@@ -7,12 +7,15 @@
 //! the very large `ExtraDataList::AddExtraCopy`, the save writer
 //! (`fn_00412970`), `ExtraDataList::Load` and `ExtraDataList::InitItem`.
 //! 624 functions in all: translated so far, in address order, `0040f680` to
-//! `00416be0` (the first 80 the queue listed, in two sessions).
+//! `00418a80` (the first 120 the queue listed, in three sessions; the third
+//! also did `004168a0`, the rotation matrix builder, which the first two
+//! left, and the single-value getters and setters of `004181c0` to
+//! `00418a80`).
 //!
-//! A later session continues at `004181c0` (the setter of the linked plane
-//! that `InitItem` calls; the callee list of `InitItem`, `Load` and the save
-//! writer shows the setters and getters that follow). What it needs is up
-//! here:
+//! A later session continues at `00418ab0` (`ExtraDataList::GetWorn`; the
+//! getters and setters of the extra data types go on in address order, and
+//! the callee lists of `InitItem`, `Load` and the save writer name the
+//! setters that follow). What it needs is up here:
 //!
 //! - the layouts and the constants (the lock, the dirty counter, the thread
 //!   cache, then, in the second block, the callees of the list operations,
@@ -4015,6 +4018,494 @@ fn init_activate_ref(
         remove_and_delete(e, this, extra);
     }
 }
+// ---------------------------------------------------------------------------
+// Third batch: the rotation matrix builder, the occlusion plane link setter,
+// and the getters and setters of single-value extra data (`004168a0`,
+// `004181c0` to `00418a80`).
+
+/// `EXTRA_DATA_TYPE` values (Xbox PDB) that more than one function of this
+/// batch uses.
+const EXTRA_GHOST: u8 = 0x1f;
+const EXTRA_ORIGINAL_REFERENCE: u8 = 0x20;
+const EXTRA_LEVELED_ITEM: u8 = 0x2f;
+const EXTRA_RADIO_DATA: u8 = 0x68;
+/// `-1.0f` in the exe's read-only data: the default of the health and charge
+/// getters.
+const MINUS_ONE: u32 = 0x0101_2054;
+/// `ExtraRadioData`'s vtable (slot 0 `0041b680`, slot 1 `Compare` `00437290`).
+const VTABLE_EXTRA_RADIO_DATA: u32 = 0x0101_5138;
+/// Copy of a `RADIO_DATA` record (`00437240`, `this` = destination, one
+/// argument: the source).
+const RADIO_DATA_COPY: u32 = 0x0043_7240;
+/// `ExtraOriginalReference::ExtraOriginalReference(reference)` (`00431950`,
+/// `this` = the new block).
+const EXTRA_ORIGINAL_REFERENCE_INIT: u32 = 0x0043_1950;
+/// `BGSSaveFormBuffer::GetForm` (`007af430`): `MOV EAX,[ECX+0x20]`.
+const SAVE_FORM_BUFFER_GET_FORM: u32 = 0x007a_f430;
+
+layout! {
+    /// `BSSoundHandle` (Xbox PDB), 0x0C bytes: the id of the playing sound,
+    /// whether success is assumed, and the assumed state.
+    pub struct BSSoundHandle: 0x0C {
+        /// `iSoundID` (Xbox PDB); `0xFFFFFFFF` for no sound.
+        0x00 iSoundID: u32,
+        /// `bAssumeSuccess` (Xbox PDB).
+        0x04 bAssumeSuccess: u8,
+        /// `eState` (Xbox PDB), `BSSoundHandle::ASSUMED_STATE`.
+        0x08 eState: u32,
+    }
+}
+
+/// The first extra data of `extra_type` in the list (`GetExtraData`).
+fn find_extra(e: &mut Engine, list: Ptr<ExtraDataList>, extra_type: u8) -> Ptr<BSExtraData> {
+    base_extra_list_get_extra_data(e, list.cast(), extra_type)
+}
+
+/// The word at +0x0C of the first extra data of `extra_type`, or `default`
+/// when the list has none.
+fn extra_word_or(e: &mut Engine, list: Ptr<ExtraDataList>, extra_type: u8, default: u32) -> u32 {
+    let extra = find_extra(e, list, extra_type);
+    if extra.is_null() {
+        default
+    } else {
+        payload(e, extra, 0x0c)
+    }
+}
+
+/// The `float` at +0x0C of the first extra data of `extra_type`, or the
+/// `float` with the bits `default`; loaded and returned through the x87
+/// stack, so a signalling NaN comes out quiet.
+fn extra_float_or(e: &mut Engine, list: Ptr<ExtraDataList>, extra_type: u8, default: u32) -> f32 {
+    let bits = extra_word_or(e, list, extra_type, default);
+    f32::from_bits(x87_float_bits(bits))
+}
+
+/// A sound getter's body: copies the `BSSoundHandle` at +0x0C of the first
+/// extra data of `extra_type` into `out` (`00418900`), or stores the empty
+/// handle (`004188d0`). Returns `out`.
+fn extra_sound_or_empty(e: &mut Engine, list: Ptr<ExtraDataList>, extra_type: u8, out: Ptr) -> Ptr {
+    let extra = find_extra(e, list, extra_type);
+    if extra.is_null() {
+        fn_004188d0(e, out)
+    } else {
+        fn_00418900(e, out, Ptr::new(extra.addr() + 0x0c))
+    }
+}
+
+// Translated from 004168a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The 3x3 rotation matrix of `angle` radians about the axis `(x, y, z)`
+/// (Rodrigues' formula, nine `float`s at `this`: `c + x*x*(1-c)`,
+/// `x*y*(1-c) + z*s`, `x*z*(1-c) - y*s`, `x*y*(1-c) - z*s`, ...). The sine
+/// and cosine come from `004169a0`. The code computes on the x87 stack and
+/// rounds to `float` where it stores a temporary; the translation computes
+/// in `f64` and rounds at the same stores.
+pub fn fn_004168a0(e: &mut Engine, this: Ptr, angle: f32, x: f32, y: f32, z: f32) {
+    let (sine, cosine) = e.with_stack(8, |e, scratch| {
+        fn_004169a0(e, angle, scratch, Ptr::new(scratch.addr() + 4));
+        (
+            e.mem.f32(scratch.addr()) as f64,
+            e.mem.f32(scratch.addr() + 4) as f64,
+        )
+    });
+    let (x, y, z) = (x as f64, y as f64, z as f64);
+    let one_minus_cos = (1.0 - cosine) as f32 as f64;
+    let xx = (x * x) as f32 as f64;
+    let yy = (y * y) as f32 as f64;
+    let zz = (z * z) as f32 as f64;
+    let xy = (x * y * one_minus_cos) as f32 as f64;
+    let xz = (x * z * one_minus_cos) as f32 as f64;
+    let yz = (y * z * one_minus_cos) as f32 as f64;
+    let x_sin = (x * sine) as f32 as f64;
+    let y_sin = (y * sine) as f32 as f64;
+    let z_sin = (z * sine) as f32 as f64;
+    let matrix = [
+        xx * one_minus_cos + cosine,
+        xy + z_sin,
+        xz - y_sin,
+        xy - z_sin,
+        yy * one_minus_cos + cosine,
+        yz + x_sin,
+        xz + y_sin,
+        yz - x_sin,
+        zz * one_minus_cos + cosine,
+    ];
+    for (index, value) in matrix.into_iter().enumerate() {
+        e.mem.set_f32(this.addr() + index as u32 * 4, value as f32);
+    }
+}
+
+// Translated from 004181c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSOcclusionPlane` linked plane setter: stores `linked_plane` in slot
+/// `index` of the array at +0xEC of the plane (no bounds check; the loader
+/// passes 0 to 3).
+pub fn fn_004181c0(e: &mut Engine, this: Ptr, index: u32, linked_plane: u32) {
+    let slot = this
+        .addr()
+        .wrapping_add(0xec)
+        .wrapping_add(index.wrapping_mul(4));
+    e.mem.set_u32(slot, linked_plane);
+}
+
+// Translated from 004181e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The base form of a reference: the code calls `BGSSaveFormBuffer::GetForm`
+/// (`007af430`), which is `MOV EAX,[ECX+0x20]`, and returns its result.
+pub fn fn_004181e0(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(SAVE_FORM_BUFFER_GET_FORM, &args![this]).u32()
+}
+
+// Translated from 00418200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetAnimSave` (Xbox PDB): the extra data of type `0x2D`
+/// (`EXTRA_ANIM_SAVE` in the Xbox enum), or null.
+pub fn extra_data_list_get_anim_save(e: &mut Engine, this: Ptr<ExtraDataList>) -> Ptr<BSExtraData> {
+    find_extra(e, this, 0x2d)
+}
+
+// Translated from 00418220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetAnimation` (Xbox PDB): the word at +0x0C of the type
+/// `0x10` extra data (`EXTRA_ANIM`), or 0.
+pub fn extra_data_list_get_animation(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_word_or(e, this, 0x10, 0)
+}
+
+// Translated from 00418250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at +0x0C of the type `0x29` extra data (`EXTRA_LIGHT` in the Xbox
+/// enum), or 0.
+pub fn fn_00418250(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_word_or(e, this, 0x29, 0)
+}
+
+// Translated from 00418280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetSpellEffectLight` (Xbox PDB): the word at +0x0C of the
+/// type `0x40` extra data (`EXTRA_MAGIC_LIGHT` in the Xbox enum), or 0.
+pub fn extra_data_list_get_spell_effect_light(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_word_or(e, this, 0x40, 0)
+}
+
+// Translated from 004182b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at +0x0C of the type `0x2A` extra data (`EXTRA_LOCK` in the Xbox
+/// enum), or 0.
+pub fn fn_004182b0(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_word_or(e, this, 0x2a, 0)
+}
+
+// Translated from 004182e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of the `RADIO_DATA` record inside the type `0x68` extra data
+/// (`ExtraRadioData`, record at +0x0C), or 0.
+pub fn fn_004182e0(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    let extra = find_extra(e, this, EXTRA_RADIO_DATA);
+    if extra.is_null() {
+        0
+    } else {
+        extra.addr() + 0x0c
+    }
+}
+
+// Translated from 00418310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the radio data of the list from the `RADIO_DATA` record at `data`:
+/// a null `data` removes the type `0x68` extra data; otherwise the record is
+/// copied (`00437240`) into the existing extra data, or into a new
+/// `ExtraRadioData` (`0x1C` bytes, built by `004183e0`) that is added to the
+/// list. The compiler's exception-unwinding frame is not translated.
+pub fn fn_00418310(e: &mut Engine, this: Ptr<ExtraDataList>, data: Ptr) {
+    if data.is_null() {
+        base_extra_list_remove_extra_ov2(e, this.cast(), EXTRA_RADIO_DATA);
+        return;
+    }
+    let existing = find_extra(e, this, EXTRA_RADIO_DATA);
+    if !existing.is_null() {
+        e.call(RADIO_DATA_COPY, &args![existing.addr() + 0x0c, data]);
+        return;
+    }
+    let block = e.call(OPERATOR_NEW, &args![0x1cu32]).u32();
+    let extra = if block == 0 {
+        0
+    } else {
+        fn_004183e0(e, Ptr::new(block)).addr()
+    };
+    e.call(RADIO_DATA_COPY, &args![extra.wrapping_add(0x0c), data]);
+    base_extra_list_add_extra(e, this.cast(), Ptr::new(extra));
+}
+
+// Translated from 004183e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `ExtraRadioData` (type `0x68`, `0x1C` bytes; its vtable has
+/// `ExtraRadioData::Compare`, `00437290`, in slot 1): the `BSExtraData` base,
+/// the vtable, the `RADIO_DATA` constructor (`00416b40`) on the record at
+/// +0x0C, and then a zero fill of the record's 16 bytes. Returns `this`. The
+/// compiler's exception-unwinding frame is not translated.
+pub fn fn_004183e0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(BS_EXTRA_DATA_INIT, &args![this, EXTRA_RADIO_DATA as u32]);
+    e.mem.set_u32(this.addr(), VTABLE_EXTRA_RADIO_DATA);
+    fn_00416b40(e, Ptr::new(this.addr() + 0x0c));
+    e.call(MEMSET, &args![this.addr() + 0x0c, 0u32, 0x10u32]);
+    this
+}
+
+// Translated from 00418460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at +0x0C of the type `0x2B` extra data (`EXTRA_TELEPORT` in the
+/// Xbox enum), or 0.
+pub fn fn_00418460(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_word_or(e, this, 0x2b, 0)
+}
+
+// Translated from 00418490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at +0x0C of the type `0x2C` extra data (`EXTRA_MAPMARKER` in the
+/// Xbox enum), or 0.
+pub fn fn_00418490(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_word_or(e, this, 0x2c, 0)
+}
+
+// Translated from 004184c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at +0x0C of the type `0x90` extra data (`EXTRA_AUDIOMARKER` in
+/// the Xbox enum), or 0.
+pub fn fn_004184c0(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_word_or(e, this, 0x90, 0)
+}
+
+// Translated from 004184f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at +0x0C of the type `0x91` extra data (`EXTRA_AUDIOBUOYMARKER`
+/// in the Xbox enum), or 0.
+pub fn fn_004184f0(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_word_or(e, this, 0x91, 0)
+}
+
+// Translated from 00418520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetContainerChanges` (Xbox PDB): the word at +0x0C of the
+/// type `0x15` extra data (`EXTRA_CONTAINER_CHANGES` in the Xbox enum), or 0.
+pub fn extra_data_list_get_container_changes(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_word_or(e, this, 0x15, 0)
+}
+
+// Translated from 00418550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the original reference of the list to `reference`: stores it in the
+/// type `0x20` extra data when there is one, and then, in every case, builds
+/// a new `0x10`-byte extra data of that type (`00431950`) and adds it to the
+/// list (the code does not skip this when it updated an existing one). The
+/// compiler's exception-unwinding frame is not translated.
+pub fn fn_00418550(e: &mut Engine, this: Ptr<ExtraDataList>, reference: u32) {
+    let existing = find_extra(e, this, EXTRA_ORIGINAL_REFERENCE);
+    if !existing.is_null() {
+        e.mem.set_u32(existing.addr() + 0x0c, reference);
+    }
+    let block = e.call(OPERATOR_NEW, &args![0x10u32]).u32();
+    let extra = if block == 0 {
+        0
+    } else {
+        e.call(EXTRA_ORIGINAL_REFERENCE_INIT, &args![block, reference])
+            .u32()
+    };
+    base_extra_list_add_extra(e, this.cast(), Ptr::new(extra));
+}
+
+// Translated from 00418600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::RemoveOriginalReferenceExtra` (Xbox PDB): removes and
+/// deletes the type `0x20` extra data, if the list has one.
+pub fn extra_data_list_remove_original_reference_extra(e: &mut Engine, this: Ptr<ExtraDataList>) {
+    let extra = find_extra(e, this, EXTRA_ORIGINAL_REFERENCE);
+    if !extra.is_null() {
+        base_extra_list_remove_extra(e, this.cast(), extra, true);
+    }
+}
+
+// Translated from 00418630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetOriginalReference` (Xbox PDB): the word at +0x0C of the
+/// type `0x20` extra data (`EXTRA_ORIGINAL_REFERENCE`), or 0.
+pub fn extra_data_list_get_original_reference(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_word_or(e, this, EXTRA_ORIGINAL_REFERENCE, 0)
+}
+
+// Translated from 00418660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at +0x0C of the type `0x21` extra data (`EXTRA_OWNERSHIP` in the
+/// Xbox enum), or 0.
+pub fn fn_00418660(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_word_or(e, this, 0x21, 0)
+}
+
+// Translated from 00418690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetGlobal` (Xbox PDB): the word at +0x0C of the type `0x22`
+/// extra data (`EXTRA_GLOBAL` in the Xbox enum), or 0.
+pub fn extra_data_list_get_global(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_word_or(e, this, 0x22, 0)
+}
+
+// Translated from 004186c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetRank` (Xbox PDB): `iRank` of the type `0x23` extra data
+/// (`EXTRA_RANK` in the Xbox enum), or -1.
+pub fn extra_data_list_get_rank(e: &mut Engine, this: Ptr<ExtraDataList>) -> i32 {
+    extra_word_or(e, this, 0x23, 0xffff_ffff) as i32
+}
+
+// Translated from 004186f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetHealth` (Xbox PDB): `fHealth` of the type `0x25` extra
+/// data (`EXTRA_HEALTH` in the Xbox enum), or the `float` at `01012054`
+/// (-1.0) when the list has none. Returned in `ST0`.
+pub fn extra_data_list_get_health(e: &mut Engine, this: Ptr<ExtraDataList>) -> f32 {
+    let default = e.mem.u32(MINUS_ONE);
+    extra_float_or(e, this, 0x25, default)
+}
+
+// Translated from 00418720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetLeveledItem` (Xbox PDB): the type `0x2F` extra data
+/// itself (`EXTRA_LEVELITEM` in the Xbox enum), or null.
+pub fn extra_data_list_get_leveled_item(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+) -> Ptr<BSExtraData> {
+    find_extra(e, this, EXTRA_LEVELED_ITEM)
+}
+
+// Translated from 00418750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::HasLeveledItem` (Xbox PDB): whether the list has a type
+/// `0x2F` extra data (`BaseExtraList::HasExtra`; the result is `AL`).
+pub fn extra_data_list_has_leveled_item(e: &mut Engine, this: Ptr<ExtraDataList>) -> bool {
+    base_extra_list_has_extra(e, this.cast(), EXTRA_LEVELED_ITEM)
+}
+
+// Translated from 00418770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetCount` (Xbox PDB): `iCount` (a `short`) of the type
+/// `0x24` extra data (`EXTRA_COUNT` in the Xbox enum), or 1. Returned in
+/// `AX`.
+pub fn extra_data_list_get_count(e: &mut Engine, this: Ptr<ExtraDataList>) -> u16 {
+    extra_word_or(e, this, 0x24, 1) as u16
+}
+
+// Translated from 004187a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fCharge` of the type `0x28` extra data (`EXTRA_CHARGE` in the Xbox enum),
+/// or the `float` at `01012054` (-1.0). Returned in `ST0`.
+pub fn fn_004187a0(e: &mut Engine, this: Ptr<ExtraDataList>) -> f32 {
+    let default = e.mem.u32(MINUS_ONE);
+    extra_float_or(e, this, 0x28, default)
+}
+
+// Translated from 004187d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetPoison` (Xbox PDB): the word at +0x0C of the type
+/// `0x3F` extra data (`EXTRA_POISON` in the Xbox enum), or 0.
+pub fn extra_data_list_get_poison(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_word_or(e, this, 0x3f, 0)
+}
+
+// Translated from 00418800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetScript` (Xbox PDB): the word at +0x0C of the type `0x0D`
+/// extra data (`EXTRA_SCRIPT` in the Xbox enum), or 0.
+pub fn extra_data_list_get_script(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_word_or(e, this, 0x0d, 0)
+}
+
+// Translated from 00418830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetScriptLocals` (Xbox PDB): the word at +0x10 of the type
+/// `0x0D` extra data (`EXTRA_SCRIPT` in the Xbox enum), or 0.
+pub fn extra_data_list_get_script_locals(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    let extra = find_extra(e, this, 0x0d);
+    if extra.is_null() {
+        0
+    } else {
+        payload(e, extra, 0x10)
+    }
+}
+
+// Translated from 00418860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fScale` of the type `0x30` extra data (`EXTRA_SCALE` in the Xbox enum),
+/// or 1.0. Returned in `ST0`.
+pub fn fn_00418860(e: &mut Engine, this: Ptr<ExtraDataList>) -> f32 {
+    extra_float_or(e, this, 0x30, 1.0f32.to_bits())
+}
+
+// Translated from 00418890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetSound` (Xbox PDB): copies the `BSSoundHandle` of the type
+/// `0x4F` extra data (`EXTRA_SOUND` in the Xbox enum, record at +0x0C) into
+/// `out`, or stores the empty handle (`fn_004188d0`). Returns `out`.
+pub fn extra_data_list_get_sound(e: &mut Engine, this: Ptr<ExtraDataList>, out: Ptr) -> Ptr {
+    extra_sound_or_empty(e, this, 0x4f, out)
+}
+
+// Translated from 004188d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the empty `BSSoundHandle` at `this`: `iSoundID` 0xFFFFFFFF,
+/// `bAssumeSuccess` false, `eState` 0 (the default constructor). Returns
+/// `this`.
+pub fn fn_004188d0(e: &mut Engine, this: Ptr) -> Ptr {
+    let handle: Ptr<BSSoundHandle> = this.cast();
+    e.set(handle, BSSoundHandle::iSoundID, 0xffff_ffff);
+    e.set(handle, BSSoundHandle::bAssumeSuccess, 0);
+    e.set(handle, BSSoundHandle::eState, 0);
+    this
+}
+
+// Translated from 00418900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies a `BSSoundHandle` (the copy constructor): `iSoundID`, the
+/// `bAssumeSuccess` byte and `eState` of `source` to `this`. Returns `this`.
+pub fn fn_00418900(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
+    let from: Ptr<BSSoundHandle> = source.cast();
+    let to: Ptr<BSSoundHandle> = this.cast();
+    let sound_id = e.get(from, BSSoundHandle::iSoundID);
+    e.set(to, BSSoundHandle::iSoundID, sound_id);
+    let assume_success = e.get(from, BSSoundHandle::bAssumeSuccess);
+    e.set(to, BSSoundHandle::bAssumeSuccess, assume_success);
+    let state = e.get(from, BSSoundHandle::eState);
+    e.set(to, BSSoundHandle::eState, state);
+    this
+}
+
+// Translated from 00418940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetCreatureAwakeSound` (Xbox PDB): as `GetSound`, for the
+/// type `0x7D` extra data (`EXTRA_CREATURE_AWAKE_SOUND` in the Xbox enum).
+/// Returns `out`.
+pub fn extra_data_list_get_creature_awake_sound(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    out: Ptr,
+) -> Ptr {
+    extra_sound_or_empty(e, this, 0x7d, out)
+}
+
+// Translated from 00418980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// As `GetSound`, for the type `0x8A` extra data
+/// (`EXTRA_CREATURE_MOVEMENT_SOUND` in the Xbox enum). Returns `out`.
+pub fn fn_00418980(e: &mut Engine, this: Ptr<ExtraDataList>, out: Ptr) -> Ptr {
+    extra_sound_or_empty(e, this, 0x8a, out)
+}
+
+// Translated from 004189c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetWeaponIdleSound` (Xbox PDB): as `GetSound`, for the type
+/// `0x83` extra data (`EXTRA_WEAPON_IDLE_SOUND` in the Xbox enum). Returns
+/// `out`.
+pub fn extra_data_list_get_weapon_idle_sound(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    out: Ptr,
+) -> Ptr {
+    extra_sound_or_empty(e, this, 0x83, out)
+}
+
+// Translated from 00418a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetWeaponAttackSound` (Xbox PDB): as `GetSound`, for the
+/// type `0x86` extra data (`EXTRA_WEAPON_ATTACK_SOUND` in the Xbox enum).
+/// Returns `out`.
+pub fn extra_data_list_get_weapon_attack_sound(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    out: Ptr,
+) -> Ptr {
+    extra_sound_or_empty(e, this, 0x86, out)
+}
+
+// Translated from 00418a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetActivateLoopSound` (Xbox PDB): as `GetSound`, for the
+/// type `0x87` extra data (`EXTRA_ACTIVATE_LOOP_SOUND` in the Xbox enum).
+/// Returns `out`.
+pub fn extra_data_list_get_activate_loop_sound(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    out: Ptr,
+) -> Ptr {
+    extra_sound_or_empty(e, this, 0x87, out)
+}
+
+// Translated from 00418a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the list has a type `0x1F` extra data (`EXTRA_GHOST` in the Xbox
+/// enum): `BaseExtraList::HasExtra`, as a `bool`.
+pub fn fn_00418a80(e: &mut Engine, this: Ptr<ExtraDataList>) -> bool {
+    base_extra_list_has_extra(e, this.cast(), EXTRA_GHOST)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -4238,6 +4729,106 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00416be0,
             extra_data_list_init_item(Ptr<ExtraDataList>, Ptr)
         ),
+        entry!(0x004168a0, fn_004168a0(Ptr, f32, f32, f32, f32)),
+        entry!(0x004181c0, fn_004181c0(Ptr, u32, u32)),
+        entry!(0x004181e0, fn_004181e0(Ptr) -> u32),
+        entry!(
+            0x00418200,
+            extra_data_list_get_anim_save(Ptr<ExtraDataList>) -> Ptr<BSExtraData>
+        ),
+        entry!(
+            0x00418220,
+            extra_data_list_get_animation(Ptr<ExtraDataList>) -> u32
+        ),
+        entry!(0x00418250, fn_00418250(Ptr<ExtraDataList>) -> u32),
+        entry!(
+            0x00418280,
+            extra_data_list_get_spell_effect_light(Ptr<ExtraDataList>) -> u32
+        ),
+        entry!(0x004182b0, fn_004182b0(Ptr<ExtraDataList>) -> u32),
+        entry!(0x004182e0, fn_004182e0(Ptr<ExtraDataList>) -> u32),
+        entry!(0x00418310, fn_00418310(Ptr<ExtraDataList>, Ptr)),
+        entry!(0x004183e0, fn_004183e0(Ptr) -> Ptr),
+        entry!(0x00418460, fn_00418460(Ptr<ExtraDataList>) -> u32),
+        entry!(0x00418490, fn_00418490(Ptr<ExtraDataList>) -> u32),
+        entry!(0x004184c0, fn_004184c0(Ptr<ExtraDataList>) -> u32),
+        entry!(0x004184f0, fn_004184f0(Ptr<ExtraDataList>) -> u32),
+        entry!(
+            0x00418520,
+            extra_data_list_get_container_changes(Ptr<ExtraDataList>) -> u32
+        ),
+        entry!(0x00418550, fn_00418550(Ptr<ExtraDataList>, u32)),
+        entry!(
+            0x00418600,
+            extra_data_list_remove_original_reference_extra(Ptr<ExtraDataList>)
+        ),
+        entry!(
+            0x00418630,
+            extra_data_list_get_original_reference(Ptr<ExtraDataList>) -> u32
+        ),
+        entry!(0x00418660, fn_00418660(Ptr<ExtraDataList>) -> u32),
+        entry!(
+            0x00418690,
+            extra_data_list_get_global(Ptr<ExtraDataList>) -> u32
+        ),
+        entry!(
+            0x004186c0,
+            extra_data_list_get_rank(Ptr<ExtraDataList>) -> i32
+        ),
+        entry!(
+            0x004186f0,
+            extra_data_list_get_health(Ptr<ExtraDataList>) -> f32
+        ),
+        entry!(
+            0x00418720,
+            extra_data_list_get_leveled_item(Ptr<ExtraDataList>) -> Ptr<BSExtraData>
+        ),
+        entry!(
+            0x00418750,
+            extra_data_list_has_leveled_item(Ptr<ExtraDataList>) -> bool
+        ),
+        entry!(
+            0x00418770,
+            extra_data_list_get_count(Ptr<ExtraDataList>) -> u16
+        ),
+        entry!(0x004187a0, fn_004187a0(Ptr<ExtraDataList>) -> f32),
+        entry!(
+            0x004187d0,
+            extra_data_list_get_poison(Ptr<ExtraDataList>) -> u32
+        ),
+        entry!(
+            0x00418800,
+            extra_data_list_get_script(Ptr<ExtraDataList>) -> u32
+        ),
+        entry!(
+            0x00418830,
+            extra_data_list_get_script_locals(Ptr<ExtraDataList>) -> u32
+        ),
+        entry!(0x00418860, fn_00418860(Ptr<ExtraDataList>) -> f32),
+        entry!(
+            0x00418890,
+            extra_data_list_get_sound(Ptr<ExtraDataList>, Ptr) -> Ptr
+        ),
+        entry!(0x004188d0, fn_004188d0(Ptr) -> Ptr),
+        entry!(0x00418900, fn_00418900(Ptr, Ptr) -> Ptr),
+        entry!(
+            0x00418940,
+            extra_data_list_get_creature_awake_sound(Ptr<ExtraDataList>, Ptr) -> Ptr
+        ),
+        entry!(0x00418980, fn_00418980(Ptr<ExtraDataList>, Ptr) -> Ptr),
+        entry!(
+            0x004189c0,
+            extra_data_list_get_weapon_idle_sound(Ptr<ExtraDataList>, Ptr) -> Ptr
+        ),
+        entry!(
+            0x00418a00,
+            extra_data_list_get_weapon_attack_sound(Ptr<ExtraDataList>, Ptr) -> Ptr
+        ),
+        entry!(
+            0x00418a40,
+            extra_data_list_get_activate_loop_sound(Ptr<ExtraDataList>, Ptr) -> Ptr
+        ),
+        entry!(0x00418a80, fn_00418a80(Ptr<ExtraDataList>) -> bool),
     ]
 }
 
@@ -9087,5 +9678,516 @@ mod tests {
         );
         assert!(calls_to(&log, AUDIO_MARKER_SET_CONTROLLER).is_empty());
         assert_eq!(chain_types(&e, list.cast()), vec![0x90]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Third batch: `004168a0`, `004181c0` to `00418a80`.
+
+    /// `extra_engine` plus the page of the exe's read-only data that holds the
+    /// -1.0 the health and charge getters default to.
+    fn getter_engine() -> Engine {
+        let mut e = extra_engine();
+        e.map(0x0101_2000, 0x1000);
+        e.set_global(MINUS_ONE, (-1.0f32).to_bits());
+        e
+    }
+
+    /// A type that is not `extra_type`, for the extra data a getter must skip.
+    fn other_type(extra_type: u8) -> u8 {
+        if extra_type == 0x01 {
+            0x02
+        } else {
+            0x01
+        }
+    }
+
+    /// Checks a getter of `address` that returns the word at +0x0C of the
+    /// extra data of `extra_type`: found among others, missing, empty list.
+    fn check_word_getter(address: u32, extra_type: u8, default: u32) {
+        let mut e = getter_engine();
+        let decoy = other_type(extra_type);
+        let (list, _) = list_with_payloads(&mut e, &[(decoy, 0x1111), (extra_type, 0x2222_3333)]);
+        assert_eq!(e.call(address, &args![list]).u32(), 0x2222_3333);
+        let (list, _) = list_with_payloads(&mut e, &[(decoy, 0x1111)]);
+        assert_eq!(e.call(address, &args![list]).u32(), default);
+        let (list, _) = list_with_payloads(&mut e, &[]);
+        assert_eq!(e.call(address, &args![list]).u32(), default);
+    }
+
+    /// As `check_word_getter`, for a getter that returns a `float`.
+    fn check_float_getter(address: u32, extra_type: u8, default: f32) {
+        let mut e = getter_engine();
+        let decoy = other_type(extra_type);
+        let (list, _) =
+            list_with_payloads(&mut e, &[(decoy, 0x1111), (extra_type, 2.5f32.to_bits())]);
+        assert_eq!(e.call(address, &args![list]).f32(), 2.5);
+        let (list, _) = list_with_payloads(&mut e, &[(decoy, 0x1111)]);
+        assert_eq!(e.call(address, &args![list]).f32(), default);
+        let (list, _) = list_with_payloads(&mut e, &[]);
+        assert_eq!(e.call(address, &args![list]).f32(), default);
+    }
+
+    /// Checks a sound getter of `address` for `extra_type`: the handle is
+    /// copied from +0x0C, or the empty handle is stored; `out` is returned.
+    fn check_sound_getter(address: u32, extra_type: u8) {
+        let mut e = getter_engine();
+        let decoy = other_type(extra_type);
+        let (list, extras) = list_with_payloads(&mut e, &[(decoy, 0x1111), (extra_type, 0x77)]);
+        e.mem.set_u8(extras[1].addr() + 0x10, 1);
+        e.mem.set_u32(extras[1].addr() + 0x14, 3);
+        let out: Ptr = Ptr::new(e.mem.alloc(0x10));
+        e.mem.write(out.addr(), &[0x5a; 0x10]);
+        let result = e.call(address, &args![list, out]).ptr::<()>();
+        assert_eq!(result, out);
+        assert_eq!(
+            (
+                e.mem.u32(out.addr()),
+                e.mem.u8(out.addr() + 4),
+                e.mem.u32(out.addr() + 8)
+            ),
+            (0x77, 1, 3)
+        );
+        // Not copied: the bytes past the handle.
+        assert_eq!(e.mem.u32(out.addr() + 0x0c), 0x5a5a_5a5a);
+
+        let (list, _) = list_with_payloads(&mut e, &[(decoy, 0x1111)]);
+        e.mem.write(out.addr(), &[0x5a; 0x10]);
+        let result = e.call(address, &args![list, out]).ptr::<()>();
+        assert_eq!(result, out);
+        assert_eq!(
+            (
+                e.mem.u32(out.addr()),
+                e.mem.u8(out.addr() + 4),
+                e.mem.u32(out.addr() + 8)
+            ),
+            (0xffff_ffff, 0, 0)
+        );
+    }
+
+    fn close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "{actual} is not close to {expected}"
+        );
+    }
+
+    #[test]
+    fn rotation_matrix_of_a_zero_angle_is_the_identity() {
+        let mut e = extra_engine();
+        let matrix: Ptr = Ptr::new(e.mem.alloc(0x28));
+        e.mem.write(matrix.addr(), &[0xee; 0x28]);
+        e.call(0x0041_68a0, &args![matrix, 0.0f32, 0.0f32, 0.0f32, 1.0f32]);
+        let expected = [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        for (index, value) in expected.into_iter().enumerate() {
+            assert_eq!(e.mem.f32(matrix.addr() + index as u32 * 4), value);
+        }
+        // The tenth word is not the matrix's.
+        assert_eq!(e.mem.u32(matrix.addr() + 36), 0xeeee_eeee);
+    }
+
+    #[test]
+    fn rotation_matrix_about_an_axis_follows_the_formula() {
+        let mut e = extra_engine();
+        let matrix: Ptr = Ptr::new(e.mem.alloc(0x28));
+        let quarter_turn = std::f32::consts::FRAC_PI_2;
+        // About z: x axis to y axis (row 1 holds z*s above the diagonal).
+        e.call(
+            0x0041_68a0,
+            &args![matrix, quarter_turn, 0.0f32, 0.0f32, 1.0f32],
+        );
+        let about_z = [0.0f32, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+        for (index, value) in about_z.into_iter().enumerate() {
+            close(e.mem.f32(matrix.addr() + index as u32 * 4), value);
+        }
+        // About the diagonal (1, 1, 1)/sqrt(3) by half a turn.
+        let axis = 1.0f32 / 3.0f32.sqrt();
+        e.call(
+            0x0041_68a0,
+            &args![matrix, std::f32::consts::PI, axis, axis, axis],
+        );
+        let expected = [
+            -1.0 / 3.0,
+            2.0 / 3.0,
+            2.0 / 3.0,
+            2.0 / 3.0,
+            -1.0 / 3.0,
+            2.0 / 3.0,
+            2.0 / 3.0,
+            2.0 / 3.0,
+            -1.0 / 3.0,
+        ];
+        for (index, value) in expected.into_iter().enumerate() {
+            close(e.mem.f32(matrix.addr() + index as u32 * 4), value);
+        }
+    }
+
+    #[test]
+    fn linked_plane_setter_stores_into_the_array_at_0xec() {
+        let mut e = extra_engine();
+        let plane: Ptr = Ptr::new(e.mem.alloc(0x100));
+        e.call(0x0041_81c0, &args![plane, 2u32, 0xabcdu32]);
+        assert_eq!(e.mem.u32(plane.addr() + 0xf4), 0xabcd);
+        assert_eq!(e.mem.u32(plane.addr() + 0xec), 0);
+        e.call(0x0041_81c0, &args![plane, 0u32, 7u32]);
+        assert_eq!(e.mem.u32(plane.addr() + 0xec), 7);
+    }
+
+    #[test]
+    fn base_form_getter_returns_what_the_form_buffer_getter_returns() {
+        let mut e = extra_engine();
+        e.register(SAVE_FORM_BUFFER_GET_FORM, |e, a| {
+            returns(e.mem.u32(a[0] + 0x20))
+        });
+        let object: Ptr = Ptr::new(e.mem.alloc(0x40));
+        e.mem.set_u32(object.addr() + 0x20, 0x1357);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0041_81e0, &args![object]).u32(), 0x1357);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, SAVE_FORM_BUFFER_GET_FORM),
+            vec![vec![object.addr()]]
+        );
+    }
+
+    #[test]
+    fn anim_save_getter_returns_the_extra_data_itself() {
+        let mut e = getter_engine();
+        let (list, extras) = list_with_payloads(&mut e, &[(0x01, 1), (0x2d, 2)]);
+        assert_eq!(e.call(0x0041_8200, &args![list]).u32(), extras[1].addr());
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 1)]);
+        assert_eq!(e.call(0x0041_8200, &args![list]).u32(), 0);
+    }
+
+    #[test]
+    fn animation_getter_reads_type_0x10() {
+        check_word_getter(0x0041_8220, 0x10, 0);
+    }
+
+    #[test]
+    fn type_0x29_getter() {
+        check_word_getter(0x0041_8250, 0x29, 0);
+    }
+
+    #[test]
+    fn spell_effect_light_getter_reads_type_0x40() {
+        check_word_getter(0x0041_8280, 0x40, 0);
+    }
+
+    #[test]
+    fn type_0x2a_getter() {
+        check_word_getter(0x0041_82b0, 0x2a, 0);
+    }
+
+    #[test]
+    fn radio_data_getter_returns_the_record_address() {
+        let mut e = getter_engine();
+        let (list, extras) = list_with_payloads(&mut e, &[(0x01, 1), (0x68, 2)]);
+        assert_eq!(
+            e.call(0x0041_82e0, &args![list]).u32(),
+            extras[1].addr() + 0x0c
+        );
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 1)]);
+        assert_eq!(e.call(0x0041_82e0, &args![list]).u32(), 0);
+    }
+
+    #[test]
+    fn radio_data_setter_removes_copies_or_adds() {
+        // A null record removes the extra data (and deletes it).
+        let mut e = getter_engine();
+        let (list, extras) = list_with_payloads(&mut e, &[(0x01, 1), (0x68, 2)]);
+        e.call_log = Some(vec![]);
+        e.call(0x0041_8310, &args![list, Ptr::<()>::NULL]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(chain_types(&e, list.cast()), vec![0x01]);
+        assert_eq!(deleted(&log), vec![extras[1].addr()]);
+
+        // With an extra data of the type: the record is copied into it.
+        let (list, extras) = list_with_payloads(&mut e, &[(0x68, 2), (0x01, 1)]);
+        stub(&mut e, RADIO_DATA_COPY);
+        let data: Ptr = Ptr::new(e.mem.alloc(0x10));
+        e.call_log = Some(vec![]);
+        e.call(0x0041_8310, &args![list, data]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, RADIO_DATA_COPY),
+            vec![vec![extras[0].addr() + 0x0c, data.addr()]]
+        );
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert_eq!(chain_types(&e, list.cast()), vec![0x68, 0x01]);
+
+        // Without one: a new extra data is built, filled and added.
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 1)]);
+        e.call_log = Some(vec![]);
+        e.call(0x0041_8310, &args![list, data]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x1c]]);
+        let types = chain_types(&e, list.cast());
+        assert_eq!(types.len(), 2);
+        assert!(types.contains(&0x68));
+        let new_extra = calls_to(&log, RADIO_DATA_COPY)[0][0] - 0x0c;
+        assert_eq!(
+            calls_to(&log, RADIO_DATA_COPY),
+            vec![vec![new_extra + 0x0c, data.addr()]]
+        );
+        assert_eq!(e.mem.u8(new_extra + 4), 0x68);
+        assert_eq!(e.mem.u32(new_extra), 0x0101_5138);
+        assert!(flag_bytes(&e, list.cast())[0x68 >> 3] & (1 << (0x68 & 7)) != 0);
+    }
+
+    #[test]
+    fn radio_data_extra_constructor_zeroes_the_record() {
+        let mut e = extra_engine();
+        let extra: Ptr = Ptr::new(e.mem.alloc(0x1c));
+        e.mem.write(extra.addr(), &[0xcd; 0x1c]);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0041_83e0, &args![extra]).ptr::<()>();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(result, extra);
+        assert_eq!(e.mem.u32(extra.addr()), 0x0101_5138);
+        assert_eq!(e.mem.u8(extra.addr() + 4), 0x68);
+        assert_eq!(e.mem.u32(extra.addr() + 8), 0);
+        assert_eq!(e.mem.bytes(extra.addr() + 0x0c, 0x10), vec![0u8; 0x10]);
+        assert_eq!(
+            calls_to(&log, MEMSET),
+            vec![vec![extra.addr() + 0x0c, 0, 0x10]]
+        );
+    }
+
+    #[test]
+    fn teleport_getter_reads_type_0x2b() {
+        check_word_getter(0x0041_8460, 0x2b, 0);
+    }
+
+    #[test]
+    fn map_marker_getter_reads_type_0x2c() {
+        check_word_getter(0x0041_8490, 0x2c, 0);
+    }
+
+    #[test]
+    fn audio_marker_getter_reads_type_0x90() {
+        check_word_getter(0x0041_84c0, 0x90, 0);
+    }
+
+    #[test]
+    fn audio_buoy_marker_getter_reads_type_0x91() {
+        check_word_getter(0x0041_84f0, 0x91, 0);
+    }
+
+    #[test]
+    fn container_changes_getter_reads_type_0x15() {
+        check_word_getter(0x0041_8520, 0x15, 0);
+    }
+
+    #[test]
+    fn original_reference_setter_updates_and_always_adds_a_new_extra_data() {
+        let mut e = getter_engine();
+        e.register(EXTRA_ORIGINAL_REFERENCE_INIT, |e, a| {
+            e.mem.set_u8(a[0] + 4, 0x20);
+            e.mem.set_u32(a[0] + 8, 0);
+            e.mem.set_u32(a[0] + 0x0c, a[1]);
+            returns(a[0])
+        });
+        // No extra data of the type yet: one is built and added.
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 1)]);
+        e.call_log = Some(vec![]);
+        e.call(0x0041_8550, &args![list, 0x4444u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x10]]);
+        let created = calls_to(&log, EXTRA_ORIGINAL_REFERENCE_INIT);
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0][1], 0x4444);
+        assert_eq!(chain_types(&e, list.cast()).len(), 2);
+        let first = find_extra(&mut e, list, 0x20);
+        assert_eq!(first.addr(), created[0][0]);
+        assert_eq!(e.mem.u32(first.addr() + 0x0c), 0x4444);
+
+        // With one: its word is updated, and another one is added anyway.
+        let (list, extras) = list_with_payloads(&mut e, &[(0x20, 0x1000), (0x01, 1)]);
+        e.call(0x0041_8550, &args![list, 0x5555u32]);
+        assert_eq!(e.mem.u32(extras[0].addr() + 0x0c), 0x5555);
+        let types = chain_types(&e, list.cast());
+        assert_eq!(types.iter().filter(|&&ty| ty == 0x20).count(), 2);
+        assert_eq!(types.len(), 3);
+    }
+
+    #[test]
+    fn remove_original_reference_extra_deletes_the_extra_data() {
+        let mut e = getter_engine();
+        let (list, extras) = list_with_payloads(&mut e, &[(0x01, 1), (0x20, 2)]);
+        e.call_log = Some(vec![]);
+        e.call(0x0041_8600, &args![list]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(chain_types(&e, list.cast()), vec![0x01]);
+        assert_eq!(deleted(&log), vec![extras[1].addr()]);
+        // Nothing to remove: nothing deleted.
+        e.call_log = Some(vec![]);
+        e.call(0x0041_8600, &args![list]);
+        let log = e.call_log.take().unwrap();
+        assert!(deleted(&log).is_empty());
+        assert_eq!(chain_types(&e, list.cast()), vec![0x01]);
+    }
+
+    #[test]
+    fn original_reference_getter_reads_type_0x20() {
+        check_word_getter(0x0041_8630, 0x20, 0);
+    }
+
+    #[test]
+    fn ownership_getter_reads_type_0x21() {
+        check_word_getter(0x0041_8660, 0x21, 0);
+    }
+
+    #[test]
+    fn global_getter_reads_type_0x22() {
+        check_word_getter(0x0041_8690, 0x22, 0);
+    }
+
+    #[test]
+    fn rank_getter_defaults_to_minus_one() {
+        check_word_getter(0x0041_86c0, 0x23, 0xffff_ffff);
+        let mut e = getter_engine();
+        let (list, _) = list_with_payloads(&mut e, &[]);
+        assert_eq!(e.call(0x0041_86c0, &args![list]).i32(), -1);
+    }
+
+    #[test]
+    fn health_getter_defaults_to_the_float_at_01012054() {
+        check_float_getter(0x0041_86f0, 0x25, -1.0);
+        // The default is read from the exe's data, not built in.
+        let mut e = getter_engine();
+        e.set_global(MINUS_ONE, 7.5f32.to_bits());
+        let (list, _) = list_with_payloads(&mut e, &[]);
+        assert_eq!(e.call(0x0041_86f0, &args![list]).f32(), 7.5);
+    }
+
+    #[test]
+    fn leveled_item_getter_returns_the_extra_data_itself() {
+        let mut e = getter_engine();
+        let (list, extras) = list_with_payloads(&mut e, &[(0x01, 1), (0x2f, 2)]);
+        assert_eq!(e.call(0x0041_8720, &args![list]).u32(), extras[1].addr());
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 1)]);
+        assert_eq!(e.call(0x0041_8720, &args![list]).u32(), 0);
+    }
+
+    #[test]
+    fn has_leveled_item_tests_the_type_bit() {
+        let mut e = getter_engine();
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 1), (0x2f, 2)]);
+        assert!(e.call(0x0041_8750, &args![list]).bool());
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 1)]);
+        assert!(!e.call(0x0041_8750, &args![list]).bool());
+    }
+
+    #[test]
+    fn count_getter_is_a_short_and_defaults_to_one() {
+        let mut e = getter_engine();
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 1), (0x24, 0x1234_0007)]);
+        assert_eq!(e.call(0x0041_8770, &args![list]).u16(), 7);
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 1)]);
+        assert_eq!(e.call(0x0041_8770, &args![list]).u16(), 1);
+    }
+
+    #[test]
+    fn charge_getter_defaults_to_minus_one() {
+        check_float_getter(0x0041_87a0, 0x28, -1.0);
+    }
+
+    #[test]
+    fn poison_getter_reads_type_0x3f() {
+        check_word_getter(0x0041_87d0, 0x3f, 0);
+    }
+
+    #[test]
+    fn script_getter_reads_type_0x0d() {
+        check_word_getter(0x0041_8800, 0x0d, 0);
+    }
+
+    #[test]
+    fn script_locals_getter_reads_the_word_at_0x10() {
+        let mut e = getter_engine();
+        let (list, extras) = list_with_payloads(&mut e, &[(0x01, 1), (0x0d, 0x5000)]);
+        e.mem.set_u32(extras[1].addr() + 0x10, 0x6000);
+        assert_eq!(e.call(0x0041_8830, &args![list]).u32(), 0x6000);
+        assert_eq!(e.call(0x0041_8800, &args![list]).u32(), 0x5000);
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 1)]);
+        assert_eq!(e.call(0x0041_8830, &args![list]).u32(), 0);
+    }
+
+    #[test]
+    fn scale_getter_defaults_to_one() {
+        check_float_getter(0x0041_8860, 0x30, 1.0);
+    }
+
+    #[test]
+    fn sound_getter_copies_the_handle_of_type_0x4f() {
+        check_sound_getter(0x0041_8890, 0x4f);
+    }
+
+    #[test]
+    fn empty_sound_handle_constructor() {
+        let mut e = extra_engine();
+        let handle: Ptr = Ptr::new(e.mem.alloc(0x10));
+        e.mem.write(handle.addr(), &[0x33; 0x10]);
+        let result = e.call(0x0041_88d0, &args![handle]).ptr::<()>();
+        assert_eq!(result, handle);
+        assert_eq!(e.mem.u32(handle.addr()), 0xffff_ffff);
+        assert_eq!(e.mem.u8(handle.addr() + 4), 0);
+        assert_eq!(e.mem.u32(handle.addr() + 8), 0);
+        // The three bytes after the flag byte are not written.
+        assert_eq!(e.mem.u8(handle.addr() + 5), 0x33);
+        assert_eq!(e.mem.u32(handle.addr() + 0x0c), 0x3333_3333);
+    }
+
+    #[test]
+    fn sound_handle_copy_constructor() {
+        let mut e = extra_engine();
+        let source: Ptr = Ptr::new(e.mem.alloc(0x10));
+        let target: Ptr = Ptr::new(e.mem.alloc(0x10));
+        e.mem.set_u32(source.addr(), 0x99);
+        e.mem.set_u8(source.addr() + 4, 1);
+        e.mem.set_u8(source.addr() + 5, 0x77);
+        e.mem.set_u32(source.addr() + 8, 4);
+        e.mem.write(target.addr(), &[0x33; 0x10]);
+        let result = e.call(0x0041_8900, &args![target, source]).ptr::<()>();
+        assert_eq!(result, target);
+        assert_eq!(e.mem.u32(target.addr()), 0x99);
+        assert_eq!(e.mem.u8(target.addr() + 4), 1);
+        assert_eq!(e.mem.u32(target.addr() + 8), 4);
+        // Only the flag byte is copied, not the padding after it.
+        assert_eq!(e.mem.u8(target.addr() + 5), 0x33);
+    }
+
+    #[test]
+    fn creature_awake_sound_getter_reads_type_0x7d() {
+        check_sound_getter(0x0041_8940, 0x7d);
+    }
+
+    #[test]
+    fn type_0x8a_sound_getter() {
+        check_sound_getter(0x0041_8980, 0x8a);
+    }
+
+    #[test]
+    fn weapon_idle_sound_getter_reads_type_0x83() {
+        check_sound_getter(0x0041_89c0, 0x83);
+    }
+
+    #[test]
+    fn weapon_attack_sound_getter_reads_type_0x86() {
+        check_sound_getter(0x0041_8a00, 0x86);
+    }
+
+    #[test]
+    fn activate_loop_sound_getter_reads_type_0x87() {
+        check_sound_getter(0x0041_8a40, 0x87);
+    }
+
+    #[test]
+    fn type_0x1f_presence_test() {
+        let mut e = getter_engine();
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 1), (0x1f, 2)]);
+        assert!(e.call(0x0041_8a80, &args![list]).bool());
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 1)]);
+        assert!(!e.call(0x0041_8a80, &args![list]).bool());
     }
 }
