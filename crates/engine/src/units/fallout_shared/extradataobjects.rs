@@ -7,9 +7,9 @@
 //! `ExtraLight`, `ExtraLock`, `ExtraFollower`, `ExtraGuardedRefData`,
 //! `ExtraTeleport`, ...), in address order, together with `REFR_LOCK`.
 //!
-//! Translated so far: the first 120 functions of the queue (`004300f0` to
-//! `00432da0`). The next session continues at `00432dd0`
-//! (`ExtraRagDollData::Compare`).
+//! Translated so far: the first 160 functions of the queue (`004300f0` to
+//! `00433d40`). The next session continues at `00433db0`
+//! (`ExtraDecalRefs::InitItem`).
 //!
 //! Notes for the next session:
 //! - The layouts of the simple one-field classes (`ExtraRank`, `ExtraCount`,
@@ -27,12 +27,13 @@
 //!   `__CxxFrameHandler` state words) are not translated.
 //! - Functions this unit still has to translate and that the ones below call
 //!   by address: `00438570`, `004385a0` (the `DismemberedLimbs` array
-//!   constructor/destructor) and `00438660`, `00438690` (the `Guards` array
-//!   constructor/destructor).
+//!   constructor/destructor), `00438660`, `00438690` (the `Guards` array
+//!   constructor/destructor), `004343c0` (frees the decal list of an
+//!   `ExtraDecalRefs`) and `00438470` (`BSStringT<char>::Set(other)`).
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::types::BSSimpleArray;
+use crate::types::{BSSimpleArray, BSSimpleList, BSStringT};
 
 /// `operator new(size)` (cdecl, one stack argument).
 const OPERATOR_NEW: u32 = 0x0040_1000;
@@ -312,6 +313,119 @@ const CRIME_LIST_ADD: u32 = 0x005a_e3d0;
 /// The destructor body of the `RagDollData` an `ExtraRagDollData` owns (in
 /// `ragdolldata.cpp`; `this` is the object).
 const RAG_DOLL_DATA_DESTRUCT: u32 = 0x004d_9380;
+
+/// `RagDollData::Compare` (Xbox PDB; `this` is the data, the argument the
+/// other data): true when the two differ.
+const RAG_DOLL_DATA_COMPARE: u32 = 0x004d_9780;
+
+/// `RTTI Type Descriptor`s of the classes whose `Compare` or `Copy` casts
+/// `other` (third batch).
+const EXTRA_RAG_DOLL_DATA_TYPE: u32 = 0x0118_4cd4;
+const EXTRA_ENCOUNTER_ZONE_TYPE: u32 = 0x0118_4cf4;
+const EXTRA_ENABLE_STATE_PARENT_TYPE: u32 = 0x0118_4d7c;
+const EXTRA_RANDOM_TELEPORT_MARKER_TYPE: u32 = 0x0118_4dcc;
+const EXTRA_LINKED_REF_TYPE: u32 = 0x0118_4e1c;
+const EXTRA_ACTIVATE_REF_TYPE: u32 = 0x0118_4e84;
+
+/// The vtables of the classes built by `00432e60` to `00433ca0` (names from
+/// the RTTI type descriptors).
+const EXTRA_ENCOUNTER_ZONE_VTABLE: u32 = 0x0101_5c54;
+const EXTRA_USED_MARKERS_VTABLE: u32 = 0x0101_5c60;
+const EXTRA_RESERVED_MARKERS_VTABLE: u32 = 0x0101_5c6c;
+const EXTRA_RUN_ONCE_PACKS_VTABLE: u32 = 0x0101_5c78;
+const EXTRA_DISTANT_DATA_VTABLE: u32 = 0x0101_5c84;
+const EXTRA_ENABLE_STATE_PARENT_VTABLE: u32 = 0x0101_5c90;
+const EXTRA_ENABLE_STATE_CHILDREN_VTABLE: u32 = 0x0101_5c9c;
+const EXTRA_RANDOM_TELEPORT_MARKER_VTABLE: u32 = 0x0101_5ca8;
+const EXTRA_LINKED_REF_CHILDREN_VTABLE: u32 = 0x0101_5cb4;
+const EXTRA_LINKED_REF_VTABLE: u32 = 0x0101_5cc0;
+const EXTRA_ASH_PILE_REF_VTABLE: u32 = 0x0101_5ccc;
+const EXTRA_ACTIVATE_REF_CHILDREN_VTABLE: u32 = 0x0101_5cd8;
+const EXTRA_ACTIVATE_REF_VTABLE: u32 = 0x0101_5ce4;
+const EXTRA_DECAL_REFS_VTABLE: u32 = 0x0101_5cf0;
+
+/// Extra-data type bytes of the third batch.
+const TYPE_ENCOUNTER_ZONE: u32 = 0x74;
+const TYPE_USED_MARKERS: u32 = 0x12;
+const TYPE_RESERVED_MARKERS: u32 = 0x82;
+const TYPE_RUN_ONCE_PACKS: u32 = 0x1b;
+const TYPE_DISTANT_DATA: u32 = 0x13;
+const TYPE_ENABLE_STATE_PARENT: u32 = 0x37;
+const TYPE_ENABLE_STATE_CHILDREN: u32 = 0x38;
+const TYPE_RANDOM_TELEPORT_MARKER: u32 = 0x3b;
+const TYPE_LINKED_REF_CHILDREN: u32 = 0x52;
+const TYPE_LINKED_REF: u32 = 0x51;
+const TYPE_ASH_PILE_REF: u32 = 0x89;
+const TYPE_ACTIVATE_REF_CHILDREN: u32 = 0x54;
+const TYPE_ACTIVATE_REF: u32 = 0x53;
+const TYPE_DECAL_REFS: u32 = 0x57;
+
+/// `BSSimpleList<T>`'s constructor (`this` is the head node: item and next
+/// are cleared).
+const SIMPLE_LIST_CONSTRUCT: u32 = 0x0096_a2d0;
+/// `BSSimpleList<T>::Clear` (the engine map has no name; `this` is the head
+/// node: frees every node after the head and clears its item).
+const SIMPLE_LIST_CLEAR: u32 = 0x0047_0470;
+/// The destructor body of a `BSSimpleList<T>` (`this` is the head node): it
+/// clears the list.
+const SIMPLE_LIST_DESTRUCT: u32 = 0x0046_ffb0;
+/// `BSSimpleList<T>`'s scalar deleting destructor (`this` is the list, the
+/// argument says whether to free it).
+const SIMPLE_LIST_DELETE: u32 = 0x0047_02f0;
+/// The address of the item slot of a list node (`this` is the node; returns
+/// `this`, the item is the first word).
+const SIMPLE_LIST_ITEM_SLOT: u32 = 0x0068_15c0;
+/// The next node of a list node (`this` is the node; null at the end).
+const SIMPLE_LIST_NEXT: u32 = 0x0072_6070;
+/// Whether a list node holds no item and has no successor (`this` is the
+/// node).
+const SIMPLE_LIST_IS_EMPTY: u32 = 0x0082_56d0;
+/// Removes the head of a list (`this` is the head node): the next node's
+/// item and successor move into the head and the next node is deleted; the
+/// head's item is cleared when there is no next node.
+const SIMPLE_LIST_REMOVE_HEAD: u32 = 0x0063_f7b0;
+/// Adds the item held at the address given as the new head of the list (`this`
+/// is the list; the same body as `CRIME_LIST_ADD`, which names it by its use
+/// in `ExtraPlayerCrimeList`).
+const SIMPLE_LIST_ADD_HEAD: u32 = CRIME_LIST_ADD;
+/// The number of non-empty nodes of a list (`this` is the head node;
+/// the engine map calls it `VATS::GetCount` by mistake).
+const SIMPLE_LIST_COUNT: u32 = 0x005a_e380;
+
+/// `NiPoint3::NiPoint3(x, y, z)` (Xbox PDB name of the folded body; `this`
+/// is the point, then three floats on the stack).
+const NI_POINT3_CONSTRUCT: u32 = 0x0041_6870;
+/// The `float` constant `ExtraDistantData`'s constructor uses for the
+/// z component of its land normal.
+const DISTANT_DATA_NORMAL_Z: u32 = 0x0101_45a8;
+/// `BSStringT<char>::BSStringT` (`this` is the string: empties it).
+const BS_STRING_CONSTRUCT: u32 = 0x0040_37b0;
+/// `BSStringT<char>::Set(source, length)` (`this` is the string; the source
+/// is a character pointer and the length 0 means all of it).
+const BS_STRING_SET: u32 = 0x0040_37f0;
+/// `BSStringT<char>::Clear` (`this` is the string; `Set(0, 0)`).
+const BS_STRING_CLEAR: u32 = 0x0040_37d0;
+/// `BSStringT<char>::Set(other)` (Xbox PDB; `this` is the string, the
+/// argument the string to copy; in this unit, not yet translated).
+const BS_STRING_COPY: u32 = 0x0043_8470;
+/// `BSStringT<char>::GetLength` (the folded body: the stored length, or the
+/// C string's length when that is 0xffff; `this` is the string).
+const BS_STRING_LENGTH: u32 = 0x0040_48e0;
+/// `BSStringT<char>::c_str` (`this` is the string: its character pointer).
+const BS_STRING_DATA: u32 = 0x0055_9450;
+/// `strcmp(a, b)` (the wrapper; `00ec6da0` is the CRT function).
+const STRCMP: u32 = 0x0040_8b20;
+/// `memcpy(destination, source, size)` (the wrapper around `00ec44d0`).
+const MEMCPY: u32 = 0x0040_1460;
+/// The constructor of a `REF_ACTIVATE_DATA` (`this` is the 8-byte data:
+/// clears the reference and the delay).
+const REF_ACTIVATE_DATA_CONSTRUCT: u32 = 0x0041_4010;
+/// Empties the `DecalRefList` of an `ExtraDecalRefs` (`this` is the extra
+/// data) and deletes the decal data; in this unit, not yet translated.
+const DECAL_REFS_FREE_LIST: u32 = 0x0043_43c0;
+/// An empty C string in the exe's data (what `ExtraActivateRef`'s constructor sets
+/// its text to).
+const EMPTY_STRING: u32 = 0x0101_1584;
 
 /// Constructor of the `DismemberedLimbs` array member of
 /// `ExtraDismemberedLimbs` (`this` is the array). In this unit; not yet
@@ -704,6 +818,107 @@ layout! {
     pub struct ExtraRagDollData: 0x10 {
         /// `pRagDollData` (Xbox PDB): `RagDollData*`, owned.
         0x0C pRagDollData: Ptr,
+    }
+
+    /// `ExtraEncounterZone` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraEncounterZone: 0x10 {
+        /// `pZone` (Xbox PDB): `BGSEncounterZone*`.
+        0x0C pZone: Ptr,
+    }
+
+    /// `ExtraUsedMarkers` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraUsedMarkers: 0x10 {
+        /// `iUsedMarkers` (Xbox PDB): bit `n` is set when marker `n` is used.
+        0x0C iUsedMarkers: u32,
+    }
+
+    /// `ExtraReservedMarkers` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraReservedMarkers: 0x10 {
+        /// `iReservedMarkers` (Xbox PDB).
+        0x0C iReservedMarkers: u32,
+    }
+
+    /// `ExtraRunOncePacks` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraRunOncePacks: 0x10 {
+        /// `pPackageList` (Xbox PDB): `BSSimpleList<RunOncePackage *>*`,
+        /// owned (the PC build allocates it).
+        0x0C pPackageList: Ptr,
+    }
+
+    /// `ExtraDistantData` (Xbox PDB), 0x18 bytes.
+    pub struct ExtraDistantData: 0x18 {
+        /// `LandNormal` (Xbox PDB).
+        0x0C LandNormal: Inline<NiPoint3>,
+    }
+
+    /// `ExtraEnableStateParent` (Xbox PDB), 0x14 bytes.
+    pub struct ExtraEnableStateParent: 0x14 {
+        /// `pParent` (Xbox PDB): `TESObjectREFR*`.
+        0x0C pParent: Ptr,
+        /// `cFlags` (Xbox PDB).
+        0x10 cFlags: u8,
+    }
+
+    /// `ExtraEnableStateChildren` (Xbox PDB), 0x14 bytes.
+    pub struct ExtraEnableStateChildren: 0x14 {
+        /// `ChildList` (Xbox PDB): `BSSimpleList<TESObjectREFR *>`.
+        0x0C ChildList: Inline<BSSimpleList>,
+    }
+
+    /// `ExtraRandomTeleportMarker` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraRandomTeleportMarker: 0x10 {
+        /// `pMarker` (Xbox PDB): `TESObjectREFR*`.
+        0x0C pMarker: Ptr,
+    }
+
+    /// `ExtraLinkedRefChildren` (Xbox PDB), 0x14 bytes.
+    pub struct ExtraLinkedRefChildren: 0x14 {
+        /// `ChildList` (Xbox PDB): `BSSimpleList<TESObjectREFR *>`.
+        0x0C ChildList: Inline<BSSimpleList>,
+    }
+
+    /// `ExtraLinkedRef` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraLinkedRef: 0x10 {
+        /// `pLinkedRef` (Xbox PDB): `TESObjectREFR*`.
+        0x0C pLinkedRef: Ptr,
+    }
+
+    /// `ExtraAshPileRef` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraAshPileRef: 0x10 {
+        /// `pAshPileRef` (Xbox PDB): `TESObjectREFR*`.
+        0x0C pAshPileRef: Ptr,
+    }
+
+    /// `REF_ACTIVATE_DATA` (Xbox PDB), 8 bytes.
+    pub struct RefActivateData: 0x08 {
+        /// `pActivateRef` (Xbox PDB): `TESObjectREFR*`.
+        0x00 pActivateRef: Ptr,
+        /// `fActivateDelay` (Xbox PDB).
+        0x04 fActivateDelay: f32,
+    }
+
+    /// `ExtraActivateRefChildren` (Xbox PDB), 0x18 bytes.
+    pub struct ExtraActivateRefChildren: 0x18 {
+        /// `ChildList` (Xbox PDB): `BSSimpleList<REF_ACTIVATE_DATA *>`.
+        0x0C ChildList: Inline<BSSimpleList>,
+        /// `fActivateChildrenTimer` (Xbox PDB).
+        0x14 fActivateChildrenTimer: f32,
+    }
+
+    /// `ExtraActivateRef` (Xbox PDB), 0x20 bytes.
+    pub struct ExtraActivateRef: 0x20 {
+        /// `ParentList` (Xbox PDB): `BSSimpleList<REF_ACTIVATE_DATA *>`.
+        0x0C ParentList: Inline<BSSimpleList>,
+        /// `cActivateFlags` (Xbox PDB).
+        0x14 cActivateFlags: u8,
+        /// `ActivateTextOverride` (Xbox PDB): `BSStringT<char>`.
+        0x18 ActivateTextOverride: Inline<BSStringT>,
+    }
+
+    /// `ExtraDecalRefs` (Xbox PDB), 0x14 bytes.
+    pub struct ExtraDecalRefs: 0x14 {
+        /// `DecalRefList` (Xbox PDB): `BSSimpleList<REF_DECAL_DATA *>`.
+        0x0C DecalRefList: Inline<BSSimpleList>,
     }
 }
 
@@ -2681,6 +2896,746 @@ pub fn fn_00432da0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// The `__RTDynamicCast` the `Compare` and `Copy` methods start with: `other`
+/// as the class with the RTTI descriptor `target_type`, null when it is not
+/// one.
+fn dynamic_cast_extra<U>(e: &mut Engine, other: Ptr, target_type: u32) -> Ptr<U> {
+    e.call(
+        DYNAMIC_CAST,
+        &args![other, 0u32, BS_EXTRA_DATA_TYPE, target_type, 0u32],
+    )
+    .ptr()
+}
+
+/// Whether the list node holds no item and has no successor.
+fn list_node_is_empty(e: &mut Engine, node: Ptr<BSSimpleList>) -> bool {
+    e.call(SIMPLE_LIST_IS_EMPTY, &args![node]).bool()
+}
+
+/// The item of a list node (the word its item slot holds).
+fn list_node_item(e: &mut Engine, node: Ptr<BSSimpleList>) -> u32 {
+    let slot = e.call(SIMPLE_LIST_ITEM_SLOT, &args![node]).u32();
+    e.mem.u32(slot)
+}
+
+/// The node after `node` (null at the end).
+fn list_node_next(e: &mut Engine, node: Ptr<BSSimpleList>) -> Ptr<BSSimpleList> {
+    e.call(SIMPLE_LIST_NEXT, &args![node]).ptr()
+}
+
+/// The constructor of a class that holds a list of its own at +0xc and
+/// nothing else: the base constructor, the vtable, then the list's
+/// constructor.
+fn construct_with_list(e: &mut Engine, this: Ptr, extra_type: u32, vtable: u32) {
+    construct_base(e, this, extra_type, vtable);
+    e.call(
+        SIMPLE_LIST_CONSTRUCT,
+        &args![Ptr::<BSSimpleList>::new(this.addr() + 0xc)],
+    );
+}
+
+/// The destructor body of the classes that hold a list at +0xc and free its
+/// nodes themselves: resets the vtable, runs the list's clear and its
+/// destructor body, then the base destructor.
+fn destroy_with_list(e: &mut Engine, this: Ptr, vtable: u32) {
+    e.mem.set_u32(this.addr(), vtable);
+    let list = Ptr::<BSSimpleList>::new(this.addr() + 0xc);
+    e.call(SIMPLE_LIST_CLEAR, &args![list]);
+    e.call(SIMPLE_LIST_DESTRUCT, &args![list]);
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 00432dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraRagDollData::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraRagDollData`, when `BSExtraData::Compare` returns true, when exactly
+/// one of the two has ragdoll data, or when `RagDollData::Compare` says the
+/// data differ.
+pub fn extra_rag_doll_data_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraRagDollData>,
+    other: Ptr,
+) -> bool {
+    let Some(cast) =
+        compare_prologue::<_, ExtraRagDollData>(e, this, other, EXTRA_RAG_DOLL_DATA_TYPE)
+    else {
+        return true;
+    };
+    let mine = e.get(this, ExtraRagDollData::pRagDollData);
+    let theirs = e.get(cast, ExtraRagDollData::pRagDollData);
+    if mine.is_null() {
+        return !theirs.is_null();
+    }
+    e.call(RAG_DOLL_DATA_COMPARE, &args![mine, theirs]).bool()
+}
+
+// Translated from 00432e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraEncounterZone::ExtraEncounterZone` (Xbox PDB): extra-data type 0x74
+/// and no zone. Returns `this`.
+pub fn extra_encounter_zone_extra_encounter_zone(
+    e: &mut Engine,
+    this: Ptr<ExtraEncounterZone>,
+) -> Ptr<ExtraEncounterZone> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_ENCOUNTER_ZONE,
+        EXTRA_ENCOUNTER_ZONE_VTABLE,
+    );
+    e.set(this, ExtraEncounterZone::pZone, Ptr::NULL);
+    this
+}
+
+// Translated from 00432e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraEncounterZone::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraEncounterZone`, when `BSExtraData::Compare` returns true, or when
+/// the zones differ.
+pub fn extra_encounter_zone_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraEncounterZone>,
+    other: Ptr,
+) -> bool {
+    let Some(cast) =
+        compare_prologue::<_, ExtraEncounterZone>(e, this, other, EXTRA_ENCOUNTER_ZONE_TYPE)
+    else {
+        return true;
+    };
+    e.get(this, ExtraEncounterZone::pZone) != e.get(cast, ExtraEncounterZone::pZone)
+}
+
+// Translated from 00432f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraUsedMarkers`' constructor (the engine map has no name for it; the
+/// class is the one whose vtable `01015c60` it stores): extra-data type 0x12
+/// and no marker used. Returns `this`.
+pub fn fn_00432f00(e: &mut Engine, this: Ptr<ExtraUsedMarkers>) -> Ptr<ExtraUsedMarkers> {
+    construct_base(e, this.cast(), TYPE_USED_MARKERS, EXTRA_USED_MARKERS_VTABLE);
+    e.set(this, ExtraUsedMarkers::iUsedMarkers, 0);
+    this
+}
+
+// Translated from 00432f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A destructor body (the engine map has no name for it) that only runs the
+/// base destructor: it does not reset the vtable.
+pub fn fn_00432f30(e: &mut Engine, this: Ptr) {
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 00432f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraReservedMarkers`' constructor (the engine map has no name for it;
+/// the class is the one whose vtable `01015c6c` it stores): extra-data type
+/// 0x82 and no marker reserved. Returns `this`.
+pub fn fn_00432f50(e: &mut Engine, this: Ptr<ExtraReservedMarkers>) -> Ptr<ExtraReservedMarkers> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_RESERVED_MARKERS,
+        EXTRA_RESERVED_MARKERS_VTABLE,
+    );
+    e.set(this, ExtraReservedMarkers::iReservedMarkers, 0);
+    this
+}
+
+// Translated from 00432f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraUsedMarkers::GetMarkerUsed` (Xbox PDB): whether bit `index` of the
+/// used markers is set; false for an index of 30 or more.
+pub fn extra_used_markers_get_marker_used(
+    e: &mut Engine,
+    this: Ptr<ExtraUsedMarkers>,
+    index: u32,
+) -> bool {
+    index < 0x1e && e.get(this, ExtraUsedMarkers::iUsedMarkers) & (1 << (index & 0x1f)) != 0
+}
+
+// Translated from 00432fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraUsedMarkers::SetMarkerUsed` (Xbox PDB): sets bit `index` of the used
+/// markers when `used` is not 0, clears it otherwise; nothing happens for an
+/// index of 30 or more.
+pub fn extra_used_markers_set_marker_used(
+    e: &mut Engine,
+    this: Ptr<ExtraUsedMarkers>,
+    index: u32,
+    used: u8,
+) {
+    if index >= 0x1e {
+        return;
+    }
+    let bit = 1u32 << (index & 0x1f);
+    let markers = e.get(this, ExtraUsedMarkers::iUsedMarkers);
+    let markers = if used != 0 {
+        markers | bit
+    } else {
+        markers & !bit
+    };
+    e.set(this, ExtraUsedMarkers::iUsedMarkers, markers);
+}
+
+// Translated from 00433010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraRunOncePacks`' constructor (the engine map has no name for it):
+/// extra-data type 0x1b and a newly allocated, constructed 8-byte list (null
+/// when the allocation fails). Returns `this`. The exception-unwinding frame
+/// is not translated.
+pub fn fn_00433010(e: &mut Engine, this: Ptr<ExtraRunOncePacks>) -> Ptr<ExtraRunOncePacks> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_RUN_ONCE_PACKS,
+        EXTRA_RUN_ONCE_PACKS_VTABLE,
+    );
+    let memory = e.call(OPERATOR_NEW, &args![8u32]).u32();
+    let list: Ptr = if memory != 0 {
+        e.call(SIMPLE_LIST_CONSTRUCT, &args![memory]).ptr()
+    } else {
+        Ptr::NULL
+    };
+    e.set(this, ExtraRunOncePacks::pPackageList, list);
+    this
+}
+
+// Translated from 004330b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraRunOncePacks::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor, then `operator delete` when `flags & 1`. Returns `this`.
+pub fn extra_run_once_packs_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraRunOncePacks>,
+    flags: u32,
+) -> Ptr<ExtraRunOncePacks> {
+    fn_004330e0(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 004330e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraRunOncePacks`' destructor body (the engine map has no name for it):
+/// resets the vtable, deletes the item of every node up to the first node
+/// without an item, clears the list (called even when the pointer is null),
+/// deletes it if there is one, then runs the base destructor. The
+/// exception-unwinding frame is not translated.
+pub fn fn_004330e0(e: &mut Engine, this: Ptr<ExtraRunOncePacks>) {
+    e.mem.set_u32(this.addr(), EXTRA_RUN_ONCE_PACKS_VTABLE);
+    let mut node = e
+        .get(this, ExtraRunOncePacks::pPackageList)
+        .cast::<BSSimpleList>();
+    while !node.is_null() {
+        if list_node_item(e, node) == 0 {
+            break;
+        }
+        let item = list_node_item(e, node);
+        e.call(OPERATOR_DELETE, &args![item]);
+        node = list_node_next(e, node);
+    }
+    let list = e.get(this, ExtraRunOncePacks::pPackageList);
+    e.call(SIMPLE_LIST_CLEAR, &args![list]);
+    let list = e.get(this, ExtraRunOncePacks::pPackageList);
+    if !list.is_null() {
+        e.call(SIMPLE_LIST_DELETE, &args![list, 1u32]);
+    }
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 004331c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of `ExtraRunOncePacks` (the engine map has no name for it): sets
+/// the flag byte of the 8-byte entry whose first word is `key`. The entry is
+/// searched in the package list (the search ends at the first node without
+/// an item); a missing one is allocated and added to the list first. The
+/// entry's first word is then `key` and its byte at +4 `flag`.
+pub fn fn_004331c0(e: &mut Engine, this: Ptr<ExtraRunOncePacks>, key: u32, flag: u8) {
+    let mut found = 0u32;
+    let mut node = e
+        .get(this, ExtraRunOncePacks::pPackageList)
+        .cast::<BSSimpleList>();
+    while !node.is_null() {
+        let item = list_node_item(e, node);
+        if item == 0 {
+            node = Ptr::NULL;
+        } else if e.mem.u32(item) == key {
+            found = item;
+            break;
+        } else {
+            node = list_node_next(e, node);
+        }
+    }
+    if found == 0 {
+        let entry = e.call(OPERATOR_NEW, &args![8u32]).u32();
+        let list = e.get(this, ExtraRunOncePacks::pPackageList);
+        // The list is given the address of the variable that holds the new
+        // entry; the entry is read back from it afterwards.
+        found = e.with_stack(4, |e, local| {
+            e.mem.set_u32(local.addr(), entry);
+            e.call(SIMPLE_LIST_ADD_HEAD, &args![list, local]);
+            e.mem.u32(local.addr())
+        });
+    }
+    e.mem.set_u32(found, key);
+    e.mem.set_u8(found + 4, flag);
+}
+
+// Translated from 00433260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDistantData`'s constructor (the engine map has no name for it; the
+/// class is the one whose vtable `01015c84` it stores): extra-data type 0x13
+/// and the land normal `(0, 0, z)` with `z` the float constant at `010145a8`
+/// (built by `NiPoint3`'s constructor in a temporary, then copied). Returns
+/// `this`. The exception-unwinding frame is not translated.
+pub fn fn_00433260(e: &mut Engine, this: Ptr<ExtraDistantData>) -> Ptr<ExtraDistantData> {
+    construct_base(e, this.cast(), TYPE_DISTANT_DATA, EXTRA_DISTANT_DATA_VTABLE);
+    let normal = this.at(ExtraDistantData::LandNormal);
+    // The call on the member's address does nothing (it returns its argument).
+    e.call(SIMPLE_LIST_ITEM_SLOT, &args![normal]);
+    let z: f32 = e.global(DISTANT_DATA_NORMAL_Z);
+    let temporary = e.with_stack(0xc, |e, point| {
+        let made = e
+            .call(NI_POINT3_CONSTRUCT, &args![point, 0.0f32, 0.0f32, z])
+            .u32();
+        [e.mem.u32(made), e.mem.u32(made + 4), e.mem.u32(made + 8)]
+    });
+    for (i, word) in temporary.iter().enumerate() {
+        e.mem.set_u32(normal.addr() + 4 * i as u32, *word);
+    }
+    this
+}
+
+// Translated from 00433300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraEnableStateParent`'s constructor (the engine map has no name for
+/// it): extra-data type 0x37, no parent and no flags. Returns `this`.
+pub fn fn_00433300(
+    e: &mut Engine,
+    this: Ptr<ExtraEnableStateParent>,
+) -> Ptr<ExtraEnableStateParent> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_ENABLE_STATE_PARENT,
+        EXTRA_ENABLE_STATE_PARENT_VTABLE,
+    );
+    e.set(this, ExtraEnableStateParent::pParent, Ptr::NULL);
+    e.set(this, ExtraEnableStateParent::cFlags, 0);
+    this
+}
+
+// Translated from 00433340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraEnableStateParent::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraEnableStateParent`, or when the parent or the flags differ.
+/// (`BSExtraData::Compare` is not asked.)
+pub fn extra_enable_state_parent_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraEnableStateParent>,
+    other: Ptr,
+) -> bool {
+    let cast: Ptr<ExtraEnableStateParent> =
+        dynamic_cast_extra(e, other, EXTRA_ENABLE_STATE_PARENT_TYPE);
+    if cast.is_null() {
+        return true;
+    }
+    e.get(cast, ExtraEnableStateParent::pParent) != e.get(this, ExtraEnableStateParent::pParent)
+        || e.get(cast, ExtraEnableStateParent::cFlags)
+            != e.get(this, ExtraEnableStateParent::cFlags)
+}
+
+// Translated from 004333a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraEnableStateChildren`'s constructor (the engine map has no name for
+/// it): extra-data type 0x38 and an empty child list. Returns `this`. The
+/// exception-unwinding frame is not translated.
+pub fn fn_004333a0(
+    e: &mut Engine,
+    this: Ptr<ExtraEnableStateChildren>,
+) -> Ptr<ExtraEnableStateChildren> {
+    construct_with_list(
+        e,
+        this.cast(),
+        TYPE_ENABLE_STATE_CHILDREN,
+        EXTRA_ENABLE_STATE_CHILDREN_VTABLE,
+    );
+    this
+}
+
+// Translated from 00433410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraEnableStateChildren::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor, then `operator delete` when `flags & 1`. Returns `this`.
+pub fn extra_enable_state_children_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraEnableStateChildren>,
+    flags: u32,
+) -> Ptr<ExtraEnableStateChildren> {
+    fn_00433440(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00433440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraEnableStateChildren`'s destructor body (the decompiler names it
+/// `CMFCRibbonInfo::XQAT::~XQAT` by mistake; the body is this class's):
+/// resets the vtable, clears the child list, runs the list's destructor body,
+/// then the base destructor. The exception-unwinding frame is not translated.
+pub fn fn_00433440(e: &mut Engine, this: Ptr<ExtraEnableStateChildren>) {
+    destroy_with_list(e, this.cast(), EXTRA_ENABLE_STATE_CHILDREN_VTABLE);
+}
+
+// Translated from 004334b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraRandomTeleportMarker`'s constructor (the engine map has no name for
+/// it): extra-data type 0x3b and no marker. Returns `this`.
+pub fn fn_004334b0(
+    e: &mut Engine,
+    this: Ptr<ExtraRandomTeleportMarker>,
+) -> Ptr<ExtraRandomTeleportMarker> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_RANDOM_TELEPORT_MARKER,
+        EXTRA_RANDOM_TELEPORT_MARKER_VTABLE,
+    );
+    e.set(this, ExtraRandomTeleportMarker::pMarker, Ptr::NULL);
+    this
+}
+
+// Translated from 004334e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraRandomTeleportMarker::Compare` (Xbox PDB): true when `other` is not
+/// an `ExtraRandomTeleportMarker` or when the markers differ.
+/// (`BSExtraData::Compare` is not asked.)
+pub fn extra_random_teleport_marker_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraRandomTeleportMarker>,
+    other: Ptr,
+) -> bool {
+    let cast: Ptr<ExtraRandomTeleportMarker> =
+        dynamic_cast_extra(e, other, EXTRA_RANDOM_TELEPORT_MARKER_TYPE);
+    if cast.is_null() {
+        return true;
+    }
+    e.get(cast, ExtraRandomTeleportMarker::pMarker)
+        != e.get(this, ExtraRandomTeleportMarker::pMarker)
+}
+
+// Translated from 00433530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraLinkedRefChildren`'s constructor (the engine map has no name for
+/// it): extra-data type 0x52 and an empty child list. Returns `this`. The
+/// exception-unwinding frame is not translated.
+pub fn fn_00433530(
+    e: &mut Engine,
+    this: Ptr<ExtraLinkedRefChildren>,
+) -> Ptr<ExtraLinkedRefChildren> {
+    construct_with_list(
+        e,
+        this.cast(),
+        TYPE_LINKED_REF_CHILDREN,
+        EXTRA_LINKED_REF_CHILDREN_VTABLE,
+    );
+    this
+}
+
+// Translated from 004335a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraLinkedRefChildren::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor, then `operator delete` when `flags & 1`. Returns `this`.
+pub fn extra_linked_ref_children_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraLinkedRefChildren>,
+    flags: u32,
+) -> Ptr<ExtraLinkedRefChildren> {
+    fn_004335d0(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 004335d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraLinkedRefChildren`'s destructor body (the decompiler names it
+/// `CMFCRibbonInfo::XQAT::~XQAT` by mistake; the body is this class's):
+/// resets the vtable, clears the child list, runs the list's destructor body,
+/// then the base destructor. The exception-unwinding frame is not translated.
+pub fn fn_004335d0(e: &mut Engine, this: Ptr<ExtraLinkedRefChildren>) {
+    destroy_with_list(e, this.cast(), EXTRA_LINKED_REF_CHILDREN_VTABLE);
+}
+
+// Translated from 00433640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraLinkedRef`'s constructor (the engine map has no name for it):
+/// extra-data type 0x51 and no linked reference. Returns `this`.
+pub fn fn_00433640(e: &mut Engine, this: Ptr<ExtraLinkedRef>) -> Ptr<ExtraLinkedRef> {
+    construct_base(e, this.cast(), TYPE_LINKED_REF, EXTRA_LINKED_REF_VTABLE);
+    e.set(this, ExtraLinkedRef::pLinkedRef, Ptr::NULL);
+    this
+}
+
+// Translated from 00433670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraLinkedRef::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraLinkedRef` or when the linked references differ.
+/// (`BSExtraData::Compare` is not asked.)
+pub fn extra_linked_ref_compare(e: &mut Engine, this: Ptr<ExtraLinkedRef>, other: Ptr) -> bool {
+    let cast: Ptr<ExtraLinkedRef> = dynamic_cast_extra(e, other, EXTRA_LINKED_REF_TYPE);
+    if cast.is_null() {
+        return true;
+    }
+    e.get(cast, ExtraLinkedRef::pLinkedRef) != e.get(this, ExtraLinkedRef::pLinkedRef)
+}
+
+// Translated from 004336c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraAshPileRef`'s constructor (the engine map has no name for it):
+/// extra-data type 0x89 and no reference. Returns `this`.
+pub fn fn_004336c0(e: &mut Engine, this: Ptr<ExtraAshPileRef>) -> Ptr<ExtraAshPileRef> {
+    construct_base(e, this.cast(), TYPE_ASH_PILE_REF, EXTRA_ASH_PILE_REF_VTABLE);
+    e.set(this, ExtraAshPileRef::pAshPileRef, Ptr::NULL);
+    this
+}
+
+// Translated from 004336f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A cdecl search in a list of `REF_ACTIVATE_DATA` pointers (the engine map
+/// has no name for it): the first item whose `pActivateRef` is `reference`,
+/// null if there is none. Stops at the first empty node.
+pub fn fn_004336f0(
+    e: &mut Engine,
+    reference: u32,
+    list: Ptr<BSSimpleList>,
+) -> Ptr<RefActivateData> {
+    let mut node = list;
+    while !node.is_null() && !list_node_is_empty(e, node) {
+        let item = list_node_item(e, node);
+        if e.mem.u32(item) == reference {
+            return Ptr::new(item);
+        }
+        node = list_node_next(e, node);
+    }
+    Ptr::NULL
+}
+
+// Translated from 00433750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A cdecl function (the engine map has no name for it): deletes the item of
+/// the list's head and removes the head, until the list is empty.
+pub fn fn_00433750(e: &mut Engine, list: Ptr<BSSimpleList>) {
+    while !list.is_null() && !list_node_is_empty(e, list) {
+        let item = list_node_item(e, list);
+        e.call(OPERATOR_DELETE, &args![item]);
+        e.call(SIMPLE_LIST_REMOVE_HEAD, &args![list]);
+    }
+}
+
+// Translated from 00433790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraActivateRefChildren`'s constructor (the engine map has no name for
+/// it): extra-data type 0x54, an empty child list and a timer of 0. Returns
+/// `this`. The exception-unwinding frame is not translated.
+pub fn fn_00433790(
+    e: &mut Engine,
+    this: Ptr<ExtraActivateRefChildren>,
+) -> Ptr<ExtraActivateRefChildren> {
+    construct_with_list(
+        e,
+        this.cast(),
+        TYPE_ACTIVATE_REF_CHILDREN,
+        EXTRA_ACTIVATE_REF_CHILDREN_VTABLE,
+    );
+    e.set(this, ExtraActivateRefChildren::fActivateChildrenTimer, 0.0);
+    this
+}
+
+// Translated from 00433800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraActivateRefChildren::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor, then `operator delete` when `flags & 1`. Returns `this`.
+pub fn extra_activate_ref_children_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraActivateRefChildren>,
+    flags: u32,
+) -> Ptr<ExtraActivateRefChildren> {
+    fn_00433830(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00433830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraActivateRefChildren`'s destructor body (the engine map has no name
+/// for it): resets the vtable, deletes the child list's items and nodes
+/// (`00433750`), runs the list's destructor body, then the base destructor.
+/// The exception-unwinding frame is not translated.
+pub fn fn_00433830(e: &mut Engine, this: Ptr<ExtraActivateRefChildren>) {
+    e.mem
+        .set_u32(this.addr(), EXTRA_ACTIVATE_REF_CHILDREN_VTABLE);
+    let list = this.at(ExtraActivateRefChildren::ChildList);
+    fn_00433750(e, list);
+    e.call(SIMPLE_LIST_DESTRUCT, &args![list]);
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 004338b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraActivateRef`'s constructor (the engine map has no name for it):
+/// extra-data type 0x53, an empty parent list, no flags, and an
+/// `ActivateTextOverride` string that is built and then `Set` to the empty string
+/// at `01011584` (an empty C string; length 0 means all of it). Returns `this`. The
+/// exception-unwinding frame is not translated.
+pub fn fn_004338b0(e: &mut Engine, this: Ptr<ExtraActivateRef>) -> Ptr<ExtraActivateRef> {
+    construct_with_list(e, this.cast(), TYPE_ACTIVATE_REF, EXTRA_ACTIVATE_REF_VTABLE);
+    let text = this.at(ExtraActivateRef::ActivateTextOverride);
+    e.call(BS_STRING_CONSTRUCT, &args![text]);
+    e.set(this, ExtraActivateRef::cActivateFlags, 0);
+    e.call(BS_STRING_SET, &args![text, EMPTY_STRING, 0u32]);
+    this
+}
+
+// Translated from 00433940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraActivateRef::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor, then `operator delete` when `flags & 1`. Returns `this`.
+pub fn extra_activate_ref_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraActivateRef>,
+    flags: u32,
+) -> Ptr<ExtraActivateRef> {
+    fn_00433970(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00433970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraActivateRef`'s destructor body (the engine map has no name for it):
+/// resets the vtable, deletes the parent list's items and nodes (`00433750`),
+/// clears the `ActivateTextOverride` string, runs the list's destructor body,
+/// then the base destructor. The exception-unwinding frame is not translated.
+pub fn fn_00433970(e: &mut Engine, this: Ptr<ExtraActivateRef>) {
+    e.mem.set_u32(this.addr(), EXTRA_ACTIVATE_REF_VTABLE);
+    let list = this.at(ExtraActivateRef::ParentList);
+    fn_00433750(e, list);
+    e.call(
+        BS_STRING_CLEAR,
+        &args![this.at(ExtraActivateRef::ActivateTextOverride)],
+    );
+    e.call(SIMPLE_LIST_DESTRUCT, &args![list]);
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 00433a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of `ExtraActivateRef` (the engine map has no name for it): the
+/// entry of the parent list for `reference` (`004336f0`), null if there is
+/// none.
+pub fn fn_00433a00(
+    e: &mut Engine,
+    this: Ptr<ExtraActivateRef>,
+    reference: u32,
+) -> Ptr<RefActivateData> {
+    fn_004336f0(e, reference, this.at(ExtraActivateRef::ParentList))
+}
+
+// Translated from 00433a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraActivateRef::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraActivateRef`, when the parent lists have a different number of
+/// entries, when an entry of this list has no entry for its reference in the
+/// other list or differs from it in its 8 bytes, when the flags differ, or
+/// when the activate texts differ (an empty text equals only an empty text,
+/// otherwise the strings are compared with `strcmp`). `BSExtraData::Compare`
+/// is not asked.
+pub fn extra_activate_ref_compare(e: &mut Engine, this: Ptr<ExtraActivateRef>, other: Ptr) -> bool {
+    let cast: Ptr<ExtraActivateRef> = dynamic_cast_extra(e, other, EXTRA_ACTIVATE_REF_TYPE);
+    if cast.is_null() {
+        return true;
+    }
+    let mine = this.at(ExtraActivateRef::ParentList);
+    let theirs = cast.at(ExtraActivateRef::ParentList);
+    let my_count = e.call(SIMPLE_LIST_COUNT, &args![mine]).u32();
+    let their_count = e.call(SIMPLE_LIST_COUNT, &args![theirs]).u32();
+    if my_count != their_count {
+        return true;
+    }
+    let mut node = mine;
+    while !node.is_null() && !list_node_is_empty(e, node) {
+        let item = list_node_item(e, node);
+        let reference = e.mem.u32(item);
+        let counterpart = fn_00433a00(e, cast, reference);
+        if counterpart.is_null() || e.call(MEMCMP, &args![counterpart, item, 8u32]).u32() != 0 {
+            return true;
+        }
+        node = list_node_next(e, node);
+    }
+    if e.get(this, ExtraActivateRef::cActivateFlags)
+        != e.get(cast, ExtraActivateRef::cActivateFlags)
+    {
+        return true;
+    }
+    let my_text = this.at(ExtraActivateRef::ActivateTextOverride);
+    let their_text = cast.at(ExtraActivateRef::ActivateTextOverride);
+    if e.call(BS_STRING_LENGTH, &args![my_text]).u32() == 0
+        && e.call(BS_STRING_LENGTH, &args![their_text]).u32() == 0
+    {
+        return false;
+    }
+    if e.call(BS_STRING_LENGTH, &args![my_text]).u32() == 0
+        || e.call(BS_STRING_LENGTH, &args![their_text]).u32() == 0
+    {
+        return true;
+    }
+    let their_chars = e.call(BS_STRING_DATA, &args![their_text]).u32();
+    let my_chars = e.call(BS_STRING_DATA, &args![my_text]).u32();
+    e.call(STRCMP, &args![my_chars, their_chars]).u32() != 0
+}
+
+// Translated from 00433b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraActivateRef::Copy` (Xbox PDB): when `other` is an `ExtraActivateRef`,
+/// deletes this parent list's entries, copies each of the other list's
+/// 8-byte entries into a new one added to the list (at the head, so the order
+/// is reversed), and copies the flags and the activate text (`BSStringT::Set`).
+/// Nothing happens when `other` is another class. The exception-unwinding
+/// frame is not translated.
+pub fn extra_activate_ref_copy(e: &mut Engine, this: Ptr<ExtraActivateRef>, other: Ptr) {
+    let cast: Ptr<ExtraActivateRef> = dynamic_cast_extra(e, other, EXTRA_ACTIVATE_REF_TYPE);
+    if cast.is_null() {
+        return;
+    }
+    let list = this.at(ExtraActivateRef::ParentList);
+    fn_00433750(e, list);
+    let mut node = cast.at(ExtraActivateRef::ParentList);
+    while !node.is_null() && !list_node_is_empty(e, node) {
+        let item = list_node_item(e, node);
+        node = list_node_next(e, node);
+        let memory = e.call(OPERATOR_NEW, &args![8u32]).u32();
+        let copy = if memory != 0 {
+            e.call(REF_ACTIVATE_DATA_CONSTRUCT, &args![memory]).u32()
+        } else {
+            0
+        };
+        e.call(MEMCPY, &args![copy, item, 8u32]);
+        e.with_stack(4, |e, local| {
+            e.mem.set_u32(local.addr(), copy);
+            e.call(SIMPLE_LIST_ADD_HEAD, &args![list, local]);
+        });
+    }
+    let flags = e.get(cast, ExtraActivateRef::cActivateFlags);
+    e.set(this, ExtraActivateRef::cActivateFlags, flags);
+    e.call(
+        BS_STRING_COPY,
+        &args![
+            this.at(ExtraActivateRef::ActivateTextOverride),
+            cast.at(ExtraActivateRef::ActivateTextOverride)
+        ],
+    );
+}
+
+// Translated from 00433ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDecalRefs`' constructor (the engine map has no name for it):
+/// extra-data type 0x57 and an empty decal list. Returns `this`. The
+/// exception-unwinding frame is not translated.
+pub fn fn_00433ca0(e: &mut Engine, this: Ptr<ExtraDecalRefs>) -> Ptr<ExtraDecalRefs> {
+    construct_with_list(e, this.cast(), TYPE_DECAL_REFS, EXTRA_DECAL_REFS_VTABLE);
+    this
+}
+
+// Translated from 00433d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDecalRefs::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor, then `operator delete` when `flags & 1`. Returns `this`.
+pub fn extra_decal_refs_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraDecalRefs>,
+    flags: u32,
+) -> Ptr<ExtraDecalRefs> {
+    fn_00433d40(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00433d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDecalRefs`' destructor body (the decompiler names it
+/// `CMFCFilterChunkValueImpl::~CMFCFilterChunkValueImpl` by mistake; the body
+/// is this class's): resets the vtable, frees the decal list's entries
+/// (`004343c0`), runs the list's destructor body, then the base destructor.
+/// The exception-unwinding frame is not translated.
+pub fn fn_00433d40(e: &mut Engine, this: Ptr<ExtraDecalRefs>) {
+    e.mem.set_u32(this.addr(), EXTRA_DECAL_REFS_VTABLE);
+    e.call(DECAL_REFS_FREE_LIST, &args![this]);
+    e.call(
+        SIMPLE_LIST_DESTRUCT,
+        &args![this.at(ExtraDecalRefs::DecalRefList)],
+    );
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3115,6 +4070,162 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00432d10, fn_00432d10(Ptr<ExtraRagDollData>)),
         entry!(0x00432da0, fn_00432da0(Ptr, u32) -> Ptr),
+        entry!(
+            0x00432dd0,
+            extra_rag_doll_data_compare(Ptr<ExtraRagDollData>, Ptr) -> bool
+        ),
+        entry!(
+            0x00432e60,
+            extra_encounter_zone_extra_encounter_zone(
+                Ptr<ExtraEncounterZone>,
+            ) -> Ptr<ExtraEncounterZone>
+        ),
+        entry!(
+            0x00432e90,
+            extra_encounter_zone_compare(Ptr<ExtraEncounterZone>, Ptr) -> bool
+        ),
+        entry!(
+            0x00432f00,
+            fn_00432f00(Ptr<ExtraUsedMarkers>) -> Ptr<ExtraUsedMarkers>
+        ),
+        entry!(0x00432f30, fn_00432f30(Ptr)),
+        entry!(
+            0x00432f50,
+            fn_00432f50(Ptr<ExtraReservedMarkers>) -> Ptr<ExtraReservedMarkers>
+        ),
+        entry!(
+            0x00432f80,
+            extra_used_markers_get_marker_used(Ptr<ExtraUsedMarkers>, u32) -> bool
+        ),
+        entry!(
+            0x00432fc0,
+            extra_used_markers_set_marker_used(Ptr<ExtraUsedMarkers>, u32, u8)
+        ),
+        entry!(
+            0x00433010,
+            fn_00433010(Ptr<ExtraRunOncePacks>) -> Ptr<ExtraRunOncePacks>
+        ),
+        entry!(
+            0x004330b0,
+            extra_run_once_packs_scalar_deleting_destructor(
+                Ptr<ExtraRunOncePacks>,
+                u32,
+            ) -> Ptr<ExtraRunOncePacks>
+        ),
+        entry!(0x004330e0, fn_004330e0(Ptr<ExtraRunOncePacks>)),
+        entry!(0x004331c0, fn_004331c0(Ptr<ExtraRunOncePacks>, u32, u8)),
+        entry!(
+            0x00433260,
+            fn_00433260(Ptr<ExtraDistantData>) -> Ptr<ExtraDistantData>
+        ),
+        entry!(
+            0x00433300,
+            fn_00433300(Ptr<ExtraEnableStateParent>) -> Ptr<ExtraEnableStateParent>
+        ),
+        entry!(
+            0x00433340,
+            extra_enable_state_parent_compare(Ptr<ExtraEnableStateParent>, Ptr) -> bool
+        ),
+        entry!(
+            0x004333a0,
+            fn_004333a0(Ptr<ExtraEnableStateChildren>) -> Ptr<ExtraEnableStateChildren>
+        ),
+        entry!(
+            0x00433410,
+            extra_enable_state_children_scalar_deleting_destructor(
+                Ptr<ExtraEnableStateChildren>,
+                u32,
+            )
+                -> Ptr<ExtraEnableStateChildren>
+        ),
+        entry!(0x00433440, fn_00433440(Ptr<ExtraEnableStateChildren>)),
+        entry!(
+            0x004334b0,
+            fn_004334b0(Ptr<ExtraRandomTeleportMarker>) -> Ptr<ExtraRandomTeleportMarker>
+        ),
+        entry!(
+            0x004334e0,
+            extra_random_teleport_marker_compare(Ptr<ExtraRandomTeleportMarker>, Ptr) -> bool
+        ),
+        entry!(
+            0x00433530,
+            fn_00433530(Ptr<ExtraLinkedRefChildren>) -> Ptr<ExtraLinkedRefChildren>
+        ),
+        entry!(
+            0x004335a0,
+            extra_linked_ref_children_scalar_deleting_destructor(
+                Ptr<ExtraLinkedRefChildren>,
+                u32,
+            )
+                -> Ptr<ExtraLinkedRefChildren>
+        ),
+        entry!(0x004335d0, fn_004335d0(Ptr<ExtraLinkedRefChildren>)),
+        entry!(
+            0x00433640,
+            fn_00433640(Ptr<ExtraLinkedRef>) -> Ptr<ExtraLinkedRef>
+        ),
+        entry!(
+            0x00433670,
+            extra_linked_ref_compare(Ptr<ExtraLinkedRef>, Ptr) -> bool
+        ),
+        entry!(
+            0x004336c0,
+            fn_004336c0(Ptr<ExtraAshPileRef>) -> Ptr<ExtraAshPileRef>
+        ),
+        entry!(
+            0x004336f0,
+            fn_004336f0(u32, Ptr<BSSimpleList>) -> Ptr<RefActivateData>
+        ),
+        entry!(0x00433750, fn_00433750(Ptr<BSSimpleList>)),
+        entry!(
+            0x00433790,
+            fn_00433790(Ptr<ExtraActivateRefChildren>) -> Ptr<ExtraActivateRefChildren>
+        ),
+        entry!(
+            0x00433800,
+            extra_activate_ref_children_scalar_deleting_destructor(
+                Ptr<ExtraActivateRefChildren>,
+                u32,
+            )
+                -> Ptr<ExtraActivateRefChildren>
+        ),
+        entry!(0x00433830, fn_00433830(Ptr<ExtraActivateRefChildren>)),
+        entry!(
+            0x004338b0,
+            fn_004338b0(Ptr<ExtraActivateRef>) -> Ptr<ExtraActivateRef>
+        ),
+        entry!(
+            0x00433940,
+            extra_activate_ref_scalar_deleting_destructor(
+                Ptr<ExtraActivateRef>,
+                u32,
+            ) -> Ptr<ExtraActivateRef>
+        ),
+        entry!(0x00433970, fn_00433970(Ptr<ExtraActivateRef>)),
+        entry!(
+            0x00433a00,
+            fn_00433a00(Ptr<ExtraActivateRef>, u32) -> Ptr<RefActivateData>
+        ),
+        entry!(
+            0x00433a20,
+            extra_activate_ref_compare(Ptr<ExtraActivateRef>, Ptr) -> bool
+        ),
+        entry!(
+            0x00433b70,
+            extra_activate_ref_copy(Ptr<ExtraActivateRef>, Ptr)
+        ),
+        entry!(
+            0x00433ca0,
+            fn_00433ca0(Ptr<ExtraDecalRefs>) -> Ptr<ExtraDecalRefs>
+        ),
+        entry!(
+            0x00433d10,
+            extra_decal_refs_scalar_deleting_destructor(
+                Ptr<ExtraDecalRefs>,
+                u32,
+            ) -> Ptr<ExtraDecalRefs>
+        ),
+        entry!(0x00433d40, fn_00433d40(Ptr<ExtraDecalRefs>)),
     ]
 }
 
@@ -5437,5 +6548,1105 @@ mod tests {
         assert_eq!(back, data);
         assert_eq!(e.mem.block_size(data), None);
         assert_eq!(calls(&e, RAG_DOLL_DATA_DESTRUCT).len(), 2);
+    }
+
+    // ---- the third batch (`00432dd0` to `00433d40`) ----
+
+    /// A constructor with no argument that stores the type, the vtable and
+    /// zero at +0xc (the words above are left alone).
+    fn check_cleared_constructor(addr: u32, extra_type: u8, vtable: u32, size: u32) {
+        let mut e = extra_engine();
+        let this = e.mem.alloc(size);
+        for offset in (0x0c..size).step_by(4) {
+            e.mem.set_u32(this + offset, 0xaaaa_aaaa);
+        }
+        start_log(&mut e);
+        assert_eq!(e.call(addr, &args![Ptr::<()>::new(this)]).u32(), this);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_CONSTRUCT).len(), 1);
+        assert_eq!(extra_type_of(&e, this), extra_type);
+        assert_eq!(vtable_of(&e, this), vtable);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        for offset in (0x10..size).step_by(4) {
+            assert_eq!(e.mem.u32(this + offset), 0xaaaa_aaaa);
+        }
+    }
+
+    /// A `Compare` that only casts `other` (it does not ask the base): a
+    /// failed cast gives true, then the word at +0xc decides.
+    fn check_cast_only_compare(addr: u32, target_type: u32) {
+        let mut e = compare_engine(false, false);
+        let this = e.mem.alloc(0x14);
+        let other = e.mem.alloc(0x14);
+        start_log(&mut e);
+        assert!(e
+            .call(addr, &args![Ptr::<()>::new(this), Ptr::<()>::new(other)])
+            .bool());
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![other, 0, BS_EXTRA_DATA_TYPE, target_type, 0]]
+        );
+
+        // The base would say "differ", but it is not asked.
+        let mut e = compare_engine(true, true);
+        let this = e.mem.alloc(0x14);
+        let other = e.mem.alloc(0x14);
+        e.mem.set_u32(this + 0xc, 0x1111);
+        e.mem.set_u32(other + 0xc, 0x1111);
+        start_log(&mut e);
+        assert!(!e
+            .call(addr, &args![Ptr::<()>::new(this), Ptr::<()>::new(other)])
+            .bool());
+        assert!(calls(&e, BS_EXTRA_DATA_COMPARE).is_empty());
+        e.mem.set_u32(other + 0xc, 0x2222);
+        assert!(e
+            .call(addr, &args![Ptr::<()>::new(this), Ptr::<()>::new(other)])
+            .bool());
+    }
+
+    /// Doubles for the `BSSimpleList` functions the classes of this batch
+    /// call, on top of the `Compare` doubles. A list is a head node (item,
+    /// next); an empty list has item 0 and no next node.
+    fn list_engine() -> Engine {
+        let mut e = compare_engine(true, false);
+        e.register(SIMPLE_LIST_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, 0);
+            ret(a[0])
+        });
+        e.register(SIMPLE_LIST_ITEM_SLOT, |_, a| ret(a[0]));
+        e.register(SIMPLE_LIST_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(SIMPLE_LIST_IS_EMPTY, |e, a| {
+            ret((e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0) as u32)
+        });
+        e.register(SIMPLE_LIST_CLEAR, |e, a| {
+            if a[0] != 0 {
+                clear_list(e, a[0]);
+            }
+            Ret::default()
+        });
+        e.register(SIMPLE_LIST_DESTRUCT, |e, a| {
+            clear_list(e, a[0]);
+            Ret::default()
+        });
+        e.register(SIMPLE_LIST_DELETE, |e, a| {
+            clear_list(e, a[0]);
+            if a[1] & 1 != 0 {
+                e.mem.free(a[0]);
+            }
+            ret(a[0])
+        });
+        e.register(SIMPLE_LIST_REMOVE_HEAD, |e, a| {
+            let next = e.mem.u32(a[0] + 4);
+            if next != 0 {
+                let item = e.mem.u32(next);
+                let after = e.mem.u32(next + 4);
+                e.mem.set_u32(a[0], item);
+                e.mem.set_u32(a[0] + 4, after);
+                e.mem.free(next);
+            } else {
+                e.mem.set_u32(a[0], 0);
+            }
+            Ret::default()
+        });
+        // `BSSimpleList::AddHead` of the item held at the address given: the
+        // old head item moves into a new second node.
+        e.register(SIMPLE_LIST_ADD_HEAD, |e, a| {
+            let item = e.mem.u32(a[1]);
+            if item != 0 {
+                if e.mem.u32(a[0]) == 0 {
+                    e.mem.set_u32(a[0], item);
+                } else {
+                    let node = e.mem.alloc(8);
+                    let old = e.mem.u32(a[0]);
+                    let next = e.mem.u32(a[0] + 4);
+                    e.mem.set_u32(node, old);
+                    e.mem.set_u32(node + 4, next);
+                    e.mem.set_u32(a[0] + 4, node);
+                    e.mem.set_u32(a[0], item);
+                }
+            }
+            Ret::default()
+        });
+        e.register(MEMCPY, |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            for (i, byte) in bytes.iter().enumerate() {
+                e.mem.set_u8(a[0] + i as u32, *byte);
+            }
+            ret(a[0])
+        });
+        e
+    }
+
+    /// Frees every node after the head and clears the head.
+    fn clear_list(e: &mut Engine, head: u32) {
+        let mut node = e.mem.u32(head + 4);
+        while node != 0 {
+            let next = e.mem.u32(node + 4);
+            e.mem.free(node);
+            node = next;
+        }
+        e.mem.set_u32(head, 0);
+        e.mem.set_u32(head + 4, 0);
+    }
+
+    /// Builds a list in place at `head` (an 8-byte block) from `items`; the
+    /// later nodes are allocated.
+    fn fill_list(e: &mut Engine, head: u32, items: &[u32]) {
+        e.mem.set_u32(head, items.first().copied().unwrap_or(0));
+        e.mem.set_u32(head + 4, 0);
+        let mut last = head;
+        for item in items.iter().skip(1) {
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, *item);
+            e.mem.set_u32(last + 4, node);
+            last = node;
+        }
+    }
+
+    /// The items of the list at `head`, node by node.
+    fn list_items(e: &Engine, head: u32) -> Vec<u32> {
+        let mut items = vec![];
+        let mut node = head;
+        while node != 0 {
+            items.push(e.mem.u32(node));
+            node = e.mem.u32(node + 4);
+        }
+        items
+    }
+
+    #[test]
+    fn rag_doll_data_compare_asks_the_data_only_when_both_have_some() {
+        check_compare_start(0x0043_2dd0, EXTRA_RAG_DOLL_DATA_TYPE, 0x10);
+        for answer in [false, true] {
+            let mut e = compare_engine(true, false);
+            e.register_double(RAG_DOLL_DATA_COMPARE, move |_, _| ret(answer as u32));
+            let this: Ptr<ExtraRagDollData> = e.new_object();
+            let other: Ptr<ExtraRagDollData> = e.new_object();
+            e.set(this, ExtraRagDollData::pRagDollData, Ptr::new(0x1111));
+            e.set(other, ExtraRagDollData::pRagDollData, Ptr::new(0x2222));
+            start_log(&mut e);
+            assert_eq!(e.call(0x0043_2dd0, &args![this, other]).bool(), answer);
+            // `this` is the first data, the other's data the argument.
+            assert_eq!(calls(&e, RAG_DOLL_DATA_COMPARE), vec![vec![0x1111, 0x2222]]);
+        }
+        // Without data of its own: equal only to another without data.
+        let mut e = compare_engine(true, false);
+        e.register(RAG_DOLL_DATA_COMPARE, |_, _| panic!("no data to compare"));
+        let this: Ptr<ExtraRagDollData> = e.new_object();
+        let other: Ptr<ExtraRagDollData> = e.new_object();
+        assert!(!e.call(0x0043_2dd0, &args![this, other]).bool());
+        e.set(other, ExtraRagDollData::pRagDollData, Ptr::new(0x2222));
+        assert!(e.call(0x0043_2dd0, &args![this, other]).bool());
+        // Data on `this` but none on the other: the data's compare is asked
+        // with a null argument.
+        let mut e = compare_engine(true, false);
+        e.register_double(RAG_DOLL_DATA_COMPARE, |_, a| ret((a[1] == 0) as u32));
+        let this: Ptr<ExtraRagDollData> = e.new_object();
+        let other: Ptr<ExtraRagDollData> = e.new_object();
+        e.set(this, ExtraRagDollData::pRagDollData, Ptr::new(0x1111));
+        assert!(e.call(0x0043_2dd0, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn encounter_zone_constructor_clears_the_zone() {
+        check_cleared_constructor(0x0043_2e60, 0x74, EXTRA_ENCOUNTER_ZONE_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn encounter_zone_compare_checks_type_base_and_zone() {
+        check_value_compare(0x0043_2e90, EXTRA_ENCOUNTER_ZONE_TYPE, 4, 0x6000, 0x7000);
+    }
+
+    #[test]
+    fn used_markers_constructor_clears_the_markers() {
+        check_cleared_constructor(0x0043_2f00, 0x12, EXTRA_USED_MARKERS_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn fn_00432f30_runs_only_the_base_destructor() {
+        let mut e = extra_engine();
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this, 0x1234);
+        start_log(&mut e);
+        e.call(0x0043_2f30, &args![Ptr::<()>::new(this)]);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+        // Only the call itself and the base destructor; the vtable stays.
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+        assert_eq!(e.mem.u32(this), 0x1234);
+    }
+
+    #[test]
+    fn reserved_markers_constructor_clears_the_markers() {
+        check_cleared_constructor(0x0043_2f50, 0x82, EXTRA_RESERVED_MARKERS_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn used_markers_get_marker_used_tests_a_bit_below_30() {
+        let mut e = extra_engine();
+        let this: Ptr<ExtraUsedMarkers> = e.new_object();
+        e.set(this, ExtraUsedMarkers::iUsedMarkers, 0xc000_0005);
+        let get = |e: &mut Engine, index: u32| e.call(0x0043_2f80, &args![this, index]).bool();
+        assert!(get(&mut e, 0));
+        assert!(!get(&mut e, 1));
+        assert!(get(&mut e, 2));
+        assert!(!get(&mut e, 29));
+        // Bits 30 and 31 are set but never reported.
+        assert!(!get(&mut e, 30));
+        assert!(!get(&mut e, 31));
+        assert!(!get(&mut e, 0x20));
+        e.set(this, ExtraUsedMarkers::iUsedMarkers, 0x2000_0000);
+        assert!(get(&mut e, 29));
+    }
+
+    #[test]
+    fn used_markers_set_marker_used_sets_or_clears_a_bit_below_30() {
+        let mut e = extra_engine();
+        let this: Ptr<ExtraUsedMarkers> = e.new_object();
+        e.call(0x0043_2fc0, &args![this, 3u32, 1u32]);
+        assert_eq!(e.get(this, ExtraUsedMarkers::iUsedMarkers), 8);
+        e.call(0x0043_2fc0, &args![this, 29u32, 0x100u32 | 5]);
+        assert_eq!(e.get(this, ExtraUsedMarkers::iUsedMarkers), 0x2000_0008);
+        // Only the low byte of the flag counts: 0x100 clears, 0x1ff sets.
+        e.call(0x0043_2fc0, &args![this, 3u32, 0x100u32]);
+        assert_eq!(e.get(this, ExtraUsedMarkers::iUsedMarkers), 0x2000_0000);
+        e.call(0x0043_2fc0, &args![this, 3u32, 0x1ffu32]);
+        assert_eq!(e.get(this, ExtraUsedMarkers::iUsedMarkers), 0x2000_0008);
+        e.call(0x0043_2fc0, &args![this, 3u32, 0u32]);
+        assert_eq!(e.get(this, ExtraUsedMarkers::iUsedMarkers), 0x2000_0000);
+        // Out of range: nothing changes.
+        e.call(0x0043_2fc0, &args![this, 30u32, 1u32]);
+        e.call(0x0043_2fc0, &args![this, 31u32, 1u32]);
+        e.call(0x0043_2fc0, &args![this, 0xffu32, 0u32]);
+        assert_eq!(e.get(this, ExtraUsedMarkers::iUsedMarkers), 0x2000_0000);
+    }
+
+    #[test]
+    fn run_once_packs_constructor_builds_the_list() {
+        let mut e = list_engine();
+        let this: Ptr<ExtraRunOncePacks> = e.new_object();
+        start_log(&mut e);
+        let back = e.call(0x0043_3010, &args![this]).ptr::<ExtraRunOncePacks>();
+        assert_eq!(back, this);
+        assert_eq!(extra_type(&e, this.addr()), 0x1b);
+        assert_eq!(vtable_of(&e, this.addr()), EXTRA_RUN_ONCE_PACKS_VTABLE);
+        let list = e.get(this, ExtraRunOncePacks::pPackageList);
+        assert!(!list.is_null());
+        assert_eq!(e.mem.block_size(list.addr()), Some(8));
+        assert_eq!(calls(&e, SIMPLE_LIST_CONSTRUCT), vec![vec![list.addr()]]);
+
+        // A failed allocation leaves no list and constructs nothing.
+        let mut e = list_engine();
+        e.register(OPERATOR_NEW, |_, _| Ret::default());
+        let failed: Ptr<ExtraRunOncePacks> = e.new_object();
+        e.set(failed, ExtraRunOncePacks::pPackageList, Ptr::new(0xdead));
+        start_log(&mut e);
+        e.call(0x0043_3010, &args![failed]);
+        assert!(e.get(failed, ExtraRunOncePacks::pPackageList).is_null());
+        assert!(calls(&e, SIMPLE_LIST_CONSTRUCT).is_empty());
+    }
+
+    #[test]
+    fn run_once_packs_scalar_deleting_destructor_frees_only_when_asked() {
+        let mut e = list_engine();
+        let this = e.mem.alloc(0x10);
+        assert_eq!(
+            e.call(0x0043_30b0, &args![Ptr::<()>::new(this), 0u32])
+                .u32(),
+            this
+        );
+        assert!(e.mem.block_size(this).is_some());
+        assert_eq!(vtable_of(&e, this), EXTRA_RUN_ONCE_PACKS_VTABLE);
+        e.call(0x0043_30b0, &args![Ptr::<()>::new(this), 1u32]);
+        assert_eq!(e.mem.block_size(this), None);
+    }
+
+    #[test]
+    fn run_once_packs_destructor_deletes_the_items_up_to_the_first_empty_one() {
+        let mut e = list_engine();
+        let this: Ptr<ExtraRunOncePacks> = e.new_object();
+        let list = e.mem.alloc(8);
+        let (first, second, after_gap) = (e.mem.alloc(8), e.mem.alloc(8), e.mem.alloc(8));
+        fill_list(&mut e, list, &[first, second, 0, after_gap]);
+        e.set(this, ExtraRunOncePacks::pPackageList, Ptr::new(list));
+        start_log(&mut e);
+        e.call(0x0043_30e0, &args![this]);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![first], vec![second]]);
+        assert!(e.mem.block_size(after_gap).is_some());
+        assert_eq!(calls(&e, SIMPLE_LIST_CLEAR), vec![vec![list]]);
+        assert_eq!(calls(&e, SIMPLE_LIST_DELETE), vec![vec![list, 1]]);
+        assert_eq!(e.mem.block_size(list), None);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this.addr()]]);
+        assert_eq!(vtable_of(&e, this.addr()), EXTRA_RUN_ONCE_PACKS_VTABLE);
+    }
+
+    #[test]
+    fn run_once_packs_destructor_without_a_list_still_clears_the_null_list() {
+        let mut e = list_engine();
+        let this: Ptr<ExtraRunOncePacks> = e.new_object();
+        start_log(&mut e);
+        e.call(0x0043_30e0, &args![this]);
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        assert_eq!(calls(&e, SIMPLE_LIST_CLEAR), vec![vec![0]]);
+        assert!(calls(&e, SIMPLE_LIST_DELETE).is_empty());
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this.addr()]]);
+    }
+
+    #[test]
+    fn run_once_packs_entry_is_updated_in_place_or_added() {
+        let mut e = list_engine();
+        let this: Ptr<ExtraRunOncePacks> = e.new_object();
+        let list = e.mem.alloc(8);
+        let (first, second) = (e.mem.alloc(8), e.mem.alloc(8));
+        e.mem.set_u32(first, 0x10);
+        e.mem.set_u32(second, 0x20);
+        fill_list(&mut e, list, &[first, second]);
+        e.set(this, ExtraRunOncePacks::pPackageList, Ptr::new(list));
+        start_log(&mut e);
+        // An existing entry gets its flag and nothing is added.
+        e.call(0x0043_31c0, &args![this, 0x20u32, 0x101u32]);
+        assert_eq!(e.mem.u32(second), 0x20);
+        assert_eq!(e.mem.u8(second + 4), 1);
+        assert_eq!(e.mem.u8(first + 4), 0);
+        assert!(calls(&e, SIMPLE_LIST_ADD_HEAD).is_empty());
+        e.call(0x0043_31c0, &args![this, 0x20u32, 0u32]);
+        assert_eq!(e.mem.u8(second + 4), 0);
+
+        // A missing one is allocated (8 bytes), added with the address of a
+        // variable holding it, and filled in.
+        e.call(0x0043_31c0, &args![this, 0x30u32, 7u32]);
+        let added = calls(&e, SIMPLE_LIST_ADD_HEAD);
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0][0], list);
+        let items = list_items(&e, list);
+        assert_eq!(items.len(), 3);
+        let entry = items[0];
+        assert_eq!(e.mem.block_size(entry), Some(8));
+        assert_eq!(e.mem.u32(entry), 0x30);
+        assert_eq!(e.mem.u8(entry + 4), 7);
+        assert_eq!(items[1..], [first, second]);
+    }
+
+    #[test]
+    fn run_once_packs_entry_search_ends_at_a_node_without_an_item() {
+        let mut e = list_engine();
+        let this: Ptr<ExtraRunOncePacks> = e.new_object();
+        let list = e.mem.alloc(8);
+        let (first, hidden) = (e.mem.alloc(8), e.mem.alloc(8));
+        e.mem.set_u32(first, 0x10);
+        e.mem.set_u32(hidden, 0x30);
+        fill_list(&mut e, list, &[first, 0, hidden]);
+        e.set(this, ExtraRunOncePacks::pPackageList, Ptr::new(list));
+        start_log(&mut e);
+        // The entry behind the gap is not seen; a new one is added.
+        e.call(0x0043_31c0, &args![this, 0x30u32, 1u32]);
+        assert_eq!(calls(&e, SIMPLE_LIST_ADD_HEAD).len(), 1);
+        assert_eq!(e.mem.u8(hidden + 4), 0);
+    }
+
+    #[test]
+    fn distant_data_constructor_builds_the_land_normal() {
+        let mut e = list_engine();
+        e.map(0x0101_4000, 0x1000);
+        e.set_global(DISTANT_DATA_NORMAL_Z, 0.9706f32);
+        e.register(NI_POINT3_CONSTRUCT, |e, a| {
+            for i in 1..4 {
+                e.mem.set_u32(a[0] + 4 * (i - 1), a[i as usize]);
+            }
+            ret(a[0])
+        });
+        let this = e.mem.alloc(0x18);
+        for offset in (0x0c..0x18).step_by(4) {
+            e.mem.set_u32(this + offset, 0xaaaa_aaaa);
+        }
+        start_log(&mut e);
+        let back = e.call(0x0043_3260, &args![Ptr::<()>::new(this)]).u32();
+        assert_eq!(back, this);
+        assert_eq!(extra_type(&e, this), 0x13);
+        assert_eq!(vtable_of(&e, this), EXTRA_DISTANT_DATA_VTABLE);
+        assert_eq!(e.mem.f32(this + 0xc), 0.0);
+        assert_eq!(e.mem.f32(this + 0x10), 0.0);
+        assert_eq!(e.mem.f32(this + 0x14), 0.9706f32);
+        // The point is built in a temporary with (0, 0, z).
+        let made = calls(&e, NI_POINT3_CONSTRUCT);
+        assert_eq!(made.len(), 1);
+        assert_eq!(made[0][1..], [0, 0, 0.9706f32.to_bits()]);
+        assert_ne!(made[0][0], this + 0xc);
+    }
+
+    #[test]
+    fn enable_state_parent_constructor_clears_the_parent_and_flags() {
+        let mut e = extra_engine();
+        let this: Ptr<ExtraEnableStateParent> = e.new_object();
+        e.mem.set_u32(this.addr() + 0xc, 0xaaaa_aaaa);
+        e.mem.set_u32(this.addr() + 0x10, 0xaaaa_aaaa);
+        let back = e
+            .call(0x0043_3300, &args![this])
+            .ptr::<ExtraEnableStateParent>();
+        assert_eq!(back, this);
+        assert_eq!(extra_type(&e, this.addr()), 0x37);
+        assert_eq!(vtable_of(&e, this.addr()), EXTRA_ENABLE_STATE_PARENT_VTABLE);
+        assert!(e.get(this, ExtraEnableStateParent::pParent).is_null());
+        // Only the flag byte is written.
+        assert_eq!(e.mem.u32(this.addr() + 0x10), 0xaaaa_aa00);
+    }
+
+    #[test]
+    fn enable_state_parent_compare_checks_type_parent_and_flags() {
+        let mut e = compare_engine(false, false);
+        let this: Ptr<ExtraEnableStateParent> = e.new_object();
+        let other: Ptr<ExtraEnableStateParent> = e.new_object();
+        start_log(&mut e);
+        assert!(e.call(0x0043_3340, &args![this, other]).bool());
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![
+                other.addr(),
+                0,
+                BS_EXTRA_DATA_TYPE,
+                EXTRA_ENABLE_STATE_PARENT_TYPE,
+                0
+            ]]
+        );
+
+        // The base would say "differ", but it is not asked.
+        let mut e = compare_engine(true, true);
+        let this: Ptr<ExtraEnableStateParent> = e.new_object();
+        let other: Ptr<ExtraEnableStateParent> = e.new_object();
+        e.set(this, ExtraEnableStateParent::pParent, Ptr::new(0x6000));
+        e.set(other, ExtraEnableStateParent::pParent, Ptr::new(0x6000));
+        e.set(this, ExtraEnableStateParent::cFlags, 3);
+        e.set(other, ExtraEnableStateParent::cFlags, 3);
+        start_log(&mut e);
+        assert!(!e.call(0x0043_3340, &args![this, other]).bool());
+        assert!(calls(&e, BS_EXTRA_DATA_COMPARE).is_empty());
+        e.set(other, ExtraEnableStateParent::cFlags, 1);
+        assert!(e.call(0x0043_3340, &args![this, other]).bool());
+        e.set(other, ExtraEnableStateParent::cFlags, 3);
+        e.set(other, ExtraEnableStateParent::pParent, Ptr::new(0x7000));
+        assert!(e.call(0x0043_3340, &args![this, other]).bool());
+    }
+
+    /// A constructor of a class with an inline list at +0xc: the base
+    /// constructor, the vtable, and the list constructed in place.
+    fn check_list_constructor(addr: u32, extra_type: u8, vtable: u32, size: u32) {
+        let mut e = list_engine();
+        let this = e.mem.alloc(size);
+        for offset in (0x0c..size).step_by(4) {
+            e.mem.set_u32(this + offset, 0xaaaa_aaaa);
+        }
+        start_log(&mut e);
+        assert_eq!(e.call(addr, &args![Ptr::<()>::new(this)]).u32(), this);
+        assert_eq!(extra_type_of(&e, this), extra_type);
+        assert_eq!(vtable_of(&e, this), vtable);
+        assert_eq!(calls(&e, SIMPLE_LIST_CONSTRUCT), vec![vec![this + 0xc]]);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        assert_eq!(e.mem.u32(this + 0x10), 0);
+        for offset in (0x14..size).step_by(4) {
+            assert_eq!(e.mem.u32(this + offset), 0xaaaa_aaaa);
+        }
+    }
+
+    /// The destructor body of a class that clears its inline list: the list
+    /// is cleared, then its destructor body runs, then the base destructor.
+    fn check_list_destructor(addr: u32, vtable: u32) {
+        let mut e = list_engine();
+        let this = e.mem.alloc(0x14);
+        let nodes = (e.mem.alloc(8), e.mem.alloc(8));
+        fill_list(&mut e, this + 0xc, &[nodes.0, nodes.1]);
+        start_log(&mut e);
+        e.call(addr, &args![Ptr::<()>::new(this)]);
+        assert_eq!(vtable_of(&e, this), vtable);
+        let log = e.call_log.clone().unwrap();
+        let order: Vec<u32> = log.iter().map(|(called, _)| *called).collect();
+        assert_eq!(
+            order,
+            vec![
+                addr,
+                SIMPLE_LIST_CLEAR,
+                SIMPLE_LIST_DESTRUCT,
+                BS_EXTRA_DATA_DESTRUCT
+            ]
+        );
+        assert_eq!(calls(&e, SIMPLE_LIST_CLEAR), vec![vec![this + 0xc]]);
+        assert_eq!(calls(&e, SIMPLE_LIST_DESTRUCT), vec![vec![this + 0xc]]);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+        // The nodes after the head are gone; the items are not the list's.
+        assert_eq!(list_items(&e, this + 0xc), vec![0]);
+        assert!(e.mem.block_size(nodes.1).is_some());
+    }
+
+    #[test]
+    fn enable_state_children_constructor_builds_an_empty_list() {
+        check_list_constructor(0x0043_33a0, 0x38, EXTRA_ENABLE_STATE_CHILDREN_VTABLE, 0x14);
+    }
+
+    #[test]
+    fn enable_state_children_scalar_deleting_destructor_frees_only_when_asked() {
+        let mut e = list_engine();
+        let this = e.mem.alloc(0x14);
+        e.mem.set_u32(this + 0xc, 0);
+        assert_eq!(
+            e.call(0x0043_3410, &args![Ptr::<()>::new(this), 0u32])
+                .u32(),
+            this
+        );
+        assert!(e.mem.block_size(this).is_some());
+        assert_eq!(vtable_of(&e, this), EXTRA_ENABLE_STATE_CHILDREN_VTABLE);
+        e.call(0x0043_3410, &args![Ptr::<()>::new(this), 1u32]);
+        assert_eq!(e.mem.block_size(this), None);
+    }
+
+    #[test]
+    fn enable_state_children_destructor_clears_the_list() {
+        check_list_destructor(0x0043_3440, EXTRA_ENABLE_STATE_CHILDREN_VTABLE);
+    }
+
+    #[test]
+    fn random_teleport_marker_constructor_clears_the_marker() {
+        check_cleared_constructor(0x0043_34b0, 0x3b, EXTRA_RANDOM_TELEPORT_MARKER_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn random_teleport_marker_compare_checks_type_and_marker() {
+        check_cast_only_compare(0x0043_34e0, EXTRA_RANDOM_TELEPORT_MARKER_TYPE);
+    }
+
+    #[test]
+    fn linked_ref_children_constructor_builds_an_empty_list() {
+        check_list_constructor(0x0043_3530, 0x52, EXTRA_LINKED_REF_CHILDREN_VTABLE, 0x14);
+    }
+
+    #[test]
+    fn linked_ref_children_scalar_deleting_destructor_frees_only_when_asked() {
+        let mut e = list_engine();
+        let this = e.mem.alloc(0x14);
+        assert_eq!(
+            e.call(0x0043_35a0, &args![Ptr::<()>::new(this), 2u32])
+                .u32(),
+            this
+        );
+        assert!(e.mem.block_size(this).is_some());
+        assert_eq!(vtable_of(&e, this), EXTRA_LINKED_REF_CHILDREN_VTABLE);
+        e.call(0x0043_35a0, &args![Ptr::<()>::new(this), 3u32]);
+        assert_eq!(e.mem.block_size(this), None);
+    }
+
+    #[test]
+    fn linked_ref_children_destructor_clears_the_list() {
+        check_list_destructor(0x0043_35d0, EXTRA_LINKED_REF_CHILDREN_VTABLE);
+    }
+
+    #[test]
+    fn linked_ref_constructor_clears_the_reference() {
+        check_cleared_constructor(0x0043_3640, 0x51, EXTRA_LINKED_REF_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn linked_ref_compare_checks_type_and_reference() {
+        check_cast_only_compare(0x0043_3670, EXTRA_LINKED_REF_TYPE);
+    }
+
+    #[test]
+    fn ash_pile_ref_constructor_clears_the_reference() {
+        check_cleared_constructor(0x0043_36c0, 0x89, EXTRA_ASH_PILE_REF_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn activate_data_search_finds_the_entry_for_a_reference() {
+        let mut e = list_engine();
+        let list = e.mem.alloc(8);
+        let (first, second) = (e.mem.alloc(8), e.mem.alloc(8));
+        e.mem.set_u32(first, 0x1000);
+        e.mem.set_u32(second, 0x2000);
+        fill_list(&mut e, list, &[first, second]);
+        let find = |e: &mut Engine, reference: u32| {
+            e.call(0x0043_36f0, &args![reference, Ptr::<()>::new(list)])
+                .u32()
+        };
+        assert_eq!(find(&mut e, 0x1000), first);
+        assert_eq!(find(&mut e, 0x2000), second);
+        assert_eq!(find(&mut e, 0x3000), 0);
+        // An empty list and a null list have nothing.
+        let empty = e.mem.alloc(8);
+        fill_list(&mut e, empty, &[]);
+        assert_eq!(
+            e.call(0x0043_36f0, &args![0x1000u32, Ptr::<()>::new(empty)])
+                .u32(),
+            0
+        );
+        assert_eq!(
+            e.call(0x0043_36f0, &args![0x1000u32, Ptr::<()>::NULL])
+                .u32(),
+            0
+        );
+    }
+
+    #[test]
+    fn activate_data_free_deletes_the_items_and_empties_the_list() {
+        let mut e = list_engine();
+        let list = e.mem.alloc(8);
+        let items = [e.mem.alloc(8), e.mem.alloc(8), e.mem.alloc(8)];
+        fill_list(&mut e, list, &items);
+        start_log(&mut e);
+        e.call(0x0043_3750, &args![Ptr::<()>::new(list)]);
+        assert_eq!(
+            calls(&e, OPERATOR_DELETE),
+            items.iter().map(|item| vec![*item]).collect::<Vec<_>>()
+        );
+        assert_eq!(list_items(&e, list), vec![0]);
+        assert_eq!(calls(&e, SIMPLE_LIST_REMOVE_HEAD).len(), 3);
+
+        // Already empty: nothing is deleted.
+        start_log(&mut e);
+        e.call(0x0043_3750, &args![Ptr::<()>::new(list)]);
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        e.call(0x0043_3750, &args![Ptr::<()>::NULL]);
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+    }
+
+    #[test]
+    fn activate_ref_children_constructor_builds_a_list_and_clears_the_timer() {
+        let mut e = list_engine();
+        let this = e.mem.alloc(0x18);
+        e.mem.set_u32(this + 0x14, 0xaaaa_aaaa);
+        start_log(&mut e);
+        assert_eq!(
+            e.call(0x0043_3790, &args![Ptr::<()>::new(this)]).u32(),
+            this
+        );
+        assert_eq!(extra_type_of(&e, this), 0x54);
+        assert_eq!(vtable_of(&e, this), EXTRA_ACTIVATE_REF_CHILDREN_VTABLE);
+        assert_eq!(calls(&e, SIMPLE_LIST_CONSTRUCT), vec![vec![this + 0xc]]);
+        assert_eq!(e.mem.f32(this + 0x14), 0.0);
+    }
+
+    #[test]
+    fn activate_ref_children_scalar_deleting_destructor_frees_only_when_asked() {
+        let mut e = list_engine();
+        let this = e.mem.alloc(0x18);
+        assert_eq!(
+            e.call(0x0043_3800, &args![Ptr::<()>::new(this), 0u32])
+                .u32(),
+            this
+        );
+        assert!(e.mem.block_size(this).is_some());
+        assert_eq!(vtable_of(&e, this), EXTRA_ACTIVATE_REF_CHILDREN_VTABLE);
+        e.call(0x0043_3800, &args![Ptr::<()>::new(this), 1u32]);
+        assert_eq!(e.mem.block_size(this), None);
+    }
+
+    #[test]
+    fn activate_ref_children_destructor_deletes_the_items_then_the_list() {
+        let mut e = list_engine();
+        let this = e.mem.alloc(0x18);
+        let items = [e.mem.alloc(8), e.mem.alloc(8)];
+        fill_list(&mut e, this + 0xc, &items);
+        start_log(&mut e);
+        e.call(0x0043_3830, &args![Ptr::<()>::new(this)]);
+        assert_eq!(vtable_of(&e, this), EXTRA_ACTIVATE_REF_CHILDREN_VTABLE);
+        assert_eq!(
+            calls(&e, OPERATOR_DELETE),
+            items.iter().map(|item| vec![*item]).collect::<Vec<_>>()
+        );
+        assert_eq!(list_items(&e, this + 0xc), vec![0]);
+        assert_eq!(calls(&e, SIMPLE_LIST_DESTRUCT), vec![vec![this + 0xc]]);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+        // The destructor body of the list comes after the entries are freed.
+        let order: Vec<u32> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(called, _)| *called)
+            .filter(|called| [OPERATOR_DELETE, SIMPLE_LIST_DESTRUCT].contains(called))
+            .collect();
+        assert_eq!(
+            order,
+            vec![OPERATOR_DELETE, OPERATOR_DELETE, SIMPLE_LIST_DESTRUCT]
+        );
+    }
+
+    #[test]
+    fn activate_ref_constructor_builds_the_list_and_the_text() {
+        let mut e = list_engine();
+        e.register(BS_STRING_CONSTRUCT, |_, a| ret(a[0]));
+        e.register(BS_STRING_SET, |_, _| ret(1));
+        let this = e.mem.alloc(0x20);
+        e.mem.set_u32(this + 0x14, 0xaaaa_aaaa);
+        start_log(&mut e);
+        assert_eq!(
+            e.call(0x0043_38b0, &args![Ptr::<()>::new(this)]).u32(),
+            this
+        );
+        assert_eq!(extra_type_of(&e, this), 0x53);
+        assert_eq!(vtable_of(&e, this), EXTRA_ACTIVATE_REF_VTABLE);
+        assert_eq!(calls(&e, SIMPLE_LIST_CONSTRUCT), vec![vec![this + 0xc]]);
+        // Only the flag byte is cleared.
+        assert_eq!(e.mem.u32(this + 0x14), 0xaaaa_aa00);
+        assert_eq!(calls(&e, BS_STRING_CONSTRUCT), vec![vec![this + 0x18]]);
+        assert_eq!(
+            calls(&e, BS_STRING_SET),
+            vec![vec![this + 0x18, EMPTY_STRING, 0]]
+        );
+        // List, then string constructor, then the string is set.
+        let order: Vec<u32> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(called, _)| *called)
+            .filter(|called| {
+                [SIMPLE_LIST_CONSTRUCT, BS_STRING_CONSTRUCT, BS_STRING_SET].contains(called)
+            })
+            .collect();
+        assert_eq!(
+            order,
+            vec![SIMPLE_LIST_CONSTRUCT, BS_STRING_CONSTRUCT, BS_STRING_SET]
+        );
+    }
+
+    #[test]
+    fn activate_ref_scalar_deleting_destructor_frees_only_when_asked() {
+        let mut e = list_engine();
+        e.register(BS_STRING_CLEAR, |_, _| Ret::default());
+        let this = e.mem.alloc(0x20);
+        assert_eq!(
+            e.call(0x0043_3940, &args![Ptr::<()>::new(this), 0u32])
+                .u32(),
+            this
+        );
+        assert!(e.mem.block_size(this).is_some());
+        assert_eq!(vtable_of(&e, this), EXTRA_ACTIVATE_REF_VTABLE);
+        e.call(0x0043_3940, &args![Ptr::<()>::new(this), 1u32]);
+        assert_eq!(e.mem.block_size(this), None);
+    }
+
+    #[test]
+    fn activate_ref_destructor_frees_the_entries_clears_the_text_and_the_list() {
+        let mut e = list_engine();
+        e.register(BS_STRING_CLEAR, |_, _| Ret::default());
+        let this = e.mem.alloc(0x20);
+        let items = [e.mem.alloc(8), e.mem.alloc(8)];
+        fill_list(&mut e, this + 0xc, &items);
+        start_log(&mut e);
+        e.call(0x0043_3970, &args![Ptr::<()>::new(this)]);
+        assert_eq!(vtable_of(&e, this), EXTRA_ACTIVATE_REF_VTABLE);
+        assert_eq!(
+            calls(&e, OPERATOR_DELETE),
+            items.iter().map(|item| vec![*item]).collect::<Vec<_>>()
+        );
+        assert_eq!(calls(&e, BS_STRING_CLEAR), vec![vec![this + 0x18]]);
+        assert_eq!(calls(&e, SIMPLE_LIST_DESTRUCT), vec![vec![this + 0xc]]);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+        let order: Vec<u32> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(called, _)| *called)
+            .filter(|called| {
+                [
+                    OPERATOR_DELETE,
+                    BS_STRING_CLEAR,
+                    SIMPLE_LIST_DESTRUCT,
+                    BS_EXTRA_DATA_DESTRUCT,
+                ]
+                .contains(called)
+            })
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                OPERATOR_DELETE,
+                OPERATOR_DELETE,
+                BS_STRING_CLEAR,
+                SIMPLE_LIST_DESTRUCT,
+                BS_EXTRA_DATA_DESTRUCT
+            ]
+        );
+    }
+
+    /// Doubles for the string and list-count functions `Compare` uses.
+    fn activate_ref_engine(cast_ok: bool) -> Engine {
+        let mut e = list_engine();
+        e.register_double(DYNAMIC_CAST, move |_, a| {
+            ret(if cast_ok { a[0] } else { 0 })
+        });
+        e.register(SIMPLE_LIST_COUNT, |e, a| {
+            let mut count = 0;
+            let mut node = a[0];
+            while node != 0 {
+                if e.mem.u32(node) != 0 {
+                    count += 1;
+                }
+                node = e.mem.u32(node + 4);
+            }
+            ret(count)
+        });
+        // The length is the stored one (the 0xffff case is not needed).
+        e.register(BS_STRING_LENGTH, |e, a| ret(e.mem.u16(a[0] + 4) as u32));
+        e.register(BS_STRING_DATA, |e, a| ret(e.mem.u32(a[0])));
+        e.register(STRCMP, |e, a| {
+            let read = |e: &Engine, mut at: u32| {
+                let mut text = vec![];
+                while e.mem.u8(at) != 0 {
+                    text.push(e.mem.u8(at));
+                    at += 1;
+                }
+                text
+            };
+            let (first, second) = (read(e, a[0]), read(e, a[1]));
+            ret(match first.cmp(&second) {
+                std::cmp::Ordering::Less => u32::MAX,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            })
+        });
+        e
+    }
+
+    /// An `ExtraActivateRef` holding `entries` (reference, delay), the flag
+    /// byte and the text.
+    fn make_activate_ref(e: &mut Engine, entries: &[(u32, f32)], flags: u8, text: &str) -> u32 {
+        let this = e.mem.alloc(0x20);
+        let items: Vec<u32> = entries
+            .iter()
+            .map(|(reference, delay)| {
+                let item = e.mem.alloc(8);
+                e.mem.set_u32(item, *reference);
+                e.mem.set_f32(item + 4, *delay);
+                item
+            })
+            .collect();
+        fill_list(e, this + 0xc, &items);
+        e.mem.set_u8(this + 0x14, flags);
+        if !text.is_empty() {
+            let chars = e.mem.alloc(text.len() as u32 + 1);
+            for (i, byte) in text.bytes().enumerate() {
+                e.mem.set_u8(chars + i as u32, byte);
+            }
+            e.mem.set_u32(this + 0x18, chars);
+            e.mem.set_u16(this + 0x1c, text.len() as u16);
+        }
+        this
+    }
+
+    fn activate_ref_compare(e: &mut Engine, this: u32, other: u32) -> bool {
+        e.call(
+            0x0043_3a20,
+            &args![Ptr::<()>::new(this), Ptr::<()>::new(other)],
+        )
+        .bool()
+    }
+
+    #[test]
+    fn activate_ref_entry_lookup_searches_the_parent_list() {
+        let mut e = activate_ref_engine(true);
+        let this = make_activate_ref(&mut e, &[(0x1000, 1.0), (0x2000, 2.0)], 0, "");
+        let items = list_items(&e, this + 0xc);
+        let find = |e: &mut Engine, reference: u32| {
+            e.call(0x0043_3a00, &args![Ptr::<()>::new(this), reference])
+                .u32()
+        };
+        assert_eq!(find(&mut e, 0x1000), items[0]);
+        assert_eq!(find(&mut e, 0x2000), items[1]);
+        assert_eq!(find(&mut e, 0x3000), 0);
+    }
+
+    #[test]
+    fn activate_ref_compare_checks_the_class_and_does_not_ask_the_base() {
+        let mut e = activate_ref_engine(false);
+        let this = make_activate_ref(&mut e, &[], 0, "");
+        let other = make_activate_ref(&mut e, &[], 0, "");
+        start_log(&mut e);
+        assert!(activate_ref_compare(&mut e, this, other));
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![
+                other,
+                0,
+                BS_EXTRA_DATA_TYPE,
+                EXTRA_ACTIVATE_REF_TYPE,
+                0
+            ]]
+        );
+        assert!(calls(&e, SIMPLE_LIST_COUNT).is_empty());
+
+        let mut e = activate_ref_engine(true);
+        e.register_double(BS_EXTRA_DATA_COMPARE, |_, _| ret(1));
+        let this = make_activate_ref(&mut e, &[], 0, "");
+        let other = make_activate_ref(&mut e, &[], 0, "");
+        start_log(&mut e);
+        assert!(!activate_ref_compare(&mut e, this, other));
+        assert!(calls(&e, BS_EXTRA_DATA_COMPARE).is_empty());
+    }
+
+    #[test]
+    fn activate_ref_compare_checks_the_entries_flags_and_texts() {
+        let mut e = activate_ref_engine(true);
+        let entries = [(0x1000, 1.0), (0x2000, 2.0)];
+        let this = make_activate_ref(&mut e, &entries, 3, "hello");
+        // The same entries in the other order, the same flags and text.
+        let same = make_activate_ref(&mut e, &[entries[1], entries[0]], 3, "hello");
+        assert!(!activate_ref_compare(&mut e, this, same));
+
+        // A different number of entries.
+        let fewer = make_activate_ref(&mut e, &entries[..1], 3, "hello");
+        assert!(activate_ref_compare(&mut e, this, fewer));
+        // The same number, but one reference is missing in the other.
+        let other_ref = make_activate_ref(&mut e, &[entries[0], (0x3000, 2.0)], 3, "hello");
+        assert!(activate_ref_compare(&mut e, this, other_ref));
+        // The same references, but a delay differs (the 8 bytes are compared).
+        let other_delay = make_activate_ref(&mut e, &[entries[0], (0x2000, 5.0)], 3, "hello");
+        assert!(activate_ref_compare(&mut e, this, other_delay));
+        // Different flags.
+        let other_flags = make_activate_ref(&mut e, &entries, 2, "hello");
+        assert!(activate_ref_compare(&mut e, this, other_flags));
+        // Different text, same length.
+        let other_text = make_activate_ref(&mut e, &entries, 3, "hellp");
+        assert!(activate_ref_compare(&mut e, this, other_text));
+        // Text against no text, in both directions.
+        let no_text = make_activate_ref(&mut e, &entries, 3, "");
+        assert!(activate_ref_compare(&mut e, this, no_text));
+        assert!(activate_ref_compare(&mut e, no_text, this));
+        // No text on both sides.
+        let also_no_text = make_activate_ref(&mut e, &entries, 3, "");
+        assert!(!activate_ref_compare(&mut e, no_text, also_no_text));
+    }
+
+    #[test]
+    fn activate_ref_compare_orders_its_string_calls_like_the_game() {
+        let mut e = activate_ref_engine(true);
+        let this = make_activate_ref(&mut e, &[], 0, "abc");
+        let other = make_activate_ref(&mut e, &[], 0, "abd");
+        start_log(&mut e);
+        assert!(activate_ref_compare(&mut e, this, other));
+        // `strcmp(thisText, otherText)`, the characters read from the other
+        // string first.
+        let chars_this = e.mem.u32(this + 0x18);
+        let chars_other = e.mem.u32(other + 0x18);
+        assert_eq!(calls(&e, STRCMP), vec![vec![chars_this, chars_other]]);
+        assert_eq!(
+            calls(&e, BS_STRING_DATA),
+            vec![vec![other + 0x18], vec![this + 0x18]]
+        );
+    }
+
+    #[test]
+    fn activate_ref_copy_replaces_the_entries_flags_and_text() {
+        let mut e = activate_ref_engine(true);
+        e.register(REF_ACTIVATE_DATA_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, 0);
+            ret(a[0])
+        });
+        e.register(BS_STRING_COPY, |_, _| Ret::default());
+        let this = make_activate_ref(&mut e, &[(0x9000, 9.0), (0x9100, 9.5)], 1, "");
+        let old_items = list_items(&e, this + 0xc);
+        let other = make_activate_ref(&mut e, &[(0x1000, 1.0), (0x2000, 2.0)], 5, "text");
+        let source_items = list_items(&e, other + 0xc);
+        start_log(&mut e);
+        e.call(
+            0x0043_3b70,
+            &args![Ptr::<()>::new(this), Ptr::<()>::new(other)],
+        );
+        // The old entries were deleted.
+        assert_eq!(
+            calls(&e, OPERATOR_DELETE),
+            old_items.iter().map(|item| vec![*item]).collect::<Vec<_>>()
+        );
+        // Each source entry was copied (8 bytes) into a new one, each added
+        // at the head: the order is reversed.
+        let copies = list_items(&e, this + 0xc);
+        assert_eq!(copies.len(), 2);
+        assert!(source_items.iter().all(|item| !copies.contains(item)));
+        assert_eq!(
+            (e.mem.u32(copies[0]), e.mem.f32(copies[0] + 4)),
+            (0x2000, 2.0)
+        );
+        assert_eq!(
+            (e.mem.u32(copies[1]), e.mem.f32(copies[1] + 4)),
+            (0x1000, 1.0)
+        );
+        assert_eq!(calls(&e, MEMCPY).len(), 2);
+        assert_eq!(calls(&e, MEMCPY)[0][1..], [source_items[0], 8]);
+        // The flags and the text were copied.
+        assert_eq!(e.mem.u8(this + 0x14), 5);
+        assert_eq!(
+            calls(&e, BS_STRING_COPY),
+            vec![vec![this + 0x18, other + 0x18]]
+        );
+        // The source is untouched.
+        assert_eq!(list_items(&e, other + 0xc), source_items);
+    }
+
+    #[test]
+    fn activate_ref_copy_of_another_class_does_nothing() {
+        let mut e = activate_ref_engine(false);
+        e.register(BS_STRING_COPY, |_, _| panic!("no text copy"));
+        let this = make_activate_ref(&mut e, &[(0x9000, 9.0)], 1, "");
+        let other = make_activate_ref(&mut e, &[(0x1000, 1.0)], 5, "text");
+        let before = list_items(&e, this + 0xc);
+        start_log(&mut e);
+        e.call(
+            0x0043_3b70,
+            &args![Ptr::<()>::new(this), Ptr::<()>::new(other)],
+        );
+        assert_eq!(list_items(&e, this + 0xc), before);
+        assert_eq!(e.mem.u8(this + 0x14), 1);
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn decal_refs_constructor_builds_an_empty_list() {
+        check_list_constructor(0x0043_3ca0, 0x57, EXTRA_DECAL_REFS_VTABLE, 0x14);
+    }
+
+    #[test]
+    fn decal_refs_scalar_deleting_destructor_frees_only_when_asked() {
+        let mut e = list_engine();
+        e.register(DECAL_REFS_FREE_LIST, |_, _| Ret::default());
+        let this = e.mem.alloc(0x14);
+        assert_eq!(
+            e.call(0x0043_3d10, &args![Ptr::<()>::new(this), 0u32])
+                .u32(),
+            this
+        );
+        assert!(e.mem.block_size(this).is_some());
+        assert_eq!(vtable_of(&e, this), EXTRA_DECAL_REFS_VTABLE);
+        e.call(0x0043_3d10, &args![Ptr::<()>::new(this), 1u32]);
+        assert_eq!(e.mem.block_size(this), None);
+    }
+
+    #[test]
+    fn decal_refs_destructor_frees_the_entries_then_destroys_the_list() {
+        let mut e = list_engine();
+        e.register(DECAL_REFS_FREE_LIST, |_, _| Ret::default());
+        let this = e.mem.alloc(0x14);
+        start_log(&mut e);
+        e.call(0x0043_3d40, &args![Ptr::<()>::new(this)]);
+        assert_eq!(vtable_of(&e, this), EXTRA_DECAL_REFS_VTABLE);
+        let order: Vec<u32> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(called, _)| *called)
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                0x0043_3d40,
+                DECAL_REFS_FREE_LIST,
+                SIMPLE_LIST_DESTRUCT,
+                BS_EXTRA_DATA_DESTRUCT
+            ]
+        );
+        // The entries are freed through the extra data, the list destructed
+        // through its member.
+        assert_eq!(calls(&e, DECAL_REFS_FREE_LIST), vec![vec![this]]);
+        assert_eq!(calls(&e, SIMPLE_LIST_DESTRUCT), vec![vec![this + 0xc]]);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
     }
 }
