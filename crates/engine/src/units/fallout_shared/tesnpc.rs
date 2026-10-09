@@ -16,8 +16,17 @@
 //! Notes for the next session (this file is translated in blocks of 40
 //! functions in address order):
 //! - Session 1 (b0016) holds the constructor `00601170` to the function at
-//!   `00605d50`; the next session continues at `00605d70`
-//!   (`TESNPC::ReplaceRefModel`).
+//!   `00605d50`. Session 2 (b0016) holds `TESNPC::ReplaceRefModel` `00605d70`
+//!   to `0060b1f0` (the block starts at the line "Session 2" below); the next
+//!   session continues at `0060b210`.
+//! - A pushed word that stays on the stack across a nested call belongs to the
+//!   OUTER call (`PUSH a; CALL getter; MOV ECX,EAX; CALL method` passes `a` to
+//!   `method`, and a getter whose `RET` has no number takes nothing): check the
+//!   `RET n` of every callee. Likewise the `PUSH 0` before `vcall(actor, 0x1f4)`
+//!   is the last word of `008bb520`, not an argument of the virtual.
+//! - The `Activate` virtual (`00607990`) is translated block by block as the
+//!   methods of `Activation` (one per jump target of the exe, named by
+//!   address); read the disassembly next to it when changing anything.
 //! - The face-gen coordinate of an NPC is four matrices of `0x20` bytes
 //!   (`[sex-or-race][shape/texture]`: index `i * 0x40 + j * 0x20`). The
 //!   exe's `00601800` returns the alternate coordinate when
@@ -2645,6 +2654,2685 @@ fn load_ai_data_chunk(e: &mut Engine, this: Ptr<TESNPC>, file: Ptr) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Session 2 (b0016): from `ReplaceRefModel` (00605d70) to the end of the
+// block at 0060b1f0. The functions that read or write the change-flag
+// buffers of the save/load code share the helper below.
+
+/// `TESObjectREFR` (RTTI type descriptor), the source type of the actor casts.
+const TYPE_TES_OBJECT_REFR: u32 = 0x0118_41cc;
+/// `Actor` (RTTI type descriptor).
+const TYPE_ACTOR: u32 = 0x0118_46d4;
+/// `TESRace` (RTTI type descriptor).
+const TYPE_TES_RACE: u32 = 0x0118_6370;
+/// `TESPackage` and `DialoguePackage` (RTTI type descriptors).
+const TYPE_TES_PACKAGE: u32 = 0x0118_46a0;
+const TYPE_DIALOGUE_PACKAGE: u32 = 0x0119_9c3c;
+/// `TESBoundObject` (RTTI type descriptor).
+const TYPE_TES_BOUND_OBJECT: u32 = 0x0118_3108;
+
+/// `MiddleHighProcess::GetSavedAcquireObject`-style getter (`008d8520`): the
+/// process of an actor.
+fn process_of(e: &mut Engine, actor: u32) -> u32 {
+    e.call(PROCESS_OF_ACTOR, &args![actor]).u32()
+}
+
+/// `NiAVObject::UpdateProperties`-less update: the update-data block built by
+/// `0043d410(0.0, false, false)` and `NiAVObject::Update` (`00a59c60`) with it.
+fn update_node(e: &mut Engine, node: u32) {
+    e.with_stack(0x10, |e, data| {
+        e.call(0x0043_d410, &args![data, 0.0f32, 0u32, 0u32]);
+        e.call(0x00a5_9c60, &args![node, data]);
+    });
+}
+
+/// `UpdateProperties` (`00a5a040`) and the virtual `0xbc` of a node, then
+/// the update of [`update_node`].
+fn refresh_node(e: &mut Engine, node: u32) {
+    e.call(0x00a5_a040, &args![node]);
+    e.vcall(node, 0xbc, &args![]);
+    update_node(e, node);
+}
+
+/// The "is this change flag set" test of the save/load code:
+/// `getter(buffer, scratch)` (`00428110`, or `0042ce30`) returns a flag
+/// object and `004280f0(object, mask)` says whether `mask` is in it.
+fn change_flag_set(e: &mut Engine, getter: u32, buffer: Ptr, mask: u32) -> bool {
+    e.with_stack(4, |e, scratch| {
+        let flags = e.call(getter, &args![buffer, scratch]).u32();
+        e.call(0x0042_80f0, &args![flags, mask]).bool()
+    })
+}
+
+/// `LoadFormID` (`008648a0`) on a load buffer, the form lookup (`004839c0`)
+/// and a dynamic cast of the form to `target`.
+fn load_form_cast(e: &mut Engine, buffer: Ptr, target: u32) -> u32 {
+    let id = e.call(0x0086_48a0, &args![buffer]).u32();
+    let form = e.call(LOOKUP_FORM, &args![id]).u32();
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, TYPE_TES_FORM, target, 0u32],
+    )
+    .u32()
+}
+
+/// The three-word position the virtual `0x1f4` of an actor returns a pointer
+/// to, passed by value (with a trailing `0`) to `008bb520(target, x, y, z, 0)`.
+fn face_actor_towards(e: &mut Engine, actor: u32, target: u32) {
+    let position = e.vcall(actor, 0x1f4, &args![]).u32();
+    let (x, y, z) = (
+        e.mem.u32(position),
+        e.mem.u32(position + 4),
+        e.mem.u32(position + 8),
+    );
+    e.call(0x008b_b520, &args![target, x, y, z, 0u32]);
+}
+
+// Translated from 00605d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESNPC::ReplaceRefModel` (Xbox PDB): reloads the biped parts of an
+/// actor's model (`actor`). The body runs once, or twice for the player (the
+/// second round with the first-person biped and node): it rebuilds the parts
+/// (`fn_00606540`), loads them (`004ac1e0(biped, 0)`) and updates the node.
+pub fn tesnpc_replace_ref_model(e: &mut Engine, this: Ptr<TESNPC>, actor: Ptr) {
+    let mut biped = e.vcall(actor.addr(), 0x1e8, &args![]).u32();
+    let mut node = e.call(0x0043_fcd0, &args![actor]).u32();
+    let mut passes = 1u32;
+    if actor.addr() == e.global::<u32>(PLAYER_SINGLETON) {
+        passes = 2;
+    }
+    while passes != 0 {
+        let player = e.global::<u32>(PLAYER_SINGLETON);
+        if actor.addr() == player && passes == 1 {
+            let first_person = e.call(0x004e_af60, &args![player]).u8() as u32;
+            biped = e.call(0x0095_0b00, &args![player, first_person]).u32();
+            node = e.call(0x0095_0bb0, &args![player, 1u32]).u32();
+        }
+        fn_00606540(e, this, actor, Ptr::new(biped), 0);
+        e.call(0x004a_c1e0, &args![biped, 0u32]);
+        if node != 0 {
+            refresh_node(e, node);
+        }
+        passes -= 1;
+    }
+}
+
+// Translated from 00605e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Equips the biped (`biped`) of an actor (`actor`) with this NPC's worn items
+/// (`worn`, a list: count `0044ddc0`, element address `006a7ad0`). The race and
+/// sex go to the biped first (`004ab250(race, female)`), then each item is put on
+/// with `tesnpc_init_worn_object`, then `fn_006062e0` runs and the biped's part
+/// loader `004ac1e0(biped, 1)` is called. The actor's process (`008d8520`) gets its
+/// virtual `0x468(1)` before the items and `0x470` after them. Last, the 3D root
+/// the actor's virtual `0x1d0` gives is updated.
+///
+pub fn fn_00605e70(e: &mut Engine, this: Ptr<TESNPC>, actor: Ptr, biped: Ptr, worn: Ptr) {
+    let female = e.get(this, TESNPC::iActorBaseFlags) & 1 != 0;
+    let race = e
+        .call(GET_WORD_AT_4, &args![this.addr() + COMPONENT_RACE])
+        .u32();
+    e.call(0x004a_b250, &args![biped, race, female]);
+    if !actor.is_null() && process_of(e, actor.addr()) != 0 {
+        let process = process_of(e, actor.addr());
+        e.vcall(process, 0x468, &args![1u32]);
+    }
+    let mut index = 0u32;
+    while index < e.call(0x0044_ddc0, &args![worn]).u32() {
+        let slot = e.call(0x006a_7ad0, &args![worn, index]).u32();
+        let item = e.mem.u32(slot);
+        tesnpc_init_worn_object(e, this, actor, biped, Ptr::new(item));
+        index += 1;
+    }
+    fn_006062e0(e, this, actor, Ptr::NULL);
+    if !actor.is_null() && process_of(e, actor.addr()) != 0 {
+        let process = process_of(e, actor.addr());
+        e.vcall(process, 0x470, &args![]);
+    }
+    e.call(0x004a_c1e0, &args![biped, 1u32]);
+    let node = e.vcall(actor.addr(), 0x1d0, &args![]).u32();
+    if node != 0 {
+        refresh_node(e, node);
+    }
+}
+
+// Translated from 00605fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESNPC::BuildObjectArray` (Xbox PDB): for each of the 20 biped slots of
+/// `slots` (`0043f220`) whose part (the slot's first word) answers true to
+/// its virtual `0xe4`, appends the part to the `BSSimpleArray` `array`
+/// (`007cb2e0`) unless `009962f0` finds it there already.
+///
+/// `_unused_1` is a word the exe never reads.
+pub fn tesnpc_build_object_array(
+    e: &mut Engine,
+    _this: Ptr<TESNPC>,
+    _unused_1: u32,
+    slots: Ptr,
+    array: Ptr,
+) {
+    for index in 0..0x14u32 {
+        let slot = e.call(0x0043_f220, &args![slots, index]).u32();
+        if e.mem.u32(slot) == 0 {
+            continue;
+        }
+        let part = e.mem.u32(slot);
+        if !e.vcall(part, 0xe4, &args![]).bool() {
+            continue;
+        }
+        let part = e.mem.u32(slot);
+        e.with_stack(4, |e, cell| {
+            e.mem.set_u32(cell.addr(), part);
+            if !e.call(0x0099_62f0, &args![array, cell]).bool() {
+                e.call(0x007c_b2e0, &args![array, cell]);
+            }
+        });
+    }
+}
+
+// Translated from 00606050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESNPC::InitWorn` (Xbox PDB): walks the biped slots `0..=0x15` (slots 3
+/// and 5 are visited as `0x14` and `0x15`, and the loop skips them in
+/// between), asks the actor's inventory changes (`004bf220`) for the item
+/// worn in each (`004c8c10`) and equips it on the biped with
+/// `tesnpc_init_worn_object`; an item that cannot be handled is logged.
+pub fn tesnpc_init_worn(e: &mut Engine, this: Ptr<TESNPC>, actor: Ptr, biped: Ptr) {
+    let changes = e.call(0x004b_f220, &args![actor]).u32();
+    // The result of this cast is not used.
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![actor, 0u32, TYPE_TES_OBJECT_REFR, TYPE_ACTOR, 0u32],
+    );
+    if actor.is_null() || biped.is_null() {
+        return;
+    }
+    let mut slot: i32 = 0;
+    while slot <= 0x15 {
+        if slot == 3 || slot == 5 {
+            slot += 1;
+        } else if slot == 0x14 {
+            slot = 3;
+        } else if slot == 0x15 {
+            slot = 5;
+        }
+        let entry = e.call(0x004c_8c10, &args![changes, slot, 0u32]).u32();
+        if entry != 0 {
+            let item = e.call(0x0044_ddc0, &args![entry]).u32();
+            if entry != 0 {
+                e.call(0x0044_59e0, &args![entry, 1u32]);
+            }
+            if item != 0 && !tesnpc_init_worn_object(e, this, actor, biped, Ptr::new(item)) {
+                let name = e.call(0x0048_2720, &args![item]).u32();
+                let slot_name = e.global::<u32>(0x0118_8b98 + (slot as u32).wrapping_mul(4));
+                e.call(LOG_MESSAGE, &args![0x0104_a7c8u32, slot_name, name]);
+            }
+        }
+        if slot == 3 {
+            slot = 0x14;
+        } else if slot == 5 {
+            slot = 0x15;
+        }
+        slot += 1;
+    }
+}
+
+// Translated from 006061b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESNPC::InitWornObject` (Xbox PDB): puts one worn item on the biped. A
+/// form of type `0x28` (a weapon) goes to `004ab400(biped, item, 0)`; any
+/// other item with a biped model (`00480db0`) is added to the biped with
+/// this NPC's sex (`00480bd0(biped, female, -1)`), and one without is
+/// logged. A biped model list (`00475020`) then has each of its models
+/// added the same way. Always true.
+///
+/// `_unused_1` is a word the exe never reads.
+pub fn tesnpc_init_worn_object(
+    e: &mut Engine,
+    this: Ptr<TESNPC>,
+    _unused_1: Ptr,
+    biped: Ptr,
+    item: Ptr,
+) -> bool {
+    let female = e.get(this, TESNPC::iActorBaseFlags) & 1 != 0;
+    let model = e.call(0x0048_0db0, &args![item]).u32();
+    if e.call(GET_FORM_TYPE, &args![item]).u32() == 0x28 {
+        e.call(0x004a_b400, &args![biped, item, 0u32]);
+    } else if model != 0 {
+        e.call(0x0048_0bd0, &args![model, biped, female, u32::MAX]);
+    } else {
+        let name = e.call(0x0048_2720, &args![item]).u32();
+        e.call(LOG_MESSAGE, &args![0x0104_a828u32, name]);
+    }
+    let list = e.call(0x0047_5020, &args![item]).u32();
+    if list != 0 && e.call(GET_WORD_AT_4, &args![list]).u32() != 0 {
+        let first = e.call(GET_WORD_AT_4, &args![list]).u32();
+        let mut node = e.call(0x0050_0940, &args![first]).u32();
+        while node != 0 {
+            if e.call(LIST_NODE_IS_EMPTY, &args![node]).bool() {
+                return true;
+            }
+            let cell = e.call(LIST_NODE_SELF, &args![node]).u32();
+            let form = e.mem.u32(cell);
+            let model = e.call(0x0048_0db0, &args![form]).u32();
+            if model != 0 {
+                e.call(0x0048_0bd0, &args![model, biped, female, u32::MAX]);
+            }
+            node = e.call(GET_WORD_AT_4, &args![node]).u32();
+        }
+    }
+    true
+}
+
+// Translated from 006062e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Passes a flag to the `BSFaceGenNiNodeBiped` and `BSFaceGenNiNodeSkinned`
+/// children of a model root (`00450f90(node, flag)`) and to the head and part
+/// nodes below it. `node` is the root (the actor's, `0043fcd0`, when null).
+/// If the actor has an item in biped slot 0 (`004c8c10` on its inventory changes)
+/// both face-gen nodes get 1 and the item is released (`004459e0`); otherwise they
+/// get 0 and the head node (named by `fn_00605d40(1)`) and the two nodes whose
+/// names `00657820` makes get a flag that is 1 when slot 1 holds an item (the
+/// second part's flag is 0 when slot 10 holds one, 1 otherwise).
+///
+/// `_this` is the `ECX` word the exe never reads.
+///
+pub fn fn_006062e0(e: &mut Engine, _this: Ptr<TESNPC>, actor: Ptr, node: Ptr) {
+    let mut node = node.addr();
+    if node == 0 {
+        node = e.call(0x0043_fcd0, &args![actor]).u32();
+    }
+    if node == 0 {
+        return;
+    }
+    let biped_node = e
+        .call(FIND_NODE_BY_NAME, &args![node, 0x0102_0408u32])
+        .u32();
+    let skinned_node = e
+        .call(FIND_NODE_BY_NAME, &args![node, 0x0102_03f0u32])
+        .u32();
+    if biped_node == 0 || skinned_node == 0 {
+        return;
+    }
+    let changes = e.call(0x004b_f220, &args![actor]).u32();
+    let worn = e.call(0x004c_8c10, &args![changes, 0u32, 0u32]).u32();
+    if worn != 0 {
+        e.call(0x0045_0f90, &args![biped_node, 1u32]);
+        e.call(0x0045_0f90, &args![skinned_node, 1u32]);
+        e.call(0x0044_59e0, &args![worn, 1u32]);
+        return;
+    }
+    e.call(0x0045_0f90, &args![biped_node, 0u32]);
+    e.call(0x0045_0f90, &args![skinned_node, 0u32]);
+    let head_name = fn_00605d40(e, 1);
+    let head_node = e.call(FIND_NODE_BY_NAME, &args![node, head_name]).u32();
+    let mut part_nodes = [0u32; 2];
+    e.with_stack(0x20, |e, buffer| {
+        for (index, part) in part_nodes.iter_mut().enumerate() {
+            let name = e.call(0x0065_7820, &args![buffer, index as u32]).u32();
+            *part = e.call(FIND_NODE_BY_NAME, &args![node, name]).u32();
+        }
+    });
+    let mut hide_head = false;
+    let mut hide_second = true;
+    let slot_one = e.call(0x004c_8c10, &args![changes, 1u32, 0u32]).u32();
+    if slot_one != 0 {
+        e.call(0x0044_59e0, &args![slot_one, 1u32]);
+        hide_head = true;
+    }
+    if part_nodes[1] != 0 {
+        let slot_ten = e.call(0x004c_8c10, &args![changes, 10u32, 0u32]).u32();
+        if slot_ten != 0 {
+            e.call(0x0044_59e0, &args![slot_ten, 1u32]);
+            hide_second = false;
+            hide_head = true;
+        }
+    }
+    if head_node != 0 {
+        e.call(0x0045_0f90, &args![head_node, hide_head]);
+    }
+    for (index, part) in part_nodes.iter().enumerate() {
+        if *part != 0 {
+            if index == 0 {
+                e.call(0x0045_0f90, &args![*part, hide_head]);
+            } else {
+                e.call(0x0045_0f90, &args![*part, hide_second]);
+            }
+        }
+    }
+}
+
+// Translated from 00606540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Rebuilds the model of an actor (`actor`) with its biped (`biped`). Unless
+/// `force` is set, it stops when any of the 20 entries of the biped's part table
+/// (`fn_00606800`, entries `0x10` bytes apart) is in use. Then, in this order: the
+/// race and sex go to the biped (`004ab250`); the actor's process gets virtual
+/// `0x468(1)` unless the extra data `0042e8c0` has an entry (`00441420`) with the
+/// first byte 0 and the second not; when the actor has no 3D yet or `force` is
+/// set, the default worn items are equipped (`fn_006047c0`) if `005f1590` or
+/// `force` allow it and the player's base form being this NPC has nothing worn;
+/// `fn_00606820` loads the head unless `004abfa0` says not to; `tesnpc_init_worn`
+/// equips the inventory; and `fn_006062e0` runs unless the biped is the player's
+/// first-person one (`00950b00(player, 1)`).
+///
+pub fn fn_00606540(e: &mut Engine, this: Ptr<TESNPC>, actor: Ptr, biped: Ptr, force: u8) {
+    if !biped.is_null() {
+        if force == 0 {
+            for index in 0..0x14u32 {
+                let table = fn_00606800(e, biped);
+                if e.mem.u32(table + index * 0x10) != 0 {
+                    return;
+                }
+            }
+        }
+        let female = e.get(this, TESNPC::iActorBaseFlags) & 1 != 0;
+        let race = e
+            .call(GET_WORD_AT_4, &args![this.addr() + COMPONENT_RACE])
+            .u32();
+        e.call(0x004a_b250, &args![biped, race, female]);
+    }
+    let cast = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![actor, 0u32, TYPE_TES_OBJECT_REFR, TYPE_ACTOR, 0u32],
+        )
+        .u32();
+    if cast != 0 && process_of(e, cast) != 0 {
+        let mut notify = true;
+        let owner = e.call(0x005d_43c0, &args![cast]).u32();
+        let extra = e.call(0x0042_e8c0, &args![owner]).u32();
+        if extra != 0
+            && e.call(0x0044_ddc0, &args![extra + 0x20]).u32() != 0
+            && e.call(0x0044_1420, &args![extra, 0u32]).u32() != 0
+        {
+            let mut index = 0u32;
+            while index < e.call(0x0044_ddc0, &args![extra + 0x20]).u32() {
+                let flags = e.call(0x0044_1420, &args![extra, index]).u32();
+                if e.mem.u8(flags) == 0 && e.mem.u8(flags + 1) != 0 {
+                    notify = false;
+                }
+                index += 1;
+            }
+        }
+        if notify {
+            let process = process_of(e, cast);
+            e.vcall(process, 0x468, &args![1u32]);
+        }
+    }
+    if e.call(0x0043_fcd0, &args![actor]).u32() == 0 || force != 0 {
+        let mut equip = e.call(0x005f_1590, &args![this, actor]).u8() | force;
+        let player = e.global::<u32>(PLAYER_SINGLETON);
+        let player_base = e.call(GET_WORD_AT_20, &args![player]).u32();
+        if this.addr() == player_base {
+            let changes = e.call(0x004b_f220, &args![actor]).u32();
+            if changes != 0 {
+                for slot in 0..0x14i32 {
+                    let worn = e.call(0x004c_8c10, &args![changes, slot, 0u32]).u32();
+                    if worn != 0 {
+                        equip = 0;
+                        if worn != 0 {
+                            e.call(0x0044_59e0, &args![worn, 1u32]);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        if equip != 0 {
+            let mut weapon_out = true;
+            let package = e.call(0x0093_44a0, &args![cast]).u32();
+            if package != 0 && e.call(0x0044_1b00, &args![package]).bool() {
+                weapon_out = false;
+            }
+            fn_006047c0(e, this, actor, 1, weapon_out, 0, false);
+        }
+    }
+    if e.call(0x004a_bfa0, &args![]).u8() == 0 {
+        tesnpc_linear_face_gen_head_load(e, this, actor, biped);
+    }
+    tesnpc_init_worn(e, this, actor, biped);
+    let mut recolour = true;
+    let player = e.global::<u32>(PLAYER_SINGLETON);
+    if biped.addr() == e.call(0x0095_0b00, &args![player, 1u32]).u32() {
+        recolour = false;
+    }
+    if recolour {
+        fn_006062e0(e, this, actor, Ptr::NULL);
+    }
+}
+
+// Translated from 00606800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of the biped part table inside a `BipedAnim` (`this + 0x16c`).
+pub fn fn_00606800(_e: &mut Engine, this: Ptr) -> u32 {
+    this.addr().wrapping_add(0x16c)
+}
+
+// Translated from 00606820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESNPC::LinearFaceGenHeadLoad` (Xbox PDB): builds the head of an actor
+/// (`actor`) from this NPC's `spHeadBiped` and `spHeadSkinned` nodes, or asks the
+/// race to make them (`00613c50`) when the NPC has none, and attaches them. Each
+/// node is used as it is when the skinned head has at most one reference
+/// (`00726070`) and cloned otherwise (`NiCloningProcess` `004ad050`, `Clone`
+/// `00a5d2c0`); the children's data are copied (`005495f0`, `00a5d510`) and the
+/// skin remapped (`fn_00607310`, `fn_006072c0`, `004adda0`, `004addc0`). The
+/// nodes get their flags (virtual `0x114`, `0x11c`), the actor's palette, a
+/// parent (the biped's head attach node `004ab230(biped, 0)` for the first, the
+/// 3D root for the second) and the actor in `+0xe8`; the first available property
+/// is sent virtual `0xb4`. `biped` is the object `004ab230` and `00559450` read.
+/// Nothing happens when `00651b30` or `0043faf0` answer 0, or for the player when
+/// `00950b30(biped)` is true. A missing attach node or root is logged; an actor
+/// that already has the heads (virtual `0x1ac`/`0x1b0`) only has its root updated.
+///
+/// Not translated: the compiler's exception-unwinding frame.
+///
+pub fn tesnpc_linear_face_gen_head_load(e: &mut Engine, this: Ptr<TESNPC>, actor: Ptr, biped: Ptr) {
+    // Three `NiPointer`s on the stack: the copy target and the two clones.
+    e.with_stack(0x14, |e, pointers| {
+        let copy = pointers.addr();
+        e.call(NI_POINTER_CONSTRUCT, &args![copy, 0u32]);
+        head_load_body(e, this, actor, biped, copy);
+        e.call(NI_POINTER_DESTROY, &args![copy]);
+    });
+}
+
+/// The clone of the node `slot` (an `NiPointer` field of the NPC) points at:
+/// `NiCloningProcess` (`004ad050(1.0)`), `NiObject::Clone` (`00a5d2c0`), and
+/// the process' destructor (`004ad270`).
+fn clone_head_node(e: &mut Engine, slot: u32) -> u32 {
+    e.with_stack(0x1c, |e, process| {
+        e.call(0x004a_d050, &args![process, 1.0f32]);
+        let node = e.call(GET_FIRST_WORD, &args![slot]).u32();
+        let clone = e.call(0x00a5_d2c0, &args![node, process]).u32();
+        e.call(0x004a_d270, &args![process]);
+        clone
+    })
+}
+
+/// Copies a child node's data into `pointer` (`005495f0`, then
+/// `NiObject::CreateDeepCopy` `00a5d510` into `copy`), and, when that gives a
+/// node, passes it to the child's virtual `0xe4`.
+fn copy_child_data(e: &mut Engine, child: u32, copy: u32, pointer: u32) {
+    let source = e.call(0x0054_95f0, &args![child]).u32();
+    e.call(0x00a5_d510, &args![source, copy]);
+    let value = e.call(GET_FIRST_WORD, &args![copy]).u32();
+    e.call(NI_POINTER_ASSIGN, &args![pointer, value]);
+    if e.call(GET_FIRST_WORD, &args![pointer]).u32() != 0 {
+        let held = e.call(GET_FIRST_WORD, &args![pointer]).u32();
+        e.vcall(child, 0xe4, &args![held]);
+    }
+}
+
+/// The part of `LinearFaceGenHeadLoad` after the `NiPointer` for the copy
+/// target (`copy`) is built; `copy + 4` and `copy + 8` are the other two.
+fn head_load_body(e: &mut Engine, this: Ptr<TESNPC>, actor: Ptr, biped: Ptr, copy: u32) {
+    let base = this.addr();
+    let pointer_a = copy + 4;
+    let pointer_b = copy + 8;
+    if e.call(0x0065_1b30, &args![]).u32() == 0 {
+        return;
+    }
+    if e.call(GET_FIRST_WORD, &args![biped]).u32() == 0 {
+        return;
+    }
+    if e.call(0x0043_faf0, &args![]).u8() == 0 {
+        return;
+    }
+    let player = e.global::<u32>(PLAYER_SINGLETON);
+    if actor.addr() == player && e.call(0x0095_0b30, &args![player, biped]).bool() {
+        return;
+    }
+    let node = e.call(0x0043_fcd0, &args![actor]).u32();
+    let mut root = 0;
+    if node != 0 {
+        root = e.vcall(node, 0xc, &args![]).u32();
+    }
+    let attach = e.call(0x004a_b230, &args![biped, 0u32]).u32();
+    e.with_stack(0x24, |e, scratch| {
+        e.call(LIST_NODE_SELF, &args![scratch]);
+    });
+    let mut palette = 0;
+    if e.vcall(actor.addr(), 0x1e4, &args![]).u32() != 0 {
+        let a = e.vcall(actor.addr(), 0x1e4, &args![]).u32();
+        if e.call(0x0049_6940, &args![a]).u32() != 0 {
+            let a = e.vcall(actor.addr(), 0x1e4, &args![]).u32();
+            let b = e.call(0x0049_6940, &args![a]).u32();
+            palette = e.call(0x0053_7bd0, &args![b]).u32();
+        }
+    }
+    if attach == 0 || root == 0 {
+        let id = e.call(GET_FORM_ID, &args![this]).u32();
+        e.call(LOG_MESSAGE, &args![0x0104_a860u32, id]);
+        return;
+    }
+    let attached = e.vcall(actor.addr(), 0x1ac, &args![attach]).u32() != 0
+        || e.vcall(actor.addr(), 0x1b0, &args![attach]).u32() != 0;
+    if !attached {
+        let mut head_a = 0u32;
+        let mut head_b = 0u32;
+        let mut selected = 0u32;
+        e.call(NI_POINTER_CONSTRUCT, &args![pointer_a, 0u32]);
+        e.call(NI_POINTER_CONSTRUCT, &args![pointer_b, 0u32]);
+        if e.call(GET_FIRST_WORD, &args![base + 0x1c4]).u32() != 0 {
+            let skinned = e.call(GET_FIRST_WORD, &args![base + 0x1c8]).u32();
+            let mut reuse = false;
+            if skinned != 0 {
+                let skinned = e.call(GET_FIRST_WORD, &args![base + 0x1c8]).u32();
+                reuse = e.call(GET_WORD_AT_4, &args![skinned]).u32() <= 1;
+            }
+            if reuse {
+                head_a = e.call(GET_FIRST_WORD, &args![base + 0x1c4]).u32();
+            } else {
+                head_a = clone_head_node(e, base + 0x1c4);
+            }
+            let count = e.call(0x0043_b480, &args![head_a]).u32();
+            for index in 0..count {
+                let child = e.call(0x0043_b4a0, &args![head_a, index]).u32();
+                let cast = if child != 0 {
+                    e.vcall(child, 0x1c, &args![]).u32()
+                } else {
+                    0
+                };
+                if cast != 0 && e.call(0x0052_aa80, &args![base + 0x1c4, head_a]).bool() {
+                    copy_child_data(e, cast, copy, pointer_a);
+                }
+            }
+            if e.call(0x0052_aa80, &args![base + 0x1c4, head_a]).bool() {
+                let property = e.vcall(head_a, 0x100, &args![]).u32();
+                selected = e.call(0x0064_c5a0, &args![property]).u32();
+                if selected != 0 {
+                    e.vcall(head_a, 0x104, &args![selected]);
+                }
+            }
+        }
+        if e.call(GET_FIRST_WORD, &args![base + 0x1c8]).u32() != 0 {
+            let skinned = e.call(GET_FIRST_WORD, &args![base + 0x1c8]).u32();
+            if e.call(GET_WORD_AT_4, &args![skinned]).u32() <= 1 {
+                head_b = e.call(GET_FIRST_WORD, &args![base + 0x1c8]).u32();
+            } else {
+                head_b = clone_head_node(e, base + 0x1c8);
+            }
+            let count = e.call(0x0043_b480, &args![head_b]).u32();
+            for index in 0..count {
+                let child = e.call(0x0043_b4a0, &args![head_b, index]).u32();
+                let cast = if child != 0 {
+                    e.vcall(child, 0x1c, &args![]).u32()
+                } else {
+                    0
+                };
+                if cast == 0 {
+                    continue;
+                }
+                if e.call(0x0052_aa80, &args![base + 0x1c8, head_b]).bool() {
+                    copy_child_data(e, cast, copy, pointer_a);
+                }
+                if e.call(0x0043_fad0, &args![cast]).u32() != 0 {
+                    let skin = e.call(0x0043_fad0, &args![cast]).u32();
+                    if e.call(0x0043_b230, &args![skin]).u32() != 0 {
+                        let remapper = fn_00607310(e, cast);
+                        let mut remappable = false;
+                        if remapper != 0 && e.vcall(remapper, 0x94, &args![]).u32() != 0 {
+                            let table = e.vcall(remapper, 0x94, &args![]).u32();
+                            remappable = fn_006072c0(e, Ptr::new(table)) != 0;
+                        }
+                        if remappable {
+                            let table = e.vcall(remapper, 0x94, &args![]).u32();
+                            let entries = fn_006072c0(e, Ptr::new(table));
+                            let skin = e.call(0x0043_fad0, &args![cast]).u32();
+                            let values = e.call(0x0082_5c00, &args![entries]).u32();
+                            let list = e.call(0x0055_85e0, &args![entries]).u32();
+                            let total = e.call(0x0080_41a0, &args![list]).u32();
+                            for position in 0..total {
+                                let value = e.mem.u32(values + position * 4);
+                                e.call(0x004a_dda0, &args![skin, position, value]);
+                            }
+                        } else {
+                            let id = e.call(GET_FORM_ID, &args![this]).u32();
+                            let name = e.vcall(this.addr(), VSLOT_GET_FORM_NAME, &args![]).u32();
+                            e.call(LOG_MESSAGE, &args![0x0104_a908u32, name, id]);
+                        }
+                        let skin = e.call(0x0043_fad0, &args![cast]).u32();
+                        let shape = e.call(0x0043_b230, &args![skin]).u32();
+                        e.call(0x00a5_d510, &args![shape, copy]);
+                        let value = e.call(GET_FIRST_WORD, &args![copy]).u32();
+                        e.call(NI_POINTER_ASSIGN, &args![pointer_b, value]);
+                        if e.call(GET_FIRST_WORD, &args![pointer_b]).u32() != 0 {
+                            let held = e.call(GET_FIRST_WORD, &args![pointer_b]).u32();
+                            let skin = e.call(0x0043_fad0, &args![cast]).u32();
+                            e.call(0x004a_ddc0, &args![skin, held]);
+                        }
+                    }
+                }
+            }
+            if e.call(0x0052_aa80, &args![base + 0x1c8, head_b]).bool() {
+                if selected == 0 {
+                    let property = e.vcall(head_b, 0x100, &args![]).u32();
+                    selected = e.call(0x0064_c5a0, &args![property]).u32();
+                    if selected != 0 {
+                        e.vcall(head_b, 0x104, &args![selected]);
+                    }
+                } else {
+                    e.vcall(head_b, 0x104, &args![selected]);
+                }
+            }
+        }
+        if e.call(GET_FIRST_WORD, &args![base + 0x1c4]).u32() == 0
+            && e.call(GET_FIRST_WORD, &args![base + 0x1c8]).u32() == 0
+            && e.call(GET_WORD_AT_4, &args![base + COMPONENT_RACE]).u32() != 0
+        {
+            let cell_a = copy + 0xc;
+            let cell_b = copy + 0x10;
+            e.mem.set_u32(cell_a, head_a);
+            e.mem.set_u32(cell_b, head_b);
+            let race = e.call(GET_WORD_AT_4, &args![base + COMPONENT_RACE]).u32();
+            e.call(
+                0x0061_3c50,
+                &args![race, cell_a, cell_b, this, 0u32, 0u32, 0u32],
+            );
+            head_a = e.mem.u32(cell_a);
+            head_b = e.mem.u32(cell_b);
+            let race = e.call(GET_WORD_AT_4, &args![base + COMPONENT_RACE]).u32();
+            let face_number = fn_00607350(e, Ptr::new(race));
+            e.set(this, TESNPC::sLastRaceFaceNum, face_number);
+            e.call(NI_POINTER_ASSIGN, &args![base + 0x1c4, head_a]);
+            e.call(NI_POINTER_ASSIGN, &args![base + 0x1c8, head_b]);
+        }
+        if head_a == 0 && head_b == 0 {
+            let id = e.call(GET_FORM_ID, &args![this]).u32();
+            e.call(LOG_MESSAGE, &args![0x0104_a8b8u32, id]);
+        }
+        if head_a != 0 {
+            if e.vcall(head_a, 0x100, &args![]).u32() != 0 {
+                let scale = e.call(0x0056_8ad0, &args![actor]).f32();
+                if f64::from(scale) <= e.global::<f64>(ZERO_DOUBLE) {
+                    let property = e.vcall(head_a, 0x100, &args![]).u32();
+                    e.vcall(property, 0xd8, &args![1u32, 1u32]);
+                    let property = e.vcall(head_a, 0x100, &args![]).u32();
+                    e.vcall(property, 0xd0, &args![1u32]);
+                }
+            }
+            e.vcall(head_a, 0x114, &args![1u32]);
+            e.vcall(head_a, 0x11c, &args![1u32]);
+            e.call(0x0044_0460, &args![head_a, 0x011f_426cu32]);
+            e.call(0x0043_fa80, &args![head_a, 0x011a_9448u32]);
+            e.vcall(attach, 0xdc, &args![head_a, 1u32]);
+            e.mem.set_u32(head_a + 0xe8, actor.addr());
+            e.call(0x00a6_e870, &args![head_a, palette]);
+        }
+        if head_b != 0 {
+            let no_a = head_a == 0;
+            e.vcall(head_b, 0x114, &args![no_a]);
+            e.vcall(head_b, 0x11c, &args![no_a]);
+            e.call(0x0044_0460, &args![head_b, 0x011f_426cu32]);
+            e.vcall(root, 0xdc, &args![head_b, 1u32]);
+            e.mem.set_u32(head_b + 0xe8, actor.addr());
+            e.call(0x00a6_e870, &args![head_b, palette]);
+            e.vcall(head_b, 0x128, &args![root, 1u32]);
+        }
+        let mut target = if head_a != 0 {
+            e.vcall(head_a, 0x100, &args![]).u32()
+        } else {
+            0
+        };
+        if target == 0 {
+            target = if head_b != 0 {
+                e.vcall(head_b, 0x100, &args![]).u32()
+            } else {
+                0
+            };
+        }
+        if target != 0 {
+            e.vcall(target, 0xb4, &args![0.0f32, 1u32, 1u32, 1u32, 1u32, 0u32]);
+        }
+        e.call(NI_POINTER_DESTROY, &args![pointer_b]);
+        e.call(NI_POINTER_DESTROY, &args![pointer_a]);
+    }
+    update_node(e, root);
+}
+
+// Translated from 006072c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The skin data node of the object behind the `NiPointer` at `this + 0x10`
+/// of the word at `this + 8`: `0043fad0` of the pointer's target, or 0.
+pub fn fn_006072c0(e: &mut Engine, this: Ptr) -> u32 {
+    let inner = e.mem.u32(this.addr() + 8);
+    if inner != 0 && e.call(GET_FIRST_WORD, &args![inner + 0x10]).u32() != 0 {
+        let target = e.call(GET_FIRST_WORD, &args![inner + 0x10]).u32();
+        e.call(0x0043_fad0, &args![target]).u32()
+    } else {
+        0
+    }
+}
+
+// Translated from 00607310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00a5bdd0(node, fn_00607340())` for a non-null `node` (an
+/// `NiObject::GetExtraData`-style lookup by the key of `fn_00607340`), 0 for
+/// null.
+pub fn fn_00607310(e: &mut Engine, node: u32) -> u32 {
+    if node != 0 {
+        let key = fn_00607340(e);
+        e.call(0x00a5_bdd0, &args![node, key]).u32()
+    } else {
+        0
+    }
+}
+
+// Translated from 00607340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at the exe global `011d5b50`.
+pub fn fn_00607340(e: &mut Engine) -> u32 {
+    e.global(0x011d_5b50)
+}
+
+// Translated from 00607350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `u16` at `+0x4f8` of a race.
+pub fn fn_00607350(e: &mut Engine, this: Ptr) -> u16 {
+    e.mem.u16(this.addr() + 0x4f8)
+}
+
+// Translated from 00607370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESNPC::InitHead` (Xbox PDB): clears both head `NiPointer`s and, when
+/// they stay empty and the NPC has a race, asks the race to make the head
+/// nodes (`00613c50(race, first, second, this, 1, 0, 0)`) and stores the
+/// race's `+0x4f8` number in `sLastRaceFaceNum`.
+pub fn tesnpc_init_head(e: &mut Engine, this: Ptr<TESNPC>, first: Ptr, second: Ptr) {
+    let base = this.addr();
+    e.call(NI_POINTER_ASSIGN, &args![base + 0x1c4, 0u32]);
+    e.call(NI_POINTER_ASSIGN, &args![base + 0x1c8, 0u32]);
+    if e.call(GET_FIRST_WORD, &args![base + 0x1c4]).u32() == 0
+        && e.call(GET_FIRST_WORD, &args![base + 0x1c8]).u32() == 0
+        && e.call(GET_WORD_AT_4, &args![base + COMPONENT_RACE]).u32() != 0
+    {
+        let race = e.call(GET_WORD_AT_4, &args![base + COMPONENT_RACE]).u32();
+        e.call(
+            0x0061_3c50,
+            &args![race, first, second, this, 1u32, 0u32, 0u32],
+        );
+        let race = e.call(GET_WORD_AT_4, &args![base + COMPONENT_RACE]).u32();
+        let face_number = fn_00607350(e, Ptr::new(race));
+        e.set(this, TESNPC::sLastRaceFaceNum, face_number);
+    }
+}
+
+// Translated from 00607420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Attaches two head nodes (`head_a`, `head_b`; either may be null) to an
+/// actor's model, as `LinearFaceGenHeadLoad` does for the nodes it builds:
+/// `head_a` hangs off the node `004ab230(biped, 0)` gives, `head_b` off the 3D
+/// root's virtual `0xc` node. Both get their flags (virtual `0x114`, `0x11c`), the
+/// palette of the actor (virtual `0x1e4`, `00a6e870`), and `head_a` also the
+/// shared transform `0043fa80(0x011a9448)` and, when its virtual `0x100` property
+/// exists and `00568ad0(actor)` is not above 0.0, the property flags (virtual
+/// `0xd8`, `0xd0`). The first available property is then sent virtual `0xb4`;
+/// when the actor's virtual `0x100` is true and `+0xac` is set, four values from
+/// `00649f00`, `00649f70`, `00649fe0` and `0064a070` are stored in that object
+/// (`fn_00607830`, `fn_00607810`, `00c748d0`). `spHeadBiped` and `spHeadSkinned`
+/// are set to the two nodes and the root is updated. Without the biped's attach
+/// node or the root the form id is logged. Ends with `fn_006062e0(this, actor, 0)`.
+///
+pub fn fn_00607420(
+    e: &mut Engine,
+    this: Ptr<TESNPC>,
+    actor: Ptr,
+    biped: Ptr,
+    head_a: Ptr,
+    head_b: Ptr,
+) {
+    let base = this.addr();
+    let (head_a, head_b) = (head_a.addr(), head_b.addr());
+    let node = e.call(0x0043_fcd0, &args![actor]).u32();
+    let mut root = 0;
+    if node != 0 {
+        root = e.vcall(node, 0xc, &args![]).u32();
+    }
+    let attach = e.call(0x004a_b230, &args![biped, 0u32]).u32();
+    e.with_stack(0x24, |e, scratch| {
+        e.call(LIST_NODE_SELF, &args![scratch]);
+    });
+    let mut palette = 0;
+    if e.vcall(actor.addr(), 0x1e4, &args![]).u32() != 0 {
+        let a = e.vcall(actor.addr(), 0x1e4, &args![]).u32();
+        if e.call(0x0049_6940, &args![a]).u32() != 0 {
+            let a = e.vcall(actor.addr(), 0x1e4, &args![]).u32();
+            let b = e.call(0x0049_6940, &args![a]).u32();
+            palette = e.call(0x0053_7bd0, &args![b]).u32();
+        }
+    }
+    if attach == 0 || root == 0 {
+        let id = e.call(GET_FORM_ID, &args![this]).u32();
+        e.call(LOG_MESSAGE, &args![0x0104_a860u32, id]);
+    } else {
+        if head_a != 0 {
+            if e.vcall(head_a, 0x100, &args![]).u32() != 0 {
+                let scale = e.call(0x0056_8ad0, &args![actor]).f32();
+                if f64::from(scale) <= e.global::<f64>(ZERO_DOUBLE) {
+                    let property = e.vcall(head_a, 0x100, &args![]).u32();
+                    e.vcall(property, 0xd8, &args![1u32, 1u32]);
+                    let property = e.vcall(head_a, 0x100, &args![]).u32();
+                    e.vcall(property, 0xd0, &args![1u32]);
+                }
+            }
+            e.vcall(head_a, 0x114, &args![1u32]);
+            e.vcall(head_a, 0x11c, &args![1u32]);
+            e.call(0x0044_0460, &args![head_a, 0x011f_426cu32]);
+            e.call(0x0043_fa80, &args![head_a, 0x011a_9448u32]);
+            e.vcall(attach, 0xdc, &args![head_a, 1u32]);
+            e.call(0x00a6_e870, &args![head_a, palette]);
+        }
+        if head_b != 0 {
+            let no_a = head_a == 0;
+            e.vcall(head_b, 0x114, &args![no_a]);
+            e.vcall(head_b, 0x11c, &args![no_a]);
+            e.call(0x0044_0460, &args![head_b, 0x011f_426cu32]);
+            e.vcall(root, 0xdc, &args![head_b, 1u32]);
+            e.call(0x00a6_e870, &args![head_b, palette]);
+            e.vcall(head_b, 0x128, &args![root, 1u32]);
+        }
+        let mut target = if head_a != 0 {
+            e.vcall(head_a, 0x100, &args![]).u32()
+        } else {
+            0
+        };
+        if target == 0 {
+            target = if head_b != 0 {
+                e.vcall(head_b, 0x100, &args![]).u32()
+            } else {
+                0
+            };
+        }
+        if target != 0 {
+            e.vcall(target, 0xb4, &args![0.0f32, 1u32, 1u32, 1u32, 1u32, 0u32]);
+            if e.vcall(actor.addr(), 0x100, &args![]).bool() {
+                let table = e.mem.u32(actor.addr() + 0xac);
+                if table != 0 {
+                    e.with_stack(0xc, |e, values| {
+                        let (first, second, third) =
+                            (values.addr(), values.addr() + 4, values.addr() + 8);
+                        e.call(0x0064_9f00, &args![first, second]);
+                        e.call(0x0064_9f70, &args![first, third]);
+                        let value = e.mem.f32(third);
+                        fn_00607830(e, Ptr::new(table), value);
+                        let value = e.mem.f32(second);
+                        fn_00607810(e, Ptr::new(table), 0, value);
+                        e.call(0x0064_9fe0, &args![first, second]);
+                        e.call(0x0064_a070, &args![first, third]);
+                        let (low, high) = (e.mem.f32(second), e.mem.f32(third));
+                        e.call(0x00c7_48d0, &args![table, 0u32, low, high]);
+                    });
+                }
+            }
+        }
+        e.call(NI_POINTER_ASSIGN, &args![base + 0x1c4, head_a]);
+        e.call(NI_POINTER_ASSIGN, &args![base + 0x1c8, head_b]);
+        refresh_properties_and_update(e, root);
+    }
+    fn_006062e0(e, this, actor, Ptr::NULL);
+}
+
+/// `UpdateProperties` (`00a5a040`) then [`update_node`].
+fn refresh_properties_and_update(e: &mut Engine, node: u32) {
+    e.call(0x00a5_a040, &args![node]);
+    update_node(e, node);
+}
+
+// Translated from 00607810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a `float` in the 80-byte record `index` of the array at `+0xf8`.
+pub fn fn_00607810(e: &mut Engine, this: Ptr, index: u32, value: f32) {
+    e.mem
+        .set_f32(this.addr() + index.wrapping_mul(0x50) + 0xf8, value);
+}
+
+// Translated from 00607830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a `float` at `+0x1a8`.
+pub fn fn_00607830(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_f32(this.addr() + 0x1a8, value);
+}
+
+// Translated from 00607850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The value of one actor value for the NPC (`index`): for an index
+/// `0047f060` accepts, `cSkill[i] + cOffset[i]` where `i` is
+/// `0066ec80(2, index)` (the offset only when the NPC is not auto-calculated,
+/// virtual `0x144` of the NPC); for the others `005f0fb0(this, index)`.
+///
+/// `this` is the NPC's `+0x100` address (the exe reads `data` at `this + 0x14`
+/// and `this - 0x100` is the NPC itself).
+pub fn fn_00607850(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    if e.call(0x0047_f060, &args![index]).bool() {
+        let skill = e.call(0x0066_ec80, &args![2u32, index]).u8() as i8 as i32 as u32;
+        let mut value = e.mem.u8(this.addr().wrapping_add(skill).wrapping_add(0x14)) as u32;
+        let npc = this.addr().wrapping_sub(0x100);
+        if !e.vcall(npc, 0x144, &args![]).bool() {
+            value += e.mem.u8(this.addr().wrapping_add(skill).wrapping_add(0x22)) as u32;
+        }
+        value
+    } else {
+        e.call(0x005f_0fb0, &args![this, index]).u32()
+    }
+}
+
+// Translated from 006078e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets one actor value of the NPC: for an `index` that `0047f060` accepts,
+/// the skill `0066ec80(2, index)` is set to `value`'s low byte and the NPC is
+/// told to update (virtual `0x48(0x200)`); otherwise `005f12d0(index,
+/// value)` does it.
+pub fn fn_006078e0(e: &mut Engine, this: Ptr<TESNPC>, index: u32, value: u32) {
+    if e.call(0x0047_f060, &args![index]).bool() {
+        let skill = e.call(0x0066_ec80, &args![2u32, index]).u8() as i8 as i32 as u32;
+        e.mem.set_u8(
+            this.addr().wrapping_add(skill).wrapping_add(0x114),
+            value as u8,
+        );
+        e.vcall(this.addr(), 0x48, &args![0x200u32]);
+    } else {
+        e.call(0x005f_12d0, &args![this, index, value]);
+    }
+}
+
+// Translated from 00607950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `pCombatStyle` (the word at `+0x1d4`).
+pub fn fn_00607950(e: &mut Engine, this: Ptr<TESNPC>) -> Ptr {
+    e.get(this, TESNPC::pCombatStyle)
+}
+
+// Translated from 00607970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `pCombatStyle`.
+pub fn fn_00607970(e: &mut Engine, this: Ptr<TESNPC>, combat_style: Ptr) {
+    e.set(this, TESNPC::pCombatStyle, combat_style);
+}
+
+// Translated from 00608d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when `004f8960(this)` is 4.
+pub fn fn_00608d80(e: &mut Engine, this: Ptr) -> bool {
+    e.call(0x004f_8960, &args![this]).u32() == 4
+}
+
+// Translated from 00608da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Size of the NPC's save data for the change flags `changes`: the base
+/// size (`005f16f0`) plus `0xe` when bit `0x200` (the `NPC_DATA` block) is
+/// set. (The exe also tests `changes & 0` for a further 4 bytes; that test
+/// can never pass.)
+pub fn fn_00608da0(e: &mut Engine, this: Ptr<TESNPC>, changes: u32) -> u16 {
+    let mut size = e.call(0x005f_16f0, &args![this, changes]).u16();
+    if changes & 0x200 != 0 {
+        size = size.wrapping_add(0xe);
+    }
+    size
+}
+
+// Translated from 00608e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes the NPC's save data for the change flags `changes`: the base data
+/// (`005f18c0`), then the first `0xe` bytes of `NPC_DATA` when bit `0x200` is
+/// set (`00484ce0`). (A further block guarded by `changes & 0` can never be
+/// written and is not translated.)
+pub fn fn_00608e00(e: &mut Engine, this: Ptr<TESNPC>, changes: u32) {
+    e.call(0x005f_18c0, &args![this, changes]);
+    if changes & 0x200 != 0 {
+        e.call(0x0048_4ce0, &args![this, this.addr() + 0x114, 0xeu32]);
+    }
+}
+
+// Translated from 00608e80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads the NPC's save data for the change flags `changes` (`005f1b30` with
+/// `extra`), then the first `0xe` bytes of `NPC_DATA` when bit `0x200` is set
+/// (`00484d00`). (A block guarded by `changes & 0` can never run and is not
+/// translated.)
+pub fn fn_00608e80(e: &mut Engine, this: Ptr<TESNPC>, changes: u32, extra: u32) {
+    e.call(0x005f_1b30, &args![this, changes, extra]);
+    if changes & 0x200 != 0 {
+        e.call(0x0048_4d00, &args![this, this.addr() + 0x114, 0xeu32]);
+    }
+}
+
+// Translated from 00608f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes this NPC's changes to a save buffer (`buffer`; `BGSSaveFormBuffer`):
+/// the base form (`005f1f30`), then for each change flag set in the buffer
+/// (tested with `change_flag_set(00428110, ..)`): `0x200` the `NPC_DATA`
+/// (`0x1c` bytes); `0x400` the class; `0x2000000` the race and the original
+/// race; `0x800` the face: a flag byte (1 when the alternate coordinate is
+/// used), the 2 x 2 matrices of the coordinate in use, hair, eyes, hair
+/// length, hair colour and the head part list as a counted run of form ids;
+/// `0x1000000` the sex bit of the actor flags.
+pub fn fn_00608f00(e: &mut Engine, this: Ptr<TESNPC>, buffer: Ptr) {
+    const SAVE_BYTES: u32 = 0x0086_5e50;
+    const SAVE_FORM_ID: u32 = 0x0086_5df0;
+    let base = this.addr();
+    e.call(0x005f_1f30, &args![this, buffer]);
+    if change_flag_set(e, 0x0042_8110, buffer, 0x200) {
+        e.call(SAVE_BYTES, &args![buffer, base + 0x114, 0x1cu32, 0u32]);
+    }
+    if change_flag_set(e, 0x0042_8110, buffer, 0x400) {
+        let class = e.get(this, TESNPC::pCl);
+        e.call(SAVE_FORM_ID, &args![buffer, class, 0u32]);
+    }
+    if change_flag_set(e, 0x0042_8110, buffer, 0x200_0000) {
+        let race = e.call(GET_WORD_AT_4, &args![base + COMPONENT_RACE]).u32();
+        e.call(SAVE_FORM_ID, &args![buffer, race, 0u32]);
+        let original = e.get(this, TESNPC::pOriginalRace);
+        e.call(SAVE_FORM_ID, &args![buffer, original, 0u32]);
+    }
+    if change_flag_set(e, 0x0042_8110, buffer, 0x800) {
+        e.with_stack(0x14, |e, locals| {
+            let flag = locals.addr();
+            let iterator = locals.addr() + 4;
+            let value = locals.addr() + 0xc;
+            let mut coordinate = base + 0x134;
+            e.mem.set_u8(flag, 0);
+            let alternate = e.get(this, TESNPC::pAlternateFaceOffsetCoord);
+            if !alternate.is_null() {
+                coordinate = alternate.addr();
+                e.mem.set_u8(flag, 1);
+            }
+            e.call(SAVE_BYTES, &args![buffer, flag, 1u32, 0u32]);
+            for row in 0..2u32 {
+                for column in 0..2u32 {
+                    let matrix = coordinate + row * 0x40 + column * 0x20;
+                    let width = e.call(0x0096_11e0, &args![matrix]).u32();
+                    let height = e.call(0x0044_1110, &args![matrix]).u32();
+                    for x in 0..width {
+                        for y in 0..height {
+                            let at = e
+                                .call(MATRIX_ITERATOR_AT, &args![matrix, iterator, x])
+                                .u32();
+                            let element = e.call(ITERATOR_ELEMENT, &args![at, y]).u32();
+                            let word = e.mem.u32(element);
+                            e.mem.set_u32(value, word);
+                            e.call(SAVE_BYTES, &args![buffer, value, 4u32, 0u32]);
+                        }
+                    }
+                }
+            }
+        });
+        let hair = e.get(this, TESNPC::pHair);
+        e.call(SAVE_FORM_ID, &args![buffer, hair, 0u32]);
+        let eyes = e.get(this, TESNPC::pEyeColor);
+        e.call(SAVE_FORM_ID, &args![buffer, eyes, 0u32]);
+        e.call(SAVE_BYTES, &args![buffer, base + 0x1bc, 4u32, 0u32]);
+        e.call(SAVE_BYTES, &args![buffer, base + 0x1d8, 4u32, 0u32]);
+        let mut count = 0u32;
+        let token = e.call(0x0086_5f20, &args![buffer]).u32();
+        let mut node = base + 0x1dc;
+        while node != 0 {
+            let cell = e.call(LIST_NODE_SELF, &args![node]).u32();
+            let part = e.mem.u32(cell);
+            if part != 0 {
+                e.call(SAVE_FORM_ID, &args![buffer, part, 0u32]);
+                count += 1;
+            }
+            node = e.call(GET_WORD_AT_4, &args![node]).u32();
+        }
+        e.call(0x0086_5ff0, &args![buffer, count, token]);
+    }
+    if change_flag_set(e, 0x0042_8110, buffer, 0x100_0000) {
+        e.with_stack(4, |e, flag| {
+            let bit = e.call(
+                TEST_ACTOR_FLAGS,
+                &args![base + COMPONENT_ACTOR_BASE_DATA, 1u32],
+            );
+            e.mem.set_u8(flag.addr(), bit.u8());
+            e.call(SAVE_BYTES, &args![buffer, flag, 1u32, 0u32]);
+        });
+    }
+}
+
+// Translated from 00609220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads this NPC's changes from a load buffer (`buffer`) and applies what
+/// differs, collecting a mask of what changed (`0x1b` for the race and the
+/// sex bit, `8` for the face) that is handed to `005f20a0`; clears the head
+/// (`005dd560`) when the face changed. The flags tested are those of
+/// `fn_00608f00`: `0x200` `NPC_DATA`, `0x400` class, `0x2000000` race (a
+/// changed race goes through `006ecd40`) and original race, `0x800` the face
+/// (a coordinate that is read for the alternate set is created and
+/// initialised on demand; the head part list is rebuilt, and compared for
+/// the `8` bit when the buffer version (virtual `0`) is at least `0xe`),
+/// `0x1000000` the sex bit (`0047dd50`). A height equal to the race height
+/// follows the race.
+pub fn fn_00609220(e: &mut Engine, this: Ptr<TESNPC>, buffer: Ptr) {
+    const LOAD_BYTES: u32 = 0x0086_4980;
+    let base = this.addr();
+    let mut changed: u8 = 0;
+    e.call(0x005f_1fd0, &args![this, buffer]);
+    if change_flag_set(e, 0x0042_8110, buffer, 0x200) {
+        e.call(LOAD_BYTES, &args![buffer, base + 0x114, 0x1cu32]);
+    }
+    if change_flag_set(e, 0x0042_8110, buffer, 0x400) {
+        let class = load_form_cast(e, buffer, TYPE_TES_CLASS);
+        e.set(this, TESNPC::pCl, Ptr::new(class));
+    }
+    if e.call(0x0042_ce90, &args![buffer]).bool() {
+        changed |= 0x1b;
+    }
+    let mut follows_race = false;
+    let race_height = tesnpc_get_race_height(e, this);
+    if e.get(this, TESNPC::fHeight) == race_height {
+        follows_race = true;
+    }
+    if change_flag_set(e, 0x0042_8110, buffer, 0x200_0000) {
+        let race = load_form_cast(e, buffer, TYPE_TES_RACE);
+        if race != e.call(GET_WORD_AT_4, &args![base + COMPONENT_RACE]).u32() {
+            e.call(SET_WORD_AT_4, &args![base + COMPONENT_RACE, race]);
+            changed |= 0x1b;
+        }
+        let original = load_form_cast(e, buffer, TYPE_TES_RACE);
+        e.set(this, TESNPC::pOriginalRace, Ptr::new(original));
+    }
+    if follows_race {
+        let height = tesnpc_get_race_height(e, this);
+        e.set(this, TESNPC::fHeight, height);
+    }
+    if change_flag_set(e, 0x0042_8110, buffer, 0x800) {
+        load_face(e, this, buffer, &mut changed);
+    }
+    if change_flag_set(e, 0x0042_8110, buffer, 0x100_0000) {
+        let stored = e.with_stack(4, |e, flag| {
+            e.mem.set_u8(flag.addr(), 0);
+            e.call(LOAD_BYTES, &args![buffer, flag, 1u32]);
+            e.mem.u8(flag.addr())
+        });
+        let current = e
+            .call(
+                TEST_ACTOR_FLAGS,
+                &args![base + COMPONENT_ACTOR_BASE_DATA, 1u32],
+            )
+            .u8();
+        if current != stored {
+            e.call(
+                0x0047_dd50,
+                &args![base + COMPONENT_ACTOR_BASE_DATA, 1u32, stored as u32, 1u32],
+            );
+            changed |= 0x1b;
+        }
+    }
+    if changed & 8 != 0 {
+        e.call(0x005d_d560, &args![this]);
+    }
+    if changed != 0 {
+        e.call(0x005f_20a0, &args![this, changed as u32]);
+    }
+}
+
+/// The `0x800` (face) block of `fn_00609220`.
+fn load_face(e: &mut Engine, this: Ptr<TESNPC>, buffer: Ptr, changed: &mut u8) {
+    const LOAD_BYTES: u32 = 0x0086_4980;
+    let base = this.addr();
+    let uses_alternate = e.with_stack(4, |e, flag| {
+        e.mem.set_u8(flag.addr(), 0);
+        e.call(LOAD_BYTES, &args![buffer, flag, 1u32]);
+        e.mem.u8(flag.addr()) != 0
+    });
+    let mut coordinate = base + 0x134;
+    if uses_alternate {
+        if e.get(this, TESNPC::pAlternateFaceOffsetCoord).is_null() {
+            // `new FaceGenCoord[4]` with its element count in front.
+            let memory = e.call(OPERATOR_NEW, &args![0x84u32]).u32();
+            let array = if memory != 0 {
+                e.mem.set_u32(memory, 4);
+                e.call(
+                    VECTOR_CONSTRUCTOR_ITERATOR,
+                    &args![memory + 4, 0x20u32, 4u32, 0x0044_9610u32, 0x0044_9680u32],
+                );
+                memory + 4
+            } else {
+                0
+            };
+            e.set(this, TESNPC::pAlternateFaceOffsetCoord, Ptr::new(array));
+            let alternate = e.get(this, TESNPC::pAlternateFaceOffsetCoord);
+            e.call(FACEGEN_INIT_COORD, &args![alternate]);
+        }
+        coordinate = e.get(this, TESNPC::pAlternateFaceOffsetCoord).addr();
+    }
+    e.with_stack(0x10, |e, locals| {
+        let value = locals.addr();
+        let iterator = locals.addr() + 4;
+        for row in 0..2u32 {
+            for column in 0..2u32 {
+                let matrix = coordinate + row * 0x40 + column * 0x20;
+                let width = e.call(0x0096_11e0, &args![matrix]).u32();
+                let height = e.call(0x0044_1110, &args![matrix]).u32();
+                for x in 0..width {
+                    for y in 0..height {
+                        e.mem.set_f32(value, 0.0);
+                        e.call(LOAD_BYTES, &args![buffer, value, 4u32]);
+                        let at = e
+                            .call(MATRIX_ITERATOR_AT, &args![matrix, iterator, x])
+                            .u32();
+                        let element = e.call(ITERATOR_ELEMENT, &args![at, y]).u32();
+                        let read = e.mem.f32(value);
+                        if e.mem.f32(element) != read {
+                            let at = e
+                                .call(MATRIX_ITERATOR_AT, &args![matrix, iterator, x])
+                                .u32();
+                            let element = e.call(ITERATOR_ELEMENT, &args![at, y]).u32();
+                            e.mem.set_f32(element, read);
+                            *changed |= 8;
+                        }
+                    }
+                }
+            }
+        }
+    });
+    let old_hair = e.get(this, TESNPC::pHair);
+    let old_eyes = e.get(this, TESNPC::pEyeColor);
+    let old_length = e.get(this, TESNPC::fHairLength);
+    let old_color = e.get(this, TESNPC::iHairColor);
+    // The old colour is kept as a `float` (`FILD`, then `FSTP` to a `float`).
+    let old_color_float = old_color as f64 as f32;
+    let hair = load_form_cast(e, buffer, TYPE_TES_HAIR);
+    e.set(this, TESNPC::pHair, Ptr::new(hair));
+    let eyes = load_form_cast(e, buffer, TYPE_TES_EYES);
+    e.set(this, TESNPC::pEyeColor, Ptr::new(eyes));
+    e.call(LOAD_BYTES, &args![buffer, base + 0x1bc, 4u32]);
+    e.call(LOAD_BYTES, &args![buffer, base + 0x1d8, 4u32]);
+    let mut parts_differ = false;
+    let version = e.vcall(buffer.addr(), 0, &args![]).u8();
+    if version >= 0xe {
+        e.with_stack(0x14, |e, locals| {
+            let array = locals.addr();
+            let cell = locals.addr() + 0x10;
+            e.call(0x0060_ba40, &args![array]);
+            let mut node = base + 0x1dc;
+            while node != 0 {
+                let item_cell = e.call(LIST_NODE_SELF, &args![node]).u32();
+                let part = e.mem.u32(item_cell);
+                e.mem.set_u32(cell, part);
+                if part != 0 {
+                    e.call(0x007c_b2e0, &args![array, cell]);
+                }
+                node = e.call(GET_WORD_AT_4, &args![node]).u32();
+            }
+            e.call(0x0047_0470, &args![base + 0x1dc]);
+            let count = e.call(0x0086_4a60, &args![buffer]).u32();
+            for _ in 0..count {
+                let part = load_form_cast(e, buffer, TYPE_BGS_HEAD_PART);
+                e.mem.set_u32(cell, part);
+                if part != 0 {
+                    e.call(0x005a_e3d0, &args![base + 0x1dc, cell]);
+                }
+            }
+            let mut node = base + 0x1dc;
+            while node != 0 {
+                let item_cell = e.call(LIST_NODE_SELF, &args![node]).u32();
+                let part = e.mem.u32(item_cell);
+                e.mem.set_u32(cell, part);
+                if part != 0 {
+                    let index = e
+                        .call(0x0071_9b20, &args![array, cell, 0u32, 0x009a_3830u32])
+                        .i32();
+                    if index == -1 {
+                        parts_differ = true;
+                        break;
+                    }
+                    e.call(0x009a_4320, &args![array, index, 1u32]);
+                }
+                node = e.call(GET_WORD_AT_4, &args![node]).u32();
+            }
+            if e.call(0x0044_ddc0, &args![array]).u32() != 0 {
+                parts_differ = true;
+            }
+            e.call(0x0060_bae0, &args![array]);
+        });
+    }
+    let new_color = e.get(this, TESNPC::iHairColor);
+    if parts_differ
+        || old_hair != e.get(this, TESNPC::pHair)
+        || old_eyes != e.get(this, TESNPC::pEyeColor)
+        || old_length != e.get(this, TESNPC::fHairLength)
+        || f64::from(new_color) != f64::from(old_color_float)
+    {
+        *changed |= 8;
+    }
+}
+
+// Translated from 006099f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The counterpart of `fn_00609220` for a buffer whose first flag object
+/// (`0042ce30`) has a change flag that the second (`00428110`) lacks, after the
+/// base form's step (`009dace0`): without `0x2000000` in the second, a set
+/// original race goes back to the race component (`006ecd40`) and is cleared;
+/// without `0x800`, the alternate coordinate is destroyed
+/// (`005d9ff0(coordinate, 3)`) and cleared and the head part list emptied
+/// (`00470470`); without `0x1000000`, the sex bit is flipped (`0047dd50`). A height
+/// equal to the race height follows the race. The changed mask goes to `005f20a0`
+/// and the head is cleared (`005dd560`) when the face bit is in it.
+///
+pub fn fn_006099f0(e: &mut Engine, this: Ptr<TESNPC>, buffer: Ptr) {
+    let base = this.addr();
+    let mut changed: u8 = 0;
+    e.call(0x009d_ace0, &args![this, buffer]);
+    let mut follows_race = false;
+    let race_height = tesnpc_get_race_height(e, this);
+    if e.get(this, TESNPC::fHeight) == race_height {
+        follows_race = true;
+    }
+    if change_flag_set(e, 0x0042_ce30, buffer, 0x200_0000)
+        && !change_flag_set(e, 0x0042_8110, buffer, 0x200_0000)
+        && !e.get(this, TESNPC::pOriginalRace).is_null()
+    {
+        let original = e.get(this, TESNPC::pOriginalRace);
+        e.call(SET_WORD_AT_4, &args![base + COMPONENT_RACE, original]);
+        e.set(this, TESNPC::pOriginalRace, Ptr::NULL);
+        changed |= 0x1b;
+    }
+    if follows_race {
+        let height = tesnpc_get_race_height(e, this);
+        e.set(this, TESNPC::fHeight, height);
+    }
+    if change_flag_set(e, 0x0042_ce30, buffer, 0x800)
+        && !change_flag_set(e, 0x0042_8110, buffer, 0x800)
+    {
+        let alternate = e.get(this, TESNPC::pAlternateFaceOffsetCoord);
+        if !alternate.is_null() {
+            e.call(0x005d_9ff0, &args![alternate, 3u32]);
+        }
+        e.set(this, TESNPC::pAlternateFaceOffsetCoord, Ptr::NULL);
+        changed |= 8;
+        e.call(0x0047_0470, &args![base + 0x1dc]);
+    }
+    if change_flag_set(e, 0x0042_ce30, buffer, 0x100_0000)
+        && !change_flag_set(e, 0x0042_8110, buffer, 0x100_0000)
+    {
+        let bit = e.call(
+            TEST_ACTOR_FLAGS,
+            &args![base + COMPONENT_ACTOR_BASE_DATA, 1u32],
+        );
+        let cleared = bit.u8() == 0;
+        e.call(
+            0x0047_dd50,
+            &args![base + COMPONENT_ACTOR_BASE_DATA, 1u32, cleared, 1u32],
+        );
+        changed |= 0x1b;
+    }
+    if changed & 8 != 0 {
+        e.call(0x005d_d560, &args![this]);
+    }
+    if changed != 0 {
+        e.call(0x005f_20a0, &args![this, changed as u32]);
+    }
+}
+
+// Translated from 00609bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when the NPC's record at `iFileOffset` can be found in `file`: the
+/// file opens (`00470c70(0, 0)`), seeks to the offset (`004723a0`), the
+/// record is of the NPC form type (the byte table at `011871f8`) and its
+/// `008d8ac0` word is the NPC's form id.
+pub fn fn_00609bf0(e: &mut Engine, this: Ptr<TESNPC>, file: Ptr) -> bool {
+    if file.is_null() || e.get(this, TESNPC::iFileOffset) == 0 {
+        return false;
+    }
+    if !e.call(0x0047_0c70, &args![file, 0u32, 0u32]).bool() {
+        return false;
+    }
+    let offset = e.get(this, TESNPC::iFileOffset);
+    if !e.call(0x0047_23a0, &args![file, offset]).bool() {
+        return false;
+    }
+    let record_type = e.call(FILE_GET_FORM_TYPE, &args![file]).u32();
+    if record_type != e.global::<u8>(0x0118_71f8) as u32 {
+        return false;
+    }
+    let word = e.call(0x008d_8ac0, &args![file]).u32();
+    word == e.call(GET_FORM_ID, &args![this]).u32()
+}
+
+// Translated from 00609c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Size of the NPC's old-format face data: four bytes per element of the
+/// 2 x 2 matrices (`width * height * 4` summed, as a `u16`), plus 21.
+///
+/// `_unused_1` is a word the exe never reads.
+pub fn fn_00609c70(e: &mut Engine, this: Ptr<TESNPC>, _unused_1: u32) -> u16 {
+    let base = this.addr();
+    let mut size: u16 = 0;
+    for row in 0..2u32 {
+        for column in 0..2u32 {
+            let matrix = base + 0x134 + row * 0x40 + column * 0x20;
+            let width = e.call(0x0096_11e0, &args![matrix]).u32();
+            let height = e.call(0x0044_1110, &args![matrix]).u32();
+            size = (size as u32).wrapping_add(width.wrapping_mul(height).wrapping_mul(4)) as u16;
+        }
+    }
+    for _ in 0..5 {
+        size = size.wrapping_add(4);
+    }
+    size.wrapping_add(1)
+}
+
+// Translated from 00609d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes the NPC's old-format face data with the old save calls: the
+/// elements of the 2 x 2 matrices (`00484ce0`, four bytes each), the race's,
+/// hair's and eyes' form ids (`00484d20`, 0 for none), the hair length and
+/// colour, and one byte that is 1 for a female NPC (`005f0cc0` is 1).
+///
+/// `_unused_1` is a word the exe never reads.
+pub fn fn_00609d60(e: &mut Engine, this: Ptr<TESNPC>, _unused_1: u32) {
+    let base = this.addr();
+    e.with_stack(0x14, |e, locals| {
+        let iterator = locals.addr();
+        let cell = locals.addr() + 8;
+        for row in 0..2u32 {
+            for column in 0..2u32 {
+                let matrix = base + 0x134 + row * 0x40 + column * 0x20;
+                let width = e.call(0x0096_11e0, &args![matrix]).u32();
+                let height = e.call(0x0044_1110, &args![matrix]).u32();
+                for x in 0..width {
+                    for y in 0..height {
+                        let at = e
+                            .call(MATRIX_ITERATOR_AT, &args![matrix, iterator, x])
+                            .u32();
+                        let element = e.call(ITERATOR_ELEMENT, &args![at, y]).u32();
+                        let word = e.mem.u32(element);
+                        e.mem.set_u32(cell, word);
+                        e.call(0x0048_4ce0, &args![this, cell, 4u32]);
+                    }
+                }
+            }
+        }
+        let mut id = 0u32;
+        if e.call(GET_WORD_AT_4, &args![base + COMPONENT_RACE]).u32() != 0 {
+            let race = e.call(GET_WORD_AT_4, &args![base + COMPONENT_RACE]).u32();
+            id = e.call(GET_FORM_ID, &args![race]).u32();
+        }
+        e.mem.set_u32(cell, id);
+        e.call(0x0048_4d20, &args![this, cell, 4u32]);
+        let mut id = 0u32;
+        let hair = e.get(this, TESNPC::pHair);
+        if !hair.is_null() {
+            id = e.call(GET_FORM_ID, &args![hair]).u32();
+        }
+        e.mem.set_u32(cell, id);
+        e.call(0x0048_4d20, &args![this, cell, 4u32]);
+        let mut id = 0u32;
+        let eyes = e.get(this, TESNPC::pEyeColor);
+        if !eyes.is_null() {
+            id = e.call(GET_FORM_ID, &args![eyes]).u32();
+        }
+        e.mem.set_u32(cell, id);
+        e.call(0x0048_4d20, &args![this, cell, 4u32]);
+        e.call(0x0048_4ce0, &args![this, base + 0x1bc, 4u32]);
+        e.call(0x0048_4ce0, &args![this, base + 0x1d8, 4u32]);
+        let female = e.call(GET_SEX, &args![this]).i32() == 1;
+        e.mem.set_u8(cell, female as u8);
+        e.call(0x0048_4ce0, &args![this, cell, 1u32]);
+    });
+}
+
+// Translated from 00609f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESNPC::LoadFaceGen` (Xbox PDB): reads the NPC's face data written by
+/// `fn_00609d60` (old save format) with the old load calls (`00484d00`,
+/// `00484d40`), applies what differs from the NPC (matrix elements, race,
+/// hair, eyes, hair length and colour, the sex bit), logging a missing form,
+/// and, when anything changed, rebuilds the actor's head (`actor`): removes
+/// the head nodes from the palette and the scene, clears the head
+/// (`005dd560`), loads the face (`fn_00606820`) and applies the face-gen
+/// parameters to both head nodes (`005dd590`, `006141f0`, `00655fa0`).
+///
+/// The exe's `race changed` flags (the stack bytes at `-0x31` and `-0x22`)
+/// are set to 0 on every path, so its branch for a changed race (from
+/// `0060a60c`, which reloads the 3D, picks a different model name and
+/// restores first-person) can never run and is not translated.
+pub fn fn_00609f60(e: &mut Engine, this: Ptr<TESNPC>, actor: Ptr) {
+    const LOAD_BYTES: u32 = 0x0048_4d00;
+    const LOAD_NUMERIC_ID: u32 = 0x0048_4d40;
+    let base = this.addr();
+    let mut changed = false;
+    e.with_stack(0x10, |e, locals| {
+        let value = locals.addr();
+        let iterator = locals.addr() + 4;
+        for row in 0..2u32 {
+            for column in 0..2u32 {
+                let matrix = base + 0x134 + row * 0x40 + column * 0x20;
+                let width = e.call(0x0096_11e0, &args![matrix]).u32();
+                let height = e.call(0x0044_1110, &args![matrix]).u32();
+                for x in 0..width {
+                    for y in 0..height {
+                        e.call(LOAD_BYTES, &args![this, value, 4u32]);
+                        let at = e
+                            .call(MATRIX_ITERATOR_AT, &args![matrix, iterator, x])
+                            .u32();
+                        let element = e.call(ITERATOR_ELEMENT, &args![at, y]).u32();
+                        let read = e.mem.f32(value);
+                        if e.mem.f32(element) != read {
+                            let at = e
+                                .call(MATRIX_ITERATOR_AT, &args![matrix, iterator, x])
+                                .u32();
+                            let element = e.call(ITERATOR_ELEMENT, &args![at, y]).u32();
+                            e.mem.set_f32(element, read);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+    });
+    let name_component = base + COMPONENT_FULL_NAME;
+    if e.call(NPC_GET_RACE, &args![this]).u32() == 0 {
+        let name = e.call(0x0040_8da0, &args![name_component]).u32();
+        e.call(LOG_MESSAGE, &args![0x0104_aa48u32, name]);
+    }
+    let race = e.with_stack(4, |e, id_cell| {
+        e.call(LOAD_NUMERIC_ID, &args![this, id_cell, 4u32]);
+        let id = e.mem.u32(id_cell.addr());
+        let form = e.call(LOOKUP_FORM, &args![id]).u32();
+        let race = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_RACE, 0u32],
+            )
+            .u32();
+        if id != 0 && race == 0 {
+            let name = e.call(0x0040_8da0, &args![name_component]).u32();
+            e.call(LOG_MESSAGE, &args![0x0104_aa20u32, name, id]);
+        }
+        race
+    });
+    if e.call(GET_WORD_AT_4, &args![base + COMPONENT_RACE]).u32() != race {
+        changed = true;
+    }
+    e.call(SET_WORD_AT_4, &args![base + COMPONENT_RACE, race]);
+    if e.call(NPC_GET_RACE, &args![this]).u32() == 0 {
+        let name = e.call(0x0040_8da0, &args![name_component]).u32();
+        e.call(LOG_MESSAGE, &args![0x0104_a9ecu32, name]);
+    }
+    let hair = e.with_stack(4, |e, id_cell| {
+        e.call(LOAD_NUMERIC_ID, &args![this, id_cell, 4u32]);
+        let id = e.mem.u32(id_cell.addr());
+        let form = e.call(LOOKUP_FORM, &args![id]).u32();
+        let hair = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_HAIR, 0u32],
+            )
+            .u32();
+        if id != 0 && hair == 0 {
+            let name = e.call(0x0040_8da0, &args![name_component]).u32();
+            e.call(LOG_MESSAGE, &args![0x0104_a9c4u32, name, id]);
+        }
+        hair
+    });
+    if e.get(this, TESNPC::pHair).addr() != hair {
+        changed = true;
+    }
+    e.set(this, TESNPC::pHair, Ptr::new(hair));
+    let eyes = e.with_stack(4, |e, id_cell| {
+        e.call(LOAD_NUMERIC_ID, &args![this, id_cell, 4u32]);
+        let id = e.mem.u32(id_cell.addr());
+        let form = e.call(LOOKUP_FORM, &args![id]).u32();
+        let eyes = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_EYES, 0u32],
+            )
+            .u32();
+        if id != 0 && eyes == 0 {
+            let name = e.call(0x0040_8da0, &args![name_component]).u32();
+            e.call(LOG_MESSAGE, &args![0x0104_a99cu32, name, id]);
+        }
+        eyes
+    });
+    if e.get(this, TESNPC::pEyeColor).addr() != eyes {
+        changed = true;
+    }
+    e.set(this, TESNPC::pEyeColor, Ptr::new(eyes));
+    let (length, color, sex_bit) = e.with_stack(0xc, |e, cells| {
+        let (length, color, bit) = (cells.addr(), cells.addr() + 4, cells.addr() + 8);
+        e.call(LOAD_BYTES, &args![this, length, 4u32]);
+        e.call(LOAD_BYTES, &args![this, color, 4u32]);
+        e.call(LOAD_BYTES, &args![this, bit, 1u32]);
+        (e.mem.f32(length), e.mem.u32(color), e.mem.u8(bit))
+    });
+    if e.get(this, TESNPC::fHairLength) != length || e.get(this, TESNPC::iHairColor) != color {
+        changed = true;
+    }
+    e.set(this, TESNPC::fHairLength, length);
+    e.set(this, TESNPC::iHairColor, color);
+    let current_bit = e
+        .call(
+            TEST_ACTOR_FLAGS,
+            &args![base + COMPONENT_ACTOR_BASE_DATA, 1u32],
+        )
+        .u8();
+    if current_bit != sex_bit {
+        changed = true;
+    }
+    e.call(
+        0x0047_dd50,
+        &args![base + COMPONENT_ACTOR_BASE_DATA, 1u32, sex_bit as u32, 1u32],
+    );
+    if !changed {
+        return;
+    }
+    let node = e.call(0x0043_fcd0, &args![actor]).u32();
+    let mut root = 0;
+    if node != 0 {
+        root = e.vcall(node, 0xc, &args![]).u32();
+    }
+    // (The exe compares its two never-set race flags here and always takes
+    // this side.)
+    if root != 0 {
+        let mut palette = 0;
+        if e.call(0x008b_70d0, &args![actor]).u32() != 0 {
+            let a = e.call(0x008b_70d0, &args![actor]).u32();
+            if e.call(0x0049_6940, &args![a]).u32() != 0 {
+                let a = e.call(0x008b_70d0, &args![actor]).u32();
+                let b = e.call(0x0049_6940, &args![a]).u32();
+                palette = e.call(0x0053_7bd0, &args![b]).u32();
+            }
+        }
+        for slot in [0x1b0u32, 0x1ac] {
+            let head = e.vcall(actor.addr(), slot, &args![0u32]).u32();
+            if head != 0 && e.call(0x0096_11e0, &args![head]).u32() != 0 {
+                e.call(0x00a6_e8e0, &args![head, palette]);
+                let parent = e.call(0x0096_11e0, &args![head]).u32();
+                e.vcall(parent, 0xe8, &args![head]);
+            }
+        }
+    }
+    e.call(0x005d_d560, &args![this]);
+    let biped = e.call(0x005d_9f90, &args![actor]).u32();
+    if biped != 0 {
+        let biped = e.call(0x005d_9f90, &args![actor]).u32();
+        tesnpc_linear_face_gen_head_load(e, this, actor, Ptr::new(biped));
+    }
+    if e.vcall(actor.addr(), 0x1ac, &args![0u32]).u32() != 0
+        && e.vcall(actor.addr(), 0x1b0, &args![0u32]).u32() != 0
+    {
+        e.with_stack(FACE_PARAMS_SIZE, |e, params| {
+            e.call(FACE_PARAMS_CONSTRUCT, &args![params]);
+            let race = e.call(GET_WORD_AT_4, &args![base + COMPONENT_RACE]).u32();
+            e.call(0x0061_41f0, &args![race, this, params, 0u32, 0u32]);
+            let first = e.vcall(actor.addr(), 0x1ac, &args![0u32]).u32();
+            e.call(APPLY_FACE_PARAMS, &args![first, params]);
+            let second = e.vcall(actor.addr(), 0x1b0, &args![0u32]).u32();
+            e.call(APPLY_FACE_PARAMS, &args![second, params]);
+            e.call(FACE_PARAMS_DESTROY, &args![params]);
+        });
+    }
+}
+
+// Translated from 0060a890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the global flag at `011c5cb4` around the call of the actor's process'
+/// virtual `0x464(actor)`. For the player it also takes the first-person biped
+/// node (`00950bb0(player, 1)`) and its child `0045bc00(node, 0)`, and gives that
+/// child the matrix `0056fac0(player, buffer, copy of 011a9448)` returns
+/// (`0043fa80`).
+///
+/// `_this` is the `ECX` word the exe never reads.
+///
+pub fn fn_0060a890(e: &mut Engine, _this: Ptr<TESNPC>, actor: Ptr) {
+    e.mem.set_u8(0x011c_5cb4, 1);
+    let process = process_of(e, actor.addr());
+    e.vcall(process, 0x464, &args![actor]);
+    e.mem.set_u8(0x011c_5cb4, 0);
+    let player = e.global::<u32>(PLAYER_SINGLETON);
+    if actor.addr() == player {
+        let biped = e.call(0x0095_0bb0, &args![player, 1u32]).u32();
+        let node = if biped != 0 {
+            e.call(0x0045_bc00, &args![biped, 0u32]).u32()
+        } else {
+            0
+        };
+        // (The exe copies the 36-byte matrix at 011a9448 to a local it
+        // never reads.)
+        if node != 0 {
+            e.with_stack(0x48, |e, frame| {
+                let copy = frame.addr() + 0x24;
+                let words = e.mem.bytes(0x011a_9448, 0x24);
+                e.mem.write(copy, &words);
+                let matrix = e.call(0x0056_fac0, &args![player, frame, copy]).u32();
+                e.call(0x0043_fa80, &args![node, matrix]);
+            });
+        }
+    }
+}
+
+// Translated from 0060a950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESNPC::SwapEyes` (Xbox PDB): finds the `"FaceGenEyeLeft"` and
+/// `"FaceGenEyeRight"` children of `spHeadBiped` and gives both a new
+/// texture, the eyes' own (`eyes + 0x24`, `"Data\Textures\%s"`) or the
+/// default `Data\Textures\Characters\Eyes\EyeDefault.dds` for no `eyes`.
+/// A shape that is usable (`0050d100`, and whose `0043b230` has a
+/// `00441110` between 8 and 12) is retextured through its virtual `0xfc`;
+/// otherwise a new `NiTexturingProperty` (`00a6aa40`, `0x30` bytes) with
+/// the texture and clamp mode 3 is attached (property type 5 is replaced).
+/// Finally the two eye nodes of the head are looked up again by name
+/// (virtual `0x9c`) and prepared (`00b57e30`).
+///
+/// Not translated: the compiler's exception-unwinding frame.
+pub fn fn_0060a950(e: &mut Engine, this: Ptr<TESNPC>, eyes: Ptr) {
+    let base = this.addr();
+    // Layout: left eye pointer, right eye pointer, path string (8 bytes),
+    // texture pointer, two fixed-string names.
+    e.with_stack(0x24, |e, frame| {
+        let left = frame.addr();
+        let right = frame.addr() + 4;
+        let path = frame.addr() + 8;
+        let texture = frame.addr() + 0x10;
+        let name_left = frame.addr() + 0x14;
+        let name_right = frame.addr() + 0x18;
+        e.call(NI_POINTER_CONSTRUCT, &args![left, 0u32]);
+        e.call(NI_POINTER_CONSTRUCT, &args![right, 0u32]);
+        if e.call(GET_FIRST_WORD, &args![base + 0x1c4]).u32() != 0 {
+            let head = e.call(GET_FIRST_WORD, &args![base + 0x1c4]).u32();
+            let count = e.call(0x0043_b480, &args![head]).u32();
+            for index in 0..count {
+                let head = e.call(GET_FIRST_WORD, &args![base + 0x1c4]).u32();
+                let child = e.call(0x0043_b4a0, &args![head, index]).u32();
+                for (eye_name, pointer) in [(0x0104_aac0u32, left), (0x0104_aab0u32, right)] {
+                    let name = e.call(0x0041_3f40, &args![child]).u32();
+                    let text = e.call(0x0043_b1b0, &args![name]).u32();
+                    if e.call(STRCMP, &args![text, eye_name]).i32() == 0 {
+                        let found = e.vcall(child, 0x1c, &args![]).u32();
+                        e.call(NI_POINTER_ASSIGN, &args![pointer, found]);
+                    }
+                }
+            }
+            if e.call(GET_FIRST_WORD, &args![left]).u32() != 0
+                && e.call(GET_FIRST_WORD, &args![right]).u32() != 0
+            {
+                e.call(0x0040_37b0, &args![path]);
+                if !eyes.is_null() {
+                    let texture_name = e.call(0x0040_8da0, &args![eyes.addr() + 0x24]).u32();
+                    e.call(0x0040_6f60, &args![path, 0x0104_a64cu32, texture_name]);
+                } else {
+                    e.call(0x0040_6f60, &args![path, 0x0104_aa80u32]);
+                }
+                e.call(NI_POINTER_CONSTRUCT, &args![texture, 0u32]);
+                let text = e.call(GET_FIRST_WORD, &args![path]).u32();
+                let tes = e.global::<u32>(TES_SINGLETON);
+                e.call(0x0045_68c0, &args![tes, text, texture, 0u32, 0u32]);
+                if e.call(GET_FIRST_WORD, &args![texture]).u32() != 0 {
+                    let left_shape = e.call(GET_FIRST_WORD, &args![left]).u32();
+                    let left_shape = e.call(0x0050_d100, &args![left_shape]).u32();
+                    let right_shape = e.call(GET_FIRST_WORD, &args![right]).u32();
+                    let right_shape = e.call(0x0050_d100, &args![right_shape]).u32();
+                    if left_shape != 0 && right_shape != 0 {
+                        let left_data = e.call(0x0043_b230, &args![left_shape]).u32();
+                        // (The exe evaluates the size test twice for the
+                        // left shape and keeps the second result.)
+                        let _first = shape_size_in_range(e, left_data);
+                        let left_usable = if shape_size_in_range(e, left_data) {
+                            left_data
+                        } else {
+                            0
+                        };
+                        let right_data = e.call(0x0043_b230, &args![right_shape]).u32();
+                        let right_usable = if shape_size_in_range(e, right_data) {
+                            right_data
+                        } else {
+                            0
+                        };
+                        if left_usable != 0 && right_usable != 0 {
+                            let held = e.call(GET_FIRST_WORD, &args![texture]).u32();
+                            e.vcall(left_usable, 0xfc, &args![0u32, held]);
+                            let held = e.call(GET_FIRST_WORD, &args![texture]).u32();
+                            e.vcall(right_usable, 0xfc, &args![0u32, held]);
+                            e.call(NI_POINTER_DESTROY, &args![texture]);
+                            e.call(0x0040_37d0, &args![path]);
+                            e.call(NI_POINTER_DESTROY, &args![right]);
+                            e.call(NI_POINTER_DESTROY, &args![left]);
+                            return;
+                        }
+                    }
+                    let memory = e.call(0x00aa_13e0, &args![0x30u32]).u32();
+                    let property = if memory != 0 {
+                        e.call(0x00a6_aa40, &args![memory]).u32()
+                    } else {
+                        0
+                    };
+                    let held = e.call(GET_FIRST_WORD, &args![texture]).u32();
+                    e.call(0x005b_8fc0, &args![property, held]);
+                    e.call(0x004f_3200, &args![property, 3u32]);
+                    fn_0060aeb0(e, Ptr::new(property), 2);
+                    for pointer in [left, right] {
+                        let node = e.call(GET_FIRST_WORD, &args![pointer]).u32();
+                        if e.call(0x00a5_9d30, &args![node, 5u32]).u32() != 0 {
+                            let node = e.call(GET_FIRST_WORD, &args![pointer]).u32();
+                            e.call(0x00a5_b230, &args![node, 5u32]);
+                        }
+                        let node = e.call(GET_FIRST_WORD, &args![pointer]).u32();
+                        e.call(0x0043_9410, &args![node, property]);
+                    }
+                }
+                e.call(NI_POINTER_DESTROY, &args![texture]);
+                e.call(0x0040_37d0, &args![path]);
+            }
+            let head = e.call(GET_FIRST_WORD, &args![base + 0x1c4]).u32();
+            for (eye_name, fixed) in [(0x0104_aac0u32, name_left), (0x0104_aab0u32, name_right)] {
+                let head = if eye_name == 0x0104_aac0 {
+                    head
+                } else {
+                    e.call(GET_FIRST_WORD, &args![base + 0x1c4]).u32()
+                };
+                let name = e.call(0x0043_8170, &args![fixed, eye_name]).u32();
+                let node = e.vcall(head, 0x9c, &args![name]).u32();
+                e.call(0x0043_81b0, &args![fixed]);
+                if node != 0 {
+                    e.call(0x00b5_7e30, &args![node, 0u32, 0u32]);
+                }
+            }
+        }
+        e.call(NI_POINTER_DESTROY, &args![right]);
+        e.call(NI_POINTER_DESTROY, &args![left]);
+    });
+}
+
+/// `00441110(data)` between 8 and 12 for a non-null `data`.
+fn shape_size_in_range(e: &mut Engine, data: u32) -> bool {
+    if data == 0 {
+        return false;
+    }
+    e.call(0x0044_1110, &args![data]).i32() >= 8 && {
+        e.call(0x0044_1110, &args![data]).i32() <= 0xc
+    }
+}
+
+// Translated from 0060aeb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Makes sure the object at `this + 0x1c` has its first slot filled
+/// (`00877a30(0)` returns the slot): an empty slot gets a new 16-byte object
+/// (`00a69dd0`) stored with `0096ae90(0, &object)`. Then
+/// `fn_0060af60(object, argument)`.
+pub fn fn_0060aeb0(e: &mut Engine, this: Ptr, argument: u32) {
+    let owner = this.addr() + 0x1c;
+    e.with_stack(4, |e, cell| {
+        let slot = e.call(0x0087_7a30, &args![owner, 0u32]).u32();
+        let mut object = e.mem.u32(slot);
+        e.mem.set_u32(cell.addr(), object);
+        if object == 0 {
+            let memory = e.call(OPERATOR_NEW, &args![0x10u32]).u32();
+            object = if memory != 0 {
+                e.call(0x00a6_9dd0, &args![memory]).u32()
+            } else {
+                0
+            };
+            e.mem.set_u32(cell.addr(), object);
+            e.call(0x0096_ae90, &args![owner, 0u32, cell]);
+        }
+        let object = e.mem.u32(cell.addr());
+        fn_0060af60(e, Ptr::new(object), argument as u16);
+    });
+}
+
+// Translated from 0060af60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `004f32e0(this, argument, 0xf00, 8)`.
+pub fn fn_0060af60(e: &mut Engine, this: Ptr, argument: u16) {
+    e.call(0x004f_32e0, &args![this, argument as u32, 0xf00u32, 8u32]);
+}
+
+// Translated from 0060af90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESNPC::BuildDefaultModelList` (Xbox PDB): makes a new `BSSimpleList` (8
+/// bytes, constructed by `0096a2d0`) and fills it. With `biped_models`, for each
+/// of the 20 biped slots whose item `004829c0(this, slot)` exists, the slot's
+/// biped model (`item + 0x70`, then `004811e0(model, sex)`) is appended
+/// (`005ae3d0`), skipping a slot whose model `00480af0(slot 2's model, slot, 0, 0)`
+/// reports as covered, and slots already seen; with `extra_model`, the model that
+/// the object at `00482910(this)`'s `+0x3c` gives through its virtual `0x14` is
+/// appended too. Returns the list.
+///
+/// Not translated: the compiler's exception-unwinding frame.
+///
+pub fn tesnpc_build_default_model_list(
+    e: &mut Engine,
+    this: Ptr<TESNPC>,
+    biped_models: u8,
+    extra_model: u8,
+) -> Ptr {
+    let base = this.addr();
+    let memory = e.call(OPERATOR_NEW, &args![8u32]).u32();
+    let list = if memory != 0 {
+        e.call(0x0096_a2d0, &args![memory]).u32()
+    } else {
+        0
+    };
+    if biped_models != 0 {
+        let mut slot_two = 0u32;
+        let sex = e.call(GET_SEX, &args![this]).u32();
+        e.with_stack(0x58, |e, frame| {
+            let models = frame.addr();
+            let cell = frame.addr() + 0x50;
+            e.call(MEMSET, &args![models, 0u32, 0x50u32]);
+            for slot in 0..0x14i32 {
+                let item = e
+                    .call(0x0048_29c0, &args![base + COMPONENT_CONTAINER, this, slot])
+                    .u32();
+                if item == 0 {
+                    continue;
+                }
+                if slot_two != 0
+                    && e.call(0x0048_0af0, &args![slot_two, slot, 0u32, 0u32])
+                        .bool()
+                {
+                    continue;
+                }
+                let entry = models + slot as u32 * 4;
+                if e.mem.u32(entry) != 0 {
+                    continue;
+                }
+                e.mem
+                    .set_u32(entry, if item != 0 { item + 0x70 } else { 0 });
+                if e.mem.u32(entry) != 0 {
+                    let model = e.mem.u32(entry);
+                    let found = e.call(0x0048_11e0, &args![model, sex]).u32();
+                    e.mem.set_u32(cell, found);
+                    if found != 0 {
+                        e.call(0x005a_e3d0, &args![list, cell]);
+                    }
+                }
+                if slot == 2 {
+                    slot_two = e.mem.u32(entry);
+                }
+            }
+        });
+    }
+    if extra_model != 0 {
+        let source = e
+            .call(0x0048_2910, &args![base + COMPONENT_CONTAINER, this])
+            .u32();
+        if source != 0 {
+            let object = if source != 0 { source + 0x3c } else { 0 };
+            if object != 0 {
+                let model = e.vcall(object, 0x14, &args![]).u32();
+                if model != 0 {
+                    e.with_stack(4, |e, cell| {
+                        e.mem.set_u32(cell.addr(), model);
+                        e.call(0x005a_e3d0, &args![list, cell]);
+                    });
+                }
+            }
+        }
+    }
+    Ptr::new(list)
+}
+
+// Translated from 0060b1d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00461580(this, 0x800)`: the `0x800` bit of an actor-base flags
+/// component.
+pub fn fn_0060b1d0(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(TEST_ACTOR_FLAGS, &args![this, 0x800u32]).u32()
+}
+
+// Translated from 0060b1f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00461580(this, 0x1000)`: the `0x1000` bit of an actor-base flags
+/// component.
+pub fn fn_0060b1f0(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(TEST_ACTOR_FLAGS, &args![this, 0x1000u32]).u32()
+}
+
+// Translated from 00607990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESNPC::Activate` (Xbox PDB): what happens when `activator_ref` activates the
+/// NPC reference `target_ref` (the form's `Activate` virtual). Returns true when
+/// the activation was handled, false when it was refused.
+///
+/// The exe's function is a long chain of tests on the two actors; its code is
+/// followed block by block, and each block that more than one path reaches is a
+/// method of [`Activation`] named after its address. In outline: nothing happens
+/// for a target that is not an actor, is refused by its virtual `0x2e8`, has no
+/// process or whose process' virtual `0x610` answers; some states of the target
+/// (virtual `0x22c`, `0x230`, kind `004f8960` = 6, fleeing `008a6650`) show a
+/// pop-up (`007052f0`); the companion menu, the VATS menu and the other menus
+/// are queued with `00709470` (type 8, 4 or 1); a process' virtual `0x33c` lets
+/// an NPC activator act on the target; the dialogue topic and item come from
+/// `0061a2d0`, `0061b320` and are started with `0057b7c0`; `item` (`count` of
+/// them) is handed over through the target's virtual `0x17c`; the processes'
+/// virtual `0x288` sets the two actors' package state.
+///
+/// `_unused_1` is a word the exe never reads.
+///
+pub fn tesnpc_activate(
+    e: &mut Engine,
+    this: Ptr<TESNPC>,
+    target_ref: Ptr,
+    activator_ref: Ptr,
+    _unused_1: u32,
+    item: Ptr,
+    count: u32,
+) -> bool {
+    e.with_stack(0x138, |e, frame| {
+        let activator = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![activator_ref, 0u32, TYPE_TES_OBJECT_REFR, TYPE_ACTOR, 0u32],
+            )
+            .u32();
+        let target = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![target_ref, 0u32, TYPE_TES_OBJECT_REFR, TYPE_ACTOR, 0u32],
+            )
+            .u32();
+        if target == 0 || e.vcall(target, 0x2e8, &args![]).bool() {
+            return false;
+        }
+        let target_process = process_of(e, target);
+        if target_process == 0 {
+            return false;
+        }
+        if e.vcall(target_process, 0x52c, &args![]).u32() != 0
+            && !e.vcall(target, 0x22c, &args![0u32]).bool()
+        {
+            return false;
+        }
+        if e.vcall(target_process, 0x610, &args![]).u32() != 0 {
+            return false;
+        }
+        let activator_process = process_of(e, activator);
+        let activator_state = e.vcall(activator_process, 0x27c, &args![]).u32();
+        let target_state = e.vcall(target_process, 0x27c, &args![]).u32();
+        let activation = Activation {
+            this,
+            target_ref: target_ref.addr(),
+            activator_ref: activator_ref.addr(),
+            item: item.addr(),
+            count,
+            activator,
+            target,
+            target_process,
+            activator_state,
+            target_state,
+            buffer: frame.addr(),
+            flag: frame.addr() + 0x130,
+        };
+        activation.start(e)
+    })
+}
+
+/// The calendar object (`011de7b8`) the hour (`00867da0`) and day
+/// (`00867d60`) getters take as `this`.
+const CALENDAR: u32 = 0x011d_e7b8;
+/// `sprintf(buffer, format, ...)` of the C runtime (cdecl).
+const SPRINTF: u32 = 0x00ec_623a;
+/// `"%s %s"`.
+const FORMAT_TWO_STRINGS: u32 = 0x0101_2058;
+/// `Interface::QueueMenuCreate(type, reference, ...)` (cdecl, six words).
+const QUEUE_MENU_CREATE: u32 = 0x0070_9470;
+/// `VATS::QuitVATSPlayback` (thiscall on `011f2250`, two words).
+const VATS_QUIT_PLAYBACK: u32 = 0x009c_8950;
+const VATS_OBJECT: u32 = 0x011f_2250;
+/// The `float` `2.0` the message display time is read from.
+const MESSAGE_TIME: u32 = 0x0101_62c0;
+/// The message icons: `glow_message_vaultboy_surprised.dds` (the path in
+/// the exe is misspelled `Interfac\`), `..._sad.dds`.
+const ICON_SURPRISED: u32 = 0x0104_a958;
+const ICON_SAD: u32 = 0x0102_08a0;
+
+/// Who the first `%s` of a message names.
+enum Speaker {
+    /// The activated actor: `0055d520(target)`.
+    Target,
+    /// The NPC form itself: its full name (`00408da0(this + 0xd0)`).
+    Npc,
+}
+
+/// The state of one `TESNPC::Activate` call.
+struct Activation {
+    this: Ptr<TESNPC>,
+    /// The two reference arguments as passed (before the casts).
+    target_ref: u32,
+    activator_ref: u32,
+    item: u32,
+    count: u32,
+    /// The casts of the two references to `Actor` (`-0x14` and `-0x8`).
+    activator: u32,
+    target: u32,
+    /// The target's process (`-0x4`) and the words the processes' virtual
+    /// `0x27c` returned for the activator (`-0x10`) and the target (`-0xc`).
+    target_process: u32,
+    activator_state: u32,
+    target_state: u32,
+    /// The message text buffer (`0x130` bytes) and a word the actor tests
+    /// (`008b06d0`) write to.
+    buffer: u32,
+    flag: u32,
+}
+
+impl Activation {
+    fn player(e: &Engine) -> u32 {
+        e.global::<u32>(PLAYER_SINGLETON)
+    }
+
+    /// `MobileObject::GetCurrentPackage` (`009344a0`).
+    fn package(e: &mut Engine, actor: u32) -> u32 {
+        e.call(0x0093_44a0, &args![actor]).u32()
+    }
+
+    /// The pop-up message: the text of the setting at `setting`
+    /// (`00403df0`), the speaker's name, `"%s %s"`, then the display call
+    /// `007052f0(text, 0, icon, 0, 2.0, 0)`.
+    fn message(&self, e: &mut Engine, setting: u32, speaker: Speaker, icon: u32) {
+        let text = e.call(0x0040_3df0, &args![setting]).u32();
+        let name = match speaker {
+            Speaker::Target => e.call(0x0055_d520, &args![self.target]).u32(),
+            Speaker::Npc => e
+                .call(0x0040_8da0, &args![self.this.addr() + COMPONENT_FULL_NAME])
+                .u32(),
+        };
+        e.call(SPRINTF, &args![self.buffer, FORMAT_TWO_STRINGS, name, text]);
+        let time = e.mem.u32(MESSAGE_TIME);
+        e.call(
+            0x0070_52f0,
+            &args![self.buffer, 0u32, icon, 0u32, time, 0u32],
+        );
+    }
+
+    /// `QueueMenuCreate(menu, reference, a, b, c, 0)`.
+    fn queue_menu(&self, e: &mut Engine, menu: u32, reference: u32, a: u32, b: u32, c: u32) {
+        e.call(QUEUE_MENU_CREATE, &args![menu, reference, a, b, c, 0u32]);
+    }
+
+    /// 00607ab4: the player's own activation of a downed actor, then the
+    /// refusal messages for the activated actor's state.
+    fn start(&self, e: &mut Engine) -> bool {
+        let player = Self::player(e);
+        let t = self.target;
+        if t == player && e.mem.u8(player + 0x20c) != 0 {
+            if e.vcall(t, 0x304, &args![]).bool() && e.call(0x008a_61b0, &args![t]).bool() {
+                let hour = e.call(0x0086_7da0, &args![CALENDAR]).f32();
+                let one = e.global::<f64>(ONE_DOUBLE);
+                let earlier = (f64::from(hour) - one) as f32;
+                e.call(0x0069_3d50, &args![self.target_process, earlier]);
+            }
+            return false;
+        }
+        if e.vcall(t, 0x22c, &args![0u32]).bool() && e.call(0x004f_8960, &args![t]).u32() != 6 {
+            return self.at_00607c8b(e);
+        }
+        if e.call(0x0043_7bd0, &args![t]).bool()
+            || e.vcall(t, 0x230, &args![]).bool()
+            || e.call(0x004f_8960, &args![t]).u32() == 6
+        {
+            self.message(e, 0x011d_210c, Speaker::Target, ICON_SURPRISED);
+            return false;
+        }
+        if !e.call(0x008a_6650, &args![t, 0u32]).bool() {
+            return self.at_00607c8b(e);
+        }
+        let combat_target = e.vcall(t, 0x428, &args![]).u32();
+        if combat_target != 0
+            && e.call(0x0097_fa10, &args![combat_target, player]).bool()
+            && !e.call(0x0089_4d60, &args![player]).bool()
+        {
+            return self.at_00607c8b(e);
+        }
+        self.message(e, 0x011d_2538, Speaker::Target, ICON_SAD);
+        false
+    }
+
+    /// 00607c8b: the companion menu, then the package extra data handling.
+    fn at_00607c8b(&self, e: &mut Engine) -> bool {
+        let player = Self::player(e);
+        let (a, t) = (self.activator, self.target);
+        if e.call(0x0056_6950, &args![t]).bool() && self.activator_ref == player {
+            if e.call(0x0075_4d90, &args![t]).bool() {
+                self.queue_menu(e, 8, self.target_ref, 0, 0, 0);
+            }
+            return false;
+        }
+        if a == 0 {
+            return false;
+        }
+        let owner = e.call(0x005d_43c0, &args![a]).u32();
+        let package_extra = e.call(0x0041_cb10, &args![owner]).u32();
+        if a != player
+            && package_extra != 0
+            && e.call(0x0041_ca90, &args![package_extra]).u32() == 0xf
+        {
+            let target_extras = e.call(0x005d_43c0, &args![t]).u32();
+            let package_target = e.call(0x0041_cb70, &args![target_extras]).u32();
+            let extras = e.call(0x005d_43c0, &args![a]).u32();
+            e.call(
+                0x0041_c930,
+                &args![
+                    extras,
+                    package_extra,
+                    4u32,
+                    package_target,
+                    1u32,
+                    1u32,
+                    0u32
+                ],
+            );
+            if e.call(0x0067_0f90, &args![package_extra]).bool() {
+                let day = e.call(0x0086_7d60, &args![CALENDAR]).u8();
+                e.vcall(a, 0x28c, &args![package_extra, day as u32]);
+            }
+            let process = process_of(e, t);
+            e.vcall(process, 0x5a0, &args![a, package_extra]);
+            e.vcall(t, 0x48, &args![0x8000_0000u32]);
+        }
+        if a != player && process_of(e, a) != 0 {
+            let process = process_of(e, a);
+            e.vcall(process, 0x4ec, &args![1u32]);
+        }
+        if e.call(0x0049_3bb0, &args![t]).bool()
+            && a == player
+            && e.call(0x0056_6950, &args![t]).bool()
+        {
+            e.call(VATS_QUIT_PLAYBACK, &args![VATS_OBJECT, 0u32, 0u32]);
+            self.queue_menu(e, 4, t, 0, 0, 1);
+            return true;
+        }
+        if e.call(0x0049_3bb0, &args![t]).bool() && !e.vcall(t, 0x230, &args![]).bool() {
+            return self.at_00608cbf(e);
+        }
+        if a == player
+            && e.vcall(t, 0x214, &args![]).u32() != 0
+            && e.vcall(t, 0x214, &args![]).u32() != 9
+            && e.vcall(t, 0x214, &args![]).u32() != 4
+        {
+            let process = process_of(e, t);
+            let record = e.vcall(process, 0x4d4, &args![]).u32();
+            if record == 0 {
+                return self.at_00608cbf(e);
+            }
+            let process = process_of(e, t);
+            let record = e.vcall(process, 0x4d4, &args![]).u32();
+            if e.mem.u8(record + 0xe) <= 0x13 {
+                return self.at_00608cbf(e);
+            }
+        }
+        self.at_00607f45(e)
+    }
+
+    /// 00607f45: attacks on a defenceless target.
+    fn at_00607f45(&self, e: &mut Engine) -> bool {
+        let player = Self::player(e);
+        let (a, t) = (self.activator, self.target);
+        if fn_00608d80(e, Ptr::new(t)) {
+            return false;
+        }
+        if e.vcall(t, 0x22c, &args![0u32]).bool() {
+            return self.at_00608c3e(e);
+        }
+        e.mem.set_u32(self.flag, 0);
+        let skip = e.call(0x0043_7bf0, &args![t]).bool() || e.vcall(t, 0x234, &args![]).bool();
+        if !skip {
+            if a != player
+                && e.call(0x008b_06d0, &args![a, t, 0u32, self.flag, 0u32])
+                    .bool()
+            {
+                let process = process_of(e, a);
+                if e.vcall(
+                    process,
+                    0x33c,
+                    &args![a, t, 0u32, 1u32, 0u32, 0u32, 0u32, 1u32, 0u32, 0u32, 0u32, 1u32, 0u32],
+                )
+                .bool()
+                {
+                    return true;
+                }
+                return self.at_006080c2(e);
+            }
+            if !e.vcall(t, 0x304, &args![]).bool()
+                && e.call(0x008b_06d0, &args![t, a, 0u32, self.flag, 0u32])
+                    .bool()
+                && !e.call(0x0049_97b0, &args![a]).bool()
+            {
+                let process = process_of(e, t);
+                if e.vcall(
+                    process,
+                    0x33c,
+                    &args![t, a, 1u32, 1u32, 0u32, 0u32, 0u32, 1u32, 0u32, 0u32, 0u32, 1u32, 0u32],
+                )
+                .bool()
+                {
+                    return true;
+                }
+            }
+        }
+        self.at_006080c2(e)
+    }
+
+    /// 006080c2: the player cannot talk to an essential/dead target.
+    fn at_006080c2(&self, e: &mut Engine) -> bool {
+        let player = Self::player(e);
+        let (a, t) = (self.activator, self.target);
+        if a == player
+            && e.vcall(t, 0x230, &args![]).bool()
+            && e.call(0x0087_f3d0, &args![t]).bool()
+        {
+            return false;
+        }
+        if a != player {
+            if t != player {
+                return self.at_00608937(e);
+            }
+            let package = Self::package(e, a);
+            if !e.call(0x0067_8610, &args![package]).bool() {
+                let package = Self::package(e, a);
+                if e.call(0x0041_ca90, &args![package]).u32() != 0 {
+                    let package = Self::package(e, a);
+                    if e.call(0x0041_ca90, &args![package]).u32() != 9 {
+                        return self.at_00608937(e);
+                    }
+                }
+            }
+        }
+        self.at_0060815a(e)
+    }
+
+    /// 0060815a: the player's refusals before a dialogue.
+    fn at_0060815a(&self, e: &mut Engine) -> bool {
+        let player = Self::player(e);
+        let (a, t) = (self.activator, self.target);
+        if a != player {
+            return self.at_00608272(e);
+        }
+        if !e.vcall(t, 0x230, &args![]).bool() {
+            if !e.call(0x0049_97b0, &args![player]).bool() {
+                return self.at_00608272(e);
+            }
+            if e.call(0x0056_6950, &args![t]).bool() {
+                return self.at_00608272(e);
+            }
+        }
+        if e.call(0x008a_ce90, &args![t]).bool() {
+            return self.at_00608272(e);
+        }
+        if !e.vcall(t, 0x230, &args![]).bool() {
+            let process = process_of(e, t);
+            if e.vcall(process, 0x110, &args![]).bool() {
+                self.message(e, 0x011d_2394, Speaker::Target, ICON_SAD);
+                return false;
+            }
+        }
+        self.queue_menu(e, 1, self.target_ref, 0, 0, 2);
+        true
+    }
+
+    /// 00608272: finds the dialogue topic and its first item.
+    fn at_00608272(&self, e: &mut Engine) -> bool {
+        let player = Self::player(e);
+        let (a, t) = (self.activator, self.target);
+        let mut topic = 0;
+        let mut wants_topic = a == player;
+        if !wants_topic {
+            let process = process_of(e, a);
+            wants_topic = e.vcall(process, 0x604, &args![]).bool();
+        }
+        if wants_topic {
+            topic = e.call(0x0061_a2d0, &args![0u32, 0u32]).u32();
+        }
+        let mut dialogue = 0;
+        if topic != 0 {
+            if a == player {
+                dialogue = e
+                    .call(0x0061_b320, &args![topic, t, player, 0u32, 0u32, 0u32])
+                    .u32();
+            } else {
+                let process = process_of(e, a);
+                if e.vcall(process, 0x604, &args![]).bool() {
+                    dialogue = e
+                        .call(0x0061_b320, &args![topic, a, player, 0u32, 0u32, 0u32])
+                        .u32();
+                }
+            }
+        }
+        if dialogue != 0 {
+            let id = e.call(GET_FORM_ID, &args![dialogue]).u32();
+            if e.call(0x0061_9df0, &args![id]).bool()
+                && e.call(0x0083_c7b0, &args![dialogue]).bool()
+                && !e.call(0x0083_c7e0, &args![dialogue]).bool()
+            {
+                if e.vcall(t, 0x214, &args![]).u32() == 9 {
+                    let process = process_of(e, t);
+                    e.vcall(process, 0x600, &args![1u32]);
+                    e.vcall(t, 0x418, &args![]);
+                    return true;
+                }
+                if t == player {
+                    e.call(0x0057_b7c0, &args![a, dialogue, 0u32, 0u32]);
+                } else {
+                    e.call(0x0057_b7c0, &args![t, dialogue, 0u32, 0u32]);
+                }
+                return self.finish_dialogue(e, dialogue);
+            }
+        }
+        self.at_00608434(e, dialogue)
+    }
+
+    /// 006088f2: frees the dialogue item; the activation counts as handled.
+    fn finish_dialogue(&self, e: &mut Engine, dialogue: u32) -> bool {
+        if dialogue != 0 {
+            e.call(0x005c_90d0, &args![dialogue, 1u32]);
+        }
+        true
+    }
+
+    /// 00608434: starts a conversation (the camera and process side).
+    fn at_00608434(&self, e: &mut Engine, dialogue: u32) -> bool {
+        let player = Self::player(e);
+        let (a, t, tp) = (self.activator, self.target, self.target_process);
+        let process = process_of(e, t);
+        if e.vcall(process, 0x4d4, &args![]).u32() != 0 {
+            let process = process_of(e, t);
+            let record = e.vcall(process, 0x4d4, &args![]).u32();
+            if e.mem.u8(record + 0xe) > 0x13 {
+                let process = process_of(e, t);
+                e.vcall(process, 0x614, &args![0x200u32]);
+            }
+        }
+        if e.vcall(t, 0x214, &args![]).u32() == 0 {
+            face_actor_towards(e, a, t);
+        }
+        let mut menu_data = 0u32;
+        if a == player {
+            if !e.call(0x008b_3bb0, &args![t]).bool() && !e.call(0x008b_3c30, &args![t]).bool() {
+                let process = process_of(e, t);
+                e.vcall(process, 0x294, &args![t]);
+            }
+            e.call(0x008a_8e50, &args![a]);
+            e.call(0x008a_8e50, &args![t]);
+            let package = Self::package(e, a);
+            let cast = e
+                .call(
+                    RT_DYNAMIC_CAST,
+                    &args![package, 0u32, TYPE_TES_PACKAGE, TYPE_DIALOGUE_PACKAGE, 0u32],
+                )
+                .u32();
+            if cast != 0 {
+                menu_data = e.mem.u32(cast + 0x8c);
+            }
+            if e.vcall(t, 0x2c8, &args![]).u32() == player
+                && self.target_state != 0
+                && e.call(0x0041_ca90, &args![self.target_state]).u32() == 0
+            {
+                let mut reached = false;
+                if e.call(0x0041_d8a0, &args![self.target_state]).u32() != 0 {
+                    let list = e.call(0x0041_d8a0, &args![self.target_state]).u32();
+                    if e.call(GET_WORD_AT_4, &args![list]).u32() == 0 {
+                        e.vcall(tp, 0x288, &args![a, 2u32]);
+                        reached = true;
+                    }
+                }
+                if !reached {
+                    e.vcall(tp, 0x288, &args![t, 1u32]);
+                }
+            }
+            let audio = e.call(0x0045_3a70, &args![]).u32();
+            e.call(0x00ad_8780, &args![audio, 4u32]);
+            e.call(0x0081_5b00, &args![t + 0x88]);
+            if e.vcall(t, 0x214, &args![]).u32() != 9 {
+                let mut subject = a;
+                if subject == player {
+                    subject = t;
+                }
+                e.call(VATS_QUIT_PLAYBACK, &args![VATS_OBJECT, 0u32, 0u32]);
+                self.queue_menu(e, 4, subject, menu_data, 0, 1);
+            } else {
+                let process = process_of(e, t);
+                e.vcall(process, 0x600, &args![1u32]);
+                e.vcall(t, 0x418, &args![]);
+            }
+        } else if e.call(0x0070_2640, &args![]).u32() != 0x3f1 {
+            let player_process = process_of(e, player);
+            if !e.vcall(player_process, 0x3fc, &args![a]).bool() {
+                return false;
+            }
+            let audio = e.call(0x0045_3a70, &args![]).u32();
+            e.call(0x00ad_8780, &args![audio, 4u32]);
+            e.call(0x008a_8e50, &args![a]);
+            e.call(0x008a_8e50, &args![t]);
+            if !e.call(0x0049_3bb0, &args![a]).bool() {
+                let package = Self::package(e, a);
+                let cast = e
+                    .call(
+                        RT_DYNAMIC_CAST,
+                        &args![package, 0u32, TYPE_TES_PACKAGE, TYPE_DIALOGUE_PACKAGE, 0u32],
+                    )
+                    .u32();
+                if cast != 0 {
+                    menu_data = e.mem.u32(cast + 0x8c);
+                }
+            }
+            let mut set_one = true;
+            if e.call(0x0041_d8a0, &args![self.activator_state]).u32() != 0 {
+                let list = e.call(0x0041_d8a0, &args![self.activator_state]).u32();
+                if e.call(GET_WORD_AT_4, &args![list]).u32() == 0 {
+                    let process = process_of(e, a);
+                    e.vcall(process, 0x288, &args![a, 2u32]);
+                    set_one = false;
+                }
+            }
+            if set_one {
+                let process = process_of(e, a);
+                e.vcall(process, 0x288, &args![a, 1u32]);
+            }
+            e.call(0x0081_5b00, &args![t + 0x88]);
+            if t == player {
+                e.call(0x008a_7a90, &args![t]);
+            } else {
+                let process = process_of(e, t);
+                e.vcall(process, 0x614, &args![0x400u32]);
+            }
+            if a == player {
+                e.call(0x008a_7a90, &args![a]);
+            } else {
+                let process = process_of(e, a);
+                e.vcall(process, 0x614, &args![0x400u32]);
+            }
+            e.call(VATS_QUIT_PLAYBACK, &args![VATS_OBJECT, 0u32, 0u32]);
+            let mut subject = a;
+            if subject == player {
+                subject = t;
+            }
+            self.queue_menu(e, 4, subject, menu_data, 0, 1);
+        }
+        self.finish_dialogue(e, dialogue)
+    }
+
+    /// 00608937: the activator is not the player and the target is neither
+    /// a dialogue partner nor a downed player: item hand-over and package
+    /// changes.
+    fn at_00608937(&self, e: &mut Engine) -> bool {
+        let player = Self::player(e);
+        let (a, t, tp) = (self.activator, self.target, self.target_process);
+        if self.item != 0 {
+            let npc_item = e
+                .call(
+                    RT_DYNAMIC_CAST,
+                    &args![self.item, 0u32, TYPE_TES_BOUND_OBJECT, TYPE_TES_NPC, 0u32],
+                )
+                .u32();
+            if npc_item == 0 {
+                e.vcall(
+                    t,
+                    0x17c,
+                    &args![self.item, 0u32, self.count, 1u32, 0u32, a, 0u32, 0u32, 1u32, 0u32],
+                );
+                e.call(0x008c_00e0, &args![a, t, self.item, self.count]);
+                return true;
+            }
+        }
+        let package = Self::package(e, a);
+        if e.call(0x0041_ca90, &args![package]).u32() == 2 {
+            let process = process_of(e, a);
+            e.vcall(process, 0x288, &args![a, 2u32]);
+            return true;
+        }
+        let package = Self::package(e, a);
+        if package != 0 {
+            let package = Self::package(e, a);
+            if e.call(0x0041_ca90, &args![package]).u32() != 1 {
+                let process = process_of(e, a);
+                e.vcall(process, 0x288, &args![a, 1u32]);
+            }
+        }
+        if t == player {
+            return true;
+        }
+        if t != a {
+            let package = Self::package(e, t);
+            if package != 0 {
+                let package = Self::package(e, t);
+                if e.call(0x0041_ca90, &args![package]).u32() != 1 {
+                    let package = Self::package(e, t);
+                    if e.call(0x0041_ca90, &args![package]).u32() != 2 {
+                        e.vcall(tp, 0x288, &args![t, 1u32]);
+                    }
+                }
+            }
+        }
+        if t != a && e.vcall(t, 0x214, &args![]).u32() == 0 {
+            if e.call(0x0093_36c0, &args![a]).bool() {
+                let package = Self::package(e, a);
+                if !e.call(0x0067_2800, &args![package]).bool()
+                    && !e.call(0x0067_27b0, &args![package]).bool()
+                {
+                    face_actor_towards(e, a, t);
+                }
+            } else {
+                face_actor_towards(e, a, t);
+            }
+        }
+        if !e.call(0x0093_36c0, &args![a]).bool()
+            && e.vcall(a, 0x218, &args![]).bool()
+            && e.vcall(t, 0x218, &args![]).bool()
+        {
+            let process = process_of(e, a);
+            e.vcall(process, 0x288, &args![a, 1u32]);
+            if e.vcall(
+                a,
+                0x280,
+                &args![t, 0u32, 0u32, 1u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+            )
+            .bool()
+            {
+                let process = process_of(e, a);
+                e.vcall(process, 0x288, &args![a, 2u32]);
+                e.vcall(tp, 0x288, &args![t, 2u32]);
+            }
+        }
+        true
+    }
+
+    /// 00608c3e: the target is down or asleep: the player gets its menu,
+    /// another actor hands over the item.
+    fn at_00608c3e(&self, e: &mut Engine) -> bool {
+        let player = Self::player(e);
+        let a = self.activator;
+        if a == player {
+            self.queue_menu(e, 1, self.target_ref, 0, 0, 1);
+            return true;
+        }
+        if self.item != 0 {
+            let npc_item = e
+                .call(
+                    RT_DYNAMIC_CAST,
+                    &args![self.item, 0u32, TYPE_TES_BOUND_OBJECT, TYPE_TES_NPC, 0u32],
+                )
+                .u32();
+            if npc_item == 0 {
+                e.vcall(
+                    self.target_ref,
+                    0x17c,
+                    &args![self.item, 0u32, self.count, 0u32, 0u32, a, 0u32, 0u32, 1u32, 0u32],
+                );
+            }
+        }
+        true
+    }
+
+    /// 00608cbf: the target's combat target tells the player off.
+    fn at_00608cbf(&self, e: &mut Engine) -> bool {
+        let player = Self::player(e);
+        let (a, t) = (self.activator, self.target);
+        if t != 0 && e.vcall(t, 0x428, &args![]).u32() != 0 && a == player {
+            let combat_target = e.vcall(t, 0x428, &args![]).u32();
+            if e.call(0x0047_c850, &args![combat_target]).bool() {
+                self.message(e, 0x011c_f594, Speaker::Npc, 0);
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2700,6 +5388,61 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00605d20, fn_00605d20() -> u8),
         entry!(0x00605d40, fn_00605d40(u32) -> u32),
         entry!(0x00605d50, fn_00605d50() -> u8),
+        entry!(0x00605d70, tesnpc_replace_ref_model(Ptr<TESNPC>, Ptr)),
+        entry!(0x00605e70, fn_00605e70(Ptr<TESNPC>, Ptr, Ptr, Ptr)),
+        entry!(
+            0x00605fc0,
+            tesnpc_build_object_array(Ptr<TESNPC>, u32, Ptr, Ptr)
+        ),
+        entry!(0x00606050, tesnpc_init_worn(Ptr<TESNPC>, Ptr, Ptr)),
+        entry!(
+            0x006061b0,
+            tesnpc_init_worn_object(Ptr<TESNPC>, Ptr, Ptr, Ptr) -> bool
+        ),
+        entry!(0x006062e0, fn_006062e0(Ptr<TESNPC>, Ptr, Ptr)),
+        entry!(0x00606540, fn_00606540(Ptr<TESNPC>, Ptr, Ptr, u8)),
+        entry!(0x00606800, fn_00606800(Ptr) -> u32),
+        entry!(
+            0x00606820,
+            tesnpc_linear_face_gen_head_load(Ptr<TESNPC>, Ptr, Ptr)
+        ),
+        entry!(0x006072c0, fn_006072c0(Ptr) -> u32),
+        entry!(0x00607310, fn_00607310(u32) -> u32),
+        entry!(0x00607340, fn_00607340() -> u32),
+        entry!(0x00607350, fn_00607350(Ptr) -> u16),
+        entry!(0x00607370, tesnpc_init_head(Ptr<TESNPC>, Ptr, Ptr)),
+        entry!(0x00607420, fn_00607420(Ptr<TESNPC>, Ptr, Ptr, Ptr, Ptr)),
+        entry!(0x00607810, fn_00607810(Ptr, u32, f32)),
+        entry!(0x00607830, fn_00607830(Ptr, f32)),
+        entry!(0x00607850, fn_00607850(Ptr, u32) -> u32),
+        entry!(0x006078e0, fn_006078e0(Ptr<TESNPC>, u32, u32)),
+        entry!(0x00607950, fn_00607950(Ptr<TESNPC>) -> Ptr),
+        entry!(0x00607970, fn_00607970(Ptr<TESNPC>, Ptr)),
+        entry!(
+            0x00607990,
+            tesnpc_activate(Ptr<TESNPC>, Ptr, Ptr, u32, Ptr, u32) -> bool
+        ),
+        entry!(0x00608d80, fn_00608d80(Ptr) -> bool),
+        entry!(0x00608da0, fn_00608da0(Ptr<TESNPC>, u32) -> u16),
+        entry!(0x00608e00, fn_00608e00(Ptr<TESNPC>, u32)),
+        entry!(0x00608e80, fn_00608e80(Ptr<TESNPC>, u32, u32)),
+        entry!(0x00608f00, fn_00608f00(Ptr<TESNPC>, Ptr)),
+        entry!(0x00609220, fn_00609220(Ptr<TESNPC>, Ptr)),
+        entry!(0x006099f0, fn_006099f0(Ptr<TESNPC>, Ptr)),
+        entry!(0x00609bf0, fn_00609bf0(Ptr<TESNPC>, Ptr) -> bool),
+        entry!(0x00609c70, fn_00609c70(Ptr<TESNPC>, u32) -> u16),
+        entry!(0x00609d60, fn_00609d60(Ptr<TESNPC>, u32)),
+        entry!(0x00609f60, fn_00609f60(Ptr<TESNPC>, Ptr)),
+        entry!(0x0060a890, fn_0060a890(Ptr<TESNPC>, Ptr)),
+        entry!(0x0060a950, fn_0060a950(Ptr<TESNPC>, Ptr)),
+        entry!(0x0060aeb0, fn_0060aeb0(Ptr, u32)),
+        entry!(0x0060af60, fn_0060af60(Ptr, u16)),
+        entry!(
+            0x0060af90,
+            tesnpc_build_default_model_list(Ptr<TESNPC>, u8, u8) -> Ptr
+        ),
+        entry!(0x0060b1d0, fn_0060b1d0(Ptr) -> u32),
+        entry!(0x0060b1f0, fn_0060b1f0(Ptr) -> u32),
     ]
 }
 
@@ -2946,6 +5689,179 @@ mod tests {
         0x00ec_782f,
         0x00ec_7ec0,
     ];
+
+    // BEGIN second-callees
+    /// Callees of the second block of functions (`ReplaceRefModel` to
+    /// `0060b1f0`) that `EXTERNAL_CALLEES` does not list; `world()` makes them
+    /// doubles returning 0.
+    const SECOND_CALLEES: [u32; 165] = [
+        0x0040_37b0,
+        0x0040_37d0,
+        0x0040_3df0,
+        0x0040_6f60,
+        0x0041_c930,
+        0x0041_ca90,
+        0x0041_cb10,
+        0x0041_cb70,
+        0x0041_d8a0,
+        0x0042_80f0,
+        0x0042_8110,
+        0x0042_ce30,
+        0x0042_ce90,
+        0x0042_e8c0,
+        0x0043_7bd0,
+        0x0043_7bf0,
+        0x0043_8170,
+        0x0043_81b0,
+        0x0043_9410,
+        0x0043_b230,
+        0x0043_b480,
+        0x0043_f220,
+        0x0043_fa80,
+        0x0043_fad0,
+        0x0043_faf0,
+        0x0043_fcd0,
+        0x0044_0460,
+        0x0044_1420,
+        0x0044_1b00,
+        0x0045_0f90,
+        0x0045_3a70,
+        0x0047_0c70,
+        0x0047_23a0,
+        0x0047_5020,
+        0x0048_0bd0,
+        0x0048_11e0,
+        0x0048_2720,
+        0x0048_2910,
+        0x0048_29c0,
+        0x0048_4ce0,
+        0x0048_4d00,
+        0x0048_4d20,
+        0x0048_4d40,
+        0x0049_3bb0,
+        0x0049_6940,
+        0x0049_97b0,
+        0x004a_b230,
+        0x004a_b250,
+        0x004a_b400,
+        0x004a_bfa0,
+        0x004a_c1e0,
+        0x004a_d050,
+        0x004a_d270,
+        0x004a_dda0,
+        0x004a_ddc0,
+        0x004c_8c10,
+        0x004e_af60,
+        0x004f_3200,
+        0x004f_32e0,
+        0x004f_8960,
+        0x0050_0940,
+        0x0050_d100,
+        0x0052_aa80,
+        0x0053_7bd0,
+        0x0054_95f0,
+        0x0055_85e0,
+        0x0055_d520,
+        0x0056_6950,
+        0x0056_8ad0,
+        0x0056_fac0,
+        0x0057_b7c0,
+        0x005b_8fc0,
+        0x005c_90d0,
+        0x005d_43c0,
+        0x005d_9f90,
+        0x005d_9ff0,
+        0x005d_d560,
+        0x005f_0fb0,
+        0x005f_12d0,
+        0x005f_1590,
+        0x005f_16f0,
+        0x005f_18c0,
+        0x005f_1b30,
+        0x005f_1f30,
+        0x005f_1fd0,
+        0x005f_20a0,
+        0x0060_ba40,
+        0x0060_bae0,
+        0x0061_3c50,
+        0x0061_41f0,
+        0x0061_9df0,
+        0x0061_a2d0,
+        0x0061_b320,
+        0x0064_9f00,
+        0x0064_9f70,
+        0x0064_9fe0,
+        0x0064_a070,
+        0x0064_c5a0,
+        0x0065_1b30,
+        0x0065_7820,
+        0x0066_ec80,
+        0x0067_0f90,
+        0x0067_27b0,
+        0x0067_2800,
+        0x0067_8610,
+        0x0069_3d50,
+        0x006a_7ad0,
+        0x0070_2640,
+        0x0070_52f0,
+        0x0070_9470,
+        0x0071_9b20,
+        0x0075_4d90,
+        0x0080_41a0,
+        0x0081_5b00,
+        0x0082_5c00,
+        0x0083_c7b0,
+        0x0083_c7e0,
+        0x0086_48a0,
+        0x0086_4980,
+        0x0086_4a60,
+        0x0086_5df0,
+        0x0086_5e50,
+        0x0086_5f20,
+        0x0086_5ff0,
+        0x0086_7d60,
+        0x0086_7da0,
+        0x0087_7a30,
+        0x0087_f3d0,
+        0x0089_4d60,
+        0x008a_61b0,
+        0x008a_6650,
+        0x008a_7a90,
+        0x008a_8e50,
+        0x008a_ce90,
+        0x008b_06d0,
+        0x008b_3bb0,
+        0x008b_3c30,
+        0x008b_70d0,
+        0x008b_b520,
+        0x008c_00e0,
+        0x008d_8ac0,
+        0x0093_36c0,
+        0x0093_44a0,
+        0x0095_0b00,
+        0x0095_0b30,
+        0x0095_0bb0,
+        0x0096_ae90,
+        0x0097_fa10,
+        0x0099_62f0,
+        0x009a_4320,
+        0x009c_8950,
+        0x009d_ace0,
+        0x00a5_b230,
+        0x00a5_bdd0,
+        0x00a5_d2c0,
+        0x00a5_d510,
+        0x00a6_9dd0,
+        0x00a6_aa40,
+        0x00a6_e870,
+        0x00a6_e8e0,
+        0x00aa_13e0,
+        0x00ad_8780,
+        0x00b5_7e30,
+        0x00c7_48d0,
+        0x00ec_623a,
+    ];
+    // END second-callees
 
     fn ret(value: u32) -> Ret {
         Ret {
@@ -5589,4 +8505,2599 @@ mod tests {
         assert!(calls(&mut e, REFERENCE_SET_OBJECT_REFERENCE).is_empty());
         assert!(calls(&mut e, LOG_MESSAGE).is_empty());
     }
+
+    // BEGIN second-block tests
+
+    // -----------------------------------------------------------------------
+    // Second block: `ReplaceRefModel` (00605d70) to 0060b1f0
+
+    /// An engine where every callee of the second block is a double
+    /// returning 0 (and recording its call), besides those `engine()` gives
+    /// real bodies.
+    fn world() -> Engine {
+        let mut e = engine();
+        for addr in SECOND_CALLEES {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e
+    }
+
+    /// Makes the function at `addr` a double that returns `value`.
+    fn returns(e: &mut Engine, addr: u32, value: u32) {
+        e.register_double(addr, move |_, _| ret(value));
+    }
+
+    /// An object whose vtable is at `table`; each `(offset, value)` slot is a
+    /// double (at `table + 0x1000 + offset`) that returns `value`.
+    fn object_with(e: &mut Engine, table: u32, slots: &[(u32, u32)]) -> u32 {
+        let object = e.mem.alloc(0x400);
+        let size = slots.iter().map(|s| s.0).max().unwrap_or(0) + 4;
+        e.map(table, size);
+        for &(offset, value) in slots {
+            let target = table + 0x1000 + offset;
+            e.mem.set_u32(table + offset, target);
+            returns(e, target, value);
+        }
+        e.mem.set_u32(object, table);
+        object
+    }
+
+    /// The address of the double `object_with` made for a slot.
+    fn slot(table: u32, offset: u32) -> u32 {
+        table + 0x1000 + offset
+    }
+
+    /// An object of `size` bytes whose words are `words`.
+    fn block(e: &mut Engine, size: u32, words: &[(u32, u32)]) -> u32 {
+        let block = e.mem.alloc(size);
+        for &(offset, value) in words {
+            e.mem.set_u32(block + offset, value);
+        }
+        block
+    }
+
+    #[test]
+    fn replace_ref_model_rebuilds_once_for_an_actor_and_twice_for_the_player() {
+        let mut e = world();
+        let this = new_npc(&mut e);
+        let biped = e.mem.alloc(0x400);
+        let node = object_with(&mut e, 0x0c00_0000, &[(0xbc, 0)]);
+        let actor = object_with(&mut e, 0x0c01_0000, &[(0x1e8, biped)]);
+        returns(&mut e, 0x0043_fcd0, node);
+        started(&mut e);
+        e.call(0x0060_5d70, &args![this, actor]);
+        assert_eq!(calls(&mut e, 0x004a_c1e0), vec![vec![biped, 0]]);
+        assert_eq!(calls(&mut e, 0x00a5_a040), vec![vec![node]]);
+        assert_eq!(calls(&mut e, slot(0x0c00_0000, 0xbc)), vec![vec![node]]);
+        let update = calls(&mut e, 0x00a5_9c60);
+        assert_eq!(update.len(), 1);
+        assert_eq!(update[0][0], node);
+        // The player: a second round with the first-person biped and node.
+        let mut e = world();
+        let this = new_npc(&mut e);
+        let biped = e.mem.alloc(0x400);
+        let node = object_with(&mut e, 0x0c00_0000, &[(0xbc, 0)]);
+        let first_biped = e.mem.alloc(0x400);
+        let first_node = object_with(&mut e, 0x0c02_0000, &[(0xbc, 0)]);
+        let player = object_with(&mut e, 0x0c01_0000, &[(0x1e8, biped)]);
+        e.set_global(PLAYER_SINGLETON, player);
+        returns(&mut e, 0x0043_fcd0, node);
+        returns(&mut e, 0x004e_af60, 1);
+        returns(&mut e, 0x0095_0b00, first_biped);
+        returns(&mut e, 0x0095_0bb0, first_node);
+        started(&mut e);
+        e.call(0x0060_5d70, &args![this, player]);
+        assert_eq!(
+            calls(&mut e, 0x004a_c1e0),
+            vec![vec![biped, 0], vec![first_biped, 0]]
+        );
+        assert_eq!(
+            calls(&mut e, 0x00a5_a040),
+            vec![vec![node], vec![first_node]]
+        );
+        assert_eq!(calls(&mut e, 0x0095_0b00), vec![vec![player, 1]; 3]);
+    }
+
+    #[test]
+    fn worn_items_are_put_on_the_biped_and_the_models_refreshed() {
+        let mut e = world();
+        let this = new_npc(&mut e);
+        e.set(this, TESNPC::iActorBaseFlags, 1);
+        e.mem.set_u32(this.addr() + COMPONENT_RACE + 4, 0x7ace);
+        let biped = e.mem.alloc(0x400);
+        let node = object_with(&mut e, 0x0c02_0000, &[(0xbc, 0)]);
+        let process = object_with(&mut e, 0x0c03_0000, &[(0x468, 0), (0x470, 0)]);
+        let actor = object_with(&mut e, 0x0c04_0000, &[(0x1d0, node)]);
+        e.mem.set_u32(actor + 0x68, process);
+        let items = [e.mem.alloc(0x20), e.mem.alloc(0x20)];
+        for item in items {
+            e.mem.set_u8(item + 4, 0x28);
+        }
+        let cells = block(&mut e, 8, &[(0, items[0]), (4, items[1])]);
+        returns(&mut e, 0x0044_ddc0, 2);
+        e.register_double(0x006a_7ad0, move |_, a| ret(cells + a[1] * 4));
+        let worn = e.mem.alloc(0x20);
+        started(&mut e);
+        e.call(0x0060_5e70, &args![this, actor, biped, worn]);
+        assert_eq!(calls(&mut e, 0x004a_b250), vec![vec![biped, 0x7ace, 1]]);
+        assert_eq!(
+            calls(&mut e, 0x004a_b400),
+            vec![vec![biped, items[0], 0], vec![biped, items[1], 0]]
+        );
+        assert_eq!(
+            calls(&mut e, slot(0x0c03_0000, 0x468)),
+            vec![vec![process, 1]]
+        );
+        assert_eq!(calls(&mut e, slot(0x0c03_0000, 0x470)), vec![vec![process]]);
+        assert_eq!(calls(&mut e, 0x004a_c1e0), vec![vec![biped, 1]]);
+        assert_eq!(calls(&mut e, 0x00a5_a040), vec![vec![node]]);
+        assert_eq!(calls(&mut e, slot(0x0c02_0000, 0xbc)), vec![vec![node]]);
+    }
+
+    #[test]
+    fn build_object_array_adds_each_new_part_that_answers_yes() {
+        let mut e = world();
+        let this = new_npc(&mut e);
+        let yes = object_with(&mut e, 0x0c00_0000, &[(0xe4, 1)]);
+        let no = object_with(&mut e, 0x0c01_0000, &[(0xe4, 0)]);
+        let duplicate = object_with(&mut e, 0x0c02_0000, &[(0xe4, 1)]);
+        let cells = block(&mut e, 0x50, &[(0, yes), (4, no), (8, duplicate)]);
+        e.register_double(0x0043_f220, move |_, a| ret(cells + a[1] * 4));
+        e.register_double(0x0099_62f0, move |e, a| {
+            ret((e.mem.u32(a[1]) == duplicate) as u32)
+        });
+        let added = Rc::new(RefCell::new(vec![]));
+        let seen = added.clone();
+        e.register_double(0x007c_b2e0, move |e, a| {
+            seen.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            Ret::default()
+        });
+        let array = e.mem.alloc(0x10);
+        e.call(0x0060_5fc0, &args![this, 0u32, 0xdeadu32, array]);
+        assert_eq!(*added.borrow(), vec![(array, yes)]);
+    }
+
+    /// An actor-base inventory of `entries` (slot, entry) for the
+    /// `InitWorn` tests; returns (actor, biped, changes).
+    fn worn_actor(e: &mut Engine, entries: &[(u32, u32)]) -> (u32, u32, u32) {
+        let actor = e.mem.alloc(0x100);
+        let biped = e.mem.alloc(0x400);
+        let changes = 0x5000u32;
+        returns(e, 0x004b_f220, changes);
+        let map: Vec<(u32, u32)> = entries.to_vec();
+        e.register_double(0x004c_8c10, move |_, a| {
+            ret(map.iter().find(|m| m.0 == a[1]).map_or(0, |m| m.1))
+        });
+        (actor, biped, changes)
+    }
+
+    #[test]
+    fn init_worn_visits_the_slots_in_the_exes_order_and_equips_what_is_worn() {
+        let mut e = world();
+        let this = new_npc(&mut e);
+        let item = e.mem.alloc(0x20);
+        e.mem.set_u8(item + 4, 0x28);
+        let entry = block(&mut e, 0x20, &[(8, item)]);
+        let (actor, biped, changes) = worn_actor(&mut e, &[(3, entry)]);
+        started(&mut e);
+        e.call(0x0060_6050, &args![this, actor, biped]);
+        let slots: Vec<u32> = calls(&mut e, 0x004c_8c10).iter().map(|c| c[1]).collect();
+        let mut expected = vec![0, 1, 2, 4];
+        expected.extend(6..=0x13);
+        expected.extend([3, 5]);
+        assert_eq!(slots, expected);
+        assert!(calls(&mut e, 0x004c_8c10)
+            .iter()
+            .all(|c| c[0] == changes && c[2] == 0));
+        assert_eq!(calls(&mut e, 0x0044_59e0), vec![vec![entry, 1]]);
+        assert_eq!(calls(&mut e, 0x004a_b400), vec![vec![biped, item, 0]]);
+        // Without an actor or a biped nothing is looked at.
+        let mut e = world();
+        let this = new_npc(&mut e);
+        let (actor, _, _) = worn_actor(&mut e, &[]);
+        started(&mut e);
+        e.call(0x0060_6050, &args![this, actor, 0u32]);
+        assert!(calls(&mut e, 0x004c_8c10).is_empty());
+        assert_eq!(calls(&mut e, 0x004b_f220), vec![vec![actor]]);
+    }
+
+    #[test]
+    fn init_worn_object_adds_models_by_form_type_and_walks_model_lists() {
+        let mut e = world();
+        let this = new_npc(&mut e);
+        e.set(this, TESNPC::iActorBaseFlags, 1);
+        let biped = e.mem.alloc(0x400);
+        // A weapon (type 0x28) goes to the biped's own function.
+        let weapon = e.mem.alloc(0x20);
+        e.mem.set_u8(weapon + 4, 0x28);
+        started(&mut e);
+        assert!(e
+            .call(0x0060_61b0, &args![this, 0u32, biped, weapon])
+            .bool());
+        assert_eq!(calls(&mut e, 0x004a_b400), vec![vec![biped, weapon, 0]]);
+        assert!(calls(&mut e, 0x0048_0bd0).is_empty());
+        // An item with a biped model: added with this NPC's sex and -1.
+        let item = e.mem.alloc(0x20);
+        returns(&mut e, 0x0048_0db0, 0x6d6d);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0060_61b0, &args![this, 0u32, biped, item]).bool());
+        assert_eq!(
+            calls(&mut e, 0x0048_0bd0),
+            vec![vec![0x6d6d, biped, 1, u32::MAX]]
+        );
+        // An item without a model is logged by name.
+        returns(&mut e, 0x0048_0db0, 0);
+        returns(&mut e, 0x0048_2720, 0x4040);
+        e.call_log = Some(vec![]);
+        e.call(0x0060_61b0, &args![this, 0u32, biped, item]);
+        assert_eq!(calls(&mut e, 0x005b_5e40), vec![vec![0x0104_a828, 0x4040]]);
+        // A model list: its models are added until an empty node.
+        let first_form = e.mem.alloc(0x20);
+        let second_form = e.mem.alloc(0x20);
+        let node_two = block(&mut e, 0x10, &[(0, second_form), (4, 0)]);
+        let node_one = block(&mut e, 0x10, &[(0, first_form), (4, node_two)]);
+        let list = block(&mut e, 0x10, &[(4, 0x1111)]);
+        returns(&mut e, 0x0047_5020, list);
+        returns(&mut e, 0x0050_0940, node_one);
+        e.register_double(0x0048_0db0, |_, a| {
+            ret(if a[0] == 0 { 0 } else { a[0] + 0x1000 })
+        });
+        e.register_double(LIST_NODE_IS_EMPTY, move |_, a| {
+            ret((a[0] == node_two) as u32)
+        });
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0060_61b0, &args![this, 0u32, biped, item]).bool());
+        assert_eq!(
+            calls(&mut e, 0x0048_0bd0),
+            vec![
+                vec![item + 0x1000, biped, 1, u32::MAX],
+                vec![first_form + 0x1000, biped, 1, u32::MAX],
+            ]
+        );
+    }
+
+    /// The nodes `fn_006062e0` looks for.
+    struct FaceNodes {
+        root: u32,
+        biped: u32,
+        skinned: u32,
+        head: u32,
+        parts: [u32; 2],
+    }
+
+    fn face_nodes(e: &mut Engine, worn: &[(u32, u32)]) -> FaceNodes {
+        let nodes = FaceNodes {
+            root: e.mem.alloc(0x20),
+            biped: e.mem.alloc(0x20),
+            skinned: e.mem.alloc(0x20),
+            head: e.mem.alloc(0x20),
+            parts: [e.mem.alloc(0x20), e.mem.alloc(0x20)],
+        };
+        e.mem.set_u32(0x0119_9fc4 + 4, 0x4001);
+        let (biped, skinned, head, parts) = (nodes.biped, nodes.skinned, nodes.head, nodes.parts);
+        e.register_double(FIND_NODE_BY_NAME, move |_, a| {
+            ret(match a[1] {
+                0x0102_0408 => biped,
+                0x0102_03f0 => skinned,
+                0x4001 => head,
+                0x5000 => parts[0],
+                0x5001 => parts[1],
+                _ => 0,
+            })
+        });
+        e.register_double(0x0065_7820, |_, a| ret(0x5000 + a[1]));
+        returns(e, 0x004b_f220, 0x6000);
+        let worn: Vec<(u32, u32)> = worn.to_vec();
+        e.register_double(0x004c_8c10, move |_, a| {
+            ret(worn.iter().find(|w| w.0 == a[1]).map_or(0, |w| w.1))
+        });
+        nodes
+    }
+
+    #[test]
+    fn face_nodes_are_hidden_for_a_worn_body_and_otherwise_follow_the_head_slots() {
+        // Slot 0 worn: both face-gen nodes get 1 and the item is released.
+        let mut e = world();
+        let this = new_npc(&mut e);
+        let nodes = face_nodes(&mut e, &[(0, 0x7100)]);
+        started(&mut e);
+        e.call(0x0060_62e0, &args![this, 0u32, nodes.root]);
+        assert_eq!(
+            calls(&mut e, 0x0045_0f90),
+            vec![vec![nodes.biped, 1], vec![nodes.skinned, 1]]
+        );
+        assert_eq!(calls(&mut e, 0x0044_59e0), vec![vec![0x7100, 1]]);
+        // Nothing worn: both 0, then the head nodes get 0 and the second part 1.
+        let mut e = world();
+        let this = new_npc(&mut e);
+        let nodes = face_nodes(&mut e, &[]);
+        started(&mut e);
+        e.call(0x0060_62e0, &args![this, 0u32, nodes.root]);
+        assert_eq!(
+            calls(&mut e, 0x0045_0f90),
+            vec![
+                vec![nodes.biped, 0],
+                vec![nodes.skinned, 0],
+                vec![nodes.head, 0],
+                vec![nodes.parts[0], 0],
+                vec![nodes.parts[1], 1],
+            ]
+        );
+        // Slot 1 worn: the head and first part get 1; slot 10 also worn:
+        // the second part gets 0.
+        let mut e = world();
+        let this = new_npc(&mut e);
+        let nodes = face_nodes(&mut e, &[(1, 0x7101), (10, 0x710a)]);
+        started(&mut e);
+        e.call(0x0060_62e0, &args![this, 0u32, nodes.root]);
+        assert_eq!(
+            calls(&mut e, 0x0045_0f90)[2..].to_vec(),
+            vec![
+                vec![nodes.head, 1],
+                vec![nodes.parts[0], 1],
+                vec![nodes.parts[1], 0],
+            ]
+        );
+        assert_eq!(
+            calls(&mut e, 0x0044_59e0),
+            vec![vec![0x7101, 1], vec![0x710a, 1]]
+        );
+    }
+
+    #[test]
+    fn face_nodes_need_a_root_and_both_face_gen_children() {
+        // No node given: the actor's root is used; no root: nothing happens.
+        let mut e = world();
+        let this = new_npc(&mut e);
+        let nodes = face_nodes(&mut e, &[]);
+        returns(&mut e, 0x0043_fcd0, 0);
+        started(&mut e);
+        e.call(0x0060_62e0, &args![this, 0x1234u32, 0u32]);
+        assert_eq!(calls(&mut e, 0x0043_fcd0), vec![vec![0x1234]]);
+        assert!(calls(&mut e, FIND_NODE_BY_NAME).is_empty());
+        returns(&mut e, 0x0043_fcd0, nodes.root);
+        e.call_log = Some(vec![]);
+        e.call(0x0060_62e0, &args![this, 0x1234u32, 0u32]);
+        assert_eq!(
+            calls(&mut e, FIND_NODE_BY_NAME)[0],
+            vec![nodes.root, 0x0102_0408]
+        );
+        assert_eq!(calls(&mut e, 0x0045_0f90).len(), 5);
+        // A missing skinned child: stops before the inventory.
+        e.register_double(FIND_NODE_BY_NAME, |_, a| ret((a[1] == 0x0102_0408) as u32));
+        e.call_log = Some(vec![]);
+        e.call(0x0060_62e0, &args![this, 0u32, nodes.root]);
+        assert!(calls(&mut e, 0x004b_f220).is_empty());
+    }
+
+    #[test]
+    fn rebuilding_a_model_stops_when_the_part_table_is_in_use_unless_forced() {
+        let mut e = world();
+        let this = new_npc(&mut e);
+        let actor = object_with(&mut e, 0x0c00_0000, &[(0x100, 0), (0x22c, 1)]);
+        let biped = e.mem.alloc(0x400);
+        e.mem.set_u32(biped + 0x16c + 3 * 0x10, 0x9999);
+        started(&mut e);
+        e.call(0x0060_6540, &args![this, actor, biped, 0u32]);
+        assert!(calls(&mut e, 0x004a_b250).is_empty());
+        assert!(calls(&mut e, 0x004b_f220).is_empty());
+        // Forced: the race and sex go to the biped and the rest runs.
+        let player = e.mem.alloc(0x100);
+        e.set_global(PLAYER_SINGLETON, player);
+        e.set(this, TESNPC::iActorBaseFlags, 1);
+        e.mem.set_u32(this.addr() + COMPONENT_RACE + 4, 0x7ace);
+        e.call_log = Some(vec![]);
+        e.call(0x0060_6540, &args![this, actor, biped, 1u32]);
+        assert_eq!(calls(&mut e, 0x004a_b250), vec![vec![biped, 0x7ace, 1]]);
+        // The default worn items are equipped (fn_006047c0 asks the
+        // actor's virtual 0x100) when 005f1590 or force say so.
+        assert_eq!(calls(&mut e, 0x005f_1590), vec![vec![this.addr(), actor]]);
+    }
+
+    #[test]
+    fn rebuilding_a_model_notifies_the_process_unless_a_dismembered_part_is_set() {
+        let mut e = world();
+        let this = new_npc(&mut e);
+        let process = object_with(&mut e, 0x0c00_0000, &[(0x468, 0)]);
+        let actor = e.mem.alloc(0x100);
+        e.mem.set_u32(actor + 0x68, process);
+        let biped = e.mem.alloc(0x400);
+        returns(&mut e, 0x005d_43c0, 0x8000);
+        let extra = e.mem.alloc(0x40);
+        e.mem.set_u32(extra + 0x28, 2);
+        returns(&mut e, 0x0042_e8c0, extra);
+        let flags = block(&mut e, 0x10, &[(0, 0x0100)]);
+        // Entry 0: first byte 0, second byte 1 (flag set) blocks the notification.
+        e.register_double(0x0044_1420, move |_, a| {
+            ret(if a[0] == extra { flags + a[1] * 2 } else { 0 })
+        });
+        returns(&mut e, 0x0043_fcd0, 0x1);
+        started(&mut e);
+        e.call(0x0060_6540, &args![this, actor, biped, 0u32]);
+        assert!(calls(&mut e, slot(0x0c00_0000, 0x468)).is_empty());
+        // No flagged entry: the process is told (virtual 0x468, 1).
+        e.mem.set_u8(flags + 1, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0060_6540, &args![this, actor, biped, 0u32]);
+        assert_eq!(
+            calls(&mut e, slot(0x0c00_0000, 0x468)),
+            vec![vec![process, 1]]
+        );
+        // The player's base form being this NPC cancels the default
+        // equipment when anything is worn.
+        let player = e.mem.alloc(0x100);
+        e.mem.set_u32(player + 0x20, this.addr());
+        e.set_global(PLAYER_SINGLETON, player);
+        returns(&mut e, 0x0043_fcd0, 0);
+        returns(&mut e, 0x005f_1590, 1);
+        returns(&mut e, 0x004b_f220, 0x5000);
+        let entry = e.mem.alloc(0x20);
+        returns(&mut e, 0x004c_8c10, entry);
+        e.call_log = Some(vec![]);
+        e.call(0x0060_6540, &args![this, actor, biped, 0u32]);
+        assert_eq!(calls(&mut e, 0x0044_59e0)[0], vec![entry, 1]);
+        assert!(calls(&mut e, 0x0093_44a0).is_empty());
+    }
+
+    #[test]
+    fn part_table_address_is_biped_plus_0x16c() {
+        let mut e = world();
+        assert_eq!(e.call(0x0060_6800, &args![0x1000u32]).u32(), 0x116c);
+    }
+
+    /// The objects `LinearFaceGenHeadLoad` works on.
+    struct HeadLoad {
+        e: Engine,
+        this: Ptr<TESNPC>,
+        actor: u32,
+        biped: u32,
+        root: u32,
+        attach: u32,
+    }
+
+    fn head_load_world() -> HeadLoad {
+        let mut e = world();
+        let this = new_npc(&mut e);
+        e.set(this, TESNPC::iFormID, 0x0777_0001);
+        let root = object_with(&mut e, 0x0c10_0000, &[(0xdc, 0), (0x128, 0), (0x100, 0)]);
+        let node = object_with(&mut e, 0x0c11_0000, &[(0xc, root)]);
+        let attach = object_with(&mut e, 0x0c12_0000, &[(0xdc, 0)]);
+        let actor = object_with(&mut e, 0x0c13_0000, &[(0x1ac, 0), (0x1b0, 0), (0x1e4, 0)]);
+        let biped = block(&mut e, 0x40, &[(0, 0x1)]);
+        returns(&mut e, 0x0065_1b30, 1);
+        returns(&mut e, 0x0043_faf0, 1);
+        returns(&mut e, 0x0043_fcd0, node);
+        returns(&mut e, 0x004a_b230, attach);
+        HeadLoad {
+            e,
+            this,
+            actor,
+            biped,
+            root,
+            attach,
+        }
+    }
+
+    /// A head node with the virtual slots `LinearFaceGenHeadLoad` calls.
+    fn fake_head_node(e: &mut Engine, table: u32, property: u32) -> u32 {
+        object_with(
+            e,
+            table,
+            &[
+                (0x100, property),
+                (0x114, 0),
+                (0x11c, 0),
+                (0xb4, 0),
+                (0x128, 0),
+            ],
+        )
+    }
+
+    #[test]
+    fn head_load_does_nothing_without_the_manager_a_biped_or_the_player_first_person() {
+        let mut w = head_load_world();
+        returns(&mut w.e, 0x0065_1b30, 0);
+        started(&mut w.e);
+        w.e.call(0x0060_6820, &args![w.this, w.actor, w.biped]);
+        assert!(calls(&mut w.e, 0x0043_fcd0).is_empty());
+        assert_eq!(calls(&mut w.e, NI_POINTER_CONSTRUCT).len(), 1);
+        assert_eq!(calls(&mut w.e, NI_POINTER_DESTROY).len(), 1);
+        // The biped's first word is empty.
+        let mut w = head_load_world();
+        let empty = w.e.mem.alloc(0x20);
+        started(&mut w.e);
+        w.e.call(0x0060_6820, &args![w.this, w.actor, empty]);
+        assert!(calls(&mut w.e, 0x0043_fcd0).is_empty());
+        // The manager is there but 0043faf0 says no.
+        let mut w = head_load_world();
+        returns(&mut w.e, 0x0043_faf0, 0);
+        started(&mut w.e);
+        w.e.call(0x0060_6820, &args![w.this, w.actor, w.biped]);
+        assert!(calls(&mut w.e, 0x0043_fcd0).is_empty());
+        // The player, with 00950b30 true for the biped.
+        let mut w = head_load_world();
+        w.e.set_global(PLAYER_SINGLETON, w.actor);
+        returns(&mut w.e, 0x0095_0b30, 1);
+        started(&mut w.e);
+        w.e.call(0x0060_6820, &args![w.this, w.actor, w.biped]);
+        assert_eq!(calls(&mut w.e, 0x0095_0b30), vec![vec![w.actor, w.biped]]);
+        assert!(calls(&mut w.e, 0x0043_fcd0).is_empty());
+    }
+
+    #[test]
+    fn head_load_logs_a_missing_biped_head_node_and_leaves_an_attached_head_alone() {
+        let mut w = head_load_world();
+        returns(&mut w.e, 0x004a_b230, 0);
+        started(&mut w.e);
+        w.e.call(0x0060_6820, &args![w.this, w.actor, w.biped]);
+        assert_eq!(
+            calls(&mut w.e, LOG_MESSAGE),
+            vec![vec![0x0104_a860, 0x0777_0001]]
+        );
+        assert!(calls(&mut w.e, 0x00a5_9c60).is_empty());
+    }
+
+    #[test]
+    fn head_load_only_updates_when_the_actor_already_has_the_heads() {
+        let mut w = head_load_world();
+        // The actor's virtual 0x1ac (for the biped head) already answers.
+        let busy = object_with(&mut w.e, 0x0c14_0000, &[(0x1ac, 1), (0x1b0, 0), (0x1e4, 0)]);
+        started(&mut w.e);
+        w.e.call(0x0060_6820, &args![w.this, busy, w.biped]);
+        let update = calls(&mut w.e, 0x00a5_9c60);
+        assert_eq!(update.len(), 1);
+        assert_eq!(update[0][0], w.root);
+        assert!(calls(&mut w.e, NI_POINTER_CONSTRUCT).len() == 1);
+        assert!(calls(&mut w.e, 0x0061_3c50).is_empty());
+    }
+
+    #[test]
+    fn head_load_asks_the_race_for_heads_and_attaches_them() {
+        let mut w = head_load_world();
+        let race = w.e.mem.alloc(0x600);
+        w.e.mem.set_u16(race + 0x4f8, 0x2a);
+        w.e.mem.set_u32(w.this.addr() + COMPONENT_RACE + 4, race);
+        let property = object_with(&mut w.e, 0x0c15_0000, &[(0xd8, 0), (0xd0, 0), (0xb4, 0)]);
+        let head_a = fake_head_node(&mut w.e, 0x0c16_0000, property);
+        let head_b = fake_head_node(&mut w.e, 0x0c17_0000, 0);
+        let (a, b) = (head_a, head_b);
+        w.e.register_double(0x0061_3c50, move |e, args| {
+            e.mem.set_u32(args[1], a);
+            e.mem.set_u32(args[2], b);
+            Ret::default()
+        });
+        returns(&mut w.e, 0x0049_6940, 0);
+        returns(&mut w.e, 0x0064_c5a0, 0);
+        w.e.register(0x0056_8ad0, |_, _| ret_float(0.0));
+        started(&mut w.e);
+        w.e.call(0x0060_6820, &args![w.this, w.actor, w.biped]);
+        let this = w.this;
+        assert_eq!(w.e.get(this, TESNPC::sLastRaceFaceNum), 0x2a);
+        assert_eq!(w.e.mem.u32(this.addr() + 0x1c4), head_a);
+        assert_eq!(w.e.mem.u32(this.addr() + 0x1c8), head_b);
+        let factory = calls(&mut w.e, 0x0061_3c50);
+        assert_eq!(factory.len(), 1);
+        assert_eq!(factory[0][0], race);
+        assert_eq!(&factory[0][3..], &[this.addr(), 0, 0, 0]);
+        // The first head: property hidden (the actor's scale is 0.0), flags,
+        // the shared transform and attachment, then its owner.
+        assert_eq!(
+            calls(&mut w.e, slot(0x0c15_0000, 0xd8)),
+            vec![vec![property, 1, 1]]
+        );
+        assert_eq!(
+            calls(&mut w.e, slot(0x0c15_0000, 0xd0)),
+            vec![vec![property, 1]]
+        );
+        assert_eq!(
+            calls(&mut w.e, slot(0x0c16_0000, 0x114)),
+            vec![vec![head_a, 1]]
+        );
+        assert_eq!(
+            calls(&mut w.e, slot(0x0c16_0000, 0x11c)),
+            vec![vec![head_a, 1]]
+        );
+        assert_eq!(
+            calls(&mut w.e, 0x0043_fa80),
+            vec![vec![head_a, 0x011a_9448]]
+        );
+        assert_eq!(
+            calls(&mut w.e, slot(0x0c12_0000, 0xdc)),
+            vec![vec![w.attach, head_a, 1]]
+        );
+        assert_eq!(w.e.mem.u32(head_a + 0xe8), w.actor);
+        // The second head hangs off the root, flagged by whether the first exists.
+        assert_eq!(
+            calls(&mut w.e, slot(0x0c17_0000, 0x114)),
+            vec![vec![head_b, 0]]
+        );
+        assert_eq!(
+            calls(&mut w.e, slot(0x0c10_0000, 0xdc)),
+            vec![vec![w.root, head_b, 1]]
+        );
+        assert_eq!(w.e.mem.u32(head_b + 0xe8), w.actor);
+        assert_eq!(
+            calls(&mut w.e, slot(0x0c17_0000, 0x128)),
+            vec![vec![head_b, w.root, 1]]
+        );
+        // The first head's property gets the update call.
+        assert_eq!(
+            calls(&mut w.e, slot(0x0c15_0000, 0xb4)),
+            vec![vec![property, 0.0f32.to_bits(), 1, 1, 1, 1, 0]]
+        );
+        let update = calls(&mut w.e, 0x00a5_9c60);
+        assert_eq!(update.len(), 1);
+        assert_eq!(update[0][0], w.root);
+    }
+
+    #[test]
+    fn head_load_logs_a_race_that_makes_no_head() {
+        let mut w = head_load_world();
+        let race = w.e.mem.alloc(0x600);
+        w.e.mem.set_u32(w.this.addr() + COMPONENT_RACE + 4, race);
+        started(&mut w.e);
+        w.e.call(0x0060_6820, &args![w.this, w.actor, w.biped]);
+        assert_eq!(
+            calls(&mut w.e, LOG_MESSAGE),
+            vec![vec![0x0104_a8b8, 0x0777_0001]]
+        );
+        // Without a race nothing is asked and the same message appears.
+        let mut w = head_load_world();
+        started(&mut w.e);
+        w.e.call(0x0060_6820, &args![w.this, w.actor, w.biped]);
+        assert!(calls(&mut w.e, 0x0061_3c50).is_empty());
+        assert_eq!(calls(&mut w.e, LOG_MESSAGE).len(), 1);
+    }
+
+    #[test]
+    fn head_load_reuses_unshared_heads_and_clones_shared_ones() {
+        // The skinned head has two references: the biped head is cloned.
+        let mut w = head_load_world();
+        let property = object_with(&mut w.e, 0x0c15_0000, &[(0xd8, 0), (0xd0, 0), (0xb4, 0)]);
+        let biped_head = fake_head_node(&mut w.e, 0x0c16_0000, property);
+        let skinned_head = fake_head_node(&mut w.e, 0x0c17_0000, 0);
+        let clone = fake_head_node(&mut w.e, 0x0c18_0000, 0);
+        w.e.mem.set_u32(skinned_head + 4, 2);
+        w.e.mem.set_u32(w.this.addr() + 0x1c4, biped_head);
+        w.e.mem.set_u32(w.this.addr() + 0x1c8, skinned_head);
+        w.e.register_double(0x00a5_d2c0, move |_, a| {
+            ret(if a[0] == biped_head { clone } else { a[0] })
+        });
+        returns(&mut w.e, 0x0049_6940, 0);
+        w.e.register(0x0056_8ad0, |_, _| ret_float(1.0));
+        started(&mut w.e);
+        w.e.call(0x0060_6820, &args![w.this, w.actor, w.biped]);
+        let made = calls(&mut w.e, 0x004a_d050);
+        assert_eq!(made.len(), 2);
+        assert_eq!(made[0][1], 1.0f32.to_bits());
+        assert_eq!(calls(&mut w.e, 0x004a_d270).len(), 2);
+        // The biped head (shared with the skinned head's two references) is
+        // cloned and the clone is attached; the skinned head is cloned too.
+        let attached = calls(&mut w.e, slot(0x0c12_0000, 0xdc));
+        assert_eq!(attached, vec![vec![w.attach, clone, 1]]);
+        // Unshared (one reference): both are used as they are.
+        let mut w = head_load_world();
+        let biped_head = fake_head_node(&mut w.e, 0x0c16_0000, 0);
+        let skinned_head = fake_head_node(&mut w.e, 0x0c17_0000, 0);
+        w.e.mem.set_u32(skinned_head + 4, 1);
+        w.e.mem.set_u32(w.this.addr() + 0x1c4, biped_head);
+        w.e.mem.set_u32(w.this.addr() + 0x1c8, skinned_head);
+        started(&mut w.e);
+        w.e.call(0x0060_6820, &args![w.this, w.actor, w.biped]);
+        assert!(calls(&mut w.e, 0x004a_d050).is_empty());
+        assert_eq!(
+            calls(&mut w.e, slot(0x0c12_0000, 0xdc)),
+            vec![vec![w.attach, biped_head, 1]]
+        );
+        assert_eq!(
+            calls(&mut w.e, slot(0x0c10_0000, 0xdc)),
+            vec![vec![w.root, skinned_head, 1]]
+        );
+    }
+
+    #[test]
+    fn head_load_copies_child_data_and_rebuilds_the_skin_remap() {
+        let mut w = head_load_world();
+        // The skinned head (one reference) has one child whose data is copied
+        // and whose skin instance gets its bone table remapped.
+        let cast = object_with(&mut w.e, 0x0c20_0000, &[(0xe4, 0)]);
+        let child = object_with(&mut w.e, 0x0c21_0000, &[(0x1c, cast)]);
+        let skinned_head = fake_head_node(&mut w.e, 0x0c17_0000, 0);
+        w.e.mem.set_u32(skinned_head + 4, 1);
+        w.e.mem.set_u32(w.this.addr() + 0x1c8, skinned_head);
+        w.e.register_double(0x0043_b480, move |_, a| ret((a[0] == skinned_head) as u32));
+        w.e.register_double(0x0043_b4a0, move |_, a| {
+            ret(if a[0] == skinned_head && a[1] == 0 {
+                child
+            } else {
+                0
+            })
+        });
+        // The head is the one the NPC points at.
+        w.e.register_double(0x0052_aa80, move |_, a| ret((a[1] == skinned_head) as u32));
+        // 005495f0 -> data object; 00a5d510 stores a copy in the pointer.
+        let copy_value = w.e.mem.alloc(0x20);
+        returns(&mut w.e, 0x0054_95f0, 0x4444);
+        w.e.register_double(0x00a5_d510, move |e, a| {
+            e.mem.set_u32(a[1], copy_value);
+            Ret::default()
+        });
+        // The skin instance: 0043fad0(cast) -> skin, 0043b230(skin) -> shape.
+        let skin = w.e.mem.alloc(0x20);
+        returns(&mut w.e, 0x0043_fad0, skin);
+        returns(&mut w.e, 0x0043_b230, 0x5555);
+        // The remapper found on the cast: its virtual 0x94 gives a table whose
+        // inner node holds the bone values.
+        let table_target = w.e.mem.alloc(0x20);
+        let inner = block(&mut w.e, 0x40, &[(0x10, table_target)]);
+        let table = block(&mut w.e, 0x20, &[(8, inner)]);
+        let remapper = object_with(&mut w.e, 0x0c22_0000, &[(0x94, table)]);
+        returns(&mut w.e, 0x00a5_bdd0, remapper);
+        let values = block(&mut w.e, 0x20, &[(0, 0x11), (4, 0x22)]);
+        returns(&mut w.e, 0x0082_5c00, values);
+        returns(&mut w.e, 0x0080_41a0, 2);
+        started(&mut w.e);
+        w.e.call(0x0060_6820, &args![w.this, w.actor, w.biped]);
+        assert_eq!(
+            calls(&mut w.e, 0x004a_dda0),
+            vec![vec![skin, 0, 0x11], vec![skin, 1, 0x22]]
+        );
+        // The copy of the child's data: the virtual 0xe4 of the child's cast
+        // gets the stored pointer, and the skin gets the copy of its shape.
+        assert_eq!(
+            calls(&mut w.e, slot(0x0c20_0000, 0xe4)),
+            vec![vec![cast, copy_value]]
+        );
+        assert_eq!(calls(&mut w.e, 0x004a_ddc0), vec![vec![skin, copy_value]]);
+        assert!(calls(&mut w.e, LOG_MESSAGE)
+            .iter()
+            .all(|c| c[0] != 0x0104_a908));
+    }
+
+    #[test]
+    fn head_load_logs_a_skin_it_cannot_remap() {
+        let mut w = head_load_world();
+        let cast = object_with(&mut w.e, 0x0c20_0000, &[(0xe4, 0)]);
+        let child = object_with(&mut w.e, 0x0c21_0000, &[(0x1c, cast)]);
+        let skinned_head = fake_head_node(&mut w.e, 0x0c17_0000, 0);
+        w.e.mem.set_u32(skinned_head + 4, 1);
+        w.e.mem.set_u32(w.this.addr() + 0x1c8, skinned_head);
+        w.e.register_double(0x0043_b480, move |_, a| ret((a[0] == skinned_head) as u32));
+        w.e.register_double(0x0043_b4a0, move |_, _| ret(child));
+        returns(&mut w.e, 0x0043_fad0, 0x4000);
+        returns(&mut w.e, 0x0043_b230, 0x5555);
+        // No remapper (00a5bdd0 returns 0): the NPC names itself in the log.
+        returns(&mut w.e, 0x0c24_1000, 0x6666);
+        put_object_vtable(
+            &mut w.e,
+            w.this.addr(),
+            0x0c24_0000,
+            &[(VSLOT_GET_FORM_NAME, 0x0c24_1000)],
+        );
+        started(&mut w.e);
+        w.e.call(0x0060_6820, &args![w.this, w.actor, w.biped]);
+        assert_eq!(
+            calls(&mut w.e, LOG_MESSAGE)[0],
+            vec![0x0104_a908, 0x6666, 0x0777_0001]
+        );
+        assert!(calls(&mut w.e, 0x004a_dda0).is_empty());
+    }
+
+    #[test]
+    fn small_head_accessors() {
+        let mut e = world();
+        // 006072c0: the skin data behind the NiPointer of the inner node.
+        let target = e.mem.alloc(0x20);
+        let inner = block(&mut e, 0x40, &[(0x10, target)]);
+        let this = block(&mut e, 0x20, &[(8, inner)]);
+        returns(&mut e, 0x0043_fad0, 0x7777);
+        assert_eq!(e.call(0x0060_72c0, &args![this]).u32(), 0x7777);
+        let empty = block(&mut e, 0x20, &[]);
+        assert_eq!(e.call(0x0060_72c0, &args![empty]).u32(), 0);
+        let hollow_inner = block(&mut e, 0x40, &[]);
+        let hollow = block(&mut e, 0x20, &[(8, hollow_inner)]);
+        assert_eq!(e.call(0x0060_72c0, &args![hollow]).u32(), 0);
+        // 00607340 / 00607310: a global key and the extra-data lookup.
+        e.set_global(0x011d_5b50, 0x5150u32);
+        assert_eq!(e.call(0x0060_7340, &args![]).u32(), 0x5150);
+        returns(&mut e, 0x00a5_bdd0, 0x9090);
+        started(&mut e);
+        assert_eq!(e.call(0x0060_7310, &args![0x1111u32]).u32(), 0x9090);
+        assert_eq!(calls(&mut e, 0x00a5_bdd0), vec![vec![0x1111, 0x5150]]);
+        assert_eq!(e.call(0x0060_7310, &args![0u32]).u32(), 0);
+        // 00607350: the race's face number.
+        let race = e.mem.alloc(0x600);
+        e.mem.set_u16(race + 0x4f8, 0x1234);
+        assert_eq!(e.call(0x0060_7350, &args![race]).u16(), 0x1234);
+    }
+
+    #[test]
+    fn init_head_clears_the_heads_and_asks_the_race_when_they_stay_empty() {
+        let mut e = world();
+        let this = new_npc(&mut e);
+        let race = e.mem.alloc(0x600);
+        e.mem.set_u16(race + 0x4f8, 0x31);
+        e.mem.set_u32(this.addr() + COMPONENT_RACE + 4, race);
+        e.mem.set_u32(this.addr() + 0x1c4, 0x1111);
+        e.mem.set_u32(this.addr() + 0x1c8, 0x2222);
+        started(&mut e);
+        e.call(0x0060_7370, &args![this, 0xaau32, 0xbbu32]);
+        assert_eq!(e.mem.u32(this.addr() + 0x1c4), 0);
+        assert_eq!(e.mem.u32(this.addr() + 0x1c8), 0);
+        assert_eq!(
+            calls(&mut e, 0x0061_3c50),
+            vec![vec![race, 0xaa, 0xbb, this.addr(), 1, 0, 0]]
+        );
+        assert_eq!(e.get(this, TESNPC::sLastRaceFaceNum), 0x31);
+        // No race: only the clearing.
+        let mut e = world();
+        let this = new_npc(&mut e);
+        started(&mut e);
+        e.call(0x0060_7370, &args![this, 0xaau32, 0xbbu32]);
+        assert!(calls(&mut e, 0x0061_3c50).is_empty());
+        assert_eq!(calls(&mut e, NI_POINTER_ASSIGN).len(), 2);
+    }
+
+    /// The head world plus a property object for `fn_00607420`.
+    #[test]
+    fn attach_heads_hangs_both_nodes_and_stores_the_actors_head_values() {
+        let mut w = head_load_world();
+        let property = object_with(&mut w.e, 0x0c15_0000, &[(0xd8, 0), (0xd0, 0), (0xb4, 0)]);
+        let head_a = fake_head_node(&mut w.e, 0x0c16_0000, property);
+        let head_b = fake_head_node(&mut w.e, 0x0c17_0000, 0);
+        let actor = object_with(&mut w.e, 0x0c19_0000, &[(0x1e4, 0), (0x100, 1)]);
+        let table = w.e.mem.alloc(0x400);
+        w.e.mem.set_u32(actor + 0xac, table);
+        returns(&mut w.e, 0x0049_6940, 0);
+        w.e.register(0x0056_8ad0, |_, _| ret_float(2.0));
+        // Each of the four helpers writes its two outputs.
+        w.e.register(0x0064_9f00, |e, a| {
+            e.mem.set_f32(a[0], 1.0);
+            e.mem.set_f32(a[1], 2.0);
+            Ret::default()
+        });
+        w.e.register(0x0064_9f70, |e, a| {
+            e.mem.set_f32(a[0], 3.0);
+            e.mem.set_f32(a[1], 4.0);
+            Ret::default()
+        });
+        w.e.register(0x0064_9fe0, |e, a| {
+            e.mem.set_f32(a[0], 5.0);
+            e.mem.set_f32(a[1], 6.0);
+            Ret::default()
+        });
+        w.e.register(0x0064_a070, |e, a| {
+            e.mem.set_f32(a[0], 7.0);
+            e.mem.set_f32(a[1], 8.0);
+            Ret::default()
+        });
+        started(&mut w.e);
+        w.e.call(0x0060_7420, &args![w.this, actor, w.biped, head_a, head_b]);
+        let this = w.this;
+        assert_eq!(w.e.mem.u32(this.addr() + 0x1c4), head_a);
+        assert_eq!(w.e.mem.u32(this.addr() + 0x1c8), head_b);
+        // The head values: 4.0 (second helper's second output) at +0x1a8,
+        // 2.0 into record 0, then 6.0 and 8.0 to 00c748d0.
+        assert_eq!(w.e.mem.f32(table + 0x1a8), 4.0);
+        assert_eq!(w.e.mem.f32(table + 0xf8), 2.0);
+        assert_eq!(
+            calls(&mut w.e, 0x00c7_48d0),
+            vec![vec![table, 0, 6.0f32.to_bits(), 8.0f32.to_bits()]]
+        );
+        // The scale (2.0) is above 0.0: the property keeps its flags.
+        assert!(calls(&mut w.e, slot(0x0c15_0000, 0xd8)).is_empty());
+        assert_eq!(
+            calls(&mut w.e, slot(0x0c15_0000, 0xb4)),
+            vec![vec![property, 0.0f32.to_bits(), 1, 1, 1, 1, 0]]
+        );
+        assert_eq!(
+            calls(&mut w.e, slot(0x0c12_0000, 0xdc)),
+            vec![vec![w.attach, head_a, 1]]
+        );
+        assert_eq!(
+            calls(&mut w.e, slot(0x0c10_0000, 0xdc)),
+            vec![vec![w.root, head_b, 1]]
+        );
+        // The root is updated and 006062e0 asks for the root again at the end.
+        assert_eq!(calls(&mut w.e, 0x00a5_9c60)[0][0], w.root);
+        assert!(calls(&mut w.e, 0x0043_fcd0).len() >= 2);
+        // Without the kind of actor that has head values nothing is stored.
+        let mut w = head_load_world();
+        let actor = object_with(&mut w.e, 0x0c19_0000, &[(0x1e4, 0), (0x100, 0)]);
+        let head_a = fake_head_node(&mut w.e, 0x0c16_0000, 0);
+        started(&mut w.e);
+        w.e.call(0x0060_7420, &args![w.this, actor, w.biped, head_a, 0u32]);
+        assert!(calls(&mut w.e, 0x0064_9f00).is_empty());
+        // A missing head node of the biped is logged and nothing is attached.
+        let mut w = head_load_world();
+        returns(&mut w.e, 0x004a_b230, 0);
+        started(&mut w.e);
+        w.e.call(0x0060_7420, &args![w.this, w.actor, w.biped, 0u32, 0u32]);
+        assert_eq!(
+            calls(&mut w.e, LOG_MESSAGE),
+            vec![vec![0x0104_a860, 0x0777_0001]]
+        );
+        assert!(calls(&mut w.e, 0x00a5_9c60).is_empty());
+        assert!(!calls(&mut w.e, 0x0043_fcd0).is_empty());
+    }
+
+    #[test]
+    fn head_value_setters_store_floats_in_the_exes_places() {
+        let mut e = world();
+        let target = e.mem.alloc(0x400);
+        e.call(0x0060_7810, &args![target, 2u32, 1.5f32]);
+        assert_eq!(e.mem.f32(target + 0xf8 + 0xa0), 1.5);
+        e.call(0x0060_7830, &args![target, 2.5f32]);
+        assert_eq!(e.mem.f32(target + 0x1a8), 2.5);
+    }
+
+    #[test]
+    fn actor_value_getter_adds_the_offset_unless_the_npc_is_auto_calculated() {
+        let mut e = world();
+        let npc = new_npc(&mut e);
+        e.mem.set_u8(npc.addr() + 0x114 + 3, 40);
+        e.mem.set_u8(npc.addr() + 0x122 + 3, 7);
+        e.register(0x0047_f060, |_, a| ret((a[0] == 5) as u32));
+        e.register(0x0066_ec80, |_, a| {
+            assert_eq!((a[0], a[1]), (2, 5));
+            ret(3)
+        });
+        put_object_vtable(&mut e, npc.addr(), 0x0c00_0000, &[(0x144, 0x0c00_1144)]);
+        returns(&mut e, 0x0c00_1144, 0);
+        assert_eq!(
+            e.call(0x0060_7850, &args![npc.addr() + 0x100, 5u32]).u32(),
+            47
+        );
+        returns(&mut e, 0x0c00_1144, 1);
+        assert_eq!(
+            e.call(0x0060_7850, &args![npc.addr() + 0x100, 5u32]).u32(),
+            40
+        );
+        // An index the exe's test rejects goes to 005f0fb0.
+        returns(&mut e, 0x005f_0fb0, 99);
+        started(&mut e);
+        assert_eq!(
+            e.call(0x0060_7850, &args![npc.addr() + 0x100, 9u32]).u32(),
+            99
+        );
+        assert_eq!(
+            calls(&mut e, 0x005f_0fb0),
+            vec![vec![npc.addr() + 0x100, 9]]
+        );
+        // A negative skill index sign-extends.
+        e.register(0x0066_ec80, |_, _| ret(0xff));
+        e.mem.set_u8(npc.addr() + 0x114 - 1, 11);
+        e.mem.set_u8(npc.addr() + 0x122 - 1, 4);
+        returns(&mut e, 0x0c00_1144, 0);
+        assert_eq!(
+            e.call(0x0060_7850, &args![npc.addr() + 0x100, 5u32]).u32(),
+            15
+        );
+    }
+
+    #[test]
+    fn actor_value_setter_writes_the_skill_byte_or_defers() {
+        let mut e = world();
+        let npc = new_npc(&mut e);
+        e.register(0x0047_f060, |_, a| ret((a[0] == 5) as u32));
+        e.register(0x0066_ec80, |_, _| ret(3));
+        put_object_vtable(&mut e, npc.addr(), 0x0c00_0000, &[(0x48, 0x0c00_1048)]);
+        returns(&mut e, 0x0c00_1048, 0);
+        started(&mut e);
+        e.call(0x0060_78e0, &args![npc, 5u32, 0x1234_5677u32]);
+        assert_eq!(e.mem.u8(npc.addr() + 0x114 + 3), 0x77);
+        assert_eq!(calls(&mut e, 0x0c00_1048), vec![vec![npc.addr(), 0x200]]);
+        started(&mut e);
+        e.call(0x0060_78e0, &args![npc, 9u32, 0x31u32]);
+        assert_eq!(calls(&mut e, 0x005f_12d0), vec![vec![npc.addr(), 9, 0x31]]);
+        assert!(calls(&mut e, 0x0c00_1048).is_empty());
+    }
+
+    #[test]
+    fn combat_style_accessors() {
+        let mut e = world();
+        let npc = new_npc(&mut e);
+        e.call(0x0060_7970, &args![npc, 0x3333u32]);
+        assert_eq!(e.mem.u32(npc.addr() + 0x1d4), 0x3333);
+        assert_eq!(e.call(0x0060_7950, &args![npc]).u32(), 0x3333);
+    }
+
+    #[test]
+    fn save_size_and_save_read_write_the_npc_data_block() {
+        let mut e = world();
+        let npc = new_npc(&mut e);
+        returns(&mut e, 0x005f_16f0, 0x30);
+        assert_eq!(e.call(0x0060_8da0, &args![npc, 0x200u32]).u16(), 0x3e);
+        assert_eq!(e.call(0x0060_8da0, &args![npc, 0u32]).u16(), 0x30);
+        returns(&mut e, 0x005f_16f0, 0xfffa);
+        assert_eq!(e.call(0x0060_8da0, &args![npc, 0x200u32]).u16(), 8);
+        started(&mut e);
+        e.call(0x0060_8e00, &args![npc, 0x200u32]);
+        assert_eq!(calls(&mut e, 0x005f_18c0), vec![vec![npc.addr(), 0x200]]);
+        assert_eq!(
+            calls(&mut e, 0x0048_4ce0),
+            vec![vec![npc.addr(), npc.addr() + 0x114, 0xe]]
+        );
+        started(&mut e);
+        e.call(0x0060_8e00, &args![npc, 0x1u32]);
+        assert!(calls(&mut e, 0x0048_4ce0).is_empty());
+        started(&mut e);
+        e.call(0x0060_8e80, &args![npc, 0x201u32, 0x77u32]);
+        assert_eq!(
+            calls(&mut e, 0x005f_1b30),
+            vec![vec![npc.addr(), 0x201, 0x77]]
+        );
+        assert_eq!(
+            calls(&mut e, 0x0048_4d00),
+            vec![vec![npc.addr(), npc.addr() + 0x114, 0xe]]
+        );
+        started(&mut e);
+        e.call(0x0060_8e80, &args![npc, 0x1u32, 0u32]);
+        assert!(calls(&mut e, 0x0048_4d00).is_empty());
+    }
+
+    #[test]
+    fn four_is_the_kind_the_first_helper_tests_for() {
+        let mut e = world();
+        returns(&mut e, 0x004f_8960, 4);
+        assert!(e.call(0x0060_8d80, &args![0x1000u32]).bool());
+        returns(&mut e, 0x004f_8960, 5);
+        assert!(!e.call(0x0060_8d80, &args![0x1000u32]).bool());
+    }
+
+    #[test]
+    fn file_check_needs_an_open_file_the_offset_and_a_matching_record() {
+        let mut e = world();
+        let npc = new_npc(&mut e);
+        e.set(npc, TESNPC::iFileOffset, 0x40);
+        e.set(npc, TESNPC::iFormID, 0x1234);
+        e.map(0x0118_7000, 0x1000);
+        e.set_global(0x0118_71f8, 0x2au8);
+        let file = e.mem.alloc(0x40);
+        returns(&mut e, 0x0047_0c70, 1);
+        returns(&mut e, 0x0047_23a0, 1);
+        returns(&mut e, FILE_GET_FORM_TYPE, 0x2a);
+        returns(&mut e, 0x008d_8ac0, 0x1234);
+        started(&mut e);
+        assert!(e.call(0x0060_9bf0, &args![npc, file]).bool());
+        assert_eq!(calls(&mut e, 0x0047_0c70), vec![vec![file, 0, 0]]);
+        assert_eq!(calls(&mut e, 0x0047_23a0), vec![vec![file, 0x40]]);
+        // Each failure.
+        assert!(!e.call(0x0060_9bf0, &args![npc, 0u32]).bool());
+        returns(&mut e, 0x008d_8ac0, 0x9999);
+        assert!(!e.call(0x0060_9bf0, &args![npc, file]).bool());
+        returns(&mut e, 0x008d_8ac0, 0x1234);
+        returns(&mut e, FILE_GET_FORM_TYPE, 0x2b);
+        assert!(!e.call(0x0060_9bf0, &args![npc, file]).bool());
+        returns(&mut e, FILE_GET_FORM_TYPE, 0x2a);
+        returns(&mut e, 0x0047_23a0, 0);
+        assert!(!e.call(0x0060_9bf0, &args![npc, file]).bool());
+        returns(&mut e, 0x0047_23a0, 1);
+        returns(&mut e, 0x0047_0c70, 0);
+        assert!(!e.call(0x0060_9bf0, &args![npc, file]).bool());
+        returns(&mut e, 0x0047_0c70, 1);
+        e.set(npc, TESNPC::iFileOffset, 0);
+        assert!(!e.call(0x0060_9bf0, &args![npc, file]).bool());
+    }
+
+    #[test]
+    fn old_face_data_size_counts_four_bytes_per_matrix_element_plus_21() {
+        let mut e = world();
+        let npc = new_npc(&mut e);
+        returns(&mut e, 0x0096_11e0, 2);
+        returns(&mut e, 0x0044_1110, 3);
+        assert_eq!(
+            e.call(0x0060_9c70, &args![npc, 0u32]).u16(),
+            4 * 2 * 3 * 4 + 21
+        );
+        // The sum is a 16-bit value.
+        returns(&mut e, 0x0096_11e0, 0x4000);
+        returns(&mut e, 0x0044_1110, 2);
+        assert_eq!(e.call(0x0060_9c70, &args![npc, 0u32]).u16(), 21);
+    }
+
+    #[test]
+    fn old_face_data_is_written_element_by_element_then_ids_and_the_sex_byte() {
+        let mut e = world();
+        let npc = new_npc(&mut e);
+        e.set(npc, TESNPC::iActorBaseFlags, 1);
+        e.mem.set_u32(npc.addr() + COMPONENT_RACE + 4, 0xa001);
+        e.set(npc, TESNPC::pHair, Ptr::new(0xa002));
+        e.set(npc, TESNPC::fHairLength, 0.5);
+        e.set(npc, TESNPC::iHairColor, 0x0102_0304);
+        returns(&mut e, 0x0096_11e0, 1);
+        returns(&mut e, 0x0044_1110, 1);
+        let cells = block(&mut e, 0x20, &[(0, 0x4040_0000)]);
+        returns(&mut e, MATRIX_ITERATOR_AT, 0x1111);
+        returns(&mut e, ITERATOR_ELEMENT, cells);
+        // Form ids come from 0084e3a0: the id word of the form.
+        e.register(GET_FORM_ID, |_, a| ret(a[0] + 1));
+        let written = Rc::new(RefCell::new(vec![]));
+        for (address, tag) in [(0x0048_4ce0u32, 'D'), (0x0048_4d20u32, 'I')] {
+            let sink = written.clone();
+            e.register_double(address, move |e, a| {
+                sink.borrow_mut().push((tag, e.mem.bytes(a[1], a[2])));
+                Ret::default()
+            });
+        }
+        e.call(0x0060_9d60, &args![npc, 0u32]);
+        let words = |v: u32| v.to_le_bytes().to_vec();
+        let mut expected = vec![('D', words(0x4040_0000)); 4];
+        expected.extend([
+            ('I', words(0xa002)),
+            ('I', words(0xa003)),
+            ('I', words(0)),
+            ('D', words(0.5f32.to_bits())),
+            ('D', words(0x0102_0304)),
+            ('D', vec![1]),
+        ]);
+        assert_eq!(*written.borrow(), expected);
+        // No race, hair or eyes: zero ids; a male NPC: sex byte 0.
+        let mut e = world();
+        let npc = new_npc(&mut e);
+        returns(&mut e, 0x0096_11e0, 0);
+        let written = Rc::new(RefCell::new(vec![]));
+        let sink = written.clone();
+        e.register_double(0x0048_4d20, move |e, a| {
+            sink.borrow_mut().push(e.mem.u32(a[1]));
+            Ret::default()
+        });
+        let sex = Rc::new(RefCell::new(vec![]));
+        let sink = sex.clone();
+        e.register_double(0x0048_4ce0, move |e, a| {
+            if a[2] == 1 {
+                sink.borrow_mut().push(e.mem.u8(a[1]));
+            }
+            Ret::default()
+        });
+        e.call(0x0060_9d60, &args![npc, 0u32]);
+        assert_eq!(*written.borrow(), vec![0, 0, 0]);
+        assert_eq!(*sex.borrow(), vec![0]);
+    }
+
+    /// Doubles for the change-flag test of the save/load code:
+    /// `0042ce30` and `00428110` return a marker (1 or 2) and
+    /// `004280f0(marker, mask)` says whether `mask` is in the flags of that
+    /// marker (`loaded` for the first, `saved` for the second).
+    fn set_change_flags(e: &mut Engine, loaded: u32, saved: u32) {
+        returns(e, 0x0042_ce30, 1);
+        returns(e, 0x0042_8110, 2);
+        e.register_double(0x0042_80f0, move |_, a| {
+            let flags = if a[0] == 1 { loaded } else { saved };
+            ret((flags & a[1] != 0) as u32)
+        });
+    }
+
+    /// The matrix doubles used by the save/load tests: the iterator for
+    /// row `x` of a matrix is the matrix address plus `x * 8`, and column
+    /// `y` of that is four bytes on, so the NPC's own memory is the storage.
+    fn matrix_storage(e: &mut Engine, width: u32, height: u32) {
+        returns(e, 0x0096_11e0, width);
+        returns(e, 0x0044_1110, height);
+        e.register(MATRIX_ITERATOR_AT, |_, a| ret(a[0] + a[2] * 8));
+        e.register(ITERATOR_ELEMENT, |_, a| ret(a[0] + a[1] * 4));
+    }
+
+    /// What a save-buffer double was asked to write, in order.
+    type Written = Rc<RefCell<Vec<(char, Vec<u8>)>>>;
+
+    fn save_recorder(e: &mut Engine) -> Written {
+        let written: Written = Rc::new(RefCell::new(vec![]));
+        let sink = written.clone();
+        e.register_double(0x0086_5e50, move |e, a| {
+            sink.borrow_mut().push(('B', e.mem.bytes(a[1], a[2])));
+            Ret::default()
+        });
+        let sink = written.clone();
+        e.register_double(0x0086_5df0, move |_, a| {
+            sink.borrow_mut().push(('F', a[1].to_le_bytes().to_vec()));
+            Ret::default()
+        });
+        returns(e, 0x0086_5f20, 0x7007);
+        let sink = written.clone();
+        e.register_double(0x0086_5ff0, move |_, a| {
+            let mut bytes = a[1].to_le_bytes().to_vec();
+            bytes.extend(a[2].to_le_bytes());
+            sink.borrow_mut().push(('S', bytes));
+            Ret::default()
+        });
+        written
+    }
+
+    #[test]
+    fn save_writes_the_blocks_the_change_flags_ask_for() {
+        let mut e = world();
+        let npc = new_npc(&mut e);
+        e.set(npc, TESNPC::iActorBaseFlags, 1);
+        let data: Vec<u8> = (1..=0x1c).collect();
+        e.mem.write(npc.addr() + 0x114, &data);
+        e.set(npc, TESNPC::pCl, Ptr::new(0xc1a5));
+        e.mem.set_u32(npc.addr() + COMPONENT_RACE + 4, 0xa001);
+        e.set(npc, TESNPC::pOriginalRace, Ptr::new(0xa002));
+        e.set(npc, TESNPC::pHair, Ptr::new(0xa003));
+        e.set(npc, TESNPC::pEyeColor, Ptr::new(0xa004));
+        e.set(npc, TESNPC::fHairLength, 0.25);
+        e.set(npc, TESNPC::iHairColor, 0x0a0b_0c0d);
+        // Head parts: 0xb001, none, 0xb003.
+        let third = block(&mut e, 0x10, &[(0, 0xb003), (4, 0)]);
+        let second = block(&mut e, 0x10, &[(0, 0), (4, third)]);
+        e.mem.set_u32(npc.addr() + 0x1dc, 0xb001);
+        e.mem.set_u32(npc.addr() + 0x1e0, second);
+        matrix_storage(&mut e, 1, 2);
+        for k in 0..4u32 {
+            // Each matrix has 1 x 2 elements: values 10.0, 11.0, ... in order.
+            let matrix = npc.addr() + 0x134 + (k / 2) * 0x40 + (k % 2) * 0x20;
+            e.mem.set_f32(matrix, 10.0 + 2.0 * k as f32);
+            e.mem.set_f32(matrix + 4, 11.0 + 2.0 * k as f32);
+        }
+        set_change_flags(&mut e, 0, 0x200 | 0x400 | 0x200_0000 | 0x800 | 0x100_0000);
+        let written = save_recorder(&mut e);
+        let buffer = e.mem.alloc(0x40);
+        started(&mut e);
+        e.call(0x0060_8f00, &args![npc, buffer]);
+        assert_eq!(calls(&mut e, 0x005f_1f30), vec![vec![npc.addr(), buffer]]);
+        let word = |v: u32| v.to_le_bytes().to_vec();
+        let mut expected = vec![
+            ('B', data),
+            ('F', word(0xc1a5)),
+            ('F', word(0xa001)),
+            ('F', word(0xa002)),
+            ('B', vec![0]),
+        ];
+        for k in 0..8u32 {
+            expected.push(('B', word((10.0 + k as f32).to_bits())));
+        }
+        expected.extend([
+            ('F', word(0xa003)),
+            ('F', word(0xa004)),
+            ('B', word(0.25f32.to_bits())),
+            ('B', word(0x0a0b_0c0d)),
+            ('F', word(0xb001)),
+            ('F', word(0xb003)),
+            ('S', [2u32.to_le_bytes(), 0x7007u32.to_le_bytes()].concat()),
+            ('B', vec![1]),
+        ]);
+        assert_eq!(*written.borrow(), expected);
+        // The coordinate in use is the alternate one when it is set.
+        let alternate = e.mem.alloc(0x80);
+        e.set(npc, TESNPC::pAlternateFaceOffsetCoord, Ptr::new(alternate));
+        written.borrow_mut().clear();
+        started(&mut e);
+        e.call(0x0060_8f00, &args![npc, buffer]);
+        assert_eq!(written.borrow()[4], ('B', vec![1]));
+        assert_eq!(calls(&mut e, 0x0096_11e0)[0], vec![alternate]);
+        // No flags: only the base form.
+        set_change_flags(&mut e, 0, 0);
+        written.borrow_mut().clear();
+        e.call(0x0060_8f00, &args![npc, buffer]);
+        assert!(written.borrow().is_empty());
+    }
+
+    /// What `00864980` should hand back, in order, and what it was asked.
+    struct SaveLoadWorld {
+        e: Engine,
+        npc: Ptr<TESNPC>,
+        buffer: u32,
+        bytes: Rc<RefCell<std::collections::VecDeque<Vec<u8>>>>,
+        ids: Rc<RefCell<std::collections::VecDeque<u32>>>,
+    }
+
+    fn save_load_world(flags: u32, version: u32) -> SaveLoadWorld {
+        let mut e = world();
+        let npc = new_npc(&mut e);
+        e.set(npc, TESNPC::iFormID, 0x0777_0001);
+        let buffer = object_with(&mut e, 0x0c30_0000, &[(0, version)]);
+        set_change_flags(&mut e, 0, flags);
+        matrix_storage(&mut e, 1, 2);
+        let bytes: Rc<RefCell<std::collections::VecDeque<Vec<u8>>>> =
+            Rc::new(RefCell::new(Default::default()));
+        let queue = bytes.clone();
+        e.register_double(0x0086_4980, move |e, a| {
+            let next = queue.borrow_mut().pop_front().expect("a queued load");
+            assert!(next.len() as u32 <= a[2], "{} > {}", next.len(), a[2]);
+            e.mem.write(a[1], &next);
+            Ret::default()
+        });
+        let ids: Rc<RefCell<std::collections::VecDeque<u32>>> =
+            Rc::new(RefCell::new(Default::default()));
+        let queue = ids.clone();
+        e.register_double(0x0086_48a0, move |_, _| {
+            ret(queue.borrow_mut().pop_front().expect("a queued form id"))
+        });
+        e.register(LOOKUP_FORM, |_, a| ret(a[0]));
+        SaveLoadWorld {
+            e,
+            npc,
+            buffer,
+            bytes,
+            ids,
+        }
+    }
+
+    #[test]
+    fn load_reads_npc_data_class_and_the_race_with_its_follow_on_changes() {
+        // Data and class only; the load flag 0042ce90 adds the 0x1b mask.
+        let mut w = save_load_world(0x200 | 0x400, 0);
+        let data: Vec<u8> = (1..=0x1c).collect();
+        w.bytes.borrow_mut().push_back(data.clone());
+        w.ids.borrow_mut().push_back(0x2001);
+        returns(&mut w.e, 0x0042_ce90, 1);
+        started(&mut w.e);
+        w.e.call(0x0060_9220, &args![w.npc, w.buffer]);
+        assert_eq!(w.e.mem.bytes(w.npc.addr() + 0x114, 0x1c), data);
+        assert_eq!(w.e.get(w.npc, TESNPC::pCl), Ptr::new(0x2001));
+        assert_eq!(
+            calls(&mut w.e, 0x005f_1fd0),
+            vec![vec![w.npc.addr(), w.buffer]]
+        );
+        assert_eq!(calls(&mut w.e, 0x005f_20a0), vec![vec![w.npc.addr(), 0x1b]]);
+        assert_eq!(calls(&mut w.e, 0x005d_d560).len(), 1);
+        // A new race: set through 006ecd40; a height equal to the old race's
+        // follows the new race; the original race is read too.
+        let mut w = save_load_world(0x200_0000, 0);
+        let old_race = w.e.mem.alloc(0x600);
+        let new_race = w.e.mem.alloc(0x600);
+        w.e.mem.set_f32(old_race + 0x60, 1.0);
+        w.e.mem.set_f32(new_race + 0x60, 2.0);
+        w.e.mem.set_u32(w.npc.addr() + COMPONENT_RACE + 4, old_race);
+        w.e.set(w.npc, TESNPC::fHeight, 1.0);
+        w.ids.borrow_mut().extend([new_race, 0x3003]);
+        started(&mut w.e);
+        w.e.call(0x0060_9220, &args![w.npc, w.buffer]);
+        assert_eq!(w.e.mem.u32(w.npc.addr() + COMPONENT_RACE + 4), new_race);
+        assert_eq!(w.e.get(w.npc, TESNPC::fHeight), 2.0);
+        assert_eq!(w.e.get(w.npc, TESNPC::pOriginalRace), Ptr::new(0x3003));
+        assert_eq!(calls(&mut w.e, 0x005f_20a0), vec![vec![w.npc.addr(), 0x1b]]);
+        // The same race and a height of its own: nothing changes.
+        let mut w = save_load_world(0x200_0000, 0);
+        let race = w.e.mem.alloc(0x600);
+        w.e.mem.set_f32(race + 0x60, 1.0);
+        w.e.mem.set_u32(w.npc.addr() + COMPONENT_RACE + 4, race);
+        w.e.set(w.npc, TESNPC::fHeight, 1.5);
+        w.ids.borrow_mut().extend([race, 0]);
+        started(&mut w.e);
+        w.e.call(0x0060_9220, &args![w.npc, w.buffer]);
+        assert_eq!(w.e.get(w.npc, TESNPC::fHeight), 1.5);
+        assert!(calls(&mut w.e, 0x005f_20a0).is_empty());
+        assert!(calls(&mut w.e, 0x006e_cd40).is_empty());
+    }
+
+    #[test]
+    fn load_applies_the_face_and_reports_what_changed() {
+        // A new alternate coordinate with one changed element.
+        let mut w = save_load_world(0x800, 0xd);
+        let mut queue = w.bytes.borrow_mut();
+        queue.push_back(vec![1]);
+        for k in 0..8u32 {
+            queue.push_back(
+                (if k == 3 { 5.0f32 } else { 0.0 })
+                    .to_bits()
+                    .to_le_bytes()
+                    .to_vec(),
+            );
+        }
+        queue.push_back(0.5f32.to_bits().to_le_bytes().to_vec());
+        queue.push_back(0x0102_0304u32.to_le_bytes().to_vec());
+        drop(queue);
+        w.ids.borrow_mut().extend([0x4001, 0x4002]);
+        w.e.set(w.npc, TESNPC::pHair, Ptr::new(0x4001));
+        w.e.set(w.npc, TESNPC::pEyeColor, Ptr::new(0x4002));
+        w.e.set(w.npc, TESNPC::fHairLength, 0.5);
+        w.e.set(w.npc, TESNPC::iHairColor, 0x0102_0304);
+        started(&mut w.e);
+        w.e.call(0x0060_9220, &args![w.npc, w.buffer]);
+        let alternate = w.e.get(w.npc, TESNPC::pAlternateFaceOffsetCoord);
+        assert!(!alternate.is_null());
+        assert_eq!(calls(&mut w.e, 0x0065_21f0), vec![vec![alternate.addr()]]);
+        assert_eq!(
+            calls(&mut w.e, VECTOR_CONSTRUCTOR_ITERATOR),
+            vec![vec![alternate.addr(), 0x20, 4, 0x0044_9610, 0x0044_9680]]
+        );
+        // Element 3 is the second element of the second matrix.
+        assert_eq!(w.e.mem.f32(alternate.addr() + 0x20 + 4), 5.0);
+        assert_eq!(calls(&mut w.e, 0x005d_d560), vec![vec![w.npc.addr()]]);
+        assert_eq!(calls(&mut w.e, 0x005f_20a0), vec![vec![w.npc.addr(), 8]]);
+        assert_eq!(w.e.get(w.npc, TESNPC::pHair), Ptr::new(0x4001));
+        // The same face again changes nothing.
+        let mut w = save_load_world(0x800, 0xd);
+        let mut queue = w.bytes.borrow_mut();
+        queue.push_back(vec![0]);
+        for _ in 0..8 {
+            queue.push_back(vec![0, 0, 0, 0]);
+        }
+        queue.push_back(0.5f32.to_bits().to_le_bytes().to_vec());
+        queue.push_back(0x0102_0304u32.to_le_bytes().to_vec());
+        drop(queue);
+        w.ids.borrow_mut().extend([0x4001, 0x4002]);
+        w.e.set(w.npc, TESNPC::pHair, Ptr::new(0x4001));
+        w.e.set(w.npc, TESNPC::pEyeColor, Ptr::new(0x4002));
+        w.e.set(w.npc, TESNPC::fHairLength, 0.5);
+        w.e.set(w.npc, TESNPC::iHairColor, 0x0102_0304);
+        started(&mut w.e);
+        w.e.call(0x0060_9220, &args![w.npc, w.buffer]);
+        assert!(calls(&mut w.e, 0x005f_20a0).is_empty());
+        assert!(calls(&mut w.e, 0x0065_21f0).is_empty());
+        // A different hair colour sets the face bit.
+        let mut w = save_load_world(0x800, 0xd);
+        let mut queue = w.bytes.borrow_mut();
+        queue.push_back(vec![0]);
+        for _ in 0..8 {
+            queue.push_back(vec![0, 0, 0, 0]);
+        }
+        queue.push_back(0.5f32.to_bits().to_le_bytes().to_vec());
+        queue.push_back(0x0102_0305u32.to_le_bytes().to_vec());
+        drop(queue);
+        w.ids.borrow_mut().extend([0x4001, 0x4002]);
+        w.e.set(w.npc, TESNPC::pHair, Ptr::new(0x4001));
+        w.e.set(w.npc, TESNPC::pEyeColor, Ptr::new(0x4002));
+        w.e.set(w.npc, TESNPC::fHairLength, 0.5);
+        w.e.set(w.npc, TESNPC::iHairColor, 0x0102_0304);
+        started(&mut w.e);
+        w.e.call(0x0060_9220, &args![w.npc, w.buffer]);
+        assert_eq!(calls(&mut w.e, 0x005f_20a0), vec![vec![w.npc.addr(), 8]]);
+    }
+
+    #[test]
+    fn load_rebuilds_the_head_part_list_for_newer_saves() {
+        // The list held part 0xb001 and the save has the same one: no change.
+        for (loaded, differs) in [(0xb001u32, false), (0xb002, true)] {
+            let mut w = save_load_world(0x800, 0xe);
+            let mut queue = w.bytes.borrow_mut();
+            queue.push_back(vec![0]);
+            for _ in 0..8 {
+                queue.push_back(vec![0, 0, 0, 0]);
+            }
+            queue.push_back(vec![0, 0, 0, 0]);
+            queue.push_back(vec![0, 0, 0, 0]);
+            drop(queue);
+            // hair and eyes (null on both sides), then the part id.
+            w.ids.borrow_mut().extend([0, 0, loaded]);
+            let list = w.npc.addr() + 0x1dc;
+            w.e.mem.set_u32(list, 0xb001);
+            returns(&mut w.e, 0x0086_4a60, 1);
+            // The array and list doubles: a Rust vector stands in for the
+            // array; the list in memory is rebuilt by the append double.
+            let array = Rc::new(RefCell::new(Vec::<u32>::new()));
+            let target = array.clone();
+            w.e.register_double(0x007c_b2e0, move |e, a| {
+                target.borrow_mut().push(e.mem.u32(a[1]));
+                Ret::default()
+            });
+            w.e.register_double(0x0047_0470, move |e, a| {
+                e.mem.set_u32(a[0], 0);
+                e.mem.set_u32(a[0] + 4, 0);
+                Ret::default()
+            });
+            w.e.register_double(0x005a_e3d0, move |e, a| {
+                if e.mem.u32(a[0]) == 0 {
+                    e.mem.set_u32(a[0], e.mem.u32(a[1]));
+                }
+                Ret::default()
+            });
+            let target = array.clone();
+            w.e.register_double(0x0071_9b20, move |e, a| {
+                let item = e.mem.u32(a[1]);
+                ret(target
+                    .borrow()
+                    .iter()
+                    .position(|v| *v == item)
+                    .map_or(u32::MAX, |p| p as u32))
+            });
+            let target = array.clone();
+            w.e.register_double(0x009a_4320, move |_, a| {
+                target.borrow_mut().remove(a[1] as usize);
+                Ret::default()
+            });
+            let target = array.clone();
+            w.e.register_double(0x0044_ddc0, move |_, _| ret(target.borrow().len() as u32));
+            started(&mut w.e);
+            w.e.call(0x0060_9220, &args![w.npc, w.buffer]);
+            assert_eq!(w.e.mem.u32(list), loaded);
+            assert_eq!(calls(&mut w.e, 0x0060_ba40).len(), 1);
+            assert_eq!(calls(&mut w.e, 0x0060_bae0).len(), 1);
+            if differs {
+                assert_eq!(calls(&mut w.e, 0x005f_20a0), vec![vec![w.npc.addr(), 8]]);
+            } else {
+                assert!(calls(&mut w.e, 0x005f_20a0).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn load_applies_the_sex_bit_and_the_load_flag() {
+        let mut w = save_load_world(0x100_0000, 0);
+        w.bytes.borrow_mut().push_back(vec![1]);
+        started(&mut w.e);
+        w.e.call(0x0060_9220, &args![w.npc, w.buffer]);
+        assert_eq!(
+            calls(&mut w.e, 0x0047_dd50),
+            vec![vec![w.npc.addr() + COMPONENT_ACTOR_BASE_DATA, 1, 1, 1]]
+        );
+        assert_eq!(calls(&mut w.e, 0x005f_20a0), vec![vec![w.npc.addr(), 0x1b]]);
+        // The stored bit equals the NPC's: nothing is set.
+        let mut w = save_load_world(0x100_0000, 0);
+        w.bytes.borrow_mut().push_back(vec![0]);
+        started(&mut w.e);
+        w.e.call(0x0060_9220, &args![w.npc, w.buffer]);
+        assert!(calls(&mut w.e, 0x0047_dd50).is_empty());
+        assert!(calls(&mut w.e, 0x005f_20a0).is_empty());
+    }
+
+    #[test]
+    fn revert_undoes_what_the_buffer_no_longer_carries() {
+        // Race: loaded flag but no saved flag -> the original race returns.
+        let mut e = world();
+        let npc = new_npc(&mut e);
+        let race = e.mem.alloc(0x600);
+        e.mem.set_u32(npc.addr() + COMPONENT_RACE + 4, race);
+        let original = e.mem.alloc(0x600);
+        e.set(npc, TESNPC::pOriginalRace, Ptr::new(original));
+        e.mem.set_f32(race + 0x60, 1.0);
+        e.set(npc, TESNPC::fHeight, 1.0);
+        set_change_flags(&mut e, 0x200_0000 | 0x800 | 0x100_0000, 0);
+        let alternate = e.mem.alloc(0x80);
+        e.set(npc, TESNPC::pAlternateFaceOffsetCoord, Ptr::new(alternate));
+        e.set(npc, TESNPC::iActorBaseFlags, 1);
+        let buffer = e.mem.alloc(0x40);
+        started(&mut e);
+        e.call(0x0060_99f0, &args![npc, buffer]);
+        assert_eq!(calls(&mut e, 0x009d_ace0), vec![vec![npc.addr(), buffer]]);
+        assert_eq!(e.mem.u32(npc.addr() + COMPONENT_RACE + 4), original);
+        assert!(e.get(npc, TESNPC::pOriginalRace).is_null());
+        assert_eq!(calls(&mut e, 0x005d_9ff0), vec![vec![alternate, 3]]);
+        assert!(e.get(npc, TESNPC::pAlternateFaceOffsetCoord).is_null());
+        assert_eq!(calls(&mut e, 0x0047_0470), vec![vec![npc.addr() + 0x1dc]]);
+        // The sex bit (set) is cleared: SetFlagBit(1, true, 1).
+        assert_eq!(
+            calls(&mut e, 0x0047_dd50),
+            vec![vec![npc.addr() + COMPONENT_ACTOR_BASE_DATA, 1, 0, 1]]
+        );
+        assert_eq!(calls(&mut e, 0x005d_d560), vec![vec![npc.addr()]]);
+        assert_eq!(calls(&mut e, 0x005f_20a0), vec![vec![npc.addr(), 0x1b]]);
+        // The saved flags are also set: nothing is undone.
+        set_change_flags(
+            &mut e,
+            0x200_0000 | 0x800 | 0x100_0000,
+            0x200_0000 | 0x800 | 0x100_0000,
+        );
+        e.set(npc, TESNPC::pOriginalRace, Ptr::new(original));
+        e.call_log = Some(vec![]);
+        e.call(0x0060_99f0, &args![npc, buffer]);
+        assert!(calls(&mut e, 0x005f_20a0).is_empty());
+        assert!(calls(&mut e, 0x005d_9ff0).is_empty());
+    }
+
+    /// A world for `LoadFaceGen`: the old load calls hand back queued bytes
+    /// and ids.
+    fn old_load_world() -> SaveLoadWorld {
+        let mut w = save_load_world(0, 0);
+        let queue = w.bytes.clone();
+        w.e.register_double(0x0048_4d00, move |e, a| {
+            let next = queue.borrow_mut().pop_front().expect("a queued load");
+            assert!(next.len() as u32 <= a[2]);
+            e.mem.write(a[1], &next);
+            Ret::default()
+        });
+        let queue = w.ids.clone();
+        w.e.register_double(0x0048_4d40, move |e, a| {
+            let id = queue.borrow_mut().pop_front().expect("a queued id");
+            e.mem.set_u32(a[1], id);
+            Ret::default()
+        });
+        w
+    }
+
+    /// Queues the loads of a face with no element changes: 8 zero elements,
+    /// the race, hair and eyes ids, the hair length and colour, the sex bit.
+    fn queue_old_face(w: &SaveLoadWorld, ids: [u32; 3], length: f32, color: u32, bit: u8) {
+        let mut bytes = w.bytes.borrow_mut();
+        for _ in 0..8 {
+            bytes.push_back(vec![0, 0, 0, 0]);
+        }
+        bytes.push_back(length.to_bits().to_le_bytes().to_vec());
+        bytes.push_back(color.to_le_bytes().to_vec());
+        bytes.push_back(vec![bit]);
+        w.ids.borrow_mut().extend(ids);
+    }
+
+    #[test]
+    fn old_face_load_stops_when_nothing_differs_and_logs_missing_forms() {
+        let mut w = old_load_world();
+        let race = w.e.mem.alloc(0x600);
+        w.e.mem.set_u32(w.npc.addr() + COMPONENT_RACE + 4, race);
+        w.e.set(w.npc, TESNPC::pHair, Ptr::new(0x4001));
+        w.e.set(w.npc, TESNPC::pEyeColor, Ptr::new(0x4002));
+        w.e.set(w.npc, TESNPC::fHairLength, 0.5);
+        w.e.set(w.npc, TESNPC::iHairColor, 0x0102_0304);
+        queue_old_face(&w, [race, 0x4001, 0x4002], 0.5, 0x0102_0304, 0);
+        let actor = w.e.mem.alloc(0x100);
+        started(&mut w.e);
+        w.e.call(0x0060_9f60, &args![w.npc, actor]);
+        assert!(calls(&mut w.e, 0x005d_d560).is_empty());
+        // The sex bit is always written back.
+        assert_eq!(
+            calls(&mut w.e, 0x0047_dd50),
+            vec![vec![w.npc.addr() + COMPONENT_ACTOR_BASE_DATA, 1, 0, 1]]
+        );
+        assert!(calls(&mut w.e, LOG_MESSAGE).is_empty());
+        // Ids that name nothing are logged with the NPC's name, and count
+        // as changes.
+        let mut w = old_load_world();
+        w.e.register(LOOKUP_FORM, |_, _| ret(0));
+        returns(&mut w.e, 0x0040_8da0, 0x7777);
+        queue_old_face(&w, [0x3001, 0x3002, 0x3003], 0.5, 0, 0);
+        let actor = object_with(&mut w.e, 0x0c44_0000, &[(0x1ac, 0), (0x1b0, 0)]);
+        started(&mut w.e);
+        w.e.call(0x0060_9f60, &args![w.npc, actor]);
+        let logged = calls(&mut w.e, LOG_MESSAGE);
+        assert_eq!(
+            logged,
+            vec![
+                vec![0x0104_aa48, 0x7777],
+                vec![0x0104_aa20, 0x7777, 0x3001],
+                vec![0x0104_a9ec, 0x7777],
+                vec![0x0104_a9c4, 0x7777, 0x3002],
+                vec![0x0104_a99c, 0x7777, 0x3003],
+            ]
+        );
+    }
+
+    #[test]
+    fn old_face_load_rebuilds_the_actors_head_when_something_changed() {
+        let mut w = old_load_world();
+        let race = w.e.mem.alloc(0x600);
+        w.e.mem.set_u32(w.npc.addr() + COMPONENT_RACE + 4, race);
+        // The stored face has another hair colour.
+        queue_old_face(&w, [race, 0, 0], 0.0, 0x00ff_00ff, 1);
+        let first_head = w.e.mem.alloc(0x20);
+        let second_head = w.e.mem.alloc(0x20);
+        let parent = object_with(&mut w.e, 0x0c40_0000, &[(0xe8, 0)]);
+        let root = object_with(&mut w.e, 0x0c41_0000, &[]);
+        let node = object_with(&mut w.e, 0x0c42_0000, &[(0xc, root)]);
+        let actor = object_with(
+            &mut w.e,
+            0x0c43_0000,
+            &[(0x1ac, first_head), (0x1b0, second_head)],
+        );
+        returns(&mut w.e, 0x0043_fcd0, node);
+        returns(&mut w.e, 0x008b_70d0, 0x6100);
+        returns(&mut w.e, 0x0049_6940, 0x6200);
+        returns(&mut w.e, 0x0053_7bd0, 0x6300);
+        w.e.register_double(0x0096_11e0, move |_, a| {
+            ret(if a[0] == first_head || a[0] == second_head {
+                parent
+            } else {
+                1
+            })
+        });
+        returns(&mut w.e, 0x005d_9f90, 0x6400);
+        started(&mut w.e);
+        w.e.call(0x0060_9f60, &args![w.npc, actor]);
+        // The head nodes are removed from the palette and their parent told.
+        assert_eq!(
+            calls(&mut w.e, 0x00a6_e8e0),
+            vec![vec![second_head, 0x6300], vec![first_head, 0x6300]]
+        );
+        assert_eq!(
+            calls(&mut w.e, slot(0x0c40_0000, 0xe8)),
+            vec![vec![parent, second_head], vec![parent, first_head]]
+        );
+        assert_eq!(calls(&mut w.e, 0x005d_d560), vec![vec![w.npc.addr()]]);
+        // The face-gen parameters go to both heads.
+        let params = calls(&mut w.e, FACE_PARAMS_CONSTRUCT);
+        assert_eq!(params.len(), 1);
+        assert_eq!(
+            calls(&mut w.e, 0x0061_41f0),
+            vec![vec![race, w.npc.addr(), params[0][0], 0, 0]]
+        );
+        assert_eq!(
+            calls(&mut w.e, APPLY_FACE_PARAMS),
+            vec![
+                vec![first_head, params[0][0]],
+                vec![second_head, params[0][0]]
+            ]
+        );
+        assert_eq!(
+            calls(&mut w.e, FACE_PARAMS_DESTROY),
+            vec![vec![params[0][0]]]
+        );
+        // The new colour and sex bit were stored.
+        assert_eq!(w.e.get(w.npc, TESNPC::iHairColor), 0x00ff_00ff);
+        assert_eq!(
+            calls(&mut w.e, 0x0047_dd50),
+            vec![vec![w.npc.addr() + COMPONENT_ACTOR_BASE_DATA, 1, 1, 1]]
+        );
+        // The head is loaded when the biped answers.
+        assert_eq!(calls(&mut w.e, 0x0065_1b30).len(), 1);
+    }
+
+    #[test]
+    fn first_person_model_refresh_calls_the_process_and_repositions_the_player_node() {
+        let mut e = world();
+        let this = new_npc(&mut e);
+        e.map(0x011a_9000, 0x1000);
+        let matrix: Vec<u8> = (0..0x24u8).collect();
+        e.mem.write(0x011a_9448, &matrix);
+        let process = object_with(&mut e, 0x0c50_0000, &[(0x464, 0)]);
+        let actor = e.mem.alloc(0x100);
+        e.mem.set_u32(actor + 0x68, process);
+        let flag_seen = Rc::new(RefCell::new(vec![]));
+        let seen = flag_seen.clone();
+        e.register_double(slot(0x0c50_0000, 0x464), move |e, _| {
+            seen.borrow_mut().push(e.mem.u8(0x011c_5cb4));
+            Ret::default()
+        });
+        started(&mut e);
+        e.call(0x0060_a890, &args![this, actor]);
+        assert_eq!(*flag_seen.borrow(), vec![1]);
+        assert_eq!(e.mem.u8(0x011c_5cb4), 0);
+        assert!(calls(&mut e, 0x0095_0bb0).is_empty());
+        // The player: the node under the first-person biped gets the matrix.
+        e.set_global(PLAYER_SINGLETON, actor);
+        returns(&mut e, 0x0095_0bb0, 0x6600);
+        returns(&mut e, 0x0045_bc00, 0x6700);
+        returns(&mut e, 0x0056_fac0, 0x6800);
+        e.call_log = Some(vec![]);
+        e.call(0x0060_a890, &args![this, actor]);
+        assert_eq!(calls(&mut e, 0x0095_0bb0), vec![vec![actor, 1]]);
+        assert_eq!(calls(&mut e, 0x0045_bc00), vec![vec![0x6600, 0]]);
+        let rotate = calls(&mut e, 0x0056_fac0);
+        assert_eq!(rotate.len(), 1);
+        assert_eq!(rotate[0][0], actor);
+        assert_ne!(rotate[0][2], 0x011a_9448);
+        assert_eq!(e.mem.bytes(rotate[0][2], 0x24), matrix);
+        assert_eq!(calls(&mut e, 0x0043_fa80), vec![vec![0x6700, 0x6800]]);
+        // Without a biped node nothing is rotated.
+        returns(&mut e, 0x0095_0bb0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0060_a890, &args![this, actor]);
+        assert!(calls(&mut e, 0x0043_fa80).is_empty());
+        assert!(calls(&mut e, 0x0045_bc00).is_empty());
+    }
+
+    /// The nodes `SwapEyes` works on.
+    struct EyeWorld {
+        e: Engine,
+        npc: Ptr<TESNPC>,
+        head: u32,
+        left: u32,
+        right: u32,
+        texture: u32,
+    }
+
+    fn eye_world() -> EyeWorld {
+        let mut e = world();
+        let npc = new_npc(&mut e);
+        let left = object_with(&mut e, 0x0c60_0000, &[(0xfc, 0), (0x1c, 0)]);
+        let right = object_with(&mut e, 0x0c61_0000, &[(0xfc, 0), (0x1c, 0)]);
+        let other = object_with(&mut e, 0x0c62_0000, &[(0x1c, 0)]);
+        // The children report themselves as the node behind virtual 0x1c.
+        for (object, table) in [
+            (left, 0x0c60_0000u32),
+            (right, 0x0c61_0000),
+            (other, 0x0c62_0000),
+        ] {
+            returns(&mut e, slot(table, 0x1c), object);
+        }
+        let head = object_with(&mut e, 0x0c63_0000, &[(0x9c, 0)]);
+        e.mem.set_u32(npc.addr() + 0x1c4, head);
+        let names = [
+            text(&mut e, "FaceGenEyeLeft"),
+            text(&mut e, "FaceGenEyeRight"),
+            text(&mut e, "Other"),
+        ];
+        let children = [left, right, other];
+        returns(&mut e, 0x0043_b480, 3);
+        e.register_double(0x0043_b4a0, move |_, a| ret(children[a[1] as usize]));
+        e.register_double(0x0041_3f40, move |_, a| ret(a[0]));
+        e.register_double(0x0043_b1b0, move |_, a| {
+            ret(names[children.iter().position(|c| *c == a[0]).unwrap()])
+        });
+        let texture = e.mem.alloc(0x20);
+        e.register_double(0x0045_68c0, move |e, a| {
+            e.mem.set_u32(a[2], texture);
+            Ret::default()
+        });
+        e.set_global(TES_SINGLETON, 0x4545u32);
+        e.mem.set_cstr(0x0104_aac0, b"FaceGenEyeLeft");
+        e.mem.set_cstr(0x0104_aab0, b"FaceGenEyeRight");
+        returns(&mut e, 0x0050_d100, 0x6a00);
+        EyeWorld {
+            e,
+            npc,
+            head,
+            left,
+            right,
+            texture,
+        }
+    }
+
+    #[test]
+    fn swap_eyes_does_nothing_without_a_biped_head_node() {
+        let mut e = world();
+        let npc = new_npc(&mut e);
+        started(&mut e);
+        e.call(0x0060_a950, &args![npc, 0u32]);
+        assert_eq!(calls(&mut e, NI_POINTER_CONSTRUCT).len(), 2);
+        assert_eq!(calls(&mut e, NI_POINTER_DESTROY).len(), 2);
+        assert!(calls(&mut e, 0x0043_b480).is_empty());
+    }
+
+    /// Gives both eye shapes data objects of a usable size (10) that answer
+    /// the virtual 0xfc; returns the data object.
+    fn usable_shapes(w: &mut EyeWorld) -> u32 {
+        let usable = object_with(&mut w.e, 0x0c64_0000, &[(0xfc, 0)]);
+        returns(&mut w.e, 0x0043_b230, usable);
+        returns(&mut w.e, 0x0044_1110, 10);
+        usable
+    }
+
+    #[test]
+    fn swap_eyes_retextures_usable_eye_shapes() {
+        let mut w = eye_world();
+        let eyes = w.e.mem.alloc(0x40);
+        returns(&mut w.e, 0x0040_8da0, 0x7a7a);
+        // Both shapes have data of a usable size (8 to 12).
+        let usable = usable_shapes(&mut w);
+        let shapes = Rc::new(RefCell::new(vec![]));
+        let seen = shapes.clone();
+        w.e.register_double(0x0050_d100, move |_, a| {
+            seen.borrow_mut().push(a[0]);
+            ret(0x6a00 + a[0] % 0x100)
+        });
+        started(&mut w.e);
+        w.e.call(0x0060_a950, &args![w.npc, eyes]);
+        assert_eq!(*shapes.borrow(), vec![w.left, w.right]);
+        // The path is built from the eyes' texture name.
+        let build = calls(&mut w.e, 0x0040_6f60);
+        assert_eq!(build.len(), 1);
+        assert_eq!(&build[0][1..], &[0x0104_a64c, 0x7a7a]);
+        assert_eq!(calls(&mut w.e, 0x0040_8da0), vec![vec![eyes + 0x24]]);
+        // The texture is created once and given to both usable nodes.
+        let created = calls(&mut w.e, 0x0045_68c0);
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0][0], 0x4545);
+        assert_eq!(
+            calls(&mut w.e, slot(0x0c64_0000, 0xfc)),
+            vec![vec![usable, 0, w.texture], vec![usable, 0, w.texture]]
+        );
+        assert!(calls(&mut w.e, 0x00aa_13e0).is_empty());
+        // Nothing else: the head's eye nodes are not looked up again.
+        assert!(calls(&mut w.e, slot(0x0c63_0000, 0x9c)).is_empty());
+        assert_eq!(calls(&mut w.e, 0x0040_37d0).len(), 1);
+        // The default texture for no eyes.
+        let mut w = eye_world();
+        usable_shapes(&mut w);
+        started(&mut w.e);
+        w.e.call(0x0060_a950, &args![w.npc, 0u32]);
+        let build = calls(&mut w.e, 0x0040_6f60);
+        assert_eq!(&build[0][1..], &[0x0104_aa80]);
+    }
+
+    #[test]
+    fn swap_eyes_attaches_a_new_texturing_property_to_unusable_shapes() {
+        let mut w = eye_world();
+        // Data sizes outside 8..=12.
+        returns(&mut w.e, 0x0043_b230, 0x6b00);
+        returns(&mut w.e, 0x0044_1110, 3);
+        let memory = w.e.mem.alloc(0x30);
+        returns(&mut w.e, 0x00aa_13e0, memory);
+        returns(&mut w.e, 0x00a6_aa40, memory);
+        // The left node already has a property of type 5.
+        let left = w.left;
+        w.e.register_double(0x00a5_9d30, move |_, a| ret((a[0] == left) as u32));
+        // The property's slot holder: first the empty slot, then it is filled.
+        let slot_cell = w.e.mem.alloc(8);
+        returns(&mut w.e, 0x0087_7a30, slot_cell);
+        let object = w.e.mem.alloc(0x20);
+        returns(&mut w.e, 0x00a6_9dd0, object);
+        started(&mut w.e);
+        w.e.call(0x0060_a950, &args![w.npc, 0u32]);
+        assert_eq!(calls(&mut w.e, 0x00aa_13e0), vec![vec![0x30]]);
+        assert_eq!(calls(&mut w.e, 0x005b_8fc0), vec![vec![memory, w.texture]]);
+        assert_eq!(calls(&mut w.e, 0x004f_3200), vec![vec![memory, 3]]);
+        // fn_0060aeb0 stored a new 16-byte object and told it 0xf00/8.
+        assert_eq!(calls(&mut w.e, 0x0096_ae90).len(), 1);
+        assert_eq!(
+            calls(&mut w.e, 0x004f_32e0),
+            vec![vec![object, 2, 0xf00, 8]]
+        );
+        assert_eq!(calls(&mut w.e, 0x00a5_b230), vec![vec![w.left, 5]]);
+        assert_eq!(
+            calls(&mut w.e, 0x0043_9410),
+            vec![vec![w.left, memory], vec![w.right, memory]]
+        );
+        // The eye nodes of the head are prepared at the end.
+        assert_eq!(calls(&mut w.e, slot(0x0c63_0000, 0x9c)).len(), 2);
+        assert_eq!(calls(&mut w.e, 0x0043_8170).len(), 2);
+        assert_eq!(calls(&mut w.e, 0x0043_81b0).len(), 2);
+        let _ = w.head;
+    }
+
+    #[test]
+    fn texturing_property_helper_fills_an_empty_slot_once() {
+        let mut e = world();
+        let owner = e.mem.alloc(0x80);
+        let slot_cell = e.mem.alloc(8);
+        returns(&mut e, 0x0087_7a30, slot_cell);
+        let object = e.mem.alloc(0x10);
+        returns(&mut e, 0x00a6_9dd0, object);
+        started(&mut e);
+        e.call(0x0060_aeb0, &args![owner, 7u32]);
+        assert_eq!(calls(&mut e, 0x0087_7a30), vec![vec![owner + 0x1c, 0]]);
+        let stored = calls(&mut e, 0x0096_ae90);
+        assert_eq!(stored.len(), 1);
+        assert_eq!(&stored[0][..2], &[owner + 0x1c, 0]);
+        assert_eq!(e.mem.u32(stored[0][2]), object);
+        assert_eq!(calls(&mut e, 0x004f_32e0), vec![vec![object, 7, 0xf00, 8]]);
+        // A filled slot is used as it is.
+        let filled = e.mem.alloc(0x10);
+        e.mem.set_u32(slot_cell, filled);
+        e.call_log = Some(vec![]);
+        e.call(0x0060_aeb0, &args![owner, 9u32]);
+        assert!(calls(&mut e, 0x0096_ae90).is_empty());
+        assert_eq!(calls(&mut e, 0x004f_32e0), vec![vec![filled, 9, 0xf00, 8]]);
+        // And the plain forwarder.
+        e.call_log = Some(vec![]);
+        e.call(0x0060_af60, &args![0x1000u32, 0x1_0005u32]);
+        assert_eq!(calls(&mut e, 0x004f_32e0), vec![vec![0x1000, 5, 0xf00, 8]]);
+    }
+
+    #[test]
+    fn default_model_list_collects_the_biped_models_and_the_extra_one() {
+        let mut e = world();
+        let npc = new_npc(&mut e);
+        e.set(npc, TESNPC::iActorBaseFlags, 1);
+        let items: Vec<u32> = (0..6).map(|_| e.mem.alloc(0x100)).collect();
+        let held = items.clone();
+        // Items in slots 0, 2 and 5; slot 5's is covered by slot 2's model.
+        e.register_double(0x0048_29c0, move |_, a| {
+            ret(match a[2] {
+                0 => held[0],
+                2 => held[2],
+                5 => held[5],
+                _ => 0,
+            })
+        });
+        e.register_double(0x0048_11e0, |_, a| ret(0x9000 + a[1] + (a[0] & 0xfff)));
+        let covering = items[2] + 0x70;
+        e.register_double(0x0048_0af0, move |_, a| {
+            ret((a[0] == covering && a[1] == 5) as u32)
+        });
+        e.register_double(0x0096_a2d0, |_, a| ret(a[0]));
+        let appended = Rc::new(RefCell::new(vec![]));
+        let seen = appended.clone();
+        e.register_double(0x005a_e3d0, move |e, a| {
+            seen.borrow_mut().push(e.mem.u32(a[1]));
+            Ret::default()
+        });
+        let list = e.call(0x0060_af90, &args![npc, 1u32, 0u32]).u32();
+        assert_ne!(list, 0);
+        // Sex 1 (female): model = 0x9000 + 1 + low bits of the model address.
+        let model = |item: u32| 0x9000 + 1 + ((item + 0x70) & 0xfff);
+        assert_eq!(*appended.borrow(), vec![model(items[0]), model(items[2])]);
+        // Only the extra model.
+        appended.borrow_mut().clear();
+        let source = e.mem.alloc(0x100);
+        returns(&mut e, 0x0048_2910, source);
+        // The object at `source + 0x3c` is embedded in the source: it needs a vtable.
+        object_with(&mut e, 0x0c71_0000, &[(0x14, 0x9998)]);
+        e.mem.set_u32(source + 0x3c, 0x0c71_0000);
+        e.call(0x0060_af90, &args![npc, 0u32, 1u32]);
+        assert_eq!(*appended.borrow(), vec![0x9998]);
+        // No source: nothing.
+        appended.borrow_mut().clear();
+        returns(&mut e, 0x0048_2910, 0);
+        e.call(0x0060_af90, &args![npc, 0u32, 1u32]);
+        assert!(appended.borrow().is_empty());
+    }
+
+    #[test]
+    fn actor_flag_testers_ask_for_the_0x800_and_0x1000_bits() {
+        let mut e = world();
+        let flags = block(&mut e, 0x20, &[(4, 0x800)]);
+        assert_eq!(e.call(0x0060_b1d0, &args![flags]).u32(), 1);
+        assert_eq!(e.call(0x0060_b1f0, &args![flags]).u32(), 0);
+        e.mem.set_u32(flags + 4, 0x1000);
+        assert_eq!(e.call(0x0060_b1d0, &args![flags]).u32(), 0);
+        assert_eq!(e.call(0x0060_b1f0, &args![flags]).u32(), 1);
+    }
+
+    const ACT_TARGET: u32 = 0x0c80_0000;
+    const ACT_ACTIVATOR: u32 = 0x0c81_0000;
+    const ACT_TARGET_PROCESS: u32 = 0x0c82_0000;
+    const ACT_ACTIVATOR_PROCESS: u32 = 0x0c83_0000;
+
+    /// Two actors with processes whose virtual slots all answer 0 unless a
+    /// test changes them with `returns(.., slot(TABLE, offset), value)`.
+    struct ActivateWorld {
+        e: Engine,
+        this: Ptr<TESNPC>,
+        target: u32,
+        activator: u32,
+        target_process: u32,
+        activator_process: u32,
+        position: u32,
+    }
+
+    fn zero_slots(offsets: &[u32]) -> Vec<(u32, u32)> {
+        offsets.iter().map(|o| (*o, 0)).collect()
+    }
+
+    fn activate_world() -> ActivateWorld {
+        let mut e = world();
+        let this = new_npc(&mut e);
+        e.mem.set_u32(0x0101_62c0, 2.0f32.to_bits());
+        let position = block(&mut e, 0x10, &[(0, 0x11), (4, 0x22), (8, 0x33)]);
+        let mut target_slots = zero_slots(&[
+            0x2e8, 0x22c, 0x230, 0x234, 0x304, 0x428, 0x214, 0x218, 0x17c, 0x418, 0x48, 0x2c8,
+        ]);
+        target_slots.push((0x1f4, position));
+        let mut activator_slots = zero_slots(&[0x28c, 0x218, 0x280, 0x214, 0x304]);
+        activator_slots.push((0x1f4, position));
+        let process_slots = zero_slots(&[
+            0x52c, 0x610, 0x27c, 0x5a0, 0x600, 0x4d4, 0x614, 0x294, 0x288, 0x33c, 0x110, 0x604,
+            0x3fc, 0x4ec,
+        ]);
+        let target_process = object_with(&mut e, ACT_TARGET_PROCESS, &process_slots);
+        let activator_process = object_with(&mut e, ACT_ACTIVATOR_PROCESS, &process_slots);
+        let target = object_with(&mut e, ACT_TARGET, &target_slots);
+        let activator = object_with(&mut e, ACT_ACTIVATOR, &activator_slots);
+        e.mem.set_u32(target + 0x68, target_process);
+        e.mem.set_u32(activator + 0x68, activator_process);
+        ActivateWorld {
+            e,
+            this,
+            target,
+            activator,
+            target_process,
+            activator_process,
+            position,
+        }
+    }
+
+    impl ActivateWorld {
+        fn activate(&mut self, item: u32, count: u32) -> bool {
+            let (this, target, activator) = (self.this, self.target, self.activator);
+            self.e
+                .call(
+                    0x0060_7990,
+                    &args![this, target, activator, 0u32, item, count],
+                )
+                .bool()
+        }
+
+        /// Sets what virtual slot `offset` of one of the objects answers.
+        fn answer(&mut self, table: u32, offset: u32, value: u32) {
+            returns(&mut self.e, slot(table, offset), value);
+        }
+    }
+
+    #[test]
+    fn activate_refuses_what_is_not_a_live_actor_with_a_free_process() {
+        // Dead or disabled (virtual 0x2e8).
+        let mut w = activate_world();
+        w.answer(ACT_TARGET, 0x2e8, 1);
+        assert!(!w.activate(0, 0));
+        // No process.
+        let mut w = activate_world();
+        w.e.mem.set_u32(w.target + 0x68, 0);
+        assert!(!w.activate(0, 0));
+        // Process virtual 0x610 set.
+        let mut w = activate_world();
+        w.answer(ACT_TARGET_PROCESS, 0x610, 1);
+        assert!(!w.activate(0, 0));
+        // Process virtual 0x52c set and the target not answering 0x22c.
+        let mut w = activate_world();
+        w.answer(ACT_TARGET_PROCESS, 0x52c, 1);
+        assert!(!w.activate(0, 0));
+        // ... but answering it passes this test (and goes on to the rest).
+        w.answer(ACT_TARGET, 0x22c, 1);
+        w.e.register(0x004f_8960, |_, _| ret(5));
+        assert!(w.activate(0, 0));
+    }
+
+    #[test]
+    fn activating_the_downed_player_moves_the_clock_back() {
+        let mut w = activate_world();
+        w.e.set_global(PLAYER_SINGLETON, w.target);
+        w.e.mem.set_u8(w.target + 0x20c, 1);
+        w.answer(ACT_TARGET, 0x304, 1);
+        returns(&mut w.e, 0x008a_61b0, 1);
+        w.e.register(0x0086_7da0, |_, _| ret_float(10.5));
+        started(&mut w.e);
+        assert!(!w.activate(0, 0));
+        assert_eq!(
+            calls(&mut w.e, 0x0069_3d50),
+            vec![vec![w.target_process, 9.5f32.to_bits()]]
+        );
+        assert_eq!(calls(&mut w.e, 0x0086_7da0), vec![vec![0x011d_e7b8]]);
+        // Without the alarm test nothing is moved.
+        w.answer(ACT_TARGET, 0x304, 0);
+        w.e.call_log = Some(vec![]);
+        assert!(!w.activate(0, 0));
+        assert!(calls(&mut w.e, 0x0069_3d50).is_empty());
+    }
+
+    #[test]
+    fn activate_shows_a_message_for_a_target_that_is_asleep_dead_or_fleeing() {
+        // Down (virtual 0x22c) and of kind 6: the surprised icon.
+        let mut w = activate_world();
+        w.answer(ACT_TARGET, 0x22c, 1);
+        w.e.register(0x004f_8960, |_, _| ret(6));
+        returns(&mut w.e, 0x0040_3df0, 0x1111);
+        returns(&mut w.e, 0x0055_d520, 0x2222);
+        started(&mut w.e);
+        assert!(!w.activate(0, 0));
+        assert_eq!(calls(&mut w.e, 0x0040_3df0), vec![vec![0x011d_210c]]);
+        let formatted = calls(&mut w.e, 0x00ec_623a);
+        assert_eq!(formatted.len(), 1);
+        assert_eq!(&formatted[0][1..], &[0x0101_2058, 0x2222, 0x1111]);
+        let displayed = calls(&mut w.e, 0x0070_52f0);
+        assert_eq!(
+            displayed,
+            vec![vec![
+                formatted[0][0],
+                0,
+                0x0104_a958,
+                0,
+                2.0f32.to_bits(),
+                0
+            ]]
+        );
+        // The 0x230 test alone gives the same message.
+        let mut w = activate_world();
+        w.answer(ACT_TARGET, 0x230, 1);
+        started(&mut w.e);
+        assert!(!w.activate(0, 0));
+        assert_eq!(calls(&mut w.e, 0x0070_52f0)[0][2], 0x0104_a958);
+        // Fleeing (008a6650) with no combat target: the sad icon.
+        let mut w = activate_world();
+        returns(&mut w.e, 0x008a_6650, 1);
+        started(&mut w.e);
+        assert!(!w.activate(0, 0));
+        assert_eq!(calls(&mut w.e, 0x0040_3df0), vec![vec![0x011d_2538]]);
+        assert_eq!(calls(&mut w.e, 0x0070_52f0).len(), 1);
+        assert_eq!(calls(&mut w.e, 0x0070_52f0)[0][2], 0x0102_08a0);
+        // Fleeing but the combat target is the player and not blocked:
+        // no message.
+        let mut w = activate_world();
+        let player = w.e.mem.alloc(0x40);
+        w.e.set_global(PLAYER_SINGLETON, player);
+        returns(&mut w.e, 0x008a_6650, 1);
+        w.answer(ACT_TARGET, 0x428, 0x7777);
+        returns(&mut w.e, 0x0097_fa10, 1);
+        returns(&mut w.e, 0x0089_4d60, 0);
+        started(&mut w.e);
+        assert!(w.activate(0, 0));
+        assert!(calls(&mut w.e, 0x0070_52f0).is_empty());
+        // Blocked: the message after all.
+        returns(&mut w.e, 0x0089_4d60, 1);
+        w.e.call_log = Some(vec![]);
+        assert!(!w.activate(0, 0));
+        assert_eq!(calls(&mut w.e, 0x0070_52f0).len(), 1);
+    }
+
+    #[test]
+    fn activate_opens_the_companion_menu_for_the_player() {
+        let mut w = activate_world();
+        w.e.set_global(PLAYER_SINGLETON, w.activator);
+        returns(&mut w.e, 0x0056_6950, 1);
+        returns(&mut w.e, 0x0075_4d90, 1);
+        started(&mut w.e);
+        assert!(!w.activate(0, 0));
+        assert_eq!(
+            calls(&mut w.e, 0x0070_9470),
+            vec![vec![8, w.target, 0, 0, 0, 0]]
+        );
+        assert_eq!(calls(&mut w.e, 0x0075_4d90), vec![vec![w.target]]);
+        // The wheel declines: no menu.
+        returns(&mut w.e, 0x0075_4d90, 0);
+        w.e.call_log = Some(vec![]);
+        assert!(!w.activate(0, 0));
+        assert!(calls(&mut w.e, 0x0070_9470).is_empty());
+    }
+
+    #[test]
+    fn activate_hands_a_package_target_to_an_npc_activator_and_reports_the_day() {
+        let mut w = activate_world();
+        let (a, t) = (w.activator, w.target);
+        w.e.register_double(0x005d_43c0, move |_, args| {
+            ret(if args[0] == a { 0x6001 } else { 0x6002 })
+        });
+        returns(&mut w.e, 0x0041_cb10, 0x6100);
+        w.e.register(0x0041_ca90, |_, args| {
+            ret(if args[0] == 0x6100 { 0xf } else { 0 })
+        });
+        returns(&mut w.e, 0x0041_cb70, 0x6200);
+        returns(&mut w.e, 0x0067_0f90, 1);
+        w.e.register(0x0086_7d60, |_, _| ret(21));
+        started(&mut w.e);
+        assert!(w.activate(0, 0));
+        assert_eq!(
+            calls(&mut w.e, 0x0041_c930),
+            vec![vec![0x6001, 0x6100, 4, 0x6200, 1, 1, 0]]
+        );
+        assert_eq!(calls(&mut w.e, 0x0041_cb70), vec![vec![0x6002]]);
+        assert_eq!(
+            calls(&mut w.e, slot(ACT_ACTIVATOR, 0x28c)),
+            vec![vec![a, 0x6100, 21]]
+        );
+        assert_eq!(
+            calls(&mut w.e, slot(ACT_TARGET_PROCESS, 0x5a0)),
+            vec![vec![w.target_process, a, 0x6100]]
+        );
+        assert_eq!(
+            calls(&mut w.e, slot(ACT_TARGET, 0x48)),
+            vec![vec![t, 0x8000_0000]]
+        );
+        // The activator is told 0x4ec(1) through its process.
+        assert_eq!(
+            calls(&mut w.e, slot(ACT_ACTIVATOR_PROCESS, 0x4ec)),
+            vec![vec![w.activator_process, 1]]
+        );
+        // The package is not "once per day": no day report.
+        returns(&mut w.e, 0x0067_0f90, 0);
+        w.e.call_log = Some(vec![]);
+        assert!(w.activate(0, 0));
+        assert!(calls(&mut w.e, slot(ACT_ACTIVATOR, 0x28c)).is_empty());
+    }
+
+    #[test]
+    fn activate_quits_vats_and_opens_the_menu_for_the_player_facing_a_vats_target() {
+        let mut w = activate_world();
+        w.e.set_global(PLAYER_SINGLETON, w.activator);
+        // The raw activator argument differs from the actor it casts to.
+        let (a, raw) = (w.activator, 0x7001u32);
+        w.e.register_double(RT_DYNAMIC_CAST, move |_, args| {
+            ret(if args[0] == raw { a } else { args[0] })
+        });
+        returns(&mut w.e, 0x0049_3bb0, 1);
+        returns(&mut w.e, 0x0056_6950, 1);
+        started(&mut w.e);
+        let this = w.this;
+        let target = w.target;
+        assert!(w
+            .e
+            .call(0x0060_7990, &args![this, target, raw, 0u32, 0u32, 0u32])
+            .bool());
+        assert_eq!(calls(&mut w.e, 0x009c_8950), vec![vec![0x011f_2250, 0, 0]]);
+        assert_eq!(
+            calls(&mut w.e, 0x0070_9470),
+            vec![vec![4, target, 0, 0, 1, 0]]
+        );
+    }
+
+    #[test]
+    fn activate_lets_npcs_attack_or_steal_through_their_process() {
+        // An NPC activator: its process' virtual 0x33c answers.
+        let mut w = activate_world();
+        returns(&mut w.e, 0x008b_06d0, 1);
+        w.answer(ACT_ACTIVATOR_PROCESS, 0x33c, 1);
+        started(&mut w.e);
+        assert!(w.activate(0, 0));
+        assert_eq!(
+            calls(&mut w.e, slot(ACT_ACTIVATOR_PROCESS, 0x33c)),
+            vec![vec![
+                w.activator_process,
+                w.activator,
+                w.target,
+                0,
+                1,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                1,
+                0
+            ]]
+        );
+        let asked = calls(&mut w.e, 0x008b_06d0);
+        assert_eq!(asked.len(), 1);
+        assert_eq!(
+            (asked[0][0], asked[0][1], asked[0][2], asked[0][4]),
+            (w.activator, w.target, 0, 0)
+        );
+        // The player activator: the target's process is asked (virtual 0x33c)
+        // with the roles swapped.
+        let mut w = activate_world();
+        w.e.set_global(PLAYER_SINGLETON, w.activator);
+        returns(&mut w.e, 0x008b_06d0, 1);
+        w.answer(ACT_TARGET_PROCESS, 0x33c, 1);
+        started(&mut w.e);
+        assert!(w.activate(0, 0));
+        assert_eq!(
+            calls(&mut w.e, slot(ACT_TARGET_PROCESS, 0x33c)),
+            vec![vec![
+                w.target_process,
+                w.target,
+                w.activator,
+                1,
+                1,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                1,
+                0
+            ]]
+        );
+        // 004997b0 on the activator stops it.
+        returns(&mut w.e, 0x0049_97b0, 1);
+        w.e.call_log = Some(vec![]);
+        w.activate(0, 0);
+        assert!(calls(&mut w.e, slot(ACT_TARGET_PROCESS, 0x33c)).is_empty());
+    }
+
+    #[test]
+    fn activate_refuses_talking_to_a_dead_target_and_takes_the_dialogue_branch() {
+        // Player activator, target dead (0x230) and 0087f3d0: refused.
+        let mut w = activate_world();
+        w.e.set_global(PLAYER_SINGLETON, w.activator);
+        w.answer(ACT_TARGET, 0x230, 1);
+        returns(&mut w.e, 0x0087_f3d0, 1);
+        // (the dead target also triggers the first-stage message path)
+        w.e.register(0x004f_8960, |_, _| ret(5));
+        returns(&mut w.e, 0x008a_ce90, 0);
+        assert!(!w.activate(0, 0));
+    }
+
+    /// A topic and a dialogue item for the dialogue tests.
+    fn dialogue_for(w: &mut ActivateWorld) -> u32 {
+        let dialogue = w.e.mem.alloc(0x40);
+        w.e.mem.set_u32(dialogue + 0xc, 0x8002);
+        returns(&mut w.e, 0x0061_a2d0, 0x8001);
+        returns(&mut w.e, 0x0061_b320, dialogue);
+        returns(&mut w.e, 0x0061_9df0, 1);
+        returns(&mut w.e, 0x0083_c7b0, 1);
+        returns(&mut w.e, 0x0083_c7e0, 0);
+        dialogue
+    }
+
+    #[test]
+    fn activate_starts_a_dialogue_topic_with_the_player() {
+        let mut w = activate_world();
+        w.e.set_global(PLAYER_SINGLETON, w.activator);
+        let dialogue = dialogue_for(&mut w);
+        started(&mut w.e);
+        assert!(w.activate(0, 0));
+        assert_eq!(calls(&mut w.e, 0x0061_a2d0), vec![vec![0, 0]]);
+        assert_eq!(
+            calls(&mut w.e, 0x0061_b320),
+            vec![vec![0x8001, w.target, w.activator, 0, 0, 0]]
+        );
+        assert_eq!(calls(&mut w.e, 0x0061_9df0), vec![vec![0x8002]]);
+        assert_eq!(
+            calls(&mut w.e, 0x0057_b7c0),
+            vec![vec![w.target, dialogue, 0, 0]]
+        );
+        assert_eq!(calls(&mut w.e, 0x005c_90d0), vec![vec![dialogue, 1]]);
+        // A target in package kind 9 answers through its process instead.
+        w.answer(ACT_TARGET, 0x214, 9);
+        w.e.call_log = Some(vec![]);
+        assert!(w.activate(0, 0));
+        assert!(calls(&mut w.e, 0x0057_b7c0).is_empty());
+        assert_eq!(
+            calls(&mut w.e, slot(ACT_TARGET_PROCESS, 0x600)),
+            vec![vec![w.target_process, 1]]
+        );
+        assert_eq!(
+            calls(&mut w.e, slot(ACT_TARGET, 0x418)),
+            vec![vec![w.target]]
+        );
+        assert!(calls(&mut w.e, 0x005c_90d0).is_empty());
+    }
+
+    #[test]
+    fn activate_opens_the_conversation_menu_for_the_player_without_a_topic() {
+        let mut w = activate_world();
+        w.e.set_global(PLAYER_SINGLETON, w.activator);
+        returns(&mut w.e, 0x0045_3a70, 0x9000);
+        started(&mut w.e);
+        assert!(w.activate(0, 0));
+        // The target turns to the player (virtual 0x214 answers 0) and is told
+        // 0x294(target) through its process; both stop attacking.
+        assert_eq!(
+            calls(&mut w.e, 0x008b_b520),
+            vec![vec![w.target, 0x11, 0x22, 0x33, 0]]
+        );
+        assert_eq!(
+            calls(&mut w.e, slot(ACT_TARGET_PROCESS, 0x294)),
+            vec![vec![w.target_process, w.target]]
+        );
+        assert_eq!(
+            calls(&mut w.e, 0x008a_8e50),
+            vec![vec![w.activator], vec![w.target]]
+        );
+        assert_eq!(calls(&mut w.e, 0x00ad_8780), vec![vec![0x9000, 4]]);
+        assert_eq!(calls(&mut w.e, 0x0081_5b00), vec![vec![w.target + 0x88]]);
+        assert_eq!(calls(&mut w.e, 0x009c_8950), vec![vec![0x011f_2250, 0, 0]]);
+        // The menu is made for the NPC (the player activates), type 4.
+        assert_eq!(
+            calls(&mut w.e, 0x0070_9470),
+            vec![vec![4, w.target, 0, 0, 1, 0]]
+        );
+        // The dialogue package's data goes along when there is one.
+        let package = w.e.mem.alloc(0x100);
+        w.e.mem.set_u32(package + 0x8c, 0x4141);
+        returns(&mut w.e, 0x0093_44a0, package);
+        w.e.call_log = Some(vec![]);
+        assert!(w.activate(0, 0));
+        assert_eq!(
+            calls(&mut w.e, 0x0070_9470),
+            vec![vec![4, w.target, 0x4141, 0, 1, 0]]
+        );
+        // A target in package kind 9 is told 0x600(1) and 0x418 instead.
+        w.answer(ACT_TARGET, 0x214, 9);
+        w.e.call_log = Some(vec![]);
+        assert!(w.activate(0, 0));
+        assert!(calls(&mut w.e, 0x0070_9470).is_empty());
+        assert_eq!(calls(&mut w.e, slot(ACT_TARGET, 0x418)).len(), 1);
+    }
+
+    #[test]
+    fn activate_lets_an_npc_start_a_conversation_with_the_player() {
+        let mut w = activate_world();
+        // The target is the player; the activator is an NPC.
+        w.e.set_global(PLAYER_SINGLETON, w.target);
+        returns(&mut w.e, 0x0067_8610, 1);
+        w.answer(ACT_TARGET_PROCESS, 0x3fc, 1);
+        started(&mut w.e);
+        assert!(w.activate(0, 0));
+        assert_eq!(
+            calls(&mut w.e, slot(ACT_TARGET_PROCESS, 0x3fc)),
+            vec![vec![w.target_process, w.activator]]
+        );
+        assert_eq!(
+            calls(&mut w.e, slot(ACT_ACTIVATOR_PROCESS, 0x288)),
+            vec![vec![w.activator_process, w.activator, 1]]
+        );
+        assert_eq!(calls(&mut w.e, 0x008a_7a90), vec![vec![w.target]]);
+        assert_eq!(
+            calls(&mut w.e, slot(ACT_ACTIVATOR_PROCESS, 0x614)),
+            vec![vec![w.activator_process, 0x400]]
+        );
+        assert_eq!(
+            calls(&mut w.e, 0x0070_9470),
+            vec![vec![4, w.activator, 0, 0, 1, 0]]
+        );
+        // The player declines (0x3fc false): nothing happens.
+        w.answer(ACT_TARGET_PROCESS, 0x3fc, 0);
+        w.e.call_log = Some(vec![]);
+        assert!(!w.activate(0, 0));
+        assert!(calls(&mut w.e, 0x0070_9470).is_empty());
+        // When the menu is already open (00702640 = 0x3f1) nothing is asked.
+        returns(&mut w.e, 0x0070_2640, 0x3f1);
+        w.e.call_log = Some(vec![]);
+        assert!(w.activate(0, 0));
+        assert!(calls(&mut w.e, slot(ACT_TARGET_PROCESS, 0x3fc)).is_empty());
+    }
+
+    #[test]
+    fn activate_hands_over_an_item_or_changes_the_packages_of_two_npcs() {
+        // An item that is not an NPC goes through virtual 0x17c, then 008c00e0.
+        let mut w = activate_world();
+        w.e.register(RT_DYNAMIC_CAST, |_, args| {
+            ret(if args[3] == TYPE_TES_NPC { 0 } else { args[0] })
+        });
+        started(&mut w.e);
+        assert!(w.activate(0x5151, 3));
+        assert_eq!(
+            calls(&mut w.e, slot(ACT_TARGET, 0x17c)),
+            vec![vec![w.target, 0x5151, 0, 3, 1, 0, w.activator, 0, 0, 1, 0]]
+        );
+        assert_eq!(
+            calls(&mut w.e, 0x008c_00e0),
+            vec![vec![w.activator, w.target, 0x5151, 3]]
+        );
+        // The activator in a package of kind 2 gets 0x288(a, 2) and stops.
+        let mut w = activate_world();
+        returns(&mut w.e, 0x0093_44a0, 0x5200);
+        w.e.register(0x0041_ca90, |_, _| ret(2));
+        started(&mut w.e);
+        assert!(w.activate(0, 0));
+        assert_eq!(
+            calls(&mut w.e, slot(ACT_ACTIVATOR_PROCESS, 0x288)),
+            vec![vec![w.activator_process, w.activator, 2]]
+        );
+        assert!(calls(&mut w.e, 0x008b_b520).is_empty());
+        // Both in other packages: each is set to 1, they face each other and
+        // the activator's 0x280 answer sets both to 2.
+        let mut w = activate_world();
+        returns(&mut w.e, 0x0093_44a0, 0x5200);
+        w.e.register(0x0041_ca90, |_, _| ret(3));
+        w.answer(ACT_ACTIVATOR, 0x218, 1);
+        w.answer(ACT_TARGET, 0x218, 1);
+        w.answer(ACT_ACTIVATOR, 0x280, 1);
+        started(&mut w.e);
+        assert!(w.activate(0, 0));
+        let activator_calls = calls(&mut w.e, slot(ACT_ACTIVATOR_PROCESS, 0x288));
+        assert_eq!(
+            activator_calls,
+            vec![
+                vec![w.activator_process, w.activator, 1],
+                vec![w.activator_process, w.activator, 1],
+                vec![w.activator_process, w.activator, 2],
+            ]
+        );
+        assert_eq!(
+            calls(&mut w.e, slot(ACT_TARGET_PROCESS, 0x288)),
+            vec![
+                vec![w.target_process, w.target, 1],
+                vec![w.target_process, w.target, 2]
+            ]
+        );
+        assert_eq!(
+            calls(&mut w.e, slot(ACT_ACTIVATOR, 0x280)),
+            vec![vec![w.activator, w.target, 0, 0, 1, 0, 0, 0, 0, 0]]
+        );
+        // The target turned toward the activator: its own position block.
+        assert_eq!(
+            calls(&mut w.e, 0x008b_b520),
+            vec![vec![w.target, 0x11, 0x22, 0x33, 0]]
+        );
+        let _ = w.position;
+    }
+
+    #[test]
+    fn activate_gives_a_downed_target_to_the_player_or_hands_the_item_over() {
+        // The target is down (virtual 0x22c): the player gets its menu 1.
+        let mut w = activate_world();
+        w.e.set_global(PLAYER_SINGLETON, w.activator);
+        w.answer(ACT_TARGET, 0x22c, 1);
+        w.e.register(0x004f_8960, |_, _| ret(5));
+        started(&mut w.e);
+        assert!(w.activate(0, 0));
+        assert_eq!(
+            calls(&mut w.e, 0x0070_9470),
+            vec![vec![1, w.target, 0, 0, 1, 0]]
+        );
+        // An NPC activator hands the item over through the target reference.
+        let mut w = activate_world();
+        w.answer(ACT_TARGET, 0x22c, 1);
+        w.e.register(0x004f_8960, |_, _| ret(5));
+        w.e.register(RT_DYNAMIC_CAST, |_, args| {
+            ret(if args[3] == TYPE_TES_NPC { 0 } else { args[0] })
+        });
+        started(&mut w.e);
+        assert!(w.activate(0x5151, 2));
+        assert_eq!(
+            calls(&mut w.e, slot(ACT_TARGET, 0x17c)),
+            vec![vec![w.target, 0x5151, 0, 2, 0, 0, w.activator, 0, 0, 1, 0]]
+        );
+    }
+
+    #[test]
+    fn activate_scolds_the_player_in_front_of_a_hostile_target_with_a_combat_target() {
+        let mut w = activate_world();
+        w.e.set_global(PLAYER_SINGLETON, w.activator);
+        returns(&mut w.e, 0x0049_3bb0, 1);
+        w.answer(ACT_TARGET, 0x428, 0x7777);
+        returns(&mut w.e, 0x0047_c850, 1);
+        returns(&mut w.e, 0x0040_3df0, 0x1111);
+        returns(&mut w.e, 0x0040_8da0, 0x3333);
+        started(&mut w.e);
+        assert!(!w.activate(0, 0));
+        assert_eq!(calls(&mut w.e, 0x0040_3df0), vec![vec![0x011c_f594]]);
+        assert_eq!(
+            calls(&mut w.e, 0x0040_8da0),
+            vec![vec![w.this.addr() + COMPONENT_FULL_NAME]]
+        );
+        let formatted = calls(&mut w.e, 0x00ec_623a);
+        assert_eq!(&formatted[0][1..], &[0x0101_2058, 0x3333, 0x1111]);
+        let displayed = calls(&mut w.e, 0x0070_52f0);
+        assert_eq!(displayed[0][1..], [0, 0, 0, 2.0f32.to_bits(), 0]);
+        // Not a matter for the player: handled quietly.
+        returns(&mut w.e, 0x0047_c850, 0);
+        w.e.call_log = Some(vec![]);
+        assert!(w.activate(0, 0));
+        assert!(calls(&mut w.e, 0x0070_52f0).is_empty());
+    }
+    // END second-block tests
 }
