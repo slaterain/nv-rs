@@ -1227,6 +1227,88 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00714bd0, fn_00714bd0(u32)),
         entry!(0x00714bf0, fn_00714bf0(u32)),
         entry!(0x00714c20, fn_00714c20(u32)),
+        entry!(0x00714c40, fn_00714c40(u32)),
+        entry!(
+            0x00714c60,
+            interface_manager_emergency_close_all_menus_and_break_stuff(Ptr<InterfaceManager>)
+        ),
+        entry!(0x00714d70, fn_00714d70(Ptr<InterfaceManager>, u32)),
+        entry!(
+            0x00714d90,
+            interface_manager_add_to_enter_stack(Ptr<InterfaceManager>, i32) -> i32
+        ),
+        entry!(
+            0x00714f00,
+            interface_manager_get_enter_stack_top(Ptr<InterfaceManager>) -> u32
+        ),
+        entry!(
+            0x00714f70,
+            interface_manager_get_enter_stack(Ptr<InterfaceManager>, u32) -> u32
+        ),
+        entry!(0x00714f90, fn_00714f90(Ptr<InterfaceManager>, i32) -> bool),
+        entry!(
+            0x00714fd0,
+            interface_manager_pop_from_enter_stack(Ptr<InterfaceManager>, i32, u8) -> i32
+        ),
+        entry!(0x007151b0, fn_007151b0(Ptr<InterfaceManager>, f32, f32)),
+        entry!(
+            0x007154b0,
+            fn_007154b0(Ptr<InterfaceManager>, i32, i32) -> u32
+        ),
+        entry!(0x00715770, fn_00715770() -> bool),
+        entry!(
+            0x007157b0,
+            interface_manager_clear_over_tile_target(Ptr<InterfaceManager>, u8)
+        ),
+        entry!(
+            0x00715860,
+            interface_manager_set_current_focus_target(Ptr<InterfaceManager>, u32, u32, u8)
+        ),
+        entry!(0x00715c60, fn_00715c60(u32, u32, u32)),
+        entry!(
+            0x00715ca0,
+            interface_manager_get_default_focus(Ptr<InterfaceManager>)
+        ),
+        entry!(0x00715d40, interface_manager_get_screen_width() -> f32),
+        entry!(0x00715da0, fn_00715da0() -> f32),
+        entry!(0x00715e00, fn_00715e00(Ptr<InterfaceManager>, i32, i32)),
+        entry!(
+            0x00715ec0,
+            interface_manager_toggle_safe_zone(Ptr<InterfaceManager>, i32)
+        ),
+        entry!(0x00716010, fn_00716010(Ptr<InterfaceManager>, u32)),
+        entry!(
+            0x007160b0,
+            interface_manager_force_texture_release(Ptr<InterfaceManager>)
+        ),
+        entry!(
+            0x007160f0,
+            interface_manager_scan_for_max_focus(Ptr<InterfaceManager>, u32, u32) -> u32
+        ),
+        entry!(
+            0x00716320,
+            interface_manager_update_all_timers(Ptr<InterfaceManager>)
+        ),
+        entry!(0x00716440, fn_00716440() -> f32),
+        entry!(0x00716450, fn_00716450(Ptr<InterfaceManager>)),
+        entry!(0x007164c0, interface_manager_new_timer(u32, f32)),
+        entry!(0x007165d0, interface_manager_clear_timer(u32)),
+        entry!(0x00716660, fn_00716660(u32) -> f32),
+        entry!(0x007166f0, fn_007166f0(Ptr<InterfaceManager>, u32)),
+        entry!(0x00716730, fn_00716730(Ptr<InterfaceManager>, f32) -> u32),
+        entry!(
+            0x00716910,
+            interface_manager_tile_is_accepting_events(Ptr<InterfaceManager>, u32) -> bool
+        ),
+        entry!(0x00716980, fn_00716980(Ptr<TextEntry>) -> Ptr<TextEntry>),
+        entry!(0x00716a10, fn_00716a10(Ptr<TextEntry>)),
+        entry!(0x00716a70, fn_00716a70(Ptr<TextEntry>, u32)),
+        entry!(0x00716aa0, fn_00716aa0(Ptr<TextEntry>, i32)),
+        entry!(0x00716ae0, fn_00716ae0(Ptr<TextEntry>) -> u8),
+        entry!(0x00716b00, fn_00716b00(Ptr<TextEntry>, u32)),
+        entry!(0x00717010, fn_00717010(Ptr<TextEntry>, u8)),
+        entry!(0x00717050, fn_00717050(Ptr<TextEntry>)),
+        entry!(0x007170a0, fn_007170a0(Ptr<TextEntry>)),
         // @@ENTRIES@@
     ]
 }
@@ -6149,6 +6231,1445 @@ fn render_state_counter(e: &mut Engine, counter: u32, count: u32) {
     e.set_global(counter, value);
 }
 
+// Callees and data of `00714c40` .. `007170a0`.
+const RENDER_COUNTER_011FFA28: u32 = 0x011f_fa28;
+const RENDER_STATE_00B98540: u32 = 0x00b9_8540;
+/// `Interface::CloseLoadingMenu` (Xbox PDB, `cdecl`) and
+/// `Interface::HideMenus` (Xbox PDB, `cdecl`).
+const CLOSE_LOADING_MENU: u32 = 0x0070_5e30;
+const HIDE_MENUS: u32 = 0x0070_3610;
+/// The class number of the loading menu.
+const LOADING_MENU_CLASS: u32 = 0x3ef;
+/// The class number of the console in the menu stack.
+const CONSOLE_STACK_ENTRY: u32 = 3;
+/// `() -> object`: the word at `011f91ac`, the object the menu stack tells
+/// when its first or second entry is set, and `(object, byte)`, the call
+/// that tells it.
+const STACK_NOTIFY_OWNER_GET: u32 = 0x004e_3270;
+const STACK_NOTIFY: u32 = 0x0071_23a0;
+/// The text `AddToEnterStack` logs when the stack is full.
+const STACK_FULL_MESSAGE: u32 = 0x0106_f2f0;
+/// `HUDMainMenu` call that forgets a reference (`cdecl(reference)`).
+const HUD_FORGET_REFERENCE: u32 = 0x0077_8b40;
+/// `FORenderedTerminal::ReleaseStaticGeometry` (Xbox PDB),
+/// `MapMenu::ClearWorldMapTexture` (Xbox PDB) and
+/// `TES::CleanUpUnusedTextures(bool)` (Xbox PDB, called on the object at
+/// `011dea10`).
+const RELEASE_STATIC_GEOMETRY: u32 = 0x007f_fe00;
+const CLEAR_WORLD_MAP_TEXTURE: u32 = 0x007a_1670;
+const CLEAN_UP_UNUSED_TEXTURES: u32 = 0x0045_2490;
+/// The renderer's width and height getters (`int` in `EAX`).
+const RENDER_TARGET_WIDTH: u32 = 0x004d_c1f0;
+const RENDER_TARGET_HEIGHT: u32 = 0x004d_c200;
+/// `1280.0` and `960.0` as `float`s, the same as `double`s: the base
+/// resolution of the interface.
+const BASE_WIDTH_FLOAT: u32 = 0x0106_ec38;
+const BASE_HEIGHT_FLOAT: u32 = 0x0106_f2dc;
+const BASE_WIDTH_DOUBLE: u32 = 0x0106_e960;
+const BASE_HEIGHT_DOUBLE: u32 = 0x0106_e7f8;
+/// `0.0` (`double`).
+const ZERO_DOUBLE: u32 = 0x0101_2060;
+/// `3.0` (`double`), the offset added to the cursor position.
+const CURSOR_X_OFFSET: u32 = 0x0102_1928;
+/// The `NiPoint3` static the cursor code remembers the last position in,
+/// and the guard byte word that tells whether its constructor has run.
+const LAST_CURSOR_POINT: u32 = 0x011d_8c7c;
+const LAST_CURSOR_POINT_GUARD: u32 = 0x011d_8c88;
+/// Whether two points differ (`!(a == b)`, `004390c0` underneath):
+/// `(point, other) -> bool`.
+const POINT_NOT_EQUAL: u32 = 0x0043_9090;
+/// The byte at `+0xc` of the manager (`cMenuMode`), read through a getter.
+const MENU_MODE_BYTE_GETTER: u32 = 0x0042_4940;
+/// `"Data\Menus\Main\safe_zone.xml"`.
+const SAFE_ZONE_PATH: u32 = 0x0106_f334;
+/// `Tile::GetValue`-style lookup that returns the entry of a trait (or 0);
+/// the entry's `float` at `+8` is read through `00488d50`.
+const TILE_GET_TRAIT_ENTRY: u32 = 0x00a0_0f30;
+const TRAIT_ENTRY_VALUE: u32 = 0x0048_8d50;
+/// The `float` at `011ac3a0`, the divisor `UpdateAllTimers` applies in game
+/// state 4.
+const TIMER_RATE: u32 = 0x011a_c3a0;
+/// The object `TES::CleanUpUnusedTextures` is called on.
+const TEXTURE_CLEANUP_OWNER: u32 = 0x011d_ea10;
+/// The two string lists whose limits `00715e00` sets.
+const LIMIT_LIST_WIDTH: u32 = 0x011d_8bd8;
+const LIMIT_LIST_HEIGHT: u32 = 0x011d_8bf0;
+/// The second repeat delay holder (`REPEAT_DELAY_HOLDER_FIRST` is the first).
+const REPEAT_DELAY_HOLDER_NEXT: u32 = 0x011d_8b88;
+/// The string (`01020770`) the shown copy of an empty text falls back to.
+const DISPLAY_FALLBACK_STRING: u32 = 0x0102_0770;
+/// `BSStringT::GetLength` (the length, computed when not cached), `strcpy`
+/// (`cdecl(dest, source)`) and `BSStringT::Set` (`(this, text)`).
+const STRING_LENGTH: u32 = 0x0040_48e0;
+const TEXT_COPY: u32 = 0x0040_46f0;
+const STRING_SET: u32 = 0x0043_8390;
+/// `(text_entry, text) -> bool`: whether the edited text may grow to that
+/// text (`fn_00717230`, in another part of this unit).
+const TEXT_ENTRY_ACCEPTS_TEXT: u32 = 0x0071_7230;
+
+layout! {
+    /// An unnamed text-entry line (constructed by `00716980`; the menu
+    /// console embeds one at `+0x34`), 0x24 bytes. Two `BSStringT`s open it:
+    /// the text at `+0` and the copy shown on screen, with the caret in it,
+    /// at `+8`.
+    pub struct TextEntry: 0x24 {
+        /// Index of the caret in the text.
+        0x10 cursor: i32,
+        /// Longest width the text may have (`-1` is no limit).
+        0x14 max_width: i32,
+        /// Word the constructor sets to 1.
+        0x18 field_18: u32,
+        /// Tick count of the last caret blink.
+        0x1c last_blink_time: u32,
+        /// Caret phase: the shown caret is `|` when set, `0x7f` when clear.
+        0x20 caret_phase: u8,
+        /// Whether the entry takes keys and shows a caret.
+        0x21 active: u8,
+        /// Set aside by every key; when set, the next editing key first
+        /// empties the text.
+        0x22 clears_text_on_edit: u8,
+    }
+}
+
+// Translated from 00714c40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Subtracts `count` from the counter at `011ffa28`, then calls
+/// `00b98540(0, 0)` (the render-state counter functions of `00714a40`).
+pub fn fn_00714c40(e: &mut Engine, count: u32) {
+    render_state_counter(e, RENDER_COUNTER_011FFA28, count);
+    e.call(RENDER_STATE_00B98540, &args![0u32, 0u32]);
+}
+
+/// The word `index` of the menu stack (`iEnterStack`, ten words).
+fn enter_stack_word(e: &Engine, this: Ptr<InterfaceManager>, index: u32) -> u32 {
+    e.mem.u32(this.addr() + 0x114 + 4 * index)
+}
+
+fn set_enter_stack_word(e: &mut Engine, this: Ptr<InterfaceManager>, index: u32, value: u32) {
+    e.mem.set_u32(this.addr() + 0x114 + 4 * index, value);
+}
+
+/// Index of the first empty word of the menu stack among the first
+/// `limit`, or `limit`.
+fn first_empty_enter_stack_word(e: &Engine, this: Ptr<InterfaceManager>, limit: u32) -> u32 {
+    let mut index = 0;
+    while index < limit && enter_stack_word(e, this, index) != 0 {
+        index += 1;
+    }
+    index
+}
+
+/// Tells the object at `011f91ac` (when there is one) about the stack:
+/// `007123a0(owner, 1)`; the caller has already checked the owner exists.
+fn notify_stack_owner(e: &mut Engine, flag: u32) {
+    let owner = e.call(STACK_NOTIFY_OWNER_GET, &args![]).u32();
+    e.call(STACK_NOTIFY, &args![owner, flag]);
+}
+
+// Translated from 00714c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::EmergencyCloseAllMenusAndBreakStuff` (Xbox PDB): walks
+/// the menu stack from its last word to its first; every entry is closed
+/// (the console is hidden, the loading menu is closed through its own call,
+/// any other menu gets its virtual destructor with flag 1) and cleared. Then
+/// the menus are hidden, `cMenuMode` becomes 4 and the byte at `0119f348`
+/// is set.
+pub fn interface_manager_emergency_close_all_menus_and_break_stuff(
+    e: &mut Engine,
+    this: Ptr<InterfaceManager>,
+) {
+    for index in (0..10u32).rev() {
+        let class = enter_stack_word(e, this, index);
+        if class == 0 {
+            continue;
+        }
+        let tile = e.call(TILE_GET_MENU_BY_CLASS, &args![class]).u32();
+        if tile == 0 {
+            if class == CONSOLE_STACK_ENTRY
+                && e.call(MENU_CONSOLE_INSTANCE, &args![0u32]).u32() != 0
+            {
+                let console = e.call(MENU_CONSOLE_INSTANCE, &args![1u32]).u32();
+                e.call(MENU_CONSOLE_TOGGLE_VISIBLE, &args![console]);
+            }
+        } else {
+            let menu = e.call(TILE_GET_MENU, &args![tile]).u32();
+            if menu != 0 {
+                let loading = e
+                    .call(TILE_GET_MENU_BY_CLASS, &args![LOADING_MENU_CLASS])
+                    .u32();
+                if tile == loading {
+                    e.call(CLOSE_LOADING_MENU, &args![]);
+                } else {
+                    delete_virtual(e, menu);
+                }
+            }
+        }
+        set_enter_stack_word(e, this, index, 0);
+    }
+    e.call(HIDE_MENUS, &args![]);
+    e.set(this, InterfaceManager::cMenuMode, 4);
+    e.set_global(START_MENU_ALLOWED, 1u8);
+}
+
+// Translated from 00714d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `reference` as `pPickRef` (Xbox PDB).
+pub fn fn_00714d70(e: &mut Engine, this: Ptr<InterfaceManager>, reference: u32) {
+    e.set(this, InterfaceManager::pPickRef, reference);
+}
+
+// Translated from 00714d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::AddToEnterStack` (Xbox PDB): puts a menu class on the
+/// menu stack and returns the slot it went to (`-1` when the stack is
+/// full). Class 3 (the console) goes first and pushes the others down by
+/// one, logging when the last of the nine words is lost; any other class
+/// goes in the first free word. When the stack gets its first entry the mode
+/// becomes 3, and the object at `011f91ac` is told (except for the class
+/// `0x3e9` as the first entry); it is told too when the class `0x3e9`
+/// becomes the first of two.
+pub fn interface_manager_add_to_enter_stack(
+    e: &mut Engine,
+    this: Ptr<InterfaceManager>,
+    class: i32,
+) -> i32 {
+    if class == CONSOLE_STACK_ENTRY as i32 {
+        let mut carried = enter_stack_word(e, this, 0);
+        set_enter_stack_word(e, this, 0, CONSOLE_STACK_ENTRY);
+        let mut index = 1;
+        while index < 9 {
+            let displaced = enter_stack_word(e, this, index);
+            set_enter_stack_word(e, this, index, carried);
+            carried = displaced;
+            if displaced == 0 {
+                break;
+            }
+            index += 1;
+        }
+        if index == 9 {
+            e.call(LOG_WARNING, &args![STACK_FULL_MESSAGE]);
+        }
+        if index == 1 {
+            e.set(this, InterfaceManager::cMenuMode, 3);
+            if e.call(STACK_NOTIFY_OWNER_GET, &args![]).u32() != 0 {
+                notify_stack_owner(e, 1);
+            }
+        }
+        return index as i32;
+    }
+    let index = first_empty_enter_stack_word(e, this, 10);
+    if index >= 10 {
+        return -1;
+    }
+    set_enter_stack_word(e, this, index, class as u32);
+    if index == 0 {
+        e.set(this, InterfaceManager::cMenuMode, 3);
+        if class != 0x3e9 && e.call(STACK_NOTIFY_OWNER_GET, &args![]).u32() != 0 {
+            notify_stack_owner(e, 1);
+        }
+    } else if index == 1
+        && enter_stack_word(e, this, 0) == 0x3e9
+        && e.call(STACK_NOTIFY_OWNER_GET, &args![]).u32() != 0
+    {
+        notify_stack_owner(e, 1);
+    }
+    index as i32
+}
+
+// Translated from 00714f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::GetEnterStackTop` (Xbox PDB): the last used word of
+/// the menu stack (0 when it is empty; the last word when it is full).
+pub fn interface_manager_get_enter_stack_top(e: &mut Engine, this: Ptr<InterfaceManager>) -> u32 {
+    let index = first_empty_enter_stack_word(e, this, 10);
+    if index < 10 {
+        if index == 0 {
+            0
+        } else {
+            e.mem.u32(this.addr() + 0x110 + 4 * index)
+        }
+    } else {
+        e.mem.u32(this.addr() + 0x138)
+    }
+}
+
+// Translated from 00714f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::GetEnterStack` (Xbox PDB): word `index` of the menu
+/// stack, unchecked.
+pub fn interface_manager_get_enter_stack(
+    e: &mut Engine,
+    this: Ptr<InterfaceManager>,
+    index: u32,
+) -> u32 {
+    enter_stack_word(e, this, index)
+}
+
+// Translated from 00714f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `class` is one of the ten words of the menu stack.
+pub fn fn_00714f90(e: &mut Engine, this: Ptr<InterfaceManager>, class: i32) -> bool {
+    (0..10u32).any(|index| interface_manager_get_enter_stack(e, this, index) == class as u32)
+}
+
+// Translated from 00714fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::PopFromEnterStack` (Xbox PDB): takes a menu class off
+/// the menu stack. Returns `-1` when the stack is empty or (without
+/// `force`) the class is not on it, `-2` when (without `force`) it is on it
+/// below an entry of class `0x3e9` or lower and is not the console. The
+/// stack closes up over every word equal to `class`. Afterwards: a console
+/// left alone on the stack is hidden and popped as well; an empty stack hides
+/// the menus when the class was 1, sets `cMenuMode` to 4 and tells the object
+/// at `011f91ac` (flag: the class is not `0x3e9`) and returns 0; otherwise the
+/// object is told when `0x3e9` is the only entry, and the word under the
+/// last used one is returned.
+pub fn interface_manager_pop_from_enter_stack(
+    e: &mut Engine,
+    this: Ptr<InterfaceManager>,
+    class: i32,
+    force: u8,
+) -> i32 {
+    if enter_stack_word(e, this, 0) == 0 {
+        return -1;
+    }
+    let class_word = class as u32;
+    if force == 0 {
+        let mut found = false;
+        let mut index = 0;
+        while index < 10 && (!found || (enter_stack_word(e, this, index) as i32) <= 0x3e9) {
+            if enter_stack_word(e, this, index) == class_word {
+                found = true;
+            }
+            index += 1;
+        }
+        if found && index < 10 && class != CONSOLE_STACK_ENTRY as i32 {
+            return -2;
+        }
+        if !found {
+            return -1;
+        }
+    }
+    let mut source = 0;
+    let mut index = 0;
+    while index < 10 {
+        if enter_stack_word(e, this, index) == class_word {
+            source += 1;
+        }
+        let word = enter_stack_word(e, this, source);
+        set_enter_stack_word(e, this, index, word);
+        if word == 0 {
+            break;
+        }
+        index += 1;
+        source += 1;
+    }
+    if enter_stack_word(e, this, 0) == CONSOLE_STACK_ENTRY && enter_stack_word(e, this, 1) == 0 {
+        if e.call(MENU_CONSOLE_INSTANCE, &args![0u32]).u32() != 0 {
+            let console = e.call(MENU_CONSOLE_INSTANCE, &args![1u32]).u32();
+            e.call(MENU_CONSOLE_TOGGLE_VISIBLE, &args![console]);
+        }
+        interface_manager_pop_from_enter_stack(e, this, CONSOLE_STACK_ENTRY as i32, 0)
+    } else if index < 1 {
+        if class == 1 {
+            e.call(HIDE_MENUS, &args![]);
+        }
+        e.set(this, InterfaceManager::cMenuMode, 4);
+        notify_stack_owner(e, (class != 0x3e9) as u32);
+        0
+    } else {
+        if index == 1 && enter_stack_word(e, this, 0) == 0x3e9 {
+            notify_stack_owner(e, 1);
+        }
+        e.mem.u32(this.addr() + 0x110 + 4 * index) as i32
+    }
+}
+
+// Translated from 007151b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Puts the cursor at the fraction `(x_fraction, z_fraction)` of the
+/// screen: the cursor node's position (kept at `+0x2c`, `+0x34`) becomes
+/// `(width * x - width / 2, height / 2 - z * height)` in interface units, the
+/// node is moved and updated, and the position in desktop units is worked
+/// out. When it changed, it is kept in the static point at `011d8c7c`, the
+/// tilt of the cursor sets its middle component, and the real position goes
+/// to `+0x38 .. +0x40`; with the mouse shown the motion flag is set, and in
+/// menu mode 2 the cursor node is shown and the cursor tile's trait `0xfa3`
+/// is set. When the real position still differs from the stored one it is
+/// scaled again the way `Idle` does. The first call constructs the static
+/// point.
+pub fn fn_007151b0(e: &mut Engine, this: Ptr<InterfaceManager>, x_fraction: f32, z_fraction: f32) {
+    if e.global::<u32>(LAST_CURSOR_POINT_GUARD) & 1 == 0 {
+        let guard = e.global::<u32>(LAST_CURSOR_POINT_GUARD);
+        e.set_global(LAST_CURSOR_POINT_GUARD, guard | 1);
+        e.call(MEMBER_CONSTRUCTOR_EMPTY, &args![LAST_CURSOR_POINT]);
+    }
+    let base = this.addr();
+    let two: f64 = e.global(TWO);
+    let cursor = e.get(this, InterfaceManager::pCursor);
+    let node = e.call(TILE_IMAGE_NODE, &args![cursor]).u32();
+    let translation = e.call(NODE_TRANSLATION, &args![node]).u32();
+    for word in 0..3 {
+        let value = e.mem.u32(translation + 4 * word);
+        e.mem.set_u32(base + 0x2c + 4 * word, value);
+    }
+    let width = interface_manager_get_screen_width(e) as f64;
+    let scaled_x = width * x_fraction as f64;
+    let width = interface_manager_get_screen_width(e) as f64;
+    e.mem.set_f32(base + 0x2c, (scaled_x - width / two) as f32);
+    let height = fn_00715da0(e) as f64;
+    let scaled_z = height * -(z_fraction as f64);
+    let height = fn_00715da0(e) as f64;
+    e.mem.set_f32(base + 0x34, (height / two + scaled_z) as f32);
+    let cursor = e.get(this, InterfaceManager::pCursor);
+    let node = e.call(TILE_IMAGE_NODE, &args![cursor]).u32();
+    e.call(NODE_SET_TRANSLATE_VECTOR, &args![node, base + 0x2c]);
+    e.with_stack(12, |e, update_data| {
+        e.call(
+            NI_UPDATE_DATA_CONSTRUCT,
+            &args![update_data, 0.0f32, 0u32, 0u32],
+        );
+        let cursor = e.get(this, InterfaceManager::pCursor);
+        let node = e.call(TILE_IMAGE_NODE, &args![cursor]).u32();
+        e.call(NODE_UPDATE, &args![node, update_data]);
+    });
+    e.with_stack(12, |e, point| {
+        e.call(MEMBER_CONSTRUCTOR_EMPTY, &args![point]);
+        let offset: f64 = e.global(CURSOR_X_OFFSET);
+        let shifted_x = e.mem.f32(base + 0x2c) as f64 + offset;
+        let desktop_width = e.call(GET_DESKTOP_WIDTH, &args![]).f64();
+        let width = interface_manager_get_screen_width(e) as f64;
+        let scaled = (desktop_width / width) * shifted_x;
+        let desktop_width = e.call(GET_DESKTOP_WIDTH, &args![]).f64();
+        e.mem
+            .set_f32(point.addr(), (desktop_width / two + scaled) as f32);
+        e.mem.set_f32(point.addr() + 4, 0.0);
+        let desktop_height = e.call(GET_DESKTOP_HEIGHT, &args![]).f64();
+        let half_height = desktop_height / two;
+        let z = e.mem.f32(base + 0x34) as f64;
+        let desktop_height = e.call(GET_DESKTOP_HEIGHT, &args![]).f64();
+        let height = fn_00715da0(e) as f64;
+        e.mem.set_f32(
+            point.addr() + 8,
+            (half_height - (desktop_height / height) * z) as f32,
+        );
+        if e.call(POINT_NOT_EQUAL, &args![point, LAST_CURSOR_POINT])
+            .bool()
+        {
+            for word in 0..3 {
+                let value = e.mem.u32(point.addr() + 4 * word);
+                e.mem.set_u32(LAST_CURSOR_POINT + 4 * word, value);
+            }
+            let cursor = e.get(this, InterfaceManager::pCursor);
+            let tilt = tile_get_float(e, cursor, 0xfad);
+            let tilt_scale: f64 = e.global(CURSOR_TILT_SCALE);
+            e.mem.set_f32(point.addr() + 4, (tilt * tilt_scale) as f32);
+            for word in 0..3 {
+                let value = e.mem.u32(point.addr() + 4 * word);
+                e.mem.set_u32(base + 0x38 + 4 * word, value);
+            }
+            if !e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
+                || e.get(this, InterfaceManager::bShowMouse) != 0
+            {
+                e.set(this, InterfaceManager::bMouseInMotion, 1);
+                if e.call(MENU_MODE_BYTE_GETTER, &args![this]).u8() as i8 == 2 {
+                    let cursor = e.get(this, InterfaceManager::pCursor);
+                    let node = e.call(TILE_IMAGE_NODE, &args![cursor]).u32();
+                    e.call(NODE_SET_FLAG, &args![node, 0u32]);
+                    let cursor = e.get(this, InterfaceManager::pCursor);
+                    tile_set_int(e, cursor, 0xfa3, 1);
+                }
+            }
+        }
+        let new_x = e.mem.f32(point.addr());
+        let new_z = e.mem.f32(point.addr() + 8);
+        if e.mem.f32(base + 0x38) != new_x || e.mem.f32(base + 0x40) != new_z {
+            e.set(this, InterfaceManager::bMouseInMotion, 1);
+            let desktop_width = e.call(GET_DESKTOP_WIDTH, &args![]).f64();
+            let width = interface_manager_get_screen_width(e) as f64;
+            let scaled = (desktop_width / width) * e.mem.f32(base + 0x38) as f64;
+            let desktop_width = e.call(GET_DESKTOP_WIDTH, &args![]).f64();
+            e.mem
+                .set_f32(base + 0x38, (desktop_width / two + scaled) as f32);
+            let cursor = e.get(this, InterfaceManager::pCursor);
+            let tilt = tile_get_float(e, cursor, 0xfad);
+            let tilt_scale: f64 = e.global(CURSOR_TILT_SCALE);
+            e.mem.set_f32(base + 0x3c, (tilt * tilt_scale) as f32);
+            let desktop_height = e.call(GET_DESKTOP_HEIGHT, &args![]).f64();
+            let half_height = desktop_height / two;
+            let desktop_height = e.call(GET_DESKTOP_HEIGHT, &args![]).f64();
+            let height = fn_00715da0(e) as f64;
+            let z = e.mem.f32(base + 0x40) as f64;
+            e.mem.set_f32(
+                base + 0x40,
+                (half_height - (desktop_height / height) * z) as f32,
+            );
+        }
+    });
+}
+
+// Translated from 007154b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Turns a key event of the interface into the code the text entries take:
+/// `event` 2 is a key release (shift, alt and control clear their bits of
+/// `iModifierKeys`, shift also `bShiftDown`; the key repeat is reset) and 1 a
+/// key press. A press asks the controls for the character of the scan code
+/// with the shift state; Escape (`0x1b`) yields 0 unless `00715770` says a
+/// text entry is up; backspace, the arrows, home, end, delete, page up/down
+/// and enter yield the codes `0x8000000x` (and the arrows, backspace and
+/// delete start the key repeat); the modifier keys set their bits; any other
+/// key yields the character. Any other event yields 0.
+pub fn fn_007154b0(e: &mut Engine, this: Ptr<InterfaceManager>, event: i32, key: i32) -> u32 {
+    let modifiers = |e: &mut Engine, keep: Option<u32>, set: u32| {
+        let value = e.get(this, InterfaceManager::iModifierKeys);
+        let value = match keep {
+            Some(mask) => value & mask as i32,
+            None => value | set as i32,
+        };
+        e.set(this, InterfaceManager::iModifierKeys, value);
+    };
+    if event == 2 {
+        if key == 0x2a || key == 0x36 {
+            modifiers(e, Some(0xfffb), 0);
+            e.set(this, InterfaceManager::bShiftDown, 0);
+        } else if key == 0x38 || key == 0xb8 {
+            modifiers(e, Some(0xfffe), 0);
+        } else if key == 0x1d || key == 0x9d {
+            modifiers(e, Some(0xfffd), 0);
+        }
+        fn_007166f0(e, this, 0);
+        return 0;
+    }
+    if event != 1 {
+        return 0;
+    }
+    let shift = e.get(this, InterfaceManager::bShiftDown) as u32;
+    let controls_owner = e.global::<u32>(CONTROLS_OWNER);
+    let controls = e.call(CONTROLS_GET, &args![controls_owner]).u32();
+    let character = e
+        .call(CONTROLS_QUERY_00A238A0, &args![controls, key, shift])
+        .u32();
+    if character == 0x1b && !fn_00715770(e) {
+        0
+    } else if character == 8 {
+        fn_007166f0(e, this, 0x8000_0000);
+        0x8000_0000
+    } else if character == 0x7c {
+        0
+    } else if character == 0xd {
+        0x8000_0008
+    } else if key == 0x2a || key == 0x36 {
+        modifiers(e, None, 4);
+        e.set(this, InterfaceManager::bShiftDown, 1);
+        // The key itself is not a character (the code falls out here).
+        0
+    } else if key == 0x38 || key == 0xb8 {
+        modifiers(e, None, 1);
+        0
+    } else if key == 0x1d || key == 0x9d {
+        modifiers(e, None, 2);
+        0
+    } else if let Some(&(_, code, repeats)) = TEXT_ENTRY_KEYS.iter().find(|(k, _, _)| *k == key) {
+        if repeats {
+            fn_007166f0(e, this, code);
+        }
+        code
+    } else {
+        character
+    }
+}
+
+/// The scan codes `fn_007154b0` turns into editing codes: arrows (`0xcb`
+/// left, `0xcd` right, `0xc8` up, `0xd0` down; these start the key repeat),
+/// home `0xc7`, end `0xcf`, page down `0xd1`, page up `0xc9` and delete
+/// `0xd3` (which starts it too).
+const TEXT_ENTRY_KEYS: [(i32, u32, bool); 9] = [
+    (0xcb, 0x8000_0001, true),
+    (0xcd, 0x8000_0002, true),
+    (0xc8, 0x8000_0003, true),
+    (0xd0, 0x8000_0004, true),
+    (0xc7, 0x8000_0005, false),
+    (0xcf, 0x8000_0006, false),
+    (0xd1, 0x8000_000a, false),
+    (0xc9, 0x8000_0009, false),
+    (0xd3, 0x8000_0007, true),
+];
+
+// Translated from 00715770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the extra interface (`XUserInterface::XUIIsUp`, `0070edf0`) is up
+/// and the object at `011daac0` has the flag `0x80000`.
+pub fn fn_00715770(e: &mut Engine) -> bool {
+    if e.call(XUI_IS_UP, &args![]).bool() {
+        let owner = e.global::<u32>(FLAGS_OWNER);
+        if e.call(HAS_FLAG, &args![owner, 0x80000u32]).bool() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Tells the menu of `tile` that the pointer or focus left it: the tile's
+/// trait `0xfc3` is cleared and `DoLeave(menu, id, tile)` is called with the
+/// menu of the tile and the id in its trait `0xfaa`.
+fn leave_tile(e: &mut Engine, this: Ptr<InterfaceManager>, tile: u32) {
+    tile_set_int(e, tile, 0xfc3, 0);
+    let id = tile_menu_id(e, tile);
+    let menu = e.call(TILE_GET_MENU, &args![tile]).u32();
+    e.call(DO_LEAVE, &args![this, menu, id as u32, tile]);
+}
+
+// Translated from 007157b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::ClearOverTileTarget` (Xbox PDB): with `leave` set and
+/// both the tile under the pointer (`pOverTileTarget`) and its menu
+/// (`pOverTileMenu`) known, the tile's traits `0xfc3` and `0xfc7` are cleared
+/// and the menu is told (`DoLeave(menu, id, tile)`, id from trait `0xfaa`).
+/// Both are forgotten whatever `leave` is.
+pub fn interface_manager_clear_over_tile_target(
+    e: &mut Engine,
+    this: Ptr<InterfaceManager>,
+    leave: u8,
+) {
+    let tile = e.get(this, InterfaceManager::pOverTileTarget);
+    let menu = e.get(this, InterfaceManager::pOverTileMenu);
+    if leave != 0 && menu != 0 && tile != 0 {
+        tile_set_int(e, tile, 0xfc3, 0);
+        tile_set_int(e, tile, 0xfc7, 0);
+        let id = tile_menu_id(e, tile);
+        e.call(DO_LEAVE, &args![this, menu, id as u32, tile]);
+    }
+    e.set(this, InterfaceManager::pOverTileTarget, 0);
+    e.set(this, InterfaceManager::pOverTileMenu, 0);
+}
+
+/// Counts a focus change of the tile `tile` when its trait `0xfd6` is
+/// positive: `iLastXDefault` goes up by one and becomes that trait.
+fn count_focus_change(e: &mut Engine, this: Ptr<InterfaceManager>, tile: u32) {
+    let value = tile_get_float(e, tile, 0xfd6);
+    if value > e.global::<f64>(ZERO_DOUBLE) {
+        let count = e.get(this, InterfaceManager::iLastXDefault).wrapping_add(1);
+        e.set(this, InterfaceManager::iLastXDefault, count);
+        fn_00715c60(e, tile, 0xfd6, count);
+    }
+}
+
+// Translated from 00715860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::SetCurrentFocusTarget` (Xbox PDB): moves the focus
+/// (`pMouseOverTarget`) to `tile`. `trait_id` says which kind of focus it is:
+/// `0xfc3` (the tile is entered; its menu is told with `DoEnter`, and with
+/// `play_sound` the tile sound `0xfe8` plays) or `0xfc7` (the tile is
+/// clicked: the sound named by its trait `0xfcb` plays with `play_sound`, its
+/// trait `0xfc7` pulses, its menu is called through slot `0xc` with the id and
+/// the tile, its children are updated, and the old focus is left unless it
+/// is still visible and has trait `0xfaf`). A null tile clears the focus. The
+/// tile under the pointer (`pOverTileTarget`) is left whenever a tile is
+/// given.
+pub fn interface_manager_set_current_focus_target(
+    e: &mut Engine,
+    this: Ptr<InterfaceManager>,
+    tile: u32,
+    trait_id: u32,
+    play_sound: u8,
+) {
+    let focus = e.get(this, InterfaceManager::pMouseOverTarget);
+    if focus != 0 && focus != tile {
+        count_focus_change(e, this, focus);
+    }
+    if tile != 0 {
+        let over = e.get(this, InterfaceManager::pOverTileTarget);
+        if over != 0 {
+            leave_tile(e, this, over);
+        }
+        e.set(this, InterfaceManager::pOverTileTarget, 0);
+        e.set(this, InterfaceManager::pOverTileMenu, 0);
+    }
+    if tile == 0 {
+        let focus = e.get(this, InterfaceManager::pMouseOverTarget);
+        if focus != 0 {
+            leave_tile(e, this, focus);
+        }
+        interface_manager_clear_over_tile_target(e, this, 0);
+        e.set(this, InterfaceManager::pMouseOverTarget, 0);
+    } else if trait_id == 0xfc3 && e.get(this, InterfaceManager::pMouseOverTarget) != tile {
+        let focus = e.get(this, InterfaceManager::pMouseOverTarget);
+        if focus != 0 {
+            leave_tile(e, this, focus);
+        }
+        e.set(this, InterfaceManager::pMouseOverTarget, tile);
+        count_focus_change(e, this, tile);
+        tile_set_int(e, tile, 0xfc3, 1);
+        if play_sound != 0 {
+            e.call(TILE_PLAY_TILE_SOUND, &args![tile, 0xfe8u32]);
+        }
+        let id = tile_menu_id(e, tile);
+        let menu = e.call(TILE_GET_MENU, &args![tile]).u32();
+        e.call(DO_ENTER, &args![this, menu, id as u32, tile]);
+    } else if trait_id == 0xfc7 {
+        let sound = {
+            let value = tile_get_float(e, tile, 0xfcb);
+            e.call(FTOL, &args![value]).i32()
+        };
+        if play_sound != 0 && sound != 0 {
+            e.call(PLAY_MENU_SOUND, &args![sound as u32]);
+        }
+        tile_set_int(e, tile, 0xfc7, 1);
+        tile_set_int(e, tile, 0xfc7, 0);
+        let menu = e.call(TILE_GET_MENU, &args![tile]).u32();
+        let id = tile_menu_id(e, tile);
+        e.vcall(menu, 0xc, &args![id as u32, tile]);
+        e.call(TILE_UPDATE_CHILDREN, &args![tile, 0u32]);
+        let focus = e.get(this, InterfaceManager::pMouseOverTarget);
+        if focus != 0 {
+            if e.call(TILE_IS_VISIBLE, &args![focus]).bool()
+                && e.call(TILE_IS_TRUE, &args![focus, 0xfafu32]).bool()
+            {
+                return;
+            }
+            leave_tile(e, this, focus);
+            interface_manager_clear_over_tile_target(e, this, 0);
+            e.set(this, InterfaceManager::pMouseOverTarget, 0);
+        }
+    }
+}
+
+// Translated from 00715c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the trait `trait_id` of `tile` to `value` as a float
+/// (`Tile::SetFloat(trait, (float)value, true)`; the integer is unsigned).
+pub fn fn_00715c60(e: &mut Engine, tile: u32, trait_id: u32, value: u32) {
+    tile_set_float(e, tile, trait_id, (value as u64) as f32);
+}
+
+// Translated from 00715ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::GetDefaultFocus` (Xbox PDB): scans the menu for the
+/// tile with the greatest focus (`ScanForMaxFocus`) and makes it the focus
+/// (trait `0xfc3`, with sound); then, unless a 360 controller is in use
+/// without the mouse, the cursor node is shown and its trait `0xfa3`
+/// cleared. `bMouseInMotion` is cleared. With nothing found the focus is
+/// cleared.
+pub fn interface_manager_get_default_focus(e: &mut Engine, this: Ptr<InterfaceManager>) {
+    let found = e.with_stack(4, |e, best| {
+        e.mem.set_u32(best.addr(), 0x8000_0000);
+        interface_manager_scan_for_max_focus(e, this, best.addr(), 0)
+    });
+    if found == 0 {
+        interface_manager_set_current_focus_target(e, this, 0, 0xfc3, 1);
+        return;
+    }
+    interface_manager_set_current_focus_target(e, this, found, 0xfc3, 1);
+    if !e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
+        || e.get(this, InterfaceManager::bShowMouse) != 0
+    {
+        let cursor = e.get(this, InterfaceManager::pCursor);
+        let node = e.call(TILE_IMAGE_NODE, &args![cursor]).u32();
+        e.call(NODE_SET_FLAG, &args![node, 1u32]);
+        let cursor = e.get(this, InterfaceManager::pCursor);
+        tile_set_int(e, cursor, 0xfa3, 0);
+    }
+    e.set(this, InterfaceManager::bMouseInMotion, 0);
+}
+
+/// `(float)width`, `(float)height` of the renderer as the screen-shape
+/// functions read them.
+fn render_target_size(e: &mut Engine) -> (f32, f32) {
+    let width = e.call(RENDER_TARGET_WIDTH, &args![]).i32() as f32;
+    let height = e.call(RENDER_TARGET_HEIGHT, &args![]).i32() as f32;
+    (width, height)
+}
+
+// Translated from 00715d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::GetScreenWidth` (Xbox PDB, `float` in `ST0`): the
+/// width of the interface space, `1280` unless the render target is wider
+/// than tall, then `width / height * 960`.
+pub fn interface_manager_get_screen_width(e: &mut Engine) -> f32 {
+    let (width, height) = render_target_size(e);
+    if height < width {
+        let base: f64 = e.global(BASE_HEIGHT_DOUBLE);
+        (width as f64 / height as f64 * base) as f32
+    } else {
+        e.global(BASE_WIDTH_FLOAT)
+    }
+}
+
+// Translated from 00715da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The height of the interface space (`float` in `ST0`): `960` unless the
+/// render target is taller than wide, then `height / width * 1280`.
+pub fn fn_00715da0(e: &mut Engine) -> f32 {
+    let (width, height) = render_target_size(e);
+    if width < height {
+        let base: f64 = e.global(BASE_WIDTH_DOUBLE);
+        (height as f64 / width as f64 * base) as f32
+    } else {
+        e.global(BASE_HEIGHT_FLOAT)
+    }
+}
+
+// Translated from 00715e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the screen metrics on the root menus tile: the string lists at
+/// `011d8bd8` and `011d8bf0` get the limits `width` and `height` (the second
+/// takes `width` when `height` is not positive; both are left alone when
+/// `width` is not positive), then the traits `0xfc0`, `0xfbf` (the interface
+/// margins), `0xfb1` (the interface width) and `0xfb0` (its height) are set.
+pub fn fn_00715e00(e: &mut Engine, this: Ptr<InterfaceManager>, width: i32, height: i32) {
+    if width > 0 {
+        e.call(STRING_LIST_SET_LIMIT, &args![LIMIT_LIST_WIDTH, width]);
+        let second = if height > 0 { height } else { width };
+        e.call(STRING_LIST_SET_LIMIT, &args![LIMIT_LIST_HEIGHT, second]);
+    }
+    let root = e.get(this, InterfaceManager::pMenusRoot);
+    let margin_a = e.call(GET_INTERFACE_MARGIN_A, &args![]).f32();
+    tile_set_float(e, root, 0xfc0, margin_a);
+    let root = e.get(this, InterfaceManager::pMenusRoot);
+    let margin_b = e.call(GET_INTERFACE_MARGIN_B, &args![]).f32();
+    tile_set_float(e, root, 0xfbf, margin_b);
+    let root = e.get(this, InterfaceManager::pMenusRoot);
+    let interface_width = interface_manager_get_screen_width(e);
+    tile_set_float(e, root, 0xfb1, interface_width);
+    let root = e.get(this, InterfaceManager::pMenusRoot);
+    let interface_height = fn_00715da0(e);
+    tile_set_float(e, root, 0xfb0, interface_height);
+}
+
+// Translated from 00715ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::ToggleSafeZone` (Xbox PDB): with `mode` 3 the safe
+/// zone tile (`pSafeZone`) is deleted. If there is none now, it is read from
+/// `Data\Menus\Main\safe_zone.xml` under the menus root, shown (trait
+/// `0xfa3`) and faded in (`RecursiveFade(node, 1.0, 0.0)`); if there is one,
+/// it is deleted. (With a zone and `mode` 2 the code asks the zone's trait
+/// `0xfa3`; with `mode` 1 or 0 it computes a flag it never uses.)
+pub fn interface_manager_toggle_safe_zone(e: &mut Engine, this: Ptr<InterfaceManager>, mode: i32) {
+    let zone = e.get(this, InterfaceManager::pSafeZone);
+    if zone != 0 && mode == 2 {
+        e.call(TILE_IS_TRUE, &args![zone, 0xfa3u32]);
+    }
+    if mode == 3 {
+        let zone = e.get(this, InterfaceManager::pSafeZone);
+        if zone != 0 {
+            delete_virtual(e, zone);
+        }
+        e.set(this, InterfaceManager::pSafeZone, 0);
+    }
+    if e.get(this, InterfaceManager::pSafeZone) == 0 {
+        let root = e.call(GET_MENUS_ROOT, &args![this]).u32();
+        let zone = e.call(TILE_READ_FILE, &args![root, SAFE_ZONE_PATH]).u32();
+        e.set(this, InterfaceManager::pSafeZone, zone);
+        tile_set_int(e, zone, 0xfa3, 1);
+        let zone = e.get(this, InterfaceManager::pSafeZone);
+        let node = e.call(TILE_IMAGE_NODE, &args![zone]).u32();
+        interface_manager_recursive_fade(e, this, node, 1.0, 0.0);
+    } else {
+        let zone = e.get(this, InterfaceManager::pSafeZone);
+        delete_virtual(e, zone);
+        e.set(this, InterfaceManager::pSafeZone, 0);
+    }
+}
+
+// Translated from 00716010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forgets `reference` wherever the manager keeps it (`pPickRef`,
+/// `pReticleRef`, `pCrossHairRef`, `pActivateRef`, `pTelekinesisRef`; Xbox
+/// PDB) and tells the HUD to forget it too (`00778b40`).
+pub fn fn_00716010(e: &mut Engine, this: Ptr<InterfaceManager>, reference: u32) {
+    for offset in [0xf0u32, 0xf4, 0xf8, 0xfc, 0x100] {
+        if e.mem.u32(this.addr() + offset) == reference {
+            e.mem.set_u32(this.addr() + offset, 0);
+        }
+    }
+    e.call(HUD_FORGET_REFERENCE, &args![reference]);
+}
+
+// Translated from 007160b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::ForceTextureRelease` (Xbox PDB): releases the
+/// terminal's static geometry, calls slot `0x1c` of the root menus tile
+/// object, clears the world map texture and cleans up the unused textures
+/// (`TES::CleanUpUnusedTextures(true)` on the object at `011dea10`).
+pub fn interface_manager_force_texture_release(e: &mut Engine, this: Ptr<InterfaceManager>) {
+    e.call(RELEASE_STATIC_GEOMETRY, &args![]);
+    let root = e.call(GET_MENUS_ROOT, &args![this]).u32();
+    e.vcall(root, 0x1c, &args![]);
+    e.call(CLEAR_WORLD_MAP_TEXTURE, &args![]);
+    let owner = e.global::<u32>(TEXTURE_CLEANUP_OWNER);
+    e.call(CLEAN_UP_UNUSED_TEXTURES, &args![owner, 1u32]);
+}
+
+/// `ftol(float of the trait entry)`: the integer value of the trait entry
+/// `00488d50` reads.
+fn trait_entry_int(e: &mut Engine, entry: u32) -> i32 {
+    let value = e.call(TRAIT_ENTRY_VALUE, &args![entry]).f64();
+    e.call(FTOL, &args![value]).i32()
+}
+
+// Translated from 007160f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::ScanForMaxFocus` (Xbox PDB): finds the tile with the
+/// highest focus value (trait `0xfd6`) in the tree below `tile`, or, with
+/// `tile` null, below the frontmost menu's tile (null when there is no menu,
+/// or when it is a tile of type `0x389` whose menu is neither in state 1
+/// nor 8). Returns null for an invisible tile (trait `0xfa3` clear). The best
+/// value found is stored at `best` (the value there on entry is the one to
+/// beat, `0x80000000` when the call is not a recursion). Equal values go to
+/// the tile with the smaller order (trait `0xfac`). A tile with traits `0xfaf`
+/// and `0xfa3` set competes with its children by its own `0xfd6` value.
+pub fn interface_manager_scan_for_max_focus(
+    e: &mut Engine,
+    _this: Ptr<InterfaceManager>,
+    best: u32,
+    tile: u32,
+) -> u32 {
+    let mut found = 0u32;
+    let mut best_value = e.mem.i32(best);
+    let mut best_order = 0x7fff_ffffi32;
+    e.mem.set_i32(best, i32::MIN);
+    let mut tile = tile;
+    if tile == 0 {
+        let manager = e.call(MENU_MANAGER_INSTANCE, &args![1u32]).u32();
+        let frontmost = e.call(GET_FRONTMOST_MENU, &args![manager]).u32();
+        if frontmost == 0 {
+            return 0;
+        }
+        tile = e.call(GET_FIELD_AT_4, &args![frontmost]).u32();
+        if e.vcall(tile, 0xc, &args![]).u32() == 0x389 {
+            let menu = e.call(TILE_GET_MENU, &args![tile]).u32();
+            if e.call(MENU_STATE, &args![menu]).u32() != 1 {
+                let menu = e.call(TILE_GET_MENU, &args![tile]).u32();
+                if e.call(MENU_STATE, &args![menu]).u32() != 8 {
+                    return 0;
+                }
+            }
+        }
+    }
+    if !e.call(TILE_IS_TRUE, &args![tile, 0xfa3u32]).bool() {
+        return 0;
+    }
+    let children = tile + 4;
+    let first = e.call(NI_POINTER_GET, &args![children]).u32();
+    e.with_stack(8, |e, cells| {
+        let cursor = cells.addr();
+        let child_best = cells.addr() + 4;
+        e.mem.set_u32(cursor, first);
+        while e.mem.u32(cursor) != 0 {
+            let element = e.call(LIST_NEXT_ELEMENT, &args![children, cursor]).u32();
+            let child = e.mem.u32(element);
+            e.mem.set_i32(child_best, i32::MIN);
+            let candidate = interface_manager_scan_for_max_focus(e, _this, child_best, child);
+            let value = e.mem.i32(child_best);
+            if candidate != 0 && value > best_value {
+                best_value = value;
+                found = candidate;
+            } else if candidate != 0 && value == best_value {
+                let order = e.call(TILE_GET_VALUE_Q, &args![candidate, 0xfacu32]).u32();
+                if order != 0 {
+                    let order = trait_entry_int(e, order);
+                    if order < best_order {
+                        best_order = order;
+                        found = candidate;
+                    }
+                }
+            }
+        }
+    });
+    if e.call(TILE_IS_TRUE, &args![tile, 0xfafu32]).bool()
+        && e.call(TILE_IS_TRUE, &args![tile, 0xfa3u32]).bool()
+    {
+        let entry = e.call(TILE_GET_TRAIT_ENTRY, &args![tile, 0xfd6u32]).u32();
+        if entry != 0 {
+            let own = trait_entry_int(e, entry);
+            if own > best_value {
+                best_value = own;
+                found = tile;
+            } else if own == best_value {
+                let order = e.call(TILE_GET_VALUE_Q, &args![tile, 0xfacu32]).u32();
+                if order != 0 {
+                    let order = trait_entry_int(e, order);
+                    if order < best_order {
+                        found = tile;
+                    }
+                }
+            }
+        }
+    }
+    e.mem.set_i32(best, best_value);
+    found
+}
+
+// Translated from 00716320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::UpdateAllTimers` (Xbox PDB): adds the frame time to
+/// every timer of the list (divided by the rate of `00716440` while the
+/// object at `011f2250` reports state 4) and removes (and frees) each timer
+/// whose elapsed time has reached its end (`clamp(elapsed / end, 0, 1)` is 1).
+pub fn interface_manager_update_all_timers(e: &mut Engine, this: Ptr<InterfaceManager>) {
+    let head = e.get(this, InterfaceManager::pTimers);
+    let mut timer = e.mem.u32(head + 0x10);
+    while timer != 0 {
+        let frame_time = |e: &mut Engine| e.call(FRAME_TIME_GETTER, &args![FADE_CLOCK]).f64();
+        let elapsed = e.mem.f32(timer + 4) as f64;
+        let state = e
+            .call(WEAPON_STATE_GETTER, &args![WEAPON_STATE_OBJECT])
+            .i32();
+        let elapsed = if state == 4 {
+            let time = frame_time(e);
+            let rate = fn_00716440(e) as f64;
+            time / rate + elapsed
+        } else {
+            frame_time(e) + elapsed
+        };
+        e.mem.set_f32(timer + 4, elapsed as f32);
+        let ratio = (e.mem.f32(timer + 4) as f64 / e.mem.f32(timer + 8) as f64) as f32;
+        let least = e.call(FLOAT_MIN, &args![1.0f32, ratio]).f32();
+        let progress = e.call(FLOAT_MAX, &args![0.0f32, least]).f64();
+        if progress == e.global::<f64>(ONE_DOUBLE) {
+            let next = e.mem.u32(timer + 0x10);
+            let previous = e.mem.u32(timer + 0xc);
+            e.mem.set_u32(previous + 0x10, next);
+            if next != 0 {
+                e.mem.set_u32(next + 0xc, previous);
+            }
+            if next == 0 {
+                let manager = e.call(GET_MANAGER, &args![]).u32();
+                let list = e.mem.u32(manager + 0x164);
+                e.mem.set_u32(list + 0xc, previous);
+            }
+            e.call(OPERATOR_DELETE, &args![timer]);
+            timer = next;
+        } else {
+            timer = e.mem.u32(timer + 0x10);
+        }
+    }
+}
+
+// Translated from 00716440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `float` at `011ac3a0` (`ST0`): the rate the timers are divided by in
+/// state 4.
+pub fn fn_00716440(e: &mut Engine) -> f32 {
+    e.global(TIMER_RATE)
+}
+
+// Translated from 00716450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Frees every timer of the list and its head, and clears `pTimers`.
+pub fn fn_00716450(e: &mut Engine, this: Ptr<InterfaceManager>) {
+    let head = e.get(this, InterfaceManager::pTimers);
+    let mut timer = e.mem.u32(head + 0x10);
+    while timer != 0 {
+        let next = e.mem.u32(timer + 0x10);
+        e.call(OPERATOR_DELETE, &args![timer]);
+        timer = next;
+    }
+    let head = e.get(this, InterfaceManager::pTimers);
+    e.call(OPERATOR_DELETE, &args![head]);
+    e.set(this, InterfaceManager::pTimers, 0);
+}
+
+// Translated from 007164c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::NewTimer` (Xbox PDB, static): replaces the timer with
+/// the index `index` by a new one (`ClearTimer`, then a new node from
+/// [`timer_construct`]) whose end is `end`, at least 0, appended at the tail
+/// of the list. The exception frame is not translated; the scope guard
+/// carries the source line `0x145a`.
+pub fn interface_manager_new_timer(e: &mut Engine, index: u32, end: f32) {
+    with_scope_guard(e, 0x145a, |e| {
+        interface_manager_clear_timer(e, index);
+        let timer = construct_new(e, OPERATOR_NEW, 0x14, |e, block| {
+            timer_construct(e, block.cast()).cast()
+        });
+        // The compiled code stores through the result without a null check.
+        e.set(timer.cast::<Timer>(), Timer::pIndex, index);
+        let least = e.call(FLOAT_MAX, &args![end, 0.0f32]).f32();
+        e.set(timer.cast::<Timer>(), Timer::fEnd, least);
+        let manager = e.call(GET_MANAGER, &args![]).u32();
+        let list = e.mem.u32(manager + 0x164);
+        let tail = e.mem.u32(list + 0xc);
+        e.set(timer.cast::<Timer>(), Timer::pPrev, tail);
+        let manager = e.call(GET_MANAGER, &args![]).u32();
+        let list = e.mem.u32(manager + 0x164);
+        let tail = e.mem.u32(list + 0xc);
+        e.mem.set_u32(tail + 0x10, timer.addr());
+        let manager = e.call(GET_MANAGER, &args![]).u32();
+        let list = e.mem.u32(manager + 0x164);
+        e.mem.set_u32(list + 0xc, timer.addr());
+    });
+}
+
+// Translated from 007165d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::ClearTimer` (Xbox PDB, static): unlinks and frees the
+/// first timer with the index `index`, moving the list's tail back when it
+/// was the last.
+pub fn interface_manager_clear_timer(e: &mut Engine, index: u32) {
+    let manager = e.call(GET_MANAGER, &args![]).u32();
+    let list = e.mem.u32(manager + 0x164);
+    let mut timer = e.mem.u32(list + 0x10);
+    while timer != 0 {
+        if e.mem.u32(timer) == index {
+            let next = e.mem.u32(timer + 0x10);
+            let previous = e.mem.u32(timer + 0xc);
+            e.mem.set_u32(previous + 0x10, next);
+            if next != 0 {
+                e.mem.set_u32(next + 0xc, previous);
+            }
+            if e.mem.u32(timer + 0x10) == 0 {
+                let manager = e.call(GET_MANAGER, &args![]).u32();
+                let list = e.mem.u32(manager + 0x164);
+                e.mem.set_u32(list + 0xc, previous);
+            }
+            e.call(OPERATOR_DELETE, &args![timer]);
+            return;
+        }
+        timer = e.mem.u32(timer + 0x10);
+    }
+}
+
+// Translated from 00716660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// How far the timer with the index `index` has come (`float` in `ST0`):
+/// `clamp(elapsed / end, 0, 1)`; 1 when there is no such timer and `-1` when
+/// its end is not positive.
+pub fn fn_00716660(e: &mut Engine, index: u32) -> f32 {
+    let manager = e.call(GET_MANAGER, &args![]).u32();
+    let list = e.mem.u32(manager + 0x164);
+    let mut timer = e.mem.u32(list + 0x10);
+    while timer != 0 {
+        if index == e.mem.u32(timer) {
+            let end = e.mem.f32(timer + 8);
+            if end as f64 > e.global::<f64>(ZERO_DOUBLE) {
+                let ratio = (e.mem.f32(timer + 4) as f64 / end as f64) as f32;
+                let least = e.call(FLOAT_MIN, &args![1.0f32, ratio]).f32();
+                return e.call(FLOAT_MAX, &args![0.0f32, least]).f32();
+            }
+            return e.global(CURSOR_DIRECTION_Y);
+        }
+        timer = e.mem.u32(timer + 0x10);
+    }
+    1.0
+}
+
+// Translated from 007166f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Starts the key repeat for `key` (`iRepeatingKey`, Xbox PDB): the start
+/// time (`uKeyDownTime`) is now, the last repeat time is cleared.
+pub fn fn_007166f0(e: &mut Engine, this: Ptr<InterfaceManager>, key: u32) {
+    let now = e.call(FADE_CLOCK_READ, &args![FADE_CLOCK]).u32();
+    e.set(this, InterfaceManager::uKeyDownTime, now);
+    // +0x158: the time of the last repeat (no PDB name).
+    e.mem.set_u32(this.addr() + 0x158, 0);
+    e.set(this, InterfaceManager::iRepeatingKey, key as i32);
+}
+
+// Translated from 00716730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The key repeat: returns the key code to repeat now, or 0. Nothing
+/// repeats while the first delay (`011d8b38`) is negative. A repeating
+/// arrow code (`0x80000001` .. `0x80000004`) stops, returning 0, once the
+/// controls say its key is no longer held. Otherwise the first repeat comes
+/// when the time since the key went down reaches the first delay, later
+/// ones when the time since the last reaches the second delay (`011d8b88`)
+/// divided by `rate`.
+pub fn fn_00716730(e: &mut Engine, this: Ptr<InterfaceManager>, rate: f32) -> u32 {
+    let now = e.call(FADE_CLOCK_READ, &args![FADE_CLOCK]).u32();
+    let first_delay = e
+        .call(FLOAT_HOLDER_GET, &args![REPEAT_DELAY_HOLDER_FIRST])
+        .u32();
+    if e.mem.f32(first_delay) < 0.0 {
+        return 0;
+    }
+    let repeating = e.get(this, InterfaceManager::iRepeatingKey) as u32;
+    let mut released = false;
+    for (code, key) in [
+        (0x8000_0001u32, 0xcbu32),
+        (0x8000_0002, 0xcd),
+        (0x8000_0003, 0xc8),
+        (0x8000_0004, 0xd0),
+    ] {
+        if repeating == code {
+            let controls_owner = e.global::<u32>(CONTROLS_OWNER);
+            let controls = e.call(CONTROLS_GET, &args![controls_owner]).u32();
+            if e.call(CONTROLS_QUERY_00A24180, &args![controls, key, 0u32])
+                .u32()
+                == 0
+            {
+                released = true;
+                break;
+            }
+        }
+    }
+    if released {
+        e.set(this, InterfaceManager::iRepeatingKey, 0);
+        return 0;
+    }
+    let last = e.mem.u32(this.addr() + 0x158);
+    if last == 0 {
+        let since = now.wrapping_sub(e.get(this, InterfaceManager::uKeyDownTime)) as f64;
+        let first_delay = e
+            .call(FLOAT_HOLDER_GET, &args![REPEAT_DELAY_HOLDER_FIRST])
+            .u32();
+        if e.mem.f32(first_delay) as f64 <= since {
+            e.mem.set_u32(this.addr() + 0x158, now);
+            e.get(this, InterfaceManager::iRepeatingKey) as u32
+        } else {
+            0
+        }
+    } else {
+        let since = now.wrapping_sub(last) as f64;
+        let next_delay = e
+            .call(FLOAT_HOLDER_GET, &args![REPEAT_DELAY_HOLDER_NEXT])
+            .u32();
+        if e.mem.f32(next_delay) as f64 / rate as f64 <= since {
+            e.mem.set_u32(this.addr() + 0x158, now);
+            e.get(this, InterfaceManager::iRepeatingKey) as u32
+        } else {
+            0
+        }
+    }
+}
+
+// Translated from 00716910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::TileIsAcceptingEvents` (Xbox PDB): false when the menu
+/// on top of the stack has a type (trait `0xfa7`) of `0x66` or `0x1776` and
+/// `tile` belongs to another menu; true otherwise.
+pub fn interface_manager_tile_is_accepting_events(
+    e: &mut Engine,
+    this: Ptr<InterfaceManager>,
+    tile: u32,
+) -> bool {
+    let top = interface_manager_get_enter_stack_top(e, this);
+    let top_tile = e.call(TILE_GET_MENU_BY_CLASS, &args![top]).u32();
+    if top_tile == 0 {
+        return true;
+    }
+    let value = tile_get_float(e, top_tile, 0xfa7);
+    let kind = e.call(FTOL, &args![value]).i32();
+    if kind == 0x66 || kind == 0x1776 {
+        let own_menu = e.call(TILE_GET_MENU, &args![tile]).u32();
+        let top_menu = e.call(TILE_GET_MENU, &args![top_tile]).u32();
+        if own_menu != top_menu {
+            return false;
+        }
+    }
+    true
+}
+
+// Translated from 00716980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the text entry: both strings are constructed, the entry is
+/// inactive with the caret at 0, no width limit (`-1`), the blink time 0,
+/// the caret phase clear and `field_18` 1. Returns `this`. The exception
+/// frame is not translated.
+pub fn fn_00716980(e: &mut Engine, this: Ptr<TextEntry>) -> Ptr<TextEntry> {
+    e.call(STRING_CONSTRUCT, &args![this]);
+    e.call(STRING_CONSTRUCT, &args![this.addr() + 8]);
+    e.set(this, TextEntry::active, 0);
+    e.set(this, TextEntry::cursor, 0);
+    e.set(this, TextEntry::caret_phase, 0);
+    e.set(this, TextEntry::max_width, -1);
+    e.set(this, TextEntry::last_blink_time, 0);
+    e.set(this, TextEntry::field_18, 1);
+    this
+}
+
+// Translated from 00716a10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the text entry: frees the shown string, then the text
+/// (`BSStringT` destructor, `004037d0`, on each). `00716a10` is a body the
+/// linker shares with unrelated library destructors. The exception frame is
+/// not translated.
+pub fn fn_00716a10(e: &mut Engine, this: Ptr<TextEntry>) {
+    e.call(STRING_DESTROY, &args![this.addr() + 8]);
+    e.call(STRING_DESTROY, &args![this]);
+}
+
+// Translated from 00716a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the text of the entry: `text` goes to both strings (the shown copy
+/// is rebuilt with the caret on the next draw).
+pub fn fn_00716a70(e: &mut Engine, this: Ptr<TextEntry>, text: u32) {
+    e.call(STRING_SET, &args![this, text]);
+    e.call(STRING_SET, &args![this.addr() + 8, text]);
+}
+
+// Translated from 00716aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the width limit to `width - 5`; when that is negative, to the
+/// interface width (`GetScreenWidth`, converted to an integer).
+pub fn fn_00716aa0(e: &mut Engine, this: Ptr<TextEntry>, width: i32) {
+    e.set(this, TextEntry::max_width, width.wrapping_sub(5));
+    if e.get(this, TextEntry::max_width) < 0 {
+        e.call(GET_MANAGER, &args![]);
+        let screen_width = interface_manager_get_screen_width(e) as f64;
+        let limit = e.call(FTOL, &args![screen_width]).i32();
+        e.set(this, TextEntry::max_width, limit);
+    }
+}
+
+// Translated from 00716ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the entry is active.
+pub fn fn_00716ae0(e: &mut Engine, this: Ptr<TextEntry>) -> u8 {
+    e.get(this, TextEntry::active)
+}
+
+/// Copies the text of the entry into the buffer at `buffer` (the empty
+/// string when it has none) and returns its length.
+fn text_entry_copy_text(e: &mut Engine, this: Ptr<TextEntry>, buffer: u32) -> i32 {
+    if e.call(STRING_LENGTH, &args![this]).u32() == 0 {
+        e.call(TEXT_COPY, &args![buffer, EMPTY_TEXT]);
+    } else {
+        let text = e.call(NI_POINTER_GET, &args![this]).u32();
+        e.call(TEXT_COPY, &args![buffer, text]);
+    }
+    e.call(STRING_LENGTH, &args![this]).i32()
+}
+
+/// Empties the text: the buffer gets a terminator at 0, the caret goes to
+/// 0 and the text is set from the buffer.
+fn text_entry_clear(e: &mut Engine, this: Ptr<TextEntry>, buffer: u32) {
+    e.mem.set_u8(buffer, 0);
+    e.set(this, TextEntry::cursor, 0);
+    e.call(STRING_SET, &args![this, buffer]);
+    e.set(this, TextEntry::clears_text_on_edit, 0);
+}
+
+// Translated from 00716b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Applies an editing code to the text of an active entry (the codes
+/// `fn_007154b0` makes). Backspace and delete remove the character before or
+/// at the caret, or empty the text when `clears_text_on_edit` is set; left,
+/// right, home and end move the caret (and clear that flag); enter empties
+/// the text when the flag is set and otherwise deactivates the entry; codes
+/// `0x80000009` and `0x8000000a` only clear the flag, and `9` is ignored. Any
+/// other code (including `0x80000003` and `0x80000004`) is inserted as its low
+/// byte at the caret, if the entry has no width limit or the new text is
+/// accepted by `00717230`.
+pub fn fn_00716b00(e: &mut Engine, this: Ptr<TextEntry>, code: u32) {
+    if e.get(this, TextEntry::active) == 0 {
+        return;
+    }
+    e.with_stack(0x404, |e, buffer| {
+        let buffer = buffer.addr();
+        let mut length = text_entry_copy_text(e, this, buffer);
+        let signed = code as i32;
+        if signed == 9 {
+            return;
+        }
+        let selector = code.wrapping_sub(0x8000_0000);
+        if signed < 9 && selector <= 10 && selector != 3 && selector != 4 {
+            match selector {
+                0 | 7 => {
+                    if e.get(this, TextEntry::clears_text_on_edit) != 0 {
+                        text_entry_clear(e, this, buffer);
+                    } else {
+                        let cursor = e.get(this, TextEntry::cursor);
+                        let backspace = selector == 0;
+                        if (backspace && cursor > 0) || (!backspace && cursor < length) {
+                            let from = if backspace { cursor - 1 } else { cursor };
+                            for at in from..length {
+                                let next = e.mem.u8(buffer + at as u32 + 1);
+                                e.mem.set_u8(buffer + at as u32, next);
+                            }
+                            length -= 1;
+                            if backspace {
+                                e.set(this, TextEntry::cursor, cursor - 1);
+                            }
+                            e.mem.set_u8(buffer + length as u32, 0);
+                            e.call(STRING_SET, &args![this, buffer]);
+                        }
+                    }
+                }
+                1 => {
+                    let cursor = e.get(this, TextEntry::cursor);
+                    if cursor > 0 {
+                        e.set(this, TextEntry::cursor, cursor - 1);
+                    }
+                    e.set(this, TextEntry::clears_text_on_edit, 0);
+                }
+                2 => {
+                    let cursor = e.get(this, TextEntry::cursor);
+                    if cursor < length {
+                        e.set(this, TextEntry::cursor, cursor + 1);
+                    }
+                    e.set(this, TextEntry::clears_text_on_edit, 0);
+                }
+                5 => {
+                    e.set(this, TextEntry::cursor, 0);
+                    e.set(this, TextEntry::clears_text_on_edit, 0);
+                }
+                6 => {
+                    e.set(this, TextEntry::cursor, length);
+                    e.set(this, TextEntry::clears_text_on_edit, 0);
+                }
+                8 => {
+                    if e.get(this, TextEntry::clears_text_on_edit) != 0 {
+                        text_entry_clear(e, this, buffer);
+                    } else {
+                        e.set(this, TextEntry::active, 0);
+                    }
+                }
+                _ => e.set(this, TextEntry::clears_text_on_edit, 0),
+            }
+            return;
+        }
+        // Any other code: insert its low byte at the caret.
+        if e.get(this, TextEntry::clears_text_on_edit) != 0 {
+            length = 0;
+            text_entry_clear(e, this, buffer);
+        }
+        let cursor = e.get(this, TextEntry::cursor);
+        let mut at = length;
+        while at > cursor {
+            let previous = e.mem.u8(buffer + at as u32 - 1);
+            e.mem.set_u8(buffer + at as u32, previous);
+            at -= 1;
+        }
+        e.mem.set_u8(buffer + at as u32, code as u8);
+        e.mem.set_u8(buffer + length as u32 + 1, 0);
+        if e.get(this, TextEntry::max_width) == -1
+            || e.call(TEXT_ENTRY_ACCEPTS_TEXT, &args![this, buffer]).bool()
+        {
+            let cursor = e.get(this, TextEntry::cursor);
+            e.set(this, TextEntry::cursor, cursor + 1);
+            e.call(STRING_SET, &args![this, buffer]);
+        }
+    });
+}
+
+// Translated from 00717010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Activates or deactivates the entry. Activating an inactive entry puts the
+/// caret at the end of the text.
+pub fn fn_00717010(e: &mut Engine, this: Ptr<TextEntry>, active: u8) {
+    if e.get(this, TextEntry::active) == 0 && active != 0 {
+        let length = e.call(STRING_LENGTH, &args![this]).i32();
+        e.set(this, TextEntry::cursor, length);
+    }
+    e.set(this, TextEntry::active, active);
+}
+
+// Translated from 00717050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Flips the caret phase and remembers the time, when more than 500 ticks
+/// have passed since the last flip.
+pub fn fn_00717050(e: &mut Engine, this: Ptr<TextEntry>) {
+    let now = e.call(FADE_CLOCK_READ, &args![FADE_CLOCK]).u32();
+    if now.wrapping_sub(e.get(this, TextEntry::last_blink_time)) > 500 {
+        let phase = e.get(this, TextEntry::caret_phase);
+        e.set(this, TextEntry::caret_phase, (phase == 0) as u8);
+        e.set(this, TextEntry::last_blink_time, now);
+    }
+}
+
+// Translated from 007170a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Rebuilds the shown copy of the text (the string at `+8`): the text with
+/// the caret character (`|` or `0x7f`, by the caret phase) inserted at the
+/// caret while the entry is active. An empty result is replaced by the string
+/// at `01020770`.
+pub fn fn_007170a0(e: &mut Engine, this: Ptr<TextEntry>) {
+    e.with_stack(0x800, |e, scratch| {
+        let source = scratch.addr();
+        let shown = scratch.addr() + 0x400;
+        let length = e.call(STRING_LENGTH, &args![this]).i32();
+        if e.call(STRING_LENGTH, &args![this]).u32() == 0 {
+            e.call(TEXT_COPY, &args![source, EMPTY_TEXT]);
+        } else {
+            let text = e.call(NI_POINTER_GET, &args![this]).u32();
+            e.call(TEXT_COPY, &args![source, text]);
+        }
+        let mut out = 0u32;
+        for at in 0..=length {
+            if e.get(this, TextEntry::active) != 0 && at == e.get(this, TextEntry::cursor) {
+                let caret = if e.get(this, TextEntry::caret_phase) != 0 {
+                    0x7c
+                } else {
+                    0x7f
+                };
+                e.mem.set_u8(shown + out, caret);
+                out += 1;
+            }
+            let character = e.mem.u8(source + at as u32);
+            e.mem.set_u8(shown + out, character);
+            out += 1;
+        }
+        e.mem.set_u8(shown + out, 0);
+        let display = this.addr() + 8;
+        e.call(STRING_SET, &args![display, shown]);
+        if e.call(STRING_LENGTH, &args![display]).u32() == 0 {
+            e.call(STRING_SET, &args![display, DISPLAY_FALLBACK_STRING]);
+        }
+        e.call(NI_POINTER_GET, &args![display]);
+    });
+}
+
 // @@FUNCS-END@@
 
 #[cfg(test)]
@@ -6162,6 +7683,61 @@ mod tests {
     /// Every callee outside this file: tests replace them all with doubles
     /// that return 0, then give the ones they care about a behaviour.
     const EXTERNAL: &[u32] = &[
+        RENDER_STATE_00B98540,
+        CLOSE_LOADING_MENU,
+        HIDE_MENUS,
+        STACK_NOTIFY_OWNER_GET,
+        STACK_NOTIFY,
+        HUD_FORGET_REFERENCE,
+        RELEASE_STATIC_GEOMETRY,
+        CLEAR_WORLD_MAP_TEXTURE,
+        CLEAN_UP_UNUSED_TEXTURES,
+        RENDER_TARGET_WIDTH,
+        RENDER_TARGET_HEIGHT,
+        POINT_NOT_EQUAL,
+        MENU_MODE_BYTE_GETTER,
+        TILE_GET_TRAIT_ENTRY,
+        TRAIT_ENTRY_VALUE,
+        TEXT_COPY,
+        STRING_LENGTH,
+        STRING_SET,
+        TEXT_ENTRY_ACCEPTS_TEXT,
+        STRING_CONSTRUCT,
+        STRING_DESTROY,
+        GET_MENUS_ROOT,
+        TILE_UPDATE_CHILDREN,
+        TILE_PLAY_TILE_SOUND,
+        PLAY_MENU_SOUND,
+        FTOL,
+        FLOAT_MIN,
+        FLOAT_MAX,
+        TILE_GET_MENU_BY_CLASS,
+        TILE_GET_MENU,
+        TILE_IS_VISIBLE,
+        TILE_IS_TRUE,
+        TILE_GET_VALUE_Q,
+        DO_ENTER,
+        DO_LEAVE,
+        XUI_IS_UP,
+        HAS_FLAG,
+        CONTROLS_GET,
+        CONTROLS_QUERY_00A238A0,
+        CONTROLS_QUERY_00A24180,
+        MENU_STATE,
+        GET_FIELD_AT_4,
+        GET_FRONTMOST_MENU,
+        MENU_MANAGER_INSTANCE,
+        WEAPON_STATE_GETTER,
+        FRAME_TIME_GETTER,
+        FLOAT_HOLDER_GET,
+        GET_MANAGER,
+        NI_POINTER_GET,
+        LIST_NEXT_ELEMENT,
+        MENU_CONSOLE_INSTANCE,
+        MENU_CONSOLE_TOGGLE_VISIBLE,
+        LOG_WARNING,
+        TILE_GET_VALUE,
+        FADE_CLOCK_READ,
         CURSOR_NAME,
         GLOBALS_XML_PATH,
         BACKGROUND_FILL_ALPHA_NAME,
@@ -10341,6 +11917,1649 @@ mod tests {
             function(&mut e, 2);
             assert_eq!(e.global::<u32>(counter), 0xffff_ffff);
         }
+    }
+
+    // ---- 00714c40 .. 007170a0 ----
+
+    fn set_stack(e: &mut Engine, m: Ptr<InterfaceManager>, words: &[u32]) {
+        for index in 0..10u32 {
+            let word = words.get(index as usize).copied().unwrap_or(0);
+            e.mem.set_u32(m.addr() + 0x114 + 4 * index, word);
+        }
+    }
+
+    fn get_stack(e: &Engine, m: Ptr<InterfaceManager>) -> Vec<u32> {
+        (0..10u32)
+            .map(|index| e.mem.u32(m.addr() + 0x114 + 4 * index))
+            .collect()
+    }
+
+    /// A world with a manager, and the stack notification object present.
+    fn stack_world(words: &[u32]) -> (Engine, Ptr<InterfaceManager>) {
+        let mut e = world();
+        let m = manager(&mut e);
+        returns(&mut e, STACK_NOTIFY_OWNER_GET, 0x77);
+        set_stack(&mut e, m, words);
+        (e, m)
+    }
+
+    /// The interface width of a 1920 x 1080 target, as the game keeps it
+    /// (a `float`).
+    fn wide_screen_width() -> f64 {
+        (1920.0f64 / 1080.0 * 960.0) as f32 as f64
+    }
+
+    /// The interface-space constants the screen-shape functions read.
+    fn screen_constants(e: &mut Engine) {
+        e.set_global(BASE_WIDTH_FLOAT, 1280.0f32);
+        e.set_global(BASE_HEIGHT_FLOAT, 960.0f32);
+        e.set_global(BASE_WIDTH_DOUBLE, 1280.0f64);
+        e.set_global(BASE_HEIGHT_DOUBLE, 960.0f64);
+        e.set_global(TWO, 2.0f64);
+    }
+
+    #[test]
+    fn a_render_state_counter_and_call_for_011ffa28() {
+        let mut e = world();
+        e.set_global(RENDER_COUNTER_011FFA28, 10u32);
+        fn_00714c40(&mut e, 3);
+        assert_eq!(e.global::<u32>(RENDER_COUNTER_011FFA28), 7);
+        assert_eq!(calls(&e, RENDER_STATE_00B98540), vec![vec![0, 0]]);
+    }
+
+    #[test]
+    fn emergency_close_closes_every_menu_in_its_own_way() {
+        let mut e = world();
+        let m = manager(&mut e);
+        let (generic_menu, generic_log) = virtual_object(&mut e, &[(0, 0x00aa_0000)], 0);
+        let (loading_menu, loading_log) = virtual_object(&mut e, &[(0, 0x00aa_0004)], 0);
+        e.register_double(TILE_GET_MENU_BY_CLASS, |_, a| Ret {
+            eax: match a[0] {
+                0x400 => 0x5000,
+                0x3ef => 0x6000,
+                _ => 0,
+            },
+            ..Ret::default()
+        });
+        e.register_double(TILE_GET_MENU, move |_, a| Ret {
+            eax: match a[0] {
+                0x5000 => generic_menu,
+                0x6000 => loading_menu,
+                _ => 0,
+            },
+            ..Ret::default()
+        });
+        returns(&mut e, MENU_CONSOLE_INSTANCE, 0x9000);
+        e.set(m, InterfaceManager::cMenuMode, 3);
+        set_stack(&mut e, m, &[0x3ef, 3, 0x400]);
+        interface_manager_emergency_close_all_menus_and_break_stuff(&mut e, m);
+        assert_eq!(get_stack(&e, m), vec![0; 10]);
+        // From the last used word back: the generic menu is deleted, the
+        // console hidden, the loading menu closed by its own call.
+        assert_eq!(generic_log[0].borrow().clone(), vec![vec![generic_menu, 1]]);
+        assert!(loading_log[0].borrow().is_empty());
+        assert_eq!(calls(&e, MENU_CONSOLE_TOGGLE_VISIBLE), vec![vec![0x9000]]);
+        assert_eq!(
+            order(
+                &e,
+                &[MENU_CONSOLE_TOGGLE_VISIBLE, CLOSE_LOADING_MENU, HIDE_MENUS]
+            ),
+            vec![MENU_CONSOLE_TOGGLE_VISIBLE, CLOSE_LOADING_MENU, HIDE_MENUS]
+        );
+        assert_eq!(e.get(m, InterfaceManager::cMenuMode), 4);
+        assert_eq!(e.global::<u8>(START_MENU_ALLOWED), 1);
+    }
+
+    #[test]
+    fn emergency_close_leaves_a_console_alone_when_there_is_no_console() {
+        let mut e = world();
+        let m = manager(&mut e);
+        returns(&mut e, MENU_CONSOLE_INSTANCE, 0);
+        set_stack(&mut e, m, &[3]);
+        interface_manager_emergency_close_all_menus_and_break_stuff(&mut e, m);
+        assert!(calls(&e, MENU_CONSOLE_TOGGLE_VISIBLE).is_empty());
+        assert_eq!(get_stack(&e, m)[0], 0);
+    }
+
+    #[test]
+    fn the_pick_reference_is_stored() {
+        let mut e = world();
+        let m = manager(&mut e);
+        fn_00714d70(&mut e, m, 0x1234);
+        assert_eq!(e.get(m, InterfaceManager::pPickRef), 0x1234);
+    }
+
+    #[test]
+    fn a_menu_class_goes_on_the_first_free_stack_word() {
+        // First entry: mode 3, the owner is told.
+        let (mut e, m) = stack_world(&[]);
+        assert_eq!(interface_manager_add_to_enter_stack(&mut e, m, 5), 0);
+        assert_eq!(get_stack(&e, m)[..2], [5, 0]);
+        assert_eq!(e.get(m, InterfaceManager::cMenuMode), 3);
+        assert_eq!(calls(&e, STACK_NOTIFY), vec![vec![0x77, 1]]);
+        // Second entry: nobody is told.
+        assert_eq!(interface_manager_add_to_enter_stack(&mut e, m, 6), 1);
+        assert_eq!(get_stack(&e, m)[..3], [5, 6, 0]);
+        assert_eq!(calls(&e, STACK_NOTIFY).len(), 1);
+        // The class 0x3e9 as the first entry: mode 3 but nobody is told.
+        let (mut e, m) = stack_world(&[]);
+        assert_eq!(interface_manager_add_to_enter_stack(&mut e, m, 0x3e9), 0);
+        assert_eq!(e.get(m, InterfaceManager::cMenuMode), 3);
+        assert!(calls(&e, STACK_NOTIFY).is_empty());
+        // ... and the owner is told when something comes under it.
+        assert_eq!(interface_manager_add_to_enter_stack(&mut e, m, 6), 1);
+        assert_eq!(calls(&e, STACK_NOTIFY), vec![vec![0x77, 1]]);
+        // Without the owner nobody is told.
+        let mut e = world();
+        let m = manager(&mut e);
+        assert_eq!(interface_manager_add_to_enter_stack(&mut e, m, 5), 0);
+        assert!(calls(&e, STACK_NOTIFY).is_empty());
+        // A full stack refuses.
+        let (mut e, m) = stack_world(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(interface_manager_add_to_enter_stack(&mut e, m, 6), -1);
+        assert_eq!(get_stack(&e, m), vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    }
+
+    #[test]
+    fn the_console_class_goes_first_and_pushes_the_others_down() {
+        let (mut e, m) = stack_world(&[]);
+        assert_eq!(interface_manager_add_to_enter_stack(&mut e, m, 3), 1);
+        assert_eq!(get_stack(&e, m)[..2], [3, 0]);
+        assert_eq!(e.get(m, InterfaceManager::cMenuMode), 3);
+        assert_eq!(calls(&e, STACK_NOTIFY), vec![vec![0x77, 1]]);
+        let (mut e, m) = stack_world(&[5, 6]);
+        assert_eq!(interface_manager_add_to_enter_stack(&mut e, m, 3), 2);
+        assert_eq!(get_stack(&e, m)[..4], [3, 5, 6, 0]);
+        assert!(calls(&e, STACK_NOTIFY).is_empty());
+        // A full stack loses its last pushed word and logs.
+        let (mut e, m) = stack_world(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(interface_manager_add_to_enter_stack(&mut e, m, 3), 9);
+        assert_eq!(get_stack(&e, m), vec![3, 1, 2, 3, 4, 5, 6, 7, 8, 10]);
+        assert_eq!(calls(&e, LOG_WARNING), vec![vec![STACK_FULL_MESSAGE]]);
+    }
+
+    #[test]
+    fn the_top_of_the_menu_stack_is_the_last_used_word() {
+        let (mut e, m) = stack_world(&[]);
+        assert_eq!(interface_manager_get_enter_stack_top(&mut e, m), 0);
+        set_stack(&mut e, m, &[7]);
+        assert_eq!(interface_manager_get_enter_stack_top(&mut e, m), 7);
+        set_stack(&mut e, m, &[7, 8, 9]);
+        assert_eq!(interface_manager_get_enter_stack_top(&mut e, m), 9);
+        set_stack(&mut e, m, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(interface_manager_get_enter_stack_top(&mut e, m), 10);
+    }
+
+    #[test]
+    fn a_stack_word_is_read_and_searched_for() {
+        let (mut e, m) = stack_world(&[4, 5, 6]);
+        assert_eq!(interface_manager_get_enter_stack(&mut e, m, 1), 5);
+        assert_eq!(interface_manager_get_enter_stack(&mut e, m, 3), 0);
+        assert!(fn_00714f90(&mut e, m, 6));
+        assert!(!fn_00714f90(&mut e, m, 7));
+        set_stack(&mut e, m, &[0, 0, 0, 0, 0, 0, 0, 0, 0, 9]);
+        assert!(fn_00714f90(&mut e, m, 9));
+    }
+
+    #[test]
+    fn popping_from_an_empty_stack_or_for_an_absent_class_fails() {
+        let (mut e, m) = stack_world(&[]);
+        assert_eq!(interface_manager_pop_from_enter_stack(&mut e, m, 5, 1), -1);
+        set_stack(&mut e, m, &[7]);
+        assert_eq!(interface_manager_pop_from_enter_stack(&mut e, m, 5, 0), -1);
+        assert_eq!(get_stack(&e, m)[0], 7);
+        // A class under an entry above 0x3e9 is not popped without force.
+        set_stack(&mut e, m, &[9, 0x400]);
+        assert_eq!(interface_manager_pop_from_enter_stack(&mut e, m, 9, 0), -2);
+        assert_eq!(get_stack(&e, m)[..2], [9, 0x400]);
+        // ... but the console may be.
+        set_stack(&mut e, m, &[3, 0x400]);
+        assert_ne!(interface_manager_pop_from_enter_stack(&mut e, m, 3, 0), -2);
+    }
+
+    #[test]
+    fn popping_closes_the_stack_up_and_returns_the_word_below() {
+        let (mut e, m) = stack_world(&[7, 9]);
+        assert_eq!(interface_manager_pop_from_enter_stack(&mut e, m, 9, 0), 7);
+        assert_eq!(get_stack(&e, m)[..3], [7, 0, 0]);
+        // The closing up compares the word it is writing to, not the one
+        // it reads, so a second equal word that moved down survives.
+        set_stack(&mut e, m, &[4, 9, 5, 9, 6]);
+        assert_eq!(interface_manager_pop_from_enter_stack(&mut e, m, 9, 1), 9);
+        assert_eq!(get_stack(&e, m)[..4], [4, 5, 9, 0]);
+        // Forced, the class need not be present.
+        set_stack(&mut e, m, &[7]);
+        assert_eq!(interface_manager_pop_from_enter_stack(&mut e, m, 9, 1), 7);
+        assert_eq!(get_stack(&e, m)[..2], [7, 0]);
+        // 0x3e9 left alone as the second word tells the owner.
+        let (mut e, m) = stack_world(&[0x3e9, 5]);
+        assert_eq!(
+            interface_manager_pop_from_enter_stack(&mut e, m, 5, 0),
+            0x3e9
+        );
+        assert_eq!(calls(&e, STACK_NOTIFY), vec![vec![0x77, 1]]);
+    }
+
+    #[test]
+    fn popping_the_last_menu_ends_the_menu_mode() {
+        let (mut e, m) = stack_world(&[1]);
+        e.set(m, InterfaceManager::cMenuMode, 3);
+        assert_eq!(interface_manager_pop_from_enter_stack(&mut e, m, 1, 0), 0);
+        assert_eq!(e.get(m, InterfaceManager::cMenuMode), 4);
+        assert_eq!(calls(&e, HIDE_MENUS).len(), 1);
+        assert_eq!(calls(&e, STACK_NOTIFY), vec![vec![0x77, 1]]);
+        // Another class: no hide; the class 0x3e9 tells with 0.
+        let (mut e, m) = stack_world(&[0x3e9]);
+        assert_eq!(
+            interface_manager_pop_from_enter_stack(&mut e, m, 0x3e9, 0),
+            0
+        );
+        assert!(calls(&e, HIDE_MENUS).is_empty());
+        assert_eq!(calls(&e, STACK_NOTIFY), vec![vec![0x77, 0]]);
+    }
+
+    #[test]
+    fn a_console_left_alone_is_hidden_and_popped_too() {
+        let (mut e, m) = stack_world(&[3, 9]);
+        returns(&mut e, MENU_CONSOLE_INSTANCE, 0x9000);
+        assert_eq!(interface_manager_pop_from_enter_stack(&mut e, m, 9, 0), 0);
+        assert_eq!(get_stack(&e, m), vec![0; 10]);
+        assert_eq!(calls(&e, MENU_CONSOLE_TOGGLE_VISIBLE), vec![vec![0x9000]]);
+        assert_eq!(e.get(m, InterfaceManager::cMenuMode), 4);
+    }
+
+    /// A world for the cursor placement: 1920 x 1080 target, a desktop of
+    /// 1500 x 1000, a cursor tile 0xc0 with node 0x4000 whose translation
+    /// is (1, 2, 3).
+    fn placement_world() -> (Engine, Ptr<InterfaceManager>, u32) {
+        let mut e = world();
+        screen_constants(&mut e);
+        e.set_global(CURSOR_X_OFFSET, 3.0f64);
+        e.set_global(CURSOR_TILT_SCALE, -0.5f64);
+        let m = manager(&mut e);
+        e.set(m, InterfaceManager::pCursor, 0xc0);
+        returns(&mut e, RENDER_TARGET_WIDTH, 1920);
+        returns(&mut e, RENDER_TARGET_HEIGHT, 1080);
+        returns_st0(&mut e, GET_DESKTOP_WIDTH, 1500.0);
+        returns_st0(&mut e, GET_DESKTOP_HEIGHT, 1000.0);
+        returns_st0(&mut e, TILE_GET_VALUE, 10.0);
+        returns(&mut e, TILE_IMAGE_NODE, 0x4000);
+        let translation = e.mem.alloc(12);
+        e.mem.set_f32(translation, 1.0);
+        e.mem.set_f32(translation + 4, 2.0);
+        e.mem.set_f32(translation + 8, 3.0);
+        returns(&mut e, NODE_TRANSLATION, translation);
+        (e, m, translation)
+    }
+
+    #[test]
+    fn the_cursor_is_placed_at_a_fraction_of_the_screen() {
+        let (mut e, m, _) = placement_world();
+        returns(&mut e, POINT_NOT_EQUAL, 1);
+        returns(&mut e, HAS_360_CONTROLLER_GETTER, 0);
+        returns(&mut e, MENU_MODE_BYTE_GETTER, 2);
+        fn_007151b0(&mut e, m, 0.25, 0.5);
+        let width = wide_screen_width();
+        let x = (width * 0.25 - width / 2.0) as f32;
+        let z = (960.0 / 2.0 + 960.0 * -0.5f64) as f32;
+        assert_eq!(e.mem.f32(m.addr() + 0x2c), x);
+        // The middle component keeps the translation's.
+        assert_eq!(e.mem.f32(m.addr() + 0x30), 2.0);
+        assert_eq!(e.mem.f32(m.addr() + 0x34), z);
+        assert_eq!(
+            calls(&e, NODE_SET_TRANSLATE_VECTOR),
+            vec![vec![0x4000, m.addr() + 0x2c]]
+        );
+        assert_eq!(calls(&e, NODE_UPDATE).len(), 1);
+        // The desktop-space point, with the tilt (10 * -0.5) in the middle.
+        let real_x = (1500.0 / 2.0 + (1500.0 / width) * (x as f64 + 3.0)) as f32;
+        let real_z = (1000.0 / 2.0 - (1000.0 / 960.0) * z as f64) as f32;
+        assert_eq!(e.mem.f32(LAST_CURSOR_POINT), real_x);
+        assert_eq!(e.mem.f32(LAST_CURSOR_POINT + 4), 0.0);
+        assert_eq!(e.mem.f32(LAST_CURSOR_POINT + 8), real_z);
+        assert_eq!(e.mem.f32(m.addr() + 0x38), real_x);
+        assert_eq!(e.mem.f32(m.addr() + 0x3c), -5.0);
+        assert_eq!(e.mem.f32(m.addr() + 0x40), real_z);
+        // No 360 controller: the motion flag, and in mode 2 the cursor
+        // node is shown and its trait 0xfa3 set.
+        assert_eq!(e.get(m, InterfaceManager::bMouseInMotion), 1);
+        assert_eq!(calls(&e, NODE_SET_FLAG), vec![vec![0x4000, 0]]);
+        assert_eq!(calls(&e, TILE_SET_INT), vec![vec![0xc0, 0xfa3, 1]]);
+        // The static point is constructed the first time only.
+        assert_eq!(
+            calls(&e, MEMBER_CONSTRUCTOR_EMPTY)
+                .iter()
+                .filter(|c| c[0] == LAST_CURSOR_POINT)
+                .count(),
+            1
+        );
+        fn_007151b0(&mut e, m, 0.25, 0.5);
+        assert_eq!(
+            calls(&e, MEMBER_CONSTRUCTOR_EMPTY)
+                .iter()
+                .filter(|c| c[0] == LAST_CURSOR_POINT)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn an_unchanged_cursor_point_is_left_alone() {
+        let (mut e, m, _) = placement_world();
+        returns(&mut e, POINT_NOT_EQUAL, 0);
+        returns(&mut e, HAS_360_CONTROLLER_GETTER, 1);
+        e.set(m, InterfaceManager::bShowMouse, 0);
+        // The stored real position equals the computed one: nothing more.
+        let width = wide_screen_width();
+        let x = (width * 0.0 - width / 2.0) as f32;
+        let z = (960.0 / 2.0 + 960.0 * -0.0f64) as f32;
+        let real_x = (1500.0 / 2.0 + (1500.0 / width) * (x as f64 + 3.0)) as f32;
+        let real_z = (1000.0 / 2.0 - (1000.0 / 960.0) * z as f64) as f32;
+        e.mem.set_f32(m.addr() + 0x38, real_x);
+        e.mem.set_f32(m.addr() + 0x40, real_z);
+        fn_007151b0(&mut e, m, 0.0, 0.0);
+        assert_eq!(e.mem.f32(LAST_CURSOR_POINT), 0.0);
+        assert_eq!(e.mem.f32(m.addr() + 0x38), real_x);
+        assert_eq!(e.get(m, InterfaceManager::bMouseInMotion), 0);
+        assert!(calls(&e, NODE_SET_FLAG).is_empty());
+    }
+
+    #[test]
+    fn a_moved_real_cursor_position_is_scaled_again() {
+        let (mut e, m, _) = placement_world();
+        returns(&mut e, POINT_NOT_EQUAL, 0);
+        returns(&mut e, HAS_360_CONTROLLER_GETTER, 1);
+        e.mem.set_f32(m.addr() + 0x38, 100.0);
+        e.mem.set_f32(m.addr() + 0x40, 40.0);
+        fn_007151b0(&mut e, m, 0.0, 0.0);
+        let width = wide_screen_width();
+        assert_eq!(
+            e.mem.f32(m.addr() + 0x38),
+            (1500.0 / 2.0 + (1500.0 / width) * 100.0) as f32
+        );
+        assert_eq!(e.mem.f32(m.addr() + 0x3c), -5.0);
+        assert_eq!(
+            e.mem.f32(m.addr() + 0x40),
+            (1000.0 / 2.0 - (1000.0 / 960.0) * 40.0) as f32
+        );
+        assert_eq!(e.get(m, InterfaceManager::bMouseInMotion), 1);
+    }
+
+    #[test]
+    fn modifier_keys_are_tracked_by_press_and_release() {
+        let mut e = world();
+        let m = manager(&mut e);
+        returns(&mut e, CONTROLS_GET, 0xc0de);
+        // A press of a modifier key sets its bit and is no character.
+        returns(&mut e, CONTROLS_QUERY_00A238A0, 0);
+        for (key, bit) in [
+            (0x2a, 4),
+            (0x36, 4),
+            (0x38, 1),
+            (0xb8, 1),
+            (0x1d, 2),
+            (0x9d, 2),
+        ] {
+            e.set(m, InterfaceManager::iModifierKeys, 0);
+            assert_eq!(fn_007154b0(&mut e, m, 1, key), 0);
+            assert_eq!(e.get(m, InterfaceManager::iModifierKeys), bit);
+            // The release clears it again (and the shift flag).
+            assert_eq!(fn_007154b0(&mut e, m, 2, key), 0);
+            assert_eq!(e.get(m, InterfaceManager::iModifierKeys), 0);
+        }
+        e.set(m, InterfaceManager::iModifierKeys, 7);
+        fn_007154b0(&mut e, m, 2, 0x2a);
+        assert_eq!(e.get(m, InterfaceManager::iModifierKeys), 3);
+        fn_007154b0(&mut e, m, 1, 0x2a);
+        assert_eq!(e.get(m, InterfaceManager::bShiftDown), 1);
+        fn_007154b0(&mut e, m, 2, 0x36);
+        assert_eq!(e.get(m, InterfaceManager::bShiftDown), 0);
+        // Any other event is nothing.
+        assert_eq!(fn_007154b0(&mut e, m, 0, 0x30), 0);
+        assert_eq!(fn_007154b0(&mut e, m, 3, 0x30), 0);
+    }
+
+    #[test]
+    fn a_key_press_becomes_a_character_or_an_editing_code() {
+        let mut e = world();
+        let m = manager(&mut e);
+        e.set(m, InterfaceManager::bShiftDown, 1);
+        returns(&mut e, CONTROLS_GET, 0xc0de);
+        e.set_global(CONTROLS_OWNER, 0x1234u32);
+        returns(&mut e, FADE_CLOCK_READ, 99);
+        // An ordinary key: the character of the controls, asked with the
+        // shift state.
+        returns(&mut e, CONTROLS_QUERY_00A238A0, b'a' as u32);
+        assert_eq!(fn_007154b0(&mut e, m, 1, 0x1e), b'a' as u32);
+        assert_eq!(
+            calls(&e, CONTROLS_QUERY_00A238A0),
+            vec![vec![0xc0de, 0x1e, 1]]
+        );
+        assert_eq!(calls(&e, CONTROLS_GET), vec![vec![0x1234]]);
+        // Backspace and enter and the pipe.
+        returns(&mut e, CONTROLS_QUERY_00A238A0, 8);
+        assert_eq!(fn_007154b0(&mut e, m, 1, 0x0e), 0x8000_0000);
+        assert_eq!(e.get(m, InterfaceManager::iRepeatingKey), i32::MIN);
+        assert_eq!(e.get(m, InterfaceManager::uKeyDownTime), 99);
+        returns(&mut e, CONTROLS_QUERY_00A238A0, 0xd);
+        assert_eq!(fn_007154b0(&mut e, m, 1, 0x1c), 0x8000_0008);
+        returns(&mut e, CONTROLS_QUERY_00A238A0, 0x7c);
+        assert_eq!(fn_007154b0(&mut e, m, 1, 0x2b), 0);
+        // The navigation keys; those that repeat start the repeat.
+        returns(&mut e, CONTROLS_QUERY_00A238A0, 0x41);
+        for (key, code, repeats) in TEXT_ENTRY_KEYS {
+            e.set(m, InterfaceManager::iRepeatingKey, 0);
+            assert_eq!(fn_007154b0(&mut e, m, 1, key), code, "{key:x}");
+            assert_eq!(
+                e.get(m, InterfaceManager::iRepeatingKey),
+                if repeats { code as i32 } else { 0 },
+                "{key:x}"
+            );
+        }
+    }
+
+    #[test]
+    fn escape_is_a_key_only_while_a_text_entry_is_up() {
+        let mut e = world();
+        let m = manager(&mut e);
+        returns(&mut e, CONTROLS_GET, 0xc0de);
+        returns(&mut e, CONTROLS_QUERY_00A238A0, 0x1b);
+        assert_eq!(fn_007154b0(&mut e, m, 1, 1), 0);
+        returns(&mut e, XUI_IS_UP, 1);
+        e.set_global(FLAGS_OWNER, 0x88u32);
+        returns(&mut e, HAS_FLAG, 1);
+        assert_eq!(fn_007154b0(&mut e, m, 1, 1), 0x1b);
+    }
+
+    #[test]
+    fn the_flag_check_needs_the_extra_interface_and_the_flag() {
+        let mut e = world();
+        e.set_global(FLAGS_OWNER, 0x88u32);
+        assert!(!fn_00715770(&mut e));
+        returns(&mut e, XUI_IS_UP, 1);
+        assert!(!fn_00715770(&mut e));
+        returns(&mut e, HAS_FLAG, 1);
+        assert!(fn_00715770(&mut e));
+        assert_eq!(
+            calls(&e, HAS_FLAG),
+            vec![vec![0x88, 0x80000], vec![0x88, 0x80000]]
+        );
+    }
+
+    #[test]
+    fn clearing_the_over_tile_target_tells_its_menu_only_when_asked() {
+        let mut e = world();
+        let m = manager(&mut e);
+        returns_st0(&mut e, TILE_GET_VALUE, 7.0);
+        returns(&mut e, FTOL, 7);
+        e.set(m, InterfaceManager::pOverTileTarget, 0x100);
+        e.set(m, InterfaceManager::pOverTileMenu, 0x200);
+        interface_manager_clear_over_tile_target(&mut e, m, 0);
+        assert!(calls(&e, DO_LEAVE).is_empty());
+        assert_eq!(e.get(m, InterfaceManager::pOverTileTarget), 0);
+        assert_eq!(e.get(m, InterfaceManager::pOverTileMenu), 0);
+        e.set(m, InterfaceManager::pOverTileTarget, 0x100);
+        e.set(m, InterfaceManager::pOverTileMenu, 0x200);
+        interface_manager_clear_over_tile_target(&mut e, m, 1);
+        assert_eq!(
+            calls(&e, TILE_SET_INT),
+            vec![vec![0x100, 0xfc3, 0], vec![0x100, 0xfc7, 0]]
+        );
+        assert_eq!(calls(&e, DO_LEAVE), vec![vec![m.addr(), 0x200, 7, 0x100]]);
+        assert_eq!(e.get(m, InterfaceManager::pOverTileTarget), 0);
+        // A tile without its menu is only forgotten.
+        e.set(m, InterfaceManager::pOverTileTarget, 0x100);
+        e.set(m, InterfaceManager::pOverTileMenu, 0);
+        interface_manager_clear_over_tile_target(&mut e, m, 1);
+        assert_eq!(calls(&e, DO_LEAVE).len(), 1);
+        assert_eq!(e.get(m, InterfaceManager::pOverTileTarget), 0);
+    }
+
+    /// A world for the focus code: every trait reads 0.0 and the id 9, the
+    /// menu of every tile is 0x7000.
+    fn focus_world() -> (Engine, Ptr<InterfaceManager>) {
+        let mut e = world();
+        let m = manager(&mut e);
+        returns_st0(&mut e, TILE_GET_VALUE, 0.0);
+        returns(&mut e, FTOL, 9);
+        returns(&mut e, TILE_GET_MENU, 0x7000);
+        (e, m)
+    }
+
+    #[test]
+    fn a_null_focus_target_clears_the_focus() {
+        let (mut e, m) = focus_world();
+        // The old focus counts a change (trait 0xfd6 is positive).
+        returns_st0(&mut e, TILE_GET_VALUE, 1.0);
+        e.set(m, InterfaceManager::pMouseOverTarget, 0x300);
+        e.set(m, InterfaceManager::iLastXDefault, 5);
+        interface_manager_set_current_focus_target(&mut e, m, 0, 0xfc3, 1);
+        assert_eq!(e.get(m, InterfaceManager::pMouseOverTarget), 0);
+        assert_eq!(e.get(m, InterfaceManager::iLastXDefault), 6);
+        assert_eq!(
+            calls(&e, TILE_SET_FLOAT),
+            vec![vec![0x300, 0xfd6, 6.0f32.to_bits(), 1]]
+        );
+        assert_eq!(calls(&e, TILE_SET_INT), vec![vec![0x300, 0xfc3, 0]]);
+        assert_eq!(calls(&e, DO_LEAVE), vec![vec![m.addr(), 0x7000, 9, 0x300]]);
+        // Nothing to leave: nothing happens.
+        let (mut e, m) = focus_world();
+        interface_manager_set_current_focus_target(&mut e, m, 0, 0xfc3, 1);
+        assert!(calls(&e, DO_LEAVE).is_empty());
+    }
+
+    #[test]
+    fn entering_a_tile_leaves_the_old_one_and_tells_the_new_menu() {
+        let (mut e, m) = focus_world();
+        e.set(m, InterfaceManager::pMouseOverTarget, 0x300);
+        e.set(m, InterfaceManager::pOverTileTarget, 0x500);
+        e.set(m, InterfaceManager::pOverTileMenu, 0x600);
+        interface_manager_set_current_focus_target(&mut e, m, 0x400, 0xfc3, 1);
+        assert_eq!(e.get(m, InterfaceManager::pMouseOverTarget), 0x400);
+        assert_eq!(e.get(m, InterfaceManager::pOverTileTarget), 0);
+        assert_eq!(e.get(m, InterfaceManager::pOverTileMenu), 0);
+        assert_eq!(
+            calls(&e, DO_LEAVE),
+            vec![
+                vec![m.addr(), 0x7000, 9, 0x500],
+                vec![m.addr(), 0x7000, 9, 0x300]
+            ]
+        );
+        assert_eq!(
+            calls(&e, TILE_SET_INT),
+            vec![
+                vec![0x500, 0xfc3, 0],
+                vec![0x300, 0xfc3, 0],
+                vec![0x400, 0xfc3, 1]
+            ]
+        );
+        assert_eq!(calls(&e, TILE_PLAY_TILE_SOUND), vec![vec![0x400, 0xfe8]]);
+        assert_eq!(calls(&e, DO_ENTER), vec![vec![m.addr(), 0x7000, 9, 0x400]]);
+        // Entering the tile that is the focus already does nothing; and no
+        // sound without the flag.
+        let (mut e, m) = focus_world();
+        e.set(m, InterfaceManager::pMouseOverTarget, 0x400);
+        interface_manager_set_current_focus_target(&mut e, m, 0x400, 0xfc3, 0);
+        assert!(calls(&e, DO_ENTER).is_empty());
+        let (mut e, m) = focus_world();
+        interface_manager_set_current_focus_target(&mut e, m, 0x400, 0xfc3, 0);
+        assert!(calls(&e, TILE_PLAY_TILE_SOUND).is_empty());
+        assert_eq!(calls(&e, DO_ENTER).len(), 1);
+    }
+
+    #[test]
+    fn clicking_a_tile_calls_its_menu_and_may_drop_the_focus() {
+        let (mut e, m) = focus_world();
+        let (menu, logs) = virtual_object(&mut e, &[(0xc, 0x00aa_0010)], 0);
+        returns(&mut e, TILE_GET_MENU, menu);
+        returns_st0(&mut e, TILE_GET_VALUE, 3.0);
+        returns(&mut e, FTOL, 3);
+        e.set(m, InterfaceManager::pMouseOverTarget, 0x300);
+        returns(&mut e, TILE_IS_VISIBLE, 1);
+        returns(&mut e, TILE_IS_TRUE, 1);
+        e.set(m, InterfaceManager::iLastXDefault, 0);
+        interface_manager_set_current_focus_target(&mut e, m, 0x400, 0xfc7, 1);
+        assert_eq!(calls(&e, PLAY_MENU_SOUND), vec![vec![3]]);
+        assert_eq!(
+            calls(&e, TILE_SET_INT)
+                .iter()
+                .filter(|c| c[0] == 0x400)
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![vec![0x400, 0xfc7, 1], vec![0x400, 0xfc7, 0]]
+        );
+        assert_eq!(logs[0].borrow().clone(), vec![vec![menu, 3, 0x400]]);
+        assert_eq!(calls(&e, TILE_UPDATE_CHILDREN), vec![vec![0x400, 0]]);
+        // The old focus is visible and has trait 0xfaf: kept.
+        assert_eq!(e.get(m, InterfaceManager::pMouseOverTarget), 0x300);
+        assert_eq!(calls(&e, TILE_IS_TRUE), vec![vec![0x300, 0xfaf]]);
+        assert!(calls(&e, DO_LEAVE).is_empty());
+        // Without the trait the old focus is left and cleared.
+        returns(&mut e, TILE_IS_TRUE, 0);
+        interface_manager_set_current_focus_target(&mut e, m, 0x400, 0xfc7, 0);
+        assert_eq!(e.get(m, InterfaceManager::pMouseOverTarget), 0);
+        assert_eq!(calls(&e, DO_LEAVE), vec![vec![m.addr(), menu, 3, 0x300]]);
+        // No sound without the flag (the second click).
+        assert_eq!(calls(&e, PLAY_MENU_SOUND).len(), 1);
+    }
+
+    #[test]
+    fn a_trait_is_set_from_an_unsigned_integer() {
+        let mut e = world();
+        fn_00715c60(&mut e, 0x400, 0xfd6, 0x8000_0001);
+        assert_eq!(
+            calls(&e, TILE_SET_FLOAT),
+            vec![vec![0x400, 0xfd6, 2147483648.0f32.to_bits(), 1]]
+        );
+    }
+
+    #[test]
+    fn the_default_focus_goes_to_the_best_tile_found() {
+        let mut e = world();
+        let m = manager(&mut e);
+        e.set(m, InterfaceManager::pCursor, 0xc0);
+        e.set(m, InterfaceManager::bMouseInMotion, 1);
+        // The frontmost menu has a root tile that is visible, focusable
+        // and has a focus value of 5, and no children.
+        let (root, _) = virtual_object(&mut e, &[(0xc, 0x00aa_0020)], 0x111);
+        returns(&mut e, MENU_MANAGER_INSTANCE, 0x42);
+        returns(&mut e, GET_FRONTMOST_MENU, 0xa000);
+        returns(&mut e, GET_FIELD_AT_4, root);
+        returns(&mut e, TILE_IS_TRUE, 1);
+        let entry = e.mem.alloc(16);
+        returns(&mut e, TILE_GET_TRAIT_ENTRY, entry);
+        returns_st0(&mut e, TRAIT_ENTRY_VALUE, 5.0);
+        returns(&mut e, FTOL, 5);
+        returns(&mut e, TILE_IMAGE_NODE, 0x4000);
+        returns(&mut e, HAS_360_CONTROLLER_GETTER, 0);
+        interface_manager_get_default_focus(&mut e, m);
+        assert_eq!(e.get(m, InterfaceManager::pMouseOverTarget), root);
+        assert_eq!(calls(&e, NODE_SET_FLAG), vec![vec![0x4000, 1]]);
+        assert!(calls(&e, TILE_SET_INT).contains(&vec![0xc0, 0xfa3, 0]));
+        assert_eq!(e.get(m, InterfaceManager::bMouseInMotion), 0);
+        // With nothing found the focus is cleared and the cursor is left
+        // alone.
+        let mut e2 = world();
+        let m2 = manager(&mut e2);
+        e2.set(m2, InterfaceManager::bMouseInMotion, 1);
+        returns(&mut e2, GET_FRONTMOST_MENU, 0);
+        e2.set(m2, InterfaceManager::pMouseOverTarget, 0x300);
+        interface_manager_get_default_focus(&mut e2, m2);
+        assert_eq!(e2.get(m2, InterfaceManager::pMouseOverTarget), 0);
+        assert_eq!(e2.get(m2, InterfaceManager::bMouseInMotion), 1);
+        assert!(calls(&e2, NODE_SET_FLAG).is_empty());
+    }
+
+    #[test]
+    fn the_interface_width_follows_the_shape_of_the_screen() {
+        let mut e = world();
+        screen_constants(&mut e);
+        returns(&mut e, RENDER_TARGET_WIDTH, 1920);
+        returns(&mut e, RENDER_TARGET_HEIGHT, 1080);
+        assert_eq!(
+            interface_manager_get_screen_width(&mut e),
+            (1920.0f32 as f64 / 1080.0f32 as f64 * 960.0) as f32
+        );
+        returns(&mut e, RENDER_TARGET_WIDTH, 1024);
+        returns(&mut e, RENDER_TARGET_HEIGHT, 768);
+        assert_eq!(interface_manager_get_screen_width(&mut e), 1280.0);
+        // As wide as tall or taller: the base width.
+        returns(&mut e, RENDER_TARGET_WIDTH, 800);
+        returns(&mut e, RENDER_TARGET_HEIGHT, 800);
+        assert_eq!(interface_manager_get_screen_width(&mut e), 1280.0);
+        e.set_global(BASE_WIDTH_FLOAT, 1111.0f32);
+        returns(&mut e, RENDER_TARGET_HEIGHT, 1000);
+        assert_eq!(interface_manager_get_screen_width(&mut e), 1111.0);
+    }
+
+    #[test]
+    fn the_interface_height_follows_the_shape_of_the_screen() {
+        let mut e = world();
+        screen_constants(&mut e);
+        returns(&mut e, RENDER_TARGET_WIDTH, 1080);
+        returns(&mut e, RENDER_TARGET_HEIGHT, 1920);
+        assert_eq!(
+            fn_00715da0(&mut e),
+            (1920.0f32 as f64 / 1080.0f32 as f64 * 1280.0) as f32
+        );
+        returns(&mut e, RENDER_TARGET_WIDTH, 1920);
+        returns(&mut e, RENDER_TARGET_HEIGHT, 1080);
+        assert_eq!(fn_00715da0(&mut e), 960.0);
+        returns(&mut e, RENDER_TARGET_HEIGHT, 1920);
+        assert_eq!(fn_00715da0(&mut e), 960.0);
+    }
+
+    #[test]
+    fn the_screen_metrics_go_to_the_string_lists_and_the_root_tile() {
+        let mut e = world();
+        screen_constants(&mut e);
+        let m = manager(&mut e);
+        e.set(m, InterfaceManager::pMenusRoot, 0x900);
+        returns(&mut e, RENDER_TARGET_WIDTH, 1920);
+        returns(&mut e, RENDER_TARGET_HEIGHT, 1080);
+        returns_st0(&mut e, GET_INTERFACE_MARGIN_A, 8.0);
+        returns_st0(&mut e, GET_INTERFACE_MARGIN_B, 9.0);
+        fn_00715e00(&mut e, m, 20, 30);
+        assert_eq!(
+            calls(&e, STRING_LIST_SET_LIMIT),
+            vec![vec![LIMIT_LIST_WIDTH, 20], vec![LIMIT_LIST_HEIGHT, 30]]
+        );
+        let width = (1920.0f32 as f64 / 1080.0f32 as f64 * 960.0) as f32;
+        assert_eq!(
+            calls(&e, TILE_SET_FLOAT),
+            vec![
+                vec![0x900, 0xfc0, 8.0f32.to_bits(), 1],
+                vec![0x900, 0xfbf, 9.0f32.to_bits(), 1],
+                vec![0x900, 0xfb1, width.to_bits(), 1],
+                vec![0x900, 0xfb0, 960.0f32.to_bits(), 1],
+            ]
+        );
+        // The height falls back to the width; no limits without a width.
+        fn_00715e00(&mut e, m, 20, 0);
+        assert_eq!(
+            calls(&e, STRING_LIST_SET_LIMIT)[3],
+            vec![LIMIT_LIST_HEIGHT, 20]
+        );
+        fn_00715e00(&mut e, m, 0, 5);
+        assert_eq!(calls(&e, STRING_LIST_SET_LIMIT).len(), 4);
+    }
+
+    #[test]
+    fn the_safe_zone_is_created_faded_in_and_toggled_away() {
+        let mut e = world();
+        let m = manager(&mut e);
+        returns(&mut e, GET_MENUS_ROOT, 0x900);
+        returns(&mut e, TILE_READ_FILE, 0x7777);
+        returns(&mut e, TILE_IMAGE_NODE, 0);
+        interface_manager_toggle_safe_zone(&mut e, m, 1);
+        assert_eq!(e.get(m, InterfaceManager::pSafeZone), 0x7777);
+        assert_eq!(calls(&e, TILE_READ_FILE), vec![vec![0x900, SAFE_ZONE_PATH]]);
+        assert_eq!(calls(&e, TILE_SET_INT), vec![vec![0x7777, 0xfa3, 1]]);
+        // RecursiveFade ran (its scope guard).
+        assert_eq!(calls(&e, SCOPE_GUARD_BEGIN).len(), 1);
+        // A second toggle removes it (virtual destructor with flag 1).
+        let (zone, logs) = virtual_object(&mut e, &[(0, 0x00aa_0030)], 0);
+        e.set(m, InterfaceManager::pSafeZone, zone);
+        interface_manager_toggle_safe_zone(&mut e, m, 0);
+        assert_eq!(logs[0].borrow().clone(), vec![vec![zone, 1]]);
+        assert_eq!(e.get(m, InterfaceManager::pSafeZone), 0);
+        assert_eq!(calls(&e, TILE_READ_FILE).len(), 1);
+    }
+
+    #[test]
+    fn mode_three_replaces_the_safe_zone_and_mode_two_asks_it() {
+        let mut e = world();
+        let m = manager(&mut e);
+        returns(&mut e, TILE_READ_FILE, 0x7777);
+        returns(&mut e, TILE_IMAGE_NODE, 0);
+        let (zone, logs) = virtual_object(&mut e, &[(0, 0x00aa_0040)], 0);
+        e.set(m, InterfaceManager::pSafeZone, zone);
+        interface_manager_toggle_safe_zone(&mut e, m, 3);
+        assert_eq!(logs[0].borrow().clone(), vec![vec![zone, 1]]);
+        assert_eq!(e.get(m, InterfaceManager::pSafeZone), 0x7777);
+        // Mode 2 with a zone asks its trait 0xfa3 first, then removes it.
+        let (zone, _) = virtual_object(&mut e, &[(0, 0x00aa_0044)], 0);
+        e.set(m, InterfaceManager::pSafeZone, zone);
+        interface_manager_toggle_safe_zone(&mut e, m, 2);
+        assert_eq!(calls(&e, TILE_IS_TRUE), vec![vec![zone, 0xfa3]]);
+        assert_eq!(e.get(m, InterfaceManager::pSafeZone), 0);
+    }
+
+    #[test]
+    fn a_reference_is_forgotten_everywhere() {
+        let mut e = world();
+        let m = manager(&mut e);
+        for offset in [0xf0u32, 0xf4, 0xf8, 0xfc, 0x100] {
+            e.mem.set_u32(m.addr() + offset, 0x55);
+        }
+        e.mem.set_u32(m.addr() + 0xf8, 0x66);
+        fn_00716010(&mut e, m, 0x55);
+        let words: Vec<u32> = [0xf0u32, 0xf4, 0xf8, 0xfc, 0x100]
+            .iter()
+            .map(|offset| e.mem.u32(m.addr() + offset))
+            .collect();
+        assert_eq!(words, vec![0, 0, 0x66, 0, 0]);
+        assert_eq!(calls(&e, HUD_FORGET_REFERENCE), vec![vec![0x55]]);
+    }
+
+    #[test]
+    fn the_textures_are_released_in_order() {
+        let mut e = world();
+        let m = manager(&mut e);
+        let (root, logs) = virtual_object(&mut e, &[(0x1c, 0x00aa_0050)], 0);
+        returns(&mut e, GET_MENUS_ROOT, root);
+        e.set_global(TEXTURE_CLEANUP_OWNER, 0x321u32);
+        interface_manager_force_texture_release(&mut e, m);
+        assert_eq!(logs[0].borrow().clone(), vec![vec![root]]);
+        assert_eq!(
+            order(
+                &e,
+                &[
+                    RELEASE_STATIC_GEOMETRY,
+                    GET_MENUS_ROOT,
+                    CLEAR_WORLD_MAP_TEXTURE,
+                    CLEAN_UP_UNUSED_TEXTURES
+                ]
+            ),
+            vec![
+                RELEASE_STATIC_GEOMETRY,
+                GET_MENUS_ROOT,
+                CLEAR_WORLD_MAP_TEXTURE,
+                CLEAN_UP_UNUSED_TEXTURES
+            ]
+        );
+        assert_eq!(calls(&e, GET_MENUS_ROOT), vec![vec![m.addr()]]);
+        assert_eq!(calls(&e, CLEAN_UP_UNUSED_TEXTURES), vec![vec![0x321, 1]]);
+    }
+
+    /// A tile object: `+4` is the list of its children (a cursor-style
+    /// list walked with `LIST_NEXT_ELEMENT`).
+    struct FocusTiles {
+        children: std::collections::HashMap<u32, Vec<u32>>,
+        focus: std::collections::HashMap<u32, i32>,
+        order: std::collections::HashMap<u32, i32>,
+    }
+
+    /// Doubles that describe a tree of tiles for `ScanForMaxFocus`: every
+    /// tile is visible; those with an entry in `focus` are focusable (traits
+    /// `0xfaf`, `0xfd6`); `order` gives trait `0xfac`.
+    fn scan_world(tiles: FocusTiles) -> (Engine, Ptr<InterfaceManager>) {
+        let mut e = world();
+        let m = manager(&mut e);
+        let tiles = Rc::new(tiles);
+        // The children of a tile: handed out as a one-word-per-step cursor
+        // (the cursor is the index plus one).
+        let list = tiles.clone();
+        e.register_double(NI_POINTER_GET, move |_, a| Ret {
+            eax: if list
+                .children
+                .get(&(a[0] - 4))
+                .is_some_and(|c| !c.is_empty())
+            {
+                1
+            } else {
+                0
+            },
+            ..Ret::default()
+        });
+        let list = tiles.clone();
+        e.register_double(LIST_NEXT_ELEMENT, move |e, a| {
+            let tile = a[0] - 4;
+            let cursor = e.mem.u32(a[1]);
+            let children = &list.children[&tile];
+            let slot = e.mem.alloc(4);
+            e.mem.set_u32(slot, children[cursor as usize - 1]);
+            e.mem.set_u32(
+                a[1],
+                if cursor as usize == children.len() {
+                    0
+                } else {
+                    cursor + 1
+                },
+            );
+            Ret {
+                eax: slot,
+                ..Ret::default()
+            }
+        });
+        let list = tiles.clone();
+        e.register_double(TILE_IS_TRUE, move |_, a| Ret {
+            eax: match a[1] {
+                0xfa3 => 1,
+                0xfaf => list.focus.contains_key(&a[0]) as u32,
+                _ => 0,
+            },
+            ..Ret::default()
+        });
+        // The entries are the tile and the trait folded into one word.
+        let list = tiles.clone();
+        e.register_double(TILE_GET_TRAIT_ENTRY, move |_, a| Ret {
+            eax: if list.focus.contains_key(&a[0]) {
+                a[0] | 0x1000_0000
+            } else {
+                0
+            },
+            ..Ret::default()
+        });
+        let list = tiles.clone();
+        e.register_double(TILE_GET_VALUE_Q, move |_, a| Ret {
+            eax: if list.order.contains_key(&a[0]) {
+                a[0] | 0x2000_0000
+            } else {
+                0
+            },
+            ..Ret::default()
+        });
+        let list = tiles;
+        e.register_double(TRAIT_ENTRY_VALUE, move |_, a| Ret {
+            st0: if a[0] & 0x2000_0000 != 0 {
+                list.order[&(a[0] & 0xfff_ffff)] as f64
+            } else {
+                list.focus[&(a[0] & 0xfff_ffff)] as f64
+            },
+            ..Ret::default()
+        });
+        e.register(FTOL, |_, a| Ret {
+            eax: f64::from_bits(((a[1] as u64) << 32) | a[0] as u64) as i32 as u32,
+            ..Ret::default()
+        });
+        (e, m)
+    }
+
+    fn scan(e: &mut Engine, m: Ptr<InterfaceManager>, tile: u32, seed: i32) -> (u32, i32) {
+        e.with_stack(4, |e, best| {
+            e.mem.set_i32(best.addr(), seed);
+            let found = interface_manager_scan_for_max_focus(e, m, best.addr(), tile);
+            (found, e.mem.i32(best.addr()))
+        })
+    }
+
+    #[test]
+    fn the_scan_finds_the_child_with_the_highest_focus() {
+        use std::collections::HashMap;
+        // Tile 0x10 (focusable, 3) has children 0x20 (7), 0x30 (9), 0x40 (9, order 1)
+        // and 0x30 has order 5.
+        let (mut e, m) = scan_world(FocusTiles {
+            children: HashMap::from([
+                (0x10, vec![0x20, 0x30, 0x40]),
+                (0x20, vec![]),
+                (0x30, vec![]),
+                (0x40, vec![]),
+            ]),
+            focus: HashMap::from([(0x10, 3), (0x20, 7), (0x30, 9), (0x40, 9)]),
+            order: HashMap::from([(0x30, 5), (0x40, 1)]),
+        });
+        assert_eq!(scan(&mut e, m, 0x10, i32::MIN), (0x40, 9));
+        // A leaf competes by its own value.
+        assert_eq!(scan(&mut e, m, 0x20, i32::MIN), (0x20, 7));
+        // The value on entry is the one to beat.
+        assert_eq!(scan(&mut e, m, 0x20, 8), (0, 8));
+    }
+
+    #[test]
+    fn the_scan_gives_a_tie_to_the_lower_order_and_skips_hidden_tiles() {
+        use std::collections::HashMap;
+        let (mut e, m) = scan_world(FocusTiles {
+            children: HashMap::from([
+                (0x10, vec![0x20, 0x30, 0x40, 0x50]),
+                (0x20, vec![]),
+                (0x30, vec![]),
+                (0x40, vec![]),
+                (0x50, vec![]),
+            ]),
+            focus: HashMap::from([(0x20, 4), (0x30, 4), (0x40, 4), (0x50, 4)]),
+            order: HashMap::from([(0x20, 2), (0x30, 6), (0x40, 3), (0x50, 9)]),
+        });
+        // The parent has no focus of its own. The first child to reach the
+        // value wins outright (its order is not remembered); each later
+        // equal one wins when its order is below the best order of the
+        // ties so far: 0x30 (6 < the initial limit), 0x40 (3 < 6), not
+        // 0x50 (9).
+        assert_eq!(scan(&mut e, m, 0x10, i32::MIN), (0x40, 4));
+        // A hidden tile finds nothing.
+        e.register_double(TILE_IS_TRUE, |_, _| Ret::default());
+        assert_eq!(scan(&mut e, m, 0x10, i32::MIN), (0, i32::MIN));
+    }
+
+    #[test]
+    fn the_scan_without_a_tile_starts_at_the_frontmost_menu() {
+        use std::collections::HashMap;
+        let (mut e, m) = scan_world(FocusTiles {
+            children: HashMap::from([(0x10, vec![])]),
+            focus: HashMap::from([(0x10, 6)]),
+            order: HashMap::new(),
+        });
+        // No menu in front: nothing.
+        returns(&mut e, MENU_MANAGER_INSTANCE, 0x42);
+        returns(&mut e, GET_FRONTMOST_MENU, 0);
+        assert_eq!(scan(&mut e, m, 0, 3), (0, i32::MIN));
+        assert_eq!(calls(&e, MENU_MANAGER_INSTANCE)[0], vec![1]);
+        // A menu with a tile of another type: that tile is the root.
+        let (tile_object, _) = virtual_object(&mut e, &[(0xc, 0x00aa_0060)], 0x111);
+        returns(&mut e, GET_FRONTMOST_MENU, 0xa000);
+        returns(&mut e, GET_FIELD_AT_4, tile_object);
+        e.register_double(TILE_IS_TRUE, move |_, a| Ret {
+            eax: (a[0] == tile_object) as u32,
+            ..Ret::default()
+        });
+        returns(&mut e, TILE_GET_TRAIT_ENTRY, 0x1000_0001);
+        returns_st0(&mut e, TRAIT_ENTRY_VALUE, 6.0);
+        assert_eq!(scan(&mut e, m, 0, 3), (tile_object, 6));
+        assert_eq!(calls(&e, GET_FRONTMOST_MENU)[1], vec![0x42]);
+        assert_eq!(calls(&e, GET_FIELD_AT_4)[0], vec![0xa000]);
+    }
+
+    #[test]
+    fn a_tile_of_type_0x389_must_have_a_menu_in_state_1_or_8() {
+        let mut e = world();
+        let m = manager(&mut e);
+        let (tile_object, _) = virtual_object(&mut e, &[(0xc, 0x00aa_0064)], 0x389);
+        returns(&mut e, MENU_MANAGER_INSTANCE, 0x42);
+        returns(&mut e, GET_FRONTMOST_MENU, 0xa000);
+        returns(&mut e, GET_FIELD_AT_4, tile_object);
+        returns(&mut e, TILE_GET_MENU, 0xb000);
+        returns(&mut e, TILE_IS_TRUE, 0);
+        returns(&mut e, MENU_STATE, 2);
+        assert_eq!(scan(&mut e, m, 0, 3), (0, i32::MIN));
+        // The state check stopped it: the tile was never asked for 0xfa3.
+        assert!(calls(&e, TILE_IS_TRUE).is_empty());
+        returns(&mut e, MENU_STATE, 8);
+        scan(&mut e, m, 0, 3);
+        assert_eq!(calls(&e, TILE_IS_TRUE)[0], vec![tile_object, 0xfa3]);
+        returns(&mut e, MENU_STATE, 1);
+        scan(&mut e, m, 0, 3);
+        assert_eq!(calls(&e, TILE_IS_TRUE).len(), 2);
+    }
+
+    /// A timer list: a head node with the first timer at `+0x10` and the
+    /// last at `+0xc`; the manager's `pTimers` is the head.
+    fn timer_world() -> (Engine, Ptr<InterfaceManager>, u32) {
+        let mut e = world();
+        let m = manager(&mut e);
+        let head = e.mem.alloc(0x14);
+        e.mem.set_u32(head + 0xc, head);
+        e.set(m, InterfaceManager::pTimers, head);
+        returns(&mut e, GET_MANAGER, m.addr());
+        (e, m, head)
+    }
+
+    fn add_timer(e: &mut Engine, head: u32, index: u32, elapsed: f32, end: f32) -> u32 {
+        let timer = e.mem.alloc(0x14);
+        e.mem.set_u32(timer, index);
+        e.mem.set_f32(timer + 4, elapsed);
+        e.mem.set_f32(timer + 8, end);
+        let tail = e.mem.u32(head + 0xc);
+        e.mem.set_u32(timer + 0xc, tail);
+        e.mem.set_u32(tail + 0x10, timer);
+        e.mem.set_u32(head + 0xc, timer);
+        timer
+    }
+
+    /// `FLOAT_MIN` and `FLOAT_MAX` as the game's helpers: smaller and larger
+    /// of two floats (the arguments are `float`s; the result is in `ST0`).
+    fn clamp_helpers(e: &mut Engine) {
+        e.register(FLOAT_MIN, |_, a| Ret {
+            st0: f32::from_bits(a[0]).min(f32::from_bits(a[1])) as f64,
+            ..Ret::default()
+        });
+        e.register(FLOAT_MAX, |_, a| Ret {
+            st0: f32::from_bits(a[0]).max(f32::from_bits(a[1])) as f64,
+            ..Ret::default()
+        });
+    }
+
+    #[test]
+    fn timers_advance_by_the_frame_time_and_finished_ones_are_freed() {
+        let (mut e, m, head) = timer_world();
+        clamp_helpers(&mut e);
+        e.set_global(ONE_DOUBLE, 1.0f64);
+        returns_st0(&mut e, FRAME_TIME_GETTER, 0.5);
+        returns(&mut e, WEAPON_STATE_GETTER, 0);
+        let slow = add_timer(&mut e, head, 1, 0.0, 2.0);
+        let done = add_timer(&mut e, head, 2, 0.75, 1.0);
+        let last = add_timer(&mut e, head, 3, 0.0, 10.0);
+        interface_manager_update_all_timers(&mut e, m);
+        assert_eq!(e.mem.f32(slow + 4), 0.5);
+        assert_eq!(e.mem.f32(last + 4), 0.5);
+        // The finished timer is unlinked and freed.
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![done]]);
+        assert_eq!(e.mem.u32(slow + 0x10), last);
+        assert_eq!(e.mem.u32(last + 0xc), slow);
+        // Finishing the last timer moves the tail back.
+        e.mem.set_f32(last + 4, 9.9);
+        interface_manager_update_all_timers(&mut e, m);
+        assert_eq!(e.mem.u32(head + 0xc), slow);
+        assert_eq!(e.mem.u32(slow + 0x10), 0);
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 2);
+    }
+
+    #[test]
+    fn timers_run_at_the_game_rate_in_state_four() {
+        let (mut e, m, head) = timer_world();
+        clamp_helpers(&mut e);
+        e.set_global(ONE_DOUBLE, 1.0f64);
+        e.set_global(TIMER_RATE, 4.0f32);
+        returns_st0(&mut e, FRAME_TIME_GETTER, 2.0);
+        returns(&mut e, WEAPON_STATE_GETTER, 4);
+        let timer = add_timer(&mut e, head, 1, 0.25, 10.0);
+        interface_manager_update_all_timers(&mut e, m);
+        assert_eq!(e.mem.f32(timer + 4), 0.75);
+        assert_eq!(
+            calls(&e, WEAPON_STATE_GETTER),
+            vec![vec![WEAPON_STATE_OBJECT]]
+        );
+        assert_eq!(fn_00716440(&mut e), 4.0);
+    }
+
+    #[test]
+    fn all_the_timers_and_the_head_are_freed() {
+        let (mut e, m, head) = timer_world();
+        let first = add_timer(&mut e, head, 1, 0.0, 1.0);
+        let second = add_timer(&mut e, head, 2, 0.0, 1.0);
+        fn_00716450(&mut e, m);
+        assert_eq!(
+            calls(&e, OPERATOR_DELETE),
+            vec![vec![first], vec![second], vec![head]]
+        );
+        assert_eq!(e.get(m, InterfaceManager::pTimers), 0);
+    }
+
+    #[test]
+    fn a_new_timer_replaces_the_one_with_its_index_and_joins_the_tail() {
+        let (mut e, _, head) = timer_world();
+        clamp_helpers(&mut e);
+        allocator(&mut e, OPERATOR_NEW);
+        e.mem.set_f32(TIMER_DEFAULT_END, 0.5);
+        let old = add_timer(&mut e, head, 7, 0.0, 1.0);
+        let other = add_timer(&mut e, head, 8, 0.0, 1.0);
+        interface_manager_new_timer(&mut e, 7, 3.0);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![old]]);
+        let timer = e.mem.u32(head + 0xc);
+        assert_ne!(timer, other);
+        assert_eq!(e.mem.u32(timer), 7);
+        assert_eq!(e.mem.f32(timer + 4), 0.0);
+        assert_eq!(e.mem.f32(timer + 8), 3.0);
+        assert_eq!(e.mem.u32(timer + 0xc), other);
+        assert_eq!(e.mem.u32(other + 0x10), timer);
+        // A negative end is raised to 0; the scope guard has the line.
+        interface_manager_new_timer(&mut e, 9, -1.0);
+        let timer = e.mem.u32(head + 0xc);
+        assert_eq!(e.mem.f32(timer + 8), 0.0);
+        assert_eq!(calls(&e, SCOPE_GUARD_BEGIN)[0][4], 0x145a);
+        assert_eq!(calls(&e, SCOPE_GUARD_END).len(), 2);
+    }
+
+    #[test]
+    fn clearing_a_timer_unlinks_the_first_with_the_index() {
+        let (mut e, _, head) = timer_world();
+        let first = add_timer(&mut e, head, 1, 0.0, 1.0);
+        let second = add_timer(&mut e, head, 2, 0.0, 1.0);
+        let third = add_timer(&mut e, head, 2, 0.0, 1.0);
+        interface_manager_clear_timer(&mut e, 2);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![second]]);
+        assert_eq!(e.mem.u32(first + 0x10), third);
+        assert_eq!(e.mem.u32(third + 0xc), first);
+        // Clearing the last moves the tail back.
+        interface_manager_clear_timer(&mut e, 2);
+        assert_eq!(e.mem.u32(head + 0xc), first);
+        assert_eq!(e.mem.u32(first + 0x10), 0);
+        // An absent index changes nothing.
+        interface_manager_clear_timer(&mut e, 99);
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 2);
+    }
+
+    #[test]
+    fn a_timers_progress_is_clamped_and_one_for_unknown_timers() {
+        let (mut e, _, head) = timer_world();
+        clamp_helpers(&mut e);
+        e.set_global(ZERO_DOUBLE, 0.0f64);
+        e.set_global(CURSOR_DIRECTION_Y, -1.0f32);
+        add_timer(&mut e, head, 1, 0.5, 2.0);
+        add_timer(&mut e, head, 2, 5.0, 2.0);
+        add_timer(&mut e, head, 3, 1.0, 0.0);
+        assert_eq!(fn_00716660(&mut e, 1), 0.25);
+        assert_eq!(fn_00716660(&mut e, 2), 1.0);
+        assert_eq!(fn_00716660(&mut e, 3), -1.0);
+        assert_eq!(fn_00716660(&mut e, 4), 1.0);
+    }
+
+    #[test]
+    fn the_key_repeat_starts_at_the_clock() {
+        let mut e = world();
+        let m = manager(&mut e);
+        returns(&mut e, FADE_CLOCK_READ, 1234);
+        e.mem.set_u32(m.addr() + 0x158, 9);
+        fn_007166f0(&mut e, m, 0x8000_0001);
+        assert_eq!(e.get(m, InterfaceManager::uKeyDownTime), 1234);
+        assert_eq!(e.mem.u32(m.addr() + 0x158), 0);
+        assert_eq!(
+            e.get(m, InterfaceManager::iRepeatingKey),
+            0x8000_0001u32 as i32
+        );
+        assert_eq!(calls(&e, FADE_CLOCK_READ), vec![vec![FADE_CLOCK]]);
+    }
+
+    /// A world for the key repeat: the clock reads `now`, the first delay
+    /// is `first`, the second `next`.
+    fn repeat_world(now: u32, first: f32, next: f32) -> (Engine, Ptr<InterfaceManager>) {
+        let mut e = world();
+        let m = manager(&mut e);
+        returns(&mut e, FADE_CLOCK_READ, now);
+        let first_cell = float_cell(&mut e, first);
+        let next_cell = float_cell(&mut e, next);
+        e.register_double(FLOAT_HOLDER_GET, move |_, a| Ret {
+            eax: if a[0] == REPEAT_DELAY_HOLDER_FIRST {
+                first_cell
+            } else {
+                next_cell
+            },
+            ..Ret::default()
+        });
+        returns(&mut e, CONTROLS_GET, 0xc0de);
+        e.set_global(ZERO_DOUBLE, 0.0f64);
+        (e, m)
+    }
+
+    #[test]
+    fn the_first_repeat_waits_for_the_first_delay() {
+        let (mut e, m) = repeat_world(1000, 300.0, 50.0);
+        e.set(m, InterfaceManager::iRepeatingKey, 0x8000_0000u32 as i32);
+        e.set(m, InterfaceManager::uKeyDownTime, 800);
+        assert_eq!(fn_00716730(&mut e, m, 1.0), 0);
+        assert_eq!(e.mem.u32(m.addr() + 0x158), 0);
+        e.set(m, InterfaceManager::uKeyDownTime, 700);
+        assert_eq!(fn_00716730(&mut e, m, 1.0), 0x8000_0000);
+        assert_eq!(e.mem.u32(m.addr() + 0x158), 1000);
+        // Later ones come at the second delay divided by the rate.
+        assert_eq!(fn_00716730(&mut e, m, 1.0), 0);
+        let (mut e, m) = repeat_world(1000, 300.0, 50.0);
+        e.set(m, InterfaceManager::iRepeatingKey, 0x8000_0000u32 as i32);
+        e.mem.set_u32(m.addr() + 0x158, 950);
+        assert_eq!(fn_00716730(&mut e, m, 1.0), 0x8000_0000);
+        e.mem.set_u32(m.addr() + 0x158, 960);
+        assert_eq!(fn_00716730(&mut e, m, 0.5), 0);
+        assert_eq!(e.mem.u32(m.addr() + 0x158), 960);
+        e.mem.set_u32(m.addr() + 0x158, 890);
+        assert_eq!(fn_00716730(&mut e, m, 0.5), 0x8000_0000);
+        assert_eq!(e.mem.u32(m.addr() + 0x158), 1000);
+    }
+
+    #[test]
+    fn a_negative_first_delay_turns_the_repeat_off() {
+        let (mut e, m) = repeat_world(1000, -1.0, 50.0);
+        e.set(m, InterfaceManager::iRepeatingKey, 5);
+        e.set(m, InterfaceManager::uKeyDownTime, 0);
+        assert_eq!(fn_00716730(&mut e, m, 1.0), 0);
+        assert_eq!(e.get(m, InterfaceManager::iRepeatingKey), 5);
+    }
+
+    #[test]
+    fn a_released_arrow_key_ends_the_repeat() {
+        for (code, key) in [
+            (0x8000_0001u32, 0xcbu32),
+            (0x8000_0002, 0xcd),
+            (0x8000_0003, 0xc8),
+            (0x8000_0004, 0xd0),
+        ] {
+            let (mut e, m) = repeat_world(1000, 300.0, 50.0);
+            e.set_global(CONTROLS_OWNER, 0x1234u32);
+            e.set(m, InterfaceManager::iRepeatingKey, code as i32);
+            e.set(m, InterfaceManager::uKeyDownTime, 0);
+            // Still held: the repeat goes on.
+            returns(&mut e, CONTROLS_QUERY_00A24180, 1);
+            assert_eq!(fn_00716730(&mut e, m, 1.0), code);
+            assert_eq!(
+                calls(&e, CONTROLS_QUERY_00A24180),
+                vec![vec![0xc0de, key, 0]]
+            );
+            // Released: it ends.
+            returns(&mut e, CONTROLS_QUERY_00A24180, 0);
+            assert_eq!(fn_00716730(&mut e, m, 1.0), 0);
+            assert_eq!(e.get(m, InterfaceManager::iRepeatingKey), 0);
+        }
+    }
+
+    #[test]
+    fn a_tile_of_another_menu_is_refused_by_a_top_menu_of_the_two_kinds() {
+        let mut e = world();
+        let m = manager(&mut e);
+        set_stack(&mut e, m, &[4, 6]);
+        returns(&mut e, TILE_GET_MENU_BY_CLASS, 0x5000);
+        returns_st0(&mut e, TILE_GET_VALUE, 0x66 as f64);
+        e.register(FTOL, |_, a| Ret {
+            eax: f64::from_bits(((a[1] as u64) << 32) | a[0] as u64) as i32 as u32,
+            ..Ret::default()
+        });
+        e.register(TILE_GET_MENU, |_, a| Ret {
+            eax: if a[0] == 0x5000 { 0xaaa } else { 0xbbb },
+            ..Ret::default()
+        });
+        assert!(!interface_manager_tile_is_accepting_events(
+            &mut e, m, 0x6000
+        ));
+        assert_eq!(calls(&e, TILE_GET_MENU_BY_CLASS)[0], vec![6]);
+        // A tile of the same menu is accepted.
+        assert!(interface_manager_tile_is_accepting_events(
+            &mut e, m, 0x5000
+        ));
+        // The other kind is the same.
+        returns_st0(&mut e, TILE_GET_VALUE, 0x1776 as f64);
+        assert!(!interface_manager_tile_is_accepting_events(
+            &mut e, m, 0x6000
+        ));
+        // Any other kind accepts everything.
+        returns_st0(&mut e, TILE_GET_VALUE, 5.0);
+        assert!(interface_manager_tile_is_accepting_events(
+            &mut e, m, 0x6000
+        ));
+        // No menu for the top class: accepted.
+        returns(&mut e, TILE_GET_MENU_BY_CLASS, 0);
+        assert!(interface_manager_tile_is_accepting_events(
+            &mut e, m, 0x6000
+        ));
+    }
+    /// The strings a text-entry test world keeps: (string object, text).
+    type StringTable = Rc<RefCell<Vec<(u32, Vec<u8>)>>>;
+
+    /// A text entry whose string members are doubles over a table: `Set`
+    /// stores the text a pointer names, `GetLength` and `c_str` read it back.
+    fn text_world() -> (Engine, Ptr<TextEntry>, StringTable) {
+        let mut e = world();
+        let entry = e.new_object::<TextEntry>();
+        e.set(entry, TextEntry::max_width, -1);
+        let strings: StringTable = Rc::new(RefCell::new(vec![]));
+        let table = strings.clone();
+        e.register_double(STRING_SET, move |e, a| {
+            let text = if a[1] == 0 { vec![] } else { e.mem.cstr(a[1]) };
+            let mut table = table.borrow_mut();
+            table.retain(|(this, _)| *this != a[0]);
+            table.push((a[0], text));
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        let table = strings.clone();
+        e.register_double(STRING_LENGTH, move |_, a| Ret {
+            eax: table
+                .borrow()
+                .iter()
+                .find(|(this, _)| *this == a[0])
+                .map_or(0, |(_, text)| text.len() as u32),
+            ..Ret::default()
+        });
+        let table = strings.clone();
+        e.register_double(NI_POINTER_GET, move |e, a| {
+            let found = table
+                .borrow()
+                .iter()
+                .find(|(this, _)| *this == a[0])
+                .map(|(_, text)| text.clone());
+            let block = e.mem.alloc(0x400);
+            e.mem.set_cstr(block, &found.unwrap_or_default());
+            Ret {
+                eax: block,
+                ..Ret::default()
+            }
+        });
+        e.register(TEXT_COPY, |e, a| {
+            let text = e.mem.cstr(a[1]);
+            e.mem.set_cstr(a[0], &text);
+            Ret::default()
+        });
+        e.mem.set_cstr(EMPTY_TEXT, b"");
+        (e, entry, strings)
+    }
+
+    fn entry_text(strings: &StringTable, at: u32) -> Option<String> {
+        strings
+            .borrow()
+            .iter()
+            .find(|(this, _)| *this == at)
+            .map(|(_, text)| String::from_utf8_lossy(text).into_owned())
+    }
+
+    #[test]
+    fn a_new_text_entry_is_inactive_without_a_width_limit() {
+        let mut e = world();
+        let entry = e.new_object::<TextEntry>();
+        e.set(entry, TextEntry::cursor, 5);
+        e.set(entry, TextEntry::caret_phase, 1);
+        assert_eq!(fn_00716980(&mut e, entry), entry);
+        assert_eq!(e.get(entry, TextEntry::active), 0);
+        assert_eq!(e.get(entry, TextEntry::cursor), 0);
+        assert_eq!(e.get(entry, TextEntry::caret_phase), 0);
+        assert_eq!(e.get(entry, TextEntry::max_width), -1);
+        assert_eq!(e.get(entry, TextEntry::last_blink_time), 0);
+        assert_eq!(e.get(entry, TextEntry::field_18), 1);
+        assert_eq!(
+            calls(&e, STRING_CONSTRUCT),
+            vec![vec![entry.addr()], vec![entry.addr() + 8]]
+        );
+    }
+
+    #[test]
+    fn the_text_entry_destructor_frees_the_shown_string_first() {
+        let mut e = world();
+        let entry = e.new_object::<TextEntry>();
+        fn_00716a10(&mut e, entry);
+        assert_eq!(
+            calls(&e, STRING_DESTROY),
+            vec![vec![entry.addr() + 8], vec![entry.addr()]]
+        );
+    }
+
+    #[test]
+    fn setting_the_text_sets_both_strings() {
+        let mut e = world();
+        let entry = e.new_object::<TextEntry>();
+        fn_00716a70(&mut e, entry, 0x4321);
+        assert_eq!(
+            calls(&e, STRING_SET),
+            vec![vec![entry.addr(), 0x4321], vec![entry.addr() + 8, 0x4321]]
+        );
+    }
+
+    #[test]
+    fn the_width_limit_is_five_less_or_the_screen_width() {
+        let mut e = world();
+        screen_constants(&mut e);
+        let entry = e.new_object::<TextEntry>();
+        fn_00716aa0(&mut e, entry, 105);
+        assert_eq!(e.get(entry, TextEntry::max_width), 100);
+        // Negative: the interface width, as an integer.
+        returns(&mut e, RENDER_TARGET_WIDTH, 1024);
+        returns(&mut e, RENDER_TARGET_HEIGHT, 768);
+        returns(&mut e, FTOL, 1280);
+        fn_00716aa0(&mut e, entry, 2);
+        assert_eq!(e.get(entry, TextEntry::max_width), 1280);
+        assert_eq!(calls(&e, FTOL), vec![vec![0, 0x4094_0000]]);
+        assert_eq!(calls(&e, GET_MANAGER).len(), 1);
+    }
+
+    #[test]
+    fn the_active_flag_is_read() {
+        let mut e = world();
+        let entry = e.new_object::<TextEntry>();
+        assert_eq!(fn_00716ae0(&mut e, entry), 0);
+        e.set(entry, TextEntry::active, 1);
+        assert_eq!(fn_00716ae0(&mut e, entry), 1);
+    }
+
+    fn key(e: &mut Engine, entry: Ptr<TextEntry>, code: u32) {
+        fn_00716b00(e, entry, code);
+    }
+
+    #[test]
+    fn typing_inserts_at_the_caret_and_moves_it() {
+        let (mut e, entry, strings) = text_world();
+        // Inactive entries take nothing.
+        key(&mut e, entry, b'a' as u32);
+        assert_eq!(entry_text(&strings, entry.addr()), None);
+        e.set(entry, TextEntry::active, 1);
+        key(&mut e, entry, b'a' as u32);
+        key(&mut e, entry, b'c' as u32);
+        assert_eq!(entry_text(&strings, entry.addr()).unwrap(), "ac");
+        assert_eq!(e.get(entry, TextEntry::cursor), 2);
+        // Left, then insert in the middle.
+        key(&mut e, entry, 0x8000_0001);
+        key(&mut e, entry, b'b' as u32);
+        assert_eq!(entry_text(&strings, entry.addr()).unwrap(), "abc");
+        assert_eq!(e.get(entry, TextEntry::cursor), 2);
+        // The up and down codes are inserted as bytes, like any other code.
+        key(&mut e, entry, 0x8000_0003);
+        assert_eq!(
+            entry_text(&strings, entry.addr()).unwrap().as_bytes(),
+            b"ab\x03c"
+        );
+    }
+
+    #[test]
+    fn the_caret_moves_with_the_arrows_home_and_end() {
+        let (mut e, entry, strings) = text_world();
+        e.set(entry, TextEntry::active, 1);
+        for byte in b"abc" {
+            key(&mut e, entry, *byte as u32);
+        }
+        e.set(entry, TextEntry::clears_text_on_edit, 1);
+        key(&mut e, entry, 0x8000_0001);
+        assert_eq!(e.get(entry, TextEntry::cursor), 2);
+        assert_eq!(e.get(entry, TextEntry::clears_text_on_edit), 0);
+        key(&mut e, entry, 0x8000_0005);
+        assert_eq!(e.get(entry, TextEntry::cursor), 0);
+        // Left at the start and right at the end stay.
+        key(&mut e, entry, 0x8000_0001);
+        assert_eq!(e.get(entry, TextEntry::cursor), 0);
+        key(&mut e, entry, 0x8000_0002);
+        assert_eq!(e.get(entry, TextEntry::cursor), 1);
+        key(&mut e, entry, 0x8000_0006);
+        assert_eq!(e.get(entry, TextEntry::cursor), 3);
+        key(&mut e, entry, 0x8000_0002);
+        assert_eq!(e.get(entry, TextEntry::cursor), 3);
+        assert_eq!(entry_text(&strings, entry.addr()).unwrap(), "abc");
+    }
+
+    #[test]
+    fn backspace_and_delete_remove_one_character() {
+        let (mut e, entry, strings) = text_world();
+        e.set(entry, TextEntry::active, 1);
+        for byte in b"abcd" {
+            key(&mut e, entry, *byte as u32);
+        }
+        key(&mut e, entry, 0x8000_0001);
+        // Backspace removes the character before the caret.
+        key(&mut e, entry, 0x8000_0000);
+        assert_eq!(entry_text(&strings, entry.addr()).unwrap(), "abd");
+        assert_eq!(e.get(entry, TextEntry::cursor), 2);
+        // Delete removes the one at the caret.
+        key(&mut e, entry, 0x8000_0007);
+        assert_eq!(entry_text(&strings, entry.addr()).unwrap(), "ab");
+        assert_eq!(e.get(entry, TextEntry::cursor), 2);
+        // ... and nothing at the end.
+        key(&mut e, entry, 0x8000_0007);
+        assert_eq!(entry_text(&strings, entry.addr()).unwrap(), "ab");
+        // Backspace at the start does nothing.
+        key(&mut e, entry, 0x8000_0005);
+        key(&mut e, entry, 0x8000_0000);
+        assert_eq!(entry_text(&strings, entry.addr()).unwrap(), "ab");
+    }
+
+    #[test]
+    fn a_flagged_entry_is_emptied_by_the_next_editing_key() {
+        let (mut e, entry, strings) = text_world();
+        e.set(entry, TextEntry::active, 1);
+        for byte in b"abc" {
+            key(&mut e, entry, *byte as u32);
+        }
+        for code in [0x8000_0000u32, 0x8000_0007, 0x8000_0008] {
+            e.set(entry, TextEntry::clears_text_on_edit, 1);
+            key(&mut e, entry, code);
+            assert_eq!(entry_text(&strings, entry.addr()).unwrap(), "", "{code:x}");
+            assert_eq!(e.get(entry, TextEntry::clears_text_on_edit), 0);
+            assert_eq!(e.get(entry, TextEntry::cursor), 0);
+            assert_eq!(e.get(entry, TextEntry::active), 1);
+            for byte in b"abc" {
+                key(&mut e, entry, *byte as u32);
+            }
+        }
+        // Typing replaces the text.
+        e.set(entry, TextEntry::clears_text_on_edit, 1);
+        key(&mut e, entry, b'z' as u32);
+        assert_eq!(entry_text(&strings, entry.addr()).unwrap(), "z");
+        assert_eq!(e.get(entry, TextEntry::cursor), 1);
+        assert_eq!(e.get(entry, TextEntry::clears_text_on_edit), 0);
+    }
+
+    #[test]
+    fn enter_deactivates_and_the_page_codes_only_clear_the_flag() {
+        let (mut e, entry, strings) = text_world();
+        e.set(entry, TextEntry::active, 1);
+        key(&mut e, entry, b'q' as u32);
+        for code in [0x8000_0009u32, 0x8000_000a] {
+            e.set(entry, TextEntry::clears_text_on_edit, 1);
+            key(&mut e, entry, code);
+            assert_eq!(e.get(entry, TextEntry::clears_text_on_edit), 0);
+            assert_eq!(e.get(entry, TextEntry::active), 1);
+        }
+        // The code 9 is ignored altogether.
+        e.set(entry, TextEntry::clears_text_on_edit, 1);
+        key(&mut e, entry, 9);
+        assert_eq!(e.get(entry, TextEntry::clears_text_on_edit), 1);
+        e.set(entry, TextEntry::clears_text_on_edit, 0);
+        key(&mut e, entry, 0x8000_0008);
+        assert_eq!(e.get(entry, TextEntry::active), 0);
+        assert_eq!(entry_text(&strings, entry.addr()).unwrap(), "q");
+    }
+
+    #[test]
+    fn typing_stops_at_the_width_limit() {
+        let (mut e, entry, strings) = text_world();
+        e.set(entry, TextEntry::active, 1);
+        e.set(entry, TextEntry::max_width, 100);
+        returns(&mut e, TEXT_ENTRY_ACCEPTS_TEXT, 0);
+        key(&mut e, entry, b'a' as u32);
+        assert_eq!(entry_text(&strings, entry.addr()), None);
+        assert_eq!(e.get(entry, TextEntry::cursor), 0);
+        assert_eq!(calls(&e, TEXT_ENTRY_ACCEPTS_TEXT).len(), 1);
+        assert_eq!(calls(&e, TEXT_ENTRY_ACCEPTS_TEXT)[0][0], entry.addr());
+        returns(&mut e, TEXT_ENTRY_ACCEPTS_TEXT, 1);
+        key(&mut e, entry, b'a' as u32);
+        assert_eq!(entry_text(&strings, entry.addr()).unwrap(), "a");
+        assert_eq!(e.get(entry, TextEntry::cursor), 1);
+    }
+
+    #[test]
+    fn activating_an_entry_puts_the_caret_at_the_end() {
+        let (mut e, entry, _) = text_world();
+        let text = e.mem.alloc(8);
+        e.mem.set_cstr(text, b"abcd");
+        e.call(STRING_SET, &args![entry, text]);
+        fn_00717010(&mut e, entry, 1);
+        assert_eq!(e.get(entry, TextEntry::active), 1);
+        assert_eq!(e.get(entry, TextEntry::cursor), 4);
+        // Already active: the caret stays.
+        e.set(entry, TextEntry::cursor, 1);
+        fn_00717010(&mut e, entry, 1);
+        assert_eq!(e.get(entry, TextEntry::cursor), 1);
+        // Deactivating leaves the caret where it is.
+        fn_00717010(&mut e, entry, 0);
+        assert_eq!(e.get(entry, TextEntry::active), 0);
+        assert_eq!(e.get(entry, TextEntry::cursor), 1);
+        // Deactivating an inactive entry changes nothing.
+        fn_00717010(&mut e, entry, 0);
+        assert_eq!(e.get(entry, TextEntry::cursor), 1);
+    }
+
+    #[test]
+    fn the_caret_blinks_every_half_second() {
+        let mut e = world();
+        let entry = e.new_object::<TextEntry>();
+        e.set(entry, TextEntry::last_blink_time, 1000);
+        returns(&mut e, FADE_CLOCK_READ, 1500);
+        fn_00717050(&mut e, entry);
+        assert_eq!(e.get(entry, TextEntry::caret_phase), 0);
+        assert_eq!(e.get(entry, TextEntry::last_blink_time), 1000);
+        returns(&mut e, FADE_CLOCK_READ, 1501);
+        fn_00717050(&mut e, entry);
+        assert_eq!(e.get(entry, TextEntry::caret_phase), 1);
+        assert_eq!(e.get(entry, TextEntry::last_blink_time), 1501);
+        returns(&mut e, FADE_CLOCK_READ, 2100);
+        fn_00717050(&mut e, entry);
+        assert_eq!(e.get(entry, TextEntry::caret_phase), 0);
+        assert_eq!(calls(&e, FADE_CLOCK_READ)[0], vec![FADE_CLOCK]);
+    }
+
+    #[test]
+    fn the_shown_text_has_the_caret_in_it() {
+        let (mut e, entry, strings) = text_world();
+        let text = e.mem.alloc(8);
+        e.mem.set_cstr(text, b"abc");
+        e.call(STRING_SET, &args![entry, text]);
+        e.mem.set_cstr(DISPLAY_FALLBACK_STRING, b"-");
+        e.set(entry, TextEntry::active, 1);
+        e.set(entry, TextEntry::cursor, 1);
+        e.set(entry, TextEntry::caret_phase, 1);
+        fn_007170a0(&mut e, entry);
+        assert_eq!(entry_text(&strings, entry.addr() + 8).unwrap(), "a|bc");
+        // The other phase shows 0x7f; the caret may be at the end.
+        e.set(entry, TextEntry::caret_phase, 0);
+        e.set(entry, TextEntry::cursor, 3);
+        fn_007170a0(&mut e, entry);
+        assert_eq!(
+            entry_text(&strings, entry.addr() + 8).unwrap().as_bytes(),
+            b"abc\x7f"
+        );
+        // An inactive entry shows the text alone.
+        e.set(entry, TextEntry::active, 0);
+        fn_007170a0(&mut e, entry);
+        assert_eq!(entry_text(&strings, entry.addr() + 8).unwrap(), "abc");
+        // Nothing to show: the fallback string.
+        e.call(STRING_SET, &args![entry, 0u32]);
+        fn_007170a0(&mut e, entry);
+        assert_eq!(
+            calls(&e, STRING_SET).last().unwrap()[1],
+            DISPLAY_FALLBACK_STRING
+        );
     }
     // @@TESTS-END@@
 }
