@@ -71,9 +71,12 @@ $L scaffold "fallout/ai/processlists.cpp" # create its file (lead)
    - The marker comment goes directly above the function, with the
      function's entry address. The doc comment names the Xbox PDB name
      (marked `(Xbox PDB)`) and says what the function does.
-   - Name: snake_case of the Xbox method name, prefixed by the class when
-     needed for uniqueness in the file (`tes_form_get_form_id`); unnamed
-     functions are `fn_<addr>`.
+   - Name: snake_case of the class and method, `tes_form_get_form_id`;
+     overloads keep the map's `_ovN` (`garbage_collector_add_ov2`);
+     unnamed functions are `fn_<addr>`. Check the body before trusting a
+     map name: identical-code folding can put another method's name on a
+     shared body (a destructor named `NiTArray<..>::SetSize`). If the name
+     is wrong, use `fn_<addr>` and say what the body is.
    - Parameters in declaration order, `this` first. Types: `u32`, `i32`,
      `u16`, `i16`, `u8`, `i8`, `bool`, `f32`, `f64`, `u64`, `Ptr<T>`.
      A struct returned by value is an explicit pointer parameter.
@@ -90,10 +93,26 @@ $L scaffold "fallout/ai/processlists.cpp" # create its file (lead)
    - CRT functions (`memcpy`, `strlen`, `sprintf`, ...) are called by
      address like any other; the runtime library is translated or
      replaced separately.
+   - Imported Windows functions (`call dword ptr [0x00fdf0e4]`) are called
+     by the address of their import slot: `e.call(0x00fdf0e4, ..)`.
+     `units/platform.rs` provides the ones with a Rust stand-in
+     (interlocked operations, critical sections, clocks); report others
+     you need.
+   - A value the code passes in x87 `ST0` (compiler helpers such as
+     `_ftol2`, `00ec62c0`) is a leading `f64` argument (two words).
+   - A local the game keeps on its stack and passes by address (a scope
+     guard, a `NiPointer` temporary, an out parameter):
+     `e.with_stack(size, |e, p| ...)`.
 4. **Data.**
    - Fields of a class this unit owns (the class's own `.cpp` is this
      unit): declare them with `layout!` in this file, Xbox PDB names,
      PC offsets.
+   - Containers, strings and reference-counted bases (`NiTArray`,
+     `BSSimpleArray`, `BSSimpleList`, `BSStringT`, `NiFixedString`,
+     `NiRefObject`) are in `crate::types`; use them, never redeclare them.
+     Template instances that a unit contains (an `NiTArray<T>::SetSize`
+     emitted in your `.cpp`) are your functions; their layout is still the
+     shared one.
    - Fields of other classes: use their `layout!` if it exists
      (`crate::units::<sub>::<unit>::Class`); otherwise read at the offset
      (`e.mem.u32(p.addr() + 0x20)`) with a comment naming the class and
@@ -102,9 +121,10 @@ $L scaffold "fallout/ai/processlists.cpp" # create its file (lead)
    - Globals and constants: read them from memory at their address
      (`e.global::<f32>(0x01012e10)`), as the game does; they come from the
      exe at run time. String literals are passed as their address.
-   - Floats: use the width the code loads and stores. Where x87 keeps an
-     intermediate in extended precision and the result could differ, say
-     so in a comment.
+   - Floats: compute in `f64` and round to `f32` at each `float` store,
+     the closest match to x87 code (results can differ only in the last bit,
+     in double-rounding cases). SSE code (`MOVSS`, `ADDSS`) computes in
+     `f32`.
 5. **Not translated**: C++ exception unwinding (`__CxxFrameHandler`
    states) and SEH frames are left out (say so if a function relies on
    them); the compiler-generated initializers and `atexit` destructors
@@ -112,7 +132,8 @@ $L scaffold "fallout/ai/processlists.cpp" # create its file (lead)
 6. **Test it** in the file's `#[cfg(test)] mod tests`: build the objects
    it reads (`e.new_object::<T>()`, `e.map`, `e.set_global`,
    `e.put_vtable`), stand in for callees with test doubles
-   (`e.register(0x00abcdef, |e, a| ...)`), and check results and calls
+   (`e.register(0x00abcdef, |e, a| ...)`, or `e.register_double` for a
+   double that keeps state), and check results and calls
    (`e.call_log = Some(vec![])`). Inputs come from the decompiled
    logic, one case per branch that matters. Then:
 

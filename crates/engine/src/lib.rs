@@ -22,6 +22,7 @@ mod engine;
 pub mod exe;
 pub mod mem;
 pub mod ptr;
+pub mod types;
 pub mod units;
 
 pub use abi::{AbiFn, Ret};

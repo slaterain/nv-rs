@@ -1,18 +1,32 @@
 use crate::abi::{AbiFn, Arg, Ret, RetVal};
 use crate::mem::Mem;
 use crate::ptr::{Field, Layout, Ptr, Scalar};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
+use std::rc::Rc;
+
+/// A test double that may keep state (see [`Engine::register_double`]).
+pub type Double = Rc<RefCell<dyn FnMut(&mut Engine, &[u32]) -> Ret>>;
+
+#[derive(Clone)]
+enum Callable {
+    Abi(AbiFn),
+    Double(Double),
+}
 
 /// The game's memory plus every translated function, by exe address.
 pub struct Engine {
     pub mem: Mem,
-    funcs: HashMap<u32, AbiFn>,
+    funcs: HashMap<u32, Callable>,
     /// When `Some`, every call made through [`Engine::call`] is recorded
     /// as (address, argument words). Tests use it to check what a
     /// translation called.
     pub call_log: Option<Vec<(u32, Vec<u32>)>>,
     tls: u32,
+    /// Milliseconds since start, as `GetTickCount`/`timeGetTime` report
+    /// them. The frame driver advances it; nothing else does.
+    pub clock_ms: u32,
 }
 
 impl Default for Engine {
@@ -28,7 +42,7 @@ impl Engine {
         crate::units::funcs(&mut list);
         let mut funcs = HashMap::with_capacity(list.len());
         for (addr, f) in list {
-            if funcs.insert(addr, f).is_some() {
+            if funcs.insert(addr, Callable::Abi(f)).is_some() {
                 panic!("{addr:08x} is registered twice");
             }
         }
@@ -37,6 +51,7 @@ impl Engine {
             funcs,
             call_log: None,
             tls: 0,
+            clock_ms: 0,
         }
     }
 
@@ -45,7 +60,28 @@ impl Engine {
     pub fn with_exe(exe: &Path) -> Result<Self, String> {
         let mut e = Self::new();
         crate::exe::map_data_sections(&mut e.mem, exe)?;
+        let file = std::fs::read(exe).map_err(|err| format!("{}: {err}", exe.display()))?;
+        e.register_imports(&crate::exe::imports(&file)?);
         Ok(e)
+    }
+
+    /// Registers the platform versions of imported functions
+    /// (`units::platform::imports`) at their import-slot addresses, so a
+    /// translation calls `e.call(slot, ..)` as the game calls `[slot]`.
+    /// Returns how many were registered.
+    pub fn register_imports(&mut self, imports: &[crate::exe::Import]) -> usize {
+        let table = crate::units::platform::imports();
+        let mut n = 0;
+        for i in imports {
+            if let Some((_, _, f)) = table
+                .iter()
+                .find(|(d, name, _)| d.eq_ignore_ascii_case(&i.dll) && *name == i.name)
+            {
+                self.register(i.slot, *f);
+                n += 1;
+            }
+        }
+        n
     }
 
     /// Address of the main thread's TLS block: what the game reaches as
@@ -76,7 +112,19 @@ impl Engine {
     /// Registers (or replaces) the function at `addr`. Tests use this for
     /// doubles of callees that are not under test.
     pub fn register(&mut self, addr: u32, f: AbiFn) {
-        self.funcs.insert(addr, f);
+        self.funcs.insert(addr, Callable::Abi(f));
+    }
+
+    /// Registers a test double that keeps state (counts calls, returns a
+    /// sequence, records arguments). A double that calls itself again
+    /// while running panics.
+    pub fn register_double(
+        &mut self,
+        addr: u32,
+        f: impl FnMut(&mut Engine, &[u32]) -> Ret + 'static,
+    ) {
+        self.funcs
+            .insert(addr, Callable::Double(Rc::new(RefCell::new(f))));
     }
 
     /// Calls the function at exe address `addr` with argument words in
@@ -87,10 +135,13 @@ impl Engine {
         if let Some(log) = &mut self.call_log {
             log.push((addr, args.to_vec()));
         }
-        let f = *self.funcs.get(&addr).unwrap_or_else(|| {
+        let f = self.funcs.get(&addr).cloned().unwrap_or_else(|| {
             panic!("open function {addr:08x}: not translated yet (FalloutNV.exe 1.4.0.525, docs/LEDGER.md)")
         });
-        f(self, args)
+        match f {
+            Callable::Abi(f) => f(self, args),
+            Callable::Double(d) => (d.borrow_mut())(self, args),
+        }
     }
 
     /// [`Engine::call`] with the result converted.
@@ -156,5 +207,54 @@ impl Engine {
         let mut w = Vec::with_capacity(A::WORDS);
         a.put(&mut w);
         self.call_as(addr, &w)
+    }
+}
+
+impl Engine {
+    /// A block of `size` zeroed bytes for the duration of `f`: a local the
+    /// game keeps on its stack and passes by address (a scope guard, a
+    /// `NiPointer` temporary, an out parameter). Freed when `f` returns.
+    pub fn with_stack<R>(&mut self, size: u32, f: impl FnOnce(&mut Engine, Ptr) -> R) -> R {
+        let block = self.mem.alloc(size);
+        let r = f(self, Ptr::new(block));
+        self.mem.free(block);
+        r
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::args;
+
+    #[test]
+    fn doubles_keep_state() {
+        let mut e = Engine::new();
+        let mut n = 0u32;
+        e.register_double(0x0040_1000, move |_, a| {
+            n += a[0];
+            Ret {
+                eax: n,
+                ..Ret::default()
+            }
+        });
+        assert_eq!(e.call(0x0040_1000, &args![2u32]).u32(), 2);
+        assert_eq!(e.call(0x0040_1000, &args![3u32]).u32(), 5);
+    }
+
+    #[test]
+    fn stack_blocks_are_freed() {
+        let mut e = Engine::new();
+        let p = e.with_stack(8, |e, p| {
+            e.mem.set_u32(p.addr(), 1);
+            p
+        });
+        assert_eq!(e.mem.block_size(p.addr()), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "open function 00abcdef")]
+    fn untranslated_calls_name_the_address() {
+        Engine::new().call(0x00ab_cdef, &[]);
     }
 }

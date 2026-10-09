@@ -43,6 +43,160 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     ]
 }
 
+// Imported Windows functions. The game calls them through its import
+// table (`call dword ptr [slot]`); translations call the slot address, and
+// `Engine::with_exe` registers these there by DLL and name. One thread, so
+// the interlocked operations are plain memory operations and the critical
+// sections do nothing.
+
+// Platform: replaces KERNEL32.DLL InterlockedIncrement (import)
+fn interlocked_increment(e: &mut Engine, target: Ptr) -> i32 {
+    let v = e.mem.i32(target.addr()).wrapping_add(1);
+    e.mem.set_i32(target.addr(), v);
+    v
+}
+
+// Platform: replaces KERNEL32.DLL InterlockedDecrement (import)
+fn interlocked_decrement(e: &mut Engine, target: Ptr) -> i32 {
+    let v = e.mem.i32(target.addr()).wrapping_sub(1);
+    e.mem.set_i32(target.addr(), v);
+    v
+}
+
+// Platform: replaces KERNEL32.DLL InterlockedExchange (import)
+fn interlocked_exchange(e: &mut Engine, target: Ptr, value: i32) -> i32 {
+    let old = e.mem.i32(target.addr());
+    e.mem.set_i32(target.addr(), value);
+    old
+}
+
+// Platform: replaces KERNEL32.DLL InterlockedExchangeAdd (import)
+fn interlocked_exchange_add(e: &mut Engine, target: Ptr, value: i32) -> i32 {
+    let old = e.mem.i32(target.addr());
+    e.mem.set_i32(target.addr(), old.wrapping_add(value));
+    old
+}
+
+// Platform: replaces KERNEL32.DLL InterlockedCompareExchange (import)
+fn interlocked_compare_exchange(e: &mut Engine, target: Ptr, exchange: i32, comparand: i32) -> i32 {
+    let old = e.mem.i32(target.addr());
+    if old == comparand {
+        e.mem.set_i32(target.addr(), exchange);
+    }
+    old
+}
+
+// Platform: replaces KERNEL32.DLL critical sections (imports): one thread.
+fn critical_section_nop(_e: &mut Engine, _section: Ptr) {}
+
+// Platform: replaces KERNEL32.DLL TryEnterCriticalSection (import)
+fn try_enter_critical_section(_e: &mut Engine, _section: Ptr) -> i32 {
+    1
+}
+
+// Platform: replaces KERNEL32.DLL GetCurrentThreadId (import): the main
+// thread's id. Code that compares thread ids sees the main thread.
+pub const MAIN_THREAD_ID: u32 = 1;
+fn get_current_thread_id(_e: &mut Engine) -> u32 {
+    MAIN_THREAD_ID
+}
+
+// Platform: replaces KERNEL32.DLL Sleep (import)
+fn sleep(_e: &mut Engine, _ms: u32) {}
+
+// Platform: replaces KERNEL32.DLL GetTickCount and WINMM.DLL timeGetTime (imports)
+fn tick_count(e: &mut Engine) -> u32 {
+    e.clock_ms
+}
+
+// Platform: replaces KERNEL32.DLL QueryPerformanceFrequency (import): 1 MHz.
+fn query_performance_frequency(e: &mut Engine, out: Ptr) -> i32 {
+    e.mem.set_u64(out.addr(), 1_000_000);
+    1
+}
+
+// Platform: replaces KERNEL32.DLL QueryPerformanceCounter (import): the
+// engine clock in microseconds.
+fn query_performance_counter(e: &mut Engine, out: Ptr) -> i32 {
+    e.mem.set_u64(out.addr(), e.clock_ms as u64 * 1000);
+    1
+}
+
+/// (DLL, name, platform version) of the imports with a Rust stand-in.
+pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
+    let k = "KERNEL32.dll";
+    vec![
+        (
+            k,
+            "InterlockedIncrement",
+            entry!(0, interlocked_increment(Ptr) -> i32).1,
+        ),
+        (
+            k,
+            "InterlockedDecrement",
+            entry!(0, interlocked_decrement(Ptr) -> i32).1,
+        ),
+        (
+            k,
+            "InterlockedExchange",
+            entry!(0, interlocked_exchange(Ptr, i32) -> i32).1,
+        ),
+        (
+            k,
+            "InterlockedExchangeAdd",
+            entry!(0, interlocked_exchange_add(Ptr, i32) -> i32).1,
+        ),
+        (
+            k,
+            "InterlockedCompareExchange",
+            entry!(0, interlocked_compare_exchange(Ptr, i32, i32) -> i32).1,
+        ),
+        (
+            k,
+            "EnterCriticalSection",
+            entry!(0, critical_section_nop(Ptr)).1,
+        ),
+        (
+            k,
+            "LeaveCriticalSection",
+            entry!(0, critical_section_nop(Ptr)).1,
+        ),
+        (
+            k,
+            "InitializeCriticalSection",
+            entry!(0, critical_section_nop(Ptr)).1,
+        ),
+        (
+            k,
+            "DeleteCriticalSection",
+            entry!(0, critical_section_nop(Ptr)).1,
+        ),
+        (
+            k,
+            "TryEnterCriticalSection",
+            entry!(0, try_enter_critical_section(Ptr) -> i32).1,
+        ),
+        (
+            k,
+            "GetCurrentThreadId",
+            entry!(0, get_current_thread_id() -> u32).1,
+        ),
+        (k, "Sleep", entry!(0, sleep(u32)).1),
+        (k, "GetTickCount", entry!(0, tick_count() -> u32).1),
+        ("WINMM.dll", "timeGetTime", entry!(0, tick_count() -> u32).1),
+        (
+            k,
+            "QueryPerformanceFrequency",
+            entry!(0, query_performance_frequency(Ptr) -> i32).1,
+        ),
+        (
+            k,
+            "QueryPerformanceCounter",
+            entry!(0, query_performance_counter(Ptr) -> i32).1,
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

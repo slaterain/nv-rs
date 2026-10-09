@@ -30,16 +30,16 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 400 | 0.6% |
-| traced | 3299 | 5.0% |
+| translated | 440 | 0.7% |
+| traced | 3311 | 5.0% |
 | platform | 3547 | 5.4% |
 | library | 21971 | 33.2% |
-| open | 37042 | 55.9% |
+| open | 36990 | 55.8% |
 | **all** | **66259** | |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 3479 (8.6%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 3531 (8.7%) are translated or traced.
 
-Rust cites 3847 distinct `.text` addresses; 27 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 3900 distinct `.text` addresses; 28 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -70,29 +70,29 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Subsystem | Functions | KB | Named | translated | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 0 | 53 | 0 | 21282 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 80 | 982 | 0 | 0 | 9408 | 10.1% |
+| fallout shared | 10470 | 2065 | 3149 | 80 | 992 | 0 | 0 | 9398 | 10.2% |
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 59 | 0 | 0 | 6479 | 1.7% |
 | fallout/ai | 4849 | 1475 | 1888 | 111 | 597 | 0 | 0 | 4141 | 14.6% |
-| fallout/interface | 2645 | 991 | 1247 | 56 | 749 | 0 | 0 | 1840 | 30.4% |
+| fallout/interface | 2645 | 991 | 1247 | 56 | 750 | 0 | 0 | 1839 | 30.5% |
 | (unplaced) | 2353 | 470 | 0 | 8 | 100 | 0 | 0 | 2245 | 4.6% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 38 | 83 | 0 | 0 | 1667 | 6.8% |
 | NiMain | 1619 | 261 | 1134 | 2 | 12 | 0 | 0 | 1605 | 0.9% |
 | BSHavok | 1615 | 316 | 1134 | 22 | 51 | 0 | 0 | 1542 | 4.5% |
 | BSShader | 1549 | 608 | 350 | 0 | 27 | 1522 | 0 | 0 | - |
 | NiAnimation | 1279 | 171 | 903 | 0 | 24 | 0 | 0 | 1255 | 1.9% |
-| fallout/misc | 1045 | 171 | 353 | 1 | 64 | 0 | 0 | 980 | 6.2% |
-| BSMain | 991 | 192 | 478 | 0 | 11 | 0 | 0 | 980 | 1.1% |
+| fallout/misc | 1045 | 171 | 353 | 41 | 59 | 0 | 0 | 945 | 9.6% |
+| BSMain | 991 | 192 | 478 | 0 | 12 | 0 | 0 | 979 | 1.2% |
 | NiXenonRenderer | 965 | 172 | 298 | 0 | 3 | 962 | 0 | 0 | - |
 | SpeedTree | 732 | 234 | 151 | 0 | 111 | 621 | 0 | 0 | - |
 | fallout/magic | 705 | 162 | 378 | 5 | 19 | 0 | 0 | 681 | 3.4% |
 | LIBCMT | 682 | 124 | 503 | 0 | 9 | 0 | 673 | 0 | - |
 | NiParticle | 649 | 89 | 540 | 0 | 66 | 0 | 0 | 583 | 10.2% |
 | fallout shared/havok | 478 | 60 | 110 | 7 | 22 | 0 | 0 | 449 | 6.1% |
-| FaceGen | 474 | 164 | 51 | 0 | 8 | 0 | 0 | 466 | 1.7% |
+| FaceGen | 474 | 164 | 51 | 0 | 9 | 0 | 0 | 465 | 1.9% |
 | fallout shared/facegen | 433 | 63 | 91 | 0 | 22 | 0 | 0 | 411 | 5.1% |
 | BSMenu | 361 | 136 | 221 | 1 | 78 | 0 | 0 | 282 | 21.9% |
 | BSAudio | 304 | 75 | 141 | 0 | 10 | 0 | 0 | 294 | 3.3% |
-| fallout shared/magic | 296 | 43 | 83 | 1 | 16 | 0 | 0 | 279 | 5.7% |
+| fallout shared/magic | 296 | 43 | 83 | 1 | 19 | 0 | 0 | 276 | 6.8% |
 | BSSystem | 275 | 54 | 36 | 1 | 9 | 265 | 0 | 0 | - |
 | NiCollision | 215 | 104 | 115 | 0 | 2 | 0 | 0 | 213 | 0.9% |
 | fallout shared/distant terrain system | 204 | 37 | 62 | 0 | 13 | 0 | 0 | 191 | 6.4% |
@@ -101,7 +101,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | fallout shared/sky | 164 | 59 | 51 | 0 | 26 | 0 | 0 | 138 | 15.9% |
 | fallout shared/region system | 159 | 26 | 74 | 0 | 2 | 0 | 0 | 157 | 1.3% |
 | fallout shared/tempeffects | 149 | 48 | 58 | 0 | 12 | 0 | 0 | 137 | 8.1% |
-| fallout shared/speedtree | 115 | 33 | 57 | 0 | 8 | 0 | 0 | 107 | 7.0% |
+| fallout shared/speedtree | 115 | 33 | 57 | 0 | 9 | 0 | 0 | 106 | 7.8% |
 | NiSystem | 92 | 7 | 39 | 0 | 0 | 0 | 0 | 92 | 0.0% |
 | BSSystemUtilities | 86 | 5 | 25 | 0 | 0 | 86 | 0 | 0 | - |
 | fallout/dialogue | 74 | 14 | 46 | 0 | 11 | 0 | 0 | 63 | 14.9% |

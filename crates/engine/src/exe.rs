@@ -90,6 +90,75 @@ pub fn sections(file: &[u8]) -> Result<Vec<Section>, String> {
     Ok(out)
 }
 
+/// One imported function: the address of its import-table slot (what the
+/// game calls through, `call dword ptr [slot]`), its DLL and its name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Import {
+    pub slot: u32,
+    pub dll: String,
+    pub name: String,
+}
+
+/// The import table of a PE file (by-ordinal imports are named `#<n>`).
+pub fn imports(file: &[u8]) -> Result<Vec<Import>, String> {
+    let secs = sections(file)?;
+    let rd = |o: usize| -> Result<u32, String> {
+        file.get(o..o + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .ok_or_else(|| "truncated PE file".to_string())
+    };
+    let pe = rd(0x3c)? as usize;
+    let opt = pe + 24;
+    let base = rd(opt + 28)?;
+    let dir_rva = rd(opt + 96 + 8)?;
+    // File bytes at a virtual address, through the section that holds it.
+    let at = |va: u32| -> Option<&[u8]> {
+        secs.iter().find_map(|s| {
+            let off = va.checked_sub(s.va)? as usize;
+            s.raw.get(off..)
+        })
+    };
+    let cstr = |va: u32| -> String {
+        let b = at(va).unwrap_or(&[]);
+        let n = b.iter().position(|&c| c == 0).unwrap_or(b.len());
+        String::from_utf8_lossy(&b[..n]).into_owned()
+    };
+    let word = |va: u32| -> u32 {
+        at(va)
+            .and_then(|b| b.get(..4))
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .unwrap_or(0)
+    };
+    let mut out = Vec::new();
+    let mut d = base + dir_rva;
+    loop {
+        let (oft, name, ft) = (word(d), word(d + 12), word(d + 16));
+        if name == 0 && ft == 0 {
+            break;
+        }
+        let dll = cstr(base + name);
+        let lookup = if oft != 0 { oft } else { ft };
+        for i in 0.. {
+            let entry = word(base + lookup + 4 * i);
+            if entry == 0 {
+                break;
+            }
+            let name = if entry & 0x8000_0000 != 0 {
+                format!("#{}", entry & 0xffff)
+            } else {
+                cstr(base + entry + 2)
+            };
+            out.push(Import {
+                slot: base + ft + 4 * i,
+                dll: dll.clone(),
+                name,
+            });
+        }
+        d += 20;
+    }
+    Ok(out)
+}
+
 /// Maps `.rdata`, `.data`, `.tls` and `CONST` of `exe` (the installed
 /// FalloutNV.exe, packed or unpacked) after checking each against 1.4.0.525.
 pub fn map_data_sections(mem: &mut Mem, exe: &Path) -> Result<(), String> {
@@ -123,6 +192,28 @@ mod tests {
     fn fnv_reference_values() {
         assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
         assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
+    }
+
+    /// With `NV_EXE` set, the import table parses and the slot the
+    /// garbage collector calls (`call [0x00fdf0e4]`) is InterlockedExchange.
+    #[test]
+    fn imports_of_installed_exe_when_given() {
+        let Ok(path) = std::env::var("NV_EXE") else {
+            return;
+        };
+        let file = std::fs::read(&path).unwrap();
+        let imps = imports(&file).unwrap();
+        let x = imps.iter().find(|i| i.slot == 0x00fd_f0e4).unwrap();
+        assert_eq!(x.name, "InterlockedExchange");
+        let mut e = crate::Engine::with_exe(Path::new(&path)).unwrap();
+        let p = e.mem.alloc(4);
+        e.mem.set_u32(p, 5);
+        assert_eq!(
+            e.call(0x00fd_f0e4, &crate::args![crate::Ptr::<()>::new(p), 9i32])
+                .i32(),
+            5
+        );
+        assert_eq!(e.mem.u32(p), 9);
     }
 
     /// With `NV_EXE` set to an installed FalloutNV.exe 1.4.0.525, the data
