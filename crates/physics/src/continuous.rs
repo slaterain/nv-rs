@@ -183,6 +183,14 @@ pub fn first_touch(
                 let p = add(x, mat_vec(&quat_mat(q), local));
                 length(sub(p, closest_on_triangle(p, a, b, c))) - r
             };
+            // Already touching where the step began: the PSI's contact
+            // has it (a bottle on its rail, clutter on the floor); a time
+            // of impact is for a point that comes in from clear space, else
+            // a body touching anything would be set back to its start every
+            // step and never move.
+            if dist(0.0) <= crate::havok::COLLISION_TOLERANCE * crate::HAVOK_UNIT {
+                continue;
+            }
             let mut at = 0.0f32;
             let mut found = false;
             for _ in 0..64 {

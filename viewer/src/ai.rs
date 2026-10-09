@@ -3221,10 +3221,17 @@ fn look_frame(ctx: &mut Ctx, walker: &mut Walker, fighting: bool, moves: &Moves)
         return;
     }
     let toward = mv::heading_to(walker.position, at);
-    if walker.turn.active
-        || walker
-            .turn
-            .should_face(walker.heading, toward, &moves.settings)
+    // Its own turn carries on; another turn under way (a travel's end
+    // heading) isn't taken over: taking it over every frame turned it back
+    // and forth between the two headings and it never ended, the turn
+    // animation playing in place (Doc Mitchell after getting up).
+    let own_turn =
+        walker.turn.active && mv::wrap_pi(walker.turn.target - toward).abs() <= mv::ONE_DEGREE;
+    if own_turn
+        || (!walker.turn.active
+            && walker
+                .turn
+                .should_face(walker.heading, toward, &moves.settings))
     {
         face(walker, toward, ctx.dt, false, ctx.moves);
     }
