@@ -3,8 +3,9 @@
 Drafted 2026-10-08 for the session after the usage reset (Monday). It
 proposes changing the method: stop tracing features one at a time and port
 FalloutNV.exe system by system, the way the Havok work (B1) was done, with a
-ledger that gives every function in the exe a status. Nothing here is done
-yet. Rules from [AGENTS.md](../AGENTS.md), ADR-0002 and ADR-0003 still apply.
+ledger that gives every function in the exe a status. Phase 0 is done
+(2026-10-09, below); Phase 1 is proposed in
+[FRAME_SKELETON.md](FRAME_SKELETON.md). Rules from [AGENTS.md](../AGENTS.md), ADR-0002 and ADR-0003 still apply.
 
 ## Where we are (measured 2026-10-08)
 
@@ -17,6 +18,75 @@ yet. Rules from [AGENTS.md](../AGENTS.md), ADR-0002 and ADR-0003 still apply.
 - Most systems were built feature by feature, from playtest bugs. That is
   why parts are still our own code where the game's isn't traced, and why
   fixes often have to work around their neighbours.
+
+## Phase 0 result (2026-10-09, `claude/phase0-ledger`)
+
+Done; see [LEDGER.md](LEDGER.md) (generated) and
+[research/engine-map](../research/engine-map/README.md) (method, tiers and
+measured error rates).
+
+- **The function set was incomplete.** Ghidra's analysis had missed the
+  functions behind 3,302 vtable slots, `bhkWorld::Update` (`00c6ae70`)
+  among them. On a private copy they were created: 62,983 → **66,259**
+  functions. (The "63,262" above included 279 imports.)
+- **Names:** 17,604 PC functions carry an Xbox PDB name (vtable slots
+  8,571, unique strings 1,716, call graph 7,317), plus 377 runtime-library
+  Function ID names. Hold-out error of the call-graph tier about 1.7%; the
+  string tier agrees with the vtable tier on all 320 functions both name.
+  The names are in the private Ghidra copy `%USERPROFILE%\nv-re\ghidra-phase0`
+  (17,405 applied, `src:xbox_pdb.*` tags); the shared server still serves
+  the unnamed project.
+- **Every function has a subsystem**: from its own name (17,502), its named
+  neighbours in link order (16,005 units, 7,789 subsystem only; hold-out
+  97.8% right), its callers (1,275), or the compiler tail (21,335); 2,353
+  (3.6%) are explicitly `(unplaced)`.
+- **What is game code:**
+
+  | | Functions | KB |
+  | --- | ---: | ---: |
+  | all | 66,259 | 10,999 |
+  | library: compiler-generated static initializers and `atexit` destructors | 21,335 | 530 |
+  | library: CRT, STL, zlib | 698 | 135 |
+  | platform: renderer, shaders, XDK/D3D, system, movie, SpeedTree, debug transport | 3,703 | 1,088 |
+  | **game code** (everything else, incl. 2,353 unplaced) | **40,523** | **9,247** |
+  | of which translated or traced today | 3,476 (8.6%) | |
+  | of which `open` | 37,047 | 7,019 |
+
+- **One command:** `cargo run --release --manifest-path scripts/ledger/Cargo.toml`
+  regenerates LEDGER.md from the committed map and the Rust sources
+  (`--check` for CI). `scripts/engine-map.ps1` redoes the map itself from
+  the private inputs (69 s).
+
+### Day-1 forecast (measured)
+
+A trial on 12 `open` functions drawn at random, stratified by size like the
+37,047 open ones (3 of ≤32 bytes, 5 of 33–128, 3 of 129–512, 1 of 1.4 KB),
+three Sonnet agents with a private named Ghidra copy each, translating into
+a scratch crate with one test per function (not committed):
+
+- 10 translated completely, 2 partly (one class has no Xbox name, so its
+  element type is unknown; one Havok callback where the decompiler was
+  wrong and the disassembly left one store width open). One translation
+  checked by hand against the disassembly matched instruction for
+  instruction, including a return value Ghidra's C dropped.
+- **Cost: 231k Sonnet tokens for 12 functions, about 19k per function or
+  95k per KB of x86. 4.2 minutes wall-clock for the three in parallel.**
+- Not included: `nv-call` checks, wiring into the running game, review by
+  the lead, and the struct layouts that a shared state model would give
+  (each agent modelled only the fields it touched).
+
+Projection for the 37,047 open game functions: about **700M Sonnet
+tokens** for leaf translation alone (by count 715M, by size 670M), before
+wiring and checking, which B1 suggests costs at least as much again in
+lead (Opus) time. Throughput is not the limit (agents ran a function a
+minute each); usage is. **A week of usage is not enough to translate the
+game.** It is enough for a few thousand functions, which is the size of
+one or two whole systems with their wiring: the script engine and
+condition functions (table-driven: 846 command-table entries, 206
+console and 640 script, each with its handlers) and the frame skeleton are the best first use,
+because they are countable, mostly pure and need little state model.
+Compare the trial's 231k tokens with the usage meter to turn this into a
+share of the weekly limit.
 
 ## Why the Havok work went better
 

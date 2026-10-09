@@ -825,6 +825,37 @@ failures. The viewer starts from a save with `--load-fos <SAVE>`
 time and quest stages printed). **Next action:** compare a loaded save
 against the original game running the same save.
 
+## Engine port Phase 0: map and ledger (`claude/phase0-ledger`, 2026-10-09)
+
+Done ([ENGINE_PORT_PLAN.md](ENGINE_PORT_PLAN.md) "Phase 0 result",
+[LEDGER.md](LEDGER.md), [research/engine-map](../research/engine-map/README.md)).
+
+- Evidence: 66,259 functions (3,271 created on a private Ghidra copy at
+  vtable slot targets analysis had missed), 17,604 with Xbox PDB names
+  (hold-out error about 1.7% for the call-graph tier), a subsystem for every
+  function (2,353 explicitly unplaced). Game code 40,523 functions, 8.6%
+  translated or traced. Ledger regenerates with one command; map with
+  `scripts/engine-map.ps1`.
+- Forecast: a 12-function trial cost about 19k Sonnet tokens per function;
+  the 37,047 open game functions project to about 700M tokens before
+  wiring. A week covers one or two whole systems, not the game.
+- Files (owner: this branch): `research/engine-map/*`,
+  `research/ghidra/NvEngineMap.java`, `research/ghidra/NvCreateFunctions.java`,
+  `research/ghidra/README.md` (two sections), `scripts/ledger/*`,
+  `scripts/engine-map.ps1`, `docs/LEDGER.md` (generated),
+  `docs/FRAME_SKELETON.md`, `docs/ENGINE_PORT_PLAN.md`.
+- Private state: named Ghidra copy `%USERPROFILE%
+v-reghidra-phase0`
+  (plus `-a`, `-b`, `-c` copies used by the trial agents, deletable);
+  intermediate files in `%USERPROFILE%
+v-reworkphase0`. The shared
+  server (8089) was not running and was not touched.
+- Unfinished checks: PROTOTYPE_SYMBOLS.md's manual 100-row spot-check per
+  tier; `NvCreateFunctions.java` has no fixture test yet.
+- Next action: Phase 1 PR 1 (frame map) from
+  [FRAME_SKELETON.md](FRAME_SKELETON.md); restart the shared server on the
+  named copy when convenient.
+
 ## Deferred
 
 Cosmetic material/lighting discrepancies, isolated facial polish, sun glare,

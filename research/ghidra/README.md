@@ -64,6 +64,34 @@ of that name runs that file, or fails if the folder is not a script path.
 | `NvImportNameMap.java` | Imports `address,name,source,pin` rows with provenance tags. Changes the project. | 2 |
 | `NvExportProgram.java` | Writes every function (metadata, callers, callees, references, strings, vtable slots, decompiled C, disassembly) plus a manifest that checks the export is complete. | 3 |
 | `NvFunctionCard.java` | Writes a Markdown and JSON card per function: constants decoded by machine, instruction classes, CPU-fidelity tier. | 3 |
+| `NvEngineMap.java` | Writes every function's size, name, ordered calls, imports, strings and reference counts, and every MSVC RTTI vtable, as TSV for the engine map ([research/engine-map](../engine-map/README.md)). | 3 |
+| `NvCreateFunctions.java` | Creates functions at listed addresses (vtable slot targets) and at their callees' targets. Changes the project. | 2 |
+
+### `NvEngineMap.java` `out=<dir>`
+
+Read-only. Writes `functions.tsv`, `vtables.tsv` and `manifest.txt`; the
+columns are described at the top of the script. The gate is the same as
+`NvExportProgram`'s (rows written equal Ghidra's function count minus
+external functions; otherwise it throws and leaves `manifest.failed.txt`).
+Vtables come from the executable's own RTTI (complete object locators in
+`.rdata`), so the script does not depend on Ghidra's RTTI analyzer having
+run; the shared project has not run it. Strings are read with the same rule
+the Xbox side uses (NUL-terminated printable ASCII, 4 to 1024 characters, in
+non-executable memory), not from Ghidra's string definitions. Whole program,
+no decompiling: about 20 seconds on 66,259 functions. Its output contains
+strings from the executable: private.
+
+### `NvCreateFunctions.java` `addrs=<file>` `report=<csv>` `[dry=1]`
+
+Changes the project: run on a copy, without `-readOnly`. For each listed
+address: `exists`, `inside` (in another function's body; left alone and
+reported with that function), `created` (disassembled and made a function;
+its call targets that are not functions are queued too), `not-code` or
+`failed`. One transaction; a throw discards everything. Checked on
+2026-10-09 on FalloutNV.exe 1.4.0.525 with the 3,302 vtable slot targets that
+were not functions: 3,271 created, 28 inside, 5 exists (one dry run and one
+real run, the counts as in [research/engine-map](../engine-map/README.md)).
+Not covered by `test/run-tests.sh` yet.
 
 ### `NvExeIdentity.java` `out=<file.json>`
 
