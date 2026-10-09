@@ -30,16 +30,16 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 5993 | 9.0% |
-| traced | 4137 | 6.2% |
+| translated | 6259 | 9.4% |
+| traced | 4145 | 6.3% |
 | platform | 3515 | 5.3% |
-| library | 21923 | 33.1% |
-| open | 30691 | 46.3% |
+| library | 21922 | 33.1% |
+| open | 30418 | 45.9% |
 | **all** | **66259** | |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 9829 (24.3%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 10102 (24.9%) are translated or traced.
 
-Rust cites 10341 distinct `.text` addresses; 52 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 10629 distinct `.text` addresses; 54 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -70,36 +70,36 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Subsystem | Functions | KB | Named | translated | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 61 | 0 | 21273 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 5596 | 921 | 0 | 0 | 3953 | 62.2% |
+| fallout shared | 10470 | 2065 | 3149 | 5862 | 896 | 0 | 0 | 3712 | 64.5% |
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 70 | 0 | 0 | 6468 | 1.9% |
-| fallout/ai | 4849 | 1475 | 1888 | 113 | 767 | 0 | 0 | 3969 | 18.1% |
-| fallout/interface | 2645 | 991 | 1247 | 56 | 795 | 0 | 0 | 1794 | 32.2% |
-| (unplaced) | 2353 | 470 | 0 | 30 | 299 | 1 | 0 | 2023 | 14.0% |
+| fallout/ai | 4849 | 1475 | 1888 | 113 | 780 | 0 | 0 | 3956 | 18.4% |
+| fallout/interface | 2645 | 991 | 1247 | 56 | 798 | 0 | 0 | 1791 | 32.3% |
+| (unplaced) | 2353 | 470 | 0 | 30 | 301 | 1 | 0 | 2021 | 14.1% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 38 | 115 | 0 | 0 | 1635 | 8.6% |
-| NiMain | 1619 | 261 | 1134 | 3 | 53 | 0 | 0 | 1563 | 3.5% |
+| NiMain | 1619 | 261 | 1134 | 3 | 56 | 0 | 0 | 1560 | 3.6% |
 | BSHavok | 1615 | 316 | 1134 | 22 | 101 | 0 | 0 | 1492 | 7.6% |
 | BSShader | 1549 | 608 | 350 | 0 | 68 | 1481 | 0 | 0 | - |
 | NiAnimation | 1279 | 171 | 903 | 0 | 31 | 0 | 0 | 1248 | 2.4% |
-| fallout/misc | 1045 | 171 | 353 | 42 | 126 | 0 | 0 | 877 | 16.1% |
+| fallout/misc | 1045 | 171 | 353 | 42 | 129 | 0 | 0 | 874 | 16.4% |
 | BSMain | 991 | 192 | 478 | 0 | 50 | 0 | 0 | 941 | 5.0% |
 | NiXenonRenderer | 965 | 172 | 298 | 0 | 5 | 960 | 0 | 0 | - |
 | SpeedTree | 732 | 234 | 151 | 0 | 111 | 621 | 0 | 0 | - |
 | fallout/magic | 705 | 162 | 378 | 7 | 31 | 0 | 0 | 667 | 5.4% |
-| LIBCMT | 682 | 124 | 503 | 0 | 17 | 31 | 634 | 0 | - |
+| LIBCMT | 682 | 124 | 503 | 0 | 18 | 31 | 633 | 0 | - |
 | NiParticle | 649 | 89 | 540 | 0 | 66 | 0 | 0 | 583 | 10.2% |
 | fallout shared/havok | 478 | 60 | 110 | 7 | 42 | 0 | 0 | 429 | 10.3% |
 | FaceGen | 474 | 164 | 51 | 0 | 10 | 0 | 0 | 464 | 2.1% |
-| fallout shared/facegen | 433 | 63 | 91 | 0 | 43 | 0 | 0 | 390 | 9.9% |
+| fallout shared/facegen | 433 | 63 | 91 | 0 | 45 | 0 | 0 | 388 | 10.4% |
 | BSMenu | 361 | 136 | 221 | 1 | 78 | 0 | 0 | 282 | 21.9% |
 | BSAudio | 304 | 75 | 141 | 0 | 14 | 0 | 0 | 290 | 4.6% |
-| fallout shared/magic | 296 | 43 | 83 | 5 | 57 | 0 | 0 | 234 | 20.9% |
+| fallout shared/magic | 296 | 43 | 83 | 5 | 58 | 0 | 0 | 233 | 21.3% |
 | BSSystem | 275 | 54 | 36 | 1 | 24 | 250 | 0 | 0 | - |
 | NiCollision | 215 | 104 | 115 | 0 | 4 | 0 | 0 | 211 | 1.9% |
-| fallout shared/distant terrain system | 204 | 37 | 62 | 0 | 23 | 0 | 0 | 181 | 11.3% |
-| BSCore | 197 | 22 | 45 | 1 | 9 | 2 | 0 | 185 | 5.1% |
+| fallout shared/distant terrain system | 204 | 37 | 62 | 0 | 26 | 0 | 0 | 178 | 12.7% |
+| BSCore | 197 | 22 | 45 | 1 | 10 | 2 | 0 | 184 | 5.6% |
 | fallout/audio | 190 | 55 | 49 | 13 | 31 | 0 | 0 | 146 | 23.2% |
 | fallout shared/sky | 164 | 59 | 51 | 2 | 32 | 0 | 0 | 130 | 20.7% |
-| fallout shared/region system | 159 | 26 | 74 | 0 | 17 | 0 | 0 | 142 | 10.7% |
+| fallout shared/region system | 159 | 26 | 74 | 0 | 18 | 0 | 0 | 141 | 11.3% |
 | fallout shared/tempeffects | 149 | 48 | 58 | 0 | 15 | 0 | 0 | 134 | 10.1% |
 | fallout shared/speedtree | 115 | 33 | 57 | 1 | 17 | 0 | 0 | 97 | 15.7% |
 | NiSystem | 92 | 7 | 39 | 1 | 3 | 0 | 0 | 88 | 4.3% |
