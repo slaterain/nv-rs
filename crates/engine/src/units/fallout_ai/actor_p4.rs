@@ -3,9 +3,9 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::actor`]; anything public there may be used here.
 //!
-//! This file holds the first 80 functions of the range: the first 40 (`008a50d0` to
-//! `008a7760`) and the second 40 (`008a7870` to `008ac6f0`); the next session
-//! continues at `008ac810`.
+//! This file holds all the functions of the range: the first 40 (`008a50d0` to
+//! `008a7760`), the second 40 (`008a7870` to `008ac6f0`) and the last 40
+//! (`008ac810` to `008aff80`); the range is complete.
 //!
 //! Notes that apply to the whole file:
 //!
@@ -135,6 +135,8 @@ layout! {
         0x146 bResetAI: u8,
         /// `Actor::pActorMover` (Xbox PDB `+0x1a0`).
         0x190 pActorMover: Ptr,
+        /// `Actor::eCriticalStage` (Xbox PDB `+0x11c`).
+        0x10c eCriticalStage: u32,
     }
 }
 
@@ -3920,6 +3922,2051 @@ pub fn fn_008a89a0(e: &mut Engine, this: Ptr<Actor>, amount: u32) -> u32 {
     left
 }
 
+/// `0.75` (`double`): the part of the height difference `008ac8b0` returns.
+const HEIGHT_FACTOR: u32 = 0x0101_de30;
+/// `100.0` (`double`): what `008ac9d0` divides the item health by.
+const ITEM_HEALTH_DIVISOR: u32 = 0x0101_7a40;
+/// `30.0` (`double`).
+const THIRTY: u32 = 0x0101_db88;
+/// `0.99` (`float`): the exponent of the combat strength.
+const COMBAT_STRENGTH_EXPONENT: u32 = 0x0106_682c;
+
+// Translated from 008ac810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The object returned by the actor's virtual method `+0x428`, passed to
+/// `004fb070`; 0 without that object.
+pub fn fn_008ac810(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let object = e.vcall(this.addr(), 0x428, &args![]).u32();
+    if object == 0 {
+        0
+    } else {
+        e.call(0x004f_b070, &args![object]).u32()
+    }
+}
+
+// Translated from 008ac850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` (`008ac890`) in the object returned by the actor's
+/// virtual method `+0x428`, when there is one.
+pub fn fn_008ac850(e: &mut Engine, this: Ptr<Actor>, value: u32) {
+    let object = e.vcall(this.addr(), 0x428, &args![]).u32();
+    if object != 0 {
+        fn_008ac890(e, Ptr::new(object), value);
+    }
+}
+
+// Translated from 008ac890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the word at `this + 0x80`.
+pub fn fn_008ac890(e: &mut Engine, this: Ptr, value: u32) {
+    e.mem.set_u32(this.addr() + 0x80, value);
+}
+
+// Translated from 008ac8b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of the actor's secondary base at `+0xa8` (`this`; the actor is
+/// `this - 0xa8`): the height of the actor. Without a character controller
+/// (virtual `+0x390` is zero) it is `0.75` of the difference of the `z`
+/// of the points returned by virtual methods `+0x1dc` and `+0x1d8`;
+/// otherwise the player's `0070c3b0` times the actor's scale (`00567400`).
+/// The result is also stored in the actor's process (`008ac990`) when the
+/// process passes `00884920`.
+pub fn fn_008ac8b0(e: &mut Engine, this: Ptr) -> f32 {
+    let actor = this.addr() - 0xa8;
+    let value: f32 = if e.vcall(actor, 0x390, &args![]).u32() == 0 {
+        let (upper, lower) = e.with_stack(0x20, |e, buffer| {
+            let upper = e.vcall(actor, 0x1dc, &args![buffer.addr()]).u32();
+            let lower = e.vcall(actor, 0x1d8, &args![buffer.addr() + 0x10]).u32();
+            (e.mem.f32(upper + 8), e.mem.f32(lower + 8))
+        });
+        let factor: f64 = e.global(HEIGHT_FACTOR);
+        ((f64::from(upper) - f64::from(lower)) * factor) as f32
+    } else {
+        let player = e.global::<u32>(PLAYER_CHARACTER);
+        let player_value = e.call(0x0070_c3b0, &args![player]).f64();
+        let scale = e.call(0x0056_7400, &args![actor]).f64();
+        (scale * player_value) as f32
+    };
+    let process = e.mem.u32(actor + 0x68);
+    if process != 0 && e.call(0x0088_4920, &args![process]).bool() {
+        fn_008ac990(e, Ptr::new(process), value);
+    }
+    value
+}
+
+// Translated from 008ac990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the float at `+0x2c` of the object at `this + 0x2c` and
+/// marks it changed (`008848c0` with `0x200`), when that object exists.
+pub fn fn_008ac990(e: &mut Engine, this: Ptr, value: f32) {
+    let object = e.mem.u32(this.addr() + 0x2c);
+    if object != 0 {
+        e.mem.set_f32(object + 0x2c, value);
+        e.call(0x0088_48c0, &args![object, 0x200u32]);
+    }
+}
+
+// Translated from 008ac9d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of the actor's secondary base at `+0xa8` (`this`; the actor is
+/// `this - 0xa8`): `00645380` of the actor's worn weapon, with the health
+/// of the item (`ItemChange::GetItemHealth` over `100`) as a float. The
+/// item is the process's current one (virtual `+0x148`) when the process
+/// passes `0045cd60 <= 1`, else the weapon slot `5` of the actor's
+/// inventory changes (`004c8c10`), which is released again (`004459e0`).
+/// The result is also stored in the actor's process (`008acb70`) when the
+/// process passes `00884920`.
+pub fn fn_008ac9d0(e: &mut Engine, this: Ptr) -> f32 {
+    let actor = this.addr() - 0xa8;
+    let mut item_word = 0u32;
+    let mut health = 1.0f32;
+    let item;
+    let process = e.call(GET_PROCESS, &args![actor]).u32();
+    let held_process = if process != 0 {
+        let process = e.call(GET_PROCESS, &args![actor]).u32();
+        e.call(0x0045_cd60, &args![process]).i32() < 2
+    } else {
+        false
+    };
+    let hundred: f64 = e.global(ITEM_HEALTH_DIVISOR);
+    if held_process {
+        let process = e.call(GET_PROCESS, &args![actor]).u32();
+        item = e.vcall(process, 0x148, &args![]).u32();
+        if item != 0 {
+            item_word = e.call(0x0044_ddc0, &args![item]).u32();
+            let item_health = e.call(0x004b_cdb0, &args![item, 1u32]).f64();
+            health = (item_health / hundred) as f32;
+        }
+    } else {
+        let changes = e.call(0x004b_f220, &args![actor]).u32();
+        let worn = e.call(0x004c_8c10, &args![changes, 5u32, 0u32]).u32();
+        if worn != 0 {
+            item_word = e.call(0x0044_ddc0, &args![worn]).u32();
+            let item_health = e.call(0x004b_cdb0, &args![worn, 1u32]).f64();
+            health = (item_health / hundred) as f32;
+            e.call(0x0044_59e0, &args![worn, 1u32]);
+        }
+        item = 0;
+    }
+    let base = if actor == 0 { 0 } else { this.addr() - 4 };
+    let value = e
+        .call(
+            0x0064_5380,
+            &args![
+                base,
+                item_word,
+                health,
+                0u32,
+                item,
+                0u32,
+                0u32,
+                0xffff_ffffu32,
+                0.0f32,
+                0.0f32,
+                0u32,
+                0u32,
+                0u32
+            ],
+        )
+        .f32();
+    let process = e.mem.u32(actor + 0x68);
+    if process != 0 && e.call(0x0088_4920, &args![process]).bool() {
+        fn_008acb70(e, Ptr::new(process), value);
+    }
+    value
+}
+
+// Translated from 008acb70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the float at `+0x10` of the object at `this + 0x2c` and
+/// marks it changed (`008848c0` with `8`), when that object exists.
+pub fn fn_008acb70(e: &mut Engine, this: Ptr, value: f32) {
+    let object = e.mem.u32(this.addr() + 0x2c);
+    if object != 0 {
+        e.mem.set_f32(object + 0x10, value);
+        e.call(0x0088_48c0, &args![object, 8u32]);
+    }
+}
+
+// Translated from 008acba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Marks the actor's process (`00884940` with `8`) when it exists and passes
+/// `00884920`.
+pub fn fn_008acba0(e: &mut Engine, this: Ptr<Actor>) {
+    let process = process(e, this);
+    if process.addr() != 0 && e.call(0x0088_4920, &args![process]).bool() {
+        e.call(0x0088_4940, &args![process, 8u32]);
+    }
+}
+
+// Translated from 008acbe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::CalculateCombatStrength` (Xbox PDB): `damage` (the actor's
+/// `Actor::GetWeaponDamagePerSecond`, `008be600`, when it is negative) times
+/// the actor value `0x10` (through the vtable at `this + 0xa4`, slot `+8`)
+/// divided by `1 - pow(virtual(+0x440) / 30, 0.99)`; `0040ebd0` is that
+/// power function.
+pub fn actor_calculate_combat_strength(e: &mut Engine, this: Ptr<Actor>, damage: f32) -> f32 {
+    let mut damage = damage;
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    if f64::from(damage) < zero {
+        damage = e.call(0x008b_e600, &args![this]).f32();
+    }
+    let value = e.vcall(this.addr() + 0xa4, 8, &args![0x10u32]).i32() as f32;
+    let thirty: f64 = e.global(THIRTY);
+    let ratio = (e.vcall(this.addr(), 0x440, &args![]).f64() / thirty) as f32;
+    let exponent: f32 = e.global(COMBAT_STRENGTH_EXPONENT);
+    let power = e.call(0x0040_ebd0, &args![ratio, exponent]).f32();
+    let factor = (f64::from(value) / (1.0 - f64::from(power))) as f32;
+    (f64::from(damage) * f64::from(factor)) as f32
+}
+
+// Translated from 008acc80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Refreshes a loaded actor after a life-state change. The object from
+/// `0043fcd0` (none: nothing happens) gets `00c9bdf0(object, 1.0)`; the face
+/// animation data (`008adcb0`) its virtual method `+0xd8(0, 0)`;
+/// `Actor::ReloadTargets(1)`; a character controller (`009306d0`) in a
+/// cell (`008d6f30`) gets `bhkCharacterController::SetWorld` with the
+/// world of the cell (`004543c0`); the ragdoll controller (`+0xac`)
+/// `EnableRagdollAnim`; the animation from virtual `+0x1e4` updates its
+/// scene graph, and so does the player's animation (`00950a60`) when this
+/// is the player. Last, by the critical stage (`+0x10c`): `1` passes the
+/// node of virtual `+0x1d0` to `00c80700`; `2` calls virtual `+0x1c4`, does
+/// that, then `00450f90(object, 0)`; `4` calls `+0x1c4` and `00450f90`.
+pub fn fn_008acc80(e: &mut Engine, this: Ptr<Actor>) {
+    let object = e.call(0x0043_fcd0, &args![this]).u32();
+    if object == 0 {
+        return;
+    }
+    e.call(0x00c9_bdf0, &args![object, 1.0f32]);
+    let face = actor_get_face_animation_data(e, this);
+    if face != 0 {
+        e.vcall(face, 0xd8, &args![0u32, 0u32]);
+    }
+    e.call(0x008b_0b00, &args![this, 1u32]);
+    let controller = e.call(0x0093_06d0, &args![this]).u32();
+    if controller != 0 && e.call(GET_PARENT_CELL, &args![this]).u32() != 0 {
+        let cell = e.call(GET_PARENT_CELL, &args![this]).u32();
+        let world = e.call(0x0045_43c0, &args![cell]).u32();
+        e.call(0x00c7_0c90, &args![controller, world]);
+    }
+    let ragdoll = e.get(this, Actor::pRagdollController);
+    if ragdoll.addr() != 0 {
+        e.call(0x00c7_a8d0, &args![ragdoll]);
+    }
+    let animation = e.vcall(this.addr(), 0x1e4, &args![]).u32();
+    if animation != 0 {
+        e.call(0x0049_3bd0, &args![animation]);
+        let player = e.global::<u32>(PLAYER_CHARACTER);
+        if this.addr() == player {
+            let flag = e.call(0x004e_af60, &args![player]).u8();
+            let player_animation = e.call(0x0095_0a60, &args![player, u32::from(flag)]).u32();
+            e.call(0x0049_3bd0, &args![player_animation]);
+        }
+    }
+    match e.get(this, Actor::eCriticalStage) {
+        1 => {
+            let node = e.vcall(this.addr(), 0x1d0, &args![]).u32();
+            e.call(0x00c8_0700, &args![node]);
+        }
+        2 => {
+            e.vcall(this.addr(), 0x1c4, &args![]);
+            let node = e.vcall(this.addr(), 0x1d0, &args![]).u32();
+            e.call(0x00c8_0700, &args![node]);
+            e.call(0x0045_0f90, &args![object, 0u32]);
+        }
+        4 => {
+            e.vcall(this.addr(), 0x1c4, &args![]);
+            e.call(0x0045_0f90, &args![object, 0u32]);
+        }
+        _ => {}
+    }
+}
+
+// Translated from 008ace10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// With `set`, `Actor::SetLifeState(3)`; without it, `SetLifeState(0)` when
+/// `004f8960` says the state is `3`.
+pub fn fn_008ace10(e: &mut Engine, this: Ptr<Actor>, set: bool) {
+    if set {
+        e.call(0x008a_1800, &args![this, 3u32]);
+    } else if e.call(0x004f_8960, &args![this]).i32() == 3 {
+        e.call(0x008a_1800, &args![this, 0u32]);
+    }
+}
+
+// Translated from 008ace50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// With `set`, `Actor::SetLifeState(5)` and `00884c60`; without it,
+/// `SetLifeState(0)` when `004f8960` says the state is `5`.
+pub fn fn_008ace50(e: &mut Engine, this: Ptr<Actor>, set: bool) {
+    if set {
+        e.call(0x008a_1800, &args![this, 5u32]);
+        e.call(0x0088_4c60, &args![this]);
+    } else if e.call(0x004f_8960, &args![this]).i32() == 5 {
+        e.call(0x008a_1800, &args![this, 0u32]);
+    }
+}
+
+// Translated from 008ace90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the ghost flag `0x10000000` is set: in the process's flag word
+/// (`008aced0`) when the actor has a process, else `00418a80` of the
+/// actor's extra data list.
+pub fn fn_008ace90(e: &mut Engine, this: Ptr<Actor>) -> u8 {
+    let process = process(e, this);
+    if process.addr() != 0 {
+        u8::from(fn_008aced0(e, process, 0x1000_0000))
+    } else {
+        let list = e.call(GET_EXTRA_LIST, &args![this]).u32();
+        e.call(0x0041_8a80, &args![list]).u8()
+    }
+}
+
+// Translated from 008aced0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the flag word at `+0x44` of the object at `this + 0x2c` has a
+/// bit of `mask`; false without that object.
+pub fn fn_008aced0(e: &mut Engine, this: Ptr, mask: u32) -> bool {
+    let object = e.mem.u32(this.addr() + 0x2c);
+    object != 0 && e.mem.u32(object + 0x44) & mask != 0
+}
+
+// Translated from 008acf10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::SetGhost` (Xbox PDB): sets the ghost state of the actor's extra
+/// data list (`ExtraDataList::SetGhost`), sets or clears the flag
+/// `0x10000000` of the process's flag word (`008acf70`) when it has a
+/// process, then calls virtual `+0x48` with `0x80000000`.
+pub fn actor_set_ghost(e: &mut Engine, this: Ptr<Actor>, ghost: u8) {
+    let list = e.call(GET_EXTRA_LIST, &args![this]).u32();
+    e.call(0x0041_a960, &args![list, u32::from(ghost)]);
+    let process = process(e, this);
+    if process.addr() != 0 {
+        fn_008acf70(e, process, 0x1000_0000, ghost);
+    }
+    e.vcall(this.addr(), 0x48, &args![0x8000_0000u32]);
+}
+
+// Translated from 008acf70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `008acfa0(mask, set)` on the object at `this + 0x2c`, when there is one.
+pub fn fn_008acf70(e: &mut Engine, this: Ptr, mask: u32, set: u8) {
+    let object = e.mem.u32(this.addr() + 0x2c);
+    if object != 0 {
+        fn_008acfa0(e, Ptr::new(object), mask, set);
+    }
+}
+
+// Translated from 008acfa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`set` nonzero) or clears the bits of `mask` in the word at
+/// `this + 0x44`.
+pub fn fn_008acfa0(e: &mut Engine, this: Ptr, mask: u32, set: u8) {
+    let flags = e.mem.u32(this.addr() + 0x44);
+    let flags = if set != 0 {
+        flags | mask
+    } else {
+        flags & !mask
+    };
+    e.mem.set_u32(this.addr() + 0x44, flags);
+}
+
+/// `100.0` (`float`), copied into the collision-sound record by `008acff0`.
+const COLLISION_SOUND_LOUDNESS: u32 = 0x0101_6410;
+/// `0.5` (`float`), copied into the collision-sound record by `008acff0`.
+const COLLISION_SOUND_HALF: u32 = 0x0101_6248;
+/// The `TES` singleton pointer (`011dea10`).
+const TES_SINGLETON: u32 = 0x011d_ea10;
+/// The `GameSetting` (`011cd65c`) `008ad1c0` reads as the spacing of the
+/// moved actors.
+const SETTING_FOLLOWER_SPACING: u32 = 0x011c_d65c;
+/// The `GameSetting` (`011cda7c`) `008ad970` turns into the search radius
+/// of the package target.
+const SETTING_SEARCH_DISTANCE: u32 = 0x011c_da7c;
+/// `3.1415927410125732` (`double`, `pi` as a `float`).
+const PI_AS_FLOAT: u32 = 0x0101_ff40;
+/// The `float` `008ad1c0` passes when the cell is not loaded (`FLT_MAX`).
+const FLOAT_MAX: u32 = 0x0101_6970;
+/// The string `"Waiting"` (`01071db4`).
+const WAITING: u32 = 0x0107_1db4;
+
+/// The item of the list node `node`: `006815c0` returns the node, whose
+/// first word is the item.
+fn list_item(e: &mut Engine, node: u32) -> u32 {
+    let at = e.call(0x0068_15c0, &args![node]).u32();
+    e.mem.u32(at)
+}
+
+// Translated from 008acff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Plays the collision sound of the actor hitting something. When `index`
+/// is zero and `hit` has a 3D node (virtual `+0x1d0`), `index` and `kind`
+/// come from the node's first collision object (`004b5260`, `006fa820`,
+/// `004ae6a0`, `006205a0`). It fills a record (`006240d0`) of the
+/// position words, `100.0`, `0.5`, the byte `0x24`, `kind` and `this +
+/// index`, finds the id of the item in the process's current weapon slot
+/// (virtual `+0x148`, `0044ddc0`), and when `hit` answers its virtual
+/// `+0x100` calls `00837520` with `hit`; otherwise, unless `kind` is `6`,
+/// with the actor itself, and plays `ImpactMixer::PlayCollisionSound`
+/// (`00837550`) for the record.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_008acff0(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    position_x: u32,
+    position_y: u32,
+    position_z: u32,
+    hit: Ptr,
+    index: u32,
+    kind: u32,
+) {
+    let mut index = index;
+    let mut kind = kind;
+    if index == 0 && hit.addr() != 0 && e.vcall(hit.addr(), 0x1d0, &args![]).u32() != 0 {
+        let node = e.vcall(hit.addr(), 0x1d0, &args![]).u32();
+        let object = e.call(0x004b_5260, &args![node]).u32();
+        if object != 0 {
+            index = e.call(0x006f_a820, &args![object]).u32();
+            let shape = e.call(0x004a_e6a0, &args![index]).u32();
+            kind = e.call(0x0062_05a0, &args![shape]).u32();
+        }
+    }
+    e.with_stack(0x28, |e, record| {
+        e.call(0x0062_40d0, &args![record]);
+        let loudness: f32 = e.global(COLLISION_SOUND_LOUDNESS);
+        let half: f32 = e.global(COLLISION_SOUND_HALF);
+        let at = record.addr();
+        e.mem.set_f32(at + 0x0c, loudness);
+        e.mem.set_u32(at + 0x1c, 0);
+        e.mem.set_u32(at + 0x20, index);
+        e.mem.set_u8(at + 0x14, 0x24);
+        e.mem.set_u8(at + 0x15, kind as u8);
+        e.mem.set_u32(at, position_x);
+        e.mem.set_u32(at + 4, position_y);
+        e.mem.set_u32(at + 8, position_z);
+        e.mem.set_f32(at + 0x10, half);
+        e.mem.set_u32(at + 0x18, this.addr().wrapping_add(index));
+        let process = e.call(GET_PROCESS, &args![this]).u32();
+        let held = if process != 0 {
+            let process = e.call(GET_PROCESS, &args![this]).u32();
+            e.vcall(process, 0x148, &args![]).u32()
+        } else {
+            0
+        };
+        let item_id = if held == 0 {
+            0
+        } else {
+            e.call(0x0044_ddc0, &args![held]).u32()
+        };
+        if hit.addr() != 0 && e.vcall(hit.addr(), 0x100, &args![]).bool() {
+            let value = if item_id == 0 {
+                0xffff_ffff
+            } else {
+                e.call(0x0044_6390, &args![item_id]).u32()
+            };
+            e.call(
+                0x0083_7520,
+                &args![
+                    this,
+                    0.0f32,
+                    0.0f32,
+                    hit,
+                    value,
+                    0xffff_ffffu32,
+                    0xffff_ffffu32,
+                    0u32,
+                    0u32
+                ],
+            );
+            return;
+        }
+        if kind != 6 {
+            let value = if item_id == 0 {
+                0xffff_ffff
+            } else {
+                e.call(0x0044_6390, &args![item_id]).u32()
+            };
+            e.call(
+                0x0083_7520,
+                &args![
+                    this,
+                    0.0f32,
+                    0.0f32,
+                    this,
+                    value,
+                    0xffff_ffffu32,
+                    0xffff_ffffu32,
+                    1u32,
+                    0u32
+                ],
+            );
+        }
+        e.call(0x0083_7550, &args![record]);
+    });
+}
+
+// Translated from 008ad1c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Moves the actor and the actors that follow it (the `ExtraDataList`
+/// object `00422700` finds in each actor's extra data list, transitively;
+/// only those with a process) to `position` in the cell `cell` of the
+/// world space `world_space`, one after the other along the direction of
+/// `angle`, each spaced by the radius of the actor (`Actor::GetRadius`)
+/// plus the `011cd65c` setting when `spaced`. Actors that are unavailable
+/// (virtual `+0x22c`, `00440da0`, `fn_008a6210`, the player's byte
+/// `+0x204`) are skipped, as are visible ones (`Actor::IsVisible(7)`)
+/// unless `forced` (or the player is sleeping or resting), the actor is the
+/// leader or the player, or has no 3D. An actor whose process is waiting
+/// (`008c1740("Waiting") == 1.0` with `GetForceNextUpdate`) is skipped. For
+/// each actor: leaves the furniture it sits on (`SetMarkerUsed`, process
+/// virtual `+0x4c0` and the heading of the marker); if it is not the leader
+/// and the cell is loaded, asks the pathing for a reachable spot at the
+/// distance (`PathingRequest`, `006d0900`, `006e7e70`); places the actor
+/// (`008c7aa0` decides between two ways), sets its location
+/// (`00575830`), marks its movement range (`005757d0`, `00575770`),
+/// `TESObjectREFR::MoveRefToNewSpace(cell, world_space)`, and for the
+/// followers stops them (`ForceStopMoving`, `StopCombat`,
+/// `EndInterruptPackage`, process virtual `+0x28`).
+#[allow(clippy::too_many_arguments)]
+pub fn fn_008ad1c0(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    position: Ptr,
+    angle: f32,
+    cell: u32,
+    world_space: u32,
+    spaced: bool,
+    forced: bool,
+) {
+    let leader = this.addr();
+    // The frame the game keeps on its stack: the position copy (+0), the
+    // direction (+0x10), the list (+0x20), the leader word (+0x30) and a
+    // reference word (+0x34), then the pathing objects (+0x40 ...).
+    e.with_stack(0x220, |e, frame| {
+        let base = frame.addr();
+        let pos = base;
+        let direction = base + 0x10;
+        let list = base + 0x20;
+        let leader_word = base + 0x30;
+        let reference_word = base + 0x34;
+        for i in 0..3 {
+            let word = e.mem.u32(position.addr() + 4 * i);
+            e.mem.set_u32(pos + 4 * i, word);
+        }
+        let sine = e.call(0x004e_4470, &args![angle]).f64();
+        let first = (-sine) as f32;
+        let cosine = e.call(0x004e_44b0, &args![angle]).f64();
+        let second = (-cosine) as f32;
+        e.call(0x0041_6870, &args![direction, second, first, 0.0f32]);
+        let mut travelled = 0.0f32;
+        e.call(0x0096_a2d0, &args![list]);
+        e.mem.set_u32(leader_word, leader);
+        e.call(0x005a_e3d0, &args![list, leader_word]);
+        // The leader and, transitively, the actors that follow it.
+        let mut node = list;
+        while node != 0 {
+            let item = list_item(e, node);
+            let extra_list = e.call(GET_EXTRA_LIST, &args![item]).u32();
+            let followers = e.call(0x0042_2700, &args![extra_list]).u32();
+            if followers != 0 {
+                let mut inner = e.mem.u32(followers + 0xc);
+                while inner != 0 {
+                    let follower = list_item(e, inner);
+                    e.mem.set_u32(reference_word, follower);
+                    if follower != 0
+                        && e.call(GET_PROCESS, &args![follower]).u32() != 0
+                        && !e.call(0x005f_65d0, &args![list, reference_word]).bool()
+                    {
+                        e.call(0x0090_5820, &args![node, reference_word]);
+                    }
+                    inner = e.call(0x0072_6070, &args![inner]).u32();
+                }
+            }
+            node = e.call(0x0072_6070, &args![node]).u32();
+        }
+        let player = e.global::<u32>(PLAYER_CHARACTER);
+        let sleeping = forced || e.call(0x0094_df60, &args![player]).bool();
+        let spacing = if spaced {
+            setting_float(e, SETTING_FOLLOWER_SPACING)
+        } else {
+            0.0
+        };
+        let mut node = list;
+        while node != 0 {
+            let actor = list_item(e, node);
+            let next = |e: &mut Engine, node: u32| e.call(0x0072_6070, &args![node]).u32();
+            let actor_ptr: Ptr<Actor> = Ptr::new(actor);
+            if e.vcall(actor, 0x22c, &args![0u32]).bool()
+                || e.call(0x0044_0da0, &args![actor]).bool()
+                || fn_008a6210(e, actor_ptr)
+            {
+                node = next(e, node);
+                continue;
+            }
+            let player = e.global::<u32>(PLAYER_CHARACTER);
+            if e.mem.u8(player + 0x204) != 0 {
+                node = next(e, node);
+                continue;
+            }
+            if !sleeping
+                && actor != leader
+                && actor != e.global::<u32>(PLAYER_CHARACTER)
+                && e.vcall(actor, 0x1d0, &args![]).u32() != 0
+                && e.call(0x008b_0190, &args![actor, 7u32]).bool()
+            {
+                node = next(e, node);
+                continue;
+            }
+            e.call(0x0068_15c0, &args![base + 0x38]);
+            let process = e.call(GET_PROCESS, &args![actor]).u32();
+            if process == 0 {
+                node = next(e, node);
+                continue;
+            }
+            if e.call(0x0056_6950, &args![actor]).bool() {
+                let waiting = e.call(0x008c_1740, &args![actor, WAITING]).f64();
+                let one: f64 = e.global(ONE);
+                if waiting == one {
+                    node = next(e, node);
+                    continue;
+                }
+            }
+            if e.vcall(process, 0x4bc, &args![]).u32() != 0 {
+                // Gets off the furniture it uses.
+                let marker_id = e.vcall(process, 0x4c4, &args![]).u32();
+                let furniture = e.vcall(process, 0x4c8, &args![]).u32();
+                e.call(0x0056_8020, &args![furniture, marker_id, 0u32]);
+                let animation = e.call(GET_ANIMATION, &args![actor]).u32();
+                e.call(0x0049_74a0, &args![animation]);
+                let furniture = e.vcall(process, 0x4c8, &args![]).u32();
+                e.vcall(process, 0x4c0, &args![actor, 0u32, furniture, 0x7fu32]);
+                let marker = e.vcall(process, 0x4d4, &args![]).u32();
+                let marker_index = e.call(0x0050_94b0, &args![marker]).u32();
+                let furniture = e.vcall(process, 0x4c8, &args![]).u32();
+                let form = e.call(GET_SAVE_FORM, &args![furniture]).u32();
+                let heading = e.call(0x0050_99c0, &args![form, marker_index]).f64();
+                e.call(0x0093_1d30, &args![actor, (-heading) as f32]);
+                let turned = e.vcall(actor, 0x2bc, &args![0u32]).f64();
+                let pi: f64 = e.global(PI_AS_FLOAT);
+                e.vcall(actor, 0x2c4, &args![(turned + pi) as f32]);
+                let marker = e.vcall(process, 0x4d4, &args![]).u32();
+                e.call(0x00c5_4550, &args![marker, 0.0f32]);
+                let marker = e.vcall(process, 0x4d4, &args![]).u32();
+                e.call(0x0056_8ab0, &args![marker, 0u32]);
+                let marker = e.vcall(process, 0x4d4, &args![]).u32();
+                e.call(0x0098_ddd0, &args![marker, ZERO_POINT]);
+                let marker = e.vcall(process, 0x4d4, &args![]).u32();
+                e.vcall(process, 0x540, &args![0u32, 0x7fu32, marker]);
+                e.call(0x0093_1fb0, &args![actor, 0u32]);
+            }
+            let radius = e.call(0x008b_e1b0, &args![actor]).f32();
+            if actor != leader {
+                travelled =
+                    ((f64::from(spacing) + f64::from(radius)) + f64::from(travelled)) as f32;
+                if cell != 0 && {
+                    let tes = e.global::<u32>(TES_SINGLETON);
+                    e.call(0x0045_11e0, &args![tes, cell, 0u32]).bool()
+                } {
+                    let out = base + 0x40;
+                    let target = base + 0x50;
+                    let solution = base + 0x60;
+                    let request = base + 0xb0;
+                    let location = base + 0x170;
+                    let found_a = base + 0x1b0;
+                    let found_b = base + 0x1c0;
+                    let scaled = e.call(0x0045_bb20, &args![direction, out, travelled]).u32();
+                    e.call(0x0043_9e90, &args![pos, target, scaled]);
+                    e.call(0x006e_7650, &args![solution]);
+                    e.call(0x006e_2420, &args![request]);
+                    e.call(0x006e_29f0, &args![request, leader]);
+                    e.call(0x006e_2b50, &args![request, 1u32]);
+                    let made = e.call(0x006d_ce10, &args![location, target, leader]).u32();
+                    e.call(0x006d_1bc0, &args![request, made]);
+                    e.call(0x004f_f7e0, &args![location]);
+                    fn_008ad8f0(e, Ptr::new(request), 1);
+                    e.call(0x0068_15c0, &args![found_b]);
+                    if e.call(0x006d_0900, &args![request, solution]).bool()
+                        && e.call(
+                            0x006e_7e70,
+                            &args![solution, 0.0f32, travelled, 1u32, found_a, found_b],
+                        )
+                        .bool()
+                    {
+                        for i in 0..3 {
+                            let word = e.mem.u32(found_b + 4 * i);
+                            e.mem.set_u32(pos + 4 * i, word);
+                        }
+                    }
+                    e.call(0x006e_2620, &args![request]);
+                    e.call(0x006e_7720, &args![solution]);
+                }
+            }
+            if e.call(0x008c_7aa0, &args![]).bool() {
+                let singleton = e.call(0x0045_37b0, &args![]).u32();
+                e.call(0x0087_b650, &args![singleton, actor, pos]);
+                let singleton = e.call(0x0045_37b0, &args![]).u32();
+                e.call(0x0087_b190, &args![singleton, actor]);
+            } else {
+                e.vcall(actor, 0x2a8, &args![pos]);
+            }
+            e.call(0x0057_5830, &args![actor, pos]);
+            travelled = (f64::from(travelled) + f64::from(radius)) as f32;
+            let loaded = cell != 0 && {
+                let tes = e.global::<u32>(TES_SINGLETON);
+                e.call(0x0045_11e0, &args![tes, cell, 0u32]).bool()
+            };
+            if loaded {
+                e.call(0x0057_57d0, &args![actor, angle]);
+                e.call(0x0057_5770, &args![actor, 0.0f32]);
+            } else {
+                let largest: f32 = e.global(FLOAT_MAX);
+                e.call(0x0057_5770, &args![actor, largest]);
+            }
+            e.call(0x0057_3800, &args![actor, cell, world_space]);
+            if actor != leader {
+                let follower_process = e.call(GET_PROCESS, &args![actor]).u32();
+                e.call(0x008b_3ad0, &args![actor]);
+                e.vcall(actor, 0x434, &args![0u32]);
+                e.call(0x0088_1680, &args![actor, 0u32]);
+                if follower_process != 0 {
+                    e.vcall(follower_process, 0x28, &args![]);
+                }
+            }
+            node = next(e, node);
+        }
+        e.call(0x0046_ffb0, &args![list]);
+    });
+}
+
+// Translated from 008ad8f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the byte `value` at `this + 0x9b`.
+pub fn fn_008ad8f0(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x9b, value);
+}
+
+// Translated from 008ad910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fn_008ad1c0` of the actor to the place of `reference`: the world space
+/// (`TESObjectREFR::GetWorldSpace`), the cell (`008d6f30`) and the angle
+/// (`float` at `+8` of what `00430830` returns, its rotation about z) of the reference, and the
+/// reference's own virtual `+0x1f4` as the position.
+pub fn fn_008ad910(e: &mut Engine, this: Ptr<Actor>, reference: Ptr, spaced: bool, forced: bool) {
+    let world_space = e.call(0x0057_5d70, &args![reference]).u32();
+    let cell = e.call(GET_PARENT_CELL, &args![reference]).u32();
+    let place = e.call(0x0043_0830, &args![reference]).u32();
+    let angle = e.mem.f32(place + 8);
+    let position = e.vcall(reference.addr(), 0x1f4, &args![]).u32();
+    fn_008ad1c0(
+        e,
+        this,
+        Ptr::new(position),
+        angle,
+        cell,
+        world_space,
+        spaced,
+        forced,
+    );
+}
+
+// Translated from 008ad970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Gives the actor a new search package: a `SearchPackage` (`009f66b0`, an
+/// object of `0x1a4` bytes) of type `0x1e` with `00826b40(0)`,
+/// `00826b90(0)`; a `PackageLocation` (`0x0c` bytes, `0067f030`) set to
+/// the actor and handed over (`SetPackageLocation`, then freed); `0067a4a0(1)`;
+/// a `PackageTarget` (`0x10` bytes, `0067ff70`); `00984f60(0x21)`; target
+/// type `0`, target reference `reference` and a count from the setting
+/// `011cda7c`. The actor's process gets virtual `+0xec`, `+0x28`, `+0xdc`
+/// and the actor's virtual `+0x2f4(package, 1, 1)`; a nonzero `place`
+/// (`NiPoint3::operator!=` against the zero point, `00439090`) is stored in
+/// the package (`008adc20`), and with `flag` the process virtual `+0x288`
+/// is called with the actor.
+pub fn fn_008ad970(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    reference: u32,
+    place_x: u32,
+    place_y: u32,
+    place_z: u32,
+    flag: bool,
+) {
+    let memory = e.call(OPERATOR_NEW, &args![0x1a4u32]).u32();
+    let package = if memory == 0 {
+        0
+    } else {
+        e.call(
+            0x009f_66b0,
+            &args![
+                memory,
+                place_x,
+                place_y,
+                place_z,
+                reference,
+                u32::from(flag)
+            ],
+        )
+        .u32()
+    };
+    e.call(0x0067_0fc0, &args![package, 0x1eu32]);
+    e.call(0x0082_6b40, &args![package, 0u32]);
+    e.call(0x0082_6b90, &args![package, 0u32]);
+    let memory = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
+    let location = if memory == 0 {
+        0
+    } else {
+        e.call(0x0067_f030, &args![memory]).u32()
+    };
+    e.call(0x0067_f3c0, &args![location, this]);
+    e.call(0x0067_1d30, &args![package, location]);
+    if location != 0 {
+        e.call(0x0067_0b30, &args![location, 1u32]);
+    }
+    e.call(0x0067_a4a0, &args![package, 1u32]);
+    let memory = e.call(OPERATOR_NEW, &args![0x10u32]).u32();
+    let target = if memory == 0 {
+        0
+    } else {
+        e.call(0x0067_ff70, &args![memory]).u32()
+    };
+    e.call(0x0067_2fc0, &args![package, target]);
+    e.call(0x0098_4f60, &args![package, 0x21u32]);
+    let package_target = e.call(0x0067_1d10, &args![package]).u32();
+    e.call(0x0068_00b0, &args![package_target, 0u32]);
+    let package_target = e.call(0x0067_1d10, &args![package]).u32();
+    e.call(0x0068_0110, &args![package_target, reference]);
+    let distance = setting_float(e, SETTING_SEARCH_DISTANCE);
+    let count = e.call(FTOL, &args![f64::from(distance)]).u32();
+    let package_target = e.call(0x0067_1d10, &args![package]).u32();
+    e.call(0x0040_3550, &args![package_target, count]);
+    let process = acquire_object(e, this);
+    e.vcall(process.addr(), 0xec, &args![]);
+    let process = acquire_object(e, this);
+    e.vcall(process.addr(), 0x28, &args![]);
+    let process = acquire_object(e, this);
+    e.vcall(process.addr(), 0xdc, &args![]);
+    e.vcall(this.addr(), 0x2f4, &args![package, 1u32, 1u32]);
+    let different = e.with_stack(12, |e, place| {
+        e.mem.set_u32(place.addr(), place_x);
+        e.mem.set_u32(place.addr() + 4, place_y);
+        e.mem.set_u32(place.addr() + 8, place_z);
+        e.call(0x0043_9090, &args![place, ZERO_POINT]).bool()
+    });
+    if different {
+        fn_008adc20(e, Ptr::new(package), place_x, place_y, place_z);
+    }
+    if flag {
+        let process = acquire_object(e, this);
+        e.vcall(process.addr(), 0x288, &args![this, 1u32]);
+    }
+}
+
+// Translated from 008adc20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores three words at `this + 0x94`.
+pub fn fn_008adc20(e: &mut Engine, this: Ptr, first: u32, second: u32, third: u32) {
+    e.mem.set_u32(this.addr() + 0x94, first);
+    e.mem.set_u32(this.addr() + 0x98, second);
+    e.mem.set_u32(this.addr() + 0x9c, third);
+}
+
+// Translated from 008adc50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the actor has a process: its virtual `+0x160(0, 0, 0)` and then
+/// `+0x168(0)`.
+pub fn fn_008adc50(e: &mut Engine, this: Ptr<Actor>) {
+    if acquire_object(e, this).addr() != 0 {
+        let process = acquire_object(e, this);
+        e.vcall(process.addr(), 0x160, &args![0u32, 0u32, 0u32]);
+        let process = acquire_object(e, this);
+        e.vcall(process.addr(), 0x168, &args![0u32]);
+    }
+}
+
+// Translated from 008adcb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetFaceAnimationData` (Xbox PDB): the process's virtual `+0x144`
+/// with the actor, or 0 without a process.
+pub fn actor_get_face_animation_data(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let process = process(e, this);
+    if process.addr() == 0 {
+        0
+    } else {
+        e.vcall(process.addr(), 0x144, &args![this]).u32()
+    }
+}
+
+/// The type descriptor of `TESBoundObject` (`01183108`).
+const TYPE_BOUND_OBJECT: u32 = 0x0118_3108;
+/// The type descriptor of `BGSPickupPutdownSounds` (`011832d4`).
+const TYPE_PICKUP_PUTDOWN_SOUNDS: u32 = 0x0118_32d4;
+/// The sound names `Actor::GetPickUpSoundName` returns.
+const SOUND_GUNS_BIG_UP: u32 = 0x0108_4e40;
+const SOUND_GUNS_BIG_DOWN: u32 = 0x0108_4e2c;
+const SOUND_GUNS_SMALL_UP: u32 = 0x0108_4e18;
+const SOUND_GUNS_SMALL_DOWN: u32 = 0x0108_4e04;
+const SOUND_MELEE_UP: u32 = 0x0108_4df4;
+const SOUND_MELEE_DOWN: u32 = 0x0108_4de4;
+const SOUND_GENERIC_UP: u32 = 0x0108_4dd4;
+const SOUND_GENERIC_DOWN: u32 = 0x0108_4dc0;
+/// The ring of five `NiPoint3` that `008ae4c0` hands out (`011df7a0`) and
+/// the index of the one it used last (`011df880`).
+const LOCATION_RING: u32 = 0x011d_f7a0;
+const LOCATION_RING_INDEX: u32 = 0x011d_f880;
+/// `-FLT_MAX` (`double`): what the water height is when there is no water.
+const NO_WATER: u32 = 0x0102_41b0;
+/// `5.0` (`double`).
+const WATER_MARGIN: u32 = 0x0102_0998;
+/// `0.75` (`double`), as `HEIGHT_FACTOR`.
+const EYE_HEIGHT_FACTOR: u32 = HEIGHT_FACTOR;
+/// `2.5` (`double`), `2.0` (`double`), `0.1`, `0.9` (`double`s) and `0.1`
+/// (`float`) of `008ae000`.
+const IMPULSE_FACTOR: u32 = 0x0101_8c00;
+const TWO: u32 = 0x0101_1590;
+const IMPULSE_FLOOR_DOUBLE: u32 = 0x0101_ffa0;
+const IMPULSE_SLOPE: u32 = 0x0106_b9e8;
+const IMPULSE_FLOOR_FLOAT: u32 = 0x0101_e2bc;
+/// The `float`s `008ae000` scales its direction vectors by.
+const IMPULSE_SCALE_HIT: u32 = 0x0101_8bfc;
+const IMPULSE_SCALE_BODY: u32 = 0x0102_36e0;
+/// The pointer (`011e07d0`) `Actor::GetEyeVector` uses for the player.
+const PLAYER_EYE_SOURCE: u32 = 0x011e_07d0;
+
+/// The three words at `at`.
+fn point_at(e: &Engine, at: u32) -> [u32; 3] {
+    [e.mem.u32(at), e.mem.u32(at + 4), e.mem.u32(at + 8)]
+}
+
+/// Stores three words at `at`.
+fn set_point(e: &mut Engine, at: u32, point: [u32; 3]) {
+    e.mem.set_u32(at, point[0]);
+    e.mem.set_u32(at + 4, point[1]);
+    e.mem.set_u32(at + 8, point[2]);
+}
+
+// Translated from 008adcf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetPickUpSoundName` (Xbox PDB): the name of the sound for picking
+/// up (`up` is 1) or putting down `item`; `this` is not used. A form with a
+/// `BGSPickupPutdownSounds` component (`__RTDynamicCast`) gives the name of
+/// its pickup sound (virtual `+0x130` of the field at `+4`; with `flag` clear
+/// and `up` nonzero) or putdown sound (`+8`; with both clear). Otherwise by
+/// the form type byte: `0x28` (a weapon) by `BGSEquipType::GetEquipType`:
+/// `0` the big gun sounds, `2` the small gun sounds, `3` the melee sounds;
+/// `0x2f` with `flag` the name of the field at `+0xc8` (virtual `+0x130`),
+/// or 0 without it. Everything else gets the generic names.
+pub fn actor_get_pick_up_sound_name(
+    e: &mut Engine,
+    _this: Ptr<Actor>,
+    item: Ptr,
+    up: u8,
+    flag: u8,
+) -> u32 {
+    if item.addr() == 0 {
+        return 0;
+    }
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![
+                item,
+                0u32,
+                TYPE_BOUND_OBJECT,
+                TYPE_PICKUP_PUTDOWN_SOUNDS,
+                0u32
+            ],
+        )
+        .u32();
+    if flag == 0 && up != 0 && cast != 0 && e.call(0x0072_6070, &args![cast]).u32() != 0 {
+        let sound = e.call(0x0072_6070, &args![cast]).u32();
+        return e.vcall(sound, 0x130, &args![]).u32();
+    }
+    if flag == 0 && up == 0 && cast != 0 && e.call(0x0044_ddc0, &args![cast]).u32() != 0 {
+        let sound = e.call(0x0044_ddc0, &args![cast]).u32();
+        return e.vcall(sound, 0x130, &args![]).u32();
+    }
+    let kind = e.call(0x0040_1170, &args![item]).u32();
+    if kind == 0x28 {
+        match e.call(0x0047_9430, &args![item]).u32() {
+            0 => {
+                return if up != 0 {
+                    SOUND_GUNS_BIG_UP
+                } else {
+                    SOUND_GUNS_BIG_DOWN
+                }
+            }
+            2 => {
+                return if up != 0 {
+                    SOUND_GUNS_SMALL_UP
+                } else {
+                    SOUND_GUNS_SMALL_DOWN
+                }
+            }
+            3 => {
+                return if up != 0 {
+                    SOUND_MELEE_UP
+                } else {
+                    SOUND_MELEE_DOWN
+                }
+            }
+            _ => {}
+        }
+    } else if kind == 0x2f && flag != 0 {
+        if e.call(0x009a_cce0, &args![item]).u32() == 0 {
+            return 0;
+        }
+        let sound = e.call(0x009a_cce0, &args![item]).u32();
+        return e.vcall(sound, 0x130, &args![]).u32();
+    }
+    if up == 1 {
+        SOUND_GENERIC_UP
+    } else {
+        SOUND_GENERIC_DOWN
+    }
+}
+
+// Translated from 008aded0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Plays the pickup or putdown sound of `item` (`actor_get_pick_up_sound_name`).
+/// For the player the sound is the handle `BSAudio::GetSoundHandleByName`
+/// finds (`0x121`), played unless it already plays; for others it is
+/// `MobileObject::PlaySoundByEditorName(name, 0, 0x102, 1)`. Nothing for a
+/// null `item`. (The exception frame is not translated.)
+pub fn fn_008aded0(e: &mut Engine, this: Ptr<Actor>, item: Ptr, up: u8, flag: u8) {
+    if item.addr() == 0 {
+        return;
+    }
+    e.with_stack(0x10, |e, handle| {
+        e.call(SOUND_HANDLE_INIT, &args![handle]);
+        let name = actor_get_pick_up_sound_name(e, this, item, up, flag);
+        if this.addr() == e.global::<u32>(PLAYER_CHARACTER) {
+            let audio = e.call(0x0045_3a70, &args![]).u32();
+            e.with_stack(0x10, |e, found| {
+                let result = e
+                    .call(0x00ad_7550, &args![audio, found, name, 0x121u32])
+                    .u32();
+                e.call(SOUND_HANDLE_ASSIGN, &args![handle, result]);
+                e.call(SOUND_HANDLE_DESTRUCT, &args![found]);
+            });
+            if !e.call(0x00ad_8930, &args![handle]).bool() {
+                e.call(0x00ad_8830, &args![handle, 0u32]);
+            }
+        } else {
+            e.with_stack(0x10, |e, played| {
+                let result = e
+                    .call(
+                        0x0093_3270,
+                        &args![this, played, name, 0u32, 0x102u32, 1u32],
+                    )
+                    .u32();
+                e.call(SOUND_HANDLE_ASSIGN, &args![handle, result]);
+                e.call(SOUND_HANDLE_DESTRUCT, &args![played]);
+            });
+        }
+        e.call(SOUND_HANDLE_DESTRUCT, &args![handle]);
+    });
+}
+
+// Translated from 008ae000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Pushes the body of the explosion's target away. `data` is the explosion
+/// record: target reference (`+4`), source (`+8`; `from_hit` when its
+/// virtual `+0x224` holds), strength (`float` at `+0x14`), a record at
+/// `+0x30` whose `008ae480`/`008ae4a0` give the radii, and the points at
+/// `+0x38` and `+0x44`. The target must pass virtual `+0x21c` false or
+/// `+0x38c` true and have 3D (`0043fcd0`). The impulse direction is built
+/// from the points (normalised by `004a0c10`, scaled by one of two
+/// `float`s), the strength by `006466e0(strength, from_hit)` times `2.5`
+/// of the first radius and, for a hit within the second radius, a falloff
+/// (`0.1` outside twice the radius, else `((2r^2 - d^2) / r^2) * 0.9 + 0.1`,
+/// at least `0.1`, `00404010`). Then the body's forces are removed
+/// (`bhkForceController::RemoveForce`), its motion set (`bhkWorld::SetMotion`)
+/// and `TESHavokUtilities::AddExplosionImpulse(body, impulse, strength,
+/// data)` applied.
+pub fn fn_008ae000(e: &mut Engine, this: Ptr<Actor>, data: Ptr) {
+    let record = data.addr();
+    let target = e.mem.u32(record + 4);
+    let base_strength = e.mem.f32(record + 0x14);
+    let source = e.mem.u32(record + 8);
+    let from_hit = source != 0 && e.vcall(source, 0x224, &args![]).bool();
+    let node = e.vcall(this.addr(), 0x1d0, &args![]).u32();
+    let zero = point_at(e, ZERO_POINT);
+    e.with_stack(0x140, |e, frame| {
+        let base = frame.addr();
+        // `A`, `B` and `C` of the game's frame; the rest are scratch.
+        let point_a = base;
+        let point_b = base + 0x10;
+        let direction = base + 0x20;
+        set_point(e, point_a, zero);
+        set_point(e, point_b, zero);
+        if node != 0 {
+            let process = acquire_object(e, this);
+            let part = e.vcall(process.addr(), 0x460, &args![]).u32();
+            let object = e.call(0x0046_1130, &args![node]).u32();
+            let found = e.call(0x0052_4c40, &args![object, base + 0x30, part]).u32();
+            let point = point_at(e, found);
+            set_point(e, point_a, point);
+        }
+        if target == 0 {
+            return;
+        }
+        if e.vcall(target, 0x21c, &args![]).bool() && !e.vcall(target, 0x38c, &args![]).bool() {
+            return;
+        }
+        let body = e.call(0x0043_fcd0, &args![target]).u32();
+        if body == 0 {
+            return;
+        }
+        set_point(e, direction, zero);
+        if from_hit {
+            let hit_point = e
+                .call(0x004a_0bd0, &args![record + 0x44, base + 0x40])
+                .u32();
+            let point = point_at(e, hit_point);
+            set_point(e, direction, point);
+            e.call(0x004a_0c10, &args![direction]);
+            let scale: f32 = e.global(IMPULSE_SCALE_HIT);
+            e.call(0x0043_9180, &args![direction, scale]);
+            e.call(0x0063_c8a0, &args![direction, record + 0x38]);
+        } else {
+            if node != 0 {
+                let weapon = actor_get_weapon_position(e, this, Ptr::new(base + 0x50), 0);
+                let object = e.call(0x0046_1130, &args![node]).u32();
+                let found = e
+                    .call(0x0052_4c40, &args![object, base + 0x80, weapon])
+                    .u32();
+                let point = point_at(e, found);
+                set_point(e, point_b, point);
+            }
+            let difference = e
+                .call(0x0043_9ef0, &args![point_a, base + 0x90, point_b])
+                .u32();
+            let point = point_at(e, difference);
+            set_point(e, direction, point);
+            e.call(0x004a_0c10, &args![direction]);
+            let hit_point = e
+                .call(0x004a_0bd0, &args![record + 0x44, base + 0xc0])
+                .u32();
+            e.call(0x0063_c8a0, &args![direction, hit_point]);
+            let scale: f32 = e.global(IMPULSE_SCALE_BODY);
+            e.call(0x0043_9180, &args![direction, scale]);
+            e.call(0x0063_c8a0, &args![direction, point_a]);
+        }
+        let mut strength = e
+            .call(0x0064_66e0, &args![base_strength, u32::from(from_hit)])
+            .f32();
+        let radii = e.mem.u32(record + 0x30);
+        if radii != 0 {
+            let radius = fn_008ae480(e, Ptr::new(radii));
+            let factor: f64 = e.global(IMPULSE_FACTOR);
+            strength = (f64::from(radius) * factor) as f32;
+            if from_hit {
+                let zero_double: f64 = e.global(ZERO_DOUBLE);
+                if f64::from(fn_008ae4a0(e, Ptr::new(radii))) > zero_double {
+                    let body_point = e.call(0x0045_bb80, &args![body]).u32();
+                    let body_point = point_at(e, body_point);
+                    let from_body = base + 0xa0;
+                    set_point(e, from_body, body_point);
+                    let offset = base + 0xb0;
+                    e.call(0x0043_9ef0, &args![from_body, offset, point_a]);
+                    let x = e.mem.f32(offset);
+                    let y = e.mem.f32(offset + 4);
+                    let distance_squared =
+                        (f64::from(x) * f64::from(x) + f64::from(y) * f64::from(y)) as f32;
+                    let inner = fn_008ae4a0(e, Ptr::new(radii));
+                    let inner_squared = (f64::from(inner) * f64::from(inner)) as f32;
+                    if inner_squared < distance_squared {
+                        let two: f64 = e.global(TWO);
+                        let floor: f64 = e.global(IMPULSE_FLOOR_DOUBLE);
+                        let doubled = f64::from(fn_008ae4a0(e, Ptr::new(radii))) * two;
+                        if f64::from(distance_squared) <= doubled {
+                            let slope: f64 = e.global(IMPULSE_SLOPE);
+                            let falloff = ((f64::from(inner_squared) * two
+                                - f64::from(distance_squared))
+                                / f64::from(inner_squared)
+                                * slope
+                                + floor) as f32;
+                            let least: f32 = e.global(IMPULSE_FLOOR_FLOAT);
+                            let falloff = e.call(0x0040_4010, &args![falloff, least]).f32();
+                            strength = (f64::from(strength) * f64::from(falloff)) as f32;
+                        } else {
+                            strength = (f64::from(strength) * floor) as f32;
+                        }
+                    }
+                }
+            }
+        }
+        let impulse = base + 0x100;
+        let forces = base + 0xe0;
+        e.call(0x00cb_9650, &args![body]);
+        e.call(0x00c6_a350, &args![body, 1u32, 1u32, 0u32, 1u32]);
+        e.call(0x0043_d410, &args![forces, 0.0f32, 0u32, 0u32]);
+        e.call(0x00a5_9c60, &args![body, forces]);
+        e.call(0x0068_15c0, &args![impulse]);
+        e.call(0x004a_3e00, &args![impulse, direction]);
+        e.call(0x0062_b660, &args![body, impulse, strength, data]);
+    });
+}
+
+// Translated from 008ae480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The float at `this + 0x1a8`.
+pub fn fn_008ae480(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0x1a8)
+}
+
+// Translated from 008ae4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The float at `this + 0x1b8`.
+pub fn fn_008ae4a0(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0x1b8)
+}
+
+// Translated from 008ae4c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetLocationOnReference` (Xbox PDB): the position of the actor
+/// (`00436aa0`), or, when `005a2030` holds and the water height
+/// (`TESObjectREFR::GetRelevantWaterHeight`) is not `-FLT_MAX`, a copy of it
+/// in the next of five slots of the ring at `011df7a0` whose `z` is raised by
+/// `0.75` of the actor's height (`008853a0`) but at most to the water height
+/// minus `5.0`, in a cell for which `004518e0` holds.
+pub fn actor_get_location_on_reference(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    if !e.call(0x005a_2030, &args![this]).bool() {
+        return e.call(0x0043_6aa0, &args![this]).u32();
+    }
+    let water = e.call(0x0057_b0a0, &args![this]).f64();
+    let no_water: f64 = e.global(NO_WATER);
+    if water == no_water {
+        return e.call(0x0043_6aa0, &args![this]).u32();
+    }
+    let mut index = e.global::<u32>(LOCATION_RING_INDEX) as i32;
+    index = index.wrapping_add(1);
+    e.set_global(LOCATION_RING_INDEX, index as u32);
+    if index >= 5 {
+        e.set_global(LOCATION_RING_INDEX, 0u32);
+    }
+    let position = e.call(0x0043_6aa0, &args![this]).u32();
+    let point = point_at(e, position);
+    let slot = LOCATION_RING + 12 * e.global::<u32>(LOCATION_RING_INDEX);
+    set_point(e, slot, point);
+    let cell = e.call(GET_PARENT_CELL, &args![this]).u32();
+    if cell != 0 && e.call(0x0045_18e0, &args![cell]).bool() {
+        let margin: f64 = e.global(WATER_MARGIN);
+        let ceiling = (e.call(0x0057_b0a0, &args![this]).f64() - margin) as f32;
+        let height = e.call(0x0088_53a0, &args![this]).f64();
+        let factor: f64 = e.global(EYE_HEIGHT_FACTOR);
+        let rise = (height * factor) as f32;
+        let slot = LOCATION_RING + 12 * e.global::<u32>(LOCATION_RING_INDEX);
+        let top = f64::from(e.mem.f32(slot + 8)) + f64::from(rise);
+        if f64::from(ceiling) <= top {
+            e.mem.set_f32(slot + 8, ceiling);
+        } else {
+            e.mem.set_f32(slot + 8, top as f32);
+        }
+    }
+    LOCATION_RING + 12 * e.global::<u32>(LOCATION_RING_INDEX)
+}
+
+// Translated from 008ae600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `this + 0x148` (`Actor::pTemplateActorBase`).
+pub fn fn_008ae600(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    e.mem.u32(this.addr() + 0x148)
+}
+
+// Translated from 008ae620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the word at `this + 0x148` (`Actor::pTemplateActorBase`).
+pub fn fn_008ae620(e: &mut Engine, this: Ptr<Actor>, value: u32) {
+    e.mem.set_u32(this.addr() + 0x148, value);
+}
+
+// Translated from 008ae640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::SetForceUpdateQuest` (Xbox PDB): stores the byte `value` at
+/// `this + 0x126` (`bForceUpdateQuestTarget`).
+pub fn actor_set_force_update_quest(e: &mut Engine, this: Ptr<Actor>, value: u8) {
+    e.mem.set_u8(this.addr() + 0x126, value);
+}
+
+// Translated from 008afef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `this + 0x3a8`.
+pub fn fn_008afef0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x3a8)
+}
+
+// Translated from 008aff10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00621b00` of the member at `this + 0x54`: a `float` (in `ST0`).
+pub fn fn_008aff10(e: &mut Engine, this: Ptr) -> f32 {
+    e.call(0x0062_1b00, &args![this.addr() + 0x54]).f32()
+}
+
+// Translated from 008aff30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `bhkFilteredCdBodyCollector` (its RTTI name): the base
+/// constructor `0062d350`, then the vtable at `01084e54`.
+pub fn fn_008aff30(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0062_d350, &args![this]);
+    e.mem.set_u32(this.addr(), 0x0108_4e54);
+    this
+}
+
+// Translated from 008aff50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor of `bhkFilteredCdBodyCollector`: the body
+/// `00cb9900`, then `0062d470(this)` (the free) when bit 0 of `flags` is set.
+pub fn fn_008aff50(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x00cb_9900, &args![this]);
+    if flags & 1 != 0 {
+        e.call(0x0062_d470, &args![this]);
+    }
+    this
+}
+
+// Translated from 008aff80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetEyeVector` (Xbox PDB): writes the eye position to `position`
+/// (the player's source `011e07d0`, through `0045bb80`, when there is one;
+/// otherwise the actor's position `00436aa0` with `z` raised by
+/// `Actor::GetEyeLevel`), adds the player's offset (`0070c410`) when `offset`
+/// is set and `00524d10` of the player holds, then turns `direction`: a
+/// rotation matrix about z from virtual `+0x2bc` (and for the player
+/// multiplied by the `x` rotation of `MobileObject::GetLooking`, `0043f8d0`)
+/// is applied to it (`00439f50(1, direction)`) and it is normalised
+/// (`004a0c10`).
+pub fn actor_get_eye_vector(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    position: Ptr,
+    direction: Ptr,
+    offset: bool,
+) {
+    let player = e.global::<u32>(PLAYER_CHARACTER);
+    let source = e.global::<u32>(PLAYER_EYE_SOURCE);
+    if this.addr() == player && source != 0 {
+        let at = e.call(0x0045_bb80, &args![source]).u32();
+        let point = point_at(e, at);
+        set_point(e, position.addr(), point);
+    } else {
+        let at = e.call(0x0043_6aa0, &args![this]).u32();
+        let point = point_at(e, at);
+        set_point(e, position.addr(), point);
+        let eye = e.call(0x008b_e940, &args![this]).f64();
+        let height = e.mem.f32(position.addr() + 8);
+        e.mem
+            .set_f32(position.addr() + 8, (eye + f64::from(height)) as f32);
+    }
+    if offset && this.addr() == player && e.call(0x0052_4d10, &args![player]).bool() {
+        e.with_stack(0x10, |e, scratch| {
+            let shift = e.call(0x0070_c410, &args![player, scratch]).u32();
+            e.call(0x0063_c8a0, &args![position, shift]);
+        });
+    }
+    e.with_stack(0xc0, |e, frame| {
+        // The game's three 36-byte matrices: the rotation, the x rotation
+        // and the product's scratch.
+        let matrix = frame.addr();
+        let x_rotation = frame.addr() + 0x30;
+        let product = frame.addr() + 0x60;
+        e.call(0x0068_15c0, &args![matrix]);
+        let heading = e.vcall(this.addr(), 0x2bc, &args![0u32]).f32();
+        e.call(0x004a_0c90, &args![matrix, heading]);
+        if this.addr() == player {
+            e.call(0x0068_15c0, &args![x_rotation]);
+            let looking = e.call(0x0093_1d70, &args![this]).f32();
+            e.call(0x0052_4ac0, &args![x_rotation, looking]);
+            let result = e
+                .call(0x0043_f8d0, &args![matrix, product, x_rotation])
+                .u32();
+            for i in 0..9 {
+                let word = e.mem.u32(result + 4 * i);
+                e.mem.set_u32(matrix + 4 * i, word);
+            }
+        }
+        e.call(0x0043_9f50, &args![matrix, 1u32, direction]);
+        e.call(0x004a_0c10, &args![direction]);
+    });
+}
+
+/// The weapon form used when the actor holds no item (`011ca278`, a pointer
+/// to the unarmed weapon).
+const UNARMED_WEAPON: u32 = 0x011c_a278;
+/// `3.0` (`double`): added to the weight `008ae660` sums.
+const HIT_WEIGHT_BONUS: u32 = 0x0102_1928;
+/// `255.0` (`double`): the divisor of the decal colour channels.
+const COLOR_CHANNEL_MAX: u32 = 0x0101_e568;
+/// `4.0` (`float`): the upper bound of the decal variant's random draw.
+const DECAL_VARIANT_RANGE: u32 = 0x0101_e570;
+/// The `float` `Actor::fn_008ae660` passes to `00963eb0`.
+const HIT_SHAKE_STRENGTH: u32 = 0x0102_918c;
+/// The `GameSetting` objects `008ae660` reads: the integer range of a weapon
+/// with no form (`011d10d4`), the ranges for the weapon types `0` to `2` and
+/// the rest, then the weight exponent, the impulse factor, the speed limit
+/// and the boost for the body class `8`/`0x1d`.
+const SETTING_RANGE_DEFAULT: u32 = 0x011d_10d4;
+const SETTING_RANGE_KIND_0: u32 = 0x011d_0ec4;
+const SETTING_RANGE_KIND_1: u32 = 0x011d_1128;
+const SETTING_RANGE_KIND_2: u32 = 0x011d_0484;
+const SETTING_RANGE_OTHER: u32 = 0x011d_1050;
+const SETTING_WEIGHT_EXPONENT: u32 = 0x011c_f77c;
+const SETTING_IMPULSE_FACTOR: u32 = 0x011c_fb90;
+const SETTING_SPEED_LIMIT: u32 = 0x011c_f66c;
+const SETTING_BODY_BOOST: u32 = 0x011c_eb08;
+/// The `GameSetting` byte (`011df7f8`) that turns the humanoid effect off.
+const SETTING_NO_HUMANOID_EFFECT: u32 = 0x011d_f7f8;
+/// The object `00525430` is asked about (`011f2250`).
+const OBJECT_011F2250: u32 = 0x011f_2250;
+/// The type descriptors `008ae660` casts the actor's base form with.
+const TYPE_BASE_FORM: u32 = 0x0118_46e8;
+const TYPE_CREATURE: u32 = 0x0118_3a00;
+/// `Script::SetActionFlag`.
+const SET_ACTION_FLAG: u32 = 0x005a_c750;
+/// `004519d0`: what the `TES` singleton finds at a position.
+const TES_FIND_AT: u32 = 0x0045_19d0;
+/// The pickup, putdown or impact sound getters of the impact record.
+const IMPACT_SOUND_A: u32 = 0x0068_a810;
+const IMPACT_SOUND_B: u32 = 0x0068_a830;
+
+/// Plays the impact sound `getter` finds in `impact` (a file name object,
+/// looked up as a sound with flags `0x4102`) at `position`, in `handle`.
+fn play_impact_sound(
+    e: &mut Engine,
+    impact: u32,
+    getter: u32,
+    handle: u32,
+    scratch: u32,
+    position: [u32; 3],
+) {
+    let flags_source = e.call(getter, &args![impact]).u32();
+    let name_object = e.call(getter, &args![impact]).u32();
+    let file = e.call(0x0051_1840, &args![name_object]).u32();
+    let audio = e.call(0x0045_3a70, &args![]).u32();
+    let found = e
+        .call(
+            0x00ad_7480,
+            &args![audio, scratch, file, 0x4102u32, flags_source],
+        )
+        .u32();
+    e.call(SOUND_HANDLE_ASSIGN, &args![handle, found]);
+    e.call(SOUND_HANDLE_DESTRUCT, &args![scratch]);
+    e.call(
+        0x00ad_8b60,
+        &args![handle, position[0], position[1], position[2]],
+    );
+    e.call(0x00ad_8830, &args![handle, 0u32]);
+}
+
+// Translated from 008ae660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resolves a melee swing of the actor against what its weapon reaches;
+/// `power_attack` selects the power attack multiplier. Returns true when
+/// something was hit.
+///
+/// It finds the physics cell of the actor's cell (`004543c0`) and a hit
+/// caster (`00626dd0`), casts a ray from the eye (`Actor::GetEyeVector`;
+/// range from the `GameSetting` of the weapon type) and, for what it hits
+/// (a reference with 3D, and the body its collision shape belongs to),
+/// works out the damage of the swing: `ItemChange::GetModifiedAttackDamage`
+/// of the held item (with the power attack multiplier of
+/// `CombatFormulas::GetPowerAttackDamageMultiplier` unless virtual `+0x21c`
+/// or `004997b0` say otherwise), or the fists (`CalcHandToHandDamage`, or
+/// virtual `+0x444` for creatures), plus `00645c20` of the weapon form when
+/// virtual `+0x360` and `00525430` hold.
+///
+/// With a physics body hit: an impulse (direction from the 3D point of the
+/// actor to the weapon position, `GameSetting` factor, weight of the weapon
+/// or of the worn armour, capped by the speed) through `0081f1e0`, the
+/// collision sound (`fn_008acff0`), the action flags `0x80`/`0x100`
+/// (`Script::SetActionFlag`), the decals of the material's impact record
+/// (`00522ba0`; one per collider of the decal caster whose material
+/// matches), an effect and the sounds of the record, and, for a reference
+/// that answers virtual `+0x224` (or is a weapon form, `0x28`), its damage
+/// (virtual `+0x144`). Without one, an actor that is hit (virtual `+0x100`,
+/// body class `0x1e`) goes through `00837520`. For the player, hitting its
+/// activation target also sets flag `0x10000000`.
+/// (The exception-unwinding frame is not translated.)
+pub fn fn_008ae660(e: &mut Engine, this: Ptr<Actor>, power_attack: u8) -> bool {
+    let actor = this.addr();
+    let mut hit_anything = false;
+    let cell = e.call(GET_PARENT_CELL, &args![this]).u32();
+    let physics_cell = if cell == 0 {
+        0
+    } else {
+        e.call(0x0045_43c0, &args![cell]).u32()
+    };
+    let hit_caster = e.call(0x0062_6dd0, &args![0u32, 1u32]).u32();
+    let held = if acquire_object(e, this).addr() == 0 {
+        0
+    } else {
+        let process = acquire_object(e, this);
+        e.vcall(process.addr(), 0x148, &args![]).u32()
+    };
+    let weapon_form = if held == 0 {
+        e.global::<u32>(UNARMED_WEAPON)
+    } else {
+        e.call(0x0044_ddc0, &args![held]).u32()
+    };
+    let range_setting = e.call(0x0043_d4d0, &args![SETTING_RANGE_DEFAULT]).u32();
+    let mut range = e.mem.u32(range_setting) as i32 as f32;
+    if weapon_form != 0 {
+        let setting = match e.call(0x0044_6390, &args![weapon_form]).u32() {
+            0 => SETTING_RANGE_KIND_0,
+            1 => SETTING_RANGE_KIND_1,
+            2 => SETTING_RANGE_KIND_2,
+            _ => SETTING_RANGE_OTHER,
+        };
+        range = setting_float(e, setting);
+    }
+    if physics_cell == 0 || hit_caster == 0 {
+        return false;
+    }
+    // The locals the game keeps on its stack, at offsets of one block.
+    e.with_stack(0x600, |e, frame| {
+        let base = frame.addr();
+        let eye_position = base;
+        let eye_direction = base + 0x10;
+        let scratch = base + 0x20;
+        let point_a = base + 0x30;
+        let point_b = base + 0x40;
+        let direction = base + 0x50;
+        let contact = base + 0x60;
+        let out_a = base + 0x70;
+        let out_weapon = base + 0x80;
+        let out_b = base + 0x90;
+        let push = base + 0xa0;
+        let push_unit = base + 0xb0;
+        let class_scratch_a = base + 0xc0;
+        let class_scratch_b = base + 0xd0;
+        let impulse = base + 0xe0;
+        let normal = base + 0x100;
+        let decal_direction = base + 0x110;
+        let decal_origin = base + 0x120;
+        let color = base + 0x130;
+        let sink = base + 0x140;
+        let reflected = base + 0x150;
+        let reflected_out = base + 0x160;
+        let sound_a = base + 0x170;
+        let sound_b = base + 0x180;
+        let handle = base + 0x1a0;
+        let damage_slot = base + 0x1f0;
+        let damage_scratch = base + 0x1fc;
+        let collector = base + 0x200;
+        let decal_info = base + 0x340;
+        e.call(0x0068_15c0, &args![eye_position]);
+        e.call(0x0068_15c0, &args![eye_direction]);
+        actor_get_eye_vector(
+            e,
+            this,
+            Ptr::new(eye_position),
+            Ptr::new(eye_direction),
+            false,
+        );
+        e.call(0x0062_6d20, &args![hit_caster, physics_cell]);
+        let controller = e.call(0x0093_1ed0, &args![this, scratch]).u32();
+        let wanted = e.call(0x004a_3a20, &args![controller]).u32();
+        if fn_008afef0(e, Ptr::new(hit_caster)) != wanted {
+            e.call(0x0062_6c50, &args![hit_caster, wanted]);
+        }
+        if !e
+            .call(
+                0x0062_6b30,
+                &args![hit_caster, eye_position, eye_direction, range],
+            )
+            .bool()
+        {
+            return;
+        }
+        let caster = e.call(0x0068_15c0, &args![hit_caster]).u32();
+        let first = e.call(0x0046_0140, &args![caster]).u32();
+        let entry = e.call(0x0080_7770, &args![first, 0u32]).u32();
+        let collidable = e.mem.u32(entry + 0x48);
+        let hit_node = e.call(0x004b_5820, &args![collidable]).u32();
+        let hit_ref = if hit_node == 0 {
+            0
+        } else {
+            e.call(0x0056_f930, &args![hit_node]).u32()
+        };
+        let first = e.call(0x0046_0140, &args![caster]).u32();
+        let entry = e.call(0x0080_7770, &args![first, 0u32]).u32();
+        let collidable = e.mem.u32(entry + 0x48);
+        let body_object = e.call(0x004b_59f0, &args![collidable]).u32();
+        let hit_actor = if hit_ref != 0 && e.vcall(hit_ref, 0x100, &args![]).bool() {
+            hit_ref
+        } else {
+            0
+        };
+        let hit_id = if weapon_form == 0 {
+            0xffff_ffff
+        } else {
+            e.call(0x0044_6390, &args![weapon_form]).u32()
+        };
+        // The damage of the swing.
+        let owner = if actor == 0 { 0 } else { actor + 0xa4 };
+        let mut damage: f32;
+        if held != 0 {
+            let animation = e.vcall(actor, 0x1e4, &args![]).u32();
+            let group = e.call(0x0043_01b0, &args![animation, 4u32]).u32() as u16;
+            let group_type = e.call(0x005f_2440, &args![u32::from(group)]).u32();
+            let mut multiplier = 1.0f32;
+            if !e.vcall(actor, 0x21c, &args![]).bool()
+                && !e.call(0x0049_97b0, &args![this]).bool()
+                && power_attack != 0
+            {
+                let bound = e.call(0x008d_85e0, &args![weapon_form]).u32();
+                let value = e.call(0x0066_ef20, &args![actor + 0xa4, bound]).u32();
+                multiplier = e.call(0x0064_4520, &args![value, group_type]).f32();
+            }
+            damage = e
+                .call(0x004b_df00, &args![held, owner, multiplier, 0u32])
+                .f32();
+        } else if e.vcall(actor, 0x21c, &args![]).bool() {
+            damage = e.vcall(actor, 0x444, &args![]).i32() as f32;
+        } else {
+            e.mem.set_f32(damage_slot, 0.0);
+            e.call(
+                0x0064_6310,
+                &args![owner, 0u32, damage_slot, damage_scratch],
+            );
+            damage = e.mem.f32(damage_slot);
+        }
+        if e.vcall(actor, 0x360, &args![]).bool()
+            && e.call(0x0052_5430, &args![OBJECT_011F2250]).bool()
+        {
+            let mut extra = 0.0f32;
+            if weapon_form != 0 {
+                extra = f32::from(e.call(0x0064_5c20, &args![weapon_form]).u32() as u16);
+            } else {
+                let unarmed = e.global::<u32>(UNARMED_WEAPON);
+                if unarmed != 0 {
+                    extra = f32::from(e.call(0x0064_5c20, &args![unarmed]).u32() as u16);
+                }
+            }
+            damage = (f64::from(damage) + f64::from(extra)) as f32;
+        }
+        let hit_owner = if weapon_form != 0 {
+            weapon_form
+        } else {
+            e.global::<u32>(UNARMED_WEAPON)
+        };
+        if body_object != 0 {
+            let body_ref = e.call(0x004b_5a80, &args![body_object]).u32();
+            let mut humanoid_effect = true;
+            e.call(0x0068_15c0, &args![point_a]);
+            e.call(0x0068_15c0, &args![point_b]);
+            let node = e.vcall(actor, 0x1d0, &args![]).u32();
+            if node != 0 {
+                let process = e.mem.u32(actor + 0x68);
+                let part = e.vcall(process, 0x460, &args![]).u32();
+                let found = e.call(0x0046_1130, &args![node]).u32();
+                let at = e.call(0x0052_4c40, &args![found, out_a, part]).u32();
+                let point = point_at(e, at);
+                set_point(e, point_a, point);
+                let weapon = actor_get_weapon_position(e, this, Ptr::new(out_weapon), 0);
+                let found = e.call(0x0046_1130, &args![node]).u32();
+                let at = e.call(0x0052_4c40, &args![found, out_b, weapon]).u32();
+                let point = point_at(e, at);
+                set_point(e, point_b, point);
+            }
+            e.call(0x0043_9ef0, &args![point_b, direction, point_a]);
+            e.call(0x004a_0c10, &args![direction]);
+            e.call(0x0068_15c0, &args![contact]);
+            let first = e.call(0x0046_0140, &args![caster]).u32();
+            let entry = e.call(0x0080_7770, &args![first, 0u32]).u32();
+            let entry = e.call(0x0068_15c0, &args![entry]).u32();
+            e.call(0x0045_8620, &args![contact, entry]);
+            let mut weight;
+            if weapon_form != 0 {
+                weight = e.call(0x004b_e380, &args![weapon_form, 0u32]).f32();
+            } else {
+                let chest = e.call(0x0089_1b90, &args![this, 3u32]).u32();
+                let hands = e.call(0x0089_1b90, &args![this, 4u32]).u32();
+                if chest != 0 || hands != 0 {
+                    weight = 0.0f32;
+                    if chest != 0 {
+                        let form = e.call(0x0044_ddc0, &args![chest]).u32();
+                        let part = e.call(0x006b_9130, &args![form + 0x60]).f64();
+                        weight = (part + f64::from(weight)) as f32;
+                    }
+                    if hands != 0 {
+                        let form = e.call(0x0044_ddc0, &args![hands]).u32();
+                        let part = e.call(0x006b_9130, &args![form + 0x60]).f64();
+                        weight = (part + f64::from(weight)) as f32;
+                    }
+                } else {
+                    weight = 0.0;
+                    humanoid_effect = false;
+                }
+                if chest != 0 {
+                    e.call(0x0044_59e0, &args![chest, 1u32]);
+                }
+                if hands != 0 {
+                    e.call(0x0044_59e0, &args![hands, 1u32]);
+                }
+            }
+            let bonus: f64 = e.global(HIT_WEIGHT_BONUS);
+            weight = (f64::from(weight) + bonus) as f32;
+            let first = e.call(0x0046_0140, &args![caster]).u32();
+            let entry = e.call(0x0080_7770, &args![first, 0u32]).u32();
+            let slot = e.mem.u32(entry + 0x4c);
+            let mut material = 0u32;
+            let class = e.call(0x0043_b4f0, &args![body_ref, class_scratch_a]).u32();
+            let class = e.call(0x0043_b4d0, &args![class]).u32();
+            if class == 0x11 {
+                let tes = e.global::<u32>(TES_SINGLETON);
+                material = e.call(0x0045_7880, &args![tes, contact]).u32();
+            } else {
+                let shape = e.call(0x004a_e6a0, &args![body_ref]).u32();
+                if shape != 0 {
+                    material = e.call(0x0062_05a0, &args![shape]).u32();
+                    if slot != 0xffff_ffff {
+                        let sub = e.vcall(shape, 0xcc, &args![]).u32();
+                        if sub != 0 {
+                            material = e.vcall(sub, 0xe0, &args![slot]).u32();
+                        }
+                    }
+                }
+            }
+            let exponent = setting_float(e, SETTING_WEIGHT_EXPONENT);
+            weight = e.call(0x0040_ebd0, &args![weight, exponent]).f32();
+            let factor = setting_float(e, SETTING_IMPULSE_FACTOR);
+            let scaled = e
+                .call(0x0045_bb20, &args![direction, push_unit, factor])
+                .u32();
+            e.call(0x0045_bb20, &args![scaled, push, weight]);
+            let speed = e.call(0x004b_4ea0, &args![body_object]).f32();
+            let limit = setting_float(e, SETTING_SPEED_LIMIT);
+            if limit > speed {
+                let limit = setting_float(e, SETTING_SPEED_LIMIT);
+                let ratio = (f64::from(speed) / f64::from(limit)) as f32;
+                e.call(0x0043_9180, &args![push, ratio]);
+            }
+            let class = e.call(0x0043_b4f0, &args![body_ref, class_scratch_b]).u32();
+            if e.call(0x0062_4070, &args![class]).bool() {
+                let boost = setting_float(e, SETTING_BODY_BOOST);
+                e.call(0x0043_9180, &args![push, boost]);
+            }
+            e.call(0x0068_15c0, &args![impulse]);
+            e.call(0x004a_3e00, &args![impulse, push]);
+            e.call(0x0055_33c0, &args![physics_cell]);
+            let first = e.call(0x0046_0140, &args![caster]).u32();
+            let entry = e.call(0x0080_7770, &args![first, 0u32]).u32();
+            let entry = e.call(0x0068_15c0, &args![entry]).u32();
+            e.call(0x0081_f1e0, &args![body_object, impulse, entry]);
+            e.call(0x0055_33c0, &args![physics_cell]);
+            let contact_words = point_at(e, contact);
+            fn_008acff0(
+                e,
+                this,
+                contact_words[0],
+                contact_words[1],
+                contact_words[2],
+                Ptr::new(hit_ref),
+                body_ref,
+                material,
+            );
+            if hit_ref != 0 {
+                if hit_actor != 0 {
+                    fn_008a5300(e, Ptr::new(hit_actor));
+                }
+                let list = e.call(GET_EXTRA_LIST, &args![hit_ref]).u32();
+                e.call(SET_ACTION_FLAG, &args![this, list, 0x80u32]);
+                let list = e.call(GET_EXTRA_LIST, &args![hit_ref]).u32();
+                e.call(SET_ACTION_FLAG, &args![hit_owner, list, 0x100u32]);
+            }
+            // The impact record of the material and its effect.
+            let impact = e.call(0x0052_2ba0, &args![hit_owner, material]).u32();
+            let effect = if impact == 0 {
+                0
+            } else {
+                e.call(0x0067_33e0, &args![impact]).u32()
+            };
+            if effect != 0 {
+                // One decal for each collider of the decal caster whose
+                // material is the one that was hit.
+                e.call(0x0068_15c0, &args![normal]);
+                let first = e.call(0x0046_0140, &args![caster]).u32();
+                let entry = e.call(0x0080_7770, &args![first, 0u32]).u32();
+                let inner = e.call(0x0046_0140, &args![entry]).u32();
+                e.call(0x0045_8620, &args![normal, inner]);
+                let normal_words = point_at(e, normal);
+                set_point(e, decal_direction, normal_words);
+                e.call(0x004a_0c10, &args![decal_direction]);
+                set_point(e, decal_origin, contact_words);
+                let high = e.call(0x004a_40c0, &args![impact]).f32();
+                let low = e.call(0x004a_40a0, &args![impact]).f32();
+                let size = e.call(0x0047_6b70, &args![low, high]).f32();
+                let decal = e.call(0x0062_2a70, &args![size, 1u32]).u32();
+                e.call(0x0062_33c0, &args![decal, 0u32]);
+                e.call(0x004a_1a10, &args![decal, 8u32, 0u32]);
+                e.call(0x004a_1a10, &args![decal, 0x1du32, 0u32]);
+                let decal_cell = e.call(GET_PARENT_CELL, &args![this]).u32();
+                let decal_tes = if decal_cell == 0 {
+                    0
+                } else {
+                    e.call(0x0045_43c0, &args![decal_cell]).u32()
+                };
+                if decal_tes != 0 {
+                    e.call(0x0062_31a0, &args![decal, decal_tes]);
+                    fn_008aff30(e, Ptr::new(collector));
+                    e.call(0x0062_3090, &args![decal, contact, collector]);
+                    let list = e.call(0x0041_3f40, &args![collector]).u32();
+                    let count = e.call(0x0072_6070, &args![list]).i32();
+                    let random_angle = e.call(0x004a_4240, &args![]).f32();
+                    let range_end: f32 = e.global(DECAL_VARIANT_RANGE);
+                    let drawn = e.call(0x0047_6b70, &args![0.0f32, range_end]).f32();
+                    let variant_input = e.call(0x0040_6cc0, &args![drawn]).f64();
+                    let variant = e.call(FTOL, &args![variant_input]).u32() as u8;
+                    for index in 0..count {
+                        let list = e.call(0x0041_3f40, &args![collector]).u32();
+                        let item = e.call(0x0062_e150, &args![list, index as u32]).u32();
+                        let object = e.mem.u32(item + 8);
+                        if object == 0 {
+                            continue;
+                        }
+                        let mut found_material = 0x24u32;
+                        let list = e.call(0x0041_3f40, &args![collector]).u32();
+                        let item = e.call(0x0062_e150, &args![list, index as u32]).u32();
+                        let item_slot = e.mem.u32(item + 0xc);
+                        let node = e.call(0x0055_9450, &args![object]).u32();
+                        let part = e.call(0x004a_3a40, &args![node]).u32();
+                        if part == 0 {
+                            continue;
+                        }
+                        if item_slot == 0xffff_ffff {
+                            found_material = e.call(0x0062_05a0, &args![part]).u32();
+                        } else {
+                            let sub = e.vcall(part, 0xcc, &args![]).u32();
+                            if sub != 0 {
+                                found_material = e.vcall(sub, 0xe0, &args![item_slot]).u32();
+                            }
+                        }
+                        if found_material != material {
+                            continue;
+                        }
+                        let key = e.call(0x0043_b540, &args![object]).u32();
+                        let stored = e.call(0x008c_71b0, &args![sink, key]).u32();
+                        let is_landscape = e.call(0x004a_3a20, &args![stored]).u32() == 1;
+                        let target = if is_landscape {
+                            let tes = e.global::<u32>(TES_SINGLETON);
+                            let mut found = e.call(0x0045_7620, &args![tes, contact]).u32();
+                            if found != 0 && e.call(0x0096_11e0, &args![found]).u32() != 0 {
+                                found = e.call(0x0096_11e0, &args![found]).u32();
+                            }
+                            found
+                        } else {
+                            e.call(0x00c7_fa90, &args![object]).u32()
+                        };
+                        let target_ref = e.call(0x0056_f930, &args![target]).u32();
+                        if !is_landscape
+                            && (target_ref == 0
+                                || !e.call(0x004a_1060, &args![target_ref, 1u32]).bool())
+                        {
+                            continue;
+                        }
+                        let tes = e.global::<u32>(TES_SINGLETON);
+                        let spot = e
+                            .call(
+                                TES_FIND_AT,
+                                &args![tes, contact_words[0], contact_words[1], contact_words[2]],
+                            )
+                            .u32();
+                        e.call(0x004a_37b0, &args![decal_info]);
+                        set_point(e, decal_info, contact_words);
+                        let flat = point_at(e, decal_direction);
+                        set_point(e, decal_info + 0xc, flat);
+                        e.mem.set_f32(decal_info + 0x38, size);
+                        e.mem.set_f32(decal_info + 0x3c, size);
+                        let spread = fn_008aff10(e, Ptr::new(impact));
+                        e.mem.set_f32(decal_info + 0x40, spread);
+                        e.mem.set_u32(decal_info + 0x28, target);
+                        e.mem.set_u32(decal_info + 0x30, effect);
+                        e.mem.set_f32(decal_info + 0x44, random_angle);
+                        e.mem.set_u8(decal_info + 0x70, variant);
+                        let byte = e.call(0x004a_4140, &args![impact]).u8();
+                        e.mem.set_u8(decal_info + 0x75, byte);
+                        let byte = e.call(0x004a_4180, &args![impact]).u8();
+                        e.mem.set_u8(decal_info + 0x74, byte);
+                        let byte = e.call(0x004a_4100, &args![impact]).u8();
+                        e.mem.set_u8(decal_info + 0x73, byte);
+                        let value = e.call(0x004a_41c0, &args![impact]).f32();
+                        e.mem.set_f32(decal_info + 0x4c, value);
+                        let byte = e.call(0x004a_41e0, &args![impact]).u8();
+                        e.mem.set_u8(decal_info + 0x76, byte);
+                        let value = e.call(0x004a_40e0, &args![impact]).f32();
+                        e.mem.set_f32(decal_info + 0x54, value);
+                        let value = e.call(0x009a_9350, &args![impact]).f32();
+                        e.mem.set_f32(decal_info + 0x58, value);
+                        let divisor: f64 = e.global(COLOR_CHANNEL_MAX);
+                        let packed = e.call(0x004a_4220, &args![impact]).u32();
+                        let red = (f64::from((packed >> 16) as u8) / divisor) as f32;
+                        let packed = e.call(0x004a_4220, &args![impact]).u32();
+                        let green = (f64::from((packed as u16 >> 8) as u8) / divisor) as f32;
+                        let packed = e.call(0x004a_4220, &args![impact]).u32();
+                        let blue = (f64::from(packed as u8) / divisor) as f32;
+                        let tint = e.call(0x0041_6870, &args![color, blue, green, red]).u32();
+                        let tint = point_at(e, tint);
+                        set_point(e, decal_info + 0x60, tint);
+                        e.call(0x004a_3fe0, &args![spot, decal_info, 1u32, 0u32]);
+                    }
+                    e.call(0x00cb_9900, &args![collector]);
+                }
+            }
+            if humanoid_effect && hit_ref != 0 && e.vcall(hit_ref, 0x100, &args![]).bool() {
+                let base_form = e.call(0x0041_81e0, &args![this]).u32();
+                let creature = e
+                    .call(
+                        DYNAMIC_CAST,
+                        &args![base_form, 0u32, TYPE_BASE_FORM, TYPE_CREATURE, 0u32],
+                    )
+                    .u32();
+                if (creature != 0 && e.call(0x005f_bf20, &args![creature]).bool())
+                    || e.vcall(actor, 0x218, &args![]).bool()
+                {
+                    let setting = e
+                        .call(0x0040_8d60, &args![SETTING_NO_HUMANOID_EFFECT])
+                        .u32();
+                    humanoid_effect = e.mem.u8(setting) == 0;
+                }
+            }
+            // The effect name of the impact record, as a reflected spark.
+            if humanoid_effect && impact != 0 {
+                let name_object = impact + 0x18;
+                let name = e.vcall(name_object, 0x14, &args![]).u32();
+                if name != 0 {
+                    let name = e.vcall(name_object, 0x14, &args![]).u32();
+                    if e.mem.u8(name) as i8 != 0 {
+                        let words = point_at(e, direction);
+                        set_point(e, reflected, words);
+                        let dot = e.call(0x004b_6190, &args![reflected, eye_direction]).f32();
+                        let spread = e
+                            .call(0x004a_3760, &args![reflected_out, dot, eye_direction])
+                            .u32();
+                        e.call(0x0045_78c0, &args![reflected, spread]);
+                        e.call(0x004a_0c10, &args![reflected]);
+                        let name = e.vcall(name_object, 0x14, &args![]).u32();
+                        let radius = e.call(0x0050_8100, &args![impact]).f32();
+                        let cell = e.call(GET_PARENT_CELL, &args![this]).u32();
+                        let reflected_words = point_at(e, reflected);
+                        e.call(
+                            0x0068_90b0,
+                            &args![
+                                cell,
+                                radius,
+                                name,
+                                reflected_words[0],
+                                reflected_words[1],
+                                reflected_words[2],
+                                contact_words[0],
+                                contact_words[1],
+                                contact_words[2],
+                                1.0f32,
+                                7u32,
+                                0u32
+                            ],
+                        );
+                    }
+                }
+            }
+            e.call(SOUND_HANDLE_INIT, &args![handle]);
+            if impact != 0 && e.call(IMPACT_SOUND_A, &args![impact]).u32() != 0 {
+                play_impact_sound(e, impact, IMPACT_SOUND_A, handle, sound_a, contact_words);
+            }
+            if impact != 0 && e.call(IMPACT_SOUND_B, &args![impact]).u32() != 0 {
+                play_impact_sound(e, impact, IMPACT_SOUND_B, handle, sound_b, contact_words);
+            }
+            if hit_ref != 0 {
+                let mut applies = e.vcall(hit_ref, 0x224, &args![]).bool();
+                if !applies {
+                    let form = e.call(GET_SAVE_FORM, &args![hit_ref]).u32();
+                    applies = e.call(0x0040_1170, &args![form]).u32() == 0x28;
+                }
+                if applies {
+                    if e.call(0x0051_7670, &args![body_object]).i32() < 4 {
+                        let attacker = e.vcall(actor, 0x168, &args![]).u32();
+                        e.vcall(hit_ref, 0x164, &args![attacker]);
+                    }
+                    e.vcall(hit_ref, 0x144, &args![damage, 0u32]);
+                    if e.call(0x0047_7ba0, &args![hit_ref]).bool()
+                        && actor == e.global::<u32>(PLAYER_CHARACTER)
+                    {
+                        let strength: f32 = e.global(HIT_SHAKE_STRENGTH);
+                        let player = e.global::<u32>(PLAYER_CHARACTER);
+                        e.call(0x0096_3eb0, &args![player, 10u32, strength, 0u32]);
+                    }
+                }
+            }
+            hit_anything = true;
+            e.call(SOUND_HANDLE_DESTRUCT, &args![handle]);
+        } else if actor != e.global::<u32>(PLAYER_CHARACTER) {
+            // No physics body: an actor that was hit is damaged directly.
+            let first = e.call(0x0046_0140, &args![caster]).u32();
+            let entry = e.call(0x0080_7770, &args![first, 0u32]).u32();
+            let collidable = e.mem.u32(entry + 0x48);
+            let owner_body = e.call(0x004b_5950, &args![collidable]).u32();
+            let other = if owner_body == 0 {
+                0
+            } else {
+                e.call(0x004b_5a80, &args![owner_body]).u32()
+            };
+            if hit_actor != 0 && !e.vcall(hit_ref, 0x22c, &args![0u32]).bool() && other != 0 {
+                let class = e.call(0x0043_b4f0, &args![other, sink]).u32();
+                if e.call(0x0043_b4d0, &args![class]).u32() == 0x1e {
+                    if e.vcall(hit_actor, 0x21c, &args![]).bool() {
+                        e.call(
+                            0x0083_7520,
+                            &args![
+                                this,
+                                damage,
+                                0.0f32,
+                                hit_actor,
+                                hit_id,
+                                0xffff_ffffu32,
+                                0xffff_ffffu32,
+                                0u32,
+                                0u32
+                            ],
+                        );
+                    } else {
+                        let armor = e.call(0x0089_d8b0, &args![hit_actor, 0u32]).u32();
+                        if armor != 0 {
+                            let form = e.call(0x0044_ddc0, &args![armor]).u32();
+                            let flag = e.call(0x0051_4410, &args![form]).u8();
+                            e.call(
+                                0x0083_7520,
+                                &args![
+                                    this,
+                                    damage,
+                                    damage,
+                                    hit_actor,
+                                    hit_id,
+                                    u32::from(flag),
+                                    0xffff_ffffu32,
+                                    1u32,
+                                    0u32
+                                ],
+                            );
+                            e.call(0x0044_59e0, &args![armor, 1u32]);
+                        } else {
+                            e.call(
+                                0x0083_7520,
+                                &args![
+                                    this,
+                                    damage,
+                                    0.0f32,
+                                    hit_actor,
+                                    hit_id,
+                                    0xffff_ffffu32,
+                                    0xffff_ffffu32,
+                                    1u32,
+                                    0u32
+                                ],
+                            );
+                        }
+                    }
+                    hit_anything = true;
+                }
+            }
+        }
+        if actor == e.global::<u32>(PLAYER_CHARACTER) {
+            let hit_cell = if hit_ref != 0 {
+                e.call(GET_PARENT_CELL, &args![hit_ref]).u32()
+            } else {
+                0
+            };
+            let hit_physics = if hit_cell != 0 {
+                e.call(0x0045_43c0, &args![hit_cell]).u32()
+            } else {
+                0
+            };
+            let hit_form = if hit_physics != 0 {
+                let form = e.call(GET_SAVE_FORM, &args![hit_physics]).u32();
+                if form == 0 {
+                    0
+                } else {
+                    form.wrapping_sub(8)
+                }
+            } else {
+                0
+            };
+            if hit_form != 0
+                && hit_ref == e.call(0x0070_3350, &args![]).u32()
+                && e.call(0x0062_dee0, &args![hit_form, hit_ref]).bool()
+            {
+                let list = e.call(GET_EXTRA_LIST, &args![hit_ref]).u32();
+                if list != 0 {
+                    e.call(SET_ACTION_FLAG, &args![hit_ref, list, 0x1000_0000u32]);
+                    hit_anything = true;
+                }
+            }
+        }
+    });
+    hit_anything
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -4024,6 +6071,64 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x008ac6f0,
             actor_is_in_combatant_faction(Ptr<Actor>) -> bool
         ),
+        entry!(0x008ac810, fn_008ac810(Ptr<Actor>) -> u32),
+        entry!(0x008ac850, fn_008ac850(Ptr<Actor>, u32)),
+        entry!(0x008ac890, fn_008ac890(Ptr, u32)),
+        entry!(0x008ac8b0, fn_008ac8b0(Ptr) -> f32),
+        entry!(0x008ac990, fn_008ac990(Ptr, f32)),
+        entry!(0x008ac9d0, fn_008ac9d0(Ptr) -> f32),
+        entry!(0x008acb70, fn_008acb70(Ptr, f32)),
+        entry!(0x008acba0, fn_008acba0(Ptr<Actor>)),
+        entry!(
+            0x008acbe0,
+            actor_calculate_combat_strength(Ptr<Actor>, f32) -> f32
+        ),
+        entry!(0x008acc80, fn_008acc80(Ptr<Actor>)),
+        entry!(0x008ace10, fn_008ace10(Ptr<Actor>, bool)),
+        entry!(0x008ace50, fn_008ace50(Ptr<Actor>, bool)),
+        entry!(0x008ace90, fn_008ace90(Ptr<Actor>) -> u8),
+        entry!(0x008aced0, fn_008aced0(Ptr, u32) -> bool),
+        entry!(0x008acf10, actor_set_ghost(Ptr<Actor>, u8)),
+        entry!(0x008acf70, fn_008acf70(Ptr, u32, u8)),
+        entry!(0x008acfa0, fn_008acfa0(Ptr, u32, u8)),
+        entry!(
+            0x008acff0,
+            fn_008acff0(Ptr<Actor>, u32, u32, u32, Ptr, u32, u32)
+        ),
+        entry!(
+            0x008ad1c0,
+            fn_008ad1c0(Ptr<Actor>, Ptr, f32, u32, u32, bool, bool)
+        ),
+        entry!(0x008ad8f0, fn_008ad8f0(Ptr, u8)),
+        entry!(0x008ad910, fn_008ad910(Ptr<Actor>, Ptr, bool, bool)),
+        entry!(
+            0x008ad970,
+            fn_008ad970(Ptr<Actor>, u32, u32, u32, u32, bool)
+        ),
+        entry!(0x008adc20, fn_008adc20(Ptr, u32, u32, u32)),
+        entry!(0x008adc50, fn_008adc50(Ptr<Actor>)),
+        entry!(0x008adcb0, actor_get_face_animation_data(Ptr<Actor>) -> u32),
+        entry!(
+            0x008adcf0,
+            actor_get_pick_up_sound_name(Ptr<Actor>, Ptr, u8, u8) -> u32
+        ),
+        entry!(0x008aded0, fn_008aded0(Ptr<Actor>, Ptr, u8, u8)),
+        entry!(0x008ae000, fn_008ae000(Ptr<Actor>, Ptr)),
+        entry!(0x008ae480, fn_008ae480(Ptr) -> f32),
+        entry!(0x008ae4a0, fn_008ae4a0(Ptr) -> f32),
+        entry!(
+            0x008ae4c0,
+            actor_get_location_on_reference(Ptr<Actor>) -> u32
+        ),
+        entry!(0x008ae600, fn_008ae600(Ptr<Actor>) -> u32),
+        entry!(0x008ae620, fn_008ae620(Ptr<Actor>, u32)),
+        entry!(0x008ae640, actor_set_force_update_quest(Ptr<Actor>, u8)),
+        entry!(0x008afef0, fn_008afef0(Ptr) -> u32),
+        entry!(0x008aff10, fn_008aff10(Ptr) -> f32),
+        entry!(0x008aff30, fn_008aff30(Ptr) -> Ptr),
+        entry!(0x008aff50, fn_008aff50(Ptr, u32) -> Ptr),
+        entry!(0x008aff80, actor_get_eye_vector(Ptr<Actor>, Ptr, Ptr, bool)),
+        entry!(0x008ae660, fn_008ae660(Ptr<Actor>, u8) -> bool),
     ]
 }
 
@@ -4054,17 +6159,19 @@ mod tests {
     }
 
     /// Every actor vtable slot any test of this file calls.
-    const ACTOR_SLOTS: [u32; 27] = [
+    const ACTOR_SLOTS: &[u32] = &[
         0x13c, 0x140, 0x178, 0x1d0, 0x1e4, 0x1e8, 0x1f4, 0x214, 0x218, 0x22c, 0x230, 0x268, 0x27c,
         0x284, 0x2e8, 0x2f4, 0x2f8, 0x338, 0x340, 0x348, 0x350, 0x360, 0x3ac, 0x418, 0x428, 0x434,
-        0x4c0,
+        0x4c0, 0x390, 0x1d8, 0x1dc, 0x440, 0x1c4, 0x48, 0x2bc, 0x2c4, 0x2a8, 0x100, 0x144, 0x164,
+        0x168, 0x21c, 0x224, 0x444,
     ];
     /// Every process vtable slot any test of this file calls.
-    const PROCESS_SLOTS: [u32; 51] = [
+    const PROCESS_SLOTS: &[u32] = &[
         0x24, 0x28, 0x44, 0x100, 0x118, 0x128, 0x148, 0x15c, 0x190, 0x1bc, 0x1c0, 0x20c, 0x22c,
         0x234, 0x27c, 0x280, 0x2e8, 0x318, 0x31c, 0x320, 0x360, 0x3e4, 0x3ec, 0x44c, 0x450, 0x48c,
         0x4b8, 0x4c0, 0x4d0, 0x4e0, 0x4ec, 0x524, 0x59c, 0x5a8, 0x718, 0x770, 0x774, 0x778, 0x77c,
-        0x780, 0x784, 0x428, 0x434, 0x418, 0x2f4, 0x3ac, 0x338, 0x1f4, 0x13c, 0x11c, 0xb4,
+        0x780, 0x784, 0x428, 0x434, 0x418, 0x2f4, 0x3ac, 0x338, 0x1f4, 0x13c, 0x11c, 0xb4, 0x144,
+        0x4bc, 0x4c4, 0x4c8, 0x4d4, 0x540, 0xec, 0xdc, 0x288, 0x160, 0x168, 0x460,
     ];
 
     fn engine() -> Engine {
@@ -4086,15 +6193,36 @@ mod tests {
             0x011d_e000,
             0x011d_f000,
             0x011f_4000,
+            0x0101_d000,
+            0x0101_7000,
+            0x0106_6000,
+            0x0101_f000,
+            0x011c_d000,
+            0x0101_1000,
+            0x0101_8000,
+            0x0101_e000,
+            0x0102_0000,
+            0x0102_4000,
+            0x011e_0000,
+            0x011c_a000,
+            0x011c_e000,
+            0x011c_f000,
+            0x011d_0000,
+            0x011d_1000,
+            0x0102_1000,
+            0x0102_9000,
         ] {
             e.map(page, 0x1000);
         }
-        make_vtable(&mut e, ACTOR_VT, &ACTOR_SLOTS);
-        make_vtable(&mut e, PROCESS_VT, &PROCESS_SLOTS);
+        make_vtable(&mut e, ACTOR_VT, ACTOR_SLOTS);
+        make_vtable(&mut e, PROCESS_VT, PROCESS_SLOTS);
         make_vtable(
             &mut e,
             OBJECT_VT,
-            &[0x8, 0x11c, 0xb4, 0x100, 0x13c, 0x128, 0x1f4],
+            &[
+                0x8, 0x11c, 0xb4, 0x100, 0x13c, 0x128, 0x1f4, 0xd8, 0x1d0, 0x130, 0x21c, 0x38c,
+                0x224, 0x144, 0x164, 0x22c,
+            ],
         );
         // `008d8520`: the process field.
         e.register(GET_PROCESS, |e, a| e.mem.u32(a[0] + 0x68).into_ret());
@@ -5595,7 +7723,7 @@ mod tests {
         answer(&mut e, OBJECT_VT, 0x100, 1);
         e.register(0x0067_0f10, |_, _| 1.into_ret());
         e.register(0x0067_0ef0, |_, _| 1.into_ret());
-        e.register(0x0088_14b0, move |_, _| 0x4a00.into_ret());
+        e.register_double(0x0088_14b0, move |_, _| 0x4a00.into_ret());
         e.register(0x0067_1d10, |_, _| 1.into_ret());
         e.register(0x0067_2930, |_, _| 3.into_ret());
         e.register(GET_SAVE_FORM, |_, _| 0x4b00.into_ret());
@@ -9268,5 +11396,2415 @@ mod tests {
         e.register(0x0043_7080, |_, _| 1.into_ret());
         e.mem.set_u32(faction_b + 0x34, 4);
         assert!(!e.call(0x008a_c6f0, &args![actor]).bool());
+    }
+
+    /// Makes the fake function behind a vtable slot return the float `value`
+    /// in `ST0`.
+    fn answer_float(e: &mut Engine, at: u32, slot: u32, value: f32) {
+        e.register_double(target(at, slot), move |_, _| value.into_ret());
+    }
+
+    /// A table at `at` whose slot `8` is a fake function returning `value`
+    /// (the table at `actor + 0xa4`).
+    fn actor_value_table(e: &mut Engine, actor: Ptr<Actor>, value: u32) {
+        let table = 0x0906_0000;
+        make_vtable(e, table, &[8]);
+        answer(e, table, 8, value);
+        e.mem.set_u32(actor.addr() + 0xa4, table);
+    }
+
+    #[test]
+    fn process_object_forwarders() {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        e.register(0x004f_b070, |_, a| (a[0] + 1).into_ret());
+        // No object: nothing is called.
+        assert_eq!(e.call(0x008a_c810, &args![actor]).u32(), 0);
+        e.call(0x008a_c850, &args![actor, 9u32]);
+        let object = new_object(&mut e);
+        answer(&mut e, ACTOR_VT, 0x428, object.addr());
+        assert_eq!(e.call(0x008a_c810, &args![actor]).u32(), object.addr() + 1);
+        e.call(0x008a_c850, &args![actor, 9u32]);
+        assert_eq!(e.mem.u32(object.addr() + 0x80), 9);
+        e.call(0x008a_c890, &args![object, 4u32]);
+        assert_eq!(e.mem.u32(object.addr() + 0x80), 4);
+    }
+
+    #[test]
+    fn height_from_the_two_points_and_the_process_store() {
+        let mut e = engine();
+        e.set_global(HEIGHT_FACTOR, 0.75f64);
+        let (actor, proc) = new_actor_with_process(&mut e);
+        let upper = new_object(&mut e);
+        let lower = new_object(&mut e);
+        e.mem.set_f32(upper.addr() + 8, 10.0);
+        e.mem.set_f32(lower.addr() + 8, 2.0);
+        answer(&mut e, ACTOR_VT, 0x390, 0);
+        answer(&mut e, ACTOR_VT, 0x1dc, upper.addr());
+        answer(&mut e, ACTOR_VT, 0x1d8, lower.addr());
+        // The process refuses the store.
+        e.register(0x0088_4920, |_, _| 0.into_ret());
+        let this: Ptr = Ptr::new(actor.addr() + 0xa8);
+        assert_eq!(e.call(0x008a_c8b0, &args![this]).f32(), 6.0);
+        // The process takes it: the object at +0x2c gets the float.
+        let stored = new_object(&mut e);
+        e.mem.set_u32(proc.addr() + 0x2c, stored.addr());
+        e.register(0x0088_4920, |_, _| 1.into_ret());
+        e.register(0x0088_48c0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008a_c8b0, &args![this]).f32(), 6.0);
+        assert_eq!(e.mem.f32(stored.addr() + 0x2c), 6.0);
+        let log = calls(&mut e);
+        assert_eq!(called(&log, 0x0088_48c0), vec![vec![stored.addr(), 0x200]]);
+    }
+
+    #[test]
+    fn height_with_a_controller_is_player_value_times_scale() {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        e.set_global(PLAYER_CHARACTER, 0x7777u32);
+        answer(&mut e, ACTOR_VT, 0x390, 1);
+        e.register(0x0070_c3b0, |_, a| {
+            assert_eq!(a[0], 0x7777);
+            2.0f64.into_ret()
+        });
+        e.register(0x0056_7400, |_, _| 1.5f32.into_ret());
+        let this: Ptr = Ptr::new(actor.addr() + 0xa8);
+        assert_eq!(e.call(0x008a_c8b0, &args![this]).f32(), 3.0);
+    }
+
+    #[test]
+    fn stores_in_the_process_state_object() {
+        let mut e = engine();
+        let object = new_object(&mut e);
+        let holder: Ptr = Ptr::new(e.mem.alloc(0x40));
+        e.register(0x0088_48c0, |_, _| Ret::default());
+        // Without the object nothing happens.
+        e.call(0x008a_c990, &args![holder, 1.5f32]);
+        e.call(0x008a_cb70, &args![holder, 1.5f32]);
+        e.mem.set_u32(holder.addr() + 0x2c, object.addr());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_c990, &args![holder, 1.5f32]);
+        e.call(0x008a_cb70, &args![holder, 2.5f32]);
+        assert_eq!(e.mem.f32(object.addr() + 0x2c), 1.5);
+        assert_eq!(e.mem.f32(object.addr() + 0x10), 2.5);
+        let log = calls(&mut e);
+        assert_eq!(
+            called(&log, 0x0088_48c0),
+            vec![vec![object.addr(), 0x200], vec![object.addr(), 8]]
+        );
+    }
+
+    #[test]
+    fn process_mark_needs_a_process_that_passes_the_test() {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        e.register(0x0088_4920, |_, _| 1.into_ret());
+        e.register(0x0088_4940, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_cba0, &args![actor]);
+        assert_eq!(called(&calls(&mut e), 0x0088_4940).len(), 0);
+        let (actor, proc) = new_actor_with_process(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_cba0, &args![actor]);
+        assert_eq!(
+            called(&calls(&mut e), 0x0088_4940),
+            vec![vec![proc.addr(), 8]]
+        );
+        e.register(0x0088_4920, |_, _| 0.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_cba0, &args![actor]);
+        assert_eq!(called(&calls(&mut e), 0x0088_4940).len(), 0);
+    }
+
+    /// Doubles for `008ac9d0`'s callees; `00645380` records its words.
+    fn stub_weapon_value(e: &mut Engine) {
+        e.register(0x0044_ddc0, |_, a| (a[0] + 0x100).into_ret());
+        e.register(0x004b_cdb0, |_, _| 50.0f32.into_ret());
+        e.register(0x0044_59e0, |_, _| Ret::default());
+        e.register(0x0088_4920, |_, _| 0.into_ret());
+        e.register(0x0064_5380, |_, _| 4.0f32.into_ret());
+    }
+
+    #[test]
+    fn weapon_value_of_the_process_item() {
+        let mut e = engine();
+        e.set_global(ITEM_HEALTH_DIVISOR, 100.0f64);
+        let (actor, proc) = new_actor_with_process(&mut e);
+        let item = new_object(&mut e);
+        stub_weapon_value(&mut e);
+        e.register(0x0045_cd60, |_, _| 1.into_ret());
+        answer(&mut e, PROCESS_VT, 0x148, item.addr());
+        e.call_log = Some(vec![]);
+        let this: Ptr = Ptr::new(actor.addr() + 0xa8);
+        assert_eq!(e.call(0x008a_c9d0, &args![this]).f32(), 4.0);
+        let log = calls(&mut e);
+        // base = actor + 0xa4, the item word, health 0.5, the item, -1 and
+        // floats 0.
+        assert_eq!(
+            called(&log, 0x0064_5380),
+            vec![vec![
+                actor.addr() + 0xa4,
+                item.addr() + 0x100,
+                0.5f32.to_bits(),
+                0,
+                item.addr(),
+                0,
+                0,
+                0xffff_ffff,
+                0,
+                0,
+                0,
+                0,
+                0
+            ]]
+        );
+        // The item stays; nothing is released.
+        assert_eq!(called(&log, 0x0044_59e0).len(), 0);
+        // With a process that passes the test the result is stored.
+        let stored = new_object(&mut e);
+        e.mem.set_u32(proc.addr() + 0x2c, stored.addr());
+        e.register(0x0088_4920, |_, _| 1.into_ret());
+        e.register(0x0088_48c0, |_, _| Ret::default());
+        e.call(0x008a_c9d0, &args![this]);
+        assert_eq!(e.mem.f32(stored.addr() + 0x10), 4.0);
+    }
+
+    #[test]
+    fn weapon_value_of_the_worn_weapon_releases_the_item() {
+        let mut e = engine();
+        e.set_global(ITEM_HEALTH_DIVISOR, 100.0f64);
+        let (actor, _) = new_actor_with_process(&mut e);
+        let item = new_object(&mut e);
+        stub_weapon_value(&mut e);
+        e.register(0x0045_cd60, |_, _| 2.into_ret());
+        e.register(0x004b_f220, |_, a| (a[0] + 0x30).into_ret());
+        e.register_double(0x004c_8c10, move |_, _| item.addr().into_ret());
+        e.call_log = Some(vec![]);
+        let this: Ptr = Ptr::new(actor.addr() + 0xa8);
+        assert_eq!(e.call(0x008a_c9d0, &args![this]).f32(), 4.0);
+        let log = calls(&mut e);
+        assert_eq!(called(&log, 0x0044_59e0), vec![vec![item.addr(), 1]]);
+        assert_eq!(
+            called(&log, 0x004c_8c10),
+            vec![vec![actor.addr() + 0x30, 5, 0]]
+        );
+        let words = &called(&log, 0x0064_5380)[0];
+        assert_eq!(words[1], item.addr() + 0x100);
+        assert_eq!(words[4], 0);
+        // No worn weapon: health stays 1.0 and the item word 0.
+        e.register(0x004c_8c10, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_c9d0, &args![this]);
+        let log = calls(&mut e);
+        let words = &called(&log, 0x0064_5380)[0];
+        assert_eq!(words[1], 0);
+        assert_eq!(words[2], 1.0f32.to_bits());
+        assert_eq!(called(&log, 0x0044_59e0).len(), 0);
+    }
+
+    #[test]
+    fn combat_strength() {
+        let mut e = engine();
+        e.set_global(ZERO_DOUBLE, 0.0f64);
+        e.set_global(THIRTY, 30.0f64);
+        e.set_global(COMBAT_STRENGTH_EXPONENT, 0.99f32);
+        let actor = new_actor(&mut e);
+        actor_value_table(&mut e, actor, 20);
+        answer_float(&mut e, ACTOR_VT, 0x440, 15.0);
+        e.register(0x008b_e600, |_, _| 10.0f32.into_ret());
+        e.register(0x0040_ebd0, |_, _| 0.5f32.into_ret());
+        e.call_log = Some(vec![]);
+        // Negative damage is replaced by the weapon's damage per second.
+        let result = e.call(0x008a_cbe0, &args![actor, -1.0f32]).f32();
+        assert_eq!(result, 400.0);
+        let log = calls(&mut e);
+        assert_eq!(
+            called(&log, 0x0040_ebd0),
+            vec![vec![0.5f32.to_bits(), 0.99f32.to_bits()]]
+        );
+        // A given damage is used as is.
+        e.call_log = Some(vec![]);
+        let result = e.call(0x008a_cbe0, &args![actor, 2.0f32]).f32();
+        assert_eq!(result, 80.0);
+        assert_eq!(called(&calls(&mut e), 0x008b_e600).len(), 0);
+    }
+
+    /// Doubles for every callee of `008acc80` outside this file.
+    fn stub_refresh(e: &mut Engine) {
+        stub(
+            e,
+            &[
+                0x00c9_bdf0,
+                0x008b_0b00,
+                0x0093_06d0,
+                0x008d_6f30,
+                0x0045_43c0,
+                0x00c7_0c90,
+                0x00c7_a8d0,
+                0x0049_3bd0,
+                0x004e_af60,
+                0x0095_0a60,
+                0x00c8_0700,
+                0x0045_0f90,
+            ],
+        );
+    }
+
+    #[test]
+    fn refresh_does_nothing_without_the_object() {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        stub_refresh(&mut e);
+        e.register(0x0043_fcd0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_cc80, &args![actor]);
+        assert_eq!(calls(&mut e).len(), 2);
+    }
+
+    #[test]
+    fn refresh_updates_the_controller_ragdoll_and_animation() {
+        let mut e = engine();
+        let (actor, _) = new_actor_with_process(&mut e);
+        stub_refresh(&mut e);
+        let object = new_object(&mut e);
+        let face = new_object(&mut e);
+        let controller = new_object(&mut e);
+        let cell = new_object(&mut e);
+        let ragdoll = new_object(&mut e);
+        let animation = new_object(&mut e);
+        e.register_double(0x0043_fcd0, move |_, _| object.addr().into_ret());
+        e.register_double(0x0093_06d0, move |_, _| controller.addr().into_ret());
+        e.register_double(0x008d_6f30, move |_, _| cell.addr().into_ret());
+        e.register(0x0045_43c0, |_, a| (a[0] + 1).into_ret());
+        e.set(actor, Actor::pRagdollController, ragdoll);
+        e.set(actor, Actor::eCriticalStage, 1);
+        answer(&mut e, PROCESS_VT, 0x144, face.addr());
+        answer(&mut e, ACTOR_VT, 0x1e4, animation.addr());
+        answer(&mut e, ACTOR_VT, 0x1d0, 0x5555);
+        e.set_global(PLAYER_CHARACTER, 0x7777u32);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_cc80, &args![actor]);
+        let log = calls(&mut e);
+        assert_eq!(
+            called(&log, 0x00c9_bdf0),
+            vec![vec![object.addr(), 1.0f32.to_bits()]]
+        );
+        assert_eq!(
+            called(&log, target(OBJECT_VT, 0xd8)),
+            vec![vec![face.addr(), 0, 0]]
+        );
+        assert_eq!(called(&log, 0x008b_0b00), vec![vec![actor.addr(), 1]]);
+        assert_eq!(
+            called(&log, 0x00c7_0c90),
+            vec![vec![controller.addr(), cell.addr() + 1]]
+        );
+        assert_eq!(called(&log, 0x00c7_a8d0), vec![vec![ragdoll.addr()]]);
+        // Not the player: one scene graph update; stage 1 passes the node.
+        assert_eq!(called(&log, 0x0049_3bd0), vec![vec![animation.addr()]]);
+        assert_eq!(called(&log, 0x00c8_0700), vec![vec![0x5555]]);
+        assert_eq!(called(&log, 0x0045_0f90).len(), 0);
+    }
+
+    #[test]
+    fn refresh_of_the_player_and_the_other_critical_stages() {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        stub_refresh(&mut e);
+        let object = new_object(&mut e);
+        let animation = new_object(&mut e);
+        e.register_double(0x0043_fcd0, move |_, _| object.addr().into_ret());
+        answer(&mut e, ACTOR_VT, 0x1e4, animation.addr());
+        answer(&mut e, ACTOR_VT, 0x1d0, 0x5555);
+        e.set_global(PLAYER_CHARACTER, actor.addr());
+        e.register(0x004e_af60, |_, _| 1.into_ret());
+        e.register(0x0095_0a60, |_, a| (a[0] + a[1]).into_ret());
+        // Stage 2: virtual +0x1c4, the node, then 00450f90(object, 0).
+        e.set(actor, Actor::eCriticalStage, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_cc80, &args![actor]);
+        let log = calls(&mut e);
+        assert_eq!(
+            called(&log, 0x0049_3bd0),
+            vec![vec![animation.addr()], vec![actor.addr() + 1]]
+        );
+        assert_eq!(called(&log, 0x0095_0a60), vec![vec![actor.addr(), 1]]);
+        assert_eq!(called(&log, target(ACTOR_VT, 0x1c4)).len(), 1);
+        assert_eq!(called(&log, 0x00c8_0700), vec![vec![0x5555]]);
+        assert_eq!(called(&log, 0x0045_0f90), vec![vec![object.addr(), 0]]);
+        // Stage 4: no node, but the same virtual method and call.
+        e.set(actor, Actor::eCriticalStage, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_cc80, &args![actor]);
+        let log = calls(&mut e);
+        assert_eq!(called(&log, target(ACTOR_VT, 0x1c4)).len(), 1);
+        assert_eq!(called(&log, 0x00c8_0700).len(), 0);
+        assert_eq!(called(&log, 0x0045_0f90), vec![vec![object.addr(), 0]]);
+        // Another stage: nothing more.
+        e.set(actor, Actor::eCriticalStage, 3);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_cc80, &args![actor]);
+        let log = calls(&mut e);
+        assert_eq!(called(&log, 0x00c8_0700).len(), 0);
+        assert_eq!(called(&log, 0x0045_0f90).len(), 0);
+    }
+
+    #[test]
+    fn life_state_toggles_go_through_set_life_state() {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        e.register(0x008a_1800, |_, _| Ret::default());
+        e.register(0x0088_4c60, |_, _| Ret::default());
+        e.register(0x004f_8960, |_, _| 0.into_ret());
+        for (addr, state, extra) in [(0x008a_ce10u32, 3u32, 0), (0x008a_ce50, 5, 1)] {
+            e.call_log = Some(vec![]);
+            e.call(addr, &args![actor, 1u32]);
+            let log = calls(&mut e);
+            assert_eq!(called(&log, 0x008a_1800), vec![vec![actor.addr(), state]]);
+            assert_eq!(called(&log, 0x0088_4c60).len(), extra);
+            // Clearing: only when the other state matches.
+            e.call_log = Some(vec![]);
+            e.call(addr, &args![actor, 0u32]);
+            assert_eq!(called(&calls(&mut e), 0x008a_1800).len(), 0);
+            e.register_double(0x004f_8960, move |_, _| state.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(addr, &args![actor, 0u32]);
+            let log = calls(&mut e);
+            assert_eq!(called(&log, 0x008a_1800), vec![vec![actor.addr(), 0]]);
+            assert_eq!(called(&log, 0x0088_4c60).len(), 0);
+            e.register(0x004f_8960, |_, _| 0.into_ret());
+        }
+    }
+
+    #[test]
+    fn ghost_flag_lives_in_the_state_object_flag_word() {
+        let mut e = engine();
+        let (actor, proc) = new_actor_with_process(&mut e);
+        let state = new_object(&mut e);
+        e.register(GET_EXTRA_LIST, |_, a| (a[0] + 0x10).into_ret());
+        e.register(0x0041_8a80, |_, a| (a[0] as u8).into_ret());
+        // Without the state object the flag reads clear.
+        assert!(!e.call(0x008a_ced0, &args![proc, 0x1000_0000u32]).bool());
+        e.mem.set_u32(proc.addr() + 0x2c, state.addr());
+        e.mem.set_u32(state.addr() + 0x44, 0x1000_0004);
+        assert!(e.call(0x008a_ced0, &args![proc, 0x1000_0000u32]).bool());
+        assert!(!e.call(0x008a_ced0, &args![proc, 0x2u32]).bool());
+        assert_eq!(e.call(0x008a_ce90, &args![actor]).u8(), 1);
+        // 008acfa0 and 008acf70 clear and set.
+        e.call(0x008a_cf70, &args![proc, 0x1000_0000u32, 0u32]);
+        assert_eq!(e.mem.u32(state.addr() + 0x44), 4);
+        assert_eq!(e.call(0x008a_ce90, &args![actor]).u8(), 0);
+        e.call(0x008a_cfa0, &args![state, 0x30u32, 1u32]);
+        assert_eq!(e.mem.u32(state.addr() + 0x44), 0x34);
+        // Without a process the extra data list decides.
+        let bare = new_actor(&mut e);
+        assert_eq!(
+            e.call(0x008a_ce90, &args![bare]).u8(),
+            (bare.addr() + 0x10) as u8
+        );
+    }
+
+    #[test]
+    fn set_ghost_updates_the_list_the_process_and_calls_the_slot() {
+        let mut e = engine();
+        let (actor, proc) = new_actor_with_process(&mut e);
+        let state = new_object(&mut e);
+        e.mem.set_u32(proc.addr() + 0x2c, state.addr());
+        e.register(GET_EXTRA_LIST, |_, a| (a[0] + 0x10).into_ret());
+        e.register(0x0041_a960, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_cf10, &args![actor, 1u32]);
+        let log = calls(&mut e);
+        assert_eq!(
+            called(&log, 0x0041_a960),
+            vec![vec![actor.addr() + 0x10, 1]]
+        );
+        assert_eq!(e.mem.u32(state.addr() + 0x44), 0x1000_0000);
+        assert_eq!(
+            called(&log, target(ACTOR_VT, 0x48)),
+            vec![vec![actor.addr(), 0x8000_0000]]
+        );
+        e.call(0x008a_cf10, &args![actor, 0u32]);
+        assert_eq!(e.mem.u32(state.addr() + 0x44), 0);
+        // No process: only the list and the slot.
+        let bare = new_actor(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_cf10, &args![bare, 1u32]);
+        assert_eq!(called(&calls(&mut e), 0x0041_a960).len(), 1);
+    }
+
+    #[test]
+    fn small_stores_and_forwarders() {
+        let mut e = engine();
+        let object: Ptr = Ptr::new(e.mem.alloc(0xc0));
+        e.call(0x008a_d8f0, &args![object, 0x1234_5601u32]);
+        assert_eq!(e.mem.u8(object.addr() + 0x9b), 1);
+        e.call(0x008a_dc20, &args![object, 7u32, 8u32, 9u32]);
+        assert_eq!(
+            [
+                e.mem.u32(object.addr() + 0x94),
+                e.mem.u32(object.addr() + 0x98),
+                e.mem.u32(object.addr() + 0x9c)
+            ],
+            [7, 8, 9]
+        );
+        // The face animation data comes from the process (with the actor).
+        let bare = new_actor(&mut e);
+        assert_eq!(e.call(0x008a_dcb0, &args![bare]).u32(), 0);
+        let (actor, _) = new_actor_with_process(&mut e);
+        e.register_double(target(PROCESS_VT, 0x144), |_, a| a[1].into_ret());
+        assert_eq!(e.call(0x008a_dcb0, &args![actor]).u32(), actor.addr());
+        // Clearing the weapon needs a process.
+        e.call_log = Some(vec![]);
+        e.call(0x008a_dc50, &args![bare]);
+        assert_eq!(calls(&mut e).len(), 2);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_dc50, &args![actor]);
+        let log = calls(&mut e);
+        assert_eq!(
+            called(&log, target(PROCESS_VT, 0x160)),
+            vec![vec![e.mem.u32(actor.addr() + 0x68), 0, 0, 0]]
+        );
+        assert_eq!(called(&log, target(PROCESS_VT, 0x168)).len(), 1);
+    }
+
+    /// Doubles for the callees of `008acff0`; `00837550` copies the record
+    /// it is given to the returned block.
+    fn collision_sound_doubles(e: &mut Engine) -> u32 {
+        let sink = e.mem.alloc(0x40);
+        e.register(0x0062_40d0, |_, _| Ret::default());
+        e.register(0x0044_ddc0, |_, a| (a[0] + 1).into_ret());
+        e.register(0x0044_6390, |_, a| (a[0] + 2).into_ret());
+        e.register(0x0083_7520, |_, _| Ret::default());
+        e.register_double(0x0083_7550, move |e, a| {
+            for i in 0..10 {
+                let word = e.mem.u32(a[0] + 4 * i);
+                e.mem.set_u32(sink + 4 * i, word);
+            }
+            Ret::default()
+        });
+        e.set_global(COLLISION_SOUND_LOUDNESS, 100.0f32);
+        e.set_global(COLLISION_SOUND_HALF, 0.5f32);
+        sink
+    }
+
+    #[test]
+    fn collision_sound_of_the_actor_itself() {
+        let mut e = engine();
+        let sink = collision_sound_doubles(&mut e);
+        let (actor, _) = new_actor_with_process(&mut e);
+        let item = new_object(&mut e);
+        answer(&mut e, PROCESS_VT, 0x148, item.addr());
+        e.call_log = Some(vec![]);
+        e.call(
+            0x008a_cff0,
+            &args![actor, 1.0f32, 2.0f32, 3.0f32, 0u32, 0x10u32, 5u32],
+        );
+        let log = calls(&mut e);
+        // 00837520(actor, 0, 0, actor, id, -1, -1, 1, 0) with the item id.
+        assert_eq!(
+            called(&log, 0x0083_7520),
+            vec![vec![
+                actor.addr(),
+                0,
+                0,
+                actor.addr(),
+                item.addr() + 3,
+                0xffff_ffff,
+                0xffff_ffff,
+                1,
+                0
+            ]]
+        );
+        let record: Vec<u32> = (0..9).map(|i| e.mem.u32(sink + 4 * i)).collect();
+        assert_eq!(record[0], 1.0f32.to_bits());
+        assert_eq!(record[1], 2.0f32.to_bits());
+        assert_eq!(record[2], 3.0f32.to_bits());
+        assert_eq!(record[3], 100.0f32.to_bits());
+        assert_eq!(record[4], 0.5f32.to_bits());
+        // Bytes 0x24 and the kind, then actor + index, 0 and the index.
+        assert_eq!(record[5], 0x24 | (5 << 8));
+        assert_eq!(record[6], actor.addr() + 0x10);
+        assert_eq!(record[7], 0);
+        assert_eq!(record[8], 0x10);
+        // Kind 6 skips the extra call but still plays the sound.
+        e.call_log = Some(vec![]);
+        e.call(
+            0x008a_cff0,
+            &args![actor, 1.0f32, 2.0f32, 3.0f32, 0u32, 0x10u32, 6u32],
+        );
+        let log = calls(&mut e);
+        assert_eq!(called(&log, 0x0083_7520).len(), 0);
+        assert_eq!(called(&log, 0x0083_7550).len(), 1);
+        // Without an item the id is -1.
+        answer(&mut e, PROCESS_VT, 0x148, 0);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x008a_cff0,
+            &args![actor, 1.0f32, 2.0f32, 3.0f32, 0u32, 0x10u32, 5u32],
+        );
+        let log = calls(&mut e);
+        assert_eq!(called(&log, 0x0083_7520)[0][4], 0xffff_ffff);
+    }
+
+    #[test]
+    fn collision_sound_of_a_hit_object() {
+        let mut e = engine();
+        let _ = collision_sound_doubles(&mut e);
+        let actor = new_actor(&mut e);
+        let hit = new_object(&mut e);
+        e.register_double(target(OBJECT_VT, 0x100), |_, _| 1.into_ret());
+        e.call_log = Some(vec![]);
+        // A hit that answers its virtual +0x100 gets the sound call alone.
+        e.call(
+            0x008a_cff0,
+            &args![actor, 0u32, 0u32, 0u32, hit, 3u32, 5u32],
+        );
+        let log = calls(&mut e);
+        assert_eq!(
+            called(&log, 0x0083_7520),
+            vec![vec![
+                actor.addr(),
+                0,
+                0,
+                hit.addr(),
+                0xffff_ffff,
+                0xffff_ffff,
+                0xffff_ffff,
+                0,
+                0
+            ]]
+        );
+        assert_eq!(called(&log, 0x0083_7550).len(), 0);
+    }
+
+    #[test]
+    fn collision_sound_takes_index_and_kind_from_the_collision_object() {
+        let mut e = engine();
+        let sink = collision_sound_doubles(&mut e);
+        let actor = new_actor(&mut e);
+        let hit = new_object(&mut e);
+        e.register_double(target(OBJECT_VT, 0x100), |_, _| 0.into_ret());
+        e.register_double(target(OBJECT_VT, 0x1d0), |_, _| 0x7001u32.into_ret());
+        // Node 0x7001 -> collision object 0x7002 -> index 0x30 -> kind 4.
+        e.register(0x004b_5260, |_, a| (a[0] + 1).into_ret());
+        e.register(0x006f_a820, |_, _| 0x30.into_ret());
+        e.register(0x004a_e6a0, |_, a| (a[0] + 1).into_ret());
+        e.register(0x0062_05a0, |_, a| (a[0] + 3).into_ret());
+        e.call(
+            0x008a_cff0,
+            &args![actor, 0u32, 0u32, 0u32, hit, 0u32, 0u32],
+        );
+        assert_eq!(e.mem.u32(sink + 0x18), actor.addr() + 0x30);
+        assert_eq!(e.mem.u32(sink + 0x20), 0x30);
+        assert_eq!(e.mem.u8(sink + 0x15), 0x34);
+    }
+
+    /// The pointer the list doubles keep nodes in: a node is two words,
+    /// the item and the next node.
+    fn list_doubles(e: &mut Engine) {
+        e.register(GET_CURRENT_PACKAGE, |_, _| Ret::default());
+        e.register(0x0096_a2d0, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, 0);
+            Ret::default()
+        });
+        e.register(0x005a_e3d0, |e, a| {
+            let item = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], item);
+            Ret::default()
+        });
+        e.register(0x0068_15c0, |_, a| a[0].into_ret());
+        e.register(0x0072_6070, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(0x005f_65d0, |e, a| {
+            let wanted = e.mem.u32(a[1]);
+            let mut node = a[0];
+            while node != 0 {
+                if e.mem.u32(node) == wanted {
+                    return 1.into_ret();
+                }
+                node = e.mem.u32(node + 4);
+            }
+            0.into_ret()
+        });
+        e.register(0x0090_5820, |e, a| {
+            let item = e.mem.u32(a[1]);
+            let added = e.mem.alloc(8);
+            e.mem.set_u32(added, item);
+            let after = e.mem.u32(a[0] + 4);
+            e.mem.set_u32(added + 4, after);
+            e.mem.set_u32(a[0] + 4, added);
+            Ret::default()
+        });
+        e.register(GET_EXTRA_LIST, |_, a| (a[0] + 0x10).into_ret());
+        e.register(0x0042_2700, |_, _| Ret::default());
+        e.register(0x004e_4470, |_, _| 0.25f64.into_ret());
+        e.register(0x004e_44b0, |_, _| 0.5f64.into_ret());
+        stub(
+            e,
+            &[
+                0x0041_6870,
+                0x0094_df60,
+                0x0044_0da0,
+                0x008b_0190,
+                0x0056_6950,
+                0x008c_7aa0,
+                0x0057_5830,
+                0x0057_57d0,
+                0x0057_5770,
+                0x0057_3800,
+                0x008b_3ad0,
+                0x0088_1680,
+                0x0045_11e0,
+                0x0087_b650,
+                0x0087_b190,
+            ],
+        );
+        e.register(0x0045_37b0, |_, _| 0x5eed.into_ret());
+        e.register(0x008b_e1b0, |_, _| 1.5f32.into_ret());
+        e.set_global(PLAYER_CHARACTER, 0u32);
+    }
+
+    /// An actor with process, 3D and the usual slot answers for the group
+    /// move.
+    fn group_member(e: &mut Engine) -> Ptr<Actor> {
+        let (actor, proc) = new_actor_with_process(e);
+        e.mem.set_u32(proc.addr(), PROCESS_VT);
+        actor
+    }
+
+    #[test]
+    fn group_move_places_the_leader_alone() {
+        let mut e = engine();
+        list_doubles(&mut e);
+        let player = e.mem.alloc(0x300);
+        e.set_global(PLAYER_CHARACTER, player);
+        e.set_global(ONE, 1.0f64);
+        e.set_global(FLOAT_MAX, 3.0e38f32);
+        let leader = group_member(&mut e);
+        let position: Ptr = Ptr::new(e.mem.alloc(0x10));
+        for (i, v) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+            e.mem.set_f32(position.addr() + 4 * i as u32, *v);
+        }
+        e.call_log = Some(vec![]);
+        e.call(
+            0x008a_d1c0,
+            &args![leader, position, 0.75f32, 0u32, 0x99u32, 0u32, 0u32],
+        );
+        let log = calls(&mut e);
+        // The direction is (-cos, -sin, 0) of the angle.
+        let direction = called(&log, 0x0041_6870);
+        assert_eq!(
+            direction[0][1..],
+            [
+                (-0.5f64 as f32).to_bits(),
+                (-0.25f64 as f32).to_bits(),
+                0.0f32.to_bits()
+            ]
+        );
+        assert_eq!(called(&log, 0x004e_4470), vec![vec![0.75f32.to_bits()]]);
+        // No cell: the way with virtual +0x2a8, the location, the huge range.
+        assert_eq!(called(&log, target(ACTOR_VT, 0x2a8)).len(), 1);
+        assert_eq!(called(&log, 0x0057_5830).len(), 1);
+        assert_eq!(
+            called(&log, 0x0057_5770),
+            vec![vec![leader.addr(), 3.0e38f32.to_bits()]]
+        );
+        assert_eq!(
+            called(&log, 0x0057_3800),
+            vec![vec![leader.addr(), 0, 0x99]]
+        );
+        // The leader is not stopped.
+        assert_eq!(called(&log, 0x008b_3ad0).len(), 0);
+        assert_eq!(called(&log, 0x0088_1680).len(), 0);
+        assert_eq!(called(&log, 0x0046_ffb0).len(), 1);
+    }
+
+    #[test]
+    fn group_move_skips_unavailable_and_visible_actors() {
+        let mut e = engine();
+        list_doubles(&mut e);
+        let player = e.mem.alloc(0x300);
+        e.set_global(PLAYER_CHARACTER, player);
+        e.set_global(ONE, 1.0f64);
+        let leader = group_member(&mut e);
+        let position: Ptr = Ptr::new(e.mem.alloc(0x10));
+        // The leader is busy (virtual +0x22c): nothing is placed.
+        e.register_double(target(ACTOR_VT, 0x22c), |_, _| 1.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(
+            0x008a_d1c0,
+            &args![leader, position, 0.0f32, 0u32, 0u32, 0u32, 0u32],
+        );
+        assert_eq!(called(&calls(&mut e), 0x0057_3800).len(), 0);
+        // The player's byte +0x204 stops everybody.
+        e.register_double(target(ACTOR_VT, 0x22c), |_, _| 0.into_ret());
+        e.mem.set_u8(player + 0x204, 1);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x008a_d1c0,
+            &args![leader, position, 0.0f32, 0u32, 0u32, 0u32, 0u32],
+        );
+        assert_eq!(called(&calls(&mut e), 0x0057_3800).len(), 0);
+        e.mem.set_u8(player + 0x204, 0);
+        // A visible leader with 3D is skipped... no: the leader always goes.
+        e.register_double(target(ACTOR_VT, 0x1d0), |_, _| 0x7001u32.into_ret());
+        e.register_double(0x008b_0190, |_, _| 1.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(
+            0x008a_d1c0,
+            &args![leader, position, 0.0f32, 0u32, 0u32, 0u32, 0u32],
+        );
+        assert_eq!(called(&calls(&mut e), 0x0057_3800).len(), 1);
+        // A waiting actor (forced update and value 1.0) is skipped.
+        e.register_double(0x0056_6950, |_, _| 1.into_ret());
+        e.register_double(0x008c_1740, |_, _| 1.0f64.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(
+            0x008a_d1c0,
+            &args![leader, position, 0.0f32, 0u32, 0u32, 0u32, 0u32],
+        );
+        let log = calls(&mut e);
+        assert_eq!(
+            called(&log, 0x008c_1740),
+            vec![vec![leader.addr(), WAITING]]
+        );
+        assert_eq!(called(&log, 0x0057_3800).len(), 0);
+        e.register_double(0x008c_1740, |_, _| 0.0f64.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(
+            0x008a_d1c0,
+            &args![leader, position, 0.0f32, 0u32, 0u32, 0u32, 0u32],
+        );
+        assert_eq!(called(&calls(&mut e), 0x0057_3800).len(), 1);
+    }
+
+    #[test]
+    fn group_move_spaces_the_follower_and_asks_the_pathing() {
+        let mut e = engine();
+        list_doubles(&mut e);
+        let player = e.mem.alloc(0x300);
+        e.set_global(PLAYER_CHARACTER, player);
+        e.set_global(ONE, 1.0f64);
+        e.set_global(TES_SINGLETON, 0x6000u32);
+        e.register(SETTING_VALUE_POINTER, |_, a| (a[0] + 4).into_ret());
+        e.set_global(SETTING_FOLLOWER_SPACING + 4, 2.0f32);
+        let leader = group_member(&mut e);
+        let follower = group_member(&mut e);
+        // The leader's extra data names the follower in a one-node list.
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, follower.addr());
+        let followers = e.mem.alloc(0x10);
+        e.mem.set_u32(followers + 0xc, node);
+        let leader_extra = leader.addr() + 0x10;
+        e.register_double(0x0042_2700, move |_, a| {
+            if a[0] == leader_extra {
+                followers.into_ret()
+            } else {
+                Ret::default()
+            }
+        });
+        // Cells are loaded; the pathing finds the spot (7, 8, 9).
+        e.register(0x0045_11e0, |_, _| 1.into_ret());
+        e.register(0x0045_bb20, |_, a| a[1].into_ret());
+        e.register(0x0043_9e90, |_, a| a[1].into_ret());
+        stub(
+            &mut e,
+            &[
+                0x006e_7650,
+                0x006e_2420,
+                0x006e_29f0,
+                0x006e_2b50,
+                0x006d_1bc0,
+            ],
+        );
+        e.register(0x006d_ce10, |_, a| a[0].into_ret());
+        stub(&mut e, &[0x004f_f7e0, 0x006e_2620, 0x006e_7720]);
+        e.register(0x006d_0900, |_, _| 1.into_ret());
+        e.register(0x006e_7e70, |e, a| {
+            for (i, v) in [7.0f32, 8.0, 9.0].iter().enumerate() {
+                e.mem.set_f32(a[5] + 4 * i as u32, *v);
+            }
+            1.into_ret()
+        });
+        let placed = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(u32, [f32; 3])>::new()));
+        let seen = placed.clone();
+        e.register_double(0x0057_5830, move |e, a| {
+            seen.borrow_mut().push((
+                a[0],
+                [e.mem.f32(a[1]), e.mem.f32(a[1] + 4), e.mem.f32(a[1] + 8)],
+            ));
+            Ret::default()
+        });
+        let position: Ptr = Ptr::new(e.mem.alloc(0x10));
+        for (i, v) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+            e.mem.set_f32(position.addr() + 4 * i as u32, *v);
+        }
+        e.call_log = Some(vec![]);
+        e.call(
+            0x008a_d1c0,
+            &args![leader, position, 0.0f32, 0x5000u32, 0x99u32, 1u32, 0u32],
+        );
+        let log = calls(&mut e);
+        // Leader at the position; follower at the pathing's spot.
+        assert_eq!(
+            *placed.borrow(),
+            vec![
+                (leader.addr(), [1.0, 2.0, 3.0]),
+                (follower.addr(), [7.0, 8.0, 9.0])
+            ]
+        );
+        // Radius 1.5 each, spacing 2: the follower is asked for 2 + 1.5 + 1.5.
+        let scaled = called(&log, 0x0045_bb20);
+        assert_eq!(scaled.len(), 1);
+        assert_eq!(scaled[0][2], 5.0f32.to_bits());
+        let request = called(&log, 0x006e_7e70);
+        assert_eq!(request[0][1], 0.0f32.to_bits());
+        assert_eq!(request[0][2], 5.0f32.to_bits());
+        assert_eq!(request[0][3], 1);
+        // The request is flagged (byte +0x9b) before it is used.
+        assert_eq!(called(&log, 0x006d_0900).len(), 1);
+        // The follower is stopped, the leader not; both get the move.
+        assert_eq!(called(&log, 0x008b_3ad0), vec![vec![follower.addr()]]);
+        assert_eq!(called(&log, 0x0088_1680), vec![vec![follower.addr(), 0]]);
+        assert_eq!(
+            called(&log, 0x0057_3800),
+            vec![
+                vec![leader.addr(), 0x5000, 0x99],
+                vec![follower.addr(), 0x5000, 0x99]
+            ]
+        );
+        // Both are in a loaded cell: the angle and the zero range.
+        assert_eq!(called(&log, 0x0057_57d0).len(), 2);
+        assert_eq!(
+            called(&log, 0x0057_5770),
+            vec![
+                vec![leader.addr(), 0.0f32.to_bits()],
+                vec![follower.addr(), 0.0f32.to_bits()]
+            ]
+        );
+    }
+
+    #[test]
+    fn group_move_takes_the_actor_off_its_furniture() {
+        let mut e = engine();
+        list_doubles(&mut e);
+        let player = e.mem.alloc(0x300);
+        e.set_global(PLAYER_CHARACTER, player);
+        e.set_global(ONE, 1.0f64);
+        e.set_global(PI_AS_FLOAT, 3.0f64);
+        let leader = group_member(&mut e);
+        let marker = new_object(&mut e);
+        answer(&mut e, PROCESS_VT, 0x4bc, 1);
+        answer(&mut e, PROCESS_VT, 0x4c4, 0x42);
+        answer(&mut e, PROCESS_VT, 0x4c8, 0x6000);
+        answer(&mut e, PROCESS_VT, 0x4d4, marker.addr());
+        stub(
+            &mut e,
+            &[
+                0x0056_8020,
+                0x0049_74a0,
+                0x0093_1d30,
+                0x00c5_4550,
+                0x0056_8ab0,
+                0x0098_ddd0,
+                0x0093_1fb0,
+                GET_ANIMATION,
+            ],
+        );
+        e.register(0x0050_94b0, |_, a| (a[0] + 1).into_ret());
+        e.register(GET_SAVE_FORM, |_, a| (a[0] + 2).into_ret());
+        e.register(0x0050_99c0, |_, _| 0.5f32.into_ret());
+        answer_float(&mut e, ACTOR_VT, 0x2bc, 1.0);
+        let position: Ptr = Ptr::new(e.mem.alloc(0x10));
+        e.call_log = Some(vec![]);
+        e.call(
+            0x008a_d1c0,
+            &args![leader, position, 0.0f32, 0u32, 0u32, 0u32, 0u32],
+        );
+        let log = calls(&mut e);
+        assert_eq!(called(&log, 0x0056_8020), vec![vec![0x6000, 0x42, 0]]);
+        assert_eq!(
+            called(&log, target(PROCESS_VT, 0x4c0)),
+            vec![vec![
+                e.mem.u32(leader.addr() + 0x68),
+                leader.addr(),
+                0,
+                0x6000,
+                0x7f
+            ]]
+        );
+        // The heading of the marker form is negated; the actor is turned by
+        // its own heading plus pi.
+        assert_eq!(
+            called(&log, 0x0050_99c0),
+            vec![vec![0x6002, marker.addr() + 1]]
+        );
+        assert_eq!(
+            called(&log, 0x0093_1d30),
+            vec![vec![leader.addr(), (-0.5f32).to_bits()]]
+        );
+        assert_eq!(
+            called(&log, target(ACTOR_VT, 0x2c4)),
+            vec![vec![leader.addr(), 4.0f32.to_bits()]]
+        );
+        assert_eq!(
+            called(&log, 0x00c5_4550),
+            vec![vec![marker.addr(), 0.0f32.to_bits()]]
+        );
+        assert_eq!(called(&log, 0x0056_8ab0), vec![vec![marker.addr(), 0]]);
+        assert_eq!(
+            called(&log, 0x0098_ddd0),
+            vec![vec![marker.addr(), ZERO_POINT]]
+        );
+        assert_eq!(
+            called(&log, target(PROCESS_VT, 0x540)),
+            vec![vec![
+                e.mem.u32(leader.addr() + 0x68),
+                0,
+                0x7f,
+                marker.addr()
+            ]]
+        );
+        assert_eq!(called(&log, 0x0093_1fb0), vec![vec![leader.addr(), 0]]);
+    }
+
+    #[test]
+    fn move_to_a_reference_forwards_its_place() {
+        let mut e = engine();
+        list_doubles(&mut e);
+        let player = e.mem.alloc(0x300);
+        e.set_global(PLAYER_CHARACTER, player);
+        e.set_global(ONE, 1.0f64);
+        e.register(SETTING_VALUE_POINTER, |_, a| (a[0] + 4).into_ret());
+        // The actor is busy, so only the setup of 008ad1c0 runs.
+        e.register_double(target(ACTOR_VT, 0x22c), |_, _| 1.into_ret());
+        let leader = group_member(&mut e);
+        let reference = new_object(&mut e);
+        let place = e.mem.alloc(0x10);
+        e.mem.set_f32(place + 8, 0.75);
+        e.register(0x0057_5d70, |_, _| 0x1111.into_ret());
+        e.register(GET_PARENT_CELL, |_, _| 0x2222.into_ret());
+        e.register_double(0x0043_0830, move |_, _| place.into_ret());
+        e.register_double(target(OBJECT_VT, 0x1f4), |_, _| 0x3333.into_ret());
+        e.call_log = Some(vec![]);
+        // The position block is read before the loop: map one for it.
+        let block = e.mem.alloc(0x10);
+        e.register_double(target(OBJECT_VT, 0x1f4), move |_, _| block.into_ret());
+        e.call(0x008a_d910, &args![leader, reference, 1u32, 0u32]);
+        let log = calls(&mut e);
+        assert_eq!(called(&log, 0x004e_4470), vec![vec![0.75f32.to_bits()]]);
+    }
+
+    #[test]
+    fn search_package_setup() {
+        let mut e = engine();
+        let (actor, proc) = new_actor_with_process(&mut e);
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(0x009f_66b0, |_, a| a[0].into_ret());
+        stub(
+            &mut e,
+            &[
+                0x0067_0fc0,
+                0x0082_6b40,
+                0x0082_6b90,
+                0x0067_f030,
+                0x0067_f3c0,
+                0x0067_1d30,
+                0x0067_0b30,
+                0x0067_a4a0,
+                0x0067_ff70,
+                0x0067_2fc0,
+                0x0098_4f60,
+                0x0068_00b0,
+                0x0068_0110,
+                0x0040_3550,
+            ],
+        );
+        e.register(0x0067_f030, |_, a| a[0].into_ret());
+        e.register(0x0067_ff70, |_, a| a[0].into_ret());
+        e.register(0x0067_1d10, |_, a| (a[0] + 0x100).into_ret());
+        e.register(SETTING_VALUE_POINTER, |_, a| (a[0] + 4).into_ret());
+        e.set_global(SETTING_SEARCH_DISTANCE + 4, 12.75f32);
+        e.register(FTOL, |_, a| {
+            let value = f64::from_bits(a[0] as u64 | (a[1] as u64) << 32);
+            (value as i32).into_ret()
+        });
+        e.register(0x0043_9090, |_, _| 1.into_ret());
+        e.set_global(ZERO_POINT, 0u32);
+        let package_store = e.mem.alloc(0x200);
+        e.register_double(0x009f_66b0, move |_, _| package_store.into_ret());
+        e.register(0x0067_1d10, |_, a| (a[0] + 0x100).into_ret());
+        let _ = proc;
+        e.call_log = Some(vec![]);
+        e.call(0x008a_d970, &args![actor, 0x77u32, 4u32, 5u32, 6u32, 1u32]);
+        let log = calls(&mut e);
+        // Package type, the location and the target are set up.
+        assert_eq!(called(&log, 0x0067_0fc0), vec![vec![package_store, 0x1e]]);
+        assert_eq!(called(&log, 0x0067_f3c0).len(), 1);
+        assert_eq!(called(&log, 0x0067_0b30).len(), 1);
+        assert_eq!(
+            called(&log, 0x0068_00b0),
+            vec![vec![package_store + 0x100, 0]]
+        );
+        assert_eq!(
+            called(&log, 0x0068_0110),
+            vec![vec![package_store + 0x100, 0x77]]
+        );
+        // The count is the setting truncated.
+        assert_eq!(
+            called(&log, 0x0040_3550),
+            vec![vec![package_store + 0x100, 12]]
+        );
+        assert_eq!(
+            called(&log, target(ACTOR_VT, 0x2f4)),
+            vec![vec![actor.addr(), package_store, 1, 1]]
+        );
+        // The nonzero place is stored in the package.
+        assert_eq!(e.mem.u32(package_store + 0x94), 4);
+        assert_eq!(e.mem.u32(package_store + 0x98), 5);
+        assert_eq!(e.mem.u32(package_store + 0x9c), 6);
+    }
+
+    /// Doubles for the small getters `Actor::GetPickUpSoundName` calls.
+    fn pick_up_doubles(e: &mut Engine) {
+        e.register(0x0072_6070, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(0x0044_ddc0, |e, a| e.mem.u32(a[0] + 8).into_ret());
+        e.register(0x0040_1170, |e, a| u32::from(e.mem.u8(a[0] + 4)).into_ret());
+        e.register(0x009a_cce0, |e, a| e.mem.u32(a[0] + 0xc8).into_ret());
+        e.register(0x0047_9430, |e, a| e.mem.u32(a[0] + 0x20).into_ret());
+        e.register(DYNAMIC_CAST, |e, a| e.mem.u32(a[0] + 0x10).into_ret());
+    }
+
+    /// A form: its component for `BGSPickupPutdownSounds` at +0x10 (the cast
+    /// result), the type byte at +4 and the equip type at +0x20.
+    fn pick_up_form(e: &mut Engine, kind: u8, equip: u32) -> Ptr {
+        let form = new_object(e);
+        e.mem.set_u8(form.addr() + 4, kind);
+        e.mem.set_u32(form.addr() + 0x20, equip);
+        form
+    }
+
+    #[test]
+    fn pick_up_sound_names_by_kind_and_direction() {
+        let mut e = engine();
+        pick_up_doubles(&mut e);
+        let actor = new_actor(&mut e);
+        let name = |e: &mut Engine, form: Ptr, up: u32, flag: u32| {
+            e.call(0x008a_dcf0, &args![actor, form, up, flag]).u32()
+        };
+        assert_eq!(name(&mut e, Ptr::new(0), 1, 0), 0);
+        // Weapons by equip type; anything else generic.
+        for (equip, up_name, down_name) in [
+            (0, SOUND_GUNS_BIG_UP, SOUND_GUNS_BIG_DOWN),
+            (2, SOUND_GUNS_SMALL_UP, SOUND_GUNS_SMALL_DOWN),
+            (3, SOUND_MELEE_UP, SOUND_MELEE_DOWN),
+            (1, SOUND_GENERIC_UP, SOUND_GENERIC_DOWN),
+        ] {
+            let weapon = pick_up_form(&mut e, 0x28, equip);
+            assert_eq!(name(&mut e, weapon, 1, 0), up_name);
+            assert_eq!(name(&mut e, weapon, 0, 0), down_name);
+        }
+        // Only `up == 1` is the up name of a generic form.
+        let other = pick_up_form(&mut e, 0x10, 0);
+        assert_eq!(name(&mut e, other, 1, 0), SOUND_GENERIC_UP);
+        assert_eq!(name(&mut e, other, 2, 0), SOUND_GENERIC_DOWN);
+        // Kind 0x2f with the flag: the sound of the field at +0xc8, or none.
+        let sound = new_object(&mut e);
+        e.register_double(target(OBJECT_VT, 0x130), |_, a| (a[0] + 5).into_ret());
+        let ammo = pick_up_form(&mut e, 0x2f, 0);
+        assert_eq!(name(&mut e, ammo, 1, 1), 0);
+        e.mem.set_u32(ammo.addr() + 0xc8, sound.addr());
+        assert_eq!(name(&mut e, ammo, 1, 1), sound.addr() + 5);
+        assert_eq!(name(&mut e, ammo, 1, 0), SOUND_GENERIC_UP);
+    }
+
+    #[test]
+    fn pick_up_sound_names_from_the_pickup_putdown_component() {
+        let mut e = engine();
+        pick_up_doubles(&mut e);
+        e.register_double(target(OBJECT_VT, 0x130), |_, a| (a[0] + 5).into_ret());
+        let actor = new_actor(&mut e);
+        let form = pick_up_form(&mut e, 0x28, 0);
+        let component = new_object(&mut e);
+        let pickup = new_object(&mut e);
+        let putdown = new_object(&mut e);
+        e.mem.set_u32(form.addr() + 0x10, component.addr());
+        // No sound set in the component: the weapon names.
+        assert_eq!(
+            e.call(0x008a_dcf0, &args![actor, form, 1u32, 0u32]).u32(),
+            SOUND_GUNS_BIG_UP
+        );
+        e.mem.set_u32(component.addr() + 4, pickup.addr());
+        e.mem.set_u32(component.addr() + 8, putdown.addr());
+        assert_eq!(
+            e.call(0x008a_dcf0, &args![actor, form, 1u32, 0u32]).u32(),
+            pickup.addr() + 5
+        );
+        assert_eq!(
+            e.call(0x008a_dcf0, &args![actor, form, 0u32, 0u32]).u32(),
+            putdown.addr() + 5
+        );
+        // With the flag the component is ignored.
+        assert_eq!(
+            e.call(0x008a_dcf0, &args![actor, form, 1u32, 1u32]).u32(),
+            SOUND_GUNS_BIG_UP
+        );
+    }
+
+    #[test]
+    fn pick_up_sound_plays_for_the_player_unless_it_already_does() {
+        let mut e = engine();
+        pick_up_doubles(&mut e);
+        let (actor, _) = new_actor_with_process(&mut e);
+        e.set_global(PLAYER_CHARACTER, actor.addr());
+        let form = pick_up_form(&mut e, 0x10, 0);
+        stub(
+            &mut e,
+            &[
+                SOUND_HANDLE_INIT,
+                SOUND_HANDLE_ASSIGN,
+                SOUND_HANDLE_DESTRUCT,
+            ],
+        );
+        e.register(0x0045_3a70, |_, _| 0xa0d10.into_ret());
+        e.register(0x00ad_7550, |_, a| a[1].into_ret());
+        e.register(0x00ad_8830, |_, _| Ret::default());
+        e.register(0x00ad_8930, |_, _| 0.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_ded0, &args![actor, form, 1u32, 0u32]);
+        let log = calls(&mut e);
+        let found = called(&log, 0x00ad_7550);
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            (found[0][0], found[0][2], found[0][3]),
+            (0xa0d10, SOUND_GENERIC_UP, 0x121)
+        );
+        assert_eq!(called(&log, 0x00ad_8830).len(), 1);
+        assert_eq!(called(&log, SOUND_HANDLE_DESTRUCT).len(), 2);
+        // The handle that was found is assigned to the local one.
+        assert_eq!(called(&log, SOUND_HANDLE_ASSIGN)[0][1], found[0][1]);
+        // Already playing: not played again.
+        e.register(0x00ad_8930, |_, _| 1.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_ded0, &args![actor, form, 1u32, 0u32]);
+        assert_eq!(called(&calls(&mut e), 0x00ad_8830).len(), 0);
+        // No item: nothing at all.
+        e.call_log = Some(vec![]);
+        e.call(0x008a_ded0, &args![actor, 0u32, 1u32, 0u32]);
+        assert_eq!(calls(&mut e).len(), 1);
+    }
+
+    #[test]
+    fn pick_up_sound_of_another_actor_goes_through_the_editor_name() {
+        let mut e = engine();
+        pick_up_doubles(&mut e);
+        let (actor, _) = new_actor_with_process(&mut e);
+        e.set_global(PLAYER_CHARACTER, 0x7777u32);
+        let form = pick_up_form(&mut e, 0x10, 0);
+        stub(
+            &mut e,
+            &[
+                SOUND_HANDLE_INIT,
+                SOUND_HANDLE_ASSIGN,
+                SOUND_HANDLE_DESTRUCT,
+            ],
+        );
+        e.register(0x0093_3270, |_, a| a[1].into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_ded0, &args![actor, form, 0u32, 0u32]);
+        let log = calls(&mut e);
+        let played = called(&log, 0x0093_3270);
+        assert_eq!(played.len(), 1);
+        assert_eq!(
+            (
+                played[0][0],
+                played[0][2],
+                played[0][3],
+                played[0][4],
+                played[0][5]
+            ),
+            (actor.addr(), SOUND_GENERIC_DOWN, 0, 0x102, 1)
+        );
+        assert_eq!(called(&log, 0x00ad_7550).len(), 0);
+    }
+
+    /// Doubles and an explosion record for `008ae000`.
+    fn impulse_engine() -> (Engine, Ptr<Actor>, Ptr, Ptr) {
+        let mut e = engine();
+        let (actor, _) = new_actor_with_process(&mut e);
+        let target_ref = new_object(&mut e);
+        let record: Ptr = Ptr::new(e.mem.alloc(0x100));
+        e.mem.set_u32(record.addr() + 4, target_ref.addr());
+        e.mem.set_f32(record.addr() + 0x14, 8.0);
+        answer(&mut e, ACTOR_VT, 0x1d0, 0);
+        e.set_global(ZERO_POINT, 0u32);
+        e.set_global(ZERO_DOUBLE, 0.0f64);
+        e.set_global(IMPULSE_SCALE_BODY, 2.0f32);
+        e.set_global(IMPULSE_SCALE_HIT, 3.0f32);
+        e.set_global(IMPULSE_FACTOR, 2.5f64);
+        e.set_global(TWO, 2.0f64);
+        e.set_global(IMPULSE_FLOOR_DOUBLE, 0.1f64);
+        e.set_global(IMPULSE_SLOPE, 0.9f64);
+        e.set_global(IMPULSE_FLOOR_FLOAT, 0.1f32);
+        e.register(0x0043_fcd0, |_, _| 0x7777.into_ret());
+        e.register(0x004a_0bd0, |_, a| a[1].into_ret());
+        e.register(0x0068_15c0, |_, a| a[0].into_ret());
+        e.register(0x0064_66e0, |_, a| f32::from_bits(a[0]).into_ret());
+        e.register(0x0040_4010, |_, a| f32::from_bits(a[0]).into_ret());
+        stub(
+            &mut e,
+            &[
+                0x0063_c8a0,
+                0x0043_9180,
+                0x004a_0c10,
+                0x00cb_9650,
+                0x00c6_a350,
+                0x0043_d410,
+                0x00a5_9c60,
+                0x004a_3e00,
+                0x0062_b660,
+            ],
+        );
+        e.register(0x0043_9ef0, |e, a| {
+            for i in 0..3 {
+                let value = e.mem.f32(a[0] + 4 * i) - e.mem.f32(a[2] + 4 * i);
+                e.mem.set_f32(a[1] + 4 * i, value);
+            }
+            a[1].into_ret()
+        });
+        (e, actor, record, target_ref)
+    }
+
+    #[test]
+    fn impulse_from_a_body_uses_the_strength_alone() {
+        let (mut e, actor, record, _) = impulse_engine();
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e000, &args![actor, record]);
+        let log = calls(&mut e);
+        // The strength is the one 006466e0 gave (8.0 for the body).
+        let impulse = called(&log, 0x0062_b660);
+        assert_eq!(impulse.len(), 1);
+        assert_eq!(impulse[0][0], 0x7777);
+        assert_eq!(impulse[0][2], 8.0f32.to_bits());
+        assert_eq!(impulse[0][3], record.addr());
+        // The direction is scaled by the body's float.
+        assert_eq!(called(&log, 0x0043_9180)[0][1], 2.0f32.to_bits());
+        assert_eq!(called(&log, 0x00c6_a350), vec![vec![0x7777, 1, 1, 0, 1]]);
+        assert_eq!(called(&log, 0x0043_d410)[0][1..], [0.0f32.to_bits(), 0, 0]);
+    }
+
+    #[test]
+    fn impulse_is_dropped_for_a_target_that_refuses() {
+        let (mut e, actor, record, target_ref) = impulse_engine();
+        // Virtual +0x21c true and +0x38c false: nothing happens.
+        e.register_double(target(OBJECT_VT, 0x21c), |_, _| 1.into_ret());
+        e.register_double(target(OBJECT_VT, 0x38c), |_, _| 0.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e000, &args![actor, record]);
+        assert_eq!(called(&calls(&mut e), 0x0062_b660).len(), 0);
+        // +0x38c true: it goes on.
+        e.register_double(target(OBJECT_VT, 0x38c), |_, _| 1.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e000, &args![actor, record]);
+        assert_eq!(called(&calls(&mut e), 0x0062_b660).len(), 1);
+        // No target at all, or a target without 3D.
+        e.mem.set_u32(record.addr() + 4, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e000, &args![actor, record]);
+        assert_eq!(called(&calls(&mut e), 0x0062_b660).len(), 0);
+        e.mem.set_u32(record.addr() + 4, target_ref.addr());
+        e.register(0x0043_fcd0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e000, &args![actor, record]);
+        assert_eq!(called(&calls(&mut e), 0x0062_b660).len(), 0);
+    }
+
+    #[test]
+    fn impulse_of_a_hit_falls_off_inside_the_blast_radius() {
+        let (mut e, actor, record, _) = impulse_engine();
+        // The source is a hit.
+        let source = new_object(&mut e);
+        e.register_double(target(OBJECT_VT, 0x224), |_, _| 1.into_ret());
+        e.mem.set_u32(record.addr() + 8, source.addr());
+        // Radii: 4.0 at +0x1a8 (strength 10) and 1.5 at +0x1b8.
+        let radii: Ptr = Ptr::new(e.mem.alloc(0x200));
+        e.mem.set_f32(radii.addr() + 0x1a8, 4.0);
+        e.mem.set_f32(radii.addr() + 0x1b8, 1.5);
+        e.mem.set_u32(record.addr() + 0x30, radii.addr());
+        // The body is at (1.5, 0.5): squared distance 2.5, between 2.25 and 3.
+        let body_point = floats(&mut e, &[1.5, 0.5, 0.0]);
+        e.register_double(0x0045_bb80, move |_, _| body_point.addr().into_ret());
+        let hit_point = floats(&mut e, &[0.0, 0.0, 0.0]);
+        e.register_double(0x004a_0bd0, move |_, _| hit_point.addr().into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e000, &args![actor, record]);
+        let log = calls(&mut e);
+        // 10 * (((2 * 2.25 - 2.5) / 2.25) * 0.9 + 0.1) = 9.
+        let impulse = called(&log, 0x0062_b660);
+        let strength = f32::from_bits(impulse[0][2]);
+        assert!((strength - 9.0).abs() < 1e-4, "{strength}");
+        assert_eq!(called(&log, 0x0064_66e0), vec![vec![8.0f32.to_bits(), 1]]);
+        // The hit scale is used.
+        assert_eq!(called(&log, 0x0043_9180)[0][1], 3.0f32.to_bits());
+        // Far outside twice the radius the strength is a tenth.
+        let far = floats(&mut e, &[10.0, 0.0, 0.0]);
+        e.register_double(0x0045_bb80, move |_, _| far.addr().into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e000, &args![actor, record]);
+        let impulse = called(&calls(&mut e), 0x0062_b660);
+        let strength = f32::from_bits(impulse[0][2]);
+        assert!((strength - 1.0).abs() < 1e-5, "{strength}");
+        // Inside the inner radius nothing changes: strength 10.
+        let near = floats(&mut e, &[0.5, 0.5, 0.0]);
+        e.register_double(0x0045_bb80, move |_, _| near.addr().into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e000, &args![actor, record]);
+        let impulse = called(&calls(&mut e), 0x0062_b660);
+        assert_eq!(f32::from_bits(impulse[0][2]), 10.0);
+        // A zero hit radius leaves the 10 as well.
+        e.mem.set_f32(radii.addr() + 0x1b8, 0.0);
+        e.register_double(0x0045_bb80, move |_, _| far.addr().into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e000, &args![actor, record]);
+        let impulse = called(&calls(&mut e), 0x0062_b660);
+        assert_eq!(f32::from_bits(impulse[0][2]), 10.0);
+    }
+
+    #[test]
+    fn impulse_of_a_hit_measures_from_the_3d_point_of_the_actor() {
+        let (mut e, actor, record, _) = impulse_engine();
+        let source = new_object(&mut e);
+        e.register_double(target(OBJECT_VT, 0x224), |_, _| 1.into_ret());
+        e.mem.set_u32(record.addr() + 8, source.addr());
+        let radii: Ptr = Ptr::new(e.mem.alloc(0x200));
+        e.mem.set_f32(radii.addr() + 0x1a8, 4.0);
+        e.mem.set_f32(radii.addr() + 0x1b8, 1.5);
+        e.mem.set_u32(record.addr() + 0x30, radii.addr());
+        // The actor's 3D point is (4, 5, 6): 00461130 gives the node and
+        // 00524c40 copies its point.
+        let node = floats(&mut e, &[4.0, 5.0, 6.0]);
+        answer(&mut e, ACTOR_VT, 0x1d0, node.addr());
+        answer(&mut e, PROCESS_VT, 0x460, 0x31);
+        e.register(0x0046_1130, |_, a| a[0].into_ret());
+        e.register(0x0052_4c40, |e, a| {
+            for i in 0..3 {
+                let value = e.mem.f32(a[0] + 4 * i);
+                e.mem.set_f32(a[1] + 4 * i, value);
+            }
+            a[1].into_ret()
+        });
+        // The body is at (5.5, 5.5, 6): 1.5 and 0.5 away in x and y.
+        let body_point = floats(&mut e, &[5.5, 5.5, 6.0]);
+        e.register_double(0x0045_bb80, move |_, _| body_point.addr().into_ret());
+        let hit_point = floats(&mut e, &[0.0, 0.0, 0.0]);
+        e.register_double(0x004a_0bd0, move |_, _| hit_point.addr().into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e000, &args![actor, record]);
+        let log = calls(&mut e);
+        // The part passed to 00524c40 is the process's virtual +0x460.
+        assert_eq!(called(&log, 0x0052_4c40)[0][2], 0x31);
+        let impulse = called(&log, 0x0062_b660);
+        let strength = f32::from_bits(impulse[0][2]);
+        assert!((strength - 9.0).abs() < 1e-4, "{strength}");
+    }
+
+    #[test]
+    fn impulse_of_a_body_starts_from_the_weapon_point() {
+        let (mut e, actor, scratch, _) = weapon_position_engine();
+        // Reuse the weapon position doubles for the actor and add those of
+        // 008ae000: the 3D node of the actor is its root.
+        let target_ref = new_object(&mut e);
+        let data: Ptr = Ptr::new(e.mem.alloc(0x100));
+        e.mem.set_u32(data.addr() + 4, target_ref.addr());
+        e.mem.set_f32(data.addr() + 0x14, 8.0);
+        answer(&mut e, PROCESS_VT, 0x460, 0);
+        e.set_global(IMPULSE_SCALE_BODY, 2.0f32);
+        e.register(0x0043_fcd0, |_, _| 0x7777.into_ret());
+        e.register(0x004a_0bd0, |_, a| a[1].into_ret());
+        e.register(0x0068_15c0, |_, a| a[0].into_ret());
+        e.register(0x0064_66e0, |_, a| f32::from_bits(a[0]).into_ret());
+        stub(
+            &mut e,
+            &[
+                0x0063_c8a0,
+                0x0043_9180,
+                0x004a_0c10,
+                0x00cb_9650,
+                0x00c6_a350,
+                0x0043_d410,
+                0x00a5_9c60,
+                0x004a_3e00,
+                0x0062_b660,
+            ],
+        );
+        // 00524c40 adds the translation of the node and the point given.
+        e.register(0x0052_4c40, |e, a| {
+            for i in 0..3 {
+                let sum = e.mem.f32(a[0] + 4 * i)
+                    + if a[2] != 0 {
+                        e.mem.f32(a[2] + 4 * i)
+                    } else {
+                        0.0
+                    };
+                e.mem.set_f32(a[1] + 4 * i, sum);
+            }
+            a[1].into_ret()
+        });
+        let differences = std::rc::Rc::new(std::cell::RefCell::new(Vec::<[f32; 6]>::new()));
+        let seen = differences.clone();
+        e.register_double(0x0043_9ef0, move |e, a| {
+            let mut row = [0.0f32; 6];
+            for i in 0..3 {
+                row[i] = e.mem.f32(a[0] + 4 * i as u32);
+                row[3 + i] = e.mem.f32(a[2] + 4 * i as u32);
+            }
+            seen.borrow_mut().push(row);
+            a[1].into_ret()
+        });
+        let weapon = e.call(0x008a_5340, &args![actor, scratch, 0u8]).ptr::<()>();
+        let weapon = point(&e, weapon);
+        answer(&mut e, PROCESS_VT, 0x148, 0x1234);
+        e.call(0x008a_e000, &args![actor, data]);
+        // A: the root point (10, 20, 30); B: the root point plus the weapon
+        // point; the difference is taken A - B.
+        let rows = differences.borrow();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][..3], [10.0, 20.0, 30.0]);
+        assert_eq!(
+            rows[0][3..],
+            [10.0 + weapon[0], 20.0 + weapon[1], 30.0 + weapon[2]]
+        );
+    }
+
+    #[test]
+    fn small_actor_getters_and_setters() {
+        let mut e = engine();
+        let object: Ptr = Ptr::new(e.mem.alloc(0x400));
+        e.mem.set_f32(object.addr() + 0x1a8, 1.5);
+        e.mem.set_f32(object.addr() + 0x1b8, 2.5);
+        assert_eq!(e.call(0x008a_e480, &args![object]).f32(), 1.5);
+        assert_eq!(e.call(0x008a_e4a0, &args![object]).f32(), 2.5);
+        e.call(0x008a_e620, &args![object, 0x1234u32]);
+        assert_eq!(e.call(0x008a_e600, &args![object]).u32(), 0x1234);
+        e.call(0x008a_e640, &args![object, 0x1_01u32]);
+        assert_eq!(e.mem.u8(object.addr() + 0x126), 1);
+        e.mem.set_u32(object.addr() + 0x3a8, 0x55);
+        assert_eq!(e.call(0x008a_fef0, &args![object]).u32(), 0x55);
+        e.register(0x0062_1b00, |_, _| 2.5f32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008a_ff10, &args![object]).f32(), 2.5);
+        assert_eq!(
+            called(&calls(&mut e), 0x0062_1b00),
+            vec![vec![object.addr() + 0x54]]
+        );
+    }
+
+    #[test]
+    fn collector_constructor_and_deleting_destructor() {
+        let mut e = engine();
+        let object: Ptr = Ptr::new(e.mem.alloc(0x40));
+        e.register(0x0062_d350, |_, _| Ret::default());
+        e.register(0x00cb_9900, |_, _| Ret::default());
+        e.register(0x0062_d470, |_, _| Ret::default());
+        assert_eq!(e.call(0x008a_ff30, &args![object]).ptr::<()>(), object);
+        assert_eq!(e.mem.u32(object.addr()), 0x0108_4e54);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x008a_ff50, &args![object, 0u32]).ptr::<()>(),
+            object
+        );
+        assert_eq!(called(&calls(&mut e), 0x0062_d470).len(), 0);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_ff50, &args![object, 3u32]);
+        assert_eq!(
+            called(&calls(&mut e), 0x0062_d470),
+            vec![vec![object.addr()]]
+        );
+    }
+
+    #[test]
+    fn location_on_reference_without_water_is_the_position() {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        let position = floats(&mut e, &[1.0, 2.0, 3.0]);
+        e.register_double(0x0043_6aa0, move |_, _| position.addr().into_ret());
+        e.set_global(NO_WATER, f64::from(f32::MIN));
+        e.register(0x005a_2030, |_, _| 0.into_ret());
+        assert_eq!(e.call(0x008a_e4c0, &args![actor]).u32(), position.addr());
+        // The check passes but there is no water.
+        e.register(0x005a_2030, |_, _| 1.into_ret());
+        e.register(0x0057_b0a0, |_, _| f32::MIN.into_ret());
+        assert_eq!(e.call(0x008a_e4c0, &args![actor]).u32(), position.addr());
+    }
+
+    #[test]
+    fn location_on_reference_copies_into_the_ring_and_clamps_to_the_water() {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        let position = floats(&mut e, &[1.0, 2.0, 3.0]);
+        e.register_double(0x0043_6aa0, move |_, _| position.addr().into_ret());
+        e.set_global(NO_WATER, f64::from(f32::MIN));
+        e.set_global(WATER_MARGIN, 5.0f64);
+        e.set_global(HEIGHT_FACTOR, 0.75f64);
+        e.register(0x005a_2030, |_, _| 1.into_ret());
+        e.register(0x0057_b0a0, |_, _| 10.0f32.into_ret());
+        e.register(GET_PARENT_CELL, |_, _| 0x3000.into_ret());
+        e.register(0x0045_18e0, |_, _| 1.into_ret());
+        e.register(0x0088_53a0, |_, _| 8.0f32.into_ret());
+        // z 3 + 6 = 9 is above the water minus 5: z is 5.
+        e.set_global(LOCATION_RING_INDEX, 2u32);
+        let slot = e.call(0x008a_e4c0, &args![actor]).u32();
+        assert_eq!(slot, LOCATION_RING + 3 * 12);
+        assert_eq!(point(&e, Ptr::new(slot)), [1.0, 2.0, 5.0]);
+        // The ring wraps after the fifth slot.
+        e.set_global(LOCATION_RING_INDEX, 4u32);
+        let slot = e.call(0x008a_e4c0, &args![actor]).u32();
+        assert_eq!(slot, LOCATION_RING);
+        // A deep water level leaves z + 6.
+        e.register(0x0057_b0a0, |_, _| 40.0f32.into_ret());
+        let slot = e.call(0x008a_e4c0, &args![actor]).u32();
+        assert_eq!(slot, LOCATION_RING + 12);
+        assert_eq!(point(&e, Ptr::new(slot)), [1.0, 2.0, 9.0]);
+        // No cell, or a cell that fails 004518e0: the plain copy.
+        e.register(0x0045_18e0, |_, _| 0.into_ret());
+        let slot = e.call(0x008a_e4c0, &args![actor]).u32();
+        assert_eq!(point(&e, Ptr::new(slot)), [1.0, 2.0, 3.0]);
+        e.register(GET_PARENT_CELL, |_, _| 0.into_ret());
+        let slot = e.call(0x008a_e4c0, &args![actor]).u32();
+        assert_eq!(point(&e, Ptr::new(slot)), [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn eye_vector_of_an_actor_adds_the_eye_level() {
+        let mut e = engine();
+        let (actor, _) = new_actor_with_process(&mut e);
+        e.set_global(PLAYER_CHARACTER, 0x7777u32);
+        let position = floats(&mut e, &[1.0, 2.0, 3.0]);
+        e.register_double(0x0043_6aa0, move |_, _| position.addr().into_ret());
+        e.register(0x008b_e940, |_, _| 1.5f32.into_ret());
+        e.register(0x0068_15c0, |_, a| a[0].into_ret());
+        answer_float(&mut e, ACTOR_VT, 0x2bc, 0.5);
+        stub(&mut e, &[0x004a_0c90, 0x0043_9f50, 0x004a_0c10]);
+        let out: Ptr = Ptr::new(e.mem.alloc(0x10));
+        let direction: Ptr = Ptr::new(e.mem.alloc(0x10));
+        e.call_log = Some(vec![]);
+        e.call(0x008a_ff80, &args![actor, out, direction, 1u32]);
+        assert_eq!(point(&e, out), [1.0, 2.0, 4.5]);
+        let log = calls(&mut e);
+        // The matrix is turned about z by the heading; no x rotation.
+        assert_eq!(called(&log, 0x004a_0c90)[0][1], 0.5f32.to_bits());
+        assert_eq!(called(&log, 0x0052_4ac0).len(), 0);
+        assert_eq!(called(&log, 0x0043_9f50)[0][1..], [1, direction.addr()]);
+        assert_eq!(called(&log, 0x004a_0c10), vec![vec![direction.addr()]]);
+    }
+
+    #[test]
+    fn eye_vector_of_the_player_uses_its_source_and_the_looking_angle() {
+        let mut e = engine();
+        let (actor, _) = new_actor_with_process(&mut e);
+        e.set_global(PLAYER_CHARACTER, actor.addr());
+        let source = new_object(&mut e);
+        e.set_global(PLAYER_EYE_SOURCE, source.addr());
+        let eye = floats(&mut e, &[4.0, 5.0, 6.0]);
+        e.register_double(0x0045_bb80, move |_, _| eye.addr().into_ret());
+        e.register(0x0068_15c0, |_, a| a[0].into_ret());
+        answer_float(&mut e, ACTOR_VT, 0x2bc, 0.5);
+        e.register(0x0093_1d70, |_, _| 0.25f32.into_ret());
+        e.register(0x0052_4ac0, |_, _| Ret::default());
+        // The product is a matrix of nine known words.
+        let product = e.mem.alloc(0x30);
+        for i in 0..9 {
+            e.mem.set_u32(product + 4 * i, 100 + i);
+        }
+        e.register_double(0x0043_f8d0, move |_, _| product.into_ret());
+        e.register(0x0052_4d10, |_, _| 1.into_ret());
+        e.register(0x0070_c410, |_, a| a[1].into_ret());
+        stub(&mut e, &[0x004a_0c90, 0x004a_0c10, 0x0063_c8a0]);
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::<u32>::new()));
+        let words = seen.clone();
+        e.register_double(0x0043_9f50, move |e, a| {
+            words
+                .borrow_mut()
+                .extend((0..9).map(|i| e.mem.u32(a[0] + 4 * i)));
+            Ret::default()
+        });
+        let out: Ptr = Ptr::new(e.mem.alloc(0x10));
+        let direction: Ptr = Ptr::new(e.mem.alloc(0x10));
+        e.call_log = Some(vec![]);
+        e.call(0x008a_ff80, &args![actor, out, direction, 1u32]);
+        assert_eq!(point(&e, out), [4.0, 5.0, 6.0]);
+        let log = calls(&mut e);
+        assert_eq!(called(&log, 0x0052_4ac0)[0][1], 0.25f32.to_bits());
+        assert_eq!(called(&log, 0x0063_c8a0).len(), 1);
+        // The rotation applied is the product (copied word by word).
+        assert_eq!(*seen.borrow(), (100..109).collect::<Vec<u32>>());
+        // Without the offset flag no offset is added.
+        e.call_log = Some(vec![]);
+        e.call(0x008a_ff80, &args![actor, out, direction, 0u32]);
+        assert_eq!(called(&calls(&mut e), 0x0063_c8a0).len(), 0);
+    }
+
+    /// Every function `008ae660` calls outside this file (and the callees of
+    /// the functions of this file it uses); the doubles answer 0 unless a
+    /// test says otherwise.
+    const HIT_CALLEES: &[u32] = &[
+        0x0040_1170,
+        0x0040_6cc0,
+        0x0040_8d60,
+        0x0040_ebd0,
+        0x0041_3f40,
+        0x0041_6870,
+        0x0041_81e0,
+        0x0043_01b0,
+        0x0043_9180,
+        0x0043_9ef0,
+        0x0043_b4d0,
+        0x0043_b4f0,
+        0x0043_b540,
+        0x0043_d4d0,
+        0x0044_59e0,
+        0x0044_6390,
+        0x0044_ddc0,
+        0x0045_19d0,
+        0x0045_3a70,
+        0x0045_43c0,
+        0x0045_7620,
+        0x0045_7880,
+        0x0045_78c0,
+        0x0045_8620,
+        0x0045_bb20,
+        0x0046_0140,
+        0x0046_1130,
+        0x0047_6b70,
+        0x0047_7ba0,
+        0x0049_97b0,
+        0x004a_0c10,
+        0x004a_1060,
+        0x004a_1a10,
+        0x004a_3760,
+        0x004a_37b0,
+        0x004a_3a20,
+        0x004a_3a40,
+        0x004a_3e00,
+        0x004a_3fe0,
+        0x004a_40a0,
+        0x004a_40c0,
+        0x004a_40e0,
+        0x004a_4100,
+        0x004a_4140,
+        0x004a_4180,
+        0x004a_41c0,
+        0x004a_41e0,
+        0x004a_4220,
+        0x004a_4240,
+        0x004a_e6a0,
+        0x004b_4ea0,
+        0x004b_5820,
+        0x004b_5950,
+        0x004b_59f0,
+        0x004b_5a80,
+        0x004b_6190,
+        0x004b_df00,
+        0x004b_e380,
+        0x0050_8100,
+        0x0051_1840,
+        0x0051_4410,
+        0x0051_7670,
+        0x0052_2ba0,
+        0x0052_4c40,
+        0x0052_5430,
+        0x0055_33c0,
+        0x0055_9450,
+        0x0056_f930,
+        0x005a_c750,
+        0x005f_2440,
+        0x005f_bf20,
+        0x0062_05a0,
+        0x0062_2a70,
+        0x0062_3090,
+        0x0062_31a0,
+        0x0062_33c0,
+        0x0062_4070,
+        0x0062_6b30,
+        0x0062_6c50,
+        0x0062_6d20,
+        0x0062_6dd0,
+        0x0062_dee0,
+        0x0062_e150,
+        0x0064_4520,
+        0x0064_5c20,
+        0x0064_6310,
+        0x0066_ef20,
+        0x0067_33e0,
+        0x0068_90b0,
+        0x0068_a810,
+        0x0068_a830,
+        0x006b_9130,
+        0x0070_3350,
+        0x0072_6070,
+        0x007a_f430,
+        0x0080_7770,
+        0x0081_f1e0,
+        0x0083_7520,
+        0x0089_1b90,
+        0x0089_d8b0,
+        0x008c_71b0,
+        0x008d_85e0,
+        0x0093_1ed0,
+        0x0096_11e0,
+        0x0096_3eb0,
+        0x009a_9350,
+        0x00ad_7480,
+        0x00ad_8830,
+        0x00ad_8b60,
+        0x00c7_fa90,
+        0x00cb_9900,
+        0x00ec_43fb,
+        0x0045_bb80,
+        0x008b_e940,
+        0x0052_4d10,
+        0x0070_c410,
+        0x0063_c8a0,
+        0x004a_0c90,
+        0x0093_1d70,
+        0x0052_4ac0,
+        0x0043_9f50,
+        0x0062_40d0,
+        0x0083_7550,
+        0x004b_5260,
+        0x006f_a820,
+        0x0062_d350,
+        0x0062_1b00,
+        0x0041_a250,
+        0x0041_8900,
+        0x0048_3710,
+    ];
+
+    /// The ray-cast world of `008ae660`: an actor whose swing hits the
+    /// object `hit_ref` (a reference, with a physics body when asked).
+    struct Swing {
+        e: Engine,
+        actor: Ptr<Actor>,
+        hit_ref: Ptr,
+        caster: u32,
+    }
+
+    fn swing_world() -> Swing {
+        let mut e = engine();
+        let (actor, _) = new_actor_with_process(&mut e);
+        stub(&mut e, HIT_CALLEES);
+        // Settings: the value pointer of a setting is its word at +4.
+        e.register(SETTING_VALUE_POINTER, |_, a| (a[0] + 4).into_ret());
+        e.register(0x0043_d4d0, |_, a| (a[0] + 4).into_ret());
+        e.set_global(SETTING_RANGE_DEFAULT + 4, 3u32);
+        e.set_global(SETTING_RANGE_KIND_1 + 4, 100.0f32);
+        e.set_global(SETTING_WEIGHT_EXPONENT + 4, 1.0f32);
+        e.set_global(SETTING_IMPULSE_FACTOR + 4, 2.0f32);
+        e.set_global(SETTING_SPEED_LIMIT + 4, 10.0f32);
+        e.set_global(SETTING_BODY_BOOST + 4, 4.0f32);
+        e.set_global(HIT_WEIGHT_BONUS, 3.0f64);
+        e.set_global(COLOR_CHANNEL_MAX, 255.0f64);
+        e.set_global(DECAL_VARIANT_RANGE, 4.0f32);
+        e.set_global(HIT_SHAKE_STRENGTH, 0.5f32);
+        e.set_global(ONE, 1.0f64);
+        e.set_global(ZERO_DOUBLE, 0.0f64);
+        e.set_global(PLAYER_CHARACTER, 0x7777u32);
+        e.set_global(TES_SINGLETON, 0x6600u32);
+        e.set_global(UNARMED_WEAPON, 0x7a00u32);
+        // The cell and the physics cell of the actor's cell.
+        e.register(GET_PARENT_CELL, |_, _| 0x6000.into_ret());
+        e.register(0x0045_43c0, |_, _| 0x6100.into_ret());
+        // The hit caster is a block of memory; its collidable (+0x48) and
+        // slot (+0x4c) are fixed.
+        let caster = e.mem.alloc(0x400);
+        e.mem.set_u32(caster + 0x48, 0x7001);
+        e.mem.set_u32(caster + 0x4c, 0xffff_ffff);
+        e.register_double(0x0062_6dd0, move |_, _| caster.into_ret());
+        e.register(0x0068_15c0, |_, a| a[0].into_ret());
+        e.register(0x0046_0140, |_, a| a[0].into_ret());
+        e.register(0x0080_7770, |_, a| a[0].into_ret());
+        e.register(0x0062_6b30, |_, _| 1.into_ret());
+        e.register(0x004b_5820, |_, _| 0x7002.into_ret());
+        let hit_ref = new_object(&mut e);
+        e.register_double(0x0056_f930, move |_, a| {
+            if a[0] == 0x7002 {
+                hit_ref.addr().into_ret()
+            } else {
+                0.into_ret()
+            }
+        });
+        e.register(GET_EXTRA_LIST, |_, a| (a[0] + 0x10).into_ret());
+        e.register(0x0044_ddc0, |_, a| (a[0] + 0x100).into_ret());
+        // The eye position is read from a block; the matrix product too.
+        let position = e.mem.alloc(0x10);
+        e.register_double(0x0043_6aa0, move |_, _| position.into_ret());
+        let product = e.mem.alloc(0x30);
+        e.register_double(0x0043_f8d0, move |_, _| product.into_ret());
+        answer(&mut e, ACTOR_VT, 0x1d0, 0);
+        Swing {
+            e,
+            actor,
+            hit_ref,
+            caster,
+        }
+    }
+
+    /// An impact record whose name object (+0x18) answers `name` to its
+    /// virtual method `+0x14`.
+    fn impact_record(e: &mut Engine, name: u32) -> Ptr {
+        let record: Ptr = Ptr::new(e.mem.alloc(0x100));
+        let table = e.mem.alloc(0x40);
+        e.mem.set_u32(table + 0x14, 0x6000_0014);
+        e.register_double(0x6000_0014, move |_, _| name.into_ret());
+        e.mem.set_u32(record.addr() + 0x18, table);
+        record
+    }
+
+    #[test]
+    fn swing_does_nothing_without_a_cell_a_caster_or_a_ray_hit() {
+        let mut w = swing_world();
+        let (actor, e) = (w.actor, &mut w.e);
+        e.register(0x0045_43c0, |_, _| 0.into_ret());
+        assert!(!e.call(0x008a_e660, &args![actor, 0u32]).bool());
+        e.register(0x0045_43c0, |_, _| 0x6100.into_ret());
+        e.register(0x0062_6dd0, |_, _| 0.into_ret());
+        assert!(!e.call(0x008a_e660, &args![actor, 0u32]).bool());
+        let caster = w.caster;
+        e.register_double(0x0062_6dd0, move |_, _| caster.into_ret());
+        // The ray misses: nothing else happens.
+        e.register(0x0062_6b30, |_, _| 0.into_ret());
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008a_e660, &args![actor, 0u32]).bool());
+        let log = calls(e);
+        assert_eq!(called(&log, 0x0062_6d20), vec![vec![caster, 0x6100]]);
+        assert_eq!(called(&log, 0x0062_6b30).len(), 1);
+        assert_eq!(called(&log, 0x0056_f930).len(), 0);
+        // The hit caster is told the actor's group when it differs.
+        e.register(0x004a_3a20, |_, _| 2.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e660, &args![actor, 0u32]);
+        assert_eq!(called(&calls(e), 0x0062_6c50), vec![vec![caster, 2]]);
+    }
+
+    #[test]
+    fn swing_range_comes_from_the_weapon_kind() {
+        let mut w = swing_world();
+        let (actor, e) = (w.actor, &mut w.e);
+        e.set_global(SETTING_RANGE_KIND_0 + 4, 50.0f32);
+        e.set_global(SETTING_RANGE_OTHER + 4, 70.0f32);
+        e.register(0x0062_6b30, |_, _| 0.into_ret());
+        for (kind, range) in [(0u32, 50.0f32), (1, 100.0), (2, 0.0), (9, 70.0)] {
+            e.register_double(0x0044_6390, move |_, _| kind.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x008a_e660, &args![actor, 0u32]);
+            let ray = called(&calls(e), 0x0062_6b30);
+            assert_eq!(ray[0][3], range.to_bits(), "kind {kind}");
+        }
+        // No form at all: the integer setting.
+        e.set_global(UNARMED_WEAPON, 0u32);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e660, &args![actor, 0u32]);
+        assert_eq!(called(&calls(e), 0x0062_6b30)[0][3], 3.0f32.to_bits());
+    }
+
+    /// The hit is an actor (`hit_ref` answers virtual `+0x100`) and the body
+    /// of the collidable `0x7004` is of class `0x1e`: no physics body.
+    fn swing_hits_an_actor(w: &mut Swing) -> u32 {
+        let e = &mut w.e;
+        e.register_double(target(OBJECT_VT, 0x100), |_, _| 1.into_ret());
+        e.register_double(target(OBJECT_VT, 0x22c), |_, _| 0.into_ret());
+        e.register(0x004b_5950, |_, _| 0x7004.into_ret());
+        e.register(0x004b_5a80, |_, _| 0x7005.into_ret());
+        e.register(0x0043_b4f0, |_, a| a[0].into_ret());
+        e.register(0x0043_b4d0, |_, a| {
+            (if a[0] == 0x7005 { 0x1eu32 } else { 0 }).into_ret()
+        });
+        w.hit_ref.addr()
+    }
+
+    #[test]
+    fn swing_at_an_actor_without_a_body_damages_it_directly() {
+        let mut w = swing_world();
+        let hit = swing_hits_an_actor(&mut w);
+        let (actor, e) = (w.actor, &mut w.e);
+        // Fists: the hand to hand formula writes 3.5.
+        e.register(0x0064_6310, |e, a| {
+            e.mem.set_f32(a[2], 3.5);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008a_e660, &args![actor, 0u32]).bool());
+        let log = calls(e);
+        // The target is not a creature type and has no armour.
+        assert_eq!(
+            called(&log, 0x0083_7520),
+            vec![vec![
+                actor.addr(),
+                3.5f32.to_bits(),
+                0,
+                hit,
+                0,
+                0xffff_ffff,
+                0xffff_ffff,
+                1,
+                0
+            ]]
+        );
+        let hand_to_hand = called(&log, 0x0064_6310);
+        assert_eq!(hand_to_hand[0][..2], [actor.addr() + 0xa4, 0]);
+        // A creature type (virtual +0x21c) takes the creature damage from
+        // virtual +0x444, and the other call of the creature target.
+        answer(e, ACTOR_VT, 0x21c, 1);
+        answer(e, ACTOR_VT, 0x444, 9);
+        e.register_double(target(OBJECT_VT, 0x21c), |_, _| 1.into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008a_e660, &args![actor, 0u32]).bool());
+        let log = calls(e);
+        assert_eq!(
+            called(&log, 0x0083_7520),
+            vec![vec![
+                actor.addr(),
+                9.0f32.to_bits(),
+                0,
+                hit,
+                0,
+                0xffff_ffff,
+                0xffff_ffff,
+                0,
+                0
+            ]]
+        );
+        // The target's armour is used when it has some, then released.
+        e.register_double(target(OBJECT_VT, 0x21c), |_, _| 0.into_ret());
+        e.register(0x0089_d8b0, |_, _| 0x7800.into_ret());
+        e.register(0x0051_4410, |_, a| (a[0] & 0x100).into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008a_e660, &args![actor, 0u32]).bool());
+        let log = calls(e);
+        assert_eq!(
+            called(&log, 0x0083_7520),
+            vec![vec![
+                actor.addr(),
+                9.0f32.to_bits(),
+                9.0f32.to_bits(),
+                hit,
+                0,
+                0,
+                0xffff_ffff,
+                1,
+                0
+            ]]
+        );
+        assert_eq!(called(&log, 0x0044_59e0), vec![vec![0x7800, 1]]);
+        // A target that is busy (virtual +0x22c) or without a body class
+        // 0x1e is left alone.
+        e.register_double(target(OBJECT_VT, 0x22c), |_, _| 1.into_ret());
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008a_e660, &args![actor, 0u32]).bool());
+        assert_eq!(called(&calls(e), 0x0083_7520).len(), 0);
+    }
+
+    #[test]
+    fn swing_damage_of_a_held_item_uses_the_power_attack_multiplier() {
+        let mut w = swing_world();
+        swing_hits_an_actor(&mut w);
+        let (actor, e) = (w.actor, &mut w.e);
+        let item = new_object(e);
+        answer(e, PROCESS_VT, 0x148, item.addr());
+        answer(e, ACTOR_VT, 0x1e4, 0x7b00);
+        e.register(0x0043_01b0, |_, _| 0x1234.into_ret());
+        e.register(0x005f_2440, |_, a| (a[0] + 1).into_ret());
+        e.register(0x008d_85e0, |_, _| 0x7c00.into_ret());
+        e.register(0x0066_ef20, |_, a| (a[1] + 1).into_ret());
+        e.register(0x0064_4520, |_, _| 2.0f32.into_ret());
+        e.register(0x004b_df00, |_, _| 21.0f32.into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008a_e660, &args![actor, 1u32]).bool());
+        let log = calls(e);
+        // The multiplier: 00644520(value, type) with type = group + 1.
+        assert_eq!(
+            called(&log, 0x0066_ef20),
+            vec![vec![actor.addr() + 0xa4, 0x7c00]]
+        );
+        assert_eq!(called(&log, 0x0064_4520), vec![vec![0x7c01, 0x1235]]);
+        assert_eq!(
+            called(&log, 0x004b_df00),
+            vec![vec![item.addr(), actor.addr() + 0xa4, 2.0f32.to_bits(), 0]]
+        );
+        assert_eq!(called(&log, 0x0083_7520)[0][1], 21.0f32.to_bits());
+        // Without the power attack flag the multiplier stays 1.
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e660, &args![actor, 0u32]);
+        let log = calls(e);
+        assert_eq!(called(&log, 0x0064_4520).len(), 0);
+        assert_eq!(called(&log, 0x004b_df00)[0][2], 1.0f32.to_bits());
+        // A creature type (virtual +0x21c) or 004997b0 also keeps it at 1.
+        e.register(0x0049_97b0, |_, _| 1.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e660, &args![actor, 1u32]);
+        assert_eq!(called(&calls(e), 0x0064_4520).len(), 0);
+        // The weapon value of the form is added when allowed.
+        e.register(0x0049_97b0, |_, _| 0.into_ret());
+        answer(e, ACTOR_VT, 0x360, 1);
+        e.register(0x0052_5430, |_, _| 1.into_ret());
+        e.register(0x0064_5c20, |_, _| 0x1_0005.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e660, &args![actor, 0u32]);
+        assert_eq!(called(&calls(e), 0x0083_7520)[0][1], 26.0f32.to_bits());
+    }
+
+    /// The swing hits a physics body: the body and body ref are set up.
+    fn swing_hits_a_body(w: &mut Swing) {
+        let e = &mut w.e;
+        e.register_double(target(OBJECT_VT, 0x100), |_, _| 1.into_ret());
+        e.register(0x004b_59f0, |_, _| 0x7003.into_ret());
+        e.register(0x004b_5a80, |_, _| 0x7004.into_ret());
+        e.register(0x0043_b4f0, |_, a| a[0].into_ret());
+        e.register(0x0043_b4d0, |_, _| 5.into_ret());
+        e.register(0x004a_e6a0, |_, _| 0x7600.into_ret());
+        e.register(0x0062_05a0, |_, a| a[0].into_ret());
+        e.register(0x004a_3a20, |_, _| 2.into_ret());
+        e.register(0x0045_8620, |e, a| {
+            for (i, v) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+                e.mem.set_f32(a[0] + 4 * i as u32, *v);
+            }
+            Ret::default()
+        });
+        e.register(0x0043_9ef0, |e, a| {
+            for (i, v) in [1.0f32, 0.0, 0.0].iter().enumerate() {
+                e.mem.set_f32(a[1] + 4 * i as u32, *v);
+            }
+            a[1].into_ret()
+        });
+        e.register(0x0045_bb20, |_, a| a[1].into_ret());
+        e.register(0x004b_e380, |_, _| 5.0f32.into_ret());
+        e.register(0x0040_ebd0, |_, a| f32::from_bits(a[0]).into_ret());
+        e.register(0x004b_4ea0, |_, _| 2.0f32.into_ret());
+        e.register(0x0064_6310, |e, a| {
+            e.mem.set_f32(a[2], 6.0);
+            Ret::default()
+        });
+        let record = impact_record(e, 0);
+        e.register_double(0x0052_2ba0, move |_, _| record.addr().into_ret());
+    }
+
+    #[test]
+    fn swing_at_a_body_pushes_it_and_plays_the_collision_sound() {
+        let mut w = swing_world();
+        swing_hits_a_body(&mut w);
+        let (actor, hit, e) = (w.actor, w.hit_ref, &mut w.e);
+        // The swing weapon has no impact record: the body is still pushed.
+        e.register(0x0052_2ba0, |_, _| 0.into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008a_e660, &args![actor, 0u32]).bool());
+        let log = calls(e);
+        // The impulse: scaled by weight (5 + 3), the speed ratio 2 / 10 and
+        // not boosted (00624070 answers 0).
+        let scale = called(&log, 0x0043_9180);
+        assert_eq!(scale.len(), 1);
+        assert_eq!(scale[0][1], 0.2f32.to_bits());
+        let pushes = called(&log, 0x0045_bb20);
+        assert_eq!(pushes.len(), 2);
+        assert_eq!(pushes[0][2], 2.0f32.to_bits());
+        assert_eq!(pushes[1][2], 8.0f32.to_bits());
+        // The body gets the impulse (0081f1e0 between the two 005533c0).
+        let bodies = called(&log, 0x0081_f1e0);
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[0][0], 0x7003);
+        assert_eq!(called(&log, 0x0055_33c0), vec![vec![0x6100], vec![0x6100]]);
+        // The collision sound of the hit object (it answers virtual +0x100).
+        let sound = called(&log, 0x0083_7520);
+        assert_eq!(sound.len(), 1);
+        assert_eq!(sound[0][3], hit.addr());
+        // The action flags are set on the extra data list of the reference.
+        assert_eq!(
+            called(&log, 0x005a_c750),
+            vec![
+                vec![actor.addr(), hit.addr() + 0x10, 0x80],
+                vec![0x7a00, hit.addr() + 0x10, 0x100]
+            ]
+        );
+        // The reference does not take damage: not an actor-damaging object.
+        assert_eq!(called(&log, target(OBJECT_VT, 0x144)).len(), 0);
+    }
+
+    #[test]
+    fn swing_at_a_body_boosts_a_light_class_and_does_not_slow_a_fast_one() {
+        let mut w = swing_world();
+        swing_hits_a_body(&mut w);
+        let (actor, e) = (w.actor, &mut w.e);
+        e.register(0x0062_4070, |_, _| 1.into_ret());
+        e.register(0x004b_4ea0, |_, _| 20.0f32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e660, &args![actor, 0u32]);
+        let scale = called(&calls(e), 0x0043_9180);
+        // Speed over the limit: no ratio, only the boost.
+        assert_eq!(scale.len(), 1);
+        assert_eq!(scale[0][1], 4.0f32.to_bits());
+    }
+
+    #[test]
+    fn swing_at_a_body_uses_the_worn_armour_without_a_weapon() {
+        let mut w = swing_world();
+        swing_hits_a_body(&mut w);
+        let (actor, e) = (w.actor, &mut w.e);
+        e.set_global(UNARMED_WEAPON, 0u32);
+        e.register(0x0089_1b90, |_, a| {
+            (if a[1] == 3 { 0x7d00u32 } else { 0 }).into_ret()
+        });
+        e.register(0x006b_9130, |_, _| 1.5f32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e660, &args![actor, 0u32]);
+        let log = calls(e);
+        // The chest armour weighs 1.5 (+ 3 for the swing).
+        let pushes = called(&log, 0x0045_bb20);
+        assert_eq!(pushes[1][2], 4.5f32.to_bits());
+        assert_eq!(called(&log, 0x0044_59e0), vec![vec![0x7d00, 1]]);
+        // No armour at all: weight 3.
+        e.register(0x0089_1b90, |_, _| 0.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e660, &args![actor, 0u32]);
+        let pushes = called(&calls(e), 0x0045_bb20);
+        assert_eq!(pushes[1][2], 3.0f32.to_bits());
+    }
+
+    #[test]
+    fn swing_at_a_body_leaves_decals_on_matching_colliders() {
+        let mut w = swing_world();
+        swing_hits_a_body(&mut w);
+        let (actor, e) = (w.actor, &mut w.e);
+        // The impact record of the material and its effect 0x7e48.
+        let impact = impact_record(e, 0);
+        e.register_double(0x0052_2ba0, move |_, _| impact.addr().into_ret());
+        e.register(0x0067_33e0, |_, _| 0x7e48.into_ret());
+        e.register(0x004a_40c0, |_, _| 2.0f32.into_ret());
+        e.register(0x004a_40a0, |_, _| 1.0f32.into_ret());
+        e.register(0x0047_6b70, |_, a| f32::from_bits(a[0]).into_ret());
+        e.register(0x0062_2a70, |_, _| 0x7f00.into_ret());
+        // The collider list: two entries, the first matching the material
+        // 0x7600 and the second not.
+        let list = e.mem.alloc(0x20);
+        let entries = e.mem.alloc(0x40);
+        let first = e.mem.alloc(0x20);
+        let second = e.mem.alloc(0x20);
+        e.mem.set_u32(first, 0x7600);
+        e.mem.set_u32(second, 0x7601);
+        e.mem.set_u32(entries + 8, first);
+        e.mem.set_u32(entries + 0xc, 0xffff_ffff);
+        e.mem.set_u32(entries + 0x10 + 8, second);
+        e.mem.set_u32(entries + 0x10 + 0xc, 0xffff_ffff);
+        e.mem.set_u32(list, entries);
+        e.mem.set_u32(list + 4, 2);
+        e.register_double(0x0041_3f40, move |_, _| list.into_ret());
+        e.register(0x0072_6070, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(0x0062_e150, |e, a| (e.mem.u32(a[0]) + a[1] * 16).into_ret());
+        e.register(0x0055_9450, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(0x004a_3a40, |_, a| a[0].into_ret());
+        e.register(0x008c_71b0, |_, a| a[0].into_ret());
+        // Not the landscape: the collider's own 3D and reference.
+        e.register(0x00c7_fa90, |_, _| 0x7002.into_ret());
+        e.register(0x004a_1060, |_, _| 1.into_ret());
+        e.register(0x0045_19d0, |_, _| 0x8100.into_ret());
+        e.register(0x0062_1b00, |_, _| 0.25f32.into_ret());
+        e.register(0x004a_4220, |_, _| 0x0033_6699.into_ret());
+        e.register(0x004a_4140, |_, _| 1.into_ret());
+        e.register(0x004a_4180, |_, _| 2.into_ret());
+        e.register(0x004a_4100, |_, _| 3.into_ret());
+        e.register(0x004a_41e0, |_, _| 4.into_ret());
+        e.register(0x004a_41c0, |_, _| 5.5f32.into_ret());
+        e.register(0x004a_40e0, |_, _| 6.5f32.into_ret());
+        e.register(0x009a_9350, |_, _| 7.5f32.into_ret());
+        e.register(0x004a_4240, |_, _| 0.75f32.into_ret());
+        e.register(0x0040_6cc0, |_, _| 2.5f64.into_ret());
+        e.register(FTOL, |_, a| {
+            (f64::from_bits(a[0] as u64 | (a[1] as u64) << 32) as i32).into_ret()
+        });
+        e.register(0x0041_6870, |e, a| {
+            for i in 1..4 {
+                e.mem.set_u32(a[0] + 4 * (i - 1), a[i as usize]);
+            }
+            a[0].into_ret()
+        });
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Vec<u32>>::new()));
+        let record = seen.clone();
+        e.register_double(0x004a_3fe0, move |e, a| {
+            record
+                .borrow_mut()
+                .push((0..0x1f).map(|i| e.mem.u32(a[1] + 4 * i)).collect());
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008a_e660, &args![actor, 0u32]).bool());
+        let log = calls(e);
+        // The decal is made with the drawn size, flagged twice, cast into
+        // the cell, and the collector asked and freed.
+        assert_eq!(called(&log, 0x0062_2a70), vec![vec![1.0f32.to_bits(), 1]]);
+        assert_eq!(called(&log, 0x004a_1a10).len(), 2);
+        assert_eq!(called(&log, 0x0062_31a0), vec![vec![0x7f00, 0x6100]]);
+        assert_eq!(called(&log, 0x0062_3090).len(), 1);
+        assert_eq!(called(&log, 0x00cb_9900).len(), 1);
+        // Only the matching collider gets a decal (at the cell's spot).
+        let infos = seen.borrow();
+        assert_eq!(infos.len(), 1);
+        assert_eq!(called(&log, 0x004a_3fe0)[0][0], 0x8100);
+        let info = &infos[0];
+        // The origin (the contact point) and the direction.
+        assert_eq!(
+            info[..3],
+            [1.0f32.to_bits(), 2.0f32.to_bits(), 3.0f32.to_bits()]
+        );
+        assert_eq!(
+            info[3..6],
+            [1.0f32.to_bits(), 2.0f32.to_bits(), 3.0f32.to_bits()]
+        );
+        // The size twice, the spread, the random angle.
+        assert_eq!(info[0x38 / 4], 1.0f32.to_bits());
+        assert_eq!(info[0x3c / 4], 1.0f32.to_bits());
+        assert_eq!(info[0x40 / 4], 0.25f32.to_bits());
+        assert_eq!(info[0x44 / 4], 0.75f32.to_bits());
+        // The collider's 3D target, the effect, the flags and the variant.
+        assert_eq!(info[0x28 / 4], 0x7002);
+        assert_eq!(info[0x30 / 4], 0x7e48);
+        assert_eq!(info[0x70 / 4].to_le_bytes(), [2, 0, 0, 3]);
+        assert_eq!(info[0x74 / 4].to_le_bytes(), [2, 1, 4, 0]);
+        assert_eq!(info[0x4c / 4], 5.5f32.to_bits());
+        assert_eq!(info[0x54 / 4], 6.5f32.to_bits());
+        assert_eq!(info[0x58 / 4], 7.5f32.to_bits());
+        // Blue, green, red of 0x336699 over 255.
+        let channel = |value: u32| (f64::from(value) / 255.0) as f32;
+        assert_eq!(
+            info[0x60 / 4..0x6c / 4],
+            [
+                channel(0x99).to_bits(),
+                channel(0x66).to_bits(),
+                channel(0x33).to_bits()
+            ]
+        );
+    }
+
+    #[test]
+    fn swing_at_a_body_plays_the_impact_sounds_and_damages_the_reference() {
+        let mut w = swing_world();
+        swing_hits_a_body(&mut w);
+        let (actor, hit, e) = (w.actor, w.hit_ref, &mut w.e);
+        // The record has two sound names but no effect.
+        e.register(0x0068_a810, |_, _| 0x8200.into_ret());
+        e.register(0x0068_a830, |_, _| 0x8300.into_ret());
+        e.register(0x0051_1840, |_, a| (a[0] + 1).into_ret());
+        e.register(0x0045_3a70, |_, _| 0xa0d10.into_ret());
+        e.register(0x00ad_7480, |_, a| a[1].into_ret());
+        // The reference takes the damage (virtual +0x224) of the fists, 6.
+        e.register_double(target(OBJECT_VT, 0x224), |_, _| 1.into_ret());
+        e.register(0x0051_7670, |_, _| 3.into_ret());
+        answer(e, ACTOR_VT, 0x168, 0x8400);
+        e.register(0x0047_7ba0, |_, _| 1.into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008a_e660, &args![actor, 0u32]).bool());
+        let log = calls(e);
+        let sounds = called(&log, 0x00ad_7480);
+        assert_eq!(sounds.len(), 2);
+        assert_eq!(
+            (sounds[0][2], sounds[0][3], sounds[0][4]),
+            (0x8201, 0x4102, 0x8200)
+        );
+        assert_eq!(
+            (sounds[1][2], sounds[1][3], sounds[1][4]),
+            (0x8301, 0x4102, 0x8300)
+        );
+        // Each is played from the contact point.
+        let positions = called(&log, 0x00ad_8b60);
+        assert_eq!(positions.len(), 2);
+        assert_eq!(
+            positions[0][1..],
+            [1.0f32.to_bits(), 2.0f32.to_bits(), 3.0f32.to_bits()]
+        );
+        assert_eq!(called(&log, 0x00ad_8830).len(), 2);
+        // The reference learns its attacker (low body class 3 < 4) and takes
+        // the damage; the shake is the player's only.
+        assert_eq!(
+            called(&log, target(OBJECT_VT, 0x164)),
+            vec![vec![hit.addr(), 0x8400]]
+        );
+        assert_eq!(
+            called(&log, target(OBJECT_VT, 0x144)),
+            vec![vec![hit.addr(), 6.0f32.to_bits(), 0]]
+        );
+        assert_eq!(called(&log, 0x0096_3eb0).len(), 0);
+        // A body class of 4 or more does not.
+        e.register(0x0051_7670, |_, _| 4.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e660, &args![actor, 0u32]);
+        assert_eq!(called(&calls(e), target(OBJECT_VT, 0x164)).len(), 0);
+        // For the player the shake is called.
+        e.set_global(PLAYER_CHARACTER, actor.addr());
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e660, &args![actor, 0u32]);
+        let shake = called(&calls(e), 0x0096_3eb0);
+        assert_eq!(shake, vec![vec![actor.addr(), 10, 0.5f32.to_bits(), 0]]);
+    }
+
+    #[test]
+    fn swing_at_a_body_leaves_a_humanoid_effect_unless_turned_off() {
+        let mut w = swing_world();
+        swing_hits_a_body(&mut w);
+        let (actor, e) = (w.actor, &mut w.e);
+        // The name object at +0x18 answers a pointer to "x".
+        let name = e.mem.alloc(0x10);
+        e.mem.set_u8(name, b'x');
+        let impact = impact_record(e, name);
+        e.register_double(0x0052_2ba0, move |_, _| impact.addr().into_ret());
+        e.register(0x0050_8100, |_, _| 0.5f32.into_ret());
+        e.register(0x004b_6190, |_, _| 0.25f32.into_ret());
+        e.register(0x004a_3760, |_, a| a[0].into_ret());
+        // The hit is an actor with a creature base form.
+        e.register(0x0041_81e0, |_, _| 0x8500.into_ret());
+        e.register(DYNAMIC_CAST, |_, _| 0x8600.into_ret());
+        e.register(0x005f_bf20, |_, _| 1.into_ret());
+        e.register(0x0040_8d60, |_, a| a[0].into_ret());
+        e.set_global(SETTING_NO_HUMANOID_EFFECT, 0u32);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e660, &args![actor, 0u32]);
+        let log = calls(e);
+        let effect = called(&log, 0x0068_90b0);
+        assert_eq!(effect.len(), 1);
+        assert_eq!(effect[0][0], 0x6000);
+        assert_eq!(effect[0][1], 0.5f32.to_bits());
+        assert_eq!(effect[0][2], name);
+        assert_eq!(effect[0][9..], [1.0f32.to_bits(), 7, 0]);
+        // The setting byte turns it off.
+        e.set_global(SETTING_NO_HUMANOID_EFFECT, 1u32);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e660, &args![actor, 0u32]);
+        assert_eq!(called(&calls(e), 0x0068_90b0).len(), 0);
+        // An empty name stays quiet as well.
+        e.set_global(SETTING_NO_HUMANOID_EFFECT, 0u32);
+        e.mem.set_u8(name, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_e660, &args![actor, 0u32]);
+        assert_eq!(called(&calls(e), 0x0068_90b0).len(), 0);
+    }
+
+    #[test]
+    fn swing_by_the_player_at_its_activation_target_sets_the_action_flag() {
+        let mut w = swing_world();
+        let (actor, hit, e) = (w.actor, w.hit_ref, &mut w.e);
+        e.set_global(PLAYER_CHARACTER, actor.addr());
+        // The hit reference lives in a cell whose form is 0x8700 (+8).
+        e.register(GET_SAVE_FORM, |_, _| 0x8708.into_ret());
+        e.register_double(0x0070_3350, move |_, _| hit.addr().into_ret());
+        e.register(0x0062_dee0, |_, a| u32::from(a[0] == 0x8700).into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008a_e660, &args![actor, 0u32]).bool());
+        let log = calls(e);
+        assert_eq!(
+            called(&log, 0x005a_c750),
+            vec![vec![hit.addr(), hit.addr() + 0x10, 0x1000_0000]]
+        );
+        // Another reference than the activation target: nothing.
+        e.register(0x0070_3350, |_, _| 0x1234.into_ret());
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008a_e660, &args![actor, 0u32]).bool());
+        assert_eq!(called(&calls(e), 0x005a_c750).len(), 0);
     }
 }
