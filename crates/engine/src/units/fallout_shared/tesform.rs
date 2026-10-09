@@ -12,8 +12,20 @@
 //! - the form array (`FORM_LIST`, `BSSimpleArray`-shaped: items at +4, count
 //!   at +0x0C) of the forms that carry flag 2 (`fn_00484730`).
 //!
-//! Done so far: the first 40 open functions of the unit, `00483370` to
-//! `00484bc0`. The next session continues at `00484bf0`.
+//! Done so far: the first 80 open functions of the unit, `00483370` to
+//! `00485c10`. The next session continues at `00485d50` (`AddCompileIndex`).
+//!
+//! The record writer (`StartForm`, `CloseForm`, the `AddChunk` family) works
+//! on the buffer in `SAVE_BUFFER` / `SAVE_BUFFER_SIZE`: a 0x18 byte record
+//! header (type tag at +0, data size at +4, flags at +8, form ID at +0x0C,
+//! version-control word at +0x10, version at +0x14 as a `u16`, one more
+//! `u16` at +0x16), followed by chunks of a 4 byte tag, a `u16` size and the
+//! data. All chunk writers end in [`tes_form_add_chunk_data`].
+//!
+//! The form's source file list (`BSSimpleList` at +0x10) is walked by node:
+//! a node is an item word at +0 and a next pointer at +4, and the list's
+//! first node is embedded in the form; [`list_first`], [`list_item`] and
+//! [`list_next`] wrap the game's own accessors.
 //!
 //! The flag setters share two helpers, [`set_form_flag`] and
 //! [`notify_changed`] (the form's virtual at +0x48 called with 1).
@@ -168,6 +180,99 @@ const DISABLE_WARNING_COUNT: u32 = 0x0043_b2b0;
 const DEFLATE_INIT: u32 = 0x00b4_6360;
 const DEFLATE: u32 = 0x00b4_6b70;
 const DEFLATE_END: u32 = 0x00b4_7370;
+
+// ---- callees outside this file, second batch ----
+/// `__RTDynamicCast(object, vfdelta, source type, target type, is_reference)`
+/// (cdecl) and the type descriptors the forms are cast between.
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// Type descriptor `.?AVTESForm@@`.
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+/// Type descriptor `.?AVBaseFormComponent@@`.
+const TYPE_BASE_FORM_COMPONENT: u32 = 0x0118_3040;
+/// Type descriptor `.?AVTESObjectREFR@@`.
+const TYPE_TES_OBJECT_REFR: u32 = 0x0118_41cc;
+/// `TESSaveLoadGame` methods the form's old save/load helpers forward to:
+/// `SaveGameDataOLD(buffer, size)`, `LoadGameDataOLD(buffer, size)`,
+/// `SaveNumericID(a, b)` and `LoadNumericID(a, b)`.
+const SAVE_LOAD_SAVE_DATA: u32 = 0x0085_79b0;
+const SAVE_LOAD_LOAD_DATA: u32 = 0x0085_79e0;
+const SAVE_LOAD_SAVE_NUMERIC_ID: u32 = 0x0085_7a10;
+const SAVE_LOAD_LOAD_NUMERIC_ID: u32 = 0x0085_7aa0;
+/// On a save/load buffer object: stores the word at +0x17 (its save kind)
+/// in the out parameter; and `bits_set(word pointer, mask)`.
+const BUFFER_SAVE_KIND: u32 = 0x0042_8110;
+const WORD_HAS_BITS: u32 = 0x0042_80f0;
+/// Save buffer: `Write(data, size, 0)`. Load buffer: `Read(data, size)`.
+const SAVE_BUFFER_WRITE: u32 = 0x0086_5e50;
+const LOAD_BUFFER_READ: u32 = 0x0086_4980;
+/// `MOV EAX,[ECX+8]`: the form's flags.
+const FORM_FLAGS: u32 = 0x0044_ddc0;
+/// The form type's string: `formEnumString[cFormType].string` (`+4` of the
+/// form-type table entry).
+const FORM_TYPE_NAME: u32 = 0x0044_0e30;
+/// What `00474cb0` computes from the form's virtual at +0x130 (a string): 0
+/// while it runs re-entrantly or when the string is null, else `0044a670` of
+/// the string.
+const FORM_NAME_KEY: u32 = 0x0047_4cb0;
+/// `strcmp`-like comparison of two strings (cdecl, 0 when equal).
+const STRING_COMPARE: u32 = 0x0040_4dc0;
+/// `TESFile::LoadForm(file, form)`.
+const FILE_LOAD_FORM: u32 = 0x0047_2f60;
+/// `file + 0x3ec`: the address of a file's list of masters.
+const FILE_MASTER_LIST: u32 = 0x0046_4df0;
+/// The end of a file's chain (`TESFile` +4 repeatedly, to the last link whose
+/// +4 is null); `SetFile` replaces the file it is given by this one.
+const FILE_ROOT: u32 = 0x0047_3c70;
+/// `TESFile::GetMaster` (Xbox PDB name).
+const FILE_IS_MASTER: u32 = 0x0047_1c20;
+/// `BSSimpleList` accessors: the first node of the form's list (`form +
+/// 0x10`), a node's item address (the node itself), a node's next pointer
+/// (+4) and whether a node is empty (no item and no next).
+const LIST_FIRST_NODE: u32 = 0x0046_0140;
+const LIST_NODE_ITEM: u32 = 0x0068_15c0;
+const LIST_NODE_NEXT: u32 = 0x0072_6070;
+const LIST_NODE_EMPTY: u32 = 0x0082_56d0;
+/// `BSSimpleList` operations on a node: remove the node's own item (the next
+/// node moves up; the last node is just cleared), remove the first node whose
+/// item equals the argument item, append an item at the end, and push an item
+/// at the front.
+const LIST_POP_NODE: u32 = 0x0063_f7b0;
+const LIST_REMOVE_ITEM: u32 = 0x0090_5330;
+const LIST_APPEND: u32 = 0x0090_5820;
+const LIST_PUSH_FRONT: u32 = 0x005a_e3d0;
+/// `FormComponentCollection` copy and compare (the argument is the other
+/// collection).
+const COMPONENTS_COPY: u32 = 0x0047_c600;
+const COMPONENTS_COMPARE: u32 = 0x0047_c670;
+/// Returns the record version (0xf) the form writer stamps in a record.
+const RECORD_VERSION: u32 = 0x0047_0bb0;
+/// Byte-swaps the `u16` at the pointer (second argument 0).
+const SWAP_HALF: u32 = 0x0040_7a90;
+/// Swaps a chunk header in place (the word at +0, the `u16` at +4).
+const SWAP_CHUNK_HEADER: u32 = 0x0041_41e0;
+/// `realloc(block, size)`: the memory manager's resize.
+const BUFFER_REALLOC: u32 = 0x0042_f5d0;
+/// The log texts of `Copy` and `Compare` for forms that have no override.
+const COPY_MESSAGE: u32 = 0x0101_c930;
+const COMPARE_MESSAGE: u32 = 0x0101_c978;
+/// The tag `"XXXX"` of the chunk written when a chunk is larger than 0xffff.
+const OVERSIZE_CHUNK_TAG: u32 = 0x5858_5858;
+/// `iFormFlags` bits `StartForm` keeps for a form of a type other than 1.
+const START_FORM_FLAGS_MASK: u32 = 0x3003_2fe0;
+/// `iFormFlags` bits `LoadGame` takes from the save: for a reference
+/// (`TESObjectREFR`) and for any other form.
+const LOAD_GAME_REFERENCE_FLAGS: u32 = 0x0091_2860;
+const LOAD_GAME_FORM_FLAGS: u32 = 0x4000_0c20;
+/// Flags `fn_004853e0` ignores when comparing two forms.
+const COMPARE_FLAGS_MASK: u32 = 0xffff_bff4;
+/// The form's virtual at +0xc8 (takes the other form's "flag 2" state when it
+/// differs), at +0xdc (called by `StartForm` last), at +0xf0 (a boolean:
+/// true selects the reference mask when flags are loaded) and at +0x130
+/// (returns a string, used as the form's name).
+const SLOT_SET_FLAG_2: u32 = 0xc8;
+const SLOT_AFTER_START: u32 = 0xdc;
+const SLOT_IS_REFERENCE: u32 = 0xf0;
+const SLOT_NAME: u32 = 0x130;
 
 // `iFormFlags` bits set or cleared by the setters in this file that have a
 // named role.
@@ -881,6 +986,772 @@ pub fn fn_00484bc0(e: &mut Engine, this: Ptr<TESForm>, changes: u32) {
     e.call(BGS_CHANGE_SIBLING, &args![bgs, this, value]);
 }
 
+/// The first node of the form's source file list (the node embedded at +0x10).
+fn list_first(e: &mut Engine, form: Ptr<TESForm>) -> u32 {
+    e.call(LIST_FIRST_NODE, &args![form]).u32()
+}
+
+/// The item (a file pointer) of a list node: the word at the address the
+/// game's accessor gives.
+fn list_item(e: &mut Engine, node: u32) -> u32 {
+    let slot = e.call(LIST_NODE_ITEM, &args![node]).u32();
+    e.mem.u32(slot)
+}
+
+/// The node after `node` (null at the end).
+fn list_next(e: &mut Engine, node: u32) -> u32 {
+    e.call(LIST_NODE_NEXT, &args![node]).u32()
+}
+
+/// Runs `f` with a stack word holding `value`, the way the game passes the
+/// address of a local item to the list operations.
+fn with_item<R>(e: &mut Engine, value: u32, f: impl FnOnce(&mut Engine, Ptr) -> R) -> R {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), value);
+        f(e, slot)
+    })
+}
+
+/// Whether the target stores multi-byte values big-endian (`00401500`).
+fn is_big_endian(e: &mut Engine) -> bool {
+    e.call(IS_BIG_ENDIAN, &args![]).bool()
+}
+
+/// The packed string word of a form type's entry in the form-type table
+/// (what a record header carries as its type).
+fn form_type_tag(e: &mut Engine, form: Ptr<TESForm>) -> u32 {
+    let form_type = e.call(FORM_TYPE, &args![form]).u32();
+    e.mem
+        .u32(FORM_ENUM_TABLE.wrapping_add(form_type.wrapping_mul(FORM_ENUM_STRIDE)) + 8)
+}
+
+/// `form.cast<TESForm>()` of a `BaseFormComponent` pointer (null when the
+/// object is not a form).
+fn cast_component_to_form(e: &mut Engine, component: Ptr) -> Ptr<TESForm> {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![
+            component,
+            0u32,
+            TYPE_BASE_FORM_COMPONENT,
+            TYPE_TES_FORM,
+            0u32
+        ],
+    )
+    .ptr()
+}
+
+// Translated from 00484bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A virtual of `TESForm` (no Xbox PDB name): 4 when bit 0 of `flags` is set,
+/// else 0. `fn_00484c20` and `fn_00484da0` save and load these 4 bytes (the
+/// form's flags) under the same bit.
+pub fn fn_00484bf0(_e: &mut Engine, _this: Ptr<TESForm>, flags: u32) -> u16 {
+    if flags & 1 != 0 {
+        4
+    } else {
+        0
+    }
+}
+
+// Translated from 00484c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A virtual of `TESForm` (no Xbox PDB name): when bit 0 of `flags` is set,
+/// saves the form's flags word (+8, 4 bytes) with `SaveGameDataOLD`.
+pub fn fn_00484c20(e: &mut Engine, this: Ptr<TESForm>, flags: u32) {
+    if flags & 1 != 0 {
+        tes_form_save_game_data_old(e, this, this.byte_add(8), 4);
+    }
+}
+
+// Translated from 00484c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::LoadGame` (Xbox PDB): when bit 0 of `flags` is set, reads 4
+/// bytes with `LoadGameDataOLD` and merges them into the form's flags: a form
+/// that casts to `TESObjectREFR` takes the bits `0x912860`, any other form
+/// the bits `0x40000c20`.
+pub fn tes_form_load_game(e: &mut Engine, this: Ptr<TESForm>, flags: u32) {
+    if flags & 1 == 0 {
+        return;
+    }
+    let saved = e.with_stack(4, |e, word| {
+        tes_form_load_game_data_old(e, this, word, 4);
+        e.mem.u32(word.addr())
+    });
+    let reference = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![this, 0u32, TYPE_TES_FORM, TYPE_TES_OBJECT_REFR, 0u32],
+        )
+        .u32();
+    let current = e.get(this, TESForm::iFormFlags);
+    let merged = if reference != 0 {
+        current & !LOAD_GAME_REFERENCE_FLAGS | saved & LOAD_GAME_REFERENCE_FLAGS
+    } else {
+        current & !LOAD_GAME_FORM_FLAGS | saved & LOAD_GAME_FORM_FLAGS
+    };
+    e.set(this, TESForm::iFormFlags, merged);
+}
+
+// Translated from 00484ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::SaveGameDataOLD` (Xbox PDB): forwards `(buffer, size)` to the
+/// `TESSaveLoadGame` instance's `SaveGameDataOLD`.
+pub fn tes_form_save_game_data_old(e: &mut Engine, _this: Ptr<TESForm>, buffer: Ptr, size: u32) {
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME);
+    e.call(SAVE_LOAD_SAVE_DATA, &args![save_load, buffer, size]);
+}
+
+// Translated from 00484d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::LoadGameDataOLD` (Xbox PDB): forwards `(buffer, size)` to the
+/// `TESSaveLoadGame` instance's `LoadGameDataOLD`.
+pub fn tes_form_load_game_data_old(e: &mut Engine, _this: Ptr<TESForm>, buffer: Ptr, size: u32) {
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME);
+    e.call(SAVE_LOAD_LOAD_DATA, &args![save_load, buffer, size]);
+}
+
+// Translated from 00484d20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::SaveNumericID` (Xbox PDB): forwards its two words to the
+/// `TESSaveLoadGame` instance's `SaveNumericID`.
+pub fn tes_form_save_numeric_id(e: &mut Engine, _this: Ptr<TESForm>, first: u32, second: u32) {
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME);
+    e.call(SAVE_LOAD_SAVE_NUMERIC_ID, &args![save_load, first, second]);
+}
+
+// Translated from 00484d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::LoadNumericID` (Xbox PDB): forwards its two words to the
+/// `TESSaveLoadGame` instance's `LoadNumericID`.
+pub fn tes_form_load_numeric_id(e: &mut Engine, _this: Ptr<TESForm>, first: u32, second: u32) {
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME);
+    e.call(SAVE_LOAD_LOAD_NUMERIC_ID, &args![save_load, first, second]);
+}
+
+// Translated from 00484d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A virtual of `TESForm` (no Xbox PDB name): when bit 0 of the save kind
+/// word of `buffer` (+0x17) is set, writes the form's flags word (+8, 4
+/// bytes) to `buffer`.
+pub fn fn_00484d60(e: &mut Engine, this: Ptr<TESForm>, buffer: Ptr) {
+    let wanted = e.with_stack(4, |e, kind| {
+        let kind = e.call(BUFFER_SAVE_KIND, &args![buffer, kind]).u32();
+        e.call(WORD_HAS_BITS, &args![kind, 1u32]).bool()
+    });
+    if wanted {
+        e.call(
+            SAVE_BUFFER_WRITE,
+            &args![buffer, this.byte_add(8), 4u32, 0u32],
+        );
+    }
+}
+
+// Translated from 00484da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A virtual of `TESForm` (no Xbox PDB name): the load counterpart of
+/// `fn_00484d60`. When bit 0 of `buffer`'s save kind is set, reads 4 bytes
+/// and merges them into the form's flags with the same masks as
+/// [`tes_form_load_game`], choosing by the form's virtual at +0xf0.
+pub fn fn_00484da0(e: &mut Engine, this: Ptr<TESForm>, buffer: Ptr) {
+    let wanted = e.with_stack(4, |e, kind| {
+        let kind = e.call(BUFFER_SAVE_KIND, &args![buffer, kind]).u32();
+        e.call(WORD_HAS_BITS, &args![kind, 1u32]).bool()
+    });
+    if !wanted {
+        return;
+    }
+    let saved = e.with_stack(4, |e, word| {
+        e.call(LOAD_BUFFER_READ, &args![buffer, word, 4u32]);
+        e.mem.u32(word.addr())
+    });
+    let current = e.get(this, TESForm::iFormFlags);
+    let merged = if e.vcall(this.addr(), SLOT_IS_REFERENCE, &[]).bool() {
+        current & !LOAD_GAME_REFERENCE_FLAGS | saved & LOAD_GAME_REFERENCE_FLAGS
+    } else {
+        current & !LOAD_GAME_FORM_FLAGS | saved & LOAD_GAME_FORM_FLAGS
+    };
+    e.set(this, TESForm::iFormFlags, merged);
+}
+
+// Translated from 00484e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the form's ID is in the range `1..=0x7ff` (`fn_00484b40` of the
+/// word at +0x0C).
+pub fn fn_00484e40(e: &mut Engine, this: Ptr<TESForm>) -> bool {
+    let id = e.call(WORD_AT_0C, &args![this]).u32();
+    fn_00484b40(e, id)
+}
+
+// Translated from 00484e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::GetFile` (Xbox PDB): the file at position `index` among the
+/// form's non-null source files (position 0 is the first); the last non-null
+/// file when there are fewer; with `index` -1, the last non-null file;
+/// null without any.
+pub fn tes_form_get_file(e: &mut Engine, this: Ptr<TESForm>, index: i32) -> Ptr {
+    let mut node = list_first(e, this);
+    let mut position = 0i32;
+    let mut found = 0u32;
+    while node != 0 {
+        let file = list_item(e, node);
+        node = list_next(e, node);
+        if file == 0 {
+            continue;
+        }
+        found = file;
+        if index == -1 {
+            continue;
+        }
+        position = position.wrapping_add(1);
+        if position > index {
+            break;
+        }
+    }
+    Ptr::new(found)
+}
+
+// Translated from 00484ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::GetOwnerMaster` (Xbox PDB): the last file of the form's list
+/// that `TESFile::GetMaster` accepts, walking until the list's empty node;
+/// null when none.
+pub fn tes_form_get_owner_master(e: &mut Engine, this: Ptr<TESForm>) -> Ptr {
+    let mut node = list_first(e, this);
+    let mut master = 0u32;
+    while node != 0 && !e.call(LIST_NODE_EMPTY, &args![node]).bool() {
+        let file = list_item(e, node);
+        node = list_next(e, node);
+        if e.call(FILE_IS_MASTER, &args![file]).bool() {
+            master = file;
+        }
+    }
+    Ptr::new(master)
+}
+
+// Translated from 00484f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::SetFile` (Xbox PDB): records `file` (replaced by the end of its
+/// chain, `00473c70`, when that is not null) in the form's source file list.
+///
+/// - No file: the last list node holding a file is popped (the list's first
+///   node when none holds one).
+/// - A file that `GetMaster` accepts: non-master entries are moved out from
+///   in front of it (each one is removed after the last master node seen, or
+///   popped while no master has been seen), then the file is appended.
+/// - Another file: nothing happens when the list already holds it; otherwise
+///   it is appended after the last non-null node, or pushed at the front of
+///   a list without files.
+pub fn tes_form_set_file(e: &mut Engine, this: Ptr<TESForm>, file: Ptr) {
+    let mut file = file.addr();
+    let root = if file == 0 {
+        0
+    } else {
+        e.call(FILE_ROOT, &args![file]).u32()
+    };
+    if root != 0 {
+        file = root;
+    }
+    if file == 0 {
+        let mut node = list_first(e, this);
+        let mut last = 0u32;
+        while node != 0 {
+            if list_item(e, node) != 0 {
+                last = node;
+            }
+            node = list_next(e, node);
+        }
+        if last != 0 {
+            e.call(LIST_POP_NODE, &args![last]);
+        } else {
+            let first = list_first(e, this);
+            e.call(LIST_POP_NODE, &args![first]);
+        }
+    } else if e.call(FILE_IS_MASTER, &args![file]).bool() {
+        let mut node = list_first(e, this);
+        let mut last_master = 0u32;
+        while node != 0 && !e.call(LIST_NODE_EMPTY, &args![node]).bool() {
+            let current = list_item(e, node);
+            if e.call(FILE_IS_MASTER, &args![current]).bool() {
+                last_master = node;
+                node = list_next(e, node);
+            } else if last_master != 0 {
+                with_item(e, current, |e, slot| {
+                    e.call(LIST_REMOVE_ITEM, &args![last_master, slot]);
+                });
+                node = list_next(e, last_master);
+            } else {
+                e.call(LIST_POP_NODE, &args![node]);
+            }
+        }
+        let first = list_first(e, this);
+        with_item(e, file, |e, slot| {
+            e.call(LIST_APPEND, &args![first, slot]);
+        });
+    } else {
+        let mut node = list_first(e, this);
+        let mut last = 0u32;
+        while node != 0 {
+            let current = list_item(e, node);
+            if current != 0 {
+                last = node;
+                if current == file {
+                    return;
+                }
+            }
+            node = list_next(e, node);
+        }
+        if last != 0 {
+            with_item(e, file, |e, slot| {
+                e.call(LIST_APPEND, &args![last, slot]);
+            });
+        } else {
+            let first = list_first(e, this);
+            with_item(e, file, |e, slot| {
+                e.call(LIST_PUSH_FRONT, &args![first, slot]);
+            });
+        }
+    }
+}
+
+// Translated from 00485110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::LoadForm` (Xbox PDB): `file.LoadForm(this)`.
+pub fn tes_form_load_form(e: &mut Engine, this: Ptr<TESForm>, file: Ptr) {
+    e.call(FILE_LOAD_FORM, &args![file, this]);
+}
+
+// Translated from 00485130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::Copy` (Xbox PDB), the base version: logs that the form `other`
+/// (named by its virtual at +0x130) has no copy function for its form type.
+pub fn tes_form_copy(e: &mut Engine, _this: Ptr<TESForm>, other: Ptr<TESForm>) {
+    let type_name = e.call(FORM_TYPE_NAME, &args![other]).u32();
+    let name = e.vcall(other.addr(), SLOT_NAME, &[]).u32();
+    e.call(LOG_MESSAGE, &args![COPY_MESSAGE, name, type_name]);
+}
+
+// Translated from 00485170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::Compare` (Xbox PDB), the base version: logs that the form
+/// `other` has no compare function for its form type; returns false.
+pub fn tes_form_compare(e: &mut Engine, _this: Ptr<TESForm>, other: Ptr<TESForm>) -> bool {
+    let type_name = e.call(FORM_TYPE_NAME, &args![other]).u32();
+    let name = e.vcall(other.addr(), SLOT_NAME, &[]).u32();
+    e.call(LOG_MESSAGE, &args![COMPARE_MESSAGE, name, type_name]);
+    false
+}
+
+// Translated from 004851b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::CopyAllComponents` (Xbox PDB): builds the
+/// `FormComponentCollection` of this form and of `other` on the stack and
+/// calls `collection(this).Copy(collection(other))` (`0047c600`). The
+/// exception-unwinding frame is not translated.
+pub fn tes_form_copy_all_components(e: &mut Engine, this: Ptr<TESForm>, other: Ptr<TESForm>) {
+    e.with_stack(COMPONENT_COLLECTION_SIZE, |e, mine| {
+        e.call(COMPONENTS_CONSTRUCT, &args![mine]);
+        e.with_stack(COMPONENT_COLLECTION_SIZE, |e, theirs| {
+            e.call(COMPONENTS_CONSTRUCT, &args![theirs]);
+            e.call(COMPONENTS_INIT, &args![mine, this]);
+            e.call(COMPONENTS_INIT, &args![theirs, other]);
+            e.call(COMPONENTS_COPY, &args![mine, theirs]);
+            fn_00483710(e, theirs.addr());
+        });
+        fn_00483710(e, mine.addr());
+    });
+}
+
+// Translated from 00485270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::CompareAllComponents` (Xbox PDB): true when `other` is null;
+/// otherwise builds the component collections of both forms on the stack and
+/// returns `collection(this).Compare(collection(other))` (`0047c670`). The
+/// exception-unwinding frame is not translated.
+pub fn tes_form_compare_all_components(
+    e: &mut Engine,
+    this: Ptr<TESForm>,
+    other: Ptr<TESForm>,
+) -> bool {
+    if other.is_null() {
+        return true;
+    }
+    e.with_stack(COMPONENT_COLLECTION_SIZE, |e, mine| {
+        e.call(COMPONENTS_CONSTRUCT, &args![mine]);
+        e.with_stack(COMPONENT_COLLECTION_SIZE, |e, theirs| {
+            e.call(COMPONENTS_CONSTRUCT, &args![theirs]);
+            e.call(COMPONENTS_INIT, &args![mine, this]);
+            e.call(COMPONENTS_INIT, &args![theirs, other]);
+            let result = e.call(COMPONENTS_COMPARE, &args![mine, theirs]).u8();
+            fn_00483710(e, theirs.addr());
+            fn_00483710(e, mine.addr());
+            result != 0
+        })
+    })
+}
+
+// Translated from 00485340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A virtual of `TESForm` (no Xbox PDB name) that copies the state of
+/// another object from a base component pointer: when `other` casts to
+/// `TESForm`, calls the virtual at +0xc8 with the other form's flag 2 state
+/// if it differs from this form's, copies the form type and takes the other
+/// form's flags except bit 0x4000, which stays as this form has it.
+pub fn fn_00485340(e: &mut Engine, this: Ptr<TESForm>, other: Ptr) {
+    let source = cast_component_to_form(e, other);
+    if source.is_null() {
+        return;
+    }
+    let mine = e.call(IS_FLAG_2, &args![this]).u8();
+    let theirs = e.call(IS_FLAG_2, &args![source]).u8();
+    if mine != theirs {
+        let theirs = e.call(IS_FLAG_2, &args![source]).u8();
+        e.vcall(this.addr(), SLOT_SET_FLAG_2, &args![theirs as u32]);
+    }
+    let form_type = e.call(FORM_TYPE, &args![source]).u8();
+    e.set(this, TESForm::cFormType, form_type);
+    let flags = e.call(FORM_FLAGS, &args![source]).u32();
+    let kept = e.get(this, TESForm::iFormFlags) & FLAG_TEMPORARY;
+    e.set(this, TESForm::iFormFlags, flags & !FLAG_TEMPORARY | kept);
+}
+
+// Translated from 004853e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A virtual of `TESForm` (no Xbox PDB name): whether this form differs from
+/// `other` (a base component pointer). True when `other` does not cast to
+/// `TESForm`, when the form types differ, when either form has a name key
+/// (`00474cb0`) and the keys or the names of virtual +0x130 differ, or when
+/// the flags differ outside the bits `0x4000` and `0xb`.
+pub fn fn_004853e0(e: &mut Engine, this: Ptr<TESForm>, other: Ptr) -> bool {
+    let source = cast_component_to_form(e, other);
+    if source.is_null() {
+        return true;
+    }
+    let form_type = e.get(this, TESForm::cFormType) as u32;
+    if form_type != e.call(FORM_TYPE, &args![source]).u32() {
+        return true;
+    }
+    let mine_key = e.call(FORM_NAME_KEY, &args![this]).u32();
+    if mine_key != 0 || e.call(FORM_NAME_KEY, &args![source]).u32() != 0 {
+        let mine_key = e.call(FORM_NAME_KEY, &args![this]).u32();
+        let theirs_key = e.call(FORM_NAME_KEY, &args![source]).u32();
+        if mine_key != theirs_key {
+            return true;
+        }
+        let theirs_name = e.vcall(source.addr(), SLOT_NAME, &[]).u32();
+        let mine_name = e.vcall(this.addr(), SLOT_NAME, &[]).u32();
+        if e.call(STRING_COMPARE, &args![mine_name, theirs_name]).u32() != 0 {
+            return true;
+        }
+    }
+    let mine = e.call(FORM_FLAGS, &args![this]).u32() & COMPARE_FLAGS_MASK;
+    let theirs = e.call(FORM_FLAGS, &args![source]).u32() & COMPARE_FLAGS_MASK;
+    mine != theirs
+}
+
+// Translated from 004854e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `record` is the top-level group record (group tag, group type 0)
+/// whose label is this form's type string. `RET 0xc`: two further words are
+/// taken and ignored.
+pub fn fn_004854e0(
+    e: &mut Engine,
+    this: Ptr<TESForm>,
+    record: Ptr,
+    _unused_1: u32,
+    _unused_2: u32,
+) -> bool {
+    if record.is_null() || e.mem.u32(record.addr()) != e.global::<u32>(GROUP_TAG) {
+        return false;
+    }
+    if e.mem.u32(record.addr() + 0xc) != 0 {
+        return false;
+    }
+    let tag = form_type_tag(e, this);
+    e.mem.u32(record.addr() + 8) == tag
+}
+
+// Translated from 00485530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Fills `record` as the top-level group record of this form's type (group
+/// tag, label = the type string, group type 0, nothing else), unless
+/// `record` is null or `flag` is not 0.
+pub fn fn_00485530(e: &mut Engine, this: Ptr<TESForm>, record: Ptr, flag: u32) {
+    if record.is_null() || flag != 0 {
+        return;
+    }
+    let at = record.addr();
+    let group_tag = e.global::<u32>(GROUP_TAG);
+    e.mem.set_u32(at, group_tag);
+    e.mem.set_u32(at + 0xc, 0);
+    let tag = form_type_tag(e, this);
+    e.mem.set_u32(at + 8, tag);
+    e.mem.set_u32(at + 4, 0);
+    e.mem.set_u32(at + 0x10, 0);
+    e.mem.set_u16(at + 0x14, 0);
+    e.mem.set_u16(at + 0x16, 0);
+}
+
+// Translated from 004855a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::StartForm` (Xbox PDB): unless the form is temporary, allocates
+/// a new 0x18 byte record header in the save buffer: the form's flags (only
+/// the bits `0x30032fe0` when the type is not 1), the type string as tag, the
+/// form ID, size 0, the record version (`00470bb0`) and no
+/// version-control data; then calls the form's virtual at +0xdc.
+pub fn tes_form_start_form(e: &mut Engine, this: Ptr<TESForm>) {
+    if e.call(IS_TEMPORARY, &args![this]).bool() {
+        return;
+    }
+    e.set_global(SAVE_BUFFER_SIZE, 0x18u32);
+    let size = e.global::<u32>(SAVE_BUFFER_SIZE);
+    let allocated = e.call(OPERATOR_NEW, &args![size]).u32();
+    e.set_global(SAVE_BUFFER, allocated);
+    let header = e.global::<u32>(SAVE_BUFFER);
+    let mut flags = e.call(FORM_FLAGS, &args![this]).u32();
+    e.mem.set_u32(header + 8, flags);
+    if e.call(FORM_TYPE, &args![this]).u32() != 1 {
+        flags &= START_FORM_FLAGS_MASK;
+        e.mem.set_u32(header + 8, flags);
+    }
+    let tag = form_type_tag(e, this);
+    e.mem.set_u32(header, tag);
+    let id = e.call(WORD_AT_0C, &args![this]).u32();
+    e.mem.set_u32(header + 0xc, id);
+    e.mem.set_u32(header + 4, 0);
+    let version = e.call(RECORD_VERSION, &args![]).u16();
+    e.mem.set_u16(header + 0x14, version);
+    e.mem.set_u32(header + 0x10, 0);
+    e.mem.set_u16(header + 0x16, 0);
+    e.vcall(this.addr(), SLOT_AFTER_START, &[]);
+}
+
+// Translated from 00485680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::CloseForm` (Xbox PDB): unless the form is temporary, stores the
+/// record's data size (the buffer size minus the 0x18 byte header) in the
+/// header and, on a big-endian target, swaps the header (`FORM::Endian`).
+pub fn tes_form_close_form(e: &mut Engine, this: Ptr<TESForm>) {
+    if e.call(IS_TEMPORARY, &args![this]).bool() {
+        return;
+    }
+    let header = e.global::<u32>(SAVE_BUFFER);
+    let size = e.global::<u32>(SAVE_BUFFER_SIZE);
+    e.mem.set_u32(header + 4, size.wrapping_sub(0x18));
+    if is_big_endian(e) {
+        e.call(FORM_ENDIAN, &args![header]);
+    }
+}
+
+// Translated from 004856d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::AddChunk` (Xbox PDB), the overload without data: a chunk with
+/// this tag and size 0 (cdecl).
+pub fn tes_form_add_chunk(e: &mut Engine, tag: u32) {
+    tes_form_add_chunk_data(e, tag, Ptr::NULL, 0);
+}
+
+// Translated from 004856f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::AddChunkArray` (Xbox PDB): a chunk with `size` bytes of `data`
+/// (cdecl).
+pub fn tes_form_add_chunk_array(e: &mut Engine, tag: u32, data: Ptr, size: u32) {
+    tes_form_add_chunk_data(e, tag, data, size);
+}
+
+// Translated from 00485710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::AddChunkArray_ov2` (Xbox PDB): a chunk of `count` 32-bit values
+/// (cdecl); see [`tes_form_add_chunk_array32`].
+pub fn tes_form_add_chunk_array_ov2(e: &mut Engine, tag: u32, data: Ptr, count: u32) {
+    tes_form_add_chunk_array32(e, tag, data, count);
+}
+
+// Translated from 00485730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A chunk of `count` 16-bit values (cdecl); see [`fn_00485820`].
+pub fn fn_00485730(e: &mut Engine, tag: u32, data: Ptr, count: u32) {
+    fn_00485820(e, tag, data, count);
+}
+
+// Translated from 00485750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::AddChunkArray32` (Xbox PDB): a chunk of `count` 32-bit values
+/// (`4 * count` bytes). On a big-endian target the values are copied to a
+/// temporary block and each is byte-swapped first (cdecl).
+pub fn tes_form_add_chunk_array32(e: &mut Engine, tag: u32, data: Ptr, count: u32) {
+    let size = count << 2;
+    if !is_big_endian(e) {
+        tes_form_add_chunk_data(e, tag, data, size);
+        return;
+    }
+    let request = count.saturating_mul(4);
+    let copy = e.call(OPERATOR_NEW, &args![request]).u32();
+    e.call(MEMCPY, &args![copy, data, size]);
+    for i in 0..count {
+        e.call(SWAP_WORD, &args![copy.wrapping_add(i << 2), 0u32]);
+    }
+    tes_form_add_chunk_data(e, tag, Ptr::new(copy), size);
+    e.call(OPERATOR_DELETE, &args![copy]);
+}
+
+// Translated from 00485820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A chunk of `count` 16-bit values (`2 * count` bytes); like
+/// [`tes_form_add_chunk_array32`] with half-word swaps (cdecl).
+pub fn fn_00485820(e: &mut Engine, tag: u32, data: Ptr, count: u32) {
+    let size = count << 1;
+    if !is_big_endian(e) {
+        tes_form_add_chunk_data(e, tag, data, size);
+        return;
+    }
+    let request = count.saturating_mul(2);
+    let copy = e.call(OPERATOR_NEW, &args![request]).u32();
+    e.call(MEMCPY, &args![copy, data, size]);
+    for i in 0..count {
+        e.call(SWAP_HALF, &args![copy.wrapping_add(i << 1), 0u32]);
+    }
+    tes_form_add_chunk_data(e, tag, Ptr::new(copy), size);
+    e.call(OPERATOR_DELETE, &args![copy]);
+}
+
+// Translated from 004858f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A one-byte chunk (cdecl): the data is the low byte of `value`, passed by
+/// the address of the stack word that holds it.
+pub fn fn_004858f0(e: &mut Engine, tag: u32, value: u32) {
+    with_item(e, value, |e, slot| {
+        tes_form_add_chunk_data(e, tag, slot, 1);
+    });
+}
+
+// Translated from 00485910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A chunk holding one 32-bit value (cdecl), swapped first on a big-endian
+/// target.
+pub fn fn_00485910(e: &mut Engine, tag: u32, value: u32) {
+    with_item(e, value, |e, slot| {
+        if is_big_endian(e) {
+            e.call(SWAP_WORD, &args![slot, 0u32]);
+        }
+        tes_form_add_chunk_data(e, tag, slot, 4);
+    });
+}
+
+// Translated from 00485950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::AddChunk_ov2` (Xbox PDB): a chunk holding one 16-bit value
+/// (cdecl), swapped first on a big-endian target. `value` is the stack word;
+/// its low half is the data.
+pub fn tes_form_add_chunk_ov2(e: &mut Engine, tag: u32, value: u32) {
+    with_item(e, value, |e, slot| {
+        if is_big_endian(e) {
+            e.call(SWAP_HALF, &args![slot, 0u32]);
+        }
+        tes_form_add_chunk_data(e, tag, slot, 2);
+    });
+}
+
+// Translated from 00485990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::__AddChunkData` (Xbox PDB): appends a chunk to the save buffer:
+/// the 4 byte tag, a `u16` size (0 for a chunk larger than 0xffff, which
+/// writes an extra `"XXXX"` chunk holding the real size first) and `size`
+/// bytes of `data`. The buffer grows by `size + 6` through `0042f5d0`; the
+/// header is swapped on a big-endian target (cdecl).
+pub fn tes_form_add_chunk_data(e: &mut Engine, tag: u32, data: Ptr, size: u32) {
+    let mut size16 = size as u16;
+    if size > 0xffff {
+        fn_00485910(e, OVERSIZE_CHUNK_TAG, size);
+        size16 = 0;
+    }
+    let old = e.global::<u32>(SAVE_BUFFER_SIZE);
+    e.set_global(SAVE_BUFFER_SIZE, old.wrapping_add(size).wrapping_add(6));
+    let buffer = e.global::<u32>(SAVE_BUFFER);
+    let new_size = e.global::<u32>(SAVE_BUFFER_SIZE);
+    let grown = e.call(BUFFER_REALLOC, &args![buffer, new_size]).u32();
+    e.set_global(SAVE_BUFFER, grown);
+    let header = e.global::<u32>(SAVE_BUFFER).wrapping_add(old);
+    e.mem.set_u32(header, tag);
+    e.mem.set_u16(header + 4, size16);
+    if is_big_endian(e) {
+        e.call(SWAP_CHUNK_HEADER, &args![header]);
+    }
+    e.call(MEMCPY, &args![header, header, 6u32]);
+    let body = e
+        .global::<u32>(SAVE_BUFFER)
+        .wrapping_add(old)
+        .wrapping_add(6);
+    e.call(MEMCPY, &args![body, data, size]);
+}
+
+// Translated from 00485a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Grows the size field of the chunk header `chunk` by `amount` (and the
+/// save buffer by the same, through `0042f5d0`). Fails (false, nothing
+/// changed) when both the current size and `amount` are 0 or the new size
+/// would pass 0xffff. The header is swapped to host order around the change
+/// on a big-endian target.
+pub fn fn_00485a70(e: &mut Engine, _this: Ptr<TESForm>, chunk: Ptr, amount: u16) -> bool {
+    let swap = is_big_endian(e);
+    if swap {
+        e.call(SWAP_CHUNK_HEADER, &args![chunk]);
+    }
+    let current = e.mem.u16(chunk.addr() + 4) as u32;
+    let amount = amount as u32;
+    if (current == 0 && amount == 0) || current + amount > 0xffff {
+        if swap {
+            e.call(SWAP_CHUNK_HEADER, &args![chunk]);
+        }
+        return false;
+    }
+    e.mem.set_u16(chunk.addr() + 4, (current + amount) as u16);
+    if swap {
+        e.call(SWAP_CHUNK_HEADER, &args![chunk]);
+    }
+    let size = e.global::<u32>(SAVE_BUFFER_SIZE).wrapping_add(amount);
+    e.set_global(SAVE_BUFFER_SIZE, size);
+    let buffer = e.global::<u32>(SAVE_BUFFER);
+    let grown = e.call(BUFFER_REALLOC, &args![buffer, size]).u32();
+    e.set_global(SAVE_BUFFER, grown);
+    true
+}
+
+// Translated from 00485b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::FreeFormBuffer` (Xbox PDB): frees the save buffer and clears the
+/// pointer.
+pub fn tes_form_free_form_buffer(e: &mut Engine, _this: Ptr<TESForm>) {
+    let buffer = e.global::<u32>(SAVE_BUFFER);
+    e.call(OPERATOR_DELETE, &args![buffer]);
+    e.set_global(SAVE_BUFFER, 0u32);
+}
+
+// Translated from 00485b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A packed word for the form: the low 24 bits of the form ID
+/// (`fn_00485bc0`), with bit 24 set when the master list (file +0x3ec) of
+/// the form's first file is not empty. A form without a file reads the
+/// "file" at null.
+pub fn fn_00485b60(e: &mut Engine, this: Ptr<TESForm>) -> u32 {
+    let id = fn_00485bc0(e, this);
+    let file = tes_form_get_file(e, this, 0);
+    let masters = e.call(FILE_MASTER_LIST, &args![file]).u32();
+    let empty = e.call(LIST_NODE_EMPTY, &args![masters]).bool();
+    ((!empty) as u32) << 24 | id
+}
+
+// Translated from 00485bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The low 24 bits of the form's ID (+0x0C).
+pub fn fn_00485bc0(e: &mut Engine, this: Ptr<TESForm>) -> u32 {
+    e.get(this, TESForm::iFormID) & 0x00ff_ffff
+}
+
+// Translated from 00485be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the low 24 bits of `form_id` equal those of the form's ID.
+pub fn fn_00485be0(e: &mut Engine, this: Ptr<TESForm>, form_id: u32) -> bool {
+    form_id & 0x00ff_ffff == fn_00485bc0(e, this)
+}
+
+// Translated from 00485c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::SetFormID` (Xbox PDB): when `new_id` differs from the form's ID
+/// and the form is not temporary, removes the old ID from the form map,
+/// removes it from the data handler when `remove_from_handler` is set, and
+/// maps the new ID (if not 0) to the form; the ID is stored in every case.
+/// The compiler's dead block after the map removal (a log message and the
+/// byte at `011c54b9`, guarded by a local that is always 0) and the
+/// exception-unwinding frame are not translated.
+pub fn tes_form_set_form_id(
+    e: &mut Engine,
+    this: Ptr<TESForm>,
+    new_id: u32,
+    remove_from_handler: bool,
+) {
+    let old_id = e.get(this, TESForm::iFormID);
+    if new_id == old_id {
+        return;
+    }
+    if !e.call(IS_TEMPORARY, &args![this]).bool() {
+        if old_id != 0 {
+            let map = e.global::<u32>(FORM_MAP);
+            e.call(MAP_REMOVE_AT, &args![map, old_id]);
+        }
+        if remove_from_handler && e.get(this, TESForm::iFormID) != 0 {
+            let id = e.get(this, TESForm::iFormID);
+            let handler = e.global::<u32>(DATA_HANDLER);
+            e.call(DATA_HANDLER_REMOVE_ID, &args![handler, id]);
+        }
+        if new_id != 0 {
+            let map = e.global::<u32>(FORM_MAP);
+            e.call(MAP_SET_AT, &args![map, new_id, this]);
+        }
+    }
+    e.set(this, TESForm::iFormID, new_id);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -933,6 +1804,61 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00484b60, fn_00484b60(Ptr<TESForm>, u32)),
         entry!(0x00484b90, tes_form_force_change(Ptr<TESForm>, u32)),
         entry!(0x00484bc0, fn_00484bc0(Ptr<TESForm>, u32)),
+        entry!(0x00484bf0, fn_00484bf0(Ptr<TESForm>, u32) -> u16),
+        entry!(0x00484c20, fn_00484c20(Ptr<TESForm>, u32)),
+        entry!(0x00484c50, tes_form_load_game(Ptr<TESForm>, u32)),
+        entry!(
+            0x00484ce0,
+            tes_form_save_game_data_old(Ptr<TESForm>, Ptr, u32)
+        ),
+        entry!(
+            0x00484d00,
+            tes_form_load_game_data_old(Ptr<TESForm>, Ptr, u32)
+        ),
+        entry!(0x00484d20, tes_form_save_numeric_id(Ptr<TESForm>, u32, u32)),
+        entry!(0x00484d40, tes_form_load_numeric_id(Ptr<TESForm>, u32, u32)),
+        entry!(0x00484d60, fn_00484d60(Ptr<TESForm>, Ptr)),
+        entry!(0x00484da0, fn_00484da0(Ptr<TESForm>, Ptr)),
+        entry!(0x00484e40, fn_00484e40(Ptr<TESForm>) -> bool),
+        entry!(0x00484e60, tes_form_get_file(Ptr<TESForm>, i32) -> Ptr),
+        entry!(0x00484ee0, tes_form_get_owner_master(Ptr<TESForm>) -> Ptr),
+        entry!(0x00484f50, tes_form_set_file(Ptr<TESForm>, Ptr)),
+        entry!(0x00485110, tes_form_load_form(Ptr<TESForm>, Ptr)),
+        entry!(0x00485130, tes_form_copy(Ptr<TESForm>, Ptr<TESForm>)),
+        entry!(
+            0x00485170,
+            tes_form_compare(Ptr<TESForm>, Ptr<TESForm>) -> bool
+        ),
+        entry!(
+            0x004851b0,
+            tes_form_copy_all_components(Ptr<TESForm>, Ptr<TESForm>)
+        ),
+        entry!(
+            0x00485270,
+            tes_form_compare_all_components(Ptr<TESForm>, Ptr<TESForm>) -> bool
+        ),
+        entry!(0x00485340, fn_00485340(Ptr<TESForm>, Ptr)),
+        entry!(0x004853e0, fn_004853e0(Ptr<TESForm>, Ptr) -> bool),
+        entry!(0x004854e0, fn_004854e0(Ptr<TESForm>, Ptr, u32, u32) -> bool),
+        entry!(0x00485530, fn_00485530(Ptr<TESForm>, Ptr, u32)),
+        entry!(0x004855a0, tes_form_start_form(Ptr<TESForm>)),
+        entry!(0x00485680, tes_form_close_form(Ptr<TESForm>)),
+        entry!(0x004856d0, tes_form_add_chunk(u32)),
+        entry!(0x004856f0, tes_form_add_chunk_array(u32, Ptr, u32)),
+        entry!(0x00485710, tes_form_add_chunk_array_ov2(u32, Ptr, u32)),
+        entry!(0x00485730, fn_00485730(u32, Ptr, u32)),
+        entry!(0x00485750, tes_form_add_chunk_array32(u32, Ptr, u32)),
+        entry!(0x00485820, fn_00485820(u32, Ptr, u32)),
+        entry!(0x004858f0, fn_004858f0(u32, u32)),
+        entry!(0x00485910, fn_00485910(u32, u32)),
+        entry!(0x00485950, tes_form_add_chunk_ov2(u32, u32)),
+        entry!(0x00485990, tes_form_add_chunk_data(u32, Ptr, u32)),
+        entry!(0x00485a70, fn_00485a70(Ptr<TESForm>, Ptr, u16) -> bool),
+        entry!(0x00485b30, tes_form_free_form_buffer(Ptr<TESForm>)),
+        entry!(0x00485b60, fn_00485b60(Ptr<TESForm>) -> u32),
+        entry!(0x00485bc0, fn_00485bc0(Ptr<TESForm>) -> u32),
+        entry!(0x00485be0, fn_00485be0(Ptr<TESForm>, u32) -> bool),
+        entry!(0x00485c10, tes_form_set_form_id(Ptr<TESForm>, u32, bool)),
     ]
 }
 
@@ -2053,5 +2979,1105 @@ mod tests {
             calls_to(&log, BGS_CHANGE_SIBLING),
             vec![vec![0x6700_0000, f.addr(), 0x44]]
         );
+    }
+
+    // ---- second batch: record writer, source file list, save/load helpers ----
+
+    /// Test vtable with the slots the second batch calls, and the doubles that
+    /// stand behind them.
+    const WIDE_VTABLE: u32 = 0x0200_1000;
+    const WIDE_SET_FLAG_2: u32 = 0x0f01_00c8;
+    const WIDE_AFTER_START: u32 = 0x0f01_00dc;
+    const WIDE_IS_REFERENCE: u32 = 0x0f01_00f0;
+    const WIDE_NAME: u32 = 0x0f01_0130;
+    /// First word of a test file that `FILE_IS_MASTER` accepts.
+    const MASTER_MARK: u32 = 0x4d41_5354;
+    const SAVE_LOAD_OBJECT: u32 = 0x6800_0000;
+    /// Where `load_game_engine` keeps the word the load double hands out.
+    const SAVED_WORD_ADDRESS: u32 = 0x0200_2000;
+
+    fn wide_engine() -> Engine {
+        let mut e = form_engine();
+        let mut slots = vec![0u32; 0x134 / 4];
+        slots[0xc8 / 4] = WIDE_SET_FLAG_2;
+        slots[0xdc / 4] = WIDE_AFTER_START;
+        slots[0xf0 / 4] = WIDE_IS_REFERENCE;
+        slots[0x130 / 4] = WIDE_NAME;
+        e.put_vtable(WIDE_VTABLE, &slots);
+        for slot in [WIDE_SET_FLAG_2, WIDE_AFTER_START, WIDE_IS_REFERENCE] {
+            e.register(slot, |_, _| Ret::default());
+        }
+        e.register(WIDE_NAME, |_, a| ret(a[0]));
+        e.register(FORM_FLAGS, |e, a| ret(e.mem.u32(a[0] + 8)));
+        e.register(FORM_TYPE_NAME, |e, a| {
+            ret(0x7000_0000 + e.mem.u8(a[0] + 4) as u32)
+        });
+        e
+    }
+
+    /// A form with the wide test vtable.
+    fn wide_form(e: &mut Engine, flags: u32, form_type: u8) -> Ptr<TESForm> {
+        let f = form(e, flags, form_type);
+        e.mem.set_u32(f.addr(), WIDE_VTABLE);
+        f
+    }
+
+    fn list_pop_double(e: &mut Engine, a: &[u32]) -> Ret {
+        let node = a[0];
+        let next = e.mem.u32(node + 4);
+        if next == 0 {
+            e.mem.set_u32(node, 0);
+        } else {
+            let item = e.mem.u32(next);
+            let after = e.mem.u32(next + 4);
+            e.mem.set_u32(node, item);
+            e.mem.set_u32(node + 4, after);
+        }
+        Ret::default()
+    }
+
+    fn list_remove_item_double(e: &mut Engine, a: &[u32]) -> Ret {
+        let head = a[0];
+        let item = e.mem.u32(a[1]);
+        if item == 0 || (e.mem.u32(head + 4) == 0 && e.mem.u32(head) == 0) {
+            return Ret::default();
+        }
+        let mut previous = head;
+        let mut node = head;
+        while node != 0 && e.mem.u32(node) != item {
+            previous = node;
+            node = e.mem.u32(node + 4);
+        }
+        if node == 0 {
+            return Ret::default();
+        }
+        if node == head {
+            list_pop_double(e, &[head]);
+        } else {
+            let after = e.mem.u32(node + 4);
+            e.mem.set_u32(previous + 4, after);
+        }
+        Ret::default()
+    }
+
+    fn list_append_double(e: &mut Engine, a: &[u32]) -> Ret {
+        let item = e.mem.u32(a[1]);
+        if item == 0 {
+            return Ret::default();
+        }
+        let mut tail = a[0];
+        while e.mem.u32(tail + 4) != 0 {
+            tail = e.mem.u32(tail + 4);
+        }
+        if e.mem.u32(tail) == 0 {
+            e.mem.set_u32(tail, item);
+        } else {
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, item);
+            e.mem.set_u32(tail + 4, node);
+        }
+        Ret::default()
+    }
+
+    fn list_push_front_double(e: &mut Engine, a: &[u32]) -> Ret {
+        let head = a[0];
+        let item = e.mem.u32(a[1]);
+        if item == 0 {
+            return Ret::default();
+        }
+        if e.mem.u32(head) != 0 {
+            let node = e.mem.alloc(8);
+            let old_item = e.mem.u32(head);
+            let old_next = e.mem.u32(head + 4);
+            e.mem.set_u32(node, old_item);
+            e.mem.set_u32(node + 4, old_next);
+            e.mem.set_u32(head + 4, node);
+        }
+        e.mem.set_u32(head, item);
+        Ret::default()
+    }
+
+    /// `wide_engine` plus doubles that behave like the game's list nodes
+    /// (item at +0, next at +4) and its files.
+    fn list_engine() -> Engine {
+        let mut e = wide_engine();
+        e.register(LIST_FIRST_NODE, |_, a| ret(a[0] + 0x10));
+        e.register(LIST_NODE_ITEM, |_, a| ret(a[0]));
+        e.register(LIST_NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(LIST_NODE_EMPTY, |e, a| {
+            ret((e.mem.u32(a[0] + 4) == 0 && e.mem.u32(a[0]) == 0) as u32)
+        });
+        e.register(FILE_IS_MASTER, |e, a| {
+            ret((a[0] != 0 && e.mem.u32(a[0]) == MASTER_MARK) as u32)
+        });
+        e.register(FILE_ROOT, |_, _| ret(0));
+        e.register(LIST_POP_NODE, list_pop_double);
+        e.register(LIST_REMOVE_ITEM, list_remove_item_double);
+        e.register(LIST_APPEND, list_append_double);
+        e.register(LIST_PUSH_FRONT, list_push_front_double);
+        e
+    }
+
+    /// A test file (0x400 bytes, so its master list at +0x3ec fits).
+    fn test_file(e: &mut Engine, master: bool) -> u32 {
+        let file = e.mem.alloc(0x400);
+        if master {
+            e.mem.set_u32(file, MASTER_MARK);
+        }
+        file
+    }
+
+    /// Makes the form's source file list hold exactly `items`.
+    fn set_list(e: &mut Engine, form: Ptr<TESForm>, items: &[u32]) {
+        let mut node = form.addr() + 0x10;
+        e.mem.set_u32(node, items.first().copied().unwrap_or(0));
+        e.mem.set_u32(node + 4, 0);
+        for item in items.iter().skip(1) {
+            let next = e.mem.alloc(8);
+            e.mem.set_u32(next, *item);
+            e.mem.set_u32(next + 4, 0);
+            e.mem.set_u32(node + 4, next);
+            node = next;
+        }
+    }
+
+    /// The items of the form's source file list, in order.
+    fn list_items(e: &Engine, form: Ptr<TESForm>) -> Vec<u32> {
+        let mut items = vec![];
+        let mut node = form.addr() + 0x10;
+        while node != 0 {
+            items.push(e.mem.u32(node));
+            node = e.mem.u32(node + 4);
+        }
+        items
+    }
+
+    #[test]
+    fn change_flag_size_is_four_when_bit_0_is_set() {
+        let mut e = wide_engine();
+        let f = wide_form(&mut e, 8, 0x20);
+        assert_eq!(e.call(0x0048_4bf0, &args![f, 1u32]).u16(), 4);
+        assert_eq!(e.call(0x0048_4bf0, &args![f, 3u32]).u16(), 4);
+        assert_eq!(e.call(0x0048_4bf0, &args![f, 2u32]).u16(), 0);
+        assert_eq!(e.call(0x0048_4bf0, &args![f, 0u32]).u16(), 0);
+    }
+
+    #[test]
+    fn save_of_flags_forwards_the_flags_word_only_for_bit_0() {
+        let mut e = wide_engine();
+        e.set_global(SAVE_LOAD_GAME, SAVE_LOAD_OBJECT);
+        e.register(SAVE_LOAD_SAVE_DATA, |_, _| Ret::default());
+        let f = wide_form(&mut e, 8, 0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_4c20, &args![f, 1u32]);
+        e.call(0x0048_4c20, &args![f, 2u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, SAVE_LOAD_SAVE_DATA),
+            vec![vec![SAVE_LOAD_OBJECT, f.addr() + 8, 4]]
+        );
+    }
+
+    fn load_game_engine(saved: u32) -> Engine {
+        let mut e = wide_engine();
+        e.set_global(SAVE_LOAD_GAME, SAVE_LOAD_OBJECT);
+        e.map(SAVED_WORD_ADDRESS, 0x1000);
+        e.mem.set_u32(SAVED_WORD_ADDRESS, saved);
+        e.register(SAVE_LOAD_LOAD_DATA, |e, a| {
+            let saved = e.mem.u32(SAVED_WORD_ADDRESS);
+            e.mem.set_u32(a[1], saved);
+            Ret::default()
+        });
+        e
+    }
+
+    #[test]
+    fn load_game_merges_the_saved_flags_by_form_kind() {
+        // A reference takes the bits 0x912860 of the saved word.
+        let mut e = load_game_engine(0x1234_5678);
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        let f = wide_form(&mut e, 0x8, 0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_4c50, &args![f, 1u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, RT_DYNAMIC_CAST),
+            vec![vec![f.addr(), 0, 0x0118_3028, 0x0118_41cc, 0]]
+        );
+        let loads = calls_to(&log, SAVE_LOAD_LOAD_DATA);
+        assert_eq!(loads.len(), 1);
+        assert_eq!((loads[0][0], loads[0][2]), (SAVE_LOAD_OBJECT, 4));
+        assert_eq!(
+            e.get(f, TESForm::iFormFlags),
+            8 | (0x1234_5678 & 0x0091_2860)
+        );
+        // Any other form takes the bits 0x40000c20.
+        let mut e = load_game_engine(0x1234_5678);
+        e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
+        let g = wide_form(&mut e, 0x8, 0x20);
+        e.call(0x0048_4c50, &args![g, 1u32]);
+        assert_eq!(
+            e.get(g, TESForm::iFormFlags),
+            8 | (0x1234_5678 & 0x4000_0c20)
+        );
+        // Without bit 0 nothing is read.
+        let h = wide_form(&mut e, 0x8, 0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_4c50, &args![h, 2u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        assert_eq!(e.get(h, TESForm::iFormFlags), 8);
+    }
+
+    /// Forwarding helpers: the call reaches the `TESSaveLoadGame` object's
+    /// method with its own two words.
+    fn check_forward(addr: u32, target: u32) {
+        let mut e = wide_engine();
+        e.set_global(SAVE_LOAD_GAME, SAVE_LOAD_OBJECT);
+        e.register(target, |_, _| Ret::default());
+        let f = wide_form(&mut e, 8, 0x20);
+        e.call_log = Some(vec![]);
+        e.call(addr, &args![f, 0x1111u32, 0x2222u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, target),
+            vec![vec![SAVE_LOAD_OBJECT, 0x1111, 0x2222]]
+        );
+    }
+
+    #[test]
+    fn save_game_data_old_forwards_to_the_save_load_object() {
+        check_forward(0x0048_4ce0, SAVE_LOAD_SAVE_DATA);
+    }
+
+    #[test]
+    fn load_game_data_old_forwards_to_the_save_load_object() {
+        check_forward(0x0048_4d00, SAVE_LOAD_LOAD_DATA);
+    }
+
+    #[test]
+    fn save_numeric_id_forwards_to_the_save_load_object() {
+        check_forward(0x0048_4d20, SAVE_LOAD_SAVE_NUMERIC_ID);
+    }
+
+    #[test]
+    fn load_numeric_id_forwards_to_the_save_load_object() {
+        check_forward(0x0048_4d40, SAVE_LOAD_LOAD_NUMERIC_ID);
+    }
+
+    /// Doubles for the save/load buffer object calls of `00484d60` and
+    /// `00484da0`: the buffer's save kind is the word at +0x17.
+    fn buffer_engine() -> (Engine, u32) {
+        let mut e = wide_engine();
+        e.register(BUFFER_SAVE_KIND, |e, a| {
+            let kind = e.mem.u32(a[0] + 0x17);
+            e.mem.set_u32(a[1], kind);
+            ret(a[1])
+        });
+        e.register(WORD_HAS_BITS, |e, a| {
+            ret((e.mem.u32(a[0]) & a[1] != 0) as u32)
+        });
+        e.register(SAVE_BUFFER_WRITE, |_, _| Ret::default());
+        e.register(LOAD_BUFFER_READ, |e, a| {
+            e.mem.set_u32(a[1], 0x1234_5678);
+            Ret::default()
+        });
+        let buffer = e.mem.alloc(0x20);
+        (e, buffer)
+    }
+
+    #[test]
+    fn save_to_buffer_writes_the_flags_when_the_kind_has_bit_0() {
+        let (mut e, buffer) = buffer_engine();
+        let f = wide_form(&mut e, 8, 0x20);
+        e.mem.set_u32(buffer + 0x17, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_4d60, &args![f, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, SAVE_BUFFER_WRITE),
+            vec![vec![buffer, f.addr() + 8, 4, 0]]
+        );
+        e.mem.set_u32(buffer + 0x17, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_4d60, &args![f, buffer]);
+        assert!(calls_to(&e.call_log.take().unwrap(), SAVE_BUFFER_WRITE).is_empty());
+    }
+
+    #[test]
+    fn load_from_buffer_merges_the_flags_by_the_reference_virtual() {
+        let (mut e, buffer) = buffer_engine();
+        e.mem.set_u32(buffer + 0x17, 1);
+        let plain = wide_form(&mut e, 8, 0x20);
+        e.call(0x0048_4da0, &args![plain, buffer]);
+        assert_eq!(
+            e.get(plain, TESForm::iFormFlags),
+            8 | (0x1234_5678 & 0x4000_0c20)
+        );
+        e.register(WIDE_IS_REFERENCE, |_, _| ret(1));
+        let reference = wide_form(&mut e, 8, 0x20);
+        e.call(0x0048_4da0, &args![reference, buffer]);
+        assert_eq!(
+            e.get(reference, TESForm::iFormFlags),
+            8 | (0x1234_5678 & 0x0091_2860)
+        );
+        // Kind without bit 0: no read, flags untouched.
+        e.mem.set_u32(buffer + 0x17, 0);
+        let untouched = wide_form(&mut e, 0x77, 0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_4da0, &args![untouched, buffer]);
+        assert!(calls_to(&e.call_log.take().unwrap(), LOAD_BUFFER_READ).is_empty());
+        assert_eq!(e.get(untouched, TESForm::iFormFlags), 0x77);
+    }
+
+    #[test]
+    fn form_id_in_reserved_range_is_checked_on_the_forms_own_id() {
+        let mut e = form_engine();
+        let f = form(&mut e, 8, 0x20);
+        for (id, expected) in [(0u32, false), (0x10, true), (0x7ff, true), (0x800, false)] {
+            e.set(f, TESForm::iFormID, id);
+            assert_eq!(e.call(0x0048_4e40, &args![f]).bool(), expected, "{id:#x}");
+        }
+    }
+
+    #[test]
+    fn get_file_returns_the_indexth_non_null_file() {
+        let mut e = list_engine();
+        let f = wide_form(&mut e, 8, 0x20);
+        let (a, b, c) = (
+            test_file(&mut e, false),
+            test_file(&mut e, false),
+            test_file(&mut e, false),
+        );
+        set_list(&mut e, f, &[0, a, 0, b, c]);
+        assert_eq!(e.call(0x0048_4e60, &args![f, 0u32]).u32(), a);
+        assert_eq!(e.call(0x0048_4e60, &args![f, 1u32]).u32(), b);
+        assert_eq!(e.call(0x0048_4e60, &args![f, 2u32]).u32(), c);
+        // Past the end, and with -1, it is the last non-null file.
+        assert_eq!(e.call(0x0048_4e60, &args![f, 9u32]).u32(), c);
+        assert_eq!(e.call(0x0048_4e60, &args![f, -1i32]).u32(), c);
+        set_list(&mut e, f, &[]);
+        assert_eq!(e.call(0x0048_4e60, &args![f, 0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn owner_master_is_the_last_master_in_the_list() {
+        let mut e = list_engine();
+        let f = wide_form(&mut e, 8, 0x20);
+        let plain = test_file(&mut e, false);
+        let first = test_file(&mut e, true);
+        let second = test_file(&mut e, true);
+        set_list(&mut e, f, &[plain, first, 0, second, plain]);
+        assert_eq!(e.call(0x0048_4ee0, &args![f]).u32(), second);
+        set_list(&mut e, f, &[plain]);
+        assert_eq!(e.call(0x0048_4ee0, &args![f]).u32(), 0);
+        set_list(&mut e, f, &[]);
+        assert_eq!(e.call(0x0048_4ee0, &args![f]).u32(), 0);
+    }
+
+    #[test]
+    fn set_file_with_no_file_pops_the_last_node_with_a_file() {
+        let mut e = list_engine();
+        let f = wide_form(&mut e, 8, 0x20);
+        let (a, b) = (test_file(&mut e, false), test_file(&mut e, false));
+        set_list(&mut e, f, &[a, b]);
+        e.call(0x0048_4f50, &args![f, 0u32]);
+        assert_eq!(list_items(&e, f), vec![a, 0]);
+        // Without any file the first node is the one popped.
+        set_list(&mut e, f, &[]);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_4f50, &args![f, 0u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, LIST_POP_NODE), vec![vec![f.addr() + 0x10]]);
+    }
+
+    #[test]
+    fn set_file_appends_a_plain_file_once() {
+        let mut e = list_engine();
+        let f = wide_form(&mut e, 8, 0x20);
+        let (a, b, c) = (
+            test_file(&mut e, false),
+            test_file(&mut e, false),
+            test_file(&mut e, false),
+        );
+        set_list(&mut e, f, &[a, b]);
+        e.call(0x0048_4f50, &args![f, c]);
+        assert_eq!(list_items(&e, f), vec![a, b, c]);
+        // A file already in the list is left alone.
+        e.call(0x0048_4f50, &args![f, b]);
+        assert_eq!(list_items(&e, f), vec![a, b, c]);
+        // A list without files gets it at the front.
+        set_list(&mut e, f, &[]);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_4f50, &args![f, a]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, LIST_PUSH_FRONT).len(), 1);
+        assert_eq!(list_items(&e, f), vec![a]);
+    }
+
+    #[test]
+    fn set_file_puts_a_master_after_the_other_masters() {
+        let mut e = list_engine();
+        let f = wide_form(&mut e, 8, 0x20);
+        let plain = test_file(&mut e, false);
+        let other_plain = test_file(&mut e, false);
+        let master = test_file(&mut e, true);
+        let new_master = test_file(&mut e, true);
+        set_list(&mut e, f, &[plain, master, other_plain]);
+        e.call(0x0048_4f50, &args![f, new_master]);
+        // The plain files are moved out of the way; the new master ends up
+        // last.
+        assert_eq!(list_items(&e, f), vec![master, new_master]);
+    }
+
+    #[test]
+    fn set_file_replaces_the_file_by_its_chain_end() {
+        let mut e = list_engine();
+        let f = wide_form(&mut e, 8, 0x20);
+        let chain_end = test_file(&mut e, false);
+        let start = test_file(&mut e, false);
+        e.mem.set_u32(start + 4, chain_end);
+        e.register(FILE_ROOT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        set_list(&mut e, f, &[]);
+        e.call(0x0048_4f50, &args![f, start]);
+        assert_eq!(list_items(&e, f), vec![chain_end]);
+    }
+
+    #[test]
+    fn load_form_asks_the_file_to_load_the_form() {
+        let mut e = wide_engine();
+        e.register(FILE_LOAD_FORM, |_, _| Ret::default());
+        let f = wide_form(&mut e, 8, 0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_5110, &args![f, 0x5000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, FILE_LOAD_FORM), vec![vec![0x5000, f.addr()]]);
+    }
+
+    #[test]
+    fn copy_and_compare_log_the_missing_override() {
+        let mut e = wide_engine();
+        e.register(LOG_MESSAGE, |_, _| Ret::default());
+        let this = wide_form(&mut e, 8, 0x20);
+        let other = wide_form(&mut e, 8, 0x21);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_5130, &args![this, other]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE),
+            vec![vec![0x0101_c930, other.addr(), 0x7000_0021]]
+        );
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0048_5170, &args![this, other]).bool();
+        let log = e.call_log.take().unwrap();
+        assert!(!result);
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE),
+            vec![vec![0x0101_c978, other.addr(), 0x7000_0021]]
+        );
+    }
+
+    fn components_engine() -> Engine {
+        let mut e = wide_engine();
+        e.register(COMPONENTS_CONSTRUCT, |_, _| Ret::default());
+        e.register(COMPONENTS_INIT, |_, _| Ret::default());
+        e.register(COMPONENTS_COPY, |_, _| Ret::default());
+        e.register(COMPONENTS_COMPARE, |_, _| ret(1));
+        e
+    }
+
+    #[test]
+    fn copy_all_components_copies_between_two_collections() {
+        let mut e = components_engine();
+        let this = wide_form(&mut e, 8, 0x20);
+        let other = wide_form(&mut e, 8, 0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_51b0, &args![this, other]);
+        let log = e.call_log.take().unwrap();
+        let built = calls_to(&log, COMPONENTS_CONSTRUCT);
+        assert_eq!(built.len(), 2);
+        let (mine, theirs) = (built[0][0], built[1][0]);
+        assert_ne!(mine, theirs);
+        assert_eq!(
+            calls_to(&log, COMPONENTS_INIT),
+            vec![vec![mine, this.addr()], vec![theirs, other.addr()]]
+        );
+        assert_eq!(calls_to(&log, COMPONENTS_COPY), vec![vec![mine, theirs]]);
+    }
+
+    #[test]
+    fn compare_all_components_is_true_without_another_form() {
+        let mut e = components_engine();
+        let this = wide_form(&mut e, 8, 0x20);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0048_5270, &args![this, 0u32]).bool());
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        let other = wide_form(&mut e, 8, 0x20);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0048_5270, &args![this, other]).bool());
+        let log = e.call_log.take().unwrap();
+        let built = calls_to(&log, COMPONENTS_CONSTRUCT);
+        assert_eq!(built.len(), 2);
+        assert_eq!(
+            calls_to(&log, COMPONENTS_INIT),
+            vec![
+                vec![built[0][0], this.addr()],
+                vec![built[1][0], other.addr()]
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, COMPONENTS_COMPARE),
+            vec![vec![built[0][0], built[1][0]]]
+        );
+        // Only the low byte of the result counts.
+        e.register(COMPONENTS_COMPARE, |_, _| ret(0x100));
+        assert!(!e.call(0x0048_5270, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn copy_from_component_takes_type_and_flags_of_the_other_form() {
+        let mut e = wide_engine();
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        let this = wide_form(&mut e, 0x4008, 0x05);
+        let other = wide_form(&mut e, 0x0102, 0x2a);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_5340, &args![this, other]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, RT_DYNAMIC_CAST),
+            vec![vec![other.addr(), 0, 0x0118_3040, 0x0118_3028, 0]]
+        );
+        // Flag 2 differs: the virtual at +0xc8 gets the other form's state.
+        assert_eq!(calls_to(&log, WIDE_SET_FLAG_2), vec![vec![this.addr(), 1]]);
+        assert_eq!(e.get(this, TESForm::cFormType), 0x2a);
+        assert_eq!(e.get(this, TESForm::iFormFlags), 0x4102);
+        // Same flag 2 state: no virtual call.
+        let same = wide_form(&mut e, 0x0, 0x05);
+        let same_other = wide_form(&mut e, 0x0100, 0x06);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_5340, &args![same, same_other]);
+        assert!(calls_to(&e.call_log.take().unwrap(), WIDE_SET_FLAG_2).is_empty());
+        assert_eq!(e.get(same, TESForm::iFormFlags), 0x0100);
+        // Not a form: nothing changes.
+        let untouched = wide_form(&mut e, 0x0, 0x07);
+        e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
+        e.call(0x0048_5340, &args![untouched, same_other]);
+        assert_eq!(e.get(untouched, TESForm::cFormType), 0x07);
+    }
+
+    fn difference_engine() -> Engine {
+        let mut e = wide_engine();
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(FORM_NAME_KEY, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        e.register(STRING_COMPARE, |_, _| ret(0));
+        e
+    }
+
+    #[test]
+    fn difference_check_stops_at_the_first_difference() {
+        let mut e = difference_engine();
+        let this = wide_form(&mut e, 0x8, 0x20);
+        let same = wide_form(&mut e, 0x4001, 0x20);
+        // Not a form: different.
+        e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
+        assert!(e.call(0x0048_53e0, &args![this, same]).bool());
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        // Same type, no name keys, flags equal outside the masked bits.
+        assert!(!e.call(0x0048_53e0, &args![this, same]).bool());
+        // Different type.
+        let other_type = wide_form(&mut e, 0x8, 0x21);
+        assert!(e.call(0x0048_53e0, &args![this, other_type]).bool());
+        // A flag outside the mask.
+        let other_flags = wide_form(&mut e, 0x10, 0x20);
+        assert!(e.call(0x0048_53e0, &args![this, other_flags]).bool());
+    }
+
+    #[test]
+    fn difference_check_compares_name_keys_and_names() {
+        let mut e = difference_engine();
+        let this = wide_form(&mut e, 0x8, 0x20);
+        let other = wide_form(&mut e, 0x8, 0x20);
+        // Keys are the words at +0x10: both non-zero and equal, names equal
+        // by the string comparison double.
+        e.mem.set_u32(this.addr() + 0x10, 5);
+        e.mem.set_u32(other.addr() + 0x10, 5);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0048_53e0, &args![this, other]).bool());
+        let log = e.call_log.take().unwrap();
+        // The names (virtual +0x130) are compared this form first.
+        assert_eq!(
+            calls_to(&log, STRING_COMPARE),
+            vec![vec![this.addr(), other.addr()]]
+        );
+        // Keys differ.
+        e.mem.set_u32(other.addr() + 0x10, 6);
+        assert!(e.call(0x0048_53e0, &args![this, other]).bool());
+        // Only the other form has a key.
+        e.mem.set_u32(this.addr() + 0x10, 0);
+        assert!(e.call(0x0048_53e0, &args![this, other]).bool());
+        // Equal keys, different names.
+        e.mem.set_u32(this.addr() + 0x10, 5);
+        e.mem.set_u32(other.addr() + 0x10, 5);
+        e.register(STRING_COMPARE, |_, _| ret(1));
+        assert!(e.call(0x0048_53e0, &args![this, other]).bool());
+    }
+
+    const GROUP_WORD: u32 = 0x5055_5247;
+
+    fn group_engine() -> (Engine, Ptr<TESForm>, u32) {
+        let mut e = wide_engine();
+        e.set_global(GROUP_TAG, GROUP_WORD);
+        e.mem
+            .set_u32(FORM_ENUM_TABLE + 0x20 * FORM_ENUM_STRIDE + 8, 0x4c41_5645);
+        let f = wide_form(&mut e, 8, 0x20);
+        let record = e.mem.alloc(0x18);
+        (e, f, record)
+    }
+
+    #[test]
+    fn group_check_matches_the_top_level_group_of_the_forms_type() {
+        let (mut e, f, record) = group_engine();
+        e.mem.set_u32(record, GROUP_WORD);
+        e.mem.set_u32(record + 8, 0x4c41_5645);
+        e.mem.set_u32(record + 0xc, 0);
+        assert!(e.call(0x0048_54e0, &args![f, record, 0u32, 0u32]).bool());
+        // Null record, another tag, another group type, another label.
+        assert!(!e.call(0x0048_54e0, &args![f, 0u32, 0u32, 0u32]).bool());
+        e.mem.set_u32(record, GROUP_WORD + 1);
+        assert!(!e.call(0x0048_54e0, &args![f, record, 0u32, 0u32]).bool());
+        e.mem.set_u32(record, GROUP_WORD);
+        e.mem.set_u32(record + 0xc, 1);
+        assert!(!e.call(0x0048_54e0, &args![f, record, 0u32, 0u32]).bool());
+        e.mem.set_u32(record + 0xc, 0);
+        e.mem.set_u32(record + 8, 0x4c41_5646);
+        assert!(!e.call(0x0048_54e0, &args![f, record, 0u32, 0u32]).bool());
+    }
+
+    #[test]
+    fn group_fill_writes_the_top_level_group_header() {
+        let (mut e, f, record) = group_engine();
+        for offset in (0..0x18).step_by(4) {
+            e.mem.set_u32(record + offset, 0xaaaa_aaaa);
+        }
+        e.call(0x0048_5530, &args![f, record, 0u32]);
+        assert_eq!(e.mem.u32(record), GROUP_WORD);
+        assert_eq!(e.mem.u32(record + 4), 0);
+        assert_eq!(e.mem.u32(record + 8), 0x4c41_5645);
+        assert_eq!(e.mem.u32(record + 0xc), 0);
+        assert_eq!(e.mem.u32(record + 0x10), 0);
+        assert_eq!(e.mem.u16(record + 0x14), 0);
+        assert_eq!(e.mem.u16(record + 0x16), 0);
+        // A non-zero flag word or a null record leaves everything alone.
+        e.mem.set_u32(record, 0xaaaa_aaaa);
+        e.call(0x0048_5530, &args![f, record, 1u32]);
+        assert_eq!(e.mem.u32(record), 0xaaaa_aaaa);
+        e.call(0x0048_5530, &args![f, 0u32, 0u32]);
+    }
+
+    fn start_engine() -> Engine {
+        let mut e = wide_engine();
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(RECORD_VERSION, |_, _| ret(0xf));
+        e.mem
+            .set_u32(FORM_ENUM_TABLE + 0x20 * FORM_ENUM_STRIDE + 8, 0x4c41_5645);
+        e.mem
+            .set_u32(FORM_ENUM_TABLE + FORM_ENUM_STRIDE + 8, 0x3254_4553);
+        e
+    }
+
+    #[test]
+    fn start_form_writes_a_record_header() {
+        let mut e = start_engine();
+        let f = wide_form(&mut e, 0xffff_bff8, 0x20);
+        e.set(f, TESForm::iFormID, 0x0100_0abc);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_55a0, &args![f]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.global::<u32>(SAVE_BUFFER_SIZE), 0x18);
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x18]]);
+        let header = e.global::<u32>(SAVE_BUFFER);
+        assert_eq!(e.mem.u32(header), 0x4c41_5645);
+        assert_eq!(e.mem.u32(header + 4), 0);
+        assert_eq!(e.mem.u32(header + 8), 0xffff_bff8 & 0x3003_2fe0);
+        assert_eq!(e.mem.u32(header + 0xc), 0x0100_0abc);
+        assert_eq!(e.mem.u32(header + 0x10), 0);
+        assert_eq!(e.mem.u16(header + 0x14), 0xf);
+        assert_eq!(e.mem.u16(header + 0x16), 0);
+        assert_eq!(calls_to(&log, WIDE_AFTER_START), vec![vec![f.addr()]]);
+    }
+
+    #[test]
+    fn start_form_keeps_all_flags_of_type_1_and_skips_temporary_forms() {
+        let mut e = start_engine();
+        let first = wide_form(&mut e, 0xffff_bff8, 0x01);
+        e.call(0x0048_55a0, &args![first]);
+        let header = e.global::<u32>(SAVE_BUFFER);
+        assert_eq!(e.mem.u32(header + 8), 0xffff_bff8);
+        assert_eq!(e.mem.u32(header), 0x3254_4553);
+        let temporary = wide_form(&mut e, 0x4000, 0x20);
+        e.set_global(SAVE_BUFFER, 0u32);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_55a0, &args![temporary]);
+        assert!(calls_to(&e.call_log.take().unwrap(), OPERATOR_NEW).is_empty());
+        assert_eq!(e.global::<u32>(SAVE_BUFFER), 0);
+    }
+
+    #[test]
+    fn close_form_stores_the_data_size_and_swaps_on_big_endian() {
+        let mut e = wide_engine();
+        e.register(FORM_ENDIAN, |_, _| Ret::default());
+        let header = e.mem.alloc(0x40);
+        e.set_global(SAVE_BUFFER, header);
+        e.set_global(SAVE_BUFFER_SIZE, 0x30u32);
+        let f = wide_form(&mut e, 8, 0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_5680, &args![f]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(header + 4), 0x18);
+        assert!(calls_to(&log, FORM_ENDIAN).is_empty());
+        e.set_global(BIG_ENDIAN_FLAG, 1u8);
+        e.set_global(SAVE_BUFFER_SIZE, 0x20u32);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_5680, &args![f]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(header + 4), 8);
+        assert_eq!(calls_to(&log, FORM_ENDIAN), vec![vec![header]]);
+        // A temporary form leaves the header alone.
+        let temporary = wide_form(&mut e, 0x4000, 0x20);
+        e.set_global(SAVE_BUFFER_SIZE, 0x38u32);
+        e.call(0x0048_5680, &args![temporary]);
+        assert_eq!(e.mem.u32(header + 4), 8);
+    }
+
+    /// An engine with a record buffer of `capacity` bytes (header already
+    /// written, `0x18` bytes used), a pass-through realloc and byte-swap
+    /// doubles. Returns the engine and the buffer address.
+    fn chunk_engine(big_endian: bool, capacity: u32) -> (Engine, u32) {
+        let mut e = form_engine();
+        let buffer = e.mem.alloc(capacity);
+        e.set_global(SAVE_BUFFER, buffer);
+        e.set_global(SAVE_BUFFER_SIZE, 0x18u32);
+        e.set_global(BIG_ENDIAN_FLAG, big_endian as u8);
+        e.register(BUFFER_REALLOC, |_, a| ret(a[0]));
+        e.register(MEMCPY, |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            e.mem.write(a[0], &bytes);
+            ret(a[0])
+        });
+        e.register(SWAP_WORD, |e, a| {
+            let value = e.mem.u32(a[0]).swap_bytes();
+            e.mem.set_u32(a[0], value);
+            Ret::default()
+        });
+        e.register(SWAP_HALF, |e, a| {
+            let value = e.mem.u16(a[0]).swap_bytes();
+            e.mem.set_u16(a[0], value);
+            Ret::default()
+        });
+        (e, buffer)
+    }
+
+    /// The bytes of the record buffer after the header.
+    fn chunks(e: &Engine, buffer: u32) -> Vec<u8> {
+        let size = e.global::<u32>(SAVE_BUFFER_SIZE);
+        e.mem.bytes(buffer + 0x18, size - 0x18)
+    }
+
+    #[test]
+    fn add_chunk_data_appends_a_tagged_chunk() {
+        let (mut e, buffer) = chunk_engine(false, 0x100);
+        let data = e.mem.alloc(8);
+        e.mem.write(data, &[1, 2, 3]);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_5990, &args![0x4443_4241u32, data, 3u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.global::<u32>(SAVE_BUFFER_SIZE), 0x21);
+        assert_eq!(chunks(&e, buffer), b"ABCD\x03\x00\x01\x02\x03");
+        assert_eq!(calls_to(&log, BUFFER_REALLOC), vec![vec![buffer, 0x21]]);
+        // A second chunk follows the first.
+        e.call(0x0048_5990, &args![0x4443_4241u32, data, 1u32]);
+        assert_eq!(e.global::<u32>(SAVE_BUFFER_SIZE), 0x21 + 7);
+    }
+
+    #[test]
+    fn add_chunk_data_swaps_the_header_on_big_endian() {
+        let (mut e, buffer) = chunk_engine(true, 0x100);
+        let data = e.mem.alloc(8);
+        e.mem.write(data, &[1, 2, 3]);
+        e.register(SWAP_CHUNK_HEADER, |e, a| {
+            let tag = e.mem.u32(a[0]).swap_bytes();
+            e.mem.set_u32(a[0], tag);
+            let size = e.mem.u16(a[0] + 4).swap_bytes();
+            e.mem.set_u16(a[0] + 4, size);
+            Ret::default()
+        });
+        e.call(0x0048_5990, &args![0x4443_4241u32, data, 3u32]);
+        assert_eq!(chunks(&e, buffer), b"DCBA\x00\x03\x01\x02\x03");
+    }
+
+    #[test]
+    fn add_chunk_data_writes_the_real_size_of_a_huge_chunk_first() {
+        let (mut e, buffer) = chunk_engine(false, 0x10100);
+        let data = e.mem.alloc(0x10000);
+        e.mem.set_u8(data, 0x5a);
+        e.call(0x0048_5990, &args![0x4443_4241u32, data, 0x1_0000u32]);
+        assert_eq!(e.global::<u32>(SAVE_BUFFER_SIZE), 0x18 + 10 + 6 + 0x1_0000);
+        // "XXXX", size 4, the real size; then the tag with size 0 and the data.
+        assert_eq!(
+            e.mem.bytes(buffer + 0x18, 10),
+            b"XXXX\x04\x00\x00\x00\x01\x00"
+        );
+        assert_eq!(e.mem.bytes(buffer + 0x22, 6), b"ABCD\x00\x00");
+        assert_eq!(e.mem.u8(buffer + 0x28), 0x5a);
+    }
+
+    #[test]
+    fn add_chunk_without_data_has_size_zero() {
+        let (mut e, buffer) = chunk_engine(false, 0x100);
+        e.call(0x0048_56d0, &args![0x4443_4241u32]);
+        assert_eq!(chunks(&e, buffer), b"ABCD\x00\x00");
+    }
+
+    #[test]
+    fn add_chunk_array_adds_the_given_bytes() {
+        let (mut e, buffer) = chunk_engine(false, 0x100);
+        let data = e.mem.alloc(8);
+        e.mem.write(data, &[9, 8]);
+        e.call(0x0048_56f0, &args![0x4443_4241u32, data, 2u32]);
+        assert_eq!(chunks(&e, buffer), b"ABCD\x02\x00\x09\x08");
+    }
+
+    fn word_array(e: &mut Engine) -> u32 {
+        let data = e.mem.alloc(8);
+        e.mem.set_u32(data, 0x0102_0304);
+        e.mem.set_u32(data + 4, 0x0506_0708);
+        data
+    }
+
+    #[test]
+    fn add_chunk_array32_copies_and_swaps_on_big_endian() {
+        for (address, name) in [(0x0048_5750u32, "array32"), (0x0048_5710, "array_ov2")] {
+            let (mut e, buffer) = chunk_engine(false, 0x100);
+            let data = word_array(&mut e);
+            e.call(address, &args![0x4443_4241u32, data, 2u32]);
+            assert_eq!(
+                chunks(&e, buffer),
+                b"ABCD\x08\x00\x04\x03\x02\x01\x08\x07\x06\x05",
+                "{name}"
+            );
+            let (mut e, buffer) = chunk_engine(true, 0x100);
+            e.register(SWAP_CHUNK_HEADER, |_, _| Ret::default());
+            let data = word_array(&mut e);
+            e.call_log = Some(vec![]);
+            e.call(address, &args![0x4443_4241u32, data, 2u32]);
+            let log = e.call_log.take().unwrap();
+            // The values are swapped in a copy, not in the caller's array.
+            assert_eq!(e.mem.u32(data), 0x0102_0304);
+            assert_eq!(
+                chunks(&e, buffer),
+                b"ABCD\x08\x00\x01\x02\x03\x04\x05\x06\x07\x08",
+                "{name}"
+            );
+            assert_eq!(calls_to(&log, SWAP_WORD).len(), 2);
+        }
+    }
+
+    #[test]
+    fn add_chunk_array16_copies_and_swaps_on_big_endian() {
+        for address in [0x0048_5820u32, 0x0048_5730] {
+            let (mut e, buffer) = chunk_engine(false, 0x100);
+            let data = word_array(&mut e);
+            e.call(address, &args![0x4443_4241u32, data, 3u32]);
+            assert_eq!(chunks(&e, buffer), b"ABCD\x06\x00\x04\x03\x02\x01\x08\x07");
+            let (mut e, buffer) = chunk_engine(true, 0x100);
+            e.register(SWAP_CHUNK_HEADER, |_, _| Ret::default());
+            let data = word_array(&mut e);
+            e.call_log = Some(vec![]);
+            e.call(address, &args![0x4443_4241u32, data, 3u32]);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(calls_to(&log, SWAP_HALF).len(), 3);
+            assert_eq!(chunks(&e, buffer), b"ABCD\x06\x00\x03\x04\x01\x02\x07\x08");
+        }
+    }
+
+    #[test]
+    fn add_byte_chunk_writes_the_low_byte() {
+        let (mut e, buffer) = chunk_engine(false, 0x100);
+        e.call(0x0048_58f0, &args![0x4443_4241u32, 0x1234_5677u32]);
+        assert_eq!(chunks(&e, buffer), b"ABCD\x01\x00\x77");
+    }
+
+    #[test]
+    fn add_word_chunk_swaps_on_big_endian() {
+        let (mut e, buffer) = chunk_engine(false, 0x100);
+        e.call(0x0048_5910, &args![0x4443_4241u32, 0x0102_0304u32]);
+        assert_eq!(chunks(&e, buffer), b"ABCD\x04\x00\x04\x03\x02\x01");
+        let (mut e, buffer) = chunk_engine(true, 0x100);
+        e.register(SWAP_CHUNK_HEADER, |_, _| Ret::default());
+        e.call(0x0048_5910, &args![0x4443_4241u32, 0x0102_0304u32]);
+        assert_eq!(chunks(&e, buffer), b"ABCD\x04\x00\x01\x02\x03\x04");
+    }
+
+    #[test]
+    fn add_half_chunk_swaps_on_big_endian() {
+        let (mut e, buffer) = chunk_engine(false, 0x100);
+        e.call(0x0048_5950, &args![0x4443_4241u32, 0x0102u32]);
+        assert_eq!(chunks(&e, buffer), b"ABCD\x02\x00\x02\x01");
+        let (mut e, buffer) = chunk_engine(true, 0x100);
+        e.register(SWAP_CHUNK_HEADER, |_, _| Ret::default());
+        e.call(0x0048_5950, &args![0x4443_4241u32, 0x0102u32]);
+        assert_eq!(chunks(&e, buffer), b"ABCD\x02\x00\x01\x02");
+    }
+
+    #[test]
+    fn grow_chunk_adds_to_the_size_field_and_the_buffer() {
+        let (mut e, buffer) = chunk_engine(false, 0x100);
+        let f = form(&mut e, 8, 0x20);
+        let data = e.mem.alloc(8);
+        e.call(0x0048_5990, &args![0x4443_4241u32, data, 5u32]);
+        let chunk = buffer + 0x18;
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0048_5a70, &args![f, chunk, 3u32]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u16(chunk + 4), 8);
+        assert_eq!(e.global::<u32>(SAVE_BUFFER_SIZE), 0x18 + 11 + 3);
+        assert_eq!(calls_to(&log, BUFFER_REALLOC), vec![vec![buffer, 0x26]]);
+        // Past 0xffff, or growing an empty chunk by nothing, fails.
+        e.mem.set_u16(chunk + 4, 0xfffe);
+        assert!(!e.call(0x0048_5a70, &args![f, chunk, 2u32]).bool());
+        assert_eq!(e.mem.u16(chunk + 4), 0xfffe);
+        e.mem.set_u16(chunk + 4, 0);
+        assert!(!e.call(0x0048_5a70, &args![f, chunk, 0u32]).bool());
+        assert_eq!(e.global::<u32>(SAVE_BUFFER_SIZE), 0x26);
+        // Exactly 0xffff is allowed.
+        e.mem.set_u16(chunk + 4, 0xfff0);
+        assert!(e.call(0x0048_5a70, &args![f, chunk, 0xfu32]).bool());
+        assert_eq!(e.mem.u16(chunk + 4), 0xffff);
+    }
+
+    #[test]
+    fn grow_chunk_swaps_the_header_around_the_change_on_big_endian() {
+        let (mut e, buffer) = chunk_engine(true, 0x100);
+        e.register(SWAP_CHUNK_HEADER, |e, a| {
+            let size = e.mem.u16(a[0] + 4).swap_bytes();
+            e.mem.set_u16(a[0] + 4, size);
+            Ret::default()
+        });
+        let f = form(&mut e, 8, 0x20);
+        let chunk = buffer + 0x18;
+        e.mem.set_u16(chunk + 4, 0x0500);
+        assert!(e.call(0x0048_5a70, &args![f, chunk, 3u32]).bool());
+        assert_eq!(e.mem.u16(chunk + 4), 0x0800);
+        // A failure puts the original order back.
+        e.mem.set_u16(chunk + 4, 0xfeff);
+        assert!(!e.call(0x0048_5a70, &args![f, chunk, 2u32]).bool());
+        assert_eq!(e.mem.u16(chunk + 4), 0xfeff);
+    }
+
+    #[test]
+    fn free_form_buffer_frees_and_clears_the_pointer() {
+        let mut e = form_engine();
+        let buffer = e.mem.alloc(0x20);
+        e.set_global(SAVE_BUFFER, buffer);
+        let f = form(&mut e, 8, 0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_5b30, &args![f]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![buffer]]);
+        assert_eq!(e.global::<u32>(SAVE_BUFFER), 0);
+    }
+
+    #[test]
+    fn id_and_master_word_of_a_form() {
+        let mut e = list_engine();
+        let f = wide_form(&mut e, 8, 0x20);
+        e.set(f, TESForm::iFormID, 0x0512_3456);
+        e.register(FILE_MASTER_LIST, |_, a| ret(a[0] + 0x3ec));
+        let file = test_file(&mut e, false);
+        set_list(&mut e, f, &[file]);
+        // An empty master list: just the 24 bit ID.
+        assert_eq!(e.call(0x0048_5b60, &args![f]).u32(), 0x0012_3456);
+        // A master listed on the file sets bit 24.
+        e.mem.set_u32(file + 0x3ec, 0x1234);
+        assert_eq!(e.call(0x0048_5b60, &args![f]).u32(), 0x0112_3456);
+    }
+
+    #[test]
+    fn low_24_bits_of_the_id() {
+        let mut e = form_engine();
+        let f = form(&mut e, 8, 0x20);
+        e.set(f, TESForm::iFormID, 0x0512_3456);
+        assert_eq!(e.call(0x0048_5bc0, &args![f]).u32(), 0x0012_3456);
+    }
+
+    #[test]
+    fn id_comparison_ignores_the_top_byte() {
+        let mut e = form_engine();
+        let f = form(&mut e, 8, 0x20);
+        e.set(f, TESForm::iFormID, 0x0512_3456);
+        assert!(e.call(0x0048_5be0, &args![f, 0xff12_3456u32]).bool());
+        assert!(!e.call(0x0048_5be0, &args![f, 0x0512_3457u32]).bool());
+    }
+
+    fn set_id_engine() -> Engine {
+        let mut e = form_engine();
+        e.set_global(FORM_MAP, 0x7100_0000u32);
+        e.set_global(DATA_HANDLER, 0x7200_0000u32);
+        e.register(MAP_REMOVE_AT, |_, _| Ret::default());
+        e.register(MAP_SET_AT, |_, _| Ret::default());
+        e.register(DATA_HANDLER_REMOVE_ID, |_, _| Ret::default());
+        e
+    }
+
+    #[test]
+    fn set_form_id_moves_the_form_in_the_map() {
+        let mut e = set_id_engine();
+        let f = form(&mut e, 8, 0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_5c10, &args![f, 0x0200_0001u32, true]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, MAP_REMOVE_AT),
+            vec![vec![0x7100_0000, 0x0100_0abc]]
+        );
+        assert_eq!(
+            calls_to(&log, DATA_HANDLER_REMOVE_ID),
+            vec![vec![0x7200_0000, 0x0100_0abc]]
+        );
+        assert_eq!(
+            calls_to(&log, MAP_SET_AT),
+            vec![vec![0x7100_0000, 0x0200_0001, f.addr()]]
+        );
+        assert_eq!(e.get(f, TESForm::iFormID), 0x0200_0001);
+    }
+
+    #[test]
+    fn set_form_id_edge_cases() {
+        let mut e = set_id_engine();
+        // Same ID: nothing at all.
+        let f = form(&mut e, 8, 0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_5c10, &args![f, 0x0100_0abcu32, true]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        // Without the handler flag, and a new ID of 0: only the map removal.
+        e.call_log = Some(vec![]);
+        e.call(0x0048_5c10, &args![f, 0u32, false]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, MAP_REMOVE_AT).len(), 1);
+        assert!(calls_to(&log, DATA_HANDLER_REMOVE_ID).is_empty());
+        assert!(calls_to(&log, MAP_SET_AT).is_empty());
+        assert_eq!(e.get(f, TESForm::iFormID), 0);
+        // A form without an ID has nothing to remove.
+        e.call_log = Some(vec![]);
+        e.call(0x0048_5c10, &args![f, 0x30u32, true]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, MAP_REMOVE_AT).is_empty());
+        assert!(calls_to(&log, DATA_HANDLER_REMOVE_ID).is_empty());
+        assert_eq!(calls_to(&log, MAP_SET_AT).len(), 1);
+        // A temporary form only stores the ID.
+        let temporary = form(&mut e, 0x4000, 0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_5c10, &args![temporary, 0x31u32, true]);
+        assert_eq!(e.call_log.take().unwrap().len(), 2);
+        assert_eq!(e.get(temporary, TESForm::iFormID), 0x31);
     }
 }
