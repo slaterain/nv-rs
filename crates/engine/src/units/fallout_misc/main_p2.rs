@@ -3,10 +3,13 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::main`]; anything public there may be used here.
 //!
-//! This session covers `008705c0` to `00872f50`: the per-frame drawing
+//! The first session covers `008705c0` to `00872f50`: the per-frame drawing
 //! sequence of the main loop (the world, menu and 1st-person passes), the
 //! render-target and window helpers around it, and the `HighActorCuller` /
-//! `BSFadeNodeCuller` constructors.
+//! `BSFadeNodeCuller` constructors. The second covers `008731a0` to
+//! `00877260`: the world pass with the scene sorting, the 1st-person and
+//! menu passes, the frame wind-down, and the archive, start-cell and
+//! player-placement setup; the next one continues at `00877430`.
 //!
 //! Conventions of the compiled code, used throughout:
 //!
@@ -1848,6 +1851,2381 @@ pub fn fn_00872f50(
     created
 }
 
+// ---------------------------------------------------------------------------
+// Second session: `008731a0` to `00877260`.
+//
+// Conventions of this session, besides those above:
+//
+// - `00705910` returns the interface object the draw routines pass to
+//   `FOVATSEffectManager::DrawTargetToTexture` (`00800f30`); it takes no
+//   argument.
+// - `00950bb0(player, n)` returns a node of the player; `00456610` reads a
+//   flag byte of a node and `00450f90` sets it.
+// - `0045c670` returns the root, `006629f0` its child, `008d80e0` the
+//   object the scene is accumulated into (the Xbox PDB names that body
+//   `DialoguePackage::GetTargetOfConversation`, a folded name).
+// - A callee's stack arguments follow its `RET n`: a word pushed before a
+//   getter whose `RET` pops nothing belongs to the call that follows it.
+// - Locals the game passes by address (lists, the culling process, vectors,
+//   `NiPointer`s) are blocks of [`Engine::with_stack`].
+// - The security-cookie check and the exception frames are not translated.
+// ---------------------------------------------------------------------------
+
+/// `BSShaderUtil::AccumulateScene` (`00b6bee0`, Xbox PDB), cdecl: three
+/// words.
+const ACCUMULATE_SCENE: u32 = 0x00b6_bee0;
+/// `BSShaderUtil::AccumulateSceneList` (`00b6bfc0`, Xbox PDB), cdecl: scene,
+/// list, culling process.
+const ACCUMULATE_SCENE_LIST: u32 = 0x00b6_bfc0;
+/// `BSSceneGraph::SetCameraFOV` (`00c52020`, Xbox PDB): `this`, the field
+/// of view and three more words.
+const SET_CAMERA_FOV: u32 = 0x00c5_2020;
+/// `MTRenderingSystem::AddAccumTask` (`00ba3390`, Xbox PDB), on the
+/// multithreaded-rendering system, nine words.
+const ADD_ACCUM_TASK: u32 = 0x00ba_3390;
+/// `FOVATSEffectManager::DrawTargetToTexture` (`00800f30`, Xbox PDB), on
+/// the object `00705910` returns; six words.
+const DRAW_TARGET_TO_TEXTURE: u32 = 0x0080_0f30;
+/// The interface object (`00705910`): the result of `00602170` on the
+/// object `004b7210` returns when its `009373f0` flag is set, else 0.
+const GET_INTERFACE_OBJECT: u32 = 0x0070_5910;
+/// Returns the pointer in the global `0x011f9508` (an object with vtable
+/// slots `0xac`, `0xb0` and `0xb4`).
+const GET_GLOBAL_011F9508: u32 = 0x004a_0e90;
+/// The player's node for the argument (`00950bb0`).
+const GET_PLAYER_NODE: u32 = 0x0095_0bb0;
+/// The scene object `008d80e0` returns for the root.
+const GET_SCENE_TARGET: u32 = 0x008d_80e0;
+/// `NiPointer<T>::operator=(T*)` (`0066b0d0`): `this` is the pointer slot.
+const NI_POINTER_ASSIGN: u32 = 0x0066_b0d0;
+/// `NiPointer` copy constructor from a slot address (`00559a40`).
+const NI_POINTER_COPY_CTOR: u32 = 0x0055_9a40;
+/// `NiPointer` constructor from a pointer (`00633c90`).
+const NI_POINTER_CTOR: u32 = 0x0063_3c90;
+/// `NiPointer` destructor (`0045cec0`).
+const NI_POINTER_DTOR: u32 = 0x0045_cec0;
+/// Sets a flag byte of a node (`00450f90`).
+const SET_NODE_FLAG: u32 = 0x0045_0f90;
+/// Reads that flag byte (`00456610`).
+const GET_NODE_FLAG: u32 = 0x0045_6610;
+/// The object a rendered menu keeps at `+4` (`007fa950`).
+const GET_MENU_SCREEN: u32 = 0x007f_a950;
+/// `Interface::IsInPipboyMenu` is [`IS_IN_PIPBOY_MENU`]; the byte test of
+/// the actor (`008c51c0`, `Actor::IsRefractive` in the Xbox PDB).
+const ACTOR_FLAG: u32 = 0x008c_51c0;
+/// The constant colour the draw routines hand to `00712e60`.
+const CONSTANT_COLOR: u32 = 0x011a_d840;
+/// The `NiPointer` global `0x011deb38`: the offscreen render target of the
+/// 1st-person pass.
+const FIRST_PERSON_TARGET_POINTER: u32 = 0x011d_eb38;
+/// The 3 floats at `0x011f426c` (a zero vector the code resets nodes to).
+const ZERO_VECTOR: u32 = 0x011f_426c;
+/// Scene-node accessors: the child count (`0043b480`), the child at an
+/// index (`0043b4a0`) and the child for a slot (`0045bc00`).
+const CHILD_COUNT: u32 = 0x0043_b480;
+const CHILD_AT: u32 = 0x0043_b4a0;
+const CHILD_FOR_SLOT: u32 = 0x0045_bc00;
+/// `NiTPointerList` constructor, `AddTail`, `RemoveAll` and destructor
+/// (`0048f200`, `004ed8c0`, `004ed900`, `004a1a30`).
+const LIST_CTOR: u32 = 0x0048_f200;
+const LIST_PUSH: u32 = 0x004e_d8c0;
+const LIST_REMOVE_ALL: u32 = 0x004e_d900;
+const LIST_DTOR: u32 = 0x004a_1a30;
+
+fn player(e: &Engine) -> u32 {
+    e.mem.u32(PLAYER_OBJECT)
+}
+
+fn node_flag(e: &mut Engine, node: u32) -> u8 {
+    e.call(GET_NODE_FLAG, &args![node]).u8()
+}
+
+/// `00950bb0(player, n)`.
+fn player_node(e: &mut Engine, n: u32) -> u32 {
+    let player = player(e);
+    e.call(GET_PLAYER_NODE, &args![player, n]).u32()
+}
+
+/// Whether the renderer test of the draw routines holds: the global
+/// `0x011f9426` is set and the renderer's vtable slot `0xcc` answers 0 or
+/// the same as its slot `0xc8`. Reads the renderer (`0043c4b0`) the way the
+/// code does.
+fn renderer_color_applies(e: &mut Engine) -> bool {
+    if e.global::<u8>(0x011f_9426) == 0 {
+        return false;
+    }
+    let renderer = e.call(GET_GLOBAL_011F4748, &args![]).u32();
+    if e.vcall(renderer, 0xcc, &args![]).u32() == 0 {
+        return true;
+    }
+    let first = e.call(GET_GLOBAL_011F4748, &args![]).u32();
+    let second = e.call(GET_GLOBAL_011F4748, &args![]).u32();
+    let wanted = e.vcall(second, 0xc8, &args![]).u32();
+    e.vcall(first, 0xcc, &args![]).u32() == wanted
+}
+
+/// The field of view the draw routines pass to `SetCameraFOV`.
+fn camera_fov(e: &mut Engine) -> f32 {
+    let player = player(e);
+    fn_00874900(e, Ptr::new(player))
+}
+
+/// `SetCameraFOV(root, fov, 0, 0, 0)` then `00b54000(fov)`.
+fn set_camera_fov(e: &mut Engine, root: u32) {
+    let fov = camera_fov(e);
+    e.call(SET_CAMERA_FOV, &args![root, fov, 0u32, 0u32, 0u32]);
+    let fov = camera_fov(e);
+    e.call(0x00b5_4000, &args![fov]);
+}
+
+/// `007fa950` on the rendered menu `00707ad0` returns.
+fn rendered_menu_screen(e: &mut Engine) -> u32 {
+    let menu = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
+    e.call(GET_MENU_SCREEN, &args![menu]).u32()
+}
+
+// Translated from 008731a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cdecl float helper: the smaller of `value` and `limit` (`limit` when they
+/// are equal or unordered), returned as a double in `ST0`. (The decompiler
+/// casts `value` to a float; the code compares with the double.)
+pub fn fn_008731a0(_e: &mut Engine, value: f64, limit: f32) -> f64 {
+    if limit as f64 > value {
+        value
+    } else {
+        limit as f64
+    }
+}
+
+// Translated from 008731d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// If the `NiPointer` at `+0x20` holds an object, passes it to `006e5cc0`
+/// (`NiPointer<PathingDebugGeometryData>::operator_`, the Xbox PDB name of a
+/// shared body) on the member at `+0x08`.
+pub fn fn_008731d0(e: &mut Engine, this: Ptr) {
+    if pointer_get(e, this.addr() + 0x20) != 0 {
+        e.call(0x006e_5cc0, &args![this.addr() + 0x08, this.addr() + 0x20]);
+    }
+}
+
+/// Appends `value` to the `NiTPointerList` at `list` (`004ed8c0` takes the
+/// address of a cell holding the pointer).
+fn list_push(e: &mut Engine, list: u32, cell: u32, value: u32) {
+    e.mem.set_u32(cell, value);
+    e.call(LIST_PUSH, &args![list, cell]);
+}
+
+/// Appends `node` to `list` when it is not null and its flag byte is clear.
+fn push_unflagged(e: &mut Engine, list: u32, cell: u32, node: u32) {
+    if node != 0 && node_flag(e, node) == 0 {
+        list_push(e, list, cell, node);
+    }
+}
+
+/// Appends `value` to `list_a` when `index` is odd, else to `list_b`.
+fn push_by_parity(e: &mut Engine, lists: (u32, u32), cell: u32, index: u32, value: u32) {
+    if index & 1 != 0 {
+        list_push(e, lists.0, cell, value);
+    } else {
+        list_push(e, lists.1, cell, value);
+    }
+}
+
+/// The scene sorting of `00873200` when the global `0x011f94b4` is set:
+/// the children of the indexed global 0 are distributed over three lists
+/// (`a` for odd positions, `b` for even ones, `c` for the fixed children),
+/// the multithreaded task takes `a`, and `AccumulateSceneList` takes `b`
+/// and `c` through a `BSCullingProcess`.
+fn sort_and_accumulate_scene(e: &mut Engine, this_addr: u32, target: u32, child: u32) {
+    e.with_stack(0x110, |e, frame| {
+        let frame = frame.addr();
+        let list_a = frame;
+        let list_b = frame + 0x0c;
+        let list_c = frame + 0x18;
+        let cell = frame + 0x24;
+        let iter_a = frame + 0x28;
+        let iter_b = frame + 0x2c;
+        let culling = frame + 0x40;
+        let lists = (list_a, list_b);
+        for list in [list_a, list_b, list_c] {
+            e.call(LIST_CTOR, &args![list]);
+        }
+        let indexed = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+        let mut group = 0u32;
+        let node = e.call(CHILD_FOR_SLOT, &args![indexed, 0u32]).u32();
+        push_unflagged(e, list_c, cell, node);
+        let node = e.call(CHILD_FOR_SLOT, &args![indexed, 1u32]).u32();
+        push_unflagged(e, list_c, cell, node);
+        let node = e.call(CHILD_FOR_SLOT, &args![indexed, 2u32]).u32();
+        if node != 0 && node_flag(e, node) == 0 {
+            group = e.vcall(node, 0xc, &args![]).u32();
+        }
+        if group != 0 {
+            for slot in 0..3u32 {
+                let node = e.call(CHILD_FOR_SLOT, &args![group, slot]).u32();
+                push_unflagged(e, list_a, cell, node);
+            }
+        }
+        let node = e.call(CHILD_FOR_SLOT, &args![indexed, 3u32]).u32();
+        group = e.vcall(node, 0xc, &args![]).u32();
+        let world = e.mem.u32(WORLD_OBJECT);
+        let interior = e.call(0x005f_36f0, &args![world]).u32();
+        if interior == 0 {
+            // Exterior: two levels of groups, sorted by the outer index.
+            if group != 0 && node_flag(e, group) == 0 {
+                let mut i = 0u32;
+                while i < e.call(CHILD_COUNT, &args![group]).u32() {
+                    let outer = e.call(CHILD_AT, &args![group, i]).u32();
+                    if outer != 0 {
+                        let middle = e.vcall(outer, 0xc, &args![]).u32();
+                        if middle != 0 && node_flag(e, middle) == 0 {
+                            let mut j = 0u32;
+                            while j < e.call(CHILD_COUNT, &args![middle]).u32() {
+                                let item = e.call(CHILD_AT, &args![middle, j]).u32();
+                                if item != 0 {
+                                    let inner = e.vcall(item, 0xc, &args![]).u32();
+                                    if inner == 0 {
+                                        push_by_parity(e, lists, cell, i, item);
+                                    } else if node_flag(e, inner) == 0 {
+                                        let mut k = (j == 6) as u32;
+                                        while k < e.call(CHILD_COUNT, &args![inner]).u32() {
+                                            let leaf = e.call(CHILD_AT, &args![inner, k]).u32();
+                                            if leaf != 0 && node_flag(e, leaf) == 0 {
+                                                push_by_parity(e, lists, cell, i, leaf);
+                                            }
+                                            k += 1;
+                                        }
+                                    }
+                                }
+                                j += 1;
+                            }
+                        }
+                    }
+                    i += 1;
+                }
+            }
+        } else {
+            let indexed_zero = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+            if fn_00874650(e, Ptr::new(indexed_zero)) != 0 {
+                let node = e.call(CHILD_FOR_SLOT, &args![group, 0u32]).u32();
+                push_unflagged(e, list_b, cell, node);
+                let node = e.call(CHILD_FOR_SLOT, &args![group, 1u32]).u32();
+                push_unflagged(e, list_a, cell, node);
+                let node = e.call(CHILD_FOR_SLOT, &args![group, 2u32]).u32();
+                if node != 0 {
+                    group = e.vcall(node, 0xc, &args![]).u32();
+                    if group != 0 && node_flag(e, group) == 0 {
+                        let mut i = 0u32;
+                        while i < e.call(CHILD_COUNT, &args![group]).u32() {
+                            let outer = e.call(CHILD_AT, &args![group, i]).u32();
+                            if outer != 0 && i != 4 && i != 0 {
+                                let middle = e.vcall(outer, 0xc, &args![]).u32();
+                                if middle != 0 && node_flag(e, middle) == 0 {
+                                    let mut k = (i == 6) as u32;
+                                    while k < e.call(CHILD_COUNT, &args![middle]).u32() {
+                                        let leaf = e.call(CHILD_AT, &args![middle, k]).u32();
+                                        if leaf != 0 && node_flag(e, leaf) == 0 {
+                                            push_by_parity(e, lists, cell, k, leaf);
+                                        }
+                                        k += 1;
+                                    }
+                                }
+                            }
+                            i += 1;
+                        }
+                    }
+                }
+            } else {
+                let node = e.call(CHILD_FOR_SLOT, &args![group, 2u32]).u32();
+                if node != 0 {
+                    group = e.vcall(node, 0xc, &args![]).u32();
+                    if group != 0 && node_flag(e, group) == 0 {
+                        let node = e.call(CHILD_FOR_SLOT, &args![group, 7u32]).u32();
+                        if node != 0 {
+                            group = e.vcall(node, 0xc, &args![]).u32();
+                            if group != 0 {
+                                let mut i = 0u32;
+                                while i < e.call(CHILD_COUNT, &args![group]).u32() {
+                                    let leaf = e.call(CHILD_AT, &args![group, i]).u32();
+                                    if leaf != 0 && node_flag(e, leaf) == 0 {
+                                        push_by_parity(e, lists, cell, i, leaf);
+                                    }
+                                    i += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // The renderable objects of the indexed global's tree.
+            let indexed_zero = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+            let owner = e.call(0x0045_4b30, &args![indexed_zero]).u32();
+            let list_head = if owner != 0 {
+                e.call(0x0043_6aa0, &args![owner]).u32()
+            } else {
+                0
+            };
+            let first = if list_head != 0 {
+                pointer_get(e, list_head)
+            } else {
+                0
+            };
+            let mut counter = 0u32;
+            e.mem.set_u32(iter_a, first);
+            while e.mem.u32(iter_a) != 0 {
+                let list = e.call(0x0043_6aa0, &args![owner]).u32();
+                let slot = e.call(0x0057_cbe0, &args![list, iter_a]).u32();
+                let holder = pointer_get(e, slot);
+                if holder != 0 {
+                    let members = e.call(0x006a_b360, &args![holder]).u32();
+                    if e.call(0x0076_b610, &args![members]).u8() == 0 {
+                        let members = e.call(0x006a_b360, &args![holder]).u32();
+                        let first_member = pointer_get(e, members);
+                        if first_member != 0 {
+                            e.mem.set_u32(iter_b, first_member);
+                            while e.mem.u32(iter_b) != 0 {
+                                let members = e.call(0x006a_b360, &args![holder]).u32();
+                                let slot = e.call(0x0057_cbe0, &args![members, iter_b]).u32();
+                                let item = e.mem.u32(slot);
+                                if item != 0 {
+                                    let geometry = e.call(0x0045_c4c0, &args![item]).u32();
+                                    if e.call(0x00c4_f320, &args![target, geometry]).u8() != 0 {
+                                        let geometry = e.call(0x0045_c4c0, &args![item]).u32();
+                                        if geometry != 0 {
+                                            if fn_00874480(e, Ptr::new(item)) != 0
+                                                && e.call(0x009b_4440, &args![item]).u32() != 0
+                                            {
+                                                let shared =
+                                                    e.call(0x0084_e3a0, &args![target]).u32();
+                                                let indexed_zero =
+                                                    e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+                                                e.call(
+                                                    0x00b5_ba80,
+                                                    &args![indexed_zero, shared, item],
+                                                );
+                                            }
+                                            push_by_parity(e, lists, cell, counter, geometry);
+                                            counter += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            let indexed_zero = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+            if fn_00874650(e, Ptr::new(indexed_zero)) != 0 {
+                let list = e.call(0x007d_6bb0, &args![owner]).u32();
+                let first = pointer_get(e, list);
+                e.mem.set_u32(iter_a, first);
+                while e.mem.u32(iter_a) != 0 {
+                    let list = e.call(0x007d_6bb0, &args![owner]).u32();
+                    let slot = e.call(0x0057_cbe0, &args![list, iter_a]).u32();
+                    let item = e.mem.u32(slot);
+                    if item != 0 {
+                        let geometry = e.call(0x0045_c4c0, &args![item]).u32();
+                        if e.call(0x00c4_f320, &args![target, geometry]).u8() != 0 {
+                            let geometry = e.call(0x0045_c4c0, &args![item]).u32();
+                            if geometry != 0 {
+                                push_by_parity(e, lists, cell, counter, geometry);
+                                counter += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            let tes_object = e.mem.u32(WORLD_OBJECT);
+            let current = e.call(0x0045_7070, &args![tes_object]).u32();
+            let portal_graph = e.call(0x009d_9f20, &args![current]).u32();
+            if portal_graph != 0 {
+                let mut i = 0u32;
+                while i < e.call(0x00c5_b5d0, &args![portal_graph]).u32() {
+                    let always = e.call(0x00c5_b5a0, &args![portal_graph, i]).u32();
+                    if always != 0 {
+                        list_push(e, list_c, cell, always);
+                    }
+                    i += 1;
+                }
+            }
+        }
+        // The fixed children and the tail of the indexed global's children.
+        let node = e.call(CHILD_FOR_SLOT, &args![indexed, 4u32]).u32();
+        push_unflagged(e, list_c, cell, node);
+        let node = e.call(CHILD_FOR_SLOT, &args![indexed, 5u32]).u32();
+        push_unflagged(e, list_c, cell, node);
+        let node = e.call(CHILD_FOR_SLOT, &args![indexed, 6u32]).u32();
+        push_unflagged(e, list_a, cell, node);
+        let mut i = 7u32;
+        while i < e.call(CHILD_COUNT, &args![indexed]).u32() {
+            let node = e.call(CHILD_AT, &args![indexed, i]).u32();
+            if node != 0 && node_flag(e, node) == 0 {
+                push_by_parity(e, lists, cell, i, node);
+            }
+            i += 1;
+        }
+        e.call(0x0041_fd00, &args![target, child]);
+        let indexed_zero = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+        e.call(0x00b5_e870, &args![indexed_zero, target]);
+        let indexed_zero = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+        if fn_00874670(e, Ptr::new(indexed_zero)).addr() != 0 {
+            let indexed_zero = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+            let operations = fn_00874670(e, Ptr::new(indexed_zero)).addr();
+            e.call(0x00c4_9850, &args![operations]);
+        }
+        let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
+        e.vcall(accumulator, 0x8c, &args![child]);
+        let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
+        e.call(0x00b5_4ac0, &args![accumulator]);
+        let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
+        let renderer = e.call(GET_GLOBAL_011F4748, &args![]).u32();
+        e.call(0x004d_c540, &args![renderer, accumulator]);
+        let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
+        let indexed_zero = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+        let operations = fn_00874670(e, Ptr::new(indexed_zero)).addr();
+        let system = e.call(GET_MT_SYSTEM, &args![]).u32();
+        e.call(
+            ADD_ACCUM_TASK,
+            &args![
+                system,
+                child,
+                operations,
+                0u32,
+                list_a,
+                0u32,
+                accumulator,
+                0u32,
+                0x15u32,
+                1u32
+            ],
+        );
+        mt_set_stage(e, 0, 0x15);
+        let tls = e.tls();
+        e.mem.set_u32(tls + 0x2bc, 0);
+        e.call(0x004a_0eb0, &args![culling, 0u32]);
+        e.call(0x0041_fd00, &args![culling, child]);
+        let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
+        e.call(0x004a_0fd0, &args![culling, accumulator]);
+        let indexed_zero = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+        let operations = fn_00874670(e, Ptr::new(indexed_zero)).addr();
+        fn_00874460(e, Ptr::new(culling), operations);
+        e.call(ACCUMULATE_SCENE_LIST, &args![child, list_b, culling]);
+        fn_00874460(e, Ptr::new(culling), 0);
+        e.call(ACCUMULATE_SCENE_LIST, &args![child, list_c, culling]);
+        mt_advance_stage(e, 1, 0x15);
+        e.call(LIST_REMOVE_ALL, &args![list_a]);
+        e.call(LIST_REMOVE_ALL, &args![list_b]);
+        e.call(0x004a_0f60, &args![culling]);
+        e.call(LIST_DTOR, &args![list_c]);
+        e.call(LIST_DTOR, &args![list_b]);
+        e.call(LIST_DTOR, &args![list_a]);
+    });
+}
+
+/// The two short passes after the world pass: the same sequence with the
+/// objects of `00874690` (`second` false) and of `008746a0` / `008746b0`
+/// (`second` true) as the scene lists.
+fn extra_pass(e: &mut Engine, this_addr: u32, world_target: u32, second: bool) {
+    fn_008746c0(e);
+    e.call(GET_GLOBAL_011F9508, &args![]);
+    let root = e.call(GET_ROOT, &args![]).u32();
+    let target = e.call(GET_SCENE_TARGET, &args![root]).u32();
+    e.call(0x004f_b0b0, &args![target, 1u32]);
+    let root_pointer = pointer_get(e, ROOT_POINTER);
+    let child = e.call(GET_ROOT_CHILD, &args![root_pointer]).u32();
+    e.call(0x00b8_03b0, &args![child]);
+    let first = if second {
+        fn_008746b0(e)
+    } else {
+        fn_00874690(e)
+    };
+    e.call(0x0041_fd00, &args![target, first]);
+    let accumulator = pointer_get(e, this_addr + 0x94);
+    e.call(0x004a_0fd0, &args![target, accumulator]);
+    if second {
+        let middle = fn_008746a0(e);
+        let list = fn_008746b0(e);
+        e.call(ACCUMULATE_SCENE, &args![list, middle, target]);
+    } else {
+        let middle = e.call(0x005b_ac50, &args![]).u32();
+        let list = fn_00874690(e);
+        e.call(ACCUMULATE_SCENE, &args![list, middle, target]);
+    }
+    let accumulator = pointer_get(e, this_addr + 0x94);
+    let list = if second {
+        fn_008746b0(e)
+    } else {
+        fn_00874690(e)
+    };
+    e.call(0x00b6_c0d0, &args![list, accumulator, 0u32]);
+    e.call(0x004a_0fd0, &args![world_target, 0u32]);
+    e.call(0x004f_b0b0, &args![target, 0u32]);
+}
+
+// Translated from 00873200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The world pass of the main draw sequence. `this` is the `Main` object.
+/// `object` is an optional object that gets `00642860` first and
+/// `006426a0` at the end; `skip_pass` clears the flag byte `+0x38` of the
+/// world accumulator (and keeps `+0x3a` clear); `overlay` draws the
+/// overlay target (`00800f30`) after the scene.
+///
+/// With the global `0x011f94b4` clear the scene is accumulated directly;
+/// otherwise it is sorted into three lists by
+/// [`sort_and_accumulate_scene`]. The wind-down of the exception frame and
+/// the security-cookie check are not translated.
+pub fn fn_00873200(
+    e: &mut Engine,
+    this: Ptr,
+    object: u32,
+    _unused_1: u32,
+    skip_pass: u8,
+    overlay: u8,
+) {
+    let this_addr = this.addr();
+    let root = e.call(GET_ROOT, &args![]).u32();
+    let target = e.call(GET_SCENE_TARGET, &args![root]).u32();
+    let root_child = e.call(GET_ROOT_CHILD, &args![root]).u32();
+    e.set_global(0x011f_9684, root_child);
+    if object != 0 {
+        e.call(0x0064_2860, &args![object]);
+    }
+    let node = player_node(e, 1);
+    let saved_flag = node_flag(e, node);
+    let node = player_node(e, 1);
+    e.call(SET_NODE_FLAG, &args![node, 1u32]);
+    let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
+    e.mem.set_u8(accumulator + 0x38, (skip_pass == 0) as u8);
+    let water = e.call(GET_GLOBAL_011F91AC, &args![]).u32();
+    let texture = e.call(0x004e_bbc0, &args![water, 4u32]).u32();
+    let use_texture = skip_pass == 0 && fn_00871220(e, Ptr::new(texture));
+    let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
+    e.mem.set_u8(accumulator + 0x3a, use_texture as u8);
+    let use_texture = skip_pass == 0 && fn_00871220(e, Ptr::new(texture));
+    let accumulator = pointer_get(e, this_addr + MAIN_FIRST_PERSON_ACCUM);
+    e.mem.set_u8(accumulator + 0x3a, use_texture as u8);
+
+    e.with_stack(0x10, |e, guard| {
+        let guard = guard.addr();
+        e.call(
+            PROFILE_SCOPE_CTOR,
+            &args![guard, 0xfu32, 1u32, SOURCE_FILE_NAME, 0x1eb7u32],
+        );
+        let child = e.call(GET_ROOT_CHILD, &args![root]).u32();
+        e.call(0x0041_fd00, &args![target, child]);
+        let frustum = e.call(MEMBER_8C_B, &args![child]).u32();
+        e.call(0x00a6_94a0, &args![target, frustum]);
+        let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
+        e.call(0x004a_0fd0, &args![target, accumulator]);
+        if e.global::<u8>(0x011f_94b4) == 0 {
+            e.call(ACCUMULATE_SCENE, &args![child, root, target]);
+        } else {
+            sort_and_accumulate_scene(e, this_addr, target, child);
+        }
+        let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
+        let root_child = e.call(GET_ROOT_CHILD, &args![root]).u32();
+        e.call(0x00b6_ba20, &args![root_child, accumulator, 1u32]);
+        if overlay != 0 {
+            e.call(0x00b9_8380, &args![0u32, 1u32]);
+            let interface = e.call(GET_INTERFACE_OBJECT, &args![]).u32();
+            e.call(
+                DRAW_TARGET_TO_TEXTURE,
+                &args![interface, 0u32, 2u32, 1u32, 0u32, 0u32, 0u32],
+            );
+            e.call(0x004e_ced0, &args![1u32]);
+        }
+        let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
+        let root_child = e.call(GET_ROOT_CHILD, &args![root]).u32();
+        e.call(0x00b6_b930, &args![root_child, accumulator, 1u32]);
+        if e.global::<u8>(0x011f_94b4) != 0 {
+            let indexed = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+            e.call(0x00a8_9af0, &args![indexed, target]);
+        }
+        e.call(0x004a_0fd0, &args![target, 0u32]);
+        e.call(0x0040_4f70, &args![guard]);
+        let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
+        e.mem.set_u8(accumulator + 0x38, 0);
+        let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
+        e.mem.set_u8(accumulator + 0x3a, 0);
+        extra_pass(e, this_addr, target, false);
+        extra_pass(e, this_addr, target, true);
+        if setting_dword(e, SETTING_THREADS) > 1 {
+            e.call(0x008c_80e0, &args![0u32]);
+        }
+        if e.global::<u8>(0x011f_94a9) != 0 {
+            let root_child = e.call(GET_ROOT_CHILD, &args![root]).u32();
+            fn_008744a0(e, root_child);
+        }
+        if object != 0 {
+            let root_pointer = pointer_get(e, ROOT_POINTER);
+            let root_child = e.call(GET_ROOT_CHILD, &args![root_pointer]).u32();
+            let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
+            e.call(0x0064_26a0, &args![object, 1u32, accumulator, root_child]);
+        }
+        fn_00872dd0(e, 0, 0);
+        let node = player_node(e, 1);
+        e.call(SET_NODE_FLAG, &args![node, saved_flag as u32]);
+        e.call(PROFILE_SCOPE_DTOR, &args![guard]);
+    });
+}
+
+// Translated from 00874460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the word at `+0xc0`.
+pub fn fn_00874460(e: &mut Engine, this: Ptr, value: u32) {
+    e.mem.set_u32(this.addr() + 0xc0, value);
+}
+
+// Translated from 00874480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `+0xfc`.
+pub fn fn_00874480(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0xfc)
+}
+
+// Translated from 008744a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cdecl. With a null `object` copies the three floats of `0x011a9490`
+/// to `0x012003d4` and clears the byte `0x012003cc`. Otherwise reads the
+/// position of `object` (the vector at its `+0x8c`) and a second vector
+/// (`0045bba0`), subtracts the previously stored pair (`0x012003e0` and
+/// `0x012003d4`, `00439ef0`), divides each difference by the stored value
+/// (`00416870` builds the results) and sets `0x012003cc` when any
+/// component of either quotient exceeds 0.01 (the double at
+/// `0x01031148`); then stores the two vectors for the next call.
+pub fn fn_008744a0(e: &mut Engine, object: u32) {
+    if object == 0 {
+        for (from, to) in [
+            (0x011a_9490u32, 0x0120_03d4u32),
+            (0x011a_9494, 0x0120_03d8),
+            (0x011a_9498, 0x0120_03dc),
+        ] {
+            let word: u32 = e.global(from);
+            e.set_global(to, word);
+        }
+        e.set_global(0x0120_03cc, 0u8);
+        return;
+    }
+    let member = e.call(MEMBER_8C, &args![object]).u32();
+    e.with_stack(0x60, |e, frame| {
+        let frame = frame.addr();
+        let position = frame;
+        let second = frame + 0x10;
+        let difference_a = frame + 0x20;
+        let difference_b = frame + 0x30;
+        let quotient_a = frame + 0x40;
+        let quotient_b = frame + 0x50;
+        for k in 0..3 {
+            let word = e.mem.u32(member + 4 * k);
+            e.mem.set_u32(position + 4 * k, word);
+        }
+        e.call(0x0045_bba0, &args![object, second]);
+        e.call(0x0043_9ef0, &args![position, difference_a, 0x0120_03e0u32]);
+        e.call(0x0043_9ef0, &args![second, difference_b, 0x0120_03d4u32]);
+        let quotient = |e: &Engine, from: u32, k: u32, global: u32| -> f32 {
+            let numerator = e.mem.f32(from + 4 * k) as f64;
+            let divisor = e.global::<f32>(global) as f64;
+            (numerator / divisor) as f32
+        };
+        let x = quotient(e, difference_a, 0, 0x0120_03e0);
+        let y = quotient(e, difference_a, 1, 0x0120_03e4);
+        let z = quotient(e, difference_a, 2, 0x0120_03e8);
+        e.call(0x0041_6870, &args![quotient_a, x, y, z]);
+        let x = quotient(e, difference_b, 0, 0x0120_03d4);
+        let y = quotient(e, difference_b, 1, 0x0120_03d8);
+        let z = quotient(e, difference_b, 2, 0x0120_03dc);
+        e.call(0x0041_6870, &args![quotient_b, x, y, z]);
+        let limit: f64 = e.global(0x0103_1148);
+        let mut changed = false;
+        for (block, k) in [
+            (quotient_a, 0),
+            (quotient_a, 1),
+            (quotient_a, 2),
+            (quotient_b, 0),
+            (quotient_b, 1),
+            (quotient_b, 2),
+        ] {
+            if limit < e.mem.f32(block + 4 * k) as f64 {
+                changed = true;
+                break;
+            }
+        }
+        e.set_global(0x0120_03cc, changed as u8);
+        for k in 0..3 {
+            let word = e.mem.u32(position + 4 * k);
+            e.set_global(0x0120_03e0 + 4 * k, word);
+            let word = e.mem.u32(second + 4 * k);
+            e.set_global(0x0120_03d4 + 4 * k, word);
+        }
+    });
+}
+
+// Translated from 00874650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `+0x1dc`.
+pub fn fn_00874650(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x1dc)
+}
+
+// Translated from 00874670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address `this + 0x138`.
+pub fn fn_00874670(_e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(this.addr() + 0x138)
+}
+
+// Translated from 00874690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The object held by the `NiPointer` global `0x011c7840` (`00559450`).
+pub fn fn_00874690(e: &mut Engine) -> u32 {
+    pointer_get(e, 0x011c_7840)
+}
+
+// Translated from 008746a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The object held by the `NiPointer` global `0x011c7810`.
+pub fn fn_008746a0(e: &mut Engine) -> u32 {
+    pointer_get(e, 0x011c_7810)
+}
+
+// Translated from 008746b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The object held by the `NiPointer` global `0x011c781c`.
+pub fn fn_008746b0(e: &mut Engine) -> u32 {
+    pointer_get(e, 0x011c_781c)
+}
+
+// Translated from 008746c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the word `0x011ff0f0`.
+pub fn fn_008746c0(e: &mut Engine) {
+    e.set_global(0x011f_f0f0, 0u32);
+}
+
+// Translated from 008746d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The pass that draws the player's node into the offscreen interface
+/// target: when the actor is aiming (`008bbc10` on the player) the
+/// borrowed render target is made current first (and released at the end).
+/// One stack word is not read.
+pub fn fn_008746d0(e: &mut Engine, this: Ptr, _unused_0: u32) {
+    let water = e.call(GET_GLOBAL_011F91AC, &args![]).u32();
+    let decal = e.call(GET_GLOBAL_011F9508, &args![]).u32();
+    let node = player_node(e, 1);
+    let root = e.call(GET_ROOT, &args![]).u32();
+    let target = e.call(GET_SCENE_TARGET, &args![root]).u32();
+    let player_value = player(e);
+    let aiming = e.call(0x008b_bc10, &args![player_value]).u8();
+    e.with_stack(0x10, |e, color| {
+        let color = color.addr();
+        color_ctor(e, color, 0.0, 0.0, 0.0, 0.0);
+        if aiming == 0 {
+            e.call(0x00b9_8380, &args![0u32, 1u32]);
+        } else {
+            let borrowed = e.call(0x004e_bbc0, &args![water, 4u32]).u32();
+            let texture = fn_008748d0(e, Ptr::new(borrowed));
+            e.call(0x00b6_b790, &args![]);
+            e.vcall(decal, 0xb4, &args![color]);
+            e.vcall(decal, 0xb0, &args![0x011f_4998u32]);
+            let group = e.call(0x00b6_b260, &args![texture]).u32();
+            e.call(0x00b6_b8d0, &args![1u32, group]);
+        }
+        let saved_flag = node_flag(e, node);
+        e.call(SET_NODE_FLAG, &args![node, 0u32]);
+        let player_value = player(e);
+        let fov = fn_00874900(e, Ptr::new(player_value));
+        e.call(SET_CAMERA_FOV, &args![root, fov, 0u32, 0u32, 0u32]);
+        let player_value = player(e);
+        let fov = fn_00874900(e, Ptr::new(player_value));
+        e.call(0x00b5_4000, &args![fov]);
+        let accumulator = pointer_get(e, this.addr() + 0x90);
+        e.call(0x004a_0fd0, &args![target, accumulator]);
+        let child = e.call(GET_ROOT_CHILD, &args![root]).u32();
+        e.call(ACCUMULATE_SCENE, &args![child, node, target]);
+        let accumulator = pointer_get(e, this.addr() + 0x90);
+        let child = e.call(GET_ROOT_CHILD, &args![root]).u32();
+        e.call(0x00b6_c0d0, &args![child, accumulator, 0u32]);
+        e.call(0x004a_0fd0, &args![target, 0u32]);
+        let player_value = player(e);
+        let fov = e.call(0x0071_0ab0, &args![player_value]).f32();
+        e.call(SET_CAMERA_FOV, &args![root, fov, 0u32, 0u32, 0u32]);
+        let player_value = player(e);
+        let fov = e.call(0x0071_0ab0, &args![player_value]).f32();
+        e.call(0x00b5_4000, &args![fov]);
+        e.call(SET_NODE_FLAG, &args![node, saved_flag as u32]);
+        if aiming == 0 {
+            e.call(0x004e_ced0, &args![1u32]);
+        } else {
+            e.vcall(decal, 0xac, &args![color]);
+            e.call(0x00b6_b790, &args![]);
+        }
+    });
+}
+
+// Translated from 008748d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceTexture::BorrowRenderedTexture` (`00ba3840`, Xbox PDB) with
+/// the argument `0x27` on the member at `+0x7c`, then
+/// `ImageSpaceTexture::GetRenderedTexture` (`00ba3770`) on it.
+pub fn fn_008748d0(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(0x00ba_3840, &args![this.addr() + 0x7c, 0x27u32]);
+    e.call(0x00ba_3770, &args![this.addr() + 0x7c]).u32()
+}
+
+// Translated from 00874900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The float at `+0x674`, returned in `ST0`.
+pub fn fn_00874900(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0x674)
+}
+
+// Translated from 00874920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Under a profiler scope (kind `0x27`, line `0x20d5`), accumulates the
+/// root's child into `accumulator` (`00b64570`, with `target`). `this` is
+/// not read.
+pub fn fn_00874920(e: &mut Engine, _this: Ptr, accumulator: u32, target: u32) {
+    with_profile_scope(e, 0x27, 0x20d5, |e| {
+        let root = e.call(GET_ROOT, &args![]).u32();
+        let child = e.call(GET_ROOT_CHILD, &args![root]).u32();
+        e.call(0x00b6_4570, &args![accumulator, child, target]);
+    });
+}
+
+// Translated from 008749b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The two overlay draws of the offscreen target. Needs the interface
+/// object (`00705910`) to hold a pointer (`005585e0`); creates the
+/// render target of the global `0x011deb38` (`00b6e110` with `0x2f`) when it
+/// is empty; then, with the interface's own pointer empty, the target set
+/// and the interface byte `+0x118` set (`00874aa0`), calls
+/// `DrawTargetToTexture` twice with the target and returns 1.
+pub fn fn_008749b0(e: &mut Engine, _this: Ptr) -> u8 {
+    let mut drew = 0u8;
+    let interface = e.call(GET_INTERFACE_OBJECT, &args![]).u32();
+    if e.call(0x0055_85e0, &args![interface]).u32() == 0 {
+        return drew;
+    }
+    if pointer_get(e, FIRST_PERSON_TARGET_POINTER) == 0 {
+        let renderer = e.call(GET_GLOBAL_011F4748, &args![]).u32();
+        let factory = e.call(GET_GLOBAL_011F91A8, &args![]).u32();
+        let created = e
+            .call(
+                0x00b6_e110,
+                &args![factory, renderer, 0x2fu32, 0u32, 0u32, 0u32],
+            )
+            .u32();
+        e.call(
+            NI_POINTER_ASSIGN,
+            &args![FIRST_PERSON_TARGET_POINTER, created],
+        );
+    }
+    let interface = e.call(GET_INTERFACE_OBJECT, &args![]).u32();
+    if pointer_get(e, interface) == 0 && pointer_get(e, FIRST_PERSON_TARGET_POINTER) != 0 {
+        let interface = e.call(GET_INTERFACE_OBJECT, &args![]).u32();
+        if e.call(0x0055_85e0, &args![interface]).u32() != 0 {
+            let interface = e.call(GET_INTERFACE_OBJECT, &args![]).u32();
+            if fn_00874aa0(e, Ptr::new(interface)) != 0 {
+                let target = pointer_get(e, FIRST_PERSON_TARGET_POINTER);
+                let interface = e.call(GET_INTERFACE_OBJECT, &args![]).u32();
+                e.call(
+                    DRAW_TARGET_TO_TEXTURE,
+                    &args![interface, target, 0u32, 1u32, 0u32, 7u32, 0u32],
+                );
+                let target = pointer_get(e, FIRST_PERSON_TARGET_POINTER);
+                let interface = e.call(GET_INTERFACE_OBJECT, &args![]).u32();
+                e.call(
+                    DRAW_TARGET_TO_TEXTURE,
+                    &args![interface, target, 1u32, 1u32, 0u32, 1u32, 1u32],
+                );
+                drew = 1;
+            }
+        }
+    }
+    drew
+}
+
+// Translated from 00874aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `+0x118`.
+pub fn fn_00874aa0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x118)
+}
+
+// Translated from 00874ac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// If the interface object (`00705910`) holds a pointer (`005585e0`): makes
+/// the stage `00b6b790`, sets `00b98380(0, 1)`, draws the target of
+/// `0x011deb38` to the texture, `004eced0(1)`, and draws it a second time.
+/// One stack word is not read.
+pub fn fn_00874ac0(e: &mut Engine, _this: Ptr, _unused_0: u32) {
+    let interface = e.call(GET_INTERFACE_OBJECT, &args![]).u32();
+    if e.call(0x0055_85e0, &args![interface]).u32() != 0 {
+        e.call(0x00b6_b790, &args![]);
+        e.call(0x00b9_8380, &args![0u32, 1u32]);
+        let target = pointer_get(e, FIRST_PERSON_TARGET_POINTER);
+        let interface = e.call(GET_INTERFACE_OBJECT, &args![]).u32();
+        e.call(
+            DRAW_TARGET_TO_TEXTURE,
+            &args![interface, target, 0u32, 0u32, 1u32, 7u32, 0u32],
+        );
+        e.call(0x004e_ced0, &args![1u32]);
+        let target = pointer_get(e, FIRST_PERSON_TARGET_POINTER);
+        let interface = e.call(GET_INTERFACE_OBJECT, &args![]).u32();
+        e.call(
+            DRAW_TARGET_TO_TEXTURE,
+            &args![interface, target, 0u32, 0u32, 0u32, 1u32, 1u32],
+        );
+    }
+}
+
+// Translated from 00874b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// If `004e9510` holds: makes the group of `texture` current
+/// (`00b6b260` then `00b6b8d0(group_slot, group)`). `this` and the
+/// second word are not read.
+pub fn fn_00874b50(e: &mut Engine, _this: Ptr, texture: u32, _unused_1: u32, slot: u32) {
+    if e.call(0x004e_9510, &args![]).u8() != 0 {
+        e.call(GET_GLOBAL_011F91AC, &args![]);
+        e.call(GET_GLOBAL_011F9508, &args![]);
+        let group = e.call(0x00b6_b260, &args![texture]).u32();
+        e.call(0x00b6_b8d0, &args![slot, group]);
+    }
+}
+
+// Translated from 00874b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// If the `NiPointer` global `0x011ded3c` holds a target: draws it into
+/// the image-space pass (`00b97550` on the first stack word, with `0x22`,
+/// the second word, the target, `mask` unless `skip_mask` is set, 0 and
+/// 1). `this` is not read.
+pub fn fn_00874b90(e: &mut Engine, _this: Ptr, first: u32, second: u32, skip_mask: u8, mask: u32) {
+    if pointer_get(e, MENU_TARGET_POINTER) != 0 {
+        e.call(0x00b9_8380, &args![7u32, 1u32]);
+        e.call(0x00b9_7fa0, &args![0u32, 1u32]);
+        let mask = if skip_mask != 0 { 0 } else { mask };
+        let target = pointer_get(e, MENU_TARGET_POINTER);
+        e.call(
+            0x00b9_7550,
+            &args![first, 0x22u32, second, target, mask, 0u32, 1u32],
+        );
+        e.call(0x0071_4ae0, &args![1u32]);
+        e.call(0x004e_ced0, &args![1u32]);
+    }
+}
+
+// Translated from 00874c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Main::DrawWorld_MTSetup1stPerson` (Xbox PDB): the 1st-person pass of
+/// the multithreaded draw. Under a profiler scope (kind `0x34`, line
+/// `0x21b1`): prepares the player's node (flag cleared, colour), and when
+/// exactly one of the node's two flags is set (and `005bb4d0` on the
+/// `Main` object is clear) moves the camera by the node's position
+/// (`004a0bd0`, `004f00e0`, `00688430`...), records the position through
+/// `00870790` and `008750e0`, sets `0x011de9d1`; otherwise clears
+/// `0x011de9d1`. Finally queues the accumulation task (`00ba3390`) unless
+/// a rendered menu other than the pipboy is current, and sets the thread
+/// stage 0 to `0x16`.
+pub fn main_draw_world_mt_setup_1st_person(e: &mut Engine, this: Ptr) {
+    let this_addr = this.addr();
+    with_profile_scope(e, 0x34, 0x21b1, |e| {
+        let root = e.call(GET_ROOT, &args![]).u32();
+        let root_child = e.call(GET_ROOT_CHILD_OF_ROOT, &args![]).u32();
+        let node = player_node(e, 1);
+        e.call(SET_NODE_FLAG, &args![node, 0u32]);
+        if renderer_color_applies(e) {
+            let child = e.call(GET_ROOT_CHILD_OF_ROOT, &args![]).u32();
+            e.call(SET_COLOR, &args![child, CONSTANT_COLOR]);
+        }
+        let fov = camera_fov(e);
+        e.call(SET_CAMERA_FOV, &args![root, fov, 0u32, 0u32, 0u32]);
+        let first = {
+            let n = player_node(e, 0);
+            node_flag(e, n)
+        };
+        let enter = if first == 0 && {
+            let n = player_node(e, 1);
+            node_flag(e, n) != 0
+        } {
+            true
+        } else {
+            let y = {
+                let n = player_node(e, 0);
+                node_flag(e, n)
+            };
+            if y == 0 {
+                false
+            } else {
+                let n = player_node(e, 1);
+                node_flag(e, n) == 0
+            }
+        };
+        let main_object = e.mem.u32(MAIN_OBJECT);
+        if enter && e.call(0x005b_b4d0, &args![main_object]).u8() == 0 {
+            e.with_stack(0x100, |e, frame| {
+                let frame = frame.addr();
+                let out_a = frame;
+                let point = frame + 0x10;
+                let block = frame + 0x20;
+                let sum_a = frame + 0x60;
+                let sum_b = frame + 0x70;
+                let sum_c = frame + 0x80;
+                let saved = frame + 0x90;
+                let member = e.call(MEMBER_8C, &args![node]).u32();
+                e.call(0x004a_0bd0, &args![member, out_a]);
+                e.call(POINT3_CTOR, &args![point, 0u32, 0u32, 0u32]);
+                e.set_global(0x011d_e9d1, 1u8);
+                let value = e.call(0x0064_47f0, &args![root_child]).f32();
+                let camera = pointer_get(e, this_addr + 0xa0);
+                e.call(0x0050_7700, &args![camera, value]);
+                let frustum = e.call(MEMBER_8C_B, &args![root_child]).u32();
+                let camera = pointer_get(e, this_addr + 0xa0);
+                e.call(0x00a6_faf0, &args![camera, frustum]);
+                let color = e.call(0x004a_0d10, &args![root_child]).u32();
+                let camera = pointer_get(e, this_addr + 0xa0);
+                e.call(SET_COLOR, &args![camera, color]);
+                let source = e.call(0x0046_1130, &args![root_child]).u32();
+                for k in 0..13 {
+                    let word = e.mem.u32(source + 4 * k);
+                    e.mem.set_u32(block + 4 * k, word);
+                }
+                let other = e.mem.u32(0x011e_07d0);
+                let member = e.call(MEMBER_8C, &args![other]).u32();
+                let sum = e.call(0x0043_9e90, &args![member, sum_a, out_a]).u32();
+                let camera = pointer_get(e, this_addr + 0xa0);
+                e.call(0x004f_00e0, &args![camera, sum]);
+                let camera = pointer_get(e, this_addr + 0xa0);
+                e.call(0x0068_8430, &args![camera, block]);
+                let player_value = player(e);
+                if e.call(0x0077_21a0, &args![player_value]).u32() != 0 {
+                    let player_value = player(e);
+                    if e.call(0x008a_8870, &args![player_value]).u8() == 0
+                        && e.call(0x0052_5430, &args![0x011f_2250u32]).u8() == 0
+                    {
+                        let player_value = player(e);
+                        let held = e.call(0x0077_21a0, &args![player_value]).u32();
+                        let member = e.call(MEMBER_8C, &args![held]).u32();
+                        let sum = e.call(0x0043_9e90, &args![member, sum_b, out_a]).u32();
+                        let camera = pointer_get(e, this_addr + 0xa0);
+                        e.call(0x004f_00e0, &args![camera, sum]);
+                    }
+                }
+                let position = e.call(0x0043_c490, &args![node]).u32();
+                for k in 0..3 {
+                    let word = e.mem.u32(position + 4 * k);
+                    e.mem.set_u32(saved + 4 * k, word);
+                }
+                e.call(0x0044_0460, &args![node, ZERO_VECTOR]);
+                e.call(0x00a5_9c60, &args![node, point]);
+                e.call(0x0044_0460, &args![node, saved]);
+                let player_value = player(e);
+                let pipboy_node = if e.call(0x0096_7ae0, &args![player_value]).u8() != 0 {
+                    let pipboy = e.call(GET_PIPBOY, &args![]).u32();
+                    e.call(0x0068_38b0, &args![pipboy]).u32()
+                } else {
+                    0
+                };
+                e.call(0x0054_6780, &args![node, 1u32]);
+                if pipboy_node != 0 {
+                    let member = e.call(MEMBER_8C, &args![pipboy_node]).u32();
+                    let difference = e.call(0x0043_9ef0, &args![member, sum_c, out_a]).u32();
+                    e.call(0x004f_00e0, &args![pipboy_node, difference]);
+                }
+                let camera = pointer_get(e, this_addr + 0xa0);
+                let words = e.call(MEMBER_8C, &args![camera]).u32();
+                let words = [e.mem.u32(words), e.mem.u32(words + 4), e.mem.u32(words + 8)];
+                let indexed = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+                fn_00870790(e, Ptr::new(indexed), words[0], words[1], words[2]);
+                let words = [e.mem.u32(out_a), e.mem.u32(out_a + 4), e.mem.u32(out_a + 8)];
+                let indexed = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+                fn_008750e0(e, Ptr::new(indexed), words[0], words[1], words[2]);
+            });
+        } else {
+            e.set_global(0x011d_e9d1, 0u8);
+        }
+        let menu = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
+        let queue = if menu == 0 {
+            true
+        } else {
+            let again = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
+            let pipboy = e.call(GET_PIPBOY, &args![]).u32();
+            again == pipboy
+        };
+        if queue {
+            let accumulator = pointer_get(e, this_addr + MAIN_FIRST_PERSON_ACCUM);
+            let camera = pointer_get(e, this_addr + 0xa0);
+            let system = e.call(GET_MT_SYSTEM, &args![]).u32();
+            e.call(
+                ADD_ACCUM_TASK,
+                &args![
+                    system,
+                    camera,
+                    0u32,
+                    node,
+                    0u32,
+                    0u32,
+                    accumulator,
+                    0u32,
+                    0x16u32,
+                    0u32
+                ],
+            );
+        }
+        mt_set_stage(e, 0, 0x16);
+    });
+}
+
+// Translated from 008750e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores three words (a position) at `+0x1e4`, `+0x1e8`, `+0x1ec`.
+pub fn fn_008750e0(e: &mut Engine, this: Ptr, first: u32, second: u32, third: u32) {
+    e.mem.set_u32(this.addr() + 0x1e4, first);
+    e.mem.set_u32(this.addr() + 0x1e8, second);
+    e.mem.set_u32(this.addr() + 0x1ec, third);
+}
+
+// Translated from 00875110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The second half of the per-frame draw. Stack words: `interface_arg`
+/// (for `007148c0`), `menu_node` (a node the rendered-menu pass clears the
+/// flag of), `overlay_node` (an object whose holder, `0043b230`, is drawn
+/// last) and `target_texture`. Under a profiler scope (kind `0x34`, line
+/// `0x221f`) it sets the camera colour (the fixed colour when the
+/// renderer test holds, else a built one), the field of view and the
+/// frustum, then:
+///
+/// - with `menu_node` and a rendered menu on screen (`007079b0`): draws the
+///   menu's scene into a new `BSShaderAccumulator` (`0x280` bytes,
+///   constructed with `0x63, 1, 0x2f7`), with the three pipboy arrays
+///   when the pipboy menu is up and `008c51c0` holds;
+/// - unless a rendered menu other than the pipboy is current (or the
+///   pipboy with `008c51c0`): the 1st-person block (`00b98380(0xf, 1)`,
+///   stage `0x16` on thread 1, a walk of the list `0043c490` gives for the object at `0x011e0e80`,
+///   whose entries that answer true at vtable slot `0xc0` have their
+///   screen (slot `0x98`) accumulated);
+/// - with `005b9b00` set, a nested scope (kind `0x27`, line `0x22b5`)
+///   accumulates `target_texture` into the 1st-person accumulator;
+/// - with the byte `0x011de9d1` set, resets the player node and records
+///   the zero vector (`00870790`, `008750e0`);
+/// - the mode field of view, the holder of `overlay_node` (when its flag
+///   is clear), `006426a0` for it, and the field of view again.
+pub fn fn_00875110(
+    e: &mut Engine,
+    this: Ptr,
+    interface_arg: u32,
+    menu_node: u32,
+    overlay_node: u32,
+    target_texture: u32,
+) {
+    let this_addr = this.addr();
+    let root = e.call(GET_ROOT, &args![]).u32();
+    let target = e.call(GET_SCENE_TARGET, &args![root]).u32();
+    let node = player_node(e, 1);
+    e.call(SET_NODE_FLAG, &args![node, 0u32]);
+    let root_child = e.call(GET_ROOT_CHILD, &args![root]).u32();
+    mt_advance_stage(e, 1, 0x16);
+    let accumulator = pointer_get(e, this_addr + MAIN_FIRST_PERSON_ACCUM);
+    e.mem.set_u8(accumulator + 0x3a, 0);
+    e.with_stack(0x200, |e, frame| {
+        let frame = frame.addr();
+        let guard = frame;
+        let color = frame + 0x10;
+        let pointer_a = frame + 0x20;
+        let pointer_b = frame + 0x24;
+        let pointer_c = frame + 0x28;
+        let guard_b = frame + 0x30;
+        let zero = frame + 0x50;
+        let vector = frame + 0x60;
+        let out_a = frame + 0x70;
+        let out_b = frame + 0x80;
+        let temp = frame + 0x90;
+        e.call(
+            PROFILE_SCOPE_CTOR,
+            &args![guard, 0x34u32, 1u32, SOURCE_FILE_NAME, 0x221fu32],
+        );
+        e.call(0x0071_48c0, &args![interface_arg, 0u32, 4u32]);
+        if renderer_color_applies(e) {
+            let camera = pointer_get(e, this_addr + 0xa0);
+            e.call(SET_COLOR, &args![camera, CONSTANT_COLOR]);
+        } else {
+            color_ctor(e, color, 0.0, 1.0, 1.0, 0.0);
+            let camera = pointer_get(e, this_addr + 0xa0);
+            e.call(SET_COLOR, &args![camera, color]);
+        }
+        set_camera_fov(e, root);
+        let frustum = e.call(MEMBER_8C_B, &args![root_child]).u32();
+        let camera = pointer_get(e, this_addr + 0xa0);
+        e.call(0x00a6_faf0, &args![camera, frustum]);
+
+        if menu_node != 0 {
+            let menu = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
+            e.call(SET_SCREEN_TEXTURE, &args![menu, 0u32]);
+            e.call(SET_NODE_FLAG, &args![menu_node, 0u32]);
+            if e.call(IS_IN_RENDERED_MENU, &args![]).u8() != 0 {
+                if e.call(IS_IN_PIPBOY_MENU, &args![]).u8() != 0 {
+                    let player_value = player(e);
+                    if e.call(ACTOR_FLAG, &args![player_value]).u8() != 0 {
+                        let screen = rendered_menu_screen(e);
+                        e.call(SET_NODE_FLAG, &args![screen, 1u32]);
+                    }
+                }
+                let memory = e.call(0x00aa_13e0, &args![0x280u32]).u32();
+                let accumulator = if memory != 0 {
+                    e.call(0x00b6_60d0, &args![memory, 0x63u32, 1u32, 0x2f7u32])
+                        .u32()
+                } else {
+                    0
+                };
+                e.call(NI_POINTER_CTOR, &args![pointer_a, accumulator]);
+                e.call(0x00c4_f270, &args![target, 1u32]);
+                let property = {
+                    let zero_arg = e.call(0x0040_df90, &args![]).u32();
+                    let screen = rendered_menu_screen(e);
+                    e.call(0x00a5_9d30, &args![screen, zero_arg]).u32()
+                };
+                if property != 0 {
+                    e.call(0x0049_ed90, &args![property, 0u32]);
+                }
+                let menu = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
+                e.call(SET_SCREEN_TEXTURE, &args![menu, 0u32]);
+                let held = pointer_get(e, pointer_a);
+                e.call(0x004a_0fd0, &args![target, held]);
+                if e.call(IS_IN_PIPBOY_MENU, &args![]).u8() != 0 {
+                    let player_value = player(e);
+                    if e.call(ACTOR_FLAG, &args![player_value]).u8() != 0 {
+                        for index in 0..3u32 {
+                            let pipboy = e.call(GET_PIPBOY, &args![]).u32();
+                            let element = fn_00875bd0(e, Ptr::new(pipboy), index);
+                            let camera = pointer_get(e, this_addr + 0xa0);
+                            e.call(ACCUMULATE_SCENE, &args![camera, element, target]);
+                        }
+                    }
+                }
+                let screen = rendered_menu_screen(e);
+                let camera = pointer_get(e, this_addr + 0xa0);
+                e.call(ACCUMULATE_SCENE, &args![camera, screen, target]);
+                let held = pointer_get(e, pointer_a);
+                let camera = pointer_get(e, this_addr + 0xa0);
+                e.call(0x00b6_c0d0, &args![camera, held, 0u32]);
+                e.call(0x004a_0fd0, &args![target, 0u32]);
+                e.call(NI_POINTER_ASSIGN, &args![pointer_a, 0u32]);
+                e.call(0x00c4_f2d0, &args![target]);
+                if e.call(IS_IN_PIPBOY_MENU, &args![]).u8() != 0 {
+                    let player_value = player(e);
+                    if e.call(ACTOR_FLAG, &args![player_value]).u8() != 0 {
+                        let screen = rendered_menu_screen(e);
+                        e.call(SET_NODE_FLAG, &args![screen, 0u32]);
+                    }
+                }
+                e.call(NI_POINTER_DTOR, &args![pointer_a]);
+            }
+        }
+
+        // The pass for the 1st-person node, unless another rendered menu
+        // than the pipboy is current.
+        let menu = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
+        let other_menu = menu != 0 && {
+            let again = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
+            let pipboy = e.call(GET_PIPBOY, &args![]).u32();
+            again != pipboy
+        };
+        let skipped = other_menu || {
+            e.call(IS_IN_PIPBOY_MENU, &args![]).u8() != 0 && {
+                let player_value = player(e);
+                e.call(ACTOR_FLAG, &args![player_value]).u8() != 0
+            }
+        };
+        if !skipped {
+            e.call(0x00b9_8380, &args![0xfu32, 1u32]);
+            mt_advance_stage(e, 1, 0x16);
+            let accumulator = pointer_get(e, this_addr + MAIN_FIRST_PERSON_ACCUM);
+            let camera = pointer_get(e, this_addr + 0xa0);
+            e.call(0x00b6_c0d0, &args![camera, accumulator, 0u32]);
+            e.call(0x004e_ced0, &args![1u32]);
+            let group = e.call(0x0043_c490, &args![0x011e_0e80u32]).u32();
+            if group != 0 && e.call(0x004a_4460, &args![group]).u8() == 0 {
+                e.call(0x0041_6870, &args![zero, 0u32, 0u32, 0u32]);
+                let player_value = player(e);
+                if e.call(0x0077_21a0, &args![player_value]).u32() != 0 {
+                    let player_value = player(e);
+                    if e.call(0x008a_8870, &args![player_value]).u8() == 0
+                        && e.call(0x0052_5430, &args![0x011f_2250u32]).u8() == 0
+                    {
+                        let other = e.mem.u32(0x011e_07d0);
+                        let other_member = e.call(MEMBER_8C, &args![other]).u32();
+                        let player_value = player(e);
+                        let held = e.call(0x0077_21a0, &args![player_value]).u32();
+                        let held_member = e.call(MEMBER_8C, &args![held]).u32();
+                        let result = e
+                            .call(0x0043_9ef0, &args![held_member, out_a, other_member])
+                            .u32();
+                        for k in 0..3 {
+                            let word = e.mem.u32(result + 4 * k);
+                            e.mem.set_u32(zero + 4 * k, word);
+                        }
+                    }
+                }
+                let root_b = e.call(GET_ROOT, &args![]).u32();
+                let child_b = e.call(GET_ROOT_CHILD, &args![root_b]).u32();
+                let target_b = e.call(GET_SCENE_TARGET, &args![root_b]).u32();
+                e.call(NI_POINTER_COPY_CTOR, &args![pointer_b, this_addr + 0x88]);
+                let member = e.call(MEMBER_8C, &args![child_b]).u32();
+                for k in 0..3 {
+                    let word = e.mem.u32(member + 4 * k);
+                    e.mem.set_u32(vector + 4 * k, word);
+                }
+                let sum = e.call(0x0043_9e90, &args![vector, out_b, zero]).u32();
+                e.call(0x004f_00e0, &args![child_b, sum]);
+                let held = pointer_get(e, pointer_b);
+                e.call(0x004a_0fd0, &args![target_b, held]);
+                let held = pointer_get(e, pointer_b);
+                e.call(0x0093_6aa0, &args![held, 1u32]);
+                let mut flagged = false;
+                let mut current = group;
+                while current != 0 {
+                    let link = e.call(0x0068_15c0, &args![current]).u32();
+                    let entry = pointer_get(e, link);
+                    current = e.call(0x0072_6070, &args![current]).u32();
+                    if entry != 0 && e.vcall(entry, 0xc0, &args![]).u8() != 0 {
+                        flagged = true;
+                        let screen = e.vcall(entry, 0x98, &args![]).u32();
+                        e.call(SET_NODE_FLAG, &args![screen, 0u32]);
+                        let screen = e.vcall(entry, 0x98, &args![]).u32();
+                        e.call(ACCUMULATE_SCENE, &args![child_b, screen, target_b]);
+                        let screen = e.vcall(entry, 0x98, &args![]).u32();
+                        e.call(SET_NODE_FLAG, &args![screen, 1u32]);
+                    }
+                }
+                if flagged {
+                    let held = pointer_get(e, pointer_b);
+                    e.call(0x00b6_c0d0, &args![child_b, held, 0u32]);
+                }
+                e.call(0x004a_0fd0, &args![target_b, 0u32]);
+                let held = pointer_get(e, pointer_b);
+                e.call(0x0093_6aa0, &args![held, 0u32]);
+                e.call(NI_POINTER_ASSIGN, &args![pointer_b, 0u32]);
+                e.call(0x004f_00e0, &args![child_b, vector]);
+                e.call(NI_POINTER_DTOR, &args![pointer_b]);
+            }
+        }
+
+        if e.call(0x005b_9b00, &args![]).u8() != 0 {
+            e.call(
+                PROFILE_SCOPE_CTOR,
+                &args![guard_b, 0x27u32, 1u32, SOURCE_FILE_NAME, 0x22b5u32],
+            );
+            if e.call(IS_IN_PIPBOY_MENU, &args![]).u8() != 0
+                && e.call(0x005b_9b00, &args![]).u8() != 0
+            {
+                let player_value = player(e);
+                if e.call(ACTOR_FLAG, &args![player_value]).u8() != 0 {
+                    e.call(0x00b6_b790, &args![]);
+                    let held = e.mem.u32(0x011f_9438);
+                    e.call(0x00a2_9680, &args![held]);
+                    let group = e.call(0x00b6_b260, &args![target_texture]).u32();
+                    e.call(0x00b6_b8d0, &args![6u32, group]);
+                    if e.global::<u8>(0x011f_9426) != 0 {
+                        let child = e.call(GET_ROOT_CHILD_OF_ROOT, &args![]).u32();
+                        e.call(SET_COLOR, &args![child, CONSTANT_COLOR]);
+                    }
+                }
+            }
+            e.call(GET_ROOT, &args![]);
+            let camera = pointer_get(e, this_addr + 0xa0);
+            let accumulator = pointer_get(e, this_addr + MAIN_FIRST_PERSON_ACCUM);
+            e.call(0x00b6_4570, &args![accumulator, camera, target_texture]);
+            fn_00874b50(e, this, target_texture, 0, 0);
+            e.call(PROFILE_SCOPE_DTOR, &args![guard_b]);
+        }
+
+        if e.global::<u8>(0x011d_e9d1) != 0 {
+            e.call(POINT3_CTOR, &args![temp, 0u32, 0u32, 0u32]);
+            e.call(0x00a5_9c60, &args![node, temp]);
+            e.call(0x0054_6780, &args![node, 0u32]);
+            let owner = e.call(0x0096_11e0, &args![root_child]).u32();
+            let position = e.call(0x0043_c490, &args![owner]).u32();
+            let words = [
+                e.mem.u32(position),
+                e.mem.u32(position + 4),
+                e.mem.u32(position + 8),
+            ];
+            let indexed = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+            fn_00870790(e, Ptr::new(indexed), words[0], words[1], words[2]);
+            let words = [
+                e.global::<u32>(ZERO_VECTOR),
+                e.global::<u32>(ZERO_VECTOR + 4),
+                e.global::<u32>(ZERO_VECTOR + 8),
+            ];
+            let indexed = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+            fn_008750e0(e, Ptr::new(indexed), words[0], words[1], words[2]);
+        }
+
+        if e.call(0x0044_ddc0, &args![0x011f_2250u32]).u32() != 4 {
+            let player_value = player(e);
+            let fov = e.call(0x0071_0ab0, &args![player_value]).f32();
+            let root_now = e.call(GET_ROOT, &args![]).u32();
+            e.call(SET_CAMERA_FOV, &args![root_now, fov, 0u32, 0u32, 0u32]);
+        }
+        let player_value = player(e);
+        let fov = e.call(0x0071_0ab0, &args![player_value]).f32();
+        e.call(0x00b5_4000, &args![fov]);
+
+        if overlay_node != 0 {
+            let holder = e.call(0x0043_b230, &args![overlay_node]).u32();
+            if node_flag(e, holder) == 0 {
+                let holder = e.call(0x0043_b230, &args![overlay_node]).u32();
+                let saved_flag = node_flag(e, holder);
+                let holder = e.call(0x0043_b230, &args![overlay_node]).u32();
+                e.call(SET_NODE_FLAG, &args![holder, 0u32]);
+                let root_c = e.call(GET_ROOT, &args![]).u32();
+                let child_c = e.call(GET_ROOT_CHILD, &args![root_c]).u32();
+                let target_c = e.call(GET_SCENE_TARGET, &args![root_c]).u32();
+                e.call(NI_POINTER_COPY_CTOR, &args![pointer_c, this_addr + 0x88]);
+                let held = pointer_get(e, pointer_c);
+                e.call(0x004a_0fd0, &args![target_c, held]);
+                let held = pointer_get(e, pointer_c);
+                e.call(0x0093_6aa0, &args![held, 1u32]);
+                let holder = e.call(0x0043_b230, &args![overlay_node]).u32();
+                e.call(ACCUMULATE_SCENE, &args![child_c, holder, target_c]);
+                let held = pointer_get(e, pointer_c);
+                e.call(0x00b6_c0d0, &args![child_c, held, 0u32]);
+                e.call(0x004a_0fd0, &args![target_c, 0u32]);
+                let held = pointer_get(e, pointer_c);
+                e.call(0x0093_6aa0, &args![held, 0u32]);
+                e.call(NI_POINTER_ASSIGN, &args![pointer_c, 0u32]);
+                let holder = e.call(0x0043_b230, &args![overlay_node]).u32();
+                e.call(SET_NODE_FLAG, &args![holder, saved_flag as u32]);
+                e.call(NI_POINTER_DTOR, &args![pointer_c]);
+            }
+        }
+        if overlay_node != 0 {
+            let root_pointer = pointer_get(e, ROOT_POINTER);
+            let child = e.call(GET_ROOT_CHILD, &args![root_pointer]).u32();
+            let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
+            e.call(0x0064_26a0, &args![overlay_node, 2u32, accumulator, child]);
+        }
+        set_camera_fov(e, root);
+        e.call(PROFILE_SCOPE_DTOR, &args![guard]);
+    });
+}
+
+// Translated from 00875bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The object held by the `NiPointer` at `this + 0xf4 + index * 4`.
+pub fn fn_00875bd0(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    pointer_get(e, this.addr() + 0xf4 + index * 4)
+}
+
+// Translated from 00875bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The pass that draws the current rendered menu into the menu
+/// accumulator (`+0x98`). Does nothing when the pointer global
+/// `0x011deb38` holds an object, when no rendered menu is current or when
+/// it is the pipboy. Otherwise accumulates the menu's scene twice (the
+/// vtable slot `0x08` of the menu gives the scene), with the render state
+/// of the pipboy overlay between the two.
+pub fn fn_00875bf0(e: &mut Engine, this: Ptr) {
+    let this_addr = this.addr();
+    if pointer_get(e, FIRST_PERSON_TARGET_POINTER) != 0 {
+        return;
+    }
+    let menu = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
+    if menu == 0 {
+        return;
+    }
+    let again = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
+    let pipboy = e.call(GET_PIPBOY, &args![]).u32();
+    if again == pipboy {
+        return;
+    }
+    let root = e.call(GET_ROOT, &args![]).u32();
+    let target = e.call(GET_SCENE_TARGET, &args![root]).u32();
+    e.call(0x00c4_f270, &args![target, 1u32]);
+    let menu = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
+    let menu_node = if e.call(0x008b_6200, &args![menu]).u32() != 0 {
+        let menu = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
+        e.call(0x008b_6200, &args![menu]).u32()
+    } else {
+        e.call(GET_ROOT_CHILD, &args![root]).u32()
+    };
+    e.call(0x0041_fd00, &args![target, menu_node]);
+    let accumulator = pointer_get(e, this_addr + MAIN_MENU_ACCUM);
+    e.call(0x004a_0fd0, &args![target, accumulator]);
+    let indexed = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+    let accumulator = pointer_get(e, this_addr + MAIN_MENU_ACCUM);
+    e.call(0x004a_1020, &args![accumulator, indexed]);
+    if renderer_color_applies(e) {
+        e.call(SET_COLOR, &args![menu_node, CONSTANT_COLOR]);
+    } else {
+        e.with_stack(0x10, |e, color| {
+            let color = color.addr();
+            color_ctor(e, color, 0.0, 1.0, 1.0, 0.0);
+            e.call(SET_COLOR, &args![menu_node, color]);
+        });
+    }
+    let menu = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
+    let scene = e.vcall(menu, 0x8, &args![target]).u32();
+    e.call(ACCUMULATE_SCENE, &args![menu_node, scene, target]);
+    e.call(0x00b4_f450, &args![0xfu32]);
+    e.call(0x00b9_7e30, &args![0u32, 1u32]);
+    e.call(0x00b9_8380, &args![8u32, 1u32]);
+    let accumulator = pointer_get(e, this_addr + MAIN_MENU_ACCUM);
+    e.call(0x00b6_c0d0, &args![menu_node, accumulator, 0u32]);
+    e.call(0x00b4_f450, &args![0u32]);
+    e.call(0x004e_ced0, &args![1u32]);
+    e.call(0x0071_4a60, &args![1u32]);
+    let menu = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
+    let scene = e.vcall(menu, 0x8, &args![target]).u32();
+    e.call(ACCUMULATE_SCENE, &args![menu_node, scene, target]);
+    let accumulator = pointer_get(e, this_addr + MAIN_MENU_ACCUM);
+    e.call(0x00b6_c0d0, &args![menu_node, accumulator, 0u32]);
+    e.call(0x004a_0fd0, &args![target, 0u32]);
+    e.call(0x00c4_f2d0, &args![target]);
+}
+
+// Translated from 00875e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the field of view, then (under a profiler scope, kind `0x27`,
+/// line `0x234c`) accumulates the root's child through `00b65550` with a
+/// temporary object (`004ad0c0` / `004ad1d0`, built with `0x101`) and
+/// destroys the object that child's vtable slot `0x48` returned (its slot
+/// 0 with 1). `this` is not read.
+pub fn fn_00875e40(e: &mut Engine, _this: Ptr, accumulator: u32, last: u32) {
+    let root = e.call(GET_ROOT, &args![]).u32();
+    if e.call(0x0044_ddc0, &args![0x011f_2250u32]).u32() != 4 {
+        let player_value = player(e);
+        let fov = e.call(0x0071_0ab0, &args![player_value]).f32();
+        e.call(SET_CAMERA_FOV, &args![root, fov, 0u32, 0u32, 0u32]);
+    }
+    let player_value = player(e);
+    let fov = e.call(0x0071_0ab0, &args![player_value]).f32();
+    e.call(0x00b5_4000, &args![fov]);
+    e.with_stack(0x20, |e, frame| {
+        let frame = frame.addr();
+        let temporary = frame;
+        let guard = frame + 0x10;
+        e.call(0x004a_d0c0, &args![temporary, 0x101u32]);
+        let child = e.call(GET_ROOT_CHILD, &args![root]).u32();
+        let made = e.vcall(child, 0x48, &args![temporary]).u32();
+        if e.call(0x0044_ddc0, &args![0x011f_2250u32]).u32() != 4 {
+            let fov = camera_fov(e);
+            e.call(SET_CAMERA_FOV, &args![root, fov, 0u32, made, 0u32]);
+        }
+        e.call(
+            PROFILE_SCOPE_CTOR,
+            &args![guard, 0x27u32, 1u32, SOURCE_FILE_NAME, 0x234cu32],
+        );
+        let child = e.call(GET_ROOT_CHILD, &args![root]).u32();
+        e.call(0x00b6_5550, &args![accumulator, child, made, last]);
+        if made != 0 {
+            e.vcall(made, 0x0, &args![1u32]);
+        }
+        e.call(PROFILE_SCOPE_DTOR, &args![guard]);
+        e.call(0x004a_d1d0, &args![temporary]);
+    });
+}
+
+// Translated from 00875fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00b651e0` on `accumulator` with the root's child and `last`.
+/// `this` is not read.
+pub fn fn_00875fa0(e: &mut Engine, _this: Ptr, accumulator: u32, last: u32) {
+    let root = e.call(GET_ROOT, &args![]).u32();
+    let child = e.call(GET_ROOT_CHILD, &args![root]).u32();
+    e.call(0x00b6_51e0, &args![accumulator, child, last]);
+}
+
+// Translated from 00875fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The pass that draws the main scene (`00b55ac0`) under a profiler scope
+/// (kind `0x27`, line `0x2362`): prepares the render state (`00b6b790`
+/// unless `004e9510`, `00702870` when no menu is showing), draws the
+/// target of the global `0x011deb38` (`00801a60`), sets the scene globals
+/// for a rendered menu, runs `00b55ac0(scene_a, texture, scene_b)`,
+/// releases the target and resets the colour. The first stack word is not
+/// read.
+pub fn fn_00875fd0(
+    e: &mut Engine,
+    this: Ptr,
+    _unused_0: u32,
+    texture: u32,
+    scene_a: u32,
+    scene_b: u32,
+) {
+    let this_addr = this.addr();
+    e.with_stack(0x40, |e, frame| {
+        let frame = frame.addr();
+        let guard = frame;
+        let color = frame + 0x20;
+        e.call(
+            PROFILE_SCOPE_CTOR,
+            &args![guard, 0x27u32, 1u32, SOURCE_FILE_NAME, 0x2362u32],
+        );
+        if e.call(0x004e_9510, &args![]).u8() == 0 {
+            e.call(0x00b6_b790, &args![]);
+        }
+        if e.call(IS_IN_PIPBOY_MENU, &args![]).u8() == 0
+            && e.call(IS_IN_MENU_MODE, &args![]).u8() == 0
+            && e.call(0x0070_5e80, &args![]).u8() == 0
+        {
+            let camera_owner = e.mem.u32(0x011d_df38);
+            if e.call(0x0042_ce10, &args![camera_owner]).u8() == 0 {
+                let camera_owner = e.mem.u32(0x011d_df38);
+                if e.call(0x0056_21d0, &args![camera_owner]).u8() == 0
+                    && e.mem.u8(this_addr + MAIN_RENDERING_MENU) == 0
+                {
+                    e.call(0x0070_2870, &args![]);
+                }
+            }
+        }
+        if pointer_get(e, FIRST_PERSON_TARGET_POINTER) != 0 {
+            let held = pointer_get(e, FIRST_PERSON_TARGET_POINTER);
+            let interface = e.call(GET_INTERFACE_OBJECT, &args![]).u32();
+            e.call(0x0080_1a60, &args![interface, texture, held, 0u32, 0u32]);
+        }
+        let rendering_menu = e.call(IS_IN_RENDERED_MENU, &args![]).u8() != 0
+            && e.mem.u8(this_addr + MAIN_RENDERING_MENU) == 0
+            && e.global::<u8>(0x011d_ea29) != 0;
+        if rendering_menu {
+            e.set_global(0x0120_05a2, 1u8);
+            let menu = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
+            let value = e.vcall(menu, 0x2c, &args![]).f32();
+            e.set_global(0x011a_dd08, value);
+        }
+        let root = e.call(GET_ROOT, &args![]).u32();
+        let child = e.call(GET_ROOT_CHILD, &args![root]).u32();
+        e.set_global(0x011f_917c, child);
+        e.call(0x00b5_5ac0, &args![scene_a, texture, scene_b]);
+        if pointer_get(e, FIRST_PERSON_TARGET_POINTER) != 0 {
+            let interface = e.call(GET_INTERFACE_OBJECT, &args![]).u32();
+            e.call(0x0080_19d0, &args![interface]);
+            let held = pointer_get(e, FIRST_PERSON_TARGET_POINTER);
+            let factory = e.call(GET_GLOBAL_011F91A8, &args![]).u32();
+            e.call(0x00b6_da10, &args![factory, held]);
+            e.call(NI_POINTER_ASSIGN, &args![FIRST_PERSON_TARGET_POINTER, 0u32]);
+        }
+        if rendering_menu {
+            e.set_global(0x0120_05a2, 0u8);
+            e.set_global(0x011a_dd08, 1.0f32);
+        }
+        color_ctor(e, color, 0.0, 1.0, 1.0, 0.0);
+        let child = e.call(GET_ROOT_CHILD_OF_ROOT, &args![]).u32();
+        e.call(SET_COLOR, &args![child, color]);
+        e.call(PROFILE_SCOPE_DTOR, &args![guard]);
+    });
+}
+
+// Translated from 008761e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The pass that draws the pipboy-style rendered menu (`00707ad0`): its
+/// node's transform is reset to the identity while the pipboy is active, the
+/// scene is accumulated into the menu accumulators (`+0x8c`, `+0x98`) and
+/// the transform is put back. `interface_arg` goes to `007148c0`. The
+/// first stack word is not read.
+pub fn fn_008761e0(e: &mut Engine, this: Ptr, _unused_0: u32, interface_arg: u32) {
+    let this_addr = this.addr();
+    e.with_stack(0x1a0, |e, frame| {
+        let frame = frame.addr();
+        let saved_transform = frame;
+        let transform = frame + 0x34;
+        let point = frame + 0x68;
+        let color = frame + 0x78;
+        let out_a = frame + 0x88;
+        let controls = frame + 0x98;
+        let root = e.call(GET_ROOT, &args![]).u32();
+        let target = e.call(GET_SCENE_TARGET, &args![root]).u32();
+        let menu = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
+        let menu_scene = e.call(0x008b_6200, &args![menu]).u32();
+        e.call(0x0071_48c0, &args![interface_arg, 0u32, 4u32]);
+        let menu = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
+        let menu_screen = e.call(0x0055_85e0, &args![menu]).u32();
+        e.call(0x004f_b0b0, &args![target, 1u32]);
+        e.call(POINT3_CTOR, &args![point, 0u32, 0u32, 0u32]);
+        e.call(0x0047_6a80, &args![transform]);
+        let flag = fn_00876810(e, Ptr::new(menu_screen));
+        let scene_node = if menu_scene != 0 {
+            menu_scene
+        } else {
+            e.call(GET_ROOT_CHILD, &args![root]).u32()
+        };
+        let player_value = player(e);
+        if e.call(0x0096_7ae0, &args![player_value]).u8() != 0 {
+            let source = e.call(0x006a_9540, &args![menu_screen]).u32();
+            for k in 0..13 {
+                let word = e.mem.u32(source + 4 * k);
+                e.mem.set_u32(saved_transform + 4 * k, word);
+            }
+            e.call(0x0044_0460, &args![menu_screen, ZERO_VECTOR]);
+            e.call(0x00a5_9c60, &args![menu_screen, point]);
+            // The translation of the saved copy (offset 0x24 of the transform).
+            e.call(0x0044_0460, &args![menu_screen, saved_transform + 0x24]);
+            e.call(0x00a8_6bf0, &args![transform]);
+            if scene_node != 0 {
+                let owner = e.call(0x0096_11e0, &args![scene_node]).u32();
+                if owner != 0 {
+                    let owner = e.call(0x0096_11e0, &args![scene_node]).u32();
+                    let source = e.call(0x006a_9540, &args![owner]).u32();
+                    for k in 0..13 {
+                        let word = e.mem.u32(source + 4 * k);
+                        e.mem.set_u32(transform + 4 * k, word);
+                    }
+                    let other = e.mem.u32(0x011e_07d0);
+                    let member = e.call(MEMBER_8C, &args![other]).u32();
+                    let owner = e.call(0x0096_11e0, &args![scene_node]).u32();
+                    e.call(0x0044_0460, &args![owner, member]);
+                    let owner = e.call(0x0096_11e0, &args![scene_node]).u32();
+                    e.call(0x00a5_9c60, &args![owner, point]);
+                }
+            }
+        }
+        let member = e.call(MEMBER_8C, &args![menu_screen]).u32();
+        let result = e.call(0x004a_0bd0, &args![member, out_a]).u32();
+        let words = [
+            e.mem.u32(result),
+            e.mem.u32(result + 4),
+            e.mem.u32(result + 8),
+        ];
+        let indexed = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+        fn_008750e0(e, Ptr::new(indexed), words[0], words[1], words[2]);
+        if e.call(IS_IN_PIPBOY_MENU, &args![]).u8() != 0 {
+            let positions = controls;
+            e.mem.set_u32(positions + 8, 0);
+            let object = e.call(0x0087_7720, &args![this_addr]).u32();
+            let first = e.call(0x00a2_3a50, &args![object, 0u32, 2u32]).i32() > 0;
+            let object = e.call(0x0087_7720, &args![this_addr]).u32();
+            let second = e.call(0x00a2_3a50, &args![object, 0u32, 1u32]).i32() > 0;
+            let pipboy = e.call(GET_PIPBOY, &args![]).u32();
+            let result = e
+                .call(
+                    0x007f_8720,
+                    &args![
+                        pipboy,
+                        second as u32,
+                        first as u32,
+                        positions,
+                        positions + 4,
+                        positions + 8
+                    ],
+                )
+                .u8();
+            let x = e.mem.f32(positions);
+            let y = e.mem.f32(positions + 4);
+            let z = e.mem.u32(positions + 8);
+            e.call(0x0070_9b50, &args![result, x, y, z]);
+        }
+        let scene = if menu_scene != 0 {
+            menu_scene
+        } else {
+            e.call(GET_ROOT_CHILD, &args![root]).u32()
+        };
+        let mut scene = scene;
+        if scene == 0 {
+            scene = pointer_get(e, this_addr + 0xa0);
+        }
+        let color_source = e.call(0x004a_0d10, &args![scene]).u32();
+        for k in 0..4 {
+            let word = e.mem.u32(color_source + 4 * k);
+            e.mem.set_u32(color + 4 * k, word);
+        }
+        if e.global::<u8>(0x011f_9426) != 0 {
+            let first = e.call(GET_GLOBAL_011F4748, &args![]).u32();
+            let second = e.call(GET_GLOBAL_011F4748, &args![]).u32();
+            let wanted = e.vcall(second, 0xc8, &args![]).u32();
+            if e.vcall(first, 0xcc, &args![]).u32() == wanted {
+                e.call(SET_COLOR, &args![scene, CONSTANT_COLOR]);
+            }
+        }
+        e.call(0x00b9_8380, &args![0u32, 1u32]);
+        e.call(0x0041_fd00, &args![target, scene]);
+        let accumulator = pointer_get(e, this_addr + MAIN_FIRST_PERSON_ACCUM);
+        e.call(0x004a_0fd0, &args![target, accumulator]);
+        let indexed = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+        let accumulator = pointer_get(e, this_addr + MAIN_FIRST_PERSON_ACCUM);
+        e.call(0x004a_1020, &args![accumulator, indexed]);
+        e.call(ACCUMULATE_SCENE, &args![scene, menu_screen, target]);
+        let accumulator = pointer_get(e, this_addr + MAIN_FIRST_PERSON_ACCUM);
+        e.call(0x00b6_c0d0, &args![scene, accumulator, 0u32]);
+        let accumulator = pointer_get(e, this_addr + MAIN_FIRST_PERSON_ACCUM);
+        e.call(0x00b6_3b90, &args![accumulator, 6u32]);
+        e.call(0x004a_0fd0, &args![target, 0u32]);
+        e.call(0x004e_ced0, &args![1u32]);
+        let zero_arg = e.call(0x0040_df90, &args![]).u32();
+        let screen = rendered_menu_screen(e);
+        let property = e.call(0x00a5_9d30, &args![screen, zero_arg]).u32();
+        if property != 0 {
+            e.call(0x0049_ed90, &args![property, 1u32]);
+            e.call(0x0043_9340, &args![property, 6u32]);
+            e.call(0x0043_9390, &args![property, 0u32]);
+            let screen = rendered_menu_screen(e);
+            e.call(0x00a5_a040, &args![screen]);
+        }
+        let render_target = pointer_get(e, OFFSCREEN_TARGET_POINTER);
+        let texture = e.call(0x004b_c320, &args![render_target, 0u32]).u32();
+        let menu = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
+        e.call(SET_SCREEN_TEXTURE, &args![menu, texture]);
+        e.call(0x0041_fd00, &args![target, scene]);
+        let accumulator = pointer_get(e, this_addr + MAIN_MENU_ACCUM);
+        e.call(0x004a_0fd0, &args![target, accumulator]);
+        e.call(0x00b9_7e30, &args![0u32, 1u32]);
+        let player_value = player(e);
+        if e.call(ACTOR_FLAG, &args![player_value]).u8() != 0
+            && e.call(IS_IN_PIPBOY_MENU, &args![]).u8() != 0
+        {
+            for index in 0..3u32 {
+                let pipboy = e.call(GET_PIPBOY, &args![]).u32();
+                let element = fn_00875bd0(e, Ptr::new(pipboy), index);
+                e.call(ACCUMULATE_SCENE, &args![scene, element, target]);
+            }
+            e.call(0x00b9_7de0, &args![0u32, 1u32]);
+        }
+        let screen = rendered_menu_screen(e);
+        e.call(ACCUMULATE_SCENE, &args![scene, screen, target]);
+        let accumulator = pointer_get(e, this_addr + MAIN_MENU_ACCUM);
+        e.call(0x00b6_c0d0, &args![scene, accumulator, 0u32]);
+        e.call(0x0071_4a60, &args![1u32]);
+        let player_value = player(e);
+        if e.call(ACTOR_FLAG, &args![player_value]).u8() != 0
+            && e.call(IS_IN_PIPBOY_MENU, &args![]).u8() != 0
+        {
+            e.call(0x0071_4a40, &args![1u32]);
+        }
+        e.call(0x004a_0fd0, &args![target, 0u32]);
+        let menu = e.call(GET_CURRENT_RENDERED_MENU, &args![]).u32();
+        e.call(SET_SCREEN_TEXTURE, &args![menu, 0u32]);
+        if property != 0 {
+            e.call(0x0049_ed90, &args![property, 0u32]);
+        }
+        e.call(SET_COLOR, &args![scene, color]);
+        let player_value = player(e);
+        if e.call(0x0096_7ae0, &args![player_value]).u8() != 0 {
+            e.call(0x00a5_9c60, &args![menu_screen, point]);
+            e.call(0x0054_6780, &args![menu_screen, flag as u32]);
+            if scene_node != 0 {
+                let owner = e.call(0x0096_11e0, &args![scene_node]).u32();
+                if owner != 0 {
+                    let owner = e.call(0x0096_11e0, &args![scene_node]).u32();
+                    // The translation of the identity-reset transform.
+                    e.call(0x0044_0460, &args![owner, transform + 0x24]);
+                    let owner = e.call(0x0096_11e0, &args![scene_node]).u32();
+                    e.call(0x00a5_9c60, &args![owner, point]);
+                }
+            }
+            let words = [
+                e.global::<u32>(ZERO_VECTOR),
+                e.global::<u32>(ZERO_VECTOR + 4),
+                e.global::<u32>(ZERO_VECTOR + 8),
+            ];
+            let indexed = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+            fn_008750e0(e, Ptr::new(indexed), words[0], words[1], words[2]);
+        }
+        e.call(0x004f_b0b0, &args![target, 0u32]);
+    });
+}
+
+// Translated from 00876810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00456630(this, 0x800)`: a flag query on the node with the mask `0x800`.
+pub fn fn_00876810(e: &mut Engine, this: Ptr) -> u8 {
+    e.call(0x0045_6630, &args![this, 0x800u32]).u8()
+}
+
+// Translated from 00876830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `00b6b790`; the two stack words are not read.
+pub fn fn_00876830(e: &mut Engine, _this: Ptr, _unused_0: u32, _unused_1: u32) {
+    e.call(0x00b6_b790, &args![]);
+}
+
+// Translated from 00876850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The wind-down of the frame: gives `object` (if set) to `00642890`,
+/// finishes the root's child (`00ba9420`), returns `render_target` (if
+/// set) to the object `004a0ea0` returns (`00b6da10`), resets the
+/// accumulators (`+0x88` with `00b65660`, `+0x94` with `00b630c0`) and
+/// the shader state (`00b540b0`, `00b4f510`), returns the rendered texture
+/// borrowed from `water` (`004ebbc0` with 4, `00876a00`), calls the
+/// stdcall slots `0x1a0` and `0x190` of the object `004dc020` returns for
+/// the one of `004a0e90` (the object is passed as the first stack word)
+/// and, when the `NiPointer` global `0x011fa008` holds a value, builds a
+/// `0x30`-byte object with it (`004d61b0`, title string `0x01082d28`,
+/// 800 x 600 at `0x80000000, 0x80000000`) and drops the pointer. The
+/// third stack word is not read.
+pub fn fn_00876850(
+    e: &mut Engine,
+    this: Ptr,
+    render_target: u32,
+    water: u32,
+    _unused_2: u32,
+    object: u32,
+) {
+    let this_addr = this.addr();
+    let root = e.call(GET_ROOT, &args![]).u32();
+    e.call(GET_SCENE_TARGET, &args![root]);
+    if object != 0 {
+        e.call(0x0064_2890, &args![object]);
+    }
+    let child = e.call(GET_ROOT_CHILD, &args![root]).u32();
+    e.call(0x00ba_9420, &args![child]);
+    if render_target != 0 {
+        let factory = e.call(GET_GLOBAL_011F91A8, &args![]).u32();
+        e.call(0x00b6_da10, &args![factory, render_target]);
+    }
+    let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
+    e.call(0x00b6_5660, &args![accumulator]);
+    let accumulator = pointer_get(e, this_addr + 0x94);
+    e.call(0x00b6_30c0, &args![accumulator]);
+    e.call(0x00b5_40b0, &args![]);
+    e.call(0x00b4_f510, &args![]);
+    let borrowed = e.call(0x004e_bbc0, &args![water, 4u32]).u32();
+    fn_00876a00(e, Ptr::new(borrowed));
+    if e.global::<u8>(0x011f_9440) != 0 {
+        e.call(0x00ba_d4a0, &args![]);
+    }
+    let decal = e.call(GET_GLOBAL_011F9508, &args![]).u32();
+    let device = e.call(0x004d_c020, &args![decal]).u32();
+    e.vcall(device, 0x1a0, &args![device, 0u32]);
+    e.vcall(device, 0x190, &args![device, 0u32, 0u32, 0u32, 0u32]);
+    if e.call(0x0068_3a60, &args![]).u32() != 0 {
+        e.call(0x0071_4900, &args![]);
+    }
+    if pointer_get(e, 0x011f_a008) != 0 {
+        let memory = e.call(ALLOCATE_OBJECT, &args![0x30u32]).u32();
+        if memory != 0 {
+            let held = pointer_get(e, 0x011f_a008);
+            let first_value = e.call(0x0044_ddc0, &args![this_addr]).u32();
+            let second_value = e.call(0x0084_e3a0, &args![this_addr]).u32();
+            e.call(
+                0x004d_61b0,
+                &args![
+                    memory,
+                    second_value,
+                    first_value,
+                    held,
+                    0x0108_2d28u32,
+                    0x8000_0000u32,
+                    0x8000_0000u32,
+                    0x320u32,
+                    0x258u32
+                ],
+            );
+        }
+        e.call(NI_POINTER_ASSIGN, &args![0x011f_a008u32, 0u32]);
+    }
+    e.call(0x00b9_88e0, &args![]);
+}
+
+// Translated from 00876a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceTexture::ReturnRenderedTexture` (`00ba39a0`, Xbox PDB) on the
+/// member at `+0x7c`.
+pub fn fn_00876a00(e: &mut Engine, this: Ptr) {
+    e.call(0x00ba_39a0, &args![this.addr() + 0x7c]);
+}
+
+// Translated from 00876a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// With the byte `0x011a9604` cleared around the calls: `004e9bb0(object,
+/// 00874690())` and `00b65ec0` on the `NiPointer` at `+0x94`.
+pub fn fn_00876a20(e: &mut Engine, this: Ptr, object: u32) {
+    let saved: u8 = e.global(0x011a_9604);
+    e.set_global(0x011a_9604, 0u8);
+    let held = fn_00874690(e);
+    e.call(0x004e_9bb0, &args![object, held]);
+    let accumulator = pointer_get(e, this.addr() + 0x94);
+    e.call(0x00b6_5ec0, &args![accumulator]);
+    e.set_global(0x011a_9604, saved);
+}
+
+// Translated from 00876a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cdecl. Reads the "Installed Path" value (name at `0x01082d38`) of the
+/// machine key "Software\Bethesda Softworks\FalloutNV" (`0x01082d48`):
+/// `RegOpenKeyExA` (import slot `0x00fdf00c`, key `0x80000002`, access 1),
+/// `RegQueryValueExA` (`0x00fdf008`, into `buffer` with `size` as the
+/// in/out size) and `RegCloseKey` (`0x00fdf004`). The key handle is closed
+/// even when the open failed.
+pub fn fn_00876a70(e: &mut Engine, buffer: u32, size: u32) {
+    e.with_stack(0x10, |e, cells| {
+        let cells = cells.addr();
+        let handle = cells;
+        let size_cell = cells + 4;
+        e.mem.set_u32(size_cell, size);
+        let status = e
+            .call(
+                0x00fd_f00c,
+                &args![0x8000_0002u32, 0x0108_2d48u32, 0u32, 1u32, handle],
+            )
+            .u32();
+        if status == 0 {
+            let key = e.mem.u32(handle);
+            e.call(
+                0x00fd_f008,
+                &args![key, 0x0108_2d38u32, 0u32, 0u32, buffer, size_cell],
+            );
+        }
+        let key = e.mem.u32(handle);
+        e.call(0x00fd_f004, &args![key]);
+    });
+}
+
+// Translated from 00876ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cdecl. Builds the INI file name into `buffer` (`0x104` bytes) and
+/// prepares the folders around it. Formats `".\%s"` twice (`00406d00`,
+/// a `_snprintf`-style call, with the strings in `0x011a2ff4` and
+/// `0x011a2ff0`) and reads `GetPrivateProfileIntA("General",
+/// "bUseMyGamesDirectory", 1, buffer)` (import slot `0x00fdf0c4`) after
+/// each. When both answer nonzero it makes the per-user folders
+/// (`SHGetFolderPathA`, slot `0x00fdf274`, with the folder ids `0x1c` and
+/// `5`; `00406d50` appends `"\FalloutNV\"`, `"\My Games\"`,
+/// `"FalloutNV\"`; `CreateDirectoryA`, slot `0x00fdf0b8`) and copies the
+/// paths with `00406d30` into the buffers `0086d480` and `004dc110`
+/// return; otherwise both buffers get `".\"`. The result is the buffer of
+/// `004dc110` followed by the string in `0x011a2ff0`. The three file names
+/// of `00c3bb80`, `00c3bbd0` and `00c3bc20` are deleted (`DeleteFileA`,
+/// slot `0x00fdf0d4`); when the INI file does not exist (`_access`,
+/// `00ecbf05`) `"Fallout_default.ini"` is copied to it (`CopyFileA`, slot
+/// `0x00fdf1b8`).
+///
+/// The `/GS` cookie check at the end is not translated.
+pub fn fn_00876ad0(e: &mut Engine, buffer: u32) {
+    e.with_stack(0x300, |e, frame| {
+        let frame = frame.addr();
+        let folder = frame;
+        let default_file = frame + 0x110;
+        let mut ok = true;
+        let first: u32 = e.global(0x011a_2ff4);
+        e.call(0x0040_6d00, &args![buffer, 0x104u32, 0x0108_2dc4u32, first]);
+        if e.call(
+            0x00fd_f0c4,
+            &args![0x0105_d548u32, 0x0108_2dacu32, 1u32, buffer],
+        )
+        .u32()
+            == 0
+        {
+            ok = false;
+        }
+        let second: u32 = e.global(0x011a_2ff0);
+        e.call(
+            0x0040_6d00,
+            &args![buffer, 0x104u32, 0x0108_2dc4u32, second],
+        );
+        if ok
+            && e.call(
+                0x00fd_f0c4,
+                &args![0x0105_d548u32, 0x0108_2dacu32, 1u32, buffer],
+            )
+            .u32()
+                == 0
+        {
+            ok = false;
+        }
+        if ok {
+            e.mem.set_u8(buffer, 0);
+            e.call(0x00fd_f274, &args![0u32, 0x1cu32, 0u32, 0u32, folder]);
+            e.call(0x0040_6d50, &args![folder, 0x104u32, 0x0108_2da0u32]);
+            e.call(0x00fd_f0b8, &args![folder, 0u32]);
+            let target = e.call(0x0086_d480, &args![]).u32();
+            e.call(0x0040_6d30, &args![target, 0x104u32, folder]);
+            e.call(0x00fd_f274, &args![0u32, 5u32, 0u32, 0u32, folder]);
+            e.call(0x0040_6d50, &args![folder, 0x104u32, 0x0108_2d94u32]);
+            e.call(0x00fd_f0b8, &args![folder, 0u32]);
+            e.call(0x0040_6d50, &args![folder, 0x104u32, 0x0108_2d88u32]);
+            e.call(0x00fd_f0b8, &args![folder, 0u32]);
+            let target = e.call(0x004d_c110, &args![]).u32();
+            e.call(0x0040_6d30, &args![target, 0x104u32, folder]);
+        } else {
+            let target = e.call(0x0086_d480, &args![]).u32();
+            e.call(0x0040_6d30, &args![target, 0x104u32, 0x0108_2d84u32]);
+            let target = e.call(0x004d_c110, &args![]).u32();
+            e.call(0x0040_6d30, &args![target, 0x104u32, 0x0108_2d84u32]);
+        }
+        let source = e.call(0x004d_c110, &args![]).u32();
+        e.call(0x0040_6d30, &args![buffer, 0x104u32, source]);
+        let name: u32 = e.global(0x011a_2ff0);
+        e.call(0x0040_6d50, &args![buffer, 0x104u32, name]);
+        for handle in [0x00c3_bb80u32, 0x00c3_bbd0, 0x00c3_bc20] {
+            let value = e.call(handle, &args![]).u32();
+            e.call(0x00fd_f0d4, &args![value]);
+        }
+        if e.call(0x00ec_bf05, &args![buffer, 0u32]).i32() == -1 {
+            e.call(0x0040_6d30, &args![default_file, 0x104u32, 0x0108_2d70u32]);
+            e.call(0x00fd_f1b8, &args![default_file, buffer, 1u32]);
+        }
+    });
+}
+
+// Translated from 00876d20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Main_InitArchive` (Xbox PDB): initialises the archive manager from
+/// the game settings: `00af43a0` (a byte setting, two strings, `0x200000`),
+/// `00af4460` (a byte setting), `00af4470` (three integer settings),
+/// `00af4490` (a byte setting and a string), then
+/// `ArchiveManager::OpenMasterArchives` (`00af4550`, Xbox PDB).
+pub fn main_init_archive(e: &mut Engine) {
+    let first = e.call(GET_POOLED_TEXT, &args![0x011d_eb94u32]).u32();
+    let second = e.call(GET_POOLED_TEXT, &args![0x011c_4030u32]).u32();
+    let flag = setting_byte(e, 0x011d_ee3c);
+    e.call(0x00af_43a0, &args![flag, second, first, 0x20_0000u32]);
+    let flag = setting_byte(e, 0x011d_ebdc);
+    e.call(0x00af_4460, &args![flag]);
+    let a = setting_dword(e, 0x011d_ec40) as u32;
+    let b = setting_dword(e, 0x011d_eaa0) as u32;
+    let c = setting_dword(e, 0x011d_eb24) as u32;
+    e.call(0x00af_4470, &args![c, b, a]);
+    let text = e.call(GET_POOLED_TEXT, &args![0x011d_ec68u32]).u32();
+    let flag = setting_byte(e, 0x011d_ec4c);
+    e.call(0x00af_4490, &args![flag, text]);
+    e.call(0x00af_4550, &args![]);
+}
+
+// Translated from 00876dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Main_InitStartCell` (Xbox PDB): finds the cell the game starts in and
+/// puts the player there. Cdecl: `cell_name` (an editor id string or 0) and
+/// `position` (three floats it fills in). The start cell comes from, in
+/// this order: `cell_name` when `0044a670` accepts it, the setting string
+/// `0x011ded5c`, or the world-space name and coordinates of the settings
+/// `0x011dee8c` / `0x011debc4` (a world space is searched in the list
+/// `00460140` returns for the data handler `0x011c3f2c`, by the name in
+/// the setting `0x011deb48`; `00461c20` creates the cell). With a cell
+/// found (a loaded cell goes through `00453dc0`, an unloaded one sets the
+/// world space, the position `x/y << 12 + 0x01016968` and `00454450`).
+/// When nothing was loaded the data handler is told (`004650a0(-1)`) and
+/// the world is refreshed (`004515a0`, `004ba7d0`); a failure logs a
+/// "CELLS: Could not find starting cell ..." message through `005b5e40`
+/// (naming the cell setting, or the coordinates and world space).
+pub fn main_init_start_cell(e: &mut Engine, cell_name: u32, position: u32) {
+    let mut cell = 0u32;
+    let mut message_wanted = true;
+    let mut run = true;
+    let named = cell_name != 0 && e.call(0x0044_a670, &args![cell_name]).u32() != 0;
+    let by_setting = named || {
+        let text = pooled_text(e, 0x011d_ed5c);
+        e.call(0x00ec_6130, &args![text]).u32() != 0
+    };
+    if by_setting {
+        let named_again = cell_name != 0 && e.call(0x0044_a670, &args![cell_name]).u32() != 0;
+        if named_again {
+            let handler = data_handler(e);
+            cell = e.call(0x0046_1ae0, &args![handler, cell_name]).u32();
+        } else {
+            let text = pooled_text(e, 0x011d_ed5c);
+            let parsed = e.call(0x0046_4f30, &args![text, 0u32]).u32();
+            let handler = data_handler(e);
+            cell = e.call(0x0046_1ae0, &args![handler, parsed]).u32();
+        }
+        if cell == 0 {
+            e.with_stack(0x10, |e, outputs| {
+                let out_x = outputs.addr();
+                let out_y = outputs.addr() + 4;
+                e.mem.set_u32(out_x, 0);
+                e.mem.set_u32(out_y, 0);
+                let text = pooled_text(e, 0x011d_ed5c);
+                let parsed = e.call(0x0046_4f30, &args![text, 0u32]).u32();
+                let handler = data_handler(e);
+                let space = e
+                    .call(0x0046_1cf0, &args![handler, parsed, out_x, out_y])
+                    .u32();
+                if space != 0 {
+                    let world = e.mem.u32(WORLD_OBJECT);
+                    e.call(0x0045_8200, &args![world, space]);
+                    let x = e.mem.i32(out_x);
+                    let y = e.mem.i32(out_y);
+                    place_at_cell_coordinates(e, position, x, y);
+                    let world = e.mem.u32(WORLD_OBJECT);
+                    e.call(0x0045_4450, &args![world, position]);
+                    let handler = data_handler(e);
+                    let x = e.mem.u32(out_x);
+                    let y = e.mem.u32(out_y);
+                    cell = e
+                        .call(0x0046_1c20, &args![handler, x, y, space, 0u32])
+                        .u32();
+                    run = false;
+                }
+            });
+        }
+    } else {
+        let space_text = pooled_text(e, 0x011d_ee8c);
+        if e.call(0x00ec_6130, &args![space_text]).u32() != 0 && {
+            let coords_text = pooled_text(e, 0x011d_ebc4);
+            e.call(0x00ec_6130, &args![coords_text]).u32() != 0
+        } {
+            let text = pooled_text(e, 0x011d_ee8c);
+            let parsed = e.call(0x0046_4f30, &args![text, 0u32]).u32();
+            let x = e.call(0x00ec_a6d3, &args![parsed]).u32();
+            let text = pooled_text(e, 0x011d_ebc4);
+            let parsed = e.call(0x0046_4f30, &args![text, 0u32]).u32();
+            let y = e.call(0x00ec_a6d3, &args![parsed]).u32();
+            let handler = data_handler(e);
+            let list = e.call(0x0046_0140, &args![handler]).u32();
+            let link = e.call(0x0068_15c0, &args![list]).u32();
+            let mut world_space = e.mem.u32(link);
+            let handler = data_handler(e);
+            let mut current = e.call(0x0046_0140, &args![handler]).u32();
+            while current != 0 {
+                if e.call(0x0082_56d0, &args![current]).u8() != 0 {
+                    break;
+                }
+                let link = e.call(0x0068_15c0, &args![current]).u32();
+                let candidate = e.mem.u32(link);
+                let wanted = pooled_text(e, 0x011d_eb48);
+                let name = e.vcall(candidate, 0x130, &args![]).u32();
+                if e.call(0x0040_4dc0, &args![name, wanted]).u32() == 0 {
+                    world_space = candidate;
+                    break;
+                }
+                current = e.call(0x0072_6070, &args![current]).u32();
+            }
+            if world_space != 0 {
+                cell = e.call(0x0058_5b30, &args![world_space, x, y]).u32();
+                if cell == 0 {
+                    let handler = data_handler(e);
+                    cell = e
+                        .call(0x0046_1c20, &args![handler, x, y, world_space, 1u32])
+                        .u32();
+                }
+            }
+        } else {
+            message_wanted = false;
+            run = false;
+        }
+    }
+    if !run {
+        return;
+    }
+    if cell != 0 {
+        if e.call(0x0042_5fd0, &args![cell]).u8() != 0 {
+            let world = e.mem.u32(WORLD_OBJECT);
+            e.call(0x0045_3dc0, &args![world, cell, position]);
+        } else {
+            let space = e.call(0x0054_ddd0, &args![cell]).u32();
+            let world = e.mem.u32(WORLD_OBJECT);
+            e.call(0x0045_8200, &args![world, space]);
+            let x = e.call(0x0054_4c30, &args![cell]).i32();
+            let y = e.call(0x0054_4c60, &args![cell]).i32();
+            place_at_cell_coordinates(e, position, x, y);
+            let world = e.mem.u32(WORLD_OBJECT);
+            e.call(0x0045_4450, &args![world, position]);
+        }
+        run = false;
+    } else if message_wanted {
+        report_missing_start_cell(e);
+    }
+    let handler = data_handler(e);
+    e.call(0x0046_50a0, &args![handler, u32::MAX]);
+    if run {
+        let world = e.mem.u32(WORLD_OBJECT);
+        e.call(0x0045_15a0, &args![world, position, 1u32]);
+        let world = e.mem.u32(WORLD_OBJECT);
+        let grid = e.call(0x0044_ddc0, &args![world]).u32();
+        e.call(0x004b_a7d0, &args![grid]);
+    }
+}
+
+/// The data handler global `0x011c3f2c`.
+fn data_handler(e: &Engine) -> u32 {
+    e.global(0x011c_3f2c)
+}
+
+/// The string `00403df0` returns for the setting at `setting`.
+fn pooled_text(e: &mut Engine, setting: u32) -> u32 {
+    e.call(GET_POOLED_TEXT, &args![setting]).u32()
+}
+
+/// Whether the string at `text` is not empty (its first byte, signed).
+fn text_not_empty(e: &Engine, text: u32) -> bool {
+    e.mem.i8(text) != 0
+}
+
+/// Stores the position `(x << 12) + d, (y << 12) + d, 0` (with `d` the
+/// double at `0x01016968`) as floats at `position`.
+fn place_at_cell_coordinates(e: &mut Engine, position: u32, x: i32, y: i32) {
+    let bias: f64 = e.global(0x0101_6968);
+    e.mem.set_f32(position, ((x << 12) as f64 + bias) as f32);
+    e.mem
+        .set_f32(position + 4, ((y << 12) as f64 + bias) as f32);
+    e.mem.set_f32(position + 8, 0.0);
+}
+
+/// The log message of `main_init_start_cell` when no start cell was found.
+fn report_missing_start_cell(e: &mut Engine) {
+    let cell_text = pooled_text(e, 0x011d_ed5c);
+    if cell_text != 0 && {
+        let text = pooled_text(e, 0x011d_ed5c);
+        text_not_empty(e, text)
+    } {
+        let text = pooled_text(e, 0x011d_ed5c);
+        e.call(0x005b_5e40, &args![0x0108_2e94u32, text]);
+        return;
+    }
+    let space_text = pooled_text(e, 0x011d_ee8c);
+    let usable = space_text != 0
+        && pooled_text(e, 0x011d_ebc4) != 0
+        && {
+            let text = pooled_text(e, 0x011d_ee8c);
+            text_not_empty(e, text)
+        }
+        && {
+            let text = pooled_text(e, 0x011d_ebc4);
+            text_not_empty(e, text)
+        };
+    if !usable {
+        e.call(0x005b_5e40, &args![0x0108_2dccu32]);
+        return;
+    }
+    let name_text = pooled_text(e, 0x011d_eb48);
+    if name_text != 0 && {
+        let text = pooled_text(e, 0x011d_eb48);
+        text_not_empty(e, text)
+    } {
+        let name = pooled_text(e, 0x011d_eb48);
+        let coords = pooled_text(e, 0x011d_ebc4);
+        let space = pooled_text(e, 0x011d_ee8c);
+        e.call(0x005b_5e40, &args![0x0108_2e50u32, space, coords, name]);
+    } else {
+        let coords = pooled_text(e, 0x011d_ebc4);
+        let space = pooled_text(e, 0x011d_ee8c);
+        e.call(0x005b_5e40, &args![0x0108_2e00u32, space, coords]);
+    }
+}
+
+// Translated from 00877260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cdecl, taking a position by value (three words). Moves the player to
+/// the position: finds the cell (`005f36f0`, else the grid cell of the
+/// setting `0x011c63cc` halved, `00457050`), lets it place the position
+/// (`0054cfd0` with the rotation `0x011f426c`), moves the player (vtable
+/// slots `0x2c4` with the z word and `0x2a8` with the position), adds the
+/// player to the cell (`00548230`, `00456520`), runs a profiler scope
+/// (kind `0x34`, line `0x2612`) that updates the player's node properties
+/// (`00a5a040`) and `00b5cbd0`, runs the player's script (`00565730`) and
+/// resets the root child's position and orientation.
+pub fn fn_00877260(e: &mut Engine, x: u32, y: u32, z: u32) {
+    e.with_stack(0x80, |e, frame| {
+        let frame = frame.addr();
+        let position = frame;
+        let rotation = frame + 0x10;
+        let orientation = frame + 0x20;
+        let point = frame + 0x30;
+        let guard = frame + 0x40;
+        e.mem.set_u32(position, x);
+        e.mem.set_u32(position + 4, y);
+        e.mem.set_u32(position + 8, z);
+        for k in 0..3 {
+            let word = e.global::<u32>(ZERO_VECTOR + 4 * k);
+            e.mem.set_u32(rotation + 4 * k, word);
+        }
+        let world = e.mem.u32(WORLD_OBJECT);
+        let mut cell = e.call(0x005f_36f0, &args![world]).u32();
+        if cell == 0 {
+            let first = setting_dword(e, 0x011c_63cc) as u32 >> 1;
+            let second = setting_dword(e, 0x011c_63cc) as u32 >> 1;
+            let world = e.mem.u32(WORLD_OBJECT);
+            let slot = e.call(0x0045_7050, &args![world, second, first]).u32();
+            cell = e.mem.u32(slot);
+        }
+        if cell != 0 {
+            e.call(0x0054_cfd0, &args![cell, position, rotation]);
+        }
+        let player_value = player(e);
+        let height = e.mem.f32(rotation + 8);
+        e.vcall(player_value, 0x2c4, &args![height]);
+        let player_value = player(e);
+        e.vcall(player_value, 0x2a8, &args![position]);
+        if cell != 0 {
+            let player_value = player(e);
+            e.call(0x0054_8230, &args![cell, player_value, 0u32]);
+            let loader: u32 = e.global(0x0120_2d98);
+            e.call(0x0045_6520, &args![loader]);
+            e.call(
+                PROFILE_SCOPE_CTOR,
+                &args![guard, 0x34u32, 1u32, SOURCE_FILE_NAME, 0x2612u32],
+            );
+            let node = player_node(e, 0);
+            e.call(0x00a5_a040, &args![node]);
+            let node = player_node(e, 0);
+            let indexed = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+            e.call(0x00b5_cbd0, &args![indexed, node]);
+            e.call(PROFILE_SCOPE_DTOR, &args![guard]);
+        }
+        let player_value = player(e);
+        e.call(0x0056_5730, &args![player_value]);
+        let root = e.call(GET_ROOT, &args![]).u32();
+        let child = e.call(0x0055_8310, &args![root]).u32();
+        e.call(0x0044_0460, &args![child, position]);
+        let player_value = player(e);
+        let current = e.call(0x0056_fa00, &args![player_value, orientation]).u32();
+        let root = e.call(GET_ROOT, &args![]).u32();
+        let child = e.call(0x0055_8310, &args![root]).u32();
+        e.call(0x0043_fa80, &args![child, current]);
+        e.call(POINT3_CTOR, &args![point, 0u32, 0u32, 0u32]);
+        let root = e.call(GET_ROOT, &args![]).u32();
+        let child = e.call(0x0055_8310, &args![root]).u32();
+        e.call(0x00a5_9c60, &args![child, point]);
+    });
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1894,6 +4272,46 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00872f30, fn_00872f30(Ptr)),
         entry!(0x00872f50, fn_00872f50(Ptr, u32, u32, u8, u8) -> u32),
+        entry!(0x008731a0, fn_008731a0(f64, f32) -> f64),
+        entry!(0x008731d0, fn_008731d0(Ptr)),
+        entry!(0x00873200, fn_00873200(Ptr, u32, u32, u8, u8)),
+        entry!(0x00874460, fn_00874460(Ptr, u32)),
+        entry!(0x00874480, fn_00874480(Ptr) -> u32),
+        entry!(0x008744a0, fn_008744a0(u32)),
+        entry!(0x00874650, fn_00874650(Ptr) -> u8),
+        entry!(0x00874670, fn_00874670(Ptr) -> Ptr),
+        entry!(0x00874690, fn_00874690() -> u32),
+        entry!(0x008746a0, fn_008746a0() -> u32),
+        entry!(0x008746b0, fn_008746b0() -> u32),
+        entry!(0x008746c0, fn_008746c0()),
+        entry!(0x008746d0, fn_008746d0(Ptr, u32)),
+        entry!(0x008748d0, fn_008748d0(Ptr) -> u32),
+        entry!(0x00874900, fn_00874900(Ptr) -> f32),
+        entry!(0x00874920, fn_00874920(Ptr, u32, u32)),
+        entry!(0x008749b0, fn_008749b0(Ptr) -> u8),
+        entry!(0x00874aa0, fn_00874aa0(Ptr) -> u8),
+        entry!(0x00874ac0, fn_00874ac0(Ptr, u32)),
+        entry!(0x00874b50, fn_00874b50(Ptr, u32, u32, u32)),
+        entry!(0x00874b90, fn_00874b90(Ptr, u32, u32, u8, u32)),
+        entry!(0x00874c10, main_draw_world_mt_setup_1st_person(Ptr)),
+        entry!(0x008750e0, fn_008750e0(Ptr, u32, u32, u32)),
+        entry!(0x00875110, fn_00875110(Ptr, u32, u32, u32, u32)),
+        entry!(0x00875bd0, fn_00875bd0(Ptr, u32) -> u32),
+        entry!(0x00875bf0, fn_00875bf0(Ptr)),
+        entry!(0x00875e40, fn_00875e40(Ptr, u32, u32)),
+        entry!(0x00875fa0, fn_00875fa0(Ptr, u32, u32)),
+        entry!(0x00875fd0, fn_00875fd0(Ptr, u32, u32, u32, u32)),
+        entry!(0x008761e0, fn_008761e0(Ptr, u32, u32)),
+        entry!(0x00876810, fn_00876810(Ptr) -> u8),
+        entry!(0x00876830, fn_00876830(Ptr, u32, u32)),
+        entry!(0x00876850, fn_00876850(Ptr, u32, u32, u32, u32)),
+        entry!(0x00876a00, fn_00876a00(Ptr)),
+        entry!(0x00876a20, fn_00876a20(Ptr, u32)),
+        entry!(0x00876a70, fn_00876a70(u32, u32)),
+        entry!(0x00876ad0, fn_00876ad0(u32)),
+        entry!(0x00876d20, main_init_archive()),
+        entry!(0x00876dd0, main_init_start_cell(u32, u32)),
+        entry!(0x00877260, fn_00877260(u32, u32, u32)),
     ]
 }
 
@@ -4591,4 +7009,2345 @@ mod tests {
     }
 
     // END TESTS
+}
+
+#[cfg(test)]
+mod tests_second {
+    //! Tests of `008731a0` to `00877260`. Every address the translations
+    //! call outside this file has a test double, so that nothing another
+    //! unit translated runs for real.
+    use super::*;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+    type Returns = Rc<RefCell<HashMap<u32, Vec<Ret>>>>;
+
+    const CALLEES: &[u32] = &[
+        0x0040_1000,
+        0x0040_3df0,
+        0x0040_4dc0,
+        0x0040_4eb0,
+        0x0040_4ee0,
+        0x0040_4f70,
+        0x0040_6d00,
+        0x0040_6d30,
+        0x0040_6d50,
+        0x0040_8d60,
+        0x0040_df90,
+        0x0041_4430,
+        0x0041_6870,
+        0x0041_fd00,
+        0x0042_5fd0,
+        0x0042_ce10,
+        0x0043_6aa0,
+        0x0043_9340,
+        0x0043_9390,
+        0x0043_9e90,
+        0x0043_9ef0,
+        0x0043_b230,
+        0x0043_b480,
+        0x0043_b4a0,
+        0x0043_c490,
+        0x0043_c4b0,
+        0x0043_d410,
+        0x0043_d4d0,
+        0x0043_fa80,
+        0x0044_0460,
+        0x0044_a670,
+        0x0044_ddc0,
+        0x0045_0b80,
+        0x0045_0f90,
+        0x0045_15a0,
+        0x0045_3dc0,
+        0x0045_4450,
+        0x0045_4b30,
+        0x0045_6520,
+        0x0045_6610,
+        0x0045_6630,
+        0x0045_7050,
+        0x0045_7070,
+        0x0045_8200,
+        0x0045_bb80,
+        0x0045_bba0,
+        0x0045_bbe0,
+        0x0045_bc00,
+        0x0045_c4c0,
+        0x0045_c670,
+        0x0045_cec0,
+        0x0046_0140,
+        0x0046_1130,
+        0x0046_1ae0,
+        0x0046_1c20,
+        0x0046_1cf0,
+        0x0046_4f30,
+        0x0046_50a0,
+        0x0047_6a80,
+        0x0048_f200,
+        0x0049_ed90,
+        0x004a_0bd0,
+        0x004a_0d10,
+        0x004a_0e90,
+        0x004a_0ea0,
+        0x004a_0eb0,
+        0x004a_0f60,
+        0x004a_0fd0,
+        0x004a_1020,
+        0x004a_1a30,
+        0x004a_4460,
+        0x004a_d0c0,
+        0x004a_d1d0,
+        0x004b_a7d0,
+        0x004b_c320,
+        0x004d_61b0,
+        0x004d_c020,
+        0x004d_c110,
+        0x004d_c540,
+        0x004e_3270,
+        0x004e_9510,
+        0x004e_9bb0,
+        0x004e_a970,
+        0x004e_bbc0,
+        0x004e_ced0,
+        0x004e_d8c0,
+        0x004e_d900,
+        0x004f_00e0,
+        0x004f_b0b0,
+        0x0050_7700,
+        0x0052_4c90,
+        0x0052_5430,
+        0x0054_4c30,
+        0x0054_4c60,
+        0x0054_6780,
+        0x0054_8230,
+        0x0054_cfd0,
+        0x0054_ddd0,
+        0x0055_8310,
+        0x0055_85e0,
+        0x0055_9a40,
+        0x0056_21d0,
+        0x0056_5730,
+        0x0056_fa00,
+        0x0057_cbe0,
+        0x0058_5b30,
+        0x005b_5e40,
+        0x005b_9b00,
+        0x005b_ac50,
+        0x005b_b4d0,
+        0x005f_36f0,
+        0x0063_3c90,
+        0x0064_26a0,
+        0x0064_2860,
+        0x0064_2890,
+        0x0064_47f0,
+        0x0066_29f0,
+        0x0066_b0d0,
+        0x0068_15c0,
+        0x0068_38b0,
+        0x0068_3a60,
+        0x0068_8430,
+        0x006a_9540,
+        0x006a_b360,
+        0x006e_5cc0,
+        0x0070_2360,
+        0x0070_2870,
+        0x0070_5910,
+        0x0070_5990,
+        0x0070_5a00,
+        0x0070_5e80,
+        0x0070_79b0,
+        0x0070_7ad0,
+        0x0070_9b50,
+        0x0071_0ab0,
+        0x0071_2e60,
+        0x0071_48c0,
+        0x0071_4900,
+        0x0071_4a40,
+        0x0071_4a60,
+        0x0071_4ae0,
+        0x0072_6070,
+        0x0076_b610,
+        0x0077_21a0,
+        0x007d_6bb0,
+        0x007f_8720,
+        0x007f_a950,
+        0x007f_ae70,
+        0x0080_0f30,
+        0x0080_19d0,
+        0x0080_1a60,
+        0x0082_56d0,
+        0x0084_e3a0,
+        0x0086_d480,
+        0x0087_7720,
+        0x008a_8870,
+        0x008b_6200,
+        0x008b_bc10,
+        0x008c_51c0,
+        0x008c_80e0,
+        0x008d_80e0,
+        0x0093_6aa0,
+        0x0095_0bb0,
+        0x0096_11e0,
+        0x0096_7ae0,
+        0x009b_4440,
+        0x009d_9f20,
+        0x00a2_3a50,
+        0x00a2_9680,
+        0x00a5_9c60,
+        0x00a5_9d30,
+        0x00a5_a040,
+        0x00a6_94a0,
+        0x00a6_faf0,
+        0x00a8_6bf0,
+        0x00a8_9af0,
+        0x00aa_13e0,
+        0x00af_43a0,
+        0x00af_4460,
+        0x00af_4470,
+        0x00af_4490,
+        0x00af_4550,
+        0x00b4_f450,
+        0x00b4_f510,
+        0x00b5_4000,
+        0x00b5_40b0,
+        0x00b5_4ac0,
+        0x00b5_5ac0,
+        0x00b5_ba80,
+        0x00b5_cbd0,
+        0x00b5_e870,
+        0x00b6_30c0,
+        0x00b6_3b90,
+        0x00b6_4570,
+        0x00b6_51e0,
+        0x00b6_5550,
+        0x00b6_5660,
+        0x00b6_5ec0,
+        0x00b6_60d0,
+        0x00b6_b260,
+        0x00b6_b790,
+        0x00b6_b8d0,
+        0x00b6_b930,
+        0x00b6_ba20,
+        0x00b6_bee0,
+        0x00b6_bfc0,
+        0x00b6_c0d0,
+        0x00b6_da10,
+        0x00b6_e110,
+        0x00b8_03b0,
+        0x00b9_7550,
+        0x00b9_7de0,
+        0x00b9_7e30,
+        0x00b9_7fa0,
+        0x00b9_8380,
+        0x00b9_88e0,
+        0x00ba_30f0,
+        0x00ba_3130,
+        0x00ba_3390,
+        0x00ba_3770,
+        0x00ba_3840,
+        0x00ba_39a0,
+        0x00ba_9420,
+        0x00ba_d4a0,
+        0x00c3_bb80,
+        0x00c3_bbd0,
+        0x00c3_bc20,
+        0x00c4_9850,
+        0x00c4_f270,
+        0x00c4_f2d0,
+        0x00c4_f320,
+        0x00c5_2020,
+        0x00c5_b5a0,
+        0x00c5_b5d0,
+        0x00ec_6130,
+        0x00ec_a6d3,
+        0x00ec_bf05,
+        0x00fd_f004,
+        0x00fd_f008,
+        0x00fd_f00c,
+        0x00fd_f0b8,
+        0x00fd_f0c4,
+        0x00fd_f0d4,
+        0x00fd_f1b8,
+        0x00fd_f274,
+    ];
+
+    /// The engine with a double for every callee and the data pages
+    /// mapped (zeroed). `00559450` (`NiPointer` read) reads memory, and
+    /// the settings accessors point at a zero value.
+    struct Rig {
+        e: Engine,
+        returns: Returns,
+        zero: u32,
+    }
+
+    impl Rig {
+        fn new() -> Rig {
+            let mut e = Engine::new();
+            for page in (0x0100_0000u32..0x0130_0000).step_by(0x1000) {
+                e.map(page, 0x1000);
+            }
+            let returns: Returns = Rc::new(RefCell::new(HashMap::new()));
+            for &addr in CALLEES {
+                let table = returns.clone();
+                e.register_double(addr, move |_, _| {
+                    let mut table = table.borrow_mut();
+                    match table.get_mut(&addr) {
+                        Some(queue) if queue.len() > 1 => queue.remove(0),
+                        Some(queue) if queue.len() == 1 => queue[0],
+                        _ => Ret::default(),
+                    }
+                });
+            }
+            e.register_double(POINTER_GET, |e, a| Ret {
+                eax: e.mem.u32(a[0]),
+                ..Ret::default()
+            });
+            // `NiPointer` assignment and construction store the pointer.
+            for addr in [NI_POINTER_ASSIGN, NI_POINTER_CTOR] {
+                e.register_double(addr, |e, a| {
+                    e.mem.set_u32(a[0], a[1]);
+                    Ret {
+                        eax: a[0],
+                        ..Ret::default()
+                    }
+                });
+            }
+            e.register_double(NI_POINTER_COPY_CTOR, |e, a| {
+                let value = e.mem.u32(a[1]);
+                e.mem.set_u32(a[0], value);
+                Ret {
+                    eax: a[0],
+                    ..Ret::default()
+                }
+            });
+            let zero = e.mem.alloc(0x100);
+            let mut rig = Rig { e, returns, zero };
+            for setting in [SETTING_DWORD_PTR, SETTING_BYTE_PTR] {
+                rig.set(setting, &[zero]);
+            }
+            rig
+        }
+
+        /// The values the double at `addr` returns in `eax`, in order; the
+        /// last one repeats.
+        fn set(&mut self, addr: u32, values: &[u32]) {
+            let queue = values
+                .iter()
+                .map(|&eax| Ret {
+                    eax,
+                    ..Ret::default()
+                })
+                .collect();
+            self.returns.borrow_mut().insert(addr, queue);
+        }
+
+        /// A double that returns `value` in ST0.
+        fn set_float(&mut self, addr: u32, value: f64) {
+            let ret = Ret {
+                st0: value,
+                ..Ret::default()
+            };
+            self.returns.borrow_mut().insert(addr, vec![ret]);
+        }
+
+        fn object(&mut self, size: u32) -> u32 {
+            self.e.mem.alloc(size)
+        }
+
+        /// An object whose vtable slots (byte offset, result) are doubles
+        /// returning the given result in `eax`.
+        fn object_with_slots(&mut self, slots: &[(u32, u32)]) -> u32 {
+            let object = self.e.mem.alloc(0x40);
+            let vtable = self.e.mem.alloc(0x400);
+            self.e.mem.set_u32(object, vtable);
+            for &(offset, result) in slots {
+                let target = 0x00f0_0000 + (vtable & 0xffff) * 0x400 + offset;
+                self.e.register_double(target, move |_, _| Ret {
+                    eax: result,
+                    ..Ret::default()
+                });
+                self.e.mem.set_u32(vtable + offset, target);
+            }
+            object
+        }
+
+        /// A settings accessor that answers by the setting it is asked
+        /// about (`values`: setting address, value); any other setting
+        /// reads 0.
+        fn settings(&mut self, accessor: u32, values: &[(u32, u32)]) {
+            let zero = self.zero;
+            let mut blocks: HashMap<u32, u32> = HashMap::new();
+            for &(setting, value) in values {
+                let block = self.e.mem.alloc(8);
+                self.e.mem.set_u32(block, value);
+                blocks.insert(setting, block);
+            }
+            self.e.register_double(accessor, move |_, a| Ret {
+                eax: blocks.get(&a[0]).copied().unwrap_or(zero),
+                ..Ret::default()
+            });
+        }
+
+        /// Runs `addr` and returns its result and the calls it made.
+        fn run(&mut self, addr: u32, args: &[u32]) -> (Ret, Log) {
+            self.e.call_log = Some(vec![]);
+            let ret = self.e.call(addr, args);
+            let mut log = self.e.call_log.take().unwrap();
+            log.remove(0);
+            // The pointer reads are noise for these tests.
+            log.retain(|(addr, _)| *addr != POINTER_GET);
+            (ret, log)
+        }
+    }
+
+    fn addrs(log: &Log) -> Vec<u32> {
+        log.iter().map(|(addr, _)| *addr).collect()
+    }
+
+    /// The addresses of `log` that are in `wanted`, in call order.
+    fn only(log: &Log, wanted: &[u32]) -> Vec<u32> {
+        addrs(log)
+            .into_iter()
+            .filter(|addr| wanted.contains(addr))
+            .collect()
+    }
+
+    /// The argument lists of the calls to `addr`.
+    fn calls_to(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, args)| args.clone())
+            .collect()
+    }
+
+    fn word(value: f32) -> u32 {
+        value.to_bits()
+    }
+
+    #[test]
+    fn float_helper_returns_the_smaller_value() {
+        let mut r = Rig::new();
+        assert_eq!(fn_008731a0(&mut r.e, 3.0, 5.0), 3.0);
+        assert_eq!(fn_008731a0(&mut r.e, 7.0, 5.0), 5.0);
+        // Equal or unordered: the float.
+        assert_eq!(fn_008731a0(&mut r.e, 5.0, 5.0), 5.0);
+        assert_eq!(fn_008731a0(&mut r.e, f64::NAN, 5.0), 5.0);
+        let ret = r.e.call(0x0087_31a0, &args![2.5f64, 9.0f32]);
+        assert_eq!(ret.f64(), 2.5);
+    }
+
+    #[test]
+    fn pointer_member_is_passed_on_when_set() {
+        let mut r = Rig::new();
+        let this = r.object(0x40);
+        let (_, log) = r.run(0x0087_31d0, &args![this]);
+        assert!(calls_to(&log, 0x006e_5cc0).is_empty());
+        r.e.mem.set_u32(this + 0x20, 0x7000);
+        let (_, log) = r.run(0x0087_31d0, &args![this]);
+        assert_eq!(
+            calls_to(&log, 0x006e_5cc0),
+            vec![vec![this + 8, this + 0x20]]
+        );
+    }
+
+    #[test]
+    fn small_accessors_read_and_write_their_fields() {
+        let mut r = Rig::new();
+        let this = r.object(0x200);
+        r.e.mem.set_u32(this + 0xfc, 0x1234);
+        r.e.mem.set_u8(this + 0x1dc, 9);
+        r.e.mem.set_u8(this + 0x118, 5);
+        r.e.mem.set_f32(this + 0x674, 1.5);
+        assert_eq!(r.e.call(0x0087_4480, &args![this]).u32(), 0x1234);
+        assert_eq!(r.e.call(0x0087_4650, &args![this]).u8(), 9);
+        assert_eq!(r.e.call(0x0087_4aa0, &args![this]).u8(), 5);
+        assert_eq!(r.e.call(0x0087_4670, &args![this]).u32(), this + 0x138);
+        assert_eq!(r.e.call(0x0087_4900, &args![this]).f32(), 1.5);
+        r.e.call(0x0087_4460, &args![this, 0x55u32]);
+        assert_eq!(r.e.mem.u32(this + 0xc0), 0x55);
+        r.e.call(0x0087_50e0, &args![this, 1u32, 2u32, 3u32]);
+        assert_eq!(
+            [
+                r.e.mem.u32(this + 0x1e4),
+                r.e.mem.u32(this + 0x1e8),
+                r.e.mem.u32(this + 0x1ec)
+            ],
+            [1, 2, 3]
+        );
+        r.e.set_global(0x011f_f0f0, 7u32);
+        r.e.call(0x0087_46c0, &args![]);
+        assert_eq!(r.e.global::<u32>(0x011f_f0f0), 0);
+    }
+
+    #[test]
+    fn global_pointer_getters_read_their_slots() {
+        let mut r = Rig::new();
+        r.e.mem.set_u32(0x011c_7840, 0x11);
+        r.e.mem.set_u32(0x011c_7810, 0x22);
+        r.e.mem.set_u32(0x011c_781c, 0x33);
+        assert_eq!(r.e.call(0x0087_4690, &args![]).u32(), 0x11);
+        assert_eq!(r.e.call(0x0087_46a0, &args![]).u32(), 0x22);
+        assert_eq!(r.e.call(0x0087_46b0, &args![]).u32(), 0x33);
+    }
+
+    #[test]
+    fn pipboy_array_reader_indexes_the_pointer_array() {
+        let mut r = Rig::new();
+        let this = r.object(0x200);
+        r.e.mem.set_u32(this + 0xf4 + 8, 0x77);
+        assert_eq!(r.e.call(0x0087_5bd0, &args![this, 2u32]).u32(), 0x77);
+    }
+
+    /// The address of vtable slot `offset` of `object` (a double made by
+    /// [`Rig::object_with_slots`]).
+    fn slot_target(r: &Rig, object: u32, offset: u32) -> u32 {
+        let vtable = r.e.mem.u32(object);
+        r.e.mem.u32(vtable + offset)
+    }
+
+    #[test]
+    fn movement_detector_flags_a_change_and_stores_the_vectors() {
+        let mut r = Rig::new();
+        r.e.set_global(0x011a_9490, 1.0f32);
+        r.e.set_global(0x011a_9494, 2.0f32);
+        r.e.set_global(0x011a_9498, 3.0f32);
+        r.e.set_global(0x0120_03cc, 1u8);
+        // A null object copies the defaults and clears the flag.
+        r.e.call(0x0087_44a0, &args![0u32]);
+        assert_eq!(r.e.global::<f32>(0x0120_03d4), 1.0);
+        assert_eq!(r.e.global::<f32>(0x0120_03d8), 2.0);
+        assert_eq!(r.e.global::<f32>(0x0120_03dc), 3.0);
+        assert_eq!(r.e.global::<u8>(0x0120_03cc), 0);
+
+        let member = r.object(0x10);
+        for (k, v) in [1.5f32, 1.0, 1.0].iter().enumerate() {
+            r.e.mem.set_f32(member + 4 * k as u32, *v);
+        }
+        r.set(MEMBER_8C, &[member]);
+        r.e.register_double(0x0045_bba0, |e, a| {
+            for k in 0..3 {
+                e.mem.set_f32(a[1] + 4 * k, 3.0);
+            }
+            Ret::default()
+        });
+        r.e.register_double(0x0043_9ef0, |e, a| {
+            for k in 0..3 {
+                let v = e.mem.f32(a[0] + 4 * k) - e.mem.f32(a[2] + 4 * k);
+                e.mem.set_f32(a[1] + 4 * k, v);
+            }
+            Ret {
+                eax: a[1],
+                ..Ret::default()
+            }
+        });
+        r.e.register_double(0x0041_6870, |e, a| {
+            for k in 0..3 {
+                e.mem.set_u32(a[0] + 4 * k, a[1 + k as usize]);
+            }
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        r.e.set_global(0x0103_1148, 0.01f64);
+        for k in 0..3 {
+            r.e.set_global(0x0120_03e0 + 4 * k, 1.0f32);
+            r.e.set_global(0x0120_03d4 + 4 * k, 3.0f32);
+        }
+        r.e.call(0x0087_44a0, &args![0x1234u32]);
+        // The x position moved by 0.5 of 1.0: flagged.
+        assert_eq!(r.e.global::<u8>(0x0120_03cc), 1);
+        assert_eq!(r.e.global::<f32>(0x0120_03e0), 1.5);
+        assert_eq!(r.e.global::<f32>(0x0120_03e4), 1.0);
+        assert_eq!(r.e.global::<f32>(0x0120_03d4), 3.0);
+        // The same vectors again: nothing moved.
+        r.e.call(0x0087_44a0, &args![0x1234u32]);
+        assert_eq!(r.e.global::<u8>(0x0120_03cc), 0);
+    }
+
+    /// The rig of the passes that take the root, the player and the scene
+    /// target: root `0x4000`, its child `0x6000`, target `0x5000`, a player
+    /// whose field of view (`+0x674`) is 1.25.
+    fn scene_rig() -> (Rig, u32) {
+        let mut r = Rig::new();
+        // The accumulators and the camera sit at fixed addresses.
+        r.e.map(0x8000, 0x3000);
+        let texture = r.object(0x100);
+        r.set(0x004e_bbc0, &[texture]);
+        let player = r.object(0x700);
+        r.e.mem.set_f32(player + 0x674, 1.25);
+        r.e.set_global(PLAYER_OBJECT, player);
+        r.set(GET_ROOT, &[0x4000]);
+        r.set(GET_ROOT_CHILD, &[0x6000]);
+        r.set(GET_SCENE_TARGET, &[0x5000]);
+        r.set(GET_PLAYER_NODE, &[0x3000]);
+        r.set_float(0x0071_0ab0, 2.5);
+        let this = r.object(0x200);
+        r.e.mem.set_u32(this + 0x88, 0x8800);
+        r.e.mem.set_u32(this + 0x8c, 0x8c00);
+        r.e.mem.set_u32(this + 0x90, 0x9000);
+        r.e.mem.set_u32(this + 0x94, 0x9400);
+        r.e.mem.set_u32(this + 0x98, 0x9800);
+        r.e.mem.set_u32(this + 0xa0, 0xa000);
+        (r, this)
+    }
+
+    #[test]
+    fn offscreen_interface_pass_borrows_the_target_only_when_aiming() {
+        let (mut r, this) = scene_rig();
+        let decal = r.object_with_slots(&[(0xac, 0), (0xb0, 0), (0xb4, 0)]);
+        r.set(GET_GLOBAL_011F9508, &[decal]);
+        r.set(GET_NODE_FLAG, &[1]);
+        let (_, log) = r.run(0x0087_46d0, &args![this, 0u32]);
+        // Not aiming: only the 4eced0 wind-down, no vtable calls.
+        assert_eq!(calls_to(&log, 0x00b9_8380), vec![vec![0, 1]]);
+        assert_eq!(calls_to(&log, 0x004e_ced0), vec![vec![1]]);
+        assert!(calls_to(&log, slot_target(&r, decal, 0xb4)).is_empty());
+        assert_eq!(
+            calls_to(&log, ACCUMULATE_SCENE),
+            vec![vec![0x6000, 0x3000, 0x5000]]
+        );
+        assert_eq!(
+            calls_to(&log, SET_CAMERA_FOV)[0],
+            vec![0x4000, word(1.25), 0, 0, 0]
+        );
+        assert_eq!(
+            calls_to(&log, SET_CAMERA_FOV)[1],
+            vec![0x4000, word(2.5), 0, 0, 0]
+        );
+        assert_eq!(
+            calls_to(&log, 0x004a_0fd0),
+            vec![vec![0x5000, 0x9000], vec![0x5000, 0]]
+        );
+        assert_eq!(calls_to(&log, 0x00b6_c0d0), vec![vec![0x6000, 0x9000, 0]]);
+        // The node's flag is cleared, then restored from the first read.
+        assert_eq!(
+            calls_to(&log, SET_NODE_FLAG),
+            vec![vec![0x3000, 0], vec![0x3000, 1]]
+        );
+
+        r.set(0x008b_bc10, &[1]);
+        r.set(0x004e_bbc0, &[0x8000]);
+        r.set(0x00ba_3770, &[0x9100]);
+        r.set(0x00b6_b260, &[0x9200]);
+        let (_, log) = r.run(0x0087_46d0, &args![this, 0u32]);
+        assert_eq!(calls_to(&log, 0x00ba_3840), vec![vec![0x8000 + 0x7c, 0x27]]);
+        assert_eq!(calls_to(&log, 0x00b6_b260), vec![vec![0x9100]]);
+        assert_eq!(calls_to(&log, 0x00b6_b8d0), vec![vec![1, 0x9200]]);
+        let first = calls_to(&log, slot_target(&r, decal, 0xb4));
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0][0], decal);
+        assert_eq!(
+            calls_to(&log, slot_target(&r, decal, 0xb0)),
+            vec![vec![decal, 0x011f_4998]]
+        );
+        let last = calls_to(&log, slot_target(&r, decal, 0xac));
+        assert_eq!(last, vec![vec![decal, first[0][1]]]);
+        assert_eq!(calls_to(&log, 0x00b6_b790).len(), 2);
+        assert!(calls_to(&log, 0x004e_ced0).is_empty());
+    }
+
+    #[test]
+    fn borrowing_the_image_space_texture_returns_its_rendered_texture() {
+        let mut r = Rig::new();
+        r.set(0x00ba_3770, &[0x1357]);
+        let (ret, log) = r.run(0x0087_48d0, &args![0x2000u32]);
+        assert_eq!(ret.u32(), 0x1357);
+        assert_eq!(calls_to(&log, 0x00ba_3840), vec![vec![0x207c, 0x27]]);
+        assert_eq!(calls_to(&log, 0x00ba_3770), vec![vec![0x207c]]);
+    }
+
+    #[test]
+    fn scoped_accumulation_runs_between_the_profiler_calls() {
+        let (mut r, this) = scene_rig();
+        let (_, log) = r.run(0x0087_4920, &args![this, 0x1111u32, 0x2222u32]);
+        assert_eq!(
+            addrs(&log),
+            vec![
+                PROFILE_SCOPE_CTOR,
+                GET_ROOT,
+                GET_ROOT_CHILD,
+                0x00b6_4570,
+                PROFILE_SCOPE_DTOR
+            ]
+        );
+        let guard = calls_to(&log, PROFILE_SCOPE_CTOR)[0][0];
+        assert_eq!(
+            calls_to(&log, PROFILE_SCOPE_CTOR),
+            vec![vec![guard, 0x27, 1, SOURCE_FILE_NAME, 0x20d5]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x00b6_4570),
+            vec![vec![0x1111, 0x6000, 0x2222]]
+        );
+        assert_eq!(calls_to(&log, PROFILE_SCOPE_DTOR), vec![vec![guard]]);
+    }
+
+    #[test]
+    fn overlay_targets_are_drawn_only_with_all_conditions() {
+        let (mut r, this) = scene_rig();
+        let interface = r.object(0x200);
+        r.set(GET_INTERFACE_OBJECT, &[interface]);
+        // The interface holds no pointer at all: nothing happens.
+        let (ret, log) = r.run(0x0087_49b0, &args![this]);
+        assert_eq!(ret.u8(), 0);
+        assert_eq!(addrs(&log), vec![GET_INTERFACE_OBJECT, 0x0055_85e0]);
+        r.set(0x0055_85e0, &[1]);
+        r.set(GET_GLOBAL_011F4748, &[0x1500]);
+        r.set(GET_GLOBAL_011F91A8, &[0x1600]);
+        r.set(0x00b6_e110, &[0x7777]);
+        // The byte at +0x118 is clear: the target is created, no draw.
+        let (ret, log) = r.run(0x0087_49b0, &args![this]);
+        assert_eq!(ret.u8(), 0);
+        assert_eq!(
+            calls_to(&log, 0x00b6_e110),
+            vec![vec![0x1600, 0x1500, 0x2f, 0, 0, 0]]
+        );
+        assert_eq!(r.e.mem.u32(0x011d_eb38), 0x7777);
+        assert!(calls_to(&log, DRAW_TARGET_TO_TEXTURE).is_empty());
+        // With the byte set both draws run, with the existing target.
+        r.e.mem.set_u8(interface + 0x118, 1);
+        let (ret, log) = r.run(0x0087_49b0, &args![this]);
+        assert_eq!(ret.u8(), 1);
+        assert!(calls_to(&log, 0x00b6_e110).is_empty());
+        assert_eq!(
+            calls_to(&log, DRAW_TARGET_TO_TEXTURE),
+            vec![
+                vec![interface, 0x7777, 0, 1, 0, 7, 0],
+                vec![interface, 0x7777, 1, 1, 0, 1, 1]
+            ]
+        );
+        // The interface's own pointer set: no draw.
+        r.e.mem.set_u32(interface, 0x99);
+        let (ret, _) = r.run(0x0087_49b0, &args![this]);
+        assert_eq!(ret.u8(), 0);
+    }
+
+    #[test]
+    fn target_pass_draws_twice_around_the_state_change() {
+        let (mut r, this) = scene_rig();
+        let interface = r.object(0x200);
+        r.set(GET_INTERFACE_OBJECT, &[interface]);
+        r.e.mem.set_u32(0x011d_eb38, 0x7777);
+        let (_, log) = r.run(0x0087_4ac0, &args![this, 0u32]);
+        assert!(calls_to(&log, DRAW_TARGET_TO_TEXTURE).is_empty());
+        r.set(0x0055_85e0, &[1]);
+        let (_, log) = r.run(0x0087_4ac0, &args![this, 0u32]);
+        assert_eq!(
+            only(
+                &log,
+                &[
+                    0x00b6_b790,
+                    0x00b9_8380,
+                    DRAW_TARGET_TO_TEXTURE,
+                    0x004e_ced0
+                ]
+            ),
+            vec![
+                0x00b6_b790,
+                0x00b9_8380,
+                DRAW_TARGET_TO_TEXTURE,
+                0x004e_ced0,
+                DRAW_TARGET_TO_TEXTURE
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, DRAW_TARGET_TO_TEXTURE),
+            vec![
+                vec![interface, 0x7777, 0, 0, 1, 7, 0],
+                vec![interface, 0x7777, 0, 0, 0, 1, 1]
+            ]
+        );
+    }
+
+    #[test]
+    fn group_selection_needs_the_renderer_check() {
+        let (mut r, this) = scene_rig();
+        r.set(0x00b6_b260, &[0x3333]);
+        let (_, log) = r.run(0x0087_4b50, &args![this, 0x2000u32, 0u32, 6u32]);
+        assert!(calls_to(&log, 0x00b6_b8d0).is_empty());
+        r.set(0x004e_9510, &[1]);
+        let (_, log) = r.run(0x0087_4b50, &args![this, 0x2000u32, 0u32, 6u32]);
+        assert_eq!(calls_to(&log, 0x00b6_b260), vec![vec![0x2000]]);
+        assert_eq!(calls_to(&log, 0x00b6_b8d0), vec![vec![6, 0x3333]]);
+    }
+
+    #[test]
+    fn menu_target_draw_masks_the_last_word() {
+        let mut r = Rig::new();
+        let this = r.object(0x40);
+        let (_, log) = r.run(0x0087_4b90, &args![this, 0x10u32, 0x20u32, 0u32, 0x30u32]);
+        assert!(addrs(&log).is_empty());
+        r.e.mem.set_u32(0x011d_ed3c, 0x6600);
+        let (_, log) = r.run(0x0087_4b90, &args![this, 0x10u32, 0x20u32, 0u32, 0x30u32]);
+        assert_eq!(
+            addrs(&log),
+            vec![
+                0x00b9_8380,
+                0x00b9_7fa0,
+                0x00b9_7550,
+                0x0071_4ae0,
+                0x004e_ced0
+            ]
+        );
+        assert_eq!(calls_to(&log, 0x00b9_8380), vec![vec![7, 1]]);
+        assert_eq!(calls_to(&log, 0x00b9_7fa0), vec![vec![0, 1]]);
+        assert_eq!(
+            calls_to(&log, 0x00b9_7550),
+            vec![vec![0x10, 0x22, 0x20, 0x6600, 0x30, 0, 1]]
+        );
+        let (_, log) = r.run(0x0087_4b90, &args![this, 0x10u32, 0x20u32, 1u32, 0x30u32]);
+        assert_eq!(
+            calls_to(&log, 0x00b9_7550),
+            vec![vec![0x10, 0x22, 0x20, 0x6600, 0, 0, 1]]
+        );
+    }
+
+    #[test]
+    fn first_person_setup_without_an_active_node_pair_clears_the_flag() {
+        let (mut r, this) = scene_rig();
+        r.set(GET_ROOT_CHILD_OF_ROOT, &[0x6100]);
+        r.set(GET_MT_SYSTEM, &[0x1234]);
+        r.e.set_global(0x011d_e9d1, 1u8);
+        let (_, log) = r.run(0x0087_4c10, &args![this]);
+        assert_eq!(r.e.global::<u8>(0x011d_e9d1), 0);
+        let guard = calls_to(&log, PROFILE_SCOPE_CTOR)[0][0];
+        assert_eq!(
+            calls_to(&log, PROFILE_SCOPE_CTOR),
+            vec![vec![guard, 0x34, 1, SOURCE_FILE_NAME, 0x21b1]]
+        );
+        assert_eq!(calls_to(&log, PROFILE_SCOPE_DTOR), vec![vec![guard]]);
+        // No rendered menu: the accumulation task is queued, then stage 0x16.
+        assert_eq!(
+            calls_to(&log, ADD_ACCUM_TASK),
+            vec![vec![0x1234, 0xa000, 0, 0x3000, 0, 0, 0x8c00, 0, 0x16, 0]]
+        );
+        assert_eq!(
+            calls_to(&log, MT_SET_THREAD_STAGE),
+            vec![vec![0x1234, 0, 0x16]]
+        );
+        assert_eq!(
+            calls_to(&log, SET_CAMERA_FOV),
+            vec![vec![0x4000, word(1.25), 0, 0, 0]]
+        );
+        assert_eq!(calls_to(&log, SET_NODE_FLAG), vec![vec![0x3000, 0]]);
+        // Another rendered menu than the pipboy: no task, still the stage.
+        r.set(GET_CURRENT_RENDERED_MENU, &[0x7000]);
+        r.set(GET_PIPBOY, &[0x7100]);
+        let (_, log) = r.run(0x0087_4c10, &args![this]);
+        assert!(calls_to(&log, ADD_ACCUM_TASK).is_empty());
+        assert_eq!(calls_to(&log, MT_SET_THREAD_STAGE).len(), 1);
+    }
+
+    #[test]
+    fn first_person_setup_moves_the_camera_when_one_flag_is_set() {
+        let (mut r, this) = scene_rig();
+        r.set(GET_ROOT_CHILD_OF_ROOT, &[0x6100]);
+        r.set(GET_MT_SYSTEM, &[0x1234]);
+        // Flag of the first node clear, of the second set: the body runs.
+        r.set(GET_NODE_FLAG, &[0, 1]);
+        let block = r.object(0x40);
+        for (k, v) in [4.0f32, 5.0, 6.0].iter().enumerate() {
+            r.e.mem.set_f32(block + 4 * k as u32, *v);
+        }
+        r.set(MEMBER_8C, &[block]);
+        r.set(MEMBER_8C_B, &[0x6200]);
+        r.set(0x004a_0d10, &[0x6300]);
+        r.set(0x0046_1130, &[block]);
+        r.set(0x0043_c490, &[block]);
+        r.set(0x0043_9e90, &[0x6400]);
+        r.set_float(0x0064_47f0, 0.75);
+        r.e.register_double(0x0045_bba0, |_, _| Ret::default());
+        r.e.register_double(0x004a_0bd0, |e, a| {
+            for (k, v) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+                e.mem.set_f32(a[1] + 4 * k as u32, *v);
+            }
+            Ret {
+                eax: a[1],
+                ..Ret::default()
+            }
+        });
+        let indexed = r.object(0x300);
+        r.set(INDEXED_GLOBAL, &[indexed]);
+        let (_, log) = r.run(0x0087_4c10, &args![this]);
+        assert_eq!(r.e.global::<u8>(0x011d_e9d1), 1);
+        assert_eq!(calls_to(&log, 0x0050_7700), vec![vec![0xa000, word(0.75)]]);
+        assert_eq!(calls_to(&log, 0x00a6_faf0), vec![vec![0xa000, 0x6200]]);
+        assert_eq!(calls_to(&log, SET_COLOR)[0], vec![0xa000, 0x6300]);
+        assert_eq!(calls_to(&log, 0x004f_00e0), vec![vec![0xa000, 0x6400]]);
+        let ctor = calls_to(&log, POINT3_CTOR);
+        assert_eq!(calls_to(&log, 0x00a5_9c60), vec![vec![0x3000, ctor[0][0]]]);
+        assert_eq!(calls_to(&log, 0x0044_0460)[0], vec![0x3000, ZERO_VECTOR]);
+        assert_eq!(calls_to(&log, 0x0054_6780), vec![vec![0x3000, 1]]);
+        // The camera's position and the recorded vector reach the indexed
+        // global's members.
+        assert_eq!(r.e.mem.f32(indexed + 0x1f0), 4.0);
+        assert_eq!(r.e.mem.f32(indexed + 0x1f8), 6.0);
+        assert_eq!(r.e.mem.f32(indexed + 0x1e4), 1.0);
+        assert_eq!(r.e.mem.f32(indexed + 0x1ec), 3.0);
+        // The main object's script check blocks the body.
+        r.set(GET_NODE_FLAG, &[0, 1]);
+        r.e.set_global(MAIN_OBJECT, 0x7777u32);
+        r.set(0x005b_b4d0, &[1]);
+        r.e.set_global(0x011d_e9d1, 1u8);
+        r.run(0x0087_4c10, &args![this]);
+        assert_eq!(r.e.global::<u8>(0x011d_e9d1), 0);
+    }
+
+    #[test]
+    fn menu_pass_draws_the_rendered_menu_scene_twice() {
+        let (mut r, this) = scene_rig();
+        let menu = r.object_with_slots(&[(8, 0x7a00)]);
+        r.set(GET_CURRENT_RENDERED_MENU, &[menu]);
+        r.set(GET_PIPBOY, &[0x1111]);
+        let (_, log) = r.run(0x0087_5bf0, &args![this]);
+        assert_eq!(calls_to(&log, ACCUMULATE_SCENE).len(), 2);
+        assert_eq!(
+            calls_to(&log, ACCUMULATE_SCENE)[0],
+            vec![0x6000, 0x7a00, 0x5000]
+        );
+        // 8b6200 finds no node, so the root's child is the node; with the
+        // global 0x011f9426 clear the colour is built and given to it.
+        assert_eq!(calls_to(&log, COLOR_CTOR).len(), 1);
+        assert_eq!(calls_to(&log, SET_COLOR).len(), 1);
+        assert_eq!(calls_to(&log, SET_COLOR)[0][0], 0x6000);
+        assert_eq!(calls_to(&log, 0x004a_1020), vec![vec![0x9800, 0]]);
+        assert_eq!(calls_to(&log, 0x00b4_f450), vec![vec![0xf], vec![0]]);
+        assert_eq!(calls_to(&log, 0x00b9_8380), vec![vec![8, 1]]);
+        assert_eq!(
+            calls_to(&log, 0x00b6_c0d0),
+            vec![vec![0x6000, 0x9800, 0], vec![0x6000, 0x9800, 0]]
+        );
+        assert_eq!(calls_to(&log, 0x00c4_f2d0), vec![vec![0x5000]]);
+        // The renderer test: both vtable slots agree, so the fixed colour.
+        let renderer = r.object_with_slots(&[(0xc8, 5), (0xcc, 5)]);
+        r.set(GET_GLOBAL_011F4748, &[renderer]);
+        r.e.set_global(0x011f_9426, 1u8);
+        let (_, log) = r.run(0x0087_5bf0, &args![this]);
+        assert!(calls_to(&log, COLOR_CTOR).is_empty());
+        assert_eq!(
+            calls_to(&log, SET_COLOR),
+            vec![vec![0x6000, CONSTANT_COLOR]]
+        );
+        // The node of the menu (8b6200) is used when it exists.
+        r.set(0x008b_6200, &[0x6600]);
+        let (_, log) = r.run(0x0087_5bf0, &args![this]);
+        assert_eq!(calls_to(&log, 0x0041_fd00), vec![vec![0x5000, 0x6600]]);
+    }
+
+    #[test]
+    fn menu_pass_stops_early() {
+        let (mut r, this) = scene_rig();
+        // The offscreen target exists: nothing.
+        r.e.mem.set_u32(0x011d_eb38, 0x5555);
+        let (_, log) = r.run(0x0087_5bf0, &args![this]);
+        assert!(addrs(&log).is_empty());
+        r.e.mem.set_u32(0x011d_eb38, 0);
+        // No rendered menu.
+        let (_, log) = r.run(0x0087_5bf0, &args![this]);
+        assert_eq!(addrs(&log), vec![GET_CURRENT_RENDERED_MENU]);
+        // The rendered menu is the pipboy.
+        r.set(GET_CURRENT_RENDERED_MENU, &[0x7000]);
+        r.set(GET_PIPBOY, &[0x7000]);
+        let (_, log) = r.run(0x0087_5bf0, &args![this]);
+        assert_eq!(
+            addrs(&log),
+            vec![
+                GET_CURRENT_RENDERED_MENU,
+                GET_CURRENT_RENDERED_MENU,
+                GET_PIPBOY
+            ]
+        );
+    }
+
+    #[test]
+    fn temporary_pass_destroys_the_object_its_child_made() {
+        let (mut r, this) = scene_rig();
+        let made = r.object_with_slots(&[(0, 0)]);
+        let child = r.object_with_slots(&[(0x48, made)]);
+        r.set(GET_ROOT_CHILD, &[child]);
+        r.set(0x0044_ddc0, &[4]);
+        let (_, log) = r.run(0x0087_5e40, &args![this, 0x1111u32, 0x2222u32]);
+        // The mode is 4: only the plain field of view is set.
+        assert!(calls_to(&log, SET_CAMERA_FOV).is_empty());
+        assert_eq!(calls_to(&log, 0x00b5_4000), vec![vec![word(2.5)]]);
+        let temporary = calls_to(&log, 0x004a_d0c0)[0].clone();
+        assert_eq!(temporary[1], 0x101);
+        assert_eq!(
+            calls_to(&log, slot_target(&r, child, 0x48)),
+            vec![vec![child, temporary[0]]]
+        );
+        let guard = calls_to(&log, PROFILE_SCOPE_CTOR)[0][0];
+        assert_eq!(
+            calls_to(&log, PROFILE_SCOPE_CTOR),
+            vec![vec![guard, 0x27, 1, SOURCE_FILE_NAME, 0x234c]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x00b6_5550),
+            vec![vec![0x1111, child, made, 0x2222]]
+        );
+        assert_eq!(
+            calls_to(&log, slot_target(&r, made, 0)),
+            vec![vec![made, 1]]
+        );
+        assert_eq!(calls_to(&log, 0x004a_d1d0), vec![temporary[..1].to_vec()]);
+        // Any other mode also sets the camera field of view, the second
+        // time with the made object.
+        r.set(0x0044_ddc0, &[3]);
+        let (_, log) = r.run(0x0087_5e40, &args![this, 0x1111u32, 0x2222u32]);
+        let fovs = calls_to(&log, SET_CAMERA_FOV);
+        assert_eq!(fovs[0], vec![0x4000, word(2.5), 0, 0, 0]);
+        assert_eq!(fovs[1], vec![0x4000, word(1.25), 0, made, 0]);
+        // Without a made object nothing is destroyed.
+        let child = r.object_with_slots(&[(0x48, 0)]);
+        r.set(GET_ROOT_CHILD, &[child]);
+        let (_, log) = r.run(0x0087_5e40, &args![this, 0x1111u32, 0x2222u32]);
+        assert!(calls_to(&log, slot_target(&r, made, 0)).is_empty());
+    }
+
+    #[test]
+    fn accumulator_forwarder_passes_the_root_child() {
+        let (mut r, this) = scene_rig();
+        let (_, log) = r.run(0x0087_5fa0, &args![this, 0x11u32, 0x22u32]);
+        assert_eq!(calls_to(&log, 0x00b6_51e0), vec![vec![0x11, 0x6000, 0x22]]);
+    }
+
+    #[test]
+    fn main_scene_pass_releases_the_target_and_resets_the_colour() {
+        let (mut r, this) = scene_rig();
+        r.set(GET_ROOT_CHILD_OF_ROOT, &[0x6100]);
+        let (_, log) = r.run(0x0087_5fd0, &args![this, 0u32, 0x10u32, 0x20u32, 0x30u32]);
+        let guard = calls_to(&log, PROFILE_SCOPE_CTOR)[0][0];
+        assert_eq!(
+            calls_to(&log, PROFILE_SCOPE_CTOR),
+            vec![vec![guard, 0x27, 1, SOURCE_FILE_NAME, 0x2362]]
+        );
+        // 004e9510 is false: the state is prepared; no menu is showing: the
+        // 00702870 call; no target pointer: no draw.
+        assert_eq!(calls_to(&log, 0x00b6_b790).len(), 1);
+        assert_eq!(calls_to(&log, 0x0070_2870).len(), 1);
+        assert!(calls_to(&log, 0x0080_1a60).is_empty());
+        assert_eq!(calls_to(&log, 0x00b5_5ac0), vec![vec![0x20, 0x10, 0x30]]);
+        assert_eq!(r.e.global::<u32>(0x011f_917c), 0x6000);
+        let ctor = calls_to(&log, COLOR_CTOR);
+        assert_eq!(ctor[0][1..], [0, word(1.0), word(1.0), 0]);
+        assert_eq!(calls_to(&log, SET_COLOR), vec![vec![0x6100, ctor[0][0]]]);
+        // A menu showing stops the 00702870 call.
+        r.set(IS_IN_MENU_MODE, &[1]);
+        let (_, log) = r.run(0x0087_5fd0, &args![this, 0u32, 0x10u32, 0x20u32, 0x30u32]);
+        assert!(calls_to(&log, 0x0070_2870).is_empty());
+        // The target pointer set: it is drawn and released.
+        let interface = r.object(0x100);
+        r.set(GET_INTERFACE_OBJECT, &[interface]);
+        r.set(GET_GLOBAL_011F91A8, &[0x1600]);
+        r.e.mem.set_u32(0x011d_eb38, 0x7777);
+        r.set(0x004e_9510, &[1]);
+        let (_, log) = r.run(0x0087_5fd0, &args![this, 0u32, 0x10u32, 0x20u32, 0x30u32]);
+        assert_eq!(calls_to(&log, 0x00b6_b790).len(), 0);
+        assert_eq!(
+            calls_to(&log, 0x0080_1a60),
+            vec![vec![interface, 0x10, 0x7777, 0, 0]]
+        );
+        assert_eq!(calls_to(&log, 0x0080_19d0), vec![vec![interface]]);
+        assert_eq!(calls_to(&log, 0x00b6_da10), vec![vec![0x1600, 0x7777]]);
+        assert_eq!(r.e.mem.u32(0x011d_eb38), 0);
+    }
+
+    #[test]
+    fn main_scene_pass_scales_the_scene_for_a_rendered_menu() {
+        let (mut r, this) = scene_rig();
+        let menu = r.object_with_slots(&[(0x2c, 0)]);
+        // The vtable slot answers in ST0.
+        let target = slot_target(&r, menu, 0x2c);
+        r.e.register_double(target, |_, _| Ret {
+            st0: 0.5,
+            ..Ret::default()
+        });
+        r.set(GET_CURRENT_RENDERED_MENU, &[menu]);
+        r.set(IS_IN_RENDERED_MENU, &[1]);
+        r.e.set_global(0x011d_ea29, 1u8);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen_in = seen.clone();
+        r.e.register_double(0x00b5_5ac0, move |e, _| {
+            seen_in
+                .borrow_mut()
+                .push((e.global::<u8>(0x0120_05a2), e.global::<f32>(0x011a_dd08)));
+            Ret::default()
+        });
+        r.run(0x0087_5fd0, &args![this, 0u32, 0x10u32, 0x20u32, 0x30u32]);
+        assert_eq!(*seen.borrow(), vec![(1, 0.5)]);
+        // Afterwards the globals are back.
+        assert_eq!(r.e.global::<u8>(0x0120_05a2), 0);
+        assert_eq!(r.e.global::<f32>(0x011a_dd08), 1.0);
+    }
+
+    #[test]
+    fn frame_pass_without_menus_sets_the_fov_and_queues_the_stage() {
+        let (mut r, this) = scene_rig();
+        r.set(MEMBER_8C_B, &[0x6200]);
+        r.set(GET_MT_SYSTEM, &[0x1234]);
+        let (_, log) = r.run(0x0087_5110, &args![this, 0x1000u32, 0u32, 0u32, 0x40u32]);
+        let guard = calls_to(&log, PROFILE_SCOPE_CTOR)[0][0];
+        assert_eq!(
+            calls_to(&log, PROFILE_SCOPE_CTOR),
+            vec![vec![guard, 0x34, 1, SOURCE_FILE_NAME, 0x221f]]
+        );
+        assert_eq!(calls_to(&log, 0x0071_48c0), vec![vec![0x1000, 0, 4]]);
+        // The first-person accumulator's byte +0x3a is cleared.
+        assert_eq!(r.e.mem.u8(0x8c00 + 0x3a), 0);
+        // With the renderer check false, a colour is built for the camera.
+        let ctor = calls_to(&log, COLOR_CTOR);
+        assert_eq!(ctor[0][1..], [0, word(1.0), word(1.0), 0]);
+        assert_eq!(calls_to(&log, SET_COLOR), vec![vec![0xa000, ctor[0][0]]]);
+        assert_eq!(calls_to(&log, 0x00a6_faf0), vec![vec![0xa000, 0x6200]]);
+        // Stage 0x16 on thread 1 twice (start and the 1st-person block).
+        assert_eq!(
+            calls_to(&log, MT_ADVANCE_THREAD_STAGE),
+            vec![vec![0x1234, 1, 0x16]; 2]
+        );
+        assert_eq!(calls_to(&log, 0x00b9_8380), vec![vec![0xf, 1]]);
+        assert_eq!(calls_to(&log, 0x00b6_c0d0), vec![vec![0xa000, 0x8c00, 0]]);
+        // The three field-of-view calls: the 1st-person one, the mode one
+        // and the final one.
+        assert_eq!(
+            calls_to(&log, SET_CAMERA_FOV),
+            vec![
+                vec![0x4000, word(1.25), 0, 0, 0],
+                vec![0x4000, word(2.5), 0, 0, 0],
+                vec![0x4000, word(1.25), 0, 0, 0]
+            ]
+        );
+        assert_eq!(calls_to(&log, PROFILE_SCOPE_DTOR), vec![vec![guard]]);
+        // No nested scope without 005b9b00.
+        assert_eq!(calls_to(&log, PROFILE_SCOPE_CTOR).len(), 1);
+    }
+
+    #[test]
+    fn frame_pass_draws_the_rendered_menu_and_the_pipboy_arrays() {
+        let (mut r, this) = scene_rig();
+        let menu = r.object(0x40);
+        r.set(GET_CURRENT_RENDERED_MENU, &[menu]);
+        let pipboy = r.object(0x200);
+        for k in 0..3 {
+            r.e.mem.set_u32(pipboy + 0xf4 + 4 * k, 0x7a00 + k);
+        }
+        r.set(GET_PIPBOY, &[pipboy]);
+        r.set(IS_IN_RENDERED_MENU, &[1]);
+        r.set(IS_IN_PIPBOY_MENU, &[1]);
+        r.set(ACTOR_FLAG, &[1]);
+        r.set(GET_MENU_SCREEN, &[0x7100]);
+        r.set(0x00aa_13e0, &[0x2800]);
+        r.set(0x00b6_60d0, &[0x2900]);
+        r.set(0x00a5_9d30, &[0x2a00]);
+        let (_, log) = r.run(
+            0x0087_5110,
+            &args![this, 0x1000u32, 0x6500u32, 0u32, 0x40u32],
+        );
+        assert_eq!(
+            calls_to(&log, SET_SCREEN_TEXTURE),
+            vec![vec![menu, 0], vec![menu, 0]]
+        );
+        assert_eq!(calls_to(&log, SET_NODE_FLAG)[..1], [vec![0x3000, 0]]);
+        assert_eq!(
+            calls_to(&log, 0x00b6_60d0),
+            vec![vec![0x2800, 0x63, 1, 0x2f7]]
+        );
+        assert_eq!(calls_to(&log, 0x00c4_f270), vec![vec![0x5000, 1]]);
+        assert_eq!(calls_to(&log, 0x00a5_9d30), vec![vec![0x7100, 0]]);
+        assert_eq!(calls_to(&log, 0x0049_ed90), vec![vec![0x2a00, 0]]);
+        assert_eq!(
+            calls_to(&log, ACCUMULATE_SCENE),
+            vec![
+                vec![0xa000, 0x7a00, 0x5000],
+                vec![0xa000, 0x7a01, 0x5000],
+                vec![0xa000, 0x7a02, 0x5000],
+                vec![0xa000, 0x7100, 0x5000]
+            ]
+        );
+        // The accumulator pointer built from 0x2900 is dropped at the end,
+        // and the pass for another rendered menu is skipped.
+        assert_eq!(calls_to(&log, NI_POINTER_DTOR).len(), 1);
+        assert_eq!(calls_to(&log, 0x00b6_c0d0).len(), 1);
+        assert_eq!(calls_to(&log, 0x00c4_f2d0), vec![vec![0x5000]]);
+        // The pipboy screen's flag is raised first and cleared at the end.
+        assert_eq!(
+            calls_to(&log, SET_NODE_FLAG),
+            vec![
+                vec![0x3000, 0],
+                vec![0x6500, 0],
+                vec![0x7100, 1],
+                vec![0x7100, 0]
+            ]
+        );
+    }
+
+    #[test]
+    fn frame_pass_accumulates_the_target_texture_in_a_nested_scope() {
+        let (mut r, this) = scene_rig();
+        r.set(0x005b_9b00, &[1]);
+        r.set(0x0043_b230, &[0xb000]);
+        let (_, log) = r.run(
+            0x0087_5110,
+            &args![this, 0x1000u32, 0u32, 0x9999u32, 0x40u32],
+        );
+        let scopes = calls_to(&log, PROFILE_SCOPE_CTOR);
+        assert_eq!(scopes.len(), 2);
+        assert_eq!(scopes[1][1..], [0x27, 1, SOURCE_FILE_NAME, 0x22b5]);
+        assert_eq!(
+            calls_to(&log, 0x00b6_4570),
+            vec![vec![0x8c00, 0xa000, 0x40]]
+        );
+        assert_eq!(calls_to(&log, PROFILE_SCOPE_DTOR).len(), 2);
+        // The overlay node: its holder is accumulated and its flag restored.
+        assert_eq!(
+            calls_to(&log, ACCUMULATE_SCENE),
+            vec![vec![0x6000, 0xb000, 0x5000]]
+        );
+        assert_eq!(
+            calls_to(&log, SET_NODE_FLAG),
+            vec![vec![0x3000, 0], vec![0xb000, 0], vec![0xb000, 0]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x0064_26a0),
+            vec![vec![0x9999, 2, 0x8800, 0x6000]]
+        );
+        // A set flag on the holder skips the overlay accumulation.
+        r.set(GET_NODE_FLAG, &[1]);
+        let (_, log) = r.run(
+            0x0087_5110,
+            &args![this, 0x1000u32, 0u32, 0x9999u32, 0x40u32],
+        );
+        assert!(calls_to(&log, ACCUMULATE_SCENE).is_empty());
+        assert_eq!(calls_to(&log, 0x0064_26a0).len(), 1);
+    }
+
+    #[test]
+    fn frame_pass_walks_the_node_list_of_the_first_person_block() {
+        let (mut r, this) = scene_rig();
+        let block = r.object(0x40);
+        r.set(MEMBER_8C, &[block]);
+        let entry = r.object_with_slots(&[(0xc0, 1), (0x98, 0x7c00)]);
+        let list = r.object(0x40);
+        r.set(0x0043_c490, &[list]);
+        r.set(0x006815c0, &[list]);
+        r.e.mem.set_u32(list, entry);
+        r.set(0x0072_6070, &[0]);
+        r.set(GET_ROOT_CHILD, &[0x6000]);
+        r.set(0x0044_ddc0, &[4]);
+        let (_, log) = r.run(0x0087_5110, &args![this, 0x1000u32, 0u32, 0u32, 0x40u32]);
+        // One flagged entry: its screen is drawn between flag changes.
+        assert_eq!(
+            calls_to(&log, ACCUMULATE_SCENE),
+            vec![vec![0x6000, 0x7c00, 0x5000]]
+        );
+        let flags = calls_to(&log, SET_NODE_FLAG);
+        assert_eq!(flags[1], vec![0x7c00, 0]);
+        assert_eq!(flags[2], vec![0x7c00, 1]);
+        // `00b6c0d0` runs twice: the block's own and the one after the list.
+        assert_eq!(calls_to(&log, 0x00b6_c0d0).len(), 2);
+        // An entry whose flag slot answers 0 is skipped.
+        let entry = r.object_with_slots(&[(0xc0, 0), (0x98, 0x7c00)]);
+        r.e.mem.set_u32(list, entry);
+        let (_, log) = r.run(0x0087_5110, &args![this, 0x1000u32, 0u32, 0u32, 0x40u32]);
+        assert!(calls_to(&log, ACCUMULATE_SCENE).is_empty());
+        assert_eq!(calls_to(&log, 0x00b6_c0d0).len(), 1);
+    }
+
+    #[test]
+    fn menu_background_pass_resets_the_view_without_the_pipboy() {
+        let (mut r, this) = scene_rig();
+        r.set(GET_CURRENT_RENDERED_MENU, &[0x7000]);
+        r.set(0x0055_85e0, &[0x7200]);
+        r.set(GET_MENU_SCREEN, &[0x7300]);
+        r.set(MEMBER_8C, &[0x7400]);
+        let block = r.object(0x40);
+        r.set(0x004a_0d10, &[block]);
+        for k in 0..4 {
+            r.e.mem.set_u32(block + 4 * k, 0x100 + k);
+        }
+        r.e.register_double(0x004a_0bd0, |e, a| {
+            e.mem.set_u32(a[1], 0xaa);
+            e.mem.set_u32(a[1] + 4, 0xbb);
+            e.mem.set_u32(a[1] + 8, 0xcc);
+            Ret {
+                eax: a[1],
+                ..Ret::default()
+            }
+        });
+        let indexed = r.object(0x300);
+        r.set(INDEXED_GLOBAL, &[indexed]);
+        let (_, log) = r.run(0x0087_61e0, &args![this, 0u32, 0x1000u32]);
+        assert_eq!(calls_to(&log, 0x0071_48c0), vec![vec![0x1000, 0, 4]]);
+        assert_eq!(
+            calls_to(&log, 0x004f_b0b0),
+            vec![vec![0x5000, 1], vec![0x5000, 0]]
+        );
+        assert_eq!(
+            calls_to(&log, ACCUMULATE_SCENE),
+            vec![vec![0x6000, 0x7200, 0x5000], vec![0x6000, 0x7300, 0x5000]]
+        );
+        assert_eq!(calls_to(&log, 0x00b6_3b90), vec![vec![0x8c00, 6]]);
+        assert_eq!(calls_to(&log, 0x004a_1020), vec![vec![0x8c00, indexed]]);
+        // The colour read from the scene is given back at the end.
+        let colors = calls_to(&log, SET_COLOR);
+        assert_eq!(colors.len(), 1);
+        assert_eq!(colors[0][0], 0x6000);
+        // The position of the menu screen reaches the indexed global.
+        assert_eq!(r.e.mem.u32(indexed + 0x1e4), 0xaa);
+        assert_eq!(r.e.mem.u32(indexed + 0x1ec), 0xcc);
+        // The pipboy-only parts did not run.
+        assert!(calls_to(&log, 0x007f_8720).is_empty());
+        assert!(calls_to(&log, 0x0044_0460).is_empty());
+        assert_eq!(calls_to(&log, 0x00b9_7e30), vec![vec![0, 1]]);
+        assert_eq!(calls_to(&log, 0x0071_4a60), vec![vec![1]]);
+    }
+
+    #[test]
+    fn menu_background_pass_restores_the_pipboy_transform() {
+        let (mut r, this) = scene_rig();
+        let color = r.object(0x40);
+        r.set(0x004a_0d10, &[color]);
+        let pipboy = r.object(0x200);
+        r.set(GET_CURRENT_RENDERED_MENU, &[0x7000]);
+        r.set(GET_PIPBOY, &[pipboy]);
+        r.set(0x0055_85e0, &[0x7200]);
+        r.set(GET_MENU_SCREEN, &[0x7300]);
+        r.set(IS_IN_PIPBOY_MENU, &[1]);
+        r.set(ACTOR_FLAG, &[1]);
+        r.set(0x0096_7ae0, &[1]);
+        let transform = r.object(0x40);
+        r.set(0x006a_9540, &[transform]);
+        r.set(0x0096_11e0, &[0x7500]);
+        r.set(0x0087_7720, &[0x7600]);
+        r.set(0x00a2_3a50, &[5, 0]);
+        r.set(0x007f_8720, &[3]);
+        r.e.register_double(0x007f_8720, |e, a| {
+            e.mem.set_f32(a[3], 1.5);
+            e.mem.set_f32(a[4], 2.5);
+            e.mem.set_u32(a[5], 9);
+            Ret {
+                eax: 3,
+                ..Ret::default()
+            }
+        });
+        let indexed = r.object(0x300);
+        r.set(INDEXED_GLOBAL, &[indexed]);
+        r.e.set_global(ZERO_VECTOR, 0x41u32);
+        r.e.register_double(0x004a_0bd0, |_, a| Ret {
+            eax: a[1],
+            ..Ret::default()
+        });
+        let (_, log) = r.run(0x0087_61e0, &args![this, 0u32, 0x1000u32]);
+        // The menu's two reads of the controls: stick up/down answers.
+        assert_eq!(
+            calls_to(&log, 0x00a2_3a50),
+            vec![vec![0x7600, 0, 2], vec![0x7600, 0, 1]]
+        );
+        let sticks = calls_to(&log, 0x007f_8720);
+        assert_eq!(sticks[0][..4], [pipboy, 0, 1, sticks[0][3]]);
+        assert_eq!(sticks[0][4], sticks[0][3] + 4);
+        assert_eq!(sticks[0][5], sticks[0][3] + 8);
+        assert_eq!(
+            calls_to(&log, 0x0070_9b50),
+            vec![vec![3, word(1.5), word(2.5), 9]]
+        );
+        // The screen's translation is set to the zero vector, to its saved
+        // copy, then restored to the identity-reset copy.
+        let moves = calls_to(&log, 0x0044_0460);
+        assert_eq!(moves[0], vec![0x7200, ZERO_VECTOR]);
+        assert_eq!(moves[1][0], 0x7200);
+        assert_eq!(moves.last().unwrap()[0], 0x7500);
+        assert_eq!(moves.last().unwrap()[1], moves[1][1] + 0x34);
+        // The pipboy arrays are accumulated.
+        assert_eq!(calls_to(&log, ACCUMULATE_SCENE).len(), 5);
+        assert_eq!(calls_to(&log, 0x00b9_7de0), vec![vec![0, 1]]);
+        assert_eq!(calls_to(&log, 0x0071_4a40), vec![vec![1]]);
+        // The last recorded position is the zero vector.
+        assert_eq!(r.e.mem.u32(indexed + 0x1e4), 0x41);
+    }
+
+    /// A scene whose pointer lists, tree and `NiTPointerList` calls are
+    /// doubles: `nodes` answer `00450b80` / `0045bc00` / `0043b480` /
+    /// `0043b4a0` and their vtable slot `0xc`; the list constructor and
+    /// `AddTail` record the lists and what was pushed.
+    #[derive(Default)]
+    struct Tree {
+        slots: HashMap<(u32, u32), u32>,
+        kids: HashMap<u32, Vec<u32>>,
+        groups: HashMap<u32, u32>,
+        lists: Vec<u32>,
+        pushes: Vec<(u32, u32)>,
+    }
+
+    /// Installs the tree doubles; returns the shared tree and the shared
+    /// vtable's object factory.
+    fn install_tree(r: &mut Rig) -> Rc<RefCell<Tree>> {
+        let tree = Rc::new(RefCell::new(Tree::default()));
+        let t = tree.clone();
+        r.e.register_double(CHILD_FOR_SLOT, move |_, a| Ret {
+            eax: t.borrow().slots.get(&(a[0], a[1])).copied().unwrap_or(0),
+            ..Ret::default()
+        });
+        let t = tree.clone();
+        r.e.register_double(CHILD_COUNT, move |_, a| Ret {
+            eax: t.borrow().kids.get(&a[0]).map_or(0, |k| k.len() as u32),
+            ..Ret::default()
+        });
+        let t = tree.clone();
+        r.e.register_double(CHILD_AT, move |_, a| Ret {
+            eax: t.borrow().kids.get(&a[0]).map_or(0, |k| k[a[1] as usize]),
+            ..Ret::default()
+        });
+        let t = tree.clone();
+        r.e.register_double(LIST_CTOR, move |_, a| {
+            t.borrow_mut().lists.push(a[0]);
+            Ret::default()
+        });
+        let t = tree.clone();
+        r.e.register_double(LIST_PUSH, move |e, a| {
+            let value = e.mem.u32(a[1]);
+            t.borrow_mut().pushes.push((a[0], value));
+            Ret::default()
+        });
+        let t = tree.clone();
+        r.e.register_double(0x00f2_000c, move |_, a| Ret {
+            eax: t.borrow().groups.get(&a[0]).copied().unwrap_or(0),
+            ..Ret::default()
+        });
+        tree
+    }
+
+    /// A node object whose vtable slot `0xc` is the tree's group lookup.
+    fn tree_node(r: &mut Rig) -> u32 {
+        let node = r.object(0x40);
+        let vtable = r.object(0x40);
+        r.e.mem.set_u32(node, vtable);
+        r.e.mem.set_u32(vtable + 0xc, 0x00f2_000c);
+        node
+    }
+
+    /// The values pushed to the list `list` (by position in the
+    /// constructor order), in order.
+    fn pushed(tree: &Tree, list: usize) -> Vec<u32> {
+        tree.pushes
+            .iter()
+            .filter(|(l, _)| *l == tree.lists[list])
+            .map(|(_, v)| *v)
+            .collect()
+    }
+
+    #[test]
+    fn world_pass_accumulates_the_scene_directly() {
+        let (mut r, this) = scene_rig();
+        let texture = r.object(0x100);
+        r.e.mem.set_f32(texture + 0x70, 5.0);
+        r.e.set_global(0x0101_2060, 1.0f64);
+        r.set(GET_GLOBAL_011F91AC, &[0x2000]);
+        r.set(0x004e_bbc0, &[texture]);
+        r.set(GET_NODE_FLAG, &[1]);
+        r.set(GET_MT_SYSTEM, &[0x1234]);
+        r.set(MEMBER_8C_B, &[0x6200]);
+        r.e.mem.set_u32(0x011c_7840, 0x11);
+        r.e.mem.set_u32(0x011c_7810, 0x22);
+        r.e.mem.set_u32(0x011c_781c, 0x33);
+        r.set(0x005b_ac50, &[0x44]);
+        // Snapshot the accumulator bytes at the first accumulation.
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen_in = seen.clone();
+        r.e.register_double(ACCUMULATE_SCENE, move |e, _| {
+            seen_in.borrow_mut().push((
+                e.mem.u8(0x8800 + 0x38),
+                e.mem.u8(0x8800 + 0x3a),
+                e.mem.u8(0x8c00 + 0x3a),
+            ));
+            Ret::default()
+        });
+        r.e.set_global(0x011f_9fc3, 9u8);
+        let (_, log) = r.run(0x0087_3200, &args![this, 0u32, 0u32, 0u32, 0u32]);
+        assert_eq!(seen.borrow()[0], (1, 1, 1));
+        assert_eq!(r.e.global::<u32>(0x011f_9684), 0x6000);
+        assert_eq!(r.e.mem.u8(0x8800 + 0x38), 0);
+        assert_eq!(r.e.mem.u8(0x8800 + 0x3a), 0);
+        assert_eq!(r.e.global::<u8>(0x011f_9fc3), 0);
+        let guard = calls_to(&log, PROFILE_SCOPE_CTOR)[0][0];
+        assert_eq!(
+            calls_to(&log, PROFILE_SCOPE_CTOR),
+            vec![vec![guard, 0xf, 1, SOURCE_FILE_NAME, 0x1eb7]]
+        );
+        assert_eq!(calls_to(&log, 0x0040_4f70), vec![vec![guard]]);
+        assert_eq!(calls_to(&log, PROFILE_SCOPE_DTOR), vec![vec![guard]]);
+        assert_eq!(calls_to(&log, 0x0041_fd00)[0], vec![0x5000, 0x6000]);
+        assert_eq!(calls_to(&log, 0x00a6_94a0), vec![vec![0x5000, 0x6200]]);
+        // The three accumulations: the world, and the two extra passes.
+        assert_eq!(
+            calls_to(&log, ACCUMULATE_SCENE),
+            vec![
+                vec![0x6000, 0x4000, 0x5000],
+                vec![0x11, 0x44, 0x5000],
+                vec![0x33, 0x22, 0x5000]
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, 0x00b6_c0d0),
+            vec![vec![0x11, 0x9400, 0], vec![0x33, 0x9400, 0]]
+        );
+        assert_eq!(calls_to(&log, 0x00b6_ba20), vec![vec![0x6000, 0x8800, 1]]);
+        assert_eq!(calls_to(&log, 0x00b6_b930), vec![vec![0x6000, 0x8800, 1]]);
+        assert_eq!(calls_to(&log, 0x00b8_03b0), vec![vec![0x6000]; 2]);
+        // The player node's flag is set during the pass and restored.
+        assert_eq!(
+            calls_to(&log, SET_NODE_FLAG),
+            vec![vec![0x3000, 1], vec![0x3000, 1]]
+        );
+        // No overlay, no object, one thread.
+        assert!(calls_to(&log, DRAW_TARGET_TO_TEXTURE).is_empty());
+        assert!(calls_to(&log, 0x0064_26a0).is_empty());
+        assert!(calls_to(&log, 0x008c_80e0).is_empty());
+    }
+
+    #[test]
+    fn world_pass_options_add_the_overlay_the_object_and_the_thread_call() {
+        let (mut r, this) = scene_rig();
+        let interface = r.object(0x100);
+        r.set(GET_INTERFACE_OBJECT, &[interface]);
+        r.settings(SETTING_DWORD_PTR, &[(SETTING_THREADS, 2)]);
+        let (_, log) = r.run(0x0087_3200, &args![this, 0x9100u32, 0u32, 1u32, 1u32]);
+        // Skipping clears the accumulator flag.
+        assert_eq!(calls_to(&log, 0x0064_2860), vec![vec![0x9100]]);
+        assert_eq!(
+            calls_to(&log, DRAW_TARGET_TO_TEXTURE),
+            vec![vec![interface, 0, 2, 1, 0, 0, 0]]
+        );
+        assert_eq!(calls_to(&log, 0x00b9_8380), vec![vec![0, 1]]);
+        assert_eq!(calls_to(&log, 0x008c_80e0), vec![vec![0]]);
+        assert_eq!(
+            calls_to(&log, 0x0064_26a0),
+            vec![vec![0x9100, 1, 0x8800, 0x6000]]
+        );
+    }
+
+    #[test]
+    fn world_pass_skip_flag_clears_the_accumulator_bytes() {
+        let (mut r, this) = scene_rig();
+        let texture = r.object(0x100);
+        r.e.mem.set_f32(texture + 0x70, 5.0);
+        r.e.set_global(0x0101_2060, 1.0f64);
+        r.set(0x004e_bbc0, &[texture]);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen_in = seen.clone();
+        r.e.register_double(ACCUMULATE_SCENE, move |e, _| {
+            seen_in.borrow_mut().push((
+                e.mem.u8(0x8800 + 0x38),
+                e.mem.u8(0x8800 + 0x3a),
+                e.mem.u8(0x8c00 + 0x3a),
+            ));
+            Ret::default()
+        });
+        r.run(0x0087_3200, &args![this, 0u32, 0u32, 1u32, 0u32]);
+        // `skip_pass` set: +0x38 is 0 (the pass is drawn), +0x3a stays 0.
+        assert_eq!(seen.borrow()[0], (0, 0, 0));
+    }
+
+    /// The rig of the scene sorting: the global `0x011f94b4` is set, the
+    /// indexed global is an object whose children come from the tree.
+    fn sorting_rig() -> (Rig, u32, u32, Rc<RefCell<Tree>>) {
+        let (mut r, this) = scene_rig();
+        r.e.set_global(0x011f_94b4, 1u8);
+        let indexed = r.object(0x300);
+        r.set(INDEXED_GLOBAL, &[indexed]);
+        r.set(GET_MT_SYSTEM, &[0x1234]);
+        let tree = install_tree(&mut r);
+        // The world accumulator has a vtable (slot 0x8c is called).
+        let vtable = r.object(0x100);
+        r.e.mem.set_u32(0x8800, vtable);
+        r.e.mem.set_u32(vtable + 0x8c, 0x00f2_008c);
+        r.e.register_double(0x00f2_008c, |_, _| Ret::default());
+        (r, this, indexed, tree)
+    }
+
+    #[test]
+    fn exterior_scene_sorting_splits_the_children_by_parity() {
+        let (mut r, this, indexed, tree) = sorting_rig();
+        let n: Vec<u32> = (0..7).map(|_| tree_node(&mut r)).collect();
+        let o0 = tree_node(&mut r);
+        let o1 = tree_node(&mut r);
+        let i0 = tree_node(&mut r);
+        let i1 = tree_node(&mut r);
+        let i2 = tree_node(&mut r);
+        {
+            let mut t = tree.borrow_mut();
+            for (k, node) in n.iter().enumerate() {
+                t.slots.insert((indexed, k as u32), *node);
+            }
+            // Slot 2 holds a group of three children.
+            t.groups.insert(n[2], 0x9100);
+            for k in 0..3u32 {
+                t.slots.insert((0x9100, k), 0x9101 + k);
+            }
+            // Slot 3 is the exterior tree: H -> O0, O1 -> M0, M1 -> items.
+            t.groups.insert(n[3], 0x9200);
+            t.kids.insert(0x9200, vec![o0, o1]);
+            t.groups.insert(o0, 0x9300);
+            t.groups.insert(o1, 0x9400);
+            t.kids.insert(0x9300, vec![i0]);
+            t.kids.insert(0x9400, vec![i1, i2]);
+            t.groups.insert(i2, 0x9500);
+            t.kids.insert(0x9500, vec![0x9501]);
+            // The tail of the indexed global's children: only 7 counts.
+            t.kids.insert(indexed, (0..8).map(|k| 0x9600 + k).collect());
+        }
+        let system = 0x1234;
+        let tls = r.e.tls();
+        r.e.mem.set_u32(tls + 0x2bc, 7);
+        let snapshots = Rc::new(RefCell::new(Vec::new()));
+        let snapshots_in = snapshots.clone();
+        r.e.register_double(ACCUMULATE_SCENE_LIST, move |e, a| {
+            snapshots_in
+                .borrow_mut()
+                .push((a[1], e.mem.u32(a[2] + 0xc0)));
+            Ret::default()
+        });
+        let (_, log) = r.run(0x0087_3200, &args![this, 0u32, 0u32, 0u32, 0u32]);
+        let tree = tree.borrow();
+        assert_eq!(tree.lists.len(), 3);
+        assert_eq!(pushed(&tree, 2), vec![n[0], n[1], n[4], n[5]]);
+        assert_eq!(
+            pushed(&tree, 0),
+            vec![0x9101, 0x9102, 0x9103, i1, 0x9501, n[6], 0x9607]
+        );
+        assert_eq!(pushed(&tree, 1), vec![i0]);
+        // Lists a and c go to the task, b and c to the scene lists with the
+        // culling process; `+0xc0` of the process is the operation list.
+        let ops = indexed + 0x138;
+        let child = 0x6000;
+        let culling = calls_to(&log, 0x004a_0eb0)[0][0];
+        assert_eq!(calls_to(&log, 0x004a_0eb0), vec![vec![culling, 0]]);
+        assert_eq!(
+            calls_to(&log, ACCUMULATE_SCENE_LIST),
+            vec![
+                vec![child, tree.lists[1], culling],
+                vec![child, tree.lists[2], culling]
+            ]
+        );
+        assert_eq!(
+            *snapshots.borrow(),
+            vec![(tree.lists[1], ops), (tree.lists[2], 0)]
+        );
+        assert_eq!(
+            calls_to(&log, ADD_ACCUM_TASK),
+            vec![vec![
+                system,
+                child,
+                ops,
+                0,
+                tree.lists[0],
+                0,
+                0x8800,
+                0,
+                0x15,
+                1
+            ]]
+        );
+        assert_eq!(
+            calls_to(&log, MT_SET_THREAD_STAGE),
+            vec![vec![system, 0, 0x15]]
+        );
+        assert_eq!(
+            calls_to(&log, MT_ADVANCE_THREAD_STAGE),
+            vec![vec![system, 1, 0x15]]
+        );
+        assert_eq!(r.e.mem.u32(tls + 0x2bc), 0);
+        // The lists are cleared (a, b) and destroyed (c, b, a); the process
+        // is destroyed.
+        assert_eq!(
+            calls_to(&log, LIST_REMOVE_ALL),
+            vec![vec![tree.lists[0]], vec![tree.lists[1]]]
+        );
+        assert_eq!(
+            calls_to(&log, LIST_DTOR),
+            vec![
+                vec![tree.lists[2]],
+                vec![tree.lists[1]],
+                vec![tree.lists[0]]
+            ]
+        );
+        assert_eq!(calls_to(&log, 0x004a_0f60), vec![vec![culling]]);
+        // The compound frustum is built from the operations.
+        assert_eq!(calls_to(&log, 0x00c4_9850), vec![vec![ops]]);
+        assert_eq!(calls_to(&log, 0x00b5_e870), vec![vec![indexed, 0x5000]]);
+        // Unfinished accumulation: the final scene step of the world pass.
+        assert_eq!(calls_to(&log, 0x00a8_9af0), vec![vec![indexed, 0x5000]]);
+        assert_eq!(calls_to(&log, ACCUMULATE_SCENE).len(), 2);
+        assert_eq!(calls_to(&log, 0x00f2_008c), vec![vec![0x8800, child]]);
+    }
+
+    #[test]
+    fn interior_scene_sorting_without_the_interior_byte_walks_two_groups() {
+        let (mut r, this, indexed, tree) = sorting_rig();
+        r.set(0x005f_36f0, &[1]);
+        let n3 = tree_node(&mut r);
+        let q = tree_node(&mut r);
+        let s = tree_node(&mut r);
+        {
+            let mut t = tree.borrow_mut();
+            t.slots.insert((indexed, 3), n3);
+            t.groups.insert(n3, 0xa100);
+            t.slots.insert((0xa100, 2), q);
+            t.groups.insert(q, 0xa200);
+            t.slots.insert((0xa200, 7), s);
+            t.groups.insert(s, 0xa300);
+            t.kids.insert(0xa300, vec![0xa301, 0xa302, 0xa303]);
+        }
+        r.run(0x0087_3200, &args![this, 0u32, 0u32, 0u32, 0u32]);
+        let tree = tree.borrow();
+        assert_eq!(pushed(&tree, 0), vec![0xa302]);
+        assert_eq!(pushed(&tree, 1), vec![0xa301, 0xa303]);
+        assert!(pushed(&tree, 2).is_empty());
+    }
+
+    #[test]
+    fn interior_scene_sorting_with_the_interior_byte_takes_the_first_three_groups() {
+        let (mut r, this, indexed, tree) = sorting_rig();
+        r.set(0x005f_36f0, &[1]);
+        r.e.mem.set_u8(indexed + 0x1dc, 1);
+        let n3 = tree_node(&mut r);
+        let z = tree_node(&mut r);
+        let v1 = tree_node(&mut r);
+        let v6 = tree_node(&mut r);
+        let v4 = tree_node(&mut r);
+        let others: Vec<u32> = (0..4).map(|_| tree_node(&mut r)).collect();
+        let owner = r.object(0x40);
+        let list = r.object(0x40);
+        r.set(0x0045_4b30, &[owner]);
+        r.set(0x007d_6bb0, &[list]);
+        {
+            let mut t = tree.borrow_mut();
+            t.slots.insert((indexed, 3), n3);
+            t.groups.insert(n3, 0xa100);
+            t.slots.insert((0xa100, 0), 0xa101);
+            t.slots.insert((0xa100, 1), 0xa102);
+            t.slots.insert((0xa100, 2), z);
+            t.groups.insert(z, 0xa200);
+            // Positions 0 and 4 are skipped; 1 and 6 have members.
+            t.kids.insert(
+                0xa200,
+                vec![others[0], v1, others[1], others[2], v4, others[3], v6],
+            );
+            t.groups.insert(v1, 0xa300);
+            t.kids.insert(0xa300, vec![0xa301, 0xa302]);
+            t.groups.insert(v4, 0xa400);
+            t.kids.insert(0xa400, vec![0xa401]);
+            t.groups.insert(v6, 0xa500);
+            t.kids.insert(0xa500, vec![0xa501, 0xa502, 0xa503]);
+        }
+        r.run(0x0087_3200, &args![this, 0u32, 0u32, 0u32, 0u32]);
+        let tree = tree.borrow();
+        // The two direct children, then the members by their own index
+        // (the node at position 6 starts at member 1).
+        assert_eq!(pushed(&tree, 1), vec![0xa101, 0xa301, 0xa503]);
+        assert_eq!(pushed(&tree, 0), vec![0xa102, 0xa302, 0xa502]);
+    }
+
+    #[test]
+    fn interior_scene_sorting_adds_the_geometry_the_culler_accepts() {
+        let (mut r, this, indexed, tree) = sorting_rig();
+        r.set(0x005f_36f0, &[1]);
+        let n3 = tree_node(&mut r);
+        tree.borrow_mut().slots.insert((indexed, 3), n3);
+        let item = r.object(0x200);
+        let owner = r.object(0x40);
+        let list_head = r.object(0x40);
+        let holder_slot = r.object(0x40);
+        let item_slot = r.object(0x40);
+        let members = r.object(0x40);
+        r.e.mem.set_u32(members, 0x55);
+        r.e.mem.set_u32(list_head, 0x66);
+        r.e.mem.set_u32(holder_slot, 0x7a7a);
+        r.e.mem.set_u32(item_slot, item);
+        r.set(0x0045_4b30, &[owner]);
+        r.set(0x0043_6aa0, &[list_head]);
+        r.set(0x006a_b360, &[members]);
+        r.set(0x0045_c4c0, &[0x5a5a]);
+        r.set(0x00c4_f320, &[1]);
+        // Outer, then inner iteration: each step ends the loop.
+        let steps = Rc::new(RefCell::new(vec![holder_slot, item_slot]));
+        r.e.register_double(0x0057_cbe0, move |e, a| {
+            e.mem.set_u32(a[1], 0);
+            Ret {
+                eax: steps.borrow_mut().remove(0),
+                ..Ret::default()
+            }
+        });
+        let (_, log) = r.run(0x0087_3200, &args![this, 0u32, 0u32, 0u32, 0u32]);
+        let tree = tree.borrow();
+        assert_eq!(pushed(&tree, 1), vec![0x5a5a]);
+        // The culler was asked about the geometry's owner with the target.
+        assert_eq!(calls_to(&log, 0x00c4_f320), vec![vec![0x5000, 0x5a5a]]);
+        // The item's `+0xfc` is clear: no shared compound frustum.
+        assert!(calls_to(&log, 0x00b5_ba80).is_empty());
+    }
+
+    #[test]
+    fn interior_scene_sorting_builds_a_shared_frustum_for_marked_geometry() {
+        let (mut r, this, indexed, tree) = sorting_rig();
+        r.set(0x005f_36f0, &[1]);
+        let n3 = tree_node(&mut r);
+        tree.borrow_mut().slots.insert((indexed, 3), n3);
+        let item = r.object(0x200);
+        r.e.mem.set_u32(item + 0xfc, 3);
+        let owner = r.object(0x40);
+        let list_head = r.object(0x40);
+        let holder_slot = r.object(0x40);
+        let item_slot = r.object(0x40);
+        let members = r.object(0x40);
+        r.e.mem.set_u32(members, 0x55);
+        r.e.mem.set_u32(list_head, 0x66);
+        r.e.mem.set_u32(holder_slot, 0x7a7a);
+        r.e.mem.set_u32(item_slot, item);
+        r.set(0x0045_4b30, &[owner]);
+        r.set(0x0043_6aa0, &[list_head]);
+        r.set(0x006a_b360, &[members]);
+        r.set(0x0045_c4c0, &[0x5a5a]);
+        r.set(0x00c4_f320, &[1]);
+        r.set(0x009b_4440, &[1]);
+        r.set(0x0084_e3a0, &[0x8e8e]);
+        let steps = Rc::new(RefCell::new(vec![holder_slot, item_slot]));
+        r.e.register_double(0x0057_cbe0, move |e, a| {
+            e.mem.set_u32(a[1], 0);
+            Ret {
+                eax: steps.borrow_mut().remove(0),
+                ..Ret::default()
+            }
+        });
+        let (_, log) = r.run(0x0087_3200, &args![this, 0u32, 0u32, 0u32, 0u32]);
+        assert_eq!(
+            calls_to(&log, 0x00b5_ba80),
+            vec![vec![indexed, 0x8e8e, item]]
+        );
+        assert_eq!(calls_to(&log, 0x0084_e3a0), vec![vec![0x5000]]);
+    }
+
+    #[test]
+    fn small_forwarders_call_their_targets() {
+        let mut r = Rig::new();
+        r.set(0x0045_6630, &[1]);
+        let (ret, log) = r.run(0x0087_6810, &args![0x4000u32]);
+        assert_eq!(ret.u8(), 1);
+        assert_eq!(calls_to(&log, 0x0045_6630), vec![vec![0x4000, 0x800]]);
+        let (_, log) = r.run(0x0087_6830, &args![0x4000u32, 1u32, 2u32]);
+        assert_eq!(addrs(&log), vec![0x00b6_b790]);
+        let (_, log) = r.run(0x0087_6a00, &args![0x4000u32]);
+        assert_eq!(calls_to(&log, 0x00ba_39a0), vec![vec![0x407c]]);
+    }
+
+    #[test]
+    fn texture_return_clears_the_byte_while_it_runs() {
+        let (mut r, this) = scene_rig();
+        r.e.set_global(0x011a_9604, 5u8);
+        r.e.mem.set_u32(0x011c_7840, 0x11);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen_in = seen.clone();
+        r.e.register_double(0x004e_9bb0, move |e, a| {
+            seen_in
+                .borrow_mut()
+                .push((e.global::<u8>(0x011a_9604), a.to_vec()));
+            Ret::default()
+        });
+        let (_, log) = r.run(0x0087_6a20, &args![this, 0x2222u32]);
+        assert_eq!(*seen.borrow(), vec![(0, vec![0x2222, 0x11])]);
+        assert_eq!(calls_to(&log, 0x00b6_5ec0), vec![vec![0x9400]]);
+        assert_eq!(r.e.global::<u8>(0x011a_9604), 5);
+    }
+
+    #[test]
+    fn frame_end_releases_what_the_frame_used() {
+        let (mut r, this) = scene_rig();
+        let decal = r.object(0x40);
+        let device = r.object_with_slots(&[(0x1a0, 0), (0x190, 0)]);
+        r.set(GET_GLOBAL_011F9508, &[decal]);
+        r.set(0x004d_c020, &[device]);
+        r.set(GET_GLOBAL_011F91A8, &[0x1600]);
+        r.set(0x004e_bbc0, &[0x8000]);
+        r.set(0x0068_3a60, &[1]);
+        r.e.set_global(0x011f_9440, 1u8);
+        let (_, log) = r.run(
+            0x0087_6850,
+            &args![this, 0x7001u32, 0x2000u32, 0u32, 0x9999u32],
+        );
+        assert_eq!(calls_to(&log, 0x0064_2890), vec![vec![0x9999]]);
+        assert_eq!(calls_to(&log, 0x00ba_9420), vec![vec![0x6000]]);
+        assert_eq!(calls_to(&log, 0x00b6_da10), vec![vec![0x1600, 0x7001]]);
+        assert_eq!(calls_to(&log, 0x00b6_5660), vec![vec![0x8800]]);
+        assert_eq!(calls_to(&log, 0x00b6_30c0), vec![vec![0x9400]]);
+        assert_eq!(calls_to(&log, 0x004e_bbc0), vec![vec![0x2000, 4]]);
+        assert_eq!(calls_to(&log, 0x00ba_39a0), vec![vec![0x8000 + 0x7c]]);
+        assert_eq!(calls_to(&log, 0x00ba_d4a0).len(), 1);
+        assert_eq!(calls_to(&log, 0x004d_c020), vec![vec![decal]]);
+        assert_eq!(
+            calls_to(&log, slot_target(&r, device, 0x1a0)),
+            vec![vec![device, device, 0]]
+        );
+        assert_eq!(
+            calls_to(&log, slot_target(&r, device, 0x190)),
+            vec![vec![device, device, 0, 0, 0, 0]]
+        );
+        assert_eq!(calls_to(&log, 0x0071_4900).len(), 1);
+        assert_eq!(calls_to(&log, 0x00b9_88e0).len(), 1);
+        // No object kept in the global 0x011fa008: nothing built.
+        assert!(calls_to(&log, 0x004d_61b0).is_empty());
+        // Without a render target, an object or the flags the extra calls
+        // are skipped.
+        r.set(0x0068_3a60, &[0]);
+        r.e.set_global(0x011f_9440, 0u8);
+        let (_, log) = r.run(0x0087_6850, &args![this, 0u32, 0x2000u32, 0u32, 0u32]);
+        assert!(calls_to(&log, 0x0064_2890).is_empty());
+        assert!(calls_to(&log, 0x00b6_da10).is_empty());
+        assert!(calls_to(&log, 0x00ba_d4a0).is_empty());
+        assert!(calls_to(&log, 0x0071_4900).is_empty());
+    }
+
+    #[test]
+    fn frame_end_builds_the_object_of_the_pointer_global() {
+        let (mut r, this) = scene_rig();
+        let decal = r.object(0x40);
+        let device = r.object_with_slots(&[(0x1a0, 0), (0x190, 0)]);
+        r.set(GET_GLOBAL_011F9508, &[decal]);
+        r.set(0x004d_c020, &[device]);
+        r.set(ALLOCATE_OBJECT, &[0x5500]);
+        r.set(0x0044_ddc0, &[0x20]);
+        r.set(0x0084_e3a0, &[0x30]);
+        r.e.mem.set_u32(0x011f_a008, 0x7777);
+        let (_, log) = r.run(0x0087_6850, &args![this, 0u32, 0x2000u32, 0u32, 0u32]);
+        assert_eq!(calls_to(&log, ALLOCATE_OBJECT), vec![vec![0x30]]);
+        assert_eq!(
+            calls_to(&log, 0x004d_61b0),
+            vec![vec![
+                0x5500,
+                0x30,
+                0x20,
+                0x7777,
+                0x0108_2d28,
+                0x8000_0000,
+                0x8000_0000,
+                0x320,
+                0x258
+            ]]
+        );
+        assert_eq!(r.e.mem.u32(0x011f_a008), 0);
+        // An allocation failure builds nothing but still drops the pointer.
+        r.e.mem.set_u32(0x011f_a008, 0x7777);
+        r.set(ALLOCATE_OBJECT, &[0]);
+        let (_, log) = r.run(0x0087_6850, &args![this, 0u32, 0x2000u32, 0u32, 0u32]);
+        assert!(calls_to(&log, 0x004d_61b0).is_empty());
+        assert_eq!(r.e.mem.u32(0x011f_a008), 0);
+    }
+
+    #[test]
+    fn registry_value_is_read_and_the_key_closed() {
+        let mut r = Rig::new();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen_in = seen.clone();
+        r.e.register_double(0x00fd_f00c, move |e, a| {
+            seen_in.borrow_mut().push(("open", a.to_vec()));
+            e.mem.set_u32(a[4], 0x5151);
+            Ret::default()
+        });
+        let seen_in = seen.clone();
+        r.e.register_double(0x00fd_f008, move |e, a| {
+            seen_in.borrow_mut().push(("query", a.to_vec()));
+            // The size cell holds the size given by the caller.
+            assert_eq!(e.mem.u32(a[5]), 0x40);
+            Ret::default()
+        });
+        let seen_in = seen.clone();
+        r.e.register_double(0x00fd_f004, move |_, a| {
+            seen_in.borrow_mut().push(("close", a.to_vec()));
+            Ret::default()
+        });
+        r.e.call(0x0087_6a70, &args![0x6000u32, 0x40u32]);
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 3);
+        assert_eq!(seen[0].0, "open");
+        assert_eq!(seen[0].1[..4], [0x8000_0002, 0x0108_2d48, 0, 1]);
+        assert_eq!(seen[1].1[..5], [0x5151, 0x0108_2d38, 0, 0, 0x6000]);
+        assert_eq!(seen[2], ("close", vec![0x5151]));
+    }
+
+    #[test]
+    fn registry_value_is_not_queried_when_the_open_fails() {
+        let mut r = Rig::new();
+        r.set(0x00fd_f00c, &[2]);
+        let (_, log) = r.run(0x0087_6a70, &args![0x6000u32, 0x40u32]);
+        assert!(calls_to(&log, 0x00fd_f008).is_empty());
+        // The handle is closed anyway (it stays 0).
+        assert_eq!(calls_to(&log, 0x00fd_f004), vec![vec![0]]);
+    }
+
+    #[test]
+    fn game_folder_is_prepared_from_the_ini_settings() {
+        let mut r = Rig::new();
+        let buffer = r.object(0x110);
+        r.e.set_global(0x011a_2ff4, 0x1111u32);
+        r.e.set_global(0x011a_2ff0, 0x2222u32);
+        r.set(0x00fd_f0c4, &[1]);
+        r.set(0x0086_d480, &[0x7001]);
+        r.set(0x004d_c110, &[0x7002]);
+        r.set(0x00c3_bb80, &[0xa1]);
+        r.set(0x00c3_bbd0, &[0xa2]);
+        r.set(0x00c3_bc20, &[0xa3]);
+        r.set(0x00ec_bf05, &[u32::MAX]);
+        let (_, log) = r.run(0x0087_6ad0, &args![buffer]);
+        assert_eq!(
+            calls_to(&log, 0x0040_6d00),
+            vec![
+                vec![buffer, 0x104, 0x0108_2dc4, 0x1111],
+                vec![buffer, 0x104, 0x0108_2dc4, 0x2222]
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, 0x00fd_f0c4)[0][..3],
+            [0x0105_d548, 0x0108_2dac, 1]
+        );
+        // The per-user folders are made: local application data, then
+        // the documents folder with two sub-folders.
+        let folders = calls_to(&log, 0x00fd_f274);
+        assert_eq!(folders.len(), 2);
+        assert_eq!(folders[0][..4], [0, 0x1c, 0, 0]);
+        assert_eq!(folders[1][..4], [0, 5, 0, 0]);
+        assert_eq!(calls_to(&log, 0x00fd_f0b8).len(), 3);
+        assert_eq!(calls_to(&log, 0x0040_6d30)[0][..2], [0x7001, 0x104]);
+        assert_eq!(calls_to(&log, 0x0040_6d30)[1][..2], [0x7002, 0x104]);
+        // The handles are closed.
+        assert_eq!(
+            calls_to(&log, 0x00fd_f0d4),
+            vec![vec![0xa1], vec![0xa2], vec![0xa3]]
+        );
+        // The file is missing: the default is copied to it.
+        let access = calls_to(&log, 0x00ec_bf05);
+        assert_eq!(access, vec![vec![buffer, 0]]);
+        let copy = calls_to(&log, 0x00fd_f1b8);
+        assert_eq!(copy.len(), 1);
+        assert_eq!(copy[0][1..], [buffer, 1]);
+    }
+
+    #[test]
+    fn game_folder_falls_back_to_the_plain_folder_without_the_ini_flag() {
+        let mut r = Rig::new();
+        let buffer = r.object(0x110);
+        r.set(0x00fd_f0c4, &[0]);
+        r.set(0x0086_d480, &[0x7001]);
+        r.set(0x004d_c110, &[0x7002]);
+        r.set(0x00ec_bf05, &[0]);
+        let (_, log) = r.run(0x0087_6ad0, &args![buffer]);
+        assert!(calls_to(&log, 0x00fd_f274).is_empty());
+        assert!(calls_to(&log, 0x00fd_f0b8).is_empty());
+        assert_eq!(
+            calls_to(&log, 0x0040_6d30)[..2],
+            [
+                vec![0x7001, 0x104, 0x0108_2d84],
+                vec![0x7002, 0x104, 0x0108_2d84]
+            ]
+        );
+        // One check only: the first failed, so the second is skipped.
+        assert_eq!(calls_to(&log, 0x00fd_f0c4).len(), 1);
+        // The file exists: no copy.
+        assert!(calls_to(&log, 0x00fd_f1b8).is_empty());
+    }
+
+    #[test]
+    fn archive_setup_passes_the_settings_on() {
+        let mut r = Rig::new();
+        r.e.register_double(GET_POOLED_TEXT, |_, a| Ret {
+            eax: a[0] + 1,
+            ..Ret::default()
+        });
+        r.settings(
+            SETTING_BYTE_PTR,
+            &[(0x011d_ee3c, 1), (0x011d_ebdc, 2), (0x011d_ec4c, 3)],
+        );
+        r.settings(
+            SETTING_DWORD_PTR,
+            &[(0x011d_ec40, 10), (0x011d_eaa0, 20), (0x011d_eb24, 30)],
+        );
+        let (_, log) = r.run(0x0087_6d20, &args![]);
+        assert_eq!(
+            calls_to(&log, 0x00af_43a0),
+            vec![vec![1, 0x011c_4031, 0x011d_eb95, 0x20_0000]]
+        );
+        assert_eq!(calls_to(&log, 0x00af_4460), vec![vec![2]]);
+        assert_eq!(calls_to(&log, 0x00af_4470), vec![vec![30, 20, 10]]);
+        assert_eq!(calls_to(&log, 0x00af_4490), vec![vec![3, 0x011d_ec69]]);
+        assert_eq!(calls_to(&log, 0x00af_4550).len(), 1);
+        assert_eq!(addrs(&log).last(), Some(&0x00af_4550));
+    }
+
+    /// The rig of the start-cell search: the setting strings are in the
+    /// table `texts` (setting address, text); the others are empty;
+    /// `00ec6130` measures them.
+    fn start_cell_rig(texts: &[(u32, &str)]) -> Rig {
+        let mut r = Rig::new();
+        let mut table: HashMap<u32, u32> = HashMap::new();
+        for (setting, text) in texts {
+            let at = r.object(0x40);
+            r.e.mem.set_cstr(at, text.as_bytes());
+            table.insert(*setting, at);
+        }
+        let empty = r.object(0x10);
+        r.e.register_double(GET_POOLED_TEXT, move |_, a| Ret {
+            eax: table.get(&a[0]).copied().unwrap_or(empty),
+            ..Ret::default()
+        });
+        r.e.register_double(0x00ec_6130, |e, a| Ret {
+            eax: e.mem.cstr(a[0]).len() as u32,
+            ..Ret::default()
+        });
+        r.e.set_global(0x011c_3f2c, 0x4100u32);
+        r.e.set_global(WORLD_OBJECT, 0x4200u32);
+        r.e.set_global(0x0101_6968, 0.5f64);
+        r.set(0x0046_0140, &[0x4300]);
+        r
+    }
+
+    #[test]
+    fn start_cell_by_name_loads_a_loaded_cell() {
+        let mut r = start_cell_rig(&[]);
+        let position = r.object(0x10);
+        r.set(0x0044_a670, &[1]);
+        r.set(0x0046_1ae0, &[0x7000]);
+        r.set(0x0042_5fd0, &[1]);
+        let (_, log) = r.run(0x0087_6dd0, &args![0x6100u32, position]);
+        assert_eq!(calls_to(&log, 0x0046_1ae0), vec![vec![0x4100, 0x6100]]);
+        assert_eq!(
+            calls_to(&log, 0x0045_3dc0),
+            vec![vec![0x4200, 0x7000, position]]
+        );
+        assert_eq!(calls_to(&log, 0x0046_50a0), vec![vec![0x4100, u32::MAX]]);
+        // A found cell ends the work: no refresh.
+        assert!(calls_to(&log, 0x0045_15a0).is_empty());
+        assert!(calls_to(&log, 0x005b_5e40).is_empty());
+    }
+
+    #[test]
+    fn start_cell_by_name_places_an_unloaded_cell_by_its_coordinates() {
+        let mut r = start_cell_rig(&[]);
+        let position = r.object(0x10);
+        r.set(0x0044_a670, &[1]);
+        r.set(0x0046_1ae0, &[0x7000]);
+        r.set(0x0054_ddd0, &[0x7300]);
+        r.set(0x0054_4c30, &[2]);
+        r.set(0x0054_4c60, &[0xffff_fffe]);
+        let (_, log) = r.run(0x0087_6dd0, &args![0x6100u32, position]);
+        assert_eq!(calls_to(&log, 0x0045_8200), vec![vec![0x4200, 0x7300]]);
+        assert_eq!(r.e.mem.f32(position), 8192.5);
+        assert_eq!(r.e.mem.f32(position + 4), -8191.5);
+        assert_eq!(r.e.mem.f32(position + 8), 0.0);
+        assert_eq!(calls_to(&log, 0x0045_4450), vec![vec![0x4200, position]]);
+        assert_eq!(calls_to(&log, 0x0046_50a0).len(), 1);
+    }
+
+    #[test]
+    fn start_cell_by_setting_creates_the_cell_of_a_found_world_space() {
+        let mut r = start_cell_rig(&[(0x011d_ed5c, "Goodsprings")]);
+        let position = r.object(0x10);
+        // No cell by that name; the world-space lookup answers and writes
+        // the grid coordinates.
+        r.set(0x0046_1ae0, &[0]);
+        r.e.register_double(0x0046_1cf0, |e, a| {
+            e.mem.set_u32(a[2], 3);
+            e.mem.set_u32(a[3], 0xffff_fffd);
+            Ret {
+                eax: 0x7500,
+                ..Ret::default()
+            }
+        });
+        r.set(0x0046_1c20, &[0x7600]);
+        let (_, log) = r.run(0x0087_6dd0, &args![0u32, position]);
+        assert_eq!(calls_to(&log, 0x0045_8200), vec![vec![0x4200, 0x7500]]);
+        assert_eq!(r.e.mem.f32(position), 12288.5);
+        assert_eq!(r.e.mem.f32(position + 4), -12287.5);
+        assert_eq!(calls_to(&log, 0x0045_4450), vec![vec![0x4200, position]]);
+        assert_eq!(
+            calls_to(&log, 0x0046_1c20),
+            vec![vec![0x4100, 3, 0xffff_fffd, 0x7500, 0]]
+        );
+        // The cell was created and positioned: nothing else is done.
+        assert!(calls_to(&log, 0x0046_50a0).is_empty());
+    }
+
+    #[test]
+    fn start_cell_by_world_space_name_searches_the_list() {
+        let mut r = start_cell_rig(&[
+            (0x011d_ee8c, "WastelandNV"),
+            (0x011d_ebc4, "4"),
+            (0x011d_eb48, "Mojave"),
+        ]);
+        let position = r.object(0x10);
+        let list = r.object(0x10);
+        let default_space = r.object_with_slots(&[(0x130, 0x6666)]);
+        let chosen = r.object_with_slots(&[(0x130, 0x6666)]);
+        r.e.mem.set_u32(list, default_space);
+        r.set(0x0046_0140, &[list]);
+        r.set(0x0068_15c0, &[list]);
+        r.set(0x0072_6070, &[0]);
+        r.set(0x00ec_a6d3, &[5, 6]);
+        r.set(0x0058_5b30, &[0]);
+        r.set(0x0046_1c20, &[0x7700]);
+        // The name does not match: the default (first) world space is used.
+        r.set(0x0040_4dc0, &[1]);
+        r.set(0x0042_5fd0, &[1]);
+        let (_, log) = r.run(0x0087_6dd0, &args![0u32, position]);
+        assert_eq!(calls_to(&log, 0x0058_5b30), vec![vec![default_space, 5, 6]]);
+        assert_eq!(
+            calls_to(&log, 0x0046_1c20),
+            vec![vec![0x4100, 5, 6, default_space, 1]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x0045_3dc0),
+            vec![vec![0x4200, 0x7700, position]]
+        );
+        // The name matches: that world space is taken.
+        r.e.mem.set_u32(list, chosen);
+        r.set(0x0040_4dc0, &[0]);
+        r.set(0x00ec_a6d3, &[5, 6]);
+        let (_, log) = r.run(0x0087_6dd0, &args![0u32, position]);
+        assert_eq!(calls_to(&log, 0x0058_5b30), vec![vec![chosen, 5, 6]]);
+        // A found cell skips the creation.
+        r.set(0x0058_5b30, &[0x7800]);
+        r.set(0x00ec_a6d3, &[5, 6]);
+        let (_, log) = r.run(0x0087_6dd0, &args![0u32, position]);
+        assert!(calls_to(&log, 0x0046_1c20).is_empty());
+        assert_eq!(
+            calls_to(&log, 0x0045_3dc0),
+            vec![vec![0x4200, 0x7800, position]]
+        );
+    }
+
+    #[test]
+    fn start_cell_without_any_setting_does_nothing() {
+        let mut r = start_cell_rig(&[]);
+        let position = r.object(0x10);
+        let (_, log) = r.run(0x0087_6dd0, &args![0u32, position]);
+        assert!(calls_to(&log, 0x0046_50a0).is_empty());
+        assert!(calls_to(&log, 0x005b_5e40).is_empty());
+    }
+
+    #[test]
+    fn start_cell_failure_logs_a_message_and_refreshes_the_world() {
+        let mut r = start_cell_rig(&[(0x011d_ed5c, "Nowhere")]);
+        let position = r.object(0x10);
+        r.set(0x0046_1ae0, &[0]);
+        r.set(0x0046_1cf0, &[0]);
+        r.set(0x0044_ddc0, &[0x4400]);
+        let (_, log) = r.run(0x0087_6dd0, &args![0u32, position]);
+        assert_eq!(calls_to(&log, 0x005b_5e40).len(), 1);
+        assert_eq!(calls_to(&log, 0x005b_5e40)[0][0], 0x0108_2e94);
+        assert_eq!(calls_to(&log, 0x0046_50a0), vec![vec![0x4100, u32::MAX]]);
+        assert_eq!(calls_to(&log, 0x0045_15a0), vec![vec![0x4200, position, 1]]);
+        assert_eq!(calls_to(&log, 0x004b_a7d0), vec![vec![0x4400]]);
+    }
+
+    #[test]
+    fn start_cell_failure_by_world_space_names_the_missing_pieces() {
+        let list = |r: &mut Rig| {
+            let list = r.object(0x10);
+            r.set(0x0046_0140, &[list]);
+            r.set(0x0068_15c0, &[list]);
+            // The list node reports the end at once.
+            r.set(0x0082_56d0, &[1]);
+        };
+        // World space and coordinates, no name setting.
+        let mut r = start_cell_rig(&[(0x011d_ee8c, "Space"), (0x011d_ebc4, "7")]);
+        list(&mut r);
+        let position = r.object(0x10);
+        let (_, log) = r.run(0x0087_6dd0, &args![0u32, position]);
+        let message = calls_to(&log, 0x005b_5e40);
+        assert_eq!(message.len(), 1);
+        assert_eq!(message[0][0], 0x0108_2e00);
+        assert_eq!(message[0].len(), 3);
+        // With a name setting too: the longer message.
+        let mut r = start_cell_rig(&[
+            (0x011d_ee8c, "Space"),
+            (0x011d_ebc4, "7"),
+            (0x011d_eb48, "Name"),
+        ]);
+        list(&mut r);
+        let position = r.object(0x10);
+        let (_, log) = r.run(0x0087_6dd0, &args![0u32, position]);
+        let message = calls_to(&log, 0x005b_5e40);
+        assert_eq!(message[0][0], 0x0108_2e50);
+        assert_eq!(message[0].len(), 4);
+        // A name accepted but no cell and no settings at all: the plain message.
+        let mut r = start_cell_rig(&[]);
+        let position = r.object(0x10);
+        r.set(0x0044_a670, &[1]);
+        r.set(0x0046_1ae0, &[0]);
+        r.set(0x0046_1cf0, &[0]);
+        let (_, log) = r.run(0x0087_6dd0, &args![0x6100u32, position]);
+        assert_eq!(calls_to(&log, 0x005b_5e40), vec![vec![0x0108_2dcc]]);
+    }
+
+    #[test]
+    fn player_move_places_the_player_in_the_cell() {
+        let mut r = Rig::new();
+        let player = r.object_with_slots(&[(0x2c4, 0), (0x2a8, 0)]);
+        r.e.set_global(PLAYER_OBJECT, player);
+        r.e.set_global(WORLD_OBJECT, 0x4200u32);
+        r.e.set_global(0x0120_2d98, 0x4900u32);
+        for (k, v) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+            r.e.set_global(ZERO_VECTOR + 4 * k as u32, *v);
+        }
+        r.set(0x005f_36f0, &[0x7000]);
+        r.set(GET_ROOT, &[0x4000]);
+        r.set(0x0055_8310, &[0x4a00]);
+        r.set(GET_PLAYER_NODE, &[0x3000]);
+        r.set(INDEXED_GLOBAL, &[0x4b00]);
+        r.set(0x0056_fa00, &[0x4c00]);
+        let (_, log) = r.run(0x0087_7260, &args![word(10.0), word(20.0), word(30.0)]);
+        let moved = calls_to(&log, 0x0054_cfd0);
+        assert_eq!(moved.len(), 1);
+        assert_eq!(moved[0][0], 0x7000);
+        let pos = moved[0][1];
+        // The player is moved by the z of the cell's rotation and the position.
+        let height = calls_to(&log, slot_target(&r, player, 0x2c4));
+        assert_eq!(height, vec![vec![player, word(3.0)]]);
+        assert_eq!(
+            calls_to(&log, slot_target(&r, player, 0x2a8)),
+            vec![vec![player, pos]]
+        );
+        assert_eq!(calls_to(&log, 0x0054_8230), vec![vec![0x7000, player, 0]]);
+        assert_eq!(calls_to(&log, 0x0045_6520), vec![vec![0x4900]]);
+        let guard = calls_to(&log, PROFILE_SCOPE_CTOR)[0][0];
+        assert_eq!(
+            calls_to(&log, PROFILE_SCOPE_CTOR),
+            vec![vec![guard, 0x34, 1, SOURCE_FILE_NAME, 0x2612]]
+        );
+        assert_eq!(calls_to(&log, 0x00a5_a040), vec![vec![0x3000]]);
+        assert_eq!(calls_to(&log, 0x00b5_cbd0), vec![vec![0x4b00, 0x3000]]);
+        assert_eq!(calls_to(&log, 0x0056_5730), vec![vec![player]]);
+        assert_eq!(calls_to(&log, 0x0044_0460), vec![vec![0x4a00, pos]]);
+        assert_eq!(calls_to(&log, 0x0043_fa80), vec![vec![0x4a00, 0x4c00]]);
+        let point = calls_to(&log, POINT3_CTOR)[0][0];
+        assert_eq!(calls_to(&log, 0x00a5_9c60), vec![vec![0x4a00, point]]);
+        // The position handed over holds the arguments.
+        assert_eq!(r.e.mem.f32(pos), 10.0);
+        assert_eq!(r.e.mem.f32(pos + 8), 30.0);
+    }
+
+    #[test]
+    fn player_move_finds_the_cell_by_the_grid_when_the_world_has_none() {
+        let mut r = Rig::new();
+        let player = r.object_with_slots(&[(0x2c4, 0), (0x2a8, 0)]);
+        r.e.set_global(PLAYER_OBJECT, player);
+        r.e.set_global(WORLD_OBJECT, 0x4200u32);
+        r.settings(SETTING_DWORD_PTR, &[(0x011c_63cc, 9)]);
+        let slot = r.object(0x10);
+        r.set(0x0045_7050, &[slot]);
+        let (_, log) = r.run(0x0087_7260, &args![0u32, 0u32, 0u32]);
+        // 9 >> 1 for both grid coordinates; no cell: no placement or add.
+        assert_eq!(calls_to(&log, 0x0045_7050), vec![vec![0x4200, 4, 4]]);
+        assert!(calls_to(&log, 0x0054_cfd0).is_empty());
+        assert!(calls_to(&log, 0x0054_8230).is_empty());
+        assert_eq!(calls_to(&log, 0x0056_5730), vec![vec![player]]);
+    }
 }
