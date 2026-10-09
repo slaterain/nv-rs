@@ -11,9 +11,17 @@
 //! pending-node queue and its worker, `AttachToWorld`, `Detach`, the creation
 //! of an interior cell's Havok world, the small wrappers of that world
 //! (`005533c0` to `005534f0`), the world cinfo destructors, `DetachHavok`,
-//! `UpdateRefSounds` and the ray-test helpers (`Pick`). The next session
-//! continues with the first function after `00553ee0` that is not done
-//! (`00553f70`).
+//! `UpdateRefSounds` and the ray-test helpers (`Pick`).
+//!
+//! The second batch holds the 40 functions from `00553f70` to `005574d0`:
+//! two vector helpers, the creation of an exterior Havok world
+//! (`00554010`), the listener constructors and destructors, the exterior
+//! world shift (`MoveExteriorWorld`), `GetLandHeight`, `IsFormCellChild` and
+//! its type test, the hide and reference-update walks, the cell's save-game
+//! size, save and load functions and their save-buffer variants, the north
+//! rotation, `GetSeenValue` and `GetIntSeenSection`, and the loops over a
+//! cell's references (`QueueReferences` and four others). The next session
+//! continues with the first function after `005574d0` that is not done.
 //!
 //! # Conventions of the exe worth knowing
 //!
@@ -1343,6 +1351,1596 @@ pub fn tes_object_cell_pick(e: &mut Engine, this: Ptr<TESObjectCELL>, query: Ptr
     e.call(PICK_FALLBACK_NODE, &args![query]).u32()
 }
 
+// ---------------------------------------------------------------------------
+// Second batch (`00553f70` to `005574d0`): callees outside this file.
+
+/// `(this, index)` thiscall: the address of component `index` of a vector of
+/// `float`s.
+const VECTOR_COMPONENT: u32 = 0x0056_0d30;
+/// cdecl, one `float`: the argument times the factor at `011c582c`, in `ST0`.
+const SCALE_FLOAT: u32 = 0x004a_3e90;
+/// cdecl `(out, in)`: stores the three components of `in`, each through
+/// [`SCALE_FLOAT`], and a zero fourth component into `out`; returns `out`.
+const SCALE_VECTOR: u32 = 0x004a_3e00;
+/// `(this, vector)`: the call `fn_00554720` makes with the scaled vector.
+const WORLD_APPLY_VECTOR: u32 = 0x00c9_a1f0;
+/// The global holding the pointer `fn_005546a0` and `fn_00554780` use, and
+/// the virtual slot `fn_00554780` calls on it.
+const EXTERIOR_WORLD_SLOT: u32 = 0x011c_a0d8;
+const EXTERIOR_WORLD_SLOT_CALL: u32 = 0xc4;
+/// The world construction of `fn_00554010`: constructor `(this, cinfo, a,
+/// b)`, and the three `float` constants it scales.
+const EXTERIOR_WORLD_CONSTRUCT: u32 = 0x00c9_9ff0;
+const EXTERIOR_BROAD_PHASE_SIZE: u32 = 0x0102_f104;
+const EXTERIOR_WORLD_EXTENT: u32 = 0x0102_f100;
+const EXTERIOR_WORLD_LIMIT: u32 = 0x0102_f0fc;
+/// cdecl, no arguments: the water listener of `teswaterlistener.cpp`.
+const WATER_LISTENER_GET: u32 = 0x0062_f3d0;
+/// The object `fn_00554590` constructs: base constructor and the vtable it
+/// stores (its RTTI says `TESWindListener`); the vtable of `hkpEntityListener`
+/// that `fn_00554650` stores; the destructor of the member at `+0x0c` of the
+/// object `fn_005545f0` destroys.
+const WIND_LISTENER_BASE_CONSTRUCT: u32 = 0x00c7_4760;
+const WIND_LISTENER_VTABLE: u32 = 0x0102_f10c;
+const ENTITY_LISTENER_VTABLE: u32 = 0x0102_f13c;
+const LISTENER_MEMBER_DESTRUCT: u32 = 0x004e_e840;
+/// cdecl `Deallocate` of the memory manager (one word).
+const DEALLOCATE_BLOCK: u32 = 0x0040_1030;
+
+/// `TESObjectCELL::GetLand` (Xbox PDB) and `TESObjectLAND::GetLandHeight`
+/// `(this, position, out)` (Xbox PDB).
+const CELL_GET_LAND: u32 = 0x0054_6fb0;
+const LAND_GET_HEIGHT: u32 = 0x0053_f180;
+/// `TESForm::GetFormTypeFromFormString` (Xbox PDB), cdecl one word; and the
+/// word at `01187020` that `fn_00554810` compares the first word of its
+/// argument with.
+const FORM_TYPE_FROM_STRING: u32 = 0x0048_6890;
+const CELL_CHILD_FORM_WORD: u32 = 0x0118_7020;
+
+/// `fn_00554910` / `fn_00554960`: the byte at `+0x16` of the cell's Havok
+/// world object (`004bae00`), its virtual `+0xd8(node, flag)` and
+/// `PrepareObjectWithNoLightingRecurse` (Xbox PDB, cdecl one word).
+const WORLD_BYTE_16: u32 = 0x004b_ae00;
+const WORLD_PREPARE_SLOT: u32 = 0xd8;
+const PREPARE_WITHOUT_LIGHTING: u32 = 0x004b_6f90;
+/// `fn_00554a20`: virtual slots of a reference and of a node, the test of a
+/// node against the table at `01202828` (cdecl `(table, node)`).
+const REFERENCE_UPDATE_SLOT: u32 = 0x2f0;
+const REFERENCE_QUERY_SLOT: u32 = 0x100;
+const NODE_FLAG_SLOT: u32 = 0x14;
+const NODE_TABLE_TEST: u32 = 0x0045_bad0;
+const NODE_TABLE: u32 = 0x0120_2828;
+/// `fn_005549d0`: the list of the cell at `+0xac` and the call made on each
+/// reference `(reference, flag)`.
+const CELL_LIST_AC: u32 = 0xac;
+const REFERENCE_UPDATE_FOR_FLAG: u32 = 0x0057_7390;
+
+/// The save-game buffer object (the pointer at `011de45c`,
+/// [`SAVE_GAME_POINTER`]) and what the cell's save, load and size functions
+/// ask of it.
+const USE_SAVE_GAME_BLOCKS: u32 = 0x0086_2110;
+const BUFFER_POSITION: u32 = 0x0082_5c00;
+const BUFFER_VERSION: u32 = 0x008d_f040;
+const BUFFER_WRITE: u32 = 0x0085_79b0;
+const BUFFER_READ: u32 = 0x0085_79e0;
+/// `(this)`: true when the word at `+0x48` of the object is zero.
+const BUFFER_FIELD_48_IS_ZERO: u32 = 0x0055_f5b0;
+/// The form the save or load is on (`004fd3e0` for saving, `004fd3c0` for
+/// loading), with its flags at `+5` and version byte at `+9`.
+const SAVING_FORM_INFO: u32 = 0x004f_d3e0;
+const LOADING_FORM_INFO: u32 = 0x004f_d3c0;
+/// The object at `011de4e8` whose byte `00408d60` finds; non-zero when the
+/// size and save functions report what they wrote.
+const SAVE_TRACE_HOLDER: u32 = 0x011d_e4e8;
+/// Virtual `+0x130` of the form `004839c0` finds, called without arguments.
+const FORM_NAME_SLOT: u32 = 0x130;
+/// `Error` (cdecl, format and arguments).
+const ERROR_REPORT: u32 = 0x0040_fbe0;
+/// `TESForm::SaveGameDataOLD`, `LoadGameDataOLD`, `SaveNumericID` and
+/// `LoadNumericID` (Xbox PDB) `(this, data, size)`; the base class's save
+/// `(this, flags)`, size `(this, flags)` and `TESForm::LoadGame` (Xbox PDB)
+/// `(this, flags, extra)`.
+const FORM_SAVE_GAME_DATA: u32 = 0x0048_4ce0;
+const FORM_LOAD_GAME_DATA: u32 = 0x0048_4d00;
+const FORM_SAVE_NUMERIC_ID: u32 = 0x0048_4d20;
+const FORM_LOAD_NUMERIC_ID: u32 = 0x0048_4d40;
+const FORM_SAVE_BASE: u32 = 0x0048_4c20;
+const FORM_SAVE_SIZE: u32 = 0x0048_4bf0;
+const FORM_LOAD_GAME: u32 = 0x0048_4c50;
+/// The base class's save and load against a buffer object `(this, buffer)`.
+const FORM_SAVE_TO_BUFFER: u32 = 0x0048_4d60;
+const FORM_LOAD_FROM_BUFFER: u32 = 0x0048_4da0;
+/// Cell fields through their own functions: the detach time
+/// (`TESObjectCELL::GetDetachTime`, Xbox PDB), the owner
+/// (`TESObjectCELL::GetOwner`, Xbox PDB), the setter of the owner
+/// `(this, form id)`, the seen data (`ExtraDataList::GetSeenData` of the
+/// cell, `00555bc0`) and the string length (`0044a670`, cdecl).
+const CELL_DETACH_TIME: u32 = 0x0054_6af0;
+const CELL_OWNER: u32 = 0x0054_6a40;
+const CELL_SET_OWNER: u32 = 0x0054_6bf0;
+const CELL_SEEN_DATA: u32 = 0x0055_5bc0;
+const STRING_LENGTH: u32 = 0x0044_a670;
+/// `ExtraDataList::SetSeenData` (Xbox PDB) and the setter `00421850(list,
+/// value)`, both on the extra data list of the cell.
+const EXTRA_LIST_SET_SEEN_DATA: u32 = 0x0042_1940;
+const EXTRA_LIST_SET_FIELD: u32 = 0x0042_1850;
+/// The seen data objects: constructors of the interior kind (`0x2c` bytes,
+/// `(this, x, y)`) and the exterior kind (`0x24` bytes).
+const INTERIOR_SEEN_DATA_CONSTRUCT: u32 = 0x0087_a100;
+const EXTERIOR_SEEN_DATA_CONSTRUCT: u32 = 0x0087_9940;
+/// Seen data virtual slots: size `+8(0)`, save to a buffer `+0x0c`, save game
+/// `+0x10(0)`, load from a buffer `+0x14`, load game `+0x18(0xffff)`.
+const SEEN_DATA_SIZE_SLOT: u32 = 0x08;
+const SEEN_DATA_SAVE_BUFFER_SLOT: u32 = 0x0c;
+const SEEN_DATA_SAVE_GAME_SLOT: u32 = 0x10;
+const SEEN_DATA_LOAD_BUFFER_SLOT: u32 = 0x14;
+const SEEN_DATA_LOAD_GAME_SLOT: u32 = 0x18;
+/// `00428110(buffer, out)` and `0042ce30(buffer, out)` store a word of the
+/// buffer's flags into `out` and return `out`; `004280f0(flags, mask)` tests
+/// it.
+const BUFFER_FLAGS_GET: u32 = 0x0042_8110;
+const BUFFER_FLAGS_GET_OTHER: u32 = 0x0042_ce30;
+const FLAGS_TEST: u32 = 0x0042_80f0;
+/// The buffer functions: `00865e50(buffer, data, size, 0)`, string
+/// `00865e70(buffer, string, 0)`, form id `00865df0(buffer, id, 0)`, and the
+/// loads `00864980(buffer, data, size)`, `008649a0(buffer, out)` and
+/// `008648e0(buffer, out)`.
+const BUFFER_SAVE_BYTES: u32 = 0x0086_5e50;
+const BUFFER_SAVE_STRING: u32 = 0x0086_5e70;
+const BUFFER_SAVE_FORM_ID: u32 = 0x0086_5df0;
+const BUFFER_LOAD_BYTES: u32 = 0x0086_4980;
+const BUFFER_LOAD_STRING: u32 = 0x0086_49a0;
+const BUFFER_LOAD_FORM_ID: u32 = 0x0086_48e0;
+/// `fn_005555d0`'s first call `(this, a, b)` (the map names it
+/// `ProcessLists::PrintLists`, a folded body); the function of `fn_00555570`,
+/// `fn_005559d0` and `fn_00555a50` that does nothing (`004534f0(this, word)`);
+/// the cell calls `00546b10(this, 0, 0)` and `00555be0`.
+const CELL_CALL_WITH_TWO_WORDS: u32 = 0x008d_0600;
+const CELL_EMPTY_CALL: u32 = 0x0045_34f0;
+const CELL_RESET_DETACH_TIME: u32 = 0x0054_6b10;
+const CELL_CLEAR_SEEN_DATA: u32 = 0x0055_5be0;
+/// cdecl `(buffer, 0, 0x104)`, the call that clears the name buffer of a load.
+const CLEAR_BUFFER: u32 = 0x0040_3d30;
+/// `fn_00555ad0` and the north rotation: `ExtraDataList`'s accessor of the
+/// rotation (`00421a40`, in `ST0`), the `float` at `01012054`, the `double`
+/// at `01012060`, the matrix at `011a9448`, `004a0c90(matrix, angle)` and the
+/// vector rotation `004b3ae0(out, in, matrix)` (cdecl).
+const EXTRA_LIST_GET_ROTATION: u32 = 0x0042_1a40;
+const MINUS_ONE_FLOAT: u32 = 0x0101_2054;
+const ROTATION_EPSILON: u32 = 0x0101_2060;
+const ROTATION_MATRIX_BUILD: u32 = 0x004a_0c90;
+const ROTATE_VECTOR: u32 = 0x004b_3ae0;
+/// `GetSeenValue`: the player object (`011dea3c`), `ftol` (`00406d90`,
+/// cdecl, one `float`), the index into seen data
+/// `00879da0(position, interior, &x, &y)` (cdecl), `TESWorldSpace::
+/// GetCellFromCellCoord` (Xbox PDB), `SeenData::IsSeenBitTrue` (Xbox PDB) and
+/// the cell's bit `0x01` of `+0x25`.
+const PLAYER_OBJECT: u32 = 0x011d_ea3c;
+const FLOAT_TO_INT: u32 = 0x0040_6d90;
+const SEEN_DATA_INDEX: u32 = 0x0087_9da0;
+const WORLD_SPACE_GET_CELL: u32 = 0x0058_75a0;
+const SEEN_BIT_IS_SET: u32 = 0x0087_99c0;
+const CELL_SEEN_FLAG: u32 = 0x0055_6850;
+/// The type descriptors the cast of `GetIntSeenSection` uses, and the cell's
+/// virtual `+0x48(0x80000000)` it calls after storing a new first section.
+const SEEN_DATA_CAST_SOURCE: u32 = 0x0118_b794;
+const SEEN_DATA_CAST_TARGET: u32 = 0x0118_b7ac;
+const CELL_CHANGED_SLOT: u32 = 0x48;
+/// Reference loops: the test `005651e0`, the form type of the loops,
+/// virtual slots of a reference, the marker forms and the reference tests
+/// of `QueueReferences`, and its model loader call `(reference, priority,
+/// 1)`.
+const REFERENCE_TEST: u32 = 0x0056_51e0;
+const REFERENCE_FORM_TYPE: u32 = 0x25;
+const REFERENCE_OWNER_SLOT: u32 = 0x1d0;
+const OWNER_QUERY_SLOT: u32 = 0x100;
+const OWNER_CALL_SLOT: u32 = 0x08;
+const MARKER_FORM_FIRST: u32 = 0x011c_a230;
+const REFERENCE_FLAG_TEST_A: u32 = 0x0044_0da0;
+const REFERENCE_FLAG_TEST_B: u32 = 0x0044_0d80;
+const REFERENCE_FLAG_TEST_C: u32 = 0x0056_b250;
+const REFERENCE_DEFER_SLOT: u32 = 0x1cc;
+const MODEL_LOADER_QUEUE_REFERENCE: u32 = 0x0044_4850;
+const CELL_PRIORITY: u32 = 0x0045_8be0;
+/// `fn_005573e0`: the reference's model (`0043fcd0`), its virtual `+0x10`, the
+/// call `00476ab0` and `BSShaderUtil::RecursiveSetPropertyFadeAlpha` (Xbox
+/// PDB, cdecl `(node, alpha)`).
+const REFERENCE_MODEL: u32 = 0x0043_fcd0;
+const MODEL_TEST_SLOT: u32 = 0x10;
+const MODEL_PREPARE: u32 = 0x0047_6ab0;
+const SET_PROPERTY_FADE_ALPHA: u32 = 0x00b6_bb30;
+/// `fn_00557470` and `fn_005574d0`: the collection object (`011c95c8`) and
+/// its calls `(this, reference)`.
+const LOADED_REFERENCES: u32 = 0x011c_95c8;
+const LOADED_REFERENCES_REMOVE: u32 = 0x0052_6f20;
+const LOADED_REFERENCES_ADD: u32 = 0x0052_70b0;
+/// `fn_005574d0`: the scene's cell getter (`005f36f0`, the word at `+0x34`),
+/// the form test (`00549580`: bit `0x40` of the flags word at `+8`), the
+/// reference's world space (`TESObjectREFR::GetWorldSpace`, Xbox PDB) and
+/// the calls on the world's terrain manager.
+const SCENE_CELL: u32 = 0x005f_36f0;
+const SCENE_WORLD_SPACE: u32 = 0x004f_d3e0;
+const BASE_FORM_FLAG_40: u32 = 0x0054_9580;
+const REFERENCE_WORLD_SPACE: u32 = 0x0057_5d70;
+const WORLD_GET_TERRAIN_MANAGER: u32 = 0x0058_6170;
+const TERRAIN_HIDE_TREE: u32 = 0x006f_cfa0;
+const TERRAIN_UPDATE_TREE: u32 = 0x006f_d010;
+const TERRAIN_SET_FLAG: u32 = 0x0092_9260;
+
+// ---------------------------------------------------------------------------
+// Second batch: helpers.
+
+/// Helper: the flag test of the buffer functions, `(buffer flags &
+/// mask) != 0`, where `getter` (`00428110` or `0042ce30`) stores the buffer's
+/// flag word into a local and returns its address.
+fn buffer_has_flag(e: &mut Engine, buffer: Ptr, getter: u32, mask: u32) -> bool {
+    e.with_stack(4, |e, local| {
+        let flags = e.call(getter, &args![buffer, local]).u32();
+        e.call(FLAGS_TEST, &args![flags, mask]).bool()
+    })
+}
+
+/// Helper: the seen data of a cell, created and stored in the cell's extra
+/// data list when it has none (an interior cell gets the `0x2c` byte kind,
+/// an exterior the `0x24` byte kind). Shared by the load functions
+/// `fn_00554fd0` and `fn_00555740`.
+fn seen_data_or_create(e: &mut Engine, this: Ptr<TESObjectCELL>) -> u32 {
+    let seen = e.call(CELL_SEEN_DATA, &args![this]).u32();
+    if seen != 0 {
+        return seen;
+    }
+    let created = if e.call(CELL_IS_INTERIOR, &args![this]).bool() {
+        let block = e.call(OPERATOR_NEW, &args![0x2cu32]).u32();
+        if block == 0 {
+            0
+        } else {
+            e.call(INTERIOR_SEEN_DATA_CONSTRUCT, &args![block, 0u32, 0u32])
+                .u32()
+        }
+    } else {
+        let block = e.call(OPERATOR_NEW, &args![0x24u32]).u32();
+        if block == 0 {
+            0
+        } else {
+            e.call(EXTERIOR_SEEN_DATA_CONSTRUCT, &args![block]).u32()
+        }
+    };
+    let list = e.call(CELL_EXTRA_DATA_LIST, &args![this]).u32();
+    e.call(EXTRA_LIST_SET_SEEN_DATA, &args![list, created]);
+    created
+}
+
+/// Helper: the packed cell-flag byte of a save: `(cCellFlags & 0x60) |
+/// cCellGameFlags`.
+fn packed_cell_flags(e: &Engine, this: Ptr<TESObjectCELL>) -> u8 {
+    (e.get(this, TESObjectCELL::cCellFlags) & 0x60) | e.get(this, TESObjectCELL::cCellGameFlags)
+}
+
+/// Helper: the reverse of [`packed_cell_flags`], as the two loads do it.
+fn unpack_cell_flags(e: &mut Engine, this: Ptr<TESObjectCELL>, packed: u8) {
+    let flags = (e.get(this, TESObjectCELL::cCellFlags) & 0x9f) | (packed & 0x60);
+    e.set(this, TESObjectCELL::cCellFlags, flags);
+    e.set(this, TESObjectCELL::cCellGameFlags, packed & 0x9f);
+}
+
+/// Helper: the form `004839c0` finds for the form id at the start of `info`
+/// (the form being saved or loaded), or 0 without `info`.
+fn find_form_of(e: &mut Engine, info: u32) -> u32 {
+    if info == 0 {
+        return 0;
+    }
+    let form_id = e.mem.u32(info);
+    e.call(FORM_LOOK_UP, &args![form_id]).u32()
+}
+
+/// Helper: the name (virtual `+0x130`) of the form being saved, for the
+/// trace messages of the size and save functions.
+fn traced_form_name(e: &mut Engine, info: u32) -> u32 {
+    let form = find_form_of(e, info);
+    e.vcall(form, FORM_NAME_SLOT, &[]).u32()
+}
+
+/// Helper: the trace line of `fn_00554b90` and `fn_00554d30` (`Error` with
+/// the number of bytes written since `start`): the form's version names it
+/// when the save has a current form.
+fn report_saved_bytes(
+    e: &mut Engine,
+    with_form_format: u32,
+    plain_format: u32,
+    bytes: u32,
+    line: u32,
+) {
+    let buffer: u32 = e.global(SAVE_GAME_POINTER);
+    let info = e.call(SAVING_FORM_INFO, &args![buffer]).u32();
+    if info == 0 {
+        e.call(
+            ERROR_REPORT,
+            &args![plain_format, bytes, line, SOURCE_FILE_NAME],
+        );
+    } else {
+        let name = traced_form_name(e, info);
+        let form_id = e.mem.u32(info);
+        let flags = e.mem.u32(info + 5);
+        e.call(
+            ERROR_REPORT,
+            &args![
+                with_form_format,
+                bytes,
+                form_id,
+                name,
+                flags,
+                line,
+                SOURCE_FILE_NAME
+            ],
+        );
+    }
+}
+
+/// Helper: the report of `fn_00554fd0` when the block header or the block
+/// length is wrong (`DEBUG_PRINT`, the `SAVELOAD:` messages). `formats` are
+/// the messages with and without a current form; `bytes` is present for the
+/// overrun and underrun messages; `info` is the form being loaded (0 for
+/// none) and `form` what `004839c0` found for it.
+fn report_load_problem(
+    e: &mut Engine,
+    formats: (u32, u32),
+    bytes: Option<u32>,
+    line: u32,
+    (info, form): (u32, u32),
+) {
+    let buffer: u32 = e.global(SAVE_GAME_POINTER);
+    let mut words = vec![];
+    if info == 0 {
+        let version = e.call(BUFFER_VERSION, &args![buffer]).u8() as u32;
+        words.push(formats.1);
+        words.extend(bytes);
+        words.extend([SOURCE_FILE_NAME, line, version]);
+    } else {
+        let name = e.vcall(form, FORM_NAME_SLOT, &[]).u32();
+        let form_id = e.mem.u32(info);
+        let version = e.mem.u8(info + 9) as u32;
+        let flags = e.mem.u32(info + 5);
+        words.push(formats.0);
+        words.extend(bytes);
+        words.extend([SOURCE_FILE_NAME, line, form_id, name, version, flags]);
+    }
+    e.call(DEBUG_PRINT, &words);
+}
+
+/// Helper: runs `visit` on the item of every node of the list that starts at
+/// `first` (`fn_005570d0`'s loops), following `00726070` after each item.
+fn for_each_list_item(e: &mut Engine, first: u32, mut visit: impl FnMut(&mut Engine, Ptr)) {
+    let mut node = first;
+    while node != 0 {
+        let item = node_item(e, Ptr::new(node));
+        visit(e, item);
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+}
+
+/// Helper: `visit` on every reference of the cell, under the cell lock
+/// (`00541ac0` / `00541ae0`), as `fn_005570d0`, `fn_005573e0`, `fn_00557470`
+/// and `fn_005574d0` do.
+fn for_each_cell_reference_locked(
+    e: &mut Engine,
+    this: Ptr<TESObjectCELL>,
+    visit: impl FnMut(&mut Engine, Ptr),
+) {
+    e.call(CELL_LOCK_ENTER, &args![this]);
+    let first = e.call(CELL_REFERENCES, &args![this]).u32();
+    for_each_list_item(e, first, visit);
+    e.call(CELL_LOCK_LEAVE, &args![this]);
+}
+
+// ---------------------------------------------------------------------------
+// Second batch: the functions.
+
+// Translated from 00553f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds the four `float`s at `other` to the four at `this` (`ADDPS`, on
+/// 16-byte aligned vectors). The map has no name for it.
+pub fn fn_00553f70(e: &mut Engine, this: Ptr, other: Ptr) {
+    let mut sum = [0f32; 4];
+    for (index, slot) in sum.iter_mut().enumerate() {
+        let offset = 4 * index as u32;
+        *slot = e.mem.f32(this.addr() + offset) + e.mem.f32(other.addr() + offset);
+    }
+    for (index, value) in sum.into_iter().enumerate() {
+        e.mem.set_f32(this.addr() + 4 * index as u32, value);
+    }
+}
+
+// Translated from 00553fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// cdecl `(destination, source)`: copies the three `float`s at `source` into
+/// components 0 to 2 of `destination` (through `00560d30`) and stores `0.0`
+/// as component 3. Returns `destination`.
+pub fn fn_00553fc0(e: &mut Engine, destination: Ptr, source: Ptr) -> Ptr {
+    for index in 0..3u32 {
+        let component = e.call(VECTOR_COMPONENT, &args![destination, index]).u32();
+        let value = e.mem.f32(source.addr() + 4 * index);
+        e.mem.set_f32(component, value);
+    }
+    let component = e.call(VECTOR_COMPONENT, &args![destination, 3u32]).u32();
+    e.mem.set_f32(component, 0.0);
+    destination
+}
+
+// Translated from 00554010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// cdecl `(centre)`: builds the Havok world of an exterior (the map has no
+/// name for it): a world cinfo with gravity `(0, 0, g, 0)`, the scaled broad
+/// phase size and scale `1.0`; two scaled extent vectors; the world itself
+/// (`0xd0` bytes, aligned to 16) with its listener, broad phase, water
+/// listener, filter, scene setting and wind listener, registered with the
+/// `011ca088` singleton; the world is positioned at the three floats of
+/// `centre` (the third replaced by `0.0`), gets its virtual `+0xc4`, the
+/// visual debugger setting, and is returned. The cinfo is destroyed. The
+/// exception frames and the stack cookie are not translated.
+pub fn fn_00554010(e: &mut Engine, centre: Ptr) -> Ptr {
+    with_scope_guard(e, 0x10, 0x3c1b, |e| {
+        // The cinfo, then the position, the extent and the limit vectors
+        // (16 bytes each), as one block of the game's stack.
+        e.with_stack(CINFO_SIZE + 0x30, |e, block| {
+            let cinfo = block;
+            let position = block.byte_add(CINFO_SIZE);
+            let extent = block.byte_add(CINFO_SIZE + 0x10);
+            let limit = block.byte_add(CINFO_SIZE + 0x20);
+            e.call(CINFO_CONSTRUCT, &args![cinfo]);
+            let gravity: f32 = e.global(GRAVITY_Z);
+            e.with_stack(16, |e, vector| {
+                let vector = fn_005532a0(e, vector, 0.0, 0.0, gravity, 0.0);
+                e.call(CINFO_SET_GRAVITY, &args![cinfo.byte_add(0x10), vector]);
+            });
+            let size: f32 = e.global(EXTERIOR_BROAD_PHASE_SIZE);
+            let scaled = e.call(SCALE_FLOAT, &args![size]).f32();
+            e.call(CINFO_SET_BROAD_PHASE_SIZE, &args![cinfo, scaled]);
+            e.call(LIST_NODE_ITEM_ADDRESS, &args![position]);
+            for index in 0..3u32 {
+                let value = e.mem.u32(centre.addr() + 4 * index);
+                e.mem.set_u32(position.addr() + 4 * index, value);
+            }
+            e.mem.set_f32(position.addr() + 8, 0.0);
+            e.mem.set_f32(cinfo.addr() + 0x54, 1.0);
+            for (vector, constant) in [
+                (extent, EXTERIOR_WORLD_EXTENT),
+                (limit, EXTERIOR_WORLD_LIMIT),
+            ] {
+                e.call(LIST_NODE_ITEM_ADDRESS, &args![vector]);
+                for index in 0..3u32 {
+                    let value: f32 = e.global(constant);
+                    let scaled = e.call(SCALE_FLOAT, &args![value]).f32();
+                    let component = e.call(VECTOR_COMPONENT, &args![vector, index]).u32();
+                    e.mem.set_f32(component, scaled);
+                }
+            }
+            let raw = fn_00553300(e, 0xd0);
+            let world: Ptr = if raw == 0 {
+                Ptr::NULL
+            } else {
+                e.call(EXTERIOR_WORLD_CONSTRUCT, &args![raw, cinfo, extent, limit])
+                    .ptr()
+            };
+            let held = e.call(HOLDER_GET_WORLD, &args![world]).u32();
+            e.call(EMPTY_FUNCTION, &args![held]);
+            let block = e.call(OPERATOR_NEW, &args![0x14u32]).u32();
+            let wind_listener = if block == 0 {
+                0
+            } else {
+                fn_00554590(e, Ptr::new(block)).addr()
+            };
+            fn_005533f0(e, world, wind_listener);
+            let block = e.call(OPERATOR_NEW, &args![0x24u32]).u32();
+            let broad_phase = if block == 0 {
+                0
+            } else {
+                e.call(BROAD_PHASE_CONSTRUCT, &args![block]).u32()
+            };
+            fn_00553480(e, world, if broad_phase == 0 { 0 } else { broad_phase + 8 });
+            let water_listener = e.call(WATER_LISTENER_GET, &[]).u32();
+            e.call(WORLD_SET_GRAVITY_SCALE, &args![world, water_listener]);
+            let block = e.call(OPERATOR_NEW, &args![0x28u32]).u32();
+            let filter = if block == 0 {
+                0
+            } else {
+                e.call(FILTER_CONSTRUCT, &args![block]).u32()
+            };
+            fn_005534f0(e, world, filter);
+            let setting = e.call(SCENE_HAVOK_SETTING, &[]).u32();
+            fn_00553440(e, world, setting);
+            let block = e.call(OPERATOR_NEW, &args![0x14u32]).u32();
+            let listener = if block == 0 {
+                0
+            } else {
+                e.call(LISTENER_OBJECT_CONSTRUCT, &args![block]).u32()
+            };
+            fn_005533f0(e, world, listener);
+            if e.global::<u32>(LISTENER_SINGLETON) == 0 {
+                let block = e.call(OPERATOR_NEW, &args![8u32]).u32();
+                let singleton = if block == 0 {
+                    0
+                } else {
+                    e.call(LISTENER_CONSTRUCT, &args![block]).u32()
+                };
+                e.set_global(LISTENER_SINGLETON, singleton);
+            }
+            let held = e.call(HOLDER_GET_WORLD, &args![world]).u32();
+            let singleton: u32 = e.global(LISTENER_SINGLETON);
+            e.call(LISTENER_REGISTER, &args![singleton, held]);
+            e.call(WORLD_SET_CENTER, &args![world, position]);
+            let held = e.call(HOLDER_GET_WORLD, &args![world]).u32();
+            e.call(EMPTY_FUNCTION, &args![held]);
+            e.vcall(world.addr(), 0xc4, &[]);
+            let suppressed = e.call(VISUAL_DEBUGGER_SUPPRESSED, &[]).bool();
+            e.call(
+                WORLD_SET_VISUAL_DEBUGGER_ENABLED,
+                &args![world, !suppressed],
+            );
+            e.call(WORLD_SET_VISUAL_DEBUGGER, &args![world, 0u32]);
+            fn_00553520(e, cinfo);
+            world
+        })
+    })
+}
+
+// Translated from 00554590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the object whose vtable is `0102f10c` (its RTTI says
+/// `TESWindListener`, derived from `bhkWindListener`): runs the base
+/// constructor `00c74760` and stores the vtable. Returns `this`.
+pub fn fn_00554590(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(WIND_LISTENER_BASE_CONSTRUCT, &args![this]);
+    e.mem.set_u32(this.addr(), WIND_LISTENER_VTABLE);
+    this
+}
+
+// Translated from 005545b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `fn_005545d0`.
+pub fn fn_005545b0(e: &mut Engine, this: Ptr) {
+    fn_005545d0(e, this);
+}
+
+// Translated from 005545d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `fn_005545f0`.
+pub fn fn_005545d0(e: &mut Engine, this: Ptr) {
+    fn_005545f0(e, this);
+}
+
+// Translated from 005545f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of a class derived from `hkpEntityListener` (the map names the
+/// folded body `std::_Ref_count_del_alloc<..>::~_Ref_count_del_alloc<..>`):
+/// destroys the member at `+0x0c` (`004ee840`), then runs `fn_00554650`. The
+/// exception frame is not translated.
+pub fn fn_005545f0(e: &mut Engine, this: Ptr) {
+    e.call(LISTENER_MEMBER_DESTRUCT, &args![this.byte_add(0x0c)]);
+    fn_00554650(e, this);
+}
+
+// Translated from 00554650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the vtable `0102f13c` (the RTTI of that vtable says
+/// `hkpEntityListener`) at `this`.
+pub fn fn_00554650(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), ENTITY_LISTENER_VTABLE);
+}
+
+// Translated from 00554670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor of the class of `fn_00554650`: stores its
+/// vtable and, when bit 0 of `flags` is set, frees the block with the memory
+/// manager's `Deallocate` (`00401030`). Returns `this`.
+pub fn fn_00554670(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00554650(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE_BLOCK, &args![this]);
+    }
+    this
+}
+
+// Translated from 005546a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCELL::MoveExteriorWorld` (Xbox PDB), cdecl `(shift)`: under an
+/// allocation scope guard, reads the pointer in the global `011ca0d8` (the
+/// getter `00559450`) and runs `fn_00554720` on it with `shift`. The
+/// exception frame is not translated.
+pub fn tes_object_cell_move_exterior_world(e: &mut Engine, shift: Ptr) {
+    with_scope_guard(e, 0x10, 0x3c5b, |e| {
+        let world = e.call(SLOT_GET_POINTER, &args![EXTERIOR_WORLD_SLOT]).u32();
+        fn_00554720(e, Ptr::new(world), shift);
+    });
+}
+
+// Translated from 00554720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `(this, vector)`: scales the three floats of `vector` into a local
+/// vector (`004a3e00`) and gives it to `00c9a1f0` on `this`. The map has no
+/// name for it.
+pub fn fn_00554720(e: &mut Engine, this: Ptr, vector: Ptr) {
+    e.with_stack(16, |e, scaled| {
+        e.call(LIST_NODE_ITEM_ADDRESS, &args![scaled]);
+        let scaled = e.call(SCALE_VECTOR, &args![scaled, vector]).u32();
+        e.call(WORLD_APPLY_VECTOR, &args![this, scaled]);
+    });
+}
+
+// Translated from 00554780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the global `011ca0d8` holds a pointer (`00559450`), calls its virtual
+/// `+0xc4`. No arguments.
+pub fn fn_00554780(e: &mut Engine) {
+    if e.call(SLOT_GET_POINTER, &args![EXTERIOR_WORLD_SLOT]).u32() != 0 {
+        let world = e.call(SLOT_GET_POINTER, &args![EXTERIOR_WORLD_SLOT]).u32();
+        e.vcall(world, EXTERIOR_WORLD_SLOT_CALL, &[]);
+    }
+}
+
+// Translated from 005547c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCELL::GetLandHeight` (Xbox PDB) `(this, position, out)`: with
+/// the cell's land (`TESObjectCELL::GetLand`) answers
+/// `TESObjectLAND::GetLandHeight(position, out)`; without land stores `0.0`
+/// into `out` and answers 0.
+pub fn tes_object_cell_get_land_height(
+    e: &mut Engine,
+    this: Ptr<TESObjectCELL>,
+    position: Ptr,
+    out: Ptr,
+) -> u8 {
+    let land = e.call(CELL_GET_LAND, &args![this]).u32();
+    if land == 0 {
+        e.mem.set_f32(out.addr(), 0.0);
+        0
+    } else {
+        e.call(LAND_GET_HEIGHT, &args![land, position, out]).u8()
+    }
+}
+
+// Translated from 00554810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCELL::IsFormCellChild` (Xbox PDB), cdecl `(form)`: 0 for null.
+/// When the first word of `form` equals the word at `01187020`, true for
+/// the values 6, 8 and 9 of the word at `+0x0c`; otherwise asks
+/// `TESForm::GetFormTypeFromFormString` with the first word and answers
+/// `fn_005548a0` on the result.
+pub fn tes_object_cell_is_form_cell_child(e: &mut Engine, form: Ptr) -> u8 {
+    if form.is_null() {
+        return 0;
+    }
+    let first = e.mem.u32(form.addr());
+    let expected: u32 = e.global(CELL_CHILD_FORM_WORD);
+    if first == expected {
+        let kind = e.mem.u32(form.addr() + 0x0c);
+        u8::from(kind == 6 || (kind > 7 && kind <= 9))
+    } else {
+        let kind = e.call(FORM_TYPE_FROM_STRING, &args![first]).u32();
+        u8::from(fn_005548a0(e, kind as u8))
+    }
+}
+
+// Translated from 00554880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// thiscall wrapper that ignores `this` and answers `fn_005548a0(kind)`.
+pub fn fn_00554880(e: &mut Engine, _unused_0: Ptr, kind: u8) -> bool {
+    fn_005548a0(e, kind)
+}
+
+// Translated from 005548a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// cdecl `(kind)`: true for the form type bytes `0x3a` to `0x40`, `0x42`,
+/// `0x43` and `0x69` (a jump table). The names of those types are not
+/// confirmed from the exe.
+pub fn fn_005548a0(_e: &mut Engine, kind: u8) -> bool {
+    matches!(kind, 0x3a..=0x40 | 0x42 | 0x43 | 0x69)
+}
+
+// Translated from 00554910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// With the cell's Havok world (`004543c0`): sets `flag = (byte at +0x16 of
+/// the world object (004bae00) == 0)`, runs `fn_00554960(flag)` and answers
+/// the flag; 0 without a world.
+pub fn fn_00554910(e: &mut Engine, this: Ptr<TESObjectCELL>) -> u8 {
+    let world = e.call(CELL_HAVOK_WORLD, &args![this]).u32();
+    if world == 0 {
+        return 0;
+    }
+    let flag = u8::from(e.call(WORLD_BYTE_16, &args![world]).u8() == 0);
+    fn_00554960(e, this, flag);
+    flag
+}
+
+// Translated from 00554960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// With the cell's Havok world and the cell's 3D (`TESObjectCELL::Get3D`):
+/// calls the world's virtual `+0xd8(node, flag)`, `fn_00554a20(flag)` and
+/// `PrepareObjectWithNoLightingRecurse(node)`.
+pub fn fn_00554960(e: &mut Engine, this: Ptr<TESObjectCELL>, flag: u8) {
+    let world = e.call(CELL_HAVOK_WORLD, &args![this]).u32();
+    let node = e.call(CELL_NODE_OF_CELL, &args![this]).u32();
+    if world != 0 && node != 0 {
+        e.vcall(world, WORLD_PREPARE_SLOT, &args![node, flag]);
+        fn_00554a20(e, this, flag);
+        e.call(PREPARE_WITHOUT_LIGHTING, &args![node]);
+    }
+}
+
+// Translated from 005549d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Walks the list at `+0xac` of the cell; stops at the first node without an
+/// item and calls `00577390(item, flag)` on every item before it.
+pub fn fn_005549d0(e: &mut Engine, this: Ptr<TESObjectCELL>, flag: u8) {
+    let mut node = this.addr() + CELL_LIST_AC;
+    while node != 0 {
+        let item = node_item(e, Ptr::new(node));
+        if item.is_null() {
+            return;
+        }
+        let item = node_item(e, Ptr::new(node));
+        e.call(REFERENCE_UPDATE_FOR_FLAG, &args![item, flag]);
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+}
+
+// Translated from 00554a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Updates references for `flag`: first, from the last to the first, the
+/// children of the cell's node (`0054a050`, `0043b480` and `0043b4a0`
+/// give them) that have a reference (`TESObjectREFR::FindReferenceFor3D`)
+/// get the reference's virtual `+0x2f0(flag)`. Then, for every child of
+/// `00456fc0(cell, 7)` that answers true to its virtual `+0x14` or is in
+/// the table at `01202828` (`0045bad0`), every one of its own children whose
+/// reference answers true to virtual `+0x100` gets `+0x2f0(flag)`.
+pub fn fn_00554a20(e: &mut Engine, this: Ptr<TESObjectCELL>, flag: u8) {
+    let node = e.call(CELL_NODE_B, &args![this]).u32();
+    let mut remaining = e.call(NODE_CHILD_COUNT, &args![node]).u32();
+    while remaining != 0 {
+        remaining -= 1;
+        let child = e.call(NODE_CHILD_AT, &args![node, remaining]).u32();
+        let reference = e.call(FIND_REFERENCE_FOR_3D, &args![child]).u32();
+        if reference != 0 {
+            e.vcall(reference, REFERENCE_UPDATE_SLOT, &args![flag]);
+        }
+    }
+    let group = e.call(CELL_CHILD_NODE, &args![this, 7u32]).u32();
+    let mut index = 0u32;
+    while index < e.call(NODE_CHILD_COUNT, &args![group]).u32() {
+        let child = e.call(NODE_CHILD_AT, &args![group, index]).u32();
+        index += 1;
+        if child == 0 {
+            continue;
+        }
+        let qualifies = e.vcall(child, NODE_FLAG_SLOT, &[]).u32() != 0
+            || e.call(NODE_TABLE_TEST, &args![NODE_TABLE, child]).bool();
+        if !qualifies {
+            continue;
+        }
+        let mut inner = 0u32;
+        while inner < e.call(NODE_CHILD_COUNT, &args![child]).u32() {
+            let grandchild = e.call(NODE_CHILD_AT, &args![child, inner]).u32();
+            inner += 1;
+            if grandchild != 0 {
+                let reference = e.call(FIND_REFERENCE_FOR_3D, &args![grandchild]).u32();
+                if e.vcall(reference, REFERENCE_QUERY_SLOT, &[]).bool() {
+                    e.vcall(reference, REFERENCE_UPDATE_SLOT, &args![flag]);
+                }
+            }
+        }
+    }
+}
+
+// Translated from 00554b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The size of a cell's save-game record for `flags` (the map has no name for
+/// it; its trace message says `GetSaveSize`): `4` for flag `0x40000000`, the
+/// base class size (`00484bf0`), `6` when save blocks are used, `1` for flag
+/// 2, the seen data's size (virtual `+8`) for `0x80000000`, `1` plus the
+/// length of the cell's name for 4, `4` for 8. The sum is a 16-bit value.
+/// When the trace holder (`011de4e8`) is set it reports the bytes added
+/// after the base class's part through `Error`.
+pub fn fn_00554b90(e: &mut Engine, this: Ptr<TESObjectCELL>, flags: u32) -> u16 {
+    let mut size: u16 = 0;
+    if flags & 0x4000_0000 != 0 {
+        size = size.wrapping_add(4);
+    }
+    size = size.wrapping_add(e.call(FORM_SAVE_SIZE, &args![this, flags]).u16());
+    let base = size;
+    let buffer: u32 = e.global(SAVE_GAME_POINTER);
+    if e.call(USE_SAVE_GAME_BLOCKS, &args![buffer]).bool() {
+        size = size.wrapping_add(4).wrapping_add(2);
+    }
+    if flags & 2 != 0 {
+        size = size.wrapping_add(1);
+    }
+    if flags & 0x8000_0000 != 0 {
+        let seen = e.call(CELL_SEEN_DATA, &args![this]).u32();
+        size = size.wrapping_add(e.vcall(seen, SEEN_DATA_SIZE_SLOT, &args![0u32]).u16());
+    }
+    if flags & 4 != 0 {
+        size = size.wrapping_add(1);
+        let name = e.call(TEXT_GET_STRING, &args![this.byte_add(0x18)]).u32();
+        size = size.wrapping_add(e.call(STRING_LENGTH, &args![name]).u16());
+    }
+    if flags & 8 != 0 {
+        size = size.wrapping_add(4);
+    }
+    let holder = e.call(BYTE_HOLDER_GET, &args![SAVE_TRACE_HOLDER]).u32();
+    if e.mem.u8(holder) != 0 {
+        let bytes = (size as u32).wrapping_sub(base as u32);
+        report_saved_bytes(e, 0x0101_2cb0, 0x0101_2c78, bytes, 0x3d51);
+    }
+    size
+}
+
+// Translated from 00554d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes the cell's save-game record for `flags` to the save-game buffer
+/// (`011de45c`): the detach time for `0x40000000`; the base class part
+/// (`00484c20`); when save blocks are used, the marker `BLOK` and a 16-bit
+/// length slot, filled at the end with the number of bytes written; the
+/// packed flags byte `(cCellFlags & 0x60) | cCellGameFlags` for 2; the seen
+/// data (virtual `+0x10`) for `0x80000000`; the name's length byte and
+/// characters for 4; the owner's form id for 8. When the trace holder is set
+/// it reports the bytes written through `Error`; a block longer than 0xffff
+/// bytes is reported through `005b5e40`. The exception frame is not
+/// translated.
+pub fn fn_00554d30(e: &mut Engine, this: Ptr<TESObjectCELL>, flags: u32) {
+    e.with_stack(0x14, |e, locals| {
+        let magic = locals;
+        let length_slot = locals.byte_add(4);
+        let flags_byte = locals.byte_add(8);
+        let name_length = locals.byte_add(9);
+        let owner_id = locals.byte_add(12);
+        let detach_time = locals.byte_add(16);
+        if flags & 0x4000_0000 != 0 {
+            let time = e.call(CELL_DETACH_TIME, &args![this]).u32();
+            e.mem.set_u32(detach_time.addr(), time);
+            e.call(FORM_SAVE_GAME_DATA, &args![this, detach_time, 4u32]);
+        }
+        e.call(FORM_SAVE_BASE, &args![this, flags]);
+        e.mem.set_u16(length_slot.addr(), 0);
+        let mut block_start = 0u32;
+        let buffer: u32 = e.global(SAVE_GAME_POINTER);
+        let mut start = e.call(BUFFER_POSITION, &args![buffer]).u32();
+        let holder = e.call(BYTE_HOLDER_GET, &args![SAVE_TRACE_HOLDER]).u32();
+        if e.mem.u8(holder) != 0 {
+            let buffer: u32 = e.global(SAVE_GAME_POINTER);
+            start = e.call(BUFFER_POSITION, &args![buffer]).u32();
+        }
+        let buffer: u32 = e.global(SAVE_GAME_POINTER);
+        if e.call(USE_SAVE_GAME_BLOCKS, &args![buffer]).bool() {
+            e.mem.set_u32(magic.addr(), 0x424c_4f4b);
+            e.call(BUFFER_WRITE, &args![buffer, magic, 4u32]);
+            block_start = e.call(BUFFER_POSITION, &args![buffer]).u32();
+            e.call(BUFFER_WRITE, &args![buffer, length_slot, 2u32]);
+        }
+        if flags & 2 != 0 {
+            let packed = packed_cell_flags(e, this);
+            e.mem.set_u8(flags_byte.addr(), packed);
+            e.call(FORM_SAVE_GAME_DATA, &args![this, flags_byte, 1u32]);
+        }
+        if flags & 0x8000_0000 != 0 {
+            let seen = e.call(CELL_SEEN_DATA, &args![this]).u32();
+            e.vcall(seen, SEEN_DATA_SAVE_GAME_SLOT, &args![0u32]);
+        }
+        if flags & 4 != 0 {
+            let name = e.call(TEXT_GET_STRING, &args![this.byte_add(0x18)]).u32();
+            let length = e.call(STRING_LENGTH, &args![name]).u8();
+            e.mem.set_u8(name_length.addr(), length);
+            e.call(FORM_SAVE_GAME_DATA, &args![this, name_length, 1u32]);
+            if length != 0 {
+                e.call(FORM_SAVE_GAME_DATA, &args![this, name, length]);
+            }
+        }
+        if flags & 8 != 0 {
+            let owner = e.call(CELL_OWNER, &args![this]).u32();
+            let mut id = 0;
+            if owner != 0 {
+                id = e.call(FORM_ID, &args![owner]).u32();
+            }
+            e.mem.set_u32(owner_id.addr(), id);
+            e.call(FORM_SAVE_NUMERIC_ID, &args![this, owner_id, 4u32]);
+        }
+        let holder = e.call(BYTE_HOLDER_GET, &args![SAVE_TRACE_HOLDER]).u32();
+        if e.mem.u8(holder) != 0 {
+            let buffer: u32 = e.global(SAVE_GAME_POINTER);
+            let position = e.call(BUFFER_POSITION, &args![buffer]).u32();
+            report_saved_bytes(
+                e,
+                0x0101_53a0,
+                0x0101_536c,
+                position.wrapping_sub(start),
+                0x3d86,
+            );
+        }
+        let buffer: u32 = e.global(SAVE_GAME_POINTER);
+        if e.call(USE_SAVE_GAME_BLOCKS, &args![buffer]).bool() {
+            let position = e.call(BUFFER_POSITION, &args![buffer]).u32();
+            if position > block_start.wrapping_add(0xffff) {
+                e.call(
+                    DEBUG_PRINT,
+                    &args![0x0101_5318u32, SOURCE_FILE_NAME, 0x3d86u32],
+                );
+            }
+            e.mem
+                .set_u16(block_start, position.wrapping_sub(block_start) as u16);
+        }
+    });
+}
+
+// Translated from 00554fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads the cell's save-game record for `flags` (`extra` goes to the base
+/// class's `TESForm::LoadGame`). From the buffer version `0x5a`, the detach
+/// time for `0x40000000` is read first (stored through the extra data
+/// list's `00421850`); older versions read it after the seen data. When
+/// save blocks are used, the marker `BLOK` is checked (a wrong one is
+/// reported through `005b5e40`) and the 16-bit length read; flag 2 unpacks
+/// the flags byte into `cCellFlags` and `cCellGameFlags`; `0x80000000` reads
+/// the seen data (created when the cell has none, virtual `+0x18(0xffff)`);
+/// 4 reads the name (length byte and characters, cleared first) into
+/// `TESSoundFile::SetSoundFile` of `this + 0x18`; 8 reads the owner's form
+/// id. Finally the position is compared with the block's end and an overrun
+/// or underrun is reported. The exception frame is not translated.
+pub fn fn_00554fd0(e: &mut Engine, this: Ptr<TESObjectCELL>, flags: u32, extra: u32) {
+    e.with_stack(0x120, |e, locals| {
+        let time = locals;
+        let magic = locals.byte_add(4);
+        let length_slot = locals.byte_add(8);
+        let flags_byte = locals.byte_add(12);
+        let name_length = locals.byte_add(13);
+        let owner_id = locals.byte_add(16);
+        let name_buffer = locals.byte_add(0x14);
+        let buffer: u32 = e.global(SAVE_GAME_POINTER);
+        let version = e.call(BUFFER_VERSION, &args![buffer]).u8();
+        if version >= 0x5a && flags & 0x4000_0000 != 0 {
+            e.call(FORM_LOAD_GAME_DATA, &args![this, time, 4u32]);
+            let list = e.call(CELL_EXTRA_DATA_LIST, &args![this]).u32();
+            let value = e.mem.u32(time.addr());
+            e.call(EXTRA_LIST_SET_FIELD, &args![list, value]);
+        }
+        e.call(FORM_LOAD_GAME, &args![this, flags, extra]);
+        e.mem.set_u16(length_slot.addr(), 0);
+        let mut block_start = 0u32;
+        let buffer: u32 = e.global(SAVE_GAME_POINTER);
+        if e.call(USE_SAVE_GAME_BLOCKS, &args![buffer]).bool() {
+            e.call(BUFFER_READ, &args![buffer, magic, 4u32]);
+            if e.mem.u32(magic.addr()) != 0x424c_4f4b {
+                let info = e.call(LOADING_FORM_INFO, &args![buffer]).u32();
+                let form = find_form_of(e, info);
+                report_load_problem(e, (0x0101_5718, 0x0101_56a8), None, 0x3d9d, (info, form));
+            }
+            block_start = e.call(BUFFER_POSITION, &args![buffer]).u32();
+            e.call(BUFFER_READ, &args![buffer, length_slot, 2u32]);
+        }
+        if flags & 2 != 0 {
+            e.call(FORM_LOAD_GAME_DATA, &args![this, flags_byte, 1u32]);
+            let packed = e.mem.u8(flags_byte.addr());
+            unpack_cell_flags(e, this, packed);
+        }
+        if flags & 0x8000_0000 != 0 {
+            let seen = seen_data_or_create(e, this);
+            e.vcall(seen, SEEN_DATA_LOAD_GAME_SLOT, &args![0xffffu32]);
+        }
+        let buffer: u32 = e.global(SAVE_GAME_POINTER);
+        let version = e.call(BUFFER_VERSION, &args![buffer]).u8();
+        if version < 0x5a && flags & 0x4000_0000 != 0 {
+            e.call(FORM_LOAD_GAME_DATA, &args![this, time, 4u32]);
+            let list = e.call(CELL_EXTRA_DATA_LIST, &args![this]).u32();
+            let value = e.mem.u32(time.addr());
+            e.call(EXTRA_LIST_SET_FIELD, &args![list, value]);
+        }
+        if flags & 4 != 0 {
+            e.call(CLEAR_BUFFER, &args![name_buffer, 0u32, 0x104u32]);
+            e.call(FORM_LOAD_GAME_DATA, &args![this, name_length, 1u32]);
+            let length = e.mem.u8(name_length.addr());
+            if length != 0 {
+                e.call(FORM_LOAD_GAME_DATA, &args![this, name_buffer, length]);
+            }
+            e.call(FULL_NAME_SET, &args![this.byte_add(0x18), name_buffer]);
+        }
+        if flags & 8 != 0 {
+            e.call(FORM_LOAD_NUMERIC_ID, &args![this, owner_id, 4u32]);
+            let id = e.mem.u32(owner_id.addr());
+            e.call(CELL_SET_OWNER, &args![this, id]);
+        }
+        let buffer: u32 = e.global(SAVE_GAME_POINTER);
+        if e.call(USE_SAVE_GAME_BLOCKS, &args![buffer]).bool() {
+            let position = e.call(BUFFER_POSITION, &args![buffer]).u32();
+            let info = e.call(LOADING_FORM_INFO, &args![buffer]).u32();
+            let expected = (e.mem.u16(length_slot.addr()) as u32).wrapping_add(block_start);
+            let form = find_form_of(e, info);
+            if position > expected {
+                report_load_problem(
+                    e,
+                    (0x0101_5588, 0x0101_54a0),
+                    Some(position.wrapping_sub(expected)),
+                    0x3dd5,
+                    (info, form),
+                );
+            } else if position < expected {
+                report_load_problem(
+                    e,
+                    (0x0101_5500, 0x0101_5440),
+                    Some(expected.wrapping_sub(position)),
+                    0x3dd5,
+                    (info, form),
+                );
+            }
+        }
+    });
+}
+
+// Translated from 00555570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `004534f0(this, flags)`; when `0055f5b0` on the save-game buffer
+/// is true clears `cCellGameFlags`; for `0x80000000` calls `00555be0`, for
+/// `0x40000000` calls `00546b10(this, 0, 0)`.
+pub fn fn_00555570(e: &mut Engine, this: Ptr<TESObjectCELL>, flags: u32) {
+    e.call(CELL_EMPTY_CALL, &args![this, flags]);
+    let buffer: u32 = e.global(SAVE_GAME_POINTER);
+    if e.call(BUFFER_FIELD_48_IS_ZERO, &args![buffer]).bool() {
+        e.set(this, TESObjectCELL::cCellGameFlags, 0);
+    }
+    if flags & 0x8000_0000 != 0 {
+        e.call(CELL_CLEAR_SEEN_DATA, &args![this]);
+    }
+    if flags & 0x4000_0000 != 0 {
+        e.call(CELL_RESET_DETACH_TIME, &args![this, 0u32, 0u32]);
+    }
+}
+
+// Translated from 005555d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `008d0600(this, flags, extra)` (the map names that folded body
+/// `ProcessLists::PrintLists`); for flag 8, when the cell has an owner
+/// (`TESObjectCELL::GetOwner`), sets the owner to the form `004839c0` finds
+/// for it.
+pub fn fn_005555d0(e: &mut Engine, this: Ptr<TESObjectCELL>, flags: u32, extra: u32) {
+    e.call(CELL_CALL_WITH_TWO_WORDS, &args![this, flags, extra]);
+    if flags & 8 != 0 {
+        let owner = e.call(CELL_OWNER, &args![this]).u32();
+        if owner != 0 {
+            let form = e.call(FORM_LOOK_UP, &args![owner]).u32();
+            e.call(CELL_SET_OWNER, &args![this, form]);
+        }
+    }
+}
+
+// Translated from 00555630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Saves the cell to a save-game buffer object (`buffer`): the base class
+/// part (`00484d60`), then for each flag the buffer holds: 2 the packed flags
+/// byte, `0x80000000` the seen data (virtual `+0x0c(buffer)`), 4 the name
+/// (`00865e70`), 8 the owner's form id (`00865df0`).
+pub fn fn_00555630(e: &mut Engine, this: Ptr<TESObjectCELL>, buffer: Ptr) {
+    e.call(FORM_SAVE_TO_BUFFER, &args![this, buffer]);
+    if buffer_has_flag(e, buffer, BUFFER_FLAGS_GET, 2) {
+        let packed = packed_cell_flags(e, this);
+        e.with_stack(4, |e, local| {
+            e.mem.set_u8(local.addr(), packed);
+            e.call(BUFFER_SAVE_BYTES, &args![buffer, local, 1u32, 0u32]);
+        });
+    }
+    if buffer_has_flag(e, buffer, BUFFER_FLAGS_GET, 0x8000_0000) {
+        let seen = e.call(CELL_SEEN_DATA, &args![this]).u32();
+        e.vcall(seen, SEEN_DATA_SAVE_BUFFER_SLOT, &args![buffer]);
+    }
+    if buffer_has_flag(e, buffer, BUFFER_FLAGS_GET, 4) {
+        let name = e.call(TEXT_GET_STRING, &args![this.byte_add(0x18)]).u32();
+        e.call(BUFFER_SAVE_STRING, &args![buffer, name, 0u32]);
+    }
+    if buffer_has_flag(e, buffer, BUFFER_FLAGS_GET, 8) {
+        let owner = e.call(CELL_OWNER, &args![this]).u32();
+        e.call(BUFFER_SAVE_FORM_ID, &args![buffer, owner, 0u32]);
+    }
+}
+
+// Translated from 00555740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Loads the cell from a save-game buffer object: the base class part
+/// (`00484da0`), then for each flag the buffer holds: 2 the packed flags byte
+/// (`00864980`), `0x80000000` the seen data (created when missing, virtual
+/// `+0x14(buffer)`), 4 the name (`008649a0`, then `TESSoundFile::SetSoundFile`
+/// of `this + 0x18`), 8 the owner's form id (`008648e0`). The exception frame
+/// is not translated.
+pub fn fn_00555740(e: &mut Engine, this: Ptr<TESObjectCELL>, buffer: Ptr) {
+    e.call(FORM_LOAD_FROM_BUFFER, &args![this, buffer]);
+    if buffer_has_flag(e, buffer, BUFFER_FLAGS_GET, 2) {
+        let packed = e.with_stack(4, |e, local| {
+            e.mem.set_u8(local.addr(), 0);
+            e.call(BUFFER_LOAD_BYTES, &args![buffer, local, 1u32]);
+            e.mem.u8(local.addr())
+        });
+        unpack_cell_flags(e, this, packed);
+    }
+    if buffer_has_flag(e, buffer, BUFFER_FLAGS_GET, 0x8000_0000) {
+        let seen = seen_data_or_create(e, this);
+        e.vcall(seen, SEEN_DATA_LOAD_BUFFER_SLOT, &args![buffer]);
+    }
+    if buffer_has_flag(e, buffer, BUFFER_FLAGS_GET, 4) {
+        e.with_stack(0x10c, |e, name| {
+            e.call(BUFFER_LOAD_STRING, &args![buffer, name]);
+            e.call(FULL_NAME_SET, &args![this.byte_add(0x18), name]);
+        });
+    }
+    if buffer_has_flag(e, buffer, BUFFER_FLAGS_GET, 8) {
+        let id = e.with_stack(4, |e, local| {
+            e.mem.set_u32(local.addr(), 0);
+            e.call(BUFFER_LOAD_FORM_ID, &args![buffer, local]);
+            e.mem.u32(local.addr())
+        });
+        e.call(CELL_SET_OWNER, &args![this, id]);
+    }
+}
+
+// Translated from 005559d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `004534f0(this, buffer)`; for the buffer's flag 8, when the cell has an
+/// owner, sets the owner to the form `004839c0` finds for it.
+pub fn fn_005559d0(e: &mut Engine, this: Ptr<TESObjectCELL>, buffer: Ptr) {
+    e.call(CELL_EMPTY_CALL, &args![this, buffer]);
+    if buffer_has_flag(e, buffer, BUFFER_FLAGS_GET, 8) {
+        let owner = e.call(CELL_OWNER, &args![this]).u32();
+        if owner != 0 {
+            let form = e.call(FORM_LOOK_UP, &args![owner]).u32();
+            e.call(CELL_SET_OWNER, &args![this, form]);
+        }
+    }
+}
+
+// Translated from 00555a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `004534f0(this, buffer)`, clears `cCellGameFlags`, and for the
+/// buffer's flags (read with `0042ce30`) `0x80000000` calls `00555be0`, for
+/// `0x40000000` calls `00546b10(this, 0, 0)`.
+pub fn fn_00555a50(e: &mut Engine, this: Ptr<TESObjectCELL>, buffer: Ptr) {
+    e.call(CELL_EMPTY_CALL, &args![this, buffer]);
+    e.set(this, TESObjectCELL::cCellGameFlags, 0);
+    if buffer_has_flag(e, buffer, BUFFER_FLAGS_GET_OTHER, 0x8000_0000) {
+        e.call(CELL_CLEAR_SEEN_DATA, &args![this]);
+    }
+    if buffer_has_flag(e, buffer, BUFFER_FLAGS_GET_OTHER, 0x4000_0000) {
+        e.call(CELL_RESET_DETACH_TIME, &args![this, 0u32, 0u32]);
+    }
+}
+
+// Translated from 00555ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The cell's north rotation: for an interior cell, `00421a40` of the extra
+/// data list (`ST0`, stored as a `float`); `0.0` for an exterior.
+pub fn fn_00555ad0(e: &mut Engine, this: Ptr<TESObjectCELL>) -> f32 {
+    if e.call(CELL_IS_INTERIOR, &args![this]).bool() {
+        let list = e.call(CELL_EXTRA_DATA_LIST, &args![this]).u32();
+        e.call(EXTRA_LIST_GET_ROTATION, &args![list]).f32()
+    } else {
+        0.0
+    }
+}
+
+// Translated from 00555b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCELL::AdjustCoordForNorthRotation` (Xbox PDB) `(this, source,
+/// destination, reverse)`: the angle is the cell's north rotation times 1.0
+/// (or the `float` at `01012054` when `reverse` is non-zero). When it equals
+/// the `double` at `01012060` the three floats of `source` are copied to
+/// `destination`; otherwise a rotation matrix (`011a9448` copied to the
+/// stack, `004a0c90(matrix, angle)`) rotates `source` (`004b3ae0`) and the
+/// result is stored in `destination`.
+pub fn tes_object_cell_adjust_coord_for_north_rotation(
+    e: &mut Engine,
+    this: Ptr<TESObjectCELL>,
+    source: Ptr,
+    destination: Ptr,
+    reverse: u8,
+) {
+    let sign: f32 = if reverse != 0 {
+        e.global(MINUS_ONE_FLOAT)
+    } else {
+        1.0
+    };
+    let rotation = fn_00555ad0(e, this);
+    let angle = (rotation as f64 * sign as f64) as f32;
+    let epsilon: f64 = e.global(ROTATION_EPSILON);
+    if angle as f64 == epsilon {
+        for index in 0..3u32 {
+            let value = e.mem.u32(source.addr() + 4 * index);
+            e.mem.set_u32(destination.addr() + 4 * index, value);
+        }
+    } else {
+        e.with_stack(0x24 + 0x0c, |e, block| {
+            let matrix = block;
+            let rotated = block.byte_add(0x24);
+            for index in 0..9u32 {
+                let word = e.mem.u32(IDENTITY_ROTATION + 4 * index);
+                e.mem.set_u32(matrix.addr() + 4 * index, word);
+            }
+            e.call(ROTATION_MATRIX_BUILD, &args![matrix, angle]);
+            let result = e.call(ROTATE_VECTOR, &args![rotated, source, matrix]).u32();
+            for index in 0..3u32 {
+                let value = e.mem.u32(result + 4 * index);
+                e.mem.set_u32(destination.addr() + 4 * index, value);
+            }
+        });
+    }
+}
+
+// Translated from 00556870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCELL::GetSeenValue` (Xbox PDB), cdecl `(position)`: counts, up
+/// to 4, how many of the four corners of the 16-by-16 seen-data tile around
+/// `position` are seen, for the cell the player object (`011dea3c`) is in
+/// (0 without one). An interior cell asks its own sections
+/// (`GetIntSeenSection(x, y, 0)`, the coordinates shifted by `0x800`);
+/// an exterior one asks the world space's cells (`GetCellFromCellCoord`),
+/// where a cell counts as seen if its seen data has the bit or its flag
+/// `00556850` is set. A corner at the end of a tile (index 15) reads the next
+/// tile.
+pub fn tes_object_cell_get_seen_value(e: &mut Engine, position: Ptr) -> i32 {
+    let player: u32 = e.global(PLAYER_OBJECT);
+    let cell = e
+        .call(REFERENCE_PARENT_CELL, &args![player])
+        .ptr::<TESObjectCELL>();
+    if cell.is_null() {
+        return 0;
+    }
+    let mut count = 0;
+    if e.call(CELL_IS_INTERIOR, &args![cell]).bool() {
+        seen_value_interior(e, cell, position, &mut count);
+    } else {
+        let world = e.call(CELL_GET_WORLD_SPACE, &args![cell]).u32();
+        if world != 0 {
+            seen_value_exterior(e, world, position, &mut count);
+        }
+    }
+    count
+}
+
+/// Helper: `float` coordinate `index` of `position` as the game's integer
+/// (`ftol`, `00406d90`).
+fn position_as_integer(e: &mut Engine, position: Ptr, index: u32) -> i32 {
+    let value = e.mem.f32(position.addr() + 4 * index);
+    e.call(FLOAT_TO_INT, &args![value]).i32()
+}
+
+/// Helper: the interior half of [`tes_object_cell_get_seen_value`].
+fn seen_value_interior(e: &mut Engine, cell: Ptr<TESObjectCELL>, position: Ptr, count: &mut i32) {
+    let section_x = (position_as_integer(e, position, 0) - 0x800) >> 12;
+    let section_y = (position_as_integer(e, position, 1) - 0x800) >> 12;
+    let (bit_x, bit_y) = seen_bit_index(e, position, 1);
+    let is_seen = |e: &mut Engine, section: u32, x: u32, y: u32| {
+        section != 0 && e.call(SEEN_BIT_IS_SET, &args![section, x, y]).bool()
+    };
+    let first = interior_section(e, cell, section_x, section_y);
+    if is_seen(e, first, bit_x, bit_y) {
+        *count += 1;
+    }
+    let mut below = 0;
+    let mut at_bottom = false;
+    if bit_y == 0xf {
+        at_bottom = true;
+        below = interior_section(e, cell, section_x, section_y + 1);
+        if is_seen(e, below, bit_x, 0) {
+            *count += 1;
+        }
+    } else if is_seen(e, first, bit_x, bit_y + 1) {
+        *count += 1;
+    }
+    let mut right = 0;
+    let mut at_right = false;
+    if bit_x == 0xf {
+        at_right = true;
+        right = interior_section(e, cell, section_x + 1, section_y);
+        if is_seen(e, right, 0, bit_y) {
+            *count += 1;
+        }
+    } else if is_seen(e, first, bit_x + 1, bit_y) {
+        *count += 1;
+    }
+    if at_bottom && at_right {
+        let corner = interior_section(e, cell, section_x + 1, section_y + 1);
+        if is_seen(e, corner, 0, 0) {
+            *count += 1;
+        }
+    } else if at_bottom {
+        if is_seen(e, below, bit_x + 1, 0) {
+            *count += 1;
+        }
+    } else if at_right {
+        if is_seen(e, right, 0, bit_y + 1) {
+            *count += 1;
+        }
+    } else if is_seen(e, first, bit_x + 1, bit_y + 1) {
+        *count += 1;
+    }
+}
+
+/// Helper: `00879da0(position, interior, &x, &y)` (cdecl): the bit
+/// coordinates of `position` inside its seen-data tile.
+fn seen_bit_index(e: &mut Engine, position: Ptr, interior: u32) -> (u32, u32) {
+    e.with_stack(8, |e, out| {
+        e.mem.set_u32(out.addr(), 0);
+        e.mem.set_u32(out.addr() + 4, 0);
+        e.call(
+            SEEN_DATA_INDEX,
+            &args![position, interior, out, out.byte_add(4)],
+        );
+        (e.mem.u32(out.addr()), e.mem.u32(out.addr() + 4))
+    })
+}
+
+/// Helper: `GetIntSeenSection(x, y, 0)` of an interior cell.
+fn interior_section(e: &mut Engine, cell: Ptr<TESObjectCELL>, x: i32, y: i32) -> u32 {
+    tes_object_cell_get_int_seen_section(e, cell, x, y, 0).addr()
+}
+
+/// Helper: the exterior half of [`tes_object_cell_get_seen_value`].
+fn seen_value_exterior(e: &mut Engine, world: u32, position: Ptr, count: &mut i32) {
+    let cell_x = position_as_integer(e, position, 0) >> 12;
+    let cell_y = position_as_integer(e, position, 1) >> 12;
+    let (bit_x, bit_y) = seen_bit_index(e, position, 0);
+    // The cell at the cell coordinates and its seen data (0 for no cell).
+    let cell_at = |e: &mut Engine, x: i32, y: i32| -> (u32, u32) {
+        let cell = e.call(WORLD_SPACE_GET_CELL, &args![world, x, y]).u32();
+        let seen = if cell == 0 {
+            0
+        } else {
+            e.call(CELL_SEEN_DATA, &args![cell]).u32()
+        };
+        (cell, seen)
+    };
+    let counts = |e: &mut Engine, cell: u32, seen: u32, x: u32, y: u32| {
+        (seen != 0 && e.call(SEEN_BIT_IS_SET, &args![seen, x, y]).bool())
+            || (cell != 0 && e.call(CELL_SEEN_FLAG, &args![cell]).bool())
+    };
+    let (first_cell, first_seen) = cell_at(e, cell_x, cell_y);
+    if counts(e, first_cell, first_seen, bit_x, bit_y) {
+        *count += 1;
+    }
+    let (mut below_cell, mut below_seen) = (0, 0);
+    let mut at_bottom = false;
+    if bit_y == 0xf {
+        at_bottom = true;
+        (below_cell, below_seen) = cell_at(e, cell_x, cell_y + 1);
+        if counts(e, below_cell, below_seen, bit_x, 0) {
+            *count += 1;
+        }
+    } else if counts(e, first_cell, first_seen, bit_x, bit_y + 1) {
+        *count += 1;
+    }
+    let (mut right_cell, mut right_seen) = (0, 0);
+    let mut at_right = false;
+    if bit_x == 0xf {
+        at_right = true;
+        (right_cell, right_seen) = cell_at(e, cell_x + 1, cell_y);
+        if counts(e, right_cell, right_seen, 0, bit_y) {
+            *count += 1;
+        }
+    } else if counts(e, first_cell, first_seen, bit_x + 1, bit_y) {
+        *count += 1;
+    }
+    if at_bottom && at_right {
+        let (corner_cell, corner_seen) = cell_at(e, cell_x + 1, cell_y + 1);
+        if counts(e, corner_cell, corner_seen, 0, 0) {
+            *count += 1;
+        }
+    } else if at_bottom {
+        if counts(e, below_cell, below_seen, bit_x + 1, 0) {
+            *count += 1;
+        }
+    } else if at_right {
+        if counts(e, right_cell, right_seen, 0, bit_y + 1) {
+            *count += 1;
+        }
+    } else if counts(e, first_cell, first_seen, bit_x + 1, bit_y + 1) {
+        *count += 1;
+    }
+}
+
+// Translated from 00556ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCELL::GetIntSeenSection` (Xbox PDB) `(this, x, y, create)`: for
+/// an interior cell, finds in the chain of seen-data sections of the cell
+/// (the cell's seen data cast to the section type, next section at `+0x28`)
+/// the one whose bytes at `+0x24` and `+0x25` equal `x` and `y` (as signed
+/// bytes). If none and `create` is non-zero, appends a new section
+/// (`0x2c` bytes, constructor `0087a100(x, y)`), or, when the cell had no
+/// seen data at all, stores it as the cell's seen data and calls the cell's
+/// virtual `+0x48(0x80000000)`. Returns the section or null. The exception
+/// frame is not translated.
+pub fn tes_object_cell_get_int_seen_section(
+    e: &mut Engine,
+    this: Ptr<TESObjectCELL>,
+    x: i32,
+    y: i32,
+    create: u8,
+) -> Ptr {
+    if !e.call(CELL_IS_INTERIOR, &args![this]).bool() {
+        return Ptr::NULL;
+    }
+    let seen = e.call(CELL_SEEN_DATA, &args![this]).u32();
+    let mut section = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![
+                seen,
+                0u32,
+                SEEN_DATA_CAST_SOURCE,
+                SEEN_DATA_CAST_TARGET,
+                0u32
+            ],
+        )
+        .u32();
+    let mut previous = 0u32;
+    while section != 0 {
+        let section_x = e.mem.i8(section + 0x24) as i32;
+        let section_y = e.mem.i8(section + 0x25) as i32;
+        if section_x == x && section_y == y {
+            break;
+        }
+        previous = section;
+        section = e.mem.u32(section + 0x28);
+    }
+    if section == 0 && create != 0 {
+        let block = e.call(OPERATOR_NEW, &args![0x2cu32]).u32();
+        let created = if block == 0 {
+            0
+        } else {
+            e.call(
+                INTERIOR_SEEN_DATA_CONSTRUCT,
+                &args![block, x as u8 as u32, y as u8 as u32],
+            )
+            .u32()
+        };
+        if previous != 0 {
+            e.mem.set_u32(previous + 0x28, created);
+            section = e.mem.u32(previous + 0x28);
+        } else {
+            section = created;
+            let list = e.call(CELL_EXTRA_DATA_LIST, &args![this]).u32();
+            e.call(EXTRA_LIST_SET_SEEN_DATA, &args![list, section]);
+            e.vcall(this.addr(), CELL_CHANGED_SLOT, &args![0x8000_0000u32]);
+        }
+    }
+    Ptr::new(section)
+}
+
+// Translated from 00557090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fn_005570b0` on the object at `this + 0x80`.
+pub fn fn_00557090(e: &mut Engine, this: Ptr) -> bool {
+    fn_005570b0(e, this.byte_add(0x80))
+}
+
+// Translated from 005570b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when the word at `this` is not zero.
+pub fn fn_005570b0(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr()) != 0
+}
+
+// Translated from 005570d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Under the cell lock, for every reference of the cell that is not null,
+/// fails the test `005651e0` and whose base object (`007af430`) has form
+/// type `0x25`: when its virtual `+0x1d0` gives an object, calls that
+/// object's virtual `+0x100` and then the virtual `+8(object)` of the result.
+/// The map has no name for it.
+pub fn fn_005570d0(e: &mut Engine, this: Ptr<TESObjectCELL>) {
+    for_each_cell_reference_locked(e, this, |e, reference| {
+        if reference.is_null() || e.call(REFERENCE_TEST, &args![reference]).bool() {
+            return;
+        }
+        let base = e.call(REFERENCE_BASE_OBJECT, &args![reference]).u32();
+        if e.call(FORM_TYPE, &args![base]).u32() != REFERENCE_FORM_TYPE {
+            return;
+        }
+        if e.vcall(reference.addr(), REFERENCE_OWNER_SLOT, &[]).u32() != 0 {
+            let owner = e.vcall(reference.addr(), REFERENCE_OWNER_SLOT, &[]).u32();
+            let target = e.vcall(owner, OWNER_QUERY_SLOT, &[]).u32();
+            e.vcall(target, OWNER_CALL_SLOT, &args![owner]);
+        }
+    });
+}
+
+// Translated from 005571a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCELL::QueueReferences` (Xbox PDB) `(this, check)`: under the cell
+/// lock, with the cell's priority (`TES::GetCellPriority(cell, 0)` on the
+/// scene), goes through the references twice: first those whose base object
+/// is one of the two marker forms (`011ca238`, `011ca230`), then all the
+/// others. A reference with no `+0x1d0` object or one that passes `005651e0`
+/// is queued in the model loader `(reference, priority, 1)` unless it is
+/// flagged by `00440da0` or `00440d80`, or `check` is non-zero and
+/// `0056b250` fails; any other reference that is flagged calls its virtual
+/// `+0x1cc(0, first)`, with `first` 1 in the first pass and 0 in the second.
+pub fn tes_object_cell_queue_references(e: &mut Engine, this: Ptr<TESObjectCELL>, check: u8) {
+    e.call(CELL_LOCK_ENTER, &args![this]);
+    let scene: u32 = e.global(SCENE_SINGLETON);
+    let priority = e.call(CELL_PRIORITY, &args![scene, this, 0u32]).u32();
+    for first_pass in [true, false] {
+        let first = e.call(CELL_REFERENCES, &args![this]).u32();
+        for_each_list_item(e, first, |e, reference| {
+            if reference.is_null() {
+                return;
+            }
+            let is_marker = |e: &mut Engine, reference: Ptr| {
+                let base = e.call(REFERENCE_BASE_OBJECT, &args![reference]).u32();
+                if base == e.global::<u32>(MARKER_FORM_SECOND) {
+                    return true;
+                }
+                let base = e.call(REFERENCE_BASE_OBJECT, &args![reference]).u32();
+                base == e.global::<u32>(MARKER_FORM_FIRST)
+            };
+            if is_marker(e, reference) != first_pass {
+                return;
+            }
+            let has_owner = e.vcall(reference.addr(), REFERENCE_OWNER_SLOT, &[]).u32() != 0;
+            if !has_owner || e.call(REFERENCE_TEST, &args![reference]).bool() {
+                if e.call(REFERENCE_FLAG_TEST_A, &args![reference]).bool()
+                    || e.call(REFERENCE_FLAG_TEST_B, &args![reference]).bool()
+                {
+                    return;
+                }
+                if check != 0 && !e.call(REFERENCE_FLAG_TEST_C, &args![reference]).bool() {
+                    return;
+                }
+                let loader: u32 = e.global(MODEL_LOADER_SINGLETON);
+                e.call(
+                    MODEL_LOADER_QUEUE_REFERENCE,
+                    &args![loader, reference, priority, 1u32],
+                );
+            } else if e.call(REFERENCE_FLAG_TEST_A, &args![reference]).bool()
+                || e.call(REFERENCE_FLAG_TEST_B, &args![reference]).bool()
+            {
+                e.vcall(
+                    reference.addr(),
+                    REFERENCE_DEFER_SLOT,
+                    &args![0u32, u32::from(first_pass)],
+                );
+            }
+        });
+    }
+    e.call(CELL_LOCK_LEAVE, &args![this]);
+}
+
+// Translated from 005573e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Under the cell lock, for every non-null reference whose model
+/// (`0043fcd0`) is non-null and answers true to its virtual `+0x10`: calls
+/// `00476ab0` on the model and sets its fade alpha to `1.0` (`BSShaderUtil::
+/// RecursiveSetPropertyFadeAlpha`). The map has no name for it.
+pub fn fn_005573e0(e: &mut Engine, this: Ptr<TESObjectCELL>) {
+    for_each_cell_reference_locked(e, this, |e, reference| {
+        if reference.is_null() {
+            return;
+        }
+        let model = e.call(REFERENCE_MODEL, &args![reference]).u32();
+        if model != 0 && e.vcall(model, MODEL_TEST_SLOT, &[]).u32() != 0 {
+            e.call(MODEL_PREPARE, &args![model]);
+            e.call(SET_PROPERTY_FADE_ALPHA, &args![model, 1.0f32]);
+        }
+    });
+}
+
+// Translated from 00557470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Under the cell lock, calls `00526f20(reference)` on the object at
+/// `011c95c8` for every non-null reference of the cell.
+pub fn fn_00557470(e: &mut Engine, this: Ptr<TESObjectCELL>) {
+    for_each_cell_reference_locked(e, this, |e, reference| {
+        if !reference.is_null() {
+            let collection: u32 = e.global(LOADED_REFERENCES);
+            e.call(LOADED_REFERENCES_REMOVE, &args![collection, reference]);
+        }
+    });
+}
+
+// Translated from 005574d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Under the cell lock, for every non-null reference: `005270b0(reference)`
+/// on the object at `011c95c8`; then, when the scene has no interior cell
+/// (`005f36f0` answers 0), has a world space (`004fd3e0`) and the
+/// reference's base object passes `00549580`, and the reference has a world
+/// space (`TESObjectREFR::GetWorldSpace`): `006fd010` on that world's
+/// terrain manager with the reference, or `BGSTerrainManager::HideTree
+/// (reference, 1)` when `00440da0` says the reference is set; then
+/// `00929260(1)` on the terrain manager. The map has no name for it.
+pub fn fn_005574d0(e: &mut Engine, this: Ptr<TESObjectCELL>) {
+    for_each_cell_reference_locked(e, this, |e, reference| {
+        if reference.is_null() {
+            return;
+        }
+        let collection: u32 = e.global(LOADED_REFERENCES);
+        e.call(LOADED_REFERENCES_ADD, &args![collection, reference]);
+        let scene: u32 = e.global(SCENE_SINGLETON);
+        if e.call(SCENE_CELL, &args![scene]).u32() != 0 {
+            return;
+        }
+        if e.call(SCENE_WORLD_SPACE, &args![scene]).u32() == 0 {
+            return;
+        }
+        let base = e.call(REFERENCE_BASE_OBJECT, &args![reference]).u32();
+        if !e.call(BASE_FORM_FLAG_40, &args![base]).bool() {
+            return;
+        }
+        let world = e.call(REFERENCE_WORLD_SPACE, &args![reference]).u32();
+        if world == 0 {
+            return;
+        }
+        if e.call(REFERENCE_FLAG_TEST_A, &args![reference]).bool() {
+            let terrain = e.call(WORLD_GET_TERRAIN_MANAGER, &args![world]).u32();
+            e.call(TERRAIN_HIDE_TREE, &args![terrain, reference, 1u32]);
+        } else {
+            let terrain = e.call(WORLD_GET_TERRAIN_MANAGER, &args![world]).u32();
+            e.call(TERRAIN_UPDATE_TREE, &args![terrain, reference]);
+        }
+        let terrain = e.call(WORLD_GET_TERRAIN_MANAGER, &args![world]).u32();
+        e.call(TERRAIN_SET_FLAG, &args![terrain, 1u32]);
+    });
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1407,6 +3005,61 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00553ee0,
             tes_object_cell_pick(Ptr<TESObjectCELL>, Ptr) -> u32
         ),
+        entry!(0x00553f70, fn_00553f70(Ptr, Ptr)),
+        entry!(0x00553fc0, fn_00553fc0(Ptr, Ptr) -> Ptr),
+        entry!(0x00554010, fn_00554010(Ptr) -> Ptr),
+        entry!(0x00554590, fn_00554590(Ptr) -> Ptr),
+        entry!(0x005545b0, fn_005545b0(Ptr)),
+        entry!(0x005545d0, fn_005545d0(Ptr)),
+        entry!(0x005545f0, fn_005545f0(Ptr)),
+        entry!(0x00554650, fn_00554650(Ptr)),
+        entry!(0x00554670, fn_00554670(Ptr, u32) -> Ptr),
+        entry!(0x005546a0, tes_object_cell_move_exterior_world(Ptr)),
+        entry!(0x00554720, fn_00554720(Ptr, Ptr)),
+        entry!(0x00554780, fn_00554780()),
+        entry!(
+            0x005547c0,
+            tes_object_cell_get_land_height(Ptr<TESObjectCELL>, Ptr, Ptr) -> u8
+        ),
+        entry!(
+            0x00554810,
+            tes_object_cell_is_form_cell_child(Ptr) -> u8
+        ),
+        entry!(0x00554880, fn_00554880(Ptr, u8) -> bool),
+        entry!(0x005548a0, fn_005548a0(u8) -> bool),
+        entry!(0x00554910, fn_00554910(Ptr<TESObjectCELL>) -> u8),
+        entry!(0x00554960, fn_00554960(Ptr<TESObjectCELL>, u8)),
+        entry!(0x005549d0, fn_005549d0(Ptr<TESObjectCELL>, u8)),
+        entry!(0x00554a20, fn_00554a20(Ptr<TESObjectCELL>, u8)),
+        entry!(0x00554b90, fn_00554b90(Ptr<TESObjectCELL>, u32) -> u16),
+        entry!(0x00554d30, fn_00554d30(Ptr<TESObjectCELL>, u32)),
+        entry!(0x00554fd0, fn_00554fd0(Ptr<TESObjectCELL>, u32, u32)),
+        entry!(0x00555570, fn_00555570(Ptr<TESObjectCELL>, u32)),
+        entry!(0x005555d0, fn_005555d0(Ptr<TESObjectCELL>, u32, u32)),
+        entry!(0x00555630, fn_00555630(Ptr<TESObjectCELL>, Ptr)),
+        entry!(0x00555740, fn_00555740(Ptr<TESObjectCELL>, Ptr)),
+        entry!(0x005559d0, fn_005559d0(Ptr<TESObjectCELL>, Ptr)),
+        entry!(0x00555a50, fn_00555a50(Ptr<TESObjectCELL>, Ptr)),
+        entry!(0x00555ad0, fn_00555ad0(Ptr<TESObjectCELL>) -> f32),
+        entry!(
+            0x00555b10,
+            tes_object_cell_adjust_coord_for_north_rotation(Ptr<TESObjectCELL>, Ptr, Ptr, u8)
+        ),
+        entry!(0x00556870, tes_object_cell_get_seen_value(Ptr) -> i32),
+        entry!(
+            0x00556ef0,
+            tes_object_cell_get_int_seen_section(Ptr<TESObjectCELL>, i32, i32, u8) -> Ptr
+        ),
+        entry!(0x00557090, fn_00557090(Ptr) -> bool),
+        entry!(0x005570b0, fn_005570b0(Ptr) -> bool),
+        entry!(0x005570d0, fn_005570d0(Ptr<TESObjectCELL>)),
+        entry!(
+            0x005571a0,
+            tes_object_cell_queue_references(Ptr<TESObjectCELL>, u8)
+        ),
+        entry!(0x005573e0, fn_005573e0(Ptr<TESObjectCELL>)),
+        entry!(0x00557470, fn_00557470(Ptr<TESObjectCELL>)),
+        entry!(0x005574d0, fn_005574d0(Ptr<TESObjectCELL>)),
     ]
 }
 
@@ -1479,11 +3132,11 @@ mod tests {
     #[test]
     fn functions_are_registered() {
         let table = funcs();
-        assert_eq!(table.len(), 40);
+        assert_eq!(table.len(), 80);
         let mut seen: Vec<u32> = table.iter().map(|(a, _)| *a).collect();
         seen.sort_unstable();
         seen.dedup();
-        assert_eq!(seen.len(), 40);
+        assert_eq!(seen.len(), 80);
         assert!(seen.iter().all(|a| (0x0055_2470..0x0055_8e20).contains(a)));
     }
 
@@ -3242,5 +4895,2187 @@ mod tests {
         e.mem.set_u32(0x7f00_0800, 0);
         e.mem.set_u32(0x7f00_0804, 0x11);
         assert_eq!(e.call(0x0055_3ee0, &args![cell, 0x9999u32]).u32(), 0xfa11);
+    }
+
+    // -----------------------------------------------------------------------
+    // Second batch (from `00553f70`).
+
+    /// Argument words of recorded calls.
+    type Hits = Rc<RefCell<Vec<Vec<u32>>>>;
+    /// Recorded `(size, first bytes)` of data calls.
+    type DataLog = Rc<RefCell<Vec<(u32, Vec<u8>)>>>;
+    /// Recorded `(section, x, y)` seen-bit queries.
+    type BitQueries = Rc<RefCell<Vec<(u32, u32, u32)>>>;
+
+    /// Reads `count` floats at `at`.
+    fn floats(e: &Engine, at: u32, count: u32) -> Vec<f32> {
+        (0..count).map(|index| e.mem.f32(at + 4 * index)).collect()
+    }
+
+    /// Writes floats at `at`.
+    fn put_floats(e: &mut Engine, at: u32, values: &[f32]) {
+        for (index, value) in values.iter().enumerate() {
+            e.mem.set_f32(at + 4 * index as u32, *value);
+        }
+    }
+
+    /// The component accessor `00560d30` for the vectors the tests build.
+    fn component_double(e: &mut Engine) {
+        e.register(VECTOR_COMPONENT, |_, a| (a[0] + 4 * a[1]).into_ret());
+    }
+
+    /// A reference-like object: the test vtable and room for the fields the
+    /// doubles read (`+0x34` slot `0x1d0`, `+0x38` slot `0x100`, `+0x3c` the
+    /// answer of virtual `+0x14`).
+    fn reference_object(e: &mut Engine) -> u32 {
+        let at = object(e, 0x60);
+        e.register(fake(0x1d0), |e, a| e.mem.u32(a[0] + 0x34).into_ret());
+        e.register(fake(0x100), |e, a| e.mem.u32(a[0] + 0x38).into_ret());
+        e.register(fake(0x14), |e, a| e.mem.u32(a[0] + 0x3c).into_ret());
+        at
+    }
+
+    #[test]
+    fn vector_addition_adds_the_four_components() {
+        let mut e = engine();
+        let a = e.mem.alloc(16);
+        let b = e.mem.alloc(16);
+        put_floats(&mut e, a, &[1.0, 2.0, 3.0, 4.0]);
+        put_floats(&mut e, b, &[0.5, -2.0, 10.0, 0.25]);
+        e.call(0x0055_3f70, &args![a, b]);
+        assert_eq!(floats(&e, a, 4), vec![1.5, 0.0, 13.0, 4.25]);
+        assert_eq!(floats(&e, b, 4), vec![0.5, -2.0, 10.0, 0.25]);
+    }
+
+    #[test]
+    fn vector_copy_stores_three_components_and_a_zero() {
+        let mut e = engine();
+        component_double(&mut e);
+        let destination = e.mem.alloc(16);
+        let source = e.mem.alloc(16);
+        put_floats(&mut e, destination, &[9.0; 4]);
+        put_floats(&mut e, source, &[1.0, 2.0, 3.0, 7.0]);
+        start_log(&mut e);
+        let result = e.call(0x0055_3fc0, &args![destination, source]).u32();
+        assert_eq!(result, destination);
+        assert_eq!(floats(&e, destination, 4), vec![1.0, 2.0, 3.0, 0.0]);
+        assert_eq!(
+            calls(&e),
+            (0..4)
+                .map(|index| (VECTOR_COMPONENT, vec![destination, index]))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// What the doubles of `fn_00554010` saw.
+    #[derive(Default)]
+    struct WorldSeen {
+        cinfo: u32,
+        gravity: Vec<f32>,
+        scale_args: Vec<f32>,
+        constructor: Vec<u32>,
+        extent: Vec<f32>,
+        limit: Vec<f32>,
+        scale_one: f32,
+        centre: Vec<f32>,
+    }
+
+    /// Doubles for everything `fn_00554010` calls; the world object is the
+    /// block the constructor is given.
+    fn exterior_world_setup(e: &mut Engine) -> Rc<RefCell<WorldSeen>> {
+        let seen = Rc::new(RefCell::new(WorldSeen::default()));
+        guard_doubles(e);
+        component_double(e);
+        quiet(
+            e,
+            &[
+                CINFO_CONSTRUCT,
+                CINFO_SET_BROAD_PHASE_SIZE,
+                EMPTY_FUNCTION,
+                WIND_LISTENER_BASE_CONSTRUCT,
+                WORLD_SET_GRAVITY_VECTOR,
+                WORLD_SET_FIELD_A,
+                WORLD_SET_FIELD_B,
+                HOLDER_FIELD_70_ADD,
+                WORLD_SET_GRAVITY_SCALE,
+                LISTENER_REGISTER,
+                WORLD_SET_VISUAL_DEBUGGER_ENABLED,
+                WORLD_SET_VISUAL_DEBUGGER,
+                CINFO_MEMBER_DESTRUCT,
+                CINFO_BASE_DESTRUCT,
+                fake(0xc4),
+                LIST_NODE_ITEM_ADDRESS,
+            ],
+        );
+        e.register(MEMORY_MANAGER_GET, |_, _| 0x1111u32.into_ret());
+        e.register(MEMORY_MANAGER_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        for address in [
+            BROAD_PHASE_CONSTRUCT,
+            FILTER_CONSTRUCT,
+            LISTENER_OBJECT_CONSTRUCT,
+            LISTENER_CONSTRUCT,
+        ] {
+            e.register(address, |_, a| a[0].into_ret());
+        }
+        returns(e, HOLDER_GET_WORLD, 0x5000);
+        returns(e, WATER_LISTENER_GET, 0xaa00);
+        returns(e, SCENE_HAVOK_SETTING, 0x77);
+        returns(e, VISUAL_DEBUGGER_SUPPRESSED, 1);
+        e.register(SCALE_FLOAT, |_, a| (f32::from_bits(a[0]) * 2.0).into_ret());
+        let recorder = seen.clone();
+        e.register_double(CINFO_SET_GRAVITY, move |e, a| {
+            recorder.borrow_mut().gravity = floats(e, a[1], 4);
+            Ret::default()
+        });
+        let recorder = seen.clone();
+        e.register_double(EXTERIOR_WORLD_CONSTRUCT, move |e, a| {
+            let mut seen = recorder.borrow_mut();
+            seen.constructor = a.to_vec();
+            seen.cinfo = a[1];
+            seen.extent = floats(e, a[2], 3);
+            seen.limit = floats(e, a[3], 3);
+            seen.scale_one = e.mem.f32(a[1] + 0x54);
+            e.mem.set_u32(a[0], TEST_VTABLE);
+            a[0].into_ret()
+        });
+        let recorder = seen.clone();
+        e.register_double(WORLD_SET_CENTER, move |e, a| {
+            recorder.borrow_mut().centre = floats(e, a[1], 3);
+            Ret::default()
+        });
+        let recorder = seen.clone();
+        e.register_double(SCALE_FLOAT, move |_, a| {
+            let value = f32::from_bits(a[0]);
+            recorder.borrow_mut().scale_args.push(value);
+            (value * 2.0).into_ret()
+        });
+        e.set_global(GRAVITY_Z, -9.5f32);
+        e.set_global(EXTERIOR_BROAD_PHASE_SIZE, 100.0f32);
+        e.set_global(EXTERIOR_WORLD_EXTENT, 10.0f32);
+        e.set_global(EXTERIOR_WORLD_LIMIT, 3.0f32);
+        seen
+    }
+
+    #[test]
+    fn exterior_world_is_built_in_the_games_order() {
+        let mut e = engine();
+        let seen = exterior_world_setup(&mut e);
+        let centre = e.mem.alloc(12);
+        put_floats(&mut e, centre, &[100.0, 200.0, 300.0]);
+        start_log(&mut e);
+        let world = e.call(0x0055_4010, &args![centre]).u32();
+        let log = calls(&e);
+        let key = [
+            SCOPE_GUARD_CONSTRUCT,
+            CINFO_CONSTRUCT,
+            CINFO_SET_GRAVITY,
+            CINFO_SET_BROAD_PHASE_SIZE,
+            EXTERIOR_WORLD_CONSTRUCT,
+            WIND_LISTENER_BASE_CONSTRUCT,
+            BROAD_PHASE_CONSTRUCT,
+            WATER_LISTENER_GET,
+            WORLD_SET_GRAVITY_SCALE,
+            FILTER_CONSTRUCT,
+            SCENE_HAVOK_SETTING,
+            LISTENER_OBJECT_CONSTRUCT,
+            LISTENER_CONSTRUCT,
+            LISTENER_REGISTER,
+            WORLD_SET_CENTER,
+            VISUAL_DEBUGGER_SUPPRESSED,
+            WORLD_SET_VISUAL_DEBUGGER_ENABLED,
+            WORLD_SET_VISUAL_DEBUGGER,
+            CINFO_BASE_DESTRUCT,
+            SCOPE_GUARD_DESTRUCT,
+        ];
+        let order: Vec<u32> = addresses(&log)
+            .into_iter()
+            .filter(|address| key.contains(address))
+            .collect();
+        assert_eq!(order, key.to_vec());
+        let seen = seen.borrow();
+        assert_eq!(world, seen.constructor[0]);
+        assert_ne!(world, 0);
+        assert_eq!(seen.gravity, vec![0.0, 0.0, -9.5, 0.0]);
+        // The extent and limit vectors went through the scaling.
+        assert_eq!(seen.extent, vec![20.0; 3]);
+        assert_eq!(seen.limit, vec![6.0; 3]);
+        assert_eq!(seen.scale_one, 1.0);
+        assert_eq!(seen.centre, vec![100.0, 200.0, 0.0]);
+        assert_eq!(seen.scale_args[0], 100.0);
+        assert_eq!(
+            calls_to(&log, CINFO_SET_BROAD_PHASE_SIZE)[0][1],
+            200.0f32.to_bits()
+        );
+        // Visual debugger: suppressed in the game's setting, so disabled.
+        assert_eq!(
+            calls_to(&log, WORLD_SET_VISUAL_DEBUGGER_ENABLED),
+            vec![vec![world, 0]]
+        );
+        assert_eq!(
+            calls_to(&log, WORLD_SET_VISUAL_DEBUGGER),
+            vec![vec![world, 0]]
+        );
+        // The guard line and the water listener.
+        assert_eq!(
+            calls_to(&log, SCOPE_GUARD_CONSTRUCT)[0][1..],
+            [0x10, 1, SOURCE_FILE_NAME, 0x3c1b]
+        );
+        assert_eq!(
+            calls_to(&log, WORLD_SET_GRAVITY_SCALE),
+            vec![vec![world, 0xaa00]]
+        );
+        // The singleton was created.
+        assert_ne!(e.global::<u32>(LISTENER_SINGLETON), 0);
+    }
+
+    #[test]
+    fn exterior_world_keeps_an_existing_listener_singleton() {
+        let mut e = engine();
+        let _ = exterior_world_setup(&mut e);
+        e.set_global(LISTENER_SINGLETON, 0x4321u32);
+        let centre = e.mem.alloc(12);
+        start_log(&mut e);
+        e.call(0x0055_4010, &args![centre]);
+        let log = calls(&e);
+        assert!(calls_to(&log, LISTENER_CONSTRUCT).is_empty());
+        assert_eq!(e.global::<u32>(LISTENER_SINGLETON), 0x4321);
+        assert_eq!(
+            calls_to(&log, LISTENER_REGISTER),
+            vec![vec![0x4321, 0x5000]]
+        );
+        // Visual debugger setting not suppressed: enabled.
+        returns(&mut e, VISUAL_DEBUGGER_SUPPRESSED, 0);
+        start_log(&mut e);
+        e.call(0x0055_4010, &args![centre]);
+        assert_eq!(
+            calls_to(&calls(&e), WORLD_SET_VISUAL_DEBUGGER_ENABLED)[0][1],
+            1
+        );
+    }
+
+    #[test]
+    fn wind_listener_constructor_stores_its_vtable() {
+        let mut e = engine();
+        quiet(&mut e, &[WIND_LISTENER_BASE_CONSTRUCT]);
+        let at = e.mem.alloc(0x14);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0055_4590, &args![at]).u32(), at);
+        assert_eq!(calls(&e), vec![(WIND_LISTENER_BASE_CONSTRUCT, vec![at])]);
+        assert_eq!(e.mem.u32(at), WIND_LISTENER_VTABLE);
+    }
+
+    #[test]
+    fn listener_destructor_chain_ends_at_the_entity_listener_vtable() {
+        for entry in [0x0055_45b0u32, 0x0055_45d0, 0x0055_45f0] {
+            let mut e = engine();
+            quiet(&mut e, &[LISTENER_MEMBER_DESTRUCT]);
+            let at = e.mem.alloc(0x20);
+            e.mem.set_u32(at, 0xdead);
+            start_log(&mut e);
+            e.call(entry, &args![at]);
+            assert_eq!(calls(&e), vec![(LISTENER_MEMBER_DESTRUCT, vec![at + 0x0c])]);
+            assert_eq!(e.mem.u32(at), ENTITY_LISTENER_VTABLE);
+        }
+    }
+
+    #[test]
+    fn entity_listener_vtable_store_and_scalar_deleting_destructor() {
+        let mut e = engine();
+        quiet(&mut e, &[DEALLOCATE_BLOCK]);
+        let at = e.mem.alloc(0x20);
+        e.call(0x0055_4650, &args![at]);
+        assert_eq!(e.mem.u32(at), ENTITY_LISTENER_VTABLE);
+        e.mem.set_u32(at, 0);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0055_4670, &args![at, 0u32]).u32(), at);
+        assert!(calls(&e).is_empty());
+        assert_eq!(e.mem.u32(at), ENTITY_LISTENER_VTABLE);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0055_4670, &args![at, 3u32]).u32(), at);
+        assert_eq!(calls(&e), vec![(DEALLOCATE_BLOCK, vec![at])]);
+    }
+
+    #[test]
+    fn move_exterior_world_scales_the_shift_for_the_world_in_the_global() {
+        let mut e = engine();
+        guard_doubles(&mut e);
+        e.register(SLOT_GET_POINTER, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(LIST_NODE_ITEM_ADDRESS, |_, a| a[0].into_ret());
+        e.register(SCALE_VECTOR, |_, a| a[0].into_ret());
+        quiet(&mut e, &[WORLD_APPLY_VECTOR]);
+        e.set_global(EXTERIOR_WORLD_SLOT, 0x8800u32);
+        let shift = e.mem.alloc(12);
+        start_log(&mut e);
+        e.call(0x0055_46a0, &args![shift]);
+        let log = calls(&e);
+        let scaled = calls_to(&log, SCALE_VECTOR)[0].clone();
+        assert_eq!(scaled[1], shift);
+        assert_eq!(
+            addresses(&log),
+            vec![
+                SCOPE_GUARD_CONSTRUCT,
+                SLOT_GET_POINTER,
+                LIST_NODE_ITEM_ADDRESS,
+                SCALE_VECTOR,
+                WORLD_APPLY_VECTOR,
+                SCOPE_GUARD_DESTRUCT
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, SLOT_GET_POINTER),
+            vec![vec![EXTERIOR_WORLD_SLOT]]
+        );
+        assert_eq!(
+            calls_to(&log, WORLD_APPLY_VECTOR),
+            vec![vec![0x8800, scaled[0]]]
+        );
+        assert_eq!(
+            calls_to(&log, SCOPE_GUARD_CONSTRUCT)[0][1..],
+            [0x10, 1, SOURCE_FILE_NAME, 0x3c5b]
+        );
+    }
+
+    #[test]
+    fn scaled_vector_is_given_to_the_world_call() {
+        let mut e = engine();
+        e.register(LIST_NODE_ITEM_ADDRESS, |_, a| a[0].into_ret());
+        returns(&mut e, SCALE_VECTOR, 0x6600);
+        quiet(&mut e, &[WORLD_APPLY_VECTOR]);
+        start_log(&mut e);
+        e.call(0x0055_4720, &args![0x1234u32, 0x5678u32]);
+        let log = calls(&e);
+        assert_eq!(calls_to(&log, SCALE_VECTOR)[0][1], 0x5678);
+        assert_eq!(
+            calls_to(&log, WORLD_APPLY_VECTOR),
+            vec![vec![0x1234, 0x6600]]
+        );
+    }
+
+    #[test]
+    fn exterior_world_refresh_needs_the_pointer() {
+        let mut e = engine();
+        e.register(SLOT_GET_POINTER, |e, a| e.mem.u32(a[0]).into_ret());
+        let hits = Rc::new(RefCell::new(vec![]));
+        let recorder = hits.clone();
+        e.register_double(fake(0xc4), move |_, a| {
+            recorder.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        e.call(0x0055_4780, &[]);
+        assert!(hits.borrow().is_empty());
+        let world = object(&mut e, 0x20);
+        e.set_global(EXTERIOR_WORLD_SLOT, world);
+        start_log(&mut e);
+        e.call(0x0055_4780, &[]);
+        assert_eq!(*hits.borrow(), vec![vec![world]]);
+        // The pointer is read twice, as the game does.
+        assert_eq!(calls_to(&calls(&e), SLOT_GET_POINTER).len(), 2);
+    }
+
+    #[test]
+    fn land_height_asks_the_land_or_stores_zero() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        let out = e.mem.alloc(4);
+        e.mem.set_f32(out, 5.0);
+        returns(&mut e, CELL_GET_LAND, 0);
+        assert_eq!(e.call(0x0055_47c0, &args![cell, 0x99u32, out]).u8(), 0);
+        assert_eq!(e.mem.f32(out), 0.0);
+        returns(&mut e, CELL_GET_LAND, 0x7300);
+        returns(&mut e, LAND_GET_HEIGHT, 1);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0055_47c0, &args![cell, 0x99u32, out]).u8(), 1);
+        assert_eq!(
+            calls_to(&calls(&e), LAND_GET_HEIGHT),
+            vec![vec![0x7300, 0x99, out]]
+        );
+    }
+
+    #[test]
+    fn form_cell_child_test_by_type_word_or_by_form_type() {
+        let mut e = engine();
+        let form = e.mem.alloc(0x20);
+        assert_eq!(e.call(0x0055_4810, &args![0u32]).u8(), 0);
+        // First word equal to the word at 01187020: the type at +0x0c.
+        e.set_global(CELL_CHILD_FORM_WORD, 0x5555u32);
+        e.mem.set_u32(form, 0x5555);
+        for (kind, expected) in [(5, 0), (6, 1), (7, 0), (8, 1), (9, 1), (10, 0)] {
+            e.mem.set_u32(form + 0x0c, kind);
+            assert_eq!(
+                e.call(0x0055_4810, &args![form]).u8(),
+                expected,
+                "kind {kind}"
+            );
+        }
+        // Otherwise the form type of the first word decides.
+        e.mem.set_u32(form, 0x6666);
+        returns(&mut e, FORM_TYPE_FROM_STRING, 0x3a);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0055_4810, &args![form]).u8(), 1);
+        assert_eq!(
+            calls_to(&calls(&e), FORM_TYPE_FROM_STRING),
+            vec![vec![0x6666]]
+        );
+        returns(&mut e, FORM_TYPE_FROM_STRING, 0x41);
+        assert_eq!(e.call(0x0055_4810, &args![form]).u8(), 0);
+    }
+
+    #[test]
+    fn form_types_in_the_jump_table_are_children() {
+        let mut e = engine();
+        let expected = [0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x42, 0x43, 0x69];
+        for kind in 0..=255u32 {
+            let want = expected.contains(&kind);
+            assert_eq!(e.call(0x0055_48a0, &args![kind]).bool(), want, "{kind:#x}");
+            assert_eq!(
+                e.call(0x0055_4880, &args![0x1234u32, kind]).bool(),
+                want,
+                "{kind:#x}"
+            );
+        }
+    }
+
+    /// Doubles for `fn_00554960` and `fn_00554a20` with an empty node tree;
+    /// returns the world object (which records its virtual `+0xd8`).
+    fn hide_setup(e: &mut Engine) -> (Ptr<TESObjectCELL>, u32, Hits) {
+        let cell = e.new_object::<TESObjectCELL>();
+        let world = object(e, 0x20);
+        let hits = Rc::new(RefCell::new(vec![]));
+        let recorder = hits.clone();
+        e.register_double(fake(0xd8), move |_, a| {
+            recorder.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        returns(e, CELL_HAVOK_WORLD, world);
+        returns(e, CELL_NODE_OF_CELL, 0x4400);
+        returns(e, CELL_NODE_B, 0x4500);
+        returns(e, CELL_CHILD_NODE, 0x4600);
+        returns(e, NODE_CHILD_COUNT, 0);
+        quiet(e, &[PREPARE_WITHOUT_LIGHTING]);
+        (cell, world, hits)
+    }
+
+    #[test]
+    fn hiding_needs_a_world_and_a_node_and_prepares_the_node() {
+        let mut e = engine();
+        let (cell, world, hits) = hide_setup(&mut e);
+        start_log(&mut e);
+        e.call(0x0055_4960, &args![cell, 1u32]);
+        assert_eq!(*hits.borrow(), vec![vec![world, 0x4400, 1]]);
+        let log = calls(&e);
+        assert_eq!(calls_to(&log, PREPARE_WITHOUT_LIGHTING), vec![vec![0x4400]]);
+        // The node walk ran for both of the cell's node lookups.
+        assert_eq!(calls_to(&log, CELL_NODE_B).len(), 1);
+        assert_eq!(calls_to(&log, CELL_CHILD_NODE), vec![vec![cell.addr(), 7]]);
+        // No node: nothing.
+        returns(&mut e, CELL_NODE_OF_CELL, 0);
+        hits.borrow_mut().clear();
+        start_log(&mut e);
+        e.call(0x0055_4960, &args![cell, 1u32]);
+        assert!(hits.borrow().is_empty());
+        assert!(calls_to(&calls(&e), PREPARE_WITHOUT_LIGHTING).is_empty());
+        // No world: nothing.
+        returns(&mut e, CELL_NODE_OF_CELL, 0x4400);
+        returns(&mut e, CELL_HAVOK_WORLD, 0);
+        start_log(&mut e);
+        e.call(0x0055_4960, &args![cell, 1u32]);
+        assert!(hits.borrow().is_empty());
+    }
+
+    #[test]
+    fn hiding_follows_the_byte_of_the_world_object() {
+        let mut e = engine();
+        let (cell, world, hits) = hide_setup(&mut e);
+        returns(&mut e, WORLD_BYTE_16, 0);
+        assert_eq!(e.call(0x0055_4910, &args![cell]).u8(), 1);
+        assert_eq!(*hits.borrow(), vec![vec![world, 0x4400, 1]]);
+        returns(&mut e, WORLD_BYTE_16, 0x80);
+        assert_eq!(e.call(0x0055_4910, &args![cell]).u8(), 0);
+        assert_eq!(hits.borrow()[1], vec![world, 0x4400, 0]);
+        returns(&mut e, CELL_HAVOK_WORLD, 0);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0055_4910, &args![cell]).u8(), 0);
+        assert_eq!(hits.borrow().len(), 2);
+        assert_eq!(addresses(&calls(&e)), vec![CELL_HAVOK_WORLD]);
+    }
+
+    #[test]
+    fn reference_list_stops_at_the_first_empty_item() {
+        let mut e = engine();
+        list_doubles(&mut e);
+        let hits = Rc::new(RefCell::new(vec![]));
+        let recorder = hits.clone();
+        e.register_double(REFERENCE_UPDATE_FOR_FLAG, move |_, a| {
+            recorder.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        let cell = e.new_object::<TESObjectCELL>();
+        // The list head lives inside the cell, at +0xac.
+        e.mem.set_u32(cell.addr() + 0xac, 0x11);
+        let second = list_of(&mut e, &[0x22, 0, 0x33]);
+        e.mem.set_u32(cell.addr() + 0xb0, second);
+        e.call(0x0055_49d0, &args![cell, 1u32]);
+        assert_eq!(*hits.borrow(), vec![vec![0x11, 1], vec![0x22, 1]]);
+    }
+
+    /// A node tree for `fn_00554a20`: node address to children.
+    type Tree = Rc<RefCell<std::collections::HashMap<u32, Vec<u32>>>>;
+
+    fn tree_doubles(e: &mut Engine, tree: &Tree) {
+        let children = tree.clone();
+        e.register_double(NODE_CHILD_COUNT, move |_, a| {
+            (children.borrow().get(&a[0]).map_or(0, Vec::len) as u32).into_ret()
+        });
+        let children = tree.clone();
+        e.register_double(NODE_CHILD_AT, move |_, a| {
+            children.borrow()[&a[0]][a[1] as usize].into_ret()
+        });
+    }
+
+    #[test]
+    fn reference_updates_walk_the_cell_node_backwards_and_the_group_forwards() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        let tree: Tree = Default::default();
+        tree_doubles(&mut e, &tree);
+        let updates = Rc::new(RefCell::new(vec![]));
+        let recorder = updates.clone();
+        e.register_double(fake(0x2f0), move |_, a| {
+            recorder.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        // The 3D objects 0x10, 0x20 and 0x60 have reference objects.
+        let mut references = std::collections::HashMap::new();
+        for object_3d in [0x10u32, 0x20, 0x60] {
+            references.insert(object_3d, reference_object(&mut e));
+        }
+        let lookup = references.clone();
+        e.register_double(FIND_REFERENCE_FOR_3D, move |_, a| {
+            lookup.get(&a[0]).copied().unwrap_or(0).into_ret()
+        });
+        // Only the inner reference answers true to virtual +0x100.
+        e.mem.set_u32(references[&0x60] + 0x38, 1);
+        // Cell node children: 0x10, none, 0x20.
+        tree.borrow_mut().insert(0x4500, vec![0x10, 0, 0x20]);
+        // The group: the first node qualifies by its virtual +0x14, the
+        // second by neither, the third by the table, and a null entry.
+        let nodes: Vec<u32> = (0..3).map(|_| reference_object(&mut e)).collect();
+        e.mem.set_u32(nodes[0] + 0x3c, 1);
+        tree.borrow_mut()
+            .insert(0x4600, vec![nodes[0], nodes[1], nodes[2], 0]);
+        for node in &nodes {
+            tree.borrow_mut().insert(*node, vec![0x60, 0]);
+        }
+        let table_hits = Rc::new(RefCell::new(vec![]));
+        let recorder = table_hits.clone();
+        let accepted = nodes[2];
+        e.register_double(NODE_TABLE_TEST, move |_, a| {
+            recorder.borrow_mut().push(a.to_vec());
+            u32::from(a[1] == accepted).into_ret()
+        });
+        returns(&mut e, CELL_NODE_B, 0x4500);
+        returns(&mut e, CELL_CHILD_NODE, 0x4600);
+        e.call(0x0055_4a20, &args![cell, 9u32]);
+        assert_eq!(
+            *updates.borrow(),
+            vec![
+                vec![references[&0x20], 9],
+                vec![references[&0x10], 9],
+                vec![references[&0x60], 9],
+                vec![references[&0x60], 9],
+            ]
+        );
+        // The table is asked for the nodes whose virtual answered false.
+        assert_eq!(
+            *table_hits.borrow(),
+            vec![vec![NODE_TABLE, nodes[1]], vec![NODE_TABLE, nodes[2]]]
+        );
+        // Without the answer of +0x100 only the cell node's two are updated.
+        e.mem.set_u32(references[&0x60] + 0x38, 0);
+        updates.borrow_mut().clear();
+        e.call(0x0055_4a20, &args![cell, 9u32]);
+        assert_eq!(updates.borrow().len(), 2);
+    }
+
+    /// Doubles shared by the save size and save tests: the cell, the save
+    /// buffer object behind `011de45c` and the trace holder byte.
+    fn save_setup(e: &mut Engine) -> (Ptr<TESObjectCELL>, u32) {
+        let cell = e.new_object::<TESObjectCELL>();
+        let buffer = e.mem.alloc(0x40);
+        e.set_global(SAVE_GAME_POINTER, buffer);
+        let holder = e.mem.alloc(4);
+        returns(e, BYTE_HOLDER_GET, holder);
+        (cell, holder)
+    }
+
+    #[test]
+    fn save_size_sums_the_parts_for_the_flags() {
+        let mut e = engine();
+        let (cell, _holder) = save_setup(&mut e);
+        returns(&mut e, FORM_SAVE_SIZE, 3);
+        returns(&mut e, USE_SAVE_GAME_BLOCKS, 0);
+        // Nothing but the base class.
+        assert_eq!(e.call(0x0055_4b90, &args![cell, 0u32]).u16(), 3);
+        // Every flag, with save blocks.
+        returns(&mut e, USE_SAVE_GAME_BLOCKS, 1);
+        let seen = object(&mut e, 0x20);
+        e.register(fake(0x08), |_, a| {
+            assert_eq!(a[1], 0);
+            5u32.into_ret()
+        });
+        returns(&mut e, CELL_SEEN_DATA, seen);
+        returns(&mut e, TEXT_GET_STRING, 0x9000);
+        returns(&mut e, STRING_LENGTH, 7);
+        start_log(&mut e);
+        let flags = 0x4000_0000 | 0x8000_0000 | 2 | 4 | 8;
+        // 4 + 3 + (4 + 2) + 1 + 5 + (1 + 7) + 4
+        assert_eq!(e.call(0x0055_4b90, &args![cell, flags]).u16(), 31);
+        let log = calls(&e);
+        assert_eq!(
+            calls_to(&log, FORM_SAVE_SIZE),
+            vec![vec![cell.addr(), flags]]
+        );
+        assert_eq!(
+            calls_to(&log, TEXT_GET_STRING),
+            vec![vec![cell.addr() + 0x18]]
+        );
+        let buffer = e.global::<u32>(SAVE_GAME_POINTER);
+        assert_eq!(calls_to(&log, USE_SAVE_GAME_BLOCKS), vec![vec![buffer]]);
+        assert_eq!(
+            calls_to(&log, BYTE_HOLDER_GET),
+            vec![vec![SAVE_TRACE_HOLDER]]
+        );
+        // The sum wraps at 16 bits: 0xfffe + 6 + 1 + 7.
+        returns(&mut e, FORM_SAVE_SIZE, 0xfffe);
+        assert_eq!(e.call(0x0055_4b90, &args![cell, 4u32]).u16(), 12);
+    }
+
+    #[test]
+    fn save_size_reports_what_it_added_when_the_trace_is_on() {
+        let mut e = engine();
+        let (cell, holder) = save_setup(&mut e);
+        returns(&mut e, FORM_SAVE_SIZE, 3);
+        returns(&mut e, USE_SAVE_GAME_BLOCKS, 0);
+        quiet(&mut e, &[ERROR_REPORT]);
+        e.mem.set_u8(holder, 1);
+        // No form being saved.
+        returns(&mut e, SAVING_FORM_INFO, 0);
+        start_log(&mut e);
+        e.call(0x0055_4b90, &args![cell, 8u32]);
+        assert_eq!(
+            calls_to(&calls(&e), ERROR_REPORT),
+            vec![vec![0x0101_2c78, 4, 0x3d51, SOURCE_FILE_NAME]]
+        );
+        // A form being saved: its id, name and flags.
+        let info = e.mem.alloc(16);
+        e.mem.set_u32(info, 0xf00d);
+        e.mem.set_u32(info + 5, 0x1234_5678);
+        returns(&mut e, SAVING_FORM_INFO, info);
+        let form = object(&mut e, 0x20);
+        returns(&mut e, FORM_LOOK_UP, form);
+        e.register(fake(0x130), |_, _| 0x7777u32.into_ret());
+        start_log(&mut e);
+        e.call(0x0055_4b90, &args![cell, 8u32]);
+        let log = calls(&e);
+        assert_eq!(
+            calls_to(&log, ERROR_REPORT),
+            vec![vec![
+                0x0101_2cb0,
+                4,
+                0xf00d,
+                0x7777,
+                0x1234_5678,
+                0x3d51,
+                SOURCE_FILE_NAME
+            ]]
+        );
+        assert_eq!(calls_to(&log, FORM_LOOK_UP), vec![vec![0xf00d]]);
+    }
+
+    /// The positions the buffer reports, in order.
+    fn position_double(e: &mut Engine, positions: Vec<u32>) {
+        let remaining = Rc::new(RefCell::new(positions.into_iter()));
+        e.register_double(BUFFER_POSITION, move |_, _| {
+            remaining.borrow_mut().next().unwrap().into_ret()
+        });
+    }
+
+    /// Records `(size, first bytes)` of every call of a `(this, data, size)`
+    /// function.
+    fn data_recorder(e: &mut Engine, address: u32) -> DataLog {
+        let log = Rc::new(RefCell::new(vec![]));
+        let recorder = log.clone();
+        e.register_double(address, move |e, a| {
+            recorder
+                .borrow_mut()
+                .push((a[2], e.mem.bytes(a[1], a[2].min(8))));
+            Ret::default()
+        });
+        log
+    }
+
+    #[test]
+    fn save_game_writes_every_part_and_fills_the_block_length() {
+        let mut e = engine();
+        let (cell, _holder) = save_setup(&mut e);
+        returns(&mut e, USE_SAVE_GAME_BLOCKS, 1);
+        quiet(&mut e, &[FORM_SAVE_BASE, BUFFER_WRITE]);
+        let area = e.mem.alloc(0x100);
+        position_double(&mut e, vec![area, area + 0x10, area + 0x50]);
+        let saved = data_recorder(&mut e, FORM_SAVE_GAME_DATA);
+        let ids = data_recorder(&mut e, FORM_SAVE_NUMERIC_ID);
+        returns(&mut e, CELL_DETACH_TIME, 0x0102_0304);
+        e.set(cell, TESObjectCELL::cCellFlags, 0x61);
+        e.set(cell, TESObjectCELL::cCellGameFlags, 0x05);
+        let seen = object(&mut e, 0x20);
+        let seen_calls = Rc::new(RefCell::new(vec![]));
+        let recorder = seen_calls.clone();
+        e.register_double(fake(0x10), move |_, a| {
+            recorder.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        returns(&mut e, CELL_SEEN_DATA, seen);
+        let name = e.mem.alloc(8);
+        e.mem.set_cstr(name, b"Vault");
+        returns(&mut e, TEXT_GET_STRING, name);
+        returns(&mut e, STRING_LENGTH, 5);
+        returns(&mut e, CELL_OWNER, 0x7001);
+        returns(&mut e, FORM_ID, 0xabcd);
+        let flags = 0x4000_0000 | 0x8000_0000 | 2 | 4 | 8;
+        start_log(&mut e);
+        e.call(0x0055_4d30, &args![cell, flags]);
+        let log = calls(&e);
+        assert_eq!(
+            *saved.borrow(),
+            vec![
+                (4, vec![4, 3, 2, 1]),
+                (1, vec![0x65]),
+                (1, vec![5]),
+                (5, b"Vault".to_vec()),
+            ]
+        );
+        assert_eq!(*ids.borrow(), vec![(4, vec![0xcd, 0xab, 0, 0])]);
+        assert_eq!(*seen_calls.borrow(), vec![vec![seen, 0]]);
+        // The marker, then the zero length slot, were written to the buffer.
+        let writes = calls_to(&log, BUFFER_WRITE);
+        assert_eq!(writes.len(), 2);
+        assert_eq!(writes[0][2], 4);
+        assert_eq!(writes[1][2], 2);
+        assert_eq!(e.mem.u16(area + 0x10), 0x40);
+        assert_eq!(
+            calls_to(&log, FORM_SAVE_BASE),
+            vec![vec![cell.addr(), flags]]
+        );
+        assert_eq!(calls_to(&log, FORM_ID), vec![vec![0x7001]]);
+    }
+
+    #[test]
+    fn save_game_without_owner_writes_a_zero_id() {
+        let mut e = engine();
+        let (cell, _holder) = save_setup(&mut e);
+        returns(&mut e, USE_SAVE_GAME_BLOCKS, 0);
+        quiet(&mut e, &[FORM_SAVE_BASE]);
+        position_double(&mut e, vec![0]);
+        returns(&mut e, CELL_OWNER, 0);
+        let ids = data_recorder(&mut e, FORM_SAVE_NUMERIC_ID);
+        e.call(0x0055_4d30, &args![cell, 8u32]);
+        assert_eq!(*ids.borrow(), vec![(4, vec![0, 0, 0, 0])]);
+    }
+
+    #[test]
+    fn save_game_reports_overlong_blocks_and_the_trace() {
+        let mut e = engine();
+        let (cell, holder) = save_setup(&mut e);
+        quiet(
+            &mut e,
+            &[FORM_SAVE_BASE, BUFFER_WRITE, DEBUG_PRINT, ERROR_REPORT],
+        );
+        returns(&mut e, USE_SAVE_GAME_BLOCKS, 0);
+        position_double(&mut e, vec![0]);
+        start_log(&mut e);
+        e.call(0x0055_4d30, &args![cell, 0u32]);
+        let log = calls(&e);
+        assert!(calls_to(&log, BUFFER_WRITE).is_empty());
+        assert!(calls_to(&log, DEBUG_PRINT).is_empty());
+        // Blocks used, a block longer than 0xffff bytes is reported.
+        returns(&mut e, USE_SAVE_GAME_BLOCKS, 1);
+        let area = e.mem.alloc(0x20000);
+        position_double(&mut e, vec![area, area + 4, area + 4 + 0x1_0000]);
+        start_log(&mut e);
+        e.call(0x0055_4d30, &args![cell, 0u32]);
+        assert_eq!(
+            calls_to(&calls(&e), DEBUG_PRINT),
+            vec![vec![0x0101_5318, SOURCE_FILE_NAME, 0x3d86]]
+        );
+        // A block of exactly 0xffff bytes is not.
+        position_double(&mut e, vec![area, area + 4, area + 4 + 0xffff]);
+        start_log(&mut e);
+        e.call(0x0055_4d30, &args![cell, 0u32]);
+        assert!(calls_to(&calls(&e), DEBUG_PRINT).is_empty());
+        assert_eq!(e.mem.u16(area + 4), 0xffff);
+        // With the trace holder set the bytes written are reported.
+        e.mem.set_u8(holder, 1);
+        returns(&mut e, USE_SAVE_GAME_BLOCKS, 0);
+        returns(&mut e, SAVING_FORM_INFO, 0);
+        position_double(&mut e, vec![area, area, area + 12]);
+        start_log(&mut e);
+        e.call(0x0055_4d30, &args![cell, 0u32]);
+        assert_eq!(
+            calls_to(&calls(&e), ERROR_REPORT),
+            vec![vec![0x0101_536c, 12, 0x3d86, SOURCE_FILE_NAME]]
+        );
+    }
+
+    /// Doubles shared by the load tests. The buffer answers the block marker
+    /// and `length` as the block length; the cell's extra data list is at
+    /// `+0x28`.
+    fn load_setup(e: &mut Engine, version: u32, blocks: bool, length: u16) -> Ptr<TESObjectCELL> {
+        let (cell, _) = save_setup(e);
+        returns(e, BUFFER_VERSION, version);
+        returns(e, USE_SAVE_GAME_BLOCKS, u32::from(blocks));
+        quiet(e, &[FORM_LOAD_GAME, EXTRA_LIST_SET_FIELD, DEBUG_PRINT]);
+        e.register_double(BUFFER_READ, move |e, a| {
+            if a[2] == 4 {
+                e.mem.set_u32(a[1], 0x424c_4f4b);
+            } else {
+                e.mem.set_u16(a[1], length);
+            }
+            Ret::default()
+        });
+        let list = cell.addr() + 0x28;
+        e.register_double(CELL_EXTRA_DATA_LIST, move |_, _| list.into_ret());
+        cell
+    }
+
+    /// `LoadGameDataOLD` writes the next queued bytes.
+    fn load_data_queue(e: &mut Engine, chunks: Vec<Vec<u8>>) {
+        let queue = Rc::new(RefCell::new(std::collections::VecDeque::from(chunks)));
+        e.register_double(FORM_LOAD_GAME_DATA, move |e, a| {
+            let bytes = queue.borrow_mut().pop_front().unwrap();
+            assert_eq!(bytes.len() as u32, a[2]);
+            for (index, byte) in bytes.into_iter().enumerate() {
+                e.mem.set_u8(a[1] + index as u32, byte);
+            }
+            Ret::default()
+        });
+    }
+
+    #[test]
+    fn load_game_reads_every_part_of_a_current_version() {
+        let mut e = engine();
+        let cell = load_setup(&mut e, 0x5b, true, 0x30);
+        let area = e.mem.alloc(0x100);
+        position_double(&mut e, vec![area, area + 0x30]);
+        returns(&mut e, LOADING_FORM_INFO, 0);
+        load_data_queue(
+            &mut e,
+            vec![vec![4, 3, 2, 1], vec![0xff], vec![3], b"abc".to_vec()],
+        );
+        e.register(FORM_LOAD_NUMERIC_ID, |e, a| {
+            e.mem.set_u32(a[1], 0x5555);
+            Ret::default()
+        });
+        e.register(CLEAR_BUFFER, |e, a| {
+            for index in 0..a[2] {
+                e.mem.set_u8(a[0] + index, 0);
+            }
+            Ret::default()
+        });
+        let names = Rc::new(RefCell::new(vec![]));
+        let recorder = names.clone();
+        e.register_double(FULL_NAME_SET, move |e, a| {
+            recorder.borrow_mut().push((a[0], e.mem.cstr(a[1])));
+            Ret::default()
+        });
+        quiet(&mut e, &[CELL_SET_OWNER, EXTRA_LIST_SET_SEEN_DATA]);
+        returns(&mut e, CELL_SEEN_DATA, 0);
+        returns(&mut e, CELL_IS_INTERIOR, 1);
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(INTERIOR_SEEN_DATA_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], TEST_VTABLE);
+            a[0].into_ret()
+        });
+        let loads = Rc::new(RefCell::new(vec![]));
+        let recorder = loads.clone();
+        e.register_double(fake(0x18), move |_, a| {
+            recorder.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        e.set(cell, TESObjectCELL::cCellFlags, 0x81);
+        let flags = 0x4000_0000 | 0x8000_0000 | 2 | 4 | 8;
+        start_log(&mut e);
+        e.call(0x0055_4fd0, &args![cell, flags, 0x55u32]);
+        let log = calls(&e);
+        // The time first (version 0x5b), through the extra data list.
+        assert_eq!(
+            calls_to(&log, EXTRA_LIST_SET_FIELD),
+            vec![vec![cell.addr() + 0x28, 0x0102_0304]]
+        );
+        assert_eq!(
+            calls_to(&log, FORM_LOAD_GAME),
+            vec![vec![cell.addr(), flags, 0x55]]
+        );
+        let order = addresses(&log);
+        assert!(
+            order.iter().position(|a| *a == EXTRA_LIST_SET_FIELD)
+                < order.iter().position(|a| *a == FORM_LOAD_GAME)
+        );
+        // The flags byte 0xff unpacked.
+        assert_eq!(e.get(cell, TESObjectCELL::cCellFlags), 0x81 | 0x60);
+        assert_eq!(e.get(cell, TESObjectCELL::cCellGameFlags), 0x9f);
+        // A seen data of the interior kind was made, stored and loaded.
+        let created = calls_to(&log, INTERIOR_SEEN_DATA_CONSTRUCT);
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0][1..], [0, 0]);
+        assert_eq!(
+            calls_to(&log, EXTRA_LIST_SET_SEEN_DATA),
+            vec![vec![cell.addr() + 0x28, created[0][0]]]
+        );
+        assert_eq!(*loads.borrow(), vec![vec![created[0][0], 0xffff]]);
+        // The name was cleared first, then read.
+        assert_eq!(calls_to(&log, CLEAR_BUFFER)[0][1..], [0, 0x104]);
+        assert_eq!(*names.borrow(), vec![(cell.addr() + 0x18, b"abc".to_vec())]);
+        assert_eq!(
+            calls_to(&log, CELL_SET_OWNER),
+            vec![vec![cell.addr(), 0x5555]]
+        );
+        // The block was read to its end: no report.
+        assert!(calls_to(&log, DEBUG_PRINT).is_empty());
+    }
+
+    #[test]
+    fn load_game_of_an_old_version_reads_the_time_after_the_seen_data() {
+        let mut e = engine();
+        let cell = load_setup(&mut e, 0x59, false, 0);
+        load_data_queue(&mut e, vec![vec![4, 0, 0, 0]]);
+        let seen = object(&mut e, 0x20);
+        returns(&mut e, CELL_SEEN_DATA, seen);
+        e.register(fake(0x18), |_, _| Ret::default());
+        start_log(&mut e);
+        e.call(0x0055_4fd0, &args![cell, 0xc000_0000u32, 0u32]);
+        let watched = [
+            FORM_LOAD_GAME,
+            fake(0x18),
+            FORM_LOAD_GAME_DATA,
+            EXTRA_LIST_SET_FIELD,
+        ];
+        let order: Vec<u32> = addresses(&calls(&e))
+            .into_iter()
+            .filter(|a| watched.contains(a))
+            .collect();
+        assert_eq!(order, watched.to_vec());
+    }
+
+    #[test]
+    fn load_game_creates_an_exterior_seen_data_for_an_exterior_cell() {
+        let mut e = engine();
+        let cell = load_setup(&mut e, 0x5b, false, 0);
+        returns(&mut e, CELL_SEEN_DATA, 0);
+        returns(&mut e, CELL_IS_INTERIOR, 0);
+        quiet(&mut e, &[EXTRA_LIST_SET_SEEN_DATA]);
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(EXTERIOR_SEEN_DATA_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], TEST_VTABLE);
+            a[0].into_ret()
+        });
+        quiet(&mut e, &[fake(0x18)]);
+        start_log(&mut e);
+        e.call(0x0055_4fd0, &args![cell, 0x8000_0000u32, 0u32]);
+        let log = calls(&e);
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x24]]);
+        assert_eq!(calls_to(&log, EXTERIOR_SEEN_DATA_CONSTRUCT).len(), 1);
+        assert!(calls_to(&log, INTERIOR_SEEN_DATA_CONSTRUCT).is_empty());
+        assert_eq!(calls_to(&log, fake(0x18))[0][1], 0xffff);
+    }
+
+    #[test]
+    fn load_game_reports_a_wrong_block_marker() {
+        let mut e = engine();
+        let cell = load_setup(&mut e, 0x5b, true, 0);
+        // The buffer gives a wrong marker.
+        e.register(BUFFER_READ, |e, a| {
+            e.mem.set_u32(a[1], if a[2] == 4 { 0x1111_1111 } else { 0 });
+            Ret::default()
+        });
+        position_double(&mut e, vec![0, 0]);
+        // No form being loaded: the version is reported.
+        returns(&mut e, LOADING_FORM_INFO, 0);
+        start_log(&mut e);
+        e.call(0x0055_4fd0, &args![cell, 0u32, 0u32]);
+        assert_eq!(
+            calls_to(&calls(&e), DEBUG_PRINT),
+            vec![vec![0x0101_56a8, SOURCE_FILE_NAME, 0x3d9d, 0x5b]]
+        );
+        // A form being loaded: its id, name, version and flags.
+        let info = e.mem.alloc(16);
+        e.mem.set_u32(info, 0xf00d);
+        e.mem.set_u32(info + 5, 0x1234_5678);
+        e.mem.set_u8(info + 9, 0x44);
+        returns(&mut e, LOADING_FORM_INFO, info);
+        let form = object(&mut e, 0x20);
+        returns(&mut e, FORM_LOOK_UP, form);
+        e.register(fake(0x130), |_, _| 0x7777u32.into_ret());
+        position_double(&mut e, vec![0, 0]);
+        start_log(&mut e);
+        e.call(0x0055_4fd0, &args![cell, 0u32, 0u32]);
+        let version = e.mem.u8(info + 9) as u32;
+        let flags = e.mem.u32(info + 5);
+        assert_eq!(
+            calls_to(&calls(&e), DEBUG_PRINT),
+            vec![vec![
+                0x0101_5718,
+                SOURCE_FILE_NAME,
+                0x3d9d,
+                0xf00d,
+                0x7777,
+                version,
+                flags
+            ]]
+        );
+    }
+
+    #[test]
+    fn load_game_reports_overruns_and_underruns_of_the_block() {
+        let mut e = engine();
+        let cell = load_setup(&mut e, 0x5b, true, 0x10);
+        returns(&mut e, LOADING_FORM_INFO, 0);
+        let area = 0x4000_0000u32;
+        // Overrun by 0x10: the position is 0x20 past the start.
+        position_double(&mut e, vec![area, area + 0x20]);
+        start_log(&mut e);
+        e.call(0x0055_4fd0, &args![cell, 0u32, 0u32]);
+        assert_eq!(
+            calls_to(&calls(&e), DEBUG_PRINT),
+            vec![vec![0x0101_54a0, 0x10, SOURCE_FILE_NAME, 0x3dd5, 0x5b]]
+        );
+        // Underrun by 0xc.
+        position_double(&mut e, vec![area, area + 4]);
+        start_log(&mut e);
+        e.call(0x0055_4fd0, &args![cell, 0u32, 0u32]);
+        assert_eq!(
+            calls_to(&calls(&e), DEBUG_PRINT),
+            vec![vec![0x0101_5440, 0xc, SOURCE_FILE_NAME, 0x3dd5, 0x5b]]
+        );
+        // Exactly the block: nothing.
+        position_double(&mut e, vec![area, area + 0x10]);
+        start_log(&mut e);
+        e.call(0x0055_4fd0, &args![cell, 0u32, 0u32]);
+        assert!(calls_to(&calls(&e), DEBUG_PRINT).is_empty());
+        // With a form being loaded the form is looked up even without a
+        // report, and named in an overrun.
+        let info = e.mem.alloc(16);
+        e.mem.set_u32(info, 0xf00d);
+        e.mem.set_u8(info + 9, 0x44);
+        e.mem.set_u32(info + 5, 0x1234_5678);
+        returns(&mut e, LOADING_FORM_INFO, info);
+        let form = object(&mut e, 0x20);
+        returns(&mut e, FORM_LOOK_UP, form);
+        e.register(fake(0x130), |_, _| 0x7777u32.into_ret());
+        position_double(&mut e, vec![area, area + 0x10]);
+        start_log(&mut e);
+        e.call(0x0055_4fd0, &args![cell, 0u32, 0u32]);
+        let log = calls(&e);
+        assert_eq!(calls_to(&log, FORM_LOOK_UP), vec![vec![0xf00d]]);
+        assert!(calls_to(&log, DEBUG_PRINT).is_empty());
+        let version = e.mem.u8(info + 9) as u32;
+        let flags = e.mem.u32(info + 5);
+        position_double(&mut e, vec![area, area + 0x18]);
+        start_log(&mut e);
+        e.call(0x0055_4fd0, &args![cell, 0u32, 0u32]);
+        assert_eq!(
+            calls_to(&calls(&e), DEBUG_PRINT),
+            vec![vec![
+                0x0101_5588,
+                8,
+                SOURCE_FILE_NAME,
+                0x3dd5,
+                0xf00d,
+                0x7777,
+                version,
+                flags
+            ]]
+        );
+        position_double(&mut e, vec![area, area + 8]);
+        start_log(&mut e);
+        e.call(0x0055_4fd0, &args![cell, 0u32, 0u32]);
+        assert_eq!(calls_to(&calls(&e), DEBUG_PRINT)[0][0], 0x0101_5500);
+    }
+
+    #[test]
+    fn load_game_reads_the_time_and_the_seen_data_only_when_flagged() {
+        // A cell with seen data present: nothing is created.
+        let mut e = engine();
+        let cell = load_setup(&mut e, 0x5b, false, 0);
+        let seen = object(&mut e, 0x20);
+        returns(&mut e, CELL_SEEN_DATA, seen);
+        quiet(&mut e, &[fake(0x18)]);
+        start_log(&mut e);
+        e.call(0x0055_4fd0, &args![cell, 0x8000_0000u32, 0u32]);
+        let log = calls(&e);
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert!(calls_to(&log, EXTRA_LIST_SET_SEEN_DATA).is_empty());
+        assert_eq!(calls_to(&log, fake(0x18)), vec![vec![seen, 0xffff]]);
+        // Nothing flagged: only the base class.
+        start_log(&mut e);
+        e.call(0x0055_4fd0, &args![cell, 0u32, 0u32]);
+        let seen_calls = addresses(&calls(&e));
+        assert!(!seen_calls.contains(&fake(0x18)));
+        assert!(!seen_calls.contains(&FORM_LOAD_GAME_DATA));
+    }
+
+    #[test]
+    fn flag_set_function_clears_the_game_flags_and_the_requested_data() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        let buffer = e.mem.alloc(0x40);
+        e.set_global(SAVE_GAME_POINTER, buffer);
+        quiet(
+            &mut e,
+            &[
+                CELL_EMPTY_CALL,
+                CELL_CLEAR_SEEN_DATA,
+                CELL_RESET_DETACH_TIME,
+            ],
+        );
+        returns(&mut e, BUFFER_FIELD_48_IS_ZERO, 0);
+        e.set(cell, TESObjectCELL::cCellGameFlags, 7);
+        start_log(&mut e);
+        e.call(0x0055_5570, &args![cell, 0u32]);
+        assert_eq!(
+            calls(&e),
+            vec![
+                (CELL_EMPTY_CALL, vec![cell.addr(), 0]),
+                (BUFFER_FIELD_48_IS_ZERO, vec![buffer])
+            ]
+        );
+        assert_eq!(e.get(cell, TESObjectCELL::cCellGameFlags), 7);
+        returns(&mut e, BUFFER_FIELD_48_IS_ZERO, 1);
+        start_log(&mut e);
+        e.call(0x0055_5570, &args![cell, 0xc000_0000u32]);
+        assert_eq!(e.get(cell, TESObjectCELL::cCellGameFlags), 0);
+        assert_eq!(
+            calls(&e)[2..],
+            [
+                (CELL_CLEAR_SEEN_DATA, vec![cell.addr()]),
+                (CELL_RESET_DETACH_TIME, vec![cell.addr(), 0, 0])
+            ]
+        );
+    }
+
+    #[test]
+    fn owner_is_set_to_the_form_found_for_it() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        quiet(&mut e, &[CELL_CALL_WITH_TWO_WORDS, CELL_SET_OWNER]);
+        returns(&mut e, CELL_OWNER, 0x7001);
+        returns(&mut e, FORM_LOOK_UP, 0x8002);
+        start_log(&mut e);
+        e.call(0x0055_55d0, &args![cell, 8u32, 0x44u32]);
+        assert_eq!(
+            calls(&e),
+            vec![
+                (CELL_CALL_WITH_TWO_WORDS, vec![cell.addr(), 8, 0x44]),
+                (CELL_OWNER, vec![cell.addr()]),
+                (FORM_LOOK_UP, vec![0x7001]),
+                (CELL_SET_OWNER, vec![cell.addr(), 0x8002]),
+            ]
+        );
+        // Without the flag or without an owner only the first call.
+        start_log(&mut e);
+        e.call(0x0055_55d0, &args![cell, 7u32, 0x44u32]);
+        assert_eq!(calls(&e).len(), 1);
+        returns(&mut e, CELL_OWNER, 0);
+        start_log(&mut e);
+        e.call(0x0055_55d0, &args![cell, 8u32, 0x44u32]);
+        assert_eq!(
+            addresses(&calls(&e)),
+            vec![CELL_CALL_WITH_TWO_WORDS, CELL_OWNER]
+        );
+    }
+
+    /// Doubles of the buffer flag words: `+0x17` for `00428110`, `+0x2c` for
+    /// `0042ce30`.
+    fn buffer_flag_doubles(e: &mut Engine, flags: u32, other_flags: u32) -> u32 {
+        let buffer = e.mem.alloc(0x40);
+        e.mem.set_u32(buffer + 0x17, flags);
+        e.mem.set_u32(buffer + 0x2c, other_flags);
+        e.register(BUFFER_FLAGS_GET, |e, a| {
+            let word = e.mem.u32(a[0] + 0x17);
+            e.mem.set_u32(a[1], word);
+            a[1].into_ret()
+        });
+        e.register(BUFFER_FLAGS_GET_OTHER, |e, a| {
+            let word = e.mem.u32(a[0] + 0x2c);
+            e.mem.set_u32(a[1], word);
+            a[1].into_ret()
+        });
+        e.register(FLAGS_TEST, |e, a| {
+            u32::from(e.mem.u32(a[0]) & a[1] != 0).into_ret()
+        });
+        buffer
+    }
+
+    #[test]
+    fn save_to_buffer_writes_the_parts_the_buffer_asks_for() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        quiet(
+            &mut e,
+            &[FORM_SAVE_TO_BUFFER, BUFFER_SAVE_STRING, BUFFER_SAVE_FORM_ID],
+        );
+        let saved_flags = Rc::new(RefCell::new(vec![]));
+        let recorder = saved_flags.clone();
+        e.register_double(BUFFER_SAVE_BYTES, move |e, a| {
+            recorder.borrow_mut().push((a[2], a[3], e.mem.u8(a[1])));
+            Ret::default()
+        });
+        let seen = object(&mut e, 0x20);
+        let seen_calls = Rc::new(RefCell::new(vec![]));
+        let recorder = seen_calls.clone();
+        e.register_double(fake(0x0c), move |_, a| {
+            recorder.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        returns(&mut e, CELL_SEEN_DATA, seen);
+        returns(&mut e, TEXT_GET_STRING, 0x9000);
+        returns(&mut e, CELL_OWNER, 0x7001);
+        e.set(cell, TESObjectCELL::cCellFlags, 0x41);
+        e.set(cell, TESObjectCELL::cCellGameFlags, 0x03);
+        let buffer = buffer_flag_doubles(&mut e, 0xffff_ffff, 0);
+        start_log(&mut e);
+        e.call(0x0055_5630, &args![cell, buffer]);
+        let log = calls(&e);
+        assert_eq!(
+            calls_to(&log, FORM_SAVE_TO_BUFFER),
+            vec![vec![cell.addr(), buffer]]
+        );
+        assert_eq!(*saved_flags.borrow(), vec![(1, 0, 0x43)]);
+        assert_eq!(*seen_calls.borrow(), vec![vec![seen, buffer]]);
+        assert_eq!(
+            calls_to(&log, BUFFER_SAVE_STRING),
+            vec![vec![buffer, 0x9000, 0]]
+        );
+        assert_eq!(
+            calls_to(&log, BUFFER_SAVE_FORM_ID),
+            vec![vec![buffer, 0x7001, 0]]
+        );
+        assert_eq!(calls_to(&log, BUFFER_FLAGS_GET).len(), 4);
+        // No flags: only the base class part.
+        e.mem.set_u32(buffer + 0x17, 0);
+        start_log(&mut e);
+        e.call(0x0055_5630, &args![cell, buffer]);
+        let log = calls(&e);
+        assert_eq!(calls_to(&log, BUFFER_FLAGS_GET).len(), 4);
+        assert_eq!(calls_to(&log, FORM_SAVE_TO_BUFFER).len(), 1);
+        assert!(calls_to(&log, BUFFER_SAVE_STRING).is_empty());
+        assert_eq!(saved_flags.borrow().len(), 1);
+    }
+
+    #[test]
+    fn load_from_buffer_reads_the_parts_the_buffer_asks_for() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        quiet(
+            &mut e,
+            &[
+                FORM_LOAD_FROM_BUFFER,
+                CELL_SET_OWNER,
+                EXTRA_LIST_SET_SEEN_DATA,
+            ],
+        );
+        e.register(BUFFER_LOAD_BYTES, |e, a| {
+            e.mem.set_u8(a[1], 0xff);
+            Ret::default()
+        });
+        e.register(BUFFER_LOAD_STRING, |e, a| {
+            e.mem.set_cstr(a[1], b"Foo");
+            Ret::default()
+        });
+        e.register(BUFFER_LOAD_FORM_ID, |e, a| {
+            e.mem.set_u32(a[1], 0x1234);
+            Ret::default()
+        });
+        let names = Rc::new(RefCell::new(vec![]));
+        let recorder = names.clone();
+        e.register_double(FULL_NAME_SET, move |e, a| {
+            recorder.borrow_mut().push((a[0], e.mem.cstr(a[1])));
+            Ret::default()
+        });
+        let loads = Rc::new(RefCell::new(vec![]));
+        let recorder = loads.clone();
+        e.register_double(fake(0x14), move |_, a| {
+            recorder.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        returns(&mut e, CELL_SEEN_DATA, 0);
+        returns(&mut e, CELL_IS_INTERIOR, 0);
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(EXTERIOR_SEEN_DATA_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], TEST_VTABLE);
+            a[0].into_ret()
+        });
+        returns(&mut e, CELL_EXTRA_DATA_LIST, 0x6100);
+        e.set(cell, TESObjectCELL::cCellFlags, 0x01);
+        let buffer = buffer_flag_doubles(&mut e, 0xffff_ffff, 0);
+        start_log(&mut e);
+        e.call(0x0055_5740, &args![cell, buffer]);
+        let log = calls(&e);
+        assert_eq!(
+            calls_to(&log, FORM_LOAD_FROM_BUFFER),
+            vec![vec![cell.addr(), buffer]]
+        );
+        assert_eq!(e.get(cell, TESObjectCELL::cCellFlags), 0x01 | 0x60);
+        assert_eq!(e.get(cell, TESObjectCELL::cCellGameFlags), 0x9f);
+        let created = calls_to(&log, EXTERIOR_SEEN_DATA_CONSTRUCT)[0][0];
+        assert_eq!(
+            calls_to(&log, EXTRA_LIST_SET_SEEN_DATA),
+            vec![vec![0x6100, created]]
+        );
+        assert_eq!(*loads.borrow(), vec![vec![created, buffer]]);
+        assert_eq!(*names.borrow(), vec![(cell.addr() + 0x18, b"Foo".to_vec())]);
+        assert_eq!(
+            calls_to(&log, CELL_SET_OWNER),
+            vec![vec![cell.addr(), 0x1234]]
+        );
+        // No flags: only the base class part.
+        e.mem.set_u32(buffer + 0x17, 0);
+        start_log(&mut e);
+        e.call(0x0055_5740, &args![cell, buffer]);
+        assert_eq!(calls_to(&calls(&e), BUFFER_FLAGS_GET).len(), 4);
+        assert!(calls_to(&calls(&e), CELL_SET_OWNER).is_empty());
+    }
+
+    #[test]
+    fn buffer_functions_for_the_owner_and_the_cleared_data() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        quiet(
+            &mut e,
+            &[
+                CELL_EMPTY_CALL,
+                CELL_SET_OWNER,
+                CELL_CLEAR_SEEN_DATA,
+                CELL_RESET_DETACH_TIME,
+            ],
+        );
+        returns(&mut e, CELL_OWNER, 0x7001);
+        returns(&mut e, FORM_LOOK_UP, 0x8002);
+        let buffer = buffer_flag_doubles(&mut e, 8, 0xc000_0000);
+        start_log(&mut e);
+        e.call(0x0055_59d0, &args![cell, buffer]);
+        let log = calls(&e);
+        assert_eq!(
+            calls_to(&log, CELL_EMPTY_CALL),
+            vec![vec![cell.addr(), buffer]]
+        );
+        assert_eq!(
+            calls_to(&log, CELL_SET_OWNER),
+            vec![vec![cell.addr(), 0x8002]]
+        );
+        // Not flagged, or without owner: nothing.
+        e.mem.set_u32(buffer + 0x17, 7);
+        start_log(&mut e);
+        e.call(0x0055_59d0, &args![cell, buffer]);
+        assert!(calls_to(&calls(&e), CELL_SET_OWNER).is_empty());
+        e.mem.set_u32(buffer + 0x17, 8);
+        returns(&mut e, CELL_OWNER, 0);
+        start_log(&mut e);
+        e.call(0x0055_59d0, &args![cell, buffer]);
+        assert!(calls_to(&calls(&e), CELL_SET_OWNER).is_empty());
+        // The clearing function reads the other flag word.
+        e.set(cell, TESObjectCELL::cCellGameFlags, 9);
+        start_log(&mut e);
+        e.call(0x0055_5a50, &args![cell, buffer]);
+        let log = calls(&e);
+        assert_eq!(e.get(cell, TESObjectCELL::cCellGameFlags), 0);
+        assert_eq!(
+            calls_to(&log, CELL_CLEAR_SEEN_DATA),
+            vec![vec![cell.addr()]]
+        );
+        assert_eq!(
+            calls_to(&log, CELL_RESET_DETACH_TIME),
+            vec![vec![cell.addr(), 0, 0]]
+        );
+        assert_eq!(calls_to(&log, BUFFER_FLAGS_GET_OTHER).len(), 2);
+        e.mem.set_u32(buffer + 0x2c, 0);
+        start_log(&mut e);
+        e.call(0x0055_5a50, &args![cell, buffer]);
+        assert!(calls_to(&calls(&e), CELL_CLEAR_SEEN_DATA).is_empty());
+        assert!(calls_to(&calls(&e), CELL_RESET_DETACH_TIME).is_empty());
+    }
+
+    #[test]
+    fn north_rotation_of_a_cell_comes_from_the_interior_extra_data() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        returns(&mut e, CELL_IS_INTERIOR, 0);
+        assert_eq!(e.call(0x0055_5ad0, &args![cell]).f32(), 0.0);
+        returns(&mut e, CELL_IS_INTERIOR, 1);
+        returns(&mut e, CELL_EXTRA_DATA_LIST, 0x6100);
+        e.register(EXTRA_LIST_GET_ROTATION, |_, a| {
+            assert_eq!(a[0], 0x6100);
+            0.75f32.into_ret()
+        });
+        assert_eq!(e.call(0x0055_5ad0, &args![cell]).f32(), 0.75);
+    }
+
+    /// Doubles for the rotation of coordinates.
+    fn rotation_setup(e: &mut Engine, interior: bool, rotation: f32) -> Rc<RefCell<Vec<u32>>> {
+        returns(e, CELL_IS_INTERIOR, u32::from(interior));
+        returns(e, CELL_EXTRA_DATA_LIST, 0x6100);
+        e.register_double(EXTRA_LIST_GET_ROTATION, move |_, _| rotation.into_ret());
+        e.set_global(MINUS_ONE_FLOAT, -1.0f32);
+        e.set_global(ROTATION_EPSILON, 0.0f64);
+        for index in 0..9u32 {
+            e.mem.set_u32(IDENTITY_ROTATION + 4 * index, 0x100 + index);
+        }
+        let seen = Rc::new(RefCell::new(vec![]));
+        let recorder = seen.clone();
+        e.register_double(ROTATION_MATRIX_BUILD, move |e, a| {
+            let mut seen = recorder.borrow_mut();
+            seen.push(a[1]);
+            seen.extend((0..9).map(|index| e.mem.u32(a[0] + 4 * index)));
+            Ret::default()
+        });
+        e.register(ROTATE_VECTOR, |e, a| {
+            for (index, value) in [1.5f32, 2.5, 3.5].into_iter().enumerate() {
+                e.mem.set_f32(a[0] + 4 * index as u32, value);
+            }
+            a[0].into_ret()
+        });
+        seen
+    }
+
+    #[test]
+    fn north_rotation_copies_the_coordinates_when_the_angle_is_zero() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        let _ = rotation_setup(&mut e, false, 0.0);
+        let source = e.mem.alloc(12);
+        let destination = e.mem.alloc(12);
+        put_floats(&mut e, source, &[10.0, 20.0, 30.0]);
+        e.call(0x0055_5b10, &args![cell, source, destination, 0u32]);
+        assert_eq!(floats(&e, destination, 3), vec![10.0, 20.0, 30.0]);
+        // A zero angle also for the reversed sign.
+        put_floats(&mut e, destination, &[0.0; 3]);
+        e.call(0x0055_5b10, &args![cell, source, destination, 1u32]);
+        assert_eq!(floats(&e, destination, 3), vec![10.0, 20.0, 30.0]);
+    }
+
+    #[test]
+    fn north_rotation_rotates_with_a_matrix_built_from_the_identity() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        let seen = rotation_setup(&mut e, true, 0.5);
+        let source = e.mem.alloc(12);
+        let destination = e.mem.alloc(12);
+        put_floats(&mut e, source, &[10.0, 20.0, 30.0]);
+        e.call(0x0055_5b10, &args![cell, source, destination, 0u32]);
+        assert_eq!(floats(&e, destination, 3), vec![1.5, 2.5, 3.5]);
+        // The matrix was the copy of the identity at 011a9448, angle 0.5.
+        let record = seen.borrow().clone();
+        assert_eq!(record[0], 0.5f32.to_bits());
+        assert_eq!(record[1..], (0..9).map(|i| 0x100 + i).collect::<Vec<u32>>());
+        // Reversed: the angle is negated.
+        seen.borrow_mut().clear();
+        e.call(0x0055_5b10, &args![cell, source, destination, 1u32]);
+        assert_eq!(seen.borrow()[0], (-0.5f32).to_bits());
+    }
+
+    #[test]
+    fn word_tests_of_the_cell_helpers() {
+        let mut e = engine();
+        let at = e.mem.alloc(0x100);
+        assert!(!e.call(0x0055_70b0, &args![at]).bool());
+        e.mem.set_u32(at, 5);
+        assert!(e.call(0x0055_70b0, &args![at]).bool());
+        assert!(!e.call(0x0055_7090, &args![at]).bool());
+        e.mem.set_u32(at + 0x80, 0x100);
+        assert!(e.call(0x0055_7090, &args![at]).bool());
+    }
+
+    /// A seen-data section object: `x`, `y` at `+0x24`, `+0x25`, next at
+    /// `+0x28`.
+    fn section(e: &mut Engine, x: i8, y: i8) -> u32 {
+        let at = e.mem.alloc(0x30);
+        e.mem.set_i8(at + 0x24, x);
+        e.mem.set_i8(at + 0x25, y);
+        at
+    }
+
+    type BitSet = Rc<RefCell<std::collections::HashSet<(u32, u32, u32)>>>;
+
+    /// Doubles shared by the `GetSeenValue` tests: the player's cell, the
+    /// float conversion, the bit index and the queries that record which
+    /// `(section, x, y)` were asked.
+    fn seen_value_setup(
+        e: &mut Engine,
+        cell: Ptr<TESObjectCELL>,
+        bits: (u32, u32),
+        interior: bool,
+    ) -> (BitSet, BitQueries) {
+        e.set_global(PLAYER_OBJECT, 0x5000u32);
+        returns(e, REFERENCE_PARENT_CELL, cell.addr());
+        returns(e, CELL_IS_INTERIOR, u32::from(interior));
+        e.register(FLOAT_TO_INT, |_, a| {
+            (f32::from_bits(a[0]) as i32).into_ret()
+        });
+        e.register_double(SEEN_DATA_INDEX, move |e, a| {
+            assert_eq!(a[1], u32::from(interior));
+            e.mem.set_u32(a[2], bits.0);
+            e.mem.set_u32(a[3], bits.1);
+            Ret::default()
+        });
+        let set: BitSet = Default::default();
+        let asked = Rc::new(RefCell::new(vec![]));
+        let (lookup, recorder) = (set.clone(), asked.clone());
+        e.register_double(SEEN_BIT_IS_SET, move |_, a| {
+            recorder.borrow_mut().push((a[0], a[1], a[2]));
+            u32::from(lookup.borrow().contains(&(a[0], a[1], a[2]))).into_ret()
+        });
+        (set, asked)
+    }
+
+    /// Four sections around `(2, 3)` as a chain of seen data; returns them as
+    /// `[(2,3), (2,4), (3,3), (3,4)]` (0 for an absent one).
+    fn interior_sections(e: &mut Engine, cell: Ptr<TESObjectCELL>, present: [bool; 4]) -> [u32; 4] {
+        returns(e, CELL_IS_INTERIOR, 1);
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        let coordinates = [(2, 3), (2, 4), (3, 3), (3, 4)];
+        let mut sections = [0; 4];
+        for index in 0..4 {
+            if present[index] {
+                sections[index] = section(e, coordinates[index].0, coordinates[index].1);
+            }
+        }
+        let chain: Vec<u32> = sections.iter().copied().filter(|s| *s != 0).collect();
+        for pair in chain.windows(2) {
+            e.mem.set_u32(pair[0] + 0x28, pair[1]);
+        }
+        returns(e, CELL_SEEN_DATA, chain.first().copied().unwrap_or(0));
+        let _ = cell;
+        sections
+    }
+
+    /// An interior position inside the section `(2, 3)`.
+    fn interior_position(e: &mut Engine) -> u32 {
+        let position = e.mem.alloc(12);
+        put_floats(
+            e,
+            position,
+            &[
+                0x800 as f32 + 2.0 * 4096.0 + 100.0,
+                0x800 as f32 + 3.0 * 4096.0 + 7.0,
+                0.0,
+            ],
+        );
+        position
+    }
+
+    #[test]
+    fn seen_value_without_a_player_cell_is_zero() {
+        let mut e = engine();
+        returns(&mut e, REFERENCE_PARENT_CELL, 0);
+        let position = e.mem.alloc(12);
+        assert_eq!(e.call(0x0055_6870, &args![position]).i32(), 0);
+        assert_eq!(
+            addresses(&[(REFERENCE_PARENT_CELL, vec![])]),
+            vec![REFERENCE_PARENT_CELL]
+        );
+    }
+
+    #[test]
+    fn interior_seen_value_inside_a_tile_asks_one_section() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        let (set, asked) = seen_value_setup(&mut e, cell, (3, 4), true);
+        let sections = interior_sections(&mut e, cell, [true, false, false, false]);
+        let position = interior_position(&mut e);
+        set.borrow_mut().insert((sections[0], 3, 4));
+        set.borrow_mut().insert((sections[0], 4, 5));
+        set.borrow_mut().insert((sections[0], 3, 5));
+        assert_eq!(e.call(0x0055_6870, &args![position]).i32(), 3);
+        assert_eq!(
+            *asked.borrow(),
+            vec![
+                (sections[0], 3, 4),
+                (sections[0], 3, 5),
+                (sections[0], 4, 4),
+                (sections[0], 4, 5)
+            ]
+        );
+    }
+
+    #[test]
+    fn interior_seen_value_at_the_corner_of_a_tile_asks_four_sections() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        let (set, asked) = seen_value_setup(&mut e, cell, (15, 15), true);
+        let sections = interior_sections(&mut e, cell, [true; 4]);
+        let position = interior_position(&mut e);
+        for query in [
+            (sections[0], 15, 15),
+            (sections[1], 15, 0),
+            (sections[3], 0, 0),
+        ] {
+            set.borrow_mut().insert(query);
+        }
+        assert_eq!(e.call(0x0055_6870, &args![position]).i32(), 3);
+        assert_eq!(
+            *asked.borrow(),
+            vec![
+                (sections[0], 15, 15),
+                (sections[1], 15, 0),
+                (sections[2], 0, 15),
+                (sections[3], 0, 0)
+            ]
+        );
+        // A missing neighbour tile is skipped without a query.
+        let (_, asked) = seen_value_setup(&mut e, cell, (15, 15), true);
+        let sections = interior_sections(&mut e, cell, [true, true, false, false]);
+        assert_eq!(e.call(0x0055_6870, &args![position]).i32(), 0);
+        assert_eq!(
+            *asked.borrow(),
+            vec![(sections[0], 15, 15), (sections[1], 15, 0)]
+        );
+    }
+
+    #[test]
+    fn interior_seen_value_at_one_edge_asks_two_sections() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        let position = interior_position(&mut e);
+        // Right edge: the tile to the right is asked for the column 0.
+        let (_, asked) = seen_value_setup(&mut e, cell, (15, 2), true);
+        let sections = interior_sections(&mut e, cell, [true, false, true, false]);
+        e.call(0x0055_6870, &args![position]);
+        assert_eq!(
+            *asked.borrow(),
+            vec![
+                (sections[0], 15, 2),
+                (sections[0], 15, 3),
+                (sections[2], 0, 2),
+                (sections[2], 0, 3)
+            ]
+        );
+        // Bottom edge: the tile below is asked for the row 0.
+        let (set, asked) = seen_value_setup(&mut e, cell, (2, 15), true);
+        let sections = interior_sections(&mut e, cell, [true, true, false, false]);
+        set.borrow_mut().insert((sections[1], 3, 0));
+        assert_eq!(e.call(0x0055_6870, &args![position]).i32(), 1);
+        assert_eq!(
+            *asked.borrow(),
+            vec![
+                (sections[0], 2, 15),
+                (sections[1], 2, 0),
+                (sections[0], 3, 15),
+                (sections[1], 3, 0)
+            ]
+        );
+    }
+
+    /// An exterior world: cells by coordinates.
+    struct Cells {
+        seen: Rc<RefCell<std::collections::HashMap<u32, u32>>>,
+        flagged: Rc<RefCell<std::collections::HashSet<u32>>>,
+        asked: Rc<RefCell<Vec<(u32, u32)>>>,
+    }
+
+    fn exterior_cells(e: &mut Engine, coordinates: &[(i32, i32)]) -> (Cells, Vec<u32>) {
+        let cells: Vec<u32> = coordinates.iter().map(|_| e.mem.alloc(0x10)).collect();
+        let by_coordinates: std::collections::HashMap<(i32, i32), u32> = coordinates
+            .iter()
+            .copied()
+            .zip(cells.iter().copied())
+            .collect();
+        let asked = Rc::new(RefCell::new(vec![]));
+        let recorder = asked.clone();
+        e.register_double(WORLD_SPACE_GET_CELL, move |_, a| {
+            assert_eq!(a[0], 0x7777);
+            recorder.borrow_mut().push((a[1], a[2]));
+            by_coordinates
+                .get(&(a[1] as i32, a[2] as i32))
+                .copied()
+                .unwrap_or(0)
+                .into_ret()
+        });
+        let seen: Rc<RefCell<std::collections::HashMap<u32, u32>>> = Default::default();
+        let lookup = seen.clone();
+        e.register_double(CELL_SEEN_DATA, move |_, a| {
+            lookup.borrow().get(&a[0]).copied().unwrap_or(0).into_ret()
+        });
+        let flagged: Rc<RefCell<std::collections::HashSet<u32>>> = Default::default();
+        let lookup = flagged.clone();
+        e.register_double(CELL_SEEN_FLAG, move |_, a| {
+            u32::from(lookup.borrow().contains(&a[0])).into_ret()
+        });
+        (
+            Cells {
+                seen,
+                flagged,
+                asked,
+            },
+            cells,
+        )
+    }
+
+    fn exterior_position(e: &mut Engine) -> u32 {
+        let position = e.mem.alloc(12);
+        put_floats(
+            e,
+            position,
+            &[2.0 * 4096.0 + 100.0, 3.0 * 4096.0 + 7.0, 0.0],
+        );
+        position
+    }
+
+    #[test]
+    fn exterior_seen_value_counts_seen_bits_and_flagged_cells() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        returns(&mut e, CELL_GET_WORLD_SPACE, 0x7777);
+        let (set, asked) = seen_value_setup(&mut e, cell, (3, 4), false);
+        let (cells, ids) = exterior_cells(&mut e, &[(2, 3)]);
+        let seen_object = 0x6000u32;
+        cells.seen.borrow_mut().insert(ids[0], seen_object);
+        set.borrow_mut().insert((seen_object, 3, 5));
+        set.borrow_mut().insert((seen_object, 4, 4));
+        let position = exterior_position(&mut e);
+        assert_eq!(e.call(0x0055_6870, &args![position]).i32(), 2);
+        assert_eq!(
+            *asked.borrow(),
+            vec![
+                (seen_object, 3, 4),
+                (seen_object, 3, 5),
+                (seen_object, 4, 4),
+                (seen_object, 4, 5)
+            ]
+        );
+        assert_eq!(*cells.asked.borrow(), vec![(2, 3)]);
+        // A flagged cell counts for all four corners, even without seen data.
+        cells.seen.borrow_mut().clear();
+        cells.flagged.borrow_mut().insert(ids[0]);
+        assert_eq!(e.call(0x0055_6870, &args![position]).i32(), 4);
+    }
+
+    #[test]
+    fn exterior_seen_value_at_the_corner_asks_the_four_neighbour_cells() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        returns(&mut e, CELL_GET_WORLD_SPACE, 0x7777);
+        let (set, asked) = seen_value_setup(&mut e, cell, (15, 15), false);
+        let (cells, ids) = exterior_cells(&mut e, &[(2, 3), (2, 4), (3, 3), (3, 4)]);
+        // (2,3): flagged only; (2,4): neither; (3,3): seen bit (0,15);
+        // (3,4): flagged.
+        cells.flagged.borrow_mut().insert(ids[0]);
+        cells.flagged.borrow_mut().insert(ids[3]);
+        cells.seen.borrow_mut().insert(ids[2], 0x6003);
+        set.borrow_mut().insert((0x6003, 0, 15));
+        let position = exterior_position(&mut e);
+        assert_eq!(e.call(0x0055_6870, &args![position]).i32(), 3);
+        assert_eq!(*cells.asked.borrow(), vec![(2, 3), (2, 4), (3, 3), (3, 4)]);
+        // Only the third cell has seen data, so only it is asked for a bit.
+        assert_eq!(*asked.borrow(), vec![(0x6003, 0, 15)]);
+        // Missing cells count nothing.
+        let (cells, _) = exterior_cells(&mut e, &[(2, 3)]);
+        assert_eq!(e.call(0x0055_6870, &args![position]).i32(), 0);
+        assert_eq!(cells.asked.borrow().len(), 4);
+    }
+
+    #[test]
+    fn exterior_seen_value_at_one_edge_asks_the_neighbour_cell() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        returns(&mut e, CELL_GET_WORLD_SPACE, 0x7777);
+        let position = exterior_position(&mut e);
+        // Right edge: (3, 3) is asked for the column 0.
+        let (set, asked) = seen_value_setup(&mut e, cell, (15, 2), false);
+        let (cells, ids) = exterior_cells(&mut e, &[(2, 3), (3, 3)]);
+        cells.seen.borrow_mut().insert(ids[0], 0x6001);
+        cells.seen.borrow_mut().insert(ids[1], 0x6002);
+        set.borrow_mut().insert((0x6002, 0, 3));
+        assert_eq!(e.call(0x0055_6870, &args![position]).i32(), 1);
+        assert_eq!(
+            *asked.borrow(),
+            vec![
+                (0x6001, 15, 2),
+                (0x6001, 15, 3),
+                (0x6002, 0, 2),
+                (0x6002, 0, 3)
+            ]
+        );
+        // Bottom edge: (2, 4) is asked for the row 0.
+        let (set, asked) = seen_value_setup(&mut e, cell, (2, 15), false);
+        let (cells, ids) = exterior_cells(&mut e, &[(2, 3), (2, 4)]);
+        cells.seen.borrow_mut().insert(ids[0], 0x6001);
+        cells.seen.borrow_mut().insert(ids[1], 0x6002);
+        set.borrow_mut().insert((0x6002, 3, 0));
+        assert_eq!(e.call(0x0055_6870, &args![position]).i32(), 1);
+        assert_eq!(
+            *asked.borrow(),
+            vec![
+                (0x6001, 2, 15),
+                (0x6002, 2, 0),
+                (0x6001, 3, 15),
+                (0x6002, 3, 0)
+            ]
+        );
+        // Without a world space an exterior cell counts nothing.
+        returns(&mut e, CELL_GET_WORLD_SPACE, 0);
+        assert_eq!(e.call(0x0055_6870, &args![position]).i32(), 0);
+    }
+
+    #[test]
+    fn int_seen_section_finds_creates_and_links_sections() {
+        let mut e = engine();
+        let cell: Ptr<TESObjectCELL> = Ptr::new(object(&mut e, 0xe0));
+        // An exterior cell has none.
+        returns(&mut e, CELL_IS_INTERIOR, 0);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0055_6ef0, &args![cell, 1u32, 2u32, 1u32]).u32(), 0);
+        assert_eq!(addresses(&calls(&e)), vec![CELL_IS_INTERIOR]);
+        // Interior: the chain A(-1, 2) -> B(3, 4).
+        returns(&mut e, CELL_IS_INTERIOR, 1);
+        let a = section(&mut e, -1, 2);
+        let b = section(&mut e, 3, 4);
+        e.mem.set_u32(a + 0x28, b);
+        returns(&mut e, CELL_SEEN_DATA, a);
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        start_log(&mut e);
+        assert_eq!(
+            e.call(0x0055_6ef0, &args![cell, -1i32, 2i32, 0u32]).u32(),
+            a
+        );
+        assert_eq!(
+            calls_to(&calls(&e), RT_DYNAMIC_CAST),
+            vec![vec![a, 0, SEEN_DATA_CAST_SOURCE, SEEN_DATA_CAST_TARGET, 0]]
+        );
+        assert_eq!(e.call(0x0055_6ef0, &args![cell, 3i32, 4i32, 1u32]).u32(), b);
+        // Not found, not created.
+        assert_eq!(e.call(0x0055_6ef0, &args![cell, 9i32, 9i32, 0u32]).u32(), 0);
+        // Not found, created after the last section.
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(INTERIOR_SEEN_DATA_CONSTRUCT, |_, a| a[0].into_ret());
+        start_log(&mut e);
+        let created = e.call(0x0055_6ef0, &args![cell, -5i32, 9i32, 1u32]).u32();
+        assert_ne!(created, 0);
+        assert_eq!(e.mem.u32(b + 0x28), created);
+        let log = calls(&e);
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x2c]]);
+        assert_eq!(
+            calls_to(&log, INTERIOR_SEEN_DATA_CONSTRUCT),
+            vec![vec![created, 0xfb, 9]]
+        );
+        assert!(calls_to(&log, EXTRA_LIST_SET_SEEN_DATA).is_empty());
+    }
+
+    #[test]
+    fn int_seen_section_without_seen_data_stores_the_first_section() {
+        let mut e = engine();
+        let cell: Ptr<TESObjectCELL> = Ptr::new(object(&mut e, 0xe0));
+        returns(&mut e, CELL_IS_INTERIOR, 1);
+        returns(&mut e, CELL_SEEN_DATA, 0);
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(INTERIOR_SEEN_DATA_CONSTRUCT, |_, a| a[0].into_ret());
+        returns(&mut e, CELL_EXTRA_DATA_LIST, 0x6100);
+        quiet(&mut e, &[EXTRA_LIST_SET_SEEN_DATA]);
+        let changed = Rc::new(RefCell::new(vec![]));
+        let recorder = changed.clone();
+        e.register_double(fake(0x48), move |_, a| {
+            recorder.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        // Without creation: nothing.
+        assert_eq!(e.call(0x0055_6ef0, &args![cell, 1u32, 2u32, 0u32]).u32(), 0);
+        assert!(changed.borrow().is_empty());
+        start_log(&mut e);
+        let created = e.call(0x0055_6ef0, &args![cell, 1u32, 2u32, 1u32]).u32();
+        assert_ne!(created, 0);
+        let log = calls(&e);
+        assert_eq!(
+            calls_to(&log, EXTRA_LIST_SET_SEEN_DATA),
+            vec![vec![0x6100, created]]
+        );
+        assert_eq!(*changed.borrow(), vec![vec![cell.addr(), 0x8000_0000]]);
+    }
+
+    /// The cell lock and the reference list of a cell with `items`.
+    fn reference_list_setup(e: &mut Engine, items: &[u32]) -> Ptr<TESObjectCELL> {
+        let cell = e.new_object::<TESObjectCELL>();
+        list_doubles(e);
+        quiet(e, &[CELL_LOCK_ENTER, CELL_LOCK_LEAVE]);
+        let first = list_of(e, items);
+        returns(e, CELL_REFERENCES, first);
+        cell
+    }
+
+    #[test]
+    fn reference_loops_run_under_the_cell_lock() {
+        let mut e = engine();
+        let cell = reference_list_setup(&mut e, &[]);
+        for entry in [0x0055_70d0u32, 0x0055_73e0, 0x0055_7470, 0x0055_74d0] {
+            start_log(&mut e);
+            e.call(entry, &args![cell]);
+            assert_eq!(
+                addresses(&calls(&e)),
+                vec![CELL_LOCK_ENTER, CELL_REFERENCES, CELL_LOCK_LEAVE],
+                "{entry:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn reference_owner_objects_are_called_for_the_references_of_form_type_0x25() {
+        let mut e = engine();
+        // `+0x34` owner, `+0x3c` form type of the base object (the base
+        // object of a test reference is the reference itself), `+0x40` the
+        // answer of `005651e0`.
+        let owner_target = reference_object(&mut e);
+        let owner = reference_object(&mut e);
+        e.mem.set_u32(owner + 0x38, owner_target);
+        let calls_on_target = Rc::new(RefCell::new(vec![]));
+        let recorder = calls_on_target.clone();
+        e.register_double(fake(0x08), move |_, a| {
+            recorder.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        let make = |e: &mut Engine, form_type: u32, owner: u32, rejected: u32| {
+            let at = reference_object(e);
+            e.mem.set_u32(at + 0x34, owner);
+            e.mem.set_u32(at + 0x3c, form_type);
+            e.mem.set_u32(at + 0x40, rejected);
+            at
+        };
+        let skipped_by_test = make(&mut e, 0x25, owner, 1);
+        let wrong_type = make(&mut e, 0x24, owner, 0);
+        let without_owner = make(&mut e, 0x25, 0, 0);
+        let working = make(&mut e, 0x25, owner, 0);
+        let cell = reference_list_setup(
+            &mut e,
+            &[0, skipped_by_test, wrong_type, without_owner, working],
+        );
+        e.register(REFERENCE_TEST, |e, a| e.mem.u32(a[0] + 0x40).into_ret());
+        e.register(REFERENCE_BASE_OBJECT, |_, a| a[0].into_ret());
+        e.register(FORM_TYPE, |e, a| e.mem.u32(a[0] + 0x3c).into_ret());
+        start_log(&mut e);
+        e.call(0x0055_70d0, &args![cell]);
+        let log = calls(&e);
+        // The owner of the working reference is asked twice (the game does).
+        assert_eq!(calls_to(&log, fake(0x1d0)).len(), 1 + 2);
+        assert_eq!(*calls_on_target.borrow(), vec![vec![owner_target, owner]]);
+        assert_eq!(calls_to(&log, REFERENCE_TEST).len(), 4);
+    }
+
+    /// A reference for `QueueReferences`: `+0x20` base object, `+0x34`
+    /// owner, `+0x44`.. flags of `00440da0`, `00440d80`, `0056b250` and the
+    /// answer of `005651e0` at `+0x50`.
+    fn queue_reference(e: &mut Engine, base: u32, owner: u32, flags: [u32; 4]) -> u32 {
+        let at = object(e, 0x60);
+        e.mem.set_u32(at + 0x20, base);
+        e.mem.set_u32(at + 0x34, owner);
+        for (index, flag) in flags.into_iter().enumerate() {
+            e.mem.set_u32(at + 0x44 + 4 * index as u32, flag);
+        }
+        at
+    }
+
+    #[test]
+    fn queue_references_goes_through_the_marker_forms_first() {
+        let mut e = engine();
+        e.set_global(MARKER_FORM_FIRST, 0xaaa1u32);
+        e.set_global(MARKER_FORM_SECOND, 0xaaa2u32);
+        e.set_global(SCENE_SINGLETON, 0x9900u32);
+        e.set_global(MODEL_LOADER_SINGLETON, 0x9a00u32);
+        returns(&mut e, CELL_PRIORITY, 0x55);
+        e.register(REFERENCE_BASE_OBJECT, |e, a| {
+            e.mem.u32(a[0] + 0x20).into_ret()
+        });
+        e.register(fake(0x1d0), |e, a| e.mem.u32(a[0] + 0x34).into_ret());
+        e.register(REFERENCE_FLAG_TEST_A, |e, a| {
+            e.mem.u32(a[0] + 0x44).into_ret()
+        });
+        e.register(REFERENCE_FLAG_TEST_B, |e, a| {
+            e.mem.u32(a[0] + 0x48).into_ret()
+        });
+        e.register(REFERENCE_FLAG_TEST_C, |e, a| {
+            e.mem.u32(a[0] + 0x4c).into_ret()
+        });
+        e.register(REFERENCE_TEST, |e, a| e.mem.u32(a[0] + 0x50).into_ret());
+        quiet(&mut e, &[MODEL_LOADER_QUEUE_REFERENCE]);
+        let deferred = Rc::new(RefCell::new(vec![]));
+        let recorder = deferred.clone();
+        e.register_double(fake(0x1cc), move |_, a| {
+            recorder.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        // [flagA, flagB, flagC, test]
+        let r1 = queue_reference(&mut e, 0xaaa1, 0, [0, 0, 1, 0]);
+        let r2 = queue_reference(&mut e, 0x1, 0, [1, 0, 1, 0]);
+        let r3 = queue_reference(&mut e, 0x1, 5, [0, 1, 0, 0]);
+        let r4 = queue_reference(&mut e, 0xaaa2, 7, [1, 0, 0, 0]);
+        let r5 = queue_reference(&mut e, 0x1, 0, [0, 0, 0, 0]);
+        let r6 = queue_reference(&mut e, 0x1, 5, [0, 0, 0, 1]);
+        let cell = reference_list_setup(&mut e, &[r1, r2, r3, r4, r5, 0, r6]);
+        start_log(&mut e);
+        e.call(0x0055_71a0, &args![cell, 1u32]);
+        let log = calls(&e);
+        assert_eq!(
+            calls_to(&log, CELL_PRIORITY),
+            vec![vec![0x9900, cell.addr(), 0]]
+        );
+        // With the check: a reference must also pass `0056b250`, which only
+        // the first one does not: r1 has its flag C set, r5 and r6 not.
+        let queued: Vec<u32> = calls_to(&log, MODEL_LOADER_QUEUE_REFERENCE)
+            .iter()
+            .map(|call| call[1])
+            .collect();
+        assert_eq!(queued, vec![r1]);
+        for call in calls_to(&log, MODEL_LOADER_QUEUE_REFERENCE) {
+            assert_eq!(call[0], 0x9a00);
+            assert_eq!(call[2..], [0x55, 1]);
+        }
+        // r4 (marker, owner, not rejected, flagged): first pass, `(0, 1)`;
+        // r3 (flagged B) in the second pass: `(0, 0)`.
+        assert_eq!(*deferred.borrow(), vec![vec![r4, 0, 1], vec![r3, 0, 0]]);
+        // Without the check, the unflagged references are queued too, in the
+        // order of the passes: marker forms first, then the others.
+        deferred.borrow_mut().clear();
+        start_log(&mut e);
+        e.call(0x0055_71a0, &args![cell, 0u32]);
+        let log = calls(&e);
+        let queued: Vec<u32> = calls_to(&log, MODEL_LOADER_QUEUE_REFERENCE)
+            .iter()
+            .map(|call| call[1])
+            .collect();
+        assert_eq!(queued, vec![r1, r5, r6]);
+        assert_eq!(*deferred.borrow(), vec![vec![r4, 0, 1], vec![r3, 0, 0]]);
+        assert_eq!(calls_to(&log, CELL_LOCK_LEAVE).len(), 1);
+    }
+
+    #[test]
+    fn models_of_the_references_are_prepared_and_made_opaque() {
+        let mut e = engine();
+        e.register(REFERENCE_MODEL, |e, a| e.mem.u32(a[0] + 0x30).into_ret());
+        e.register(fake(0x10), |e, a| e.mem.u32(a[0] + 0x30).into_ret());
+        quiet(&mut e, &[MODEL_PREPARE, SET_PROPERTY_FADE_ALPHA]);
+        let model_off = object(&mut e, 0x40);
+        let model_on = object(&mut e, 0x40);
+        e.mem.set_u32(model_on + 0x30, 1);
+        let reference = |e: &mut Engine, model: u32| {
+            let at = e.mem.alloc(0x40);
+            e.mem.set_u32(at + 0x30, model);
+            at
+        };
+        let items = [
+            0,
+            reference(&mut e, 0),
+            reference(&mut e, model_off),
+            reference(&mut e, model_on),
+        ];
+        let cell = reference_list_setup(&mut e, &items);
+        start_log(&mut e);
+        e.call(0x0055_73e0, &args![cell]);
+        let log = calls(&e);
+        assert_eq!(calls_to(&log, MODEL_PREPARE), vec![vec![model_on]]);
+        assert_eq!(
+            calls_to(&log, SET_PROPERTY_FADE_ALPHA),
+            vec![vec![model_on, 1.0f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn references_of_the_cell_are_handed_to_the_loaded_collection() {
+        let mut e = engine();
+        e.set_global(LOADED_REFERENCES, 0xc0deu32);
+        quiet(&mut e, &[LOADED_REFERENCES_REMOVE]);
+        let cell = reference_list_setup(&mut e, &[0, 0x31, 0x32]);
+        start_log(&mut e);
+        e.call(0x0055_7470, &args![cell]);
+        assert_eq!(
+            calls_to(&calls(&e), LOADED_REFERENCES_REMOVE),
+            vec![vec![0xc0de, 0x31], vec![0xc0de, 0x32]]
+        );
+    }
+
+    /// Doubles for the terrain updates; the reference flags are `+0x30`
+    /// (`00440da0`). The terrain manager of every world is `0x7a`.
+    fn terrain_setup(e: &mut Engine) {
+        e.set_global(LOADED_REFERENCES, 0xc0deu32);
+        e.set_global(SCENE_SINGLETON, 0x9900u32);
+        quiet(
+            e,
+            &[
+                LOADED_REFERENCES_ADD,
+                TERRAIN_HIDE_TREE,
+                TERRAIN_UPDATE_TREE,
+                TERRAIN_SET_FLAG,
+            ],
+        );
+        returns(e, SCENE_CELL, 0);
+        returns(e, SCENE_WORLD_SPACE, 1);
+        returns(e, REFERENCE_BASE_OBJECT, 0xba5e);
+        returns(e, BASE_FORM_FLAG_40, 1);
+        returns(e, REFERENCE_WORLD_SPACE, 0x3300);
+        returns(e, WORLD_GET_TERRAIN_MANAGER, 0x7a);
+        e.register(REFERENCE_FLAG_TEST_A, |e, a| {
+            e.mem.u32(a[0] + 0x30).into_ret()
+        });
+    }
+
+    #[test]
+    fn terrain_is_told_about_every_reference_of_an_exterior_scene() {
+        let mut e = engine();
+        terrain_setup(&mut e);
+        let plain = e.mem.alloc(0x40);
+        let hidden = e.mem.alloc(0x40);
+        e.mem.set_u32(hidden + 0x30, 1);
+        let cell = reference_list_setup(&mut e, &[0, plain, hidden]);
+        start_log(&mut e);
+        e.call(0x0055_74d0, &args![cell]);
+        let log = calls(&e);
+        assert_eq!(
+            calls_to(&log, LOADED_REFERENCES_ADD),
+            vec![vec![0xc0de, plain], vec![0xc0de, hidden]]
+        );
+        assert_eq!(calls_to(&log, SCENE_CELL), vec![vec![0x9900], vec![0x9900]]);
+        assert_eq!(calls_to(&log, TERRAIN_UPDATE_TREE), vec![vec![0x7a, plain]]);
+        assert_eq!(
+            calls_to(&log, TERRAIN_HIDE_TREE),
+            vec![vec![0x7a, hidden, 1]]
+        );
+        assert_eq!(
+            calls_to(&log, TERRAIN_SET_FLAG),
+            vec![vec![0x7a, 1], vec![0x7a, 1]]
+        );
+        assert_eq!(
+            calls_to(&log, WORLD_GET_TERRAIN_MANAGER),
+            vec![vec![0x3300]; 4]
+        );
+    }
+
+    #[test]
+    fn terrain_is_left_alone_when_the_scene_or_the_reference_does_not_qualify() {
+        let reference_at = |e: &mut Engine| e.mem.alloc(0x40);
+        for step in 0..4 {
+            let mut e = engine();
+            terrain_setup(&mut e);
+            match step {
+                0 => returns(&mut e, SCENE_CELL, 0x44),
+                1 => returns(&mut e, SCENE_WORLD_SPACE, 0),
+                2 => returns(&mut e, BASE_FORM_FLAG_40, 0),
+                _ => returns(&mut e, REFERENCE_WORLD_SPACE, 0),
+            }
+            let reference = reference_at(&mut e);
+            let cell = reference_list_setup(&mut e, &[reference]);
+            start_log(&mut e);
+            e.call(0x0055_74d0, &args![cell]);
+            let log = calls(&e);
+            assert_eq!(calls_to(&log, LOADED_REFERENCES_ADD).len(), 1, "{step}");
+            assert!(calls_to(&log, TERRAIN_UPDATE_TREE).is_empty(), "{step}");
+            assert!(calls_to(&log, TERRAIN_HIDE_TREE).is_empty(), "{step}");
+            assert!(calls_to(&log, TERRAIN_SET_FLAG).is_empty(), "{step}");
+        }
     }
 }
