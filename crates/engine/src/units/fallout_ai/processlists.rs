@@ -4579,6 +4579,1775 @@ pub fn fn_00974960(e: &mut Engine, array: u32, index: u32) {
     }
 }
 
+// --- 009749b0 .. 009756c0: shader hit effects, projectiles, save/load sizes --
+
+/// `PathingLocation::GetWorldspace` (Xbox PDB), called on a temporary effect
+/// by the sweeps below: the worldspace the effect belongs to.
+const EFFECT_WORLDSPACE: u32 = 0x0044_1110;
+/// `0043b300(type, effect)`: whether the effect is of the class whose
+/// type descriptor is `type` (a dynamic-cast test; false for null).
+const EFFECT_IS_OF_TYPE: u32 = 0x0043_b300;
+/// Setter of the byte at +0x24 of an effect (`00461310(effect, value)`).
+const EFFECT_SET_FLAG_0X24: u32 = 0x0046_1310;
+/// Setter of the byte at +0x28 of an effect (`00929260(effect, value)`).
+const EFFECT_SET_FLAG_0X28: u32 = 0x0092_9260;
+/// Class tested by `fn_009749b0` (sweep over the `MagicEffectList`).
+const EFFECT_TYPE_011DC6B4: u32 = 0x011d_c6b4;
+/// Class tested by most sweeps over the `MagicEffectList` (the one
+/// `FinishMagicShaderHitEffect` uses).
+const EFFECT_TYPE_011DC804: u32 = 0x011d_c804;
+/// Class tested by `fn_00974b80`.
+const EFFECT_TYPE_011DC724: u32 = 0x011d_c724;
+/// Class tested by `fn_00974c30` over the `GlobalTempEffectList`.
+const EFFECT_TYPE_011D6B04: u32 = 0x011d_6b04;
+/// `__RTDynamicCast(object, 0, source, target, 0)` (cdecl).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// Type descriptors `__RTDynamicCast` is given: the source (the class of the
+/// process array's objects) and the targets.
+const OBJECT_TYPE_SOURCE: u32 = 0x0118_4920;
+const TYPE_PROJECTILE: u32 = 0x0118_9dbc;
+const TYPE_011A0E88: u32 = 0x011a_0e88;
+const TYPE_011A28E0: u32 = 0x011a_28e0;
+/// The save-game stream the `Save*` functions write to (a pointer kept in a
+/// global): `008579b0(stream, data, size)` appends bytes, `00825c00(stream)`
+/// returns the address of the next byte to be written.
+const SAVE_STREAM: u32 = 0x011d_e45c;
+const STREAM_WRITE: u32 = 0x0085_79b0;
+const STREAM_POSITION: u32 = 0x0082_5c00;
+/// `MobileObject::IsinDialogue` (Xbox PDB).
+const IS_IN_DIALOGUE: u32 = 0x0093_36c0;
+
+/// Visits every non-null effect of the `NiPointer` list at `list` for which
+/// `0043b300(type, effect)` holds, in order. The walk begins with the
+/// list's own emptiness test, as the game's loops do.
+fn for_each_effect_of_type(
+    e: &mut Engine,
+    list: u32,
+    effect_type: u32,
+    mut visit: impl FnMut(&mut Engine, u32),
+) {
+    if e.call(NI_POINTER_LIST_IS_EMPTY, &args![list]).bool() {
+        return;
+    }
+    let mut node = list;
+    while node != 0 {
+        let effect = effect_of_node(e, node);
+        if effect != 0
+            && e.call(EFFECT_IS_OF_TYPE, &args![effect_type, effect])
+                .bool()
+        {
+            visit(e, effect);
+        }
+        node = node_next(e, node);
+    }
+}
+
+/// The worldspace of an effect (`PathingLocation::GetWorldspace`).
+fn effect_worldspace(e: &mut Engine, effect: u32) -> u32 {
+    e.call(EFFECT_WORLDSPACE, &args![effect]).u32()
+}
+
+// Translated from 009749b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// For every effect of the `MagicEffectList` (+0x60) of class
+/// `0x011dc6b4` whose worldspace is `worldspace`: calls its slot 0xc8 and
+/// sets its byte at +0x24 (`00461310`).
+pub fn fn_009749b0(e: &mut Engine, this: Ptr<ProcessLists>, worldspace: u32) {
+    let list = this.addr() + MAGIC_EFFECT_LIST;
+    for_each_effect_of_type(e, list, EFFECT_TYPE_011DC6B4, |e, effect| {
+        if effect_worldspace(e, effect) == worldspace {
+            e.vcall(effect, 0xc8, &[]);
+            e.call(EFFECT_SET_FLAG_0X24, &args![effect, 1u32]);
+        }
+    });
+}
+
+// Translated from 00974a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ProcessLists::FinishMagicShaderHitEffect` (Xbox PDB): for every effect of
+/// the `MagicEffectList` of class `0x011dc804` in `worldspace` whose
+/// `00671d10` is `shader`, sets the byte at +0x24 (`00461310`).
+pub fn processlists_finish_magic_shader_hit_effect(
+    e: &mut Engine,
+    this: Ptr<ProcessLists>,
+    worldspace: u32,
+    shader: u32,
+) {
+    let list = this.addr() + MAGIC_EFFECT_LIST;
+    for_each_effect_of_type(e, list, EFFECT_TYPE_011DC804, |e, effect| {
+        if effect_worldspace(e, effect) == worldspace
+            && e.call(0x0067_1d10, &args![effect]).u32() == shader
+        {
+            e.call(EFFECT_SET_FLAG_0X24, &args![effect, 1u32]);
+        }
+    });
+}
+
+// Translated from 00974af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Like `FinishMagicShaderHitEffect` without the worldspace test: sets the
+/// byte at +0x24 of every `MagicEffectList` effect of class `0x011dc804`
+/// whose `00671d10` is `shader`.
+pub fn fn_00974af0(e: &mut Engine, this: Ptr<ProcessLists>, shader: u32) {
+    let list = this.addr() + MAGIC_EFFECT_LIST;
+    for_each_effect_of_type(e, list, EFFECT_TYPE_011DC804, |e, effect| {
+        if e.call(0x0067_1d10, &args![effect]).u32() == shader {
+            e.call(EFFECT_SET_FLAG_0X24, &args![effect, 1u32]);
+        }
+    });
+}
+
+// Translated from 00974b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the byte at +0x24 of every `MagicEffectList` effect of class
+/// `0x011dc724` in `worldspace` for which `00408b20(effect->0055b980(),
+/// name)` is zero (a comparison of the effect's field at +0x2c with `name`).
+pub fn fn_00974b80(e: &mut Engine, this: Ptr<ProcessLists>, worldspace: u32, name: u32) {
+    let list = this.addr() + MAGIC_EFFECT_LIST;
+    for_each_effect_of_type(e, list, EFFECT_TYPE_011DC724, |e, effect| {
+        if effect_worldspace(e, effect) == worldspace {
+            let effect_name = e.call(0x0055_b980, &args![effect]).u32();
+            if e.call(0x0040_8b20, &args![effect_name, name]).u32() == 0 {
+                e.call(EFFECT_SET_FLAG_0X24, &args![effect, 1u32]);
+            }
+        }
+    });
+}
+
+// Translated from 00974c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the byte at +0x28 (`00929260`) of every effect of the
+/// `GlobalTempEffectList` (+0x58) of class `0x011d6b04`.
+pub fn fn_00974c30(e: &mut Engine, this: Ptr<ProcessLists>) {
+    let list = this.addr() + GLOBAL_TEMP_EFFECT_LIST;
+    for_each_effect_of_type(e, list, EFFECT_TYPE_011D6B04, |e, effect| {
+        e.call(EFFECT_SET_FLAG_0X28, &args![effect, 1u32]);
+    });
+}
+
+// Translated from 00974cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The effect of the `MagicEffectList` of class `0x011dc804` in `worldspace`
+/// with the smallest value at +0x10 (`00621b00`, a `float`, starting from
+/// `FLT_MAX`) among those whose byte at +0x28 is clear; null when none.
+pub fn fn_00974cb0(e: &mut Engine, this: Ptr<ProcessLists>, worldspace: u32) -> u32 {
+    let list = this.addr() + MAGIC_EFFECT_LIST;
+    let mut best = 0u32;
+    let mut best_value: f32 = e.global(0x0101_6970);
+    for_each_effect_of_type(e, list, EFFECT_TYPE_011DC804, |e, effect| {
+        if effect_worldspace(e, effect) == worldspace {
+            let value = e.call(0x0062_1b00, &args![effect]).f32();
+            if value < best_value && fn_00974d90(e, Ptr::new(effect)) == 0 {
+                best = effect;
+                best_value = e.call(0x0062_1b00, &args![effect]).f32();
+            }
+        }
+    });
+    best
+}
+
+// Translated from 00974d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at +0x28 of an effect (the one `00929260` sets).
+pub fn fn_00974d90(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x28)
+}
+
+// Translated from 00974db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ProcessLists::FindAndCleanupWeaponShaderHitEffect` (Xbox PDB): among the
+/// `MagicEffectList` effects of class `0x011dc804` in `worldspace` whose
+/// byte at +0x28 is set and for which `00543c30` is false, keeps the first
+/// one whose `00671d10` is `shader` and returns it; every other such effect
+/// gets its byte at +0x24 set (`00461310`).
+pub fn processlists_find_and_cleanup_weapon_shader_hit_effect(
+    e: &mut Engine,
+    this: Ptr<ProcessLists>,
+    worldspace: u32,
+    shader: u32,
+) -> u32 {
+    let list = this.addr() + MAGIC_EFFECT_LIST;
+    let mut found = 0u32;
+    for_each_effect_of_type(e, list, EFFECT_TYPE_011DC804, |e, effect| {
+        if effect_worldspace(e, effect) == worldspace
+            && fn_00974d90(e, Ptr::new(effect)) != 0
+            && !e.call(0x0054_3c30, &args![effect]).bool()
+        {
+            if e.call(0x0067_1d10, &args![effect]).u32() == shader && found == 0 {
+                found = effect;
+            } else {
+                e.call(EFFECT_SET_FLAG_0X24, &args![effect, 1u32]);
+            }
+        }
+    });
+    found
+}
+
+// Translated from 00974e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Among the `MagicEffectList` effects whose slot 0x9c answers 6 and that
+/// have an owner (`009611e0`), takes the one with the smallest value at
+/// +0x10 (`00621b00`, a `float`, starting from `FLT_MAX`) whose owner's
+/// `0059bb30` object answers `kind` in its slot 4 and for which
+/// `007043c0(test)` holds. That effect gets slot 0xc4 and
+/// `MagicShaderHitEffect::ResetAlphaTimer` (`008216c0`) and true is
+/// returned; false when the list is empty or nothing qualifies.
+pub fn fn_00974e90(e: &mut Engine, this: Ptr<ProcessLists>, kind: u32, test: u32) -> bool {
+    let list = this.addr() + MAGIC_EFFECT_LIST;
+    if e.call(NI_POINTER_LIST_IS_EMPTY, &args![list]).bool() {
+        return false;
+    }
+    let mut best = 0u32;
+    let mut best_value: f32 = e.global(0x0101_6970);
+    let mut node = list;
+    while node != 0 {
+        let effect = effect_of_node(e, node);
+        if effect != 0 && e.vcall(effect, 0x9c, &[]).i32() == 6 {
+            let owner = e.call(0x0096_11e0, &args![effect]).u32();
+            if owner != 0 && e.call(0x0062_1b00, &args![effect]).f32() < best_value {
+                let texture = e.call(0x0059_bb30, &args![owner]).u32();
+                if texture != 0 {
+                    let texture = e.call(0x0059_bb30, &args![owner]).u32();
+                    if e.vcall(texture, 4, &[]).u32() == kind
+                        && e.call(0x0070_43c0, &args![test]).bool()
+                    {
+                        best = effect;
+                        best_value = e.call(0x0062_1b00, &args![effect]).f32();
+                    }
+                }
+            }
+        }
+        node = node_next(e, node);
+    }
+    if best == 0 {
+        return false;
+    }
+    e.vcall(best, 0xc4, &[]);
+    e.call(0x0082_16c0, &args![best]);
+    true
+}
+
+// Translated from 00974fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ProcessLists::StopAllActorsInDialog` (Xbox PDB): for every actor of
+/// level 0 that is in dialogue (`MobileObject::IsinDialogue`) and whose slot
+/// 0x2c8 is not the player, calls its slot 0x288.
+pub fn processlists_stop_all_actors_in_dialog(e: &mut Engine, this: Ptr<ProcessLists>) {
+    let array = mob_process_array(this);
+    let mut index = 0u32;
+    while index < array_tail(e, array, 0) {
+        let object = array_object(e, array, index);
+        if object != 0 && is_actor(e, object) {
+            let actor = object;
+            if e.call(IS_IN_DIALOGUE, &args![actor]).bool() {
+                let partner = e.vcall(actor, 0x2c8, &[]).u32();
+                if partner != player(e) {
+                    e.vcall(actor, 0x288, &[]);
+                }
+            }
+        }
+        index = index.wrapping_add(1);
+    }
+}
+
+// Translated from 00975080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Walks the list at +0x70 (`ProjectilePostProcessList`) and removes every
+/// entry that is a projectile (`__RTDynamicCast` to `0x01189dbc`) whose
+/// `009bec50(0.0)` answers true.
+pub fn fn_00975080(e: &mut Engine, this: Ptr<ProcessLists>) {
+    let list = this.addr() + PROJECTILE_POST_PROCESS_LIST;
+    if e.call(LIST_IS_EMPTY, &args![list]).bool() {
+        return;
+    }
+    let mut previous = list;
+    let mut node = list;
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let item = node_value(e, node);
+        let mut remove = false;
+        let projectile = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![item, 0u32, OBJECT_TYPE_SOURCE, TYPE_PROJECTILE, 0u32],
+            )
+            .u32();
+        if projectile != 0 {
+            remove = e.call(0x009b_ec50, &args![projectile, 0.0f32]).bool();
+        }
+        if remove {
+            list_remove_value(e, list, item);
+            if node != previous {
+                node = node_next(e, previous);
+            }
+        } else {
+            previous = node;
+            node = node_next(e, node);
+        }
+    }
+}
+
+/// `__RTDynamicCast(object, 0, OBJECT_TYPE_SOURCE, target, 0)`.
+fn cast_object(e: &mut Engine, object: u32, target: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![object, 0u32, OBJECT_TYPE_SOURCE, target, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 00975160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ProcessLists::KillAllProjectiles` (Xbox PDB): for every object of level 0,
+/// slot 0xc4(1) on a `0x011a0e88` or else `0x011a28e0` object; for a
+/// projectile (`0x01189dbc`) whose `004181e0` is null, or whose `004181e0`
+/// answers neither `00975300` nor `005de080`, `009bc8f0`. Then slot 0xc4(1)
+/// on every `0x011a28e0` object of level 1.
+pub fn processlists_kill_all_projectiles(e: &mut Engine, this: Ptr<ProcessLists>) {
+    let array = mob_process_array(this);
+    let mut index = 0u32;
+    while index < array_tail(e, array, 0) {
+        let object = array_object(e, array, index);
+        let first = cast_object(e, object, TYPE_011A0E88);
+        if first != 0 {
+            e.vcall(first, 0xc4, &args![1u32]);
+        } else {
+            let second = cast_object(e, object, TYPE_011A28E0);
+            if second != 0 {
+                e.vcall(second, 0xc4, &args![1u32]);
+            } else {
+                let projectile = cast_object(e, object, TYPE_PROJECTILE);
+                if projectile != 0 {
+                    let mut kill = true;
+                    if e.call(0x0041_81e0, &args![projectile]).u32() != 0 {
+                        let inner = e.call(0x0041_81e0, &args![projectile]).u32();
+                        if fn_00975300(e, inner) {
+                            kill = false;
+                        } else {
+                            let inner = e.call(0x0041_81e0, &args![projectile]).u32();
+                            if e.call(0x005d_e080, &args![inner]).bool() {
+                                kill = false;
+                            }
+                        }
+                    }
+                    if kill {
+                        e.call(0x009b_c8f0, &args![projectile]);
+                    }
+                }
+            }
+        }
+        index = index.wrapping_add(1);
+    }
+    let mut index = array_head(e, array, 1);
+    while index < array_tail(e, array, 1) {
+        let object = array_object(e, array, index);
+        let target = cast_object(e, object, TYPE_011A28E0);
+        if target != 0 {
+            e.vcall(target, 0xc4, &args![1u32]);
+        }
+        index = index.wrapping_add(1);
+    }
+}
+
+// Translated from 00975300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `004fd420(this, 4)`: the test `KillAllProjectiles` applies to a
+/// projectile's `004181e0` object.
+pub fn fn_00975300(e: &mut Engine, this: u32) -> bool {
+    e.call(0x004f_d420, &args![this, 4u32]).bool()
+}
+
+// Translated from 00975320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// For each of the five lists of `GlobalCrimeListArray` (+0x44): every entry
+/// whose `0084e3a0` or `0044ddc0` is `reference` is removed (the first node
+/// is popped, `0063f7b0`) and destroyed (`008f25e0(entry, 1)`); for any other
+/// entry, when `reference` is an actor (slot 0x100), `009eba00(entry,
+/// reference)`.
+pub fn fn_00975320(e: &mut Engine, this: Ptr<ProcessLists>, reference: u32) {
+    for i in 0..5u32 {
+        let list: u32 = e.mem.u32(this.addr() + GLOBAL_CRIME_LIST_ARRAY + 4 * i);
+        let mut node = list;
+        let mut previous = 0u32;
+        while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+            let item = node_value(e, node);
+            let mut removed = false;
+            if e.call(0x0084_e3a0, &args![item]).u32() == reference
+                || e.call(0x0044_ddc0, &args![item]).u32() == reference
+            {
+                if previous != 0 {
+                    list_remove_value(e, previous, item);
+                    node = node_next(e, previous);
+                } else {
+                    e.call(LIST_POP_FRONT, &args![node]);
+                }
+                if item != 0 {
+                    e.call(0x008f_25e0, &args![item, 1u32]);
+                }
+                removed = true;
+            } else if is_actor(e, reference) {
+                e.call(0x009e_ba00, &args![item, reference]);
+            }
+            if !removed {
+                previous = node;
+                node = node_next(e, node);
+            }
+        }
+    }
+}
+
+// Translated from 00975450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Size in bytes of the crime lists in a save: 4, plus 2 per list and the
+/// `009ebb80` size of each entry (16-bit arithmetic).
+pub fn fn_00975450(e: &mut Engine, this: Ptr<ProcessLists>) -> u16 {
+    let mut size: u16 = 4;
+    for i in 0..5u32 {
+        let list: u32 = e.mem.u32(this.addr() + GLOBAL_CRIME_LIST_ARRAY + 4 * i);
+        size = size.wrapping_add(2);
+        let mut node = list;
+        while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+            let item = node_value(e, node);
+            size = size.wrapping_add(e.call(0x009e_bb80, &args![item]).u16());
+            node = node_next(e, node);
+        }
+    }
+    size
+}
+
+// Translated from 009754f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ProcessLists::SaveGame` (Xbox PDB): writes the system time clock (4
+/// bytes), then for each of the five crime lists a 16-bit entry count
+/// (written first as 0 and patched at the end) and each entry through
+/// `009ebca0`.
+pub fn processlists_save_game(e: &mut Engine, this: Ptr<ProcessLists>) {
+    let stream: u32 = e.global(SAVE_STREAM);
+    e.call(STREAM_WRITE, &args![stream, SYSTEM_TIME_CLOCK, 4u32]);
+    e.with_stack(4, |e, count_slot| {
+        for i in 0..5u32 {
+            let mut count: u16 = 0;
+            e.mem.set_u16(count_slot.addr(), count);
+            let position = e.call(STREAM_POSITION, &args![stream]).u32();
+            e.call(STREAM_WRITE, &args![stream, count_slot.addr(), 2u32]);
+            let mut node: u32 = e.mem.u32(this.addr() + GLOBAL_CRIME_LIST_ARRAY + 4 * i);
+            while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+                let item = node_value(e, node);
+                e.call(0x009e_bca0, &args![item]);
+                count = count.wrapping_add(1);
+                node = node_next(e, node);
+            }
+            e.mem.set_u16(position, count);
+        }
+    });
+}
+
+/// Calls `visit(effect)` for every effect of the `GlobalTempEffectList`
+/// (+0x58), then of the `MagicEffectList` (+0x60): each walk stops at the
+/// list's first empty node.
+fn for_each_saved_effect_list(
+    e: &mut Engine,
+    this: Ptr<ProcessLists>,
+    mut visit: impl FnMut(&mut Engine, u32),
+) {
+    for offset in [GLOBAL_TEMP_EFFECT_LIST, MAGIC_EFFECT_LIST] {
+        let mut node = this.addr() + offset;
+        while node != 0 && !e.call(NI_POINTER_LIST_IS_EMPTY, &args![node]).bool() {
+            let effect = effect_of_node(e, node);
+            visit(e, effect);
+            node = node_next(e, node);
+        }
+    }
+}
+
+// Translated from 009755b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Size in bytes of the temporary effects in a save: 2, plus, for each
+/// effect of the two lists whose slot 0xa0 answers true, 1 plus its slot
+/// 0xa4 (a 16-bit size).
+pub fn fn_009755b0(e: &mut Engine, this: Ptr<ProcessLists>) -> u32 {
+    let mut size = 2u32;
+    for_each_saved_effect_list(e, this, |e, effect| {
+        if e.vcall(effect, 0xa0, &[]).bool() {
+            size = size.wrapping_add(1);
+            let own = e.vcall(effect, 0xa4, &[]).u16() as u32;
+            size = size.wrapping_add(own);
+        }
+    });
+    size
+}
+
+// Translated from 009756c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ProcessLists::SaveTempEffectsList` (Xbox PDB): writes a 16-bit count
+/// (patched at the end) and, for every effect of the two lists whose slot
+/// 0xa0 answers true, its kind (slot 0x9c, one byte) followed by its own
+/// data (slot 0xac).
+pub fn processlists_save_temp_effects_list(e: &mut Engine, this: Ptr<ProcessLists>) {
+    let stream: u32 = e.global(SAVE_STREAM);
+    e.with_stack(4, |e, slot| {
+        let mut count: u16 = 0;
+        e.mem.set_u16(slot.addr(), count);
+        let position = e.call(STREAM_POSITION, &args![stream]).u32();
+        e.call(STREAM_WRITE, &args![stream, slot.addr(), 2u32]);
+        for_each_saved_effect_list(e, this, |e, effect| {
+            if e.vcall(effect, 0xa0, &[]).bool() {
+                let kind = e.vcall(effect, 0x9c, &[]).u8();
+                e.mem.set_u8(slot.addr() + 2, kind);
+                e.call(STREAM_WRITE, &args![stream, slot.addr() + 2, 1u32]);
+                e.vcall(effect, 0xac, &[]);
+                count = count.wrapping_add(1);
+            }
+        });
+        e.mem.set_u16(position, count);
+    });
+}
+
+// --- 00975840 .. 009764a0: save/load of the crimes, clean-up, resting -------
+
+/// `BGSSaveGameBuffer` calls the save functions use (`this` = the buffer):
+/// `SaveData`-like `00865e50(buffer, address, size, 0)`,
+/// `StartVariableSizedValue` (`00865f20`) and
+/// `SaveVariableSizedValue_ov2` (`00865ff0(buffer, count, start)`, Xbox PDB).
+const BUFFER_SAVE_DATA: u32 = 0x0086_5e50;
+const BUFFER_START_VARIABLE_SIZED_VALUE: u32 = 0x0086_5f20;
+const BUFFER_SAVE_VARIABLE_SIZED_VALUE: u32 = 0x0086_5ff0;
+/// `BGSLoadGameBuffer` calls the load functions use: `00864980(buffer,
+/// address, size)` reads bytes, `00864a60(buffer)` is `LoadVariableSizedValue`
+/// (Xbox PDB).
+const BUFFER_LOAD_DATA: u32 = 0x0086_4980;
+const BUFFER_LOAD_VARIABLE_SIZED_VALUE: u32 = 0x0086_4a60;
+/// `Crime::SaveGame(crime, buffer)` (Xbox PDB), `Crime::LoadGame(crime,
+/// buffer)` (Xbox PDB), the `Crime` constructor used by the load (`this` =
+/// 0x3c bytes of fresh memory) and the load's second pass `009ec400(crime,
+/// buffer)`.
+const CRIME_SAVE_GAME: u32 = 0x009e_bfe0;
+const CRIME_LOAD_GAME: u32 = 0x009e_c1a0;
+const CRIME_CONSTRUCT: u32 = 0x009e_b420;
+const CRIME_LOAD_FIXUP: u32 = 0x009e_c400;
+/// `TES::IsCellLoaded(cell, flag)` (Xbox PDB name of `004511e0`).
+const TES_IS_CELL_LOADED: u32 = 0x0045_11e0;
+/// The cell an actor stands in (`008d6f30`).
+const ACTOR_CELL: u32 = 0x008d_6f30;
+/// `TESObjectCELL::AddReference(cell, reference, flag)` (`00548230`).
+const CELL_ADD_REFERENCE: u32 = 0x0054_8230;
+
+// Translated from 00975840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ProcessLists::SaveGame_ov2` (Xbox PDB): writes into `buffer` the four
+/// words at +0x154, +0x158, +0x103b4 and +0x103b8 (4 bytes each), then for
+/// each of the five crime lists a variable sized value holding the entries
+/// (`Crime::SaveGame`) and their count; null entries are skipped.
+pub fn processlists_save_game_ov2(e: &mut Engine, this: Ptr<ProcessLists>, buffer: u32) {
+    for offset in [0x154u32, 0x158, 0x103b4, 0x103b8] {
+        e.call(
+            BUFFER_SAVE_DATA,
+            &args![buffer, this.addr() + offset, 4u32, 0u32],
+        );
+    }
+    for i in 0..5u32 {
+        let mut count = 0u32;
+        let start = e
+            .call(BUFFER_START_VARIABLE_SIZED_VALUE, &args![buffer])
+            .u32();
+        let mut node: u32 = e.mem.u32(this.addr() + GLOBAL_CRIME_LIST_ARRAY + 4 * i);
+        while node != 0 {
+            let crime = node_value(e, node);
+            if crime != 0 {
+                e.call(CRIME_SAVE_GAME, &args![crime, buffer]);
+                count = count.wrapping_add(1);
+            }
+            node = node_next(e, node);
+        }
+        e.call(
+            BUFFER_SAVE_VARIABLE_SIZED_VALUE,
+            &args![buffer, count, start],
+        );
+    }
+}
+
+// Translated from 00975930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ProcessLists::LoadGame` (Xbox PDB): reads +0x154 (and +0x158 when the
+/// buffer's slot 0 answers 0x12 or more), +0x103b4 and +0x103b8 (4 bytes
+/// each); then for each of the five crime lists reads the variable sized
+/// value (the count), clears the list (or creates it when there is none) and
+/// pushes that many crimes, each constructed and loaded from the buffer. The
+/// exception-unwinding frame is not translated.
+pub fn processlists_load_game(e: &mut Engine, this: Ptr<ProcessLists>, buffer: u32) {
+    e.call(BUFFER_LOAD_DATA, &args![buffer, this.addr() + 0x154, 4u32]);
+    if e.vcall(buffer, 0, &[]).u8() >= 0x12 {
+        e.call(BUFFER_LOAD_DATA, &args![buffer, this.addr() + 0x158, 4u32]);
+    }
+    e.call(
+        BUFFER_LOAD_DATA,
+        &args![buffer, this.addr() + 0x103b4, 4u32],
+    );
+    e.call(
+        BUFFER_LOAD_DATA,
+        &args![buffer, this.addr() + 0x103b8, 4u32],
+    );
+    for i in 0..5u32 {
+        let count = e
+            .call(BUFFER_LOAD_VARIABLE_SIZED_VALUE, &args![buffer])
+            .u32();
+        if count == 0 {
+            continue;
+        }
+        let slot = this.addr() + GLOBAL_CRIME_LIST_ARRAY + 4 * i;
+        if e.mem.u32(slot) == 0 {
+            let list = list_new(e);
+            e.mem.set_u32(slot, list);
+        } else {
+            let list = e.mem.u32(slot);
+            e.call(LIST_CLEAR, &args![list]);
+        }
+        for _ in 0..count {
+            let memory = e.call(OPERATOR_NEW, &args![0x3cu32]).u32();
+            let crime = if memory == 0 {
+                0
+            } else {
+                e.call(CRIME_CONSTRUCT, &args![memory]).u32()
+            };
+            e.call(CRIME_LOAD_GAME, &args![crime, buffer]);
+            let list = e.mem.u32(slot);
+            list_push_value(e, list, crime);
+        }
+    }
+}
+
+// Translated from 00975af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Second pass of the load: calls `009ec400(crime, buffer)` on every non-null
+/// crime of the five crime lists, then `fn_0096e310`.
+pub fn fn_00975af0(e: &mut Engine, this: Ptr<ProcessLists>, buffer: u32) {
+    for i in 0..5u32 {
+        let mut node: u32 = e.mem.u32(this.addr() + GLOBAL_CRIME_LIST_ARRAY + 4 * i);
+        while node != 0 {
+            let crime = node_value(e, node);
+            if crime != 0 {
+                e.call(CRIME_LOAD_FIXUP, &args![crime, buffer]);
+            }
+            node = node_next(e, node);
+        }
+    }
+    fn_0096e310(e, this);
+}
+
+// Translated from 00975b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the crime state: zeroes +0x154, +0x158 and +0x103b8, and for each of
+/// the five crime lists destroys every entry (`008f25e0(crime, 1)`, popping
+/// the first node each time), deletes the list itself and clears its
+/// pointer. It takes one stack word it never reads.
+pub fn fn_00975b60(e: &mut Engine, this: Ptr<ProcessLists>, _unused_0: u32) {
+    e.mem.set_f32(this.addr() + 0x154, 0.0);
+    e.mem.set_f32(this.addr() + 0x158, 0.0);
+    e.mem.set_u32(this.addr() + 0x103b8, 0);
+    for i in 0..5u32 {
+        let slot = this.addr() + GLOBAL_CRIME_LIST_ARRAY + 4 * i;
+        let list = e.mem.u32(slot);
+        while list != 0 && node_value(e, list) != 0 {
+            let crime = node_value(e, list);
+            if crime != 0 {
+                e.call(0x008f_25e0, &args![crime, 1u32]);
+            }
+            e.call(LIST_POP_FRONT, &args![list]);
+        }
+        list_delete(e, list);
+        e.mem.set_u32(slot, 0);
+    }
+}
+
+// Translated from 00975c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Shuts the temporary effects down: every effect of the
+/// `GlobalTempEffectList` (+0x58) gets slot 0x90 and its node is removed
+/// from the head; the `MagicEffectList` (+0x60) is emptied the same way
+/// without the slot call; then `fn_00975cf0`, `004ee7d0`, `0049fef0` and
+/// `004a42a0` run. It takes one stack word it never reads.
+pub fn fn_00975c50(e: &mut Engine, this: Ptr<ProcessLists>, _unused_0: u32) {
+    let list = this.addr() + GLOBAL_TEMP_EFFECT_LIST;
+    while !e.call(NI_POINTER_LIST_IS_EMPTY, &args![list]).bool() {
+        let effect = effect_of_node(e, list);
+        if effect != 0 {
+            e.vcall(effect, 0x90, &[]);
+        }
+        e.call(NI_POINTER_LIST_REMOVE_HEAD, &args![list]);
+    }
+    let list = this.addr() + MAGIC_EFFECT_LIST;
+    while !e.call(NI_POINTER_LIST_IS_EMPTY, &args![list]).bool() {
+        e.call(NI_POINTER_LIST_REMOVE_HEAD, &args![list]);
+    }
+    fn_00975cf0(e);
+    e.call(0x004e_e7d0, &[]);
+    e.call(0x0049_fef0, &[]);
+    e.call(0x004a_42a0, &[]);
+}
+
+// Translated from 00975cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `004ee920` on the object at `0x011d6a30` and clears the word at
+/// `0x011d6a20`.
+pub fn fn_00975cf0(e: &mut Engine) {
+    e.call(0x004e_e920, &args![0x011d_6a30u32]);
+    e.set_global(0x011d_6a20, 0u32);
+}
+
+// Translated from 00975d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ProcessLists::Update3DAfterResting` (Xbox PDB): unless the byte at
+/// `0x011d8909` is set, walks the whole process array. For each actor: when
+/// it has a 3D node (slot 0x1d0) but its cell (`008d6f30`) is missing or not
+/// loaded (`TES::IsCellLoaded(cell, 0)`), slot 0x1cc(0, 0) is called and
+/// nothing else. Otherwise, when it still has no 3D node and neither
+/// `00445750(actor)` (on the object at `0x011c3b3c`), `00440da0` nor
+/// `00440d80` hold, and its cell is loaded (`IsCellLoaded(cell, 1)`), the
+/// actor is added to its cell (`00548230(cell, actor, 0)`) and the walk
+/// restarts at index 1. Afterwards the furniture list is rebuilt
+/// (`00459870(TES)`) and the actors are placed in beds and chairs.
+pub fn processlists_update_3d_after_resting(e: &mut Engine, this: Ptr<ProcessLists>) {
+    if e.global::<u8>(0x011d_8909) != 0 {
+        return;
+    }
+    let array = mob_process_array(this);
+    let tes: u32 = e.global(TES);
+    let mut index = 0u32;
+    while index < e.call(0x0055_b980, &args![array]).u32() {
+        let object = array_object(e, array, index);
+        if object != 0 && is_actor(e, object) {
+            let actor = object;
+            if e.vcall(actor, SLOT_GET_NODE, &[]).u32() != 0 {
+                // The actor has a 3D node: that is only kept when its cell is
+                // loaded.
+                let cell = e.call(ACTOR_CELL, &args![actor]).u32();
+                if cell == 0 || !e.call(TES_IS_CELL_LOADED, &args![tes, cell, 0u32]).bool() {
+                    e.vcall(actor, 0x1cc, &args![0u32, 0u32]);
+                    index = index.wrapping_add(1);
+                    continue;
+                }
+            }
+            let navigator: u32 = e.global(0x011c_3b3c);
+            if e.vcall(actor, SLOT_GET_NODE, &[]).u32() == 0
+                && !e.call(0x0044_5750, &args![navigator, actor]).bool()
+                && !e.call(0x0044_0da0, &args![actor]).bool()
+                && !e.call(0x0044_0d80, &args![actor]).bool()
+                && e.call(ACTOR_CELL, &args![actor]).u32() != 0
+            {
+                let cell = e.call(ACTOR_CELL, &args![actor]).u32();
+                if e.call(TES_IS_CELL_LOADED, &args![tes, cell, 1u32]).bool() {
+                    let cell = e.call(ACTOR_CELL, &args![actor]).u32();
+                    e.call(CELL_ADD_REFERENCE, &args![cell, actor, 0u32]);
+                    index = 0;
+                }
+            }
+        }
+        index = index.wrapping_add(1);
+    }
+    e.call(0x0045_9870, &args![tes]);
+    processlists_place_actors_in_beds_or_chairs(e, this);
+}
+
+// Translated from 00975ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// For every actor of process level 3 and then of level 2 whose slot 0x22c(0)
+/// is false, calls slot 0x208(1).
+pub fn fn_00975ea0(e: &mut Engine, this: Ptr<ProcessLists>) {
+    let array = mob_process_array(this);
+    for level in [3u32, 2] {
+        let mut index = array_head(e, array, level);
+        while index < array_tail(e, array, level) {
+            let object = array_object(e, array, index);
+            if object != 0
+                && is_actor(e, object)
+                && !e.vcall(object, SLOT_0X22C, &args![0u32]).bool()
+            {
+                e.vcall(object, 0x208, &args![1u32]);
+            }
+            index = index.wrapping_add(1);
+        }
+    }
+}
+
+// Translated from 00975f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// For every actor of level 0 whose slot 0x22c(0) is false, runs `00483710`.
+pub fn fn_00975f90(e: &mut Engine, this: Ptr<ProcessLists>) {
+    let array = mob_process_array(this);
+    let mut index = 0u32;
+    while index < array_tail(e, array, 0) {
+        let object = array_object(e, array, index);
+        if object != 0 && is_actor(e, object) && !e.vcall(object, SLOT_0X22C, &args![0u32]).bool() {
+            e.call(0x0048_3710, &args![object]);
+        }
+        index = index.wrapping_add(1);
+    }
+}
+
+/// Destroys `object` (scalar deleting destructor, slot 0x10) inside the
+/// process lists lock, as `FlushNonPersistentActors` does for each actor it
+/// drops.
+fn destroy_under_lock(e: &mut Engine, object: u32) {
+    lock_enter(e, LOCK);
+    if object != 0 {
+        e.vcall(object, SLOT_DELETING_DESTRUCTOR, &args![1u32]);
+    }
+    lock_leave(e, LOCK);
+}
+
+// Translated from 00976030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ProcessLists::FlushNonPersistentActors` (Xbox PDB): `mode` 0, 1 or 2.
+/// Goes through the level-0 actors for which `00565450` is false. In mode 2
+/// each one is destroyed under the lock and the walk restarts at index 1.
+/// In the other modes the actor goes to a list of the near ones (distance
+/// from the player, `005723b0`, at most 3000.0) or to a list of the far
+/// ones. Mode 0 then destroys the actors of the far list; mode 1 walks the
+/// far list (or, when it is empty, the near list): for each actor whose slot
+/// 0x21c is true (and only while walking the far list), it drops from the
+/// near list the actors whose models (`005715d0`) match according to
+/// `00404dc0` is zero, destroying them, and finally destroys the actor
+/// itself. Both lists are cleared at the end; the far list is deleted (the
+/// near one is not, as in the game). The exception-unwinding frame is not
+/// translated.
+pub fn processlists_flush_non_persistent_actors(
+    e: &mut Engine,
+    this: Ptr<ProcessLists>,
+    mode: u32,
+) {
+    let array = mob_process_array(this);
+    let near_list = list_new(e);
+    let far_list = list_new(e);
+    let mut index = 0u32;
+    while index < array_tail(e, array, 0) {
+        let object = array_object(e, array, index);
+        let actor = if object != 0 && is_actor(e, object) {
+            object
+        } else {
+            0
+        };
+        if actor != 0 && !e.call(0x0056_5450, &args![actor]).bool() {
+            if mode == 2 {
+                destroy_under_lock(e, actor);
+                index = 0;
+            } else {
+                let player = player(e);
+                let distance = e.call(0x0057_23b0, &args![actor, player, 0u32, 0u32]).f64();
+                let limit: f64 = e.global(0x0102_ed48);
+                if distance.is_nan() || distance <= limit {
+                    list_push_value(e, near_list, actor);
+                } else {
+                    list_push_value(e, far_list, actor);
+                }
+            }
+        }
+        index = index.wrapping_add(1);
+    }
+    if mode == 1 {
+        let near_only = e.call(LIST_IS_EMPTY, &args![far_list]).bool();
+        let current = if near_only { near_list } else { far_list };
+        while current != 0 && node_value(e, current) != 0 {
+            let actor = node_value(e, current);
+            if e.vcall(actor, 0x21c, &[]).bool() && !near_only {
+                let mut inner = near_list;
+                while inner != 0 && node_value(e, inner) != 0 {
+                    let other = node_value(e, inner);
+                    let model_actor = e.call(0x0057_15d0, &args![actor]).u32();
+                    let model_other = e.call(0x0057_15d0, &args![other]).u32();
+                    if e.call(0x0040_4dc0, &args![model_other, model_actor]).u32() == 0 {
+                        list_remove_value(e, near_list, other);
+                        list_remove_value(e, inner, other);
+                        inner = near_list;
+                        destroy_under_lock(e, other);
+                    } else {
+                        inner = node_next(e, inner);
+                    }
+                }
+            }
+            e.call(LIST_POP_FRONT, &args![current]);
+            destroy_under_lock(e, actor);
+        }
+    } else if mode == 0 {
+        while far_list != 0 && node_value(e, far_list) != 0 {
+            let actor = node_value(e, far_list);
+            e.call(LIST_POP_FRONT, &args![far_list]);
+            destroy_under_lock(e, actor);
+        }
+    }
+    e.call(LIST_CLEAR, &args![far_list]);
+    list_delete(e, far_list);
+    e.call(LIST_CLEAR, &args![near_list]);
+}
+
+// Translated from 009764a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether some level-0 actor other than the player (with slot 0x22c(0)
+/// false and `00440da0` false), replaced by its process's saved acquire
+/// object (slot 0x52c of the process) when it has one, is within the
+/// distance setting (`0x011d0bb4`, or `0x011d04b4` when `flag` is set) of the
+/// player and is in combat with the player (`008bc700`) or would attack
+/// them (`008b06d0`).
+pub fn fn_009764a0(e: &mut Engine, this: Ptr<ProcessLists>, flag: u8) -> bool {
+    let array = mob_process_array(this);
+    let setting = if flag != 0 {
+        0x011d_04b4u32
+    } else {
+        0x011d_0bb4
+    };
+    let address = e.call(SETTING_FLOAT_VALUE, &args![setting]).u32();
+    let limit = e.mem.f32(address);
+    let mut found = false;
+    let mut index = 0u32;
+    while !found && index < array_tail(e, array, 0) {
+        let object = array_object(e, array, index);
+        let mut actor = if object != 0 && is_actor(e, object) {
+            object
+        } else {
+            0
+        };
+        let player = player(e);
+        if actor != 0
+            && actor != player
+            && !e.vcall(actor, SLOT_0X22C, &args![0u32]).bool()
+            && !e.call(0x0044_0da0, &args![actor]).bool()
+        {
+            if actor_process(e, actor) != 0 {
+                let process = actor_process(e, actor);
+                if e.vcall(process, 0x52c, &[]).u32() != 0 {
+                    let process = actor_process(e, actor);
+                    actor = e.vcall(process, 0x52c, &[]).u32();
+                }
+            }
+            let distance = e.call(0x0057_23b0, &args![player, actor, 0u32, 0u32]).f32();
+            if distance <= limit {
+                e.vcall(actor, 0x344, &args![player, 0u32]);
+                if e.call(0x008b_c700, &args![actor, player]).bool() {
+                    found = true;
+                } else {
+                    let attack = e.with_stack(4, |e, slot| {
+                        e.mem.set_u32(slot.addr(), 0);
+                        e.call(0x008b_06d0, &args![actor, player, 0u32, slot.addr(), 0u32])
+                            .bool()
+                    });
+                    if attack {
+                        found = true;
+                    }
+                }
+            }
+        }
+        index = index.wrapping_add(1);
+    }
+    found
+}
+
+// --- 00976680 .. 009781d0: forgetting a reference, dead actors, radiation ----
+
+/// Clears the references to `target` a package keeps, for the actor `high`
+/// that runs it (the part `fn_00976680` does for the actor's two packages):
+/// only a created package (`00674d40`) that is not of type 0x12 is touched;
+/// its package target is cleared (`00672fc0(package, 0)`) when the target's
+/// reference (`00680020` of `00671d10`) is `target`, and its location
+/// (`00671d30(package, 0)`) when `00676140(package, high)` is `target`.
+fn clear_created_package_references(e: &mut Engine, package: u32, high: u32, target: u32) {
+    if package == 0
+        || !e.call(0x0067_4d40, &args![package]).bool()
+        || e.call(PACKAGE_TYPE, &args![package]).u32() == 0x12
+    {
+        return;
+    }
+    if e.call(0x0067_1d10, &args![package]).u32() != 0 {
+        let inner = e.call(0x0067_1d10, &args![package]).u32();
+        if e.call(0x0068_0020, &args![inner]).u32() == target {
+            e.call(0x0067_2fc0, &args![package, 0u32]);
+        }
+    }
+    if e.call(0x0067_6140, &args![package, high]).u32() == target {
+        e.call(0x0067_1d30, &args![package, 0u32]);
+    }
+}
+
+/// Ends the package of `high` when its package target is `target`, as
+/// `fn_00976680` does: the actor's `00881650` is `target`, or the object of
+/// the process's slot 0x20c has a `00671d10` whose `00680020` is `target`
+/// (the slot is asked again for each step, as the code does). In dialogue the
+/// actor gets slot 0x288; else a created current package (`0093 44a0`,
+/// `00674d40`) is ended with `00881680(high, 0)`; else the process gets
+/// slots 0x234 and 0x214.
+fn end_package_when_targeted(e: &mut Engine, high: u32, process: u32, target: u32) {
+    let mut hit = e.call(0x0088_1650, &args![high]).u32() == target;
+    if !hit && e.vcall(process, 0x20c, &[]).u32() != 0 {
+        let holder = e.vcall(process, 0x20c, &[]).u32();
+        if e.call(0x0067_1d10, &args![holder]).u32() != 0 {
+            let holder = e.vcall(process, 0x20c, &[]).u32();
+            let inner = e.call(0x0067_1d10, &args![holder]).u32();
+            hit = e.call(0x0068_0020, &args![inner]).u32() == target;
+        }
+    }
+    if !hit {
+        return;
+    }
+    if e.call(0x0093_36c0, &args![high]).bool() {
+        e.vcall(high, 0x288, &[]);
+        return;
+    }
+    if e.call(0x0093_44a0, &args![high]).u32() != 0 {
+        let package = e.call(0x0093_44a0, &args![high]).u32();
+        if e.call(0x0067_4d40, &args![package]).bool() {
+            e.call(0x0088_1680, &args![high, 0u32]);
+            return;
+        }
+    }
+    e.vcall(process, 0x234, &[]);
+    e.vcall(process, 0x214, &[]);
+}
+
+/// The clean-up both loops of `fn_00976680` end with for the actor `high`
+/// whose process is `process`: the 0x19 extra record's reference, the word at
+/// +0xc0, the flee target, the combat controller's target, the follower
+/// record, the process's slot 0x128 and the actor's slot 0x2c8, each cleared
+/// when it is `target`.
+fn forget_reference_actor_tail(e: &mut Engine, high: u32, process: u32, target: u32) {
+    clear_extra_record_reference(e, high, target);
+    if e.mem.u32(high + 0xc0) == target {
+        e.mem.set_u32(high + 0xc0, 0);
+    }
+    if e.call(0x008a_6650, &args![high, 0u32]).bool() {
+        forget_flee_target(e, high, target);
+    }
+    if e.call(0x0049_3bb0, &args![high]).bool() {
+        let controller = e.vcall(high, 0x428, &[]).u32();
+        if controller != 0 {
+            e.call(0x0097_f9c0, &args![controller, target]);
+        }
+    }
+    let extra = extra_list(e, high);
+    e.call(EXTRA_REMOVE_FOLLOWER, &args![extra, target]);
+    if e.vcall(process, 0x128, &[]).u32() == target {
+        e.vcall(process, 0x12c, &args![0u32]);
+    }
+    if e.vcall(high, 0x2c8, &[]).u32() == target {
+        e.call(0x0088_1620, &args![high, 0u32]);
+    }
+}
+
+/// The package clean-up common to both loops of `fn_00976680`: the packages
+/// of slot 0x27c of the process and `00881510` of the actor.
+fn forget_reference_packages(e: &mut Engine, high: u32, target: u32) {
+    let process = actor_process(e, high);
+    let current = e.vcall(process, 0x27c, &[]).u32();
+    let set_as_current = e.call(0x0088_1510, &args![high]).u32();
+    clear_created_package_references(e, current, high, target);
+    clear_created_package_references(e, set_as_current, high, target);
+}
+
+// Translated from 00976680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forgets a reference that is going away (`target`) in the player, in every
+/// object of process level 3 and in every object of the `TempShouldMoveList`,
+/// then removes it from the actors close to the player. A shorter relative of
+/// `fn_0096f600`: after `00992920(target)` on the object at `0x011f1958`,
+/// an actor `target` leaves the player's followers, the player's process
+/// drops it as a detection actor (slot 0x2c4, `target, 3`) and the player's
+/// `004fd380` target is cleared when it is `target`. Every object of level 3
+/// that `00576d30` does not skip is then cleaned: an actor gets its packages'
+/// targets and locations (`fn_00976680`'s helpers), and, below the tail of
+/// level 1 (resp. while the level 3 index is under 2 in the second loop),
+/// the detection removal, the package end and the other clean-ups; a
+/// non-actor gets slot 0x224/0x220 handling (`009c4c80` / `009b28a0`). The
+/// objects of the temp list get the same clean-up as the actors of level 3;
+/// when one is skipped the second loop applies slot 0x224/0x220 to the last
+/// object the first loop looked at, as the code does (it faults in the game
+/// if that was null).
+pub fn fn_00976680(e: &mut Engine, this: Ptr<ProcessLists>, target: u32) {
+    let array = mob_process_array(this);
+    let observer: u32 = e.global(0x011f_1958);
+    e.call(0x0099_2920, &args![observer, target]);
+    let player = player(e);
+    if is_actor(e, target) {
+        let extra = extra_list(e, player);
+        if e.call(EXTRA_FOLLOWERS, &args![extra]).u32() != 0 {
+            let extra = extra_list(e, player);
+            let followers = e.call(EXTRA_FOLLOWERS, &args![extra]).u32();
+            if e.mem.u32(followers + 0xc) != 0 {
+                let extra = extra_list(e, player);
+                let followers = e.call(EXTRA_FOLLOWERS, &args![extra]).u32();
+                let list = e.mem.u32(followers + 0xc);
+                list_remove_value(e, list, target);
+            }
+        }
+        if actor_process(e, player) != 0 {
+            let process = actor_process(e, player);
+            e.vcall(process, 0x2c4, &args![target, 3u32]);
+        }
+        if e.call(0x004f_d380, &args![player]).u32() == target {
+            e.call(0x0057_bd60, &args![player, 0u32]);
+        }
+    }
+
+    // The objects of process level 3.
+    let mut index = 0u32;
+    let mut last_object = 0u32;
+    while index < array_tail(e, array, 3) {
+        last_object = array_object(e, array, index);
+        let object = last_object;
+        if object != 0 && !e.call(0x0057_6d30, &args![object]).bool() {
+            if is_actor(e, object) {
+                let high = object;
+                let process = actor_process(e, high);
+                if e.call(0x004f_d380, &args![high]).u32() == target {
+                    e.call(0x0057_bd60, &args![high, 0u32]);
+                    if process != 0 {
+                        e.vcall(process, 0x310, &args![0u32]);
+                        e.vcall(process, 0x4a0, &[]);
+                    }
+                }
+                if process != 0 {
+                    forget_reference_packages(e, high, target);
+                    if index < array_tail(e, array, 1) {
+                        e.vcall(process, 0x2c4, &args![target, 3u32]);
+                        end_package_when_targeted(e, high, process, target);
+                        let topic = e.vcall(target, 0x198, &[]).u32();
+                        e.call(0x008c_4f10, &args![high, topic]);
+                        if index < array_tail(e, array, 0) {
+                            e.vcall(process, 0x664, &args![target]);
+                        }
+                    }
+                    e.vcall(process, 0x47c, &args![target]);
+                    e.vcall(process, 0x7b0, &args![target]);
+                    forget_reference_actor_tail(e, high, process, target);
+                }
+            } else if e.vcall(object, 0x224, &[]).bool() {
+                e.call(0x009c_4c80, &args![object, target]);
+                if e.call(0x0044_0da0, &args![object]).bool()
+                    && array_object(e, array, index) != object
+                {
+                    index = index.wrapping_sub(1);
+                }
+            } else if e.vcall(object, 0x220, &[]).bool() {
+                e.call(0x009b_28a0, &args![object, target]);
+            }
+        }
+        index = index.wrapping_add(1);
+    }
+
+    // The objects of the temp list.
+    let mut node = this.addr() + TEMP_SHOULD_MOVE_LIST;
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let item = node_value(e, node);
+        let high = if is_actor(e, item) {
+            node_value(e, node)
+        } else {
+            0
+        };
+        if high == 0 || e.call(0x0057_6d30, &args![high]).bool() {
+            if e.vcall(last_object, 0x224, &[]).bool() {
+                e.call(0x009c_4c80, &args![last_object, target]);
+            } else if e.vcall(last_object, 0x220, &[]).bool() {
+                e.call(0x009b_28a0, &args![last_object, target]);
+            }
+        } else {
+            let process = actor_process(e, high);
+            if e.call(0x004f_d380, &args![high]).u32() == target {
+                e.call(0x0057_bd60, &args![high, 0u32]);
+                if process != 0 {
+                    e.vcall(process, 0x310, &args![0u32]);
+                    e.vcall(process, 0x4a0, &[]);
+                }
+            }
+            if process != 0 {
+                forget_reference_packages(e, high, target);
+                if index < 2 {
+                    e.vcall(process, 0x2c4, &args![target, 3u32]);
+                    end_package_when_targeted(e, high, process, target);
+                    let topic = e.vcall(target, 0x198, &[]).u32();
+                    e.call(0x008c_4f10, &args![high, topic]);
+                    if index < 1 {
+                        e.vcall(process, 0x664, &args![target]);
+                    }
+                }
+                e.vcall(process, 0x47c, &args![target]);
+                forget_reference_actor_tail(e, high, process, target);
+            }
+        }
+        node = node_next(e, node);
+    }
+    processlists_remove_actor_close_to_player(e, this, target);
+}
+
+/// `ProcessLists` list of 8 bytes: pushes `value` with the variant the
+/// dead-actor sweep uses (`00905820`, argument = address of the item).
+fn list_add_value(e: &mut Engine, list: u32, value: u32) {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), value);
+        e.call(LIST_ADD_ITEM, &args![list, slot.addr()]);
+    });
+}
+
+/// Destructor of a stack `BSSimpleList` (`0046ffb0`).
+const LIST_DESTRUCT: u32 = 0x0046_ffb0;
+
+// Translated from 00977130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Counts down `fRemoveExcessDeadTimer` (+0x103bc) by `delta`; when it
+/// reaches zero, goes through the level-0 actors that `00576d30` does not
+/// skip and collects (in a stack list) the ones that are of kind 2
+/// (`004f8960`), whose process is at level 0, does not answer slot 0x610,
+/// whose slot 0x160 is false, for which neither `00577de0` nor `IsDead`
+/// hold, whose process's slot 0x4b0 (a `float`) is below zero and whose
+/// `0056ac90` is null or an empty list. With `525420()` true and at least 25
+/// actors seen the quotas come from the settings `0x011d0964` (collected
+/// minimum) and `0x011d08f8` (seen minimum), otherwise from `0x011d0cd8` and
+/// `0x011d09a0`; the timer is reloaded from `0x011d1530` or `0x011d0a84`.
+/// When both minimums are met, with `525420()` true the first collected
+/// actors are faded (`008feb60(process, actor)`) while more than the
+/// collected minimum remain; otherwise only the one whose process's slot
+/// 0x4b0 is smallest. The unwind frame is not translated.
+pub fn fn_00977130(e: &mut Engine, this: Ptr<ProcessLists>, delta: f32) {
+    let timer_address = this.addr() + 0x103bc;
+    let timer = (e.mem.f32(timer_address) as f64 - delta as f64) as f32;
+    e.mem.set_f32(timer_address, timer);
+    if timer.is_nan() || timer > 0.0 {
+        return;
+    }
+    let array = mob_process_array(this);
+    e.with_stack(8, |e, list| {
+        let list = list.addr();
+        e.call(LIST_CONSTRUCT, &args![list]);
+        let mut collected = 0u32;
+        let mut seen = 0u32;
+        let mut index = 0u32;
+        while index < array_tail(e, array, 0) {
+            let object = array_object(e, array, index);
+            if object != 0 && is_actor(e, object) && !e.call(0x0057_6d30, &args![object]).bool() {
+                seen += 1;
+                let actor = object;
+                if e.call(0x004f_8960, &args![actor]).i32() == 2 {
+                    let process = actor_process(e, actor);
+                    if process != 0
+                        && e.call(PROCESS_LEVEL, &args![process]).i32() == 0
+                        && e.vcall(process, 0x610, &[]).u32() == 0
+                        && !e.vcall(actor, 0x160, &[]).bool()
+                        && !e.call(0x0057_7de0, &args![actor]).bool()
+                        && !e.call(0x0057_22c0, &args![actor, 0u32]).bool()
+                        && e.vcall(process, 0x4b0, &[]).f32() < 0.0
+                    {
+                        let mut add = true;
+                        if e.call(0x0056_ac90, &args![actor]).u32() != 0 {
+                            let inner = e.call(0x0056_ac90, &args![actor]).u32();
+                            add = e.call(LIST_IS_EMPTY, &args![inner]).bool();
+                        }
+                        if add {
+                            collected += 1;
+                            list_add_value(e, list, actor);
+                        }
+                    }
+                }
+            }
+            index = index.wrapping_add(1);
+        }
+        let mut flag = e.call(0x0052_5420, &[]).bool();
+        if seen < 0x19 {
+            flag = false;
+        }
+        let timer_setting = if flag { 0x011d_1530u32 } else { 0x011d_0a84 };
+        let address = e.call(SETTING_FLOAT_VALUE, &args![timer_setting]).u32();
+        let reload = e.mem.f32(address);
+        e.mem.set_f32(timer_address, reload);
+        let setting = if flag { 0x011d_0964u32 } else { 0x011d_0cd8 };
+        let address = e.call(SETTING_INT_VALUE, &args![setting]).u32();
+        let minimum_collected = e.mem.u32(address);
+        let setting = if flag { 0x011d_08f8u32 } else { 0x011d_09a0 };
+        let address = e.call(SETTING_INT_VALUE, &args![setting]).u32();
+        let minimum_seen = e.mem.u32(address);
+        if collected >= minimum_collected && seen >= minimum_seen {
+            if flag {
+                let mut node = list;
+                while node != 0
+                    && !e.call(LIST_IS_EMPTY, &args![node]).bool()
+                    && collected >= minimum_collected
+                {
+                    let actor = node_value(e, node);
+                    if actor != 0 {
+                        let process = actor_process(e, actor);
+                        e.call(0x008f_eb60, &args![process, actor]);
+                        collected = collected.wrapping_sub(1);
+                    }
+                    node = node_next(e, node);
+                }
+            } else {
+                let mut best = 0u32;
+                let mut best_value: f32 = e.global(0x0101_6970);
+                let mut node = list;
+                while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+                    let actor = node_value(e, node);
+                    if actor != 0 {
+                        let mut better = true;
+                        if best != 0 {
+                            let process = actor_process(e, actor);
+                            let value = e.vcall(process, 0x4b0, &[]).f32();
+                            better = best_value > value;
+                        }
+                        if better {
+                            best = actor;
+                            let process = actor_process(e, actor);
+                            best_value = e.vcall(process, 0x4b0, &[]).f32();
+                        }
+                    }
+                    node = node_next(e, node);
+                }
+                if best != 0 {
+                    let process = actor_process(e, best);
+                    e.call(0x008f_eb60, &args![process, best]);
+                }
+            }
+        }
+        e.call(LIST_CLEAR, &args![list]);
+        e.call(LIST_DESTRUCT, &args![list]);
+    });
+}
+
+// Translated from 00977540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `008c30a0` on every actor of levels 0 and 1 (level 1 from its head
+/// index) and then on the player when there is one.
+pub fn fn_00977540(e: &mut Engine, this: Ptr<ProcessLists>) {
+    let array = mob_process_array(this);
+    let mut index = 0u32;
+    while index < array_tail(e, array, 0) {
+        let object = array_object(e, array, index);
+        if object != 0 && is_actor(e, object) {
+            e.call(0x008c_30a0, &args![object]);
+        }
+        index = index.wrapping_add(1);
+    }
+    let mut index = array_head(e, array, 1);
+    while index < array_tail(e, array, 1) {
+        let object = array_object(e, array, index);
+        if object != 0 && is_actor(e, object) {
+            e.call(0x008c_30a0, &args![object]);
+        }
+        index = index.wrapping_add(1);
+    }
+    let player = player(e);
+    if player != 0 {
+        e.call(0x008c_30a0, &args![player]);
+    }
+}
+
+/// `memset(destination, value, count)` (cdecl).
+const MEMSET: u32 = 0x0069_5390;
+
+// Translated from 00977660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ProcessLists::RebuildActorsCloseToPlayer` (Xbox PDB): empties the array of
+/// the actors close to the player under its lock (count at +0x150 to 0, the
+/// 200 bytes at +0x88 cleared), then inserts every level-0 actor (the last
+/// actor seen is kept for objects that are not actors, as in the code) whose
+/// distance from the player (`005723b0`, a `float`) is under the setting
+/// `0x011ccf94`, into the one `ProcessLists` object (`0x011e0e80`), and
+/// sorts it.
+pub fn processlists_rebuild_actors_close_to_player(e: &mut Engine, this: Ptr<ProcessLists>) {
+    let lock = this.addr() + ACTORS_CLOSE_TO_PLAYER_LOCK;
+    lock_enter(e, lock);
+    e.mem.set_u32(this.addr() + 0x150, 0);
+    e.call(
+        MEMSET,
+        &args![
+            this.addr() + ACTORS_CLOSE_TO_PLAYER,
+            0u32,
+            ACTORS_CLOSE_TO_PLAYER_BYTES
+        ],
+    );
+    lock_leave(e, lock);
+    let array = mob_process_array(this);
+    let mut actor = 0u32;
+    let mut index = 0u32;
+    while index < array_tail(e, array, 0) {
+        let object = array_object(e, array, index);
+        if object != 0 && is_actor(e, object) {
+            actor = object;
+        }
+        if actor != 0 {
+            let player = player(e);
+            let distance = e.call(0x0057_23b0, &args![actor, player, 0u32, 0u32]).f32();
+            let address = e.call(SETTING_FLOAT_VALUE, &args![0x011c_cf94u32]).u32();
+            if distance < e.mem.f32(address) {
+                processlists_insert_actor_close_to_player(e, Ptr::new(PROCESS_LISTS), actor);
+            }
+        }
+        index = index.wrapping_add(1);
+    }
+    processlists_sort_actors_close_to_player(e, Ptr::new(PROCESS_LISTS));
+}
+
+// Translated from 00977770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Does nothing (two stack words it never reads).
+pub fn fn_00977770(_e: &mut Engine, _this: Ptr<ProcessLists>, _unused_0: u32, _unused_1: u32) {}
+
+// Translated from 00977c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `float` at +0x43c of a process (returned in ST0).
+pub fn fn_00977c70(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0x43c)
+}
+
+// Translated from 00977c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a `float` into the process field at +0x440.
+pub fn fn_00977c90(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_f32(this.addr() + 0x440, value);
+}
+
+// Translated from 009777a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Per-frame update of the radiation the actors receive from the radiation
+/// sources. The sources come from an iterator (`009c1a50` on the object at
+/// `0x011c95c8`, first element `004b9ba0`, advanced by `006b7f20`) whose
+/// extra data (`005d43c0`) gives a radius (`00422320`) and an inner radius
+/// (`00422450`). For every level-0 actor whose process's value at +0x43c
+/// (`00977c70`) exceeds the setting `0x011d0db0`, the radiation it gets from
+/// the source (`00648e50(inner, radius, distance)` times the actor's
+/// `008c4330` resistance) is, when it exceeds the setting `0x011cd874` and
+/// the process's current level (`00904430`), either turned into an avoid
+/// pathing area (`009042a0`), an avoid package (`008982c0`) or a move mode
+/// request (`008b39f0(0x200)`), depending on the actor and process, and
+/// stored in the process (`00977c90`); the level is then pushed back to the
+/// process (slot 0x768). The player gets the same treatment, and
+/// `bPlayerInRadiationArea` (+0x15c) is set when any amount was positive.
+/// When the iterator has just run out, the byte at `0x011f12d8` is cleared and
+/// every actor's and the player's level is reset (slot 0x768 with 0.0).
+pub fn fn_009777a0(e: &mut Engine, this: Ptr<ProcessLists>) {
+    let array = mob_process_array(this);
+    let mut finished = false;
+    let mut maximum: f32 = 0.0;
+    let source: u32 = e.global(0x011c_95c8);
+    let iterator = e.call(0x009c_1a50, &args![source]).u32();
+    if iterator != 0 {
+        e.with_stack(12, |e, frame| {
+            let cursor_slot = frame.addr();
+            let skipped_slot = frame.addr() + 4;
+            let reference_slot = frame.addr() + 8;
+            let first = e.call(0x004b_9ba0, &args![iterator]).u32();
+            e.mem.set_u32(cursor_slot, first);
+            if first != 0 {
+                e.set_global(0x011f_12d8, 1u8);
+            } else if e.global::<u8>(0x011f_12d8) != 0 {
+                e.set_global(0x011f_12d8, 0u8);
+                finished = true;
+            }
+            while e.mem.u32(cursor_slot) != 0 {
+                e.mem.set_u32(skipped_slot, 0);
+                e.mem.set_u32(reference_slot, 0);
+                e.call(
+                    0x006b_7f20,
+                    &args![iterator, cursor_slot, skipped_slot, reference_slot],
+                );
+                let reference = e.mem.u32(reference_slot);
+                let extra = if reference != 0 {
+                    extra_list(e, reference)
+                } else {
+                    0
+                };
+                if extra == 0 {
+                    continue;
+                }
+                let radius = e.call(0x0042_2320, &args![extra]).f32();
+                let inner = e.call(0x0042_2450, &args![extra]).f32();
+                let mut index = 0u32;
+                while index < array_tail(e, array, 0) {
+                    let object = array_object(e, array, index);
+                    index = index.wrapping_add(1);
+                    if object == 0 || !is_actor(e, object) {
+                        continue;
+                    }
+                    let actor = object;
+                    let process = actor_process(e, actor);
+                    let exposure = fn_00977c70(e, Ptr::new(process));
+                    let address = e.call(SETTING_FLOAT_VALUE, &args![0x011d_0db0u32]).u32();
+                    let exposed = (e.mem.f32(address) as f64) < exposure as f64;
+                    if !exposed {
+                        continue;
+                    }
+                    let distance = e
+                        .call(0x0057_23b0, &args![actor, reference, 0u32, 1u32])
+                        .f32();
+                    let amount = e.call(0x0064_8e50, &args![inner, radius, distance]).f32();
+                    let resistance = e.call(0x008c_4330, &args![actor]).f32();
+                    let amount = (amount as f64 * resistance as f64) as f32;
+                    let address = e.call(SETTING_FLOAT_VALUE, &args![0x011c_d874u32]).u32();
+                    if (e.mem.f32(address) as f64) < amount as f64 {
+                        let level = e.call(0x0090_4430, &args![process]).f32();
+                        if level < amount {
+                            if e.call(0x008b_cc80, &args![actor]).bool() {
+                                if !e.vcall(process, 0x258, &args![reference]).bool() {
+                                    let position = e.vcall(reference, 0x1f4, &[]).u32();
+                                    let (x, y, z) = (
+                                        e.mem.u32(position),
+                                        e.mem.u32(position + 4),
+                                        e.mem.u32(position + 8),
+                                    );
+                                    let float_max: u32 = e.global(0x0101_6970);
+                                    e.call(
+                                        0x0090_42a0,
+                                        &args![
+                                            process, actor, x, y, z, radius, float_max, amount,
+                                            reference, 0u32
+                                        ],
+                                    );
+                                } else if !e.call(0x008b_3bb0, &args![actor]).bool() {
+                                    e.call(0x008b_39f0, &args![actor, 0x200u32]);
+                                } else {
+                                    e.call(0x0089_82c0, &args![actor, reference, 0.0f32]);
+                                }
+                            }
+                            fn_00977c90(e, Ptr::new(process), amount);
+                        }
+                    }
+                    let level = e.call(0x0090_4430, &args![process]).f32();
+                    e.vcall(process, 0x768, &args![level]);
+                }
+                let player = player(e);
+                let process = actor_process(e, player);
+                let distance = e
+                    .call(0x0057_23b0, &args![player, reference, 0u32, 1u32])
+                    .f32();
+                let mut amount = e.call(0x0064_8e50, &args![inner, radius, distance]).f32();
+                if amount > 0.0 {
+                    let resistance = e.call(0x008c_4330, &args![player]).f32();
+                    amount = (amount as f64 * resistance as f64) as f32;
+                }
+                if player != 0
+                    && amount > 0.0
+                    && e.call(0x0090_4430, &args![process]).f32() < amount
+                {
+                    fn_00977c90(e, Ptr::new(process), amount);
+                }
+                if amount > maximum {
+                    maximum = amount;
+                }
+                let level = e.call(0x0090_4430, &args![process]).f32();
+                e.vcall(process, 0x768, &args![level]);
+            }
+        });
+    }
+    e.mem.set_u8(this.addr() + 0x15c, (maximum > 0.0) as u8);
+    if finished {
+        let mut index = 0u32;
+        while index < array_tail(e, array, 0) {
+            let object = array_object(e, array, index);
+            index = index.wrapping_add(1);
+            if object == 0 || !is_actor(e, object) {
+                continue;
+            }
+            let process = actor_process(e, object);
+            if process != 0 {
+                e.vcall(process, 0x768, &args![0.0f32]);
+            }
+        }
+        let player = player(e);
+        let process = actor_process(e, player);
+        if process != 0 {
+            e.vcall(process, 0x768, &args![0.0f32]);
+        }
+    }
+}
+
+// Translated from 00977cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Picks an actor to greet the player for the situation `kind` (1 to 12;
+/// nothing happens for 0) and makes it do so. Needs the greeting timer
+/// (+0x154) to be due or `force` to be set. For kind 9 the speaker is the
+/// player's slot 0x42c actor; for the other kinds the first of the actors
+/// close to the player (array at +0x88, searched in widening rings of 350,
+/// 550, 750 and 950 units under the lock at +0x10300) that is awake, can
+/// speak, is not talking, has a detection level above zero against the
+/// player, and so on; for kinds 5 and 7 the reference `owned` must be owned
+/// by that actor and the +0x158 timer is reloaded from the setting
+/// `0x011d000c`. Then the kind picks the topic (`0061a2d0`) the speaker
+/// starts to greet with (`008bc3d0`), cancelled for kinds 1 to 3 while the
+/// player is in combat (`00493bb0`) and, for kind 3, when the speaker has
+/// `00566950`; the +0x154 timer is reloaded from `0x011d0174`.
+pub fn fn_00977cb0(e: &mut Engine, this: Ptr<ProcessLists>, kind: u32, owned: u32, force: u8) {
+    if kind == 0 {
+        return;
+    }
+    let timer = e.mem.f32(this.addr() + 0x154);
+    let due = timer <= 0.0 || force != 0;
+    if !due {
+        return;
+    }
+    let player = player(e);
+    let mut topic = 0u32;
+    let mut speaker = 0u32;
+    let mut maximum: i32 = 0x15e;
+    e.with_stack(4, |e, detected| {
+        e.mem.set_u8(detected.addr(), 0);
+        if kind == 9 {
+            topic = 8;
+            speaker = e.vcall(player, 0x42c, &[]).u32();
+            if speaker != 0 {
+                let rejected = e.vcall(speaker, 0x214, &[]).u32() == 9
+                    || !e.call(0x0088_4480, &args![speaker]).bool()
+                    || e.vcall(speaker, SLOT_0X22C, &args![0u32]).bool()
+                    || e.call(0x0049_3bb0, &args![speaker]).bool()
+                    || (e.call(0x008a_78f0, &args![speaker, 4u32]).bool()
+                        && !e.call(0x0056_6950, &args![speaker]).bool())
+                    || (maximum as f64)
+                        < e.call(0x0057_23b0, &args![speaker, player, 0u32, 0u32])
+                            .f64();
+                if rejected {
+                    speaker = 0;
+                } else if e.call(0x008a_67f0, &args![speaker]).bool() {
+                    let process = actor_process(e, speaker);
+                    if e.vcall(process, 0x30c, &[]).bool() {
+                        let level = e.call(
+                            0x008a_0d10,
+                            &args![
+                                speaker,
+                                0u32,
+                                player,
+                                detected.addr(),
+                                0u32,
+                                0u32,
+                                0u32,
+                                0u32
+                            ],
+                        );
+                        if level.i32() <= 0 {
+                            speaker = 0;
+                        }
+                    }
+                }
+            }
+        } else {
+            lock_enter(e, this.addr() + ACTORS_CLOSE_TO_PLAYER_LOCK);
+            let mut i = 0i32;
+            while i < e.mem.u32(this.addr() + 0x150) as i32 && speaker == 0 {
+                let candidate = e
+                    .mem
+                    .u32(this.addr() + ACTORS_CLOSE_TO_PLAYER + 4 * i as u32);
+                let mut eligible = true;
+                let forced = candidate != 0 && e.call(0x0056_6950, &args![candidate]).bool();
+                if candidate != 0
+                    && actor_process(e, candidate) != 0
+                    && e.vcall(candidate, 0x214, &[]).u32() != 9
+                    && e.call(0x0088_4480, &args![candidate]).bool()
+                    && !e.call(0x008a_67f0, &args![candidate]).bool()
+                {
+                    let process = actor_process(e, candidate);
+                    if !e.vcall(process, 0x30c, &[]).bool()
+                        && e.call(
+                            0x008a_0d10,
+                            &args![
+                                candidate,
+                                0u32,
+                                player,
+                                detected.addr(),
+                                0u32,
+                                0u32,
+                                0u32,
+                                0u32
+                            ],
+                        )
+                        .i32()
+                            > 0
+                        && (!e.call(0x008a_78f0, &args![candidate, 4u32]).bool() || forced)
+                        && (e
+                            .call(0x0057_23b0, &args![candidate, player, 0u32, 0u32])
+                            .f64()
+                            < maximum as f64)
+                        && !e.vcall(candidate, SLOT_0X22C, &args![0u32]).bool()
+                        && !e.call(0x0049_3bb0, &args![candidate]).bool()
+                    {
+                        if kind == 7 || kind == 5 {
+                            let owner_timer = e.mem.f32(this.addr() + 0x158);
+                            if owned != 0
+                                && e.call(0x0057_85e0, &args![owned, candidate, 1u32]).bool()
+                                && (owner_timer.is_nan() || owner_timer <= 0.0)
+                            {
+                                let address =
+                                    e.call(SETTING_FLOAT_VALUE, &args![0x011d_000cu32]).u32();
+                                let reload = e.mem.f32(address);
+                                e.mem.set_f32(this.addr() + 0x158, reload);
+                            } else {
+                                eligible = false;
+                            }
+                        }
+                        if eligible {
+                            speaker = candidate;
+                        }
+                    }
+                }
+                i += 1;
+                if i >= e.mem.u32(this.addr() + 0x150) as i32 && maximum < 1000 && speaker == 0 {
+                    i = 0;
+                    maximum += 200;
+                }
+            }
+            lock_leave(e, this.addr() + ACTORS_CLOSE_TO_PLAYER_LOCK);
+        }
+    });
+    match kind {
+        1 | 2 => {
+            topic = kind;
+            if e.call(0x0049_3bb0, &args![player]).bool() {
+                speaker = 0;
+            }
+        }
+        3 => {
+            topic = 3;
+            if e.call(0x0049_3bb0, &args![player]).bool()
+                || (speaker != 0 && e.call(0x0056_6950, &args![speaker]).bool())
+            {
+                speaker = 0;
+            }
+        }
+        4..=7 => topic = kind,
+        8 => topic = 10,
+        10 => topic = 9,
+        11 => topic = 0xd,
+        12 => topic = 0xe,
+        _ => {}
+    }
+    if speaker != 0 {
+        let form = e.call(0x0061_a2d0, &args![0u32, topic]).u32();
+        e.call(0x008b_c3d0, &args![speaker, form]);
+        let address = e.call(SETTING_FLOAT_VALUE, &args![0x011d_0174u32]).u32();
+        let reload = e.mem.f32(address);
+        e.mem.set_f32(this.addr() + 0x154, reload);
+    }
+}
+
+// Translated from 009781a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Lowers the greeting timer (+0x154) by 0.5 (the double at `0x01011598`).
+pub fn fn_009781a0(e: &mut Engine, this: Ptr<ProcessLists>) {
+    let step: f64 = e.global(0x0101_1598);
+    let timer = e.mem.f32(this.addr() + 0x154);
+    e.mem
+        .set_f32(this.addr() + 0x154, (timer as f64 + step) as f32);
+}
+
+// Translated from 009781d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Per-frame update of the level-0 actors with `delta`: an actor that
+/// `00576d30` does not skip gets `008ba600`, its process's slot 0x104, the
+/// ragdoll update of its object at +0xb0 (`00978400`, then `00ca2ad0` with the
+/// actor's 3D node and a value derived from `00931ed0` and `004a3a20`, and
+/// `00ca1410`), `ConsolidateSimIslands` unless its slot 0x22c(0) is true, its
+/// slot 0x34c(delta, player sleeping or resting) and its process's slots
+/// 0x500(actor, 0), 0x170(actor) and 0x1d8(actor); another object with slot
+/// 0x220 gets `009b17a0(delta)`. Then `00978890(delta)` runs and the
+/// player's process gets slot 0x170(player). Slot 0x1d0 takes no stack
+/// argument: the value pushed before it is the second argument of the call
+/// after it, as in the code.
+pub fn fn_009781d0(e: &mut Engine, this: Ptr<ProcessLists>, delta: f32) {
+    let array = mob_process_array(this);
+    let mut index = 0u32;
+    while index < array_tail(e, array, 0) {
+        let object = array_object(e, array, index);
+        if object != 0 && is_actor(e, object) && !e.call(0x0057_6d30, &args![object]).bool() {
+            let actor = object;
+            e.call(0x008b_a600, &args![actor]);
+            let process = actor_process(e, actor);
+            e.vcall(process, 0x104, &[]);
+            let ragdoll = e.mem.u32(actor + 0xb0);
+            if e.call(0x0097_8400, &args![ragdoll]).bool() {
+                e.with_stack(0x10, |e, buffer| {
+                    let source = e.call(0x0093_1ed0, &args![actor, buffer.addr()]).u32();
+                    let value = e.call(0x004a_3a20, &args![source]).u32();
+                    let node = e.vcall(actor, SLOT_GET_NODE, &[]).u32();
+                    let ragdoll = e.mem.u32(actor + 0xb0);
+                    e.call(0x00ca_2ad0, &args![ragdoll, node, value]);
+                });
+            }
+            let ragdoll = e.mem.u32(actor + 0xb0);
+            e.call(0x00ca_1410, &args![ragdoll]);
+            if !e.vcall(actor, SLOT_0X22C, &args![0u32]).bool() {
+                e.call(0x0062_c430, &args![actor]);
+            }
+            let player = player(e);
+            let resting = e.call(0x0094_df60, &args![player]).u8();
+            e.vcall(actor, 0x34c, &args![delta, resting as u32]);
+            let process = actor_process(e, actor);
+            if process != 0 {
+                e.vcall(process, 0x500, &args![actor, 0u32]);
+                e.vcall(process, 0x170, &args![actor]);
+                e.vcall(process, 0x1d8, &args![actor]);
+            }
+        } else if object != 0 && e.vcall(object, 0x220, &[]).bool() {
+            e.call(0x009b_17a0, &args![object, delta]);
+        }
+        index = index.wrapping_add(1);
+    }
+    e.call(0x0097_8890, &args![this.addr(), delta]);
+    let player = player(e);
+    if actor_process(e, player) != 0 {
+        let process = actor_process(e, player);
+        e.vcall(process, 0x170, &args![player]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -4752,6 +6521,77 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00974420, fn_00974420(Ptr<ProcessLists>, f32)),
         entry!(0x009746c0, fn_009746c0(Ptr<ProcessLists>, f32)),
         entry!(0x00974960, fn_00974960(u32, u32)),
+        entry!(0x009749b0, fn_009749b0(Ptr<ProcessLists>, u32)),
+        entry!(
+            0x00974a50,
+            processlists_finish_magic_shader_hit_effect(Ptr<ProcessLists>, u32, u32)
+        ),
+        entry!(0x00974af0, fn_00974af0(Ptr<ProcessLists>, u32)),
+        entry!(0x00974b80, fn_00974b80(Ptr<ProcessLists>, u32, u32)),
+        entry!(0x00974c30, fn_00974c30(Ptr<ProcessLists>)),
+        entry!(0x00974cb0, fn_00974cb0(Ptr<ProcessLists>, u32) -> u32),
+        entry!(0x00974d90, fn_00974d90(Ptr) -> u8),
+        entry!(
+            0x00974db0,
+            processlists_find_and_cleanup_weapon_shader_hit_effect(
+                Ptr<ProcessLists>,
+                u32,
+                u32,
+            ) -> u32
+        ),
+        entry!(0x00974e90, fn_00974e90(Ptr<ProcessLists>, u32, u32) -> bool),
+        entry!(
+            0x00974fc0,
+            processlists_stop_all_actors_in_dialog(Ptr<ProcessLists>)
+        ),
+        entry!(0x00975080, fn_00975080(Ptr<ProcessLists>)),
+        entry!(
+            0x00975160,
+            processlists_kill_all_projectiles(Ptr<ProcessLists>)
+        ),
+        entry!(0x00975300, fn_00975300(u32) -> bool),
+        entry!(0x00975320, fn_00975320(Ptr<ProcessLists>, u32)),
+        entry!(0x00975450, fn_00975450(Ptr<ProcessLists>) -> u16),
+        entry!(0x009754f0, processlists_save_game(Ptr<ProcessLists>)),
+        entry!(0x009755b0, fn_009755b0(Ptr<ProcessLists>) -> u32),
+        entry!(
+            0x009756c0,
+            processlists_save_temp_effects_list(Ptr<ProcessLists>)
+        ),
+        entry!(
+            0x00975840,
+            processlists_save_game_ov2(Ptr<ProcessLists>, u32)
+        ),
+        entry!(0x00975930, processlists_load_game(Ptr<ProcessLists>, u32)),
+        entry!(0x00975af0, fn_00975af0(Ptr<ProcessLists>, u32)),
+        entry!(0x00975b60, fn_00975b60(Ptr<ProcessLists>, u32)),
+        entry!(0x00975c50, fn_00975c50(Ptr<ProcessLists>, u32)),
+        entry!(0x00975cf0, fn_00975cf0()),
+        entry!(
+            0x00975d10,
+            processlists_update_3d_after_resting(Ptr<ProcessLists>)
+        ),
+        entry!(0x00975ea0, fn_00975ea0(Ptr<ProcessLists>)),
+        entry!(0x00975f90, fn_00975f90(Ptr<ProcessLists>)),
+        entry!(
+            0x00976030,
+            processlists_flush_non_persistent_actors(Ptr<ProcessLists>, u32)
+        ),
+        entry!(0x009764a0, fn_009764a0(Ptr<ProcessLists>, u8) -> bool),
+        entry!(0x00976680, fn_00976680(Ptr<ProcessLists>, u32)),
+        entry!(0x00977130, fn_00977130(Ptr<ProcessLists>, f32)),
+        entry!(0x00977540, fn_00977540(Ptr<ProcessLists>)),
+        entry!(
+            0x00977660,
+            processlists_rebuild_actors_close_to_player(Ptr<ProcessLists>)
+        ),
+        entry!(0x00977770, fn_00977770(Ptr<ProcessLists>, u32, u32)),
+        entry!(0x009777a0, fn_009777a0(Ptr<ProcessLists>)),
+        entry!(0x00977c70, fn_00977c70(Ptr) -> f32),
+        entry!(0x00977c90, fn_00977c90(Ptr, f32)),
+        entry!(0x00977cb0, fn_00977cb0(Ptr<ProcessLists>, u32, u32, u8)),
+        entry!(0x009781a0, fn_009781a0(Ptr<ProcessLists>)),
+        entry!(0x009781d0, fn_009781d0(Ptr<ProcessLists>, f32)),
     ]
 }
 
@@ -9327,5 +11167,2097 @@ mod tests {
         e.call(0x0097_46c0, &args![lists, 0.5f32]);
         assert_eq!(calls(&e, slot(0x94)), vec![vec![effect, 0.5f32.to_bits()]]);
     }
+    // --- 009749b0 .. 009756c0 -------------------------------------------------
+
+    /// Doubles for the sweeps over the temporary effect lists: the type test
+    /// passes for an effect whose word at +0x20 is the class asked for, its
+    /// worldspace is the word at +0x30 and `00671d10` the word at +0x34.
+    fn sweep_doubles(e: &mut Engine) {
+        effect_list_doubles(e);
+        e.register(EFFECT_IS_OF_TYPE, |e, a| Ret {
+            eax: (a[1] != 0 && e.mem.u32(a[1] + 0x20) == a[0]) as u32,
+            ..Ret::default()
+        });
+        e.register(EFFECT_WORLDSPACE, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 0x30),
+            ..Ret::default()
+        });
+        e.register(0x0067_1d10, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 0x34),
+            ..Ret::default()
+        });
+        stubs(e, &[EFFECT_SET_FLAG_0X24, EFFECT_SET_FLAG_0X28]);
+    }
+
+    /// An effect of class `class` in `worldspace` with `shader`.
+    fn sweep_effect(e: &mut Engine, class: u32, worldspace: u32, shader: u32) -> u32 {
+        let effect = object(e);
+        e.mem.set_u32(effect + 0x20, class);
+        e.mem.set_u32(effect + 0x30, worldspace);
+        e.mem.set_u32(effect + 0x34, shader);
+        effect
+    }
+
+    #[test]
+    fn slot_0xc8_sweep_acts_on_the_effects_of_the_worldspace_and_class() {
+        let mut e = fixture();
+        sweep_doubles(&mut e);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        let hit = sweep_effect(&mut e, EFFECT_TYPE_011DC6B4, 5, 0);
+        let other_world = sweep_effect(&mut e, EFFECT_TYPE_011DC6B4, 6, 0);
+        let other_class = sweep_effect(&mut e, EFFECT_TYPE_011DC804, 5, 0);
+        embed_list(
+            &mut e,
+            lists.addr() + MAGIC_EFFECT_LIST,
+            &[other_world, hit, other_class],
+        );
+        stub(&mut e, slot(0xc8), 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_49b0, &args![lists, 5u32]);
+        assert_eq!(calls(&e, slot(0xc8)), vec![vec![hit]]);
+        assert_eq!(calls(&e, EFFECT_SET_FLAG_0X24), vec![vec![hit, 1]]);
+        // An empty list is left alone.
+        let empty: Ptr<ProcessLists> = e.new_object();
+        e.call_log = Some(vec![]);
+        e.call(0x0097_49b0, &args![empty, 5u32]);
+        assert!(calls(&e, EFFECT_SET_FLAG_0X24).is_empty());
+    }
+
+    #[test]
+    fn finish_magic_shader_hit_effect_needs_worldspace_and_shader() {
+        let mut e = fixture();
+        sweep_doubles(&mut e);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        let hit = sweep_effect(&mut e, EFFECT_TYPE_011DC804, 5, 9);
+        let wrong_shader = sweep_effect(&mut e, EFFECT_TYPE_011DC804, 5, 8);
+        let wrong_world = sweep_effect(&mut e, EFFECT_TYPE_011DC804, 4, 9);
+        embed_list(
+            &mut e,
+            lists.addr() + MAGIC_EFFECT_LIST,
+            &[wrong_shader, wrong_world, hit],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0097_4a50, &args![lists, 5u32, 9u32]);
+        assert_eq!(calls(&e, EFFECT_SET_FLAG_0X24), vec![vec![hit, 1]]);
+    }
+
+    #[test]
+    fn the_shader_sweep_ignores_the_worldspace() {
+        let mut e = fixture();
+        sweep_doubles(&mut e);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        let first = sweep_effect(&mut e, EFFECT_TYPE_011DC804, 5, 9);
+        let second = sweep_effect(&mut e, EFFECT_TYPE_011DC804, 6, 9);
+        let other = sweep_effect(&mut e, EFFECT_TYPE_011DC804, 6, 3);
+        embed_list(
+            &mut e,
+            lists.addr() + MAGIC_EFFECT_LIST,
+            &[first, other, second],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0097_4af0, &args![lists, 9u32]);
+        assert_eq!(
+            calls(&e, EFFECT_SET_FLAG_0X24),
+            vec![vec![first, 1], vec![second, 1]]
+        );
+    }
+
+    #[test]
+    fn the_name_sweep_compares_the_effect_name() {
+        let mut e = fixture();
+        sweep_doubles(&mut e);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        let same = sweep_effect(&mut e, EFFECT_TYPE_011DC724, 5, 0);
+        let different = sweep_effect(&mut e, EFFECT_TYPE_011DC724, 5, 0);
+        let elsewhere = sweep_effect(&mut e, EFFECT_TYPE_011DC724, 6, 0);
+        e.mem.set_u32(same + 0x2c, 0x7000);
+        e.mem.set_u32(different + 0x2c, 0x7001);
+        e.mem.set_u32(elsewhere + 0x2c, 0x7000);
+        e.register(0x0055_b980, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 0x2c),
+            ..Ret::default()
+        });
+        // Zero when the two strings are equal.
+        e.register(0x0040_8b20, |_, a| Ret {
+            eax: (a[0] != a[1]) as u32,
+            ..Ret::default()
+        });
+        embed_list(
+            &mut e,
+            lists.addr() + MAGIC_EFFECT_LIST,
+            &[different, same, elsewhere],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0097_4b80, &args![lists, 5u32, 0x7000u32]);
+        assert_eq!(calls(&e, EFFECT_SET_FLAG_0X24), vec![vec![same, 1]]);
+        assert_eq!(calls(&e, 0x0040_8b20)[0], vec![0x7001, 0x7000]);
+    }
+
+    #[test]
+    fn the_global_list_sweep_sets_the_second_flag() {
+        let mut e = fixture();
+        sweep_doubles(&mut e);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        let hit = sweep_effect(&mut e, EFFECT_TYPE_011D6B04, 0, 0);
+        let miss = sweep_effect(&mut e, EFFECT_TYPE_011DC804, 0, 0);
+        embed_list(&mut e, lists.addr() + GLOBAL_TEMP_EFFECT_LIST, &[miss, hit]);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_4c30, &args![lists]);
+        assert_eq!(calls(&e, EFFECT_SET_FLAG_0X28), vec![vec![hit, 1]]);
+        assert!(calls(&e, EFFECT_SET_FLAG_0X24).is_empty());
+    }
+
+    /// Makes `00621b00` answer the `float` stored at +0x10 of the effect and
+    /// maps the page of `FLT_MAX`.
+    fn float_value_doubles(e: &mut Engine) {
+        e.map(0x0101_6000, 0x1000);
+        e.set_global(0x0101_6970u32, f32::MAX);
+        e.register(0x0062_1b00, |e, a| Ret {
+            st0: e.mem.f32(a[0] + 0x10) as f64,
+            ..Ret::default()
+        });
+    }
+
+    #[test]
+    fn the_nearest_effect_is_the_smallest_value_with_the_flag_clear() {
+        let mut e = fixture();
+        sweep_doubles(&mut e);
+        float_value_doubles(&mut e);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        let make = |e: &mut Engine, world: u32, value: f32, flag: u8| {
+            let effect = sweep_effect(e, EFFECT_TYPE_011DC804, world, 0);
+            e.mem.set_f32(effect + 0x10, value);
+            e.mem.set_u8(effect + 0x28, flag);
+            effect
+        };
+        let far = make(&mut e, 5, 9.0, 0);
+        let flagged = make(&mut e, 5, 1.0, 1);
+        let near = make(&mut e, 5, 4.0, 0);
+        let elsewhere = make(&mut e, 6, 0.5, 0);
+        embed_list(
+            &mut e,
+            lists.addr() + MAGIC_EFFECT_LIST,
+            &[far, flagged, near, elsewhere],
+        );
+        assert_eq!(e.call(0x0097_4cb0, &args![lists, 5u32]).u32(), near);
+        assert_eq!(e.call(0x0097_4cb0, &args![lists, 7u32]).u32(), 0);
+        let empty: Ptr<ProcessLists> = e.new_object();
+        assert_eq!(e.call(0x0097_4cb0, &args![empty, 5u32]).u32(), 0);
+    }
+
+    #[test]
+    fn the_flag_getter_reads_the_byte_at_0x28() {
+        let mut e = fixture();
+        let effect = object(&mut e);
+        assert_eq!(e.call(0x0097_4d90, &args![Ptr::<()>::new(effect)]).u8(), 0);
+        e.mem.set_u8(effect + 0x28, 3);
+        assert_eq!(e.call(0x0097_4d90, &args![Ptr::<()>::new(effect)]).u8(), 3);
+    }
+
+    #[test]
+    fn the_weapon_shader_cleanup_keeps_the_first_match_and_flags_the_others() {
+        let mut e = fixture();
+        sweep_doubles(&mut e);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        let make = |e: &mut Engine, world: u32, shader: u32, flag: u8| {
+            let effect = sweep_effect(e, EFFECT_TYPE_011DC804, world, shader);
+            e.mem.set_u8(effect + 0x28, flag);
+            effect
+        };
+        let first = make(&mut e, 5, 9, 1);
+        let second = make(&mut e, 5, 9, 1);
+        let other_shader = make(&mut e, 5, 8, 1);
+        let unflagged = make(&mut e, 5, 9, 0);
+        let busy = make(&mut e, 5, 9, 1);
+        e.register_double(0x0054_3c30, move |_, a| Ret {
+            eax: (a[0] == busy) as u32,
+            ..Ret::default()
+        });
+        embed_list(
+            &mut e,
+            lists.addr() + MAGIC_EFFECT_LIST,
+            &[first, other_shader, second, unflagged, busy],
+        );
+        e.call_log = Some(vec![]);
+        let found = e.call(0x0097_4db0, &args![lists, 5u32, 9u32]).u32();
+        assert_eq!(found, first);
+        assert_eq!(
+            calls(&e, EFFECT_SET_FLAG_0X24),
+            vec![vec![other_shader, 1], vec![second, 1]]
+        );
+    }
+
+    #[test]
+    fn the_hit_effect_search_resets_the_best_effect() {
+        let mut e = fixture();
+        effect_list_doubles(&mut e);
+        float_value_doubles(&mut e);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        let (far, near, wrong_kind, not_six) = (
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+        );
+        for (effect, value) in [
+            (far, 8.0f32),
+            (near, 2.0),
+            (wrong_kind, 1.0),
+            (not_six, 0.5),
+        ] {
+            e.mem.set_f32(effect + 0x10, value);
+            // The owner is the effect + 0x50; its texture object is the
+            // effect + 0x60, whose slot 4 answers the word at +0x40.
+            e.mem.set_u32(effect + 0x40, 77);
+        }
+        e.mem.set_u32(wrong_kind + 0x40, 78);
+        on_slot(&mut e, 0x9c, move |o| (o != not_six) as u32 * 6);
+        e.register(0x0096_11e0, |_, a| Ret {
+            eax: a[0] + 0x50,
+            ..Ret::default()
+        });
+        e.register(0x0059_bb30, |_, a| Ret {
+            eax: a[0] + 0x10,
+            ..Ret::default()
+        });
+        let texture_vtable = e.mem.alloc(0x10);
+        e.register_double(0x0e10_0004, |e, a| Ret {
+            eax: e.mem.u32(a[0] - 0x60 + 0x40),
+            ..Ret::default()
+        });
+        e.mem.set_u32(texture_vtable + 4, 0x0e10_0004);
+        for effect in [far, near, wrong_kind, not_six] {
+            e.mem.set_u32(effect + 0x60, texture_vtable);
+        }
+        e.register(0x0070_43c0, |_, a| Ret {
+            eax: (a[0] == 5) as u32,
+            ..Ret::default()
+        });
+        stubs(&mut e, &[slot(0xc4), 0x0082_16c0]);
+        embed_list(
+            &mut e,
+            lists.addr() + MAGIC_EFFECT_LIST,
+            &[far, near, wrong_kind, not_six],
+        );
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0097_4e90, &args![lists, 77u32, 5u32]).bool());
+        assert_eq!(calls(&e, slot(0xc4)), vec![vec![near]]);
+        assert_eq!(calls(&e, 0x0082_16c0), vec![vec![near]]);
+        // The test fails: nothing qualifies, nothing is reset.
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0097_4e90, &args![lists, 77u32, 6u32]).bool());
+        assert!(calls(&e, slot(0xc4)).is_empty());
+        // An empty list answers false.
+        let empty: Ptr<ProcessLists> = e.new_object();
+        assert!(!e.call(0x0097_4e90, &args![empty, 77u32, 5u32]).bool());
+    }
+
+    #[test]
+    fn actors_in_dialogue_stop_unless_they_talk_to_the_player() {
+        let mut e = fixture();
+        let (talking, with_player, silent, thing) = (
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+        );
+        let lists = lists_with(&mut e, 0, &[talking, thing, with_player, silent]);
+        on_slot(&mut e, SLOT_IS_ACTOR, move |o| (o != thing) as u32);
+        e.set_global(PLAYER, 0x4242u32);
+        e.register_double(IS_IN_DIALOGUE, move |_, a| Ret {
+            eax: (a[0] != silent) as u32,
+            ..Ret::default()
+        });
+        on_slot(
+            &mut e,
+            0x2c8,
+            move |o| if o == with_player { 0x4242 } else { 7 },
+        );
+        stub(&mut e, slot(0x288), 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_4fc0, &args![lists]);
+        assert_eq!(calls(&e, slot(0x288)), vec![vec![talking]]);
+    }
+
+    #[test]
+    fn dead_projectiles_leave_the_post_process_list() {
+        let mut e = fixture();
+        e.register(NODE_ITEM, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.register(LIST_IS_EMPTY, |e, a| Ret {
+            eax: (e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0) as u32,
+            ..Ret::default()
+        });
+        let lists: Ptr<ProcessLists> = e.new_object();
+        let (a, b, c, plain) = (0x7101u32, 0x7102u32, 0x7103u32, 0x7104u32);
+        embed_list(
+            &mut e,
+            lists.addr() + PROJECTILE_POST_PROCESS_LIST,
+            &[a, plain, b, c],
+        );
+        // Everything but `plain` is a projectile (the cast returns it), and
+        // `a` and `c` are finished.
+        e.register_double(RT_DYNAMIC_CAST, move |_, w| Ret {
+            eax: if w[0] == plain { 0 } else { w[0] },
+            ..Ret::default()
+        });
+        e.register_double(0x009b_ec50, move |_, w| Ret {
+            eax: (w[0] == a || w[0] == c) as u32,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0097_5080, &args![lists]);
+        assert_eq!(
+            list_items(&e, lists.addr() + PROJECTILE_POST_PROCESS_LIST),
+            vec![plain, b]
+        );
+        assert_eq!(calls(&e, 0x009b_ec50)[0], vec![a, 0]);
+        // An empty list does nothing.
+        let empty: Ptr<ProcessLists> = e.new_object();
+        e.call_log = Some(vec![]);
+        e.call(0x0097_5080, &args![empty]);
+        assert!(calls(&e, RT_DYNAMIC_CAST).is_empty());
+    }
+
+    #[test]
+    fn kill_all_projectiles_kills_by_class_and_checks_the_owner() {
+        let mut e = fixture();
+        let (kind_a, kind_b, orphan, owned, excused, ignored) = (
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+        );
+        let lists = lists_with(
+            &mut e,
+            0,
+            &[kind_a, kind_b, orphan, owned, excused, ignored],
+        );
+        let level_one = object(&mut e);
+        let array = lists.addr() + MOB_PROCESS_ARRAY;
+        // Level 1 holds one object (index 6 of the table: reuse the table).
+        let table = e.mem.u32(array + 0x3c);
+        let bigger = e.mem.alloc(4 * 8);
+        for i in 0..6 {
+            let word = e.mem.u32(table + 4 * i);
+            e.mem.set_u32(bigger + 4 * i, word);
+        }
+        e.mem.set_u32(bigger + 24, level_one);
+        e.mem.set_u32(array + 0x3c, bigger);
+        e.mem.set_u32(array + 0x10 + 4, 6);
+        e.mem.set_u32(array + 0x20 + 4, 7);
+        // The casts: target 0x011a0e88 -> kind_a, 0x011a28e0 -> kind_b and
+        // level_one, 0x01189dbc -> the three projectiles.
+        e.register_double(RT_DYNAMIC_CAST, move |_, w| Ret {
+            eax: match w[3] {
+                TYPE_011A0E88 if w[0] == kind_a => w[0],
+                TYPE_011A28E0 if w[0] == kind_b || w[0] == level_one => w[0],
+                TYPE_PROJECTILE if [orphan, owned, excused].contains(&w[0]) => w[0],
+                _ => 0,
+            },
+            ..Ret::default()
+        });
+        // `004181e0` is null for `orphan`, else the projectile plus one;
+        // `00975300` holds for `excused`'s, `005de080` for nobody's.
+        e.register_double(0x0041_81e0, move |_, w| Ret {
+            eax: if w[0] == orphan { 0 } else { w[0] + 1 },
+            ..Ret::default()
+        });
+        e.register_double(0x004f_d420, move |_, w| Ret {
+            eax: (w[0] == excused + 1 && w[1] == 4) as u32,
+            ..Ret::default()
+        });
+        stubs(&mut e, &[0x005d_e080, 0x009b_c8f0, slot(0xc4)]);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_5160, &args![lists]);
+        assert_eq!(
+            calls(&e, slot(0xc4)),
+            vec![vec![kind_a, 1], vec![kind_b, 1], vec![level_one, 1]]
+        );
+        assert_eq!(calls(&e, 0x009b_c8f0), vec![vec![orphan], vec![owned]]);
+        let _ = ignored;
+    }
+
+    #[test]
+    fn the_projectile_owner_test_calls_004fd420_with_four() {
+        let mut e = fixture();
+        stub(&mut e, 0x004f_d420, 1);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0097_5300, &args![0x55u32]).bool());
+        assert_eq!(calls(&e, 0x004f_d420), vec![vec![0x55, 4]]);
+    }
+
+    /// Doubles for the crime lists: nodes carry their item in the first word.
+    fn crime_list_doubles(e: &mut Engine) {
+        e.register(NODE_ITEM, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.register(LIST_IS_EMPTY, |e, a| Ret {
+            eax: (e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0) as u32,
+            ..Ret::default()
+        });
+        e.register(LIST_POP_FRONT, |e, a| {
+            let next = e.mem.u32(a[0] + 4);
+            if next == 0 {
+                e.mem.set_u32(a[0], 0);
+            } else {
+                let (item, after) = (e.mem.u32(next), e.mem.u32(next + 4));
+                e.mem.set_u32(a[0], item);
+                e.mem.set_u32(a[0] + 4, after);
+            }
+            Ret::default()
+        });
+    }
+
+    /// Puts `items` in crime list `index` of `lists` (an embedded list on the heap).
+    fn set_crime_items(e: &mut Engine, lists: Ptr<ProcessLists>, index: u32, items: &[u32]) {
+        let head = e.mem.alloc(8);
+        embed_list(e, head, items);
+        e.mem
+            .set_u32(lists.addr() + GLOBAL_CRIME_LIST_ARRAY + 4 * index, head);
+    }
+
+    #[test]
+    fn crimes_of_a_reference_are_removed_and_the_others_told_about_an_actor() {
+        let mut e = fixture();
+        crime_list_doubles(&mut e);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        let reference = object(&mut e);
+        let (by_owner, by_victim, other_a, other_b) = (0x7301u32, 0x7302u32, 0x7303u32, 0x7304u32);
+        set_crime_items(&mut e, lists, 0, &[by_owner, other_a, by_victim, other_b]);
+        set_crime_items(&mut e, lists, 1, &[other_a]);
+        e.register_double(0x0084_e3a0, move |_, a| Ret {
+            eax: if a[0] == by_owner { reference } else { 1 },
+            ..Ret::default()
+        });
+        e.register_double(0x0044_ddc0, move |_, a| Ret {
+            eax: if a[0] == by_victim { reference } else { 2 },
+            ..Ret::default()
+        });
+        stubs(&mut e, &[0x008f_25e0, 0x009e_ba00]);
+        on_slot(&mut e, SLOT_IS_ACTOR, |_| 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_5320, &args![lists, reference]);
+        let head = e.mem.u32(lists.addr() + GLOBAL_CRIME_LIST_ARRAY);
+        assert_eq!(list_items(&e, head), vec![other_a, other_b]);
+        assert_eq!(
+            calls(&e, 0x008f_25e0),
+            vec![vec![by_owner, 1], vec![by_victim, 1]]
+        );
+        // `other_a` is told about the actor in both lists, `other_b` once.
+        assert_eq!(calls(&e, 0x009e_ba00).len(), 3);
+        assert_eq!(calls(&e, 0x009e_ba00)[0], vec![other_a, reference]);
+        // Not an actor: nothing is told.
+        on_slot(&mut e, SLOT_IS_ACTOR, |_| 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_5320, &args![lists, reference]);
+        assert!(calls(&e, 0x009e_ba00).is_empty());
+    }
+
+    #[test]
+    fn the_crime_save_size_adds_the_entries() {
+        let mut e = fixture();
+        crime_list_doubles(&mut e);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        set_crime_items(&mut e, lists, 0, &[0x11, 0x22]);
+        set_crime_items(&mut e, lists, 2, &[0x33]);
+        e.register(0x009e_bb80, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        // 4 + 5 * 2 + 0x11 + 0x22 + 0x33
+        assert_eq!(e.call(0x0097_5450, &args![lists]).u16(), 14 + 0x66);
+    }
+
+    #[test]
+    fn saving_writes_the_clock_and_the_patched_counts_of_the_crime_lists() {
+        let mut e = fixture();
+        crime_list_doubles(&mut e);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        set_crime_items(&mut e, lists, 0, &[0x11, 0x22]);
+        set_crime_items(&mut e, lists, 3, &[0x33]);
+        let stream = 0x6666_0000u32;
+        e.set_global(SAVE_STREAM, stream);
+        // The stream is a byte buffer; `00825c00` is its write position.
+        let buffer = e.mem.alloc(0x100);
+        let position = Rc::new(RefCell::new(buffer));
+        let at = position.clone();
+        e.register_double(STREAM_POSITION, move |_, _| Ret {
+            eax: *at.borrow(),
+            ..Ret::default()
+        });
+        let at = position.clone();
+        e.register_double(STREAM_WRITE, move |e, w| {
+            let at_now = *at.borrow();
+            for i in 0..w[2] {
+                let byte = e.mem.u8(w[1] + i);
+                e.mem.set_u8(at_now + i, byte);
+            }
+            *at.borrow_mut() = at_now + w[2];
+            Ret::default()
+        });
+        let saved = Rc::new(RefCell::new(Vec::new()));
+        let log = saved.clone();
+        e.register_double(0x009e_bca0, move |_, w| {
+            log.borrow_mut().push(w[0]);
+            Ret::default()
+        });
+        e.mem.set_f32(SYSTEM_TIME_CLOCK, 12.5);
+        e.call(0x0097_54f0, &args![lists]);
+        assert_eq!(e.mem.f32(buffer), 12.5);
+        // Five counts of two bytes follow the clock.
+        let counts: Vec<u16> = (0..5).map(|i| e.mem.u16(buffer + 4 + 2 * i)).collect();
+        assert_eq!(counts, vec![2, 0, 0, 1, 0]);
+        assert_eq!(*saved.borrow(), vec![0x11, 0x22, 0x33]);
+    }
+
+    #[test]
+    fn the_effect_save_size_counts_the_saved_effects() {
+        let mut e = fixture();
+        effect_list_doubles(&mut e);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        let (kept, skipped, kept_too) = (object(&mut e), object(&mut e), object(&mut e));
+        embed_list(
+            &mut e,
+            lists.addr() + GLOBAL_TEMP_EFFECT_LIST,
+            &[kept, skipped],
+        );
+        embed_list(&mut e, lists.addr() + MAGIC_EFFECT_LIST, &[kept_too]);
+        on_slot(&mut e, 0xa0, move |o| (o != skipped) as u32);
+        // Sizes above 16 bits are cut to 16 bits.
+        on_slot(&mut e, 0xa4, move |o| if o == kept { 10 } else { 0x1_0005 });
+        assert_eq!(
+            e.call(0x0097_55b0, &args![lists]).u32(),
+            2 + (1 + 10) + (1 + 5)
+        );
+    }
+
+    #[test]
+    fn saving_the_effects_writes_kind_and_body_of_each_saved_effect() {
+        let mut e = fixture();
+        effect_list_doubles(&mut e);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        let (first, skipped, second) = (object(&mut e), object(&mut e), object(&mut e));
+        embed_list(
+            &mut e,
+            lists.addr() + GLOBAL_TEMP_EFFECT_LIST,
+            &[first, skipped],
+        );
+        embed_list(&mut e, lists.addr() + MAGIC_EFFECT_LIST, &[second]);
+        on_slot(&mut e, 0xa0, move |o| (o != skipped) as u32);
+        on_slot(&mut e, 0x9c, move |o| if o == first { 4 } else { 6 });
+        stub(&mut e, slot(0xac), 0);
+        e.set_global(SAVE_STREAM, 0x6666_0000u32);
+        let buffer = e.mem.alloc(0x40);
+        let position = Rc::new(RefCell::new(buffer));
+        let at = position.clone();
+        e.register_double(STREAM_POSITION, move |_, _| Ret {
+            eax: *at.borrow(),
+            ..Ret::default()
+        });
+        let at = position.clone();
+        e.register_double(STREAM_WRITE, move |e, w| {
+            let now = *at.borrow();
+            for i in 0..w[2] {
+                let byte = e.mem.u8(w[1] + i);
+                e.mem.set_u8(now + i, byte);
+            }
+            *at.borrow_mut() = now + w[2];
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0097_56c0, &args![lists]);
+        assert_eq!(e.mem.u16(buffer), 2);
+        assert_eq!(e.mem.u8(buffer + 2), 4);
+        assert_eq!(e.mem.u8(buffer + 3), 6);
+        assert_eq!(calls(&e, slot(0xac)), vec![vec![first], vec![second]]);
+    }
+
+    // --- 00975840 .. 009781d0 -------------------------------------------------
+
+    /// Maps the pages of the globals and settings the following tests read.
+    fn map_settings(e: &mut Engine) {
+        for page in [
+            0x011c_c000u32,
+            0x011c_9000,
+            0x011d_0000,
+            0x011d_1000,
+            0x011d_6000,
+            0x011d_8000,
+            0x011f_1000,
+            0x0101_6000,
+            0x0102_e000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(0x0101_6970u32, f32::MAX);
+    }
+
+    /// Sets the value of a setting (the getter doubles answer the address
+    /// 0x100 after the setting).
+    fn set_float_setting(e: &mut Engine, setting: u32, value: f32) {
+        e.mem.set_f32(setting + 0x100, value);
+    }
+
+    #[test]
+    fn the_save_buffer_gets_four_words_and_the_crimes_with_their_counts() {
+        let mut e = fixture();
+        crime_list_doubles(&mut e);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        set_crime_items(&mut e, lists, 0, &[0x11, 0, 0x22]);
+        set_crime_items(&mut e, lists, 2, &[0x33]);
+        let buffer = 0x6100_0000u32;
+        stubs(
+            &mut e,
+            &[
+                BUFFER_SAVE_DATA,
+                CRIME_SAVE_GAME,
+                BUFFER_SAVE_VARIABLE_SIZED_VALUE,
+            ],
+        );
+        stub(&mut e, BUFFER_START_VARIABLE_SIZED_VALUE, 0x77);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_5840, &args![lists, buffer]);
+        let base = lists.addr();
+        assert_eq!(
+            calls(&e, BUFFER_SAVE_DATA),
+            vec![
+                vec![buffer, base + 0x154, 4, 0],
+                vec![buffer, base + 0x158, 4, 0],
+                vec![buffer, base + 0x103b4, 4, 0],
+                vec![buffer, base + 0x103b8, 4, 0],
+            ]
+        );
+        assert_eq!(
+            calls(&e, CRIME_SAVE_GAME),
+            vec![vec![0x11, buffer], vec![0x22, buffer], vec![0x33, buffer]]
+        );
+        assert_eq!(
+            calls(&e, BUFFER_SAVE_VARIABLE_SIZED_VALUE),
+            vec![
+                vec![buffer, 2, 0x77],
+                vec![buffer, 0, 0x77],
+                vec![buffer, 1, 0x77],
+                vec![buffer, 0, 0x77],
+                vec![buffer, 0, 0x77],
+            ]
+        );
+    }
+
+    /// Doubles for loading the crimes: counts per list, allocation, list clear.
+    fn load_doubles(e: &mut Engine, counts: [u32; 5], version: u32) -> Rc<RefCell<Vec<u32>>> {
+        let sequence = Rc::new(RefCell::new(counts.to_vec()));
+        let remaining = sequence.clone();
+        e.register_double(BUFFER_LOAD_VARIABLE_SIZED_VALUE, move |_, _| Ret {
+            eax: remaining.borrow_mut().remove(0),
+            ..Ret::default()
+        });
+        on_slot(e, 0, move |_| version);
+        e.register_double(OPERATOR_NEW, |e, a| Ret {
+            eax: e.mem.alloc(a[0]),
+            ..Ret::default()
+        });
+        e.register(CRIME_CONSTRUCT, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.register(LIST_CLEAR, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, 0);
+            Ret::default()
+        });
+        stubs(e, &[BUFFER_LOAD_DATA, CRIME_LOAD_GAME]);
+        sequence
+    }
+
+    #[test]
+    fn loading_creates_missing_lists_and_refills_the_existing_ones() {
+        let mut e = fixture();
+        let _ = load_doubles(&mut e, [2, 0, 1, 0, 0], 0x12);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        let buffer = object(&mut e);
+        // List 0 exists with an old entry; list 2 does not exist.
+        set_crime_items(&mut e, lists, 0, &[0x9999]);
+        let old_head = e.mem.u32(lists.addr() + GLOBAL_CRIME_LIST_ARRAY);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_5930, &args![lists, buffer]);
+        let base = lists.addr();
+        // The version allows the +0x158 word.
+        assert_eq!(calls(&e, BUFFER_LOAD_DATA).len(), 4);
+        assert_eq!(
+            calls(&e, BUFFER_LOAD_DATA)[1],
+            vec![buffer, base + 0x158, 4]
+        );
+        let loaded: Vec<u32> = calls(&e, CRIME_LOAD_GAME).iter().map(|w| w[0]).collect();
+        assert_eq!(loaded.len(), 3);
+        assert!(calls(&e, CRIME_LOAD_GAME).iter().all(|w| w[1] == buffer));
+        let first = e.mem.u32(base + GLOBAL_CRIME_LIST_ARRAY);
+        let third = e.mem.u32(base + GLOBAL_CRIME_LIST_ARRAY + 8);
+        assert_eq!(first, old_head);
+        // (The push helper puts the newest entry first.)
+        let mut pushed = list_items(&e, first);
+        pushed.sort();
+        let mut expected = loaded[..2].to_vec();
+        expected.sort();
+        assert_eq!(pushed, expected);
+        assert_ne!(third, 0);
+        assert_eq!(list_items(&e, third), vec![loaded[2]]);
+        assert_eq!(e.mem.u32(base + GLOBAL_CRIME_LIST_ARRAY + 4), 0);
+        assert_eq!(calls(&e, LIST_CLEAR), vec![vec![old_head]]);
+    }
+
+    #[test]
+    fn loading_an_old_save_skips_the_second_timer() {
+        let mut e = fixture();
+        let _ = load_doubles(&mut e, [0; 5], 0x11);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        let buffer = object(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_5930, &args![lists, buffer]);
+        let base = lists.addr();
+        assert_eq!(
+            calls(&e, BUFFER_LOAD_DATA),
+            vec![
+                vec![buffer, base + 0x154, 4],
+                vec![buffer, base + 0x103b4, 4],
+                vec![buffer, base + 0x103b8, 4],
+            ]
+        );
+    }
+
+    #[test]
+    fn the_second_load_pass_fixes_up_the_crimes_and_rebuilds_the_alive_list() {
+        let mut e = fixture();
+        crime_list_doubles(&mut e);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        set_crime_items(&mut e, lists, 0, &[0x11, 0, 0x22]);
+        set_crime_items(&mut e, lists, 3, &[0x33]);
+        stubs(&mut e, &[CRIME_LOAD_FIXUP]);
+        e.register(LIST_CLEAR, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0097_5af0, &args![lists, 0x6100_0000u32]);
+        assert_eq!(
+            calls(&e, CRIME_LOAD_FIXUP),
+            vec![
+                vec![0x11, 0x6100_0000],
+                vec![0x22, 0x6100_0000],
+                vec![0x33, 0x6100_0000]
+            ]
+        );
+        assert_eq!(
+            calls(&e, LIST_CLEAR),
+            vec![vec![lists.addr() + ALIVE_ACTOR_LIST]]
+        );
+    }
+
+    #[test]
+    fn clearing_the_crimes_destroys_the_entries_and_the_lists() {
+        let mut e = fixture();
+        crime_list_doubles(&mut e);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        e.mem.set_f32(lists.addr() + 0x154, 5.0);
+        e.mem.set_f32(lists.addr() + 0x158, 6.0);
+        e.mem.set_u32(lists.addr() + 0x103b8, 7);
+        set_crime_items(&mut e, lists, 0, &[0x11, 0x22]);
+        set_crime_items(&mut e, lists, 2, &[0x33]);
+        let first = e.mem.u32(lists.addr() + GLOBAL_CRIME_LIST_ARRAY);
+        let third = e.mem.u32(lists.addr() + GLOBAL_CRIME_LIST_ARRAY + 8);
+        stubs(&mut e, &[0x008f_25e0, LIST_DELETE]);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_5b60, &args![lists, 0u32]);
+        assert_eq!(
+            calls(&e, 0x008f_25e0),
+            vec![vec![0x11, 1], vec![0x22, 1], vec![0x33, 1]]
+        );
+        assert_eq!(calls(&e, LIST_DELETE), vec![vec![first, 1], vec![third, 1]]);
+        for i in 0..5 {
+            assert_eq!(e.mem.u32(lists.addr() + GLOBAL_CRIME_LIST_ARRAY + 4 * i), 0);
+        }
+        assert_eq!(e.mem.f32(lists.addr() + 0x154), 0.0);
+        assert_eq!(e.mem.f32(lists.addr() + 0x158), 0.0);
+        assert_eq!(e.mem.u32(lists.addr() + 0x103b8), 0);
+    }
+
+    #[test]
+    fn shutting_the_effects_down_releases_the_global_ones_and_resets_the_rest() {
+        let mut e = fixture();
+        effect_list_doubles(&mut e);
+        map_settings(&mut e);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        let (first, second, third) = (object(&mut e), object(&mut e), object(&mut e));
+        embed_list(
+            &mut e,
+            lists.addr() + GLOBAL_TEMP_EFFECT_LIST,
+            &[first, second],
+        );
+        embed_list(&mut e, lists.addr() + MAGIC_EFFECT_LIST, &[third]);
+        stub(&mut e, slot(0x90), 0);
+        stubs(
+            &mut e,
+            &[0x004e_e920, 0x004e_e7d0, 0x0049_fef0, 0x004a_42a0],
+        );
+        e.set_global(0x011d_6a20u32, 5u32);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_5c50, &args![lists, 0u32]);
+        assert_eq!(calls(&e, slot(0x90)), vec![vec![first], vec![second]]);
+        assert!(list_items(&e, lists.addr() + GLOBAL_TEMP_EFFECT_LIST).is_empty());
+        assert!(list_items(&e, lists.addr() + MAGIC_EFFECT_LIST).is_empty());
+        assert_eq!(calls(&e, 0x004e_e920), vec![vec![0x011d_6a30]]);
+        assert_eq!(e.global::<u32>(0x011d_6a20), 0);
+        for address in [0x004e_e7d0, 0x0049_fef0, 0x004a_42a0] {
+            assert_eq!(calls(&e, address).len(), 1);
+        }
+    }
+
+    #[test]
+    fn the_effect_reset_clears_its_flag_word() {
+        let mut e = fixture();
+        map_settings(&mut e);
+        stubs(&mut e, &[0x004e_e920]);
+        e.set_global(0x011d_6a20u32, 9u32);
+        e.call(0x0097_5cf0, &[]);
+        assert_eq!(e.global::<u32>(0x011d_6a20), 0);
+    }
+
+    #[test]
+    fn resting_updates_the_3d_of_actors_and_places_them() {
+        let mut e = fixture();
+        map_settings(&mut e);
+        let (to_add, loaded, no_cell, thing) = (
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+        );
+        let lists = lists_with(&mut e, 0, &[to_add, loaded, no_cell, thing]);
+        e.mem.set_u32(lists.addr() + MOB_PROCESS_ARRAY + 0x2c, 4);
+        e.register(0x0055_b980, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 0x2c),
+            ..Ret::default()
+        });
+        on_slot(&mut e, SLOT_IS_ACTOR, move |o| (o != thing) as u32);
+        // The actors that already have a 3D node.
+        let nodes = Rc::new(RefCell::new(HashMap::new()));
+        nodes.borrow_mut().insert(loaded, 1u32);
+        nodes.borrow_mut().insert(no_cell, 1u32);
+        let seen = nodes.clone();
+        e.register_double(slot(SLOT_GET_NODE), move |_, a| Ret {
+            eax: *seen.borrow().get(&a[0]).unwrap_or(&0),
+            ..Ret::default()
+        });
+        let tes = 0x7000_0000u32;
+        e.set_global(TES, tes);
+        e.set_global(0x011c_3b3cu32, 0x7100_0000u32);
+        // Cells: `to_add` and `loaded` have one; `no_cell` has none.
+        e.register_double(ACTOR_CELL, move |_, a| Ret {
+            eax: if a[0] == no_cell {
+                0
+            } else {
+                0x7200_0000 + a[0]
+            },
+            ..Ret::default()
+        });
+        e.register(TES_IS_CELL_LOADED, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        stubs(&mut e, &[0x0044_5750, 0x0044_0da0, 0x0044_0d80]);
+        stub(&mut e, slot(0x1cc), 0);
+        let adder = nodes.clone();
+        e.register_double(CELL_ADD_REFERENCE, move |_, a| {
+            adder.borrow_mut().insert(a[1], 1);
+            Ret::default()
+        });
+        stubs(&mut e, &[0x0045_9870, 0x0055_ac00, 0x0045_0b60]);
+        // The placement that closes the update finds nothing to do.
+        stub(&mut e, slot(SLOT_0X22C), 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_5d10, &args![lists]);
+        assert_eq!(
+            calls(&e, CELL_ADD_REFERENCE),
+            vec![vec![0x7200_0000 + to_add, to_add, 0]]
+        );
+        assert_eq!(calls(&e, slot(0x1cc)), vec![vec![no_cell, 0, 0]]);
+        assert_eq!(calls(&e, 0x0045_9870), vec![vec![tes]]);
+        // With the byte set, nothing happens.
+        e.set_global(0x011d_8909u32, 1u8);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_5d10, &args![lists]);
+        assert!(calls(&e, 0x0045_9870).is_empty());
+    }
+
+    #[test]
+    fn levels_three_and_two_get_slot_208_for_actors_that_are_not_busy() {
+        let mut e = fixture();
+        let (a, busy, thing, b) = (
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+        );
+        let lists = lists_with(&mut e, 3, &[a, busy, thing]);
+        let array = lists.addr() + MOB_PROCESS_ARRAY;
+        // Level 2 holds `b` at index 3 of the table.
+        let table = e.mem.alloc(16);
+        for (i, o) in [a, busy, thing, b].iter().enumerate() {
+            e.mem.set_u32(table + 4 * i as u32, *o);
+        }
+        e.mem.set_u32(array + 0x3c, table);
+        e.mem.set_u32(array + 0x10 + 8, 3);
+        e.mem.set_u32(array + 0x20 + 8, 4);
+        on_slot(&mut e, SLOT_IS_ACTOR, move |o| (o != thing) as u32);
+        on_slot(&mut e, SLOT_0X22C, move |o| (o == busy) as u32);
+        stub(&mut e, slot(0x208), 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_5ea0, &args![lists]);
+        assert_eq!(calls(&e, slot(0x208)), vec![vec![a, 1], vec![b, 1]]);
+    }
+
+    #[test]
+    fn idle_level_zero_actors_get_00483710() {
+        let mut e = fixture();
+        let (a, busy, thing) = (object(&mut e), object(&mut e), object(&mut e));
+        let lists = lists_with(&mut e, 0, &[a, busy, 0, thing]);
+        on_slot(&mut e, SLOT_IS_ACTOR, move |o| (o != thing) as u32);
+        on_slot(&mut e, SLOT_0X22C, move |o| (o == busy) as u32);
+        stub(&mut e, 0x0048_3710, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_5f90, &args![lists]);
+        assert_eq!(calls(&e, 0x0048_3710), vec![vec![a]]);
+    }
+
+    /// Doubles for `FlushNonPersistentActors`: stack lists work like the
+    /// crime lists, the actors' destructors are logged by `slot(0x10)`.
+    fn flush_world(e: &mut Engine) -> (Ptr<ProcessLists>, u32, u32, u32) {
+        crime_list_doubles(e);
+        map_settings(e);
+        e.set_global(0x0102_ed48u32, 3000.0f64);
+        e.register_double(OPERATOR_NEW, |e, a| Ret {
+            eax: e.mem.alloc(a[0]),
+            ..Ret::default()
+        });
+        e.register(LIST_CLEAR, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, 0);
+            Ret::default()
+        });
+        let (near, far, skipped) = (object(e), object(e), object(e));
+        let lists = lists_with(e, 0, &[near, far, skipped]);
+        on_slot(e, SLOT_IS_ACTOR, |_| 1);
+        // A destroyed actor leaves the process array (here: it is skipped).
+        let destroyed = Rc::new(RefCell::new(Vec::<u32>::new()));
+        let gone = destroyed.clone();
+        e.register_double(0x0056_5450, move |_, a| Ret {
+            eax: (a[0] == skipped || gone.borrow().contains(&a[0])) as u32,
+            ..Ret::default()
+        });
+        e.register_double(slot(SLOT_DELETING_DESTRUCTOR), move |_, a| {
+            destroyed.borrow_mut().push(a[0]);
+            Ret::default()
+        });
+        stub(e, slot(0x21c), 0);
+        e.register_double(0x0057_23b0, move |_, a| Ret {
+            st0: if a[0] == near { 100.0 } else { 5000.0 },
+            ..Ret::default()
+        });
+        stubs(e, &[LOCK_ENTER, LOCK_LEAVE, LIST_DELETE]);
+        e.set_global(PLAYER, 0x4242u32);
+        (lists, near, far, skipped)
+    }
+
+    #[test]
+    fn flushing_in_mode_two_destroys_the_actors_one_after_the_other() {
+        let mut e = fixture();
+        let (lists, near, far, _) = flush_world(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_6030, &args![lists, 2u32]);
+        assert_eq!(
+            calls(&e, slot(SLOT_DELETING_DESTRUCTOR)),
+            vec![vec![near, 1], vec![far, 1]]
+        );
+        assert_eq!(calls(&e, LOCK_ENTER).len(), 2);
+        assert_eq!(calls(&e, LOCK_LEAVE).len(), 2);
+    }
+
+    #[test]
+    fn flushing_in_mode_zero_destroys_only_the_far_actors() {
+        let mut e = fixture();
+        let (lists, _, far, _) = flush_world(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_6030, &args![lists, 0u32]);
+        assert_eq!(
+            calls(&e, slot(SLOT_DELETING_DESTRUCTOR)),
+            vec![vec![far, 1]]
+        );
+        // The far list is deleted, both lists are cleared.
+        assert_eq!(calls(&e, LIST_DELETE).len(), 1);
+        assert_eq!(calls(&e, LIST_CLEAR).len(), 2);
+    }
+
+    #[test]
+    fn flushing_in_mode_one_drops_the_near_actors_that_share_a_model_with_a_far_one() {
+        let mut e = fixture();
+        let (lists, near, far, _) = flush_world(&mut e);
+        // A second near actor with another model; `near` shares the model of `far`.
+        let other_near = object(&mut e);
+        let lists_table = e.mem.alloc(16);
+        let objects = [near, far, other_near];
+        for (i, o) in objects.iter().enumerate() {
+            e.mem.set_u32(lists_table + 4 * i as u32, *o);
+        }
+        let array = lists.addr() + MOB_PROCESS_ARRAY;
+        e.mem.set_u32(array + 0x3c, lists_table);
+        e.mem.set_u32(array + 0x20, 3);
+        e.register_double(0x0057_23b0, move |_, a| Ret {
+            st0: if a[0] == far { 5000.0 } else { 100.0 },
+            ..Ret::default()
+        });
+        on_slot(&mut e, 0x21c, move |o| (o == far) as u32);
+        e.register_double(0x0057_15d0, move |_, a| Ret {
+            eax: if a[0] == other_near { 2 } else { 1 },
+            ..Ret::default()
+        });
+        // Zero when the two models are the same.
+        e.register(0x0040_4dc0, |_, a| Ret {
+            eax: (a[0] != a[1]) as u32,
+            ..Ret::default()
+        });
+        e.mem.set_u32(near + 0x300, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_6030, &args![lists, 1u32]);
+        // `near` goes first (same model as `far`), then `far` itself;
+        // `other_near` stays.
+        assert_eq!(
+            calls(&e, slot(SLOT_DELETING_DESTRUCTOR)),
+            vec![vec![near, 1], vec![far, 1]]
+        );
+    }
+
+    #[test]
+    fn flushing_in_mode_one_with_nothing_far_destroys_the_near_ones() {
+        let mut e = fixture();
+        let (lists, near, _, _) = flush_world(&mut e);
+        e.register_double(0x0057_23b0, |_, _| Ret {
+            st0: 100.0,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0097_6030, &args![lists, 1u32]);
+        let destroyed: Vec<u32> = calls(&e, slot(SLOT_DELETING_DESTRUCTOR))
+            .iter()
+            .map(|w| w[0])
+            .collect();
+        assert_eq!(destroyed.len(), 2);
+        assert!(destroyed.contains(&near));
+    }
+
+    /// The world of `fn_009764a0`: the player, a far actor, a calm actor, an
+    /// actor in combat with the player and an actor whose acquire object is the
+    /// calm one's friend.
+    fn hostile_world(e: &mut Engine) -> (Ptr<ProcessLists>, [u32; 5]) {
+        map_settings(e);
+        let objects = [object(e), object(e), object(e), object(e), object(e)];
+        let [player, far, calm, foe, replaced] = objects;
+        let lists = lists_with(e, 0, &[player, far, calm, foe, replaced]);
+        e.set_global(PLAYER, player);
+        on_slot(e, SLOT_IS_ACTOR, |_| 1);
+        stub(e, slot(SLOT_0X22C), 0);
+        stub(e, 0x0044_0da0, 0);
+        set_float_setting(e, 0x011d_0bb4, 1000.0);
+        set_float_setting(e, 0x011d_04b4, 10.0);
+        e.register_double(0x0057_23b0, move |_, a| Ret {
+            st0: if a[1] == far { 5000.0 } else { 50.0 },
+            ..Ret::default()
+        });
+        stub(e, slot(0x344), 0);
+        // Only `replaced` has a process, whose saved acquire object is `calm`.
+        let process = object(e);
+        e.register_double(ACTOR_PROCESS, move |_, a| Ret {
+            eax: if a[0] == replaced { process } else { 0 },
+            ..Ret::default()
+        });
+        stub(e, slot(0x52c), calm);
+        stub(e, 0x008b_c700, 0);
+        stub(e, 0x008b_06d0, 0);
+        (lists, objects)
+    }
+
+    #[test]
+    fn a_hostile_actor_in_range_is_found() {
+        let mut e = fixture();
+        let (lists, [player, _, _, foe, _]) = hostile_world(&mut e);
+        e.register_double(0x008b_c700, move |_, a| Ret {
+            eax: (a[0] == foe && a[1] == player) as u32,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0097_64a0, &args![lists, 0u32]).bool());
+        // The search stops at the first hit.
+        assert_eq!(calls(&e, slot(0x344)).len(), 2);
+        assert_eq!(calls(&e, slot(0x344))[1], vec![foe, player, 0]);
+    }
+
+    #[test]
+    fn an_actor_that_would_attack_is_found_through_the_second_test() {
+        let mut e = fixture();
+        let (lists, [player, _, calm, _, _]) = hostile_world(&mut e);
+        e.register_double(0x008b_06d0, move |_, a| Ret {
+            eax: (a[0] == calm) as u32,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0097_64a0, &args![lists, 0u32]).bool());
+        assert_eq!(calls(&e, 0x008b_06d0)[0][..3], [calm, player, 0]);
+    }
+
+    #[test]
+    fn nobody_hostile_in_range_gives_false_and_the_flag_picks_the_other_distance() {
+        let mut e = fixture();
+        let (lists, [_, _, _, foe, _]) = hostile_world(&mut e);
+        assert!(!e.call(0x0097_64a0, &args![lists, 0u32]).bool());
+        e.register_double(0x008b_c700, move |_, a| Ret {
+            eax: (a[0] == foe) as u32,
+            ..Ret::default()
+        });
+        assert!(e.call(0x0097_64a0, &args![lists, 0u32]).bool());
+        // With the flag the limit is 10 units: the actors at 50 are too far.
+        assert!(!e.call(0x0097_64a0, &args![lists, 1u32]).bool());
+    }
+
+    #[test]
+    fn an_actor_with_a_saved_acquire_object_is_measured_through_it() {
+        let mut e = fixture();
+        let (lists, [_, far, calm, _, replaced]) = hostile_world(&mut e);
+        // Only `replaced` is hostile, but its acquire object is the far actor.
+        let _ = calm;
+        e.register_double(0x008b_c700, move |_, a| Ret {
+            eax: (a[0] == replaced) as u32,
+            ..Ret::default()
+        });
+        stub(&mut e, slot(0x52c), far);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0097_64a0, &args![lists, 0u32]).bool());
+        assert_eq!(calls(&e, slot(0x52c)).len(), 2);
+        // Without the acquire object it is found.
+        stub(&mut e, slot(0x52c), 0);
+        assert!(e.call(0x0097_64a0, &args![lists, 0u32]).bool());
+    }
+
+    /// A world for `fn_00976680`: a target actor, a level-3 actor with a
+    /// process, a level-3 non-actor and an actor in the temp list.
+    struct ForgetWorld {
+        e: Engine,
+        lists: Ptr<ProcessLists>,
+        target: u32,
+        player: u32,
+        high: u32,
+        process: u32,
+        other: u32,
+        listed: u32,
+        listed_process: u32,
+    }
+
+    fn forget_world() -> ForgetWorld {
+        let mut e = fixture();
+        map_settings(&mut e);
+        let (target, player, high, other, listed) = (
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+        );
+        let (process, listed_process, player_process) =
+            (object(&mut e), object(&mut e), object(&mut e));
+        let lists = lists_with(&mut e, 3, &[high, other]);
+        let array = lists.addr() + MOB_PROCESS_ARRAY;
+        // Levels 0 and 1 hold two objects each (the same table).
+        e.mem.set_u32(array + 0x20, 2);
+        e.mem.set_u32(array + 0x20 + 4, 2);
+        e.set_global(PLAYER, player);
+        e.set_global(0x011f_1958u32, 0x7300_0000u32);
+        on_slot(&mut e, SLOT_IS_ACTOR, move |o| {
+            (o == target || o == high || o == listed || o == player) as u32
+        });
+        e.register_double(ACTOR_PROCESS, move |_, a| Ret {
+            eax: if a[0] == high {
+                process
+            } else if a[0] == listed {
+                listed_process
+            } else if a[0] == player {
+                player_process
+            } else {
+                0
+            },
+            ..Ret::default()
+        });
+        // Extra data lists: the extra list of an object is the object plus 0x100.
+        e.register(EXTRA_DATA_LIST, |_, a| Ret {
+            eax: a[0] + 0x100,
+            ..Ret::default()
+        });
+        stubs(
+            &mut e,
+            &[
+                EXTRA_FOLLOWERS,
+                EXTRA_REMOVE_FOLLOWER,
+                0x0099_2920,
+                0x0057_6d30,
+                0x004f_d380,
+                0x0057_bd60,
+                0x0041_0220,
+                0x008a_6650,
+                0x0049_3bb0,
+                0x0097_f9c0,
+                0x0088_1620,
+                0x0088_1510,
+                0x0067_4d40,
+                0x0067_2fc0,
+                0x0067_1d30,
+                0x0067_1d10,
+                0x0068_0020,
+                0x0067_6140,
+                0x0088_1650,
+                0x0093_36c0,
+                0x0093_44a0,
+                0x0088_1680,
+                0x008c_4f10,
+                0x009c_4c80,
+                0x009b_28a0,
+                0x0044_0da0,
+                LOCK_ENTER,
+                LOCK_LEAVE,
+            ],
+        );
+        stub(&mut e, PACKAGE_TYPE, 0x10);
+        for s in [
+            0x2c4, 0x310, 0x4a0, 0x27c, 0x224, 0x220, 0x664, 0x47c, 0x7b0, 0x128, 0x12c, 0x2c8,
+            0x198, 0x20c, 0x234, 0x214, 0x288, 0x428,
+        ] {
+            stub(&mut e, slot(s), 0);
+        }
+        // The process array accessor by index sees `high`, `other`.
+        ForgetWorld {
+            e,
+            lists,
+            target,
+            player,
+            high,
+            process,
+            other,
+            listed,
+            listed_process,
+        }
+    }
+
+    #[test]
+    fn forgetting_a_reference_cleans_the_level_three_actor_and_the_temp_list() {
+        let mut w = forget_world();
+        let (target, high, process, other, listed, lp, lists) = (
+            w.target,
+            w.high,
+            w.process,
+            w.other,
+            w.listed,
+            w.listed_process,
+            w.lists,
+        );
+        let _ = w.player;
+        embed_list(&mut w.e, lists.addr() + TEMP_SHOULD_MOVE_LIST, &[listed]);
+        w.e.register(NODE_ITEM, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        w.e.register(LIST_IS_EMPTY, |e, a| Ret {
+            eax: (e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0) as u32,
+            ..Ret::default()
+        });
+        // `high` aims at the target and has two created packages that point at it.
+        w.e.register_double(0x004f_d380, move |_, a| Ret {
+            eax: if a[0] == high { target } else { 0 },
+            ..Ret::default()
+        });
+        let (p1, p2) = (0x7400_0000u32, 0x7400_1000u32);
+        w.e.register_double(0x0088_1510, move |_, _| Ret {
+            eax: p2,
+            ..Ret::default()
+        });
+        w.e.register_double(slot(0x27c), move |_, _| Ret {
+            eax: p1,
+            ..Ret::default()
+        });
+        stub(&mut w.e, 0x0067_4d40, 1);
+        stub(&mut w.e, 0x0067_1d10, 0x7500);
+        stub(&mut w.e, 0x0068_0020, target);
+        stub(&mut w.e, 0x0067_6140, target);
+        // The non-actor asks to be told (slot 0x224) and is still in the array.
+        on_slot(&mut w.e, 0x224, move |o| (o == other) as u32);
+        // The listed actor's process.
+        let _ = lp;
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x0097_6680, &args![lists, target]);
+        let e = &mut w.e;
+        // The level 3 actor.
+        assert_eq!(calls(e, 0x0099_2920), vec![vec![0x7300_0000, target]]);
+        assert_eq!(calls(e, 0x0057_bd60)[0], vec![high, 0]);
+        assert_eq!(calls(e, slot(0x310))[0], vec![process, 0]);
+        assert_eq!(calls(e, 0x0067_2fc0)[..2], [vec![p1, 0], vec![p2, 0]]);
+        assert_eq!(calls(e, 0x0067_1d30).len(), 4);
+        assert_eq!(calls(e, slot(0x7b0)), vec![vec![process, target]]);
+        assert_eq!(
+            calls(e, slot(0x47c)),
+            vec![vec![process, target], vec![lp, target]]
+        );
+        assert_eq!(calls(e, slot(0x2c4))[1], vec![process, target, 3]);
+        assert_eq!(calls(e, 0x008c_4f10)[0][0], high);
+        // The non-actor.
+        assert_eq!(calls(e, 0x009c_4c80), vec![vec![other, target]]);
+        // The listed actor is cleaned without the 0x7b0 call.
+        assert!(calls(e, slot(0x47c)).iter().any(|c| c[0] == lp));
+        // The actors close to the player are updated last.
+        assert!(!calls(e, LOCK_ENTER).is_empty());
+        let _ = listed;
+    }
+
+    #[test]
+    fn forgetting_a_non_actor_target_skips_the_player_part() {
+        let mut w = forget_world();
+        let (lists, other) = (w.lists, w.other);
+        let target = other;
+        // `other` is the target and is not an actor: the player is untouched.
+        w.e.register(NODE_ITEM, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        w.e.register(LIST_IS_EMPTY, |e, a| Ret {
+            eax: (e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0) as u32,
+            ..Ret::default()
+        });
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x0097_6680, &args![lists, target]);
+        assert!(calls(&w.e, slot(0x2c4)).iter().all(|c| c[0] != w.player));
+        assert_eq!(calls(&w.e, 0x0099_2920).len(), 1);
+    }
+
+    /// Doubles for `fn_00977130`: the actors' states come from the maps.
+    fn dead_world(flag: bool, seen_extra: usize) -> (Engine, Ptr<ProcessLists>, Vec<u32>) {
+        let mut e = fixture();
+        map_settings(&mut e);
+        let mut actors = Vec::new();
+        for _ in 0..3 + seen_extra {
+            actors.push(object(&mut e));
+        }
+        let processes: Vec<u32> = actors.iter().map(|_| object(&mut e)).collect();
+        let lists = lists_with(&mut e, 0, &actors);
+        on_slot(&mut e, SLOT_IS_ACTOR, |_| 1);
+        let pairs: HashMap<u32, u32> = actors
+            .iter()
+            .cloned()
+            .zip(processes.iter().cloned())
+            .collect();
+        e.register_double(ACTOR_PROCESS, move |_, a| Ret {
+            eax: pairs[&a[0]],
+            ..Ret::default()
+        });
+        // The first three actors qualify; the process values are -3, -1 and -2.
+        let values: HashMap<u32, f32> = processes
+            .iter()
+            .cloned()
+            .zip(
+                [-3.0f32, -1.0, -2.0]
+                    .into_iter()
+                    .chain(std::iter::repeat(5.0)),
+            )
+            .collect();
+        e.register_double(slot(0x4b0), move |_, a| Ret {
+            st0: values[&a[0]] as f64,
+            ..Ret::default()
+        });
+        stubs(
+            &mut e,
+            &[
+                0x0057_6d30,
+                0x0057_7de0,
+                0x0057_22c0,
+                0x0056_ac90,
+                0x008f_eb60,
+                slot(0x610),
+                slot(0x160),
+            ],
+        );
+        stub(&mut e, 0x004f_8960, 2);
+        stub(&mut e, PROCESS_LEVEL, 0);
+        stub(&mut e, 0x0052_5420, flag as u32);
+        e.register(LIST_IS_EMPTY, |e, a| Ret {
+            eax: (e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0) as u32,
+            ..Ret::default()
+        });
+        e.register(NODE_ITEM, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.register(LIST_CLEAR, |_, _| Ret::default());
+        stubs(&mut e, &[LIST_DESTRUCT]);
+        // `00905820` is not translated: appends at the tail.
+        e.register(LIST_ADD_ITEM, |e, a| {
+            let value = e.mem.u32(a[1]);
+            if e.mem.u32(a[0]) == 0 {
+                e.mem.set_u32(a[0], value);
+            } else {
+                let mut node = a[0];
+                while e.mem.u32(node + 4) != 0 {
+                    node = e.mem.u32(node + 4);
+                }
+                let added = e.mem.alloc(8);
+                e.mem.set_u32(added, value);
+                e.mem.set_u32(node + 4, added);
+            }
+            Ret::default()
+        });
+        // Quotas: reload 12.5 / 30.0, minimums 2 collected, 3 seen.
+        set_float_setting(&mut e, 0x011d_1530, 12.5);
+        set_float_setting(&mut e, 0x011d_0a84, 30.0);
+        for (setting, value) in [
+            (0x011d_0964u32, 2u32),
+            (0x011d_0cd8, 2),
+            (0x011d_08f8, 3),
+            (0x011d_09a0, 3),
+        ] {
+            e.mem.set_u32(setting + 0x100, value);
+        }
+        (e, lists, processes)
+    }
+
+    #[test]
+    fn the_dead_actor_timer_counts_down_before_anything_happens() {
+        let (mut e, lists, _) = dead_world(false, 0);
+        e.mem.set_f32(lists.addr() + 0x103bc, 5.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7130, &args![lists, 1.5f32]);
+        assert_eq!(e.mem.f32(lists.addr() + 0x103bc), 3.5);
+        assert!(calls(&e, 0x004f_8960).is_empty());
+    }
+
+    #[test]
+    fn the_dead_actor_sweep_fades_the_one_with_the_lowest_value() {
+        let (mut e, lists, processes) = dead_world(false, 0);
+        e.mem.set_f32(lists.addr() + 0x103bc, 1.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7130, &args![lists, 1.0f32]);
+        // Not enough actors for the flagged mode: the timer is reloaded from
+        // the plain setting and the actor with the smallest value is faded.
+        assert_eq!(e.mem.f32(lists.addr() + 0x103bc), 30.0);
+        let faded = calls(&e, 0x008f_eb60);
+        assert_eq!(faded.len(), 1);
+        assert_eq!(faded[0][0], processes[0]);
+    }
+
+    #[test]
+    fn the_dead_actor_sweep_fades_the_excess_in_the_flagged_mode() {
+        // 28 actors seen: the flag holds; 3 qualify, the minimum is 2, so the
+        // first collected actor is faded.
+        let (mut e, lists, processes) = dead_world(true, 25);
+        e.mem.set_f32(lists.addr() + 0x103bc, 0.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7130, &args![lists, 0.0f32]);
+        assert_eq!(e.mem.f32(lists.addr() + 0x103bc), 12.5);
+        let faded: Vec<u32> = calls(&e, 0x008f_eb60).iter().map(|w| w[0]).collect();
+        assert_eq!(faded.len(), 2);
+        assert!(faded.iter().all(|p| processes[..3].contains(p)));
+    }
+
+    #[test]
+    fn the_dead_actor_sweep_does_nothing_below_the_minimums() {
+        let (mut e, lists, _) = dead_world(false, 0);
+        e.mem.set_u32(0x011d_0cd8 + 0x100, 4);
+        e.mem.set_f32(lists.addr() + 0x103bc, 0.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7130, &args![lists, 0.0f32]);
+        assert!(calls(&e, 0x008f_eb60).is_empty());
+        assert_eq!(e.mem.f32(lists.addr() + 0x103bc), 30.0);
+    }
+
+    #[test]
+    fn the_player_and_the_actors_of_levels_zero_and_one_are_updated() {
+        let mut e = fixture();
+        let (a, b, thing, c) = (
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+        );
+        let lists = lists_with(&mut e, 0, &[a, thing]);
+        let array = lists.addr() + MOB_PROCESS_ARRAY;
+        let table = e.mem.alloc(32);
+        for (i, o) in [a, thing, b, c].iter().enumerate() {
+            e.mem.set_u32(table + 4 * i as u32, *o);
+        }
+        e.mem.set_u32(array + 0x3c, table);
+        e.mem.set_u32(array + 0x10 + 4, 2);
+        e.mem.set_u32(array + 0x20 + 4, 4);
+        on_slot(&mut e, SLOT_IS_ACTOR, move |o| (o != thing) as u32);
+        e.set_global(PLAYER, 0x4242u32);
+        stub(&mut e, 0x008c_30a0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7540, &args![lists]);
+        assert_eq!(
+            calls(&e, 0x008c_30a0),
+            vec![vec![a], vec![b], vec![c], vec![0x4242]]
+        );
+        // Without a player the last call is left out.
+        e.set_global(PLAYER, 0u32);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7540, &args![lists]);
+        assert_eq!(calls(&e, 0x008c_30a0).len(), 3);
+    }
+
+    #[test]
+    fn rebuilding_the_close_actors_inserts_the_ones_under_the_distance_setting() {
+        let mut e = fixture();
+        map_settings(&mut e);
+        let lists = Ptr::<ProcessLists>::new(PROCESS_LISTS);
+        let (near, far, middle, thing) = (
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+        );
+        set_objects(
+            &mut e,
+            PROCESS_LISTS + MOB_PROCESS_ARRAY,
+            0,
+            &[far, thing, near, middle],
+        );
+        on_slot(&mut e, SLOT_IS_ACTOR, move |o| (o != thing) as u32);
+        e.set_global(PLAYER, 0x4242u32);
+        // Distances: near 100, middle 300, far 900; the limit is 500.
+        e.register_double(0x0057_23b0, move |_, a| Ret {
+            st0: if a[0] == near {
+                100.0
+            } else if a[0] == middle {
+                300.0
+            } else {
+                900.0
+            },
+            ..Ret::default()
+        });
+        set_float_setting(&mut e, 0x011c_cf94, 500.0);
+        // The actors have controllers; their distance is the same.
+        on_call(&mut e, 0x0093_06d0, |a| a + 1);
+        e.register_double(0x008a_3b50, move |_, a| Ret {
+            st0: if a[0] == near + 1 {
+                100.0
+            } else if a[0] == middle + 1 {
+                300.0
+            } else {
+                900.0
+            },
+            ..Ret::default()
+        });
+        e.mem.set_i32(MAX_ACTORS_SETTING + 0x100, 5);
+        e.register(MEMMOVE, |e, a| {
+            let bytes = e.mem.bytes(a[2], a[3]);
+            e.mem.write(a[0], &bytes);
+            Ret::default()
+        });
+        e.register_double(MEMSET, |e, a| {
+            for i in 0..a[2] {
+                e.mem.set_u8(a[0] + i, a[1] as u8);
+            }
+            Ret::default()
+        });
+        e.mem
+            .set_u32(PROCESS_LISTS + ACTORS_CLOSE_TO_PLAYER, 0x9999);
+        e.mem.set_i32(PROCESS_LISTS + 0x150, 1);
+        stubs(&mut e, &[LOCK_ENTER, LOCK_LEAVE]);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7660, &args![lists]);
+        assert_eq!(close_to_player(&e, lists), vec![near, middle]);
+        assert_eq!(
+            calls(&e, MEMSET),
+            vec![vec![PROCESS_LISTS + ACTORS_CLOSE_TO_PLAYER, 0, 200]]
+        );
+    }
+
+    #[test]
+    fn the_unused_hook_does_nothing() {
+        let mut e = fixture();
+        let lists: Ptr<ProcessLists> = e.new_object();
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7770, &args![lists, 1u32, 2u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_process_float_accessors_use_0x43c_and_0x440() {
+        let mut e = fixture();
+        let process = object(&mut e);
+        e.mem.set_f32(process + 0x43c, 2.5);
+        assert_eq!(
+            e.call(0x0097_7c70, &args![Ptr::<()>::new(process)]).f32(),
+            2.5
+        );
+        e.call(0x0097_7c90, &args![Ptr::<()>::new(process), 7.5f32]);
+        assert_eq!(e.mem.f32(process + 0x440), 7.5);
+    }
+
+    /// The world of the radiation update: one source with radius 100 and inner
+    /// radius 10, an actor `exposed` at distance 50, and the player at 20.
+    struct RadiationWorld {
+        e: Engine,
+        lists: Ptr<ProcessLists>,
+        exposed: u32,
+        process: u32,
+        player: u32,
+        player_process: u32,
+        source: u32,
+    }
+
+    fn radiation_world() -> RadiationWorld {
+        let mut e = fixture();
+        map_settings(&mut e);
+        let (exposed, bystander, player, source) = (
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+        );
+        let (process, player_process, bystander_process) =
+            (object(&mut e), object(&mut e), object(&mut e));
+        let lists = lists_with(&mut e, 0, &[exposed, bystander]);
+        e.set_global(PLAYER, player);
+        e.set_global(0x011c_95c8u32, 0x7600_0000u32);
+        on_slot(&mut e, SLOT_IS_ACTOR, |_| 1);
+        e.register_double(ACTOR_PROCESS, move |_, a| Ret {
+            eax: if a[0] == exposed {
+                process
+            } else if a[0] == player {
+                player_process
+            } else {
+                bystander_process
+            },
+            ..Ret::default()
+        });
+        // The iterator: `0x7000` is its first cursor, which `006b7f20` consumes.
+        stub(&mut e, 0x009c_1a50, 0x7000);
+        stub(&mut e, 0x004b_9ba0, 0x7001);
+        e.register_double(0x006b_7f20, move |e, a| {
+            e.mem.set_u32(a[1], 0);
+            e.mem.set_u32(a[3], source);
+            Ret::default()
+        });
+        e.register(EXTRA_DATA_LIST, |_, a| Ret {
+            eax: a[0] + 0x100,
+            ..Ret::default()
+        });
+        e.register(0x0042_2320, |_, _| Ret {
+            st0: 100.0,
+            ..Ret::default()
+        });
+        e.register(0x0042_2450, |_, _| Ret {
+            st0: 10.0,
+            ..Ret::default()
+        });
+        // The exposure of the processes: only `process` has some.
+        set_float_setting(&mut e, 0x011d_0db0, 1.0);
+        set_float_setting(&mut e, 0x011c_d874, 2.0);
+        e.register_double(0x0057_23b0, move |_, a| Ret {
+            st0: if a[0] == player { 20.0 } else { 50.0 },
+            ..Ret::default()
+        });
+        // The amount is `(radius - distance)`, so 50 for the actor, 80 for the player.
+        e.register(0x0064_8e50, |_, a| Ret {
+            st0: (f32::from_bits(a[1]) - f32::from_bits(a[2])) as f64,
+            ..Ret::default()
+        });
+        e.register(0x008c_4330, |_, _| Ret {
+            st0: 0.5,
+            ..Ret::default()
+        });
+        e.register_double(0x0090_4430, |_, _| Ret {
+            st0: 1.0,
+            ..Ret::default()
+        });
+        stubs(
+            &mut e,
+            &[
+                slot(0x768),
+                0x008b_cc80,
+                0x0090_42a0,
+                0x008b_39f0,
+                0x0089_82c0,
+                0x008b_3bb0,
+            ],
+        );
+        stub(&mut e, slot(0x258), 0);
+        stub(&mut e, slot(0x1f4), 0x7800_0000);
+        RadiationWorld {
+            e,
+            lists,
+            exposed,
+            process,
+            player,
+            player_process,
+            source,
+        }
+    }
+
+    #[test]
+    fn radiation_reaches_the_actors_and_the_player() {
+        let mut w = radiation_world();
+        w.e.map(0x7000_0000, 0x1000);
+        w.e.map(0x7800_0000, 0x1000);
+        w.e.mem.set_f32(w.process + 0x43c, 5.0);
+        w.e.mem.set_f32(0x7800_0000, 1.0);
+        w.e.mem.set_f32(0x7800_0004, 2.0);
+        w.e.mem.set_f32(0x7800_0008, 3.0);
+        let (exposed, process, player, player_process, source) =
+            (w.exposed, w.process, w.player, w.player_process, w.source);
+        let lists = w.lists;
+        stub(&mut w.e, 0x008b_cc80, 1);
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x0097_77a0, &args![lists]);
+        let e = &mut w.e;
+        // The actor: amount (100 - 50) * 0.5 = 25 above the thresholds, with
+        // the avoid area at the source's position.
+        let areas = calls(e, 0x0090_42a0);
+        assert_eq!(areas.len(), 1);
+        assert_eq!(
+            areas[0],
+            vec![
+                process,
+                exposed,
+                1.0f32.to_bits(),
+                2.0f32.to_bits(),
+                3.0f32.to_bits(),
+                100.0f32.to_bits(),
+                f32::MAX.to_bits(),
+                25.0f32.to_bits(),
+                source,
+                0
+            ]
+        );
+        assert_eq!(e.mem.f32(process + 0x440), 25.0);
+        // The player: (100 - 20) * 0.5 = 40.
+        assert_eq!(e.mem.f32(player_process + 0x440), 40.0);
+        assert_eq!(e.mem.u8(lists.addr() + 0x15c), 1);
+        assert_eq!(e.global::<u8>(0x011f_12d8), 1);
+        let levels = calls(e, slot(0x768));
+        assert_eq!(levels.len(), 2);
+        assert_eq!(levels[1][0], player_process);
+        let _ = player;
+    }
+
+    #[test]
+    fn radiation_ending_resets_the_levels_and_clears_the_flag() {
+        let mut w = radiation_world();
+        stub(&mut w.e, 0x004b_9ba0, 0);
+        w.e.set_global(0x011f_12d8u32, 1u8);
+        let (lists, player_process) = (w.lists, w.player_process);
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x0097_77a0, &args![lists]);
+        let e = &mut w.e;
+        assert_eq!(e.global::<u8>(0x011f_12d8), 0);
+        assert_eq!(e.mem.u8(lists.addr() + 0x15c), 0);
+        let resets = calls(e, slot(0x768));
+        assert_eq!(resets.last().unwrap(), &vec![player_process, 0]);
+        assert_eq!(resets.len(), 3);
+    }
+
+    #[test]
+    fn radiation_without_a_source_object_does_nothing() {
+        let mut w = radiation_world();
+        stub(&mut w.e, 0x009c_1a50, 0);
+        let lists = w.lists;
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x0097_77a0, &args![lists]);
+        assert!(calls(&w.e, slot(0x768)).is_empty());
+        assert_eq!(w.e.mem.u8(lists.addr() + 0x15c), 0);
+    }
+
+    /// A world for the greeting: the player, a speaker close to the player.
+    fn greeting_world() -> (Engine, Ptr<ProcessLists>, u32, u32) {
+        let mut e = fixture();
+        map_settings(&mut e);
+        let (player, speaker, process) = (object(&mut e), object(&mut e), object(&mut e));
+        let lists: Ptr<ProcessLists> = e.new_object();
+        e.set_global(PLAYER, player);
+        e.mem.set_i32(lists.addr() + 0x150, 1);
+        e.mem
+            .set_u32(lists.addr() + ACTORS_CLOSE_TO_PLAYER, speaker);
+        e.register_double(ACTOR_PROCESS, move |_, a| Ret {
+            eax: if a[0] == speaker { process } else { 0 },
+            ..Ret::default()
+        });
+        stub(&mut e, slot(0x214), 0);
+        stub(&mut e, 0x0088_4480, 1);
+        stub(&mut e, slot(SLOT_0X22C), 0);
+        stub(&mut e, 0x0049_3bb0, 0);
+        stub(&mut e, 0x008a_67f0, 0);
+        stub(&mut e, slot(0x30c), 0);
+        stub(&mut e, 0x008a_0d10, 1);
+        stub(&mut e, 0x008a_78f0, 0);
+        stub(&mut e, 0x0056_6950, 0);
+        e.register_double(0x0057_23b0, |_, _| Ret {
+            st0: 100.0,
+            ..Ret::default()
+        });
+        stub(&mut e, slot(0x42c), speaker);
+        e.register_double(0x0061_a2d0, |_, a| Ret {
+            eax: 0x5000 + a[1],
+            ..Ret::default()
+        });
+        stubs(&mut e, &[0x008b_c3d0, LOCK_ENTER, LOCK_LEAVE]);
+        set_float_setting(&mut e, 0x011d_0174, 8.0);
+        set_float_setting(&mut e, 0x011d_000c, 9.0);
+        (e, lists, player, speaker)
+    }
+
+    #[test]
+    fn a_close_speaker_greets_the_player_with_the_topic_of_the_kind() {
+        let (mut e, lists, _, speaker) = greeting_world();
+        e.mem.set_f32(lists.addr() + 0x154, 0.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7cb0, &args![lists, 4u32, 0u32, 0u32]);
+        assert_eq!(calls(&e, 0x0061_a2d0), vec![vec![0, 4]]);
+        assert_eq!(calls(&e, 0x008b_c3d0), vec![vec![speaker, 0x5004]]);
+        assert_eq!(e.mem.f32(lists.addr() + 0x154), 8.0);
+        // The topic numbers of the other kinds.
+        for (kind, topic) in [(8u32, 10u32), (10, 9), (11, 0xd), (12, 0xe), (6, 6)] {
+            e.mem.set_f32(lists.addr() + 0x154, 0.0);
+            e.call_log = Some(vec![]);
+            e.call(0x0097_7cb0, &args![lists, kind, 0u32, 0u32]);
+            assert_eq!(calls(&e, 0x0061_a2d0), vec![vec![0, topic]], "kind {kind}");
+        }
+    }
+
+    #[test]
+    fn nobody_greets_before_the_timer_is_due_unless_forced() {
+        let (mut e, lists, _, _) = greeting_world();
+        e.mem.set_f32(lists.addr() + 0x154, 5.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7cb0, &args![lists, 4u32, 0u32, 0u32]);
+        assert!(calls(&e, 0x008b_c3d0).is_empty());
+        e.call(0x0097_7cb0, &args![lists, 0u32, 0u32, 1u32]);
+        assert!(calls(&e, 0x008b_c3d0).is_empty());
+        e.call(0x0097_7cb0, &args![lists, 4u32, 0u32, 1u32]);
+        assert_eq!(calls(&e, 0x008b_c3d0).len(), 1);
+    }
+
+    #[test]
+    fn kinds_one_to_three_are_cancelled_in_combat() {
+        let (mut e, lists, player, _) = greeting_world();
+        e.register_double(0x0049_3bb0, move |_, a| Ret {
+            eax: (a[0] == player) as u32,
+            ..Ret::default()
+        });
+        for kind in [1u32, 2, 3] {
+            e.call_log = Some(vec![]);
+            e.call(0x0097_7cb0, &args![lists, kind, 0u32, 0u32]);
+            assert!(calls(&e, 0x008b_c3d0).is_empty(), "kind {kind}");
+        }
+        // Kind 3 is also cancelled for a speaker with 00566950.
+        stub(&mut e, 0x0049_3bb0, 0);
+        stub(&mut e, 0x0056_6950, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7cb0, &args![lists, 3u32, 0u32, 0u32]);
+        assert!(calls(&e, 0x008b_c3d0).is_empty());
+        e.call(0x0097_7cb0, &args![lists, 2u32, 0u32, 0u32]);
+        assert_eq!(calls(&e, 0x008b_c3d0).len(), 1);
+    }
+
+    #[test]
+    fn the_search_widens_its_rings_and_skips_unfit_speakers() {
+        let (mut e, lists, _, _) = greeting_world();
+        // Too far for the first rings: 600 units needs the ring of 750.
+        e.register_double(0x0057_23b0, |_, _| Ret {
+            st0: 600.0,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7cb0, &args![lists, 4u32, 0u32, 0u32]);
+        assert_eq!(calls(&e, 0x008b_c3d0).len(), 1);
+        assert_eq!(calls(&e, LOCK_ENTER).len(), 1);
+        // 1200 units is beyond the last ring: nobody speaks.
+        e.register_double(0x0057_23b0, |_, _| Ret {
+            st0: 1200.0,
+            ..Ret::default()
+        });
+        e.mem.set_f32(lists.addr() + 0x154, 0.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7cb0, &args![lists, 4u32, 0u32, 0u32]);
+        assert!(calls(&e, 0x008b_c3d0).is_empty());
+        // A speaker who is talking is skipped.
+        stub(&mut e, 0x008a_67f0, 1);
+        e.register_double(0x0057_23b0, |_, _| Ret {
+            st0: 10.0,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7cb0, &args![lists, 4u32, 0u32, 0u32]);
+        assert!(calls(&e, 0x008b_c3d0).is_empty());
+    }
+
+    #[test]
+    fn kinds_five_and_seven_need_an_owned_object_and_reload_their_timer() {
+        let (mut e, lists, _, speaker) = greeting_world();
+        let owned = object(&mut e);
+        e.register_double(0x0057_85e0, move |_, a| Ret {
+            eax: (a[0] == owned && a[1] == speaker && a[2] == 1) as u32,
+            ..Ret::default()
+        });
+        e.mem.set_f32(lists.addr() + 0x158, 0.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7cb0, &args![lists, 5u32, owned, 0u32]);
+        assert_eq!(calls(&e, 0x008b_c3d0).len(), 1);
+        assert_eq!(e.mem.f32(lists.addr() + 0x158), 9.0);
+        // The reloaded timer blocks the next one.
+        e.mem.set_f32(lists.addr() + 0x154, 0.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7cb0, &args![lists, 7u32, owned, 0u32]);
+        assert!(calls(&e, 0x008b_c3d0).is_empty());
+        // Without an owned object nobody is picked.
+        e.mem.set_f32(lists.addr() + 0x158, 0.0);
+        e.call(0x0097_7cb0, &args![lists, 5u32, 0u32, 0u32]);
+        assert!(calls(&e, 0x008b_c3d0).is_empty());
+    }
+
+    #[test]
+    fn kind_nine_uses_the_players_own_speaker() {
+        let (mut e, lists, player, speaker) = greeting_world();
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7cb0, &args![lists, 9u32, 0u32, 0u32]);
+        assert_eq!(calls(&e, slot(0x42c)), vec![vec![player]]);
+        assert_eq!(calls(&e, 0x0061_a2d0), vec![vec![0, 8]]);
+        assert_eq!(calls(&e, 0x008b_c3d0), vec![vec![speaker, 0x5008]]);
+        // A speaker farther than 350 units is rejected.
+        e.register_double(0x0057_23b0, |_, _| Ret {
+            st0: 400.0,
+            ..Ret::default()
+        });
+        e.mem.set_f32(lists.addr() + 0x154, 0.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7cb0, &args![lists, 9u32, 0u32, 0u32]);
+        assert!(calls(&e, 0x008b_c3d0).is_empty());
+        // One that is talking and not detected is rejected too.
+        e.register_double(0x0057_23b0, |_, _| Ret {
+            st0: 100.0,
+            ..Ret::default()
+        });
+        stub(&mut e, 0x008a_67f0, 1);
+        stub(&mut e, slot(0x30c), 1);
+        stub(&mut e, 0x008a_0d10, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_7cb0, &args![lists, 9u32, 0u32, 0u32]);
+        assert!(calls(&e, 0x008b_c3d0).is_empty());
+    }
+
+    #[test]
+    fn the_greeting_timer_runs_down_by_half_a_unit() {
+        let mut e = fixture();
+        e.map(0x0101_1000, 0x1000);
+        e.set_global(0x0101_1598u32, -0.5f64);
+        let lists: Ptr<ProcessLists> = e.new_object();
+        e.mem.set_f32(lists.addr() + 0x154, 3.0);
+        e.call(0x0097_81a0, &args![lists]);
+        assert_eq!(e.mem.f32(lists.addr() + 0x154), 2.5);
+    }
+
+    #[test]
+    fn the_level_zero_update_runs_the_actors_and_the_player() {
+        let mut e = fixture();
+        let (actor, other, skipped, player, process, ragdoll_owner) = (
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+            object(&mut e),
+        );
+        let lists = lists_with(&mut e, 0, &[actor, other, skipped]);
+        e.set_global(PLAYER, player);
+        on_slot(&mut e, SLOT_IS_ACTOR, move |o| {
+            (o == actor || o == skipped) as u32
+        });
+        e.register_double(0x0057_6d30, move |_, a| Ret {
+            eax: (a[0] == skipped) as u32,
+            ..Ret::default()
+        });
+        on_slot(&mut e, 0x220, move |o| (o == other || o == skipped) as u32);
+        e.mem.set_u32(actor + 0xb0, ragdoll_owner);
+        e.register_double(ACTOR_PROCESS, move |_, a| Ret {
+            eax: if a[0] == actor || a[0] == player {
+                process
+            } else {
+                0
+            },
+            ..Ret::default()
+        });
+        stubs(
+            &mut e,
+            &[
+                0x008b_a600,
+                slot(0x104),
+                0x0097_8400,
+                0x0093_1ed0,
+                0x004a_3a20,
+                slot(SLOT_GET_NODE),
+                0x00ca_2ad0,
+                0x00ca_1410,
+                slot(SLOT_0X22C),
+                0x0062_c430,
+                0x0094_df60,
+                slot(0x34c),
+                slot(0x500),
+                slot(0x170),
+                slot(0x1d8),
+                0x009b_17a0,
+                0x0097_8890,
+            ],
+        );
+        stub(&mut e, 0x0097_8400, 1);
+        stub(&mut e, 0x0093_1ed0, 0x7777);
+        stub(&mut e, 0x004a_3a20, 0x6666);
+        stub(&mut e, slot(SLOT_GET_NODE), 0x5555);
+        stub(&mut e, 0x0094_df60, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_81d0, &args![lists, 0.25f32]);
+        assert_eq!(calls(&e, 0x008b_a600), vec![vec![actor]]);
+        assert_eq!(calls(&e, slot(0x104)), vec![vec![process]]);
+        assert_eq!(
+            calls(&e, 0x00ca_2ad0),
+            vec![vec![ragdoll_owner, 0x5555, 0x6666]]
+        );
+        assert_eq!(calls(&e, 0x00ca_1410), vec![vec![ragdoll_owner]]);
+        assert_eq!(calls(&e, 0x0062_c430), vec![vec![actor]]);
+        assert_eq!(
+            calls(&e, slot(0x34c)),
+            vec![vec![actor, 0.25f32.to_bits(), 1]]
+        );
+        assert_eq!(calls(&e, slot(0x500)), vec![vec![process, actor, 0]]);
+        // `other` and `skipped` are not actors to update; both answer slot 0x220.
+        assert_eq!(
+            calls(&e, 0x009b_17a0),
+            vec![
+                vec![other, 0.25f32.to_bits()],
+                vec![skipped, 0.25f32.to_bits()]
+            ]
+        );
+        assert_eq!(
+            calls(&e, 0x0097_8890),
+            vec![vec![lists.addr(), 0.25f32.to_bits()]]
+        );
+        // The player's process ends the update.
+        assert_eq!(
+            calls(&e, slot(0x170)).last().unwrap(),
+            &vec![process, player]
+        );
+    }
+
     // <<more tests>>
 }
