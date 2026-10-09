@@ -26,6 +26,13 @@
 //! `Compact`) with the rest of the queue (the map and array members up to
 //! `004b01f0`, `005e0ba0` and `00ba87e0`).
 //!
+//! Session 3 (b0021) finishes the unit: `Compact` and `UpdateSize` of the
+//! node array, the base constructors and destructors of the two maps, their
+//! scalar deleting destructors, `NiTNewInterface<NiPointer<NiAVObject>>::
+//! Allocate` and `BipedAnim::GetParentBone`. Every function of the unit is
+//! translated; the older `FN_` constants stay because earlier tests stand in
+//! for those functions.
+//!
 //! Conventions this file uses, so the next session finds them:
 //!
 //! - The layouts ([`BipedAnim`], [`BipedBone`], [`BipedObject`],
@@ -489,6 +496,23 @@ const FN_004B0030: u32 = 0x004b_0030;
 const FN_004AFFA0: u32 = 0x004a_ffa0;
 const FN_004B00A0: u32 = 0x004b_00a0;
 const FN_004B0220: u32 = 0x004b_0220;
+/// Session 3: the callees of the array and map members below.
+/// `NiPointer::operator!=` on two handles (`00631820(this, other)`: whether
+/// the pointers differ), `NiPointer::operator=(NiPointer &)`
+/// (`006e5cc0(this, other)`), the `NiPointer` constructor `__ehvec_ctor`
+/// runs on each element (`006694e0`), `NiMemObject` allocation (`00aa1070`,
+/// cdecl, size), `NiTMapBase::RemoveAll` (`00438af0`) and the two base map
+/// destructors (`004b0000` for the clone map, `004b0100` for the process map).
+const NI_POINTER_DIFFERS: u32 = 0x0063_1820;
+const NI_POINTER_COPY: u32 = 0x006e_5cc0;
+const NI_POINTER_ELEMENT_INIT: u32 = 0x0066_94e0;
+const NI_ALLOC: u32 = 0x00aa_1070;
+const MAP_REMOVE_ALL: u32 = 0x0043_8af0;
+const CLONE_MAP_BASE_DESTRUCT: u32 = 0x004b_0000;
+const PROCESS_MAP_BASE_DESTRUCT: u32 = 0x004b_0100;
+/// The vtables the base constructors store (`0101fbdc`, `0101fbfc`).
+const CLONE_MAP_BASE_VTABLE: u32 = 0x0101_fbdc;
+const PROCESS_MAP_BASE_VTABLE: u32 = 0x0101_fbfc;
 const FN_004B02D0: u32 = 0x004b_02d0;
 
 // ---- Session 2: data of the exe ------------------------------------------------------
@@ -3380,6 +3404,204 @@ pub fn fn_004afc50(e: &mut Engine, this: Ptr, item: Ptr) {
     e.call(FN_004B02D0, &args![this, count, item]);
 }
 
+// Translated from 004afc80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTArray<NiPointer<NiAVObject>,NiTNewInterface<NiPointer<NiAVObject>>>::
+/// Compact` (Xbox PDB): when the number of non-null elements (`+0xc`) differs
+/// from the size (`+0xa`), moves the non-null elements to the front, then
+/// reallocates the block to exactly that many elements (copying them
+/// `NiPointer` by `NiPointer`) and releases the old block (`004b0220`). With
+/// no elements, the block becomes null. The exception frame is not
+/// translated.
+pub fn fn_004afc80(e: &mut Engine, this: Ptr) {
+    let block_at = this.addr().wrapping_add(4);
+    let size_at = this.addr().wrapping_add(0x0a);
+    let element_count_at = this.addr().wrapping_add(0x0c);
+    if e.mem.u16(element_count_at) == e.mem.u16(size_at) {
+        return;
+    }
+    if e.mem.u16(element_count_at) != 0 {
+        let mut kept: u32 = 0;
+        let mut index: u32 = 0;
+        while index < e.mem.u16(size_at) as u32 {
+            let base = e.mem.u32(block_at);
+            let null_handle = stack_alloc(e, 4);
+            ni_pointer_new(e, null_handle, Ptr::new(0));
+            let slot = base.wrapping_add(index * 4);
+            let present = e.call(NI_POINTER_DIFFERS, &args![slot, null_handle]).bool();
+            ni_pointer_release(e, null_handle);
+            stack_free(e, null_handle);
+            if present {
+                let base = e.mem.u32(block_at);
+                let target = base.wrapping_add((kept & 0xffff) * 4);
+                let source = base.wrapping_add(index * 4);
+                if e.call(NI_POINTER_DIFFERS, &args![target, source]).bool() {
+                    e.call(NI_POINTER_COPY, &args![target, source]);
+                }
+                kept = kept.wrapping_add(1);
+            }
+            index += 1;
+        }
+    }
+    let old_block = e.mem.u32(block_at);
+    let count = e.mem.u16(element_count_at);
+    e.mem.set_u16(size_at, count);
+    e.mem.set_u16(this.addr().wrapping_add(8), count);
+    if count == 0 {
+        e.mem.set_u32(block_at, 0);
+    } else {
+        let block = fn_005e0ba0(e, count as u32);
+        e.mem.set_u32(block_at, block.addr());
+        let mut index: u32 = 0;
+        while index < e.mem.u16(size_at) as u32 {
+            let target = block.addr().wrapping_add(index * 4);
+            let source = old_block.wrapping_add(index * 4);
+            e.call(NI_POINTER_COPY, &args![target, source]);
+            index += 1;
+        }
+    }
+    e.call(FN_004B0220, &args![old_block]);
+}
+
+// Translated from 004afe50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTArray<NiPointer<NiAVObject>,NiTNewInterface<NiPointer<NiAVObject>>>::
+/// UpdateSize` (Xbox PDB): lowers the size (`+0xa`) while the last element is
+/// null.
+pub fn fn_004afe50(e: &mut Engine, this: Ptr) {
+    let size_at = this.addr().wrapping_add(0x0a);
+    while e.mem.u16(size_at) != 0 {
+        let size = e.mem.u16(size_at) as u32;
+        let base = e.mem.u32(this.addr().wrapping_add(4));
+        let last = base.wrapping_add(size * 4).wrapping_sub(4);
+        let null_handle = stack_alloc(e, 4);
+        ni_pointer_new(e, null_handle, Ptr::new(0));
+        let present = e.call(NI_POINTER_DIFFERS, &args![last, null_handle]).bool();
+        ni_pointer_release(e, null_handle);
+        stack_free(e, null_handle);
+        if present {
+            break;
+        }
+        e.mem.set_u16(size_at, (size as u16).wrapping_sub(1));
+    }
+}
+
+/// The shared body of the two map base constructors: stores `vtable`, the
+/// bucket count (`+4`), a zero count (`+0xc`) and a zeroed table of
+/// `hash_size` words (`+8`).
+fn map_base_construct(e: &mut Engine, this: Ptr, hash_size: u32, vtable: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), vtable);
+    e.mem.set_u32(this.addr().wrapping_add(4), hash_size);
+    e.mem.set_u32(this.addr().wrapping_add(0x0c), 0);
+    let bytes = hash_size.wrapping_shl(2);
+    let table = e.call(NI_ALLOC, &args![bytes]).u32();
+    e.mem.set_u32(this.addr().wrapping_add(8), table);
+    let bytes = e.mem.u32(this.addr().wrapping_add(4)).wrapping_shl(2);
+    e.call(MEMSET, &args![table, 0u32, bytes]);
+    this
+}
+
+// Translated from 004aff30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Base constructor of the clone map (`NiTMapBase<..,NiObject *,NiObject *>`):
+/// vtable `0101fbdc`, `hash_size` buckets (`+4`), no items (`+0xc`) and a
+/// zeroed table (`+8`). Returns `this`.
+pub fn fn_004aff30(e: &mut Engine, this: Ptr, hash_size: u32) -> Ptr {
+    map_base_construct(e, this, hash_size, CLONE_MAP_BASE_VTABLE)
+}
+
+// Translated from 004affa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the clone map (`NiTPointerMap<NiObject *,NiObject *>`): the
+/// vtable `0101fb8c`, `RemoveAll` (`00438af0`), then the base destructor
+/// (`004b0000`). The map names the body `ctype<char>`, a folded library name.
+pub fn fn_004affa0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), CLONE_MAP_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    e.call(CLONE_MAP_BASE_DESTRUCT, &args![this]);
+}
+
+// Translated from 004b0030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Base constructor of the process map (`NiTMapBase<..,NiObject *,bool>`):
+/// as [`fn_004aff30`] with the vtable `0101fbfc`. Returns `this`.
+pub fn fn_004b0030(e: &mut Engine, this: Ptr, hash_size: u32) -> Ptr {
+    map_base_construct(e, this, hash_size, PROCESS_MAP_BASE_VTABLE)
+}
+
+// Translated from 004b00a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the process map (`NiTPointerMap<NiObject *,bool>`): the
+/// vtable `0101fbac`, `RemoveAll` (`00438af0`), then the base destructor
+/// (`004b0100`).
+pub fn fn_004b00a0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), PROCESS_MAP_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    e.call(PROCESS_MAP_BASE_DESTRUCT, &args![this]);
+}
+
+// Translated from 004b01c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>,NiObject *,NiObject *>::
+/// scalar deleting destructor` (Xbox PDB): the base destructor (`004b0000`)
+/// and, with bit 0 of `flags`, frees `this`. Returns `this`.
+pub fn ni_t_map_base_object_object_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(CLONE_MAP_BASE_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004b01f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>,NiObject *,bool>::scalar
+/// deleting destructor` (Xbox PDB): the base destructor (`004b0100`) and,
+/// with bit 0 of `flags`, frees `this`. Returns `this`.
+pub fn ni_t_map_base_object_bool_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(PROCESS_MAP_BASE_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 005e0ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTNewInterface<NiPointer<NiAVObject>>::Allocate` (Xbox PDB): a block of
+/// `count` `NiPointer`s. `operator new` gets `4 * count + 4` bytes (all ones
+/// when that overflows); the block stores `count` at its start and its
+/// elements are constructed after it (`__ehvec_ctor`). Returns the address of
+/// the first element, or null when the allocation failed.
+pub fn fn_005e0ba0(e: &mut Engine, count: u32) -> Ptr {
+    let (bytes, overflow) = count.overflowing_mul(4);
+    let bytes = if overflow { u32::MAX } else { bytes };
+    let (total, carry) = bytes.overflowing_add(4);
+    let total = if carry { u32::MAX } else { total };
+    let block = e.call(OPERATOR_NEW, &args![total]).u32();
+    if block == 0 {
+        return Ptr::new(0);
+    }
+    e.mem.set_u32(block, count);
+    let first = block.wrapping_add(4);
+    e.call(
+        VECTOR_CONSTRUCT,
+        &args![
+            first,
+            4u32,
+            count,
+            NI_POINTER_ELEMENT_INIT,
+            NI_POINTER_RELEASE
+        ],
+    );
+    Ptr::new(first)
+}
+
+// Translated from 00ba87e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BipedAnim::GetParentBone` (Xbox PDB): `bone[index].pParent`.
+pub fn biped_anim_get_parent_bone(e: &mut Engine, this: Ptr<BipedAnim>, index: u32) -> Ptr {
+    e.get(bone(this, index), BipedBone::pParent)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3521,6 +3743,25 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x004afc20, fn_004afc20(Ptr)),
         entry!(0x004afc50, fn_004afc50(Ptr, Ptr)),
+        entry!(0x004afc80, fn_004afc80(Ptr)),
+        entry!(0x004afe50, fn_004afe50(Ptr)),
+        entry!(0x004aff30, fn_004aff30(Ptr, u32) -> Ptr),
+        entry!(0x004affa0, fn_004affa0(Ptr)),
+        entry!(0x004b0030, fn_004b0030(Ptr, u32) -> Ptr),
+        entry!(0x004b00a0, fn_004b00a0(Ptr)),
+        entry!(
+            0x004b01c0,
+            ni_t_map_base_object_object_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x004b01f0,
+            ni_t_map_base_object_bool_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x005e0ba0, fn_005e0ba0(u32) -> Ptr),
+        entry!(
+            0x00ba87e0,
+            biped_anim_get_parent_bone(Ptr<BipedAnim>, u32) -> Ptr
+        ),
     ]
 }
 
@@ -3687,6 +3928,12 @@ mod tests {
         FN_004B00A0,
         FN_004B0220,
         FN_004B02D0,
+        NI_POINTER_DIFFERS,
+        NI_POINTER_COPY,
+        NI_ALLOC,
+        MAP_REMOVE_ALL,
+        CLONE_MAP_BASE_DESTRUCT,
+        PROCESS_MAP_BASE_DESTRUCT,
         STRING_COPY,
         STRING_APPEND,
         FORMAT_INTO,
@@ -3876,13 +4123,13 @@ mod tests {
     }
 
     #[test]
-    fn the_unit_registers_eighty_functions() {
+    fn the_unit_registers_ninety_functions() {
         let table = funcs();
-        assert_eq!(table.len(), 80);
+        assert_eq!(table.len(), 90);
         let mut addresses: Vec<u32> = table.iter().map(|(a, _)| *a).collect();
         addresses.sort_unstable();
         addresses.dedup();
-        assert_eq!(addresses.len(), 80);
+        assert_eq!(addresses.len(), 90);
         let mut e = engine();
         // Through the uniform form: the weapon flag word table and a flag bit.
         let form = block(&mut e, 0x300);
@@ -7916,5 +8163,220 @@ mod tests {
         log(&mut e);
         fn_004afc50(&mut e, Ptr::new(array), Ptr::new(0x4141));
         assert_eq!(log(&mut e), vec![(FN_004B02D0, vec![array, 4, 0x4141])]);
+    }
+
+    /// Stands in for the `NiPointer` comparison and copy the array code uses.
+    fn pointer_doubles(e: &mut Engine) {
+        e.register(NI_POINTER_DIFFERS, |e, a| {
+            ret((e.mem.u32(a[0]) != e.mem.u32(a[1])) as u32)
+        });
+        e.register(NI_POINTER_COPY, |e, a| {
+            let value = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], value);
+            ret(a[0])
+        });
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+    }
+
+    /// A node array and its block of `items.len()` words, with the given
+    /// non-null count.
+    fn node_array(e: &mut Engine, items: &[u32], element_count: u16) -> (u32, u32) {
+        let array = block(e, 0x10);
+        let data = block(e, 4 * items.len() as u32);
+        for (i, item) in items.iter().enumerate() {
+            e.mem.set_u32(data + 4 * i as u32, *item);
+        }
+        e.mem.set_u32(array + 4, data);
+        e.mem.set_u16(array + 8, items.len() as u16);
+        e.mem.set_u16(array + 0x0a, items.len() as u16);
+        e.mem.set_u16(array + 0x0c, element_count);
+        (array, data)
+    }
+
+    #[test]
+    fn compact_does_nothing_when_no_element_is_null() {
+        let mut e = engine();
+        pointer_doubles(&mut e);
+        let (array, data) = node_array(&mut e, &[0x11, 0x22], 2);
+        log(&mut e);
+        fn_004afc80(&mut e, Ptr::new(array));
+        assert_eq!(e.mem.u32(array + 4), data);
+        assert!(calls_to(&log(&mut e), FN_004B0220).is_empty());
+    }
+
+    #[test]
+    fn compact_moves_the_elements_into_a_block_of_exactly_their_count() {
+        let mut e = engine();
+        pointer_doubles(&mut e);
+        let (array, data) = node_array(&mut e, &[0x11, 0, 0x22, 0], 2);
+        log(&mut e);
+        fn_004afc80(&mut e, Ptr::new(array));
+        let new_data = e.mem.u32(array + 4);
+        assert_ne!(new_data, data);
+        assert_eq!(e.mem.u16(array + 8), 2);
+        assert_eq!(e.mem.u16(array + 0x0a), 2);
+        assert_eq!(e.mem.u32(new_data), 0x11);
+        assert_eq!(e.mem.u32(new_data + 4), 0x22);
+        // The old block was packed in place before it was copied and freed.
+        assert_eq!(e.mem.u32(data), 0x11);
+        assert_eq!(e.mem.u32(data + 4), 0x22);
+        let calls = log(&mut e);
+        assert_eq!(calls_to(&calls, FN_004B0220), vec![vec![data]]);
+        assert_eq!(calls_to(&calls, VECTOR_CONSTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn compact_of_an_array_with_no_element_leaves_a_null_block() {
+        let mut e = engine();
+        pointer_doubles(&mut e);
+        let (array, data) = node_array(&mut e, &[0, 0, 0], 0);
+        log(&mut e);
+        fn_004afc80(&mut e, Ptr::new(array));
+        assert_eq!(e.mem.u32(array + 4), 0);
+        assert_eq!(e.mem.u16(array + 8), 0);
+        assert_eq!(e.mem.u16(array + 0x0a), 0);
+        let calls = log(&mut e);
+        assert_eq!(calls_to(&calls, FN_004B0220), vec![vec![data]]);
+        assert!(calls_to(&calls, OPERATOR_NEW).is_empty());
+    }
+
+    #[test]
+    fn update_size_drops_the_null_elements_at_the_end() {
+        let mut e = engine();
+        pointer_doubles(&mut e);
+        let (array, _) = node_array(&mut e, &[0x11, 0x22, 0, 0], 2);
+        fn_004afe50(&mut e, Ptr::new(array));
+        assert_eq!(e.mem.u16(array + 0x0a), 2);
+        let (all_null, _) = node_array(&mut e, &[0, 0], 0);
+        fn_004afe50(&mut e, Ptr::new(all_null));
+        assert_eq!(e.mem.u16(all_null + 0x0a), 0);
+        let (full, _) = node_array(&mut e, &[0x11, 0x22], 2);
+        fn_004afe50(&mut e, Ptr::new(full));
+        assert_eq!(e.mem.u16(full + 0x0a), 2);
+    }
+
+    #[test]
+    fn the_map_base_constructors_store_the_table_and_the_vtable() {
+        let mut e = engine();
+        e.register(NI_ALLOC, |e, a| ret(e.mem.alloc(a[0])));
+        let clone_map = block(&mut e, 0x10);
+        let process_map = block(&mut e, 0x10);
+        e.mem.set_u32(clone_map + 0x0c, 9);
+        log(&mut e);
+        assert_eq!(
+            fn_004aff30(&mut e, Ptr::new(clone_map), 0x25),
+            Ptr::new(clone_map)
+        );
+        assert_eq!(e.mem.u32(clone_map), CLONE_MAP_BASE_VTABLE);
+        assert_eq!(e.mem.u32(clone_map + 4), 0x25);
+        assert_eq!(e.mem.u32(clone_map + 0x0c), 0);
+        let table = e.mem.u32(clone_map + 8);
+        let calls = log(&mut e);
+        assert_eq!(calls_to(&calls, NI_ALLOC), vec![vec![0x94]]);
+        assert_eq!(calls_to(&calls, MEMSET), vec![vec![table, 0, 0x94]]);
+        fn_004b0030(&mut e, Ptr::new(process_map), 7);
+        assert_eq!(e.mem.u32(process_map), PROCESS_MAP_BASE_VTABLE);
+        assert_eq!(e.mem.u32(process_map + 4), 7);
+    }
+
+    #[test]
+    fn the_map_destructors_reset_the_vtable_then_remove_all_and_destroy_the_base() {
+        let mut e = engine();
+        let map = block(&mut e, 0x10);
+        log(&mut e);
+        fn_004affa0(&mut e, Ptr::new(map));
+        assert_eq!(e.mem.u32(map), CLONE_MAP_VTABLE);
+        assert_eq!(
+            log(&mut e),
+            vec![
+                (MAP_REMOVE_ALL, vec![map]),
+                (CLONE_MAP_BASE_DESTRUCT, vec![map])
+            ]
+        );
+        fn_004b00a0(&mut e, Ptr::new(map));
+        assert_eq!(e.mem.u32(map), PROCESS_MAP_VTABLE);
+        assert_eq!(
+            log(&mut e),
+            vec![
+                (MAP_REMOVE_ALL, vec![map]),
+                (PROCESS_MAP_BASE_DESTRUCT, vec![map])
+            ]
+        );
+    }
+
+    #[test]
+    fn the_scalar_deleting_destructors_of_the_map_bases_free_on_bit_0() {
+        let mut e = engine();
+        log(&mut e);
+        assert_eq!(
+            ni_t_map_base_object_object_scalar_deleting_destructor(&mut e, Ptr::new(0x4000), 2),
+            Ptr::new(0x4000)
+        );
+        assert_eq!(log(&mut e), vec![(CLONE_MAP_BASE_DESTRUCT, vec![0x4000])]);
+        ni_t_map_base_object_object_scalar_deleting_destructor(&mut e, Ptr::new(0x4000), 1);
+        assert_eq!(
+            log(&mut e),
+            vec![
+                (CLONE_MAP_BASE_DESTRUCT, vec![0x4000]),
+                (OPERATOR_DELETE, vec![0x4000])
+            ]
+        );
+        ni_t_map_base_object_bool_scalar_deleting_destructor(&mut e, Ptr::new(0x4000), 0);
+        assert_eq!(log(&mut e), vec![(PROCESS_MAP_BASE_DESTRUCT, vec![0x4000])]);
+        ni_t_map_base_object_bool_scalar_deleting_destructor(&mut e, Ptr::new(0x4000), 3);
+        assert_eq!(
+            log(&mut e),
+            vec![
+                (PROCESS_MAP_BASE_DESTRUCT, vec![0x4000]),
+                (OPERATOR_DELETE, vec![0x4000])
+            ]
+        );
+    }
+
+    #[test]
+    fn allocate_stores_the_count_and_constructs_the_elements() {
+        let mut e = engine();
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        log(&mut e);
+        let first = fn_005e0ba0(&mut e, 3);
+        assert_eq!(e.mem.u32(first.addr() - 4), 3);
+        let calls = log(&mut e);
+        assert_eq!(calls_to(&calls, OPERATOR_NEW), vec![vec![16]]);
+        assert_eq!(
+            calls_to(&calls, VECTOR_CONSTRUCT),
+            vec![vec![
+                first.addr(),
+                4,
+                3,
+                NI_POINTER_ELEMENT_INIT,
+                NI_POINTER_RELEASE
+            ]]
+        );
+    }
+
+    #[test]
+    fn allocate_asks_for_all_ones_when_the_size_overflows_and_fails_on_null() {
+        let mut e = engine();
+        log(&mut e);
+        assert_eq!(fn_005e0ba0(&mut e, 0x4000_0000), Ptr::new(0));
+        assert_eq!(fn_005e0ba0(&mut e, 0x3fff_ffff), Ptr::new(0));
+        let calls = log(&mut e);
+        assert_eq!(
+            calls_to(&calls, OPERATOR_NEW),
+            vec![vec![u32::MAX], vec![u32::MAX]]
+        );
+        assert!(calls_to(&calls, VECTOR_CONSTRUCT).is_empty());
+    }
+
+    #[test]
+    fn the_parent_bone_is_the_node_of_the_indexed_bone() {
+        let mut e = engine();
+        let anim = biped(&mut e);
+        e.mem.set_u32(bone(anim, 3).addr() + 4, 0x5555);
+        assert_eq!(
+            biped_anim_get_parent_bone(&mut e, anim, 3),
+            Ptr::new(0x5555)
+        );
+        assert_eq!(biped_anim_get_parent_bone(&mut e, anim, 0), Ptr::new(0));
     }
 }
