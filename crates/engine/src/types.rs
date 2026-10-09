@@ -170,3 +170,16 @@ layout! {
 
 /// `ExtraDataList` has the layout of [`BaseExtraList`].
 pub type ExtraDataList = BaseExtraList;
+
+/// `NiTMap<K, V>` has the `NiTMapBase` layout of [`NiTPointerMap`]
+/// (vtable, bucket count, bucket array, item count).
+pub type NiTMap = NiTPointerMap;
+
+layout! {
+    /// `NiPoint3` (Xbox PDB).
+    pub struct NiPoint3: 0x0C {
+        0x00 x: f32,
+        0x04 y: f32,
+        0x08 z: f32,
+    }
+}
