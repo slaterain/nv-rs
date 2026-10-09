@@ -3,15 +3,21 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::modelloader`]; anything public there may be used here.
 //!
-//! State of this file: the first 40 functions of its range, `0043fed0` to
-//! `00441440`. They are the reference tasks of the loader: `QueuedReference`
+//! State of this file: the first 80 functions of its range, `0043fed0` to
+//! `00443190`. The second 40 (`004414c0` to `00443190`) are the rest of the
+//! character, creature and player tasks (`QueueModels`, `BackgroundClone`,
+//! `FinishAttach`, constructors, destructors), `QueuedFileLoad` and
+//! `QueuedFaceGenFile`, the `BackgroundCloneThread` (constructor, destructor,
+//! `ThreadUpdate`), `ModelLoader`'s constructor and destructor, and the
+//! reference-count sum of a model; the next function of the range is
+//! `004431b0`. The first 40, `0043fed0` to `00441440`, are the reference tasks
+//! of the loader: `QueuedReference`
 //! (`QueueMe`, `QueueModels`, `UseDistant3D`, `AttachDistant3D`,
 //! `CheckFinished`, `Cancel`, `BackgroundClone`, `Attach`, `GetDescription`),
 //! the `AttachDistant3DTask` and `IOTask` helpers they use, the counters of
 //! the parent cell, and the subclasses `QueuedTree`, `QueuedActor` and
 //! `QueuedCharacter` (constructors, destructors, `QueueModels`, `QueueMe`,
-//! `UseDistant3D`). The next function of the range is `00441560`
-//! (`QueuedCharacter::QueueModels`).
+//! `UseDistant3D`).
 //!
 //! Not translated: the compiler's exception-unwinding frames (the `FS:[0]`
 //! chains and state variables) and the stack-cookie check of `00440190`.
@@ -249,6 +255,272 @@ const FLOAT_FILTER: u32 = 0x0040_8820;
 /// `__thiscall()` on a reference-counted object (`00401970`): decrements the
 /// count at +4 and calls the object's virtual function 1 when it reaches 0.
 const OBJECT_RELEASE: u32 = 0x0040_1970;
+
+/// Source lines of the memory-context guards of `QueuedCharacter::
+/// QueueModels`, `BackgroundClone` and `FinishAttach`, `QueuedCreature::
+/// QueueModels`, `QueuedPlayer::QueueModels` and `QueuedFileLoad::Run`.
+const CHARACTER_QUEUE_MODELS_SOURCE_LINE: u32 = 0x8ca;
+const CHARACTER_BACKGROUND_CLONE_SOURCE_LINE: u32 = 0x8e4;
+const CHARACTER_FINISH_ATTACH_SOURCE_LINE: u32 = 0x8ff;
+const CREATURE_QUEUE_MODELS_SOURCE_LINE: u32 = 0x925;
+const PLAYER_QUEUE_MODELS_SOURCE_LINE: u32 = 0x94e;
+const FILE_LOAD_RUN_SOURCE_LINE: u32 = 0x976;
+/// The virtual tables of `QueuedCreature` (`01016d34`), `QueuedPlayer`
+/// (`01016d7c`), `QueuedFileLoad` (`01016dc4`), `QueuedFaceGenFile`
+/// (`01016e1c`) and `BackgroundCloneThread` (`01016e50`).
+const QUEUED_CREATURE_VTABLE: u32 = 0x0101_6d34;
+const QUEUED_PLAYER_VTABLE: u32 = 0x0101_6d7c;
+const QUEUED_FILE_LOAD_VTABLE: u32 = 0x0101_6dc4;
+const QUEUED_FACE_GEN_FILE_VTABLE: u32 = 0x0101_6e1c;
+const BACKGROUND_CLONE_THREAD_VTABLE: u32 = 0x0101_6e50;
+/// `"BackgroundCloneThread"`, the thread's name.
+const BACKGROUND_CLONE_THREAD_NAME: u32 = 0x0101_6e58;
+/// `"MODELS: Could not get file for %s."`.
+const FILE_LOAD_ERROR_FORMAT: u32 = 0x0101_6df4;
+/// `"MODELS: ModelLoader still contains %d NIF files.\r\n"` and
+/// `"ANIMATION: ModelLoader still has %d KF files.\r\n"`.
+const MODEL_FILES_LEFT_FORMAT: u32 = 0x0101_6ea0;
+const KF_FILES_LEFT_FORMAT: u32 = 0x0101_6e70;
+/// The thread-local words at +0x260 and +0x264 of the TLS block that
+/// `00441780` sets and `004417c0` clears.
+const TLS_CLONE_WORD: u32 = 0x260;
+const TLS_CLONE_REFERENCE: u32 = 0x264;
+/// `TESNPC::CreateBipedAnim` (Xbox PDB, `006055f0`, `__thiscall(reference)`
+/// on the base form), `00606540(reference, biped, 0)` on the base form (no
+/// name in the engine map), `004abd30(priority, slot, task)` on the biped
+/// animation (no name in the engine map), `00444fe0(base form, slot,
+/// priority, task)` on the loader (no name in the engine map),
+/// `ModelLoader::QueueAnimations` (Xbox PDB, `00445a10`, `__thiscall(slot,
+/// priority, task, reference, flag, flag)` on the loader) and
+/// `ModelLoader::QueueCreatureParts` (Xbox PDB, `004457d0`, `__thiscall(slot,
+/// priority, task, reference)` on the loader).
+const CREATE_BIPED_ANIM: u32 = 0x0060_55f0;
+const NPC_SET_BIPED_ANIM: u32 = 0x0060_6540;
+const BIPED_QUEUE_FILES: u32 = 0x004a_bd30;
+const MODEL_LOADER_QUEUE_HEAD: u32 = 0x0044_4fe0;
+const MODEL_LOADER_QUEUE_ANIMATIONS: u32 = 0x0044_5a10;
+const MODEL_LOADER_QUEUE_CREATURE_PARTS: u32 = 0x0044_57d0;
+/// `00483710` (an empty function of `tesform.cpp`'s range, `__thiscall()`),
+/// the getter of the `NiPointer<NiAVObject>` at +0x34 of a reference task
+/// (`005d8710`: `this + 0x34` dereferenced), `005d9f90` on a reference (no
+/// name in the engine map), the head's attach `QueuedHead` method
+/// (`0043ed90(reference, argument)`) and `QueuedHelmet::Attach` (Xbox PDB,
+/// `0043fb80`).
+const FINISH_ATTACH_BASE: u32 = 0x0048_3710;
+const GET_CLONED_3D: u32 = 0x005d_8710;
+const REFERENCE_QUERY_005D9F90: u32 = 0x005d_9f90;
+const HEAD_ATTACH: u32 = 0x0043_ed90;
+const HELMET_ATTACH: u32 = 0x0043_fb80;
+/// `MobileObject::GetCurrentPackage` (Xbox PDB, `009344a0`),
+/// `TESActorBase::ShouldRunInitDefaultWorn` (Xbox PDB, `005f1590`),
+/// `TESCreature::InitWorn` (Xbox PDB, `005fa0a0`) and `TESCreature::
+/// InitDefaultWorn` (Xbox PDB, `005f9e00`).
+const GET_CURRENT_PACKAGE: u32 = 0x0093_44a0;
+const SHOULD_RUN_INIT_DEFAULT_WORN: u32 = 0x005f_1590;
+const CREATURE_INIT_WORN: u32 = 0x005f_a0a0;
+const CREATURE_INIT_DEFAULT_WORN: u32 = 0x005f_9e00;
+/// The method `0095f210(priority, task)` of `playercharacter.cpp` that
+/// `QueuedPlayer::QueueModels` runs on the player reference.
+const PLAYER_QUEUE_FILES: u32 = 0x0095_f210;
+/// The bit of the dword at +0x1C of a package that `00441b00` tests.
+const PACKAGE_FLAG_MASK: u32 = 0x0020_0000;
+/// `QueuedFileEntry` functions (`queuedfiles.cpp`): the constructor
+/// (`00c3ce60`, `__thiscall(context)`), the destructor (`00c3cea0`), the
+/// file-name setter (`00c3cee0`, copies the name), the file-index setter
+/// (`00c3cf60`, finds the file entry for the index) and `QueuedFileEntry::
+/// GetFile` (Xbox PDB, `00c3cff0`, `__thiscall(index, 0xffff)`).
+const QUEUED_FILE_ENTRY_CONSTRUCT: u32 = 0x00c3_ce60;
+const QUEUED_FILE_ENTRY_DESTRUCT: u32 = 0x00c3_cea0;
+const QUEUED_FILE_ENTRY_SET_NAME: u32 = 0x00c3_cee0;
+const QUEUED_FILE_ENTRY_SET_INDEX: u32 = 0x00c3_cf60;
+const QUEUED_FILE_ENTRY_GET_FILE: u32 = 0x00c3_cff0;
+/// `NiPointer<LoadedFile>` functions: `NiPointer(file)` (`0044b0c0`),
+/// `operator=(file)` (`0044b220`) and `~NiPointer` (`0044b160`).
+const LOADED_FILE_POINTER_CONSTRUCT: u32 = 0x0044_b0c0;
+const LOADED_FILE_POINTER_ASSIGN: u32 = 0x0044_b220;
+const LOADED_FILE_POINTER_DESTRUCT: u32 = 0x0044_b160;
+/// `NiPointer<BSFaceGenModelMeshData>` functions: `NiPointer(data)`
+/// (`0044b270`), `operator=(data)` (`0044b300`) and `~NiPointer`
+/// (`0044b2c0`).
+const MESH_DATA_POINTER_CONSTRUCT: u32 = 0x0044_b270;
+const MESH_DATA_POINTER_ASSIGN: u32 = 0x0044_b300;
+const MESH_DATA_POINTER_DESTRUCT: u32 = 0x0044_b2c0;
+/// The `IO_FILE_INDEX` of a file kind (`00449050`, `__cdecl(kind)`).
+const FILE_INDEX_OF_KIND: u32 = 0x0044_9050;
+/// The getter of the file name of a `QueuedFileEntry` (`0045cd60`, the dword
+/// at +0x28) and the loader's loaded-file lookup (`004483a0(name)` on the
+/// loader, named `LoadedFile::IncRefCount` in the engine map).
+const QUEUED_FILE_ENTRY_GET_NAME: u32 = 0x0045_cd60;
+const MODEL_LOADER_FIND_LOADED_FILE: u32 = 0x0044_83a0;
+/// The log function, `__cdecl(format, ...)` (`005b5e40`).
+const LOG_MESSAGE: u32 = 0x005b_5e40;
+/// `NiAlloc`, `__cdecl(size)` (`00aa13e0`).
+const NI_ALLOC: u32 = 0x00aa_13e0;
+/// `BSTaskThread::BSTaskThread` (Xbox PDB, `00c42dd0`, `__thiscall(3,
+/// name)`) and the `BSTaskThread` destructor body (`00c42f00`).
+const TASK_THREAD_CONSTRUCT: u32 = 0x00c4_2dd0;
+const TASK_THREAD_DESTRUCT: u32 = 0x00c4_2f00;
+/// The queue of the background clone thread: constructor
+/// `0044b350(argument, 8)` on a 0x40 byte block, and the pop `00449280(slot)`
+/// on the queue that fills a task pointer.
+const CLONE_QUEUE_CONSTRUCT: u32 = 0x0044_b350;
+const CLONE_QUEUE_POP: u32 = 0x0044_9280;
+/// Methods of the background clone thread: wait for work (`004424c0`), the
+/// two calls around a task (`00442510`, `00442530`) and the wake call
+/// (`00442600`).
+const THREAD_WAIT_FOR_WORK: u32 = 0x0044_24c0;
+const THREAD_BEFORE_TASK: u32 = 0x0044_2510;
+const THREAD_AFTER_TASK: u32 = 0x0044_2530;
+const THREAD_WAKE: u32 = 0x0044_2600;
+/// `InterlockedIncrement` through the game's wrapper, `__cdecl(address)`
+/// (`0040b460`).
+const INTERLOCKED_INCREMENT: u32 = 0x0040_b460;
+/// An empty function (`0040fbe0`, named `Error` in the engine map).
+const EMPTY_FUNCTION: u32 = 0x0040_fbe0;
+/// `BSTask` state getter (`0084e3a0`, the dword at +0xC) and the function
+/// `00449190(from, to)` that changes the state when it is `from` (true when
+/// it did).
+const TASK_GET_STATE: u32 = 0x0084_e3a0;
+const TASK_CHANGE_STATE: u32 = 0x0044_9190;
+/// The virtual function of a task that says whether it needs post processing.
+const TASK_NEEDS_POST_PROCESS_SLOT: u32 = 0x38;
+/// `IOManager::AddPostProcessTask` (Xbox PDB, `0043d690`, `__thiscall(task)`)
+/// and the `LoadedFile` constructor (`0043baf0(name, file)`).
+const IOMANAGER_ADD_POST_PROCESS_TASK: u32 = 0x0043_d690;
+const LOADED_FILE_CONSTRUCT: u32 = 0x0043_baf0;
+/// `ModelLoader::OutputModelMapContents` (Xbox PDB, `00443270`,
+/// `__thiscall(0, 0)`).
+const OUTPUT_MODEL_MAP_CONTENTS: u32 = 0x0044_3270;
+/// Functions of the lock-free maps the loader owns: the iterator constructors
+/// of the model map (`004498e0`) and of the KF map (`00449960`), the iterator
+/// end test (`006ebde0`), `next(iterator, &key, &value, 1)` (`0044c640`, on
+/// the map), the iterator destructors (`004431d0` after the model map,
+/// `00443220` after the KF map), the KF model reference count (`004431b0`),
+/// the deleting destructors of a model (`004431f0`) and of a KF model
+/// (`00443240`), and two tests on the animation of a KF model (`005585e0`
+/// and `005f26c0`).
+const MODEL_ITERATOR_CONSTRUCT: u32 = 0x0044_98e0;
+const KF_ITERATOR_CONSTRUCT: u32 = 0x0044_9960;
+const ITERATOR_AT_END: u32 = 0x006e_bde0;
+const MAP_NEXT: u32 = 0x0044_c640;
+const MODEL_ITERATOR_DESTRUCT: u32 = 0x0044_31d0;
+const KF_ITERATOR_DESTRUCT: u32 = 0x0044_3220;
+const KF_MODEL_REF_COUNT: u32 = 0x0044_31b0;
+const MODEL_DELETE: u32 = 0x0044_31f0;
+const KF_MODEL_DELETE: u32 = 0x0044_3240;
+const KF_MODEL_ANIMATION: u32 = 0x0055_85e0;
+const ANIMATION_TEST: u32 = 0x005f_26c0;
+/// The size of an iterator the destructor keeps on its stack.
+const MAP_ITERATOR_SIZE: u32 = 0x114;
+/// The constructors of the loader's maps and queue, `__thiscall` on a block
+/// of 0x40 bytes: `pModelMap` `004492c0(10, 0x3f1, 0xc)`, `pKFModelMap`
+/// `004496a0(10, 0x3f1, 0xc)`, `pQueuedReferencesMap` and
+/// `pReferencesToQueueMap` `0044b750(10, 0x13af, 0xc)`, `pQueuedAnimIdleMap`
+/// `0044ba10(10, 0xfb, 0xc)`, `pQueuedReplacementKFListMap`
+/// `0044bbe0(10, 0xfb, 0xc)`, `pQueuedHelmetMap` `0044be80(10, 0xfb, 0xc)`,
+/// `pAttachDistant3DTaskQueue` `0044b500(10, 8)`, `pQueuedTextureMap`
+/// `0044c760(10, 0x3f1, 0xc)` and `pLoadedFileMap` `004497c0(10, 0x3f1,
+/// 0xc)`.
+const MODEL_MAP_CONSTRUCT: u32 = 0x0044_92c0;
+const KF_MODEL_MAP_CONSTRUCT: u32 = 0x0044_96a0;
+const REFERENCE_MAP_CONSTRUCT: u32 = 0x0044_b750;
+const ANIM_IDLE_MAP_CONSTRUCT: u32 = 0x0044_ba10;
+const REPLACEMENT_KF_LIST_MAP_CONSTRUCT: u32 = 0x0044_bbe0;
+const HELMET_MAP_CONSTRUCT: u32 = 0x0044_be80;
+const ATTACH_TASK_QUEUE_CONSTRUCT: u32 = 0x0044_b500;
+const TEXTURE_MAP_CONSTRUCT: u32 = 0x0044_c760;
+const LOADED_FILE_MAP_CONSTRUCT: u32 = 0x0044_97c0;
+/// `00c42f50` on the background clone thread (starts the thread) and the
+/// registrations the loader makes on the IO manager when there is one, each
+/// `__thiscall(callback)`: `0057bd60`, `004febb0`, the setter [`fn_00442a80`],
+/// `004fbf00`, `004febd0` and `008ac890`. The callbacks are the functions of
+/// the loader at `00446e30`, `00446e40`, `00446ea0`, `00446f00`, `00446f10`
+/// and `00446f90`.
+const THREAD_START: u32 = 0x00c4_2f50;
+const IO_MANAGER_REGISTER_FIRST: u32 = 0x0057_bd60;
+const IO_MANAGER_REGISTER_SECOND: u32 = 0x004f_ebb0;
+const IO_MANAGER_REGISTER_FOURTH: u32 = 0x004f_bf00;
+const IO_MANAGER_REGISTER_FIFTH: u32 = 0x004f_ebd0;
+const IO_MANAGER_REGISTER_SIXTH: u32 = 0x008a_c890;
+const LOADER_CALLBACK_00446E30: u32 = 0x0044_6e30;
+const LOADER_CALLBACK_00446E40: u32 = 0x0044_6e40;
+const LOADER_CALLBACK_00446EA0: u32 = 0x0044_6ea0;
+const LOADER_CALLBACK_00446F00: u32 = 0x0044_6f00;
+const LOADER_CALLBACK_00446F10: u32 = 0x0044_6f10;
+const LOADER_CALLBACK_00446F90: u32 = 0x0044_6f90;
+
+layout! {
+    /// `QueuedFileLoad` (Xbox PDB), 0x38 bytes (the same on PC): a
+    /// `QueuedFileEntry` and the file it loads.
+    pub struct QueuedFileLoad: 0x38 {
+        /// `eContext` (`QueuedFile`, Xbox PDB).
+        0x18 eContext: u32,
+        /// `pFileName` (`QueuedFileEntry`, Xbox PDB): `char*`.
+        0x28 pFileName: u32,
+        /// `pFileEntry` (`QueuedFileEntry`, Xbox PDB): `BSFileEntry*`.
+        0x2C pFileEntry: Ptr,
+        /// `spLoadedFile` (Xbox PDB): `NiPointer<LoadedFile>`.
+        0x30 spLoadedFile: Ptr,
+        /// `eFileIndex` (Xbox PDB): `IO_FILE_INDEX`.
+        0x34 eFileIndex: u32,
+    }
+
+    /// `QueuedFaceGenFile` (Xbox PDB), 0x40 bytes (the same on PC): a
+    /// `QueuedFileLoad` and the face model it loads.
+    pub struct QueuedFaceGenFile: 0x40 {
+        /// `spLoadedFile` (`QueuedFileLoad`, Xbox PDB).
+        0x30 spLoadedFile: Ptr,
+        /// `eFileIndex` (`QueuedFileLoad`, Xbox PDB).
+        0x34 eFileIndex: u32,
+        /// `spFaceGenModel` (Xbox PDB): `NiPointer<BSFaceGenModel>`.
+        0x38 spFaceGenModel: Ptr,
+        /// `spModelMeshData` (Xbox PDB):
+        /// `NiPointer<BSFaceGenModelMeshData>`.
+        0x3C spModelMeshData: Ptr,
+    }
+
+    /// `BackgroundCloneThread` (Xbox PDB), 0x3c bytes (the same on PC): a
+    /// `BSTaskThread` (0x30 bytes) and these.
+    pub struct BackgroundCloneThread: 0x3c {
+        /// `bExit` (Xbox PDB): the thread's loop ends when it is 1.
+        0x30 bExit: u8,
+        /// `iRunningCount` (Xbox PDB): changed with interlocked operations.
+        0x34 iRunningCount: i32,
+        /// `pCloneReferencesQueue` (Xbox PDB):
+        /// `LockFreeQueue<NiPointer<QueuedReference> >*`.
+        0x38 pCloneReferencesQueue: Ptr,
+    }
+
+    /// `ModelLoader` (Xbox PDB), 0x30 bytes: the loader's maps and queues.
+    pub struct ModelLoader: 0x30 {
+        /// `pModelMap` (Xbox PDB):
+        /// `LockFreeCaseInsensitiveStringMap<Model *>*`.
+        0x00 pModelMap: Ptr,
+        /// `pKFModelMap` (Xbox PDB):
+        /// `LockFreeCaseInsensitiveStringMap<KFModel *>*`.
+        0x04 pKFModelMap: Ptr,
+        /// `pQueuedReferencesMap` (Xbox PDB).
+        0x08 pQueuedReferencesMap: Ptr,
+        /// `pReferencesToQueueMap` (Xbox PDB).
+        0x0C pReferencesToQueueMap: Ptr,
+        /// `pQueuedAnimIdleMap` (Xbox PDB).
+        0x10 pQueuedAnimIdleMap: Ptr,
+        /// `pQueuedReplacementKFListMap` (Xbox PDB).
+        0x14 pQueuedReplacementKFListMap: Ptr,
+        /// `pQueuedHelmetMap` (Xbox PDB).
+        0x18 pQueuedHelmetMap: Ptr,
+        /// `pAttachDistant3DTaskQueue` (Xbox PDB).
+        0x1C pAttachDistant3DTaskQueue: Ptr,
+        /// `pQueuedTextureMap` (Xbox PDB).
+        0x20 pQueuedTextureMap: Ptr,
+        /// `pLoadedFileMap` (Xbox PDB).
+        0x24 pLoadedFileMap: Ptr,
+        /// `pBackgroundCloneThread` (Xbox PDB).
+        0x28 pBackgroundCloneThread: Ptr,
+        /// `bHasDelayedFree` (Xbox PDB).
+        0x2C bHasDelayedFree: u8,
+    }
+}
 
 layout! {
     /// `QueuedCharacter` (Xbox PDB), 0x48 bytes: a `QueuedActor` (the same
@@ -1211,6 +1483,973 @@ pub fn fn_00441440(
     this
 }
 
+// Translated from 004414c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedCharacter` scalar deleting destructor (no name in the engine map):
+/// runs the destructor ([`fn_004414f0`]) and, when bit 0 of `flags` is set,
+/// frees the object. Returns `this`.
+pub fn fn_004414c0(e: &mut Engine, this: Ptr<QueuedCharacter>, flags: u32) -> Ptr<QueuedCharacter> {
+    fn_004414f0(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004414f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedCharacter` destructor (no name in the engine map): releases the
+/// helmet task (`spQueuedHelmet`) and the head task (`spQueuedHead`), then
+/// runs the `QueuedReference` destructor ([`fn_00440eb0`]). It does not
+/// restore the virtual table.
+///
+/// The exception-unwinding frame is not translated.
+pub fn fn_004414f0(e: &mut Engine, this: Ptr<QueuedCharacter>) {
+    e.call(
+        TASK_POINTER_DESTRUCT,
+        &args![this.byte_add(QueuedCharacter::spQueuedHelmet.off)],
+    );
+    e.call(
+        TASK_POINTER_DESTRUCT,
+        &args![this.byte_add(QueuedCharacter::spQueuedHead.off)],
+    );
+    fn_00440eb0(e, this.cast());
+}
+
+// Translated from 00441560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedCharacter::QueueModels` (Xbox PDB): inside the memory context of
+/// the task (source line `0x8ca`), the biped animation of the reference
+/// (virtual function `0x1e8`, or a new one from `TESNPC::CreateBipedAnim`
+/// when there is none) is given to the base form (`00606540`); when there is
+/// one, it queues its files (`004abd30(priority, helmet slot, task)`) and the
+/// loader queues the head (`00444fe0(base form, head slot, priority,
+/// task)`). Then the loader queues the animations of the base form's
+/// animation data (the base form + `0xdc`, or 0) with `ModelLoader::
+/// QueueAnimations` and `QueuedActor::QueueModels` runs.
+///
+/// The exception-unwinding frame is not translated.
+pub fn queued_character_queue_models(e: &mut Engine, this: Ptr<QueuedCharacter>) {
+    let context = e.get(this, QueuedCharacter::eContext);
+    in_context(e, context, CHARACTER_QUEUE_MODELS_SOURCE_LINE, |e| {
+        let reference = e.get(this, QueuedCharacter::pRef);
+        let base_form = e.call(GET_BASE_FORM, &args![reference]).u32();
+        let mut biped = e.vcall(reference.addr(), 0x1e8, &args![]).u32();
+        if biped == 0 {
+            let reference = e.get(this, QueuedCharacter::pRef);
+            biped = e
+                .call(CREATE_BIPED_ANIM, &args![base_form, reference])
+                .u32();
+        }
+        if biped != 0 {
+            let reference = e.get(this, QueuedCharacter::pRef);
+            e.call(
+                NPC_SET_BIPED_ANIM,
+                &args![base_form, reference, biped, 0u32],
+            );
+            let priority = task_priority(e, this.cast());
+            let helmet_slot = this.byte_add(QueuedCharacter::spQueuedHelmet.off);
+            e.call(
+                BIPED_QUEUE_FILES,
+                &args![biped, priority, helmet_slot, this],
+            );
+            let priority = task_priority(e, this.cast());
+            let head_slot = this.byte_add(QueuedCharacter::spQueuedHead.off);
+            let loader = e.global::<u32>(MODEL_LOADER);
+            e.call(
+                MODEL_LOADER_QUEUE_HEAD,
+                &args![loader, base_form, head_slot, priority, this],
+            );
+        }
+        let animation_data = if base_form != 0 { base_form + 0xdc } else { 0 };
+        let reference = e.get(this, QueuedCharacter::pRef);
+        let priority = task_priority(e, this.cast());
+        let loader = e.global::<u32>(MODEL_LOADER);
+        e.call(
+            MODEL_LOADER_QUEUE_ANIMATIONS,
+            &args![
+                loader,
+                animation_data,
+                priority,
+                this,
+                reference,
+                0u32,
+                0u32
+            ],
+        );
+        queued_actor_queue_models(e, this.cast());
+    });
+}
+
+// Translated from 004416c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedCharacter::BackgroundClone` (Xbox PDB): inside the memory context
+/// of the task (source line `0x8e4`), `QueuedReference::BackgroundClone`
+/// runs; when it succeeded and the task has a cloned 3D (`005d8710`), the
+/// thread-local clone words are set to the reference and that 3D
+/// ([`fn_00441780`]), the head and helmet are attached ([`fn_004418b0`]) and
+/// the words are cleared ([`fn_004417c0`]). Returns the result of
+/// `QueuedReference::BackgroundClone`.
+///
+/// The exception-unwinding frame is not translated.
+pub fn queued_character_background_clone(e: &mut Engine, this: Ptr<QueuedCharacter>) -> bool {
+    let context = e.get(this, QueuedCharacter::eContext);
+    in_context(e, context, CHARACTER_BACKGROUND_CLONE_SOURCE_LINE, |e| {
+        let cloned = queued_reference_background_clone(e, this.cast());
+        if cloned && e.call(GET_CLONED_3D, &args![this]).u32() != 0 {
+            let node = e.call(GET_CLONED_3D, &args![this]).u32();
+            let reference = e.get(this, QueuedCharacter::pRef);
+            fn_00441780(e, reference, node);
+            fn_004418b0(e, this);
+            fn_004417c0(e);
+        }
+        cloned
+    })
+}
+
+// Translated from 00441780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ModelLoader` helper (no name in the engine map): stores `reference` and
+/// `node` in the thread-local words at +0x264 and +0x260 of the TLS block.
+pub fn fn_00441780(e: &mut Engine, reference: Ptr, node: u32) {
+    let tls = e.tls();
+    e.mem.set_u32(tls + TLS_CLONE_REFERENCE, reference.addr());
+    e.mem.set_u32(tls + TLS_CLONE_WORD, node);
+}
+
+// Translated from 004417c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ModelLoader` helper (no name in the engine map): clears the thread-local
+/// words that [`fn_00441780`] sets.
+pub fn fn_004417c0(e: &mut Engine) {
+    let tls = e.tls();
+    e.mem.set_u32(tls + TLS_CLONE_REFERENCE, 0);
+    e.mem.set_u32(tls + TLS_CLONE_WORD, 0);
+}
+
+// Translated from 00441800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedCharacter::Attach` (no name in the engine map): the
+/// `QueuedReference::Attach` ([`queued_reference_attach`]).
+pub fn fn_00441800(e: &mut Engine, this: Ptr<QueuedReference>) {
+    queued_reference_attach(e, this);
+}
+
+// Translated from 00441820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedCharacter::FinishAttach` (Xbox PDB): inside the memory context of
+/// the task (source line `0x8ff`), the base class's (empty) `FinishAttach`
+/// runs; a task without a cloned 3D (`005d8710`) then attaches its head and
+/// helmet ([`fn_004418b0`]).
+///
+/// The exception-unwinding frame is not translated.
+pub fn queued_character_finish_attach(e: &mut Engine, this: Ptr<QueuedCharacter>) {
+    let context = e.get(this, QueuedCharacter::eContext);
+    in_context(e, context, CHARACTER_FINISH_ATTACH_SOURCE_LINE, |e| {
+        e.call(FINISH_ATTACH_BASE, &args![this]);
+        if e.call(GET_CLONED_3D, &args![this]).u32() == 0 {
+            fn_004418b0(e, this);
+        }
+    });
+}
+
+// Translated from 004418b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedCharacter` method (no name in the engine map): asks `005d9f90`
+/// about the reference, attaches the head task if there is one
+/// (`0043ed90(reference, answer)`) and then the helmet task
+/// (`QueuedHelmet::Attach`).
+pub fn fn_004418b0(e: &mut Engine, this: Ptr<QueuedCharacter>) {
+    let reference = e.get(this, QueuedCharacter::pRef);
+    let answer = e.call(REFERENCE_QUERY_005D9F90, &args![reference]).u32();
+    let head_slot = this.byte_add(QueuedCharacter::spQueuedHead.off);
+    if ni_pointer_value(e, head_slot) != 0 {
+        let reference = e.get(this, QueuedCharacter::pRef);
+        let head = ni_pointer_value(e, head_slot);
+        e.call(HEAD_ATTACH, &args![head, reference, answer]);
+    }
+    let helmet_slot = this.byte_add(QueuedCharacter::spQueuedHelmet.off);
+    if ni_pointer_value(e, helmet_slot) != 0 {
+        let helmet = ni_pointer_value(e, helmet_slot);
+        e.call(HELMET_ATTACH, &args![helmet]);
+    }
+}
+
+// Translated from 00441920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedCreature` constructor (no name in the engine map): the
+/// `QueuedActor` constructor ([`fn_004411d0`]) with `reference` and
+/// `context`, then the creature task's virtual table. Returns `this`.
+pub fn fn_00441920(
+    e: &mut Engine,
+    this: Ptr<QueuedReference>,
+    reference: Ptr,
+    context: u32,
+) -> Ptr<QueuedReference> {
+    fn_004411d0(e, this, reference, context);
+    e.mem.set_u32(this.addr(), QUEUED_CREATURE_VTABLE);
+    this
+}
+
+// Translated from 00441950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedCreature` scalar deleting destructor (no name in the engine map):
+/// runs the destructor ([`fn_00441980`]) and, when bit 0 of `flags` is set,
+/// frees the object. Returns `this`.
+pub fn fn_00441950(e: &mut Engine, this: Ptr<QueuedReference>, flags: u32) -> Ptr<QueuedReference> {
+    fn_00441980(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00441980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedCreature` destructor (no name in the engine map): the
+/// `QueuedReference` destructor ([`fn_00440eb0`]).
+pub fn fn_00441980(e: &mut Engine, this: Ptr<QueuedReference>) {
+    fn_00440eb0(e, this);
+}
+
+// Translated from 004419a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedCreature::QueueModels` (Xbox PDB): inside the memory context of the
+/// task (source line `0x925`), the creature's worn items are initialised: the
+/// package of the reference (`MobileObject::GetCurrentPackage`) with bit
+/// `0x200000` at +0x1C ([`fn_00441b00`]) turns the second flag off; a base
+/// form that `TESActorBase::ShouldRunInitDefaultWorn` accepts gets
+/// `TESCreature::InitDefaultWorn(reference, 1, flag, 0)`, any other
+/// `TESCreature::InitWorn(reference)`. The loader then queues the
+/// animations (`ModelLoader::QueueAnimations` with the flags 1 and 0) and the
+/// creature parts (`ModelLoader::QueueCreatureParts`) of the base form's
+/// animation data (the base form + `0xdc`, or 0), and `QueuedActor::
+/// QueueModels` runs.
+///
+/// The exception-unwinding frame is not translated.
+pub fn queued_creature_queue_models(e: &mut Engine, this: Ptr<QueuedReference>) {
+    let context = e.get(this, QueuedReference::eContext);
+    in_context(e, context, CREATURE_QUEUE_MODELS_SOURCE_LINE, |e| {
+        let reference = e.get(this, QueuedReference::pRef);
+        let base_form = e.call(GET_BASE_FORM, &args![reference]).u32();
+        let reference = e.get(this, QueuedReference::pRef);
+        let mut flag = 1u32;
+        let package = e.call(GET_CURRENT_PACKAGE, &args![reference]).u32();
+        if package != 0 && fn_00441b00(e, Ptr::new(package)) {
+            flag = 0;
+        }
+        let reference = e.get(this, QueuedReference::pRef);
+        if !e
+            .call(SHOULD_RUN_INIT_DEFAULT_WORN, &args![base_form, reference])
+            .bool()
+        {
+            let reference = e.get(this, QueuedReference::pRef);
+            e.call(CREATURE_INIT_WORN, &args![base_form, reference]);
+        } else {
+            let reference = e.get(this, QueuedReference::pRef);
+            e.call(
+                CREATURE_INIT_DEFAULT_WORN,
+                &args![base_form, reference, 1u32, flag, 0u32],
+            );
+        }
+        let animation_data = if base_form != 0 { base_form + 0xdc } else { 0 };
+        let reference = e.get(this, QueuedReference::pRef);
+        let priority = task_priority(e, this.cast());
+        let loader = e.global::<u32>(MODEL_LOADER);
+        e.call(
+            MODEL_LOADER_QUEUE_ANIMATIONS,
+            &args![
+                loader,
+                animation_data,
+                priority,
+                this,
+                reference,
+                1u32,
+                0u32
+            ],
+        );
+        let reference = e.get(this, QueuedReference::pRef);
+        let priority = task_priority(e, this.cast());
+        let loader = e.global::<u32>(MODEL_LOADER);
+        e.call(
+            MODEL_LOADER_QUEUE_CREATURE_PARTS,
+            &args![loader, animation_data, priority, this, reference],
+        );
+        queued_actor_queue_models(e, this);
+    });
+}
+
+// Translated from 00441b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Package predicate (no name in the engine map): bit `0x200000` of the
+/// dword at +0x1C is set.
+pub fn fn_00441b00(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0x1c) & PACKAGE_FLAG_MASK != 0
+}
+
+// Translated from 00441b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedPlayer` constructor (no name in the engine map): the
+/// `QueuedCharacter` constructor ([`fn_00441440`]) for the reference in the
+/// global `011dea3c` and `context`, then the player task's virtual table.
+/// Returns `this`.
+pub fn fn_00441b20(
+    e: &mut Engine,
+    this: Ptr<QueuedCharacter>,
+    context: u32,
+) -> Ptr<QueuedCharacter> {
+    let player = Ptr::new(e.global::<u32>(SPECIAL_REFERENCE));
+    fn_00441440(e, this, player, context);
+    e.mem.set_u32(this.addr(), QUEUED_PLAYER_VTABLE);
+    this
+}
+
+// Translated from 00441b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedPlayer` scalar deleting destructor (no name in the engine map):
+/// runs the destructor ([`fn_00441b80`]) and, when bit 0 of `flags` is set,
+/// frees the object. Returns `this`.
+pub fn fn_00441b50(e: &mut Engine, this: Ptr<QueuedCharacter>, flags: u32) -> Ptr<QueuedCharacter> {
+    fn_00441b80(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00441b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedPlayer` destructor (no name in the engine map): the
+/// `QueuedCharacter` destructor ([`fn_004414f0`]).
+pub fn fn_00441b80(e: &mut Engine, this: Ptr<QueuedCharacter>) {
+    fn_004414f0(e, this);
+}
+
+// Translated from 00441ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedPlayer::QueueModels` (Xbox PDB): inside the memory context of the
+/// task (source line `0x94e`), the player reference (global `011dea3c`) is
+/// asked to queue its files (`0095f210(priority, task)`), then
+/// `QueuedCharacter::QueueModels` runs.
+///
+/// The exception-unwinding frame is not translated.
+pub fn queued_player_queue_models(e: &mut Engine, this: Ptr<QueuedCharacter>) {
+    let context = e.get(this, QueuedCharacter::eContext);
+    in_context(e, context, PLAYER_QUEUE_MODELS_SOURCE_LINE, |e| {
+        let priority = task_priority(e, this.cast());
+        let player = e.global::<u32>(SPECIAL_REFERENCE);
+        e.call(PLAYER_QUEUE_FILES, &args![player, priority, this]);
+        queued_character_queue_models(e, this);
+    });
+}
+
+// Translated from 00441c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedPlayer::Attach` (no name in the engine map): [`fn_00441800`].
+pub fn fn_00441c30(e: &mut Engine, this: Ptr<QueuedReference>) {
+    fn_00441800(e, this);
+}
+
+// Translated from 00441c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedFileLoad` constructor (no name in the engine map): the
+/// `QueuedFileEntry` constructor with `context`, the file load task's virtual
+/// table, an empty `spLoadedFile`, `eFileIndex` = `file_kind`, a copy of the
+/// file name `name` (`00c3cee0`) and the file entry found for the index that
+/// `00449050` gives for `file_kind` (`00c3cf60`). Returns `this`.
+///
+/// The exception-unwinding frame is not translated.
+pub fn fn_00441c50(
+    e: &mut Engine,
+    this: Ptr<QueuedFileLoad>,
+    name: u32,
+    context: u32,
+    file_kind: u32,
+) -> Ptr<QueuedFileLoad> {
+    e.call(QUEUED_FILE_ENTRY_CONSTRUCT, &args![this, context]);
+    e.mem.set_u32(this.addr(), QUEUED_FILE_LOAD_VTABLE);
+    e.call(
+        LOADED_FILE_POINTER_CONSTRUCT,
+        &args![this.byte_add(QueuedFileLoad::spLoadedFile.off), 0u32],
+    );
+    e.set(this, QueuedFileLoad::eFileIndex, file_kind);
+    e.call(QUEUED_FILE_ENTRY_SET_NAME, &args![this, name]);
+    let kind = e.get(this, QueuedFileLoad::eFileIndex);
+    let index = e.call(FILE_INDEX_OF_KIND, &args![kind]).u32();
+    e.call(QUEUED_FILE_ENTRY_SET_INDEX, &args![this, index]);
+    this
+}
+
+// Translated from 00441cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedFileLoad::_scalar_deleting_destructor_` (Xbox PDB): runs the
+/// destructor ([`fn_00441d20`]) and, when bit 0 of `flags` is set, frees the
+/// object. Returns `this`.
+pub fn queued_file_load_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<QueuedFileLoad>,
+    flags: u32,
+) -> Ptr<QueuedFileLoad> {
+    fn_00441d20(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00441d20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedFileLoad` destructor (no name in the engine map; the map's name
+/// belongs to folded code): releases `spLoadedFile` and runs the
+/// `QueuedFileEntry` destructor (`00c3cea0`).
+///
+/// The exception-unwinding frame is not translated.
+pub fn fn_00441d20(e: &mut Engine, this: Ptr<QueuedFileLoad>) {
+    e.call(
+        LOADED_FILE_POINTER_DESTRUCT,
+        &args![this.byte_add(QueuedFileLoad::spLoadedFile.off)],
+    );
+    e.call(QUEUED_FILE_ENTRY_DESTRUCT, &args![this]);
+}
+
+// Translated from 00441d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedFileLoad` constructor for an already loaded file (no name in the
+/// engine map): the `QueuedFileEntry` constructor with `context`, the file
+/// load task's virtual table, `eFileIndex` = 3, `spLoadedFile` = `file`, and
+/// the task put into state 5 (`00449150`). Returns `this`.
+///
+/// The exception-unwinding frame is not translated.
+pub fn fn_00441d80(
+    e: &mut Engine,
+    this: Ptr<QueuedFileLoad>,
+    file: Ptr,
+    context: u32,
+) -> Ptr<QueuedFileLoad> {
+    e.call(QUEUED_FILE_ENTRY_CONSTRUCT, &args![this, context]);
+    e.mem.set_u32(this.addr(), QUEUED_FILE_LOAD_VTABLE);
+    let file_slot = this.byte_add(QueuedFileLoad::spLoadedFile.off);
+    e.call(LOADED_FILE_POINTER_CONSTRUCT, &args![file_slot, 0u32]);
+    e.set(this, QueuedFileLoad::eFileIndex, 3);
+    e.call(LOADED_FILE_POINTER_ASSIGN, &args![file_slot, file]);
+    e.call(TASK_SET_STATE_5, &args![this]);
+    this
+}
+
+// Translated from 00441e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedKF::QueueMe` (Xbox PDB; the body is shared with other tasks): asks
+/// the IO manager (global `01202d98`, virtual function `0x48`) to queue the
+/// task.
+pub fn queued_kf_queue_me(e: &mut Engine, this: Ptr<QueuedKF>) {
+    let manager = e.global::<u32>(TASK_QUEUE);
+    e.vcall(manager, 0x48, &args![this]);
+}
+
+// Translated from 00441e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedFileLoad::Run` (Xbox PDB): inside the memory context of the task
+/// (source line `0x976`), the loader (`004483a0`) is asked for the loaded
+/// file of the task's file name and `spLoadedFile` takes it. A task still
+/// without one finds the file of its file index with `QueuedFileEntry::
+/// GetFile` (the index from `00449050`, `0xffff`); with a file it builds a
+/// `LoadedFile` (0x10 bytes from `NiAlloc`, [`fn_0043baf0`]) for the file
+/// name and stores that, without one it logs `"MODELS: Could not get file for
+/// %s."`.
+///
+/// The exception-unwinding frame is not translated.
+pub fn queued_file_load_run(e: &mut Engine, this: Ptr<QueuedFileLoad>) {
+    let context = e.get(this, QueuedFileLoad::eContext);
+    in_context(e, context, FILE_LOAD_RUN_SOURCE_LINE, |e| {
+        let file_slot = this.byte_add(QueuedFileLoad::spLoadedFile.off);
+        let name = e.call(QUEUED_FILE_ENTRY_GET_NAME, &args![this]).u32();
+        let loader = e.global::<u32>(MODEL_LOADER);
+        let found = e
+            .call(MODEL_LOADER_FIND_LOADED_FILE, &args![loader, name])
+            .u32();
+        e.call(LOADED_FILE_POINTER_ASSIGN, &args![file_slot, found]);
+        if ni_pointer_value(e, file_slot) != 0 {
+            return;
+        }
+        let kind = e.get(this, QueuedFileLoad::eFileIndex);
+        let index = e.call(FILE_INDEX_OF_KIND, &args![kind]).u32();
+        let file = e
+            .call(QUEUED_FILE_ENTRY_GET_FILE, &args![this, index, 0xffffu32])
+            .u32();
+        if file != 0 {
+            let block = e.call(NI_ALLOC, &args![0x10u32]).u32();
+            let loaded = if block != 0 {
+                let name = e.call(QUEUED_FILE_ENTRY_GET_NAME, &args![this]).u32();
+                e.call(LOADED_FILE_CONSTRUCT, &args![block, name, file])
+                    .u32()
+            } else {
+                0
+            };
+            e.call(LOADED_FILE_POINTER_ASSIGN, &args![file_slot, loaded]);
+        } else {
+            let name = e.call(QUEUED_FILE_ENTRY_GET_NAME, &args![this]).u32();
+            e.call(LOG_MESSAGE, &args![FILE_LOAD_ERROR_FORMAT, name]);
+        }
+    });
+}
+
+// Translated from 00441f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedFaceGenFile` constructor (no name in the engine map): the
+/// `QueuedFileLoad` constructor ([`fn_00441c50`]), the face-gen task's
+/// virtual table and empty `spFaceGenModel` and `spModelMeshData`. Returns
+/// `this`.
+///
+/// The exception-unwinding frame is not translated.
+pub fn fn_00441f80(
+    e: &mut Engine,
+    this: Ptr<QueuedFaceGenFile>,
+    name: u32,
+    context: u32,
+    file_kind: u32,
+) -> Ptr<QueuedFaceGenFile> {
+    fn_00441c50(e, this.cast(), name, context, file_kind);
+    e.mem.set_u32(this.addr(), QUEUED_FACE_GEN_FILE_VTABLE);
+    e.call(
+        NI_POINTER_CONSTRUCT,
+        &args![this.byte_add(QueuedFaceGenFile::spFaceGenModel.off), 0u32],
+    );
+    e.call(
+        MESH_DATA_POINTER_CONSTRUCT,
+        &args![this.byte_add(QueuedFaceGenFile::spModelMeshData.off), 0u32],
+    );
+    this
+}
+
+// Translated from 00442010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedFaceGenFile::_scalar_deleting_destructor_` (Xbox PDB): runs the
+/// destructor ([`fn_00442040`]) and, when bit 0 of `flags` is set, frees the
+/// object. Returns `this`.
+pub fn queued_face_gen_file_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<QueuedFaceGenFile>,
+    flags: u32,
+) -> Ptr<QueuedFaceGenFile> {
+    fn_00442040(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00442040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedFaceGenFile` destructor (no name in the engine map): releases
+/// `spModelMeshData` and `spFaceGenModel`, then runs the `QueuedFileLoad`
+/// destructor ([`fn_00441d20`]).
+///
+/// The exception-unwinding frame is not translated.
+pub fn fn_00442040(e: &mut Engine, this: Ptr<QueuedFaceGenFile>) {
+    e.call(
+        MESH_DATA_POINTER_DESTRUCT,
+        &args![this.byte_add(QueuedFaceGenFile::spModelMeshData.off)],
+    );
+    e.call(
+        NI_POINTER_DESTRUCT,
+        &args![this.byte_add(QueuedFaceGenFile::spFaceGenModel.off)],
+    );
+    fn_00441d20(e, this.cast());
+}
+
+// Translated from 004420b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedFaceGenFile` constructor for an already loaded file (no name in the
+/// engine map): the `QueuedFileLoad` constructor for a loaded file
+/// ([`fn_00441d80`]), the face-gen task's virtual table and empty
+/// `spFaceGenModel` and `spModelMeshData`. Returns `this`.
+///
+/// The exception-unwinding frame is not translated.
+pub fn fn_004420b0(
+    e: &mut Engine,
+    this: Ptr<QueuedFaceGenFile>,
+    file: Ptr,
+    context: u32,
+) -> Ptr<QueuedFaceGenFile> {
+    fn_00441d80(e, this.cast(), file, context);
+    e.mem.set_u32(this.addr(), QUEUED_FACE_GEN_FILE_VTABLE);
+    e.call(
+        NI_POINTER_CONSTRUCT,
+        &args![this.byte_add(QueuedFaceGenFile::spFaceGenModel.off), 0u32],
+    );
+    e.call(
+        MESH_DATA_POINTER_CONSTRUCT,
+        &args![this.byte_add(QueuedFaceGenFile::spModelMeshData.off), 0u32],
+    );
+    this
+}
+
+// Translated from 00442130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedFaceGenFile` constructor from a face model and its mesh data (no
+/// name in the engine map): the `QueuedFileLoad` constructor for a loaded file
+/// ([`fn_00441d80`]) with no file and the context 5, the face-gen task's
+/// virtual table, then `spFaceGenModel` = `face_model` and `spModelMeshData`
+/// = `mesh_data`. Returns `this`.
+///
+/// The exception-unwinding frame is not translated.
+pub fn fn_00442130(
+    e: &mut Engine,
+    this: Ptr<QueuedFaceGenFile>,
+    face_model: Ptr,
+    mesh_data: Ptr,
+) -> Ptr<QueuedFaceGenFile> {
+    fn_00441d80(e, this.cast(), Ptr::NULL, 5);
+    e.mem.set_u32(this.addr(), QUEUED_FACE_GEN_FILE_VTABLE);
+    let model_slot = this.byte_add(QueuedFaceGenFile::spFaceGenModel.off);
+    let mesh_slot = this.byte_add(QueuedFaceGenFile::spModelMeshData.off);
+    e.call(NI_POINTER_CONSTRUCT, &args![model_slot, 0u32]);
+    e.call(MESH_DATA_POINTER_CONSTRUCT, &args![mesh_slot, 0u32]);
+    e.call(NI_POINTER_ASSIGN, &args![model_slot, face_model]);
+    e.call(MESH_DATA_POINTER_ASSIGN, &args![mesh_slot, mesh_data]);
+    this
+}
+
+// Translated from 004421d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BackgroundCloneThread::BackgroundCloneThread` (Xbox PDB): the
+/// `BSTaskThread` constructor (`00c42dd0(3, "BackgroundCloneThread")`), the
+/// thread's virtual table, `iRunningCount` = 0, `bExit` = 0 and a new queue
+/// (a 0x40 byte block of the memory manager constructed with `queue_size`
+/// and 8, `0044b350`; 0 when the allocation failed) in
+/// `pCloneReferencesQueue`. Returns `this`.
+///
+/// The exception-unwinding frame is not translated.
+pub fn background_clone_thread_background_clone_thread(
+    e: &mut Engine,
+    this: Ptr<BackgroundCloneThread>,
+    queue_size: u32,
+) -> Ptr<BackgroundCloneThread> {
+    e.call(
+        TASK_THREAD_CONSTRUCT,
+        &args![this, 3u32, BACKGROUND_CLONE_THREAD_NAME],
+    );
+    e.mem.set_u32(this.addr(), BACKGROUND_CLONE_THREAD_VTABLE);
+    e.set(this, BackgroundCloneThread::iRunningCount, 0);
+    e.set(this, BackgroundCloneThread::bExit, 0);
+    let block = e.call(MEMORY_ALLOC, &args![0x40u32]).u32();
+    let queue = if block != 0 {
+        e.call(CLONE_QUEUE_CONSTRUCT, &args![block, queue_size, 8u32])
+            .ptr::<()>()
+    } else {
+        Ptr::NULL
+    };
+    e.set(this, BackgroundCloneThread::pCloneReferencesQueue, queue);
+    this
+}
+
+// Translated from 00442290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BackgroundCloneThread::_scalar_deleting_destructor_` (Xbox PDB): runs the
+/// destructor ([`fn_004422c0`]) and, when bit 0 of `flags` is set, frees the
+/// object. Returns `this`.
+pub fn background_clone_thread_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BackgroundCloneThread>,
+    flags: u32,
+) -> Ptr<BackgroundCloneThread> {
+    fn_004422c0(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004422c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BackgroundCloneThread` destructor (no name in the engine map): sets the
+/// thread's virtual table, deletes the queue (virtual destructor, flag 1)
+/// when there is one, and runs the `BSTaskThread` destructor body
+/// (`00c42f00`).
+///
+/// The exception-unwinding frame is not translated.
+pub fn fn_004422c0(e: &mut Engine, this: Ptr<BackgroundCloneThread>) {
+    e.mem.set_u32(this.addr(), BACKGROUND_CLONE_THREAD_VTABLE);
+    let queue = e.get(this, BackgroundCloneThread::pCloneReferencesQueue);
+    if !queue.is_null() {
+        e.vcall(queue.addr(), 0, &args![1u32]);
+    }
+    e.call(TASK_THREAD_DESTRUCT, &args![this]);
+}
+
+// Translated from 00442350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BackgroundCloneThread::ThreadUpdate` (Xbox PDB): until `bExit` is 1, the
+/// thread waits for work (`004424c0`), counts itself running
+/// (`iRunningCount`, `0040b460`) and pops a task from the queue (`00449280`).
+/// Without a task it only runs the two bracketing calls (`00442510`,
+/// `00442530`). With one, for each task popped: when it is not in state 6 and
+/// its state could be changed from the state it was in to 3 (`00449190`), a
+/// task whose virtual function `0x38` says it needs it is added to the IO
+/// manager's post-process tasks (`IOManager::AddPostProcessTask`), and the
+/// state changes from 3 to 5; the next task is then popped. Last the running
+/// count is decremented.
+///
+/// The exception-unwinding frame is not translated.
+pub fn background_clone_thread_thread_update(e: &mut Engine, this: Ptr<BackgroundCloneThread>) {
+    let running = this.addr() + BackgroundCloneThread::iRunningCount.off;
+    while e.get(this, BackgroundCloneThread::bExit) != 1 {
+        e.call(THREAD_WAIT_FOR_WORK, &args![this]);
+        e.call(INTERLOCKED_INCREMENT, &args![running]);
+        e.with_stack(4, |e, slot| {
+            e.call(TASK_POINTER_CONSTRUCT, &args![slot, 0u32]);
+            let queue = e.get(this, BackgroundCloneThread::pCloneReferencesQueue);
+            e.call(CLONE_QUEUE_POP, &args![queue, slot]);
+            if ni_pointer_value(e, slot) == 0 {
+                e.call(THREAD_BEFORE_TASK, &args![this]);
+                e.call(THREAD_AFTER_TASK, &args![this]);
+            } else {
+                while ni_pointer_value(e, slot) != 0 {
+                    e.call(THREAD_BEFORE_TASK, &args![this]);
+                    e.call(EMPTY_FUNCTION, &args![]);
+                    let task = ni_pointer_value(e, slot);
+                    let state = e.call(TASK_GET_STATE, &args![task]).u32();
+                    if !e.call(TASK_STATE_IS_6, &args![task]).bool()
+                        && e.call(TASK_CHANGE_STATE, &args![task, state, 3u32]).bool()
+                    {
+                        if e.vcall(task, TASK_NEEDS_POST_PROCESS_SLOT, &args![]).bool() {
+                            e.call(IOMANAGER_ADD_POST_PROCESS_TASK, &args![task]);
+                        }
+                        e.call(TASK_CHANGE_STATE, &args![task, 3u32, 5u32]);
+                    }
+                    let queue = e.get(this, BackgroundCloneThread::pCloneReferencesQueue);
+                    e.call(CLONE_QUEUE_POP, &args![queue, slot]);
+                    e.call(EMPTY_FUNCTION, &args![]);
+                    e.call(THREAD_AFTER_TASK, &args![this]);
+                }
+            }
+            e.call(INTERLOCKED_DECREMENT, &args![running]);
+            e.call(TASK_POINTER_DESTRUCT, &args![slot]);
+        });
+    }
+}
+
+// Translated from 00442580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BackgroundCloneThread` method (no name in the engine map): puts `task` in
+/// a temporary task pointer, adds it to the thread's queue (`00449240` on
+/// `pCloneReferencesQueue`) and wakes the thread (`00442600`).
+///
+/// The exception-unwinding frame is not translated.
+pub fn fn_00442580(e: &mut Engine, this: Ptr<BackgroundCloneThread>, task: Ptr) {
+    e.with_stack(4, |e, slot| {
+        e.call(TASK_POINTER_CONSTRUCT, &args![slot, task]);
+        let queue = e.get(this, BackgroundCloneThread::pCloneReferencesQueue);
+        e.call(FINISHED_QUEUE_ADD, &args![queue, slot]);
+        e.call(TASK_POINTER_DESTRUCT, &args![slot]);
+    });
+    e.call(THREAD_WAKE, &args![this]);
+}
+
+// Translated from 00442630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BackgroundCloneThread` method (no name in the engine map): sets `bExit`
+/// to 1.
+pub fn fn_00442630(e: &mut Engine, this: Ptr<BackgroundCloneThread>) {
+    e.set(this, BackgroundCloneThread::bExit, 1);
+}
+
+/// A fresh block of `size` bytes from the memory manager, constructed by
+/// `constructor(block, arguments...)`; null when the allocation failed.
+fn new_loader_member(e: &mut Engine, size: u32, constructor: u32, arguments: &[u32]) -> Ptr {
+    let block = e.call(MEMORY_ALLOC, &args![size]).u32();
+    if block == 0 {
+        return Ptr::NULL;
+    }
+    let mut words = vec![block];
+    words.extend_from_slice(arguments);
+    e.call(constructor, &words).ptr()
+}
+
+// Translated from 00442650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ModelLoader::ModelLoader` (Xbox PDB): creates the loader's maps and
+/// queues, each a 0x40 byte block of the memory manager (0 when the
+/// allocation failed) constructed with its own constructor: the model map,
+/// the KF model map, the queued references and references-to-queue maps, the
+/// anim idle, replacement KF list and helmet maps, the attach-distant-3D
+/// queue, the texture map and the loaded file map; then the background clone
+/// thread (0x3c bytes, [`background_clone_thread_background_clone_thread`]
+/// with 10), which is started (`00c42f50`). `bHasDelayedFree` is cleared.
+/// When the IO manager (global `01202d98`) exists, six loader callbacks are
+/// registered on it (`0057bd60`, `004febb0`, [`fn_00442a80`], `004fbf00`,
+/// `004febd0`, `008ac890`). Returns `this`.
+///
+/// The exception-unwinding frame is not translated.
+pub fn model_loader_model_loader(e: &mut Engine, this: Ptr<ModelLoader>) -> Ptr<ModelLoader> {
+    let map = new_loader_member(e, 0x40, MODEL_MAP_CONSTRUCT, &[10, 0x3f1, 0xc]);
+    e.set(this, ModelLoader::pModelMap, map);
+    let map = new_loader_member(e, 0x40, KF_MODEL_MAP_CONSTRUCT, &[10, 0x3f1, 0xc]);
+    e.set(this, ModelLoader::pKFModelMap, map);
+    let map = new_loader_member(e, 0x40, REFERENCE_MAP_CONSTRUCT, &[10, 0x13af, 0xc]);
+    e.set(this, ModelLoader::pQueuedReferencesMap, map);
+    let map = new_loader_member(e, 0x40, REFERENCE_MAP_CONSTRUCT, &[10, 0x13af, 0xc]);
+    e.set(this, ModelLoader::pReferencesToQueueMap, map);
+    let map = new_loader_member(e, 0x40, ANIM_IDLE_MAP_CONSTRUCT, &[10, 0xfb, 0xc]);
+    e.set(this, ModelLoader::pQueuedAnimIdleMap, map);
+    let map = new_loader_member(e, 0x40, REPLACEMENT_KF_LIST_MAP_CONSTRUCT, &[10, 0xfb, 0xc]);
+    e.set(this, ModelLoader::pQueuedReplacementKFListMap, map);
+    let map = new_loader_member(e, 0x40, HELMET_MAP_CONSTRUCT, &[10, 0xfb, 0xc]);
+    e.set(this, ModelLoader::pQueuedHelmetMap, map);
+    let queue = new_loader_member(e, 0x40, ATTACH_TASK_QUEUE_CONSTRUCT, &[10, 8]);
+    e.set(this, ModelLoader::pAttachDistant3DTaskQueue, queue);
+    let map = new_loader_member(e, 0x40, TEXTURE_MAP_CONSTRUCT, &[10, 0x3f1, 0xc]);
+    e.set(this, ModelLoader::pQueuedTextureMap, map);
+    let map = new_loader_member(e, 0x40, LOADED_FILE_MAP_CONSTRUCT, &[10, 0x3f1, 0xc]);
+    e.set(this, ModelLoader::pLoadedFileMap, map);
+    let block = e.call(MEMORY_ALLOC, &args![0x3cu32]).u32();
+    let thread = if block != 0 {
+        background_clone_thread_background_clone_thread(e, Ptr::new(block), 10).cast::<()>()
+    } else {
+        Ptr::NULL
+    };
+    e.set(this, ModelLoader::pBackgroundCloneThread, thread);
+    e.call(THREAD_START, &args![thread]);
+    e.set(this, ModelLoader::bHasDelayedFree, 0);
+    if e.global::<u32>(TASK_QUEUE) != 0 {
+        let manager = e.global::<u32>(TASK_QUEUE);
+        e.call(
+            IO_MANAGER_REGISTER_FIRST,
+            &args![manager, LOADER_CALLBACK_00446E30],
+        );
+        let manager = e.global::<u32>(TASK_QUEUE);
+        e.call(
+            IO_MANAGER_REGISTER_SECOND,
+            &args![manager, LOADER_CALLBACK_00446E40],
+        );
+        let manager = e.global::<u32>(TASK_QUEUE);
+        fn_00442a80(e, Ptr::new(manager), LOADER_CALLBACK_00446EA0);
+        let manager = e.global::<u32>(TASK_QUEUE);
+        e.call(
+            IO_MANAGER_REGISTER_FOURTH,
+            &args![manager, LOADER_CALLBACK_00446F00],
+        );
+        let manager = e.global::<u32>(TASK_QUEUE);
+        e.call(
+            IO_MANAGER_REGISTER_FIFTH,
+            &args![manager, LOADER_CALLBACK_00446F10],
+        );
+        let manager = e.global::<u32>(TASK_QUEUE);
+        e.call(
+            IO_MANAGER_REGISTER_SIXTH,
+            &args![manager, LOADER_CALLBACK_00446F90],
+        );
+    }
+    this
+}
+
+// Translated from 00442a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// IO manager setter (no name in the engine map): stores `callback` in the
+/// dword at +0x78 of the manager.
+pub fn fn_00442a80(e: &mut Engine, this: Ptr, callback: u32) {
+    e.mem.set_u32(this.addr() + 0x78, callback);
+}
+
+/// `next(iterator, &key, &value, 1)` (`0044c640`) on `map`: the key and the
+/// value it wrote, or `None` when it found no entry.
+fn map_next(e: &mut Engine, map: Ptr, iterator: Ptr) -> Option<(u32, u32)> {
+    e.with_stack(8, |e, out| {
+        let value_slot = out.addr() + 4;
+        e.mem.set_u32(out.addr(), 0);
+        e.mem.set_u32(value_slot, 0);
+        let found = e
+            .call(MAP_NEXT, &args![map, iterator, out, value_slot, 1u32])
+            .bool();
+        found.then(|| (e.mem.u32(out.addr()), e.mem.u32(value_slot)))
+    })
+}
+
+/// Deletes `object` through its virtual destructor (slot 0, flag 1) when it
+/// is not null.
+fn delete_object(e: &mut Engine, object: Ptr) {
+    if !object.is_null() {
+        e.vcall(object.addr(), 0, &args![1u32]);
+    }
+}
+
+// Translated from 00442aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ModelLoader::~ModelLoader` (Xbox PDB): first `OutputModelMapContents(0,
+/// 0)` runs. A model map with entries (virtual function `0x44` not 0) is
+/// walked: the models whose reference count ([`fn_00443190`]) is above 0 are
+/// counted and every model is deleted (`004431f0`); a non-zero count is
+/// logged (`"MODELS: ModelLoader still contains %d NIF files."`). Then the
+/// KF model map is walked: an entry whose animation is missing (`005585e0` is
+/// 0) or fails `005f26c0` is removed from the map (virtual function `0x14`
+/// with the key) and deleted (`00443240`). A KF map with entries is walked
+/// again, counting the KF models whose count (`004431b0`) is above 0 and
+/// deleting them all, with the same kind of log message. Last the maps, the
+/// queue and the background clone thread are deleted through their virtual
+/// destructors, in the order `pModelMap`, `pKFModelMap`,
+/// `pAttachDistant3DTaskQueue`, `pQueuedHelmetMap`,
+/// `pQueuedReplacementKFListMap`, `pQueuedAnimIdleMap`,
+/// `pQueuedReferencesMap`, `pReferencesToQueueMap`,
+/// `pBackgroundCloneThread`, `pQueuedTextureMap`, `pLoadedFileMap`.
+///
+/// The exception-unwinding frame and the stack-cookie check are not
+/// translated.
+pub fn model_loader_destructor(e: &mut Engine, this: Ptr<ModelLoader>) {
+    e.call(OUTPUT_MODEL_MAP_CONTENTS, &args![this, 0u32, 0u32]);
+    let model_map = e.get(this, ModelLoader::pModelMap);
+    if e.vcall(model_map.addr(), 0x44, &args![]).u32() != 0 {
+        let mut left = 0u32;
+        e.with_stack(MAP_ITERATOR_SIZE, |e, iterator| {
+            e.call(MODEL_ITERATOR_CONSTRUCT, &args![iterator]);
+            while !e.call(ITERATOR_AT_END, &args![iterator]).bool() {
+                let model_map = e.get(this, ModelLoader::pModelMap);
+                if let Some((_, model)) = map_next(e, model_map, iterator) {
+                    if fn_00443190(e, Ptr::new(model)) > 0 {
+                        left += 1;
+                    }
+                    if model != 0 {
+                        e.call(MODEL_DELETE, &args![model, 1u32]);
+                    }
+                }
+            }
+            if left != 0 {
+                e.call(LOG_MESSAGE, &args![MODEL_FILES_LEFT_FORMAT, left]);
+            }
+            e.call(MODEL_ITERATOR_DESTRUCT, &args![iterator]);
+        });
+    }
+    e.with_stack(MAP_ITERATOR_SIZE, |e, iterator| {
+        e.call(KF_ITERATOR_CONSTRUCT, &args![iterator]);
+        while !e.call(ITERATOR_AT_END, &args![iterator]).bool() {
+            let kf_map = e.get(this, ModelLoader::pKFModelMap);
+            let Some((key, model)) = map_next(e, kf_map, iterator) else {
+                continue;
+            };
+            if model == 0 {
+                continue;
+            }
+            let animation = e.call(KF_MODEL_ANIMATION, &args![model]).u32();
+            let remove = animation == 0 || {
+                let animation = e.call(KF_MODEL_ANIMATION, &args![model]).u32();
+                e.call(ANIMATION_TEST, &args![animation]).bool()
+            };
+            if remove {
+                let kf_map = e.get(this, ModelLoader::pKFModelMap);
+                e.vcall(kf_map.addr(), 0x14, &args![key]);
+                e.call(KF_MODEL_DELETE, &args![model, 1u32]);
+            }
+        }
+        let kf_map = e.get(this, ModelLoader::pKFModelMap);
+        if e.vcall(kf_map.addr(), 0x44, &args![]).u32() != 0 {
+            let mut left = 0u32;
+            e.with_stack(MAP_ITERATOR_SIZE, |e, second| {
+                e.call(KF_ITERATOR_CONSTRUCT, &args![second]);
+                while !e.call(ITERATOR_AT_END, &args![second]).bool() {
+                    let kf_map = e.get(this, ModelLoader::pKFModelMap);
+                    if let Some((_, model)) = map_next(e, kf_map, second) {
+                        if e.call(KF_MODEL_REF_COUNT, &args![model]).u32() as i32 > 0 {
+                            left += 1;
+                        }
+                        if model != 0 {
+                            e.call(KF_MODEL_DELETE, &args![model, 1u32]);
+                        }
+                    }
+                }
+                if left != 0 {
+                    e.call(LOG_MESSAGE, &args![KF_FILES_LEFT_FORMAT, left]);
+                }
+                e.call(KF_ITERATOR_DESTRUCT, &args![second]);
+            });
+        }
+        for member in [
+            ModelLoader::pModelMap,
+            ModelLoader::pKFModelMap,
+            ModelLoader::pAttachDistant3DTaskQueue,
+            ModelLoader::pQueuedHelmetMap,
+            ModelLoader::pQueuedReplacementKFListMap,
+            ModelLoader::pQueuedAnimIdleMap,
+            ModelLoader::pQueuedReferencesMap,
+            ModelLoader::pReferencesToQueueMap,
+            ModelLoader::pBackgroundCloneThread,
+            ModelLoader::pQueuedTextureMap,
+            ModelLoader::pLoadedFileMap,
+        ] {
+            let object = e.get(this, member);
+            delete_object(e, object);
+        }
+        e.call(KF_ITERATOR_DESTRUCT, &args![iterator]);
+    });
+}
+
+// Translated from 00443190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Model` method (no name in the engine map): the sum of `iRefCount` and
+/// `iManualRefCount`.
+pub fn fn_00443190(e: &mut Engine, this: Ptr<Model>) -> i32 {
+    let count = e.get(this, Model::iRefCount);
+    count.wrapping_add(e.get(this, Model::iManualRefCount))
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1297,6 +2536,120 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00441440,
             fn_00441440(Ptr<QueuedCharacter>, Ptr, u32) -> Ptr<QueuedCharacter>
         ),
+        entry!(
+            0x004414c0,
+            fn_004414c0(Ptr<QueuedCharacter>, u32) -> Ptr<QueuedCharacter>
+        ),
+        entry!(0x004414f0, fn_004414f0(Ptr<QueuedCharacter>)),
+        entry!(
+            0x00441560,
+            queued_character_queue_models(Ptr<QueuedCharacter>)
+        ),
+        entry!(
+            0x004416c0,
+            queued_character_background_clone(Ptr<QueuedCharacter>) -> bool
+        ),
+        entry!(0x00441780, fn_00441780(Ptr, u32)),
+        entry!(0x004417c0, fn_004417c0()),
+        entry!(0x00441800, fn_00441800(Ptr<QueuedReference>)),
+        entry!(
+            0x00441820,
+            queued_character_finish_attach(Ptr<QueuedCharacter>)
+        ),
+        entry!(0x004418b0, fn_004418b0(Ptr<QueuedCharacter>)),
+        entry!(
+            0x00441920,
+            fn_00441920(Ptr<QueuedReference>, Ptr, u32) -> Ptr<QueuedReference>
+        ),
+        entry!(
+            0x00441950,
+            fn_00441950(Ptr<QueuedReference>, u32) -> Ptr<QueuedReference>
+        ),
+        entry!(0x00441980, fn_00441980(Ptr<QueuedReference>)),
+        entry!(
+            0x004419a0,
+            queued_creature_queue_models(Ptr<QueuedReference>)
+        ),
+        entry!(0x00441b00, fn_00441b00(Ptr) -> bool),
+        entry!(
+            0x00441b20,
+            fn_00441b20(Ptr<QueuedCharacter>, u32) -> Ptr<QueuedCharacter>
+        ),
+        entry!(
+            0x00441b50,
+            fn_00441b50(Ptr<QueuedCharacter>, u32) -> Ptr<QueuedCharacter>
+        ),
+        entry!(0x00441b80, fn_00441b80(Ptr<QueuedCharacter>)),
+        entry!(0x00441ba0, queued_player_queue_models(Ptr<QueuedCharacter>)),
+        entry!(0x00441c30, fn_00441c30(Ptr<QueuedReference>)),
+        entry!(
+            0x00441c50,
+            fn_00441c50(Ptr<QueuedFileLoad>, u32, u32, u32) -> Ptr<QueuedFileLoad>
+        ),
+        entry!(
+            0x00441cf0,
+            queued_file_load_scalar_deleting_destructor(
+                Ptr<QueuedFileLoad>,
+                u32,
+            ) -> Ptr<QueuedFileLoad>
+        ),
+        entry!(0x00441d20, fn_00441d20(Ptr<QueuedFileLoad>)),
+        entry!(
+            0x00441d80,
+            fn_00441d80(Ptr<QueuedFileLoad>, Ptr, u32) -> Ptr<QueuedFileLoad>
+        ),
+        entry!(0x00441e10, queued_kf_queue_me(Ptr<QueuedKF>)),
+        entry!(0x00441e40, queued_file_load_run(Ptr<QueuedFileLoad>)),
+        entry!(
+            0x00441f80,
+            fn_00441f80(Ptr<QueuedFaceGenFile>, u32, u32, u32) -> Ptr<QueuedFaceGenFile>
+        ),
+        entry!(
+            0x00442010,
+            queued_face_gen_file_scalar_deleting_destructor(
+                Ptr<QueuedFaceGenFile>,
+                u32,
+            ) -> Ptr<QueuedFaceGenFile>
+        ),
+        entry!(0x00442040, fn_00442040(Ptr<QueuedFaceGenFile>)),
+        entry!(
+            0x004420b0,
+            fn_004420b0(Ptr<QueuedFaceGenFile>, Ptr, u32) -> Ptr<QueuedFaceGenFile>
+        ),
+        entry!(
+            0x00442130,
+            fn_00442130(Ptr<QueuedFaceGenFile>, Ptr, Ptr) -> Ptr<QueuedFaceGenFile>
+        ),
+        entry!(
+            0x004421d0,
+            background_clone_thread_background_clone_thread(
+                Ptr<BackgroundCloneThread>,
+                u32,
+            )
+                -> Ptr<BackgroundCloneThread>
+        ),
+        entry!(
+            0x00442290,
+            background_clone_thread_scalar_deleting_destructor(
+                Ptr<BackgroundCloneThread>,
+                u32,
+            )
+                -> Ptr<BackgroundCloneThread>
+        ),
+        entry!(0x004422c0, fn_004422c0(Ptr<BackgroundCloneThread>)),
+        entry!(
+            0x00442350,
+            background_clone_thread_thread_update(Ptr<BackgroundCloneThread>)
+        ),
+        entry!(0x00442580, fn_00442580(Ptr<BackgroundCloneThread>, Ptr)),
+        entry!(0x00442630, fn_00442630(Ptr<BackgroundCloneThread>)),
+        entry!(
+            0x00442650,
+            model_loader_model_loader(Ptr<ModelLoader>) -> Ptr<ModelLoader>
+        ),
+        entry!(0x00442a80, fn_00442a80(Ptr, u32)),
+        entry!(0x00442aa0, model_loader_destructor(Ptr<ModelLoader>)),
+        entry!(0x00443190, fn_00443190(Ptr<Model>) -> i32),
     ]
 }
 
@@ -2983,5 +4336,1538 @@ mod tests {
         e.call(0x0044_12e0, &args![this]);
         assert!(calls_to(&e, MODEL_LOADER_QUEUE_DISMEMBER_PART).is_empty());
         assert_eq!(calls_to(&e, REFERENCE_GET_TES_MODEL).len(), 1);
+    }
+
+    // ---- the batch of 004414c0 to 00443190 ----
+
+    /// Words where doubles of this batch leave what they observed.
+    const SEEN_A: u32 = OBSERVED + 0x10;
+    const SEEN_B: u32 = OBSERVED + 0x14;
+    const SEEN_C: u32 = OBSERVED + 0x18;
+
+    fn noop(e: &mut Engine, addrs: &[u32]) {
+        for addr in addrs {
+            e.register(*addr, |_, _| Ret::default());
+        }
+    }
+
+    /// Doubles for `QueuedActor::QueueModels` and `QueuedReference::
+    /// QueueModels` of a reference without a dismemberment extra or a model.
+    fn actor_models_doubles(e: &mut Engine) {
+        e.register(ACTOR_PREPARE, |_, _| Ret::default());
+        e.register(REFERENCE_EXTRA_LIST, |_, a| (a[0] + 0x44).into_ret());
+        answer(e, EXTRA_GET_DISMEMBERMENT, 0);
+        base_form_double(e);
+        answer(e, REFERENCE_GET_TES_MODEL, 0);
+    }
+
+    /// The doubles for the `QueuedReference` destructor's callees.
+    fn destructor_doubles(e: &mut Engine) {
+        noop(e, &[MODEL_POINTER_RELEASE, QUEUED_FILE_DESTRUCT]);
+    }
+
+    /// A `QueuedCharacter` for `reference` with the test context and priority.
+    fn character(e: &mut Engine, reference: Ptr) -> Ptr<QueuedCharacter> {
+        vtable(e, TASK_VTABLE, &[]);
+        let this = e.new_object::<QueuedCharacter>();
+        e.mem.set_u32(this.addr(), TASK_VTABLE);
+        e.set(this, QueuedCharacter::eContext, CONTEXT);
+        e.set(this, QueuedCharacter::pRef, reference);
+        e.set(this.cast::<IOTask>(), IOTask::Key, (PRIORITY as u64) << 16);
+        this
+    }
+
+    fn entered_lines(e: &Engine) -> Vec<u32> {
+        calls_to(e, MEMORY_CONTEXT_ENTER)
+            .iter()
+            .map(|a| a[4])
+            .collect()
+    }
+
+    #[test]
+    fn character_destructor_releases_helmet_then_head_and_frees_on_request() {
+        let mut e = engine();
+        destructor_doubles(&mut e);
+        let reference = Ptr::<()>::new(0x1000);
+        let this = character(&mut e, reference);
+        e.call_log = Some(vec![]);
+        // Without the delete flag the object is kept.
+        assert_eq!(e.call(0x0044_14c0, &args![this, 0u32]).u32(), this.addr());
+        assert!(calls_to(&e, MEMORY_FREE).is_empty());
+        let released = calls_to(&e, TASK_POINTER_DESTRUCT);
+        assert_eq!(released[0], vec![this.addr() + 0x44]);
+        assert_eq!(released[1], vec![this.addr() + 0x40]);
+        assert_eq!(calls_to(&e, QUEUED_FILE_DESTRUCT), vec![vec![this.addr()]]);
+        // With it, the block is freed after the destructor ran.
+        e.call_log = Some(vec![]);
+        e.call(0x0044_14c0, &args![this, 1u32]);
+        assert_eq!(calls_to(&e, MEMORY_FREE), vec![vec![this.addr()]]);
+        assert_eq!(
+            order_of(&e, &[QUEUED_FILE_DESTRUCT, MEMORY_FREE]),
+            vec![QUEUED_FILE_DESTRUCT, MEMORY_FREE]
+        );
+    }
+
+    #[test]
+    fn character_destructor_body_runs_the_reference_destructor_last() {
+        let mut e = engine();
+        destructor_doubles(&mut e);
+        let this = character(&mut e, Ptr::<()>::new(0x1000));
+        e.call_log = Some(vec![]);
+        e.call(0x0044_14f0, &args![this]);
+        assert_eq!(
+            order_of(&e, &[TASK_POINTER_DESTRUCT, QUEUED_FILE_DESTRUCT]),
+            vec![
+                TASK_POINTER_DESTRUCT,
+                TASK_POINTER_DESTRUCT,
+                TASK_POINTER_DESTRUCT,
+                TASK_POINTER_DESTRUCT,
+                QUEUED_FILE_DESTRUCT
+            ]
+        );
+    }
+
+    #[test]
+    fn character_queue_models_queues_biped_files_head_and_animations() {
+        let mut e = engine();
+        actor_models_doubles(&mut e);
+        e.register(CREATE_BIPED_ANIM, |_, _| 0u32.into_ret());
+        noop(
+            &mut e,
+            &[
+                NPC_SET_BIPED_ANIM,
+                BIPED_QUEUE_FILES,
+                MODEL_LOADER_QUEUE_HEAD,
+                MODEL_LOADER_QUEUE_ANIMATIONS,
+            ],
+        );
+        answer(&mut e, ANSWER_A, 0xb1b1);
+        let reference = reference(&mut e, &[(0x1e8, ANSWER_A)], 0x5000);
+        let this = character(&mut e, reference);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1560, &args![this]);
+        let loader = loader(&e);
+        assert!(calls_to(&e, CREATE_BIPED_ANIM).is_empty());
+        assert_eq!(
+            calls_to(&e, NPC_SET_BIPED_ANIM),
+            vec![vec![0x5000, reference.addr(), 0xb1b1, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, BIPED_QUEUE_FILES),
+            vec![vec![
+                0xb1b1,
+                PRIORITY as u32,
+                this.addr() + 0x44,
+                this.addr()
+            ]]
+        );
+        assert_eq!(
+            calls_to(&e, MODEL_LOADER_QUEUE_HEAD),
+            vec![vec![
+                loader,
+                0x5000,
+                this.addr() + 0x40,
+                PRIORITY as u32,
+                this.addr()
+            ]]
+        );
+        assert_eq!(
+            calls_to(&e, MODEL_LOADER_QUEUE_ANIMATIONS),
+            vec![vec![
+                loader,
+                0x5000 + 0xdc,
+                PRIORITY as u32,
+                this.addr(),
+                reference.addr(),
+                0,
+                0
+            ]]
+        );
+        // The actor and reference tasks ran inside this one's context.
+        assert_eq!(
+            entered_lines(&e),
+            vec![
+                0x8ca,
+                ACTOR_QUEUE_MODELS_SOURCE_LINE,
+                QUEUE_MODELS_SOURCE_LINE
+            ]
+        );
+    }
+
+    #[test]
+    fn character_queue_models_creates_a_biped_when_there_is_none() {
+        let mut e = engine();
+        actor_models_doubles(&mut e);
+        answer(&mut e, CREATE_BIPED_ANIM, 0);
+        noop(
+            &mut e,
+            &[
+                NPC_SET_BIPED_ANIM,
+                BIPED_QUEUE_FILES,
+                MODEL_LOADER_QUEUE_HEAD,
+                MODEL_LOADER_QUEUE_ANIMATIONS,
+            ],
+        );
+        answer(&mut e, ANSWER_A, 0);
+        // A reference without a base form: no animation data either.
+        let reference = reference(&mut e, &[(0x1e8, ANSWER_A)], 0);
+        let this = character(&mut e, reference);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1560, &args![this]);
+        assert_eq!(
+            calls_to(&e, CREATE_BIPED_ANIM),
+            vec![vec![0, reference.addr()]]
+        );
+        assert!(calls_to(&e, NPC_SET_BIPED_ANIM).is_empty());
+        assert!(calls_to(&e, MODEL_LOADER_QUEUE_HEAD).is_empty());
+        let animations = calls_to(&e, MODEL_LOADER_QUEUE_ANIMATIONS);
+        assert_eq!(animations[0][1], 0);
+    }
+
+    #[test]
+    fn character_queue_models_uses_the_biped_the_creation_gives() {
+        let mut e = engine();
+        actor_models_doubles(&mut e);
+        answer(&mut e, CREATE_BIPED_ANIM, 0xc0c0);
+        noop(
+            &mut e,
+            &[
+                NPC_SET_BIPED_ANIM,
+                BIPED_QUEUE_FILES,
+                MODEL_LOADER_QUEUE_HEAD,
+                MODEL_LOADER_QUEUE_ANIMATIONS,
+            ],
+        );
+        answer(&mut e, ANSWER_A, 0);
+        let reference = reference(&mut e, &[(0x1e8, ANSWER_A)], 0x5000);
+        let this = character(&mut e, reference);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1560, &args![this]);
+        assert_eq!(
+            calls_to(&e, NPC_SET_BIPED_ANIM),
+            vec![vec![0x5000, reference.addr(), 0xc0c0, 0]]
+        );
+        assert_eq!(calls_to(&e, BIPED_QUEUE_FILES)[0][0], 0xc0c0);
+    }
+
+    /// Doubles for the character `BackgroundClone` tests: the parent cell is
+    /// loaded (or not), the reference needs no clone, the cloned 3D getter
+    /// reads +0x34, and the attach calls leave the thread-local words they
+    /// see.
+    fn clone_setup(e: &mut Engine, cell_loaded: bool, node: u32) -> Ptr<QueuedCharacter> {
+        e.register(REFERENCE_CELL, |_, _| 0x7000u32.into_ret());
+        answer(e, TES_IS_CELL_LOADED, cell_loaded as u32);
+        answer(e, TES_REFERENCE_PREDICATE, 0);
+        e.register(GET_CLONED_3D, |e, a| e.mem.u32(a[0] + 0x34).into_ret());
+        e.register(REFERENCE_QUERY_005D9F90, |_, _| 0x99u32.into_ret());
+        e.register(HEAD_ATTACH, |e, _| {
+            let tls = e.tls();
+            let reference = e.mem.u32(tls + TLS_CLONE_REFERENCE);
+            let word = e.mem.u32(tls + TLS_CLONE_WORD);
+            e.mem.set_u32(SEEN_A, reference);
+            e.mem.set_u32(SEEN_B, word);
+            Ret::default()
+        });
+        e.register(HELMET_ATTACH, |_, _| Ret::default());
+        let reference = reference(e, &[], 0x5000);
+        let this = character(e, reference);
+        e.mem.set_u32(this.addr() + 0x34, node);
+        let head = e.mem.alloc(8);
+        e.mem.set_u32(this.addr() + 0x40, head);
+        this
+    }
+
+    #[test]
+    fn character_background_clone_attaches_head_and_helmet_with_the_clone_words() {
+        let mut e = engine();
+        let this = clone_setup(&mut e, true, 0x3333);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0044_16c0, &args![this]).bool());
+        let reference = e.get(this, QueuedCharacter::pRef).addr();
+        // The head saw the reference and the cloned 3D in the thread words.
+        assert_eq!(e.mem.u32(SEEN_A), reference);
+        assert_eq!(e.mem.u32(SEEN_B), 0x3333);
+        let head = e.mem.u32(this.addr() + 0x40);
+        assert_eq!(calls_to(&e, HEAD_ATTACH), vec![vec![head, reference, 0x99]]);
+        // They are cleared again, and no helmet was set.
+        let tls = e.tls();
+        assert_eq!(e.mem.u32(tls + TLS_CLONE_REFERENCE), 0);
+        assert_eq!(e.mem.u32(tls + TLS_CLONE_WORD), 0);
+        assert!(calls_to(&e, HELMET_ATTACH).is_empty());
+        assert_eq!(entered_lines(&e), vec![0x8e4, BACKGROUND_CLONE_SOURCE_LINE]);
+    }
+
+    #[test]
+    fn character_background_clone_does_nothing_more_without_a_cloned_3d_or_cell() {
+        // The cell is loaded but the task has no cloned 3D.
+        let mut e = engine();
+        let this = clone_setup(&mut e, true, 0);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0044_16c0, &args![this]).bool());
+        assert!(calls_to(&e, HEAD_ATTACH).is_empty());
+        // The cell is not loaded: the result is false.
+        let mut e = engine();
+        let this = clone_setup(&mut e, false, 0x3333);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0044_16c0, &args![this]).bool());
+        assert!(calls_to(&e, GET_CLONED_3D).is_empty());
+    }
+
+    #[test]
+    fn clone_words_are_set_and_cleared_in_the_tls_block() {
+        let mut e = engine();
+        e.call(0x0044_1780, &args![Ptr::<()>::new(0x1234), 0x5678u32]);
+        let tls = e.tls();
+        assert_eq!(e.mem.u32(tls + 0x264), 0x1234);
+        assert_eq!(e.mem.u32(tls + 0x260), 0x5678);
+        e.call(0x0044_17c0, &args![]);
+        assert_eq!(e.mem.u32(tls + 0x264), 0);
+        assert_eq!(e.mem.u32(tls + 0x260), 0);
+    }
+
+    #[test]
+    fn character_attach_is_the_reference_attach() {
+        // A task in state 6 leaves the attach after entering its context.
+        let mut e = engine();
+        answer(&mut e, TASK_STATE_IS_6, 1);
+        let this = task(&mut e, Ptr::<()>::new(0x1000));
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1800, &args![this]);
+        assert_eq!(entered_lines(&e), vec![ATTACH_SOURCE_LINE]);
+        assert!(calls_to(&e, REFERENCE_CELL).is_empty());
+        // The player's attach is the same function.
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1c30, &args![this]);
+        assert_eq!(entered_lines(&e), vec![ATTACH_SOURCE_LINE]);
+    }
+
+    #[test]
+    fn character_finish_attach_attaches_only_without_a_cloned_3d() {
+        let mut e = engine();
+        let this = clone_setup(&mut e, true, 0);
+        noop(&mut e, &[FINISH_ATTACH_BASE]);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1820, &args![this]);
+        assert_eq!(calls_to(&e, FINISH_ATTACH_BASE), vec![vec![this.addr()]]);
+        assert_eq!(calls_to(&e, HEAD_ATTACH).len(), 1);
+        assert_eq!(entered_lines(&e), vec![0x8ff]);
+        // With a cloned 3D nothing is attached.
+        e.mem.set_u32(this.addr() + 0x34, 0x3333);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1820, &args![this]);
+        assert!(calls_to(&e, HEAD_ATTACH).is_empty());
+    }
+
+    #[test]
+    fn character_attach_helper_attaches_the_head_then_the_helmet() {
+        let mut e = engine();
+        let this = clone_setup(&mut e, true, 0);
+        let helmet = e.mem.alloc(8);
+        e.mem.set_u32(this.addr() + 0x44, helmet);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_18b0, &args![this]);
+        let reference = e.get(this, QueuedCharacter::pRef).addr();
+        let head = e.mem.u32(this.addr() + 0x40);
+        assert_eq!(
+            order_of(&e, &[HEAD_ATTACH, HELMET_ATTACH]),
+            vec![HEAD_ATTACH, HELMET_ATTACH]
+        );
+        assert_eq!(calls_to(&e, HEAD_ATTACH), vec![vec![head, reference, 0x99]]);
+        assert_eq!(calls_to(&e, HELMET_ATTACH), vec![vec![helmet]]);
+        // Neither task: nothing is attached.
+        e.mem.set_u32(this.addr() + 0x40, 0);
+        e.mem.set_u32(this.addr() + 0x44, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_18b0, &args![this]);
+        assert!(calls_to(&e, HEAD_ATTACH).is_empty());
+        assert!(calls_to(&e, HELMET_ATTACH).is_empty());
+    }
+
+    /// The doubles of the `QueuedReference` constructor.
+    fn constructor_doubles(e: &mut Engine) {
+        e.register(QUEUED_FILE_CONSTRUCT, |_, a| a[0].into_ret());
+    }
+
+    #[test]
+    fn creature_constructor_sets_the_reference_and_the_creature_table() {
+        let mut e = engine();
+        constructor_doubles(&mut e);
+        let this = e.new_object::<QueuedReference>();
+        let result = e.call(0x0044_1920, &args![this, Ptr::<()>::new(0x4444), 0x31u32]);
+        assert_eq!(result.u32(), this.addr());
+        assert_eq!(e.mem.u32(this.addr()), 0x0101_6d34);
+        assert_eq!(e.get(this, QueuedReference::pRef).addr(), 0x4444);
+    }
+
+    #[test]
+    fn creature_destructor_runs_the_reference_destructor() {
+        let mut e = engine();
+        destructor_doubles(&mut e);
+        let this = e.new_object::<QueuedReference>();
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1980, &args![this]);
+        assert_eq!(calls_to(&e, QUEUED_FILE_DESTRUCT), vec![vec![this.addr()]]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0044_1950, &args![this, 1u32]).u32(), this.addr());
+        assert_eq!(calls_to(&e, MEMORY_FREE), vec![vec![this.addr()]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1950, &args![this, 0u32]);
+        assert!(calls_to(&e, MEMORY_FREE).is_empty());
+    }
+
+    /// A creature task whose reference has the given package (0 for none)
+    /// and base form; `default_worn` is the answer of `005f1590`.
+    fn creature_setup(
+        e: &mut Engine,
+        package: u32,
+        default_worn: u32,
+        form: u32,
+    ) -> Ptr<QueuedReference> {
+        actor_models_doubles(e);
+        answer(e, GET_CURRENT_PACKAGE, package);
+        answer(e, SHOULD_RUN_INIT_DEFAULT_WORN, default_worn);
+        noop(
+            e,
+            &[
+                CREATURE_INIT_WORN,
+                CREATURE_INIT_DEFAULT_WORN,
+                MODEL_LOADER_QUEUE_ANIMATIONS,
+                MODEL_LOADER_QUEUE_CREATURE_PARTS,
+            ],
+        );
+        let reference = reference(e, &[], form);
+        task(e, reference)
+    }
+
+    #[test]
+    fn creature_queue_models_inits_the_default_worn_items_with_the_flag() {
+        // No package: the flag stays 1.
+        let mut e = engine();
+        let this = creature_setup(&mut e, 0, 1, 0x5000);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_19a0, &args![this]);
+        let reference = e.get(this, QueuedReference::pRef).addr();
+        let loader = loader(&e);
+        assert_eq!(
+            calls_to(&e, CREATURE_INIT_DEFAULT_WORN),
+            vec![vec![0x5000, reference, 1, 1, 0]]
+        );
+        assert!(calls_to(&e, CREATURE_INIT_WORN).is_empty());
+        assert_eq!(
+            calls_to(&e, MODEL_LOADER_QUEUE_ANIMATIONS),
+            vec![vec![
+                loader,
+                0x5000 + 0xdc,
+                PRIORITY as u32,
+                this.addr(),
+                reference,
+                1,
+                0
+            ]]
+        );
+        assert_eq!(
+            calls_to(&e, MODEL_LOADER_QUEUE_CREATURE_PARTS),
+            vec![vec![
+                loader,
+                0x5000 + 0xdc,
+                PRIORITY as u32,
+                this.addr(),
+                reference
+            ]]
+        );
+        assert_eq!(
+            order_of(
+                &e,
+                &[
+                    CREATURE_INIT_DEFAULT_WORN,
+                    MODEL_LOADER_QUEUE_ANIMATIONS,
+                    MODEL_LOADER_QUEUE_CREATURE_PARTS,
+                    REFERENCE_GET_TES_MODEL
+                ]
+            ),
+            vec![
+                CREATURE_INIT_DEFAULT_WORN,
+                MODEL_LOADER_QUEUE_ANIMATIONS,
+                MODEL_LOADER_QUEUE_CREATURE_PARTS,
+                REFERENCE_GET_TES_MODEL
+            ]
+        );
+        assert_eq!(entered_lines(&e)[0], 0x925);
+    }
+
+    #[test]
+    fn creature_queue_models_clears_the_flag_for_a_package_with_the_bit() {
+        let mut e = engine();
+        let package = e.mem.alloc(0x40);
+        e.mem.set_u32(package + 0x1c, 0x0020_0000);
+        let this = creature_setup(&mut e, package, 1, 0x5000);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_19a0, &args![this]);
+        let defaults = calls_to(&e, CREATURE_INIT_DEFAULT_WORN);
+        assert_eq!(defaults[0][3], 0);
+        // A package without the bit keeps it.
+        let mut e = engine();
+        let package = e.mem.alloc(0x40);
+        e.mem.set_u32(package + 0x1c, 0x0010_0000);
+        let this = creature_setup(&mut e, package, 1, 0x5000);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_19a0, &args![this]);
+        assert_eq!(calls_to(&e, CREATURE_INIT_DEFAULT_WORN)[0][3], 1);
+    }
+
+    #[test]
+    fn creature_queue_models_inits_plain_worn_items_and_handles_no_base_form() {
+        let mut e = engine();
+        let this = creature_setup(&mut e, 0, 0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_19a0, &args![this]);
+        let reference = e.get(this, QueuedReference::pRef).addr();
+        assert_eq!(calls_to(&e, CREATURE_INIT_WORN), vec![vec![0, reference]]);
+        assert!(calls_to(&e, CREATURE_INIT_DEFAULT_WORN).is_empty());
+        // No base form: no animation data.
+        assert_eq!(calls_to(&e, MODEL_LOADER_QUEUE_ANIMATIONS)[0][1], 0);
+        assert_eq!(calls_to(&e, MODEL_LOADER_QUEUE_CREATURE_PARTS)[0][1], 0);
+    }
+
+    #[test]
+    fn package_predicate_tests_bit_0x200000_at_0x1c() {
+        let mut e = engine();
+        let package = e.mem.alloc(0x40);
+        assert!(!e.call(0x0044_1b00, &args![Ptr::<()>::new(package)]).bool());
+        e.mem.set_u32(package + 0x1c, 0x0020_0000);
+        assert!(e.call(0x0044_1b00, &args![Ptr::<()>::new(package)]).bool());
+        e.mem.set_u32(package + 0x1c, 0xffdf_ffff);
+        assert!(!e.call(0x0044_1b00, &args![Ptr::<()>::new(package)]).bool());
+    }
+
+    #[test]
+    fn player_constructor_uses_the_special_reference() {
+        let mut e = engine();
+        constructor_doubles(&mut e);
+        e.set_global(SPECIAL_REFERENCE, 0x6666u32);
+        let this = e.new_object::<QueuedCharacter>();
+        let result = e.call(0x0044_1b20, &args![this, 0x31u32]);
+        assert_eq!(result.u32(), this.addr());
+        assert_eq!(e.mem.u32(this.addr()), 0x0101_6d7c);
+        assert_eq!(e.get(this, QueuedCharacter::pRef).addr(), 0x6666);
+        // The head and helmet pointers were made empty.
+        assert_eq!(e.mem.u32(this.addr() + 0x40), 0);
+        assert_eq!(e.mem.u32(this.addr() + 0x44), 0);
+    }
+
+    #[test]
+    fn player_destructor_runs_the_character_destructor() {
+        let mut e = engine();
+        destructor_doubles(&mut e);
+        let this = character(&mut e, Ptr::<()>::new(0x1000));
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1b80, &args![this]);
+        assert_eq!(calls_to(&e, TASK_POINTER_DESTRUCT).len(), 4);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0044_1b50, &args![this, 1u32]).u32(), this.addr());
+        assert_eq!(calls_to(&e, MEMORY_FREE), vec![vec![this.addr()]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1b50, &args![this, 0u32]);
+        assert!(calls_to(&e, MEMORY_FREE).is_empty());
+    }
+
+    #[test]
+    fn player_queue_models_asks_the_player_then_queues_the_character() {
+        let mut e = engine();
+        actor_models_doubles(&mut e);
+        e.set_global(SPECIAL_REFERENCE, 0x6666u32);
+        noop(
+            &mut e,
+            &[
+                PLAYER_QUEUE_FILES,
+                NPC_SET_BIPED_ANIM,
+                BIPED_QUEUE_FILES,
+                MODEL_LOADER_QUEUE_HEAD,
+                MODEL_LOADER_QUEUE_ANIMATIONS,
+            ],
+        );
+        answer(&mut e, ANSWER_A, 0xb1b1);
+        let reference = reference(&mut e, &[(0x1e8, ANSWER_A)], 0x5000);
+        let this = character(&mut e, reference);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1ba0, &args![this]);
+        assert_eq!(
+            calls_to(&e, PLAYER_QUEUE_FILES),
+            vec![vec![0x6666, PRIORITY as u32, this.addr()]]
+        );
+        assert_eq!(
+            order_of(&e, &[PLAYER_QUEUE_FILES, MODEL_LOADER_QUEUE_HEAD]),
+            vec![PLAYER_QUEUE_FILES, MODEL_LOADER_QUEUE_HEAD]
+        );
+        assert_eq!(entered_lines(&e)[..2], [0x94e, 0x8ca]);
+    }
+
+    /// Doubles for the `QueuedFileEntry` functions the file load tasks use;
+    /// `00449050` adds 100 to its kind so that the tests can tell it apart.
+    fn file_entry_doubles(e: &mut Engine) {
+        e.register(QUEUED_FILE_ENTRY_CONSTRUCT, |_, a| a[0].into_ret());
+        noop(
+            e,
+            &[
+                QUEUED_FILE_ENTRY_DESTRUCT,
+                QUEUED_FILE_ENTRY_SET_NAME,
+                QUEUED_FILE_ENTRY_SET_INDEX,
+                MESH_DATA_POINTER_CONSTRUCT,
+                MESH_DATA_POINTER_DESTRUCT,
+                LOADED_FILE_POINTER_DESTRUCT,
+                TASK_SET_STATE_5,
+            ],
+        );
+        e.register(FILE_INDEX_OF_KIND, |_, a| (a[0] + 100).into_ret());
+        for addr in [LOADED_FILE_POINTER_CONSTRUCT, LOADED_FILE_POINTER_ASSIGN] {
+            e.register(addr, |e, a| {
+                e.mem.set_u32(a[0], a[1]);
+                a[0].into_ret()
+            });
+        }
+        e.register(MESH_DATA_POINTER_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            a[0].into_ret()
+        });
+    }
+
+    #[test]
+    fn file_load_constructor_names_the_file_and_finds_its_entry() {
+        let mut e = engine();
+        file_entry_doubles(&mut e);
+        let this = e.new_object::<QueuedFileLoad>();
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0044_1c50, &args![this, 0x7777u32, 0x31u32, 2u32]);
+        assert_eq!(result.u32(), this.addr());
+        assert_eq!(e.mem.u32(this.addr()), 0x0101_6dc4);
+        assert_eq!(e.get(this, QueuedFileLoad::eFileIndex), 2);
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_ENTRY_CONSTRUCT),
+            vec![vec![this.addr(), 0x31]]
+        );
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_ENTRY_SET_NAME),
+            vec![vec![this.addr(), 0x7777]]
+        );
+        assert_eq!(calls_to(&e, FILE_INDEX_OF_KIND), vec![vec![2]]);
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_ENTRY_SET_INDEX),
+            vec![vec![this.addr(), 102]]
+        );
+        assert_eq!(
+            order_of(
+                &e,
+                &[
+                    QUEUED_FILE_ENTRY_CONSTRUCT,
+                    QUEUED_FILE_ENTRY_SET_NAME,
+                    QUEUED_FILE_ENTRY_SET_INDEX
+                ]
+            ),
+            vec![
+                QUEUED_FILE_ENTRY_CONSTRUCT,
+                QUEUED_FILE_ENTRY_SET_NAME,
+                QUEUED_FILE_ENTRY_SET_INDEX
+            ]
+        );
+    }
+
+    #[test]
+    fn file_load_destructors_release_the_loaded_file_and_free_on_request() {
+        let mut e = engine();
+        file_entry_doubles(&mut e);
+        let this = e.new_object::<QueuedFileLoad>();
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1d20, &args![this]);
+        assert_eq!(
+            calls_to(&e, LOADED_FILE_POINTER_DESTRUCT),
+            vec![vec![this.addr() + 0x30]]
+        );
+        assert_eq!(
+            order_of(
+                &e,
+                &[LOADED_FILE_POINTER_DESTRUCT, QUEUED_FILE_ENTRY_DESTRUCT]
+            ),
+            vec![LOADED_FILE_POINTER_DESTRUCT, QUEUED_FILE_ENTRY_DESTRUCT]
+        );
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0044_1cf0, &args![this, 1u32]).u32(), this.addr());
+        assert_eq!(calls_to(&e, MEMORY_FREE), vec![vec![this.addr()]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1cf0, &args![this, 0u32]);
+        assert!(calls_to(&e, MEMORY_FREE).is_empty());
+        assert_eq!(calls_to(&e, QUEUED_FILE_ENTRY_DESTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn loaded_file_constructor_takes_the_file_and_finishes_the_task() {
+        let mut e = engine();
+        file_entry_doubles(&mut e);
+        let this = e.new_object::<QueuedFileLoad>();
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0044_1d80, &args![this, Ptr::<()>::new(0x8888), 0x31u32]);
+        assert_eq!(result.u32(), this.addr());
+        assert_eq!(e.mem.u32(this.addr()), 0x0101_6dc4);
+        assert_eq!(e.get(this, QueuedFileLoad::eFileIndex), 3);
+        assert_eq!(e.mem.u32(this.addr() + 0x30), 0x8888);
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_ENTRY_CONSTRUCT),
+            vec![vec![this.addr(), 0x31]]
+        );
+        assert_eq!(calls_to(&e, TASK_SET_STATE_5), vec![vec![this.addr()]]);
+    }
+
+    #[test]
+    fn kf_queue_me_calls_the_io_manager_virtual_function_0x48() {
+        let mut e = engine();
+        vtable(&mut e, OBJECT_VTABLE, &[(0x48, SLOT_A)]);
+        let manager = object(&mut e, OBJECT_VTABLE, 0x20);
+        e.set_global(TASK_QUEUE, manager);
+        let this = e.new_object::<QueuedKF>();
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1e10, &args![this]);
+        assert_eq!(calls_to(&e, SLOT_A), vec![vec![manager, this.addr()]]);
+    }
+
+    /// A file load task for `name` with the given kind, and doubles for the
+    /// loader's lookup (`found`), `GetFile` (`file`) and the `LoadedFile`
+    /// construction.
+    fn file_load_setup(e: &mut Engine, found: u32, file: u32) -> Ptr<QueuedFileLoad> {
+        file_entry_doubles(e);
+        e.register(QUEUED_FILE_ENTRY_GET_NAME, |_, _| 0x7777u32.into_ret());
+        answer(e, MODEL_LOADER_FIND_LOADED_FILE, found);
+        answer(e, QUEUED_FILE_ENTRY_GET_FILE, file);
+        e.register(NI_ALLOC, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(LOADED_FILE_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(LOG_MESSAGE, |_, _| Ret::default());
+        let this = e.new_object::<QueuedFileLoad>();
+        e.set(this, QueuedFileLoad::eContext, CONTEXT);
+        e.set(this, QueuedFileLoad::eFileIndex, 1);
+        this
+    }
+
+    #[test]
+    fn file_load_run_keeps_a_file_the_loader_already_has() {
+        let mut e = engine();
+        let this = file_load_setup(&mut e, 0x4242, 0x1111);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1e40, &args![this]);
+        let loader = loader(&e);
+        assert_eq!(
+            calls_to(&e, MODEL_LOADER_FIND_LOADED_FILE),
+            vec![vec![loader, 0x7777]]
+        );
+        assert_eq!(e.mem.u32(this.addr() + 0x30), 0x4242);
+        assert!(calls_to(&e, QUEUED_FILE_ENTRY_GET_FILE).is_empty());
+        assert_eq!(entered_lines(&e), vec![0x976]);
+        assert_eq!(calls_to(&e, MEMORY_CONTEXT_LEAVE).len(), 1);
+    }
+
+    #[test]
+    fn file_load_run_builds_a_loaded_file_for_the_file_it_finds() {
+        let mut e = engine();
+        let this = file_load_setup(&mut e, 0, 0x1111);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1e40, &args![this]);
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_ENTRY_GET_FILE),
+            vec![vec![this.addr(), 101, 0xffff]]
+        );
+        assert_eq!(calls_to(&e, NI_ALLOC), vec![vec![0x10]]);
+        let block = e.mem.u32(this.addr() + 0x30);
+        assert_ne!(block, 0);
+        assert_eq!(
+            calls_to(&e, LOADED_FILE_CONSTRUCT),
+            vec![vec![block, 0x7777, 0x1111]]
+        );
+        assert!(calls_to(&e, LOG_MESSAGE).is_empty());
+    }
+
+    #[test]
+    fn file_load_run_stores_nothing_when_the_allocation_fails() {
+        let mut e = engine();
+        let this = file_load_setup(&mut e, 0, 0x1111);
+        e.register(NI_ALLOC, |_, _| 0u32.into_ret());
+        e.mem.set_u32(this.addr() + 0x30, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1e40, &args![this]);
+        assert!(calls_to(&e, LOADED_FILE_CONSTRUCT).is_empty());
+        assert_eq!(e.mem.u32(this.addr() + 0x30), 0);
+        // The assign function was still called, with a null file.
+        assert_eq!(
+            calls_to(&e, LOADED_FILE_POINTER_ASSIGN).last().unwrap(),
+            &vec![this.addr() + 0x30, 0]
+        );
+    }
+
+    #[test]
+    fn file_load_run_logs_a_missing_file() {
+        let mut e = engine();
+        let this = file_load_setup(&mut e, 0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_1e40, &args![this]);
+        assert_eq!(calls_to(&e, LOG_MESSAGE), vec![vec![0x0101_6df4, 0x7777]]);
+        assert!(calls_to(&e, NI_ALLOC).is_empty());
+        assert_eq!(calls_to(&e, MEMORY_CONTEXT_LEAVE).len(), 1);
+    }
+
+    #[test]
+    fn face_gen_file_constructors_set_the_table_and_empty_pointers() {
+        // From a file name.
+        let mut e = engine();
+        file_entry_doubles(&mut e);
+        let this = e.new_object::<QueuedFaceGenFile>();
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0044_1f80, &args![this, 0x7777u32, 0x31u32, 0u32]);
+        assert_eq!(result.u32(), this.addr());
+        assert_eq!(e.mem.u32(this.addr()), 0x0101_6e1c);
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_ENTRY_SET_NAME),
+            vec![vec![this.addr(), 0x7777]]
+        );
+        assert_eq!(
+            calls_to(&e, NI_POINTER_CONSTRUCT),
+            vec![vec![this.addr() + 0x38, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, MESH_DATA_POINTER_CONSTRUCT),
+            vec![vec![this.addr() + 0x3c, 0]]
+        );
+        // From an already loaded file.
+        let mut e = engine();
+        file_entry_doubles(&mut e);
+        let this = e.new_object::<QueuedFaceGenFile>();
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0044_20b0, &args![this, Ptr::<()>::new(0x8888), 0x31u32]);
+        assert_eq!(result.u32(), this.addr());
+        assert_eq!(e.mem.u32(this.addr()), 0x0101_6e1c);
+        assert_eq!(e.mem.u32(this.addr() + 0x30), 0x8888);
+        assert_eq!(calls_to(&e, TASK_SET_STATE_5), vec![vec![this.addr()]]);
+        assert_eq!(calls_to(&e, NI_POINTER_CONSTRUCT).len(), 1);
+        assert_eq!(calls_to(&e, MESH_DATA_POINTER_CONSTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn face_gen_file_constructor_from_models_assigns_both_pointers() {
+        let mut e = engine();
+        file_entry_doubles(&mut e);
+        let this = e.new_object::<QueuedFaceGenFile>();
+        e.call_log = Some(vec![]);
+        let result = e.call(
+            0x0044_2130,
+            &args![this, Ptr::<()>::new(0xaaaa), Ptr::<()>::new(0xbbbb)],
+        );
+        assert_eq!(result.u32(), this.addr());
+        assert_eq!(e.mem.u32(this.addr()), 0x0101_6e1c);
+        assert_eq!(e.mem.u32(this.addr() + 0x38), 0xaaaa);
+        assert_eq!(e.mem.u32(this.addr() + 0x3c), 0xbbbb);
+        // The loaded file constructor ran with no file and the context 5.
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_ENTRY_CONSTRUCT),
+            vec![vec![this.addr(), 5]]
+        );
+        assert_eq!(
+            e.get(this.cast::<QueuedFileLoad>(), QueuedFileLoad::eFileIndex),
+            3
+        );
+    }
+
+    #[test]
+    fn face_gen_file_destructors_release_both_pointers_then_the_file_load() {
+        let mut e = engine();
+        file_entry_doubles(&mut e);
+        let this = e.new_object::<QueuedFaceGenFile>();
+        e.call_log = Some(vec![]);
+        e.call(0x0044_2040, &args![this]);
+        assert_eq!(
+            calls_to(&e, MESH_DATA_POINTER_DESTRUCT),
+            vec![vec![this.addr() + 0x3c]]
+        );
+        assert_eq!(
+            calls_to(&e, NI_POINTER_DESTRUCT),
+            vec![vec![this.addr() + 0x38]]
+        );
+        assert_eq!(
+            order_of(
+                &e,
+                &[
+                    MESH_DATA_POINTER_DESTRUCT,
+                    NI_POINTER_DESTRUCT,
+                    LOADED_FILE_POINTER_DESTRUCT,
+                    QUEUED_FILE_ENTRY_DESTRUCT
+                ]
+            ),
+            vec![
+                MESH_DATA_POINTER_DESTRUCT,
+                NI_POINTER_DESTRUCT,
+                LOADED_FILE_POINTER_DESTRUCT,
+                QUEUED_FILE_ENTRY_DESTRUCT
+            ]
+        );
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0044_2010, &args![this, 1u32]).u32(), this.addr());
+        assert_eq!(calls_to(&e, MEMORY_FREE), vec![vec![this.addr()]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_2010, &args![this, 0u32]);
+        assert!(calls_to(&e, MEMORY_FREE).is_empty());
+    }
+
+    /// Doubles for the `BSTaskThread` constructor and the clone queue.
+    fn thread_doubles(e: &mut Engine) {
+        e.register(TASK_THREAD_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(CLONE_QUEUE_CONSTRUCT, |_, a| a[0].into_ret());
+        noop(e, &[TASK_THREAD_DESTRUCT]);
+    }
+
+    #[test]
+    fn background_clone_thread_constructor_makes_the_queue() {
+        let mut e = engine();
+        thread_doubles(&mut e);
+        let this = e.new_object::<BackgroundCloneThread>();
+        e.mem.set_u8(this.addr() + 0x30, 9);
+        e.mem.set_u32(this.addr() + 0x34, 9);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0044_21d0, &args![this, 10u32]);
+        assert_eq!(result.u32(), this.addr());
+        assert_eq!(e.mem.u32(this.addr()), 0x0101_6e50);
+        assert_eq!(
+            calls_to(&e, TASK_THREAD_CONSTRUCT),
+            vec![vec![this.addr(), 3, 0x0101_6e58]]
+        );
+        assert_eq!(e.get(this, BackgroundCloneThread::bExit), 0);
+        assert_eq!(e.get(this, BackgroundCloneThread::iRunningCount), 0);
+        let queue = e.get(this, BackgroundCloneThread::pCloneReferencesQueue);
+        assert!(!queue.is_null());
+        assert_eq!(calls_to(&e, MEMORY_ALLOC), vec![vec![0x40]]);
+        assert_eq!(
+            calls_to(&e, CLONE_QUEUE_CONSTRUCT),
+            vec![vec![queue.addr(), 10, 8]]
+        );
+    }
+
+    #[test]
+    fn background_clone_thread_constructor_leaves_the_queue_null_when_allocation_fails() {
+        let mut e = engine();
+        thread_doubles(&mut e);
+        e.register(MEMORY_ALLOC, |_, _| 0u32.into_ret());
+        let this = e.new_object::<BackgroundCloneThread>();
+        e.mem.set_u32(this.addr() + 0x38, 0x1234);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_21d0, &args![this, 10u32]);
+        assert!(e
+            .get(this, BackgroundCloneThread::pCloneReferencesQueue)
+            .is_null());
+        assert!(calls_to(&e, CLONE_QUEUE_CONSTRUCT).is_empty());
+    }
+
+    #[test]
+    fn background_clone_thread_destructor_deletes_the_queue() {
+        let mut e = engine();
+        thread_doubles(&mut e);
+        vtable(&mut e, OBJECT_VTABLE, &[(0x0, SLOT_A)]);
+        let queue = object(&mut e, OBJECT_VTABLE, 0x20);
+        let this = e.new_object::<BackgroundCloneThread>();
+        e.set(
+            this,
+            BackgroundCloneThread::pCloneReferencesQueue,
+            Ptr::<()>::new(queue),
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0044_22c0, &args![this]);
+        assert_eq!(e.mem.u32(this.addr()), 0x0101_6e50);
+        assert_eq!(calls_to(&e, SLOT_A), vec![vec![queue, 1]]);
+        assert_eq!(calls_to(&e, TASK_THREAD_DESTRUCT), vec![vec![this.addr()]]);
+        // Without a queue only the base destructor runs.
+        e.set(
+            this,
+            BackgroundCloneThread::pCloneReferencesQueue,
+            Ptr::<()>::NULL,
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0044_22c0, &args![this]);
+        assert!(calls_to(&e, SLOT_A).is_empty());
+        assert_eq!(calls_to(&e, TASK_THREAD_DESTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn background_clone_thread_scalar_deleting_destructor_frees_on_request() {
+        let mut e = engine();
+        thread_doubles(&mut e);
+        let this = e.new_object::<BackgroundCloneThread>();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0044_2290, &args![this, 1u32]).u32(), this.addr());
+        assert_eq!(calls_to(&e, MEMORY_FREE), vec![vec![this.addr()]]);
+        assert_eq!(calls_to(&e, TASK_THREAD_DESTRUCT).len(), 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_2290, &args![this, 0u32]);
+        assert!(calls_to(&e, MEMORY_FREE).is_empty());
+    }
+
+    /// A task for the thread tests: state at +0xC.
+    fn clone_task(e: &mut Engine, state: u32) -> u32 {
+        let task = object(e, TASK_VTABLE, 0x40);
+        e.mem.set_u32(task + 0xc, state);
+        task
+    }
+
+    /// Doubles for `ThreadUpdate`: the wait sets `bExit` the second time it
+    /// is called, the pops hand out the given tasks in order and then
+    /// nothing, and the state functions follow the state word.
+    fn thread_update_setup(e: &mut Engine, tasks: Vec<u32>) -> Ptr<BackgroundCloneThread> {
+        let mut waits = 0;
+        e.register_double(THREAD_WAIT_FOR_WORK, move |e, a| {
+            waits += 1;
+            if waits == 2 {
+                e.mem.set_u8(a[0] + 0x30, 1);
+            }
+            Ret::default()
+        });
+        let mut tasks = tasks.into_iter();
+        e.register_double(CLONE_QUEUE_POP, move |e, a| {
+            e.mem.set_u32(a[1], tasks.next().unwrap_or(0));
+            Ret::default()
+        });
+        noop(
+            e,
+            &[
+                INTERLOCKED_INCREMENT,
+                THREAD_BEFORE_TASK,
+                THREAD_AFTER_TASK,
+                EMPTY_FUNCTION,
+                IOMANAGER_ADD_POST_PROCESS_TASK,
+            ],
+        );
+        decrement(e);
+        e.register(TASK_GET_STATE, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        e.register(TASK_STATE_IS_6, |e, a| {
+            ((e.mem.u32(a[0] + 0xc) == 6) as u32).into_ret()
+        });
+        e.register(TASK_CHANGE_STATE, |e, a| {
+            // Changes the state word when it is the expected one.
+            let ok = e.mem.u32(a[0] + 0xc) == a[1];
+            if ok {
+                e.mem.set_u32(a[0] + 0xc, a[2]);
+            }
+            (ok as u32).into_ret()
+        });
+        vtable(e, TASK_VTABLE, &[(0x38, ANSWER_A)]);
+        let this = e.new_object::<BackgroundCloneThread>();
+        let queue = e.mem.alloc(0x40);
+        e.set(
+            this,
+            BackgroundCloneThread::pCloneReferencesQueue,
+            Ptr::<()>::new(queue),
+        );
+        e.mem.set_u32(this.addr() + 0x34, 5);
+        this
+    }
+
+    #[test]
+    fn thread_update_post_processes_a_task_that_wants_it() {
+        let mut e = engine();
+        // The task is in state 2; the thread moves it to 3 and then 5.
+        let this = thread_update_setup(&mut e, vec![]);
+        let task = clone_task(&mut e, 2);
+        // Replace the pops: the first round hands out the task.
+        let mut once = vec![task].into_iter();
+        e.register_double(CLONE_QUEUE_POP, move |e, a| {
+            e.mem.set_u32(a[1], once.next().unwrap_or(0));
+            Ret::default()
+        });
+        answer(&mut e, ANSWER_A, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_2350, &args![this]);
+        assert_eq!(
+            calls_to(&e, TASK_CHANGE_STATE),
+            vec![vec![task, 2, 3], vec![task, 3, 5]]
+        );
+        assert_eq!(
+            calls_to(&e, IOMANAGER_ADD_POST_PROCESS_TASK),
+            vec![vec![task]]
+        );
+        assert_eq!(e.mem.u32(task + 0xc), 5);
+        // Two rounds ran, each counted running and then done.
+        assert_eq!(calls_to(&e, INTERLOCKED_INCREMENT).len(), 2);
+        assert_eq!(calls_to(&e, INTERLOCKED_DECREMENT).len(), 2);
+        assert_eq!(e.mem.i32(this.addr() + 0x34), 3);
+        // The task bracketing calls: once per task, and once for the
+        // empty round.
+        assert_eq!(calls_to(&e, THREAD_BEFORE_TASK).len(), 2);
+        assert_eq!(calls_to(&e, THREAD_AFTER_TASK).len(), 2);
+        assert_eq!(calls_to(&e, TASK_POINTER_DESTRUCT).len(), 2);
+    }
+
+    #[test]
+    fn thread_update_skips_finished_and_unchangeable_tasks_and_unwanted_post_processing() {
+        let mut e = engine();
+        let this = thread_update_setup(&mut e, vec![]);
+        let finished = clone_task(&mut e, 6);
+        let changed_elsewhere = clone_task(&mut e, 4);
+        let quiet = clone_task(&mut e, 2);
+        // One round hands out three tasks one after the other.
+        let mut tasks = vec![finished, changed_elsewhere, quiet].into_iter();
+        e.register_double(CLONE_QUEUE_POP, move |e, a| {
+            e.mem.set_u32(a[1], tasks.next().unwrap_or(0));
+            Ret::default()
+        });
+        // The state getter reports 2 for the second task so that the
+        // exchange to 3 fails.
+        e.register_double(TASK_GET_STATE, move |e, a| {
+            if a[0] == changed_elsewhere {
+                2u32.into_ret()
+            } else {
+                e.mem.u32(a[0] + 0xc).into_ret()
+            }
+        });
+        answer(&mut e, ANSWER_A, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_2350, &args![this]);
+        // Only the third task changed state, and it needs no post processing.
+        assert_eq!(
+            calls_to(&e, TASK_CHANGE_STATE),
+            vec![
+                vec![changed_elsewhere, 2, 3],
+                vec![quiet, 2, 3],
+                vec![quiet, 3, 5]
+            ]
+        );
+        assert!(calls_to(&e, IOMANAGER_ADD_POST_PROCESS_TASK).is_empty());
+        assert_eq!(e.mem.u32(finished + 0xc), 6);
+        assert_eq!(e.mem.u32(changed_elsewhere + 0xc), 4);
+        assert_eq!(e.mem.u32(quiet + 0xc), 5);
+        assert_eq!(calls_to(&e, THREAD_BEFORE_TASK).len(), 4);
+    }
+
+    #[test]
+    fn thread_update_without_a_flag_change_does_not_run_when_exit_is_set() {
+        let mut e = engine();
+        let this = thread_update_setup(&mut e, vec![]);
+        e.mem.set_u8(this.addr() + 0x30, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_2350, &args![this]);
+        assert!(calls_to(&e, THREAD_WAIT_FOR_WORK).is_empty());
+        assert!(calls_to(&e, INTERLOCKED_INCREMENT).is_empty());
+    }
+
+    #[test]
+    fn thread_queue_add_wraps_the_task_and_wakes_the_thread() {
+        let mut e = engine();
+        noop(&mut e, &[FINISHED_QUEUE_ADD, THREAD_WAKE]);
+        let this = e.new_object::<BackgroundCloneThread>();
+        let queue = e.mem.alloc(0x40);
+        e.set(
+            this,
+            BackgroundCloneThread::pCloneReferencesQueue,
+            Ptr::<()>::new(queue),
+        );
+        e.register(FINISHED_QUEUE_ADD, |e, a| {
+            // The temporary task pointer holds the task.
+            let task = e.mem.u32(a[1]);
+            e.mem.set_u32(SEEN_C, task);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0044_2580, &args![this, Ptr::<()>::new(0x9999)]);
+        assert_eq!(e.mem.u32(SEEN_C), 0x9999);
+        let added = calls_to(&e, FINISHED_QUEUE_ADD);
+        assert_eq!(added[0][0], queue);
+        assert_eq!(calls_to(&e, TASK_POINTER_CONSTRUCT)[0][1], 0x9999);
+        assert_eq!(calls_to(&e, TASK_POINTER_DESTRUCT)[0][0], added[0][1]);
+        assert_eq!(calls_to(&e, THREAD_WAKE), vec![vec![this.addr()]]);
+        assert_eq!(
+            order_of(
+                &e,
+                &[
+                    TASK_POINTER_CONSTRUCT,
+                    FINISHED_QUEUE_ADD,
+                    TASK_POINTER_DESTRUCT,
+                    THREAD_WAKE
+                ]
+            ),
+            vec![
+                TASK_POINTER_CONSTRUCT,
+                FINISHED_QUEUE_ADD,
+                TASK_POINTER_DESTRUCT,
+                THREAD_WAKE
+            ]
+        );
+    }
+
+    #[test]
+    fn thread_exit_sets_the_exit_flag() {
+        let mut e = engine();
+        let this = e.new_object::<BackgroundCloneThread>();
+        e.call(0x0044_2630, &args![this]);
+        assert_eq!(e.get(this, BackgroundCloneThread::bExit), 1);
+    }
+
+    /// Doubles that make every loader member constructor return its block,
+    /// and the thread, the IO manager registrations.
+    fn loader_constructor_doubles(e: &mut Engine) {
+        for addr in [
+            MODEL_MAP_CONSTRUCT,
+            KF_MODEL_MAP_CONSTRUCT,
+            REFERENCE_MAP_CONSTRUCT,
+            ANIM_IDLE_MAP_CONSTRUCT,
+            REPLACEMENT_KF_LIST_MAP_CONSTRUCT,
+            HELMET_MAP_CONSTRUCT,
+            ATTACH_TASK_QUEUE_CONSTRUCT,
+            TEXTURE_MAP_CONSTRUCT,
+            LOADED_FILE_MAP_CONSTRUCT,
+        ] {
+            e.register(addr, |_, a| a[0].into_ret());
+        }
+        thread_doubles(e);
+        noop(
+            e,
+            &[
+                THREAD_START,
+                IO_MANAGER_REGISTER_FIRST,
+                IO_MANAGER_REGISTER_SECOND,
+                IO_MANAGER_REGISTER_FOURTH,
+                IO_MANAGER_REGISTER_FIFTH,
+                IO_MANAGER_REGISTER_SIXTH,
+            ],
+        );
+    }
+
+    #[test]
+    fn model_loader_constructor_builds_the_maps_and_the_thread() {
+        let mut e = engine();
+        loader_constructor_doubles(&mut e);
+        e.set_global(TASK_QUEUE, 0u32);
+        let this = e.new_object::<ModelLoader>();
+        e.mem.set_u8(this.addr() + 0x2c, 7);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0044_2650, &args![this]).u32(), this.addr());
+        // Every member holds the block its constructor was given.
+        let members = [
+            (0x00, MODEL_MAP_CONSTRUCT, vec![10, 0x3f1, 0xc]),
+            (0x04, KF_MODEL_MAP_CONSTRUCT, vec![10, 0x3f1, 0xc]),
+            (0x08, REFERENCE_MAP_CONSTRUCT, vec![10, 0x13af, 0xc]),
+            (0x0c, REFERENCE_MAP_CONSTRUCT, vec![10, 0x13af, 0xc]),
+            (0x10, ANIM_IDLE_MAP_CONSTRUCT, vec![10, 0xfb, 0xc]),
+            (0x14, REPLACEMENT_KF_LIST_MAP_CONSTRUCT, vec![10, 0xfb, 0xc]),
+            (0x18, HELMET_MAP_CONSTRUCT, vec![10, 0xfb, 0xc]),
+            (0x1c, ATTACH_TASK_QUEUE_CONSTRUCT, vec![10, 8]),
+            (0x20, TEXTURE_MAP_CONSTRUCT, vec![10, 0x3f1, 0xc]),
+            (0x24, LOADED_FILE_MAP_CONSTRUCT, vec![10, 0x3f1, 0xc]),
+        ];
+        let mut seen = Vec::new();
+        for (offset, constructor, arguments) in members {
+            let block = e.mem.u32(this.addr() + offset);
+            assert_ne!(block, 0);
+            assert!(!seen.contains(&block));
+            seen.push(block);
+            let mut expected = vec![block];
+            expected.extend(arguments);
+            assert!(calls_to(&e, constructor).contains(&expected));
+        }
+        // The thread is made with 10 and started; the delayed free flag is
+        // cleared.
+        let thread = e.mem.u32(this.addr() + 0x28);
+        assert_ne!(thread, 0);
+        assert_eq!(e.mem.u32(thread), 0x0101_6e50);
+        assert_eq!(calls_to(&e, THREAD_START), vec![vec![thread]]);
+        assert_eq!(calls_to(&e, CLONE_QUEUE_CONSTRUCT)[0][1..], [10, 8]);
+        assert_eq!(e.get(this, ModelLoader::bHasDelayedFree), 0);
+        // No IO manager: no registrations.
+        assert!(calls_to(&e, IO_MANAGER_REGISTER_FIRST).is_empty());
+    }
+
+    #[test]
+    fn model_loader_constructor_registers_the_callbacks_with_the_io_manager() {
+        let mut e = engine();
+        loader_constructor_doubles(&mut e);
+        let manager = e.mem.alloc(0x100);
+        e.set_global(TASK_QUEUE, manager);
+        let this = e.new_object::<ModelLoader>();
+        e.call_log = Some(vec![]);
+        e.call(0x0044_2650, &args![this]);
+        assert_eq!(
+            calls_to(&e, IO_MANAGER_REGISTER_FIRST),
+            vec![vec![manager, 0x0044_6e30]]
+        );
+        assert_eq!(
+            calls_to(&e, IO_MANAGER_REGISTER_SECOND),
+            vec![vec![manager, 0x0044_6e40]]
+        );
+        assert_eq!(e.mem.u32(manager + 0x78), 0x0044_6ea0);
+        assert_eq!(
+            calls_to(&e, IO_MANAGER_REGISTER_FOURTH),
+            vec![vec![manager, 0x0044_6f00]]
+        );
+        assert_eq!(
+            calls_to(&e, IO_MANAGER_REGISTER_FIFTH),
+            vec![vec![manager, 0x0044_6f10]]
+        );
+        assert_eq!(
+            calls_to(&e, IO_MANAGER_REGISTER_SIXTH),
+            vec![vec![manager, 0x0044_6f90]]
+        );
+    }
+
+    #[test]
+    fn model_loader_constructor_stores_null_for_a_failed_allocation() {
+        let mut e = engine();
+        loader_constructor_doubles(&mut e);
+        e.set_global(TASK_QUEUE, 0u32);
+        // The very first allocation (the model map) fails.
+        let mut failed = false;
+        e.register_double(MEMORY_ALLOC, move |e, a| {
+            if !failed {
+                failed = true;
+                0u32.into_ret()
+            } else {
+                e.mem.alloc(a[0]).into_ret()
+            }
+        });
+        let this = e.new_object::<ModelLoader>();
+        e.mem.set_u32(this.addr(), 0x1234);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_2650, &args![this]);
+        assert_eq!(e.mem.u32(this.addr()), 0);
+        assert_eq!(calls_to(&e, MODEL_MAP_CONSTRUCT).len(), 0);
+        assert_ne!(e.mem.u32(this.addr() + 4), 0);
+    }
+
+    #[test]
+    fn io_manager_setter_stores_the_callback_at_0x78() {
+        let mut e = engine();
+        let manager = e.mem.alloc(0x100);
+        e.call(0x0044_2a80, &args![Ptr::<()>::new(manager), 0x4545u32]);
+        assert_eq!(e.mem.u32(manager + 0x78), 0x4545);
+    }
+
+    #[test]
+    fn model_ref_count_adds_both_counts() {
+        let mut e = engine();
+        let model = e.new_object::<Model>();
+        e.set(model, Model::iRefCount, 3);
+        e.set(model, Model::iManualRefCount, 4);
+        assert_eq!(e.call(0x0044_3190, &args![model]).u32(), 7);
+        e.set(model, Model::iRefCount, -2);
+        e.set(model, Model::iManualRefCount, 1);
+        assert_eq!(e.call(0x0044_3190, &args![model]).u32() as i32, -1);
+    }
+
+    // ---- ModelLoader::~ModelLoader ----
+
+    const MAP_VTABLE: u32 = 0x0ff2_0000;
+    const EMPTY_MAP_VTABLE: u32 = 0x0ff2_1000;
+    /// The map's virtual functions: delete (slot 0), remove (0x14).
+    const MAP_DELETE: u32 = 0x0ff0_0030;
+    const MAP_REMOVE: u32 = 0x0ff0_0031;
+    const MAP_COUNT_ONE: u32 = 0x0ff0_0032;
+
+    /// What the destructor's iterator doubles hand out: per walk (model map,
+    /// KF map first walk, KF map second walk) the entries (found, key,
+    /// value).
+    type Walks = Vec<Vec<(bool, u32, u32)>>;
+
+    fn walk_doubles(e: &mut Engine, walks: Walks) {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let state = Rc::new(RefCell::new((walks, 0usize, 0usize)));
+        for addr in [MODEL_ITERATOR_CONSTRUCT, KF_ITERATOR_CONSTRUCT] {
+            let state = state.clone();
+            e.register_double(addr, move |_, _| {
+                let mut state = state.borrow_mut();
+                state.1 += 1;
+                state.2 = 0;
+                Ret::default()
+            });
+        }
+        let at_end = state.clone();
+        e.register_double(ITERATOR_AT_END, move |_, _| {
+            let state = at_end.borrow();
+            ((state.2 >= state.0[state.1 - 1].len()) as u32).into_ret()
+        });
+        let next = state;
+        e.register_double(MAP_NEXT, move |e, a| {
+            let mut state = next.borrow_mut();
+            let (found, key, value) = state.0[state.1 - 1][state.2];
+            state.2 += 1;
+            if found {
+                e.mem.set_u32(a[2], key);
+                e.mem.set_u32(a[3], value);
+            }
+            (found as u32).into_ret()
+        });
+        noop(
+            e,
+            &[
+                MODEL_ITERATOR_DESTRUCT,
+                KF_ITERATOR_DESTRUCT,
+                MODEL_DELETE,
+                KF_MODEL_DELETE,
+                OUTPUT_MODEL_MAP_CONTENTS,
+                LOG_MESSAGE,
+            ],
+        );
+    }
+
+    fn model_with_counts(e: &mut Engine, references: i32, manual: i32) -> u32 {
+        let model = e.new_object::<Model>();
+        e.set(model, Model::iRefCount, references);
+        e.set(model, Model::iManualRefCount, manual);
+        model.addr()
+    }
+
+    fn map_object(e: &mut Engine, table: u32) -> Ptr {
+        Ptr::new(object(e, table, 0x40))
+    }
+
+    /// A loader whose members are all maps with the table `table` (the
+    /// thread and queue included); returns it and the member addresses in
+    /// the order of the fields.
+    fn loader_with_members(e: &mut Engine, table: u32) -> (Ptr<ModelLoader>, Vec<u32>) {
+        e.register(MAP_DELETE, |_, _| Ret::default());
+        e.register(MAP_REMOVE, |_, _| Ret::default());
+        e.register(MAP_COUNT_ONE, |_, _| 1u32.into_ret());
+        vtable(
+            e,
+            MAP_VTABLE,
+            &[(0x0, MAP_DELETE), (0x14, MAP_REMOVE), (0x44, MAP_COUNT_ONE)],
+        );
+        vtable(
+            e,
+            EMPTY_MAP_VTABLE,
+            &[(0x0, MAP_DELETE), (0x14, MAP_REMOVE), (0x44, NO)],
+        );
+        let this = e.new_object::<ModelLoader>();
+        let mut members = Vec::new();
+        for offset in (0..0x2c).step_by(4) {
+            let member = map_object(e, table);
+            e.mem.set_u32(this.addr() + offset, member.addr());
+            members.push(member.addr());
+        }
+        (this, members)
+    }
+
+    #[test]
+    fn model_loader_destructor_counts_and_deletes_the_models_it_still_holds() {
+        let mut e = engine();
+        let (this, members) = loader_with_members(&mut e, MAP_VTABLE);
+        let used = model_with_counts(&mut e, 1, 0);
+        let manual = model_with_counts(&mut e, 0, 2);
+        let free = model_with_counts(&mut e, 0, 0);
+        // Model walk: three models and a miss; KF walks find nothing.
+        walk_doubles(
+            &mut e,
+            vec![
+                vec![
+                    (true, 0, used),
+                    (false, 0, 0),
+                    (true, 0, manual),
+                    (true, 0, free),
+                ],
+                vec![],
+                vec![],
+            ],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0044_2aa0, &args![this]);
+        assert_eq!(
+            calls_to(&e, OUTPUT_MODEL_MAP_CONTENTS),
+            vec![vec![this.addr(), 0, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, MODEL_DELETE),
+            vec![vec![used, 1], vec![manual, 1], vec![free, 1]]
+        );
+        // Two models are still referenced.
+        assert_eq!(calls_to(&e, LOG_MESSAGE)[0], vec![0x0101_6ea0, 2]);
+        assert_eq!(calls_to(&e, MODEL_ITERATOR_DESTRUCT).len(), 1);
+        // The members are deleted in the destructor's order.
+        let by_offset = |offset: usize| members[offset / 4];
+        let expected: Vec<Vec<u32>> = [
+            0x00, 0x04, 0x1c, 0x18, 0x14, 0x10, 0x08, 0x0c, 0x28, 0x20, 0x24,
+        ]
+        .iter()
+        .map(|offset| vec![by_offset(*offset), 1])
+        .collect();
+        assert_eq!(calls_to(&e, MAP_DELETE), expected);
+    }
+
+    #[test]
+    fn model_loader_destructor_removes_kf_models_without_animation_and_counts_the_rest() {
+        let mut e = engine();
+        let (this, members) = loader_with_members(&mut e, MAP_VTABLE);
+        let no_animation = model_with_counts(&mut e, 0, 0);
+        let kept = model_with_counts(&mut e, 0, 0);
+        let rejected = model_with_counts(&mut e, 0, 0);
+        let animation_for_kept = e.mem.alloc(8);
+        let animation_for_rejected = e.mem.alloc(8);
+        // 005585e0 gives the animation, 005f26c0 accepts the second.
+        let mut table = std::collections::HashMap::new();
+        table.insert(no_animation, 0u32);
+        table.insert(kept, animation_for_kept);
+        table.insert(rejected, animation_for_rejected);
+        e.register_double(KF_MODEL_ANIMATION, move |_, a| table[&a[0]].into_ret());
+        e.register_double(ANIMATION_TEST, move |_, a| {
+            ((a[0] == animation_for_rejected) as u32).into_ret()
+        });
+        e.register(KF_MODEL_REF_COUNT, |e, a| {
+            // Only the model with a reference counts.
+            e.mem.u32(a[0] + 4).into_ret()
+        });
+        e.mem.set_u32(kept + 4, 1);
+        walk_doubles(
+            &mut e,
+            vec![
+                vec![],
+                vec![
+                    (true, 0xa1, no_animation),
+                    (true, 0xa2, kept),
+                    (true, 0xa3, rejected),
+                    (false, 0, 0),
+                    (true, 0xa4, 0),
+                ],
+                vec![(true, 0xb1, kept), (true, 0xb2, no_animation)],
+            ],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0044_2aa0, &args![this]);
+        let kf_map = members[1];
+        assert_eq!(
+            calls_to(&e, MAP_REMOVE),
+            vec![vec![kf_map, 0xa1], vec![kf_map, 0xa3]]
+        );
+        let deleted = calls_to(&e, KF_MODEL_DELETE);
+        assert_eq!(
+            deleted,
+            vec![
+                vec![no_animation, 1],
+                vec![rejected, 1],
+                vec![kept, 1],
+                vec![no_animation, 1]
+            ]
+        );
+        // One KF model is still referenced.
+        assert_eq!(calls_to(&e, LOG_MESSAGE), vec![vec![0x0101_6e70, 1]]);
+        assert_eq!(calls_to(&e, KF_ITERATOR_DESTRUCT).len(), 2);
+        // The model map walk did not start a second iterator.
+        assert_eq!(calls_to(&e, MODEL_ITERATOR_CONSTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn model_loader_destructor_skips_maps_without_entries_and_null_members() {
+        let mut e = engine();
+        let (this, members) = loader_with_members(&mut e, EMPTY_MAP_VTABLE);
+        // The KF walk still happens (it is unconditional); the others do not.
+        walk_doubles(&mut e, vec![vec![]]);
+        // Null members are skipped.
+        e.mem.set_u32(this.addr() + 0x28, 0);
+        e.mem.set_u32(this.addr() + 0x1c, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_2aa0, &args![this]);
+        assert!(calls_to(&e, MODEL_ITERATOR_CONSTRUCT).is_empty());
+        assert_eq!(calls_to(&e, KF_ITERATOR_CONSTRUCT).len(), 1);
+        assert!(calls_to(&e, LOG_MESSAGE).is_empty());
+        let deleted: Vec<u32> = calls_to(&e, MAP_DELETE).iter().map(|a| a[0]).collect();
+        assert_eq!(deleted.len(), 9);
+        assert!(!deleted.contains(&members[0x28 / 4]));
+        assert!(!deleted.contains(&members[0x1c / 4]));
+        assert_eq!(deleted[0], members[0]);
     }
 }
