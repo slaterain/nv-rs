@@ -47,150 +47,150 @@
 use crate::prelude::*;
 
 /// `TESObjectREFR`'s vtable (`0102f55c`) and `TESChildCell`'s (`0102f550`).
-const REFR_VTABLE: u32 = 0x0102_f55c;
-const CHILD_CELL_VTABLE: u32 = 0x0102_f550;
+pub(crate) const REFR_VTABLE: u32 = 0x0102_f55c;
+pub(crate) const CHILD_CELL_VTABLE: u32 = 0x0102_f550;
 
 /// `this + 0x44`: the reference's embedded `ExtraDataList` (also called on
 /// other references and on list nodes; the game never inlines it).
-const GET_EXTRA_LIST: u32 = 0x005d_43c0;
+pub(crate) const GET_EXTRA_LIST: u32 = 0x005d_43c0;
 /// `__RTDynamicCast(object, 0, from, to, 0)` (cdecl).
-const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+pub(crate) const DYNAMIC_CAST: u32 = 0x00ec_43fb;
 /// RTTI type descriptors the casts use (`.?AVTESForm@@` and so on).
-const TYPE_TES_FORM: u32 = 0x0118_3028;
-const TYPE_TES_OBJECT_REFR: u32 = 0x0118_41cc;
-const TYPE_TES_BOUND_OBJECT: u32 = 0x0118_3108;
-const TYPE_TES_OBJECT_CELL: u32 = 0x0118_3fb4;
-const TYPE_TES_CHILD_CELL: u32 = 0x0118_ac2c;
-const TYPE_BS_EXTRA_DATA: u32 = 0x0118_3b2c;
-const TYPE_EXTRA_TELEPORT: u32 = 0x0118_4430;
-const TYPE_EXTRA_ENABLE_STATE_PARENT: u32 = 0x0118_4d7c;
-const TYPE_EXTRA_RANDOM_TELEPORT_MARKER: u32 = 0x0118_4dcc;
-const TYPE_EXTRA_LINKED_REF: u32 = 0x0118_4e1c;
-const TYPE_EXTRA_ACTIVATE_REF: u32 = 0x0118_4e84;
-const TYPE_EXTRA_DECAL_REFS: u32 = 0x0118_4ea4;
-const TYPE_EXTRA_MERCHANT_CONTAINER: u32 = 0x0118_4ec4;
-const TYPE_EXTRA_MULTI_BOUND_REF: u32 = 0x0118_4f50;
+pub(crate) const TYPE_TES_FORM: u32 = 0x0118_3028;
+pub(crate) const TYPE_TES_OBJECT_REFR: u32 = 0x0118_41cc;
+pub(crate) const TYPE_TES_BOUND_OBJECT: u32 = 0x0118_3108;
+pub(crate) const TYPE_TES_OBJECT_CELL: u32 = 0x0118_3fb4;
+pub(crate) const TYPE_TES_CHILD_CELL: u32 = 0x0118_ac2c;
+pub(crate) const TYPE_BS_EXTRA_DATA: u32 = 0x0118_3b2c;
+pub(crate) const TYPE_EXTRA_TELEPORT: u32 = 0x0118_4430;
+pub(crate) const TYPE_EXTRA_ENABLE_STATE_PARENT: u32 = 0x0118_4d7c;
+pub(crate) const TYPE_EXTRA_RANDOM_TELEPORT_MARKER: u32 = 0x0118_4dcc;
+pub(crate) const TYPE_EXTRA_LINKED_REF: u32 = 0x0118_4e1c;
+pub(crate) const TYPE_EXTRA_ACTIVATE_REF: u32 = 0x0118_4e84;
+pub(crate) const TYPE_EXTRA_DECAL_REFS: u32 = 0x0118_4ea4;
+pub(crate) const TYPE_EXTRA_MERCHANT_CONTAINER: u32 = 0x0118_4ec4;
+pub(crate) const TYPE_EXTRA_MULTI_BOUND_REF: u32 = 0x0118_4f50;
 
 /// `BaseExtraList` methods (the receiver is the list, `this + 0x44` of a
 /// reference).
-const EXTRA_GET_DATA: u32 = 0x0041_0220; // GetExtraData(type) -> BSExtraData*
-const EXTRA_REMOVE: u32 = 0x0041_0020; // RemoveExtra(extra, free)
-const EXTRA_ADD: u32 = 0x0040_ff60; // AddExtra(extra)
-const EXTRA_REMOVE_ALL: u32 = 0x0040_fae0; // RemoveAll(keep_defaults)
-const EXTRA_REMOVE_ALL_DEFAULT: u32 = 0x0040_fcb0; // RemoveAllDefault(keep_defaults)
-const EXTRA_REMOVE_TYPE: u32 = 0x0041_0140; // RemoveExtra_ov2(type)
-const EXTRA_GET_PERSISTENT_CELL: u32 = 0x0041_d460;
-const EXTRA_SET_PERSISTENT_CELL: u32 = 0x0041_d390;
+pub(crate) const EXTRA_GET_DATA: u32 = 0x0041_0220; // GetExtraData(type) -> BSExtraData*
+pub(crate) const EXTRA_REMOVE: u32 = 0x0041_0020; // RemoveExtra(extra, free)
+pub(crate) const EXTRA_ADD: u32 = 0x0040_ff60; // AddExtra(extra)
+pub(crate) const EXTRA_REMOVE_ALL: u32 = 0x0040_fae0; // RemoveAll(keep_defaults)
+pub(crate) const EXTRA_REMOVE_ALL_DEFAULT: u32 = 0x0040_fcb0; // RemoveAllDefault(keep_defaults)
+pub(crate) const EXTRA_REMOVE_TYPE: u32 = 0x0041_0140; // RemoveExtra_ov2(type)
+pub(crate) const EXTRA_GET_PERSISTENT_CELL: u32 = 0x0041_d460;
+pub(crate) const EXTRA_SET_PERSISTENT_CELL: u32 = 0x0041_d390;
 /// `TESObjectCELL::RemoveReference(cell, ref)`.
-const CELL_REMOVE_REFERENCE: u32 = 0x0054_ca90;
+pub(crate) const CELL_REMOVE_REFERENCE: u32 = 0x0054_ca90;
 /// `BSSimpleList` helpers: the node's item slot (identity on the node), the
 /// next node, whether a node is empty.
-const LIST_ITEM_SLOT: u32 = 0x0068_15c0;
-const LIST_NEXT: u32 = 0x0072_6070;
-const LIST_IS_EMPTY: u32 = 0x0082_56d0;
+pub(crate) const LIST_ITEM_SLOT: u32 = 0x0068_15c0;
+pub(crate) const LIST_NEXT: u32 = 0x0072_6070;
+pub(crate) const LIST_IS_EMPTY: u32 = 0x0082_56d0;
 /// Removes the item at a pointer from a `BSSimpleList` (`list`, `&item`).
-const LIST_REMOVE: u32 = 0x0090_5330;
+pub(crate) const LIST_REMOVE: u32 = 0x0090_5330;
 /// `*(u32 *)this`: the first dword of a pointer wrapper or `BSStringT`.
-const READ_FIRST_DWORD: u32 = 0x0055_9450;
+pub(crate) const READ_FIRST_DWORD: u32 = 0x0055_9450;
 /// `TESForm` accessors.
-const FORM_TYPE: u32 = 0x0040_1170; // cFormType (byte at +4)
-const FORM_ID: u32 = 0x0084_e3a0; // iFormID (+0x0C)
-const FORM_IS_DELETED: u32 = 0x0044_0d80; // iFormFlags & 0x20
-const FORM_IS_DISABLED: u32 = 0x0044_0da0; // iFormFlags & 0x800
+pub(crate) const FORM_TYPE: u32 = 0x0040_1170; // cFormType (byte at +4)
+pub(crate) const FORM_ID: u32 = 0x0084_e3a0; // iFormID (+0x0C)
+pub(crate) const FORM_IS_DELETED: u32 = 0x0044_0d80; // iFormFlags & 0x20
+pub(crate) const FORM_IS_DISABLED: u32 = 0x0044_0da0; // iFormFlags & 0x800
 /// The reference's base object (`data.pObjectReference`, +0x20; the map
 /// names the body `BGSSaveFormBuffer::GetForm (Xbox PDB)`).
-const GET_BASE_FORM: u32 = 0x007a_f430;
+pub(crate) const GET_BASE_FORM: u32 = 0x007a_f430;
 /// The reference's parent cell (`pParentCell`, +0x40).
-const GET_PARENT_CELL: u32 = 0x008d_6f30;
+pub(crate) const GET_PARENT_CELL: u32 = 0x008d_6f30;
 /// `&this->data` (`OBJ_REFR`, +0x20).
-const GET_DATA: u32 = 0x0089_1170;
+pub(crate) const GET_DATA: u32 = 0x0089_1170;
 /// Constructor/destructor of the 8-byte `BSStringT` the game keeps on its
 /// stack, and `BSStringT::Format(fmt, ...)`.
-const STRING_CONSTRUCT: u32 = 0x0040_37b0;
-const STRING_DESTRUCT: u32 = 0x0040_37d0;
-const STRING_FORMAT: u32 = 0x0040_6f60;
+pub(crate) const STRING_CONSTRUCT: u32 = 0x0040_37b0;
+pub(crate) const STRING_DESTRUCT: u32 = 0x0040_37d0;
+pub(crate) const STRING_FORMAT: u32 = 0x0040_6f60;
 /// The CRT (called by address): `sprintf`, `memcmp`, `memset` (via the
 /// wrapper at `00403d30`), `_finite` and `_isnan` (which take a `double`).
-const SPRINTF: u32 = 0x00ec_623a;
-const MEMCMP: u32 = 0x00ec_4835;
-const MEMSET: u32 = 0x0040_3d30;
-const CRT_FINITE: u32 = 0x00ec_7595;
-const CRT_ISNAN: u32 = 0x00ec_75b1;
+pub(crate) const SPRINTF: u32 = 0x00ec_623a;
+pub(crate) const MEMCMP: u32 = 0x00ec_4835;
+pub(crate) const MEMSET: u32 = 0x0040_3d30;
+pub(crate) const CRT_FINITE: u32 = 0x00ec_7595;
+pub(crate) const CRT_ISNAN: u32 = 0x00ec_75b1;
 /// The error logger (`Error(fmt, ...)`) and the message log (`005b5e40`).
-const ERROR_LOG: u32 = 0x0040_fbe0;
-const MESSAGE: u32 = 0x005b_5e40;
+pub(crate) const ERROR_LOG: u32 = 0x0040_fbe0;
+pub(crate) const MESSAGE: u32 = 0x005b_5e40;
 /// `TESObjectREFR::GetRefPersists` (translated later in this unit).
-const GET_REF_PERSISTS: u32 = 0x0056_53d0;
+pub(crate) const GET_REF_PERSISTS: u32 = 0x0056_53d0;
 /// Whether the current thread's loading flag (TLS +0x294 bit 2) is set; the
 /// game calls it on `011ddf38`'s object (it does not use `this`).
-const LOADING_FLAG: u32 = 0x0041_21b0;
+pub(crate) const LOADING_FLAG: u32 = 0x0041_21b0;
 
 /// Writers of the save record (`TESForm::AddChunk (value)` and
 /// `__AddChunkData`), whether the build swaps endianness on save, and the
 /// double `1.0`.
-const ADD_CHUNK_VALUE: u32 = 0x0048_5910;
-const ADD_CHUNK_DATA: u32 = 0x0048_5990;
-const ENDIAN_SWAP_ON_SAVE: u32 = 0x0040_1500;
-const CONSTANT_ONE: u32 = 0x0101_2070;
+pub(crate) const ADD_CHUNK_VALUE: u32 = 0x0048_5910;
+pub(crate) const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+pub(crate) const ENDIAN_SWAP_ON_SAVE: u32 = 0x0040_1500;
+pub(crate) const CONSTANT_ONE: u32 = 0x0101_2070;
 
 /// Globals the code reads.
-const GLOBAL_PLAYER: u32 = 0x011d_ea3c; // PlayerCharacter *
-const GLOBAL_SAVE_LOAD: u32 = 0x011d_e45c; // TESSaveLoadGame *
-const GLOBAL_DATA_HANDLER: u32 = 0x011c_3f2c; // TESDataHandler *
-const GLOBAL_LOADING_OBJECT: u32 = 0x011d_df38; // object whose 4121b0 flag says "loading"
-const GLOBAL_TEMP_REFR_MANAGER: u32 = 0x011d_ea10;
-const GLOBAL_LAST_REFR: u32 = 0x011d_ea24; // reference remembered by 0055ac70/0055ac80
-const GLOBAL_STORED_BY_825C00: u32 = 0x011c_a28c;
-const GLOBAL_IO_MANAGER: u32 = 0x0120_2d98;
-const GLOBAL_DEBUG_SWITCHES: u32 = 0x011d_e4e8; // an object, passed as `this`
+pub(crate) const GLOBAL_PLAYER: u32 = 0x011d_ea3c; // PlayerCharacter *
+pub(crate) const GLOBAL_SAVE_LOAD: u32 = 0x011d_e45c; // TESSaveLoadGame *
+pub(crate) const GLOBAL_DATA_HANDLER: u32 = 0x011c_3f2c; // TESDataHandler *
+pub(crate) const GLOBAL_LOADING_OBJECT: u32 = 0x011d_df38; // object whose 4121b0 flag says "loading"
+pub(crate) const GLOBAL_TEMP_REFR_MANAGER: u32 = 0x011d_ea10;
+pub(crate) const GLOBAL_LAST_REFR: u32 = 0x011d_ea24; // reference remembered by 0055ac70/0055ac80
+pub(crate) const GLOBAL_STORED_BY_825C00: u32 = 0x011c_a28c;
+pub(crate) const GLOBAL_IO_MANAGER: u32 = 0x0120_2d98;
+pub(crate) const GLOBAL_DEBUG_SWITCHES: u32 = 0x011d_e4e8; // an object, passed as `this`
 /// Static objects passed as `this`.
-const OBJECT_PROCESS_LISTS: u32 = 0x011e_0e80; // ProcessLists
-const OBJECT_FURNITURE_MANAGER: u32 = 0x011e_043c;
-const OBJECT_ACTOR_LISTS: u32 = 0x011f_6394;
+pub(crate) const OBJECT_PROCESS_LISTS: u32 = 0x011e_0e80; // ProcessLists
+pub(crate) const OBJECT_FURNITURE_MANAGER: u32 = 0x011e_043c;
+pub(crate) const OBJECT_ACTOR_LISTS: u32 = 0x011f_6394;
 /// Getters (in `teswater.cpp`) that return the addresses of two global
 /// lists (`011ca13c`, `011ca144`) the destructor removes the reference from.
-const WATER_LIST_A_GETTER: u32 = 0x004e_3260;
-const WATER_LIST_B_GETTER: u32 = 0x004e_c7b0;
+pub(crate) const WATER_LIST_A_GETTER: u32 = 0x004e_3260;
+pub(crate) const WATER_LIST_B_GETTER: u32 = 0x004e_c7b0;
 /// The `float` the loaded-data water height is reset to.
-const LOADED_DATA_DEFAULT_HEIGHT: u32 = 0x0101_5f5c;
+pub(crate) const LOADED_DATA_DEFAULT_HEIGHT: u32 = 0x0101_5f5c;
 /// The zero vector (three dwords) at `011f426c`.
-const ZERO_VECTOR: u32 = 0x011f_426c;
+pub(crate) const ZERO_VECTOR: u32 = 0x011f_426c;
 /// The `float` tolerance `Copy` compares radii with (0.001).
-const RADIUS_EPSILON: u32 = 0x0101_7d00;
+pub(crate) const RADIUS_EPSILON: u32 = 0x0101_7d00;
 /// The global holding the vtable address of the 0x14-byte group-data record
 /// that `fn_0055e5e0` fills.
-const GROUP_DATA_VTABLE_PTR: u32 = 0x0118_7020;
+pub(crate) const GROUP_DATA_VTABLE_PTR: u32 = 0x0118_7020;
 /// The empty string.
-const EMPTY_STRING: u32 = 0x0101_1584;
+pub(crate) const EMPTY_STRING: u32 = 0x0101_1584;
 
 /// Message and format strings in the exe.
-const MISSING_BASE_FORMAT: u32 = 0x0102_f828;
-const LOAD_TERMINATED_MESSAGE: u32 = 0x0102_f7ec;
-const PATROL_NOT_COMPILED_FORMAT: u32 = 0x0102_f7a0;
-const LEVELED_BASE_MESSAGE: u32 = 0x0102_fbb0;
-const CORRUPT_LOCATION_MESSAGE: u32 = 0x0102_fb68;
-const CORRUPT_ANGLE_MESSAGE: u32 = 0x0102_fb20;
-const SHARED_DATA_REMOVED_MESSAGE: u32 = 0x0102_f870;
-const INIT_ITEM_ERROR_CELL: u32 = 0x0102_fa78;
-const INIT_ITEM_ERROR_WORLD: u32 = 0x0102_f9b0;
-const INIT_ITEM_ERROR_NO_CELL: u32 = 0x0102_f910;
-const DETAILED_FORMAT: u32 = 0x0102_f8b8;
-const DETAILED_BASE_FORMAT: u32 = 0x0102_f8f8;
-const DETAILED_WORLD_FORMAT: u32 = 0x0102_f8dc;
-const SAVE_SIZE_FORMAT: u32 = 0x0101_2cb0;
-const SAVE_SIZE_SHORT_FORMAT: u32 = 0x0101_2c78;
+pub(crate) const MISSING_BASE_FORMAT: u32 = 0x0102_f828;
+pub(crate) const LOAD_TERMINATED_MESSAGE: u32 = 0x0102_f7ec;
+pub(crate) const PATROL_NOT_COMPILED_FORMAT: u32 = 0x0102_f7a0;
+pub(crate) const LEVELED_BASE_MESSAGE: u32 = 0x0102_fbb0;
+pub(crate) const CORRUPT_LOCATION_MESSAGE: u32 = 0x0102_fb68;
+pub(crate) const CORRUPT_ANGLE_MESSAGE: u32 = 0x0102_fb20;
+pub(crate) const SHARED_DATA_REMOVED_MESSAGE: u32 = 0x0102_f870;
+pub(crate) const INIT_ITEM_ERROR_CELL: u32 = 0x0102_fa78;
+pub(crate) const INIT_ITEM_ERROR_WORLD: u32 = 0x0102_f9b0;
+pub(crate) const INIT_ITEM_ERROR_NO_CELL: u32 = 0x0102_f910;
+pub(crate) const DETAILED_FORMAT: u32 = 0x0102_f8b8;
+pub(crate) const DETAILED_BASE_FORMAT: u32 = 0x0102_f8f8;
+pub(crate) const DETAILED_WORLD_FORMAT: u32 = 0x0102_f8dc;
+pub(crate) const SAVE_SIZE_FORMAT: u32 = 0x0101_2cb0;
+pub(crate) const SAVE_SIZE_SHORT_FORMAT: u32 = 0x0101_2c78;
 /// `"D:\_Fallout3\Platforms\Common\Code\Fallout Shared\TESObjectREFR.cpp"`
 /// and the line `GetSaveSize` reports.
-const SOURCE_FILE: u32 = 0x0102_fc20;
-const SOURCE_LINE: u32 = 0x0ad0;
+pub(crate) const SOURCE_FILE: u32 = 0x0102_fc20;
+pub(crate) const SOURCE_LINE: u32 = 0x0ad0;
 
 /// A four-character record or chunk tag as the game's 32-bit constant.
-const fn tag(name: &[u8; 4]) -> u32 {
+pub(crate) const fn tag(name: &[u8; 4]) -> u32 {
     u32::from_le_bytes(*name)
 }
 
 /// The chunk kinds `Load` hands to `ExtraDataList::Load`.
-const EXTRA_DATA_CHUNKS: [u32; 76] = [
+pub(crate) const EXTRA_DATA_CHUNKS: [u32; 76] = [
     tag(b"XPPA"),
     tag(b"XRGB"),
     tag(b"XGLB"),
@@ -321,37 +321,37 @@ layout! {
 }
 
 /// `m_Extra` (Xbox PDB), the embedded `ExtraDataList`, at +0x44.
-const EXTRA_OFFSET: u32 = 0x44;
+pub(crate) const EXTRA_OFFSET: u32 = 0x44;
 /// `TESChildCell` base subobject, at +0x18.
-const CHILD_CELL_OFFSET: u32 = 0x18;
+pub(crate) const CHILD_CELL_OFFSET: u32 = 0x18;
 
-fn extra_list(e: &mut Engine, refr: u32) -> u32 {
+pub(crate) fn extra_list(e: &mut Engine, refr: u32) -> u32 {
     e.call(GET_EXTRA_LIST, &args![refr]).u32()
 }
 
-fn dynamic_cast(e: &mut Engine, object: u32, to: u32) -> u32 {
+pub(crate) fn dynamic_cast(e: &mut Engine, object: u32, to: u32) -> u32 {
     e.call(DYNAMIC_CAST, &args![object, 0u32, TYPE_TES_FORM, to, 0u32])
         .u32()
 }
 
 /// `IsActor` (virtual at +0x100) on `actor`, false for a null pointer: the
 /// guard these helpers all start with.
-fn is_actor(e: &mut Engine, actor: u32) -> bool {
+pub(crate) fn is_actor(e: &mut Engine, actor: u32) -> bool {
     actor != 0 && e.vcall(actor, 0x100, &args![]).bool()
 }
 
 /// The cell the `TESChildCell` base reports (its virtual at slot 0).
-fn save_parent_cell(e: &mut Engine, refr: Ptr<TESObjectREFR>) -> u32 {
+pub(crate) fn save_parent_cell(e: &mut Engine, refr: Ptr<TESObjectREFR>) -> u32 {
     e.vcall(refr.addr() + CHILD_CELL_OFFSET, 0, &args![]).u32()
 }
 
-fn global_ptr(e: &Engine, addr: u32) -> u32 {
+pub(crate) fn global_ptr(e: &Engine, addr: u32) -> u32 {
     e.global::<u32>(addr)
 }
 
 /// `BGSSaveLoadReferencesMap::Lookup(old, &new)` (`00853130`, on the map):
 /// the new pointer for `old`, 0 when it has none.
-fn lookup_new_reference(e: &mut Engine, map: u32, old: u32) -> u32 {
+pub(crate) fn lookup_new_reference(e: &mut Engine, map: u32, old: u32) -> u32 {
     e.with_stack(4, |e, out| {
         e.mem.set_u32(out.addr(), 0);
         let found = e.call(0x0085_3130, &args![map, old, out]).bool();
@@ -364,7 +364,7 @@ fn lookup_new_reference(e: &mut Engine, map: u32, old: u32) -> u32 {
 }
 
 /// [`lookup_new_reference`], cast to `TESObjectREFR`; 0 when either fails.
-fn resolve_reference(e: &mut Engine, map: u32, old: u32) -> u32 {
+pub(crate) fn resolve_reference(e: &mut Engine, map: u32, old: u32) -> u32 {
     let new = lookup_new_reference(e, map, old);
     if new == 0 {
         return 0;
@@ -374,7 +374,12 @@ fn resolve_reference(e: &mut Engine, map: u32, old: u32) -> u32 {
 
 /// The body of `TESObjectREFR::Load` (`0055af90`): `id_slot` is the stack word
 /// `TESFile::GetChunkData` writes the base object's form ID to.
-fn load_record(e: &mut Engine, this: Ptr<TESObjectREFR>, file: u32, id_slot: u32) -> bool {
+pub(crate) fn load_record(
+    e: &mut Engine,
+    this: Ptr<TESObjectREFR>,
+    file: u32,
+    id_slot: u32,
+) -> bool {
     let me = this.addr();
     let data = this.at(TESObjectREFR::data);
     e.with_stack(0x18, |e, scratch| {
@@ -500,20 +505,20 @@ fn load_record(e: &mut Engine, this: Ptr<TESObjectREFR>, file: u32, id_slot: u32
 }
 
 /// `Get3D` (virtual at +0x1d0): the reference's loaded 3D, null when none.
-fn get_3d(e: &mut Engine, refr: u32) -> u32 {
+pub(crate) fn get_3d(e: &mut Engine, refr: u32) -> u32 {
     e.vcall(refr, 0x1d0, &args![]).u32()
 }
 
 /// The reference's world position as `GetLocationOnReference`-style
 /// accessor (virtual at +0x1f4, returns `&data.Location`).
-fn location_of(e: &mut Engine, refr: u32) -> u32 {
+pub(crate) fn location_of(e: &mut Engine, refr: u32) -> u32 {
     e.vcall(refr, 0x1f4, &args![]).u32()
 }
 
 /// The tail the collision reset shares between `Copy`'s places: resets the
 /// 3D node's simulation (`00c6bd00(node, 1)`), then gives it a zero velocity
 /// (`NiPoint3(0, 0, 0)` built at `scratch`, 12 bytes).
-fn reset_collision(e: &mut Engine, refr: u32, scratch: u32) {
+pub(crate) fn reset_collision(e: &mut Engine, refr: u32, scratch: u32) {
     let node = get_3d(e, refr);
     e.call(0x00c6_bd00, &args![node, 1u32]);
     e.call(0x0043_d410, &args![scratch, 0.0f32, 0u32, 0u32]);
@@ -527,7 +532,7 @@ fn reset_collision(e: &mut Engine, refr: u32, scratch: u32) {
 /// after a membership test), without it the light is added
 /// (`0057c730`). Each entry is finally pointed at `this`
 /// (`ExtraDataList::SetWaterLightRef`, `0041f840`, with `remove` as flag).
-fn move_water_lights(e: &mut Engine, this: u32, source_list: u32, remove: bool) {
+pub(crate) fn move_water_lights(e: &mut Engine, this: u32, source_list: u32, remove: bool) {
     let list = extra_list(e, source_list);
     let mut node = e.call(0x0041_f810, &args![list]).u32();
     loop {
@@ -587,26 +592,26 @@ fn move_water_lights(e: &mut Engine, this: u32, source_list: u32, remove: bool) 
 
 /// Whether a `float` coordinate is finite and not a NaN, by the CRT's
 /// `_finite` (`00ec7595`) and `_isnan` (`00ec75b1`), which take a `double`.
-fn is_not_finite(e: &mut Engine, bits: u32) -> bool {
+pub(crate) fn is_not_finite(e: &mut Engine, bits: u32) -> bool {
     let value = f32::from_bits(bits) as f64;
     e.call(CRT_FINITE, &args![value]).i32() == 0
 }
 
-fn is_nan_float(e: &mut Engine, bits: u32) -> bool {
+pub(crate) fn is_nan_float(e: &mut Engine, bits: u32) -> bool {
     let value = f32::from_bits(bits) as f64;
     e.call(CRT_ISNAN, &args![value]).i32() != 0
 }
 
 /// `_finite` on all three, then `_isnan` on all three, as `InitItem` tests
 /// a position or a rotation; true when any is infinite or a NaN.
-fn vector_is_corrupt(e: &mut Engine, at: u32) -> bool {
+pub(crate) fn vector_is_corrupt(e: &mut Engine, at: u32) -> bool {
     let words = [e.mem.u32(at), e.mem.u32(at + 4), e.mem.u32(at + 8)];
     words.iter().any(|w| is_not_finite(e, *w)) || words.iter().any(|w| is_nan_float(e, *w))
 }
 
 /// Overwrites three dwords at `at` with the zero vector the game keeps at
 /// `011f426c`.
-fn reset_vector(e: &mut Engine, at: u32) {
+pub(crate) fn reset_vector(e: &mut Engine, at: u32) {
     for i in 0..3 {
         let word = e.global::<u32>(ZERO_VECTOR + 4 * i);
         e.mem.set_u32(at + 4 * i, word);
@@ -616,7 +621,7 @@ fn reset_vector(e: &mut Engine, at: u32) {
 /// The error text `InitItem` writes when its warning count went up, in three
 /// shapes: the cell is a plain one (`00425fd0` holds), the cell has
 /// coordinates in a world, or there is no cell.
-fn report_init_item_errors(e: &mut Engine, this: Ptr<TESObjectREFR>) {
+pub(crate) fn report_init_item_errors(e: &mut Engine, this: Ptr<TESObjectREFR>) {
     let cell = e.call(GET_PARENT_CELL, &args![this]).u32();
     if cell != 0 {
         let cell = e.call(GET_PARENT_CELL, &args![this]).u32();
@@ -2629,25 +2634,25 @@ pub fn fn_0055e730(e: &mut Engine, this: Ptr<TESObjectREFR>, flags: u32) -> u16 
 /// The `float` global `0055e230` sets (the player's running speed, which
 /// the character controller in `crates/physics` reads), and the `double`
 /// `0.0` it compares with.
-const RUNNING_SPEED: u32 = 0x0126_7bc4;
-const ZERO_DOUBLE: u32 = 0x0101_2060;
+pub(crate) const RUNNING_SPEED: u32 = 0x0126_7bc4;
+pub(crate) const ZERO_DOUBLE: u32 = 0x0101_2060;
 /// The `double` `-1.0` that marks "use the default blend time", and the
 /// `float` default `011c3c08` replaces it with (the callers pass the
 /// `float` `-1.0` at `01012054`).
-const MINUS_ONE_DOUBLE: u32 = 0x0101_a6b0;
-const MINUS_ONE_FLOAT: u32 = 0x0101_2054;
-const DEFAULT_BLEND_TIME: u32 = 0x011c_3c08;
+pub(crate) const MINUS_ONE_DOUBLE: u32 = 0x0101_a6b0;
+pub(crate) const MINUS_ONE_FLOAT: u32 = 0x0101_2054;
+pub(crate) const DEFAULT_BLEND_TIME: u32 = 0x011c_3c08;
 /// `FLT_MAX` (`0102f510`), negated for the sequence's time offset.
-const FLOAT_MAX: u32 = 0x0102_f510;
+pub(crate) const FLOAT_MAX: u32 = 0x0102_f510;
 /// Doubles and the `float` of `fn_0055ffa0`'s time stepping: the divisor
 /// `20.0`, the smallest step as a `double` and as a `float`.
-const STEP_DIVISOR: u32 = 0x0102_fc70;
-const MIN_STEP_DOUBLE: u32 = 0x0102_fc68;
-const MIN_STEP_FLOAT: u32 = 0x0102_fc64;
+pub(crate) const STEP_DIVISOR: u32 = 0x0102_fc70;
+pub(crate) const MIN_STEP_DOUBLE: u32 = 0x0102_fc68;
+pub(crate) const MIN_STEP_FLOAT: u32 = 0x0102_fc64;
 /// The `float` constants of `fn_005612a0`: `0.5`, `3.0` and `0.0`.
-const HALF: u32 = 0x0101_6248;
-const THREE: u32 = 0x0101_7718;
-const ZERO_FLOAT: u32 = 0x0101_1d78;
+pub(crate) const HALF: u32 = 0x0101_6248;
+pub(crate) const THREE: u32 = 0x0101_7718;
+pub(crate) const ZERO_FLOAT: u32 = 0x0101_1d78;
 
 /// The game's `TESSaveLoadGame` stream (`this` is the object at
 /// [`GLOBAL_SAVE_LOAD`]): write `size` bytes from a buffer
@@ -2677,85 +2682,85 @@ pub(crate) const FORM_SAVE_DATA: u32 = 0x0048_4ce0;
 pub(crate) const FORM_LOAD_DATA: u32 = 0x0048_4d00;
 /// The form-level step `SaveGame` starts with (`0048xxx` counterpart of
 /// `TESForm::LoadGame`, `00484c50`).
-const FORM_SAVE_GAME: u32 = 0x0048_4c20;
-const FORM_LOAD_GAME: u32 = 0x0048_4c50;
+pub(crate) const FORM_SAVE_GAME: u32 = 0x0048_4c20;
+pub(crate) const FORM_LOAD_GAME: u32 = 0x0048_4c50;
 /// `TESForm::SetEmpty(empty)` and `TESForm::SetDisabled(disabled)`
 /// (Xbox PDB).
-const FORM_SET_EMPTY: u32 = 0x0048_4580;
-const FORM_SET_DISABLED: u32 = 0x0048_4af0;
+pub(crate) const FORM_SET_EMPTY: u32 = 0x0048_4580;
+pub(crate) const FORM_SET_DISABLED: u32 = 0x0048_4af0;
 /// `ExtraDataList::SaveGame(flags, reference)` (`004235e0`) and
 /// `ExtraDataList::LoadGame(flags, flags2, reference)` (`00424960`).
-const EXTRA_SAVE_GAME: u32 = 0x0042_35e0;
-const EXTRA_LOAD_GAME: u32 = 0x0042_4960;
+pub(crate) const EXTRA_SAVE_GAME: u32 = 0x0042_35e0;
+pub(crate) const EXTRA_LOAD_GAME: u32 = 0x0042_4960;
 /// `ExtraDataList::GetContainerChanges` (Xbox PDB), the save of those
 /// changes (`004d3ab0`), and `InventoryChanges::GetInventoryChanges`
 /// (Xbox PDB, cdecl: the reference).
-const EXTRA_GET_CONTAINER_CHANGES: u32 = 0x0041_8520;
-const CONTAINER_CHANGES_SAVE: u32 = 0x004d_3ab0;
-const GET_INVENTORY_CHANGES: u32 = 0x004b_f220;
+pub(crate) const EXTRA_GET_CONTAINER_CHANGES: u32 = 0x0041_8520;
+pub(crate) const CONTAINER_CHANGES_SAVE: u32 = 0x004d_3ab0;
+pub(crate) const GET_INVENTORY_CHANGES: u32 = 0x004b_f220;
 /// `InventoryChanges::LoadGame` (Xbox PDB).
-const INVENTORY_CHANGES_LOAD: u32 = 0x004d_3cc0;
+pub(crate) const INVENTORY_CHANGES_LOAD: u32 = 0x004d_3cc0;
 /// `BaseExtraList` flag test for `type` (`0041b3a0`, returns whether the
 /// list has any of the bits), set (`0041b470`) and clear (`0041b440`).
-const EXTRA_FLAG_TEST: u32 = 0x0041_b3a0;
-const EXTRA_FLAG_SET: u32 = 0x0041_b470;
-const EXTRA_FLAG_CLEAR: u32 = 0x0041_b440;
+pub(crate) const EXTRA_FLAG_TEST: u32 = 0x0041_b3a0;
+pub(crate) const EXTRA_FLAG_SET: u32 = 0x0041_b470;
+pub(crate) const EXTRA_FLAG_CLEAR: u32 = 0x0041_b440;
 /// `ExtraDataList::RemoveLastFinishedSequence` (Xbox PDB) and
 /// `ExtraDataList::GetLastFinishedSequence` (Xbox PDB).
-const EXTRA_REMOVE_LAST_SEQUENCE: u32 = 0x0042_2920;
-const EXTRA_GET_LAST_SEQUENCE: u32 = 0x0042_28f0;
+pub(crate) const EXTRA_REMOVE_LAST_SEQUENCE: u32 = 0x0042_2920;
+pub(crate) const EXTRA_GET_LAST_SEQUENCE: u32 = 0x0042_28f0;
 /// `TESObjectREFR::RemoveWeapon` (Xbox PDB), and two helpers `LoadGame`
 /// calls after it on the same reference.
-const REMOVE_WEAPON: u32 = 0x0057_1b50;
-const FORM_PREPARE: u32 = 0x0045_34f0;
-const FORM_STEP: u32 = 0x0048_3710;
+pub(crate) const REMOVE_WEAPON: u32 = 0x0057_1b50;
+pub(crate) const FORM_PREPARE: u32 = 0x0045_34f0;
+pub(crate) const FORM_STEP: u32 = 0x0048_3710;
 /// The functions of the reference's enable-state parent: `list`'s parent
 /// (`0056a9f0`, a form or null) and whether this reference follows its
 /// parent's state (`0056aa70`).
-const ENABLE_PARENT: u32 = 0x0056_a9f0;
-const FOLLOWS_ENABLE_PARENT: u32 = 0x0056_aa70;
+pub(crate) const ENABLE_PARENT: u32 = 0x0056_a9f0;
+pub(crate) const FOLLOWS_ENABLE_PARENT: u32 = 0x0056_aa70;
 /// `ProcessLists::PrintLists` is the name the map gives `008d0600`; the
 /// body is `LoadGame`'s/`FinishInitLoadGame`'s first step (called with the
 /// two flag words).
-const LOAD_FIRST_STEP: u32 = 0x008d_0600;
+pub(crate) const LOAD_FIRST_STEP: u32 = 0x008d_0600;
 /// `TESForm::...` flag tests: `IsDisabled`-like (`iFormFlags & 0x800`) is
 /// [`FORM_IS_DISABLED`]; the deleted test is [`FORM_IS_DELETED`].
 /// The Havok reference's loaded 3D: `0043fcd0(reference)` returns the
 /// `NiAVObject` (the thread's cached one when it is the one being loaded,
 /// else `pLoadedData->m_spData3D`).
-const GET_LOADED_3D: u32 = 0x0043_fcd0;
+pub(crate) const GET_LOADED_3D: u32 = 0x0043_fcd0;
 /// `[this + 0xc]` of a 3D object (its first controller).
-const GET_CONTROLLER: u32 = 0x0043_b230;
+pub(crate) const GET_CONTROLLER: u32 = 0x0043_b230;
 /// A checked cast: `(type record, object)`, cdecl, null for a null object.
 /// With the record at [`MANAGER_TYPE`] it turns a controller into its
 /// controller manager, with [`RIGID_BODY_TYPE`] a collision body reference
 /// into its rigid body.
-const CHECKED_CAST: u32 = 0x0065_3270;
-const MANAGER_TYPE: u32 = 0x011f_36ac;
+pub(crate) const CHECKED_CAST: u32 = 0x0065_3270;
+pub(crate) const MANAGER_TYPE: u32 = 0x011f_36ac;
 /// `NiControllerManager` methods (the map names two): `GetSequenceAt(i)`
 /// (`00495d20`), the count (`00495d00`), `DeactivateAll(time)`
 /// (`0048fef0`), `0047aa40(flag)`, `0047aab0(sequence, ...)`, "has
 /// sequences to save" (`004f05a0`), and the lookup by `NiFixedString`
 /// (`0047a520`).
-const MANAGER_SEQUENCE_AT: u32 = 0x0049_5d20;
-const MANAGER_SEQUENCE_COUNT: u32 = 0x0049_5d00;
-const MANAGER_DEACTIVATE_ALL: u32 = 0x0048_fef0;
-const MANAGER_SET_FLAG: u32 = 0x0047_aa40;
-const MANAGER_ACTIVATE: u32 = 0x0047_aab0;
-const MANAGER_HAS_SEQUENCES: u32 = 0x004f_05a0;
-const MANAGER_FIND_SEQUENCE: u32 = 0x0047_a520;
+pub(crate) const MANAGER_SEQUENCE_AT: u32 = 0x0049_5d20;
+pub(crate) const MANAGER_SEQUENCE_COUNT: u32 = 0x0049_5d00;
+pub(crate) const MANAGER_DEACTIVATE_ALL: u32 = 0x0048_fef0;
+pub(crate) const MANAGER_SET_FLAG: u32 = 0x0047_aa40;
+pub(crate) const MANAGER_ACTIVATE: u32 = 0x0047_aab0;
+pub(crate) const MANAGER_HAS_SEQUENCES: u32 = 0x004f_05a0;
+pub(crate) const MANAGER_FIND_SEQUENCE: u32 = 0x0047_a520;
 /// `NiFixedString` constructor from a C string (`00438170`, `this`, the
 /// text) and destructor (`004381b0`).
-const FIXED_STRING_CONSTRUCT: u32 = 0x0043_8170;
-const FIXED_STRING_DESTRUCT: u32 = 0x0043_81b0;
+pub(crate) const FIXED_STRING_CONSTRUCT: u32 = 0x0043_8170;
+pub(crate) const FIXED_STRING_DESTRUCT: u32 = 0x0043_81b0;
 /// Pointers the exe keeps to the names of three sequences: "Unequip"
 /// (`01197b5c`) and the entries 0 (`011977d8`) and 2 (`01197820`) of the
 /// same table (stride 0x24, a name pointer first).
-const NAME_UNEQUIP: u32 = 0x0119_7b5c;
-const NAME_SEQUENCE_A: u32 = 0x0119_77d8;
-const NAME_SEQUENCE_B: u32 = 0x0119_7820;
+pub(crate) const NAME_UNEQUIP: u32 = 0x0119_7b5c;
+pub(crate) const NAME_SEQUENCE_A: u32 = 0x0119_77d8;
+pub(crate) const NAME_SEQUENCE_B: u32 = 0x0119_7820;
 /// The table itself (`011977d8`, stride 0x24).
-const NAME_TABLE: u32 = 0x0119_77d8;
+pub(crate) const NAME_TABLE: u32 = 0x0119_77d8;
 /// A sequence's methods: its name holder (`00413f40` = `this + 8`),
 /// the C string of a name holder (`0043b1b0`), `0044a670` (string
 /// length, cdecl), whether it is a generic-location one (`008041a0`,
@@ -2764,162 +2769,162 @@ const NAME_TABLE: u32 = 0x0119_77d8;
 /// (loads it), `004efaa0()` (the size of an empty record) and the time
 /// offset (`00759450`, `[this + 0x2c]`, in ST0), `00639aa0` (`[this +
 /// 0x48]`, in ST0), `0098adb0(offset)` (sets `[this + 0x48]`).
-const SEQUENCE_NAME_HOLDER: u32 = 0x0041_3f40;
-const NAME_TEXT: u32 = 0x0043_b1b0;
-const STRING_LENGTH: u32 = 0x0044_a670;
-const SEQUENCE_IS_GENERIC: u32 = 0x0080_41a0;
-const SEQUENCE_SAVE_SIZE: u32 = 0x004e_fb10;
-const SEQUENCE_SAVE: u32 = 0x004e_fb20;
-const SEQUENCE_LOAD: u32 = 0x004e_fbc0;
-const EMPTY_SEQUENCE_SIZE: u32 = 0x004e_faa0;
-const SEQUENCE_OFFSET_TIME: u32 = 0x0075_9450;
-const SEQUENCE_DURATION: u32 = 0x0063_9aa0;
-const SEQUENCE_SET_OFFSET: u32 = 0x0098_adb0;
+pub(crate) const SEQUENCE_NAME_HOLDER: u32 = 0x0041_3f40;
+pub(crate) const NAME_TEXT: u32 = 0x0043_b1b0;
+pub(crate) const STRING_LENGTH: u32 = 0x0044_a670;
+pub(crate) const SEQUENCE_IS_GENERIC: u32 = 0x0080_41a0;
+pub(crate) const SEQUENCE_SAVE_SIZE: u32 = 0x004e_fb10;
+pub(crate) const SEQUENCE_SAVE: u32 = 0x004e_fb20;
+pub(crate) const SEQUENCE_LOAD: u32 = 0x004e_fbc0;
+pub(crate) const EMPTY_SEQUENCE_SIZE: u32 = 0x004e_faa0;
+pub(crate) const SEQUENCE_OFFSET_TIME: u32 = 0x0075_9450;
+pub(crate) const SEQUENCE_DURATION: u32 = 0x0063_9aa0;
+pub(crate) const SEQUENCE_SET_OFFSET: u32 = 0x0098_adb0;
 /// `strcmp`-like compare of two C strings (`00408b20`, cdecl, 0 when equal)
 /// and `"Arrow"`.
-const STRING_COMPARE: u32 = 0x0040_8b20;
-const ARROW: u32 = 0x0102_031c;
+pub(crate) const STRING_COMPARE: u32 = 0x0040_8b20;
+pub(crate) const ARROW: u32 = 0x0102_031c;
 /// `0043d410(this, value, a, b)`: the 9-byte record `00a59c60` and
 /// `00a59c90` take (a `float` and two bytes), and the two functions that
 /// take it on a 3D object.
-const MAKE_VELOCITY: u32 = 0x0043_d410;
-const SET_3D_VELOCITY: u32 = 0x00a5_9c60;
-const ADD_3D_VELOCITY: u32 = 0x00a5_9c90;
+pub(crate) const MAKE_VELOCITY: u32 = 0x0043_d410;
+pub(crate) const SET_3D_VELOCITY: u32 = 0x00a5_9c60;
+pub(crate) const ADD_3D_VELOCITY: u32 = 0x00a5_9c90;
 /// `NiAVObject`-side functions of the Havok walk: the collision root of a
 /// 3D (`004a8b00`), the walker over a node's collision objects
 /// (`00c68900(node, visitor, callback)`), and `00c6a350(node, a, b, c, d)`
 /// (the map's `bhkWorld::SetMotion`-like call), `00c8f210(node, a, b)`
 /// and `00c9b670(node, vector, a, time, b)` (the knock-down), and
 /// `00c7c150(controller, 1)` (disable a ragdoll animation).
-const COLLISION_ROOT: u32 = 0x004a_8b00;
-const WALK_COLLISION: u32 = 0x00c6_8900;
-const SET_MOTION: u32 = 0x00c6_a350;
-const SET_FIXED: u32 = 0x00c8_f210;
-const KNOCK_DOWN: u32 = 0x00c9_b670;
-const DISABLE_RAGDOLL_ANIM: u32 = 0x00c7_c150;
-const SET_HAVOK_WEAPON: u32 = 0x008a_5f20;
+pub(crate) const COLLISION_ROOT: u32 = 0x004a_8b00;
+pub(crate) const WALK_COLLISION: u32 = 0x00c6_8900;
+pub(crate) const SET_MOTION: u32 = 0x00c6_a350;
+pub(crate) const SET_FIXED: u32 = 0x00c8_f210;
+pub(crate) const KNOCK_DOWN: u32 = 0x00c9_b670;
+pub(crate) const DISABLE_RAGDOLL_ANIM: u32 = 0x00c7_c150;
+pub(crate) const SET_HAVOK_WEAPON: u32 = 0x008a_5f20;
 /// Rigid body glue: the entity of a body (`004ae750`), the entity's
 /// activity flag writer (`00c9bff0(entity, &flag)`), the body of a
 /// collision node (`006fa820`, the first word of its `+0x10`), and the
 /// checked cast of that to a rigid body (`00653270` with
 /// [`RIGID_BODY_TYPE`]).
-const BODY_ENTITY: u32 = 0x004a_e750;
-const ENTITY_ACTIVE_FLAG: u32 = 0x00c9_bff0;
-const NODE_BODY_REF: u32 = 0x006f_a820;
-const RIGID_BODY_TYPE: u32 = 0x0126_81c0;
+pub(crate) const BODY_ENTITY: u32 = 0x004a_e750;
+pub(crate) const ENTITY_ACTIVE_FLAG: u32 = 0x00c9_bff0;
+pub(crate) const NODE_BODY_REF: u32 = 0x006f_a820;
+pub(crate) const RIGID_BODY_TYPE: u32 = 0x0126_81c0;
 /// `0043b300(type record, object)`: whether `object` is of that type
 /// (cdecl); the two records the Havok callbacks test.
-const IS_OF_TYPE: u32 = 0x0043_b300;
-const WEAPON_NODE_TYPE: u32 = 0x0126_817c;
-const SKIPPED_NODE_TYPE: u32 = 0x011f_9140;
+pub(crate) const IS_OF_TYPE: u32 = 0x0043_b300;
+pub(crate) const WEAPON_NODE_TYPE: u32 = 0x0126_817c;
+pub(crate) const SKIPPED_NODE_TYPE: u32 = 0x011f_9140;
 /// `[this + 8]` of a collision node (`0044ddc0`): the object it belongs to.
-const NODE_OBJECT: u32 = 0x0044_ddc0;
+pub(crate) const NODE_OBJECT: u32 = 0x0044_ddc0;
 /// The default constructors the compiler calls on a stack `NiPoint3` or
 /// `hkVector4` (`006815c0`, which just returns `this`) and on a quaternion
 /// (`006240d0`).
-const VECTOR_CONSTRUCT: u32 = LIST_ITEM_SLOT;
-const QUATERNION_CONSTRUCT: u32 = 0x0062_40d0;
+pub(crate) const VECTOR_CONSTRUCT: u32 = LIST_ITEM_SLOT;
+pub(crate) const QUATERNION_CONSTRUCT: u32 = 0x0062_40d0;
 /// `hkVector4` to `NiPoint3` (`00458620(dest, source)`, cdecl),
 /// `NiPoint3` to `hkVector4` (`004a3e00(dest, source)`, cdecl),
 /// `hkVector4` to `NiPoint3` for velocities (`004a3970(dest, source)`),
 /// `NiQuaternion` to `hkQuaternion` (`00561500(dest, source)`, cdecl)
 /// and the 16-byte copy (`004a3c90(dest, source)`).
-const VECTOR_TO_NI: u32 = 0x0045_8620;
-const NI_TO_VECTOR: u32 = 0x004a_3e00;
-const VECTOR_TO_NI_VELOCITY: u32 = 0x004a_3970;
-const NI_QUATERNION_TO_HAVOK: u32 = 0x0056_1500;
-const COPY_16_BYTES: u32 = 0x004a_3c90;
+pub(crate) const VECTOR_TO_NI: u32 = 0x0045_8620;
+pub(crate) const NI_TO_VECTOR: u32 = 0x004a_3e00;
+pub(crate) const VECTOR_TO_NI_VELOCITY: u32 = 0x004a_3970;
+pub(crate) const NI_QUATERNION_TO_HAVOK: u32 = 0x0056_1500;
+pub(crate) const COPY_16_BYTES: u32 = 0x004a_3c90;
 /// A rigid body's linear/angular velocity pieces: `009d9f40` and
 /// `0045c650`, and the zero vector `00458b20` returns (`01267e30`).
-const BODY_VECTOR_PART: u32 = 0x009d_9f40;
-const BODY_VECTOR_FINISH: u32 = 0x0045_c650;
-const ZERO_VECTOR_GETTER: u32 = 0x0045_8b20;
+pub(crate) const BODY_VECTOR_PART: u32 = 0x009d_9f40;
+pub(crate) const BODY_VECTOR_FINISH: u32 = 0x0045_c650;
+pub(crate) const ZERO_VECTOR_GETTER: u32 = 0x0045_8b20;
 /// The quaternion setters `00560c80` calls on its destination.
-const QUATERNION_SET_0: u32 = 0x004f_5d90;
-const QUATERNION_SET_2: u32 = 0x0063_f790;
-const QUATERNION_SET_3: u32 = 0x0052_ce20;
+pub(crate) const QUATERNION_SET_0: u32 = 0x004f_5d90;
+pub(crate) const QUATERNION_SET_2: u32 = 0x0063_f790;
+pub(crate) const QUATERNION_SET_3: u32 = 0x0052_ce20;
 /// The rigid-body functions the Havok callbacks use (a flag setter and two
 /// vector setters; the save writes the two vectors in the order the load
 /// reads them back):
 /// `00561580(body, flag)`, `005615d0(body, vector)`, `00561630(body,
 /// vector)`, the load handler for older saves (`00561860`) and
 /// `00496080(x, 0x14, time)` / `004964d0(x)` (the animation group clear).
-const BODY_FLAG_SETTER: u32 = 0x0056_1580;
-const BODY_SET_FIRST_VECTOR: u32 = 0x0056_15d0;
-const BODY_SET_SECOND_VECTOR: u32 = 0x0056_1630;
-const LOAD_OLD_HAVOK: u32 = 0x0056_1860;
-const CLEAR_ANIM_GROUP: u32 = 0x0049_6080;
-const ANIM_FINISH: u32 = 0x0049_64d0;
+pub(crate) const BODY_FLAG_SETTER: u32 = 0x0056_1580;
+pub(crate) const BODY_SET_FIRST_VECTOR: u32 = 0x0056_15d0;
+pub(crate) const BODY_SET_SECOND_VECTOR: u32 = 0x0056_1630;
+pub(crate) const LOAD_OLD_HAVOK: u32 = 0x0056_1860;
+pub(crate) const CLEAR_ANIM_GROUP: u32 = 0x0049_6080;
+pub(crate) const ANIM_FINISH: u32 = 0x0049_64d0;
 /// `NiQuaternion::FromRotation(matrix)` (`00a6df40`, `this` the
 /// quaternion) and `TESObjectREFR::GetOrientation(matrix)` (`0056fa00`).
-const QUATERNION_FROM_ROTATION: u32 = 0x00a6_df40;
-const GET_ORIENTATION: u32 = 0x0056_fa00;
+pub(crate) const QUATERNION_FROM_ROTATION: u32 = 0x00a6_df40;
+pub(crate) const GET_ORIENTATION: u32 = 0x0056_fa00;
 /// The reference's location accessor, set functions of the 3D
 /// (`00440460(node, location)`, `0043fa80(node, orientation)`),
 /// `bhkWorld::UpdatePosition(node, a, b)` (`00c69f50`, cdecl) and
 /// `0046a010(reference, flag)`.
-const SET_3D_LOCATION: u32 = 0x0044_0460;
-const SET_3D_ORIENTATION: u32 = 0x0043_fa80;
-const UPDATE_POSITION: u32 = 0x00c6_9f50;
-const FINISH_INIT_LAST: u32 = 0x0046_a010;
+pub(crate) const SET_3D_LOCATION: u32 = 0x0044_0460;
+pub(crate) const SET_3D_ORIENTATION: u32 = 0x0043_fa80;
+pub(crate) const UPDATE_POSITION: u32 = 0x00c6_9f50;
+pub(crate) const FINISH_INIT_LAST: u32 = 0x0046_a010;
 /// `TESObjectREFR` handlers `fn_0055f240` calls: `00574920(this, flag)`,
 /// `BGSOpenCloseForm::IsOpenCloseForm(form)` (`0047a490`, cdecl),
 /// `BGSOpenCloseForm::SetOpenState(reference, state, flag)`
 /// (`0047aec0`, cdecl), the open-state getter (`00572d30(this, 8)`),
 /// the "was in the middle of a transition" test (`00632ce0`),
 /// `TESObjectREFR::RestoreRagDollData` (`00577330`), `00579ac0`, `00477ba0`.
-const RESET_STATE: u32 = 0x0057_4920;
-const IS_OPEN_CLOSE_FORM: u32 = 0x0047_a490;
-const SET_OPEN_STATE: u32 = 0x0047_aec0;
-const GET_OPEN_STATE: u32 = 0x0057_2d30;
-const SAVE_LOAD_TEST_632CE0: u32 = 0x0063_2ce0;
-const RESTORE_RAGDOLL_DATA: u32 = 0x0057_7330;
-const REFR_DISABLE_FIX: u32 = 0x0057_9ac0;
-const FORM_IS_KIND_477BA0: u32 = 0x0047_7ba0;
+pub(crate) const RESET_STATE: u32 = 0x0057_4920;
+pub(crate) const IS_OPEN_CLOSE_FORM: u32 = 0x0047_a490;
+pub(crate) const SET_OPEN_STATE: u32 = 0x0047_aec0;
+pub(crate) const GET_OPEN_STATE: u32 = 0x0057_2d30;
+pub(crate) const SAVE_LOAD_TEST_632CE0: u32 = 0x0063_2ce0;
+pub(crate) const RESTORE_RAGDOLL_DATA: u32 = 0x0057_7330;
+pub(crate) const REFR_DISABLE_FIX: u32 = 0x0057_9ac0;
+pub(crate) const FORM_IS_KIND_477BA0: u32 = 0x0047_7ba0;
 /// `0055f970`'s other callees: the head-controller test `004b5bf0`
 /// (`HasMorpherController`, cdecl), `0040_4dc0(sequence name, "Unequip")`
 /// (cdecl compare) and `004b5c80(object)` (cdecl, bool).
-const HAS_MORPHER_CONTROLLER: u32 = 0x004b_5bf0;
-const SEQUENCE_NAME_COMPARE: u32 = 0x0040_4dc0;
-const IS_ACTOR_3D: u32 = 0x004b_5c80;
+pub(crate) const HAS_MORPHER_CONTROLLER: u32 = 0x004b_5bf0;
+pub(crate) const SEQUENCE_NAME_COMPARE: u32 = 0x0040_4dc0;
+pub(crate) const IS_ACTOR_3D: u32 = 0x004b_5c80;
 /// `0042_6020(list, flags, flags2, reference, base)`: the extra-data
 /// handler `fn_0055f5f0` ends with.
-const EXTRA_AFTER_LOAD: u32 = 0x0042_6020;
+pub(crate) const EXTRA_AFTER_LOAD: u32 = 0x0042_6020;
 /// `InventoryChanges` handlers `fn_0055f5f0` and `FinishInitLoadGame`
 /// call on the changes.
-const INVENTORY_CHANGES_STEP_A: u32 = 0x004d_4030;
-const INVENTORY_CHANGES_STEP_B: u32 = 0x004d_1960;
+pub(crate) const INVENTORY_CHANGES_STEP_A: u32 = 0x004d_4030;
+pub(crate) const INVENTORY_CHANGES_STEP_B: u32 = 0x004d_1960;
 /// `00567490(reference, scale)`: the scale setter `LoadGame` calls.
-const SET_SCALE: u32 = 0x0056_7490;
+pub(crate) const SET_SCALE: u32 = 0x0056_7490;
 /// `0085f2b0(game, reference, size)` and `0085f5a0(game, reference,
 /// size)`: the loaders of the older `0x10000000` and `4` records.
-const LOAD_OLD_RECORD_A: u32 = 0x0085_f2b0;
-const LOAD_OLD_RECORD_B: u32 = 0x0085_f5a0;
+pub(crate) const LOAD_OLD_RECORD_A: u32 = 0x0085_f2b0;
+pub(crate) const LOAD_OLD_RECORD_B: u32 = 0x0085_f5a0;
 
 /// The tag the save game writes ahead of a reference's block: the constant
 /// `0x424c4f4b` ("BLOK" read as a big-endian constant), which the file holds
 /// as the bytes `KOLB`.
-const BLOCK_TAG: u32 = tag(b"KOLB");
+pub(crate) const BLOCK_TAG: u32 = tag(b"KOLB");
 /// The source line the save and load of this unit report.
-const SAVE_GAME_LINE: u32 = 0x0b01;
-const LOAD_GAME_HEADER_LINE: u32 = 0x0b10;
-const LOAD_GAME_END_LINE: u32 = 0x0b8f;
+pub(crate) const SAVE_GAME_LINE: u32 = 0x0b01;
+pub(crate) const LOAD_GAME_HEADER_LINE: u32 = 0x0b10;
+pub(crate) const LOAD_GAME_END_LINE: u32 = 0x0b8f;
 /// Message formats (exe strings) of `SaveGame`, `LoadGame` and the Havok
 /// load.
-const SAVE_GAME_FORMAT: u32 = 0x0101_53a0;
-const SAVE_GAME_SHORT_FORMAT: u32 = 0x0101_536c;
-const SAVE_BLOCK_TOO_LARGE_MESSAGE: u32 = 0x0101_5318;
-const BLOCK_HEADER_FORM_FORMAT: u32 = 0x0101_5718;
-const BLOCK_HEADER_FORMAT: u32 = 0x0101_56a8;
-const LOAD_OVERRUN_FORM_FORMAT: u32 = 0x0101_5588;
-const LOAD_UNDERRUN_FORM_FORMAT: u32 = 0x0101_5500;
-const LOAD_OVERRUN_FORMAT: u32 = 0x0101_54a0;
-const LOAD_UNDERRUN_FORMAT: u32 = 0x0101_5440;
-const HAVOK_NO_3D_FORMAT: u32 = 0x0102_fc78;
-const HAVOK_BONE_COUNT_FORMAT: u32 = 0x0102_fd38;
-const HAVOK_WEAPON_BONE_FORMAT: u32 = 0x0102_fcc8;
-const TRUE_TEXT: u32 = 0x0102_fd2c;
-const FALSE_TEXT: u32 = 0x0102_fd24;
+pub(crate) const SAVE_GAME_FORMAT: u32 = 0x0101_53a0;
+pub(crate) const SAVE_GAME_SHORT_FORMAT: u32 = 0x0101_536c;
+pub(crate) const SAVE_BLOCK_TOO_LARGE_MESSAGE: u32 = 0x0101_5318;
+pub(crate) const BLOCK_HEADER_FORM_FORMAT: u32 = 0x0101_5718;
+pub(crate) const BLOCK_HEADER_FORMAT: u32 = 0x0101_56a8;
+pub(crate) const LOAD_OVERRUN_FORM_FORMAT: u32 = 0x0101_5588;
+pub(crate) const LOAD_UNDERRUN_FORM_FORMAT: u32 = 0x0101_5500;
+pub(crate) const LOAD_OVERRUN_FORMAT: u32 = 0x0101_54a0;
+pub(crate) const LOAD_UNDERRUN_FORMAT: u32 = 0x0101_5440;
+pub(crate) const HAVOK_NO_3D_FORMAT: u32 = 0x0102_fc78;
+pub(crate) const HAVOK_BONE_COUNT_FORMAT: u32 = 0x0102_fd38;
+pub(crate) const HAVOK_WEAPON_BONE_FORMAT: u32 = 0x0102_fcc8;
+pub(crate) const TRUE_TEXT: u32 = 0x0102_fd2c;
+pub(crate) const FALSE_TEXT: u32 = 0x0102_fd24;
 
 layout! {
     /// `HavokSaveData` (Xbox PDB), 0x14 bytes: what the save and load of a
@@ -2959,23 +2964,23 @@ layout! {
 }
 
 /// The reference's loaded 3D (`NiAVObject*`), null when it has none.
-fn loaded_3d(e: &mut Engine, refr: u32) -> u32 {
+pub(crate) fn loaded_3d(e: &mut Engine, refr: u32) -> u32 {
     e.call(GET_LOADED_3D, &args![refr]).u32()
 }
 
 /// The first controller of a 3D object (`[obj + 0xc]`).
-fn controller_of(e: &mut Engine, obj3d: u32) -> u32 {
+pub(crate) fn controller_of(e: &mut Engine, obj3d: u32) -> u32 {
     e.call(GET_CONTROLLER, &args![obj3d]).u32()
 }
 
 /// The controller manager the 3D's first controller casts to, or 0.
-fn manager_of(e: &mut Engine, controller: u32) -> u32 {
+pub(crate) fn manager_of(e: &mut Engine, controller: u32) -> u32 {
     e.call(CHECKED_CAST, &args![MANAGER_TYPE, controller]).u32()
 }
 
 /// `manager_of` for a reference whose 3D has a controller; 0 otherwise
 /// (the lookup `fn_0055f880` and `fn_0055f900` start with).
-fn manager_of_reference(e: &mut Engine, this: u32) -> u32 {
+pub(crate) fn manager_of_reference(e: &mut Engine, this: u32) -> u32 {
     let obj3d = loaded_3d(e, this);
     let mut manager = 0;
     if obj3d != 0 && controller_of(e, obj3d) != 0 {
@@ -2986,7 +2991,7 @@ fn manager_of_reference(e: &mut Engine, this: u32) -> u32 {
 }
 
 /// The C string of a sequence's name (`0043b1b0(00413f40(sequence))`).
-fn sequence_name(e: &mut Engine, sequence: u32) -> u32 {
+pub(crate) fn sequence_name(e: &mut Engine, sequence: u32) -> u32 {
     let holder = e.call(SEQUENCE_NAME_HOLDER, &args![sequence]).u32();
     e.call(NAME_TEXT, &args![holder]).u32()
 }
@@ -2994,7 +2999,7 @@ fn sequence_name(e: &mut Engine, sequence: u32) -> u32 {
 /// The sequence of `manager` whose name is the C string at the pointer
 /// stored in the global `name_global`: builds the `NiFixedString`, looks
 /// it up (`0047a520`) and destroys it.
-fn find_sequence(e: &mut Engine, manager: u32, name_global: u32) -> u32 {
+pub(crate) fn find_sequence(e: &mut Engine, manager: u32, name_global: u32) -> u32 {
     let name = e.global::<u32>(name_global);
     e.with_stack(4, |e, fixed| {
         let handle = e.call(FIXED_STRING_CONSTRUCT, &args![fixed, name]).u32();
@@ -3005,13 +3010,13 @@ fn find_sequence(e: &mut Engine, manager: u32, name_global: u32) -> u32 {
 }
 
 /// The `float` result of a sequence getter in ST0.
-fn float_of(e: &mut Engine, addr: u32, object: u32) -> f32 {
+pub(crate) fn float_of(e: &mut Engine, addr: u32, object: u32) -> f32 {
     e.call(addr, &args![object]).f32()
 }
 
 /// Gives a 3D object its velocity record: `0043d410(record, value, 1, 0)`
 /// (`value` is the sequence's offset time) then `00a59c60(node, record)`.
-fn set_velocity_record(e: &mut Engine, obj3d: u32, value: f32, a: u32, b: u32) {
+pub(crate) fn set_velocity_record(e: &mut Engine, obj3d: u32, value: f32, a: u32, b: u32) {
     e.with_stack(0xc, |e, record| {
         e.call(MAKE_VELOCITY, &args![record, value, a, b]);
         e.call(SET_3D_VELOCITY, &args![obj3d, record]);
@@ -3021,20 +3026,20 @@ fn set_velocity_record(e: &mut Engine, obj3d: u32, value: f32, a: u32, b: u32) {
 /// The `CMPEQSS`/`RSQRTSS` pair of the Havok normalizer: the hardware
 /// estimate of `1 / sqrt(x)` on x86, exact elsewhere.
 #[cfg(target_arch = "x86_64")]
-fn rsqrt_estimate(x: f32) -> f32 {
+pub(crate) fn rsqrt_estimate(x: f32) -> f32 {
     use std::arch::x86_64::{_mm_cvtss_f32, _mm_rsqrt_ss, _mm_set_ss};
     // SAFETY: SSE is part of the x86_64 baseline.
     unsafe { _mm_cvtss_f32(_mm_rsqrt_ss(_mm_set_ss(x))) }
 }
 
 #[cfg(not(target_arch = "x86_64"))]
-fn rsqrt_estimate(x: f32) -> f32 {
+pub(crate) fn rsqrt_estimate(x: f32) -> f32 {
     1.0 / x.sqrt()
 }
 
 /// Drops the weapon of an actor that has one drawn: the sequence both
 /// `LoadGame` and `fn_0055f240` run when the container changed.
-fn drop_drawn_weapon(e: &mut Engine, this: Ptr<TESObjectREFR>) {
+pub(crate) fn drop_drawn_weapon(e: &mut Engine, this: Ptr<TESObjectREFR>) {
     let me = this.addr();
     if is_actor(e, me) && e.vcall(me, 0x21c, &args![]).bool() {
         e.call(REMOVE_WEAPON, &args![this]);
@@ -3047,7 +3052,7 @@ fn drop_drawn_weapon(e: &mut Engine, this: Ptr<TESObjectREFR>) {
 /// Sets the reference's disabled state from its enable-state parent
 /// `parent` (`0056a9f0`'s result): the same as the parent's, or the
 /// opposite when the reference follows it inverted (`0056aa70`).
-fn follow_enable_parent(e: &mut Engine, this: Ptr<TESObjectREFR>, parent: u32) {
+pub(crate) fn follow_enable_parent(e: &mut Engine, this: Ptr<TESObjectREFR>, parent: u32) {
     if e.call(FOLLOWS_ENABLE_PARENT, &args![this]).bool() {
         let disabled = e.call(FORM_IS_DISABLED, &args![parent]).bool();
         e.call(FORM_SET_DISABLED, &args![this, !disabled]);
@@ -3060,7 +3065,7 @@ fn follow_enable_parent(e: &mut Engine, this: Ptr<TESObjectREFR>, parent: u32) {
 /// The open/close extra flag step `LoadGame`'s sibling `fn_0055f240` and
 /// `LoadGame` share: if the list has bit 8, sets it (`0041b470`), else
 /// clears it (`0041b440`).
-fn copy_open_state_flag(e: &mut Engine, me: u32) {
+pub(crate) fn copy_open_state_flag(e: &mut Engine, me: u32) {
     let list = extra_list(e, me);
     if e.call(EXTRA_FLAG_TEST, &args![list, 8u32]).bool() {
         let list = extra_list(e, me);
@@ -3669,7 +3674,7 @@ pub fn fn_0055f970(e: &mut Engine, this: Ptr<TESObjectREFR>) {
 /// The tail `fn_0055f970` runs for a restarted sequence: sets its offset
 /// to `-FLT_MAX` and gives the 3D a velocity record made from the
 /// sequence's offset time (`00759450`).
-fn restart_offset(e: &mut Engine, obj3d: u32, sequence: u32) {
+pub(crate) fn restart_offset(e: &mut Engine, obj3d: u32, sequence: u32) {
     let minimum: f32 = e.global(FLOAT_MAX);
     e.call(SEQUENCE_SET_OFFSET, &args![sequence, -minimum]);
     let time = float_of(e, SEQUENCE_OFFSET_TIME, sequence);
@@ -4065,7 +4070,12 @@ pub fn fn_00560530(e: &mut Engine, this: Ptr<TESObjectREFR>, size: u16) {
 /// collision root and whose object is named "Arrow" is ignored; so is one
 /// whose object is of the type at `011f9140` while the reference is an
 /// actor.
-fn skip_collision_node(e: &mut Engine, node: u32, object: u32, state: Ptr<HavokSaveData>) -> bool {
+pub(crate) fn skip_collision_node(
+    e: &mut Engine,
+    node: u32,
+    object: u32,
+    state: Ptr<HavokSaveData>,
+) -> bool {
     let root = e.get(state, HavokSaveData::pCollisionRoot).addr();
     if node != root && object != 0 && sequence_name(e, object) != 0 {
         let name = sequence_name(e, object);
@@ -4080,7 +4090,7 @@ fn skip_collision_node(e: &mut Engine, node: u32, object: u32, state: Ptr<HavokS
 
 /// The rigid body of a collision node: its body reference (`006fa820`)
 /// cast to a rigid body, 0 when either is missing.
-fn node_rigid_body(e: &mut Engine, body_ref: u32) -> u32 {
+pub(crate) fn node_rigid_body(e: &mut Engine, body_ref: u32) -> u32 {
     if body_ref == 0 {
         return 0;
     }
@@ -4571,76 +4581,77 @@ layout! {
 
 /// `00a29680`: a bare `RET` in this build. `fn_00561580` and `fn_00561690`
 /// call it on the body before and after they change its entity.
-const BODY_LOCK_MARKER: u32 = 0x00a2_9680;
+pub(crate) const BODY_LOCK_MARKER: u32 = 0x00a2_9680;
 /// `hkpEntity::activate` and `hkpEntity::deactivate` (the map's names).
-const ENTITY_ACTIVATE: u32 = 0x00c9_c1d0;
-const ENTITY_DEACTIVATE: u32 = 0x00c9_c240;
+pub(crate) const ENTITY_ACTIVATE: u32 = 0x00c9_c1d0;
+pub(crate) const ENTITY_DEACTIVATE: u32 = 0x00c9_c240;
 /// `NiPoint3` to `hkVector4` for the angular velocity
 /// (`00553fc0(dest, source)`, cdecl): copies three floats and zeroes the
 /// fourth lane.
-const NI_POINT_TO_VECTOR_ZERO_W: u32 = 0x0055_3fc0;
+pub(crate) const NI_POINT_TO_VECTOR_ZERO_W: u32 = 0x0055_3fc0;
 /// The four component getters `fn_00561500` calls on the `NiQuaternion`
 /// (each returns a `float` in `ST0`: the values at +4, +8, +0xc and +0, in
 /// the order the `hkQuaternion` takes them).
-const QUATERNION_COMPONENTS: [u32; 4] = [0x006b_9130, 0x0048_8d50, 0x0084_d030, 0x006a_7f50];
+pub(crate) const QUATERNION_COMPONENTS: [u32; 4] =
+    [0x006b_9130, 0x0048_8d50, 0x0084_d030, 0x006a_7f50];
 /// The SSE helpers `fn_00561730` chains (all `thiscall` on a stack
 /// `hkVector4`): `00458a10(out; a, b)` is a `SUBPS`, `00458ad0(v; v)` an
 /// `ANDPS`, `004589c0(v; float)` fills all four lanes, `00458a60(a; out, b)`
 /// a `CMPLEPS` and `00458990(mask vector; bits)` tests that all the bits
 /// are set in the mask.
-const VECTOR_SUBTRACT: u32 = 0x0045_8a10;
-const VECTOR_ABSOLUTE: u32 = 0x0045_8ad0;
-const VECTOR_SPLAT: u32 = 0x0045_89c0;
-const VECTOR_COMPARE: u32 = 0x0045_8a60;
-const VECTOR_ALL_SET: u32 = 0x0045_8990;
+pub(crate) const VECTOR_SUBTRACT: u32 = 0x0045_8a10;
+pub(crate) const VECTOR_ABSOLUTE: u32 = 0x0045_8ad0;
+pub(crate) const VECTOR_SPLAT: u32 = 0x0045_89c0;
+pub(crate) const VECTOR_COMPARE: u32 = 0x0045_8a60;
+pub(crate) const VECTOR_ALL_SET: u32 = 0x0045_8990;
 /// The tolerance `0.001` the velocity setters pass (the same `float` as
 /// [`RADIUS_EPSILON`]).
-const VELOCITY_EPSILON: u32 = RADIUS_EPSILON;
+pub(crate) const VELOCITY_EPSILON: u32 = RADIUS_EPSILON;
 /// `bhkCharacterController::SetPosition_ov2` (`00c6e390`, takes an
 /// `hkVector4`) and `MobileObject::GetCharController` (`009306d0`).
-const CONTROLLER_SET_POSITION: u32 = 0x00c6_e390;
-const GET_CHARACTER_CONTROLLER: u32 = 0x0093_06d0;
+pub(crate) const CONTROLLER_SET_POSITION: u32 = 0x00c6_e390;
+pub(crate) const GET_CHARACTER_CONTROLLER: u32 = 0x0093_06d0;
 /// `ExtraDataList::GetStartingWorldOrCell` (`0041b320`),
 /// `TESObjectREFR::GetWorldSpace` (`00575d70`), the cell test `00425fd0`
 /// that `InitItem` also applies to a parent cell, and
 /// `TESObjectCELL::GetWorldSpace` (`0054ddd0`).
-const EXTRA_GET_STARTING_SPACE: u32 = 0x0041_b320;
-const GET_WORLD_SPACE: u32 = 0x0057_5d70;
-const CELL_TEST: u32 = 0x0042_5fd0;
-const CELL_GET_WORLD_SPACE: u32 = 0x0054_ddd0;
+pub(crate) const EXTRA_GET_STARTING_SPACE: u32 = 0x0041_b320;
+pub(crate) const GET_WORLD_SPACE: u32 = 0x0057_5d70;
+pub(crate) const CELL_TEST: u32 = 0x0042_5fd0;
+pub(crate) const CELL_GET_WORLD_SPACE: u32 = 0x0054_ddd0;
 /// The `TES` singleton and `TES::IsCellLoaded(TES; cell, flag)`
 /// (`004511e0`).
-const GLOBAL_TES: u32 = 0x011d_ea10;
-const TES_IS_CELL_LOADED: u32 = 0x0045_11e0;
+pub(crate) const GLOBAL_TES: u32 = 0x011d_ea10;
+pub(crate) const TES_IS_CELL_LOADED: u32 = 0x0045_11e0;
 /// `GetLocationCellOrWorld(form, &cell, &world)` (`00846190`, cdecl),
 /// `TESWorldSpace::GetCellFromWorldCoord(world; position)` (`00587550`),
 /// `TESObjectREFR::SetLocationOnReference(this; position)` (`00575830`), the
 /// rotation setter (`00575700`, three `float`s by value) and
 /// `TESObjectREFR::MoveRefToNewSpace(this, cell, world)` (`00573800`, cdecl).
-const GET_LOCATION_CELL_OR_WORLD: u32 = 0x0084_6190;
-const WORLD_CELL_FROM_COORD: u32 = 0x0058_7550;
-const SET_LOCATION_ON_REFERENCE: u32 = 0x0057_5830;
-const SET_ROTATION: u32 = 0x0057_5700;
-const MOVE_REF_TO_NEW_SPACE: u32 = 0x0057_3800;
+pub(crate) const GET_LOCATION_CELL_OR_WORLD: u32 = 0x0084_6190;
+pub(crate) const WORLD_CELL_FROM_COORD: u32 = 0x0058_7550;
+pub(crate) const SET_LOCATION_ON_REFERENCE: u32 = 0x0057_5830;
+pub(crate) const SET_ROTATION: u32 = 0x0057_5700;
+pub(crate) const MOVE_REF_TO_NEW_SPACE: u32 = 0x0057_3800;
 /// The `BGSSaveLoadGame` singleton (`iGlobalFlags` at +0x244, Xbox PDB) and
 /// `BGSSaveLoadGame::GetChange(this; reference, change flags)`
 /// (`0084a6d0`), with the change flags built by `008c71b0(cell; value)`.
-const GLOBAL_SAVE_LOAD_GAME: u32 = 0x011d_df38;
-const SAVE_LOAD_GET_CHANGE: u32 = 0x0084_a6d0;
-const CHANGE_FLAGS_CONSTRUCT: u32 = 0x008c_71b0;
+pub(crate) const GLOBAL_SAVE_LOAD_GAME: u32 = 0x011d_df38;
+pub(crate) const SAVE_LOAD_GET_CHANGE: u32 = 0x0084_a6d0;
+pub(crate) const CHANGE_FLAGS_CONSTRUCT: u32 = 0x008c_71b0;
 /// `BGSLoadFormBuffer::Header.iChangeFlags` (`00428110(buffer; out)`
 /// copies the `BGSChangeFlags` at +0x17) and `iOldChangeFlags`
 /// (`0042ce30(buffer; out)` copies the one at +0x2c); both return `out`.
 /// `004280f0(flags; mask)` tells whether any bit of `mask` is set.
-const BUFFER_CHANGE_FLAGS: u32 = 0x0042_8110;
-const BUFFER_OLD_CHANGE_FLAGS: u32 = 0x0042_ce30;
-const CHANGE_FLAGS_TEST: u32 = 0x0042_80f0;
+pub(crate) const BUFFER_CHANGE_FLAGS: u32 = 0x0042_8110;
+pub(crate) const BUFFER_OLD_CHANGE_FLAGS: u32 = 0x0042_ce30;
+pub(crate) const CHANGE_FLAGS_TEST: u32 = 0x0042_80f0;
 /// The steps `SaveGame` and `LoadGame` of this unit start with:
 /// `TESForm::SaveGame(buffer)` (`00484d60`), `TESForm::LoadGame(buffer)`
 /// (`00484da0`) and the empty step `004534f0(this; buffer)`.
-const FORM_SAVE_GAME_BUFFER: u32 = 0x0048_4d60;
-const FORM_LOAD_GAME_BUFFER: u32 = 0x0048_4da0;
-const EMPTY_BUFFER_STEP: u32 = 0x0045_34f0;
+pub(crate) const FORM_SAVE_GAME_BUFFER: u32 = 0x0048_4d60;
+pub(crate) const FORM_LOAD_GAME_BUFFER: u32 = 0x0048_4da0;
+pub(crate) const EMPTY_BUFFER_STEP: u32 = 0x0045_34f0;
 /// Buffer functions: `BGSSaveGameBuffer::SaveData(buffer; source, size, 0)`
 /// (`00865e50`), `BGSLoadGameBuffer::LoadData(buffer; dest, size)`
 /// (`00864980`), `BGSSaveGameBuffer::SaveString(buffer; text, 0)`
@@ -4649,126 +4660,126 @@ const EMPTY_BUFFER_STEP: u32 = 0x0045_34f0;
 /// value)` (`00865f60`), `SaveVariableSizedValue_ov2(buffer; size, token)`
 /// (`00865ff0`), `LoadVariableSizedValue` (`00864a60`) and
 /// `BGSLoadGameSubBuffer::SaveGame(sub buffer; buffer)` (`00865510`).
-const BUFFER_SAVE_DATA: u32 = 0x0086_5e50;
-const BUFFER_LOAD_DATA: u32 = 0x0086_4980;
-const BUFFER_SAVE_STRING: u32 = 0x0086_5e70;
-const BUFFER_LOAD_STRING: u32 = 0x0086_49a0;
-const BUFFER_START_VARIABLE: u32 = 0x0086_5f20;
-const BUFFER_SAVE_VARIABLE: u32 = 0x0086_5f60;
-const BUFFER_SAVE_VARIABLE_OV2: u32 = 0x0086_5ff0;
-const BUFFER_LOAD_VARIABLE: u32 = 0x0086_4a60;
-const SUB_BUFFER_SAVE_GAME: u32 = 0x0086_5510;
+pub(crate) const BUFFER_SAVE_DATA: u32 = 0x0086_5e50;
+pub(crate) const BUFFER_LOAD_DATA: u32 = 0x0086_4980;
+pub(crate) const BUFFER_SAVE_STRING: u32 = 0x0086_5e70;
+pub(crate) const BUFFER_LOAD_STRING: u32 = 0x0086_49a0;
+pub(crate) const BUFFER_START_VARIABLE: u32 = 0x0086_5f20;
+pub(crate) const BUFFER_SAVE_VARIABLE: u32 = 0x0086_5f60;
+pub(crate) const BUFFER_SAVE_VARIABLE_OV2: u32 = 0x0086_5ff0;
+pub(crate) const BUFFER_LOAD_VARIABLE: u32 = 0x0086_4a60;
+pub(crate) const SUB_BUFFER_SAVE_GAME: u32 = 0x0086_5510;
 /// `SaveGameWarning(format, ...)` (`00845cc0`, cdecl): the buffer-based
 /// loaders report with it where the older ones use [`MESSAGE`].
-const SAVE_GAME_WARNING: u32 = 0x0084_5cc0;
+pub(crate) const SAVE_GAME_WARNING: u32 = 0x0084_5cc0;
 /// `BGSSaveLoadGame::QueueSubBuffer(this; 0, buffer, 0)` (`0084a810`).
-const QUEUE_SUB_BUFFER: u32 = 0x0084_a810;
+pub(crate) const QUEUE_SUB_BUFFER: u32 = 0x0084_a810;
 /// `ExtraDataList` handlers: `SaveGame_ov2(list; buffer)` (`00426a30`),
 /// `LoadGame_ov2(list; buffer)` (`00428150`), `0042ceb0(list; buffer, base)`,
 /// `FinishLoadGame(list; buffer)` (`0042d9e0`), `0042dae0(list; buffer)`,
 /// `0042dd90(list; buffer)`, `0041aeb0(list)`, `GetSavedAnimation(list)`
 /// (`00422a10`) and `00422850(list; name)`, which stores the name of the last
 /// finished sequence.
-const EXTRA_SAVE_GAME_OV2: u32 = 0x0042_6a30;
-const EXTRA_LOAD_GAME_OV2: u32 = 0x0042_8150;
-const EXTRA_LOAD_GAME_WITH_BASE: u32 = 0x0042_ceb0;
-const EXTRA_FINISH_LOAD_GAME: u32 = 0x0042_d9e0;
-const EXTRA_LOAD_STEP: u32 = 0x0042_dae0;
-const EXTRA_LOAD_LAST_STEP: u32 = 0x0042_dd90;
-const EXTRA_STEP_BEFORE_CHANGES: u32 = 0x0041_aeb0;
-const EXTRA_GET_SAVED_ANIMATION: u32 = 0x0042_2a10;
-const EXTRA_SET_LAST_SEQUENCE: u32 = 0x0042_2850;
+pub(crate) const EXTRA_SAVE_GAME_OV2: u32 = 0x0042_6a30;
+pub(crate) const EXTRA_LOAD_GAME_OV2: u32 = 0x0042_8150;
+pub(crate) const EXTRA_LOAD_GAME_WITH_BASE: u32 = 0x0042_ceb0;
+pub(crate) const EXTRA_FINISH_LOAD_GAME: u32 = 0x0042_d9e0;
+pub(crate) const EXTRA_LOAD_STEP: u32 = 0x0042_dae0;
+pub(crate) const EXTRA_LOAD_LAST_STEP: u32 = 0x0042_dd90;
+pub(crate) const EXTRA_STEP_BEFORE_CHANGES: u32 = 0x0041_aeb0;
+pub(crate) const EXTRA_GET_SAVED_ANIMATION: u32 = 0x0042_2a10;
+pub(crate) const EXTRA_SET_LAST_SEQUENCE: u32 = 0x0042_2850;
 /// `InventoryChanges` handlers taking the buffer (`this` is the result of
 /// [`GET_INVENTORY_CHANGES`]): `SaveGame` (`004d4090`), `LoadGame`
 /// (`004d4160`) and `004d42f0`.
-const INVENTORY_CHANGES_SAVE_GAME: u32 = 0x004d_4090;
-const INVENTORY_CHANGES_LOAD_GAME: u32 = 0x004d_4160;
-const INVENTORY_CHANGES_FINISH: u32 = 0x004d_42f0;
+pub(crate) const INVENTORY_CHANGES_SAVE_GAME: u32 = 0x004d_4090;
+pub(crate) const INVENTORY_CHANGES_LOAD_GAME: u32 = 0x004d_4160;
+pub(crate) const INVENTORY_CHANGES_FINISH: u32 = 0x004d_42f0;
 /// `00452370(this)`, the test the load handlers apply to a reference before
 /// the destruction stage.
-const REFR_HEALTH_GATE: u32 = 0x0045_2370;
+pub(crate) const REFR_HEALTH_GATE: u32 = 0x0045_2370;
 /// `ExtraDataList::GetObjectHealth` (`0041b6b0`, `float` in `ST0`),
 /// `BGSDestructibleObjectForm::GetDestructionForm(base)` (`00475400`,
 /// cdecl), `UpdateCurrentDamageStage(form; reference, flag)` (`00476f50`)
 /// and `TESObjectREFR::UpdateAddonNodeSounds(this, flag)` (`0057a3c0`).
-const EXTRA_GET_OBJECT_HEALTH: u32 = 0x0041_b6b0;
-const GET_DESTRUCTION_FORM: u32 = 0x0047_5400;
-const UPDATE_DAMAGE_STAGE: u32 = 0x0047_6f50;
-const UPDATE_ADDON_NODE_SOUNDS: u32 = 0x0057_a3c0;
+pub(crate) const EXTRA_GET_OBJECT_HEALTH: u32 = 0x0041_b6b0;
+pub(crate) const GET_DESTRUCTION_FORM: u32 = 0x0047_5400;
+pub(crate) const UPDATE_DAMAGE_STAGE: u32 = 0x0047_6f50;
+pub(crate) const UPDATE_ADDON_NODE_SOUNDS: u32 = 0x0057_a3c0;
 /// `TESHavokUtilities::Should3DRagDoll(reference, 3D)` (`0062c3c0`, cdecl).
-const SHOULD_3D_RAGDOLL: u32 = 0x0062_c3c0;
+pub(crate) const SHOULD_3D_RAGDOLL: u32 = 0x0062_c3c0;
 /// `TESObjectCELL::AddActivatingRef(cell; reference)` (`005455c0`),
 /// `00545670(cell; reference)` and `TESObjectCELL::AttachReference3D(cell;
 /// reference, flag)` (`00548880`).
-const CELL_ADD_ACTIVATING_REF: u32 = 0x0054_55c0;
-const CELL_REFERENCE_STEP: u32 = 0x0054_5670;
-const CELL_ATTACH_REFERENCE_3D: u32 = 0x0054_8880;
+pub(crate) const CELL_ADD_ACTIVATING_REF: u32 = 0x0054_55c0;
+pub(crate) const CELL_REFERENCE_STEP: u32 = 0x0054_5670;
+pub(crate) const CELL_ATTACH_REFERENCE_3D: u32 = 0x0054_8880;
 /// `TESObjectREFR::ClearAction(this, 4)` (`00572db0`), `00572d50(this, 4)`,
 /// `BGSOpenCloseForm::SnapHavokTo3D(reference)` (`0047b360`, cdecl) and the
 /// navmesh obstacle manager (`006c0720` returns it; `OnDoorClose`
 /// `006c0f10` and `006c0dc0` take the reference).
-const REFR_CLEAR_ACTION: u32 = 0x0057_2db0;
-const REFR_SET_ACTION: u32 = 0x0057_2d50;
-const SNAP_HAVOK_TO_3D: u32 = 0x0047_b360;
-const GET_OBSTACLE_MANAGER: u32 = 0x006c_0720;
-const OBSTACLE_ON_DOOR_CLOSE: u32 = 0x006c_0f10;
-const OBSTACLE_ON_DOOR_OPEN: u32 = 0x006c_0dc0;
+pub(crate) const REFR_CLEAR_ACTION: u32 = 0x0057_2db0;
+pub(crate) const REFR_SET_ACTION: u32 = 0x0057_2d50;
+pub(crate) const SNAP_HAVOK_TO_3D: u32 = 0x0047_b360;
+pub(crate) const GET_OBSTACLE_MANAGER: u32 = 0x006c_0720;
+pub(crate) const OBSTACLE_ON_DOOR_CLOSE: u32 = 0x006c_0f10;
+pub(crate) const OBSTACLE_ON_DOOR_OPEN: u32 = 0x006c_0dc0;
 /// `0042ce10(BGSSaveLoadGame)`, `00437b90(reference)`, `00450ff0(cell)`,
 /// `TES::GetCellPriority(TES; cell, 0)` (`00458be0`) and
 /// `ModelLoader::QueueReference(loader; reference, priority, 1)`
 /// (`00444850`, loader at `011c3b3c`).
-const SAVE_LOAD_GAME_TEST: u32 = 0x0042_ce10;
-const REFR_3D_TEST: u32 = 0x0043_7b90;
-const CELL_PRIORITY_TEST: u32 = 0x0045_0ff0;
-const TES_GET_CELL_PRIORITY: u32 = 0x0045_8be0;
-const GLOBAL_MODEL_LOADER: u32 = 0x011c_3b3c;
-const MODEL_LOADER_QUEUE_REFERENCE: u32 = 0x0044_4850;
+pub(crate) const SAVE_LOAD_GAME_TEST: u32 = 0x0042_ce10;
+pub(crate) const REFR_3D_TEST: u32 = 0x0043_7b90;
+pub(crate) const CELL_PRIORITY_TEST: u32 = 0x0045_0ff0;
+pub(crate) const TES_GET_CELL_PRIORITY: u32 = 0x0045_8be0;
+pub(crate) const GLOBAL_MODEL_LOADER: u32 = 0x011c_3b3c;
+pub(crate) const MODEL_LOADER_QUEUE_REFERENCE: u32 = 0x0044_4850;
 /// `00549580(base)`, `TESWorldSpace::GetTerrainManager(world)` (`00586170`)
 /// and `BGSTerrainManager::HideTree(manager; reference, 1)` (`006fcfa0`).
-const BASE_FORM_TEST: u32 = 0x0054_9580;
-const WORLD_GET_TERRAIN_MANAGER: u32 = 0x0058_6170;
-const TERRAIN_HIDE_TREE: u32 = 0x006f_cfa0;
+pub(crate) const BASE_FORM_TEST: u32 = 0x0054_9580;
+pub(crate) const WORLD_GET_TERRAIN_MANAGER: u32 = 0x0058_6170;
+pub(crate) const TERRAIN_HIDE_TREE: u32 = 0x006f_cfa0;
 /// The texts `fn_005636e0` swaps (`01011f30` and `0101abac`, which the
 /// decompiler shows as "Close") and the `strcpy_s`-like
 /// `00406d30(dest, size, source)` (cdecl).
-const TEXT_OPEN_SIDE: u32 = 0x0101_1f30;
-const TEXT_CLOSE_SIDE: u32 = 0x0101_abac;
-const STRING_COPY: u32 = 0x0040_6d30;
+pub(crate) const TEXT_OPEN_SIDE: u32 = 0x0101_1f30;
+pub(crate) const TEXT_CLOSE_SIDE: u32 = 0x0101_abac;
+pub(crate) const STRING_COPY: u32 = 0x0040_6d30;
 /// Functions after this range that `fn_005636e0` and `fn_00563650` call:
 /// `00563d80(this; manager, name, time)`, `SaveControllerManager`
 /// (`00563f30(manager, buffer, blend)`, cdecl) and `00564010(manager,
 /// buffer, blend)` (cdecl, the loader that follows `SaveControllerManager`).
-const ANIMATION_LOAD_STEP: u32 = 0x0056_3d80;
-const SAVE_CONTROLLER_MANAGER: u32 = 0x0056_3f30;
-const CONTROLLER_MANAGER_LOADER: u32 = 0x0056_4010;
+pub(crate) const ANIMATION_LOAD_STEP: u32 = 0x0056_3d80;
+pub(crate) const SAVE_CONTROLLER_MANAGER: u32 = 0x0056_3f30;
+pub(crate) const CONTROLLER_MANAGER_LOADER: u32 = 0x0056_4010;
 /// `00517630(body)` is compared with 4 (the Xbox name of the counter it
 /// feeds, `iKeyFramedBoneCount`, suggests the keyframed motion type);
 /// `004d9fa0(node, 0)` is the step all three loading callbacks take first;
 /// `00437bd0(reference)` is the first of four tests `LoadHavokData` makes
 /// of an actor.
-const BODY_MOTION_KIND: u32 = 0x0051_7630;
-const RAGDOLL_NODE_STEP: u32 = 0x004d_9fa0;
-const REFR_STATE_TEST: u32 = 0x0043_7bd0;
+pub(crate) const BODY_MOTION_KIND: u32 = 0x0051_7630;
+pub(crate) const RAGDOLL_NODE_STEP: u32 = 0x004d_9fa0;
+pub(crate) const REFR_STATE_TEST: u32 = 0x0043_7bd0;
 /// A `bhkRigidBody` virtual (`+0xe4`) that `fn_00563380` calls with 4 when
 /// bit 2 of a body's saved kind byte is set.
-const BODY_SLOT_SET_KIND: u32 = 0xe4;
+pub(crate) const BODY_SLOT_SET_KIND: u32 = 0xe4;
 /// `0047ab40(reference, sequence)` (cdecl), the shadow-scene getter
 /// `00450b80(0)` and `ShadowSceneNode::AddObject(scene; object)`
 /// (`00b5eeb0`).
-const GENERIC_SEQUENCE_STEP: u32 = 0x0047_ab40;
-const SCENE_GETTER: u32 = 0x0045_0b80;
-const SCENE_ADD_OBJECT: u32 = 0x00b5_eeb0;
+pub(crate) const GENERIC_SEQUENCE_STEP: u32 = 0x0047_ab40;
+pub(crate) const SCENE_GETTER: u32 = 0x0045_0b80;
+pub(crate) const SCENE_ADD_OBJECT: u32 = 0x00b5_eeb0;
 /// The address of `LOADED_REF_DATA::m_spData3D` inside the loaded data, which
 /// `00559450` dereferences.
-const LOADED_DATA_3D_OFFSET: u32 = 0x14;
+pub(crate) const LOADED_DATA_3D_OFFSET: u32 = 0x14;
 /// The extra-data type `GetEditorLocation` asks for (the editor location)
 /// and the form type byte it compares a default space with.
-const EXTRA_TYPE_EDITOR_LOCATION: u32 = 0xf;
-const FORM_TYPE_CELL: u32 = 0x39;
+pub(crate) const EXTRA_TYPE_EDITOR_LOCATION: u32 = 0xf;
+pub(crate) const FORM_TYPE_CELL: u32 = 0x39;
 
 /// Runs the default constructor the compiler calls on each stack
 /// `NiPoint3` or `hkVector4` in `vectors`.
-fn construct_vectors(e: &mut Engine, vectors: &[u32]) {
+pub(crate) fn construct_vectors(e: &mut Engine, vectors: &[u32]) {
     for vector in vectors {
         e.call(VECTOR_CONSTRUCT, &args![*vector]);
     }
@@ -4778,7 +4789,7 @@ fn construct_vectors(e: &mut Engine, vectors: &[u32]) {
 /// ([`BUFFER_CHANGE_FLAGS`] or [`BUFFER_OLD_CHANGE_FLAGS`]) have any bit of
 /// `mask`: the game copies them into a 4-byte local (`reader` returns it) and
 /// asks `004280f0(flags; mask)`.
-fn buffer_changed(e: &mut Engine, reader: u32, buffer: u32, mask: u32) -> bool {
+pub(crate) fn buffer_changed(e: &mut Engine, reader: u32, buffer: u32, mask: u32) -> bool {
     e.with_stack(4, |e, local| {
         let flags = e.call(reader, &args![buffer, local]).u32();
         e.call(CHANGE_FLAGS_TEST, &args![flags, mask]).bool()
@@ -4787,20 +4798,20 @@ fn buffer_changed(e: &mut Engine, reader: u32, buffer: u32, mask: u32) -> bool {
 
 /// The change-flag mask for the extra data of a reference: `0xa4021c40`,
 /// plus `0x3fc00` added (not or-ed) for an actor, which gives `0xa4061840`.
-fn extra_change_mask(actor: bool) -> u32 {
+pub(crate) fn extra_change_mask(actor: bool) -> u32 {
     let extra = if actor { 0x3_fc00 } else { 0 };
     0xa402_1c40u32.wrapping_add(extra)
 }
 
 /// The save version byte of the save-load stream (`008df040`).
-fn save_version(e: &mut Engine, save_load: u32) -> u8 {
+pub(crate) fn save_version(e: &mut Engine, save_load: u32) -> u8 {
     e.call(SAVE_VERSION, &args![save_load]).u8()
 }
 
 /// The part of the destruction-stage step the load handlers share: the
 /// reference has loaded data (`00452370` holds) whose pointer at +0x14 is
 /// set.
-fn has_loaded_3d_data(e: &mut Engine, this: Ptr<TESObjectREFR>) -> bool {
+pub(crate) fn has_loaded_3d_data(e: &mut Engine, this: Ptr<TESObjectREFR>) -> bool {
     if !e.call(REFR_HEALTH_GATE, &args![this]).bool() {
         return false;
     }
@@ -4817,7 +4828,7 @@ fn has_loaded_3d_data(e: &mut Engine, this: Ptr<TESObjectREFR>) -> bool {
 /// Updates the damage stage from the base form's destruction form
 /// (`UpdateCurrentDamageStage(reference, flag)`); when it changed, the
 /// addon node sounds are updated.
-fn update_damage_stage(e: &mut Engine, this: Ptr<TESObjectREFR>, flag: u32) {
+pub(crate) fn update_damage_stage(e: &mut Engine, this: Ptr<TESObjectREFR>, flag: u32) {
     let base = e.call(GET_BASE_FORM, &args![this]).u32();
     let destruction = e.call(GET_DESTRUCTION_FORM, &args![base]).u32();
     if e.call(UPDATE_DAMAGE_STAGE, &args![destruction, this, flag])
