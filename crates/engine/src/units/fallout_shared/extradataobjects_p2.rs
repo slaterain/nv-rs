@@ -3,9 +3,9 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::extradataobjects`]; anything public there may be used here.
 //!
-//! Translated so far: the first 40 functions of the range, `004353f0` to
-//! `00435f50` (`ExtraXTarget::Compare` to the scalar deleting destructor of
-//! `ExtraRefractionProperty`). The next session continues at `00435f80`.
+//! Translated so far: the first 80 functions of the range, `004353f0` to
+//! `00437290` (`ExtraXTarget::Compare` to `ExtraRadioData::Compare`). The
+//! next session continues at `00437300` (`ExtraCombatStyle::Compare`).
 //!
 //! Notes for the next session:
 //! - Every class here is a `BSExtraData` subclass whose payload starts at
@@ -16,15 +16,15 @@
 //! - `00435ac0` and `00435bb0` (the destructors of `ExtraSavedAnimation` and
 //!   `ExtraSavedHavokData`, called by their scalar deleting destructors) are
 //!   not in Ghidra's function list, so the ledger does not queue them; they
-//!   are called by address. `00435f80` (`ExtraRefractionProperty`'s
-//!   destructor) is the first function of the next session.
+//!   are called by address.
 
+use super::extradatalist::BSSoundHandle;
 use super::extradatalist_p3::{ExtraDroppedItemList, ExtraItemDropper};
 #[allow(unused_imports)]
 use super::extradataobjects::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::types::BSSimpleArray;
+use crate::types::{BSSimpleArray, NiPoint3};
 
 /// `operator delete(pointer)` (cdecl, one stack argument).
 const OPERATOR_DELETE: u32 = 0x0040_1030;
@@ -83,7 +83,8 @@ const HOLDER_CONSTRUCT: u32 = 0x008c_71b0;
 const EXTRA_SAVED_ANIMATION_DESTRUCT: u32 = 0x0043_5ac0;
 /// The destructor of `ExtraSavedHavokData` (not in Ghidra's function list).
 const EXTRA_SAVED_HAVOK_DATA_DESTRUCT: u32 = 0x0043_5bb0;
-/// `ExtraRefractionProperty`'s destructor body (next session of this file).
+/// `ExtraRefractionProperty`'s destructor body (reached by
+/// address from its scalar deleting destructor).
 const EXTRA_REFRACTION_PROPERTY_DESTRUCT: u32 = 0x0043_5f80;
 /// A float game-setting accessor: `this` is the setting (an exe global), the
 /// result is the address of its value.
@@ -133,6 +134,127 @@ const EXTRA_X_TARGET_TYPE: u32 = 0x0118_4f10;
 const EXTRA_EMITTANCE_SOURCE_TYPE: u32 = 0x0118_4f2c;
 const EXTRA_MULTI_BOUND_REF_TYPE: u32 = 0x0118_4f50;
 const EXTRA_MULTI_BOUND_DATA_TYPE: u32 = 0x0118_4f74;
+
+/// `operator new(size)` (cdecl, one stack argument).
+const OPERATOR_NEW: u32 = 0x0040_1000;
+/// `BSExtraData::Compare` (Xbox PDB; `this`, other).
+const BS_EXTRA_DATA_COMPARE: u32 = 0x0040_f700;
+/// `memcmp(a, b, size)`.
+const MEMCMP: u32 = 0x00ec_4835;
+/// The folded `NiPoint3` constructor: `this` is returned (nothing is
+/// written); `ExtraEditorRefMoveData` runs it on its three vectors.
+const NI_POINT3_CONSTRUCT: u32 = 0x0068_15c0;
+/// The same body as an accessor of a `BSSimpleList` node: the address of the
+/// node's item word (the node itself).
+const LIST_NODE_ITEM_SLOT: u32 = 0x0068_15c0;
+/// A `BSSimpleList` node's next pointer (`this` is the node).
+const LIST_NODE_NEXT: u32 = 0x0072_6070;
+/// The list's insertion of the item whose pointer is at the address given
+/// (`this` is the list).
+const SIMPLE_LIST_ADD_HEAD: u32 = 0x005a_e3d0;
+/// The list's scalar deleting destructor (`this` is the list, the argument
+/// is the flags; with bit 0 it frees the list).
+const SIMPLE_LIST_DELETE: u32 = 0x0047_02f0;
+/// `BSSoundHandle`'s default constructor (the id -1, the byte 0, the state
+/// 0; `this` is the handle).
+const SOUND_HANDLE_CONSTRUCT: u32 = 0x0041_a250;
+/// `BSSoundHandle`'s copy (`this` is the destination, the argument the
+/// source handle).
+const SOUND_HANDLE_ASSIGN: u32 = 0x0041_8900;
+/// `BSSoundHandle`'s destructor (it does nothing; `this` is the handle).
+const SOUND_HANDLE_DESTRUCT: u32 = 0x0048_3710;
+/// `MobileObject::MobileObject` (Xbox PDB; `this` is the 0x88-byte block).
+const MOBILE_OBJECT_CONSTRUCT: u32 = 0x0092_eb50;
+/// `TESObjectREFR::SetObjectReference` (Xbox PDB; `this`, base object).
+const SET_OBJECT_REFERENCE: u32 = 0x0057_5690;
+/// `TESObjectREFR::GetRefPersists` (Xbox PDB; the flag is returned in AL).
+const GET_REF_PERSISTS: u32 = 0x0056_53d0;
+/// `TESObjectREFR::SetRefPersists` (Xbox PDB; `this`, the flag).
+const SET_REF_PERSISTS: u32 = 0x0056_5480;
+/// `TESObjectREFR::SetLocationOnReference` (Xbox PDB; `this`, the address of
+/// a 12-byte vector).
+const SET_LOCATION_ON_REFERENCE: u32 = 0x0057_5830;
+/// A `TESObjectREFR` method (`this`, three float words), the rotation.
+const SET_ROTATION: u32 = 0x0057_5700;
+/// A method of the new object that stores its argument in the word at +0x6c.
+const SET_SOURCE_REFERENCE: u32 = 0x004f_bf00;
+/// A method that stores its byte argument at +0x81.
+const SET_FLAG_BYTE_81: u32 = 0x0089_8280;
+/// A `MobileObject` initialisation method (`this` only).
+const OBJECT_INIT: u32 = 0x0093_5ae0;
+/// An accessor: the word at +0x40 (`TESObjectREFR`'s parent cell).
+const GET_PARENT_CELL: u32 = 0x008d_6f30;
+/// A predicate on a cell: bit 0 of the byte at +0x24.
+const CELL_CHECK: u32 = 0x0042_5fd0;
+/// An accessor: the address `this + 0x44` (the embedded extra data list).
+const GET_EXTRA_LIST: u32 = 0x005d_43c0;
+/// `ExtraDataList::SetPersistentCell` (Xbox PDB; `this`, the cell).
+const SET_PERSISTENT_CELL: u32 = 0x0041_d390;
+/// An accessor: the word at +0x68 (`MiddleHighProcess::GetSavedAcquireObject`
+/// in the engine map; on the player it is the process).
+const GET_PROCESS: u32 = 0x008d_8520;
+/// An accessor: the word at +0x28 of a process (its kind, 0 to 3).
+const GET_PROCESS_KIND: u32 = 0x0045_cd60;
+/// The method that stores its argument in the word at +0x68
+/// (`MiddleHighProcess::SetSavedAcquireObject` in the engine map).
+const SET_PROCESS: u32 = 0x0040_7800;
+/// `HighProcess::HighProcess` (Xbox PDB), process kind 0, 0x46c bytes.
+const HIGH_PROCESS_CONSTRUCT: u32 = 0x008d_7510;
+/// The constructor of the 0x25c-byte process, kind 1.
+const PROCESS_CONSTRUCT_25C: u32 = 0x0091_3fe0;
+/// The constructor of the 200-byte process, kind 2.
+const PROCESS_CONSTRUCT_0C8: u32 = 0x0092_c950;
+/// The constructor of the 0xb4-byte process, kind 3.
+const PROCESS_CONSTRUCT_0B4: u32 = 0x0090_6dc0;
+/// `ProcessLists::AddReference` (Xbox PDB; `this` is [`PROCESS_LISTS`],
+/// then the object, the process kind and three zero words).
+const PROCESS_LISTS_ADD_REFERENCE: u32 = 0x0096_d450;
+/// The `ProcessLists` singleton object.
+const PROCESS_LISTS: u32 = 0x011e_0e80;
+/// The global holding the `PlayerCharacter` pointer.
+const PLAYER: u32 = 0x011d_ea3c;
+/// The constructor of the faction map `ExtraFactionChanges` builds on its
+/// stack (`this` is the 0x10-byte map, the argument the bucket count).
+const FACTION_MAP_CONSTRUCT: u32 = 0x0043_83e0;
+/// The faction map's destructor (`this` is the map).
+const FACTION_MAP_DESTRUCT: u32 = 0x0043_88a0;
+/// The faction map's insertion or update (`this`, key, value byte).
+const FACTION_MAP_SET_AT: u32 = 0x0055_94e0;
+/// The faction map's lookup (`this`, key, address of the value byte;
+/// returns whether the key was found).
+const FACTION_MAP_LOOKUP: u32 = 0x0057_c850;
+/// An accessor: the address `this + 0x2c` (the faction list embedded in a
+/// base actor record).
+const FACTION_LIST_OF: u32 = 0x005d_8a70;
+
+/// Extra-data type bytes of this session's classes.
+const TYPE_EDITOR_REF_MOVE_DATA: u32 = 0x4c;
+const TYPE_HAS_NO_RUMORS: u32 = 0x4e;
+const TYPE_SOUND: u32 = 0x4f;
+const TYPE_CREATURE_AWAKE_SOUND: u32 = 0x7d;
+const TYPE_CREATURE_MOVEMENT_SOUND: u32 = 0x8a;
+const TYPE_WEAPON_IDLE_SOUND: u32 = 0x83;
+const TYPE_WEAPON_ATTACK_SOUND: u32 = 0x86;
+const TYPE_ACTIVATE_LOOP_SOUND: u32 = 0x87;
+const TYPE_TALKING_ACTOR: u32 = 0x55;
+const TYPE_FACTION_CHANGES: u32 = 0x5e;
+
+/// The vtables of this session's classes.
+const EXTRA_EDITOR_REF_MOVE_DATA_VTABLE: u32 = 0x0101_5ed0;
+const EXTRA_HAS_NO_RUMORS_VTABLE: u32 = 0x0101_5974;
+const EXTRA_SOUND_VTABLE: u32 = 0x0101_5edc;
+const EXTRA_CREATURE_AWAKE_SOUND_VTABLE: u32 = 0x0101_5ee8;
+const EXTRA_CREATURE_MOVEMENT_SOUND_VTABLE: u32 = 0x0101_5ef4;
+const EXTRA_WEAPON_IDLE_SOUND_VTABLE: u32 = 0x0101_5f00;
+const EXTRA_WEAPON_ATTACK_SOUND_VTABLE: u32 = 0x0101_5f0c;
+const EXTRA_ACTIVATE_LOOP_SOUND_VTABLE: u32 = 0x0101_5f18;
+const EXTRA_TALKING_ACTOR_VTABLE: u32 = 0x0101_5f24;
+const EXTRA_FACTION_CHANGES_VTABLE: u32 = 0x0101_5f30;
+
+/// `RTTI Type Descriptor`s of the classes whose `Compare` casts `other`.
+const EXTRA_RADIUS_TYPE: u32 = 0x0118_43a8;
+const EXTRA_RADIATION_TYPE: u32 = 0x0118_43c4;
+const EXTRA_RADIO_DATA_TYPE: u32 = 0x0118_41e8;
 
 layout! {
     /// `ExtraEmittanceSource` (Xbox PDB), type `0x67`, 0x10 bytes.
@@ -783,7 +905,7 @@ pub fn fn_00435f20(
 
 // Translated from 00435f50 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ExtraRefractionProperty`'s scalar deleting destructor (the engine map has
-/// no name for it): the destructor (`00435f80`, next session of this file,
+/// no name for it): the destructor (`00435f80`,
 /// called by address), then `operator delete` when `flags & 1`. Returns
 /// `this`.
 pub fn fn_00435f50(
@@ -794,6 +916,912 @@ pub fn fn_00435f50(
     e.call(EXTRA_REFRACTION_PROPERTY_DESTRUCT, &args![this]);
     delete_when_asked(e, this.cast(), flags);
     this
+}
+
+layout! {
+    /// `ExtraEditorRefMoveData` (Xbox PDB), type `0x4c`, 0x30 bytes.
+    pub struct ExtraEditorRefMoveData: 0x30 {
+        /// `realAngle` (Xbox PDB).
+        0x0C realAngle: Inline<NiPoint3>,
+        /// `realLocation` (Xbox PDB).
+        0x18 realLocation: Inline<NiPoint3>,
+        /// `oldLocation` (Xbox PDB).
+        0x24 oldLocation: Inline<NiPoint3>,
+    }
+
+    /// `ExtraHasNoRumors` (Xbox PDB), type `0x4e`, 0x10 bytes.
+    pub struct ExtraHasNoRumors: 0x10 {
+        /// `bNoRumors` (Xbox PDB).
+        0x0C bNoRumors: u8,
+    }
+
+    /// `ExtraSound` (Xbox PDB), type `0x4f`, 0x18 bytes.
+    pub struct ExtraSound: 0x18 {
+        /// `pHandle` (Xbox PDB): the `BSSoundHandle` held by value.
+        0x0C pHandle: Inline<BSSoundHandle>,
+    }
+
+    /// `ExtraCreatureAwakeSound` (Xbox PDB), type `0x7d`, 0x18 bytes.
+    pub struct ExtraCreatureAwakeSound: 0x18 {
+        /// `pHandle` (Xbox PDB): the `BSSoundHandle` held by value.
+        0x0C pHandle: Inline<BSSoundHandle>,
+    }
+
+    /// `ExtraCreatureMovementSound` (Xbox PDB), type `0x8a`, 0x18 bytes.
+    pub struct ExtraCreatureMovementSound: 0x18 {
+        /// `pHandle` (Xbox PDB): the `BSSoundHandle` held by value.
+        0x0C pHandle: Inline<BSSoundHandle>,
+    }
+
+    /// `ExtraWeaponIdleSound` (Xbox PDB), type `0x83`, 0x18 bytes.
+    pub struct ExtraWeaponIdleSound: 0x18 {
+        /// `pHandle` (Xbox PDB): the `BSSoundHandle` held by value.
+        0x0C pHandle: Inline<BSSoundHandle>,
+    }
+
+    /// `ExtraWeaponAttackSound` (Xbox PDB), type `0x86`, 0x18 bytes.
+    pub struct ExtraWeaponAttackSound: 0x18 {
+        /// `pHandle` (Xbox PDB): the `BSSoundHandle` held by value.
+        0x0C pHandle: Inline<BSSoundHandle>,
+    }
+
+    /// `ExtraActivateLoopSound` (Xbox PDB), type `0x87`, 0x18 bytes.
+    pub struct ExtraActivateLoopSound: 0x18 {
+        /// `pHandle` (Xbox PDB): the `BSSoundHandle` held by value.
+        0x0C pHandle: Inline<BSSoundHandle>,
+    }
+
+    /// `ExtraTalkingActor` (Xbox PDB), type `0x55`, 0x10 bytes.
+    pub struct ExtraTalkingActor: 0x10 {
+        /// `pTalkObject` (Xbox PDB): `MobileObject*` (the PC constructor
+        /// stores the object `00436780` builds).
+        0x0C pTalkObject: Ptr,
+    }
+
+    /// `ExtraRadius` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraRadius: 0x10 {
+        /// `fRadius` (Xbox PDB).
+        0x0C fRadius: f32,
+    }
+
+    /// `ExtraRadiation` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraRadiation: 0x10 {
+        /// `fRadiation` (Xbox PDB).
+        0x0C fRadiation: f32,
+    }
+
+    /// `FACTION_RANK` (Xbox PDB), 0x8 bytes.
+    #[allow(non_camel_case_types)]
+    pub struct FACTION_RANK: 0x08 {
+        /// `pFaction` (Xbox PDB): `TESFaction*`.
+        0x00 pFaction: Ptr,
+        /// `cRank` (Xbox PDB); `0xff` is rank -1.
+        0x04 cRank: u8,
+    }
+
+    /// `ExtraFactionChanges` (Xbox PDB), type `0x5e`, 0x10 bytes.
+    pub struct ExtraFactionChanges: 0x10 {
+        /// `pFactionChanges` (Xbox PDB): `BSSimpleList<FACTION_RANK *>*`,
+        /// owned (a list node is a pointer to the item, then the next node).
+        0x0C pFactionChanges: Ptr,
+    }
+
+    /// `RADIO_DATA` (Xbox PDB), 0x10 bytes.
+    #[allow(non_camel_case_types)]
+    pub struct RADIO_DATA: 0x10 {
+        /// `fRadius` (Xbox PDB).
+        0x00 fRadius: f32,
+        /// `eRangeType` (Xbox PDB): `RADIO_RANGE_TYPE`.
+        0x04 eRangeType: u32,
+        /// `fStaticPct` (Xbox PDB).
+        0x08 fStaticPct: f32,
+        /// `pPositionRef` (Xbox PDB): `TESObjectREFR*`.
+        0x0C pPositionRef: Ptr,
+    }
+
+    /// `ExtraRadioData` (Xbox PDB), 0x1c bytes.
+    pub struct ExtraRadioData: 0x1C {
+        /// `Data` (Xbox PDB).
+        0x0C Data: Inline<RADIO_DATA>,
+    }
+}
+
+// Translated from 00435f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraRefractionProperty`'s destructor body (the engine map has no name
+/// for it): resets the vtable, then runs the base destructor.
+pub fn fn_00435f80(e: &mut Engine, this: Ptr<ExtraRefractionProperty>) {
+    e.mem.set_u32(this.addr(), EXTRA_REFRACTION_PROPERTY_VTABLE);
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+/// Copies the three words of a `NiPoint3` (the game does it with word moves).
+fn copy_point(e: &mut Engine, from: u32, to: u32) {
+    for word in 0..3 {
+        let value = e.mem.u32(from + 4 * word);
+        e.mem.set_u32(to + 4 * word, value);
+    }
+}
+
+// Translated from 00435fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraEditorRefMoveData`'s constructor (the engine map has no name for
+/// it): extra-data type 0x4c, the three vectors constructed (`006815c0`),
+/// then, when `reference` is not null, `realAngle` takes the 12 bytes
+/// `00430830` gives for the reference, `realLocation` the vector its virtual
+/// method at +0x1f4 returns, and `oldLocation` a copy of `realLocation`.
+/// Returns `this`. The exception-unwinding frame is not translated.
+pub fn fn_00435fa0(
+    e: &mut Engine,
+    this: Ptr<ExtraEditorRefMoveData>,
+    reference: Ptr,
+) -> Ptr<ExtraEditorRefMoveData> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_EDITOR_REF_MOVE_DATA,
+        EXTRA_EDITOR_REF_MOVE_DATA_VTABLE,
+    );
+    for offset in [0x0c, 0x18, 0x24] {
+        e.call(NI_POINT3_CONSTRUCT, &args![this.addr() + offset]);
+    }
+    if !reference.is_null() {
+        let angle = fn_00430830(e, reference);
+        copy_point(e, angle.addr(), this.addr() + 0x0c);
+        // The reference's virtual method at +0x1f4 returns the address of a
+        // 12-byte vector (`ExtraTalkingActor`'s constructor passes the same
+        // result to `TESObjectREFR::SetLocationOnReference`).
+        let location = e.vcall(reference.addr(), 0x1f4, &args![]).u32();
+        copy_point(e, location, this.addr() + 0x18);
+        copy_point(e, this.addr() + 0x18, this.addr() + 0x24);
+    }
+    this
+}
+
+// Translated from 00436090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraHasNoRumors`' constructor (the engine map has no name for it):
+/// extra-data type 0x4e, storing the flag byte. Returns `this`.
+pub fn fn_00436090(
+    e: &mut Engine,
+    this: Ptr<ExtraHasNoRumors>,
+    no_rumors: u8,
+) -> Ptr<ExtraHasNoRumors> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_HAS_NO_RUMORS,
+        EXTRA_HAS_NO_RUMORS_VTABLE,
+    );
+    e.set(this, ExtraHasNoRumors::bNoRumors, no_rumors);
+    this
+}
+
+/// The constructor of the classes that hold a `BSSoundHandle` at +0xc: base
+/// constructor, the handle's default constructor (`0041a250`), then the
+/// handle passed by value (three words) is copied in (`00418900`) and its
+/// destructor (`00483710`) runs on the argument copy. The exception-unwinding
+/// frame is not translated.
+fn construct_sound_holder(
+    e: &mut Engine,
+    this: Ptr,
+    extra_type: u32,
+    vtable: u32,
+    handle: [u32; 3],
+) {
+    construct_base(e, this, extra_type, vtable);
+    e.call(SOUND_HANDLE_CONSTRUCT, &args![payload(this)]);
+    e.with_stack(12, |e, copy| {
+        for (index, word) in handle.iter().enumerate() {
+            e.mem.set_u32(copy.addr() + 4 * index as u32, *word);
+        }
+        e.call(SOUND_HANDLE_ASSIGN, &args![payload(this), copy]);
+        e.call(SOUND_HANDLE_DESTRUCT, &args![copy]);
+    });
+}
+
+/// The destructor body of those classes: the vtable is stored again when
+/// `vtable` is given, the handle's destructor (`00483710`) runs, then the base
+/// destructor.
+fn destroy_sound_holder(e: &mut Engine, this: Ptr, vtable: Option<u32>) {
+    if let Some(vtable) = vtable {
+        e.mem.set_u32(this.addr(), vtable);
+    }
+    e.call(SOUND_HANDLE_DESTRUCT, &args![payload(this)]);
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 004360c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraSound`'s constructor (the engine map has no name for it): extra-data
+/// type 0x4f holding a copy of the `BSSoundHandle` passed by value (its three
+/// words: sound id, assume-success byte, state). Returns `this`.
+pub fn fn_004360c0(
+    e: &mut Engine,
+    this: Ptr<ExtraSound>,
+    sound_id: u32,
+    assume_success: u32,
+    state: u32,
+) -> Ptr<ExtraSound> {
+    construct_sound_holder(
+        e,
+        this.cast(),
+        TYPE_SOUND,
+        EXTRA_SOUND_VTABLE,
+        [sound_id, assume_success, state],
+    );
+    this
+}
+
+// Translated from 00436150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraSound`'s scalar deleting destructor (the engine map has no name for
+/// it): the destructor, then `operator delete` when `flags & 1`. Returns
+/// `this`.
+pub fn fn_00436150(e: &mut Engine, this: Ptr<ExtraSound>, flags: u32) -> Ptr<ExtraSound> {
+    fn_00436180(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00436180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraSound`'s destructor body (the engine map has no name for it): resets
+/// the vtable, destroys the handle, runs the base destructor.
+pub fn fn_00436180(e: &mut Engine, this: Ptr<ExtraSound>) {
+    destroy_sound_holder(e, this.cast(), Some(EXTRA_SOUND_VTABLE));
+}
+
+// Translated from 004361e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraCreatureAwakeSound`'s constructor (the engine map has no name for
+/// it): extra-data type 0x7d holding a copy of the `BSSoundHandle` passed by
+/// value. Returns `this`.
+pub fn fn_004361e0(
+    e: &mut Engine,
+    this: Ptr<ExtraCreatureAwakeSound>,
+    sound_id: u32,
+    assume_success: u32,
+    state: u32,
+) -> Ptr<ExtraCreatureAwakeSound> {
+    construct_sound_holder(
+        e,
+        this.cast(),
+        TYPE_CREATURE_AWAKE_SOUND,
+        EXTRA_CREATURE_AWAKE_SOUND_VTABLE,
+        [sound_id, assume_success, state],
+    );
+    this
+}
+
+// Translated from 00436270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraCreatureAwakeSound`'s scalar deleting destructor (the engine map has
+/// no name for it): the destructor, then `operator delete` when `flags & 1`.
+/// Returns `this`.
+pub fn fn_00436270(
+    e: &mut Engine,
+    this: Ptr<ExtraCreatureAwakeSound>,
+    flags: u32,
+) -> Ptr<ExtraCreatureAwakeSound> {
+    fn_004362a0(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 004362a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraCreatureAwakeSound`'s destructor body (the engine map has no name
+/// for it): resets the vtable, destroys the handle, runs the base destructor.
+pub fn fn_004362a0(e: &mut Engine, this: Ptr<ExtraCreatureAwakeSound>) {
+    destroy_sound_holder(e, this.cast(), Some(EXTRA_CREATURE_AWAKE_SOUND_VTABLE));
+}
+
+// Translated from 00436300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraCreatureMovementSound`'s constructor (the engine map has no name for
+/// it): extra-data type 0x8a holding a copy of the `BSSoundHandle` passed by
+/// value. Returns `this`.
+pub fn fn_00436300(
+    e: &mut Engine,
+    this: Ptr<ExtraCreatureMovementSound>,
+    sound_id: u32,
+    assume_success: u32,
+    state: u32,
+) -> Ptr<ExtraCreatureMovementSound> {
+    construct_sound_holder(
+        e,
+        this.cast(),
+        TYPE_CREATURE_MOVEMENT_SOUND,
+        EXTRA_CREATURE_MOVEMENT_SOUND_VTABLE,
+        [sound_id, assume_success, state],
+    );
+    this
+}
+
+// Translated from 00436390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraCreatureMovementSound`'s scalar deleting destructor (the engine map
+/// has no name for it): the destructor, then `operator delete` when
+/// `flags & 1`. Returns `this`.
+pub fn fn_00436390(
+    e: &mut Engine,
+    this: Ptr<ExtraCreatureMovementSound>,
+    flags: u32,
+) -> Ptr<ExtraCreatureMovementSound> {
+    fn_004363c0(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 004363c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraCreatureMovementSound`'s destructor body (the engine map has no name
+/// for it): destroys the handle, runs the base destructor. Unlike its
+/// siblings it does not store the vtable again.
+pub fn fn_004363c0(e: &mut Engine, this: Ptr<ExtraCreatureMovementSound>) {
+    destroy_sound_holder(e, this.cast(), None);
+}
+
+// Translated from 00436420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraWeaponIdleSound`'s constructor (the engine map has no name for it):
+/// extra-data type 0x83 holding a copy of the `BSSoundHandle` passed by
+/// value. Returns `this`.
+pub fn fn_00436420(
+    e: &mut Engine,
+    this: Ptr<ExtraWeaponIdleSound>,
+    sound_id: u32,
+    assume_success: u32,
+    state: u32,
+) -> Ptr<ExtraWeaponIdleSound> {
+    construct_sound_holder(
+        e,
+        this.cast(),
+        TYPE_WEAPON_IDLE_SOUND,
+        EXTRA_WEAPON_IDLE_SOUND_VTABLE,
+        [sound_id, assume_success, state],
+    );
+    this
+}
+
+// Translated from 004364b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraWeaponIdleSound`'s scalar deleting destructor (the engine map has no
+/// name for it): the destructor, then `operator delete` when `flags & 1`.
+/// Returns `this`.
+pub fn fn_004364b0(
+    e: &mut Engine,
+    this: Ptr<ExtraWeaponIdleSound>,
+    flags: u32,
+) -> Ptr<ExtraWeaponIdleSound> {
+    fn_004364e0(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 004364e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraWeaponIdleSound`'s destructor body (the engine map has no name for
+/// it): resets the vtable, destroys the handle, runs the base destructor.
+pub fn fn_004364e0(e: &mut Engine, this: Ptr<ExtraWeaponIdleSound>) {
+    destroy_sound_holder(e, this.cast(), Some(EXTRA_WEAPON_IDLE_SOUND_VTABLE));
+}
+
+// Translated from 00436540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraWeaponAttackSound`'s constructor (the engine map has no name for
+/// it): extra-data type 0x86 holding a copy of the `BSSoundHandle` passed by
+/// value. Returns `this`.
+pub fn fn_00436540(
+    e: &mut Engine,
+    this: Ptr<ExtraWeaponAttackSound>,
+    sound_id: u32,
+    assume_success: u32,
+    state: u32,
+) -> Ptr<ExtraWeaponAttackSound> {
+    construct_sound_holder(
+        e,
+        this.cast(),
+        TYPE_WEAPON_ATTACK_SOUND,
+        EXTRA_WEAPON_ATTACK_SOUND_VTABLE,
+        [sound_id, assume_success, state],
+    );
+    this
+}
+
+// Translated from 004365d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraWeaponAttackSound`'s scalar deleting destructor (the engine map has
+/// no name for it): the destructor, then `operator delete` when `flags & 1`.
+/// Returns `this`.
+pub fn fn_004365d0(
+    e: &mut Engine,
+    this: Ptr<ExtraWeaponAttackSound>,
+    flags: u32,
+) -> Ptr<ExtraWeaponAttackSound> {
+    fn_00436600(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00436600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraWeaponAttackSound`'s destructor body (the engine map has no name for
+/// it): resets the vtable, destroys the handle, runs the base destructor.
+pub fn fn_00436600(e: &mut Engine, this: Ptr<ExtraWeaponAttackSound>) {
+    destroy_sound_holder(e, this.cast(), Some(EXTRA_WEAPON_ATTACK_SOUND_VTABLE));
+}
+
+// Translated from 00436660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraActivateLoopSound`'s constructor (the engine map has no name for
+/// it): extra-data type 0x87 holding a copy of the `BSSoundHandle` passed by
+/// value. Returns `this`.
+pub fn fn_00436660(
+    e: &mut Engine,
+    this: Ptr<ExtraActivateLoopSound>,
+    sound_id: u32,
+    assume_success: u32,
+    state: u32,
+) -> Ptr<ExtraActivateLoopSound> {
+    construct_sound_holder(
+        e,
+        this.cast(),
+        TYPE_ACTIVATE_LOOP_SOUND,
+        EXTRA_ACTIVATE_LOOP_SOUND_VTABLE,
+        [sound_id, assume_success, state],
+    );
+    this
+}
+
+// Translated from 004366f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraActivateLoopSound`'s scalar deleting destructor (the engine map has
+/// no name for it): the destructor, then `operator delete` when `flags & 1`.
+/// Returns `this`.
+pub fn fn_004366f0(
+    e: &mut Engine,
+    this: Ptr<ExtraActivateLoopSound>,
+    flags: u32,
+) -> Ptr<ExtraActivateLoopSound> {
+    fn_00436720(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00436720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraActivateLoopSound`'s destructor body (the engine map has no name for
+/// it): resets the vtable, destroys the handle, runs the base destructor.
+pub fn fn_00436720(e: &mut Engine, this: Ptr<ExtraActivateLoopSound>) {
+    destroy_sound_holder(e, this.cast(), Some(EXTRA_ACTIVATE_LOOP_SOUND_VTABLE));
+}
+
+/// Allocates `size` bytes (`operator new`) and runs `constructor` on them when
+/// the allocation succeeded; null otherwise.
+fn new_object(e: &mut Engine, size: u32, constructor: u32) -> u32 {
+    let memory = e.call(OPERATOR_NEW, &args![size]).u32();
+    if memory == 0 {
+        0
+    } else {
+        e.call(constructor, &args![memory]).u32()
+    }
+}
+
+// Translated from 00436780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A function of this unit that the engine map has no name for; it ignores
+/// its `this` (ECX) and `ExtraTalkingActor`'s constructor calls it. Builds a
+/// `MobileObject` (0x88 bytes) for `source` and returns it (null when
+/// `source` is null). The object is given `base_object` (`SetObjectReference`),
+/// the persistence flag, the position (`source + 0x30`) and the rotation
+/// (`source + 0x24`) of `source`, then `source` itself (the word at +0x6c),
+/// and the byte at +0x81 is set to 1. Its cell is taken from the word at
+/// `source + 0x40` when that is not null and `00425fd0` approves it (virtual
+/// slot 0x228 of the new object); otherwise from the virtual method at slot
+/// 0 of the word at `source + 0x18`, put in the new object's extra data
+/// (`ExtraDataList::SetPersistentCell`), falling back to `source + 0x40` and
+/// the virtual slot 0x228 again when that gives nothing. Finally, when the
+/// player has a process (the word at +0x68), a process of the same kind (the
+/// word at +0x28; 0 `HighProcess`, 1 to 3 other classes of 0x25c, 200 and
+/// 0xb4 bytes, nothing otherwise) is built, stored in the new object, and
+/// the object is added to the process lists. The exception-unwinding frame
+/// is not translated.
+pub fn fn_00436780(e: &mut Engine, _unused_this: Ptr, base_object: Ptr, source: Ptr) -> Ptr {
+    if source.is_null() {
+        return Ptr::NULL;
+    }
+    let object = new_object(e, 0x88, MOBILE_OBJECT_CONSTRUCT);
+    e.call(SET_OBJECT_REFERENCE, &args![object, base_object]);
+    let persists = e.call(GET_REF_PERSISTS, &args![source]).u32() & 0xff;
+    e.call(SET_REF_PERSISTS, &args![object, persists]);
+    let position = fn_00436aa0(e, source);
+    e.call(SET_LOCATION_ON_REFERENCE, &args![object, position]);
+    let rotation = fn_00430830(e, source).addr();
+    let words = [
+        e.mem.u32(rotation),
+        e.mem.u32(rotation + 4),
+        e.mem.u32(rotation + 8),
+    ];
+    e.call(SET_ROTATION, &args![object, words[0], words[1], words[2]]);
+    e.call(SET_SOURCE_REFERENCE, &args![object, source]);
+    e.call(SET_FLAG_BYTE_81, &args![object, 1u32]);
+    e.call(OBJECT_INIT, &args![object]);
+
+    let mut cell_set = false;
+    if e.call(GET_PARENT_CELL, &args![source]).u32() != 0 {
+        let cell = e.call(GET_PARENT_CELL, &args![source]).u32();
+        if e.call(CELL_CHECK, &args![cell]).bool() {
+            let cell = e.call(GET_PARENT_CELL, &args![source]).u32();
+            e.vcall(object, 0x228, &args![cell]);
+            cell_set = true;
+        }
+    }
+    if !cell_set {
+        // `source + 0x18` is the `TESChildCell` base; its virtual slot 0
+        // answers the persistent cell.
+        let persistent = e.vcall(source.addr() + 0x18, 0, &args![]).u32();
+        if persistent != 0 {
+            let extra_list = e.call(GET_EXTRA_LIST, &args![object]).u32();
+            e.call(SET_PERSISTENT_CELL, &args![extra_list, persistent]);
+        } else {
+            let cell = e.call(GET_PARENT_CELL, &args![source]).u32();
+            e.vcall(object, 0x228, &args![cell]);
+        }
+    }
+
+    let player = e.mem.u32(PLAYER);
+    let player_process = e.call(GET_PROCESS, &args![player]).u32();
+    if player_process != 0 {
+        let kind = e.call(GET_PROCESS_KIND, &args![player_process]).u32();
+        let process = match kind {
+            0 => new_object(e, 0x46c, HIGH_PROCESS_CONSTRUCT),
+            1 => new_object(e, 0x25c, PROCESS_CONSTRUCT_25C),
+            2 => new_object(e, 200, PROCESS_CONSTRUCT_0C8),
+            3 => new_object(e, 0xb4, PROCESS_CONSTRUCT_0B4),
+            _ => 0,
+        };
+        e.call(SET_PROCESS, &args![object, process]);
+        let kind = e.call(GET_PROCESS_KIND, &args![process]).u32();
+        e.call(
+            PROCESS_LISTS_ADD_REFERENCE,
+            &args![PROCESS_LISTS, object, kind, 0u32, 0u32, 0u32],
+        );
+    }
+    Ptr::new(object)
+}
+
+// Translated from 00436aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A function of this unit that the engine map has no name for: the address
+/// of the position vector at `this + 0x30` (`TESObjectREFR`'s `data.pos`).
+pub fn fn_00436aa0(_e: &mut Engine, this: Ptr) -> Ptr {
+    this.byte_add(0x30)
+}
+
+// Translated from 00436ac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraTalkingActor`'s default constructor (the engine map has no name for
+/// it): extra-data type 0x55, no talking object. Returns `this`.
+pub fn fn_00436ac0(e: &mut Engine, this: Ptr<ExtraTalkingActor>) -> Ptr<ExtraTalkingActor> {
+    construct_null_payload(
+        e,
+        this.cast(),
+        TYPE_TALKING_ACTOR,
+        EXTRA_TALKING_ACTOR_VTABLE,
+    );
+    this
+}
+
+// Translated from 00436af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraTalkingActor`'s scalar deleting destructor (the engine map has no
+/// name for it): the destructor, then `operator delete` when `flags & 1`.
+/// Returns `this`.
+pub fn fn_00436af0(
+    e: &mut Engine,
+    this: Ptr<ExtraTalkingActor>,
+    flags: u32,
+) -> Ptr<ExtraTalkingActor> {
+    fn_00436bb0(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00436b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraTalkingActor::ExtraTalkingActor` (Xbox PDB): extra-data type 0x55,
+/// then `00436780` builds the talking object from `base_object` and `source`
+/// (stored in `pTalkObject`), and the object is moved to the vector that
+/// `source`'s virtual method at +0x1f4 returns
+/// (`TESObjectREFR::SetLocationOnReference`). Returns `this`. The
+/// exception-unwinding frame is not translated.
+pub fn extra_talking_actor_extra_talking_actor(
+    e: &mut Engine,
+    this: Ptr<ExtraTalkingActor>,
+    base_object: Ptr,
+    source: Ptr,
+) -> Ptr<ExtraTalkingActor> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_TALKING_ACTOR,
+        EXTRA_TALKING_ACTOR_VTABLE,
+    );
+    let object = fn_00436780(e, this.cast(), base_object, source);
+    e.set(this, ExtraTalkingActor::pTalkObject, object);
+    let location = e.vcall(source.addr(), 0x1f4, &args![]).u32();
+    e.call(SET_LOCATION_ON_REFERENCE, &args![object, location]);
+    this
+}
+
+// Translated from 00436bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraTalkingActor`'s destructor body (the engine map has no name for it):
+/// resets the vtable, then runs the base destructor. The talking object is
+/// not released.
+pub fn fn_00436bb0(e: &mut Engine, this: Ptr<ExtraTalkingActor>) {
+    e.mem.set_u32(this.addr(), EXTRA_TALKING_ACTOR_VTABLE);
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+/// The start of the `Compare`s below: casts `other` to the class with the RTTI
+/// descriptor `target_type`, then asks `BSExtraData::Compare`. `None` means the
+/// answer is already true.
+fn compare_start(e: &mut Engine, this: Ptr, other: Ptr, target_type: u32) -> Option<Ptr> {
+    let cast: Ptr = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, BS_EXTRA_DATA_TYPE, target_type, 0u32],
+        )
+        .ptr();
+    if cast.is_null() {
+        return None;
+    }
+    if e.call(BS_EXTRA_DATA_COMPARE, &args![this, other]).bool() {
+        return None;
+    }
+    Some(cast)
+}
+
+/// `Compare` of the classes whose payload is one `float` at +0xc.
+fn compare_float_payload(e: &mut Engine, this: Ptr, other: Ptr, target_type: u32) -> bool {
+    let Some(cast) = compare_start(e, this, other, target_type) else {
+        return true;
+    };
+    // `FUCOMPP`: differing or unordered (NaN) floats count as different.
+    f32::from_bits(e.mem.u32(this.addr() + 0xc)) != f32::from_bits(e.mem.u32(cast.addr() + 0xc))
+}
+
+// Translated from 00436bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraRadius::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraRadius`, when `BSExtraData::Compare` says so, or when `fRadius`
+/// differs.
+pub fn extra_radius_compare(e: &mut Engine, this: Ptr<ExtraRadius>, other: Ptr) -> bool {
+    compare_float_payload(e, this.cast(), other, EXTRA_RADIUS_TYPE)
+}
+
+// Translated from 00436c40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraRadiation::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraRadiation`, when `BSExtraData::Compare` says so, or when
+/// `fRadiation` differs.
+pub fn extra_radiation_compare(e: &mut Engine, this: Ptr<ExtraRadiation>, other: Ptr) -> bool {
+    compare_float_payload(e, this.cast(), other, EXTRA_RADIATION_TYPE)
+}
+
+// Translated from 00436cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraFactionChanges`' constructor (the engine map has no name for it):
+/// extra-data type 0x5e, then a new 8-byte list (`0096a2d0`) stored in
+/// `pFactionChanges`. Returns `this`. The exception-unwinding frame is not
+/// translated.
+pub fn fn_00436cb0(e: &mut Engine, this: Ptr<ExtraFactionChanges>) -> Ptr<ExtraFactionChanges> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_FACTION_CHANGES,
+        EXTRA_FACTION_CHANGES_VTABLE,
+    );
+    let list = new_object(e, 8, SIMPLE_LIST_CONSTRUCT);
+    e.set(this, ExtraFactionChanges::pFactionChanges, Ptr::new(list));
+    this
+}
+
+// Translated from 00436d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraFactionChanges::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor, then `operator delete` when `flags & 1`. Returns `this`.
+pub fn extra_faction_changes_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraFactionChanges>,
+    flags: u32,
+) -> Ptr<ExtraFactionChanges> {
+    fn_00436d80(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00436d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraFactionChanges`' destructor body (the engine map has no name for
+/// it): resets the vtable, runs the list's node release (`00470470`, also
+/// when the list pointer is null) and, when the list exists, its scalar
+/// deleting destructor with the flag 1; then the base destructor. The
+/// entries themselves are not freed. The exception-unwinding frame is not
+/// translated.
+pub fn fn_00436d80(e: &mut Engine, this: Ptr<ExtraFactionChanges>) {
+    e.mem.set_u32(this.addr(), EXTRA_FACTION_CHANGES_VTABLE);
+    let list = e.get(this, ExtraFactionChanges::pFactionChanges);
+    e.call(SIMPLE_LIST_CLEAR, &args![list]);
+    if !list.is_null() {
+        e.call(SIMPLE_LIST_DELETE, &args![list, 1u32]);
+    }
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+/// The item of a list node (`006815c0` gives the address of the node's item
+/// word).
+fn node_item(e: &mut Engine, node: u32) -> u32 {
+    let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+    e.mem.u32(slot)
+}
+
+/// The next node of a list node (`00726070`).
+fn node_next(e: &mut Engine, node: u32) -> u32 {
+    e.call(LIST_NODE_NEXT, &args![node]).u32()
+}
+
+/// The entry for `faction` in the list that begins at `node`, walking while
+/// the nodes exist and hold an item.
+fn find_faction_entry(e: &mut Engine, mut node: u32, faction: Ptr) -> Option<Ptr<FACTION_RANK>> {
+    while node != 0 && node_item(e, node) != 0 {
+        let entry = Ptr::<FACTION_RANK>::new(node_item(e, node));
+        if e.get(entry, FACTION_RANK::pFaction) == faction {
+            return Some(entry);
+        }
+        node = node_next(e, node);
+    }
+    None
+}
+
+/// A new 8-byte entry `{faction, rank}`, added to the list at `list` through
+/// `005ae3d0` (which takes the address of a word holding the entry pointer).
+fn add_faction_entry(e: &mut Engine, list: Ptr, faction: Ptr, rank: u8) {
+    let entry = Ptr::<FACTION_RANK>::new(e.call(OPERATOR_NEW, &args![8u32]).u32());
+    e.set(entry, FACTION_RANK::cRank, rank);
+    e.set(entry, FACTION_RANK::pFaction, faction);
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), entry.addr());
+        e.call(SIMPLE_LIST_ADD_HEAD, &args![list, slot]);
+    });
+}
+
+// Translated from 00436e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of `ExtraFactionChanges` that the engine map has no name for:
+/// sets the rank of `faction` to `0xff` (-1) when the list has an entry for
+/// it; otherwise creates the list if there is none and adds a new entry
+/// `{faction, 0xff}`. The exception-unwinding frame is not translated.
+pub fn fn_00436e10(e: &mut Engine, this: Ptr<ExtraFactionChanges>, faction: Ptr) {
+    let head = e.get(this, ExtraFactionChanges::pFactionChanges);
+    if let Some(entry) = find_faction_entry(e, head.addr(), faction) {
+        e.set(entry, FACTION_RANK::cRank, 0xff);
+        return;
+    }
+    if e.get(this, ExtraFactionChanges::pFactionChanges).is_null() {
+        let list = new_object(e, 8, SIMPLE_LIST_CONSTRUCT);
+        e.set(this, ExtraFactionChanges::pFactionChanges, Ptr::new(list));
+    }
+    let list = e.get(this, ExtraFactionChanges::pFactionChanges);
+    add_faction_entry(e, list, faction, 0xff);
+}
+
+// Translated from 00436f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of `ExtraFactionChanges` that the engine map has no name for:
+/// sets the rank of `faction` when the list has an entry for it; nothing
+/// otherwise.
+pub fn fn_00436f20(e: &mut Engine, this: Ptr<ExtraFactionChanges>, faction: Ptr, rank: u8) {
+    let head = e.get(this, ExtraFactionChanges::pFactionChanges);
+    if let Some(entry) = find_faction_entry(e, head.addr(), faction) {
+        e.set(entry, FACTION_RANK::cRank, rank);
+    }
+}
+
+// Translated from 00436f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of `ExtraFactionChanges` that the engine map has no name for:
+/// sets the rank of `faction` when the list has an entry for it, otherwise
+/// adds a new entry `{faction, rank}` to the list (which must exist).
+pub fn fn_00436f80(e: &mut Engine, this: Ptr<ExtraFactionChanges>, faction: Ptr, rank: u8) {
+    let head = e.get(this, ExtraFactionChanges::pFactionChanges);
+    if let Some(entry) = find_faction_entry(e, head.addr(), faction) {
+        e.set(entry, FACTION_RANK::cRank, rank);
+        return;
+    }
+    let list = e.get(this, ExtraFactionChanges::pFactionChanges);
+    add_faction_entry(e, list, faction, rank);
+}
+
+// Translated from 00437010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraFactionChanges::GetIsInFaction` (Xbox PDB): true when some entry is
+/// for `faction` and has a rank above -1. An entry for it with rank -1 does
+/// not stop the walk.
+pub fn extra_faction_changes_get_is_in_faction(
+    e: &mut Engine,
+    this: Ptr<ExtraFactionChanges>,
+    faction: Ptr,
+) -> bool {
+    let mut node = e.get(this, ExtraFactionChanges::pFactionChanges).addr();
+    while node != 0 && node_item(e, node) != 0 {
+        let entry = Ptr::<FACTION_RANK>::new(node_item(e, node));
+        if e.get(entry, FACTION_RANK::pFaction) == faction
+            && (e.get(entry, FACTION_RANK::cRank) as i8) > -1
+        {
+            return true;
+        }
+        node = node_next(e, node);
+    }
+    false
+}
+
+// Translated from 00437080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraFactionChanges::GetIsExpelled` (Xbox PDB): true when some entry is
+/// for `faction` and has rank -1.
+pub fn extra_faction_changes_get_is_expelled(
+    e: &mut Engine,
+    this: Ptr<ExtraFactionChanges>,
+    faction: Ptr,
+) -> bool {
+    let mut node = e.get(this, ExtraFactionChanges::pFactionChanges).addr();
+    while node != 0 && node_item(e, node) != 0 {
+        let entry = Ptr::<FACTION_RANK>::new(node_item(e, node));
+        if e.get(entry, FACTION_RANK::pFaction) == faction
+            && (e.get(entry, FACTION_RANK::cRank) as i8) == -1
+        {
+            return true;
+        }
+        node = node_next(e, node);
+    }
+    false
+}
+
+// Translated from 004370f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of `ExtraFactionChanges` that the engine map has no name for.
+/// Builds a map of 37 buckets on the stack (`004383e0`, destroyed at the end
+/// by `004388a0`); every entry of the list gets rank `0xff` and its faction
+/// is recorded in the map (`005594e0`, value 1). Then, when `other` is not
+/// null, every entry of the list `005d8a70` gives for `other + 0x30` whose
+/// faction is not in the map, or is there with a zero value (`0057c850`), is
+/// added to the list as `{faction, 0xff}`. The exception-unwinding frame is
+/// not translated.
+pub fn fn_004370f0(e: &mut Engine, this: Ptr<ExtraFactionChanges>, other: Ptr) {
+    e.with_stack(0x10, |e, map| {
+        e.call(FACTION_MAP_CONSTRUCT, &args![map, 0x25u32]);
+        let mut node = e.get(this, ExtraFactionChanges::pFactionChanges).addr();
+        while node != 0 && node_item(e, node) != 0 {
+            let entry = Ptr::<FACTION_RANK>::new(node_item(e, node));
+            node = node_next(e, node);
+            e.set(entry, FACTION_RANK::cRank, 0xff);
+            let faction = e.get(entry, FACTION_RANK::pFaction);
+            e.call(FACTION_MAP_SET_AT, &args![map, faction, 1u32]);
+        }
+        if !other.is_null() {
+            let mut node = e.call(FACTION_LIST_OF, &args![other.addr() + 0x30]).u32();
+            while node != 0 && node_item(e, node) != 0 {
+                let entry = Ptr::<FACTION_RANK>::new(node_item(e, node));
+                node = node_next(e, node);
+                let faction = e.get(entry, FACTION_RANK::pFaction);
+                let recorded = e.with_stack(4, |e, value| {
+                    let found = e
+                        .call(FACTION_MAP_LOOKUP, &args![map, faction, value])
+                        .bool();
+                    found && e.mem.u8(value.addr()) != 0
+                });
+                if !recorded {
+                    let list = e.get(this, ExtraFactionChanges::pFactionChanges);
+                    add_faction_entry(e, list, faction, 0xff);
+                }
+            }
+        }
+        e.call(FACTION_MAP_DESTRUCT, &args![map]);
+    });
+}
+
+// Translated from 00437240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A function of this unit that the engine map has no name for: copies a
+/// `RADIO_DATA` (0x10 bytes: radius, range type, static percentage, position
+/// reference) from `source` into `this`, nothing when `source` is null. The
+/// floats pass through x87 registers in the game; the copy here is bitwise.
+pub fn fn_00437240(e: &mut Engine, this: Ptr<RADIO_DATA>, source: Ptr<RADIO_DATA>) {
+    if source.is_null() {
+        return;
+    }
+    for offset in [0u32, 4, 8, 0xc] {
+        let value = e.mem.u32(source.addr() + offset);
+        e.mem.set_u32(this.addr() + offset, value);
+    }
+}
+
+// Translated from 00437290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraRadioData::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraRadioData`, when `BSExtraData::Compare` says so, or when the 0x10
+/// bytes of `Data` differ.
+pub fn extra_radio_data_compare(e: &mut Engine, this: Ptr<ExtraRadioData>, other: Ptr) -> bool {
+    let Some(cast) = compare_start(e, this.cast(), other, EXTRA_RADIO_DATA_TYPE) else {
+        return true;
+    };
+    e.call(MEMCMP, &args![payload(this), payload(cast), 0x10u32])
+        .u32()
+        != 0
 }
 
 /// This part's translated functions, by exe address.
@@ -945,6 +1973,136 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00435f50,
             fn_00435f50(Ptr<ExtraRefractionProperty>, u32) -> Ptr<ExtraRefractionProperty>
         ),
+        entry!(0x00435f80, fn_00435f80(Ptr<ExtraRefractionProperty>)),
+        entry!(
+            0x00435fa0,
+            fn_00435fa0(Ptr<ExtraEditorRefMoveData>, Ptr) -> Ptr<ExtraEditorRefMoveData>
+        ),
+        entry!(
+            0x00436090,
+            fn_00436090(Ptr<ExtraHasNoRumors>, u8) -> Ptr<ExtraHasNoRumors>
+        ),
+        entry!(
+            0x004360c0,
+            fn_004360c0(Ptr<ExtraSound>, u32, u32, u32) -> Ptr<ExtraSound>
+        ),
+        entry!(
+            0x00436150,
+            fn_00436150(Ptr<ExtraSound>, u32) -> Ptr<ExtraSound>
+        ),
+        entry!(0x00436180, fn_00436180(Ptr<ExtraSound>)),
+        entry!(
+            0x004361e0,
+            fn_004361e0(
+                Ptr<ExtraCreatureAwakeSound>,
+                u32,
+                u32,
+                u32,
+            ) -> Ptr<ExtraCreatureAwakeSound>
+        ),
+        entry!(
+            0x00436270,
+            fn_00436270(Ptr<ExtraCreatureAwakeSound>, u32) -> Ptr<ExtraCreatureAwakeSound>
+        ),
+        entry!(0x004362a0, fn_004362a0(Ptr<ExtraCreatureAwakeSound>)),
+        entry!(
+            0x00436300,
+            fn_00436300(
+                Ptr<ExtraCreatureMovementSound>,
+                u32,
+                u32,
+                u32,
+            ) -> Ptr<ExtraCreatureMovementSound>
+        ),
+        entry!(
+            0x00436390,
+            fn_00436390(Ptr<ExtraCreatureMovementSound>, u32) -> Ptr<ExtraCreatureMovementSound>
+        ),
+        entry!(0x004363c0, fn_004363c0(Ptr<ExtraCreatureMovementSound>)),
+        entry!(
+            0x00436420,
+            fn_00436420(Ptr<ExtraWeaponIdleSound>, u32, u32, u32) -> Ptr<ExtraWeaponIdleSound>
+        ),
+        entry!(
+            0x004364b0,
+            fn_004364b0(Ptr<ExtraWeaponIdleSound>, u32) -> Ptr<ExtraWeaponIdleSound>
+        ),
+        entry!(0x004364e0, fn_004364e0(Ptr<ExtraWeaponIdleSound>)),
+        entry!(
+            0x00436540,
+            fn_00436540(Ptr<ExtraWeaponAttackSound>, u32, u32, u32) -> Ptr<ExtraWeaponAttackSound>
+        ),
+        entry!(
+            0x004365d0,
+            fn_004365d0(Ptr<ExtraWeaponAttackSound>, u32) -> Ptr<ExtraWeaponAttackSound>
+        ),
+        entry!(0x00436600, fn_00436600(Ptr<ExtraWeaponAttackSound>)),
+        entry!(
+            0x00436660,
+            fn_00436660(Ptr<ExtraActivateLoopSound>, u32, u32, u32) -> Ptr<ExtraActivateLoopSound>
+        ),
+        entry!(
+            0x004366f0,
+            fn_004366f0(Ptr<ExtraActivateLoopSound>, u32) -> Ptr<ExtraActivateLoopSound>
+        ),
+        entry!(0x00436720, fn_00436720(Ptr<ExtraActivateLoopSound>)),
+        entry!(0x00436780, fn_00436780(Ptr, Ptr, Ptr) -> Ptr),
+        entry!(0x00436aa0, fn_00436aa0(Ptr) -> Ptr),
+        entry!(
+            0x00436ac0,
+            fn_00436ac0(Ptr<ExtraTalkingActor>) -> Ptr<ExtraTalkingActor>
+        ),
+        entry!(
+            0x00436af0,
+            fn_00436af0(Ptr<ExtraTalkingActor>, u32) -> Ptr<ExtraTalkingActor>
+        ),
+        entry!(
+            0x00436b20,
+            extra_talking_actor_extra_talking_actor(
+                Ptr<ExtraTalkingActor>,
+                Ptr,
+                Ptr,
+            ) -> Ptr<ExtraTalkingActor>
+        ),
+        entry!(0x00436bb0, fn_00436bb0(Ptr<ExtraTalkingActor>)),
+        entry!(
+            0x00436bd0,
+            extra_radius_compare(Ptr<ExtraRadius>, Ptr) -> bool
+        ),
+        entry!(
+            0x00436c40,
+            extra_radiation_compare(Ptr<ExtraRadiation>, Ptr) -> bool
+        ),
+        entry!(
+            0x00436cb0,
+            fn_00436cb0(Ptr<ExtraFactionChanges>) -> Ptr<ExtraFactionChanges>
+        ),
+        entry!(
+            0x00436d50,
+            extra_faction_changes_scalar_deleting_destructor(
+                Ptr<ExtraFactionChanges>,
+                u32,
+            )
+                -> Ptr<ExtraFactionChanges>
+        ),
+        entry!(0x00436d80, fn_00436d80(Ptr<ExtraFactionChanges>)),
+        entry!(0x00436e10, fn_00436e10(Ptr<ExtraFactionChanges>, Ptr)),
+        entry!(0x00436f20, fn_00436f20(Ptr<ExtraFactionChanges>, Ptr, u8)),
+        entry!(0x00436f80, fn_00436f80(Ptr<ExtraFactionChanges>, Ptr, u8)),
+        entry!(
+            0x00437010,
+            extra_faction_changes_get_is_in_faction(Ptr<ExtraFactionChanges>, Ptr) -> bool
+        ),
+        entry!(
+            0x00437080,
+            extra_faction_changes_get_is_expelled(Ptr<ExtraFactionChanges>, Ptr) -> bool
+        ),
+        entry!(0x004370f0, fn_004370f0(Ptr<ExtraFactionChanges>, Ptr)),
+        entry!(0x00437240, fn_00437240(Ptr<RADIO_DATA>, Ptr<RADIO_DATA>)),
+        entry!(
+            0x00437290,
+            extra_radio_data_compare(Ptr<ExtraRadioData>, Ptr) -> bool
+        ),
     ]
 }
 
@@ -989,6 +2147,7 @@ mod tests {
             EXTRA_SAVED_ANIMATION_DESTRUCT,
             EXTRA_SAVED_HAVOK_DATA_DESTRUCT,
             EXTRA_REFRACTION_PROPERTY_DESTRUCT,
+            SOUND_HANDLE_DESTRUCT,
         ] {
             e.register(noop, |_, _| Ret::default());
         }
@@ -1548,5 +2707,848 @@ mod tests {
     #[test]
     fn refraction_property_scalar_deleting_destructor_frees_only_when_asked() {
         check_scalar_deleting(0x0043_5f50, EXTRA_REFRACTION_PROPERTY_DESTRUCT);
+    }
+
+    // ---- the session of 00435f80 to 00437290 ----
+
+    /// A fake `BSSoundHandle` constructor/copy/destructor, the identity
+    /// `NiPoint3` constructor and list node accessor, the node-next accessor,
+    /// a list that appends, and the constructors that return their block.
+    fn session_engine() -> Engine {
+        let mut e = extra_engine();
+        e.register(SOUND_HANDLE_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], 0xffff_ffff);
+            e.mem.set_u8(a[0] + 4, 0);
+            e.mem.set_u32(a[0] + 8, 0);
+            ret(a[0])
+        });
+        e.register(SOUND_HANDLE_ASSIGN, |e, a| {
+            let id = e.mem.u32(a[1]);
+            let assume = e.mem.u8(a[1] + 4);
+            let state = e.mem.u32(a[1] + 8);
+            e.mem.set_u32(a[0], id);
+            e.mem.set_u8(a[0] + 4, assume);
+            e.mem.set_u32(a[0] + 8, state);
+            ret(a[0])
+        });
+        e.register(SOUND_HANDLE_DESTRUCT, |_, _| Ret::default());
+        e.register(NI_POINT3_CONSTRUCT, |_, a| ret(a[0]));
+        e.register(LIST_NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(SIMPLE_LIST_CONSTRUCT, |_, a| ret(a[0]));
+        e.register(MOBILE_OBJECT_CONSTRUCT, |_, a| ret(a[0]));
+        e.register(SIMPLE_LIST_ADD_HEAD, |e, a| {
+            // Appends: the head node takes the first item, later items get
+            // new nodes at the tail.
+            let item = e.mem.u32(a[1]);
+            let mut node = a[0];
+            if e.mem.u32(node) == 0 {
+                e.mem.set_u32(node, item);
+                return Ret::default();
+            }
+            while e.mem.u32(node + 4) != 0 {
+                node = e.mem.u32(node + 4);
+            }
+            let fresh = e.mem.alloc(8);
+            e.mem.set_u32(fresh, item);
+            e.mem.set_u32(node + 4, fresh);
+            Ret::default()
+        });
+        e
+    }
+
+    fn word_slots(e: &mut Engine, object: u32, slots: &[(u32, u32)]) {
+        let vtable = e.mem.alloc(0x300);
+        for (slot, target) in slots {
+            e.mem.set_u32(vtable + slot, *target);
+        }
+        e.mem.set_u32(object, vtable);
+    }
+
+    #[test]
+    fn refraction_property_destructor_resets_the_vtable() {
+        let mut e = extra_engine();
+        let this = dirty_object(&mut e, 0x10);
+        start_log(&mut e);
+        fn_00435f80(&mut e, Ptr::new(this));
+        assert_eq!(vtable_of(&e, this), EXTRA_REFRACTION_PROPERTY_VTABLE);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+    }
+
+    #[test]
+    fn editor_ref_move_data_without_a_reference_only_constructs_the_vectors() {
+        let mut e = session_engine();
+        let this = dirty_object(&mut e, 0x30);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0043_5fa0, &args![this, 0u32]).u32(), this);
+        assert_eq!(extra_type(&e, this), 0x4c);
+        assert_eq!(vtable_of(&e, this), EXTRA_EDITOR_REF_MOVE_DATA_VTABLE);
+        assert_eq!(
+            calls(&e, NI_POINT3_CONSTRUCT),
+            vec![vec![this + 0xc], vec![this + 0x18], vec![this + 0x24]]
+        );
+        // Nothing else was stored: the payload keeps what it held.
+        assert_eq!(e.mem.u32(this + 0xc), 0xdead_0002);
+    }
+
+    #[test]
+    fn editor_ref_move_data_copies_the_reference_vectors() {
+        let mut e = session_engine();
+        let this = dirty_object(&mut e, 0x30);
+        let reference = e.mem.alloc(0x40);
+        for (i, word) in [1u32, 2, 3].iter().enumerate() {
+            e.mem.set_u32(reference + 0x24 + 4 * i as u32, *word);
+        }
+        let location = e.mem.alloc(12);
+        for (i, word) in [7u32, 8, 9].iter().enumerate() {
+            e.mem.set_u32(location + 4 * i as u32, *word);
+        }
+        e.register_double(0x00f0_0001, move |_, _| ret(location));
+        word_slots(&mut e, reference, &[(0x1f4, 0x00f0_0001)]);
+        e.call(0x0043_5fa0, &args![this, reference]);
+        let words = |e: &Engine, at: u32| (0..3).map(|i| e.mem.u32(at + 4 * i)).collect::<Vec<_>>();
+        assert_eq!(words(&e, this + 0xc), vec![1, 2, 3]);
+        assert_eq!(words(&e, this + 0x18), vec![7, 8, 9]);
+        assert_eq!(words(&e, this + 0x24), vec![7, 8, 9]);
+    }
+
+    #[test]
+    fn has_no_rumors_constructor_stores_the_byte() {
+        let mut e = extra_engine();
+        let this = dirty_object(&mut e, 0x10);
+        assert_eq!(
+            e.call(0x0043_6090, &args![this, 0xffff_ff01u32]).u32(),
+            this
+        );
+        assert_eq!(extra_type(&e, this), 0x4e);
+        assert_eq!(vtable_of(&e, this), EXTRA_HAS_NO_RUMORS_VTABLE);
+        // Only the byte at +0xc is written.
+        assert_eq!(e.mem.u32(this + 0xc), 0xdead_0001);
+    }
+
+    /// A sound-holder constructor: base constructor, default handle, copy of
+    /// the argument handle, destructor of the copy.
+    fn check_sound_constructor(addr: u32, extra: u8, vtable: u32) {
+        let mut e = session_engine();
+        let this = dirty_object(&mut e, 0x18);
+        start_log(&mut e);
+        assert_eq!(e.call(addr, &args![this, 77u32, 0x1u32, 3u32]).u32(), this);
+        assert_eq!(extra_type(&e, this), extra);
+        assert_eq!(vtable_of(&e, this), vtable);
+        assert_eq!(e.mem.u32(this + 0xc), 77);
+        assert_eq!(e.mem.u8(this + 0x10), 1);
+        assert_eq!(e.mem.u32(this + 0x14), 3);
+        assert_eq!(calls(&e, SOUND_HANDLE_CONSTRUCT), vec![vec![this + 0xc]]);
+        let assigns = calls(&e, SOUND_HANDLE_ASSIGN);
+        assert_eq!(assigns.len(), 1);
+        assert_eq!(assigns[0][0], this + 0xc);
+        assert_eq!(calls(&e, SOUND_HANDLE_DESTRUCT), vec![vec![assigns[0][1]]]);
+    }
+
+    /// A sound-holder destructor body: the vtable (when stored), the handle's
+    /// destructor, then the base destructor.
+    fn check_sound_destructor(addr: u32, vtable: Option<u32>) {
+        let mut e = session_engine();
+        let this = dirty_object(&mut e, 0x18);
+        start_log(&mut e);
+        e.call(addr, &args![this]);
+        assert_eq!(
+            vtable_of(&e, this),
+            vtable.unwrap_or(0xdead_0001),
+            "vtable word"
+        );
+        assert_eq!(calls(&e, SOUND_HANDLE_DESTRUCT), vec![vec![this + 0xc]]);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+    }
+
+    #[test]
+    fn sound_constructor_copies_the_handle() {
+        check_sound_constructor(0x0043_60c0, 0x4f, EXTRA_SOUND_VTABLE);
+    }
+
+    #[test]
+    fn sound_scalar_deleting_destructor_frees_only_when_asked() {
+        check_scalar_deleting(0x0043_6150, BS_EXTRA_DATA_DESTRUCT);
+    }
+
+    #[test]
+    fn sound_destructor_resets_the_vtable() {
+        check_sound_destructor(0x0043_6180, Some(EXTRA_SOUND_VTABLE));
+    }
+
+    #[test]
+    fn creature_awake_sound_constructor_copies_the_handle() {
+        check_sound_constructor(0x0043_61e0, 0x7d, EXTRA_CREATURE_AWAKE_SOUND_VTABLE);
+    }
+
+    #[test]
+    fn creature_awake_sound_scalar_deleting_destructor_frees_only_when_asked() {
+        check_scalar_deleting(0x0043_6270, BS_EXTRA_DATA_DESTRUCT);
+    }
+
+    #[test]
+    fn creature_awake_sound_destructor_resets_the_vtable() {
+        check_sound_destructor(0x0043_62a0, Some(EXTRA_CREATURE_AWAKE_SOUND_VTABLE));
+    }
+
+    #[test]
+    fn creature_movement_sound_constructor_copies_the_handle() {
+        check_sound_constructor(0x0043_6300, 0x8a, EXTRA_CREATURE_MOVEMENT_SOUND_VTABLE);
+    }
+
+    #[test]
+    fn creature_movement_sound_scalar_deleting_destructor_frees_only_when_asked() {
+        check_scalar_deleting(0x0043_6390, BS_EXTRA_DATA_DESTRUCT);
+    }
+
+    #[test]
+    fn creature_movement_sound_destructor_keeps_the_vtable() {
+        check_sound_destructor(0x0043_63c0, None);
+    }
+
+    #[test]
+    fn weapon_idle_sound_constructor_copies_the_handle() {
+        check_sound_constructor(0x0043_6420, 0x83, EXTRA_WEAPON_IDLE_SOUND_VTABLE);
+    }
+
+    #[test]
+    fn weapon_idle_sound_scalar_deleting_destructor_frees_only_when_asked() {
+        check_scalar_deleting(0x0043_64b0, BS_EXTRA_DATA_DESTRUCT);
+    }
+
+    #[test]
+    fn weapon_idle_sound_destructor_resets_the_vtable() {
+        check_sound_destructor(0x0043_64e0, Some(EXTRA_WEAPON_IDLE_SOUND_VTABLE));
+    }
+
+    #[test]
+    fn weapon_attack_sound_constructor_copies_the_handle() {
+        check_sound_constructor(0x0043_6540, 0x86, EXTRA_WEAPON_ATTACK_SOUND_VTABLE);
+    }
+
+    #[test]
+    fn weapon_attack_sound_scalar_deleting_destructor_frees_only_when_asked() {
+        check_scalar_deleting(0x0043_65d0, BS_EXTRA_DATA_DESTRUCT);
+    }
+
+    #[test]
+    fn weapon_attack_sound_destructor_resets_the_vtable() {
+        check_sound_destructor(0x0043_6600, Some(EXTRA_WEAPON_ATTACK_SOUND_VTABLE));
+    }
+
+    #[test]
+    fn activate_loop_sound_constructor_copies_the_handle() {
+        check_sound_constructor(0x0043_6660, 0x87, EXTRA_ACTIVATE_LOOP_SOUND_VTABLE);
+    }
+
+    #[test]
+    fn activate_loop_sound_scalar_deleting_destructor_frees_only_when_asked() {
+        check_scalar_deleting(0x0043_66f0, BS_EXTRA_DATA_DESTRUCT);
+    }
+
+    #[test]
+    fn activate_loop_sound_destructor_resets_the_vtable() {
+        check_sound_destructor(0x0043_6720, Some(EXTRA_ACTIVATE_LOOP_SOUND_VTABLE));
+    }
+
+    /// The doubles `00436780` needs: the accessors read the fields the real
+    /// ones read, the mutators record their arguments in the call log.
+    fn talking_engine() -> Engine {
+        let mut e = session_engine();
+        e.map(PLAYER & !0xfff, 0x1000);
+        e.register(GET_PARENT_CELL, |e, a| ret(e.mem.u32(a[0] + 0x40)));
+        e.register(CELL_CHECK, |e, a| ret(e.mem.u8(a[0] + 0x24) as u32 & 1));
+        e.register(GET_PROCESS, |e, a| ret(e.mem.u32(a[0] + 0x68)));
+        e.register(GET_PROCESS_KIND, |e, a| ret(e.mem.u32(a[0] + 0x28)));
+        e.register(GET_EXTRA_LIST, |_, a| ret(a[0] + 0x44));
+        e.register(GET_REF_PERSISTS, |e, a| ret(e.mem.u8(a[0] + 0x7f) as u32));
+        // Every new object gets a vtable whose slot 0x228 (the cell setter)
+        // is the recording stand-in 0x00f00002.
+        e.register(MOBILE_OBJECT_CONSTRUCT, |e, a| {
+            let vtable = e.mem.alloc(0x300);
+            e.mem.set_u32(vtable + 0x228, 0x00f0_0002);
+            e.mem.set_u32(a[0], vtable);
+            ret(a[0])
+        });
+        for process in [
+            HIGH_PROCESS_CONSTRUCT,
+            PROCESS_CONSTRUCT_25C,
+            PROCESS_CONSTRUCT_0C8,
+            PROCESS_CONSTRUCT_0B4,
+        ] {
+            e.register_double(process, move |e, a| {
+                // The kind word at +0x28 of the new process is its address
+                // plus nothing: tests tell the processes apart by the log.
+                e.mem.set_u32(a[0] + 0x28, process);
+                ret(a[0])
+            });
+        }
+        for noop in [
+            SET_OBJECT_REFERENCE,
+            SET_REF_PERSISTS,
+            SET_LOCATION_ON_REFERENCE,
+            SET_ROTATION,
+            SET_SOURCE_REFERENCE,
+            SET_FLAG_BYTE_81,
+            OBJECT_INIT,
+            SET_PERSISTENT_CELL,
+            PROCESS_LISTS_ADD_REFERENCE,
+            0x00f0_0002,
+        ] {
+            e.register(noop, |_, _| Ret::default());
+        }
+        e.register(SET_PROCESS, |e, a| {
+            e.mem.set_u32(a[0] + 0x68, a[1]);
+            Ret::default()
+        });
+        e
+    }
+
+    /// A source reference: rotation at +0x24, parent cell at +0x40, the
+    /// child-cell base at +0x18 whose slot 0 gives `persistent`, slot 0x1f4
+    /// of the object gives `location`.
+    fn source_reference(e: &mut Engine, cell: u32, persistent: u32, location: u32) -> u32 {
+        let source = e.mem.alloc(0x80);
+        e.mem.set_u32(source + 0x24, 0x1111);
+        e.mem.set_u32(source + 0x28, 0x2222);
+        e.mem.set_u32(source + 0x2c, 0x3333);
+        e.mem.set_u32(source + 0x40, cell);
+        e.mem.set_u8(source + 0x7f, 1);
+        e.register_double(0x00f0_0010, move |_, _| ret(persistent));
+        e.register_double(0x00f0_0011, move |_, _| ret(location));
+        let vtable = e.mem.alloc(0x300);
+        e.mem.set_u32(vtable + 0x1f4, 0x00f0_0011);
+        e.mem.set_u32(source, vtable);
+        let child_vtable = e.mem.alloc(8);
+        e.mem.set_u32(child_vtable, 0x00f0_0010);
+        e.mem.set_u32(source + 0x18, child_vtable);
+        source
+    }
+
+    /// The player with a process of `kind` (or none).
+    fn set_player_process(e: &mut Engine, kind: Option<u32>) {
+        let player = e.mem.alloc(0x80);
+        e.mem.set_u32(PLAYER, player);
+        if let Some(kind) = kind {
+            let process = e.mem.alloc(0x40);
+            e.mem.set_u32(process + 0x28, kind);
+            e.mem.set_u32(player + 0x68, process);
+        }
+    }
+
+    /// The object `00436780` made: the block `operator new(0x88)` gave.
+    fn made_object(e: &Engine) -> u32 {
+        let (_, words) = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|(called, _)| *called == MOBILE_OBJECT_CONSTRUCT)
+            .expect("the object is constructed");
+        words[0]
+    }
+
+    #[test]
+    fn talking_object_of_a_null_source_is_null() {
+        let mut e = talking_engine();
+        start_log(&mut e);
+        assert_eq!(e.call(0x0043_6780, &args![0u32, 0x55u32, 0u32]).u32(), 0);
+        assert!(calls(&e, OPERATOR_NEW).is_empty());
+    }
+
+    #[test]
+    fn talking_object_copies_the_source_and_uses_its_cell() {
+        let mut e = talking_engine();
+        set_player_process(&mut e, None);
+        let source = source_reference(&mut e, 0x5000, 0, 0);
+        let cell = e.mem.alloc(0x40);
+        e.mem.set_u8(cell + 0x24, 1);
+        e.mem.set_u32(source + 0x40, cell);
+        start_log(&mut e);
+        let object = e.call(0x0043_6780, &args![0u32, 0x55u32, source]).u32();
+        assert_eq!(object, made_object(&e));
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0x88]]);
+        assert_eq!(calls(&e, SET_OBJECT_REFERENCE), vec![vec![object, 0x55]]);
+        assert_eq!(calls(&e, SET_REF_PERSISTS), vec![vec![object, 1]]);
+        assert_eq!(
+            calls(&e, SET_LOCATION_ON_REFERENCE),
+            vec![vec![object, source + 0x30]]
+        );
+        assert_eq!(
+            calls(&e, SET_ROTATION),
+            vec![vec![object, 0x1111, 0x2222, 0x3333]]
+        );
+        assert_eq!(calls(&e, SET_SOURCE_REFERENCE), vec![vec![object, source]]);
+        assert_eq!(calls(&e, SET_FLAG_BYTE_81), vec![vec![object, 1]]);
+        assert_eq!(calls(&e, OBJECT_INIT), vec![vec![object]]);
+        // The cell is asked three times, approved, and given to slot 0x228.
+        assert_eq!(calls(&e, GET_PARENT_CELL).len(), 3);
+        assert_eq!(calls(&e, CELL_CHECK), vec![vec![cell]]);
+        assert!(calls(&e, SET_PERSISTENT_CELL).is_empty());
+    }
+
+    #[test]
+    fn talking_object_takes_the_persistent_cell_when_the_cell_is_refused() {
+        let mut e = talking_engine();
+        set_player_process(&mut e, None);
+        let source = source_reference(&mut e, 0, 0x7777, 0);
+        // The new object's virtual table must exist for the cell store; here
+        // the persistent cell is used instead.
+        start_log(&mut e);
+        let object = e.call(0x0043_6780, &args![0u32, 0x55u32, source]).u32();
+        assert_eq!(calls(&e, GET_PARENT_CELL).len(), 1);
+        assert!(calls(&e, CELL_CHECK).is_empty());
+        assert_eq!(calls(&e, GET_EXTRA_LIST), vec![vec![object]]);
+        assert_eq!(
+            calls(&e, SET_PERSISTENT_CELL),
+            vec![vec![object + 0x44, 0x7777]]
+        );
+    }
+
+    #[test]
+    fn talking_object_falls_back_to_the_cell_when_nothing_is_persistent() {
+        let mut e = talking_engine();
+        set_player_process(&mut e, None);
+        let source = source_reference(&mut e, 0, 0, 0);
+        start_log(&mut e);
+        let object = e.call(0x0043_6780, &args![0u32, 0x55u32, source]).u32();
+        assert!(object != 0);
+        assert!(calls(&e, SET_PERSISTENT_CELL).is_empty());
+        assert_eq!(calls(&e, GET_PARENT_CELL).len(), 2);
+        let slot_calls: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(called, _)| *called == 0x00f0_0002)
+            .collect();
+        assert_eq!(slot_calls.len(), 1);
+        assert_eq!(slot_calls[0].1, vec![object, 0]);
+    }
+
+    #[test]
+    fn talking_object_builds_a_process_of_the_players_kind() {
+        let sizes = [
+            (0u32, 0x46cu32, HIGH_PROCESS_CONSTRUCT),
+            (1, 0x25c, PROCESS_CONSTRUCT_25C),
+            (2, 200, PROCESS_CONSTRUCT_0C8),
+            (3, 0xb4, PROCESS_CONSTRUCT_0B4),
+        ];
+        for (kind, size, constructor) in sizes {
+            let mut e = talking_engine();
+            set_player_process(&mut e, Some(kind));
+            let source = source_reference(&mut e, 0, 0x7777, 0);
+            start_log(&mut e);
+            let object = e.call(0x0043_6780, &args![0u32, 0x55u32, source]).u32();
+            assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0x88], vec![size]]);
+            let built = calls(&e, constructor);
+            assert_eq!(built.len(), 1);
+            let process = built[0][0];
+            assert_eq!(calls(&e, SET_PROCESS), vec![vec![object, process]]);
+            assert_eq!(
+                calls(&e, PROCESS_LISTS_ADD_REFERENCE),
+                vec![vec![PROCESS_LISTS, object, constructor, 0, 0, 0]],
+                "kind {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn talking_object_with_an_unknown_process_kind_gets_no_process() {
+        let mut e = talking_engine();
+        set_player_process(&mut e, Some(9));
+        let source = source_reference(&mut e, 0, 0x7777, 0);
+        e.register(GET_PROCESS_KIND, |e, a| {
+            if a[0] == 0 {
+                ret(0)
+            } else {
+                ret(e.mem.u32(a[0] + 0x28))
+            }
+        });
+        start_log(&mut e);
+        let object = e.call(0x0043_6780, &args![0u32, 0x55u32, source]).u32();
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0x88]]);
+        assert_eq!(calls(&e, SET_PROCESS), vec![vec![object, 0]]);
+        assert_eq!(
+            calls(&e, PROCESS_LISTS_ADD_REFERENCE),
+            vec![vec![PROCESS_LISTS, object, 0, 0, 0, 0]]
+        );
+    }
+
+    #[test]
+    fn position_accessor_adds_0x30() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0043_6aa0, &args![0x1000u32]).u32(), 0x1030);
+    }
+
+    #[test]
+    fn talking_actor_default_constructor_has_no_object() {
+        check_null_payload_constructor(0x0043_6ac0, 0x55, EXTRA_TALKING_ACTOR_VTABLE);
+    }
+
+    #[test]
+    fn talking_actor_scalar_deleting_destructor_frees_only_when_asked() {
+        check_scalar_deleting(0x0043_6af0, BS_EXTRA_DATA_DESTRUCT);
+    }
+
+    #[test]
+    fn talking_actor_destructor_resets_the_vtable() {
+        let mut e = extra_engine();
+        let this = dirty_object(&mut e, 0x10);
+        start_log(&mut e);
+        e.call(0x0043_6bb0, &args![this]);
+        assert_eq!(vtable_of(&e, this), EXTRA_TALKING_ACTOR_VTABLE);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+        // The talking object is not released.
+        assert_eq!(e.mem.u32(this + 0xc), 0xdead_0002);
+    }
+
+    #[test]
+    fn talking_actor_constructor_stores_the_object_and_places_it() {
+        let mut e = talking_engine();
+        set_player_process(&mut e, None);
+        let location = e.mem.alloc(12);
+        let source = source_reference(&mut e, 0, 0x7777, location);
+        let this = dirty_object(&mut e, 0x10);
+        start_log(&mut e);
+        assert_eq!(
+            e.call(0x0043_6b20, &args![this, 0x55u32, source]).u32(),
+            this
+        );
+        assert_eq!(extra_type(&e, this), 0x55);
+        assert_eq!(vtable_of(&e, this), EXTRA_TALKING_ACTOR_VTABLE);
+        let object = made_object(&e);
+        assert_eq!(e.mem.u32(this + 0xc), object);
+        let placed = calls(&e, SET_LOCATION_ON_REFERENCE);
+        assert_eq!(
+            placed,
+            vec![vec![object, source + 0x30], vec![object, location]]
+        );
+    }
+
+    /// A `Compare` of a one-float class.
+    fn check_float_compare(addr: u32, target_type: u32) {
+        let mut e = session_engine();
+        e.register(BS_EXTRA_DATA_COMPARE, |_, _| Ret::default());
+        let this = dirty_object(&mut e, 0x10);
+        let same = dirty_object(&mut e, 0x10);
+        let other = dirty_object(&mut e, 0x10);
+        let nan = dirty_object(&mut e, 0x10);
+        e.mem.set_u32(this + 0xc, 2.5f32.to_bits());
+        e.mem.set_u32(same + 0xc, 2.5f32.to_bits());
+        e.mem.set_u32(other + 0xc, 3.5f32.to_bits());
+        e.mem.set_u32(nan + 0xc, f32::NAN.to_bits());
+        start_log(&mut e);
+        assert!(e.call(addr, &args![this, 0u32]).bool());
+        assert!(!e.call(addr, &args![this, same]).bool());
+        assert!(e.call(addr, &args![this, other]).bool());
+        assert!(e.call(addr, &args![this, nan]).bool());
+        let casts = calls(&e, DYNAMIC_CAST);
+        assert_eq!(casts[1], vec![same, 0, BS_EXTRA_DATA_TYPE, target_type, 0]);
+        // A null cast never reaches the base compare.
+        assert_eq!(calls(&e, BS_EXTRA_DATA_COMPARE).len(), 3);
+        // The base compare's answer true settles it.
+        e.register(BS_EXTRA_DATA_COMPARE, |_, _| ret(1));
+        assert!(e.call(addr, &args![this, same]).bool());
+    }
+
+    #[test]
+    fn radius_compare_asks_the_float() {
+        check_float_compare(0x0043_6bd0, EXTRA_RADIUS_TYPE);
+    }
+
+    #[test]
+    fn radiation_compare_asks_the_float() {
+        check_float_compare(0x0043_6c40, EXTRA_RADIATION_TYPE);
+    }
+
+    #[test]
+    fn faction_changes_constructor_makes_an_empty_list() {
+        let mut e = session_engine();
+        let this = dirty_object(&mut e, 0x10);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0043_6cb0, &args![this]).u32(), this);
+        assert_eq!(extra_type(&e, this), 0x5e);
+        assert_eq!(vtable_of(&e, this), EXTRA_FACTION_CHANGES_VTABLE);
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![8]]);
+        let list = e.mem.u32(this + 0xc);
+        assert_eq!(calls(&e, SIMPLE_LIST_CONSTRUCT), vec![vec![list]]);
+        assert_eq!(e.mem.block_size(list), Some(8));
+    }
+
+    #[test]
+    fn faction_changes_scalar_deleting_destructor_frees_only_when_asked() {
+        let mut e = session_engine();
+        let this = e.mem.alloc(0x10);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0043_6d50, &args![this, 0u32]).u32(), this);
+        assert!(e.mem.block_size(this).is_some());
+        assert_eq!(e.call(0x0043_6d50, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.block_size(this), None);
+    }
+
+    #[test]
+    fn faction_changes_destructor_releases_the_list() {
+        let mut e = session_engine();
+        e.register(SIMPLE_LIST_DELETE, |_, _| Ret::default());
+        let this = dirty_object(&mut e, 0x10);
+        e.mem.set_u32(this + 0xc, 0x4400);
+        start_log(&mut e);
+        e.call(0x0043_6d80, &args![this]);
+        assert_eq!(vtable_of(&e, this), EXTRA_FACTION_CHANGES_VTABLE);
+        assert_eq!(calls(&e, SIMPLE_LIST_CLEAR), vec![vec![0x4400]]);
+        assert_eq!(calls(&e, SIMPLE_LIST_DELETE), vec![vec![0x4400, 1]]);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+        // With no list the node release still runs, the deleting one not.
+        let bare = dirty_object(&mut e, 0x10);
+        e.mem.set_u32(bare + 0xc, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_6d80, &args![bare]);
+        assert_eq!(calls(&e, SIMPLE_LIST_CLEAR), vec![vec![0]]);
+        assert!(calls(&e, SIMPLE_LIST_DELETE).is_empty());
+    }
+
+    /// A list of `(faction, rank)` entries: nodes `{item, next}` in a chain;
+    /// returns the head node (a node with no item when `entries` is empty).
+    fn faction_list(e: &mut Engine, entries: &[(u32, u8)]) -> u32 {
+        let head = e.mem.alloc(8);
+        let mut node = head;
+        for (index, (faction, rank)) in entries.iter().enumerate() {
+            let entry = e.mem.alloc(8);
+            e.mem.set_u32(entry, *faction);
+            e.mem.set_u8(entry + 4, *rank);
+            e.mem.set_u32(node, entry);
+            if index + 1 < entries.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        head
+    }
+
+    /// The `(faction, rank)` entries of the list at `head`.
+    fn entries_of(e: &Engine, head: u32) -> Vec<(u32, u8)> {
+        let mut found = vec![];
+        let mut node = head;
+        while node != 0 && e.mem.u32(node) != 0 {
+            let entry = e.mem.u32(node);
+            found.push((e.mem.u32(entry), e.mem.u8(entry + 4)));
+            node = e.mem.u32(node + 4);
+        }
+        found
+    }
+
+    fn faction_changes_with(e: &mut Engine, list: u32) -> u32 {
+        let this = dirty_object(e, 0x10);
+        e.mem.set_u32(this + 0xc, list);
+        this
+    }
+
+    #[test]
+    fn faction_expel_marks_an_existing_entry() {
+        let mut e = session_engine();
+        let list = faction_list(&mut e, &[(0xa1, 2), (0xa2, 5)]);
+        let this = faction_changes_with(&mut e, list);
+        e.call(0x0043_6e10, &args![this, 0xa2u32]);
+        assert_eq!(entries_of(&e, list), vec![(0xa1, 2), (0xa2, 0xff)]);
+    }
+
+    #[test]
+    fn faction_expel_adds_a_missing_entry() {
+        let mut e = session_engine();
+        let list = faction_list(&mut e, &[(0xa1, 2)]);
+        let this = faction_changes_with(&mut e, list);
+        e.call(0x0043_6e10, &args![this, 0xa3u32]);
+        assert_eq!(entries_of(&e, list), vec![(0xa1, 2), (0xa3, 0xff)]);
+    }
+
+    #[test]
+    fn faction_expel_creates_the_list_when_there_is_none() {
+        let mut e = session_engine();
+        let this = faction_changes_with(&mut e, 0);
+        start_log(&mut e);
+        e.call(0x0043_6e10, &args![this, 0xa3u32]);
+        let list = e.mem.u32(this + 0xc);
+        assert!(list != 0);
+        assert_eq!(calls(&e, SIMPLE_LIST_CONSTRUCT), vec![vec![list]]);
+        assert_eq!(entries_of(&e, list), vec![(0xa3, 0xff)]);
+    }
+
+    #[test]
+    fn faction_set_rank_changes_only_existing_entries() {
+        let mut e = session_engine();
+        let list = faction_list(&mut e, &[(0xa1, 2), (0xa2, 5)]);
+        let this = faction_changes_with(&mut e, list);
+        e.call(0x0043_6f20, &args![this, 0xa1u32, 9u32]);
+        e.call(0x0043_6f20, &args![this, 0xa9u32, 9u32]);
+        assert_eq!(entries_of(&e, list), vec![(0xa1, 9), (0xa2, 5)]);
+        let bare = faction_changes_with(&mut e, 0);
+        e.call(0x0043_6f20, &args![bare, 0xa1u32, 9u32]);
+        assert_eq!(e.mem.u32(bare + 0xc), 0);
+    }
+
+    #[test]
+    fn faction_set_or_add_rank_adds_a_missing_entry() {
+        let mut e = session_engine();
+        let list = faction_list(&mut e, &[(0xa1, 2)]);
+        let this = faction_changes_with(&mut e, list);
+        e.call(0x0043_6f80, &args![this, 0xa1u32, 7u32]);
+        assert_eq!(entries_of(&e, list), vec![(0xa1, 7)]);
+        e.call(0x0043_6f80, &args![this, 0xa5u32, 4u32]);
+        assert_eq!(entries_of(&e, list), vec![(0xa1, 7), (0xa5, 4)]);
+    }
+
+    #[test]
+    fn faction_membership_needs_a_rank_above_minus_one() {
+        let mut e = session_engine();
+        let list = faction_list(
+            &mut e,
+            &[(0xa1, 0xff), (0xa1, 0), (0xa2, 0xff), (0xa3, 0x7f)],
+        );
+        let this = faction_changes_with(&mut e, list);
+        // The expelled entry for 0xa1 does not stop the walk.
+        assert!(e.call(0x0043_7010, &args![this, 0xa1u32]).bool());
+        assert!(!e.call(0x0043_7010, &args![this, 0xa2u32]).bool());
+        assert!(e.call(0x0043_7010, &args![this, 0xa3u32]).bool());
+        assert!(!e.call(0x0043_7010, &args![this, 0xa4u32]).bool());
+        let empty = faction_changes_with(&mut e, 0);
+        assert!(!e.call(0x0043_7010, &args![empty, 0xa1u32]).bool());
+    }
+
+    #[test]
+    fn faction_expelled_needs_rank_minus_one() {
+        let mut e = session_engine();
+        let list = faction_list(&mut e, &[(0xa1, 3), (0xa1, 0xff), (0xa2, 0), (0xa3, 0xfe)]);
+        let this = faction_changes_with(&mut e, list);
+        assert!(e.call(0x0043_7080, &args![this, 0xa1u32]).bool());
+        assert!(!e.call(0x0043_7080, &args![this, 0xa2u32]).bool());
+        assert!(!e.call(0x0043_7080, &args![this, 0xa3u32]).bool());
+        let empty = faction_changes_with(&mut e, 0);
+        assert!(!e.call(0x0043_7080, &args![empty, 0xa1u32]).bool());
+    }
+
+    #[test]
+    fn faction_merge_expels_own_entries_and_adds_missing_ones() {
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+        use std::rc::Rc;
+        let mut e = session_engine();
+        let recorded: Rc<RefCell<HashMap<u32, u8>>> = Rc::default();
+        e.register(FACTION_MAP_CONSTRUCT, |_, a| ret(a[0]));
+        e.register(FACTION_MAP_DESTRUCT, |_, _| Ret::default());
+        let map = recorded.clone();
+        e.register_double(FACTION_MAP_SET_AT, move |_, a| {
+            map.borrow_mut().insert(a[1], a[2] as u8);
+            Ret::default()
+        });
+        let map = recorded.clone();
+        e.register_double(FACTION_MAP_LOOKUP, move |e, a| {
+            match map.borrow().get(&a[1]) {
+                Some(value) => {
+                    e.mem.set_u8(a[2], *value);
+                    ret(1)
+                }
+                None => ret(0),
+            }
+        });
+        e.register(FACTION_LIST_OF, |_, a| ret(a[0] + 0x2c));
+        let list = faction_list(&mut e, &[(0xa1, 2), (0xa2, 5)]);
+        let this = faction_changes_with(&mut e, list);
+        // The other record's list is embedded at +0x5c: head node there.
+        let other = e.mem.alloc(0x80);
+        let entry_a = e.mem.alloc(8);
+        e.mem.set_u32(entry_a, 0xa2);
+        let entry_b = e.mem.alloc(8);
+        e.mem.set_u32(entry_b, 0xb7);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(second, entry_b);
+        e.mem.set_u32(other + 0x5c, entry_a);
+        e.mem.set_u32(other + 0x60, second);
+        start_log(&mut e);
+        e.call(0x0043_70f0, &args![this, other]);
+        assert_eq!(calls(&e, FACTION_MAP_CONSTRUCT).len(), 1);
+        assert_eq!(calls(&e, FACTION_MAP_CONSTRUCT)[0][1], 0x25);
+        assert_eq!(calls(&e, FACTION_MAP_DESTRUCT).len(), 1);
+        assert_eq!(calls(&e, FACTION_LIST_OF), vec![vec![other + 0x30]]);
+        // 0xa2 was recorded by the first pass; only 0xb7 is added.
+        assert_eq!(
+            entries_of(&e, list),
+            vec![(0xa1, 0xff), (0xa2, 0xff), (0xb7, 0xff)]
+        );
+        assert_eq!(recorded.borrow().get(&0xa1), Some(&1));
+        // Without another record only the first pass runs.
+        let list = faction_list(&mut e, &[(0xc1, 4)]);
+        let alone = faction_changes_with(&mut e, list);
+        e.call(0x0043_70f0, &args![alone, 0u32]);
+        assert_eq!(entries_of(&e, list), vec![(0xc1, 0xff)]);
+    }
+
+    #[test]
+    fn faction_merge_adds_entries_the_map_has_with_a_zero_value() {
+        let mut e = session_engine();
+        e.register(FACTION_MAP_CONSTRUCT, |_, a| ret(a[0]));
+        e.register(FACTION_MAP_DESTRUCT, |_, _| Ret::default());
+        e.register(FACTION_MAP_SET_AT, |_, _| Ret::default());
+        e.register(FACTION_MAP_LOOKUP, |e, a| {
+            e.mem.set_u8(a[2], 0);
+            ret(1)
+        });
+        e.register(FACTION_LIST_OF, |_, a| ret(a[0] + 0x2c));
+        let list = faction_list(&mut e, &[]);
+        let this = faction_changes_with(&mut e, list);
+        let other = e.mem.alloc(0x80);
+        let entry = e.mem.alloc(8);
+        e.mem.set_u32(entry, 0xd4);
+        e.mem.set_u32(other + 0x5c, entry);
+        e.call(0x0043_70f0, &args![this, other]);
+        assert_eq!(entries_of(&e, list), vec![(0xd4, 0xff)]);
+    }
+
+    #[test]
+    fn radio_data_copy_copies_four_words() {
+        let mut e = Engine::new();
+        let from = e.mem.alloc(0x10);
+        let to = e.mem.alloc(0x10);
+        for (i, word) in [10.5f32.to_bits(), 2, 0.25f32.to_bits(), 0x9000]
+            .iter()
+            .enumerate()
+        {
+            e.mem.set_u32(from + 4 * i as u32, *word);
+            e.mem.set_u32(to + 4 * i as u32, 0xdead_beef);
+        }
+        e.call(0x0043_7240, &args![to, from]);
+        for i in 0..4 {
+            assert_eq!(e.mem.u32(to + 4 * i), e.mem.u32(from + 4 * i));
+        }
+        // A null source leaves the destination alone.
+        e.mem.set_u32(to, 1);
+        e.call(0x0043_7240, &args![to, 0u32]);
+        assert_eq!(e.mem.u32(to), 1);
+    }
+
+    #[test]
+    fn radio_data_compare_compares_the_sixteen_bytes() {
+        let mut e = session_engine();
+        e.register(BS_EXTRA_DATA_COMPARE, |_, _| Ret::default());
+        e.register(MEMCMP, |e, a| {
+            let differs = (0..a[2]).any(|i| e.mem.u8(a[0] + i) != e.mem.u8(a[1] + i));
+            ret(differs as u32)
+        });
+        let this = dirty_object(&mut e, 0x1c);
+        let same = dirty_object(&mut e, 0x1c);
+        let other = dirty_object(&mut e, 0x1c);
+        e.mem.set_u8(other + 0xc + 15, 1);
+        start_log(&mut e);
+        assert!(e.call(0x0043_7290, &args![this, 0u32]).bool());
+        assert!(!e.call(0x0043_7290, &args![this, same]).bool());
+        assert!(e.call(0x0043_7290, &args![this, other]).bool());
+        let casts = calls(&e, DYNAMIC_CAST);
+        assert_eq!(
+            casts[1],
+            vec![same, 0, BS_EXTRA_DATA_TYPE, EXTRA_RADIO_DATA_TYPE, 0]
+        );
+        assert_eq!(calls(&e, MEMCMP)[0], vec![this + 0xc, same + 0xc, 0x10]);
+        e.register(BS_EXTRA_DATA_COMPARE, |_, _| ret(1));
+        assert!(e.call(0x0043_7290, &args![this, same]).bool());
     }
 }
