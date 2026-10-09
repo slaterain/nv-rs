@@ -12,8 +12,11 @@
 //! - the form array (`FORM_LIST`, `BSSimpleArray`-shaped: items at +4, count
 //!   at +0x0C) of the forms that carry flag 2 (`fn_00484730`).
 //!
-//! Done so far: the first 80 open functions of the unit, `00483370` to
-//! `00485c10`. The next session continues at `00485d50` (`AddCompileIndex`).
+//! Done: every function of the unit, `00483370` to `00486eb0`. The third
+//! session added `AddCompileIndex`, the component `DATA` chunk code
+//! (`__SaveData`, `LoadData`, `fn_00486620`; the eight component kinds are
+//! `Components`), the form copier `fn_004867a0`, the form-type string lookup
+//! and the destructors of the registries' map classes.
 //!
 //! The record writer (`StartForm`, `CloseForm`, the `AddChunk` family) works
 //! on the buffer in `SAVE_BUFFER` / `SAVE_BUFFER_SIZE`: a 0x18 byte record
@@ -273,6 +276,109 @@ const SLOT_SET_FLAG_2: u32 = 0xc8;
 const SLOT_AFTER_START: u32 = 0xdc;
 const SLOT_IS_REFERENCE: u32 = 0xf0;
 const SLOT_NAME: u32 = 0x130;
+
+// ---- third batch: the component save/load data, the form creator, the maps ----
+/// The form components that `__SaveData` / `LoadData` / `fn_00486620` cast the
+/// form to (RTTI type descriptors, `.?AV<name>@@`), in the order the code
+/// lists them: `TESUsesForm`, `TESValueForm`, `TESHealthForm`,
+/// `TESWeightForm`, `TESQualityForm`, `TESAttackDamageForm`, `TESAttributes`
+/// and `BGSClipRoundsForm`.
+const TYPE_USES_FORM: u32 = 0x0118_6b88;
+const TYPE_VALUE_FORM: u32 = 0x0118_6b6c;
+const TYPE_HEALTH_FORM: u32 = 0x0118_6c3c;
+const TYPE_WEIGHT_FORM: u32 = 0x0118_3274;
+const TYPE_QUALITY_FORM: u32 = 0x0118_6bdc;
+const TYPE_ATTACK_DAMAGE_FORM: u32 = 0x0118_6c90;
+const TYPE_ATTRIBUTES: u32 = 0x0118_6c74;
+const TYPE_CLIP_ROUNDS_FORM: u32 = 0x0118_68d4;
+/// The chunk tag `"DATA"` of the form's component data.
+const DATA_CHUNK_TAG: u32 = 0x4154_4144;
+/// `"MASTERFILE: Trying to SaveData that's too large."` and the format
+/// `"%s Form '%s' (%08X)"` of `GetFormDetailedString`.
+const SAVE_DATA_TOO_LARGE_MESSAGE: u32 = 0x0101_ca2c;
+const DETAILED_STRING_FORMAT: u32 = 0x0101_ca60;
+/// The record buffer's current size (`011c54d0`) and address (`011c54cc`) as
+/// two getters (the receiver is ignored).
+const SAVE_BUFFER_SIZE_GETTER: u32 = 0x0047_3080;
+const SAVE_BUFFER_GETTER: u32 = 0x0047_3070;
+/// The one-byte component accessors: the byte at +4 of the component
+/// (`TESUsesForm`, `BGSClipRoundsForm`; the same body as [`FORM_TYPE`]) and
+/// its setter.
+const COMPONENT_BYTE_GET: u32 = FORM_TYPE;
+const COMPONENT_BYTE_SET: u32 = 0x004f_15a0;
+/// The word at +4 of `TESValueForm` / `TESHealthForm`, and their setters.
+const COMPONENT_WORD_GET: u32 = 0x0072_6070;
+const VALUE_SET: u32 = 0x0048_e960;
+const HEALTH_SET: u32 = 0x006e_cd40;
+/// `TESWeightForm`: the weight (a float returned in `ST0`) and its setter
+/// (the float is one stack word).
+const WEIGHT_GET: u32 = 0x006b_9130;
+const WEIGHT_SET: u32 = 0x004f_5d90;
+/// `TESQualityForm`: the quality (a getter returning a byte).
+const QUALITY_GET: u32 = 0x004f_1540;
+/// `TESAttackDamageForm`: the setter (a `u16`); the getter is the
+/// component's virtual at +0x10.
+const ATTACK_DAMAGE_SET: u32 = 0x0047_ff50;
+const SLOT_ATTACK_DAMAGE_GET: u32 = 0x10;
+/// `TESAttributes`: the size in bytes of its save data, its writer
+/// `(attributes, destination)` and its reader `(attributes, source)` (both
+/// return the number of bytes used).
+const ATTRIBUTES_SIZE: u32 = 0x009d_2510;
+const ATTRIBUTES_SAVE: u32 = 0x0048_0100;
+const ATTRIBUTES_LOAD: u32 = 0x0048_0130;
+/// On a `TESFile`: the size of the current chunk (`file + 0x25c`), reading
+/// the current chunk's data `(file, buffer, size)` and the big-endian flag
+/// (the byte at `file + 0x299`).
+const FILE_CHUNK_SIZE: u32 = 0x0040_1660;
+const FILE_READ_CHUNK: u32 = 0x0047_2890;
+const FILE_IS_BIG_ENDIAN: u32 = 0x0040_1680;
+/// `TESFile::GetIndexFile(file, index)` (Xbox PDB name) and a file's compile
+/// index (a byte).
+const FILE_GET_INDEX_FILE: u32 = 0x0047_1a10;
+const FILE_COMPILE_INDEX: u32 = 0x0047_3250;
+/// On `TESSaveLoadGame`: the remapping of a form ID that
+/// `AddCompileIndex` applies while the save/load stub (`0047c850`) is true.
+const SAVE_LOAD_REMAP_ID: u32 = 0x0085_7bf0;
+/// `TESDataHandler::CreateFormOfType(type)` (Xbox PDB name, cdecl).
+const CREATE_FORM_OF_TYPE: u32 = 0x0046_5110;
+/// The getter `00401280` returns the constant string at `DEFAULT_NAME`,
+/// which is also what `fn_004867a0` first hands the form's virtual at +0x134
+/// (a virtual that takes a string).
+const FORM_NAME_GETTER: u32 = 0x0040_1280;
+const DEFAULT_NAME: u32 = 0x0101_1584;
+const SLOT_TAKE_NAME: u32 = 0x134;
+/// The new form's virtual at +0x108, called with the original form.
+const SLOT_COPY_FROM: u32 = 0x108;
+/// A string local of 8 bytes (a pointer and two `u16`s): its constructor
+/// from a C string, the C string pointer it holds and its destructor.
+const STRING_CONSTRUCT: u32 = 0x0040_c0e0;
+const STRING_DATA: u32 = 0x0055_9450;
+const STRING_DESTROY: u32 = 0x0040_37d0;
+/// `sprintf(buffer, format, ...)` (cdecl).
+const FORMAT_STRING: u32 = 0x0040_6f60;
+/// `memset(buffer, value, size)` (cdecl) and the map bucket array's
+/// allocator (cdecl, byte size).
+const MEMSET: u32 = 0x0040_3d30;
+const ALLOCATE_BUCKETS: u32 = 0x00aa_1070;
+/// The base destructor steps of the map classes: of the form map and its
+/// base (`00486a60`), of the case-insensitive string map (`00486c80`), of
+/// `NiTMapBase<const char *, TESForm *>` (`00486dc0`), of
+/// `NiTMap<const char *, TESForm *>` (`00486d60`) and of
+/// `NiTStringTemplateMap` (`00486ca0`).
+const MAP_BASE_DESTROY: u32 = 0x0048_6a60;
+const STRING_MAP_BASE_DESTROY: u32 = 0x0048_6c80;
+const CHAR_KEY_MAP_BASE_DESTROY: u32 = 0x0048_6dc0;
+const NI_T_MAP_DESTROY: u32 = 0x0048_6d60;
+const STRING_TEMPLATE_MAP_DESTROY: u32 = 0x0048_6ca0;
+/// Map vtables: the map base, the `NiTPointerMap<unsigned int, TESForm *>`
+/// and the case-insensitive string map.
+const MAP_BASE_VTABLE: u32 = 0x0101_ca98;
+const POINTER_MAP_VTABLE: u32 = 0x0101_ca78;
+const STRING_MAP_VTABLE: u32 = 0x0101_cab8;
+/// The cache of `GetFormTypeFromFormString`: the last result and the last
+/// string looked up.
+const FORM_TYPE_CACHE_RESULT: u32 = 0x011c_54f0;
+const FORM_TYPE_CACHE_KEY: u32 = 0x011c_54f4;
 
 // `iFormFlags` bits set or cleared by the setters in this file that have a
 // named role.
@@ -1752,6 +1858,528 @@ pub fn tes_form_set_form_id(
     e.set(this, TESForm::iFormID, new_id);
 }
 
+// Translated from 00485d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::AddCompileIndex` (Xbox PDB), a cdecl function `(id pointer,
+/// file)`: while the save/load stub is true the ID is remapped by
+/// `TESSaveLoadGame` (`00857bf0`); otherwise, unless the ID is the one
+/// `fn_00484b40` selects and when `file` is not null, the top byte of the ID
+/// becomes the compile index of the file the ID's top byte plus one names in
+/// `file` (`GetIndexFile`), or of `file` itself when there is none.
+pub fn tes_form_add_compile_index(e: &mut Engine, id: Ptr, file: Ptr) {
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME);
+    if e.call(SAVE_LOAD_STUB, &args![save_load]).bool() {
+        let old = e.mem.u32(id.addr());
+        let remapped = e.call(SAVE_LOAD_REMAP_ID, &args![save_load, old]).u32();
+        e.mem.set_u32(id.addr(), remapped);
+        return;
+    }
+    let old = e.mem.u32(id.addr());
+    if fn_00484b40(e, old) || file.addr() == 0 {
+        return;
+    }
+    let indexed = e
+        .call(
+            FILE_GET_INDEX_FILE,
+            &args![file, (old >> 24).wrapping_add(1)],
+        )
+        .u32();
+    let source = if indexed != 0 { indexed } else { file.addr() };
+    let index = e.call(FILE_COMPILE_INDEX, &args![source]).u8() as u32;
+    let current = e.mem.u32(id.addr());
+    e.mem
+        .set_u32(id.addr(), index << 24 | current & 0x00ff_ffff);
+}
+
+/// The eight form components `__SaveData`, `LoadData` and `fn_00486620`
+/// cast a form to (each 0 when the form is not of that kind).
+struct Components {
+    uses: u32,
+    value: u32,
+    health: u32,
+    weight: u32,
+    quality: u32,
+    attack_damage: u32,
+    attributes: u32,
+    clip_rounds: u32,
+}
+
+/// `__RTDynamicCast(form, 0, TESForm, target, 0)`: the component of
+/// `target`'s kind inside the form, or 0.
+fn cast_form_to(e: &mut Engine, form: Ptr<TESForm>, target: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, TYPE_TES_FORM, target, 0u32],
+    )
+    .u32()
+}
+
+/// All eight casts, in the order of the game's code.
+fn cast_components(e: &mut Engine, form: Ptr<TESForm>) -> Components {
+    Components {
+        uses: cast_form_to(e, form, TYPE_USES_FORM),
+        value: cast_form_to(e, form, TYPE_VALUE_FORM),
+        health: cast_form_to(e, form, TYPE_HEALTH_FORM),
+        weight: cast_form_to(e, form, TYPE_WEIGHT_FORM),
+        quality: cast_form_to(e, form, TYPE_QUALITY_FORM),
+        attack_damage: cast_form_to(e, form, TYPE_ATTACK_DAMAGE_FORM),
+        attributes: cast_form_to(e, form, TYPE_ATTRIBUTES),
+        clip_rounds: cast_form_to(e, form, TYPE_CLIP_ROUNDS_FORM),
+    }
+}
+
+/// Bytes the components add to the form's `DATA` chunk: 1 for the uses and
+/// clip rounds components, 4 for value, health, weight and quality, 2 for
+/// the attack damage and the attributes' own size (`009d2510`).
+fn components_size(e: &mut Engine, parts: &Components) -> u32 {
+    let mut size = (parts.uses != 0) as u32;
+    for part in [parts.value, parts.health, parts.weight, parts.quality] {
+        if part != 0 {
+            size += 4;
+        }
+    }
+    if parts.attack_damage != 0 {
+        size += 2;
+    }
+    if parts.attributes != 0 {
+        size = size.wrapping_add(e.call(ATTRIBUTES_SIZE, &args![parts.attributes]).u32());
+    }
+    if parts.clip_rounds != 0 {
+        size += 1;
+    }
+    size
+}
+
+/// Byte-swaps the word at `addr` in place (`Swap32(addr, 0)`).
+fn swap_word_in_place(e: &mut Engine, addr: u32) {
+    e.call(SWAP_WORD, &args![addr, 0u32]);
+}
+
+/// Byte-swaps the `u16` at `addr` in place.
+fn swap_half_in_place(e: &mut Engine, addr: u32) {
+    e.call(SWAP_HALF, &args![addr, 0u32]);
+}
+
+/// x87 `FISTP` with the rounding mode set to truncation: values that do not
+/// fit a 32 bit integer give the "integer indefinite" `0x80000000`.
+fn x87_truncate(value: f32) -> i32 {
+    if value.is_nan() || value >= 2_147_483_648.0 || value < -2_147_483_648.0 {
+        i32::MIN
+    } else {
+        value as i32
+    }
+}
+
+// Translated from 00485e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::SaveData` (Xbox PDB): `__SaveData` with no data.
+pub fn tes_form_save_data(e: &mut Engine, this: Ptr<TESForm>) {
+    tes_form_save_data_inner(e, this, Ptr::new(0), 0);
+}
+
+// Translated from 00485e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::__SaveData` (Xbox PDB): writes the `DATA` chunk of `size` bytes
+/// of `data` (a log message and nothing else when `size` is over 0xffff),
+/// then makes room in that chunk for what the form's components add and
+/// appends it: the uses byte, the value and health words, the weight and the
+/// quality as floats, the attack damage `u16`, the attributes' own data and
+/// the clip rounds byte, each swapped to big endian when the target is.
+pub fn tes_form_save_data_inner(e: &mut Engine, this: Ptr<TESForm>, data: Ptr, size: u32) {
+    if size > 0xffff {
+        e.call(LOG_MESSAGE, &args![SAVE_DATA_TOO_LARGE_MESSAGE]);
+        return;
+    }
+    let size_before = e.call(SAVE_BUFFER_SIZE_GETTER, &args![this]).u32();
+    tes_form_add_chunk_data(e, DATA_CHUNK_TAG, data, size);
+    let chunk = e
+        .call(SAVE_BUFFER_GETTER, &args![this])
+        .u32()
+        .wrapping_add(size_before);
+    let parts = cast_components(e, this);
+    let extra = components_size(e, &parts) as u16;
+    if extra == 0 {
+        return;
+    }
+    let size_before = e.call(SAVE_BUFFER_SIZE_GETTER, &args![this]).u32();
+    if !fn_00485a70(e, this, Ptr::new(chunk), extra) {
+        return;
+    }
+    let mut out = e
+        .call(SAVE_BUFFER_GETTER, &args![this])
+        .u32()
+        .wrapping_add(size_before);
+    if parts.uses != 0 {
+        let byte = e.call(COMPONENT_BYTE_GET, &args![parts.uses]).u8();
+        e.mem.set_u8(out, byte);
+        out += 1;
+    }
+    for part in [parts.value, parts.health] {
+        if part != 0 {
+            let word = e.call(COMPONENT_WORD_GET, &args![part]).u32();
+            e.mem.set_u32(out, word);
+            if is_big_endian(e) {
+                swap_word_in_place(e, out);
+            }
+            out += 4;
+        }
+    }
+    if parts.weight != 0 {
+        let weight = e.call(WEIGHT_GET, &args![parts.weight]).f32();
+        out = write_float(e, out, weight);
+    }
+    if parts.quality != 0 {
+        let quality = e.call(QUALITY_GET, &args![parts.quality]).u8();
+        out = write_float(e, out, quality as f32);
+    }
+    if parts.attack_damage != 0 {
+        let damage = e
+            .vcall(parts.attack_damage, SLOT_ATTACK_DAMAGE_GET, &args![])
+            .u16();
+        e.mem.set_u16(out, damage);
+        if is_big_endian(e) {
+            swap_half_in_place(e, out);
+        }
+        out += 2;
+    }
+    if parts.attributes != 0 {
+        let used = e.call(ATTRIBUTES_SAVE, &args![parts.attributes, out]).u32();
+        out = out.wrapping_add(used);
+    }
+    if parts.clip_rounds != 0 {
+        let byte = e.call(COMPONENT_BYTE_GET, &args![parts.clip_rounds]).u8();
+        e.mem.set_u8(out, byte);
+    }
+}
+
+/// Stores `value` as a float at `out` (through a stack local and `memcpy`, as
+/// the game does), swapped when the target is big endian; returns the
+/// address after it.
+fn write_float(e: &mut Engine, out: u32, value: f32) -> u32 {
+    e.with_stack(4, |e, local| {
+        e.mem.set_f32(local.addr(), value);
+        if is_big_endian(e) {
+            swap_word_in_place(e, local.addr());
+        }
+        e.call(MEMCPY, &args![out, local.addr(), 4u32]);
+    });
+    out.wrapping_add(4)
+}
+
+// Translated from 004861f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::LoadData` (Xbox PDB), `(file, destination, start)`: reads the
+/// current chunk of `file` into a local buffer, copies its first
+/// `min(chunk size, start)` bytes to `destination`, then hands the
+/// components, from offset `start` of the chunk on, their values in the order
+/// `__SaveData` wrote them (each only while the offset is inside the chunk,
+/// the attributes always): the uses byte, the value and health words, the
+/// weight and the quality as floats (the quality is truncated to an integer
+/// and set as a byte), the attack damage `u16`, the attributes' own data and
+/// the clip rounds byte. Words are swapped when the file is big endian.
+pub fn tes_form_load_data(
+    e: &mut Engine,
+    this: Ptr<TESForm>,
+    file: Ptr,
+    destination: Ptr,
+    start: u16,
+) {
+    let size = e.call(FILE_CHUNK_SIZE, &args![file]).u16();
+    e.with_stack((size as u32).max(1), |e, buffer| {
+        let buffer = buffer.addr();
+        e.call(FILE_READ_CHUNK, &args![file, buffer, size as u32]);
+        let copied = fn_004865f0(e, size, start);
+        e.call(MEMCPY, &args![destination, buffer, copied as u32]);
+        let parts = cast_components(e, this);
+        let mut offset = start;
+        let swapped = |e: &mut Engine| e.call(FILE_IS_BIG_ENDIAN, &args![file]).bool();
+        if parts.uses != 0 && offset < size {
+            let byte = e.mem.u8(buffer + offset as u32) as u32;
+            e.call(COMPONENT_BYTE_SET, &args![parts.uses, byte]);
+            offset = offset.wrapping_add(1);
+        }
+        for (part, setter) in [(parts.value, VALUE_SET), (parts.health, HEALTH_SET)] {
+            if part != 0 && offset < size {
+                let mut word = e.mem.u32(buffer + offset as u32);
+                offset = offset.wrapping_add(4);
+                if swapped(e) {
+                    word = byte_swapped_word(e, word);
+                }
+                e.call(setter, &args![part, word]);
+            }
+        }
+        if parts.weight != 0 && offset < size {
+            let (weight, next) = read_float(e, file, buffer, offset);
+            offset = next;
+            e.call(WEIGHT_SET, &args![parts.weight, weight]);
+        }
+        if parts.quality != 0 && offset < size {
+            let (quality, next) = read_float(e, file, buffer, offset);
+            offset = next;
+            let truncated = x87_truncate(quality) as u32 & 0xff;
+            e.call(COMPONENT_BYTE_SET, &args![parts.quality, truncated]);
+        }
+        if parts.attack_damage != 0 && offset < size {
+            let mut half = e.mem.u16(buffer + offset as u32);
+            offset = offset.wrapping_add(2);
+            if swapped(e) {
+                half = e.with_stack(2, |e, local| {
+                    e.mem.set_u16(local.addr(), half);
+                    swap_half_in_place(e, local.addr());
+                    e.mem.u16(local.addr())
+                });
+            }
+            e.call(ATTACK_DAMAGE_SET, &args![parts.attack_damage, half as u32]);
+        }
+        if parts.attributes != 0 {
+            let used = e
+                .call(
+                    ATTRIBUTES_LOAD,
+                    &args![parts.attributes, buffer + offset as u32],
+                )
+                .u32();
+            offset = (offset as u32).wrapping_add(used) as u16;
+        }
+        if parts.clip_rounds != 0 && offset < size {
+            let byte = e.mem.u8(buffer + offset as u32) as u32;
+            e.call(COMPONENT_BYTE_SET, &args![parts.clip_rounds, byte]);
+        }
+    });
+}
+
+/// A word read from the game's stack local after a byte swap.
+fn byte_swapped_word(e: &mut Engine, value: u32) -> u32 {
+    e.with_stack(4, |e, local| {
+        e.mem.set_u32(local.addr(), value);
+        swap_word_in_place(e, local.addr());
+        e.mem.u32(local.addr())
+    })
+}
+
+/// Reads the float at `buffer + offset` (`memcpy` into a local, then into a
+/// second local that is swapped when `file` is big endian); returns it and
+/// the offset after it.
+fn read_float(e: &mut Engine, file: Ptr, buffer: u32, offset: u16) -> (f32, u16) {
+    let value = e.with_stack(8, |e, locals| {
+        let copy = locals.addr();
+        let work = copy + 4;
+        e.call(MEMCPY, &args![copy, buffer + offset as u32, 4u32]);
+        let value = e.mem.f32(copy);
+        e.mem.set_f32(work, value);
+        if e.call(FILE_IS_BIG_ENDIAN, &args![file]).bool() {
+            swap_word_in_place(e, work);
+        }
+        e.mem.f32(work)
+    });
+    (value, offset.wrapping_add(4))
+}
+
+// Translated from 004865f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The smaller of two `u16` values (cdecl).
+pub fn fn_004865f0(_e: &mut Engine, first: u16, second: u16) -> u16 {
+    first.min(second)
+}
+
+// Translated from 00486620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A fastcall function `(form)`: the number of bytes the form's components
+/// add to its `DATA` chunk (see [`components_size`]).
+pub fn fn_00486620(e: &mut Engine, this: Ptr<TESForm>) -> u32 {
+    let parts = cast_components(e, this);
+    components_size(e, &parts)
+}
+
+// Translated from 004867a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A form copier `(form, _unused_1, map)`: creates a form of the same type
+/// (`CreateFormOfType`), and when that works: saves the name the form's name
+/// getter returns in a string local, gives the original form's virtual at
+/// +0x134 the constant string `DEFAULT_NAME`, calls the new form's virtual at
+/// +0x108 with the original form, and then, if the saved string holds
+/// anything, gives it back to the original through the virtual at +0x134.
+/// When `map` is not null the new form is added to it under the original
+/// form's address (`SetAt`). Returns the new form or null. The exception
+/// frame is not translated.
+pub fn fn_004867a0(e: &mut Engine, this: Ptr<TESForm>, _unused_1: u32, map: Ptr) -> Ptr<TESForm> {
+    let form_type = e.call(FORM_TYPE, &args![this]).u32();
+    let created = e
+        .call(CREATE_FORM_OF_TYPE, &args![form_type])
+        .ptr::<TESForm>();
+    if created.addr() != 0 {
+        let name = e.call(FORM_NAME_GETTER, &args![this]).u32();
+        e.with_stack(8, |e, saved| {
+            e.call(STRING_CONSTRUCT, &args![saved, name]);
+            e.vcall(this.addr(), SLOT_TAKE_NAME, &args![DEFAULT_NAME]);
+            e.vcall(created.addr(), SLOT_COPY_FROM, &args![this]);
+            if e.call(STRING_DATA, &args![saved]).u32() != 0 {
+                let text = e.call(STRING_DATA, &args![saved]).u32();
+                e.vcall(this.addr(), SLOT_TAKE_NAME, &args![text]);
+            }
+            e.call(STRING_DESTROY, &args![saved]);
+        });
+        if map.addr() != 0 {
+            e.call(MAP_SET_AT, &args![map, this, created]);
+        }
+    }
+    created
+}
+
+// Translated from 00486890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::GetFormTypeFromFormString` (Xbox PDB): the index of the entry of
+/// the form-type table whose packed string equals `packed` (0 when none),
+/// remembering the last string and index it found.
+pub fn tes_form_get_form_type_from_form_string(e: &mut Engine, packed: u32) -> u32 {
+    if packed == e.global::<u32>(FORM_TYPE_CACHE_KEY) {
+        return e.global::<u32>(FORM_TYPE_CACHE_RESULT);
+    }
+    for index in 0..FORM_ENUM_COUNT {
+        let entry = FORM_ENUM_TABLE + index * FORM_ENUM_STRIDE;
+        // Form-type table entry +8: the packed string.
+        if e.mem.u32(entry + 8) == packed {
+            e.set_global(FORM_TYPE_CACHE_RESULT, index);
+            e.set_global(FORM_TYPE_CACHE_KEY, packed);
+            return index;
+        }
+    }
+    0
+}
+
+// Translated from 004868f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::GetFormDetailedString` (Xbox PDB): prints `"<type> Form '<name>'
+/// (<form ID>)"` into `buffer` (`sprintf`), the type being the form-type
+/// table's string and the name what `00401280` returns.
+pub fn tes_form_get_form_detailed_string(e: &mut Engine, this: Ptr<TESForm>, buffer: Ptr) {
+    let id = e.call(WORD_AT_0C, &args![this]).u32();
+    let name = e.call(FORM_NAME_GETTER, &args![this]).u32();
+    let type_name = e.call(FORM_TYPE_NAME, &args![this]).u32();
+    e.call(
+        FORMAT_STRING,
+        &args![buffer, DETAILED_STRING_FORMAT, type_name, name, id],
+    );
+}
+
+// Translated from 00486960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerMap<unsigned int, TESForm *>::scalar deleting destructor`
+/// (Xbox PDB): the map's destructor and, when bit 0 of `flags` is set, the
+/// release of the object. Returns the map.
+pub fn ni_t_pointer_map_form_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00486a00(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00486930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the form map `(buckets)`: the map base's constructor
+/// (`fn_00486990`) and then the `NiTPointerMap` vtable.
+pub fn fn_00486930(e: &mut Engine, this: Ptr, buckets: u32) -> Ptr {
+    fn_00486990(e, this, buckets);
+    e.mem.set_u32(this.addr(), POINTER_MAP_VTABLE);
+    this
+}
+
+// Translated from 00486990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The map base's constructor `(buckets)`: stores the map base vtable, the
+/// bucket count (+4), an item count of 0 (+0x0C) and a zeroed array of
+/// `buckets` words (+8). Returns the map.
+pub fn fn_00486990(e: &mut Engine, this: Ptr, buckets: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, MAP_BASE_VTABLE);
+    e.mem.set_u32(base + 4, buckets);
+    e.mem.set_u32(base + 0xc, 0);
+    let array = e.call(ALLOCATE_BUCKETS, &args![buckets << 2]).u32();
+    e.mem.set_u32(base + 8, array);
+    e.call(MEMSET, &args![array, 0u32, buckets << 2]);
+    this
+}
+
+// Translated from 00486a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor body of the form map: the `NiTPointerMap` vtable, removal
+/// of every entry (`00438af0`) and the map base's destruction (`00486a60`).
+/// The exception frame is not translated.
+pub fn fn_00486a00(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), POINTER_MAP_VTABLE);
+    e.call(MAP_CLEAR, &args![this]);
+    e.call(MAP_BASE_DESTROY, &args![this]);
+}
+
+/// The shared tail of the scalar deleting destructors below: runs
+/// `destroy(this)` and releases the object when bit 0 of `flags` is set.
+fn scalar_deleting(e: &mut Engine, this: Ptr, flags: u32, destroy: u32) -> Ptr {
+    e.call(destroy, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00486c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>, unsigned int, TESForm *>::
+/// scalar deleting destructor` (Xbox PDB): `00486a60`, then the release when
+/// bit 0 of `flags` is set. Returns the object.
+pub fn ni_t_map_base_form_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    scalar_deleting(e, this, flags, MAP_BASE_DESTROY)
+}
+
+// Translated from 00486c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCaseInsensitiveStringMap<TESForm *>::scalar deleting destructor`
+/// (Xbox PDB): the destructor `fn_00486c60`, then the release when bit 0 of
+/// `flags` is set. Returns the object.
+pub fn bst_case_insensitive_string_map_form_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00486c60(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00486c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the case-insensitive string map: its vtable, then the
+/// base destruction (`00486c80`).
+pub fn fn_00486c60(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), STRING_MAP_VTABLE);
+    e.call(STRING_MAP_BASE_DESTROY, &args![this]);
+}
+
+// Translated from 00486e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<const char *, TESForm *>>, const char *,
+/// TESForm *>::scalar deleting destructor` (Xbox PDB): `00486dc0`, then the
+/// release when bit 0 of `flags` is set. Returns the object.
+pub fn ni_t_map_base_char_key_form_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    scalar_deleting(e, this, flags, CHAR_KEY_MAP_BASE_DESTROY)
+}
+
+// Translated from 00486e80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<const char *, TESForm *>::scalar deleting destructor` (Xbox PDB):
+/// `00486d60`, then the release when bit 0 of `flags` is set. Returns the
+/// object.
+pub fn ni_t_map_char_key_form_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    scalar_deleting(e, this, flags, NI_T_MAP_DESTROY)
+}
+
+// Translated from 00486eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTStringTemplateMap<NiTMap<const char *, TESForm *>, TESForm *>::scalar
+/// deleting destructor` (Xbox PDB): `00486ca0`, then the release when bit 0
+/// of `flags` is set. Returns the object.
+pub fn ni_t_string_template_map_form_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    scalar_deleting(e, this, flags, STRING_TEMPLATE_MAP_DESTROY)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1859,6 +2487,52 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00485bc0, fn_00485bc0(Ptr<TESForm>) -> u32),
         entry!(0x00485be0, fn_00485be0(Ptr<TESForm>, u32) -> bool),
         entry!(0x00485c10, tes_form_set_form_id(Ptr<TESForm>, u32, bool)),
+        entry!(0x00485d50, tes_form_add_compile_index(Ptr, Ptr)),
+        entry!(0x00485e00, tes_form_save_data(Ptr<TESForm>)),
+        entry!(0x00485e20, tes_form_save_data_inner(Ptr<TESForm>, Ptr, u32)),
+        entry!(0x004861f0, tes_form_load_data(Ptr<TESForm>, Ptr, Ptr, u16)),
+        entry!(0x004865f0, fn_004865f0(u16, u16) -> u16),
+        entry!(0x00486620, fn_00486620(Ptr<TESForm>) -> u32),
+        entry!(
+            0x004867a0,
+            fn_004867a0(Ptr<TESForm>, u32, Ptr) -> Ptr<TESForm>
+        ),
+        entry!(
+            0x00486890,
+            tes_form_get_form_type_from_form_string(u32) -> u32
+        ),
+        entry!(
+            0x004868f0,
+            tes_form_get_form_detailed_string(Ptr<TESForm>, Ptr)
+        ),
+        entry!(0x00486930, fn_00486930(Ptr, u32) -> Ptr),
+        entry!(
+            0x00486960,
+            ni_t_pointer_map_form_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00486990, fn_00486990(Ptr, u32) -> Ptr),
+        entry!(0x00486a00, fn_00486a00(Ptr)),
+        entry!(
+            0x00486c00,
+            ni_t_map_base_form_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00486c30,
+            bst_case_insensitive_string_map_form_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00486c60, fn_00486c60(Ptr)),
+        entry!(
+            0x00486e50,
+            ni_t_map_base_char_key_form_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00486e80,
+            ni_t_map_char_key_form_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00486eb0,
+            ni_t_string_template_map_form_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
     ]
 }
 
@@ -4079,5 +4753,604 @@ mod tests {
         e.call(0x0048_5c10, &args![temporary, 0x31u32, true]);
         assert_eq!(e.call_log.take().unwrap().len(), 2);
         assert_eq!(e.get(temporary, TESForm::iFormID), 0x31);
+    }
+
+    // ---- third batch: components, copier, maps ----
+
+    /// The component objects of a test form: each has its value at +4.
+    struct Parts {
+        uses: u32,
+        value: u32,
+        health: u32,
+        weight: u32,
+        quality: u32,
+        attack_damage: u32,
+        attributes: u32,
+        clip_rounds: u32,
+    }
+
+    const SLOT_ATTACK_DAMAGE: u32 = 0x0f00_0010;
+
+    fn make_parts(e: &mut Engine) -> Parts {
+        let mut slots = vec![0u32; 5];
+        slots[4] = SLOT_ATTACK_DAMAGE;
+        e.put_vtable(0x0200_1000, &slots);
+        let new = |e: &mut Engine| e.mem.alloc(0x20);
+        let parts = Parts {
+            uses: new(e),
+            value: new(e),
+            health: new(e),
+            weight: new(e),
+            quality: new(e),
+            attack_damage: new(e),
+            attributes: new(e),
+            clip_rounds: new(e),
+        };
+        e.mem.set_u32(parts.attack_damage, 0x0200_1000);
+        parts
+    }
+
+    /// Makes `RT_DYNAMIC_CAST` find the given components (target type to
+    /// object).
+    fn cast_to(e: &mut Engine, parts: &Parts, kinds: &[u32]) {
+        let table = [
+            (TYPE_USES_FORM, parts.uses),
+            (TYPE_VALUE_FORM, parts.value),
+            (TYPE_HEALTH_FORM, parts.health),
+            (TYPE_WEIGHT_FORM, parts.weight),
+            (TYPE_QUALITY_FORM, parts.quality),
+            (TYPE_ATTACK_DAMAGE_FORM, parts.attack_damage),
+            (TYPE_ATTRIBUTES, parts.attributes),
+            (TYPE_CLIP_ROUNDS_FORM, parts.clip_rounds),
+        ];
+        let found: Vec<(u32, u32)> = table
+            .iter()
+            .copied()
+            .filter(|(kind, _)| kinds.contains(kind))
+            .collect();
+        e.register_double(RT_DYNAMIC_CAST, move |_, a| {
+            assert_eq!(a[2], TYPE_TES_FORM);
+            ret(found
+                .iter()
+                .find(|(kind, _)| *kind == a[3])
+                .map_or(0, |(_, object)| *object))
+        });
+    }
+
+    const ALL_KINDS: [u32; 8] = [
+        TYPE_USES_FORM,
+        TYPE_VALUE_FORM,
+        TYPE_HEALTH_FORM,
+        TYPE_WEIGHT_FORM,
+        TYPE_QUALITY_FORM,
+        TYPE_ATTACK_DAMAGE_FORM,
+        TYPE_ATTRIBUTES,
+        TYPE_CLIP_ROUNDS_FORM,
+    ];
+
+    /// A record-buffer engine with the doubles `__SaveData` needs.
+    fn save_data_engine(big_endian: bool) -> (Engine, u32, Parts) {
+        let (mut e, buffer) = chunk_engine(big_endian, 0x200);
+        e.register(SWAP_CHUNK_HEADER, |_, _| Ret::default());
+        e.register(SAVE_BUFFER_SIZE_GETTER, |e, _| {
+            ret(e.global::<u32>(SAVE_BUFFER_SIZE))
+        });
+        e.register(SAVE_BUFFER_GETTER, |e, _| ret(e.global::<u32>(SAVE_BUFFER)));
+        e.register(LOG_MESSAGE, |_, _| Ret::default());
+        e.register(COMPONENT_WORD_GET, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(WEIGHT_GET, |e, a| Ret {
+            st0: e.mem.f32(a[0] + 4) as f64,
+            ..Ret::default()
+        });
+        e.register(QUALITY_GET, |e, a| ret(e.mem.u8(a[0] + 4) as u32));
+        e.register(ATTRIBUTES_SIZE, |_, _| ret(3));
+        e.register(ATTRIBUTES_SAVE, |e, a| {
+            e.mem.write(a[1], &[9, 9, 9]);
+            ret(3)
+        });
+        e.register(SLOT_ATTACK_DAMAGE, |e, a| ret(e.mem.u16(a[0] + 4) as u32));
+        let parts = make_parts(&mut e);
+        e.mem.set_u8(parts.uses + 4, 7);
+        e.mem.set_u32(parts.value + 4, 0x1122_3344);
+        e.mem.set_u32(parts.health + 4, 0x5566_7788);
+        e.mem.set_f32(parts.weight + 4, 1.5);
+        e.mem.set_u8(parts.quality + 4, 200);
+        e.mem.set_u16(parts.attack_damage + 4, 0x0abc);
+        e.mem.set_u8(parts.clip_rounds + 4, 2);
+        (e, buffer, parts)
+    }
+
+    #[test]
+    fn save_data_appends_every_component_to_the_data_chunk() {
+        let (mut e, buffer, parts) = save_data_engine(false);
+        cast_to(&mut e, &parts, &ALL_KINDS);
+        let f = form(&mut e, 8, 0x20);
+        let data = e.mem.alloc(4);
+        e.mem.write(data, &[1, 2, 3]);
+        e.call(0x0048_5e20, &args![f, data, 3u32]);
+        let mut expected = b"DATA".to_vec();
+        expected.extend_from_slice(&26u16.to_le_bytes());
+        expected.extend_from_slice(&[1, 2, 3, 7]);
+        expected.extend_from_slice(&0x1122_3344u32.to_le_bytes());
+        expected.extend_from_slice(&0x5566_7788u32.to_le_bytes());
+        expected.extend_from_slice(&1.5f32.to_le_bytes());
+        expected.extend_from_slice(&200.0f32.to_le_bytes());
+        expected.extend_from_slice(&[0xbc, 0x0a, 9, 9, 9, 2]);
+        assert_eq!(chunks(&e, buffer), expected);
+    }
+
+    #[test]
+    fn save_data_swaps_words_floats_and_halves_on_big_endian() {
+        let (mut e, buffer, parts) = save_data_engine(true);
+        cast_to(
+            &mut e,
+            &parts,
+            &[TYPE_VALUE_FORM, TYPE_WEIGHT_FORM, TYPE_ATTACK_DAMAGE_FORM],
+        );
+        let f = form(&mut e, 8, 0x20);
+        e.call(0x0048_5e00, &args![f]);
+        let mut expected = b"DATA".to_vec();
+        expected.extend_from_slice(&10u16.to_le_bytes());
+        expected.extend_from_slice(&0x1122_3344u32.to_be_bytes());
+        expected.extend_from_slice(&1.5f32.to_be_bytes());
+        expected.extend_from_slice(&0x0abcu16.to_be_bytes());
+        assert_eq!(chunks(&e, buffer), expected);
+    }
+
+    #[test]
+    fn save_data_without_components_writes_only_the_chunk() {
+        let (mut e, buffer, parts) = save_data_engine(false);
+        cast_to(&mut e, &parts, &[]);
+        let f = form(&mut e, 8, 0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_5e00, &args![f]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(chunks(&e, buffer), b"DATA\x00\x00");
+        assert_eq!(calls_to(&log, ATTRIBUTES_SIZE).len(), 0);
+        assert_eq!(e.global::<u32>(SAVE_BUFFER_SIZE), 0x18 + 6);
+    }
+
+    #[test]
+    fn save_data_refuses_more_than_65535_bytes() {
+        let (mut e, _, parts) = save_data_engine(false);
+        cast_to(&mut e, &parts, &ALL_KINDS);
+        let f = form(&mut e, 8, 0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_5e20, &args![f, 0u32, 0x1_0000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE),
+            vec![vec![SAVE_DATA_TOO_LARGE_MESSAGE]]
+        );
+        assert!(calls_to(&log, SAVE_BUFFER_SIZE_GETTER).is_empty());
+        assert_eq!(e.global::<u32>(SAVE_BUFFER_SIZE), 0x18);
+    }
+
+    #[test]
+    fn component_size_counts_each_kind() {
+        let (mut e, _, parts) = save_data_engine(false);
+        let f = form(&mut e, 8, 0x20);
+        cast_to(&mut e, &parts, &ALL_KINDS);
+        assert_eq!(e.call(0x0048_6620, &args![f]).u32(), 1 + 16 + 2 + 3 + 1);
+        cast_to(&mut e, &parts, &[TYPE_QUALITY_FORM, TYPE_CLIP_ROUNDS_FORM]);
+        assert_eq!(e.call(0x0048_6620, &args![f]).u32(), 5);
+        cast_to(&mut e, &parts, &[]);
+        assert_eq!(e.call(0x0048_6620, &args![f]).u32(), 0);
+    }
+
+    #[test]
+    fn smaller_of_two_halves() {
+        let mut e = form_engine();
+        assert_eq!(e.call(0x0048_65f0, &args![3u16, 9u16]).u16(), 3);
+        assert_eq!(e.call(0x0048_65f0, &args![9u16, 3u16]).u16(), 3);
+        assert_eq!(e.call(0x0048_65f0, &args![0xffffu16, 1u16]).u16(), 1);
+    }
+
+    #[test]
+    fn x87_truncation_matches_fistp() {
+        assert_eq!(x87_truncate(7.9), 7);
+        assert_eq!(x87_truncate(-1.5), -1);
+        assert_eq!(x87_truncate(3.0e10), i32::MIN);
+        assert_eq!(x87_truncate(f32::NAN), i32::MIN);
+    }
+
+    const FILE_CHUNK_AT: u32 = 0x100;
+
+    /// An engine with a file whose current chunk is `chunk`, and doubles for
+    /// the components' setters that store what they are given at +4.
+    fn load_data_engine(chunk: &[u8], big_endian: bool) -> (Engine, u32, Parts) {
+        let (mut e, _) = chunk_engine(big_endian, 0x40);
+        let file = e.mem.alloc(0x400);
+        e.mem.set_u32(file + 0x25c, chunk.len() as u32);
+        e.mem.set_u8(file + 0x299, big_endian as u8);
+        e.mem.write(file + FILE_CHUNK_AT, chunk);
+        e.register(FILE_CHUNK_SIZE, |e, a| ret(e.mem.u32(a[0] + 0x25c)));
+        e.register(
+            FILE_IS_BIG_ENDIAN,
+            |e, a| ret(e.mem.u8(a[0] + 0x299) as u32),
+        );
+        e.register(FILE_READ_CHUNK, |e, a| {
+            let bytes = e.mem.bytes(a[0] + FILE_CHUNK_AT, a[2]);
+            e.mem.write(a[1], &bytes);
+            ret(1)
+        });
+        e.register(COMPONENT_BYTE_SET, |e, a| {
+            e.mem.set_u8(a[0] + 4, a[1] as u8);
+            Ret::default()
+        });
+        for setter in [VALUE_SET, HEALTH_SET, WEIGHT_SET] {
+            e.register(setter, |e, a| {
+                e.mem.set_u32(a[0] + 4, a[1]);
+                Ret::default()
+            });
+        }
+        e.register(ATTACK_DAMAGE_SET, |e, a| {
+            e.mem.set_u16(a[0] + 4, a[1] as u16);
+            Ret::default()
+        });
+        e.register(ATTRIBUTES_LOAD, |_, _| ret(3));
+        let parts = make_parts(&mut e);
+        (e, file, parts)
+    }
+
+    #[test]
+    fn load_data_hands_every_component_its_value() {
+        let mut chunk = vec![0xaa, 0xbb, 5];
+        chunk.extend_from_slice(&0x0102_0304u32.to_le_bytes());
+        chunk.extend_from_slice(&0x0a0b_0c0du32.to_le_bytes());
+        chunk.extend_from_slice(&2.5f32.to_le_bytes());
+        chunk.extend_from_slice(&7.9f32.to_le_bytes());
+        chunk.extend_from_slice(&0x1234u16.to_le_bytes());
+        chunk.extend_from_slice(&[0, 0, 0, 9]);
+        let (mut e, file, parts) = load_data_engine(&chunk, false);
+        cast_to(&mut e, &parts, &ALL_KINDS);
+        let f = form(&mut e, 8, 0x20);
+        let destination = e.mem.alloc(8);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_61f0, &args![f, file, destination, 2u16]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.bytes(destination, 2), vec![0xaa, 0xbb]);
+        assert_eq!(e.mem.u8(parts.uses + 4), 5);
+        assert_eq!(e.mem.u32(parts.value + 4), 0x0102_0304);
+        assert_eq!(e.mem.u32(parts.health + 4), 0x0a0b_0c0d);
+        assert_eq!(e.mem.f32(parts.weight + 4), 2.5);
+        assert_eq!(e.mem.u8(parts.quality + 4), 7);
+        assert_eq!(e.mem.u16(parts.attack_damage + 4), 0x1234);
+        let loads = calls_to(&log, ATTRIBUTES_LOAD);
+        assert_eq!(loads.len(), 1);
+        assert_eq!(loads[0][0], parts.attributes);
+        // The clip rounds byte is read after the attributes' 3 bytes.
+        assert_eq!(e.mem.u8(parts.clip_rounds + 4), 9);
+    }
+
+    #[test]
+    fn load_data_swaps_when_the_file_is_big_endian() {
+        let mut chunk = vec![];
+        chunk.extend_from_slice(&0x0102_0304u32.to_be_bytes());
+        chunk.extend_from_slice(&2.5f32.to_be_bytes());
+        chunk.extend_from_slice(&0x1234u16.to_be_bytes());
+        let (mut e, file, parts) = load_data_engine(&chunk, true);
+        cast_to(
+            &mut e,
+            &parts,
+            &[TYPE_VALUE_FORM, TYPE_WEIGHT_FORM, TYPE_ATTACK_DAMAGE_FORM],
+        );
+        let f = form(&mut e, 8, 0x20);
+        let destination = e.mem.alloc(8);
+        e.call(0x0048_61f0, &args![f, file, destination, 0u16]);
+        assert_eq!(e.mem.u32(parts.value + 4), 0x0102_0304);
+        assert_eq!(e.mem.f32(parts.weight + 4), 2.5);
+        assert_eq!(e.mem.u16(parts.attack_damage + 4), 0x1234);
+    }
+
+    #[test]
+    fn load_data_stops_at_the_end_of_the_chunk_but_always_loads_attributes() {
+        let (mut e, file, parts) = load_data_engine(&[5], false);
+        cast_to(&mut e, &parts, &ALL_KINDS);
+        let f = form(&mut e, 8, 0x20);
+        let destination = e.mem.alloc(8);
+        e.mem.set_u32(parts.value + 4, 0xdead);
+        e.mem.set_u8(parts.clip_rounds + 4, 0x55);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_61f0, &args![f, file, destination, 0u16]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u8(parts.uses + 4), 5);
+        assert_eq!(e.mem.u32(parts.value + 4), 0xdead);
+        assert_eq!(e.mem.u8(parts.clip_rounds + 4), 0x55);
+        assert!(calls_to(&log, VALUE_SET).is_empty());
+        assert_eq!(calls_to(&log, ATTRIBUTES_LOAD).len(), 1);
+    }
+
+    #[test]
+    fn add_compile_index_remaps_while_the_save_load_stub_is_true() {
+        let mut e = form_engine();
+        e.set_global(SAVE_LOAD_GAME, 0x7300_0000u32);
+        e.register(SAVE_LOAD_STUB, |_, _| ret(1));
+        e.register(SAVE_LOAD_REMAP_ID, |_, a| ret(a[1] + 1));
+        let id = e.mem.alloc(4);
+        e.mem.set_u32(id, 0x0100_0800);
+        e.call(0x0048_5d50, &args![id, 0u32]);
+        assert_eq!(e.mem.u32(id), 0x0100_0801);
+    }
+
+    #[test]
+    fn add_compile_index_replaces_the_top_byte_by_the_files_index() {
+        let mut e = form_engine();
+        e.set_global(SAVE_LOAD_GAME, 0x7300_0000u32);
+        e.register(SAVE_LOAD_STUB, |_, _| ret(0));
+        e.register(FILE_GET_INDEX_FILE, |_, a| {
+            ret(if a[1] == 2 { 0x7400_0000 } else { 0 })
+        });
+        e.register(FILE_COMPILE_INDEX, |_, a| {
+            ret(if a[0] == 0x7400_0000 { 5 } else { 3 })
+        });
+        let file = 0x7500_0000u32;
+        let id = e.mem.alloc(4);
+        // The file with index 2 is found: its compile index is used.
+        e.mem.set_u32(id, 0x0112_3456);
+        e.call(0x0048_5d50, &args![id, file]);
+        assert_eq!(e.mem.u32(id), 0x0512_3456);
+        // No such file: the file's own index.
+        e.mem.set_u32(id, 0x0712_3456);
+        e.call(0x0048_5d50, &args![id, file]);
+        assert_eq!(e.mem.u32(id), 0x0312_3456);
+        // IDs 1..=0x7ff and a null file leave the ID alone.
+        e.mem.set_u32(id, 0x0000_0123);
+        e.call(0x0048_5d50, &args![id, file]);
+        assert_eq!(e.mem.u32(id), 0x0000_0123);
+        e.mem.set_u32(id, 0x0112_3456);
+        e.call(0x0048_5d50, &args![id, 0u32]);
+        assert_eq!(e.mem.u32(id), 0x0112_3456);
+    }
+
+    const COPIER_VTABLE: u32 = 0x0200_2000;
+    const SLOT_TAKE_NAME_DOUBLE: u32 = 0x0f00_0134;
+    const SLOT_COPY_FROM_DOUBLE: u32 = 0x0f00_0108;
+
+    fn copier_engine(name: u32) -> (Engine, Ptr<TESForm>, Ptr<TESForm>) {
+        let mut e = form_engine();
+        let mut slots = vec![0u32; 0x138 / 4];
+        slots[0x134 / 4] = SLOT_TAKE_NAME_DOUBLE;
+        slots[0x108 / 4] = SLOT_COPY_FROM_DOUBLE;
+        e.put_vtable(COPIER_VTABLE, &slots);
+        e.register(SLOT_TAKE_NAME_DOUBLE, |_, _| Ret::default());
+        e.register(SLOT_COPY_FROM_DOUBLE, |_, _| Ret::default());
+        e.register_double(FORM_NAME_GETTER, move |_, _| ret(name));
+        e.register(STRING_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            ret(a[0])
+        });
+        e.register(STRING_DATA, |e, a| ret(e.mem.u32(a[0])));
+        e.register(STRING_DESTROY, |_, _| Ret::default());
+        e.register(MAP_SET_AT, |_, _| Ret::default());
+        let original = form(&mut e, 8, 0x2a);
+        e.mem.set_u32(original.addr(), COPIER_VTABLE);
+        let created = form(&mut e, 8, 0x2a);
+        e.mem.set_u32(created.addr(), COPIER_VTABLE);
+        let created_addr = created.addr();
+        e.register_double(CREATE_FORM_OF_TYPE, move |_, a| {
+            ret(if a[0] == 0x2a { created_addr } else { 0 })
+        });
+        (e, original, created)
+    }
+
+    #[test]
+    fn copier_creates_a_form_copies_into_it_and_restores_the_name() {
+        let (mut e, original, created) = copier_engine(0x7600_0000);
+        e.call_log = Some(vec![]);
+        let map = 0x7700_0000u32;
+        let back = e
+            .call(0x0048_67a0, &args![original, 0xeeeeu32, map])
+            .ptr::<TESForm>();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(back, created);
+        let order: Vec<u32> = log
+            .iter()
+            .map(|(a, _)| *a)
+            .filter(|a| {
+                [
+                    CREATE_FORM_OF_TYPE,
+                    SLOT_TAKE_NAME_DOUBLE,
+                    SLOT_COPY_FROM_DOUBLE,
+                    MAP_SET_AT,
+                ]
+                .contains(a)
+            })
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                CREATE_FORM_OF_TYPE,
+                SLOT_TAKE_NAME_DOUBLE,
+                SLOT_COPY_FROM_DOUBLE,
+                SLOT_TAKE_NAME_DOUBLE,
+                MAP_SET_AT
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, SLOT_TAKE_NAME_DOUBLE),
+            vec![
+                vec![original.addr(), DEFAULT_NAME],
+                vec![original.addr(), 0x7600_0000]
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, SLOT_COPY_FROM_DOUBLE),
+            vec![vec![created.addr(), original.addr()]]
+        );
+        assert_eq!(
+            calls_to(&log, MAP_SET_AT),
+            vec![vec![map, original.addr(), created.addr()]]
+        );
+    }
+
+    #[test]
+    fn copier_without_a_saved_name_or_map_skips_those_steps() {
+        let (mut e, original, created) = copier_engine(0);
+        e.call_log = Some(vec![]);
+        let back = e
+            .call(0x0048_67a0, &args![original, 0u32, 0u32])
+            .ptr::<TESForm>();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(back, created);
+        assert_eq!(calls_to(&log, SLOT_TAKE_NAME_DOUBLE).len(), 1);
+        assert!(calls_to(&log, MAP_SET_AT).is_empty());
+    }
+
+    #[test]
+    fn copier_returns_null_when_no_form_can_be_created() {
+        let (mut e, _, _) = copier_engine(0x7600_0000);
+        let other = form(&mut e, 8, 0x30);
+        e.mem.set_u32(other.addr(), COPIER_VTABLE);
+        e.call_log = Some(vec![]);
+        let back = e
+            .call(0x0048_67a0, &args![other, 0u32, 0x7700_0000u32])
+            .u32();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(back, 0);
+        assert!(calls_to(&log, MAP_SET_AT).is_empty());
+        assert!(calls_to(&log, SLOT_COPY_FROM_DOUBLE).is_empty());
+    }
+
+    #[test]
+    fn form_type_lookup_finds_the_table_entry_and_caches_it() {
+        let mut e = form_engine();
+        let entry = |index: u32| FORM_ENUM_TABLE + index * FORM_ENUM_STRIDE + 8;
+        e.mem.set_u32(entry(3), 0x1111);
+        e.mem.set_u32(entry(5), 0x2222);
+        e.set_global(FORM_TYPE_CACHE_KEY, 0xffff_ffffu32);
+        assert_eq!(e.call(0x0048_6890, &args![0x2222u32]).u32(), 5);
+        assert_eq!(e.global::<u32>(FORM_TYPE_CACHE_RESULT), 5);
+        assert_eq!(e.global::<u32>(FORM_TYPE_CACHE_KEY), 0x2222);
+        // The cache answers without looking at the table.
+        e.mem.set_u32(entry(5), 0);
+        assert_eq!(e.call(0x0048_6890, &args![0x2222u32]).u32(), 5);
+        // A string not in the table gives 0 and keeps the cache.
+        assert_eq!(e.call(0x0048_6890, &args![0x3333u32]).u32(), 0);
+        assert_eq!(e.global::<u32>(FORM_TYPE_CACHE_KEY), 0x2222);
+        assert_eq!(e.call(0x0048_6890, &args![0x1111u32]).u32(), 3);
+    }
+
+    #[test]
+    fn detailed_string_prints_type_name_and_id() {
+        let mut e = form_engine();
+        e.register(FORM_NAME_GETTER, |_, _| ret(0x7800_0000));
+        e.register(FORM_TYPE_NAME, |_, _| ret(0x7900_0000));
+        e.register(FORMAT_STRING, |_, _| Ret::default());
+        let f = form(&mut e, 8, 0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_68f0, &args![f, 0x7a00_0000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, FORMAT_STRING),
+            vec![vec![
+                0x7a00_0000,
+                DETAILED_STRING_FORMAT,
+                0x7900_0000,
+                0x7800_0000,
+                0x0100_0abc
+            ]]
+        );
+    }
+
+    fn map_engine() -> Engine {
+        let mut e = form_engine();
+        e.register(ALLOCATE_BUCKETS, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(MEMSET, |e, a| {
+            for i in 0..a[2] {
+                e.mem.set_u8(a[0] + i, a[1] as u8);
+            }
+            ret(a[0])
+        });
+        for addr in [
+            MAP_CLEAR,
+            MAP_BASE_DESTROY,
+            STRING_MAP_BASE_DESTROY,
+            CHAR_KEY_MAP_BASE_DESTROY,
+            NI_T_MAP_DESTROY,
+            STRING_TEMPLATE_MAP_DESTROY,
+            OPERATOR_DELETE,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e
+    }
+
+    #[test]
+    fn map_base_constructor_allocates_and_clears_the_buckets() {
+        let mut e = map_engine();
+        let map = e.mem.alloc(0x14);
+        e.call_log = Some(vec![]);
+        let back = e.call(0x0048_6990, &args![map, 5u32]).u32();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(back, map);
+        assert_eq!(e.mem.u32(map), MAP_BASE_VTABLE);
+        assert_eq!(e.mem.u32(map + 4), 5);
+        assert_eq!(e.mem.u32(map + 0xc), 0);
+        let buckets = e.mem.u32(map + 8);
+        assert_eq!(calls_to(&log, ALLOCATE_BUCKETS), vec![vec![20]]);
+        assert_eq!(calls_to(&log, MEMSET), vec![vec![buckets, 0, 20]]);
+    }
+
+    #[test]
+    fn form_map_constructor_sets_the_pointer_map_vtable() {
+        let mut e = map_engine();
+        let map = e.mem.alloc(0x14);
+        assert_eq!(e.call(0x0048_6930, &args![map, 7u32]).u32(), map);
+        assert_eq!(e.mem.u32(map), POINTER_MAP_VTABLE);
+        assert_eq!(e.mem.u32(map + 4), 7);
+    }
+
+    #[test]
+    fn form_map_destructor_clears_then_destroys_the_base() {
+        let mut e = map_engine();
+        let map = e.mem.alloc(0x14);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_6a00, &args![map]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(map), POINTER_MAP_VTABLE);
+        let order: Vec<u32> = log.iter().map(|(a, _)| *a).collect();
+        assert_eq!(order, vec![0x0048_6a00, MAP_CLEAR, MAP_BASE_DESTROY]);
+    }
+
+    #[test]
+    fn string_map_destructor_sets_its_vtable_and_destroys_the_base() {
+        let mut e = map_engine();
+        let map = e.mem.alloc(0x14);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_6c60, &args![map]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(map), STRING_MAP_VTABLE);
+        assert_eq!(calls_to(&log, STRING_MAP_BASE_DESTROY), vec![vec![map]]);
+    }
+
+    #[test]
+    fn scalar_deleting_destructors_release_only_when_asked() {
+        let cases: [(u32, &[u32]); 6] = [
+            (0x0048_6960, &[MAP_CLEAR, MAP_BASE_DESTROY]),
+            (0x0048_6c00, &[MAP_BASE_DESTROY]),
+            (0x0048_6c30, &[STRING_MAP_BASE_DESTROY]),
+            (0x0048_6e50, &[CHAR_KEY_MAP_BASE_DESTROY]),
+            (0x0048_6e80, &[NI_T_MAP_DESTROY]),
+            (0x0048_6eb0, &[STRING_TEMPLATE_MAP_DESTROY]),
+        ];
+        for (addr, callees) in cases {
+            let mut e = map_engine();
+            let object = e.mem.alloc(0x14);
+            for (flags, deleted) in [(0u32, false), (1, true), (2, false), (3, true)] {
+                e.call_log = Some(vec![]);
+                assert_eq!(e.call(addr, &args![object, flags]).u32(), object);
+                let log = e.call_log.take().unwrap();
+                for callee in callees {
+                    assert_eq!(calls_to(&log, *callee).len(), 1, "{addr:08x}");
+                }
+                let expected: Vec<Vec<u32>> = if deleted { vec![vec![object]] } else { vec![] };
+                assert_eq!(
+                    calls_to(&log, OPERATOR_DELETE),
+                    expected,
+                    "{addr:08x} flags {flags}"
+                );
+            }
+        }
     }
 }
