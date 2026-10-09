@@ -3,8 +3,8 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::tesscriptfunctions`]; anything public there may be used here.
 //!
-//! Progress: the first 80 queue entries of the range (`005d7d30` to
-//! `005da630`) are translated. The next session continues at `005da690`.
+//! Progress: the whole range is translated: the first 80 queue entries
+//! (`005d7d30` to `005da630`) and the last 40 (`005da690` to `005db7b0`).
 //!
 //! The bodies follow the conventions of the main file: `cdecl`, the eight
 //! stack words as [`ScriptArgs`], `AL` as the result; a body that never reads
@@ -550,6 +550,147 @@ const MSG_IS_PLAYER_TAG_SKILL: u32 = 0x0103_6498;
 const MSG_GET_PLAYER_GRABBED_REF: u32 = 0x0103_cfb0;
 /// `"SCRIPTS: FireWeapon in script '%s' called with non-weapon parameter."`
 const MSG_FIRE_WEAPON_NON_WEAPON: u32 = 0x0103_cfd0;
+
+// ---- Callees, slots and globals of the commands from 005da690 -----------------
+
+/// Virtual slot `0x218` of a reference: a test returning `AL` (the commands
+/// `005da690` and `005da810` need it true on both references).
+const REFERENCE_TEST_SLOT_218: u32 = 0x218;
+/// Virtual slot `0x208` of a reference (`0`).
+const REFERENCE_SLOT_208: u32 = 0x208;
+/// Virtual slot `0x3c8` of a reference (`item, float, 1`): lowers the health
+/// of an equipped item by the float.
+const REFERENCE_LOWER_ITEM_HEALTH_SLOT: u32 = 0x3c8;
+/// Virtual slot `0x31c` of a reference (`flag`).
+const REFERENCE_SLOT_31C: u32 = 0x31c;
+/// Virtual slot `0x148` of a process: the item change (equipped weapon) the
+/// health commands work on, or 0.
+const PROCESS_EQUIPPED_ITEM_SLOT: u32 = 0x148;
+/// Virtual slot `0xfc` of a process (`reference, x, y, z`).
+const PROCESS_SLOT_FC: u32 = 0xfc;
+
+/// `thiscall` on the base form of an actor, two words (`node, reference or
+/// 0`), `tesnpc.cpp`: selects the list node `node` of the list at
+/// `base + 0x10c`.
+const NPC_SELECT_LIST_NODE: u32 = 0x0060_b240;
+/// `BSFaceGenManager::ClearBodyTexturesFromPalette` (Xbox PDB), `cdecl`
+/// (`base form`).
+const CLEAR_BODY_TEXTURES_FROM_PALETTE: u32 = 0x0065_70e0;
+
+/// `Script::GetConcussedConditionFunction` (Xbox PDB), `cdecl`
+/// (`thisObj, value, 0, double* result`): its `AL`.
+const GET_CONCUSSED_CONDITION: u32 = 0x005a_5020;
+/// `Script::GetRadiationLevelConditionFunction` (Xbox PDB), same shape.
+const GET_RADIATION_LEVEL_CONDITION: u32 = 0x005a_50f0;
+/// `Script::GetMapMarkerVisibleConditionFunction` (Xbox PDB), same shape.
+const GET_MAP_MARKER_VISIBLE_CONDITION: u32 = 0x005a_51e0;
+/// `Script::GetWeaponHealthPercConditionFunction` (Xbox PDB), same shape.
+const GET_WEAPON_HEALTH_PERC_CONDITION: u32 = 0x005a_5270;
+/// `Script::IsGreetingPlayerConditionFunction` (Xbox PDB), same shape.
+const IS_GREETING_PLAYER_CONDITION: u32 = 0x005a_5330;
+/// `Script::GetIgnoreCrimeConditionFunction` (Xbox PDB), same shape.
+const GET_IGNORE_CRIME_CONDITION: u32 = 0x005a_59a0;
+/// `Script::IsCombatTargetConditionFunction` (Xbox PDB), same shape.
+const IS_COMBAT_TARGET_CONDITION: u32 = 0x005a_53e0;
+/// `Script::GetVATSRightAreaFreeConditionFunction` (Xbox PDB), same shape.
+const GET_VATS_RIGHT_AREA_FREE_CONDITION: u32 = 0x005a_5460;
+/// `Script::GetVATSLeftAreaFreeConditionFunction` (Xbox PDB), same shape.
+const GET_VATS_LEFT_AREA_FREE_CONDITION: u32 = 0x005a_54f0;
+/// `Script::GetVATSBackAreaFreeConditionFunction` (Xbox PDB), same shape.
+const GET_VATS_BACK_AREA_FREE_CONDITION: u32 = 0x005a_5580;
+/// `Script::GetVATSFrontAreaFreeConditionFunction` (Xbox PDB), same shape.
+const GET_VATS_FRONT_AREA_FREE_CONDITION: u32 = 0x005a_5610;
+/// `Script::GetVATSRightTargetVisibleConditionFunction` (Xbox PDB), same
+/// shape.
+const GET_VATS_RIGHT_TARGET_VISIBLE_CONDITION: u32 = 0x005a_5690;
+/// `Script::GetVATSLeftTargetVisibleConditionFunction` (Xbox PDB), same
+/// shape.
+const GET_VATS_LEFT_TARGET_VISIBLE_CONDITION: u32 = 0x005a_5720;
+/// `Script::GetVATSBackTargetVisibleConditionFunction` (Xbox PDB), same
+/// shape.
+const GET_VATS_BACK_TARGET_VISIBLE_CONDITION: u32 = 0x005a_57b0;
+
+/// `thiscall` on the player (`flag`), `playercharacter.cpp`: the target of
+/// `005da980`.
+const PLAYER_FN_00969820: u32 = 0x0096_9820;
+/// `thiscall` on the player (`flag`), `playercharacter.cpp`: the target of
+/// `005da9e0`.
+const PLAYER_FN_009697C0: u32 = 0x0096_97c0;
+
+/// `thiscall` on a form (`tes.cpp`): `AL` is whether bit `0x1000000` of its
+/// flags (`this + 8`) is set.
+const FORM_HAS_FLAG_1000000: u32 = 0x0045_2370;
+/// `BGSDestructibleObjectForm::GetDestructionForm` (Xbox PDB), `cdecl`
+/// (`base form`): the destructible data of the form, or 0.
+const GET_DESTRUCTION_FORM: u32 = 0x0047_5400;
+/// `thiscall` on the destructible data (`tesobjectrefr.cpp`): `AL`.
+const DESTRUCTIBLE_FN_00576100: u32 = 0x0057_6100;
+/// `thiscall` on a form (`flag`, one byte), `tesform.cpp`.
+const FORM_FN_004846E0: u32 = 0x0048_46e0;
+
+/// `ItemChange::GetItemHealth` (Xbox PDB), `thiscall` on an item change
+/// (`flag`): the health in `ST0`.
+const ITEM_GET_ITEM_HEALTH: u32 = 0x004b_cdb0;
+/// `ItemChange::SetItemHealth` (Xbox PDB), `thiscall` on an item change
+/// (`health float, container changes, extra data list, 1`).
+const ITEM_SET_ITEM_HEALTH: u32 = 0x004b_d030;
+/// `ItemChange::HasModEffectActive_ov2` (Xbox PDB), `thiscall` (`effect`),
+/// `AL`.
+const ITEM_HAS_MOD_EFFECT_ACTIVE: u32 = 0x004b_da70;
+/// `thiscall` on an item change: its form (`this + 8`).
+const ITEM_GET_FORM: u32 = 0x0044_ddc0;
+/// `TESObjectWEAP::GetFormHealth` (Xbox PDB), `thiscall` on the form
+/// (`has mod effect`): its maximum health.
+const WEAPON_GET_FORM_HEALTH: u32 = 0x004b_cf00;
+/// `TESHealthForm::GetFormHealth` (Xbox PDB), `cdecl` (`form`): its maximum
+/// health.
+const HEALTH_FORM_GET_FORM_HEALTH: u32 = 0x0048_73d0;
+/// `cdecl` (`a, b`, floats): `b` when `b <= a` (or unordered), else `a`.
+const FLOAT_MIN: u32 = 0x0040_ebd0;
+
+/// `TES::GetWorldSpace` (Xbox PDB), `thiscall` on the `TES` singleton.
+const TES_GET_WORLD_SPACE: u32 = 0x004f_d3e0;
+/// `TESWorldSpace::GetTerrainManager` (Xbox PDB), `thiscall`.
+const WORLD_SPACE_GET_TERRAIN_MANAGER: u32 = 0x0058_6170;
+/// `thiscall` on the terrain manager (`distant terrain system`).
+const TERRAIN_MANAGER_FN_006FD060: u32 = 0x006f_d060;
+/// The `TES` singleton pointer.
+const TES_SINGLETON: u32 = 0x011d_ea10;
+/// The `Main` singleton pointer.
+const MAIN_SINGLETON: u32 = 0x011d_ea0c;
+
+/// `thiscall` on the `Main` object (`main.cpp`): the word at `0x011f35cc`,
+/// the controls object [`CONTROLS_RUMBLE`] runs on.
+const MAIN_GET_CONTROLS: u32 = 0x0087_7720;
+/// `Controls::Rumble` (Xbox PDB), `thiscall` (`left float, right float,
+/// duration, 0, 0, 0, 1`).
+const CONTROLS_RUMBLE: u32 = 0x00a2_55b0;
+/// `thiscall` on a form: its sound path (`this + 0x30`).
+const FORM_SOUND_PATH: u32 = 0x0051_1840;
+/// `BSAudio::Precache_ov3` (Xbox PDB), `thiscall` on the audio object
+/// (`path, 0x20000121, form`).
+const AUDIO_PRECACHE: u32 = 0x00ad_8100;
+/// The value `005db1b0` precaches its form's sound with.
+const PRECACHE_FLAGS: u32 = 0x2000_0121;
+/// The word `005db260` stores and `005db280` clears.
+const WORD_AT_11DCFA8: u32 = 0x011d_cfa8;
+/// The byte `005db6e0` stores.
+const BYTE_AT_11F5AF1: u32 = 0x011f_5af1;
+
+/// `Actor::FadeSkins` (Xbox PDB), `thiscall` on an actor (`node, float`).
+const ACTOR_FADE_SKINS: u32 = 0x008b_d630;
+/// `thiscall` on an actor (`modelloader.cpp`): the node `005db290` hands to
+/// [`ACTOR_FADE_SKINS`].
+const ACTOR_FN_0043FCD0: u32 = 0x0043_fcd0;
+/// `thiscall` on the object at `actor + 0xac` (`bhkragdollcontroller.obj`;
+/// three flags).
+const RAGDOLL_FN_00C79D60: u32 = 0x00c7_9d60;
+/// The float `005db290` passes to [`ACTOR_FADE_SKINS`] when any flag is set
+/// (0.5 in the exe).
+const FADE_SKINS_STRENGTH: u32 = 0x0101_6248;
+/// `1000.0` (a `double`): [`script_set_rumble_function`] scales the rumble
+/// duration by it.
+const THOUSAND: u32 = 0x0101_7b70;
 
 // ---- Small helpers -------------------------------------------------------------
 
@@ -2134,6 +2275,666 @@ pub fn script_show_tutorial_menu(e: &mut Engine, a: ScriptArgs) -> bool {
     true
 }
 
+// Translated from 005da690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses a signed integer (default 0) and moves a selection along the chain
+/// of an actor's base form. With a non-zero count and a `thisObj` whose
+/// virtual test `0x218` holds, the chain starts at the node `00726070` gives
+/// for `base + 0x10c` (`base` being the word `007af430` gives for `thisObj`):
+/// a negative count follows [`fn_005da7d0`] links (adding one per step), a
+/// positive count follows [`fn_005da7f0`] links (subtracting one per step),
+/// and a missing link ends the walk. When the walk ended elsewhere than the
+/// start, `0060b240(base; node, thisObj or 0)` selects that node (the
+/// reference is passed only if the virtual test `0x100` holds) and
+/// `Character::Reset3D(thisObj)` runs. Succeeds once the parameters parse.
+pub fn fn_005da690(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([count]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    let mut remaining = count as i32;
+    let this_obj = a.this_obj.addr();
+    if remaining != 0
+        && this_obj != 0
+        && e.vcall(this_obj, REFERENCE_TEST_SLOT_218, &args![]).bool()
+    {
+        let base = e.call(WORD_AT_20, &args![this_obj]).u32();
+        let start = e.call(LIST_NEXT_NODE, &args![base + 0x10c]).u32();
+        let mut node = start;
+        while remaining != 0 {
+            if remaining < 0 {
+                let link = fn_005da7d0(e, Ptr::new(node));
+                if link == 0 {
+                    remaining = 0;
+                } else {
+                    node = link;
+                    remaining += 1;
+                }
+            } else {
+                let link = fn_005da7f0(e, Ptr::new(node));
+                if link == 0 {
+                    remaining = 0;
+                } else {
+                    node = link;
+                    remaining -= 1;
+                }
+            }
+        }
+        if node != start {
+            let reference = if e.vcall(this_obj, REFERENCE_TEST_SLOT, &args![]).bool() {
+                this_obj
+            } else {
+                0
+            };
+            e.call(NPC_SELECT_LIST_NODE, &args![base, node, reference]);
+            e.call(CHARACTER_RESET_3D, &args![this_obj]);
+        }
+    }
+    true
+}
+
+// Translated from 005da7d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `this + 0x508` of a chain node (the link [`fn_005da690`]
+/// follows for a negative count).
+pub fn fn_005da7d0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x508)
+}
+
+// Translated from 005da7f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `this + 0x504` of a chain node (the link [`fn_005da690`]
+/// follows for a positive count).
+pub fn fn_005da7f0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x504)
+}
+
+// Translated from 005da810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses a reference (default 0) and copies its selection position onto
+/// `thisObj`'s. Both references need a non-zero value and a true virtual
+/// test `0x218` (tested in that order), and the chain starts of their base
+/// forms (`00726070(base + 0x10c)`) must differ. Then the number of links
+/// `thisObj`'s start has through [`fn_005da7d0`] is counted, the source's
+/// start is walked to the end of the same links and back by that many
+/// [`fn_005da7f0`] links (fewer if the chain ends), the face-gen body
+/// textures of `thisObj`'s base are cleared
+/// (`BSFaceGenManager::ClearBodyTexturesFromPalette`), the node reached is
+/// selected for `thisObj`'s base (`0060b240(base; node, 0)`) and
+/// `Character::Reset3D(thisObj)` runs. Succeeds once the parameters parse.
+pub fn fn_005da810(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([source]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    let this_obj = a.this_obj.addr();
+    if source != 0
+        && e.vcall(source, REFERENCE_TEST_SLOT_218, &args![]).bool()
+        && this_obj != 0
+        && e.vcall(this_obj, REFERENCE_TEST_SLOT_218, &args![]).bool()
+    {
+        let target_base = e.call(WORD_AT_20, &args![this_obj]).u32();
+        let source_base = e.call(WORD_AT_20, &args![source]).u32();
+        let target_start = e.call(LIST_NEXT_NODE, &args![target_base + 0x10c]).u32();
+        let source_start = e.call(LIST_NEXT_NODE, &args![source_base + 0x10c]).u32();
+        if source_start != target_start {
+            let mut steps = 0u32;
+            let mut target_node = target_start;
+            loop {
+                let link = fn_005da7d0(e, Ptr::new(target_node));
+                if link == 0 {
+                    break;
+                }
+                target_node = link;
+                steps += 1;
+            }
+            let mut source_node = source_start;
+            loop {
+                let link = fn_005da7d0(e, Ptr::new(source_node));
+                if link == 0 {
+                    break;
+                }
+                source_node = link;
+            }
+            loop {
+                let link = fn_005da7f0(e, Ptr::new(source_node));
+                if link == 0 || steps == 0 {
+                    break;
+                }
+                source_node = link;
+                steps -= 1;
+            }
+            e.call(CLEAR_BODY_TEXTURES_FROM_PALETTE, &args![target_base]);
+            e.call(NPC_SELECT_LIST_NODE, &args![target_base, source_node, 0u32]);
+            e.call(CHARACTER_RESET_3D, &args![this_obj]);
+        }
+    }
+    true
+}
+
+// Translated from 005da980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses an integer (default 0) and calls `00969820(player, integer != 0)`
+/// (`playercharacter.cpp`). Returns the parse result.
+pub fn fn_005da980(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([flag]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    let player = player(e);
+    e.call(PLAYER_FN_00969820, &args![player, (flag != 0) as u32]);
+    true
+}
+
+// Translated from 005da9e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Like [`fn_005da980`] with `009697c0`.
+pub fn fn_005da9e0(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([flag]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    let player = player(e);
+    e.call(PLAYER_FN_009697C0, &args![player, (flag != 0) as u32]);
+    true
+}
+
+/// The commands that parse one integer (default 0) and return a condition
+/// function's `AL` for `(thisObj, integer, 0, result)`; `false` when the
+/// parameters do not parse.
+fn parsed_condition(e: &mut Engine, a: ScriptArgs, function: u32) -> bool {
+    let Some([value]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    call_condition(e, function, a, value)
+}
+
+// Translated from 005daa40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetConcussedFunction` (Xbox PDB): parses an integer (default 0)
+/// and returns the `AL` of `GetConcussedConditionFunction(thisObj, value, 0,
+/// result)`.
+pub fn script_get_concussed_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    parsed_condition(e, a, GET_CONCUSSED_CONDITION)
+}
+
+// Translated from 005daaa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the `AL` of `GetRadiationLevelConditionFunction(thisObj, 0, 0,
+/// result)`.
+pub fn fn_005daaa0(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_argument(e, a, GET_RADIATION_LEVEL_CONDITION)
+}
+
+// Translated from 005daac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the `AL` of `GetMapMarkerVisibleConditionFunction(thisObj, 0, 0,
+/// result)`.
+pub fn fn_005daac0(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_argument(e, a, GET_MAP_MARKER_VISIBLE_CONDITION)
+}
+
+// Translated from 005daae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses an integer (default 0). When `thisObj` has bit `0x1000000` of its
+/// flags (`00452370`), looks up the destructible data of its base form
+/// (`GetDestructionForm(007af430(thisObj))`); the byte `00576100` gives for
+/// it (0 without data) is compared with `integer != 0`, and
+/// `004846e0(thisObj, 0)` is called when they are equal, `004846e0(thisObj,
+/// 1)` when they differ. Succeeds once the parameters parse.
+pub fn fn_005daae0(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([flag]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    let this_obj = a.this_obj.addr();
+    if e.call(FORM_HAS_FLAG_1000000, &args![this_obj]).bool() {
+        let wanted = (flag != 0) as u8;
+        let mut current = 0u8;
+        let base = e.call(WORD_AT_20, &args![this_obj]).u32();
+        let destruction = e.call(GET_DESTRUCTION_FORM, &args![base]).u32();
+        if destruction != 0 {
+            current = e.call(DESTRUCTIBLE_FN_00576100, &args![destruction]).u8();
+        }
+        e.call(
+            FORM_FN_004846E0,
+            &args![this_obj, (current != wanted) as u32],
+        );
+    }
+    true
+}
+
+// Translated from 005dab90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses a reference and an integer (both default 0). With a reference,
+/// [`fn_005dac10`] sets or clears its bit 0 of the byte at `+0x1e`
+/// (`integer == 0` sets it) and its virtual slot `0x48` is called with 2.
+/// Succeeds once the parameters parse.
+pub fn fn_005dab90(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([reference, flag]) = parse_params(e, a, [0, 0]) else {
+        return false;
+    };
+    if reference != 0 {
+        fn_005dac10(e, Ptr::new(reference), (flag == 0) as u8);
+        e.vcall(reference, FORM_SLOT_48, &args![2u32]);
+    }
+    true
+}
+
+// Translated from 005dac10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets bit 0 of the byte at `this + 0x1e` when `flag` is non-zero, else
+/// clears it.
+pub fn fn_005dac10(e: &mut Engine, this: Ptr, flag: u8) {
+    let address = this.addr() + 0x1e;
+    let byte = e.mem.u8(address);
+    e.mem
+        .set_u8(address, if flag != 0 { byte | 1 } else { byte & !1 });
+}
+
+// Translated from 005dac60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// With a `thisObj`, calls its virtual slot `0x208` with 0. Always succeeds;
+/// only `thisObj` is read of the eight words.
+pub fn fn_005dac60(e: &mut Engine, a: ScriptArgs) -> bool {
+    if !a.this_obj.is_null() {
+        e.vcall(a.this_obj.addr(), REFERENCE_SLOT_208, &args![0u32]);
+    }
+    true
+}
+
+// Translated from 005dac80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Without a `thisObj` it succeeds at once, without parsing. Otherwise it
+/// parses a reference, an integer (both default 0) and an integer (default
+/// 3). When the reference passes the virtual test `0x100` and has a process
+/// (`GetSavedAcquireObject`), `thisObj`'s virtual slot `0x1f4` is called with
+/// `(second integer, third integer, thisObj)`; it returns a pointer to three
+/// words, which the process's virtual slot `0xfc` receives after the
+/// reference: `(reference, word 0, word 1, word 2)`. Succeeds once the
+/// parameters parse.
+pub fn fn_005dac80(e: &mut Engine, a: ScriptArgs) -> bool {
+    if a.this_obj.is_null() {
+        return true;
+    }
+    let Some([reference, first, second]) = parse_params(e, a, [0, 0, 3]) else {
+        return false;
+    };
+    if reference != 0
+        && e.vcall(reference, REFERENCE_TEST_SLOT, &args![]).bool()
+        && e.call(GET_PROCESS, &args![reference]).u32() != 0
+    {
+        let process = e.call(GET_PROCESS, &args![reference]).u32();
+        let point = e
+            .vcall(
+                a.this_obj.addr(),
+                REFERENCE_SLOT_1F4,
+                &args![first, second, a.this_obj],
+            )
+            .u32();
+        let words = [e.mem.u32(point), e.mem.u32(point + 4), e.mem.u32(point + 8)];
+        e.vcall(
+            process,
+            PROCESS_SLOT_FC,
+            &args![reference, words[0], words[1], words[2]],
+        );
+    }
+    true
+}
+
+// Translated from 005dad70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the byte at `player + 0xdf2` to 1 ([`fn_005dadd0`]), then, when the
+/// `TES` singleton has a world space with a terrain manager, calls
+/// `006fd060` on the terrain manager. Always succeeds; none of the eight
+/// words is read.
+pub fn fn_005dad70(e: &mut Engine, _unused_args: ScriptArgs) -> bool {
+    let player = player(e);
+    fn_005dadd0(e, Ptr::new(player), 1);
+    let tes = e.global::<u32>(TES_SINGLETON);
+    if e.call(TES_GET_WORLD_SPACE, &args![tes]).u32() != 0 {
+        let world = e.call(TES_GET_WORLD_SPACE, &args![tes]).u32();
+        if e.call(WORLD_SPACE_GET_TERRAIN_MANAGER, &args![world]).u32() != 0 {
+            let world = e.call(TES_GET_WORLD_SPACE, &args![tes]).u32();
+            let terrain = e.call(WORLD_SPACE_GET_TERRAIN_MANAGER, &args![world]).u32();
+            e.call(TERRAIN_MANAGER_FN_006FD060, &args![terrain]);
+        }
+    }
+    true
+}
+
+// Translated from 005dadd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the byte `value` at `this + 0xdf2` (of the player).
+pub fn fn_005dadd0(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0xdf2, value);
+}
+
+// Translated from 005dadf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the `AL` of `GetWeaponHealthPercConditionFunction(thisObj, 0, 0,
+/// result)`.
+pub fn fn_005dadf0(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_argument(e, a, GET_WEAPON_HEALTH_PERC_CONDITION)
+}
+
+/// The item change (the equipped weapon) of `thisObj` that the two health
+/// commands work on: `thisObj` must exist and pass the virtual test `0x100`,
+/// have a process (`GetSavedAcquireObject`, asked twice) whose virtual slot
+/// `0x148` returns a non-zero item change.
+fn equipped_item(e: &mut Engine, this_obj: u32) -> Option<u32> {
+    if this_obj == 0
+        || !e.vcall(this_obj, REFERENCE_TEST_SLOT, &args![]).bool()
+        || e.call(GET_PROCESS, &args![this_obj]).u32() == 0
+    {
+        return None;
+    }
+    let process = e.call(GET_PROCESS, &args![this_obj]).u32();
+    let item = e.vcall(process, PROCESS_EQUIPPED_ITEM_SLOT, &args![]).u32();
+    (item != 0).then_some(item)
+}
+
+/// Brings the health of `item` to `target`. Compared with its current
+/// health (`GetItemHealth(0)`): a difference that is not positive is taken
+/// off through `thisObj`'s virtual slot `0x3c8` (`item, -difference, 1`).
+/// A positive one raises the health with `SetItemHealth(item, health,
+/// container changes of thisObj's extra data list, first extra data list of
+/// the item, 1)`, where `health` is `target`, or the smaller of `target` and
+/// `ceiling` (`0040ebd0`, which gives its second argument when that is not
+/// greater than the first).
+fn change_item_health(e: &mut Engine, this_obj: u32, item: u32, target: f32, ceiling: Option<f32>) {
+    let current = e.call(ITEM_GET_ITEM_HEALTH, &args![item, 0u32]).f32();
+    let difference = (target as f64 - current as f64) as f32;
+    if difference > 0.0 {
+        let list = e.call(DEREF, &args![item]).u32();
+        let data = e.call(LIST_NODE_DATA, &args![list]).u32();
+        let first_extra_list = e.mem.u32(data);
+        let extra_list = e.call(EXTRA_DATA_LIST, &args![this_obj]).u32();
+        let changes = e.call(GET_CONTAINER_CHANGES, &args![extra_list]).u32();
+        let health = match ceiling {
+            Some(ceiling) => e.call(FLOAT_MIN, &args![target, ceiling]).f32(),
+            None => target,
+        };
+        e.call(
+            ITEM_SET_ITEM_HEALTH,
+            &args![item, health, changes, first_extra_list, 1u32],
+        );
+    } else {
+        e.vcall(
+            this_obj,
+            REFERENCE_LOWER_ITEM_HEALTH_SLOT,
+            &args![item, -difference, 1u32],
+        );
+    }
+}
+
+// Translated from 005dae10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses a float (default 1.0), a percentage. For the equipped item
+/// ([`equipped_item`]) the target health is the item form's maximum health
+/// (`TESObjectWEAP::GetFormHealth(form; has mod effect 10)`) times the
+/// percentage divided by 100; [`change_item_health`] brings the item to it,
+/// a raise being limited to the maximum minus 1. Succeeds once the
+/// parameters parse.
+pub fn fn_005dae10(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([percent]) = parse_params(e, a, [1.0f32.to_bits()]) else {
+        return false;
+    };
+    let this_obj = a.this_obj.addr();
+    if let Some(item) = equipped_item(e, this_obj) {
+        let hundred = e.global::<f64>(HUNDRED);
+        let fraction = (f32::from_bits(percent) as f64 / hundred) as f32;
+        let mod_active = e.call(ITEM_HAS_MOD_EFFECT_ACTIVE, &args![item, 10u32]).u8();
+        let form = e.call(ITEM_GET_FORM, &args![item]).u32();
+        let maximum = e
+            .call(WEAPON_GET_FORM_HEALTH, &args![form, mod_active as u32])
+            .i32() as f32;
+        let target = (maximum as f64 * fraction as f64) as f32;
+        let ceiling = (maximum as f64 - 1.0) as f32;
+        change_item_health(e, this_obj, item, target, Some(ceiling));
+    }
+    true
+}
+
+// Translated from 005daf90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses a float (default 1.0), a percentage change. For the equipped item
+/// ([`equipped_item`]) the new fraction is (`GetItemHealth(1)` + percentage)
+/// / 100, at least 0; the target health is the maximum health of the item's
+/// form (`TESHealthForm::GetFormHealth`, unsigned) times the fraction, and
+/// [`change_item_health`] brings the item to it (no limit on a raise).
+/// Succeeds once the parameters parse.
+pub fn fn_005daf90(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([percent]) = parse_params(e, a, [1.0f32.to_bits()]) else {
+        return false;
+    };
+    let this_obj = a.this_obj.addr();
+    if let Some(item) = equipped_item(e, this_obj) {
+        let current = e.call(ITEM_GET_ITEM_HEALTH, &args![item, 1u32]).f32();
+        let total = (current as f64 + f32::from_bits(percent) as f64) as f32;
+        let hundred = e.global::<f64>(HUNDRED);
+        let mut fraction = (total as f64 / hundred) as f32;
+        if fraction < 0.0 {
+            fraction = 0.0;
+        }
+        let form = e.call(ITEM_GET_FORM, &args![item]).u32();
+        let maximum = e.call(HEALTH_FORM_GET_FORM_HEALTH, &args![form]).u32() as f32;
+        let target = (maximum as f64 * fraction as f64) as f32;
+        change_item_health(e, this_obj, item, target, None);
+    }
+    true
+}
+
+// Translated from 005db110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetRumbleFunction` (Xbox PDB): parses three floats (left, right
+/// and a duration in seconds; default 0.0). With a controls object
+/// (`00877720(Main)`) it calls `Controls::Rumble(left, right, trunc(seconds
+/// * 1000.0), 0, 0, 0, 1)`. Succeeds once the parameters parse.
+pub fn script_set_rumble_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([left, right, seconds]) = parse_params(e, a, [0.0f32.to_bits(); 3]) else {
+        return false;
+    };
+    let main = e.global::<u32>(MAIN_SINGLETON);
+    let controls = e.call(MAIN_GET_CONTROLS, &args![main]).u32();
+    if controls != 0 {
+        let thousand = e.global::<f64>(THOUSAND);
+        let duration = e
+            .call(FTOL, &args![f32::from_bits(seconds) as f64 * thousand])
+            .u32();
+        e.call(
+            CONTROLS_RUMBLE,
+            &args![controls, left, right, duration, 0u32, 0u32, 0u32, 1u32],
+        );
+    }
+    true
+}
+
+// Translated from 005db1b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses a form (default 0). When the parameters parse and the form is
+/// not null, precaches its sound three times
+/// (`BSAudio::Precache_ov3(audio; 00511840(form), 0x20000121, form)`) and
+/// stores the form in the word at `011dcfa8` ([`fn_005db260`]). Always
+/// succeeds, whether the parameters parse or not.
+pub fn fn_005db1b0(e: &mut Engine, a: ScriptArgs) -> bool {
+    if let Some([form]) = parse_params(e, a, [0]) {
+        if form != 0 {
+            for _ in 0..3 {
+                let path = e.call(FORM_SOUND_PATH, &args![form]).u32();
+                let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+                e.call(AUDIO_PRECACHE, &args![audio, path, PRECACHE_FLAGS, form]);
+            }
+            fn_005db260(e, form);
+        }
+    }
+    true
+}
+
+// Translated from 005db260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the word at `011dcfa8`.
+pub fn fn_005db260(e: &mut Engine, value: u32) {
+    e.mem.set_u32(WORD_AT_11DCFA8, value);
+}
+
+// Translated from 005db270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the word at `011dcfa8` ([`fn_005db280`]) and succeeds; none of
+/// the eight words is read.
+pub fn fn_005db270(e: &mut Engine, _unused_args: ScriptArgs) -> bool {
+    fn_005db280(e);
+    true
+}
+
+// Translated from 005db280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the word at `011dcfa8`.
+pub fn fn_005db280(e: &mut Engine) {
+    e.mem.set_u32(WORD_AT_11DCFA8, 0);
+}
+
+// Translated from 005db290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::DrawSkeleton` (Xbox PDB): parses three integers (default 0). A
+/// `thisObj` that casts to an actor (`TESObjectREFR` to `Actor`) with a
+/// non-zero word at `+0xac` has its skins faded
+/// (`Actor::FadeSkins(node from 0043fcd0, strength)`, strength 0.5 (the float
+/// at `01016248`) when any integer is non-zero, else 1.0), then
+/// `00c79d60(word at +0xac; first != 0, second != 0, third != 0)` is called.
+/// Succeeds once the parameters parse.
+pub fn script_draw_skeleton(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([first, second, third]) = parse_params(e, a, [0, 0, 0]) else {
+        return false;
+    };
+    if !a.this_obj.is_null() {
+        let actor = e
+            .call(
+                DYNAMIC_CAST,
+                &args![a.this_obj, 0u32, RTTI_TES_OBJECT_REFR, RTTI_ACTOR, 0u32],
+            )
+            .u32();
+        let flags = [first != 0, second != 0, third != 0];
+        if actor != 0 && e.mem.u32(actor + 0xac) != 0 {
+            let node = e.call(ACTOR_FN_0043FCD0, &args![actor]).u32();
+            let strength = if flags.iter().any(|flag| *flag) {
+                e.global::<f32>(FADE_SKINS_STRENGTH)
+            } else {
+                1.0f32
+            };
+            e.call(ACTOR_FADE_SKINS, &args![actor, node, strength]);
+            let ragdoll = e.mem.u32(actor + 0xac);
+            e.call(
+                RAGDOLL_FN_00C79D60,
+                &args![ragdoll, flags[0] as u32, flags[1] as u32, flags[2] as u32],
+            );
+        }
+    }
+    true
+}
+
+// Translated from 005db3b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the `AL` of `IsGreetingPlayerConditionFunction(thisObj, 0, 0,
+/// result)`.
+pub fn fn_005db3b0(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_argument(e, a, IS_GREETING_PLAYER_CONDITION)
+}
+
+// Translated from 005db3d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the `AL` of `GetIgnoreCrimeConditionFunction(thisObj, 0, 0,
+/// result)`.
+pub fn fn_005db3d0(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_argument(e, a, GET_IGNORE_CRIME_CONDITION)
+}
+
+// Translated from 005db3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses a signed integer (default 0). When `thisObj` exists and passes
+/// the virtual test `0x100`, calls its virtual slot `0x31c` with 1 when the
+/// integer is greater than 0, else with 0. Succeeds once the parameters
+/// parse.
+pub fn fn_005db3f0(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([amount]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    let this_obj = a.this_obj.addr();
+    if this_obj != 0 && e.vcall(this_obj, REFERENCE_TEST_SLOT, &args![]).bool() {
+        e.vcall(
+            this_obj,
+            REFERENCE_SLOT_31C,
+            &args![(amount as i32 > 0) as u32],
+        );
+    }
+    true
+}
+
+// Translated from 005db490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the Pipboy exists (`Interface::GetPipboy`), sets its byte at
+/// `+0x16c` to 1 ([`fn_005db4c0`]). Always succeeds; none of the eight
+/// words is read.
+pub fn fn_005db490(e: &mut Engine, _unused_args: ScriptArgs) -> bool {
+    let pipboy = e.call(INTERFACE_GET_PIPBOY, &args![]).u32();
+    if pipboy != 0 {
+        fn_005db4c0(e, Ptr::new(pipboy), 1);
+    }
+    true
+}
+
+// Translated from 005db4c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the byte `value` at `this + 0x16c` (of the Pipboy).
+pub fn fn_005db4c0(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x16c, value);
+}
+
+// Translated from 005db4e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsCombatTargetFunction` (Xbox PDB): parses an integer (default
+/// 0) and returns the `AL` of `IsCombatTargetConditionFunction(thisObj,
+/// value, 0, result)`.
+pub fn script_is_combat_target_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    parsed_condition(e, a, IS_COMBAT_TARGET_CONDITION)
+}
+
+// Translated from 005db540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetVATSRightAreaFreeFunction` (Xbox PDB): like
+/// [`script_is_combat_target_function`] with
+/// `GetVATSRightAreaFreeConditionFunction`.
+pub fn script_get_vats_right_area_free_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    parsed_condition(e, a, GET_VATS_RIGHT_AREA_FREE_CONDITION)
+}
+
+// Translated from 005db5a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetVATSLeftAreaFreeFunction` (Xbox PDB): like
+/// [`script_is_combat_target_function`] with
+/// `GetVATSLeftAreaFreeConditionFunction`.
+pub fn script_get_vats_left_area_free_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    parsed_condition(e, a, GET_VATS_LEFT_AREA_FREE_CONDITION)
+}
+
+// Translated from 005db600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetVATSBackAreaFreeFunction` (Xbox PDB): like
+/// [`script_is_combat_target_function`] with
+/// `GetVATSBackAreaFreeConditionFunction`.
+pub fn script_get_vats_back_area_free_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    parsed_condition(e, a, GET_VATS_BACK_AREA_FREE_CONDITION)
+}
+
+// Translated from 005db660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetVATSFrontAreaFreeFunction` (Xbox PDB): like
+/// [`script_is_combat_target_function`] with
+/// `GetVATSFrontAreaFreeConditionFunction`.
+pub fn script_get_vats_front_area_free_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    parsed_condition(e, a, GET_VATS_FRONT_AREA_FREE_CONDITION)
+}
+
+// Translated from 005db6c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores 1 in the byte at `011f5af1` ([`fn_005db6e0`]), closes the console
+/// (`Interface::CloseConsole`) and succeeds; none of the eight words is
+/// read.
+pub fn fn_005db6c0(e: &mut Engine, _unused_args: ScriptArgs) -> bool {
+    fn_005db6e0(e, 1);
+    e.call(CLOSE_CONSOLE, &args![]);
+    true
+}
+
+// Translated from 005db6e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the byte `value` at `011f5af1`.
+pub fn fn_005db6e0(e: &mut Engine, value: u8) {
+    e.mem.set_u8(BYTE_AT_11F5AF1, value);
+}
+
+// Translated from 005db6f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetVATSRightTargetVisibleFunction` (Xbox PDB): like
+/// [`script_is_combat_target_function`] with
+/// `GetVATSRightTargetVisibleConditionFunction`.
+pub fn script_get_vats_right_target_visible_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    parsed_condition(e, a, GET_VATS_RIGHT_TARGET_VISIBLE_CONDITION)
+}
+
+// Translated from 005db750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetVATSLeftTargetVisibleFunction` (Xbox PDB): like
+/// [`script_is_combat_target_function`] with
+/// `GetVATSLeftTargetVisibleConditionFunction`.
+pub fn script_get_vats_left_target_visible_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    parsed_condition(e, a, GET_VATS_LEFT_TARGET_VISIBLE_CONDITION)
+}
+
+// Translated from 005db7b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetVATSBackTargetVisibleFunction` (Xbox PDB): like
+/// [`script_is_combat_target_function`] with
+/// `GetVATSBackTargetVisibleConditionFunction`.
+pub fn script_get_vats_back_target_visible_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    parsed_condition(e, a, GET_VATS_BACK_TARGET_VISIBLE_CONDITION)
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2217,6 +3018,46 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005da540, fn_005da540(ScriptArgs) -> bool),
         entry!(0x005da570, script_fire_weapon_function(ScriptArgs) -> bool),
         entry!(0x005da630, script_show_tutorial_menu(ScriptArgs) -> bool),
+        entry!(0x005da690, fn_005da690(ScriptArgs) -> bool),
+        entry!(0x005da7d0, fn_005da7d0(Ptr) -> u32),
+        entry!(0x005da7f0, fn_005da7f0(Ptr) -> u32),
+        entry!(0x005da810, fn_005da810(ScriptArgs) -> bool),
+        entry!(0x005da980, fn_005da980(ScriptArgs) -> bool),
+        entry!(0x005da9e0, fn_005da9e0(ScriptArgs) -> bool),
+        entry!(0x005daa40, script_get_concussed_function(ScriptArgs) -> bool),
+        entry!(0x005daaa0, fn_005daaa0(ScriptArgs) -> bool),
+        entry!(0x005daac0, fn_005daac0(ScriptArgs) -> bool),
+        entry!(0x005daae0, fn_005daae0(ScriptArgs) -> bool),
+        entry!(0x005dab90, fn_005dab90(ScriptArgs) -> bool),
+        entry!(0x005dac10, fn_005dac10(Ptr, u8)),
+        entry!(0x005dac60, fn_005dac60(ScriptArgs) -> bool),
+        entry!(0x005dac80, fn_005dac80(ScriptArgs) -> bool),
+        entry!(0x005dad70, fn_005dad70(ScriptArgs) -> bool),
+        entry!(0x005dadd0, fn_005dadd0(Ptr, u8)),
+        entry!(0x005dadf0, fn_005dadf0(ScriptArgs) -> bool),
+        entry!(0x005dae10, fn_005dae10(ScriptArgs) -> bool),
+        entry!(0x005daf90, fn_005daf90(ScriptArgs) -> bool),
+        entry!(0x005db110, script_set_rumble_function(ScriptArgs) -> bool),
+        entry!(0x005db1b0, fn_005db1b0(ScriptArgs) -> bool),
+        entry!(0x005db260, fn_005db260(u32)),
+        entry!(0x005db270, fn_005db270(ScriptArgs) -> bool),
+        entry!(0x005db280, fn_005db280()),
+        entry!(0x005db290, script_draw_skeleton(ScriptArgs) -> bool),
+        entry!(0x005db3b0, fn_005db3b0(ScriptArgs) -> bool),
+        entry!(0x005db3d0, fn_005db3d0(ScriptArgs) -> bool),
+        entry!(0x005db3f0, fn_005db3f0(ScriptArgs) -> bool),
+        entry!(0x005db490, fn_005db490(ScriptArgs) -> bool),
+        entry!(0x005db4c0, fn_005db4c0(Ptr, u8)),
+        entry!(0x005db4e0, script_is_combat_target_function(ScriptArgs) -> bool),
+        entry!(0x005db540, script_get_vats_right_area_free_function(ScriptArgs) -> bool),
+        entry!(0x005db5a0, script_get_vats_left_area_free_function(ScriptArgs) -> bool),
+        entry!(0x005db600, script_get_vats_back_area_free_function(ScriptArgs) -> bool),
+        entry!(0x005db660, script_get_vats_front_area_free_function(ScriptArgs) -> bool),
+        entry!(0x005db6c0, fn_005db6c0(ScriptArgs) -> bool),
+        entry!(0x005db6e0, fn_005db6e0(u8)),
+        entry!(0x005db6f0, script_get_vats_right_target_visible_function(ScriptArgs) -> bool),
+        entry!(0x005db750, script_get_vats_left_target_visible_function(ScriptArgs) -> bool),
+        entry!(0x005db7b0, script_get_vats_back_target_visible_function(ScriptArgs) -> bool),
     ]
 }
 
@@ -4877,5 +5718,1075 @@ mod tests {
         assert!(run(&mut e, 0x005d_a630, a));
         assert!(calls(&e, PARSE_PARAMETERS).is_empty());
         assert!(calls(&e, TUTORIAL_MENU_CREATE).is_empty());
+    }
+
+    // ---- The functions from 005da690 ----
+
+    const V_POINT: u32 = 0x0900_0020;
+    const V_ITEM: u32 = 0x0900_0021;
+
+    /// `engine_p7b` with the pages of the globals the last commands touch.
+    fn engine_p7c() -> Engine {
+        let mut e = engine_p7b();
+        e.map(0x011d_c000, 0x1000);
+        e.map(0x011f_5000, 0x1000);
+        e.map(0x0101_6000, 0x1000);
+        e.set_global(THOUSAND, 1000.0f64);
+        e
+    }
+
+    /// A reference with the given virtual slots whose word at `+0x20` is a
+    /// base form holding a chain of three nodes: the `+0x508` links lead
+    /// from node 0 to 1 to 2 (then 0), the `+0x504` links back. The base
+    /// form's start (`+0x110`, the word `00726070` returns for `+0x10c`) is
+    /// node 0. Returns `(reference, base form, nodes)`.
+    fn chain_reference(e: &mut Engine, slots: &[(u32, u32)]) -> (u32, u32, [u32; 3]) {
+        let reference = object_with(e, slots);
+        let base = object(e);
+        let nodes = [object(e), object(e), object(e)];
+        e.mem.set_u32(reference + 0x20, base);
+        e.mem.set_u32(base + 0x110, nodes[0]);
+        e.mem.set_u32(nodes[0] + 0x508, nodes[1]);
+        e.mem.set_u32(nodes[1] + 0x508, nodes[2]);
+        e.mem.set_u32(nodes[2] + 0x504, nodes[1]);
+        e.mem.set_u32(nodes[1] + 0x504, nodes[0]);
+        e.register(WORD_AT_20, |e, a| e.mem.u32(a[0] + 0x20).into_ret());
+        e.register(LIST_NEXT_NODE, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(NPC_SELECT_LIST_NODE, |_, _| Ret::default());
+        e.register(CLEAR_BODY_TEXTURES_FROM_PALETTE, |_, _| Ret::default());
+        e.register(CHARACTER_RESET_3D, |_, _| Ret::default());
+        (reference, base, nodes)
+    }
+
+    #[test]
+    fn fn_005da690_walks_the_chain_and_selects_the_node_reached() {
+        let mut e = engine_p7c();
+        let slots = [
+            (REFERENCE_TEST_SLOT_218, V_TRUE),
+            (REFERENCE_TEST_SLOT, V_TRUE),
+        ];
+        let (this_obj, base, nodes) = chain_reference(&mut e, &slots);
+        let a = command(&mut e, this_obj);
+
+        // One step down the negative links (count -1 adds one per step).
+        parse_gives(&mut e, true, &[(-1i32) as u32]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_a690, a));
+        assert_parsed(&e, this_obj);
+        assert_eq!(
+            calls(&e, NPC_SELECT_LIST_NODE),
+            vec![vec![base, nodes[1], this_obj]]
+        );
+        assert_eq!(calls(&e, CHARACTER_RESET_3D), vec![vec![this_obj]]);
+
+        // The walk stops at the end of the chain.
+        parse_gives(&mut e, true, &[(-9i32) as u32]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_a690, a));
+        assert_eq!(
+            calls(&e, NPC_SELECT_LIST_NODE),
+            vec![vec![base, nodes[2], this_obj]]
+        );
+
+        // Positive counts follow the other links.
+        e.mem.set_u32(base + 0x110, nodes[2]);
+        parse_gives(&mut e, true, &[1]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_a690, a));
+        assert_eq!(
+            calls(&e, NPC_SELECT_LIST_NODE),
+            vec![vec![base, nodes[1], this_obj]]
+        );
+
+        // No link to follow: the selection does not change.
+        e.mem.set_u32(base + 0x110, nodes[0]);
+        parse_gives(&mut e, true, &[3]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_a690, a));
+        assert!(calls(&e, NPC_SELECT_LIST_NODE).is_empty());
+        assert!(calls(&e, CHARACTER_RESET_3D).is_empty());
+
+        // A count of zero does nothing at all.
+        parse_gives(&mut e, true, &[0]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_a690, a));
+        assert!(calls(&e, WORD_AT_20).is_empty());
+
+        // Parameters that do not parse.
+        parse_gives(&mut e, false, &[]);
+        assert!(!run(&mut e, 0x005d_a690, a));
+    }
+
+    #[test]
+    fn fn_005da690_passes_the_reference_only_when_the_test_0x100_holds() {
+        let mut e = engine_p7c();
+        let slots = [
+            (REFERENCE_TEST_SLOT_218, V_TRUE),
+            (REFERENCE_TEST_SLOT, V_FALSE),
+        ];
+        let (this_obj, base, nodes) = chain_reference(&mut e, &slots);
+        let a = command(&mut e, this_obj);
+        parse_gives(&mut e, true, &[(-2i32) as u32]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_a690, a));
+        assert_eq!(
+            calls(&e, NPC_SELECT_LIST_NODE),
+            vec![vec![base, nodes[2], 0]]
+        );
+        assert_eq!(calls(&e, CHARACTER_RESET_3D), vec![vec![this_obj]]);
+    }
+
+    #[test]
+    fn fn_005da690_needs_a_reference_that_passes_the_test_0x218() {
+        let mut e = engine_p7c();
+        let slots = [
+            (REFERENCE_TEST_SLOT_218, V_FALSE),
+            (REFERENCE_TEST_SLOT, V_TRUE),
+        ];
+        let (this_obj, _, _) = chain_reference(&mut e, &slots);
+        parse_gives(&mut e, true, &[(-2i32) as u32]);
+        let a = command(&mut e, this_obj);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_a690, a));
+        assert!(calls(&e, WORD_AT_20).is_empty());
+
+        let without = command(&mut e, 0);
+        assert!(run(&mut e, 0x005d_a690, without));
+        assert!(calls(&e, WORD_AT_20).is_empty());
+    }
+
+    #[test]
+    fn fn_005da7d0_reads_the_word_at_offset_0x508() {
+        let mut e = engine_p7c();
+        let node = object(&mut e);
+        e.mem.set_u32(node + 0x508, 0x4242);
+        assert_eq!(e.call(0x005d_a7d0, &args![node]).u32(), 0x4242);
+    }
+
+    #[test]
+    fn fn_005da7f0_reads_the_word_at_offset_0x504() {
+        let mut e = engine_p7c();
+        let node = object(&mut e);
+        e.mem.set_u32(node + 0x504, 0x2424);
+        assert_eq!(e.call(0x005d_a7f0, &args![node]).u32(), 0x2424);
+    }
+
+    #[test]
+    fn fn_005da810_copies_the_selection_position_of_the_source() {
+        let mut e = engine_p7c();
+        let slots = [(REFERENCE_TEST_SLOT_218, V_TRUE)];
+        let (this_obj, base, nodes) = chain_reference(&mut e, &slots);
+        let (source, source_base, source_nodes) = chain_reference(&mut e, &slots);
+        // The source starts at its second node.
+        e.mem.set_u32(source_base + 0x110, source_nodes[1]);
+        let a = command(&mut e, this_obj);
+
+        // thisObj's start has two links down, the source ends two links
+        // above the end of its chain: its first node.
+        parse_gives(&mut e, true, &[source]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_a810, a));
+        assert_parsed(&e, this_obj);
+        assert_eq!(
+            calls(&e, CLEAR_BODY_TEXTURES_FROM_PALETTE),
+            vec![vec![base]]
+        );
+        assert_eq!(
+            calls(&e, NPC_SELECT_LIST_NODE),
+            vec![vec![base, source_nodes[0], 0]]
+        );
+        assert_eq!(calls(&e, CHARACTER_RESET_3D), vec![vec![this_obj]]);
+
+        // A source chain that ends early stops the walk back there.
+        e.mem.set_u32(source_nodes[1] + 0x504, 0);
+        e.mem.set_u32(source_base + 0x110, source_nodes[2]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_a810, a));
+        assert_eq!(
+            calls(&e, NPC_SELECT_LIST_NODE),
+            vec![vec![base, source_nodes[1], 0]]
+        );
+
+        // The same start: nothing to do.
+        e.mem.set_u32(source_base + 0x110, nodes[0]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_a810, a));
+        assert!(calls(&e, NPC_SELECT_LIST_NODE).is_empty());
+        assert!(calls(&e, CHARACTER_RESET_3D).is_empty());
+
+        // Parameters that do not parse.
+        parse_gives(&mut e, false, &[]);
+        assert!(!run(&mut e, 0x005d_a810, a));
+    }
+
+    #[test]
+    fn fn_005da810_needs_both_references_to_pass_the_test_0x218() {
+        let mut e = engine_p7c();
+        let (this_obj, _, _) = chain_reference(&mut e, &[(REFERENCE_TEST_SLOT_218, V_TRUE)]);
+        let (source, _, _) = chain_reference(&mut e, &[(REFERENCE_TEST_SLOT_218, V_FALSE)]);
+        let a = command(&mut e, this_obj);
+        parse_gives(&mut e, true, &[source]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_a810, a));
+        assert!(calls(&e, WORD_AT_20).is_empty());
+
+        // The source passes, thisObj fails.
+        let (bad, _, _) = chain_reference(&mut e, &[(REFERENCE_TEST_SLOT_218, V_FALSE)]);
+        let (good, _, _) = chain_reference(&mut e, &[(REFERENCE_TEST_SLOT_218, V_TRUE)]);
+        let a = command(&mut e, bad);
+        parse_gives(&mut e, true, &[good]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_a810, a));
+        assert!(calls(&e, WORD_AT_20).is_empty());
+
+        // No source, or no thisObj.
+        parse_gives(&mut e, true, &[0]);
+        assert!(run(&mut e, 0x005d_a810, a));
+        let none = command(&mut e, 0);
+        parse_gives(&mut e, true, &[good]);
+        assert!(run(&mut e, 0x005d_a810, none));
+        assert!(calls(&e, WORD_AT_20).is_empty());
+    }
+
+    /// The commands `005da980` and `005da9e0`: an integer handed to a method
+    /// of the player as a flag.
+    fn assert_player_flag_command(address: u32, callee: u32) {
+        let mut e = engine_p7c();
+        let player = set_player(&mut e);
+        e.register(callee, |_, _| Ret::default());
+        let a = command(&mut e, 0);
+        parse_gives(&mut e, true, &[7]);
+        start_log(&mut e);
+        assert!(run(&mut e, address, a));
+        assert_parsed(&e, 0);
+        assert_eq!(calls(&e, callee), vec![vec![player, 1]]);
+        parse_gives(&mut e, true, &[0]);
+        start_log(&mut e);
+        assert!(run(&mut e, address, a));
+        assert_eq!(calls(&e, callee), vec![vec![player, 0]]);
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!run(&mut e, address, a));
+        assert!(calls(&e, callee).is_empty());
+    }
+
+    #[test]
+    fn fn_005da980_hands_the_flag_to_the_player() {
+        assert_player_flag_command(0x005d_a980, PLAYER_FN_00969820);
+    }
+
+    #[test]
+    fn fn_005da9e0_hands_the_flag_to_the_player() {
+        assert_player_flag_command(0x005d_a9e0, PLAYER_FN_009697C0);
+    }
+
+    #[test]
+    fn script_get_concussed_function_returns_the_condition_for_the_parsed_value() {
+        assert_parsed_condition(0x005d_aa40, GET_CONCUSSED_CONDITION, 0);
+    }
+
+    #[test]
+    fn fn_005daaa0_returns_the_condition_function_s_result() {
+        assert_plain_condition(0x005d_aaa0, GET_RADIATION_LEVEL_CONDITION);
+    }
+
+    #[test]
+    fn fn_005daac0_returns_the_condition_function_s_result() {
+        assert_plain_condition(0x005d_aac0, GET_MAP_MARKER_VISIBLE_CONDITION);
+    }
+
+    /// Doubles for `005daae0`: whether the form has the flag, the
+    /// destructible data (0 for none) and the byte `00576100` gives.
+    fn destructible_engine(flag: bool, destruction: u32, byte: u32) -> (Engine, u32) {
+        let mut e = engine_p7c();
+        let this_obj = object(&mut e);
+        e.register_double(FORM_HAS_FLAG_1000000, move |_, _| flag.into_ret());
+        e.register(WORD_AT_20, |_, _| 0x6000u32.into_ret());
+        e.register_double(GET_DESTRUCTION_FORM, move |_, _| destruction.into_ret());
+        e.register_double(DESTRUCTIBLE_FN_00576100, move |_, _| byte.into_ret());
+        e.register(FORM_FN_004846E0, |_, _| Ret::default());
+        (e, this_obj)
+    }
+
+    #[test]
+    fn fn_005daae0_sets_the_flag_when_the_destructible_byte_differs() {
+        // Equal: 0; different: 1.
+        let (mut e, this_obj) = destructible_engine(true, 0x7000, 1);
+        let a = command(&mut e, this_obj);
+        parse_gives(&mut e, true, &[5]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_aae0, a));
+        assert_parsed(&e, this_obj);
+        assert_eq!(calls(&e, GET_DESTRUCTION_FORM), vec![vec![0x6000]]);
+        assert_eq!(calls(&e, DESTRUCTIBLE_FN_00576100), vec![vec![0x7000]]);
+        assert_eq!(calls(&e, FORM_FN_004846E0), vec![vec![this_obj, 0]]);
+
+        parse_gives(&mut e, true, &[0]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_aae0, a));
+        assert_eq!(calls(&e, FORM_FN_004846E0), vec![vec![this_obj, 1]]);
+
+        // The bytes are compared as bytes: 2 is not 1.
+        let (mut e, this_obj) = destructible_engine(true, 0x7000, 2);
+        let a = command(&mut e, this_obj);
+        parse_gives(&mut e, true, &[5]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_aae0, a));
+        assert_eq!(calls(&e, FORM_FN_004846E0), vec![vec![this_obj, 1]]);
+    }
+
+    #[test]
+    fn fn_005daae0_treats_a_form_without_destructible_data_as_zero() {
+        let (mut e, this_obj) = destructible_engine(true, 0, 1);
+        let a = command(&mut e, this_obj);
+        parse_gives(&mut e, true, &[0]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_aae0, a));
+        assert!(calls(&e, DESTRUCTIBLE_FN_00576100).is_empty());
+        assert_eq!(calls(&e, FORM_FN_004846E0), vec![vec![this_obj, 0]]);
+    }
+
+    #[test]
+    fn fn_005daae0_does_nothing_without_the_form_flag_and_fails_unparsed() {
+        let (mut e, this_obj) = destructible_engine(false, 0x7000, 1);
+        let a = command(&mut e, this_obj);
+        parse_gives(&mut e, true, &[1]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_aae0, a));
+        assert!(calls(&e, FORM_FN_004846E0).is_empty());
+        assert!(calls(&e, GET_DESTRUCTION_FORM).is_empty());
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!run(&mut e, 0x005d_aae0, a));
+        assert!(calls(&e, FORM_HAS_FLAG_1000000).is_empty());
+    }
+
+    #[test]
+    fn fn_005dab90_sets_or_clears_bit_0_of_the_byte_at_0x1e() {
+        let mut e = engine_p7c();
+        let reference = object_with(&mut e, &[(FORM_SLOT_48, V_RECORD)]);
+        let a = command(&mut e, 0);
+        e.register_double(PARSE_PARAMETERS, move |e, args| {
+            assert_eq!(e.mem.u32(args[7]), 0);
+            assert_eq!(e.mem.u32(args[8]), 0);
+            e.mem.set_u32(args[7], reference);
+            e.mem.set_u32(args[8], 0);
+            true.into_ret()
+        });
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_ab90, a));
+        assert_parsed(&e, 0);
+        // An integer of 0 sets the bit.
+        assert_eq!(e.mem.u8(reference + 0x1e) & 1, 1);
+        assert_eq!(calls(&e, V_RECORD), vec![vec![reference, 2]]);
+
+        parse_gives(&mut e, true, &[reference, 3]);
+        assert!(run(&mut e, 0x005d_ab90, a));
+        assert_eq!(e.mem.u8(reference + 0x1e) & 1, 0);
+
+        // No reference: nothing happens; parameters that do not parse fail.
+        start_log(&mut e);
+        parse_gives(&mut e, true, &[0, 0]);
+        assert!(run(&mut e, 0x005d_ab90, a));
+        assert!(calls(&e, V_RECORD).is_empty());
+        parse_gives(&mut e, false, &[]);
+        assert!(!run(&mut e, 0x005d_ab90, a));
+    }
+
+    #[test]
+    fn fn_005dac10_sets_or_clears_bit_0_and_keeps_the_others() {
+        let mut e = engine_p7c();
+        let object = object(&mut e);
+        e.mem.set_u8(object + 0x1e, 0xa4);
+        e.call(0x005d_ac10, &args![object, 1u32]);
+        assert_eq!(e.mem.u8(object + 0x1e), 0xa5);
+        e.call(0x005d_ac10, &args![object, 0u32]);
+        assert_eq!(e.mem.u8(object + 0x1e), 0xa4);
+        e.call(0x005d_ac10, &args![object, 0u32]);
+        assert_eq!(e.mem.u8(object + 0x1e), 0xa4);
+    }
+
+    #[test]
+    fn fn_005dac60_calls_slot_0x208_of_this_obj_with_zero() {
+        let mut e = engine_p7c();
+        let this_obj = object_with(&mut e, &[(REFERENCE_SLOT_208, V_RECORD)]);
+        let a = command(&mut e, this_obj);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_ac60, a));
+        assert_eq!(calls(&e, V_RECORD), vec![vec![this_obj, 0]]);
+        let none = command(&mut e, 0);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_ac60, none));
+        assert!(calls(&e, V_RECORD).is_empty());
+    }
+
+    #[test]
+    fn fn_005dac80_tells_the_process_of_the_reference_a_point_of_this_obj() {
+        let mut e = engine_p7c();
+        let point = e.mem.alloc(12);
+        for (i, word) in [0x11u32, 0x22, 0x33].iter().enumerate() {
+            e.mem.set_u32(point + 4 * i as u32, *word);
+        }
+        e.register_double(V_POINT, move |_, _| point.into_ret());
+        let this_obj = object_with(&mut e, &[(REFERENCE_SLOT_1F4, V_POINT)]);
+        let process = object_with(&mut e, &[(PROCESS_SLOT_FC, V_RECORD)]);
+        let target = object_with(&mut e, &[(REFERENCE_TEST_SLOT, V_TRUE)]);
+        e.register_double(GET_PROCESS, move |_, _| process.into_ret());
+        let a = command(&mut e, this_obj);
+        e.register_double(PARSE_PARAMETERS, move |e, args| {
+            // The locals start as 0, 0 and 3.
+            assert_eq!(
+                [e.mem.u32(args[7]), e.mem.u32(args[8]), e.mem.u32(args[9])],
+                [0, 0, 3]
+            );
+            e.mem.set_u32(args[7], target);
+            e.mem.set_u32(args[8], 7);
+            e.mem.set_u32(args[9], 9);
+            true.into_ret()
+        });
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_ac80, a));
+        assert_parsed(&e, this_obj);
+        assert_eq!(calls(&e, V_POINT), vec![vec![this_obj, 7, 9, this_obj]]);
+        assert_eq!(
+            calls(&e, V_RECORD),
+            vec![vec![process, target, 0x11, 0x22, 0x33]]
+        );
+        assert_eq!(calls(&e, GET_PROCESS).len(), 2);
+    }
+
+    #[test]
+    fn fn_005dac80_skips_what_cannot_be_done() {
+        let mut e = engine_p7c();
+        e.register(V_POINT, |_, _| 0u32.into_ret());
+        let this_obj = object_with(&mut e, &[(REFERENCE_SLOT_1F4, V_POINT)]);
+        let process = object_with(&mut e, &[(PROCESS_SLOT_FC, V_RECORD)]);
+        let target = object_with(&mut e, &[(REFERENCE_TEST_SLOT, V_TRUE)]);
+        let refusing = object_with(&mut e, &[(REFERENCE_TEST_SLOT, V_FALSE)]);
+        e.register_double(GET_PROCESS, move |_, _| process.into_ret());
+        let a = command(&mut e, this_obj);
+
+        // The reference fails the virtual test.
+        parse_gives(&mut e, true, &[refusing, 0, 3]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_ac80, a));
+        assert!(calls(&e, V_POINT).is_empty());
+
+        // No reference.
+        parse_gives(&mut e, true, &[0, 0, 3]);
+        assert!(run(&mut e, 0x005d_ac80, a));
+        assert!(calls(&e, V_POINT).is_empty());
+
+        // No process.
+        e.register(GET_PROCESS, |_, _| 0u32.into_ret());
+        parse_gives(&mut e, true, &[target, 0, 3]);
+        assert!(run(&mut e, 0x005d_ac80, a));
+        assert!(calls(&e, V_POINT).is_empty());
+
+        // Parameters that do not parse.
+        parse_gives(&mut e, false, &[]);
+        assert!(!run(&mut e, 0x005d_ac80, a));
+
+        // No thisObj: the parameters are not even parsed.
+        let none = command(&mut e, 0);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_ac80, none));
+        assert!(calls(&e, PARSE_PARAMETERS).is_empty());
+    }
+
+    /// An engine for `005dad70`: the player has room for its byte at
+    /// `+0xdf2`, the world space and its terrain manager are the given
+    /// words.
+    fn terrain_engine(world: u32, terrain: u32) -> (Engine, u32) {
+        let mut e = engine_p7c();
+        let player = e.mem.alloc(0x1000);
+        e.set_global(PLAYER, player);
+        e.set_global(TES_SINGLETON, 0x7001u32);
+        e.register_double(TES_GET_WORLD_SPACE, move |_, _| world.into_ret());
+        e.register_double(WORLD_SPACE_GET_TERRAIN_MANAGER, move |_, _| {
+            terrain.into_ret()
+        });
+        e.register(TERRAIN_MANAGER_FN_006FD060, |_, _| Ret::default());
+        (e, player)
+    }
+
+    #[test]
+    fn fn_005dad70_flags_the_player_and_refreshes_the_terrain() {
+        let (mut e, player) = terrain_engine(0x7100, 0x7200);
+        let a = command(&mut e, 0);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_ad70, a));
+        assert_eq!(e.mem.u8(player + 0xdf2), 1);
+        assert_eq!(calls(&e, TES_GET_WORLD_SPACE), vec![vec![0x7001]; 3]);
+        assert_eq!(
+            calls(&e, WORLD_SPACE_GET_TERRAIN_MANAGER),
+            vec![vec![0x7100]; 2]
+        );
+        assert_eq!(calls(&e, TERRAIN_MANAGER_FN_006FD060), vec![vec![0x7200]]);
+    }
+
+    #[test]
+    fn fn_005dad70_only_flags_the_player_without_a_world_or_terrain_manager() {
+        let (mut e, player) = terrain_engine(0, 0x7200);
+        let a = command(&mut e, 0);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_ad70, a));
+        assert_eq!(e.mem.u8(player + 0xdf2), 1);
+        assert!(calls(&e, WORLD_SPACE_GET_TERRAIN_MANAGER).is_empty());
+
+        let (mut e, player) = terrain_engine(0x7100, 0);
+        let a = command(&mut e, 0);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_ad70, a));
+        assert_eq!(e.mem.u8(player + 0xdf2), 1);
+        assert_eq!(calls(&e, WORLD_SPACE_GET_TERRAIN_MANAGER).len(), 1);
+        assert!(calls(&e, TERRAIN_MANAGER_FN_006FD060).is_empty());
+    }
+
+    #[test]
+    fn fn_005dadd0_stores_the_byte_at_offset_0xdf2() {
+        let mut e = engine_p7c();
+        let player = e.mem.alloc(0x1000);
+        e.call(0x005d_add0, &args![player, 1u32]);
+        assert_eq!(e.mem.u8(player + 0xdf2), 1);
+        e.call(0x005d_add0, &args![player, 0u32]);
+        assert_eq!(e.mem.u8(player + 0xdf2), 0);
+    }
+
+    #[test]
+    fn fn_005dadf0_returns_the_condition_function_s_result() {
+        assert_plain_condition(0x005d_adf0, GET_WEAPON_HEALTH_PERC_CONDITION);
+    }
+
+    const ITEM_FORM: u32 = 0x4000;
+    const CHANGES: u32 = 0xcc00;
+    const FIRST_EXTRA_LIST: u32 = 0xe1e1;
+
+    /// An engine for the two health commands: `thisObj` passes the test
+    /// `0x100`, its process hands out an item change whose health is
+    /// `current_without_mods` (flag 0) and `current_with_mods` (flag 1).
+    /// The form's maximum health is 200. Returns the engine, `thisObj` and
+    /// the item.
+    fn health_engine(current_flag_0: f32, current_flag_1: f32) -> (Engine, u32, u32) {
+        let mut e = engine_p7c();
+        let this_obj = object_with(
+            &mut e,
+            &[
+                (REFERENCE_TEST_SLOT, V_TRUE),
+                (REFERENCE_LOWER_ITEM_HEALTH_SLOT, V_RECORD),
+            ],
+        );
+        let process = object_with(&mut e, &[(PROCESS_EQUIPPED_ITEM_SLOT, V_ITEM)]);
+        let item = object(&mut e);
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, FIRST_EXTRA_LIST);
+        e.mem.set_u32(item, node);
+        e.register_double(V_ITEM, move |_, _| item.into_ret());
+        e.register_double(GET_PROCESS, move |_, _| process.into_ret());
+        e.register(ITEM_HAS_MOD_EFFECT_ACTIVE, |_, _| 1u32.into_ret());
+        e.register(ITEM_GET_FORM, |_, _| ITEM_FORM.into_ret());
+        e.register(WEAPON_GET_FORM_HEALTH, |_, _| 200u32.into_ret());
+        e.register(HEALTH_FORM_GET_FORM_HEALTH, |_, _| 200u32.into_ret());
+        e.register_double(ITEM_GET_ITEM_HEALTH, move |_, a| {
+            if a[1] == 0 {
+                current_flag_0
+            } else {
+                current_flag_1
+            }
+            .into_ret()
+        });
+        e.register(DEREF, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(LIST_NODE_DATA, |_, a| a[0].into_ret());
+        e.register(EXTRA_DATA_LIST, |_, a| (a[0] + 0x44).into_ret());
+        e.register(GET_CONTAINER_CHANGES, |_, _| CHANGES.into_ret());
+        e.register(FLOAT_MIN, |_, a| {
+            let (first, second) = (f32::from_bits(a[0]), f32::from_bits(a[1]));
+            if second <= first { second } else { first }.into_ret()
+        });
+        e.register(ITEM_SET_ITEM_HEALTH, |_, _| Ret::default());
+        (e, this_obj, item)
+    }
+
+    /// `ParseParameters` double for the health commands: the local starts as
+    /// 1.0 and becomes `percent`.
+    fn parse_percent(e: &mut Engine, percent: f32) {
+        e.register_double(PARSE_PARAMETERS, move |e, args| {
+            assert_eq!(e.mem.u32(args[7]), 1.0f32.to_bits());
+            e.mem.set_u32(args[7], percent.to_bits());
+            true.into_ret()
+        });
+    }
+
+    #[test]
+    fn fn_005dae10_raises_the_item_health_to_a_percentage_of_the_maximum() {
+        let (mut e, this_obj, item) = health_engine(40.0, 0.0);
+        let a = command(&mut e, this_obj);
+        parse_percent(&mut e, 50.0);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_ae10, a));
+        assert_parsed(&e, this_obj);
+        assert_eq!(calls(&e, ITEM_HAS_MOD_EFFECT_ACTIVE), vec![vec![item, 10]]);
+        assert_eq!(calls(&e, WEAPON_GET_FORM_HEALTH), vec![vec![ITEM_FORM, 1]]);
+        assert_eq!(calls(&e, ITEM_GET_ITEM_HEALTH), vec![vec![item, 0]]);
+        assert_eq!(calls(&e, EXTRA_DATA_LIST), vec![vec![this_obj]]);
+        assert_eq!(
+            calls(&e, ITEM_SET_ITEM_HEALTH),
+            vec![vec![item, 100.0f32.to_bits(), CHANGES, FIRST_EXTRA_LIST, 1]]
+        );
+        assert!(calls(&e, V_RECORD).is_empty());
+    }
+
+    #[test]
+    fn fn_005dae10_limits_a_raise_to_the_maximum_minus_one() {
+        let (mut e, this_obj, item) = health_engine(40.0, 0.0);
+        let a = command(&mut e, this_obj);
+        parse_percent(&mut e, 150.0);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_ae10, a));
+        assert_eq!(
+            calls(&e, FLOAT_MIN),
+            vec![vec![300.0f32.to_bits(), 199.0f32.to_bits()]]
+        );
+        assert_eq!(
+            calls(&e, ITEM_SET_ITEM_HEALTH),
+            vec![vec![item, 199.0f32.to_bits(), CHANGES, FIRST_EXTRA_LIST, 1]]
+        );
+    }
+
+    #[test]
+    fn fn_005dae10_lowers_the_item_health_through_the_reference() {
+        let (mut e, this_obj, item) = health_engine(150.0, 0.0);
+        let a = command(&mut e, this_obj);
+        parse_percent(&mut e, 50.0);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_ae10, a));
+        assert_eq!(
+            calls(&e, V_RECORD),
+            vec![vec![this_obj, item, 50.0f32.to_bits(), 1]]
+        );
+        assert!(calls(&e, ITEM_SET_ITEM_HEALTH).is_empty());
+
+        // The health already at the target: nothing to raise, a lowering by
+        // the negated zero (`FCHS` of +0.0 gives -0.0).
+        let (mut e, this_obj, item) = health_engine(100.0, 0.0);
+        let a = command(&mut e, this_obj);
+        parse_percent(&mut e, 50.0);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_ae10, a));
+        assert_eq!(
+            calls(&e, V_RECORD),
+            vec![vec![this_obj, item, (-0.0f32).to_bits(), 1]]
+        );
+    }
+
+    /// The health commands need a reference passing the test `0x100`, a
+    /// process and an equipped item; they fail when the parameters do not
+    /// parse.
+    fn assert_health_command_guards(address: u32) {
+        let (mut e, this_obj, _) = health_engine(40.0, 0.0);
+        let a = command(&mut e, this_obj);
+
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!run(&mut e, address, a));
+        assert!(calls(&e, GET_PROCESS).is_empty());
+
+        // No thisObj.
+        parse_percent(&mut e, 50.0);
+        let none = command(&mut e, 0);
+        start_log(&mut e);
+        assert!(run(&mut e, address, none));
+        assert!(calls(&e, GET_PROCESS).is_empty());
+
+        // The test 0x100 fails.
+        let refusing = object_with(&mut e, &[(REFERENCE_TEST_SLOT, V_FALSE)]);
+        let a_refusing = command(&mut e, refusing);
+        start_log(&mut e);
+        assert!(run(&mut e, address, a_refusing));
+        assert!(calls(&e, GET_PROCESS).is_empty());
+
+        // No process.
+        e.register(GET_PROCESS, |_, _| 0u32.into_ret());
+        start_log(&mut e);
+        assert!(run(&mut e, address, a));
+        assert_eq!(calls(&e, GET_PROCESS).len(), 1);
+        assert!(calls(&e, ITEM_GET_ITEM_HEALTH).is_empty());
+
+        // A process without an equipped item.
+        let process = object_with(&mut e, &[(PROCESS_EQUIPPED_ITEM_SLOT, V_ITEM)]);
+        e.register_double(GET_PROCESS, move |_, _| process.into_ret());
+        e.register(V_ITEM, |_, _| 0u32.into_ret());
+        start_log(&mut e);
+        assert!(run(&mut e, address, a));
+        assert_eq!(calls(&e, GET_PROCESS).len(), 2);
+        assert!(calls(&e, ITEM_GET_ITEM_HEALTH).is_empty());
+    }
+
+    #[test]
+    fn fn_005dae10_needs_a_reference_a_process_and_an_equipped_item() {
+        assert_health_command_guards(0x005d_ae10);
+    }
+
+    #[test]
+    fn fn_005daf90_raises_the_item_health_by_a_percentage() {
+        // Current health with mods 50, plus 25, is 75 percent of 200.
+        let (mut e, this_obj, item) = health_engine(100.0, 50.0);
+        let a = command(&mut e, this_obj);
+        parse_percent(&mut e, 25.0);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_af90, a));
+        assert_parsed(&e, this_obj);
+        assert_eq!(
+            calls(&e, ITEM_GET_ITEM_HEALTH),
+            vec![vec![item, 1], vec![item, 0]]
+        );
+        assert_eq!(
+            calls(&e, HEALTH_FORM_GET_FORM_HEALTH),
+            vec![vec![ITEM_FORM]]
+        );
+        assert!(calls(&e, FLOAT_MIN).is_empty());
+        assert_eq!(
+            calls(&e, ITEM_SET_ITEM_HEALTH),
+            vec![vec![item, 150.0f32.to_bits(), CHANGES, FIRST_EXTRA_LIST, 1]]
+        );
+    }
+
+    #[test]
+    fn fn_005daf90_lowers_the_item_health_and_never_goes_below_zero() {
+        // 10 - 50 is negative: the fraction is 0, the target 0, and the
+        // current health 100 is taken off through the reference.
+        let (mut e, this_obj, item) = health_engine(100.0, 10.0);
+        let a = command(&mut e, this_obj);
+        parse_percent(&mut e, -50.0);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_af90, a));
+        assert_eq!(
+            calls(&e, V_RECORD),
+            vec![vec![this_obj, item, 100.0f32.to_bits(), 1]]
+        );
+        assert!(calls(&e, ITEM_SET_ITEM_HEALTH).is_empty());
+    }
+
+    #[test]
+    fn fn_005daf90_needs_a_reference_a_process_and_an_equipped_item() {
+        assert_health_command_guards(0x005d_af90);
+    }
+
+    #[test]
+    fn script_set_rumble_function_rumbles_the_controls_with_a_duration_in_milliseconds() {
+        let mut e = engine_p7c();
+        e.set_global(MAIN_SINGLETON, 0x7002u32);
+        e.register(MAIN_GET_CONTROLS, |_, a| {
+            assert_eq!(a[0], 0x7002);
+            0x7003u32.into_ret()
+        });
+        e.register(FTOL, |_, a| {
+            let value = f64::from_bits(a[0] as u64 | (a[1] as u64) << 32);
+            (value as i32 as u32).into_ret()
+        });
+        e.register(CONTROLS_RUMBLE, |_, _| Ret::default());
+        let a = command(&mut e, 0);
+        e.register_double(PARSE_PARAMETERS, |e, args| {
+            // The three floats start as 0.0.
+            for i in 0..3 {
+                assert_eq!(e.mem.u32(args[7 + i]), 0);
+            }
+            e.mem.set_u32(args[7], 0.25f32.to_bits());
+            e.mem.set_u32(args[8], 0.5f32.to_bits());
+            e.mem.set_u32(args[9], 1.5f32.to_bits());
+            true.into_ret()
+        });
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_b110, a));
+        assert_parsed(&e, 0);
+        assert_eq!(
+            calls(&e, CONTROLS_RUMBLE),
+            vec![vec![
+                0x7003,
+                0.25f32.to_bits(),
+                0.5f32.to_bits(),
+                1500,
+                0,
+                0,
+                0,
+                1
+            ]]
+        );
+
+        // No controls object: no rumble.
+        e.register(MAIN_GET_CONTROLS, |_, _| 0u32.into_ret());
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_b110, a));
+        assert!(calls(&e, CONTROLS_RUMBLE).is_empty());
+
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!run(&mut e, 0x005d_b110, a));
+        assert!(calls(&e, MAIN_GET_CONTROLS).is_empty());
+    }
+
+    #[test]
+    fn fn_005db1b0_precaches_the_sound_of_the_form_three_times_and_remembers_it() {
+        let mut e = engine_p7c();
+        e.register(FORM_SOUND_PATH, |_, _| 0x5a5au32.into_ret());
+        e.register(AUDIO_INSTANCE, |_, _| 0x7004u32.into_ret());
+        e.register(AUDIO_PRECACHE, |_, _| Ret::default());
+        let a = command(&mut e, 0);
+        parse_gives(&mut e, true, &[0x9090]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_b1b0, a));
+        assert_parsed(&e, 0);
+        assert_eq!(calls(&e, FORM_SOUND_PATH), vec![vec![0x9090]; 3]);
+        assert_eq!(
+            calls(&e, AUDIO_PRECACHE),
+            vec![vec![0x7004, 0x5a5a, 0x2000_0121, 0x9090]; 3]
+        );
+        assert_eq!(e.mem.u32(WORD_AT_11DCFA8), 0x9090);
+
+        // A null form, or parameters that do not parse: still a success.
+        e.mem.set_u32(WORD_AT_11DCFA8, 0);
+        parse_gives(&mut e, true, &[0]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_b1b0, a));
+        parse_gives(&mut e, false, &[]);
+        assert!(run(&mut e, 0x005d_b1b0, a));
+        assert!(calls(&e, AUDIO_PRECACHE).is_empty());
+        assert_eq!(e.mem.u32(WORD_AT_11DCFA8), 0);
+    }
+
+    #[test]
+    fn fn_005db260_stores_the_word() {
+        let mut e = engine_p7c();
+        e.call(0x005d_b260, &args![0x1234u32]);
+        assert_eq!(e.mem.u32(WORD_AT_11DCFA8), 0x1234);
+    }
+
+    #[test]
+    fn fn_005db270_clears_the_word_and_succeeds() {
+        let mut e = engine_p7c();
+        e.mem.set_u32(WORD_AT_11DCFA8, 0x1234);
+        let a = command(&mut e, 0);
+        assert!(run(&mut e, 0x005d_b270, a));
+        assert_eq!(e.mem.u32(WORD_AT_11DCFA8), 0);
+    }
+
+    #[test]
+    fn fn_005db280_clears_the_word() {
+        let mut e = engine_p7c();
+        e.mem.set_u32(WORD_AT_11DCFA8, 0x1234);
+        e.call(0x005d_b280, &args![]);
+        assert_eq!(e.mem.u32(WORD_AT_11DCFA8), 0);
+    }
+
+    /// An engine for `005db290`: the cast gives `actor` (an object with the
+    /// word `ragdoll` at `+0xac`).
+    fn skeleton_engine(cast_to_actor: bool, ragdoll: u32) -> (Engine, u32) {
+        let mut e = engine_p7c();
+        e.set_global(FADE_SKINS_STRENGTH, 0.5f32);
+        let actor = object(&mut e);
+        e.mem.set_u32(actor + 0xac, ragdoll);
+        e.register_double(DYNAMIC_CAST, move |_, _| {
+            if cast_to_actor { actor } else { 0 }.into_ret()
+        });
+        e.register(ACTOR_FN_0043FCD0, |_, _| 0x7777u32.into_ret());
+        e.register(ACTOR_FADE_SKINS, |_, _| Ret::default());
+        e.register(RAGDOLL_FN_00C79D60, |_, _| Ret::default());
+        (e, actor)
+    }
+
+    #[test]
+    fn script_draw_skeleton_fades_the_skins_and_updates_the_ragdoll() {
+        let (mut e, actor) = skeleton_engine(true, 0x8800);
+        let a = command(&mut e, 0x4444);
+        e.register_double(PARSE_PARAMETERS, |e, args| {
+            for i in 0..3 {
+                assert_eq!(e.mem.u32(args[7 + i]), 0);
+            }
+            e.mem.set_u32(args[8], 5);
+            true.into_ret()
+        });
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_b290, a));
+        assert_parsed(&e, 0x4444);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![0x4444, 0, 0x0118_41cc, 0x0118_46d4, 0]]
+        );
+        // One flag set: the strength is the exe's 0.5.
+        assert_eq!(
+            calls(&e, ACTOR_FADE_SKINS),
+            vec![vec![actor, 0x7777, 0.5f32.to_bits()]]
+        );
+        assert_eq!(calls(&e, RAGDOLL_FN_00C79D60), vec![vec![0x8800, 0, 1, 0]]);
+
+        // No flag set: full strength.
+        parse_gives(&mut e, true, &[0, 0, 0]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_b290, a));
+        assert_eq!(
+            calls(&e, ACTOR_FADE_SKINS),
+            vec![vec![actor, 0x7777, 1.0f32.to_bits()]]
+        );
+        assert_eq!(calls(&e, RAGDOLL_FN_00C79D60), vec![vec![0x8800, 0, 0, 0]]);
+
+        // Every flag, with other non-zero values.
+        parse_gives(&mut e, true, &[9, 8, 7]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_b290, a));
+        assert_eq!(calls(&e, RAGDOLL_FN_00C79D60), vec![vec![0x8800, 1, 1, 1]]);
+    }
+
+    #[test]
+    fn script_draw_skeleton_skips_what_is_not_an_actor_with_a_ragdoll() {
+        // The cast fails.
+        let (mut e, _) = skeleton_engine(false, 0x8800);
+        let a = command(&mut e, 0x4444);
+        parse_gives(&mut e, true, &[1, 1, 1]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_b290, a));
+        assert!(calls(&e, ACTOR_FADE_SKINS).is_empty());
+
+        // The actor has no word at +0xac.
+        let (mut e, _) = skeleton_engine(true, 0);
+        let a = command(&mut e, 0x4444);
+        parse_gives(&mut e, true, &[1, 1, 1]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_b290, a));
+        assert!(calls(&e, ACTOR_FADE_SKINS).is_empty());
+        assert!(calls(&e, RAGDOLL_FN_00C79D60).is_empty());
+
+        // No thisObj: no cast; parameters that do not parse: failure.
+        let none = command(&mut e, 0);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_b290, none));
+        assert!(calls(&e, DYNAMIC_CAST).is_empty());
+        parse_gives(&mut e, false, &[]);
+        assert!(!run(&mut e, 0x005d_b290, a));
+    }
+
+    #[test]
+    fn fn_005db3b0_returns_the_condition_function_s_result() {
+        assert_plain_condition(0x005d_b3b0, IS_GREETING_PLAYER_CONDITION);
+    }
+
+    #[test]
+    fn fn_005db3d0_returns_the_condition_function_s_result() {
+        assert_plain_condition(0x005d_b3d0, GET_IGNORE_CRIME_CONDITION);
+    }
+
+    #[test]
+    fn fn_005db3f0_calls_slot_0x31c_with_whether_the_integer_is_positive() {
+        let mut e = engine_p7c();
+        let this_obj = object_with(
+            &mut e,
+            &[
+                (REFERENCE_TEST_SLOT, V_TRUE),
+                (REFERENCE_SLOT_31C, V_RECORD),
+            ],
+        );
+        let a = command(&mut e, this_obj);
+        for (value, expected) in [(5i32, 1u32), (1, 1), (0, 0), (-3, 0)] {
+            parse_gives(&mut e, true, &[value as u32]);
+            start_log(&mut e);
+            assert!(run(&mut e, 0x005d_b3f0, a));
+            assert_parsed(&e, this_obj);
+            assert_eq!(calls(&e, V_RECORD), vec![vec![this_obj, expected]]);
+        }
+
+        // The test 0x100 fails, or there is no thisObj.
+        let refusing = object_with(&mut e, &[(REFERENCE_TEST_SLOT, V_FALSE)]);
+        let a_refusing = command(&mut e, refusing);
+        parse_gives(&mut e, true, &[5]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_b3f0, a_refusing));
+        let none = command(&mut e, 0);
+        assert!(run(&mut e, 0x005d_b3f0, none));
+        assert!(calls(&e, V_RECORD).is_empty());
+
+        parse_gives(&mut e, false, &[]);
+        assert!(!run(&mut e, 0x005d_b3f0, a));
+    }
+
+    #[test]
+    fn fn_005db490_flags_the_pipboy_when_there_is_one() {
+        let mut e = engine_p7c();
+        let pipboy = e.mem.alloc(0x1000);
+        e.register_double(INTERFACE_GET_PIPBOY, move |_, _| pipboy.into_ret());
+        let a = command(&mut e, 0);
+        assert!(run(&mut e, 0x005d_b490, a));
+        assert_eq!(e.mem.u8(pipboy + 0x16c), 1);
+
+        e.mem.set_u8(pipboy + 0x16c, 0);
+        e.register(INTERFACE_GET_PIPBOY, |_, _| 0u32.into_ret());
+        assert!(run(&mut e, 0x005d_b490, a));
+        assert_eq!(e.mem.u8(pipboy + 0x16c), 0);
+    }
+
+    #[test]
+    fn fn_005db4c0_stores_the_byte_at_offset_0x16c() {
+        let mut e = engine_p7c();
+        let pipboy = e.mem.alloc(0x1000);
+        e.call(0x005d_b4c0, &args![pipboy, 1u32]);
+        assert_eq!(e.mem.u8(pipboy + 0x16c), 1);
+        e.call(0x005d_b4c0, &args![pipboy, 0u32]);
+        assert_eq!(e.mem.u8(pipboy + 0x16c), 0);
+    }
+
+    #[test]
+    fn script_is_combat_target_function_returns_the_condition_for_the_parsed_value() {
+        assert_parsed_condition(0x005d_b4e0, IS_COMBAT_TARGET_CONDITION, 0);
+    }
+
+    #[test]
+    fn script_get_vats_right_area_free_function_returns_the_condition_for_the_parsed_value() {
+        assert_parsed_condition(0x005d_b540, GET_VATS_RIGHT_AREA_FREE_CONDITION, 0);
+    }
+
+    #[test]
+    fn script_get_vats_left_area_free_function_returns_the_condition_for_the_parsed_value() {
+        assert_parsed_condition(0x005d_b5a0, GET_VATS_LEFT_AREA_FREE_CONDITION, 0);
+    }
+
+    #[test]
+    fn script_get_vats_back_area_free_function_returns_the_condition_for_the_parsed_value() {
+        assert_parsed_condition(0x005d_b600, GET_VATS_BACK_AREA_FREE_CONDITION, 0);
+    }
+
+    #[test]
+    fn script_get_vats_front_area_free_function_returns_the_condition_for_the_parsed_value() {
+        assert_parsed_condition(0x005d_b660, GET_VATS_FRONT_AREA_FREE_CONDITION, 0);
+    }
+
+    #[test]
+    fn fn_005db6c0_sets_the_byte_and_closes_the_console() {
+        let mut e = engine_p7c();
+        e.register(CLOSE_CONSOLE, |_, _| Ret::default());
+        let a = command(&mut e, 0);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005d_b6c0, a));
+        assert_eq!(e.mem.u8(BYTE_AT_11F5AF1), 1);
+        assert_eq!(calls(&e, CLOSE_CONSOLE), vec![Vec::<u32>::new()]);
+    }
+
+    #[test]
+    fn fn_005db6e0_stores_the_byte() {
+        let mut e = engine_p7c();
+        e.call(0x005d_b6e0, &args![7u32]);
+        assert_eq!(e.mem.u8(BYTE_AT_11F5AF1), 7);
+    }
+
+    #[test]
+    fn script_get_vats_right_target_visible_function_returns_the_condition_for_the_parsed_value() {
+        assert_parsed_condition(0x005d_b6f0, GET_VATS_RIGHT_TARGET_VISIBLE_CONDITION, 0);
+    }
+
+    #[test]
+    fn script_get_vats_left_target_visible_function_returns_the_condition_for_the_parsed_value() {
+        assert_parsed_condition(0x005d_b750, GET_VATS_LEFT_TARGET_VISIBLE_CONDITION, 0);
+    }
+
+    #[test]
+    fn script_get_vats_back_target_visible_function_returns_the_condition_for_the_parsed_value() {
+        assert_parsed_condition(0x005d_b7b0, GET_VATS_BACK_TARGET_VISIBLE_CONDITION, 0);
     }
 }
