@@ -13720,6 +13720,296 @@ fn hit_me_finish(e: &mut Engine, s: &mut HitMe) {
     }
     e.call(ACTOR_HIT_BRACKET_8A5300, &args![this]);
 }
+/// `bhkBlendController::DoHit` (Xbox PDB), cdecl: the first value found by
+/// `004aae30`, a `float` and a flag.
+const BLEND_CONTROLLER_DO_HIT: u32 = 0x00c9_b250;
+/// `004aae30`: cdecl, takes what `0043fcd0` returned and the result of
+/// `004c69f0`; returns an object or zero.
+const FIND_BY_NAME_4AAE30: u32 = 0x004a_ae30;
+/// The `this` of [`MESSAGE_TEXT`] for the first lookup of `fn_008a4af0`.
+const HIT_NAME_SOURCE_FIRST: u32 = 0x011c_c83c;
+/// The `this` of [`MESSAGE_TEXT`] for the fall-back lookup.
+const HIT_NAME_SOURCE_FALLBACK: u32 = 0x011c_c8cc;
+/// The `float` settings `fn_008a4af0` reads through `00450410` (the `this`
+/// of each call): the pair behind the first amount ...
+const HIT_SETTING_FIRST_A: u32 = 0x011c_c77c;
+const HIT_SETTING_FIRST_B: u32 = 0x011c_c86c;
+/// ... and the pair behind the second amount.
+const HIT_SETTING_SECOND_A: u32 = 0x011c_c860;
+const HIT_SETTING_SECOND_B: u32 = 0x011c_c7dc;
+/// `100.0` as a `double`: the limit of the first percentage.
+const HIT_LIMIT_DOUBLE: u32 = 0x0101_7a40;
+/// `100.0f`: what the first percentage becomes above the limit.
+const HIT_LIMIT_FLOAT: u32 = 0x0101_6410;
+/// `0.01` as a `double`.
+const HIT_PERCENT_SCALE: u32 = 0x0101_6408;
+/// `75.0` as a `double`: a second amount above it clears the first.
+const HIT_SECOND_CUTOFF: u32 = 0x0107_31a8;
+/// `0.0` as a `double`.
+const HIT_ZERO_DOUBLE: u32 = 0x0101_2060;
+/// `1.0` as a `double`.
+const HIT_ONE_DOUBLE: u32 = 0x0101_2070;
+/// `30.0f`: handed to `008a50d0`.
+const HIT_REACH: u32 = 0x0101_8f5c;
+/// `0043b1b0`: thiscall on the result of `00413f40`, returns text.
+const HIT_NAME_STRING_43B1B0: u32 = 0x0043_b1b0;
+/// `00413f40`: thiscall, returns the object `0043b1b0` reads.
+const HIT_TEXT_SOURCE_413F40: u32 = 0x0041_3f40;
+/// `00c806b0`: cdecl (the value `0043fcd0` returned, the ray object, zero);
+/// returns a result or zero.
+const HIT_RAY_C806B0: u32 = 0x00c8_06b0;
+/// `bhkCharacterProxy::operatorP` (Xbox PDB), `004ae750`: thiscall on the
+/// ray result.
+const HIT_RAY_RESULT_4AE750: u32 = 0x004a_e750;
+/// `008a50f0`: thiscall on the ray object, takes a vector.
+const HIT_RAY_SET_VECTOR_8A50F0: u32 = 0x008a_50f0;
+/// `008a50d0`: thiscall on the ray object, takes a `float`.
+const HIT_RAY_SET_REACH_8A50D0: u32 = 0x008a_50d0;
+/// `008a5170`: thiscall on the member at `+0x410` of the character
+/// controller, returns a flag.
+const HIT_CONTROLLER_FLAG_8A5170: u32 = 0x008a_5170;
+/// `008a5190`: returns the word at `011c6254`.
+const HIT_GLOBAL_VALUE_8A5190: u32 = 0x008a_5190;
+/// `00571530`: thiscall on the actor, takes what `0043fcd0` returned and a
+/// word; returns a word.
+const HIT_ACTOR_WORKER_571530: u32 = 0x0057_1530;
+/// `00cb9320`: cdecl, takes the first object `004aae30` found, a vector and
+/// a word.
+const HIT_APPLY_CB9320: u32 = 0x00cb_9320;
+/// `"Hit At %s\r\n"`.
+const HIT_AT_FORMAT: u32 = 0x0108_4d8c;
+
+/// `0044ddc0`: thiscall on a rigid body's reference, returns the object the
+/// hit is applied to.
+const HIT_BODY_OBJECT_44DDC0: u32 = 0x0044_ddc0;
+
+// Translated from 008a4af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::HitMe_ov2` (Xbox PDB): thiscall on the actor that is hit,
+/// `RET 0x14`. `source` is another actor whose slot `0x1d0` supplies the
+/// object whose rotation turns the two vectors `offset_a` and `offset_b`
+/// (addresses) into `first_point` and `second_point`; its slot `0x360` picks
+/// the colour of the debug arrow.
+///
+/// Nothing happens when `008ace90` is true, or (after the vectors are
+/// worked out) when `004aae30` finds nothing. Two amounts come from the
+/// settings: `first = low + (high - low) * percent * 0.01` (`percent`
+/// limited to 100) and `second = low + (high - low) * second_amount`; a
+/// `second_amount` above 75 clears `first`; both zero ends the function.
+/// Otherwise `bhkBlendController::DoHit` runs unless slot `0x230` is true
+/// or, for the player, `004eaf60` is false. A non-zero `first` draws the
+/// debug arrow (when the debug setting is positive) and, unless that
+/// player check failed, calls `00c806b0` with the ray object and applies
+/// the outcome with `00cb9320`; a non-zero `second` applies a second
+/// outcome (`00571530`) the same way.
+///
+/// The `NiPoint3` constructor `006815c0` and `006240d0` do nothing and are
+/// not called; the vectors stay zero until written (the exe leaves them
+/// undefined). The exception frame is not translated.
+pub fn actor_hit_me_ov2(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    source: Ptr<Actor>,
+    percent: f32,
+    second_amount: f32,
+    offset_a: u32,
+    offset_b: u32,
+) {
+    let locals = e.mem.alloc(0x300);
+    hit_me_ov2_body(
+        e,
+        this,
+        source,
+        (percent, second_amount),
+        (offset_a, offset_b),
+        locals,
+    );
+    e.mem.free(locals);
+}
+
+/// `fn_008a4af0` proper; `locals` is zeroed memory for the vectors and
+/// objects the exe keeps on its stack.
+fn hit_me_ov2_body(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    source: Ptr<Actor>,
+    (mut percent, second_amount): (f32, f32),
+    (offset_a, offset_b): (u32, u32),
+    locals: u32,
+) {
+    let first_point = locals;
+    let second_point = locals + 0x20;
+    let direction = locals + 0x40;
+    let temp_a = locals + 0x60;
+    let temp_b = locals + 0x80;
+    let subtract_temp = locals + 0xa0;
+    let scaled = locals + 0xc0;
+    let color = locals + 0xe0;
+    let color_temp = locals + 0x100;
+    let small_temp = locals + 0x120;
+    let copy_a = locals + 0x140;
+    let ray = locals + 0x160;
+    let ray_vector = locals + 0x180;
+    let scaled_second = locals + 0x1a0;
+    let copy_b = locals + 0x1c0;
+    let collision = e.call(ACTOR_COLLISION_OBJECT, &args![this]).u32();
+    if e.call(ACTOR_TEST_8ACE90, &args![this]).bool() {
+        return;
+    }
+    let first_name = e.call(MESSAGE_TEXT, &args![HIT_NAME_SOURCE_FIRST]).u32();
+    let found = e
+        .call(FIND_BY_NAME_4AAE30, &args![collision, first_name])
+        .u32();
+    let node = e.vcall(source.addr(), ACTOR_SLOT_1D0, &args![]).u32();
+    if node != 0 {
+        let rotation = e.call(NODE_ROTATION, &args![node]).u32();
+        let result = e
+            .call(MATRIX_TRANSFORM, &args![rotation, temp_a, offset_a])
+            .u32();
+        copy_vector(e, result, first_point);
+        let rotation = e.call(NODE_ROTATION, &args![node]).u32();
+        let result = e
+            .call(MATRIX_TRANSFORM, &args![rotation, temp_b, offset_b])
+            .u32();
+        copy_vector(e, result, second_point);
+    }
+    let result = e
+        .call(
+            VECTOR_SUBTRACT,
+            &args![second_point, subtract_temp, first_point],
+        )
+        .u32();
+    copy_vector(e, result, direction);
+    e.call(VECTOR_NORMALIZE, &args![direction]);
+    if found == 0 {
+        return;
+    }
+    if percent as f64 > e.global::<f64>(HIT_LIMIT_DOUBLE) {
+        percent = e.global::<f32>(HIT_LIMIT_FLOAT);
+    }
+    let high = hit_setting(e, HIT_SETTING_FIRST_A);
+    let low = hit_setting(e, HIT_SETTING_FIRST_B);
+    let span = (high as f64 - low as f64) as f32;
+    let step = span as f64 * percent as f64 * e.global::<f64>(HIT_PERCENT_SCALE);
+    let low = hit_setting(e, HIT_SETTING_FIRST_B);
+    let mut first = (low as f64 + step) as f32;
+    let high = hit_setting(e, HIT_SETTING_SECOND_A);
+    let low = hit_setting(e, HIT_SETTING_SECOND_B);
+    let span = (high as f64 - low as f64) as f32;
+    let step = span as f64 * second_amount as f64;
+    let low = hit_setting(e, HIT_SETTING_SECOND_B);
+    let second = (low as f64 + step) as f32;
+    if second_amount as f64 > e.global::<f64>(HIT_SECOND_CUTOFF) {
+        first = 0.0;
+    }
+    let zero = e.global::<f64>(HIT_ZERO_DOUBLE);
+    if first as f64 == zero && second as f64 == zero {
+        return;
+    }
+    let mut full_hit = true;
+    if this.addr() == e.global::<u32>(PLAYER_CHARACTER) {
+        full_hit = e.call(PLAYER_FIRST_PERSON_CHECK, &args![this]).bool();
+    }
+    if !e.vcall(this.addr(), ACTOR_SLOT_230, &args![]).bool() && full_hit {
+        let mut limb = 0u32;
+        let controller = e
+            .call(MOBILE_OBJECT_GET_CHAR_CONTROLLER, &args![this])
+            .u32();
+        if controller != 0 {
+            limb = e
+                .call(HIT_CONTROLLER_FLAG_8A5170, &args![controller + 0x410])
+                .u32()
+                & 0xff;
+        }
+        e.call(BLEND_CONTROLLER_DO_HIT, &args![found, 0.0f32, limb]);
+    }
+    if first as f64 != zero {
+        e.call(VECTOR_SCALE, &args![direction, scaled, first]);
+        if e.call(DEBUG_DRAW_LEVEL, &args![DEBUG_DRAW_SETTING]).u32() as i32 > 0 {
+            let zero_f = 0.0f32;
+            let one_f = 1.0f32;
+            e.call(
+                COLOR_CONSTRUCT,
+                &args![color, zero_f, zero_f, zero_f, zero_f],
+            );
+            let made = if e.vcall(source.addr(), ACTOR_SLOT_360, &args![]).bool() {
+                e.call(
+                    COLOR_CONSTRUCT,
+                    &args![color_temp, zero_f, zero_f, one_f, one_f],
+                )
+            } else {
+                e.call(
+                    COLOR_CONSTRUCT,
+                    &args![color_temp, one_f, zero_f, zero_f, one_f],
+                )
+            }
+            .u32();
+            for word in 0..4 {
+                let value = e.mem.u32(made + 4 * word);
+                e.mem.set_u32(color + 4 * word, value);
+            }
+            let width = e.global::<f32>(ARROW_WIDTH_SCALE);
+            let arrow_vector = e
+                .call(VECTOR_SCALE, &args![scaled, small_temp, width])
+                .u32();
+            let arrow = e.call(CREATE_DIR_ARROW, &args![arrow_vector, color]).u32();
+            e.call(DEBUG_OBJECT_SET_POSITION, &args![arrow, second_point]);
+            let seconds = e
+                .call(DEBUG_DRAW_DURATION_GETTER, &args![DEBUG_DRAW_DURATION])
+                .f32();
+            let tes = e.global::<u32>(TES_SINGLETON);
+            e.call(TES_ADD_TEMP_DEBUG_OBJECT, &args![tes, arrow, seconds]);
+        }
+        if full_hit {
+            // The exe constructs `copy_a`, `ray` and `ray_vector` with
+            // constructors (`006815c0`, `006240d0`) that do nothing.
+            e.call(VECTOR_COPY_553FC0, &args![copy_a, scaled]);
+            e.call(VECTOR_ASSIGN, &args![ray_vector, second_point]);
+            e.call(HIT_RAY_SET_VECTOR_8A50F0, &args![ray, ray_vector]);
+            let reach = e.global::<f32>(HIT_REACH);
+            e.call(HIT_RAY_SET_REACH_8A50D0, &args![ray, reach]);
+            let mut picked = 0u32;
+            let result = e.call(HIT_RAY_C806B0, &args![collision, ray, 0u32]).u32();
+            if result != 0 {
+                let proxy = e.call(HIT_RAY_RESULT_4AE750, &args![result]).u32();
+                let body = e.call(RIGID_BODY_REFERENCE_4B5A20, &args![proxy]).u32();
+                if body != 0 {
+                    picked = e.call(HIT_BODY_OBJECT_44DDC0, &args![body]).u32();
+                }
+            }
+            if picked == 0 {
+                let name = e.call(MESSAGE_TEXT, &args![HIT_NAME_SOURCE_FALLBACK]).u32();
+                picked = e.call(FIND_BY_NAME_4AAE30, &args![collision, name]).u32();
+            }
+            if picked != 0 {
+                let object = e.call(HIT_TEXT_SOURCE_413F40, &args![picked]).u32();
+                let text = e.call(HIT_NAME_STRING_43B1B0, &args![object]).u32();
+                e.call(ERROR_REPORT, &args![HIT_AT_FORMAT, text]);
+            }
+            e.call(HIT_APPLY_CB9320, &args![found, copy_a, picked]);
+        }
+    }
+    if second as f64 != zero && full_hit {
+        let one = e.global::<f64>(HIT_ONE_DOUBLE);
+        let x = (e.mem.f32(direction) as f64 + one) as f32;
+        e.mem.set_f32(direction, x);
+        let y = (e.mem.f32(direction + 4) as f64 + one) as f32;
+        e.mem.set_f32(direction + 4, y);
+        e.call(VECTOR_NORMALIZE, &args![direction]);
+        e.call(VECTOR_SCALE, &args![direction, scaled_second, first]);
+        e.call(VECTOR_COPY_553FC0, &args![copy_b, scaled_second]);
+        let word = e.call(HIT_GLOBAL_VALUE_8A5190, &args![]).u32();
+        let picked = e
+            .call(HIT_ACTOR_WORKER_571530, &args![this, collision, word])
+            .u32();
+        e.call(HIT_APPLY_CB9320, &args![found, copy_b, picked]);
+    }
+}
+
+/// Reads the `float` setting whose object is at `setting` (`00450410`).
+fn hit_setting(e: &mut Engine, setting: u32) -> f32 {
+    e.call(DEBUG_DRAW_DURATION_GETTER, &args![setting]).f32()
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -13920,6 +14210,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             ) -> f32
         ),
         entry!(0x0089a760, actor_hit_me(Ptr<Actor>, Ptr<HitData>, u8)),
+        entry!(
+            0x008a4af0,
+            actor_hit_me_ov2(Ptr<Actor>, Ptr<Actor>, f32, f32, u32, u32)
+        ),
     ]
 }
 
@@ -21878,5 +22172,231 @@ mod tests {
         e.set(world.hit, HitData::fPercentBlocked, 0.0);
         actor_hit_me(&mut e, world.victim, world.hit, 0);
         assert_eq!(call_count(&e, ACTOR_FN_88E8D0), 1);
+    }
+
+    /// Doubles for everything `actor_hit_me_ov2` calls and the exe data it
+    /// reads: the settings give `first = 100 * percent * 0.01` and
+    /// `second = 2 + 8 * second_amount`. Returns the actor that is hit and
+    /// the source actor (its slot `0x360` returns `blue`).
+    fn hit_ov2_setup(e: &mut Engine, blue: u32) -> (Ptr<Actor>, Ptr<Actor>) {
+        for (address, value) in [
+            (HIT_LIMIT_DOUBLE, 100.0f64),
+            (HIT_PERCENT_SCALE, 0.01),
+            (HIT_SECOND_CUTOFF, 75.0),
+            (HIT_ZERO_DOUBLE, 0.0),
+            (HIT_ONE_DOUBLE, 1.0),
+        ] {
+            e.map(address, 8);
+            e.set_global(address, value);
+        }
+        for (address, value) in [
+            (HIT_LIMIT_FLOAT, 100.0f32),
+            (HIT_REACH, 30.0),
+            (ARROW_WIDTH_SCALE, 0.1),
+        ] {
+            e.map(address, 4);
+            e.set_global(address, value);
+        }
+        e.map(TES_SINGLETON, 4);
+        e.set_global(TES_SINGLETON, 0x8300u32);
+        let this = actor_with(e, &[(ACTOR_SLOT_230, ret(0))], None);
+        let source = actor_with(
+            e,
+            &[(ACTOR_SLOT_1D0, ret(0x8100)), (ACTOR_SLOT_360, ret(blue))],
+            None,
+        );
+        let vector = e.mem.alloc(16);
+        e.mem.set_f32(vector, 1.0);
+        stub(e, ACTOR_COLLISION_OBJECT, 0x7000);
+        stub(e, ACTOR_TEST_8ACE90, 0);
+        stub(e, MESSAGE_TEXT, 0x7100);
+        stub(e, FIND_BY_NAME_4AAE30, 0x7200);
+        stub(e, NODE_ROTATION, 0x8200);
+        stub(e, MATRIX_TRANSFORM, vector);
+        stub(e, VECTOR_SUBTRACT, vector);
+        stub(e, VECTOR_SCALE, vector);
+        stub(e, DEBUG_DRAW_LEVEL, 0);
+        stub_with(e, COLOR_CONSTRUCT, |e, a| {
+            for i in 0..4 {
+                e.mem.set_u32(a[0] + 4 * i, a[1 + i as usize]);
+            }
+            ret(a[0])
+        });
+        stub(e, CREATE_DIR_ARROW, 0x8500);
+        stub(e, HIT_RAY_C806B0, 0);
+        stub(e, HIT_ACTOR_WORKER_571530, 0x7300);
+        stub(e, HIT_GLOBAL_VALUE_8A5190, 9);
+        stub(e, HIT_CONTROLLER_FLAG_8A5170, 1);
+        stub(e, MOBILE_OBJECT_GET_CHAR_CONTROLLER, 0);
+        stub(e, PLAYER_FIRST_PERSON_CHECK, 1);
+        stub(e, HIT_TEXT_SOURCE_413F40, 0x7400);
+        stub(e, HIT_NAME_STRING_43B1B0, 0x7500);
+        for address in [
+            BLEND_CONTROLLER_DO_HIT,
+            HIT_APPLY_CB9320,
+            ERROR_REPORT,
+            VECTOR_NORMALIZE,
+            VECTOR_COPY_553FC0,
+            VECTOR_ASSIGN,
+            HIT_RAY_SET_VECTOR_8A50F0,
+            HIT_RAY_SET_REACH_8A50D0,
+            DEBUG_OBJECT_SET_POSITION,
+            TES_ADD_TEMP_DEBUG_OBJECT,
+            HIT_RAY_RESULT_4AE750,
+            RIGID_BODY_REFERENCE_4B5A20,
+            HIT_BODY_OBJECT_44DDC0,
+        ] {
+            stub(e, address, 0);
+        }
+        stub_with(e, DEBUG_DRAW_DURATION_GETTER, |_, a| {
+            float_ret(match a[0] {
+                HIT_SETTING_FIRST_A => 100.0,
+                HIT_SETTING_SECOND_A => 10.0,
+                HIT_SETTING_SECOND_B => 2.0,
+                DEBUG_DRAW_DURATION => 4.5,
+                _ => 0.0,
+            })
+        });
+        (this, source)
+    }
+
+    #[test]
+    fn hit_me_ov2_applies_both_amounts() {
+        let mut e = engine();
+        let (this, source) = hit_ov2_setup(&mut e, 0);
+        e.call_log = Some(vec![]);
+        actor_hit_me_ov2(&mut e, this, source, 50.0, 0.5, 0x9000, 0x9100);
+        // The offsets are turned into points by the node of the source.
+        let transforms = calls_to(&e, MATRIX_TRANSFORM);
+        assert_eq!(transforms.len(), 2);
+        assert_eq!((transforms[0][2], transforms[1][2]), (0x9000, 0x9100));
+        // Played unless blocked: no controller, so the flag is zero.
+        assert_eq!(
+            calls_to(&e, BLEND_CONTROLLER_DO_HIT),
+            vec![vec![0x7200, 0, 0]]
+        );
+        // first = 100 * 50 * 0.01 = 50 scales the direction; the second
+        // section scales it by the same amount.
+        let scales = calls_to(&e, VECTOR_SCALE);
+        assert_eq!(scales.len(), 2);
+        assert_eq!(scales[0][2], 50.0f32.to_bits());
+        assert_eq!(scales[1][2], 50.0f32.to_bits());
+        // No hit from the ray: the fall-back lookup supplies the object.
+        assert_eq!(calls_to(&e, FIND_BY_NAME_4AAE30).len(), 2);
+        assert_eq!(
+            calls_to(&e, ERROR_REPORT),
+            vec![vec![HIT_AT_FORMAT, 0x7500]]
+        );
+        assert_eq!(
+            calls_to(&e, HIT_RAY_SET_REACH_8A50D0)[0][1],
+            30.0f32.to_bits()
+        );
+        let applied = calls_to(&e, HIT_APPLY_CB9320);
+        assert_eq!(applied.len(), 2);
+        assert_eq!((applied[0][0], applied[0][2]), (0x7200, 0x7200));
+        assert_eq!((applied[1][0], applied[1][2]), (0x7200, 0x7300));
+        assert_eq!(
+            calls_to(&e, HIT_ACTOR_WORKER_571530),
+            vec![vec![this.addr(), 0x7000, 9]]
+        );
+        assert_eq!(call_count(&e, DEBUG_DRAW_LEVEL), 1);
+        assert_eq!(call_count(&e, CREATE_DIR_ARROW), 0);
+    }
+
+    #[test]
+    fn hit_me_ov2_ray_hit_and_debug_arrow() {
+        let mut e = engine();
+        let (this, source) = hit_ov2_setup(&mut e, 1);
+        stub(&mut e, DEBUG_DRAW_LEVEL, 1);
+        stub(&mut e, HIT_RAY_C806B0, 0x6000);
+        stub(&mut e, HIT_RAY_RESULT_4AE750, 0x6100);
+        stub(&mut e, RIGID_BODY_REFERENCE_4B5A20, 0x6200);
+        stub(&mut e, HIT_BODY_OBJECT_44DDC0, 0x6300);
+        // A controller whose member test is true: the limb flag is passed.
+        stub(&mut e, MOBILE_OBJECT_GET_CHAR_CONTROLLER, 0x6400);
+        e.call_log = Some(vec![]);
+        // A second amount above 75 clears the first one: only the second
+        // section scales, by the cleared first amount.
+        actor_hit_me_ov2(&mut e, this, source, 500.0, 100.0, 0x9000, 0x9100);
+        assert_eq!(
+            calls_to(&e, BLEND_CONTROLLER_DO_HIT),
+            vec![vec![0x7200, 0, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, HIT_CONTROLLER_FLAG_8A5170),
+            vec![vec![0x6400 + 0x410]]
+        );
+        assert_eq!(call_count(&e, CREATE_DIR_ARROW), 0);
+        assert_eq!(call_count(&e, HIT_RAY_C806B0), 0);
+        let scales = calls_to(&e, VECTOR_SCALE);
+        assert_eq!(scales.len(), 1);
+        assert_eq!(scales[0][2], 0);
+
+        // With a percentage the ray runs, the arrow is blue and the body
+        // found by the ray is the object hit.
+        e.call_log = Some(vec![]);
+        actor_hit_me_ov2(&mut e, this, source, 500.0, 0.0, 0x9000, 0x9100);
+        // The percentage is limited to 100: first = 100.
+        let scales = calls_to(&e, VECTOR_SCALE);
+        assert_eq!(scales[0][2], 100.0f32.to_bits());
+        let arrow = calls_to(&e, CREATE_DIR_ARROW);
+        assert_eq!(arrow.len(), 1);
+        let color = arrow[0][1];
+        assert_eq!(
+            [e.mem.f32(color), e.mem.f32(color + 4), e.mem.f32(color + 8)],
+            [0.0, 0.0, 1.0]
+        );
+        assert_eq!(calls_to(&e, HIT_BODY_OBJECT_44DDC0), vec![vec![0x6200]]);
+        assert_eq!(calls_to(&e, HIT_APPLY_CB9320)[0][2], 0x6300);
+        assert_eq!(call_count(&e, ERROR_REPORT), 1);
+        assert_eq!(
+            calls_to(&e, TES_ADD_TEMP_DEBUG_OBJECT),
+            vec![vec![0x8300, 0x8500, 4.5f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn hit_me_ov2_stops_early() {
+        // Blocked by 008ace90: nothing else runs.
+        let mut e = engine();
+        let (this, source) = hit_ov2_setup(&mut e, 0);
+        stub(&mut e, ACTOR_TEST_8ACE90, 1);
+        e.call_log = Some(vec![]);
+        actor_hit_me_ov2(&mut e, this, source, 50.0, 0.5, 0, 0);
+        assert_eq!(call_count(&e, FIND_BY_NAME_4AAE30), 0);
+        // Nothing found: the vectors are still worked out, then it ends.
+        stub(&mut e, ACTOR_TEST_8ACE90, 0);
+        stub(&mut e, FIND_BY_NAME_4AAE30, 0);
+        e.call_log = Some(vec![]);
+        actor_hit_me_ov2(&mut e, this, source, 50.0, 0.5, 0, 0);
+        assert_eq!(call_count(&e, VECTOR_NORMALIZE), 1);
+        assert_eq!(call_count(&e, BLEND_CONTROLLER_DO_HIT), 0);
+        // A zero first amount still plays the hit for the second one.
+        stub(&mut e, FIND_BY_NAME_4AAE30, 0x7200);
+        e.call_log = Some(vec![]);
+        actor_hit_me_ov2(&mut e, this, source, 0.0, 0.0, 0, 0);
+        assert_eq!(call_count(&e, BLEND_CONTROLLER_DO_HIT), 1);
+        // Both amounts zero: nothing is applied.
+        stub_with(&mut e, DEBUG_DRAW_DURATION_GETTER, |_, _| float_ret(0.0));
+        e.call_log = Some(vec![]);
+        actor_hit_me_ov2(&mut e, this, source, 50.0, 0.5, 0, 0);
+        assert_eq!(call_count(&e, BLEND_CONTROLLER_DO_HIT), 0);
+        assert_eq!(call_count(&e, HIT_APPLY_CB9320), 0);
+    }
+
+    #[test]
+    fn hit_me_ov2_player_failing_the_check() {
+        let mut e = engine();
+        let (this, source) = hit_ov2_setup(&mut e, 0);
+        set_player(&mut e, this);
+        stub(&mut e, PLAYER_FIRST_PERSON_CHECK, 0);
+        stub(&mut e, DEBUG_DRAW_LEVEL, 1);
+        e.call_log = Some(vec![]);
+        actor_hit_me_ov2(&mut e, this, source, 50.0, 0.5, 0, 0);
+        // No blend hit and no ray; the debug arrow is still drawn.
+        assert_eq!(call_count(&e, BLEND_CONTROLLER_DO_HIT), 0);
+        assert_eq!(call_count(&e, HIT_RAY_C806B0), 0);
+        assert_eq!(call_count(&e, HIT_APPLY_CB9320), 0);
+        assert_eq!(call_count(&e, CREATE_DIR_ARROW), 1);
     }
 }
