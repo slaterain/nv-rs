@@ -1370,6 +1370,1132 @@ pub fn fn_0086c0d0(e: &mut Engine) -> f32 {
     e.call(0x0045_0410, &args![0x011c_774cu32]).f32()
 }
 
+// ---------------------------------------------------------------------------------------------
+// The `Main` object (`0086c160`), its task queues and the start-up of the game's world
+// (`0086c0e0` - `0086e580`).
+// ---------------------------------------------------------------------------------------------
+
+/// Allocates a block for a scene-graph object (cdecl, size).
+const ALLOCATE_SCENE_OBJECT: u32 = 0x00aa_13e0;
+/// Reads the pointer held by the object it is called on (`this`, no argument).
+const POINTER_GET: u32 = 0x0055_9450;
+/// Assigns the pointer held by the object it is called on (`this`, the new pointer).
+const POINTER_SET: u32 = 0x0066_b0d0;
+/// A scope object (4 bytes, a local of the caller): `00404eb0` constructs it with a category,
+/// a flag, the source file name and a line; `00404f70` ends it and `00404ee0` ends and
+/// destroys it ([`scope_begin`] starts it again).
+const SCOPE_CONSTRUCT: u32 = 0x0040_4eb0;
+const SCOPE_END: u32 = 0x0040_4f70;
+const SCOPE_DESTROY: u32 = 0x0040_4ee0;
+/// `CreateSemaphoreA`, called by the address of its import slot.
+const API_CREATE_SEMAPHORE: u32 = 0x00fd_f0b4;
+/// Bits of `1.0f` and `0.0f`, as the game pushes them on the stack.
+const FLOAT_ONE: u32 = 0x3f80_0000;
+const FLOAT_ZERO: u32 = 0;
+
+/// Global: the task object (0x1C04 bytes, built by `00a22660`) of [`fn_0086c790`].
+const TASK_OBJECT: u32 = 0x011f_35cc;
+/// Global: an object whose slot 0 (a deleting destructor) [`fn_0086cd80`] calls when its byte
+/// at +4 is 0.
+const SHUTDOWN_OBJECT: u32 = 0x0120_2d74;
+/// Globals set by [`main_init_scene_graph`] and read by [`main_init_tes`].
+const TES_OBJECT: u32 = 0x011d_ea10;
+const LOD_ROOT_NODE: u32 = 0x011d_ea14;
+const OBJECT_LOD_ROOT_NODE: u32 = 0x011d_ea18;
+const WATER_LOD_NODE: u32 = 0x011d_ea1c;
+const SKY_OBJECT: u32 = 0x011d_ea20;
+const SCENE_FLAG_BYTE: u32 = 0x011d_ea28;
+const PLAYER_OBJECT: u32 = 0x011d_ea3c;
+/// Holders (objects that keep one pointer, read with [`POINTER_GET`]) of the scene graph.
+const SCENE_GRAPH_HOLDER: u32 = 0x011d_eb7c;
+const FOG_HOLDER: u32 = 0x011d_eb00;
+const SKY_NODE_HOLDER: u32 = 0x011d_eb34;
+const WEATHER_NODE_HOLDER: u32 = 0x011d_eda4;
+const PARTICLE_SYSTEMS_HOLDER: u32 = 0x011d_ed58;
+const SCREEN_ELEMENT_HOLDER: u32 = 0x011d_ec94;
+const SCREEN_TEXTURE_HOLDER: u32 = 0x011d_ed3c;
+/// A holder `0086c880` clears besides the scene-graph ones above.
+const CLEARED_HOLDER: u32 = 0x011d_6e5c;
+/// Tables of heap objects (pointers; zero when absent) with their element counts, destroyed
+/// one by one by [`fn_0086c880`] through slot 0 of their vtables (the deleting destructor).
+const OBJECT_TABLES: [(u32, u32); 9] = [
+    (0x011d_5730, 4),
+    (0x011d_52f0, 0xee),
+    (0x011d_5240, 9),
+    (0x011d_51b0, 8),
+    (0x011d_51d0, 0x1c),
+    (0x011d_5128, 0xe),
+    (0x011d_5160, 0x14),
+    (0x011d_5268, 0x22),
+    (0x011d_56a8, 0x22),
+];
+/// The "processor count" setting (a setting object whose value [`SETTING_INT_PTR`] points at).
+const PROCESSOR_COUNT_SETTING: u32 = 0x011c_3ea4;
+
+/// Allocates `size` bytes with `allocator` (cdecl) and, when that worked, constructs the object
+/// there with `construct(block)`, which returns the object. Returns 0 when the allocation
+/// failed.
+fn allocate_and_construct(
+    e: &mut Engine,
+    allocator: u32,
+    size: u32,
+    construct: impl FnOnce(&mut Engine, u32) -> u32,
+) -> u32 {
+    let block = e.call(allocator, &args![size]).u32();
+    if block == 0 {
+        0
+    } else {
+        construct(e, block)
+    }
+}
+
+/// The pointer held by `holder`.
+fn pointer_get(e: &mut Engine, holder: u32) -> u32 {
+    e.call(POINTER_GET, &args![holder]).u32()
+}
+
+/// Makes `holder` hold `value`.
+fn pointer_set(e: &mut Engine, holder: u32, value: u32) {
+    e.call(POINTER_SET, &args![holder, value]);
+}
+
+/// Names `object` (`00a5b950`) with a temporary 4-byte name object built from the text at
+/// `text` (`00438170`, destroyed again by `004381b0`). `object` is evaluated after the name is
+/// built, as the game does.
+fn name_object(e: &mut Engine, text: u32, object: impl FnOnce(&mut Engine) -> u32) {
+    e.with_stack(4, |e, name| {
+        let built = e.call(0x0043_8170, &args![name, text]).u32();
+        let target = object(e);
+        e.call(0x00a5_b950, &args![target, built]);
+        e.call(0x0043_81b0, &args![name]);
+    });
+}
+
+/// Logs a start-up message (`Error`, cdecl, one argument).
+fn log_message(e: &mut Engine, text: u32) {
+    e.call(ERROR_LOG, &args![text]);
+}
+
+// Translated from 0086c0e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the float setting at `011c7314` (through `00450410`).
+pub fn fn_0086c0e0(e: &mut Engine) -> f32 {
+    e.call(0x0045_0410, &args![0x011c_7314u32]).f32()
+}
+
+// Translated from 0086c0f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the float setting at `011c768c` (through `00450410`).
+pub fn fn_0086c0f0(e: &mut Engine) -> f32 {
+    e.call(0x0045_0410, &args![0x011c_768cu32]).f32()
+}
+
+// Translated from 0086c100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the float setting at `011c7758` (through `00450410`).
+pub fn fn_0086c100(e: &mut Engine) -> f32 {
+    e.call(0x0045_0410, &args![0x011c_7758u32]).f32()
+}
+
+// Translated from 0086c110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the float setting at `011c75bc` (through `00450410`).
+pub fn fn_0086c110(e: &mut Engine) -> f32 {
+    e.call(0x0045_0410, &args![0x011c_75bcu32]).f32()
+}
+
+// Translated from 0086c120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the float setting at `011c7458` (through `00450410`).
+pub fn fn_0086c120(e: &mut Engine) -> f32 {
+    e.call(0x0045_0410, &args![0x011c_7458u32]).f32()
+}
+
+// Translated from 0086c130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the float setting at `011c74a0` (through `00450410`).
+pub fn fn_0086c130(e: &mut Engine) -> f32 {
+    e.call(0x0045_0410, &args![0x011c_74a0u32]).f32()
+}
+
+// Translated from 0086c140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a float in the global at `011ff8ac`.
+pub fn fn_0086c140(e: &mut Engine, value: f32) {
+    e.set_global(0x011f_f8ac, value);
+}
+
+// Translated from 0086c150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a float in the global at `011ff8b0`.
+pub fn fn_0086c150(e: &mut Engine, value: f32) {
+    e.set_global(0x011f_f8b0, value);
+}
+
+// Translated from 0086c160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Main::Main` (Xbox PDB): constructs the `Main` object (0xA4 bytes) at `this`; `window` and
+/// `instance` are kept at +8 and +0xC. Two task-queue pairs are built first (a base object at
+/// +0x18 / +0x50 and a semaphore-guarded queue at +0x28 / +0x60 over it, [`fn_0086c620`]),
+/// then six pointer holders at +0x88 .. +0xA0 (`00633c90`) and seven flag bytes at +1 .. +7 are
+/// cleared, as is the holder at `011dec64`. Five accumulator objects (0x280 bytes, `00b660d0`)
+/// go into the holders at +0x88 (arguments 0x63, 1, 0x2f7), +0x8C and +0x90 (the same, each
+/// then given two settings, `004a1040(0xC)` and `00936aa0(1)`), +0x94 (0x64, 1, 4;
+/// `004a1040(0xD)`) and +0x98 (0x63, 1, 0x2f7); the byte at +0x9C is cleared and the holder at
+/// +0xA0 gets an object built by `00a712f0` (0x114 bytes). With more than one processor the two
+/// queues are started (`0087b8d0`, then [`bs_packed_task_queue_thread_begin_input`] on each).
+/// Then the thread id (`0040fc90`), the window and the instance are stored (+0x10, +8, +0xC;
+/// +0x14 is cleared), the thread is named (`00aa2740`, "Main"), the task object
+/// ([`fn_0086c790`]), the object `007fdf30` returns (`00a22ef0`) and the audio set-up
+/// ([`fn_0086ce40`]) follow, each inside a scope object. Returns `this`. (The SEH frame of the
+/// original is not translated.)
+pub fn main_main(e: &mut Engine, this: Ptr, window: u32, instance: u32) -> Ptr {
+    let base = this.addr();
+    e.call(0x00aa_53f0, &args![base + 0x18]);
+    fn_0086c620(e, Ptr::new(base + 0x28), base + 0x18, 0x0087_b990);
+    e.call(0x00aa_53f0, &args![base + 0x50]);
+    fn_0086c620(e, Ptr::new(base + 0x60), base + 0x50, 0x0087_b990);
+    for offset in [0x88u32, 0x8c, 0x90, 0x94, 0x98, 0xa0] {
+        e.call(0x0063_3c90, &args![base + offset, 0u32]);
+    }
+    for offset in 1..=7u32 {
+        e.mem.set_u8(base + offset, 0);
+    }
+    pointer_set(e, 0x011d_ec64, 0);
+
+    let accumulator = |e: &mut Engine, kind: u32, third: u32| {
+        allocate_and_construct(e, ALLOCATE_SCENE_OBJECT, 0x280, |e, block| {
+            e.call(0x00b6_60d0, &args![block, kind, 1u32, third]).u32()
+        })
+    };
+    let object = accumulator(e, 0x63, 0x2f7);
+    pointer_set(e, base + 0x88, object);
+
+    let object = accumulator(e, 0x63, 0x2f7);
+    pointer_set(e, base + 0x8c, object);
+    let held = pointer_get(e, base + 0x8c);
+    e.call(0x004a_1040, &args![held, 0xcu32]);
+    let held = pointer_get(e, base + 0x8c);
+    e.call(0x0093_6aa0, &args![held, 1u32]);
+
+    let object = accumulator(e, 0x63, 0x2f7);
+    pointer_set(e, base + 0x90, object);
+    let held = pointer_get(e, base + 0x90);
+    e.call(0x004a_1040, &args![held, 0xcu32]);
+    let held = pointer_get(e, base + 0x90);
+    e.call(0x0093_6aa0, &args![held, 1u32]);
+
+    let object = accumulator(e, 0x64, 4);
+    pointer_set(e, base + 0x94, object);
+    let held = pointer_get(e, base + 0x94);
+    e.call(0x004a_1040, &args![held, 0xdu32]);
+
+    let object = accumulator(e, 0x63, 0x2f7);
+    pointer_set(e, base + 0x98, object);
+    e.mem.set_u8(base + 0x9c, 0);
+
+    let object = allocate_and_construct(e, ALLOCATE_SCENE_OBJECT, 0x114, |e, block| {
+        e.call(0x00a7_12f0, &args![block]).u32()
+    });
+    pointer_set(e, base + 0xa0, object);
+
+    let count = e
+        .call(SETTING_INT_PTR, &args![PROCESSOR_COUNT_SETTING])
+        .u32();
+    if e.mem.i32(count) > 1 {
+        e.call(0x0087_b8d0, &args![base + 0x28, base + 0x60]);
+        bs_packed_task_queue_thread_begin_input(e, Ptr::new(base + 0x28));
+        bs_packed_task_queue_thread_begin_input(e, Ptr::new(base + 0x60));
+    }
+    // The setting is looked up once more and the result is not used.
+    e.call(SETTING_INT_PTR, &args![PROCESSOR_COUNT_SETTING]);
+    let thread = e.call(0x0040_fc90, &args![]).u32();
+    e.mem.set_u32(base + 0x10, thread);
+    e.mem.set_u32(base + 8, window);
+    e.mem.set_u32(base + 0xc, instance);
+    e.mem.set_u32(base + 0x14, 0);
+    e.call(0x00aa_2740, &args![thread, 0x0105_c2b0u32]);
+
+    e.with_stack(4, |e, scope| {
+        let scope = scope.addr();
+        e.call(
+            SCOPE_CONSTRUCT,
+            &args![scope, 0xdu32, 1u32, 0x0108_29c4u32, 0xdc6u32],
+        );
+        fn_0086c790(e, instance);
+        let object = e.call(0x007f_df30, &args![]).u32();
+        e.call(0x00a2_2ef0, &args![object]);
+        e.call(SCOPE_END, &args![scope]);
+        scope_begin(e, scope, 0xb, 0xdd5);
+        fn_0086ce40(e, this);
+        e.call(SCOPE_END, &args![scope]);
+        e.call(SCOPE_DESTROY, &args![scope]);
+    });
+    this
+}
+
+// Translated from 0086c600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSPackedTaskQueue::ThreadBeginInput` (Xbox PDB): releases the semaphore wrapper at +0x14
+/// (`00442550`).
+pub fn bs_packed_task_queue_thread_begin_input(e: &mut Engine, this: Ptr) {
+    e.call(0x0044_2550, &args![this.addr() + 0x14]);
+}
+
+// Translated from 0086c620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs a semaphore-guarded task queue at `this`: the base part from `base`
+/// (`00877a80`), the semaphore wrapper at +0x14 with 0 as initial count and 100 as maximum
+/// ([`fn_0086c6a0`]), `value` at +0x20 and the byte at +0x24 cleared. Returns `this`. (The SEH
+/// frame is not translated.)
+pub fn fn_0086c620(e: &mut Engine, this: Ptr, base: u32, value: u32) -> Ptr {
+    e.call(0x0087_7a80, &args![this, base]);
+    fn_0086c6a0(e, Ptr::new(this.addr() + 0x14), 0, 100);
+    e.mem.set_u32(this.addr() + 0x20, value);
+    e.mem.set_u8(this.addr() + 0x24, 0);
+    this
+}
+
+// Translated from 0086c6a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs a semaphore wrapper at `this`: the initial count at +0, the handle at +4 (from
+/// `CreateSemaphoreA(NULL, initial, maximum, NULL)`) and the maximum count at +8. Returns
+/// `this`.
+pub fn fn_0086c6a0(e: &mut Engine, this: Ptr, initial: u32, maximum: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), initial);
+    e.mem.set_u32(this.addr() + 8, maximum);
+    let handle = e
+        .call(API_CREATE_SEMAPHORE, &args![0u32, initial, maximum, 0u32])
+        .u32();
+    e.mem.set_u32(this.addr() + 4, handle);
+    this
+}
+
+// Translated from 0086c6e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys a task queue made by [`fn_0086c620`]: drains it ([`fn_0086c750`]), runs the
+/// destructor of the semaphore wrapper at +0x14 (`0055a2d0`) and then the base destructor
+/// (`00877ac0`). The SEH frame of the original is not translated.
+pub fn fn_0086c6e0(e: &mut Engine, this: Ptr) {
+    fn_0086c750(e, this);
+    e.call(0x0055_a2d0, &args![this.addr() + 0x14]);
+    e.call(0x0087_7ac0, &args![this]);
+}
+
+// Translated from 0086c750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls slot 0x10 of the queue's vtable with the address of a 32-byte local until it answers
+/// false. The stack-cookie check is not translated.
+pub fn fn_0086c750(e: &mut Engine, this: Ptr) {
+    e.with_stack(32, |e, entry| {
+        while e.vcall(this.addr(), 0x10, &args![entry]).bool() {}
+    });
+}
+
+// Translated from 0086c790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Replaces the task object at `011f35cc`: the old one is destroyed ([`fn_0086c850`], flag
+/// set) and a new 0x1C04-byte one built with `00a22660(argument)`; a failed allocation leaves
+/// 0. (The SEH frame is not translated.)
+pub fn fn_0086c790(e: &mut Engine, argument: u32) {
+    let old = e.global::<u32>(TASK_OBJECT);
+    if old != 0 {
+        fn_0086c850(e, Ptr::new(old), 1);
+    }
+    let created = allocate_and_construct(e, ALLOCATE_OBJECT, 0x1c04, |e, block| {
+        e.call(0x00a2_2660, &args![block, argument]).u32()
+    });
+    e.set_global(TASK_OBJECT, created);
+}
+
+// Translated from 0086c850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Deleting destructor of the task object of [`fn_0086c790`]: body `00a22bf0`, free when bit 0
+/// of `flags` is set; returns `this`.
+pub fn fn_0086c850(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    deleting_destructor(e, 0x00a2_2bf0, this, flags)
+}
+
+// Translated from 0086c880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of `Main` (its deleting destructor is [`fn_0086bf40`]): `00af5820`, then
+/// `00a22e10` on the object `007fdf30` returns; the globals `011dea14`, `011dea18` and
+/// `011dea1c` are cleared; the task object is destroyed ([`fn_0086cdf0`]); `00483710` acts
+/// on the scene graph; eight holders are cleared; [`fn_0086cd80`] runs. Then every non-null
+/// object of the nine tables [`OBJECT_TABLES`] is destroyed through slot 0 of its vtable with
+/// flag 1. With more than one processor the two queues are waited on ([`fn_0086cdd0`] at +0x28
+/// and +0x60) and `0087b950` runs. The holders at +0x88, +0x8C, +0x94, +0x98 and +0xA0 are
+/// cleared and all six holders (+0xA0 down to +0x88) destroyed (`0045cec0`); finally the queue
+/// at +0x60 ([`fn_0086c6e0`]), the base at +0x50 (`00aa5460`), the queue at +0x28 and the base
+/// at +0x18.
+pub fn fn_0086c880(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(0x00af_5820, &args![]);
+    let object = e.call(0x007f_df30, &args![]).u32();
+    e.call(0x00a2_2e10, &args![object]);
+    e.set_global(LOD_ROOT_NODE, 0u32);
+    e.set_global(OBJECT_LOD_ROOT_NODE, 0u32);
+    e.set_global(WATER_LOD_NODE, 0u32);
+    fn_0086cdf0(e);
+    let held = pointer_get(e, SCENE_GRAPH_HOLDER);
+    e.call(0x0048_3710, &args![held]);
+    for holder in [
+        SCENE_GRAPH_HOLDER,
+        CLEARED_HOLDER,
+        SKY_NODE_HOLDER,
+        WEATHER_NODE_HOLDER,
+        PARTICLE_SYSTEMS_HOLDER,
+        FOG_HOLDER,
+        SCREEN_TEXTURE_HOLDER,
+        SCREEN_ELEMENT_HOLDER,
+    ] {
+        pointer_set(e, holder, 0);
+    }
+    fn_0086cd80(e);
+    for (table, count) in OBJECT_TABLES {
+        for index in 0..count {
+            let object = e.mem.u32(table + index * 4);
+            if object != 0 {
+                e.vcall(object, 0, &args![1u32]);
+            }
+        }
+    }
+    let count = e
+        .call(SETTING_INT_PTR, &args![PROCESSOR_COUNT_SETTING])
+        .u32();
+    if e.mem.i32(count) > 1 {
+        fn_0086cdd0(e, Ptr::new(base + 0x28));
+        fn_0086cdd0(e, Ptr::new(base + 0x60));
+        e.call(0x0087_b950, &args![]);
+    }
+    for offset in [0x88u32, 0x8c, 0x94, 0x98, 0xa0] {
+        pointer_set(e, base + offset, 0);
+    }
+    for offset in [0xa0u32, 0x98, 0x94, 0x90, 0x8c, 0x88] {
+        e.call(0x0045_cec0, &args![base + offset]);
+    }
+    fn_0086c6e0(e, Ptr::new(base + 0x60));
+    e.call(0x00aa_5460, &args![base + 0x50]);
+    fn_0086c6e0(e, Ptr::new(base + 0x28));
+    e.call(0x00aa_5460, &args![base + 0x18]);
+}
+
+// Translated from 0086cd80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the object at `01202d74` exists and its byte at +4 is 0, calls its slot 0 with 1 (a
+/// deleting destructor).
+pub fn fn_0086cd80(e: &mut Engine) {
+    let object = e.global::<u32>(SHUTDOWN_OBJECT);
+    if object != 0 && e.mem.u8(object + 4) == 0 {
+        let object = e.global::<u32>(SHUTDOWN_OBJECT);
+        if object != 0 {
+            e.vcall(object, 0, &args![1u32]);
+        }
+    }
+}
+
+// Translated from 0086cdd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Waits on the semaphore wrapper at +0x14 of the queue (`004424e0`).
+pub fn fn_0086cdd0(e: &mut Engine, this: Ptr) {
+    e.call(0x0044_24e0, &args![this.addr() + 0x14]);
+}
+
+// Translated from 0086cdf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the task object at `011f35cc` ([`fn_0086c850`] with flag 1) if there is one and
+/// clears the global.
+pub fn fn_0086cdf0(e: &mut Engine) {
+    let object = e.global::<u32>(TASK_OBJECT);
+    if object != 0 {
+        fn_0086c850(e, Ptr::new(object), 1);
+    }
+    e.set_global(TASK_OBJECT, 0u32);
+}
+
+// Translated from 0086ce40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Audio set-up of `Main`: `00aea020`, then six callbacks are registered on the object
+/// `00453a70` returns (`0050f9c0` with `0082d150`, `007037c0` with `0082d280`, `0061cc40` with
+/// `005e3630`, [`fn_0086cf00`] with `0082d400`, `005f4bb0` with `00832c40`, `008d7dc0` with
+/// `00832c80`), its slot 0xC is called with `0082d740`, its slot 4 with the word at +8 of the
+/// `Main` object, and `0082f830` runs.
+pub fn fn_0086ce40(e: &mut Engine, this: Ptr) {
+    e.call(0x00ae_a020, &args![]);
+    for (callee, callback) in [
+        (0x0050_f9c0u32, 0x0082_d150u32),
+        (0x0070_37c0, 0x0082_d280),
+        (0x0061_cc40, 0x005e_3630),
+    ] {
+        let audio = e.call(0x0045_3a70, &args![]).u32();
+        e.call(callee, &args![audio, callback]);
+    }
+    let audio = e.call(0x0045_3a70, &args![]).u32();
+    fn_0086cf00(e, Ptr::new(audio), 0x0082_d400);
+    for (callee, callback) in [(0x005f_4bb0u32, 0x0083_2c40u32), (0x008d_7dc0, 0x0083_2c80)] {
+        let audio = e.call(0x0045_3a70, &args![]).u32();
+        e.call(callee, &args![audio, callback]);
+    }
+    let audio = e.call(0x0045_3a70, &args![]).u32();
+    e.vcall(audio, 0xc, &args![0x0082_d740u32]);
+    let audio = e.call(0x0045_3a70, &args![]).u32();
+    let word = e.mem.u32(this.addr() + 8);
+    e.vcall(audio, 4, &args![word]);
+    e.call(0x0082_f830, &args![]);
+}
+
+// Translated from 0086cf00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` at +0x2C of the object.
+pub fn fn_0086cf00(e: &mut Engine, this: Ptr, value: u32) {
+    e.mem.set_u32(this.addr() + 0x2c, value);
+}
+
+// Translated from 0086cf20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Main::InitTES` (Xbox PDB): builds the `TES` object and loads the game's data, logging each
+/// step. `node` is the object that gets `00a5a040` and a 12-byte value built by `0043d410(0.0,
+/// 0, 0)` handed to `00a59c60` (the call order of the original).
+///
+/// In order: the sky object (`0046dd00`, kept at `011dea20`) and `00877730`; the helper object
+/// `007a1480` returns (if any, it is given to the sky object, `004505a0` / `00a89af0`, and
+/// replaced by the result of slot 0xC of the object `0045bc00(helper, 0)` returns, or 0); the
+/// `TES` object (0xC4 bytes, `0044fb20` with `010724e8`, the value [`fn_0086d470`] returns, the
+/// helper, the sky object and `011dea1c`) is kept at `011dea10`; tree manager, tasklet
+/// threads; the ten file-name holders are looked up (`00403df0` text, `00464f30`, then
+/// `00462f40` on `011c3f2c`) and each file found is activated (`00471d00(file, 1)`); the
+/// plugins list is read (`00872430`) and when neither gave a file `Fallout.esm` is activated;
+/// the player object (0xE50 bytes, `00938180`) is built into `011dea3c` and its slot 0x128 is
+/// called with (0x14, 1); files, addon nodes and forms are loaded; the player is given its
+/// object reference (`00575690` with the dynamic cast of `004839c0(7)` to the type at
+/// `01183a1c`), its slot 0x2a8 gets a value built by `00416870`, `0086d490` and slot 0x88
+/// run, `008c26e0(0)` is called, and when its object at +0xA4 answers 0 to slot 8 with 0x10 the
+/// "Health value is 0" error is logged with the file name of the reference. Finally the scripts
+/// are initialised (`00465040`) and, when the setting object at `011dee60` holds a value
+/// between 1 and 199, [`fn_0086d4c0`] on the timer is given that setting's value. The whole
+/// body is inside a scope object. The SEH frame is not translated.
+pub fn main_init_tes(e: &mut Engine, this: Ptr, node: u32) {
+    e.with_stack(4, |e, scope| {
+        init_tes_body(e, this.addr(), node, scope.addr())
+    });
+}
+
+/// The ten file-name holders [`main_init_tes`] walks.
+const FILE_NAME_HOLDERS: [u32; 10] = [
+    0x011d_ebf0,
+    0x011d_eb88,
+    0x011d_ecf8,
+    0x011d_ee9c,
+    0x011d_ec34,
+    0x011d_ee0c,
+    0x011d_ed14,
+    0x011d_ee48,
+    0x011d_ea70,
+    0x011d_ed48,
+];
+/// The data handler (`011c3f2c`) whose method `00462f40(name)` finds a file.
+const DATA_HANDLER: u32 = 0x011c_3f2c;
+/// The pointer to the plugins list file name used by [`main_init_tes`].
+const PLUGINS_LIST_NAME: u32 = 0x011a_2ffc;
+
+fn init_tes_body(e: &mut Engine, this: u32, node: u32, scope: u32) {
+    e.call(
+        SCOPE_CONSTRUCT,
+        &args![scope, 0xau32, 1u32, 0x0108_29c4u32, 0xe4fu32],
+    );
+    scope_begin(e, scope, 0xa, 0xe51);
+    let sky = e.call(0x0046_dd00, &args![]).u32();
+    e.set_global(SKY_OBJECT, sky);
+    e.call(0x0087_7730, &args![]);
+    let tes_argument = fn_0086d470(e);
+    let mut helper = e.call(0x007a_1480, &args![]).u32();
+    if helper != 0 {
+        let sky = e.global::<u32>(SKY_OBJECT);
+        let result = e.call(0x0045_05a0, &args![sky]).u32();
+        e.call(0x00a8_9af0, &args![result, helper]);
+        let object = e.call(0x0045_bc00, &args![helper, 0u32]).u32();
+        helper = if object != 0 {
+            e.vcall(object, 0xc, &args![]).u32()
+        } else {
+            0
+        };
+    }
+    log_message(e, 0x0108_2be8);
+    let tes = allocate_and_construct(e, ALLOCATE_OBJECT, 0xc4, |e, block| {
+        let sky = e.global::<u32>(SKY_OBJECT);
+        let water_lod = e.global::<u32>(WATER_LOD_NODE);
+        e.call(
+            0x0044_fb20,
+            &args![block, 0x0107_24e8u32, tes_argument, helper, sky, water_lod],
+        )
+        .u32()
+    });
+    e.set_global(TES_OBJECT, tes);
+    e.call(SCOPE_END, &args![scope]);
+    let tes = e.global::<u32>(TES_OBJECT);
+    e.call(0x0045_0c50, &args![tes]);
+    log_message(e, 0x0108_2bcc);
+    e.call(0x0066_4870, &args![0u32]);
+    log_message(e, 0x0108_2bac);
+    let tasklets = e.call(0x00b0_0a00, &args![]).u32();
+    e.call(0x00b0_0df0, &args![tasklets]);
+    e.call(0x0052_6e10, &args![]);
+    e.call(0x0099_0f20, &args![]);
+    scope_begin(e, scope, 0x19, 0xe85);
+    e.call(0x00a5_a040, &args![node]);
+    e.with_stack(12, |e, value| {
+        e.call(0x0043_d410, &args![value, FLOAT_ZERO, 0u32, 0u32]);
+        e.call(0x00a5_9c60, &args![node, value]);
+    });
+    e.call(SCOPE_END, &args![scope]);
+
+    let mut found_file = false;
+    for holder in FILE_NAME_HOLDERS {
+        if e.call(GET_POOLED_TEXT, &args![holder]).u32() != 0 {
+            let text = e.call(GET_POOLED_TEXT, &args![holder]).u32();
+            if e.call(0x00ec_6130, &args![text]).u32() != 0 {
+                let text = e.call(GET_POOLED_TEXT, &args![holder]).u32();
+                let name = e.call(0x0046_4f30, &args![text, 0u32]).u32();
+                let handler = e.global::<u32>(DATA_HANDLER);
+                let file = e.call(0x0046_2f40, &args![handler, name]).u32();
+                if file != 0 {
+                    e.call(0x0047_1d00, &args![file, 1u32]);
+                    found_file = true;
+                }
+            }
+        }
+    }
+    let list_name = e.global::<u32>(PLUGINS_LIST_NAME);
+    let list_file = fn_0086d480(e);
+    if e.call(0x0087_2430, &args![this, list_file, list_name])
+        .bool()
+    {
+        found_file = true;
+    }
+    if !found_file {
+        let handler = e.global::<u32>(DATA_HANDLER);
+        let file = e.call(0x0046_2f40, &args![handler, 0x0108_2ba0u32]).u32();
+        if file != 0 {
+            e.call(0x0047_1d00, &args![file, 1u32]);
+        }
+    }
+    scope_begin(e, scope, 0x34, 0xecb);
+    let player = allocate_and_construct(e, ALLOCATE_OBJECT, 0xe50, |e, block| {
+        e.call(0x0093_8180, &args![block]).u32()
+    });
+    e.set_global(PLAYER_OBJECT, player);
+    let player = e.global::<u32>(PLAYER_OBJECT);
+    e.vcall(player, 0x128, &args![0x14u32, 1u32]);
+    e.call(SCOPE_END, &args![scope]);
+    log_message(e, 0x0108_2b8c);
+    let handler = e.global::<u32>(DATA_HANDLER);
+    e.call(0x0046_3070, &args![handler, 0u32]);
+    e.call(0x005f_5880, &args![]);
+    let tes = e.global::<u32>(TES_OBJECT);
+    e.call(0x0045_9f10, &args![tes]);
+    let tes = e.global::<u32>(TES_OBJECT);
+    e.call(0x0045_a370, &args![tes]);
+    let setting = e.call(SETTING_BYTE_PTR, &args![0x011c_7adcu32]).u32();
+    if e.mem.u8(setting) != 0 {
+        let tes = e.global::<u32>(TES_OBJECT);
+        e.call(0x0045_a600, &args![tes]);
+    }
+    let tes = e.global::<u32>(TES_OBJECT);
+    e.call(0x0045_a1e0, &args![tes]);
+    e.call(0x0068_b3e0, &args![]);
+    log_message(e, 0x0108_2b74);
+    scope_begin(e, scope, 0x34, 0xf00);
+    let form = e.call(0x0048_39c0, &args![7u32]).u32();
+    // `__RTDynamicCast(object, 0, source type, target type, 0)`.
+    let reference = e
+        .call(
+            0x00ec_43fb,
+            &args![form, 0u32, 0x0118_3028u32, 0x0118_3a1cu32, 0u32],
+        )
+        .u32();
+    let player = e.global::<u32>(PLAYER_OBJECT);
+    e.call(0x0057_5690, &args![player, reference]);
+    let first_bits = e.global::<u32>(0x0101_8bfc);
+    e.with_stack(12, |e, buffer| {
+        let second_bits = e.global::<u32>(0x0101_8bfc);
+        let position = e
+            .call(
+                0x0041_6870,
+                &args![buffer, first_bits, second_bits, FLOAT_ZERO],
+            )
+            .u32();
+        let player = e.global::<u32>(PLAYER_OBJECT);
+        e.vcall(player, 0x2a8, &args![position]);
+    });
+    let player = e.global::<u32>(PLAYER_OBJECT);
+    // TESObjectREFR::SetAngleOnReference (Xbox PDB)
+    e.call(0x0086_d490, &args![player, 0x011f_426cu32]);
+    let player = e.global::<u32>(PLAYER_OBJECT);
+    e.vcall(player, 0x88, &args![]);
+    let player = e.global::<u32>(PLAYER_OBJECT);
+    e.call(0x008c_26e0, &args![player, 0u32]);
+    let player = e.global::<u32>(PLAYER_OBJECT);
+    let health = e.vcall(player + 0xa4, 8, &args![0x10u32]).u32();
+    if health == 0 {
+        let reference_file = e.call(0x0048_4e60, &args![reference, 0u32]).u32();
+        let file_name = e.call(0x0089_1170, &args![reference_file]).u32();
+        e.call(ERROR_LOG, &args![0x0108_2b30u32, file_name]);
+    }
+    log_message(e, 0x0108_2b14);
+    let handler = e.global::<u32>(DATA_HANDLER);
+    e.call(0x0046_5040, &args![handler]);
+    let setting = 0x011d_ee60u32;
+    if e.call(0x0045_03f0, &args![setting]).i32() > 0
+        && e.call(0x0045_03f0, &args![setting]).i32() < 200
+    {
+        let value = e.call(SETTING_INT_PTR, &args![setting]).u32();
+        let value = e.mem.u32(value);
+        fn_0086d4c0(e, Ptr::new(TIMER), value);
+    }
+    e.call(SCOPE_DESTROY, &args![scope]);
+}
+
+// Translated from 0086d470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the global at `011dea18` (the object-LOD root node [`main_init_scene_graph`] makes).
+pub fn fn_0086d470(e: &mut Engine) -> u32 {
+    e.global::<u32>(OBJECT_LOD_ROOT_NODE)
+}
+
+// Translated from 0086d480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the address `01202e98`, a fixed object of the data section.
+pub fn fn_0086d480(_e: &mut Engine) -> u32 {
+    0x0120_2e98
+}
+
+// Translated from 0086d4c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `1000.0 / count` (the `double` at `01017b70` divided by the unsigned count, rounded
+/// to `float`) at +4 of the object, or 0.0 when `count` is 0.
+pub fn fn_0086d4c0(e: &mut Engine, this: Ptr, count: u32) {
+    let value: f64 = if count != 0 {
+        let per_second: f64 = e.global(MILLISECONDS_PER_SECOND);
+        per_second / count as f64
+    } else {
+        0.0
+    };
+    e.mem.set_f32(this.addr() + 4, value as f32);
+}
+
+// Translated from 0086d500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Checks the renderer start-up: `004da670(this[8], this[0xC])`; when it answers 0 a Windows
+/// message box titled "Fallout" says "Failed to initialize renderer." followed by the text
+/// `0086d580` returns, and the process ends (`ExitProcess(0)`). The stack-cookie check is not
+/// translated.
+pub fn fn_0086d500(e: &mut Engine, this: Ptr) {
+    let first = e.mem.u32(this.addr() + 8);
+    let second = e.mem.u32(this.addr() + 0xc);
+    if e.call(0x004d_a670, &args![first, second]).u32() == 0 {
+        let detail = e.call(0x0086_d580, &args![]).u32();
+        e.with_stack(0x204, |e, message| {
+            // `sprintf(message, "Failed to initialize renderer.\n%s", detail)`
+            e.call(0x00ec_623a, &args![message, 0x0108_2c04u32, detail]);
+            e.call(API_MESSAGE_BOX, &args![0u32, message, 0x0108_2bfcu32, 0u32]);
+        });
+        e.call(API_EXIT_PROCESS, &args![0u32]);
+    }
+}
+
+// Translated from 0086d590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Main::InitSceneGraph` (Xbox PDB): builds the world's scene graph.
+///
+/// The `World` scene graph (0xC0 bytes, `00878610("World", 0, 0)`) goes into the holder at
+/// `011deb7c`; a root node (0x200 bytes, `00b5e0f0`) is made; the shader path
+/// `data\shaders\` and the node are handed on (`0086e520`, `0086e4e0`, `00b57420`,
+/// `00712e60`, `0070b760`, `00b4f2f0`) and the node is stored in the holders at +0x88, +0x8C,
+/// +0x90, +0x94 and +0x98 of `Main` (`004a1020`; the last one gets the result of `00450b80(1)`
+/// instead); the byte settings are folded into the flag word given to `004bc3d0` (bit 1 for
+/// `0086e540`, 2 for `0086e560`, 4 for `0086e5a0`, 8 for `0086e580`, always 0x10, 0x20 when
+/// `004bc400` and `004dc060(0) >= 2`) and the one at `011ad82c` (8 for `0086e5c0`, 2 for
+/// `0086e5e0`); `0086e500(0)`, `0086e510(0)` and `0086e4d0(00564360)` set globals. Then the
+/// nodes are created, attached to the root with slot 0xDC / 0xF8 of its vtable and named: fog
+/// (0x64 bytes, `00bb8180`, holder `011deb00`), the "Sky" node (`00c46970`, holder `011deb34`,
+/// child 0), "Weather" (`00a5ecb0`, holder `011deda4`, child 1), "LODRoot" (`00bc2980`, global
+/// `011dea14`, child 2), under it "LandLOD", "DistantRefLOD", "WaterLOD" (global `011dea1c`) and
+/// "LOD Trees" (`0086e620` and `0086e630` get it), "ObjectLODRoot" (global `011dea18`, child 3)
+/// and "Master Particle Systems" (`00c503d0`, holder `011ded58`, child 5). The root is placed
+/// (`004bc1f0` with `0.0, 0.0` and the float at `0101e704`), updated and given the value
+/// `0043d410(0.0, 0, 0)`; the renderer gets the accumulator `00b4f5c0` returns (`004dc540`);
+/// the byte at `011dea28` is `0086e600()`. When the holder at `011dec94` is empty a screen
+/// quad is built there: a screen-elements object (`00a881e0`, `00a87810`) with one element of
+/// four vertices (`0086e3f0`), the rectangle (0, 0, 1, 1) (`0086e420`) and the texture
+/// coordinates (0, 0, 1, 1) (`0086e460`), a material property (`00a75650`, `004bc450`) and a
+/// texturing property (`00a6aa40`, the texture `004bc320(011ded3c, 0)` as base, clamp mode 0),
+/// both attached (`00439410`), and the quad updated like the root. Finally `0057cf00` (grass
+/// set-up) runs. Everything is inside a scope object; the SEH frame is not translated.
+pub fn main_init_scene_graph(e: &mut Engine, this: Ptr) {
+    e.with_stack(4, |e, scope| {
+        init_scene_graph_body(e, this.addr(), scope.addr())
+    });
+}
+
+/// A plain node of 0xAC bytes (`00a5ecb0(0)`), or 0.
+fn new_plain_node(e: &mut Engine) -> u32 {
+    allocate_and_construct(e, ALLOCATE_SCENE_OBJECT, 0xac, |e, block| {
+        e.call(0x00a5_ecb0, &args![block, 0u32]).u32()
+    })
+}
+
+/// Marks a node (`00546780(1)` and `005467c0(1)`).
+fn mark_node(e: &mut Engine, node: u32) {
+    e.call(0x0054_6780, &args![node, 1u32]);
+    e.call(0x0054_67c0, &args![node, 1u32]);
+}
+
+/// Attaches `child` as child number `slot` of the node `parent` (slot 0xF8 of its vtable).
+fn set_child(e: &mut Engine, parent: u32, slot: u32, child: u32) {
+    e.vcall(parent, 0xf8, &args![slot, child]);
+}
+
+/// Attaches `child` to the node `parent` (slot 0xDC of its vtable, with 1).
+fn attach_child(e: &mut Engine, parent: u32, child: u32) {
+    e.vcall(parent, 0xdc, &args![child, 1u32]);
+}
+
+/// Updates the object held by `holder` (`00a5a040`) and hands it a 12-byte value built by
+/// `0043d410(0.0, 0, 0)` (`00a59c60`).
+fn update_held_object(e: &mut Engine, holder: u32) {
+    let held = pointer_get(e, holder);
+    e.call(0x00a5_a040, &args![held]);
+    e.with_stack(12, |e, value| {
+        e.call(0x0043_d410, &args![value, FLOAT_ZERO, 0u32, 0u32]);
+        let held = pointer_get(e, holder);
+        e.call(0x00a5_9c60, &args![held, value]);
+    });
+}
+
+fn init_scene_graph_body(e: &mut Engine, this: u32, scope: u32) {
+    e.call(
+        SCOPE_CONSTRUCT,
+        &args![scope, 0x19u32, 1u32, 0x0108_29c4u32, 0xf4cu32],
+    );
+    let graph = allocate_and_construct(e, ALLOCATE_SCENE_OBJECT, 0xc0, |e, block| {
+        e.call(0x0087_8610, &args![block, 0x0108_2c9cu32, 0u32, 0u32])
+            .u32()
+    });
+    pointer_set(e, SCENE_GRAPH_HOLDER, graph);
+    let root = allocate_and_construct(e, ALLOCATE_SCENE_OBJECT, 0x200, |e, block| {
+        e.call(0x00b5_e0f0, &args![block]).u32()
+    });
+    let shader_path = e.call(0x004b_c3f0, &args![]).u32();
+    fn_0086e520(e, shader_path);
+    fn_0086e4e0(e, 0x0108_2c8c);
+    e.call(0x00b5_7420, &args![]);
+    let held = pointer_get(e, SCENE_GRAPH_HOLDER);
+    let held = e.call(0x0066_29f0, &args![held]).u32();
+    e.call(0x0071_2e60, &args![held, 0x011a_d840u32]);
+    e.call(0x0070_b760, &args![root, 0u32]);
+    e.call(0x00b4_f2f0, &args![0u32, root]);
+    for offset in [0x88u32, 0x8c, 0x90, 0x94] {
+        let held = pointer_get(e, this + offset);
+        e.call(0x004a_1020, &args![held, root]);
+    }
+    let value = e.call(0x0045_0b80, &args![1u32]).u32();
+    let held = pointer_get(e, this + 0x98);
+    e.call(0x004a_1020, &args![held, value]);
+    fn_0086e500(e, 0);
+    fn_0086e510(e, 0);
+
+    // The flag word handed to 004bc3d0: one bit per byte setting that equals 1.
+    let mut flags = (fn_0086e540(e) == 1) as u32;
+    flags |= if fn_0086e560(e) == 1 { 2 } else { 0 };
+    flags |= if e.call(0x0086_e5a0, &args![]).u8() == 1 {
+        4
+    } else {
+        0
+    };
+    flags |= if fn_0086e580(e) == 1 { 8 } else { 0 };
+    flags |= 0x10;
+    let extra =
+        if e.call(0x004b_c400, &args![]).bool() && e.call(0x004d_c060, &args![0u32]).i32() >= 2 {
+            0x20
+        } else {
+            0
+        };
+    flags |= extra;
+    e.call(0x004b_c3d0, &args![flags]);
+    let mut state = if e.call(0x0086_e5c0, &args![]).u8() != 0 {
+        8
+    } else {
+        0
+    };
+    state |= if e.call(0x0086_e5e0, &args![]).u8() != 0 {
+        2
+    } else {
+        0
+    };
+    e.set_global(0x011a_d82c, state);
+    fn_0086e4d0(e, 0x0056_4360);
+    e.set_global(0x011f_d870, FLOAT_ZERO);
+
+    let held = pointer_get(e, SCENE_GRAPH_HOLDER);
+    let held = e.call(0x0066_29f0, &args![held]).u32();
+    pointer_set(e, 0x011f_95d8, held);
+    let graph = pointer_get(e, SCENE_GRAPH_HOLDER);
+    attach_child(e, graph, root);
+
+    // Fog.
+    let fog = allocate_and_construct(e, ALLOCATE_SCENE_OBJECT, 0x64, |e, block| {
+        e.call(0x00bb_8180, &args![block]).u32()
+    });
+    pointer_set(e, FOG_HOLDER, fog);
+    let held = pointer_get(e, FOG_HOLDER);
+    e.call(0x0049_ed90, &args![held, 1u32]);
+    let held = pointer_get(e, FOG_HOLDER);
+    e.call(0x00bb_8140, &args![held, FLOAT_ONE]);
+    let held = pointer_get(e, FOG_HOLDER);
+    e.call(0x00b5_5540, &args![0u32, held]);
+
+    // The "Sky" node.
+    let node = allocate_and_construct(e, ALLOCATE_SCENE_OBJECT, 0xb4, |e, block| {
+        e.call(0x00c4_6970, &args![block]).u32()
+    });
+    pointer_set(e, SKY_NODE_HOLDER, node);
+    let held = pointer_get(e, SKY_NODE_HOLDER);
+    e.call(0x0054_68d0, &args![held, 1u32]);
+    let held = pointer_get(e, SKY_NODE_HOLDER);
+    e.call(0x0054_67c0, &args![held, 1u32]);
+    name_object(e, 0x0108_2c88, |e| pointer_get(e, SKY_NODE_HOLDER));
+    let held = pointer_get(e, SKY_NODE_HOLDER);
+    set_child(e, root, 0, held);
+
+    // The "Weather" node.
+    let node = new_plain_node(e);
+    pointer_set(e, WEATHER_NODE_HOLDER, node);
+    let held = pointer_get(e, WEATHER_NODE_HOLDER);
+    e.call(0x0054_6780, &args![held, 1u32]);
+    let held = pointer_get(e, WEATHER_NODE_HOLDER);
+    e.call(0x0054_67c0, &args![held, 1u32]);
+    name_object(e, 0x0101_fe78, |e| pointer_get(e, WEATHER_NODE_HOLDER));
+    let held = pointer_get(e, WEATHER_NODE_HOLDER);
+    set_child(e, root, 1, held);
+    e.call(0x004d_c5c0, &args![]);
+    e.call(0x004d_c650, &args![]);
+
+    // The LOD nodes.
+    let lod_root = allocate_and_construct(e, ALLOCATE_SCENE_OBJECT, 0xb8, |e, block| {
+        e.call(0x00bc_2980, &args![block]).u32()
+    });
+    e.set_global(LOD_ROOT_NODE, lod_root);
+    name_object(e, 0x0108_2c80, |e| e.global::<u32>(LOD_ROOT_NODE));
+    let lod_root = e.global::<u32>(LOD_ROOT_NODE);
+    set_child(e, root, 2, lod_root);
+
+    let land_lod = new_plain_node(e);
+    mark_node(e, land_lod);
+    name_object(e, 0x0108_2c78, |_| land_lod);
+    let lod_root = e.global::<u32>(LOD_ROOT_NODE);
+    attach_child(e, lod_root, land_lod);
+    // The float the object `00403e20(011dedc8)` points at.
+    let setting = e.call(0x0040_3e20, &args![0x011d_edc8u32]).u32();
+    let value = e.mem.u32(setting);
+    e.set_global(0x011a_d808, value);
+
+    let distant_lod = new_plain_node(e);
+    mark_node(e, distant_lod);
+    name_object(e, 0x0108_2c68, |_| distant_lod);
+    let lod_root = e.global::<u32>(LOD_ROOT_NODE);
+    attach_child(e, lod_root, distant_lod);
+
+    let water_lod = new_plain_node(e);
+    e.set_global(WATER_LOD_NODE, water_lod);
+    let water_lod = e.global::<u32>(WATER_LOD_NODE);
+    mark_node(e, water_lod);
+    name_object(e, 0x0108_2c5c, |e| e.global::<u32>(WATER_LOD_NODE));
+    let water_lod = e.global::<u32>(WATER_LOD_NODE);
+    let lod_root = e.global::<u32>(LOD_ROOT_NODE);
+    attach_child(e, lod_root, water_lod);
+
+    let trees = new_plain_node(e);
+    mark_node(e, trees);
+    name_object(e, 0x0108_2c50, |_| trees);
+    // The "LOD Trees" node is attached to the "DistantRefLOD" node, the last one held in the
+    // local the game reuses for the LOD children.
+    attach_child(e, distant_lod, trees);
+    e.call(0x0086_e620, &args![trees]);
+    e.call(0x0086_e630, &args![trees]);
+
+    let object_lod_root = new_plain_node(e);
+    e.set_global(OBJECT_LOD_ROOT_NODE, object_lod_root);
+    mark_node(e, object_lod_root);
+    name_object(e, 0x0108_2c40, |e| e.global::<u32>(OBJECT_LOD_ROOT_NODE));
+    let object_lod_root = e.global::<u32>(OBJECT_LOD_ROOT_NODE);
+    set_child(e, root, 3, object_lod_root);
+
+    // Master particle systems.
+    let particles = allocate_and_construct(e, ALLOCATE_SCENE_OBJECT, 0xb8, |e, block| {
+        e.call(0x00c5_03d0, &args![block]).u32()
+    });
+    pointer_set(e, PARTICLE_SYSTEMS_HOLDER, particles);
+    name_object(e, 0x0108_2c28, |e| pointer_get(e, PARTICLE_SYSTEMS_HOLDER));
+    let held = pointer_get(e, PARTICLE_SYSTEMS_HOLDER);
+    set_child(e, root, 5, held);
+
+    // Place and update the root.
+    let limit_bits = e.global::<u32>(0x0101_e704);
+    let held = pointer_get(e, SCENE_GRAPH_HOLDER);
+    let held = e.call(0x0055_8310, &args![held]).u32();
+    e.call(
+        0x004b_c1f0,
+        &args![held, FLOAT_ZERO, FLOAT_ZERO, limit_bits],
+    );
+    update_held_object(e, SCENE_GRAPH_HOLDER);
+    let accumulator = e.call(0x00b4_f5c0, &args![]).u32();
+    let renderer = e.call(GET_RENDERER, &args![]).u32();
+    e.call(0x004d_c540, &args![renderer, accumulator]);
+    let flag = e.call(0x0086_e600, &args![]).u8();
+    e.set_global(SCENE_FLAG_BYTE, flag);
+
+    // The screen quad.
+    if pointer_get(e, SCREEN_ELEMENT_HOLDER) == 0 {
+        let outer = allocate_and_construct(e, ALLOCATE_SCENE_OBJECT, 0xc4, |e, block| {
+            let data = allocate_and_construct(e, ALLOCATE_SCENE_OBJECT, 0x70, |e, data_block| {
+                e.call(
+                    0x00a8_81e0,
+                    &args![data_block, 0u32, 0u32, 1u32, 1u32, 1u32, 4u32, 1u32, 2u32, 1u32],
+                )
+                .u32()
+            });
+            e.call(0x00a8_7810, &args![block, data]).u32()
+        });
+        pointer_set(e, SCREEN_ELEMENT_HOLDER, outer);
+        let held = pointer_get(e, SCREEN_ELEMENT_HOLDER);
+        fn_0086e3f0(e, Ptr::new(held), 4, 0, 0);
+        let held = pointer_get(e, SCREEN_ELEMENT_HOLDER);
+        fn_0086e420(
+            e,
+            Ptr::new(held),
+            0,
+            f32::from_bits(FLOAT_ZERO),
+            f32::from_bits(FLOAT_ZERO),
+            f32::from_bits(FLOAT_ONE),
+            f32::from_bits(FLOAT_ONE),
+        );
+        let held = pointer_get(e, SCREEN_ELEMENT_HOLDER);
+        fn_0086e4b0(e, Ptr::new(held));
+        let held = pointer_get(e, SCREEN_ELEMENT_HOLDER);
+        fn_0086e460(
+            e,
+            Ptr::new(held),
+            0,
+            0,
+            f32::from_bits(FLOAT_ZERO),
+            f32::from_bits(FLOAT_ZERO),
+            f32::from_bits(FLOAT_ONE),
+            f32::from_bits(FLOAT_ONE),
+        );
+        let material = allocate_and_construct(e, ALLOCATE_SCENE_OBJECT, 0x4c, |e, block| {
+            e.call(0x00a7_5650, &args![block]).u32()
+        });
+        e.call(0x004b_c450, &args![material, 0x011a_9b7cu32]);
+        let held = pointer_get(e, SCREEN_ELEMENT_HOLDER);
+        e.call(0x0043_9410, &args![held, material]);
+        let texturing = allocate_and_construct(e, ALLOCATE_SCENE_OBJECT, 0x30, |e, block| {
+            e.call(0x00a6_aa40, &args![block]).u32()
+        });
+        let held = pointer_get(e, SCREEN_TEXTURE_HOLDER);
+        let texture = e.call(0x004b_c320, &args![held, 0u32]).u32();
+        e.call(0x005b_8fc0, &args![texturing, texture]);
+        e.call(0x0060_aeb0, &args![texturing, 0u32]);
+        e.call(0x004f_3200, &args![texturing, 0u32]);
+        let held = pointer_get(e, SCREEN_ELEMENT_HOLDER);
+        e.call(0x0043_9410, &args![held, texturing]);
+        update_held_object(e, SCREEN_ELEMENT_HOLDER);
+    }
+    e.call(0x0057_cf00, &args![]);
+    e.call(SCOPE_DESTROY, &args![scope]);
+}
+
+// Translated from 0086e3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards to `00a87ae0` on the object `005495f0` (the pointer held at +0xB8) returns, with
+/// the same three arguments (`NiScreenElementsData::Insert` in the decompiler's naming). Returns
+/// what it returns.
+pub fn fn_0086e3f0(e: &mut Engine, this: Ptr, first: u16, second: u16, third: u32) -> u32 {
+    let data = e.call(0x0054_95f0, &args![this]).u32();
+    e.call(0x00a8_7ae0, &args![data, first, second, third])
+        .u32()
+}
+
+// Translated from 0086e420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards to `00a88020` on the object `005495f0` returns, with the same five arguments (an
+/// index and four floats; `NiScreenElementsData::SetRectangle` in the decompiler's naming).
+/// Returns what it returns.
+pub fn fn_0086e420(
+    e: &mut Engine,
+    this: Ptr,
+    index: u32,
+    first: f32,
+    second: f32,
+    third: f32,
+    fourth: f32,
+) -> u32 {
+    let data = e.call(0x0054_95f0, &args![this]).u32();
+    e.call(
+        0x00a8_8020,
+        &args![data, index, first, second, third, fourth],
+    )
+    .u32()
+}
+
+// Translated from 0086e460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards to `00a88130` on the object `005495f0` returns, with the same six arguments (an
+/// index, a 16-bit value and four floats; `NiScreenElementsData::SetTextures` in the
+/// decompiler's naming). Returns what it returns.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_0086e460(
+    e: &mut Engine,
+    this: Ptr,
+    index: u32,
+    set: u16,
+    first: f32,
+    second: f32,
+    third: f32,
+    fourth: f32,
+) -> u32 {
+    let data = e.call(0x0054_95f0, &args![this]).u32();
+    e.call(
+        0x00a8_8130,
+        &args![data, index, set, first, second, third, fourth],
+    )
+    .u32()
+}
+
+// Translated from 0086e4b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards to `00a87900` on the object `005495f0` returns (`NiScreenElementsData::UpdateBound`
+/// in the decompiler's naming).
+pub fn fn_0086e4b0(e: &mut Engine, this: Ptr) {
+    let data = e.call(0x0054_95f0, &args![this]).u32();
+    e.call(0x00a8_7900, &args![data]);
+}
+
+// Translated from 0086e4d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a word in the global at `011f91ec`.
+pub fn fn_0086e4d0(e: &mut Engine, value: u32) {
+    e.set_global(0x011f_91ec, value);
+}
+
+// Translated from 0086e4e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the string at `text` into the 0x104-byte buffer at `011f9308` (`00406d30`).
+pub fn fn_0086e4e0(e: &mut Engine, text: u32) {
+    e.call(0x0040_6d30, &args![0x011f_9308u32, 0x104u32, text]);
+}
+
+// Translated from 0086e500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a byte in the global at `011f91de`.
+pub fn fn_0086e500(e: &mut Engine, value: u8) {
+    e.set_global(0x011f_91de, value);
+}
+
+// Translated from 0086e510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a byte in the global at `011f91dd`.
+pub fn fn_0086e510(e: &mut Engine, value: u8) {
+    e.set_global(0x011f_91dd, value);
+}
+
+// Translated from 0086e520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Makes the holder at `011f9508` hold `value` (`0066b0d0`).
+pub fn fn_0086e520(e: &mut Engine, value: u32) {
+    pointer_set(e, 0x011f_9508, value);
+}
+
+// Translated from 0086e540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the byte setting at `011c7154`.
+pub fn fn_0086e540(e: &mut Engine) -> u8 {
+    setting_byte(e, 0x011c_7154) as u8
+}
+
+// Translated from 0086e560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the byte setting at `011c7544`.
+pub fn fn_0086e560(e: &mut Engine) -> u8 {
+    setting_byte(e, 0x011c_7544) as u8
+}
+
+// Translated from 0086e580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the byte setting at `011c712c`.
+pub fn fn_0086e580(e: &mut Engine) -> u8 {
+    setting_byte(e, 0x011c_712c) as u8
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1413,6 +2539,46 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0086c010, fn_0086c010()),
         entry!(0x0086c0c0, fn_0086c0c0() -> f32),
         entry!(0x0086c0d0, fn_0086c0d0() -> f32),
+        entry!(0x0086c0e0, fn_0086c0e0() -> f32),
+        entry!(0x0086c0f0, fn_0086c0f0() -> f32),
+        entry!(0x0086c100, fn_0086c100() -> f32),
+        entry!(0x0086c110, fn_0086c110() -> f32),
+        entry!(0x0086c120, fn_0086c120() -> f32),
+        entry!(0x0086c130, fn_0086c130() -> f32),
+        entry!(0x0086c140, fn_0086c140(f32)),
+        entry!(0x0086c150, fn_0086c150(f32)),
+        entry!(0x0086c160, main_main(Ptr, u32, u32) -> Ptr),
+        entry!(0x0086c600, bs_packed_task_queue_thread_begin_input(Ptr)),
+        entry!(0x0086c620, fn_0086c620(Ptr, u32, u32) -> Ptr),
+        entry!(0x0086c6a0, fn_0086c6a0(Ptr, u32, u32) -> Ptr),
+        entry!(0x0086c6e0, fn_0086c6e0(Ptr)),
+        entry!(0x0086c750, fn_0086c750(Ptr)),
+        entry!(0x0086c790, fn_0086c790(u32)),
+        entry!(0x0086c850, fn_0086c850(Ptr, u32) -> Ptr),
+        entry!(0x0086c880, fn_0086c880(Ptr)),
+        entry!(0x0086cd80, fn_0086cd80()),
+        entry!(0x0086cdd0, fn_0086cdd0(Ptr)),
+        entry!(0x0086cdf0, fn_0086cdf0()),
+        entry!(0x0086ce40, fn_0086ce40(Ptr)),
+        entry!(0x0086cf00, fn_0086cf00(Ptr, u32)),
+        entry!(0x0086cf20, main_init_tes(Ptr, u32)),
+        entry!(0x0086d470, fn_0086d470() -> u32),
+        entry!(0x0086d480, fn_0086d480() -> u32),
+        entry!(0x0086d4c0, fn_0086d4c0(Ptr, u32)),
+        entry!(0x0086d500, fn_0086d500(Ptr)),
+        entry!(0x0086d590, main_init_scene_graph(Ptr)),
+        entry!(0x0086e3f0, fn_0086e3f0(Ptr, u16, u16, u32) -> u32),
+        entry!(0x0086e420, fn_0086e420(Ptr, u32, f32, f32, f32, f32) -> u32),
+        entry!(0x0086e460, fn_0086e460(Ptr, u32, u16, f32, f32, f32, f32) -> u32),
+        entry!(0x0086e4b0, fn_0086e4b0(Ptr)),
+        entry!(0x0086e4d0, fn_0086e4d0(u32)),
+        entry!(0x0086e4e0, fn_0086e4e0(u32)),
+        entry!(0x0086e500, fn_0086e500(u8)),
+        entry!(0x0086e510, fn_0086e510(u8)),
+        entry!(0x0086e520, fn_0086e520(u32)),
+        entry!(0x0086e540, fn_0086e540() -> u8),
+        entry!(0x0086e560, fn_0086e560() -> u8),
+        entry!(0x0086e580, fn_0086e580() -> u8),
     ]
 }
 
@@ -2948,5 +4114,1518 @@ mod tests {
             vec![vec![KEY_ARRAY_A], vec![KEY_ARRAY_B]]
         );
         assert_eq!(e.global::<u8>(0x011a_31f4), 0);
+    }
+
+    // ----- the Main object, its queues and the start-up of the world (0086c0e0 - 0086e580) ----
+
+    /// Callees of the functions from `0086c0e0` to `0086e580` that [`engine`] does not register
+    /// (each is a no-op returning 0 until a test replaces it).
+    const INIT_CALLEES: &[u32] = &[
+        0x0040_3e20,
+        0x0040_fc90,
+        0x0041_6870,
+        0x0043_8170,
+        0x0043_81b0,
+        0x0043_9410,
+        0x0043_d410,
+        0x0044_24e0,
+        0x0044_2550,
+        0x0044_fb20,
+        0x0045_03f0,
+        0x0045_05a0,
+        0x0045_0b80,
+        0x0045_0c50,
+        0x0045_9f10,
+        0x0045_a1e0,
+        0x0045_a370,
+        0x0045_a600,
+        0x0045_bc00,
+        0x0045_cec0,
+        0x0046_2f40,
+        0x0046_3070,
+        0x0046_4f30,
+        0x0046_5040,
+        0x0046_dd00,
+        0x0047_1d00,
+        0x0048_3710,
+        0x0048_39c0,
+        0x0048_4e60,
+        0x0049_ed90,
+        0x004a_1020,
+        0x004a_1040,
+        0x004b_c1f0,
+        0x004b_c320,
+        0x004b_c3d0,
+        0x004b_c3f0,
+        0x004b_c400,
+        0x004b_c450,
+        0x004d_a670,
+        0x004d_c060,
+        0x004d_c540,
+        0x004d_c5c0,
+        0x004d_c650,
+        0x004f_3200,
+        0x0050_f9c0,
+        0x0052_6e10,
+        0x0054_6780,
+        0x0054_67c0,
+        0x0054_68d0,
+        0x0054_95f0,
+        0x0055_8310,
+        0x0055_a2d0,
+        0x0057_5690,
+        0x0057_cf00,
+        0x005b_8fc0,
+        0x005f_4bb0,
+        0x005f_5880,
+        0x0060_aeb0,
+        0x0061_cc40,
+        0x0063_3c90,
+        0x0066_29f0,
+        0x0066_4870,
+        0x0068_b3e0,
+        0x0070_37c0,
+        0x0070_b760,
+        0x0071_2e60,
+        0x007a_1480,
+        0x007f_df30,
+        0x0082_f830,
+        0x0086_d490,
+        0x0086_d580,
+        0x0086_e5a0,
+        0x0086_e5c0,
+        0x0086_e5e0,
+        0x0086_e600,
+        0x0086_e620,
+        0x0086_e630,
+        0x0087_2430,
+        0x0087_7730,
+        0x0087_7a80,
+        0x0087_7ac0,
+        0x0087_8610,
+        0x0087_b8d0,
+        0x0087_b950,
+        0x0089_1170,
+        0x008c_26e0,
+        0x008d_7dc0,
+        0x0093_6aa0,
+        0x0093_8180,
+        0x0099_0f20,
+        0x00a2_2660,
+        0x00a2_2bf0,
+        0x00a2_2e10,
+        0x00a2_2ef0,
+        0x00a5_9c60,
+        0x00a5_a040,
+        0x00a5_b950,
+        0x00a5_ecb0,
+        0x00a6_aa40,
+        0x00a7_12f0,
+        0x00a7_5650,
+        0x00a8_7810,
+        0x00a8_7900,
+        0x00a8_7ae0,
+        0x00a8_8020,
+        0x00a8_8130,
+        0x00a8_81e0,
+        0x00a8_9af0,
+        0x00aa_2740,
+        0x00aa_53f0,
+        0x00aa_5460,
+        0x00ae_a020,
+        0x00af_5820,
+        0x00b0_0a00,
+        0x00b0_0df0,
+        0x00b4_f2f0,
+        0x00b4_f5c0,
+        0x00b5_5540,
+        0x00b5_7420,
+        0x00b5_e0f0,
+        0x00b6_60d0,
+        0x00bb_8140,
+        0x00bb_8180,
+        0x00bc_2980,
+        0x00c4_6970,
+        0x00c5_03d0,
+        0x00ec_43fb,
+        0x00ec_6130,
+        0x00ec_623a,
+        0x00fd_f0b4,
+        0x0040_1000,
+        0x0040_1030,
+        0x0040_3df0,
+        0x0040_4eb0,
+        0x0040_4ee0,
+        0x0040_4f00,
+        0x0040_4f70,
+        0x0040_6d30,
+        0x0040_fbe0,
+        0x0043_c4b0,
+        0x0045_0410,
+        0x0045_3a70,
+        0x0055_9450,
+        0x0066_b0d0,
+        0x0000_3000,
+        0x0000_3100,
+        0x0000_3200,
+        0x0000_3300,
+        0x0000_3400,
+        0x0000_3500,
+        0x0000_3600,
+        0x0000_3700,
+        0x0000_3800,
+    ];
+
+    /// The engine for the start-up tests: [`INIT_CALLEES`] are no-ops, the allocators work and
+    /// the holders behave (`00559450` reads the pointer a holder keeps, `0066b0d0` sets it).
+    fn init_engine() -> Engine {
+        let mut e = engine();
+        for address in INIT_CALLEES.iter().copied() {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(ALLOCATE_SCENE_OBJECT, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(ALLOCATE_OBJECT, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(POINTER_SET, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        // The addresses of this file's own functions that the earlier tests stub out are the
+        // real translations again.
+        for (address, function) in funcs() {
+            e.register(address, function);
+        }
+        e
+    }
+
+    /// Makes every constructor in `addresses` return its `this`.
+    fn constructors_return_this(e: &mut Engine, addresses: &[u32]) {
+        for address in addresses {
+            e.register(*address, |_, a| a[0].into_ret());
+        }
+    }
+
+    /// Registers a double at `address` that records its argument words in the returned list.
+    fn recorder(e: &mut Engine, address: u32, result: u32) -> Rc<RefCell<Vec<Vec<u32>>>> {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let record = seen.clone();
+        e.register_double(address, move |_, a| {
+            record.borrow_mut().push(a.to_vec());
+            result.into_ret()
+        });
+        seen
+    }
+
+    /// A text in the test memory.
+    fn text_at(e: &mut Engine, address: u32, text: &[u8]) -> u32 {
+        e.mem.set_cstr(address, text);
+        address
+    }
+
+    // ----- 0086c0e0 .. 0086c150 --------------------------------------------------------------
+
+    /// The float getters: the setting object whose address they pass answers with a float
+    /// derived from it.
+    fn float_getter_result(function: fn(&mut Engine) -> f32, setting: u32) -> f32 {
+        let mut e = init_engine();
+        e.register(0x0045_0410, |_, a| ret_f32((a[0] & 0xffff) as f32));
+        e.call_log = Some(vec![]);
+        let value = function(&mut e);
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, 0x0045_0410), vec![vec![setting]]);
+        value
+    }
+
+    #[test]
+    fn float_getter_0086c0e0_reads_its_setting() {
+        assert_eq!(float_getter_result(fn_0086c0e0, 0x011c_7314), 0x7314 as f32);
+    }
+
+    #[test]
+    fn float_getter_0086c0f0_reads_its_setting() {
+        assert_eq!(float_getter_result(fn_0086c0f0, 0x011c_768c), 0x768c as f32);
+    }
+
+    #[test]
+    fn float_getter_0086c100_reads_its_setting() {
+        assert_eq!(float_getter_result(fn_0086c100, 0x011c_7758), 0x7758 as f32);
+    }
+
+    #[test]
+    fn float_getter_0086c110_reads_its_setting() {
+        assert_eq!(float_getter_result(fn_0086c110, 0x011c_75bc), 0x75bc as f32);
+    }
+
+    #[test]
+    fn float_getter_0086c120_reads_its_setting() {
+        assert_eq!(float_getter_result(fn_0086c120, 0x011c_7458), 0x7458 as f32);
+    }
+
+    #[test]
+    fn float_getter_0086c130_reads_its_setting() {
+        assert_eq!(float_getter_result(fn_0086c130, 0x011c_74a0), 0x74a0 as f32);
+    }
+
+    #[test]
+    fn float_setters_store_their_argument() {
+        let mut e = init_engine();
+        e.call(0x0086_c140, &args![1.5f32]);
+        e.call(0x0086_c150, &args![-2.25f32]);
+        assert_eq!(e.global::<f32>(0x011f_f8ac), 1.5);
+        assert_eq!(e.global::<f32>(0x011f_f8b0), -2.25);
+    }
+
+    // ----- Main::Main ------------------------------------------------------------------------
+
+    /// An engine where `Main::Main` can run: constructors return `this`, the thread id is
+    /// 0x1234 and the audio object exists.
+    fn main_main_engine() -> (Engine, u32) {
+        let mut e = init_engine();
+        constructors_return_this(
+            &mut e,
+            &[
+                0x00aa_53f0,
+                0x00b6_60d0,
+                0x00a7_12f0,
+                0x00a2_2660,
+                0x0087_7a80,
+            ],
+        );
+        e.register(API_CREATE_SEMAPHORE, |_, _| 0x5151u32.into_ret());
+        e.register(0x0040_fc90, |_, _| 0x1234u32.into_ret());
+        e.register(0x007f_df30, |_, _| 0x7777u32.into_ret());
+        let audio = object_with_vtable(&mut e, &[(0xc, NOTHING), (4, NOTHING)]);
+        e.register_double(0x0045_3a70, move |_, _| audio.into_ret());
+        let this = e.mem.alloc(0xa4);
+        (e, this)
+    }
+
+    #[test]
+    fn main_main_builds_the_queues_the_accumulators_and_the_fields() {
+        let (mut e, this) = main_main_engine();
+        for offset in 1..=7 {
+            e.mem.set_u8(this + offset, 0xff);
+        }
+        e.mem.set_u8(this + 0x9c, 0xff);
+        e.mem.set_u32(this + 0x14, 0xffff);
+        e.call_log = Some(vec![]);
+        let result = e
+            .call(0x0086_c160, &args![this, 0xaaaau32, 0xbbbbu32])
+            .u32();
+        let log = take_log(&mut e);
+        assert_eq!(result, this);
+        assert_eq!(e.mem.u32(this + 8), 0xaaaa);
+        assert_eq!(e.mem.u32(this + 0xc), 0xbbbb);
+        assert_eq!(e.mem.u32(this + 0x10), 0x1234);
+        assert_eq!(e.mem.u32(this + 0x14), 0);
+        for offset in 1..=7 {
+            assert_eq!(e.mem.u8(this + offset), 0);
+        }
+        assert_eq!(e.mem.u8(this + 0x9c), 0);
+        // The two queue pairs: bases at +0x18 / +0x50, queues at +0x28 / +0x60 over them.
+        assert_eq!(
+            calls_to(&log, 0x0087_7a80),
+            vec![
+                vec![this + 0x28, this + 0x18],
+                vec![this + 0x60, this + 0x50]
+            ]
+        );
+        assert_eq!(e.mem.u32(this + 0x28 + 0x20), 0x0087_b990);
+        assert_eq!(e.mem.u8(this + 0x28 + 0x24), 0);
+        assert_eq!(e.mem.u32(this + 0x28 + 0x14 + 4), 0x5151);
+        assert_eq!(e.mem.u32(this + 0x28 + 0x14 + 8), 100);
+        assert_eq!(
+            calls_to(&log, API_CREATE_SEMAPHORE),
+            vec![vec![0, 0, 100, 0]; 2]
+        );
+        // Six holders constructed with 0.
+        let holders: Vec<Vec<u32>> = [0x88u32, 0x8c, 0x90, 0x94, 0x98, 0xa0]
+            .iter()
+            .map(|offset| vec![this + offset, 0])
+            .collect();
+        assert_eq!(calls_to(&log, 0x0063_3c90), holders);
+        // Five accumulators.
+        let accumulators: Vec<Vec<u32>> = calls_to(&log, 0x00b6_60d0)
+            .iter()
+            .map(|call| call[1..].to_vec())
+            .collect();
+        assert_eq!(
+            accumulators,
+            vec![
+                vec![0x63, 1, 0x2f7],
+                vec![0x63, 1, 0x2f7],
+                vec![0x63, 1, 0x2f7],
+                vec![0x64, 1, 4],
+                vec![0x63, 1, 0x2f7],
+            ]
+        );
+        let held = |e: &Engine, offset: u32| e.mem.u32(this + offset);
+        assert_eq!(
+            calls_to(&log, 0x004a_1040),
+            vec![
+                vec![held(&e, 0x8c), 0xc],
+                vec![held(&e, 0x90), 0xc],
+                vec![held(&e, 0x94), 0xd]
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, 0x0093_6aa0),
+            vec![vec![held(&e, 0x8c), 1], vec![held(&e, 0x90), 1]]
+        );
+        assert!(held(&e, 0xa0) != 0);
+        // One processor: the queues are not started.
+        assert!(calls_to(&log, 0x0087_b8d0).is_empty());
+        assert!(calls_to(&log, 0x0044_2550).is_empty());
+        // Thread name, task object, scope objects.
+        assert_eq!(calls_to(&log, 0x00aa_2740), vec![vec![0x1234, 0x0105_c2b0]]);
+        assert_eq!(calls_to(&log, 0x00a2_2660).len(), 1);
+        assert_eq!(calls_to(&log, 0x00a2_2660)[0][1], 0xbbbb);
+        assert_ne!(e.global::<u32>(TASK_OBJECT), 0);
+        assert_eq!(calls_to(&log, 0x00a2_2ef0), vec![vec![0x7777]]);
+        let scope = calls_to(&log, 0x0040_4eb0)[0][0];
+        assert_eq!(
+            calls_to(&log, 0x0040_4eb0),
+            vec![vec![scope, 0xd, 1, 0x0108_29c4, 0xdc6]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x0040_4f00),
+            vec![vec![scope, 0xb, 1, 0x0108_29c4, 0xdd5]]
+        );
+        assert_eq!(calls_to(&log, 0x0040_4f70).len(), 2);
+        assert_eq!(calls_to(&log, 0x0040_4ee0), vec![vec![scope]]);
+        // The audio set-up ran (with the window word at +8).
+        assert_eq!(calls_to(&log, 0x0050_f9c0).len(), 1);
+    }
+
+    #[test]
+    fn main_main_with_several_processors_starts_both_queues() {
+        let (mut e, this) = main_main_engine();
+        e.mem.set_u32(ZERO_WORD, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x0086_c160, &args![this, 1u32, 2u32]);
+        let log = take_log(&mut e);
+        assert_eq!(
+            calls_to(&log, 0x0087_b8d0),
+            vec![vec![this + 0x28, this + 0x60]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x0044_2550),
+            vec![vec![this + 0x28 + 0x14], vec![this + 0x60 + 0x14]]
+        );
+    }
+
+    // ----- the task queues -------------------------------------------------------------------
+
+    #[test]
+    fn thread_begin_input_releases_the_semaphore_wrapper() {
+        let mut e = init_engine();
+        e.call_log = Some(vec![]);
+        e.call(0x0086_c600, &args![0x4000u32]);
+        assert_eq!(calls_to(&take_log(&mut e), 0x0044_2550), vec![vec![0x4014]]);
+    }
+
+    #[test]
+    fn task_queue_constructor_sets_up_the_base_the_semaphore_and_the_fields() {
+        let mut e = init_engine();
+        e.register(API_CREATE_SEMAPHORE, |_, _| 0x6161u32.into_ret());
+        let queue = e.mem.alloc(0x30);
+        e.mem.set_u8(queue + 0x24, 0xff);
+        e.call_log = Some(vec![]);
+        let result = e
+            .call(0x0086_c620, &args![queue, 0x7000u32, 0x0087_b990u32])
+            .u32();
+        let log = take_log(&mut e);
+        assert_eq!(result, queue);
+        assert_eq!(calls_to(&log, 0x0087_7a80), vec![vec![queue, 0x7000]]);
+        assert_eq!(
+            calls_to(&log, API_CREATE_SEMAPHORE),
+            vec![vec![0, 0, 100, 0]]
+        );
+        assert_eq!(e.mem.u32(queue + 0x14), 0);
+        assert_eq!(e.mem.u32(queue + 0x18), 0x6161);
+        assert_eq!(e.mem.u32(queue + 0x1c), 100);
+        assert_eq!(e.mem.u32(queue + 0x20), 0x0087_b990);
+        assert_eq!(e.mem.u8(queue + 0x24), 0);
+    }
+
+    #[test]
+    fn semaphore_wrapper_constructor_creates_the_semaphore() {
+        let mut e = init_engine();
+        e.register(API_CREATE_SEMAPHORE, |_, _| 0x9999u32.into_ret());
+        let wrapper = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0086_c6a0, &args![wrapper, 3u32, 8u32]).u32();
+        let log = take_log(&mut e);
+        assert_eq!(result, wrapper);
+        assert_eq!(calls_to(&log, API_CREATE_SEMAPHORE), vec![vec![0, 3, 8, 0]]);
+        assert_eq!(e.mem.u32(wrapper), 3);
+        assert_eq!(e.mem.u32(wrapper + 4), 0x9999);
+        assert_eq!(e.mem.u32(wrapper + 8), 8);
+    }
+
+    #[test]
+    fn task_queue_destructor_drains_then_destroys_the_semaphore_and_the_base() {
+        let mut e = init_engine();
+        let queue = object_with_vtable(&mut e, &[(0x10, 0x3000)]);
+        e.register(0x0000_3000, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0086_c6e0, &args![queue]);
+        let log = take_log(&mut e);
+        assert!(position(&log, 0x0000_3000) < position(&log, 0x0055_a2d0));
+        assert!(position(&log, 0x0055_a2d0) < position(&log, 0x0087_7ac0));
+        assert_eq!(calls_to(&log, 0x0055_a2d0), vec![vec![queue + 0x14]]);
+        assert_eq!(calls_to(&log, 0x0087_7ac0), vec![vec![queue]]);
+    }
+
+    #[test]
+    fn queue_drain_calls_slot_0x10_until_it_answers_false() {
+        let mut e = init_engine();
+        let queue = object_with_vtable(&mut e, &[(0x10, 0x3000)]);
+        let answers = Rc::new(RefCell::new(vec![0u32, 1, 1]));
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let (script, record) = (answers.clone(), seen.clone());
+        e.register_double(0x0000_3000, move |_, a| {
+            record.borrow_mut().push(a.to_vec());
+            script.borrow_mut().pop().unwrap().into_ret()
+        });
+        e.call(0x0086_c750, &args![queue]);
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 3);
+        assert!(seen.iter().all(|call| call[0] == queue && call.len() == 2));
+        assert!(seen.iter().all(|call| call[1] == seen[0][1]));
+    }
+
+    #[test]
+    fn task_object_is_replaced_and_the_old_one_destroyed() {
+        let mut e = init_engine();
+        constructors_return_this(&mut e, &[0x00a2_2660]);
+        e.set_global(TASK_OBJECT, 0x4242u32);
+        e.call_log = Some(vec![]);
+        e.call(0x0086_c790, &args![0x77u32]);
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, 0x00a2_2bf0), vec![vec![0x4242]]);
+        assert_eq!(calls_to(&log, FREE_OBJECT), vec![vec![0x4242]]);
+        assert_eq!(calls_to(&log, ALLOCATE_OBJECT), vec![vec![0x1c04]]);
+        let new = e.global::<u32>(TASK_OBJECT);
+        assert_ne!(new, 0);
+        assert_eq!(calls_to(&log, 0x00a2_2660), vec![vec![new, 0x77]]);
+    }
+
+    #[test]
+    fn task_object_first_time_and_failed_allocation() {
+        let mut e = init_engine();
+        constructors_return_this(&mut e, &[0x00a2_2660]);
+        e.call_log = Some(vec![]);
+        e.call(0x0086_c790, &args![1u32]);
+        assert!(calls_to(&take_log(&mut e), 0x00a2_2bf0).is_empty());
+        assert_ne!(e.global::<u32>(TASK_OBJECT), 0);
+        // The allocator fails: the global ends up 0 and the constructor is not called.
+        e.register(ALLOCATE_OBJECT, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0086_c790, &args![1u32]);
+        let log = take_log(&mut e);
+        assert_eq!(e.global::<u32>(TASK_OBJECT), 0);
+        assert!(calls_to(&log, 0x00a2_2660).is_empty());
+    }
+
+    #[test]
+    fn task_object_deleting_destructor_frees_only_with_bit_0() {
+        let mut e = init_engine();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0086_c850, &args![0x5000u32, 0u32]).u32(), 0x5000);
+        assert!(calls_to(&take_log(&mut e), FREE_OBJECT).is_empty());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0086_c850, &args![0x5000u32, 3u32]).u32(), 0x5000);
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, 0x00a2_2bf0), vec![vec![0x5000]]);
+        assert_eq!(calls_to(&log, FREE_OBJECT), vec![vec![0x5000]]);
+    }
+
+    // ----- Main::~Main -----------------------------------------------------------------------
+
+    /// Sets the nonzero marks `fn_0086c880` clears and returns a `Main` object (0xA4 bytes)
+    /// whose two queues have a vtable whose slot 0x10 answers false.
+    fn destroyed_main(e: &mut Engine) -> u32 {
+        let this = e.mem.alloc(0xa4);
+        let queue = object_with_vtable(e, &[(0x10, 0x3000)]);
+        let vtable = e.mem.u32(queue);
+        e.mem.set_u32(this + 0x28, vtable);
+        e.mem.set_u32(this + 0x60, vtable);
+        for offset in [0x88u32, 0x8c, 0x90, 0x94, 0x98, 0xa0] {
+            e.mem.set_u32(this + offset, 0x9000 + offset);
+        }
+        this
+    }
+
+    #[test]
+    fn main_destructor_destroys_the_tables_the_holders_and_the_queues() {
+        let mut e = init_engine();
+        let this = destroyed_main(&mut e);
+        e.set_global(LOD_ROOT_NODE, 1u32);
+        e.set_global(OBJECT_LOD_ROOT_NODE, 2u32);
+        e.set_global(WATER_LOD_NODE, 3u32);
+        e.set_global(TASK_OBJECT, 0x4242u32);
+        e.mem.set_u32(SCENE_GRAPH_HOLDER, 0x1111);
+        for holder in [CLEARED_HOLDER, SKY_NODE_HOLDER, SCREEN_ELEMENT_HOLDER] {
+            e.mem.set_u32(holder, 0x2222);
+        }
+        // Objects in the tables: first and fourth of the first table, the last of the second
+        // and the last of the ninth.
+        let objects = Rc::new(RefCell::new(Vec::new()));
+        let record = objects.clone();
+        e.register_double(0x0000_3100, move |_, a| {
+            record.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        let mut placed = Vec::new();
+        for (table, index) in [
+            (OBJECT_TABLES[0].0, 0u32),
+            (OBJECT_TABLES[0].0, 3),
+            (OBJECT_TABLES[1].0, 0xed),
+            (OBJECT_TABLES[8].0, 0x21),
+        ] {
+            let object = object_with_vtable(&mut e, &[(0, 0x0000_3100)]);
+            e.mem.set_u32(table + index * 4, object);
+            placed.push(vec![object, 1]);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0086_c880, &args![this]);
+        let log = take_log(&mut e);
+        assert_eq!(*objects.borrow(), placed);
+        assert_eq!(e.global::<u32>(LOD_ROOT_NODE), 0);
+        assert_eq!(e.global::<u32>(OBJECT_LOD_ROOT_NODE), 0);
+        assert_eq!(e.global::<u32>(WATER_LOD_NODE), 0);
+        assert_eq!(e.global::<u32>(TASK_OBJECT), 0);
+        assert_eq!(calls_to(&log, 0x00a2_2bf0), vec![vec![0x4242]]);
+        // The scene graph is told about the holder's object before the holder is cleared.
+        assert_eq!(calls_to(&log, 0x0048_3710), vec![vec![0x1111]]);
+        for holder in [
+            SCENE_GRAPH_HOLDER,
+            CLEARED_HOLDER,
+            SKY_NODE_HOLDER,
+            SCREEN_ELEMENT_HOLDER,
+        ] {
+            assert_eq!(e.mem.u32(holder), 0);
+        }
+        // Holders of `Main`: +0x90 is destroyed but not cleared.
+        for offset in [0x88u32, 0x8c, 0x94, 0x98, 0xa0] {
+            assert_eq!(e.mem.u32(this + offset), 0);
+        }
+        assert_eq!(e.mem.u32(this + 0x90), 0x9090);
+        assert_eq!(
+            calls_to(&log, 0x0045_cec0),
+            [0xa0u32, 0x98, 0x94, 0x90, 0x8c, 0x88]
+                .iter()
+                .map(|offset| vec![this + offset])
+                .collect::<Vec<_>>()
+        );
+        // One processor: nothing is waited on.
+        assert!(calls_to(&log, 0x0044_24e0).is_empty());
+        assert!(calls_to(&log, 0x0087_b950).is_empty());
+        // The queues and their bases are destroyed back to front.
+        assert_eq!(
+            calls_to(&log, 0x0055_a2d0),
+            vec![vec![this + 0x60 + 0x14], vec![this + 0x28 + 0x14]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x0087_7ac0),
+            vec![vec![this + 0x60], vec![this + 0x28]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x00aa_5460),
+            vec![vec![this + 0x50], vec![this + 0x18]]
+        );
+    }
+
+    #[test]
+    fn main_destructor_with_several_processors_waits_for_both_queues() {
+        let mut e = init_engine();
+        let this = destroyed_main(&mut e);
+        e.mem.set_u32(ZERO_WORD, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x0086_c880, &args![this]);
+        let log = take_log(&mut e);
+        assert_eq!(
+            calls_to(&log, 0x0044_24e0),
+            vec![vec![this + 0x28 + 0x14], vec![this + 0x60 + 0x14]]
+        );
+        assert_eq!(calls_to(&log, 0x0087_b950).len(), 1);
+    }
+
+    #[test]
+    fn shutdown_object_is_destroyed_unless_it_is_missing_or_marked() {
+        let mut e = init_engine();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let record = seen.clone();
+        e.register_double(0x0000_3100, move |_, a| {
+            record.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        // No object.
+        e.call(0x0086_cd80, &args![]);
+        assert!(seen.borrow().is_empty());
+        // Marked (byte at +4 non-zero).
+        let object = object_with_vtable(&mut e, &[(0, 0x0000_3100)]);
+        e.mem.set_u8(object + 4, 1);
+        e.set_global(SHUTDOWN_OBJECT, object);
+        e.call(0x0086_cd80, &args![]);
+        assert!(seen.borrow().is_empty());
+        // Unmarked.
+        e.mem.set_u8(object + 4, 0);
+        e.call(0x0086_cd80, &args![]);
+        assert_eq!(*seen.borrow(), vec![vec![object, 1]]);
+    }
+
+    #[test]
+    fn queue_wait_waits_on_the_semaphore_wrapper() {
+        let mut e = init_engine();
+        e.call_log = Some(vec![]);
+        e.call(0x0086_cdd0, &args![0x6000u32]);
+        assert_eq!(calls_to(&take_log(&mut e), 0x0044_24e0), vec![vec![0x6014]]);
+    }
+
+    #[test]
+    fn task_object_is_cleared_with_its_destructor() {
+        let mut e = init_engine();
+        e.call_log = Some(vec![]);
+        e.call(0x0086_cdf0, &args![]);
+        assert!(calls_to(&take_log(&mut e), 0x00a2_2bf0).is_empty());
+        e.set_global(TASK_OBJECT, 0x4242u32);
+        e.call_log = Some(vec![]);
+        e.call(0x0086_cdf0, &args![]);
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, 0x00a2_2bf0), vec![vec![0x4242]]);
+        assert_eq!(calls_to(&log, FREE_OBJECT), vec![vec![0x4242]]);
+        assert_eq!(e.global::<u32>(TASK_OBJECT), 0);
+    }
+
+    #[test]
+    fn audio_setup_registers_the_callbacks_on_the_audio_object() {
+        let mut e = init_engine();
+        let slot_c = recorder(&mut e, 0x0000_3100, 0);
+        let slot_4 = recorder(&mut e, 0x0000_3200, 0);
+        let audio = object_with_vtable(&mut e, &[(0xc, 0x0000_3100), (4, 0x0000_3200)]);
+        e.register_double(0x0045_3a70, move |_, _| audio.into_ret());
+        let main = e.mem.alloc(0xa4);
+        e.mem.set_u32(main + 8, 0xabcd);
+        e.call_log = Some(vec![]);
+        e.call(0x0086_ce40, &args![main]);
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, 0x0050_f9c0), vec![vec![audio, 0x0082_d150]]);
+        assert_eq!(calls_to(&log, 0x0070_37c0), vec![vec![audio, 0x0082_d280]]);
+        assert_eq!(calls_to(&log, 0x0061_cc40), vec![vec![audio, 0x005e_3630]]);
+        // `0086cf00` stored its callback at +0x2c of the audio object.
+        assert_eq!(e.mem.u32(audio + 0x2c), 0x0082_d400);
+        assert_eq!(calls_to(&log, 0x005f_4bb0), vec![vec![audio, 0x0083_2c40]]);
+        assert_eq!(calls_to(&log, 0x008d_7dc0), vec![vec![audio, 0x0083_2c80]]);
+        assert_eq!(*slot_c.borrow(), vec![vec![audio, 0x0082_d740]]);
+        assert_eq!(*slot_4.borrow(), vec![vec![audio, 0xabcd]]);
+        assert!(position(&log, 0x00ae_a020) < position(&log, 0x0050_f9c0));
+        assert!(position(&log, 0x008d_7dc0) < position(&log, 0x0082_f830));
+    }
+
+    #[test]
+    fn audio_callback_setter_stores_at_0x2c() {
+        let mut e = init_engine();
+        let object = e.mem.alloc(0x40);
+        e.call(0x0086_cf00, &args![object, 0x1234u32]);
+        assert_eq!(e.mem.u32(object + 0x2c), 0x1234);
+    }
+
+    // ----- Main::InitTES ---------------------------------------------------------------------
+
+    /// The pieces of an engine in which `Main::InitTES` can run.
+    struct TesWorld {
+        player_calls: Rc<RefCell<Vec<Vec<u32>>>>,
+        health_calls: Rc<RefCell<Vec<Vec<u32>>>>,
+    }
+
+    const HOLDER_TEXT: u32 = 0x0100_0400;
+
+    /// An engine for `Main::InitTES`: the sky, the helper, the player and the file lookups
+    /// exist. `health` is what the player's slot 8 (at +0xA4) answers. The second file-name
+    /// holder has the text "A.esm", the fourth an empty text.
+    fn tes_engine(health: u32) -> (Engine, TesWorld) {
+        let mut e = init_engine();
+        e.register(0x0046_dd00, |_, _| 0x5000u32.into_ret());
+        e.register(0x007a_1480, |_, _| 0x6000u32.into_ret());
+        e.register(0x0045_05a0, |_, a| (a[0] + 1).into_ret());
+        let helper_object = object_with_vtable(&mut e, &[(0xc, 0x0000_3800)]);
+        e.register(0x0000_3800, |_, _| 0x7000u32.into_ret());
+        e.register_double(0x0045_bc00, move |_, _| helper_object.into_ret());
+        constructors_return_this(&mut e, &[0x0044_fb20]);
+        e.set_global(OBJECT_LOD_ROOT_NODE, 0x8200u32);
+        e.set_global(WATER_LOD_NODE, 0x8100u32);
+        e.set_global(DATA_HANDLER, 0x9000u32);
+        let player_calls = recorder(&mut e, 0x0000_3300, 0);
+        let health_calls = recorder(&mut e, 0x0000_3500, health);
+        let player_table = e.mem.alloc(0x400);
+        for slot in [0x128u32, 0x2a8, 0x88] {
+            e.mem.set_u32(player_table + slot, 0x0000_3300);
+        }
+        let embedded_table = e.mem.alloc(0x40);
+        e.mem.set_u32(embedded_table + 8, 0x0000_3500);
+        e.register_double(0x0093_8180, move |e, a| {
+            e.mem.set_u32(a[0], player_table);
+            e.mem.set_u32(a[0] + 0xa4, embedded_table);
+            a[0].into_ret()
+        });
+        // Texts of the file-name holders.
+        let first = text_at(&mut e, HOLDER_TEXT, b"A.esm");
+        let empty = text_at(&mut e, HOLDER_TEXT + 0x20, b"");
+        e.register_double(0x0040_3df0, move |_, a| {
+            if a[0] == FILE_NAME_HOLDERS[1] {
+                first.into_ret()
+            } else if a[0] == FILE_NAME_HOLDERS[3] {
+                empty.into_ret()
+            } else {
+                0u32.into_ret()
+            }
+        });
+        e.register(0x00ec_6130, |e, a| {
+            (e.mem.cstr(a[0]).len() as u32).into_ret()
+        });
+        e.register(0x0046_4f30, |_, a| a[0].into_ret());
+        e.register(0x0046_2f40, |_, a| (a[1] + 0x100).into_ret());
+        e.register(0x0048_39c0, |_, _| 0x6100u32.into_ret());
+        e.register(0x00ec_43fb, |_, _| 0x6200u32.into_ret());
+        e.register(0x0041_6870, |_, a| a[0].into_ret());
+        (
+            e,
+            TesWorld {
+                player_calls,
+                health_calls,
+            },
+        )
+    }
+
+    #[test]
+    fn init_tes_builds_the_tes_object_activates_files_and_initialises_the_player() {
+        let (mut e, world) = tes_engine(100);
+        e.set_global(PLUGINS_LIST_NAME, 0x4242u32);
+        e.set_global(0x0101_8bfc, 0x4500_0000u32);
+        let main = e.mem.alloc(0xa4);
+        e.call_log = Some(vec![]);
+        e.call(0x0086_cf20, &args![main, 0x3333u32]);
+        let log = take_log(&mut e);
+
+        // Sky, helper and the TES object.
+        assert_eq!(e.global::<u32>(SKY_OBJECT), 0x5000);
+        assert_eq!(calls_to(&log, 0x0045_05a0), vec![vec![0x5000]]);
+        assert_eq!(calls_to(&log, 0x00a8_9af0), vec![vec![0x5001, 0x6000]]);
+        assert_eq!(calls_to(&log, 0x0045_bc00), vec![vec![0x6000, 0]]);
+        let tes = e.global::<u32>(TES_OBJECT);
+        assert_eq!(
+            calls_to(&log, 0x0044_fb20),
+            vec![vec![tes, 0x0107_24e8, 0x8200, 0x7000, 0x5000, 0x8100]]
+        );
+        assert_eq!(calls_to(&log, 0x0045_0c50), vec![vec![tes]]);
+        assert_eq!(calls_to(&log, 0x0045_9f10), vec![vec![tes]]);
+        assert_eq!(calls_to(&log, 0x0045_a370), vec![vec![tes]]);
+        assert_eq!(calls_to(&log, 0x0045_a1e0), vec![vec![tes]]);
+        // The setting byte (zero) keeps `0045a600` away.
+        assert!(calls_to(&log, 0x0045_a600).is_empty());
+        // One file was found; the list of plugins did not add one, but the fallback is skipped.
+        assert_eq!(calls_to(&log, 0x0046_2f40), vec![vec![0x9000, HOLDER_TEXT]]);
+        assert_eq!(
+            calls_to(&log, 0x0047_1d00),
+            vec![vec![HOLDER_TEXT + 0x100, 1]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x0087_2430),
+            vec![vec![main, 0x0120_2e98, 0x4242]]
+        );
+        // The player.
+        let player = e.global::<u32>(PLAYER_OBJECT);
+        assert_ne!(player, 0);
+        let player_calls = world.player_calls.borrow();
+        assert_eq!(player_calls.len(), 3);
+        assert_eq!(player_calls[0], vec![player, 0x14, 1]);
+        assert_eq!(calls_to(&log, 0x0057_5690), vec![vec![player, 0x6200]]);
+        assert_eq!(
+            calls_to(&log, 0x00ec_43fb),
+            vec![vec![0x6100, 0, 0x0118_3028, 0x0118_3a1c, 0]]
+        );
+        let buffer = calls_to(&log, 0x0041_6870)[0][0];
+        assert_eq!(
+            calls_to(&log, 0x0041_6870),
+            vec![vec![buffer, 0x4500_0000, 0x4500_0000, 0]]
+        );
+        assert_eq!(player_calls[1], vec![player, buffer]);
+        assert_eq!(player_calls[2], vec![player]);
+        assert_eq!(calls_to(&log, 0x0086_d490), vec![vec![player, 0x011f_426c]]);
+        assert_eq!(calls_to(&log, 0x008c_26e0), vec![vec![player, 0]]);
+        // Health is non-zero: no error.
+        assert_eq!(
+            *world.health_calls.borrow(),
+            vec![vec![player + 0xa4, 0x10]]
+        );
+        assert!(calls_to(&log, ERROR_LOG)
+            .iter()
+            .all(|call| call[0] != 0x0108_2b30));
+        // Node update and scopes.
+        let scope = calls_to(&log, 0x0040_4eb0)[0][0];
+        assert_eq!(
+            calls_to(&log, 0x0040_4eb0),
+            vec![vec![scope, 0xa, 1, 0x0108_29c4, 0xe4f]]
+        );
+        let scope_lines: Vec<u32> = calls_to(&log, 0x0040_4f00)
+            .iter()
+            .map(|call| call[4])
+            .collect();
+        assert_eq!(scope_lines, vec![0xe51, 0xe85, 0xecb, 0xf00]);
+        assert_eq!(calls_to(&log, 0x0040_4ee0), vec![vec![scope]]);
+        assert_eq!(calls_to(&log, 0x00a5_a040), vec![vec![0x3333]]);
+        let value = calls_to(&log, 0x0043_d410)[0][0];
+        assert_eq!(calls_to(&log, 0x0043_d410), vec![vec![value, 0, 0, 0]]);
+        assert_eq!(calls_to(&log, 0x00a5_9c60), vec![vec![0x3333, value]]);
+        // Messages, in order.
+        let messages: Vec<u32> = calls_to(&log, ERROR_LOG)
+            .iter()
+            .map(|call| call[0])
+            .collect();
+        assert_eq!(
+            messages,
+            vec![
+                0x0108_2be8,
+                0x0108_2bcc,
+                0x0108_2bac,
+                0x0108_2b8c,
+                0x0108_2b74,
+                0x0108_2b14
+            ]
+        );
+        assert_eq!(calls_to(&log, 0x0046_3070), vec![vec![0x9000, 0]]);
+        assert_eq!(calls_to(&log, 0x0046_5040), vec![vec![0x9000]]);
+    }
+
+    #[test]
+    fn init_tes_without_a_helper_object_and_without_files_activates_fallout_esm() {
+        let (mut e, _world) = tes_engine(100);
+        e.register(0x007a_1480, |_, _| 0u32.into_ret());
+        // No holder has a text.
+        e.register(0x0040_3df0, |_, _| 0u32.into_ret());
+        let main = e.mem.alloc(0xa4);
+        e.call_log = Some(vec![]);
+        e.call(0x0086_cf20, &args![main, 0u32]);
+        let log = take_log(&mut e);
+        assert!(calls_to(&log, 0x0045_05a0).is_empty());
+        assert!(calls_to(&log, 0x0045_bc00).is_empty());
+        let tes = e.global::<u32>(TES_OBJECT);
+        assert_eq!(
+            calls_to(&log, 0x0044_fb20),
+            vec![vec![tes, 0x0107_24e8, 0x8200, 0, 0x5000, 0x8100]]
+        );
+        assert_eq!(calls_to(&log, 0x0046_2f40), vec![vec![0x9000, 0x0108_2ba0]]);
+        assert_eq!(
+            calls_to(&log, 0x0047_1d00),
+            vec![vec![0x0108_2ba0 + 0x100, 1]]
+        );
+    }
+
+    #[test]
+    fn init_tes_skips_fallout_esm_when_the_plugin_list_loads() {
+        let (mut e, _world) = tes_engine(100);
+        e.register(0x0040_3df0, |_, _| 0u32.into_ret());
+        e.register(0x0087_2430, |_, _| 1u32.into_ret());
+        let main = e.mem.alloc(0xa4);
+        e.call_log = Some(vec![]);
+        e.call(0x0086_cf20, &args![main, 0u32]);
+        let log = take_log(&mut e);
+        assert!(calls_to(&log, 0x0046_2f40).is_empty());
+        assert!(calls_to(&log, 0x0047_1d00).is_empty());
+    }
+
+    #[test]
+    fn init_tes_loads_extra_data_when_the_setting_is_on_and_logs_a_zero_health() {
+        let (mut e, world) = tes_engine(0);
+        e.mem.set_u8(ZERO_BYTE, 1);
+        e.register(0x0048_4e60, |_, a| (a[0] + 1).into_ret());
+        e.register(0x0089_1170, |_, a| (a[0] + 1).into_ret());
+        let main = e.mem.alloc(0xa4);
+        e.call_log = Some(vec![]);
+        e.call(0x0086_cf20, &args![main, 0u32]);
+        let log = take_log(&mut e);
+        let tes = e.global::<u32>(TES_OBJECT);
+        assert_eq!(calls_to(&log, 0x0045_a600), vec![vec![tes]]);
+        assert_eq!(world.health_calls.borrow().len(), 1);
+        assert_eq!(calls_to(&log, 0x0048_4e60), vec![vec![0x6200, 0]]);
+        assert_eq!(calls_to(&log, 0x0089_1170), vec![vec![0x6201]]);
+        assert!(calls_to(&log, ERROR_LOG).contains(&vec![0x0108_2b30, 0x6202]));
+    }
+
+    #[test]
+    fn init_tes_sets_the_timer_step_from_the_setting_when_it_is_in_range() {
+        let (mut e, _world) = tes_engine(100);
+        e.set_global(MILLISECONDS_PER_SECOND, 1000.0f64);
+        e.register(0x0045_03f0, |_, _| 100u32.into_ret());
+        e.mem.set_u32(ZERO_WORD, 500);
+        let main = e.mem.alloc(0xa4);
+        e.call_log = Some(vec![]);
+        e.call(0x0086_cf20, &args![main, 0u32]);
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, 0x0045_03f0).len(), 2);
+        assert_eq!(e.mem.f32(TIMER + 4), 2.0);
+        // Out of range (200 or more): left alone.
+        e.mem.set_f32(TIMER + 4, 0.0);
+        e.register(0x0045_03f0, |_, _| 200u32.into_ret());
+        e.call(0x0086_cf20, &args![main, 0u32]);
+        assert_eq!(e.mem.f32(TIMER + 4), 0.0);
+        // Zero: left alone after one check.
+        e.register(0x0045_03f0, |_, _| 0u32.into_ret());
+        e.call(0x0086_cf20, &args![main, 0u32]);
+        assert_eq!(e.mem.f32(TIMER + 4), 0.0);
+    }
+
+    // ----- the small helpers of the start-up -------------------------------------------------
+
+    #[test]
+    fn object_lod_root_getter_and_constant_getter() {
+        let mut e = init_engine();
+        e.set_global(OBJECT_LOD_ROOT_NODE, 0x1357u32);
+        assert_eq!(e.call(0x0086_d470, &args![]).u32(), 0x1357);
+        assert_eq!(e.call(0x0086_d480, &args![]).u32(), 0x0120_2e98);
+    }
+
+    #[test]
+    fn timer_step_is_a_thousandth_divided_by_the_count() {
+        let mut e = init_engine();
+        e.set_global(MILLISECONDS_PER_SECOND, 1000.0f64);
+        let object = e.mem.alloc(0x10);
+        e.call(0x0086_d4c0, &args![object, 4u32]);
+        assert_eq!(e.mem.f32(object + 4), 250.0);
+        e.call(0x0086_d4c0, &args![object, 0u32]);
+        assert_eq!(e.mem.f32(object + 4), 0.0);
+        // The count is unsigned.
+        e.call(0x0086_d4c0, &args![object, 0x8000_0000u32]);
+        assert_eq!(e.mem.f32(object + 4), (1000.0f64 / 2147483648.0) as f32);
+    }
+
+    #[test]
+    fn renderer_check_does_nothing_when_the_renderer_starts() {
+        let mut e = init_engine();
+        e.register(0x004d_a670, |_, _| 1u32.into_ret());
+        let object = e.mem.alloc(0x20);
+        e.mem.set_u32(object + 8, 0x11);
+        e.mem.set_u32(object + 0xc, 0x22);
+        e.call_log = Some(vec![]);
+        e.call(0x0086_d500, &args![object]);
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, 0x004d_a670), vec![vec![0x11, 0x22]]);
+        assert!(calls_to(&log, API_MESSAGE_BOX).is_empty());
+        assert!(calls_to(&log, API_EXIT_PROCESS).is_empty());
+    }
+
+    #[test]
+    fn renderer_check_reports_the_failure_and_ends_the_process() {
+        let mut e = init_engine();
+        e.register(0x004d_a670, |_, _| 0u32.into_ret());
+        e.register(0x0086_d580, |_, _| 0x1234u32.into_ret());
+        e.register(0x00ec_623a, |e, a| {
+            e.mem.set_cstr(a[0], b"formatted");
+            Ret::default()
+        });
+        let shown = Rc::new(RefCell::new(Vec::new()));
+        let record = shown.clone();
+        e.register_double(API_MESSAGE_BOX, move |e, a| {
+            record.borrow_mut().push((a.to_vec(), e.mem.cstr(a[1])));
+            Ret::default()
+        });
+        let object = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0086_d500, &args![object]);
+        let log = take_log(&mut e);
+        let format = calls_to(&log, 0x00ec_623a);
+        assert_eq!(format.len(), 1);
+        assert_eq!(format[0][1..], [0x0108_2c04, 0x1234]);
+        let shown = shown.borrow();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].0, vec![0, format[0][0], 0x0108_2bfc, 0]);
+        assert_eq!(shown[0].1, b"formatted".to_vec());
+        assert!(position(&log, API_MESSAGE_BOX) < position(&log, API_EXIT_PROCESS));
+        assert_eq!(calls_to(&log, API_EXIT_PROCESS), vec![vec![0]]);
+    }
+
+    // ----- Main::InitSceneGraph --------------------------------------------------------------
+
+    /// What a scene-graph test needs to look at.
+    struct SceneWorld {
+        graph: u32,
+        root: u32,
+        lod_root: u32,
+        nodes: Rc<RefCell<Vec<u32>>>,
+        attached: Rc<RefCell<Vec<Vec<u32>>>>,
+        children: Rc<RefCell<Vec<Vec<u32>>>>,
+    }
+
+    /// An engine for `Main::InitSceneGraph`: the constructors return nodes that share one
+    /// vtable (slot 0xDC attaches, slot 0xF8 sets a numbered child, both recorded).
+    fn scene_engine() -> (Engine, SceneWorld, u32) {
+        let mut e = init_engine();
+        let attached = recorder(&mut e, 0x0000_3600, 0);
+        let children = recorder(&mut e, 0x0000_3700, 0);
+        let table = e.mem.alloc(0x400);
+        e.mem.set_u32(table + 0xdc, 0x0000_3600);
+        e.mem.set_u32(table + 0xf8, 0x0000_3700);
+        let node = move |e: &mut Engine| {
+            let node = e.mem.alloc(0x40);
+            e.mem.set_u32(node, table);
+            node
+        };
+        let graph = node(&mut e);
+        let root = node(&mut e);
+        let lod_root = node(&mut e);
+        e.register_double(0x0087_8610, move |_, _| graph.into_ret());
+        e.register_double(0x00b5_e0f0, move |_, _| root.into_ret());
+        e.register_double(0x00bc_2980, move |_, _| lod_root.into_ret());
+        let nodes = Rc::new(RefCell::new(Vec::new()));
+        let made = nodes.clone();
+        e.register_double(0x00a5_ecb0, move |e, _| {
+            let created = node(e);
+            made.borrow_mut().push(created);
+            created.into_ret()
+        });
+        constructors_return_this(
+            &mut e,
+            &[
+                0x00bb_8180,
+                0x00c4_6970,
+                0x00c5_03d0,
+                0x00a8_81e0,
+                0x00a8_7810,
+                0x00a7_5650,
+                0x00a6_aa40,
+            ],
+        );
+        e.register(0x0043_8170, |_, a| a[0].into_ret());
+        e.register(0x0066_29f0, |_, a| (a[0] + 1).into_ret());
+        e.register(0x0045_0b80, |_, _| 0x5555u32.into_ret());
+        e.register(0x004b_c3f0, |_, _| 0x6666u32.into_ret());
+        e.register(0x0055_8310, |_, a| (a[0] + 2).into_ret());
+        e.register(0x00b4_f5c0, |_, _| 0x7171u32.into_ret());
+        e.register(0x0086_e600, |_, _| 0x81u32.into_ret());
+        // The LOD distance setting: the float the object `00403e20` points at.
+        e.register(0x0040_3e20, |_, _| 0x0100_0300u32.into_ret());
+        e.mem.set_u32(0x0100_0300, 0x4049_0fdb);
+        e.register(0x0054_95f0, |_, _| 0x4444u32.into_ret());
+        let main = e.mem.alloc(0xa4);
+        for offset in [0x88u32, 0x8c, 0x90, 0x94, 0x98] {
+            e.mem.set_u32(main + offset, 0xa000 + offset);
+        }
+        (
+            e,
+            SceneWorld {
+                graph,
+                root,
+                lod_root,
+                nodes,
+                attached,
+                children,
+            },
+            main,
+        )
+    }
+
+    #[test]
+    fn scene_graph_is_built_with_its_nodes_in_order() {
+        let (mut e, world, main) = scene_engine();
+        e.call_log = Some(vec![]);
+        e.call(0x0086_d590, &args![main]);
+        let log = take_log(&mut e);
+
+        // The graph is named "World"; the root is stored in the holders of `Main`.
+        let world_calls = calls_to(&log, 0x0087_8610);
+        assert_eq!(world_calls.len(), 1);
+        assert_eq!(world_calls[0][1..], [0x0108_2c9c, 0, 0]);
+        assert_eq!(e.mem.u32(SCENE_GRAPH_HOLDER), world.graph);
+        assert_eq!(calls_to(&log, ALLOCATE_SCENE_OBJECT)[0], vec![0xc0]);
+        assert_eq!(calls_to(&log, ALLOCATE_SCENE_OBJECT)[1], vec![0x200]);
+        assert_eq!(e.mem.u32(0x011f_9508), 0x6666);
+        assert_eq!(
+            calls_to(&log, 0x0040_6d30),
+            vec![vec![0x011f_9308, 0x104, 0x0108_2c8c]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x0071_2e60),
+            vec![vec![world.graph + 1, 0x011a_d840]]
+        );
+        assert_eq!(calls_to(&log, 0x0070_b760), vec![vec![world.root, 0]]);
+        assert_eq!(calls_to(&log, 0x00b4_f2f0), vec![vec![0, world.root]]);
+        assert_eq!(
+            calls_to(&log, 0x004a_1020),
+            vec![
+                vec![0xa088, world.root],
+                vec![0xa08c, world.root],
+                vec![0xa090, world.root],
+                vec![0xa094, world.root],
+                vec![0xa098, 0x5555],
+            ]
+        );
+        assert_eq!(calls_to(&log, 0x0045_0b80), vec![vec![1]]);
+        assert_eq!(e.mem.u32(0x011f_95d8), world.graph + 1);
+
+        // Settings: everything off.
+        assert_eq!(calls_to(&log, 0x004b_c3d0), vec![vec![0x10]]);
+        assert_eq!(e.global::<u32>(0x011a_d82c), 0);
+        assert_eq!(e.global::<u32>(0x011f_91ec), 0x0056_4360);
+        assert_eq!(e.global::<u32>(0x011f_d870), 0);
+        assert_eq!(e.global::<u32>(0x011a_d808), 0x4049_0fdb);
+        assert_eq!(calls_to(&log, 0x0040_3e20), vec![vec![0x011d_edc8]]);
+        assert_eq!(e.global::<u8>(0x011f_91de), 0);
+        assert_eq!(e.global::<u8>(0x011f_91dd), 0);
+
+        // Attachments (slot 0xDC) and numbered children (slot 0xF8).
+        let nodes = world.nodes.borrow().clone();
+        // Weather, LandLOD, DistantRefLOD, WaterLOD, LOD Trees, ObjectLODRoot.
+        assert_eq!(nodes.len(), 6);
+        let (weather, land, distant, water, trees, object_lod) =
+            (nodes[0], nodes[1], nodes[2], nodes[3], nodes[4], nodes[5]);
+        let sky = e.mem.u32(SKY_NODE_HOLDER);
+        let particles = e.mem.u32(PARTICLE_SYSTEMS_HOLDER);
+        assert_eq!(
+            *world.attached.borrow(),
+            vec![
+                vec![world.graph, world.root, 1],
+                vec![world.lod_root, land, 1],
+                vec![world.lod_root, distant, 1],
+                vec![world.lod_root, water, 1],
+                vec![distant, trees, 1],
+            ]
+        );
+        assert_eq!(
+            *world.children.borrow(),
+            vec![
+                vec![world.root, 0, sky],
+                vec![world.root, 1, weather],
+                vec![world.root, 2, world.lod_root],
+                vec![world.root, 3, object_lod],
+                vec![world.root, 5, particles],
+            ]
+        );
+        assert_eq!(e.global::<u32>(LOD_ROOT_NODE), world.lod_root);
+        assert_eq!(e.global::<u32>(WATER_LOD_NODE), water);
+        assert_eq!(e.global::<u32>(OBJECT_LOD_ROOT_NODE), object_lod);
+        assert_eq!(e.mem.u32(WEATHER_NODE_HOLDER), weather);
+        assert_eq!(calls_to(&log, 0x0086_e620), vec![vec![trees]]);
+        assert_eq!(calls_to(&log, 0x0086_e630), vec![vec![trees]]);
+
+        // Names, in creation order, each given to its node.
+        let texts: Vec<u32> = calls_to(&log, 0x0043_8170)
+            .iter()
+            .map(|call| call[1])
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                0x0108_2c88,
+                0x0101_fe78,
+                0x0108_2c80,
+                0x0108_2c78,
+                0x0108_2c68,
+                0x0108_2c5c,
+                0x0108_2c50,
+                0x0108_2c40,
+                0x0108_2c28,
+            ]
+        );
+        let named: Vec<u32> = calls_to(&log, 0x00a5_b950)
+            .iter()
+            .map(|call| call[0])
+            .collect();
+        assert_eq!(
+            named,
+            vec![
+                sky,
+                weather,
+                world.lod_root,
+                land,
+                distant,
+                water,
+                trees,
+                object_lod,
+                particles
+            ]
+        );
+        assert_eq!(calls_to(&log, 0x0043_81b0).len(), 9);
+
+        // Fog.
+        let fog = e.mem.u32(FOG_HOLDER);
+        assert_eq!(calls_to(&log, 0x0049_ed90), vec![vec![fog, 1]]);
+        assert_eq!(calls_to(&log, 0x00bb_8140), vec![vec![fog, 0x3f80_0000]]);
+        assert_eq!(calls_to(&log, 0x00b5_5540), vec![vec![0, fog]]);
+        // The sky and the weather nodes are marked.
+        assert_eq!(calls_to(&log, 0x0054_68d0), vec![vec![sky, 1]]);
+        assert!(calls_to(&log, 0x0054_67c0).contains(&vec![sky, 1]));
+        let marked: Vec<Vec<u32>> = calls_to(&log, 0x0054_6780);
+        assert_eq!(
+            marked,
+            vec![
+                vec![weather, 1],
+                vec![land, 1],
+                vec![distant, 1],
+                vec![water, 1],
+                vec![trees, 1],
+                vec![object_lod, 1]
+            ]
+        );
+        // The root is placed, updated, handed to the renderer.
+        assert_eq!(
+            calls_to(&log, 0x004b_c1f0),
+            vec![vec![world.graph + 2, 0, 0, 0]]
+        );
+        assert_eq!(calls_to(&log, 0x004d_c540), vec![vec![0, 0x7171]]);
+        assert_eq!(e.global::<u8>(SCENE_FLAG_BYTE), 0x81);
+        assert_eq!(calls_to(&log, 0x0057_cf00).len(), 1);
+        // Scope.
+        let scope = calls_to(&log, 0x0040_4eb0)[0][0];
+        assert_eq!(
+            calls_to(&log, 0x0040_4eb0),
+            vec![vec![scope, 0x19, 1, 0x0108_29c4, 0xf4c]]
+        );
+        assert_eq!(calls_to(&log, 0x0040_4ee0), vec![vec![scope]]);
+    }
+
+    #[test]
+    fn scene_graph_builds_the_screen_quad_when_the_holder_is_empty() {
+        let (mut e, _world, main) = scene_engine();
+        e.register(0x00a8_7ae0, |_, _| 77u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0086_d590, &args![main]);
+        let log = take_log(&mut e);
+        let quad = e.mem.u32(SCREEN_ELEMENT_HOLDER);
+        assert_ne!(quad, 0);
+        // The data (0x70 bytes) and the object (0xC4 bytes) are allocated in that nesting.
+        let allocations: Vec<u32> = calls_to(&log, ALLOCATE_SCENE_OBJECT)
+            .iter()
+            .map(|call| call[0])
+            .collect();
+        let at_outer = allocations.iter().position(|size| *size == 0xc4).unwrap();
+        assert_eq!(allocations[at_outer + 1], 0x70);
+        let data = calls_to(&log, 0x00a8_81e0);
+        assert_eq!(data.len(), 1);
+        assert_eq!(data[0][1..], [0, 0, 1, 1, 1, 4, 1, 2, 1]);
+        assert_eq!(calls_to(&log, 0x00a8_7810), vec![vec![quad, data[0][0]]]);
+        // The wrappers reach the data object `005495f0` returns.
+        assert_eq!(calls_to(&log, 0x00a8_7ae0), vec![vec![0x4444, 4, 0, 0]]);
+        assert_eq!(
+            calls_to(&log, 0x00a8_8020),
+            vec![vec![0x4444, 0, 0, 0, 0x3f80_0000, 0x3f80_0000]]
+        );
+        assert_eq!(calls_to(&log, 0x00a8_7900), vec![vec![0x4444]]);
+        assert_eq!(
+            calls_to(&log, 0x00a8_8130),
+            vec![vec![0x4444, 0, 0, 0, 0, 0x3f80_0000, 0x3f80_0000]]
+        );
+        // The material and the texturing property are attached to the quad.
+        let material = calls_to(&log, 0x004b_c450);
+        assert_eq!(material.len(), 1);
+        assert_eq!(material[0][1], 0x011a_9b7c);
+        let texturing = calls_to(&log, 0x005b_8fc0)[0][0];
+        assert_eq!(
+            calls_to(&log, 0x0043_9410),
+            vec![vec![quad, material[0][0]], vec![quad, texturing]]
+        );
+        assert_eq!(calls_to(&log, 0x004b_c320), vec![vec![0, 0]]);
+        assert_eq!(calls_to(&log, 0x0060_aeb0), vec![vec![texturing, 0]]);
+        assert_eq!(calls_to(&log, 0x004f_3200), vec![vec![texturing, 0]]);
+        // The quad is updated like the root: two updates in all.
+        assert_eq!(calls_to(&log, 0x00a5_a040).len(), 2);
+        assert_eq!(calls_to(&log, 0x00a5_a040)[1], vec![quad]);
+        assert_eq!(calls_to(&log, 0x0043_d410).len(), 2);
+        assert_eq!(calls_to(&log, 0x00a5_9c60).len(), 2);
+        assert_eq!(calls_to(&log, 0x00a5_9c60)[1][0], quad);
+    }
+
+    #[test]
+    fn scene_graph_keeps_an_existing_screen_quad() {
+        let (mut e, _world, main) = scene_engine();
+        e.mem.set_u32(SCREEN_ELEMENT_HOLDER, 0x2468);
+        e.call_log = Some(vec![]);
+        e.call(0x0086_d590, &args![main]);
+        let log = take_log(&mut e);
+        assert_eq!(e.mem.u32(SCREEN_ELEMENT_HOLDER), 0x2468);
+        assert!(calls_to(&log, 0x00a8_81e0).is_empty());
+        assert!(calls_to(&log, 0x00a8_7ae0).is_empty());
+        assert_eq!(calls_to(&log, 0x00a5_a040).len(), 1);
+        assert_eq!(calls_to(&log, 0x0057_cf00).len(), 1);
+    }
+
+    #[test]
+    fn scene_graph_folds_the_settings_into_the_flag_words() {
+        let (mut e, _world, main) = scene_engine();
+        // Every byte setting is 1 (the three read through the setting pointer and the three
+        // read by address).
+        e.mem.set_u8(ZERO_BYTE, 1);
+        e.register(0x0086_e5a0, |_, _| 1u32.into_ret());
+        e.register(0x0086_e5c0, |_, _| 1u32.into_ret());
+        e.register(0x0086_e5e0, |_, _| 7u32.into_ret());
+        e.register(0x004b_c400, |_, _| 1u32.into_ret());
+        e.register(0x004d_c060, |_, a| {
+            assert_eq!(a, &[0]);
+            2u32.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0086_d590, &args![main]);
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, 0x004b_c3d0), vec![vec![0x3f]]);
+        assert_eq!(e.global::<u32>(0x011a_d82c), 10);
+    }
+
+    #[test]
+    fn scene_graph_leaves_out_the_multi_display_bit_with_one_display_or_none() {
+        let (mut e, _world, main) = scene_engine();
+        e.register(0x004b_c400, |_, _| 1u32.into_ret());
+        e.register(0x004d_c060, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0086_d590, &args![main]);
+        assert_eq!(calls_to(&take_log(&mut e), 0x004b_c3d0), vec![vec![0x10]]);
+        // Settings that are 2 do not count as 1; the display count is not even asked when
+        // the first check fails.
+        let (mut e, _world, main) = scene_engine();
+        e.mem.set_u8(ZERO_BYTE, 2);
+        e.register(0x004d_c060, |_, _| panic!("not asked"));
+        e.call_log = Some(vec![]);
+        e.call(0x0086_d590, &args![main]);
+        assert_eq!(calls_to(&take_log(&mut e), 0x004b_c3d0), vec![vec![0x10]]);
+    }
+
+    // ----- the screen-element wrappers and the global setters --------------------------------
+
+    #[test]
+    fn insert_wrapper_forwards_to_the_data_object() {
+        let mut e = init_engine();
+        e.register(0x0054_95f0, |_, a| {
+            assert_eq!(a, &[0x1000]);
+            0x4444u32.into_ret()
+        });
+        e.register(0x00a8_7ae0, |_, _| 9u32.into_ret());
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0086_e3f0, &args![0x1000u32, 4u16, 0xffffu16, 0x2000u32]);
+        assert_eq!(result.u32(), 9);
+        assert_eq!(
+            calls_to(&take_log(&mut e), 0x00a8_7ae0),
+            vec![vec![0x4444, 4, 0xffff, 0x2000]]
+        );
+    }
+
+    #[test]
+    fn rectangle_wrapper_forwards_to_the_data_object() {
+        let mut e = init_engine();
+        e.register(0x0054_95f0, |_, _| 0x4444u32.into_ret());
+        e.register(0x00a8_8020, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        let result = e.call(
+            0x0086_e420,
+            &args![0x1000u32, 3u32, 0.5f32, 1.5f32, 2.5f32, -3.5f32],
+        );
+        assert_eq!(result.u32(), 1);
+        assert_eq!(
+            calls_to(&take_log(&mut e), 0x00a8_8020),
+            vec![vec![
+                0x4444,
+                3,
+                0.5f32.to_bits(),
+                1.5f32.to_bits(),
+                2.5f32.to_bits(),
+                (-3.5f32).to_bits()
+            ]]
+        );
+    }
+
+    #[test]
+    fn textures_wrapper_forwards_to_the_data_object() {
+        let mut e = init_engine();
+        e.register(0x0054_95f0, |_, _| 0x4444u32.into_ret());
+        e.register(0x00a8_8130, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        let result = e.call(
+            0x0086_e460,
+            &args![
+                0x1000u32,
+                3u32,
+                0x1_0002u32,
+                0.25f32,
+                0.5f32,
+                0.75f32,
+                1.0f32
+            ],
+        );
+        assert_eq!(result.u32(), 1);
+        // The 16-bit argument is cut to 16 bits.
+        assert_eq!(
+            calls_to(&take_log(&mut e), 0x00a8_8130),
+            vec![vec![
+                0x4444,
+                3,
+                2,
+                0.25f32.to_bits(),
+                0.5f32.to_bits(),
+                0.75f32.to_bits(),
+                1.0f32.to_bits()
+            ]]
+        );
+    }
+
+    #[test]
+    fn update_bound_wrapper_forwards_to_the_data_object() {
+        let mut e = init_engine();
+        e.register(0x0054_95f0, |_, _| 0x4444u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0086_e4b0, &args![0x1000u32]);
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, 0x0054_95f0), vec![vec![0x1000]]);
+        assert_eq!(calls_to(&log, 0x00a8_7900), vec![vec![0x4444]]);
+    }
+
+    #[test]
+    fn global_setters_store_their_arguments() {
+        let mut e = init_engine();
+        e.call(0x0086_e4d0, &args![0xdead_beefu32]);
+        assert_eq!(e.global::<u32>(0x011f_91ec), 0xdead_beef);
+        e.call(0x0086_e500, &args![7u8]);
+        assert_eq!(e.global::<u8>(0x011f_91de), 7);
+        e.call(0x0086_e510, &args![9u8]);
+        assert_eq!(e.global::<u8>(0x011f_91dd), 9);
+        // Each setter touches only its own global.
+        assert_eq!(e.global::<u8>(0x011f_91df), 0);
+    }
+
+    #[test]
+    fn path_setter_copies_into_the_buffer() {
+        let mut e = init_engine();
+        e.call_log = Some(vec![]);
+        e.call(0x0086_e4e0, &args![0x1234u32]);
+        assert_eq!(
+            calls_to(&take_log(&mut e), 0x0040_6d30),
+            vec![vec![0x011f_9308, 0x104, 0x1234]]
+        );
+    }
+
+    #[test]
+    fn holder_setter_assigns_the_holder() {
+        let mut e = init_engine();
+        e.call(0x0086_e520, &args![0x7777u32]);
+        assert_eq!(e.mem.u32(0x011f_9508), 0x7777);
+    }
+
+    #[test]
+    fn byte_setting_getters_read_their_settings() {
+        let mut e = init_engine();
+        e.register(0x0040_8d60, |_, a| {
+            // The setting object's address picks one of three bytes.
+            let index = match a[0] {
+                0x011c_7154 => 0,
+                0x011c_7544 => 1,
+                0x011c_712c => 2,
+                other => panic!("unexpected setting {other:08x}"),
+            };
+            (ZERO_BYTE + index).into_ret()
+        });
+        e.mem.set_u8(ZERO_BYTE, 11);
+        e.mem.set_u8(ZERO_BYTE + 1, 22);
+        e.mem.set_u8(ZERO_BYTE + 2, 33);
+        assert_eq!(e.call(0x0086_e540, &args![]).u8(), 11);
+        assert_eq!(e.call(0x0086_e560, &args![]).u8(), 22);
+        assert_eq!(e.call(0x0086_e580, &args![]).u8(), 33);
     }
 }
