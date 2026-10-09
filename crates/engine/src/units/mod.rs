@@ -6,6 +6,7 @@ pub mod bscore;
 pub mod bshavok;
 pub mod bsmain;
 pub mod bsmenu;
+pub mod crt;
 pub mod facegen;
 pub mod fallout_ai;
 pub mod fallout_audio;
@@ -36,6 +37,7 @@ pub mod unplaced;
 
 /// Every registered function of every unit.
 pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
+    out.extend(crt::funcs());
     out.extend(platform::funcs());
     bsaudio::funcs(out);
     bscore::funcs(out);
