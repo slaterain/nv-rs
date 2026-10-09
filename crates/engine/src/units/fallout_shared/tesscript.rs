@@ -5,9 +5,10 @@
 //! running script instance, the engine's event list), the `Script` form, and
 //! the static lists of references whose enable/disable/delete is delayed.
 //!
-//! Progress: 40 of the 77 functions, `005a8bc0` to `005aa930`, are
-//! translated. The next session continues at `005aaaf0`
-//! (`Script::LoadPendingReferences`).
+//! Progress: all 77 functions, `005a8bc0` to `005ae2e0`, are translated:
+//! the first 40 (`005a8bc0` to `005aa930`) in an earlier session and the
+//! last 37 (`005aaaf0` to `005ae2e0`) in the next, so there is nothing left
+//! in this unit.
 //!
 //! Notes for whoever continues:
 //! - The engine map names `005a8bc0` `ScriptLocals::ScriptLocals`, but the
@@ -31,11 +32,26 @@
 //! - A pushed word that follows a call with no stack clean-up belongs to the
 //!   next call (`005e24d0` takes none, `005e2730` takes the three pushed
 //!   words).
+//! - `Script::Init` takes a `ScriptCompileData` (`fn_005ab040` compares it
+//!   with the script), not a `Script`; `005ab7f0` and `005ab930` are
+//!   `cdecl` with a third pushed word they never read. `005aaee0(count, size)`
+//!   is a `calloc` on the memory manager.
+//! - `Script::ParseParameters` (`005accb0`) is `cdecl` varargs: seven fixed
+//!   words, then the output pointers. Its typed form is
+//!   [`script_parse_parameters`] (the outputs as a slice); it is registered
+//!   through [`parse_parameters_entry`], which takes any number of words.
+//!   `fn_005ac7a0` evaluates one operand (also called by it) and takes the
+//!   same fixed words with the output double first.
+//! - Names the decompiler or the map gets wrong here: `005ae380` is a list
+//!   count (not `VATS::GetCount`), `00526ac0` returns the double of the `G`
+//!   operand (not `QMultiBoundRadius`), `00500910` constructs a
+//!   `SCRIPT_REFERENCED_OBJECT` (not `AddTail`), `00ec5ec0` is the stack
+//!   probe of the `alloca` in `Script::Load`.
 //! - Not translated: the compiler's exception-unwinding frames.
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::types::BSSimpleList;
+use crate::types::{BSSimpleList, BSStringT};
 
 // ---- Memory and list helpers of the game, called by address ---------------
 
@@ -228,6 +244,215 @@ const SCRIPT_VARIABLE_DELETE: u32 = 0x0061_cb30;
 const SCRIPT_REFERENCED_OBJECT_DESTRUCT: u32 = 0x007d_9ec0;
 /// `Script`'s vtable.
 const SCRIPT_VTABLE: u32 = 0x0103_7094;
+
+// ---- Second half of the unit: loading, running and parsing ------------------
+
+/// `BGSLoadGameBuffer::LoadFormID` (`008648a0(buffer)`): the next form id.
+const BUFFER_LOAD_FORM_ID: u32 = 0x0086_48a0;
+/// `TESObjectREFR::TESObjectREFR` (`0055a2f0(block)`, the 0x68-byte block
+/// from `operator new`).
+const REFERENCE_CONSTRUCT: u32 = 0x0055_a2f0;
+/// `BSSimpleList` clear (`00470470(list)`: releases every node after the
+/// first and empties the first).
+const LIST_CLEAR: u32 = 0x0047_0470;
+/// `BSSimpleList` item count (`005ae380(list)`; the engine map calls it
+/// `VATS::GetCount` through folded code).
+const LIST_COUNT: u32 = 0x005a_e380;
+/// `_strlen` (`cdecl`).
+const STRLEN: u32 = 0x00ec_6130;
+/// The memory manager: `00401020()` answers the singleton whose
+/// `Allocate(size)` is `00aa3e40`.
+const MEMORY_MANAGER_GET: u32 = 0x0040_1020;
+const MEMORY_MANAGER_ALLOCATE: u32 = 0x00aa_3e40;
+/// String helpers of the unit: the length of a `BSStringT` (`004048e0`, its
+/// `this` the string), its character data (`00559450`), and
+/// `00404dc0(first, second)` (`cdecl`), a string comparison that answers
+/// zero when the strings are equal (`FindVariable` takes zero as a match).
+const STRING_LENGTH: u32 = 0x0040_48e0;
+const STRING_DATA: u32 = 0x0055_9450;
+const STRING_COMPARE: u32 = 0x0040_4dc0;
+/// The comparison `00469880(first, second)` of `CompareResultScripts`
+/// (`cdecl`), non-zero when the two texts differ.
+const TEXT_COMPARE: u32 = 0x0046_9880;
+/// A test on a script (`00474cb0(script)`) that the loader of
+/// `005ab040` combines with the name length; not named in the map.
+const SCRIPT_IS_NAMED_CHECK: u32 = 0x0047_4cb0;
+/// `005e29a0(variable, other)` (`this` a `ScriptVariable`): non-zero when
+/// the two variables differ.
+const VARIABLE_DIFFERS: u32 = 0x005e_29a0;
+/// `005e2910(block, source)` (`this` the new block): the copy constructor
+/// of `ScriptVariable` (0x20 bytes), `005ab8b0` is that of
+/// `SCRIPT_REFERENCED_OBJECT` (0x10 bytes) and `005ac150` that of
+/// `SCRIPT_LOCAL`.
+const SCRIPT_VARIABLE_COPY_CONSTRUCT: u32 = 0x005e_2910;
+/// `ScriptVariable::ScriptVariable()` (`005e28b0(block)`) and
+/// `ScriptVariable::Load` (`005e2a20(variable, file)`, Xbox PDB).
+const SCRIPT_VARIABLE_CONSTRUCT: u32 = 0x005e_28b0;
+const SCRIPT_VARIABLE_LOAD: u32 = 0x005e_2a20;
+/// The string constructor (`004037b0(this)`) and the copy
+/// (`00501c10(this, source)`) that `005ab8b0` runs on the first eight bytes
+/// of a referenced object, and `BSStringT::Set(text, 0)` (`004037f0`).
+const STRING_CONSTRUCT: u32 = 0x0040_37b0;
+const STRING_COPY: u32 = 0x0050_1c10;
+const STRING_SET: u32 = 0x0040_37f0;
+/// `SCRIPT_REFERENCED_OBJECT` constructor (`00500910(block)`, named
+/// `BSSimpleList<..>::AddTail` in the map by folding).
+const REFERENCED_OBJECT_CONSTRUCT: u32 = 0x0050_0910;
+/// `ScriptLocals::ScriptLocals` (`005a8b80(block)`).
+const SCRIPT_LOCALS_CONSTRUCT: u32 = 0x005a_8b80;
+/// `ScriptCompileData` accessor of its variable list (`005a8080`, +0x3c).
+const SCRIPT_BUFFER_VARIABLE_LIST: u32 = 0x005a_8080;
+/// The form-type byte of a form (`00401170`, `this` the form: the byte
+/// at +4), `TESForm::GetFile(-1)` (`00484e60`) and `SetFile` (`00484f50`),
+/// `AddCompileIndex(&id, file)` (`00485d50`, `cdecl`), the test `004077c0`
+/// that `InitItem` applies to the script, and `00483710` (an empty method).
+const FORM_TYPE_OF: u32 = 0x0040_1170;
+const FORM_GET_FILE: u32 = 0x0048_4e60;
+const FORM_SET_FILE: u32 = 0x0048_4f50;
+const FORM_ADD_COMPILE_INDEX: u32 = 0x0048_5d50;
+const SCRIPT_INIT_ITEM_CHECK: u32 = 0x0040_77c0;
+const EMPTY_METHOD: u32 = 0x0048_3710;
+/// The word at +0xC of a form (`0084e3a0(form)`): its form id.
+const FORM_ID_OF: u32 = 0x0084_e3a0;
+/// `TESForm` methods the script's save and load use: `StartForm`
+/// (`004855a0`), `AddChunkData(type, data, size)` (`00485990`, `cdecl`),
+/// `CloseForm` (`00485680`), `Save` (`00483d20`) and `LoadForm`
+/// (`00485110(this, file)`).
+const FORM_START: u32 = 0x0048_55a0;
+const FORM_ADD_CHUNK: u32 = 0x0048_5990;
+const FORM_CLOSE: u32 = 0x0048_5680;
+const FORM_SAVE: u32 = 0x0048_3d20;
+const FORM_LOAD: u32 = 0x0048_5110;
+/// The "swap bytes on save" global test (`00401500()`, a byte at
+/// `011c54ba`) and the swap of a script header (`00414220(header)`).
+const ENDIAN_SWAP_ENABLED: u32 = 0x0040_1500;
+const HEADER_SWAP_BYTES: u32 = 0x0041_4220;
+/// `TESFile` methods (`this` the file): the type of the current record
+/// (`00472660`, `GetTESForm`), the next chunk's type (`004726b0`,
+/// `GetTESChunk`, zero at the end), the advance to the next chunk
+/// (`004726f0`), the chunk size (`00401660`), `GetChunkData(&value)`
+/// (`004727f0`), `GetChunkData(buffer, size)` (`00472890`), the
+/// big-endian flag (`00401680`) and the file name (`00891170`).
+const FILE_RECORD_TYPE: u32 = 0x0047_2660;
+const FILE_CHUNK_TYPE: u32 = 0x0047_26b0;
+const FILE_NEXT_CHUNK: u32 = 0x0047_26f0;
+const FILE_CHUNK_SIZE: u32 = 0x0040_1660;
+const FILE_GET_CHUNK_VALUE: u32 = 0x0047_27f0;
+const FILE_GET_CHUNK_DATA: u32 = 0x0047_2890;
+const FILE_IS_BIG_ENDIAN: u32 = 0x0040_1680;
+const FILE_NAME_OF: u32 = 0x0089_1170;
+/// Chunk types of a script record, as little-endian words of their four
+/// letters.
+const CHUNK_RNAM: u32 = 0x4d41_4e52;
+const CHUNK_OBND: u32 = 0x444e_424f;
+const CHUNK_SCDA: u32 = 0x4144_4353;
+const CHUNK_EDID: u32 = 0x4449_4445;
+const CHUNK_SLSD: u32 = 0x4453_4c53;
+const CHUNK_SCVR: u32 = 0x5256_4353;
+const CHUNK_SCRO: u32 = 0x4f52_4353;
+const CHUNK_SCHR: u32 = 0x5248_4353;
+const CHUNK_SCRV: u32 = 0x5652_4353;
+/// The form type of a script record.
+const FORM_TYPE_SCRIPT: u32 = 0x11;
+/// Virtual slots of a `Script` (byte offsets): the load of the object
+/// bounds (`+0xE0`), the editor id setter (`+0x134`), the "set delete"
+/// (`+0xC4`) and "set altered" (`+0xC8`) and the clean-up (`+0x88`).
+const SLOT_LOAD_BOUNDS: u32 = 0xe0;
+const SLOT_SET_EDITOR_ID: u32 = 0x134;
+const SLOT_SET_DELETED: u32 = 0xc4;
+const SLOT_SET_ALTERED: u32 = 0xc8;
+const SLOT_INIT_ITEM: u32 = 0x88;
+/// Formats of the messages of this half.
+const FORMAT_REFERENCED_OBJECT_INVALID: u32 = 0x0103_7238;
+const FORMAT_REFERENCED_OBJECT_NOT_FOUND: u32 = 0x0103_72a0;
+const FORMAT_REFERENCE_LIST_CORRUPT: u32 = 0x0103_71d0;
+const FORMAT_NOT_COMPILED: u32 = 0x0103_730c;
+const FORMAT_LOCAL_VARIABLE_NOT_FOUND: u32 = 0x0103_7350;
+const FORMAT_PARAMETER_TYPE_UNIMPLEMENTED: u32 = 0x0103_73a8;
+/// Source lines of the scope guards.
+const INIT_ITEM_SCOPE_LINE: u32 = 0xab5;
+const BUILD_LOCALS_SCOPE_LINE: u32 = 0xcde;
+const COPY_VARIABLES_SCOPE_LINE: u32 = 0xceb;
+const COMPILE_AND_RUN_SCOPE_LINE: u32 = 0xd53;
+/// TLS fields of the referenced-object cache (with
+/// [`TLS_LAST_REF_SEARCH_SCRIPT`]): the last result, index and locals.
+const TLS_LAST_REF_OBJECT: u32 = 0x27c;
+const TLS_LAST_REF_INDEX: u32 = 0x280;
+const TLS_LAST_REF_LOCALS: u32 = 0x284;
+/// The setting object whose accessor `00403e20(object)` gives a pointer
+/// to the float used as the default quest script delay (`fQuestScriptDelay`
+/// is set from it), the table of eight halvings of it (`011cad20`) and the
+/// counter of quest scripts initialized (`011cad40`).
+const QUEST_DELAY_SETTING: u32 = 0x011c_ac68;
+const QUEST_DELAY_ACCESSOR: u32 = 0x0040_3e20;
+const QUEST_DELAY_TABLE: u32 = 0x011c_ad20;
+const QUEST_DELAY_COUNTER: u32 = 0x011c_ad40;
+/// The divisor of the halvings, as a double (read from the exe).
+const QUEST_DELAY_DIVISOR: u32 = 0x0101_1590;
+/// `00792760(quest)`: the float (in `ST0`) added to a quest script's
+/// delay; `0084d030(object)` with `object` at `011f6394`: the float
+/// elapsed time that `Run` takes off the delay.
+const QUEST_DELAY_OF: u32 = 0x0079_2760;
+const ELAPSED_TIME: u32 = 0x0084_d030;
+const ELAPSED_TIME_OBJECT: u32 = 0x011f_6394;
+/// `ScriptRunManager::Run(manager, script, a, b, c, flag, 0, 0, 0.0)`.
+const SCRIPT_RUN_MANAGER_RUN: u32 = 0x005e_2590;
+/// `ScriptCompiler::CompilePartialScript` (`005aedb0`, `this` the
+/// compiler: `(script, reference, mode, 0)`).
+const COMPILE_PARTIAL_SCRIPT: u32 = 0x005a_edb0;
+/// `TESObjectREFR::GetScriptVariables` (`005673e0(reference)`).
+const REFERENCE_SCRIPT_VARIABLES: u32 = 0x0056_73e0;
+/// `ExtraDataList::GetScriptLocals` (`00418830(list)`).
+const EXTRA_LIST_SCRIPT_LOCALS: u32 = 0x0041_8830;
+/// `ExtraDataList::GetReferencePointer` (`0041c8d0(list)`), `00576260
+/// (pointer, key, id)` (`TESObjectREFR::GetInventoryItem`), `ItemChange::
+/// GetScriptLocals` (`004bdea0(item)`), `007af430(form)` (the key passed
+/// to the inventory lookup), `004459e0(item, 1)` (releases the item) and
+/// `0059e300(quest)` (the locals of a quest).
+const EXTRA_LIST_REFERENCE_POINTER: u32 = 0x0041_c8d0;
+const INVENTORY_ITEM_OF: u32 = 0x0057_6260;
+const ITEM_SCRIPT_LOCALS: u32 = 0x004b_dea0;
+const INVENTORY_KEY_OF: u32 = 0x007a_f430;
+const RELEASE_ITEM: u32 = 0x0044_59e0;
+const QUEST_SCRIPT_LOCALS: u32 = 0x0059_e300;
+/// `BSMultiBoundCapsule::QMultiBoundRadius` in the map (folded): the double
+/// (in `ST0`) that `fn_005ac7a0` stores for the `G` marker
+/// (`00526ac0(object)`).
+const GLOBAL_VALUE_OF: u32 = 0x0052_6ac0;
+/// `ScriptCompiler::GetFunctionDef(id)` (`005b1120`, `cdecl`): the
+/// definition whose +0x10 byte says it needs a reference, +0x14 is its
+/// parameter list and +0x18 its handler.
+const GET_FUNCTION_DEFINITION: u32 = 0x005b_1120;
+/// `ScriptParameter` type table: 8 bytes per type, the byte at +5 is set
+/// for the types given as referenced objects.
+const PARAMETER_TYPE_TABLE: u32 = 0x0118_cdd5;
+/// `TESContainer::ContainerCanHoldType(formType)` (`cdecl`).
+const CONTAINER_CAN_HOLD_TYPE: u32 = 0x0048_1f30;
+/// `_ftol2` (`00ec62c0`), the value in `ST0` as a leading double.
+const FTOL2: u32 = 0x00ec_62c0;
+/// Whether the scripts are processed (a byte).
+const PROCESS_SCRIPTS_BYTE: u32 = 0x0118_c685;
+/// Type descriptors of the casts of `ParseParameters`.
+const RTTI_TARGET_FORM_7: u32 = 0x0118_3060;
+const RTTI_TARGET_FORM_11: u32 = 0x0118_3140;
+const RTTI_TARGET_FORM_31: u32 = 0x0118_37c4;
+
+layout! {
+    /// `ScriptCompileData` (Xbox PDB), 0x58 bytes on both builds: the
+    /// output of the script compiler that `Script::Init` takes.
+    pub struct ScriptCompileData: 0x58 {
+        /// `cScriptName` (Xbox PDB): a `BSStringT<char>`.
+        0x0C cScriptName: Inline<BSStringT>,
+        /// `pOutput` (Xbox PDB): the compiled bytes.
+        0x20 pOutput: Ptr,
+        /// `header` (Xbox PDB).
+        0x28 header: Inline<ScriptHeader>,
+        /// `listVariables` (Xbox PDB): a `BSSimpleList` embedded here.
+        0x3C listVariables: Inline<BSSimpleList>,
+        /// `listRefObjects` (Xbox PDB): a `BSSimpleList` embedded here.
+        0x44 listRefObjects: Inline<BSSimpleList>,
+    }
+}
 
 layout! {
     /// `ScriptLocals` (Xbox PDB), 0x14 bytes on both builds: the variables and
@@ -1559,6 +1784,1729 @@ pub fn script_save_pending_references(e: &mut Engine, buffer: Ptr) {
     });
 }
 
+// ---- Helpers of the second half -------------------------------------------
+
+/// The `SCRIPT_HEADER` embedded in a `Script`.
+fn header_of(this: Ptr<Script>) -> Ptr<ScriptHeader> {
+    this.at(Script::m_header)
+}
+
+/// The form-type byte of a form (`00401170`).
+fn form_type(e: &mut Engine, form: u32) -> u32 {
+    e.call(FORM_TYPE_OF, &args![form]).u8() as u32
+}
+
+/// A form's id (the word at +0xC, `0084e3a0`).
+fn form_id_of(e: &mut Engine, form: u32) -> u32 {
+    e.call(FORM_ID_OF, &args![form]).u32()
+}
+
+/// Whether bit 3 of the form flags of `form` is set (`004013e0`).
+fn form_flag_bit_3(e: &mut Engine, form: u32) -> bool {
+    e.call(FORM_FLAG_BIT_3, &args![form]).bool()
+}
+
+/// `new` of `size` bytes zeroed (`005aaee0(1, size)`).
+fn new_zeroed(e: &mut Engine, size: u32) -> u32 {
+    fn_005aaee0(e, 1, size)
+}
+
+/// The name of a `Script` as the game shows it (virtual `+0x130`).
+fn script_type_name(e: &mut Engine, this: Ptr<Script>) -> u32 {
+    form_type_name(e, this.addr())
+}
+
+/// Adds `item` at the tail of `list` (the game passes the address of a
+/// local that holds it).
+fn list_add_tail(e: &mut Engine, list: u32, item: u32) {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), item);
+        e.call(LIST_ADD_TAIL, &args![list, slot]);
+    });
+}
+
+/// The TLS block of the thread.
+fn tls_block(e: &mut Engine) -> u32 {
+    e.tls()
+}
+
+// Translated from 005aaaf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::LoadPendingReferences` (Xbox PDB): under the lock, empties the
+/// four pending lists (to-enable, to-disable, to-delete, fade-disable),
+/// then for each in that order reads a variable-sized count from `buffer`
+/// and, for each entry, reads a form id and adds the reference it looks up
+/// at the head of the list. As in the game, a `TESObjectREFR` is constructed
+/// for every entry first (0x68 bytes) and left unused.
+pub fn script_load_pending_references(e: &mut Engine, buffer: Ptr) {
+    with_reference_lock(e, |e| {
+        let lists = [
+            REFERENCES_TO_ENABLE,
+            REFERENCES_TO_DISABLE,
+            REFERENCES_TO_DELETE,
+            REFERENCES_TO_FADE_DISABLE,
+        ];
+        for list in lists {
+            e.call(LIST_CLEAR, &args![list]);
+        }
+        for list in lists {
+            let count = e.call(BUFFER_LOAD_SIZED_VALUE, &args![buffer]).u32();
+            for _ in 0..count {
+                let block = new_block(e, 0x68);
+                if block != 0 {
+                    e.call(REFERENCE_CONSTRUCT, &args![block]);
+                }
+                let id = e.call(BUFFER_LOAD_FORM_ID, &args![buffer]).u32();
+                let form = e.call(LOOKUP_FORM_BY_ID, &args![id]).u32();
+                let reference = e
+                    .call(
+                        RT_DYNAMIC_CAST,
+                        &args![form, 0u32, RTTI_SOURCE_FORM, RTTI_TARGET_REFERENCE, 0u32],
+                    )
+                    .u32();
+                e.with_stack(4, |e, slot| {
+                    e.mem.set_u32(slot.addr(), reference);
+                    e.call(LIST_ADD_HEAD, &args![list, slot]);
+                });
+            }
+        }
+    });
+}
+
+// Translated from 005aae20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Under the lock, empties the four pending reference lists (to-enable,
+/// to-disable, to-delete, fade-disable).
+pub fn fn_005aae20(e: &mut Engine) {
+    with_reference_lock(e, |e| {
+        for list in [
+            REFERENCES_TO_ENABLE,
+            REFERENCES_TO_DISABLE,
+            REFERENCES_TO_DELETE,
+            REFERENCES_TO_FADE_DISABLE,
+        ] {
+            e.call(LIST_CLEAR, &args![list]);
+        }
+    });
+}
+
+// Translated from 005aae70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetCompileData` (Xbox PDB): frees the compiled data, sets the
+/// header's data size to `size` and, when it is not zero, allocates that
+/// many zeroed bytes and copies `data` into them.
+pub fn script_set_compile_data(e: &mut Engine, this: Ptr<Script>, size: u32, data: u32) {
+    let old = e.get(this, Script::m_data);
+    delete_block(e, old.addr());
+    e.set(this, Script::m_data, Ptr::NULL);
+    let header = header_of(this);
+    e.set(header, ScriptHeader::dataSize, size);
+    if size != 0 {
+        let block = new_zeroed(e, size);
+        e.set(this, Script::m_data, Ptr::new(block));
+        e.call(MEMCPY, &args![block, data, size]);
+    }
+}
+
+// Translated from 005aaee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Allocates `count * size` bytes from the memory manager and zeroes them
+/// (a `calloc`).
+pub fn fn_005aaee0(e: &mut Engine, count: u32, size: u32) -> u32 {
+    let total = size.wrapping_mul(count);
+    let manager = e.call(MEMORY_MANAGER_GET, &args![]).u32();
+    let block = e
+        .call(MEMORY_MANAGER_ALLOCATE, &args![manager, total])
+        .u32();
+    e.call(MEMSET, &args![block, 0u32, total]);
+    block
+}
+
+// Translated from 005aaf20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::Init` (Xbox PDB): sets this script from the compiler's output
+/// `buffer`. Runs virtual `+0x88`; a buffer with no script name only sets
+/// the deleted flag (virtual `+0xC4`, 1); otherwise, when `fn_005ab040` finds
+/// the buffer different from this script, sets the editor id (virtual
+/// `+0x134`) from the name, copies the 0x14-byte header, sets the compile
+/// data, empties and refills the referenced-object and variable lists, then
+/// clears the deleted flag and sets the altered flag (virtual `+0xC8`, 1).
+pub fn script_init(e: &mut Engine, this: Ptr<Script>, buffer: Ptr<ScriptCompileData>) {
+    e.vcall(this.addr(), SLOT_INIT_ITEM, &args![]);
+    let name = buffer.at(ScriptCompileData::cScriptName);
+    if e.call(STRING_LENGTH, &args![name]).u32() == 0 {
+        e.vcall(this.addr(), SLOT_SET_DELETED, &args![1u32]);
+        return;
+    }
+    if !fn_005ab040(e, this, buffer) {
+        return;
+    }
+    let text = e.call(STRING_DATA, &args![name]).u32();
+    e.vcall(this.addr(), SLOT_SET_EDITOR_ID, &args![text]);
+    let source_header = buffer.at(ScriptCompileData::header);
+    e.call(MEMCPY, &args![header_of(this), source_header, 0x14u32]);
+    let size = e.get(header_of(this), ScriptHeader::dataSize);
+    let output = e.get(buffer, ScriptCompileData::pOutput);
+    script_set_compile_data(e, this, size, output.addr());
+    fn_005aa350(e, this);
+    fn_005aa2e0(e, this);
+    if e.get(header_of(this), ScriptHeader::dataSize) != 0 {
+        let own_refs = e.call(SCRIPT_REF_OBJECT_LIST, &args![this]).u32();
+        let other_refs = e.call(SCRIPT_REF_OBJECT_LIST, &args![buffer]).u32();
+        fn_005ab7f0(e, other_refs, own_refs, this.addr());
+        let own_vars = e.call(SCRIPT_VARIABLE_LIST, &args![this]).u32();
+        let other_vars = e.call(SCRIPT_BUFFER_VARIABLE_LIST, &args![buffer]).u32();
+        fn_005ab930(e, other_vars, own_vars, this.addr());
+    }
+    e.vcall(this.addr(), SLOT_SET_DELETED, &args![0u32]);
+    e.vcall(this.addr(), SLOT_SET_ALTERED, &args![1u32]);
+}
+
+// Translated from 005ab040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the compiler's output `buffer` differs from this script (true) or
+/// not (false): true when the unnamed test `00474cb0` passes and the name
+/// does not compare equal to the script's type name, when the data size,
+/// the referenced-object count, or any compiled byte differs, when the
+/// variable lists have different counts or a pair of variables differs
+/// (`005e29a0`), or when the referenced-object lists have different counts
+/// or a pair differs in the form word at +8.
+pub fn fn_005ab040(e: &mut Engine, this: Ptr<Script>, buffer: Ptr<ScriptCompileData>) -> bool {
+    let name = buffer.at(ScriptCompileData::cScriptName);
+    if e.call(SCRIPT_IS_NAMED_CHECK, &args![this]).u32() != 0
+        && e.call(STRING_LENGTH, &args![name]).u32() != 0
+    {
+        let text = e.call(STRING_DATA, &args![name]).u32();
+        let type_name = script_type_name(e, this);
+        if e.call(STRING_COMPARE, &args![type_name, text]).u32() != 0 {
+            return true;
+        }
+    }
+    let source_header = buffer.at(ScriptCompileData::header);
+    let header = header_of(this);
+    if e.get(header, ScriptHeader::dataSize) != e.get(source_header, ScriptHeader::dataSize) {
+        return true;
+    }
+    if e.get(header, ScriptHeader::refObjectCount)
+        != e.get(source_header, ScriptHeader::refObjectCount)
+    {
+        return true;
+    }
+    let output = e.get(buffer, ScriptCompileData::pOutput).addr();
+    let data = e.get(this, Script::m_data).addr();
+    for i in 0..e.get(header, ScriptHeader::dataSize) {
+        if e.mem.i8(data + i) != e.mem.i8(output + i) {
+            return true;
+        }
+    }
+    let mut other = e.call(SCRIPT_BUFFER_VARIABLE_LIST, &args![buffer]).u32();
+    let mut own = e.call(SCRIPT_VARIABLE_LIST, &args![this]).u32();
+    if e.call(LIST_COUNT, &args![other]).u32() != e.call(LIST_COUNT, &args![own]).u32() {
+        return true;
+    }
+    while other != 0 && own != 0 {
+        let own_item = list_item(e, own);
+        let other_item = list_item(e, other);
+        if other_item != 0
+            && own_item != 0
+            && e.call(VARIABLE_DIFFERS, &args![other_item, own_item])
+                .bool()
+        {
+            return true;
+        }
+        other = list_next(e, other);
+        own = list_next(e, own);
+    }
+    let mut other = e.call(SCRIPT_REF_OBJECT_LIST, &args![buffer]).u32();
+    let mut own = e.call(SCRIPT_REF_OBJECT_LIST, &args![this]).u32();
+    if e.call(LIST_COUNT, &args![other]).u32() != e.call(LIST_COUNT, &args![own]).u32() {
+        return true;
+    }
+    while other != 0 && own != 0 {
+        let own_item = list_item(e, own);
+        let other_item = list_item(e, other);
+        // SCRIPT_REFERENCED_OBJECT::pForm-like word at +8.
+        if other_item != 0 && own_item != 0 && e.mem.u32(other_item + 8) != e.mem.u32(own_item + 8)
+        {
+            return true;
+        }
+        other = list_next(e, other);
+        own = list_next(e, own);
+    }
+    false
+}
+
+// Translated from 005ab240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::CompareResultScripts` (Xbox PDB): whether `other` differs from
+/// this script (true for a null `other`): different data size, referenced
+/// object count or compiled flag, a different compiled byte, a different
+/// text (one missing, a different length, or `00469880` non-zero), or a
+/// pair of referenced objects whose words at +8 differ.
+pub fn script_compare_result_scripts(
+    e: &mut Engine,
+    this: Ptr<Script>,
+    other: Ptr<Script>,
+) -> bool {
+    if other.is_null() {
+        return true;
+    }
+    let other_header = e.call(SCRIPT_HEADER_OF, &args![other]).u32();
+    let header = header_of(this);
+    // SCRIPT_HEADER::dataSize (+8), refObjectCount (+4), bIsCompiled (+0x12).
+    if e.get(header, ScriptHeader::dataSize) != e.mem.u32(other_header + 8) {
+        return true;
+    }
+    if e.get(header, ScriptHeader::refObjectCount) != e.mem.u32(other_header + 4) {
+        return true;
+    }
+    if e.get(header, ScriptHeader::bIsCompiled) as u8 != e.mem.u8(other_header + 0x12) {
+        return true;
+    }
+    let other_data = e.call(SCRIPT_COMPILE_DATA_OF, &args![other]).u32();
+    let data = e.get(this, Script::m_data).addr();
+    for i in 0..e.get(header, ScriptHeader::dataSize) {
+        if e.mem.i8(data + i) != e.mem.i8(other_data + i) {
+            return true;
+        }
+    }
+    let own_text = e.call(SCRIPT_TEXT_OF, &args![this]).u32();
+    let other_text = if own_text != 0 {
+        e.call(SCRIPT_TEXT_OF, &args![other]).u32()
+    } else {
+        0
+    };
+    if own_text != 0 && other_text != 0 {
+        let own_text = e.call(SCRIPT_TEXT_OF, &args![this]).u32();
+        let own_length = e.call(STRLEN, &args![own_text]).u32();
+        let other_text = e.call(SCRIPT_TEXT_OF, &args![other]).u32();
+        let other_length = e.call(STRLEN, &args![other_text]).u32();
+        if own_length != other_length {
+            return true;
+        }
+        let other_text = e.call(SCRIPT_TEXT_OF, &args![other]).u32();
+        let own_text = e.call(SCRIPT_TEXT_OF, &args![this]).u32();
+        if e.call(TEXT_COMPARE, &args![own_text, other_text]).u32() != 0 {
+            return true;
+        }
+    } else {
+        if e.call(SCRIPT_TEXT_OF, &args![this]).u32() != 0 {
+            return true;
+        }
+        if e.call(SCRIPT_TEXT_OF, &args![other]).u32() != 0 {
+            return true;
+        }
+    }
+    let mut other_node = e.call(SCRIPT_REF_OBJECT_LIST, &args![other]).u32();
+    let mut own_node = e.call(SCRIPT_REF_OBJECT_LIST, &args![this]).u32();
+    while other_node != 0 && own_node != 0 {
+        let own_item = list_item(e, own_node);
+        let other_item = list_item(e, other_node);
+        if other_item != 0 && own_item != 0 && e.mem.u32(other_item + 8) != e.mem.u32(own_item + 8)
+        {
+            return true;
+        }
+        other_node = list_next(e, other_node);
+        own_node = list_next(e, own_node);
+    }
+    false
+}
+
+// Translated from 005ab400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::InitItem` (Xbox PDB): does nothing when bit 3 of this script's
+/// form flags is set or `source` is null. Otherwise (inside a scope guard)
+/// takes the file of `source` for this script when they differ and the
+/// unnamed test `004077c0` passes, then resolves each referenced object:
+/// the id at +8 is rebased on the file (`AddCompileIndex`) and replaced by
+/// the form it names; an object with neither a form nor a variable id, or
+/// whose form is not found, is logged, removed from the list, and clears the
+/// script's data size. Logs a corrupt count when the objects seen differ
+/// from the header's. Quest scripts get their delay set from the setting
+/// (spread over eight steps by the counter of `011cad40`, or zero when the
+/// quest has its own delay), and the script takes `source` as its owner
+/// quest when that is a form of type 0x47.
+pub fn script_init_item(e: &mut Engine, this: Ptr<Script>, source: Ptr) {
+    if form_flag_bit_3(e, this.addr()) || source.is_null() {
+        return;
+    }
+    with_scope_guard(e, INIT_ITEM_SCOPE_LINE, |e| {
+        if source.addr() != this.addr() && e.call(SCRIPT_INIT_ITEM_CHECK, &args![this]).bool() {
+            let file = e.call(FORM_GET_FILE, &args![source, 0xffff_ffffu32]).u32();
+            e.call(FORM_SET_FILE, &args![this, file]);
+        }
+        let mut index = 0u32;
+        let mut node = e.call(SCRIPT_REF_OBJECT_LIST, &args![this]).u32();
+        let mut previous = 0u32;
+        let file = e.call(FORM_GET_FILE, &args![source, 0xffff_ffffu32]).u32();
+        while node != 0 && !list_is_empty(e, node) {
+            let object = list_item(e, node);
+            let mut id = e.mem.u32(object + 8);
+            let variable_id = e.mem.u32(object + 0xc);
+            let resolved = if id != 0 {
+                id = e.with_stack(4, |e, slot| {
+                    e.mem.set_u32(slot.addr(), id);
+                    e.call(FORM_ADD_COMPILE_INDEX, &args![slot, file]);
+                    e.mem.u32(slot.addr())
+                });
+                let form = e.call(LOOKUP_FORM_BY_ID, &args![id]).u32();
+                e.mem.set_u32(object + 8, form);
+                form != 0
+            } else {
+                variable_id != 0
+            };
+            if resolved {
+                previous = node;
+                node = list_next(e, node);
+            } else {
+                if previous != 0 {
+                    let slot = e.call(LIST_ITEM_SLOT, &args![node]).u32();
+                    e.call(LIST_REMOVE, &args![previous, slot]);
+                    node = list_next(e, previous);
+                } else {
+                    e.call(LIST_POP_FIRST, &args![node]);
+                }
+                let name = script_type_name(e, this);
+                let script_id = form_id_of(e, this.addr());
+                if id != 0 {
+                    script_log(
+                        e,
+                        &args![FORMAT_REFERENCED_OBJECT_NOT_FOUND, id, script_id, name],
+                    );
+                } else {
+                    script_log(
+                        e,
+                        &args![FORMAT_REFERENCED_OBJECT_INVALID, index, script_id, name],
+                    );
+                }
+                e.set(header_of(this), ScriptHeader::dataSize, 0);
+            }
+            index += 1;
+        }
+        let expected = e.get(header_of(this), ScriptHeader::refObjectCount);
+        if index != expected && e.get(header_of(this), ScriptHeader::dataSize) != 0 {
+            let name = script_type_name(e, this);
+            let script_id = form_id_of(e, this.addr());
+            script_log(
+                e,
+                &args![
+                    FORMAT_REFERENCE_LIST_CORRUPT,
+                    script_id,
+                    name,
+                    expected,
+                    index
+                ],
+            );
+            e.set(header_of(this), ScriptHeader::dataSize, 0);
+        }
+        if !e.get(this, Script::m_data).is_null() {
+            e.call(EMPTY_METHOD, &args![this]);
+        }
+        let header = e.call(SCRIPT_HEADER_OF, &args![this]).u32();
+        // SCRIPT_HEADER::bIsQuestScript (+0x10).
+        if e.mem.u8(header + 0x10) != 0 {
+            let setting = e
+                .call(QUEST_DELAY_ACCESSOR, &args![QUEST_DELAY_SETTING])
+                .u32();
+            if e.mem.f32(setting) > 0.0 {
+                let setting = e
+                    .call(QUEST_DELAY_ACCESSOR, &args![QUEST_DELAY_SETTING])
+                    .u32();
+                let mut step = e.mem.f32(setting);
+                if e.global::<u32>(QUEST_DELAY_COUNTER) == 0 {
+                    let divisor = e.global::<f64>(QUEST_DELAY_DIVISOR);
+                    for i in 0..8u32 {
+                        step = (step as f64 / divisor) as f32;
+                        e.mem.set_f32(QUEST_DELAY_TABLE + i * 4, step);
+                    }
+                }
+                let mut bits = (e.global::<u32>(QUEST_DELAY_COUNTER) & 0xff) as i32;
+                let mut table_index = 0u32;
+                let owner = e.get(this, Script::pOwnerQuest);
+                if !owner.is_null() && e.call(QUEST_DELAY_OF, &args![owner]).f64() > 0.0 {
+                    e.set(this, Script::fQuestScriptDelay, 0.0);
+                } else if bits == 0 {
+                    let setting = e
+                        .call(QUEST_DELAY_ACCESSOR, &args![QUEST_DELAY_SETTING])
+                        .u32();
+                    let value = e.mem.f32(setting);
+                    e.set(this, Script::fQuestScriptDelay, value);
+                } else {
+                    while bits != 0 {
+                        if bits & 1 != 0 {
+                            let delay = e.get(this, Script::fQuestScriptDelay) as f64;
+                            let part = e.mem.f32(QUEST_DELAY_TABLE + table_index * 4) as f64;
+                            e.set(this, Script::fQuestScriptDelay, (delay + part) as f32);
+                        }
+                        table_index += 1;
+                        bits >>= 1;
+                    }
+                }
+                let counter = e.global::<u32>(QUEST_DELAY_COUNTER);
+                e.set_global::<u32>(QUEST_DELAY_COUNTER, counter.wrapping_add(1));
+            }
+        }
+        if form_type(e, source.addr()) == 0x47 {
+            e.set(this, Script::pOwnerQuest, source);
+        }
+        e.call(SCRIPT_SET_QUEST_SCRIPT_FLAG, &args![this, 1u32]);
+    });
+}
+
+// Translated from 005ab7d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `Script::InitItem` with this script as its own source.
+pub fn fn_005ab7d0(e: &mut Engine, this: Ptr<Script>) {
+    script_init_item(e, this, this.cast());
+}
+
+// Translated from 005ab7f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies a list of `SCRIPT_REFERENCED_OBJECT` pointers: for each item of
+/// `source` (while the node is not an empty one), makes a copy
+/// (`fn_005ab8b0` into a new 0x10-byte block) and adds it at the tail of
+/// `destination`. Nothing when either list is null.
+pub fn fn_005ab7f0(e: &mut Engine, source: u32, destination: u32, _unused_0: u32) {
+    if destination == 0 || source == 0 {
+        return;
+    }
+    let mut node = source;
+    while node != 0 && !list_is_empty(e, node) {
+        let block = new_block(e, 0x10);
+        let item = list_item(e, node);
+        let copy = if block != 0 {
+            fn_005ab8b0(e, Ptr::new(block), Ptr::new(item)).addr()
+        } else {
+            0
+        };
+        list_add_tail(e, destination, copy);
+        node = list_next(e, node);
+    }
+}
+
+// Translated from 005ab8b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copy constructor of `SCRIPT_REFERENCED_OBJECT` (0x10 bytes): constructs
+/// the string at +0, copies the string of `source` into it and copies the
+/// words at +8 and +0xC.
+pub fn fn_005ab8b0(
+    e: &mut Engine,
+    this: Ptr<ScriptReferencedObject>,
+    source: Ptr<ScriptReferencedObject>,
+) -> Ptr<ScriptReferencedObject> {
+    e.call(STRING_CONSTRUCT, &args![this]);
+    e.call(STRING_COPY, &args![this, source]);
+    let form = e.mem.u32(source.addr() + 8);
+    e.mem.set_u32(this.addr() + 8, form);
+    let variable_id = e.get(source, ScriptReferencedObject::uiVariableID);
+    e.set(this, ScriptReferencedObject::uiVariableID, variable_id);
+    this
+}
+
+// Translated from 005ab930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies a list of `ScriptVariable` pointers: for each item of `source`
+/// (while the node is not an empty one), makes a copy (`005e2910` into a new
+/// 0x20-byte block) and adds it at the tail of `destination`. Nothing when
+/// either list is null.
+pub fn fn_005ab930(e: &mut Engine, source: u32, destination: u32, _unused_0: u32) {
+    if destination == 0 || source == 0 {
+        return;
+    }
+    let mut node = source;
+    while node != 0 && !list_is_empty(e, node) {
+        let block = new_block(e, 0x20);
+        let item = list_item(e, node);
+        let copy = if block != 0 {
+            e.call(SCRIPT_VARIABLE_COPY_CONSTRUCT, &args![block, item])
+                .u32()
+        } else {
+            0
+        };
+        list_add_tail(e, destination, copy);
+        node = list_next(e, node);
+    }
+}
+
+// Translated from 005ab9f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::Load` (Xbox PDB): reads a script record from `file`. False
+/// when the record is not a script (form type 0x11). Otherwise loads the
+/// form (`TESForm::LoadForm`) and then each chunk: `EDID` sets the editor
+/// id (virtual `+0x134`), `OBND` runs virtual `+0xE0`, `SCHR` reads the
+/// header (swapped on a big-endian file), `SCDA` reads the compiled bytes
+/// into a new zeroed block, `SLSD` adds a new `ScriptVariable` loaded from
+/// the file, `SCVR` sets the name of that variable, `SCRO` and `SCRV` add a
+/// referenced object holding the chunk's value at +8 or +0xC, and `RNAM` is
+/// read and dropped. Logs when no compiled data was read and answers true.
+pub fn script_load(e: &mut Engine, this: Ptr<Script>, file: Ptr) -> bool {
+    let mut current_variable = 0u32;
+    if e.call(FILE_RECORD_TYPE, &args![file]).u32() != FORM_TYPE_SCRIPT {
+        return false;
+    }
+    e.call(FORM_LOAD, &args![this, file]);
+    loop {
+        let chunk = e.call(FILE_CHUNK_TYPE, &args![file]).u32();
+        if chunk == 0 {
+            break;
+        }
+        match chunk {
+            CHUNK_EDID => {
+                let size = e.call(FILE_CHUNK_SIZE, &args![file]).u32();
+                e.with_stack(size.max(4), |e, text| {
+                    e.call(FILE_GET_CHUNK_DATA, &args![file, text, 0x200u32]);
+                    e.vcall(this.addr(), SLOT_SET_EDITOR_ID, &args![text]);
+                });
+            }
+            CHUNK_OBND => {
+                e.vcall(this.addr(), SLOT_LOAD_BOUNDS, &args![file]);
+            }
+            CHUNK_SCHR => {
+                let header = header_of(this);
+                e.call(FILE_GET_CHUNK_DATA, &args![file, header, 0u32]);
+                if e.call(FILE_IS_BIG_ENDIAN, &args![file]).bool() {
+                    e.call(HEADER_SWAP_BYTES, &args![header]);
+                }
+            }
+            CHUNK_SLSD => {
+                let block = new_block(e, 0x20);
+                let variable = if block != 0 {
+                    e.call(SCRIPT_VARIABLE_CONSTRUCT, &args![block]).u32()
+                } else {
+                    0
+                };
+                current_variable = variable;
+                e.call(SCRIPT_VARIABLE_LOAD, &args![variable, file]);
+                let list = e.call(SCRIPT_VARIABLE_LIST, &args![this]).u32();
+                list_add_tail(e, list, variable);
+            }
+            CHUNK_SCVR => {
+                if current_variable != 0 {
+                    let size = e.call(FILE_CHUNK_SIZE, &args![file]).u32();
+                    e.with_stack(size.max(4), |e, text| {
+                        e.call(FILE_GET_CHUNK_DATA, &args![file, text, 0x200u32]);
+                        e.call(STRING_SET, &args![current_variable + 0x18, text, 0u32]);
+                    });
+                }
+            }
+            CHUNK_SCDA => {
+                let size = e.call(FILE_CHUNK_SIZE, &args![file]).u32();
+                let data = new_zeroed(e, size);
+                e.set(this, Script::m_data, Ptr::new(data));
+                e.call(MEMSET, &args![data, 0u32, size]);
+                e.call(FILE_GET_CHUNK_DATA, &args![file, data, 0u32]);
+            }
+            CHUNK_SCRO | CHUNK_SCRV => {
+                let block = new_block(e, 0x10);
+                let object = if block != 0 {
+                    e.call(REFERENCED_OBJECT_CONSTRUCT, &args![block]).u32()
+                } else {
+                    0
+                };
+                let value = e.with_stack(4, |e, slot| {
+                    e.call(FILE_GET_CHUNK_VALUE, &args![file, slot]);
+                    e.mem.u32(slot.addr())
+                });
+                if chunk == CHUNK_SCRO {
+                    e.mem.set_u32(object + 8, value);
+                } else {
+                    e.mem.set_u32(object + 0xc, value);
+                }
+                let list = e.call(SCRIPT_REF_OBJECT_LIST, &args![this]).u32();
+                list_add_tail(e, list, object);
+            }
+            CHUNK_RNAM => {
+                e.with_stack(4, |e, slot| {
+                    e.call(FILE_GET_CHUNK_VALUE, &args![file, slot]);
+                });
+            }
+            _ => {}
+        }
+        if !e.call(FILE_NEXT_CHUNK, &args![file]).bool() {
+            break;
+        }
+    }
+    if e.get(this, Script::m_data).is_null() {
+        let file_name = e.call(FILE_NAME_OF, &args![file]).u32();
+        let name = script_type_name(e, this);
+        script_log(e, &args![FORMAT_NOT_COMPILED, name, file_name]);
+    }
+    true
+}
+
+// Translated from 005abd70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Passes its argument to `TESForm::Save` (`00483d20`).
+pub fn fn_005abd70(e: &mut Engine, this: Ptr<Script>, buffer: u32) {
+    e.call(FORM_SAVE, &args![this, buffer]);
+}
+
+/// Swaps the bytes of the script header when the save is big-endian
+/// (`00401500`, then `00414220(header)`).
+fn swap_header_if_needed(e: &mut Engine, this: Ptr<Script>) {
+    if e.call(ENDIAN_SWAP_ENABLED, &args![]).bool() {
+        e.call(HEADER_SWAP_BYTES, &args![header_of(this)]);
+    }
+}
+
+// Translated from 005abd90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes the script record: `TESForm::StartForm`, the empty method
+/// `00483710`, then the header chunk (`SCHR`, 0x14 bytes, swapped to
+/// big-endian before and back after when the swap is enabled) and
+/// `TESForm::CloseForm`.
+pub fn fn_005abd90(e: &mut Engine, this: Ptr<Script>) {
+    e.call(FORM_START, &args![this]);
+    e.call(EMPTY_METHOD, &args![this]);
+    swap_header_if_needed(e, this);
+    e.call(FORM_ADD_CHUNK, &args![CHUNK_SCHR, header_of(this), 0x14u32]);
+    swap_header_if_needed(e, this);
+    e.call(FORM_CLOSE, &args![this]);
+}
+
+// Translated from 005abe00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SaveResultScript` (Xbox PDB): writes the header chunk (`SCHR`,
+/// 0x14 bytes) of the script, swapped to big-endian before and back after
+/// when the swap is enabled.
+pub fn script_save_result_script(e: &mut Engine, this: Ptr<Script>) {
+    swap_header_if_needed(e, this);
+    e.call(FORM_ADD_CHUNK, &args![CHUNK_SCHR, header_of(this), 0x14u32]);
+    swap_header_if_needed(e, this);
+}
+
+// Translated from 005abe50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetText` (Xbox PDB): frees the text (when set) and, for a
+/// non-null `text`, keeps a zero-terminated copy of it; null clears it.
+pub fn script_set_text(e: &mut Engine, this: Ptr<Script>, text: u32) {
+    let old = e.get(this, Script::m_text);
+    if !old.is_null() {
+        delete_block(e, old.addr());
+    }
+    if text == 0 {
+        e.set(this, Script::m_text, Ptr::NULL);
+    } else {
+        let length = e.call(STRLEN, &args![text]).u32();
+        let block = new_zeroed(e, length + 1);
+        e.set(this, Script::m_text, Ptr::new(block));
+        e.call(MEMCPY, &args![block, text, length]);
+    }
+}
+
+// Translated from 005abed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetVariableName` (Xbox PDB): the name string of the variable
+/// `id` of the script's variable list; for an unknown id logs "variable
+/// not found" with the script's name and answers null.
+pub fn script_get_variable_name(e: &mut Engine, this: Ptr<Script>, id: u32) -> u32 {
+    let mut node = e.call(SCRIPT_VARIABLE_LIST, &args![this]).u32();
+    while node != 0 && list_item(e, node) != 0 {
+        let variable = list_item(e, node);
+        node = list_next(e, node);
+        // ScriptVariable::data.uiID (+0) and cName (+0x18).
+        if e.mem.u32(variable) == id {
+            return e.call(STRING_DATA, &args![variable + 0x18]).u32();
+        }
+    }
+    let name = script_type_name(e, this);
+    script_log(e, &args![FORMAT_LOCAL_VARIABLE_NOT_FOUND, id, name]);
+    0
+}
+
+// Translated from 005abf60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Makes the `ScriptLocals` of a script instance: inside a scope guard,
+/// constructs a 0x14-byte `ScriptLocals`, gives it the copy of the script's
+/// variables that `fn_005ac020` builds, and its master script.
+pub fn fn_005abf60(e: &mut Engine, this: Ptr<Script>) -> Ptr<ScriptLocals> {
+    with_scope_guard(e, BUILD_LOCALS_SCOPE_LINE, |e| {
+        let block = new_block(e, 0x14);
+        let locals = if block != 0 {
+            Ptr::<ScriptLocals>::new(e.call(SCRIPT_LOCALS_CONSTRUCT, &args![block]).u32())
+        } else {
+            Ptr::NULL
+        };
+        let variables = fn_005ac020(e, this);
+        e.set(locals, ScriptLocals::m_pLocalList, Ptr::new(variables));
+        e.set(locals, ScriptLocals::m_pMasterScript, this.cast());
+        locals
+    })
+}
+
+// Translated from 005ac020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Builds a new variable list that holds a copy (`fn_005ac150`, 0x18-byte
+/// `SCRIPT_LOCAL`) of the data of each variable of the script's variable
+/// list, until a node with no variable. Runs inside a scope guard.
+pub fn fn_005ac020(e: &mut Engine, this: Ptr<Script>) -> u32 {
+    with_scope_guard(e, COPY_VARIABLES_SCOPE_LINE, |e| {
+        let list = new_list(e);
+        let mut node = e.call(SCRIPT_VARIABLE_LIST, &args![this]).u32();
+        while node != 0 && list_item(e, node) != 0 {
+            let variable = list_item(e, node);
+            node = list_next(e, node);
+            let block = new_block(e, 0x18);
+            let copy = if block != 0 {
+                fn_005ac150(e, Ptr::new(block), Ptr::new(variable)).addr()
+            } else {
+                0
+            };
+            list_add_tail(e, list, copy);
+        }
+        list
+    })
+}
+
+// Translated from 005ac150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copy constructor of `SCRIPT_LOCAL` (0x18 bytes): copies the integer
+/// flag, the id and the value.
+pub fn fn_005ac150(
+    e: &mut Engine,
+    this: Ptr<ScriptLocal>,
+    source: Ptr<ScriptLocal>,
+) -> Ptr<ScriptLocal> {
+    let is_integer = e.get(source, ScriptLocal::bIsInteger);
+    e.set(this, ScriptLocal::bIsInteger, is_integer);
+    let id = e.get(source, ScriptLocal::uiID);
+    e.set(this, ScriptLocal::uiID, id);
+    let value = e.get(source, ScriptLocal::fValue);
+    e.set(this, ScriptLocal::fValue, value);
+    this
+}
+
+// Translated from 005ac190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::InitActionList` (Xbox PDB): for a reference with an extra data
+/// list that has `ScriptLocals` with no action list yet, asks the script run
+/// manager to build the action list (`InitActionList(master, reference,
+/// locals)`).
+pub fn script_init_action_list(e: &mut Engine, reference: u32, extra_list: Ptr) {
+    if extra_list.is_null() {
+        return;
+    }
+    if e.call(EXTRA_LIST_SCRIPT_LOCALS, &args![extra_list]).u32() == 0 {
+        return;
+    }
+    let locals =
+        Ptr::<ScriptLocals>::new(e.call(EXTRA_LIST_SCRIPT_LOCALS, &args![extra_list]).u32());
+    if e.get(locals, ScriptLocals::m_pActionList).is_null() {
+        let master = e.get(locals, ScriptLocals::m_pMasterScript);
+        let manager = e.call(SCRIPT_RUN_MANAGER_INSTANCE, &args![]).u32();
+        e.call(
+            SCRIPT_RUN_MANAGER_INIT_ACTION_LIST,
+            &args![manager, master, reference, locals],
+        );
+    }
+}
+
+/// Calls `ScriptRunManager::Run` (`005e2590`) on the manager with the
+/// script and the eight words the callers of `Script::Run` pass.
+fn run_manager(e: &mut Engine, words: &[u32]) -> Ret {
+    let manager = e.call(SCRIPT_RUN_MANAGER_INSTANCE, &args![]).u32();
+    let mut all = vec![manager];
+    all.extend_from_slice(words);
+    e.call(SCRIPT_RUN_MANAGER_RUN, &all)
+}
+
+// Translated from 005ac1e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::Run` (Xbox PDB): runs the script through `ScriptRunManager::Run`
+/// and answers its result. Without `force` (the last argument) a script
+/// whose compiled data is 4 bytes or fewer does not run (false). A quest
+/// script with a running delay (`fQuestScriptDelay` above 0) first loses
+/// the elapsed time (`0084d030`) from it, adds that time to the get-seconds
+/// buffer, and does not run (false) while the delay is still above 0. After a
+/// run, a quest script sets the delay again: the owner quest's
+/// (`00792760`) when it is above 0, or the setting's, added to what is left;
+/// the get-seconds buffer is zeroed, and `fn_005ae2e0` forgets the cached
+/// references.
+pub fn script_run(
+    e: &mut Engine,
+    this: Ptr<Script>,
+    first: u32,
+    second: u32,
+    third: u32,
+    force: u8,
+) -> bool {
+    if force == 0 {
+        let header = e.call(SCRIPT_HEADER_OF, &args![this]).u32();
+        if e.mem.u32(header + 8) <= 4 {
+            return false;
+        }
+    }
+    let header = e.call(SCRIPT_HEADER_OF, &args![this]).u32();
+    // SCRIPT_HEADER::bIsQuestScript (+0x10).
+    if e.mem.u8(header + 0x10) != 0 && e.get(this, Script::fQuestScriptDelay) > 0.0 {
+        let elapsed = e.call(ELAPSED_TIME, &args![ELAPSED_TIME_OBJECT]).f64();
+        let delay = e.get(this, Script::fQuestScriptDelay) as f64;
+        e.set(this, Script::fQuestScriptDelay, (delay - elapsed) as f32);
+        let elapsed = e.call(ELAPSED_TIME, &args![ELAPSED_TIME_OBJECT]).f64();
+        let buffer = e.get(this, Script::fQuestScriptGetSecondsBuffer) as f64;
+        e.set(
+            this,
+            Script::fQuestScriptGetSecondsBuffer,
+            (elapsed + buffer) as f32,
+        );
+        if e.get(this, Script::fQuestScriptDelay) > 0.0 {
+            return false;
+        }
+    }
+    let result = run_manager(
+        e,
+        &args![this, first, second, third, force as u32, 0u32, 0u32, 0.0f32],
+    )
+    .bool();
+    let header = e.call(SCRIPT_HEADER_OF, &args![this]).u32();
+    if e.mem.u8(header + 0x10) != 0 {
+        let setting = e
+            .call(QUEST_DELAY_ACCESSOR, &args![QUEST_DELAY_SETTING])
+            .u32();
+        if e.mem.f32(setting) > 0.0 {
+            let owner = e.get(this, Script::pOwnerQuest);
+            if !owner.is_null() && e.call(QUEST_DELAY_OF, &args![owner]).f64() > 0.0 {
+                let owner = e.get(this, Script::pOwnerQuest);
+                let quest_delay = e.call(QUEST_DELAY_OF, &args![owner]).f64();
+                let delay = e.get(this, Script::fQuestScriptDelay) as f64;
+                e.set(
+                    this,
+                    Script::fQuestScriptDelay,
+                    (quest_delay + delay) as f32,
+                );
+            } else {
+                let setting = e
+                    .call(QUEST_DELAY_ACCESSOR, &args![QUEST_DELAY_SETTING])
+                    .u32();
+                let delay = e.get(this, Script::fQuestScriptDelay) as f64;
+                let value = e.mem.f32(setting) as f64;
+                e.set(this, Script::fQuestScriptDelay, (delay + value) as f32);
+            }
+            e.set(this, Script::fQuestScriptGetSecondsBuffer, 0.0);
+        }
+    }
+    fn_005ae2e0(e, this);
+    result
+}
+
+// Translated from 005ac340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::RunScriptEffectStart` (Xbox PDB): `ScriptRunManager::Run` with
+/// the effect-start flag (the sixth word) set.
+pub fn script_run_script_effect_start(e: &mut Engine, this: Ptr<Script>, first: u32, second: u32) {
+    run_manager(
+        e,
+        &args![this, first, second, 0u32, 0u32, 1u32, 0u32, 0.0f32],
+    );
+}
+
+// Translated from 005ac380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::RunScriptEffectFinish` (Xbox PDB): `ScriptRunManager::Run` with
+/// the effect-finish flag (the seventh word) set.
+pub fn script_run_script_effect_finish(e: &mut Engine, this: Ptr<Script>, first: u32, second: u32) {
+    run_manager(
+        e,
+        &args![this, first, second, 0u32, 0u32, 0u32, 1u32, 0.0f32],
+    );
+}
+
+// Translated from 005ac3c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::RunScriptEffectUpdate` (Xbox PDB): `ScriptRunManager::Run` with
+/// the elapsed time `delta` as the last word.
+pub fn script_run_script_effect_update(
+    e: &mut Engine,
+    this: Ptr<Script>,
+    first: u32,
+    second: u32,
+    delta: f32,
+) {
+    run_manager(
+        e,
+        &args![this, first, second, 0u32, 0u32, 0u32, 0u32, delta],
+    );
+}
+
+// Translated from 005ac400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::CompileAndRun` (Xbox PDB): inside a scope guard, compiles the
+/// script with `ScriptCompiler::CompilePartialScript` (`compiler` the
+/// object, `mode` and `reference` its arguments) and, when that succeeds
+/// and there is compiled data, runs it with `reference` and the script
+/// variables of `reference` (none for a null one), forced. With `mode` 1 the
+/// thread's system-output byte is set during the run.
+pub fn script_compile_and_run(
+    e: &mut Engine,
+    this: Ptr<Script>,
+    compiler: u32,
+    mode: u32,
+    reference: u32,
+) {
+    with_scope_guard(e, COMPILE_AND_RUN_SCOPE_LINE, |e| {
+        let compiled = e
+            .call(
+                COMPILE_PARTIAL_SCRIPT,
+                &args![compiler, this, reference, mode, 0u32],
+            )
+            .bool();
+        if compiled && e.get(header_of(this), ScriptHeader::dataSize) != 0 {
+            let tls = tls_block(e);
+            if mode == 1 {
+                e.mem.set_u8(tls + TLS_SYSTEM_OUTPUT, 1);
+            }
+            let mut variables = 0u32;
+            if reference != 0 {
+                variables = e.call(REFERENCE_SCRIPT_VARIABLES, &args![reference]).u32();
+            }
+            script_run(e, this, reference, variables, 0, 1);
+            e.mem.set_u8(tls + TLS_SYSTEM_OUTPUT, 0);
+        }
+    });
+}
+
+// Translated from 005ac4f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetReferencedObject` (Xbox PDB): the `index`th (1-based)
+/// referenced object of the script, null for 0 or past the end. The last
+/// answer is cached in the TLS block (script, index, locals, object). For a
+/// new lookup, an object with a variable id and a `locals` has its form
+/// reloaded from the numeric id stored in that variable
+/// (`ScriptLocals::GetVariable`, `GetNumericIDFromDouble`).
+pub fn script_get_referenced_object(
+    e: &mut Engine,
+    this: Ptr<Script>,
+    index: u32,
+    locals: u32,
+) -> u32 {
+    if index == 0 {
+        return 0;
+    }
+    if e.get(header_of(this), ScriptHeader::refObjectCount) < index {
+        return 0;
+    }
+    let tls = tls_block(e);
+    if e.mem.u32(tls + TLS_LAST_REF_SEARCH_SCRIPT) == this.addr()
+        && e.mem.u32(tls + TLS_LAST_REF_INDEX) == index
+        && e.mem.u32(tls + TLS_LAST_REF_LOCALS) == locals
+    {
+        return e.mem.u32(tls + TLS_LAST_REF_OBJECT);
+    }
+    let mut position = 1u32;
+    let mut node = e.call(SCRIPT_REF_OBJECT_LIST, &args![this]).u32();
+    while node != 0 {
+        if list_is_empty(e, node) || position >= index {
+            break;
+        }
+        position += 1;
+        node = list_next(e, node);
+    }
+    if node == 0 {
+        return 0;
+    }
+    let object = list_item(e, node);
+    let variable_id = e.mem.u32(object + 0xc);
+    if variable_id != 0 && locals != 0 {
+        let value = script_locals_get_variable(e, Ptr::new(locals), variable_id, this.cast());
+        let id = e.with_stack(12, |e, buffer| {
+            e.mem.set_f64(buffer.addr(), value);
+            e.mem.set_u32(buffer.addr() + 8, 0);
+            e.call(
+                GET_NUMERIC_ID_FROM_DOUBLE,
+                &args![buffer.addr() + 8, buffer],
+            );
+            e.mem.u32(buffer.addr() + 8)
+        });
+        if id != 0 {
+            let form = e.call(LOOKUP_FORM_BY_ID, &args![id]).u32();
+            e.mem.set_u32(object + 8, form);
+        }
+    }
+    e.mem.set_u32(tls + TLS_LAST_REF_SEARCH_SCRIPT, this.addr());
+    e.mem.set_u32(tls + TLS_LAST_REF_LOCALS, locals);
+    e.mem.set_u32(tls + TLS_LAST_REF_INDEX, index);
+    e.mem.set_u32(tls + TLS_LAST_REF_OBJECT, object);
+    object
+}
+
+// Translated from 005ac6a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::FindVariable` (Xbox PDB): looks the variable called `name` up in
+/// the script's variable list (`00404dc0` answering zero is a match). Found:
+/// stores its id through `out` and answers `s` (0x73) for an integer
+/// variable or `f` (0x66) otherwise. Not found: stores 0 and answers 0.
+pub fn script_find_variable(e: &mut Engine, this: Ptr<Script>, name: u32, out: Ptr) -> u8 {
+    let mut node = e.call(SCRIPT_VARIABLE_LIST, &args![this]).u32();
+    while node != 0 && list_item(e, node) != 0 {
+        let variable = list_item(e, node);
+        node = list_next(e, node);
+        let variable_name = e.call(STRING_DATA, &args![variable + 0x18]).u32();
+        if e.call(STRING_COMPARE, &args![variable_name, name]).u32() == 0 {
+            let id = e.mem.u32(variable);
+            e.mem.set_u32(out.addr(), id);
+            return if e.get(Ptr::<ScriptLocal>::new(variable), ScriptLocal::bIsInteger) {
+                b's'
+            } else {
+                b'f'
+            };
+        }
+    }
+    e.mem.set_u32(out.addr(), 0);
+    0
+}
+
+// Translated from 005ac730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetProcessScripts` (Xbox PDB): sets the byte that says whether
+/// scripts are processed.
+pub fn script_set_process_scripts(e: &mut Engine, value: u8) {
+    e.set_global::<u8>(PROCESS_SCRIPTS_BYTE, value);
+}
+
+// Translated from 005ac740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetProcessScripts` (Xbox PDB): the byte that says whether
+/// scripts are processed.
+pub fn script_get_process_scripts(e: &mut Engine) -> u8 {
+    e.global::<u8>(PROCESS_SCRIPTS_BYTE)
+}
+
+// Translated from 005ac750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetActionFlag` (Xbox PDB): for a non-null `extra_list` that has
+/// `ScriptLocals`, sets `flags` on the action of `form` there
+/// (`ScriptLocals::SetActionFlag`) and answers its result; otherwise false.
+pub fn script_set_action_flag(e: &mut Engine, form: u32, extra_list: Ptr, flags: u32) -> bool {
+    let mut result = false;
+    if !extra_list.is_null() && e.call(EXTRA_LIST_SCRIPT_LOCALS, &args![extra_list]).u32() != 0 {
+        let locals =
+            Ptr::<ScriptLocals>::new(e.call(EXTRA_LIST_SCRIPT_LOCALS, &args![extra_list]).u32());
+        result = script_locals_set_action_flag(e, locals, form, flags);
+    }
+    result
+}
+
+/// Reads the 16-bit value at the parse offset and moves the offset past it.
+fn take_i16(e: &mut Engine, code: u32, offset: u32) -> i16 {
+    let at = e.mem.u32(offset);
+    let value = e.mem.i16(code.wrapping_add(at));
+    e.mem.set_u32(offset, at.wrapping_add(2));
+    value
+}
+
+/// Reads the byte at the parse offset and moves the offset past it.
+fn take_u8(e: &mut Engine, code: u32, offset: u32) -> u8 {
+    let at = e.mem.u32(offset);
+    let value = e.mem.u8(code.wrapping_add(at));
+    e.mem.set_u32(offset, at.wrapping_add(1));
+    value
+}
+
+/// Whether a form-type byte is one of the 0x3A..=0x40 and 0x69 types that
+/// can carry script variables (`ParseParameters` and `fn_005ac7a0` accept
+/// them as the target of a call).
+fn is_scripted_reference_type(form_type: u32) -> bool {
+    form_type >= 0x3a && (form_type <= 0x40 || form_type == 0x69)
+}
+
+// Translated from 005ac7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads one value of a script's compiled data at `*offset` into the double
+/// at `out` (`cdecl`). The first byte is the kind of operand: `r`, `G` and
+/// `Z` name a referenced object (a 16-bit index into the script's referenced
+/// objects, see `Script::GetReferencedObject`): `G` stores the object's
+/// global value (`00526ac0`), `Z` stores its form id as a numeric id
+/// (`Script::PutNumericIDInDouble`), and `r` is followed by a call marker
+/// `X` or by a variable: it redirects `locals` to the locals of the
+/// referenced object (a quest, a reference, or an inventory item of one). `n`
+/// is an immediate integer (4 bytes) and `z` an immediate double (8). An
+/// `X` marker is a function call: a 16-bit function id (and 16 bits that are
+/// skipped) looked up with `ScriptCompiler::GetFunctionDef`; with `parse`
+/// set only its parameters are parsed (`ParseParameters`) and the answer is
+/// false; otherwise its handler (the +0x18 word of the definition) runs
+/// with the eight words of the script command signature. Any other
+/// marker (`f`, `l` or `s`) is a 16-bit variable id read from `locals`
+/// (`ScriptLocals::GetVariable`). False when the data cannot be read.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_005ac7a0(
+    e: &mut Engine,
+    out: u32,
+    code: u32,
+    offset: u32,
+    reference: u32,
+    container: u32,
+    script: u32,
+    locals: u32,
+    parse: u8,
+) -> bool {
+    let mut locals_to_use = locals;
+    if locals_to_use == 0 {
+        return false;
+    }
+    let mut object = 0u32;
+    let mut parse = parse;
+    if parse != 0 && form_flag_bit_3(e, script) {
+        parse = 0;
+    }
+    let mut marker = take_u8(e, code, offset);
+    match marker {
+        b'G' | b'Z' | b'r' => {
+            let index = take_i16(e, code, offset);
+            object = script_get_referenced_object(e, Ptr::new(script), index as i32 as u32, locals);
+            if object == 0 {
+                return false;
+            }
+            let form = e.mem.u32(object + 8);
+            if form == 0 && parse == 0 {
+                if e.mem.u32(object + 0xc) != 0 {
+                    e.mem.set_f64(out, 0.0);
+                    return true;
+                }
+                return false;
+            }
+            if marker == b'G' {
+                let value = e.call(GLOBAL_VALUE_OF, &args![form]).f64();
+                e.mem.set_f64(out, value);
+                return true;
+            }
+            if marker == b'Z' {
+                let id = form_id_of(e, form);
+                e.with_stack(4, |e, slot| {
+                    e.mem.set_u32(slot.addr(), id);
+                    e.call(PUT_NUMERIC_ID_IN_DOUBLE, &args![slot, out]);
+                });
+                return true;
+            }
+            marker = take_u8(e, code, offset);
+            if marker != b'X' {
+                let mut quest = 0u32;
+                if form != 0 && form_type(e, form) == 0x47 {
+                    quest = form;
+                }
+                if quest != 0 {
+                    locals_to_use = e.call(QUEST_SCRIPT_LOCALS, &args![quest]).u32();
+                } else {
+                    let mut holder = 0u32;
+                    if form != 0 && is_scripted_reference_type(form_type(e, form)) {
+                        holder = form;
+                    }
+                    if holder != 0 {
+                        let list = e.call(SCRIPT_REF_OBJECT_LIST, &args![holder]).u32();
+                        if e.call(EXTRA_LIST_REFERENCE_POINTER, &args![list]).u32() != 0 {
+                            let list = e.call(SCRIPT_REF_OBJECT_LIST, &args![holder]).u32();
+                            let pointer = e.call(EXTRA_LIST_REFERENCE_POINTER, &args![list]).u32();
+                            let id = form_id_of(e, holder);
+                            let key = e.call(INVENTORY_KEY_OF, &args![holder]).u32();
+                            let item = e.call(INVENTORY_ITEM_OF, &args![pointer, key, id]).u32();
+                            if item != 0 {
+                                locals_to_use = e.call(ITEM_SCRIPT_LOCALS, &args![item]).u32();
+                            }
+                            if item != 0 {
+                                e.call(RELEASE_ITEM, &args![item, 1u32]);
+                            }
+                        } else {
+                            locals_to_use =
+                                e.call(REFERENCE_SCRIPT_VARIABLES, &args![holder]).u32();
+                        }
+                    }
+                }
+                if locals_to_use == 0 {
+                    return false;
+                }
+            }
+        }
+        b'n' => {
+            let at = e.mem.u32(offset);
+            let value = e.mem.i32(code.wrapping_add(at));
+            e.mem.set_f64(out, value as f64);
+            e.mem.set_u32(offset, at.wrapping_add(4));
+            return true;
+        }
+        b'z' => {
+            let at = e.mem.u32(offset);
+            e.call(MEMCPY, &args![out, code.wrapping_add(at), 8u32]);
+            e.mem.set_u32(offset, at.wrapping_add(8));
+            return true;
+        }
+        _ => {}
+    }
+    if marker == b'X' {
+        let function_id = take_i16(e, code, offset) as i32 as u32;
+        let at = e.mem.u32(offset);
+        e.mem.set_u32(offset, at.wrapping_add(2));
+        let definition = e.call(GET_FUNCTION_DEFINITION, &args![function_id]).u32();
+        if definition == 0 {
+            return false;
+        }
+        let mut target = reference;
+        if object != 0 && e.mem.u32(object + 8) != 0 {
+            target = 0;
+            let form = e.mem.u32(object + 8);
+            if form != 0 && is_scripted_reference_type(form_type(e, form)) {
+                target = form;
+            }
+        }
+        // The function definition: needs-reference byte (+0x10), parameters
+        // (+0x14), handler (+0x18).
+        let parameters = e.mem.u32(definition + 0x14);
+        if parse != 0 {
+            if parameters != 0 {
+                script_parse_parameters(
+                    e,
+                    parameters,
+                    code,
+                    offset,
+                    target,
+                    container,
+                    script,
+                    locals_to_use,
+                    &[],
+                );
+            }
+            return false;
+        }
+        let needs_reference = e.mem.u8(definition + 0x10) != 0;
+        if !needs_reference || target != 0 {
+            let handler = e.mem.u32(definition + 0x18);
+            if handler != 0
+                && e.call(
+                    handler,
+                    &args![
+                        parameters,
+                        code,
+                        target,
+                        container,
+                        script,
+                        locals_to_use,
+                        out,
+                        offset
+                    ],
+                )
+                .bool()
+            {
+                return true;
+            }
+            return false;
+        }
+        false
+    } else {
+        let id = take_i16(e, code, offset);
+        if matches!(marker, b'f' | b'l' | b's') {
+            let value = script_locals_get_variable(
+                e,
+                Ptr::new(locals_to_use),
+                id as i32 as u32,
+                Ptr::new(script),
+            );
+            e.mem.set_f64(out, value);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+// Translated from 005acc70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::PutNumericIDInDouble` (Xbox PDB): copies the 4 bytes at `id` to
+/// the start of the double at `value` (`cdecl`).
+pub fn script_put_numeric_id_in_double(e: &mut Engine, id: u32, value: u32) {
+    e.call(MEMCPY, &args![value, id, 4u32]);
+}
+
+// Translated from 005acc90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The inverse of `Script::PutNumericIDInDouble`: copies the first 4 bytes
+/// of the double at `value` to `id` (`cdecl`).
+pub fn fn_005acc90(e: &mut Engine, id: u32, value: u32) {
+    e.call(MEMCPY, &args![id, value, 4u32]);
+}
+
+/// Stores a form through the next output pointer and says whether it is
+/// not null (the common ending of the referenced-object parameters).
+fn store_form(e: &mut Engine, outputs: &[u32], used: &mut usize, form: u32) -> bool {
+    let target = next_output(outputs, used);
+    e.mem.set_u32(target, form);
+    e.mem.u32(target) != 0
+}
+
+/// The next output pointer of a `ParseParameters` call.
+fn next_output(outputs: &[u32], used: &mut usize) -> u32 {
+    let target = *outputs
+        .get(*used)
+        .unwrap_or_else(|| panic!("ParseParameters: output pointer {} missing", *used));
+    *used += 1;
+    target
+}
+
+/// `__RTDynamicCast(form, 0, TESForm, target, 0)`.
+fn cast_form(e: &mut Engine, form: u32, target: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, RTTI_SOURCE_FORM, target, 0u32],
+    )
+    .u32()
+}
+
+/// The form types that a referenced-object parameter type accepts when it
+/// is a plain test of the form type (the form is stored through the next
+/// output pointer): `Some((low, high))` for an inclusive range.
+fn exact_reference_type(parameter: u32) -> Option<(u32, u32)> {
+    let exact = match parameter {
+        0x9 => 0x39,
+        0xc => 0xd,
+        0xd => 0x45,
+        0xe => 0x47,
+        0xf => 0xc,
+        0x10 => 0x7,
+        0x11 => 0x8,
+        0x13 => 0x6,
+        0x1b => 0x41,
+        0x1d => 0x49,
+        0x1e => 0x4a,
+        0x21 => 0x35,
+        0x22 => 0x2a,
+        0x24 => 0x4f,
+        0x25 => 0x55,
+        0x26 => 0x5,
+        0x27 => 0x56,
+        0x28 => 0x31,
+        0x2a => 0x54,
+        0x2b => 0x53,
+        0x2f => 0x61,
+        0x31 => 0x62,
+        0x36 => 0x66,
+        0x3a => 0x2d,
+        0x3b => 0x2c,
+        0x3c => 0x34,
+        0x3e => 0x68,
+        0x3f => 0x6d,
+        0x40 => 0x6c,
+        0x41 => 0x71,
+        0x42 => 0x74,
+        0x43 => 0x73,
+        0x44 => 0x75,
+        0x45 => 0x37,
+        0x6 => return Some((0x3b, 0x3c)),
+        _ => return None,
+    };
+    Some((exact, exact))
+}
+
+/// One referenced-object parameter of `ParseParameters`: `parameter` is the
+/// type, `form` the (non-null) form of the referenced object. Stores the
+/// form through the next output pointer when the type accepts it and says
+/// whether it did; `None` for a type the game does not implement.
+fn parse_reference_parameter(
+    e: &mut Engine,
+    parameter: u32,
+    form: u32,
+    outputs: &[u32],
+    used: &mut usize,
+) -> Option<bool> {
+    if let Some((low, high)) = exact_reference_type(parameter) {
+        let kind = form_type(e, form);
+        if kind >= low && kind <= high {
+            return Some(store_form(e, outputs, used, form));
+        }
+        return Some(false);
+    }
+    let accepted = match parameter {
+        // A container-capable form (virtual +0xE8 on the form).
+        3 => {
+            let kind = form_type(e, form);
+            if e.call(CONTAINER_CAN_HOLD_TYPE, &args![kind]).bool() {
+                let target = next_output(outputs, used);
+                e.mem.set_u32(target, 0);
+                if form != 0 && e.vcall(form, 0xe8, &args![]).bool() {
+                    e.mem.set_u32(target, form);
+                }
+                e.mem.u32(target) != 0
+            } else {
+                false
+            }
+        }
+        4 | 0x18 | 0x1a => {
+            if is_scripted_reference_type(form_type(e, form)) {
+                let target = next_output(outputs, used);
+                e.mem.set_u32(target, 0);
+                if form != 0 && is_scripted_reference_type(form_type(e, form)) {
+                    e.mem.set_u32(target, form);
+                }
+                e.mem.u32(target) != 0
+            } else {
+                false
+            }
+        }
+        7 => {
+            let target = next_output(outputs, used);
+            let cast = cast_form(e, form, RTTI_TARGET_FORM_7);
+            e.mem.set_u32(target, cast);
+            if cast != 0 {
+                true
+            } else {
+                let mut quest = 0u32;
+                if form != 0 && form_type(e, form) == 0x19 {
+                    quest = form;
+                }
+                e.mem.set_u32(target, quest);
+                quest != 0 && list_next(e, quest + 0x74) != 0
+            }
+        }
+        0xb | 0x1f => {
+            let target = next_output(outputs, used);
+            let wanted = if parameter == 0xb {
+                RTTI_TARGET_FORM_11
+            } else {
+                RTTI_TARGET_FORM_31
+            };
+            let cast = cast_form(e, form, wanted);
+            e.mem.set_u32(target, cast);
+            cast != 0
+        }
+        0x14 => {
+            let kind = form_type(e, form);
+            if kind == 0x27 || form_type(e, form) == 0x55 {
+                store_form(e, outputs, used, form)
+            } else {
+                false
+            }
+        }
+        0x15 => {
+            let target = next_output(outputs, used);
+            e.mem.set_u32(target, 0);
+            if form != 0 && e.vcall(form, 0xe8, &args![]).bool() {
+                e.mem.set_u32(target, form);
+            }
+            e.mem.u32(target) != 0
+        }
+        0x19 => {
+            let target = next_output(outputs, used);
+            e.mem.set_u32(target, 0);
+            if form != 0 {
+                let kind = form_type(e, form);
+                if (0x2a..=0x2b).contains(&kind) {
+                    e.mem.set_u32(target, form);
+                }
+            }
+            e.mem.u32(target) != 0
+        }
+        0x23 | 0x38 | 0x39 => {
+            let target = next_output(outputs, used);
+            e.mem.set_u32(target, 0);
+            if form != 0 {
+                let kind = form_type(e, form);
+                let (first, second) = match parameter {
+                    0x23 => (8, 0x2a),
+                    0x38 => (0x2a, 0x2d),
+                    _ => (0x2b, 0x2c),
+                };
+                if kind == first || kind == second {
+                    e.mem.set_u32(target, form);
+                }
+            }
+            e.mem.u32(target) != 0
+        }
+        0x32 => {
+            let kind = form_type(e, form);
+            if e.call(CONTAINER_CAN_HOLD_TYPE, &args![kind]).bool() || form_type(e, form) == 0x55 {
+                store_form(e, outputs, used, form)
+            } else {
+                false
+            }
+        }
+        0x35 => {
+            let target = next_output(outputs, used);
+            e.mem.set_u32(target, 0);
+            if form != 0 && (e.vcall(form, 0xe8, &args![]).bool() || form_type(e, form) == 0x55) {
+                e.mem.set_u32(target, form);
+            }
+            e.mem.u32(target) != 0
+        }
+        0x3d => {
+            if form != 0 {
+                store_form(e, outputs, used, form)
+            } else {
+                false
+            }
+        }
+        _ => return None,
+    };
+    Some(accepted)
+}
+
+// Translated from 005accb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::ParseParameters` (Xbox PDB), `cdecl`, varargs: reads the
+/// parameters of a script command from the compiled data at `*offset`
+/// (`code`). `parameters` is the command's parameter list (12 bytes per
+/// entry, the type at +4); a 16-bit count in the data says how many follow.
+/// Each parameter is stored through the next of the output pointers in
+/// `outputs` (the stack words after the seventh), but only when bit 3 of
+/// the script's form flags is set (`004013e0`; otherwise the data is only
+/// skipped). Types the table at `0118cdd5` marks as referenced objects are
+/// an `r` marker and a 16-bit index into the script's referenced objects
+/// (`GetReferencedObject`) and need the object to have a form; the other
+/// types are strings (type 0), integers and floats read as operands with
+/// `fn_005ac7a0` (types 1, 0x17 and 2), 16-bit values stored as integers
+/// (types 5, 0xA, 0x12, 0x1C, 0x29, 0x33, 0x34, 0x37), a byte (type 8) or a
+/// 16-bit value stored as a byte (type 0x20). Any other type, a missing
+/// `r` marker or a rejected object answers false (an unimplemented
+/// referenced-object type is logged first); true when every parameter was
+/// read.
+#[allow(clippy::too_many_arguments)]
+pub fn script_parse_parameters(
+    e: &mut Engine,
+    parameters: u32,
+    code: u32,
+    offset: u32,
+    reference: u32,
+    container: u32,
+    script: u32,
+    locals: u32,
+    outputs: &[u32],
+) -> bool {
+    if parameters == 0 {
+        return false;
+    }
+    let mut used = 0usize;
+    let count = take_i16(e, code, offset);
+    let mut index: i16 = 0;
+    while index < count {
+        let entry = parameters.wrapping_add((index as i32).wrapping_mul(12) as u32);
+        let parameter = e.mem.u32(entry.wrapping_add(4));
+        let is_reference = e
+            .mem
+            .u8(PARAMETER_TYPE_TABLE.wrapping_add(parameter.wrapping_mul(8)))
+            != 0;
+        if is_reference {
+            if take_u8(e, code, offset) != b'r' {
+                return false;
+            }
+            let object_index = take_i16(e, code, offset);
+            let object = script_get_referenced_object(
+                e,
+                Ptr::new(script),
+                object_index as i32 as u32,
+                locals,
+            );
+            if !form_flag_bit_3(e, script) || object == 0 || e.mem.u32(object + 8) == 0 {
+                return false;
+            }
+            let form = e.mem.u32(object + 8);
+            match parse_reference_parameter(e, parameter, form, outputs, &mut used) {
+                Some(true) => {}
+                Some(false) => return false,
+                None => {
+                    script_log(e, &args![FORMAT_PARAMETER_TYPE_UNIMPLEMENTED, parameter]);
+                    return false;
+                }
+            }
+        } else {
+            match parameter {
+                0 => {
+                    let length = take_i16(e, code, offset);
+                    if form_flag_bit_3(e, script) {
+                        let target = next_output(outputs, &mut used);
+                        let at = e.mem.u32(offset);
+                        e.call(
+                            MEMCPY,
+                            &args![target, code.wrapping_add(at), length as i32 as u32],
+                        );
+                        e.mem.set_u8(target.wrapping_add(length as i32 as u32), 0);
+                    }
+                    let at = e.mem.u32(offset);
+                    e.mem.set_u32(offset, at.wrapping_add(length as i32 as u32));
+                }
+                1 | 0x17 => {
+                    let value = e.with_stack(8, |e, slot| {
+                        e.mem.set_f64(slot.addr(), 0.0);
+                        let ok = fn_005ac7a0(
+                            e,
+                            slot.addr(),
+                            code,
+                            offset,
+                            reference,
+                            container,
+                            script,
+                            locals,
+                            1,
+                        );
+                        ok.then(|| e.mem.f64(slot.addr()))
+                    });
+                    let Some(value) = value else {
+                        return false;
+                    };
+                    if form_flag_bit_3(e, script) {
+                        let target = next_output(outputs, &mut used);
+                        let integer = e.call(FTOL2, &args![value]).u32();
+                        e.mem.set_u32(target, integer);
+                    }
+                }
+                2 => {
+                    let value = e.with_stack(8, |e, slot| {
+                        e.mem.set_f64(slot.addr(), 0.0);
+                        let ok = fn_005ac7a0(
+                            e,
+                            slot.addr(),
+                            code,
+                            offset,
+                            reference,
+                            container,
+                            script,
+                            locals,
+                            1,
+                        );
+                        ok.then(|| e.mem.f64(slot.addr()))
+                    });
+                    let Some(value) = value else {
+                        return false;
+                    };
+                    if form_flag_bit_3(e, script) {
+                        let target = next_output(outputs, &mut used);
+                        e.mem.set_f32(target, value as f32);
+                    }
+                }
+                5 | 0xa | 0x12 | 0x1c | 0x29 | 0x33 | 0x34 | 0x37 => {
+                    let value = take_i16(e, code, offset);
+                    if form_flag_bit_3(e, script) {
+                        let target = next_output(outputs, &mut used);
+                        e.mem.set_i32(target, value as i32);
+                    }
+                }
+                8 => {
+                    if form_flag_bit_3(e, script) {
+                        let target = next_output(outputs, &mut used);
+                        let at = e.mem.u32(offset);
+                        let value = e.mem.u8(code.wrapping_add(at));
+                        e.mem.set_u8(target, value);
+                    }
+                    let at = e.mem.u32(offset);
+                    e.mem.set_u32(offset, at.wrapping_add(1));
+                }
+                0x20 => {
+                    let value = take_i16(e, code, offset);
+                    if form_flag_bit_3(e, script) {
+                        let target = next_output(outputs, &mut used);
+                        e.mem.set_u8(target, value as u8);
+                    }
+                }
+                _ => return false,
+            }
+        }
+        index = index.wrapping_add(1);
+    }
+    true
+}
+
+/// The registered form of `Script::ParseParameters`: seven fixed words and
+/// then the output pointers, however many the caller pushed.
+fn parse_parameters_entry(e: &mut Engine, words: &[u32]) -> Ret {
+    assert!(
+        words.len() >= 7,
+        "ParseParameters needs 7 argument words, got {}",
+        words.len()
+    );
+    let ok = script_parse_parameters(
+        e,
+        words[0],
+        words[1],
+        words[2],
+        words[3],
+        words[4],
+        words[5],
+        words[6],
+        &words[7..],
+    );
+    Ret {
+        eax: ok as u32,
+        ..Ret::default()
+    }
+}
+
+// Translated from 005ae2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forgets this script as the last referenced-object search script (TLS
+/// +0x288) and clears the form (+8) of each of its referenced objects that
+/// has a variable id (+0xC), so that the next lookup reloads it.
+pub fn fn_005ae2e0(e: &mut Engine, this: Ptr<Script>) {
+    let tls = tls_block(e);
+    if e.mem.u32(tls + TLS_LAST_REF_SEARCH_SCRIPT) == this.addr() {
+        e.mem.set_u32(tls + TLS_LAST_REF_SEARCH_SCRIPT, 0);
+    }
+    let mut node = e.call(SCRIPT_REF_OBJECT_LIST, &args![this]).u32();
+    while node != 0 && !list_is_empty(e, node) {
+        let object = list_item(e, node);
+        if object != 0 && e.mem.u32(object + 0xc) != 0 {
+            e.mem.set_u32(object + 8, 0);
+        }
+        node = list_next(e, node);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1632,6 +3580,85 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005aa8c0, fn_005aa8c0(Ptr) -> bool),
         entry!(0x005aa910, fn_005aa910(Ptr) -> bool),
         entry!(0x005aa930, script_save_pending_references(Ptr)),
+        entry!(0x005aaaf0, script_load_pending_references(Ptr)),
+        entry!(0x005aae20, fn_005aae20()),
+        entry!(0x005aae70, script_set_compile_data(Ptr<Script>, u32, u32)),
+        entry!(0x005aaee0, fn_005aaee0(u32, u32) -> u32),
+        entry!(0x005aaf20, script_init(Ptr<Script>, Ptr<ScriptCompileData>)),
+        entry!(
+            0x005ab040,
+            fn_005ab040(Ptr<Script>, Ptr<ScriptCompileData>) -> bool
+        ),
+        entry!(
+            0x005ab240,
+            script_compare_result_scripts(Ptr<Script>, Ptr<Script>) -> bool
+        ),
+        entry!(0x005ab400, script_init_item(Ptr<Script>, Ptr)),
+        entry!(0x005ab7d0, fn_005ab7d0(Ptr<Script>)),
+        entry!(0x005ab7f0, fn_005ab7f0(u32, u32, u32)),
+        entry!(
+            0x005ab8b0,
+            fn_005ab8b0(
+                Ptr<ScriptReferencedObject>,
+                Ptr<ScriptReferencedObject>,
+            ) -> Ptr<ScriptReferencedObject>
+        ),
+        entry!(0x005ab930, fn_005ab930(u32, u32, u32)),
+        entry!(0x005ab9f0, script_load(Ptr<Script>, Ptr) -> bool),
+        entry!(0x005abd70, fn_005abd70(Ptr<Script>, u32)),
+        entry!(0x005abd90, fn_005abd90(Ptr<Script>)),
+        entry!(0x005abe00, script_save_result_script(Ptr<Script>)),
+        entry!(0x005abe50, script_set_text(Ptr<Script>, u32)),
+        entry!(
+            0x005abed0,
+            script_get_variable_name(Ptr<Script>, u32) -> u32
+        ),
+        entry!(0x005abf60, fn_005abf60(Ptr<Script>) -> Ptr<ScriptLocals>),
+        entry!(0x005ac020, fn_005ac020(Ptr<Script>) -> u32),
+        entry!(
+            0x005ac150,
+            fn_005ac150(Ptr<ScriptLocal>, Ptr<ScriptLocal>) -> Ptr<ScriptLocal>
+        ),
+        entry!(0x005ac190, script_init_action_list(u32, Ptr)),
+        entry!(
+            0x005ac1e0,
+            script_run(Ptr<Script>, u32, u32, u32, u8) -> bool
+        ),
+        entry!(
+            0x005ac340,
+            script_run_script_effect_start(Ptr<Script>, u32, u32)
+        ),
+        entry!(
+            0x005ac380,
+            script_run_script_effect_finish(Ptr<Script>, u32, u32)
+        ),
+        entry!(
+            0x005ac3c0,
+            script_run_script_effect_update(Ptr<Script>, u32, u32, f32)
+        ),
+        entry!(
+            0x005ac400,
+            script_compile_and_run(Ptr<Script>, u32, u32, u32)
+        ),
+        entry!(
+            0x005ac4f0,
+            script_get_referenced_object(Ptr<Script>, u32, u32) -> u32
+        ),
+        entry!(
+            0x005ac6a0,
+            script_find_variable(Ptr<Script>, u32, Ptr) -> u8
+        ),
+        entry!(0x005ac730, script_set_process_scripts(u8)),
+        entry!(0x005ac740, script_get_process_scripts() -> u8),
+        entry!(0x005ac750, script_set_action_flag(u32, Ptr, u32) -> bool),
+        entry!(
+            0x005ac7a0,
+            fn_005ac7a0(u32, u32, u32, u32, u32, u32, u32, u8) -> bool
+        ),
+        entry!(0x005acc70, script_put_numeric_id_in_double(u32, u32)),
+        entry!(0x005acc90, fn_005acc90(u32, u32)),
+        (0x005accb0, parse_parameters_entry as AbiFn),
+        entry!(0x005ae2e0, fn_005ae2e0(Ptr<Script>)),
     ]
 }
 
@@ -3301,5 +5328,2178 @@ mod tests {
         );
         assert_eq!(log[1].0, CRITICAL_SECTION_ENTER);
         assert_eq!(log.last().unwrap().0, CRITICAL_SECTION_LEAVE);
+    }
+
+    // ============================================================================
+    // Second half of the unit (005aaaf0 to 005ae2e0)
+    // ============================================================================
+
+    type Calls = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    /// An engine for the second half: the doubles of [`script_engine`] plus
+    /// the C runtime and allocator functions the code reaches, and the pages
+    /// of the globals it reads.
+    fn tail_engine() -> Engine {
+        let mut e = script_engine();
+        e.map(0x0101_1000, 0x1000);
+        e.map(0x0118_c000, 0x1000);
+        e.register(MEMCPY, |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            e.mem.write(a[0], &bytes);
+            ret(a[0])
+        });
+        e.register(MEMSET, |e, a| {
+            for i in 0..a[2] {
+                e.mem.set_u8(a[0] + i, a[1] as u8);
+            }
+            ret(a[0])
+        });
+        e.register(STRLEN, |e, a| ret(e.mem.cstr(a[0]).len() as u32));
+        e.register(MEMORY_MANAGER_GET, |_, _| ret(0x011f_6238));
+        e.register(MEMORY_MANAGER_ALLOCATE, |e, a| ret(e.mem.alloc(a[1])));
+        e.register(SCRIPT_HEADER_OF, |_, a| ret(a[0] + 0x18));
+        e.register(FORM_ID_OF, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        e.register(SCRIPT_BUFFER_VARIABLE_LIST, |_, a| ret(a[0] + 0x3c));
+        e.register(STRING_LENGTH, |e, a| ret(e.mem.u16(a[0] + 4) as u32));
+        e.register(STRING_DATA, |e, a| ret(e.mem.u32(a[0])));
+        e
+    }
+
+    /// A script whose virtual slots record their calls (slot, words).
+    fn recording_script(e: &mut Engine, slots: &[u32]) -> (Ptr<Script>, Calls) {
+        let calls: Calls = Rc::new(RefCell::new(Vec::new()));
+        let table = e.mem.alloc(0x200);
+        for &slot in slots {
+            let sink = calls.clone();
+            let target = fake_code(e, move |_, a| {
+                sink.borrow_mut().push((slot, a.to_vec()));
+                ret(0x7000 + slot)
+            });
+            e.mem.set_u32(table + slot, target);
+        }
+        let script = e.new_object::<Script>();
+        e.mem.set_u32(script.addr(), table);
+        (script, calls)
+    }
+
+    /// The header of a script.
+    fn script_header(script: Ptr<Script>) -> Ptr<ScriptHeader> {
+        script.at(Script::m_header)
+    }
+
+    /// A C string in game memory.
+    fn c_string(e: &mut Engine, text: &str) -> u32 {
+        let block = e.mem.alloc(text.len() as u32 + 1);
+        e.mem.set_cstr(block, text.as_bytes());
+        block
+    }
+
+    /// A `BSStringT` (pointer, length) for `text` at a fresh block.
+    fn bs_string(e: &mut Engine, at: u32, text: &str) {
+        let data = c_string(e, text);
+        e.mem.set_u32(at, data);
+        e.mem.set_u16(at + 4, text.len() as u16);
+    }
+
+    /// A `ScriptVariable` block (0x20 bytes) with an id and a name.
+    fn script_variable(e: &mut Engine, id: u32, name: &str) -> u32 {
+        let block = e.mem.alloc(0x20);
+        e.mem.set_u32(block, id);
+        bs_string(e, block + 0x18, name);
+        block
+    }
+
+    // ---- pending references and small helpers --------------------------------
+
+    #[test]
+    fn load_pending_references_reads_the_four_lists() {
+        let mut e = tail_engine();
+        e.register(LIST_CLEAR, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, 0);
+            Ret::default()
+        });
+        e.register(REFERENCE_CONSTRUCT, |_, a| ret(a[0]));
+        e.register(LOOKUP_FORM_BY_ID, |_, a| ret(a[0] + 0x100));
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        let counts = Rc::new(RefCell::new(vec![1u32, 0, 2, 1]));
+        let ids = Rc::new(RefCell::new(vec![0x10u32, 0x20, 0x21, 0x30]));
+        let queue = counts.clone();
+        e.register_double(BUFFER_LOAD_SIZED_VALUE, move |_, _| {
+            ret(queue.borrow_mut().remove(0))
+        });
+        let queue = ids.clone();
+        e.register_double(BUFFER_LOAD_FORM_ID, move |_, _| {
+            ret(queue.borrow_mut().remove(0))
+        });
+        // Something already pending is dropped first.
+        e.mem.set_u32(REFERENCES_TO_ENABLE, 0x99);
+        e.call_log = Some(vec![]);
+        e.call(0x005a_aaf0, &args![0xb0f0u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, LIST_CLEAR).len(), 4);
+        assert_eq!(calls_to(&log, BUFFER_LOAD_SIZED_VALUE).len(), 4);
+        // One reference constructed (in a 0x68-byte block) per entry.
+        assert_eq!(calls_to(&log, REFERENCE_CONSTRUCT).len(), 4);
+        assert_eq!(list_items(&e, REFERENCES_TO_ENABLE), vec![0x110]);
+        assert_eq!(list_items(&e, REFERENCES_TO_DISABLE), Vec::<u32>::new());
+        assert_eq!(list_items(&e, REFERENCES_TO_DELETE), vec![0x121, 0x120]);
+        assert_eq!(list_items(&e, REFERENCES_TO_FADE_DISABLE), vec![0x130]);
+        assert_eq!(calls_to(&log, CRITICAL_SECTION_ENTER).len(), 1);
+        assert_eq!(calls_to(&log, CRITICAL_SECTION_LEAVE).len(), 1);
+    }
+
+    #[test]
+    fn clear_pending_references_empties_the_four_lists_under_the_lock() {
+        let mut e = tail_engine();
+        e.register(LIST_CLEAR, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, 0);
+            Ret::default()
+        });
+        for list in [
+            REFERENCES_TO_ENABLE,
+            REFERENCES_TO_DISABLE,
+            REFERENCES_TO_DELETE,
+            REFERENCES_TO_FADE_DISABLE,
+        ] {
+            e.mem.set_u32(list, 0x55);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x005a_ae20, &args![]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, LIST_CLEAR).len(), 4);
+        assert_eq!(calls_to(&log, CRITICAL_SECTION_ENTER).len(), 1);
+        assert_eq!(e.mem.u32(REFERENCES_TO_DELETE), 0);
+        assert_eq!(e.mem.u32(REFERENCES_TO_FADE_DISABLE), 0);
+    }
+
+    #[test]
+    fn set_compile_data_replaces_the_data_with_a_copy() {
+        let mut e = tail_engine();
+        let this = e.new_object::<Script>();
+        let old = e.mem.alloc(8);
+        e.set(this, Script::m_data, Ptr::new(old));
+        let source = e.mem.alloc(8);
+        e.mem.write(source, &[1, 2, 3, 4, 5]);
+        e.call_log = Some(vec![]);
+        e.call(0x005a_ae70, &args![this, 5u32, source]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(deleted(&log), vec![old]);
+        let data = e.get(this, Script::m_data).addr();
+        assert_ne!(data, 0);
+        assert_eq!(e.mem.bytes(data, 5), vec![1, 2, 3, 4, 5]);
+        assert_eq!(e.get(script_header(this), ScriptHeader::dataSize), 5);
+        // Size 0: the data is dropped and nothing is allocated.
+        e.call_log = Some(vec![]);
+        e.call(0x005a_ae70, &args![this, 0u32, source]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(deleted(&log), vec![data]);
+        assert!(e.get(this, Script::m_data).is_null());
+        assert_eq!(e.get(script_header(this), ScriptHeader::dataSize), 0);
+        assert!(calls_to(&log, MEMORY_MANAGER_ALLOCATE).is_empty());
+    }
+
+    #[test]
+    fn zeroed_allocation_multiplies_and_clears() {
+        let mut e = tail_engine();
+        e.call_log = Some(vec![]);
+        let block = e.call(0x005a_aee0, &args![3u32, 4u32]).u32();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, MEMORY_MANAGER_ALLOCATE),
+            vec![vec![0x011f_6238, 12]]
+        );
+        assert_eq!(calls_to(&log, MEMSET), vec![vec![block, 0, 12]]);
+        assert_eq!(e.mem.block_size(block), Some(16));
+    }
+
+    // ---- Init and comparisons ------------------------------------------------------
+
+    /// A compiler output buffer: name `name`, `data`, header sizes and empty
+    /// lists.
+    fn compile_buffer(e: &mut Engine, name: &str, data: &[u8], ref_count: u32) -> u32 {
+        let buffer = e.mem.alloc(0x58);
+        if !name.is_empty() {
+            bs_string(e, buffer + 0xc, name);
+        }
+        let output = e.mem.alloc(data.len() as u32 + 1);
+        e.mem.write(output, data);
+        e.mem.set_u32(buffer + 0x20, output);
+        e.mem.set_u32(buffer + 0x28 + 4, ref_count);
+        e.mem.set_u32(buffer + 0x28 + 8, data.len() as u32);
+        buffer
+    }
+
+    #[test]
+    fn script_differs_from_buffer_by_size_count_bytes_and_lists() {
+        let mut e = tail_engine();
+        e.register(SCRIPT_IS_NAMED_CHECK, |_, _| ret(0));
+        e.register(LIST_COUNT, |e, a| ret(list_items(e, a[0]).len() as u32));
+        e.register(VARIABLE_DIFFERS, |e, a| {
+            ret((e.mem.u32(a[0]) != e.mem.u32(a[1])) as u32)
+        });
+        let (this, _) = recording_script(&mut e, &[0x130]);
+        let data = [1u8, 2, 3];
+        let set_data = |e: &mut Engine, bytes: &[u8]| {
+            let block = e.mem.alloc(8);
+            e.mem.write(block, bytes);
+            e.set(this, Script::m_data, Ptr::new(block));
+        };
+        set_data(&mut e, &data);
+        e.set(script_header(this), ScriptHeader::dataSize, 3);
+        e.set(script_header(this), ScriptHeader::refObjectCount, 1);
+        let buffer = compile_buffer(&mut e, "Name", &data, 1);
+        // Same data, no lists: not different.
+        assert!(!e.call(0x005a_b040, &args![this, buffer]).bool());
+        // A different size, count or byte.
+        e.mem.set_u32(buffer + 0x30, 4);
+        assert!(e.call(0x005a_b040, &args![this, buffer]).bool());
+        e.mem.set_u32(buffer + 0x30, 3);
+        e.mem.set_u32(buffer + 0x2c, 2);
+        assert!(e.call(0x005a_b040, &args![this, buffer]).bool());
+        e.mem.set_u32(buffer + 0x2c, 1);
+        let output = e.mem.u32(buffer + 0x20);
+        e.mem.set_u8(output + 1, 9);
+        assert!(e.call(0x005a_b040, &args![this, buffer]).bool());
+        e.mem.set_u8(output + 1, 2);
+        assert!(!e.call(0x005a_b040, &args![this, buffer]).bool());
+        // Variable lists: a different count, then a different pair.
+        let variable_a = variable(&mut e, 1, 0.0);
+        let variable_b = variable(&mut e, 2, 0.0);
+        fill_list(&mut e, buffer + 0x3c, &[variable_a]);
+        assert!(e.call(0x005a_b040, &args![this, buffer]).bool());
+        fill_list(&mut e, this.addr() + 0x4c, &[variable_b]);
+        assert!(e.call(0x005a_b040, &args![this, buffer]).bool());
+        e.mem.set_u32(variable_b, 1);
+        assert!(!e.call(0x005a_b040, &args![this, buffer]).bool());
+        // Referenced objects: the form word at +8 is compared.
+        let object_a = e.mem.alloc(0x10);
+        let object_b = e.mem.alloc(0x10);
+        e.mem.set_u32(object_a + 8, 0x500);
+        e.mem.set_u32(object_b + 8, 0x600);
+        fill_list(&mut e, buffer + 0x44, &[object_a]);
+        assert!(e.call(0x005a_b040, &args![this, buffer]).bool());
+        fill_list(&mut e, this.addr() + 0x44, &[object_b]);
+        assert!(e.call(0x005a_b040, &args![this, buffer]).bool());
+        e.mem.set_u32(object_b + 8, 0x500);
+        assert!(!e.call(0x005a_b040, &args![this, buffer]).bool());
+    }
+
+    #[test]
+    fn script_differs_from_buffer_when_the_name_does_not_match() {
+        let mut e = tail_engine();
+        e.register(SCRIPT_IS_NAMED_CHECK, |_, _| ret(1));
+        e.register(LIST_COUNT, |e, a| ret(list_items(e, a[0]).len() as u32));
+        let table_name = c_string(&mut e, "Other");
+        let target = fake_code(&mut e, move |_, _| ret(table_name));
+        let table = e.mem.alloc(0x200);
+        e.mem.set_u32(table + 0x130, target);
+        let this = e.new_object::<Script>();
+        e.mem.set_u32(this.addr(), table);
+        e.register(STRING_COMPARE, |e, a| {
+            ret((e.mem.cstr(a[0]) != e.mem.cstr(a[1])) as u32)
+        });
+        let buffer = compile_buffer(&mut e, "Name", &[], 0);
+        assert!(e.call(0x005a_b040, &args![this, buffer]).bool());
+        // The same name (compare is zero) and nothing else different.
+        let buffer = compile_buffer(&mut e, "Other", &[], 0);
+        assert!(!e.call(0x005a_b040, &args![this, buffer]).bool());
+        // A buffer with no name skips the name test.
+        let buffer = compile_buffer(&mut e, "", &[], 0);
+        assert!(!e.call(0x005a_b040, &args![this, buffer]).bool());
+    }
+
+    #[test]
+    fn init_with_an_empty_name_only_marks_the_script_deleted() {
+        let mut e = tail_engine();
+        let (this, calls) = recording_script(&mut e, &[0x88, 0xc4, 0xc8, 0x134]);
+        let buffer = compile_buffer(&mut e, "", &[], 0);
+        e.call(0x005a_af20, &args![this, buffer]);
+        let calls = calls.borrow();
+        assert_eq!(
+            *calls,
+            vec![(0x88, vec![this.addr()]), (0xc4, vec![this.addr(), 1])]
+        );
+    }
+
+    #[test]
+    fn init_takes_the_compiled_output_when_it_differs() {
+        let mut e = tail_engine();
+        e.register(SCRIPT_IS_NAMED_CHECK, |_, _| ret(0));
+        e.register(LIST_COUNT, |e, a| ret(list_items(e, a[0]).len() as u32));
+        e.register(STRING_CONSTRUCT, |_, _| Ret::default());
+        e.register(STRING_COPY, |_, _| Ret::default());
+        e.register(SCRIPT_VARIABLE_COPY_CONSTRUCT, |e, a| {
+            let bytes = e.mem.bytes(a[1], 0x20);
+            e.mem.write(a[0], &bytes);
+            ret(a[0])
+        });
+        e.register(SCRIPT_VARIABLE_DELETE, |e, a| {
+            e.mem.free(a[0]);
+            Ret::default()
+        });
+        e.register(SCRIPT_REFERENCED_OBJECT_DESTRUCT, |_, _| Ret::default());
+        let (this, calls) = recording_script(&mut e, &[0x88, 0xc4, 0xc8, 0x134]);
+        let buffer = compile_buffer(&mut e, "Name", &[7, 8, 9], 1);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object + 8, 0x500);
+        e.mem.set_u32(object + 0xc, 3);
+        fill_list(&mut e, buffer + 0x44, &[object]);
+        let local = variable(&mut e, 4, 2.5);
+        fill_list(&mut e, buffer + 0x3c, &[local]);
+        e.call(0x005a_af20, &args![this, buffer]);
+        let name_data = e.mem.u32(buffer + 0xc);
+        let sequence: Vec<(u32, Vec<u32>)> = calls.borrow().clone();
+        assert_eq!(
+            sequence,
+            vec![
+                (0x88, vec![this.addr()]),
+                (0x134, vec![this.addr(), name_data]),
+                (0xc4, vec![this.addr(), 0]),
+                (0xc8, vec![this.addr(), 1]),
+            ]
+        );
+        assert_eq!(e.get(script_header(this), ScriptHeader::dataSize), 3);
+        assert_eq!(e.get(script_header(this), ScriptHeader::refObjectCount), 1);
+        let data = e.get(this, Script::m_data).addr();
+        assert_eq!(e.mem.bytes(data, 3), vec![7, 8, 9]);
+        // The lists are copies of the buffer's.
+        let references = list_items(&e, this.addr() + 0x44);
+        assert_eq!(references.len(), 1);
+        assert_ne!(references[0], object);
+        assert_eq!(e.mem.u32(references[0] + 8), 0x500);
+        assert_eq!(e.mem.u32(references[0] + 0xc), 3);
+        let variables = list_items(&e, this.addr() + 0x4c);
+        assert_eq!(variables.len(), 1);
+        assert_eq!(e.mem.u32(variables[0]), 4);
+        assert_eq!(e.mem.f64(variables[0] + 8), 2.5);
+    }
+
+    #[test]
+    fn init_leaves_an_identical_script_alone() {
+        let mut e = tail_engine();
+        e.register(SCRIPT_IS_NAMED_CHECK, |_, _| ret(0));
+        e.register(LIST_COUNT, |e, a| ret(list_items(e, a[0]).len() as u32));
+        let (this, calls) = recording_script(&mut e, &[0x88, 0xc4, 0xc8, 0x134]);
+        let block = e.mem.alloc(8);
+        e.mem.write(block, &[7, 8, 9]);
+        e.set(this, Script::m_data, Ptr::new(block));
+        e.set(script_header(this), ScriptHeader::dataSize, 3);
+        let buffer = compile_buffer(&mut e, "Name", &[7, 8, 9], 0);
+        e.call(0x005a_af20, &args![this, buffer]);
+        assert_eq!(*calls.borrow(), vec![(0x88, vec![this.addr()])]);
+    }
+
+    /// A script with a header copy and the given text for the comparison.
+    fn comparison_engine() -> Engine {
+        let mut e = tail_engine();
+        e.register(SCRIPT_COMPILE_DATA_OF, |e, a| ret(e.mem.u32(a[0] + 0x30)));
+        e.register(TEXT_COMPARE, |e, a| {
+            ret((e.mem.cstr(a[0]) != e.mem.cstr(a[1])) as u32)
+        });
+        e.register(SCRIPT_TEXT_OF, |e, a| ret(e.mem.u32(a[0] + 0x2c)));
+        e
+    }
+
+    fn comparable_script(e: &mut Engine, data: &[u8], text: &str) -> Ptr<Script> {
+        let script = e.new_object::<Script>();
+        let block = e.mem.alloc(8);
+        e.mem.write(block, data);
+        e.set(script, Script::m_data, Ptr::new(block));
+        e.set(
+            script_header(script),
+            ScriptHeader::dataSize,
+            data.len() as u32,
+        );
+        e.set(script_header(script), ScriptHeader::refObjectCount, 1);
+        e.set(script_header(script), ScriptHeader::bIsCompiled, true);
+        if !text.is_empty() {
+            let text = c_string(e, text);
+            e.set(script, Script::m_text, Ptr::new(text));
+        }
+        script
+    }
+
+    #[test]
+    fn compare_result_scripts_reports_every_difference() {
+        let mut e = comparison_engine();
+        let this = comparable_script(&mut e, &[1, 2], "run");
+        // Null: different.
+        assert!(e.call(0x005a_b240, &args![this, 0u32]).bool());
+        let other = comparable_script(&mut e, &[1, 2], "run");
+        assert!(!e.call(0x005a_b240, &args![this, other]).bool());
+        // Size, reference count, compiled flag.
+        let bigger = comparable_script(&mut e, &[1, 2, 3], "run");
+        assert!(e.call(0x005a_b240, &args![this, bigger]).bool());
+        e.set(script_header(other), ScriptHeader::refObjectCount, 2);
+        assert!(e.call(0x005a_b240, &args![this, other]).bool());
+        e.set(script_header(other), ScriptHeader::refObjectCount, 1);
+        e.set(script_header(other), ScriptHeader::bIsCompiled, false);
+        assert!(e.call(0x005a_b240, &args![this, other]).bool());
+        e.set(script_header(other), ScriptHeader::bIsCompiled, true);
+        // A compiled byte.
+        let data = e.get(other, Script::m_data).addr();
+        e.mem.set_u8(data, 9);
+        assert!(e.call(0x005a_b240, &args![this, other]).bool());
+        e.mem.set_u8(data, 1);
+        // Texts: a different length, a different text, one missing.
+        let longer = comparable_script(&mut e, &[1, 2], "runs");
+        assert!(e.call(0x005a_b240, &args![this, longer]).bool());
+        let changed = comparable_script(&mut e, &[1, 2], "rux");
+        assert!(e.call(0x005a_b240, &args![this, changed]).bool());
+        let none = comparable_script(&mut e, &[1, 2], "");
+        assert!(e.call(0x005a_b240, &args![this, none]).bool());
+        assert!(e.call(0x005a_b240, &args![none, this]).bool());
+        let also_none = comparable_script(&mut e, &[1, 2], "");
+        assert!(!e.call(0x005a_b240, &args![none, also_none]).bool());
+    }
+
+    #[test]
+    fn compare_result_scripts_compares_referenced_objects() {
+        let mut e = comparison_engine();
+        let this = comparable_script(&mut e, &[1], "");
+        let other = comparable_script(&mut e, &[1], "");
+        let own = e.mem.alloc(0x10);
+        let theirs = e.mem.alloc(0x10);
+        e.mem.set_u32(own + 8, 0x500);
+        e.mem.set_u32(theirs + 8, 0x500);
+        fill_list(&mut e, this.addr() + 0x44, &[own]);
+        fill_list(&mut e, other.addr() + 0x44, &[theirs]);
+        assert!(!e.call(0x005a_b240, &args![this, other]).bool());
+        e.mem.set_u32(theirs + 8, 0x600);
+        assert!(e.call(0x005a_b240, &args![this, other]).bool());
+        // A node with no object is skipped.
+        e.mem.set_u32(other.addr() + 0x44, 0);
+        assert!(!e.call(0x005a_b240, &args![this, other]).bool());
+    }
+
+    // ---- InitItem --------------------------------------------------------------------
+
+    /// The doubles `InitItem` needs; the form of id `0x1010` exists (as
+    /// `0xf0f0`), nothing else does, and rebasing adds 0x1000 to the id.
+    fn init_item_engine(flag_bit_3: u32) -> Engine {
+        let mut e = tail_engine();
+        e.register_double(FORM_FLAG_BIT_3, move |_, _| ret(flag_bit_3));
+        e.register(SCRIPT_INIT_ITEM_CHECK, |_, _| ret(1));
+        e.register(FORM_GET_FILE, |_, _| ret(0xf11e));
+        e.register(FORM_SET_FILE, |_, _| Ret::default());
+        e.register(FORM_ADD_COMPILE_INDEX, |e, a| {
+            let id = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], id + 0x1000);
+            Ret::default()
+        });
+        e.register(LOOKUP_FORM_BY_ID, |_, a| {
+            ret(if a[0] == 0x1010 { 0xf0f0 } else { 0 })
+        });
+        e.register(EMPTY_METHOD, |_, _| Ret::default());
+        e.register(SCRIPT_SET_QUEST_SCRIPT_FLAG, |_, _| Ret::default());
+        e.register(FORM_TYPE_OF, |e, a| ret(e.mem.u8(a[0] + 4) as u32));
+        e
+    }
+
+    /// A referenced object with a form id and a variable id.
+    fn referenced_object(e: &mut Engine, form: u32, variable_id: u32) -> u32 {
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object + 8, form);
+        e.mem.set_u32(object + 0xc, variable_id);
+        object
+    }
+
+    #[test]
+    fn init_item_does_nothing_when_the_flag_is_set_or_there_is_no_source() {
+        let mut e = init_item_engine(1);
+        let (this, _) = recording_script(&mut e, &[0x130]);
+        let source = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x005a_b400, &args![this, source]);
+        e.call(0x005a_b7d0, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, SCOPE_GUARD_OPEN).is_empty());
+        let mut e = init_item_engine(0);
+        let (this, _) = recording_script(&mut e, &[0x130]);
+        e.call_log = Some(vec![]);
+        e.call(0x005a_b400, &args![this, 0u32]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, SCOPE_GUARD_OPEN).is_empty());
+    }
+
+    #[test]
+    fn init_item_resolves_objects_and_drops_the_unresolved() {
+        let mut e = init_item_engine(0);
+        let (this, _) = recording_script(&mut e, &[0x130]);
+        let source = e.mem.alloc(0x20);
+        // Three objects: resolved (id 0x10 + 0x1000), variable only, and an
+        // unknown form (id 0x30).
+        let good = referenced_object(&mut e, 0x10, 0);
+        let by_variable = referenced_object(&mut e, 0, 7);
+        let missing = referenced_object(&mut e, 0x30, 0);
+        fill_list(&mut e, this.addr() + 0x44, &[good, by_variable, missing]);
+        e.set(script_header(this), ScriptHeader::refObjectCount, 3);
+        e.set(script_header(this), ScriptHeader::dataSize, 5);
+        e.mem.set_u32(this.addr() + 0xc, 0x4242);
+        e.call_log = Some(vec![]);
+        e.call(0x005a_b400, &args![this, source]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, SCOPE_GUARD_OPEN).len(), 1);
+        assert_eq!(
+            calls_to(&log, SCOPE_GUARD_OPEN)[0][1..],
+            [0x15, 1, SOURCE_FILE, 0xab5]
+        );
+        assert_eq!(calls_to(&log, SCOPE_GUARD_CLOSE).len(), 1);
+        // The file of the source is taken for the script.
+        assert_eq!(
+            calls_to(&log, FORM_SET_FILE),
+            vec![vec![this.addr(), 0xf11e]]
+        );
+        // The first object has its form, the unresolved one is gone.
+        assert_eq!(e.mem.u32(good + 8), 0xf0f0);
+        assert_eq!(list_items(&e, this.addr() + 0x44), vec![good, by_variable]);
+        assert_eq!(
+            calls_to(&log, SCRIPT_LOG),
+            vec![vec![
+                FORMAT_REFERENCED_OBJECT_NOT_FOUND,
+                0x1030,
+                0x4242,
+                0x7130
+            ]]
+        );
+        // Its data size is cleared and the script is marked.
+        assert_eq!(e.get(script_header(this), ScriptHeader::dataSize), 0);
+        assert_eq!(
+            calls_to(&log, SCRIPT_SET_QUEST_SCRIPT_FLAG),
+            vec![vec![this.addr(), 1]]
+        );
+    }
+
+    #[test]
+    fn init_item_logs_an_object_with_nothing_and_a_corrupt_count() {
+        let mut e = init_item_engine(0);
+        let (this, _) = recording_script(&mut e, &[0x130]);
+        let source = this.addr();
+        // The first object has neither a form nor a variable: it is removed
+        // from the head (nothing before it) and logged with its index.
+        let empty = referenced_object(&mut e, 0, 0);
+        let kept = referenced_object(&mut e, 0, 9);
+        fill_list(&mut e, this.addr() + 0x44, &[empty, kept]);
+        // The header expects 3 objects but only 2 are seen.
+        e.set(script_header(this), ScriptHeader::refObjectCount, 3);
+        e.set(script_header(this), ScriptHeader::dataSize, 5);
+        e.mem.set_u32(this.addr() + 0xc, 0x4242);
+        let data = e.mem.alloc(8);
+        e.set(this, Script::m_data, Ptr::new(data));
+        e.call_log = Some(vec![]);
+        e.call(0x005a_b400, &args![this, source]);
+        let log = e.call_log.take().unwrap();
+        // The source is the script itself: no file is taken.
+        assert!(calls_to(&log, FORM_SET_FILE).is_empty());
+        assert_eq!(
+            calls_to(&log, SCRIPT_LOG),
+            vec![vec![FORMAT_REFERENCED_OBJECT_INVALID, 0, 0x4242, 0x7130]]
+        );
+        assert_eq!(list_items(&e, this.addr() + 0x44), vec![kept]);
+        // The data size was already cleared by the first message, so the
+        // corrupt count is not reported.
+        assert_eq!(e.get(script_header(this), ScriptHeader::dataSize), 0);
+        // A non-null data pointer runs the empty method.
+        assert_eq!(calls_to(&log, EMPTY_METHOD).len(), 1);
+    }
+
+    #[test]
+    fn init_item_reports_a_corrupt_object_count() {
+        let mut e = init_item_engine(0);
+        let (this, _) = recording_script(&mut e, &[0x130]);
+        let kept = referenced_object(&mut e, 0, 9);
+        fill_list(&mut e, this.addr() + 0x44, &[kept]);
+        e.set(script_header(this), ScriptHeader::refObjectCount, 3);
+        e.set(script_header(this), ScriptHeader::dataSize, 5);
+        e.mem.set_u32(this.addr() + 0xc, 0x4242);
+        e.call_log = Some(vec![]);
+        e.call(0x005a_b400, &args![this, this.addr()]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, SCRIPT_LOG),
+            vec![vec![FORMAT_REFERENCE_LIST_CORRUPT, 0x4242, 0x7130, 3, 1]]
+        );
+        assert_eq!(e.get(script_header(this), ScriptHeader::dataSize), 0);
+    }
+
+    /// Doubles for the quest delay: the setting holds `setting`, the table
+    /// is derived with a divisor of 2.
+    fn quest_engine(setting: f32, counter: u32) -> (Engine, Ptr<Script>) {
+        let mut e = init_item_engine(0);
+        let cell = e.mem.alloc(4);
+        e.mem.set_f32(cell, setting);
+        e.register_double(QUEST_DELAY_ACCESSOR, move |_, _| ret(cell));
+        e.mem.set_f64(QUEST_DELAY_DIVISOR, 2.0);
+        e.set_global::<u32>(QUEST_DELAY_COUNTER, counter);
+        let (this, _) = recording_script(&mut e, &[0x130]);
+        e.set(script_header(this), ScriptHeader::bIsQuestScript, true);
+        (e, this)
+    }
+
+    #[test]
+    fn init_item_spreads_the_quest_delay_over_the_counter_bits() {
+        let (mut e, this) = quest_engine(8.0, 0);
+        e.call(0x005a_b400, &args![this, this.addr()]);
+        // Counter 0: the whole setting, and the halving table is built.
+        assert_eq!(e.get(this, Script::fQuestScriptDelay), 8.0);
+        assert_eq!(e.mem.f32(QUEST_DELAY_TABLE), 4.0);
+        assert_eq!(e.mem.f32(QUEST_DELAY_TABLE + 4 * 7), 8.0 / 256.0);
+        assert_eq!(e.global::<u32>(QUEST_DELAY_COUNTER), 1);
+        // Counter 5 (binary 101): table entries 0 and 2.
+        e.set(this, Script::fQuestScriptDelay, 0.0);
+        e.set_global::<u32>(QUEST_DELAY_COUNTER, 5);
+        e.call(0x005a_b400, &args![this, this.addr()]);
+        assert_eq!(e.get(this, Script::fQuestScriptDelay), 5.0);
+        assert_eq!(e.global::<u32>(QUEST_DELAY_COUNTER), 6);
+        // A setting of 0 or less leaves the delay and the counter alone.
+        let (mut e, this) = quest_engine(0.0, 3);
+        e.call(0x005a_b400, &args![this, this.addr()]);
+        assert_eq!(e.get(this, Script::fQuestScriptDelay), 0.0);
+        assert_eq!(e.global::<u32>(QUEST_DELAY_COUNTER), 3);
+    }
+
+    #[test]
+    fn init_item_gives_a_quest_with_its_own_delay_no_delay_and_takes_it_as_owner() {
+        let (mut e, this) = quest_engine(8.0, 5);
+        e.register(QUEST_DELAY_OF, |_, _| Ret {
+            st0: 3.0,
+            ..Ret::default()
+        });
+        e.set(this, Script::fQuestScriptDelay, 9.0);
+        let quest = e.mem.alloc(0x20);
+        e.mem.set_u8(quest + 4, 0x47);
+        e.set(this, Script::pOwnerQuest, Ptr::new(quest));
+        e.call(0x005a_b400, &args![this, quest]);
+        assert_eq!(e.get(this, Script::fQuestScriptDelay), 0.0);
+        assert_eq!(e.get(this, Script::pOwnerQuest).addr(), quest);
+        assert_eq!(e.global::<u32>(QUEST_DELAY_COUNTER), 6);
+        // An owner whose delay is 0 gets the bit-spread delay instead.
+        e.register(QUEST_DELAY_OF, |_, _| Ret::default());
+        e.mem.set_f32(QUEST_DELAY_TABLE, 4.0);
+        e.set_global::<u32>(QUEST_DELAY_COUNTER, 1);
+        e.call(0x005a_b400, &args![this, quest]);
+        assert_eq!(e.get(this, Script::fQuestScriptDelay), 4.0);
+        // A source that is not a quest (type 0x20) is not taken as owner.
+        let other = e.mem.alloc(0x20);
+        e.mem.set_u8(other + 4, 0x20);
+        e.set(this, Script::pOwnerQuest, Ptr::NULL);
+        e.call(0x005a_b400, &args![this, other]);
+        assert!(e.get(this, Script::pOwnerQuest).is_null());
+    }
+
+    // ---- list copies -----------------------------------------------------------------
+
+    #[test]
+    fn referenced_object_copy_constructor_copies_string_form_and_variable() {
+        let mut e = tail_engine();
+        e.register(STRING_CONSTRUCT, |_, _| Ret::default());
+        e.register(STRING_COPY, |_, _| Ret::default());
+        let source = referenced_object(&mut e, 0x500, 6);
+        let this = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x005a_b8b0, &args![this, source]).u32();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(result, this);
+        assert_eq!(e.mem.u32(this + 8), 0x500);
+        assert_eq!(e.mem.u32(this + 0xc), 6);
+        assert_eq!(calls_to(&log, STRING_CONSTRUCT), vec![vec![this]]);
+        assert_eq!(calls_to(&log, STRING_COPY), vec![vec![this, source]]);
+    }
+
+    #[test]
+    fn copying_reference_and_variable_lists_makes_new_blocks() {
+        let mut e = tail_engine();
+        e.register(STRING_CONSTRUCT, |_, _| Ret::default());
+        e.register(STRING_COPY, |_, _| Ret::default());
+        e.register(SCRIPT_VARIABLE_COPY_CONSTRUCT, |e, a| {
+            let bytes = e.mem.bytes(a[1], 0x18);
+            e.mem.write(a[0], &bytes);
+            ret(a[0])
+        });
+        let first = referenced_object(&mut e, 0x500, 1);
+        let second = referenced_object(&mut e, 0x600, 2);
+        let source = make_list(&mut e, &[first, second]);
+        let destination = make_list(&mut e, &[]);
+        e.call(0x005a_b7f0, &args![source, destination, 0u32]);
+        let copies = list_items(&e, destination);
+        assert_eq!(copies.len(), 2);
+        assert!(!copies.contains(&first) && !copies.contains(&second));
+        assert_eq!(
+            copies.iter().map(|c| e.mem.u32(c + 8)).collect::<Vec<_>>(),
+            vec![0x500, 0x600]
+        );
+        // Variables.
+        let one = variable(&mut e, 4, 1.5);
+        let two = variable(&mut e, 5, 2.5);
+        let source = make_list(&mut e, &[one, two]);
+        let destination = make_list(&mut e, &[]);
+        e.call(0x005a_b930, &args![source, destination, 0u32]);
+        let copies = list_items(&e, destination);
+        assert_eq!(copies.len(), 2);
+        assert_eq!(e.mem.f64(copies[1] + 8), 2.5);
+        // A null list on either side copies nothing.
+        e.call(0x005a_b930, &args![0u32, destination, 0u32]);
+        e.call(0x005a_b930, &args![source, 0u32, 0u32]);
+        assert_eq!(list_items(&e, destination).len(), 2);
+        // An empty source node copies nothing.
+        let empty = make_list(&mut e, &[]);
+        let target = make_list(&mut e, &[]);
+        e.call(0x005a_b7f0, &args![empty, target, 0u32]);
+        assert!(list_items(&e, target).is_empty());
+    }
+
+    // ---- Load ------------------------------------------------------------------------
+
+    /// A chunk reader: the chunks come from a queue, `next` pops one, and
+    /// the data readers fill a buffer or a value from per-chunk bytes.
+    type Strings = Rc<RefCell<Vec<(u32, Vec<u8>)>>>;
+
+    fn file_engine(chunks: Vec<(u32, Vec<u8>)>, record_type: u32) -> (Engine, u32, Strings) {
+        let mut e = tail_engine();
+        let queue = Rc::new(RefCell::new(chunks));
+        e.register_double(FILE_RECORD_TYPE, move |_, _| ret(record_type));
+        e.register(FORM_LOAD, |_, _| Ret::default());
+        let q = queue.clone();
+        e.register_double(FILE_CHUNK_TYPE, move |_, _| {
+            ret(q.borrow().first().map(|c| c.0).unwrap_or(0))
+        });
+        let q = queue.clone();
+        e.register_double(FILE_CHUNK_SIZE, move |_, _| {
+            ret(q.borrow().first().map(|c| c.1.len() as u32).unwrap_or(0))
+        });
+        let q = queue.clone();
+        e.register_double(FILE_NEXT_CHUNK, move |_, _| {
+            q.borrow_mut().remove(0);
+            ret(!q.borrow().is_empty() as u32)
+        });
+        let q = queue.clone();
+        e.register_double(FILE_GET_CHUNK_DATA, move |e, a| {
+            let bytes = q.borrow()[0].1.clone();
+            e.mem.write(a[1], &bytes);
+            Ret::default()
+        });
+        let q = queue.clone();
+        e.register_double(FILE_GET_CHUNK_VALUE, move |e, a| {
+            let bytes = q.borrow()[0].1.clone();
+            e.mem.write(a[1], &bytes);
+            Ret::default()
+        });
+        e.register(FILE_IS_BIG_ENDIAN, |_, _| ret(1));
+        e.register(HEADER_SWAP_BYTES, |_, _| Ret::default());
+        e.register(FILE_NAME_OF, |_, a| ret(a[0] + 0x20));
+        e.register(SCRIPT_VARIABLE_CONSTRUCT, |_, a| ret(a[0]));
+        e.register(SCRIPT_VARIABLE_LOAD, |e, a| {
+            e.mem.set_u32(a[0], 0x77);
+            Ret::default()
+        });
+        let strings: Strings = Rc::new(RefCell::new(Vec::new()));
+        let sink = strings.clone();
+        e.register_double(STRING_SET, move |e, a| {
+            sink.borrow_mut().push((a[0], e.mem.cstr(a[1])));
+            Ret::default()
+        });
+        e.register(REFERENCED_OBJECT_CONSTRUCT, |_, a| ret(a[0]));
+        let file = e.mem.alloc(0x40);
+        (e, file, strings)
+    }
+
+    #[test]
+    fn load_reads_every_chunk_kind() {
+        let header = (0..0x14u8).collect::<Vec<_>>();
+        let (mut e, file, strings) = file_engine(
+            vec![
+                (CHUNK_EDID, b"MyScript\0".to_vec()),
+                (CHUNK_SCHR, header.clone()),
+                (CHUNK_SCDA, vec![0xaa, 0xbb, 0xcc]),
+                (CHUNK_SLSD, vec![0; 4]),
+                (CHUNK_SCVR, b"fVar\0".to_vec()),
+                (CHUNK_SCRO, 0x1234u32.to_le_bytes().to_vec()),
+                (CHUNK_SCRV, 7u32.to_le_bytes().to_vec()),
+                (CHUNK_RNAM, vec![1, 2, 3, 4]),
+                (CHUNK_OBND, vec![]),
+                (0x1234_5678, vec![]),
+            ],
+            0x11,
+        );
+        let (this, calls) = recording_script(&mut e, &[0x134, 0xe0]);
+        // The editor id slot keeps the text it was given (the buffer is gone later).
+        let names: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = names.clone();
+        let capture = fake_code(&mut e, move |e, a| {
+            sink.borrow_mut().push(e.mem.cstr(a[1]));
+            Ret::default()
+        });
+        let table = e.mem.u32(this.addr());
+        e.mem.set_u32(table + 0x134, capture);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x005a_b9f0, &args![this, file]).bool());
+        let log = e.call_log.take().unwrap();
+        // EDID went to the editor id slot as a string.
+        assert_eq!(*names.borrow(), vec![b"MyScript".to_vec()]);
+        // OBND went to its slot with the file.
+        assert_eq!(*calls.borrow(), vec![(0xe0, vec![this.addr(), file])]);
+        // The header chunk was read into the script and swapped (big-endian).
+        assert_eq!(e.mem.bytes(this.addr() + 0x18, 0x14), header);
+        assert_eq!(
+            calls_to(&log, HEADER_SWAP_BYTES),
+            vec![vec![this.addr() + 0x18]]
+        );
+        // Compiled data was read into a new block.
+        let data = e.get(this, Script::m_data).addr();
+        assert_eq!(e.mem.bytes(data, 3), vec![0xaa, 0xbb, 0xcc]);
+        assert_eq!(calls_to(&log, MEMSET).len(), 2);
+        // The variable was loaded, named and added.
+        let variables = list_items(&e, this.addr() + 0x4c);
+        assert_eq!(variables.len(), 1);
+        assert_eq!(e.mem.u32(variables[0]), 0x77);
+        assert_eq!(
+            *strings.borrow(),
+            vec![(variables[0] + 0x18, b"fVar".to_vec())]
+        );
+        // Two referenced objects: one with a form word, one with a variable id.
+        let objects = list_items(&e, this.addr() + 0x44);
+        assert_eq!(objects.len(), 2);
+        assert_eq!(e.mem.u32(objects[0] + 8), 0x1234);
+        assert_eq!(e.mem.u32(objects[1] + 0xc), 7);
+        // Compiled: no "not compiled" message.
+        assert!(calls_to(&log, SCRIPT_LOG).is_empty());
+    }
+
+    #[test]
+    fn load_rejects_other_records_and_logs_a_script_without_data() {
+        let (mut e, file, _) = file_engine(vec![(CHUNK_SCVR, b"x\0".to_vec())], 0x12);
+        let (this, _) = recording_script(&mut e, &[0x130]);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x005a_b9f0, &args![this, file]).bool());
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, FORM_LOAD).is_empty());
+        // A script record with only a name chunk for a variable that was never
+        // declared: no variable to name, no data, a message and true.
+        let (mut e, file, strings) = file_engine(vec![(CHUNK_SCVR, b"x\0".to_vec())], 0x11);
+        let (this, _) = recording_script(&mut e, &[0x130]);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x005a_b9f0, &args![this, file]).bool());
+        let log = e.call_log.take().unwrap();
+        assert!(strings.borrow().is_empty());
+        assert_eq!(
+            calls_to(&log, SCRIPT_LOG),
+            vec![vec![FORMAT_NOT_COMPILED, 0x7130, file + 0x20]]
+        );
+        // A little-endian file does not swap the header.
+        let (mut e, file, _) = file_engine(vec![(CHUNK_SCHR, vec![0; 0x14])], 0x11);
+        e.register(FILE_IS_BIG_ENDIAN, |_, _| ret(0));
+        let (this, _) = recording_script(&mut e, &[0x130]);
+        e.call_log = Some(vec![]);
+        e.call(0x005a_b9f0, &args![this, file]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, HEADER_SWAP_BYTES).is_empty());
+    }
+
+    // ---- saving, text, variable names -------------------------------------------------
+
+    #[test]
+    fn save_forwards_to_the_form_save() {
+        let mut e = tail_engine();
+        e.register(FORM_SAVE, |_, _| Ret::default());
+        let this = e.new_object::<Script>();
+        e.call_log = Some(vec![]);
+        e.call(0x005a_bd70, &args![this, 0xb0f0u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, FORM_SAVE), vec![vec![this.addr(), 0xb0f0]]);
+    }
+
+    #[test]
+    fn save_writes_the_header_chunk_swapping_around_it() {
+        let mut e = tail_engine();
+        for address in [
+            FORM_START,
+            EMPTY_METHOD,
+            FORM_CLOSE,
+            FORM_ADD_CHUNK,
+            HEADER_SWAP_BYTES,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(ENDIAN_SWAP_ENABLED, |_, _| ret(1));
+        let this = e.new_object::<Script>();
+        let header = this.addr() + 0x18;
+        e.call_log = Some(vec![]);
+        e.call(0x005a_bd90, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let order: Vec<u32> = log
+            .iter()
+            .map(|(a, _)| *a)
+            .filter(|a| *a != ENDIAN_SWAP_ENABLED)
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                0x005a_bd90,
+                FORM_START,
+                EMPTY_METHOD,
+                HEADER_SWAP_BYTES,
+                FORM_ADD_CHUNK,
+                HEADER_SWAP_BYTES,
+                FORM_CLOSE
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, FORM_ADD_CHUNK),
+            vec![vec![CHUNK_SCHR, header, 0x14]]
+        );
+        // Without the swap only the chunk is written.
+        e.register(ENDIAN_SWAP_ENABLED, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        e.call(0x005a_be00, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, HEADER_SWAP_BYTES).is_empty());
+        assert_eq!(calls_to(&log, FORM_ADD_CHUNK).len(), 1);
+        // With it, the result-script save swaps before and after.
+        e.register(ENDIAN_SWAP_ENABLED, |_, _| ret(1));
+        e.call_log = Some(vec![]);
+        e.call(0x005a_be00, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, HEADER_SWAP_BYTES).len(), 2);
+    }
+
+    #[test]
+    fn set_text_keeps_a_zero_terminated_copy() {
+        let mut e = tail_engine();
+        let this = e.new_object::<Script>();
+        let text = c_string(&mut e, "Begin GameMode");
+        e.call(0x005a_be50, &args![this, text]);
+        let copy = e.get(this, Script::m_text).addr();
+        assert_ne!(copy, text);
+        assert_eq!(e.mem.cstr(copy), b"Begin GameMode".to_vec());
+        // Replacing frees the old copy; null clears.
+        e.call_log = Some(vec![]);
+        e.call(0x005a_be50, &args![this, 0u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(deleted(&log), vec![copy]);
+        assert!(e.get(this, Script::m_text).is_null());
+        // With no text there is nothing to free.
+        e.call_log = Some(vec![]);
+        e.call(0x005a_be50, &args![this, text]);
+        let log = e.call_log.take().unwrap();
+        assert!(deleted(&log).is_empty());
+    }
+
+    #[test]
+    fn variable_name_is_found_by_id_or_logged() {
+        let mut e = tail_engine();
+        let (this, _) = recording_script(&mut e, &[0x130]);
+        let first = script_variable(&mut e, 1, "fOne");
+        let second = script_variable(&mut e, 2, "fSpeed");
+        let name = e.mem.u32(second + 0x18);
+        fill_list(&mut e, this.addr() + 0x4c, &[first, second]);
+        assert_eq!(e.call(0x005a_bed0, &args![this, 2u32]).u32(), name);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x005a_bed0, &args![this, 9u32]).u32(), 0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, SCRIPT_LOG),
+            vec![vec![FORMAT_LOCAL_VARIABLE_NOT_FOUND, 9, 0x7130]]
+        );
+    }
+
+    // ---- ScriptLocals of a script -------------------------------------------------------
+
+    #[test]
+    fn locals_are_built_from_copies_of_the_script_variables() {
+        let mut e = tail_engine();
+        e.register(SCRIPT_LOCALS_CONSTRUCT, |_, a| ret(a[0]));
+        let this = e.new_object::<Script>();
+        let first = variable(&mut e, 1, 1.5);
+        let second = variable(&mut e, 2, 2.5);
+        e.mem.set_u8(second + 0x10, 1);
+        fill_list(&mut e, this.addr() + 0x4c, &[first, second]);
+        e.call_log = Some(vec![]);
+        let locals = e.call(0x005a_bf60, &args![this]).ptr::<ScriptLocals>();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            e.get(locals, ScriptLocals::m_pMasterScript).addr(),
+            this.addr()
+        );
+        let list = e.get(locals, ScriptLocals::m_pLocalList).addr();
+        let copies = list_items(&e, list);
+        assert_eq!(copies.len(), 2);
+        assert!(!copies.contains(&first) && !copies.contains(&second));
+        assert_eq!(e.mem.u32(copies[0]), 1);
+        assert_eq!(e.mem.f64(copies[0] + 8), 1.5);
+        assert_eq!(e.mem.u8(copies[0] + 0x10), 0);
+        assert_eq!(e.mem.f64(copies[1] + 8), 2.5);
+        assert_eq!(e.mem.u8(copies[1] + 0x10), 1);
+        // The locals block is 0x14 bytes; two scope guards, lines 0xcde and
+        // 0xceb, are opened.
+        assert_eq!(calls_to(&log, OPERATOR_NEW)[0], vec![0x14]);
+        let guards = calls_to(&log, SCOPE_GUARD_OPEN);
+        assert_eq!(guards.len(), 2);
+        assert_eq!(guards[0][4], 0xcde);
+        assert_eq!(guards[1][4], 0xceb);
+        assert_eq!(calls_to(&log, SCOPE_GUARD_CLOSE).len(), 2);
+    }
+
+    #[test]
+    fn init_item_with_itself_as_the_source_takes_no_file() {
+        let mut e = init_item_engine(0);
+        let (this, _) = recording_script(&mut e, &[0x130]);
+        e.call_log = Some(vec![]);
+        e.call(0x005a_b7d0, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, SCOPE_GUARD_OPEN).len(), 1);
+        assert!(calls_to(&log, FORM_SET_FILE).is_empty());
+        assert_eq!(calls_to(&log, SCRIPT_SET_QUEST_SCRIPT_FLAG).len(), 1);
+    }
+
+    #[test]
+    fn variable_list_copy_makes_one_copy_per_variable() {
+        let mut e = tail_engine();
+        let this = e.new_object::<Script>();
+        let first = variable(&mut e, 1, 1.5);
+        let second = variable(&mut e, 2, 2.5);
+        fill_list(&mut e, this.addr() + 0x4c, &[first, second]);
+        e.call_log = Some(vec![]);
+        let list = e.call(0x005a_c020, &args![this]).u32();
+        let log = e.call_log.take().unwrap();
+        let copies = list_items(&e, list);
+        assert_eq!(copies.len(), 2);
+        assert_eq!(e.mem.f64(copies[1] + 8), 2.5);
+        assert_eq!(calls_to(&log, SCOPE_GUARD_OPEN)[0][4], 0xceb);
+    }
+
+    #[test]
+    fn variable_data_copy_constructor_copies_id_value_and_flag() {
+        let mut e = tail_engine();
+        let source = variable(&mut e, 9, 4.25);
+        e.mem.set_u8(source + 0x10, 1);
+        let this = e.mem.alloc(0x18);
+        let result = e.call(0x005a_c150, &args![this, source]).u32();
+        assert_eq!(result, this);
+        assert_eq!(e.mem.u32(this), 9);
+        assert_eq!(e.mem.f64(this + 8), 4.25);
+        assert_eq!(e.mem.u8(this + 0x10), 1);
+    }
+
+    #[test]
+    fn init_action_list_asks_the_run_manager_once() {
+        let mut e = tail_engine();
+        let locals = locals(&mut e);
+        let master = e.mem.alloc(0x20);
+        e.set(locals, ScriptLocals::m_pMasterScript, Ptr::new(master));
+        let extra = e.mem.alloc(0x20);
+        e.register_double(EXTRA_LIST_SCRIPT_LOCALS, move |_, _| ret(locals.addr()));
+        e.register(SCRIPT_RUN_MANAGER_INSTANCE, |_, _| ret(0x3ab));
+        e.register(SCRIPT_RUN_MANAGER_INIT_ACTION_LIST, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x005a_c190, &args![0xf00du32, extra]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, SCRIPT_RUN_MANAGER_INIT_ACTION_LIST),
+            vec![vec![0x3ab, master, 0xf00d, locals.addr()]]
+        );
+        // It already has an action list: nothing.
+        set_actions(&mut e, locals, &[(1, 0)]);
+        e.call_log = Some(vec![]);
+        e.call(0x005a_c190, &args![0xf00du32, extra]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, SCRIPT_RUN_MANAGER_INIT_ACTION_LIST).is_empty());
+        // No extra data list, or one with no locals: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x005a_c190, &args![0xf00du32, 0u32]);
+        e.register(EXTRA_LIST_SCRIPT_LOCALS, |_, _| ret(0));
+        e.call(0x005a_c190, &args![0xf00du32, extra]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, SCRIPT_RUN_MANAGER_INIT_ACTION_LIST).is_empty());
+    }
+
+    // ---- Run -------------------------------------------------------------------------
+
+    type Runs = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    /// Doubles for running: the manager (answering `answer`), the elapsed
+    /// time 0.5 and the quest delay setting `setting`.
+    fn run_engine(answer: u32, setting: f32) -> (Engine, Runs) {
+        let mut e = tail_engine();
+        e.register(SCRIPT_RUN_MANAGER_INSTANCE, |_, _| ret(0x3ab));
+        let runs: Runs = Rc::new(RefCell::new(Vec::new()));
+        let sink = runs.clone();
+        e.register_double(SCRIPT_RUN_MANAGER_RUN, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            ret(answer)
+        });
+        e.register(ELAPSED_TIME, |_, _| Ret {
+            st0: 0.5,
+            ..Ret::default()
+        });
+        let cell = e.mem.alloc(4);
+        e.mem.set_f32(cell, setting);
+        e.register_double(QUEST_DELAY_ACCESSOR, move |_, _| ret(cell));
+        (e, runs)
+    }
+
+    fn runnable_script(e: &mut Engine, data_size: u32, quest: bool) -> Ptr<Script> {
+        let script = e.new_object::<Script>();
+        e.set(script_header(script), ScriptHeader::dataSize, data_size);
+        e.set(script_header(script), ScriptHeader::bIsQuestScript, quest);
+        script
+    }
+
+    #[test]
+    fn run_skips_tiny_scripts_unless_forced() {
+        let (mut e, runs) = run_engine(1, 0.0);
+        let this = runnable_script(&mut e, 4, false);
+        assert!(!e
+            .call(0x005a_c1e0, &args![this, 1u32, 2u32, 3u32, 0u8])
+            .bool());
+        assert!(runs.borrow().is_empty());
+        // Forced, or big enough: the manager runs it with the 8 words.
+        assert!(e
+            .call(0x005a_c1e0, &args![this, 1u32, 2u32, 3u32, 1u8])
+            .bool());
+        assert_eq!(
+            runs.borrow()[0],
+            vec![0x3ab, this.addr(), 1, 2, 3, 1, 0, 0, 0]
+        );
+        let big = runnable_script(&mut e, 5, false);
+        e.call(0x005a_c1e0, &args![big, 1u32, 2u32, 3u32, 0u8]);
+        assert_eq!(
+            runs.borrow()[1],
+            vec![0x3ab, big.addr(), 1, 2, 3, 0, 0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn run_answers_what_the_manager_answers_and_forgets_the_reference_cache() {
+        let (mut e, _) = run_engine(0, 0.0);
+        let this = runnable_script(&mut e, 8, false);
+        let object = referenced_object(&mut e, 0x500, 3);
+        let plain = referenced_object(&mut e, 0x600, 0);
+        fill_list(&mut e, this.addr() + 0x44, &[object, plain]);
+        let tls = e.tls();
+        e.mem.set_u32(tls + TLS_LAST_REF_SEARCH_SCRIPT, this.addr());
+        assert!(!e
+            .call(0x005a_c1e0, &args![this, 0u32, 0u32, 0u32, 0u8])
+            .bool());
+        // The cache is dropped and the object with a variable id loses its form.
+        assert_eq!(e.mem.u32(tls + TLS_LAST_REF_SEARCH_SCRIPT), 0);
+        assert_eq!(e.mem.u32(object + 8), 0);
+        assert_eq!(e.mem.u32(plain + 8), 0x600);
+    }
+
+    #[test]
+    fn run_counts_down_a_quest_scripts_delay() {
+        let (mut e, runs) = run_engine(1, 0.0);
+        let this = runnable_script(&mut e, 8, true);
+        e.set(this, Script::fQuestScriptDelay, 2.0);
+        e.set(this, Script::fQuestScriptGetSecondsBuffer, 0.25);
+        // 2.0 - 0.5 is still above 0: no run, and the time is banked.
+        assert!(!e
+            .call(0x005a_c1e0, &args![this, 0u32, 0u32, 0u32, 0u8])
+            .bool());
+        assert!(runs.borrow().is_empty());
+        assert_eq!(e.get(this, Script::fQuestScriptDelay), 1.5);
+        assert_eq!(e.get(this, Script::fQuestScriptGetSecondsBuffer), 0.75);
+    }
+
+    #[test]
+    fn run_resets_a_quest_scripts_delay_after_running() {
+        let (mut e, runs) = run_engine(1, 4.0);
+        let this = runnable_script(&mut e, 8, true);
+        e.set(this, Script::fQuestScriptDelay, 0.5);
+        e.set(this, Script::fQuestScriptGetSecondsBuffer, 0.25);
+        // 0.5 - 0.5 reaches 0: it runs, then the setting is added.
+        assert!(e
+            .call(0x005a_c1e0, &args![this, 0u32, 0u32, 0u32, 0u8])
+            .bool());
+        assert_eq!(runs.borrow().len(), 1);
+        assert_eq!(e.get(this, Script::fQuestScriptDelay), 4.0);
+        assert_eq!(e.get(this, Script::fQuestScriptGetSecondsBuffer), 0.0);
+        // With an owner quest that has its own delay, that is added instead.
+        e.register(QUEST_DELAY_OF, |_, _| Ret {
+            st0: 3.0,
+            ..Ret::default()
+        });
+        let quest = e.mem.alloc(0x20);
+        e.set(this, Script::pOwnerQuest, Ptr::new(quest));
+        e.set(this, Script::fQuestScriptDelay, 0.0);
+        e.call(0x005a_c1e0, &args![this, 0u32, 0u32, 0u32, 0u8]);
+        assert_eq!(e.get(this, Script::fQuestScriptDelay), 3.0);
+        // A setting of 0 leaves the delay alone.
+        let (mut e, _) = run_engine(1, 0.0);
+        let this = runnable_script(&mut e, 8, true);
+        e.set(this, Script::fQuestScriptDelay, 0.0);
+        e.set(this, Script::fQuestScriptGetSecondsBuffer, 0.25);
+        e.call(0x005a_c1e0, &args![this, 0u32, 0u32, 0u32, 0u8]);
+        assert_eq!(e.get(this, Script::fQuestScriptDelay), 0.0);
+        assert_eq!(e.get(this, Script::fQuestScriptGetSecondsBuffer), 0.25);
+    }
+
+    #[test]
+    fn script_effect_runs_pass_their_flags_to_the_manager() {
+        let (mut e, runs) = run_engine(1, 0.0);
+        let this = e.new_object::<Script>();
+        e.call(0x005a_c340, &args![this, 7u32, 8u32]);
+        e.call(0x005a_c380, &args![this, 7u32, 8u32]);
+        e.call(0x005a_c3c0, &args![this, 7u32, 8u32, 1.5f32]);
+        let runs = runs.borrow();
+        let s = this.addr();
+        assert_eq!(runs[0], vec![0x3ab, s, 7, 8, 0, 0, 1, 0, 0]);
+        assert_eq!(runs[1], vec![0x3ab, s, 7, 8, 0, 0, 0, 1, 0]);
+        assert_eq!(runs[2], vec![0x3ab, s, 7, 8, 0, 0, 0, 0, 1.5f32.to_bits()]);
+    }
+
+    #[test]
+    fn compile_and_run_runs_what_compiled() {
+        let (mut e, runs) = run_engine(1, 0.0);
+        let compiled = Rc::new(Cell::new(0u32));
+        let flag = compiled.clone();
+        let seen_output: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+        let seen = seen_output.clone();
+        e.register_double(COMPILE_PARTIAL_SCRIPT, move |_, _| ret(flag.get()));
+        e.register(REFERENCE_SCRIPT_VARIABLES, |_, _| ret(0x5ca1));
+        let this = runnable_script(&mut e, 8, false);
+        let tls = e.tls();
+        // Nothing compiled: no run.
+        e.call_log = Some(vec![]);
+        e.call(0x005a_c400, &args![this, 0xc0deu32, 1u32, 0xf00du32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, COMPILE_PARTIAL_SCRIPT),
+            vec![vec![0xc0de, this.addr(), 0xf00d, 1, 0]]
+        );
+        assert!(runs.borrow().is_empty());
+        assert_eq!(calls_to(&log, SCOPE_GUARD_OPEN)[0][4], 0xd53);
+        // Compiled, mode 1: runs with the reference's variables and the
+        // system-output byte set while it does.
+        compiled.set(1);
+        let sink = runs.clone();
+        e.register_double(SCRIPT_RUN_MANAGER_RUN, move |e, a| {
+            sink.borrow_mut().push(a.to_vec());
+            let tls = e.tls();
+            seen.borrow_mut().push(e.mem.u8(tls + TLS_SYSTEM_OUTPUT));
+            ret(1)
+        });
+        e.call(0x005a_c400, &args![this, 0xc0deu32, 1u32, 0xf00du32]);
+        assert_eq!(
+            runs.borrow()[0],
+            vec![0x3ab, this.addr(), 0xf00d, 0x5ca1, 0, 1, 0, 0, 0]
+        );
+        assert_eq!(*seen_output.borrow(), vec![1]);
+        assert_eq!(e.mem.u8(tls + TLS_SYSTEM_OUTPUT), 0);
+        // Another mode, no reference: no variables and the byte stays clear.
+        e.call(0x005a_c400, &args![this, 0xc0deu32, 0u32, 0u32]);
+        assert_eq!(
+            runs.borrow()[1],
+            vec![0x3ab, this.addr(), 0, 0, 0, 1, 0, 0, 0]
+        );
+        assert_eq!(*seen_output.borrow(), vec![1, 0]);
+        // Compiled to nothing: no run.
+        e.set(script_header(this), ScriptHeader::dataSize, 0);
+        e.call(0x005a_c400, &args![this, 0xc0deu32, 0u32, 0u32]);
+        assert_eq!(runs.borrow().len(), 2);
+    }
+
+    // ---- referenced objects and variables ----------------------------------------------
+
+    #[test]
+    fn referenced_object_lookup_is_one_based_and_cached() {
+        let mut e = tail_engine();
+        let this = e.new_object::<Script>();
+        e.set(script_header(this), ScriptHeader::refObjectCount, 2);
+        let first = referenced_object(&mut e, 0x500, 0);
+        let second = referenced_object(&mut e, 0x600, 0);
+        fill_list(&mut e, this.addr() + 0x44, &[first, second]);
+        assert_eq!(e.call(0x005a_c4f0, &args![this, 0u32, 0u32]).u32(), 0);
+        assert_eq!(e.call(0x005a_c4f0, &args![this, 3u32, 0u32]).u32(), 0);
+        assert_eq!(e.call(0x005a_c4f0, &args![this, 1u32, 0u32]).u32(), first);
+        assert_eq!(e.call(0x005a_c4f0, &args![this, 2u32, 0u32]).u32(), second);
+        let tls = e.tls();
+        assert_eq!(e.mem.u32(tls + TLS_LAST_REF_SEARCH_SCRIPT), this.addr());
+        assert_eq!(e.mem.u32(tls + TLS_LAST_REF_INDEX), 2);
+        assert_eq!(e.mem.u32(tls + TLS_LAST_REF_OBJECT), second);
+        // The cache answers without walking: break the list to prove it.
+        e.mem.set_u32(this.addr() + 0x44 + 4, 0);
+        assert_eq!(e.call(0x005a_c4f0, &args![this, 2u32, 0u32]).u32(), second);
+        // A different locals argument is a new lookup, which now falls off
+        // the end of the list.
+        assert_eq!(e.call(0x005a_c4f0, &args![this, 2u32, 0x1111u32]).u32(), 0);
+    }
+
+    #[test]
+    fn referenced_object_with_a_variable_takes_its_form_from_the_locals() {
+        let mut e = tail_engine();
+        e.register(GET_NUMERIC_ID_FROM_DOUBLE, |e, a| {
+            let id = e.mem.f64(a[1]) as u32;
+            e.mem.set_u32(a[0], id);
+            Ret::default()
+        });
+        e.register(LOOKUP_FORM_BY_ID, |_, a| ret(a[0] + 0x100));
+        let this = e.new_object::<Script>();
+        e.set(script_header(this), ScriptHeader::refObjectCount, 1);
+        let object = referenced_object(&mut e, 0x500, 5);
+        fill_list(&mut e, this.addr() + 0x44, &[object]);
+        let locals = locals(&mut e);
+        set_variables(&mut e, locals, &[(5, 4660.0)]);
+        assert_eq!(
+            e.call(0x005a_c4f0, &args![this, 1u32, locals]).u32(),
+            object
+        );
+        assert_eq!(e.mem.u32(object + 8), 4660 + 0x100);
+        // A zero numeric id leaves the form as it was.
+        set_variables(&mut e, locals, &[(5, 0.0)]);
+        e.mem.set_u32(object + 8, 0x777);
+        let tls = e.tls();
+        e.mem.set_u32(tls + TLS_LAST_LOCALS, 0);
+        e.mem.set_u32(tls + TLS_LAST_REF_SEARCH_SCRIPT, 0);
+        e.call(0x005a_c4f0, &args![this, 1u32, locals]);
+        assert_eq!(e.mem.u32(object + 8), 0x777);
+    }
+
+    #[test]
+    fn find_variable_answers_the_type_letter_and_stores_the_id() {
+        let mut e = tail_engine();
+        e.register(STRING_COMPARE, |e, a| {
+            ret((e.mem.cstr(a[0]) != e.mem.cstr(a[1])) as u32)
+        });
+        let this = e.new_object::<Script>();
+        let float = script_variable(&mut e, 3, "fSpeed");
+        let integer = script_variable(&mut e, 4, "iCount");
+        e.mem.set_u8(integer + 0x10, 1);
+        fill_list(&mut e, this.addr() + 0x4c, &[float, integer]);
+        let out = e.mem.alloc(4);
+        let wanted = c_string(&mut e, "iCount");
+        assert_eq!(e.call(0x005a_c6a0, &args![this, wanted, out]).u8(), b's');
+        assert_eq!(e.mem.u32(out), 4);
+        let wanted = c_string(&mut e, "fSpeed");
+        assert_eq!(e.call(0x005a_c6a0, &args![this, wanted, out]).u8(), b'f');
+        assert_eq!(e.mem.u32(out), 3);
+        let wanted = c_string(&mut e, "missing");
+        assert_eq!(e.call(0x005a_c6a0, &args![this, wanted, out]).u8(), 0);
+        assert_eq!(e.mem.u32(out), 0);
+    }
+
+    #[test]
+    fn process_scripts_flag_is_a_byte() {
+        let mut e = tail_engine();
+        e.call(0x005a_c730, &args![1u8]);
+        assert_eq!(e.call(0x005a_c740, &args![]).u8(), 1);
+        e.call(0x005a_c730, &args![0u8]);
+        assert_eq!(e.call(0x005a_c740, &args![]).u8(), 0);
+    }
+
+    #[test]
+    fn set_action_flag_goes_through_the_extra_list_locals() {
+        let mut e = tail_engine();
+        let locals = locals(&mut e);
+        set_actions(&mut e, locals, &[(0x10, 0), (0, 0)]);
+        e.register_double(EXTRA_LIST_SCRIPT_LOCALS, move |_, _| ret(locals.addr()));
+        let extra = e.mem.alloc(0x20);
+        assert!(e
+            .call(0x005a_c750, &args![0x10u32, extra, 0x1000u32])
+            .bool());
+        assert_eq!(action_list(&e, locals), vec![(0x10, 0x1000), (0, 0x1000)]);
+        // No extra list, or one with no locals: false.
+        assert!(!e.call(0x005a_c750, &args![0x10u32, 0u32, 0x1000u32]).bool());
+        e.register(EXTRA_LIST_SCRIPT_LOCALS, |_, _| ret(0));
+        assert!(!e
+            .call(0x005a_c750, &args![0x10u32, extra, 0x1000u32])
+            .bool());
+    }
+
+    #[test]
+    fn numeric_ids_travel_in_the_low_word_of_a_double() {
+        let mut e = tail_engine();
+        let id = e.mem.alloc(4);
+        let value = e.mem.alloc(8);
+        e.mem.set_u32(id, 0x0001_0203);
+        e.mem.set_f64(value, 0.0);
+        e.call(0x005a_cc70, &args![id, value]);
+        assert_eq!(e.mem.u32(value), 0x0001_0203);
+        assert_eq!(e.mem.u32(value + 4), 0);
+        let back = e.mem.alloc(4);
+        e.call(0x005a_cc90, &args![back, value]);
+        assert_eq!(e.mem.u32(back), 0x0001_0203);
+    }
+
+    #[test]
+    fn clear_reference_cache_forgets_forms_that_have_variables() {
+        let mut e = tail_engine();
+        let this = e.new_object::<Script>();
+        let with_variable = referenced_object(&mut e, 0x500, 4);
+        let plain = referenced_object(&mut e, 0x600, 0);
+        fill_list(&mut e, this.addr() + 0x44, &[with_variable, plain]);
+        let tls = e.tls();
+        e.mem.set_u32(tls + TLS_LAST_REF_SEARCH_SCRIPT, this.addr());
+        e.call(0x005a_e2e0, &args![this]);
+        assert_eq!(e.mem.u32(tls + TLS_LAST_REF_SEARCH_SCRIPT), 0);
+        assert_eq!(e.mem.u32(with_variable + 8), 0);
+        assert_eq!(e.mem.u32(plain + 8), 0x600);
+        // Another script in the cache stays.
+        e.mem.set_u32(tls + TLS_LAST_REF_SEARCH_SCRIPT, 0x1234);
+        e.call(0x005a_e2e0, &args![this]);
+        assert_eq!(e.mem.u32(tls + TLS_LAST_REF_SEARCH_SCRIPT), 0x1234);
+    }
+
+    // ---- operands (005ac7a0) -------------------------------------------------------------
+
+    /// Compiled data in memory and the cell that holds the read offset.
+    fn code_with(e: &mut Engine, bytes: &[u8]) -> (u32, u32) {
+        let code = e.mem.alloc(bytes.len() as u32 + 8);
+        e.mem.write(code, bytes);
+        let offset = e.mem.alloc(4);
+        (code, offset)
+    }
+
+    /// Doubles for operands and parameters: bit 3 of the form flags answers
+    /// `flag`, the form type is the byte at +4, numeric ids travel in the low
+    /// word of a double.
+    fn operand_engine(flag: u32) -> Engine {
+        let mut e = tail_engine();
+        e.register_double(FORM_FLAG_BIT_3, move |_, _| ret(flag));
+        e.register(FORM_TYPE_OF, |e, a| ret(e.mem.u8(a[0] + 4) as u32));
+        e.register(PUT_NUMERIC_ID_IN_DOUBLE, |e, a| {
+            let id = e.mem.u32(a[0]);
+            e.mem.set_f64(a[1], id as f64);
+            Ret::default()
+        });
+        e
+    }
+
+    /// Calls `fn_005ac7a0(out, code, &offset, reference, container, script,
+    /// locals, parse)`.
+    fn operand(
+        e: &mut Engine,
+        code: u32,
+        offset: u32,
+        script: u32,
+        locals: u32,
+        parse: u8,
+    ) -> (bool, f64) {
+        let out = e.mem.alloc(8);
+        let ok = e
+            .call(
+                0x005a_c7a0,
+                &args![out, code, offset, 0xaaa0u32, 0xbbb0u32, script, locals, parse],
+            )
+            .bool();
+        (ok, e.mem.f64(out))
+    }
+
+    #[test]
+    fn operand_immediates_and_variables() {
+        let mut e = operand_engine(0);
+        let mut bytes = vec![b'n'];
+        bytes.extend_from_slice(&(-42i32).to_le_bytes());
+        bytes.push(b'z');
+        bytes.extend_from_slice(&1.25f64.to_le_bytes());
+        bytes.extend_from_slice(&[b'f', 5, 0, b's', 5, 0, b'q', 5, 0]);
+        let (code, offset) = code_with(&mut e, &bytes);
+        let this = e.new_object::<Script>();
+        let locals = locals(&mut e);
+        set_variables(&mut e, locals, &[(5, 9.5)]);
+        assert_eq!(
+            operand(&mut e, code, offset, this.addr(), locals.addr(), 0),
+            (true, -42.0)
+        );
+        assert_eq!(e.mem.u32(offset), 5);
+        assert_eq!(
+            operand(&mut e, code, offset, this.addr(), locals.addr(), 0),
+            (true, 1.25)
+        );
+        assert_eq!(e.mem.u32(offset), 14);
+        assert_eq!(
+            operand(&mut e, code, offset, this.addr(), locals.addr(), 0),
+            (true, 9.5)
+        );
+        assert_eq!(
+            operand(&mut e, code, offset, this.addr(), locals.addr(), 0),
+            (true, 9.5)
+        );
+        // An unknown marker still consumes its id, and answers false.
+        assert!(!operand(&mut e, code, offset, this.addr(), locals.addr(), 0).0);
+        assert_eq!(e.mem.u32(offset), 23);
+        // No locals: nothing is read.
+        e.mem.set_u32(offset, 0);
+        assert!(!operand(&mut e, code, offset, this.addr(), 0, 0).0);
+        assert_eq!(e.mem.u32(offset), 0);
+    }
+
+    /// A script with one referenced object (form `form`, variable id
+    /// `variable_id`).
+    fn script_with_object(e: &mut Engine, form: u32, variable_id: u32) -> (Ptr<Script>, u32) {
+        let script = e.new_object::<Script>();
+        e.set(script_header(script), ScriptHeader::refObjectCount, 1);
+        let object = referenced_object(e, form, variable_id);
+        fill_list(e, script.addr() + 0x44, &[object]);
+        (script, object)
+    }
+
+    #[test]
+    fn operand_global_and_form_id_markers() {
+        let mut e = operand_engine(0);
+        e.register(GLOBAL_VALUE_OF, |_, _| Ret {
+            st0: 6.5,
+            ..Ret::default()
+        });
+        let form = e.mem.alloc(0x20);
+        e.mem.set_u32(form + 0xc, 0x1234);
+        let (script, object) = script_with_object(&mut e, form, 0);
+        let locals = locals(&mut e);
+        let (code, offset) = code_with(&mut e, &[b'G', 1, 0, b'Z', 1, 0]);
+        assert_eq!(
+            operand(&mut e, code, offset, script.addr(), locals.addr(), 0),
+            (true, 6.5)
+        );
+        assert_eq!(
+            operand(&mut e, code, offset, script.addr(), locals.addr(), 0),
+            (true, 4660.0)
+        );
+        // No form: false, or 0.0 when the object has a variable id (and the
+        // call is not a parse).
+        e.mem.set_u32(object + 8, 0);
+        e.mem.set_u32(offset, 0);
+        assert!(!operand(&mut e, code, offset, script.addr(), locals.addr(), 0).0);
+        e.mem.set_u32(object + 0xc, 3);
+        e.mem.set_u32(offset, 0);
+        assert_eq!(
+            operand(&mut e, code, offset, script.addr(), locals.addr(), 0),
+            (true, 0.0)
+        );
+        // An index past the objects: false.
+        let (code, offset) = code_with(&mut e, &[b'G', 2, 0]);
+        assert!(!operand(&mut e, code, offset, script.addr(), locals.addr(), 0).0);
+    }
+
+    #[test]
+    fn operand_reference_redirects_the_locals() {
+        let mut e = operand_engine(0);
+        // A quest (type 0x47): its locals answer the variable.
+        let quest = e.mem.alloc(0x20);
+        e.mem.set_u8(quest + 4, 0x47);
+        let quest_locals = locals(&mut e);
+        set_variables(&mut e, quest_locals, &[(7, 3.5)]);
+        e.register_double(QUEST_SCRIPT_LOCALS, move |_, _| ret(quest_locals.addr()));
+        let (script, _) = script_with_object(&mut e, quest, 0);
+        let own = locals(&mut e);
+        let (code, offset) = code_with(&mut e, &[b'r', 1, 0, b'f', 7, 0]);
+        assert_eq!(
+            operand(&mut e, code, offset, script.addr(), own.addr(), 0),
+            (true, 3.5)
+        );
+        assert_eq!(e.mem.u32(offset), 6);
+        // A reference (type 0x3a) with no extra reference pointer: the
+        // reference's script variables.
+        let reference = e.mem.alloc(0x20);
+        e.mem.set_u8(reference + 4, 0x3a);
+        let reference_locals = locals(&mut e);
+        set_variables(&mut e, reference_locals, &[(7, 1.5)]);
+        e.register_double(REFERENCE_SCRIPT_VARIABLES, move |_, _| {
+            ret(reference_locals.addr())
+        });
+        e.register(EXTRA_LIST_REFERENCE_POINTER, |_, _| ret(0));
+        let (script, _) = script_with_object(&mut e, reference, 0);
+        e.mem.set_u32(offset, 0);
+        assert_eq!(
+            operand(&mut e, code, offset, script.addr(), own.addr(), 0),
+            (true, 1.5)
+        );
+        // With an extra reference pointer: the inventory item's locals, and
+        // the item is released.
+        let item_locals = locals(&mut e);
+        set_variables(&mut e, item_locals, &[(7, 2.5)]);
+        e.register(EXTRA_LIST_REFERENCE_POINTER, |_, _| ret(0x9999));
+        e.register(INVENTORY_KEY_OF, |_, _| ret(0x4e));
+        e.register(INVENTORY_ITEM_OF, |_, _| ret(0x17e));
+        e.register_double(ITEM_SCRIPT_LOCALS, move |_, _| ret(item_locals.addr()));
+        e.register(RELEASE_ITEM, |_, _| Ret::default());
+        let (script, _) = script_with_object(&mut e, reference, 0);
+        e.mem.set_u32(reference + 0xc, 0xabc);
+        e.mem.set_u32(offset, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            operand(&mut e, code, offset, script.addr(), own.addr(), 0),
+            (true, 2.5)
+        );
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, INVENTORY_ITEM_OF),
+            vec![vec![0x9999, 0x4e, 0xabc]]
+        );
+        assert_eq!(calls_to(&log, RELEASE_ITEM), vec![vec![0x17e, 1]]);
+        // No locals found for the referenced object: false.
+        e.register(ITEM_SCRIPT_LOCALS, |_, _| ret(0));
+        e.mem.set_u32(offset, 0);
+        assert!(!operand(&mut e, code, offset, script.addr(), own.addr(), 0).0);
+        // A form of another type keeps the caller's locals.
+        let other = e.mem.alloc(0x20);
+        e.mem.set_u8(other + 4, 0x20);
+        let (script, _) = script_with_object(&mut e, other, 0);
+        set_variables(&mut e, own, &[(7, 8.5)]);
+        e.mem.set_u32(offset, 0);
+        assert_eq!(
+            operand(&mut e, code, offset, script.addr(), own.addr(), 0),
+            (true, 8.5)
+        );
+    }
+
+    /// A function definition: needs-reference byte, parameters and handler.
+    fn function_definition(
+        e: &mut Engine,
+        needs_reference: u8,
+        parameters: u32,
+        handler: u32,
+    ) -> u32 {
+        let definition = e.mem.alloc(0x20);
+        e.mem.set_u8(definition + 0x10, needs_reference);
+        e.mem.set_u32(definition + 0x14, parameters);
+        e.mem.set_u32(definition + 0x18, handler);
+        definition
+    }
+
+    #[test]
+    fn operand_function_call_runs_the_handler() {
+        let mut e = operand_engine(0);
+        let words: Rc<RefCell<Vec<Vec<u32>>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = words.clone();
+        let answer = Rc::new(Cell::new(1u32));
+        let reply = answer.clone();
+        let handler = fake_code(&mut e, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            ret(reply.get())
+        });
+        let definition = function_definition(&mut e, 0, 0x6a6a, handler);
+        e.register_double(GET_FUNCTION_DEFINITION, move |_, _| ret(definition));
+        let this = e.new_object::<Script>();
+        let locals = locals(&mut e);
+        let (code, offset) = code_with(&mut e, &[b'X', 0x34, 0x12, 0, 0]);
+        let (ok, _) = operand(&mut e, code, offset, this.addr(), locals.addr(), 0);
+        assert!(ok);
+        // Function id and two skipped words consumed after the marker.
+        assert_eq!(e.mem.u32(offset), 5);
+        let out_words = words.borrow()[0].clone();
+        assert_eq!(out_words[0], 0x6a6a); // parameters
+        assert_eq!(out_words[1], code);
+        assert_eq!(out_words[2], 0xaaa0); // reference
+        assert_eq!(out_words[3], 0xbbb0); // container
+        assert_eq!(out_words[4], this.addr());
+        assert_eq!(out_words[5], locals.addr());
+        assert_eq!(out_words[7], offset);
+        // A handler that answers false: false.
+        answer.set(0);
+        e.mem.set_u32(offset, 0);
+        assert!(!operand(&mut e, code, offset, this.addr(), locals.addr(), 0).0);
+        // A definition that needs a reference with none: false, no call.
+        let needy = function_definition(&mut e, 1, 0, handler);
+        e.register_double(GET_FUNCTION_DEFINITION, move |_, _| ret(needy));
+        answer.set(1);
+        let before = words.borrow().len();
+        e.mem.set_u32(offset, 0);
+        let out = e.mem.alloc(8);
+        let ok = e
+            .call(
+                0x005a_c7a0,
+                &args![
+                    out,
+                    code,
+                    offset,
+                    0u32,
+                    0u32,
+                    this.addr(),
+                    locals.addr(),
+                    0u8
+                ],
+            )
+            .bool();
+        assert!(!ok);
+        assert_eq!(words.borrow().len(), before);
+        // An unknown function: false.
+        e.register(GET_FUNCTION_DEFINITION, |_, _| ret(0));
+        e.mem.set_u32(offset, 0);
+        assert!(!operand(&mut e, code, offset, this.addr(), locals.addr(), 0).0);
+    }
+
+    #[test]
+    fn operand_function_call_uses_the_referenced_object_as_target() {
+        let mut e = operand_engine(0);
+        let words: Rc<RefCell<Vec<Vec<u32>>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = words.clone();
+        let handler = fake_code(&mut e, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            ret(1)
+        });
+        let definition = function_definition(&mut e, 1, 0, handler);
+        e.register_double(GET_FUNCTION_DEFINITION, move |_, _| ret(definition));
+        // A scripted reference (type 0x3a) named by `r` is the target.
+        let reference = e.mem.alloc(0x20);
+        e.mem.set_u8(reference + 4, 0x3a);
+        let (script, _) = script_with_object(&mut e, reference, 0);
+        let own = locals(&mut e);
+        // 'r' then 'X': the locals are not redirected, the target is the form.
+        let (code, offset) = code_with(&mut e, &[b'r', 1, 0, b'X', 1, 0, 0, 0]);
+        let (ok, _) = operand(&mut e, code, offset, script.addr(), own.addr(), 0);
+        assert!(ok);
+        assert_eq!(words.borrow()[0][2], reference);
+        // An object of another type clears the target.
+        let other = e.mem.alloc(0x20);
+        e.mem.set_u8(other + 4, 0x20);
+        let (script, _) = script_with_object(&mut e, other, 0);
+        e.mem.set_u32(offset, 0);
+        let (ok, _) = operand(&mut e, code, offset, script.addr(), own.addr(), 0);
+        assert!(!ok);
+        assert_eq!(words.borrow().len(), 1);
+    }
+
+    #[test]
+    fn operand_function_call_while_parsing_only_parses_the_parameters() {
+        let mut e = operand_engine(0);
+        let handler = fake_code(&mut e, |_, _| ret(1));
+        // A parameter list that says there are no parameters: count 0.
+        let parameters = e.mem.alloc(16);
+        let definition = function_definition(&mut e, 0, parameters, handler);
+        e.register_double(GET_FUNCTION_DEFINITION, move |_, _| ret(definition));
+        let this = e.new_object::<Script>();
+        let locals = locals(&mut e);
+        // The count (0) of the parameters follows the call marker.
+        let (code, offset) = code_with(&mut e, &[b'X', 1, 0, 0, 0, 0, 0]);
+        let (ok, _) = operand(&mut e, code, offset, this.addr(), locals.addr(), 1);
+        assert!(!ok);
+        // marker, id, skipped word, then the count of 0 was read.
+        assert_eq!(e.mem.u32(offset), 7);
+        // With bit 3 of the flags set the parse flag is dropped: the handler
+        // runs instead.
+        e.register(FORM_FLAG_BIT_3, |_, _| ret(1));
+        e.mem.set_u32(offset, 0);
+        let (ok, _) = operand(&mut e, code, offset, this.addr(), locals.addr(), 1);
+        assert!(ok);
+    }
+
+    // ---- ParseParameters -------------------------------------------------------------------
+
+    /// A parameter list: 12 bytes per entry with the type at +4.
+    fn parameter_list(e: &mut Engine, types: &[u32]) -> u32 {
+        let list = e.mem.alloc(types.len() as u32 * 12 + 4);
+        for (i, kind) in types.iter().enumerate() {
+            e.mem.set_u32(list + i as u32 * 12 + 4, *kind);
+        }
+        list
+    }
+
+    /// Calls `ParseParameters` with `outputs`.
+    fn parse(
+        e: &mut Engine,
+        parameters: u32,
+        code: u32,
+        offset: u32,
+        script: u32,
+        locals: u32,
+        outputs: &[u32],
+    ) -> bool {
+        let mut words = args![parameters, code, offset, 0xaaa0u32, 0xbbb0u32, script, locals];
+        words.extend_from_slice(outputs);
+        e.call(0x005a_ccb0, &words).bool()
+    }
+
+    #[test]
+    fn parse_parameters_stores_plain_values_when_the_flag_is_set() {
+        let mut e = operand_engine(1);
+        let types = [0, 8, 5, 2, 1, 0x20, 0xa];
+        let parameters = parameter_list(&mut e, &types);
+        let mut bytes = vec![7u8, 0]; // count
+        bytes.extend_from_slice(&[3, 0, b'a', b'b', b'c']); // string "abc"
+        bytes.push(0x2a); // byte
+        bytes.extend_from_slice(&(-2i16).to_le_bytes()); // short
+        bytes.push(b'n');
+        bytes.extend_from_slice(&3i32.to_le_bytes()); // float operand 3
+        bytes.push(b'n');
+        bytes.extend_from_slice(&(-5i32).to_le_bytes()); // int operand -5
+        bytes.extend_from_slice(&0x1234u16.to_le_bytes()); // u16 -> byte
+        bytes.extend_from_slice(&(-9i16).to_le_bytes());
+        let (code, offset) = code_with(&mut e, &bytes);
+        let this = e.new_object::<Script>();
+        let locals = locals(&mut e);
+        let cells: Vec<u32> = (0..7).map(|_| e.mem.alloc(8)).collect();
+        assert!(parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            this.addr(),
+            locals.addr(),
+            &cells
+        ));
+        assert_eq!(e.mem.cstr(cells[0]), b"abc".to_vec());
+        assert_eq!(e.mem.u8(cells[1]), 0x2a);
+        assert_eq!(e.mem.i32(cells[2]), -2);
+        assert_eq!(e.mem.f32(cells[3]), 3.0);
+        assert_eq!(e.mem.i32(cells[4]), -5);
+        assert_eq!(e.mem.u8(cells[5]), 0x34);
+        assert_eq!(e.mem.i32(cells[6]), -9);
+        assert_eq!(e.mem.u32(offset) as usize, bytes.len());
+    }
+
+    #[test]
+    fn parse_parameters_only_skips_without_the_flag() {
+        let mut e = operand_engine(0);
+        let parameters = parameter_list(&mut e, &[0, 8, 5, 1]);
+        let mut bytes = vec![4u8, 0, 2, 0, b'h', b'i', 9];
+        bytes.extend_from_slice(&7i16.to_le_bytes());
+        bytes.push(b'n');
+        bytes.extend_from_slice(&1i32.to_le_bytes());
+        let (code, offset) = code_with(&mut e, &bytes);
+        let this = e.new_object::<Script>();
+        let locals = locals(&mut e);
+        // No output pointers at all: nothing is stored, the data is skipped.
+        assert!(parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            this.addr(),
+            locals.addr(),
+            &[]
+        ));
+        assert_eq!(e.mem.u32(offset) as usize, bytes.len());
+        // A null parameter list: false and nothing read.
+        e.mem.set_u32(offset, 0);
+        assert!(!parse(
+            &mut e,
+            0,
+            code,
+            offset,
+            this.addr(),
+            locals.addr(),
+            &[]
+        ));
+        assert_eq!(e.mem.u32(offset), 0);
+    }
+
+    #[test]
+    fn parse_parameters_fails_on_unsupported_types_and_failed_operands() {
+        let mut e = operand_engine(1);
+        let this = e.new_object::<Script>();
+        let locals = locals(&mut e);
+        // Type 3 is not a plain type.
+        let parameters = parameter_list(&mut e, &[3]);
+        let (code, offset) = code_with(&mut e, &[1, 0]);
+        assert!(!parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            this.addr(),
+            locals.addr(),
+            &[0]
+        ));
+        // An operand that cannot be read ('q' is not an operand).
+        let parameters = parameter_list(&mut e, &[2]);
+        let (code, offset) = code_with(&mut e, &[1, 0, b'q', 0, 0]);
+        let cell = e.mem.alloc(4);
+        assert!(!parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            this.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+    }
+
+    /// Marks `kinds` as referenced-object parameter types.
+    fn mark_reference_types(e: &mut Engine, kinds: &[u32]) {
+        for kind in kinds {
+            e.mem.set_u8(PARAMETER_TYPE_TABLE + kind * 8, 1);
+        }
+    }
+
+    #[test]
+    fn parse_parameters_takes_referenced_objects_by_form_type() {
+        let mut e = operand_engine(1);
+        mark_reference_types(&mut e, &[0xe, 0x6, 0x16]);
+        let locals = locals(&mut e);
+        let form = e.mem.alloc(0x20);
+        e.mem.set_u8(form + 4, 0x47);
+        let (script, _) = script_with_object(&mut e, form, 0);
+        let (code, offset) = code_with(&mut e, &[1, 0, b'r', 1, 0]);
+        let cell = e.mem.alloc(4);
+        let parameters = parameter_list(&mut e, &[0xe]);
+        assert!(parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            script.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+        assert_eq!(e.mem.u32(cell), form);
+        // The wrong form type is rejected, and nothing is stored.
+        e.mem.set_u8(form + 4, 0x20);
+        e.mem.set_u32(cell, 0);
+        e.mem.set_u32(offset, 0);
+        assert!(!parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            script.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+        assert_eq!(e.mem.u32(cell), 0);
+        // Type 6 takes the two types 0x3b and 0x3c.
+        let parameters = parameter_list(&mut e, &[0x6]);
+        e.mem.set_u8(form + 4, 0x3c);
+        e.mem.set_u32(offset, 0);
+        assert!(parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            script.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+        assert_eq!(e.mem.u32(cell), form);
+        e.mem.set_u8(form + 4, 0x3d);
+        e.mem.set_u32(offset, 0);
+        assert!(!parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            script.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+        // An unimplemented referenced-object type is logged.
+        let parameters = parameter_list(&mut e, &[0x16]);
+        e.mem.set_u32(offset, 0);
+        e.call_log = Some(vec![]);
+        assert!(!parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            script.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, SCRIPT_LOG),
+            vec![vec![FORMAT_PARAMETER_TYPE_UNIMPLEMENTED, 0x16]]
+        );
+    }
+
+    #[test]
+    fn parse_parameters_rejects_bad_referenced_objects() {
+        let mut e = operand_engine(1);
+        mark_reference_types(&mut e, &[0xe]);
+        let locals = locals(&mut e);
+        let parameters = parameter_list(&mut e, &[0xe]);
+        let cell = e.mem.alloc(4);
+        let form = e.mem.alloc(0x20);
+        e.mem.set_u8(form + 4, 0x47);
+        let (script, object) = script_with_object(&mut e, form, 0);
+        // No 'r' marker.
+        let (code, offset) = code_with(&mut e, &[1, 0, b'x', 1, 0]);
+        assert!(!parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            script.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+        // An index past the objects.
+        let (code, offset) = code_with(&mut e, &[1, 0, b'r', 2, 0]);
+        assert!(!parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            script.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+        // An object with no form.
+        let (code, offset) = code_with(&mut e, &[1, 0, b'r', 1, 0]);
+        e.mem.set_u32(object + 8, 0);
+        assert!(!parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            script.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+        // Without the flag, a referenced object always fails.
+        e.mem.set_u32(object + 8, form);
+        e.register(FORM_FLAG_BIT_3, |_, _| ret(0));
+        e.mem.set_u32(offset, 0);
+        assert!(!parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            script.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+    }
+
+    #[test]
+    fn parse_parameters_container_and_cast_types() {
+        let mut e = operand_engine(1);
+        mark_reference_types(&mut e, &[0x3, 0x7, 0x15, 0x3d, 0x23]);
+        let locals = locals(&mut e);
+        let can_hold = fake_code(&mut e, |_, _| ret(1));
+        let form = fake_object(&mut e, &[(0xe8, can_hold)]);
+        e.mem.set_u8(form + 4, 0x2a);
+        let (script, _) = script_with_object(&mut e, form, 0);
+        let (code, offset) = code_with(&mut e, &[1, 0, b'r', 1, 0]);
+        let cell = e.mem.alloc(4);
+        // Type 3: a container type, and the form answers its virtual +0xE8.
+        e.register(CONTAINER_CAN_HOLD_TYPE, |_, _| ret(1));
+        let parameters = parameter_list(&mut e, &[0x3]);
+        assert!(parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            script.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+        assert_eq!(e.mem.u32(cell), form);
+        // Type 3 with a type that cannot hold anything: false.
+        e.register(CONTAINER_CAN_HOLD_TYPE, |_, _| ret(0));
+        e.mem.set_u32(offset, 0);
+        assert!(!parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            script.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+        // Type 0x15: the virtual +0xE8 alone decides.
+        let parameters = parameter_list(&mut e, &[0x15]);
+        e.mem.set_u32(offset, 0);
+        e.mem.set_u32(cell, 0);
+        assert!(parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            script.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+        assert_eq!(e.mem.u32(cell), form);
+        // Type 0x3d takes any form.
+        let parameters = parameter_list(&mut e, &[0x3d]);
+        e.mem.set_u32(offset, 0);
+        assert!(parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            script.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+        // Type 0x23 takes types 8 and 0x2a.
+        let parameters = parameter_list(&mut e, &[0x23]);
+        e.mem.set_u32(offset, 0);
+        assert!(parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            script.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+        e.mem.set_u8(form + 4, 0x30);
+        e.mem.set_u32(offset, 0);
+        assert!(!parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            script.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+        // Type 7 casts to its class; a failed cast falls back to a type 0x19
+        // form whose list at +0x74 has a next node.
+        let parameters = parameter_list(&mut e, &[0x7]);
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0] + 1));
+        e.mem.set_u32(offset, 0);
+        assert!(parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            script.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+        assert_eq!(e.mem.u32(cell), form + 1);
+        e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
+        e.mem.set_u8(form + 4, 0x19);
+        e.mem.set_u32(offset, 0);
+        assert!(!parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            script.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+        assert_eq!(e.mem.u32(cell), form);
+        let node = e.mem.alloc(8);
+        let next = e.mem.alloc(8);
+        e.mem.set_u32(node + 4, next);
+        e.mem.set_u32(form + 0x74, 0);
+        // The list node is embedded at +0x74 of the form: give it a next.
+        e.mem.set_u32(form + 0x74 + 4, next);
+        e.mem.set_u32(offset, 0);
+        assert!(parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            script.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+    }
+
+    #[test]
+    fn parse_parameters_entry_needs_its_fixed_words() {
+        let mut e = operand_engine(0);
+        let parameters = parameter_list(&mut e, &[]);
+        let (code, offset) = code_with(&mut e, &[0, 0]);
+        let this = e.new_object::<Script>();
+        let locals = locals(&mut e);
+        // Count 0: true with no outputs at all.
+        assert!(parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            this.addr(),
+            locals.addr(),
+            &[]
+        ));
     }
 }
