@@ -12,7 +12,12 @@
 //!   choices, the stack counting and the fast iterator, gold and food, the
 //!   load fix `004cbbc0`, the duplicate `004cd9c0`, the whole transfer
 //!   `004ce380` and the container queries up to `004d0490`). The next
-//!   session continues at `004d0650`. The `InventoryChanges` layout is
+//!   session (the fourth) translated the rest: `004d0650` to `004d4f40` and
+//!   `0076b630` (the weight and value totals, the leveled item and script
+//!   steps, `RunScripts`, the copy into another changes `004d26d0`,
+//!   `ClearAllChangeItems`, the save, load and buffer code, the item
+//!   walks and groups and the `NiTMap<TESObject *, bool>` members); the unit
+//!   is complete. The `InventoryChanges` layout is
 //!   declared below with the constants. The third session's helpers
 //!   (`entry_number`, `set_entry_number`, `announce_taken_item`,
 //!   `removal_owner`, the list pop and scripted-form clone helpers) sit
@@ -56,6 +61,7 @@
 use crate::prelude::*;
 
 use super::extradatalist::{list_item, list_next};
+use crate::types::NiTMap;
 
 /// `operator new(size)` (`platform`).
 pub(crate) const OPERATOR_NEW: u32 = 0x0040_1000;
@@ -9244,6 +9250,2120 @@ pub fn fn_004ce380(
     total
 }
 
+// Constants of the fourth session (functions 004d0650 to 0076b630).
+
+/// `00403e20` (`__thiscall`) on a game setting object: the address of the
+/// setting's float value (the same accessor `KARMA_REWARD_OBJECT` names).
+pub(crate) const SETTING_FLOAT_ADDRESS: u32 = 0x0040_3e20;
+/// The setting objects `fn_004d0900` reads: the multiplier applied to light
+/// items and the weight limit under which it applies.
+pub(crate) const LIGHT_WEIGHT_FACTOR_SETTING: u32 = 0x011c_64a8;
+pub(crate) const LIGHT_WEIGHT_LIMIT_SETTING: u32 = 0x011c_6478;
+/// `10.0` as a double: the weapon weight from which the entry point 0x49
+/// (weapon weight modifier) applies.
+pub(crate) const HEAVY_WEAPON_WEIGHT: u32 = 0x0102_0758;
+/// `TESWeightForm::GetFormWeight(form, withMods)` (Xbox PDB, `__cdecl`).
+pub(crate) const WEIGHT_FORM_GET_WEIGHT: u32 = 0x0048_ebc0;
+/// Numbers of `HandleEntryPoint` the weight code uses (not named here):
+/// 0x37 switches the light item factor on, 0x49 modifies a weapon's weight.
+pub(crate) const ENTRY_POINT_LIGHT_ITEMS: u32 = 0x37;
+pub(crate) const ENTRY_POINT_WEAPON_WEIGHT: u32 = 0x49;
+/// `008ba2f0(object, 0x2e, previous, current, 0)` (`__cdecl`, floats passed
+/// as one word each): called on the sub-object at +0xa4 of the owner actor
+/// with the old weight and the change.
+pub(crate) const ACTOR_WEIGHT_CHANGED: u32 = 0x008b_a2f0;
+/// Virtual slot 0x94 of a form (a bool the weight code tests to skip it).
+pub(crate) const FORM_EXCLUDED_SLOT: u32 = 0x94;
+/// Form type bytes the weight code compares: weapon (0x28) and 0x18.
+pub(crate) const FORM_TYPE_WEAPON: u32 = 0x28;
+pub(crate) const FORM_TYPE_ARMOR: u32 = 0x18;
+
+/// `HandleEntryPoint(kind, actor, &value)` with `value` starting at `initial`;
+/// returns the float the entry point left in it.
+fn entry_point_float(e: &mut Engine, kind: u32, actor: u32, initial: f32) -> f32 {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_f32(slot.addr(), initial);
+        e.call(HANDLE_ENTRY_POINT, &args![kind, actor, slot]);
+        e.mem.f32(slot.addr())
+    })
+}
+
+// Translated from 004d0650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InventoryChanges::GetInventoryItem` (Xbox PDB): a new `ItemChange` for
+/// `form` made from the changes' entry (the number is the entry's plus the
+/// owner container's count; the extra lists are copied: all of them when the
+/// first one is the container's default one, else the first only) or, when
+/// the changes have no entry, from the owner container's own object for the
+/// form; 0 when there is neither. The second stack word goes to
+/// `GetObjectInList`. When the entry holds no lists, the new item's list is
+/// deleted. The C++ exception frame is not translated.
+pub fn inventory_changes_get_inventory_item(
+    e: &mut Engine,
+    this: Ptr<InventoryChanges>,
+    form: u32,
+    reference_id: u32,
+) -> u32 {
+    let entry = inventory_changes_get_object_in_list(e, this, form, 1, reference_id);
+    if entry == 0 {
+        let container = fn_004bffb0(e, this);
+        let mut node = e.call(CONTAINER_OBJECT_LIST, &args![container]).u32();
+        while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+            let object = list_item(e, node);
+            if e.mem.u32(object + 4) == form {
+                let object = list_item(e, node);
+                let count = e.mem.u32(object);
+                return new_item_change(e, form, count);
+            }
+            node = list_next(e, node);
+        }
+        return 0;
+    }
+    let container = fn_004bffb0(e, this);
+    let in_container = e.call(CONTAINER_COUNT, &args![container, form]).i32();
+    let number = e
+        .call(WORD_AT_4, &args![entry])
+        .i32()
+        .wrapping_add(in_container);
+    let result = new_item_change(e, form, number as u32);
+    let entry_lists = e.call(WORD_AT_0, &args![entry]).u32();
+    if entry_lists != 0 {
+        let list = e.call(WORD_AT_0, &args![entry]).u32();
+        if e.call(LIST_COUNT_NONNULL, &args![list]).u32() != 0 {
+            if e.call(WORD_AT_0, &args![result]).u32() == 0 {
+                let node = new_list_node(e);
+                e.mem.set_u32(result, node);
+            }
+            let source = e.call(WORD_AT_0, &args![entry]).u32();
+            let first = list_item(e, source);
+            if e.call(EXTRA_IS_DEFAULT_FOR_CONTAINER, &args![first, 0u32])
+                .bool()
+            {
+                let mut cursor = e.call(WORD_AT_0, &args![entry]).u32();
+                while cursor != 0 && list_item(e, cursor) != 0 {
+                    let item = list_item(e, cursor);
+                    let target = e.mem.u32(result);
+                    list_call_with_item(e, LIST_ADD_TAIL, target, item);
+                    cursor = list_next(e, cursor);
+                }
+            } else {
+                let target = e.mem.u32(result);
+                list_call_with_item(e, LIST_ADD, target, first);
+            }
+            return result;
+        }
+    }
+    if e.call(WORD_AT_0, &args![result]).u32() != 0 {
+        let list = e.mem.u32(result);
+        if list != 0 {
+            e.call(LIST_DESTROY, &args![list, 1u32]);
+        }
+        e.mem.set_u32(result, 0);
+    }
+    result
+}
+
+/// A weapon weight with the weapon weight modifier (entry point 0x49 of the
+/// player) applied from `HEAVY_WEAPON_WEIGHT` up.
+fn heavy_weapon_adjusted(e: &mut Engine, weight: f32) -> f32 {
+    let limit = e.global::<f64>(HEAVY_WEAPON_WEIGHT);
+    if (weight as f64) >= limit {
+        let player = e.global::<u32>(PLAYER_GLOBAL);
+        let factor = entry_point_float(e, ENTRY_POINT_WEAPON_WEIGHT, player, 1.0);
+        return (weight as f64 * factor as f64) as f32;
+    }
+    weight
+}
+
+// Translated from 004d0900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The total weight the owner carries (the map has no name), cached in
+/// `fcontainerweight` and recomputed only when that is `-1.0`. Walks the owner
+/// container's objects (an object with a changes entry counts the entry's
+/// number plus its own; weapons use the weight with mods, scaled by entry
+/// point 0x49 from 10.0 up), then the changes' entries the container does not
+/// list (weapons with an active mod of action 4 are weighed per stack with the
+/// modded weight). With the entry point 0x37 above zero, weights at or under
+/// the limit setting are multiplied by the factor setting. A worn armor piece
+/// of an actor owner counts once at full weight. When the weight was
+/// recomputed for an actor, its sub-object at +0xa4 is told the old weight and
+/// the change (`008ba2f0`). Returns the cached weight (an `f32` in ST0).
+pub fn fn_004d0900(e: &mut Engine, this: Ptr<InventoryChanges>, with_mods: u8) -> f32 {
+    let mut actor = 0u32;
+    let owner = e.get(this, InventoryChanges::pRef).addr();
+    if e.vcall(owner, 0x100, &args![]).bool() {
+        actor = e.get(this, InventoryChanges::pRef).addr();
+    }
+    let light_bonus = entry_point_float(e, ENTRY_POINT_LIGHT_ITEMS, actor, 0.0);
+    let factor_address = e
+        .call(SETTING_FLOAT_ADDRESS, &args![LIGHT_WEIGHT_FACTOR_SETTING])
+        .u32();
+    let factor = e.mem.f32(factor_address);
+    let limit_address = e
+        .call(SETTING_FLOAT_ADDRESS, &args![LIGHT_WEIGHT_LIMIT_SETTING])
+        .u32();
+    let limit = e.mem.f32(limit_address);
+    let light_items = 0.0 < light_bonus;
+    if e.get(this, InventoryChanges::fcontainerweight) as f64 != e.global::<f64>(MINUS_ONE_DOUBLE) {
+        return e.get(this, InventoryChanges::fcontainerweight);
+    }
+    let mut total = 0.0f32;
+    let mut mod_weight = 0.0f32;
+    let container = fn_004bffb0(e, this);
+    let mut node = e.call(CONTAINER_OBJECT_LIST, &args![container]).u32();
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let object = list_item(e, node);
+        let form = e.mem.u32(object + 4);
+        let entry = inventory_changes_get_object_in_list(e, this, form, 1, 0);
+        if !e.vcall(form, FORM_EXCLUDED_SLOT, &args![]).bool() {
+            let mut weight;
+            if form_type_of(e, form) == FORM_TYPE_WEAPON && entry != 0 {
+                let with_mod = item_change_has_mod_effect_active_ov2(e, Ptr::new(entry), 4);
+                weight = tes_object_weap_get_form_weight(e, Ptr::new(form), with_mod as u8);
+                weight = heavy_weapon_adjusted(e, weight);
+            } else {
+                weight = e
+                    .call(WEIGHT_FORM_GET_WEIGHT, &args![form, with_mods as u32])
+                    .f32();
+            }
+            if weight as f64 == e.global::<f64>(MINUS_ONE_DOUBLE) {
+                weight = 0.0;
+            }
+            if light_items && weight <= limit {
+                weight = (weight as f64 * factor as f64) as f32;
+            }
+            let object = list_item(e, node);
+            let count = e.mem.u32(object) as i32;
+            if entry == 0 {
+                total = (count as f64 * weight as f64 + total as f64) as f32;
+            } else {
+                let number = e.call(WORD_AT_4, &args![entry]).i32().wrapping_add(count);
+                if number != 0 {
+                    total = (number as f64 * weight as f64 + total as f64) as f32;
+                }
+            }
+        }
+        node = list_next(e, node);
+    }
+    let mut node = e.mem.u32(this.addr());
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() && list_item(e, node) != 0 {
+        let mut is_weapon = false;
+        let entry = list_item(e, node);
+        let form = e.mem.u32(entry + 8);
+        if form != 0 {
+            let mut weight;
+            let container = fn_004bffb0(e, this);
+            if container != 0 && e.call(CONTAINER_HAS_FORM, &args![container, form]).bool() {
+                node = list_next(e, node);
+                continue;
+            }
+            if e.vcall(form, FORM_EXCLUDED_SLOT, &args![]).bool() {
+                node = list_next(e, node);
+                continue;
+            }
+            if form_type_of(e, form) == FORM_TYPE_WEAPON {
+                is_weapon = true;
+                let with_mod = item_change_has_mod_effect_active_ov2(e, Ptr::new(entry), 4);
+                mod_weight = tes_object_weap_get_form_weight(e, Ptr::new(form), with_mod as u8);
+                weight = e
+                    .call(WEIGHT_FORM_GET_WEIGHT, &args![form, with_mods as u32])
+                    .f32();
+                weight = heavy_weapon_adjusted(e, weight);
+                mod_weight = heavy_weapon_adjusted(e, mod_weight);
+            } else {
+                weight = e
+                    .call(WEIGHT_FORM_GET_WEIGHT, &args![form, with_mods as u32])
+                    .f32();
+            }
+            if weight as f64 > e.global::<f64>(ZERO_DOUBLE) {
+                if light_items && weight <= limit {
+                    weight = (weight as f64 * factor as f64) as f32;
+                }
+                if light_items && mod_weight <= limit {
+                    mod_weight = (mod_weight as f64 * factor as f64) as f32;
+                }
+                let armor = if form_type_of(e, form) == FORM_TYPE_ARMOR {
+                    form
+                } else {
+                    0
+                };
+                let mut count = e.call(WORD_AT_4, &args![entry]).i32();
+                let lists = e.call(WORD_AT_0, &args![entry]).u32();
+                if lists != 0
+                    && is_weapon
+                    && item_change_get_extra_total_count(e, Ptr::new(entry), true) >= 1
+                {
+                    let weapon = e.call(WORD_AT_8, &args![entry]).u32();
+                    let mut modded = 0i32;
+                    let mut cursor = e.call(WORD_AT_0, &args![entry]).u32();
+                    while cursor != 0 {
+                        let extra = list_item(e, cursor);
+                        if extra != 0 && e.call(EXTRA_HAS_WEAPON_MODS, &args![extra]).bool() {
+                            for slot_bit in [1u32, 2, 4] {
+                                if e.call(EXTRA_GET_WEAPON_MOD_SLOT_ACTIVE, &args![extra, slot_bit])
+                                    .bool()
+                                    && fn_004bd880(e, Ptr::new(weapon), slot_bit) == 4
+                                {
+                                    let held =
+                                        e.call(EXTRA_GET_COUNT, &args![extra]).u16() as i16 as i32;
+                                    modded = modded.wrapping_add(held);
+                                }
+                            }
+                        }
+                        cursor = list_next(e, cursor);
+                    }
+                    weight = (count.wrapping_sub(modded) as f64 * weight as f64
+                        + modded as f64 * mod_weight as f64) as f32;
+                } else if is_weapon {
+                    weight = (count as f64 * weight as f64) as f32;
+                }
+                if actor != 0
+                    && armor != 0
+                    && item_change_get_worn(e, Ptr::new(entry), 0)
+                    && count > 0
+                {
+                    total = (total as f64 + weight as f64) as f32;
+                    count -= 1;
+                }
+                if count > 0 && !is_weapon {
+                    total = (count as f64 * weight as f64 + total as f64) as f32;
+                } else if count != 0 {
+                    total = (total as f64 + weight as f64) as f32;
+                }
+            }
+        }
+        node = list_next(e, node);
+    }
+    e.set(this, InventoryChanges::fcontainerweight, total);
+    if actor != 0 {
+        let sub_object = actor + 0xa4;
+        let previous = e.get(this, InventoryChanges::fpreviousContainerWeight);
+        let current = e.get(this, InventoryChanges::fcontainerweight);
+        let difference = (current as f64 - previous as f64) as f32;
+        e.call(
+            ACTOR_WEIGHT_CHANGED,
+            &args![
+                sub_object,
+                0x2eu32,
+                previous.to_bits(),
+                difference.to_bits(),
+                0u32
+            ],
+        );
+    }
+    e.get(this, InventoryChanges::fcontainerweight)
+}
+
+/// `TESObject` type descriptor (`.?AVTESObject@@`) and the word at +0x7bc of
+/// the player character `fn_004d1360` tests.
+pub(crate) const TYPE_TES_OBJECT: u32 = 0x0118_3128;
+pub(crate) const PLAYER_WEIGHT_MODE: u32 = 0x7bc;
+
+// Translated from 004d0f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The total value of everything the owner carries (the map has no name):
+/// the owner container's objects first (value times the number, the entry's
+/// number added when the changes hold one), then the changes' entries the
+/// container does not list. A form is left out when its virtual 0x94 says so
+/// (unless `include_excluded`) and the form with the id 0xf is left out
+/// (unless `include_caps`); a value of `-1` counts as 0.
+pub fn fn_004d0f40(
+    e: &mut Engine,
+    this: Ptr<InventoryChanges>,
+    include_excluded: u8,
+    include_caps: u8,
+) -> i32 {
+    let mut total = 0i32;
+    let container = fn_004bffb0(e, this);
+    let mut node = e.call(CONTAINER_OBJECT_LIST, &args![container]).u32();
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let object = list_item(e, node);
+        let form = e.mem.u32(object + 4);
+        if (include_excluded != 0 || !e.vcall(form, FORM_EXCLUDED_SLOT, &args![]).bool())
+            && (include_caps != 0 || e.call(FORM_ID, &args![form]).u32() != 0xf)
+        {
+            let mut value = e.call(GET_FORM_VALUE, &args![form]).i32();
+            if value == -1 {
+                value = 0;
+            }
+            if value != 0 {
+                let entry = inventory_changes_get_object_in_list(e, this, form, 1, 0);
+                let object = list_item(e, node);
+                let count = e.mem.u32(object) as i32;
+                if entry == 0 {
+                    total = value.wrapping_mul(count).wrapping_add(total);
+                } else {
+                    let number = e.call(WORD_AT_4, &args![entry]).i32().wrapping_add(count);
+                    if number != 0 {
+                        total = number.wrapping_mul(value).wrapping_add(total);
+                    }
+                }
+            }
+        }
+        node = list_next(e, node);
+    }
+    let mut node = e.mem.u32(this.addr());
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() && list_item(e, node) != 0 {
+        let entry = list_item(e, node);
+        let form = e.mem.u32(entry + 8);
+        if form != 0 {
+            let container = fn_004bffb0(e, this);
+            let listed =
+                container != 0 && e.call(CONTAINER_HAS_FORM, &args![container, form]).bool();
+            if !listed
+                && (include_excluded != 0 || !e.vcall(form, FORM_EXCLUDED_SLOT, &args![]).bool())
+                && (include_caps != 0 || e.call(FORM_ID, &args![form]).u32() != 0xf)
+            {
+                let mut value = e.call(GET_FORM_VALUE, &args![form]).i32();
+                if value == -1 {
+                    value = 0;
+                }
+                if value != 0 && e.call(WORD_AT_4, &args![entry]).u32() != 0 {
+                    let number = e.call(WORD_AT_4, &args![entry]).i32();
+                    total = number.wrapping_mul(value).wrapping_add(total);
+                }
+            }
+        }
+        node = list_next(e, node);
+    }
+    total
+}
+
+// Translated from 004d1360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the word at +0x7bc of the player character is 1 (the value that
+/// selects the weight code path the weight functions pass on as their flag).
+pub fn fn_004d1360(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + PLAYER_WEIGHT_MODE) == 1
+}
+
+// Translated from 004d1180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The weight of the worn items of the changes (the map has no name): the
+/// entries that have a worn extra list (`GetWorn(0)`) and are not of form type
+/// 0x29, each at its weight (weapons with the weapon weight modifier) times
+/// the number the container holds (`fn_004c8f30`), but a weapon the actor's
+/// process says is the same form for both its virtual 0x148 and 0x14c
+/// results counts once. Returns the `f32` total (ST0). `actor` is the stack
+/// word.
+pub fn fn_004d1180(e: &mut Engine, this: Ptr<InventoryChanges>, actor: u32) -> f32 {
+    let mut total = 0.0f32;
+    let mut node = e.mem.u32(this.addr());
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() && list_item(e, node) != 0 {
+        let entry = list_item(e, node);
+        let form = e.mem.u32(entry + 8);
+        if item_change_get_worn(e, Ptr::new(entry), 0) && form_type_of(e, form) != 0x29 {
+            let mut weight;
+            if form_type_of(e, form) == FORM_TYPE_WEAPON {
+                let with_mod = item_change_has_mod_effect_active_ov2(e, Ptr::new(entry), 4);
+                weight = tes_object_weap_get_form_weight(e, Ptr::new(form), with_mod as u8);
+                weight = heavy_weapon_adjusted(e, weight);
+            } else {
+                let player = e.global::<u32>(PLAYER_GLOBAL);
+                let mode = fn_004d1360(e, Ptr::new(player));
+                weight = e
+                    .call(WEIGHT_FORM_GET_WEIGHT, &args![form, mode as u32])
+                    .f32();
+            }
+            let entry_form = e.call(WORD_AT_8, &args![entry]).u32();
+            let mut count = fn_004c8f30(e, this, entry_form);
+            if form_type_of(e, form) == FORM_TYPE_ARMOR {
+                // The result of this cast is not used.
+                e.call(
+                    RT_DYNAMIC_CAST,
+                    &args![form, 0u32, TYPE_TES_OBJECT, TYPE_TES_OBJECT_ARMO, 0u32],
+                );
+            } else if form_type_of(e, form) == FORM_TYPE_WEAPON {
+                let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+                if process != 0 {
+                    let first = e.vcall(process, 0x148, &args![]).u32();
+                    let second = e.vcall(process, 0x14c, &args![]).u32();
+                    if first != 0
+                        && second != 0
+                        && e.call(WORD_AT_8, &args![first]).u32()
+                            == e.call(WORD_AT_8, &args![second]).u32()
+                    {
+                        count = 1;
+                    }
+                }
+            }
+            total = (count as f64 * weight as f64 + total as f64) as f32;
+        }
+        node = list_next(e, node);
+    }
+    total
+}
+
+// Translated from 004d1380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether any extra data list of any entry has the leveled item position
+/// (`0041d360`) `position`.
+pub fn fn_004d1380(e: &mut Engine, this: Ptr<InventoryChanges>, position: i32) -> bool {
+    let mut found = false;
+    let mut node = e.mem.u32(this.addr());
+    while node != 0
+        && !e.call(LIST_IS_EMPTY, &args![node]).bool()
+        && list_item(e, node) != 0
+        && !found
+    {
+        let entry = list_item(e, node);
+        if entry != 0 {
+            let mut cursor = e.mem.u32(entry);
+            while cursor != 0 && list_item(e, cursor) != 0 {
+                let extra = list_item(e, cursor);
+                if extra != 0 && e.call(EXTRA_LEVELED_POSITION, &args![extra]).i32() == position {
+                    found = true;
+                }
+                cursor = list_next(e, cursor);
+            }
+        }
+        node = list_next(e, node);
+    }
+    found
+}
+
+/// `TESContainer` temporary (12 bytes on the stack): constructor `00481610`
+/// (`TESContainer::TESContainer`, Xbox PDB), destructor `00481680`, and the
+/// methods `fn_004d1440` calls on it: `00487f70(leveled item + 0x30, level,
+/// |count|, container, 0)` fills it from a leveled item, `00482090(container,
+/// float)` scales its counts, `00482770(container, index, changes)` adds its
+/// map's name, a getter of the float at +8 of the object it is called on)
+/// and the double `1.0` at `0x01012070`.
+/// map's name, a getter of the float at +8 of the object it is called on)
+pub(crate) const CONTAINER_TEMP_CONSTRUCT: u32 = 0x0048_1610;
+pub(crate) const CONTAINER_TEMP_DESTRUCT: u32 = 0x0048_1680;
+pub(crate) const LEVELED_ITEM_FILL_CONTAINER: u32 = 0x0048_7f70;
+pub(crate) const CONTAINER_SCALE_COUNTS: u32 = 0x0048_2090;
+pub(crate) const CONTAINER_ADD_TO_CHANGES: u32 = 0x0048_2770;
+pub(crate) const LEVELED_ITEM_CHANCE: u32 = 0x0048_8d50;
+pub(crate) const ONE_DOUBLE: u32 = 0x0101_2070;
+/// `abs(int)` (`__cdecl`, `00ec7d40`), the actor's level (`0087f9f0`, a
+/// 16-bit value, on the owner of the changes), `TESObjectREFR::GetCalcLevel`
+/// (Xbox PDB, `this`, one flag word) and the call `fn_004d1610` makes on the
+/// third word of a container object: `0040ea20(word, extra, healthForm)`.
+pub(crate) const ABS_INT: u32 = 0x00ec_7d40;
+pub(crate) const ACTOR_LEVEL: u32 = 0x0087_f9f0;
+pub(crate) const REFERENCE_GET_CALC_LEVEL: u32 = 0x0056_7e10;
+pub(crate) const CONTAINER_OBJECT_ATTACH_EXTRA: u32 = 0x0040_ea20;
+/// The form type byte of a leveled item form in a container (0x34).
+pub(crate) const FORM_TYPE_LEVELED_ITEM: u32 = 0x34;
+
+// Translated from 004d1440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Expands the leveled items of the owner container into the changes (the
+/// map has no name): for each object of the owner's container whose form is of
+/// type 0x34 (a leveled item), when no extra list of the changes already has
+/// that object's index as its leveled item position (`fn_004d1380`), a
+/// temporary `TESContainer` is filled from the leveled item for the owner's
+/// level (an actor's `0087f9f0` level, else `GetCalcLevel(1)`; 16 bits), its
+/// counts are scaled when the item's third word gives a chance other than
+/// `1.0`, and it is added to the changes under the index. The index counts
+/// the leveled objects. The C++ exception frame is not translated.
+pub fn fn_004d1440(e: &mut Engine, this: Ptr<InventoryChanges>) {
+    let container = fn_004bffb0(e, this);
+    let mut node = e.call(CONTAINER_OBJECT_LIST, &args![container]).u32();
+    let mut index = 0i32;
+    let owner = e.call(WORD_AT_4, &args![this]).u32();
+    let level = if e.vcall(owner, 0x100, &args![]).bool() {
+        let owner = e.call(WORD_AT_4, &args![this]).u32();
+        e.call(ACTOR_LEVEL, &args![owner]).u32() & 0xffff
+    } else {
+        let owner = e.call(WORD_AT_4, &args![this]).u32();
+        e.call(REFERENCE_GET_CALC_LEVEL, &args![owner, 1u32]).u32()
+    };
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let object = list_item(e, node);
+        let mut leveled = 0u32;
+        let form = e.mem.u32(object + 4);
+        if form != 0 && form_type_of(e, form) == FORM_TYPE_LEVELED_ITEM {
+            leveled = e.mem.u32(object + 4);
+        }
+        if leveled != 0 {
+            if !fn_004d1380(e, this, index) {
+                e.with_stack(0xc, |e, temporary| {
+                    e.call(CONTAINER_TEMP_CONSTRUCT, &args![temporary]);
+                    let count = e.mem.u32(object);
+                    let magnitude = e.call(ABS_INT, &args![count]).u32();
+                    e.call(
+                        LEVELED_ITEM_FILL_CONTAINER,
+                        &args![leveled + 0x30, level & 0xffff, magnitude, temporary, 0u32],
+                    );
+                    let third = e.mem.u32(object + 8);
+                    if object != 0 && third != 0 {
+                        let chance = e.call(LEVELED_ITEM_CHANCE, &args![third]).f32();
+                        if chance as f64 != e.global::<f64>(ONE_DOUBLE) {
+                            let chance = e.call(LEVELED_ITEM_CHANCE, &args![third]).f32();
+                            e.call(CONTAINER_SCALE_COUNTS, &args![temporary, chance.to_bits()]);
+                        }
+                    }
+                    e.call(CONTAINER_ADD_TO_CHANGES, &args![temporary, index, this]);
+                    e.call(CONTAINER_TEMP_DESTRUCT, &args![temporary]);
+                });
+            }
+            index += 1;
+        }
+        node = list_next(e, node);
+    }
+}
+
+// Translated from 004d1610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// For each object of the owner container whose form is not a leveled item
+/// (type 0x34) and that has a third word: a new extra data list with the
+/// object's count (`SetCount`), attached to the third word together with the
+/// form's health form (`0040ea20`), added to the lists of a new `ItemChange`
+/// for the form (number 0), which is merged into the changes
+/// (`fn_004c3380`, deleting the source). The C++ exception frame is not
+/// translated.
+pub fn fn_004d1610(e: &mut Engine, this: Ptr<InventoryChanges>) {
+    let container = fn_004bffb0(e, this);
+    let mut node = e.call(CONTAINER_OBJECT_LIST, &args![container]).u32();
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let object = list_item(e, node);
+        node = list_next(e, node);
+        let form = e.mem.u32(object + 4);
+        if form != 0
+            && form_type_of(e, form) != FORM_TYPE_LEVELED_ITEM
+            && e.mem.u32(object + 8) != 0
+        {
+            let extra = new_extra_list(e);
+            let count = e.mem.u16(object) as u32;
+            e.call(EXTRA_SET_COUNT, &args![extra, count]);
+            let health_form = e.call(GET_FORM_AS_HEALTH_FORM, &args![form]).u32();
+            let third = e.mem.u32(object + 8);
+            e.call(
+                CONTAINER_OBJECT_ATTACH_EXTRA,
+                &args![third, extra, health_form],
+            );
+            let item = new_item_change(e, form, 0);
+            let list = e.mem.u32(item);
+            list_call_with_item(e, LIST_ADD, list, extra);
+            fn_004c3380(e, this, item, 1);
+        }
+    }
+}
+
+// Translated from 004d17a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Takes the leveled item extra lists out of the changes (the map has no
+/// name): the owner is told (virtual 0x48 with `0x8000000`), then in every
+/// entry each extra list that has a leveled item (`GetLeveledItem`) is
+/// cleaned (`0041d000`), the entry's number reduced by the list's count, the
+/// list unlinked and deleted, and the walk restarted at the entry's first
+/// list. An entry left with an empty list head and number 0 is unlinked from
+/// the changes and deleted, and the walk restarts.
+pub fn fn_004d17a0(e: &mut Engine, this: Ptr<InventoryChanges>) {
+    let owner = e.get(this, InventoryChanges::pRef).addr();
+    e.vcall(owner, 0x48, &args![0x0800_0000u32]);
+    let mut node = e.mem.u32(this.addr());
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() && list_item(e, node) != 0 {
+        let entry = list_item(e, node);
+        let mut inner = e.mem.u32(entry);
+        while inner != 0 && list_item(e, inner) != 0 {
+            let extra = list_item(e, inner);
+            if extra == 0 {
+                inner = list_next(e, inner);
+            } else if e.call(EXTRA_GET_LEVELED_ITEM, &args![extra]).u32() != 0 {
+                e.call(EXTRA_FN_0041D000, &args![extra]);
+                let number = e.call(WORD_AT_4, &args![entry]).i32();
+                let held = e.call(EXTRA_GET_COUNT, &args![extra]).u16() as i16 as i32;
+                e.call(ITEM_SET_NUMBER, &args![entry, number.wrapping_sub(held)]);
+                list_call_with_item(e, LIST_REMOVE, inner, extra);
+                delete_object(e, extra);
+                inner = e.mem.u32(entry);
+            } else {
+                inner = list_next(e, inner);
+            }
+        }
+        let lists = e.mem.u32(entry);
+        if entry != 0
+            && lists != 0
+            && e.call(LIST_IS_EMPTY, &args![lists]).bool()
+            && e.call(WORD_AT_4, &args![entry]).u32() == 0
+        {
+            let head = e.mem.u32(this.addr());
+            list_call_with_item(e, LIST_REMOVE, head, entry);
+            delete_item_change(e, entry);
+            node = e.mem.u32(this.addr());
+        } else {
+            node = list_next(e, node);
+        }
+    }
+}
+
+/// Runs `script` on a new temporary reference with the script variables of
+/// the extra list `extra`, then deletes the reference (virtual 0x10).
+fn run_script_on_temporary_reference(e: &mut Engine, script: u32, extra: u32) {
+    let reference = new_temporary_reference(e);
+    let locals = e.call(EXTRA_GET_SCRIPT_LOCALS, &args![extra]).u32();
+    e.call(SCRIPT_RUN, &args![script, reference, locals, 0u32, 0u32]);
+    if reference != 0 {
+        e.vcall(reference, 0x10, &args![1u32]);
+    }
+}
+
+/// Gives the extra list `extra` the script `script` and its event list, then
+/// runs the script on it (`run_script_on_temporary_reference`).
+fn give_script_to_list(e: &mut Engine, extra: u32, script: u32) {
+    e.call(EXTRA_SET_SCRIPT, &args![extra, script]);
+    attach_script_events(e, extra);
+    run_script_on_temporary_reference(e, script, extra);
+}
+
+/// Appends `count` new extra lists (count 1 each) to the lists of `entry`;
+/// each one that has no script yet gets `script`.
+fn append_scripted_lists(e: &mut Engine, entry: u32, count: i32, script: u32) {
+    for _ in 0..count {
+        let created = new_extra_list(e);
+        let head = e.mem.u32(entry);
+        list_call_with_item(e, LIST_ADD, head, created);
+        e.call(EXTRA_SET_COUNT, &args![created, 1u32]);
+        if created != 0 && e.call(EXTRA_GET_SCRIPT, &args![created]).u32() == 0 {
+            give_script_to_list(e, created, script);
+        }
+    }
+}
+
+/// Gives every extra list of `entry` without a script the script `script`
+/// (running it); returns how many it did. An entry without a list gets an
+/// empty list head instead.
+fn script_lists_of_entry(e: &mut Engine, entry: u32, script: u32) -> i32 {
+    let mut given = 0;
+    if e.mem.u32(entry) == 0 {
+        let node = new_list_node(e);
+        e.mem.set_u32(entry, node);
+    } else {
+        let mut cursor = e.mem.u32(entry);
+        while cursor != 0 && list_item(e, cursor) != 0 {
+            let extra = list_item(e, cursor);
+            if extra != 0 && e.call(EXTRA_GET_SCRIPT, &args![extra]).u32() == 0 {
+                give_script_to_list(e, extra, script);
+                given += 1;
+            }
+            cursor = list_next(e, cursor);
+        }
+    }
+    given
+}
+
+/// Runs `script` once for each extra list of `entry`; returns how many.
+fn run_script_for_lists_of_entry(e: &mut Engine, entry: u32, script: u32) -> i32 {
+    let mut ran = 0;
+    let mut cursor = e.mem.u32(entry);
+    while cursor != 0 && list_item(e, cursor) != 0 {
+        let extra = list_item(e, cursor);
+        if extra != 0 {
+            run_script_on_temporary_reference(e, script, extra);
+            ran += 1;
+        }
+        cursor = list_next(e, cursor);
+    }
+    ran
+}
+
+// Translated from 004d1960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Gives the stacks of items that have a script their scripts (the map has
+/// no name). For each object of the owner container whose form has a script
+/// (`GetFormScript`) and a count above 0 (`abs`): the changes' entry for the
+/// form, made when missing, gets the script on each extra list without one
+/// (each run on a temporary reference, one less to make for each) and then
+/// as many new extra lists (count 1) as remain; a made entry is merged into
+/// the changes (`fn_004c3380`). An entry that already has a script
+/// (`ItemChange::GetScript`) only has the script run once for each of its
+/// lists. Then the same is done for every entry of the changes (a null entry
+/// counts as having a script, so nothing is done for it). The C++ exception
+/// frame is not translated.
+pub fn fn_004d1960(e: &mut Engine, this: Ptr<InventoryChanges>) {
+    let container = fn_004bffb0(e, this);
+    let mut node = e.call(CONTAINER_OBJECT_LIST, &args![container]).u32();
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let object = list_item(e, node);
+        let form = e.mem.u32(object + 4);
+        let script = e.call(FORM_SCRIPT_OF, &args![form]).u32();
+        let raw_count = e.mem.u32(object);
+        let mut count = e.call(ABS_INT, &args![raw_count]).i32();
+        if script != 0 && count > 0 {
+            let mut entry = inventory_changes_get_object_in_list(e, this, form, 1, 0);
+            if entry == 0 || item_change_get_script(e, Ptr::new(entry)) == 0 {
+                let mut created = false;
+                if entry == 0 {
+                    created = true;
+                    entry = new_item_change(e, form, 0);
+                }
+                count -= script_lists_of_entry(e, entry, script);
+                if count > 0 {
+                    append_scripted_lists(e, entry, count, script);
+                }
+                if created {
+                    fn_004c3380(e, this, entry, 1);
+                }
+            } else if entry != 0 {
+                run_script_for_lists_of_entry(e, entry, script);
+            }
+        }
+        node = list_next(e, node);
+    }
+    let mut node = e.mem.u32(this.addr());
+    while node != 0 && list_item(e, node) != 0 {
+        let entry = list_item(e, node);
+        let form = e.call(WORD_AT_8, &args![entry]).u32();
+        let script = e.call(FORM_SCRIPT_OF, &args![form]).u32();
+        let number = e.call(WORD_AT_4, &args![entry]).u32();
+        let count = e.call(ABS_INT, &args![number]).i32();
+        if script != 0 && count > 0 {
+            if entry == 0 || item_change_get_script(e, Ptr::new(entry)) != 0 {
+                if entry != 0 {
+                    run_script_for_lists_of_entry(e, entry, script);
+                }
+            } else {
+                let remaining = count - script_lists_of_entry(e, entry, script);
+                append_scripted_lists(e, entry, remaining, script);
+            }
+        }
+        node = list_next(e, node);
+    }
+}
+
+/// The critical section `fn_004d2480` takes (`0040fbf0` with the name 0,
+/// `0040fba0` to leave) and the temporary reference methods it uses on the
+/// scratch reference `TEMP_REF_GLOBAL`: `00568bb0(reference, extra)` is
+/// `TESObjectREFR::SetExtra` (Xbox PDB), `00575690(reference, form)` is
+/// `TESObjectREFR::SetObjectReference` (Xbox PDB), `0087ce80(reference, cell)`
+/// sets its parent cell, `00436aa0(owner)` gives the word `0049eea0(reference,
+/// word)` stores, `RemoveAllCopyableExtra(list, flag)` is `00411fd0` (Xbox
+/// PDB) and `004013e0(script)` tests a script object.
+pub(crate) const RUN_SCRIPTS_LOCK_OBJECT: u32 = 0x011c_64e0;
+pub(crate) const SECTION_LOCK: u32 = 0x0040_fbf0;
+pub(crate) const SECTION_UNLOCK: u32 = 0x0040_fba0;
+pub(crate) const REFERENCE_SET_EXTRA: u32 = 0x0056_8bb0;
+pub(crate) const REFERENCE_SET_OBJECT_REFERENCE: u32 = 0x0057_5690;
+pub(crate) const REFERENCE_SET_PARENT_CELL: u32 = 0x0087_ce80;
+pub(crate) const OWNER_STORED_WORD: u32 = 0x0043_6aa0;
+pub(crate) const REFERENCE_STORE_OWNER_WORD: u32 = 0x0049_eea0;
+pub(crate) const EXTRA_REMOVE_ALL_COPYABLE: u32 = 0x0041_1fd0;
+pub(crate) const SCRIPT_OBJECT_TEST: u32 = 0x0040_13e0;
+/// The form type byte of a script object (0x11).
+pub(crate) const FORM_TYPE_SCRIPT: u32 = 0x11;
+
+// Translated from 004d2480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InventoryChanges::RunScripts` (Xbox PDB): runs the script of every extra
+/// data list of the changes on the scratch reference (`TEMP_REF_GLOBAL`), set
+/// up with the list (`SetExtra`), the entry's form (`SetObjectReference`) and
+/// the cell of `owner`; returns whether any run returned true. `bcountdirty`
+/// is cleared first and, when a script sets it again, the walk of that entry's
+/// lists stops and the walk of the entries restarts after the first node (the
+/// game's behaviour). Nothing is done without an `owner` or a cell. The C++
+/// exception frame is not translated.
+pub fn inventory_changes_run_scripts(
+    e: &mut Engine,
+    this: Ptr<InventoryChanges>,
+    owner: u32,
+) -> bool {
+    e.set(this, InventoryChanges::bcountdirty, false);
+    if owner == 0 {
+        return false;
+    }
+    let cell = e.call(REFERENCE_PARENT_CELL, &args![owner]).u32();
+    if cell == 0 {
+        return false;
+    }
+    e.call(SECTION_LOCK, &args![RUN_SCRIPTS_LOCK_OBJECT, 0u32]);
+    let mut node = e.mem.u32(this.addr());
+    let mut ran = false;
+    e.with_stack(4, |e, guard| {
+        e.call(
+            SCOPE_GUARD_OPEN,
+            &args![guard, 0x15u32, 1u32, SOURCE_FILE_NAME, 0x264bu32],
+        );
+        let temporary = e.global::<u32>(TEMP_REF_GLOBAL);
+        e.call(REFERENCE_SET_PARENT_CELL, &args![temporary, cell]);
+        let stored = e.call(OWNER_STORED_WORD, &args![owner]).u32();
+        let temporary = e.global::<u32>(TEMP_REF_GLOBAL);
+        e.call(REFERENCE_STORE_OWNER_WORD, &args![temporary, stored]);
+        while node != 0 && list_item(e, node) != 0 {
+            let entry = list_item(e, node);
+            let mut inner = e.mem.u32(entry);
+            while inner != 0 && list_item(e, inner) != 0 {
+                let extra = list_item(e, inner);
+                if extra != 0 {
+                    let script = e.call(EXTRA_GET_SCRIPT, &args![extra]).u32();
+                    if script != 0 && e.call(SCRIPT_OBJECT_TEST, &args![script]).u8() != 0 {
+                        if form_type_of(e, script) == FORM_TYPE_SCRIPT {
+                            let temporary = e.global::<u32>(TEMP_REF_GLOBAL);
+                            e.call(REFERENCE_SET_EXTRA, &args![temporary, extra]);
+                            let form = e.call(WORD_AT_8, &args![entry]).u32();
+                            let temporary = e.global::<u32>(TEMP_REF_GLOBAL);
+                            e.call(REFERENCE_SET_OBJECT_REFERENCE, &args![temporary, form]);
+                            let locals = e.call(EXTRA_GET_SCRIPT_LOCALS, &args![extra]).u32();
+                            let temporary = e.global::<u32>(TEMP_REF_GLOBAL);
+                            let result = e
+                                .call(SCRIPT_RUN, &args![script, temporary, locals, owner, 0u32])
+                                .u8();
+                            if result != 0 {
+                                ran = true;
+                            }
+                            let temporary = e.global::<u32>(TEMP_REF_GLOBAL);
+                            let list = e.call(REFR_EXTRA_LIST, &args![temporary]).u32();
+                            e.call(EXTRA_SET_SCRIPT_EVENTS, &args![list, 0u32]);
+                            let temporary = e.global::<u32>(TEMP_REF_GLOBAL);
+                            let list = e.call(REFR_EXTRA_LIST, &args![temporary]).u32();
+                            e.call(EXTRA_REMOVE_ALL_COPYABLE, &args![list, 1u32]);
+                        }
+                        if e.get(this, InventoryChanges::bcountdirty) {
+                            break;
+                        }
+                    }
+                }
+                inner = list_next(e, inner);
+            }
+            if e.get(this, InventoryChanges::bcountdirty) {
+                node = e.mem.u32(this.addr());
+                e.set(this, InventoryChanges::bcountdirty, false);
+            }
+            node = list_next(e, node);
+        }
+        let temporary = e.global::<u32>(TEMP_REF_GLOBAL);
+        e.call(REFERENCE_SET_PARENT_CELL, &args![temporary, 0u32]);
+        let temporary = e.global::<u32>(TEMP_REF_GLOBAL);
+        e.call(REFERENCE_SET_OBJECT_REFERENCE, &args![temporary, 0u32]);
+        e.call(SCOPE_GUARD_CLOSE, &args![guard]);
+    });
+    e.call(SECTION_UNLOCK, &args![RUN_SCRIPTS_LOCK_OBJECT]);
+    ran
+}
+
+/// `00418550(extra list, owner)` (`__thiscall`): sets the owner (the extra
+/// of type 0x20, made when the list has none) of an extra data list; the
+/// map has no name for it.
+pub(crate) const EXTRA_SET_OWNER_EXTRA: u32 = 0x0041_8550;
+/// The extra data type `fn_004d26d0` looks for in the lists (0x2f).
+pub(crate) const EXTRA_TYPE_0X2F: u32 = 0x2f;
+
+/// `new ItemChange()` through `ItemChange_ov3`: 0xC bytes, constructed unless
+/// the allocation failed.
+fn new_empty_item_change(e: &mut Engine) -> u32 {
+    let item = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
+    if item == 0 {
+        return 0;
+    }
+    item_change_item_change_ov3(e, Ptr::new(item)).addr()
+}
+
+/// A new extra data list owned by `owner` (`00418550`) holding `count` items
+/// (`SetCount`), added to the lists of `item` (`fn_004d26d0`).
+fn add_counted_list(e: &mut Engine, item: u32, owner: u32, count: u32) {
+    let extra = new_extra_list(e);
+    e.call(EXTRA_SET_OWNER_EXTRA, &args![extra, owner]);
+    e.call(EXTRA_SET_COUNT, &args![extra, count]);
+    let head = e.mem.u32(item);
+    list_call_with_item(e, LIST_ADD, head, extra);
+}
+
+/// The end of the worn case of `fn_004d26d0`: the original reference extra of
+/// the first extra list of `item` is removed and the item deleted.
+fn drop_worn_item(e: &mut Engine, item: u32) {
+    let head = e.mem.u32(item);
+    let first = list_item(e, head);
+    if first != 0 {
+        e.call(EXTRA_REMOVE_ORIGINAL_REFERENCE, &args![first]);
+    }
+    delete_item_change(e, item);
+}
+
+// Translated from 0076b630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ItemChange::ItemChange_ov3` (Xbox PDB): the constructor that zeroes the
+/// extra list pointer, the number and the form.
+pub fn item_change_item_change_ov3(e: &mut Engine, this: Ptr<ItemChange>) -> Ptr<ItemChange> {
+    e.set(this, ItemChange::pExtraObjectList, Ptr::NULL);
+    e.set(this, ItemChange::iNumber, 0);
+    e.set(this, ItemChange::pContainerObj, Ptr::NULL);
+    this
+}
+
+// Translated from 004d26d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the contents of this inventory into the changes `target` (the map
+/// has no name; `owner` is the owner extra given to the new extra lists and
+/// `skip_excluded` skips forms whose virtual 0x94 is true). First the owner
+/// container's objects that are not leveled items (`TESLevItem` by dynamic
+/// cast): with the changes' entry for the form (its original changes removed
+/// first) an entry that is a plain container item (number plus count 0, a
+/// worn or skipped one) is dropped; with no extra lists in the entry a new item
+/// of `|count|` (less what the entry's lists hold) is made, getting the
+/// entry's lists when the entry has a script, else one counted list; with
+/// extra lists each is given the owner and moved over one by one, then a list
+/// of the remainder. Every made item is merged into `target`
+/// (`fn_004c3380`, deleting the source); one that is worn is deleted. Then the
+/// same for every entry of the changes the owner container does not list,
+/// whose number is above 0 (moving its lists, or one counted list, keeping the
+/// extra of type 0x2f and the class-4 forms apart as the code shows). The scope
+/// guard of line 0x26b7 is kept around it all. The C++ exception frame is not
+/// translated.
+pub fn fn_004d26d0(
+    e: &mut Engine,
+    this: Ptr<InventoryChanges>,
+    target: Ptr<InventoryChanges>,
+    owner: u32,
+    skip_excluded: u8,
+) {
+    with_scope_guard(e, 0x26b7, |e| {
+        let container = fn_004bffb0(e, this);
+        let mut node = e.call(CONTAINER_OBJECT_LIST, &args![container]).u32();
+        while node != 0 && list_item(e, node) != 0 {
+            let object = list_item(e, node);
+            let object_form = e.mem.u32(object + 4);
+            let leveled = e
+                .call(
+                    RT_DYNAMIC_CAST,
+                    &args![
+                        object_form,
+                        0u32,
+                        TYPE_TES_BOUND_OBJECT,
+                        TYPE_TES_LEV_ITEM,
+                        0u32
+                    ],
+                )
+                .u32();
+            let item = new_empty_item_change(e);
+            let container = fn_004bffb0(e, this);
+            let count = e
+                .call(CONTAINER_COUNT, &args![container, object_form])
+                .i32();
+            ensure_extra_list(e, item);
+            if object == 0 || leveled != 0 {
+                delete_item_change(e, item);
+            } else {
+                let entry = inventory_changes_get_object_in_list(e, this, object_form, 1, 0);
+                if entry != 0 {
+                    item_change_remove_original_changes(e, Ptr::new(entry));
+                }
+                let mut proceed = true;
+                if entry != 0 {
+                    let keep = (fn_004bcb70(e, Ptr::new(entry))
+                        && item_change_number_leveled_extra(e, Ptr::new(entry)) >= 1)
+                        || entry_number(e, entry).wrapping_add(count) != 0;
+                    if keep {
+                        let entry_form = e.call(WORD_AT_8, &args![entry]).u32();
+                        let excluded = e.vcall(entry_form, FORM_EXCLUDED_SLOT, &args![]).bool();
+                        if (excluded && skip_excluded != 0)
+                            || item_change_get_worn(e, Ptr::new(entry), 0)
+                        {
+                            proceed = false;
+                        }
+                    } else {
+                        proceed = false;
+                    }
+                    if !proceed {
+                        delete_item_change(e, item);
+                    }
+                }
+                if proceed {
+                    let has_extras = entry != 0
+                        && item_change_get_extra_total_count(e, Ptr::new(entry), false) != 0;
+                    if !has_extras {
+                        // The entry holds no extra lists of its own.
+                        let magnitude = count.wrapping_abs();
+                        if entry != 0 {
+                            let held = item_change_get_extra_total_count(e, Ptr::new(entry), false);
+                            let number = magnitude
+                                .wrapping_add(entry_number(e, entry))
+                                .wrapping_sub(held);
+                            set_entry_number(e, item, number);
+                        } else {
+                            set_entry_number(e, item, magnitude);
+                        }
+                        e.call(ITEM_SET_FORM, &args![item, object_form]);
+                        if entry != 0 && item_change_get_script(e, Ptr::new(entry)) != 0 {
+                            let mut cursor = e.call(WORD_AT_0, &args![entry]).u32();
+                            while cursor != 0 && list_item(e, cursor) != 0 {
+                                let extra = list_item(e, cursor);
+                                e.call(EXTRA_SET_OWNER_EXTRA, &args![extra, owner]);
+                                let head = e.mem.u32(item);
+                                list_call_with_item(e, LIST_ADD_TAIL, head, extra);
+                                cursor = list_next(e, cursor);
+                            }
+                            fn_004c3380(e, target, item, 1);
+                        } else if !item_change_get_worn(e, Ptr::new(item), 0) {
+                            let number = e.call(WORD_AT_4, &args![item]).u32();
+                            add_counted_list(e, item, owner, number);
+                            fn_004c3380(e, target, item, 1);
+                        } else {
+                            delete_item_change(e, item);
+                        }
+                    } else {
+                        // The entry has extra lists of its own.
+                        if e.mem.u32(entry) != 0 {
+                            item_change_get_extra_total_count(e, Ptr::new(entry), false);
+                        }
+                        let mut cursor = e.mem.u32(entry);
+                        // The new item is never null here, so this loop does
+                        // not run in the game.
+                        while cursor != 0 && list_item(e, cursor) != 0 && item == 0 {
+                            let extra = list_item(e, cursor);
+                            let entry_form = e.mem.u32(entry + 8);
+                            e.call(ITEM_SET_FORM, &args![item, entry_form]);
+                            let held = e.call(EXTRA_GET_COUNT, &args![extra]).u16() as i16 as i32;
+                            e.call(ITEM_SET_NUMBER, &args![item, held]);
+                            ensure_extra_list(e, item);
+                            e.call(EXTRA_SET_OWNER_EXTRA, &args![extra, owner]);
+                            let head = e.mem.u32(item);
+                            list_call_with_item(e, LIST_ADD, head, extra);
+                            if !item_change_get_worn(e, Ptr::new(item), 0) {
+                                fn_004c3380(e, target, item, 1);
+                            }
+                            cursor = list_next(e, cursor);
+                        }
+                        let held = item_change_get_extra_total_count(e, Ptr::new(entry), false);
+                        let wanted = count.wrapping_add(entry_number(e, entry));
+                        if held < wanted {
+                            ensure_extra_list(e, item);
+                            if entry != 0 {
+                                let held =
+                                    item_change_get_extra_total_count(e, Ptr::new(entry), false);
+                                let number = count
+                                    .wrapping_add(entry_number(e, entry))
+                                    .wrapping_sub(held);
+                                set_entry_number(e, item, number);
+                            } else {
+                                set_entry_number(e, item, count);
+                            }
+                            e.call(ITEM_SET_FORM, &args![item, object_form]);
+                            if !item_change_get_worn(e, Ptr::new(item), 0) {
+                                let number = e.call(WORD_AT_4, &args![item]).u32();
+                                add_counted_list(e, item, owner, number);
+                                fn_004c3380(e, target, item, 1);
+                            } else {
+                                delete_item_change(e, item);
+                            }
+                        }
+                    }
+                }
+            }
+            node = list_next(e, node);
+        }
+        let mut node = e.mem.u32(this.addr());
+        while node != 0 && list_item(e, node) != 0 {
+            let item = new_empty_item_change(e);
+            ensure_extra_list(e, item);
+            let entry = list_item(e, node);
+            if entry == 0 || e.call(WORD_AT_4, &args![entry]).i32() < 1 {
+                delete_item_change(e, item);
+            } else {
+                let container = fn_004bffb0(e, this);
+                let entry_form = e.mem.u32(entry + 8);
+                let container_again = fn_004bffb0(e, this);
+                if container != 0
+                    && e.call(CONTAINER_HAS_FORM, &args![container_again, entry_form])
+                        .bool()
+                {
+                    delete_item_change(e, item);
+                } else if item_change_get_extra_total_count(e, Ptr::new(entry), false) == 0
+                    && item_change_get_script(e, Ptr::new(entry)) == 0
+                {
+                    // No extra lists and no script on the entry.
+                    let mut found = 0u32;
+                    if e.mem.u32(entry) != 0 {
+                        let mut cursor = e.mem.u32(entry);
+                        let mut sum = 0i32;
+                        while cursor != 0 && list_item(e, cursor) != 0 && found == 0 {
+                            found = list_item(e, cursor);
+                            sum = sum.wrapping_add(
+                                e.call(EXTRA_GET_COUNT, &args![found]).u16() as i16 as i32
+                            );
+                            if e.call(EXTRA_IS_DEFAULT_FOR_CONTAINER, &args![found, 0u32])
+                                .bool()
+                            {
+                                found = 0;
+                            }
+                            cursor = list_next(e, cursor);
+                        }
+                        if found != 0 {
+                            ensure_extra_list(e, item);
+                            e.call(EXTRA_SET_OWNER_EXTRA, &args![found, owner]);
+                            let head = e.mem.u32(item);
+                            list_call_with_item(e, LIST_ADD, head, found);
+                            let number = e.call(WORD_AT_4, &args![entry]).i32();
+                            if !item_change_get_worn(e, Ptr::new(item), 0) && sum < number {
+                                add_counted_list(e, item, owner, number.wrapping_sub(sum) as u32);
+                            }
+                        } else {
+                            let number = e.call(WORD_AT_4, &args![entry]).u32();
+                            add_counted_list(e, item, owner, number);
+                        }
+                        e.call(ITEM_SET_FORM, &args![item, entry_form]);
+                        let number = e.call(WORD_AT_4, &args![entry]).u32();
+                        e.call(ITEM_SET_NUMBER, &args![item, number]);
+                        if !item_change_get_worn(e, Ptr::new(item), 0) {
+                            let number = e.call(WORD_AT_4, &args![entry]).u32();
+                            e.call(ITEM_SET_NUMBER, &args![item, number]);
+                            fn_004c3380(e, target, item, 1);
+                        } else {
+                            drop_worn_item(e, item);
+                        }
+                    } else {
+                        let form = e.call(WORD_AT_8, &args![entry]).u32();
+                        e.call(ITEM_SET_FORM, &args![item, form]);
+                        let number = e.call(WORD_AT_4, &args![entry]).u32();
+                        e.call(ITEM_SET_NUMBER, &args![item, number]);
+                        let number = e.call(WORD_AT_4, &args![item]).u32();
+                        add_counted_list(e, item, owner, number);
+                        fn_004c3380(e, target, item, 1);
+                    }
+                } else {
+                    // The entry has extra lists or a script.
+                    let mut moved = 0i32;
+                    let mut has_type_0x2f = false;
+                    let mut cursor = e.mem.u32(entry);
+                    while cursor != 0 && list_item(e, cursor) != 0 {
+                        let extra = list_item(e, cursor);
+                        if e.call(EXTRA_GET_BY_TYPE, &args![extra, EXTRA_TYPE_0X2F])
+                            .u32()
+                            != 0
+                        {
+                            has_type_0x2f = true;
+                        }
+                        cursor = list_next(e, cursor);
+                    }
+                    cursor = e.mem.u32(entry);
+                    if !(has_type_0x2f && fn_004be1a0(e, Ptr::new(entry)) == 4) {
+                        while cursor != 0 && list_item(e, cursor) != 0 {
+                            let extra = list_item(e, cursor);
+                            e.call(EXTRA_SET_OWNER_EXTRA, &args![extra, owner]);
+                            let head = e.mem.u32(item);
+                            list_call_with_item(e, LIST_ADD, head, extra);
+                            cursor = list_next(e, cursor);
+                            moved =
+                                moved.wrapping_add(e.call(EXTRA_GET_COUNT, &args![extra]).u16()
+                                    as i16
+                                    as i32);
+                        }
+                    } else {
+                        if fn_004be1a0(e, Ptr::new(entry)) == 4
+                            && item_change_get_script(e, Ptr::new(entry)) != 0
+                        {
+                            e.call(ITEM_SET_NUMBER, &args![entry, 1u32]);
+                        }
+                        while cursor != 0 && list_item(e, cursor) != 0 {
+                            let extra = list_item(e, cursor);
+                            e.call(EXTRA_REMOVE_COUNT, &args![extra]);
+                            e.call(EXTRA_SET_OWNER_EXTRA, &args![extra, owner]);
+                            let head = e.mem.u32(item);
+                            list_call_with_item(e, LIST_ADD, head, extra);
+                            cursor = list_next(e, cursor);
+                            moved = 1;
+                        }
+                    }
+                    let entry_form = e.mem.u32(entry + 8);
+                    e.call(ITEM_SET_FORM, &args![item, entry_form]);
+                    let number = e.call(WORD_AT_4, &args![entry]).u32();
+                    e.call(ITEM_SET_NUMBER, &args![item, number]);
+                    let number = e.call(WORD_AT_4, &args![entry]).i32();
+                    if !item_change_get_worn(e, Ptr::new(item), 0) && moved < number {
+                        add_counted_list(e, item, owner, number.wrapping_sub(moved) as u32);
+                    }
+                    if !item_change_get_worn(e, Ptr::new(item), 0) {
+                        fn_004c3380(e, target, item, 1);
+                    } else {
+                        drop_worn_item(e, item);
+                    }
+                }
+            }
+            node = list_next(e, node);
+        }
+    });
+}
+
+// Translated from 004d3660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InventoryChanges::ClearAllChangeItems` (Xbox PDB): empties the changes.
+/// Each entry's extra lists are popped one by one from the head; a list that
+/// has an original reference (`GetOriginalReference`) loses that extra; when
+/// the reference has no container the list is deleted unless it has a script;
+/// when it has one the list also loses its count when it holds nothing else,
+/// is unlinked again, and is deleted unless the reference's own changes entry
+/// for the form, or the player's, still lists it. Lists without an original
+/// reference are left alone (not deleted). The entry is then unlinked from
+/// the changes (from the node `[this]` the walk started at) and deleted, and
+/// the walk restarts at that node.
+pub fn inventory_changes_clear_all_change_items(e: &mut Engine, this: Ptr<InventoryChanges>) {
+    let mut node = e.mem.u32(this.addr());
+    let first_node = e.mem.u32(this.addr());
+    while node != 0 && list_item(e, node) != 0 {
+        let entry = list_item(e, node);
+        loop {
+            let lists = e.mem.u32(entry);
+            if lists == 0 || list_item(e, lists) == 0 {
+                break;
+            }
+            let extra = list_item(e, lists);
+            list_pop_head(e, lists);
+            let reference = if extra != 0 {
+                e.call(EXTRA_GET_ORIGINAL_REFERENCE, &args![extra]).u32()
+            } else {
+                0
+            };
+            if reference == 0 {
+                continue;
+            }
+            if e.call(REFR_HAS_CONTAINER, &args![reference]).u32() == 0 {
+                e.call(EXTRA_REMOVE_ORIGINAL_REFERENCE, &args![extra]);
+                if e.call(EXTRA_GET_SCRIPT, &args![extra]).u32() == 0 {
+                    delete_object(e, extra);
+                }
+                continue;
+            }
+            e.call(EXTRA_REMOVE_ORIGINAL_REFERENCE, &args![extra]);
+            if e.call(EXTRA_ITEMS_IN_LIST, &args![extra]).u32() < 2
+                && e.call(EXTRA_GET_COUNT, &args![extra]).u16() as i16 != 0
+            {
+                e.call(EXTRA_REMOVE_COUNT, &args![extra]);
+            }
+            let lists = e.call(WORD_AT_0, &args![entry]).u32();
+            list_call_with_item(e, LIST_REMOVE, lists, extra);
+            let mut unlisted = true;
+            let reference_extras = e.call(REFR_EXTRA_LIST, &args![reference]).u32();
+            let changes = e
+                .call(EXTRA_GET_CONTAINER_CHANGES, &args![reference_extras])
+                .u32();
+            unlisted = lists_hold_no(e, changes, entry, extra, unlisted);
+            let player = e.global::<u32>(PLAYER_GLOBAL);
+            let player_extras = e.call(REFR_EXTRA_LIST, &args![player]).u32();
+            let changes = e
+                .call(EXTRA_GET_CONTAINER_CHANGES, &args![player_extras])
+                .u32();
+            unlisted = lists_hold_no(e, changes, entry, extra, unlisted);
+            if unlisted {
+                delete_object(e, extra);
+            }
+        }
+        list_call_with_item(e, LIST_REMOVE, first_node, entry);
+        delete_item_change(e, entry);
+        node = first_node;
+    }
+}
+
+/// The check `ClearAllChangeItems` makes in a container's changes: `unlisted`
+/// stays true unless the changes' entry for the form of `entry` has `extra`
+/// among its lists.
+fn lists_hold_no(e: &mut Engine, changes: u32, entry: u32, extra: u32, unlisted: bool) -> bool {
+    let mut unlisted = unlisted;
+    if changes != 0 {
+        let form = e.call(WORD_AT_8, &args![entry]).u32();
+        let other = inventory_changes_get_object_in_list(e, Ptr::new(changes), form, 1, 0);
+        if other != 0 && e.call(WORD_AT_0, &args![other]).u32() != 0 {
+            let mut cursor = e.call(WORD_AT_0, &args![other]).u32();
+            while cursor != 0 && list_item(e, cursor) != 0 && unlisted {
+                if list_item(e, cursor) == extra {
+                    unlisted = false;
+                } else {
+                    cursor = list_next(e, cursor);
+                }
+            }
+        }
+    }
+    unlisted
+}
+
+// Translated from 004d3960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InventoryChanges` save size (the 16-bit size of `SaveGame`): 6 more bytes
+/// when save game blocks are used, 2 for the number of entries and the save
+/// size (`fn_004be5a0`) of every entry. With the size logging flag set the
+/// size is reported through `Error` (the message names the form being saved
+/// when there is one).
+pub fn fn_004d3960(e: &mut Engine, this: Ptr<InventoryChanges>) -> u16 {
+    let save = save_load_game(e);
+    let mut size: u16 = 0;
+    if e.call(USE_SAVE_GAME_BLOCKS, &args![save]).bool() {
+        size = size.wrapping_add(4);
+        size = size.wrapping_add(2);
+    }
+    size = size.wrapping_add(2);
+    let mut cursor = e.mem.u32(this.addr());
+    while cursor != 0 {
+        if e.call(LIST_IS_EMPTY, &args![cursor]).bool() {
+            break;
+        }
+        let entry = list_item(e, cursor);
+        if entry != 0 {
+            size = size.wrapping_add(fn_004be5a0(e, Ptr::new(entry)));
+        }
+        cursor = list_next(e, cursor);
+    }
+    if save_size_logging(e) {
+        let current = e.call(CURRENT_SAVE_FORM, &args![save]).u32();
+        log_save_size(e, size as u32, current, 0x284e, (0x0101_2cb0, 0x0101_2c78));
+    }
+    size
+}
+
+// Translated from 004d3ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InventoryChanges` save (to the save/load game object): with save game
+/// blocks the block tag `BLOK` and a 16-bit length (patched at the end), then
+/// a 16-bit number of entries (patched after them) and every non-null entry
+/// saved with `fn_004be6f0`. With the logging flag set the bytes written are
+/// reported through `Error`; a block over 0xFFFF bytes is reported through
+/// `005b5e40`.
+pub fn fn_004d3ab0(e: &mut Engine, this: Ptr<InventoryChanges>) {
+    let save = save_load_game(e);
+    let mut start = e.call(SAVE_POSITION, &args![save]).u32();
+    if save_size_logging(e) {
+        start = e.call(SAVE_POSITION, &args![save]).u32();
+    }
+    // Locals of the game's frame passed by address: the tag, the block length
+    // and the number of entries.
+    e.with_stack(0xc, |e, locals| {
+        let (tag, length_slot, count_slot) = (locals.addr(), locals.addr() + 4, locals.addr() + 8);
+        e.mem.set_u16(length_slot, 0);
+        let mut block = 0u32;
+        if e.call(USE_SAVE_GAME_BLOCKS, &args![save]).bool() {
+            e.mem.set_u32(tag, 0x424c_4f4b);
+            e.call(SAVE_BYTES, &args![save, tag, 4u32]);
+            block = e.call(SAVE_POSITION, &args![save]).u32();
+            e.call(SAVE_BYTES, &args![save, length_slot, 2u32]);
+        }
+        e.mem.set_u16(count_slot, 0);
+        let count_position = e.call(SAVE_POSITION, &args![save]).u32();
+        e.call(SAVE_BYTES, &args![save, count_slot, 2u32]);
+        let mut cursor = e.mem.u32(this.addr());
+        while cursor != 0 {
+            if e.call(LIST_IS_EMPTY, &args![cursor]).bool() {
+                break;
+            }
+            let entry = list_item(e, cursor);
+            if entry != 0 {
+                fn_004be6f0(e, Ptr::new(entry));
+                let count = e.mem.u16(count_slot);
+                e.mem.set_u16(count_slot, count.wrapping_add(1));
+            }
+            cursor = list_next(e, cursor);
+        }
+        let count = e.mem.u16(count_slot);
+        e.mem.set_u16(count_position, count);
+        if save_size_logging(e) {
+            let end = e.call(SAVE_POSITION, &args![save]).u32();
+            let current = e.call(CURRENT_SAVE_FORM, &args![save]).u32();
+            log_save_size(
+                e,
+                end.wrapping_sub(start),
+                current,
+                0x286a,
+                (0x0101_53a0, 0x0101_536c),
+            );
+        }
+        if e.call(USE_SAVE_GAME_BLOCKS, &args![save]).bool() {
+            let end = e.call(SAVE_POSITION, &args![save]).u32();
+            if end > block.wrapping_add(0xffff) {
+                e.call(
+                    SAVE_LOAD_LOG,
+                    &args![0x0101_5318u32, SOURCE_FILE_NAME, 0x286au32],
+                );
+            }
+            e.mem.set_u16(block, end.wrapping_sub(block) as u16);
+        }
+    });
+}
+
+// Translated from 004d3cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InventoryChanges::LoadGame` (Xbox PDB): reads what `fn_004d3ab0` wrote.
+/// With save game blocks the `BLOK` tag is checked (a wrong tag is logged
+/// through `005b5e40`) and the 16-bit length read; then the 16-bit number of
+/// entries, each loaded into a new `ItemChange` (`ItemChange::LoadGame`) and
+/// added to the changes, or, when its form could not be found, its extra
+/// lists deleted and the entry deleted. Then `fn_004cbbc0` fixes the loaded
+/// changes up and the block length is checked against the bytes read
+/// (overrun and underrun are logged). The C++ exception frame is not
+/// translated.
+pub fn inventory_changes_load_game(e: &mut Engine, this: Ptr<InventoryChanges>) {
+    let save = save_load_game(e);
+    let mut length = 0u16;
+    let mut block = 0u32;
+    let mut entries = 0u16;
+    e.with_stack(0xc, |e, locals| {
+        let (tag, length_slot, count_slot) = (locals.addr(), locals.addr() + 4, locals.addr() + 8);
+        if e.call(USE_SAVE_GAME_BLOCKS, &args![save]).bool() {
+            e.call(LOAD_BYTES, &args![save, tag, 4u32]);
+            if e.mem.u32(tag) != 0x424c_4f4b {
+                let current = e.call(CURRENT_LOAD_FORM, &args![save]).u32();
+                if current != 0 {
+                    let form_id = e.mem.u32(current);
+                    let form = e.call(LOOKUP_FORM_BY_ID, &args![form_id]).u32();
+                    let version = e.mem.u8(current + 9) as u32;
+                    let flags = e.mem.u32(current + 5);
+                    let name = e.vcall(form, FORM_NAME_SLOT, &args![]).u32();
+                    e.call(
+                        SAVE_LOAD_LOG,
+                        &args![
+                            0x0101_5718u32,
+                            SOURCE_FILE_NAME,
+                            0x2871u32,
+                            form_id,
+                            name,
+                            version,
+                            flags
+                        ],
+                    );
+                } else {
+                    let version = e.call(LOAD_VERSION, &args![save]).u8() as u32;
+                    e.call(
+                        SAVE_LOAD_LOG,
+                        &args![0x0101_56a8u32, SOURCE_FILE_NAME, 0x2871u32, version],
+                    );
+                }
+            }
+            block = e.call(SAVE_POSITION, &args![save]).u32();
+            e.call(LOAD_BYTES, &args![save, length_slot, 2u32]);
+            length = e.mem.u16(length_slot);
+        }
+        e.call(LOAD_BYTES, &args![save, count_slot, 2u32]);
+        entries = e.mem.u16(count_slot);
+    });
+    for _ in 0..entries {
+        let item = new_empty_item_change(e);
+        item_change_load_game(e, Ptr::new(item));
+        if e.call(WORD_AT_8, &args![item]).u32() != 0 {
+            let list = e.mem.u32(this.addr());
+            list_call_with_item(e, LIST_ADD, list, item);
+        } else {
+            item_change_delete_all_extra(e, Ptr::new(item));
+            delete_item_change(e, item);
+        }
+    }
+    fn_004cbbc0(e, this);
+    if e.call(USE_SAVE_GAME_BLOCKS, &args![save]).bool() {
+        let position = e.call(SAVE_POSITION, &args![save]).u32();
+        let current = e.call(CURRENT_LOAD_FORM, &args![save]).u32();
+        let expected = (length as u32).wrapping_add(block);
+        // The messages: "SAVELOAD: LoadGame Buffer overrun/underrun of %i
+        // bytes in file %s on line %i.  Current version is %i", or with the
+        // form being loaded.
+        let (overrun, underrun) = if current != 0 {
+            (0x0101_5588u32, 0x0101_5500u32)
+        } else {
+            (0x0101_54a0u32, 0x0101_5440u32)
+        };
+        let difference = if position > expected {
+            Some((overrun, position - expected))
+        } else if position < expected {
+            Some((underrun, expected - position))
+        } else {
+            None
+        };
+        if current != 0 {
+            let form_id = e.mem.u32(current);
+            let form = e.call(LOOKUP_FORM_BY_ID, &args![form_id]).u32();
+            if let Some((format, bytes)) = difference {
+                let version = e.mem.u8(current + 9) as u32;
+                let flags = e.mem.u32(current + 5);
+                let name = e.vcall(form, FORM_NAME_SLOT, &args![]).u32();
+                e.call(
+                    SAVE_LOAD_LOG,
+                    &args![
+                        format,
+                        bytes,
+                        SOURCE_FILE_NAME,
+                        0x2884u32,
+                        form_id,
+                        name,
+                        version,
+                        flags
+                    ],
+                );
+            }
+        } else if let Some((format, bytes)) = difference {
+            let version = e.call(LOAD_VERSION, &args![save]).u8() as u32;
+            e.call(
+                SAVE_LOAD_LOG,
+                &args![format, bytes, SOURCE_FILE_NAME, 0x2884u32, version],
+            );
+        }
+    }
+}
+
+/// `0046e8c0` (`__thiscall` on a weapon form): a test the inventory item
+/// filters use on weapons; the map has no name for it.
+pub(crate) const WEAPON_FILTER_TEST: u32 = 0x0046_e8c0;
+/// The save/load buffer (`BGSSaveGameBuffer` / `BGSLoadGameBuffer`) setters
+/// and getters `fn_004d4090`, `fn_004d4160` and `fn_004d42f0` use to switch a
+/// buffer's mode words while they work: the word at +0x17 (get `00428110(buffer,
+/// &out)`, set `00428130(buffer, value)`), +0x20 (`0050f9c0`), +0x24
+/// (`007037c0`, the map's `BGSMenuPacker::RecomputePacking` for a folded
+/// body) and +0x2c (get `0042ce30(buffer, &out)`, set `0086cf00`). Virtual
+/// slot 0 (save buffers) or 4 (load buffers) returns the mode they restore.
+pub(crate) const BUFFER_WORD_17_GET: u32 = 0x0042_8110;
+pub(crate) const BUFFER_WORD_17_SET: u32 = 0x0042_8130;
+pub(crate) const BUFFER_WORD_20_SET: u32 = 0x0050_f9c0;
+pub(crate) const BUFFER_WORD_24_SET: u32 = 0x0070_37c0;
+pub(crate) const BUFFER_WORD_2C_GET: u32 = 0x0042_ce30;
+pub(crate) const BUFFER_WORD_2C_SET: u32 = 0x0086_cf00;
+/// `NiMalloc(size)` and `NiFree(ptr)` (`__cdecl`) used by the `NiTMap`
+/// constructor and destructor, the map's clear (`00438af0`, `__thiscall`) and
+/// the two vtables of `NiTMapBase<TESObject *, bool>` (`01020944`) and its
+/// derived `NiTMap<TESObject *, bool>` (`01020924`).
+pub(crate) const NI_ALLOCATE: u32 = 0x00aa_1070;
+pub(crate) const NI_FREE: u32 = 0x00aa_10f0;
+pub(crate) const NI_MAP_CLEAR: u32 = 0x0043_8af0;
+pub(crate) const NI_MAP_BASE_VTABLE: u32 = 0x0102_0944;
+pub(crate) const NI_MAP_VTABLE: u32 = 0x0102_0924;
+/// `0047bb50(itemForm, form)` (`__cdecl`): the test `GetRepairItemGroup`
+/// asks about each item's form.
+pub(crate) const REPAIR_ITEM_TEST: u32 = 0x0047_bb50;
+/// The form type byte of a mod object (0x67).
+pub(crate) const FORM_TYPE_WEAPON_MOD: u32 = 0x67;
+
+/// The filter the item iterations of `fn_004d4530` and `fn_004d4830` apply
+/// when bit 0 of their flags is set: a form is skipped when its virtual 0x94
+/// says so, when it is a biped model that is not playable, or when it is a
+/// weapon that `0046e8c0` rejects.
+fn skipped_by_item_filter(e: &mut Engine, form: u32) -> bool {
+    if e.vcall(form, FORM_EXCLUDED_SLOT, &args![]).bool() {
+        return true;
+    }
+    let biped = e.call(GET_FORM_AS_BIPED_MODEL, &args![form]).u32();
+    if biped != 0 && !e.call(BIPED_PLAYABLE, &args![biped]).bool() {
+        return true;
+    }
+    form_type_of(e, form) == FORM_TYPE_WEAPON && e.call(WEAPON_FILTER_TEST, &args![form]).u8() != 0
+}
+
+// Translated from 004d4030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `fn_004bed00` (the step after loading) on every non-null entry of
+/// the changes; the walk stops at an empty head node.
+pub fn fn_004d4030(e: &mut Engine, this: Ptr<InventoryChanges>) {
+    let mut cursor = e.mem.u32(this.addr());
+    while cursor != 0 {
+        if e.call(LIST_IS_EMPTY, &args![cursor]).bool() {
+            break;
+        }
+        let entry = list_item(e, cursor);
+        if entry != 0 {
+            fn_004bed00(e, Ptr::new(entry));
+        }
+        cursor = list_next(e, cursor);
+    }
+}
+
+/// Runs `body` with the buffer modes `fn_004d4090`, `fn_004d4160` and
+/// `fn_004d42f0` set (and restores them afterwards): saves the mode the
+/// buffer's virtual `mode_slot` reports and the words +0x17 (and +0x2c for
+/// the load buffers), sets the mode word (+0x20 or +0x24) to 0, +0x17 to
+/// 0x400 (and +0x2c to 0).
+fn with_buffer_modes<R>(
+    e: &mut Engine,
+    buffer: u32,
+    loading: bool,
+    body: impl FnOnce(&mut Engine) -> R,
+) -> R {
+    let mode_setter = if loading {
+        BUFFER_WORD_24_SET
+    } else {
+        BUFFER_WORD_20_SET
+    };
+    let mode_slot = if loading { 4 } else { 0 };
+    let mode = e.vcall(buffer, mode_slot, &args![]).u32();
+    let (kind, word_2c) = e.with_stack(8, |e, out| {
+        e.call(BUFFER_WORD_17_GET, &args![buffer, out]);
+        let kind = e.mem.u32(out.addr());
+        let mut word_2c = 0;
+        if loading {
+            let second = out.addr() + 4;
+            e.call(BUFFER_WORD_2C_GET, &args![buffer, second]);
+            word_2c = e.mem.u32(second);
+        }
+        (kind, word_2c)
+    });
+    e.call(mode_setter, &args![buffer, 0u32]);
+    e.call(BUFFER_WORD_17_SET, &args![buffer, 0x400u32]);
+    if loading {
+        e.call(BUFFER_WORD_2C_SET, &args![buffer, 0u32]);
+    }
+    let result = body(e);
+    e.call(mode_setter, &args![buffer, mode]);
+    e.call(BUFFER_WORD_17_SET, &args![buffer, kind]);
+    if loading {
+        e.call(BUFFER_WORD_2C_SET, &args![buffer, word_2c]);
+    }
+    result
+}
+
+// Translated from 004d4090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InventoryChanges` save to a buffer (the map has no name): with the
+/// buffer's mode words switched (see `with_buffer_modes`), a variable sized
+/// value holding the number of entries written
+/// (`ItemChange::SaveGame(buffer)` for each non-null entry).
+pub fn fn_004d4090(e: &mut Engine, this: Ptr<InventoryChanges>, buffer: u32) {
+    with_buffer_modes(e, buffer, false, |e| {
+        let mut written = 0u32;
+        let start = e.call(SAVE_BUFFER_START_SIZED, &args![buffer]).u32();
+        let mut cursor = e.mem.u32(this.addr());
+        while cursor != 0 {
+            let entry = list_item(e, cursor);
+            if entry != 0 {
+                item_change_save_game(e, Ptr::new(entry), buffer);
+                written += 1;
+            }
+            cursor = list_next(e, cursor);
+        }
+        e.call(SAVE_BUFFER_END_SIZED, &args![buffer, written, start]);
+    });
+}
+
+// Translated from 004d4160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InventoryChanges` load from a buffer (the map has no name): with the
+/// buffer's mode words switched, the number of entries (a variable sized
+/// value), each loaded into a new `ItemChange` (`LoadGame_ov2`); when its
+/// form could not be found its extra lists are deleted and the item
+/// deleted, and the (then null) item is added to the changes in any case
+/// (the game's behaviour). The C++ exception frame is not translated.
+pub fn fn_004d4160(e: &mut Engine, this: Ptr<InventoryChanges>, buffer: u32) {
+    with_buffer_modes(e, buffer, true, |e| {
+        let entries = e.call(LOAD_BUFFER_LOAD_SIZED, &args![buffer]).u32();
+        for _ in 0..entries {
+            let mut item = new_empty_item_change(e);
+            item_change_load_game_ov2(e, Ptr::new(item), buffer);
+            if e.call(WORD_AT_8, &args![item]).u32() == 0 {
+                item_change_delete_all_extra(e, Ptr::new(item));
+                delete_item_change(e, item);
+                item = 0;
+            }
+            let list = e.mem.u32(this.addr());
+            list_call_with_item(e, LIST_ADD, list, item);
+        }
+    });
+}
+
+// Translated from 004d42f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `fn_004bef60(entry, buffer)` (the step after loading from a buffer)
+/// on every non-null entry of the changes, with the buffer's mode words
+/// switched (see `with_buffer_modes`).
+pub fn fn_004d42f0(e: &mut Engine, this: Ptr<InventoryChanges>, buffer: u32) {
+    with_buffer_modes(e, buffer, true, |e| {
+        let mut cursor = e.mem.u32(this.addr());
+        while cursor != 0 {
+            let entry = list_item(e, cursor);
+            if entry != 0 {
+                fn_004bef60(e, Ptr::new(entry), buffer);
+            }
+            cursor = list_next(e, cursor);
+        }
+    });
+}
+
+// Translated from 004d43c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The position of the extra data list `extra` among the extra lists of the
+/// changes' entry for `form`; -1 when there is no such entry (or no `form`
+/// or `extra`) or the entry does not hold the list.
+pub fn fn_004d43c0(e: &mut Engine, this: Ptr<InventoryChanges>, form: u32, extra: u32) -> i32 {
+    if form == 0 || extra == 0 {
+        return -1;
+    }
+    let mut cursor = e.mem.u32(this.addr());
+    while cursor != 0 {
+        let entry = list_item(e, cursor);
+        cursor = list_next(e, cursor);
+        if entry != 0 && e.call(WORD_AT_8, &args![entry]).u32() == form {
+            let mut index = 0i32;
+            let mut lists = e.call(WORD_AT_0, &args![entry]).u32();
+            while lists != 0 {
+                let item = list_item(e, lists);
+                if item != 0 && item == extra {
+                    return index;
+                }
+                index += 1;
+                lists = list_next(e, lists);
+            }
+            return -1;
+        }
+    }
+    -1
+}
+
+// Translated from 004d4480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The extra data list at position `index` among the extra lists of the
+/// changes' entry for `form`; 0 when there is none (or no `form`, or `index`
+/// is -1).
+pub fn fn_004d4480(e: &mut Engine, this: Ptr<InventoryChanges>, form: u32, index: i32) -> u32 {
+    if form == 0 || index == -1 {
+        return 0;
+    }
+    let mut cursor = e.mem.u32(this.addr());
+    while cursor != 0 {
+        let entry = list_item(e, cursor);
+        cursor = list_next(e, cursor);
+        if entry != 0 && e.call(WORD_AT_8, &args![entry]).u32() == form {
+            let mut position = 0i32;
+            let mut lists = e.call(WORD_AT_0, &args![entry]).u32();
+            while lists != 0 {
+                let item = list_item(e, lists);
+                if position == index {
+                    return item;
+                }
+                position += 1;
+                lists = list_next(e, lists);
+            }
+            return 0;
+        }
+    }
+    0
+}
+
+// Translated from 004d4530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `callback(&item, user_data)` (`__cdecl`) for each item stack of the
+/// owner's inventory until it returns true; returns how many were offered.
+/// The container's objects the changes have no entry for come first (as an
+/// `ItemChange` on the stack with the object's count and form), then the
+/// entries of the changes (number plus what the container holds, sharing the
+/// entry's extra lists; entries with that total 0 are left out). With bit 0
+/// of `flags` the filter `skipped_by_item_filter` applies. The C++ exception
+/// frame is not translated.
+pub fn fn_004d4530(
+    e: &mut Engine,
+    this: Ptr<InventoryChanges>,
+    callback: u32,
+    user_data: u32,
+    flags: u32,
+) -> i32 {
+    let mut offered = 0i32;
+    let container = fn_004bffb0(e, this);
+    let mut node = e.call(CONTAINER_OBJECT_LIST, &args![container]).u32();
+    while node != 0 {
+        let object = list_item(e, node);
+        node = list_next(e, node);
+        if object == 0 {
+            continue;
+        }
+        let object_form = e.mem.u32(object + 4);
+        if inventory_changes_get_object_in_list(e, this, object_form, 1, 0) != 0 {
+            continue;
+        }
+        if flags & 1 != 0 && skipped_by_item_filter(e, object_form) {
+            continue;
+        }
+        let stop = e.with_stack(0xc, |e, item| {
+            item_change_item_change_ov3(e, Ptr::new(item.addr()));
+            let count = e.mem.u32(object);
+            e.call(ITEM_SET_NUMBER, &args![item, count]);
+            e.call(ITEM_SET_FORM, &args![item, object_form]);
+            offered += 1;
+            let stop = e.call(callback, &args![item, user_data]).u8() != 0;
+            fn_004bc5f0(e, Ptr::new(item.addr()));
+            stop
+        });
+        if stop {
+            return offered;
+        }
+    }
+    let mut node = e.mem.u32(this.addr());
+    while node != 0 {
+        let entry = list_item(e, node);
+        node = list_next(e, node);
+        if entry == 0 {
+            continue;
+        }
+        let form = e.call(WORD_AT_8, &args![entry]).u32();
+        if flags & 1 != 0 && skipped_by_item_filter(e, form) {
+            continue;
+        }
+        let container = fn_004bffb0(e, this);
+        let held = e.call(CONTAINER_COUNT, &args![container, form]).i32();
+        let number = e.call(WORD_AT_4, &args![entry]).i32().wrapping_add(held);
+        if number == 0 {
+            continue;
+        }
+        let stop = e.with_stack(0xc, |e, item| {
+            item_change_item_change_ov3(e, Ptr::new(item.addr()));
+            let lists = e.call(WORD_AT_0, &args![entry]).u32();
+            e.mem.set_u32(item.addr(), lists);
+            e.call(ITEM_SET_NUMBER, &args![item, number]);
+            e.call(ITEM_SET_FORM, &args![item, form]);
+            offered += 1;
+            let stop = e.call(callback, &args![item, user_data]).u8() != 0;
+            // The item shares the entry's lists: it must not free them.
+            e.mem.set_u32(item.addr(), 0);
+            fn_004bc5f0(e, Ptr::new(item.addr()));
+            stop
+        });
+        if stop {
+            return offered;
+        }
+    }
+    offered
+}
+
+// Translated from 004d4830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The next item stack of the owner's inventory for the resumable iteration
+/// state `iterator` (an `ItemChange` followed by the container node at +0xc,
+/// the changes node at +0x10 and the finished byte at +0x14), written into
+/// the iterator itself and stored in `*out`; false when the iteration is
+/// over. Like `fn_004d4530` it first gives the container objects without a
+/// changes entry (the iterator's lists cleared, the object's count and form),
+/// then the entries of the changes (sharing the entry's lists, with the
+/// number plus what the container holds when that is above 0). Bit 0 of
+/// `flags` applies `skipped_by_item_filter`.
+pub fn fn_004d4830(
+    e: &mut Engine,
+    this: Ptr<InventoryChanges>,
+    iterator: u32,
+    out: u32,
+    flags: u32,
+) -> bool {
+    if e.mem.u8(iterator + 0x14) != 0 {
+        return false;
+    }
+    if e.mem.u32(iterator + 0xc) == 0 && e.mem.u32(iterator + 0x10) == 0 {
+        let container = fn_004bffb0(e, this);
+        let node = e.call(CONTAINER_OBJECT_LIST, &args![container]).u32();
+        e.mem.set_u32(iterator + 0xc, node);
+    }
+    if e.mem.u32(iterator + 0xc) != 0 {
+        loop {
+            let node = e.mem.u32(iterator + 0xc);
+            if node == 0 {
+                break;
+            }
+            let object = list_item(e, node);
+            let next = list_next(e, node);
+            e.mem.set_u32(iterator + 0xc, next);
+            if next == 0 {
+                let changes = e.mem.u32(this.addr());
+                if changes != 0 {
+                    e.mem.set_u32(iterator + 0x10, changes);
+                } else {
+                    e.mem.set_u8(iterator + 0x14, 1);
+                }
+            }
+            if object == 0 {
+                continue;
+            }
+            let object_form = e.mem.u32(object + 4);
+            if inventory_changes_get_object_in_list(e, this, object_form, 1, 0) != 0 {
+                continue;
+            }
+            if flags & 1 != 0 && skipped_by_item_filter(e, object_form) {
+                continue;
+            }
+            e.mem.set_u32(iterator, 0);
+            let count = e.mem.u32(object);
+            e.call(ITEM_SET_NUMBER, &args![iterator, count]);
+            e.call(ITEM_SET_FORM, &args![iterator, object_form]);
+            e.mem.set_u32(out, iterator);
+            return true;
+        }
+    }
+    if e.mem.u32(iterator + 0x10) == 0 {
+        return false;
+    }
+    loop {
+        let node = e.mem.u32(iterator + 0x10);
+        if node == 0 {
+            return false;
+        }
+        let entry = list_item(e, node);
+        let next = list_next(e, node);
+        e.mem.set_u32(iterator + 0x10, next);
+        if next == 0 {
+            e.mem.set_u8(iterator + 0x14, 1);
+        }
+        if entry == 0 {
+            continue;
+        }
+        let form = e.call(WORD_AT_8, &args![entry]).u32();
+        if flags & 1 != 0 && skipped_by_item_filter(e, form) {
+            continue;
+        }
+        let held_by = e.call(WORD_AT_4, &args![entry]).i32();
+        let container = fn_004bffb0(e, this);
+        let held = e.call(CONTAINER_COUNT, &args![container, form]).i32();
+        let number = held_by.wrapping_add(held);
+        if number <= 0 {
+            continue;
+        }
+        e.mem.set_u32(out, entry);
+        let lists = e.call(WORD_AT_0, &args![entry]).u32();
+        e.mem.set_u32(iterator, lists);
+        e.call(ITEM_SET_NUMBER, &args![iterator, number]);
+        e.call(ITEM_SET_FORM, &args![iterator, form]);
+        e.mem.set_u32(out, iterator);
+        return true;
+    }
+}
+
+/// Runs the fast iteration of the owner's inventory: `visit(item)` is called
+/// for each item stack the iteration gives (a new `ItemChange` the visitor
+/// owns), then the iterator is deleted (virtual-free through its scalar
+/// deleting destructor `004bf630`).
+fn for_each_fast_item(
+    e: &mut Engine,
+    this: Ptr<InventoryChanges>,
+    mut visit: impl FnMut(&mut Engine, u32) -> bool,
+) {
+    let iterator = inventory_changes_start_oei_fast_inventory_iteration(e, this);
+    loop {
+        let item = inventory_changes_get_next_oei_fast_inventory_item(e, this, iterator);
+        if item != 0 && !visit(e, item) {
+            break;
+        }
+        if item == 0 {
+            break;
+        }
+    }
+    if iterator != 0 {
+        oei_fast_inventory_iterator_scalar_deleting_destructor(e, iterator, 1);
+    }
+}
+
+// Translated from 004d4b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InventoryChanges::GetItemGroup` (Xbox PDB): adds to `list` (a
+/// `BSSimpleList<ItemChange *>`) the item stacks of the fast iteration whose
+/// form is `form`; the other stacks are deleted, and once a stack has been
+/// found the first other one ends the walk. Nothing is done without a form or
+/// a list.
+pub fn inventory_changes_get_item_group(
+    e: &mut Engine,
+    this: Ptr<InventoryChanges>,
+    form: u32,
+    list: u32,
+) {
+    if form == 0 || list == 0 {
+        return;
+    }
+    let mut found = false;
+    for_each_fast_item(e, this, |e, item| {
+        if e.call(WORD_AT_8, &args![item]).u32() == form {
+            found = true;
+            list_call_with_item(e, LIST_ADD, list, item);
+            true
+        } else {
+            delete_item_change(e, item);
+            !found
+        }
+    });
+}
+
+// Translated from 004d4bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InventoryChanges::GetRepairItemGroup` (Xbox PDB): adds to `list` the item
+/// stacks of the fast iteration whose form `0047bb50(itemForm, form)` accepts;
+/// the other stacks are deleted. Nothing is done without a form or a list.
+pub fn inventory_changes_get_repair_item_group(
+    e: &mut Engine,
+    this: Ptr<InventoryChanges>,
+    form: u32,
+    list: u32,
+) {
+    if form == 0 || list == 0 {
+        return;
+    }
+    for_each_fast_item(e, this, |e, item| {
+        let item_form = e.call(WORD_AT_8, &args![item]).u32();
+        if e.call(REPAIR_ITEM_TEST, &args![item_form, form]).u8() != 0 {
+            list_call_with_item(e, LIST_ADD, list, item);
+        } else {
+            delete_item_change(e, item);
+        }
+        true
+    });
+}
+
+// Translated from 004d4ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InventoryChanges::GetItemModGroup` (Xbox PDB): for the weapon `weapon`
+/// (a form of type 0x28), adds to `list` the item stacks of the fast
+/// iteration whose form is one of the weapon's three mod objects; stacks that
+/// are mod objects (form type 0x67) but none of its three are neither added
+/// nor deleted, other stacks are deleted. Nothing is done without a weapon or
+/// a list.
+pub fn inventory_changes_get_item_mod_group(
+    e: &mut Engine,
+    this: Ptr<InventoryChanges>,
+    weapon: u32,
+    list: u32,
+) {
+    if weapon == 0 || list == 0 || form_type_of(e, weapon) != FORM_TYPE_WEAPON {
+        return;
+    }
+    for_each_fast_item(e, this, |e, item| {
+        let item_form = e.call(WORD_AT_8, &args![item]).u32();
+        if form_type_of(e, item_form) == FORM_TYPE_WEAPON_MOD {
+            let mod_form = e.call(WORD_AT_8, &args![item]).u32();
+            for slot_bit in [1u32, 2, 4] {
+                if mod_form == fn_004bd570(e, Ptr::new(weapon), slot_bit) {
+                    list_call_with_item(e, LIST_ADD, list, item);
+                    break;
+                }
+            }
+        } else {
+            delete_item_change(e, item);
+        }
+        true
+    });
+}
+
+// Translated from 004d4e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor body of `NiTMapBase<TESObject *, bool>` (the map's
+/// `NiTMapBase` layout, [`NiTMap`]): vtable, `size` buckets (a zeroed bucket
+/// array of `size` words from `NiMalloc`) and no items.
+pub fn fn_004d4e40(e: &mut Engine, this: Ptr<NiTMap>, size: u32) -> Ptr<NiTMap> {
+    e.mem.set_u32(this.addr(), NI_MAP_BASE_VTABLE);
+    e.set(this, NiTMap::m_uiHashSize, size);
+    e.set(this, NiTMap::m_uiCount, 0);
+    let bytes = size.wrapping_shl(2);
+    let table = e.call(NI_ALLOCATE, &args![bytes]).u32();
+    e.set(this, NiTMap::m_ppkHashTable, table);
+    let table = e.get(this, NiTMap::m_ppkHashTable);
+    let bytes = e.get(this, NiTMap::m_uiHashSize).wrapping_shl(2);
+    e.call(MEMSET, &args![table, 0u32, bytes]);
+    this
+}
+
+// Translated from 004d4de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<TESObject *, bool>::NiTMap` (the map has no name): the base
+/// constructor, then the derived vtable.
+pub fn fn_004d4de0(e: &mut Engine, this: Ptr<NiTMap>, size: u32) -> Ptr<NiTMap> {
+    fn_004d4e40(e, this, size);
+    e.mem.set_u32(this.addr(), NI_MAP_VTABLE);
+    this
+}
+
+// Translated from 004d4f10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor body of `NiTMapBase<TESObject *, bool>`: the base vtable,
+/// the map cleared (`00438af0`) and its bucket array freed (`NiFree`).
+pub fn fn_004d4f10(e: &mut Engine, this: Ptr<NiTMap>) {
+    e.mem.set_u32(this.addr(), NI_MAP_BASE_VTABLE);
+    e.call(NI_MAP_CLEAR, &args![this]);
+    let table = e.get(this, NiTMap::m_ppkHashTable);
+    e.call(NI_FREE, &args![table]);
+}
+
+// Translated from 004d4eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of `NiTMap<TESObject *, bool>` (the map names the body of
+/// a std `ctype` destructor through folding): the derived vtable, the map
+/// cleared (`00438af0`) and then the base destructor body. The C++ exception
+/// frame is not translated.
+pub fn fn_004d4eb0(e: &mut Engine, this: Ptr<NiTMap>) {
+    e.mem.set_u32(this.addr(), NI_MAP_VTABLE);
+    e.call(NI_MAP_CLEAR, &args![this]);
+    fn_004d4f10(e, this);
+}
+
+// Translated from 004d4e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<TESObject *, bool>::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor, and the memory freed when bit 0 of `flags` is set; returns
+/// `this`.
+pub fn ni_tmap_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTMap>,
+    flags: u32,
+) -> Ptr<NiTMap> {
+    fn_004d4eb0(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004d4f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<TESObject *, bool>>, TESObject *,
+/// bool>::_scalar_deleting_destructor_` (Xbox PDB): the base destructor body,
+/// and the memory freed when bit 0 of `flags` is set; returns `this`.
+pub fn ni_tmap_base_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTMap>,
+    flags: u32,
+) -> Ptr<NiTMap> {
+    fn_004d4f10(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -9561,6 +11681,88 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x004ce380,
             fn_004ce380(Ptr<InventoryChanges>, u32, u32, u8, u8, u8, u8, i32, u32) -> f32
+        ),
+        entry!(
+            0x004d0650,
+            inventory_changes_get_inventory_item(Ptr<InventoryChanges>, u32, u32) -> u32
+        ),
+        entry!(0x004d0900, fn_004d0900(Ptr<InventoryChanges>, u8) -> f32),
+        entry!(
+            0x004d0f40,
+            fn_004d0f40(Ptr<InventoryChanges>, u8, u8) -> i32
+        ),
+        entry!(0x004d1180, fn_004d1180(Ptr<InventoryChanges>, u32) -> f32),
+        entry!(0x004d1360, fn_004d1360(Ptr) -> bool),
+        entry!(0x004d1380, fn_004d1380(Ptr<InventoryChanges>, i32) -> bool),
+        entry!(0x004d1440, fn_004d1440(Ptr<InventoryChanges>)),
+        entry!(0x004d1610, fn_004d1610(Ptr<InventoryChanges>)),
+        entry!(0x004d17a0, fn_004d17a0(Ptr<InventoryChanges>)),
+        entry!(0x004d1960, fn_004d1960(Ptr<InventoryChanges>)),
+        entry!(
+            0x004d2480,
+            inventory_changes_run_scripts(Ptr<InventoryChanges>, u32) -> bool
+        ),
+        entry!(
+            0x004d26d0,
+            fn_004d26d0(Ptr<InventoryChanges>, Ptr<InventoryChanges>, u32, u8)
+        ),
+        entry!(
+            0x004d3660,
+            inventory_changes_clear_all_change_items(Ptr<InventoryChanges>)
+        ),
+        entry!(0x004d3960, fn_004d3960(Ptr<InventoryChanges>) -> u16),
+        entry!(0x004d3ab0, fn_004d3ab0(Ptr<InventoryChanges>)),
+        entry!(
+            0x004d3cc0,
+            inventory_changes_load_game(Ptr<InventoryChanges>)
+        ),
+        entry!(0x004d4030, fn_004d4030(Ptr<InventoryChanges>)),
+        entry!(0x004d4090, fn_004d4090(Ptr<InventoryChanges>, u32)),
+        entry!(0x004d4160, fn_004d4160(Ptr<InventoryChanges>, u32)),
+        entry!(0x004d42f0, fn_004d42f0(Ptr<InventoryChanges>, u32)),
+        entry!(
+            0x004d43c0,
+            fn_004d43c0(Ptr<InventoryChanges>, u32, u32) -> i32
+        ),
+        entry!(
+            0x004d4480,
+            fn_004d4480(Ptr<InventoryChanges>, u32, i32) -> u32
+        ),
+        entry!(
+            0x004d4530,
+            fn_004d4530(Ptr<InventoryChanges>, u32, u32, u32) -> i32
+        ),
+        entry!(
+            0x004d4830,
+            fn_004d4830(Ptr<InventoryChanges>, u32, u32, u32) -> bool
+        ),
+        entry!(
+            0x004d4b00,
+            inventory_changes_get_item_group(Ptr<InventoryChanges>, u32, u32)
+        ),
+        entry!(
+            0x004d4bd0,
+            inventory_changes_get_repair_item_group(Ptr<InventoryChanges>, u32, u32)
+        ),
+        entry!(
+            0x004d4ca0,
+            inventory_changes_get_item_mod_group(Ptr<InventoryChanges>, u32, u32)
+        ),
+        entry!(0x004d4de0, fn_004d4de0(Ptr<NiTMap>, u32) -> Ptr<NiTMap>),
+        entry!(
+            0x004d4e10,
+            ni_tmap_scalar_deleting_destructor(Ptr<NiTMap>, u32) -> Ptr<NiTMap>
+        ),
+        entry!(0x004d4e40, fn_004d4e40(Ptr<NiTMap>, u32) -> Ptr<NiTMap>),
+        entry!(0x004d4eb0, fn_004d4eb0(Ptr<NiTMap>)),
+        entry!(0x004d4f10, fn_004d4f10(Ptr<NiTMap>)),
+        entry!(
+            0x004d4f40,
+            ni_tmap_base_scalar_deleting_destructor(Ptr<NiTMap>, u32) -> Ptr<NiTMap>
+        ),
+        entry!(
+            0x0076b630,
+            item_change_item_change_ov3(Ptr<ItemChange>) -> Ptr<ItemChange>
         ),
     ]
 }
@@ -14392,5 +16594,1377 @@ mod tests {
         transfer_all(&mut e, 0x004ce340, this, owner, PLAYER, [0, 0, 0, 1], -1, 0);
         assert!(calls(&e, SHOW_MESSAGE).is_empty());
         assert_eq!(calls(&e, AFTER_TRANSFER_REFRESH).len(), 1);
+    }
+
+    // ---- Tests of the fourth session (004d0650 to 0076b630) ----
+
+    /// The float weight of a fake form, the "excluded" word its virtual 0x94
+    /// returns and the "is an actor" word its virtual 0x100 returns.
+    const F_WEIGHT: u32 = 0x60;
+    const O_EXCLUDED: u32 = 0x54;
+    const O_IS_ACTOR: u32 = 0x58;
+    /// The float each entry point (by number) leaves in its output.
+    const ENTRY_POINT_OUTPUT: u32 = 0x011c_7000;
+    /// The word `00418550(extra, owner)` stores in a fake extra list.
+    const X_OWNER_SET: u32 = 0x78;
+    /// The leveled item position of a fake extra list.
+    const X_LEVELED_POSITION: u32 = 0x7c;
+
+    /// `tx8()` plus the doubles of the fourth session.
+    fn fx() -> Engine {
+        let mut e = tx8();
+        e.map(0x0102_0000, 0x2000);
+        e.map(0x011c_0000, 0x4_0000);
+        e.set_global(HEAVY_WEAPON_WEIGHT, 10.0f64);
+        e.set_global(ONE_DOUBLE, 1.0f64);
+        e.register(ITEM_SET_NUMBER, |e, a| {
+            e.mem.set_u32(a[0] + 4, a[1]);
+            Ret::default()
+        });
+        e.register(ITEM_SET_FORM, |e, a| {
+            e.mem.set_u32(a[0] + 8, a[1]);
+            Ret::default()
+        });
+        e.register(SETTING_FLOAT_ADDRESS, |_, a| returns(a[0] + 0x10));
+        e.register(WEIGHT_FORM_GET_WEIGHT, |e, a| {
+            returns_float(e.mem.f32(a[0] + F_WEIGHT))
+        });
+        e.register(GET_WEIGHT, |e, a| returns_float(e.mem.f32(a[0])));
+        e.register(EXTRA_SET_OWNER_EXTRA, |e, a| {
+            e.mem.set_u32(a[0] + X_OWNER_SET, a[1]);
+            Ret::default()
+        });
+        e.register(HANDLE_ENTRY_POINT, |e, a| {
+            let value = e.mem.f32(ENTRY_POINT_OUTPUT + 4 * a[0]);
+            e.mem.set_f32(a[2], value);
+            Ret::default()
+        });
+        stub(&mut e, ACTOR_WEIGHT_CHANGED);
+        e.register(ABS_INT, |_, a| returns((a[0] as i32).unsigned_abs()));
+        e.register(EXTRA_LEVELED_POSITION, |e, a| {
+            returns(e.mem.u32(a[0] + X_LEVELED_POSITION))
+        });
+        e.register(vcall_address(0), |_, _| Ret::default());
+        e.register(vcall_address(0x10), |_, _| Ret::default());
+        e.register(vcall_address(0x48), |_, _| Ret::default());
+        e.register(vcall_address(0x94), |e, a| {
+            returns(e.mem.u32(a[0] + O_EXCLUDED))
+        });
+        e.register(vcall_address(0x100), |e, a| {
+            returns(e.mem.u32(a[0] + O_IS_ACTOR))
+        });
+        e
+    }
+
+    fn set_float(e: &mut Engine, base: u32, offset: u32, value: f32) {
+        e.mem.set_f32(base + offset, value);
+    }
+
+    /// A form of type `form_type` with the weight `weight`.
+    fn weighted_form(e: &mut Engine, form_type: u8, weight: f32) -> u32 {
+        let f = big_form(e, form_type, 0);
+        set_float(e, f, F_WEIGHT, weight);
+        f
+    }
+
+    /// An extra list with a leveled item and `count` items.
+    fn leveled_extra(e: &mut Engine, count: u32, position: u32) -> u32 {
+        let x = extra(e);
+        set(e, x, X_LEVELED_ITEM, 1);
+        set(e, x, X_COUNT, count);
+        set(e, x, X_LEVELED_POSITION, position);
+        x
+    }
+
+    #[test]
+    fn inventory_item_without_an_entry_comes_from_the_container() {
+        let mut e = fx();
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let wanted = big_form(&mut e, 0x20, 1);
+        let other = big_form(&mut e, 0x21, 1);
+        give_container(&mut e, owner, &[(2, other), (3, wanted)]);
+        let item = e.call(0x004d0650, &args![this, wanted, 0u32]).u32();
+        assert_ne!(item, 0);
+        assert_eq!((e.mem.u32(item + 4), e.mem.u32(item + 8)), (3, wanted));
+        let missing = big_form(&mut e, 0x22, 1);
+        assert_eq!(e.call(0x004d0650, &args![this, missing, 0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn inventory_item_with_an_entry_adds_the_container_count_and_copies_lists() {
+        let mut e = fx();
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let form_a = big_form(&mut e, 0x20, 1);
+        give_container(&mut e, owner, &[(2, form_a)]);
+        // A plain first list: only it is copied.
+        let (plain, other) = (extra(&mut e), extra(&mut e));
+        let change = entry(&mut e, form_a, &[plain, other], 5);
+        put_entry(&mut e, this, change);
+        let item = e.call(0x004d0650, &args![this, form_a, 0u32]).u32();
+        assert_eq!(e.mem.u32(item + 4), 7);
+        assert_eq!(items(&e, e.mem.u32(item)), vec![plain]);
+        // A default first list: all lists are copied.
+        let (default, second) = (extra(&mut e), extra(&mut e));
+        set(&mut e, default, X_DEFAULT, 1);
+        let form_b = big_form(&mut e, 0x20, 1);
+        let change = entry(&mut e, form_b, &[default, second], 1);
+        put_entry(&mut e, this, change);
+        let item = e.call(0x004d0650, &args![this, form_b, 0u32]).u32();
+        assert_eq!(items(&e, e.mem.u32(item)), vec![default, second]);
+        // An entry without lists gives an item without a list.
+        let form_c = big_form(&mut e, 0x20, 1);
+        let change = entry(&mut e, form_c, &[], 4);
+        put_entry(&mut e, this, change);
+        let item = e.call(0x004d0650, &args![this, form_c, 0u32]).u32();
+        assert_eq!(e.mem.u32(item), 0);
+        assert_eq!(e.mem.u32(item + 4), 4);
+        assert_eq!(calls(&e, LIST_DESTROY).len(), 1);
+    }
+
+    /// Inventory weight fixture: a container with a light object (weight 2,
+    /// three of them) and an excluded one, and an armor entry (weight 5, two).
+    fn weight_setup(e: &mut Engine, actor: u32) -> (Ptr<InventoryChanges>, u32, u32) {
+        let owner = object(e);
+        e.mem.set_u32(owner + O_IS_ACTOR, actor);
+        let this = inventory(e, &[], owner);
+        e.set(this, InventoryChanges::fcontainerweight, -1.0f32);
+        let light = weighted_form(e, 0x20, 2.0);
+        let heavy = weighted_form(e, 0x20, 100.0);
+        e.mem.set_u32(heavy + O_EXCLUDED, 1);
+        let armor = weighted_form(e, 0x18, 5.0);
+        give_container(e, owner, &[(3, light), (1, heavy)]);
+        let change = entry(e, armor, &[], 2);
+        put_entry(e, this, change);
+        (this, light, owner)
+    }
+
+    #[test]
+    fn inventory_weight_counts_container_and_changes_and_is_cached() {
+        let mut e = fx();
+        let (this, light, _) = weight_setup(&mut e, 0);
+        assert_eq!(e.call(0x004d0900, &args![this, 0u32]).f32(), 16.0);
+        assert_eq!(e.get(this, InventoryChanges::fcontainerweight), 16.0);
+        // The result is cached while it is not -1.0.
+        set_float(&mut e, light, F_WEIGHT, 50.0);
+        assert_eq!(e.call(0x004d0900, &args![this, 0u32]).f32(), 16.0);
+        assert!(calls(&e, ACTOR_WEIGHT_CHANGED).is_empty());
+    }
+
+    #[test]
+    fn inventory_weight_applies_the_light_item_factor() {
+        let mut e = fx();
+        set_float(&mut e, ENTRY_POINT_OUTPUT, ENTRY_POINT_LIGHT_ITEMS * 4, 1.0);
+        set_float(&mut e, LIGHT_WEIGHT_FACTOR_SETTING, 0x10, 0.5);
+        set_float(&mut e, LIGHT_WEIGHT_LIMIT_SETTING, 0x10, 3.0);
+        let (this, _, _) = weight_setup(&mut e, 0);
+        // 3 * (2 * 0.5) + 2 * 5: the armor is over the limit.
+        assert_eq!(e.call(0x004d0900, &args![this, 0u32]).f32(), 13.0);
+    }
+
+    #[test]
+    fn inventory_weight_tells_an_actor_owner_the_change() {
+        let mut e = fx();
+        let (this, _, owner) = weight_setup(&mut e, 1);
+        assert_eq!(e.call(0x004d0900, &args![this, 0u32]).f32(), 16.0);
+        assert_eq!(
+            calls(&e, ACTOR_WEIGHT_CHANGED),
+            vec![vec![owner + 0xa4, 0x2e, 0, 16.0f32.to_bits(), 0]]
+        );
+        assert_eq!(
+            calls(&e, HANDLE_ENTRY_POINT)[0][..2],
+            [ENTRY_POINT_LIGHT_ITEMS, owner]
+        );
+    }
+
+    #[test]
+    fn inventory_weight_of_a_worn_armor_counts_once_at_full_weight() {
+        let mut e = fx();
+        let owner = object(&mut e);
+        e.mem.set_u32(owner + O_IS_ACTOR, 1);
+        let this = inventory(&mut e, &[], owner);
+        e.set(this, InventoryChanges::fcontainerweight, -1.0f32);
+        give_container(&mut e, owner, &[]);
+        let armor = weighted_form(&mut e, 0x18, 5.0);
+        let worn = worn_plain_extra(&mut e);
+        let change = entry(&mut e, armor, &[worn], 2);
+        put_entry(&mut e, this, change);
+        assert_eq!(e.call(0x004d0900, &args![this, 0u32]).f32(), 10.0);
+    }
+
+    #[test]
+    fn inventory_weight_of_weapons_uses_the_modded_weight_per_stack() {
+        let mut e = fx();
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        e.set(this, InventoryChanges::fcontainerweight, -1.0f32);
+        give_container(&mut e, owner, &[]);
+        let weapon = weighted_form(&mut e, 0x28, 4.0);
+        set_float(&mut e, weapon, WEAPON_WEIGHT_FORM, 3.0);
+        let plain = entry(&mut e, weapon, &[], 2);
+        put_entry(&mut e, this, plain);
+        // Without lists: the count times the plain weight.
+        assert_eq!(e.call(0x004d0900, &args![this, 0u32]).f32(), 8.0);
+        // One of two weapons carries a weight mod (mod action 4, value 1).
+        let mut e = fx();
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        e.set(this, InventoryChanges::fcontainerweight, -1.0f32);
+        give_container(&mut e, owner, &[]);
+        let weapon = weighted_form(&mut e, 0x28, 4.0);
+        set_float(&mut e, weapon, WEAPON_WEIGHT_FORM, 3.0);
+        set(&mut e, weapon, WEAPON_MOD_ACTION, 4);
+        set_float(&mut e, weapon, WEAPON_MOD_ACTION_VALUE, 1.0);
+        let modded = extra(&mut e);
+        set(&mut e, modded, X_COUNT, 1);
+        set(&mut e, modded, X_HAS_MODS, 1);
+        set(&mut e, modded, X_SLOT_ACTIVE, 1);
+        let stack = entry(&mut e, weapon, &[modded], 2);
+        put_entry(&mut e, this, stack);
+        // (2 - 1) * 4 + 1 * (3 - 1)
+        assert_eq!(e.call(0x004d0900, &args![this, 0u32]).f32(), 6.0);
+    }
+
+    #[test]
+    fn inventory_value_sums_container_and_changes_with_the_filters() {
+        let mut e = fx();
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let plain = big_form(&mut e, 0x20, 10);
+        let caps = big_form(&mut e, 0x20, 1);
+        e.mem.set_u32(caps + 0xc, 0xf);
+        let excluded = big_form(&mut e, 0x20, 50);
+        e.mem.set_u32(excluded + O_EXCLUDED, 1);
+        let unknown = big_form(&mut e, 0x20, 0xffff_ffff);
+        let loose = big_form(&mut e, 0x20, 7);
+        give_container(
+            &mut e,
+            owner,
+            &[(2, plain), (100, caps), (1, excluded), (4, unknown)],
+        );
+        let change = entry(&mut e, loose, &[], 3);
+        put_entry(&mut e, this, change);
+        assert_eq!(e.call(0x004d0f40, &args![this, 0u32, 0u32]).i32(), 41);
+        assert_eq!(e.call(0x004d0f40, &args![this, 0u32, 1u32]).i32(), 141);
+        assert_eq!(e.call(0x004d0f40, &args![this, 1u32, 0u32]).i32(), 91);
+        // An entry for a container object adds its number to the count and is
+        // not counted again.
+        let listed = entry(&mut e, plain, &[], 4);
+        put_entry(&mut e, this, listed);
+        assert_eq!(e.call(0x004d0f40, &args![this, 0u32, 0u32]).i32(), 81);
+    }
+
+    #[test]
+    fn player_weight_mode_is_one_at_0x7bc() {
+        let mut e = fx();
+        let player = e.mem.alloc(0x800);
+        assert!(!e.call(0x004d1360, &args![player]).bool());
+        e.mem.set_u32(player + 0x7bc, 1);
+        assert!(e.call(0x004d1360, &args![player]).bool());
+    }
+
+    #[test]
+    fn worn_weight_counts_worn_items_and_a_shared_weapon_once() {
+        let mut e = fx();
+        e.register(ACTOR_PROCESS, |e, a| returns(e.mem.u32(a[0] + 0x68)));
+        e.register(vcall_address(0x148), |e, a| returns(e.mem.u32(a[0] + 0x60)));
+        e.register(vcall_address(0x14c), |e, a| returns(e.mem.u32(a[0] + 0x64)));
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        give_container(&mut e, owner, &[]);
+        let armor = weighted_form(&mut e, 0x18, 5.0);
+        let ammo = weighted_form(&mut e, 0x29, 1.0);
+        let weapon = weighted_form(&mut e, 0x28, 4.0);
+        set_float(&mut e, weapon, WEAPON_WEIGHT_FORM, 3.0);
+        let spare = weighted_form(&mut e, 0x20, 9.0);
+        for (form, number) in [(armor, 2), (ammo, 7), (weapon, 4), (spare, 3)] {
+            let worn = worn_plain_extra(&mut e);
+            // The spare form is not worn.
+            if form == spare {
+                set(&mut e, worn, X_WORN, 0);
+            }
+            let change = entry(&mut e, form, &[worn], number);
+            put_entry(&mut e, this, change);
+        }
+        let actor = object(&mut e);
+        let process = object(&mut e);
+        e.mem.set_u32(actor + 0x68, process);
+        // Without a shared weapon item: 2 * 5 + 4 * 3.
+        assert_eq!(e.call(0x004d1180, &args![this, actor]).f32(), 22.0);
+        // The same item for both virtuals: the weapon counts once.
+        let item = e.mem.alloc(0x10);
+        e.mem.set_u32(item + 8, weapon);
+        e.mem.set_u32(process + 0x60, item);
+        e.mem.set_u32(process + 0x64, item);
+        assert_eq!(e.call(0x004d1180, &args![this, actor]).f32(), 13.0);
+    }
+
+    #[test]
+    fn leveled_position_search_looks_at_every_extra_list() {
+        let mut e = fx();
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let form_a = big_form(&mut e, 0x20, 1);
+        let (first, second) = (leveled_extra(&mut e, 1, 3), leveled_extra(&mut e, 1, 8));
+        let change = entry(&mut e, form_a, &[first, second], 2);
+        put_entry(&mut e, this, change);
+        assert!(e.call(0x004d1380, &args![this, 8i32]).bool());
+        assert!(e.call(0x004d1380, &args![this, 3i32]).bool());
+        assert!(!e.call(0x004d1380, &args![this, 4i32]).bool());
+    }
+
+    #[test]
+    fn leveled_items_of_the_container_are_expanded_once() {
+        let mut e = fx();
+        e.register(REFERENCE_GET_CALC_LEVEL, |_, _| returns(7));
+        e.register(LEVELED_ITEM_CHANCE, |e, a| {
+            returns_float(e.mem.f32(a[0] + 8))
+        });
+        for address in [
+            CONTAINER_TEMP_CONSTRUCT,
+            CONTAINER_TEMP_DESTRUCT,
+            CONTAINER_SCALE_COUNTS,
+            CONTAINER_ADD_TO_CHANGES,
+        ] {
+            stub(&mut e, address);
+        }
+        e.register(LEVELED_ITEM_FILL_CONTAINER, |_, a| returns(a[2]));
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let (first, second, plain) = (
+            big_form(&mut e, 0x34, 0),
+            big_form(&mut e, 0x34, 0),
+            big_form(&mut e, 0x20, 0),
+        );
+        // The chance object is read at +8: 0.5 for the first, 1.0 for the second.
+        let chance_a = e.mem.alloc(0x10);
+        set_float(&mut e, chance_a, 8, 0.5);
+        let chance_b = e.mem.alloc(0x10);
+        set_float(&mut e, chance_b, 8, 1.0);
+        let records: Vec<u32> = [
+            (-3i32, first, chance_a),
+            (1, plain, 0),
+            (2, second, chance_b),
+        ]
+        .iter()
+        .map(|(count, form, chance)| {
+            let record = e.mem.alloc(0x10);
+            e.mem.set_u32(record, *count as u32);
+            e.mem.set_u32(record + 4, *form);
+            e.mem.set_u32(record + 8, *chance);
+            record
+        })
+        .collect();
+        let head = list(&mut e, &records);
+        e.mem.set_u32(owner + 0x18, head);
+        // The leveled object number 1 is already in the changes.
+        let form_a = big_form(&mut e, 0x20, 1);
+        let seen = leveled_extra(&mut e, 1, 1);
+        let change = entry(&mut e, form_a, &[seen], 1);
+        put_entry(&mut e, this, change);
+        e.call_log = Some(vec![]);
+        e.call(0x004d1440, &args![this]);
+        // |count| 3 and the owner's level 7 fill the temporary container.
+        let fill = calls(&e, LEVELED_ITEM_FILL_CONTAINER);
+        assert_eq!(fill.len(), 1);
+        assert_eq!((fill[0][0], fill[0][1], fill[0][2]), (first + 0x30, 7, 3));
+        assert_eq!(fill[0][4], 0);
+        // The chance 0.5 scales it; index 0 is added to the changes.
+        let scale = calls(&e, CONTAINER_SCALE_COUNTS);
+        assert_eq!(scale, vec![vec![fill[0][3], 0.5f32.to_bits()]]);
+        assert_eq!(
+            calls(&e, CONTAINER_ADD_TO_CHANGES),
+            vec![vec![fill[0][3], 0, this.addr()]]
+        );
+        assert_eq!(calls(&e, CONTAINER_TEMP_DESTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn container_objects_become_entries_with_their_own_extra_list() {
+        let mut e = fx();
+        e.register(GET_FORM_AS_HEALTH_FORM, |_, a| returns(a[0] + 0x100));
+        e.register(CONTAINER_OBJECT_ATTACH_EXTRA, |_, _| Ret::default());
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let (plain, leveled, bare) = (
+            big_form(&mut e, 0x20, 0),
+            big_form(&mut e, 0x34, 0),
+            big_form(&mut e, 0x21, 0),
+        );
+        let records: Vec<u32> = [(2u32, plain, 0x99u32), (5, leveled, 0x98), (4, bare, 0)]
+            .iter()
+            .map(|(count, form, third)| {
+                let record = e.mem.alloc(0x10);
+                e.mem.set_u32(record, *count);
+                e.mem.set_u32(record + 4, *form);
+                e.mem.set_u32(record + 8, *third);
+                record
+            })
+            .collect();
+        let head = list(&mut e, &records);
+        e.mem.set_u32(owner + 0x18, head);
+        e.call(0x004d1610, &args![this]);
+        let attach = calls(&e, CONTAINER_OBJECT_ATTACH_EXTRA);
+        assert_eq!(attach.len(), 1);
+        assert_eq!((attach[0][0], attach[0][2]), (0x99, plain + 0x100));
+        let created = inventory_list(&e, this);
+        assert_eq!(created.len(), 1);
+        let entry_form = e.mem.u32(created[0] + 8);
+        assert_eq!(entry_form, plain);
+        let lists = items(&e, e.mem.u32(created[0]));
+        assert_eq!(lists, vec![attach[0][1]]);
+        assert_eq!(e.mem.u32(lists[0] + X_COUNT), 2);
+    }
+
+    #[test]
+    fn leveled_extra_lists_are_taken_out_of_the_changes() {
+        let mut e = fx();
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let form_a = big_form(&mut e, 0x20, 1);
+        let form_b = big_form(&mut e, 0x20, 1);
+        let (leveled_a, kept) = (leveled_extra(&mut e, 3, 0), extra(&mut e));
+        let first = entry(&mut e, form_a, &[leveled_a, kept], 4);
+        let leveled_b = leveled_extra(&mut e, 2, 1);
+        let second = entry(&mut e, form_b, &[leveled_b], 2);
+        put_entry(&mut e, this, first);
+        put_entry(&mut e, this, second);
+        e.call(0x004d17a0, &args![this]);
+        assert_eq!(
+            calls(&e, vcall_address(0x48)),
+            vec![vec![owner, 0x0800_0000]]
+        );
+        // The first entry keeps its plain list and 4 - 3 items.
+        assert_eq!(items(&e, e.mem.u32(first)), vec![kept]);
+        assert_eq!(e.mem.u32(first + 4), 1);
+        assert!(calls(&e, DESTRUCTOR).contains(&vec![leveled_a, 1]));
+        // The second is left empty with number 0: it goes away.
+        assert_eq!(inventory_list(&e, this), vec![first]);
+        assert!(calls(&e, ITEM_CHANGE_DELETE).contains(&vec![second, 1]));
+        assert!(calls(&e, DESTRUCTOR).contains(&vec![leveled_b, 1]));
+    }
+
+    /// Doubles for the scratch reference `fn_004d2480` works on.
+    fn run_scripts_setup(e: &mut Engine) -> u32 {
+        let temporary = e.mem.alloc(0x100);
+        e.set_global(TEMP_REF_GLOBAL, temporary);
+        for address in [
+            SECTION_LOCK,
+            SECTION_UNLOCK,
+            REFERENCE_SET_PARENT_CELL,
+            REFERENCE_STORE_OWNER_WORD,
+            REFERENCE_SET_EXTRA,
+            REFERENCE_SET_OBJECT_REFERENCE,
+            EXTRA_REMOVE_ALL_COPYABLE,
+            EXTRA_SET_SCRIPT_EVENTS,
+        ] {
+            stub(e, address);
+        }
+        e.register(REFERENCE_PARENT_CELL, |_, a| returns(a[0] + 0x30));
+        e.register(OWNER_STORED_WORD, |_, a| returns(a[0] + 1));
+        e.register(SCRIPT_OBJECT_TEST, |_, _| returns(1));
+        e.register(SCRIPT_RUN, |_, _| returns(1));
+        temporary
+    }
+
+    #[test]
+    fn run_scripts_runs_each_list_script_on_the_scratch_reference() {
+        let mut e = fx();
+        let temporary = run_scripts_setup(&mut e);
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let (script_a, script_b) = (big_form(&mut e, 0x11, 0), big_form(&mut e, 0x11, 0));
+        let not_script = big_form(&mut e, 0x20, 0);
+        let (x, y, z) = (extra(&mut e), extra(&mut e), extra(&mut e));
+        set(&mut e, x, X_SCRIPT, script_a);
+        set(&mut e, y, X_SCRIPT, script_b);
+        set(&mut e, z, X_SCRIPT, not_script);
+        let form_a = big_form(&mut e, 0x20, 0);
+        let change = entry(&mut e, form_a, &[x, y, z], 1);
+        put_entry(&mut e, this, change);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x004d2480, &args![this, owner]).bool());
+        // A script that is not of form type 0x11 is not run.
+        assert_eq!(
+            calls(&e, SCRIPT_RUN),
+            vec![
+                vec![script_a, temporary, 0, owner, 0],
+                vec![script_b, temporary, 0, owner, 0]
+            ]
+        );
+        assert_eq!(
+            calls(&e, REFERENCE_SET_EXTRA),
+            vec![vec![temporary, x], vec![temporary, y]]
+        );
+        assert_eq!(
+            calls(&e, REFERENCE_SET_OBJECT_REFERENCE),
+            vec![
+                vec![temporary, form_a],
+                vec![temporary, form_a],
+                vec![temporary, 0]
+            ]
+        );
+        assert_eq!(
+            calls(&e, REFERENCE_SET_PARENT_CELL),
+            vec![vec![temporary, owner + 0x30], vec![temporary, 0]]
+        );
+        assert_eq!(
+            calls(&e, SECTION_LOCK),
+            vec![vec![RUN_SCRIPTS_LOCK_OBJECT, 0]]
+        );
+        assert_eq!(
+            calls(&e, SECTION_UNLOCK),
+            vec![vec![RUN_SCRIPTS_LOCK_OBJECT]]
+        );
+        // Nothing is done without an owner.
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x004d2480, &args![this, 0u32]).bool());
+        assert!(calls(&e, SECTION_LOCK).is_empty());
+    }
+
+    #[test]
+    fn run_scripts_stops_the_lists_of_an_entry_when_a_script_marks_the_count_dirty() {
+        let mut e = fx();
+        run_scripts_setup(&mut e);
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let dirty = this.addr() + 0x10;
+        e.register_double(SCRIPT_RUN, move |e, _| {
+            e.mem.set_u8(dirty, 1);
+            returns(0)
+        });
+        let (script_a, script_b) = (big_form(&mut e, 0x11, 0), big_form(&mut e, 0x11, 0));
+        let (x, y) = (extra(&mut e), extra(&mut e));
+        set(&mut e, x, X_SCRIPT, script_a);
+        set(&mut e, y, X_SCRIPT, script_b);
+        let form_a = big_form(&mut e, 0x20, 0);
+        let change = entry(&mut e, form_a, &[x, y], 1);
+        put_entry(&mut e, this, change);
+        e.call_log = Some(vec![]);
+        // The second script is not run, the result is false (the run said
+        // false) and the flag is cleared again.
+        assert!(!e.call(0x004d2480, &args![this, owner]).bool());
+        assert_eq!(calls(&e, SCRIPT_RUN).len(), 1);
+        assert!(!e.get(this, InventoryChanges::bcountdirty));
+    }
+
+    #[test]
+    fn container_objects_are_copied_into_the_target_changes() {
+        let mut e = fx();
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let target_owner = object(&mut e);
+        let target = inventory(&mut e, &[], target_owner);
+        let (form_a, leveled) = (big_form(&mut e, 0x20, 1), big_form(&mut e, 0x7e, 1));
+        give_container(&mut e, owner, &[(3, form_a), (2, leveled)]);
+        e.call_log = Some(vec![]);
+        e.call(0x004d26d0, &args![this, target, 0xaa00u32, 0u32]);
+        let copied = inventory_list(&e, target);
+        assert_eq!(copied.len(), 1);
+        assert_eq!(
+            (e.mem.u32(copied[0] + 8), e.mem.u32(copied[0] + 4)),
+            (form_a, 3)
+        );
+        let lists = items(&e, e.mem.u32(copied[0]));
+        assert_eq!(lists.len(), 1);
+        assert_eq!(e.mem.u32(lists[0] + X_COUNT), 3);
+        assert_eq!(e.mem.u32(lists[0] + X_OWNER_SET), 0xaa00);
+        // The leveled item's new item was only deleted.
+        assert!(!calls(&e, ITEM_CHANGE_DELETE).is_empty());
+        let guard = &calls(&e, SCOPE_GUARD_OPEN)[0];
+        assert_eq!(&guard[1..], &[0x36, 1, SOURCE_FILE_NAME, 0x26b7]);
+    }
+
+    #[test]
+    fn changes_entries_are_copied_into_the_target_changes() {
+        let mut e = fx();
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let target_owner = object(&mut e);
+        let target = inventory(&mut e, &[], target_owner);
+        give_container(&mut e, owner, &[]);
+        // An entry without lists becomes one counted list.
+        let form_d = big_form(&mut e, 0x20, 1);
+        let bare = entry(&mut e, form_d, &[], 2);
+        put_entry(&mut e, this, bare);
+        // An entry with a list keeps it, owned by the new owner.
+        let form_e = big_form(&mut e, 0x21, 1);
+        let held = extra(&mut e);
+        set(&mut e, held, X_COUNT, 4);
+        let with_list = entry(&mut e, form_e, &[held], 4);
+        put_entry(&mut e, this, with_list);
+        // An entry with a number of 0 or less is left out.
+        let form_f = big_form(&mut e, 0x22, 1);
+        let negative = entry(&mut e, form_f, &[], -1);
+        put_entry(&mut e, this, negative);
+        e.call(0x004d26d0, &args![this, target, 0xbb00u32, 0u32]);
+        let copied = inventory_list(&e, target);
+        assert_eq!(copied.len(), 2);
+        assert_eq!(
+            (e.mem.u32(copied[0] + 8), e.mem.u32(copied[0] + 4)),
+            (form_d, 2)
+        );
+        let lists = items(&e, e.mem.u32(copied[0]));
+        assert_eq!(
+            (
+                e.mem.u32(lists[0] + X_COUNT),
+                e.mem.u32(lists[0] + X_OWNER_SET)
+            ),
+            (2, 0xbb00)
+        );
+        assert_eq!(
+            (e.mem.u32(copied[1] + 8), e.mem.u32(copied[1] + 4)),
+            (form_e, 4)
+        );
+        assert_eq!(items(&e, e.mem.u32(copied[1])), vec![held]);
+        assert_eq!(e.mem.u32(held + X_OWNER_SET), 0xbb00);
+    }
+
+    #[test]
+    fn clearing_the_changes_deletes_lists_without_a_container_and_unlisted_ones() {
+        let mut e = fx();
+        e.register(REFR_HAS_CONTAINER, |e, a| returns(e.mem.u32(a[0] + 0x30)));
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let (no_container, with_container) = (e.mem.alloc(0x100), e.mem.alloc(0x100));
+        e.mem.set_u32(with_container + 0x30, 1);
+        let (x1, x2, y) = (extra(&mut e), extra(&mut e), extra(&mut e));
+        set(&mut e, x1, X_ORIGINAL, no_container);
+        set(&mut e, y, X_ORIGINAL, with_container);
+        set(&mut e, y, X_ITEMS_IN_LIST, 1);
+        set(&mut e, y, X_COUNT, 1);
+        let (form_a, form_b) = (big_form(&mut e, 0x20, 1), big_form(&mut e, 0x21, 1));
+        let first = entry(&mut e, form_a, &[x1, x2], 2);
+        let second = entry(&mut e, form_b, &[y], 1);
+        put_entry(&mut e, this, first);
+        put_entry(&mut e, this, second);
+        e.call_log = Some(vec![]);
+        e.call(0x004d3660, &args![this]);
+        // Both entries are gone; the lists with an original reference are
+        // deleted (the one without is not).
+        assert_eq!(inventory_list(&e, this), Vec::<u32>::new());
+        let deleted = calls(&e, DESTRUCTOR);
+        assert!(deleted.contains(&vec![x1, 1]));
+        assert!(deleted.contains(&vec![y, 1]));
+        assert!(!deleted.contains(&vec![x2, 1]));
+        assert_eq!(
+            calls(&e, ITEM_CHANGE_DELETE),
+            vec![vec![first, 1], vec![second, 1]]
+        );
+        assert_eq!(calls(&e, EXTRA_REMOVE_COUNT), vec![vec![y]]);
+    }
+
+    #[test]
+    fn clearing_keeps_a_list_the_references_own_changes_still_hold() {
+        let mut e = fx();
+        e.register(REFR_HAS_CONTAINER, |e, a| returns(e.mem.u32(a[0] + 0x30)));
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let reference = e.mem.alloc(0x100);
+        e.mem.set_u32(reference + 0x30, 1);
+        let y = extra(&mut e);
+        set(&mut e, y, X_ORIGINAL, reference);
+        let form_a = big_form(&mut e, 0x20, 1);
+        let change = entry(&mut e, form_a, &[y], 1);
+        put_entry(&mut e, this, change);
+        // The reference's changes (kept at +0x1c of its extra list, +0x40)
+        // hold an entry for the form with the list y.
+        let other_owner = object(&mut e);
+        let other = inventory(&mut e, &[], other_owner);
+        let kept = entry(&mut e, form_a, &[y], 1);
+        put_entry(&mut e, other, kept);
+        e.mem.set_u32(reference + 0x40 + 0x1c, other.addr());
+        e.call_log = Some(vec![]);
+        e.call(0x004d3660, &args![this]);
+        assert!(!calls(&e, DESTRUCTOR).contains(&vec![y, 1]));
+        assert_eq!(inventory_list(&e, this), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn save_size_adds_the_entries_and_logs_it_when_asked() {
+        let mut e = fx();
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let form_a = big_form(&mut e, 0x20, 1);
+        let listed = extra(&mut e);
+        set(&mut e, listed, X_SAVE_SIZE, 30);
+        let change = entry(&mut e, form_a, &[listed], 2);
+        put_entry(&mut e, this, change);
+        assert_eq!(e.call(0x004d3960, &args![this]).u16(), 2 + 12 + 30);
+        e.mem.set_u32(SAVE_OBJECT + 0x20, 1);
+        assert_eq!(e.call(0x004d3960, &args![this]).u16(), 6 + 2 + 6 + 12 + 30);
+        assert!(calls(&e, ERROR_LOG).is_empty());
+        e.mem.set_u8(LOG_FLAG, 1);
+        e.call(0x004d3960, &args![this]);
+        assert_eq!(
+            calls(&e, ERROR_LOG).last().unwrap(),
+            &vec![0x0101_2c78, 56, 0x284e, SOURCE_FILE_NAME]
+        );
+    }
+
+    #[test]
+    fn save_writes_the_entries_in_a_length_prefixed_block_and_load_reads_them_back() {
+        let mut e = fx();
+        e.set_global(PLAYER_GLOBAL, PLAYER);
+        e.mem.set_u32(SAVE_OBJECT + 0x14, STREAM);
+        e.mem.set_u32(SAVE_OBJECT + 0x20, 1);
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let form_a = big_form(&mut e, 0x20, 1);
+        e.mem.set_u32(form_a + 0xc, 0x1234);
+        let change = entry(&mut e, form_a, &[], 2);
+        put_entry(&mut e, this, change);
+        e.call(0x004d3ab0, &args![this]);
+        assert_eq!(e.mem.u32(STREAM), 0x424c_4f4b);
+        // The block length (the bytes after the tag) and the entry count.
+        assert_eq!(e.mem.u16(STREAM + 4), 22);
+        assert_eq!(e.mem.u16(STREAM + 6), 1);
+        // The entry: its own block, form id, number and list count.
+        assert_eq!(e.mem.u32(STREAM + 8), 0x424c_4f4b);
+        assert_eq!(e.mem.u16(STREAM + 12), 14);
+        assert_eq!(e.mem.u32(STREAM + 14), 0x1234);
+        assert_eq!(e.mem.u32(STREAM + 18), 2);
+        assert_eq!(e.mem.u32(STREAM + 22), 0);
+        assert_eq!(e.mem.u32(SAVE_OBJECT + 0x14), STREAM + 26);
+        // Reading it back into another inventory.
+        e.mem.set_u32(SAVE_OBJECT + 0x14, STREAM);
+        e.mem.set_u32(LOOKUP_CELL, form_a);
+        e.register(RT_DYNAMIC_CAST, |_, a| {
+            returns(if a[3] == TYPE_TES_BOUND_OBJECT {
+                a[0]
+            } else {
+                0
+            })
+        });
+        let other_owner = object(&mut e);
+        let loaded = inventory(&mut e, &[], other_owner);
+        e.call(0x004d3cc0, &args![loaded]);
+        let entries = inventory_list(&e, loaded);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            (e.mem.u32(entries[0] + 8), e.mem.u32(entries[0] + 4)),
+            (form_a, 2)
+        );
+        assert_eq!(e.mem.u32(SAVE_OBJECT + 0x14), STREAM + 26);
+        assert!(calls(&e, SAVE_LOAD_LOG).is_empty());
+    }
+
+    #[test]
+    fn save_logs_the_bytes_and_a_wrong_load_tag_and_length() {
+        let mut e = fx();
+        e.mem.set_u32(SAVE_OBJECT + 0x14, STREAM);
+        e.mem.set_u8(LOG_FLAG, 1);
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        e.call(0x004d3ab0, &args![this]);
+        // Without save game blocks only the 2 byte entry count was written.
+        assert_eq!(
+            calls(&e, ERROR_LOG).last().unwrap(),
+            &vec![0x0101_536c, 2, 0x286a, SOURCE_FILE_NAME]
+        );
+        // Loading with blocks: a wrong tag is logged and a length that is too
+        // long is reported as an underrun.
+        e.mem.set_u32(SAVE_OBJECT + 0x14, STREAM);
+        e.mem.set_u32(SAVE_OBJECT + 0x20, 1);
+        e.mem.set_u8(SAVE_OBJECT + 0x80, 9);
+        e.mem.set_u32(STREAM, 0x1111_1111);
+        e.mem.set_u16(STREAM + 4, 100);
+        e.mem.set_u16(STREAM + 6, 0);
+        e.register(RT_DYNAMIC_CAST, |_, a| returns(a[0]));
+        let loaded = inventory(&mut e, &[], owner);
+        e.call_log = Some(vec![]);
+        e.call(0x004d3cc0, &args![loaded]);
+        let logged = calls(&e, SAVE_LOAD_LOG);
+        assert_eq!(logged[0], vec![0x0101_56a8, SOURCE_FILE_NAME, 0x2871, 9]);
+        // Read 8 bytes of a block of 100 + 4.
+        assert_eq!(
+            logged[1],
+            vec![
+                0x0101_5440,
+                100 + 4 + STREAM - (STREAM + 8),
+                SOURCE_FILE_NAME,
+                0x2884,
+                9
+            ]
+        );
+    }
+
+    #[test]
+    fn load_deletes_entries_whose_form_is_missing() {
+        let mut e = fx();
+        e.mem.set_u32(SAVE_OBJECT + 0x14, STREAM);
+        // No blocks: an entry count of 1, then the item: form id, number,
+        // list count 0.
+        e.mem.set_u16(STREAM, 1);
+        e.mem.set_u32(STREAM + 2, 0x77);
+        e.mem.set_u32(STREAM + 6, 5);
+        e.mem.set_u32(STREAM + 10, 0);
+        e.mem.set_u32(LOOKUP_CELL, 0);
+        e.register(RT_DYNAMIC_CAST, |_, a| returns(a[0]));
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        e.call_log = Some(vec![]);
+        e.call(0x004d3cc0, &args![this]);
+        assert_eq!(inventory_list(&e, this), Vec::<u32>::new());
+        assert_eq!(calls(&e, ITEM_CHANGE_DELETE).len(), 1);
+    }
+
+    #[test]
+    fn after_load_step_runs_on_every_entry() {
+        let mut e = fx();
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let (form_a, form_b) = (big_form(&mut e, 0x20, 1), big_form(&mut e, 0x21, 1));
+        let (x, y) = (extra(&mut e), extra(&mut e));
+        let (first, second) = (
+            entry(&mut e, form_a, &[x], 1),
+            entry(&mut e, form_b, &[y], 1),
+        );
+        put_entry(&mut e, this, first);
+        put_entry(&mut e, this, second);
+        e.call(0x004d4030, &args![this]);
+        assert_eq!(
+            calls(&e, EXTRA_AFTER_LOAD_GAME),
+            vec![vec![x, 0, 0, 0, form_a], vec![y, 0, 0, 0, form_b]]
+        );
+    }
+
+    /// Doubles for the save/load buffer words: the fields at +0x17, +0x20,
+    /// +0x24 and +0x2c of the buffer object.
+    fn buffer_setup(e: &mut Engine) -> u32 {
+        let buffer = object(e);
+        e.mem.set_u32(buffer + 0x17, 0x33);
+        e.mem.set_u32(buffer + 0x2c, 0x44);
+        e.register(BUFFER_WORD_17_GET, |e, a| {
+            let value = e.mem.u32(a[0] + 0x17);
+            e.mem.set_u32(a[1], value);
+            returns(a[1])
+        });
+        e.register(BUFFER_WORD_2C_GET, |e, a| {
+            let value = e.mem.u32(a[0] + 0x2c);
+            e.mem.set_u32(a[1], value);
+            returns(a[1])
+        });
+        for (address, offset) in [
+            (BUFFER_WORD_17_SET, 0x17),
+            (BUFFER_WORD_20_SET, 0x20),
+            (BUFFER_WORD_24_SET, 0x24),
+            (BUFFER_WORD_2C_SET, 0x2c),
+        ] {
+            e.register_double(address, move |e, a| {
+                e.mem.set_u32(a[0] + offset, a[1]);
+                Ret::default()
+            });
+        }
+        e.register(vcall_address(0), |_, _| returns(0x11));
+        e.register(vcall_address(4), |_, _| returns(0x22));
+        e.register(SAVE_BUFFER_START_SIZED, |_, _| returns(0x55));
+        e.register(LOAD_BUFFER_LOAD_DATA, |_, _| Ret::default());
+        buffer
+    }
+
+    #[test]
+    fn buffer_save_writes_a_counted_list_with_the_mode_words_switched() {
+        let mut e = fx();
+        let buffer = buffer_setup(&mut e);
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let (form_a, form_b) = (big_form(&mut e, 0x20, 1), big_form(&mut e, 0x21, 1));
+        let (x, y) = (extra(&mut e), extra(&mut e));
+        let (first, second) = (
+            entry(&mut e, form_a, &[x], 1),
+            entry(&mut e, form_b, &[y], 3),
+        );
+        put_entry(&mut e, this, first);
+        put_entry(&mut e, this, second);
+        e.call_log = Some(vec![]);
+        e.call(0x004d4090, &args![this, buffer]);
+        assert_eq!(
+            calls(&e, SAVE_BUFFER_SAVE_FORM_ID),
+            vec![vec![buffer, form_a, 0], vec![buffer, form_b, 0]]
+        );
+        assert_eq!(
+            calls(&e, EXTRA_SAVE_GAME_BUFFER),
+            vec![vec![x, buffer], vec![y, buffer]]
+        );
+        assert_eq!(
+            calls(&e, SAVE_BUFFER_END_SIZED).last().unwrap(),
+            &vec![buffer, 2, 0x55]
+        );
+        // The mode word is set to 0 and the kind word to 0x400, then both
+        // are put back.
+        assert_eq!(
+            calls(&e, BUFFER_WORD_20_SET),
+            vec![vec![buffer, 0], vec![buffer, 0x11]]
+        );
+        assert_eq!(
+            calls(&e, BUFFER_WORD_17_SET),
+            vec![vec![buffer, 0x400], vec![buffer, 0x33]]
+        );
+        assert_eq!(e.mem.u32(buffer + 0x17), 0x33);
+    }
+
+    #[test]
+    fn buffer_load_reads_the_entries_and_adds_even_a_failed_one() {
+        let mut e = fx();
+        let buffer = buffer_setup(&mut e);
+        e.register(RT_DYNAMIC_CAST, |_, a| returns(a[0]));
+        e.register(LOAD_BUFFER_LOAD_FORM_ID, |_, _| returns(1));
+        // The first value is the entry count, the next ones the list counts.
+        let first = std::cell::Cell::new(true);
+        e.register_double(LOAD_BUFFER_LOAD_SIZED, move |_, _| {
+            returns(if first.replace(false) { 2 } else { 0 })
+        });
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let form_a = big_form(&mut e, 0x20, 1);
+        e.mem.set_u32(LOOKUP_CELL, form_a);
+        e.call_log = Some(vec![]);
+        e.call(0x004d4160, &args![this, buffer]);
+        let loaded = inventory_list(&e, this);
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(e.mem.u32(loaded[0] + 8), form_a);
+        assert_eq!(
+            calls(&e, BUFFER_WORD_24_SET),
+            vec![vec![buffer, 0], vec![buffer, 0x22]]
+        );
+        assert_eq!(
+            calls(&e, BUFFER_WORD_2C_SET),
+            vec![vec![buffer, 0], vec![buffer, 0x44]]
+        );
+        // A form that cannot be found: the item is deleted and a null item
+        // is added all the same.
+        let other_owner = object(&mut e);
+        let again = inventory(&mut e, &[], other_owner);
+        let once = std::cell::Cell::new(true);
+        e.register_double(LOAD_BUFFER_LOAD_SIZED, move |_, _| {
+            returns(if once.replace(false) { 1 } else { 0 })
+        });
+        e.mem.set_u32(LOOKUP_CELL, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x004d4160, &args![again, buffer]);
+        assert_eq!(calls(&e, ITEM_CHANGE_DELETE).len(), 1);
+        assert_eq!(inventory_list(&e, again), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn buffer_after_load_step_runs_on_every_list() {
+        let mut e = fx();
+        let buffer = buffer_setup(&mut e);
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let form_a = big_form(&mut e, 0x20, 1);
+        let x = extra(&mut e);
+        let first = entry(&mut e, form_a, &[x], 1);
+        put_entry(&mut e, this, first);
+        e.call_log = Some(vec![]);
+        e.call(0x004d42f0, &args![this, buffer]);
+        assert_eq!(
+            calls(&e, EXTRA_AFTER_LOAD_GAME_BUFFER),
+            vec![vec![x, buffer, form_a]]
+        );
+        assert_eq!(calls(&e, BUFFER_WORD_24_SET).len(), 2);
+        assert_eq!(e.mem.u32(buffer + 0x24), 0x22);
+    }
+
+    #[test]
+    fn extra_list_position_is_found_and_read_back() {
+        let mut e = fx();
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let (form_a, form_b) = (big_form(&mut e, 0x20, 1), big_form(&mut e, 0x21, 1));
+        let (x, y, z) = (extra(&mut e), extra(&mut e), extra(&mut e));
+        let (first, second) = (
+            entry(&mut e, form_a, &[x, y], 1),
+            entry(&mut e, form_b, &[z], 1),
+        );
+        put_entry(&mut e, this, first);
+        put_entry(&mut e, this, second);
+        assert_eq!(e.call(0x004d43c0, &args![this, form_a, y]).i32(), 1);
+        assert_eq!(e.call(0x004d43c0, &args![this, form_b, z]).i32(), 0);
+        // A list of another entry, an unknown form or null arguments: -1.
+        assert_eq!(e.call(0x004d43c0, &args![this, form_a, z]).i32(), -1);
+        assert_eq!(e.call(0x004d43c0, &args![this, 0u32, z]).i32(), -1);
+        assert_eq!(e.call(0x004d43c0, &args![this, form_b, 0u32]).i32(), -1);
+        assert_eq!(e.call(0x004d4480, &args![this, form_a, 1i32]).u32(), y);
+        assert_eq!(e.call(0x004d4480, &args![this, form_a, 0i32]).u32(), x);
+        assert_eq!(e.call(0x004d4480, &args![this, form_a, 2i32]).u32(), 0);
+        assert_eq!(e.call(0x004d4480, &args![this, form_a, -1i32]).u32(), 0);
+        assert_eq!(e.call(0x004d4480, &args![this, 0u32, 0i32]).u32(), 0);
+    }
+
+    const CALLBACK: u32 = 0x0300_0000;
+
+    /// What the callback of the item walks saw: `(lists, number, form, user)`.
+    type Offered = std::rc::Rc<std::cell::RefCell<Vec<(u32, u32, u32, u32)>>>;
+
+    /// Registers a callback that records the offered stacks and stops after
+    /// `stop_after` calls.
+    fn recording_callback(e: &mut Engine, stop_after: usize) -> Offered {
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let log = seen.clone();
+        e.register_double(CALLBACK, move |e, a| {
+            log.borrow_mut().push((
+                e.mem.u32(a[0]),
+                e.mem.u32(a[0] + 4),
+                e.mem.u32(a[0] + 8),
+                a[1],
+            ));
+            let stop = log.borrow().len() >= stop_after;
+            returns(stop as u32)
+        });
+        seen
+    }
+
+    #[test]
+    fn each_item_stack_is_offered_to_the_callback() {
+        let mut e = fx();
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let (held, excluded, loose) = (
+            big_form(&mut e, 0x20, 1),
+            big_form(&mut e, 0x21, 1),
+            big_form(&mut e, 0x22, 1),
+        );
+        e.mem.set_u32(excluded + O_EXCLUDED, 1);
+        give_container(&mut e, owner, &[(2, held), (6, excluded)]);
+        let x = extra(&mut e);
+        let change = entry(&mut e, loose, &[x], 3);
+        put_entry(&mut e, this, change);
+        let lists = e.mem.u32(change);
+        let seen = recording_callback(&mut e, 99);
+        assert_eq!(
+            e.call(0x004d4530, &args![this, CALLBACK, 0x77u32, 0u32])
+                .i32(),
+            3
+        );
+        assert_eq!(
+            *seen.borrow(),
+            vec![
+                (0, 2, held, 0x77),
+                (0, 6, excluded, 0x77),
+                (lists, 3, loose, 0x77)
+            ]
+        );
+        // With the filter flag the excluded form is skipped.
+        let seen = recording_callback(&mut e, 99);
+        assert_eq!(
+            e.call(0x004d4530, &args![this, CALLBACK, 0x78u32, 1u32])
+                .i32(),
+            2
+        );
+        assert_eq!(seen.borrow().len(), 2);
+        // The callback stops the walk by returning true.
+        let seen = recording_callback(&mut e, 1);
+        assert_eq!(
+            e.call(0x004d4530, &args![this, CALLBACK, 0x79u32, 0u32])
+                .i32(),
+            1
+        );
+        assert_eq!(seen.borrow().len(), 1);
+    }
+
+    #[test]
+    fn the_resumable_iteration_gives_one_stack_per_call_and_then_stops() {
+        let mut e = fx();
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let (held, excluded, loose) = (
+            big_form(&mut e, 0x20, 1),
+            big_form(&mut e, 0x21, 1),
+            big_form(&mut e, 0x22, 1),
+        );
+        e.mem.set_u32(excluded + O_EXCLUDED, 1);
+        give_container(&mut e, owner, &[(2, held), (6, excluded)]);
+        let x = extra(&mut e);
+        let change = entry(&mut e, loose, &[x], 3);
+        put_entry(&mut e, this, change);
+        let lists = e.mem.u32(change);
+        let iterator = e.mem.alloc(0x20);
+        let out = e.mem.alloc(8);
+        let next = |e: &mut Engine, flags: u32| {
+            e.call(0x004d4830, &args![this, iterator, out, flags])
+                .bool()
+        };
+        assert!(next(&mut e, 1));
+        assert_eq!(e.mem.u32(out), iterator);
+        assert_eq!(
+            (
+                e.mem.u32(iterator),
+                e.mem.u32(iterator + 4),
+                e.mem.u32(iterator + 8)
+            ),
+            (0, 2, held)
+        );
+        // The excluded form is skipped with the filter flag; the changes
+        // entry follows with its lists shared.
+        assert!(next(&mut e, 1));
+        assert_eq!(
+            (
+                e.mem.u32(iterator),
+                e.mem.u32(iterator + 4),
+                e.mem.u32(iterator + 8)
+            ),
+            (lists, 3, loose)
+        );
+        assert_eq!(e.mem.u8(iterator + 0x14), 1);
+        assert!(!next(&mut e, 1));
+    }
+
+    #[test]
+    fn item_groups_collect_the_matching_stacks_and_delete_the_others() {
+        let mut e = fx();
+        let (this, held, loose) = stack_setup(&mut e);
+        let group = list(&mut e, &[]);
+        e.call_log = Some(vec![]);
+        e.call(0x004d4b00, &args![this, loose, group]);
+        let collected = items(&e, group);
+        assert_eq!(collected.len(), 1);
+        assert_eq!(
+            (e.mem.u32(collected[0] + 8), e.mem.u32(collected[0] + 4)),
+            (loose, 3)
+        );
+        let deleted = calls(&e, ITEM_CHANGE_DELETE);
+        assert_eq!(deleted.len(), 1);
+        assert_ne!(deleted[0][0], collected[0]);
+        assert_eq!(calls(&e, FAST_ITERATOR_DESTRUCT).len(), 1);
+        // Nothing is done without a form or a list.
+        e.call_log = Some(vec![]);
+        e.call(0x004d4b00, &args![this, 0u32, group]);
+        e.call(0x004d4b00, &args![this, held, 0u32]);
+        assert!(e.call_log.as_ref().unwrap().len() == 2);
+    }
+
+    #[test]
+    fn repair_item_group_keeps_the_stacks_the_test_accepts() {
+        let mut e = fx();
+        e.register(REPAIR_ITEM_TEST, |e, a| {
+            returns((e.mem.u8(a[0] + F_TYPE) == 0x20 && a[1] == 0x99) as u32)
+        });
+        let (this, _, loose) = stack_setup(&mut e);
+        let group = list(&mut e, &[]);
+        e.call_log = Some(vec![]);
+        e.call(0x004d4bd0, &args![this, 0x99u32, group]);
+        let collected = items(&e, group);
+        assert_eq!(collected.len(), 1);
+        assert_eq!(e.mem.u32(collected[0] + 8), loose);
+        assert_eq!(calls(&e, ITEM_CHANGE_DELETE).len(), 1);
+    }
+
+    #[test]
+    fn mod_group_collects_the_mod_objects_of_the_weapon() {
+        let mut e = fx();
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let weapon = big_form(&mut e, 0x28, 1);
+        let (mod_a, mod_b, other_mod, plain) = (
+            big_form(&mut e, 0x67, 1),
+            big_form(&mut e, 0x67, 1),
+            big_form(&mut e, 0x67, 1),
+            big_form(&mut e, 0x20, 1),
+        );
+        set(&mut e, weapon, WEAPON_MOD_OBJECT, mod_a);
+        set(&mut e, weapon, WEAPON_MOD_OBJECT + 8, mod_b);
+        give_container(
+            &mut e,
+            owner,
+            &[(1, mod_a), (1, plain), (1, other_mod), (1, mod_b)],
+        );
+        let group = list(&mut e, &[]);
+        e.call_log = Some(vec![]);
+        e.call(0x004d4ca0, &args![this, weapon, group]);
+        let forms: Vec<u32> = items(&e, group)
+            .iter()
+            .map(|item| e.mem.u32(item + 8))
+            .collect();
+        assert_eq!(forms, vec![mod_a, mod_b]);
+        // Only the plain form's stack was deleted.
+        assert_eq!(calls(&e, ITEM_CHANGE_DELETE).len(), 1);
+        // A weapon that is no weapon, or no list: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x004d4ca0, &args![this, plain, group]);
+        e.call(0x004d4ca0, &args![this, weapon, 0u32]);
+        assert_eq!(items(&e, group).len(), 2);
+        assert!(calls(&e, ITEM_CHANGE_DELETE).is_empty());
+    }
+
+    #[test]
+    fn the_form_map_is_built_with_zeroed_buckets_and_torn_down() {
+        let mut e = Engine::new();
+        e.map(0x0200_0000, 0x1_0000);
+        e.register(MEMSET, |e, a| {
+            for i in 0..a[2] {
+                e.mem.set_u8(a[0] + i, a[1] as u8);
+            }
+            Ret::default()
+        });
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        e.register(NI_ALLOCATE, |e, a| returns(e.mem.alloc(a[0])));
+        for address in [NI_MAP_CLEAR, NI_FREE] {
+            stub(&mut e, address);
+        }
+        let map = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004d4de0, &args![map, 0x25u32]).u32(), map);
+        assert_eq!(e.mem.u32(map), NI_MAP_VTABLE);
+        assert_eq!((e.mem.u32(map + 4), e.mem.u32(map + 0xc)), (0x25, 0));
+        let table = e.mem.u32(map + 8);
+        assert_eq!(calls(&e, NI_ALLOCATE), vec![vec![0x94]]);
+        assert_eq!(calls(&e, MEMSET), vec![vec![table, 0, 0x94]]);
+        // The base constructor leaves the base vtable.
+        let base = e.mem.alloc(0x10);
+        e.call(0x004d4e40, &args![base, 8u32]);
+        assert_eq!(e.mem.u32(base), NI_MAP_BASE_VTABLE);
+        // The destructors clear the map; the deleting ones free the map.
+        e.call_log = Some(vec![]);
+        e.call(0x004d4eb0, &args![map]);
+        assert_eq!(calls(&e, NI_MAP_CLEAR), vec![vec![map], vec![map]]);
+        assert_eq!(calls(&e, NI_FREE), vec![vec![table]]);
+        assert_eq!(e.mem.u32(map), NI_MAP_BASE_VTABLE);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004d4e10, &args![map, 0u32]).u32(), map);
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        e.call(0x004d4e10, &args![map, 1u32]);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![map]]);
+        e.call_log = Some(vec![]);
+        e.call(0x004d4f10, &args![base]);
+        assert_eq!(calls(&e, NI_MAP_CLEAR), vec![vec![base]]);
+        e.call(0x004d4f40, &args![base, 1u32]);
+        assert_eq!(calls(&e, NI_MAP_CLEAR).len(), 2);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![base]]);
+    }
+
+    #[test]
+    fn empty_item_constructor_zeroes_the_three_words() {
+        let mut e = Engine::new();
+        e.map(0x0200_0000, 0x1000);
+        let item = e.mem.alloc(0xc);
+        for offset in [0, 4, 8] {
+            e.mem.set_u32(item + offset, 0xdead);
+        }
+        assert_eq!(e.call(0x0076b630, &args![item]).u32(), item);
+        assert_eq!(
+            (e.mem.u32(item), e.mem.u32(item + 4), e.mem.u32(item + 8)),
+            (0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn stacks_of_script_forms_get_their_scripts_run() {
+        let mut e = fx();
+        e.register(REFR_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], BIG_VTABLE);
+            returns(a[0])
+        });
+        e.register(EXTRA_SET_SCRIPT, |e, a| {
+            e.mem.set_u32(a[0] + X_SCRIPT, a[1]);
+            Ret::default()
+        });
+        e.register(SCRIPT_MAKE_EVENT_LIST, |_, _| returns(0));
+        stub(&mut e, EXTRA_SET_SCRIPT_EVENTS);
+        stub(&mut e, SCRIPT_RUN);
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let (scripted, plain) = (big_form(&mut e, 0x20, 1), big_form(&mut e, 0x21, 1));
+        e.mem.set_u32(scripted + 0x44, 0x777);
+        give_container(&mut e, owner, &[(2, scripted), (3, plain)]);
+        e.call_log = Some(vec![]);
+        e.call(0x004d1960, &args![this]);
+        // Two new lists (count 1) with the script, each run once.
+        let runs = calls(&e, SCRIPT_RUN);
+        assert_eq!(runs.len(), 2);
+        assert!(runs
+            .iter()
+            .all(|run| run[0] == 0x777 && run[2..] == [0, 0, 0]));
+        let created = inventory_list(&e, this);
+        assert_eq!(created.len(), 1);
+        assert_eq!(e.mem.u32(created[0] + 8), scripted);
+        let lists = items(&e, e.mem.u32(created[0]));
+        assert_eq!(lists.len(), 2);
+        assert!(lists.iter().all(|list| e.mem.u32(list + X_SCRIPT) == 0x777));
+        assert!(lists.iter().all(|list| e.mem.u32(list + X_COUNT) == 1));
+        // Now the entry has a script: it is only run again on each list.
+        e.call_log = Some(vec![]);
+        e.call(0x004d1960, &args![this]);
+        assert_eq!(calls(&e, SCRIPT_RUN).len(), 2);
+        // An entry with a number but a list without a script: the list gets
+        // it and the missing lists are made.
+        let other = big_form(&mut e, 0x22, 1);
+        e.mem.set_u32(other + 0x44, 0x888);
+        let bare = extra(&mut e);
+        let change = entry(&mut e, other, &[bare], 3);
+        put_entry(&mut e, this, change);
+        e.call_log = Some(vec![]);
+        e.call(0x004d1960, &args![this]);
+        assert_eq!(e.mem.u32(bare + X_SCRIPT), 0x888);
+        assert_eq!(items(&e, e.mem.u32(change)).len(), 3);
+        let runs = calls(&e, SCRIPT_RUN);
+        assert_eq!(runs.iter().filter(|run| run[0] == 0x888).count(), 3);
+    }
+
+    #[test]
+    fn copying_a_container_object_with_an_entry_adds_the_numbers_and_honours_the_filters() {
+        let mut e = fx();
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let target_owner = object(&mut e);
+        let target = inventory(&mut e, &[], target_owner);
+        let (form_a, form_b, form_c) = (
+            big_form(&mut e, 0x20, 1),
+            big_form(&mut e, 0x21, 1),
+            big_form(&mut e, 0x22, 1),
+        );
+        // form_c is excluded (virtual 0x94).
+        e.mem.set_u32(form_c + O_EXCLUDED, 1);
+        give_container(&mut e, owner, &[(2, form_a), (2, form_b), (1, form_c)]);
+        // 2 + 3: five of form_a; 2 - 2: nothing of form_b; form_c has an entry.
+        let (entry_a, entry_b, entry_c) = (
+            entry(&mut e, form_a, &[], 3),
+            entry(&mut e, form_b, &[], -2),
+            entry(&mut e, form_c, &[], 1),
+        );
+        for change in [entry_a, entry_b, entry_c] {
+            put_entry(&mut e, this, change);
+        }
+        // Excluded forms are only left out when asked to.
+        e.call(0x004d26d0, &args![this, target, 0xaa00u32, 1u32]);
+        let copied = inventory_list(&e, target);
+        assert_eq!(copied.len(), 1);
+        assert_eq!(
+            (e.mem.u32(copied[0] + 8), e.mem.u32(copied[0] + 4)),
+            (form_a, 5)
+        );
+        let lists = items(&e, e.mem.u32(copied[0]));
+        assert_eq!(e.mem.u32(lists[0] + X_COUNT), 5);
+        let other_owner = object(&mut e);
+        let again = inventory(&mut e, &[], other_owner);
+        e.call(0x004d26d0, &args![this, again, 0xaa00u32, 0u32]);
+        let forms: Vec<u32> = inventory_list(&e, again)
+            .iter()
+            .map(|change| e.mem.u32(change + 8))
+            .collect();
+        assert_eq!(forms, vec![form_a, form_c]);
+    }
+
+    #[test]
+    fn copying_an_entry_with_a_script_keeps_its_lists() {
+        let mut e = fx();
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let target_owner = object(&mut e);
+        let target = inventory(&mut e, &[], target_owner);
+        let form_a = big_form(&mut e, 0x20, 1);
+        give_container(&mut e, owner, &[(2, form_a)]);
+        let scripted = extra(&mut e);
+        set(&mut e, scripted, X_SCRIPT, 0x777);
+        let change = entry(&mut e, form_a, &[scripted], 0);
+        put_entry(&mut e, this, change);
+        e.call(0x004d26d0, &args![this, target, 0xcc00u32, 0u32]);
+        let copied = inventory_list(&e, target);
+        assert_eq!(copied.len(), 1);
+        assert_eq!(e.mem.u32(copied[0] + 4), 2);
+        assert_eq!(items(&e, e.mem.u32(copied[0])), vec![scripted]);
+        assert_eq!(e.mem.u32(scripted + X_OWNER_SET), 0xcc00);
     }
 }
