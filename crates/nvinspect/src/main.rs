@@ -27,6 +27,8 @@ mod nif_cmd;
 mod nvse_cmd;
 mod particles_cmd;
 mod play_cmd;
+mod quest_coverage;
+mod quest_played;
 mod records;
 mod render_cmd;
 mod scripts_cmd;
@@ -273,6 +275,13 @@ COMMANDS FOR DATA FOLDERS ONLY:
     coverage nvse         the script extender (xNVSE) functions and NVSE
                           plugin opcodes the scripts call, against what
                           nv-rs runs (Markdown; also for a single plugin)
+    coverage functions    every script function the game's scripts call and
+                          its conditions ask, against what nv-rs carries
+                          out (Markdown)
+    coverage quests       every quest in the first plugin (FalloutNV.esm):
+                          stages, objectives, how it starts, the script
+                          functions its scripts need that nv-rs lacks, and
+                          how far it has been played: docs/QUEST_COVERAGE.md
 
 COMMANDS FOR ARCHIVES:
     info                  format, flags and what the archive holds

@@ -1112,8 +1112,9 @@ pub fn run(
         "records" => records(out, order),
         "files" => files(out, data_dir),
         "functions" => functions(out, order),
+        "quests" => crate::quest_coverage::quests(out, order),
         other => Err(CliError::Usage(format!(
-            "coverage: '{other}' isn't one of records, files, functions"
+            "coverage: '{other}' isn't one of records, files, functions, quests"
         ))),
     }
 }
