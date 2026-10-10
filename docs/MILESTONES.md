@@ -63,6 +63,12 @@ open, and original-game comparison is not done. Evidence and owners:
 [HANDOFF.md](HANDOFF.md). Next action: merge after both required checks,
 then publish play build 40 from merged main.
 
+Navigation-render batch collected as `6855902`: 36 preserved translations
+now covered by 31 focused tests, including nonempty triangle geometry and
+512 native style vectors. Combined lead checks passed formatting, lint
+and 13,312 engine tests. These functions remain outside live gameplay.
+Next action remains interface/render CI and play build publication.
+
 Next session: start with [HANDOFF.md](HANDOFF.md). Open tasks:
 [TASKS.md](TASKS.md); contributor rules: [CONTRIBUTING.md](../CONTRIBUTING.md).
 

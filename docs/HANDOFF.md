@@ -13,11 +13,11 @@ was no new rolling PR immediately after the merge. The ship
 script stopped after the merge/rebase; recovery verified main and recreated
 the automatically deleted remote branch with a normal push.
 
-Active in this session: a04 restarted from its partial file and a03 started
-its original task. Both are completing behavioral tests and final checks.
-a05 has now started its original AI task-manager task without reset.
-a06 is waiting for an available agent and still has its original task file:
-do not reset it before first restart. The interface/render work in p2 is
+Active in this session: a03 is completing behavioral tests and final checks.
+a05 and a06 have started their original AI task-manager and Havok world
+tasks without reset. a04 was collected as `6855902` (36 translations,
+31 focused tests); its next task is b0160, explosion.cpp, prepared but idle.
+The interface/render work in p2 is
 finished as PR #113 (`5b292ad`), awaiting CI and lead merge coordination.
 The session supports three child agents plus the lead; rotate translation
 slots while p2 runs. a01 was collected as `74f7fb1` (40 functions), and
@@ -28,8 +28,9 @@ remaining original slots. Play build remains 39.
 Validation: a01's 40 preserved translations pass their 38 focused tests
 after correcting an expectation for `00697010`'s unusual distance
 comparison; collection passed formatting, lint and 13,281 engine tests
-plus doc tests on the lead branch. a04's 36 preserved
-translations lacked tests, which are now being added. Native `nv-call`
+plus doc tests on the lead branch. a04's preserved translations now pass
+31 focused tests; collection passed formatting, lint and all 13,312 engine
+tests plus doc tests on the combined lead branch. Native `nv-call`
 spot checks cover five `00698620` point products and 512 `006a5da0` flag
 combinations (private evidence under `phase0/codex-audit`), not whole units.
 p2's 182 release-profile viewer tests and 15,108 core tests passed after
@@ -53,8 +54,8 @@ Next steps:
 1. Ship rolling PR #112 from `claude/engine-crate` once both checks pass.
    Later local commits belong to the following rolling batch.
 2. Collect completed slots with one `cycle.sh NN 0 0` at a time. Never
-   cycle an active agent's worktree. Restart a06 from its existing task
-   file before resetting it; then rotate a01's prepared next task.
+   cycle an active agent's worktree. Once capacity opens, rotate a01's
+   prepared next task, then a04's new task.
 3. Rebase interface/render PR #113 if another batch merges; retain both
    sides' tests and regenerate the ledger. Merge only with both checks
    passing. Detailed models and open wiring: FRAME_SKELETON.md.
@@ -69,8 +70,8 @@ Next steps:
 - **Phase 0** (engine map, ledger) is merged (#72). `docs/LEDGER.md` is the
   coverage table; regenerate with
   `cargo run -q --release --manifest-path scripts/ledger/Cargo.toml`.
-- **Engine crate** (`crates/engine`, ADR-0006): 10,303 of FalloutNV.exe's
-  functions are translated (15.5% of all, see LEDGER.md), each with a
+- **Engine crate** (`crates/engine`, ADR-0006): 10,339 of FalloutNV.exe's
+  functions are translated (15.6% of all, see LEDGER.md), each with a
   `// Translated from <addr>` marker and tests. They run in the crate's
   emulated 32-bit memory, not yet in play.
 - **Units finished:** main.cpp, actor.cpp (all 7 parts), playercharacter.cpp
@@ -82,8 +83,8 @@ Next steps:
   BSMenu/tile.cpp, highprocess.cpp parts 1, 2, 4 and 5, navmesh.cpp,
   pathinglocation.cpp, bgssceneinfo.cpp, bgssaveloadgame.cpp, and others.
 - **In progress (translation lanes; see "Resume here" for current owners):**
-  navmesh_util.cpp (a01), exteriorcellloader.cpp (a03), navmeshrender.cpp
-  (a04), aitaskmanager.cpp lane 2 (a05; MovementTaskData still needs its
+  navmesh_util.cpp (a01, prepared), exteriorcellloader.cpp (a03), explosion.cpp
+  (a04, prepared), aitaskmanager.cpp lane 2 (a05; MovementTaskData still needs its
   layout, see the file header), bhkworld.obj (a06).
 - **Phase 1 (frame skeleton) wiring:**
   - PR 1 frame map (#84), PR 2 `world::frame` (#86), PR 3 Bevy order from the
