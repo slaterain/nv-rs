@@ -23,8 +23,9 @@ comparison with the original game. Exact menu-input placement and GPU
 renderer work remain open in FRAME_SKELETON.md. Play build remains 39.
 
 Slot state: a01 is active on its prepared navigation continuation;
-a05 and a06 are completing their original AI task-manager and Havok world
-tasks. a03 was collected as `d68664d` (38 functions, 43 focused tests),
+a05 has finished its original task and awaits collection (28 complete,
+12 partial bodies). a06 was collected as `195ffaa` (40 complete functions);
+its next b0360 continuation is prepared but idle. a03 was collected as `d68664d` (38 functions, 43 focused tests),
 and its next b0331 pathmanager.cpp task is prepared but idle. a04's
 36-function navigation-render batch is collected as `622afc4` after
 rebase; its b0160 explosion.cpp task is prepared but idle. Runtime allows
@@ -32,7 +33,8 @@ three children plus the lead; rotate slots only after their owner stops.
 
 Collection validation: a01 passed 13,281 engine tests; a04 added 31
 focused tests and passed 13,312 combined engine tests; a03 passed 13,355
-combined engine tests. Formatting, engine lint and doc tests passed for
+combined engine tests. a06 passed 13,397 combined engine tests.
+Formatting, engine lint and doc tests passed for
 each collection. Native spot checks cover five `00698620` point products
 and 512 `006a5da0` flag combinations, not whole units. These translations
 are not newly playable behavior.
@@ -41,7 +43,9 @@ Lead Phase 2 preparation is isolated in managed worktree
 `%USERPROFILE%/.codex/worktrees/phase2-extra-data/wt-phase0`, branch
 `codex/phase2-extra-data`. Uncommitted files add an explicit engine-owned
 ExtraData list handle and four traced missing helpers; focused integration
-tests are compiling. No world/viewer consumer or save writer is added.
+tests passed, as did all 15,124 core tests. Lint/release checks are running.
+The installed-executable real-registry probe passes construction, add,
+lookup and detach. No world/viewer consumer or save writer is added.
 Private probes/native vectors and the read-only 11-save baseline are in
 `phase0/codex-audit`; FOS_SAVES.md records the decoder limits. Update this
 paragraph when the adapter checks finish; do not treat it as completed.
@@ -68,7 +72,7 @@ Next steps:
 - **Phase 0** (engine map, ledger) is merged (#72). `docs/LEDGER.md` is the
   coverage table; regenerate with
   `cargo run -q --release --manifest-path scripts/ledger/Cargo.toml`.
-- **Engine crate** (`crates/engine`, ADR-0006): 10,377 of FalloutNV.exe's
+- **Engine crate** (`crates/engine`, ADR-0006): 10,410 of FalloutNV.exe's
   functions are translated (15.7% of all, see LEDGER.md), each with a
   `// Translated from <addr>` marker and tests. They run in the crate's
   emulated 32-bit memory, not yet in play.

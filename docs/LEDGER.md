@@ -30,16 +30,16 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 10377 | 15.7% |
-| traced | 4512 | 6.8% |
+| translated | 10414 | 15.7% |
+| traced | 4508 | 6.8% |
 | platform | 3417 | 5.2% |
 | library | 21915 | 33.1% |
-| open | 26038 | 39.3% |
+| open | 26005 | 39.2% |
 | **all** | **66259** | |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14482 (35.7%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14515 (35.8%) are translated or traced.
 
-Rust cites 15513 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 15546 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -71,13 +71,13 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 65 | 0 | 21269 | 0 | - |
 | fallout shared | 10470 | 2065 | 3149 | 6303 | 993 | 0 | 0 | 3174 | 69.7% |
-| Havok SDK | 6591 | 1555 | 3499 | 53 | 77 | 0 | 0 | 6461 | 2.0% |
+| Havok SDK | 6591 | 1555 | 3499 | 53 | 78 | 0 | 0 | 6460 | 2.0% |
 | fallout/ai | 4849 | 1475 | 1888 | 2115 | 624 | 0 | 0 | 2110 | 56.5% |
 | fallout/interface | 2645 | 991 | 1247 | 583 | 741 | 0 | 0 | 1321 | 50.1% |
 | (unplaced) | 2353 | 470 | 0 | 30 | 411 | 1 | 0 | 1911 | 18.7% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 532 | 203 | 0 | 0 | 1053 | 41.1% |
 | NiMain | 1619 | 261 | 1134 | 3 | 76 | 0 | 0 | 1540 | 4.9% |
-| BSHavok | 1615 | 316 | 1134 | 22 | 139 | 0 | 0 | 1454 | 10.0% |
+| BSHavok | 1615 | 316 | 1134 | 59 | 134 | 0 | 0 | 1422 | 12.0% |
 | BSShader | 1549 | 608 | 350 | 0 | 142 | 1407 | 0 | 0 | - |
 | NiAnimation | 1279 | 171 | 903 | 0 | 32 | 0 | 0 | 1247 | 2.5% |
 | fallout/misc | 1045 | 171 | 353 | 425 | 134 | 0 | 0 | 486 | 53.5% |
@@ -130,7 +130,7 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | 1 | 143 | 117 | 97 | 34 | 3 | 0 | 9 |
 | 2 | 1575 | 583 | 1032 | 399 | 24 | 4 | 116 |
-| 3 | 4973 | 1303 | 3343 | 1111 | 154 | 26 | 339 |
+| 3 | 4973 | 1303 | 3351 | 1103 | 154 | 26 | 339 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 

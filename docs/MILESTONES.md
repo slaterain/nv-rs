@@ -76,6 +76,12 @@ Rolling #112 merged as `d854fbe`; #114 holds later batches. Interface/render
 preparation is isolated and not yet validated or used by the viewer.
 Next action: merge #113 after both checks and publish play build 40.
 
+Havok-world batch collected as `195ffaa`: 40 complete functions and
+42 focused tests; combined formatting, lint and 13,397 engine tests pass.
+The isolated Phase 2 list probe now passes with installed executable data
+and the real registry. No world consumer or save round trip is established.
+Next action remains interface/render CI and play build 40 publication.
+
 Next session: start with [HANDOFF.md](HANDOFF.md). Open tasks:
 [TASKS.md](TASKS.md); contributor rules: [CONTRIBUTING.md](../CONTRIBUTING.md).
 
