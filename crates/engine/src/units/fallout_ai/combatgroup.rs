@@ -5,9 +5,9 @@
 //! they fight), the two element classes of its arrays (`CombatTarget`,
 //! `CombatMember`) and the small `CombatGroupCluster` / `CombatSearchLocation`
 //! records. The unit is translated over several sessions, in address order:
-//! this part covers `0069cfe0`, `00985410` to `00986c60` and `009871c0` to
-//! `0098a4d0`; the next
-//! function of the queue is `0098a580`.
+//! this part covers `0069cfe0`, `00985410` to `00986c60`, `009871c0` to
+//! `0098a4d0` and `0098a580` to `0098de90`; the next function of the queue is
+//! `0098e3d0` (`CombatGroup::LoadGame`).
 //!
 //! Conventions of this file:
 //! - Layouts first (below); embedded structs that other units own
@@ -206,6 +206,213 @@ const FRACTION_HIGH: u32 = 0x0105_1680;
 /// 8 corners x 3 axes of bytes: non-zero means the corner takes the
 /// maximum on that axis.
 const CORNER_TABLE: u32 = 0x0108_d57c;
+
+/// `SearchLocations` (`BSSimpleArray<CombatSearchLocation, 1024>`, +0x110) accessors
+/// the game calls with the group: its size, and element `i` (address).
+const SEARCH_LOCATION_COUNT: u32 = 0x0098_8750;
+const SEARCH_LOCATION_AT: u32 = 0x0098_8770;
+/// Element `i` of a `BSSimpleArray<CombatSearchLocation>` (`array`, `i`).
+const SEARCH_LOCATION_ELEMENT: u32 = 0x0098_ebc0;
+/// The same through a different folded instance, used when a new entry is
+/// filled in (`array`, `i`).
+const SEARCH_LOCATION_SLOT: u32 = 0x006b_f670;
+/// `BSSimpleArray<CombatSearchLocation>` append of one uninitialised
+/// element: returns its index (`array`).
+const SEARCH_LOCATION_ADD: u32 = 0x006b_fd40;
+/// `BSSimpleArray<CombatSearchLocation>::RemoveAt` (`array`, `index`,
+/// `count`).
+const SEARCH_LOCATION_REMOVE: u32 = 0x0098_f430;
+/// The group's member `i` (address of its `CombatMember`), taking the group.
+const MEMBER_OF_GROUP: u32 = 0x0098_8790;
+/// Element `i` of the `BSSimpleArray<CombatSearchDoor>` at +0x120 (`array`,
+/// `i`), 12-byte elements.
+const SEARCH_DOOR_ELEMENT: u32 = 0x006a_7af0;
+/// Appends one uninitialised `CombatSearchDoor` and returns its index
+/// (`array`).
+const SEARCH_DOOR_ADD: u32 = 0x0097_8bc0;
+/// `BSSimpleArray<T *>::RemoveAt` (`array`, `index`, `count`) for the
+/// `ClusterArray`.
+const CLUSTER_REMOVE: u32 = 0x009a_4320;
+/// `BSSimpleArray<T *>::RemoveAt` (`array`, `index`, `count`, 0) that the
+/// search-door code uses to drop duplicate doors.
+const POINTER_ARRAY_REMOVE_RANGE: u32 = 0x0098_ebe0;
+/// `BSSimpleArray<T *>` (16 bytes) constructor and destructor.
+const POINTER_ARRAY_CONSTRUCT: u32 = 0x005e_04c0;
+const POINTER_ARRAY_DESTRUCT: u32 = 0x005e_04f0;
+/// Sorts a `BSSimpleArray` of 4-byte elements with a comparison function
+/// (`array`, `compare`).
+const ARRAY_SORT: u32 = 0x0072_9970;
+/// The comparison function `006bfb30` (unsigned order of two words).
+const COMPARE_WORDS: u32 = 0x006b_fb30;
+/// Collects the teleport doors within a radius of a point into an array
+/// (`space`, `point`, `radius`, `array`; cdecl).
+const COLLECT_TELEPORT_DOORS: u32 = 0x006d_9350;
+/// `BGSWorldLocation::GetDistance` (this, other), in ST0.
+const WORLD_LOCATION_DISTANCE: u32 = 0x0052_7a80;
+/// A scaled distance between two `BGSWorldLocation`s (this, other, scale
+/// `NiPoint3`), in ST0.
+const WORLD_LOCATION_SCALED_DISTANCE: u32 = 0x0052_7ac0;
+/// `TESObjectREFR::GetSpace`.
+const REFERENCE_SPACE: u32 = 0x0057_5ca0;
+/// `MobileObject::GetCurrentProcessType` (Xbox PDB).
+const PROCESS_TYPE: u32 = 0x0093_1850;
+/// The `thiscall` getter `00586150` (`[this + 0x9c]`): the combat state
+/// object of a process.
+const PROCESS_COMBAT_STATE: u32 = 0x0058_6150;
+/// `CombatState::CheckMovement` (Xbox PDB): (state, location, 1, 0), in AL.
+const COMBAT_STATE_CHECK_MOVEMENT: u32 = 0x009a_02a0;
+/// `CombatController::IsFleeing` (Xbox PDB), taking the process.
+const CONTROLLER_IS_FLEEING: u32 = 0x0098_1990;
+/// The process test `00981420(process)`, in AL.
+const PROCESS_TEST_00981420: u32 = 0x0098_1420;
+/// The process test `004013e0(process)`: bit 3 of the word at +8, in AL.
+const PROCESS_FLAG_BIT_3: u32 = 0x0040_13e0;
+/// `Actor::GetCurrentPathfindingGoal(actor, point)`, in AL.
+const ACTOR_PATHFINDING_GOAL: u32 = 0x008b_3840;
+/// `BSSimpleArray<ParentSpaceNode>::Add(array, point)`.
+const PATH_POINT_ARRAY_ADD: u32 = 0x0049_f210;
+/// `Actor::GetWeaponDamagePerSecond` (Xbox PDB), in ST0.
+const ACTOR_WEAPON_DAMAGE_PER_SECOND: u32 = 0x008b_e600;
+/// `Actor::CalculateCombatStrength(actor, damage per second)` (Xbox PDB),
+/// in ST0.
+const ACTOR_COMBAT_STRENGTH: u32 = 0x008a_cbe0;
+/// The combat-state values `00979260(state)` (damage per second) and
+/// `00453700(state)` (combat strength), in ST0.
+const STATE_DAMAGE_PER_SECOND: u32 = 0x0097_9260;
+const STATE_COMBAT_STRENGTH: u32 = 0x0045_3700;
+/// `Actor::IsFleeing(actor, 0)` (Xbox PDB), in AL.
+const ACTOR_IS_FLEEING_ARG: u32 = 0x008a_6650;
+/// Global holding the pointer of the player's actor (compared with the members' actors).
+const PLAYER: u32 = 0x011d_ea3c;
+/// `NiPoint3` default constructor (returns `this`).
+const POINT_CONSTRUCT: u32 = 0x0041_6870;
+/// `BGSWorldLocation` constructor from a point (`this`; point, space).
+const WORLD_LOCATION_FROM_POINT: u32 = 0x0043_a3c0;
+/// `BGSWorldLocation::IsLocationLoaded`, `GetCellOrWorld`.
+const WORLD_LOCATION_IS_LOADED: u32 = 0x0052_7a00;
+const WORLD_LOCATION_GET_CELL_OR_WORLD: u32 = 0x0052_7990;
+/// The point test `004390c0(this, other)`: whether the points are equal.
+const POINTS_EQUAL: u32 = 0x0043_90c0;
+/// `Pathing::FindClosestPointOnNavmesh` (Xbox PDB; cdecl: two words from
+/// `GetCellOrWorld`, the point, the result).
+const FIND_CLOSEST_POINT_ON_NAVMESH: u32 = 0x006d_6f80;
+/// `PathingLocation` (0x28 bytes): constructor from a point and the two
+/// words (`PathingLocation_ov7`), from an actor (`PathingLocation_ov3`),
+/// `ResolveNavMeshInfo(0)`, the destructor, and the call `006f4ed0(point)`.
+const PATHING_LOCATION_FROM_POINT: u32 = 0x006d_cee0;
+const PATHING_LOCATION_FROM_ACTOR: u32 = 0x006d_cd70;
+const PATHING_LOCATION_RESOLVE: u32 = 0x006d_d6f0;
+const PATHING_LOCATION_DESTRUCT: u32 = 0x004f_f7e0;
+const PATHING_LOCATION_SET_POINT: u32 = 0x006f_4ed0;
+/// `PathingLOSGridMap` constructor (`this`), and its method
+/// `006e0320(this, location, radius)`, `006e05b0(this)`.
+const LOS_GRID_MAP_CONSTRUCT: u32 = 0x006e_01d0;
+const LOS_GRID_MAP_UPDATE: u32 = 0x006e_0320;
+const LOS_GRID_MAP_STEP: u32 = 0x006e_05b0;
+/// `NiPointer` assignment (`address of the pointer`, `new value`).
+const NI_POINTER_ASSIGN: u32 = 0x0066_b0d0;
+/// The search constructors/destructors of the two arrays the search code
+/// builds from the members: `(array, count, 0, 0)` and the destructors,
+/// the `Add` of each, and the call `006d7ca0(&pointer, locations, angles)`.
+const LOCATION_ARRAY_CONSTRUCT: u32 = 0x0098_f5f0;
+const ANGLE_ARRAY_CONSTRUCT: u32 = 0x006d_b680;
+const LOCATION_ARRAY_DESTRUCT: u32 = 0x006f_2bb0;
+const ANGLE_ARRAY_DESTRUCT: u32 = 0x006d_b740;
+const LOCATION_ARRAY_ADD: u32 = 0x006c_f1b0;
+const ANGLE_ARRAY_ADD: u32 = 0x006d_c320;
+const LOS_GRID_MAP_APPLY: u32 = 0x006d_7ca0;
+/// `ClampAngle` (cdecl, `float`), in ST0.
+const CLAMP_ANGLE: u32 = 0x004b_1480;
+/// A random integer between its two arguments (cdecl; the code calls it with
+/// `(0, member count)` to pick a member; it goes through `00476c00`).
+const RANDOM_INDEX: u32 = 0x0094_4460;
+/// The `CombatDialogueManager*` global and `StartDialogue_ov2` (Xbox PDB;
+/// `this`, speaker, target, 4, flag, 0, 0 or the variants the callers use).
+const DIALOGUE_MANAGER: u32 = 0x011f_1708;
+const START_DIALOGUE: u32 = 0x0098_39b0;
+/// Operator `delete` (cdecl, one word).
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// Operator `new` of the game (cdecl, size).
+const OPERATOR_NEW_SMALL: u32 = 0x0040_1000;
+/// `memset(ptr, value, size)` (cdecl).
+const MEMSET: u32 = 0x0040_3d30;
+/// `min(a, b)` of two signed words (cdecl).
+const SIGNED_MIN: u32 = 0x004a_8f20;
+/// `minf` and `maxf` of two `float`s (cdecl): the smaller and the larger.
+const FLOAT_MIN: u32 = 0x0040_ebd0;
+/// The larger of two `float`s (cdecl).
+const FLOAT_MAX: u32 = 0x0040_4010;
+/// `00910b10(timer)`: sets the timer's target time (+4) to 0 (the map names it
+/// `TESWeightForm::InitializeDataComponent`, a folded body); `0097f220(timer)`
+/// sets the target time to -1.0.
+const TIMER_RESET: u32 = 0x0091_0b10;
+const TIMER_EXPIRE_NOW: u32 = 0x0097_f220;
+/// `CombatTimer::SaveGame` (this, buffer).
+const TIMER_SAVE: u32 = 0x009a_5eb0;
+/// `BGSSaveGameBuffer::SaveVariableSizedValue` (buffer, value).
+const SAVE_SIZED_VALUE: u32 = 0x0086_5f60;
+/// `BGSSaveGameBuffer::SaveFormID` (buffer, form, 0).
+const SAVE_FORM_ID_PLAIN: u32 = 0x0086_5db0;
+/// `PathingLOSGridMap::SaveGame` (grid, buffer).
+const LOS_GRID_MAP_SAVE: u32 = 0x006e_0c40;
+/// The group strategy's index (`this` = the strategy), `00726070`.
+const STRATEGY_INDEX: u32 = 0x0072_6070;
+/// The strategy chooser `009900f0(group)` (cdecl, one word).
+const CHOOSE_STRATEGY: u32 = 0x0099_00f0;
+/// The teleport reference of a door reference (`00568e50(door)`):
+/// null when it has none.
+const DOOR_TELEPORT_REFERENCE: u32 = 0x0056_8e50;
+/// `DoorTeleportData::GetTeleportWorldLocation` (this, out) and
+/// `CombatUtilities::CanActorExistInSpace` (cdecl: actor, location).
+const TELEPORT_WORLD_LOCATION: u32 = 0x0043_a390;
+const CAN_ACTOR_EXIST_IN_SPACE: u32 = 0x009a_96f0;
+/// `ExtraDataList`-style getter `004181e0(actor)` the door search uses.
+const ACTOR_EXTRA_OBJECT: u32 = 0x0041_81e0;
+/// `Actor::IsWaitingOnPath`, and `008b3b90(actor)`.
+const ACTOR_IS_WAITING_ON_PATH: u32 = 0x008b_3bf0;
+const ACTOR_TEST_008B3B90: u32 = 0x008b_3b90;
+/// `30.0` as a `double`.
+const THIRTY_DOUBLE: u32 = 0x0101_db88;
+/// `70.0` as a `double`.
+const SEVENTY_DOUBLE: u32 = 0x0107_3568;
+/// `5.0` as a `double`.
+const FIVE_DOUBLE: u32 = 0x0102_0998;
+/// `2.25` as a `double`.
+const TWO_AND_QUARTER_DOUBLE: u32 = 0x0108_d6e8;
+/// `128.0` as a `double`, and `4096.0` as a `double`.
+const SEARCH_AREA_MARGIN: u32 = 0x0102_e430;
+const SEARCH_AREA_MOVE_LIMIT: u32 = 0x0101_7a10;
+/// `0.99` as a `double`.
+const PATH_PROGRESS_LIMIT: u32 = 0x0106_d508;
+/// `0.5f`, and `0.25f`.
+const HALF_FLOAT: u32 = 0x0101_6248;
+const QUARTER_FLOAT: u32 = 0x0101_622c;
+/// `1000000.0f` (the radius the group search asks `fn_00989970` for), and
+/// the delay `0x0101712c` the strategy chooser restarts its timer with.
+const ONE_MILLION_FLOAT: u32 = 0x0108_cb00;
+const STRATEGY_DELAY: u32 = 0x0101_712c;
+/// The `bool` global that turns cluster building off, the `float` radius
+/// of a cluster and the `float` delay between two builds.
+const CLUSTER_DISABLE: u32 = 0x011a_4d34;
+const CLUSTER_RADIUS: u32 = 0x011a_4d2c;
+const CLUSTER_DELAY: u32 = 0x011a_4d30;
+/// The table of 3 x 2 setting pointers `0098b070` reads (radius settings).
+const SEARCH_RADIUS_TABLE: u32 = 0x011a_4d38;
+/// The group test `0097ef30(group)`: `iSearchCount` is not zero.
+const SEARCH_RUNNING: u32 = 0x0097_ef30;
+/// The type byte (`[this + 4]`) of a form (`00401170`).
+const FORM_TYPE_BYTE: u32 = 0x0040_1170;
+/// Frees the elements of a `BSSimpleArray` (`array`, 1).
+const ARRAY_CLEAR: u32 = 0x0084_54f0;
+/// `RandomFloat(low, high)` (cdecl), in ST0.
+const RANDOM_FLOAT: u32 = 0x0047_6b70;
+/// `007058c0(state)`: the record the combat state keeps for its target;
+/// its word at +4 is that target.
+const STATE_TARGET_RECORD: u32 = 0x0070_58c0;
+/// `BSSimpleArray<T *>` search (`array`, `&value`, 0, `compare`) and its
+/// comparison function.
+const CLUSTER_SEARCH: u32 = 0x0071_9b20;
+const CLUSTER_COMPARE: u32 = 0x009a_3830;
 
 layout! {
     /// `CombatTarget` (Xbox PDB), 0x68 bytes on both builds. The four
@@ -2708,6 +2915,2272 @@ pub fn fn_0098a4d0(e: &mut Engine, this: Ptr<CombatGroup>) -> f32 {
     (sum as f64 / count as f64) as f32
 }
 
+/// Reads a `NiPointer` (`[slot]`) as the game's getter `00559450` does.
+fn ni_pointer_get(e: &mut Engine, slot: Ptr) -> u32 {
+    e.call(NI_POINTER_GET, &args![slot]).u32()
+}
+// Translated from 0098a580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: the per-update step of the search (the engine map has no
+/// name). The C++ exception frame is not translated.
+///
+/// First, when the group has initialised members: it counts the targets and
+/// notes whether every one is "ready" (no targets, or at least as many
+/// fleeing members as initialised ones). With a search running (`iSearchCount`
+/// not zero) it resets the search (`fn_0098bae0`) when ready, or when some
+/// target's last-detected time stamp is younger than the setting `011ce9b4`;
+/// with no search running and not ready it starts one (`fn_0098add0`) when
+/// every target's time stamp is at least as old as the setting `011ce528`
+/// and some target has attackers.
+///
+/// Second, with a search running: drops the searching member when it is
+/// done, and, when the search timer (+0xd8) has expired, advances the
+/// line-of-sight grid (`+0xd4`), refreshes the search area (timer +0xe0),
+/// rebuilds the grid's search location when the area is loaded and the grid
+/// is missing or the area moved, feeds the members' locations and headings
+/// to the grid, restarts the timer from the setting `011ce43c`, and has a
+/// random member that is not the player start dialogue toward the target it
+/// is fighting.
+pub fn fn_0098a580(e: &mut Engine, this: Ptr<CombatGroup>) {
+    if e.get(this, CombatGroup::iInitializedMemberCount) != 0 {
+        let count = e.call(TARGET_COUNT, &args![this]).u32();
+        let ready = count == 0
+            || e.get(this, CombatGroup::iFleeingMemberCount)
+                >= e.get(this, CombatGroup::iInitializedMemberCount);
+        if e.call(SEARCH_RUNNING, &args![this]).bool() {
+            if ready {
+                fn_0098bae0(e, this);
+            } else {
+                for index in 0..count {
+                    let target = fn_009871c0(e, this, index);
+                    let age = e
+                        .call(
+                            TIME_STAMP_AGE,
+                            &args![target.byte_add(CombatTarget::fLastDetectedTimeStamp.off)],
+                        )
+                        .f64();
+                    let limit = float_setting(e, 0x011c_e9b4);
+                    if limit as f64 > age {
+                        fn_0098bae0(e, this);
+                        break;
+                    }
+                }
+            }
+        } else if !ready {
+            let mut old_enough = 0u32;
+            let mut attacked = 0u32;
+            for index in 0..count {
+                let target = fn_009871c0(e, this, index);
+                let age = e
+                    .call(
+                        TIME_STAMP_AGE,
+                        &args![target.byte_add(CombatTarget::fLastDetectedTimeStamp.off)],
+                    )
+                    .f64();
+                let limit = float_setting(e, 0x011c_e528);
+                if limit as f64 <= age {
+                    old_enough += 1;
+                }
+                if e.get(target, CombatTarget::sAttackerCount) != 0 {
+                    attacked += 1;
+                }
+            }
+            if attacked != 0 && old_enough == count {
+                fn_0098add0(e, this);
+            }
+        }
+    }
+    if !e.call(SEARCH_RUNNING, &args![this]).bool() {
+        return;
+    }
+    let member = e.get(this, CombatGroup::pSearchingMember);
+    if !member.is_null()
+        && (e.call(ACTOR_TEST_008B3B90, &args![member]).bool()
+            || !e.call(ACTOR_IS_WAITING_ON_PATH, &args![member]).bool())
+    {
+        e.set(this, CombatGroup::pSearchingMember, Ptr::NULL);
+    }
+    let search_timer = this.byte_add(CombatGroup::SEARCH_UPDATE_TIMER);
+    if !e.call(TIMER_EXPIRED, &args![search_timer]).bool() {
+        return;
+    }
+    let grid_slot = this.byte_add(CombatGroup::spPathingLOSGridMap.off);
+    if ni_pointer_get(e, grid_slot) != 0 {
+        let grid = ni_pointer_get(e, grid_slot);
+        let travelled = e.call(PATH_HANDLER_DISTANCE_TRAVELLED, &args![grid]).f64();
+        let limit: f64 = e.global(PATH_PROGRESS_LIMIT);
+        if travelled > limit {
+            let grid = ni_pointer_get(e, grid_slot);
+            e.call(LOS_GRID_MAP_STEP, &args![grid]);
+            let searches = e.get(this, CombatGroup::iSearchCount);
+            e.set(this, CombatGroup::iSearchCount, searches.wrapping_add(1));
+            e.call(
+                TIMER_EXPIRE_NOW,
+                &args![this.byte_add(CombatGroup::SEARCH_AREA_UPDATE_TIMER)],
+            );
+        }
+    }
+    let mut area_moved = false;
+    let area_timer = this.byte_add(CombatGroup::SEARCH_AREA_UPDATE_TIMER);
+    if e.call(TIMER_EXPIRED, &args![area_timer]).bool() {
+        area_moved = combat_group_update_search_area(e, this);
+        let delay = float_setting(e, 0x011c_f870);
+        e.call(TIMER_START, &args![area_timer, delay]);
+    }
+    let centre = this.byte_add(CombatGroup::SEARCH_CENTER);
+    if e.call(WORLD_LOCATION_IS_LOADED, &args![centre]).bool() {
+        if ni_pointer_get(e, grid_slot) == 0 || area_moved {
+            rebuild_search_grid(e, this);
+        }
+    } else if ni_pointer_get(e, grid_slot) != 0 {
+        e.call(NI_POINTER_ASSIGN, &args![grid_slot, 0u32]);
+    }
+    if ni_pointer_get(e, grid_slot) != 0 {
+        feed_members_to_grid(e, this);
+    }
+    let delay = float_setting(e, 0x011c_e43c);
+    e.call(TIMER_START, &args![search_timer, delay]);
+    let members = e.call(MEMBER_COUNT, &args![this]).u32();
+    let chosen_index = e.call(RANDOM_INDEX, &args![0u32, members]).u32();
+    let chosen = e.call(MEMBER_ACTOR_AT, &args![this, chosen_index]).u32();
+    let target = e.vcall(chosen, 0x42c, &args![]).u32();
+    if chosen == e.global::<u32>(PLAYER) || target == 0 {
+        return;
+    }
+    let entry = fn_009865d0(e, this, Ptr::new(target));
+    let manager = e.global::<u32>(DIALOGUE_MANAGER);
+    let mut seen = false;
+    if !entry.is_null() {
+        let stamp = e
+            .call(
+                TIME_STAMP_VALUE,
+                &args![entry.byte_add(CombatTarget::fLastDetectedTimeStamp.off)],
+            )
+            .f32();
+        seen = stamp != -e.global::<f32>(MAX_FLOAT);
+    }
+    e.call(
+        START_DIALOGUE,
+        &args![manager, chosen, target, 4u32, seen as u32, 0u32, 0u32],
+    );
+}
+
+/// The block of `fn_0098a580` that (re)creates the line-of-sight grid: gets
+/// the search center's cell or world; finds the closest navmesh point to the
+/// focal point; resolves a `PathingLocation` there; makes the grid when the
+/// group has none; feeds it the location and radius; sets its field +0x48
+/// from the setting `011cf42c`; and flags the debug geometry for update.
+fn rebuild_search_grid(e: &mut Engine, this: Ptr<CombatGroup>) {
+    let centre = this.byte_add(CombatGroup::SEARCH_CENTER);
+    let grid_slot = this.byte_add(CombatGroup::spPathingLOSGridMap.off);
+    e.with_stack(0x20, |e, frame| {
+        // frame + 0: first word, +4: second word, +8: the closest point
+        // (a `NiPoint3`), +0x14: the `PathingLocation` (0x28 bytes)
+        e.mem.set_u32(frame.addr(), 0);
+        e.mem.set_u32(frame.addr() + 4, 0);
+        if !e
+            .call(
+                WORLD_LOCATION_GET_CELL_OR_WORLD,
+                &args![centre, frame.byte_add(4), frame],
+            )
+            .bool()
+        {
+            return;
+        }
+        let point = frame.byte_add(8);
+        e.call(POINT_NO_OP, &args![point]);
+        let first = e.mem.u32(frame.addr());
+        let second = e.mem.u32(frame.addr() + 4);
+        let focal = this.byte_add(CombatGroup::SEARCH_FOCAL_POINT);
+        if !e
+            .call(
+                FIND_CLOSEST_POINT_ON_NAVMESH,
+                &args![first, second, focal, point],
+            )
+            .bool()
+        {
+            return;
+        }
+        e.with_stack(0x28, |e, location| {
+            e.call(
+                PATHING_LOCATION_FROM_POINT,
+                &args![location, point, second, first],
+            );
+            if e.call(PATHING_LOCATION_RESOLVE, &args![location, 0u32])
+                .bool()
+            {
+                let centre_point = e.call(POINT_NO_OP, &args![centre]).u32();
+                e.call(PATHING_LOCATION_SET_POINT, &args![location, centre_point]);
+                if ni_pointer_get(e, grid_slot) == 0 {
+                    let memory = e.call(OPERATOR_NEW, &args![0x54u32]).u32();
+                    let grid = if memory != 0 {
+                        e.call(LOS_GRID_MAP_CONSTRUCT, &args![memory]).u32()
+                    } else {
+                        0
+                    };
+                    e.call(NI_POINTER_ASSIGN, &args![grid_slot, grid]);
+                }
+                let radius = e.get(this, CombatGroup::fSearchRadius);
+                let grid = ni_pointer_get(e, grid_slot);
+                e.call(LOS_GRID_MAP_UPDATE, &args![grid, location, radius]);
+                let setting = float_setting(e, 0x011c_f42c);
+                let grid = Ptr::new(ni_pointer_get(e, grid_slot));
+                fn_0098adb0(e, grid, setting);
+                e.set(this, CombatGroup::bUpdateSearchDebugGeometry, true);
+            }
+            e.call(PATHING_LOCATION_DESTRUCT, &args![location]);
+        });
+    });
+}
+
+/// The block of `fn_0098a580` that gives the grid the members' locations
+/// and headings: for every member whose space is the search center's space
+/// and whose `PathingLocation` has navmesh information (`fn_0098ad70`), the
+/// location is added to one array and the clamped heading (virtual method
+/// 0x2bc of the actor, argument 0) to another; the grid takes both
+/// (`006d7ca0`), and the debug geometry is flagged when the grid's distance
+/// travelled changed.
+fn feed_members_to_grid(e: &mut Engine, this: Ptr<CombatGroup>) {
+    let grid_slot = this.byte_add(CombatGroup::spPathingLOSGridMap.off);
+    let members = e.call(MEMBER_COUNT, &args![this]).u32();
+    e.with_stack(0x14, |e, locations| {
+        e.call(
+            LOCATION_ARRAY_CONSTRUCT,
+            &args![locations, members, 0u32, 0u32],
+        );
+        e.with_stack(0x14, |e, angles| {
+            e.call(ANGLE_ARRAY_CONSTRUCT, &args![angles, members, 0u32, 0u32]);
+            for index in 0..members {
+                let actor = e.call(MEMBER_ACTOR_AT, &args![this, index]).u32();
+                let space = e.call(REFERENCE_SPACE, &args![actor]).u32();
+                let centre_space = e
+                    .call(FORM_ID, &args![this.byte_add(CombatGroup::SEARCH_CENTER)])
+                    .u32();
+                if space != centre_space {
+                    continue;
+                }
+                e.with_stack(0x28, |e, location| {
+                    e.call(PATHING_LOCATION_FROM_ACTOR, &args![location, actor]);
+                    if fn_0098ad70(e, location) {
+                        e.call(LOCATION_ARRAY_ADD, &args![locations, location]);
+                        let heading = e.vcall(actor, 0x2bc, &args![0u32]).f32();
+                        let clamped = e.call(CLAMP_ANGLE, &args![heading]).f32();
+                        e.with_stack(4, |e, value| {
+                            e.mem.set_f32(value.addr(), clamped);
+                            e.call(ANGLE_ARRAY_ADD, &args![angles, value]);
+                        });
+                    }
+                    e.call(PATHING_LOCATION_DESTRUCT, &args![location]);
+                });
+            }
+            if e.call(ARRAY_SIZE, &args![locations]).u32() != 0 {
+                let grid = ni_pointer_get(e, grid_slot);
+                let before = e.call(PATH_HANDLER_DISTANCE_TRAVELLED, &args![grid]).f32();
+                e.call(LOS_GRID_MAP_APPLY, &args![grid_slot, locations, angles]);
+                let grid = ni_pointer_get(e, grid_slot);
+                let after = e.call(PATH_HANDLER_DISTANCE_TRAVELLED, &args![grid]).f64();
+                if before as f64 != after {
+                    e.set(this, CombatGroup::bUpdateSearchDebugGeometry, true);
+                }
+            }
+            e.call(ANGLE_ARRAY_DESTRUCT, &args![angles]);
+        });
+        e.call(LOCATION_ARRAY_DESTRUCT, &args![locations]);
+    });
+}
+
+// Translated from 0098ad70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PathingLocation`: whether either of the words at +0x10 and +0x14 is not
+/// zero (the navmesh information a resolved location carries).
+pub fn fn_0098ad70(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0x10) != 0 || e.mem.u32(this.addr() + 0x14) != 0
+}
+
+// Translated from 0098adb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PathingLOSGridMap`: stores the `float` `value` at +0x48.
+pub fn fn_0098adb0(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_f32(this.addr() + 0x48, value);
+}
+
+// Translated from 0098add0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: starts the search. Builds the search locations and the
+/// search area and teleport doors (`fn_0098c0d0`, `fn_0098b100`,
+/// `BuildSearchTeleportDoorArray`), sets `iSearchCount` to 1, starts the
+/// search timer (+0xd8) with 0.5 and the area timer (+0xe0) with the setting
+/// `011cf870`, stamps `fSearchStartedTimeStamp` with the game time, clears
+/// every target's `sLastSearchNoticed`, and starts two of the detection
+/// dialogue timers (+0x58 and +0x60) with random delays between the settings
+/// `011cf24c` and `011ce35c`. The scan over the targets only tracks the two
+/// newest time stamps in locals it never uses.
+pub fn fn_0098add0(e: &mut Engine, this: Ptr<CombatGroup>) {
+    let targets = e.call(TARGET_COUNT, &args![this]).u32();
+    fn_0098c0d0(e, this);
+    fn_0098b100(e, this);
+    combat_group_build_search_teleport_door_array(e, this);
+    e.set(this, CombatGroup::iSearchCount, 1);
+    let half: f32 = e.global(HALF_FLOAT);
+    e.call(
+        TIMER_START,
+        &args![this.byte_add(CombatGroup::SEARCH_UPDATE_TIMER), half],
+    );
+    let area_delay = float_setting(e, 0x011c_f870);
+    e.call(
+        TIMER_START,
+        &args![
+            this.byte_add(CombatGroup::SEARCH_AREA_UPDATE_TIMER),
+            area_delay
+        ],
+    );
+    e.with_stack(0x20, |e, locals| {
+        // The game's locals: the two newest stamps and the actors they
+        // belong to (never read again), and a scratch stamp.
+        let newest = locals;
+        let newest_actor = locals.byte_add(4);
+        let second_newest = locals.byte_add(8);
+        let second_actor = locals.byte_add(0xc);
+        let scratch = locals.byte_add(0x10);
+        let now = e.call(GAME_TIME_NOW, &args![]).f32();
+        e.call(TIME_STAMP_SET, &args![scratch, now]);
+        let started = e.mem.f32(scratch.addr());
+        e.set(this, CombatGroup::fSearchStartedTimeStamp, started);
+        let lowest = -e.global::<f32>(MAX_FLOAT);
+        e.call(TIME_STAMP_SET, &args![newest, lowest]);
+        e.call(TIME_STAMP_SET, &args![second_newest, lowest]);
+        e.mem.set_u32(newest_actor.addr(), 0);
+        e.mem.set_u32(second_actor.addr(), 0);
+        for index in 0..targets {
+            let target = fn_009871c0(e, this, index);
+            e.set(target, CombatTarget::sLastSearchNoticed, 0);
+            let detected_at = target.byte_add(CombatTarget::fLastDetectedTimeStamp.off);
+            let noticed_at = target.byte_add(CombatTarget::fLastNoticedTimeStamp.off);
+            let detected = time_stamp(e, detected_at) as f64;
+            if (time_stamp(e, newest) as f64) < detected {
+                let bits = e.mem.u32(detected_at.addr());
+                e.mem.set_u32(newest.addr(), bits);
+                let actor = e.mem.u32(target.addr());
+                e.mem.set_u32(newest_actor.addr(), actor);
+            } else {
+                let noticed = time_stamp(e, noticed_at) as f64;
+                if (time_stamp(e, second_newest) as f64) < noticed {
+                    let bits = e.mem.u32(noticed_at.addr());
+                    e.mem.set_u32(second_newest.addr(), bits);
+                    let actor = e.mem.u32(target.addr());
+                    e.mem.set_u32(second_actor.addr(), actor);
+                }
+            }
+        }
+    });
+    for timer in [
+        CombatGroup::DETECTION_DIALOGUE_TIMERS,
+        CombatGroup::DETECTION_DIALOGUE_TIMERS + 8,
+    ] {
+        let high = float_setting(e, 0x011c_e35c);
+        let low = float_setting(e, 0x011c_f24c);
+        let delay = e.call(RANDOM_FLOAT, &args![low, high]).f32();
+        e.call(TIMER_START, &args![this.byte_add(timer), delay]);
+    }
+}
+
+// Translated from 0098afb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::UpdateSearchArea` (Xbox PDB): rebuilds the search
+/// locations (`fn_0098c0d0`) and recomputes the search center and radius
+/// (`fn_0098b100`). Returns, and rebuilds the teleport doors
+/// (`BuildSearchTeleportDoorArray`) for, "the area moved": the radius
+/// changed by more than 128 either way, or the center moved by more than
+/// 64 (squared distance above 4096).
+pub fn combat_group_update_search_area(e: &mut Engine, this: Ptr<CombatGroup>) -> bool {
+    fn_0098c0d0(e, this);
+    e.with_stack(0x10, |e, old_centre| {
+        copy_location(e, old_centre, this.byte_add(CombatGroup::SEARCH_CENTER));
+        let old_radius = e.get(this, CombatGroup::fSearchRadius);
+        fn_0098b100(e, this);
+        let new_radius = e.get(this, CombatGroup::fSearchRadius) as f64;
+        let margin: f64 = e.global(SEARCH_AREA_MARGIN);
+        let old = old_radius as f64;
+        let mut moved = false;
+        if old > new_radius + margin || old < new_radius - margin {
+            moved = true;
+        } else {
+            let squared = e
+                .call(
+                    DISTANCE_SQUARED,
+                    &args![old_centre, this.byte_add(CombatGroup::SEARCH_CENTER)],
+                )
+                .f64();
+            let limit: f64 = e.global(SEARCH_AREA_MOVE_LIMIT);
+            if squared > limit {
+                moved = true;
+            }
+        }
+        if moved {
+            combat_group_build_search_teleport_door_array(e, this);
+        }
+        moved
+    })
+}
+
+// Translated from 0098b070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: looks up the two radius settings for a search around
+/// `location`. The row of the table at `011a4d38` (12 bytes per row, two
+/// setting pointers in use per column) is 0 when the location has a space
+/// whose type byte (`00401170`) is 0x39 and 1 otherwise; the column is 1
+/// when `iSearchCount` is above 1 and 0 otherwise. The first setting goes to
+/// `out_first`, the second to `out_second` (both `float`s).
+pub fn fn_0098b070(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    location: Ptr,
+    out_first: Ptr,
+    out_second: Ptr,
+) {
+    let mut row = 1u32;
+    if e.call(FORM_ID, &args![location]).u32() != 0 {
+        let space = e.call(FORM_ID, &args![location]).u32();
+        if e.call(FORM_TYPE_BYTE, &args![space]).u32() == 0x39 {
+            row = 0;
+        }
+    }
+    let column = (e.get(this, CombatGroup::iSearchCount) >= 2) as u32;
+    let base = SEARCH_RADIUS_TABLE + row * 12 + column * 4;
+    let setting = e.mem.u32(base);
+    let value = e.call(SETTING_FLOAT_VALUE, &args![setting]).u32();
+    let first = e.mem.f32(value);
+    e.mem.set_f32(out_first.addr(), first);
+    let setting = e.mem.u32(base + 4);
+    let value = e.call(SETTING_FLOAT_VALUE, &args![setting]).u32();
+    let second = e.mem.f32(value);
+    e.mem.set_f32(out_second.addr(), second);
+}
+
+// Translated from 0098b100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: recomputes the search center (`SearchCenter`, +0xf0), the
+/// focal point (+0x100) and the search radius (+0x10c).
+///
+/// With search locations: the center is the average of the locations within
+/// the larger radius setting of the best one (the best is the entry with the
+/// highest `fn_00985bb0`; the average weighs the locations by it) and takes
+/// its space; the radius is derived from the farthest location in the same
+/// space (see `finish_radius`). With a single location the center and focal
+/// point are that location's. With no locations and an empty center space
+/// (`pSpace` null), the same is done with the members' world locations: the
+/// center is the average of those within the radius of the member with the
+/// lowest process type (below 4), and a single member gives its location.
+pub fn fn_0098b100(e: &mut Engine, this: Ptr<CombatGroup>) {
+    e.with_stack(8, |e, radii| {
+        e.mem.set_f32(radii.addr(), 0.0);
+        e.mem.set_f32(radii.addr() + 4, 0.0);
+        let locations = e.call(SEARCH_LOCATION_COUNT, &args![this]).u32();
+        if locations != 0 {
+            centre_from_locations(e, this, locations, radii);
+        } else if e
+            .call(FORM_ID, &args![this.byte_add(CombatGroup::SEARCH_CENTER)])
+            .u32()
+            == 0
+        {
+            centre_from_members(e, this, radii);
+        }
+    });
+}
+
+/// `fn_0098b100` with search locations (`locations` of them); `radii` holds
+/// the two settings of `fn_0098b070` (smaller at +0, larger at +4).
+fn centre_from_locations(e: &mut Engine, this: Ptr<CombatGroup>, locations: u32, radii: Ptr) {
+    let centre_field = this.byte_add(CombatGroup::SEARCH_CENTER);
+    let focal_field = this.byte_add(CombatGroup::SEARCH_FOCAL_POINT);
+    let mut best_score = -e.global::<f32>(MAX_FLOAT);
+    if locations <= 1 {
+        let location = e
+            .call(SEARCH_LOCATION_AT, &args![this, 0u32])
+            .ptr::<CombatSearchLocation>();
+        let _ = fn_00985bb0(e, location);
+        copy_location(e, centre_field, location.cast());
+        let point = e.call(POINT_NO_OP, &args![location]).u32();
+        copy_point(e, focal_field, point);
+        fn_0098b070(e, this, location.cast(), radii, radii.byte_add(4));
+        let smaller = e.mem.f32(radii.addr());
+        e.set(this, CombatGroup::fSearchRadius, smaller);
+        return;
+    }
+    let mut best_index = 0u32;
+    for index in 0..locations {
+        let location = e
+            .call(SEARCH_LOCATION_AT, &args![this, index])
+            .ptr::<CombatSearchLocation>();
+        let score = fn_00985bb0(e, location);
+        if best_score < score {
+            best_score = score;
+            best_index = index;
+        }
+    }
+    let best = e
+        .call(SEARCH_LOCATION_AT, &args![this, best_index])
+        .ptr::<CombatSearchLocation>();
+    e.with_stack(0x10, |e, centre| {
+        copy_point(e, centre, ZERO_POINT);
+        let mut total = 0.0f32;
+        fn_0098b070(e, this, best.cast(), radii, radii.byte_add(4));
+        let larger = e.mem.f32(radii.addr() + 4);
+        let larger_squared = larger as f64 * larger as f64;
+        for index in 0..locations {
+            let location = e
+                .call(SEARCH_LOCATION_AT, &args![this, index])
+                .ptr::<CombatSearchLocation>();
+            let squared = e.call(DISTANCE_SQUARED, &args![best, location]).f64();
+            if larger_squared < squared {
+                continue;
+            }
+            let score = fn_00985bb0(e, location);
+            e.with_stack(0xc, |e, scaled| {
+                let point = e.call(POINT_NO_OP, &args![location]).u32();
+                let result = e.call(POINT_SCALE, &args![point, scaled, score]).u32();
+                e.call(POINT_ACCUMULATE, &args![centre, result]);
+            });
+            total = (total as f64 + score as f64) as f32;
+        }
+        e.call(POINT_DIVIDE_IN_PLACE, &args![centre, total]);
+        let space = e.call(FORM_ID, &args![best]).u32();
+        bgs_world_location_set_location(e, centre_field, centre, space);
+    });
+    let point = e.call(POINT_NO_OP, &args![best]).u32();
+    copy_point(e, focal_field, point);
+    let mut farthest = 0.0f32;
+    let larger = e.mem.f32(radii.addr() + 4);
+    let larger_squared = larger as f64 * larger as f64;
+    for index in 0..locations {
+        let location = e
+            .call(SEARCH_LOCATION_AT, &args![this, index])
+            .ptr::<CombatSearchLocation>();
+        if e.call(FORM_ID, &args![location]).u32() != e.call(FORM_ID, &args![centre_field]).u32() {
+            continue;
+        }
+        let squared = e
+            .call(DISTANCE_SQUARED, &args![centre_field, location])
+            .f32();
+        if farthest < squared {
+            farthest = squared;
+            if farthest as f64 > larger_squared {
+                break;
+            }
+        }
+    }
+    finish_radius(e, this, farthest, radii);
+}
+
+/// `fn_0098b100` without search locations: from the members.
+fn centre_from_members(e: &mut Engine, this: Ptr<CombatGroup>, radii: Ptr) {
+    let centre_field = this.byte_add(CombatGroup::SEARCH_CENTER);
+    let focal_field = this.byte_add(CombatGroup::SEARCH_FOCAL_POINT);
+    let members = e.call(MEMBER_COUNT, &args![this]).u32();
+    if members <= 1 {
+        let actor = e.call(MEMBER_ACTOR_AT, &args![this, 0u32]).u32();
+        e.with_stack(0x10, |e, location| {
+            let world = e
+                .call(GET_WORLD_LOCATION, &args![actor, location])
+                .ptr::<()>();
+            copy_location(e, centre_field, world);
+        });
+        let point = e.call(POINT_NO_OP, &args![centre_field]).u32();
+        copy_point(e, focal_field, point);
+        fn_0098b070(e, this, centre_field, radii, radii.byte_add(4));
+        let smaller = e.mem.f32(radii.addr());
+        e.set(this, CombatGroup::fSearchRadius, smaller);
+        return;
+    }
+    let mut best_type = 4i32;
+    let mut best_actor = 0u32;
+    for index in 0..members {
+        let actor = e.call(MEMBER_ACTOR_AT, &args![this, index]).u32();
+        let process_type = e.call(PROCESS_TYPE, &args![actor]).i32();
+        if process_type < best_type {
+            best_type = process_type;
+            best_actor = actor;
+        }
+    }
+    e.with_stack(0x20, |e, frame| {
+        let best_location = frame;
+        let location = frame.byte_add(0x10);
+        e.call(GET_WORLD_LOCATION, &args![best_actor, best_location]);
+        e.with_stack(0x10, |e, centre| {
+            copy_point(e, centre, ZERO_POINT);
+            let mut inside = 0u32;
+            fn_0098b070(e, this, best_location, radii, radii.byte_add(4));
+            let larger = e.mem.f32(radii.addr() + 4);
+            let larger_squared = larger as f64 * larger as f64;
+            for index in 0..members {
+                let actor = e.call(MEMBER_ACTOR_AT, &args![this, index]).u32();
+                e.call(GET_WORLD_LOCATION, &args![actor, location]);
+                let squared = e
+                    .call(DISTANCE_SQUARED, &args![best_location, location])
+                    .f64();
+                if larger_squared < squared {
+                    continue;
+                }
+                let point = e.call(POINT_NO_OP, &args![location]).u32();
+                e.call(POINT_ACCUMULATE, &args![centre, point]);
+                inside += 1;
+            }
+            e.call(POINT_DIVIDE_IN_PLACE, &args![centre, inside as f32]);
+            let space = e.call(FORM_ID, &args![best_location]).u32();
+            bgs_world_location_set_location(e, centre_field, centre, space);
+        });
+        let point = e.call(POINT_NO_OP, &args![best_location]).u32();
+        copy_point(e, focal_field, point);
+        let mut farthest = 0.0f32;
+        let larger = e.mem.f32(radii.addr() + 4);
+        let larger_squared = larger as f64 * larger as f64;
+        for index in 0..members {
+            let actor = e.call(MEMBER_ACTOR_AT, &args![this, index]).u32();
+            e.call(GET_WORLD_LOCATION, &args![actor, location]);
+            if e.call(FORM_ID, &args![location]).u32()
+                != e.call(FORM_ID, &args![centre_field]).u32()
+            {
+                continue;
+            }
+            let squared = e
+                .call(DISTANCE_SQUARED, &args![centre_field, location])
+                .f32();
+            if farthest < squared {
+                farthest = squared;
+                if farthest as f64 > larger_squared {
+                    break;
+                }
+            }
+        }
+        finish_radius(e, this, farthest, radii);
+    });
+}
+
+/// The end of `fn_0098b100` with several locations or members: the radius
+/// is the larger setting when the farthest squared distance exceeds its
+/// square; otherwise the square root of that distance plus the setting
+/// `011ce7b0`, limited to the larger setting (`0040ebd0`) and then to at
+/// least the smaller one (`00404010`).
+fn finish_radius(e: &mut Engine, this: Ptr<CombatGroup>, farthest: f32, radii: Ptr) {
+    let smaller = e.mem.f32(radii.addr());
+    let larger = e.mem.f32(radii.addr() + 4);
+    if farthest as f64 > larger as f64 * larger as f64 {
+        e.set(this, CombatGroup::fSearchRadius, larger);
+        return;
+    }
+    let root = e.call(SQUARE_ROOT, &args![farthest]).f64();
+    let padding = float_setting(e, 0x011c_e7b0);
+    let radius = (padding as f64 + root) as f32;
+    e.set(this, CombatGroup::fSearchRadius, radius);
+    let radius = e.get(this, CombatGroup::fSearchRadius);
+    let limited = e.call(FLOAT_MIN, &args![radius, larger]).f32();
+    e.set(this, CombatGroup::fSearchRadius, limited);
+    let radius = e.get(this, CombatGroup::fSearchRadius);
+    let raised = e.call(FLOAT_MAX, &args![radius, smaller]).f32();
+    e.set(this, CombatGroup::fSearchRadius, raised);
+}
+
+// Translated from 0098b8c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::BuildSearchTeleportDoorArray` (Xbox PDB): rebuilds
+/// `SearchTeleportDoors`. Collects the teleport doors around the search
+/// center with the radius `fSearchRadius` and the smaller radius setting
+/// around every member whose distance (the unsquared one, compared with the
+/// larger setting squared as the game does) is not below it, sorts the
+/// collected doors, removes duplicates, and adds the ones that are not yet
+/// in the group's door array (`fn_0098c600`).
+pub fn combat_group_build_search_teleport_door_array(e: &mut Engine, this: Ptr<CombatGroup>) {
+    e.with_stack(0x30, |e, frame| {
+        let array = frame;
+        let first = frame.byte_add(0x10);
+        let second = frame.byte_add(0x14);
+        let location = frame.byte_add(0x20);
+        e.call(POINTER_ARRAY_CONSTRUCT, &args![array]);
+        e.mem.set_f32(first.addr(), 0.0);
+        e.mem.set_f32(second.addr(), 0.0);
+        let centre = this.byte_add(CombatGroup::SEARCH_CENTER);
+        fn_0098b070(e, this, centre, first, second);
+        let radius = e.get(this, CombatGroup::fSearchRadius);
+        let point = e.call(POINT_NO_OP, &args![centre]).u32();
+        let space = e.call(FORM_ID, &args![centre]).u32();
+        e.call(COLLECT_TELEPORT_DOORS, &args![space, point, radius, array]);
+        let members = e.call(MEMBER_COUNT, &args![this]).u32();
+        let larger = e.mem.f32(second.addr());
+        let larger_squared = larger as f64 * larger as f64;
+        for index in 0..members {
+            let actor = e.call(MEMBER_ACTOR_AT, &args![this, index]).u32();
+            e.call(GET_WORLD_LOCATION, &args![actor, location]);
+            let distance = e
+                .call(WORLD_LOCATION_DISTANCE, &args![centre, location])
+                .f64();
+            if larger_squared > distance {
+                continue;
+            }
+            let smaller = e.mem.f32(first.addr());
+            let point = e.call(POINT_NO_OP, &args![location]).u32();
+            let space = e.call(FORM_ID, &args![location]).u32();
+            e.call(COLLECT_TELEPORT_DOORS, &args![space, point, smaller, array]);
+        }
+        e.call(ARRAY_SORT, &args![array, COMPARE_WORDS]);
+        let mut index = 0u32;
+        while index < e.call(ARRAY_SIZE, &args![array]).u32() {
+            let slot = e.call(CLUSTER_AT, &args![array, index]).u32();
+            let door = e.mem.u32(slot);
+            let mut duplicates = 0u32;
+            let mut next = index + 1;
+            while next < e.call(ARRAY_SIZE, &args![array]).u32() {
+                let slot = e.call(CLUSTER_AT, &args![array, next]).u32();
+                if e.mem.u32(slot) != door {
+                    break;
+                }
+                duplicates += 1;
+                next += 1;
+            }
+            if duplicates != 0 {
+                e.call(
+                    POINTER_ARRAY_REMOVE_RANGE,
+                    &args![array, index + 1, duplicates, 0u32],
+                );
+            }
+            index += 1;
+        }
+        let mut index = 0u32;
+        while index < e.call(ARRAY_SIZE, &args![array]).u32() {
+            let slot = e.call(CLUSTER_AT, &args![array, index]).u32();
+            let door = e.mem.u32(slot);
+            fn_0098c600(e, this, door);
+            index += 1;
+        }
+        e.call(POINTER_ARRAY_DESTRUCT, &args![array]);
+    });
+}
+
+// Translated from 0098bae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: ends the search. Releases the line-of-sight grid and the
+/// search debug geometry, clears the debug-update flag, resets the two
+/// search timers, sets `fSearchStartedTimeStamp` to the lowest time stamp,
+/// zeroes `iSearchCount` and the radius, clears the center and the focal
+/// point, and empties the search location and teleport door arrays.
+pub fn fn_0098bae0(e: &mut Engine, this: Ptr<CombatGroup>) {
+    e.call(
+        NI_POINTER_ASSIGN,
+        &args![this.byte_add(CombatGroup::spPathingLOSGridMap.off), 0u32],
+    );
+    e.call(
+        NI_POINTER_ASSIGN,
+        &args![this.byte_add(CombatGroup::spSearchDebugGeometry.off), 0u32],
+    );
+    e.set(this, CombatGroup::bUpdateSearchDebugGeometry, false);
+    e.call(
+        TIMER_RESET,
+        &args![this.byte_add(CombatGroup::SEARCH_UPDATE_TIMER)],
+    );
+    e.call(
+        TIMER_RESET,
+        &args![this.byte_add(CombatGroup::SEARCH_AREA_UPDATE_TIMER)],
+    );
+    let lowest = -e.global::<f32>(MAX_FLOAT);
+    e.with_stack(4, |e, stamp| {
+        e.call(TIME_STAMP_SET, &args![stamp, lowest]);
+        let value = e.mem.f32(stamp.addr());
+        e.set(this, CombatGroup::fSearchStartedTimeStamp, value);
+    });
+    e.set(this, CombatGroup::iSearchCount, 0);
+    e.set(this, CombatGroup::fSearchRadius, 0.0);
+    fn_0098bbc0(e, this.byte_add(CombatGroup::SEARCH_CENTER));
+    copy_point(
+        e,
+        this.byte_add(CombatGroup::SEARCH_FOCAL_POINT),
+        ZERO_POINT,
+    );
+    e.call(
+        ARRAY_CLEAR,
+        &args![this.byte_add(CombatGroup::SEARCH_LOCATIONS), 1u32],
+    );
+    e.call(
+        ARRAY_CLEAR,
+        &args![this.byte_add(CombatGroup::SEARCH_TELEPORT_DOORS), 1u32],
+    );
+}
+
+// Translated from 0098bbc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSWorldLocation` constructor from the default point: the three
+/// coordinates of the global at `011f426c`, and a null space.
+pub fn fn_0098bbc0(e: &mut Engine, this: Ptr) {
+    copy_point(e, this, ZERO_POINT);
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+}
+
+// Translated from 0098bc00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::FindSearchLocation` (Xbox PDB): the search location with
+/// the best score for `actor`, or null. An entry qualifies when its
+/// remaining time (`fn_00985bb0`) plus 5 (when `reference` is given, shares
+/// the entry's space and has the same point as the entry) reaches
+/// `minimum`, its `fn_00985b40` score for the actor's location does not
+/// lose to the best so far, and, when the actor has a process, the combat
+/// state's movement check (`CheckMovement(location, 1, 0)`) passes. Ties go
+/// to the later entry.
+pub fn combat_group_find_search_location(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    actor: Ptr,
+    minimum: u8,
+    reference: Ptr,
+) -> Ptr {
+    let process = e.vcall(actor.addr(), 0x428, &args![]).u32();
+    e.with_stack(0x10, |e, location| {
+        e.call(GET_WORLD_LOCATION, &args![actor, location]);
+        let mut best_index = u32::MAX;
+        let mut best = 0.0f32;
+        let count = e.call(SEARCH_LOCATION_COUNT, &args![this]).u32();
+        for index in 0..count {
+            let entry = e
+                .call(SEARCH_LOCATION_AT, &args![this, index])
+                .ptr::<CombatSearchLocation>();
+            let score = fn_00985bb0(e, entry);
+            let mut bonus = 0.0f32;
+            if !reference.is_null()
+                && e.call(FORM_ID, &args![entry]).u32() == e.call(FORM_ID, &args![reference]).u32()
+            {
+                let reference_point = e.call(POINT_NO_OP, &args![reference]).u32();
+                let entry_point = e.call(POINT_NO_OP, &args![entry]).u32();
+                if e.call(POINTS_EQUAL, &args![entry_point, reference_point])
+                    .bool()
+                {
+                    let five: f64 = e.global(FIVE_DOUBLE);
+                    bonus = (bonus as f64 + five) as f32;
+                }
+            }
+            if minimum as f64 > score as f64 + bonus as f64 {
+                continue;
+            }
+            // The game adds `bonus` to this and stores it in a local it never reads.
+            let _ = fn_00985b40(e, entry, location);
+            if best > score {
+                continue;
+            }
+            if process != 0 {
+                let state = e.call(PROCESS_COMBAT_STATE, &args![process]).u32();
+                if !e
+                    .call(
+                        COMBAT_STATE_CHECK_MOVEMENT,
+                        &args![state, entry, 1u32, 0u32],
+                    )
+                    .bool()
+                {
+                    continue;
+                }
+            }
+            best_index = index;
+            best = score;
+        }
+        if best_index == u32::MAX {
+            Ptr::NULL
+        } else {
+            e.call(SEARCH_LOCATION_AT, &args![this, best_index]).ptr()
+        }
+    })
+}
+
+// Translated from 0098bd70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: ages the search state near `position` (a
+/// `BGSWorldLocation`). The squared setting `011cf684` is the range; the
+/// scale applied to the vertical axis is (1, 1, 0.25). For every search
+/// location whose scaled distance to `position` is within the range:
+/// when its remaining time exceeds 30 the excess is taken off its `fScore`;
+/// and when it belongs to a target (`iTargetID`) that the group has, each of
+/// the target's three time stamps (last detected +0x50, last noticed +0x58,
+/// last attacked member +0x60) whose `fn_0098c060` excess is above 30 and
+/// whose location (+0x18, +0x08, +0x38) is within the range as well is
+/// moved back by that excess over 30.
+pub fn fn_0098bd70(e: &mut Engine, this: Ptr<CombatGroup>, position: Ptr) {
+    let first = float_setting(e, 0x011c_f684);
+    let second = float_setting(e, 0x011c_f684);
+    let range = (first as f64 * second as f64) as f32;
+    e.with_stack(0x20, |e, frame| {
+        let scale = frame;
+        let outs = frame.byte_add(0x10);
+        let (excess_detected, excess_noticed, excess_attacked) =
+            (outs, outs.byte_add(4), outs.byte_add(8));
+        let quarter: f32 = e.global(QUARTER_FLOAT);
+        e.call(POINT_CONSTRUCT, &args![scale, 1.0f32, 1.0f32, quarter]);
+        let count = e.call(SEARCH_LOCATION_COUNT, &args![this]).u32();
+        let thirty: f64 = e.global(THIRTY_DOUBLE);
+        for index in 0..count {
+            let entry = e
+                .call(SEARCH_LOCATION_AT, &args![this, index])
+                .ptr::<CombatSearchLocation>();
+            let distance = e
+                .call(
+                    WORLD_LOCATION_SCALED_DISTANCE,
+                    &args![entry, position, scale],
+                )
+                .f64();
+            let within = range as f64 > distance;
+            if !within {
+                continue;
+            }
+            let remaining = fn_00985bb0(e, entry);
+            if remaining as f64 > thirty {
+                let score = e.get(entry, CombatSearchLocation::fScore);
+                let lowered = (score as f64 - (remaining as f64 - thirty)) as f32;
+                e.set(entry, CombatSearchLocation::fScore, lowered);
+            }
+            let target_id = e.get(entry, CombatSearchLocation::iTargetID);
+            if target_id == 0 {
+                continue;
+            }
+            let target = fn_00986610(e, this, target_id);
+            if target.is_null() {
+                continue;
+            }
+            fn_0098c060(
+                e,
+                this,
+                target,
+                excess_detected,
+                excess_noticed,
+                excess_attacked,
+            );
+            // (excess slot, location of the target, time stamp field)
+            for (excess, location, stamp) in [
+                (
+                    excess_detected,
+                    CombatTarget::LAST_DETECTED_LOCATION,
+                    CombatTarget::fLastDetectedTimeStamp.off,
+                ),
+                (
+                    excess_noticed,
+                    CombatTarget::LAST_NOTICED_LOCATION,
+                    CombatTarget::fLastNoticedTimeStamp.off,
+                ),
+                (
+                    excess_attacked,
+                    CombatTarget::LAST_ATTACKED_MEMBER_LOCATION,
+                    CombatTarget::fLastAttackedMemberTimeStamp.off,
+                ),
+            ] {
+                let excess_value = e.mem.f32(excess.addr());
+                let exceeds = excess_value as f64 > thirty;
+                if !exceeds {
+                    continue;
+                }
+                let target_location = target.byte_add(location);
+                let distance = e
+                    .call(
+                        WORLD_LOCATION_SCALED_DISTANCE,
+                        &args![target_location, position, scale],
+                    )
+                    .f64();
+                let within = range as f64 > distance;
+                if !within {
+                    continue;
+                }
+                let stamp_at = target.byte_add(stamp);
+                let stamp_value = e.call(TIME_STAMP_VALUE, &args![stamp_at]).f64();
+                let moved = (stamp_value - (excess_value as f64 - thirty)) as f32;
+                e.with_stack(4, |e, scratch| {
+                    e.call(TIME_STAMP_SET, &args![scratch, moved]);
+                    let bits = e.mem.u32(scratch.addr());
+                    e.mem.set_u32(stamp_at.addr(), bits);
+                });
+            }
+        }
+    });
+}
+
+// Translated from 0098bfb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: adds a search location: a copy of `location`, stamped
+/// with the game time, with `iTargetID` `target_id` and `fScore` `score`.
+pub fn fn_0098bfb0(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    location: Ptr,
+    score: f32,
+    target_id: u32,
+) {
+    let array = this.byte_add(CombatGroup::SEARCH_LOCATIONS);
+    let index = e.call(SEARCH_LOCATION_ADD, &args![array]).u32();
+    let entry = e
+        .call(SEARCH_LOCATION_SLOT, &args![array, index])
+        .ptr::<()>();
+    copy_location(e, entry, location);
+    let now = e.call(GAME_TIME_NOW, &args![]).f32();
+    e.with_stack(4, |e, stamp| {
+        e.call(TIME_STAMP_SET, &args![stamp, now]);
+        let bits = e.mem.u32(stamp.addr());
+        let entry = e.call(SEARCH_LOCATION_SLOT, &args![array, index]).u32();
+        e.mem
+            .set_u32(entry + CombatSearchLocation::fTimeStamp.off, bits);
+    });
+    let entry = e.call(SEARCH_LOCATION_SLOT, &args![array, index]).u32();
+    e.mem
+        .set_u32(entry + CombatSearchLocation::iTargetID.off, target_id);
+    let entry = e.call(SEARCH_LOCATION_SLOT, &args![array, index]).u32();
+    e.mem
+        .set_f32(entry + CombatSearchLocation::fScore.off, score);
+}
+
+// Translated from 0098c060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: how far each of a target's time stamps is below its
+/// expiry: `out_detected` = (setting `011ce528` + 70 - age of the last
+/// detected stamp +0x50), `out_noticed` = 30 - age of the last noticed
+/// stamp +0x58, `out_attacked` = 70 - age of the last attacked member stamp
+/// +0x60. (The outputs are `float`s.)
+pub fn fn_0098c060(
+    e: &mut Engine,
+    _this: Ptr<CombatGroup>,
+    target: Ptr<CombatTarget>,
+    out_detected: Ptr,
+    out_noticed: Ptr,
+    out_attacked: Ptr,
+) {
+    let seventy: f64 = e.global(SEVENTY_DOUBLE);
+    let thirty: f64 = e.global(THIRTY_DOUBLE);
+    let age = e
+        .call(
+            TIME_STAMP_AGE,
+            &args![target.byte_add(CombatTarget::fLastDetectedTimeStamp.off)],
+        )
+        .f64();
+    let remaining = seventy - age;
+    let setting = float_setting(e, 0x011c_e528);
+    e.mem
+        .set_f32(out_detected.addr(), (setting as f64 + remaining) as f32);
+    let age = e
+        .call(
+            TIME_STAMP_AGE,
+            &args![target.byte_add(CombatTarget::fLastNoticedTimeStamp.off)],
+        )
+        .f64();
+    e.mem.set_f32(out_noticed.addr(), (thirty - age) as f32);
+    let age = e
+        .call(
+            TIME_STAMP_AGE,
+            &args![target.byte_add(CombatTarget::fLastAttackedMemberTimeStamp.off)],
+        )
+        .f64();
+    e.mem.set_f32(out_attacked.addr(), (seventy - age) as f32);
+}
+
+// Translated from 0098c0d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: rebuilds the search locations from the targets. First
+/// removes every search location whose remaining time (`fn_00985bb0`) is
+/// below zero or that belongs to a target (`iTargetID` not zero). Then, for
+/// every target, takes the three excesses of `fn_0098c060` (last detected
+/// a, last noticed b, last attacked member c) and, when one of them is above
+/// zero: if b is below a or c, adds a search location at the last detected
+/// location with score a (or at the last attacked member location with score
+/// c when c is above a); otherwise, when b is above zero, adds one at the
+/// last noticed location with score b, or, when the larger of a and c is
+/// above zero and the last detected / attacked location (whichever has the
+/// larger value) is in the same space, at the average of that location and
+/// the noticed one weighted by the two scores.
+pub fn fn_0098c0d0(e: &mut Engine, this: Ptr<CombatGroup>) {
+    let array = this.byte_add(CombatGroup::SEARCH_LOCATIONS);
+    let mut index = 0u32;
+    while index < e.call(ARRAY_SIZE, &args![array]).u32() {
+        let entry = e
+            .call(SEARCH_LOCATION_ELEMENT, &args![array, index])
+            .ptr::<CombatSearchLocation>();
+        let remaining = fn_00985bb0(e, entry);
+        if remaining < 0.0 || e.get(entry, CombatSearchLocation::iTargetID) != 0 {
+            e.call(SEARCH_LOCATION_REMOVE, &args![array, index, 1u32]);
+            index = index.wrapping_sub(1);
+        }
+        index = index.wrapping_add(1);
+    }
+    let targets = e.call(TARGET_COUNT, &args![this]).u32();
+    for target_index in 0..targets {
+        let target = fn_009871c0(e, this, target_index);
+        e.with_stack(0x80, |e, frame| {
+            let (detected, noticed, attacked) = (frame, frame.byte_add(4), frame.byte_add(8));
+            fn_0098c060(e, this, target, detected, noticed, attacked);
+            let a = e.mem.f32(detected.addr());
+            let b = e.mem.f32(noticed.addr());
+            let c = e.mem.f32(attacked.addr());
+            if !(a > 0.0 || b > 0.0 || c > 0.0) {
+                return;
+            }
+            let actor = e.get(target, CombatTarget::pActor);
+            if b < a || b < c {
+                let id = e.call(FORM_ID, &args![actor]).u32();
+                if c <= a {
+                    let location = target.byte_add(CombatTarget::LAST_DETECTED_LOCATION);
+                    fn_0098bfb0(e, this, location, a, id);
+                } else {
+                    let location = target.byte_add(CombatTarget::LAST_ATTACKED_MEMBER_LOCATION);
+                    fn_0098bfb0(e, this, location, c, id);
+                }
+                return;
+            }
+            let positive = b > 0.0;
+            if !positive {
+                return;
+            }
+            let combined = frame.byte_add(0x10);
+            e.call(WORLD_LOCATION_CONSTRUCT, &args![combined]);
+            let larger = e.call(FLOAT_MAX, &args![a, c]).f32();
+            if larger > 0.0 {
+                let source = if c < a {
+                    CombatTarget::LAST_DETECTED_LOCATION
+                } else {
+                    CombatTarget::LAST_ATTACKED_MEMBER_LOCATION
+                };
+                copy_location(e, combined, target.byte_add(source));
+            }
+            let noticed_at = target.byte_add(CombatTarget::LAST_NOTICED_LOCATION);
+            if larger > 0.0
+                && e.call(FORM_ID, &args![combined]).u32()
+                    == e.call(FORM_ID, &args![noticed_at]).u32()
+            {
+                let first_scaled = frame.byte_add(0x30);
+                let second_scaled = frame.byte_add(0x40);
+                let result = frame.byte_add(0x50);
+                let point = e.call(POINT_NO_OP, &args![combined]).u32();
+                e.call(POINT_SCALE, &args![point, first_scaled, larger]);
+                let point = e.call(POINT_NO_OP, &args![noticed_at]).u32();
+                let scaled = e.call(POINT_SCALE, &args![point, second_scaled, b]).u32();
+                e.call(POINT_ACCUMULATE, &args![first_scaled, scaled]);
+                let total = (larger as f64 + b as f64) as f32;
+                e.call(POINT_DIVIDE_IN_PLACE, &args![first_scaled, total]);
+                let space = e.call(FORM_ID, &args![noticed_at]).u32();
+                e.call(
+                    WORLD_LOCATION_FROM_POINT,
+                    &args![result, first_scaled, space],
+                );
+                let id = e.call(FORM_ID, &args![actor]).u32();
+                fn_0098bfb0(e, this, result, b, id);
+            } else {
+                let id = e.call(FORM_ID, &args![actor]).u32();
+                fn_0098bfb0(e, this, noticed_at, b, id);
+            }
+        });
+    }
+}
+
+// Translated from 0098c3d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::FindSearchDoor` (Xbox PDB): the reference of the search
+/// door nearest to `actor` within `radius`, or null. Nothing is found for an
+/// actor whose virtual method 0x21c is true and whose extra object's method
+/// 0x28 (at +0x30) is true. A door qualifies when both its references are
+/// set, its attempt count (+8) does not exceed the setting `011cfc98`, it is
+/// neither reserved (+0xa) nor already investigated (+9), it has a teleport
+/// reference, (with `check_space`) the actor can exist in the teleport's
+/// space, and (when the actor has a process) the combat state's movement
+/// check on the door's location passes.
+pub fn combat_group_find_search_door(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    actor: Ptr,
+    radius: f32,
+    check_space: u8,
+) -> Ptr {
+    if e.vcall(actor.addr(), 0x21c, &args![]).bool() {
+        let extra = e.call(ACTOR_EXTRA_OBJECT, &args![actor]).u32();
+        if e.vcall(extra + 0x30, 0x28, &args![]).bool() {
+            return Ptr::NULL;
+        }
+    }
+    let process = e.vcall(actor.addr(), 0x428, &args![]).u32();
+    let doors = this.byte_add(CombatGroup::SEARCH_TELEPORT_DOORS);
+    e.with_stack(0x20, |e, frame| {
+        let actor_location = frame;
+        let door_location = frame.byte_add(0x10);
+        e.call(GET_WORLD_LOCATION, &args![actor, actor_location]);
+        let mut found = 0u32;
+        let mut best = (radius as f64 * radius as f64) as f32;
+        let mut index = 0u32;
+        while index < e.call(ARRAY_SIZE, &args![doors]).u32() {
+            let door = e.call(SEARCH_DOOR_ELEMENT, &args![doors, index]).u32();
+            index += 1;
+            let reference = e.mem.u32(door);
+            if reference == 0 || e.mem.u32(door + 4) == 0 {
+                continue;
+            }
+            let attempts = e.mem.u8(door + 8) as u32;
+            let limit = int_setting(e, 0x011c_fc98);
+            if attempts > limit || e.mem.u8(door + 0xa) != 0 || e.mem.u8(door + 9) != 0 {
+                continue;
+            }
+            let teleport = e.call(DOOR_TELEPORT_REFERENCE, &args![reference]).u32();
+            if teleport == 0 {
+                continue;
+            }
+            if check_space != 0 {
+                let can_exist = e.with_stack(0x10, |e, space_location| {
+                    e.call(TELEPORT_WORLD_LOCATION, &args![teleport, space_location]);
+                    e.call(CAN_ACTOR_EXIST_IN_SPACE, &args![actor, space_location])
+                        .bool()
+                });
+                if !can_exist {
+                    continue;
+                }
+            }
+            e.call(GET_WORLD_LOCATION, &args![reference, door_location]);
+            if process != 0 {
+                let state = e.call(PROCESS_COMBAT_STATE, &args![process]).u32();
+                if !e
+                    .call(
+                        COMBAT_STATE_CHECK_MOVEMENT,
+                        &args![state, door_location, 1u32, 0u32],
+                    )
+                    .bool()
+                {
+                    continue;
+                }
+            }
+            let squared = e
+                .call(DISTANCE_SQUARED, &args![actor_location, door_location])
+                .f32();
+            if best > squared {
+                found = reference;
+                best = squared;
+            }
+        }
+        Ptr::new(found)
+    })
+}
+
+// Translated from 0098c590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::GetCombatSearchDoor` (Xbox PDB): the `SearchTeleportDoors`
+/// entry that has `reference` as its first or second reference, or null.
+pub fn combat_group_get_combat_search_door(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    reference: u32,
+) -> Ptr {
+    let doors = this.byte_add(CombatGroup::SEARCH_TELEPORT_DOORS);
+    let mut index = 0u32;
+    while index < e.call(ARRAY_SIZE, &args![doors]).u32() {
+        let door = e.call(SEARCH_DOOR_ELEMENT, &args![doors, index]).u32();
+        if e.mem.u32(door) == reference || e.mem.u32(door + 4) == reference {
+            return Ptr::new(door);
+        }
+        index += 1;
+    }
+    Ptr::NULL
+}
+
+// Translated from 0098c600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: adds `reference` to `SearchTeleportDoors` when it is not
+/// there yet and has a teleport reference (`00568e50`) whose pointer
+/// getter (`00559450`) gives a second reference: the new entry holds the
+/// two references and its bytes +8, +0xa and +9 start at zero.
+pub fn fn_0098c600(e: &mut Engine, this: Ptr<CombatGroup>, reference: u32) {
+    if !combat_group_get_combat_search_door(e, this, reference).is_null() {
+        return;
+    }
+    let teleport = e.call(DOOR_TELEPORT_REFERENCE, &args![reference]).u32();
+    if teleport == 0 || e.call(NI_POINTER_GET, &args![teleport]).u32() == 0 {
+        return;
+    }
+    let doors = this.byte_add(CombatGroup::SEARCH_TELEPORT_DOORS);
+    let index = e.call(SEARCH_DOOR_ADD, &args![doors]).u32();
+    let door = e.call(SEARCH_DOOR_AT, &args![doors, index]).u32();
+    e.mem.set_u32(door, reference);
+    let linked = e.call(NI_POINTER_GET, &args![teleport]).u32();
+    let door = e.call(SEARCH_DOOR_AT, &args![doors, index]).u32();
+    e.mem.set_u32(door + 4, linked);
+    let door = e.call(SEARCH_DOOR_AT, &args![doors, index]).u32();
+    e.mem.set_u8(door + 8, 0);
+    let door = e.call(SEARCH_DOOR_AT, &args![doors, index]).u32();
+    e.mem.set_u8(door + 0xa, 0);
+    let door = e.call(SEARCH_DOOR_AT, &args![doors, index]).u32();
+    e.mem.set_u8(door + 9, 0);
+}
+
+// Translated from 0098c6e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: sets byte +9 of the search door for `reference` (when
+/// there is one).
+pub fn fn_0098c6e0(e: &mut Engine, this: Ptr<CombatGroup>, reference: u32) {
+    let door = combat_group_get_combat_search_door(e, this, reference);
+    if !door.is_null() {
+        e.mem.set_u8(door.addr() + 9, 1);
+    }
+}
+
+// Translated from 0098c710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::FailedToInvestigateSearchDoor` (Xbox PDB): clears byte +0xa
+/// of the search door for `reference` (when there is one) and counts one
+/// more attempt in byte +8.
+pub fn combat_group_failed_to_investigate_search_door(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    reference: u32,
+) {
+    let door = combat_group_get_combat_search_door(e, this, reference);
+    if !door.is_null() {
+        e.mem.set_u8(door.addr() + 0xa, 0);
+        let attempts = e.mem.u8(door.addr() + 8).wrapping_add(1);
+        e.mem.set_u8(door.addr() + 8, attempts);
+    }
+}
+
+// Translated from 0098c750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: sets byte +0xa of the search door for `reference` (when
+/// there is one); `UnreserveSearchDoor` clears it.
+pub fn fn_0098c750(e: &mut Engine, this: Ptr<CombatGroup>, reference: u32) {
+    let door = combat_group_get_combat_search_door(e, this, reference);
+    if !door.is_null() {
+        e.mem.set_u8(door.addr() + 0xa, 1);
+    }
+}
+
+// Translated from 0098c780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::UnreserveSearchDoor` (Xbox PDB): clears byte +0xa of the
+/// search door for `reference` (when there is one).
+pub fn combat_group_unreserve_search_door(e: &mut Engine, this: Ptr<CombatGroup>, reference: u32) {
+    let door = combat_group_get_combat_search_door(e, this, reference);
+    if !door.is_null() {
+        e.mem.set_u8(door.addr() + 0xa, 0);
+    }
+}
+
+// Translated from 0098c7b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::CalculateSearchIgnoreLocations` (Xbox PDB): with more than
+/// one member, adds to `array` the pathfinding goal
+/// (`Actor::GetCurrentPathfindingGoal`) of every member other than `skip`
+/// that has a process (and passes the process test `00981420`); returns
+/// whether any was added.
+pub fn combat_group_calculate_search_ignore_locations(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    skip: Ptr,
+    array: Ptr,
+) -> bool {
+    let members = e.call(MEMBER_COUNT, &args![this]).u32();
+    if members <= 1 {
+        return false;
+    }
+    let mut added = false;
+    for index in 0..members {
+        let actor = e.call(MEMBER_ACTOR_AT, &args![this, index]).u32();
+        if actor == skip.addr() {
+            continue;
+        }
+        let process = e.vcall(actor, 0x428, &args![]).u32();
+        if process == 0 || !e.call(PROCESS_TEST_00981420, &args![process]).bool() {
+            continue;
+        }
+        e.with_stack(0xc, |e, point| {
+            e.call(POINT_NO_OP, &args![point]);
+            if e.call(ACTOR_PATHFINDING_GOAL, &args![actor, point]).bool() {
+                e.call(PATH_POINT_ARRAY_ADD, &args![array, point]);
+                added = true;
+            }
+        });
+    }
+    added
+}
+
+// Translated from 0098c870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::UpdateCombatStrength` (Xbox PDB): recomputes
+/// `fMemberCombatStrength` (sum over the usable members of their combat
+/// strength), `fAverageMemberDamagePerSecond`, `fTargetCombatStrength` (sum
+/// over the usable targets) and `fAverageTargetCombatStrength`.
+///
+/// A member's `fDamagePerSecond` and `fCombatStrength` are refreshed first:
+/// from the player's weapon and `Actor::CalculateCombatStrength` for the
+/// player, otherwise from the combat state of its process (a member with no
+/// process keeps its old values). A member counts when it is not fleeing
+/// (`CombatController::IsFleeing`) and both values are not below zero. A
+/// target counts when its strength (the player's `CalculateCombatStrength`,
+/// the state's value, or `CalculateCombatStrength(-1)` for an actor with no
+/// process; -1 for a fleeing one) is not below zero.
+pub fn combat_group_update_combat_strength(e: &mut Engine, this: Ptr<CombatGroup>) {
+    e.set(this, CombatGroup::fMemberCombatStrength, 0.0);
+    e.set(this, CombatGroup::fAverageMemberDamagePerSecond, 0.0);
+    let members = e.call(MEMBER_COUNT, &args![this]).u32();
+    let mut counted = 0u32;
+    let player = e.global::<u32>(PLAYER);
+    for index in 0..members {
+        let mut fleeing = false;
+        let member = e
+            .call(MEMBER_OF_GROUP, &args![this, index])
+            .ptr::<CombatMember>();
+        let actor = e.get(member, CombatMember::pActor);
+        if actor.addr() == player {
+            let damage = e.call(ACTOR_WEAPON_DAMAGE_PER_SECOND, &args![player]).f32();
+            e.set(member, CombatMember::fDamagePerSecond, damage);
+            let damage = e.get(member, CombatMember::fDamagePerSecond);
+            let strength = e.call(ACTOR_COMBAT_STRENGTH, &args![player, damage]).f32();
+            e.set(member, CombatMember::fCombatStrength, strength);
+        } else {
+            let process = e.vcall(actor.addr(), 0x428, &args![]).u32();
+            if process != 0 {
+                fleeing = e.call(CONTROLLER_IS_FLEEING, &args![process]).bool();
+                let state = e.call(PROCESS_COMBAT_STATE, &args![process]).u32();
+                let damage = e.call(STATE_DAMAGE_PER_SECOND, &args![state]).f32();
+                e.set(member, CombatMember::fDamagePerSecond, damage);
+                let state = e.call(PROCESS_COMBAT_STATE, &args![process]).u32();
+                let strength = e.call(STATE_COMBAT_STRENGTH, &args![state]).f32();
+                e.set(member, CombatMember::fCombatStrength, strength);
+            }
+        }
+        let strength = e.get(member, CombatMember::fCombatStrength);
+        let damage = e.get(member, CombatMember::fDamagePerSecond);
+        if !fleeing && strength >= 0.0 && damage >= 0.0 {
+            let total = e.get(this, CombatGroup::fMemberCombatStrength);
+            e.set(
+                this,
+                CombatGroup::fMemberCombatStrength,
+                (total as f64 + strength as f64) as f32,
+            );
+            let total = e.get(this, CombatGroup::fAverageMemberDamagePerSecond);
+            e.set(
+                this,
+                CombatGroup::fAverageMemberDamagePerSecond,
+                (total as f64 + damage as f64) as f32,
+            );
+            counted += 1;
+        }
+    }
+    if counted != 0 {
+        let total = e.get(this, CombatGroup::fAverageMemberDamagePerSecond);
+        e.set(
+            this,
+            CombatGroup::fAverageMemberDamagePerSecond,
+            (total as f64 / counted as f64) as f32,
+        );
+    }
+    e.set(this, CombatGroup::fTargetCombatStrength, 0.0);
+    e.set(this, CombatGroup::fAverageTargetCombatStrength, 0.0);
+    let targets = e.call(TARGET_COUNT, &args![this]).u32();
+    let mut counted = 0u32;
+    for index in 0..targets {
+        let minus_one: f32 = e.global(MINUS_ONE);
+        let mut strength = minus_one;
+        let actor = e.call(TARGET_ACTOR_AT, &args![this, index]).u32();
+        if actor == player {
+            strength = e
+                .call(ACTOR_COMBAT_STRENGTH, &args![player, minus_one])
+                .f32();
+        } else if !e.call(ACTOR_IS_FLEEING_ARG, &args![actor, 0u32]).bool() {
+            let process = e.vcall(actor, 0x428, &args![]).u32();
+            if process != 0 {
+                let state = e.call(PROCESS_COMBAT_STATE, &args![process]).u32();
+                strength = e.call(STATE_COMBAT_STRENGTH, &args![state]).f32();
+            } else {
+                strength = e
+                    .call(ACTOR_COMBAT_STRENGTH, &args![actor, minus_one])
+                    .f32();
+            }
+        }
+        if strength >= 0.0 {
+            let total = e.get(this, CombatGroup::fTargetCombatStrength);
+            e.set(
+                this,
+                CombatGroup::fTargetCombatStrength,
+                (total as f64 + strength as f64) as f32,
+            );
+            counted += 1;
+        }
+    }
+    if counted != 0 {
+        let total = e.get(this, CombatGroup::fTargetCombatStrength);
+        e.set(
+            this,
+            CombatGroup::fAverageTargetCombatStrength,
+            (total as f64 / counted as f64) as f32,
+        );
+    }
+}
+
+// Translated from 0098cb30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: the combat strength of the group's members as seen with
+/// `actor` in mind. With a null `actor` it is `fMemberCombatStrength`.
+/// Otherwise the sum over the members of: for `actor` itself (when it has a
+/// process) the state's strength if above zero; for every other member that
+/// is not fleeing, its stored `fCombatStrength` if above zero.
+pub fn fn_0098cb30(e: &mut Engine, this: Ptr<CombatGroup>, actor: Ptr) -> f32 {
+    if actor.is_null() {
+        return e.get(this, CombatGroup::fMemberCombatStrength);
+    }
+    let mut sum = 0.0f32;
+    let members = e.call(MEMBER_COUNT, &args![this]).u32();
+    for index in 0..members {
+        let member = e
+            .call(MEMBER_OF_GROUP, &args![this, index])
+            .ptr::<CombatMember>();
+        let member_actor = e.get(member, CombatMember::pActor);
+        let process = e.vcall(member_actor.addr(), 0x428, &args![]).u32();
+        if actor == member_actor && process != 0 {
+            let state = e.call(PROCESS_COMBAT_STATE, &args![process]).u32();
+            let strength = e.call(STATE_COMBAT_STRENGTH, &args![state]).f32();
+            if strength > 0.0 {
+                sum = (sum as f64 + strength as f64) as f32;
+            }
+        } else if process == 0 || !e.call(CONTROLLER_IS_FLEEING, &args![process]).bool() {
+            let strength = e.get(member, CombatMember::fCombatStrength);
+            if strength > 0.0 {
+                sum = (sum as f64 + strength as f64) as f32;
+            }
+        }
+    }
+    sum
+}
+
+// Translated from 0098cc20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: the members' average damage per second as seen with
+/// `actor` in mind. With a null `actor` it is
+/// `fAverageMemberDamagePerSecond`. Otherwise the average over the counted
+/// members of: for `actor` itself (when it has a process) the state's
+/// damage per second if above zero; for every other member that is not
+/// fleeing and whose `fCombatStrength` is not below zero, its stored
+/// `fDamagePerSecond`.
+pub fn fn_0098cc20(e: &mut Engine, this: Ptr<CombatGroup>, actor: Ptr) -> f32 {
+    if actor.is_null() {
+        return e.get(this, CombatGroup::fAverageMemberDamagePerSecond);
+    }
+    let mut sum = 0.0f32;
+    let members = e.call(MEMBER_COUNT, &args![this]).u32();
+    let mut counted = 0u32;
+    for index in 0..members {
+        let member = e
+            .call(MEMBER_OF_GROUP, &args![this, index])
+            .ptr::<CombatMember>();
+        let member_actor = e.get(member, CombatMember::pActor);
+        let process = e.vcall(member_actor.addr(), 0x428, &args![]).u32();
+        if actor == member_actor && process != 0 {
+            let state = e.call(PROCESS_COMBAT_STATE, &args![process]).u32();
+            let damage = e.call(STATE_DAMAGE_PER_SECOND, &args![state]).f32();
+            if damage > 0.0 {
+                sum = (sum as f64 + damage as f64) as f32;
+                counted += 1;
+            }
+        } else {
+            let usable = process == 0 || !e.call(CONTROLLER_IS_FLEEING, &args![process]).bool();
+            if usable && e.get(member, CombatMember::fCombatStrength) >= 0.0 {
+                let damage = e.get(member, CombatMember::fDamagePerSecond);
+                sum = (sum as f64 + damage as f64) as f32;
+                counted += 1;
+            }
+        }
+    }
+    if counted != 0 {
+        sum = (sum as f64 / counted as f64) as f32;
+    }
+    sum
+}
+
+// Translated from 0098cd50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: the member (other than `actor`) nearest to `actor` within
+/// `radius`, or null. The squared distance of `preferred` is divided by
+/// 2.25 first. A nearest member whose process has a target of its own
+/// (`007058c0`) that is `actor` is discarded.
+pub fn fn_0098cd50(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    actor: Ptr,
+    preferred: Ptr,
+    radius: f32,
+) -> Ptr {
+    let mut best = (radius as f64 * radius as f64) as f32;
+    let mut found = 0u32;
+    let position_ptr = e.vcall(actor.addr(), 0x1f4, &args![]).u32();
+    e.with_stack(0x20, |e, frame| {
+        let position = frame;
+        let difference = frame.byte_add(0x10);
+        copy_point(e, position, position_ptr);
+        let members = e.call(MEMBER_COUNT, &args![this]).u32();
+        for index in 0..members {
+            let other = e.call(MEMBER_ACTOR_AT, &args![this, index]).u32();
+            if other == actor.addr() {
+                continue;
+            }
+            let other_position = e.vcall(other, 0x1f4, &args![]).u32();
+            e.call(POINT_SUBTRACT, &args![other_position, difference, position]);
+            let mut squared = e.call(POINT_LENGTH_SQUARED, &args![difference]).f32();
+            if other == preferred.addr() {
+                let divisor: f64 = e.global(TWO_AND_QUARTER_DOUBLE);
+                squared = (squared as f64 / divisor) as f32;
+            }
+            if best > squared {
+                best = squared;
+                found = other;
+            }
+        }
+    });
+    if found != 0 {
+        let process = e.vcall(found, 0x428, &args![]).u32();
+        if process != 0 {
+            let state = e.call(PROCESS_COMBAT_STATE, &args![process]).u32();
+            let goal = e.call(STATE_TARGET_RECORD, &args![state]).u32();
+            if goal != 0 && e.mem.u32(goal + 4) == actor.addr() {
+                found = 0;
+            }
+        }
+    }
+    Ptr::new(found)
+}
+
+// Translated from 0098ce80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::UpdateCounts` (Xbox PDB): recounts the members that have a
+/// process: `iInitializedMemberCount` (bit 3 of the process word at +8, test
+/// `004013e0`), and `iFleeingMemberCount` / `iNonFleeingMemberCount` by
+/// `CombatController::IsFleeing`.
+pub fn combat_group_update_counts(e: &mut Engine, this: Ptr<CombatGroup>) {
+    e.set(this, CombatGroup::iInitializedMemberCount, 0);
+    e.set(this, CombatGroup::iFleeingMemberCount, 0);
+    e.set(this, CombatGroup::iNonFleeingMemberCount, 0);
+    let members = e.call(MEMBER_COUNT, &args![this]).u32();
+    for index in 0..members {
+        let actor = e.call(MEMBER_ACTOR_AT, &args![this, index]).u32();
+        let process = e.vcall(actor, 0x428, &args![]).u32();
+        if process == 0 {
+            continue;
+        }
+        if e.call(PROCESS_FLAG_BIT_3, &args![process]).bool() {
+            let count = e.get(this, CombatGroup::iInitializedMemberCount);
+            e.set(this, CombatGroup::iInitializedMemberCount, count + 1);
+        }
+        if e.call(CONTROLLER_IS_FLEEING, &args![process]).bool() {
+            let count = e.get(this, CombatGroup::iFleeingMemberCount);
+            e.set(this, CombatGroup::iFleeingMemberCount, count + 1);
+        } else {
+            let count = e.get(this, CombatGroup::iNonFleeingMemberCount);
+            e.set(this, CombatGroup::iNonFleeingMemberCount, count + 1);
+        }
+    }
+}
+
+// Translated from 0098cf70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: recounts `sAttackerCount` of every target: the number of
+/// members other than the player whose virtual method 0x42c (their current
+/// target) is that target's actor.
+pub fn fn_0098cf70(e: &mut Engine, this: Ptr<CombatGroup>) {
+    let targets = e.call(TARGET_COUNT, &args![this]).u32();
+    let members = e.call(MEMBER_COUNT, &args![this]).u32();
+    let player = e.global::<u32>(PLAYER);
+    for index in 0..targets {
+        let target = fn_009871c0(e, this, index);
+        e.set(target, CombatTarget::sAttackerCount, 0);
+        for member_index in 0..members {
+            let actor = e.call(MEMBER_ACTOR_AT, &args![this, member_index]).u32();
+            if actor == player {
+                continue;
+            }
+            let aimed_at = e.vcall(actor, 0x42c, &args![]).u32();
+            if aimed_at == e.get(target, CombatTarget::pActor).addr() {
+                let count = e.get(target, CombatTarget::sAttackerCount);
+                e.set(target, CombatTarget::sAttackerCount, count.wrapping_add(1));
+            }
+        }
+    }
+}
+
+// Translated from 0098d030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: drops the targets `fn_00987220` rejects. When the group
+/// has just one target and it is dropped, the actor `fn_00989970` finds for
+/// it within 1,000,000 units (or, failing that, for the player) says a line
+/// of dialogue about it unless the target is dead (virtual method 0x22c with
+/// 0): dialogue type 8 once the target has been detected (its last detected
+/// time stamp is not the lowest value) and type 5 otherwise.
+pub fn fn_0098d030(e: &mut Engine, this: Ptr<CombatGroup>) {
+    let mut targets = e.call(TARGET_COUNT, &args![this]).u32();
+    if targets == 0 {
+        return;
+    }
+    e.with_stack(4, |e, stamp| {
+        let lowest = -e.global::<f32>(MAX_FLOAT);
+        e.call(TIME_STAMP_SET, &args![stamp, lowest]);
+    });
+    let mut index = 0u32;
+    while index < targets {
+        let target = fn_009871c0(e, this, index);
+        if fn_00987220(e, this, target) {
+            if targets == 1 {
+                let radius: f32 = e.global(ONE_MILLION_FLOAT);
+                let actor = e.get(target, CombatTarget::pActor);
+                let mut speaker = fn_00989970(e, this, actor, radius);
+                if speaker.is_null() {
+                    let player = Ptr::new(e.global::<u32>(PLAYER));
+                    speaker = fn_00989970(e, this, player, radius);
+                }
+                if !speaker.is_null() && !e.vcall(actor.addr(), 0x22c, &args![0u32]).bool() {
+                    let stamp = e
+                        .call(
+                            TIME_STAMP_VALUE,
+                            &args![target.byte_add(CombatTarget::fLastDetectedTimeStamp.off)],
+                        )
+                        .f32();
+                    let kind = if stamp == -e.global::<f32>(MAX_FLOAT) {
+                        5u32
+                    } else {
+                        8u32
+                    };
+                    let manager = e.global::<u32>(DIALOGUE_MANAGER);
+                    e.call(
+                        START_DIALOGUE,
+                        &args![manager, speaker, actor, 4u32, kind, 1u32, 0u32],
+                    );
+                }
+            }
+            fn_00986560(e, this, index);
+            index = index.wrapping_sub(1);
+            targets = targets.wrapping_sub(1);
+        }
+        index = index.wrapping_add(1);
+    }
+}
+
+// Translated from 0098d1a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: keeps the group strategy up to date. With fewer than two
+/// members there is no strategy (`pGroupStrategy` and `bStrategyForced`
+/// cleared) and the choose timer (+0x30) restarts with 0. Otherwise, when
+/// the strategy is not forced and the choose timer has expired, the strategy
+/// chooser (`009900f0`) picks one, the timer restarts with the delay at
+/// `0101712c`, and a chosen strategy records its index
+/// (`iLastGroupStrategyChosenIndex`) and the time
+/// (`fLastGroupStrategyChosenTimeStamp`); then, when there is a strategy and
+/// the update timer (+0x38) has expired, the strategy's virtual method 8 is
+/// run on the group (it drops the strategy when it returns false) and the
+/// update timer restarts with 1.
+pub fn fn_0098d1a0(e: &mut Engine, this: Ptr<CombatGroup>) {
+    let choose_timer = this.byte_add(CombatGroup::CHOOSE_STRATEGY_TIMER);
+    let update_timer = this.byte_add(CombatGroup::UPDATE_STRATEGY_TIMER);
+    if e.call(MEMBER_COUNT, &args![this]).u32() <= 1 {
+        e.set(this, CombatGroup::pGroupStrategy, Ptr::NULL);
+        e.set(this, CombatGroup::bStrategyForced, false);
+        e.call(TIMER_START, &args![choose_timer, 0.0f32]);
+        return;
+    }
+    if !e.get(this, CombatGroup::bStrategyForced)
+        && e.call(TIMER_EXPIRED, &args![choose_timer]).bool()
+    {
+        let strategy = e.call(CHOOSE_STRATEGY, &args![this]).ptr::<()>();
+        e.set(this, CombatGroup::pGroupStrategy, strategy);
+        let delay: f32 = e.global(STRATEGY_DELAY);
+        e.call(TIMER_START, &args![choose_timer, delay]);
+        if !e.get(this, CombatGroup::pGroupStrategy).is_null() {
+            let strategy = e.get(this, CombatGroup::pGroupStrategy);
+            let index = e.call(STRATEGY_INDEX, &args![strategy]).u32();
+            e.set(this, CombatGroup::iLastGroupStrategyChosenIndex, index);
+            e.with_stack(4, |e, stamp| {
+                let now = e.call(GAME_TIME_NOW, &args![]).f32();
+                e.call(TIME_STAMP_SET, &args![stamp, now]);
+                let value = e.mem.f32(stamp.addr());
+                e.set(this, CombatGroup::fLastGroupStrategyChosenTimeStamp, value);
+            });
+        }
+    }
+    if !e.get(this, CombatGroup::pGroupStrategy).is_null()
+        && e.call(TIMER_EXPIRED, &args![update_timer]).bool()
+    {
+        let strategy = e.get(this, CombatGroup::pGroupStrategy);
+        if !e.vcall(strategy.addr(), 8, &args![this]).bool() {
+            e.set(this, CombatGroup::pGroupStrategy, Ptr::NULL);
+            e.set(this, CombatGroup::bStrategyForced, false);
+        }
+        e.call(TIMER_START, &args![update_timer, 1.0f32]);
+    }
+}
+
+// Translated from 0098d2c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: rebuilds the clusters of nearby members
+/// (`CombatGroupCluster`, `ClusterArray` at +0x138), unless the global
+/// `011a4d34` switches that off. The C++ exception frame is not translated.
+///
+/// When the cluster update timer (+0xb0) has expired, restarts it with the
+/// delay `011a4d30` and works on at most 63 members (`min(count, 0x3f)`):
+/// each gets a record of its member entry, world location and nearest
+/// neighbour. Members whose cluster is farther than twice the radius
+/// `011a4d2c` leave it; clusters left empty are deleted; every member with no
+/// cluster looks up its nearest neighbour (squared distances are cached in a
+/// 64 x 64 matrix of `float`s, 0 meaning "not computed") and mutual nearest
+/// pairs without a cluster form a new one centred between them; clusters
+/// closer than the radius are merged (the later one is deleted and its
+/// members move to the earlier one); finally a member with no cluster takes
+/// the first cluster found by following its chain of nearest neighbours
+/// when that one is closer than the radius, and so do the members on the
+/// chain that have none. The cluster centres are recomputed from their
+/// members before (`fn_0098dc40`) and after.
+pub fn fn_0098d2c0(e: &mut Engine, this: Ptr<CombatGroup>) {
+    if e.mem.u8(CLUSTER_DISABLE) != 0 {
+        return;
+    }
+    fn_0098dc40(e, this);
+    let timer = this.byte_add(CombatGroup::CLUSTER_UPDATE_TIMER);
+    if !e.call(TIMER_EXPIRED, &args![timer]).bool() {
+        return;
+    }
+    let delay: f32 = e.global(CLUSTER_DELAY);
+    e.call(TIMER_START, &args![timer, delay]);
+    let radius: f32 = e.global(CLUSTER_RADIUS);
+    let radius_squared = radius as f64 * radius as f64;
+    let four: f64 = e.global(FOUR_DOUBLE);
+    let clusters = this.byte_add(CombatGroup::CLUSTER_ARRAY);
+    let members = e.call(MEMBER_COUNT, &args![this]).i32();
+    let members = e.call(SIGNED_MIN, &args![members, 0x3fu32]).u32();
+    // The game's frame: 64 records of 0x18 bytes (+0 the `CombatMember`,
+    // +4 its world location, +0x14 the nearest record as a signed byte),
+    // then the 64 x 64 `float` matrix, then three scratch values.
+    e.with_stack(0x4700, |e, frame| {
+        let matrix = frame.byte_add(0x600);
+        let scratch_location = frame.byte_add(0x4600);
+        let new_cluster = frame.byte_add(0x4610);
+        let scratch_point = frame.byte_add(0x4620);
+        let record = |index: u32| frame.byte_add(index.wrapping_mul(0x18));
+
+        let cluster_of = |e: &Engine, index: u32| {
+            let member = e.mem.u32(record(index).addr());
+            e.mem.u32(member + CombatMember::pCluster.off)
+        };
+        let set_cluster = |e: &mut Engine, index: u32, cluster: u32| {
+            let member = e.mem.u32(record(index).addr());
+            e.mem.set_u32(member + CombatMember::pCluster.off, cluster);
+        };
+        let nearest_of = |e: &Engine, index: i32| {
+            e.mem.i8(record(index as u32).addr().wrapping_add(0x14)) as i32
+        };
+        let cell = |row: u32, column: u32| matrix.addr() + row * 0x100 + column * 4;
+        e.call(
+            VECTOR_CONSTRUCTOR,
+            &args![frame, 0x18u32, 0x40u32, 0x0098_dc20u32],
+        );
+        e.call(MEMSET, &args![frame, 0u32, 0x600u32]);
+        e.call(MEMSET, &args![matrix, 0u32, 0x4000u32]);
+        for index in 0..members {
+            let member = e.call(MEMBER_OF_GROUP, &args![this, index]).u32();
+            e.mem.set_u32(record(index).addr(), member);
+            let actor = e.mem.u32(member);
+            let world = e
+                .call(GET_WORLD_LOCATION, &args![actor, scratch_location])
+                .ptr::<()>();
+            copy_location(e, record(index).byte_add(4), world);
+            e.mem.set_u8(record(index).addr() + 0x14, 0xff);
+            let cluster = cluster_of(e, index);
+            if cluster != 0 {
+                let squared = e
+                    .call(DISTANCE_SQUARED, &args![cluster, record(index).byte_add(4)])
+                    .f64();
+                if radius_squared * four < squared {
+                    let count = e.mem.u32(cluster + 0x10);
+                    e.mem.set_u32(cluster + 0x10, count.wrapping_sub(1));
+                    set_cluster(e, index, 0);
+                }
+            }
+        }
+        // Delete the clusters nobody is left in.
+        let mut index = 0u32;
+        while index < e.call(ARRAY_SIZE, &args![clusters]).u32() {
+            let slot = e.call(CLUSTER_AT, &args![clusters, index]).u32();
+            let cluster = e.mem.u32(slot);
+            if e.mem.u32(cluster + 0x10) == 0 {
+                e.call(CLUSTER_REMOVE, &args![clusters, index, 1u32]);
+                e.call(OPERATOR_DELETE, &args![cluster]);
+                index = index.wrapping_sub(1);
+            }
+            index = index.wrapping_add(1);
+        }
+        // Each unclustered member finds its nearest neighbour.
+        for row in 0..members {
+            if cluster_of(e, row) != 0 {
+                continue;
+            }
+            let mut best = e.global::<f32>(MAX_FLOAT);
+            let mut best_column = 0u8;
+            for column in 0..members {
+                if row == column {
+                    continue;
+                }
+                if e.mem.f32(cell(row, column)) == 0.0 {
+                    let squared = e
+                        .call(
+                            DISTANCE_SQUARED,
+                            &args![record(row).byte_add(4), record(column).byte_add(4)],
+                        )
+                        .f32();
+                    e.mem.set_f32(cell(row, column), squared);
+                    e.mem.set_f32(cell(column, row), squared);
+                }
+                let squared = e.mem.f32(cell(row, column));
+                if best > squared {
+                    best_column = column as u8;
+                    best = squared;
+                }
+            }
+            e.mem.set_u8(record(row).addr() + 0x14, best_column);
+        }
+        // Mutual nearest pairs with no cluster form a new one.
+        for first in 0..members {
+            if cluster_of(e, first) != 0 {
+                continue;
+            }
+            let second = nearest_of(e, first as i32);
+            if nearest_of(e, second) != first as i8 as i32 {
+                continue;
+            }
+            let memory = e.call(OPERATOR_NEW_SMALL, &args![0x14u32]).u32();
+            let cluster = if memory != 0 {
+                fn_0098dc00(e, Ptr::new(memory)).addr()
+            } else {
+                0
+            };
+            e.mem.set_u32(new_cluster.addr(), cluster);
+            e.call(POINTER_ARRAY_ADD, &args![clusters, new_cluster]);
+            let cluster = e.mem.u32(new_cluster.addr());
+            set_cluster(e, first, cluster);
+            set_cluster(e, second as u32, cluster);
+            let first_point = e
+                .call(POINT_NO_OP, &args![record(second as u32).byte_add(4)])
+                .u32();
+            let second_point = e.call(POINT_NO_OP, &args![record(first).byte_add(4)]).u32();
+            e.call(POINT_ADD, &args![second_point, scratch_point, first_point]);
+            let two: f32 = e.global(TWO_FLOAT);
+            e.call(POINT_DIVIDE_IN_PLACE, &args![scratch_point, two]);
+            let space = e.call(FORM_ID, &args![record(first).byte_add(4)]).u32();
+            bgs_world_location_set_location(e, Ptr::new(cluster), scratch_point, space);
+        }
+        // Merge the clusters that are closer than the radius.
+        let mut first_index = 0u32;
+        while first_index < e.call(ARRAY_SIZE, &args![clusters]).u32() {
+            let slot = e.call(CLUSTER_AT, &args![clusters, first_index]).u32();
+            let kept = e.mem.u32(slot);
+            let mut other_index = first_index + 1;
+            while other_index < e.call(ARRAY_SIZE, &args![clusters]).u32() {
+                let slot = e.call(CLUSTER_AT, &args![clusters, other_index]).u32();
+                let other = e.mem.u32(slot);
+                let squared = e.call(DISTANCE_SQUARED, &args![kept, other]).f64();
+                if radius_squared > squared {
+                    for member_index in 0..members {
+                        if cluster_of(e, member_index) == other {
+                            set_cluster(e, member_index, kept);
+                        }
+                    }
+                    e.call(OPERATOR_DELETE, &args![other]);
+                    e.call(CLUSTER_REMOVE, &args![clusters, other_index, 1u32]);
+                    other_index = other_index.wrapping_sub(1);
+                }
+                other_index = other_index.wrapping_add(1);
+            }
+            first_index += 1;
+        }
+        // The rest join the first cluster along their chain, if close enough.
+        for index in 0..members {
+            if cluster_of(e, index) != 0 {
+                continue;
+            }
+            let mut found = 0u32;
+            let mut chain = nearest_of(e, index as i32);
+            while found == 0 {
+                found = cluster_of(e, chain as u32);
+                chain = nearest_of(e, chain);
+            }
+            let squared = e
+                .call(DISTANCE_SQUARED, &args![record(index).byte_add(4), found])
+                .f64();
+            if radius_squared > squared {
+                set_cluster(e, index, found);
+                chain = nearest_of(e, index as i32);
+                while cluster_of(e, chain as u32) == 0 {
+                    set_cluster(e, chain as u32, found);
+                    chain = nearest_of(e, chain);
+                }
+            }
+        }
+    });
+    fn_0098dc40(e, this);
+}
+
+// Translated from 0098dc00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroupCluster` constructor (0x14 bytes): a default
+/// `BGSWorldLocation` at +0 and a member count (+0x10) of zero. Returns
+/// `this`.
+pub fn fn_0098dc00(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(WORLD_LOCATION_CONSTRUCT, &args![this]);
+    e.mem.set_u32(this.addr() + 0x10, 0);
+    this
+}
+
+// Translated from 0098dc20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the 0x18-byte record `fn_0098d2c0` keeps per member: a
+/// default `BGSWorldLocation` at +4. Returns `this`.
+pub fn fn_0098dc20(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(WORLD_LOCATION_CONSTRUCT, &args![this.byte_add(4)]);
+    this
+}
+
+// Translated from 0098dc40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: recomputes the centre of every cluster from its members.
+/// Zeroes the centres and counts, adds each member's position (virtual
+/// method 0x1f4 of its actor) to its cluster's centre and counts it, then
+/// divides each centre by its count.
+pub fn fn_0098dc40(e: &mut Engine, this: Ptr<CombatGroup>) {
+    let clusters = this.byte_add(CombatGroup::CLUSTER_ARRAY);
+    let mut index = 0u32;
+    while index < e.call(ARRAY_SIZE, &args![clusters]).u32() {
+        let slot = e.call(CLUSTER_AT, &args![clusters, index]).u32();
+        let cluster = e.mem.u32(slot);
+        fn_0098ddd0(e, Ptr::new(cluster), Ptr::new(ZERO_POINT));
+        e.mem.set_u32(cluster + 0x10, 0);
+        index += 1;
+    }
+    let members = e.call(MEMBER_COUNT, &args![this]).u32();
+    for member_index in 0..members {
+        let member = e
+            .call(MEMBER_OF_GROUP, &args![this, member_index])
+            .ptr::<CombatMember>();
+        let cluster = e.get(member, CombatMember::pCluster);
+        if cluster.is_null() {
+            continue;
+        }
+        e.with_stack(0xc, |e, sum| {
+            let centre = e.call(POINT_NO_OP, &args![cluster]).u32();
+            copy_point(e, sum, centre);
+            let actor = e.get(member, CombatMember::pActor);
+            let position = e.vcall(actor.addr(), 0x1f4, &args![]).u32();
+            e.call(POINT_ACCUMULATE, &args![sum, position]);
+            fn_0098ddd0(e, cluster, sum);
+        });
+        let count = e.mem.u32(cluster.addr() + 0x10);
+        e.mem.set_u32(cluster.addr() + 0x10, count.wrapping_add(1));
+    }
+    let mut index = 0u32;
+    while index < e.call(ARRAY_SIZE, &args![clusters]).u32() {
+        let slot = e.call(CLUSTER_AT, &args![clusters, index]).u32();
+        let cluster = e.mem.u32(slot);
+        e.with_stack(0xc, |e, centre| {
+            let point = e.call(POINT_NO_OP, &args![cluster]).u32();
+            copy_point(e, centre, point);
+            let count = e.mem.u32(cluster + 0x10);
+            e.call(POINT_DIVIDE_IN_PLACE, &args![centre, count as f32]);
+            fn_0098ddd0(e, Ptr::new(cluster), centre);
+        });
+        index += 1;
+    }
+}
+
+// Translated from 0098ddd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroupCluster`: copies the three coordinates of `point` to the
+/// cluster's centre (the space is left alone).
+pub fn fn_0098ddd0(e: &mut Engine, this: Ptr, point: Ptr) {
+    copy_point(e, this, point.addr());
+}
+
+// Translated from 0098de00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: the cluster of the member entry for `actor`, or null when
+/// the actor has no entry.
+pub fn fn_0098de00(e: &mut Engine, this: Ptr<CombatGroup>, actor: Ptr) -> u32 {
+    let member = fn_009865f0(e, this, actor);
+    if member.is_null() {
+        0
+    } else {
+        e.get(member, CombatMember::pCluster).addr()
+    }
+}
+
+// Translated from 0098de30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: searches the `ClusterArray` (`00719b20`, with the
+/// comparison `009a3830` and a start index of 0) for `cluster`, whose
+/// address it passes; returns that search's result.
+pub fn fn_0098de30(e: &mut Engine, this: Ptr<CombatGroup>, cluster: u32) -> u32 {
+    let array = this.byte_add(CombatGroup::CLUSTER_ARRAY);
+    e.with_stack(4, |e, value| {
+        e.mem.set_u32(value.addr(), cluster);
+        e.call(CLUSTER_SEARCH, &args![array, value, 0u32, CLUSTER_COMPARE])
+            .u32()
+    })
+}
+
+// Translated from 0098de60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: the cluster with the given index (a signed byte), or null
+/// for a negative index.
+pub fn fn_0098de60(e: &mut Engine, this: Ptr<CombatGroup>, index: i8) -> u32 {
+    if index < 0 {
+        return 0;
+    }
+    let slot = e
+        .call(
+            CLUSTER_AT,
+            &args![this.byte_add(CombatGroup::CLUSTER_ARRAY), index as i32],
+        )
+        .u32();
+    e.mem.u32(slot)
+}
+
+// Translated from 0098de90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::SaveGame` (Xbox PDB): writes the group to the save buffer,
+/// in this order: the clusters (count, then each through `fn_00985ae0`), the
+/// targets (count, each `CombatTarget::SaveGame`), the members (count, each
+/// `CombatMember::SaveGame`); the strategy's index as one byte (0xff when
+/// there is none) and `bStrategyForced`; the choose and update timers;
+/// `iLastGroupStrategyChosenIndex` and its time stamp; the avoid-threat
+/// dialogue timer, the cluster timer and the target timer; the ten
+/// detection dialogue timers; `iSearchCount` and, when it is not zero, the
+/// search state (searching member as a form ID, the focal point, the two
+/// search timers, `fSearchStartedTimeStamp`, `SearchCenter`, the radius, the
+/// search locations, the teleport doors, and the line-of-sight grid behind a
+/// flag byte); then the combat strength timer, the four strength values, the
+/// music timer and `cCombatMusicState`. (Counts are written through
+/// `SaveVariableSizedValue`; arrays at an impossible address count as empty,
+/// as the folded accessors check.)
+pub fn combat_group_save_game(e: &mut Engine, this: Ptr<CombatGroup>, buffer: Ptr) {
+    let clusters = this.byte_add(CombatGroup::CLUSTER_ARRAY);
+    let count = array_count(e, clusters);
+    e.call(SAVE_SIZED_VALUE, &args![buffer, count]);
+    for index in 0..count {
+        let slot = e.call(CLUSTER_AT, &args![clusters, index]).u32();
+        let cluster = e.mem.u32(slot);
+        fn_00985ae0(e, Ptr::new(cluster), buffer, this.addr());
+    }
+    let targets = this.byte_add(CombatGroup::TARGET_ARRAY);
+    let count = array_count(e, targets);
+    e.call(SAVE_SIZED_VALUE, &args![buffer, count]);
+    for index in 0..count {
+        let target = e
+            .call(TARGET_AT, &args![targets, index])
+            .ptr::<CombatTarget>();
+        combat_target_save_game(e, target, buffer, this.addr());
+    }
+    let members = this.byte_add(CombatGroup::MEMBER_ARRAY);
+    let count = array_count(e, members);
+    e.call(SAVE_SIZED_VALUE, &args![buffer, count]);
+    for index in 0..count {
+        let member = e
+            .call(MEMBER_AT, &args![members, index])
+            .ptr::<CombatMember>();
+        combat_member_save_game(e, member, buffer, this);
+    }
+    let strategy = e.get(this, CombatGroup::pGroupStrategy);
+    let index = if strategy.is_null() {
+        u32::MAX
+    } else {
+        e.call(STRATEGY_INDEX, &args![strategy]).u32()
+    };
+    e.with_stack(4, |e, byte| {
+        e.mem.set_u8(byte.addr(), index as u8);
+        e.call(SAVE_BYTES, &args![buffer, byte, 1u32, 0u32]);
+    });
+    save_field(e, buffer, this, CombatGroup::bStrategyForced.off, 1);
+    save_timer(e, buffer, this, CombatGroup::CHOOSE_STRATEGY_TIMER);
+    save_timer(e, buffer, this, CombatGroup::UPDATE_STRATEGY_TIMER);
+    save_field(
+        e,
+        buffer,
+        this,
+        CombatGroup::iLastGroupStrategyChosenIndex.off,
+        4,
+    );
+    e.call(
+        TIME_STAMP_SAVE,
+        &args![
+            this.byte_add(CombatGroup::fLastGroupStrategyChosenTimeStamp.off),
+            buffer
+        ],
+    );
+    save_timer(e, buffer, this, CombatGroup::AVOID_THREAT_DIALOGUE_TIMER);
+    save_timer(e, buffer, this, CombatGroup::CLUSTER_UPDATE_TIMER);
+    save_timer(e, buffer, this, CombatGroup::TARGET_UPDATE_TIMER);
+    for timer in 0..10u32 {
+        save_timer(
+            e,
+            buffer,
+            this,
+            CombatGroup::DETECTION_DIALOGUE_TIMERS + timer * 8,
+        );
+    }
+    save_field(e, buffer, this, CombatGroup::iSearchCount.off, 4);
+    if e.get(this, CombatGroup::iSearchCount) != 0 {
+        let member = e.get(this, CombatGroup::pSearchingMember);
+        e.call(SAVE_FORM_ID, &args![buffer, member, 0u32]);
+        save_field(e, buffer, this, CombatGroup::SEARCH_FOCAL_POINT, 0xc);
+        save_timer(e, buffer, this, CombatGroup::SEARCH_UPDATE_TIMER);
+        save_timer(e, buffer, this, CombatGroup::SEARCH_AREA_UPDATE_TIMER);
+        e.call(
+            TIME_STAMP_SAVE,
+            &args![
+                this.byte_add(CombatGroup::fSearchStartedTimeStamp.off),
+                buffer
+            ],
+        );
+        e.call(
+            WORLD_LOCATION_SAVE,
+            &args![this.byte_add(CombatGroup::SEARCH_CENTER), buffer],
+        );
+        save_field(e, buffer, this, CombatGroup::fSearchRadius.off, 4);
+        let locations = this.byte_add(CombatGroup::SEARCH_LOCATIONS);
+        let count = array_count(e, locations);
+        e.call(SAVE_SIZED_VALUE, &args![buffer, count]);
+        for index in 0..count {
+            let entry = e
+                .call(SEARCH_LOCATION_ELEMENT, &args![locations, index])
+                .ptr::<CombatSearchLocation>();
+            e.call(WORLD_LOCATION_SAVE, &args![entry, buffer]);
+            save_field(e, buffer, entry, CombatSearchLocation::fScore.off, 4);
+            let target_id = e.get(entry, CombatSearchLocation::iTargetID);
+            e.call(SAVE_FORM_ID_PLAIN, &args![buffer, target_id, 0u32]);
+            e.call(
+                TIME_STAMP_SAVE,
+                &args![entry.byte_add(CombatSearchLocation::fTimeStamp.off), buffer],
+            );
+        }
+        let doors = this.byte_add(CombatGroup::SEARCH_TELEPORT_DOORS);
+        let count = array_count(e, doors);
+        e.call(SAVE_SIZED_VALUE, &args![buffer, count]);
+        for index in 0..count {
+            let door = e
+                .call(SEARCH_DOOR_ELEMENT, &args![doors, index])
+                .ptr::<()>();
+            let reference = e.mem.u32(door.addr());
+            e.call(SAVE_FORM_ID, &args![buffer, reference, 0u32]);
+            let linked = e.mem.u32(door.addr() + 4);
+            e.call(SAVE_FORM_ID, &args![buffer, linked, 0u32]);
+            for offset in [8u32, 9, 0xa] {
+                e.call(
+                    SAVE_BYTES,
+                    &args![buffer, door.byte_add(offset), 1u32, 0u32],
+                );
+            }
+        }
+        let grid_slot = this.byte_add(CombatGroup::spPathingLOSGridMap.off);
+        let has_grid = ni_pointer_get(e, grid_slot) != 0;
+        e.with_stack(4, |e, flag| {
+            e.mem.set_u8(flag.addr(), has_grid as u8);
+            e.call(SAVE_BYTES, &args![buffer, flag, 1u32, 0u32]);
+        });
+        if has_grid {
+            let grid = ni_pointer_get(e, grid_slot);
+            e.call(LOS_GRID_MAP_SAVE, &args![grid, buffer]);
+        }
+    }
+    save_timer(e, buffer, this, CombatGroup::COMBAT_STRENGTH_TIMER);
+    save_field(e, buffer, this, CombatGroup::fMemberCombatStrength.off, 4);
+    save_field(
+        e,
+        buffer,
+        this,
+        CombatGroup::fAverageMemberDamagePerSecond.off,
+        4,
+    );
+    save_field(e, buffer, this, CombatGroup::fTargetCombatStrength.off, 4);
+    save_field(
+        e,
+        buffer,
+        this,
+        CombatGroup::fAverageTargetCombatStrength.off,
+        4,
+    );
+    save_timer(e, buffer, this, CombatGroup::COMBAT_MUSIC_UPDATE_TIMER);
+    save_field(e, buffer, this, CombatGroup::cCombatMusicState.off, 1);
+}
+
+/// The size of an embedded array as the folded `SaveGame` accessors read it
+/// (they test the address of the array for null first, which never fails).
+fn array_count<T>(e: &mut Engine, array: Ptr<T>) -> u32 {
+    if array.addr() == 0 {
+        0
+    } else {
+        e.call(ARRAY_SIZE, &args![array]).u32()
+    }
+}
+
+/// Writes `size` bytes of the object at `base + offset` to the save buffer.
+fn save_field<T>(e: &mut Engine, buffer: Ptr, base: Ptr<T>, offset: u32, size: u32) {
+    e.call(
+        SAVE_BYTES,
+        &args![buffer, base.byte_add(offset), size, 0u32],
+    );
+}
+
+/// `CombatTimer::SaveGame` of the timer at `offset` in the group.
+fn save_timer(e: &mut Engine, buffer: Ptr, this: Ptr<CombatGroup>, offset: u32) {
+    e.call(TIMER_SAVE, &args![this.byte_add(offset), buffer]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2902,6 +5375,79 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             combat_group_check_group_strategy_chosen_time_stamp(Ptr<CombatGroup>, u32, f32) -> bool
         ),
         entry!(0x0098a4d0, fn_0098a4d0(Ptr<CombatGroup>) -> f32),
+        entry!(0x0098a580, fn_0098a580(Ptr<CombatGroup>)),
+        entry!(0x0098ad70, fn_0098ad70(Ptr) -> bool),
+        entry!(0x0098adb0, fn_0098adb0(Ptr, f32)),
+        entry!(0x0098add0, fn_0098add0(Ptr<CombatGroup>)),
+        entry!(
+            0x0098afb0,
+            combat_group_update_search_area(Ptr<CombatGroup>) -> bool
+        ),
+        entry!(0x0098b070, fn_0098b070(Ptr<CombatGroup>, Ptr, Ptr, Ptr)),
+        entry!(0x0098b100, fn_0098b100(Ptr<CombatGroup>)),
+        entry!(
+            0x0098b8c0,
+            combat_group_build_search_teleport_door_array(Ptr<CombatGroup>)
+        ),
+        entry!(0x0098bae0, fn_0098bae0(Ptr<CombatGroup>)),
+        entry!(0x0098bbc0, fn_0098bbc0(Ptr)),
+        entry!(
+            0x0098bc00,
+            combat_group_find_search_location(Ptr<CombatGroup>, Ptr, u8, Ptr) -> Ptr
+        ),
+        entry!(0x0098bd70, fn_0098bd70(Ptr<CombatGroup>, Ptr)),
+        entry!(0x0098bfb0, fn_0098bfb0(Ptr<CombatGroup>, Ptr, f32, u32)),
+        entry!(
+            0x0098c060,
+            fn_0098c060(Ptr<CombatGroup>, Ptr<CombatTarget>, Ptr, Ptr, Ptr)
+        ),
+        entry!(0x0098c0d0, fn_0098c0d0(Ptr<CombatGroup>)),
+        entry!(
+            0x0098c3d0,
+            combat_group_find_search_door(Ptr<CombatGroup>, Ptr, f32, u8) -> Ptr
+        ),
+        entry!(
+            0x0098c590,
+            combat_group_get_combat_search_door(Ptr<CombatGroup>, u32) -> Ptr
+        ),
+        entry!(0x0098c600, fn_0098c600(Ptr<CombatGroup>, u32)),
+        entry!(0x0098c6e0, fn_0098c6e0(Ptr<CombatGroup>, u32)),
+        entry!(
+            0x0098c710,
+            combat_group_failed_to_investigate_search_door(Ptr<CombatGroup>, u32)
+        ),
+        entry!(0x0098c750, fn_0098c750(Ptr<CombatGroup>, u32)),
+        entry!(
+            0x0098c780,
+            combat_group_unreserve_search_door(Ptr<CombatGroup>, u32)
+        ),
+        entry!(
+            0x0098c7b0,
+            combat_group_calculate_search_ignore_locations(Ptr<CombatGroup>, Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x0098c870,
+            combat_group_update_combat_strength(Ptr<CombatGroup>)
+        ),
+        entry!(0x0098cb30, fn_0098cb30(Ptr<CombatGroup>, Ptr) -> f32),
+        entry!(0x0098cc20, fn_0098cc20(Ptr<CombatGroup>, Ptr) -> f32),
+        entry!(
+            0x0098cd50,
+            fn_0098cd50(Ptr<CombatGroup>, Ptr, Ptr, f32) -> Ptr
+        ),
+        entry!(0x0098ce80, combat_group_update_counts(Ptr<CombatGroup>)),
+        entry!(0x0098cf70, fn_0098cf70(Ptr<CombatGroup>)),
+        entry!(0x0098d030, fn_0098d030(Ptr<CombatGroup>)),
+        entry!(0x0098d1a0, fn_0098d1a0(Ptr<CombatGroup>)),
+        entry!(0x0098d2c0, fn_0098d2c0(Ptr<CombatGroup>)),
+        entry!(0x0098dc00, fn_0098dc00(Ptr) -> Ptr),
+        entry!(0x0098dc20, fn_0098dc20(Ptr) -> Ptr),
+        entry!(0x0098dc40, fn_0098dc40(Ptr<CombatGroup>)),
+        entry!(0x0098ddd0, fn_0098ddd0(Ptr, Ptr)),
+        entry!(0x0098de00, fn_0098de00(Ptr<CombatGroup>, Ptr) -> u32),
+        entry!(0x0098de30, fn_0098de30(Ptr<CombatGroup>, u32) -> u32),
+        entry!(0x0098de60, fn_0098de60(Ptr<CombatGroup>, i8) -> u32),
+        entry!(0x0098de90, combat_group_save_game(Ptr<CombatGroup>, Ptr)),
     ]
 }
 
@@ -5368,5 +7914,2154 @@ mod tests {
         assert_eq!(fn_0098a4d0(&mut e, group), 2.75);
         let empty = group_with(&mut e, &[], &[]);
         assert!(fn_0098a4d0(&mut e, empty).is_nan());
+    }
+
+    // ---- search, strength, cluster and save tests ----
+
+    /// Where the fake `GetWorldLocation` reads a fake actor's location:
+    /// four words at +0x60.
+    const ACTOR_LOCATION: u32 = 0x60;
+
+    /// `engine()` plus the pages and fakes the search code needs: the
+    /// arrays of the group (`SearchLocations` at +0x110, 0x1c-byte elements;
+    /// `SearchTeleportDoors` at +0x120, 12-byte elements; buffer at +4 and
+    /// size at +8 of each), `NiPointer` getter, points, distances.
+    fn search_engine() -> Engine {
+        let mut e = engine();
+        add_search_fakes(&mut e);
+        e
+    }
+
+    /// The pages and fakes of `search_engine`, for an engine built another way.
+    fn add_search_fakes(e: &mut Engine) {
+        for page in [
+            0x011d_e000u32,
+            0x0102_e000,
+            0x0101_7000,
+            0x0106_d000,
+            0x0107_3000,
+            0x0108_c000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(PLAYER, 0x7300_0000u32);
+        e.register(SEARCH_LOCATION_COUNT, |e, a| {
+            e.mem.u32(a[0] + 0x118).into_ret()
+        });
+        e.register(SEARCH_LOCATION_AT, |e, a| {
+            (e.mem.u32(a[0] + 0x114) + a[1] * 0x1c).into_ret()
+        });
+        e.register(SEARCH_LOCATION_ELEMENT, |e, a| {
+            (e.mem.u32(a[0] + 4) + a[1] * 0x1c).into_ret()
+        });
+        e.register(SEARCH_LOCATION_SLOT, |e, a| {
+            (e.mem.u32(a[0] + 4) + a[1] * 0x1c).into_ret()
+        });
+        e.register(SEARCH_LOCATION_ADD, |e, a| {
+            let size = e.mem.u32(a[0] + 8);
+            e.mem.set_u32(a[0] + 8, size + 1);
+            size.into_ret()
+        });
+        e.register(SEARCH_LOCATION_REMOVE, |e, a| {
+            let (buffer, size) = (e.mem.u32(a[0] + 4), e.mem.u32(a[0] + 8));
+            for entry in a[1]..size - a[2] {
+                for word in 0..7 {
+                    let value = e.mem.u32(buffer + (entry + a[2]) * 0x1c + 4 * word);
+                    e.mem.set_u32(buffer + entry * 0x1c + 4 * word, value);
+                }
+            }
+            e.mem.set_u32(a[0] + 8, size - a[2]);
+            Ret::default()
+        });
+        e.register(MEMBER_OF_GROUP, |e, a| {
+            (e.mem.u32(a[0] + 0x1c) + a[1] * 0x14).into_ret()
+        });
+        e.register(SEARCH_DOOR_ELEMENT, |e, a| {
+            (e.mem.u32(a[0] + 4) + a[1] * 12).into_ret()
+        });
+        e.register(SEARCH_DOOR_AT, |e, a| {
+            (e.mem.u32(a[0] + 4) + a[1] * 12).into_ret()
+        });
+        e.register(SEARCH_DOOR_ADD, |e, a| {
+            let size = e.mem.u32(a[0] + 8);
+            e.mem.set_u32(a[0] + 8, size + 1);
+            size.into_ret()
+        });
+        e.register(NI_POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(POINT_NO_OP, |_, a| a[0].into_ret());
+        e.register(FORM_TYPE_BYTE, |e, a| e.mem.u8(a[0] + 4).into_ret());
+        e.register(DISTANCE_SQUARED, |e, a| {
+            let d = |i: u32| e.mem.f32(a[0] + 4 * i) - e.mem.f32(a[1] + 4 * i);
+            ((d(0) * d(0) + d(1) * d(1) + d(2) * d(2)) as f64).into_ret()
+        });
+        e.register(SQUARE_ROOT, |_, a| f32::from_bits(a[0]).sqrt().into_ret());
+        e.register(POINT_SCALE, |e, a| {
+            let factor = f32::from_bits(a[2]);
+            for i in 0..3 {
+                let value = e.mem.f32(a[0] + 4 * i) * factor;
+                e.mem.set_f32(a[1] + 4 * i, value);
+            }
+            a[1].into_ret()
+        });
+        e.register(POINT_ACCUMULATE, |e, a| {
+            for i in 0..3 {
+                let value = e.mem.f32(a[0] + 4 * i) + e.mem.f32(a[1] + 4 * i);
+                e.mem.set_f32(a[0] + 4 * i, value);
+            }
+            a[0].into_ret()
+        });
+        e.register(POINT_ADD, |e, a| {
+            for i in 0..3 {
+                let value = e.mem.f32(a[0] + 4 * i) + e.mem.f32(a[2] + 4 * i);
+                e.mem.set_f32(a[1] + 4 * i, value);
+            }
+            a[1].into_ret()
+        });
+        e.register(POINT_SUBTRACT, |e, a| {
+            for i in 0..3 {
+                let value = e.mem.f32(a[0] + 4 * i) - e.mem.f32(a[2] + 4 * i);
+                e.mem.set_f32(a[1] + 4 * i, value);
+            }
+            a[1].into_ret()
+        });
+        e.register(POINT_LENGTH_SQUARED, |e, a| {
+            let c = |i: u32| e.mem.f32(a[0] + 4 * i);
+            (c(0) * c(0) + c(1) * c(1) + c(2) * c(2)).into_ret()
+        });
+        e.register(POINT_DIVIDE_IN_PLACE, |e, a| {
+            let factor = 1.0 / f32::from_bits(a[1]);
+            for i in 0..3 {
+                let value = e.mem.f32(a[0] + 4 * i) * factor;
+                e.mem.set_f32(a[0] + 4 * i, value);
+            }
+            a[0].into_ret()
+        });
+        // The world location of a fake actor: four words at +0x60.
+        e.register(GET_WORLD_LOCATION, |e, a| {
+            for word in 0..4 {
+                let value = e.mem.u32(a[0] + ACTOR_LOCATION + 4 * word);
+                e.mem.set_u32(a[1] + 4 * word, value);
+            }
+            a[1].into_ret()
+        });
+        e.register(WORLD_LOCATION_CONSTRUCT, |e, a| {
+            for word in 0..4 {
+                e.mem.set_u32(a[0] + 4 * word, 0);
+            }
+            a[0].into_ret()
+        });
+    }
+
+    /// Allocates the buffers behind the group's search arrays.
+    fn give_search_buffers(e: &mut Engine, group: Ptr<CombatGroup>) {
+        let locations = e.mem.alloc(0x1c * 16);
+        e.mem.set_u32(group.addr() + 0x114, locations);
+        let doors = e.mem.alloc(12 * 16);
+        e.mem.set_u32(group.addr() + 0x124, doors);
+    }
+
+    /// Puts `locations` into the group's `SearchLocations`: (point, space,
+    /// `fScore`, `iTargetID`); their time stamp is the current game time,
+    /// so the remaining time is the score.
+    fn put_locations(
+        e: &mut Engine,
+        group: Ptr<CombatGroup>,
+        locations: &[([f32; 3], u32, f32, u32)],
+    ) {
+        give_search_buffers(e, group);
+        let buffer = e.mem.u32(group.addr() + 0x114);
+        for (i, (point, space, score, id)) in locations.iter().enumerate() {
+            let at = buffer + 0x1c * i as u32;
+            for (axis, value) in point.iter().enumerate() {
+                e.mem.set_f32(at + 4 * axis as u32, *value);
+            }
+            e.mem.set_u32(at + 0x0c, *space);
+            e.mem.set_f32(at + 0x10, NOW);
+            e.mem.set_u32(at + 0x14, *id);
+            e.mem.set_f32(at + 0x18, *score);
+        }
+        e.mem.set_u32(group.addr() + 0x118, locations.len() as u32);
+    }
+
+    /// Puts `doors` into the group's `SearchTeleportDoors`: (reference,
+    /// linked reference, attempts, investigated, reserved).
+    fn put_doors(e: &mut Engine, group: Ptr<CombatGroup>, doors: &[(u32, u32, u8, u8, u8)]) {
+        if e.mem.u32(group.addr() + 0x124) == 0 {
+            give_search_buffers(e, group);
+        }
+        let buffer = e.mem.u32(group.addr() + 0x124);
+        for (i, (reference, linked, attempts, investigated, reserved)) in doors.iter().enumerate() {
+            let at = buffer + 12 * i as u32;
+            e.mem.set_u32(at, *reference);
+            e.mem.set_u32(at + 4, *linked);
+            e.mem.set_u8(at + 8, *attempts);
+            e.mem.set_u8(at + 9, *investigated);
+            e.mem.set_u8(at + 10, *reserved);
+        }
+        e.mem.set_u32(group.addr() + 0x128, doors.len() as u32);
+    }
+
+    fn door_bytes(e: &Engine, group: Ptr<CombatGroup>, index: u32) -> (u32, u32, u8, u8, u8) {
+        let at = e.mem.u32(group.addr() + 0x124) + 12 * index;
+        (
+            e.mem.u32(at),
+            e.mem.u32(at + 4),
+            e.mem.u8(at + 8),
+            e.mem.u8(at + 9),
+            e.mem.u8(at + 10),
+        )
+    }
+
+    fn point_at(e: &Engine, addr: u32) -> [f32; 3] {
+        [e.mem.f32(addr), e.mem.f32(addr + 4), e.mem.f32(addr + 8)]
+    }
+
+    /// Sets the radius settings `fn_0098b070` reads for a location with no
+    /// space (row 1) and a search count below 2 (column 0): `smaller` and
+    /// `larger`.
+    fn put_radius_settings(e: &mut Engine, smaller: f32, larger: f32) {
+        e.set_global(0x011f_1100u32, smaller);
+        e.set_global(0x011f_1104u32, larger);
+        // Row 1 starts 12 bytes into the table; column 0 reads words 0 and 1.
+        e.set_global(SEARCH_RADIUS_TABLE + 12, 0x011f_1100u32);
+        e.set_global(SEARCH_RADIUS_TABLE + 16, 0x011f_1104u32);
+        e.set_global(SEARCH_RADIUS_TABLE + 20, 0x011f_1104u32);
+    }
+
+    #[test]
+    fn pathing_location_information_and_grid_value() {
+        let mut e = engine();
+        let location = e.mem.alloc(0x30);
+        assert!(!fn_0098ad70(&mut e, Ptr::new(location)));
+        e.mem.set_u32(location + 0x14, 1);
+        assert!(e.call(0x0098_ad70, &args![location]).bool());
+        e.mem.set_u32(location + 0x14, 0);
+        e.mem.set_u32(location + 0x10, 7);
+        assert!(fn_0098ad70(&mut e, Ptr::new(location)));
+        let grid = e.mem.alloc(0x60);
+        e.call(0x0098_adb0, &args![grid, 2.5f32]);
+        assert_eq!(e.mem.f32(grid + 0x48), 2.5);
+    }
+
+    #[test]
+    fn default_world_location_takes_the_default_point_and_no_space() {
+        let mut e = engine();
+        for (i, value) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+            e.mem.set_f32(ZERO_POINT + 4 * i as u32, *value);
+        }
+        let location = e.mem.alloc(0x10);
+        for word in 0..4 {
+            e.mem.set_u32(location + 4 * word, 0xffff_ffff);
+        }
+        fn_0098bbc0(&mut e, Ptr::new(location));
+        assert_eq!(point_at(&e, location), [1.0, 2.0, 3.0]);
+        assert_eq!(e.mem.u32(location + 0x0c), 0);
+    }
+
+    #[test]
+    fn radius_settings_depend_on_the_space_and_the_search_count() {
+        let mut e = search_engine();
+        let group = e.new_object::<CombatGroup>();
+        // Table: row 0 (the 0x39 space) then row 1; two settings per
+        // column, columns overlapping by one word.
+        let values = [
+            (0x011f_1100u32, 1.0f32),
+            (0x011f_1104, 2.0),
+            (0x011f_1108, 3.0),
+            (0x011f_110c, 4.0),
+            (0x011f_1110, 5.0),
+            (0x011f_1114, 6.0),
+        ];
+        for (i, (address, value)) in values.iter().enumerate() {
+            e.set_global(*address, *value);
+            e.set_global(SEARCH_RADIUS_TABLE + 4 * i as u32, *address);
+        }
+        let outputs = e.mem.alloc(8);
+        let space = e.mem.alloc(0x10);
+        let location = e.mem.alloc(0x10);
+        let read = |e: &Engine| (e.mem.f32(outputs), e.mem.f32(outputs + 4));
+        // No space: row 1, column 0.
+        fn_0098b070(
+            &mut e,
+            group,
+            Ptr::new(location),
+            Ptr::new(outputs),
+            Ptr::new(outputs + 4),
+        );
+        assert_eq!(read(&e), (4.0, 5.0));
+        // Search count 2: column 1.
+        e.set(group, CombatGroup::iSearchCount, 2);
+        e.call(0x0098_b070, &args![group, location, outputs, outputs + 4]);
+        assert_eq!(read(&e), (5.0, 6.0));
+        // A space whose type byte is 0x39: row 0.
+        e.mem.set_u32(location + 0x0c, space);
+        e.mem.set_u8(space + 4, 0x39);
+        fn_0098b070(
+            &mut e,
+            group,
+            Ptr::new(location),
+            Ptr::new(outputs),
+            Ptr::new(outputs + 4),
+        );
+        assert_eq!(read(&e), (2.0, 3.0));
+        // Another type: row 1 again.
+        e.mem.set_u8(space + 4, 0x10);
+        e.set(group, CombatGroup::iSearchCount, 1);
+        fn_0098b070(
+            &mut e,
+            group,
+            Ptr::new(location),
+            Ptr::new(outputs),
+            Ptr::new(outputs + 4),
+        );
+        assert_eq!(read(&e), (4.0, 5.0));
+    }
+
+    #[test]
+    fn search_door_lookup_and_state_bytes() {
+        let mut e = search_engine();
+        let group = e.new_object::<CombatGroup>();
+        put_doors(&mut e, group, &[(10, 20, 0, 0, 0), (30, 40, 255, 0, 1)]);
+        let first = combat_group_get_combat_search_door(&mut e, group, 20);
+        assert_eq!(first.addr(), e.mem.u32(group.addr() + 0x124));
+        let second = e.call(0x0098_c590, &args![group, 30u32]).ptr::<()>();
+        assert_eq!(second.addr(), first.addr() + 12);
+        assert!(combat_group_get_combat_search_door(&mut e, group, 99).is_null());
+        // Bytes: +9 set by 0098c6e0, +0xa by 0098c750 and cleared by
+        // UnreserveSearchDoor, +8 counted by FailedToInvestigate.
+        fn_0098c6e0(&mut e, group, 10);
+        assert_eq!(door_bytes(&e, group, 0), (10, 20, 0, 1, 0));
+        fn_0098c750(&mut e, group, 20);
+        assert_eq!(door_bytes(&e, group, 0).4, 1);
+        combat_group_unreserve_search_door(&mut e, group, 10);
+        assert_eq!(door_bytes(&e, group, 0).4, 0);
+        combat_group_failed_to_investigate_search_door(&mut e, group, 40);
+        assert_eq!(door_bytes(&e, group, 1), (30, 40, 0, 0, 0));
+        combat_group_failed_to_investigate_search_door(&mut e, group, 30);
+        assert_eq!(door_bytes(&e, group, 1).2, 1);
+        // An unknown reference changes nothing.
+        fn_0098c6e0(&mut e, group, 99);
+        combat_group_unreserve_search_door(&mut e, group, 99);
+        assert_eq!(door_bytes(&e, group, 0), (10, 20, 0, 1, 0));
+    }
+
+    #[test]
+    fn adding_a_search_door_needs_a_teleport_reference_with_a_link() {
+        let mut e = search_engine();
+        let group = e.new_object::<CombatGroup>();
+        put_doors(&mut e, group, &[(10, 20, 1, 1, 1)]);
+        // Door 50 has a teleport reference whose pointer is 0x777; door 60's
+        // reference is null; door 70's pointer is null.
+        let linked = e.mem.alloc(8);
+        e.mem.set_u32(linked, 0x777);
+        let unlinked = e.mem.alloc(8);
+        e.register_double(DOOR_TELEPORT_REFERENCE, move |_, a| match a[0] {
+            50 => linked.into_ret(),
+            70 => unlinked.into_ret(),
+            _ => Ret::default(),
+        });
+        fn_0098c600(&mut e, group, 10);
+        assert_eq!(e.mem.u32(group.addr() + 0x128), 1);
+        fn_0098c600(&mut e, group, 60);
+        fn_0098c600(&mut e, group, 70);
+        assert_eq!(e.mem.u32(group.addr() + 0x128), 1);
+        e.mem.set_u8(e.mem.u32(group.addr() + 0x124) + 12 + 8, 9);
+        e.call(0x0098_c600, &args![group, 50u32]);
+        assert_eq!(e.mem.u32(group.addr() + 0x128), 2);
+        assert_eq!(door_bytes(&e, group, 1), (50, 0x777, 0, 0, 0));
+    }
+
+    #[test]
+    fn search_ignore_locations_collects_other_members_goals() {
+        let mut e = search_engine();
+        let skipped = actor(&mut e, 1);
+        let a = actor(&mut e, 2);
+        let b = actor(&mut e, 3);
+        let c = actor(&mut e, 4);
+        // Processes: a and b have one (the 0x38 word), c has none.
+        e.mem.set_u32(skipped.addr() + 0x38, 0x5000);
+        e.mem.set_u32(a.addr() + 0x38, 0x5001);
+        e.mem.set_u32(b.addr() + 0x38, 0x5002);
+        // The process test passes for 0x5001 only; the goal exists for a.
+        e.register(PROCESS_TEST_00981420, |_, a| (a[0] == 0x5001).into_ret());
+        e.register(ACTOR_PATHFINDING_GOAL, |_, a| (a[0] != 0).into_ret());
+        record(&mut e, &[PATH_POINT_ARRAY_ADD]);
+        let array = e.mem.alloc(0x10);
+        let group = group_with(&mut e, &[], &[skipped, a, b, c]);
+        assert!(combat_group_calculate_search_ignore_locations(
+            &mut e,
+            group,
+            skipped,
+            Ptr::new(array)
+        ));
+        let adds = calls(&e, PATH_POINT_ARRAY_ADD);
+        assert_eq!(adds.len(), 1);
+        assert_eq!(adds[0][0], array);
+        // One member: nothing to do.
+        let single = group_with(&mut e, &[], &[a]);
+        assert!(!combat_group_calculate_search_ignore_locations(
+            &mut e,
+            single,
+            skipped,
+            Ptr::new(array)
+        ));
+        assert_eq!(calls(&e, PATH_POINT_ARRAY_ADD).len(), 1);
+    }
+
+    #[test]
+    fn adding_a_search_location_copies_the_location_and_sets_the_fields() {
+        let mut e = search_engine();
+        let group = e.new_object::<CombatGroup>();
+        give_search_buffers(&mut e, group);
+        let location = e.mem.alloc(0x10);
+        for (i, value) in [4.0f32, 5.0, 6.0].iter().enumerate() {
+            e.mem.set_f32(location + 4 * i as u32, *value);
+        }
+        e.mem.set_u32(location + 0x0c, 0x4242);
+        fn_0098bfb0(&mut e, group, Ptr::new(location), 12.5, 0x1234);
+        assert_eq!(e.mem.u32(group.addr() + 0x118), 1);
+        let entry = e.mem.u32(group.addr() + 0x114);
+        assert_eq!(point_at(&e, entry), [4.0, 5.0, 6.0]);
+        assert_eq!(e.mem.u32(entry + 0x0c), 0x4242);
+        assert_eq!(e.mem.f32(entry + 0x10), NOW);
+        assert_eq!(e.mem.u32(entry + 0x14), 0x1234);
+        assert_eq!(e.mem.f32(entry + 0x18), 12.5);
+    }
+
+    #[test]
+    fn target_time_stamp_excesses() {
+        let mut e = search_engine();
+        let group = e.new_object::<CombatGroup>();
+        let target = e.new_object::<CombatTarget>();
+        // Ages 10, 20 and 30 (game time 100).
+        e.set(target, CombatTarget::fLastDetectedTimeStamp, 90.0f32);
+        e.set(target, CombatTarget::fLastNoticedTimeStamp, 80.0f32);
+        e.set(target, CombatTarget::fLastAttackedMemberTimeStamp, 70.0f32);
+        e.set_global(0x011c_e528u32, 5.0f32);
+        e.mem.set_f64(0x0107_3568, 70.0);
+        e.mem.set_f64(0x0101_db88, 30.0);
+        let outputs = e.mem.alloc(12);
+        fn_0098c060(
+            &mut e,
+            group,
+            target,
+            Ptr::new(outputs),
+            Ptr::new(outputs + 4),
+            Ptr::new(outputs + 8),
+        );
+        // 5 + (70 - 10), 30 - 20, 70 - 30.
+        assert_eq!(point_at(&e, outputs), [65.0, 10.0, 40.0]);
+    }
+
+    /// Registers all the virtual methods of the fake actors the search and
+    /// strength tests use: besides `engine()`'s, 0x21c (byte at +0x3c), 0x2bc
+    /// (`float` at +0x48), 0x42c (word at +0x4c).
+    fn fuller_actor_vtable(e: &mut Engine) {
+        let mut slots = vec![0u32; 0x120];
+        for slot in [
+            0x130u32, 0x1d0, 0x1f4, 0x21c, 0x22c, 0x230, 0x2bc, 0x2e8, 0x3fc, 0x428, 0x42c,
+        ] {
+            slots[(slot / 4) as usize] = fake(slot);
+        }
+        e.put_vtable(ACTOR_VTABLE, &slots);
+        e.register(fake(0x21c), |e, a| e.mem.u8(a[0] + 0x3c).into_ret());
+        e.register(fake(0x2bc), |e, a| e.mem.f32(a[0] + 0x48).into_ret());
+        e.register(fake(0x42c), |e, a| e.mem.u32(a[0] + 0x4c).into_ret());
+    }
+
+    /// A block that stands for a process: +0 damage per second, +4 combat
+    /// strength (both `float`), +8 flags word (bit 3 initialised), +0xc
+    /// fleeing byte.
+    fn process_block(e: &mut Engine, dps: f32, strength: f32, flags: u32, fleeing: bool) -> u32 {
+        let block = e.mem.alloc(0x10);
+        e.mem.set_f32(block, dps);
+        e.mem.set_f32(block + 4, strength);
+        e.mem.set_u32(block + 8, flags);
+        e.mem.set_u8(block + 0x0c, fleeing as u8);
+        block
+    }
+
+    /// Doubles for the combat-state accessors over `process_block`.
+    fn add_process_fakes(e: &mut Engine) {
+        e.register(PROCESS_COMBAT_STATE, |_, a| a[0].into_ret());
+        e.register(STATE_DAMAGE_PER_SECOND, |e, a| e.mem.f32(a[0]).into_ret());
+        e.register(STATE_COMBAT_STRENGTH, |e, a| e.mem.f32(a[0] + 4).into_ret());
+        e.register(CONTROLLER_IS_FLEEING, |e, a| {
+            e.mem.u8(a[0] + 0x0c).into_ret()
+        });
+        e.register(PROCESS_FLAG_BIT_3, |e, a| {
+            (e.mem.u32(a[0] + 8) & 8 != 0).into_ret()
+        });
+        // `CalculateCombatStrength(actor, damage)`: twice the damage, or 7
+        // for the -1 the target code passes.
+        e.register(ACTOR_COMBAT_STRENGTH, |_, a| {
+            let damage = f32::from_bits(a[1]);
+            (if damage < 0.0 { 7.0 } else { damage * 2.0 }).into_ret()
+        });
+        e.register(ACTOR_WEAPON_DAMAGE_PER_SECOND, |_, _| 10.0f32.into_ret());
+        e.register(ACTOR_IS_FLEEING_ARG, |e, a| {
+            e.mem.u8(a[0] + 0x3e).into_ret()
+        });
+    }
+
+    fn member_entry(e: &Engine, group: Ptr<CombatGroup>, index: u32) -> Ptr<CombatMember> {
+        Ptr::new(e.mem.u32(group.addr() + 0x1c) + 0x14 * index)
+    }
+
+    /// Sets the word at +0x38 of a fake actor (its process), +0x44 (its
+    /// process type) and its location (+0x60: x, y, z, space).
+    fn place_actor(e: &mut Engine, actor: Ptr, process: u32, x: f32, space: u32) {
+        e.mem.set_u32(actor.addr() + 0x38, process);
+        e.mem.set_f32(actor.addr() + ACTOR_LOCATION, x);
+        e.mem.set_u32(actor.addr() + ACTOR_LOCATION + 0x0c, space);
+        // The position that virtual method 0x1f4 returns is +0x40.
+        e.mem.set_f32(actor.addr() + 0x40, x);
+    }
+
+    #[test]
+    fn search_center_from_locations() {
+        let mut e = search_engine();
+        let space = e.mem.alloc(8);
+        let group = e.new_object::<CombatGroup>();
+        put_radius_settings(&mut e, 20.0, 100.0);
+        e.set_global(0x011c_e7b0u32, 20.0f32);
+        let first = space;
+        put_locations(
+            &mut e,
+            group,
+            &[
+                ([0.0, 0.0, 0.0], first, 40.0, 0),
+                ([10.0, 0.0, 0.0], first, 20.0, 0),
+            ],
+        );
+        fn_0098b100(&mut e, group);
+        // The center is the average weighted by the remaining times.
+        let factor = 1.0f32 / 60.0;
+        let centre = point_at(&e, group.addr() + 0xf0);
+        assert!((centre[0] - 200.0 * factor).abs() < 1e-5);
+        assert_eq!(e.mem.u32(group.addr() + 0xfc), first);
+        assert_eq!(point_at(&e, group.addr() + 0x100), [0.0, 0.0, 0.0]);
+        // Radius: 20 + the root of the largest squared distance (6.67^2),
+        // inside [20, 100].
+        let radius = e.get(group, CombatGroup::fSearchRadius);
+        let farthest = (10.0f32 - 200.0 * factor).powi(2);
+        assert!((radius - (20.0 + farthest.sqrt())).abs() < 1e-3);
+        // A far location beyond the larger radius caps the radius at it.
+        put_radius_settings(&mut e, 1.0, 5.0);
+        fn_0098b100(&mut e, group);
+        assert_eq!(point_at(&e, group.addr() + 0xf0), [0.0, 0.0, 0.0]);
+        assert_eq!(e.get(group, CombatGroup::fSearchRadius), 5.0);
+        // One location: it is the center, the radius the smaller setting.
+        let single = e.new_object::<CombatGroup>();
+        put_locations(&mut e, single, &[([3.0, 4.0, 5.0], first, 9.0, 0)]);
+        e.call(0x0098_b100, &args![single]);
+        assert_eq!(point_at(&e, single.addr() + 0xf0), [3.0, 4.0, 5.0]);
+        assert_eq!(e.mem.u32(single.addr() + 0xfc), first);
+        assert_eq!(point_at(&e, single.addr() + 0x100), [3.0, 4.0, 5.0]);
+        assert_eq!(e.get(single, CombatGroup::fSearchRadius), 1.0);
+    }
+
+    #[test]
+    fn search_center_from_members() {
+        let mut e = search_engine();
+        e.register(PROCESS_TYPE, |e, a| e.mem.i32(a[0] + 0x44).into_ret());
+        let space = e.mem.alloc(8);
+        put_radius_settings(&mut e, 20.0, 100.0);
+        let (a, b, c) = (actor(&mut e, 1), actor(&mut e, 2), actor(&mut e, 3));
+        for (who, x, kind) in [(a, 10.0f32, 4i32), (b, 0.0, 2), (c, 300.0, 3)] {
+            place_actor(&mut e, who, 0, x, space);
+            e.mem.set_i32(who.addr() + 0x44, kind);
+        }
+        let group = group_with(&mut e, &[], &[a, b, c]);
+        fn_0098b100(&mut e, group);
+        // Best member b (lowest type); a and b within 100 of it.
+        assert_eq!(point_at(&e, group.addr() + 0xf0), [5.0, 0.0, 0.0]);
+        assert_eq!(e.mem.u32(group.addr() + 0xfc), space);
+        assert_eq!(point_at(&e, group.addr() + 0x100), [0.0, 0.0, 0.0]);
+        // c lies beyond the larger radius: the radius is the larger setting.
+        assert_eq!(e.get(group, CombatGroup::fSearchRadius), 100.0);
+        // A single member: its location, radius the smaller setting.
+        let single = group_with(&mut e, &[], &[a]);
+        fn_0098b100(&mut e, single);
+        assert_eq!(point_at(&e, single.addr() + 0xf0), [10.0, 0.0, 0.0]);
+        assert_eq!(e.mem.u32(single.addr() + 0xfc), space);
+        assert_eq!(e.get(single, CombatGroup::fSearchRadius), 20.0);
+        // With the center's space already set nothing is recomputed.
+        e.mem.set_u32(single.addr() + 0xfc, 0x1234);
+        e.set(single, CombatGroup::fSearchRadius, 3.0f32);
+        fn_0098b100(&mut e, single);
+        assert_eq!(e.get(single, CombatGroup::fSearchRadius), 3.0);
+    }
+
+    #[test]
+    fn search_area_moves_when_the_radius_or_the_center_changed_enough() {
+        let mut e = search_engine();
+        let space = e.mem.alloc(8);
+        put_radius_settings(&mut e, 20.0, 100.0);
+        e.set_global(SEARCH_AREA_MARGIN, 128.0f64);
+        e.set_global(SEARCH_AREA_MOVE_LIMIT, 4096.0f64);
+        record(
+            &mut e,
+            &[
+                POINTER_ARRAY_CONSTRUCT,
+                POINTER_ARRAY_DESTRUCT,
+                COLLECT_TELEPORT_DOORS,
+                ARRAY_SORT,
+            ],
+        );
+        let group = e.new_object::<CombatGroup>();
+        put_locations(&mut e, group, &[([0.0, 0.0, 0.0], space, 9.0, 0)]);
+        // The new area is center (0, 0, 0), radius 20.
+        e.mem.set_f32(group.addr() + 0xf0, 0.0);
+        e.set(group, CombatGroup::fSearchRadius, 20.0f32);
+        assert!(!combat_group_update_search_area(&mut e, group));
+        assert!(calls(&e, POINTER_ARRAY_CONSTRUCT).is_empty());
+        // Radius far above the new one.
+        e.set(group, CombatGroup::fSearchRadius, 149.0f32);
+        assert!(e.call(0x0098_afb0, &args![group]).bool());
+        assert_eq!(calls(&e, POINTER_ARRAY_CONSTRUCT).len(), 1);
+        // The radius is back to 20; a center 70 away (4900 > 4096) moves.
+        e.mem.set_f32(group.addr() + 0xf0, 70.0);
+        assert!(combat_group_update_search_area(&mut e, group));
+        // 60 away (3600) does not; a radius 100 below does not either.
+        e.mem.set_f32(group.addr() + 0xf0, 60.0);
+        e.set(group, CombatGroup::fSearchRadius, 0.0f32);
+        assert!(!combat_group_update_search_area(&mut e, group));
+        assert_eq!(calls(&e, POINTER_ARRAY_CONSTRUCT).len(), 2);
+    }
+
+    #[test]
+    fn teleport_door_array_collects_sorts_dedupes_and_adds_new_doors() {
+        let mut e = search_engine();
+        let space = e.mem.alloc(8);
+        put_radius_settings(&mut e, 10.0, 3.0);
+        // The array the game keeps on its stack: buffer at +4, size at +8.
+        e.register(POINTER_ARRAY_CONSTRUCT, |e, a| {
+            let buffer = e.mem.alloc(0x100);
+            e.mem.set_u32(a[0] + 4, buffer);
+            e.mem.set_u32(a[0] + 8, 0);
+            a[0].into_ret()
+        });
+        e.register(POINTER_ARRAY_DESTRUCT, |_, _| Ret::default());
+        // The first collection (the center) finds 7, 3, 7; the next one (a
+        // member beyond the larger radius) finds 3, 9.
+        let mut batches = vec![vec![3u32, 9], vec![7, 3, 7]];
+        e.register_double(COLLECT_TELEPORT_DOORS, move |e, a| {
+            let array = a[3];
+            let doors = batches.pop().unwrap_or_default();
+            for door in doors {
+                let size = e.mem.u32(array + 8);
+                let buffer = e.mem.u32(array + 4);
+                e.mem.set_u32(buffer + 4 * size, door);
+                e.mem.set_u32(array + 8, size + 1);
+            }
+            Ret::default()
+        });
+        e.register(ARRAY_SORT, |e, a| {
+            let (buffer, size) = (e.mem.u32(a[0] + 4), e.mem.u32(a[0] + 8));
+            let mut values: Vec<u32> = (0..size).map(|i| e.mem.u32(buffer + 4 * i)).collect();
+            values.sort_unstable();
+            for (i, value) in values.iter().enumerate() {
+                e.mem.set_u32(buffer + 4 * i as u32, *value);
+            }
+            Ret::default()
+        });
+        e.register(POINTER_ARRAY_REMOVE_RANGE, |e, a| {
+            let (buffer, size) = (e.mem.u32(a[0] + 4), e.mem.u32(a[0] + 8));
+            for i in a[1]..size - a[2] {
+                let value = e.mem.u32(buffer + 4 * (i + a[2]));
+                e.mem.set_u32(buffer + 4 * i, value);
+            }
+            e.mem.set_u32(a[0] + 8, size - a[2]);
+            Ret::default()
+        });
+        // GetDistance: the first coordinate difference.
+        e.register(WORLD_LOCATION_DISTANCE, |e, a| {
+            ((e.mem.f32(a[1]) - e.mem.f32(a[0])).abs() as f64).into_ret()
+        });
+        e.register(DOOR_TELEPORT_REFERENCE, |_, _| Ret::default());
+        let (near, far) = (actor(&mut e, 1), actor(&mut e, 2));
+        // Larger setting 3 -> its square 9: the near member (distance 4)
+        // is not below 9?  4 < 9, so it is skipped; the far one (20) counts.
+        place_actor(&mut e, near, 0, 4.0, space);
+        place_actor(&mut e, far, 0, 20.0, space);
+        let group = group_with(&mut e, &[], &[near, far]);
+        e.mem.set_u32(group.addr() + 0xfc, space);
+        e.set(group, CombatGroup::fSearchRadius, 50.0f32);
+        e.call_log = Some(vec![]);
+        combat_group_build_search_teleport_door_array(&mut e, group);
+        let collections = calls(&e, COLLECT_TELEPORT_DOORS);
+        assert_eq!(collections.len(), 2);
+        // (space, point, radius, array): the center with the group's radius,
+        // then the far member with the smaller setting.
+        assert_eq!(collections[0][0], space);
+        assert_eq!(f32::from_bits(collections[0][2]), 50.0);
+        assert_eq!(f32::from_bits(collections[1][2]), 10.0);
+        // Sorted 3, 3, 7, 7, 9 -> 3, 7, 9; each added through 0098c600,
+        // which asks for its teleport reference.
+        let asked: Vec<u32> = calls(&e, DOOR_TELEPORT_REFERENCE)
+            .iter()
+            .map(|c| c[0])
+            .collect();
+        assert_eq!(asked, vec![3, 7, 9]);
+        assert_eq!(calls(&e, POINTER_ARRAY_REMOVE_RANGE).len(), 2);
+    }
+
+    #[test]
+    fn ending_the_search_resets_everything() {
+        let mut e = search_engine();
+        record(&mut e, &[NI_POINTER_ASSIGN, TIMER_RESET, ARRAY_CLEAR]);
+        let group = e.new_object::<CombatGroup>();
+        e.set(group, CombatGroup::bUpdateSearchDebugGeometry, true);
+        e.set(group, CombatGroup::iSearchCount, 4);
+        e.set(group, CombatGroup::fSearchRadius, 9.0f32);
+        e.set(group, CombatGroup::fSearchStartedTimeStamp, 55.0f32);
+        for (i, value) in [7.0f32, 8.0, 9.0].iter().enumerate() {
+            e.mem.set_f32(group.addr() + 0xf0 + 4 * i as u32, *value);
+            e.mem.set_f32(group.addr() + 0x100 + 4 * i as u32, *value);
+        }
+        e.mem.set_u32(group.addr() + 0xfc, 0x99);
+        for (i, value) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+            e.mem.set_f32(ZERO_POINT + 4 * i as u32, *value);
+        }
+        e.call_log = Some(vec![]);
+        fn_0098bae0(&mut e, group);
+        assert!(!e.get(group, CombatGroup::bUpdateSearchDebugGeometry));
+        assert_eq!(e.get(group, CombatGroup::iSearchCount), 0);
+        assert_eq!(e.get(group, CombatGroup::fSearchRadius), 0.0);
+        assert_eq!(
+            e.get(group, CombatGroup::fSearchStartedTimeStamp),
+            -f32::MAX
+        );
+        assert_eq!(point_at(&e, group.addr() + 0xf0), [1.0, 2.0, 3.0]);
+        assert_eq!(e.mem.u32(group.addr() + 0xfc), 0);
+        assert_eq!(point_at(&e, group.addr() + 0x100), [1.0, 2.0, 3.0]);
+        assert_eq!(
+            calls(&e, NI_POINTER_ASSIGN),
+            vec![vec![group.addr() + 0xd4, 0], vec![group.addr() + 0x130, 0]]
+        );
+        assert_eq!(
+            calls(&e, TIMER_RESET),
+            vec![vec![group.addr() + 0xd8], vec![group.addr() + 0xe0]]
+        );
+        assert_eq!(
+            calls(&e, ARRAY_CLEAR),
+            vec![vec![group.addr() + 0x110, 1], vec![group.addr() + 0x120, 1]]
+        );
+        e.call(0x0098_bae0, &args![group]);
+    }
+
+    #[test]
+    fn best_search_location_for_an_actor() {
+        let mut e = search_engine();
+        let space = e.mem.alloc(8);
+        e.set_global(0x0108_d5a0u32, 1000.0f32);
+        e.set_global(0x0108_d598u32, 1.0f64);
+        e.set_global(0x0102_0758u32, 10.0f64);
+        e.set_global(FIVE_DOUBLE, 5.0f64);
+        e.register(POINTS_EQUAL, |e, a| {
+            (0..3)
+                .all(|i| e.mem.f32(a[0] + 4 * i) == e.mem.f32(a[1] + 4 * i))
+                .into_ret()
+        });
+        let who = actor(&mut e, 1);
+        place_actor(&mut e, who, 0, 0.0, space);
+        let group = e.new_object::<CombatGroup>();
+        // Scores 8, 9, 12, 12, 6; the second shares the reference's space
+        // and point, which adds 5 to its qualification.
+        let scores = [8.0f32, 9.0, 12.0, 12.0, 6.0];
+        let list: Vec<([f32; 3], u32, f32, u32)> = scores
+            .iter()
+            .enumerate()
+            .map(|(i, s)| ([i as f32, 0.0, 0.0], space, *s, 0))
+            .collect();
+        put_locations(&mut e, group, &list);
+        let reference = e.mem.alloc(0x10);
+        e.mem.set_f32(reference, 1.0);
+        e.mem.set_u32(reference + 0x0c, space);
+        let entries: Vec<u32> = (0..5)
+            .map(|i| e.mem.u32(group.addr() + 0x114) + 0x1c * i)
+            .collect();
+        // Threshold 10: entries 1 (9 + 5), 2 and 3 qualify; ties go to the
+        // later one.
+        let found = combat_group_find_search_location(&mut e, group, who, 10, Ptr::new(reference));
+        assert_eq!(found.addr(), entries[3]);
+        // Without the reference only entries 2 and 3 qualify.
+        let found = e
+            .call(0x0098_bc00, &args![group, who, 10u32, 0u32])
+            .ptr::<()>();
+        assert_eq!(found.addr(), entries[3]);
+        // With a process whose combat state refuses the last one.
+        let process = 0x5555u32;
+        e.mem.set_u32(who.addr() + 0x38, process);
+        e.register(PROCESS_COMBAT_STATE, |_, a| (a[0] + 1).into_ret());
+        let refused = entries[3];
+        e.register_double(COMBAT_STATE_CHECK_MOVEMENT, move |_, a| {
+            (a[1] != refused).into_ret()
+        });
+        let found = combat_group_find_search_location(&mut e, group, who, 10, Ptr::NULL);
+        assert_eq!(found.addr(), entries[2]);
+        // A higher threshold than any score: nothing.
+        let found = combat_group_find_search_location(&mut e, group, who, 200, Ptr::NULL);
+        assert!(found.is_null());
+    }
+
+    #[test]
+    fn ageing_search_locations_and_target_time_stamps_near_a_position() {
+        let mut e = search_engine();
+        e.set_global(0x011c_f684u32, 10.0f32);
+        e.set_global(0x011c_e528u32, 0.0f32);
+        e.mem.set_f64(0x0107_3568, 70.0);
+        e.mem.set_f64(0x0101_db88, 30.0);
+        e.set_global(QUARTER_FLOAT, 0.25f32);
+        record(&mut e, &[POINT_CONSTRUCT]);
+        // The scaled distance of a location: its first coordinate.
+        e.register(WORLD_LOCATION_SCALED_DISTANCE, |e, a| {
+            (e.mem.f32(a[0]) as f64).into_ret()
+        });
+        let (t1, t2) = (actor(&mut e, 0x77), actor(&mut e, 0x78));
+        let group = group_with(&mut e, &[t1, t2], &[]);
+        put_locations(
+            &mut e,
+            group,
+            &[
+                ([50.0, 0.0, 0.0], 0, 40.0, 0),
+                ([500.0, 0.0, 0.0], 0, 99.0, 0),
+                ([10.0, 0.0, 0.0], 0, 20.0, 0x77),
+                ([1.0, 0.0, 0.0], 0, 20.0, 0x78),
+            ],
+        );
+        // t1: detected stamp 90 (age 10 -> excess 60), noticed 100 (30),
+        // attacked 50 (20); its detected location is close.
+        let first = target_entry(&e, group, 0);
+        e.set(first, CombatTarget::fLastDetectedTimeStamp, 90.0f32);
+        e.set(first, CombatTarget::fLastNoticedTimeStamp, 100.0f32);
+        e.set(first, CombatTarget::fLastAttackedMemberTimeStamp, 50.0f32);
+        e.mem.set_f32(first.addr() + 0x18, 20.0);
+        // t2: detected excess 60 but far away; noticed stamp 110 (excess 40)
+        // and close.
+        let second = target_entry(&e, group, 1);
+        e.set(second, CombatTarget::fLastDetectedTimeStamp, 90.0f32);
+        e.set(second, CombatTarget::fLastNoticedTimeStamp, 110.0f32);
+        e.set(second, CombatTarget::fLastAttackedMemberTimeStamp, 50.0f32);
+        e.mem.set_f32(second.addr() + 0x18, 1000.0);
+        e.mem.set_f32(second.addr() + 0x08, 5.0);
+        let position = e.mem.alloc(0x10);
+        fn_0098bd70(&mut e, group, Ptr::new(position));
+        let buffer = e.mem.u32(group.addr() + 0x114);
+        // 40 remaining -> score lowered by 10; the far one and the others
+        // (not above 30) stay.
+        assert_eq!(e.mem.f32(buffer + 0x18), 30.0);
+        assert_eq!(e.mem.f32(buffer + 0x1c + 0x18), 99.0);
+        assert_eq!(e.mem.f32(buffer + 2 * 0x1c + 0x18), 20.0);
+        // t1's detected stamp moved back by the excess over 30.
+        assert_eq!(e.get(first, CombatTarget::fLastDetectedTimeStamp), 60.0);
+        assert_eq!(e.get(first, CombatTarget::fLastNoticedTimeStamp), 100.0);
+        assert_eq!(
+            e.get(first, CombatTarget::fLastAttackedMemberTimeStamp),
+            50.0
+        );
+        // t2: only the noticed one (110 - (40 - 30)).
+        assert_eq!(e.get(second, CombatTarget::fLastDetectedTimeStamp), 90.0);
+        assert_eq!(e.get(second, CombatTarget::fLastNoticedTimeStamp), 100.0);
+        // The scale given to the distance is (1, 1, 0.25).
+        assert_eq!(calls(&e, POINT_CONSTRUCT).len(), 1);
+        assert_eq!(f32::from_bits(calls(&e, POINT_CONSTRUCT)[0][3]), 0.25);
+    }
+
+    #[test]
+    fn search_locations_are_rebuilt_from_the_targets_strongly() {
+        let mut e = search_engine();
+        e.mem.set_f64(0x0107_3568, 70.0);
+        e.mem.set_f64(0x0101_db88, 30.0);
+        e.set_global(0x011c_e528u32, 0.0f32);
+        // BGSWorldLocation(point, space): the point and the space.
+        e.register(WORLD_LOCATION_FROM_POINT, |e, a| {
+            for i in 0..3 {
+                let value = e.mem.f32(a[1] + 4 * i);
+                e.mem.set_f32(a[0] + 4 * i, value);
+            }
+            e.mem.set_u32(a[0] + 0x0c, a[2]);
+            a[0].into_ret()
+        });
+        let space_one = e.mem.alloc(8);
+        let space_two = e.mem.alloc(8);
+        let actors: Vec<Ptr> = (0..5).map(|i| actor(&mut e, 0x11 + i)).collect();
+        let group = group_with(&mut e, &actors, &[]);
+        // Old entries: kept (score 5), negative score, with a target ID,
+        // kept (score 9).
+        put_locations(
+            &mut e,
+            group,
+            &[
+                ([1.0, 1.0, 1.0], 0, 5.0, 0),
+                ([2.0, 2.0, 2.0], 0, -1.0, 0),
+                ([3.0, 3.0, 3.0], 0, 9.0, 0x99),
+                ([4.0, 4.0, 4.0], 0, 9.0, 0),
+            ],
+        );
+        // (detected, noticed, attacked) stamps with the game time 100, so
+        // the excesses are (70 - age, 30 - age, 70 - age):
+        // t0: (50, 20, 70): b < a, c > a -> attacked location, score 70
+        // t1: (60, 20, 60): b < a, c <= a -> detected location, score 60
+        // t2: (30, 30, 30): b is not below -> noticed + attacked, same space
+        // t3: (30, 30, 30), another space -> noticed location, score 30
+        // t4: all negative: nothing
+        let stamps = [
+            (80.0f32, 90.0, 100.0),
+            (90.0, 90.0, 90.0),
+            (60.0, 100.0, 60.0),
+            (60.0, 100.0, 60.0),
+            (0.0, 0.0, 0.0),
+        ];
+        for (i, (detected, noticed, attacked)) in stamps.iter().enumerate() {
+            let target = target_entry(&e, group, i as u32);
+            e.set(target, CombatTarget::fLastDetectedTimeStamp, *detected);
+            e.set(target, CombatTarget::fLastNoticedTimeStamp, *noticed);
+            e.set(
+                target,
+                CombatTarget::fLastAttackedMemberTimeStamp,
+                *attacked,
+            );
+            // Locations: detected +0x18, noticed +0x08, attacked +0x38
+            // (x = 10 + 100 * kind + i).
+            for (kind, offset) in [(1u32, 0x18u32), (0, 0x08), (2, 0x38)] {
+                let at = target.addr() + offset;
+                e.mem.set_f32(at, (10 + 100 * kind) as f32 + i as f32);
+                e.mem.set_u32(
+                    at + 0x0c,
+                    if i == 3 && kind == 2 {
+                        space_two
+                    } else {
+                        space_one
+                    },
+                );
+            }
+        }
+        e.call_log = Some(vec![]);
+        fn_0098c0d0(&mut e, group);
+        let buffer = e.mem.u32(group.addr() + 0x114);
+        assert_eq!(e.mem.u32(group.addr() + 0x118), 2 + 4);
+        let entry = |i: u32| buffer + 0x1c * i;
+        // The two kept ones first.
+        assert_eq!(e.mem.f32(entry(0) + 0x18), 5.0);
+        assert_eq!(e.mem.f32(entry(1) + 0x18), 9.0);
+        assert_eq!(e.mem.u32(entry(1) + 0x14), 0);
+        // t0 -> attacked location (x = 210), score 70, the actor's form ID.
+        assert_eq!(e.mem.f32(entry(2)), 210.0);
+        assert_eq!(e.mem.f32(entry(2) + 0x18), 70.0);
+        assert_eq!(e.mem.u32(entry(2) + 0x14), 0x11);
+        // t1 -> detected location (x = 111), score 60.
+        assert_eq!(e.mem.f32(entry(3)), 111.0);
+        assert_eq!(e.mem.f32(entry(3) + 0x18), 60.0);
+        assert_eq!(e.mem.u32(entry(3) + 0x14), 0x12);
+        // t2 -> the average of the noticed (12) and attacked (212) locations
+        // weighted by 30 and 30, in the noticed location's space, score 30.
+        let average = (212.0f32 * 30.0 + 12.0 * 30.0) * (1.0f32 / 60.0);
+        assert!((e.mem.f32(entry(4)) - average).abs() < 1e-3);
+        assert_eq!(e.mem.u32(entry(4) + 0x0c), space_one);
+        assert_eq!(e.mem.f32(entry(4) + 0x18), 30.0);
+        assert_eq!(e.mem.u32(entry(4) + 0x14), 0x13);
+        // t3 (the attacked location is in another space) -> noticed.
+        assert_eq!(e.mem.f32(entry(5)), 13.0);
+        assert_eq!(e.mem.f32(entry(5) + 0x18), 30.0);
+        assert_eq!(e.mem.u32(entry(5) + 0x14), 0x14);
+    }
+
+    #[test]
+    fn nearest_search_door_of_an_actor() {
+        let mut e = search_engine();
+        fuller_actor_vtable(&mut e);
+        e.set_global(0x011c_fc98u32, 5u32);
+        let who = actor(&mut e, 1);
+        place_actor(&mut e, who, 0, 0.0, 0);
+        // Door references are fake actors with a location.
+        let mut references = vec![];
+        for (i, x) in [50.0f32, 10.0, 20.0, 30.0, 40.0, 5.0, 60.0]
+            .iter()
+            .enumerate()
+        {
+            let door = actor(&mut e, 100 + i as u32);
+            place_actor(&mut e, door, 0, *x, 0);
+            references.push(door.addr());
+        }
+        let group = e.new_object::<CombatGroup>();
+        // 0: far-ish; 1: nearest; 2: no link; 3: reserved; 4: investigated;
+        // 5: too many attempts; 6: no teleport reference.
+        put_doors(
+            &mut e,
+            group,
+            &[
+                (references[0], 1, 0, 0, 0),
+                (references[1], 1, 0, 0, 0),
+                (references[2], 0, 0, 0, 0),
+                (references[3], 1, 0, 0, 1),
+                (references[4], 1, 0, 1, 0),
+                (references[5], 1, 9, 0, 0),
+                (references[6], 1, 0, 0, 0),
+            ],
+        );
+        let no_teleport = references[6];
+        e.register_double(DOOR_TELEPORT_REFERENCE, move |_, a| {
+            (if a[0] == no_teleport { 0 } else { a[0] + 1 }).into_ret()
+        });
+        // The teleport location is marked with the teleport reference it
+        // came from; the actor cannot exist in the nearest door's space.
+        e.register(TELEPORT_WORLD_LOCATION, |e, a| {
+            e.mem.set_u32(a[1], a[0]);
+            a[1].into_ret()
+        });
+        let blocked = references[1] + 1;
+        e.register_double(CAN_ACTOR_EXIST_IN_SPACE, move |e, a| {
+            (e.mem.u32(a[1]) != blocked).into_ret()
+        });
+        let found = combat_group_find_search_door(&mut e, group, who, 100.0, 0);
+        assert_eq!(found.addr(), references[1]);
+        // Within a radius of 8 nothing qualifies (the nearest is 10 away).
+        let found = e
+            .call(0x0098_c3d0, &args![group, who, 8.0f32, 0u32])
+            .ptr::<()>();
+        assert!(found.is_null());
+        // With the space check the nearest is out: the next one is chosen.
+        let found = combat_group_find_search_door(&mut e, group, who, 100.0, 1);
+        assert_eq!(found.addr(), references[0]);
+        // An actor whose method 0x21c is true and whose extra object's
+        // method 0x28 is true finds nothing.
+        e.mem.set_u8(who.addr() + 0x3c, 1);
+        let extra = e.mem.alloc(0x40);
+        let mut slots = vec![0u32; 16];
+        slots[10] = fake(0x28);
+        e.put_vtable(0x7210_0000, &slots);
+        e.mem.set_u32(extra + 0x30, 0x7210_0000);
+        e.register(fake(0x28), |_, _| true.into_ret());
+        e.register_double(ACTOR_EXTRA_OBJECT, move |_, _| extra.into_ret());
+        let found = combat_group_find_search_door(&mut e, group, who, 100.0, 0);
+        assert!(found.is_null());
+        e.register(fake(0x28), |_, _| false.into_ret());
+        let found = combat_group_find_search_door(&mut e, group, who, 100.0, 0);
+        assert_eq!(found.addr(), references[1]);
+    }
+
+    #[test]
+    fn combat_strength_of_members_and_targets() {
+        let mut e = search_engine();
+        add_process_fakes(&mut e);
+        let player = actor(&mut e, 1);
+        e.set_global(PLAYER, player.addr());
+        let (m1, m2, m3) = (actor(&mut e, 2), actor(&mut e, 3), actor(&mut e, 4));
+        // m1: process, not fleeing, dps 3 strength 5; m2: fleeing; m3: no
+        // process (keeps its stored values 4 / 2).
+        let p1 = process_block(&mut e, 3.0, 5.0, 0, false);
+        let p2 = process_block(&mut e, 100.0, 100.0, 0, true);
+        e.mem.set_u32(m1.addr() + 0x38, p1);
+        e.mem.set_u32(m2.addr() + 0x38, p2);
+        let (t1, t2, t3) = (actor(&mut e, 5), actor(&mut e, 6), actor(&mut e, 7));
+        // t1: process with strength 6; t2: fleeing; t3: no process.
+        let p3 = process_block(&mut e, 0.0, 6.0, 0, false);
+        e.mem.set_u32(t1.addr() + 0x38, p3);
+        e.mem.set_u8(t2.addr() + 0x3e, 1);
+        let group = group_with(&mut e, &[player, t1, t2, t3], &[player, m1, m2, m3]);
+        let last = member_entry(&e, group, 3);
+        e.set(last, CombatMember::fCombatStrength, 4.0f32);
+        e.set(last, CombatMember::fDamagePerSecond, 2.0f32);
+        combat_group_update_combat_strength(&mut e, group);
+        // Members: the player (dps 10 -> strength 20), m1 (5), m3 (4).
+        assert_eq!(e.get(group, CombatGroup::fMemberCombatStrength), 29.0);
+        assert_eq!(
+            e.get(group, CombatGroup::fAverageMemberDamagePerSecond),
+            5.0
+        );
+        let first = member_entry(&e, group, 0);
+        assert_eq!(e.get(first, CombatMember::fDamagePerSecond), 10.0);
+        assert_eq!(e.get(first, CombatMember::fCombatStrength), 20.0);
+        let second = member_entry(&e, group, 1);
+        assert_eq!(e.get(second, CombatMember::fDamagePerSecond), 3.0);
+        assert_eq!(e.get(second, CombatMember::fCombatStrength), 5.0);
+        // Targets: the player (7), t1 (6), t3 (7); t2 fleeing is out.
+        assert_eq!(e.get(group, CombatGroup::fTargetCombatStrength), 20.0);
+        assert_eq!(
+            e.get(group, CombatGroup::fAverageTargetCombatStrength),
+            20.0f32 / 3.0
+        );
+        // No members and no targets: the sums and averages are zero.
+        let empty = group_with(&mut e, &[], &[]);
+        e.call(0x0098_c870, &args![empty]);
+        assert_eq!(e.get(empty, CombatGroup::fMemberCombatStrength), 0.0);
+        assert_eq!(e.get(empty, CombatGroup::fAverageTargetCombatStrength), 0.0);
+    }
+
+    #[test]
+    fn member_strength_and_damage_as_seen_from_an_actor() {
+        let mut e = search_engine();
+        add_process_fakes(&mut e);
+        let (a, b, c, d) = (
+            actor(&mut e, 1),
+            actor(&mut e, 2),
+            actor(&mut e, 3),
+            actor(&mut e, 4),
+        );
+        let process_a = process_block(&mut e, 0.0, 0.0, 0, false);
+        let process_b = process_block(&mut e, 0.0, 0.0, 0, true);
+        let process_d = process_block(&mut e, 9.0, 7.0, 0, false);
+        e.mem.set_u32(a.addr() + 0x38, process_a);
+        e.mem.set_u32(b.addr() + 0x38, process_b);
+        e.mem.set_u32(d.addr() + 0x38, process_d);
+        let group = group_with(&mut e, &[], &[a, b, c, d]);
+        // Stored values: (strength, damage per second).
+        for (i, (strength, damage)) in [(10.0f32, 1.0f32), (20.0, 2.0), (-5.0, 3.0), (40.0, 4.0)]
+            .iter()
+            .enumerate()
+        {
+            let member = member_entry(&e, group, i as u32);
+            e.set(member, CombatMember::fCombatStrength, *strength);
+            e.set(member, CombatMember::fDamagePerSecond, *damage);
+        }
+        e.set(group, CombatGroup::fMemberCombatStrength, 123.0f32);
+        e.set(group, CombatGroup::fAverageMemberDamagePerSecond, 4.5f32);
+        // A null actor: the stored sums.
+        assert_eq!(fn_0098cb30(&mut e, group, Ptr::NULL), 123.0);
+        assert_eq!(fn_0098cc20(&mut e, group, Ptr::NULL), 4.5);
+        // Seen from d: d's state (7) + a's stored 10; b is fleeing, c has a
+        // negative strength.
+        assert_eq!(fn_0098cb30(&mut e, group, d), 17.0);
+        // Damage: d's state 9, a's stored 1 -> average 5.
+        assert_eq!(e.call(0x0098_cc20, &args![group, d]).f32(), 5.0);
+        // An actor outside the group: a (10) and d (40) count.
+        let outsider = actor(&mut e, 9);
+        assert_eq!(e.call(0x0098_cb30, &args![group, outsider]).f32(), 50.0);
+        assert_eq!(fn_0098cc20(&mut e, group, outsider), (1.0 + 4.0) / 2.0);
+    }
+
+    #[test]
+    fn nearest_other_member_within_a_radius() {
+        let mut e = search_engine();
+        add_process_fakes(&mut e);
+        let (who, near, preferred, farther) = (
+            actor(&mut e, 1),
+            actor(&mut e, 2),
+            actor(&mut e, 3),
+            actor(&mut e, 4),
+        );
+        for (a, x) in [(who, 0.0f32), (near, 3.0), (preferred, 4.0), (farther, 4.5)] {
+            place_actor(&mut e, a, 0, x, 0);
+        }
+        let group = group_with(&mut e, &[], &[who, near, preferred, farther]);
+        // Squared distances 9, 16 / 2.25 = 7.1, 20.25 inside 5 (25).
+        e.set_global(TWO_AND_QUARTER_DOUBLE, 2.25f64);
+        assert_eq!(fn_0098cd50(&mut e, group, who, preferred, 5.0), preferred);
+        // Without a preferred member the nearest wins.
+        assert_eq!(
+            e.call(0x0098_cd50, &args![group, who, 0u32, 5.0f32])
+                .ptr::<()>(),
+            near
+        );
+        // Radius 2: nobody.
+        assert!(fn_0098cd50(&mut e, group, who, preferred, 2.0).is_null());
+        // The nearest one is discarded when its combat state's record
+        // points back at the actor.
+        let record_block = e.mem.alloc(8);
+        e.mem.set_u32(record_block + 4, who.addr());
+        e.register_double(STATE_TARGET_RECORD, move |_, _| record_block.into_ret());
+        let process = process_block(&mut e, 0.0, 0.0, 0, false);
+        e.mem.set_u32(preferred.addr() + 0x38, process);
+        assert!(fn_0098cd50(&mut e, group, who, preferred, 5.0).is_null());
+        e.mem.set_u32(record_block + 4, 0x1234);
+        assert_eq!(fn_0098cd50(&mut e, group, who, preferred, 5.0), preferred);
+    }
+
+    #[test]
+    fn member_counts_follow_the_processes() {
+        let mut e = search_engine();
+        add_process_fakes(&mut e);
+        let actors: Vec<Ptr> = (0..4).map(|i| actor(&mut e, i + 1)).collect();
+        // No process; initialised, not fleeing; initialised and fleeing;
+        // not initialised, fleeing.
+        let p1 = process_block(&mut e, 0.0, 0.0, 8, false);
+        let p2 = process_block(&mut e, 0.0, 0.0, 8, true);
+        let p3 = process_block(&mut e, 0.0, 0.0, 0, true);
+        for (a, p) in actors[1..].iter().zip([p1, p2, p3]) {
+            e.mem.set_u32(a.addr() + 0x38, p);
+        }
+        let group = group_with(&mut e, &[], &actors);
+        e.set(group, CombatGroup::iInitializedMemberCount, 9);
+        combat_group_update_counts(&mut e, group);
+        assert_eq!(e.get(group, CombatGroup::iInitializedMemberCount), 2);
+        assert_eq!(e.get(group, CombatGroup::iFleeingMemberCount), 2);
+        assert_eq!(e.get(group, CombatGroup::iNonFleeingMemberCount), 1);
+        e.call(0x0098_ce80, &args![group]);
+    }
+
+    #[test]
+    fn attacker_counts_count_members_aimed_at_each_target() {
+        let mut e = search_engine();
+        fuller_actor_vtable(&mut e);
+        let player = actor(&mut e, 1);
+        e.set_global(PLAYER, player.addr());
+        let (m1, m2, m3) = (actor(&mut e, 2), actor(&mut e, 3), actor(&mut e, 4));
+        let (t1, t2) = (actor(&mut e, 5), actor(&mut e, 6));
+        // Aimed at: the player at t1 (not counted), m1 and m2 at t1, m3 at t2.
+        for (a, who) in [(player, t1), (m1, t1), (m2, t1), (m3, t2)] {
+            e.mem.set_u32(a.addr() + 0x4c, who.addr());
+        }
+        let group = group_with(&mut e, &[t1, t2], &[player, m1, m2, m3]);
+        let first = target_entry(&e, group, 0);
+        e.set(first, CombatTarget::sAttackerCount, 9);
+        fn_0098cf70(&mut e, group);
+        assert_eq!(e.get(first, CombatTarget::sAttackerCount), 2);
+        let second = target_entry(&e, group, 1);
+        assert_eq!(e.get(second, CombatTarget::sAttackerCount), 1);
+        e.call(0x0098_cf70, &args![group]);
+    }
+
+    /// `array_engine()` with the search fakes, for the tests that remove
+    /// targets or add members.
+    fn array_search_engine() -> Engine {
+        let mut e = array_engine();
+        add_search_fakes(&mut e);
+        e.register(ACTOR_TEST_00437BD0, |_, _| Ret::default());
+        e
+    }
+
+    #[test]
+    fn invalid_targets_are_dropped_and_a_lone_one_is_commented_on() {
+        let mut e = array_search_engine();
+        e.set_global(0x011c_e744u32, 10.0f32);
+        e.set_global(0x011f_1708u32, 0x4444u32);
+        e.set_global(ONE_MILLION_FLOAT, 1.0e6f32);
+        record(&mut e, &[START_DIALOGUE]);
+        let (stale, fresh, speaker) = (actor(&mut e, 1), actor(&mut e, 2), actor(&mut e, 3));
+        place_actor(&mut e, speaker, 0, 5.0, 0);
+        let group = group_with(&mut e, &[stale, fresh], &[speaker]);
+        // The stale target was last noticed at time 0 (age 100 > 10) and has
+        // no attackers; the fresh one was noticed now.
+        e.set(
+            target_entry(&e, group, 0),
+            CombatTarget::fLastNoticedTimeStamp,
+            0.0f32,
+        );
+        e.set(
+            target_entry(&e, group, 1),
+            CombatTarget::fLastNoticedTimeStamp,
+            NOW,
+        );
+        fn_0098d030(&mut e, group);
+        assert_eq!(array_len(&e, group, 8), 1);
+        assert_eq!(
+            e.get(target_entry(&e, group, 0), CombatTarget::pActor),
+            fresh
+        );
+        // With two targets nobody speaks.
+        assert!(calls(&e, START_DIALOGUE).is_empty());
+        assert_eq!(
+            calls(&e, MANAGER_REMOVE_TARGET),
+            vec![vec![MANAGER, group.addr(), stale.addr()]]
+        );
+        // A lone stale target that was never detected: type 5 from the
+        // nearest member; once detected, type 8.
+        let lone = group_with(&mut e, &[stale], &[speaker]);
+        e.set(
+            target_entry(&e, lone, 0),
+            CombatTarget::fLastNoticedTimeStamp,
+            0.0f32,
+        );
+        e.set(
+            target_entry(&e, lone, 0),
+            CombatTarget::fLastDetectedTimeStamp,
+            -f32::MAX,
+        );
+        e.call(0x0098_d030, &args![lone]);
+        assert_eq!(array_len(&e, lone, 8), 0);
+        assert_eq!(
+            calls(&e, START_DIALOGUE),
+            vec![vec![0x4444, speaker.addr(), stale.addr(), 4, 5, 1, 0]]
+        );
+        let lone = group_with(&mut e, &[stale], &[speaker]);
+        e.set(
+            target_entry(&e, lone, 0),
+            CombatTarget::fLastNoticedTimeStamp,
+            0.0f32,
+        );
+        e.set(
+            target_entry(&e, lone, 0),
+            CombatTarget::fLastDetectedTimeStamp,
+            10.0f32,
+        );
+        fn_0098d030(&mut e, lone);
+        assert_eq!(calls(&e, START_DIALOGUE).len(), 2);
+        assert_eq!(calls(&e, START_DIALOGUE)[1][4], 8);
+        // No member near the target (and none for the player): silence.
+        let player = actor(&mut e, 4);
+        e.set_global(PLAYER, player.addr());
+        let alone = group_with(&mut e, &[stale], &[]);
+        e.set(
+            target_entry(&e, alone, 0),
+            CombatTarget::fLastNoticedTimeStamp,
+            0.0f32,
+        );
+        fn_0098d030(&mut e, alone);
+        assert_eq!(calls(&e, START_DIALOGUE).len(), 2);
+        // No targets: nothing happens.
+        let none = group_with(&mut e, &[], &[]);
+        fn_0098d030(&mut e, none);
+    }
+
+    /// Strategy test doubles: the chooser, the index, the timers (expired
+    /// when the first byte of the timer is set) and the strategy's virtual
+    /// method 8 (its result is the byte at +8 of the strategy).
+    fn strategy_engine() -> Engine {
+        let mut e = search_engine();
+        e.register(TIMER_EXPIRED, |e, a| e.mem.u8(a[0]).into_ret());
+        record(&mut e, &[TIMER_START]);
+        e.register(STRATEGY_INDEX, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.set_global(STRATEGY_DELAY, 5.0f32);
+        e.put_vtable(0x7220_0000, &[0, 0, fake(8)]);
+        e.register(fake(8), |e, a| e.mem.u8(a[0] + 8).into_ret());
+        e
+    }
+
+    #[test]
+    fn strategy_is_chosen_and_run() {
+        let mut e = strategy_engine();
+        let strategy = e.mem.alloc(0x10);
+        e.mem.set_u32(strategy, 0x7220_0000);
+        e.mem.set_u32(strategy + 4, 3);
+        e.mem.set_u8(strategy + 8, 1);
+        e.register_double(CHOOSE_STRATEGY, move |_, _| strategy.into_ret());
+        let (a, b) = (actor(&mut e, 1), actor(&mut e, 2));
+        let group = group_with(&mut e, &[], &[a, b]);
+        // Choose timer expired, update timer expired.
+        e.mem.set_u8(group.addr() + 0x30, 1);
+        e.mem.set_u8(group.addr() + 0x38, 1);
+        e.call_log = Some(vec![]);
+        fn_0098d1a0(&mut e, group);
+        assert_eq!(e.get(group, CombatGroup::pGroupStrategy).addr(), strategy);
+        assert_eq!(e.get(group, CombatGroup::iLastGroupStrategyChosenIndex), 3);
+        assert_eq!(
+            e.get(group, CombatGroup::fLastGroupStrategyChosenTimeStamp),
+            NOW
+        );
+        let starts = calls(&e, TIMER_START);
+        assert_eq!(starts.len(), 2);
+        assert_eq!(starts[0][0], group.addr() + 0x30);
+        assert_eq!(f32::from_bits(starts[0][1]), 5.0);
+        assert_eq!(starts[1][0], group.addr() + 0x38);
+        assert_eq!(f32::from_bits(starts[1][1]), 1.0);
+        // The strategy's method says stop: it is dropped.
+        e.mem.set_u8(strategy + 8, 0);
+        e.mem.set_u8(group.addr() + 0x30, 0);
+        e.call(0x0098_d1a0, &args![group]);
+        assert!(e.get(group, CombatGroup::pGroupStrategy).is_null());
+        assert!(!e.get(group, CombatGroup::bStrategyForced));
+        // A forced strategy is not re-chosen, even with the timer expired.
+        e.set(group, CombatGroup::pGroupStrategy, Ptr::new(strategy));
+        e.set(group, CombatGroup::bStrategyForced, true);
+        e.mem.set_u8(group.addr() + 0x30, 1);
+        e.mem.set_u8(strategy + 8, 1);
+        e.register_double(CHOOSE_STRATEGY, |_, _| panic!("must not choose"));
+        e.mem.set_u8(group.addr() + 0x38, 0);
+        fn_0098d1a0(&mut e, group);
+        assert!(e.get(group, CombatGroup::bStrategyForced));
+        // Fewer than two members: no strategy, the timer restarts with 0.
+        let single = group_with(&mut e, &[], &[a]);
+        e.set(single, CombatGroup::pGroupStrategy, Ptr::new(strategy));
+        e.set(single, CombatGroup::bStrategyForced, true);
+        e.call_log = Some(vec![]);
+        fn_0098d1a0(&mut e, single);
+        assert!(e.get(single, CombatGroup::pGroupStrategy).is_null());
+        assert!(!e.get(single, CombatGroup::bStrategyForced));
+        assert_eq!(
+            calls(&e, TIMER_START),
+            vec![vec![single.addr() + 0x30, 0.0f32.to_bits()]]
+        );
+    }
+
+    /// The doubles `fn_0098d2c0` and `fn_0098dc40` need besides the search
+    /// fakes: the cluster array (buffer +0x13c, size +0x140), memory
+    /// functions and the expired cluster timer.
+    fn cluster_engine(radius: f32) -> Engine {
+        let mut e = search_engine();
+        e.map(0x011a_4000, 0x1000);
+        e.set_global(CLUSTER_RADIUS, radius);
+        e.set_global(CLUSTER_DELAY, 2.0f32);
+        e.set_global(FOUR_DOUBLE, 4.0f64);
+        e.set_global(TWO_FLOAT, 2.0f32);
+        e.mem.set_u8(CLUSTER_DISABLE, 0);
+        e.register(TIMER_EXPIRED, |e, a| e.mem.u8(a[0]).into_ret());
+        record(&mut e, &[TIMER_START, VECTOR_CONSTRUCTOR, OPERATOR_DELETE]);
+        e.register(MEMSET, |e, a| {
+            e.mem.write(a[0], &vec![a[1] as u8; a[2] as usize]);
+            Ret::default()
+        });
+        e.register(OPERATOR_NEW_SMALL, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(SIGNED_MIN, |_, a| (a[0] as i32).min(a[1] as i32).into_ret());
+        e.register(POINTER_ARRAY_ADD, |e, a| {
+            let (buffer, size) = (e.mem.u32(a[0] + 4), e.mem.u32(a[0] + 8));
+            let value = e.mem.u32(a[1]);
+            e.mem.set_u32(buffer + 4 * size, value);
+            e.mem.set_u32(a[0] + 8, size + 1);
+            size.into_ret()
+        });
+        e.register(CLUSTER_REMOVE, |e, a| {
+            let (buffer, size) = (e.mem.u32(a[0] + 4), e.mem.u32(a[0] + 8));
+            for i in a[1]..size - a[2] {
+                let value = e.mem.u32(buffer + 4 * (i + a[2]));
+                e.mem.set_u32(buffer + 4 * i, value);
+            }
+            e.mem.set_u32(a[0] + 8, size - a[2]);
+            Ret::default()
+        });
+        e
+    }
+
+    /// A group whose members are fake actors at the given x positions
+    /// (all in `space`), with room in its cluster array.
+    fn cluster_group(e: &mut Engine, positions: &[f32], space: u32) -> Ptr<CombatGroup> {
+        let mut members = vec![];
+        for (i, x) in positions.iter().enumerate() {
+            let who = actor(e, 10 + i as u32);
+            place_actor(e, who, 0, *x, space);
+            members.push(who);
+        }
+        let group = group_with(e, &[], &members);
+        let buffer = e.mem.alloc(0x100);
+        e.mem.set_u32(group.addr() + 0x13c, buffer);
+        // The cluster timer (+0xb0) has expired.
+        e.mem.set_u8(group.addr() + 0xb0, 1);
+        group
+    }
+
+    fn cluster_count(e: &Engine, group: Ptr<CombatGroup>) -> u32 {
+        e.mem.u32(group.addr() + 0x140)
+    }
+
+    fn cluster_at(e: &Engine, group: Ptr<CombatGroup>, index: u32) -> u32 {
+        e.mem.u32(e.mem.u32(group.addr() + 0x13c) + 4 * index)
+    }
+
+    #[test]
+    fn nearby_members_form_a_cluster() {
+        let mut e = cluster_engine(5.0);
+        let space = e.mem.alloc(8);
+        // 0 and 1 are mutual nearest neighbours; 2 is far away.
+        let group = cluster_group(&mut e, &[0.0, 1.0, 100.0], space);
+        fn_0098d2c0(&mut e, group);
+        assert_eq!(cluster_count(&e, group), 1);
+        let cluster = cluster_at(&e, group, 0);
+        let (m0, m1, m2) = (
+            member_entry(&e, group, 0),
+            member_entry(&e, group, 1),
+            member_entry(&e, group, 2),
+        );
+        assert_eq!(e.get(m0, CombatMember::pCluster).addr(), cluster);
+        assert_eq!(e.get(m1, CombatMember::pCluster).addr(), cluster);
+        assert!(e.get(m2, CombatMember::pCluster).is_null());
+        // The centre is recomputed from the members: x = 0.5, 2 members.
+        assert_eq!(point_at(&e, cluster), [0.5, 0.0, 0.0]);
+        assert_eq!(e.mem.u32(cluster + 0x10), 2);
+        assert_eq!(e.mem.u32(cluster + 0x0c), space);
+        let starts = calls(&e, TIMER_START);
+        assert_eq!(starts[0][0], group.addr() + 0xb0);
+        assert_eq!(f32::from_bits(starts[0][1]), 2.0);
+        // Nothing happens before the timer expires (the centres are still
+        // recomputed) or when the global switch is on.
+        e.mem.set_u8(group.addr() + 0xb0, 0);
+        e.mem.set_f32(cluster, 99.0);
+        e.call(0x0098_d2c0, &args![group]);
+        assert_eq!(point_at(&e, cluster), [0.5, 0.0, 0.0]);
+        assert_eq!(calls(&e, TIMER_START).len(), 1);
+        e.mem.set_u8(group.addr() + 0xb0, 1);
+        e.mem.set_u8(CLUSTER_DISABLE, 1);
+        e.mem.set_f32(cluster, 99.0);
+        fn_0098d2c0(&mut e, group);
+        assert_eq!(e.mem.f32(cluster), 99.0);
+    }
+
+    #[test]
+    fn a_close_member_joins_the_cluster_and_far_clusters_are_dropped() {
+        let mut e = cluster_engine(5.0);
+        let space = e.mem.alloc(8);
+        // 0 and 1 form a cluster; 2 is within the radius of its centre; 3
+        // is far from everything.
+        let group = cluster_group(&mut e, &[0.0, 1.0, 3.0, 100.0], space);
+        // Members 0 and 3 start in a stale cluster: its centre is their
+        // average (50), more than twice the radius from both.
+        let stale = e.mem.alloc(0x14);
+        e.mem.set_u32(stale + 0x10, 2);
+        e.mem.set_u32(group.addr() + 0x140, 1);
+        e.mem.set_u32(e.mem.u32(group.addr() + 0x13c), stale);
+        e.set(
+            member_entry(&e, group, 0),
+            CombatMember::pCluster,
+            Ptr::new(stale),
+        );
+        e.set(
+            member_entry(&e, group, 3),
+            CombatMember::pCluster,
+            Ptr::new(stale),
+        );
+        fn_0098d2c0(&mut e, group);
+        // The stale cluster is deleted; one new cluster holds members 0-2.
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![stale]]);
+        assert_eq!(cluster_count(&e, group), 1);
+        let cluster = cluster_at(&e, group, 0);
+        assert_ne!(cluster, stale);
+        for i in 0..3 {
+            let member = member_entry(&e, group, i);
+            assert_eq!(e.get(member, CombatMember::pCluster).addr(), cluster);
+        }
+        assert!(e
+            .get(member_entry(&e, group, 3), CombatMember::pCluster)
+            .is_null());
+        assert_eq!(e.mem.u32(cluster + 0x10), 3);
+        let centre = point_at(&e, cluster);
+        assert!((centre[0] - 4.0 / 3.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn clusters_closer_than_the_radius_are_merged() {
+        let mut e = cluster_engine(25.0);
+        let space = e.mem.alloc(8);
+        // Pairs (0, 1) at 0.5 and (2, 3) at 20.5: 20 apart, inside 25.
+        let group = cluster_group(&mut e, &[0.0, 1.0, 20.0, 21.0], space);
+        fn_0098d2c0(&mut e, group);
+        assert_eq!(cluster_count(&e, group), 1);
+        let cluster = cluster_at(&e, group, 0);
+        for i in 0..4 {
+            let member = member_entry(&e, group, i);
+            assert_eq!(e.get(member, CombatMember::pCluster).addr(), cluster);
+        }
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 1);
+        assert_eq!(e.mem.u32(cluster + 0x10), 4);
+        assert_eq!(point_at(&e, cluster), [10.5, 0.0, 0.0]);
+        // With a radius of 5 the pairs stay apart.
+        let mut e = cluster_engine(5.0);
+        let space = e.mem.alloc(8);
+        let group = cluster_group(&mut e, &[0.0, 1.0, 20.0, 21.0], space);
+        fn_0098d2c0(&mut e, group);
+        assert_eq!(cluster_count(&e, group), 2);
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+    }
+
+    #[test]
+    fn cluster_helpers() {
+        let mut e = cluster_engine(5.0);
+        let space = e.mem.alloc(8);
+        // Construct: the location constructor, then a zero count.
+        let block = e.mem.alloc(0x20);
+        e.mem.set_u32(block + 0x10, 7);
+        assert_eq!(fn_0098dc00(&mut e, Ptr::new(block)).addr(), block);
+        assert_eq!(e.mem.u32(block + 0x10), 0);
+        assert_eq!(e.call(0x0098_dc20, &args![block]).u32(), block);
+        // The point copy leaves the space alone.
+        let cluster = e.mem.alloc(0x14);
+        e.mem.set_u32(cluster + 0x0c, 0x55);
+        let point = e.mem.alloc(0xc);
+        for (i, value) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+            e.mem.set_f32(point + 4 * i as u32, *value);
+        }
+        fn_0098ddd0(&mut e, Ptr::new(cluster), Ptr::new(point));
+        e.call(0x0098_ddd0, &args![cluster, point]);
+        assert_eq!(point_at(&e, cluster), [1.0, 2.0, 3.0]);
+        assert_eq!(e.mem.u32(cluster + 0x0c), 0x55);
+        // The cluster of an actor and by index.
+        let group = cluster_group(&mut e, &[0.0, 1.0], space);
+        let stranger = actor(&mut e, 99);
+        let other = e.mem.alloc(0x14);
+        e.mem.set_u32(group.addr() + 0x140, 2);
+        e.mem.set_u32(e.mem.u32(group.addr() + 0x13c), cluster);
+        e.mem.set_u32(e.mem.u32(group.addr() + 0x13c) + 4, other);
+        let first_member = member_entry(&e, group, 0);
+        e.set(first_member, CombatMember::pCluster, Ptr::new(other));
+        let first_actor = e.get(first_member, CombatMember::pActor);
+        assert_eq!(fn_0098de00(&mut e, group, first_actor), other);
+        assert_eq!(e.call(0x0098_de00, &args![group, stranger]).u32(), 0);
+        let second_actor = e.get(member_entry(&e, group, 1), CombatMember::pActor);
+        assert_eq!(fn_0098de00(&mut e, group, second_actor), 0);
+        assert_eq!(fn_0098de60(&mut e, group, 1), other);
+        assert_eq!(fn_0098de60(&mut e, group, 0), cluster);
+        assert_eq!(e.call(0x0098_de60, &args![group, 0xffu32]).u32(), 0);
+        // The search passes the array, the address of a word holding the
+        // cluster, 0 and the comparison.
+        let mut seen = vec![];
+        e.register_double(CLUSTER_SEARCH, move |e, a| {
+            seen.push((a.to_vec(), e.mem.u32(a[1])));
+            (seen.len() as u32 + 40).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_0098de30(&mut e, group, other), 41);
+        let logged = calls(&e, CLUSTER_SEARCH);
+        assert_eq!(logged.len(), 1);
+        assert_eq!(logged[0][0], group.addr() + 0x138);
+        assert_eq!(&logged[0][2..], &[0, CLUSTER_COMPARE]);
+    }
+
+    #[test]
+    fn centres_of_clusters_are_recomputed_from_their_members() {
+        let mut e = cluster_engine(5.0);
+        let space = e.mem.alloc(8);
+        let group = cluster_group(&mut e, &[2.0, 4.0, 9.0], space);
+        let (one, two) = (e.mem.alloc(0x14), e.mem.alloc(0x14));
+        // Stale centres and counts that must be replaced.
+        for cluster in [one, two] {
+            e.mem.set_f32(cluster, 77.0);
+            e.mem.set_u32(cluster + 0x10, 5);
+        }
+        e.mem.set_u32(group.addr() + 0x140, 2);
+        e.mem.set_u32(e.mem.u32(group.addr() + 0x13c), one);
+        e.mem.set_u32(e.mem.u32(group.addr() + 0x13c) + 4, two);
+        for (i, cluster) in [(0u32, one), (1, one), (2, two)] {
+            e.set(
+                member_entry(&e, group, i),
+                CombatMember::pCluster,
+                Ptr::new(cluster),
+            );
+        }
+        fn_0098dc40(&mut e, group);
+        assert_eq!(e.mem.u32(one + 0x10), 2);
+        assert_eq!(e.mem.f32(one), 3.0);
+        assert_eq!(e.mem.u32(two + 0x10), 1);
+        assert_eq!(e.mem.f32(two), 9.0);
+        // A cluster with no members ends up at the origin divided by zero:
+        // its count is zero.
+        let empty = e.mem.alloc(0x14);
+        e.mem.set_u32(group.addr() + 0x140, 3);
+        e.mem.set_u32(e.mem.u32(group.addr() + 0x13c) + 8, empty);
+        e.call(0x0098_dc40, &args![group]);
+        assert_eq!(e.mem.u32(empty + 0x10), 0);
+        assert!(e.mem.f32(empty).is_nan());
+    }
+
+    #[test]
+    fn save_game_writes_the_group_in_order() {
+        let mut e = search_engine();
+        let saved = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(u32, Vec<u8>)>::new()));
+        let log = saved.clone();
+        record(
+            &mut e,
+            &[
+                SAVE_SIZED_VALUE,
+                TIMER_SAVE,
+                TIME_STAMP_SAVE,
+                WORLD_LOCATION_SAVE,
+                SAVE_FORM_ID,
+                SAVE_FORM_ID_PLAIN,
+                LOS_GRID_MAP_SAVE,
+                CLUSTER_SEARCH,
+            ],
+        );
+        e.register_double(SAVE_BYTES, move |e, a| {
+            log.borrow_mut().push((a[2], e.mem.bytes(a[1], a[2])));
+            Ret::default()
+        });
+        e.register(STRATEGY_INDEX, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        let strategy = e.mem.alloc(0x10);
+        e.mem.set_u32(strategy + 4, 3);
+        let (t1, t2, m1) = (actor(&mut e, 1), actor(&mut e, 2), actor(&mut e, 3));
+        let group = group_with(&mut e, &[t1, t2], &[m1]);
+        let g = group.addr();
+        // One cluster, two search locations, one door, a grid and a strategy.
+        let cluster = e.mem.alloc(0x14);
+        let cluster_buffer = e.mem.alloc(0x10);
+        e.mem.set_u32(cluster_buffer, cluster);
+        e.mem.set_u32(g + 0x13c, cluster_buffer);
+        e.mem.set_u32(g + 0x140, 1);
+        put_locations(
+            &mut e,
+            group,
+            &[
+                ([1.0, 2.0, 3.0], 0, 4.0, 0x55),
+                ([5.0, 6.0, 7.0], 0, 8.0, 0),
+            ],
+        );
+        put_doors(&mut e, group, &[(0x61, 0x62, 1, 0, 1)]);
+        let grid = e.mem.alloc(0x10);
+        e.mem.set_u32(g + 0xd4, grid);
+        e.set(group, CombatGroup::pGroupStrategy, Ptr::new(strategy));
+        let searching = actor(&mut e, 4);
+        e.set(group, CombatGroup::pSearchingMember, searching);
+        e.set(group, CombatGroup::iSearchCount, 2);
+        e.set(group, CombatGroup::cCombatMusicState, 5);
+        e.call_log = Some(vec![]);
+        combat_group_save_game(&mut e, group, Ptr::new(0x9000));
+        let inside = |p: u32| p >= g && p < g + 0x15c;
+        let summary: Vec<String> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter_map(|(address, a)| match *address {
+                SAVE_SIZED_VALUE => Some(format!("count {}", a[1])),
+                SAVE_BYTES if inside(a[1]) => Some(format!("bytes +{:x} x{}", a[1] - g, a[2])),
+                TIMER_SAVE if inside(a[0]) => Some(format!("timer +{:x}", a[0] - g)),
+                TIME_STAMP_SAVE if inside(a[0]) => Some(format!("stamp +{:x}", a[0] - g)),
+                WORLD_LOCATION_SAVE if inside(a[0]) => Some(format!("location +{:x}", a[0] - g)),
+                _ => None,
+            })
+            .collect();
+        let mut expected: Vec<String> = [
+            "count 1",
+            "count 2",
+            "count 1",
+            "bytes +2c x1",
+            "timer +30",
+            "timer +38",
+            "bytes +40 x4",
+            "stamp +44",
+            "timer +48",
+            "timer +b0",
+            "timer +a8",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        for timer in 0..10u32 {
+            expected.push(format!("timer +{:x}", 0x58 + 8 * timer));
+        }
+        expected.extend(
+            [
+                "bytes +d0 x4",
+                "bytes +100 x12",
+                "timer +d8",
+                "timer +e0",
+                "stamp +e8",
+                "location +f0",
+                "bytes +10c x4",
+                "count 2",
+                "count 1",
+                "timer +50",
+                "bytes +c0 x4",
+                "bytes +c4 x4",
+                "bytes +c8 x4",
+                "bytes +cc x4",
+                "timer +b8",
+                "bytes +154 x1",
+            ]
+            .iter()
+            .map(|s| s.to_string()),
+        );
+        assert_eq!(summary, expected);
+        // The strategy index byte (3) is among the one-byte writes, the last is the
+        // music state; the grid is saved with the buffer.
+        let singles: Vec<Vec<u8>> = saved
+            .borrow()
+            .iter()
+            .filter(|(n, _)| *n == 1)
+            .map(|(_, b)| b.clone())
+            .collect();
+        assert!(singles.contains(&vec![3u8]));
+        assert_eq!(singles.last().unwrap(), &vec![5u8]);
+        assert_eq!(calls(&e, LOS_GRID_MAP_SAVE), vec![vec![grid, 0x9000]]);
+        // The form IDs written: the two targets, the member, the searching
+        // member (a fourth actor) and the door's two references.
+        let written: Vec<u32> = calls(&e, SAVE_FORM_ID).iter().map(|c| c[1]).collect();
+        assert_eq!(
+            written,
+            vec![
+                t1.addr(),
+                t2.addr(),
+                m1.addr(),
+                searching.addr(),
+                0x61,
+                0x62
+            ]
+        );
+        // The search location's target ID goes through the plain form ID writer.
+        assert_eq!(calls(&e, SAVE_FORM_ID_PLAIN)[0], vec![0x9000, 0x55, 0]);
+
+        // Without a search nothing of the search state is written; with no
+        // strategy the index byte is 0xff, with no clusters the count is 0.
+        saved.borrow_mut().clear();
+        let quiet = group_with(&mut e, &[], &[]);
+        e.call_log = Some(vec![]);
+        e.call(0x0098_de90, &args![quiet, 0x9000u32]);
+        assert_eq!(saved.borrow().first().unwrap(), &(1, vec![0xffu8]));
+        let g = quiet.addr();
+        let after: Vec<String> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter_map(|(address, a)| match *address {
+                SAVE_SIZED_VALUE => Some(format!("count {}", a[1])),
+                TIMER_SAVE => Some(format!("timer +{:x}", a[0] - g)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(after[..3], ["count 0", "count 0", "count 0"]);
+        assert!(!after.iter().any(|s| s == "timer +d8"));
+        assert!(after.iter().any(|s| s == "timer +50"));
+    }
+
+    /// The doubles `fn_0098add0` needs: the settings, the timers, a random
+    /// delay of 3.5, the radius settings and the world locations.
+    fn search_start_engine() -> Engine {
+        let mut e = search_engine();
+        e.set_global(HALF_FLOAT, 0.5f32);
+        e.set_global(0x011c_f870u32, 4.0f32);
+        e.set_global(0x011c_e35cu32, 9.0f32);
+        e.set_global(0x011c_f24cu32, 2.0f32);
+        e.set_global(0x011c_e528u32, 0.0f32);
+        e.mem.set_f64(0x0107_3568, 70.0);
+        e.mem.set_f64(0x0101_db88, 30.0);
+        e.register(RANDOM_FLOAT, |_, _| 3.5f32.into_ret());
+        e.register(WORLD_LOCATION_DISTANCE, |_, _| 0.0f64.into_ret());
+        record(
+            &mut e,
+            &[
+                TIMER_START,
+                POINTER_ARRAY_CONSTRUCT,
+                POINTER_ARRAY_DESTRUCT,
+                COLLECT_TELEPORT_DOORS,
+                ARRAY_SORT,
+            ],
+        );
+        e
+    }
+
+    /// A group of one member and two targets for the search start tests.
+    fn search_start_group(e: &mut Engine) -> Ptr<CombatGroup> {
+        let space = e.mem.alloc(8);
+        put_radius_settings(e, 10.0, 30.0);
+        let member = actor(e, 1);
+        place_actor(e, member, 0, 5.0, space);
+        let (t0, t1) = (actor(e, 2), actor(e, 3));
+        let group = group_with(e, &[t0, t1], &[member]);
+        // t0: detected at 60 (age 40), noticed at 70; t1: detected 80,
+        // noticed 50; the attacked-member stamps are old.
+        let (first, second) = (target_entry(e, group, 0), target_entry(e, group, 1));
+        for (target, detected, noticed) in [(first, 60.0f32, 70.0f32), (second, 80.0, 50.0)] {
+            e.set(target, CombatTarget::fLastDetectedTimeStamp, detected);
+            e.set(target, CombatTarget::fLastNoticedTimeStamp, noticed);
+            e.set(target, CombatTarget::fLastAttackedMemberTimeStamp, 0.0f32);
+            e.set(target, CombatTarget::sLastSearchNoticed, 7);
+            let x = if target == first { 10.0f32 } else { 20.0 };
+            e.mem.set_f32(target.addr() + 0x18, x);
+        }
+        give_search_buffers(e, group);
+        group
+    }
+
+    #[test]
+    fn starting_a_search_sets_up_the_state() {
+        let mut e = search_start_engine();
+        let group = search_start_group(&mut e);
+        e.call_log = Some(vec![]);
+        fn_0098add0(&mut e, group);
+        assert_eq!(e.get(group, CombatGroup::iSearchCount), 1);
+        assert_eq!(e.get(group, CombatGroup::fSearchStartedTimeStamp), NOW);
+        for i in 0..2 {
+            let target = target_entry(&e, group, i);
+            assert_eq!(e.get(target, CombatTarget::sLastSearchNoticed), 0);
+        }
+        // The two search locations (the targets' detected locations, 10 and
+        // 20, scores 30 and 50) are averaged with those scores as weights;
+        // the radius ends at the smaller setting.
+        assert_eq!(e.mem.u32(group.addr() + 0x118), 2);
+        let centre = point_at(&e, group.addr() + 0xf0);
+        assert!((centre[0] - (10.0 * 30.0 + 20.0 * 50.0) / 80.0).abs() < 1e-3);
+        assert_eq!(e.get(group, CombatGroup::fSearchRadius), 10.0);
+        let starts: Vec<(u32, f32)> = calls(&e, TIMER_START)
+            .iter()
+            .map(|c| (c[0] - group.addr(), f32::from_bits(c[1])))
+            .collect();
+        assert_eq!(
+            starts,
+            vec![(0xd8, 0.5), (0xe0, 4.0), (0x58, 3.5), (0x60, 3.5)]
+        );
+        // The random delays are asked between the settings 011cf24c and
+        // 011ce35c.
+        let randoms = calls(&e, RANDOM_FLOAT);
+        assert_eq!(randoms.len(), 2);
+        assert_eq!(f32::from_bits(randoms[0][0]), 2.0);
+        assert_eq!(f32::from_bits(randoms[0][1]), 9.0);
+        e.call(0x0098_add0, &args![group]);
+    }
+
+    /// Everything `fn_0098a580` calls besides the search start.
+    fn search_step_engine() -> Engine {
+        let mut e = search_engine();
+        add_process_fakes(&mut e);
+        fuller_actor_vtable(&mut e);
+        e.set_global(DIALOGUE_MANAGER, 0x4444u32);
+        e.register(SEARCH_RUNNING, |e, a| {
+            (e.mem.u32(a[0] + 0xd0) != 0).into_ret()
+        });
+        e.register(TIMER_EXPIRED, |e, a| e.mem.u8(a[0]).into_ret());
+        e.register(ACTOR_TEST_008B3B90, |e, a| e.mem.u8(a[0] + 0x3d).into_ret());
+        e.register(ACTOR_IS_WAITING_ON_PATH, |e, a| {
+            e.mem.u8(a[0] + 0x3e).into_ret()
+        });
+        e.register(NI_POINTER_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(LOS_GRID_MAP_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(WORLD_LOCATION_GET_CELL_OR_WORLD, |e, a| {
+            e.mem.set_u32(a[1], 0xbb);
+            e.mem.set_u32(a[2], 0xaa);
+            true.into_ret()
+        });
+        e.register(FIND_CLOSEST_POINT_ON_NAVMESH, |_, _| true.into_ret());
+        e.register(PATHING_LOCATION_RESOLVE, |_, _| true.into_ret());
+        e.register(REFERENCE_SPACE, |e, a| {
+            e.mem.u32(a[0] + ACTOR_LOCATION + 0x0c).into_ret()
+        });
+        // A location has navmesh information when the actor's byte +0x3f
+        // is set.
+        e.register(PATHING_LOCATION_FROM_ACTOR, |e, a| {
+            let info = e.mem.u8(a[1] + 0x3f) as u32;
+            e.mem.set_u32(a[0] + 0x10, info);
+            a[0].into_ret()
+        });
+        e.register(LOCATION_ARRAY_ADD, |e, a| {
+            let size = e.mem.u32(a[0] + 8);
+            e.mem.set_u32(a[0] + 8, size + 1);
+            Ret::default()
+        });
+        e.register(CLAMP_ANGLE, |_, a| (f32::from_bits(a[0]) + 1.0).into_ret());
+        e.register(RANDOM_INDEX, |_, a| (a[1] - 1).into_ret());
+        e.register(PATH_HANDLER_DISTANCE_TRAVELLED, |_, _| 0.0f32.into_ret());
+        record(
+            &mut e,
+            &[
+                TIMER_START,
+                TIMER_EXPIRE_NOW,
+                LOS_GRID_MAP_STEP,
+                LOS_GRID_MAP_UPDATE,
+                LOS_GRID_MAP_APPLY,
+                PATHING_LOCATION_FROM_POINT,
+                PATHING_LOCATION_SET_POINT,
+                PATHING_LOCATION_DESTRUCT,
+                LOCATION_ARRAY_CONSTRUCT,
+                LOCATION_ARRAY_DESTRUCT,
+                ANGLE_ARRAY_CONSTRUCT,
+                ANGLE_ARRAY_DESTRUCT,
+                ANGLE_ARRAY_ADD,
+                TIMER_RESET,
+                ARRAY_CLEAR,
+                START_DIALOGUE,
+            ],
+        );
+        e
+    }
+
+    #[test]
+    fn search_update_resets_or_starts_the_search() {
+        let mut e = search_step_engine();
+        e.set_global(0x011c_e9b4u32, 10.0f32);
+        e.set_global(0x011c_e528u32, 5.0f32);
+        let (t0, t1) = (actor(&mut e, 1), actor(&mut e, 2));
+        let idle = actor(&mut e, 3);
+        // A search is running and there are no targets: reset.
+        let group = group_with(&mut e, &[], &[idle]);
+        e.set(group, CombatGroup::iInitializedMemberCount, 1);
+        e.set(group, CombatGroup::iSearchCount, 2);
+        e.call_log = Some(vec![]);
+        fn_0098a580(&mut e, group);
+        assert_eq!(e.get(group, CombatGroup::iSearchCount), 0);
+        assert_eq!(calls(&e, NI_POINTER_ASSIGN).len(), 2);
+        // Running, not ready (targets, nobody fleeing): a target detected 5
+        // ago (below 10) resets.
+        let group = group_with(&mut e, &[t0, t1], &[idle]);
+        e.set(group, CombatGroup::iInitializedMemberCount, 2);
+        e.set(group, CombatGroup::iSearchCount, 2);
+        e.set(
+            target_entry(&e, group, 0),
+            CombatTarget::fLastDetectedTimeStamp,
+            50.0f32,
+        );
+        e.set(
+            target_entry(&e, group, 1),
+            CombatTarget::fLastDetectedTimeStamp,
+            95.0f32,
+        );
+        e.call(0x0098_a580, &args![group]);
+        assert_eq!(e.get(group, CombatGroup::iSearchCount), 0);
+        // Targets detected 50 and 40 ago do not reset it.
+        let group = group_with(&mut e, &[t0, t1], &[idle]);
+        e.set(group, CombatGroup::iInitializedMemberCount, 2);
+        e.set(group, CombatGroup::iSearchCount, 2);
+        e.set(
+            target_entry(&e, group, 0),
+            CombatTarget::fLastDetectedTimeStamp,
+            50.0f32,
+        );
+        e.set(
+            target_entry(&e, group, 1),
+            CombatTarget::fLastDetectedTimeStamp,
+            60.0f32,
+        );
+        // The searching member is done (its byte +0x3d is set): dropped.
+        e.mem.set_u8(idle.addr() + 0x3d, 1);
+        e.set(group, CombatGroup::pSearchingMember, idle);
+        fn_0098a580(&mut e, group);
+        assert_eq!(e.get(group, CombatGroup::iSearchCount), 2);
+        assert!(e.get(group, CombatGroup::pSearchingMember).is_null());
+        // A searching member that is waiting on a path stays; with neither
+        // flag it is dropped as well.
+        e.mem.set_u8(idle.addr() + 0x3d, 0);
+        e.mem.set_u8(idle.addr() + 0x3e, 1);
+        e.set(group, CombatGroup::pSearchingMember, idle);
+        fn_0098a580(&mut e, group);
+        assert_eq!(e.get(group, CombatGroup::pSearchingMember), idle);
+        e.mem.set_u8(idle.addr() + 0x3e, 0);
+        fn_0098a580(&mut e, group);
+        assert!(e.get(group, CombatGroup::pSearchingMember).is_null());
+    }
+
+    #[test]
+    fn search_update_starts_a_search_when_every_target_is_old_enough() {
+        let mut e = search_start_engine();
+        e.register(SEARCH_RUNNING, |e, a| {
+            (e.mem.u32(a[0] + 0xd0) != 0).into_ret()
+        });
+        e.register(TIMER_EXPIRED, |e, a| e.mem.u8(a[0]).into_ret());
+        e.set_global(0x011c_e528u32, 5.0f32);
+        let group = search_start_group(&mut e);
+        e.set(group, CombatGroup::iInitializedMemberCount, 2);
+        // Ages 40 and 20 are at least 5; nobody has attackers yet.
+        fn_0098a580(&mut e, group);
+        assert_eq!(e.get(group, CombatGroup::iSearchCount), 0);
+        // One target has an attacker: the search starts.
+        e.set(target_entry(&e, group, 1), CombatTarget::sAttackerCount, 1);
+        fn_0098a580(&mut e, group);
+        assert_eq!(e.get(group, CombatGroup::iSearchCount), 1);
+        // A target detected too recently (age 2 < 5) prevents it.
+        let group = search_start_group(&mut e);
+        e.set(group, CombatGroup::iInitializedMemberCount, 2);
+        e.set(target_entry(&e, group, 1), CombatTarget::sAttackerCount, 1);
+        e.set(
+            target_entry(&e, group, 0),
+            CombatTarget::fLastDetectedTimeStamp,
+            98.0f32,
+        );
+        e.call(0x0098_a580, &args![group]);
+        assert_eq!(e.get(group, CombatGroup::iSearchCount), 0);
+        // Everyone fleeing: "ready", but no search is running, so nothing
+        // is started.
+        let ready = search_start_group(&mut e);
+        e.set(ready, CombatGroup::iInitializedMemberCount, 2);
+        e.set(ready, CombatGroup::iFleeingMemberCount, 2);
+        fn_0098a580(&mut e, ready);
+        assert_eq!(e.get(ready, CombatGroup::iSearchCount), 0);
+    }
+
+    #[test]
+    fn search_update_builds_the_grid_and_starts_dialogue() {
+        let mut e = search_step_engine();
+        e.set_global(0x011c_f42cu32, 6.5f32);
+        e.set_global(0x011c_e43cu32, 1.5f32);
+        e.set_global(PATH_PROGRESS_LIMIT, 0.99f64);
+        let space = e.mem.alloc(8);
+        let (m0, m1, victim) = (actor(&mut e, 1), actor(&mut e, 2), actor(&mut e, 3));
+        place_actor(&mut e, m0, 0, 1.0, space);
+        place_actor(&mut e, m1, 0, 2.0, space);
+        e.mem.set_u8(m0.addr() + 0x3f, 1);
+        e.mem.set_f32(m0.addr() + 0x48, 1.25);
+        e.mem.set_u32(m1.addr() + 0x4c, victim.addr());
+        let group = group_with(&mut e, &[victim], &[m0, m1]);
+        let g = group.addr();
+        e.set(group, CombatGroup::iSearchCount, 1);
+        e.set(group, CombatGroup::fSearchRadius, 33.0f32);
+        e.mem.set_u32(g + 0xfc, space);
+        // The search timer has expired; the area timer has not; the area is
+        // loaded; there is no grid yet.
+        e.mem.set_u8(g + 0xd8, 1);
+        e.register(WORLD_LOCATION_IS_LOADED, |_, _| true.into_ret());
+        e.set(
+            target_entry(&e, group, 0),
+            CombatTarget::fLastDetectedTimeStamp,
+            90.0f32,
+        );
+        e.call_log = Some(vec![]);
+        fn_0098a580(&mut e, group);
+        // The grid exists now, was given the radius, and has the setting.
+        let grid = e.mem.u32(g + 0xd4);
+        assert_ne!(grid, 0);
+        assert_eq!(e.mem.f32(grid + 0x48), 6.5);
+        assert!(e.get(group, CombatGroup::bUpdateSearchDebugGeometry));
+        let updates = calls(&e, LOS_GRID_MAP_UPDATE);
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0][0], grid);
+        assert_eq!(f32::from_bits(updates[0][2]), 33.0);
+        // m0's location (with information) and clamped heading go to the grid.
+        let applied = calls(&e, LOS_GRID_MAP_APPLY);
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0][0], g + 0xd4);
+        assert_eq!(calls(&e, LOCATION_ARRAY_ADD).len(), 1);
+        // The search timer restarts with the setting.
+        let starts = calls(&e, TIMER_START);
+        assert_eq!(starts.last().unwrap()[0], g + 0xd8);
+        assert_eq!(f32::from_bits(starts.last().unwrap()[1]), 1.5);
+        // Dialogue: the member picked by the random index (the last, m1)
+        // speaks to its target; the target was detected, so flag 1.
+        assert_eq!(
+            calls(&e, START_DIALOGUE),
+            vec![vec![0x4444, m1.addr(), victim.addr(), 4, 1, 0, 0]]
+        );
+        // The target was never detected: flag 0.
+        e.set(
+            target_entry(&e, group, 0),
+            CombatTarget::fLastDetectedTimeStamp,
+            -f32::MAX,
+        );
+        e.mem.set_u8(g + 0xd8, 1);
+        fn_0098a580(&mut e, group);
+        assert_eq!(calls(&e, START_DIALOGUE)[1][4], 0);
+        // The player never speaks.
+        e.set_global(PLAYER, m1.addr());
+        e.mem.set_u8(g + 0xd8, 1);
+        fn_0098a580(&mut e, group);
+        assert_eq!(calls(&e, START_DIALOGUE).len(), 2);
+    }
+
+    #[test]
+    fn search_update_advances_or_drops_an_existing_grid() {
+        let mut e = search_step_engine();
+        e.set_global(PATH_PROGRESS_LIMIT, 0.99f64);
+        e.set_global(0x011c_f870u32, 4.0f32);
+        let space = e.mem.alloc(8);
+        let m0 = actor(&mut e, 1);
+        place_actor(&mut e, m0, 0, 1.0, space);
+        let group = group_with(&mut e, &[], &[m0]);
+        let g = group.addr();
+        let grid = e.mem.alloc(0x60);
+        e.mem.set_u32(g + 0xd4, grid);
+        e.set(group, CombatGroup::iSearchCount, 1);
+        e.mem.set_u32(g + 0xfc, space);
+        e.mem.set_u8(g + 0xd8, 1);
+        e.mem.set_u8(g + 0xe0, 1);
+        // The grid has travelled 1.5 (above 0.99): it steps once more, the
+        // search count goes up and the area timer expires at once. The area
+        // timer being expired, the area is refreshed.
+        e.register(PATH_HANDLER_DISTANCE_TRAVELLED, |_, _| 1.5f32.into_ret());
+        e.register(WORLD_LOCATION_IS_LOADED, |_, _| true.into_ret());
+        record(
+            &mut e,
+            &[
+                POINTER_ARRAY_CONSTRUCT,
+                POINTER_ARRAY_DESTRUCT,
+                COLLECT_TELEPORT_DOORS,
+                ARRAY_SORT,
+                WORLD_LOCATION_DISTANCE,
+            ],
+        );
+        put_radius_settings(&mut e, 10.0, 30.0);
+        give_search_buffers(&mut e, group);
+        fn_0098a580(&mut e, group);
+        assert_eq!(calls(&e, LOS_GRID_MAP_STEP), vec![vec![grid]]);
+        assert_eq!(e.get(group, CombatGroup::iSearchCount), 2);
+        assert_eq!(calls(&e, TIMER_EXPIRE_NOW), vec![vec![g + 0xe0]]);
+        // The area is not loaded: the grid is dropped.
+        e.register(WORLD_LOCATION_IS_LOADED, |_, _| false.into_ret());
+        e.mem.set_u8(g + 0xd8, 1);
+        e.mem.set_u8(g + 0xe0, 0);
+        e.register(PATH_HANDLER_DISTANCE_TRAVELLED, |_, _| 0.5f32.into_ret());
+        e.call_log = Some(vec![]);
+        fn_0098a580(&mut e, group);
+        assert_eq!(e.mem.u32(g + 0xd4), 0);
+        assert_eq!(calls(&e, NI_POINTER_ASSIGN), vec![vec![g + 0xd4, 0]]);
+        assert!(calls(&e, LOS_GRID_MAP_STEP).is_empty());
     }
 }
