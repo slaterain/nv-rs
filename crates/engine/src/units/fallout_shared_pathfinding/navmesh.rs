@@ -14,8 +14,8 @@
 //! not hold a triangle index but an index into the mesh's `ExtraEdgeInfo`
 //! array ([`EdgeExtraInfo`]: the portal's `NavMeshInfo` and triangle).
 //!
-//! Translated so far (address order): everything up to and including
-//! `00691bf0`; the next session continues at `00691c10`.
+//! Translated so far (address order): the whole unit (every function from
+//! `0049c4c0` and `0068eb80` up to `00692740`).
 //!
 //! The `NavMeshTriangle` and `NavMeshInfo` methods in this unit are unnamed
 //! in the engine map; they are named here by what their bodies do. Methods
@@ -378,6 +378,51 @@ const POINTER_RELEASE: u32 = 0x0045_cec0;
 const AVOID_NODE_TRIANGLE: u32 = 0x006d_f760;
 /// `iSize == 0` of a `BSSimpleArray`.
 const ARRAY_IS_EMPTY: u32 = 0x0076_b610;
+
+// Constants of the third batch (`00691c10` to `00692740`).
+/// Vtables stored by the door portal, closed door, map base, obstacle and
+/// static avoid node array constructors and destructors.
+const DOOR_PORTAL_ARRAY_VTABLE: u32 = 0x0106_ac54;
+const CLOSED_DOOR_ARRAY_VTABLE: u32 = 0x0106_ac68;
+const MAP_ITEM_BASE_VTABLE: u32 = 0x0106_ac7c;
+const OBSTACLE_ARRAY_VTABLE: u32 = 0x0106_ac9c;
+const AVOID_NODE_ARRAY_VTABLE: u32 = 0x0106_acb0;
+/// Extra edge info array: makes room (`00978bc0`, as for the vertices),
+/// constructs `count` elements at an address, copy-constructs one element
+/// (`this` = the new element, argument = the source).
+const EXTRA_INFO_ARRAY_GROW: u32 = 0x0097_8bc0;
+const EXTRA_INFO_CONSTRUCT_ELEMENTS: u32 = 0x0069_2320;
+const EXTRA_INFO_COPY_CONSTRUCT: u32 = 0x0069_1c60;
+/// Initialiser `(array, 0, 0)` of the door portal and closed door arrays,
+/// and of the obstacle array.
+const DOOR_ARRAY_INITIALISE: u32 = 0x0069_2520;
+const OBSTACLES_INITIALISE: u32 = 0x0082_2860;
+/// Static avoid node array: makes room for one more element (returns the
+/// index) and constructs `count` elements at an address.
+const AVOID_NODE_ARRAY_GROW: u32 = 0x0069_25b0;
+const AVOID_NODE_CONSTRUCT_ELEMENTS: u32 = 0x0069_2640;
+/// Map base destructor step called twice by the POV map destructors (frees
+/// the items), and the free of the bucket table (cdecl, one word).
+const MAP_REMOVE_ALL: u32 = 0x0043_8af0;
+const FREE_TABLE: u32 = 0x00aa_10f0;
+/// Item functions of the POV map: reset the value stored at `item + 6` (one
+/// argument, 0) and give an item back to the map's allocator (`this` =
+/// `map + 0xc`).
+const POV_ITEM_RESET_VALUE: u32 = 0x0065_de30;
+const POV_ITEM_FREE: u32 = 0x006b_8310;
+/// `BSSimpleArray<unsigned short>` growth step: true when the array has no
+/// room left, the next capacity, and the resize `(new capacity, count)`.
+const U16_ARRAY_IS_FULL: u32 = 0x0043_8b90;
+const U16_ARRAY_NEXT_CAPACITY: u32 = 0x009a_3910;
+const U16_ARRAY_RESIZE: u32 = 0x005e_f6a0;
+/// Destructor body the obstacle map's scalar deleting destructor
+/// (`00692050`) runs.
+const OBSTACLE_MAP_BASE_DESTRUCTOR: u32 = 0x0069_1a00;
+/// Virtual slot (byte offset) of the `BSSimpleArray` allocator
+/// `(count) -> block`.
+const ARRAY_ALLOCATE_SLOT: u32 = 0x04;
+/// Initial capacity of a `BSSimpleArray<unsigned short>` that has none.
+const U16_ARRAY_FIRST_CAPACITY: u32 = 4;
 
 // Vtables the constructors of this batch store.
 const OBSTACLE_MAP_VTABLE: u32 = 0x0106_aba4;
@@ -2263,6 +2308,373 @@ pub fn fn_00691bf0(e: &mut Engine, this: Ptr<BSSimpleArray>) {
     e.call(ARRAY_CLEAR, &args![this, 1u32]);
 }
 
+// Translated from 00691c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Appends a copy of the `EdgeExtraInfo` at `value` to the extra edge info
+/// array: makes room (`00978bc0`), constructs the element (`00692320`) and
+/// copy-constructs it from `value` (`00691c60`). Returns the new element's
+/// index.
+pub fn fn_00691c10(e: &mut Engine, this: Ptr<BSSimpleArray>, value: Ptr) -> u32 {
+    let index = e.call(EXTRA_INFO_ARRAY_GROW, &args![this]).u32();
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    let element = index.wrapping_mul(12).wrapping_add(buffer);
+    e.call(EXTRA_INFO_CONSTRUCT_ELEMENTS, &args![this, element, 1u32]);
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    let element = index.wrapping_mul(12).wrapping_add(buffer);
+    e.call(EXTRA_INFO_COPY_CONSTRUCT, &args![element, value]);
+    index
+}
+
+// Translated from 00691d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the door portal array
+/// (`BSSimpleArray<NavMeshTriangleDoorPortal>`): stores the vtable and
+/// initialises the array with `(0, 0)` (`00692520`). Returns `this`.
+pub fn fn_00691d40(e: &mut Engine, this: Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray> {
+    e.mem.set_u32(this.addr(), DOOR_PORTAL_ARRAY_VTABLE);
+    e.call(DOOR_ARRAY_INITIALISE, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 00691d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the door portal array: stores the vtable and clears the
+/// array, freeing its buffer.
+pub fn fn_00691d70(e: &mut Engine, this: Ptr<BSSimpleArray>) {
+    e.mem.set_u32(this.addr(), DOOR_PORTAL_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 00691d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the closed door array
+/// (`BSSimpleArray<NavMeshClosedDoorInfo>`): stores the vtable and
+/// initialises the array with `(0, 0)` (`00692520`). Returns `this`.
+pub fn fn_00691d90(e: &mut Engine, this: Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray> {
+    e.mem.set_u32(this.addr(), CLOSED_DOOR_ARRAY_VTABLE);
+    e.call(DOOR_ARRAY_INITIALISE, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 00691dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the closed door array: stores the vtable and clears the
+/// array, freeing its buffer.
+pub fn fn_00691dc0(e: &mut Engine, this: Ptr<BSSimpleArray>) {
+    e.mem.set_u32(this.addr(), CLOSED_DOOR_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 00691de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Base constructor of the `NavMeshPOVData` `NiTMap`: like `006918c0` but
+/// with its own base vtable. Stores the vtable and the bucket count, sets
+/// the item count to 0, allocates `buckets * 4` bytes (`00aa1070`) for the
+/// bucket table and zeroes them. Returns `this`.
+pub fn fn_00691de0(e: &mut Engine, this: Ptr<NiTPointerMap>, buckets: u32) -> Ptr<NiTPointerMap> {
+    e.mem.set_u32(this.addr(), MAP_ITEM_BASE_VTABLE);
+    e.set(this, NiTPointerMap::m_uiHashSize, buckets);
+    e.set(this, NiTPointerMap::m_uiCount, 0);
+    let size = buckets.wrapping_shl(2);
+    let table = e.call(ALLOCATE, &args![size]).u32();
+    e.set(this, NiTPointerMap::m_ppkHashTable, table);
+    let size = buckets.wrapping_shl(2);
+    e.call(MEMORY_SET, &args![table, 0u32, size]);
+    this
+}
+
+// Translated from 00691e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<unsigned short, NiPointer<ObstacleData>>>,
+/// unsigned short, NiPointer<ObstacleData>>::IsKeysEqual` (Xbox PDB): whether
+/// the two `unsigned short` keys are equal. `this` is not used.
+pub fn ni_t_map_base_obstacle_data_is_keys_equal(
+    _e: &mut Engine,
+    _this: Ptr<NiTPointerMap>,
+    key_1: u16,
+    key_2: u16,
+) -> bool {
+    key_1 == key_2
+}
+
+// Translated from 00691e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<unsigned short, NavMeshPOVData>>, unsigned
+/// short, NavMeshPOVData>::SetValue` (Xbox PDB): stores `key` at `item + 4`
+/// and the 4-byte `value` at `item + 6` (the item is packed). `this` is not
+/// used.
+pub fn ni_t_map_base_pov_data_set_value(
+    e: &mut Engine,
+    _this: Ptr<NiTPointerMap>,
+    item: Ptr,
+    key: u16,
+    value: u32,
+) {
+    e.mem.set_u16(item.addr() + 4, key);
+    e.mem.set_u32(item.addr() + 6, value);
+}
+
+// Translated from 00691ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the `NavMeshPOVData` `NiTMap`: stores the map's vtable,
+/// removes all items (`00438af0`) and runs the base destructor (`00691f00`).
+/// Left out: the exception-unwinding frame.
+pub fn fn_00691ea0(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    e.mem.set_u32(this.addr(), POV_MAP_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    fn_00691f00(e, this);
+}
+
+// Translated from 00691f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Base destructor of the `NavMeshPOVData` `NiTMap`: stores the base vtable,
+/// removes all items (`00438af0`) and frees the bucket table (`00aa10f0`).
+pub fn fn_00691f00(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    e.mem.set_u32(this.addr(), MAP_ITEM_BASE_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    let table = e.get(this, NiTPointerMap::m_ppkHashTable);
+    e.call(FREE_TABLE, &args![table]);
+}
+
+// Translated from 00691f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Releases an item of the `NavMeshPOVData` `NiTMap`: resets the value at
+/// `item + 6` (`0065de30`, argument 0) and hands the item back to the map's
+/// allocator (`006b8310` on `this + 0xc`).
+pub fn fn_00691f30(e: &mut Engine, this: Ptr<NiTPointerMap>, item: Ptr) {
+    e.call(POV_ITEM_RESET_VALUE, &args![item.byte_add(6), 0u32]);
+    e.call(POV_ITEM_FREE, &args![this.byte_add(0xc), item]);
+}
+
+// Translated from 00691f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the obstacle array
+/// (`BSSimpleArray<NiPointer<ObstacleUndoData>>`): stores the vtable and
+/// initialises the array with `(0, 0)` (`00822860`). Returns `this`.
+pub fn fn_00691f60(e: &mut Engine, this: Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray> {
+    e.mem.set_u32(this.addr(), OBSTACLE_ARRAY_VTABLE);
+    e.call(OBSTACLES_INITIALISE, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 00691f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NiPointer<ObstacleUndoData>, 1024>::~BSSimpleArray`
+/// (Xbox PDB): stores the vtable and clears the array (`006c6200`, argument
+/// 1: free the buffer).
+pub fn fn_00691f90(e: &mut Engine, this: Ptr<BSSimpleArray>) {
+    e.mem.set_u32(this.addr(), OBSTACLE_ARRAY_VTABLE);
+    e.call(OBSTACLES_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 00691fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the static avoid node array: stores the vtable and
+/// initialises the array with `(0, 0)` (`00692740`). Returns `this`.
+pub fn fn_00691fb0(e: &mut Engine, this: Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray> {
+    e.mem.set_u32(this.addr(), AVOID_NODE_ARRAY_VTABLE);
+    fn_00692740(e, this, 0, 0);
+    this
+}
+
+// Translated from 00691fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the static avoid node array: stores the vtable and clears
+/// the array, freeing its buffer.
+pub fn fn_00691fe0(e: &mut Engine, this: Ptr<BSSimpleArray>) {
+    e.mem.set_u32(this.addr(), AVOID_NODE_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 00692000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Appends a copy of the 40-byte avoid node at `value` to the static avoid
+/// node array: makes room (`006925b0`), constructs the element (`00692640`)
+/// and copies the ten words. Returns the new element's index.
+pub fn fn_00692000(e: &mut Engine, this: Ptr<BSSimpleArray>, value: Ptr) -> u32 {
+    let index = e.call(AVOID_NODE_ARRAY_GROW, &args![this]).u32();
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    let element = index.wrapping_mul(0x28).wrapping_add(buffer);
+    e.call(AVOID_NODE_CONSTRUCT_ELEMENTS, &args![this, element, 1u32]);
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    let element = index.wrapping_mul(0x28).wrapping_add(buffer);
+    for word in 0..10 {
+        let copied = e.mem.u32(value.addr() + 4 * word);
+        e.mem.set_u32(element + 4 * word, copied);
+    }
+    index
+}
+
+// Translated from 00692050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<unsigned short, NiPointer<ObstacleData>>>,
+/// unsigned short, NiPointer<ObstacleData>>::scalar deleting destructor`
+/// (Xbox PDB): runs the destructor body (`00691a00`) and, when bit 0 of
+/// `flags` is set, frees the object. Returns `this`.
+pub fn ni_t_map_base_obstacle_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTPointerMap>,
+    flags: u32,
+) -> Ptr<NiTPointerMap> {
+    e.call(OBSTACLE_MAP_BASE_DESTRUCTOR, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+/// Shared tail of the scalar deleting destructors below: frees the object
+/// when bit 0 of `flags` is set.
+fn delete_if_flagged(e: &mut Engine, this: Ptr<BSSimpleArray>, flags: u32) -> Ptr<BSSimpleArray> {
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00692080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NavMeshVertex, 1024>::scalar deleting destructor` (Xbox
+/// PDB): runs the destructor (`00691a90`) and, when bit 0 of `flags` is set,
+/// frees the object. Returns `this`.
+pub fn bs_simple_array_vertex_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    fn_00691a90(e, this);
+    delete_if_flagged(e, this, flags)
+}
+
+// Translated from 006920b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NavMeshTriangle, 1024>::scalar deleting destructor` (Xbox
+/// PDB): runs the destructor (`00691b40`) and, when bit 0 of `flags` is set,
+/// frees the object. Returns `this`.
+pub fn bs_simple_array_triangle_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    fn_00691b40(e, this);
+    delete_if_flagged(e, this, flags)
+}
+
+// Translated from 006920e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<EdgeExtraInfo, 1024>::scalar deleting destructor` (Xbox
+/// PDB): runs the destructor (`00691bf0`) and, when bit 0 of `flags` is set,
+/// frees the object. Returns `this`.
+pub fn bs_simple_array_edge_extra_info_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    fn_00691bf0(e, this);
+    delete_if_flagged(e, this, flags)
+}
+
+// Translated from 00692110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NavMeshTriangleDoorPortal, 1024>::scalar deleting
+/// destructor` (Xbox PDB): runs the destructor (`00691d70`) and, when bit 0
+/// of `flags` is set, frees the object. Returns `this`.
+pub fn bs_simple_array_door_portal_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    fn_00691d70(e, this);
+    delete_if_flagged(e, this, flags)
+}
+
+// Translated from 00692140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NavMeshClosedDoorInfo, 1024>::scalar deleting destructor`
+/// (Xbox PDB): runs the destructor (`00691dc0`) and, when bit 0 of `flags` is
+/// set, frees the object. Returns `this`.
+pub fn bs_simple_array_closed_door_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    fn_00691dc0(e, this);
+    delete_if_flagged(e, this, flags)
+}
+
+// Translated from 00692170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<unsigned short, NavMeshPOVData>>, unsigned
+/// short, NavMeshPOVData>::scalar deleting destructor` (Xbox PDB): runs the
+/// base destructor (`00691f00`) and, when bit 0 of `flags` is set, frees the
+/// object. Returns `this`.
+pub fn ni_t_map_base_pov_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTPointerMap>,
+    flags: u32,
+) -> Ptr<NiTPointerMap> {
+    fn_00691f00(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006921a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NiPointer<ObstacleUndoData>, 1024>::scalar deleting
+/// destructor` (Xbox PDB): runs the destructor (`00691f90`) and, when bit 0
+/// of `flags` is set, frees the object. Returns `this`.
+pub fn bs_simple_array_obstacle_undo_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    fn_00691f90(e, this);
+    delete_if_flagged(e, this, flags)
+}
+
+// Translated from 006921d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NavMeshStaticAvoidNode, 1024>::scalar deleting destructor`
+/// (Xbox PDB): runs the destructor (`00691fe0`) and, when bit 0 of `flags` is
+/// set, frees the object. Returns `this`.
+pub fn bs_simple_array_static_avoid_node_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    fn_00691fe0(e, this);
+    delete_if_flagged(e, this, flags)
+}
+
+// Translated from 00692200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Makes room for one more `unsigned short` element and returns its index
+/// (the old size). When the array is full (`00438b90`): with no capacity
+/// yet, allocates 4 elements through the array's virtual allocator (slot 4);
+/// otherwise takes the next capacity (`009a3910`) and resizes (`005ef6a0`).
+/// Then increments the size.
+pub fn fn_00692200(e: &mut Engine, this: Ptr<BSSimpleArray>) -> u32 {
+    let full = e.call(U16_ARRAY_IS_FULL, &args![this]).u32() & 0xff != 0;
+    if full {
+        if e.get(this, BSSimpleArray::iReservedSize) == 0 {
+            let capacity = U16_ARRAY_FIRST_CAPACITY;
+            let block = e
+                .vcall(this.addr(), ARRAY_ALLOCATE_SLOT, &args![capacity])
+                .u32();
+            e.set(this, BSSimpleArray::pBuffer, block);
+            e.set(this, BSSimpleArray::iReservedSize, capacity);
+        } else {
+            let capacity = e.call(U16_ARRAY_NEXT_CAPACITY, &args![this]).u32();
+            let size = e.get(this, BSSimpleArray::iSize);
+            e.call(U16_ARRAY_RESIZE, &args![this, capacity, size]);
+            e.set(this, BSSimpleArray::iReservedSize, capacity);
+        }
+    }
+    let size = e.get(this, BSSimpleArray::iSize).wrapping_add(1);
+    e.set(this, BSSimpleArray::iSize, size);
+    size.wrapping_sub(1)
+}
+
+// Translated from 00692740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Initialiser of the static avoid node array: empties it, raises `capacity`
+/// to at least `count`, allocates that many 40-byte elements through the
+/// array's virtual allocator (slot 4) and constructs `count` of them
+/// (`00692640`), setting the size to `count`.
+pub fn fn_00692740(e: &mut Engine, this: Ptr<BSSimpleArray>, capacity: u32, count: u32) {
+    e.set(this, BSSimpleArray::pBuffer, 0);
+    e.set(this, BSSimpleArray::iSize, 0);
+    e.set(this, BSSimpleArray::iReservedSize, 0);
+    let capacity = capacity.max(count);
+    if capacity > 0 {
+        let block = e
+            .vcall(this.addr(), ARRAY_ALLOCATE_SLOT, &args![capacity])
+            .u32();
+        e.set(this, BSSimpleArray::pBuffer, block);
+        e.set(this, BSSimpleArray::iReservedSize, capacity);
+    }
+    if count > 0 {
+        let buffer = e.get(this, BSSimpleArray::pBuffer);
+        e.call(AVOID_NODE_CONSTRUCT_ELEMENTS, &args![this, buffer, count]);
+        e.set(this, BSSimpleArray::iSize, count);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2442,6 +2854,114 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fn_00691bc0(Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray>
         ),
         entry!(0x00691bf0, fn_00691bf0(Ptr<BSSimpleArray>)),
+        entry!(0x00691c10, fn_00691c10(Ptr<BSSimpleArray>, Ptr) -> u32),
+        entry!(
+            0x00691d40,
+            fn_00691d40(Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray>
+        ),
+        entry!(0x00691d70, fn_00691d70(Ptr<BSSimpleArray>)),
+        entry!(
+            0x00691d90,
+            fn_00691d90(Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray>
+        ),
+        entry!(0x00691dc0, fn_00691dc0(Ptr<BSSimpleArray>)),
+        entry!(
+            0x00691de0,
+            fn_00691de0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00691e50,
+            ni_t_map_base_obstacle_data_is_keys_equal(Ptr<NiTPointerMap>, u16, u16) -> bool
+        ),
+        entry!(
+            0x00691e70,
+            ni_t_map_base_pov_data_set_value(Ptr<NiTPointerMap>, Ptr, u16, u32)
+        ),
+        entry!(0x00691ea0, fn_00691ea0(Ptr<NiTPointerMap>)),
+        entry!(0x00691f00, fn_00691f00(Ptr<NiTPointerMap>)),
+        entry!(0x00691f30, fn_00691f30(Ptr<NiTPointerMap>, Ptr)),
+        entry!(
+            0x00691f60,
+            fn_00691f60(Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray>
+        ),
+        entry!(0x00691f90, fn_00691f90(Ptr<BSSimpleArray>)),
+        entry!(
+            0x00691fb0,
+            fn_00691fb0(Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray>
+        ),
+        entry!(0x00691fe0, fn_00691fe0(Ptr<BSSimpleArray>)),
+        entry!(0x00692000, fn_00692000(Ptr<BSSimpleArray>, Ptr) -> u32),
+        entry!(
+            0x00692050,
+            ni_t_map_base_obstacle_data_scalar_deleting_destructor(
+                Ptr<NiTPointerMap>,
+                u32,
+            )
+                -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00692080,
+            bs_simple_array_vertex_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            ) -> Ptr<BSSimpleArray>
+        ),
+        entry!(
+            0x006920b0,
+            bs_simple_array_triangle_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            ) -> Ptr<BSSimpleArray>
+        ),
+        entry!(
+            0x006920e0,
+            bs_simple_array_edge_extra_info_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            )
+                -> Ptr<BSSimpleArray>
+        ),
+        entry!(
+            0x00692110,
+            bs_simple_array_door_portal_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            )
+                -> Ptr<BSSimpleArray>
+        ),
+        entry!(
+            0x00692140,
+            bs_simple_array_closed_door_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            )
+                -> Ptr<BSSimpleArray>
+        ),
+        entry!(
+            0x00692170,
+            ni_t_map_base_pov_data_scalar_deleting_destructor(
+                Ptr<NiTPointerMap>,
+                u32,
+            ) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x006921a0,
+            bs_simple_array_obstacle_undo_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            )
+                -> Ptr<BSSimpleArray>
+        ),
+        entry!(
+            0x006921d0,
+            bs_simple_array_static_avoid_node_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            )
+                -> Ptr<BSSimpleArray>
+        ),
+        entry!(0x00692200, fn_00692200(Ptr<BSSimpleArray>) -> u32),
+        entry!(0x00692740, fn_00692740(Ptr<BSSimpleArray>, u32, u32)),
     ]
 }
 
@@ -4522,5 +5042,303 @@ mod tests {
             calls_to(&log, TRIANGLE_ARRAY_CONSTRUCT_ELEMENTS)[1],
             vec![triangles.addr(), triangle_buffer + 16, 1]
         );
+    }
+
+    /// Address the fake allocator double (virtual slot 4) is registered at.
+    const FAKE_ALLOCATE: u32 = 0x00ff_0001;
+
+    /// An array object whose vtable slot 4 is a double that returns a fresh
+    /// 256-byte block and logs nothing else.
+    fn array_with_allocator(e: &mut Engine) -> Ptr<BSSimpleArray> {
+        e.register(FAKE_ALLOCATE, |e, _| result(e.mem.alloc(256)));
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable + 4, FAKE_ALLOCATE);
+        let array: Ptr<BSSimpleArray> = e.new_object();
+        e.mem.set_u32(array.addr(), vtable);
+        array
+    }
+
+    #[test]
+    fn extra_info_add_constructs_then_copy_constructs() {
+        let mut e = Engine::new();
+        e.register(EXTRA_INFO_ARRAY_GROW, grow_array);
+        noops(
+            &mut e,
+            &[EXTRA_INFO_CONSTRUCT_ELEMENTS, EXTRA_INFO_COPY_CONSTRUCT],
+        );
+        let array: Ptr<BSSimpleArray> = e.new_object();
+        let source = Ptr::<()>::new(e.mem.alloc(12));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0069_1c10, &args![array, source]).u32(), 0);
+        assert_eq!(e.call(0x0069_1c10, &args![array, source]).u32(), 1);
+        let log = e.call_log.take().unwrap();
+        let buffer = e.mem.u32(array.addr() + 4);
+        assert_eq!(
+            calls_to(&log, EXTRA_INFO_CONSTRUCT_ELEMENTS)[1],
+            vec![array.addr(), buffer + 12, 1]
+        );
+        assert_eq!(
+            calls_to(&log, EXTRA_INFO_COPY_CONSTRUCT)[1],
+            vec![buffer + 12, source.addr()]
+        );
+    }
+
+    #[test]
+    fn door_and_closed_door_arrays_construct_and_destroy() {
+        let mut e = Engine::new();
+        noops(&mut e, &[DOOR_ARRAY_INITIALISE, ARRAY_CLEAR]);
+        let array: Ptr<BSSimpleArray> = e.new_object();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0069_1d40, &args![array]).u32(), array.addr());
+        assert_eq!(e.mem.u32(array.addr()), DOOR_PORTAL_ARRAY_VTABLE);
+        e.call(0x0069_1d70, &args![array]);
+        assert_eq!(e.call(0x0069_1d90, &args![array]).u32(), array.addr());
+        assert_eq!(e.mem.u32(array.addr()), CLOSED_DOOR_ARRAY_VTABLE);
+        e.call(0x0069_1dc0, &args![array]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, DOOR_ARRAY_INITIALISE),
+            vec![vec![array.addr(), 0, 0]; 2]
+        );
+        assert_eq!(calls_to(&log, ARRAY_CLEAR), vec![vec![array.addr(), 1]; 2]);
+    }
+
+    #[test]
+    fn pov_map_base_constructor_allocates_and_clears_the_bucket_table() {
+        let mut e = Engine::new();
+        e.register(ALLOCATE, |e, _| result(e.mem.alloc(0x100)));
+        noops(&mut e, &[MEMORY_SET]);
+        let map: Ptr<NiTPointerMap> = e.new_object();
+        e.mem.set_u32(map.addr() + 0xc, 7);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0069_1de0, &args![map, 0x25u32]).u32(), map.addr());
+        let log = e.call_log.take().unwrap();
+        let table = e.mem.u32(map.addr() + 8);
+        assert_ne!(table, 0);
+        assert_eq!(e.mem.u32(map.addr()), MAP_ITEM_BASE_VTABLE);
+        assert_eq!(e.mem.u32(map.addr() + 4), 0x25);
+        assert_eq!(e.mem.u32(map.addr() + 0xc), 0);
+        assert_eq!(calls_to(&log, ALLOCATE), vec![vec![0x94]]);
+        assert_eq!(calls_to(&log, MEMORY_SET), vec![vec![table, 0, 0x94]]);
+    }
+
+    #[test]
+    fn obstacle_map_keys_compare_as_unsigned_shorts() {
+        let mut e = Engine::new();
+        let map: Ptr<NiTPointerMap> = e.new_object();
+        assert!(e.call(0x0069_1e50, &args![map, 5u16, 5u16]).bool());
+        assert!(!e.call(0x0069_1e50, &args![map, 5u16, 6u16]).bool());
+    }
+
+    #[test]
+    fn pov_map_set_value_stores_key_and_packed_value() {
+        let mut e = Engine::new();
+        let map: Ptr<NiTPointerMap> = e.new_object();
+        let item = Ptr::<()>::new(e.mem.alloc(16));
+        e.call(0x0069_1e70, &args![map, item, 0xbeefu16, 0x1122_3344u32]);
+        assert_eq!(e.mem.u16(item.addr() + 4), 0xbeef);
+        assert_eq!(e.mem.u32(item.addr() + 6), 0x1122_3344);
+    }
+
+    #[test]
+    fn pov_map_destructors_remove_items_and_free_the_table() {
+        let mut e = Engine::new();
+        noops(&mut e, &[MAP_REMOVE_ALL, FREE_TABLE]);
+        let map: Ptr<NiTPointerMap> = e.new_object();
+        e.mem.set_u32(map.addr() + 8, 0x4444);
+        e.call_log = Some(vec![]);
+        e.call(0x0069_1ea0, &args![map]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(map.addr()), MAP_ITEM_BASE_VTABLE);
+        assert_eq!(calls_to(&log, MAP_REMOVE_ALL), vec![vec![map.addr()]; 2]);
+        assert_eq!(calls_to(&log, FREE_TABLE), vec![vec![0x4444]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0069_1f00, &args![map]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, MAP_REMOVE_ALL).len(), 1);
+        assert_eq!(calls_to(&log, FREE_TABLE), vec![vec![0x4444]]);
+    }
+
+    #[test]
+    fn pov_map_item_release_resets_value_then_frees_item() {
+        let mut e = Engine::new();
+        noops(&mut e, &[POV_ITEM_RESET_VALUE, POV_ITEM_FREE]);
+        let map: Ptr<NiTPointerMap> = e.new_object();
+        let item = Ptr::<()>::new(e.mem.alloc(16));
+        e.call_log = Some(vec![]);
+        e.call(0x0069_1f30, &args![map, item]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, POV_ITEM_RESET_VALUE),
+            vec![vec![item.addr() + 6, 0]]
+        );
+        assert_eq!(
+            calls_to(&log, POV_ITEM_FREE),
+            vec![vec![map.addr() + 0xc, item.addr()]]
+        );
+    }
+
+    #[test]
+    fn obstacle_array_constructor_and_destructor() {
+        let mut e = Engine::new();
+        noops(&mut e, &[OBSTACLES_INITIALISE, OBSTACLES_CLEAR]);
+        let array: Ptr<BSSimpleArray> = e.new_object();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0069_1f60, &args![array]).u32(), array.addr());
+        assert_eq!(e.mem.u32(array.addr()), OBSTACLE_ARRAY_VTABLE);
+        e.call(0x0069_1f90, &args![array]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, OBSTACLES_INITIALISE),
+            vec![vec![array.addr(), 0, 0]]
+        );
+        assert_eq!(calls_to(&log, OBSTACLES_CLEAR), vec![vec![array.addr(), 1]]);
+    }
+
+    #[test]
+    fn avoid_node_array_constructor_and_destructor() {
+        let mut e = Engine::new();
+        noops(&mut e, &[AVOID_NODE_CONSTRUCT_ELEMENTS, ARRAY_CLEAR]);
+        let array: Ptr<BSSimpleArray> = e.new_object();
+        e.mem.set_u32(array.addr() + 4, 0x1234);
+        e.mem.set_u32(array.addr() + 8, 9);
+        e.mem.set_u32(array.addr() + 12, 9);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0069_1fb0, &args![array]).u32(), array.addr());
+        assert_eq!(e.mem.u32(array.addr()), AVOID_NODE_ARRAY_VTABLE);
+        assert_eq!(e.mem.u32(array.addr() + 4), 0);
+        assert_eq!(e.mem.u32(array.addr() + 8), 0);
+        assert_eq!(e.mem.u32(array.addr() + 12), 0);
+        e.call(0x0069_1fe0, &args![array]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, AVOID_NODE_CONSTRUCT_ELEMENTS).is_empty());
+        assert_eq!(calls_to(&log, ARRAY_CLEAR), vec![vec![array.addr(), 1]]);
+    }
+
+    #[test]
+    fn avoid_node_add_copies_ten_words() {
+        let mut e = Engine::new();
+        e.register(AVOID_NODE_ARRAY_GROW, grow_array);
+        noops(&mut e, &[AVOID_NODE_CONSTRUCT_ELEMENTS]);
+        let array: Ptr<BSSimpleArray> = e.new_object();
+        let source = Ptr::<()>::new(e.mem.alloc(48));
+        for word in 0..11 {
+            e.mem.set_u32(source.addr() + 4 * word, 0x100 + word);
+        }
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0069_2000, &args![array, source]).u32(), 0);
+        assert_eq!(e.call(0x0069_2000, &args![array, source]).u32(), 1);
+        let log = e.call_log.take().unwrap();
+        let buffer = e.mem.u32(array.addr() + 4);
+        assert_eq!(e.mem.u32(buffer + 0x28), 0x100);
+        assert_eq!(e.mem.u32(buffer + 0x28 + 36), 0x109);
+        assert_eq!(e.mem.u32(buffer + 0x28 + 40), 0, "only ten words");
+        assert_eq!(
+            calls_to(&log, AVOID_NODE_CONSTRUCT_ELEMENTS)[1],
+            vec![array.addr(), buffer + 0x28, 1]
+        );
+    }
+
+    #[test]
+    fn scalar_deleting_destructors_run_the_destructor_and_free_on_bit_zero() {
+        let mut e = Engine::new();
+        noops(
+            &mut e,
+            &[
+                ARRAY_CLEAR,
+                OBSTACLES_CLEAR,
+                MAP_REMOVE_ALL,
+                FREE_TABLE,
+                OBSTACLE_MAP_BASE_DESTRUCTOR,
+                OPERATOR_DELETE,
+            ],
+        );
+        let object: Ptr<BSSimpleArray> = e.new_object();
+        // (entry, the call the destructor makes first).
+        let cases = [
+            (0x0069_2050, OBSTACLE_MAP_BASE_DESTRUCTOR),
+            (0x0069_2080, ARRAY_CLEAR),
+            (0x0069_20b0, ARRAY_CLEAR),
+            (0x0069_20e0, ARRAY_CLEAR),
+            (0x0069_2110, ARRAY_CLEAR),
+            (0x0069_2140, ARRAY_CLEAR),
+            (0x0069_2170, MAP_REMOVE_ALL),
+            (0x0069_21a0, OBSTACLES_CLEAR),
+            (0x0069_21d0, ARRAY_CLEAR),
+        ];
+        for (entry, inner) in cases {
+            for flags in [0u32, 1, 2, 3] {
+                e.call_log = Some(vec![]);
+                let returned = e.call(entry, &args![object, flags]).u32();
+                let log = e.call_log.take().unwrap();
+                assert_eq!(returned, object.addr(), "{entry:08x}");
+                assert!(!calls_to(&log, inner).is_empty(), "{entry:08x}");
+                let deleted = calls_to(&log, OPERATOR_DELETE);
+                if flags & 1 != 0 {
+                    assert_eq!(deleted, vec![vec![object.addr()]], "{entry:08x}");
+                } else {
+                    assert!(deleted.is_empty(), "{entry:08x}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unsigned_short_array_grow_branches() {
+        let mut e = Engine::new();
+        let full = std::rc::Rc::new(std::cell::Cell::new(false));
+        let flag = full.clone();
+        e.register_double(U16_ARRAY_IS_FULL, move |_, _| result(flag.get() as u32));
+        e.register(U16_ARRAY_NEXT_CAPACITY, |_, _| result(8));
+        noops(&mut e, &[U16_ARRAY_RESIZE]);
+        let array = array_with_allocator(&mut e);
+        // Not full: only the size changes.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0069_2200, &args![array]).u32(), 0);
+        assert_eq!(e.mem.u32(array.addr() + 8), 1);
+        assert_eq!(e.mem.u32(array.addr() + 4), 0);
+        // Full with no capacity: 4 elements from the allocator.
+        full.set(true);
+        assert_eq!(e.call(0x0069_2200, &args![array]).u32(), 1);
+        assert_eq!(e.mem.u32(array.addr() + 12), 4);
+        assert_ne!(e.mem.u32(array.addr() + 4), 0);
+        // Full with a capacity: next capacity and resize with the old size.
+        assert_eq!(e.call(0x0069_2200, &args![array]).u32(), 2);
+        assert_eq!(e.mem.u32(array.addr() + 12), 8);
+        assert_eq!(e.mem.u32(array.addr() + 8), 3);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, U16_ARRAY_RESIZE),
+            vec![vec![array.addr(), 8, 2]]
+        );
+    }
+
+    #[test]
+    fn avoid_node_array_initialiser_raises_capacity_to_count() {
+        let mut e = Engine::new();
+        noops(&mut e, &[AVOID_NODE_CONSTRUCT_ELEMENTS]);
+        let array = array_with_allocator(&mut e);
+        e.mem.set_u32(array.addr() + 8, 5);
+        e.call_log = Some(vec![]);
+        e.call(0x0069_2740, &args![array, 2u32, 6u32]);
+        let log = e.call_log.take().unwrap();
+        let buffer = e.mem.u32(array.addr() + 4);
+        assert_ne!(buffer, 0);
+        assert_eq!(e.mem.u32(array.addr() + 12), 6, "capacity raised to count");
+        assert_eq!(e.mem.u32(array.addr() + 8), 6);
+        assert_eq!(
+            calls_to(&log, AVOID_NODE_CONSTRUCT_ELEMENTS),
+            vec![vec![array.addr(), buffer, 6]]
+        );
+        // Capacity only: allocates, constructs nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x0069_2740, &args![array, 3u32, 0u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(array.addr() + 12), 3);
+        assert_eq!(e.mem.u32(array.addr() + 8), 0);
+        assert!(calls_to(&log, AVOID_NODE_CONSTRUCT_ELEMENTS).is_empty());
+        // Nothing: no allocation.
+        e.call(0x0069_2740, &args![array, 0u32, 0u32]);
+        assert_eq!(e.mem.u32(array.addr() + 4), 0);
     }
 }
