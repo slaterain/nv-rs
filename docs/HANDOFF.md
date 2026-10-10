@@ -89,3 +89,4 @@ Everything private lives in `C:\Users\alexa\nv-re\work\phase0` (state notes in
   004203b0, 00420630): define them in the private project and rerun the engine
   map.
 - ADR-0006 awaits maintainer review.
+- Stray scratch files agents left in the Git install folder (`C:Program FilesGit	mp_dummy`, `C:Program FilesGit	mp_p3.rs`); deleting them there needs the user.
