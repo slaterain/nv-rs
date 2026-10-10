@@ -35,6 +35,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::types::BSSimpleArray;
 use crate::units::fallout_ai::actor::Actor;
 
 /// The game's one `ProcessLists` object.
@@ -6348,6 +6349,477 @@ pub fn fn_009781d0(e: &mut Engine, this: Ptr<ProcessLists>, delta: f32) {
     }
 }
 
+// --- 00978400 .. 00978ec2: per-actor loops, muzzle flashes, array helpers ----
+
+/// `operator delete` (`00401030`, cdecl, one word).
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// The memory manager getter (`00401020`) and `MemoryManager::GetThreadScrapHeap`
+/// (Xbox PDB, `00aa42e0`, `this` = the manager).
+const MEMORY_MANAGER: u32 = 0x0040_1020;
+const GET_THREAD_SCRAP_HEAP: u32 = 0x00aa_42e0;
+/// `ScrapHeap::Allocate(size, alignment)` (Xbox PDB).
+const SCRAP_HEAP_ALLOCATE: u32 = 0x00aa_54a0;
+/// Alignment the scrap arrays pass to `ScrapHeap::Allocate`.
+const SCRAP_ALIGNMENT: u32 = 0x010a_2720;
+/// Array initialiser `006b3eb0(this, size, capacity)` of the `Animation *` and
+/// `Actor *` arrays, and `006b3f40` of the `EffectTaskData` array.
+const ARRAY_INITIALISE: u32 = 0x006b_3eb0;
+const EFFECT_ARRAY_INITIALISE: u32 = 0x006b_3f40;
+/// Array buffer release `008454f0(this, 1)` that every array destructor runs.
+const ARRAY_RELEASE: u32 = 0x0084_54f0;
+/// Vtables of the arrays of this file: `BSSimpleArray<Animation *>`,
+/// `BSScrapArray<Animation *>`, `BSScrapArray<Actor *>`,
+/// `BSScrapArray<EffectTaskData>` and `BSSimpleArray<EffectTaskData>`.
+const ANIMATION_ARRAY_VTABLE: u32 = 0x0108_c23c;
+const ANIMATION_SCRAP_ARRAY_VTABLE: u32 = 0x0108_c228;
+const ACTOR_SCRAP_ARRAY_VTABLE: u32 = 0x0108_c250;
+const EFFECT_SCRAP_ARRAY_VTABLE: u32 = 0x0108_c264;
+const EFFECT_ARRAY_VTABLE: u32 = 0x0108_c278;
+/// Constructor (`008c1c00`) and destructor body (`008c1cb0`) of the
+/// `BSSimpleArray<Actor *>` the actor scrap array derives from.
+const ACTOR_ARRAY_CONSTRUCT: u32 = 0x008c_1c00;
+const ACTOR_ARRAY_DESTRUCT: u32 = 0x008c_1cb0;
+/// Offset of the scrap heap pointer in a `BSScrapArray`.
+const SCRAP_HEAP: u32 = 0x10;
+/// Muzzle flash accessors: `00441110` (the reference form id, +0x1c) and
+/// `00825c00` (the word at +0x14); `004181e0`, `00476c90` and `009611e0` read
+/// the words of the description a muzzle flash is looked up by.
+const MUZZLE_FLASH_REFERENCE: u32 = 0x0044_1110;
+const MUZZLE_FLASH_KEY_A: u32 = 0x0082_5c00;
+/// `MuzzleFlash::MuzzleFlash` (`009bacb0`), `MuzzleFlash::Update` (Xbox
+/// PDB, `009bb080`), its flag getter `009373f0`, its start `009bb690` and
+/// `MuzzleFlash::~MuzzleFlash` (Xbox PDB, `008d9f70`, scalar deleting form).
+const MUZZLE_FLASH_CONSTRUCT: u32 = 0x009b_acb0;
+const MUZZLE_FLASH_UPDATE: u32 = 0x009b_b080;
+const MUZZLE_FLASH_FLAG: u32 = 0x0093_73f0;
+const MUZZLE_FLASH_START: u32 = 0x009b_b690;
+const MUZZLE_FLASH_DELETE: u32 = 0x008d_9f70;
+
+// Translated from 00978400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Byte getter: the flag at +0x18 of the object (the ragdoll controller
+/// `fn_009781d0` tests before it updates the actor's ragdoll).
+pub fn fn_00978400(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x18)
+}
+
+// Translated from 00978420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls the actor vtable slot 0x268 with `delta` on every actor of process
+/// level 0. The second stack word is never read.
+pub fn fn_00978420(e: &mut Engine, this: Ptr<ProcessLists>, delta: f32, _unused_0: u32) {
+    let array = mob_process_array(this);
+    let mut index = array_head(e, array, 0);
+    while index < array_tail(e, array, 0) {
+        let object = array_object(e, array, index);
+        if object != 0 && is_actor(e, object) {
+            e.vcall(object, 0x268, &args![delta]);
+        }
+        index = index.wrapping_add(1);
+    }
+}
+
+// Translated from 009784c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `Actor::UpdateMagic` (`008c3c40`, two zero words) on every actor of
+/// process level 0.
+pub fn fn_009784c0(e: &mut Engine, this: Ptr<ProcessLists>) {
+    let array = mob_process_array(this);
+    let mut index = array_head(e, array, 0);
+    while index < array_tail(e, array, 0) {
+        let object = array_object(e, array, index);
+        if object != 0 && is_actor(e, object) {
+            e.call(0x008c_3c40, &args![object, 0u32, 0u32]);
+        }
+        index = index.wrapping_add(1);
+    }
+}
+
+// Translated from 00978550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs the script of every actor of process level 0 (`00565870`, the
+/// function the map names `TESObjectREFR::RunScript`).
+pub fn fn_00978550(e: &mut Engine, this: Ptr<ProcessLists>) {
+    let array = mob_process_array(this);
+    let mut index = array_head(e, array, 0);
+    while index < array_tail(e, array, 0) {
+        let object = array_object(e, array, index);
+        if object != 0 && is_actor(e, object) {
+            e.call(0x0056_5870, &args![object]);
+        }
+        index = index.wrapping_add(1);
+    }
+}
+
+// Translated from 009785d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls slot 0x100 of the process of every actor of process level 0.
+pub fn fn_009785d0(e: &mut Engine, this: Ptr<ProcessLists>) {
+    let array = mob_process_array(this);
+    let mut index = array_head(e, array, 0);
+    while index < array_tail(e, array, 0) {
+        let object = array_object(e, array, index);
+        if object != 0 && is_actor(e, object) {
+            let process = actor_process(e, object);
+            e.vcall(process, 0x100, &[]);
+        }
+        index = index.wrapping_add(1);
+    }
+}
+
+// Translated from 00978660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes from the reference muzzle flash list (+0x68) every muzzle flash
+/// whose reference (`00441110`, +0x1c) is `reference`, and deletes it. The walk
+/// stays on the head node after a removal (the list moves the next node
+/// into the head) and steps on otherwise, as the game does.
+pub fn fn_00978660(e: &mut Engine, this: Ptr<ProcessLists>, reference: u32) {
+    let list = this.addr() + REFERENCE_MUZZLE_FLASH_LIST;
+    if e.call(LIST_IS_EMPTY, &args![list]).bool() {
+        return;
+    }
+    let mut node = list;
+    let mut first = true;
+    while node != 0 {
+        let item = node_value(e, node);
+        if !first {
+            node = node_next(e, node);
+        }
+        let mut removed = false;
+        if item != 0 && e.call(MUZZLE_FLASH_REFERENCE, &args![item]).u32() == reference {
+            list_remove_value(e, list, item);
+            e.call(MUZZLE_FLASH_DELETE, &args![item, 1u32]);
+            removed = true;
+        }
+        if !removed && first {
+            node = node_next(e, node);
+            first = false;
+        }
+    }
+}
+
+// Translated from 00978740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finds the muzzle flash of the reference muzzle flash list whose key words
+/// match `description` (`00825c00` against `004181e0`, `009611e0` against
+/// `00476c90`) and whose reference is `reference`; makes one (`operator new`
+/// of 0x20 bytes, `009bacb0`, `SetTargeted(reference, true)` and a push on the
+/// list) when there is none; then starts it (`009bb690`). Does nothing when
+/// either argument is null. The exception frame is not translated.
+pub fn fn_00978740(e: &mut Engine, this: Ptr<ProcessLists>, description: u32, reference: u32) {
+    if reference == 0 || description == 0 {
+        return;
+    }
+    let list = this.addr() + REFERENCE_MUZZLE_FLASH_LIST;
+    let mut found = 0u32;
+    let mut node = list;
+    while found == 0 && node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let item = node_value(e, node);
+        if item != 0 {
+            let key_a = e.call(MUZZLE_FLASH_KEY_A, &args![item]).u32();
+            let wanted_a = e.call(0x0041_81e0, &args![description]).u32();
+            if key_a == wanted_a {
+                let key_b = e.call(0x0096_11e0, &args![item]).u32();
+                let wanted_b = e.call(0x0047_6c90, &args![description]).u32();
+                if key_b == wanted_b
+                    && e.call(MUZZLE_FLASH_REFERENCE, &args![item]).u32() == reference
+                {
+                    found = item;
+                }
+            }
+        }
+        node = node_next(e, node);
+    }
+    if found == 0 {
+        let memory = e.call(OPERATOR_NEW, &args![0x20u32]).u32();
+        found = if memory != 0 {
+            e.call(
+                MUZZLE_FLASH_CONSTRUCT,
+                &args![memory, description, reference],
+            )
+            .u32()
+        } else {
+            0
+        };
+        // TESObjectREFR::SetTargeted (Xbox PDB)
+        e.call(0x0056_4db0, &args![reference, 1u32]);
+        list_push_value(e, list, found);
+    }
+    if found != 0 {
+        e.call(MUZZLE_FLASH_START, &args![found]);
+    }
+}
+
+// Translated from 00978890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Updates every muzzle flash of the list at +0x68 with `delta`
+/// (`MuzzleFlash::Update(delta, reference)`), and removes and deletes those
+/// whose flag getter (`009373f0`, read before the update) returns zero.
+pub fn fn_00978890(e: &mut Engine, this: Ptr<ProcessLists>, delta: f32) {
+    let list = this.addr() + REFERENCE_MUZZLE_FLASH_LIST;
+    if e.call(LIST_IS_EMPTY, &args![list]).bool() {
+        return;
+    }
+    let mut node = list;
+    let mut first = true;
+    while node != 0 {
+        let item = node_value(e, node);
+        if !first {
+            node = node_next(e, node);
+        }
+        let mut remove = item != 0;
+        if item != 0 {
+            remove = e.call(MUZZLE_FLASH_FLAG, &args![item]).u8() == 0;
+            let reference = e.call(MUZZLE_FLASH_REFERENCE, &args![item]).u32();
+            e.call(MUZZLE_FLASH_UPDATE, &args![item, delta, reference]);
+            if remove {
+                list_remove_value(e, list, item);
+                e.call(MUZZLE_FLASH_DELETE, &args![item, 1u32]);
+            }
+        }
+        if !remove && first {
+            node = node_next(e, node);
+            first = false;
+        }
+    }
+}
+
+// Translated from 00978990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Counts the nodes of the `BSSimpleList` `this` (walked to its end) whose
+/// item, given by address to `00559450` (it reads the word there), is
+/// not zero.
+pub fn fn_00978990(e: &mut Engine, this: Ptr) -> u32 {
+    let mut count = 0u32;
+    let mut node = this.addr();
+    while node != 0 {
+        let item = node_item(e, node);
+        if e.call(0x0055_9450, &args![item]).u32() != 0 {
+            count = count.wrapping_add(1);
+        }
+        node = node_next(e, node);
+    }
+    count
+}
+
+// Translated from 009789e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<Animation_P_1024>::BSScrapArray<Animation_P_1024>` (Xbox
+/// PDB): runs the base constructor (`00978e70`), installs its own vtable,
+/// takes the thread's scrap heap into +0x10 and initialises the array again
+/// with `006b3eb0(0, 0)`. Returns `this`.
+pub fn bs_scrap_array_animation_constructor(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_00978e70(e, this);
+    e.mem.set_u32(this.addr(), ANIMATION_SCRAP_ARRAY_VTABLE);
+    let manager = e.call(MEMORY_MANAGER, &args![]).u32();
+    let heap = e.call(GET_THREAD_SCRAP_HEAP, &args![manager]).u32();
+    e.mem.set_u32(this.addr() + SCRAP_HEAP, heap);
+    e.call(ARRAY_INITIALISE, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 00978a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of `BSSimpleArray<Animation *, 1024>`: installs the
+/// vtable and releases the buffer (`008454f0(1)`).
+pub fn fn_00978a60(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), ANIMATION_ARRAY_VTABLE);
+    e.call(ARRAY_RELEASE, &args![this, 1u32]);
+}
+
+// Translated from 00978a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of `BSScrapArray<Animation *, 1024>`: installs its vtable,
+/// releases the buffer, then runs the base destructor body `00978a60`. The
+/// exception frame is not translated.
+pub fn fn_00978a80(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), ANIMATION_SCRAP_ARRAY_VTABLE);
+    e.call(ARRAY_RELEASE, &args![this, 1u32]);
+    fn_00978a60(e, this);
+}
+
+// Translated from 00978ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `BSScrapArray<Actor *, 1024>`: runs the
+/// `BSSimpleArray<Actor *>` constructor (`008c1c00`), installs its vtable,
+/// takes the thread's scrap heap into +0x10 and initialises the array with
+/// `006b3eb0(0, 0)`. Returns `this`.
+pub fn fn_00978ae0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(ACTOR_ARRAY_CONSTRUCT, &args![this]);
+    e.mem.set_u32(this.addr(), ACTOR_SCRAP_ARRAY_VTABLE);
+    let manager = e.call(MEMORY_MANAGER, &args![]).u32();
+    let heap = e.call(GET_THREAD_SCRAP_HEAP, &args![manager]).u32();
+    e.mem.set_u32(this.addr() + SCRAP_HEAP, heap);
+    e.call(ARRAY_INITIALISE, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 00978b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of `BSScrapArray<Actor *, 1024>`: installs its vtable,
+/// releases the buffer, then runs the destructor body of
+/// `BSSimpleArray<Actor *>` (`008c1cb0`).
+pub fn fn_00978b60(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), ACTOR_SCRAP_ARRAY_VTABLE);
+    e.call(ARRAY_RELEASE, &args![this, 1u32]);
+    e.call(ACTOR_ARRAY_DESTRUCT, &args![this]);
+}
+
+// Translated from 00978bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reserves the next slot of a `BSSimpleArray` and returns its index. When the
+/// array is full (`00438b90`: size equals capacity) it grows: with no capacity
+/// yet, to 4 elements through vtable slot 4 (the allocator, called with
+/// the count; its result becomes the buffer); otherwise to the capacity
+/// `009a3910` computes (doubled up to 1024, then plus 1024), moving the
+/// elements with `006dc590(capacity, size)`. Then the size is incremented.
+pub fn fn_00978bc0(e: &mut Engine, this: Ptr<BSSimpleArray>) -> u32 {
+    if e.call(0x0043_8b90, &args![this]).bool() {
+        if e.get(this, BSSimpleArray::iReservedSize) == 0 {
+            let capacity = 4u32;
+            let buffer = e.vcall(this.addr(), 4, &args![capacity]).u32();
+            e.set(this, BSSimpleArray::pBuffer, buffer);
+            e.set(this, BSSimpleArray::iReservedSize, capacity);
+        } else {
+            let capacity = e.call(0x009a_3910, &args![this]).u32();
+            let size = e.get(this, BSSimpleArray::iSize);
+            e.call(0x006d_c590, &args![this, capacity, size]);
+            e.set(this, BSSimpleArray::iReservedSize, capacity);
+        }
+    }
+    let size = e.get(this, BSSimpleArray::iSize).wrapping_add(1);
+    e.set(this, BSSimpleArray::iSize, size);
+    size.wrapping_sub(1)
+}
+
+// Translated from 00978c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `BSScrapArray<EffectTaskData, 1024>`: runs the
+/// `BSSimpleArray<EffectTaskData>` constructor (`00978ea0`), installs its
+/// vtable, takes the thread's scrap heap into +0x10 and initialises the
+/// array with `006b3f40(0, 0)`. Returns `this`.
+pub fn fn_00978c50(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_00978ea0(e, this);
+    e.mem.set_u32(this.addr(), EFFECT_SCRAP_ARRAY_VTABLE);
+    let manager = e.call(MEMORY_MANAGER, &args![]).u32();
+    let heap = e.call(GET_THREAD_SCRAP_HEAP, &args![manager]).u32();
+    e.mem.set_u32(this.addr() + SCRAP_HEAP, heap);
+    e.call(EFFECT_ARRAY_INITIALISE, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 00978cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of `BSSimpleArray<EffectTaskData, 1024>`: installs the
+/// vtable and releases the buffer (`008454f0(1)`).
+pub fn fn_00978cd0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), EFFECT_ARRAY_VTABLE);
+    e.call(ARRAY_RELEASE, &args![this, 1u32]);
+}
+
+// Translated from 00978cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of `BSScrapArray<EffectTaskData, 1024>`: installs its vtable,
+/// releases the buffer, then runs the base destructor body `00978cd0`.
+pub fn fn_00978cf0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), EFFECT_SCRAP_ARRAY_VTABLE);
+    e.call(ARRAY_RELEASE, &args![this, 1u32]);
+    fn_00978cd0(e, this);
+}
+
+// Translated from 00978d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<EffectTaskData_1024>::_Allocate` (Xbox PDB): allocates room
+/// for `count` 12-byte elements from the array's scrap heap (+0x10).
+pub fn bs_scrap_array_effect_task_data_allocate(e: &mut Engine, this: Ptr, count: u32) -> u32 {
+    let heap = e.mem.u32(this.addr() + SCRAP_HEAP);
+    let alignment: u32 = e.global(SCRAP_ALIGNMENT);
+    e.call(
+        SCRAP_HEAP_ALLOCATE,
+        &args![heap, count.wrapping_mul(12), alignment],
+    )
+    .u32()
+}
+
+// Translated from 00978d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<Animation_P_1024>::_scalar_deleting_destructor_` (Xbox
+/// PDB): runs the destructor body `00978a60`, then frees the block when bit 0
+/// of `flags` is set. Returns `this`.
+pub fn bs_simple_array_animation_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00978a60(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00978db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<Animation_P_1024>::_scalar_deleting_destructor_` (Xbox PDB):
+/// runs the destructor `00978a80`, then frees the block when bit 0 of `flags`
+/// is set. Returns `this`.
+pub fn bs_scrap_array_animation_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00978a80(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00978de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<Actor_P_1024>::_scalar_deleting_destructor_` (Xbox PDB):
+/// runs the destructor `00978b60`, then frees the block when bit 0 of `flags`
+/// is set. Returns `this`.
+pub fn bs_scrap_array_actor_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00978b60(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00978e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<EffectTaskData_1024>::_scalar_deleting_destructor_` (Xbox
+/// PDB): runs the destructor body `00978cd0`, then frees the block when bit 0
+/// of `flags` is set. Returns `this`.
+pub fn bs_simple_array_effect_task_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00978cd0(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00978e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<EffectTaskData_1024>::_scalar_deleting_destructor_` (Xbox
+/// PDB): runs the destructor `00978cf0`, then frees the block when bit 0 of
+/// `flags` is set. Returns `this`.
+pub fn bs_scrap_array_effect_task_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00978cf0(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00978e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `BSSimpleArray<Animation *, 1024>`: installs the vtable and
+/// initialises the array with `006b3eb0(0, 0)`. Returns `this`.
+pub fn fn_00978e70(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), ANIMATION_ARRAY_VTABLE);
+    e.call(ARRAY_INITIALISE, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 00978ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `BSSimpleArray<EffectTaskData, 1024>`: installs the vtable
+/// and initialises the array with `006b3f40(0, 0)`. Returns `this`.
+pub fn fn_00978ea0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), EFFECT_ARRAY_VTABLE);
+    e.call(EFFECT_ARRAY_INITIALISE, &args![this, 0u32, 0u32]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -6592,6 +7064,47 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00977cb0, fn_00977cb0(Ptr<ProcessLists>, u32, u32, u8)),
         entry!(0x009781a0, fn_009781a0(Ptr<ProcessLists>)),
         entry!(0x009781d0, fn_009781d0(Ptr<ProcessLists>, f32)),
+        entry!(0x00978400, fn_00978400(Ptr) -> u8),
+        entry!(0x00978420, fn_00978420(Ptr<ProcessLists>, f32, u32)),
+        entry!(0x009784c0, fn_009784c0(Ptr<ProcessLists>)),
+        entry!(0x00978550, fn_00978550(Ptr<ProcessLists>)),
+        entry!(0x009785d0, fn_009785d0(Ptr<ProcessLists>)),
+        entry!(0x00978660, fn_00978660(Ptr<ProcessLists>, u32)),
+        entry!(0x00978740, fn_00978740(Ptr<ProcessLists>, u32, u32)),
+        entry!(0x00978890, fn_00978890(Ptr<ProcessLists>, f32)),
+        entry!(0x00978990, fn_00978990(Ptr) -> u32),
+        entry!(0x009789e0, bs_scrap_array_animation_constructor(Ptr) -> Ptr),
+        entry!(0x00978a60, fn_00978a60(Ptr)),
+        entry!(0x00978a80, fn_00978a80(Ptr)),
+        entry!(0x00978ae0, fn_00978ae0(Ptr) -> Ptr),
+        entry!(0x00978b60, fn_00978b60(Ptr)),
+        entry!(0x00978bc0, fn_00978bc0(Ptr<BSSimpleArray>) -> u32),
+        entry!(0x00978c50, fn_00978c50(Ptr) -> Ptr),
+        entry!(0x00978cd0, fn_00978cd0(Ptr)),
+        entry!(0x00978cf0, fn_00978cf0(Ptr)),
+        entry!(0x00978d50, bs_scrap_array_effect_task_data_allocate(Ptr, u32) -> u32),
+        entry!(
+            0x00978d80,
+            bs_simple_array_animation_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00978db0,
+            bs_scrap_array_animation_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00978de0,
+            bs_scrap_array_actor_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00978e10,
+            bs_simple_array_effect_task_data_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00978e40,
+            bs_scrap_array_effect_task_data_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00978e70, fn_00978e70(Ptr) -> Ptr),
+        entry!(0x00978ea0, fn_00978ea0(Ptr) -> Ptr),
     ]
 }
 
@@ -13257,6 +13770,466 @@ mod tests {
             calls(&e, slot(0x170)).last().unwrap(),
             &vec![process, player]
         );
+    }
+
+    // --- 00978400 .. 00978ea0 -------------------------------------------------
+
+    #[test]
+    fn flag_getter_reads_the_byte_at_0x18() {
+        let mut e = fixture();
+        let o = object(&mut e);
+        assert_eq!(
+            e.call(0x0097_8400, &args![Ptr::<()>::new(o)]).u32() & 0xff,
+            0
+        );
+        e.mem.set_u8(o + 0x18, 1);
+        assert_eq!(
+            e.call(0x0097_8400, &args![Ptr::<()>::new(o)]).u32() & 0xff,
+            1
+        );
+    }
+
+    /// Level 0 holds an actor, an empty entry and a non-actor; the actor test
+    /// answers for the actor only.
+    fn actor_world(e: &mut Engine) -> (Ptr<ProcessLists>, u32, u32) {
+        let (actor, other) = (object(e), object(e));
+        let lists = lists_with(e, 0, &[actor, 0, other]);
+        on_slot(e, SLOT_IS_ACTOR, move |o| (o == actor) as u32);
+        (lists, actor, other)
+    }
+
+    #[test]
+    fn slot_0x268_runs_on_every_actor_of_level_0_with_the_delta() {
+        let mut e = fixture();
+        let (lists, actor, _) = actor_world(&mut e);
+        stubs(&mut e, &[slot(0x268)]);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_8420, &args![lists, 0.5f32, 99u32]);
+        assert_eq!(calls(&e, slot(0x268)), vec![vec![actor, 0.5f32.to_bits()]]);
+    }
+
+    #[test]
+    fn update_magic_runs_on_every_actor_of_level_0() {
+        let mut e = fixture();
+        let (lists, actor, _) = actor_world(&mut e);
+        stubs(&mut e, &[0x008c_3c40]);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_84c0, &args![lists]);
+        assert_eq!(calls(&e, 0x008c_3c40), vec![vec![actor, 0, 0]]);
+    }
+
+    #[test]
+    fn run_script_runs_on_every_actor_of_level_0() {
+        let mut e = fixture();
+        let (lists, actor, _) = actor_world(&mut e);
+        stubs(&mut e, &[0x0056_5870]);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_8550, &args![lists]);
+        assert_eq!(calls(&e, 0x0056_5870), vec![vec![actor]]);
+    }
+
+    #[test]
+    fn process_slot_0x100_runs_for_every_actor_of_level_0() {
+        let mut e = fixture();
+        let (lists, actor, other) = actor_world(&mut e);
+        let process = object(&mut e);
+        e.register_double(ACTOR_PROCESS, move |_, a| Ret {
+            eax: if a[0] == actor { process } else { 0 },
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0097_85d0, &args![lists]);
+        // Slot 0x100 is also the actor test: the actor, its process, the other object.
+        assert_eq!(
+            calls(&e, slot(0x100)),
+            vec![vec![actor], vec![process], vec![other]]
+        );
+    }
+
+    /// Puts `items` into the reference muzzle flash list of `lists`.
+    fn set_flash_list(e: &mut Engine, lists: Ptr<ProcessLists>, items: &[u32]) {
+        let head = lists.addr() + REFERENCE_MUZZLE_FLASH_LIST;
+        let mut next = 0;
+        for (i, item) in items.iter().enumerate().rev() {
+            let node = if i == 0 { head } else { e.mem.alloc(8) };
+            e.mem.set_u32(node, *item);
+            e.mem.set_u32(node + 4, next);
+            next = node;
+        }
+    }
+
+    /// The items of the reference muzzle flash list.
+    fn flash_items(e: &Engine, lists: Ptr<ProcessLists>) -> Vec<u32> {
+        let mut node = lists.addr() + REFERENCE_MUZZLE_FLASH_LIST;
+        let mut items = vec![];
+        while node != 0 {
+            if e.mem.u32(node) != 0 {
+                items.push(e.mem.u32(node));
+            }
+            node = e.mem.u32(node + 4);
+        }
+        items
+    }
+
+    /// Muzzle flashes whose references are the form ids 5, 7, 5.
+    fn flash_world(e: &mut Engine) -> (Ptr<ProcessLists>, [u32; 3]) {
+        let flashes = [object(e), object(e), object(e)];
+        let lists: Ptr<ProcessLists> = e.new_object();
+        set_flash_list(e, lists, &flashes);
+        let ids = [(flashes[0], 5), (flashes[1], 7), (flashes[2], 5)];
+        on_call(e, MUZZLE_FLASH_REFERENCE, move |o| {
+            ids.iter().find(|(f, _)| *f == o).map_or(0, |(_, id)| *id)
+        });
+        stubs(e, &[MUZZLE_FLASH_DELETE, MUZZLE_FLASH_UPDATE]);
+        (lists, flashes)
+    }
+
+    #[test]
+    fn remove_muzzle_flashes_of_a_reference_deletes_every_match() {
+        let mut e = fixture();
+        let (lists, f) = flash_world(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_8660, &args![lists, 5u32]);
+        assert_eq!(flash_items(&e, lists), vec![f[1]]);
+        assert_eq!(
+            calls(&e, MUZZLE_FLASH_DELETE),
+            vec![vec![f[0], 1], vec![f[2], 1]]
+        );
+    }
+
+    #[test]
+    fn remove_muzzle_flashes_of_a_reference_leaves_other_references_and_empty_lists() {
+        let mut e = fixture();
+        let (lists, f) = flash_world(&mut e);
+        e.call(0x0097_8660, &args![lists, 9u32]);
+        assert_eq!(flash_items(&e, lists), f.to_vec());
+        let empty: Ptr<ProcessLists> = e.new_object();
+        e.call_log = Some(vec![]);
+        e.call(0x0097_8660, &args![empty, 5u32]);
+        assert!(calls(&e, MUZZLE_FLASH_REFERENCE).is_empty());
+    }
+
+    /// Key words: every flash answers 1 (`00825c00`) and 2 (`009611e0`); a
+    /// description answers the same, except `other_description`.
+    fn key_doubles(e: &mut Engine, other_description: u32) {
+        stub(e, MUZZLE_FLASH_KEY_A, 1);
+        stub(e, 0x0096_11e0, 2);
+        on_call(
+            e,
+            0x0041_81e0,
+            move |d| {
+                if d == other_description {
+                    9
+                } else {
+                    1
+                }
+            },
+        );
+        on_call(
+            e,
+            0x0047_6c90,
+            move |d| {
+                if d == other_description {
+                    9
+                } else {
+                    2
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn find_or_make_muzzle_flash_starts_the_matching_flash() {
+        let mut e = fixture();
+        let (lists, f) = flash_world(&mut e);
+        let desc = object(&mut e);
+        key_doubles(&mut e, 0);
+        stubs(
+            &mut e,
+            &[MUZZLE_FLASH_START, MUZZLE_FLASH_CONSTRUCT, 0x0056_4db0],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0097_8740, &args![lists, desc, 7u32]);
+        assert_eq!(calls(&e, MUZZLE_FLASH_START), vec![vec![f[1]]]);
+        assert!(calls(&e, MUZZLE_FLASH_CONSTRUCT).is_empty());
+        assert_eq!(flash_items(&e, lists), f.to_vec());
+    }
+
+    #[test]
+    fn find_or_make_muzzle_flash_makes_one_when_none_matches() {
+        let mut e = fixture();
+        let (lists, f) = flash_world(&mut e);
+        let desc = object(&mut e);
+        key_doubles(&mut e, 0);
+        let made = object(&mut e);
+        on_call(&mut e, MUZZLE_FLASH_CONSTRUCT, move |_| made);
+        stubs(&mut e, &[MUZZLE_FLASH_START, 0x0056_4db0]);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_8740, &args![lists, desc, 11u32]);
+        let constructed = calls(&e, MUZZLE_FLASH_CONSTRUCT);
+        assert_eq!(constructed.len(), 1);
+        assert_eq!(constructed[0][1..], [desc, 11]);
+        assert_eq!(calls(&e, 0x0056_4db0), vec![vec![11, 1]]);
+        assert_eq!(calls(&e, MUZZLE_FLASH_START), vec![vec![made]]);
+        // The list pushes the new item at its head.
+        assert_eq!(flash_items(&e, lists), vec![made, f[0], f[1], f[2]]);
+    }
+
+    #[test]
+    fn find_or_make_muzzle_flash_does_nothing_without_both_arguments() {
+        let mut e = fixture();
+        let (lists, f) = flash_world(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_8740, &args![lists, 0u32, 7u32]);
+        e.call(0x0097_8740, &args![lists, f[0], 0u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn update_muzzle_flashes_removes_those_whose_flag_is_clear() {
+        let mut e = fixture();
+        let (lists, f) = flash_world(&mut e);
+        // The flag is set for the middle flash only.
+        let middle = f[1];
+        on_call(&mut e, MUZZLE_FLASH_FLAG, move |o| (o == middle) as u32);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_8890, &args![lists, 0.25f32]);
+        assert_eq!(flash_items(&e, lists), vec![f[1]]);
+        assert_eq!(
+            calls(&e, MUZZLE_FLASH_UPDATE),
+            vec![
+                vec![f[0], 0.25f32.to_bits(), 5],
+                vec![f[1], 0.25f32.to_bits(), 7],
+                vec![f[2], 0.25f32.to_bits(), 5]
+            ]
+        );
+        assert_eq!(
+            calls(&e, MUZZLE_FLASH_DELETE),
+            vec![vec![f[0], 1], vec![f[2], 1]]
+        );
+    }
+
+    #[test]
+    fn update_muzzle_flashes_does_nothing_on_an_empty_list() {
+        let mut e = fixture();
+        let lists: Ptr<ProcessLists> = e.new_object();
+        e.call_log = Some(vec![]);
+        e.call(0x0097_8890, &args![lists, 0.25f32]);
+        assert!(calls(&e, MUZZLE_FLASH_UPDATE).is_empty());
+        assert!(calls(&e, MUZZLE_FLASH_FLAG).is_empty());
+    }
+
+    #[test]
+    fn count_nodes_counts_the_items_the_test_accepts() {
+        let mut e = fixture();
+        let head = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        let third = e.mem.alloc(8);
+        for (node, item, next) in [
+            (head, 0x10, second),
+            (second, 0x20, third),
+            (third, 0x30, 0),
+        ] {
+            e.mem.set_u32(node, item);
+            e.mem.set_u32(node + 4, next);
+        }
+        // The test reads the word at the address it is given: accept 0x10 and 0x30.
+        e.register(0x0055_9450, |e, a| Ret {
+            eax: (e.mem.u32(a[0]) != 0x20) as u32,
+            ..Ret::default()
+        });
+        assert_eq!(e.call(0x0097_8990, &args![Ptr::<()>::new(head)]).u32(), 2);
+    }
+
+    /// Doubles for the array helpers the constructors and destructors call.
+    fn array_doubles(e: &mut Engine) {
+        stub(e, MEMORY_MANAGER, 0x4444);
+        on_call(e, GET_THREAD_SCRAP_HEAP, |manager| manager + 1);
+        stubs(
+            e,
+            &[
+                ARRAY_INITIALISE,
+                EFFECT_ARRAY_INITIALISE,
+                ARRAY_RELEASE,
+                ACTOR_ARRAY_CONSTRUCT,
+                ACTOR_ARRAY_DESTRUCT,
+                OPERATOR_DELETE,
+            ],
+        );
+    }
+
+    #[test]
+    fn scrap_array_constructors_take_the_thread_heap() {
+        for (addr, vtable, initialise, base) in [
+            (
+                0x0097_89e0u32,
+                ANIMATION_SCRAP_ARRAY_VTABLE,
+                ARRAY_INITIALISE,
+                None,
+            ),
+            (
+                0x0097_8ae0,
+                ACTOR_SCRAP_ARRAY_VTABLE,
+                ARRAY_INITIALISE,
+                Some(ACTOR_ARRAY_CONSTRUCT),
+            ),
+            (
+                0x0097_8c50,
+                EFFECT_SCRAP_ARRAY_VTABLE,
+                EFFECT_ARRAY_INITIALISE,
+                None,
+            ),
+        ] {
+            let mut e = fixture();
+            array_doubles(&mut e);
+            let array = object(&mut e);
+            e.call_log = Some(vec![]);
+            let result = e.call(addr, &args![Ptr::<()>::new(array)]).u32();
+            assert_eq!(result, array);
+            assert_eq!(e.mem.u32(array), vtable);
+            assert_eq!(e.mem.u32(array + 0x10), 0x4445);
+            let initialised = calls(&e, initialise);
+            assert_eq!(initialised.last().unwrap(), &vec![array, 0, 0]);
+            if let Some(base) = base {
+                assert_eq!(calls(&e, base), vec![vec![array]]);
+            } else {
+                // The base constructor initialises first, then the derived one.
+                assert_eq!(initialised.len(), 2);
+            }
+        }
+    }
+
+    #[test]
+    fn simple_array_constructors_install_their_vtable() {
+        for (addr, vtable, initialise) in [
+            (0x0097_8e70u32, ANIMATION_ARRAY_VTABLE, ARRAY_INITIALISE),
+            (0x0097_8ea0, EFFECT_ARRAY_VTABLE, EFFECT_ARRAY_INITIALISE),
+        ] {
+            let mut e = fixture();
+            array_doubles(&mut e);
+            let array = object(&mut e);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(addr, &args![Ptr::<()>::new(array)]).u32(), array);
+            assert_eq!(e.mem.u32(array), vtable);
+            assert_eq!(calls(&e, initialise), vec![vec![array, 0, 0]]);
+        }
+    }
+
+    #[test]
+    fn array_destructors_release_the_buffer_and_run_the_base() {
+        // (address, vtable the body leaves behind)
+        for (addr, vtable) in [
+            (0x0097_8a60u32, ANIMATION_ARRAY_VTABLE),
+            (0x0097_8a80, ANIMATION_ARRAY_VTABLE),
+            (0x0097_8b60, ACTOR_SCRAP_ARRAY_VTABLE),
+            (0x0097_8cd0, EFFECT_ARRAY_VTABLE),
+            (0x0097_8cf0, EFFECT_ARRAY_VTABLE),
+        ] {
+            let mut e = fixture();
+            array_doubles(&mut e);
+            let array = object(&mut e);
+            e.call_log = Some(vec![]);
+            e.call(addr, &args![Ptr::<()>::new(array)]);
+            assert_eq!(calls(&e, ARRAY_RELEASE)[0], vec![array, 1]);
+            if addr == 0x0097_8b60 {
+                assert_eq!(calls(&e, ACTOR_ARRAY_DESTRUCT), vec![vec![array]]);
+            }
+            assert_eq!(e.mem.u32(array), vtable);
+        }
+    }
+
+    #[test]
+    fn scalar_deleting_destructors_free_the_block_only_when_asked() {
+        for addr in [
+            0x0097_8d80u32,
+            0x0097_8db0,
+            0x0097_8de0,
+            0x0097_8e10,
+            0x0097_8e40,
+        ] {
+            let mut e = fixture();
+            array_doubles(&mut e);
+            let array = object(&mut e);
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                e.call(addr, &args![Ptr::<()>::new(array), 0u32]).u32(),
+                array
+            );
+            assert!(calls(&e, OPERATOR_DELETE).is_empty());
+            assert!(!calls(&e, ARRAY_RELEASE).is_empty());
+            assert_eq!(
+                e.call(addr, &args![Ptr::<()>::new(array), 1u32]).u32(),
+                array
+            );
+            assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![array]]);
+        }
+    }
+
+    #[test]
+    fn effect_allocate_asks_the_scrap_heap_for_twelve_byte_elements() {
+        let mut e = fixture();
+        e.set_global(SCRAP_ALIGNMENT, 16u32);
+        let array = object(&mut e);
+        e.mem.set_u32(array + 0x10, 0x7000);
+        stub(&mut e, SCRAP_HEAP_ALLOCATE, 0x9000);
+        e.call_log = Some(vec![]);
+        let result = e
+            .call(0x0097_8d50, &args![Ptr::<()>::new(array), 5u32])
+            .u32();
+        assert_eq!(result, 0x9000);
+        assert_eq!(calls(&e, SCRAP_HEAP_ALLOCATE), vec![vec![0x7000, 60, 16]]);
+    }
+
+    /// An array whose "is full" test compares size and capacity and whose
+    /// vtable slot 4 (the allocator) answers `0x5000`.
+    fn growing_array(e: &mut Engine, size: u32, capacity: u32) -> u32 {
+        e.register(0x0043_8b90, |e, a| Ret {
+            eax: (e.mem.u32(a[0] + 8) == e.mem.u32(a[0] + 0xc)) as u32,
+            ..Ret::default()
+        });
+        stub(e, 0x009a_3910, 8);
+        stubs(e, &[0x006d_c590]);
+        let array = object(e);
+        e.mem.set_u32(array + 8, size);
+        e.mem.set_u32(array + 0xc, capacity);
+        stub(e, slot(4), 0x5000);
+        array
+    }
+
+    #[test]
+    fn add_slot_allocates_four_elements_for_an_array_without_capacity() {
+        let mut e = fixture();
+        let array = growing_array(&mut e, 0, 0);
+        e.call_log = Some(vec![]);
+        let index = e.call(0x0097_8bc0, &args![Ptr::<()>::new(array)]).u32();
+        assert_eq!(index, 0);
+        assert_eq!(calls(&e, slot(4)), vec![vec![array, 4]]);
+        assert_eq!(e.mem.u32(array + 4), 0x5000);
+        assert_eq!(e.mem.u32(array + 0xc), 4);
+        assert_eq!(e.mem.u32(array + 8), 1);
+    }
+
+    #[test]
+    fn add_slot_grows_a_full_array_to_the_computed_capacity() {
+        let mut e = fixture();
+        let array = growing_array(&mut e, 4, 4);
+        e.call_log = Some(vec![]);
+        let index = e.call(0x0097_8bc0, &args![Ptr::<()>::new(array)]).u32();
+        assert_eq!(index, 4);
+        assert_eq!(calls(&e, 0x006d_c590), vec![vec![array, 8, 4]]);
+        assert_eq!(e.mem.u32(array + 0xc), 8);
+        assert_eq!(e.mem.u32(array + 8), 5);
+    }
+
+    #[test]
+    fn add_slot_does_not_grow_an_array_with_room() {
+        let mut e = fixture();
+        let array = growing_array(&mut e, 2, 4);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0097_8bc0, &args![Ptr::<()>::new(array)]).u32(), 2);
+        assert!(calls(&e, slot(4)).is_empty());
+        assert!(calls(&e, 0x006d_c590).is_empty());
+        assert_eq!(e.mem.u32(array + 0xc), 4);
     }
 
     // <<more tests>>
