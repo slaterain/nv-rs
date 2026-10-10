@@ -10,8 +10,8 @@ machinery runs.
 - **Phase 0** (engine map, ledger) is merged (#72). `docs/LEDGER.md` is the
   coverage table; regenerate with
   `cargo run -q --release --manifest-path scripts/ledger/Cargo.toml`.
-- **Engine crate** (`crates/engine`, ADR-0006): about 9,500 of FalloutNV.exe's
-  functions are translated (14.3% of all, see LEDGER.md), each with a
+- **Engine crate** (`crates/engine`, ADR-0006): about 10,000 of FalloutNV.exe's
+  functions are translated (15.1% of all, see LEDGER.md), each with a
   `// Translated from <addr>` marker and tests. They run in the crate's
   emulated 32-bit memory, not yet in play.
 - **Units finished:** main.cpp, actor.cpp (all 7 parts), playercharacter.cpp
@@ -29,17 +29,19 @@ machinery runs.
     frame (#90): merged.
   - PR 4 player stage (#101): merged. It added `world::frame::player` and
     `frame_order::PlayerSet`.
-  - PR 5 world and time stage: an agent is working on it in the worktree
-    `%USERPROFILE%\nv-re\work\agents\p2`, branch `claude/phase1-world-stage`;
-    it opens its own PR. Merge after both checks pass, rebasing it on main
-    first if translation PRs merged meanwhile (LEDGER.md and engine unit test
-    modules can conflict; keep both sides' tests).
-  - Next: PR 6 AI task stage (Actor::Update, AI
+  - PR 5 world and time stage (#105): merged.
+  - PR 6 AI task stage: an agent is working on it in the worktree
+    `%USERPROFILE%\nv-re\work\agents\p3`, branch `claude/phase1-ai-stage`
+    (started from PR 5's branch before it was squash-merged, so rebase it on
+    main before merging). It opens its own PR. Merge after both checks pass,
+    rebasing first if translation PRs merged meanwhile (LEDGER.md and engine
+    unit test modules can conflict; keep both sides' tests).
+  - After that: PR 6 is the AI task stage (Actor::Update, AI
     threads, the Havok step via TES::UpdateCellAnimations 00453550), PR 7
     interface and render. Then Phase 2 (state model in engine memory, save
     round trip; see ENGINE_PORT_PLAN.md).
-- **Rolling translation PR:** #103 (branch `claude/engine-crate`).
-- **Play build** (the user's `Desktop\nv-rs-play`): Build 37 = main with #101.
+- **Rolling translation PR:** #106 (branch `claude/engine-crate`).
+- **Play build** (the user's `Desktop\nv-rs-play`): Build 38 = main with #105.
   After the next wiring PR merges, build `viewer` in release from main
   (`cargo build --release --manifest-path viewer/Cargo.toml`), copy
   `viewer/target/release/nv-viewer.exe` into `app` (or `next` if the viewer is
