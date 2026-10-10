@@ -17,7 +17,8 @@
 //! - The stack-protector cookie check (`00ec408c`) and the C++ exception
 //!   frames of `00851330` and `00851680` are not translated.
 //! - Session 1 covers the first 40 functions in address order, `008467e0` to
-//!   `00851bf0`. The next session continues at `00851cb0`.
+//!   `00851bf0`. Session 2 covers the remaining 18, `00851cb0` to `00852080`
+//!   (the unit is complete).
 //! - Shared helpers and constants at the top are `pub(crate)` where a later
 //!   part file would need them.
 
@@ -275,6 +276,108 @@ const SKY_OWNER: u32 = 0x008d_8520;
 /// The singleton accessors of the path manager and the audio system.
 const PATH_MANAGER: u32 = 0x0047_d0b0;
 const AUDIO: u32 = 0x0045_3a70;
+
+// ---- Callees of the second part (`00851cb0` onwards) -----------------------
+
+/// `GetTickCount` through `00457fe0` (a wrapper around the import).
+const TICK_COUNT: u32 = 0x0045_7fe0;
+/// Fader test `(this, kind)` (kinds 1 and 2 block a queued save) and
+/// `Interface::IsInGameLoadingMenuOpen`.
+const FADER_ACTIVE: u32 = 0x0070_1450;
+const LOADING_MENU_OPEN: u32 = 0x0070_5ea0;
+/// `BGSSaveLoadFileEntry::LoadData` (Xbox PDB): reads the entry's header.
+const FILE_ENTRY_LOAD_DATA: u32 = 0x0084_6900;
+/// Returns the static object that `00851f50` hands back.
+const GAME_DATA_UTILITY: u32 = 0x00af_2e50;
+/// `BSSystemUtility::QInstance` (Xbox PDB), and
+/// `BSMsgDialogSystemUtility::QInstance` (Xbox PDB) called on its result.
+const SYSTEM_UTILITY_INSTANCE: u32 = 0x00af_2640;
+const MSG_DIALOG_INSTANCE: u32 = 0x0085_26c0;
+/// Directory walker: construct `(this, path)`, next `(this, &finished)`,
+/// destruct, and the "is a plain file" test on the current entry.
+const DIRECTORY_CONSTRUCT: u32 = 0x00b0_0820;
+const DIRECTORY_NEXT: u32 = 0x00b0_0720;
+const DIRECTORY_DESTRUCT: u32 = 0x00b0_0860;
+const DIRECTORY_IS_FILE: u32 = 0x0085_2700;
+/// The current entry's file name sits at `walker + 0x30` (`00436aa0`).
+const DIRECTORY_FILE_NAME: u32 = 0x0043_6aa0;
+/// A file object: construct `(this, path, 0, 0, 0)`, destruct, the open
+/// result (its first word, 0 when the open worked), `BSSystemFile::DoGetSize`
+/// (Xbox PDB) `(this, &size)` and `BSSystemFile::DoRead` (Xbox PDB)
+/// `(this, buffer, size_low, size_high, &bytes_read)`.
+const FILE_CONSTRUCT: u32 = 0x00b0_0900;
+const FILE_DESTRUCT: u32 = 0x00b0_0950;
+const FILE_OPEN_RESULT: u32 = 0x0055_9450;
+const FILE_GET_SIZE: u32 = 0x0065_c290;
+const FILE_READ: u32 = 0x0085_26d0;
+/// `BGSSaveLoadFile::BGSSaveLoadFile` (Xbox PDB) `(this, name, 0, size)`.
+const SAVE_LOAD_FILE_CONSTRUCT: u32 = 0x0084_61e0;
+/// The save-data buffer object of a `BGSSaveLoadFile` (its word at +0x104),
+/// and that object's data pointer (its word at +0x15c).
+const SAVE_FILE_BUFFER: u32 = 0x0068_efb0;
+const BUFFER_DATA: u32 = 0x008d_85e0;
+/// `(save file, entry)` (cdecl): fills a list entry from the file.
+const FILE_ENTRY_FILL: u32 = 0x0084_dab0;
+/// Sets the byte at entry +4.
+const FILE_ENTRY_MARK: u32 = 0x006e_a330;
+/// Entry getters that run `LoadData` first: +0x14, +0x18, +0x10, +0x0c, +0x1c.
+const ENTRY_LOCATION: u32 = 0x007d_6970;
+const ENTRY_PLAYER_NAME: u32 = 0x007d_5180;
+const ENTRY_LEVEL_NAME: u32 = 0x007d_5140;
+const ENTRY_CELL_NAME: u32 = 0x0075_f8c0;
+const ENTRY_LEVEL: u32 = 0x007d_5160;
+/// The three entry getters of this file and the buffer setters.
+const ENTRY_DATA_A: u32 = 0x0085_1ef0;
+const ENTRY_DATA_B: u32 = 0x0085_1f10;
+const ENTRY_DATA_C: u32 = 0x0085_1f30;
+const BUFFER_SET_TITLE: u32 = 0x0085_1f60;
+const BUFFER_SET_LOCATION: u32 = 0x0085_1f90;
+const BUFFER_SET_TEXT: u32 = 0x0085_1fc0;
+const BUFFER_SET_SIZES: u32 = 0x0085_1ff0;
+const BUFFER_SET_IMAGE: u32 = 0x0085_2030;
+const BUFFER_SET_CALLBACK: u32 = 0x0085_2060;
+/// The routine the buffer calls when the copy is done.
+const COPY_DONE_CALLBACK: u32 = 0x0085_2740;
+/// Sets the word at +0x20 (here the manager's open save file).
+const SET_WORD_AT_20: u32 = 0x0050_f9c0;
+/// Reads the byte at +4 of the game-data utility: 1 while a save-data
+/// operation runs.
+const GAME_DATA_BUSY: u32 = 0x004f_1540;
+/// `Sleep` wrapper `(milliseconds)` (cdecl).
+const SLEEP: u32 = 0x0040_fca0;
+/// Debug print `(format, ...)` (cdecl).
+const DEBUG_PRINT: u32 = 0x0084_cbd0;
+/// The object `CopySaveGames` quiets: its data byte is saved, cleared and
+/// restored (`00408d60` returns the byte's address, `004de2d0` sets it).
+const COPY_GUARD_OBJECT: u32 = 0x011d_e308;
+const GUARD_DATA: u32 = 0x0040_8d60;
+const GUARD_SET: u32 = 0x004d_e2d0;
+/// Settings read for the description text.
+const SETTING_PLAYER_NAME: u32 = 0x011d_3954;
+const SETTING_CELL_NAME: u32 = 0x011d_4f78;
+const SETTING_LEVEL_LABEL: u32 = 0x011d_3b2c;
+/// Texts: `"Saves"`, `"/"`, `"%s%s"`, `"SaveData"`, `"-SAVE-"`,
+/// `"Location"`, `"-"`, the description format `"%s\n%s %d: %s\n%s: %s"`,
+/// the image path, the progress text and the two failure texts.
+const COPY_FOLDER: u32 = 0x0107_fd90;
+const COPY_SLASH: u32 = 0x0106_3cbc;
+const COPY_PATH_FORMAT: u32 = 0x0101_996c;
+const COPY_BUFFER_NAME: u32 = 0x0107_fca4;
+const COPY_TITLE: u32 = 0x0107_fabc;
+const COPY_LOCATION: u32 = 0x0104_47cc;
+const COPY_DASH: u32 = 0x0103_45e0;
+const COPY_TEXT_FORMAT: u32 = 0x0107_fc90;
+const COPY_IMAGE: u32 = 0x0107_fc74;
+const COPY_PROGRESS: u32 = 0x0107_fd60;
+const COPY_READ_FAILED: u32 = 0x0107_fd08;
+const COPY_OPEN_FAILED: u32 = 0x0107_fcb0;
+/// Sizes: the directory walker, and the file object.
+const DIRECTORY_SIZE: u32 = 0x258;
+const FILE_OBJECT_SIZE: u32 = 0x20;
+/// Play-time fields of the player object (read through `00851cb0`): the tick
+/// count at the last mark and the accumulated milliseconds.
+const PLAY_TIME_MARK: u32 = 0x78c;
+const PLAY_TIME_ACCUMULATED: u32 = 0x790;
 
 // ---- Layouts -------------------------------------------------------------
 
@@ -1513,6 +1616,401 @@ pub fn bgssaveloadmanager_get_play_time_string(
     );
 }
 
+// Translated from 00851cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The player's play time: brings the accumulated milliseconds (`+0x790`) up
+/// to date with `00851cd0` and returns them.
+pub fn fn_00851cb0(e: &mut Engine, this: Ptr) -> u32 {
+    fn_00851cd0(e, this);
+    e.mem.u32(this.addr() + PLAY_TIME_ACCUMULATED)
+}
+
+// Translated from 00851cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds the time since the last mark (`+0x78c`) to the accumulated play time
+/// (`+0x790`), then marks the current tick (`00851d10`).
+pub fn fn_00851cd0(e: &mut Engine, this: Ptr) {
+    let now = e.call(TICK_COUNT, &args![]).u32();
+    let since = now.wrapping_sub(e.mem.u32(this.addr() + PLAY_TIME_MARK));
+    let total = since.wrapping_add(e.mem.u32(this.addr() + PLAY_TIME_ACCUMULATED));
+    e.mem.set_u32(this.addr() + PLAY_TIME_ACCUMULATED, total);
+    fn_00851d10(e, this);
+}
+
+// Translated from 00851d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the current tick count at `+0x78c`.
+pub fn fn_00851d10(e: &mut Engine, this: Ptr) {
+    let now = e.call(TICK_COUNT, &args![]).u32();
+    e.mem.set_u32(this.addr() + PLAY_TIME_MARK, now);
+}
+
+// Translated from 00851d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Queues an autosave: sets `cQueuedAutosave` to 1.
+pub fn fn_00851d30(e: &mut Engine, this: Ptr<BGSSaveLoadManager>) {
+    e.set(this, BGSSaveLoadManager::cQueuedAutosave, 1);
+}
+
+// Translated from 00851d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Queues a forced save: sets `cQueuedForceSave` to 1.
+pub fn fn_00851d50(e: &mut Engine, this: Ptr<BGSSaveLoadManager>) {
+    e.set(this, BGSSaveLoadManager::cQueuedForceSave, 1);
+}
+
+// Translated from 00851d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Queues a system save: sets the PC-only byte at +0x11 to 1.
+pub fn fn_00851d70(e: &mut Engine, this: Ptr<BGSSaveLoadManager>) {
+    e.set(this, BGSSaveLoadManager::cQueuedSystemSave, 1);
+}
+
+/// True while the fader (kinds 1 and 2) or the in-game loading menu stops a
+/// queued save from running.
+fn queued_save_blocked(e: &mut Engine) -> bool {
+    let faders = e.global::<u32>(FADER_MANAGER);
+    if e.call(FADER_ACTIVE, &args![faders, 1u32]).bool() {
+        return true;
+    }
+    let faders = e.global::<u32>(FADER_MANAGER);
+    if e.call(FADER_ACTIVE, &args![faders, 2u32]).bool() {
+        return true;
+    }
+    e.call(LOADING_MENU_OPEN, &args![]).bool()
+}
+
+// Translated from 00851d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadManager::UpdateQueuedSaves` (Xbox PDB): each frame, counts a
+/// queued autosave, forced save or system save down; at 1 it runs once
+/// neither fader kind nor the in-game loading menu is active (an autosave
+/// through `00850a40`, a forced save as `SaveGame(0, -1, 0)` followed by
+/// clearing its byte, a system save through `00850a90`). Only the first
+/// queue that is set is looked at. The saves run on the singleton manager.
+pub fn bgssaveloadmanager_update_queued_saves(e: &mut Engine, this: Ptr<BGSSaveLoadManager>) {
+    let autosave = e.get(this, BGSSaveLoadManager::cQueuedAutosave);
+    if autosave != 0 {
+        if autosave > 1 {
+            e.set(this, BGSSaveLoadManager::cQueuedAutosave, autosave - 1);
+        } else if !queued_save_blocked(e) {
+            let manager = Ptr::new(e.global::<u32>(MANAGER_INSTANCE));
+            fn_00850a40(e, manager);
+        }
+        return;
+    }
+    let forced = e.get(this, BGSSaveLoadManager::cQueuedForceSave);
+    if forced != 0 {
+        if forced > 1 {
+            e.set(this, BGSSaveLoadManager::cQueuedForceSave, forced - 1);
+        } else if !queued_save_blocked(e) {
+            let manager = Ptr::new(e.global::<u32>(MANAGER_INSTANCE));
+            bgssaveloadmanager_save_game(e, manager, Ptr::new(0), u32::MAX, false);
+            e.set(this, BGSSaveLoadManager::cQueuedForceSave, 0);
+        }
+        return;
+    }
+    let system = e.get(this, BGSSaveLoadManager::cQueuedSystemSave);
+    if system != 0 {
+        if system > 1 {
+            e.set(this, BGSSaveLoadManager::cQueuedSystemSave, system - 1);
+        } else if !queued_save_blocked(e) {
+            let manager = Ptr::new(e.global::<u32>(MANAGER_INSTANCE));
+            fn_00850a90(e, manager);
+        }
+    }
+}
+
+// Translated from 00851ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadFileEntry` getter: loads the entry's data
+/// (`BGSSaveLoadFileEntry::LoadData`, `00846900`) and returns the word at
+/// +0x20.
+pub fn fn_00851ef0(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(FILE_ENTRY_LOAD_DATA, &args![this]);
+    e.mem.u32(this.addr() + 0x20)
+}
+
+// Translated from 00851f10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// As `00851ef0`, for the word at +0x24.
+pub fn fn_00851f10(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(FILE_ENTRY_LOAD_DATA, &args![this]);
+    e.mem.u32(this.addr() + 0x24)
+}
+
+// Translated from 00851f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// As `00851ef0`, for the word at +0x28.
+pub fn fn_00851f30(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(FILE_ENTRY_LOAD_DATA, &args![this]);
+    e.mem.u32(this.addr() + 0x28)
+}
+
+// Translated from 00851f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the static object `00af2e50` creates on first use (the engine map
+/// shows it as an `Immortalize` template; the callee takes no arguments and
+/// `this` is left unread).
+pub fn fn_00851f50(e: &mut Engine, _unused_this: u32) -> u32 {
+    e.call(GAME_DATA_UTILITY, &args![]).u32()
+}
+
+// Translated from 00851f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies `text` into the 0x100-byte field at +0x164 of the save-data
+/// buffer object `this`.
+pub fn fn_00851f60(e: &mut Engine, this: Ptr, text: Ptr) {
+    copy_string(e, this.addr() + 0x164, 0x100, text.addr());
+}
+
+// Translated from 00851f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies `text` into the 0x80-byte field at +0x265.
+pub fn fn_00851f90(e: &mut Engine, this: Ptr, text: Ptr) {
+    copy_string(e, this.addr() + 0x265, 0x80, text.addr());
+}
+
+// Translated from 00851fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies `text` into the 0x400-byte field at +0x2e5.
+pub fn fn_00851fc0(e: &mut Engine, this: Ptr, text: Ptr) {
+    copy_string(e, this.addr() + 0x2e5, 0x400, text.addr());
+}
+
+// Translated from 00851ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores three words at +0x7e8, +0x7ec and +0x7f0.
+pub fn fn_00851ff0(e: &mut Engine, this: Ptr, first: u32, second: u32, third: u32) {
+    e.mem.set_u32(this.addr() + 0x7e8, first);
+    e.mem.set_u32(this.addr() + 0x7ec, second);
+    e.mem.set_u32(this.addr() + 0x7f0, third);
+}
+
+// Translated from 00852030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies `text` into the 0x100-byte field at +0x8f4.
+pub fn fn_00852030(e: &mut Engine, this: Ptr, text: Ptr) {
+    copy_string(e, this.addr() + 0x8f4, 0x100, text.addr());
+}
+
+// Translated from 00852060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `callback` at +0x9f4.
+pub fn fn_00852060(e: &mut Engine, this: Ptr, callback: u32) {
+    e.mem.set_u32(this.addr() + 0x9f4, callback);
+}
+
+// Translated from 00852080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadManager::CopySaveGames` (Xbox PDB): the Xbox "copy saves from
+/// the host" routine. It saves the data byte of the guard object
+/// (`0x011de308`) and clears it, then walks the `Saves/` folder; for every
+/// plain file ending in `.fos` it opens it, reads it whole into a new
+/// `BGSSaveLoadFile`, builds a list entry for it, fills the save-data buffer
+/// object (title `-SAVE-`, location, a description made of the player name,
+/// level and cell texts, sizes, the `SAVEBACK.PNG` image and the completion
+/// callback `00852740`), parks the file in the manager (`+0x20`), starts the
+/// operation through the game-data utility (`00851f50`, slot 0x20) and polls
+/// until its busy byte clears, sleeping 10 ms between polls. A file that
+/// cannot be opened or read is reported with the debug print and skipped.
+/// At the end the guard byte is restored.
+///
+/// The path buffer is never initialised by the game before the two appends
+/// (its stack contents are whatever was there; here it starts empty). The
+/// stack-protector check and the exception frame are not translated, and
+/// the stack parameter is never read.
+pub fn bgssaveloadmanager_copy_save_games(
+    e: &mut Engine,
+    this: Ptr<BGSSaveLoadManager>,
+    _unused_1: u32,
+) {
+    let guard_data = e.call(GUARD_DATA, &args![COPY_GUARD_OBJECT]).u32();
+    let saved_byte = e.mem.u8(guard_data);
+    e.call(GUARD_SET, &args![COPY_GUARD_OBJECT, 0u32]);
+
+    e.with_stack(0x6a0, |e, block| {
+        let walker = block.addr();
+        let folder = walker + DIRECTORY_SIZE;
+        let path = folder + PATH_SIZE;
+        let message = path + PATH_SIZE;
+        let description = message + PATH_SIZE;
+        let file = description + 0x100;
+        let size = file + FILE_OBJECT_SIZE;
+        let bytes_read = size + 8;
+        let finished = bytes_read + 8;
+
+        append_string(e, folder, PATH_SIZE, COPY_FOLDER);
+        append_string(e, folder, PATH_SIZE, COPY_SLASH);
+        e.call(DIRECTORY_CONSTRUCT, &args![walker, folder]);
+        e.mem.set_u8(finished, 0);
+        loop {
+            e.call(DIRECTORY_NEXT, &args![walker, finished]);
+            if e.mem.u8(finished) != 0 {
+                break;
+            }
+            if e.call(DIRECTORY_IS_FILE, &args![walker]).u32() & 0xff != 1 {
+                continue;
+            }
+            let name = e.call(DIRECTORY_FILE_NAME, &args![walker]).u32();
+            let length = string_length(e, name);
+            let name_end = name.wrapping_add(length).wrapping_sub(4);
+            let differs = e
+                .call(
+                    STRING_COMPARE_PREFIX,
+                    &args![name_end, SAVE_EXTENSION, 4u32],
+                )
+                .u32();
+            if differs != 0 {
+                continue;
+            }
+            let name = e.call(DIRECTORY_FILE_NAME, &args![walker]).u32();
+            e.call(
+                FORMAT,
+                &args![path, PATH_SIZE, COPY_PATH_FORMAT, folder, name],
+            );
+            e.call(FILE_CONSTRUCT, &args![file, path, 0u32, 0u32, 0u32]);
+            if e.call(FILE_OPEN_RESULT, &args![file]).u32() != 0 {
+                e.call(DEBUG_PRINT, &args![COPY_OPEN_FAILED, path]);
+            } else {
+                let places = CopyPlaces {
+                    file,
+                    path,
+                    message,
+                    description,
+                    size,
+                    bytes_read,
+                };
+                copy_one_save(e, this, &places);
+            }
+            e.call(FILE_DESTRUCT, &args![file]);
+        }
+        e.call(GUARD_SET, &args![COPY_GUARD_OBJECT, saved_byte as u32]);
+        e.call(DIRECTORY_DESTRUCT, &args![walker]);
+    });
+}
+
+/// The stack locals `CopySaveGames` hands to the per-file part.
+struct CopyPlaces {
+    file: u32,
+    path: u32,
+    message: u32,
+    description: u32,
+    size: u32,
+    bytes_read: u32,
+}
+
+/// The body of `CopySaveGames` for one opened file: read it, make the entry
+/// and the buffer, and start the copy.
+fn copy_one_save(e: &mut Engine, this: Ptr<BGSSaveLoadManager>, at: &CopyPlaces) {
+    let CopyPlaces {
+        file,
+        path,
+        message,
+        description,
+        size,
+        bytes_read,
+    } = *at;
+    e.mem.set_u32(size, 0);
+    e.mem.set_u32(size + 4, 0);
+    e.call(FILE_GET_SIZE, &args![file, size]);
+    let size_low = e.mem.u32(size);
+    let size_high = e.mem.u32(size + 4);
+    let memory = e.call(ALLOCATE, &args![0x110u32]).u32();
+    let save_file = if memory != 0 {
+        e.call(
+            SAVE_LOAD_FILE_CONSTRUCT,
+            &args![memory, COPY_BUFFER_NAME, 0u32, size_low],
+        )
+        .u32()
+    } else {
+        0
+    };
+    let buffer = e.call(SAVE_FILE_BUFFER, &args![save_file]).u32();
+    e.mem.set_u32(bytes_read, 0);
+    e.mem.set_u32(bytes_read + 4, 0);
+    let data = e.call(BUFFER_DATA, &args![buffer]).u32();
+    e.call(
+        FILE_READ,
+        &args![file, data, size_low, size_high, bytes_read],
+    );
+    if e.call(FILE_OPEN_RESULT, &args![file]).u32() != 0 {
+        e.call(DEBUG_PRINT, &args![COPY_READ_FAILED, path]);
+        return;
+    }
+
+    e.call(FORMAT, &args![message, PATH_SIZE, COPY_PROGRESS]);
+    append_string(e, message, PATH_SIZE, path);
+    let utility = e.call(SYSTEM_UTILITY_INSTANCE, &args![]).u32();
+    let dialog = e.call(MSG_DIALOG_INSTANCE, &args![utility]).u32();
+    e.vcall(dialog, 8, &args![message, 1000u32]);
+
+    let memory = e.call(ALLOCATE, &args![FILE_ENTRY_SIZE]).u32();
+    let entry = if memory != 0 {
+        e.call(FILE_ENTRY_CONSTRUCT, &args![memory, path, 0u32])
+            .u32()
+    } else {
+        0
+    };
+    e.call(FILE_ENTRY_FILL, &args![save_file, entry]);
+    e.call(FILE_ENTRY_MARK, &args![entry]);
+    e.call(BUFFER_SET_TITLE, &args![buffer, COPY_TITLE]);
+
+    let location = e.call(ENTRY_LOCATION, &args![entry]).u32();
+    let location_length = if location != 0 {
+        let location = e.call(ENTRY_LOCATION, &args![entry]).u32();
+        string_length(e, location)
+    } else {
+        0
+    };
+    if location != 0 && location_length != 0 {
+        let location = e.call(ENTRY_LOCATION, &args![entry]).u32();
+        e.call(BUFFER_SET_LOCATION, &args![buffer, location]);
+    } else {
+        e.call(BUFFER_SET_LOCATION, &args![buffer, COPY_LOCATION]);
+    }
+
+    let player_name = if e.call(ENTRY_PLAYER_NAME, &args![entry]).u32() != 0 {
+        e.call(ENTRY_PLAYER_NAME, &args![entry]).u32()
+    } else {
+        e.call(SETTING_VALUE, &args![SETTING_PLAYER_NAME]).u32()
+    };
+    let level_name = if e.call(ENTRY_LEVEL_NAME, &args![entry]).u32() != 0 {
+        e.call(ENTRY_LEVEL_NAME, &args![entry]).u32()
+    } else {
+        COPY_DASH
+    };
+    let cell_name = if e.call(ENTRY_CELL_NAME, &args![entry]).u32() != 0 {
+        e.call(ENTRY_CELL_NAME, &args![entry]).u32()
+    } else {
+        e.call(SETTING_VALUE, &args![SETTING_CELL_NAME]).u32()
+    };
+    let player_label = e.call(SETTING_VALUE, &args![SETTING_PLAYER_NAME]).u32();
+    let level = e.call(ENTRY_LEVEL, &args![entry]).u32();
+    let level_label = e.call(SETTING_VALUE, &args![SETTING_LEVEL_LABEL]).u32();
+    e.call(
+        FORMAT,
+        &args![
+            description,
+            0x100u32,
+            COPY_TEXT_FORMAT,
+            cell_name,
+            level_label,
+            level,
+            level_name,
+            player_label,
+            player_name
+        ],
+    );
+    e.call(BUFFER_SET_TEXT, &args![buffer, description]);
+
+    let data = e.call(BUFFER_DATA, &args![buffer]).u32();
+    let third = data.wrapping_add(e.call(ENTRY_DATA_C, &args![entry]).u32());
+    let second = e.call(ENTRY_DATA_B, &args![entry]).u32();
+    let first = e.call(ENTRY_DATA_A, &args![entry]).u32();
+    e.call(BUFFER_SET_SIZES, &args![buffer, first, second, third]);
+    e.call(BUFFER_SET_IMAGE, &args![buffer, COPY_IMAGE]);
+    e.call(BUFFER_SET_CALLBACK, &args![buffer, COPY_DONE_CALLBACK]);
+
+    if entry != 0 {
+        fn_008515f0(e, Ptr::new(entry), 1);
+    }
+    e.call(SET_WORD_AT_20, &args![this, save_file]);
+    let utility = e.call(SYSTEM_UTILITY_INSTANCE, &args![]).u32();
+    let operations = fn_00851f50(e, utility);
+    e.vcall(operations, 0x20, &args![buffer]);
+    loop {
+        let utility = e.call(SYSTEM_UTILITY_INSTANCE, &args![]).u32();
+        let operations = fn_00851f50(e, utility);
+        if e.call(GAME_DATA_BUSY, &args![operations]).u32() & 0xff != 1 {
+            break;
+        }
+        e.call(SLEEP, &args![10u32]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1606,6 +2104,30 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00851bf0,
             bgssaveloadmanager_get_play_time_string(Ptr<BGSSaveLoadManager>, Ptr, bool)
+        ),
+        entry!(0x00851cb0, fn_00851cb0(Ptr) -> u32),
+        entry!(0x00851cd0, fn_00851cd0(Ptr)),
+        entry!(0x00851d10, fn_00851d10(Ptr)),
+        entry!(0x00851d30, fn_00851d30(Ptr<BGSSaveLoadManager>)),
+        entry!(0x00851d50, fn_00851d50(Ptr<BGSSaveLoadManager>)),
+        entry!(0x00851d70, fn_00851d70(Ptr<BGSSaveLoadManager>)),
+        entry!(
+            0x00851d90,
+            bgssaveloadmanager_update_queued_saves(Ptr<BGSSaveLoadManager>)
+        ),
+        entry!(0x00851ef0, fn_00851ef0(Ptr) -> u32),
+        entry!(0x00851f10, fn_00851f10(Ptr) -> u32),
+        entry!(0x00851f30, fn_00851f30(Ptr) -> u32),
+        entry!(0x00851f50, fn_00851f50(u32) -> u32),
+        entry!(0x00851f60, fn_00851f60(Ptr, Ptr)),
+        entry!(0x00851f90, fn_00851f90(Ptr, Ptr)),
+        entry!(0x00851fc0, fn_00851fc0(Ptr, Ptr)),
+        entry!(0x00851ff0, fn_00851ff0(Ptr, u32, u32, u32)),
+        entry!(0x00852030, fn_00852030(Ptr, Ptr)),
+        entry!(0x00852060, fn_00852060(Ptr, u32)),
+        entry!(
+            0x00852080,
+            bgssaveloadmanager_copy_save_games(Ptr<BGSSaveLoadManager>, u32)
         ),
     ]
 }
@@ -1751,6 +2273,43 @@ mod tests {
         0x00fd_f070,
         0x00fd_f0d4,
         0x00fd_f0d8,
+    ];
+
+    /// Callees of the second part (`00851cb0` onwards) outside this file.
+    const EXTERNAL_PART_TWO: [u32; 33] = [
+        0x0040_8d60,
+        0x0040_fca0,
+        0x0043_6aa0,
+        0x0045_7fe0,
+        0x004d_e2d0,
+        0x004f_1540,
+        0x0050_f9c0,
+        0x0055_9450,
+        0x0065_c290,
+        0x0068_efb0,
+        0x006e_a330,
+        0x0070_1450,
+        0x0070_5ea0,
+        0x0075_f8c0,
+        0x007d_5140,
+        0x007d_5160,
+        0x007d_5180,
+        0x007d_6970,
+        0x0084_61e0,
+        0x0084_6900,
+        0x0084_cbd0,
+        0x0084_dab0,
+        0x0085_26c0,
+        0x0085_26d0,
+        0x0085_2700,
+        0x008d_85e0,
+        0x00af_2640,
+        0x00af_2e50,
+        0x00b0_0720,
+        0x00b0_0820,
+        0x00b0_0860,
+        0x00b0_0900,
+        0x00b0_0950,
     ];
 
     fn rv(eax: u32) -> Ret {
@@ -1915,6 +2474,9 @@ mod tests {
             e.map(addr, len);
         }
         for addr in EXTERNAL {
+            e.register(addr, |_, _| Ret::default());
+        }
+        for addr in EXTERNAL_PART_TWO {
             e.register(addr, |_, _| Ret::default());
         }
         library_doubles(&mut e);
@@ -3750,5 +4312,516 @@ mod tests {
         assert_eq!(loads.borrow().len(), 1);
         // Loading again writes the statistics (flag 1) and passes quiet = 1.
         assert_eq!(loads.borrow()[0].1, 1);
+    }
+
+    // ---- Second part: queued saves, entry getters and CopySaveGames ----------
+
+    #[test]
+    fn play_time_adds_the_time_since_the_mark_and_moves_the_mark() {
+        let mut e = engine();
+        let player = e.mem.alloc(0x800);
+        e.mem.set_u32(player + 0x78c, 400);
+        e.mem.set_u32(player + 0x790, 50);
+        e.register(TICK_COUNT, |_, _| rv(1000));
+        assert_eq!(fn_00851cb0(&mut e, Ptr::new(player)), 650);
+        assert_eq!(e.mem.u32(player + 0x790), 650);
+        assert_eq!(e.mem.u32(player + 0x78c), 1000);
+        // The mark alone is the current tick.
+        e.mem.set_u32(player + 0x78c, 0);
+        fn_00851d10(&mut e, Ptr::new(player));
+        assert_eq!(e.mem.u32(player + 0x78c), 1000);
+        assert_eq!(e.mem.u32(player + 0x790), 650);
+    }
+
+    #[test]
+    fn the_queue_setters_each_set_their_own_byte() {
+        let mut e = engine();
+        let manager = manager(&mut e);
+        e.call(0x0085_1d30, &args![manager]);
+        assert_eq!(e.get(manager, BGSSaveLoadManager::cQueuedAutosave), 1);
+        assert_eq!(e.get(manager, BGSSaveLoadManager::cQueuedForceSave), 0);
+        e.call(0x0085_1d50, &args![manager]);
+        assert_eq!(e.get(manager, BGSSaveLoadManager::cQueuedForceSave), 1);
+        assert_eq!(e.get(manager, BGSSaveLoadManager::cQueuedSystemSave), 0);
+        e.call(0x0085_1d70, &args![manager]);
+        assert_eq!(e.get(manager, BGSSaveLoadManager::cQueuedSystemSave), 1);
+    }
+
+    type Blockers = (Rc<std::cell::Cell<u32>>, Rc<std::cell::Cell<bool>>);
+
+    /// Blockers for the queued saves: the fader kind that is active (0 for
+    /// none) and whether the loading menu is open.
+    fn blockers(e: &mut Engine) -> Blockers {
+        let kind = Rc::new(std::cell::Cell::new(0u32));
+        let menu = Rc::new(std::cell::Cell::new(false));
+        e.set_global(FADER_MANAGER, 0x6060u32);
+        let seen = kind.clone();
+        e.register_double(FADER_ACTIVE, move |_, a| {
+            assert_eq!(a[0], 0x6060);
+            rv((a[1] == seen.get()) as u32)
+        });
+        let seen = menu.clone();
+        e.register_double(LOADING_MENU_OPEN, move |_, _| rv(seen.get() as u32));
+        (kind, menu)
+    }
+
+    #[test]
+    fn a_queued_autosave_counts_down_and_waits_for_the_blockers() {
+        let mut e = engine();
+        let rig = rig(&mut e);
+        let (fader, menu) = blockers(&mut e);
+        e.register(FRAME_SECONDS, |_, _| Ret::default());
+        e.register(SKY_OWNER, |_, a| rv(a[0]));
+        e.set(rig.manager, BGSSaveLoadManager::cQueuedAutosave, 3);
+        e.call(0x0085_1d90, &args![rig.manager]);
+        assert_eq!(e.get(rig.manager, BGSSaveLoadManager::cQueuedAutosave), 2);
+        e.call(0x0085_1d90, &args![rig.manager]);
+        assert_eq!(e.get(rig.manager, BGSSaveLoadManager::cQueuedAutosave), 1);
+        // At 1 it stays queued while either fader kind or the menu is active.
+        for (kind, open) in [(1, false), (2, false), (0, true)] {
+            fader.set(kind);
+            menu.set(open);
+            e.call(0x0085_1d90, &args![rig.manager]);
+            assert_eq!(e.get(rig.manager, BGSSaveLoadManager::cQueuedAutosave), 1);
+            assert!(rig.opens.borrow().is_empty());
+        }
+        fader.set(0);
+        menu.set(false);
+        e.call(0x0085_1d90, &args![rig.manager]);
+        assert_eq!(e.get(rig.manager, BGSSaveLoadManager::cQueuedAutosave), 0);
+        assert_eq!(
+            rig.opens.borrow()[0],
+            ("autosave".to_string(), 1, 2, u32::MAX)
+        );
+    }
+
+    #[test]
+    fn a_queued_forced_save_saves_with_no_name_and_clears_its_byte() {
+        let mut e = engine();
+        let rig = rig(&mut e);
+        let (_fader, menu) = blockers(&mut e);
+        let player = e.mem.alloc(16);
+        e.set_global(PLAYER, player);
+        let prefix = string(&mut e, "Save");
+        set_setting(&mut e, NAME_PREFIX_GENERATED, prefix);
+        let courier = string(&mut e, "Ed");
+        e.register_double(PLAYER_NAME, move |_, _| rv(courier));
+        e.register(BSSTRING_DATA, |e, a| rv(e.mem.u32(a[0])));
+        e.register(PLAY_TIME_MS, |_, _| rv(61_000));
+        e.set(rig.manager, BGSSaveLoadManager::cQueuedForceSave, 2);
+        e.call(0x0085_1d90, &args![rig.manager]);
+        assert_eq!(e.get(rig.manager, BGSSaveLoadManager::cQueuedForceSave), 1);
+        menu.set(true);
+        e.call(0x0085_1d90, &args![rig.manager]);
+        assert_eq!(e.get(rig.manager, BGSSaveLoadManager::cQueuedForceSave), 1);
+        assert!(rig.opens.borrow().is_empty());
+        menu.set(false);
+        e.call(0x0085_1d90, &args![rig.manager]);
+        assert_eq!(e.get(rig.manager, BGSSaveLoadManager::cQueuedForceSave), 0);
+        assert_eq!(rig.opens.borrow()[0].0, "Save 5   Ed    00 01 01");
+    }
+
+    #[test]
+    fn a_queued_system_save_runs_and_only_the_first_queue_counts() {
+        let mut e = engine();
+        let rig = rig(&mut e);
+        blockers(&mut e);
+        let player = e.mem.alloc(16);
+        e.set_global(PLAYER, player);
+        let name = string(&mut e, "Ed");
+        e.register_double(PLAYER_NAME, move |_, _| rv(name));
+        e.register(FRAME_SECONDS, |_, _| Ret::default());
+        e.set(rig.manager, BGSSaveLoadManager::cQueuedSystemSave, 2);
+        e.call(0x0085_1d90, &args![rig.manager]);
+        assert_eq!(e.get(rig.manager, BGSSaveLoadManager::cQueuedSystemSave), 1);
+        e.call(0x0085_1d90, &args![rig.manager]);
+        assert_eq!(e.get(rig.manager, BGSSaveLoadManager::cQueuedSystemSave), 0);
+        assert_eq!(rig.opens.borrow().len(), 1);
+
+        // With an autosave queued as well, only the autosave counter moves.
+        e.set(rig.manager, BGSSaveLoadManager::cQueuedAutosave, 5);
+        e.set(rig.manager, BGSSaveLoadManager::cQueuedForceSave, 5);
+        e.set(rig.manager, BGSSaveLoadManager::cQueuedSystemSave, 5);
+        e.call(0x0085_1d90, &args![rig.manager]);
+        assert_eq!(e.get(rig.manager, BGSSaveLoadManager::cQueuedAutosave), 4);
+        assert_eq!(e.get(rig.manager, BGSSaveLoadManager::cQueuedForceSave), 5);
+        assert_eq!(e.get(rig.manager, BGSSaveLoadManager::cQueuedSystemSave), 5);
+    }
+
+    #[test]
+    fn the_entry_getters_load_the_entry_first() {
+        let mut e = engine();
+        let entry = e.mem.alloc(0x7c);
+        e.mem.set_u32(entry + 0x20, 11);
+        e.mem.set_u32(entry + 0x24, 22);
+        e.mem.set_u32(entry + 0x28, 33);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0085_1ef0, &args![entry]).u32(), 11);
+        assert_eq!(e.call(0x0085_1f10, &args![entry]).u32(), 22);
+        assert_eq!(e.call(0x0085_1f30, &args![entry]).u32(), 33);
+        let log = take_log(&mut e);
+        assert_eq!(calls(&log, FILE_ENTRY_LOAD_DATA), vec![vec![entry]; 3]);
+    }
+
+    #[test]
+    fn the_game_data_utility_getter_returns_the_static_object() {
+        let mut e = engine();
+        e.register(GAME_DATA_UTILITY, |_, _| rv(0x011f_72a0));
+        assert_eq!(e.call(0x0085_1f50, &args![0x1234u32]).u32(), 0x011f_72a0);
+    }
+
+    #[test]
+    fn the_buffer_setters_fill_their_fields() {
+        let mut e = engine();
+        let buffer = e.mem.alloc(0xa00);
+        for (setter, offset, size, written) in [
+            (0x0085_1f60u32, 0x164u32, 0x100u32, "-SAVE-"),
+            (0x0085_1f90, 0x265, 0x80, "Location"),
+            (0x0085_1fc0, 0x2e5, 0x400, "a description"),
+            (0x0085_2030, 0x8f4, 0x100, "DATA/SYSUTIL/SAVEBACK.PNG"),
+        ] {
+            let source = string(&mut e, written);
+            start_log(&mut e);
+            e.call(setter, &args![buffer, source]);
+            let log = take_log(&mut e);
+            assert_eq!(
+                calls(&log, STRING_COPY),
+                vec![vec![buffer + offset, size, source]]
+            );
+            assert_eq!(text(&e, buffer + offset), written);
+        }
+        e.call(0x0085_1ff0, &args![buffer, 1u32, 2u32, 3u32]);
+        assert_eq!(
+            [0x7e8, 0x7ec, 0x7f0].map(|o| e.mem.u32(buffer + o)),
+            [1, 2, 3]
+        );
+        e.call(0x0085_2060, &args![buffer, 0x0085_2740u32]);
+        assert_eq!(e.mem.u32(buffer + 0x9f4), 0x0085_2740);
+    }
+
+    /// Everything `CopySaveGames` observably does, recorded by doubles.
+    #[derive(Default)]
+    struct CopyLog {
+        /// The guard object's byte as set, and 0xdead when the walker is
+        /// destroyed.
+        guard_sets: Vec<u32>,
+        folder: String,
+        paths: Vec<String>,
+        failures: Vec<(u32, String)>,
+        destructs: u32,
+        reads: Vec<Vec<u32>>,
+        dialog: Vec<(String, u32)>,
+        started: Vec<u32>,
+        sleeps: u32,
+        busy_polls: u32,
+    }
+
+    const COPY_UTILITY: u32 = 0x00ab_0000;
+    const COPY_DIALOG: u32 = 0x00ab_0100;
+    const COPY_GAME_DATA: u32 = 0x00ab_0200;
+    const COPY_BUFFER_OBJECT: u32 = 0x00ab_1000;
+    const COPY_DATA_BLOCK: u32 = 0x00ab_3000;
+
+    /// A heap string (for doubles that cannot capture).
+    fn string_at(e: &mut Engine, s: &str) -> u32 {
+        string(e, s)
+    }
+
+    /// Doubles for the whole of `CopySaveGames`: a folder holding `files`
+    /// (name, is a plain file), the file layer (a file whose path contains
+    /// `unreadable` fails to open; with `read_fails` every read fails), and
+    /// the dialog and game-data singletons. `busy` is how many polls report
+    /// the operation still running.
+    fn copy_rig(
+        e: &mut Engine,
+        files: &[(&str, bool)],
+        unreadable: &'static str,
+        read_fails: bool,
+        busy: u32,
+    ) -> Rc<RefCell<CopyLog>> {
+        let log = Rc::new(RefCell::new(CopyLog::default()));
+        e.map(0x00ab_0000, 0x4000);
+        e.map(0x00ac_0000, 0x3000);
+        e.map(COPY_GUARD_OBJECT, 0x100);
+        let guard_byte = e.mem.alloc(8);
+        e.mem.set_u8(guard_byte, 7);
+        e.register_double(GUARD_DATA, move |_, a| {
+            assert_eq!(a[0], COPY_GUARD_OBJECT);
+            rv(guard_byte)
+        });
+        let seen = log.clone();
+        e.register_double(GUARD_SET, move |_, a| {
+            assert_eq!(a[0], COPY_GUARD_OBJECT);
+            seen.borrow_mut().guard_sets.push(a[1]);
+            Ret::default()
+        });
+
+        // The folder walker.
+        let seen = log.clone();
+        e.register_double(DIRECTORY_CONSTRUCT, move |e, a| {
+            seen.borrow_mut().folder = text(e, a[1]);
+            Ret::default()
+        });
+        let pending: Rc<RefCell<Vec<(String, bool)>>> = Rc::new(RefCell::new(
+            files
+                .iter()
+                .rev()
+                .map(|(n, f)| (n.to_string(), *f))
+                .collect(),
+        ));
+        e.register_double(DIRECTORY_NEXT, move |e, a| {
+            match pending.borrow_mut().pop() {
+                None => e.mem.set_u8(a[1], 1),
+                Some((name, is_file)) => {
+                    e.mem.set_u32(a[0] + 4, if is_file { 0x20 } else { 0x10 });
+                    put(e, a[0] + 0x30, &name);
+                }
+            }
+            Ret::default()
+        });
+        e.register(DIRECTORY_IS_FILE, |e, a| {
+            rv((e.mem.u32(a[0] + 4) & 0x20 != 0) as u32)
+        });
+        e.register(DIRECTORY_FILE_NAME, |_, a| rv(a[0] + 0x30));
+        let seen = log.clone();
+        e.register_double(DIRECTORY_DESTRUCT, move |_, _| {
+            seen.borrow_mut().guard_sets.push(0xdead);
+            Ret::default()
+        });
+
+        // The file layer.
+        let seen = log.clone();
+        e.register_double(FILE_CONSTRUCT, move |e, a| {
+            let path = text(e, a[1]);
+            e.mem
+                .set_u32(a[0], if path.contains(unreadable) { 0x80 } else { 0 });
+            seen.borrow_mut().paths.push(path);
+            Ret::default()
+        });
+        let reading = Rc::new(std::cell::Cell::new(false));
+        let flag = reading.clone();
+        e.register_double(FILE_OPEN_RESULT, move |e, a| {
+            let code = e.mem.u32(a[0]);
+            rv(if code == 0 && read_fails && flag.get() {
+                5
+            } else {
+                code
+            })
+        });
+        e.register_double(FILE_GET_SIZE, |e, a| {
+            e.mem.set_u32(a[1], 0x40);
+            e.mem.set_u32(a[1] + 4, 0);
+            Ret::default()
+        });
+        let seen = log.clone();
+        e.register_double(FILE_READ, move |_, a| {
+            seen.borrow_mut().reads.push(a.to_vec());
+            reading.set(true);
+            Ret::default()
+        });
+        let seen = log.clone();
+        e.register_double(FILE_DESTRUCT, move |_, _| {
+            seen.borrow_mut().destructs += 1;
+            Ret::default()
+        });
+        let seen = log.clone();
+        e.register_double(DEBUG_PRINT, move |e, a| {
+            seen.borrow_mut().failures.push((a[0], text(e, a[1])));
+            Ret::default()
+        });
+
+        // The save file and its buffer object.
+        e.map(COPY_BUFFER_OBJECT, 0x2000);
+        e.mem.set_u32(COPY_BUFFER_OBJECT + 0x15c, COPY_DATA_BLOCK);
+        e.map(COPY_DATA_BLOCK, 0x1000);
+        e.register(SAVE_LOAD_FILE_CONSTRUCT, |e, a| {
+            assert_eq!(text(e, a[1]), "SaveData");
+            assert_eq!((a[2], a[3]), (0, 0x40));
+            e.mem.set_u32(a[0] + 0x104, COPY_BUFFER_OBJECT);
+            rv(a[0])
+        });
+        e.register(SAVE_FILE_BUFFER, |e, a| rv(e.mem.u32(a[0] + 0x104)));
+        e.register(BUFFER_DATA, |e, a| rv(e.mem.u32(a[0] + 0x15c)));
+        e.register(FILE_ENTRY_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0] + 0x20, 1);
+            e.mem.set_u32(a[0] + 0x24, 2);
+            e.mem.set_u32(a[0] + 0x28, 3);
+            rv(a[0])
+        });
+
+        // The entry getters and the settings behind the description.
+        let location = string(e, "Novac");
+        e.register_double(ENTRY_LOCATION, move |_, _| rv(location));
+        e.register(ENTRY_LEVEL, |_, _| rv(12));
+        for (setting, s) in [
+            (SETTING_PLAYER_NAME, "Courier"),
+            (SETTING_CELL_NAME, "Cottonwood"),
+            (SETTING_LEVEL_LABEL, "Level"),
+        ] {
+            let s = string(e, s);
+            set_setting(e, setting, s);
+        }
+        for (addr, s) in [
+            (COPY_FOLDER, "Saves"),
+            (COPY_SLASH, "/"),
+            (COPY_PATH_FORMAT, "%s%s"),
+            (COPY_BUFFER_NAME, "SaveData"),
+            (COPY_TITLE, "-SAVE-"),
+            (COPY_LOCATION, "Location"),
+            (COPY_DASH, "-"),
+            (COPY_TEXT_FORMAT, "%s\n%s %d: %s\n%s: %s"),
+            (COPY_IMAGE, "DATA/SYSUTIL/SAVEBACK.PNG"),
+            (COPY_PROGRESS, "Copying...\n"),
+            (COPY_READ_FAILED, "read failed %s"),
+            (COPY_OPEN_FAILED, "open failed %s"),
+        ] {
+            put(e, addr, s);
+        }
+
+        // The dialog and the game-data utility.
+        e.register(SYSTEM_UTILITY_INSTANCE, |_, _| rv(COPY_UTILITY));
+        e.register(MSG_DIALOG_INSTANCE, |_, a| {
+            assert_eq!(a[0], COPY_UTILITY);
+            rv(COPY_DIALOG)
+        });
+        e.put_vtable(0x00ac_0000, &[0, 0, 0x00ac_1000]);
+        e.mem.set_u32(COPY_DIALOG, 0x00ac_0000);
+        let seen = log.clone();
+        e.register_double(0x00ac_1000, move |e, a| {
+            assert_eq!(a[0], COPY_DIALOG);
+            seen.borrow_mut().dialog.push((text(e, a[1]), a[2]));
+            Ret::default()
+        });
+        e.register(GAME_DATA_UTILITY, |_, _| rv(COPY_GAME_DATA));
+        let mut table = vec![0u32; 9];
+        table[8] = 0x00ac_2000;
+        e.put_vtable(0x00ac_0100, &table);
+        e.mem.set_u32(COPY_GAME_DATA, 0x00ac_0100);
+        let seen = log.clone();
+        e.register_double(0x00ac_2000, move |_, a| {
+            assert_eq!(a[0], COPY_GAME_DATA);
+            seen.borrow_mut().started.push(a[1]);
+            Ret::default()
+        });
+        let seen = log.clone();
+        e.register_double(GAME_DATA_BUSY, move |_, a| {
+            assert_eq!(a[0], COPY_GAME_DATA);
+            let mut log = seen.borrow_mut();
+            log.busy_polls += 1;
+            rv((log.busy_polls <= busy) as u32)
+        });
+        let seen = log.clone();
+        e.register_double(SLEEP, move |_, a| {
+            assert_eq!(a[0], 10);
+            seen.borrow_mut().sleeps += 1;
+            Ret::default()
+        });
+        e.register(SET_WORD_AT_20, |e, a| {
+            e.mem.set_u32(a[0] + 0x20, a[1]);
+            Ret::default()
+        });
+        log
+    }
+
+    #[test]
+    fn copy_save_games_copies_every_readable_fos_file() {
+        let mut e = engine();
+        let manager = manager(&mut e);
+        let log = copy_rig(
+            &mut e,
+            &[
+                ("Quick.fos", true),
+                ("Saves", false),
+                ("notes.txt", true),
+                ("Bad.fos", true),
+            ],
+            "Bad",
+            false,
+            2,
+        );
+        e.call(0x0085_2080, &args![manager, 0u32]);
+        let log = log.borrow();
+
+        // The guard byte is cleared first and restored (7) at the end; the
+        // walker is destroyed last.
+        assert_eq!(log.guard_sets, vec![0, 7, 0xdead]);
+        assert_eq!(log.folder, "Saves/");
+        // Only the `.fos` plain files are opened.
+        assert_eq!(log.paths, vec!["Saves/Quick.fos", "Saves/Bad.fos"]);
+        assert_eq!(
+            log.failures,
+            vec![(COPY_OPEN_FAILED, "Saves/Bad.fos".to_string())]
+        );
+        assert_eq!(log.destructs, 2);
+
+        // The good file is read whole into the buffer's data block.
+        assert_eq!(log.reads.len(), 1);
+        assert_eq!(log.reads[0][1..4], [COPY_DATA_BLOCK, 0x40, 0]);
+        assert_eq!(
+            log.dialog,
+            vec![("Copying...\nSaves/Quick.fos".to_string(), 1000)]
+        );
+
+        // The buffer object got its texts, sizes, image and callback.
+        let at = COPY_BUFFER_OBJECT;
+        assert_eq!(text(&e, at + 0x164), "-SAVE-");
+        assert_eq!(text(&e, at + 0x265), "Novac");
+        assert_eq!(
+            text(&e, at + 0x2e5),
+            "Cottonwood\nLevel 12: -\nCourier: Courier"
+        );
+        assert_eq!(e.mem.u32(at + 0x7e8), 1);
+        assert_eq!(e.mem.u32(at + 0x7ec), 2);
+        assert_eq!(e.mem.u32(at + 0x7f0), COPY_DATA_BLOCK + 3);
+        assert_eq!(text(&e, at + 0x8f4), "DATA/SYSUTIL/SAVEBACK.PNG");
+        assert_eq!(e.mem.u32(at + 0x9f4), 0x0085_2740);
+
+        // The save file is parked in the manager; the operation started once
+        // and was polled until it stopped (2 busy polls, then free).
+        let parked = e.get(manager, BGSSaveLoadManager::pSaveLoadFile);
+        assert!(!parked.is_null());
+        assert_eq!(log.started, vec![COPY_BUFFER_OBJECT]);
+        assert_eq!(log.busy_polls, 3);
+        assert_eq!(log.sleeps, 2);
+    }
+
+    #[test]
+    fn copy_save_games_uses_the_entry_texts_when_it_has_them() {
+        let mut e = engine();
+        let manager = manager(&mut e);
+        let log = copy_rig(&mut e, &[("Quick.fos", true)], "none", false, 0);
+        e.register(ENTRY_LOCATION, |_, _| Ret::default());
+        e.register(ENTRY_PLAYER_NAME, |e, _| rv(string_at(e, "Boone")));
+        e.register(ENTRY_LEVEL_NAME, |e, _| rv(string_at(e, "Novac")));
+        e.register(ENTRY_CELL_NAME, |e, _| rv(string_at(e, "Strip")));
+        e.call(0x0085_2080, &args![manager, 0u32]);
+        let at = COPY_BUFFER_OBJECT;
+        // No location: the placeholder; the entry's own names fill the text.
+        assert_eq!(text(&e, at + 0x265), "Location");
+        assert_eq!(
+            text(&e, at + 0x2e5),
+            "Strip\nLevel 12: Novac\nCourier: Boone"
+        );
+        assert_eq!(log.borrow().sleeps, 0);
+    }
+
+    #[test]
+    fn copy_save_games_reports_a_failed_read_and_goes_on() {
+        let mut e = engine();
+        let manager = manager(&mut e);
+        let log = copy_rig(&mut e, &[("Quick.fos", true)], "none", true, 0);
+        e.call(0x0085_2080, &args![manager, 0u32]);
+        let log = log.borrow();
+        assert_eq!(
+            log.failures,
+            vec![(COPY_READ_FAILED, "Saves/Quick.fos".to_string())]
+        );
+        // No dialog, no copy, but the file object is still destroyed and the
+        // guard byte restored.
+        assert!(log.dialog.is_empty());
+        assert!(log.started.is_empty());
+        assert_eq!(log.destructs, 1);
+        assert_eq!(log.guard_sets, vec![0, 7, 0xdead]);
+        assert!(e.get(manager, BGSSaveLoadManager::pSaveLoadFile).is_null());
     }
 }
