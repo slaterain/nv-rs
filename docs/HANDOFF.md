@@ -1,4 +1,4 @@
-# Handoff: engine port push (2026-10-09, night)
+# Handoff: engine port push (2026-10-10, early morning)
 
 For the next Claude session leading the nv-rs engine port. Read AGENTS.md,
 docs/MILESTONES.md, docs/ENGINE_PORT_PLAN.md, docs/FRAME_SKELETON.md and
@@ -10,8 +10,8 @@ machinery runs.
 - **Phase 0** (engine map, ledger) is merged (#72). `docs/LEDGER.md` is the
   coverage table; regenerate with
   `cargo run -q --release --manifest-path scripts/ledger/Cargo.toml`.
-- **Engine crate** (`crates/engine`, ADR-0006): about 10,000 of FalloutNV.exe's
-  functions are translated (15.1% of all, see LEDGER.md), each with a
+- **Engine crate** (`crates/engine`, ADR-0006): about 10,250 of FalloutNV.exe's
+  functions are translated (15.5% of all, see LEDGER.md), each with a
   `// Translated from <addr>` marker and tests. They run in the crate's
   emulated 32-bit memory, not yet in play.
 - **Units finished:** main.cpp, actor.cpp (all 7 parts), playercharacter.cpp
@@ -20,28 +20,31 @@ machinery runs.
   tesform, tesfile, tesland, tesworldspace, teswater, tesnpc, package,
   inventorychanges, bipedanim, animation, modelloader, tesobjectcell,
   bgsdecalmanager, navmeshobstaclemanager, globalfunc, pathfind.cpp,
-  BSMenu/tile.cpp, highprocess.cpp parts 1, 2, 4 and 5, and others.
-- **In progress (translation lanes):** bgssaveloadmanager.cpp (a01),
-  highprocess.cpp part 3 (a03), run_004a3c20 (a04), combatgroup.cpp (a05),
-  loadingmenu.cpp (a06).
+  BSMenu/tile.cpp, highprocess.cpp parts 1, 2, 4 and 5, navmesh.cpp,
+  pathinglocation.cpp, bgssceneinfo.cpp, bgssaveloadgame.cpp, and others.
+- **In progress (translation lanes):** navmesh_util.cpp (a01),
+  exteriorcellloader.cpp (a03), navmeshrender.cpp (a04), aitaskmanager.cpp
+  lane 2 (a05; MovementTaskData still needs its layout, see the file header),
+  bhkworld.obj (a06).
 - **Phase 1 (frame skeleton) wiring:**
   - PR 1 frame map (#84), PR 2 `world::frame` (#86), PR 3 Bevy order from the
     frame (#90): merged.
   - PR 4 player stage (#101): merged. It added `world::frame::player` and
     `frame_order::PlayerSet`.
   - PR 5 world and time stage (#105): merged.
-  - PR 6 AI task stage: an agent is working on it in the worktree
-    `%USERPROFILE%\nv-re\work\agents\p3`, branch `claude/phase1-ai-stage`
-    (started from PR 5's branch before it was squash-merged, so rebase it on
-    main before merging). It opens its own PR. Merge after both checks pass,
-    rebasing first if translation PRs merged meanwhile (LEDGER.md and engine
-    unit test modules can conflict; keep both sides' tests).
-    PR 6 covers Actor::Update, the AI threads and the Havok step via
-    TES::UpdateCellAnimations 00453550.
-  - After that: PR 7 interface and render. Then Phase 2 (state model in engine memory, save
-    round trip; see ENGINE_PORT_PLAN.md).
-- **Rolling translation PR:** #106 (branch `claude/engine-crate`).
-- **Play build** (the user's `Desktop\nv-rs-play`): Build 38 = main with #105.
+  - PR 6 AI task stage (#107): merged.
+  - PR 7 interface and render: an agent is working on it in the worktree
+    `%USERPROFILE%\nv-re\work\agents\p2`, branch
+    `claude/phase1-interface-stage` (started from #107's branch before it was
+    squash-merged, so rebase it on main before merging). It opens its own PR.
+    Merge after both checks pass, rebasing first if translation PRs merged
+    meanwhile (LEDGER.md and engine unit test modules can conflict; keep both
+    sides' tests).
+  - After that: Phase 2 (state model in engine memory, save round trip; see
+    ENGINE_PORT_PLAN.md).
+- **Rolling translation PR:** #106 (branch `claude/engine-crate`), rebased on
+  main after #107; ship it with `bin/ship.sh 106` once both checks pass.
+- **Play build** (the user's `Desktop\nv-rs-play`): Build 39 = main with #107.
   After the next wiring PR merges, build `viewer` in release from main
   (`cargo build --release --manifest-path viewer/Cargo.toml`), copy
   `viewer/target/release/nv-viewer.exe` into `app` (or `next` if the viewer is
@@ -96,6 +99,8 @@ Everything private lives in `%USERPROFILE%\nv-re\work\phase0` (state notes in
 - Six functions Ghidra never defined (00435ac0, 00435bb0, 0041fdb0, 00420060,
   004203b0, 00420630): define them in the private project and rerun the engine
   map.
+- 0084b720 (hash map base destructor body, vtable 0107f4c8) is called from
+  bgssaveloadgame.cpp but sits in no unit's queue; it needs an owner.
 - ADR-0006 awaits maintainer review.
 - Stray scratch files agents left in the Git install folder
   (`C:/Program Files/Git/tmp_dummy`, `tmp_p3.rs`, `tmp_tests.rs`); deleting
