@@ -17,12 +17,16 @@
 //! - The compiler's exception-unwinding frame (`__CxxFrameHandler` state
 //!   writes and the `FS:[0]` chain) is not translated; every exit path
 //!   destroys the live locals in the order the game does.
+//! - The stack cookie check (`__security_check_cookie`) of the functions that
+//!   have one is not translated either.
 //! - Callee arguments are listed in the uniform form (`this` first, then the
 //!   stack words from the top of the stack downwards, i.e. the last `PUSH`
 //!   first). Floats the callee leaves in `ST0` come back through `.f32()` or,
 //!   where the game compares the unrounded `ST0`, `.f64()`.
 //! - Offsets that are not in a declared layout are named in comments with
 //!   the Xbox PDB field they correspond to.
+//! - Translated so far: everything up to `006d7a20`; the next session continues
+//!   at `006d7a40` (`Pathing::FindClosestReachableLocation`).
 
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -58,6 +62,8 @@ layout! {
         0x34 Destination: Inline<PathingLocation>,
         /// `fActorRadius` (Xbox PDB).
         0x68 fActorRadius: f32,
+        /// `fTargetRadius` (Xbox PDB).
+        0x74 fTargetRadius: f32,
         /// `fInitialPathHeading` (Xbox PDB).
         0x90 fInitialPathHeading: f32,
         /// `spAvoidNodeArray` (Xbox PDB): `NiPointer<PathingAvoidNodeArray>`.
@@ -604,6 +610,361 @@ const FLOAT_MAXIMUM: u32 = 0x0106_cb30;
 /// Global unit vectors `fn_006d12a0` scales to get a point on a circle.
 const CIRCLE_AXIS_A: u32 = 0x011a_9478;
 const CIRCLE_AXIS_B: u32 = 0x011a_946c;
+
+// Callees and data of the second batch of translations (`006d3b00` on).
+
+/// `ECX` = safe-straight-line request: the base destructor `fn_006d3b20`
+/// runs.
+const REQUEST_BASE_DESTRUCT: u32 = 0x006d_ad70;
+/// `ECX` = location: whether it has navmesh info.
+const LOCATION_HAS_NAVMESH_INFO: u32 = 0x006d_d6a0;
+/// `ECX` = location: the word at +0x10 (its navmesh info).
+const LOCATION_NAVMESH_INFO_FIELD: u32 = 0x0044_edb0;
+/// `ECX` = the point search of `navmeshsearchslpoint.cpp` (constructed by
+/// [`HIDE_SEARCH_CONSTRUCT`], destroyed by [`HIDE_SEARCH_DESTRUCT`]), stack
+/// (request, start, goal): runs it, returns whether it found a point (the
+/// point is at +0x20cc, see `fn_006d3ff0`).
+const POINT_SEARCH_RUN: u32 = 0x006a_c220;
+/// `ECX` = request (to construct): `PathingRequest::PathingRequest`
+/// (Xbox PDB).
+const REQUEST_CONSTRUCT: u32 = 0x006e_2420;
+/// `ECX` = request, stack (target): `PathingRequest::CopyTo` (Xbox PDB).
+const REQUEST_COPY_TO: u32 = 0x006e_2750;
+/// `ECX` = close-point request (to construct):
+/// `PathingRequestClosePoint::PathingRequestClosePoint` (Xbox PDB).
+const CLOSE_POINT_REQUEST_CONSTRUCT: u32 = 0x006e_3f30;
+/// `ECX` = solution, stack (last node index as `float`, minimum distance,
+/// 0, address of a scratch word, out): looks a point up along the
+/// solution's path and stores it in `out`; returns whether it found one.
+const SOLUTION_QUERY_006E7E70: u32 = 0x006e_7e70;
+/// `ECX` = holder, stack (other holder): copies the `NiPointer`.
+const NAV_HOLDER_COPY_CONSTRUCT: u32 = 0x0042_fa20;
+/// `ECX` = array of pointers, stack (index): the address of the element.
+const POINTER_ARRAY_ELEMENT: u32 = 0x0087_7a30;
+/// `ECX` = navmesh: the number of triangles.
+const NAVMESH_TRIANGLE_COUNT: u32 = 0x0055_8200;
+/// `ECX` = triangle record, stack (edge): the neighbouring triangle across
+/// the edge as `u16`, `0xffff` for none.
+const TRIANGLE_NEIGHBOUR: u32 = 0x0068_f2c0;
+/// `ECX` = navmesh, stack (triangle `u16`, edge, out a, out b): the two
+/// end points of the triangle's edge.
+const NAVMESH_EDGE_POINTS: u32 = 0x0068_f0c0;
+/// `cdecl (out, point, a, b)`: the point of the segment `a b` closest to
+/// `point`.
+const POINT_SEGMENT_CLOSEST: u32 = 0x006b_9c20;
+/// `cdecl (point, a, b, flag)`, `float` in `ST0`: the distance from
+/// `point` to the segment `a b`.
+const POINT_SEGMENT_DISTANCE: u32 = 0x006b_9b10;
+/// `ECX` = point: `x * x + y * y` in `ST0`.
+const POINT_PLANAR_LENGTH_SQUARED: u32 = 0x0059_5c80;
+/// `ECX` = point: its length, in `ST0`.
+const POINT3_LENGTH: u32 = 0x0045_7990;
+/// `ECX` = array of 0x20-byte edge candidates: constructor.
+const CANDIDATE_ARRAY_CONSTRUCT: u32 = 0x006d_b3b0;
+/// `ECX` = candidate array: destructor.
+const CANDIDATE_ARRAY_DESTRUCT: u32 = 0x006d_b3e0;
+/// `ECX` = candidate array, stack (candidate): appends a copy.
+const CANDIDATE_ARRAY_ADD: u32 = 0x006d_b400;
+/// `ECX` = candidate array, stack (index): the address of the element.
+const CANDIDATE_ARRAY_ELEMENT: u32 = 0x006b_3120;
+/// `cdecl (a, b)`: the smaller of two unsigned numbers.
+const MINIMUM_UNSIGNED: u32 = 0x0042_f5a0;
+/// `ECX` = scratch object, stack (candidate): converts a candidate to a
+/// path point, returns it.
+const CANDIDATE_TO_PATH_POINT: u32 = 0x0069_df60;
+/// `ECX` = path point array, stack (path point): appends a copy.
+const PATH_POINT_ARRAY_ADD: u32 = 0x006d_b450;
+/// The C runtime's `qsort`: `cdecl (base, count, element size, compare)`.
+const QSORT: u32 = 0x00ec_6f20;
+/// `ECX` = path point array (`pathbuilder.cpp`): constructor.
+const PATH_POINT_ARRAY_CONSTRUCT: u32 = 0x006c_f200;
+/// `ECX` = path point array, stack (index): the address of the element.
+const PATH_POINT_ARRAY_ELEMENT: u32 = 0x006c_ee10;
+/// `ECX` = path point array: destructor.
+const PATH_POINT_ARRAY_DESTRUCT: u32 = 0x006c_f230;
+/// `ECX` = path point, stack (other path point): assigns it.
+const PATH_POINT_ASSIGN: u32 = 0x006c_f900;
+/// `ECX` = array of edge references: constructor.
+const EDGE_ARRAY_CONSTRUCT: u32 = 0x0069_b2c0;
+/// `ECX` = edge reference array: destructor.
+const EDGE_ARRAY_DESTRUCT: u32 = 0x0069_b2f0;
+/// `ECX` = edge reference array, stack (edge reference): appends a copy.
+const EDGE_ARRAY_ADD: u32 = 0x0069_b310;
+/// `ECX` = array of triangle records: constructor.
+const TRIANGLE_ARRAY_CONSTRUCT: u32 = 0x006d_b4a0;
+/// `ECX` = triangle record array: destructor.
+const TRIANGLE_ARRAY_DESTRUCT: u32 = 0x006d_b4d0;
+/// `ECX` = triangle record array, stack (record): appends a copy.
+const TRIANGLE_ARRAY_ADD: u32 = 0x006d_b4f0;
+/// `ECX` = edge or triangle array, stack (index): the address of the
+/// element.
+const ARRAY_ELEMENT_006A1440: u32 = 0x006a_1440;
+/// `ECX` = triangle record: constructor (constructs the reference in its
+/// first 8 bytes, a `NiPoint3`-style default constructor).
+const TRIANGLE_RECORD_CONSTRUCT: u32 = 0x0062_40d0;
+/// `ECX` = scratch object, stack (navmesh, triangle `u16`): a triangle
+/// reference, returns it.
+const TRIANGLE_REFERENCE_CONSTRUCT: u32 = 0x0069_a660;
+/// `ECX` = reference, stack (other): copies the navmesh and triangle.
+const TRIANGLE_REFERENCE_ASSIGN: u32 = 0x0069_a690;
+/// `ECX` = edge reference (to construct), stack (navmesh, triangle `u16`,
+/// edge).
+const EDGE_REFERENCE_CONSTRUCT: u32 = 0x0069_a6c0;
+/// `ECX` = navmesh, stack (edge reference, out reference):
+/// `NavMesh::GetMatchingEdge_ov4` (Xbox PDB), returns whether there is a
+/// matching edge across the triangle.
+const NAVMESH_GET_MATCHING_EDGE: u32 = 0x0068_f670;
+/// `ECX` = edge reference, stack (other): assigns it.
+const EDGE_REFERENCE_ASSIGN: u32 = 0x006b_c870;
+/// `ECX` = teleport path: `TeleportPath::TeleportPath` (Xbox PDB).
+const TELEPORT_PATH_CONSTRUCT: u32 = 0x006f_48b0;
+/// `ECX` = teleport path: `TeleportPath::~TeleportPath` (Xbox PDB).
+const TELEPORT_PATH_DESTRUCT: u32 = 0x006f_4930;
+/// `ECX` = teleport path: `TeleportPath::Clear` (Xbox PDB).
+const TELEPORT_PATH_CLEAR: u32 = 0x006f_4990;
+/// `ECX` = teleport path: `TeleportPath::ComputeLength` (Xbox PDB), in
+/// `ST0`.
+const TELEPORT_PATH_COMPUTE_LENGTH: u32 = 0x006f_49c0;
+/// `ECX` = teleport path, stack (count): reserves room for the path's
+/// first array.
+const TELEPORT_PATH_RESERVE_STEPS: u32 = 0x006c_ee30;
+/// `ECX` = teleport path + 0x10, stack (count): reserves room for the
+/// path's second array.
+const TELEPORT_PATH_RESERVE_DOORS: u32 = 0x006c_eea0;
+/// `ECX` = `TeleportDoorSearch`: `TeleportDoorSearch::TeleportDoorSearch`
+/// (Xbox PDB).
+const TELEPORT_SEARCH_CONSTRUCT: u32 = 0x006f_33b0;
+/// `ECX` = teleport search, stack (from, to, path, argument 4, `float`,
+/// argument 6, argument 7): `TeleportDoorSearch::BuildNodePath` (Xbox
+/// PDB), returns whether it found a path.
+const TELEPORT_SEARCH_BUILD_NODE_PATH: u32 = 0x006f_34e0;
+/// `ECX` = teleport search: `TeleportDoorSearch::~TeleportDoorSearch`
+/// (Xbox PDB).
+const TELEPORT_SEARCH_DESTRUCT: u32 = 0x006f_3460;
+/// `ECX` = low-path search (`navmeshinfosearch.cpp`): constructor.
+const LOW_PATH_SEARCH_CONSTRUCT: u32 = 0x006b_8340;
+/// `ECX` = low-path search, stack (argument 4, from position, from info,
+/// to position, to info, info array, reference array, argument 5): runs
+/// it, returns whether it found a path.
+const LOW_PATH_SEARCH_RUN: u32 = 0x006b_8c50;
+/// `ECX` = low-path search: destructor.
+const LOW_PATH_SEARCH_DESTRUCT: u32 = 0x006b_8420;
+/// `ECX` = array of navmesh info pointers: constructor.
+const INFO_ARRAY_CONSTRUCT: u32 = 0x005e_0510;
+/// `ECX` = info array: destructor.
+const INFO_ARRAY_DESTRUCT: u32 = 0x005e_0540;
+/// `ECX` = info array, stack (address of the pointer): appends it
+/// (the exe's map names it `BSSimpleArray<..>::AddUninitialized`).
+const INFO_ARRAY_ADD: u32 = 0x007c_b2e0;
+/// `ECX` = array of reference pointers: constructor.
+const REFERENCE_ARRAY_CONSTRUCT: u32 = 0x005e_04c0;
+/// `ECX` = reference array: destructor.
+const REFERENCE_ARRAY_DESTRUCT: u32 = 0x005e_04f0;
+/// `ECX` = navmesh info: a value the low path records for each step.
+const INFO_VALUE_A: u32 = 0x0069_0800;
+/// `ECX` = navmesh info: the second value the low path records.
+const INFO_VALUE_B: u32 = 0x006b_77b0;
+/// `ECX` = reference: the object whose position `NODE_LOCATION` returns
+/// (`tesobjectrefr.cpp`).
+const REFERENCE_GET_POSITION_OWNER: u32 = 0x0056_8e50;
+/// `ECX` = path's first array, stack (step): appends a 12-byte step
+/// (`flag`, value A, value B).
+const PATH_STEP_ADD: u32 = 0x006c_f4c0;
+/// `ECX` = path + 0x10, stack (door entry): appends a 0x10-byte entry.
+const PATH_DOOR_ADD: u32 = 0x006d_ae00;
+/// `cdecl (location, radius, navmesh list)`: fills the list for the
+/// location and radius (`fn_006d4120` uses it with a setting radius).
+const NEARBY_NAVMESHES_FILL: u32 = 0x006d_8a00;
+/// `ECX` = setting object (the radius `fn_006d4120` searches around a
+/// location).
+const NEARBY_RADIUS_SETTING: u32 = 0x011d_74dc;
+/// `float` 0.1: how far from an edge point towards the triangle's center
+/// `fn_006d4120` puts its candidate.
+const CENTER_FRACTION: u32 = 0x0101_e2bc;
+/// `double` -64.0 and 180.0: the open height band `fn_006d4020` sorts
+/// into first.
+const HEIGHT_BAND_MINIMUM: u32 = 0x0106_b9f0;
+const HEIGHT_BAND_MAXIMUM: u32 = 0x0104_ed58;
+/// `float` `FLT_MAX`.
+const FLOAT_LARGEST: u32 = 0x0101_6970;
+/// `ECX` = cover request: `iMaxResults` (+0xC8).
+const COVER_MAX_RESULTS: u32 = 0x009a_cce0;
+/// `ECX` = results array (of `PathingCoverLocation`), stack (capacity):
+/// reserves room.
+const COVER_RESULTS_RESERVE: u32 = 0x006d_aeb0;
+/// `ECX` = results array, stack (index, location): inserts a copy of the
+/// location at the index.
+const COVER_RESULTS_INSERT: u32 = 0x006d_af20;
+/// `ECX` = array of `float` sort keys, stack (0x20, 0, 0): constructor.
+const KEY_ARRAY_CONSTRUCT: u32 = 0x006d_b680;
+/// `ECX` = key array, stack (index, address of the key): inserts it.
+const KEY_ARRAY_INSERT: u32 = 0x006d_b540;
+/// `ECX` = key array: destructor.
+const KEY_ARRAY_DESTRUCT: u32 = 0x006d_b740;
+/// `ECX` = cover request: the address of `ActorLocation` (+0xE0).
+const COVER_ACTOR_LOCATION: u32 = 0x009d_9f40;
+/// `ECX` = cover request: its `fActorHeight` (+0x6C), in `ST0`.
+const COVER_ACTOR_HEIGHT: u32 = 0x009a_7c40;
+/// `ECX` = cover request: `fMaxCoverDistance` (+0xBC), in `ST0`.
+const COVER_MAX_DISTANCE: u32 = 0x0099_e040;
+/// `ECX` = cover request: `fMaxHeightChange` (+0xC4), in `ST0`.
+const COVER_MAX_HEIGHT_CHANGE: u32 = 0x0064_4a50;
+/// `ECX` = cover request: the address of `DistanceProjectionVector`
+/// (+0xD4).
+const COVER_PROJECTION_VECTOR: u32 = 0x0092_3000;
+/// `ECX` = cover request: `bSortDistanceFromTarget` (+0xD0).
+const COVER_SORT_FROM_TARGET: u32 = 0x0055_7d30;
+/// `ECX` = point, stack (other): `NiPoint3::operator==` (exact `float`
+/// comparison of the three components).
+const POINT3_EQUALS: u32 = 0x0043_90c0;
+/// `ECX` = point, stack (other): `NiPoint3::operator!=`.
+const POINT3_NOT_EQUALS: u32 = 0x0043_9090;
+/// `ECX` = point, stack (other): `NiPoint3::Dot` (Xbox PDB), in `ST0`.
+const POINT3_DOT: u32 = 0x004b_6190;
+/// `ECX` = point, stack (result, other): the cross product, returns
+/// `result`.
+const POINT3_CROSS: u32 = 0x004b_3800;
+/// `ECX` = `NiPoint2`, stack (x, y): constructor.
+const POINT2_CONSTRUCT: u32 = 0x0045_2dc0;
+/// `cdecl (height, 0, 1)`, returns a `u16`: the class of a height.
+const HEIGHT_CLASS: u32 = 0x006a_d3b0;
+/// `ECX` = array of navmesh pointers, stack (8, 0, 0): constructor.
+const NAVMESH_LIST_B_CONSTRUCT: u32 = 0x006d_b7a0;
+/// `ECX` = that array: destructor.
+const NAVMESH_LIST_B_DESTRUCT: u32 = 0x006c_6ce0;
+/// `cdecl (location, radius, navmesh list)`: the second function that
+/// fills the list (see [`NEARBY_NAVMESHES_FILL`]).
+const NEARBY_NAVMESHES_FILL_B: u32 = 0x006d_8a20;
+/// `ECX` = holder, stack (other holder): assigns the `NiPointer`.
+const NAV_HOLDER_ASSIGN: u32 = 0x0042_f4c0;
+/// `ECX` = navmesh: the address of its cover triangle array (+0x78).
+const NAVMESH_COVER_ARRAY: u32 = 0x0046_1110;
+/// `ECX` = cover triangle array, stack (index): the address of the
+/// `u16` triangle.
+const COVER_ARRAY_ELEMENT: u32 = 0x0069_dec0;
+/// `ECX` = triangle record: whether it carries cover edge flags (word at
+/// +0xC and `0x0fbe0000`).
+const TRIANGLE_IS_COVER: u32 = 0x0069_0770;
+/// `ECX` = navmesh, stack (out, triangle): the triangle's normal, returns
+/// the address.
+const TRIANGLE_NORMAL: u32 = 0x0069_71e0;
+/// `ECX` = triangle record, stack (edge, out class `u16`, out flag byte,
+/// out flag byte): the cover information of an edge.
+const TRIANGLE_EDGE_INFO: u32 = 0x0069_1040;
+/// `ECX` = navmesh, stack (out two vertex pointers, triangle, edge):
+/// `NavMesh::GetEdgeVertices` (Xbox PDB).
+const NAVMESH_EDGE_VERTICES: u32 = 0x0068_f040;
+/// `cdecl (cover position, threat, edge end a, edge end b)`, all planar
+/// points: whether the cover position works against the threat.
+const COVER_EDGE_TEST: u32 = 0x006b_a010;
+/// `ECX` = `PathingCoverLocation`, stack (class, standing class, crouching
+/// class, flag, flag, edge): sets its cover data.
+const COVER_LOCATION_SET_COVER: u32 = 0x006e_4500;
+/// `double` 0.0.
+const ZERO_DOUBLE: u32 = 0x0101_2060;
+/// `float` 0.5: how far along an edge `fn_006d62e0` puts the cover.
+const EDGE_MIDPOINT_FRACTION: u32 = 0x0101_6248;
+/// The global `TES` pointer.
+const TES_GLOBAL: u32 = 0x011d_ea10;
+/// `ECX` = `TES`: `TES::GetNavMeshInfoMap` (Xbox PDB).
+const TES_GET_NAVMESH_INFO_MAP: u32 = 0x0045_af00;
+/// `ECX` = map, stack (cell): `NavMeshInfoMap::FindNavMeshInfoForCell`
+/// (Xbox PDB).
+const NAVMESH_INFO_MAP_FIND_FOR_CELL: u32 = 0x006b_77e0;
+/// `ECX` = map, stack (two words): the other lookup of the map.
+const NAVMESH_INFO_MAP_FIND_BY_PAIR: u32 = 0x006b_7850;
+/// `ECX` = location, stack (holder): `PathingLocation::GetNavMesh`
+/// (Xbox PDB).
+const LOCATION_GET_NAVMESH: u32 = 0x006d_d610;
+/// `cdecl (value)`, `float` in `ST0`: wrapper of `004019d0` (the square
+/// root).
+const SQUARE_ROOT_WRAPPER: u32 = 0x0040_19b0;
+/// `ECX` = navmesh, stack (point, radius, out): whether it finds a point
+/// near `point` and stores it in `out`.
+const NAVMESH_PROBE_A: u32 = 0x0069_7c10;
+/// `ECX` = navmesh, stack (point, 0): whether the point is acceptable.
+const NAVMESH_PROBE_B: u32 = 0x0069_7670;
+/// `ECX` = navmesh, stack (point, out triangle `u16`, out flag byte):
+/// `NavMesh::FindClosestTriangleForLocation` (Xbox PDB).
+const NAVMESH_FIND_TRIANGLE: u32 = 0x0069_6cf0;
+/// `ECX` = navmesh, stack (triangle, previous edge, start, end, out hit):
+/// the edge through which the planar segment leaves the triangle, -1 when
+/// the end is inside.
+const NAVMESH_CROSSED_EDGE: u32 = 0x0069_8060;
+/// `ECX` = navmesh, stack (triangle, edge, out holder, out triangle `u16`,
+/// out edge): `NavMesh::GetMatchingEdge_ov2` (Xbox PDB), returns whether
+/// the edge has a neighbour.
+const NAVMESH_GET_MATCHING_EDGE_B: u32 = 0x0068_f3b0;
+/// `ECX` = edge reference (to construct), stack (other): the copy
+/// constructor (12 bytes), returns `ECX`.
+const EDGE_REFERENCE_COPY: u32 = 0x006c_4350;
+/// `ECX` = navmesh, stack (triangle, edge): `NavMesh::GetEdgeExtraInfo`
+/// (Xbox PDB), returns the address of the info or 0.
+const NAVMESH_EDGE_EXTRA_INFO: u32 = 0x0068_f230;
+/// `ECX` = location, stack (navmesh info): stores it.
+const LOCATION_SET_NAVMESH_INFO: u32 = 0x006d_d3e0;
+/// `ECX` = location, stack (triangle): stores it.
+const LOCATION_SET_TRIANGLE: u32 = 0x006d_d4d0;
+/// `ECX` = location, stack (position): `PathingLocation::SetLocation`
+/// (Xbox PDB).
+const LOCATION_SET_POSITION: u32 = 0x006d_d460;
+/// `cdecl (out, a, b, point, point)`, planar points: returns the address
+/// of a planar point computed from the segment `a b`.
+const POINT2_SEGMENT_CLOSEST: u32 = 0x006b_a3d0;
+/// `ECX` = holder, stack (other holder): whether the first words differ.
+const HOLDER_DIFFERS: u32 = 0x0063_1820;
+/// `ECX` = base solver, stack (two words): a method of the base solver
+/// (`006c9170`) that `fn_006d5340` wraps.
+const BASE_SOLVER_METHOD_006C9170: u32 = 0x006c_9170;
+/// `ECX` = base solver: the method `fn_006d53b0` wraps.
+const BASE_SOLVER_METHOD_006C93D0: u32 = 0x006c_93d0;
+/// `ECX` = base solver, stack (one word): the method `fn_006d5420` wraps.
+const BASE_SOLVER_METHOD_006C93F0: u32 = 0x006c_93f0;
+/// `ECX` = the search of `navmeshsearch.cpp` `fn_006d5490` runs:
+/// constructor.
+const NAVMESH_SEARCH_CONSTRUCT: u32 = 0x006a_6a40;
+/// `ECX` = that search, stack (request copy, start node, goal node, path
+/// array, node array, info array): runs it, returns whether it found a
+/// path.
+const NAVMESH_SEARCH_RUN: u32 = 0x006a_6b70;
+/// `ECX` = that search: destructor.
+const NAVMESH_SEARCH_DESTRUCT: u32 = 0x006a_6b00;
+/// `ECX` = array: default constructor of the first kind of node array
+/// (`NODE_ARRAY_A_DESTRUCT` destroys it).
+const NODE_ARRAY_A_DEFAULT_CONSTRUCT: u32 = 0x006a_bbb0;
+/// `ECX` = path array, stack (0): called before the capacity check.
+const PATH_ARRAY_PREPARE: u32 = 0x0084_54f0;
+/// `ECX` = path array: its capacity.
+const PATH_ARRAY_CAPACITY: u32 = 0x0084_e3a0;
+/// `ECX` = path array, stack (capacity): reserves room.
+const PATH_ARRAY_RESERVE: u32 = 0x006d_b0d0;
+/// `ECX` = path array, stack (index): the address of the path node.
+const PATH_ARRAY_ELEMENT: u32 = 0x006d_ad90;
+/// `ECX` = path array, stack (first, count, 0): removes entries.
+const PATH_ARRAY_REMOVE: u32 = 0x006d_b140;
+/// `ECX` = node array, stack (first, count, 0): removes entries.
+const NODE_ARRAY_REMOVE: u32 = 0x0049_f3c0;
+/// `ECX` = node array, stack (index): the address of the entry (navmesh,
+/// triangle `u16` at +4, edge at +8).
+const NODE_ARRAY_B_ELEMENT: u32 = 0x006a_7af0;
+/// `cdecl (portal end a, portal end b, from, current, out)`: narrows a
+/// portal point; returns whether it wrote one to `out`.
+const PORTAL_CLIP: u32 = 0x006b_a7e0;
+/// `cdecl (from, to, left, right)`: whether the line still passes the
+/// portal.
+const LINE_REACHES: u32 = 0x0069_6540;
+/// `cdecl (...)`: an empty function in this build (its Xbox PDB name is
+/// `Error`); `fn_006d5490` calls it on the path while the debug flag is
+/// set.
+const DEBUG_HOOK: u32 = 0x0040_fbe0;
+/// Byte: the debug flag `fn_006d5490` tests and clears.
+const PATH_DEBUG_FLAG: u32 = 0x011d_74ec;
+/// `float` 20.0 and 40.0: values `fn_006d5490` passes the debug hook.
+const DEBUG_VALUE_ODD: u32 = 0x0101_7868;
+const DEBUG_VALUE_FINAL: u32 = 0x0104_ef80;
+/// `ECX` = the request's `spAvoidNodeArray` slot, stack (array): assigns
+/// it.
+const AVOID_NODE_ARRAY_ASSIGN: u32 = 0x006d_adb0;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -2476,6 +2837,2404 @@ pub fn fn_006d3ae0(e: &mut Engine, this: Ptr<PathingRequest>, radius: f32) {
     e.set(this, PathingRequest::fActorRadius, radius);
 }
 
+// Translated from 006d3b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the request's `fTargetRadius` (+0x74).
+pub fn fn_006d3b00(e: &mut Engine, this: Ptr<PathingRequest>, radius: f32) {
+    e.set(this, PathingRequest::fTargetRadius, radius);
+}
+
+// Translated from 006d3b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of a `PathingRequestSafeStraightLine` (Xbox PDB): runs the
+/// base destructor `006dad70`.
+pub fn fn_006d3b20(e: &mut Engine, this: Ptr<PathingRequest>) {
+    e.call(REQUEST_BASE_DESTRUCT, &args![this]);
+}
+
+// Translated from 006d3b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finds a point for a safe-straight-line request and stores it in `out`.
+/// Both the origin and the destination must resolve to a navmesh and
+/// triangle. The point search (`006ac220`, whose point `fn_006d3ff0` copies
+/// out) goes first; when it finds nothing the request is copied and solved
+/// as a type-0 request (`fn_006d0b10`) and the solution is asked for a
+/// point (`006e7e70`, with the last node index and the request's minimum
+/// distance); when that fails too, a close-point request with the same
+/// distances and the destination as its origin gets a random point from
+/// `fn_006d34d0`. The third argument callers pass (0) is not read.
+pub fn fn_006d3b40(e: &mut Engine, request: Ptr<PathingRequest>, out: Ptr) -> bool {
+    with_frame(e, 0x2330, |e, f| {
+        let origin = e.call(REQUEST_ORIGIN, &args![request]).u32();
+        if !e.call(LOCATION_RESOLVE_CLOSEST, &args![origin]).bool() {
+            return false;
+        }
+        let start_holder = f.at(-0x28);
+        let start_triangle = f.at(-0x2160);
+        e.call(NAV_HOLDER_CONSTRUCT, &args![start_holder]);
+        e.mem.set_u16(start_triangle, 0xffff);
+        let origin = e.call(REQUEST_ORIGIN, &args![request]).u32();
+        if !e
+            .call(
+                LOCATION_GET_NAVMESH_AND_TRIANGLE,
+                &args![origin, start_holder, start_triangle],
+            )
+            .bool()
+        {
+            e.call(NAV_HOLDER_RELEASE, &args![start_holder]);
+            return false;
+        }
+        let start = f.at(-0x24);
+        let navmesh = e.call(NAV_HOLDER_GET, &args![start_holder]).u32();
+        e.mem.set_u32(start, navmesh);
+        let triangle = e.mem.u16(start_triangle);
+        e.mem.set_u16(start + 4, triangle);
+
+        let destination = e.call(REQUEST_DESTINATION, &args![request]).u32();
+        if !e.call(LOCATION_RESOLVE_CLOSEST, &args![destination]).bool() {
+            e.call(NAV_HOLDER_RELEASE, &args![start_holder]);
+            return false;
+        }
+        let goal_holder = f.at(-0x215c);
+        let goal_triangle = f.at(-0x10);
+        e.call(NAV_HOLDER_CONSTRUCT, &args![goal_holder]);
+        e.mem.set_u16(goal_triangle, 0xffff);
+        let destination = e.call(REQUEST_DESTINATION, &args![request]).u32();
+        if !e
+            .call(
+                LOCATION_GET_NAVMESH_AND_TRIANGLE,
+                &args![destination, goal_holder, goal_triangle],
+            )
+            .bool()
+        {
+            e.call(NAV_HOLDER_RELEASE, &args![goal_holder]);
+            e.call(NAV_HOLDER_RELEASE, &args![start_holder]);
+            return false;
+        }
+        let goal = f.at(-0x2158);
+        let navmesh = e.call(NAV_HOLDER_GET, &args![goal_holder]).u32();
+        e.mem.set_u32(goal, navmesh);
+        let triangle = e.mem.u16(goal_triangle);
+        e.mem.set_u16(goal + 4, triangle);
+
+        let search = f.at(-0x2134);
+        e.call(HIDE_SEARCH_CONSTRUCT, &args![search]);
+        let list = f.at(-0x2144);
+        e.call(NAVMESH_LIST_CONSTRUCT, &args![list]);
+        e.call(NAVMESH_LIST_FILL, &args![list]);
+        let found = e
+            .call(POINT_SEARCH_RUN, &args![search, request, start, goal])
+            .bool();
+        if found {
+            fn_006d3ff0(e, Ptr::new(search), out);
+            safe_line_release(e, list, search, goal_holder, start_holder);
+            return true;
+        }
+
+        let copy = f.at(-0x225c);
+        e.call(REQUEST_CONSTRUCT, &args![copy]);
+        e.call(REQUEST_COPY_TO, &args![request, copy]);
+        let solution = f.at(-0x21ac);
+        e.call(SOLUTION_CONSTRUCT, &args![solution]);
+        let mut result = false;
+        if fn_006d0b10(e, Ptr::new(copy), Ptr::new(solution)) {
+            let minimum = fn_006d2c20(e, request.cast());
+            let node_count = e.call(SOLUTION_NODE_COUNT, &args![solution]).u32();
+            let last_index = node_count.wrapping_sub(1) as f32;
+            let scratch = f.at(-0x2260);
+            if e.call(
+                SOLUTION_QUERY_006E7E70,
+                &args![solution, last_index, minimum, 0u32, scratch, out],
+            )
+            .bool()
+            {
+                e.call(SOLUTION_DESTRUCT, &args![solution]);
+                e.call(REQUEST_COPY_DESTRUCT, &args![copy]);
+                safe_line_release(e, list, search, goal_holder, start_holder);
+                return true;
+            }
+            let close = f.at(-0x231c);
+            e.call(CLOSE_POINT_REQUEST_CONSTRUCT, &args![close]);
+            e.call(REQUEST_COPY_TO, &args![request, close]);
+            let destination = e.call(REQUEST_DESTINATION, &args![request]).u32();
+            fn_006d3ac0(e, Ptr::new(close), Ptr::new(destination));
+            let minimum = fn_006d2c20(e, request.cast());
+            e.call(REQUEST_SET_MINIMUM_DISTANCE, &args![close, minimum]);
+            let maximum = fn_006d2c40(e, request.cast());
+            e.call(REQUEST_SET_MAXIMUM_DISTANCE, &args![close, maximum]);
+            result = fn_006d34d0(e, Ptr::new(close), out);
+            e.call(REQUEST_BASE_DESTRUCT, &args![close]);
+        }
+        e.call(SOLUTION_DESTRUCT, &args![solution]);
+        e.call(REQUEST_COPY_DESTRUCT, &args![copy]);
+        safe_line_release(e, list, search, goal_holder, start_holder);
+        result
+    })
+}
+
+/// The common exit of `fn_006d3b40`: destroys the navmesh list, the point
+/// search and the two navmesh holders, in that order.
+fn safe_line_release(e: &mut Engine, list: u32, search: u32, goal_holder: u32, start_holder: u32) {
+    e.call(NAVMESH_LIST_DESTRUCT, &args![list]);
+    e.call(HIDE_SEARCH_DESTRUCT, &args![search]);
+    e.call(NAV_HOLDER_RELEASE, &args![goal_holder]);
+    e.call(NAV_HOLDER_RELEASE, &args![start_holder]);
+}
+
+// Translated from 006d3ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the point the point search found (this + 0x20cc) to `out`.
+pub fn fn_006d3ff0(e: &mut Engine, this: Ptr, out: Ptr) {
+    copy_words(e, out.addr(), this.addr() + 0x20cc, 3);
+}
+
+// Translated from 006d4020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Comparison function `fn_006d4120` gives `qsort` for its 0x20-byte
+/// candidates (cdecl, two element pointers). A candidate is in the height
+/// band when its float at +0x1c is above -64.0 and below 180.0 (exclusive;
+/// NaN is outside). Candidates in the band come first (-1 when only
+/// `first` is in it, 1 when only `second` is); otherwise the smaller float
+/// at +0x18 comes first.
+pub fn fn_006d4020(e: &mut Engine, first: Ptr, second: Ptr) -> i32 {
+    let minimum = e.global::<f64>(HEIGHT_BAND_MINIMUM);
+    let maximum = e.global::<f64>(HEIGHT_BAND_MAXIMUM);
+    let first_height = e.mem.f32(first.addr() + 0x1c) as f64;
+    let second_height = e.mem.f32(second.addr() + 0x1c) as f64;
+    let first_in_band = first_height > minimum && first_height < maximum;
+    let second_in_band = second_height > minimum && second_height < maximum;
+    if first_in_band && !second_in_band {
+        return -1;
+    }
+    if !first_in_band && second_in_band {
+        return 1;
+    }
+    let first_distance = e.mem.f32(first.addr() + 0x18);
+    let second_distance = e.mem.f32(second.addr() + 0x18);
+    if second_distance > first_distance {
+        -1
+    } else if second_distance < first_distance {
+        1
+    } else {
+        0
+    }
+}
+
+// Translated from 006d4120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Collects up to `limit` points near a location that has no navmesh info.
+/// Returns 1 at once when the location has navmesh info (after resolving
+/// it). Otherwise it lists the navmeshes within the search radius setting
+/// (`011d74dc`) of the location (`006d8a00`) and, for every triangle edge
+/// without a neighbour (`0xffff`), finds the closest point of the edge to
+/// the location; when its planar squared distance is below the radius
+/// squared a 0x20-byte candidate is recorded: navmesh, triangle (`u16`),
+/// edge, the point moved 0.1 of the way to the triangle's center, the
+/// distance and the height difference. The candidates are sorted with
+/// `fn_006d4020`, the first `limit` are converted to path points and added
+/// to `out`. Returns 2 when there is at least one, 0 when none.
+pub fn fn_006d4120(e: &mut Engine, location: Ptr, limit: u32, out: Ptr) -> u32 {
+    with_frame(e, 0x110, |e, f| {
+        e.call(LOCATION_RESOLVE_NAVMESH_INFO, &args![location, 0u32]);
+        if e.call(LOCATION_HAS_NAVMESH_INFO, &args![location]).bool() {
+            return 1;
+        }
+        let setting = e
+            .call(SETTING_FLOAT_ADDRESS, &args![NEARBY_RADIUS_SETTING])
+            .u32();
+        let radius = e.mem.f32(setting);
+        let radius_squared = (radius as f64 * radius as f64) as f32;
+        let list = f.at(-0x34);
+        e.call(NAVMESH_LIST_CONSTRUCT, &args![list]);
+        e.call(NEARBY_NAVMESHES_FILL, &args![location, radius, list]);
+        let candidates = f.at(-0x1c);
+        e.call(CANDIDATE_ARRAY_CONSTRUCT, &args![candidates]);
+        let holder = f.at(-0x40);
+        let mut navmesh_index = 0u32;
+        loop {
+            let count = e.call(ARRAY_COUNT, &args![list]).u32();
+            if navmesh_index >= count {
+                break;
+            }
+            let entry = e
+                .call(POINTER_ARRAY_ELEMENT, &args![list, navmesh_index])
+                .u32();
+            e.call(NAV_HOLDER_COPY_CONSTRUCT, &args![holder, entry]);
+            let mut triangle = 0u32;
+            loop {
+                let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+                let triangle_count = e.call(NAVMESH_TRIANGLE_COUNT, &args![navmesh]).u32();
+                if triangle >= triangle_count {
+                    break;
+                }
+                let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+                let record = e
+                    .call(NAVMESH_GET_TRIANGLE, &args![navmesh, triangle & 0xffff])
+                    .u32();
+                for edge in 0..3u32 {
+                    let neighbour = e.call(TRIANGLE_NEIGHBOUR, &args![record, edge]).u16();
+                    if neighbour != 0xffff {
+                        continue;
+                    }
+                    let corner = e
+                        .call(TRIANGLE_GET_VERTEX_INDEX, &args![record, edge])
+                        .u16() as u32;
+                    let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+                    let start = e.call(NAVMESH_GET_VERTEX, &args![navmesh, corner]).u32();
+                    let next_edge = if edge + 1 == 3 { 0 } else { edge + 1 };
+                    let corner = e
+                        .call(TRIANGLE_GET_VERTEX_INDEX, &args![record, next_edge])
+                        .u16() as u32;
+                    let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+                    let end = e.call(NAVMESH_GET_VERTEX, &args![navmesh, corner]).u32();
+                    let position = e
+                        .call(LOCATION_COPY_POSITION, &args![location, f.at(-0xa4)])
+                        .u32();
+                    let closest = f.at(-0x5c);
+                    e.call(POINT_SEGMENT_CLOSEST, &args![closest, position, start, end]);
+                    let position = e
+                        .call(LOCATION_COPY_POSITION, &args![location, f.at(-0xb0)])
+                        .u32();
+                    let difference = f.at(-0x74);
+                    e.call(POINT3_SUBTRACT, &args![position, difference, closest]);
+                    let distance = e
+                        .call(POINT_PLANAR_LENGTH_SQUARED, &args![difference])
+                        .f32();
+                    let within_radius = distance < radius_squared;
+                    if !within_radius {
+                        continue;
+                    }
+                    let candidate = f.at(-0x94);
+                    fn_006d4550(e, Ptr::new(candidate));
+                    let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+                    e.mem.set_u32(candidate, navmesh);
+                    e.mem.set_u16(candidate + 4, triangle as u16);
+                    e.mem.set_u32(candidate + 8, edge);
+                    let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+                    let center = e
+                        .call(
+                            NAVMESH_GET_CENTER,
+                            &args![navmesh, f.at(-0xbc), triangle & 0xffff],
+                        )
+                        .u32();
+                    let from_closest = e
+                        .call(POINT3_SUBTRACT, &args![center, f.at(-0xc8), closest])
+                        .u32();
+                    let fraction = e.global::<f32>(CENTER_FRACTION);
+                    let step = e
+                        .call(
+                            POINT3_TIMES_SCALAR,
+                            &args![from_closest, f.at(-0xd4), fraction],
+                        )
+                        .u32();
+                    let moved = e.call(POINT3_ADD, &args![closest, f.at(-0xe0), step]).u32();
+                    copy_words(e, candidate + 0xc, moved, 3);
+                    e.mem.set_f32(candidate + 0x18, distance);
+                    let height = e.mem.f32(difference + 8);
+                    e.mem.set_f32(candidate + 0x1c, height);
+                    e.call(CANDIDATE_ARRAY_ADD, &args![candidates, candidate]);
+                }
+                triangle += 1;
+            }
+            e.call(NAV_HOLDER_RELEASE, &args![holder]);
+            navmesh_index += 1;
+        }
+        if e.call(ARRAY_IS_EMPTY, &args![candidates]).bool() {
+            e.call(CANDIDATE_ARRAY_DESTRUCT, &args![candidates]);
+            e.call(NAVMESH_LIST_DESTRUCT, &args![list]);
+            return 0;
+        }
+        let count = e.call(ARRAY_COUNT, &args![candidates]).u32();
+        let base = e
+            .call(CANDIDATE_ARRAY_ELEMENT, &args![candidates, 0u32])
+            .u32();
+        e.call(QSORT, &args![base, count, 0x20u32, 0x006d_4020u32]);
+        let count = e.call(ARRAY_COUNT, &args![candidates]).u32();
+        let taken = e.call(MINIMUM_UNSIGNED, &args![limit, count]).u32();
+        for index in 0..taken {
+            let candidate = e
+                .call(CANDIDATE_ARRAY_ELEMENT, &args![candidates, index])
+                .u32();
+            let point = e
+                .call(CANDIDATE_TO_PATH_POINT, &args![f.at(-0xfc), candidate])
+                .u32();
+            e.call(PATH_POINT_ARRAY_ADD, &args![out, point]);
+        }
+        e.call(CANDIDATE_ARRAY_DESTRUCT, &args![candidates]);
+        e.call(NAVMESH_LIST_DESTRUCT, &args![list]);
+        if taken == 0 {
+            0
+        } else {
+            2
+        }
+    })
+}
+
+// Translated from 006d4550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the path point `fn_006d4120` builds its candidates on:
+/// runs `006a0480`, returns `this`.
+pub fn fn_006d4550(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(PATH_POINT_CONSTRUCT, &args![this]);
+    this
+}
+
+// Translated from 006d4570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finds a point for `location` within `radius` and stores it in `out`
+/// (navmesh info, triangle `u16` at +4, edge at +8, position at +0xC).
+///
+/// A location without navmesh info asks `fn_006d4120` for one point and
+/// copies it. Otherwise it floods the triangles within `radius` of the
+/// location: starting from the location's own triangle it marks, per
+/// triangle, which of the three edges lie closer than `radius` to the
+/// location (`mark_near_edges`), and follows the marked edges that have a
+/// neighbour to triangles not yet in the visited list. The marked edges
+/// without a neighbour go to a list; the one whose closest point is
+/// nearest to the location (squared length) is the result. Fails when the
+/// location has no triangle or no such edge exists.
+pub fn fn_006d4570(e: &mut Engine, location: Ptr, radius: f32, out: Ptr) -> bool {
+    with_frame(e, 0x180, |e, f| {
+        e.call(LOCATION_RESOLVE_NAVMESH_INFO, &args![location, 0u32]);
+        if !e.call(LOCATION_HAS_NAVMESH_INFO, &args![location]).bool() {
+            let found = f.at(-0x1c);
+            e.call(PATH_POINT_ARRAY_CONSTRUCT, &args![found]);
+            fn_006d4120(e, location, 1, Ptr::new(found));
+            let result = if e.call(ARRAY_IS_EMPTY, &args![found]).bool() {
+                false
+            } else {
+                let first = e.call(PATH_POINT_ARRAY_ELEMENT, &args![found, 0u32]).u32();
+                e.call(PATH_POINT_ASSIGN, &args![out, first]);
+                true
+            };
+            e.call(PATH_POINT_ARRAY_DESTRUCT, &args![found]);
+            return result;
+        }
+        let border_edges = f.at(-0x4c);
+        e.call(EDGE_ARRAY_CONSTRUCT, &args![border_edges]);
+        let visited = f.at(-0x2c);
+        e.call(TRIANGLE_ARRAY_CONSTRUCT, &args![visited]);
+        let holder = f.at(-0x50);
+        e.call(NAV_HOLDER_CONSTRUCT, &args![holder]);
+        let triangle = f.at(-0x58);
+        let release = |e: &mut Engine| {
+            e.call(NAV_HOLDER_RELEASE, &args![holder]);
+            e.call(TRIANGLE_ARRAY_DESTRUCT, &args![visited]);
+            e.call(EDGE_ARRAY_DESTRUCT, &args![border_edges]);
+        };
+        if !e
+            .call(
+                LOCATION_GET_NAVMESH_AND_TRIANGLE,
+                &args![location, holder, triangle],
+            )
+            .bool()
+        {
+            release(e);
+            return false;
+        }
+        let start = f.at(-0x3c);
+        e.call(TRIANGLE_RECORD_CONSTRUCT, &args![start]);
+        let start_triangle = e.mem.u16(triangle) as u32;
+        let navmesh = e.call(NAV_HOLDER_GET, &args![holder]).u32();
+        let reference = e
+            .call(
+                TRIANGLE_REFERENCE_CONSTRUCT,
+                &args![f.at(-0x128), navmesh, start_triangle],
+            )
+            .u32();
+        e.call(TRIANGLE_REFERENCE_ASSIGN, &args![start, reference]);
+        let marks = EdgeMarks {
+            location,
+            radius,
+            first_scratch: -0x68,
+            second_scratch: -0x74,
+            position_scratch: -0x134,
+        };
+        mark_near_edges(
+            e,
+            f,
+            &marks,
+            MarkSource::Holder(holder),
+            start_triangle,
+            start,
+        );
+        e.call(TRIANGLE_ARRAY_ADD, &args![visited, start]);
+
+        let mut index = 0u32;
+        loop {
+            let count = e.call(ARRAY_COUNT, &args![visited]).u32();
+            if index >= count {
+                break;
+            }
+            let current = f.at(-0x84);
+            let element = e.call(ARRAY_ELEMENT_006A1440, &args![visited, index]).u32();
+            fn_006d4ce0(e, Ptr::new(current), Ptr::new(element));
+            for edge in 0..3u32 {
+                if e.mem.u8(current + 8 + edge) == 0 {
+                    continue;
+                }
+                let current_navmesh = e.mem.u32(current);
+                let current_triangle = e.mem.u16(current + 4) as u32;
+                let record = e
+                    .call(
+                        NAVMESH_GET_TRIANGLE,
+                        &args![current_navmesh, current_triangle],
+                    )
+                    .u32();
+                let edge_reference = f.at(-0x94);
+                e.call(
+                    EDGE_REFERENCE_CONSTRUCT,
+                    &args![edge_reference, current_navmesh, current_triangle, edge],
+                );
+                let neighbour = e.call(TRIANGLE_NEIGHBOUR, &args![record, edge]).u16();
+                if neighbour == 0xffff {
+                    e.call(EDGE_ARRAY_ADD, &args![border_edges, edge_reference]);
+                    continue;
+                }
+                let other = f.at(-0xa4);
+                e.call(TRIANGLE_RECORD_CONSTRUCT, &args![other]);
+                let current_navmesh = e.mem.u32(current);
+                if !e
+                    .call(
+                        NAVMESH_GET_MATCHING_EDGE,
+                        &args![current_navmesh, edge_reference, other],
+                    )
+                    .bool()
+                {
+                    continue;
+                }
+                let mut seen = false;
+                let mut probe = 0u32;
+                loop {
+                    let count = e.call(ARRAY_COUNT, &args![visited]).u32();
+                    if probe >= count {
+                        break;
+                    }
+                    let element = e.call(ARRAY_ELEMENT_006A1440, &args![visited, probe]).u32();
+                    if fn_006d4ca0(e, Ptr::new(element), Ptr::new(other)) {
+                        seen = true;
+                        break;
+                    }
+                    probe += 1;
+                }
+                if seen {
+                    continue;
+                }
+                let next = f.at(-0xb8);
+                e.call(TRIANGLE_RECORD_CONSTRUCT, &args![next]);
+                e.call(TRIANGLE_REFERENCE_ASSIGN, &args![next, other]);
+                let other_triangle = e.mem.u16(other + 4) as u32;
+                let marks = EdgeMarks {
+                    location,
+                    radius,
+                    first_scratch: -0xc8,
+                    second_scratch: -0xd4,
+                    position_scratch: -0x140,
+                };
+                mark_near_edges(
+                    e,
+                    f,
+                    &marks,
+                    MarkSource::Reference(other),
+                    other_triangle,
+                    next,
+                );
+                e.call(TRIANGLE_ARRAY_ADD, &args![visited, next]);
+            }
+            index += 1;
+        }
+
+        if e.call(ARRAY_IS_EMPTY, &args![border_edges]).bool() {
+            release(e);
+            return false;
+        }
+        let best = f.at(-0xf0);
+        e.call(TRIANGLE_RECORD_CONSTRUCT, &args![best]);
+        let best_point = f.at(-0xe4);
+        e.call(POINT3_DEFAULT_CONSTRUCTOR, &args![best_point]);
+        let mut best_distance = e.global::<f32>(FLOAT_LARGEST);
+        let mut index = 0u32;
+        loop {
+            let count = e.call(ARRAY_COUNT, &args![border_edges]).u32();
+            if index >= count {
+                break;
+            }
+            let end_a = f.at(-0x100);
+            e.call(POINT3_DEFAULT_CONSTRUCTOR, &args![end_a]);
+            let end_b = f.at(-0x11c);
+            e.call(POINT3_DEFAULT_CONSTRUCTOR, &args![end_b]);
+            let element = e
+                .call(ARRAY_ELEMENT_006A1440, &args![border_edges, index])
+                .u32();
+            let edge = e.mem.u32(element + 8);
+            let element = e
+                .call(ARRAY_ELEMENT_006A1440, &args![border_edges, index])
+                .u32();
+            let edge_triangle = e.mem.u16(element + 4) as u32;
+            let element = e
+                .call(ARRAY_ELEMENT_006A1440, &args![border_edges, index])
+                .u32();
+            let edge_navmesh = e.mem.u32(element);
+            e.call(
+                NAVMESH_EDGE_POINTS,
+                &args![edge_navmesh, edge_triangle, edge, end_a, end_b],
+            );
+            let closest = f.at(-0x110);
+            let position = e
+                .call(LOCATION_COPY_POSITION, &args![location, f.at(-0x14c)])
+                .u32();
+            e.call(
+                POINT_SEGMENT_CLOSEST,
+                &args![closest, position, end_a, end_b],
+            );
+            let position = e
+                .call(LOCATION_COPY_POSITION, &args![location, f.at(-0x158)])
+                .u32();
+            let difference = e
+                .call(POINT3_SUBTRACT, &args![closest, f.at(-0x164), position])
+                .u32();
+            let distance = e.call(POINT3_LENGTH_SQUARED, &args![difference]).f32();
+            if distance < best_distance {
+                best_distance = distance;
+                copy_words(e, best_point, closest, 3);
+                let element = e
+                    .call(ARRAY_ELEMENT_006A1440, &args![border_edges, index])
+                    .u32();
+                e.call(EDGE_REFERENCE_ASSIGN, &args![best, element]);
+            }
+            index += 1;
+        }
+        let best_navmesh = e.mem.u32(best);
+        let info = e.call(NAVMESH_GET_INFO, &args![best_navmesh]).u32();
+        e.mem.set_u32(out.addr(), info);
+        let best_triangle = e.mem.u16(best + 4);
+        e.mem.set_u16(out.addr() + 4, best_triangle);
+        let best_edge = e.mem.u32(best + 8);
+        e.mem.set_u32(out.addr() + 8, best_edge);
+        copy_words(e, out.addr() + 0xc, best_point, 3);
+        release(e);
+        true
+    })
+}
+
+/// Where `mark_near_edges` takes the navmesh from.
+enum MarkSource {
+    /// A navmesh holder (read through `NiPointer::Get`).
+    Holder(u32),
+    /// A triangle reference whose first word is the navmesh.
+    Reference(u32),
+}
+
+/// What `mark_near_edges` needs besides the engine and the frame: the
+/// location, the radius and the `EBP`-relative offsets of the scratch
+/// locals the two call sites use.
+struct EdgeMarks {
+    location: Ptr,
+    radius: f32,
+    first_scratch: i32,
+    second_scratch: i32,
+    position_scratch: i32,
+}
+
+/// The part of `fn_006d4570` that marks the edges of a triangle that lie
+/// closer than the radius to the location: for each of the three edges it
+/// gets the edge's end points (`0068f0c0`, into two scratch points) and sets
+/// the byte `record + 8 + edge` when the radius is greater than the
+/// distance from the location to the segment (`006b9b10`, compared in
+/// `ST0`). The game has this code twice in the function (for the first
+/// triangle and for each new neighbour); only the scratch locals differ.
+fn mark_near_edges(
+    e: &mut Engine,
+    f: Frame,
+    marks: &EdgeMarks,
+    source: MarkSource,
+    triangle: u32,
+    record: u32,
+) {
+    for edge in 0..3u32 {
+        let end_a = f.at(marks.first_scratch);
+        let end_b = f.at(marks.second_scratch);
+        e.call(POINT3_DEFAULT_CONSTRUCTOR, &args![end_a]);
+        e.call(POINT3_DEFAULT_CONSTRUCTOR, &args![end_b]);
+        let navmesh = match source {
+            MarkSource::Holder(holder) => e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32(),
+            MarkSource::Reference(reference) => e.mem.u32(reference),
+        };
+        e.call(
+            NAVMESH_EDGE_POINTS,
+            &args![navmesh, triangle, edge, end_a, end_b],
+        );
+        let position = e
+            .call(
+                LOCATION_COPY_POSITION,
+                &args![marks.location, f.at(marks.position_scratch)],
+            )
+            .u32();
+        let distance = e
+            .call(POINT_SEGMENT_DISTANCE, &args![position, end_a, end_b, 0u32])
+            .f64();
+        e.mem
+            .set_u8(record + 8 + edge, ((marks.radius as f64) > distance) as u8);
+    }
+}
+
+// Translated from 006d4ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether two triangle references are equal: the same navmesh word at +0
+/// and the same triangle `u16` at +4.
+pub fn fn_006d4ca0(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    e.mem.u32(this.addr()) == e.mem.u32(other.addr())
+        && e.mem.u16(this.addr() + 4) == e.mem.u16(other.addr() + 4)
+}
+
+// Translated from 006d4ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Assigns a triangle record: the reference (`0069a690`), then the `u16`
+/// at +8 and the byte at +10 (the three edge marks). Returns `this`.
+pub fn fn_006d4ce0(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
+    e.call(TRIANGLE_REFERENCE_ASSIGN, &args![this, other]);
+    let marks = e.mem.u16(other.addr() + 8);
+    e.mem.set_u16(this.addr() + 8, marks);
+    let mark = e.mem.u8(other.addr() + 10);
+    e.mem.set_u8(this.addr() + 10, mark);
+    this
+}
+
+// Translated from 006d4d20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Pathing::BuildTeleportDoorPath` (Xbox PDB): builds a path between two
+/// locations through teleport doors into `path` (a `TeleportPath`, cleared
+/// first, both arrays given room for 10 entries). On success the path's
+/// start (+0x20) and end (+0x2C) are the two locations' positions. The
+/// scope timer of line 0x582 covers the call. `argument_4`, `argument_5`,
+/// `argument_6` and `argument_7` go to `TeleportDoorSearch::BuildNodePath`
+/// unchanged.
+#[allow(clippy::too_many_arguments)]
+pub fn pathing_build_teleport_door_path(
+    e: &mut Engine,
+    from: Ptr,
+    to: Ptr,
+    path: Ptr,
+    argument_4: u32,
+    argument_5: f32,
+    argument_6: u32,
+    argument_7: u32,
+) -> bool {
+    with_frame(e, 0x20f0, |e, f| {
+        let timer = f.at(-0x20c8);
+        scope_enter(e, timer, 0x582);
+        let search = f.at(-0x20c4);
+        e.call(TELEPORT_SEARCH_CONSTRUCT, &args![search]);
+        e.call(TELEPORT_PATH_CLEAR, &args![path]);
+        e.call(TELEPORT_PATH_RESERVE_STEPS, &args![path, 10u32]);
+        e.call(
+            TELEPORT_PATH_RESERVE_DOORS,
+            &args![path.addr() + 0x10, 10u32],
+        );
+        let found = e
+            .call(
+                TELEPORT_SEARCH_BUILD_NODE_PATH,
+                &args![search, from, to, path, argument_4, argument_5, argument_6, argument_7],
+            )
+            .bool();
+        if found {
+            let position = e
+                .call(LOCATION_COPY_POSITION, &args![from, f.at(-0x20d4)])
+                .u32();
+            copy_words(e, path.addr() + 0x20, position, 3);
+            let position = e
+                .call(LOCATION_COPY_POSITION, &args![to, f.at(-0x20e0)])
+                .u32();
+            copy_words(e, path.addr() + 0x2c, position, 3);
+        }
+        e.call(TELEPORT_SEARCH_DESTRUCT, &args![search]);
+        scope_leave(e, timer);
+        found
+    })
+}
+
+// Translated from 006d4eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Pathing::ComputeTeleportDoorPathLength` (Xbox PDB): builds the
+/// teleport-door path between the locations in a local `TeleportPath`
+/// (`pathing_build_teleport_door_path` with 0 for its fourth argument) and returns its length
+/// (`TeleportPath::ComputeLength`), or `FLT_MAX` when there is no path.
+pub fn pathing_compute_teleport_door_path_length(
+    e: &mut Engine,
+    from: Ptr,
+    to: Ptr,
+    distance: f32,
+    argument_a: u32,
+    argument_b: u32,
+) -> f32 {
+    with_frame(e, 0x50, |e, f| {
+        let path = f.at(-0x44);
+        e.call(TELEPORT_PATH_CONSTRUCT, &args![path]);
+        let result = if pathing_build_teleport_door_path(
+            e,
+            from,
+            to,
+            Ptr::new(path),
+            0,
+            distance,
+            argument_a,
+            argument_b,
+        ) {
+            e.call(TELEPORT_PATH_COMPUTE_LENGTH, &args![path]).f32()
+        } else {
+            e.global::<f32>(FLOAT_LARGEST)
+        };
+        e.call(TELEPORT_PATH_DESTRUCT, &args![path]);
+        result
+    })
+}
+
+// Translated from 006d4f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Pathing::BuildLowPath` (Xbox PDB): when both locations have navmesh
+/// info, runs the low-path search (`006b8c50`) between them; on success it
+/// fills `path`: the first array gets a 12-byte step (flag, two values the
+/// info gives) for the first info and then, for every reference the
+/// search found, a step for the next info; the second array (+0x10) gets
+/// an entry per reference (the reference word and its position); the path's
+/// start (+0x20) and end (+0x2C) are the locations' positions. Otherwise
+/// (a location without info, or the search failed) it falls back to the
+/// teleport-door search with the fourth argument 0, the `float` 0.0 and
+/// the two arguments given here.
+pub fn pathing_build_low_path(
+    e: &mut Engine,
+    from: Ptr,
+    to: Ptr,
+    path: Ptr,
+    argument_4: u32,
+    argument_5: u32,
+) -> bool {
+    with_frame(e, 0x41f0, |e, f| {
+        if e.call(LOCATION_RESOLVE_NAVMESH_INFO, &args![from, 0u32])
+            .bool()
+            && e.call(LOCATION_RESOLVE_NAVMESH_INFO, &args![to, 0u32])
+                .bool()
+        {
+            let search = f.at(-0x4164);
+            e.call(LOW_PATH_SEARCH_CONSTRUCT, &args![search]);
+            let infos = f.at(-0x4184);
+            e.call(INFO_ARRAY_CONSTRUCT, &args![infos]);
+            let references = f.at(-0x4174);
+            e.call(REFERENCE_ARRAY_CONSTRUCT, &args![references]);
+            let to_info = e.call(LOCATION_NAVMESH_INFO_FIELD, &args![to]).u32();
+            let to_position = e
+                .call(LOCATION_COPY_POSITION, &args![to, f.at(-0x41bc)])
+                .u32();
+            let from_info = e.call(LOCATION_NAVMESH_INFO_FIELD, &args![from]).u32();
+            let from_position = e
+                .call(LOCATION_COPY_POSITION, &args![from, f.at(-0x41c8)])
+                .u32();
+            let found = e
+                .call(
+                    LOW_PATH_SEARCH_RUN,
+                    &args![
+                        search,
+                        argument_4,
+                        from_position,
+                        from_info,
+                        to_position,
+                        to_info,
+                        infos,
+                        references,
+                        argument_5
+                    ],
+                )
+                .bool();
+            if found {
+                // The first step, then one step and one door entry per
+                // reference.
+                low_path_step(e, path, infos, 0, f.at(-0x4190));
+                let mut index = 0u32;
+                loop {
+                    let count = e.call(ARRAY_COUNT, &args![references]).u32();
+                    if index >= count {
+                        break;
+                    }
+                    let slot = e
+                        .call(POINTER_ARRAY_ELEMENT, &args![references, index])
+                        .u32();
+                    if e.mem.u32(slot) != 0 {
+                        let entry = f.at(-0x41b0);
+                        fn_006d5320(e, Ptr::new(entry));
+                        let slot = e
+                            .call(POINTER_ARRAY_ELEMENT, &args![references, index])
+                            .u32();
+                        let reference = e.mem.u32(slot);
+                        e.mem.set_u32(entry, reference);
+                        let slot = e
+                            .call(POINTER_ARRAY_ELEMENT, &args![references, index])
+                            .u32();
+                        let reference = e.mem.u32(slot);
+                        let owner = e
+                            .call(REFERENCE_GET_POSITION_OWNER, &args![reference])
+                            .u32();
+                        let position = e.call(NODE_LOCATION, &args![owner]).u32();
+                        copy_words(e, entry + 4, position, 3);
+                        e.call(PATH_DOOR_ADD, &args![path.addr() + 0x10, entry]);
+                        low_path_step(e, path, infos, index + 1, f.at(-0x41a0));
+                    }
+                    index += 1;
+                }
+                let position = e
+                    .call(LOCATION_COPY_POSITION, &args![from, f.at(-0x41d4)])
+                    .u32();
+                copy_words(e, path.addr() + 0x20, position, 3);
+                let position = e
+                    .call(LOCATION_COPY_POSITION, &args![to, f.at(-0x41e0)])
+                    .u32();
+                copy_words(e, path.addr() + 0x2c, position, 3);
+                e.call(REFERENCE_ARRAY_DESTRUCT, &args![references]);
+                e.call(INFO_ARRAY_DESTRUCT, &args![infos]);
+                e.call(LOW_PATH_SEARCH_DESTRUCT, &args![search]);
+                return true;
+            }
+            e.call(REFERENCE_ARRAY_DESTRUCT, &args![references]);
+            e.call(INFO_ARRAY_DESTRUCT, &args![infos]);
+            e.call(LOW_PATH_SEARCH_DESTRUCT, &args![search]);
+        }
+        let search = f.at(-0x20c4);
+        e.call(TELEPORT_SEARCH_CONSTRUCT, &args![search]);
+        let found = e
+            .call(
+                TELEPORT_SEARCH_BUILD_NODE_PATH,
+                &args![search, from, to, path, 0u32, 0.0f32, argument_4, argument_5],
+            )
+            .bool();
+        e.call(TELEPORT_SEARCH_DESTRUCT, &args![search]);
+        found
+    })
+}
+
+/// Appends to the path's first array the step for info `index` of the info
+/// array: `step` is the 12-byte local (flag byte, then the two values
+/// `006b77b0` and `00690800` give for the info; the flag is whether
+/// `00690800` is not zero).
+fn low_path_step(e: &mut Engine, path: Ptr, infos: u32, index: u32, step: u32) {
+    let slot = e.call(POINTER_ARRAY_ELEMENT, &args![infos, index]).u32();
+    let info = e.mem.u32(slot);
+    let first = e.call(INFO_VALUE_A, &args![info]).u32();
+    e.mem.set_u32(step + 4, first);
+    let slot = e.call(POINTER_ARRAY_ELEMENT, &args![infos, index]).u32();
+    let info = e.mem.u32(slot);
+    let second = e.call(INFO_VALUE_B, &args![info]).u32();
+    e.mem.set_u32(step + 8, second);
+    let slot = e.call(POINTER_ARRAY_ELEMENT, &args![infos, index]).u32();
+    let info = e.mem.u32(slot);
+    let flag = e.call(INFO_VALUE_A, &args![info]).u32();
+    e.mem.set_u8(step, (flag != 0) as u8);
+    e.call(PATH_STEP_ADD, &args![path, step]);
+}
+
+// Translated from 006d5320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the 0x10-byte door entry of a low path: constructs the
+/// point at +4 (`NiPoint3` constructor). Returns `this`.
+pub fn fn_006d5320(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(POINT3_DEFAULT_CONSTRUCTOR, &args![this.addr() + 4]);
+    this
+}
+
+// Translated from 006d5340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Builds the base solver for a request and solution on the stack (as
+/// `fn_006d0b10` does), calls its method `006c9170` with the two extra
+/// words and destroys the solver. Returns what the method returned.
+pub fn fn_006d5340(
+    e: &mut Engine,
+    request: Ptr<PathingRequest>,
+    solution: Ptr<PathingSolution>,
+    argument_3: u32,
+    argument_4: u32,
+) -> u32 {
+    with_frame(e, 0x38, |e, f| {
+        let solver = f.at(-0x40);
+        e.call(BASE_SOLVER_CONSTRUCT, &args![solver, request, solution]);
+        let result = e
+            .call(
+                BASE_SOLVER_METHOD_006C9170,
+                &args![solver, argument_3, argument_4],
+            )
+            .u32();
+        fn_006d0b80(e, Ptr::new(solver));
+        result
+    })
+}
+
+// Translated from 006d53b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Builds the base solver for a request and solution on the stack, calls
+/// its method `006c93d0` and destroys the solver. Returns what the method
+/// returned.
+pub fn fn_006d53b0(
+    e: &mut Engine,
+    request: Ptr<PathingRequest>,
+    solution: Ptr<PathingSolution>,
+) -> u32 {
+    with_frame(e, 0x38, |e, f| {
+        let solver = f.at(-0x40);
+        e.call(BASE_SOLVER_CONSTRUCT, &args![solver, request, solution]);
+        let result = e.call(BASE_SOLVER_METHOD_006C93D0, &args![solver]).u32();
+        fn_006d0b80(e, Ptr::new(solver));
+        result
+    })
+}
+
+// Translated from 006d5420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Builds the base solver for a request and solution on the stack, calls
+/// its method `006c93f0` with one extra word and destroys the solver.
+/// Returns what the method returned.
+pub fn fn_006d5420(
+    e: &mut Engine,
+    request: Ptr<PathingRequest>,
+    solution: Ptr<PathingSolution>,
+    argument_3: u32,
+) -> u32 {
+    with_frame(e, 0x38, |e, f| {
+        let solver = f.at(-0x40);
+        e.call(BASE_SOLVER_CONSTRUCT, &args![solver, request, solution]);
+        let result = e
+            .call(BASE_SOLVER_METHOD_006C93F0, &args![solver, argument_3])
+            .u32();
+        fn_006d0b80(e, Ptr::new(solver));
+        result
+    })
+}
+
+/// Stores into `out_length` the straight-line distance between the two
+/// locations (the length of `to - from`); the three offsets are the
+/// `EBP`-relative scratch locals of the call site (the copy of the `from`
+/// position, the difference and the copy of the `to` position).
+fn store_straight_distance(
+    e: &mut Engine,
+    f: Frame,
+    from: Ptr,
+    to: Ptr,
+    out_length: Ptr,
+    scratch: [i32; 3],
+) {
+    let from_position = e
+        .call(LOCATION_COPY_POSITION, &args![from, f.at(scratch[0])])
+        .u32();
+    let to_position = e
+        .call(LOCATION_COPY_POSITION, &args![to, f.at(scratch[2])])
+        .u32();
+    let difference = e
+        .call(
+            POINT3_SUBTRACT,
+            &args![to_position, f.at(scratch[1]), from_position],
+        )
+        .u32();
+    let length = e.call(POINT3_LENGTH, &args![difference]).f32();
+    e.mem.set_f32(out_length.addr(), length);
+}
+
+// Translated from 006d5490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finds a path between two locations on the navmeshes and straightens it.
+///
+/// The navmeshes the exe lists (`006d91d0`) give an array of their infos.
+/// When a location does not resolve to a navmesh and triangle, the
+/// function stores the straight-line distance in `out_length` (if given)
+/// and fails; the one exception is both locations failing to resolve,
+/// which succeeds. The search (`006a6b70`) fills a path (the `out_path`
+/// array, or a local one when it is null) and a node array; the first and
+/// last path nodes are moved to the two positions. With more than two
+/// nodes and an output wanted, the path is smoothed: every node is tried
+/// against the following ones with the portals of the node array
+/// (`006ba7e0` narrows the left and right portal point, `00696540` tests
+/// the line), the nodes that can be skipped are removed, and the remaining
+/// inner nodes are moved to the nearer end of their portal. `out_length`
+/// then gets the summed length of the path. When the debug flag at
+/// `011d74ec` is set, the hook `0040fbe0` (an empty function in this
+/// build) is called with the path at the stages the game draws, and the
+/// flag is cleared at the end.
+pub fn fn_006d5490(
+    e: &mut Engine,
+    from: Ptr,
+    to: Ptr,
+    request: Ptr,
+    out_length: Ptr,
+    out_path: Ptr,
+) -> bool {
+    with_frame(e, 0x23f0, |e, f| {
+        let list = f.at(-0x21f0);
+        e.call(NAVMESH_LIST_CONSTRUCT, &args![list]);
+        e.call(NAVMESH_LIST_FILL, &args![list]);
+        let infos = f.at(-0x21c8);
+        e.call(INFO_ARRAY_CONSTRUCT, &args![infos]);
+        let mut index = 0u32;
+        loop {
+            let count = e.call(ARRAY_COUNT, &args![list]).u32();
+            if index >= count {
+                break;
+            }
+            let entry = e.call(POINTER_ARRAY_ELEMENT, &args![list, index]).u32();
+            let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![entry]).u32();
+            let info = e.call(NAVMESH_GET_INFO, &args![navmesh]).u32();
+            e.mem.set_u32(f.at(-0x22f0), info);
+            e.call(INFO_ARRAY_ADD, &args![infos, f.at(-0x22f0)]);
+            index += 1;
+        }
+        let wants_length = out_length.addr() != 0;
+        let release_lists = |e: &mut Engine| {
+            e.call(INFO_ARRAY_DESTRUCT, &args![infos]);
+            e.call(NAVMESH_LIST_DESTRUCT, &args![list]);
+        };
+
+        if !e.call(LOCATION_RESOLVE_CLOSEST, &args![from]).bool() {
+            if wants_length {
+                store_straight_distance(e, f, from, to, out_length, [-0x2308, -0x2314, -0x22fc]);
+            }
+            let to_resolves = e.call(LOCATION_RESOLVE_CLOSEST, &args![to]).bool();
+            release_lists(e);
+            return !to_resolves;
+        }
+        if !e.call(LOCATION_RESOLVE_CLOSEST, &args![to]).bool() {
+            if wants_length {
+                store_straight_distance(e, f, from, to, out_length, [-0x2330, -0x233c, -0x2324]);
+            }
+            release_lists(e);
+            return false;
+        }
+
+        let from_holder = f.at(-0xd8);
+        e.call(NAV_HOLDER_CONSTRUCT, &args![from_holder]);
+        let from_triangle = f.at(-0x2208);
+        e.mem.set_u16(from_triangle, 0xffff);
+        if !e
+            .call(
+                LOCATION_GET_NAVMESH_AND_TRIANGLE,
+                &args![from, from_holder, from_triangle],
+            )
+            .bool()
+        {
+            if wants_length {
+                store_straight_distance(e, f, from, to, out_length, [-0x2358, -0x2364, -0x234c]);
+            }
+            e.call(NAV_HOLDER_RELEASE, &args![from_holder]);
+            release_lists(e);
+            return false;
+        }
+        let from_node = f.at(-0x21b4);
+        let navmesh = e.call(NAV_HOLDER_GET, &args![from_holder]).u32();
+        e.mem.set_u32(from_node, navmesh);
+        let triangle = e.mem.u16(from_triangle);
+        e.mem.set_u16(from_node + 4, triangle);
+        e.call(LOCATION_COPY_POSITION, &args![from, f.at(-0x24)]);
+
+        let to_holder = f.at(-0x21e0);
+        e.call(NAV_HOLDER_CONSTRUCT, &args![to_holder]);
+        let to_triangle = f.at(-0xdc);
+        e.mem.set_u16(to_triangle, 0xffff);
+        if !e
+            .call(
+                LOCATION_GET_NAVMESH_AND_TRIANGLE,
+                &args![to, to_holder, to_triangle],
+            )
+            .bool()
+        {
+            if wants_length {
+                store_straight_distance(e, f, from, to, out_length, [-0x2380, -0x238c, -0x2374]);
+            }
+            e.call(NAV_HOLDER_RELEASE, &args![to_holder]);
+            e.call(NAV_HOLDER_RELEASE, &args![from_holder]);
+            release_lists(e);
+            return false;
+        }
+        let to_node = f.at(-0x2204);
+        let navmesh = e.call(NAV_HOLDER_GET, &args![to_holder]).u32();
+        e.mem.set_u32(to_node, navmesh);
+        let triangle = e.mem.u16(to_triangle);
+        e.mem.set_u16(to_node + 4, triangle);
+        e.call(LOCATION_COPY_POSITION, &args![to, f.at(-0x18)]);
+
+        let search = f.at(-0x219c);
+        e.call(NAVMESH_SEARCH_CONSTRUCT, &args![search]);
+        let local_path = f.at(-0x21dc);
+        e.call(NODE_ARRAY_A_DEFAULT_CONSTRUCT, &args![local_path]);
+        let path = if out_path.addr() != 0 {
+            out_path.addr()
+        } else {
+            local_path
+        };
+        e.mem.set_u32(f.at(-0x21b8), path);
+        e.call(PATH_ARRAY_PREPARE, &args![path, 0u32]);
+        if e.call(PATH_ARRAY_CAPACITY, &args![path]).u32() < 0x20 {
+            e.call(PATH_ARRAY_RESERVE, &args![path, 0x20u32]);
+        }
+        let nodes = f.at(-0xf0);
+        e.call(NODE_ARRAY_B_CONSTRUCT, &args![nodes, 0x20u32, 0u32, 0u32]);
+        let request_copy = f.at(-0xd4);
+        e.call(REQUEST_CONSTRUCT, &args![request_copy]);
+        fn_006d61e0(e, Ptr::new(request_copy), request.addr());
+        let release_all = |e: &mut Engine| {
+            e.call(REQUEST_COPY_DESTRUCT, &args![request_copy]);
+            e.call(NODE_ARRAY_B_DESTRUCT, &args![nodes]);
+            e.call(NODE_ARRAY_A_DESTRUCT, &args![local_path]);
+            e.call(NAVMESH_SEARCH_DESTRUCT, &args![search]);
+            e.call(NAV_HOLDER_RELEASE, &args![to_holder]);
+            e.call(NAV_HOLDER_RELEASE, &args![from_holder]);
+            e.call(INFO_ARRAY_DESTRUCT, &args![infos]);
+            e.call(NAVMESH_LIST_DESTRUCT, &args![list]);
+        };
+        if !e
+            .call(
+                NAVMESH_SEARCH_RUN,
+                &args![search, request_copy, from_node, to_node, path, nodes, infos],
+            )
+            .bool()
+        {
+            if wants_length {
+                store_straight_distance(e, f, from, to, out_length, [-0x23a8, -0x23b4, -0x239c]);
+            }
+            release_all(e);
+            return false;
+        }
+
+        // The ends of the path are the two positions.
+        let first = e.call(PATH_ARRAY_ELEMENT, &args![path, 0u32]).u32();
+        e.mem.set_u32(f.at(-0x21a0), first);
+        let position = e
+            .call(LOCATION_COPY_POSITION, &args![from, f.at(-0x23c4)])
+            .u32();
+        fn_006d61b0(e, Ptr::new(first), Ptr::new(position));
+        if e.call(ARRAY_COUNT, &args![path]).u32() > 1 {
+            let count = e.call(ARRAY_COUNT, &args![path]).u32();
+            let last = e
+                .call(PATH_ARRAY_ELEMENT, &args![path, count.wrapping_sub(1)])
+                .u32();
+            e.mem.set_u32(f.at(-0x2210), last);
+            let position = e
+                .call(LOCATION_COPY_POSITION, &args![to, f.at(-0x23d0)])
+                .u32();
+            fn_006d61b0(e, Ptr::new(last), Ptr::new(position));
+        }
+        let debug = |e: &mut Engine| e.global::<u8>(PATH_DEBUG_FLAG) != 0;
+        if debug(e) {
+            e.call(DEBUG_HOOK, &args![path, 0.0f32, 0u32]);
+        }
+
+        if e.call(ARRAY_COUNT, &args![path]).u32() > 2 && (wants_length || out_path.addr() != 0) {
+            smooth_path(e, f, path, nodes);
+        }
+
+        if wants_length {
+            e.mem.set_f32(out_length.addr(), 0.0);
+            if e.call(ARRAY_COUNT, &args![path]).u32() > 1 {
+                let previous = f.at(-0x22dc);
+                let first = e.call(PATH_ARRAY_ELEMENT, &args![path, 0u32]).u32();
+                e.call(NODE_TO_POSITION, &args![first, previous]);
+                let mut index = 1u32;
+                loop {
+                    let count = e.call(ARRAY_COUNT, &args![path]).u32();
+                    if index >= count {
+                        break;
+                    }
+                    let current = f.at(-0x22ec);
+                    let node = e.call(PATH_ARRAY_ELEMENT, &args![path, index]).u32();
+                    e.call(NODE_TO_POSITION, &args![node, current]);
+                    let step = e
+                        .call(POINT3_SUBTRACT, &args![current, f.at(-0x23dc), previous])
+                        .u32();
+                    let length = e.call(POINT3_LENGTH, &args![step]).f64();
+                    let total = length + e.mem.f32(out_length.addr()) as f64;
+                    e.mem.set_f32(out_length.addr(), total as f32);
+                    copy_words(e, previous, current, 3);
+                    index += 1;
+                }
+            }
+        }
+        if debug(e) {
+            let color = e.global::<f32>(DEBUG_VALUE_FINAL);
+            e.call(DEBUG_HOOK, &args![path, color, 1u32]);
+        }
+        e.mem.set_u8(PATH_DEBUG_FLAG, 0);
+        release_all(e);
+        true
+    })
+}
+
+/// The smoothing part of `fn_006d5490` (the path has more than two nodes).
+/// First pass: for each node `i` it takes the portal of the node array
+/// entry `i` (`NavMesh` edge end points `left` and `right`, locals at
+/// -0x2244 and -0x2220) and walks `j = i + 2, ...`: the portal of entry
+/// `j - 1` narrows `left` and `right` (`006ba7e0`, which writes the
+/// clipped point to a scratch point when it returns true; otherwise the
+/// portal's own end is taken) and `00696540` decides whether the line from
+/// node `i` through the narrowed portal still reaches node `j`; the nodes
+/// `i + 1 .. j - 2` are removed from the path (`006db140`) and the node
+/// array (`0049f3c0`). Second pass: every inner node is moved to the end
+/// of its portal (the previous entry's) that is nearer to the previous
+/// node.
+fn smooth_path(e: &mut Engine, f: Frame, path: u32, nodes: u32) {
+    let mut i = 0u32;
+    loop {
+        let count = e.call(ARRAY_COUNT, &args![path]).u32();
+        if i >= count.wrapping_sub(2) {
+            break;
+        }
+        let node = e.call(PATH_ARRAY_ELEMENT, &args![path, i]).u32();
+        e.mem.set_u32(f.at(-0x2230), node);
+        let node_position = f.at(-0x222c);
+        e.call(NODE_TO_POSITION, &args![node, node_position]);
+        let portal = e.call(NODE_ARRAY_B_ELEMENT, &args![nodes, i]).u32();
+        e.mem.set_u32(f.at(-0x2234), portal);
+        let left = f.at(-0x2244);
+        let right = f.at(-0x2220);
+        e.call(POINT3_DEFAULT_CONSTRUCTOR, &args![left]);
+        e.call(POINT3_DEFAULT_CONSTRUCTOR, &args![right]);
+        portal_points(e, portal, left, right);
+        let mut j = i + 2;
+        loop {
+            let count = e.call(ARRAY_COUNT, &args![path]).u32();
+            if j >= count {
+                break;
+            }
+            let next = e.call(PATH_ARRAY_ELEMENT, &args![path, j]).u32();
+            e.mem.set_u32(f.at(-0x2278), next);
+            let next_position = f.at(-0x2274);
+            e.call(NODE_TO_POSITION, &args![next, next_position]);
+            let portal = e.call(NODE_ARRAY_B_ELEMENT, &args![nodes, j - 1]).u32();
+            e.mem.set_u32(f.at(-0x227c), portal);
+            let end_a = f.at(-0x2268);
+            let end_b = f.at(-0x225c);
+            e.call(POINT3_DEFAULT_CONSTRUCTOR, &args![end_a]);
+            e.call(POINT3_DEFAULT_CONSTRUCTOR, &args![end_b]);
+            portal_points(e, portal, end_a, end_b);
+            let clipped = f.at(-0x2250);
+            e.call(POINT3_DEFAULT_CONSTRUCTOR, &args![clipped]);
+            let narrowed = e
+                .call(
+                    PORTAL_CLIP,
+                    &args![end_a, end_b, node_position, left, clipped],
+                )
+                .bool();
+            if narrowed {
+                copy_words(e, left, clipped, 3);
+            } else {
+                copy_words(e, left, end_a, 3);
+            }
+            let narrowed = e
+                .call(
+                    PORTAL_CLIP,
+                    &args![end_a, end_b, node_position, right, clipped],
+                )
+                .bool();
+            if narrowed {
+                copy_words(e, right, clipped, 3);
+            } else {
+                copy_words(e, right, end_b, 3);
+            }
+            if e.global::<u8>(PATH_DEBUG_FLAG) != 0 {
+                let color = if j % 2 == 0 {
+                    0.0
+                } else {
+                    e.global::<f32>(DEBUG_VALUE_ODD)
+                };
+                e.call(DEBUG_HOOK, &args![portal, j - 1, color, 3u32]);
+            }
+            let reaches = e
+                .call(
+                    LINE_REACHES,
+                    &args![node_position, next_position, left, right],
+                )
+                .bool();
+            if !reaches {
+                break;
+            }
+            j += 1;
+        }
+        if i + 2 < j {
+            let removed = j - i - 2;
+            e.call(PATH_ARRAY_REMOVE, &args![path, i + 1, removed, 0u32]);
+            e.call(NODE_ARRAY_REMOVE, &args![nodes, i, removed, 0u32]);
+        }
+        i += 1;
+    }
+    if e.global::<u8>(PATH_DEBUG_FLAG) != 0 {
+        let color = e.global::<f32>(DEBUG_VALUE_ODD);
+        e.call(DEBUG_HOOK, &args![path, color, 2u32]);
+    }
+    let mut i = 1u32;
+    loop {
+        let count = e.call(ARRAY_COUNT, &args![path]).u32();
+        if i >= count.wrapping_sub(1) {
+            break;
+        }
+        let node = e.call(PATH_ARRAY_ELEMENT, &args![path, i]).u32();
+        e.mem.set_u32(f.at(-0x22d0), node);
+        let previous = e.call(PATH_ARRAY_ELEMENT, &args![path, i - 1]).u32();
+        e.mem.set_u32(f.at(-0x229c), previous);
+        let portal = e.call(NODE_ARRAY_B_ELEMENT, &args![nodes, i - 1]).u32();
+        e.mem.set_u32(f.at(-0x228c), portal);
+        let previous_position = f.at(-0x22c0);
+        e.call(NODE_TO_POSITION, &args![previous, previous_position]);
+        let left = f.at(-0x22cc);
+        let right = f.at(-0x22b4);
+        e.call(POINT3_DEFAULT_CONSTRUCTOR, &args![left]);
+        e.call(POINT3_DEFAULT_CONSTRUCTOR, &args![right]);
+        portal_points(e, portal, left, right);
+        let to_left = f.at(-0x22a8);
+        e.call(POINT3_SUBTRACT, &args![previous_position, to_left, left]);
+        let to_right = f.at(-0x2298);
+        e.call(POINT3_SUBTRACT, &args![previous_position, to_right, right]);
+        let left_distance = e.call(POINT3_LENGTH_SQUARED, &args![to_left]).f64();
+        let right_distance = e.call(POINT3_LENGTH_SQUARED, &args![to_right]).f64();
+        if right_distance > left_distance {
+            fn_006d61b0(e, Ptr::new(node), Ptr::new(left));
+        } else {
+            fn_006d61b0(e, Ptr::new(node), Ptr::new(right));
+        }
+        i += 1;
+    }
+}
+
+/// Reads the two end points of the node array entry's edge (`entry` holds
+/// the navmesh at +0, the triangle `u16` at +4 and the edge at +8) into the
+/// two points.
+fn portal_points(e: &mut Engine, entry: u32, first: u32, second: u32) {
+    let edge = e.mem.u32(entry + 8);
+    let triangle = e.mem.u16(entry + 4) as u32;
+    let navmesh = e.mem.u32(entry);
+    e.call(
+        NAVMESH_EDGE_POINTS,
+        &args![navmesh, triangle, edge, first, second],
+    );
+}
+
+// Translated from 006d61b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a point (three floats) at this + 8.
+pub fn fn_006d61b0(e: &mut Engine, this: Ptr, point: Ptr) {
+    for i in 0..3 {
+        let value = e.mem.f32(point.addr() + 4 * i);
+        e.mem.set_f32(this.addr() + 8 + 4 * i, value);
+    }
+}
+
+// Translated from 006d61e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Passes `argument` to `006dadb0` on the member at this + 0x94 (the
+/// `spAvoidNodeArray` of a request).
+pub fn fn_006d61e0(e: &mut Engine, this: Ptr, argument: u32) {
+    e.call(
+        AVOID_NODE_ARRAY_ASSIGN,
+        &args![this.addr() + 0x94, argument],
+    );
+}
+
+// Translated from 006d6200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Pathing::ComputeLowPathDistance` (Xbox PDB): builds the low path
+/// between two locations into a local `TeleportPath` (`pathing_build_low_path` with
+/// arguments 0 and 1) and stores its length in `out`, or 0.0 when there is
+/// no path. Returns whether there was a path.
+pub fn pathing_compute_low_path_distance(e: &mut Engine, from: Ptr, to: Ptr, out: Ptr) -> bool {
+    with_frame(e, 0x50, |e, f| {
+        let path = f.at(-0x44);
+        e.call(TELEPORT_PATH_CONSTRUCT, &args![path]);
+        let found = pathing_build_low_path(e, from, to, Ptr::new(path), 0, 1);
+        let length = if found {
+            e.call(TELEPORT_PATH_COMPUTE_LENGTH, &args![path]).f32()
+        } else {
+            0.0
+        };
+        e.mem.set_f32(out.addr(), length);
+        e.call(TELEPORT_PATH_DESTRUCT, &args![path]);
+        found
+    })
+}
+
+// Translated from 006d62c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `fn_006d5490` with the first three words and two null pointers
+/// (no length, no output path). Returns what it returned.
+pub fn fn_006d62c0(e: &mut Engine, from: Ptr, to: Ptr, request: Ptr) -> bool {
+    fn_006d5490(e, from, to, request, Ptr::new(0), Ptr::new(0))
+}
+
+// Translated from 006d62e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finds cover locations for a `PathingRequestCover` (Xbox PDB) and inserts
+/// them, best first, into the `results` array; returns how many it found.
+///
+/// The PC layout of the request equals the Xbox one: `Threat` +0xB0,
+/// `fMaxCoverDistance` +0xBC, `fActorCrouchHeight` +0xC0,
+/// `fMaxHeightChange` +0xC4, `iMaxResults` +0xC8, the flags at +0xCC to
+/// +0xD1, `DistanceProjectionVector` +0xD4 and `ActorLocation` +0xE0.
+///
+/// The actor location (the origin's position when it is the zero vector) is
+/// the point the covers are measured from. Heights are turned into classes
+/// with `006ad3b0`. For every navmesh within the maximum cover distance of
+/// the origin (`006d8a20`), every cover triangle (`navmesh + 0x78` lists
+/// them, flagged by `00690770`) whose center is no farther than the
+/// maximum distance from the origin and within `fMaxHeightChange` of the
+/// actor's height is considered: the center's side of the line from the
+/// threat through the actor decides (the opposite side with
+/// `bFindBehindTarget`; both sides with `bFindBothSides`); then for each of
+/// its two cover edges `00691040` gives the cover class and two flags; a
+/// class below 4 is accepted only for class 2 without `bHideCover`, a class
+/// of 4 or more when it reaches the class of the standing or crouching
+/// actor (`bCanCrouch`) and one of the flags, the crouch class or
+/// `bHideCover` allows it. The cover position is the edge midpoint moved
+/// along the edge's normal (its edge direction crossed with the triangle
+/// normal, flattened and normalized) by the actor radius; `006ba010` must
+/// accept it against the threat. The accepted location (a
+/// `PathingCoverLocation`) is inserted in the results at the position the
+/// sort key finds: the key is the squared distance from the actor location
+/// to the triangle center (from the threat vector with
+/// `bSortDistanceFromTarget`, plus `2 * dot * dot / key` of the projection
+/// vector's dot product when that vector is not zero), ascending or, with
+/// `bSortFarthestFirst`, descending. It stops once `iMaxResults` are found.
+pub fn fn_006d62e0(e: &mut Engine, request: Ptr, results: Ptr) -> u32 {
+    with_frame(e, 0x270, |e, f| {
+        let mut count = 0u32;
+        let capacity = e.call(COVER_MAX_RESULTS, &args![request]).u32();
+        e.call(COVER_RESULTS_RESERVE, &args![results, capacity]);
+        let keys = f.at(-0xb4);
+        e.call(KEY_ARRAY_CONSTRUCT, &args![keys, 0x20u32, 0u32, 0u32]);
+
+        // The actor location, or the origin's position when it is zero.
+        let actor_location = e.call(COVER_ACTOR_LOCATION, &args![request]).u32();
+        copy_words(e, f.at(-0x2c), actor_location, 3);
+        let origin = e.call(REQUEST_ORIGIN, &args![request]).u32();
+        e.call(LOCATION_COPY_POSITION, &args![origin, f.at(-0x20)]);
+        let mut has_actor_location = true;
+        if e.call(POINT3_EQUALS, &args![f.at(-0x2c), ZERO_VECTOR])
+            .bool()
+        {
+            copy_words(e, f.at(-0x2c), f.at(-0x20), 3);
+            has_actor_location = false;
+        }
+
+        // The threat's planar position and the planar direction from it to
+        // the actor location.
+        fn_006d6d60(e, request, Ptr::new(f.at(-0x84)));
+        let threat_x = e.mem.f32(f.at(-0x84));
+        let threat_y = e.mem.f32(f.at(-0x80));
+        e.call(POINT2_CONSTRUCT, &args![f.at(-0xa0), threat_x, threat_y]);
+        let actor_y = e.mem.f32(f.at(-0x28));
+        let direction_y = (actor_y as f64 - e.mem.f32(f.at(-0x9c)) as f64) as f32;
+        let actor_x = e.mem.f32(f.at(-0x2c));
+        let direction_x = (actor_x as f64 - e.mem.f32(f.at(-0xa0)) as f64) as f32;
+        e.call(
+            POINT2_CONSTRUCT,
+            &args![f.at(-0x78), direction_x, direction_y],
+        );
+
+        let crouch_height = fn_006d6d90(e, request);
+        let crouch_class = e
+            .call(HEIGHT_CLASS, &args![crouch_height, 0u32, 1u32])
+            .u16();
+        e.mem.set_u16(f.at(-0x94), crouch_class);
+        let actor_height = e.call(COVER_ACTOR_HEIGHT, &args![request]).f32();
+        let stand_class = e.call(HEIGHT_CLASS, &args![actor_height, 0u32, 1u32]).u16();
+        e.mem.set_u16(f.at(-0xe8), stand_class);
+
+        let distance = e.call(COVER_MAX_DISTANCE, &args![request]).f64();
+        let distance_again = e.call(COVER_MAX_DISTANCE, &args![request]).f64();
+        let maximum_squared = (distance_again * distance) as f32;
+        e.mem.set_f32(f.at(-0x30), maximum_squared);
+
+        let navmeshes = f.at(-0x108);
+        e.call(
+            NAVMESH_LIST_B_CONSTRUCT,
+            &args![navmeshes, 8u32, 0u32, 0u32],
+        );
+        let reach = e.call(COVER_MAX_DISTANCE, &args![request]).f32();
+        let origin = e.call(REQUEST_ORIGIN, &args![request]).u32();
+        e.call(NEARBY_NAVMESHES_FILL_B, &args![origin, reach, navmeshes]);
+        for offset in [
+            -0xf4, -0x48, -0x114, -0x3c, -0xe4, -0x64, -0xd4, -0x70, -0x58, -0xc8,
+        ] {
+            e.call(POINT3_DEFAULT_CONSTRUCTOR, &args![f.at(offset)]);
+        }
+        let holder = f.at(-0x68);
+        e.call(NAV_HOLDER_CONSTRUCT, &args![holder]);
+        let crouch_flag = fn_006d6db0(e, request);
+        e.mem.set_u8(f.at(-0xd5), crouch_flag);
+        let hide_flag = fn_006d6e30(e, request);
+        e.mem.set_u8(f.at(-0x4d), hide_flag);
+
+        let finish = |e: &mut Engine, count: u32| {
+            e.call(NAV_HOLDER_RELEASE, &args![holder]);
+            e.call(NAVMESH_LIST_B_DESTRUCT, &args![navmeshes]);
+            e.call(KEY_ARRAY_DESTRUCT, &args![keys]);
+            count
+        };
+        let mut navmesh_index = 0u32;
+        loop {
+            let navmesh_count = e.call(ARRAY_COUNT, &args![navmeshes]).u32();
+            if navmesh_index >= navmesh_count {
+                return finish(e, count);
+            }
+            let entry = e
+                .call(POINTER_ARRAY_ELEMENT, &args![navmeshes, navmesh_index])
+                .u32();
+            e.call(NAV_HOLDER_ASSIGN, &args![holder, entry]);
+            let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+            let covers = e.call(NAVMESH_COVER_ARRAY, &args![navmesh]).u32();
+            let cover_count = e.call(ARRAY_COUNT, &args![covers]).u16();
+            e.mem.set_u16(f.at(-0x98), cover_count);
+            let mut cover_index = 0u16;
+            while cover_index < cover_count {
+                let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+                let covers = e.call(NAVMESH_COVER_ARRAY, &args![navmesh]).u32();
+                let item = e
+                    .call(COVER_ARRAY_ELEMENT, &args![covers, cover_index as u32])
+                    .u32();
+                let triangle = e.mem.u16(item);
+                e.mem.set_u16(f.at(-0x10), triangle);
+                let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+                let record = e
+                    .call(NAVMESH_GET_TRIANGLE, &args![navmesh, triangle as u32])
+                    .u32();
+                e.mem.set_u32(f.at(-0x90), record);
+                cover_index += 1;
+                if !e.call(TRIANGLE_IS_COVER, &args![record]).bool() {
+                    continue;
+                }
+                let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+                let center = e
+                    .call(
+                        NAVMESH_GET_CENTER,
+                        &args![navmesh, f.at(-0x1c0), triangle as u32],
+                    )
+                    .u32();
+                copy_words(e, f.at(-0xf4), center, 3);
+                let to_actor = e
+                    .call(
+                        POINT3_SUBTRACT,
+                        &args![f.at(-0x2c), f.at(-0x1cc), f.at(-0xf4)],
+                    )
+                    .u32();
+                copy_words(e, f.at(-0x48), to_actor, 3);
+                let key = e.call(POINT3_LENGTH_SQUARED, &args![f.at(-0x48)]).f32();
+                e.mem.set_f32(f.at(-0xb8), key);
+                if has_actor_location {
+                    e.call(
+                        POINT3_SUBTRACT,
+                        &args![f.at(-0x20), f.at(-0x134), f.at(-0xf4)],
+                    );
+                    let from_origin = e.call(POINT3_LENGTH_SQUARED, &args![f.at(-0x134)]).f64();
+                    if (maximum_squared as f64) < from_origin {
+                        continue;
+                    }
+                } else if maximum_squared < e.mem.f32(f.at(-0xb8)) {
+                    continue;
+                }
+
+                // The sort key.
+                let projection = e.call(COVER_PROJECTION_VECTOR, &args![request]).u32();
+                copy_words(e, f.at(-0x128), projection, 3);
+                if e.call(COVER_SORT_FROM_TARGET, &args![request]).bool() {
+                    e.call(
+                        POINT3_SUBTRACT,
+                        &args![f.at(-0x84), f.at(-0x140), f.at(-0xf4)],
+                    );
+                    let key = e.call(POINT3_LENGTH_SQUARED, &args![f.at(-0x140)]).f32();
+                    e.mem.set_f32(f.at(-0xb8), key);
+                    if e.call(POINT3_NOT_EQUALS, &args![f.at(-0x128), ZERO_VECTOR])
+                        .bool()
+                    {
+                        let dot = e.call(POINT3_DOT, &args![f.at(-0x140), f.at(-0x128)]).f32();
+                        e.mem.set_f32(f.at(-0x144), dot);
+                        adjust_cover_key(e, f, dot);
+                    }
+                } else if e
+                    .call(POINT3_NOT_EQUALS, &args![f.at(-0x128), ZERO_VECTOR])
+                    .bool()
+                {
+                    let dot = e.call(POINT3_DOT, &args![f.at(-0x48), f.at(-0x128)]).f32();
+                    e.mem.set_f32(f.at(-0x148), dot);
+                    adjust_cover_key(e, f, dot);
+                }
+
+                // Height and side.
+                let height = e.mem.f32(f.at(-0x40));
+                let height = e.call(FLOAT_ABSOLUTE_VALUE, &args![height]).f64();
+                let allowed = e.call(COVER_MAX_HEIGHT_CHANGE, &args![request]).f64();
+                if allowed < height {
+                    continue;
+                }
+                let center_x = e.mem.f32(f.at(-0xf4)) as f64;
+                let center_y = e.mem.f32(f.at(-0xf0)) as f64;
+                let threat_x = e.mem.f32(f.at(-0xa0)) as f64;
+                let threat_y = e.mem.f32(f.at(-0x9c)) as f64;
+                let direction_x = e.mem.f32(f.at(-0x78)) as f64;
+                let direction_y = e.mem.f32(f.at(-0x74)) as f64;
+                let mut side = ((center_x - threat_x) * direction_x
+                    + (center_y - threat_y) * direction_y) as f32;
+                if fn_006d6df0(e, request) != 0 {
+                    side = -side;
+                }
+                let on_the_near_side = (side as f64) > e.global::<f64>(ZERO_DOUBLE);
+                if fn_006d6dd0(e, request) == 0 && !on_the_near_side {
+                    continue;
+                }
+
+                let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+                let normal = e
+                    .call(
+                        TRIANGLE_NORMAL,
+                        &args![navmesh, f.at(-0x1d8), triangle as u32],
+                    )
+                    .u32();
+                copy_words(e, f.at(-0x114), normal, 3);
+                for edge in 0..2u16 {
+                    e.call(
+                        TRIANGLE_EDGE_INFO,
+                        &args![record, edge as u32, f.at(-0x88), f.at(-0x8a), f.at(-0xb9)],
+                    );
+                    let class = e.mem.u16(f.at(-0x88));
+                    let hidden_only = e.mem.u8(f.at(-0x4d)) != 0;
+                    if class < 4 {
+                        if !(class == 2 && !hidden_only) {
+                            continue;
+                        }
+                    } else {
+                        let needed = if e.mem.u8(f.at(-0xd5)) != 0 {
+                            e.mem.u16(f.at(-0x94))
+                        } else {
+                            e.mem.u16(f.at(-0xe8))
+                        };
+                        if class < needed {
+                            continue;
+                        }
+                    }
+                    let first_flag = e.mem.u8(f.at(-0x8a));
+                    let second_flag = e.mem.u8(f.at(-0xb9));
+                    let crouch_class = e.mem.u16(f.at(-0x94));
+                    if first_flag == 0 && second_flag == 0 && class > crouch_class && !hidden_only {
+                        continue;
+                    }
+
+                    // The cover position: the edge's midpoint moved off
+                    // the edge by the actor radius.
+                    let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+                    e.call(
+                        NAVMESH_EDGE_VERTICES,
+                        &args![navmesh, f.at(-0x154), triangle as u32, edge as u32],
+                    );
+                    let first_vertex = e.mem.u32(f.at(-0x154));
+                    let second_vertex = e.mem.u32(f.at(-0x150));
+                    let along = e
+                        .call(
+                            POINT3_SUBTRACT,
+                            &args![second_vertex, f.at(-0x1e4), first_vertex],
+                        )
+                        .u32();
+                    copy_words(e, f.at(-0x3c), along, 3);
+                    let half = e.global::<f32>(EDGE_MIDPOINT_FRACTION);
+                    let half_way = e
+                        .call(POINT3_TIMES_SCALAR, &args![f.at(-0x3c), f.at(-0x1f0), half])
+                        .u32();
+                    let midpoint = e
+                        .call(POINT3_ADD, &args![first_vertex, f.at(-0x1fc), half_way])
+                        .u32();
+                    copy_words(e, f.at(-0xe4), midpoint, 3);
+                    let crossed = e
+                        .call(
+                            POINT3_CROSS,
+                            &args![f.at(-0x3c), f.at(-0x208), f.at(-0x114)],
+                        )
+                        .u32();
+                    copy_words(e, f.at(-0x64), crossed, 3);
+                    e.mem.set_f32(f.at(-0x5c), 0.0);
+                    e.call(POINT3_NORMALIZE, &args![f.at(-0x64)]);
+                    let radius = e.call(REQUEST_ACTOR_RADIUS, &args![request]).f32();
+                    let off_edge = e
+                        .call(
+                            POINT3_TIMES_SCALAR,
+                            &args![f.at(-0x64), f.at(-0x214), radius],
+                        )
+                        .u32();
+                    let position = e
+                        .call(POINT3_SUBTRACT, &args![f.at(-0xe4), f.at(-0x220), off_edge])
+                        .u32();
+                    copy_words(e, f.at(-0xd4), position, 3);
+                    for (to, from) in [(-0x70, -0xd4), (-0x6c, -0xd0)] {
+                        let value = e.mem.f32(f.at(from));
+                        e.mem.set_f32(f.at(to), value);
+                    }
+                    for (to, from, offset) in [
+                        (-0x58, first_vertex, 0u32),
+                        (-0x54, first_vertex, 4),
+                        (-0xc8, second_vertex, 0),
+                        (-0xc4, second_vertex, 4),
+                    ] {
+                        let value = e.mem.f32(from + offset);
+                        e.mem.set_f32(f.at(to), value);
+                    }
+                    if !e
+                        .call(
+                            COVER_EDGE_TEST,
+                            &args![f.at(-0x70), f.at(-0xa0), f.at(-0x58), f.at(-0xc8)],
+                        )
+                        .bool()
+                    {
+                        continue;
+                    }
+
+                    let cover = f.at(-0x1b4);
+                    let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+                    let info = e.call(NAVMESH_GET_INFO, &args![navmesh]).u32();
+                    fn_006d6e50(e, Ptr::new(cover), f.at(-0xd4), info, triangle);
+                    fn_006d6ee0(
+                        e,
+                        Ptr::new(cover),
+                        Ptr::new(second_vertex),
+                        Ptr::new(first_vertex),
+                        Ptr::new(f.at(-0x64)),
+                    );
+                    let stand_class = e.mem.u16(f.at(-0xe8));
+                    let crouch_class = e.mem.u16(f.at(-0x94));
+                    e.call(
+                        COVER_LOCATION_SET_COVER,
+                        &args![
+                            cover,
+                            class as u32,
+                            stand_class as u32,
+                            crouch_class as u32,
+                            first_flag as u32,
+                            second_flag as u32,
+                            edge as u32
+                        ],
+                    );
+
+                    // Where the key goes among the keys found so far.
+                    let mut position = 0u32;
+                    while position < count {
+                        let farthest_first = fn_006d6e10(e, request) != 0;
+                        let slot = e.call(POINTER_ARRAY_ELEMENT, &args![keys, position]).u32();
+                        let existing = e.mem.f32(slot);
+                        let key = e.mem.f32(f.at(-0xb8));
+                        let found = if farthest_first {
+                            existing < key
+                        } else {
+                            existing > key
+                        };
+                        if found {
+                            break;
+                        }
+                        position += 1;
+                    }
+                    e.call(KEY_ARRAY_INSERT, &args![keys, position, f.at(-0xb8)]);
+                    e.call(COVER_RESULTS_INSERT, &args![results, position, cover]);
+                    count += 1;
+                    let limit = e.call(COVER_MAX_RESULTS, &args![request]).u32();
+                    fn_006d32c0(e, Ptr::new(cover));
+                    if count >= limit {
+                        return finish(e, count);
+                    }
+                }
+            }
+            navmesh_index += 1;
+        }
+    })
+}
+
+/// The key adjustment of `fn_006d62e0` when the request has a projection
+/// vector: `key = 2 * dot * dot / key + key`, in the x87's extended
+/// precision, stored as a `float`.
+fn adjust_cover_key(e: &mut Engine, f: Frame, dot: f32) {
+    let key = e.mem.f32(f.at(-0xb8)) as f64;
+    let part = dot as f64 * dot as f64 / key;
+    e.mem.set_f32(f.at(-0xb8), (part + part + key) as f32);
+}
+
+// Translated from 006d6d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the request's `Threat` (+0xB0, three floats) to `out`; returns
+/// `out`.
+pub fn fn_006d6d60(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
+    copy_words(e, out.addr(), this.addr() + 0xb0, 3);
+    out
+}
+
+// Translated from 006d6d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The request's `fActorCrouchHeight` (+0xC0).
+pub fn fn_006d6d90(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0xc0)
+}
+
+// Translated from 006d6db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The request's `bCanCrouch` (+0xCC).
+pub fn fn_006d6db0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0xcc)
+}
+
+// Translated from 006d6dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The request's `bFindBothSides` (+0xCD).
+pub fn fn_006d6dd0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0xcd)
+}
+
+// Translated from 006d6df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The request's `bFindBehindTarget` (+0xCE).
+pub fn fn_006d6df0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0xce)
+}
+
+// Translated from 006d6e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The request's `bSortFarthestFirst` (+0xCF).
+pub fn fn_006d6e10(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0xcf)
+}
+
+// Translated from 006d6e30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The request's `bHideCover` (+0xD1).
+pub fn fn_006d6e30(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0xd1)
+}
+
+// Translated from 006d6e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of a `PathingCoverLocation` (Xbox PDB) at a navmesh point:
+/// the `PathingLocation` constructor for a position, navmesh info and
+/// triangle (`006dd010`), the derived vtable (`0106cbc0`) and three
+/// default-constructed points at +0x28, +0x34 and +0x40. Returns `this`.
+pub fn fn_006d6e50(
+    e: &mut Engine,
+    this: Ptr<PathingCoverLocation>,
+    position: u32,
+    info: u32,
+    triangle: u16,
+) -> Ptr<PathingCoverLocation> {
+    e.call(
+        LOCATION_CONSTRUCT_FROM_MESH_POINT,
+        &args![this, position, info, triangle],
+    );
+    e.mem.set_u32(this.addr(), PATHING_COVER_LOCATION_VTABLE);
+    for offset in [0x28u32, 0x34, 0x40] {
+        e.call(POINT3_DEFAULT_CONSTRUCTOR, &args![this.addr() + offset]);
+    }
+    this
+}
+
+// Translated from 006d6ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the three points of a `PathingCoverLocation` (the left vertex
+/// at +0x28, the right vertex at +0x34 and the edge direction at +0x40)
+/// from the three points given.
+pub fn fn_006d6ee0(
+    e: &mut Engine,
+    this: Ptr<PathingCoverLocation>,
+    left: Ptr,
+    right: Ptr,
+    direction: Ptr,
+) {
+    copy_words(e, this.addr() + 0x28, left.addr(), 3);
+    copy_words(e, this.addr() + 0x34, right.addr(), 3);
+    copy_words(e, this.addr() + 0x40, direction.addr(), 3);
+}
+
+// Translated from 006d6f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Pathing::GetPotentialNavMeshInfoForLocation` (Xbox PDB): the navmesh
+/// info of the cell the map knows (`NavMeshInfoMap::FindNavMeshInfoForCell`
+/// of the map `TES::GetNavMeshInfoMap` gives for the global `TES`).
+pub fn pathing_get_potential_nav_mesh_info_for_location(e: &mut Engine, cell: u32) -> u32 {
+    let tes = e.global::<u32>(TES_GLOBAL);
+    let map = e.call(TES_GET_NAVMESH_INFO_MAP, &args![tes]).u32();
+    e.call(NAVMESH_INFO_MAP_FIND_FOR_CELL, &args![map, cell])
+        .u32()
+}
+
+// Translated from 006d6f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Pathing::GetPotentialNavMeshInfoForLocation_ov2` (Xbox PDB): the same
+/// through the map's lookup by two words (`006b7850`).
+pub fn pathing_get_potential_nav_mesh_info_for_location_ov2(
+    e: &mut Engine,
+    first: u32,
+    second: u32,
+) -> u32 {
+    let tes = e.global::<u32>(TES_GLOBAL);
+    let map = e.call(TES_GET_NAVMESH_INFO_MAP, &args![tes]).u32();
+    e.call(NAVMESH_INFO_MAP_FIND_BY_PAIR, &args![map, first, second])
+        .u32()
+}
+
+// Translated from 006d6f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Pathing::FindClosestPointOnNavmesh` (Xbox PDB): the point of the
+/// navmesh closest to `point` in a worldspace and cell. A location built
+/// from the three that already has navmesh info keeps the point as it is.
+/// Otherwise the location is resolved to the closest navmesh and triangle
+/// and `out` is that triangle's center. Fails when it cannot resolve one.
+/// The scope timer of line 0x906 covers the call.
+pub fn pathing_find_closest_point_on_navmesh(
+    e: &mut Engine,
+    worldspace: u32,
+    cell: u32,
+    point: Ptr,
+    out: Ptr,
+) -> bool {
+    with_frame(e, 0x60, |e, f| {
+        let timer = f.at(-0x10);
+        scope_enter(e, timer, 0x906);
+        let location = f.at(-0x38);
+        e.call(
+            LOCATION_CONSTRUCT_FROM_PARTS,
+            &args![location, point, cell, worldspace],
+        );
+        let finish = |e: &mut Engine, result: bool| {
+            e.call(LOCATION_DESTRUCT, &args![location]);
+            scope_leave(e, timer);
+            result
+        };
+        if e.call(LOCATION_RESOLVE_NAVMESH_INFO, &args![location, 0u32])
+            .bool()
+            && e.call(LOCATION_HAS_NAVMESH_INFO, &args![location]).bool()
+        {
+            copy_words(e, out.addr(), point.addr(), 3);
+            return finish(e, true);
+        }
+        if e.call(LOCATION_RESOLVE_CLOSEST, &args![location]).bool() {
+            let holder = f.at(-0x40);
+            e.call(NAV_HOLDER_CONSTRUCT, &args![holder]);
+            let triangle = f.at(-0x3c);
+            if e.call(
+                LOCATION_GET_NAVMESH_AND_TRIANGLE,
+                &args![location, holder, triangle],
+            )
+            .bool()
+            {
+                let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+                let center = e
+                    .call(
+                        NAVMESH_GET_CENTER,
+                        &args![navmesh, f.at(-0x50), e.mem.u16(triangle) as u32],
+                    )
+                    .u32();
+                copy_words(e, out.addr(), center, 3);
+                e.call(NAV_HOLDER_RELEASE, &args![holder]);
+                return finish(e, true);
+            }
+            e.call(NAV_HOLDER_RELEASE, &args![holder]);
+        }
+        finish(e, false)
+    })
+}
+
+// Translated from 006d7110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Pathing::FindPointOnNavMesh` (Xbox PDB): a point of the navmesh within
+/// `radius` of `point` in a worldspace and cell, stored in `out`.
+///
+/// When the location built from the three has no navmesh info or no
+/// navmesh (`PathingLocation::GetNavMesh`), `out` is `point` plus a random
+/// planar offset: `x` in `[-radius, radius]`, `y` in `[-s, s]` with
+/// `s = sqrt(radius * radius - x * x)` (the square root wrapper
+/// `004019b0`), and always succeeds. Otherwise the navmesh is asked
+/// whether it has a point near `point` within `radius` (`00697c10`) and
+/// whether that point is acceptable (`00697670`, with 0); when either
+/// says no, the closest triangle for the point is used and `out` is its
+/// center; if there is none the function fails.
+pub fn pathing_find_point_on_nav_mesh(
+    e: &mut Engine,
+    worldspace: u32,
+    cell: u32,
+    point: Ptr,
+    radius: f32,
+    out: Ptr,
+) -> bool {
+    with_frame(e, 0x80, |e, f| {
+        let location = f.at(-0x38);
+        e.call(
+            LOCATION_CONSTRUCT_FROM_PARTS,
+            &args![location, point, cell, worldspace],
+        );
+        let mut has_navmesh = true;
+        if !e
+            .call(LOCATION_RESOLVE_NAVMESH_INFO, &args![location, 0u32])
+            .bool()
+        {
+            has_navmesh = false;
+        }
+        let holder = f.at(-0x3c);
+        e.call(NAV_HOLDER_CONSTRUCT, &args![holder]);
+        if !e
+            .call(LOCATION_GET_NAVMESH, &args![location, holder])
+            .bool()
+        {
+            has_navmesh = false;
+        }
+        if !has_navmesh {
+            let x = e.call(RANDOM_FLOAT, &args![-radius, radius]).f32();
+            e.mem.set_f32(f.at(-0x40), x);
+            let remaining = (radius as f64 * radius as f64 - x as f64 * x as f64) as f32;
+            e.mem.set_f32(f.at(-0x7c), remaining);
+            let limit = e.call(SQUARE_ROOT_WRAPPER, &args![remaining]).f32();
+            e.mem.set_f32(f.at(-0x44), limit);
+            let y = e.call(RANDOM_FLOAT, &args![-limit, limit]).f32();
+            e.mem.set_f32(f.at(-0x44), y);
+            let offset = e
+                .call(POINT3_CONSTRUCT, &args![f.at(-0x58), x, y, 0.0f32])
+                .u32();
+            let moved = e.call(POINT3_ADD, &args![point, f.at(-0x64), offset]).u32();
+            copy_words(e, out.addr(), moved, 3);
+            e.call(NAV_HOLDER_RELEASE, &args![holder]);
+            e.call(LOCATION_DESTRUCT, &args![location]);
+            return true;
+        }
+        let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+        let near = e
+            .call(NAVMESH_PROBE_A, &args![navmesh, point, radius, out])
+            .bool();
+        let mut settled = false;
+        if near {
+            let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+            settled = e.call(NAVMESH_PROBE_B, &args![navmesh, out, 0u32]).bool();
+        }
+        if !settled {
+            let triangle = f.at(-0x48);
+            e.mem.set_u16(triangle, 0xffff);
+            let flag = f.at(-0x49);
+            e.mem.set_u8(flag, 0);
+            let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+            if !e
+                .call(
+                    NAVMESH_FIND_TRIANGLE,
+                    &args![navmesh, point, triangle, flag],
+                )
+                .bool()
+            {
+                e.call(NAV_HOLDER_RELEASE, &args![holder]);
+                e.call(LOCATION_DESTRUCT, &args![location]);
+                return false;
+            }
+            let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+            let center = e
+                .call(
+                    NAVMESH_GET_CENTER,
+                    &args![navmesh, f.at(-0x74), e.mem.u16(triangle) as u32],
+                )
+                .u32();
+            copy_words(e, out.addr(), center, 3);
+        }
+        e.call(NAV_HOLDER_RELEASE, &args![holder]);
+        e.call(LOCATION_DESTRUCT, &args![location]);
+        true
+    })
+}
+
+// Translated from 006d7350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Pathing::CheckLineOfSight` (Xbox PDB): whether there is a line of sight
+/// from the location `from` to the location `to`. A non-null `result` first
+/// receives a copy of `from` (it is updated by the walk). When `to` has no
+/// navmesh info the answer is true only if `from` has none either.
+/// Otherwise `fn_006d74c0` walks from `from` towards the position of `to`,
+/// given `to`'s navmesh and triangle when `GetNavMeshAndTriangle` finds
+/// them (else no navmesh and triangle 0xffff).
+pub fn pathing_check_line_of_sight(
+    e: &mut Engine,
+    from: Ptr,
+    to: Ptr,
+    result: Ptr,
+    filter: Ptr,
+) -> bool {
+    with_frame(e, 0x40, |e, f| {
+        if result.addr() != 0 {
+            e.call(LOCATION_ASSIGN, &args![result, from]);
+        }
+        if !e
+            .call(LOCATION_RESOLVE_NAVMESH_INFO, &args![to, 0u32])
+            .bool()
+        {
+            return !e
+                .call(LOCATION_RESOLVE_NAVMESH_INFO, &args![from, 0u32])
+                .bool();
+        }
+        let holder = f.at(-0x14);
+        e.call(NAV_HOLDER_CONSTRUCT, &args![holder]);
+        let triangle = f.at(-0x10);
+        let found = if !e
+            .call(
+                LOCATION_GET_NAVMESH_AND_TRIANGLE,
+                &args![to, holder, triangle],
+            )
+            .bool()
+        {
+            let position = e
+                .call(LOCATION_COPY_POSITION, &args![to, f.at(-0x24)])
+                .u32();
+            fn_006d74c0(e, from, Ptr::new(position), 0, 0xffff, result, filter)
+        } else {
+            let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+            let position = e
+                .call(LOCATION_COPY_POSITION, &args![to, f.at(-0x34)])
+                .u32();
+            fn_006d74c0(
+                e,
+                from,
+                Ptr::new(position),
+                navmesh,
+                e.mem.u16(triangle) as u32,
+                result,
+                filter,
+            )
+        };
+        e.call(NAV_HOLDER_RELEASE, &args![holder]);
+        found
+    })
+}
+
+// Translated from 006d7490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Pathing::CheckLineOfSight_ov2` (Xbox PDB): `fn_006d74c0` with no
+/// target navmesh and triangle 0xffff.
+pub fn pathing_check_line_of_sight_ov2(
+    e: &mut Engine,
+    from: Ptr,
+    to: Ptr,
+    result: Ptr,
+    filter: Ptr,
+) -> bool {
+    fn_006d74c0(e, from, to, 0, 0xffff, result, filter)
+}
+
+// Translated from 006d74c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Pathing::CheckLineOfSight_ov3` (Xbox PDB): walks the navmesh triangles
+/// from the location `start` along the segment to the position `end`.
+///
+/// A non-null `result` first receives a copy of `start`; it ends up at the
+/// last place reached. Without navmesh info for `start` the answer is
+/// whether `target_navmesh` is null. The walk keeps a 2D hit point and the
+/// current triangle: `00698060` gives the edge of the current triangle the
+/// segment leaves through (-1 when the end lies inside); `0068f3b0` finds
+/// the triangle across it (the navmesh may change; `fn_006d7a20` tells,
+/// and then the hit point is recomputed on the new edge with `006ba3d0`);
+/// the optional `filter` object (its virtual slot 0, called with copies of
+/// the two edge references) may refuse the crossing, as may an edge whose
+/// extra info is 1. A refused crossing fails and puts `result` at the
+/// current triangle, with the hit point and the triangle center's height.
+/// When the end is reached: without a target the answer is true and
+/// `result` is the end position in the current triangle; with a target
+/// navmesh and triangle the walk must have ended in exactly that one.
+pub fn fn_006d74c0(
+    e: &mut Engine,
+    start: Ptr,
+    end: Ptr,
+    target_navmesh: u32,
+    target_triangle: u32,
+    result: Ptr,
+    filter: Ptr,
+) -> bool {
+    with_frame(e, 0x120, |e, f| {
+        if result.addr() != 0 {
+            e.call(LOCATION_ASSIGN, &args![result, start]);
+        }
+        if !e
+            .call(LOCATION_RESOLVE_NAVMESH_INFO, &args![start, 0u32])
+            .bool()
+        {
+            return target_navmesh == 0;
+        }
+        let start_holder = f.at(-0x38);
+        e.call(NAV_HOLDER_CONSTRUCT, &args![start_holder]);
+        let start_triangle = f.at(-0x14);
+        if !e
+            .call(
+                LOCATION_GET_NAVMESH_AND_TRIANGLE,
+                &args![start, start_holder, start_triangle],
+            )
+            .bool()
+        {
+            e.call(NAV_HOLDER_RELEASE, &args![start_holder]);
+            return false;
+        }
+        let position = e
+            .call(LOCATION_COPY_POSITION, &args![start, f.at(-0x94)])
+            .u32();
+        let start_y = e.mem.f32(position + 4);
+        let position = e
+            .call(LOCATION_COPY_POSITION, &args![start, f.at(-0xa0)])
+            .u32();
+        let start_x = e.mem.f32(position);
+        let start_2d = f.at(-0x30);
+        e.call(POINT2_CONSTRUCT, &args![start_2d, start_x, start_y]);
+        let end_y = e.mem.f32(end.addr() + 4);
+        let end_x = e.mem.f32(end.addr());
+        let end_2d = f.at(-0x28);
+        e.call(POINT2_CONSTRUCT, &args![end_2d, end_x, end_y]);
+        let hit = f.at(-0x1c);
+        e.call(POINT3_DEFAULT_CONSTRUCTOR, &args![hit]);
+        let holder = f.at(-0x10);
+        e.call(NAV_HOLDER_COPY_CONSTRUCT, &args![holder, start_holder]);
+        let current_triangle = f.at(-0x20);
+        let triangle = e.mem.u16(start_triangle);
+        e.mem.set_u16(current_triangle, triangle);
+        let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+        let mut edge = e
+            .call(
+                NAVMESH_CROSSED_EDGE,
+                &args![
+                    navmesh,
+                    triangle as u32,
+                    0xffff_ffffu32,
+                    start_2d,
+                    end_2d,
+                    hit
+                ],
+            )
+            .u32();
+        let next_holder = f.at(-0x48);
+        let next_triangle = f.at(-0x40);
+        let next_edge = f.at(-0x44);
+        while edge != 0xffff_ffff {
+            e.call(NAV_HOLDER_CONSTRUCT, &args![next_holder]);
+            let triangle = e.mem.u16(current_triangle) as u32;
+            let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+            let mut crossed = e
+                .call(
+                    NAVMESH_GET_MATCHING_EDGE_B,
+                    &args![
+                        navmesh,
+                        triangle,
+                        edge,
+                        next_holder,
+                        next_triangle,
+                        next_edge
+                    ],
+                )
+                .bool();
+            if crossed && filter.addr() != 0 {
+                let triangle = e.mem.u16(current_triangle) as u32;
+                let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+                let from_edge = f.at(-0x54);
+                e.call(
+                    EDGE_REFERENCE_CONSTRUCT,
+                    &args![from_edge, navmesh, triangle, edge],
+                );
+                let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![next_holder]).u32();
+                let to_edge = f.at(-0x60);
+                let next_triangle_value = e.mem.u16(next_triangle) as u32;
+                let next_edge_value = e.mem.u32(next_edge);
+                e.call(
+                    EDGE_REFERENCE_CONSTRUCT,
+                    &args![to_edge, navmesh, next_triangle_value, next_edge_value],
+                );
+                // The filter takes both references by value: copies of
+                // the references, the one for the source edge on top.
+                let to_copy = f.at(-0x110);
+                let from_copy = f.at(-0x11c);
+                e.call(EDGE_REFERENCE_COPY, &args![to_copy, to_edge]);
+                e.call(EDGE_REFERENCE_COPY, &args![from_copy, from_edge]);
+                let mut words = Vec::new();
+                for i in 0..3 {
+                    words.push(e.mem.u32(from_copy + 4 * i));
+                }
+                for i in 0..3 {
+                    words.push(e.mem.u32(to_copy + 4 * i));
+                }
+                crossed = e.vcall(filter.addr(), 0, &words).bool();
+            }
+            if crossed {
+                let triangle = e.mem.u16(current_triangle) as u32;
+                let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+                let info = e
+                    .call(NAVMESH_EDGE_EXTRA_INFO, &args![navmesh, triangle, edge])
+                    .u32();
+                if info != 0 && e.mem.u32(info) == 1 {
+                    crossed = false;
+                }
+            }
+            if !crossed {
+                if result.addr() != 0 {
+                    let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+                    let info = e.call(NAVMESH_GET_INFO, &args![navmesh]).u32();
+                    e.call(LOCATION_SET_NAVMESH_INFO, &args![result, info]);
+                    let triangle = e.mem.u16(current_triangle) as u32;
+                    e.call(LOCATION_SET_TRIANGLE, &args![result, triangle]);
+                    let triangle = e.mem.u16(current_triangle) as u32;
+                    let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+                    let center = e
+                        .call(NAVMESH_GET_CENTER, &args![navmesh, f.at(-0xc8), triangle])
+                        .u32();
+                    let center_height = e.mem.f32(center + 8);
+                    let hit_y = e.mem.f32(hit + 4);
+                    let hit_x = e.mem.f32(hit);
+                    let place = e
+                        .call(
+                            POINT3_CONSTRUCT,
+                            &args![f.at(-0xbc), hit_x, hit_y, center_height],
+                        )
+                        .u32();
+                    e.call(LOCATION_SET_POSITION, &args![result, place]);
+                }
+                e.call(NAV_HOLDER_RELEASE, &args![next_holder]);
+                e.call(NAV_HOLDER_RELEASE, &args![holder]);
+                e.call(NAV_HOLDER_RELEASE, &args![start_holder]);
+                return false;
+            }
+            if fn_006d7a20(e, Ptr::new(next_holder), Ptr::new(holder)) {
+                let triangle = e.mem.u16(next_triangle) as u32;
+                let edge_value = e.mem.u32(next_edge);
+                let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![next_holder]).u32();
+                let vertices = f.at(-0x84);
+                e.call(
+                    NAVMESH_EDGE_VERTICES,
+                    &args![navmesh, vertices, triangle, edge_value],
+                );
+                let first = e.mem.u32(vertices);
+                let first_y = e.mem.f32(first + 4);
+                let first_x = e.mem.f32(first);
+                e.call(POINT2_CONSTRUCT, &args![f.at(-0x7c), first_x, first_y]);
+                let second = e.mem.u32(vertices + 4);
+                let second_y = e.mem.f32(second + 4);
+                let second_x = e.mem.f32(second);
+                e.call(POINT2_CONSTRUCT, &args![f.at(-0x74), second_x, second_y]);
+                let closest = e
+                    .call(
+                        POINT2_SEGMENT_CLOSEST,
+                        &args![f.at(-0xb0), f.at(-0x7c), f.at(-0x74), hit, end_2d],
+                    )
+                    .u32();
+                let closest_x = e.mem.u32(closest);
+                let closest_y = e.mem.u32(closest + 4);
+                e.mem.set_u32(hit, closest_x);
+                e.mem.set_u32(hit + 4, closest_y);
+            }
+            let next_triangle_value = e.mem.u16(next_triangle);
+            e.mem.set_u16(current_triangle, next_triangle_value);
+            e.call(NAV_HOLDER_ASSIGN, &args![holder, next_holder]);
+            let new_hit = f.at(-0x6c);
+            e.call(POINT3_DEFAULT_CONSTRUCTOR, &args![new_hit]);
+            let triangle = e.mem.u16(next_triangle) as u32;
+            let edge_value = e.mem.u32(next_edge);
+            let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![next_holder]).u32();
+            edge = e
+                .call(
+                    NAVMESH_CROSSED_EDGE,
+                    &args![navmesh, triangle, edge_value, hit, end_2d, new_hit],
+                )
+                .u32();
+            let new_x = e.mem.u32(new_hit);
+            let new_y = e.mem.u32(new_hit + 4);
+            e.mem.set_u32(hit, new_x);
+            e.mem.set_u32(hit + 4, new_y);
+            e.call(NAV_HOLDER_RELEASE, &args![next_holder]);
+        }
+
+        let reached = if target_navmesh == 0 || (target_triangle & 0xffff) == 0xffff {
+            if result.addr() != 0 {
+                let navmesh = e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32();
+                let info = e.call(NAVMESH_GET_INFO, &args![navmesh]).u32();
+                e.call(LOCATION_SET_NAVMESH_INFO, &args![result, info]);
+                let triangle = e.mem.u16(current_triangle) as u32;
+                e.call(LOCATION_SET_TRIANGLE, &args![result, triangle]);
+                e.call(LOCATION_SET_POSITION, &args![result, end]);
+            }
+            true
+        } else if e.call(NI_POINTER_GET_FROM_FIELD, &args![holder]).u32() == target_navmesh
+            && e.mem.u16(current_triangle) as u32 == (target_triangle & 0xffff)
+        {
+            if result.addr() != 0 {
+                let info = e.call(NAVMESH_GET_INFO, &args![target_navmesh]).u32();
+                let place = f.at(-0xf4);
+                let built = e
+                    .call(
+                        LOCATION_CONSTRUCT_FROM_MESH_POINT,
+                        &args![place, end, info, target_triangle & 0xffff],
+                    )
+                    .u32();
+                e.call(LOCATION_ASSIGN, &args![result, built]);
+                e.call(LOCATION_DESTRUCT, &args![place]);
+            }
+            true
+        } else {
+            false
+        };
+        e.call(NAV_HOLDER_RELEASE, &args![holder]);
+        e.call(NAV_HOLDER_RELEASE, &args![start_holder]);
+        reached
+    })
+}
+
+// Translated from 006d7a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the first words of two `NiPointer` holders differ: `00631820`
+/// with `other`.
+pub fn fn_006d7a20(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    e.call(HOLDER_DIFFERS, &args![this, other]).bool()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2567,6 +5326,85 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d3780, pathing_find_safe_straight_line_path_point(Ptr, Ptr, f32, Ptr) -> bool),
         entry!(0x006d3ac0, fn_006d3ac0(Ptr, Ptr)),
         entry!(0x006d3ae0, fn_006d3ae0(Ptr<PathingRequest>, f32)),
+        entry!(0x006d3b00, fn_006d3b00(Ptr<PathingRequest>, f32)),
+        entry!(0x006d3b20, fn_006d3b20(Ptr<PathingRequest>)),
+        entry!(0x006d3b40, fn_006d3b40(Ptr<PathingRequest>, Ptr) -> bool),
+        entry!(0x006d3ff0, fn_006d3ff0(Ptr, Ptr)),
+        entry!(0x006d4020, fn_006d4020(Ptr, Ptr) -> i32),
+        entry!(0x006d4120, fn_006d4120(Ptr, u32, Ptr) -> u32),
+        entry!(0x006d4550, fn_006d4550(Ptr) -> Ptr),
+        entry!(0x006d4570, fn_006d4570(Ptr, f32, Ptr) -> bool),
+        entry!(0x006d4ca0, fn_006d4ca0(Ptr, Ptr) -> bool),
+        entry!(0x006d4ce0, fn_006d4ce0(Ptr, Ptr) -> Ptr),
+        entry!(
+            0x006d4d20,
+            pathing_build_teleport_door_path(Ptr, Ptr, Ptr, u32, f32, u32, u32) -> bool
+        ),
+        entry!(0x006d4eb0, pathing_compute_teleport_door_path_length(Ptr, Ptr, f32, u32, u32) -> f32),
+        entry!(0x006d4f70, pathing_build_low_path(Ptr, Ptr, Ptr, u32, u32) -> bool),
+        entry!(0x006d5320, fn_006d5320(Ptr) -> Ptr),
+        entry!(
+            0x006d5340,
+            fn_006d5340(Ptr<PathingRequest>, Ptr<PathingSolution>, u32, u32) -> u32
+        ),
+        entry!(
+            0x006d53b0,
+            fn_006d53b0(Ptr<PathingRequest>, Ptr<PathingSolution>) -> u32
+        ),
+        entry!(
+            0x006d5420,
+            fn_006d5420(Ptr<PathingRequest>, Ptr<PathingSolution>, u32) -> u32
+        ),
+        entry!(0x006d5490, fn_006d5490(Ptr, Ptr, Ptr, Ptr, Ptr) -> bool),
+        entry!(0x006d61b0, fn_006d61b0(Ptr, Ptr)),
+        entry!(0x006d61e0, fn_006d61e0(Ptr, u32)),
+        entry!(0x006d6200, pathing_compute_low_path_distance(Ptr, Ptr, Ptr) -> bool),
+        entry!(0x006d62c0, fn_006d62c0(Ptr, Ptr, Ptr) -> bool),
+        entry!(0x006d62e0, fn_006d62e0(Ptr, Ptr) -> u32),
+        entry!(0x006d6d60, fn_006d6d60(Ptr, Ptr) -> Ptr),
+        entry!(0x006d6d90, fn_006d6d90(Ptr) -> f32),
+        entry!(0x006d6db0, fn_006d6db0(Ptr) -> u8),
+        entry!(0x006d6dd0, fn_006d6dd0(Ptr) -> u8),
+        entry!(0x006d6df0, fn_006d6df0(Ptr) -> u8),
+        entry!(0x006d6e10, fn_006d6e10(Ptr) -> u8),
+        entry!(0x006d6e30, fn_006d6e30(Ptr) -> u8),
+        entry!(
+            0x006d6e50,
+            fn_006d6e50(Ptr<PathingCoverLocation>, u32, u32, u16) -> Ptr<PathingCoverLocation>
+        ),
+        entry!(
+            0x006d6ee0,
+            fn_006d6ee0(Ptr<PathingCoverLocation>, Ptr, Ptr, Ptr)
+        ),
+        entry!(
+            0x006d6f40,
+            pathing_get_potential_nav_mesh_info_for_location(u32) -> u32
+        ),
+        entry!(
+            0x006d6f60,
+            pathing_get_potential_nav_mesh_info_for_location_ov2(u32, u32) -> u32
+        ),
+        entry!(
+            0x006d6f80,
+            pathing_find_closest_point_on_navmesh(u32, u32, Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x006d7110,
+            pathing_find_point_on_nav_mesh(u32, u32, Ptr, f32, Ptr) -> bool
+        ),
+        entry!(
+            0x006d7350,
+            pathing_check_line_of_sight(Ptr, Ptr, Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x006d7490,
+            pathing_check_line_of_sight_ov2(Ptr, Ptr, Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x006d74c0,
+            fn_006d74c0(Ptr, Ptr, u32, u32, Ptr, Ptr) -> bool
+        ),
+        entry!(0x006d7a20, fn_006d7a20(Ptr, Ptr) -> bool),
     ]
 }
 
@@ -2725,6 +5563,136 @@ mod tests {
         RANDOM_POINT_SEARCH_BUILD_NODE_PATH,
         TIME_STAMP_CONSTRUCT,
         COVER_LOCATION_ARRAY_CONSTRUCT,
+        REQUEST_BASE_DESTRUCT,
+        LOCATION_HAS_NAVMESH_INFO,
+        LOCATION_NAVMESH_INFO_FIELD,
+        POINT_SEARCH_RUN,
+        REQUEST_CONSTRUCT,
+        REQUEST_COPY_TO,
+        CLOSE_POINT_REQUEST_CONSTRUCT,
+        SOLUTION_QUERY_006E7E70,
+        NAV_HOLDER_COPY_CONSTRUCT,
+        POINTER_ARRAY_ELEMENT,
+        NAVMESH_TRIANGLE_COUNT,
+        TRIANGLE_NEIGHBOUR,
+        NAVMESH_EDGE_POINTS,
+        POINT_SEGMENT_CLOSEST,
+        POINT_SEGMENT_DISTANCE,
+        POINT_PLANAR_LENGTH_SQUARED,
+        POINT3_LENGTH,
+        CANDIDATE_ARRAY_CONSTRUCT,
+        CANDIDATE_ARRAY_DESTRUCT,
+        CANDIDATE_ARRAY_ADD,
+        CANDIDATE_ARRAY_ELEMENT,
+        MINIMUM_UNSIGNED,
+        CANDIDATE_TO_PATH_POINT,
+        PATH_POINT_ARRAY_ADD,
+        QSORT,
+        PATH_POINT_ARRAY_CONSTRUCT,
+        PATH_POINT_ARRAY_ELEMENT,
+        PATH_POINT_ARRAY_DESTRUCT,
+        PATH_POINT_ASSIGN,
+        EDGE_ARRAY_CONSTRUCT,
+        EDGE_ARRAY_DESTRUCT,
+        EDGE_ARRAY_ADD,
+        TRIANGLE_ARRAY_CONSTRUCT,
+        TRIANGLE_ARRAY_DESTRUCT,
+        TRIANGLE_ARRAY_ADD,
+        ARRAY_ELEMENT_006A1440,
+        TRIANGLE_RECORD_CONSTRUCT,
+        TRIANGLE_REFERENCE_CONSTRUCT,
+        TRIANGLE_REFERENCE_ASSIGN,
+        EDGE_REFERENCE_CONSTRUCT,
+        NAVMESH_GET_MATCHING_EDGE,
+        EDGE_REFERENCE_ASSIGN,
+        TELEPORT_PATH_CONSTRUCT,
+        TELEPORT_PATH_DESTRUCT,
+        TELEPORT_PATH_CLEAR,
+        TELEPORT_PATH_COMPUTE_LENGTH,
+        TELEPORT_PATH_RESERVE_STEPS,
+        TELEPORT_PATH_RESERVE_DOORS,
+        TELEPORT_SEARCH_CONSTRUCT,
+        TELEPORT_SEARCH_BUILD_NODE_PATH,
+        TELEPORT_SEARCH_DESTRUCT,
+        LOW_PATH_SEARCH_CONSTRUCT,
+        LOW_PATH_SEARCH_RUN,
+        LOW_PATH_SEARCH_DESTRUCT,
+        INFO_ARRAY_CONSTRUCT,
+        INFO_ARRAY_DESTRUCT,
+        INFO_ARRAY_ADD,
+        REFERENCE_ARRAY_CONSTRUCT,
+        REFERENCE_ARRAY_DESTRUCT,
+        INFO_VALUE_A,
+        INFO_VALUE_B,
+        REFERENCE_GET_POSITION_OWNER,
+        PATH_STEP_ADD,
+        PATH_DOOR_ADD,
+        NEARBY_NAVMESHES_FILL,
+        COVER_MAX_RESULTS,
+        COVER_RESULTS_RESERVE,
+        COVER_RESULTS_INSERT,
+        KEY_ARRAY_CONSTRUCT,
+        KEY_ARRAY_INSERT,
+        KEY_ARRAY_DESTRUCT,
+        COVER_ACTOR_LOCATION,
+        COVER_ACTOR_HEIGHT,
+        COVER_MAX_DISTANCE,
+        COVER_MAX_HEIGHT_CHANGE,
+        COVER_PROJECTION_VECTOR,
+        COVER_SORT_FROM_TARGET,
+        POINT3_EQUALS,
+        POINT3_NOT_EQUALS,
+        POINT3_DOT,
+        POINT3_CROSS,
+        POINT2_CONSTRUCT,
+        HEIGHT_CLASS,
+        NAVMESH_LIST_B_CONSTRUCT,
+        NAVMESH_LIST_B_DESTRUCT,
+        NEARBY_NAVMESHES_FILL_B,
+        NAV_HOLDER_ASSIGN,
+        NAVMESH_COVER_ARRAY,
+        COVER_ARRAY_ELEMENT,
+        TRIANGLE_IS_COVER,
+        TRIANGLE_NORMAL,
+        TRIANGLE_EDGE_INFO,
+        NAVMESH_EDGE_VERTICES,
+        COVER_EDGE_TEST,
+        COVER_LOCATION_SET_COVER,
+        TES_GET_NAVMESH_INFO_MAP,
+        NAVMESH_INFO_MAP_FIND_FOR_CELL,
+        NAVMESH_INFO_MAP_FIND_BY_PAIR,
+        LOCATION_GET_NAVMESH,
+        SQUARE_ROOT_WRAPPER,
+        NAVMESH_PROBE_A,
+        NAVMESH_PROBE_B,
+        NAVMESH_FIND_TRIANGLE,
+        NAVMESH_CROSSED_EDGE,
+        NAVMESH_GET_MATCHING_EDGE_B,
+        EDGE_REFERENCE_COPY,
+        NAVMESH_EDGE_EXTRA_INFO,
+        LOCATION_SET_NAVMESH_INFO,
+        LOCATION_SET_TRIANGLE,
+        LOCATION_SET_POSITION,
+        POINT2_SEGMENT_CLOSEST,
+        HOLDER_DIFFERS,
+        BASE_SOLVER_METHOD_006C9170,
+        BASE_SOLVER_METHOD_006C93D0,
+        BASE_SOLVER_METHOD_006C93F0,
+        NAVMESH_SEARCH_CONSTRUCT,
+        NAVMESH_SEARCH_RUN,
+        NAVMESH_SEARCH_DESTRUCT,
+        NODE_ARRAY_A_DEFAULT_CONSTRUCT,
+        PATH_ARRAY_PREPARE,
+        PATH_ARRAY_CAPACITY,
+        PATH_ARRAY_RESERVE,
+        PATH_ARRAY_ELEMENT,
+        PATH_ARRAY_REMOVE,
+        NODE_ARRAY_REMOVE,
+        NODE_ARRAY_B_ELEMENT,
+        PORTAL_CLIP,
+        LINE_REACHES,
+        DEBUG_HOOK,
+        AVOID_NODE_ARRAY_ASSIGN,
     ];
 
     /// The pages the translations read constants and globals from.
@@ -2739,6 +5707,12 @@ mod tests {
         0x011a_9000,
         0x011f_2000,
         0x011f_4000,
+        0x0101_2000,
+        0x0101_6000,
+        0x0101_7000,
+        0x0104_e000,
+        0x011d_7000,
+        0x011d_e000,
     ];
 
     /// Points recorded by a double.
@@ -4709,8 +7683,3044 @@ mod tests {
         assert_eq!(e.get(request, PathingRequest::fActorRadius), 12.5);
     }
 
+    // ======================================================================
+    // Second batch: 006d3b00 to 006d7a20
+    // ======================================================================
+
+    /// A fake array of the game: where it keeps its elements and how many.
+    #[derive(Clone, Copy)]
+    struct FakeArray {
+        storage: u32,
+        stride: u32,
+        count: u32,
+    }
+
+    /// The game's arrays, faked: the accessors every solver shares (element
+    /// count, emptiness, element address) answer for each array a test has
+    /// registered, over storage the array keeps in the engine's memory.
+    #[derive(Clone, Default)]
+    struct Arrays(Rc<RefCell<std::collections::HashMap<u32, FakeArray>>>);
+
+    impl Arrays {
+        /// Registers an array the test builds itself.
+        fn make(&self, e: &mut Engine, array: u32, stride: u32) {
+            let storage = e.mem.alloc(stride * 16);
+            self.0.borrow_mut().insert(
+                array,
+                FakeArray {
+                    storage,
+                    stride,
+                    count: 0,
+                },
+            );
+        }
+
+        /// Makes `construct` (ECX = the array) register a fake array of
+        /// `stride`-byte elements, with room for 16.
+        fn constructor(&self, e: &mut Engine, construct: u32, stride: u32) {
+            let arrays = self.clone();
+            e.register_double(construct, move |e, a| {
+                arrays.make(e, a[0], stride);
+                ret(a[0])
+            });
+        }
+
+        /// `add` (ECX = array, stack: address of the element) appends a copy
+        /// of the element.
+        fn appender(&self, e: &mut Engine, add: u32) {
+            let arrays = self.clone();
+            e.register_double(add, move |e, a| {
+                arrays.push(e, a[0], a[1]);
+                Ret::default()
+            });
+        }
+
+        /// `insert` (ECX = array, stack: index, address of the element)
+        /// inserts a copy of the element at the index.
+        fn inserter(&self, e: &mut Engine, insert: u32) {
+            let arrays = self.clone();
+            e.register_double(insert, move |e, a| {
+                let item = arrays.0.borrow()[&a[0]];
+                let index = a[1];
+                for i in (index..item.count).rev() {
+                    for word in 0..item.stride / 4 {
+                        let value = e.mem.u32(item.storage + i * item.stride + 4 * word);
+                        e.mem
+                            .set_u32(item.storage + (i + 1) * item.stride + 4 * word, value);
+                    }
+                }
+                for word in 0..item.stride / 4 {
+                    let value = e.mem.u32(a[2] + 4 * word);
+                    e.mem
+                        .set_u32(item.storage + index * item.stride + 4 * word, value);
+                }
+                arrays.0.borrow_mut().get_mut(&a[0]).unwrap().count += 1;
+                Ret::default()
+            });
+        }
+
+        /// `remove` (ECX = array, stack: first, count, 0) removes entries.
+        fn remover(&self, e: &mut Engine, remove: u32) {
+            let arrays = self.clone();
+            e.register_double(remove, move |e, a| {
+                let item = arrays.0.borrow()[&a[0]];
+                let (first, removed) = (a[1], a[2]);
+                for i in first..item.count - removed {
+                    for word in 0..item.stride / 4 {
+                        let value = e
+                            .mem
+                            .u32(item.storage + (i + removed) * item.stride + 4 * word);
+                        e.mem
+                            .set_u32(item.storage + i * item.stride + 4 * word, value);
+                    }
+                }
+                arrays.0.borrow_mut().get_mut(&a[0]).unwrap().count -= removed;
+                Ret::default()
+            });
+        }
+
+        /// Appends a copy of the `stride` bytes at `source`; returns the
+        /// index.
+        fn push(&self, e: &mut Engine, array: u32, source: u32) -> u32 {
+            let mut map = self.0.borrow_mut();
+            let item = map.get_mut(&array).expect("a registered array");
+            let index = item.count;
+            for word in 0..item.stride / 4 {
+                let value = e.mem.u32(source + 4 * word);
+                e.mem
+                    .set_u32(item.storage + index * item.stride + 4 * word, value);
+            }
+            item.count += 1;
+            index
+        }
+
+        /// Appends one word.
+        fn push_word(&self, e: &mut Engine, array: u32, value: u32) -> u32 {
+            let scratch = e.mem.alloc(4);
+            e.mem.set_u32(scratch, value);
+            self.push(e, array, scratch)
+        }
+
+        fn count(&self, array: u32) -> u32 {
+            self.0.borrow().get(&array).map_or(0, |item| item.count)
+        }
+
+        /// The address of the element.
+        fn element(&self, array: u32, index: u32) -> u32 {
+            let item = self.0.borrow()[&array];
+            item.storage + index * item.stride
+        }
+
+        /// Registers the element count, the emptiness test and the given
+        /// element getters (ECX = array, stack: index) for every array.
+        fn accessors(&self, e: &mut Engine, getters: &[u32]) {
+            let arrays = self.clone();
+            e.register_double(ARRAY_COUNT, move |_, a| ret(arrays.count(a[0])));
+            let arrays = self.clone();
+            e.register_double(ARRAY_IS_EMPTY, move |_, a| {
+                ret((arrays.count(a[0]) == 0) as u32)
+            });
+            for getter in getters {
+                let arrays = self.clone();
+                e.register_double(*getter, move |_, a| ret(arrays.element(a[0], a[1])));
+            }
+        }
+    }
+
+    /// A navmesh the second batch's tests use, and the address its triangle
+    /// records start at (a record is `TRIANGLE_RECORDS + 0x10 * triangle`).
+    const NAV: u32 = 0x00c0_0300;
+    const TRIANGLE_RECORDS: u32 = 0x00d6_0000;
+
+    /// Writes the three corners (0, 0, 0), (10, 0, 0) and (0, 10, 0) and
+    /// returns their address.
+    fn corner_points(e: &mut Engine) -> u32 {
+        let corners = e.mem.alloc(36);
+        set_point(e, corners, [0.0, 0.0, 0.0]);
+        set_point(e, corners + 12, [10.0, 0.0, 0.0]);
+        set_point(e, corners + 24, [0.0, 10.0, 0.0]);
+        corners
+    }
+
+    /// `cdecl (out, point, a, b)`: the closest point of the segment `a b`
+    /// to `point`.
+    fn segment_closest(e: &mut Engine, a: &[u32]) -> Ret {
+        let (point, start, end) = (point(e, a[1]), point(e, a[2]), point(e, a[3]));
+        let direction = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
+        let length_squared: f32 = direction.iter().map(|d| d * d).sum();
+        let along: f32 = (0..3)
+            .map(|i| (point[i] - start[i]) * direction[i])
+            .sum::<f32>()
+            / length_squared;
+        let along = along.clamp(0.0, 1.0);
+        let closest = [
+            start[0] + along * direction[0],
+            start[1] + along * direction[1],
+            start[2] + along * direction[2],
+        ];
+        set_point(e, a[0], closest);
+        ret(a[0])
+    }
+
+    /// `cdecl (point, a, b, flag)`, `ST0`: the distance from `point` to the
+    /// segment `a b`.
+    fn segment_distance(e: &mut Engine, a: &[u32]) -> Ret {
+        let scratch = e.mem.alloc(12);
+        segment_closest(e, &[scratch, a[0], a[1], a[2]]);
+        let (point, closest) = (point(e, a[0]), point(e, scratch));
+        ret_float(
+            (0..3)
+                .map(|i| (point[i] - closest[i]).powi(2))
+                .sum::<f32>()
+                .sqrt(),
+        )
+    }
+
+    // -- 006d3b00 and 006d3b20 ---------------------------------------------
+
     #[test]
-    fn funcs_cover_the_forty_functions() {
-        assert_eq!(funcs().len(), 40);
+    fn target_radius_setter_stores_the_float() {
+        let mut e = engine();
+        let (request, _) = objects(&mut e);
+        fn_006d3b00(&mut e, request, 6.5);
+        assert_eq!(e.get(request, PathingRequest::fTargetRadius), 6.5);
+        assert_eq!(e.mem.f32(request.addr() + 0x74), 6.5);
+    }
+
+    #[test]
+    fn safe_straight_line_destructor_runs_the_base_destructor() {
+        let mut e = engine();
+        let (request, _) = objects(&mut e);
+        e.call_log = Some(vec![]);
+        fn_006d3b20(&mut e, request);
+        assert_eq!(
+            log_of(&mut e),
+            vec![(REQUEST_BASE_DESTRUCT, vec![request.addr()])]
+        );
+    }
+
+    // -- 006d3b40 and 006d3ff0 ---------------------------------------------
+
+    /// `random_point_setup` (a resolvable request whose random-point search
+    /// works) with the doubles of `fn_006d3b40`: the point search finds
+    /// nothing, the base solver succeeds and the solution query fails.
+    fn safe_line_setup() -> (Engine, Ptr<PathingRequest>) {
+        let (mut e, request, _) = random_point_setup();
+        e.register(POINT_SEARCH_RUN, |_, _| ret(0));
+        e.register(BASE_SOLVER_RUN, |_, _| ret(1));
+        e.register(SOLUTION_NODE_COUNT, |_, _| ret(5));
+        e.register(SOLUTION_QUERY_006E7E70, |_, _| ret(0));
+        e.mem.set_f32(request.addr() + 0xb0, 7.5);
+        e.mem.set_f32(request.addr() + 0xb4, 20.0);
+        (e, request)
+    }
+
+    #[test]
+    fn safe_line_point_search_result_is_copied_out() {
+        let (mut e, request) = safe_line_setup();
+        let found = Rc::new(RefCell::new(Vec::new()));
+        let sink = found.clone();
+        e.register_double(POINT_SEARCH_RUN, move |e, a| {
+            // The point the search found is at search + 0x20cc.
+            set_point(e, a[0] + 0x20cc, [1.0, 2.0, 3.0]);
+            sink.borrow_mut()
+                .push((a.to_vec(), e.mem.u32(a[2]), e.mem.u16(a[2] + 4)));
+            ret(1)
+        });
+        let out = e.mem.alloc(12);
+        e.call_log = Some(vec![]);
+        assert!(fn_006d3b40(&mut e, request, Ptr::new(out)));
+        let log = log_of(&mut e);
+        assert_eq!(point(&e, out), [1.0, 2.0, 3.0]);
+        // The search got the request and the start node (navmesh and
+        // triangle of the origin).
+        let found = found.borrow();
+        assert_eq!(found[0].0[1], request.addr());
+        assert_eq!((found[0].1, found[0].2), (NAVMESH, 9));
+        // Nothing else was tried; the list, the search and the two holders
+        // were released in that order.
+        assert!(calls_to(&log, REQUEST_CONSTRUCT).is_empty());
+        let order: Vec<u32> = log
+            .iter()
+            .map(|(callee, _)| *callee)
+            .filter(|callee| {
+                [
+                    NAVMESH_LIST_DESTRUCT,
+                    HIDE_SEARCH_DESTRUCT,
+                    NAV_HOLDER_RELEASE,
+                ]
+                .contains(callee)
+            })
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                NAVMESH_LIST_DESTRUCT,
+                HIDE_SEARCH_DESTRUCT,
+                NAV_HOLDER_RELEASE,
+                NAV_HOLDER_RELEASE
+            ]
+        );
+    }
+
+    #[test]
+    fn safe_line_asks_the_solution_for_a_point() {
+        let (mut e, request) = safe_line_setup();
+        let query = Rc::new(RefCell::new(Vec::new()));
+        let sink = query.clone();
+        e.register_double(SOLUTION_QUERY_006E7E70, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            ret(1)
+        });
+        let out = e.mem.alloc(12);
+        e.call_log = Some(vec![]);
+        assert!(fn_006d3b40(&mut e, request, Ptr::new(out)));
+        let log = log_of(&mut e);
+        // The last node index (5 nodes), the minimum distance, 0 and the
+        // out point.
+        let query = query.borrow();
+        assert_eq!(query[0][1..4], [4.0f32.to_bits(), 7.5f32.to_bits(), 0u32]);
+        assert_eq!(query[0][5], out);
+        let solution = query[0][0];
+        // The copy of the request is built, solved and destroyed with the
+        // solution; no close-point request is needed.
+        let copy = calls_to(&log, REQUEST_CONSTRUCT)[0][0];
+        assert_eq!(
+            calls_to(&log, REQUEST_COPY_TO),
+            vec![vec![request.addr(), copy]]
+        );
+        assert_eq!(calls_to(&log, SOLUTION_DESTRUCT), vec![vec![solution]]);
+        assert_eq!(calls_to(&log, REQUEST_COPY_DESTRUCT), vec![vec![copy]]);
+        assert!(calls_to(&log, CLOSE_POINT_REQUEST_CONSTRUCT).is_empty());
+    }
+
+    #[test]
+    fn safe_line_falls_back_to_a_random_point_near_the_destination() {
+        let (mut e, request) = safe_line_setup();
+        let out = e.mem.alloc(12);
+        e.call_log = Some(vec![]);
+        assert!(fn_006d3b40(&mut e, request, Ptr::new(out)));
+        let log = log_of(&mut e);
+        // The random point (1, 1, 0) of the triangle of the close-point
+        // request, which starts at the destination and keeps the
+        // distances.
+        assert_eq!(point(&e, out), [1.0, 1.0, 0.0]);
+        let close = calls_to(&log, CLOSE_POINT_REQUEST_CONSTRUCT)[0][0];
+        assert_eq!(
+            calls_to(&log, LOCATION_ASSIGN),
+            vec![vec![close + 0xc, request.addr() + 0x34]]
+        );
+        assert_eq!(
+            calls_to(&log, REQUEST_SET_MINIMUM_DISTANCE),
+            vec![vec![close, 7.5f32.to_bits()]]
+        );
+        assert_eq!(
+            calls_to(&log, REQUEST_SET_MAXIMUM_DISTANCE),
+            vec![vec![close, 20.0f32.to_bits()]]
+        );
+        assert_eq!(calls_to(&log, REQUEST_BASE_DESTRUCT), vec![vec![close]]);
+        // Both requests, the solution and the holders are cleaned up.
+        assert_eq!(calls_to(&log, SOLUTION_DESTRUCT).len(), 1);
+        assert_eq!(calls_to(&log, REQUEST_COPY_DESTRUCT).len(), 1);
+        assert_eq!(calls_to(&log, NAVMESH_LIST_DESTRUCT).len(), 2);
+    }
+
+    #[test]
+    fn safe_line_fails_when_nothing_finds_a_point() {
+        // The base solver fails: no solution query, no fallback.
+        let (mut e, request) = safe_line_setup();
+        e.register(BASE_SOLVER_RUN, |_, _| ret(0));
+        let out = e.mem.alloc(12);
+        e.call_log = Some(vec![]);
+        assert!(!fn_006d3b40(&mut e, request, Ptr::new(out)));
+        let log = log_of(&mut e);
+        assert!(calls_to(&log, SOLUTION_QUERY_006E7E70).is_empty());
+        assert!(calls_to(&log, CLOSE_POINT_REQUEST_CONSTRUCT).is_empty());
+        assert_eq!(calls_to(&log, SOLUTION_DESTRUCT).len(), 1);
+
+        // The random point search fails too.
+        let (mut e, request) = safe_line_setup();
+        e.register(RANDOM_POINT_SEARCH_BUILD_NODE_PATH, |_, _| ret(0));
+        assert!(!fn_006d3b40(&mut e, request, Ptr::new(out)));
+
+        // The origin or the destination does not resolve.
+        let (mut e, request) = safe_line_setup();
+        e.register(LOCATION_RESOLVE_CLOSEST, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        assert!(!fn_006d3b40(&mut e, request, Ptr::new(out)));
+        assert!(calls_to(&log_of(&mut e), NAV_HOLDER_CONSTRUCT).is_empty());
+        let (mut e, request) = safe_line_setup();
+        let resolved = Rc::new(RefCell::new(0));
+        let counter = resolved.clone();
+        e.register_double(LOCATION_RESOLVE_CLOSEST, move |_, _| {
+            *counter.borrow_mut() += 1;
+            ret((*counter.borrow() < 2) as u32)
+        });
+        e.call_log = Some(vec![]);
+        assert!(!fn_006d3b40(&mut e, request, Ptr::new(out)));
+        let log = log_of(&mut e);
+        assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 1);
+        assert!(calls_to(&log, POINT_SEARCH_RUN).is_empty());
+        // Neither triangle of origin or destination.
+        let (mut e, request) = safe_line_setup();
+        e.register(LOCATION_GET_NAVMESH_AND_TRIANGLE, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        assert!(!fn_006d3b40(&mut e, request, Ptr::new(out)));
+        assert_eq!(calls_to(&log_of(&mut e), NAV_HOLDER_RELEASE).len(), 1);
+    }
+
+    #[test]
+    fn found_point_is_copied_from_the_search() {
+        let mut e = engine();
+        let search = e.mem.alloc(0x2100);
+        set_point(&mut e, search + 0x20cc, [4.0, 5.0, 6.0]);
+        let out = e.mem.alloc(12);
+        fn_006d3ff0(&mut e, Ptr::new(search), Ptr::new(out));
+        assert_eq!(point(&e, out), [4.0, 5.0, 6.0]);
+    }
+
+    // -- 006d4020 ----------------------------------------------------------
+
+    /// A 0x20-byte candidate with a distance (+0x18) and a height (+0x1c).
+    fn candidate(e: &mut Engine, distance: f32, height: f32) -> Ptr {
+        let item = Ptr::new(e.mem.alloc(0x20));
+        e.mem.set_f32(item.addr() + 0x18, distance);
+        e.mem.set_f32(item.addr() + 0x1c, height);
+        item
+    }
+
+    #[test]
+    fn candidate_comparison_puts_the_height_band_first() {
+        let mut e = engine();
+        e.set_global(HEIGHT_BAND_MINIMUM, -64.0f64);
+        e.set_global(HEIGHT_BAND_MAXIMUM, 180.0f64);
+        let in_band = candidate(&mut e, 50.0, 10.0);
+        let above = candidate(&mut e, 1.0, 180.0);
+        let below = candidate(&mut e, 1.0, -64.0);
+        let unordered = candidate(&mut e, 1.0, f32::NAN);
+        assert_eq!(fn_006d4020(&mut e, in_band, above), -1);
+        assert_eq!(fn_006d4020(&mut e, above, in_band), 1);
+        // The band is open at both ends and does not contain NaN.
+        assert_eq!(fn_006d4020(&mut e, in_band, below), -1);
+        assert_eq!(fn_006d4020(&mut e, unordered, in_band), 1);
+        // Outside the band the distance decides.
+        assert_eq!(fn_006d4020(&mut e, above, below), 0);
+        let farther = candidate(&mut e, 9.0, 500.0);
+        assert_eq!(fn_006d4020(&mut e, above, farther), -1);
+        assert_eq!(fn_006d4020(&mut e, farther, above), 1);
+    }
+
+    #[test]
+    fn candidate_comparison_orders_by_distance_within_the_band() {
+        let mut e = engine();
+        e.set_global(HEIGHT_BAND_MINIMUM, -64.0f64);
+        e.set_global(HEIGHT_BAND_MAXIMUM, 180.0f64);
+        let near = candidate(&mut e, 2.0, 0.0);
+        let far = candidate(&mut e, 3.0, 100.0);
+        let same = candidate(&mut e, 2.0, 50.0);
+        assert_eq!(fn_006d4020(&mut e, near, far), -1);
+        assert_eq!(fn_006d4020(&mut e, far, near), 1);
+        assert_eq!(fn_006d4020(&mut e, near, same), 0);
+    }
+
+    // -- 006d4120 ----------------------------------------------------------
+
+    /// Doubles for the nearby-point searches (`fn_006d4120`, and
+    /// `fn_006d4570` for a location without navmesh info): one navmesh with
+    /// one triangle (0, 0, 0), (10, 0, 0), (0, 10, 0) whose edge 0 has no
+    /// neighbour (edges 1 and 2 have), the location at (5, 3, 0) with
+    /// no navmesh info, the radius setting `radius`, a triangle center
+    /// (3, 3, 0) and the fraction 0.1. Returns the location.
+    fn nearby_setup(e: &mut Engine, arrays: &Arrays, radius: f32) -> u32 {
+        vector_math(e);
+        let location = e.mem.alloc(0x28);
+        let setting = e.mem.alloc(4);
+        e.mem.set_f32(setting, radius);
+        e.register_double(SETTING_FLOAT_ADDRESS, move |_, a| {
+            assert_eq!(a[0], NEARBY_RADIUS_SETTING);
+            ret(setting)
+        });
+        arrays.constructor(e, NAVMESH_LIST_CONSTRUCT, 4);
+        arrays.constructor(e, CANDIDATE_ARRAY_CONSTRUCT, 0x20);
+        arrays.appender(e, CANDIDATE_ARRAY_ADD);
+        arrays.accessors(e, &[POINTER_ARRAY_ELEMENT, CANDIDATE_ARRAY_ELEMENT]);
+        let entry = e.mem.alloc(4);
+        let list_owner = arrays.clone();
+        e.register_double(NEARBY_NAVMESHES_FILL, move |e, a| {
+            list_owner.push(e, a[2], entry);
+            Ret::default()
+        });
+        e.register(NI_POINTER_GET_FROM_FIELD, |_, _| ret(NAV));
+        e.register(NAVMESH_TRIANGLE_COUNT, |_, _| ret(1));
+        e.register(NAVMESH_GET_TRIANGLE, |_, a| {
+            ret(TRIANGLE_RECORDS + 0x10 * a[1])
+        });
+        e.register(TRIANGLE_NEIGHBOUR, |_, a| {
+            ret(if a[1] == 0 { 0xffff } else { 7 })
+        });
+        e.register(TRIANGLE_GET_VERTEX_INDEX, |_, a| ret(a[1]));
+        let corners = corner_points(e);
+        e.register_double(NAVMESH_GET_VERTEX, move |_, a| ret(corners + 12 * a[1]));
+        e.register(LOCATION_COPY_POSITION, |e, a| {
+            set_point(e, a[1], [5.0, 3.0, 0.0]);
+            ret(a[1])
+        });
+        e.register(POINT_SEGMENT_CLOSEST, segment_closest);
+        e.register(POINT_PLANAR_LENGTH_SQUARED, |e, a| {
+            let p = point(e, a[0]);
+            ret_float(p[0] * p[0] + p[1] * p[1])
+        });
+        e.register(NAVMESH_GET_CENTER, |e, a| {
+            set_point(e, a[1], [3.0, 3.0, 0.0]);
+            ret(a[1])
+        });
+        e.set_global(CENTER_FRACTION, 0.1f32);
+        e.register(MINIMUM_UNSIGNED, |_, a| ret(a[0].min(a[1])));
+        e.register(CANDIDATE_TO_PATH_POINT, |_, a| ret(a[1]));
+        location
+    }
+
+    #[test]
+    fn nearby_points_record_a_candidate_per_border_edge_within_the_radius() {
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let location = nearby_setup(&mut e, &arrays, 10.0);
+        let out = e.mem.alloc(16);
+        arrays.make(&mut e, out, 0x20);
+        arrays.appender(&mut e, PATH_POINT_ARRAY_ADD);
+        let sorted = Rc::new(RefCell::new(Vec::new()));
+        let sink = sorted.clone();
+        e.register_double(QSORT, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let result = fn_006d4120(&mut e, Ptr::new(location), 5, Ptr::new(out));
+        let log = log_of(&mut e);
+        assert_eq!(result, 2);
+        // The radius setting was read and squared for the comparison; the
+        // candidate array was sorted with the comparison function.
+        let sorted = sorted.borrow();
+        assert_eq!(sorted.len(), 1);
+        assert_eq!(sorted[0][1..], [1, 0x20, 0x006d_4020]);
+        // Candidate: navmesh, triangle, edge, the closest point (5, 0, 0)
+        // moved a tenth of the way to the center (3, 3, 0), distance 9
+        // and the height difference 0.
+        assert_eq!(arrays.count(out), 1);
+        let item = arrays.element(out, 0);
+        assert_eq!(
+            (e.mem.u32(item), e.mem.u16(item + 4), e.mem.u32(item + 8)),
+            (NAV, 0, 0)
+        );
+        assert_close(point(&e, item + 0xc), [4.8, 0.3, 0.0]);
+        assert_eq!((e.mem.f32(item + 0x18), e.mem.f32(item + 0x1c)), (9.0, 0.0));
+        // The nearby navmeshes were listed for the location and radius.
+        assert_eq!(
+            calls_to(&log, NEARBY_NAVMESHES_FILL)[0][..2],
+            [location, 10.0f32.to_bits()]
+        );
+        assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 1);
+        assert_eq!(calls_to(&log, CANDIDATE_ARRAY_DESTRUCT).len(), 1);
+        assert_eq!(calls_to(&log, NAVMESH_LIST_DESTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn nearby_points_respect_the_limit_and_the_radius() {
+        // Beyond the radius (3 squared is below 9): no candidate, no sort.
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let location = nearby_setup(&mut e, &arrays, 2.0);
+        let out = e.mem.alloc(16);
+        arrays.make(&mut e, out, 0x20);
+        arrays.appender(&mut e, PATH_POINT_ARRAY_ADD);
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006d4120(&mut e, Ptr::new(location), 5, Ptr::new(out)), 0);
+        let log = log_of(&mut e);
+        assert!(calls_to(&log, QSORT).is_empty());
+        assert_eq!(arrays.count(out), 0);
+        assert_eq!(calls_to(&log, CANDIDATE_ARRAY_DESTRUCT).len(), 1);
+
+        // A limit of zero takes none of the candidates but reports none.
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let location = nearby_setup(&mut e, &arrays, 10.0);
+        let out = e.mem.alloc(16);
+        arrays.make(&mut e, out, 0x20);
+        arrays.appender(&mut e, PATH_POINT_ARRAY_ADD);
+        e.register(QSORT, |_, _| Ret::default());
+        assert_eq!(fn_006d4120(&mut e, Ptr::new(location), 0, Ptr::new(out)), 0);
+        assert_eq!(arrays.count(out), 0);
+    }
+
+    #[test]
+    fn nearby_points_stop_at_once_for_a_location_with_navmesh_info() {
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let location = nearby_setup(&mut e, &arrays, 10.0);
+        e.register(LOCATION_HAS_NAVMESH_INFO, |_, _| ret(1));
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006d4120(&mut e, Ptr::new(location), 5, Ptr::new(0)), 1);
+        let log = log_of(&mut e);
+        assert_eq!(
+            log,
+            vec![
+                (LOCATION_RESOLVE_NAVMESH_INFO, vec![location, 0]),
+                (LOCATION_HAS_NAVMESH_INFO, vec![location])
+            ]
+        );
+    }
+
+    // -- 006d4550 ----------------------------------------------------------
+
+    #[test]
+    fn path_point_constructor_returns_this() {
+        let mut e = engine();
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006d4550(&mut e, Ptr::new(0x1234)), Ptr::new(0x1234));
+        assert_eq!(log_of(&mut e), vec![(PATH_POINT_CONSTRUCT, vec![0x1234])]);
+    }
+
+    // -- 006d4ca0 and 006d4ce0 ---------------------------------------------
+
+    #[test]
+    fn triangle_references_are_equal_by_navmesh_and_triangle() {
+        let mut e = engine();
+        let a = e.mem.alloc(16);
+        let b = e.mem.alloc(16);
+        for (item, filler) in [(a, 0x1111u16), (b, 0x2222)] {
+            e.mem.set_u32(item, NAV);
+            e.mem.set_u16(item + 4, 3);
+            // The bytes after the triangle are not compared.
+            e.mem.set_u16(item + 6, filler);
+        }
+        assert!(fn_006d4ca0(&mut e, Ptr::new(a), Ptr::new(b)));
+        e.mem.set_u16(b + 4, 4);
+        assert!(!fn_006d4ca0(&mut e, Ptr::new(a), Ptr::new(b)));
+        e.mem.set_u16(b + 4, 3);
+        e.mem.set_u32(b, NAV + 4);
+        assert!(!fn_006d4ca0(&mut e, Ptr::new(a), Ptr::new(b)));
+    }
+
+    #[test]
+    fn triangle_record_assignment_copies_the_reference_and_the_marks() {
+        let mut e = engine();
+        let this = e.mem.alloc(16);
+        let other = e.mem.alloc(16);
+        e.mem.set_u16(other + 8, 0x0101);
+        e.mem.set_u8(other + 10, 1);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            fn_006d4ce0(&mut e, Ptr::new(this), Ptr::new(other)),
+            Ptr::new(this)
+        );
+        assert_eq!(
+            log_of(&mut e),
+            vec![(TRIANGLE_REFERENCE_ASSIGN, vec![this, other])]
+        );
+        assert_eq!(e.mem.u16(this + 8), 0x0101);
+        assert_eq!(e.mem.u8(this + 10), 1);
+    }
+
+    // -- 006d4570 ----------------------------------------------------------
+
+    #[test]
+    fn point_without_navmesh_info_is_the_nearby_point() {
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let location = nearby_setup(&mut e, &arrays, 10.0);
+        arrays.constructor(&mut e, PATH_POINT_ARRAY_CONSTRUCT, 0x20);
+        arrays.appender(&mut e, PATH_POINT_ARRAY_ADD);
+        arrays.accessors(
+            &mut e,
+            &[
+                POINTER_ARRAY_ELEMENT,
+                CANDIDATE_ARRAY_ELEMENT,
+                PATH_POINT_ARRAY_ELEMENT,
+            ],
+        );
+        e.register(QSORT, |_, _| Ret::default());
+        e.register(PATH_POINT_ASSIGN, |e, a| {
+            for word in 0..6 {
+                let value = e.mem.u32(a[1] + 4 * word);
+                e.mem.set_u32(a[0] + 4 * word, value);
+            }
+            ret(a[0])
+        });
+        let out = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        assert!(fn_006d4570(&mut e, Ptr::new(location), 3.0, Ptr::new(out)));
+        let log = log_of(&mut e);
+        // Navmesh, triangle, edge and the point of the one candidate.
+        assert_eq!(
+            (e.mem.u32(out), e.mem.u16(out + 4), e.mem.u32(out + 8)),
+            (NAV, 0, 0)
+        );
+        assert_close(point(&e, out + 0xc), [4.8, 0.3, 0.0]);
+        // One point was asked for, and the array that held it is destroyed.
+        let found = calls_to(&log, PATH_POINT_ARRAY_CONSTRUCT)[0][0];
+        assert_eq!(calls_to(&log, PATH_POINT_ARRAY_DESTRUCT), vec![vec![found]]);
+        assert_eq!(calls_to(&log, MINIMUM_UNSIGNED)[0][..], [1, 1]);
+
+        // No candidate: no point.
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let location = nearby_setup(&mut e, &arrays, 2.0);
+        arrays.constructor(&mut e, PATH_POINT_ARRAY_CONSTRUCT, 0x20);
+        arrays.appender(&mut e, PATH_POINT_ARRAY_ADD);
+        arrays.accessors(
+            &mut e,
+            &[
+                POINTER_ARRAY_ELEMENT,
+                CANDIDATE_ARRAY_ELEMENT,
+                PATH_POINT_ARRAY_ELEMENT,
+            ],
+        );
+        e.call_log = Some(vec![]);
+        assert!(!fn_006d4570(&mut e, Ptr::new(location), 3.0, Ptr::new(out)));
+        assert!(calls_to(&log_of(&mut e), PATH_POINT_ASSIGN).is_empty());
+    }
+
+    /// Doubles for the flood of `fn_006d4570` over a location with
+    /// navmesh info: triangle 2 of the navmesh (corners (0, 0, 0),
+    /// (10, 0, 0), (0, 10, 0)) holds the location at (5, 3, 0); across its
+    /// edge 1 is triangle 4, which has no neighbours. Returns the
+    /// location.
+    fn flood_setup(e: &mut Engine, arrays: &Arrays) -> u32 {
+        vector_math(e);
+        let location = e.mem.alloc(0x28);
+        e.register(LOCATION_HAS_NAVMESH_INFO, |_, _| ret(1));
+        e.register(LOCATION_GET_NAVMESH_AND_TRIANGLE, |e, a| {
+            e.mem.set_u16(a[2], 2);
+            ret(1)
+        });
+        e.register(NAV_HOLDER_GET, |_, _| ret(NAV));
+        e.register(NI_POINTER_GET_FROM_FIELD, |_, _| ret(NAV));
+        e.register(NAVMESH_GET_INFO, |_, a| ret(a[0] + 0x1000));
+        e.register(TRIANGLE_REFERENCE_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            e.mem.set_u16(a[0] + 4, a[2] as u16);
+            ret(a[0])
+        });
+        e.register(TRIANGLE_REFERENCE_ASSIGN, |e, a| {
+            let (navmesh, triangle) = (e.mem.u32(a[1]), e.mem.u16(a[1] + 4));
+            e.mem.set_u32(a[0], navmesh);
+            e.mem.set_u16(a[0] + 4, triangle);
+            ret(a[0])
+        });
+        let corners = corner_points(e);
+        e.register_double(NAVMESH_EDGE_POINTS, move |e, a| {
+            let (first, second) = (
+                point(e, corners + 12 * a[2]),
+                point(e, corners + 12 * ((a[2] + 1) % 3)),
+            );
+            set_point(e, a[3], first);
+            set_point(e, a[4], second);
+            Ret::default()
+        });
+        e.register(LOCATION_COPY_POSITION, |e, a| {
+            set_point(e, a[1], [5.0, 3.0, 0.0]);
+            ret(a[1])
+        });
+        e.register(POINT_SEGMENT_DISTANCE, segment_distance);
+        e.register(POINT_SEGMENT_CLOSEST, segment_closest);
+        e.register(NAVMESH_GET_TRIANGLE, |_, a| {
+            ret(TRIANGLE_RECORDS + 0x10 * a[1])
+        });
+        e.register(TRIANGLE_NEIGHBOUR, |_, a| {
+            ret(if a[0] == TRIANGLE_RECORDS + 0x20 && a[1] == 1 {
+                4
+            } else {
+                0xffff
+            })
+        });
+        e.register(EDGE_REFERENCE_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            e.mem.set_u16(a[0] + 4, a[2] as u16);
+            e.mem.set_u32(a[0] + 8, a[3]);
+            ret(a[0])
+        });
+        e.register(EDGE_REFERENCE_ASSIGN, |e, a| {
+            for word in 0..3 {
+                let value = e.mem.u32(a[1] + 4 * word);
+                e.mem.set_u32(a[0] + 4 * word, value);
+            }
+            ret(a[0])
+        });
+        e.register(NAVMESH_GET_MATCHING_EDGE, |e, a| {
+            // Only the edge 1 of triangle 2 has a neighbour: triangle 4.
+            assert_eq!(
+                (e.mem.u32(a[1]), e.mem.u16(a[1] + 4), e.mem.u32(a[1] + 8)),
+                (NAV, 2, 1)
+            );
+            e.mem.set_u32(a[2], NAV);
+            e.mem.set_u16(a[2] + 4, 4);
+            ret(1)
+        });
+        arrays.constructor(e, TRIANGLE_ARRAY_CONSTRUCT, 0xc);
+        arrays.appender(e, TRIANGLE_ARRAY_ADD);
+        arrays.constructor(e, EDGE_ARRAY_CONSTRUCT, 0xc);
+        arrays.appender(e, EDGE_ARRAY_ADD);
+        arrays.accessors(e, &[ARRAY_ELEMENT_006A1440]);
+        e.set_global(FLOAT_LARGEST, f32::MAX);
+        location
+    }
+
+    #[test]
+    fn flood_finds_the_border_edge_nearest_to_the_location() {
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let location = flood_setup(&mut e, &arrays);
+        let out = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        // The radius 2 reaches only the edge 1 (1.41 away): triangle 2
+        // continues into triangle 4, whose edge 1 is a border.
+        assert!(fn_006d4570(&mut e, Ptr::new(location), 2.0, Ptr::new(out)));
+        let log = log_of(&mut e);
+        // Navmesh info, triangle 4, edge 1 and the closest point (6, 4, 0).
+        assert_eq!(
+            (e.mem.u32(out), e.mem.u16(out + 4), e.mem.u32(out + 8)),
+            (NAV + 0x1000, 4, 1)
+        );
+        assert_close(point(&e, out + 0xc), [6.0, 4.0, 0.0]);
+        // The visited triangles carry the edge marks.
+        let visited = calls_to(&log, TRIANGLE_ARRAY_CONSTRUCT)[0][0];
+        assert_eq!(arrays.count(visited), 2);
+        for (index, triangle) in [(0, 2u16), (1, 4)] {
+            let record = arrays.element(visited, index);
+            assert_eq!((e.mem.u32(record), e.mem.u16(record + 4)), (NAV, triangle));
+            assert_eq!(
+                [
+                    e.mem.u8(record + 8),
+                    e.mem.u8(record + 9),
+                    e.mem.u8(record + 10)
+                ],
+                [0, 1, 0]
+            );
+        }
+        let border = calls_to(&log, EDGE_ARRAY_CONSTRUCT)[0][0];
+        assert_eq!(arrays.count(border), 1);
+        // The three arrays and the holder are released.
+        assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 1);
+        assert_eq!(calls_to(&log, TRIANGLE_ARRAY_DESTRUCT), vec![vec![visited]]);
+        assert_eq!(calls_to(&log, EDGE_ARRAY_DESTRUCT), vec![vec![border]]);
+    }
+
+    #[test]
+    fn flood_fails_without_a_border_edge_or_a_triangle() {
+        // A radius that reaches no edge: nothing to follow, nothing found.
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let location = flood_setup(&mut e, &arrays);
+        let out = e.mem.alloc(0x20);
+        assert!(!fn_006d4570(&mut e, Ptr::new(location), 1.0, Ptr::new(out)));
+
+        // Every edge reached has a neighbour that was visited already.
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let location = flood_setup(&mut e, &arrays);
+        e.register(TRIANGLE_NEIGHBOUR, |_, _| ret(4));
+        e.register(NAVMESH_GET_MATCHING_EDGE, |e, a| {
+            e.mem.set_u32(a[2], NAV);
+            e.mem.set_u16(a[2] + 4, 4);
+            ret(1)
+        });
+        e.call_log = Some(vec![]);
+        assert!(!fn_006d4570(&mut e, Ptr::new(location), 2.0, Ptr::new(out)));
+        let log = log_of(&mut e);
+        let visited = calls_to(&log, TRIANGLE_ARRAY_CONSTRUCT)[0][0];
+        assert_eq!(arrays.count(visited), 2);
+        assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 1);
+
+        // The location has no triangle.
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let location = flood_setup(&mut e, &arrays);
+        e.register(LOCATION_GET_NAVMESH_AND_TRIANGLE, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        assert!(!fn_006d4570(&mut e, Ptr::new(location), 2.0, Ptr::new(out)));
+        let log = log_of(&mut e);
+        assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 1);
+        assert_eq!(calls_to(&log, TRIANGLE_ARRAY_DESTRUCT).len(), 1);
+        assert_eq!(calls_to(&log, EDGE_ARRAY_DESTRUCT).len(), 1);
+        assert!(calls_to(&log, TRIANGLE_ARRAY_ADD).is_empty());
+    }
+
+    // -- 006d4d20, 006d4eb0 -------------------------------------------------
+
+    #[test]
+    fn teleport_door_path_is_built_and_its_ends_set() {
+        let mut e = engine();
+        let (from, to, path) = (e.mem.alloc(0x28), e.mem.alloc(0x28), e.mem.alloc(0x60));
+        let build = Rc::new(RefCell::new(Vec::new()));
+        let sink = build.clone();
+        e.register_double(TELEPORT_SEARCH_BUILD_NODE_PATH, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            ret(1)
+        });
+        e.register_double(LOCATION_COPY_POSITION, move |e, a| {
+            let position = if a[0] == from {
+                [1.0, 2.0, 3.0]
+            } else {
+                [4.0, 5.0, 6.0]
+            };
+            set_point(e, a[1], position);
+            ret(a[1])
+        });
+        e.call_log = Some(vec![]);
+        assert!(pathing_build_teleport_door_path(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(path),
+            7,
+            2.5,
+            9,
+            11
+        ));
+        let log = log_of(&mut e);
+        assert_eq!(timer_lines(&log), vec![0x582]);
+        assert_timers_balanced(&log);
+        assert_eq!(calls_to(&log, TELEPORT_PATH_CLEAR), vec![vec![path]]);
+        assert_eq!(
+            calls_to(&log, TELEPORT_PATH_RESERVE_STEPS),
+            vec![vec![path, 10]]
+        );
+        assert_eq!(
+            calls_to(&log, TELEPORT_PATH_RESERVE_DOORS),
+            vec![vec![path + 0x10, 10]]
+        );
+        let build = build.borrow();
+        assert_eq!(build[0][1..], [from, to, path, 7, 2.5f32.to_bits(), 9, 11]);
+        assert_eq!(point(&e, path + 0x20), [1.0, 2.0, 3.0]);
+        assert_eq!(point(&e, path + 0x2c), [4.0, 5.0, 6.0]);
+        // The search is destroyed before the timer closes.
+        assert_eq!(
+            calls_to(&log, TELEPORT_SEARCH_DESTRUCT),
+            vec![vec![build[0][0]]]
+        );
+        assert!(
+            position_of(&log, TELEPORT_SEARCH_DESTRUCT).unwrap()
+                < position_of(&log, TIMER_SCOPE_DESTROY).unwrap()
+        );
+    }
+
+    #[test]
+    fn teleport_door_path_failure_leaves_the_ends_alone() {
+        let mut e = engine();
+        let (from, to, path) = (e.mem.alloc(0x28), e.mem.alloc(0x28), e.mem.alloc(0x60));
+        e.call_log = Some(vec![]);
+        assert!(!pathing_build_teleport_door_path(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(path),
+            0,
+            0.0,
+            0,
+            0
+        ));
+        let log = log_of(&mut e);
+        assert!(calls_to(&log, LOCATION_COPY_POSITION).is_empty());
+        assert_eq!(point(&e, path + 0x20), [0.0; 3]);
+        assert_timers_balanced(&log);
+        assert_eq!(calls_to(&log, TELEPORT_SEARCH_DESTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn teleport_door_path_length_is_the_paths_or_the_largest_float() {
+        let mut e = engine();
+        let (from, to) = (e.mem.alloc(0x28), e.mem.alloc(0x28));
+        e.register(LOCATION_COPY_POSITION, |e, a| {
+            set_point(e, a[1], [1.0, 2.0, 3.0]);
+            ret(a[1])
+        });
+        e.set_global(FLOAT_LARGEST, f32::MAX);
+        let build = Rc::new(RefCell::new(Vec::new()));
+        let sink = build.clone();
+        e.register_double(TELEPORT_SEARCH_BUILD_NODE_PATH, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            ret(1)
+        });
+        e.register(TELEPORT_PATH_COMPUTE_LENGTH, |_, _| ret_float(12.5));
+        e.call_log = Some(vec![]);
+        let length = pathing_compute_teleport_door_path_length(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            3.0,
+            8,
+            9,
+        );
+        let log = log_of(&mut e);
+        assert_eq!(length, 12.5);
+        // The search got a zero fourth argument and the distance and the
+        // two words.
+        assert_eq!(build.borrow()[0][1..2], [from]);
+        assert_eq!(build.borrow()[0][4..], [0, 3.0f32.to_bits(), 8, 9]);
+        // The local path is constructed first and destroyed last.
+        let path = calls_to(&log, TELEPORT_PATH_CONSTRUCT)[0][0];
+        assert_eq!(build.borrow()[0][3], path);
+        assert_eq!(calls_to(&log, TELEPORT_PATH_DESTRUCT), vec![vec![path]]);
+        assert_eq!(
+            calls_to(&log, TELEPORT_PATH_COMPUTE_LENGTH),
+            vec![vec![path]]
+        );
+
+        // No path: the largest float, and the length is not asked for.
+        e.register(TELEPORT_SEARCH_BUILD_NODE_PATH, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        let length = pathing_compute_teleport_door_path_length(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            3.0,
+            8,
+            9,
+        );
+        assert_eq!(length, f32::MAX);
+        let log = log_of(&mut e);
+        assert!(calls_to(&log, TELEPORT_PATH_COMPUTE_LENGTH).is_empty());
+        assert_eq!(calls_to(&log, TELEPORT_PATH_DESTRUCT).len(), 1);
+    }
+
+    // -- 006d4f70 ----------------------------------------------------------
+
+    /// The steps and the door entries the low-path doubles record.
+    type Steps = Rc<RefCell<Vec<(u8, u32, u32)>>>;
+    type Doors = Rc<RefCell<Vec<(u32, u32, [f32; 3])>>>;
+
+    /// Doubles for `pathing_build_low_path` where both locations have info
+    /// and the low-path search fills the info array with three infos and the
+    /// reference array with a reference and a null. Returns the arrays and
+    /// what the step and door recorders collect.
+    fn low_path_setup(e: &mut Engine, from: u32, to: u32) -> (Steps, Doors) {
+        let arrays = Arrays::default();
+        arrays.constructor(e, INFO_ARRAY_CONSTRUCT, 4);
+        arrays.constructor(e, REFERENCE_ARRAY_CONSTRUCT, 4);
+        arrays.accessors(e, &[POINTER_ARRAY_ELEMENT]);
+        e.register(LOCATION_RESOLVE_NAVMESH_INFO, |_, _| ret(1));
+        e.register(LOCATION_NAVMESH_INFO_FIELD, |_, a| ret(a[0] + 0x10));
+        e.register_double(LOCATION_COPY_POSITION, move |e, a| {
+            let position = if a[0] == from {
+                [1.0, 2.0, 3.0]
+            } else {
+                assert_eq!(a[0], to);
+                [4.0, 5.0, 6.0]
+            };
+            set_point(e, a[1], position);
+            ret(a[1])
+        });
+        e.register_double(LOW_PATH_SEARCH_RUN, move |e, a| {
+            for info in [0x100u32, 0x200, 0x300] {
+                arrays.push_word(e, a[6], info);
+            }
+            for reference in [0x700u32, 0] {
+                arrays.push_word(e, a[7], reference);
+            }
+            ret(1)
+        });
+        e.register(INFO_VALUE_A, |_, a| ret(a[0] + 1));
+        e.register(INFO_VALUE_B, |_, a| ret(a[0] + 2));
+        e.register(REFERENCE_GET_POSITION_OWNER, |_, a| ret(a[0] + 0x10));
+        let door_position = e.mem.alloc(12);
+        set_point(e, door_position, [7.0, 8.0, 9.0]);
+        e.register_double(NODE_LOCATION, move |_, a| {
+            assert_eq!(a[0], 0x710);
+            ret(door_position)
+        });
+        let steps = Steps::default();
+        let sink = steps.clone();
+        e.register_double(PATH_STEP_ADD, move |e, a| {
+            sink.borrow_mut()
+                .push((e.mem.u8(a[1]), e.mem.u32(a[1] + 4), e.mem.u32(a[1] + 8)));
+            Ret::default()
+        });
+        let doors = Doors::default();
+        let sink = doors.clone();
+        e.register_double(PATH_DOOR_ADD, move |e, a| {
+            sink.borrow_mut()
+                .push((a[0], e.mem.u32(a[1]), point(e, a[1] + 4)));
+            Ret::default()
+        });
+        (steps, doors)
+    }
+
+    #[test]
+    fn low_path_follows_the_search_references() {
+        let mut e = engine();
+        let (from, to, path) = (e.mem.alloc(0x28), e.mem.alloc(0x28), e.mem.alloc(0x60));
+        let (steps, doors) = low_path_setup(&mut e, from, to);
+        e.call_log = Some(vec![]);
+        assert!(pathing_build_low_path(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(path),
+            5,
+            6
+        ));
+        let log = log_of(&mut e);
+        // The first step is the first info's; the reference gives a door
+        // entry (the reference word and the position of its owner) and the
+        // step of the next info; the null reference gives nothing.
+        assert_eq!(*steps.borrow(), vec![(1, 0x101, 0x102), (1, 0x201, 0x202)]);
+        assert_eq!(*doors.borrow(), vec![(path + 0x10, 0x700, [7.0, 8.0, 9.0])]);
+        assert_eq!(point(&e, path + 0x20), [1.0, 2.0, 3.0]);
+        assert_eq!(point(&e, path + 0x2c), [4.0, 5.0, 6.0]);
+        // The search got both infos and positions; everything is torn down
+        // and the teleport search is not used.
+        let run = &calls_to(&log, LOW_PATH_SEARCH_RUN)[0];
+        assert_eq!(
+            (run[1], run[3], run[5], run[8]),
+            (5, from + 0x10, to + 0x10, 6)
+        );
+        assert_eq!(calls_to(&log, REFERENCE_ARRAY_DESTRUCT).len(), 1);
+        assert_eq!(calls_to(&log, INFO_ARRAY_DESTRUCT).len(), 1);
+        assert_eq!(calls_to(&log, LOW_PATH_SEARCH_DESTRUCT).len(), 1);
+        assert!(calls_to(&log, TELEPORT_SEARCH_CONSTRUCT).is_empty());
+    }
+
+    #[test]
+    fn low_path_falls_back_to_the_teleport_door_search() {
+        // The search finds nothing: its objects are destroyed and the
+        // teleport search runs with 0, 0.0 and the two words.
+        let mut e = engine();
+        let (from, to, path) = (e.mem.alloc(0x28), e.mem.alloc(0x28), e.mem.alloc(0x60));
+        low_path_setup(&mut e, from, to);
+        e.register(LOW_PATH_SEARCH_RUN, |_, _| ret(0));
+        let build = Rc::new(RefCell::new(Vec::new()));
+        let sink = build.clone();
+        e.register_double(TELEPORT_SEARCH_BUILD_NODE_PATH, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            ret(1)
+        });
+        e.call_log = Some(vec![]);
+        assert!(pathing_build_low_path(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(path),
+            5,
+            6
+        ));
+        let log = log_of(&mut e);
+        assert_eq!(build.borrow()[0][1..], [from, to, path, 0, 0, 5, 6]);
+        assert_eq!(calls_to(&log, LOW_PATH_SEARCH_DESTRUCT).len(), 1);
+        assert!(calls_to(&log, PATH_STEP_ADD).is_empty());
+
+        // The first location without info skips the check of the second.
+        let mut e = engine();
+        e.register(LOCATION_RESOLVE_NAVMESH_INFO, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        assert!(!pathing_build_low_path(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(path),
+            5,
+            6
+        ));
+        let log = log_of(&mut e);
+        assert_eq!(calls_to(&log, LOCATION_RESOLVE_NAVMESH_INFO).len(), 1);
+        assert!(calls_to(&log, LOW_PATH_SEARCH_CONSTRUCT).is_empty());
+        assert_eq!(calls_to(&log, TELEPORT_SEARCH_DESTRUCT).len(), 1);
+    }
+
+    // -- 006d5320 to 006d5420 ----------------------------------------------
+
+    #[test]
+    fn door_entry_constructor_constructs_its_point() {
+        let mut e = engine();
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006d5320(&mut e, Ptr::new(0x2000)), Ptr::new(0x2000));
+        assert_eq!(
+            log_of(&mut e),
+            vec![(POINT3_DEFAULT_CONSTRUCTOR, vec![0x2004])]
+        );
+    }
+
+    /// Checks a wrapper that builds the base solver, calls one of its
+    /// methods and destroys it: returns the construct and method calls.
+    fn solver_wrapper(
+        method: u32,
+        call: impl FnOnce(&mut Engine, Ptr<PathingRequest>, Ptr<PathingSolution>) -> u32,
+    ) -> (Vec<u32>, Vec<u32>) {
+        let mut e = engine();
+        let (request, solution) = objects(&mut e);
+        e.register(method, |_, _| ret(77));
+        e.call_log = Some(vec![]);
+        assert_eq!(call(&mut e, request, solution), 77);
+        let log = log_of(&mut e);
+        let construct = calls_to(&log, BASE_SOLVER_CONSTRUCT)[0].clone();
+        assert_eq!(construct[1..], [request.addr(), solution.addr()]);
+        let solver = construct[0];
+        // The solver is destroyed: its two members.
+        assert_eq!(
+            calls_to(&log, NAVMESH_LIST_DESTRUCT),
+            vec![vec![solver + 0x24]]
+        );
+        assert_eq!(
+            calls_to(&log, BASE_SOLVER_MEMBER_DESTRUCT),
+            vec![vec![solver + 0x14]]
+        );
+        (construct, calls_to(&log, method)[0].clone())
+    }
+
+    #[test]
+    fn solver_wrapper_006d5340_passes_two_words_to_its_method() {
+        let (construct, method) = solver_wrapper(BASE_SOLVER_METHOD_006C9170, |e, r, s| {
+            fn_006d5340(e, r, s, 5, 6)
+        });
+        assert_eq!(method, vec![construct[0], 5, 6]);
+    }
+
+    #[test]
+    fn solver_wrapper_006d53b0_calls_its_method_without_words() {
+        let (construct, method) = solver_wrapper(BASE_SOLVER_METHOD_006C93D0, fn_006d53b0);
+        assert_eq!(method, vec![construct[0]]);
+    }
+
+    #[test]
+    fn solver_wrapper_006d5420_passes_one_word_to_its_method() {
+        let (construct, method) = solver_wrapper(BASE_SOLVER_METHOD_006C93F0, |e, r, s| {
+            fn_006d5420(e, r, s, 9)
+        });
+        assert_eq!(method, vec![construct[0], 9]);
+    }
+
+    // -- 006d5490 ----------------------------------------------------------
+
+    /// Doubles for `fn_006d5490`: the navmesh list has two entries, both
+    /// locations resolve to triangle 9 of `NAV`, the first is at (0, 0, 0)
+    /// and the second at (100, 0, 0). Returns the two locations.
+    fn straighten_setup(e: &mut Engine, arrays: &Arrays) -> (u32, u32) {
+        vector_math(e);
+        let (from, to) = (e.mem.alloc(0x28), e.mem.alloc(0x28));
+        arrays.constructor(e, NAVMESH_LIST_CONSTRUCT, 4);
+        arrays.constructor(e, INFO_ARRAY_CONSTRUCT, 4);
+        arrays.appender(e, INFO_ARRAY_ADD);
+        arrays.constructor(e, NODE_ARRAY_A_DEFAULT_CONSTRUCT, 0x14);
+        arrays.constructor(e, NODE_ARRAY_B_CONSTRUCT, 0xc);
+        arrays.remover(e, PATH_ARRAY_REMOVE);
+        arrays.remover(e, NODE_ARRAY_REMOVE);
+        arrays.accessors(
+            e,
+            &[
+                POINTER_ARRAY_ELEMENT,
+                PATH_ARRAY_ELEMENT,
+                NODE_ARRAY_B_ELEMENT,
+            ],
+        );
+        let entry = e.mem.alloc(4);
+        let list_owner = arrays.clone();
+        e.register_double(NAVMESH_LIST_FILL, move |e, a| {
+            list_owner.push(e, a[0], entry);
+            list_owner.push(e, a[0], entry);
+            Ret::default()
+        });
+        e.register(NI_POINTER_GET_FROM_FIELD, |_, _| ret(NAV));
+        e.register(NAVMESH_GET_INFO, |_, a| ret(a[0] + 0x1000));
+        e.register(LOCATION_RESOLVE_CLOSEST, |_, _| ret(1));
+        e.register(LOCATION_GET_NAVMESH_AND_TRIANGLE, |e, a| {
+            e.mem.set_u16(a[2], 9);
+            ret(1)
+        });
+        e.register(NAV_HOLDER_GET, |_, _| ret(NAV));
+        e.register_double(LOCATION_COPY_POSITION, move |e, a| {
+            let position = if a[0] == from {
+                [0.0, 0.0, 0.0]
+            } else {
+                [100.0, 0.0, 0.0]
+            };
+            set_point(e, a[1], position);
+            ret(a[1])
+        });
+        // A path node keeps its position at +8.
+        e.register(NODE_TO_POSITION, |e, a| {
+            let position = point(e, a[0] + 8);
+            set_point(e, a[1], position);
+            ret(a[1])
+        });
+        e.register(PATH_ARRAY_CAPACITY, |_, _| ret(0x40));
+        e.register(POINT3_LENGTH, |e, a| {
+            let p = point(e, a[0]);
+            ret_float((p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt())
+        });
+        (from, to)
+    }
+
+    /// Makes the search fill the path with nodes at the given positions
+    /// and the node array with entries (navmesh, triangle 3, edge = index).
+    fn search_finds(e: &mut Engine, arrays: &Arrays, positions: Vec<[f32; 3]>, portals: u32) {
+        let arrays = arrays.clone();
+        e.register_double(NAVMESH_SEARCH_RUN, move |e, a| {
+            let node = e.mem.alloc(0x14);
+            for position in &positions {
+                set_point(e, node + 8, *position);
+                arrays.push(e, a[4], node);
+            }
+            let entry = e.mem.alloc(0xc);
+            for edge in 0..portals {
+                e.mem.set_u32(entry, NAV);
+                e.mem.set_u16(entry + 4, 3);
+                e.mem.set_u32(entry + 8, edge);
+                arrays.push(e, a[5], entry);
+            }
+            ret(1)
+        });
+    }
+
+    /// The positions of a path array's nodes.
+    fn path_positions(e: &Engine, arrays: &Arrays, path: u32) -> Vec<[f32; 3]> {
+        (0..arrays.count(path))
+            .map(|i| point(e, arrays.element(path, i) + 8))
+            .collect()
+    }
+
+    #[test]
+    fn straightening_without_navmesh_positions_succeeds_only_if_neither_resolves() {
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let (from, to) = straighten_setup(&mut e, &arrays);
+        e.register(LOCATION_RESOLVE_CLOSEST, |_, _| ret(0));
+        let length = e.mem.alloc(4);
+        e.mem.set_f32(length, 5.0);
+        e.call_log = Some(vec![]);
+        // Neither location resolves: the straight line is as good as any;
+        // the distance is stored when asked for.
+        assert!(fn_006d5490(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(0),
+            Ptr::new(length),
+            Ptr::new(0)
+        ));
+        let log = log_of(&mut e);
+        assert_eq!(e.mem.f32(length), 100.0);
+        assert_eq!(calls_to(&log, LOCATION_RESOLVE_CLOSEST).len(), 2);
+        // The navmesh list was filled once and both arrays destroyed.
+        assert_eq!(calls_to(&log, NAVMESH_LIST_FILL).len(), 1);
+        assert_eq!(calls_to(&log, INFO_ARRAY_DESTRUCT).len(), 1);
+        assert_eq!(calls_to(&log, NAVMESH_LIST_DESTRUCT).len(), 1);
+        // The infos of both navmeshes were listed.
+        let infos = calls_to(&log, INFO_ARRAY_CONSTRUCT)[0][0];
+        assert_eq!(arrays.count(infos), 2);
+        assert_eq!(e.mem.u32(arrays.element(infos, 1)), NAV + 0x1000);
+
+        // Without a place for the distance it is not computed.
+        e.mem.set_f32(length, 5.0);
+        e.call_log = Some(vec![]);
+        assert!(fn_006d62c0(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(0)
+        ));
+        assert!(calls_to(&log_of(&mut e), POINT3_LENGTH).is_empty());
+
+        // Only the second resolves: failure.
+        e.register_double(LOCATION_RESOLVE_CLOSEST, move |_, a| {
+            ret((a[0] == to) as u32)
+        });
+        assert!(!fn_006d5490(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(0),
+            Ptr::new(length),
+            Ptr::new(0)
+        ));
+        assert_eq!(e.mem.f32(length), 100.0);
+    }
+
+    #[test]
+    fn straightening_fails_with_the_distance_when_a_location_has_no_triangle() {
+        // The first resolves but only the second has no navmesh: failure.
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let (from, to) = straighten_setup(&mut e, &arrays);
+        e.register_double(LOCATION_RESOLVE_CLOSEST, move |_, a| {
+            ret((a[0] == from) as u32)
+        });
+        let length = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        assert!(!fn_006d5490(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(0),
+            Ptr::new(length),
+            Ptr::new(0)
+        ));
+        assert_eq!(e.mem.f32(length), 100.0);
+        assert!(calls_to(&log_of(&mut e), NAV_HOLDER_CONSTRUCT).is_empty());
+
+        // The first has no triangle.
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let (from, to) = straighten_setup(&mut e, &arrays);
+        e.register_double(LOCATION_GET_NAVMESH_AND_TRIANGLE, move |e, a| {
+            e.mem.set_u16(a[2], 9);
+            ret((a[0] != from) as u32)
+        });
+        e.call_log = Some(vec![]);
+        assert!(!fn_006d5490(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(0),
+            Ptr::new(length),
+            Ptr::new(0)
+        ));
+        let log = log_of(&mut e);
+        assert_eq!(e.mem.f32(length), 100.0);
+        assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 1);
+        assert_eq!(calls_to(&log, INFO_ARRAY_DESTRUCT).len(), 1);
+
+        // The second has none.
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let (from, to) = straighten_setup(&mut e, &arrays);
+        e.register_double(LOCATION_GET_NAVMESH_AND_TRIANGLE, move |e, a| {
+            e.mem.set_u16(a[2], 9);
+            ret((a[0] != to) as u32)
+        });
+        e.mem.set_f32(length, 0.0);
+        e.call_log = Some(vec![]);
+        assert!(!fn_006d5490(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(0),
+            Ptr::new(length),
+            Ptr::new(0)
+        ));
+        let log = log_of(&mut e);
+        assert_eq!(e.mem.f32(length), 100.0);
+        assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 2);
+
+        // The search finds nothing: everything is destroyed again.
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let (from, to) = straighten_setup(&mut e, &arrays);
+        e.mem.set_f32(length, 0.0);
+        e.call_log = Some(vec![]);
+        assert!(!fn_006d5490(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(0),
+            Ptr::new(length),
+            Ptr::new(0)
+        ));
+        let log = log_of(&mut e);
+        assert_eq!(e.mem.f32(length), 100.0);
+        assert_eq!(calls_to(&log, REQUEST_COPY_DESTRUCT).len(), 1);
+        assert_eq!(calls_to(&log, NODE_ARRAY_B_DESTRUCT).len(), 1);
+        assert_eq!(calls_to(&log, NODE_ARRAY_A_DESTRUCT).len(), 1);
+        assert_eq!(calls_to(&log, NAVMESH_SEARCH_DESTRUCT).len(), 1);
+        assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 2);
+    }
+
+    #[test]
+    fn straightened_path_ends_at_the_two_positions() {
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let (from, to) = straighten_setup(&mut e, &arrays);
+        search_finds(&mut e, &arrays, vec![[1.0, 1.0, 1.0], [2.0, 2.0, 2.0]], 1);
+        let path = e.mem.alloc(0x10);
+        arrays.make(&mut e, path, 0x14);
+        let length = e.mem.alloc(4);
+        let (request, _) = objects(&mut e);
+        e.call_log = Some(vec![]);
+        assert!(fn_006d5490(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            request.cast(),
+            Ptr::new(length),
+            Ptr::new(path)
+        ));
+        let log = log_of(&mut e);
+        // Two nodes: only the ends move and the length is their distance.
+        assert_eq!(
+            path_positions(&e, &arrays, path),
+            vec![[0.0, 0.0, 0.0], [100.0, 0.0, 0.0]]
+        );
+        assert_eq!(e.mem.f32(length), 100.0);
+        assert!(calls_to(&log, PATH_ARRAY_REMOVE).is_empty());
+        // The request's avoid nodes go to the copy; the search got it, the
+        // start and goal nodes (navmesh, triangle 9) and the arrays.
+        let copy = calls_to(&log, REQUEST_CONSTRUCT)[0][0];
+        assert_eq!(
+            calls_to(&log, AVOID_NODE_ARRAY_ASSIGN),
+            vec![vec![copy + 0x94, request.addr()]]
+        );
+        let run = &calls_to(&log, NAVMESH_SEARCH_RUN)[0];
+        assert_eq!(run[1], copy);
+        for node in [run[2], run[3]] {
+            assert_eq!((e.mem.u32(node), e.mem.u16(node + 4)), (NAV, 9));
+        }
+        assert_eq!(run[4], path);
+        // The path array is prepared and given room.
+        assert_eq!(calls_to(&log, PATH_ARRAY_PREPARE), vec![vec![path, 0]]);
+        assert!(calls_to(&log, PATH_ARRAY_RESERVE).is_empty());
+        // The debug hook is not used.
+        assert!(calls_to(&log, DEBUG_HOOK).is_empty());
+    }
+
+    #[test]
+    fn straightened_path_grows_a_small_path_array() {
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let (from, to) = straighten_setup(&mut e, &arrays);
+        search_finds(&mut e, &arrays, vec![[1.0; 3], [2.0; 3]], 1);
+        e.register(PATH_ARRAY_CAPACITY, |_, _| ret(0x10));
+        e.call_log = Some(vec![]);
+        // No output path: a local one is used and no length is wanted.
+        assert!(fn_006d5490(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(0),
+            Ptr::new(0),
+            Ptr::new(0)
+        ));
+        let log = log_of(&mut e);
+        let local = calls_to(&log, NODE_ARRAY_A_DEFAULT_CONSTRUCT)[0][0];
+        assert_eq!(calls_to(&log, PATH_ARRAY_RESERVE), vec![vec![local, 0x20]]);
+        assert_eq!(calls_to(&log, NODE_ARRAY_A_DESTRUCT), vec![vec![local]]);
+    }
+
+    /// A four-node path (the ends are moved to (0, 0, 0) and (100, 0, 0)) with
+    /// three portals; the portal of entry `i` has the points
+    /// `PORTALS[i]`.
+    const PORTALS: [([f32; 3], [f32; 3]); 3] = [
+        ([10.0, 5.0, 0.0], [10.0, -8.0, 0.0]),
+        ([30.0, 8.0, 0.0], [30.0, -2.0, 0.0]),
+        ([60.0, 1.0, 0.0], [60.0, -1.0, 0.0]),
+    ];
+
+    fn smoothing_setup(e: &mut Engine, arrays: &Arrays) -> (u32, u32, u32) {
+        let (from, to) = straighten_setup(e, arrays);
+        search_finds(
+            e,
+            arrays,
+            vec![
+                [0.0, 0.0, 0.0],
+                [25.0, 10.0, 0.0],
+                [50.0, 10.0, 0.0],
+                [100.0, 0.0, 0.0],
+            ],
+            3,
+        );
+        e.register(NAVMESH_EDGE_POINTS, |e, a| {
+            let (left, right) = PORTALS[a[2] as usize];
+            set_point(e, a[3], left);
+            set_point(e, a[4], right);
+            Ret::default()
+        });
+        e.register(LINE_REACHES, |_, _| ret(0));
+        e.register(PORTAL_CLIP, |_, _| ret(0));
+        let path = e.mem.alloc(0x10);
+        arrays.make(e, path, 0x14);
+        (from, to, path)
+    }
+
+    #[test]
+    fn straightening_removes_the_nodes_a_line_can_skip() {
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let (from, to, path) = smoothing_setup(&mut e, &arrays);
+        e.register(LINE_REACHES, |_, _| ret(1));
+        e.call_log = Some(vec![]);
+        assert!(fn_006d5490(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(0),
+            Ptr::new(0),
+            Ptr::new(path)
+        ));
+        let log = log_of(&mut e);
+        // Node 0 reaches nodes 2 and 3: nodes 1 and 2 go, with portals 0
+        // and 1.
+        assert_eq!(calls_to(&log, PATH_ARRAY_REMOVE), vec![vec![path, 1, 2, 0]]);
+        let nodes = calls_to(&log, NODE_ARRAY_B_CONSTRUCT)[0][0];
+        assert_eq!(
+            calls_to(&log, NODE_ARRAY_REMOVE),
+            vec![vec![nodes, 0, 2, 0]]
+        );
+        assert_eq!(
+            path_positions(&e, &arrays, path),
+            vec![[0.0, 0.0, 0.0], [100.0, 0.0, 0.0]]
+        );
+        // The line test got node 0, the node it tests, and the portal
+        // points: the first portal's both points while the portal of
+        // entry j - 1 narrows them.
+        let line = &calls_to(&log, LINE_REACHES);
+        assert_eq!(line.len(), 2);
+    }
+
+    #[test]
+    fn straightening_moves_the_inner_nodes_to_the_nearer_portal_end() {
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let (from, to, path) = smoothing_setup(&mut e, &arrays);
+        let length = e.mem.alloc(4);
+        e.set_global(DEBUG_VALUE_ODD, 20.0f32);
+        e.set_global(DEBUG_VALUE_FINAL, 40.0f32);
+        e.mem.set_u8(PATH_DEBUG_FLAG, 1);
+        e.call_log = Some(vec![]);
+        assert!(fn_006d5490(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(0),
+            Ptr::new(length),
+            Ptr::new(path)
+        ));
+        let log = log_of(&mut e);
+        // No node can be skipped; node 1 goes to the nearer end of portal 0
+        // (the left one, seen from node 0), node 2 to that of portal 1 seen
+        // from the moved node 1.
+        assert!(calls_to(&log, PATH_ARRAY_REMOVE).is_empty());
+        assert_eq!(
+            path_positions(&e, &arrays, path),
+            vec![
+                [0.0, 0.0, 0.0],
+                [10.0, 5.0, 0.0],
+                [30.0, 8.0, 0.0],
+                [100.0, 0.0, 0.0]
+            ]
+        );
+        let expected = 125.0f32.sqrt() + 409.0f32.sqrt() + 4964.0f32.sqrt();
+        assert!((e.mem.f32(length) - expected).abs() < 1e-3);
+        // The debug hook saw the path before smoothing (0.0, 0), the two
+        // portals tested (node index 1 and 2, colors 0.0 and 20.0, 3), the
+        // smoothed path (20.0, 2) and the end (40.0, 1); the flag is
+        // cleared.
+        let hooks = calls_to(&log, DEBUG_HOOK);
+        assert_eq!(hooks.len(), 5);
+        assert_eq!(hooks[0], vec![path, 0.0f32.to_bits(), 0]);
+        assert_eq!(hooks[1][1..], [1, 0.0f32.to_bits(), 3]);
+        assert_eq!(hooks[2][1..], [2, 20.0f32.to_bits(), 3]);
+        assert_eq!(hooks[3], vec![path, 20.0f32.to_bits(), 2]);
+        assert_eq!(hooks[4], vec![path, 40.0f32.to_bits(), 1]);
+        assert_eq!(e.mem.u8(PATH_DEBUG_FLAG), 0);
+    }
+
+    #[test]
+    fn straightening_narrows_the_portal_with_the_clipped_point() {
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let (from, to, path) = smoothing_setup(&mut e, &arrays);
+        // Clip the left point of every portal to (1, 2, 3); keep the right.
+        let clips = Rc::new(RefCell::new(Vec::new()));
+        let sink = clips.clone();
+        e.register_double(PORTAL_CLIP, move |e, a| {
+            let mut clips = sink.borrow_mut();
+            clips.push(point(e, a[3]));
+            if clips.len() % 2 == 1 {
+                set_point(e, a[4], [1.0, 2.0, 3.0]);
+                ret(1)
+            } else {
+                ret(0)
+            }
+        });
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let sink = lines.clone();
+        e.register_double(LINE_REACHES, move |e, a| {
+            sink.borrow_mut().push((point(e, a[2]), point(e, a[3])));
+            ret(0)
+        });
+        assert!(fn_006d5490(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(0),
+            Ptr::new(0),
+            Ptr::new(path)
+        ));
+        // Node 0 tests node 2 and node 1 tests node 3. The clip starts
+        // from the portal of entry i (left, then right); the line test
+        // gets the narrowed left point and the right end of the portal of
+        // entry j - 1.
+        assert_eq!(
+            *clips.borrow(),
+            vec![PORTALS[0].0, PORTALS[0].1, PORTALS[1].0, PORTALS[1].1]
+        );
+        assert_eq!(
+            *lines.borrow(),
+            vec![
+                ([1.0, 2.0, 3.0], PORTALS[1].1),
+                ([1.0, 2.0, 3.0], PORTALS[2].1)
+            ]
+        );
+    }
+
+    // -- 006d61b0, 006d61e0 -------------------------------------------------
+
+    #[test]
+    fn path_node_position_setter_stores_a_point_at_8() {
+        let mut e = engine();
+        let node = e.mem.alloc(0x14);
+        let position = e.mem.alloc(12);
+        set_point(&mut e, position, [1.0, 2.0, 3.0]);
+        fn_006d61b0(&mut e, Ptr::new(node), Ptr::new(position));
+        assert_eq!(point(&e, node + 8), [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn avoid_node_array_is_assigned_at_0x94() {
+        let mut e = engine();
+        e.call_log = Some(vec![]);
+        fn_006d61e0(&mut e, Ptr::new(0x3000), 0x77);
+        assert_eq!(
+            log_of(&mut e),
+            vec![(AVOID_NODE_ARRAY_ASSIGN, vec![0x3094, 0x77])]
+        );
+    }
+
+    // -- 006d6200, 006d62c0 -------------------------------------------------
+
+    #[test]
+    fn low_path_distance_is_the_length_or_zero() {
+        let mut e = engine();
+        let (from, to) = (e.mem.alloc(0x28), e.mem.alloc(0x28));
+        let out = e.mem.alloc(4);
+        e.mem.set_f32(out, 99.0);
+        // Neither location has info: the teleport door search decides.
+        let build = Rc::new(RefCell::new(Vec::new()));
+        let sink = build.clone();
+        e.register_double(TELEPORT_SEARCH_BUILD_NODE_PATH, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            ret(1)
+        });
+        e.register(TELEPORT_PATH_COMPUTE_LENGTH, |_, _| ret_float(42.5));
+        e.call_log = Some(vec![]);
+        assert!(pathing_compute_low_path_distance(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(out)
+        ));
+        let log = log_of(&mut e);
+        assert_eq!(e.mem.f32(out), 42.5);
+        // The low path is built with the arguments 0 and 1, into a local
+        // path that is destroyed afterwards.
+        let path = calls_to(&log, TELEPORT_PATH_CONSTRUCT)[0][0];
+        assert_eq!(build.borrow()[0][1..], [from, to, path, 0, 0, 0, 1]);
+        assert_eq!(calls_to(&log, TELEPORT_PATH_DESTRUCT), vec![vec![path]]);
+
+        e.register(TELEPORT_SEARCH_BUILD_NODE_PATH, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        assert!(!pathing_compute_low_path_distance(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(out)
+        ));
+        assert_eq!(e.mem.f32(out), 0.0);
+        assert!(calls_to(&log_of(&mut e), TELEPORT_PATH_COMPUTE_LENGTH).is_empty());
+    }
+
+    // -- 006d62e0 ----------------------------------------------------------
+
+    /// What the cover search sees of a vertex pair and of a location it
+    /// builds.
+    type EdgeInfos = Rc<RefCell<[(u16, u8, u8); 2]>>;
+
+    /// The state `cover_setup` hands the test.
+    struct CoverFixture {
+        request: Ptr,
+        results: u32,
+        arrays: Arrays,
+        edge_infos: EdgeInfos,
+        /// The arguments of every `006e4500` call.
+        covers: Rc<RefCell<Vec<Vec<u32>>>>,
+        /// The arguments of every `006ba010` call and the points they
+        /// pointed at.
+        tests: Rc<RefCell<Vec<[[f32; 2]; 4]>>>,
+        /// The cover list of the navmesh.
+        triangles: u32,
+    }
+
+    /// Doubles for `fn_006d62e0`: a threat at the origin of the world and an
+    /// actor at (10, 0, 0) (128 high, 64 crouching, 2 wide), a navmesh with
+    /// the cover triangle 3 whose center is (20, 5, 0) (triangle 5: (13, 3,
+    /// 0)); edge 0 is cover of class 8 with the first flag, edge 1 has class
+    /// 1; the edge vertices are (20, 0, 0) and (20, 10, 0), the normal is
+    /// up, and the cover test accepts. The request allows 4 results within
+    /// 50 units, 30 up or down; it crouches, searches one side, sorts
+    /// nearest first.
+    fn cover_setup(e: &mut Engine) -> CoverFixture {
+        let arrays = Arrays::default();
+        vector_math(e);
+        let request = Ptr::new(e.mem.alloc(0x120));
+        let r = request.addr();
+        e.mem.set_f32(r + 0x68, 2.0);
+        e.mem.set_f32(r + 0x6c, 128.0);
+        e.mem.set_f32(r + 0xbc, 50.0);
+        e.mem.set_f32(r + 0xc0, 64.0);
+        e.mem.set_f32(r + 0xc4, 30.0);
+        e.mem.set_u32(r + 0xc8, 4);
+        e.mem.set_u8(r + 0xcc, 1);
+        set_point(e, r + 0xe0, [10.0, 0.0, 0.0]);
+        e.register(COVER_MAX_RESULTS, |e, a| ret(e.mem.u32(a[0] + 0xc8)));
+        e.register(COVER_ACTOR_LOCATION, |_, a| ret(a[0] + 0xe0));
+        e.register(COVER_ACTOR_HEIGHT, |e, a| ret_float(e.mem.f32(a[0] + 0x6c)));
+        e.register(COVER_MAX_DISTANCE, |e, a| ret_float(e.mem.f32(a[0] + 0xbc)));
+        e.register(COVER_MAX_HEIGHT_CHANGE, |e, a| {
+            ret_float(e.mem.f32(a[0] + 0xc4))
+        });
+        e.register(COVER_PROJECTION_VECTOR, |_, a| ret(a[0] + 0xd4));
+        e.register(COVER_SORT_FROM_TARGET, |e, a| {
+            ret(e.mem.u8(a[0] + 0xd0) as u32)
+        });
+        e.register(REQUEST_ACTOR_RADIUS, |e, a| {
+            ret_float(e.mem.f32(a[0] + 0x68))
+        });
+        e.register(REQUEST_ORIGIN, |_, a| ret(a[0] + 0xc));
+        e.register(LOCATION_COPY_POSITION, |e, a| {
+            set_point(e, a[1], [10.0, 0.0, 0.0]);
+            ret(a[1])
+        });
+        let equal = |e: &Engine, a: &[u32]| point(e, a[0]) == point(e, a[1]);
+        e.register_double(POINT3_EQUALS, move |e, a| ret(equal(e, a) as u32));
+        e.register_double(POINT3_NOT_EQUALS, move |e, a| ret(!equal(e, a) as u32));
+        e.register(POINT3_DOT, |e, a| {
+            let (x, y) = (point(e, a[0]), point(e, a[1]));
+            ret_float(x[0] * y[0] + x[1] * y[1] + x[2] * y[2])
+        });
+        e.register(POINT3_CROSS, |e, a| {
+            let (x, y) = (point(e, a[0]), point(e, a[2]));
+            set_point(
+                e,
+                a[1],
+                [
+                    x[1] * y[2] - x[2] * y[1],
+                    x[2] * y[0] - x[0] * y[2],
+                    x[0] * y[1] - x[1] * y[0],
+                ],
+            );
+            ret(a[1])
+        });
+        e.register(POINT2_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            e.mem.set_u32(a[0] + 4, a[2]);
+            ret(a[0])
+        });
+        e.register(HEIGHT_CLASS, |_, a| ret((float_arg(a[0]) / 10.0) as u32));
+        arrays.constructor(e, NAVMESH_LIST_B_CONSTRUCT, 4);
+        arrays.constructor(e, KEY_ARRAY_CONSTRUCT, 4);
+        arrays.inserter(e, KEY_ARRAY_INSERT);
+        arrays.inserter(e, COVER_RESULTS_INSERT);
+        arrays.accessors(e, &[POINTER_ARRAY_ELEMENT, COVER_ARRAY_ELEMENT]);
+        let entry = e.mem.alloc(4);
+        let list_owner = arrays.clone();
+        e.register_double(NEARBY_NAVMESHES_FILL_B, move |e, a| {
+            list_owner.push(e, a[2], entry);
+            Ret::default()
+        });
+        let triangles = e.mem.alloc(0x10);
+        arrays.make(e, triangles, 4);
+        arrays.push_word(e, triangles, 3);
+        e.register_double(NAVMESH_COVER_ARRAY, move |_, _| ret(triangles));
+        e.register(NI_POINTER_GET_FROM_FIELD, |_, _| ret(NAV));
+        e.register(NAVMESH_GET_INFO, |_, a| ret(a[0] + 0x1000));
+        e.register(NAVMESH_GET_TRIANGLE, |_, a| {
+            ret(TRIANGLE_RECORDS + 0x10 * a[1])
+        });
+        e.register(TRIANGLE_IS_COVER, |_, _| ret(1));
+        e.register(NAVMESH_GET_CENTER, |e, a| {
+            let center = if a[2] == 3 {
+                [20.0, 5.0, 0.0]
+            } else {
+                [13.0, 3.0, 0.0]
+            };
+            set_point(e, a[1], center);
+            ret(a[1])
+        });
+        e.register(TRIANGLE_NORMAL, |e, a| {
+            set_point(e, a[1], [0.0, 0.0, 1.0]);
+            ret(a[1])
+        });
+        e.set_global(EDGE_MIDPOINT_FRACTION, 0.5f32);
+        let edge_infos: EdgeInfos = Rc::new(RefCell::new([(8, 1, 0), (1, 0, 0)]));
+        let infos = edge_infos.clone();
+        e.register_double(TRIANGLE_EDGE_INFO, move |e, a| {
+            let (class, first, second) = infos.borrow()[a[1] as usize];
+            e.mem.set_u16(a[2], class);
+            e.mem.set_u8(a[3], first);
+            e.mem.set_u8(a[4], second);
+            Ret::default()
+        });
+        let vertices = [e.mem.alloc(12), e.mem.alloc(12)];
+        set_point(e, vertices[0], [20.0, 0.0, 0.0]);
+        set_point(e, vertices[1], [20.0, 10.0, 0.0]);
+        e.register_double(NAVMESH_EDGE_VERTICES, move |e, a| {
+            e.mem.set_u32(a[1], vertices[0]);
+            e.mem.set_u32(a[1] + 4, vertices[1]);
+            Ret::default()
+        });
+        let tests: Rc<RefCell<Vec<[[f32; 2]; 4]>>> = Rc::default();
+        let sink = tests.clone();
+        e.register_double(COVER_EDGE_TEST, move |e, a| {
+            let planar = |i: usize| {
+                let p = point(e, a[i]);
+                [p[0], p[1]]
+            };
+            sink.borrow_mut()
+                .push([planar(0), planar(1), planar(2), planar(3)]);
+            ret(1)
+        });
+        // A real constructor stores the position and the triangle.
+        e.register(LOCATION_CONSTRUCT_FROM_MESH_POINT, |e, a| {
+            let position = point(e, a[1]);
+            set_point(e, a[0] + 4, position);
+            e.mem.set_u32(a[0] + 0x10, a[2]);
+            e.mem.set_u16(a[0] + 0x24, a[3] as u16);
+            ret(a[0])
+        });
+        let covers: Rc<RefCell<Vec<Vec<u32>>>> = Rc::default();
+        let sink = covers.clone();
+        e.register_double(COVER_LOCATION_SET_COVER, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        let results = e.mem.alloc(0x10);
+        arrays.make(e, results, 0x54);
+        CoverFixture {
+            request,
+            results,
+            arrays,
+            edge_infos,
+            covers,
+            tests,
+            triangles,
+        }
+    }
+
+    #[test]
+    fn cover_search_builds_the_cover_location_from_the_edge() {
+        let mut e = engine();
+        let f = cover_setup(&mut e);
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006d62e0(&mut e, f.request, Ptr::new(f.results)), 1);
+        let log = log_of(&mut e);
+        // The results were given room for the 4 results asked for.
+        assert_eq!(
+            calls_to(&log, COVER_RESULTS_RESERVE),
+            vec![vec![f.results, 4]]
+        );
+        // The cover position: the edge's midpoint (20, 5, 0) moved off the
+        // edge by the radius 2, against the edge direction crossed with
+        // the normal (1, 0, 0); the test got it with the planar threat
+        // (the world's origin) and the planar edge ends.
+        assert_eq!(
+            *f.tests.borrow(),
+            vec![[[18.0, 5.0], [0.0, 0.0], [20.0, 0.0], [20.0, 10.0]]]
+        );
+        let build = &calls_to(&log, LOCATION_CONSTRUCT_FROM_MESH_POINT)[0];
+        assert_eq!(point(&e, build[1]), [18.0, 5.0, 0.0]);
+        assert_eq!(build[2..], [NAV + 0x1000, 3]);
+        assert_eq!(f.arrays.count(f.results), 1);
+        let cover = f.arrays.element(f.results, 0);
+        assert_eq!(e.mem.u32(cover), PATHING_COVER_LOCATION_VTABLE);
+        assert_eq!(e.mem.u16(cover + 0x24), 3);
+        assert_eq!(point(&e, cover + 0x28), [20.0, 10.0, 0.0]);
+        assert_eq!(point(&e, cover + 0x34), [20.0, 0.0, 0.0]);
+        assert_eq!(point(&e, cover + 0x40), [1.0, 0.0, 0.0]);
+        // Cover class 8, the classes of the standing (128) and crouching
+        // (64) actor, the two flags and the edge.
+        let covers = f.covers.borrow();
+        assert_eq!(covers.len(), 1);
+        assert_eq!(covers[0][1..], [8, 12, 6, 1, 0, 0]);
+        // The sort key is the squared distance between the actor and the
+        // triangle center.
+        let keys = calls_to(&log, KEY_ARRAY_CONSTRUCT)[0][0];
+        assert_eq!(f.arrays.count(keys), 1);
+        assert_eq!(e.mem.f32(f.arrays.element(keys, 0)), 125.0);
+        // The location built on the stack is destroyed after the insertion;
+        // the holder, the navmesh list and the keys are released.
+        assert_eq!(calls_to(&log, LOCATION_DESTRUCT).len(), 1);
+        assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 1);
+        assert_eq!(calls_to(&log, NAVMESH_LIST_B_DESTRUCT).len(), 1);
+        assert_eq!(calls_to(&log, KEY_ARRAY_DESTRUCT), vec![vec![keys]]);
+        // The search asked for the navmeshes near the origin within the
+        // maximum distance.
+        assert_eq!(
+            calls_to(&log, NEARBY_NAVMESHES_FILL_B)[0][..2],
+            [f.request.addr() + 0xc, 50.0f32.to_bits()]
+        );
+    }
+
+    /// Adds a second cover triangle (5) to the list.
+    fn two_triangles(e: &mut Engine, f: &CoverFixture) {
+        f.arrays.push_word(e, f.triangles, 5);
+    }
+
+    /// The triangles of the covers in the results, best first.
+    fn result_triangles(e: &Engine, f: &CoverFixture) -> Vec<u16> {
+        (0..f.arrays.count(f.results))
+            .map(|i| e.mem.u16(f.arrays.element(f.results, i) + 0x24))
+            .collect()
+    }
+
+    #[test]
+    fn cover_search_sorts_by_distance_and_stops_at_the_maximum() {
+        let mut e = engine();
+        let f = cover_setup(&mut e);
+        two_triangles(&mut e, &f);
+        assert_eq!(fn_006d62e0(&mut e, f.request, Ptr::new(f.results)), 2);
+        // Nearest first: triangle 5 (key 18) before triangle 3 (key 125).
+        assert_eq!(result_triangles(&e, &f), vec![5, 3]);
+
+        // Farthest first.
+        let mut e = engine();
+        let f = cover_setup(&mut e);
+        two_triangles(&mut e, &f);
+        e.mem.set_u8(f.request.addr() + 0xcf, 1);
+        assert_eq!(fn_006d62e0(&mut e, f.request, Ptr::new(f.results)), 2);
+        assert_eq!(result_triangles(&e, &f), vec![3, 5]);
+
+        // One result at most: the search ends with the first.
+        let mut e = engine();
+        let f = cover_setup(&mut e);
+        two_triangles(&mut e, &f);
+        e.mem.set_u32(f.request.addr() + 0xc8, 1);
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006d62e0(&mut e, f.request, Ptr::new(f.results)), 1);
+        let log = log_of(&mut e);
+        assert_eq!(result_triangles(&e, &f), vec![3]);
+        assert_eq!(calls_to(&log, NAVMESH_GET_CENTER).len(), 1);
+        assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 1);
+        assert_eq!(calls_to(&log, KEY_ARRAY_DESTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn cover_search_skips_far_high_and_wrong_sided_triangles() {
+        // Too far from the origin (125 is above 5 squared).
+        let mut e = engine();
+        let f = cover_setup(&mut e);
+        e.mem.set_f32(f.request.addr() + 0xbc, 5.0);
+        assert_eq!(fn_006d62e0(&mut e, f.request, Ptr::new(f.results)), 0);
+
+        // The actor is 100 above the center: more than the allowed 30.
+        let mut e = engine();
+        let f = cover_setup(&mut e);
+        e.mem.set_f32(f.request.addr() + 0xe0 + 8, 100.0);
+        assert_eq!(fn_006d62e0(&mut e, f.request, Ptr::new(f.results)), 0);
+
+        // Behind the target: the side is negated.
+        let mut e = engine();
+        let f = cover_setup(&mut e);
+        e.mem.set_u8(f.request.addr() + 0xce, 1);
+        assert_eq!(fn_006d62e0(&mut e, f.request, Ptr::new(f.results)), 0);
+        // ... unless both sides count.
+        e.mem.set_u8(f.request.addr() + 0xcd, 1);
+        assert_eq!(fn_006d62e0(&mut e, f.request, Ptr::new(f.results)), 1);
+
+        // Not a cover triangle.
+        let mut e = engine();
+        let f = cover_setup(&mut e);
+        e.register(TRIANGLE_IS_COVER, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006d62e0(&mut e, f.request, Ptr::new(f.results)), 0);
+        assert!(calls_to(&log_of(&mut e), NAVMESH_GET_CENTER).is_empty());
+    }
+
+    #[test]
+    fn cover_search_accepts_edges_by_class_and_flags() {
+        let run = |infos: [(u16, u8, u8); 2], hide: u8, crouch: u8| {
+            let mut e = engine();
+            let f = cover_setup(&mut e);
+            *f.edge_infos.borrow_mut() = infos;
+            e.mem.set_u8(f.request.addr() + 0xd1, hide);
+            e.mem.set_u8(f.request.addr() + 0xcc, crouch);
+            fn_006d62e0(&mut e, f.request, Ptr::new(f.results))
+        };
+        // Classes below 4: only class 2, and not when hiding.
+        assert_eq!(run([(3, 1, 1), (1, 1, 1)], 0, 1), 0);
+        assert_eq!(run([(2, 0, 0), (1, 0, 0)], 0, 1), 1);
+        assert_eq!(run([(2, 0, 0), (1, 0, 0)], 1, 1), 0);
+        // Class 8 reaches the crouching class 6 but not the standing 12.
+        assert_eq!(run([(8, 1, 0), (1, 0, 0)], 0, 1), 1);
+        assert_eq!(run([(8, 1, 0), (1, 0, 0)], 0, 0), 0);
+        assert_eq!(run([(12, 1, 0), (1, 0, 0)], 0, 0), 1);
+        // Above the crouching class a flag or hiding is needed.
+        assert_eq!(run([(8, 0, 0), (1, 0, 0)], 0, 1), 0);
+        assert_eq!(run([(8, 0, 1), (1, 0, 0)], 0, 1), 1);
+        assert_eq!(run([(8, 0, 0), (1, 0, 0)], 1, 1), 1);
+        // The class of the second edge counts too, and edge 1 is the one
+        // reported.
+        let mut e = engine();
+        let f = cover_setup(&mut e);
+        *f.edge_infos.borrow_mut() = [(1, 0, 0), (8, 1, 0)];
+        assert_eq!(fn_006d62e0(&mut e, f.request, Ptr::new(f.results)), 1);
+        assert_eq!(f.covers.borrow()[0][6], 1);
+        // A cover edge the threat test refuses is not used.
+        let mut e = engine();
+        let f = cover_setup(&mut e);
+        e.register(COVER_EDGE_TEST, |_, _| ret(0));
+        assert_eq!(fn_006d62e0(&mut e, f.request, Ptr::new(f.results)), 0);
+    }
+
+    #[test]
+    fn cover_search_uses_the_origin_without_an_actor_location() {
+        let mut e = engine();
+        let f = cover_setup(&mut e);
+        set_point(&mut e, f.request.addr() + 0xe0, [0.0, 0.0, 0.0]);
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006d62e0(&mut e, f.request, Ptr::new(f.results)), 1);
+        // The origin's position (10, 0, 0) takes its place: the same key.
+        let log = log_of(&mut e);
+        let keys = calls_to(&log, KEY_ARRAY_CONSTRUCT)[0][0];
+        assert_eq!(e.mem.f32(f.arrays.element(keys, 0)), 125.0);
+        // A distance beyond the maximum still excludes it.
+        let mut e = engine();
+        let f = cover_setup(&mut e);
+        set_point(&mut e, f.request.addr() + 0xe0, [0.0, 0.0, 0.0]);
+        e.mem.set_f32(f.request.addr() + 0xbc, 5.0);
+        assert_eq!(fn_006d62e0(&mut e, f.request, Ptr::new(f.results)), 0);
+    }
+
+    #[test]
+    fn cover_search_corrects_the_key_by_the_projection_vector() {
+        // Measured from the actor (the default): -10 along the projection
+        // vector (1, 0, 0), key 125 + 2 * 100 / 125.
+        let mut e = engine();
+        let f = cover_setup(&mut e);
+        set_point(&mut e, f.request.addr() + 0xd4, [1.0, 0.0, 0.0]);
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006d62e0(&mut e, f.request, Ptr::new(f.results)), 1);
+        let keys = calls_to(&log_of(&mut e), KEY_ARRAY_CONSTRUCT)[0][0];
+        assert_eq!(
+            e.mem.f32(f.arrays.element(keys, 0)),
+            (125.0f64 + 2.0 * 100.0 / 125.0) as f32
+        );
+
+        // Measured from the threat vector: (0, 0, 0) - (20, 5, 0), key 425
+        // and the dot product -20.
+        let mut e = engine();
+        let f = cover_setup(&mut e);
+        set_point(&mut e, f.request.addr() + 0xd4, [1.0, 0.0, 0.0]);
+        e.mem.set_u8(f.request.addr() + 0xd0, 1);
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006d62e0(&mut e, f.request, Ptr::new(f.results)), 1);
+        let keys = calls_to(&log_of(&mut e), KEY_ARRAY_CONSTRUCT)[0][0];
+        assert_eq!(
+            e.mem.f32(f.arrays.element(keys, 0)),
+            (425.0f64 + 2.0 * 400.0 / 425.0) as f32
+        );
+
+        // Without a projection vector, measured from the threat: 425.
+        let mut e = engine();
+        let f = cover_setup(&mut e);
+        e.mem.set_u8(f.request.addr() + 0xd0, 1);
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006d62e0(&mut e, f.request, Ptr::new(f.results)), 1);
+        let keys = calls_to(&log_of(&mut e), KEY_ARRAY_CONSTRUCT)[0][0];
+        assert_eq!(e.mem.f32(f.arrays.element(keys, 0)), 425.0);
+    }
+
+    // -- 006d6d60 to 006d6e30 -----------------------------------------------
+
+    /// A cover request with the fields the accessors read.
+    fn accessor_request(e: &mut Engine) -> Ptr {
+        let request = Ptr::new(e.mem.alloc(0x120));
+        let r = request.addr();
+        set_point(e, r + 0xb0, [1.0, 2.0, 3.0]);
+        e.mem.set_f32(r + 0xc0, 64.5);
+        for (offset, value) in [(0xcc, 1u8), (0xcd, 2), (0xce, 3), (0xcf, 4), (0xd1, 5)] {
+            e.mem.set_u8(r + offset, value);
+        }
+        request
+    }
+
+    #[test]
+    fn cover_request_threat_is_copied_out() {
+        let mut e = engine();
+        let request = accessor_request(&mut e);
+        let out = e.mem.alloc(12);
+        assert_eq!(fn_006d6d60(&mut e, request, Ptr::new(out)), Ptr::new(out));
+        assert_eq!(point(&e, out), [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn cover_request_crouch_height_is_read() {
+        let mut e = engine();
+        let request = accessor_request(&mut e);
+        assert_eq!(fn_006d6d90(&mut e, request), 64.5);
+    }
+
+    #[test]
+    fn cover_request_can_crouch_is_read() {
+        let mut e = engine();
+        let request = accessor_request(&mut e);
+        assert_eq!(fn_006d6db0(&mut e, request), 1);
+    }
+
+    #[test]
+    fn cover_request_find_both_sides_is_read() {
+        let mut e = engine();
+        let request = accessor_request(&mut e);
+        assert_eq!(fn_006d6dd0(&mut e, request), 2);
+    }
+
+    #[test]
+    fn cover_request_find_behind_target_is_read() {
+        let mut e = engine();
+        let request = accessor_request(&mut e);
+        assert_eq!(fn_006d6df0(&mut e, request), 3);
+    }
+
+    #[test]
+    fn cover_request_sort_farthest_first_is_read() {
+        let mut e = engine();
+        let request = accessor_request(&mut e);
+        assert_eq!(fn_006d6e10(&mut e, request), 4);
+    }
+
+    #[test]
+    fn cover_request_hide_cover_is_read() {
+        let mut e = engine();
+        let request = accessor_request(&mut e);
+        assert_eq!(fn_006d6e30(&mut e, request), 5);
+    }
+
+    // -- 006d6e50, 006d6ee0 -------------------------------------------------
+
+    #[test]
+    fn cover_location_constructor_sets_the_vtable_and_the_points() {
+        let mut e = engine();
+        let this = Ptr::<PathingCoverLocation>::new(e.mem.alloc(0x54));
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006d6e50(&mut e, this, 0x111, 0x222, 3), this);
+        assert_eq!(
+            log_of(&mut e),
+            vec![
+                (
+                    LOCATION_CONSTRUCT_FROM_MESH_POINT,
+                    vec![this.addr(), 0x111, 0x222, 3]
+                ),
+                (POINT3_DEFAULT_CONSTRUCTOR, vec![this.addr() + 0x28]),
+                (POINT3_DEFAULT_CONSTRUCTOR, vec![this.addr() + 0x34]),
+                (POINT3_DEFAULT_CONSTRUCTOR, vec![this.addr() + 0x40]),
+            ]
+        );
+        assert_eq!(e.mem.u32(this.addr()), PATHING_COVER_LOCATION_VTABLE);
+    }
+
+    #[test]
+    fn cover_location_points_are_stored_in_order() {
+        let mut e = engine();
+        let this = Ptr::<PathingCoverLocation>::new(e.mem.alloc(0x54));
+        let (first, second, third) = (e.mem.alloc(12), e.mem.alloc(12), e.mem.alloc(12));
+        set_point(&mut e, first, [1.0, 2.0, 3.0]);
+        set_point(&mut e, second, [4.0, 5.0, 6.0]);
+        set_point(&mut e, third, [7.0, 8.0, 9.0]);
+        fn_006d6ee0(
+            &mut e,
+            this,
+            Ptr::new(first),
+            Ptr::new(second),
+            Ptr::new(third),
+        );
+        assert_eq!(point(&e, this.addr() + 0x28), [1.0, 2.0, 3.0]);
+        assert_eq!(point(&e, this.addr() + 0x34), [4.0, 5.0, 6.0]);
+        assert_eq!(point(&e, this.addr() + 0x40), [7.0, 8.0, 9.0]);
+    }
+
+    // -- 006d6f40, 006d6f60 -------------------------------------------------
+
+    /// A `TES` whose map answers the two lookups.
+    fn potential_info_setup(e: &mut Engine) {
+        e.set_global(TES_GLOBAL, 0x00a4_0000u32);
+        e.register_double(TES_GET_NAVMESH_INFO_MAP, |_, a| {
+            assert_eq!(a, [0x00a4_0000]);
+            ret(0x00a5_0000)
+        });
+        e.register(NAVMESH_INFO_MAP_FIND_FOR_CELL, |_, a| {
+            assert_eq!(a[0], 0x00a5_0000);
+            ret(a[1] + 1)
+        });
+        e.register(NAVMESH_INFO_MAP_FIND_BY_PAIR, |_, a| {
+            assert_eq!(a[0], 0x00a5_0000);
+            ret(a[1] * 100 + a[2])
+        });
+    }
+
+    #[test]
+    fn potential_navmesh_info_for_a_cell_asks_the_map_of_the_global_tes() {
+        let mut e = engine();
+        potential_info_setup(&mut e);
+        assert_eq!(
+            pathing_get_potential_nav_mesh_info_for_location(&mut e, 41),
+            42
+        );
+    }
+
+    #[test]
+    fn potential_navmesh_info_for_two_words_asks_the_map_of_the_global_tes() {
+        let mut e = engine();
+        potential_info_setup(&mut e);
+        assert_eq!(
+            pathing_get_potential_nav_mesh_info_for_location_ov2(&mut e, 3, 4),
+            304
+        );
+    }
+
+    // -- 006d6f80 ----------------------------------------------------------
+
+    #[test]
+    fn closest_point_on_navmesh_keeps_a_point_that_has_navmesh_info() {
+        let mut e = engine();
+        let (given, out) = (e.mem.alloc(12), e.mem.alloc(12));
+        set_point(&mut e, given, [1.0, 2.0, 3.0]);
+        e.register(LOCATION_RESOLVE_NAVMESH_INFO, |_, _| ret(1));
+        e.register(LOCATION_HAS_NAVMESH_INFO, |_, _| ret(1));
+        e.call_log = Some(vec![]);
+        assert!(pathing_find_closest_point_on_navmesh(
+            &mut e,
+            0x10,
+            0x20,
+            Ptr::new(given),
+            Ptr::new(out)
+        ));
+        let log = log_of(&mut e);
+        assert_eq!(point(&e, out), [1.0, 2.0, 3.0]);
+        // The location is built from the point, the cell and the
+        // worldspace, inside the timer of line 0x906, and destroyed.
+        let built = &calls_to(&log, LOCATION_CONSTRUCT_FROM_PARTS)[0];
+        assert_eq!(built[1..], [given, 0x20, 0x10]);
+        assert_eq!(timer_lines(&log), vec![0x906]);
+        assert_timers_balanced(&log);
+        assert_eq!(calls_to(&log, LOCATION_DESTRUCT), vec![vec![built[0]]]);
+        assert!(calls_to(&log, LOCATION_RESOLVE_CLOSEST).is_empty());
+    }
+
+    #[test]
+    fn closest_point_on_navmesh_is_the_center_of_the_closest_triangle() {
+        let mut e = engine();
+        let (given, out) = (e.mem.alloc(12), e.mem.alloc(12));
+        e.register(LOCATION_RESOLVE_CLOSEST, |_, _| ret(1));
+        e.register(LOCATION_GET_NAVMESH_AND_TRIANGLE, |e, a| {
+            e.mem.set_u16(a[2], 7);
+            ret(1)
+        });
+        e.register(NI_POINTER_GET_FROM_FIELD, |_, _| ret(NAV));
+        e.register(NAVMESH_GET_CENTER, |e, a| {
+            assert_eq!((a[0], a[2]), (NAV, 7));
+            set_point(e, a[1], [3.0, 4.0, 5.0]);
+            ret(a[1])
+        });
+        e.call_log = Some(vec![]);
+        assert!(pathing_find_closest_point_on_navmesh(
+            &mut e,
+            0x10,
+            0x20,
+            Ptr::new(given),
+            Ptr::new(out)
+        ));
+        let log = log_of(&mut e);
+        assert_eq!(point(&e, out), [3.0, 4.0, 5.0]);
+        assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 1);
+        assert_eq!(calls_to(&log, LOCATION_DESTRUCT).len(), 1);
+        assert_timers_balanced(&log);
+    }
+
+    #[test]
+    fn closest_point_on_navmesh_fails_without_a_navmesh_or_triangle() {
+        let mut e = engine();
+        let (given, out) = (e.mem.alloc(12), e.mem.alloc(12));
+        e.call_log = Some(vec![]);
+        // Nothing resolves.
+        assert!(!pathing_find_closest_point_on_navmesh(
+            &mut e,
+            0x10,
+            0x20,
+            Ptr::new(given),
+            Ptr::new(out)
+        ));
+        let log = log_of(&mut e);
+        assert!(calls_to(&log, NAV_HOLDER_CONSTRUCT).is_empty());
+        assert_eq!(calls_to(&log, LOCATION_DESTRUCT).len(), 1);
+        assert_timers_balanced(&log);
+
+        // A navmesh but no triangle: the holder is released.
+        e.register(LOCATION_RESOLVE_CLOSEST, |_, _| ret(1));
+        e.call_log = Some(vec![]);
+        assert!(!pathing_find_closest_point_on_navmesh(
+            &mut e,
+            0x10,
+            0x20,
+            Ptr::new(given),
+            Ptr::new(out)
+        ));
+        let log = log_of(&mut e);
+        assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 1);
+        assert_eq!(point(&e, out), [0.0; 3]);
+    }
+
+    // -- 006d7110 ----------------------------------------------------------
+
+    #[test]
+    fn point_on_navmesh_without_a_navmesh_is_a_random_offset() {
+        let mut e = engine();
+        vector_math(&mut e);
+        let (given, out) = (e.mem.alloc(12), e.mem.alloc(12));
+        set_point(&mut e, given, [100.0, 200.0, 300.0]);
+        e.register(LOCATION_RESOLVE_NAVMESH_INFO, |_, _| ret(1));
+        let randoms = Rc::new(RefCell::new(Vec::new()));
+        let sink = randoms.clone();
+        e.register_double(RANDOM_FLOAT, move |_, a| {
+            let mut randoms = sink.borrow_mut();
+            randoms.push(a.to_vec());
+            ret_float(if randoms.len() == 1 { 6.0 } else { -3.0 })
+        });
+        e.register(SQUARE_ROOT_WRAPPER, |_, a| {
+            ret_float(float_arg(a[0]).sqrt())
+        });
+        e.register(POINT3_CONSTRUCT, |e, a| {
+            for i in 1..4 {
+                e.mem.set_u32(a[0] + 4 * (i - 1), a[i as usize]);
+            }
+            ret(a[0])
+        });
+        e.call_log = Some(vec![]);
+        // The location has info but no navmesh (the GetNavMesh double
+        // returns false).
+        assert!(pathing_find_point_on_nav_mesh(
+            &mut e,
+            1,
+            2,
+            Ptr::new(given),
+            10.0,
+            Ptr::new(out)
+        ));
+        let log = log_of(&mut e);
+        // x in [-10, 10] was 6, y in [-8, 8] (the root of 100 - 36) was -3.
+        assert_eq!(
+            *randoms.borrow(),
+            vec![
+                vec![(-10.0f32).to_bits(), 10.0f32.to_bits()],
+                vec![(-8.0f32).to_bits(), 8.0f32.to_bits()]
+            ]
+        );
+        assert_eq!(point(&e, out), [106.0, 197.0, 300.0]);
+        let built = &calls_to(&log, LOCATION_CONSTRUCT_FROM_PARTS)[0];
+        assert_eq!(built[1..], [given, 2, 1]);
+        assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 1);
+        assert_eq!(calls_to(&log, LOCATION_DESTRUCT).len(), 1);
+
+        // Without navmesh info the same, even if a navmesh would be found.
+        e.register(LOCATION_RESOLVE_NAVMESH_INFO, |_, _| ret(0));
+        e.register(LOCATION_GET_NAVMESH, |_, _| ret(1));
+        assert!(pathing_find_point_on_nav_mesh(
+            &mut e,
+            1,
+            2,
+            Ptr::new(given),
+            10.0,
+            Ptr::new(out)
+        ));
+        assert_eq!(randoms.borrow().len(), 4);
+    }
+
+    /// Doubles for `pathing_find_point_on_nav_mesh` on a navmesh: the first
+    /// probe stores (7, 8, 9) and returns `first`, the second returns
+    /// `second`; the closest triangle search finds triangle 6 (if
+    /// `triangle`), whose center is (3, 4, 5).
+    fn navmesh_probe_setup(e: &mut Engine, first: u32, second: u32, triangle: u32) {
+        e.register(LOCATION_RESOLVE_NAVMESH_INFO, |_, _| ret(1));
+        e.register(LOCATION_GET_NAVMESH, |_, _| ret(1));
+        e.register(NI_POINTER_GET_FROM_FIELD, |_, _| ret(NAV));
+        e.register_double(NAVMESH_PROBE_A, move |e, a| {
+            set_point(e, a[3], [7.0, 8.0, 9.0]);
+            ret(first)
+        });
+        e.register_double(NAVMESH_PROBE_B, move |_, _| ret(second));
+        e.register_double(NAVMESH_FIND_TRIANGLE, move |e, a| {
+            e.mem.set_u16(a[2], 6);
+            ret(triangle)
+        });
+        e.register(NAVMESH_GET_CENTER, |e, a| {
+            assert_eq!((a[0], a[2]), (NAV, 6));
+            set_point(e, a[1], [3.0, 4.0, 5.0]);
+            ret(a[1])
+        });
+    }
+
+    #[test]
+    fn point_on_navmesh_uses_the_navmesh_probes_or_the_closest_triangle() {
+        // Both probes accept: their point.
+        let mut e = engine();
+        let (given, out) = (e.mem.alloc(12), e.mem.alloc(12));
+        navmesh_probe_setup(&mut e, 1, 1, 1);
+        e.call_log = Some(vec![]);
+        assert!(pathing_find_point_on_nav_mesh(
+            &mut e,
+            1,
+            2,
+            Ptr::new(given),
+            10.0,
+            Ptr::new(out)
+        ));
+        let log = log_of(&mut e);
+        assert_eq!(point(&e, out), [7.0, 8.0, 9.0]);
+        assert_eq!(
+            calls_to(&log, NAVMESH_PROBE_A),
+            vec![vec![NAV, given, 10.0f32.to_bits(), out]]
+        );
+        assert_eq!(calls_to(&log, NAVMESH_PROBE_B), vec![vec![NAV, out, 0]]);
+        assert!(calls_to(&log, NAVMESH_FIND_TRIANGLE).is_empty());
+        assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 1);
+
+        // The first probe refuses: the second is not asked and the center
+        // of the closest triangle is used.
+        let mut e = engine();
+        navmesh_probe_setup(&mut e, 0, 1, 1);
+        e.call_log = Some(vec![]);
+        assert!(pathing_find_point_on_nav_mesh(
+            &mut e,
+            1,
+            2,
+            Ptr::new(given),
+            10.0,
+            Ptr::new(out)
+        ));
+        assert_eq!(point(&e, out), [3.0, 4.0, 5.0]);
+        let log = log_of(&mut e);
+        assert!(calls_to(&log, NAVMESH_PROBE_B).is_empty());
+        assert_eq!(calls_to(&log, NAVMESH_FIND_TRIANGLE)[0][1], given);
+
+        // The second probe refuses: the triangle's center as well.
+        let mut e = engine();
+        navmesh_probe_setup(&mut e, 1, 0, 1);
+        assert!(pathing_find_point_on_nav_mesh(
+            &mut e,
+            1,
+            2,
+            Ptr::new(given),
+            10.0,
+            Ptr::new(out)
+        ));
+        assert_eq!(point(&e, out), [3.0, 4.0, 5.0]);
+
+        // No triangle: failure, with the holder and location released.
+        let mut e = engine();
+        navmesh_probe_setup(&mut e, 0, 0, 0);
+        e.call_log = Some(vec![]);
+        assert!(!pathing_find_point_on_nav_mesh(
+            &mut e,
+            1,
+            2,
+            Ptr::new(given),
+            10.0,
+            Ptr::new(out)
+        ));
+        let log = log_of(&mut e);
+        assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 1);
+        assert_eq!(calls_to(&log, LOCATION_DESTRUCT).len(), 1);
+    }
+
+    // -- 006d7350, 006d7490 -------------------------------------------------
+
+    #[test]
+    fn line_of_sight_to_a_location_without_info_needs_a_start_without_info() {
+        let mut e = engine();
+        let (from, to, result) = (e.mem.alloc(0x28), e.mem.alloc(0x28), e.mem.alloc(0x28));
+        e.call_log = Some(vec![]);
+        // Neither location has navmesh info: nothing blocks.
+        assert!(pathing_check_line_of_sight(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(result),
+            Ptr::new(0)
+        ));
+        let log = log_of(&mut e);
+        // The result location receives the start first.
+        assert_eq!(calls_to(&log, LOCATION_ASSIGN), vec![vec![result, from]]);
+        // The start has info: no line of sight.
+        e.register_double(LOCATION_RESOLVE_NAVMESH_INFO, move |_, a| {
+            ret((a[0] == from) as u32)
+        });
+        assert!(!pathing_check_line_of_sight(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(0),
+            Ptr::new(0)
+        ));
+    }
+
+    #[test]
+    fn line_of_sight_passes_the_target_navmesh_and_triangle_on() {
+        // The start has no info, so the walk answers whether it was given
+        // no target navmesh.
+        let mut e = engine();
+        let (from, to) = (e.mem.alloc(0x28), e.mem.alloc(0x28));
+        e.register_double(LOCATION_RESOLVE_NAVMESH_INFO, move |_, a| {
+            ret((a[0] == to) as u32)
+        });
+        e.register(NI_POINTER_GET_FROM_FIELD, |_, _| ret(NAV));
+        e.register(LOCATION_GET_NAVMESH_AND_TRIANGLE, |e, a| {
+            e.mem.set_u16(a[2], 6);
+            ret(1)
+        });
+        e.call_log = Some(vec![]);
+        // The target has a navmesh and a triangle.
+        assert!(!pathing_check_line_of_sight(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(0),
+            Ptr::new(0)
+        ));
+        let log = log_of(&mut e);
+        assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 1);
+        assert_eq!(calls_to(&log, LOCATION_COPY_POSITION).len(), 1);
+        // Without a triangle for the target there is no target navmesh.
+        e.register(LOCATION_GET_NAVMESH_AND_TRIANGLE, |_, _| ret(0));
+        assert!(pathing_check_line_of_sight(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(0),
+            Ptr::new(0)
+        ));
+        // The second overload takes the position as it is and no target.
+        e.call_log = Some(vec![]);
+        assert!(pathing_check_line_of_sight_ov2(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(0x1234),
+            Ptr::new(0),
+            Ptr::new(0)
+        ));
+        assert!(calls_to(&log_of(&mut e), LOCATION_COPY_POSITION).is_empty());
+    }
+
+    // -- 006d74c0, 006d7a20 -------------------------------------------------
+
+    /// What `walk_setup` records of every `00698060` call: the arguments
+    /// and the planar hit point it was given.
+    type Crossings = Rc<RefCell<Vec<(Vec<u32>, [f32; 2], [f32; 2])>>>;
+
+    /// Doubles for the walk of `fn_006d74c0`: the start (1, 2) has info
+    /// and triangle 1 of `NAV`; the crossing edges the walk finds are
+    /// `script` in order (the first walk step writes the hit (11, 12), the
+    /// next (12, 13), ...); crossing an edge leads to triangle 4 across its
+    /// edge 1 of the same navmesh; the center of a triangle is (0, 0, 55).
+    /// Returns the start, the end (9, 8, 7) and the recorded crossings.
+    fn walk_setup(e: &mut Engine, script: Vec<u32>) -> (u32, u32, Crossings) {
+        let (start, end) = (e.mem.alloc(0x28), e.mem.alloc(12));
+        set_point(e, end, [9.0, 8.0, 7.0]);
+        e.register(LOCATION_RESOLVE_NAVMESH_INFO, |_, _| ret(1));
+        e.register(LOCATION_GET_NAVMESH_AND_TRIANGLE, |e, a| {
+            e.mem.set_u16(a[2], 1);
+            ret(1)
+        });
+        e.register(LOCATION_COPY_POSITION, |e, a| {
+            set_point(e, a[1], [1.0, 2.0, 0.0]);
+            ret(a[1])
+        });
+        e.register(POINT2_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            e.mem.set_u32(a[0] + 4, a[2]);
+            ret(a[0])
+        });
+        e.register(NI_POINTER_GET_FROM_FIELD, |_, _| ret(NAV));
+        let crossings = Crossings::default();
+        let sink = crossings.clone();
+        let mut script = script.into_iter();
+        e.register_double(NAVMESH_CROSSED_EDGE, move |e, a| {
+            let mut sink = sink.borrow_mut();
+            let hit = [e.mem.f32(a[3]), e.mem.f32(a[3] + 4)];
+            let end = [e.mem.f32(a[4]), e.mem.f32(a[4] + 4)];
+            sink.push((a.to_vec(), hit, end));
+            let step = sink.len() as f32;
+            e.mem.set_f32(a[5], 10.0 + step);
+            e.mem.set_f32(a[5] + 4, 11.0 + step);
+            ret(script.next().expect("a scripted crossing"))
+        });
+        e.register(NAVMESH_GET_MATCHING_EDGE_B, |e, a| {
+            e.mem.set_u16(a[4], 4);
+            e.mem.set_u32(a[5], 1);
+            ret(1)
+        });
+        e.register(NAVMESH_GET_INFO, |_, a| ret(a[0] + 0x1000));
+        e.register(NAVMESH_GET_CENTER, |e, a| {
+            set_point(e, a[1], [0.0, 0.0, 55.0]);
+            ret(a[1])
+        });
+        e.register(EDGE_REFERENCE_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            e.mem.set_u16(a[0] + 4, a[2] as u16);
+            e.mem.set_u32(a[0] + 8, a[3]);
+            ret(a[0])
+        });
+        e.register(EDGE_REFERENCE_COPY, |e, a| {
+            for word in 0..3 {
+                let value = e.mem.u32(a[1] + 4 * word);
+                e.mem.set_u32(a[0] + 4 * word, value);
+            }
+            ret(a[0])
+        });
+        e.register(POINT3_CONSTRUCT, |e, a| {
+            for i in 1..4 {
+                e.mem.set_u32(a[0] + 4 * (i - 1), a[i as usize]);
+            }
+            ret(a[0])
+        });
+        (start, end, crossings)
+    }
+
+    #[test]
+    fn walk_follows_the_crossed_edges_to_the_end() {
+        let mut e = engine();
+        let (start, end, crossings) = walk_setup(&mut e, vec![2, 0xffff_ffff]);
+        e.call_log = Some(vec![]);
+        assert!(fn_006d74c0(
+            &mut e,
+            Ptr::new(start),
+            Ptr::new(end),
+            0,
+            0xffff,
+            Ptr::new(0),
+            Ptr::new(0)
+        ));
+        let log = log_of(&mut e);
+        let crossings = crossings.borrow();
+        // First from triangle 1 with no previous edge, between the planar
+        // start (1, 2) and end (9, 8); then from triangle 4 (entered by
+        // its edge 1) from the hit point the first step found.
+        let first = &crossings[0];
+        assert_eq!(first.0[..3], [NAV, 1, 0xffff_ffff]);
+        assert_eq!((first.1, first.2), ([1.0, 2.0], [9.0, 8.0]));
+        let second = &crossings[1];
+        assert_eq!(second.0[..3], [NAV, 4, 1]);
+        assert_eq!(second.1, [11.0, 12.0]);
+        // The second step's hit becomes the hit point.
+        assert_eq!(crossings.len(), 2);
+        // All three holders are released and nothing else was touched.
+        assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 3);
+        assert!(calls_to(&log, LOCATION_ASSIGN).is_empty());
+    }
+
+    fn point_2d(e: &Engine, address: u32) -> [f32; 2] {
+        [e.mem.f32(address), e.mem.f32(address + 4)]
+    }
+
+    #[test]
+    fn walk_reports_where_it_ended() {
+        let mut e = engine();
+        let (start, end, _) = walk_setup(&mut e, vec![2, 0xffff_ffff]);
+        let result = e.mem.alloc(0x28);
+        e.call_log = Some(vec![]);
+        assert!(fn_006d74c0(
+            &mut e,
+            Ptr::new(start),
+            Ptr::new(end),
+            0,
+            0xffff,
+            Ptr::new(result),
+            Ptr::new(0)
+        ));
+        let log = log_of(&mut e);
+        // The result starts as the start location, then gets the info of
+        // the navmesh, the triangle 4 and the end position.
+        assert_eq!(calls_to(&log, LOCATION_ASSIGN), vec![vec![result, start]]);
+        assert_eq!(
+            calls_to(&log, LOCATION_SET_NAVMESH_INFO),
+            vec![vec![result, NAV + 0x1000]]
+        );
+        assert_eq!(calls_to(&log, LOCATION_SET_TRIANGLE), vec![vec![result, 4]]);
+        assert_eq!(
+            calls_to(&log, LOCATION_SET_POSITION),
+            vec![vec![result, end]]
+        );
+    }
+
+    #[test]
+    fn walk_must_end_in_the_target_triangle() {
+        for (navmesh, triangle, expected) in
+            [(NAV, 4u32, true), (NAV, 5, false), (NAV + 4, 4, false)]
+        {
+            let mut e = engine();
+            e.register(LOCATION_CONSTRUCT_FROM_MESH_POINT, |_, a| ret(a[0]));
+            let (start, end, _) = walk_setup(&mut e, vec![2, 0xffff_ffff]);
+            let result = e.mem.alloc(0x28);
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                fn_006d74c0(
+                    &mut e,
+                    Ptr::new(start),
+                    Ptr::new(end),
+                    navmesh,
+                    triangle,
+                    Ptr::new(result),
+                    Ptr::new(0)
+                ),
+                expected
+            );
+            let log = log_of(&mut e);
+            if expected {
+                // The result is the end position on the target triangle: a
+                // location built on the stack, assigned and destroyed.
+                let built = &calls_to(&log, LOCATION_CONSTRUCT_FROM_MESH_POINT)[0];
+                assert_eq!(built[1..], [end, NAV + 0x1000, 4]);
+                assert_eq!(calls_to(&log, LOCATION_ASSIGN)[1], vec![result, built[0]]);
+                assert_eq!(calls_to(&log, LOCATION_DESTRUCT), vec![vec![built[0]]]);
+            } else {
+                assert!(calls_to(&log, LOCATION_CONSTRUCT_FROM_MESH_POINT).is_empty());
+            }
+            assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 3);
+        }
+    }
+
+    #[test]
+    fn walk_is_stopped_by_a_refusing_filter() {
+        let mut e = engine();
+        let (start, end, _) = walk_setup(&mut e, vec![2]);
+        let filter = e.mem.alloc(8);
+        e.put_vtable(0x00a6_0000, &[0x00a6_1000]);
+        e.mem.set_u32(filter, 0x00a6_0000);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        e.register_double(0x00a6_1000, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            ret(0)
+        });
+        let placed = Rc::new(RefCell::new(Vec::new()));
+        let sink = placed.clone();
+        e.register_double(LOCATION_SET_POSITION, move |e, a| {
+            sink.borrow_mut().push(point(e, a[1]));
+            Ret::default()
+        });
+        let result = e.mem.alloc(0x28);
+        e.call_log = Some(vec![]);
+        assert!(!fn_006d74c0(
+            &mut e,
+            Ptr::new(start),
+            Ptr::new(end),
+            0,
+            0xffff,
+            Ptr::new(result),
+            Ptr::new(filter)
+        ));
+        let log = log_of(&mut e);
+        // The filter got the references of the crossing by value: the edge
+        // left (navmesh, triangle 1, edge 2) and the edge entered
+        // (navmesh, triangle 4, edge 1).
+        assert_eq!(*seen.borrow(), vec![vec![filter, NAV, 1, 2, NAV, 4, 1]]);
+        // The result is where the walk stopped: triangle 1, at the hit
+        // point (11, 12) with the height of the center, 55.
+        assert_eq!(
+            calls_to(&log, LOCATION_SET_NAVMESH_INFO),
+            vec![vec![result, NAV + 0x1000]]
+        );
+        assert_eq!(calls_to(&log, LOCATION_SET_TRIANGLE), vec![vec![result, 1]]);
+        assert_eq!(*placed.borrow(), vec![[11.0, 12.0, 55.0]]);
+        // The next holder, the current one and the start's are released.
+        assert_eq!(calls_to(&log, NAV_HOLDER_RELEASE).len(), 3);
+    }
+
+    #[test]
+    fn walk_continues_when_the_filter_accepts_and_stops_at_blocking_edges() {
+        let mut e = engine();
+        let (start, end, _) = walk_setup(&mut e, vec![2, 0xffff_ffff]);
+        let filter = e.mem.alloc(8);
+        e.put_vtable(0x00a6_0000, &[0x00a6_1000]);
+        e.mem.set_u32(filter, 0x00a6_0000);
+        e.register(0x00a6_1000, |_, _| ret(1));
+        assert!(fn_006d74c0(
+            &mut e,
+            Ptr::new(start),
+            Ptr::new(end),
+            0,
+            0xffff,
+            Ptr::new(0),
+            Ptr::new(filter)
+        ));
+
+        // An edge whose extra info is 1 blocks the walk, other infos do not.
+        for (value, expected) in [(1u32, false), (2, true)] {
+            let mut e = engine();
+            let (start, end, _) = walk_setup(&mut e, vec![2, 0xffff_ffff]);
+            let info = e.mem.alloc(4);
+            e.mem.set_u32(info, value);
+            e.register_double(NAVMESH_EDGE_EXTRA_INFO, move |_, _| ret(info));
+            assert_eq!(
+                fn_006d74c0(
+                    &mut e,
+                    Ptr::new(start),
+                    Ptr::new(end),
+                    0,
+                    0xffff,
+                    Ptr::new(0),
+                    Ptr::new(0)
+                ),
+                expected
+            );
+        }
+
+        // An edge without a neighbour blocks it as well.
+        let mut e = engine();
+        let (start, end, _) = walk_setup(&mut e, vec![2]);
+        e.register(NAVMESH_GET_MATCHING_EDGE_B, |_, _| ret(0));
+        assert!(!fn_006d74c0(
+            &mut e,
+            Ptr::new(start),
+            Ptr::new(end),
+            0,
+            0xffff,
+            Ptr::new(0),
+            Ptr::new(0)
+        ));
+    }
+
+    #[test]
+    fn walk_recomputes_the_hit_point_when_the_navmesh_changes() {
+        let mut e = engine();
+        let (start, end, crossings) = walk_setup(&mut e, vec![2, 0xffff_ffff]);
+        e.register(HOLDER_DIFFERS, |_, _| ret(1));
+        let vertices = e.mem.alloc(24);
+        set_point(&mut e, vertices, [1.0, 2.0, 3.0]);
+        set_point(&mut e, vertices + 12, [4.0, 5.0, 6.0]);
+        e.register_double(NAVMESH_EDGE_VERTICES, move |e, a| {
+            assert_eq!((a[0], a[2], a[3]), (NAV, 4, 1));
+            e.mem.set_u32(a[1], vertices);
+            e.mem.set_u32(a[1] + 4, vertices + 12);
+            Ret::default()
+        });
+        let closest = e.mem.alloc(8);
+        e.mem.set_f32(closest, 21.0);
+        e.mem.set_f32(closest + 4, 22.0);
+        let ends = Rc::new(RefCell::new(Vec::new()));
+        let sink = ends.clone();
+        e.register_double(POINT2_SEGMENT_CLOSEST, move |e, a| {
+            sink.borrow_mut()
+                .push((point_2d(e, a[1]), point_2d(e, a[2]), point_2d(e, a[3])));
+            ret(closest)
+        });
+        assert!(fn_006d74c0(
+            &mut e,
+            Ptr::new(start),
+            Ptr::new(end),
+            0,
+            0xffff,
+            Ptr::new(0),
+            Ptr::new(0)
+        ));
+        // The planar ends of the new edge and the previous hit point.
+        assert_eq!(*ends.borrow(), vec![([1.0, 2.0], [4.0, 5.0], [11.0, 12.0])]);
+        // The walk goes on from the point found.
+        assert_eq!(crossings.borrow()[1].1, [21.0, 22.0]);
+    }
+
+    #[test]
+    fn walk_without_navmesh_info_or_a_triangle_fails_early() {
+        // No info for the start: success only without a target navmesh.
+        let mut e = engine();
+        let (start, end, _) = walk_setup(&mut e, vec![]);
+        e.register(LOCATION_RESOLVE_NAVMESH_INFO, |_, _| ret(0));
+        for (navmesh, expected) in [(0, true), (NAV, false)] {
+            assert_eq!(
+                fn_006d74c0(
+                    &mut e,
+                    Ptr::new(start),
+                    Ptr::new(end),
+                    navmesh,
+                    0xffff,
+                    Ptr::new(0),
+                    Ptr::new(0)
+                ),
+                expected
+            );
+        }
+        // No triangle for the start: failure, the holder is released.
+        let mut e = engine();
+        let (start, end, _) = walk_setup(&mut e, vec![]);
+        e.register(LOCATION_GET_NAVMESH_AND_TRIANGLE, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        assert!(!fn_006d74c0(
+            &mut e,
+            Ptr::new(start),
+            Ptr::new(end),
+            0,
+            0xffff,
+            Ptr::new(0),
+            Ptr::new(0)
+        ));
+        assert_eq!(calls_to(&log_of(&mut e), NAV_HOLDER_RELEASE).len(), 1);
+    }
+
+    #[test]
+    fn holder_comparison_is_the_exe_functions_answer() {
+        let mut e = engine();
+        e.register_double(HOLDER_DIFFERS, |_, a| ret((a[0] != a[1]) as u32));
+        assert!(fn_006d7a20(&mut e, Ptr::new(1), Ptr::new(2)));
+        assert!(!fn_006d7a20(&mut e, Ptr::new(2), Ptr::new(2)));
+    }
+
+    #[test]
+    fn straightening_wrapper_asks_for_neither_a_length_nor_a_path() {
+        let mut e = engine();
+        let arrays = Arrays::default();
+        let (from, to) = straighten_setup(&mut e, &arrays);
+        // Neither location resolves: success, and no length is computed.
+        e.register(LOCATION_RESOLVE_CLOSEST, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        assert!(fn_006d62c0(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(0)
+        ));
+        assert!(calls_to(&log_of(&mut e), POINT3_LENGTH).is_empty());
+        // The second resolves alone: failure.
+        e.register_double(LOCATION_RESOLVE_CLOSEST, move |_, a| {
+            ret((a[0] == to) as u32)
+        });
+        assert!(!fn_006d62c0(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(to),
+            Ptr::new(0)
+        ));
+    }
+
+    #[test]
+    fn line_of_sight_overload_two_walks_without_a_target() {
+        let mut e = engine();
+        let (from, point_to) = (e.mem.alloc(0x28), e.mem.alloc(12));
+        let result = e.mem.alloc(0x28);
+        e.call_log = Some(vec![]);
+        // The start has no info, so the walk is true exactly for no target
+        // navmesh.
+        assert!(pathing_check_line_of_sight_ov2(
+            &mut e,
+            Ptr::new(from),
+            Ptr::new(point_to),
+            Ptr::new(result),
+            Ptr::new(0)
+        ));
+        assert_eq!(
+            log_of(&mut e),
+            vec![
+                (LOCATION_ASSIGN, vec![result, from]),
+                (LOCATION_RESOLVE_NAVMESH_INFO, vec![from, 0])
+            ]
+        );
+    }
+
+    #[test]
+    fn funcs_cover_the_eighty_functions() {
+        assert_eq!(funcs().len(), 80);
     }
 }
