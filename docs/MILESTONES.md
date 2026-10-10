@@ -56,6 +56,12 @@ acceptance routes passed. Evidence and open work:
 comparison remains pending. Next action: merge after CI and review,
 publish the play build, then begin Phase 2 (HANDOFF.md). Buffered
 player input remains an interface follow-up before moving menu idle.
+Interface/render PR #113 now passes local core/viewer tests, lint, release
+builds and all three acceptance routes. CI and merge remain pending;
+play build remains 39. Exact menu-input placement and renderer work remain
+open, and original-game comparison is not done. Evidence and owners:
+[HANDOFF.md](HANDOFF.md). Next action: merge after both required checks,
+then publish play build 40 from merged main.
 
 Next session: start with [HANDOFF.md](HANDOFF.md). Open tasks:
 [TASKS.md](TASKS.md); contributor rules: [CONTRIBUTING.md](../CONTRIBUTING.md).

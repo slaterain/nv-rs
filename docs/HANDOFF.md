@@ -14,10 +14,11 @@ script stopped after the merge/rebase; recovery verified main and recreated
 the automatically deleted remote branch with a normal push.
 
 Active in this session: a04 restarted from its partial file and a03 started
-its original task. The interface/render agent owns p2 and is finishing
-the WIP (now `5fc95c9` after rebase onto `b995218`). a05 and a06 are waiting
-for an available agent and
-still have their original task files: do not reset them before first restart.
+its original task. Both are completing behavioral tests and final checks.
+a05 has now started its original AI task-manager task without reset.
+a06 is waiting for an available agent and still has its original task file:
+do not reset it before first restart. The interface/render work in p2 is
+finished as PR #113 (`5b292ad`), awaiting CI and lead merge coordination.
 The session supports three child agents plus the lead; rotate translation
 slots while p2 runs. a01 was collected as `74f7fb1` (40 functions), and
 `cycle.sh` prepared its next b0329 task (78 entries left, starting at
@@ -34,8 +35,13 @@ combinations (private evidence under `phase0/codex-audit`), not whole units.
 p2's 182 release-profile viewer tests and 15,108 core tests passed after
 repairing WIP model/test errors. The missing model call
 was voice pause `0070bbe0` at `0070bb03`; a queue mock also made a deferred
-deletion loop run forever. Both workspaces passed lint; final release
-builds and acceptance are pending. No new play build has been published.
+deletion loop run forever. Both workspaces passed lint and release builds.
+Doc Mitchell, Back in the Saddle and Ghost Town Gunfight acceptance routes
+all passed; private evidence is under `%USERPROFILE%\nv-re\acceptance\pr7-resume-20261010`.
+This is not a comparison with the original game. No new play build has
+been published. PR #112 is the rolling navigation batch (`81a4677`): core
+CI passed, viewer CI is pending. PR #113 started CI on `b995218`; rebase it
+after #112 merges, preserve both milestone notes and regenerate the ledger.
 
 Machine note: automatic policy blocked removal of idle p3's target cache;
 nothing was deleted. Private `task.sh` now warns below 40 GB free instead
@@ -44,17 +50,19 @@ deletion path to bypass that denial. Ending the hung test recovered space.
 
 Next steps:
 
-1. Ship the rolling PR from `claude/engine-crate` once both checks pass;
-   `gh pr list --head claude/engine-crate` identifies the current number.
+1. Ship rolling PR #112 from `claude/engine-crate` once both checks pass.
+   Later local commits belong to the following rolling batch.
 2. Collect completed slots with one `cycle.sh NN 0 0` at a time. Never
-   cycle an active agent's worktree. Restart a05 and a06 from their existing
-   task files before resetting them; then rotate a01's prepared next task.
-3. Finish p2 validation, amend its WIP into a proper commit, push and open
-   the interface/render PR. Rebase if another batch merges; retain both
+   cycle an active agent's worktree. Restart a06 from its existing task
+   file before resetting it; then rotate a01's prepared next task.
+3. Rebase interface/render PR #113 if another batch merges; retain both
    sides' tests and regenerate the ledger. Merge only with both checks
    passing. Detailed models and open wiring: FRAME_SKELETON.md.
 4. After that PR merges: play build 40 from main, then Phase 2. Keep the
    early menu-input boundary recorded as a follow-up, not a new priority.
+   A private real-registry ExtraData probe already identifies the first
+   dependency: `0040f740` constructs a list, but `0040f680` reaches open
+   base constructor `0040ec80`. No successful object round trip yet.
 
 ## Where things stand
 
@@ -84,14 +92,14 @@ Next steps:
     `frame_order::PlayerSet`.
   - PR 5 world and time stage (#105): merged.
   - PR 6 AI task stage (#107): merged.
-  - PR 7 interface and render: resumed WIP in worktree
+  - PR 7 interface and render: #113 open, tested, in worktree
     `%USERPROFILE%\nv-re\work\agents\p2`, branch
     `claude/phase1-interface-stage` (see "Resume here"). Merge after both
     checks pass, rebasing first if translation PRs merged meanwhile (LEDGER.md
     and engine unit test modules can conflict; keep both sides' tests).
   - After that: Phase 2 (state model in engine memory, save round trip; see
     ENGINE_PORT_PLAN.md).
-- **Rolling translation PR:** #109 merged; the next batch is on branch
+- **Rolling translation PR:** #109 merged; #112 is open on branch
   `claude/engine-crate` (see "Resume here").
 - **Play build** (the user's `Desktop\nv-rs-play`): Build 39 = main with #107.
   After the next wiring PR merges, build `viewer` in release from main
