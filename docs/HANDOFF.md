@@ -10,8 +10,8 @@ machinery runs.
 - **Phase 0** (engine map, ledger) is merged (#72). `docs/LEDGER.md` is the
   coverage table; regenerate with
   `cargo run -q --release --manifest-path scripts/ledger/Cargo.toml`.
-- **Engine crate** (`crates/engine`, ADR-0006): about 9,000 of FalloutNV.exe's
-  functions are translated (13.6% of all, see LEDGER.md), each with a
+- **Engine crate** (`crates/engine`, ADR-0006): about 9,500 of FalloutNV.exe's
+  functions are translated (14.3% of all, see LEDGER.md), each with a
   `// Translated from <addr>` marker and tests. They run in the crate's
   emulated 32-bit memory, not yet in play.
 - **Units finished:** main.cpp, actor.cpp (all 7 parts), playercharacter.cpp
@@ -19,22 +19,28 @@ machinery runs.
   tesobjectrefr.cpp, extradatalist.cpp, extradataobjects.cpp, tesscript*.cpp,
   tesform, tesfile, tesland, tesworldspace, teswater, tesnpc, package,
   inventorychanges, bipedanim, animation, modelloader, tesobjectcell,
-  bgsdecalmanager, navmeshobstaclemanager, globalfunc, and others.
-- **In progress (translation lanes):** pathfind.cpp (a01), highprocess.cpp
-  parts (a03, a04, a05), BSMenu/tile.cpp (a06).
+  bgsdecalmanager, navmeshobstaclemanager, globalfunc, pathfind.cpp,
+  BSMenu/tile.cpp, highprocess.cpp parts 1, 2, 4 and 5, and others.
+- **In progress (translation lanes):** bgssaveloadmanager.cpp (a01),
+  highprocess.cpp part 3 (a03), run_004a3c20 (a04), combatgroup.cpp (a05),
+  loadingmenu.cpp (a06).
 - **Phase 1 (frame skeleton) wiring:**
   - PR 1 frame map (#84), PR 2 `world::frame` (#86), PR 3 Bevy order from the
     frame (#90): merged.
-  - PR 4 player stage: **open as #101**, rebased on main, CI was running. It
-    adds `world::frame::player` and `frame_order::PlayerSet`; acceptance routes
-    doc, vcg02, vms16 passed. Merge it when both checks pass (squash, admin).
-  - Next: PR 5 world and time stage, PR 6 AI task stage (Actor::Update, AI
+  - PR 4 player stage (#101): merged. It added `world::frame::player` and
+    `frame_order::PlayerSet`.
+  - PR 5 world and time stage: an agent is working on it in the worktree
+    `%USERPROFILE%\nv-re\work\agents\p2`, branch `claude/phase1-world-stage`;
+    it opens its own PR. Merge after both checks pass, rebasing it on main
+    first if translation PRs merged meanwhile (LEDGER.md and engine unit test
+    modules can conflict; keep both sides' tests).
+  - Next: PR 6 AI task stage (Actor::Update, AI
     threads, the Havok step via TES::UpdateCellAnimations 00453550), PR 7
     interface and render. Then Phase 2 (state model in engine memory, save
     round trip; see ENGINE_PORT_PLAN.md).
-- **Rolling translation PR:** #100 (branch `claude/engine-crate`).
-- **Play build** (the user's `Desktop\nv-rs-play`): Build 36 = main with #90.
-  After #101 merges, build `viewer` in release from main
+- **Rolling translation PR:** #103 (branch `claude/engine-crate`).
+- **Play build** (the user's `Desktop\nv-rs-play`): Build 37 = main with #101.
+  After the next wiring PR merges, build `viewer` in release from main
   (`cargo build --release --manifest-path viewer/Cargo.toml`), copy
   `viewer/target/release/nv-viewer.exe` into `app` (or `next` if the viewer is
   running) and add a plain-language entry at the top of `WHATS-NEW.txt` (LF
