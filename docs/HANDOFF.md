@@ -12,28 +12,29 @@ checks and were squash-merged as `b995218` and `d854fbe`. Current rolling
 PR #114 contains the later navigation-render and exterior-cell loader
 batches, ledger and handoff. The lead branch is `claude/engine-crate`.
 
-Phase 1 PR 7 is finished as PR #113, rebased on `d854fbe` at `3662420`.
-Only ledger/milestone conflicts needed resolution; world/viewer source is
-unchanged by that rebase. Both CI checks restarted. Local validation
+Phase 1 PR 7 (#113) passed both checks and merged as `f917219`.
+The lead branch is rebased onto that main.
+Only ledger/milestone conflicts needed resolution. Local validation
 passed 15,108 core tests, 182 viewer release tests, formatting, lint and
 release builds. Doc Mitchell, Back in the Saddle and Ghost Town Gunfight
 acceptance routes passed; private evidence is under
 `%USERPROFILE%/nv-re/acceptance/pr7-resume-20261010`. This is not a
 comparison with the original game. Exact menu-input placement and GPU
-renderer work remain open in FRAME_SKELETON.md. Play build remains 39.
+renderer work remain open in FRAME_SKELETON.md. Build 40 is compiling
+from merged main in p2; play copy remains 39 until publication is verified.
 
-Slot state: a01 is active on its prepared navigation continuation;
-a05 has finished its original task and awaits collection (28 complete,
-12 partial bodies). a06 was collected as `195ffaa` (40 complete functions);
-its next b0360 continuation is prepared but idle. a03 was collected as `d68664d` (38 functions, 43 focused tests),
-and its next b0331 pathmanager.cpp task is prepared but idle. a04's
-36-function navigation-render batch is collected as `622afc4` after
-rebase; its b0160 explosion.cpp task is prepared but idle. Runtime allows
-three children plus the lead; rotate slots only after their owner stops.
+Slot state: a01 is active on its prepared navigation continuation; a04
+is active on b0160 explosion.cpp. a03's next b0331 pathmanager.cpp task
+is prepared but idle. a06's next b0360 continuation is prepared but idle.
+a05 was collected as `136fa2a` (28 complete, 12 partial; five behavior gaps
+and seven exception-cleanup gaps). Its next b0158 task has 12 entries
+left, starting at `008ca620`, prepared but idle. Runtime allows three
+children plus the lead; rotate slots only after their owner stops.
 
 Collection validation: a01 passed 13,281 engine tests; a04 added 31
 focused tests and passed 13,312 combined engine tests; a03 passed 13,355
 combined engine tests. a06 passed 13,397 combined engine tests.
+a05 passed 13,438 combined engine tests before the PR 7 rebase.
 Formatting, engine lint and doc tests passed for
 each collection. Native spot checks cover five `00698620` point products
 and 512 `006a5da0` flag combinations, not whole units. These translations
@@ -41,9 +42,11 @@ are not newly playable behavior.
 
 Lead Phase 2 preparation is isolated in managed worktree
 `%USERPROFILE%/.codex/worktrees/phase2-extra-data/wt-phase0`, branch
-`codex/phase2-extra-data`. Uncommitted files add an explicit engine-owned
+`codex/phase2-extra-data`. Commit `0a00e09` adds an explicit engine-owned
 ExtraData list handle and four traced missing helpers; focused integration
-tests passed, as did all 15,124 core tests. Lint/release checks are running.
+tests passed, as did all 15,124 core tests, lint, formatting and release
+build. Full checks rerun after rebasing onto `f917219`; the milestone
+note is still uncommitted in that worktree.
 The installed-executable real-registry probe passes construction, add,
 lookup and detach. No world/viewer consumer or save writer is added.
 Private probes/native vectors and the read-only 11-save baseline are in
@@ -57,8 +60,8 @@ deletion path to bypass that denial.
 
 Next steps:
 
-1. Merge PR #113 only after both checks pass on its current head. Publish
-   play build 40 from merged main, with a plain-language WHATS-NEW entry.
+1. Finish the merged-main viewer build and Doc route, then publish play
+   build 40 with a plain-language WHATS-NEW entry and verify the copy.
 2. Collect completed slots with one `cycle.sh NN 0 0` at a time. Never
    cycle an active agent's worktree. Rotate prepared tasks as capacity opens.
 3. Ship rolling PR #114 when both checks pass; rebase affected branches
@@ -72,8 +75,8 @@ Next steps:
 - **Phase 0** (engine map, ledger) is merged (#72). `docs/LEDGER.md` is the
   coverage table; regenerate with
   `cargo run -q --release --manifest-path scripts/ledger/Cargo.toml`.
-- **Engine crate** (`crates/engine`, ADR-0006): 10,410 of FalloutNV.exe's
-  functions are translated (15.7% of all, see LEDGER.md), each with a
+- **Engine crate** (`crates/engine`, ADR-0006): 10,454 of FalloutNV.exe's
+  functions are translated (15.8% of all, see LEDGER.md), each with a
   `// Translated from <addr>` marker and tests. They run in the crate's
   emulated 32-bit memory, not yet in play.
 - **Units finished:** main.cpp, actor.cpp (all 7 parts), playercharacter.cpp
@@ -86,7 +89,7 @@ Next steps:
   pathinglocation.cpp, bgssceneinfo.cpp, bgssaveloadgame.cpp, and others.
 - **In progress (translation lanes; see "Resume here" for current owners):**
   navmesh_util.cpp (a01, active), pathmanager.cpp (a03, prepared), explosion.cpp
-  (a04, prepared), aitaskmanager.cpp lane 2 (a05; MovementTaskData still needs its
+  (a04, active), aitaskmanager.cpp lane 2 (a05; MovementTaskData still needs its
   layout, see the file header), bhkworld.obj (a06).
 - **Phase 1 (frame skeleton) wiring:**
   - PR 1 frame map (#84), PR 2 `world::frame` (#86), PR 3 Bevy order from the
@@ -95,12 +98,9 @@ Next steps:
     `frame_order::PlayerSet`.
   - PR 5 world and time stage (#105): merged.
   - PR 6 AI task stage (#107): merged.
-  - PR 7 interface and render: #113 open, tested, in worktree
-    `%USERPROFILE%\nv-re\work\agents\p2`, branch
-    `claude/phase1-interface-stage` (see "Resume here"). Merge after both
-    checks pass, rebasing first if translation PRs merged meanwhile (LEDGER.md
-    and engine unit test modules can conflict; keep both sides' tests).
-  - After that: Phase 2 (state model in engine memory, save round trip; see
+  - PR 7 interface and render (#113): merged as `f917219` after both checks.
+    Acceptance passed; exact open boundaries remain in FRAME_SKELETON.md.
+  - Phase 2 (state model in engine memory, save round trip; see
     ENGINE_PORT_PLAN.md).
 - **Rolling translation PR:** #109 and #112 merged; #114 is open on branch
   `claude/engine-crate` (see "Resume here").

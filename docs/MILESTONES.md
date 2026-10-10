@@ -82,6 +82,13 @@ The isolated Phase 2 list probe now passes with installed executable data
 and the real registry. No world consumer or save round trip is established.
 Next action remains interface/render CI and play build 40 publication.
 
+Phase 1 PR 7 merged as `f917219` after both CI checks passed. Build 40
+is building from main. AI task-manager batch collected as `136fa2a`:
+28 complete and 12 partial functions (five behavior gaps, seven cleanup
+gaps), with 13,438 combined engine tests passing before the PR 7 rebase.
+The list adapter passed its initial full checks and is rebased for another
+combined check. Next action: verify and publish play build 40.
+
 Next session: start with [HANDOFF.md](HANDOFF.md). Open tasks:
 [TASKS.md](TASKS.md); contributor rules: [CONTRIBUTING.md](../CONTRIBUTING.md).
 
