@@ -8,8 +8,13 @@
 //! `009ff340`. Translated so far, in order:
 //!
 //! * session 1: `009ff340` to `00a03da0` (40 functions, up to and including
-//!   `Tile::GetChildByName`); the next function to translate is
-//!   `00a03eb0` (`Tile::GetChildByID`).
+//!   `Tile::GetChildByName`);
+//! * session 2: `00a03eb0` to `00a09410` (40 functions, from
+//!   `Tile::GetChildByID` up to and including `Tile::Value::CalculateValue`):
+//!   the dirty and hibernating tile lists, `UpdateAll` / `UpdateTile`,
+//!   `GetTextureAtlasInfo`, the fade controls, `SetParent`, the link
+//!   lookup, and the trait value's actions and calculation. The next
+//!   function to translate is `00a0a0b0` (`Tile::GetUnderscoreValue`).
 //!
 //! Conventions of the whole unit:
 //!
@@ -124,6 +129,50 @@ layout! {
         0x00 iFileSize: u32,
         /// `pXMLData` (Xbox PDB).
         0x04 pXMLData: Ptr,
+    }
+
+    /// `Tile::FadeControl` (Xbox PDB), 0x1c bytes: one running fade of a
+    /// tile's trait. The nodes of the global fade list ([`FADE_CONTROLS_LIST`])
+    /// point to these.
+    pub struct FadeControl: 0x1c {
+        /// `fStartValue` (Xbox PDB).
+        0x00 fStartValue: f32,
+        /// `fEndValue` (Xbox PDB).
+        0x04 fEndValue: f32,
+        /// `uiStartTime` (Xbox PDB): `GetTickCount` at the start.
+        0x08 uiStartTime: u32,
+        /// `fDurationMillis` (Xbox PDB).
+        0x0c fDurationMillis: f32,
+        /// `iTrait` (Xbox PDB): the trait id that is faded.
+        0x10 iTrait: i32,
+        /// `pParent` (Xbox PDB): the tile.
+        0x14 pParent: Ptr<Tile>,
+        /// `eFadeType` (Xbox PDB): a `TILE_FADE_CONTROL_TYPE`.
+        0x18 eFadeType: i32,
+    }
+
+    /// `Tile::Action` (Xbox PDB) with its two derived classes
+    /// `Tile::FloatAction` and `Tile::RefValueAction` (0x10 bytes, a vtable
+    /// at +0): one step of a trait's calculation.
+    pub struct ValueAction: 0x10 {
+        /// `eActionType` (Xbox PDB): a `VALUE_ACTION`.
+        0x04 eActionType: i32,
+        /// `pnext` (Xbox PDB).
+        0x08 pnext: Ptr,
+        /// `fValue` (Xbox PDB, `FloatAction`).
+        0x0c fValue: f32,
+        /// `pRefValue` (Xbox PDB, `RefValueAction`): the trait the action
+        /// reads.
+        0x0c pRefValue: Ptr<TileValue>,
+    }
+
+    /// `Tile::Reaction` (Xbox PDB), 0x8 bytes: a node of the list of the
+    /// values that depend on a value.
+    pub struct Reaction: 0x08 {
+        /// `preactionValue` (Xbox PDB).
+        0x00 preactionValue: Ptr<TileValue>,
+        /// `pnext` (Xbox PDB).
+        0x04 pnext: Ptr,
     }
 }
 
@@ -471,6 +520,283 @@ const TI_TILE_END: i32 = 7;
 const TI_SIMPLE_TRAIT: i32 = 8;
 const TI_SIMPLE_ACTION: i32 = 9;
 const TI_TRAIT_LINK: i32 = 10;
+
+// Session 2: constants of `GetChildByID` .. `Value::~Value`.
+
+/// `Tile::enumbfUpdate` mask of the ten update bits (`ebfNeedsUpdateMask`).
+pub(crate) const UPDATE_MASK: u32 = 0x3ff;
+/// More `Tile::enumTrait` ids: `eStackingType`, `eChildCount`, `eZoom`,
+/// `eFilewidth` and `eFileheight`.
+pub(crate) const TRAIT_STACKING_TYPE: i32 = 0xfa7;
+pub(crate) const TRAIT_CHILD_COUNT: i32 = 0xfb6;
+pub(crate) const TRAIT_ZOOM: i32 = 0xfb8;
+pub(crate) const TRAIT_FILE_WIDTH: i32 = 0xfcd;
+pub(crate) const TRAIT_FILE_HEIGHT: i32 = 0xfce;
+/// `Tile::VALUE_ACTION::VA_REF` (Xbox PDB): an action that reads another
+/// trait.
+const VA_REF: i32 = 2023;
+/// `Tile::TILE_FADE_CONTROL_TYPE` (Xbox PDB).
+const FADE_STANDARD: i32 = 0;
+const FADE_NONLINEAR_LONG_DARK_REPEATING: i32 = 1;
+const FADE_BLINK_THRICE: i32 = 2;
+const FADE_BLINK_FAST_FADE: i32 = 3;
+const FADE_IN_HOLD_FADE_OUT: i32 = 4;
+/// The names of the user traits that count the flashes of the blinking
+/// fades: `"_FlashCount"` and `"_TotalFlashCount"`.
+const FLASH_COUNT_NAME: u32 = 0x0109_4c00;
+const TOTAL_FLASH_COUNT_NAME: u32 = 0x0109_4bec;
+
+/// `Tile::bNeedsCheckHibernate` (Xbox PDB static, a byte): set by
+/// `UpdateTile` when a tile that was hidden became visible.
+const NEEDS_CHECK_HIBERNATE: u32 = 0x011f_32c9;
+/// `Tile::iTilesUpdatedThisFrame` (Xbox PDB static).
+const TILES_UPDATED_THIS_FRAME: u32 = 0x011f_32d4;
+/// `InterfaceManager::pInstance` (the word `011d8a80`), and its methods
+/// that `UpdateAll` calls (`thiscall`): `AddTileToUpdateList(tile)`
+/// (Xbox PDB) and the end-of-update step (no PDB name).
+const INTERFACE_MANAGER: u32 = 0x011d_8a80;
+const ADD_TILE_TO_UPDATE_LIST: u32 = 0x0071_3da0;
+const INTERFACE_MANAGER_END_OF_UPDATE: u32 = 0x0071_3e20;
+/// `Interface::GetFirstChanceTextureRelease()` (Xbox PDB), the step that
+/// follows it (`cdecl(0)`, no PDB name) and
+/// `BSTexturePalette::PurgeUnusedTextures()` (Xbox PDB).
+const INTERFACE_GET_FIRST_CHANCE_TEXTURE_RELEASE: u32 = 0x0070_6d70;
+const INTERFACE_PREPARE_TEXTURE_RELEASE: u32 = 0x0070_6db0;
+const TEXTURE_PALETTE_PURGE_UNUSED: u32 = 0x00a6_1cd0;
+/// `Interface::GetRealScreenWidth()` / `GetRealScreenHeight()` (Xbox PDB)
+/// and the width and height of the rendered menu (no PDB names); each
+/// answers a `float` in `ST0`.
+const SCREEN_REAL_WIDTH: u32 = 0x0070_6e40;
+const SCREEN_REAL_HEIGHT: u32 = 0x0070_6e10;
+const RENDERED_MENU_WIDTH: u32 = 0x0070_6e80;
+const RENDERED_MENU_HEIGHT: u32 = 0x0070_6e90;
+/// The function `fn_00a08b20` calls for the link code `0x138f` (no PDB
+/// name, `Interface`).
+const INTERFACE_00706CF0: u32 = 0x0070_6cf0;
+/// `NiAVObject::GetProperty(type)` (Xbox PDB, `thiscall`), the two
+/// `NiTArray<NiPointer<NiAVObject>>` steps `Compact` and `UpdateSize` (Xbox
+/// PDB, `thiscall` on the children array at +0x9C of an `NiNode`) and the
+/// shader property's refresh step `(flag)` (no PDB name).
+const NI_OBJECT_GET_PROPERTY: u32 = 0x00a5_9d30;
+const NI_ARRAY_COMPACT: u32 = 0x004a_fc80;
+const NI_ARRAY_UPDATE_SIZE: u32 = 0x004a_fe50;
+const SHADER_PROPERTY_REFRESH: u32 = 0x00bb_79d0;
+/// `NiTPointerList` steps (no PDB names; thiscall on the list): remove the
+/// node `*iterator` and advance the iterator to the next node
+/// `(list, &iterator)`; append `*item` `(list, &item)`; allocate a node
+/// from the allocator `(allocator)`; link a node at the tail
+/// `(list, node)`; add `*item` at the head `(list, &item)`; add `*item`
+/// behind `node` `(list, node, &item)`.
+const LIST_REMOVE_NODE: u32 = 0x0049_f590;
+const LIST_ADD_TAIL: u32 = 0x004e_d8c0;
+const LIST_NEW_NODE: u32 = 0x0043_a010;
+const LIST_ADD_NODE_TAIL: u32 = 0x0055_9a70;
+const LIST_ADD_HEAD: u32 = 0x00a0_c9f0;
+const LIST_ADD_AFTER: u32 = 0x00a0_ca70;
+/// `BSSimpleList<Tile::FadeControl *>::AddHead(&item)` and `Remove(&item)`
+/// (Xbox PDB, `thiscall`).
+const FADE_LIST_ADD_HEAD: u32 = 0x00a0_c7c0;
+const FADE_LIST_REMOVE: u32 = 0x00a0_cbe0;
+/// `Tile::ValueReactionList` (Xbox PDB static,
+/// `NiTPointerMap<Tile::Value *, Tile::Reaction *>`) and its steps: find
+/// `(map, key, &out)` (shared with the text table's find by identical-code
+/// folding), erase `(map, key)` and set `(map, key, value)` (the latter
+/// shared with [`TRAIT_EXTRA_DATA_ADD`]).
+const REACTION_MAP: u32 = 0x011f_3358;
+const REACTION_MAP_FIND: u32 = TEXT_TABLE_FIND;
+const REACTION_MAP_REMOVE: u32 = 0x00a1_e240;
+const REACTION_MAP_SET: u32 = TRAIT_EXTRA_DATA_ADD;
+/// `Tile::AddReaction(value, owner)` (Xbox PDB, `cdecl`).
+const ADD_REACTION: u32 = 0x00a0_a130;
+/// The vtables of `Tile::FloatAction` and `Tile::RefValueAction`.
+const VTABLE_FLOAT_ACTION: u32 = 0x0109_4c2c;
+const VTABLE_REF_VALUE_ACTION: u32 = 0x0109_4c44;
+/// `GetTickCount` (import slot), `_stricmp` and `_fabs` (CRT).
+const TICK_COUNT_IMPORT: u32 = 0x00fd_f060;
+const STRICMP: u32 = 0x00ec_68e4;
+const FABS: u32 = 0x00ec_6cde;
+/// Doubles in `.rdata` the code compares or computes with: `1000.0`,
+/// `0.5`, `2.0`, `1.0`, `-1.0`, `3.0` and `255.0`.
+const THOUSAND: u32 = 0x0101_7b70;
+const HALF: u32 = 0x0101_1588;
+const TWO: u32 = 0x0101_1590;
+const ONE_DOUBLE: u32 = 0x0101_2070;
+const MINUS_ONE_DOUBLE: u32 = 0x0101_a6b0;
+const THREE_DOUBLE: u32 = 0x0102_1928;
+const TWO_FIFTY_FIVE_DOUBLE: u32 = 0x0101_e568;
+/// The `id` values the update code recognises, as doubles: `110.0`,
+/// and the stacking types `102.0` and `103.0` with the floats `6000.0`
+/// and `6001.0` they are changed to.
+const ID_VALUE_110: u32 = 0x0106_ebc8;
+const STACKING_TYPE_102: u32 = 0x0107_04e8;
+const STACKING_TYPE_103: u32 = 0x0109_4bb8;
+const STACKING_VALUE_6000: u32 = 0x0109_4bc0;
+const STACKING_VALUE_6001: u32 = 0x0109_4bb0;
+/// The thresholds of the fade-in-hold-fade-out curve: `0.16666` and
+/// `0.83334` as doubles (compared) and as floats (computed with).
+const FADE_RISE_END_DOUBLE: u32 = 0x0109_4c20;
+const FADE_FALL_START_DOUBLE: u32 = 0x0109_4c10;
+const FADE_RISE_END_FLOAT: u32 = 0x0109_4c18;
+const FADE_FALL_START_FLOAT: u32 = 0x0109_4c0c;
+/// The link codes of [`fn_00a08b20`] (`Tile::enumKeyword`-style text table
+/// values of the words that name a relative tile).
+const LINK_PARENT: i32 = 0x1389;
+const LINK_SELF: i32 = 0x138a;
+const LINK_SIBLING: i32 = 0x138c;
+const LINK_CHILD: i32 = 0x138d;
+const LINK_MENUS_ROOT: i32 = 0x138e;
+const LINK_00706CF0: i32 = 0x138f;
+const LINK_MENU: i32 = 0x1390;
+const LINK_GRANDPARENT: i32 = 0x1391;
+/// The menu class table of `Tile::GetMenuByClass`: the class numbers it
+/// accepts, the word at `011f350c` (table base) and the 16-bit entry count
+/// at `011f3512`.
+const MENU_CLASS_FIRST: i32 = 0x3e9;
+const MENU_CLASS_LAST: i32 = 0x43c;
+const MENU_CLASS_TABLE: u32 = 0x011f_350c;
+const MENU_CLASS_COUNT: u32 = 0x011f_3512;
+
+/// `Tile::enumTrait::eTile` (Xbox PDB).
+pub(crate) const TRAIT_TILE: i32 = 0xfb5;
+/// `Tile::enumbfUpdate::ebfManualUpdateTris` (Xbox PDB).
+pub(crate) const FLAG_MANUAL_UPDATE_TRIS: u32 = 0x8000;
+/// `Tile::VALUE_ACTION` (Xbox PDB), the operations of
+/// [`value_calculate_value`] (`VA_REF` and the parentheses are above).
+const VA_COPY: i32 = 2000;
+const VA_ADD: i32 = 2001;
+const VA_SUB: i32 = 2002;
+const VA_MULT: i32 = 2003;
+const VA_DIV: i32 = 2004;
+const VA_MIN: i32 = 2005;
+const VA_MAX: i32 = 2006;
+const VA_MOD: i32 = 2007;
+const VA_FLOOR: i32 = 2008;
+const VA_CEIL: i32 = 2009;
+const VA_ABS: i32 = 2010;
+const VA_ROUND: i32 = 2011;
+const VA_GT: i32 = 2012;
+const VA_GTE: i32 = 2013;
+const VA_EQ: i32 = 2014;
+const VA_NEQ: i32 = 2015;
+const VA_LT: i32 = 2016;
+const VA_LTE: i32 = 2017;
+const VA_AND: i32 = 2018;
+const VA_OR: i32 = 2019;
+const VA_NOT: i32 = 2020;
+const VA_ONLYIF: i32 = 2021;
+const VA_ONLYIFNOT: i32 = 2022;
+
+/// Functions of other units (or of the CRT) that `Value::CalculateValue`
+/// calls: the stack of floats it keeps (vtable `0106cc64`, constructor
+/// `(0, 0)`, push `(&float)`, destructor; no PDB names),
+/// `ValueChangeEvent(value)` (`cdecl`, next session), the lookup of a user
+/// trait's value `(tile, trait, rounded value)` and `sprintf`; the CRT's
+/// `floor`, `ceil` and `fabs`, which take and answer a `double`.
+const VTABLE_FLOAT_STACK: u32 = 0x0106_cc64;
+const FLOAT_STACK_CONSTRUCT: u32 = 0x006b_3eb0;
+const FLOAT_STACK_PUSH: u32 = 0x006d_c320;
+const FLOAT_STACK_DESTROY: u32 = 0x006d_b720;
+const VALUE_CHANGE_EVENT: u32 = 0x00a0_a220;
+const TILE_GET_UNDERSCORE_VALUE: u32 = 0x00a0_a0b0;
+const SPRINTF_S: u32 = 0x0040_6d00;
+const FORMAT_INTEGER: u32 = 0x0102_0764;
+const FLOOR: u32 = 0x00ec_6940;
+const CEIL: u32 = 0x00ec_9e10;
+
+/// `UpdateTile`'s callees outside this file: the step after a text tile's
+/// node was made (`cdecl(1)`, no PDB name), `TileShaderProperty::SetTileTexture
+/// (texture)` (Xbox PDB), `TileImage::AddToTesTextures(name, &scale slot,
+/// &out texture, zoom, counted copy of the old texture)` (Xbox PDB, `cdecl`),
+/// the `BSStringT` constructor from a C string `(string, text)`, the
+/// geometry data steps (`MarkAsChanged(flags)`, `SetConsistency(value)`) and
+/// `NiBound::ComputeFromData(count, positions)`, and `Tile3D::UpdateNIF()`
+/// (Xbox PDB).
+const TEXT_TILE_CREATED: u32 = 0x0070_6dd0;
+const SET_TILE_TEXTURE: u32 = 0x00bb_7a10;
+const ADD_TO_TES_TEXTURES: u32 = 0x00a1_fa20;
+const BSSTRING_CONSTRUCT: u32 = 0x0040_c0e0;
+const GEOMETRY_DATA_MARK_AS_CHANGED: u32 = 0x00a6_7090;
+const GEOMETRY_DATA_SET_CONSISTENCY: u32 = 0x00a6_7050;
+const BOUND_COMPUTE_FROM_DATA: u32 = 0x00a7_ee30;
+const TILE_3D_UPDATE_NIF: u32 = 0x00a2_0980;
+/// The placeholder texture `UpdateTile` gives an image tile without one:
+/// `"Interface\\Shared\\empty.dds"`.
+const EMPTY_TEXTURE_NAME: u32 = 0x0109_4bc8;
+/// `100.0` as a `float` and as a `double`.
+const HUNDRED_FLOAT: u32 = 0x0101_6410;
+const HUNDRED_DOUBLE: u32 = 0x0101_7a40;
+/// The default translation of a model (three floats at `011f426c`) and
+/// the double `-0.008` the depth is scaled by.
+const DEFAULT_TRANSLATION: u32 = 0x011f_426c;
+const DEPTH_SCALE: u32 = 0x0106_f290;
+/// The `NiRTTI` record that `UpdateTile`'s rotation code looks for in an
+/// object's class chain (virtual `GetRTTI`, slot +8; the chain is the word
+/// at +4 of each record).
+const SHAPE_RTTI: u32 = 0x011f_4a40;
+/// `Interface::GetScreenWidth()` / `GetScreenHeight()` /
+/// `GetScreenAspectRatio()` (Xbox PDB; floats in `ST0`) and
+/// `Interface::IsRenderedMenu(menu)` (Xbox PDB, `cdecl`).
+const SCREEN_WIDTH: u32 = 0x0070_6e00;
+const SCREEN_HEIGHT: u32 = 0x0070_6df0;
+const SCREEN_ASPECT_RATIO: u32 = 0x0070_6e70;
+const INTERFACE_IS_RENDERED_MENU: u32 = 0x0070_7a30;
+/// `NiMatrix3 * NiPoint3` `(matrix, out, point)`, `NiPoint3 + NiPoint3`
+/// `(a, out, b)` and `NiPoint3 - NiPoint3` `(a, out, b)` (no PDB names,
+/// `thiscall`; each answers `out`).
+const MATRIX_TIMES_POINT: u32 = 0x004b_4500;
+const POINT_ADD: u32 = 0x0043_9e90;
+const POINT_SUBTRACT: u32 = 0x0043_9ef0;
+/// `SystemColorManager::GetInstance()` and `GetColor(entry, &rgba)` (Xbox
+/// PDB), and the colour scale step `(color, factor)` (no PDB name).
+const SYSTEM_COLOR_MANAGER_GET_INSTANCE: u32 = 0x0071_8b60;
+const SYSTEM_COLOR_MANAGER_GET_COLOR: u32 = 0x0071_9060;
+const COLOR_SCALE: u32 = 0x0053_21d0;
+/// The `id` value `111.0` (a double) and the name, brightness and alpha
+/// of the dark red "speech challenge failure" highlight: `"lb_highlight_box"`,
+/// `0.545f` and `0.2f`.
+const ID_VALUE_111: u32 = 0x0106_ebc0;
+const HIGHLIGHT_BOX_NAME: u32 = 0x0106_f898;
+const HIGHLIGHT_RED: u32 = 0x0109_4bc4;
+const HIGHLIGHT_ALPHA: u32 = 0x0101_df44;
+
+/// For `GetTextureAtlasInfo`: the directory `"Data\\Textures\\"` the atlas
+/// files are in; the token delimiters `" ,\t"` and `" ,"`;
+/// `FileFinder::GetFile(path, 0, 0x4000)` (Xbox PDB); the CRT's `strcat_s`,
+/// `strtok` and `atof`; the game's `std::string` steps (`_Tidy(built,
+/// size)`, `assign(text, length)`, `rfind(&char, pos, length)`,
+/// `substr(&out, pos, length)`, `assign(string, pos, length)` and
+/// `append(text, length)`, thiscall, the last two and the first in
+/// `BSMenu/tile.cpp` and next to it) with `std::string::npos`; and the
+/// `Tile::TextureAtlasEntry` constructor (Xbox PDB `BSMenu/tile.cpp`,
+/// next session).
+const TEXTURE_DIRECTORY: u32 = 0x0103_3e9c;
+const ATLAS_DELIMITERS: u32 = 0x0109_4be8;
+const ATLAS_DELIMITERS_NO_TAB: u32 = 0x0109_4be4;
+const FILE_FINDER_GET_FILE: u32 = 0x00af_df00;
+const STRCAT_S: u32 = 0x00ec_6bd2;
+const STRTOK: u32 = 0x00ec_c6e6;
+const ATOF: u32 = 0x00ec_a573;
+const STD_STRING_TIDY: u32 = 0x0044_a730;
+const STD_STRING_ASSIGN: u32 = 0x0044_a7f0;
+const STD_STRING_RFIND: u32 = 0x00a0_c300;
+const STD_STRING_SUBSTR: u32 = 0x007a_b000;
+const STD_STRING_ASSIGN_STRING: u32 = 0x0044_a580;
+const STD_STRING_APPEND: u32 = 0x00a0_c430;
+const STD_STRING_NPOS: u32 = 0x0101_73f0;
+const TEXTURE_ATLAS_ENTRY_CONSTRUCT: u32 = 0x00a0_beb0;
+
+/// `!(a < b)`: true when `a >= b` and when the two are unordered, as the
+/// FPU compare-and-branch sequences test it.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn not_less(a: f64, b: f64) -> bool {
+    !(a < b)
+}
+
+/// `!(a > b)`: true when `a <= b` and when the two are unordered.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn not_greater(a: f64, b: f64) -> bool {
+    !(a > b)
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -2424,6 +2750,2554 @@ pub fn tile_get_child_by_name(e: &mut Engine, this: Ptr<Tile>, name: Ptr) -> Ptr
     result
 }
 
+// Translated from 00a03eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::GetChildByID` (Xbox PDB): the first direct child whose `id` trait
+/// (`eID`) equals `id`, or null. Under `Tile::Lock`.
+pub fn tile_get_child_by_id(e: &mut Engine, this: Ptr<Tile>, id: i32) -> Ptr<Tile> {
+    lock(e);
+    let mut result = Ptr::NULL;
+    let mut node = e.get(this.at(Tile::xChildren), NiTPointerList::m_pkHead);
+    while node != 0 {
+        let child: Ptr<Tile> = Ptr::new(e.mem.u32(node + 8));
+        node = e.mem.u32(node);
+        let child_id = fn_00a011b0(e, child, TRAIT_ID);
+        if id as f64 == child_id as f64 {
+            result = child;
+            break;
+        }
+    }
+    unlock(e);
+    result
+}
+
+// Translated from 00a03f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::GetFirstRefCopy` (Xbox PDB): follows the first reference action
+/// (`VA_REF`, 2023) of trait `trait_id`: answers the tile of the referenced
+/// trait and writes that trait's id to `*out`. When the tile has no such
+/// trait the search continues in its parent. The answer is 0 when no
+/// reference action is found. Under `Tile::Lock`.
+pub fn tile_get_first_ref_copy(e: &mut Engine, this: Ptr<Tile>, trait_id: i32, out: Ptr) -> u32 {
+    lock(e);
+    let value: Ptr<TileValue> = tile_get_value(e, this, trait_id).cast();
+    let mut answer = 0;
+    if value.is_null() {
+        let parent = e.get(this, Tile::pParent);
+        if !parent.is_null() {
+            answer = tile_get_first_ref_copy(e, parent, trait_id, out);
+            unlock(e);
+            return answer;
+        }
+    } else {
+        let mut action = e.get(value, TileValue::pActionListA).addr();
+        let mut found = false;
+        while action != 0 && !found {
+            // `Tile::Action::eActionType` is at +4; `QRefValue` is slot +4.
+            if e.mem.i32(action + 4) == VA_REF && e.vcall(action, 4, &[]).u32() != 0 {
+                let referenced = e.vcall(action, 4, &[]).u32();
+                answer = e.mem.u32(referenced + 4);
+                let referenced = e.vcall(action, 4, &[]).u32();
+                let referenced_trait = e.mem.u32(referenced);
+                e.mem.set_u32(out.addr(), referenced_trait);
+                found = true;
+            }
+            action = e.mem.u32(action + 8);
+        }
+    }
+    unlock(e);
+    answer
+}
+
+// Translated from 00a040a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::IsVisible` (Xbox PDB): false when the tile's model or any of its
+/// ancestor nodes has the `NiAVObject` culled flag (bit 0 of +0x30) set.
+pub fn tile_is_visible(e: &mut Engine, this: Ptr<Tile>) -> bool {
+    let mut hidden = false;
+    let mut node = e.get(this, Tile::spModel).addr();
+    while !hidden && node != 0 {
+        hidden |= e.mem.u32(node + 0x30) & 1 != 0;
+        node = e.mem.u32(node + 0x18);
+    }
+    !hidden
+}
+
+// Translated from 00a04100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No Xbox PDB name. Walks up from the tile's parent while the `id` trait of
+/// the tile is the double at `0106ebc8` (110.0) and answers false when the
+/// walk reaches the root. A tile with another id makes the game loop
+/// forever (the loop only advances on a match); this translation stops
+/// there with a panic instead of hanging.
+pub fn fn_00a04100(e: &mut Engine, this: Ptr<Tile>) -> bool {
+    let mut tile = e.get(this, Tile::pParent);
+    while !tile.is_null() {
+        let id = fn_00a011b0(e, tile, TRAIT_ID);
+        if id as f64 != e.global::<f64>(ID_VALUE_110) {
+            panic!("fn_00a04100: the game loops forever on a tile whose id is not 110");
+        }
+        tile = e.get(tile, Tile::pParent);
+    }
+    false
+}
+
+// Translated from 00a04150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::DeleteChildren` (Xbox PDB): under `Tile::Lock`, deletes every
+/// child (virtual scalar deleting destructor, slot 0, with the delete flag)
+/// and then empties the children list.
+pub fn tile_delete_children(e: &mut Engine, this: Ptr<Tile>) {
+    lock(e);
+    let mut node = e.get(this.at(Tile::xChildren), NiTPointerList::m_pkHead);
+    while node != 0 {
+        let child = e.mem.u32(node + 8);
+        node = e.mem.u32(node);
+        if child != 0 {
+            e.vcall(child, 0, &args![1u32]);
+        }
+    }
+    e.call(LIST_REMOVE_ALL, &args![this.addr() + 4]);
+    unlock(e);
+}
+
+// Translated from 00a04200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::UpdateAll` (Xbox PDB), `cdecl(flag)`: with the update critical
+/// section held and the current-line word of the TLS block set to 13,
+/// takes dirty tiles one at a time ([`tile_get_next_dirty_tile`]) and
+/// updates those that have update bits and are neither released, deleting
+/// nor hibernated; a tile that changed adds itself to the interface
+/// manager's update list, and a menu's root-level tile with the stacking
+/// type 102.0 or 103.0 gets the stacking value 6000.0 or 6001.0. When a
+/// tile became visible again (`bNeedsCheckHibernate`) the hibernating tiles
+/// are checked and the whole pass runs again. Otherwise, with `flag`, the
+/// interface manager is asked to do its end-of-update work, and when the
+/// interface wants textures released the unused ones are purged.
+pub fn tile_update_all(e: &mut Engine, flag: bool) {
+    let line_word = e.tls() + TLS_CURRENT_LINE;
+    let saved_line = e.mem.u32(line_word);
+    e.mem.set_u32(line_word, 0xd);
+    enter_critical_section(e, TILE_CRITICAL_SECTION);
+    e.set_global(NEEDS_CHECK_HIBERNATE, 0u8);
+    while e.mem.u32(DIRTY_TILES_LIST + 8) != 0 {
+        let tile = tile_get_next_dirty_tile(e, true);
+        if tile.is_null() {
+            continue;
+        }
+        let flags = e.get(tile, Tile::uiFlags);
+        if flags & (FLAG_RELEASED | FLAG_MENU_DELETING | FLAG_HIBERNATED) != 0
+            || flags & UPDATE_MASK == 0
+        {
+            continue;
+        }
+        let changed = tile_update_tile(e, tile, true);
+        let needs = e.mem.u8(tile.addr() + 0x34) | changed as u8;
+        e.mem.set_u8(tile.addr() + 0x34, needs);
+        if changed {
+            let manager = e.global::<u32>(INTERFACE_MANAGER);
+            e.call(ADD_TILE_TO_UPDATE_LIST, &args![manager, tile]);
+        }
+        let parent = e.get(tile, Tile::pParent);
+        let root: Ptr<Tile> = e.call(INTERFACE_GET_MENUS_ROOT, &args![]).ptr();
+        if parent == root {
+            let stacking = fn_00a011b0(e, tile, TRAIT_STACKING_TYPE);
+            if stacking as f64 == e.global::<f64>(STACKING_TYPE_102) {
+                let value = e.global::<f32>(STACKING_VALUE_6000);
+                fn_00a012d0(e, tile, TRAIT_STACKING_TYPE, value, true);
+            } else {
+                let stacking = fn_00a011b0(e, tile, TRAIT_STACKING_TYPE);
+                if stacking as f64 == e.global::<f64>(STACKING_TYPE_103) {
+                    let value = e.global::<f32>(STACKING_VALUE_6001);
+                    fn_00a012d0(e, tile, TRAIT_STACKING_TYPE, value, true);
+                }
+            }
+        }
+    }
+    if e.global::<u8>(NEEDS_CHECK_HIBERNATE) != 0 {
+        tile_check_hibernating_tiles(e);
+        tile_update_all(e, flag);
+        leave_critical_section(e, TILE_CRITICAL_SECTION);
+        e.mem.set_u32(line_word, saved_line);
+        return;
+    }
+    if flag {
+        let inner_line = e.mem.u32(line_word);
+        e.mem.set_u32(line_word, 0xd);
+        let manager = e.global::<u32>(INTERFACE_MANAGER);
+        e.call(INTERFACE_MANAGER_END_OF_UPDATE, &args![manager]);
+        e.mem.set_u32(line_word, inner_line);
+    }
+    if e.call(INTERFACE_GET_FIRST_CHANCE_TEXTURE_RELEASE, &args![])
+        .u8()
+        != 0
+    {
+        let inner_line = e.mem.u32(line_word);
+        e.mem.set_u32(line_word, 0xd);
+        e.call(INTERFACE_PREPARE_TEXTURE_RELEASE, &args![0u32]);
+        e.call(TEXTURE_PALETTE_PURGE_UNUSED, &args![]);
+        e.mem.set_u32(line_word, inner_line);
+    }
+    leave_critical_section(e, TILE_CRITICAL_SECTION);
+    e.mem.set_u32(line_word, saved_line);
+}
+
+// Translated from 00a044f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::Lock` (Xbox PDB): `EnterCriticalSection` on the tile critical
+/// section.
+pub fn tile_lock(e: &mut Engine) {
+    enter_critical_section(e, TILE_CRITICAL_SECTION);
+}
+
+// Translated from 00a04500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::Unlock` (Xbox PDB): `LeaveCriticalSection` on the tile critical
+/// section.
+pub fn tile_unlock(e: &mut Engine) {
+    leave_critical_section(e, TILE_CRITICAL_SECTION);
+}
+
+// Translated from 00a04510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No Xbox PDB name. Wakes hibernating tiles while the frame has update
+/// budget: when the tiles updated this frame plus the dirty tiles number
+/// 10 or fewer, up to `11 - that` tiles are taken from the front of the
+/// hibernating list; each loses the hibernated bit, gets the promoted bit
+/// and is added to the dirty list. (The compiler folded the `if (0)` /
+/// `if (1)` bit setters of its flag helper away.)
+pub fn fn_00a04510(e: &mut Engine) {
+    let used = e
+        .global::<i32>(TILES_UPDATED_THIS_FRAME)
+        .wrapping_add(e.mem.u32(DIRTY_TILES_LIST + 8) as i32);
+    if used > 10 {
+        return;
+    }
+    let mut budget = 11 - used;
+    let mut node = e.mem.u32(HIBERNATING_TILES_LIST);
+    while node != 0 && budget != 0 {
+        let tile: Ptr<Tile> = Ptr::new(e.mem.u32(node + 8));
+        if !tile.is_null() {
+            let flags = e.get(tile, Tile::uiFlags) & !FLAG_HIBERNATED;
+            e.set(tile, Tile::uiFlags, flags | FLAG_PROMOTED);
+            tile_add_dirty_tile(e, tile);
+        }
+        node = e.with_stack(4, |e, iterator| {
+            e.mem.set_u32(iterator.addr(), node);
+            e.call(LIST_REMOVE_NODE, &args![HIBERNATING_TILES_LIST, iterator]);
+            e.mem.u32(iterator.addr())
+        });
+        budget -= 1;
+    }
+}
+
+// Translated from 00a04620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::UpdateChildren` (Xbox PDB): `UpdateAll(false)`; the tile and the
+/// stack word it is given are not used.
+pub fn tile_update_children(e: &mut Engine, _this: Ptr<Tile>, _unused_1: u32) {
+    tile_update_all(e, false);
+}
+
+/// The first child object of a model (`NiNode`): null when the children
+/// array has no element (the 16-bit count at +0xA6 is zero).
+fn first_child_object(e: &Engine, model: u32) -> u32 {
+    if e.mem.u16(model + 0xa6) == 0 {
+        0
+    } else {
+        e.mem.u32(e.mem.u32(model + 0xa0))
+    }
+}
+
+/// A texture file name that means "none": null, empty or a single space.
+fn is_blank_name(e: &Engine, name: u32) -> bool {
+    name == 0 || e.mem.i8(name) == 0 || (e.mem.i8(name) == 0x20 && e.mem.i8(name + 1) == 0)
+}
+
+/// Clears the update bit `bit` of the tile once it was handled, when the
+/// caller asked for that (`flag`).
+fn clear_update_bit(e: &mut Engine, this: Ptr<Tile>, flag: bool, bit: u32) {
+    let flags = e.get(this, Tile::uiFlags);
+    if flag && flags & bit != 0 {
+        e.set(this, Tile::uiFlags, flags ^ bit);
+    }
+}
+
+// Translated from 00a04640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::UpdateTile` (Xbox PDB), `thiscall(flag)`: brings the tile's model
+/// up to date with its traits, one update bit at a time, under the tile
+/// critical section; answers whether anything was done. With `flag` the
+/// handled bits are cleared, and the tile is put to sleep
+/// ([`fn_00a077c0`]) when it still has update bits; without bits, or without
+/// `flag`, `iTilesUpdatedThisFrame` is counted up instead. Nothing happens
+/// for a tile without update bits. The current-line word of the TLS block
+/// is 13 while the bits are handled. In the order of the game:
+///
+/// * `ebfCreate` (2): [`tile_delete_model`], then the virtual `MakeNode`
+///   (slot +8) builds a new model (for a text tile `00706dd0(1)` follows);
+/// * `ebfVisibility` (4): the model's culled flag follows the `visible`
+///   trait; a model that was culled and is shown again sets
+///   `bNeedsCheckHibernate`;
+/// * when the interface wants textures released, an image tile's shader
+///   property gets no texture and the tile the texture update bit;
+/// * `ebfTexture` (32), image and hot-rect tiles: loads the texture named by
+///   the `filename` trait (the empty placeholder `Interface\Shared\empty.dds`
+///   when there is none and no action computes it), through the texture
+///   atlas when the tile has an atlas trait, hands it to the shader
+///   property, derives the file size traits from it and queues a geometry
+///   update;
+/// * `ebfGeometry` (16), image tiles: writes the model's four corners from
+///   the `width` and `height` traits, the texture coordinates from the crop
+///   traits, the atlas rectangle and the zoom, and updates the bound;
+/// * `ebfNIFFile` (64): for a 3D tile `Tile3D::UpdateNIF`;
+/// * `ebfPosition` (1): the model's translation (and, for a tile that is
+///   neither a locus nor a child of the menus root, a rotation about the
+///   axis traits) from the position, depth and rotation traits;
+/// * `ebfLocus` (512): only cleared;
+/// * `ebfScissorWindow` (128): [`tile_re_clip_children`] with the tile's
+///   screen rectangle;
+/// * `ebfScissor` (256): the scissor of the tile's own model children from
+///   its nearest clip-window ancestor;
+/// * `ebfColor` (8): alpha and colour, from the colour traits, the system
+///   colour table and the brightness, handed to the virtual
+///   `SetAlphaAndColor` (slot +0x24).
+pub fn tile_update_tile(e: &mut Engine, this: Ptr<Tile>, flag: bool) -> bool {
+    enter_critical_section(e, TILE_CRITICAL_SECTION);
+    let mut result = false;
+    if e.get(this, Tile::uiFlags) & UPDATE_MASK != 0 {
+        let line_word = e.tls() + TLS_CURRENT_LINE;
+        let saved_line = e.mem.u32(line_word);
+        e.mem.set_u32(line_word, 0xd);
+        update_tile_create(e, this, flag, &mut result);
+        update_tile_visibility(e, this, flag, &mut result);
+        update_tile_release_texture(e, this);
+        let kind = tile_type(e, this);
+        let is_image = kind == TYPE_IMAGE || kind == TYPE_HOT_RECT;
+        // The atlas rectangle (left, right, top, bottom), -1.0 when unknown.
+        e.with_stack(0x10, |e, rect| {
+            let unknown = e.global::<f32>(MINUS_ONE);
+            for index in 0..4 {
+                e.mem.set_f32(rect.addr() + index * 4, unknown);
+            }
+            update_tile_texture(e, this, flag, is_image, rect, &mut result);
+            update_tile_geometry(e, this, flag, is_image, rect, &mut result);
+        });
+        update_tile_nif(e, this, flag, &mut result);
+        update_tile_position(e, this, flag, &mut result);
+        clear_update_bit(e, this, flag, UPDATE_LOCUS);
+        update_tile_scissor_window(e, this, flag, &mut result);
+        update_tile_scissor(e, this, flag, &mut result);
+        update_tile_color(e, this, flag);
+        e.mem.set_u32(line_word, saved_line);
+    }
+    if flag && e.get(this, Tile::uiFlags) & UPDATE_MASK != 0 {
+        fn_00a077c0(e, this);
+    } else {
+        let count = e.global::<u32>(TILES_UPDATED_THIS_FRAME);
+        e.set_global(TILES_UPDATED_THIS_FRAME, count.wrapping_add(1));
+    }
+    leave_critical_section(e, TILE_CRITICAL_SECTION);
+    result
+}
+
+/// `ebfCreate` of [`tile_update_tile`].
+fn update_tile_create(e: &mut Engine, this: Ptr<Tile>, flag: bool, result: &mut bool) {
+    if e.get(this, Tile::uiFlags) & UPDATE_CREATE == 0 {
+        return;
+    }
+    tile_delete_model(e, this);
+    if e.vcall(this.addr(), 8, &[]).u32() != 0 {
+        if tile_type(e, this) == TYPE_TEXT {
+            e.call(TEXT_TILE_CREATED, &args![1u32]);
+        }
+        *result = true;
+        clear_update_bit(e, this, flag, UPDATE_CREATE);
+    }
+}
+
+/// `ebfVisibility` of [`tile_update_tile`].
+fn update_tile_visibility(e: &mut Engine, this: Ptr<Tile>, flag: bool, result: &mut bool) {
+    if e.get(this, Tile::uiFlags) & UPDATE_VISIBILITY == 0 {
+        return;
+    }
+    let model = e.get(this, Tile::spModel).addr();
+    if model == 0 {
+        return;
+    }
+    let was_culled = e.mem.u32(model + 0x30) & 1 != 0;
+    let visible = fn_00a011b0(e, this, TRAIT_VISIBLE);
+    let hidden = visible as f64 == e.global::<f64>(ZERO);
+    let model = e.get(this, Tile::spModel).addr();
+    let object_flags = e.mem.u32(model + 0x30);
+    e.mem.set_u32(
+        model + 0x30,
+        if hidden {
+            object_flags | 1
+        } else {
+            object_flags & !1
+        },
+    );
+    *result = true;
+    if was_culled {
+        let model = e.get(this, Tile::spModel).addr();
+        if e.mem.u32(model + 0x30) & 1 == 0 {
+            e.set_global(NEEDS_CHECK_HIBERNATE, 1u8);
+        }
+    }
+    clear_update_bit(e, this, flag, UPDATE_VISIBILITY);
+}
+
+/// When the interface asks for textures to be released, an image tile's
+/// shader property loses its texture and the tile gets `ebfTexture`.
+fn update_tile_release_texture(e: &mut Engine, this: Ptr<Tile>) {
+    if e.call(INTERFACE_GET_FIRST_CHANCE_TEXTURE_RELEASE, &args![])
+        .u8()
+        == 0
+    {
+        return;
+    }
+    let model = e.get(this, Tile::spModel).addr();
+    if model == 0 {
+        return;
+    }
+    let child = first_child_object(e, model);
+    if tile_type(e, this) == TYPE_IMAGE && child != 0 {
+        let property = e.call(NI_OBJECT_GET_PROPERTY, &args![child, 3u32]).u32();
+        if property != 0 {
+            e.call(SET_TILE_TEXTURE, &args![property, 0u32]);
+            tile_add_needs_update(e, this, UPDATE_TEXTURE);
+        }
+    }
+}
+
+/// A reference-counted copy of the word at +0x3C of an image tile (its
+/// texture pointer), made for the by-value last argument of
+/// `TileImage::AddToTesTextures`.
+fn counted_copy_of_texture(e: &mut Engine, this: Ptr<Tile>) -> u32 {
+    let texture = e.mem.u32(this.addr() + 0x3c);
+    if texture != 0 {
+        e.call(INTERLOCKED_INCREMENT, &args![texture + 4]);
+    }
+    texture
+}
+
+/// `ebfTexture` of [`tile_update_tile`], image and hot-rect tiles.
+fn update_tile_texture(
+    e: &mut Engine,
+    this: Ptr<Tile>,
+    flag: bool,
+    is_image: bool,
+    rect: Ptr,
+    result: &mut bool,
+) {
+    if !is_image || e.get(this, Tile::uiFlags) & UPDATE_TEXTURE == 0 {
+        return;
+    }
+    let model = e.get(this, Tile::spModel).addr();
+    if model == 0 {
+        return;
+    }
+    let child = first_child_object(e, model);
+    if child == 0 {
+        return;
+    }
+    if e.get(this, Tile::uiFlags) & FLAG_PROMOTED == 0 && !tile_is_visible(e, this) {
+        return;
+    }
+    let property = e.call(NI_OBJECT_GET_PROPERTY, &args![child, 3u32]).u32();
+    if property == 0 {
+        return;
+    }
+    // The tile's texture, a counted reference that is released at the end.
+    let mut texture = 0u32;
+    let value: Ptr<TileValue> = tile_get_value(e, this, TRAIT_FILENAME).cast();
+    let mut actions = 0u32;
+    let mut text = 0u32;
+    let mut used_placeholder = false;
+    if !value.is_null() {
+        actions = e.get(value, TileValue::pActionListA).addr();
+        text = e.get(value, TileValue::strValue).addr();
+    }
+    if (text == 0 || e.mem.i8(text) == 0) && actions == 0 {
+        fn_00a01350(e, this, TRAIT_FILENAME, Ptr::new(EMPTY_TEXTURE_NAME), true);
+        text = tile_get_string(e, this, TRAIT_FILENAME).addr();
+        used_placeholder = true;
+    }
+    if text != 0 && e.mem.i8(text) != 0 {
+        if used_placeholder || !tile_get_value(e, this, TRAIT_TEX_ATLAS).is_null() {
+            e.with_stack(8, |e, atlas_texture_name| {
+                e.call(BSSTRING_CONSTRUCT, &args![atlas_texture_name, EMPTY_NAME]);
+                let atlas = if used_placeholder {
+                    e.global::<u32>(DEFAULT_ATLAS_NAME)
+                } else {
+                    tile_get_string(e, this, TRAIT_TEX_ATLAS).addr()
+                };
+                let subtexture = tile_get_string(e, this, TRAIT_FILENAME);
+                tile_get_texture_atlas_info(
+                    e,
+                    Ptr::new(atlas),
+                    subtexture,
+                    atlas_texture_name,
+                    rect,
+                );
+                let copy = counted_copy_of_texture(e, this);
+                let name = e.mem.u32(atlas_texture_name.addr());
+                let zoom = fn_00a011b0(e, this, TRAIT_ZOOM);
+                e.with_stack(4, |e, slot| {
+                    e.call(
+                        ADD_TO_TES_TEXTURES,
+                        &args![name, this.addr() + 0x38, slot, zoom, copy],
+                    );
+                    texture = e.mem.u32(slot.addr());
+                });
+                e.call(STRING_SET, &args![atlas_texture_name, 0u32, 0u32]);
+            });
+        }
+        if texture == 0 {
+            let copy = counted_copy_of_texture(e, this);
+            let zoom = fn_00a011b0(e, this, TRAIT_ZOOM);
+            e.with_stack(4, |e, slot| {
+                e.call(
+                    ADD_TO_TES_TEXTURES,
+                    &args![text, this.addr() + 0x38, slot, zoom, copy],
+                );
+                texture = e.mem.u32(slot.addr());
+            });
+        }
+    }
+    if texture != 0 {
+        e.call(SET_TILE_TEXTURE, &args![property, texture]);
+        let tiled = tile_is_true(e, this, TRAIT_TILE);
+        e.mem.set_u32(property + 0x8c, if tiled { 2 } else { 0 });
+        let mut zoom = fn_00a011b0(e, this, TRAIT_ZOOM);
+        let name = tile_get_string(e, this, TRAIT_FILENAME).addr();
+        // `NiTexture` virtuals +0x94 and +0x98: the width and height.
+        let width = e.vcall(texture, 0x94, &[]).u32() as f64 as f32;
+        let height = e.vcall(texture, 0x98, &[]).u32() as f64 as f32;
+        let divisor = e.mem.f32(this.addr() + 0x38) as f64;
+        if fn_00a011b0(e, this, TRAIT_TILE) as f64 == e.global::<f64>(MINUS_ONE_DOUBLE) {
+            if is_blank_name(e, name) {
+                fn_00a012d0(e, this, TRAIT_FILE_WIDTH, width, true);
+                fn_00a012d0(e, this, TRAIT_FILE_HEIGHT, height, true);
+            } else {
+                let file_width = (width as f64 / divisor) as f32;
+                fn_00a012d0(e, this, TRAIT_FILE_WIDTH, file_width, true);
+                let file_height = (height as f64 / divisor) as f32;
+                fn_00a012d0(e, this, TRAIT_FILE_HEIGHT, file_height, true);
+            }
+            tile_add_needs_update(e, this, UPDATE_GEOMETRY);
+            zoom = e.global::<f32>(MINUS_ONE);
+        }
+        if zoom >= 0.0 {
+            if zoom as f64 == e.global::<f64>(ZERO) {
+                zoom = e.global::<f32>(HUNDRED_FLOAT);
+            }
+            let scale = zoom as f64 / e.global::<f64>(HUNDRED_DOUBLE);
+            if is_blank_name(e, name) {
+                fn_00a012d0(
+                    e,
+                    this,
+                    TRAIT_FILE_WIDTH,
+                    (width as f64 * scale) as f32,
+                    true,
+                );
+                fn_00a012d0(
+                    e,
+                    this,
+                    TRAIT_FILE_HEIGHT,
+                    (height as f64 * scale) as f32,
+                    true,
+                );
+            } else {
+                let file_width = (width as f64 * scale / divisor) as f32;
+                fn_00a012d0(e, this, TRAIT_FILE_WIDTH, file_width, true);
+                let file_height = (height as f64 * scale / divisor) as f32;
+                fn_00a012d0(e, this, TRAIT_FILE_HEIGHT, file_height, true);
+            }
+            tile_add_needs_update(e, this, UPDATE_GEOMETRY);
+        }
+        *result = true;
+        clear_update_bit(e, this, flag, UPDATE_TEXTURE);
+    } else if flag
+        && !tile_is_true(e, this, TRAIT_VISIBLE)
+        && e.get(this, Tile::uiFlags) & UPDATE_TEXTURE != 0
+    {
+        clear_update_bit(e, this, flag, UPDATE_TEXTURE);
+    }
+    if texture != 0 {
+        release_reference(e, texture);
+    }
+}
+
+/// `ebfGeometry` of [`tile_update_tile`], image tiles.
+fn update_tile_geometry(
+    e: &mut Engine,
+    this: Ptr<Tile>,
+    flag: bool,
+    is_image: bool,
+    rect: Ptr,
+    result: &mut bool,
+) {
+    // Whether the model's geometry data is static (consistency bits
+    // 0x7000 equal 0x4000): then its vertices and bound stay as they are.
+    let mut static_geometry = false;
+    if e.get(this, Tile::uiFlags) & UPDATE_GEOMETRY != 0 {
+        let model = e.get(this, Tile::spModel).addr();
+        if model != 0 {
+            let child = first_child_object(e, model);
+            // Virtual slot +0x1C (`IsTriBasedGeom`).
+            let geometry = if child != 0 {
+                e.vcall(child, 0x1c, &[]).u32()
+            } else {
+                0
+            };
+            let data = if geometry != 0 {
+                e.mem.u32(geometry + 0xb8)
+            } else {
+                0
+            };
+            if data != 0 && e.mem.u16(data + 0xe) & 0x7000 == 0x4000 {
+                static_geometry = true;
+            }
+        }
+    }
+    if e.get(this, Tile::uiFlags) & UPDATE_GEOMETRY != 0 {
+        let model = e.get(this, Tile::spModel).addr();
+        if model != 0 {
+            let child = first_child_object(e, model);
+            let width = fn_00a011b0(e, this, TRAIT_WIDTH);
+            let height = fn_00a011b0(e, this, TRAIT_HEIGHT);
+            let crop_x = fn_00a011b0(e, this, TRAIT_CROP_X);
+            let crop_y = fn_00a011b0(e, this, TRAIT_CROP_Y);
+            if child != 0 && tile_type(e, this) == TYPE_IMAGE {
+                update_image_geometry(
+                    e,
+                    this,
+                    is_image,
+                    rect,
+                    child,
+                    static_geometry,
+                    [width, height, crop_x, crop_y],
+                );
+                *result = true;
+                let data = e.mem.u32(child + 0xb8);
+                if data != 0 {
+                    e.call(GEOMETRY_DATA_SET_CONSISTENCY, &args![data, 0u32]);
+                }
+            }
+            clear_update_bit(e, this, flag, UPDATE_GEOMETRY);
+        }
+    }
+}
+
+/// The body of `ebfGeometry` for the image tile whose model has the
+/// geometry `child`; `size` is (`width`, `height`, `cropx`, `cropy`).
+fn update_image_geometry(
+    e: &mut Engine,
+    this: Ptr<Tile>,
+    is_image: bool,
+    rect: Ptr,
+    child: u32,
+    static_geometry: bool,
+    size: [f32; 4],
+) {
+    let [width, height, crop_x, crop_y] = size;
+    if !static_geometry {
+        let data = e.mem.u32(child + 0xb8);
+        if data != 0 && e.mem.u32(data + 0x20) != 0 {
+            // The four corners of the quad: (0,0,0), (0,0,-height),
+            // (width,0,0), (width,0,-height).
+            let vertices = e.mem.u32(data + 0x20);
+            let corners = [
+                [0.0, 0.0, 0.0],
+                [0.0, 0.0, -height],
+                [width, 0.0, 0.0],
+                [width, 0.0, -height],
+            ];
+            for (index, corner) in corners.iter().enumerate() {
+                for (axis, value) in corner.iter().enumerate() {
+                    e.mem
+                        .set_f32(vertices + index as u32 * 12 + axis as u32 * 4, *value);
+                }
+            }
+        }
+    }
+    // The size the texture coordinates are relative to.
+    let mut texture_width = width;
+    let mut texture_height = height;
+    let property = e.call(NI_OBJECT_GET_PROPERTY, &args![child, 3u32]).u32();
+    if property != 0 && is_image && e.mem.u32(property + 0x60) != 0 {
+        let tiled = fn_00a011b0(e, this, TRAIT_TILE);
+        e.mem.set_u32(
+            property + 0x8c,
+            if tiled as f64 == e.global::<f64>(ZERO) {
+                0
+            } else {
+                2
+            },
+        );
+        let mut zoom = fn_00a011b0(e, this, TRAIT_ZOOM);
+        if fn_00a011b0(e, this, TRAIT_TILE) as f64 == e.global::<f64>(MINUS_ONE_DOUBLE) {
+            let texture = e.mem.u32(property + 0x60);
+            let file_height = e.vcall(texture, 0x98, &[]).u32() as f64;
+            let ratio = height as f64 / file_height;
+            let file_width = e.vcall(texture, 0x94, &[]).u32() as f64;
+            texture_width = (file_width * ratio) as f32;
+        } else if zoom >= 0.0 {
+            if zoom as f64 == e.global::<f64>(ZERO) {
+                zoom = e.global::<f32>(HUNDRED_FLOAT);
+            }
+            let scale = zoom as f64 / e.global::<f64>(HUNDRED_DOUBLE);
+            let name = tile_get_string(e, this, TRAIT_FILENAME).addr();
+            let texture = e.mem.u32(property + 0x60);
+            if is_blank_name(e, name) {
+                let file_width = e.vcall(texture, 0x94, &[]).u32() as f64;
+                texture_width = (file_width * scale) as f32;
+                let file_height = e.vcall(texture, 0x98, &[]).u32() as f64;
+                texture_height = (file_height * scale) as f32;
+            } else {
+                let divisor = e.mem.f32(this.addr() + 0x38) as f64;
+                let file_width = e.vcall(texture, 0x94, &[]).u32() as f64;
+                texture_width = (file_width * scale / divisor) as f32;
+                let divisor = e.mem.f32(this.addr() + 0x38) as f64;
+                let file_height = e.vcall(texture, 0x98, &[]).u32() as f64;
+                texture_height = (file_height * scale / divisor) as f32;
+            }
+        }
+    }
+    let data = e.mem.u32(child + 0xb8);
+    let coordinates = e.mem.u32(data + 0x2c);
+    if coordinates != 0 {
+        let mut left = (crop_x as f64 / texture_width as f64) as f32;
+        let mut top = (crop_y as f64 / texture_height as f64) as f32;
+        let mut span_x = (width as f64 / texture_width as f64) as f32;
+        let mut span_y = (height as f64 / texture_height as f64) as f32;
+        if !tile_get_value(e, this, TRAIT_TEX_ATLAS).is_null() {
+            let minus_one = e.global::<f64>(MINUS_ONE_DOUBLE);
+            e.with_stack(0x10, |e, atlas_rect| {
+                let known = e.mem.f32(rect.addr() + 4) as f64 != minus_one
+                    && e.mem.f32(rect.addr() + 12) as f64 != minus_one;
+                if known {
+                    for index in 0..4 {
+                        let value = e.mem.f32(rect.addr() + index * 4);
+                        e.mem.set_f32(atlas_rect.addr() + index * 4, value);
+                    }
+                } else {
+                    let subtexture = tile_get_string(e, this, TRAIT_FILENAME);
+                    let atlas = tile_get_string(e, this, TRAIT_TEX_ATLAS);
+                    tile_get_texture_atlas_info(e, atlas, subtexture, Ptr::NULL, atlas_rect);
+                }
+                let rect_left = e.mem.f32(atlas_rect.addr());
+                let rect_right = e.mem.f32(atlas_rect.addr() + 4);
+                let rect_top = e.mem.f32(atlas_rect.addr() + 8);
+                let rect_bottom = e.mem.f32(atlas_rect.addr() + 12);
+                let atlas_width = (rect_right as f64 - rect_left as f64) as f32;
+                let atlas_height = (rect_bottom as f64 - rect_top as f64) as f32;
+                if atlas_width > 0.0 && atlas_height > 0.0 {
+                    left = (left as f64 * atlas_width as f64 + rect_left as f64) as f32;
+                    top = (top as f64 * atlas_height as f64 + rect_top as f64) as f32;
+                    span_x = atlas_width;
+                    span_y = atlas_height;
+                }
+                let mut zoom = fn_00a011b0(e, this, TRAIT_ZOOM);
+                if zoom > 0.0 {
+                    zoom = (zoom as f64 / e.global::<f64>(HUNDRED_DOUBLE)) as f32;
+                    let tile_width = fn_00a011b0(e, this, TRAIT_WIDTH) as f64;
+                    let file_width = fn_00a011b0(e, this, TRAIT_FILE_WIDTH) as f64;
+                    span_x = (tile_width / file_width * zoom as f64) as f32;
+                    let tile_height = fn_00a011b0(e, this, TRAIT_HEIGHT) as f64;
+                    let file_height = fn_00a011b0(e, this, TRAIT_FILE_HEIGHT) as f64;
+                    span_y = (tile_height / file_height * zoom as f64) as f32;
+                }
+            });
+        }
+        let right = (span_x as f64 + left as f64) as f32;
+        let bottom = (span_y as f64 + top as f64) as f32;
+        let coordinate_values = [left, top, left, bottom, right, top, right, bottom];
+        for (index, value) in coordinate_values.iter().enumerate() {
+            e.mem.set_f32(coordinates + index as u32 * 4, *value);
+        }
+    }
+    if !static_geometry {
+        let data = e.mem.u32(child + 0xb8);
+        if data != 0 {
+            e.call(GEOMETRY_DATA_MARK_AS_CHANGED, &args![data, 9u32]);
+        }
+        let data = e.mem.u32(child + 0xb8);
+        let vertices = e.mem.u32(data + 0x20);
+        let count = e.mem.u16(data + 8) as u32;
+        e.call(
+            BOUND_COMPUTE_FROM_DATA,
+            &args![data + 0x10, count, vertices],
+        );
+    }
+}
+
+/// `ebfNIFFile` of [`tile_update_tile`].
+fn update_tile_nif(e: &mut Engine, this: Ptr<Tile>, flag: bool, result: &mut bool) {
+    if e.get(this, Tile::uiFlags) & UPDATE_NIF_FILE == 0 || e.get(this, Tile::spModel).is_null() {
+        return;
+    }
+    if tile_type(e, this) == TYPE_3D {
+        e.call(TILE_3D_UPDATE_NIF, &args![this]);
+    }
+    *result = true;
+    clear_update_bit(e, this, flag, UPDATE_NIF_FILE);
+}
+
+/// The three floats the position code starts from (the default
+/// translation at `011f426c`).
+fn default_translation(e: &Engine) -> [f32; 3] {
+    [
+        e.global::<f32>(DEFAULT_TRANSLATION),
+        e.global::<f32>(DEFAULT_TRANSLATION + 4),
+        e.global::<f32>(DEFAULT_TRANSLATION + 8),
+    ]
+}
+
+fn set_translation(e: &mut Engine, object: u32, translation: [f32; 3]) {
+    for (axis, value) in translation.iter().enumerate() {
+        e.mem.set_f32(object + 0x58 + axis as u32 * 4, *value);
+    }
+}
+
+/// `ebfPosition` of [`tile_update_tile`].
+fn update_tile_position(e: &mut Engine, this: Ptr<Tile>, flag: bool, result: &mut bool) {
+    if e.get(this, Tile::uiFlags) & UPDATE_POSITION == 0 || e.get(this, Tile::spModel).is_null() {
+        return;
+    }
+    let child_of_root = tile_is_true(e, this, TRAIT_LOCUS) || {
+        let root: Ptr<Tile> = e.call(INTERFACE_GET_MENUS_ROOT, &args![]).ptr();
+        e.get(this, Tile::pParent) == root
+    };
+    if child_of_root {
+        let depth = fn_00a011b0(e, this, TRAIT_DEPTH);
+        let mut translation = default_translation(e);
+        translation[0] = fn_00a011b0(e, this, TRAIT_X);
+        translation[2] = -fn_00a011b0(e, this, TRAIT_Y);
+        translation[1] = (depth as f64 * e.global::<f64>(DEPTH_SCALE)) as f32;
+        let root: Ptr<Tile> = e.call(INTERFACE_GET_MENUS_ROOT, &args![]).ptr();
+        if e.get(this, Tile::pParent) == root {
+            let screen_width = e.call(SCREEN_WIDTH, &args![]).f32();
+            translation[0] =
+                (translation[0] as f64 - screen_width as f64 / e.global::<f64>(TWO)) as f32;
+            let screen_height = e.call(SCREEN_HEIGHT, &args![]).f32();
+            let sum = screen_height as f64 + translation[2] as f64;
+            let screen_height = e.call(SCREEN_HEIGHT, &args![]).f32();
+            translation[2] = (sum - screen_height as f64 / e.global::<f64>(TWO)) as f32;
+        }
+        let model = e.get(this, Tile::spModel).addr();
+        set_translation(e, model, translation);
+        if e.get(this, Tile::uiFlags) & UPDATE_LOCUS != 0 {
+            let model = e.get(this, Tile::spModel).addr();
+            let mut index = 0u32;
+            while model != 0 && index < e.mem.u16(model + 0xa8) as u32 {
+                let object = if index < e.mem.u16(model + 0xa6) as u32 {
+                    e.mem.u32(e.mem.u32(model + 0xa0) + index * 4)
+                } else {
+                    0
+                };
+                // Virtual slot +0x24 (`IsTriShape`).
+                let shape = if object != 0 {
+                    e.vcall(object, 0x24, &[]).u32()
+                } else {
+                    0
+                };
+                if shape != 0 && e.get(this, Tile::uiFlags) & FLAG_MANUAL_UPDATE_TRIS == 0 {
+                    let translation = default_translation(e);
+                    set_translation(e, shape, translation);
+                }
+                index += 1;
+            }
+        }
+        tile_update_clipwindows(e, this);
+    } else {
+        let depth = fn_00a011b0(e, this, TRAIT_DEPTH);
+        let mut translation = default_translation(e);
+        let model = e.get(this, Tile::spModel).addr();
+        set_translation(e, model, translation);
+        translation[0] = (fn_00a011b0(e, this, TRAIT_X) as f64 + translation[0] as f64) as f32;
+        translation[2] = (-fn_00a011b0(e, this, TRAIT_Y) as f64 + translation[2] as f64) as f32;
+        translation[1] =
+            (depth as f64 * e.global::<f64>(DEPTH_SCALE) + translation[1] as f64) as f32;
+        let model = e.get(this, Tile::spModel).addr();
+        let mut index = 0u32;
+        while model != 0 && index < e.mem.u16(model + 0xa8) as u32 {
+            let object = e.mem.u32(e.mem.u32(model + 0xa0) + index * 4);
+            let shape = if object == 0 {
+                0
+            } else {
+                // The object's RTTI chain contains the record at 011f4a40.
+                let mut rtti = e.vcall(object, 8, &[]).u32();
+                while rtti != 0 && rtti != SHAPE_RTTI {
+                    rtti = e.mem.u32(rtti + 4);
+                }
+                if rtti != 0 {
+                    object
+                } else {
+                    0
+                }
+            };
+            let axis_x = fn_00a011b0(e, this, TRAIT_ROTATE_AXIS_X);
+            let axis_z = -fn_00a011b0(e, this, TRAIT_ROTATE_AXIS_Y);
+            let angle = fn_00a011b0(e, this, TRAIT_ROTATE_ANGLE);
+            let (sine, cosine) = ((angle as f64).sin() as f32, (angle as f64).cos() as f32);
+            let rotation = [cosine, 0.0, -sine, 0.0, 1.0, 0.0, sine, 0.0, cosine];
+            if shape != 0 {
+                for (slot, value) in rotation.iter().enumerate() {
+                    e.mem.set_f32(shape + 0x34 + slot as u32 * 4, *value);
+                }
+                let moved = rotate_about_axis(e, rotation, [axis_x, 0.0, axis_z], translation);
+                set_translation(e, shape, moved);
+            }
+            index += 1;
+        }
+    }
+    *result = true;
+    clear_update_bit(e, this, flag, UPDATE_POSITION);
+}
+
+/// `(translation + axis) - rotation * axis`, computed with the game's
+/// point helpers: the position that makes the rotation about the point
+/// `axis`.
+fn rotate_about_axis(
+    e: &mut Engine,
+    rotation: [f32; 9],
+    axis: [f32; 3],
+    translation: [f32; 3],
+) -> [f32; 3] {
+    e.with_stack(0x24 + 5 * 12, |e, scratch| {
+        let matrix = scratch.addr();
+        let axis_at = matrix + 0x24;
+        let translation_at = axis_at + 12;
+        let rotated_at = translation_at + 12;
+        let sum_at = rotated_at + 12;
+        let result_at = sum_at + 12;
+        for (slot, value) in rotation.iter().enumerate() {
+            e.mem.set_f32(matrix + slot as u32 * 4, *value);
+        }
+        for (slot, value) in axis.iter().enumerate() {
+            e.mem.set_f32(axis_at + slot as u32 * 4, *value);
+        }
+        for (slot, value) in translation.iter().enumerate() {
+            e.mem.set_f32(translation_at + slot as u32 * 4, *value);
+        }
+        let rotated = e
+            .call(MATRIX_TIMES_POINT, &args![matrix, rotated_at, axis_at])
+            .u32();
+        let sum = e
+            .call(POINT_ADD, &args![translation_at, sum_at, axis_at])
+            .u32();
+        let moved = e
+            .call(POINT_SUBTRACT, &args![sum, result_at, rotated])
+            .u32();
+        [e.mem.f32(moved), e.mem.f32(moved + 4), e.mem.f32(moved + 8)]
+    })
+}
+
+/// The scale from layout units to the real screen that the scissor code
+/// uses, and the real screen size: (`scale_x`, `scale_y`, `width`,
+/// `height`). A rendered menu has its own size and aspect ratio.
+fn scissor_scale(e: &mut Engine, this: Ptr<Tile>) -> (f32, f32, f32, f32) {
+    let mut width = e.call(SCREEN_REAL_WIDTH, &args![]).f32();
+    let mut height = e.call(SCREEN_REAL_HEIGHT, &args![]).f32();
+    if tile_get_rendered_menu(e, this) {
+        width = e.call(RENDERED_MENU_WIDTH, &args![]).f32();
+        height = e.call(RENDERED_MENU_HEIGHT, &args![]).f32();
+    }
+    let screen_width = e.call(SCREEN_WIDTH, &args![]).f32();
+    let mut scale_x = (width as f64 / screen_width as f64) as f32;
+    let screen_height = e.call(SCREEN_HEIGHT, &args![]).f32();
+    let scale_y = (height as f64 / screen_height as f64) as f32;
+    let menu = tile_get_menu(e, this);
+    if e.call(INTERFACE_IS_RENDERED_MENU, &args![menu]).u8() != 0 {
+        let aspect = e.call(SCREEN_ASPECT_RATIO, &args![]).f32();
+        scale_x = (aspect as f64 * scale_x as f64) as f32;
+    }
+    (scale_x, scale_y, width, height)
+}
+
+/// The screen rectangle (left, top, right, bottom) of `tile` in the real
+/// screen's units.
+fn scissor_rectangle(
+    e: &mut Engine,
+    tile: Ptr<Tile>,
+    scale_x: f32,
+    scale_y: f32,
+) -> (f32, f32, f32, f32) {
+    let left = fn_00a013d0(e, tile);
+    let top = fn_00a01440(e, tile);
+    let width = fn_00a011b0(e, tile, TRAIT_WIDTH);
+    let right = ((width as f64 + left as f64) * scale_x as f64) as f32;
+    let height = fn_00a011b0(e, tile, TRAIT_HEIGHT);
+    let bottom = ((height as f64 + top as f64) * scale_y as f64) as f32;
+    let left = (left as f64 * scale_x as f64) as f32;
+    let top = (top as f64 * scale_y as f64) as f32;
+    (left, top, right, bottom)
+}
+
+/// `ebfScissorWindow` of [`tile_update_tile`].
+fn update_tile_scissor_window(e: &mut Engine, this: Ptr<Tile>, flag: bool, result: &mut bool) {
+    if e.get(this, Tile::spModel).is_null()
+        || e.get(this, Tile::uiFlags) & UPDATE_SCISSOR_WINDOW == 0
+    {
+        return;
+    }
+    let (scale_x, scale_y, _, _) = scissor_scale(e, this);
+    let (left, top, right, bottom) = scissor_rectangle(e, this, scale_x, scale_y);
+    tile_re_clip_children(e, this, left, top, right, bottom);
+    *result = true;
+    clear_update_bit(e, this, flag, UPDATE_SCISSOR_WINDOW);
+}
+
+/// `ebfScissor` of [`tile_update_tile`].
+fn update_tile_scissor(e: &mut Engine, this: Ptr<Tile>, flag: bool, result: &mut bool) {
+    if e.get(this, Tile::spModel).is_null() || e.get(this, Tile::uiFlags) & UPDATE_SCISSOR == 0 {
+        return;
+    }
+    // The nearest ancestor with the clip-window trait.
+    let mut window = e.get(this, Tile::pParent);
+    while !window.is_null() && !tile_is_true(e, window, TRAIT_CLIP_WINDOW) {
+        window = e.get(window, Tile::pParent);
+    }
+    if !window.is_null() {
+        let (scale_x, scale_y, width, height) = scissor_scale(e, this);
+        let (left, top, right, bottom) = scissor_rectangle(e, window, scale_x, scale_y);
+        let model = e.get(this, Tile::spModel).addr();
+        e.call(NI_ARRAY_COMPACT, &args![model + 0x9c]);
+        e.call(NI_ARRAY_UPDATE_SIZE, &args![model + 0x9c]);
+        let mut index = 0u32;
+        loop {
+            let model = e.get(this, Tile::spModel).addr();
+            if index >= e.mem.u16(model + 0xa8) as u32 {
+                break;
+            }
+            let model = e.get(this, Tile::spModel).addr();
+            let object = e.mem.u32(e.mem.u32(model + 0xa0) + index * 4);
+            let property = e.call(NI_OBJECT_GET_PROPERTY, &args![object, 3u32]).u32();
+            if property != 0 {
+                let x0 = float_to_int(e, if 0.0 < left { left } else { 0.0 });
+                let y0 = float_to_int(e, if 0.0 < top { top } else { 0.0 });
+                let x1 = float_to_int(e, if right < width { right } else { width });
+                let y1 = float_to_int(e, if bottom < height { bottom } else { height });
+                e.mem.set_i32(property + 0x9c, x0);
+                e.mem.set_i32(property + 0xa0, y0);
+                e.mem.set_i32(property + 0xa4, x1);
+                e.mem.set_i32(property + 0xa8, y1);
+                e.call(SHADER_PROPERTY_REFRESH, &args![property, 1u32]);
+            }
+            index += 1;
+        }
+    }
+    *result = true;
+    clear_update_bit(e, this, flag, UPDATE_SCISSOR);
+}
+
+/// `ebfColor` of [`tile_update_tile`]: the colour (red, green, blue,
+/// alpha 1.0 each at first) comes from the `systemcolor` table when the
+/// tile or an ancestor names an entry, scaled by the brightness, else from
+/// the colour traits divided by 255; the alpha is the `alpha` trait over
+/// 255. A tile with the speech-challenge failure flag that is the
+/// `lb_highlight_box`, or a child of it, turns dark red.
+fn update_tile_color(e: &mut Engine, this: Ptr<Tile>, flag: bool) {
+    if e.get(this, Tile::uiFlags) & UPDATE_COLOR == 0 {
+        return;
+    }
+    let two_fifty_five = e.global::<f64>(TWO_FIFTY_FIVE_DOUBLE);
+    let mut color = [1.0f32; 4];
+    let alpha = fn_00a011b0(e, this, TRAIT_ALPHA);
+    let mut alpha = (alpha as f64 / two_fifty_five) as f32;
+    let mut brightness = fn_00a011b0(e, this, TRAIT_BRIGHTNESS);
+    if brightness >= 0.0 {
+        brightness = (brightness as f64 / two_fifty_five) as f32;
+    }
+    if brightness >= 0.0 {
+        let mut entry = 0i32;
+        let mut tile = this;
+        while !tile.is_null() {
+            if !tile_get_value(e, tile, TRAIT_SYSTEM_COLOR).is_null()
+                || fn_00a011b0(e, tile, TRAIT_ID) as f64 == e.global::<f64>(ID_VALUE_111)
+            {
+                break;
+            }
+            let parent = e.get(tile, Tile::pParent);
+            if !parent.is_null()
+                && !e.get(parent, Tile::pParent).is_null()
+                && e.get(e.get(parent, Tile::pParent), Tile::pParent).is_null()
+                && fn_00a011b0(e, tile, TRAIT_ID) as f64 == e.global::<f64>(ID_VALUE_110)
+            {
+                let system_color = fn_00a011b0(e, tile, TRAIT_SYSTEM_COLOR);
+                entry = float_to_int(e, system_color);
+                if entry == 0 {
+                    let system_color = fn_00a011b0(e, parent, TRAIT_SYSTEM_COLOR);
+                    entry = float_to_int(e, system_color);
+                }
+                if entry == 0 {
+                    entry = 1;
+                }
+                tile = Ptr::NULL;
+                break;
+            }
+            tile = parent;
+        }
+        if !tile.is_null() {
+            let system_color = fn_00a011b0(e, tile, TRAIT_SYSTEM_COLOR);
+            entry = float_to_int(e, system_color);
+        }
+        let found = e.with_stack(0x10, |e, rgba| {
+            for (slot, value) in color.iter().enumerate() {
+                e.mem.set_f32(rgba.addr() + slot as u32 * 4, *value);
+            }
+            let manager = e.call(SYSTEM_COLOR_MANAGER_GET_INSTANCE, &args![]).u32();
+            let found = e
+                .call(SYSTEM_COLOR_MANAGER_GET_COLOR, &args![manager, entry, rgba])
+                .u8()
+                != 0;
+            if found {
+                e.call(COLOR_SCALE, &args![rgba, brightness]);
+            }
+            for (slot, value) in color.iter_mut().enumerate() {
+                *value = e.mem.f32(rgba.addr() + slot as u32 * 4);
+            }
+            found
+        });
+        if !found {
+            brightness = e.global::<f32>(MINUS_ONE);
+        }
+    }
+    if brightness as f64 == e.global::<f64>(MINUS_ONE_DOUBLE) {
+        for (slot, trait_id) in [TRAIT_RED, TRAIT_GREEN, TRAIT_BLUE].into_iter().enumerate() {
+            let channel = fn_00a011b0(e, this, trait_id);
+            color[slot] = (channel as f64 / two_fifty_five) as f32;
+        }
+    }
+    if e.mem.u8(this.addr() + 0x35) != 0 {
+        let name = e.mem.u32(this.addr() + 0x20);
+        let is_box = e.call(STRCMP, &args![name, HIGHLIGHT_BOX_NAME]).i32() == 0;
+        let parent = e.get(this, Tile::pParent);
+        if is_box {
+            color[0] = e.global::<f32>(HIGHLIGHT_RED);
+            color[1] = 0.0;
+            color[2] = 0.0;
+            alpha = e.global::<f32>(HIGHLIGHT_ALPHA);
+        } else if !parent.is_null() {
+            let parent_name = e.mem.u32(parent.addr() + 0x20);
+            if e.call(STRCMP, &args![parent_name, HIGHLIGHT_BOX_NAME])
+                .i32()
+                == 0
+            {
+                color[0] = e.global::<f32>(HIGHLIGHT_RED);
+                color[1] = 0.0;
+                color[2] = 0.0;
+                alpha = 1.0;
+            }
+        }
+    }
+    let model = e.get(this, Tile::spModel).addr();
+    e.with_stack(0x10, |e, rgba| {
+        for (slot, value) in color.iter().enumerate() {
+            e.mem.set_f32(rgba.addr() + slot as u32 * 4, *value);
+        }
+        // Virtual slot +0x24 (`SetAlphaAndColor(model, alpha, color)`).
+        e.vcall(this.addr(), 0x24, &args![model, alpha, rgba]);
+    });
+    clear_update_bit(e, this, flag, UPDATE_COLOR);
+}
+
+/// Copies what a texture atlas entry answers: the atlas texture's file name
+/// into the string `out_texture` (when given) and the rectangle
+/// (left, right, top, bottom) into the four floats at `out_rect` (when
+/// given).
+fn copy_atlas_entry(e: &mut Engine, entry: u32, out_texture: Ptr, out_rect: Ptr) {
+    if !out_texture.is_null() {
+        let texture_name = e.mem.u32(entry + 0x10);
+        e.call(STRING_SET, &args![out_texture, texture_name, 0u32]);
+    }
+    if !out_rect.is_null() {
+        let rect = out_rect.addr();
+        // `NiRect<float>` at +0x18 of the entry: left, right, top, bottom.
+        let left = e.mem.f32(entry + 0x18);
+        e.mem.set_f32(rect, left);
+        let bottom = e.mem.f32(entry + 0x24);
+        e.mem.set_f32(rect + 12, bottom);
+        let top = e.mem.f32(entry + 0x20);
+        e.mem.set_f32(rect + 8, top);
+        let right = e.mem.f32(entry + 0x1c);
+        e.mem.set_f32(rect + 4, right);
+    }
+}
+
+// Translated from 00a06dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::GetTextureAtlasInfo` (Xbox PDB), `cdecl`: looks up the sub-texture
+/// named `subtexture` (the part after the last backslash) in the texture
+/// atlas description `atlas` and answers, through `out_texture` (a
+/// `BSStringT`, may be null) the file name of the atlas texture and, through
+/// `out_rect` (four floats: left, right, top, bottom; may be null) its
+/// rectangle. Nothing is done unless `atlas`, `subtexture` and one of the
+/// outputs are given.
+///
+/// The entries already read are kept on the static list `TextureEntryList`
+/// (`011f3350`; every match writes the outputs). Only when neither the
+/// sub-texture nor the atlas is known is the file `Data\Textures\<atlas>`
+/// opened (`FileFinder::GetFile`; virtual slots +0x20 open, +0x34 read a
+/// line up to a newline, 0 delete) and parsed: every line that does not
+/// begin with `#`, a newline, tab, return or space is an entry
+/// `<name> <texture> <x> <y> <width> <height>` (separated by spaces, commas
+/// and tabs; the two tokens after the texture are skipped, and one more
+/// after the second number); the texture file name is the atlas's
+/// directory plus the second token. Each entry is a new
+/// `Tile::TextureAtlasEntry` (0x28 bytes) put on the list; the right and
+/// bottom are stored as left plus width and top plus height.
+pub fn tile_get_texture_atlas_info(
+    e: &mut Engine,
+    atlas: Ptr,
+    subtexture: Ptr,
+    out_texture: Ptr,
+    out_rect: Ptr,
+) {
+    e.with_stack(NAME_BUFFER_SIZE, |e, path| {
+        e.call(STRCPY_S, &args![path, NAME_BUFFER_SIZE, TEXTURE_DIRECTORY]);
+        if atlas.is_null() || subtexture.is_null() || (out_texture.is_null() && out_rect.is_null())
+        {
+            return;
+        }
+        let last_slash = e.call(STRRCHR, &args![subtexture, 0x5cu32]).u32();
+        let mut found_subtexture = false;
+        let mut found_atlas = false;
+        e.call(STRCAT_S, &args![path, NAME_BUFFER_SIZE, atlas]);
+        let subtexture = if last_slash != 0 {
+            last_slash + 1
+        } else {
+            subtexture.addr()
+        };
+        let mut node = TEXTURE_ENTRY_LIST;
+        while node != 0 && e.mem.u32(node) != 0 {
+            let entry = e.mem.u32(node);
+            let entry_atlas = e.mem.u32(entry);
+            if e.call(STRCMP, &args![entry_atlas, atlas]).i32() == 0 {
+                found_atlas = true;
+            }
+            let entry_subtexture = e.mem.u32(entry + 8);
+            if e.call(STRCMP, &args![entry_subtexture, subtexture]).i32() == 0 {
+                copy_atlas_entry(e, entry, out_texture, out_rect);
+                found_subtexture = true;
+            }
+            node = e.mem.u32(node + 4);
+        }
+        if found_subtexture || found_atlas {
+            return;
+        }
+        let file = e
+            .call(FILE_FINDER_GET_FILE, &args![path, 0u32, 0x4000u32])
+            .u32();
+        if file != 0 && e.vcall(file, 0x20, &args![0u32, 0u32]).u8() != 0 {
+            e.with_stack(0x404, |e, line| {
+                while e.vcall(file, 0x34, &args![line, 0x400u32, 10u32]).u32() != 0 {
+                    read_atlas_line(e, atlas, subtexture, out_texture, out_rect, line);
+                }
+            });
+        }
+        if file != 0 {
+            e.vcall(file, 0, &args![1u32]);
+        }
+    });
+}
+
+/// One line of a texture atlas description, see
+/// [`tile_get_texture_atlas_info`].
+fn read_atlas_line(
+    e: &mut Engine,
+    atlas: Ptr,
+    subtexture: u32,
+    out_texture: Ptr,
+    out_rect: Ptr,
+    line: Ptr,
+) {
+    // The game's `std::string` (0x1C bytes) that builds the texture's path.
+    e.with_stack(0x1c, |e, text| {
+        e.call(STD_STRING_TIDY, &args![text, 0u32, 0u32]);
+        e.call(STRTOK, &args![line, ATLAS_DELIMITERS]);
+        let first = e.mem.i8(line.addr());
+        if matches!(first, 0x23 | 0x0a | 0x09 | 0x0d | 0x20) {
+            e.call(STD_STRING_TIDY, &args![text, 1u32, 0u32]);
+            return;
+        }
+        let block = allocate(e, 0x28);
+        let entry = e.call(TEXTURE_ATLAS_ENTRY_CONSTRUCT, &args![block]).u32();
+        e.call(STRING_SET, &args![entry, atlas, 0u32]);
+        e.call(STRING_SET, &args![entry + 8, line, 0u32]);
+        let atlas_length = e.call(STRLEN, &args![atlas]).u32();
+        e.call(STD_STRING_ASSIGN, &args![text, atlas, atlas_length]);
+        let npos = e.global::<u32>(STD_STRING_NPOS);
+        // The atlas's directory: the part up to and including the last
+        // backslash.
+        let directory_length = e.with_stack(4, |e, backslash| {
+            e.mem.set_u8(backslash.addr(), 0x5c);
+            let position = e
+                .call(STD_STRING_RFIND, &args![text, backslash, npos, 1u32])
+                .u32();
+            position.wrapping_add(1)
+        });
+        e.with_stack(0x1c, |e, directory| {
+            let sub = e
+                .call(
+                    STD_STRING_SUBSTR,
+                    &args![text, directory, 0u32, directory_length],
+                )
+                .u32();
+            e.call(STD_STRING_ASSIGN_STRING, &args![text, sub, 0u32, npos]);
+            e.call(STD_STRING_TIDY, &args![directory, 1u32, 0u32]);
+        });
+        let texture_token = e.call(STRTOK, &args![0u32, ATLAS_DELIMITERS]).u32();
+        let token_length = e.call(STRLEN, &args![texture_token]).u32();
+        e.call(STD_STRING_APPEND, &args![text, texture_token, token_length]);
+        let data = if e.mem.u32(text.addr() + 0x18) >= 0x10 {
+            e.mem.u32(text.addr() + 4)
+        } else {
+            text.addr() + 4
+        };
+        e.call(STRING_SET, &args![entry + 0x10, data, 0u32]);
+        for _ in 0..2 {
+            e.call(STRTOK, &args![0u32, ATLAS_DELIMITERS]);
+        }
+        // x and y, then (after one more token) width and height.
+        let token = e.call(STRTOK, &args![0u32, ATLAS_DELIMITERS]).u32();
+        let x = e.call(ATOF, &args![token]).f64() as f32;
+        e.mem.set_f32(entry + 0x18, x);
+        let token = e.call(STRTOK, &args![0u32, ATLAS_DELIMITERS]).u32();
+        let y = e.call(ATOF, &args![token]).f64() as f32;
+        e.mem.set_f32(entry + 0x20, y);
+        e.call(STRTOK, &args![0u32, ATLAS_DELIMITERS_NO_TAB]);
+        let token = e.call(STRTOK, &args![0u32, ATLAS_DELIMITERS]).u32();
+        let width = e.call(ATOF, &args![token]).f64() as f32;
+        e.mem.set_f32(entry + 0x1c, width);
+        let token = e.call(STRTOK, &args![0u32, ATLAS_DELIMITERS]).u32();
+        let height = e.call(ATOF, &args![token]).f64() as f32;
+        e.mem.set_f32(entry + 0x24, height);
+        let right = (e.mem.f32(entry + 0x1c) as f64 + e.mem.f32(entry + 0x18) as f64) as f32;
+        e.mem.set_f32(entry + 0x1c, right);
+        let bottom = (e.mem.f32(entry + 0x24) as f64 + e.mem.f32(entry + 0x20) as f64) as f32;
+        e.mem.set_f32(entry + 0x24, bottom);
+        let entry_subtexture = e.mem.u32(entry + 8);
+        if e.call(STRCMP, &args![entry_subtexture, subtexture]).i32() == 0 {
+            copy_atlas_entry(e, entry, out_texture, out_rect);
+        }
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), entry);
+            e.call(FADE_LIST_ADD_HEAD, &args![TEXTURE_ENTRY_LIST, slot]);
+        });
+        e.call(STD_STRING_TIDY, &args![text, 1u32, 0u32]);
+    });
+}
+
+// Translated from 00a074d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::SetNeedsUpdate` (Xbox PDB): replaces the tile's update bits (the
+/// low ten bits of its flags) with `bits` (ignored when `bits` has any
+/// other bit) and, when the flags changed, puts the tile on the dirty list.
+pub fn tile_set_needs_update(e: &mut Engine, this: Ptr<Tile>, bits: u32) {
+    if bits > UPDATE_MASK {
+        return;
+    }
+    let old = e.get(this, Tile::uiFlags);
+    let new = (old & !UPDATE_MASK) | bits;
+    e.set(this, Tile::uiFlags, new);
+    if new != old {
+        tile_add_dirty_tile(e, this);
+    }
+}
+
+// Translated from 00a07530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::AddNeedsUpdate` (Xbox PDB): adds the update bits `bits` (ignored
+/// when `bits` has any bit outside the low ten) and, when the flags
+/// changed, puts the tile on the dirty list.
+pub fn tile_add_needs_update(e: &mut Engine, this: Ptr<Tile>, bits: u32) {
+    if bits > UPDATE_MASK {
+        return;
+    }
+    let old = e.get(this, Tile::uiFlags);
+    let new = old | bits;
+    e.set(this, Tile::uiFlags, new);
+    if new != old {
+        tile_add_dirty_tile(e, this);
+    }
+}
+
+// Translated from 00a07580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::GetNextDirtyTile` (Xbox PDB), `cdecl(remove)`: the tile at the
+/// head of the dirty list, null when the list is empty. With `remove` the
+/// tile is taken off the list and loses its dirty bit. Under `Tile::Lock`.
+pub fn tile_get_next_dirty_tile(e: &mut Engine, remove: bool) -> Ptr<Tile> {
+    lock(e);
+    let tile: Ptr<Tile> = if e.mem.u32(DIRTY_TILES_LIST + 8) == 0 {
+        Ptr::NULL
+    } else if remove {
+        let tile: Ptr<Tile> = e.call(LIST_REMOVE_HEAD, &args![DIRTY_TILES_LIST]).ptr();
+        if !tile.is_null() {
+            let flags = e.get(tile, Tile::uiFlags);
+            e.set(tile, Tile::uiFlags, flags & !FLAG_DIRTY);
+        }
+        tile
+    } else {
+        let head = e.mem.u32(DIRTY_TILES_LIST);
+        Ptr::new(e.mem.u32(head + 8))
+    };
+    unlock(e);
+    tile
+}
+
+// Translated from 00a07690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::AddDirtyTile` (Xbox PDB), `cdecl(tile)`: nothing for a null tile.
+/// Under `Tile::Lock`: appends the tile to the dirty list unless it is
+/// there already (dirty bit) and sets the dirty bit; a hibernated tile is
+/// taken off the hibernating list and loses the hibernated bit. (The
+/// compiler folded the `if (1)` / `if (0)` bit setters of its flag helper.)
+pub fn tile_add_dirty_tile(e: &mut Engine, tile: Ptr<Tile>) {
+    if tile.is_null() {
+        return;
+    }
+    lock(e);
+    if e.get(tile, Tile::uiFlags) & FLAG_DIRTY == 0 {
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), tile.addr());
+            e.call(LIST_ADD_TAIL, &args![DIRTY_TILES_LIST, slot]);
+        });
+        let flags = e.get(tile, Tile::uiFlags);
+        e.set(tile, Tile::uiFlags, flags | FLAG_DIRTY);
+    }
+    if e.get(tile, Tile::uiFlags) & FLAG_HIBERNATED != 0 {
+        remove_from_list(e, HIBERNATING_TILES_LIST, tile);
+        let flags = e.get(tile, Tile::uiFlags);
+        e.set(tile, Tile::uiFlags, flags & !FLAG_HIBERNATED);
+    }
+    unlock(e);
+}
+
+// Translated from 00a077c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No Xbox PDB name. Puts a tile to sleep: unless the tile is null, already
+/// hibernated, or the last one on the hibernating list, counts it
+/// (`iHibernatingTileCount`), appends it to the hibernating list, sets the
+/// hibernated bit and clears the promoted bit. (The compiler folded the
+/// `if (1)` / `if (0)` bit setters of its flag helper.)
+pub fn fn_00a077c0(e: &mut Engine, tile: Ptr<Tile>) {
+    if tile.is_null() || e.get(tile, Tile::uiFlags) & FLAG_HIBERNATED != 0 {
+        return;
+    }
+    if e.mem.u32(HIBERNATING_TILES_LIST + 8) != 0 {
+        let tail = e.mem.u32(HIBERNATING_TILES_LIST + 4);
+        if tile.addr() == e.mem.u32(tail + 8) {
+            return;
+        }
+    }
+    let count = e.global::<u32>(HIBERNATING_TILE_COUNT);
+    e.set_global(HIBERNATING_TILE_COUNT, count.wrapping_add(1));
+    let node = e
+        .call(LIST_NEW_NODE, &args![HIBERNATING_TILES_LIST + 8])
+        .u32();
+    e.mem.set_u32(node + 8, tile.addr());
+    e.call(LIST_ADD_NODE_TAIL, &args![HIBERNATING_TILES_LIST, node]);
+    let flags = e.get(tile, Tile::uiFlags) | FLAG_HIBERNATED;
+    e.set(tile, Tile::uiFlags, flags & !FLAG_PROMOTED);
+}
+
+// Translated from 00a078e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::CheckHibernatingTiles` (Xbox PDB): walks the hibernating list;
+/// every tile that is visible again ([`tile_is_visible`]) loses the
+/// hibernated and promoted bits, is added to the dirty list and is taken
+/// off the hibernating list (the list's remove-and-advance step), the
+/// others are skipped.
+pub fn tile_check_hibernating_tiles(e: &mut Engine) {
+    let mut node = e.mem.u32(HIBERNATING_TILES_LIST);
+    while node != 0 {
+        let tile: Ptr<Tile> = Ptr::new(e.mem.u32(node + 8));
+        if tile_is_visible(e, tile) {
+            let flags = e.get(tile, Tile::uiFlags) & !FLAG_HIBERNATED;
+            e.set(tile, Tile::uiFlags, flags & !FLAG_PROMOTED);
+            tile_add_dirty_tile(e, tile);
+            node = e.with_stack(4, |e, iterator| {
+                e.mem.set_u32(iterator.addr(), node);
+                e.call(LIST_REMOVE_NODE, &args![HIBERNATING_TILES_LIST, iterator]);
+                e.mem.u32(iterator.addr())
+            });
+        } else {
+            node = e.mem.u32(node);
+        }
+    }
+}
+
+// Translated from 00a079d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::UpdateClipwindows` (Xbox PDB): every child with the clip-window
+/// trait set gets the scissor-window update bit; for the other children the
+/// search goes on among their own children.
+pub fn tile_update_clipwindows(e: &mut Engine, this: Ptr<Tile>) {
+    let mut node = e.get(this.at(Tile::xChildren), NiTPointerList::m_pkHead);
+    while node != 0 {
+        let child: Ptr<Tile> = Ptr::new(e.mem.u32(node + 8));
+        node = e.mem.u32(node);
+        if tile_is_true(e, child, TRAIT_CLIP_WINDOW) {
+            tile_add_needs_update(e, child, UPDATE_SCISSOR_WINDOW);
+        } else {
+            tile_update_clipwindows(e, child);
+        }
+    }
+}
+
+// Translated from 00a07a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::ReClipChildren` (Xbox PDB): for every descendant with the clips
+/// trait set and a model, gives each of the model's child objects that has a
+/// property of type 3 (the shader property) the scissor rectangle
+/// `left, top, right, bottom` limited to the screen: the left and top are
+/// raised to 0 when negative, the right and bottom lowered to the screen
+/// width and height (those of the rendered menu when this tile's menu is
+/// rendered) and each is truncated to an integer; then the property is
+/// told to refresh (`00bb79d0(1)`).
+pub fn tile_re_clip_children(
+    e: &mut Engine,
+    this: Ptr<Tile>,
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+) {
+    let mut node = e.get(this.at(Tile::xChildren), NiTPointerList::m_pkHead);
+    while node != 0 {
+        let child: Ptr<Tile> = Ptr::new(e.mem.u32(node + 8));
+        node = e.mem.u32(node);
+        if tile_is_true(e, child, TRAIT_CLIPS) && !e.get(child, Tile::spModel).is_null() {
+            let model = e.get(child, Tile::spModel).addr();
+            e.call(NI_ARRAY_COMPACT, &args![model + 0x9c]);
+            e.call(NI_ARRAY_UPDATE_SIZE, &args![model + 0x9c]);
+            let mut index = 0u32;
+            loop {
+                let model = e.get(child, Tile::spModel).addr();
+                if index >= e.mem.u16(model + 0xa8) as u32 {
+                    break;
+                }
+                let model = e.get(child, Tile::spModel).addr();
+                let object = e.mem.u32(e.mem.u32(model + 0xa0) + index * 4);
+                let property = e.call(NI_OBJECT_GET_PROPERTY, &args![object, 3u32]).u32();
+                if property != 0 {
+                    let mut width = e.call(SCREEN_REAL_WIDTH, &args![]).f32();
+                    let mut height = e.call(SCREEN_REAL_HEIGHT, &args![]).f32();
+                    if tile_get_rendered_menu(e, this) {
+                        width = e.call(RENDERED_MENU_WIDTH, &args![]).f32();
+                        height = e.call(RENDERED_MENU_HEIGHT, &args![]).f32();
+                    }
+                    let left_limited = if 0.0 < left { left } else { 0.0 };
+                    let x0 = float_to_int(e, left_limited);
+                    let top_limited = if 0.0 < top { top } else { 0.0 };
+                    let y0 = float_to_int(e, top_limited);
+                    let right_limited = if right < width { right } else { width };
+                    let x1 = float_to_int(e, right_limited);
+                    let bottom_limited = if bottom < height { bottom } else { height };
+                    let y1 = float_to_int(e, bottom_limited);
+                    e.mem.set_i32(property + 0x9c, x0);
+                    e.mem.set_i32(property + 0xa0, y0);
+                    e.mem.set_i32(property + 0xa4, x1);
+                    e.mem.set_i32(property + 0xa8, y1);
+                    e.call(SHADER_PROPERTY_REFRESH, &args![property, 1u32]);
+                }
+                index += 1;
+            }
+        }
+        tile_re_clip_children(e, child, left, top, right, bottom);
+    }
+}
+
+// Translated from 00a07c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::AddFadeControl` (Xbox PDB): starts fading trait `trait_id` of the
+/// tile from `from` to `to` over `seconds` seconds with fade type
+/// `fade_type`. Nothing when `from == to` or `seconds` is not above 0.
+/// Replaces the tile's running fade of that trait ([`tile_remove_fade_control`]),
+/// stamps the start time (`GetTickCount`) and puts the new control at the
+/// head of the global fade list. Type 3 (`TFCT_BLINK_FAST_FADE`) first
+/// zeroes the user trait `_FlashCount`, sets `_TotalFlashCount` to
+/// `seconds / 0.5 - 2` and makes the duration `seconds / (seconds / 0.5)`
+/// seconds long; type 2 (`TFCT_BLINK_THRICE`) zeroes `_FlashCount`.
+pub fn tile_add_fade_control(
+    e: &mut Engine,
+    this: Ptr<Tile>,
+    trait_id: i32,
+    from: f32,
+    to: f32,
+    seconds: f32,
+    fade_type: i32,
+) {
+    if from == to || not_greater(seconds as f64, e.global::<f64>(ZERO)) {
+        return;
+    }
+    tile_remove_fade_control(e, this, trait_id);
+    let control: Ptr<FadeControl> = allocate(e, 0x1c).cast();
+    e.set(control, FadeControl::pParent, this);
+    e.set(control, FadeControl::iTrait, trait_id);
+    e.set(control, FadeControl::fStartValue, from);
+    e.set(control, FadeControl::fEndValue, to);
+    let millis = (seconds as f64 * e.global::<f64>(THOUSAND)) as f32;
+    e.set(control, FadeControl::fDurationMillis, millis);
+    let now = tick_count(e);
+    e.set(control, FadeControl::uiStartTime, now);
+    e.set(control, FadeControl::eFadeType, fade_type);
+    if fade_type == FADE_BLINK_FAST_FADE {
+        let flashes = (seconds as f64 / e.global::<f64>(HALF)) as f32;
+        let flash_count = tile_add_user_trait(e, Ptr::new(FLASH_COUNT_NAME), -1);
+        fn_00a012d0(e, this, flash_count, 0.0, true);
+        let total = (flashes as f64 - e.global::<f64>(TWO)) as f32;
+        let total_count = tile_add_user_trait(e, Ptr::new(TOTAL_FLASH_COUNT_NAME), -1);
+        fn_00a012d0(e, this, total_count, total, true);
+        let millis = (seconds as f64 / flashes as f64 * e.global::<f64>(THOUSAND)) as f32;
+        e.set(control, FadeControl::fDurationMillis, millis);
+    }
+    if fade_type == FADE_BLINK_THRICE {
+        let flash_count = tile_add_user_trait(e, Ptr::new(FLASH_COUNT_NAME), -1);
+        fn_00a012d0(e, this, flash_count, 0.0, true);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), control.addr());
+        e.call(FADE_LIST_ADD_HEAD, &args![FADE_CONTROLS_LIST, slot]);
+    });
+}
+
+// Translated from 00a07dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::RemoveFadeControl` (Xbox PDB): removes from the global fade list
+/// (and frees) every fade control of this tile for trait `trait_id`, or for
+/// all traits when `trait_id` is `eNone` (`0x80000000`). The matches are
+/// first collected in a temporary `BSSimpleList`, then removed one by one.
+pub fn tile_remove_fade_control(e: &mut Engine, this: Ptr<Tile>, trait_id: i32) {
+    e.with_stack(8, |e, matches| {
+        let mut node = FADE_CONTROLS_LIST;
+        while node != 0 && e.mem.u32(node) != 0 {
+            let control: Ptr<FadeControl> = Ptr::new(e.mem.u32(node));
+            let control_trait = e.get(control, FadeControl::iTrait);
+            if (control_trait == trait_id || trait_id == TRAIT_NONE)
+                && e.get(control, FadeControl::pParent) == this
+            {
+                // The node itself serves as the pointer to the item (its
+                // first word).
+                e.call(FADE_LIST_ADD_HEAD, &args![matches, node]);
+            }
+            node = e.mem.u32(node + 4);
+        }
+        remove_listed_fade_controls(e, matches);
+    });
+}
+
+/// Removes from the global fade list, and frees, every control on the
+/// temporary list `matches`, then empties that list (twice: the game's
+/// list clean-up runs once explicitly and once as the destructor).
+fn remove_listed_fade_controls(e: &mut Engine, matches: Ptr) {
+    let mut node = matches.addr();
+    while node != 0 && e.mem.u32(node) != 0 {
+        e.with_stack(4, |e, slot| {
+            let control = e.mem.u32(node);
+            e.mem.set_u32(slot.addr(), control);
+            e.call(FADE_LIST_REMOVE, &args![FADE_CONTROLS_LIST, slot]);
+            let control = e.mem.u32(slot.addr());
+            deallocate(e, control);
+        });
+        node = e.mem.u32(node + 4);
+    }
+    e.call(SIMPLE_LIST_REMOVE_ALL, &args![matches]);
+    e.call(SIMPLE_LIST_REMOVE_ALL, &args![matches]);
+}
+
+/// The controls of the global fade list in order (the nodes up to the first
+/// one without an item).
+fn fade_controls(e: &Engine) -> Vec<Ptr<FadeControl>> {
+    let mut controls = vec![];
+    let mut node = FADE_CONTROLS_LIST;
+    while node != 0 && e.mem.u32(node) != 0 {
+        controls.push(Ptr::new(e.mem.u32(node)));
+        node = e.mem.u32(node + 4);
+    }
+    controls
+}
+
+/// The first fade control of `tile` for trait `trait_id`.
+fn find_fade_control(e: &Engine, tile: Ptr<Tile>, trait_id: i32) -> Option<Ptr<FadeControl>> {
+    fade_controls(e).into_iter().find(|&control| {
+        e.get(control, FadeControl::iTrait) == trait_id
+            && e.get(control, FadeControl::pParent) == tile
+    })
+}
+
+/// `GetTickCount` through its import slot.
+fn tick_count(e: &mut Engine) -> u32 {
+    e.call(TICK_COUNT_IMPORT, &args![]).u32()
+}
+
+// Translated from 00a07ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::HasFadeControl` (Xbox PDB): whether the global fade list holds a
+/// control of this tile for trait `trait_id`.
+pub fn tile_has_fade_control(e: &mut Engine, this: Ptr<Tile>, trait_id: i32) -> bool {
+    find_fade_control(e, this, trait_id).is_some()
+}
+
+// Translated from 00a07f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::GetFadeEndFor` (Xbox PDB): the end value of the tile's fade of
+/// trait `trait_id` truncated to an integer (the last matching control of
+/// the list counts), else the trait's current value. A truncated end value
+/// of exactly -1 also gives the current value.
+pub fn tile_get_fade_end_for(e: &mut Engine, this: Ptr<Tile>, trait_id: i32) -> f32 {
+    let mut end: i32 = -1;
+    for control in fade_controls(e) {
+        if e.get(control, FadeControl::iTrait) == trait_id
+            && e.get(control, FadeControl::pParent) == this
+        {
+            let to = e.get(control, FadeControl::fEndValue);
+            end = float_to_int(e, to);
+        }
+    }
+    if end as f64 == e.global::<f64>(MINUS_ONE_DOUBLE) {
+        fn_00a011b0(e, this, trait_id)
+    } else {
+        end as f32
+    }
+}
+
+// Translated from 00a07fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::GetFadeFinished` (Xbox PDB): true when the tile has no fade of
+/// trait `trait_id`; false for a fade of type 1
+/// (`TFCT_NONLINEAR_LONG_DARK_REPEATING`); else whether the elapsed time
+/// has reached the duration.
+pub fn tile_get_fade_finished(e: &mut Engine, this: Ptr<Tile>, trait_id: i32) -> bool {
+    let Some(control) = find_fade_control(e, this, trait_id) else {
+        return true;
+    };
+    if e.get(control, FadeControl::eFadeType) == FADE_NONLINEAR_LONG_DARK_REPEATING {
+        return false;
+    }
+    let now = tick_count(e);
+    let elapsed = now.wrapping_sub(e.get(control, FadeControl::uiStartTime));
+    let duration = e.get(control, FadeControl::fDurationMillis);
+    let ratio = elapsed as f64 / duration as f64;
+    ratio >= e.global::<f64>(ONE_DOUBLE)
+}
+
+// Translated from 00a08070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::GetFadeType` (Xbox PDB): the fade type of the tile's fade of
+/// trait `trait_id`, 0 when there is none.
+pub fn tile_get_fade_type(e: &mut Engine, this: Ptr<Tile>, trait_id: i32) -> i32 {
+    match find_fade_control(e, this, trait_id) {
+        Some(control) => e.get(control, FadeControl::eFadeType),
+        None => 0,
+    }
+}
+
+// Translated from 00a080d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::UpdateFadeControls` (Xbox PDB): advances every fade control of the
+/// global list by the time that has passed and sets the faded trait; the
+/// controls that reached their end are collected on a temporary list and
+/// then removed and freed. By fade type (`TILE_FADE_CONTROL_TYPE`):
+///
+/// * 0 standard: linear from start to end; a 3D tile's `alpha` also fades
+///   the model ([`tile_fade_in_3d`], scaled by 1/255);
+/// * 1, 2, 3 (blinks): the progress runs from 0 to 1 and back; at the end
+///   of a cycle the start time is renewed (type 1 always; type 2 while the
+///   flash counter is below 3; type 3 while it is below the total) and for
+///   types 2 and 3 the flash counter (user trait `_FlashCount`) grows by
+///   one; type 2 finishes by moving to the end value after the third
+///   flash, type 3 by returning to the start value after the total;
+/// * 4 (fade in, hold, fade out): rises over the first 0.16666 of the time,
+///   holds the end value up to 0.83334 and falls back to the start value.
+pub fn tile_update_fade_controls(e: &mut Engine) {
+    if e.mem.u32(FADE_CONTROLS_LIST + 4) == 0 && e.mem.u32(FADE_CONTROLS_LIST) == 0 {
+        return;
+    }
+    e.with_stack(8, |e, finished| {
+        let mut node = FADE_CONTROLS_LIST;
+        while node != 0 && e.mem.u32(node) != 0 {
+            let control: Ptr<FadeControl> = Ptr::new(e.mem.u32(node));
+            update_fade_control(e, node, control, finished);
+            node = e.mem.u32(node + 4);
+        }
+        remove_listed_fade_controls(e, finished);
+    });
+}
+
+/// One control of [`tile_update_fade_controls`]; `node` is its node in the
+/// global list, `finished` the temporary list of the controls that ended.
+fn update_fade_control(e: &mut Engine, node: u32, control: Ptr<FadeControl>, finished: Ptr) {
+    let end = e.get(control, FadeControl::fEndValue);
+    let start = e.get(control, FadeControl::fStartValue);
+    let trait_id = e.get(control, FadeControl::iTrait);
+    let tile = e.get(control, FadeControl::pParent);
+    let fade_type = e.get(control, FadeControl::eFadeType);
+    // `(end - start) * progress + start`, all in the FPU's precision.
+    let mix = |progress: f32| (end as f64 - start as f64) * progress as f64 + start as f64;
+    let progress_now = |e: &mut Engine| {
+        let now = tick_count(e);
+        let elapsed = now.wrapping_sub(e.get(control, FadeControl::uiStartTime));
+        let duration = e.get(control, FadeControl::fDurationMillis);
+        (elapsed as f64 / duration as f64) as f32
+    };
+    match fade_type {
+        FADE_STANDARD => {
+            let mut progress = progress_now(e);
+            if not_less(progress as f64, 1.0) {
+                progress = 1.0;
+            }
+            if tile_type(e, tile) == TYPE_3D && trait_id == TRAIT_ALPHA {
+                let model = e.get(tile, Tile::spModel);
+                let alpha = (mix(progress) / e.global::<f64>(TWO_FIFTY_FIVE_DOUBLE)) as f32;
+                tile_fade_in_3d(e, tile, model, alpha);
+            }
+            fn_00a012d0(e, tile, trait_id, mix(progress) as f32, true);
+            if progress >= 1.0 {
+                e.call(FADE_LIST_ADD_HEAD, &args![finished, node]);
+            }
+        }
+        FADE_NONLINEAR_LONG_DARK_REPEATING | FADE_BLINK_THRICE | FADE_BLINK_FAST_FADE => {
+            let flash_id = tile_text_to_trait(e, Ptr::new(FLASH_COUNT_NAME));
+            let flash = fn_00a011b0(e, tile, flash_id);
+            let total_id = tile_text_to_trait(e, Ptr::new(TOTAL_FLASH_COUNT_NAME));
+            let total = fn_00a011b0(e, tile, total_id);
+            let mut progress = progress_now(e);
+            let three = e.global::<f64>(THREE_DOUBLE);
+            if progress >= 1.0 {
+                if (fade_type == FADE_BLINK_THRICE && (flash as f64) < three)
+                    || (fade_type == FADE_BLINK_FAST_FADE && flash < total)
+                    || fade_type == FADE_NONLINEAR_LONG_DARK_REPEATING
+                {
+                    let now = tick_count(e);
+                    e.set(control, FadeControl::uiStartTime, now);
+                    progress = 0.0;
+                }
+                if fade_type == FADE_BLINK_THRICE || fade_type == FADE_BLINK_FAST_FADE {
+                    let next = (flash as f64 + e.global::<f64>(ONE_DOUBLE)) as f32;
+                    let flash_id = tile_text_to_trait(e, Ptr::new(FLASH_COUNT_NAME));
+                    fn_00a012d0(e, tile, flash_id, next, true);
+                    if fade_type == FADE_BLINK_THRICE && flash as f64 > three {
+                        fn_00a012d0(e, tile, trait_id, end, true);
+                    } else if fade_type == FADE_BLINK_FAST_FADE && total < flash {
+                        fn_00a012d0(e, tile, trait_id, start, true);
+                        e.call(FADE_LIST_ADD_HEAD, &args![finished, node]);
+                    }
+                }
+            }
+            if fade_type == FADE_BLINK_THRICE && flash as f64 >= three {
+                let value = mix(progress) as f32;
+                let limited = if end < value { end } else { value };
+                fn_00a012d0(e, tile, trait_id, limited, true);
+                if end <= value {
+                    e.call(FADE_LIST_ADD_HEAD, &args![finished, node]);
+                }
+            } else {
+                let swing =
+                    (progress as f64 * e.global::<f64>(TWO) - e.global::<f64>(ONE_DOUBLE)) as f32;
+                let magnitude = e.call(FABS, &args![swing as f64]).f64() as f32;
+                let weight = (e.global::<f64>(ONE_DOUBLE) - magnitude as f64) as f32;
+                fn_00a012d0(e, tile, trait_id, mix(weight) as f32, true);
+            }
+        }
+        FADE_IN_HOLD_FADE_OUT => {
+            let progress = progress_now(e);
+            if (progress as f64) < e.global::<f64>(FADE_RISE_END_DOUBLE) {
+                let rise = e.global::<f32>(FADE_RISE_END_FLOAT);
+                let ratio = (progress as f64 - 0.0) / (rise as f64 - 0.0);
+                let value = (start as f64 + (end as f64 - start as f64) * ratio) as f32;
+                fn_00a012d0(e, tile, trait_id, value, true);
+            } else if (progress as f64) < e.global::<f64>(FADE_FALL_START_DOUBLE) {
+                fn_00a012d0(e, tile, trait_id, end, true);
+            } else if progress >= 1.0 {
+                fn_00a012d0(e, tile, trait_id, start, true);
+                e.call(FADE_LIST_ADD_HEAD, &args![finished, node]);
+            } else {
+                let fall = e.global::<f32>(FADE_FALL_START_FLOAT) as f64;
+                let ratio = (progress as f64 - fall) / (e.global::<f64>(ONE_DOUBLE) - fall);
+                let value = (end as f64 + (start as f64 - end as f64) * ratio) as f32;
+                fn_00a012d0(e, tile, trait_id, value, true);
+            }
+        }
+        _ => {}
+    }
+}
+
+// Translated from 00a08720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::FadeIn3D` (Xbox PDB): sets the alpha `alpha` of the shader
+/// property (property type 3) of the node and of every geometry among its
+/// descendants. The tile is not used. Virtual calls on the node: slot +0xC
+/// (`IsNode`: answers the `NiNode` or null) and +0x18 (`IsGeometry`).
+pub fn tile_fade_in_3d(e: &mut Engine, _this: Ptr<Tile>, node: Ptr, alpha: f32) {
+    if node.is_null() {
+        return;
+    }
+    let as_node = e.vcall(node.addr(), 0xc, &[]).u32();
+    let mut index = 0;
+    while as_node != 0 && index < e.mem.u16(as_node + 0xa6) as u32 {
+        let child = e.mem.u32(e.mem.u32(as_node + 0xa0) + index * 4);
+        tile_fade_in_3d(e, _this, Ptr::new(child), alpha);
+        index += 1;
+    }
+    if e.vcall(node.addr(), 0x18, &[]).u32() != 0 {
+        let property = e
+            .call(NI_OBJECT_GET_PROPERTY, &args![node.addr(), 3u32])
+            .u32();
+        if property != 0 {
+            e.mem.set_f32(property + 0x78, alpha);
+        }
+    }
+}
+
+// Translated from 00a087d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::SetParent` (Xbox PDB): moves the tile under `parent` (null:
+/// detaches it). The old parent, unless it is released, loses one from its
+/// child count trait (`eChildCount`) and drops the tile from its children
+/// list. The new parent gains one and gets the tile in its children list:
+/// right behind the child `after` when that is among them (the tile is
+/// first taken out of the list), else at the head of the list.
+pub fn tile_set_parent(e: &mut Engine, this: Ptr<Tile>, parent: Ptr<Tile>, after: Ptr<Tile>) {
+    let old_parent = e.get(this, Tile::pParent);
+    if !old_parent.is_null() && e.get(old_parent, Tile::uiFlags) & FLAG_RELEASED == 0 {
+        let count = fn_00a011b0(e, old_parent, TRAIT_CHILD_COUNT);
+        let count = (count as f64 - e.global::<f64>(ONE_DOUBLE)) as f32;
+        fn_00a012d0(e, old_parent, TRAIT_CHILD_COUNT, count, true);
+        remove_from_list(e, old_parent.addr() + 4, this);
+    }
+    e.set(this, Tile::pParent, parent);
+    if parent.is_null() {
+        return;
+    }
+    let count = fn_00a011b0(e, parent, TRAIT_CHILD_COUNT);
+    let count = (count as f64 + e.global::<f64>(ONE_DOUBLE)) as f32;
+    fn_00a012d0(e, parent, TRAIT_CHILD_COUNT, count, true);
+    let children = parent.addr() + 4;
+    let mut placed = false;
+    if !after.is_null() {
+        let mut node = e.mem.u32(children);
+        while node != 0 {
+            let behind = node;
+            let element = e.mem.u32(node + 8);
+            node = e.mem.u32(node);
+            if element == after.addr() {
+                remove_from_list(e, children, this);
+                e.with_stack(4, |e, slot| {
+                    e.mem.set_u32(slot.addr(), this.addr());
+                    e.call(LIST_ADD_AFTER, &args![children, behind, slot]);
+                });
+                placed = true;
+                break;
+            }
+        }
+    }
+    if !placed {
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), this.addr());
+            e.call(LIST_ADD_HEAD, &args![children, slot]);
+        });
+    }
+}
+
+// Translated from 00a089c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::GetParentModel` (Xbox PDB): the model of the tile, or of its
+/// nearest ancestor that has one; null when none has.
+pub fn tile_get_parent_model(e: &mut Engine, this: Ptr<Tile>) -> Ptr {
+    let mut tile = this;
+    while !tile.is_null() && e.get(tile, Tile::spModel).is_null() {
+        tile = e.get(tile, Tile::pParent);
+    }
+    if tile.is_null() || e.get(tile, Tile::spModel).is_null() {
+        Ptr::NULL
+    } else {
+        e.get(tile, Tile::spModel)
+    }
+}
+
+// Translated from 00a08a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::DeleteModel` (Xbox PDB): nothing without a model. Otherwise
+/// severs the tile's extra data from the model, has the model's parent
+/// node remove it (slot +0xE8, `DetachChild`), and releases the tile's
+/// reference to it. A local reference taken for the duration keeps the
+/// model alive until the end, where it is released too (and the model is
+/// destroyed through its virtual slot +4 if that was the last).
+pub fn tile_delete_model(e: &mut Engine, this: Ptr<Tile>) {
+    let model = e.get(this, Tile::spModel);
+    if model.is_null() {
+        return;
+    }
+    tile_sever_extra_data(e, this);
+    let parent_node = e.mem.u32(model.addr() + 0x18);
+    if parent_node != 0 {
+        e.vcall(parent_node, 0xe8, &args![model]);
+    }
+    // The local `NiPointer` copy of the model.
+    e.call(INTERLOCKED_INCREMENT, &args![model.addr() + 4]);
+    e.with_stack(4, |e, local| {
+        e.mem.set_u32(local.addr(), model.addr());
+        e.call(NI_POINTER_ASSIGN, &args![this.addr() + 0x2c, 0u32]);
+        e.call(NI_POINTER_ASSIGN, &args![local, 0u32]);
+        let held = e.mem.u32(local.addr());
+        if held != 0 {
+            release_reference(e, held);
+        }
+    });
+}
+
+// Translated from 00a08b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No Xbox PDB name. Finds the tile an action link names: `path` is split
+/// by [`fn_00a018d0`] into a word (looked up in the text table; the code
+/// selects the rule) and an optional name in parentheses. The rules, by
+/// code:
+///
+/// * `0x1389` the parent of `tile`; `0x138a` `tile` itself;
+/// * `0x138c` the next sibling (the first child after the last) when the
+///   name is empty, else the first sibling named like it (case-blind);
+/// * `0x138d` the first child when the name is empty, else the child
+///   found by name ([`tile_get_child_by_name`]);
+/// * `0x138e` the menus root; `0x138f` the result of `00706cf0`;
+/// * `0x1390` the word at +4 of the tile's menu ([`tile_get_menu`]);
+/// * `0x1391` the grandparent;
+/// * anything else (`0x138b` among it) a depth-first search by name
+///   ([`fn_00a08f20`]) under the menu tile of `tile` (or the menus root
+///   for a null `tile`).
+///
+/// The tile is dereferenced without a null check in most rules, as in the
+/// game.
+pub fn fn_00a08b20(e: &mut Engine, tile: Ptr<Tile>, path: Ptr) -> Ptr {
+    e.with_stack(NAME_BUFFER_SIZE, |e, buffer| {
+        e.mem.set_u8(buffer.addr(), 0);
+        let code = fn_00a018d0(e, path, buffer);
+        let named = e.mem.i8(buffer.addr()) != 0;
+        match code {
+            LINK_PARENT => e.get(tile, Tile::pParent).cast(),
+            LINK_SELF => tile.cast(),
+            LINK_SIBLING => {
+                let parent = e.get(tile, Tile::pParent);
+                let sibling_count = e.mem.u32(parent.addr() + 0xc);
+                if !named && sibling_count != 0 {
+                    let mut node = e.mem.u32(parent.addr() + 4);
+                    while node != 0 {
+                        let element = e.mem.u32(node + 8);
+                        node = e.mem.u32(node);
+                        if element == tile.addr() {
+                            break;
+                        }
+                    }
+                    if node != 0 {
+                        Ptr::new(e.mem.u32(node + 8))
+                    } else {
+                        Ptr::new(e.mem.u32(e.mem.u32(parent.addr() + 4) + 8))
+                    }
+                } else if named && sibling_count != 0 {
+                    let mut node = e.mem.u32(parent.addr() + 4);
+                    let mut found = Ptr::NULL;
+                    while node != 0 {
+                        let sibling = e.mem.u32(node + 8);
+                        node = e.mem.u32(node);
+                        let sibling_name = e.mem.u32(sibling + 0x20);
+                        if sibling_name != 0
+                            && e.call(STRICMP, &args![sibling_name, buffer]).i32() == 0
+                        {
+                            found = Ptr::new(sibling);
+                            break;
+                        }
+                    }
+                    found
+                } else {
+                    Ptr::NULL
+                }
+            }
+            LINK_CHILD => {
+                if !named && e.mem.u32(tile.addr() + 0xc) != 0 {
+                    return Ptr::new(e.mem.u32(e.mem.u32(tile.addr() + 4) + 8));
+                }
+                if !tile.is_null() && named && e.mem.u32(tile.addr() + 0xc) != 0 {
+                    tile_get_child_by_name(e, tile, buffer).cast()
+                } else {
+                    Ptr::NULL
+                }
+            }
+            LINK_MENUS_ROOT => e.call(INTERFACE_GET_MENUS_ROOT, &args![]).ptr(),
+            LINK_00706CF0 => e.call(INTERFACE_00706CF0, &args![]).ptr(),
+            LINK_MENU => {
+                let menu = tile_get_menu(e, tile);
+                Ptr::new(e.mem.u32(menu.addr() + 4))
+            }
+            LINK_GRANDPARENT => {
+                let parent = e.get(tile, Tile::pParent);
+                if parent.is_null() {
+                    Ptr::NULL
+                } else {
+                    e.get(parent, Tile::pParent).cast()
+                }
+            }
+            _ => {
+                let start = if tile.is_null() {
+                    e.call(INTERFACE_GET_MENUS_ROOT, &args![]).ptr()
+                } else {
+                    tile_get_menu_tile(e, tile)
+                };
+                fn_00a08f20(e, start, path).cast()
+            }
+        }
+    })
+}
+
+// Translated from 00a08f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No Xbox PDB name, `cdecl(tile, name)`: the first tile named `name`
+/// (case-blind `_stricmp`) in the tree under and including `tile`, searched
+/// depth first; null when there is none.
+pub fn fn_00a08f20(e: &mut Engine, tile: Ptr<Tile>, name: Ptr) -> Ptr<Tile> {
+    if tile.is_null() {
+        return Ptr::NULL;
+    }
+    let tile_name = e.mem.u32(tile.addr() + 0x20);
+    if tile_name != 0 && e.call(STRICMP, &args![tile_name, name]).i32() == 0 {
+        return tile;
+    }
+    let mut node = e.get(tile.at(Tile::xChildren), NiTPointerList::m_pkHead);
+    while node != 0 {
+        let child: Ptr<Tile> = Ptr::new(e.mem.u32(node + 8));
+        node = e.mem.u32(node);
+        let found = fn_00a08f20(e, child, name);
+        if !found.is_null() {
+            return found;
+        }
+    }
+    Ptr::NULL
+}
+
+// Translated from 00a08fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No Xbox PDB name, `cdecl(tile, id)`: the first tile whose `id` trait
+/// equals `id` in the tree under and including `tile`, depth first; null
+/// when there is none. A null `tile` is not special-cased by the game: it
+/// goes on to read the children list at address 4 (this translation reads
+/// the same address).
+pub fn fn_00a08fb0(e: &mut Engine, tile: Ptr<Tile>, id: i32) -> Ptr<Tile> {
+    if !tile.is_null() {
+        let tile_id = fn_00a011b0(e, tile, TRAIT_ID);
+        if id as f64 == tile_id as f64 {
+            return tile;
+        }
+    }
+    let mut node = e.mem.u32(tile.addr() + 4);
+    while node != 0 {
+        let child: Ptr<Tile> = Ptr::new(e.mem.u32(node + 8));
+        node = e.mem.u32(node);
+        let found = fn_00a08fb0(e, child, id);
+        if !found.is_null() {
+            return found;
+        }
+    }
+    Ptr::NULL
+}
+
+// Translated from 00a09030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::GetMenuByClass` (Xbox PDB), `cdecl(class)`: the menu registered
+/// for the menu class number `class` (1001 to 1084) in the table at
+/// `[011f350c]` (indexed from 1001, `[011f3512]` entries long), else 0.
+pub fn tile_get_menu_by_class(e: &mut Engine, class: i32) -> u32 {
+    if !(MENU_CLASS_FIRST..=MENU_CLASS_LAST).contains(&class) {
+        return 0;
+    }
+    let index = (class - MENU_CLASS_FIRST) as u32;
+    if e.global::<u16>(MENU_CLASS_COUNT) as u32 <= index {
+        return 0;
+    }
+    let table = e.global::<u32>(MENU_CLASS_TABLE);
+    e.mem.u32(table + index * 4)
+}
+
+/// Appends the action `node` at the end of the action list of `value`.
+fn append_action(e: &mut Engine, value: Ptr<TileValue>, node: u32) {
+    let mut tail = e.get(value, TileValue::pActionListA).addr();
+    if tail == 0 {
+        e.set(value, TileValue::pActionListA, Ptr::new(node));
+        return;
+    }
+    while e.mem.u32(tail + 8) != 0 {
+        tail = e.mem.u32(tail + 8);
+    }
+    e.mem.set_u32(tail + 8, node);
+}
+
+// Translated from 00a09080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::Value::AddAction` (Xbox PDB): appends a `Tile::FloatAction` (vtable
+/// `01094c2c`, `QFloat`) of type `action` (a `VALUE_ACTION`) with the
+/// operand `amount` to the trait's action list. The `Tile::Action`
+/// constructor first writes its own vtable and the default type
+/// `VA_COPY` (2000); both are overwritten at once.
+pub fn value_add_action(e: &mut Engine, this: Ptr<TileValue>, action: i32, amount: f32) {
+    let node: Ptr<ValueAction> = allocate(e, 0x10).cast();
+    e.mem.set_u32(node.addr(), VTABLE_FLOAT_ACTION);
+    e.set(node, ValueAction::eActionType, action);
+    e.set(node, ValueAction::pnext, Ptr::NULL);
+    e.set(node, ValueAction::fValue, amount);
+    append_action(e, this, node.addr());
+}
+
+// Translated from 00a09130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::Value::AddAction_ov2` (Xbox PDB): appends a `Tile::RefValueAction`
+/// (vtable `01094c44`, `QRefValue`) of type `action` that reads trait
+/// `trait_id` of `tile` (created when missing), and registers the trait
+/// with `AddReaction(value, this)` so it is recalculated when that trait
+/// changes.
+pub fn value_add_action_ov2(
+    e: &mut Engine,
+    this: Ptr<TileValue>,
+    action: i32,
+    tile: Ptr<Tile>,
+    trait_id: i32,
+) {
+    let node: Ptr<ValueAction> = allocate(e, 0x10).cast();
+    e.mem.set_u32(node.addr(), VTABLE_REF_VALUE_ACTION);
+    e.set(node, ValueAction::eActionType, action);
+    e.set(node, ValueAction::pnext, Ptr::NULL);
+    let referenced = tile_get_or_create_value(e, tile, trait_id);
+    e.mem.set_u32(node.addr() + 0xc, referenced.addr());
+    append_action(e, this, node.addr());
+    e.call(ADD_REACTION, &args![referenced, this]);
+}
+
+// Translated from 00a09200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::Value::ClearActions` (Xbox PDB): deletes the trait's actions one
+/// by one. An action that reads another trait (`QRefValue`, slot +4,
+/// answers it) is first removed from that trait's reaction list (the map
+/// `ValueReactionList`, `011f3358`): the reactions of this trait come out
+/// of the list, and the map entry is erased when none are left or updated
+/// when the head changed.
+pub fn value_clear_actions(e: &mut Engine, this: Ptr<TileValue>) {
+    let list_head = this.addr() + 0x10;
+    loop {
+        let action = e.mem.u32(list_head);
+        if action == 0 {
+            break;
+        }
+        if e.vcall(action, 4, &[]).u32() != 0 {
+            e.with_stack(4, |e, reactions| {
+                e.mem.set_u32(reactions.addr(), 0);
+                let referenced = e.vcall(action, 4, &[]).u32();
+                let found = e
+                    .call(
+                        REACTION_MAP_FIND,
+                        &args![REACTION_MAP, referenced, reactions],
+                    )
+                    .u8();
+                if found != 0 {
+                    let first_before = e.mem.u32(reactions.addr());
+                    let mut link = reactions.addr();
+                    loop {
+                        let reaction = e.mem.u32(link);
+                        if reaction == 0 {
+                            break;
+                        }
+                        if e.mem.u32(reaction) == this.addr() {
+                            let next = e.mem.u32(reaction + 4);
+                            e.mem.set_u32(link, next);
+                            deallocate(e, reaction);
+                        } else {
+                            link = reaction + 4;
+                        }
+                    }
+                    let first_after = e.mem.u32(reactions.addr());
+                    if first_after == 0 {
+                        let referenced = e.vcall(action, 4, &[]).u32();
+                        e.call(REACTION_MAP_REMOVE, &args![REACTION_MAP, referenced]);
+                    } else if first_after != first_before {
+                        let referenced = e.vcall(action, 4, &[]).u32();
+                        e.call(
+                            REACTION_MAP_SET,
+                            &args![REACTION_MAP, referenced, first_after],
+                        );
+                    }
+                }
+            });
+        }
+        let next = e.mem.u32(action + 8);
+        e.mem.set_u32(list_head, next);
+        deallocate(e, action);
+    }
+}
+
+// Translated from 00a09330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::Value::~Value` (Xbox PDB): clears the trait's actions
+/// ([`value_clear_actions`]); then, if the trait has a reaction list in the
+/// map `ValueReactionList`, goes through its reactions, blanks the
+/// referenced trait of every action of theirs that reads this trait, frees
+/// the reaction nodes and erases the map entry. Frees the string and zeroes
+/// the float and the owning tile. (The value itself is not freed.)
+pub fn value_destructor(e: &mut Engine, this: Ptr<TileValue>) {
+    value_clear_actions(e, this);
+    e.with_stack(4, |e, reactions| {
+        e.mem.set_u32(reactions.addr(), 0);
+        let found = e
+            .call(REACTION_MAP_FIND, &args![REACTION_MAP, this, reactions])
+            .u8();
+        if found != 0 {
+            let mut reaction = e.mem.u32(reactions.addr());
+            while reaction != 0 {
+                let owner = e.mem.u32(reaction);
+                let mut action = e.mem.u32(owner + 0x10);
+                while action != 0 {
+                    if e.vcall(action, 4, &[]).u32() == this.addr() {
+                        e.mem.set_u32(action + 0xc, 0);
+                    }
+                    action = e.mem.u32(action + 8);
+                }
+                let node = reaction;
+                reaction = e.mem.u32(reaction + 4);
+                deallocate(e, node);
+            }
+            e.call(REACTION_MAP_REMOVE, &args![REACTION_MAP, this]);
+        }
+    });
+    let text = e.get(this, TileValue::strValue);
+    if !text.is_null() {
+        deallocate(e, text.addr());
+    }
+    e.set(this, TileValue::fValue, 0.0);
+    e.set(this, TileValue::pParent, Ptr::NULL);
+}
+
+// Translated from 00a09410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Tile::Value::CalculateValue` (Xbox PDB), `thiscall(flag)`: recomputes
+/// the trait's float and string by running its action list. Nothing is done
+/// when the owning tile is missing or deleting (`ebfMenuDeleting`), nor
+/// (except for the `class` trait) while the tile is loading
+/// (`ebfTileLoading`). The current-line word of the TLS block is 13 during
+/// the calculation.
+///
+/// The value starts from the float it has; the actions run in order, each
+/// with an operand (its `QFloat`; for a reference action `QRefValue` also
+/// answers the other trait, whose string is taken too; a user trait whose
+/// text-table number is -1 is looked up by [`GetUnderscoreValue`]
+/// `00a0a0b0` for the current value rounded). Parentheses use a stack of
+/// floats: a left parenthesis (`VA_LEFT_PAREN`) pushes the running value
+/// and restarts from 0, a right parenthesis (`VA_RIGHT_PAREN`) pops it back
+/// as the running value and applies the operation its own `QFloat`
+/// encodes to the parenthesised result. Operations (`VALUE_ACTION`):
+/// `VA_COPY` copies the float, or the string when there is one (which marks
+/// the value changed unless the text is the same), `ADD`, `SUB`, `MULT`,
+/// `DIV` (not by 0), `MIN`, `MAX`, `MOD` (on the rounded integers, not by
+/// 0), `FLOOR` and `CEIL` of the sum, `ABS` of the sum, `ROUND` to a
+/// multiple of the operand, the comparisons `GT`, `GTE`, `EQ`, `NEQ`,
+/// `LT`, `LTE` (0 or 1), `AND`, `OR`, `NOT` (a string counts as true),
+/// `ONLYIF` and `ONLYIFNOT` (set 0).
+///
+/// Afterwards the value counts as changed when it has no string and the
+/// float differs from the starting one; the string of an `eString` trait is
+/// rewritten as the decimal rounded integer when the float changed. When
+/// the value changed (or `flag`), `ValueChangeEvent(value)` `00a0a220` is
+/// called and, if the tile is not released, the tile's virtual `PostParse`
+/// (slot +0x18) is asked about (trait, float, string); an answer of 0
+/// leads to `Tile::FinalPostParse`.
+pub fn value_calculate_value(e: &mut Engine, this: Ptr<TileValue>, flag: bool) {
+    let tile = e.get(this, TileValue::pParent);
+    let trait_id = e.get(this, TileValue::eIndex);
+    // The first test reads the tile without a null check, as the game does.
+    let tile_flags = e.mem.u32(tile.addr() + 0x30);
+    if !(tile_flags & FLAG_TILE_LOADING == 0 || trait_id == TRAIT_CLASS) {
+        return;
+    }
+    if tile.is_null() || e.get(tile, Tile::uiFlags) & FLAG_MENU_DELETING != 0 {
+        return;
+    }
+    let line_word = e.tls() + TLS_CURRENT_LINE;
+    let saved_line = e.mem.u32(line_word);
+    e.mem.set_u32(line_word, 0xd);
+    let mut action = e.get(this, TileValue::pActionListA).addr();
+    let start = e.get(this, TileValue::fValue);
+    let mut changed = false;
+    e.with_stack(0x10, |e, stack| {
+        // A stack of floats: vtable, buffer, size, capacity.
+        e.mem.set_u32(stack.addr(), VTABLE_FLOAT_STACK);
+        e.call(FLOAT_STACK_CONSTRUCT, &args![stack, 0u32, 0u32]);
+        while action != 0 {
+            run_action(e, this, action, stack, &mut changed);
+            action = e.mem.u32(action + 8);
+        }
+        if e.get(this, TileValue::strValue).is_null() {
+            changed = e.get(this, TileValue::fValue) != start;
+        }
+        let float = e.get(this, TileValue::fValue);
+        if float != start && trait_id == TRAIT_STRING {
+            let number = float_to_int_rounded(float);
+            // The number of characters `%d` needs.
+            let mut digits = (number == 0) as u32;
+            let mut rest = number;
+            while rest != 0 {
+                digits += 1;
+                rest /= 10;
+            }
+            if number < 0 {
+                digits += 1;
+            }
+            let text = e.get(this, TileValue::strValue);
+            if text.is_null() || e.call(STRLEN, &args![text]).u32() != digits {
+                let old = e.get(this, TileValue::strValue).addr();
+                deallocate(e, old);
+                let new_text = allocate(e, digits + 1);
+                e.set(this, TileValue::strValue, new_text);
+            }
+            let text = e.get(this, TileValue::strValue);
+            e.call(SPRINTF_S, &args![text, digits + 1, FORMAT_INTEGER, number]);
+            changed = true;
+        }
+        if changed || flag {
+            e.call(VALUE_CHANGE_EVENT, &args![this]);
+            let tile = e.get(this, TileValue::pParent);
+            if !tile.is_null() && e.get(tile, Tile::uiFlags) & FLAG_RELEASED == 0 {
+                let value = e.get(this, TileValue::fValue);
+                let text = e.get(this, TileValue::strValue);
+                let handled = e.vcall(tile.addr(), 0x18, &args![trait_id, value, text]);
+                if handled.u32() == 0 {
+                    tile_final_post_parse(e, tile, trait_id, value, text.addr());
+                }
+            }
+        }
+        e.call(FLOAT_STACK_DESTROY, &args![stack]);
+    });
+    e.mem.set_u32(line_word, saved_line);
+}
+
+/// One action of [`value_calculate_value`]; `stack` is its stack of floats
+/// and `changed` its "the string changed" flag.
+fn run_action(e: &mut Engine, this: Ptr<TileValue>, action: u32, stack: Ptr, changed: &mut bool) {
+    let mut operand = e.vcall(action, 0, &[]).f32();
+    let mut text = 0u32;
+    if e.vcall(action, 4, &[]).u32() != 0 {
+        let referenced = e.vcall(action, 4, &[]).u32();
+        let mut found_number: i32 = 0;
+        text = e.mem.u32(referenced + 0xc);
+        let referenced_trait = e.mem.i32(referenced);
+        if referenced_trait >= FIRST_USER_TEXT_ID {
+            e.with_stack(4, |e, out| {
+                e.call(
+                    REACTION_MAP_FIND,
+                    &args![TRAIT_EXTRA_DATA_MAP, referenced_trait, out],
+                );
+                found_number = e.mem.i32(out.addr());
+            });
+        }
+        if found_number == -1 {
+            let rounded = float_to_int_rounded(e.get(this, TileValue::fValue));
+            let owner = e.mem.u32(referenced + 4);
+            let found = e
+                .call(
+                    TILE_GET_UNDERSCORE_VALUE,
+                    &args![owner, referenced_trait, rounded],
+                )
+                .u32();
+            if found != 0 {
+                operand = e.mem.f32(found + 8);
+                text = e.mem.u32(found + 0xc);
+            }
+        }
+    }
+    let mut kind = e.mem.i32(action + 4);
+    if kind == ACTION_LEFT_PAREN {
+        let value_address = this.addr() + 8;
+        e.call(FLOAT_STACK_PUSH, &args![stack, value_address]);
+        e.set(this, TileValue::fValue, 0.0);
+    } else if kind == ACTION_RIGHT_PAREN {
+        let size = e.mem.u32(stack.addr() + 8);
+        let top = e.mem.f32(
+            e.mem
+                .u32(stack.addr() + 4)
+                .wrapping_add(size.wrapping_mul(4))
+                .wrapping_sub(4),
+        );
+        let encoded = e.vcall(action, 0, &[]).f32();
+        kind = float_to_int_rounded(encoded);
+        operand = e.get(this, TileValue::fValue);
+        e.set(this, TileValue::fValue, top);
+        if size != 0 {
+            e.mem.set_u32(stack.addr() + 8, size - 1);
+        }
+    }
+    let current = e.get(this, TileValue::fValue);
+    let (current64, operand64) = (current as f64, operand as f64);
+    let zero = e.global::<f64>(ZERO);
+    let flag = |condition: bool| if condition { 1.0f32 } else { 0.0f32 };
+    let result: Option<f32> = match kind {
+        VA_COPY => {
+            if text == 0 {
+                Some(operand)
+            } else {
+                let length = e.call(STRLEN, &args![text]).u32();
+                let old = e.get(this, TileValue::strValue);
+                *changed = old.is_null() || e.call(STRCMP, &args![old, text]).i32() != 0;
+                if !old.is_null() {
+                    deallocate(e, old.addr());
+                    e.set(this, TileValue::strValue, Ptr::NULL);
+                }
+                let copy = allocate(e, length + 1);
+                e.set(this, TileValue::strValue, copy);
+                e.call(STRCPY_S, &args![copy, length + 1, text]);
+                None
+            }
+        }
+        VA_ADD => Some((current64 + operand64) as f32),
+        VA_SUB => Some((current64 - operand64) as f32),
+        VA_MULT => Some((current64 * operand64) as f32),
+        VA_DIV => {
+            if operand64 != zero {
+                Some((current64 / operand64) as f32)
+            } else {
+                None
+            }
+        }
+        VA_MIN => Some(if current < operand { current } else { operand }),
+        VA_MAX => Some(if operand < current { current } else { operand }),
+        VA_MOD => {
+            if operand64 != zero {
+                let dividend = float_to_int_rounded(current);
+                let divisor = float_to_int_rounded(operand);
+                Some((dividend % divisor) as f32)
+            } else {
+                None
+            }
+        }
+        VA_FLOOR => {
+            let sum = (operand64 + current64) as f32;
+            Some(e.call(FLOOR, &args![sum as f64]).f64() as f32)
+        }
+        VA_CEIL => {
+            let sum = (operand64 + current64) as f32;
+            Some(e.call(CEIL, &args![sum as f64]).f64() as f32)
+        }
+        VA_ABS => {
+            let sum = (operand64 + current64) as f32;
+            Some(e.call(FABS, &args![sum as f64]).f64() as f32)
+        }
+        VA_ROUND => {
+            let quotient = (current64 / operand64) as f32;
+            let truncated = float_to_int(e, quotient);
+            let round_up =
+                not_less(quotient as f64 - truncated as f64, e.global::<f64>(HALF)) as i32;
+            let multiple = float_to_int(e, quotient).wrapping_add(round_up);
+            Some((operand64 * multiple as f64) as f32)
+        }
+        VA_GT => Some(flag(operand < current)),
+        VA_GTE => Some(flag(operand <= current)),
+        VA_EQ => Some(flag(operand == current)),
+        VA_NEQ => Some(flag(operand != current)),
+        VA_LT => Some(flag(current < operand)),
+        VA_LTE => Some(flag(current <= operand)),
+        VA_AND => Some(flag(if text == 0 {
+            current64 != zero && operand64 != zero
+        } else {
+            current64 != zero
+        })),
+        VA_OR => Some(flag(if text == 0 {
+            current64 != zero || operand64 != zero
+        } else {
+            current64 != zero || text != 0
+        })),
+        VA_NOT => Some(if text == 0 {
+            flag(operand64 == zero)
+        } else {
+            0.0
+        }),
+        VA_ONLYIF => {
+            if operand64 == zero && text == 0 {
+                Some(0.0)
+            } else {
+                None
+            }
+        }
+        VA_ONLYIFNOT => {
+            if operand64 != zero || text != 0 {
+                Some(0.0)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    if let Some(value) = result {
+        e.set(this, TileValue::fValue, value);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2482,6 +5356,61 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00a03da0,
             tile_get_child_by_name(Ptr<Tile>, Ptr) -> Ptr<Tile>
         ),
+        entry!(
+            0x00a03eb0,
+            tile_get_child_by_id(Ptr<Tile>, i32) -> Ptr<Tile>
+        ),
+        entry!(
+            0x00a03f70,
+            tile_get_first_ref_copy(Ptr<Tile>, i32, Ptr) -> u32
+        ),
+        entry!(0x00a040a0, tile_is_visible(Ptr<Tile>) -> bool),
+        entry!(0x00a04100, fn_00a04100(Ptr<Tile>) -> bool),
+        entry!(0x00a04150, tile_delete_children(Ptr<Tile>)),
+        entry!(0x00a04200, tile_update_all(bool)),
+        entry!(0x00a044f0, tile_lock()),
+        entry!(0x00a04500, tile_unlock()),
+        entry!(0x00a04510, fn_00a04510()),
+        entry!(0x00a04620, tile_update_children(Ptr<Tile>, u32)),
+        entry!(0x00a04640, tile_update_tile(Ptr<Tile>, bool) -> bool),
+        entry!(0x00a06dd0, tile_get_texture_atlas_info(Ptr, Ptr, Ptr, Ptr)),
+        entry!(0x00a074d0, tile_set_needs_update(Ptr<Tile>, u32)),
+        entry!(0x00a07530, tile_add_needs_update(Ptr<Tile>, u32)),
+        entry!(0x00a07580, tile_get_next_dirty_tile(bool) -> Ptr<Tile>),
+        entry!(0x00a07690, tile_add_dirty_tile(Ptr<Tile>)),
+        entry!(0x00a077c0, fn_00a077c0(Ptr<Tile>)),
+        entry!(0x00a078e0, tile_check_hibernating_tiles()),
+        entry!(0x00a079d0, tile_update_clipwindows(Ptr<Tile>)),
+        entry!(
+            0x00a07a40,
+            tile_re_clip_children(Ptr<Tile>, f32, f32, f32, f32)
+        ),
+        entry!(
+            0x00a07c60,
+            tile_add_fade_control(Ptr<Tile>, i32, f32, f32, f32, i32)
+        ),
+        entry!(0x00a07dc0, tile_remove_fade_control(Ptr<Tile>, i32)),
+        entry!(0x00a07ed0, tile_has_fade_control(Ptr<Tile>, i32) -> bool),
+        entry!(0x00a07f30, tile_get_fade_end_for(Ptr<Tile>, i32) -> f32),
+        entry!(0x00a07fc0, tile_get_fade_finished(Ptr<Tile>, i32) -> bool),
+        entry!(0x00a08070, tile_get_fade_type(Ptr<Tile>, i32) -> i32),
+        entry!(0x00a080d0, tile_update_fade_controls()),
+        entry!(0x00a08720, tile_fade_in_3d(Ptr<Tile>, Ptr, f32)),
+        entry!(0x00a087d0, tile_set_parent(Ptr<Tile>, Ptr<Tile>, Ptr<Tile>)),
+        entry!(0x00a089c0, tile_get_parent_model(Ptr<Tile>) -> Ptr),
+        entry!(0x00a08a20, tile_delete_model(Ptr<Tile>)),
+        entry!(0x00a08b20, fn_00a08b20(Ptr<Tile>, Ptr) -> Ptr),
+        entry!(0x00a08f20, fn_00a08f20(Ptr<Tile>, Ptr) -> Ptr<Tile>),
+        entry!(0x00a08fb0, fn_00a08fb0(Ptr<Tile>, i32) -> Ptr<Tile>),
+        entry!(0x00a09030, tile_get_menu_by_class(i32) -> u32),
+        entry!(0x00a09080, value_add_action(Ptr<TileValue>, i32, f32)),
+        entry!(
+            0x00a09130,
+            value_add_action_ov2(Ptr<TileValue>, i32, Ptr<Tile>, i32)
+        ),
+        entry!(0x00a09200, value_clear_actions(Ptr<TileValue>)),
+        entry!(0x00a09330, value_destructor(Ptr<TileValue>)),
+        entry!(0x00a09410, value_calculate_value(Ptr<TileValue>, bool)),
     ]
 }
 
@@ -2546,6 +5475,67 @@ mod tests {
         STRRCHR,
         STRCMP,
         STRTOK_S,
+        ADD_TILE_TO_UPDATE_LIST,
+        INTERFACE_MANAGER_END_OF_UPDATE,
+        INTERFACE_GET_FIRST_CHANCE_TEXTURE_RELEASE,
+        INTERFACE_PREPARE_TEXTURE_RELEASE,
+        TEXTURE_PALETTE_PURGE_UNUSED,
+        SCREEN_REAL_WIDTH,
+        SCREEN_REAL_HEIGHT,
+        RENDERED_MENU_WIDTH,
+        RENDERED_MENU_HEIGHT,
+        INTERFACE_00706CF0,
+        NI_OBJECT_GET_PROPERTY,
+        NI_ARRAY_COMPACT,
+        NI_ARRAY_UPDATE_SIZE,
+        SHADER_PROPERTY_REFRESH,
+        LIST_REMOVE_NODE,
+        LIST_ADD_TAIL,
+        LIST_NEW_NODE,
+        LIST_ADD_NODE_TAIL,
+        LIST_ADD_HEAD,
+        LIST_ADD_AFTER,
+        FADE_LIST_ADD_HEAD,
+        FADE_LIST_REMOVE,
+        REACTION_MAP_REMOVE,
+        ADD_REACTION,
+        TICK_COUNT_IMPORT,
+        FABS,
+        FLOOR,
+        CEIL,
+        TEXT_TILE_CREATED,
+        SET_TILE_TEXTURE,
+        ADD_TO_TES_TEXTURES,
+        BSSTRING_CONSTRUCT,
+        GEOMETRY_DATA_MARK_AS_CHANGED,
+        GEOMETRY_DATA_SET_CONSISTENCY,
+        BOUND_COMPUTE_FROM_DATA,
+        TILE_3D_UPDATE_NIF,
+        SCREEN_WIDTH,
+        SCREEN_HEIGHT,
+        SCREEN_ASPECT_RATIO,
+        INTERFACE_IS_RENDERED_MENU,
+        MATRIX_TIMES_POINT,
+        POINT_ADD,
+        POINT_SUBTRACT,
+        SYSTEM_COLOR_MANAGER_GET_INSTANCE,
+        SYSTEM_COLOR_MANAGER_GET_COLOR,
+        COLOR_SCALE,
+        VALUE_CHANGE_EVENT,
+        TILE_GET_UNDERSCORE_VALUE,
+        FLOAT_STACK_CONSTRUCT,
+        FLOAT_STACK_PUSH,
+        FLOAT_STACK_DESTROY,
+        SPRINTF_S,
+        STD_STRING_TIDY,
+        STD_STRING_ASSIGN,
+        STD_STRING_RFIND,
+        STD_STRING_SUBSTR,
+        STD_STRING_ASSIGN_STRING,
+        STD_STRING_APPEND,
+        TEXTURE_ATLAS_ENTRY_CONSTRUCT,
+        FILE_FINDER_GET_FILE,
+        STRTOK,
     ];
 
     /// An engine with do-nothing doubles for everything outside this file,
@@ -5189,5 +8179,3264 @@ mod tests {
         assert_eq!(float_to_int_rounded(f32::NAN), i32::MIN);
         assert_eq!(float_to_int_rounded(3.0e9), i32::MIN);
         assert_eq!(float_to_int_rounded(-3.0e9), i32::MIN);
+    }
+
+    // -----------------------------------------------------------------------
+    // Session 2: `GetChildByID` .. `Value::CalculateValue`
+
+    /// The pages and values of the `.rdata` constants this batch reads.
+    fn provide_constants(e: &mut Engine) {
+        for page in [
+            0x0101_1000,
+            0x0101_6000,
+            0x0101_7000,
+            0x0101_a000,
+            0x0101_d000,
+            0x0101_e000,
+            0x0102_0000,
+            0x0102_1000,
+            0x0103_3000,
+            0x0106_e000,
+            0x0106_f000,
+            0x0107_0000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(ZERO, 0.0f64);
+        e.set_global(ONE_DOUBLE, 1.0f64);
+        e.set_global(HALF, 0.5f64);
+        e.set_global(TWO, 2.0f64);
+        e.set_global(THREE_DOUBLE, 3.0f64);
+        e.set_global(THOUSAND, 1000.0f64);
+        e.set_global(HUNDRED_DOUBLE, 100.0f64);
+        e.set_global(HUNDRED_FLOAT, 100.0f32);
+        e.set_global(TWO_FIFTY_FIVE_DOUBLE, 255.0f64);
+        e.set_global(MINUS_ONE_DOUBLE, -1.0f64);
+        e.set_global(MINUS_ONE, -1.0f32);
+        e.set_global(ID_VALUE_110, 110.0f64);
+        e.set_global(ID_VALUE_111, 111.0f64);
+        e.set_global(STACKING_TYPE_102, 102.0f64);
+        e.set_global(STACKING_TYPE_103, 103.0f64);
+        e.set_global(STACKING_VALUE_6000, 6000.0f32);
+        e.set_global(STACKING_VALUE_6001, 6001.0f32);
+        e.set_global(DEPTH_SCALE, -0.008f64);
+        e.set_global(FADE_RISE_END_DOUBLE, 0.16666f64);
+        e.set_global(FADE_FALL_START_DOUBLE, 0.83334f64);
+        e.set_global(FADE_RISE_END_FLOAT, 0.16666f32);
+        e.set_global(FADE_FALL_START_FLOAT, 0.83334f32);
+        e.set_global(HIGHLIGHT_RED, 0.545f32);
+        e.set_global(HIGHLIGHT_ALPHA, 0.2f32);
+        e.set_global(STD_STRING_NPOS, u32::MAX);
+        e.mem.set_cstr(HIGHLIGHT_BOX_NAME, b"lb_highlight_box");
+        e.mem.set_cstr(FORMAT_INTEGER, b"%d");
+    }
+
+    /// A `strcmp` over game memory.
+    fn install_strcmp(e: &mut Engine) {
+        e.register(STRCMP, |e, a| {
+            let first = e.mem.cstr(a[0]);
+            let second = e.mem.cstr(a[1]);
+            (first.cmp(&second) as i32).into_ret()
+        });
+    }
+
+    /// A clock for `GetTickCount`: the cell is the time it answers.
+    fn install_clock(e: &mut Engine) -> Rc<Cell<u32>> {
+        let now = Rc::new(Cell::new(0));
+        let seen = now.clone();
+        e.register_double(TICK_COUNT_IMPORT, move |_, _| seen.get().into_ret());
+        now
+    }
+
+    /// Makes the function at `addr` answer the `float` `value`.
+    fn answer_float(e: &mut Engine, addr: u32, value: f32) {
+        e.register_double(addr, move |_, _| value.into_ret());
+    }
+
+    /// An `NiNode`-like block: children array at +0xA0 with counts at +0xA6
+    /// and +0xA8, parent at +0x18, flags at +0x30.
+    fn make_model(e: &mut Engine, children: &[u32]) -> u32 {
+        let node = e.mem.alloc(0xc0);
+        let buffer = e.mem.alloc(4 * children.len().max(1) as u32);
+        for (index, child) in children.iter().enumerate() {
+            e.mem.set_u32(buffer + 4 * index as u32, *child);
+        }
+        e.mem.set_u32(node + 0xa0, buffer);
+        e.mem.set_u16(node + 0xa6, children.len() as u16);
+        e.mem.set_u16(node + 0xa8, children.len() as u16);
+        node
+    }
+
+    /// A vtable for a `Tile::Action`: `QFloat` (slot 0) answers `amount`,
+    /// `QRefValue` (slot 4) answers `referenced`.
+    fn action_vtable(e: &mut Engine, amount: f32, referenced: u32) -> u32 {
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable, 0x7000_0000 + vtable);
+        e.mem.set_u32(vtable + 4, 0x7000_0004 + vtable);
+        e.register_double(0x7000_0000 + vtable, move |_, _| amount.into_ret());
+        e.register_double(0x7000_0004 + vtable, move |_, _| referenced.into_ret());
+        vtable
+    }
+
+    /// An action object of the given `VALUE_ACTION` type.
+    fn make_action(e: &mut Engine, vtable: u32, kind: i32, next: u32) -> u32 {
+        let action = e.mem.alloc(0x10);
+        e.mem.set_u32(action, vtable);
+        e.mem.set_i32(action + 4, kind);
+        e.mem.set_u32(action + 8, next);
+        action
+    }
+
+    /// A tile with scalar-deleting-destructor calls recorded as
+    /// (tile, flag).
+    fn deletable_tile(e: &mut Engine, log: &Rc<RefCell<Vec<(u32, u32)>>>) -> Ptr<Tile> {
+        let vtable = e.mem.alloc(0x10);
+        let function = 0x7100_0000 + vtable;
+        e.mem.set_u32(vtable, function);
+        let seen = log.clone();
+        e.register_double(function, move |_, a| {
+            seen.borrow_mut().push((a[0], a[1]));
+            Ret::default()
+        });
+        let tile: Ptr<Tile> = e.new_object();
+        e.mem.set_u32(tile.addr(), vtable);
+        tile
+    }
+
+    /// One `SetAlphaAndColor` call: (model, alpha, color).
+    type ColorCall = (u32, f32, [f32; 4]);
+
+    /// What the virtual calls of an [`updating_tile`] saw.
+    struct TileLog {
+        /// What `MakeNode` (slot +8) answers.
+        make_node: Rc<Cell<u32>>,
+        /// How often `MakeNode` was called.
+        made: Rc<Cell<u32>>,
+        /// `SetAlphaAndColor(model, alpha, color)` (slot +0x24).
+        colors: Rc<RefCell<Vec<ColorCall>>>,
+        /// `PostParse(trait, value, text)` (slot +0x18) as it was called.
+        post_parses: Rc<RefCell<Vec<(i32, f32, u32)>>>,
+        /// What `PostParse` answers.
+        post_parse_answer: Rc<Cell<u32>>,
+    }
+
+    /// A tile of the given type with `MakeNode` and `SetAlphaAndColor`.
+    fn updating_tile(e: &mut Engine, kind: u32) -> (Ptr<Tile>, TileLog) {
+        let vtable = e.mem.alloc(0x30);
+        let base = 0x7200_0000 + vtable;
+        for slot in [8u32, 0xc, 0x18, 0x24] {
+            e.mem.set_u32(vtable + slot, base + slot);
+        }
+        let log = TileLog {
+            make_node: Rc::new(Cell::new(1)),
+            made: Rc::new(Cell::new(0)),
+            colors: Rc::new(RefCell::new(vec![])),
+            post_parses: Rc::new(RefCell::new(vec![])),
+            post_parse_answer: Rc::new(Cell::new(1)),
+        };
+        let (answer, made) = (log.make_node.clone(), log.made.clone());
+        e.register_double(base + 8, move |_, _| {
+            made.set(made.get() + 1);
+            answer.get().into_ret()
+        });
+        e.register_double(base + 0xc, move |_, _| kind.into_ret());
+        let (post_parses, answer) = (log.post_parses.clone(), log.post_parse_answer.clone());
+        e.register_double(base + 0x18, move |_, a| {
+            post_parses
+                .borrow_mut()
+                .push((a[1] as i32, f32::from_bits(a[2]), a[3]));
+            answer.get().into_ret()
+        });
+        let colors = log.colors.clone();
+        e.register_double(base + 0x24, move |e, a| {
+            let rgba = [
+                e.mem.f32(a[3]),
+                e.mem.f32(a[3] + 4),
+                e.mem.f32(a[3] + 8),
+                e.mem.f32(a[3] + 12),
+            ];
+            colors.borrow_mut().push((a[1], f32::from_bits(a[2]), rgba));
+            Ret::default()
+        });
+        let tile: Ptr<Tile> = e.new_object();
+        e.mem.set_u32(tile.addr(), vtable);
+        (tile, log)
+    }
+
+    #[test]
+    fn all_functions_of_the_second_batch_are_registered() {
+        let e = Engine::new();
+        for address in [
+            0x00a0_3eb0,
+            0x00a0_3f70,
+            0x00a0_40a0,
+            0x00a0_4100,
+            0x00a0_4150,
+            0x00a0_4200,
+            0x00a0_44f0,
+            0x00a0_4500,
+            0x00a0_4510,
+            0x00a0_4620,
+            0x00a0_4640,
+            0x00a0_6dd0,
+            0x00a0_74d0,
+            0x00a0_7530,
+            0x00a0_7580,
+            0x00a0_7690,
+            0x00a0_77c0,
+            0x00a0_78e0,
+            0x00a0_79d0,
+            0x00a0_7a40,
+            0x00a0_7c60,
+            0x00a0_7dc0,
+            0x00a0_7ed0,
+            0x00a0_7f30,
+            0x00a0_7fc0,
+            0x00a0_8070,
+            0x00a0_80d0,
+            0x00a0_8720,
+            0x00a0_87d0,
+            0x00a0_89c0,
+            0x00a0_8a20,
+            0x00a0_8b20,
+            0x00a0_8f20,
+            0x00a0_8fb0,
+            0x00a0_9030,
+            0x00a0_9080,
+            0x00a0_9130,
+            0x00a0_9200,
+            0x00a0_9330,
+            0x00a0_9410,
+        ] {
+            assert!(e.is_translated(address), "{address:08x}");
+        }
+    }
+
+    #[test]
+    fn child_by_id_finds_the_first_child_with_that_id() {
+        let mut e = tile_engine();
+        install_value_array_doubles(&mut e);
+        let parent = typed_tile(&mut e, TYPE_RECT);
+        let mut children = vec![];
+        for index in 0..3 {
+            let child = typed_tile(&mut e, TYPE_RECT);
+            give_trait(&mut e, child, TRAIT_ID, 10.0 + index as f32);
+            add_child(&mut e, parent, child);
+            children.push(child);
+        }
+        e.call_log = Some(vec![]);
+        assert_eq!(tile_get_child_by_id(&mut e, parent, 11), children[1]);
+        assert!(tile_get_child_by_id(&mut e, parent, 99).is_null());
+        assert_lock_balanced(&e);
+        assert_eq!(calls_to(&e, TILE_LOCK).len(), 2);
+    }
+
+    #[test]
+    fn first_ref_copy_follows_the_first_reference_action() {
+        let mut e = tile_engine();
+        install_value_array_doubles(&mut e);
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        let other = typed_tile(&mut e, TYPE_RECT);
+        let referenced: Ptr<TileValue> = Ptr::new(e.mem.alloc(0x14));
+        e.set(referenced, TileValue::eIndex, TRAIT_Y);
+        e.set(referenced, TileValue::pParent, other);
+        let plain = action_vtable(&mut e, 1.0, 0);
+        let reference = action_vtable(&mut e, 0.0, referenced.addr());
+        let second = make_action(&mut e, reference, VA_REF, 0);
+        let first = make_action(&mut e, plain, VA_COPY, second);
+        let value = give_trait(&mut e, tile, TRAIT_X, 0.0);
+        e.set(value, TileValue::pActionListA, Ptr::new(first));
+        let out = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        let answer = tile_get_first_ref_copy(&mut e, tile, TRAIT_X, Ptr::new(out));
+        assert_eq!(answer, other.addr());
+        assert_eq!(e.mem.i32(out), TRAIT_Y);
+        assert_lock_balanced(&e);
+        // A trait without a reference action answers 0 and leaves `out`.
+        let only_plain = make_action(&mut e, plain, VA_COPY, 0);
+        let value = give_trait(&mut e, tile, TRAIT_WIDTH, 0.0);
+        e.set(value, TileValue::pActionListA, Ptr::new(only_plain));
+        e.mem.set_i32(out, 77);
+        assert_eq!(
+            tile_get_first_ref_copy(&mut e, tile, TRAIT_WIDTH, Ptr::new(out)),
+            0
+        );
+        assert_eq!(e.mem.i32(out), 77);
+    }
+
+    #[test]
+    fn first_ref_copy_asks_the_parent_when_the_tile_lacks_the_trait() {
+        let mut e = tile_engine();
+        install_value_array_doubles(&mut e);
+        let parent = typed_tile(&mut e, TYPE_RECT);
+        let child = typed_tile(&mut e, TYPE_RECT);
+        add_child(&mut e, parent, child);
+        let other = typed_tile(&mut e, TYPE_RECT);
+        let referenced: Ptr<TileValue> = Ptr::new(e.mem.alloc(0x14));
+        e.set(referenced, TileValue::eIndex, TRAIT_HEIGHT);
+        e.set(referenced, TileValue::pParent, other);
+        let reference = action_vtable(&mut e, 0.0, referenced.addr());
+        let action = make_action(&mut e, reference, VA_REF, 0);
+        let value = give_trait(&mut e, parent, TRAIT_X, 0.0);
+        e.set(value, TileValue::pActionListA, Ptr::new(action));
+        let out = e.mem.alloc(4);
+        assert_eq!(
+            tile_get_first_ref_copy(&mut e, child, TRAIT_X, Ptr::new(out)),
+            other.addr()
+        );
+        assert_eq!(e.mem.i32(out), TRAIT_HEIGHT);
+        // Neither the tile nor a parent has it.
+        assert_eq!(
+            tile_get_first_ref_copy(&mut e, child, TRAIT_Y, Ptr::new(out)),
+            0
+        );
+    }
+
+    #[test]
+    fn a_tile_is_visible_unless_its_model_or_an_ancestor_node_is_culled() {
+        let mut e = tile_engine();
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        assert!(tile_is_visible(&mut e, tile));
+        let parent_node = make_model(&mut e, &[]);
+        let model = make_model(&mut e, &[]);
+        e.mem.set_u32(model + 0x18, parent_node);
+        e.set(tile, Tile::spModel, Ptr::new(model));
+        assert!(tile_is_visible(&mut e, tile));
+        e.mem.set_u32(parent_node + 0x30, 1);
+        assert!(!tile_is_visible(&mut e, tile));
+        e.mem.set_u32(parent_node + 0x30, 0);
+        e.mem.set_u32(model + 0x30, 3);
+        assert!(!tile_is_visible(&mut e, tile));
+        e.mem.set_u32(model + 0x30, 2);
+        assert!(tile_is_visible(&mut e, tile));
+    }
+
+    #[test]
+    fn walking_up_through_tiles_with_id_110_ends_at_the_root() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        let [root, middle, leaf] = chain(&mut e, [[0.0; 4]; 3]);
+        give_trait(&mut e, root, TRAIT_ID, 110.0);
+        give_trait(&mut e, middle, TRAIT_ID, 110.0);
+        assert!(!fn_00a04100(&mut e, leaf));
+        assert!(!fn_00a04100(&mut e, root));
+    }
+
+    #[test]
+    #[should_panic(expected = "loops forever")]
+    fn walking_up_stops_with_a_panic_where_the_game_would_hang() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        let [root, _, leaf] = chain(&mut e, [[0.0; 4]; 3]);
+        give_trait(&mut e, root, TRAIT_ID, 5.0);
+        fn_00a04100(&mut e, leaf);
+    }
+
+    #[test]
+    fn delete_children_deletes_each_child_and_empties_the_list() {
+        let mut e = tile_engine();
+        let parent = typed_tile(&mut e, TYPE_RECT);
+        let log = Rc::new(RefCell::new(vec![]));
+        let first = deletable_tile(&mut e, &log);
+        let second = deletable_tile(&mut e, &log);
+        add_child(&mut e, parent, first);
+        push_list(&mut e, parent.at(Tile::xChildren), 0);
+        add_child(&mut e, parent, second);
+        e.call_log = Some(vec![]);
+        tile_delete_children(&mut e, parent);
+        assert_eq!(*log.borrow(), vec![(first.addr(), 1), (second.addr(), 1)]);
+        assert_eq!(calls_to(&e, LIST_REMOVE_ALL), vec![vec![parent.addr() + 4]]);
+        assert_lock_balanced(&e);
+    }
+
+    #[test]
+    fn lock_and_unlock_enter_and_leave_the_tile_critical_section() {
+        let mut e = tile_engine();
+        e.call_log = Some(vec![]);
+        tile_lock(&mut e);
+        tile_unlock(&mut e);
+        assert_eq!(
+            calls_to(&e, ENTER_CRITICAL_SECTION),
+            vec![vec![TILE_CRITICAL_SECTION]]
+        );
+        assert_eq!(
+            calls_to(&e, LEAVE_CRITICAL_SECTION),
+            vec![vec![TILE_CRITICAL_SECTION]]
+        );
+    }
+
+    /// The dirty-tile list doubles: `LIST_REMOVE_HEAD` hands out `tiles` in
+    /// order and keeps the count at `DIRTY_TILES_LIST + 8` right.
+    fn dirty_list_with(e: &mut Engine, tiles: Vec<Ptr<Tile>>) {
+        e.mem.set_u32(DIRTY_TILES_LIST + 8, tiles.len() as u32);
+        let mut queue = std::collections::VecDeque::from(tiles);
+        e.register_double(LIST_REMOVE_HEAD, move |e, _| {
+            let count = e.mem.u32(DIRTY_TILES_LIST + 8);
+            e.mem.set_u32(DIRTY_TILES_LIST + 8, count - 1);
+            queue.pop_front().map_or(0, |tile| tile.addr()).into_ret()
+        });
+    }
+
+    #[test]
+    fn update_all_updates_dirty_tiles_and_announces_the_changed_ones() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        let (tile, log) = updating_tile(&mut e, TYPE_RECT);
+        e.set(tile, Tile::uiFlags, UPDATE_CREATE | FLAG_DIRTY);
+        dirty_list_with(&mut e, vec![tile]);
+        e.set_global(INTERFACE_MANAGER, 0x5000_1000u32);
+        let line_word = e.tls() + TLS_CURRENT_LINE;
+        e.mem.set_u32(line_word, 0x77);
+        let during = Rc::new(Cell::new(0));
+        let seen = during.clone();
+        e.register_double(INTERFACE_MANAGER_END_OF_UPDATE, move |e, _| {
+            let line_word = e.tls() + TLS_CURRENT_LINE;
+            seen.set(e.mem.u32(line_word));
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+
+        e.call(0x00a0_4200, &args![true]);
+
+        assert_eq!(log.made.get(), 1);
+        assert_eq!(e.get(tile, Tile::uiFlags), 0);
+        assert!(e.get(tile, Tile::bNeedsNiUpdate));
+        assert_eq!(
+            calls_to(&e, ADD_TILE_TO_UPDATE_LIST),
+            vec![vec![0x5000_1000, tile.addr()]]
+        );
+        assert_eq!(calls_to(&e, INTERFACE_MANAGER_END_OF_UPDATE).len(), 1);
+        assert_eq!(during.get(), 13);
+        assert_eq!(e.mem.u32(line_word), 0x77);
+        assert_eq!(
+            calls_to(&e, ENTER_CRITICAL_SECTION),
+            calls_to(&e, LEAVE_CRITICAL_SECTION)
+        );
+        assert_lock_balanced(&e);
+        // Without the flag the manager is left alone.
+        e.call_log = Some(vec![]);
+        e.call(0x00a0_4200, &args![false]);
+        assert!(calls_to(&e, INTERFACE_MANAGER_END_OF_UPDATE).is_empty());
+    }
+
+    #[test]
+    fn update_all_skips_released_deleting_hibernated_and_idle_tiles() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        let mut tiles = vec![];
+        let mut logs = vec![];
+        for flags in [
+            UPDATE_CREATE | FLAG_RELEASED,
+            UPDATE_CREATE | FLAG_MENU_DELETING,
+            UPDATE_CREATE | FLAG_HIBERNATED,
+            FLAG_DIRTY,
+        ] {
+            let (tile, log) = updating_tile(&mut e, TYPE_RECT);
+            e.set(tile, Tile::uiFlags, flags);
+            tiles.push(tile);
+            logs.push(log);
+        }
+        dirty_list_with(&mut e, tiles);
+        e.call(0x00a0_4200, &args![false]);
+        for log in &logs {
+            assert_eq!(log.made.get(), 0);
+        }
+    }
+
+    #[test]
+    fn update_all_gives_the_menus_root_children_their_stacking_values() {
+        for (stacking, expected) in [(102.0f32, 6000.0f32), (103.0, 6001.0), (104.0, 104.0)] {
+            let mut e = tile_engine();
+            provide_constants(&mut e);
+            install_value_array_doubles(&mut e);
+            let (tile, _) = updating_tile(&mut e, TYPE_RECT);
+            let root = typed_tile(&mut e, TYPE_RECT);
+            add_child(&mut e, root, tile);
+            e.register_double(INTERFACE_GET_MENUS_ROOT, move |_, _| root.addr().into_ret());
+            let value = give_trait(&mut e, tile, TRAIT_STACKING_TYPE, stacking);
+            e.set(tile, Tile::uiFlags, UPDATE_CREATE | FLAG_DIRTY);
+            dirty_list_with(&mut e, vec![tile]);
+            let set = Rc::new(RefCell::new(vec![]));
+            let seen = set.clone();
+            e.register_double(VALUE_SET_FLOAT, move |_, a| {
+                seen.borrow_mut().push((a[0], f32::from_bits(a[1]), a[2]));
+                Ret::default()
+            });
+            e.call(0x00a0_4200, &args![false]);
+            let expected_sets = if expected == stacking {
+                vec![]
+            } else {
+                vec![(value.addr(), expected, 1)]
+            };
+            assert_eq!(*set.borrow(), expected_sets);
+        }
+    }
+
+    #[test]
+    fn update_all_checks_the_hibernating_tiles_and_runs_again_after_a_tile_became_visible() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        let (tile, _) = updating_tile(&mut e, TYPE_RECT);
+        // A culled model that the visibility trait shows again.
+        let model = make_model(&mut e, &[]);
+        e.mem.set_u32(model + 0x30, 1);
+        e.set(tile, Tile::spModel, Ptr::new(model));
+        give_trait(&mut e, tile, TRAIT_VISIBLE, 1.0);
+        e.set(tile, Tile::uiFlags, UPDATE_VISIBILITY | FLAG_DIRTY);
+        dirty_list_with(&mut e, vec![tile]);
+        e.set_global(INTERFACE_MANAGER, 0x5000_1000u32);
+        e.call_log = Some(vec![]);
+        e.call(0x00a0_4200, &args![true]);
+        assert_eq!(e.mem.u32(model + 0x30), 0);
+        // The inner pass found nothing to do and finished the work once.
+        assert_eq!(calls_to(&e, INTERFACE_MANAGER_END_OF_UPDATE).len(), 1);
+        assert_eq!(e.global::<u8>(NEEDS_CHECK_HIBERNATE), 0);
+        assert_eq!(
+            calls_to(&e, ENTER_CRITICAL_SECTION).len(),
+            calls_to(&e, LEAVE_CRITICAL_SECTION).len()
+        );
+    }
+
+    #[test]
+    fn update_all_purges_textures_when_the_interface_asks() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        e.register(INTERFACE_GET_FIRST_CHANCE_TEXTURE_RELEASE, |_, _| {
+            1u32.into_ret()
+        });
+        let line_word = e.tls() + TLS_CURRENT_LINE;
+        e.mem.set_u32(line_word, 0x55);
+        let during = Rc::new(Cell::new(0));
+        let seen = during.clone();
+        e.register_double(TEXTURE_PALETTE_PURGE_UNUSED, move |e, _| {
+            let line_word = e.tls() + TLS_CURRENT_LINE;
+            seen.set(e.mem.u32(line_word));
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        tile_update_all(&mut e, false);
+        assert_eq!(
+            calls_to(&e, INTERFACE_PREPARE_TEXTURE_RELEASE),
+            vec![vec![0]]
+        );
+        assert_eq!(calls_to(&e, TEXTURE_PALETTE_PURGE_UNUSED).len(), 1);
+        assert_eq!(during.get(), 13);
+        assert_eq!(e.mem.u32(line_word), 0x55);
+    }
+
+    /// A hibernating list of the given tiles: nodes (next, previous,
+    /// element) and a `LIST_REMOVE_NODE` that steps the iterator on.
+    fn hibernating_list_with(e: &mut Engine, tiles: &[Ptr<Tile>]) {
+        let nodes: Vec<u32> = tiles.iter().map(|_| e.mem.alloc(12)).collect();
+        for (index, tile) in tiles.iter().enumerate() {
+            e.mem.set_u32(nodes[index] + 8, tile.addr());
+            if let Some(next) = nodes.get(index + 1) {
+                e.mem.set_u32(nodes[index], *next);
+            }
+        }
+        e.mem
+            .set_u32(HIBERNATING_TILES_LIST, nodes.first().copied().unwrap_or(0));
+        e.mem
+            .set_u32(HIBERNATING_TILES_LIST + 8, tiles.len() as u32);
+        e.register_double(LIST_REMOVE_NODE, |e, a| {
+            let node = e.mem.u32(a[1]);
+            let next = e.mem.u32(node);
+            e.mem.set_u32(a[1], next);
+            e.mem.u32(node + 8).into_ret()
+        });
+    }
+
+    #[test]
+    fn hibernating_tiles_wake_while_the_frame_has_budget() {
+        let mut e = tile_engine();
+        let tiles: Vec<Ptr<Tile>> = (0..4)
+            .map(|_| {
+                let tile = typed_tile(&mut e, TYPE_RECT);
+                e.set(tile, Tile::uiFlags, FLAG_HIBERNATED);
+                tile
+            })
+            .collect();
+        hibernating_list_with(&mut e, &tiles);
+        // 9 tiles updated and 0 dirty: a budget of 11 - 9 = 2.
+        e.set_global(TILES_UPDATED_THIS_FRAME, 9u32);
+        let appended = Rc::new(RefCell::new(vec![]));
+        let seen = appended.clone();
+        e.register_double(LIST_ADD_TAIL, move |e, a| {
+            seen.borrow_mut().push(e.mem.u32(a[1]));
+            Ret::default()
+        });
+        fn_00a04510(&mut e);
+        for (index, tile) in tiles.iter().enumerate() {
+            let flags = e.get(*tile, Tile::uiFlags);
+            if index < 2 {
+                assert_eq!(flags, FLAG_PROMOTED | FLAG_DIRTY);
+            } else {
+                assert_eq!(flags, FLAG_HIBERNATED);
+            }
+        }
+        assert_eq!(*appended.borrow(), vec![tiles[0].addr(), tiles[1].addr()]);
+    }
+
+    #[test]
+    fn hibernating_tiles_stay_asleep_when_the_frame_is_busy() {
+        let mut e = tile_engine();
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        e.set(tile, Tile::uiFlags, FLAG_HIBERNATED);
+        hibernating_list_with(&mut e, &[tile]);
+        // 8 updated and 3 dirty: 11 is over the limit of 10.
+        e.set_global(TILES_UPDATED_THIS_FRAME, 8u32);
+        e.mem.set_u32(DIRTY_TILES_LIST + 8, 3);
+        fn_00a04510(&mut e);
+        assert_eq!(e.get(tile, Tile::uiFlags), FLAG_HIBERNATED);
+    }
+
+    #[test]
+    fn update_children_runs_update_all_without_the_flag() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        e.call_log = Some(vec![]);
+        tile_update_children(&mut e, tile, 0);
+        assert!(calls_to(&e, INTERFACE_MANAGER_END_OF_UPDATE).is_empty());
+        assert_eq!(calls_to(&e, ENTER_CRITICAL_SECTION).len(), 1);
+        assert_eq!(calls_to(&e, LEAVE_CRITICAL_SECTION).len(), 1);
+    }
+
+    /// Sets the string of an existing or new trait.
+    fn give_string(e: &mut Engine, tile: Ptr<Tile>, id: i32, text: &str) -> Ptr<TileValue> {
+        let value = give_trait(e, tile, id, 0.0);
+        let string = cstring(e, text);
+        e.set(value, TileValue::strValue, Ptr::new(string));
+        value
+    }
+
+    /// Doubles that record `Tile::Value::SetFloat(value, float, flag)` as
+    /// (trait id, float, flag).
+    fn record_float_sets(e: &mut Engine) -> Rc<RefCell<Vec<(i32, f32, u32)>>> {
+        let sets = Rc::new(RefCell::new(vec![]));
+        let seen = sets.clone();
+        e.register_double(VALUE_SET_FLOAT, move |e, a| {
+            seen.borrow_mut()
+                .push((e.mem.i32(a[0]), f32::from_bits(a[1]), a[2]));
+            Ret::default()
+        });
+        sets
+    }
+
+    /// `NiMatrix3 * NiPoint3`, `+` and `-` over game memory.
+    fn install_point_math(e: &mut Engine) {
+        fn read(e: &Engine, at: u32, count: u32) -> Vec<f32> {
+            (0..count).map(|index| e.mem.f32(at + 4 * index)).collect()
+        }
+        e.register(MATRIX_TIMES_POINT, |e, a| {
+            let (m, v) = (read(e, a[0], 9), read(e, a[2], 3));
+            for row in 0..3 {
+                let value = m[row * 3] * v[0] + m[row * 3 + 1] * v[1] + m[row * 3 + 2] * v[2];
+                e.mem.set_f32(a[1] + 4 * row as u32, value);
+            }
+            a[1].into_ret()
+        });
+        e.register(POINT_ADD, |e, a| {
+            let (x, y) = (read(e, a[0], 3), read(e, a[2], 3));
+            for axis in 0..3 {
+                e.mem.set_f32(a[1] + 4 * axis as u32, x[axis] + y[axis]);
+            }
+            a[1].into_ret()
+        });
+        e.register(POINT_SUBTRACT, |e, a| {
+            let (x, y) = (read(e, a[0], 3), read(e, a[2], 3));
+            for axis in 0..3 {
+                e.mem.set_f32(a[1] + 4 * axis as u32, x[axis] - y[axis]);
+            }
+            a[1].into_ret()
+        });
+    }
+
+    /// A new hibernating-list node for `fn_00a077c0`.
+    fn install_node_allocation(e: &mut Engine) {
+        e.register(LIST_NEW_NODE, |e, _| e.mem.alloc(12).into_ret());
+    }
+
+    fn translation_of(e: &Engine, object: u32) -> [f32; 3] {
+        [
+            e.mem.f32(object + 0x58),
+            e.mem.f32(object + 0x5c),
+            e.mem.f32(object + 0x60),
+        ]
+    }
+
+    #[test]
+    fn update_tile_without_update_bits_only_counts_the_tile() {
+        let mut e = tile_engine();
+        let (tile, log) = updating_tile(&mut e, TYPE_RECT);
+        e.set(tile, Tile::uiFlags, FLAG_DIRTY);
+        e.set_global(TILES_UPDATED_THIS_FRAME, 5u32);
+        let line_word = e.tls() + TLS_CURRENT_LINE;
+        e.mem.set_u32(line_word, 0x77);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00a0_4640, &args![tile, true]).bool());
+        assert_eq!(e.global::<u32>(TILES_UPDATED_THIS_FRAME), 6);
+        assert_eq!(e.mem.u32(line_word), 0x77);
+        assert_eq!(log.made.get(), 0);
+        assert_eq!(
+            calls_to(&e, ENTER_CRITICAL_SECTION),
+            calls_to(&e, LEAVE_CRITICAL_SECTION)
+        );
+    }
+
+    #[test]
+    fn update_tile_creates_the_model_and_clears_the_bit() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_node_allocation(&mut e);
+        let (tile, log) = updating_tile(&mut e, TYPE_TEXT);
+        e.set(tile, Tile::uiFlags, UPDATE_CREATE | UPDATE_NIF_FILE);
+        e.set_global(TILES_UPDATED_THIS_FRAME, 5u32);
+        e.call_log = Some(vec![]);
+        // `MakeNode` answers a node: created; the other bit keeps the tile
+        // updating, so it is put to sleep instead of being counted.
+        assert!(tile_update_tile(&mut e, tile, true));
+        assert_eq!(log.made.get(), 1);
+        assert_eq!(calls_to(&e, TEXT_TILE_CREATED), vec![vec![1]]);
+        assert_eq!(e.get(tile, Tile::uiFlags) & UPDATE_MASK, UPDATE_NIF_FILE);
+        assert_eq!(
+            e.get(tile, Tile::uiFlags) & FLAG_HIBERNATED,
+            FLAG_HIBERNATED
+        );
+        assert_eq!(e.global::<u32>(HIBERNATING_TILE_COUNT), 1);
+        assert_eq!(e.global::<u32>(TILES_UPDATED_THIS_FRAME), 5);
+    }
+
+    #[test]
+    fn update_tile_keeps_the_bits_without_the_flag_and_when_no_node_is_made() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_node_allocation(&mut e);
+        let (tile, log) = updating_tile(&mut e, TYPE_RECT);
+        e.set(tile, Tile::uiFlags, UPDATE_CREATE);
+        assert!(tile_update_tile(&mut e, tile, false));
+        assert_eq!(e.get(tile, Tile::uiFlags), UPDATE_CREATE);
+        assert_eq!(e.global::<u32>(TILES_UPDATED_THIS_FRAME), 1);
+        log.make_node.set(0);
+        assert!(!tile_update_tile(&mut e, tile, true));
+        assert_eq!(e.get(tile, Tile::uiFlags) & UPDATE_CREATE, UPDATE_CREATE);
+        assert_eq!(log.made.get(), 2);
+    }
+
+    #[test]
+    fn update_tile_follows_the_visibility_trait() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        let (tile, _) = updating_tile(&mut e, TYPE_RECT);
+        let model = make_model(&mut e, &[]);
+        e.set(tile, Tile::spModel, Ptr::new(model));
+        // Hidden tile, shown model: culled.
+        e.set(tile, Tile::uiFlags, UPDATE_VISIBILITY);
+        assert!(tile_update_tile(&mut e, tile, true));
+        assert_eq!(e.mem.u32(model + 0x30), 1);
+        assert_eq!(e.global::<u8>(NEEDS_CHECK_HIBERNATE), 0);
+        assert_eq!(e.get(tile, Tile::uiFlags) & UPDATE_MASK, 0);
+        // Visible trait: the culled model is shown again and the
+        // hibernating tiles must be checked.
+        give_trait(&mut e, tile, TRAIT_VISIBLE, 1.0);
+        e.set(tile, Tile::uiFlags, UPDATE_VISIBILITY);
+        assert!(tile_update_tile(&mut e, tile, true));
+        assert_eq!(e.mem.u32(model + 0x30), 0);
+        assert_eq!(e.global::<u8>(NEEDS_CHECK_HIBERNATE), 1);
+        // Without a model nothing is done and the bit stays.
+        let (bare, _) = updating_tile(&mut e, TYPE_RECT);
+        e.set(bare, Tile::uiFlags, UPDATE_VISIBILITY);
+        assert!(!tile_update_tile(&mut e, bare, false));
+        assert_eq!(e.get(bare, Tile::uiFlags), UPDATE_VISIBILITY);
+    }
+
+    /// A tile of the given type with an alpha of 0.5, red 255, green 51 and
+    /// blue 0 and the color bit set.
+    fn colored_tile(e: &mut Engine) -> (Ptr<Tile>, TileLog) {
+        let (tile, log) = updating_tile(e, TYPE_RECT);
+        give_trait(e, tile, TRAIT_ALPHA, 127.5);
+        give_trait(e, tile, TRAIT_RED, 255.0);
+        give_trait(e, tile, TRAIT_GREEN, 51.0);
+        give_trait(e, tile, TRAIT_BLUE, 0.0);
+        e.set(tile, Tile::uiFlags, UPDATE_COLOR);
+        (tile, log)
+    }
+
+    #[test]
+    fn update_tile_colors_from_the_traits_when_there_is_no_system_color() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_strcmp(&mut e);
+        let (tile, log) = colored_tile(&mut e);
+        assert!(!tile_update_tile(&mut e, tile, true));
+        let green = (51.0f64 / 255.0) as f32;
+        assert_eq!(*log.colors.borrow(), vec![(0, 0.5, [1.0, green, 0.0, 1.0])]);
+        assert_eq!(e.get(tile, Tile::uiFlags) & UPDATE_MASK, 0);
+    }
+
+    #[test]
+    fn update_tile_scales_a_system_color_by_the_brightness() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_strcmp(&mut e);
+        let (tile, log) = colored_tile(&mut e);
+        give_trait(&mut e, tile, TRAIT_SYSTEM_COLOR, 3.0);
+        give_trait(&mut e, tile, TRAIT_BRIGHTNESS, 127.5);
+        e.register(SYSTEM_COLOR_MANAGER_GET_INSTANCE, |_, _| {
+            0x5000_2000u32.into_ret()
+        });
+        let asked = Rc::new(RefCell::new(vec![]));
+        let seen = asked.clone();
+        e.register_double(SYSTEM_COLOR_MANAGER_GET_COLOR, move |e, a| {
+            seen.borrow_mut().push((a[0], a[1]));
+            for (slot, value) in [1.0f32, 0.5, 0.25, 1.0].iter().enumerate() {
+                e.mem.set_f32(a[2] + 4 * slot as u32, *value);
+            }
+            1u32.into_ret()
+        });
+        e.register(COLOR_SCALE, |e, a| {
+            let factor = f32::from_bits(a[1]);
+            for slot in 0..4 {
+                let value = e.mem.f32(a[0] + 4 * slot);
+                e.mem.set_f32(a[0] + 4 * slot, value * factor);
+            }
+            a[0].into_ret()
+        });
+        tile_update_tile(&mut e, tile, true);
+        assert_eq!(*asked.borrow(), vec![(0x5000_2000, 3)]);
+        assert_eq!(
+            *log.colors.borrow(),
+            vec![(0, 0.5, [0.5, 0.25, 0.125, 0.5])]
+        );
+    }
+
+    #[test]
+    fn update_tile_finds_the_system_color_of_a_menu_tile_by_its_ancestors() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_strcmp(&mut e);
+        // root > menu (id 110, system color 7) > leaf (id 110): the leaf is
+        // a grandchild of the root with id 110 and no system color of its
+        // own, so the menu's counts.
+        let root = typed_tile(&mut e, TYPE_RECT);
+        let menu = typed_tile(&mut e, TYPE_RECT);
+        let (leaf, _) = colored_tile(&mut e);
+        add_child(&mut e, root, menu);
+        add_child(&mut e, menu, leaf);
+        give_trait(&mut e, leaf, TRAIT_ID, 110.0);
+        give_trait(&mut e, menu, TRAIT_SYSTEM_COLOR, 7.0);
+        give_trait(&mut e, leaf, TRAIT_BRIGHTNESS, 255.0);
+        let asked = Rc::new(RefCell::new(vec![]));
+        let seen = asked.clone();
+        e.register_double(SYSTEM_COLOR_MANAGER_GET_COLOR, move |_, a| {
+            seen.borrow_mut().push(a[1]);
+            0u32.into_ret()
+        });
+        tile_update_tile(&mut e, leaf, true);
+        assert_eq!(*asked.borrow(), vec![7]);
+    }
+
+    #[test]
+    fn update_tile_turns_a_failed_speech_challenge_highlight_red() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_strcmp(&mut e);
+        let (tile, log) = colored_tile(&mut e);
+        e.set(tile, Tile::bSpeechChallengeFailure, true);
+        let name = cstring(&mut e, "lb_highlight_box");
+        e.mem.set_u32(tile.addr() + 0x20, name);
+        tile_update_tile(&mut e, tile, true);
+        assert_eq!(*log.colors.borrow(), vec![(0, 0.2, [0.545, 0.0, 0.0, 1.0])]);
+        // The child of the box: red and opaque.
+        let (child, log) = colored_tile(&mut e);
+        e.set(child, Tile::bSpeechChallengeFailure, true);
+        let other = cstring(&mut e, "child");
+        e.mem.set_u32(child.addr() + 0x20, other);
+        add_child(&mut e, tile, child);
+        tile_update_tile(&mut e, child, true);
+        assert_eq!(*log.colors.borrow(), vec![(0, 1.0, [0.545, 0.0, 0.0, 1.0])]);
+        // A failure flag on an unrelated tile changes nothing.
+        let (plain, log) = colored_tile(&mut e);
+        e.set(plain, Tile::bSpeechChallengeFailure, true);
+        e.mem.set_u32(plain.addr() + 0x20, other);
+        tile_update_tile(&mut e, plain, true);
+        let green = (51.0f64 / 255.0) as f32;
+        assert_eq!(*log.colors.borrow(), vec![(0, 0.5, [1.0, green, 0.0, 1.0])]);
+    }
+
+    #[test]
+    fn update_tile_positions_a_menu_level_model_from_the_screen() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        answer_float(&mut e, SCREEN_WIDTH, 1280.0);
+        answer_float(&mut e, SCREEN_HEIGHT, 720.0);
+        let root = typed_tile(&mut e, TYPE_RECT);
+        e.register_double(INTERFACE_GET_MENUS_ROOT, move |_, _| root.addr().into_ret());
+        let (tile, _) = updating_tile(&mut e, TYPE_RECT);
+        add_child(&mut e, root, tile);
+        give_trait(&mut e, tile, TRAIT_X, 100.0);
+        give_trait(&mut e, tile, TRAIT_Y, 50.0);
+        give_trait(&mut e, tile, TRAIT_DEPTH, 10.0);
+        // A locus shape child gets the default translation back.
+        e.set_global(DEFAULT_TRANSLATION, 1.0f32);
+        e.set_global(DEFAULT_TRANSLATION + 4, 2.0f32);
+        e.set_global(DEFAULT_TRANSLATION + 8, 3.0f32);
+        let shape = e.mem.alloc(0xc0);
+        let shape_vtable = e.mem.alloc(0x30);
+        e.mem.set_u32(shape_vtable + 0x24, 0x7300_0000);
+        e.register_double(0x7300_0000, |_, a| a[0].into_ret());
+        e.mem.set_u32(shape, shape_vtable);
+        let model = make_model(&mut e, &[shape]);
+        e.set(tile, Tile::spModel, Ptr::new(model));
+        e.set(tile, Tile::uiFlags, UPDATE_POSITION | UPDATE_LOCUS);
+        assert!(tile_update_tile(&mut e, tile, true));
+        let depth = (10.0f32 as f64 * -0.008f64) as f32;
+        assert_eq!(translation_of(&e, model), [-540.0, depth, 310.0]);
+        assert_eq!(translation_of(&e, shape), [1.0, 2.0, 3.0]);
+        assert_eq!(e.get(tile, Tile::uiFlags) & UPDATE_MASK, 0);
+        // With the manual-update flag the shape is left alone.
+        e.mem.set_f32(shape + 0x58, 9.0);
+        e.set(
+            tile,
+            Tile::uiFlags,
+            UPDATE_POSITION | UPDATE_LOCUS | FLAG_MANUAL_UPDATE_TRIS,
+        );
+        tile_update_tile(&mut e, tile, true);
+        assert_eq!(e.mem.f32(shape + 0x58), 9.0);
+    }
+
+    #[test]
+    fn update_tile_positions_a_nested_model_and_rotates_its_shapes_about_the_axis() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_point_math(&mut e);
+        let parent = typed_tile(&mut e, TYPE_RECT);
+        let (tile, _) = updating_tile(&mut e, TYPE_RECT);
+        add_child(&mut e, parent, tile);
+        give_trait(&mut e, tile, TRAIT_X, 5.0);
+        give_trait(&mut e, tile, TRAIT_Y, 7.0);
+        give_trait(&mut e, tile, TRAIT_DEPTH, 2.0);
+        give_trait(&mut e, tile, TRAIT_ROTATE_AXIS_X, 10.0);
+        give_trait(&mut e, tile, TRAIT_ROTATE_AXIS_Y, 4.0);
+        give_trait(
+            &mut e,
+            tile,
+            TRAIT_ROTATE_ANGLE,
+            std::f32::consts::FRAC_PI_2,
+        );
+        e.set_global(DEFAULT_TRANSLATION, 1.0f32);
+        e.set_global(DEFAULT_TRANSLATION + 4, 2.0f32);
+        e.set_global(DEFAULT_TRANSLATION + 8, 3.0f32);
+        // The first child is a shape (its class chain holds the shape
+        // record), the second is not.
+        let make_object = |e: &mut Engine, rtti: u32| {
+            let object = e.mem.alloc(0xc0);
+            let vtable = e.mem.alloc(0x10);
+            let function = 0x7400_0000 + vtable;
+            e.mem.set_u32(vtable + 8, function);
+            e.register_double(function, move |_, _| rtti.into_ret());
+            e.mem.set_u32(object, vtable);
+            object
+        };
+        let other_rtti = e.mem.alloc(8);
+        e.mem.set_u32(other_rtti + 4, SHAPE_RTTI);
+        let shape = make_object(&mut e, other_rtti);
+        let stranger = make_object(&mut e, 0);
+        let model = make_model(&mut e, &[shape, stranger]);
+        e.set(tile, Tile::spModel, Ptr::new(model));
+        e.set(tile, Tile::uiFlags, UPDATE_POSITION);
+        assert!(tile_update_tile(&mut e, tile, true));
+        // The model gets the default translation plus x, depth and -y.
+        let depth = (2.0f64 * -0.008 + 2.0) as f32;
+        assert_eq!(translation_of(&e, model), [1.0, 2.0, 3.0]);
+        let rotation: Vec<f32> = (0..9)
+            .map(|slot| e.mem.f32(shape + 0x34 + 4 * slot))
+            .collect();
+        assert_eq!(
+            rotation[1..9].to_vec(),
+            vec![0.0, -1.0, 0.0, 1.0, 0.0, 1.0, 0.0, rotation[0]]
+        );
+        assert!(rotation[0].abs() < 1e-6);
+        // (translation + axis) - rotation * axis, with the axis (10, 0, -4):
+        // (6, depth, -4) + (10, 0, -4) - (4, 0, 10).
+        let moved = translation_of(&e, shape);
+        assert!((moved[0] - 12.0).abs() < 1e-4, "{moved:?}");
+        assert!((moved[1] - depth).abs() < 1e-6, "{moved:?}");
+        assert!((moved[2] + 18.0).abs() < 1e-4, "{moved:?}");
+        // The other child keeps its translation.
+        assert_eq!(translation_of(&e, stranger), [0.0, 0.0, 0.0]);
+    }
+
+    /// An image tile whose model holds one geometry with the given data.
+    struct ImageParts {
+        tile: Ptr<Tile>,
+        data: u32,
+        vertices: u32,
+        coordinates: u32,
+        property: u32,
+        geometry: u32,
+    }
+
+    fn image_tile(e: &mut Engine, flags: u32, data_flags: u16) -> ImageParts {
+        let (tile, _) = updating_tile(e, TYPE_IMAGE);
+        let vertices = e.mem.alloc(48);
+        let coordinates = e.mem.alloc(32);
+        let data = e.mem.alloc(0x40);
+        e.mem.set_u16(data + 8, 4);
+        e.mem.set_u16(data + 0xe, data_flags);
+        e.mem.set_u32(data + 0x20, vertices);
+        e.mem.set_u32(data + 0x2c, coordinates);
+        // The geometry: `IsTriBasedGeom` (slot +0x1C) answers itself.
+        let geometry = e.mem.alloc(0xc0);
+        let vtable = e.mem.alloc(0x30);
+        e.mem.set_u32(vtable + 0x1c, 0x7500_0000);
+        e.register_double(0x7500_0000, |_, a| a[0].into_ret());
+        e.mem.set_u32(geometry, vtable);
+        e.mem.set_u32(geometry + 0xb8, data);
+        // Its shader property holds a 128 x 64 texture.
+        let texture = e.mem.alloc(0x20);
+        let texture_vtable = e.mem.alloc(0xa0);
+        e.mem.set_u32(texture_vtable + 0x94, 0x7500_0094);
+        e.mem.set_u32(texture_vtable + 0x98, 0x7500_0098);
+        e.register_double(0x7500_0094, |_, _| 128u32.into_ret());
+        e.register_double(0x7500_0098, |_, _| 64u32.into_ret());
+        e.mem.set_u32(texture, texture_vtable);
+        let property = e.mem.alloc(0xb0);
+        e.mem.set_u32(property + 0x60, texture);
+        e.register_double(NI_OBJECT_GET_PROPERTY, move |_, a| {
+            if a[1] == 3 {
+                property.into_ret()
+            } else {
+                0u32.into_ret()
+            }
+        });
+        let model = make_model(e, &[geometry]);
+        e.set(tile, Tile::spModel, Ptr::new(model));
+        e.set(tile, Tile::uiFlags, flags);
+        ImageParts {
+            tile,
+            data,
+            vertices,
+            coordinates,
+            property,
+            geometry,
+        }
+    }
+
+    #[test]
+    fn update_tile_builds_the_geometry_of_an_image_tile() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        let image = image_tile(&mut e, UPDATE_GEOMETRY, 0);
+        give_trait(&mut e, image.tile, TRAIT_WIDTH, 64.0);
+        give_trait(&mut e, image.tile, TRAIT_HEIGHT, 32.0);
+        give_trait(&mut e, image.tile, TRAIT_TILE, -1.0);
+        e.call_log = Some(vec![]);
+        assert!(tile_update_tile(&mut e, image.tile, true));
+        let vertices: Vec<f32> = (0..12)
+            .map(|slot| e.mem.f32(image.vertices + 4 * slot))
+            .collect();
+        assert_eq!(
+            vertices,
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, -32.0, 64.0, 0.0, 0.0, 64.0, 0.0, -32.0]
+        );
+        let coordinates: Vec<f32> = (0..8)
+            .map(|slot| e.mem.f32(image.coordinates + 4 * slot))
+            .collect();
+        assert_eq!(coordinates, vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0]);
+        // The texture is tiled when the trait is not 0.
+        assert_eq!(e.mem.u32(image.property + 0x8c), 2);
+        assert_eq!(
+            calls_to(&e, GEOMETRY_DATA_MARK_AS_CHANGED),
+            vec![vec![image.data, 9]]
+        );
+        assert_eq!(
+            calls_to(&e, BOUND_COMPUTE_FROM_DATA),
+            vec![vec![image.data + 0x10, 4, image.vertices]]
+        );
+        assert_eq!(
+            calls_to(&e, GEOMETRY_DATA_SET_CONSISTENCY),
+            vec![vec![image.data, 0]]
+        );
+        assert_eq!(e.get(image.tile, Tile::uiFlags) & UPDATE_MASK, 0);
+    }
+
+    #[test]
+    fn update_tile_leaves_static_geometry_alone_and_zooms_the_coordinates() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        let image = image_tile(&mut e, UPDATE_GEOMETRY, 0x4000);
+        e.mem.set_f32(image.vertices, 9.0);
+        give_trait(&mut e, image.tile, TRAIT_WIDTH, 64.0);
+        give_trait(&mut e, image.tile, TRAIT_HEIGHT, 32.0);
+        give_trait(&mut e, image.tile, TRAIT_CROP_X, 32.0);
+        give_trait(&mut e, image.tile, TRAIT_CROP_Y, 16.0);
+        // A zoom of 50% against the file size 128 x 64: the texture is
+        // 64 x 32, the crop 0.5 / 0.5 and the span 1 x 1.
+        give_trait(&mut e, image.tile, TRAIT_ZOOM, 50.0);
+        e.call_log = Some(vec![]);
+        assert!(tile_update_tile(&mut e, image.tile, true));
+        assert_eq!(e.mem.f32(image.vertices), 9.0);
+        let coordinates: Vec<f32> = (0..8)
+            .map(|slot| e.mem.f32(image.coordinates + 4 * slot))
+            .collect();
+        assert_eq!(coordinates, vec![0.5, 0.5, 0.5, 1.5, 1.5, 0.5, 1.5, 1.5]);
+        assert_eq!(e.mem.u32(image.property + 0x8c), 0);
+        assert!(calls_to(&e, GEOMETRY_DATA_MARK_AS_CHANGED).is_empty());
+        assert!(calls_to(&e, BOUND_COMPUTE_FROM_DATA).is_empty());
+        assert_eq!(
+            calls_to(&e, GEOMETRY_DATA_SET_CONSISTENCY),
+            vec![vec![image.data, 0]]
+        );
+        let _ = image.geometry;
+    }
+
+    /// A texture atlas entry on the static list `TextureEntryList`.
+    fn cached_atlas_entry(
+        e: &mut Engine,
+        atlas: &str,
+        subtexture: &str,
+        texture: &str,
+        rect: [f32; 4],
+    ) -> u32 {
+        let entry = e.mem.alloc(0x28);
+        let atlas = cstring(e, atlas);
+        let subtexture = cstring(e, subtexture);
+        let texture = cstring(e, texture);
+        e.mem.set_u32(entry, atlas);
+        e.mem.set_u32(entry + 8, subtexture);
+        e.mem.set_u32(entry + 0x10, texture);
+        for (slot, value) in rect.iter().enumerate() {
+            e.mem.set_f32(entry + 0x18 + 4 * slot as u32, *value);
+        }
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, entry);
+        // `TextureEntryList` is a `BSSimpleList`: its head is the first node.
+        e.mem.set_u32(TEXTURE_ENTRY_LIST, entry);
+        e.mem.set_u32(TEXTURE_ENTRY_LIST + 4, 0);
+        entry
+    }
+
+    #[test]
+    fn update_tile_maps_the_texture_coordinates_into_the_atlas_rectangle() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_strcmp(&mut e);
+        e.register(STRRCHR, |_, _| 0u32.into_ret());
+        let image = image_tile(&mut e, UPDATE_GEOMETRY, 0);
+        give_trait(&mut e, image.tile, TRAIT_WIDTH, 64.0);
+        give_trait(&mut e, image.tile, TRAIT_HEIGHT, 32.0);
+        give_trait(&mut e, image.tile, TRAIT_TILE, -1.0);
+        give_string(&mut e, image.tile, TRAIT_TEX_ATLAS, "atlas.txt");
+        give_string(&mut e, image.tile, TRAIT_FILENAME, "icon");
+        cached_atlas_entry(
+            &mut e,
+            "atlas.txt",
+            "icon",
+            "Interface\\icons.dds",
+            [10.0, 74.0, 20.0, 52.0],
+        );
+        assert!(tile_update_tile(&mut e, image.tile, true));
+        let coordinates: Vec<f32> = (0..8)
+            .map(|slot| e.mem.f32(image.coordinates + 4 * slot))
+            .collect();
+        assert_eq!(
+            coordinates,
+            vec![10.0, 20.0, 10.0, 52.0, 74.0, 20.0, 74.0, 52.0]
+        );
+    }
+
+    #[test]
+    fn update_tile_loads_the_texture_of_an_image_tile() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_node_allocation(&mut e);
+        let sets = record_float_sets(&mut e);
+        let image = image_tile(&mut e, UPDATE_TEXTURE | FLAG_PROMOTED, 0);
+        let tile = image.tile;
+        let name = cstring(&mut e, "icon.dds");
+        let value = give_trait(&mut e, tile, TRAIT_FILENAME, 0.0);
+        e.set(value, TileValue::strValue, Ptr::new(name));
+        give_trait(&mut e, tile, TRAIT_TILE, -1.0);
+        e.mem.set_f32(tile.addr() + 0x38, 2.0);
+        // `AddToTesTextures` hands out a texture with one reference.
+        let texture = e.mem.alloc(0x20);
+        e.mem.set_u32(texture + 4, 1);
+        let texture_vtable = e.mem.alloc(0xa0);
+        e.mem.set_u32(texture_vtable + 4, 0x7600_0004);
+        e.mem.set_u32(texture_vtable + 0x94, 0x7600_0094);
+        e.mem.set_u32(texture_vtable + 0x98, 0x7600_0098);
+        e.register_double(0x7600_0094, |_, _| 256u32.into_ret());
+        e.register_double(0x7600_0098, |_, _| 128u32.into_ret());
+        let destroyed = Rc::new(Cell::new(0));
+        let seen = destroyed.clone();
+        e.register_double(0x7600_0004, move |_, a| {
+            seen.set(a[0]);
+            Ret::default()
+        });
+        e.mem.set_u32(texture, texture_vtable);
+        e.register_double(ADD_TO_TES_TEXTURES, move |e, a| {
+            e.mem.set_u32(a[2], texture);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert!(tile_update_tile(&mut e, tile, true));
+        assert_eq!(
+            calls_to(&e, ADD_TO_TES_TEXTURES).len(),
+            1,
+            "{:?}",
+            calls_to(&e, ADD_TO_TES_TEXTURES)
+        );
+        let call = &calls_to(&e, ADD_TO_TES_TEXTURES)[0];
+        assert_eq!(
+            (call[0], call[1], call[3], call[4]),
+            (name, tile.addr() + 0x38, 0, 0)
+        );
+        assert_eq!(
+            calls_to(&e, SET_TILE_TEXTURE),
+            vec![vec![image.property, texture]]
+        );
+        assert_eq!(e.mem.u32(image.property + 0x8c), 2);
+        // The trait is -1: the file size follows the texture, divided by the
+        // tile's scale (2.0), and a geometry update is queued (and, in the
+        // same pass, handled).
+        assert_eq!(
+            *sets.borrow(),
+            vec![(TRAIT_FILE_WIDTH, 128.0, 1), (TRAIT_FILE_HEIGHT, 64.0, 1)]
+        );
+        assert_eq!(e.get(tile, Tile::uiFlags) & UPDATE_MASK, 0);
+        // The reference taken for the call is released: destroyed.
+        assert_eq!(destroyed.get(), texture);
+    }
+
+    #[test]
+    fn update_tile_without_a_texture_clears_the_bit_of_an_invisible_tile() {
+        for (visible, cleared) in [(0.0, true), (1.0, false)] {
+            let mut e = tile_engine();
+            provide_constants(&mut e);
+            install_value_array_doubles(&mut e);
+            install_node_allocation(&mut e);
+            let image = image_tile(&mut e, UPDATE_TEXTURE | FLAG_PROMOTED, 0);
+            let value = give_trait(&mut e, image.tile, TRAIT_FILENAME, 0.0);
+            let name = cstring(&mut e, "missing.dds");
+            e.set(value, TileValue::strValue, Ptr::new(name));
+            give_trait(&mut e, image.tile, TRAIT_VISIBLE, visible);
+            assert!(!tile_update_tile(&mut e, image.tile, true));
+            let texture_bit = e.get(image.tile, Tile::uiFlags) & UPDATE_TEXTURE;
+            assert_eq!(texture_bit == 0, cleared);
+        }
+    }
+
+    #[test]
+    fn update_tile_gives_an_image_tile_without_a_file_the_placeholder_texture() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_node_allocation(&mut e);
+        e.mem
+            .set_cstr(EMPTY_TEXTURE_NAME, b"Interface\\Shared\\empty.dds");
+        let image = image_tile(&mut e, UPDATE_TEXTURE | FLAG_PROMOTED, 0);
+        give_trait(&mut e, image.tile, TRAIT_FILENAME, 0.0);
+        let set_strings = Rc::new(RefCell::new(vec![]));
+        let seen = set_strings.clone();
+        e.register_double(VALUE_SET_STRING, move |e, a| {
+            seen.borrow_mut().push((e.mem.i32(a[0]), a[1], a[2]));
+            e.mem.set_u32(a[0] + 0xc, a[1]);
+            Ret::default()
+        });
+        tile_update_tile(&mut e, image.tile, true);
+        assert_eq!(
+            *set_strings.borrow(),
+            vec![(TRAIT_FILENAME, EMPTY_TEXTURE_NAME, 1)]
+        );
+    }
+
+    /// root > menu (a menu tile) > tile, with the screen sizes of a
+    /// 1920 x 1080 window on a 1280 x 720 layout.
+    fn scissor_scene(e: &mut Engine) -> (Ptr<Tile>, Ptr<Tile>) {
+        provide_constants(e);
+        install_value_array_doubles(e);
+        answer_float(e, SCREEN_REAL_WIDTH, 1920.0);
+        answer_float(e, SCREEN_REAL_HEIGHT, 1080.0);
+        answer_float(e, SCREEN_WIDTH, 1280.0);
+        answer_float(e, SCREEN_HEIGHT, 720.0);
+        let root = typed_tile(e, TYPE_RECT);
+        let (menu_tile, _) = make_menu_tile(e, 0);
+        add_child(e, root, menu_tile);
+        let (tile, _) = updating_tile(e, TYPE_RECT);
+        add_child(e, menu_tile, tile);
+        (menu_tile, tile)
+    }
+
+    /// A tile with a model of one object with a shader property (the
+    /// property is `property`).
+    fn clipped_child(e: &mut Engine, parent: Ptr<Tile>, property: u32) -> Ptr<Tile> {
+        let child = typed_tile(e, TYPE_RECT);
+        add_child(e, parent, child);
+        give_trait(e, child, TRAIT_CLIPS, 1.0);
+        let model = make_model(e, &[0x1234_0000 + property]);
+        e.set(child, Tile::spModel, Ptr::new(model));
+        e.register_double(NI_OBJECT_GET_PROPERTY, move |_, a| {
+            if a[1] == 3 {
+                property.into_ret()
+            } else {
+                0u32.into_ret()
+            }
+        });
+        child
+    }
+
+    #[test]
+    fn update_tile_clips_the_children_to_its_screen_rectangle() {
+        let mut e = tile_engine();
+        let (_, tile) = scissor_scene(&mut e);
+        give_trait(&mut e, tile, TRAIT_X, 10.0);
+        give_trait(&mut e, tile, TRAIT_Y, 20.0);
+        give_trait(&mut e, tile, TRAIT_WIDTH, 100.0);
+        give_trait(&mut e, tile, TRAIT_HEIGHT, 50.0);
+        let model = make_model(&mut e, &[]);
+        e.set(tile, Tile::spModel, Ptr::new(model));
+        let property = e.mem.alloc(0xb0);
+        clipped_child(&mut e, tile, property);
+        e.set(tile, Tile::uiFlags, UPDATE_SCISSOR_WINDOW);
+        e.call_log = Some(vec![]);
+        assert!(tile_update_tile(&mut e, tile, true));
+        let rectangle: Vec<i32> = (0..4)
+            .map(|slot| e.mem.i32(property + 0x9c + 4 * slot))
+            .collect();
+        assert_eq!(rectangle, vec![15, 30, 165, 105]);
+        assert_eq!(
+            calls_to(&e, SHADER_PROPERTY_REFRESH),
+            vec![vec![property, 1]]
+        );
+        assert_eq!(e.get(tile, Tile::uiFlags) & UPDATE_MASK, 0);
+    }
+
+    #[test]
+    fn update_tile_clips_its_own_objects_to_the_clip_window_ancestor() {
+        let mut e = tile_engine();
+        let (menu_tile, tile) = scissor_scene(&mut e);
+        let window = typed_tile(&mut e, TYPE_RECT);
+        // window > tile instead of menu > tile.
+        add_child(&mut e, menu_tile, window);
+        give_trait(&mut e, window, TRAIT_CLIP_WINDOW, 1.0);
+        give_trait(&mut e, window, TRAIT_X, 10.0);
+        give_trait(&mut e, window, TRAIT_Y, 20.0);
+        give_trait(&mut e, window, TRAIT_WIDTH, 100.0);
+        give_trait(&mut e, window, TRAIT_HEIGHT, 50.0);
+        let inner = updating_tile(&mut e, TYPE_RECT).0;
+        add_child(&mut e, window, inner);
+        let property = e.mem.alloc(0xb0);
+        e.register_double(NI_OBJECT_GET_PROPERTY, move |_, a| {
+            if a[1] == 3 {
+                property.into_ret()
+            } else {
+                0u32.into_ret()
+            }
+        });
+        let model = make_model(&mut e, &[0x1234_0000]);
+        e.set(inner, Tile::spModel, Ptr::new(model));
+        e.set(inner, Tile::uiFlags, UPDATE_SCISSOR);
+        let _ = tile;
+        assert!(tile_update_tile(&mut e, inner, true));
+        let rectangle: Vec<i32> = (0..4)
+            .map(|slot| e.mem.i32(property + 0x9c + 4 * slot))
+            .collect();
+        assert_eq!(rectangle, vec![15, 30, 165, 105]);
+        assert_eq!(e.get(inner, Tile::uiFlags) & UPDATE_MASK, 0);
+    }
+
+    #[test]
+    fn update_tile_loads_the_nif_of_a_3d_tile_only() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        let (tile, _) = updating_tile(&mut e, TYPE_3D);
+        let model = make_model(&mut e, &[]);
+        e.set(tile, Tile::spModel, Ptr::new(model));
+        e.set(tile, Tile::uiFlags, UPDATE_NIF_FILE);
+        e.call_log = Some(vec![]);
+        assert!(tile_update_tile(&mut e, tile, true));
+        assert_eq!(calls_to(&e, TILE_3D_UPDATE_NIF), vec![vec![tile.addr()]]);
+        let (rect, _) = updating_tile(&mut e, TYPE_RECT);
+        e.set(rect, Tile::spModel, Ptr::new(model));
+        e.set(rect, Tile::uiFlags, UPDATE_NIF_FILE);
+        e.call_log = Some(vec![]);
+        assert!(tile_update_tile(&mut e, rect, true));
+        assert!(calls_to(&e, TILE_3D_UPDATE_NIF).is_empty());
+    }
+
+    #[test]
+    fn update_tile_lets_go_of_the_textures_when_the_interface_asks() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_node_allocation(&mut e);
+        e.register(INTERFACE_GET_FIRST_CHANCE_TEXTURE_RELEASE, |_, _| {
+            1u32.into_ret()
+        });
+        let image = image_tile(&mut e, UPDATE_NIF_FILE, 0);
+        // A culled model: the texture update that this queues is not run.
+        let model = e.get(image.tile, Tile::spModel).addr();
+        e.mem.set_u32(model + 0x30, 1);
+        e.call_log = Some(vec![]);
+        tile_update_tile(&mut e, image.tile, false);
+        assert_eq!(
+            calls_to(&e, SET_TILE_TEXTURE),
+            vec![vec![image.property, 0]]
+        );
+        assert_eq!(
+            e.get(image.tile, Tile::uiFlags),
+            UPDATE_NIF_FILE | UPDATE_TEXTURE | FLAG_DIRTY
+        );
+    }
+
+    #[test]
+    fn needs_update_bits_are_added_or_replaced_and_the_tile_is_queued() {
+        let mut e = tile_engine();
+        let queued = Rc::new(RefCell::new(vec![]));
+        let seen = queued.clone();
+        e.register_double(LIST_ADD_TAIL, move |e, a| {
+            assert_eq!(a[0], DIRTY_TILES_LIST);
+            seen.borrow_mut().push(e.mem.u32(a[1]));
+            Ret::default()
+        });
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        e.set(tile, Tile::uiFlags, UPDATE_POSITION);
+        tile_add_needs_update(&mut e, tile, UPDATE_COLOR);
+        assert_eq!(
+            e.get(tile, Tile::uiFlags),
+            UPDATE_POSITION | UPDATE_COLOR | FLAG_DIRTY
+        );
+        assert_eq!(*queued.borrow(), vec![tile.addr()]);
+        // Nothing changes when the bits are there already, or are not update
+        // bits at all.
+        tile_add_needs_update(&mut e, tile, UPDATE_COLOR);
+        tile_add_needs_update(&mut e, tile, FLAG_DIRTY);
+        tile_set_needs_update(&mut e, tile, FLAG_PROMOTED);
+        assert_eq!(
+            e.get(tile, Tile::uiFlags),
+            UPDATE_POSITION | UPDATE_COLOR | FLAG_DIRTY
+        );
+        // `SetNeedsUpdate` replaces the update bits and keeps the others.
+        e.set(
+            tile,
+            Tile::uiFlags,
+            UPDATE_POSITION | UPDATE_COLOR | FLAG_DIRTY | FLAG_PROMOTED,
+        );
+        tile_set_needs_update(&mut e, tile, UPDATE_GEOMETRY);
+        assert_eq!(
+            e.get(tile, Tile::uiFlags),
+            UPDATE_GEOMETRY | FLAG_DIRTY | FLAG_PROMOTED
+        );
+        // The tile was dirty already: it is not queued again.
+        assert_eq!(queued.borrow().len(), 1);
+        // Set to nothing: changed, but queued only when not dirty yet.
+        let other = typed_tile(&mut e, TYPE_RECT);
+        e.set(other, Tile::uiFlags, UPDATE_TEXTURE);
+        tile_set_needs_update(&mut e, other, 0);
+        assert_eq!(e.get(other, Tile::uiFlags), FLAG_DIRTY);
+        assert_eq!(queued.borrow().len(), 2);
+    }
+
+    #[test]
+    fn the_next_dirty_tile_is_looked_at_or_taken() {
+        let mut e = tile_engine();
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        e.set(tile, Tile::uiFlags, FLAG_DIRTY | UPDATE_COLOR);
+        e.call_log = Some(vec![]);
+        // Nothing in the list.
+        assert!(tile_get_next_dirty_tile(&mut e, true).is_null());
+        assert!(tile_get_next_dirty_tile(&mut e, false).is_null());
+        // One node: look, then take.
+        let node = e.mem.alloc(12);
+        e.mem.set_u32(node + 8, tile.addr());
+        e.mem.set_u32(DIRTY_TILES_LIST, node);
+        e.mem.set_u32(DIRTY_TILES_LIST + 8, 1);
+        assert_eq!(tile_get_next_dirty_tile(&mut e, false), tile);
+        assert_eq!(e.get(tile, Tile::uiFlags), FLAG_DIRTY | UPDATE_COLOR);
+        e.register_double(LIST_REMOVE_HEAD, move |_, _| tile.addr().into_ret());
+        assert_eq!(tile_get_next_dirty_tile(&mut e, true), tile);
+        assert_eq!(e.get(tile, Tile::uiFlags), UPDATE_COLOR);
+        assert_lock_balanced(&e);
+    }
+
+    #[test]
+    fn a_dirty_tile_is_listed_once_and_leaves_the_hibernating_list() {
+        let mut e = tile_engine();
+        let appended = Rc::new(RefCell::new(vec![]));
+        let seen = appended.clone();
+        e.register_double(LIST_ADD_TAIL, move |e, a| {
+            seen.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            Ret::default()
+        });
+        let removed = Rc::new(RefCell::new(vec![]));
+        let seen = removed.clone();
+        e.register_double(LIST_REMOVE_ITEM, move |e, a| {
+            seen.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            1u32.into_ret()
+        });
+        // Null: nothing happens, not even the lock.
+        e.call_log = Some(vec![]);
+        tile_add_dirty_tile(&mut e, Ptr::NULL);
+        assert!(calls_to(&e, TILE_LOCK).is_empty());
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        tile_add_dirty_tile(&mut e, tile);
+        tile_add_dirty_tile(&mut e, tile);
+        assert_eq!(*appended.borrow(), vec![(DIRTY_TILES_LIST, tile.addr())]);
+        assert_eq!(e.get(tile, Tile::uiFlags), FLAG_DIRTY);
+        assert!(removed.borrow().is_empty());
+        // A hibernated tile is taken off the hibernating list.
+        let sleeper = typed_tile(&mut e, TYPE_RECT);
+        e.set(sleeper, Tile::uiFlags, FLAG_HIBERNATED);
+        tile_add_dirty_tile(&mut e, sleeper);
+        assert_eq!(e.get(sleeper, Tile::uiFlags), FLAG_DIRTY);
+        assert_eq!(
+            *removed.borrow(),
+            vec![(HIBERNATING_TILES_LIST, sleeper.addr())]
+        );
+        assert_lock_balanced(&e);
+    }
+
+    #[test]
+    fn putting_a_tile_to_sleep_lists_it_once() {
+        let mut e = tile_engine();
+        let node = e.mem.alloc(12);
+        e.register_double(LIST_NEW_NODE, move |_, a| {
+            assert_eq!(a[0], HIBERNATING_TILES_LIST + 8);
+            node.into_ret()
+        });
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        e.set(tile, Tile::uiFlags, FLAG_PROMOTED | UPDATE_COLOR);
+        e.call_log = Some(vec![]);
+        fn_00a077c0(&mut e, tile);
+        assert_eq!(e.get(tile, Tile::uiFlags), FLAG_HIBERNATED | UPDATE_COLOR);
+        assert_eq!(e.global::<u32>(HIBERNATING_TILE_COUNT), 1);
+        assert_eq!(e.mem.u32(node + 8), tile.addr());
+        assert_eq!(
+            calls_to(&e, LIST_ADD_NODE_TAIL),
+            vec![vec![HIBERNATING_TILES_LIST, node]]
+        );
+        // Asleep already, null, or the last tile of the list: nothing.
+        fn_00a077c0(&mut e, tile);
+        fn_00a077c0(&mut e, Ptr::NULL);
+        let last = typed_tile(&mut e, TYPE_RECT);
+        let tail = e.mem.alloc(12);
+        e.mem.set_u32(tail + 8, last.addr());
+        e.mem.set_u32(HIBERNATING_TILES_LIST + 4, tail);
+        e.mem.set_u32(HIBERNATING_TILES_LIST + 8, 1);
+        fn_00a077c0(&mut e, last);
+        assert_eq!(e.get(last, Tile::uiFlags), 0);
+        assert_eq!(calls_to(&e, LIST_ADD_NODE_TAIL).len(), 1);
+        assert_eq!(e.global::<u32>(HIBERNATING_TILE_COUNT), 1);
+        // Another tile is listed after the last one.
+        let another = typed_tile(&mut e, TYPE_RECT);
+        fn_00a077c0(&mut e, another);
+        assert_eq!(calls_to(&e, LIST_ADD_NODE_TAIL).len(), 2);
+    }
+
+    #[test]
+    fn hibernating_tiles_that_are_visible_again_wake_up() {
+        let mut e = tile_engine();
+        let awake = typed_tile(&mut e, TYPE_RECT);
+        let asleep = typed_tile(&mut e, TYPE_RECT);
+        let later = typed_tile(&mut e, TYPE_RECT);
+        for tile in [awake, asleep, later] {
+            e.set(tile, Tile::uiFlags, FLAG_HIBERNATED | FLAG_PROMOTED);
+        }
+        let culled = make_model(&mut e, &[]);
+        e.mem.set_u32(culled + 0x30, 1);
+        e.set(asleep, Tile::spModel, Ptr::new(culled));
+        hibernating_list_with(&mut e, &[awake, asleep, later]);
+        let queued = Rc::new(RefCell::new(vec![]));
+        let seen = queued.clone();
+        e.register_double(LIST_ADD_TAIL, move |e, a| {
+            seen.borrow_mut().push(e.mem.u32(a[1]));
+            Ret::default()
+        });
+        tile_check_hibernating_tiles(&mut e);
+        assert_eq!(e.get(awake, Tile::uiFlags), FLAG_DIRTY);
+        assert_eq!(e.get(later, Tile::uiFlags), FLAG_DIRTY);
+        assert_eq!(
+            e.get(asleep, Tile::uiFlags),
+            FLAG_HIBERNATED | FLAG_PROMOTED
+        );
+        assert_eq!(*queued.borrow(), vec![awake.addr(), later.addr()]);
+    }
+
+    #[test]
+    fn clip_windows_are_marked_for_a_scissor_window_update() {
+        let mut e = tile_engine();
+        install_value_array_doubles(&mut e);
+        let root = typed_tile(&mut e, TYPE_RECT);
+        let [window, plain, nested_window, below_window] =
+            [(); 4].map(|_| typed_tile(&mut e, TYPE_RECT));
+        add_child(&mut e, root, window);
+        add_child(&mut e, root, plain);
+        add_child(&mut e, plain, nested_window);
+        add_child(&mut e, window, below_window);
+        give_trait(&mut e, window, TRAIT_CLIP_WINDOW, 1.0);
+        give_trait(&mut e, nested_window, TRAIT_CLIP_WINDOW, 1.0);
+        tile_update_clipwindows(&mut e, root);
+        let marked =
+            |e: &Engine, tile: Ptr<Tile>| e.get(tile, Tile::uiFlags) & UPDATE_SCISSOR_WINDOW != 0;
+        assert!(marked(&e, window));
+        assert!(marked(&e, nested_window));
+        assert!(!marked(&e, plain));
+        // The search does not go on below a clip window.
+        assert!(!marked(&e, below_window));
+    }
+
+    #[test]
+    fn re_clipping_limits_the_scissor_rectangles_to_the_screen() {
+        for (rendered, expected) in [(false, [0, 10, 1920, 500]), (true, [0, 10, 800, 500])] {
+            let mut e = tile_engine();
+            let (menu_tile, parent) = scissor_scene(&mut e);
+            let menu = Ptr::<()>::new(e.mem.u32(menu_tile.addr() + 0x3c));
+            e.mem.set_u8(menu.addr() + 0x1c, rendered as u8);
+            answer_float(&mut e, RENDERED_MENU_WIDTH, 800.0);
+            answer_float(&mut e, RENDERED_MENU_HEIGHT, 600.0);
+            let property = e.mem.alloc(0xb0);
+            let child = clipped_child(&mut e, parent, property);
+            // A clipped grandchild is reached by the recursion; a tile whose
+            // clips trait is off is passed over.
+            let grandchild_property = e.mem.alloc(0xb0);
+            let skipped = typed_tile(&mut e, TYPE_RECT);
+            add_child(&mut e, parent, skipped);
+            e.call_log = Some(vec![]);
+            tile_re_clip_children(&mut e, parent, -5.0, 10.5, 3000.0, 500.7);
+            let rectangle: Vec<i32> = (0..4)
+                .map(|slot| e.mem.i32(property + 0x9c + 4 * slot))
+                .collect();
+            assert_eq!(rectangle, expected.to_vec());
+            assert_eq!(
+                calls_to(&e, SHADER_PROPERTY_REFRESH),
+                vec![vec![property, 1]]
+            );
+            let model = e.get(child, Tile::spModel).addr();
+            assert_eq!(calls_to(&e, NI_ARRAY_COMPACT), vec![vec![model + 0x9c]]);
+            assert_eq!(calls_to(&e, NI_ARRAY_UPDATE_SIZE), vec![vec![model + 0x9c]]);
+            let _ = (grandchild_property, skipped);
+        }
+    }
+
+    #[test]
+    fn re_clipping_goes_through_the_whole_tree() {
+        let mut e = tile_engine();
+        let (_, parent) = scissor_scene(&mut e);
+        let first = e.mem.alloc(0xb0);
+        let child = clipped_child(&mut e, parent, first);
+        let second = e.mem.alloc(0xb0);
+        clipped_child(&mut e, child, second);
+        // The properties are told apart by the object they are asked of.
+        let objects = [(0x1234_0000 + first, first), (0x1234_0000 + second, second)];
+        e.register_double(NI_OBJECT_GET_PROPERTY, move |_, a| {
+            objects
+                .iter()
+                .find(|(object, _)| *object == a[0])
+                .map_or(0, |(_, property)| *property)
+                .into_ret()
+        });
+        tile_re_clip_children(&mut e, parent, 1.0, 2.0, 3.0, 4.0);
+        for property in [first, second] {
+            let rectangle: Vec<i32> = (0..4)
+                .map(|slot| e.mem.i32(property + 0x9c + 4 * slot))
+                .collect();
+            assert_eq!(rectangle, vec![1, 2, 3, 4]);
+        }
+    }
+
+    /// The real `BSSimpleList` add-head, remove and remove-all over game
+    /// memory (the global fade list and the texture entry list use them).
+    fn install_simple_list_doubles(e: &mut Engine) {
+        e.register(FADE_LIST_ADD_HEAD, |e, a| {
+            let item = e.mem.u32(a[1]);
+            if item == 0 {
+                return Ret::default();
+            }
+            if e.mem.u32(a[0]) == 0 {
+                e.mem.set_u32(a[0], item);
+            } else {
+                let node = e.mem.alloc(8);
+                let (head_item, head_next) = (e.mem.u32(a[0]), e.mem.u32(a[0] + 4));
+                e.mem.set_u32(node, head_item);
+                e.mem.set_u32(node + 4, head_next);
+                e.mem.set_u32(a[0] + 4, node);
+                e.mem.set_u32(a[0], item);
+            }
+            Ret::default()
+        });
+        e.register(FADE_LIST_REMOVE, |e, a| {
+            let item = e.mem.u32(a[1]);
+            if item == 0 || (e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0) {
+                return Ret::default();
+            }
+            let (mut previous, mut node) = (a[0], a[0]);
+            while node != 0 && e.mem.u32(node) != item {
+                previous = node;
+                node = e.mem.u32(node + 4);
+            }
+            if node == 0 {
+                return Ret::default();
+            }
+            if node == a[0] {
+                let next = e.mem.u32(node + 4);
+                if next == 0 {
+                    e.mem.set_u32(node, 0);
+                } else {
+                    let (next_item, next_next) = (e.mem.u32(next), e.mem.u32(next + 4));
+                    e.mem.set_u32(node, next_item);
+                    e.mem.set_u32(node + 4, next_next);
+                    e.mem.free(next);
+                }
+            } else {
+                let next = e.mem.u32(node + 4);
+                e.mem.set_u32(previous + 4, next);
+                e.mem.free(node);
+            }
+            Ret::default()
+        });
+        e.register(SIMPLE_LIST_REMOVE_ALL, |e, a| {
+            let mut node = e.mem.u32(a[0] + 4);
+            while node != 0 {
+                let next = e.mem.u32(node + 4);
+                e.mem.free(node);
+                node = next;
+            }
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, 0);
+            Ret::default()
+        });
+    }
+
+    /// The controls on the global fade list, newest first.
+    fn fade_list(e: &Engine) -> Vec<u32> {
+        let mut items = vec![];
+        let mut node = FADE_CONTROLS_LIST;
+        while node != 0 && e.mem.u32(node) != 0 {
+            items.push(e.mem.u32(node));
+            node = e.mem.u32(node + 4);
+        }
+        items
+    }
+
+    /// Puts a fade control on the global list.
+    fn add_fade(
+        e: &mut Engine,
+        tile: Ptr<Tile>,
+        trait_id: i32,
+        range: (f32, f32),
+        duration_millis: f32,
+        kind: i32,
+    ) -> u32 {
+        let control = e.mem.alloc(0x1c);
+        e.mem.set_f32(control, range.0);
+        e.mem.set_f32(control + 4, range.1);
+        e.mem.set_f32(control + 0xc, duration_millis);
+        e.mem.set_i32(control + 0x10, trait_id);
+        e.mem.set_u32(control + 0x14, tile.addr());
+        e.mem.set_i32(control + 0x18, kind);
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), control);
+            e.call(FADE_LIST_ADD_HEAD, &args![FADE_CONTROLS_LIST, slot]);
+        });
+        control
+    }
+
+    /// The text table knows the two flash counters as 10001 and 10002.
+    fn install_flash_traits(e: &mut Engine) {
+        e.mem.set_cstr(FLASH_COUNT_NAME, b"_FlashCount");
+        e.mem.set_cstr(TOTAL_FLASH_COUNT_NAME, b"_TotalFlashCount");
+        e.register(TEXT_TABLE_FIND, |e, a| {
+            let id = match e.mem.cstr(a[1]).as_slice() {
+                b"_FlashCount" => 10001,
+                b"_TotalFlashCount" => 10002,
+                _ => return 0u32.into_ret(),
+            };
+            e.mem.set_i32(a[2], id);
+            1u32.into_ret()
+        });
+    }
+
+    #[test]
+    fn adding_a_fade_control_stamps_it_and_replaces_the_tiles_old_fade() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_simple_list_doubles(&mut e);
+        let clock = install_clock(&mut e);
+        clock.set(1000);
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        let other = typed_tile(&mut e, TYPE_RECT);
+        tile_add_fade_control(&mut e, tile, TRAIT_ALPHA, 0.0, 255.0, 2.0, FADE_STANDARD);
+        let controls = fade_list(&e);
+        assert_eq!(controls.len(), 1);
+        let control = Ptr::<FadeControl>::new(controls[0]);
+        assert_eq!(e.get(control, FadeControl::fStartValue), 0.0);
+        assert_eq!(e.get(control, FadeControl::fEndValue), 255.0);
+        assert_eq!(e.get(control, FadeControl::fDurationMillis), 2000.0);
+        assert_eq!(e.get(control, FadeControl::uiStartTime), 1000);
+        assert_eq!(e.get(control, FadeControl::iTrait), TRAIT_ALPHA);
+        assert_eq!(e.get(control, FadeControl::pParent), tile);
+        assert_eq!(e.get(control, FadeControl::eFadeType), FADE_STANDARD);
+        // Another tile's fade of the same trait stays; the same tile's goes.
+        tile_add_fade_control(&mut e, other, TRAIT_ALPHA, 1.0, 2.0, 1.0, 1);
+        clock.set(1500);
+        tile_add_fade_control(&mut e, tile, TRAIT_ALPHA, 10.0, 20.0, 1.0, FADE_STANDARD);
+        let controls = fade_list(&e);
+        assert_eq!(controls.len(), 2);
+        let newest = Ptr::<FadeControl>::new(controls[0]);
+        assert_eq!(e.get(newest, FadeControl::uiStartTime), 1500);
+        assert_eq!(e.get(newest, FadeControl::fDurationMillis), 1000.0);
+        assert_eq!(e.get(newest, FadeControl::pParent), tile);
+        // No fade without a change or without a duration.
+        tile_add_fade_control(&mut e, tile, TRAIT_RED, 5.0, 5.0, 1.0, FADE_STANDARD);
+        tile_add_fade_control(&mut e, tile, TRAIT_RED, 5.0, 6.0, 0.0, FADE_STANDARD);
+        tile_add_fade_control(&mut e, tile, TRAIT_RED, 5.0, 6.0, -1.0, FADE_STANDARD);
+        assert_eq!(fade_list(&e).len(), 2);
+    }
+
+    #[test]
+    fn blinking_fades_reset_their_flash_counters() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_simple_list_doubles(&mut e);
+        install_flash_traits(&mut e);
+        install_clock(&mut e);
+        let sets = record_float_sets(&mut e);
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        // Blink thrice: the flash count restarts at 0.
+        tile_add_fade_control(
+            &mut e,
+            tile,
+            TRAIT_ALPHA,
+            0.0,
+            255.0,
+            2.0,
+            FADE_BLINK_THRICE,
+        );
+        assert_eq!(*sets.borrow(), vec![(10001, 0.0, 1)]);
+        sets.borrow_mut().clear();
+        // Blink and fade fast: 2 s are 4 flashes; the total is 2 and one
+        // flash lasts 500 ms.
+        tile_add_fade_control(
+            &mut e,
+            tile,
+            TRAIT_ALPHA,
+            0.0,
+            255.0,
+            2.0,
+            FADE_BLINK_FAST_FADE,
+        );
+        assert_eq!(*sets.borrow(), vec![(10001, 0.0, 1), (10002, 2.0, 1)]);
+        let control = Ptr::<FadeControl>::new(fade_list(&e)[0]);
+        assert_eq!(e.get(control, FadeControl::fDurationMillis), 500.0);
+        assert_eq!(fade_list(&e).len(), 1);
+    }
+
+    #[test]
+    fn removing_fade_controls_takes_one_trait_or_all_of_a_tile() {
+        let mut e = tile_engine();
+        install_simple_list_doubles(&mut e);
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        let other = typed_tile(&mut e, TYPE_RECT);
+        let kept_other = add_fade(&mut e, other, TRAIT_ALPHA, (0.0, 1.0), 10.0, 0);
+        let first = add_fade(&mut e, tile, TRAIT_ALPHA, (0.0, 1.0), 10.0, 0);
+        let second = add_fade(&mut e, tile, TRAIT_RED, (0.0, 1.0), 10.0, 0);
+        let third = add_fade(&mut e, tile, TRAIT_GREEN, (0.0, 1.0), 10.0, 0);
+        assert_eq!(fade_list(&e), vec![third, second, first, kept_other]);
+        tile_remove_fade_control(&mut e, tile, TRAIT_RED);
+        assert_eq!(fade_list(&e), vec![third, first, kept_other]);
+        assert_eq!(e.mem.block_size(second), None);
+        tile_remove_fade_control(&mut e, tile, TRAIT_NONE);
+        assert_eq!(fade_list(&e), vec![kept_other]);
+        assert_eq!(e.mem.block_size(first), None);
+        assert_eq!(e.mem.block_size(third), None);
+        tile_remove_fade_control(&mut e, tile, TRAIT_ALPHA);
+        assert_eq!(fade_list(&e), vec![kept_other]);
+    }
+
+    #[test]
+    fn fade_queries_find_the_controls_of_the_tile() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_simple_list_doubles(&mut e);
+        let clock = install_clock(&mut e);
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        let other = typed_tile(&mut e, TYPE_RECT);
+        assert!(!tile_has_fade_control(&mut e, tile, TRAIT_ALPHA));
+        assert_eq!(tile_get_fade_type(&mut e, tile, TRAIT_ALPHA), 0);
+        assert!(tile_get_fade_finished(&mut e, tile, TRAIT_ALPHA));
+        give_trait(&mut e, tile, TRAIT_ALPHA, 3.5);
+        assert_eq!(tile_get_fade_end_for(&mut e, tile, TRAIT_ALPHA), 3.5);
+        // A fade of the other tile does not count.
+        add_fade(&mut e, other, TRAIT_ALPHA, (0.0, 50.0), 1000.0, 2);
+        assert!(!tile_has_fade_control(&mut e, tile, TRAIT_ALPHA));
+        let first = add_fade(&mut e, tile, TRAIT_ALPHA, (0.0, 7.9), 1000.0, 3);
+        e.mem.set_u32(first + 8, 100);
+        assert!(tile_has_fade_control(&mut e, tile, TRAIT_ALPHA));
+        assert!(!tile_has_fade_control(&mut e, tile, TRAIT_RED));
+        assert_eq!(tile_get_fade_type(&mut e, tile, TRAIT_ALPHA), 3);
+        // The end value is truncated; the last matching control counts.
+        assert_eq!(tile_get_fade_end_for(&mut e, tile, TRAIT_ALPHA), 7.0);
+        // Several controls: the last one in list order (the oldest) counts.
+        add_fade(&mut e, tile, TRAIT_ALPHA, (0.0, 12.7), 1000.0, 3);
+        assert_eq!(tile_get_fade_end_for(&mut e, tile, TRAIT_ALPHA), 7.0);
+        // An end value of -1 means "use the trait's value".
+        give_trait(&mut e, tile, TRAIT_BLUE, 4.5);
+        add_fade(&mut e, tile, TRAIT_BLUE, (0.0, -1.0), 1000.0, 3);
+        assert_eq!(tile_get_fade_end_for(&mut e, tile, TRAIT_BLUE), 4.5);
+        // Finished once the duration is over, never for type 1.
+        let control = add_fade(&mut e, tile, TRAIT_RED, (0.0, 1.0), 1000.0, 0);
+        e.mem.set_u32(control + 8, 500);
+        clock.set(1499);
+        assert!(!tile_get_fade_finished(&mut e, tile, TRAIT_RED));
+        clock.set(1500);
+        assert!(tile_get_fade_finished(&mut e, tile, TRAIT_RED));
+        let repeating = add_fade(
+            &mut e,
+            tile,
+            TRAIT_GREEN,
+            (0.0, 1.0),
+            1000.0,
+            FADE_NONLINEAR_LONG_DARK_REPEATING,
+        );
+        e.mem.set_u32(repeating + 8, 0);
+        clock.set(1_000_000);
+        assert!(!tile_get_fade_finished(&mut e, tile, TRAIT_GREEN));
+    }
+
+    /// Fades the given traits of a tile: `fades` are (trait, start, end,
+    /// duration, type), the clock stands at `now`. Returns the float sets
+    /// the update made as (trait, value).
+    fn run_fades(
+        e: &mut Engine,
+        tile: Ptr<Tile>,
+        fades: &[(i32, f32, f32, f32, i32)],
+        now: u32,
+    ) -> (Vec<(i32, f32)>, Vec<u32>) {
+        e.mem.set_u32(FADE_CONTROLS_LIST, 0);
+        e.mem.set_u32(FADE_CONTROLS_LIST + 4, 0);
+        let clock = install_clock(e);
+        clock.set(now);
+        let sets = record_float_sets(e);
+        let controls: Vec<u32> = fades
+            .iter()
+            .map(|&(trait_id, start, end, duration, kind)| {
+                add_fade(e, tile, trait_id, (start, end), duration, kind)
+            })
+            .collect();
+        tile_update_fade_controls(e);
+        let made = sets
+            .borrow()
+            .iter()
+            .map(|&(id, value, _)| (id, value))
+            .collect();
+        (made, controls)
+    }
+
+    /// The CRT's `fabs`, `floor` and `ceil` over a `double` argument.
+    fn install_double_math(e: &mut Engine) {
+        fn argument(a: &[u32]) -> f64 {
+            f64::from_bits(a[0] as u64 | (a[1] as u64) << 32)
+        }
+        e.register(FABS, |_, a| argument(a).abs().into_ret());
+        e.register(FLOOR, |_, a| argument(a).floor().into_ret());
+        e.register(CEIL, |_, a| argument(a).ceil().into_ret());
+    }
+
+    #[test]
+    fn update_fade_controls_with_no_controls_does_nothing() {
+        let mut e = tile_engine();
+        e.call_log = Some(vec![]);
+        tile_update_fade_controls(&mut e);
+        assert!(e.call_log.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_standard_fade_runs_linearly_and_ends_at_the_end_value() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_simple_list_doubles(&mut e);
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        let (sets, controls) = run_fades(
+            &mut e,
+            tile,
+            &[(TRAIT_RED, 100.0, 200.0, 1000.0, FADE_STANDARD)],
+            250,
+        );
+        assert_eq!(sets, vec![(TRAIT_RED, 125.0)]);
+        assert_eq!(fade_list(&e), controls);
+        // Past the end: clamped to the end value and finished (freed).
+        let clock = install_clock(&mut e);
+        clock.set(5000);
+        let sets = record_float_sets(&mut e);
+        tile_update_fade_controls(&mut e);
+        assert_eq!(*sets.borrow(), vec![(TRAIT_RED, 200.0, 1)]);
+        assert!(fade_list(&e).is_empty());
+        assert_eq!(e.mem.block_size(controls[0]), None);
+    }
+
+    #[test]
+    fn a_standard_alpha_fade_of_a_3d_tile_also_fades_the_model() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_simple_list_doubles(&mut e);
+        let (tile, _) = updating_tile(&mut e, TYPE_3D);
+        // The model is a geometry (virtual +0xC answers 0, +0x18 answers
+        // true) with a shader property.
+        let model = e.mem.alloc(0xc0);
+        let vtable = e.mem.alloc(0x30);
+        e.mem.set_u32(vtable + 0xc, 0x7700_000c);
+        e.mem.set_u32(vtable + 0x18, 0x7700_0018);
+        e.register_double(0x7700_000c, |_, _| 0u32.into_ret());
+        e.register_double(0x7700_0018, |_, _| 1u32.into_ret());
+        e.mem.set_u32(model, vtable);
+        e.set(tile, Tile::spModel, Ptr::new(model));
+        let property = e.mem.alloc(0x90);
+        e.register_double(NI_OBJECT_GET_PROPERTY, move |_, a| {
+            assert_eq!(a[1], 3);
+            property.into_ret()
+        });
+        let (sets, _) = run_fades(
+            &mut e,
+            tile,
+            &[(TRAIT_ALPHA, 0.0, 255.0, 1000.0, FADE_STANDARD)],
+            500,
+        );
+        assert_eq!(sets, vec![(TRAIT_ALPHA, 127.5)]);
+        assert_eq!(e.mem.f32(property + 0x78), 0.5);
+    }
+
+    #[test]
+    fn the_fade_in_hold_fade_out_curve_has_three_phases() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_simple_list_doubles(&mut e);
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        let fade = [(TRAIT_ALPHA, 10.0, 110.0, 1000.0, FADE_IN_HOLD_FADE_OUT)];
+        // Rising: from the end... the curve goes from start to end.
+        let (sets, _) = run_fades(&mut e, tile, &fade, 83);
+        let expected = (10.0f64 + (110.0 - 10.0) * ((0.083f32 as f64) / 0.16666f32 as f64)) as f32;
+        assert_eq!(sets, vec![(TRAIT_ALPHA, expected)]);
+        // Holding at the end value.
+        let (sets, _) = run_fades(&mut e, tile, &fade, 500);
+        assert_eq!(sets, vec![(TRAIT_ALPHA, 110.0)]);
+        // Falling back.
+        let (sets, _) = run_fades(&mut e, tile, &fade, 916);
+        let progress = 0.916f32 as f64;
+        let low = 0.83334f32 as f64;
+        let expected = (110.0 + (10.0 - 110.0) * ((progress - low) / (1.0 - low))) as f32;
+        assert_eq!(sets, vec![(TRAIT_ALPHA, expected)]);
+        // Over: the start value again, and finished.
+        let (sets, controls) = run_fades(&mut e, tile, &fade, 1000);
+        assert_eq!(sets, vec![(TRAIT_ALPHA, 10.0)]);
+        assert!(!fade_list(&e).contains(&controls[0]));
+    }
+
+    #[test]
+    fn a_blink_goes_to_the_end_and_back_each_cycle() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_simple_list_doubles(&mut e);
+        install_flash_traits(&mut e);
+        install_double_math(&mut e);
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        give_trait(&mut e, tile, 10001, 0.0);
+        let fade = [(TRAIT_ALPHA, 0.0, 100.0, 1000.0, FADE_BLINK_THRICE)];
+        // A quarter into the first flash: halfway up.
+        let (sets, _) = run_fades(&mut e, tile, &fade, 250);
+        assert_eq!(sets, vec![(TRAIT_ALPHA, 50.0)]);
+        // The end of the cycle: the flash count rises to 1, the cycle
+        // restarts (from the start value).
+        let (sets, controls) = run_fades(&mut e, tile, &fade, 1000);
+        assert_eq!(sets, vec![(10001, 1.0), (TRAIT_ALPHA, 0.0)]);
+        assert_eq!(e.mem.u32(controls[0] + 8), 1000);
+    }
+
+    #[test]
+    fn the_third_flash_of_a_blink_ends_at_the_end_value() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_simple_list_doubles(&mut e);
+        install_flash_traits(&mut e);
+        install_double_math(&mut e);
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        give_trait(&mut e, tile, 10001, 3.5);
+        let fade = [(TRAIT_ALPHA, 0.0, 100.0, 1000.0, FADE_BLINK_THRICE)];
+        // Climbing toward the end value without passing it.
+        let (sets, _) = run_fades(&mut e, tile, &fade, 250);
+        assert_eq!(sets, vec![(TRAIT_ALPHA, 25.0)]);
+        // The end of the cycle: the count is past 3: set the end value and
+        // finish.
+        let (sets, controls) = run_fades(&mut e, tile, &fade, 1000);
+        assert_eq!(
+            sets,
+            vec![(10001, 4.5), (TRAIT_ALPHA, 100.0), (TRAIT_ALPHA, 100.0)]
+        );
+        assert!(!fade_list(&e).contains(&controls[0]));
+    }
+
+    #[test]
+    fn a_repeating_fade_restarts_and_a_fast_blink_finishes_after_its_total() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_simple_list_doubles(&mut e);
+        install_flash_traits(&mut e);
+        install_double_math(&mut e);
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        // Type 1 restarts forever and does not touch the flash counter.
+        let (sets, controls) = run_fades(
+            &mut e,
+            tile,
+            &[(
+                TRAIT_ALPHA,
+                0.0,
+                100.0,
+                1000.0,
+                FADE_NONLINEAR_LONG_DARK_REPEATING,
+            )],
+            1000,
+        );
+        assert_eq!(sets, vec![(TRAIT_ALPHA, 0.0)]);
+        assert!(fade_list(&e).contains(&controls[0]));
+        // Type 3 with a total of 2: the count 3 is past it: back to the
+        // start value, finished.
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        install_simple_list_doubles(&mut e);
+        install_flash_traits(&mut e);
+        install_double_math(&mut e);
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        give_trait(&mut e, tile, 10001, 3.0);
+        give_trait(&mut e, tile, 10002, 2.0);
+        let (sets, controls) = run_fades(
+            &mut e,
+            tile,
+            &[(TRAIT_ALPHA, 0.0, 100.0, 1000.0, FADE_BLINK_FAST_FADE)],
+            1000,
+        );
+        assert_eq!(
+            sets,
+            vec![(10001, 4.0), (TRAIT_ALPHA, 0.0), (TRAIT_ALPHA, 0.0)]
+        );
+        assert!(!fade_list(&e).contains(&controls[0]));
+        // Fades of an unknown type are left alone.
+        let (sets, controls) =
+            run_fades(&mut e, tile, &[(TRAIT_ALPHA, 0.0, 100.0, 1000.0, 9)], 500);
+        assert!(sets.is_empty());
+        assert!(fade_list(&e).contains(&controls[0]));
+    }
+
+    #[test]
+    fn fade_in_3d_sets_the_alpha_of_every_geometry_below_the_node() {
+        let mut e = tile_engine();
+        let properties = Rc::new(RefCell::new(std::collections::HashMap::new()));
+        // A geometry: `IsNode` answers 0, `IsGeometry` answers true.
+        let geometry_vtable = e.mem.alloc(0x30);
+        e.mem.set_u32(geometry_vtable + 0xc, 0x7800_000c);
+        e.mem.set_u32(geometry_vtable + 0x18, 0x7800_0018);
+        e.register_double(0x7800_000c, |_, _| 0u32.into_ret());
+        e.register_double(0x7800_0018, |_, _| 1u32.into_ret());
+        // A node: `IsNode` answers itself, `IsGeometry` answers false.
+        let node_vtable = e.mem.alloc(0x30);
+        e.mem.set_u32(node_vtable + 0xc, 0x7800_010c);
+        e.mem.set_u32(node_vtable + 0x18, 0x7800_0118);
+        e.register_double(0x7800_010c, |_, a| a[0].into_ret());
+        e.register_double(0x7800_0118, |_, _| 0u32.into_ret());
+        let make = |e: &mut Engine, vtable: u32| {
+            let object = e.mem.alloc(0xc0);
+            e.mem.set_u32(object, vtable);
+            object
+        };
+        let geometry_a = make(&mut e, geometry_vtable);
+        let geometry_b = make(&mut e, geometry_vtable);
+        let inner = make_model(&mut e, &[geometry_b]);
+        e.mem.set_u32(inner, node_vtable);
+        let outer = make_model(&mut e, &[geometry_a, inner]);
+        e.mem.set_u32(outer, node_vtable);
+        for geometry in [geometry_a, geometry_b] {
+            let property = e.mem.alloc(0x90);
+            properties.borrow_mut().insert(geometry, property);
+        }
+        let lookup = properties.clone();
+        e.register_double(NI_OBJECT_GET_PROPERTY, move |_, a| {
+            assert_eq!(a[1], 3);
+            lookup.borrow().get(&a[0]).copied().unwrap_or(0).into_ret()
+        });
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        tile_fade_in_3d(&mut e, tile, Ptr::new(outer), 0.25);
+        for property in properties.borrow().values() {
+            assert_eq!(e.mem.f32(property + 0x78), 0.25);
+        }
+        // A null node does nothing.
+        tile_fade_in_3d(&mut e, tile, Ptr::NULL, 0.5);
+    }
+
+    #[test]
+    fn moving_a_tile_under_a_parent_keeps_the_child_counts_and_lists() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_value_array_doubles(&mut e);
+        let sets = record_float_sets(&mut e);
+        let events = Rc::new(RefCell::new(vec![]));
+        for (name, address) in [("remove", LIST_REMOVE_ITEM), ("add_head", LIST_ADD_HEAD)] {
+            let seen = events.clone();
+            e.register_double(address, move |e, a| {
+                seen.borrow_mut().push((name, a[0], e.mem.u32(a[1])));
+                1u32.into_ret()
+            });
+        }
+        let seen = events.clone();
+        e.register_double(LIST_ADD_AFTER, move |e, a| {
+            seen.borrow_mut().push(("add_after", a[0], e.mem.u32(a[2])));
+            seen.borrow_mut().push(("after_node", a[1], 0));
+            Ret::default()
+        });
+        let old_parent = typed_tile(&mut e, TYPE_RECT);
+        let new_parent = typed_tile(&mut e, TYPE_RECT);
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        let sibling = typed_tile(&mut e, TYPE_RECT);
+        add_child(&mut e, old_parent, tile);
+        add_child(&mut e, new_parent, sibling);
+        give_trait(&mut e, old_parent, TRAIT_CHILD_COUNT, 3.0);
+        give_trait(&mut e, new_parent, TRAIT_CHILD_COUNT, 1.0);
+        // No sibling asked for: the tile goes to the head.
+        tile_set_parent(&mut e, tile, new_parent, Ptr::NULL);
+        assert_eq!(e.get(tile, Tile::pParent), new_parent);
+        assert_eq!(
+            *sets.borrow(),
+            vec![(TRAIT_CHILD_COUNT, 2.0, 1), (TRAIT_CHILD_COUNT, 2.0, 1)]
+        );
+        assert_eq!(
+            *events.borrow(),
+            vec![
+                ("remove", old_parent.addr() + 4, tile.addr()),
+                ("add_head", new_parent.addr() + 4, tile.addr())
+            ]
+        );
+        // Behind a sibling that is on the list: removed, then added behind
+        // that sibling's node.
+        events.borrow_mut().clear();
+        let sibling_node = e.mem.u32(new_parent.addr() + 4);
+        tile_set_parent(&mut e, tile, new_parent, sibling);
+        // (The tile is under the new parent already, so it is taken off its
+        // list as the old parent first.)
+        assert_eq!(
+            *events.borrow(),
+            vec![
+                ("remove", new_parent.addr() + 4, tile.addr()),
+                ("remove", new_parent.addr() + 4, tile.addr()),
+                ("add_after", new_parent.addr() + 4, tile.addr()),
+                ("after_node", sibling_node, 0)
+            ]
+        );
+        // A sibling that is not on the list: the head again.
+        events.borrow_mut().clear();
+        let stranger = typed_tile(&mut e, TYPE_RECT);
+        tile_set_parent(&mut e, tile, new_parent, stranger);
+        assert_eq!(events.borrow().last().unwrap().0, "add_head");
+        // Detaching: a null parent only clears the link; a released old
+        // parent keeps its count and list.
+        events.borrow_mut().clear();
+        sets.borrow_mut().clear();
+        e.set(new_parent, Tile::uiFlags, FLAG_RELEASED);
+        tile_set_parent(&mut e, tile, Ptr::NULL, Ptr::NULL);
+        assert!(e.get(tile, Tile::pParent).is_null());
+        assert!(events.borrow().is_empty());
+        assert!(sets.borrow().is_empty());
+    }
+
+    #[test]
+    fn the_parent_model_is_the_nearest_one() {
+        let mut e = tile_engine();
+        let root = typed_tile(&mut e, TYPE_RECT);
+        let middle = typed_tile(&mut e, TYPE_RECT);
+        let leaf = typed_tile(&mut e, TYPE_RECT);
+        add_child(&mut e, root, middle);
+        add_child(&mut e, middle, leaf);
+        assert!(tile_get_parent_model(&mut e, leaf).is_null());
+        let root_model = make_model(&mut e, &[]);
+        e.set(root, Tile::spModel, Ptr::new(root_model));
+        assert_eq!(tile_get_parent_model(&mut e, leaf).addr(), root_model);
+        let middle_model = make_model(&mut e, &[]);
+        e.set(middle, Tile::spModel, Ptr::new(middle_model));
+        assert_eq!(tile_get_parent_model(&mut e, leaf).addr(), middle_model);
+        assert_eq!(tile_get_parent_model(&mut e, root).addr(), root_model);
+    }
+
+    /// `NiPointer::operator=` over game memory.
+    fn install_ni_pointer_assign(e: &mut Engine) {
+        e.register(NI_POINTER_ASSIGN, |e, a| {
+            let old = e.mem.u32(a[0]);
+            if a[1] != 0 {
+                let count = e.mem.i32(a[1] + 4) + 1;
+                e.mem.set_i32(a[1] + 4, count);
+            }
+            e.mem.set_u32(a[0], a[1]);
+            if old != 0 {
+                let count = e.mem.i32(old + 4) - 1;
+                e.mem.set_i32(old + 4, count);
+                if count == 0 {
+                    e.vcall(old, 4, &[]);
+                }
+            }
+            Ret::default()
+        });
+    }
+
+    #[test]
+    fn deleting_the_model_detaches_it_and_drops_the_references() {
+        let mut e = tile_engine();
+        install_ni_pointer_assign(&mut e);
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        // A model with one reference (the tile's): its destructor is slot 4.
+        let model = e.mem.alloc(0xc0);
+        e.mem.set_u32(model + 4, 1);
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable + 4, 0x7900_0004);
+        e.mem.set_u32(model, vtable);
+        let destroyed = Rc::new(RefCell::new(vec![]));
+        let seen = destroyed.clone();
+        e.register_double(0x7900_0004, move |_, a| {
+            seen.borrow_mut().push(a[0]);
+            Ret::default()
+        });
+        // Its parent node removes children through slot 0xE8.
+        let parent_node = e.mem.alloc(0x10);
+        let parent_vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(parent_vtable + 0xe8, 0x7900_00e8);
+        e.mem.set_u32(parent_node, parent_vtable);
+        e.mem.set_u32(model + 0x18, parent_node);
+        let detached = Rc::new(RefCell::new(vec![]));
+        let seen = detached.clone();
+        e.register_double(0x7900_00e8, move |_, a| {
+            seen.borrow_mut().push((a[0], a[1]));
+            Ret::default()
+        });
+        e.set(tile, Tile::spModel, Ptr::new(model));
+        e.call_log = Some(vec![]);
+        tile_delete_model(&mut e, tile);
+        assert!(e.get(tile, Tile::spModel).is_null());
+        assert_eq!(*detached.borrow(), vec![(parent_node, model)]);
+        assert_eq!(*destroyed.borrow(), vec![model]);
+        assert_eq!(e.mem.i32(model + 4), 0);
+        // Nothing happens for a tile without a model.
+        e.call_log = Some(vec![]);
+        tile_delete_model(&mut e, tile);
+        assert!(e.call_log.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn deleting_a_model_without_a_parent_node_still_releases_it() {
+        let mut e = tile_engine();
+        install_ni_pointer_assign(&mut e);
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        // Another reference keeps the model alive.
+        let model = e.mem.alloc(0xc0);
+        e.mem.set_u32(model + 4, 2);
+        e.set(tile, Tile::spModel, Ptr::new(model));
+        tile_delete_model(&mut e, tile);
+        assert!(e.get(tile, Tile::spModel).is_null());
+        assert_eq!(e.mem.i32(model + 4), 1);
+    }
+
+    /// root > menu (a menu tile whose Menu answers `0xabcd` at +4) > "a" >
+    /// "b", "c" (named "Somewhere"), with a text table that knows the link
+    /// words.
+    fn link_scene(e: &mut Engine) -> [Ptr<Tile>; 5] {
+        provide_constants(e);
+        install_value_array_doubles(e);
+        install_strcmp(e);
+        let root = typed_tile(e, TYPE_RECT);
+        // A menu tile with room for its own fields behind the Tile part.
+        let kind = typed_tile(e, TYPE_MENU);
+        let vtable = e.mem.u32(kind.addr());
+        let menu_tile: Ptr<Tile> = Ptr::new(e.mem.alloc(0x50));
+        e.mem.set_u32(menu_tile.addr(), vtable);
+        let menu = e.mem.alloc(0x28);
+        e.mem.set_u32(menu_tile.addr() + 0x3c, menu);
+        e.mem.set_u32(menu + 4, 0xabcd);
+        add_child(e, root, menu_tile);
+        let parent = typed_tile(e, TYPE_RECT);
+        let first = typed_tile(e, TYPE_RECT);
+        let second = typed_tile(e, TYPE_RECT);
+        add_child(e, menu_tile, parent);
+        add_child(e, parent, first);
+        add_child(e, parent, second);
+        for (tile, name) in [(parent, "a"), (first, "b"), (second, "Somewhere")] {
+            let text = cstring(e, name);
+            e.mem.set_u32(tile.addr() + 0x20, text);
+        }
+        e.register(TEXT_TABLE_FIND, |e, a| {
+            let code = match e.mem.cstr(a[1]).as_slice() {
+                b"parent" => LINK_PARENT,
+                b"self" => LINK_SELF,
+                b"sibling" => LINK_SIBLING,
+                b"child" => LINK_CHILD,
+                b"root" => LINK_MENUS_ROOT,
+                b"special" => LINK_00706CF0,
+                b"menu" => LINK_MENU,
+                b"grandparent" => LINK_GRANDPARENT,
+                _ => return 0u32.into_ret(),
+            };
+            e.mem.set_i32(a[2], code);
+            1u32.into_ret()
+        });
+        e.register_double(INTERFACE_GET_MENUS_ROOT, move |_, _| root.addr().into_ret());
+        e.register(INTERFACE_00706CF0, |_, _| 0x77u32.into_ret());
+        [root, menu_tile, parent, first, second]
+    }
+
+    fn find(e: &mut Engine, tile: Ptr<Tile>, path: &str) -> u32 {
+        let text = cstring(e, path);
+        fn_00a08b20(e, tile, Ptr::new(text)).addr()
+    }
+
+    #[test]
+    fn a_link_names_a_relative_tile() {
+        let mut e = tile_engine();
+        let [root, menu_tile, parent, first, second] = link_scene(&mut e);
+        assert_eq!(find(&mut e, first, "parent"), parent.addr());
+        assert_eq!(find(&mut e, first, "self"), first.addr());
+        assert_eq!(find(&mut e, first, "grandparent"), menu_tile.addr());
+        assert_eq!(find(&mut e, root, "grandparent"), 0);
+        assert_eq!(find(&mut e, first, "root"), root.addr());
+        assert_eq!(find(&mut e, first, "special"), 0x77);
+        assert_eq!(find(&mut e, first, "menu"), 0xabcd);
+        // The next sibling, wrapping around; or a sibling by name, case-blind.
+        assert_eq!(find(&mut e, first, "sibling"), second.addr());
+        assert_eq!(find(&mut e, second, "sibling"), first.addr());
+        assert_eq!(find(&mut e, second, "sibling(B)"), first.addr());
+        assert_eq!(find(&mut e, first, "sibling(nobody)"), 0);
+        // The first child, or a descendant by name.
+        assert_eq!(find(&mut e, parent, "child"), first.addr());
+        assert_eq!(find(&mut e, parent, "child(Somewhere)"), second.addr());
+        assert_eq!(find(&mut e, first, "child"), 0);
+        assert_eq!(find(&mut e, first, "child(x)"), 0);
+        // Any other word: a name searched under the menu tile, case-blind.
+        assert_eq!(find(&mut e, first, "somewhere"), second.addr());
+        assert_eq!(find(&mut e, first, "missing"), 0);
+        // Without a tile the search starts at the menus root.
+        assert_eq!(find(&mut e, Ptr::NULL, "A"), parent.addr());
+    }
+
+    #[test]
+    fn a_tile_is_found_by_name_or_by_id_depth_first() {
+        let mut e = tile_engine();
+        let [root, menu_tile, parent, first, second] = link_scene(&mut e);
+        let find_name = |e: &mut Engine, tile: Ptr<Tile>, name: &str| {
+            let text = cstring(e, name);
+            fn_00a08f20(e, tile, Ptr::new(text)).addr()
+        };
+        assert_eq!(find_name(&mut e, root, "SOMEWHERE"), second.addr());
+        assert_eq!(find_name(&mut e, parent, "a"), parent.addr());
+        assert_eq!(find_name(&mut e, first, "a"), 0);
+        assert_eq!(find_name(&mut e, Ptr::NULL, "a"), 0);
+        // By id: the first match in depth-first order.
+        give_trait(&mut e, parent, TRAIT_ID, 5.0);
+        give_trait(&mut e, first, TRAIT_ID, 6.0);
+        give_trait(&mut e, second, TRAIT_ID, 6.0);
+        assert_eq!(fn_00a08fb0(&mut e, root, 6), first);
+        assert_eq!(fn_00a08fb0(&mut e, menu_tile, 5), parent);
+        assert!(fn_00a08fb0(&mut e, root, 7).is_null());
+        assert_eq!(fn_00a08fb0(&mut e, second, 6), second);
+    }
+
+    #[test]
+    fn menus_are_looked_up_by_class_number() {
+        let mut e = tile_engine();
+        let table = e.mem.alloc(4 * 0x60);
+        // The game indexes `table[class - 1001]`, 3 entries long.
+        for index in 0..3u32 {
+            e.mem.set_u32(table + 4 * index, 0x1000 + index);
+        }
+        e.set_global(MENU_CLASS_TABLE, table);
+        e.set_global(MENU_CLASS_COUNT, 3u16);
+        assert_eq!(tile_get_menu_by_class(&mut e, 1001), 0x1000);
+        assert_eq!(tile_get_menu_by_class(&mut e, 1003), 0x1002);
+        // Past the entries, and outside the class range.
+        assert_eq!(tile_get_menu_by_class(&mut e, 1004), 0);
+        assert_eq!(tile_get_menu_by_class(&mut e, 1000), 0);
+        assert_eq!(tile_get_menu_by_class(&mut e, 0x43d), 0);
+        e.set_global(MENU_CLASS_COUNT, 0x60u16);
+        assert_eq!(tile_get_menu_by_class(&mut e, 0x43c), 0);
+        assert_eq!(tile_get_menu_by_class(&mut e, 0x43d), 0);
+    }
+
+    // --- GetTextureAtlasInfo --------------------------------------------
+
+    /// What the atlas-file doubles saw.
+    struct AtlasDoubles {
+        /// Paths handed to `FileFinder::GetFile`.
+        opened: Rc<RefCell<Vec<String>>>,
+        /// The lines still to be read.
+        lines: Rc<RefCell<std::collections::VecDeque<String>>>,
+        /// Strings assigned with `BSStringT::Set` as (string, text).
+        strings: Rc<RefCell<Vec<(u32, String)>>>,
+        /// Deleted file objects.
+        deleted: Rc<RefCell<Vec<u32>>>,
+        /// What opening the file answers.
+        opens: Rc<Cell<bool>>,
+    }
+
+    fn text_of(e: &Engine, string: u32) -> String {
+        let (buffer, length) = (e.mem.u32(string + 4), e.mem.u32(string + 0x14));
+        String::from_utf8(e.mem.bytes(buffer, length)).unwrap()
+    }
+
+    fn set_text(e: &mut Engine, string: u32, text: &[u8]) {
+        let buffer = e.mem.alloc(text.len() as u32 + 1);
+        e.mem.write(buffer, text);
+        e.mem.set_u32(string + 4, buffer);
+        e.mem.set_u32(string + 0x14, text.len() as u32);
+        e.mem.set_u32(string + 0x18, 0x1f);
+    }
+
+    /// Doubles for everything `GetTextureAtlasInfo` calls: the CRT string
+    /// functions, the game's `std::string` (kept as a pointer, length and
+    /// capacity of 0x1F), the file finder and the string setter.
+    fn install_atlas_doubles(e: &mut Engine, lines: &[&str]) -> AtlasDoubles {
+        provide_constants(e);
+        install_strcmp(e);
+        install_simple_list_doubles(e);
+        e.mem.set_cstr(TEXTURE_DIRECTORY, b"Data\\Textures\\");
+        e.mem.set_cstr(ATLAS_DELIMITERS, b" ,\t");
+        e.mem.set_cstr(ATLAS_DELIMITERS_NO_TAB, b" ,");
+        e.register(STRRCHR, |e, a| {
+            let text = e.mem.cstr(a[0]);
+            text.iter()
+                .rposition(|&byte| byte as u32 == a[1])
+                .map_or(0, |at| a[0] + at as u32)
+                .into_ret()
+        });
+        let saved = Rc::new(Cell::new(0u32));
+        e.register_double(STRTOK, move |e, a| {
+            let delimiters = e.mem.cstr(a[1]);
+            let mut at = if a[0] != 0 { a[0] } else { saved.get() };
+            if at == 0 {
+                return 0u32.into_ret();
+            }
+            while e.mem.u8(at) != 0 && delimiters.contains(&e.mem.u8(at)) {
+                at += 1;
+            }
+            if e.mem.u8(at) == 0 {
+                saved.set(0);
+                return 0u32.into_ret();
+            }
+            let start = at;
+            while e.mem.u8(at) != 0 && !delimiters.contains(&e.mem.u8(at)) {
+                at += 1;
+            }
+            if e.mem.u8(at) != 0 {
+                e.mem.set_u8(at, 0);
+                at += 1;
+            }
+            saved.set(at);
+            start.into_ret()
+        });
+        e.register(STD_STRING_TIDY, |e, a| {
+            set_text(e, a[0], b"");
+            Ret::default()
+        });
+        e.register(STD_STRING_ASSIGN, |e, a| {
+            let text = e.mem.bytes(a[1], a[2]);
+            set_text(e, a[0], &text);
+            Ret::default()
+        });
+        e.register(STD_STRING_RFIND, |e, a| {
+            let text = text_of(e, a[0]).into_bytes();
+            let wanted = e.mem.u8(a[1]);
+            text.iter()
+                .rposition(|&byte| byte == wanted)
+                .map_or(u32::MAX, |at| at as u32)
+                .into_ret()
+        });
+        e.register(STD_STRING_SUBSTR, |e, a| {
+            let text = text_of(e, a[0]).into_bytes();
+            let end = text.len().min(a[2] as usize + a[3] as usize);
+            set_text(e, a[1], &text[a[2] as usize..end]);
+            a[1].into_ret()
+        });
+        e.register(STD_STRING_ASSIGN_STRING, |e, a| {
+            let text = text_of(e, a[1]).into_bytes();
+            set_text(e, a[0], &text[a[2] as usize..]);
+            Ret::default()
+        });
+        e.register(STD_STRING_APPEND, |e, a| {
+            let mut text = text_of(e, a[0]).into_bytes();
+            text.extend(e.mem.bytes(a[1], a[2]));
+            set_text(e, a[0], &text);
+            Ret::default()
+        });
+        e.register(TEXTURE_ATLAS_ENTRY_CONSTRUCT, |_, a| a[0].into_ret());
+        let doubles = AtlasDoubles {
+            opened: Rc::new(RefCell::new(vec![])),
+            lines: Rc::new(RefCell::new(
+                lines.iter().map(|line| line.to_string()).collect(),
+            )),
+            strings: Rc::new(RefCell::new(vec![])),
+            deleted: Rc::new(RefCell::new(vec![])),
+            opens: Rc::new(Cell::new(true)),
+        };
+        let seen = doubles.strings.clone();
+        e.register_double(STRING_SET, move |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            if a[1] != 0 {
+                seen.borrow_mut()
+                    .push((a[0], String::from_utf8(e.mem.cstr(a[1])).unwrap()));
+            }
+            Ret::default()
+        });
+        // The file object: open (slot +0x20), read a line (+0x34), delete (0).
+        let file_vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(file_vtable, 0x7a00_0000);
+        e.mem.set_u32(file_vtable + 0x20, 0x7a00_0020);
+        e.mem.set_u32(file_vtable + 0x34, 0x7a00_0034);
+        let file = e.mem.alloc(0x10);
+        e.mem.set_u32(file, file_vtable);
+        let (opened, opens) = (doubles.opened.clone(), doubles.opens.clone());
+        e.register_double(FILE_FINDER_GET_FILE, move |e, a| {
+            opened
+                .borrow_mut()
+                .push(String::from_utf8(e.mem.cstr(a[0])).unwrap());
+            file.into_ret()
+        });
+        let opens_now = opens.clone();
+        e.register_double(0x7a00_0020, move |_, _| opens_now.get().into_ret());
+        let remaining = doubles.lines.clone();
+        e.register_double(0x7a00_0034, move |e, a| {
+            let Some(line) = remaining.borrow_mut().pop_front() else {
+                return 0u32.into_ret();
+            };
+            e.mem.set_cstr(a[1], line.as_bytes());
+            1u32.into_ret()
+        });
+        let seen = doubles.deleted.clone();
+        e.register_double(0x7a00_0000, move |_, a| {
+            seen.borrow_mut().push(a[0]);
+            Ret::default()
+        });
+        doubles
+    }
+
+    fn read_rect(e: &Engine, rect: u32) -> [f32; 4] {
+        [
+            e.mem.f32(rect),
+            e.mem.f32(rect + 4),
+            e.mem.f32(rect + 8),
+            e.mem.f32(rect + 12),
+        ]
+    }
+
+    #[test]
+    fn atlas_entries_that_are_cached_answer_without_reading_the_file() {
+        let mut e = tile_engine();
+        let doubles = install_atlas_doubles(&mut e, &[]);
+        cached_atlas_entry(
+            &mut e,
+            "atlas.txt",
+            "icon",
+            "Interface\\icons.dds",
+            [10.0, 74.0, 20.0, 52.0],
+        );
+        let atlas = Ptr::<()>::new(cstring(&mut e, "atlas.txt"));
+        let texture = e.mem.alloc(8);
+        let rect = e.mem.alloc(16);
+        // The sub-texture is the part after the last backslash.
+        let subtexture = Ptr::<()>::new(cstring(&mut e, "Interface\\Shared\\icon"));
+        tile_get_texture_atlas_info(&mut e, atlas, subtexture, Ptr::new(texture), Ptr::new(rect));
+        assert_eq!(read_rect(&e, rect), [10.0, 74.0, 20.0, 52.0]);
+        assert_eq!(
+            *doubles.strings.borrow(),
+            vec![(texture, "Interface\\icons.dds".to_string())]
+        );
+        assert!(doubles.opened.borrow().is_empty());
+        // Another sub-texture of a known atlas leaves the outputs alone and
+        // reads nothing either.
+        e.mem.set_f32(rect, -1.0);
+        let other = Ptr::<()>::new(cstring(&mut e, "other"));
+        tile_get_texture_atlas_info(&mut e, atlas, other, Ptr::NULL, Ptr::new(rect));
+        assert_eq!(e.mem.f32(rect), -1.0);
+        assert!(doubles.opened.borrow().is_empty());
+    }
+
+    #[test]
+    fn atlas_info_needs_both_names_and_an_output() {
+        let mut e = tile_engine();
+        let doubles = install_atlas_doubles(&mut e, &[]);
+        let name = Ptr::<()>::new(cstring(&mut e, "x"));
+        let rect = Ptr::<()>::new(e.mem.alloc(16));
+        tile_get_texture_atlas_info(&mut e, Ptr::NULL, name, Ptr::NULL, rect);
+        tile_get_texture_atlas_info(&mut e, name, Ptr::NULL, Ptr::NULL, rect);
+        tile_get_texture_atlas_info(&mut e, name, name, Ptr::NULL, Ptr::NULL);
+        assert!(doubles.opened.borrow().is_empty());
+    }
+
+    #[test]
+    fn an_unknown_atlas_is_read_from_its_description_file() {
+        let mut e = tile_engine();
+        let doubles = install_atlas_doubles(
+            &mut e,
+            &[
+                "# a comment",
+                " blank start",
+                "other other.dds 0 0 1 2 0 3 4",
+                "icon  icons.dds, 0 0 16 32 0 64 128",
+            ],
+        );
+        let atlas = Ptr::<()>::new(cstring(&mut e, "Interface\\Shared\\atlas.txt"));
+        let subtexture = Ptr::<()>::new(cstring(&mut e, "icon"));
+        let texture = e.mem.alloc(8);
+        let rect = e.mem.alloc(16);
+        tile_get_texture_atlas_info(&mut e, atlas, subtexture, Ptr::new(texture), Ptr::new(rect));
+        assert_eq!(
+            *doubles.opened.borrow(),
+            vec!["Data\\Textures\\Interface\\Shared\\atlas.txt".to_string()]
+        );
+        // Right and bottom are left plus width and top plus height.
+        assert_eq!(read_rect(&e, rect), [16.0, 80.0, 32.0, 160.0]);
+        // The texture file is in the atlas's directory.
+        let texture_text = (texture, "Interface\\Shared\\icons.dds".to_string());
+        assert!(doubles.strings.borrow().contains(&texture_text));
+        // Both entries are kept: the sub-texture and atlas names are stored.
+        let entries: Vec<u32> = {
+            let mut items = vec![];
+            let mut node = TEXTURE_ENTRY_LIST;
+            while node != 0 && e.mem.u32(node) != 0 {
+                items.push(e.mem.u32(node));
+                node = e.mem.u32(node + 4);
+            }
+            items
+        };
+        assert_eq!(entries.len(), 2);
+        let texts = doubles.strings.borrow();
+        for (entry, name) in [(entries[1], "other"), (entries[0], "icon")] {
+            assert!(texts.contains(&(entry, "Interface\\Shared\\atlas.txt".to_string())));
+            assert!(texts.contains(&(entry + 8, name.to_string())));
+        }
+        assert_eq!(e.mem.f32(entries[1] + 0x1c), 4.0);
+        assert_eq!(e.mem.f32(entries[1] + 0x24), 6.0);
+        // The file is deleted at the end.
+        assert_eq!(doubles.deleted.borrow().len(), 1);
+    }
+
+    #[test]
+    fn an_atlas_file_that_cannot_be_opened_adds_nothing() {
+        let mut e = tile_engine();
+        let doubles = install_atlas_doubles(&mut e, &["icon icons.dds 0 0 1 2 0 3 4"]);
+        doubles.opens.set(false);
+        let atlas = Ptr::<()>::new(cstring(&mut e, "a.txt"));
+        let subtexture = Ptr::<()>::new(cstring(&mut e, "icon"));
+        let rect = Ptr::<()>::new(e.mem.alloc(16));
+        tile_get_texture_atlas_info(&mut e, atlas, subtexture, Ptr::NULL, rect);
+        assert_eq!(e.mem.u32(TEXTURE_ENTRY_LIST), 0);
+        assert_eq!(doubles.deleted.borrow().len(), 1);
+        assert!(doubles.strings.borrow().is_empty());
+    }
+
+    // --- Tile::Value --------------------------------------------------------
+
+    /// A trait value of `tile` with the given actions (type, amount).
+    fn value_with(
+        e: &mut Engine,
+        tile: Ptr<Tile>,
+        trait_id: i32,
+        start: f32,
+        actions: &[(i32, f32)],
+    ) -> Ptr<TileValue> {
+        let value: Ptr<TileValue> = Ptr::new(e.mem.alloc(0x14));
+        e.set(value, TileValue::eIndex, trait_id);
+        e.set(value, TileValue::pParent, tile);
+        e.set(value, TileValue::fValue, start);
+        let mut next = 0;
+        for &(kind, amount) in actions.iter().rev() {
+            let vtable = action_vtable(e, amount, 0);
+            next = make_action(e, vtable, kind, next);
+        }
+        e.set(value, TileValue::pActionListA, Ptr::new(next));
+        value
+    }
+
+    fn install_float_stack(e: &mut Engine) {
+        e.register(FLOAT_STACK_CONSTRUCT, |e, a| {
+            let buffer = e.mem.alloc(64);
+            e.mem.set_u32(a[0] + 4, buffer);
+            e.mem.set_u32(a[0] + 8, 0);
+            a[0].into_ret()
+        });
+        e.register(FLOAT_STACK_PUSH, |e, a| {
+            let (buffer, size) = (e.mem.u32(a[0] + 4), e.mem.u32(a[0] + 8));
+            let value = e.mem.f32(a[1]);
+            e.mem.set_f32(buffer + 4 * size, value);
+            e.mem.set_u32(a[0] + 8, size + 1);
+            Ret::default()
+        });
+    }
+
+    #[test]
+    fn adding_actions_appends_them_to_the_trait() {
+        let mut e = tile_engine();
+        let value: Ptr<TileValue> = Ptr::new(e.mem.alloc(0x14));
+        value_add_action(&mut e, value, VA_ADD, 2.5);
+        let first = e.get(value, TileValue::pActionListA).addr();
+        assert_eq!(e.mem.u32(first), VTABLE_FLOAT_ACTION);
+        assert_eq!(e.mem.i32(first + 4), VA_ADD);
+        assert_eq!(e.mem.u32(first + 8), 0);
+        assert_eq!(e.mem.f32(first + 0xc), 2.5);
+        assert_eq!(e.mem.block_size(first), Some(0x10));
+        value_add_action(&mut e, value, VA_MULT, 3.0);
+        value_add_action(&mut e, value, VA_SUB, 1.0);
+        let second = e.mem.u32(first + 8);
+        let third = e.mem.u32(second + 8);
+        assert_eq!(e.mem.i32(second + 4), VA_MULT);
+        assert_eq!(e.mem.i32(third + 4), VA_SUB);
+        assert_eq!(e.mem.u32(third + 8), 0);
+        assert_eq!(e.get(value, TileValue::pActionListA).addr(), first);
+    }
+
+    #[test]
+    fn adding_a_reference_action_creates_the_referenced_trait_and_a_reaction() {
+        let mut e = tile_engine();
+        install_value_array_doubles(&mut e);
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        let other = typed_tile(&mut e, TYPE_RECT);
+        let value = give_trait(&mut e, tile, TRAIT_X, 0.0);
+        e.call_log = Some(vec![]);
+        value_add_action_ov2(&mut e, value, VA_REF, other, TRAIT_Y);
+        let referenced = tile_get_value(&mut e, other, TRAIT_Y);
+        assert!(!referenced.is_null());
+        let action = e.get(value, TileValue::pActionListA).addr();
+        assert_eq!(e.mem.u32(action), VTABLE_REF_VALUE_ACTION);
+        assert_eq!(e.mem.i32(action + 4), VA_REF);
+        assert_eq!(e.mem.u32(action + 0xc), referenced.addr());
+        assert_eq!(
+            calls_to(&e, ADD_REACTION),
+            vec![vec![referenced.addr(), value.addr()]]
+        );
+        // A second action goes behind the first.
+        value_add_action_ov2(&mut e, value, VA_COPY, other, TRAIT_Y);
+        assert_eq!(e.mem.i32(e.mem.u32(action + 8) + 4), VA_COPY);
+    }
+
+    /// A reaction list `[owner values]` for the map doubles: nodes
+    /// (value, next).
+    fn reaction_list(e: &mut Engine, values: &[u32]) -> u32 {
+        let mut next = 0;
+        for &value in values.iter().rev() {
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, value);
+            e.mem.set_u32(node + 4, next);
+            next = node;
+        }
+        next
+    }
+
+    #[test]
+    fn clearing_actions_takes_the_value_off_the_reaction_lists() {
+        let mut e = tile_engine();
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        let this = value_with(&mut e, tile, TRAIT_X, 0.0, &[]);
+        let referenced: Ptr<TileValue> = Ptr::new(e.mem.alloc(0x14));
+        let stranger = value_with(&mut e, tile, TRAIT_Y, 0.0, &[]);
+        // Two reference actions on the same trait, one plain action.
+        let reference = action_vtable(&mut e, 0.0, referenced.addr());
+        let plain = action_vtable(&mut e, 1.0, 0);
+        let third = make_action(&mut e, reference, VA_REF, 0);
+        let second = make_action(&mut e, plain, VA_COPY, third);
+        let first = make_action(&mut e, reference, VA_REF, second);
+        e.set(this, TileValue::pActionListA, Ptr::new(first));
+        // The referenced trait reacts for `this`, `stranger` and `this`.
+        let list = reaction_list(&mut e, &[this.addr(), stranger.addr(), this.addr()]);
+        let nodes: Vec<u32> = {
+            let mut items = vec![];
+            let mut node = list;
+            while node != 0 {
+                items.push(node);
+                node = e.mem.u32(node + 4);
+            }
+            items
+        };
+        let head = Rc::new(Cell::new(list));
+        let seen = head.clone();
+        e.register_double(REACTION_MAP_FIND, move |e, a| {
+            assert_eq!((a[0], a[1]), (REACTION_MAP, referenced.addr()));
+            e.mem.set_u32(a[2], seen.get());
+            1u32.into_ret()
+        });
+        let updated = Rc::new(RefCell::new(vec![]));
+        let seen = updated.clone();
+        let new_head = head.clone();
+        e.register_double(REACTION_MAP_SET, move |_, a| {
+            new_head.set(a[2]);
+            seen.borrow_mut().push((a[0], a[1], a[2]));
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        value_clear_actions(&mut e, this);
+        // The first and last reactions are gone (freed); the stranger's
+        // stays and becomes the head.
+        assert_eq!(
+            *updated.borrow(),
+            vec![(REACTION_MAP, referenced.addr(), nodes[1])]
+        );
+        assert_eq!(e.mem.block_size(nodes[0]), None);
+        assert_eq!(e.mem.block_size(nodes[2]), None);
+        assert_eq!(e.mem.u32(nodes[1] + 4), 0);
+        // All actions are freed and the list is empty.
+        for action in [first, second, third] {
+            assert_eq!(e.mem.block_size(action), None);
+        }
+        assert!(e.get(this, TileValue::pActionListA).is_null());
+        // When nothing is left the map entry is erased instead.
+        let only = value_with(&mut e, tile, TRAIT_Y, 0.0, &[]);
+        let action = make_action(&mut e, reference, VA_REF, 0);
+        e.set(only, TileValue::pActionListA, Ptr::new(action));
+        let single = reaction_list(&mut e, &[only.addr()]);
+        head.set(single);
+        e.call_log = Some(vec![]);
+        value_clear_actions(&mut e, only);
+        assert_eq!(
+            calls_to(&e, REACTION_MAP_REMOVE),
+            vec![vec![REACTION_MAP, referenced.addr()]]
+        );
+        // A value without actions touches nothing.
+        e.call_log = Some(vec![]);
+        value_clear_actions(&mut e, only);
+        assert!(e.call_log.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn destroying_a_value_blanks_the_references_other_values_hold_to_it() {
+        let mut e = tile_engine();
+        let tile = typed_tile(&mut e, TYPE_RECT);
+        let this = value_with(&mut e, tile, TRAIT_X, 4.5, &[]);
+        let text = cstring(&mut e, "text");
+        e.set(this, TileValue::strValue, Ptr::new(text));
+        // Another value reads `this` through a reference action.
+        let owner = value_with(&mut e, tile, TRAIT_Y, 0.0, &[]);
+        let reference = action_vtable(&mut e, 0.0, this.addr());
+        let elsewhere = action_vtable(&mut e, 0.0, owner.addr());
+        let kept = make_action(&mut e, elsewhere, VA_REF, 0);
+        let pointing = make_action(&mut e, reference, VA_REF, kept);
+        e.mem.set_u32(pointing + 0xc, this.addr());
+        e.mem.set_u32(kept + 0xc, owner.addr());
+        e.set(owner, TileValue::pActionListA, Ptr::new(pointing));
+        let reactions = reaction_list(&mut e, &[owner.addr()]);
+        e.register_double(REACTION_MAP_FIND, move |e, a| {
+            if a[1] == this.addr() {
+                e.mem.set_u32(a[2], reactions);
+                1u32.into_ret()
+            } else {
+                0u32.into_ret()
+            }
+        });
+        e.call_log = Some(vec![]);
+        value_destructor(&mut e, this);
+        assert_eq!(e.mem.u32(pointing + 0xc), 0);
+        assert_eq!(e.mem.u32(kept + 0xc), owner.addr());
+        assert_eq!(e.mem.block_size(reactions), None);
+        assert_eq!(
+            calls_to(&e, REACTION_MAP_REMOVE),
+            vec![vec![REACTION_MAP, this.addr()]]
+        );
+        assert_eq!(e.mem.block_size(text), None);
+        assert_eq!(e.get(this, TileValue::fValue), 0.0);
+        assert!(e.get(this, TileValue::pParent).is_null());
+    }
+
+    #[test]
+    fn calculating_runs_the_operations_in_order() {
+        let calculate = |actions: &[(i32, f32)], start: f32| -> f32 {
+            let mut e = tile_engine();
+            provide_constants(&mut e);
+            install_float_stack(&mut e);
+            install_double_math(&mut e);
+            let (tile, _) = updating_tile(&mut e, TYPE_RECT);
+            let value = value_with(&mut e, tile, TRAIT_X, start, actions);
+            value_calculate_value(&mut e, value, false);
+            e.get(value, TileValue::fValue)
+        };
+        let table: &[(i32, f32, f32, f32)] = &[
+            (VA_COPY, 1.0, 7.0, 7.0),
+            (VA_ADD, 10.0, 5.0, 15.0),
+            (VA_SUB, 10.0, 4.0, 6.0),
+            (VA_MULT, 10.0, 3.0, 30.0),
+            (VA_DIV, 10.0, 4.0, 2.5),
+            (VA_DIV, 10.0, 0.0, 10.0),
+            (VA_MIN, 10.0, 4.0, 4.0),
+            (VA_MIN, 3.0, 4.0, 3.0),
+            (VA_MAX, 10.0, 40.0, 40.0),
+            (VA_MAX, 50.0, 40.0, 50.0),
+            (VA_MOD, 13.0, 5.0, 3.0),
+            (VA_MOD, 13.4, 5.6, 1.0),
+            (VA_MOD, 13.0, 0.0, 13.0),
+            (VA_FLOOR, -3.5, 1.0, -3.0),
+            (VA_FLOOR, 1.25, 1.0, 2.0),
+            (VA_CEIL, 1.25, 1.0, 3.0),
+            (VA_ABS, -3.5, 1.0, 2.5),
+            (VA_ROUND, 7.3, 2.0, 8.0),
+            (VA_ROUND, 6.9, 2.0, 6.0),
+            (VA_GT, 5.0, 3.0, 1.0),
+            (VA_GT, 3.0, 3.0, 0.0),
+            (VA_GTE, 3.0, 3.0, 1.0),
+            (VA_GTE, 2.0, 3.0, 0.0),
+            (VA_EQ, 3.0, 3.0, 1.0),
+            (VA_EQ, 3.0, 4.0, 0.0),
+            (VA_NEQ, 3.0, 4.0, 1.0),
+            (VA_NEQ, 3.0, 3.0, 0.0),
+            (VA_LT, 3.0, 5.0, 1.0),
+            (VA_LT, 5.0, 5.0, 0.0),
+            (VA_LTE, 5.0, 5.0, 1.0),
+            (VA_LTE, 6.0, 5.0, 0.0),
+            (VA_AND, 2.0, 3.0, 1.0),
+            (VA_AND, 0.0, 3.0, 0.0),
+            (VA_AND, 2.0, 0.0, 0.0),
+            (VA_OR, 0.0, 0.0, 0.0),
+            (VA_OR, 0.0, 2.0, 1.0),
+            (VA_OR, 3.0, 0.0, 1.0),
+            (VA_NOT, 9.0, 0.0, 1.0),
+            (VA_NOT, 9.0, 5.0, 0.0),
+            (VA_ONLYIF, 9.0, 0.0, 0.0),
+            (VA_ONLYIF, 9.0, 1.0, 9.0),
+            (VA_ONLYIFNOT, 9.0, 1.0, 0.0),
+            (VA_ONLYIFNOT, 9.0, 0.0, 9.0),
+            (9999, 9.0, 1.0, 9.0),
+        ];
+        for &(kind, start, amount, expected) in table {
+            assert_eq!(
+                calculate(&[(kind, amount)], start),
+                expected,
+                "{kind} {start} {amount}"
+            );
+        }
+        // The actions run one after the other.
+        assert_eq!(
+            calculate(&[(VA_ADD, 5.0), (VA_MULT, 2.0), (VA_SUB, 6.0)], 10.0),
+            24.0
+        );
+    }
+
+    #[test]
+    fn parentheses_calculate_the_inside_first_and_apply_the_operation_after() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_float_stack(&mut e);
+        let (tile, _) = updating_tile(&mut e, TYPE_RECT);
+        // 1 + 2 = 3; "(" saves 3 and restarts at 0; + 4 = 4; ")" restores
+        // 3 and multiplies it by the 4 (the operation is the parenthesis's
+        // own float, `VA_MULT`).
+        let value = value_with(
+            &mut e,
+            tile,
+            TRAIT_X,
+            1.0,
+            &[
+                (VA_ADD, 2.0),
+                (ACTION_LEFT_PAREN, 0.0),
+                (VA_ADD, 4.0),
+                (ACTION_RIGHT_PAREN, VA_MULT as f32),
+            ],
+        );
+        value_calculate_value(&mut e, value, false);
+        assert_eq!(e.get(value, TileValue::fValue), 12.0);
+    }
+
+    #[test]
+    fn copying_a_text_replaces_the_string_and_counts_as_a_change() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_float_stack(&mut e);
+        install_strcmp(&mut e);
+        let (tile, log) = updating_tile(&mut e, TYPE_RECT);
+        let value = value_with(&mut e, tile, TRAIT_X, 0.0, &[]);
+        let source: Ptr<TileValue> = Ptr::new(e.mem.alloc(0x14));
+        let text = cstring(&mut e, "hello");
+        e.set(source, TileValue::strValue, Ptr::new(text));
+        e.set(source, TileValue::eIndex, 5);
+        let reference = action_vtable(&mut e, 0.0, source.addr());
+        let action = make_action(&mut e, reference, VA_COPY, 0);
+        e.set(value, TileValue::pActionListA, Ptr::new(action));
+        e.call_log = Some(vec![]);
+        value_calculate_value(&mut e, value, false);
+        let copy = e.get(value, TileValue::strValue).addr();
+        assert_ne!(copy, text);
+        assert_eq!(string_at(&e, copy), "hello");
+        assert_eq!(calls_to(&e, VALUE_CHANGE_EVENT), vec![vec![value.addr()]]);
+        assert_eq!(*log.post_parses.borrow(), vec![(TRAIT_X, 0.0, copy)]);
+        // The same text again: not a change, no event.
+        e.call_log = Some(vec![]);
+        value_calculate_value(&mut e, value, false);
+        assert!(calls_to(&e, VALUE_CHANGE_EVENT).is_empty());
+        assert_eq!(
+            string_at(&e, e.get(value, TileValue::strValue).addr()),
+            "hello"
+        );
+        // A text-less copy still announces when asked to.
+        let plain = value_with(&mut e, tile, TRAIT_X, 2.0, &[]);
+        e.set(plain, TileValue::strValue, Ptr::new(text));
+        value_calculate_value(&mut e, plain, true);
+        assert_eq!(calls_to(&e, VALUE_CHANGE_EVENT).len(), 1);
+    }
+
+    #[test]
+    fn a_changed_value_is_announced_to_its_tile() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_float_stack(&mut e);
+        let (tile, log) = updating_tile(&mut e, TYPE_RECT);
+        let value = value_with(&mut e, tile, TRAIT_X, 1.0, &[(VA_ADD, 2.0)]);
+        let line_word = e.tls() + TLS_CURRENT_LINE;
+        e.mem.set_u32(line_word, 0x77);
+        e.call_log = Some(vec![]);
+        value_calculate_value(&mut e, value, false);
+        assert_eq!(calls_to(&e, VALUE_CHANGE_EVENT), vec![vec![value.addr()]]);
+        assert_eq!(*log.post_parses.borrow(), vec![(TRAIT_X, 3.0, 0)]);
+        assert_eq!(e.mem.u32(line_word), 0x77);
+        assert_eq!(calls_to(&e, FLOAT_STACK_DESTROY).len(), 1);
+        // No change and no flag: silence. With the flag: announced anyway.
+        e.call_log = Some(vec![]);
+        let steady = value_with(&mut e, tile, TRAIT_X, 1.0, &[(VA_ADD, 0.0)]);
+        value_calculate_value(&mut e, steady, false);
+        assert!(calls_to(&e, VALUE_CHANGE_EVENT).is_empty());
+        value_calculate_value(&mut e, steady, true);
+        assert_eq!(calls_to(&e, VALUE_CHANGE_EVENT).len(), 1);
+        // A released tile gets the event but is not asked.
+        log.post_parses.borrow_mut().clear();
+        e.set(tile, Tile::uiFlags, FLAG_RELEASED);
+        value_calculate_value(&mut e, steady, true);
+        assert!(log.post_parses.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_value_the_tile_does_not_post_parse_goes_to_final_post_parse() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_float_stack(&mut e);
+        install_value_array_doubles(&mut e);
+        let (tile, log) = updating_tile(&mut e, TYPE_RECT);
+        log.post_parse_answer.set(0);
+        let updates = record_updates(&mut e);
+        let value = value_with(&mut e, tile, TRAIT_X, 1.0, &[(VA_ADD, 2.0)]);
+        value_calculate_value(&mut e, value, false);
+        // `FinalPostParse` of a position trait queues a position update.
+        assert_eq!(*updates.borrow(), vec![(tile.addr(), UPDATE_POSITION)]);
+    }
+
+    #[test]
+    fn a_tile_that_is_loading_or_deleting_is_not_calculated() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_float_stack(&mut e);
+        let (tile, log) = updating_tile(&mut e, TYPE_RECT);
+        let value = value_with(&mut e, tile, TRAIT_X, 1.0, &[(VA_ADD, 2.0)]);
+        e.set(tile, Tile::uiFlags, FLAG_TILE_LOADING);
+        value_calculate_value(&mut e, value, false);
+        assert_eq!(e.get(value, TileValue::fValue), 1.0);
+        // Except for the class trait, which is always calculated.
+        let class = value_with(&mut e, tile, TRAIT_CLASS, 1.0, &[(VA_ADD, 2.0)]);
+        value_calculate_value(&mut e, class, false);
+        assert_eq!(e.get(class, TileValue::fValue), 3.0);
+        e.set(tile, Tile::uiFlags, FLAG_MENU_DELETING);
+        value_calculate_value(&mut e, class, false);
+        assert_eq!(e.get(class, TileValue::fValue), 3.0);
+        // Without a tile the (tile-less) value is not calculated either.
+        let orphan = value_with(&mut e, Ptr::NULL, TRAIT_CLASS, 1.0, &[(VA_ADD, 2.0)]);
+        e.mem.map(0, 0x1000);
+        value_calculate_value(&mut e, orphan, false);
+        assert_eq!(e.get(orphan, TileValue::fValue), 1.0);
+        let _ = log;
+    }
+
+    #[test]
+    fn a_string_trait_shows_the_rounded_integer() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_float_stack(&mut e);
+        e.register(SPRINTF_S, |e, a| {
+            let text = format!("{}", a[3] as i32);
+            assert!(text.len() < a[1] as usize);
+            e.mem.set_cstr(a[0], text.as_bytes());
+            0u32.into_ret()
+        });
+        let (tile, log) = updating_tile(&mut e, TYPE_RECT);
+        let value = value_with(&mut e, tile, TRAIT_STRING, 0.0, &[(VA_ADD, 123.0)]);
+        value_calculate_value(&mut e, value, false);
+        let first = e.get(value, TileValue::strValue).addr();
+        assert_eq!(string_at(&e, first), "123");
+        assert!(e.mem.block_size(first).is_some());
+        // The same number of characters keeps the buffer.
+        let action = e.get(value, TileValue::pActionListA).addr();
+        let vtable = action_vtable(&mut e, -168.0, 0);
+        e.mem.set_u32(action, vtable);
+        value_calculate_value(&mut e, value, false);
+        assert_eq!(e.get(value, TileValue::fValue), -45.0);
+        assert_eq!(e.get(value, TileValue::strValue).addr(), first);
+        assert_eq!(string_at(&e, first), "-45");
+        // A different length gets a new buffer; zero is one character.
+        let vtable = action_vtable(&mut e, 45.0, 0);
+        e.mem.set_u32(action, vtable);
+        value_calculate_value(&mut e, value, false);
+        let zero = e.get(value, TileValue::strValue).addr();
+        assert_eq!(string_at(&e, zero), "0");
+        assert_eq!(log.post_parses.borrow().len(), 3);
+    }
+
+    #[test]
+    fn a_numbered_user_trait_reference_reads_the_underscore_value() {
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_float_stack(&mut e);
+        let (tile, _) = updating_tile(&mut e, TYPE_RECT);
+        let other = typed_tile(&mut e, TYPE_RECT);
+        let value = value_with(&mut e, tile, TRAIT_X, 2.75, &[]);
+        let referenced: Ptr<TileValue> = Ptr::new(e.mem.alloc(0x14));
+        e.set(referenced, TileValue::eIndex, 10005);
+        e.set(referenced, TileValue::pParent, other);
+        let reference = action_vtable(&mut e, 1.0, referenced.addr());
+        let action = make_action(&mut e, reference, VA_ADD, 0);
+        e.set(value, TileValue::pActionListA, Ptr::new(action));
+        // The text table's number for the name is -1: look it up.
+        e.register(REACTION_MAP_FIND, |e, a| {
+            assert_eq!((a[0], a[1]), (TRAIT_EXTRA_DATA_MAP, 10005));
+            e.mem.set_i32(a[2], -1);
+            1u32.into_ret()
+        });
+        let found: Ptr<TileValue> = Ptr::new(e.mem.alloc(0x14));
+        e.set(found, TileValue::fValue, 9.0);
+        e.register_double(TILE_GET_UNDERSCORE_VALUE, move |_, a| {
+            assert_eq!((a[0], a[1] as i32, a[2] as i32), (other.addr(), 10005, 3));
+            found.addr().into_ret()
+        });
+        value_calculate_value(&mut e, value, false);
+        assert_eq!(e.get(value, TileValue::fValue), 11.75);
+        // Nothing found: the action's own amount is used.
+        e.register(TILE_GET_UNDERSCORE_VALUE, |_, _| 0u32.into_ret());
+        e.set(value, TileValue::fValue, 2.0);
+        value_calculate_value(&mut e, value, false);
+        assert_eq!(e.get(value, TileValue::fValue), 3.0);
     }
 }
