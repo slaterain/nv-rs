@@ -26,10 +26,12 @@
 //!   constructor, the `std::string` `rfind` / `append` steps, and the
 //!   container code the unit emitted (`NiTPointerMap` / `NiTMapBase` set,
 //!   iterate, hash and destructor chain, `BSSimpleArray` insert, grow and
-//!   sorted find, `BSSimpleList<FadeControl *>` add and remove). The next
-//!   function to translate is `00a0d7f0` (the `NiTPointerMap<int, int>`
+//!   sorted find, `BSSimpleList<FadeControl *>` add and remove). The
+//!   last functions, from `00a0d7f0`, are the `NiTPointerMap<int, int>`
 //!   code and then the map of `Tile::Value *` to `Tile::Reaction *`, up to
-//!   `00a0d990`, the last function of the unit before the library tail).
+//!   `00a0d990`, the last function of the unit before the library tail);
+//! * session 5: `00a0d7f0` to `00a0d990` (5 functions): the unit is
+//!   complete (only the `library` initializer `00fb33f0` remains).
 //!
 //! Conventions of the whole unit:
 //!
@@ -941,6 +943,11 @@ const VTABLE_POINTER_MAP: u32 = 0x0109_4dfc;
 const VTABLE_MAP_BASE: u32 = 0x0109_4e1c;
 const VTABLE_INT_POINTER_MAP: u32 = 0x0109_4e3c;
 const VTABLE_INT_MAP_BASE: u32 = 0x0109_4e5c;
+/// The two levels of the map of `Tile::Value *` to `Tile::Reaction *`
+/// (`NiTPointerMap<Tile::Value *, Tile::Reaction *>`, `01094e7c`) and its
+/// base class (`01094e9c`).
+const VTABLE_REACTION_POINTER_MAP: u32 = 0x0109_4e7c;
+const VTABLE_REACTION_MAP_BASE: u32 = 0x0109_4e9c;
 /// Slots of the hash maps' vtable that the shared map code calls: the hash
 /// of a key `(key)`, the key comparison `(a, b)`, the construction of a
 /// node's key and value `(node, key, value)` and the allocation of a node.
@@ -7439,6 +7446,91 @@ pub fn fn_00a0d7c0(e: &mut Engine, this: Ptr, node: u32) {
     e.call(MAP_FREE_NODE, &args![this.addr() + 0xc, node]);
 }
 
+// Translated from 00a0d7f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned_int>, int, int>::
+/// _scalar_deleting_destructor_` (Xbox PDB): the base destructor
+/// ([`fn_00a0d790`]) and, with bit 0 of `flags`, frees the object.
+pub fn ni_t_map_base_int_int_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00a0d790(e, this);
+    if flags & 1 != 0 {
+        deallocate(e, this.addr());
+    }
+    this
+}
+
+// Translated from 00a0d840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerMap<Tile::Value *, Tile::Reaction *>::
+/// _scalar_deleting_destructor_` (Xbox PDB): empties the map under the
+/// vtable of each of its two levels ([`MAP_REMOVE_ALL`]), frees the bucket
+/// array and, with bit 0 of `flags`, frees the object. The C++ exception
+/// frame is not translated.
+pub fn ni_t_pointer_map_value_reaction_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    let map = this.addr();
+    e.mem.set_u32(map, VTABLE_REACTION_POINTER_MAP);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    e.mem.set_u32(map, VTABLE_REACTION_MAP_BASE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    let buckets = e.mem.u32(map + 8);
+    e.call(FREE_BYTES, &args![buckets]);
+    if flags & 1 != 0 {
+        deallocate(e, map);
+    }
+    this
+}
+
+// Translated from 00a0d8e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the map base class of `NiTPointerMap<Tile::Value *,
+/// Tile::Reaction *>` (the map has no name): the same as [`fn_00a0d5f0`]
+/// with the vtable `01094e9c`.
+pub fn fn_00a0d8e0(e: &mut Engine, this: Ptr, bucket_count: u32) -> Ptr {
+    let map = this.addr();
+    e.mem.set_u32(map, VTABLE_REACTION_MAP_BASE);
+    e.mem.set_u32(map + 4, bucket_count);
+    e.mem.set_u32(map + 0xc, 0);
+    let buckets = e.call(ALLOC_BYTES, &args![e.mem.u32(map + 4) << 2]).u32();
+    e.mem.set_u32(map + 8, buckets);
+    let size = e.mem.u32(map + 4) << 2;
+    let buckets = e.mem.u32(map + 8);
+    e.call(MEMSET, &args![buckets, 0u32, size]);
+    this
+}
+
+// Translated from 00a0d960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the map base class of `NiTPointerMap<Tile::Value *,
+/// Tile::Reaction *>` (the map has no name): sets the base vtable, empties
+/// the map ([`MAP_REMOVE_ALL`]) and frees the bucket array.
+pub fn fn_00a0d960(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), VTABLE_REACTION_MAP_BASE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    let buckets = e.mem.u32(this.addr() + 8);
+    e.call(FREE_BYTES, &args![buckets]);
+}
+
+// Translated from 00a0d990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned_int>, Tile::Value *,
+/// Tile::Reaction *>::_scalar_deleting_destructor_` (Xbox PDB): the base
+/// destructor ([`fn_00a0d960`]) and, with bit 0 of `flags`, frees the
+/// object.
+pub fn ni_t_map_base_value_reaction_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00a0d960(e, this);
+    if flags & 1 != 0 {
+        deallocate(e, this.addr());
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -7710,6 +7802,20 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a0d710, fn_00a0d710(Ptr, u32) -> Ptr),
         entry!(0x00a0d790, fn_00a0d790(Ptr)),
         entry!(0x00a0d7c0, fn_00a0d7c0(Ptr, u32)),
+        entry!(
+            0x00a0d7f0,
+            ni_t_map_base_int_int_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00a0d840,
+            ni_t_pointer_map_value_reaction_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00a0d8e0, fn_00a0d8e0(Ptr, u32) -> Ptr),
+        entry!(0x00a0d960, fn_00a0d960(Ptr)),
+        entry!(
+            0x00a0d990,
+            ni_t_map_base_value_reaction_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
     ]
 }
 
@@ -16106,6 +16212,69 @@ mod tests {
             calls_to(&e, MAP_FREE_NODE),
             vec![vec![map.addr() + 0xc, node]]
         );
+    }
+
+    #[test]
+    fn reaction_map_code_matches_the_int_map_code() {
+        let mut e = batch4_engine();
+        e.call_log = Some(vec![]);
+        let seen = record_remove_all(&mut e);
+        // The `int` map base's deleting destructor.
+        let map = make_map(&mut e, 4, false);
+        assert_eq!(
+            ni_t_map_base_int_int_scalar_deleting_destructor(&mut e, map.cast(), 0),
+            map.cast()
+        );
+        assert_eq!(*seen.borrow(), vec![VTABLE_INT_MAP_BASE]);
+        assert!(calls_to(&e, MEMORY_DEALLOCATE).is_empty());
+        seen.borrow_mut().clear();
+        let map = make_map(&mut e, 4, false);
+        ni_t_map_base_int_int_scalar_deleting_destructor(&mut e, map.cast(), 1);
+        assert_eq!(
+            calls_to(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, map.addr()]]
+        );
+        // The reaction map: both levels, buckets, then the object.
+        seen.borrow_mut().clear();
+        let map = make_map(&mut e, 4, false);
+        let table = e.get(map, NiTPointerMap::m_ppkHashTable);
+        ni_t_pointer_map_value_reaction_scalar_deleting_destructor(&mut e, map.cast(), 1);
+        assert_eq!(
+            *seen.borrow(),
+            vec![VTABLE_REACTION_POINTER_MAP, VTABLE_REACTION_MAP_BASE]
+        );
+        assert_eq!(calls_to(&e, FREE_BYTES).last().unwrap(), &vec![table]);
+        assert_eq!(calls_to(&e, MEMORY_DEALLOCATE).len(), 2);
+        // Without bit 0 the object stays.
+        let map = make_map(&mut e, 4, false);
+        ni_t_pointer_map_value_reaction_scalar_deleting_destructor(&mut e, map.cast(), 0);
+        assert_eq!(calls_to(&e, MEMORY_DEALLOCATE).len(), 2);
+        // The base destructor and its deleting form.
+        seen.borrow_mut().clear();
+        let map = make_map(&mut e, 4, false);
+        fn_00a0d960(&mut e, map.cast());
+        assert_eq!(*seen.borrow(), vec![VTABLE_REACTION_MAP_BASE]);
+        assert_eq!(e.mem.u32(map.addr()), VTABLE_REACTION_MAP_BASE);
+        ni_t_map_base_value_reaction_scalar_deleting_destructor(&mut e, map.cast(), 1);
+        assert_eq!(calls_to(&e, MEMORY_DEALLOCATE).len(), 3);
+        ni_t_map_base_value_reaction_scalar_deleting_destructor(&mut e, map.cast(), 2);
+        assert_eq!(calls_to(&e, MEMORY_DEALLOCATE).len(), 3);
+    }
+
+    #[test]
+    fn reaction_map_constructor_allocates_and_clears_the_buckets() {
+        let mut e = batch4_engine();
+        e.call_log = Some(vec![]);
+        let map = zeroed_block(&mut e, 0x14);
+        e.mem.set_u32(map + 0xc, 99);
+        assert_eq!(fn_00a0d8e0(&mut e, Ptr::new(map), 5), Ptr::new(map));
+        assert_eq!(e.mem.u32(map), VTABLE_REACTION_MAP_BASE);
+        assert_eq!(e.mem.u32(map + 4), 5);
+        assert_eq!(e.mem.u32(map + 0xc), 0);
+        let table = e.mem.u32(map + 8);
+        assert_eq!(e.mem.bytes(table, 20), vec![0; 20]);
+        assert_eq!(calls_to(&e, ALLOC_BYTES), vec![vec![20]]);
+        assert_eq!(calls_to(&e, MEMSET)[0][1..], [0, 20]);
     }
 
     #[test]
