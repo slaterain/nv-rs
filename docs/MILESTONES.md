@@ -69,6 +69,13 @@ now covered by 31 focused tests, including nonempty triangle geometry and
 and 13,312 engine tests. These functions remain outside live gameplay.
 Next action remains interface/render CI and play build publication.
 
+Exterior-cell loader batch collected as `d68664d`: 38 translations and
+43 focused tests; combined formatting, lint and 13,355 engine tests pass.
+Rolling #112 merged as `d854fbe`; #114 holds later batches. Interface/render
+#113 is rebased onto that main and rerunning CI. Phase 2 list-adapter
+preparation is isolated and not yet validated or used by the viewer.
+Next action: merge #113 after both checks and publish play build 40.
+
 Next session: start with [HANDOFF.md](HANDOFF.md). Open tasks:
 [TASKS.md](TASKS.md); contributor rules: [CONTRIBUTING.md](../CONTRIBUTING.md).
 
