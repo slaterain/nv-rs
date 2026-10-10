@@ -15,7 +15,7 @@
 //! array ([`EdgeExtraInfo`]: the portal's `NavMeshInfo` and triangle).
 //!
 //! Translated so far (address order): everything up to and including
-//! `00691000`; the next session continues at `00691020`.
+//! `00691bf0`; the next session continues at `00691c10`.
 //!
 //! The `NavMeshTriangle` and `NavMeshInfo` methods in this unit are unnamed
 //! in the engine map; they are named here by what their bodies do. Methods
@@ -78,6 +78,50 @@ layout! {
         0x06 Triangles: u16,
         /// `TriangleFlags` (Xbox PDB).
         0x0C TriangleFlags: u32,
+    }
+
+    /// `NavMeshGrid` (Xbox PDB), 0x28 bytes: the search grid, embedded in the
+    /// mesh at [`MESH_GRID_OFFSET`]. `GridData` is an array of
+    /// `iGridSize * iGridSize` 16-byte `BSSimpleArray<unsigned short>`, one
+    /// per cell, listing the triangles that touch the cell.
+    pub struct NavMeshGrid: 0x28 {
+        /// `iGridSize` (Xbox PDB): cells per side.
+        0x00 iGridSize: u32,
+        /// `fColumnSectionLen` (Xbox PDB).
+        0x04 fColumnSectionLen: f32,
+        /// `fRowSectionLen` (Xbox PDB).
+        0x08 fRowSectionLen: f32,
+        /// `GridBoundsMin.x` (Xbox PDB).
+        0x0C GridBoundsMin_x: f32,
+        /// `GridBoundsMin.y` (Xbox PDB).
+        0x10 GridBoundsMin_y: f32,
+        /// `GridBoundsMin.z` (Xbox PDB).
+        0x14 GridBoundsMin_z: f32,
+        /// `GridBoundsMax.x` (Xbox PDB).
+        0x18 GridBoundsMax_x: f32,
+        /// `GridBoundsMax.y` (Xbox PDB).
+        0x1C GridBoundsMax_y: f32,
+        /// `GridBoundsMax.z` (Xbox PDB).
+        0x20 GridBoundsMax_z: f32,
+        /// `GridData` (Xbox PDB): the cell array.
+        0x24 GridData: Ptr,
+    }
+
+    /// `NavMeshStaticAvoidNode` (Xbox PDB), 0x28 bytes (a `PathingAvoidNode`
+    /// followed by the triangle).
+    pub struct NavMeshStaticAvoidNode: 0x28 {
+        /// `Point1` (Xbox PDB): first of three floats.
+        0x00 Point1_x: f32,
+        /// `Point2` (Xbox PDB): first of three floats.
+        0x0C Point2_x: f32,
+        /// `fRadius` (Xbox PDB).
+        0x18 fRadius: f32,
+        /// `fCost` (Xbox PDB).
+        0x1C fCost: f32,
+        /// `eType` (Xbox PDB): `PathingAvoidNode::AVOID_NODE_TYPE`.
+        0x20 eType: u32,
+        /// `usTriangle` (Xbox PDB).
+        0x24 usTriangle: u16,
     }
 
     /// `EdgeExtraInfo` (Xbox PDB), 0x0C bytes.
@@ -276,6 +320,78 @@ const GET_NAV_MESH_INFO_MAP: u32 = 0x0045_af00;
 const DELETE_NAV_MESH_INFO: u32 = 0x006b_6a00;
 /// Looks a form up by its id (cdecl).
 const LOOKUP_FORM: u32 = 0x0048_39c0;
+
+// Functions of other units and not yet translated functions of this one,
+// called by the second batch (`00691020` to `00691bf0`).
+/// `_ftol2_sse`: truncates the `f64` it is given (the x87 value).
+const FLOAT_TO_INT: u32 = 0x00ec_62c0;
+/// Cdecl, one `float`; returns a `float` in ST0 (`floor`, through `00ec6940`).
+const FLOAT_FLOOR: u32 = 0x0040_6ce0;
+/// Cdecl `(int* value, int low, int high)`: clamps `*value` to the range.
+const CLAMP_INT: u32 = 0x0064_7ba0;
+/// Cdecl, two words: the larger / the smaller of two unsigned values.
+const UNSIGNED_MAX: u32 = 0x0040_3940;
+const UNSIGNED_MIN: u32 = 0x0042_f5a0;
+/// `(array, unsigned short value)` membership test of one grid cell.
+const GRID_CELL_CONTAINS: u32 = 0x0069_da10;
+/// Appends the 4-byte value at its argument to a `BSSimpleArray` of words.
+const ARRAY_PUSH_WORD: u32 = 0x007c_b2e0;
+/// Appends a copy of a 40-byte avoid node to the static avoid node array.
+const AVOID_NODE_ADD: u32 = 0x0069_2000;
+/// Appends a copy of a 12-byte `EdgeExtraInfo` to its array.
+const EXTRA_INFO_ADD: u32 = 0x0069_1c10;
+/// Makes room for one more `unsigned short` element and returns its index.
+const U16_ARRAY_GROW: u32 = 0x0069_2200;
+/// Constructs `count` `unsigned short` elements at an address of the array.
+const U16_ARRAY_CONSTRUCT_ELEMENTS: u32 = 0x005e_f650;
+/// Makes room for one more 12-byte (vertex) element and returns its index,
+/// and constructs elements there.
+const VERTEX_ARRAY_GROW: u32 = 0x0097_8bc0;
+const VERTEX_ARRAY_CONSTRUCT_ELEMENTS: u32 = 0x0069_b9d0;
+/// The same for the 16-byte triangle array.
+const TRIANGLE_ARRAY_GROW: u32 = 0x006f_31f0;
+const TRIANGLE_ARRAY_CONSTRUCT_ELEMENTS: u32 = 0x0064_4490;
+/// Initialisers of the member arrays: `(array, 0, 0)`.
+const U16_ARRAY_INITIALISE: u32 = 0x0069_2290;
+const VERTEX_ARRAY_INITIALISE: u32 = 0x0069_ba70;
+const TRIANGLE_ARRAY_INITIALISE: u32 = 0x0064_4400;
+const EXTRA_INFO_ARRAY_INITIALISE: u32 = 0x0069_23f0;
+/// Constructors of the base of the two `NiTMap` instances (`NiPointer<
+/// ObstacleData>` and `NavMeshPOVData` values), and their destructor bodies.
+const POV_MAP_BASE_CONSTRUCTOR: u32 = 0x0069_1de0;
+const OBSTACLE_MAP_DESTRUCTOR_BODY: u32 = 0x0069_19a0;
+const POV_MAP_DESTRUCTOR_BODY: u32 = 0x0069_1ea0;
+/// Constructor of a `NiPoint3` (does nothing, returns `this`).
+const POINT_CONSTRUCTOR: u32 = 0x0068_15c0;
+/// `operator delete` (cdecl, one word).
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// Cdecl `(size)`: allocates `size` bytes.
+const ALLOCATE: u32 = 0x00aa_1070;
+/// Cdecl `(block, size)`: frees a block of an array.
+const DEALLOCATE_SIZED: u32 = 0x0042_f5d0;
+/// Cdecl `(destination, value, size)`: `memset`.
+const MEMORY_SET: u32 = 0x0040_3d30;
+/// `NiPointer::operator=(NiPointer*)` and the `NiPointer` destructor.
+const POINTER_ASSIGN_FROM: u32 = 0x006e_5cc0;
+const POINTER_RELEASE: u32 = 0x0045_cec0;
+/// Returns the `usTriangle` field (+0x24) of a static avoid node.
+const AVOID_NODE_TRIANGLE: u32 = 0x006d_f760;
+/// `iSize == 0` of a `BSSimpleArray`.
+const ARRAY_IS_EMPTY: u32 = 0x0076_b610;
+
+// Vtables the constructors of this batch store.
+const OBSTACLE_MAP_VTABLE: u32 = 0x0106_aba4;
+const POV_MAP_VTABLE: u32 = 0x0106_abc4;
+const U16_ARRAY_VTABLE: u32 = 0x0106_abe4;
+const MAP_BASE_VTABLE: u32 = 0x0106_abf8;
+const VERTEX_ARRAY_VTABLE: u32 = 0x0106_ac18;
+const TRIANGLE_ARRAY_VTABLE: u32 = 0x0106_ac2c;
+const EXTRA_INFO_ARRAY_VTABLE: u32 = 0x0106_ac40;
+
+/// Triangle flag bit `006910a0` tests before listing a triangle as cover.
+const TRIANGLE_FLAG_0X20: u32 = 0x20;
+/// Triangle flag bit set on the triangle of a static avoid node.
+const TRIANGLE_FLAG_HAS_AVOID_NODE: u32 = 0x8000_0000;
 
 // Format strings of the problems `CheckNavMesh` reports, in the order the
 // function checks them. All start with `"PATHFINDING: Navmesh %08x Cell %s,
@@ -1578,6 +1694,575 @@ pub fn fn_00691000(e: &mut Engine, this: Ptr<NavMesh>, triangle: Ptr) -> u32 {
     e.call(ARRAY_ADD_16, &args![triangles, triangle]).u32()
 }
 
+// Translated from 00691020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Appends the `EdgeExtraInfo` at `info` to the mesh's `ExtraEdgeInfo`
+/// array (`00691c10`); returns what that returns (the new index).
+pub fn fn_00691020(e: &mut Engine, this: Ptr<NavMesh>, info: Ptr) -> u32 {
+    let infos = this.at(NavMesh::ExtraEdgeInfo);
+    e.call(EXTRA_INFO_ADD, &args![infos, info]).u32()
+}
+
+// Translated from 00691040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unpacks the six bits that the triangle flags hold for edge `edge` (from
+/// bit `16 + 6 * edge` upward): the low four bits go to the `u16` at `value`,
+/// bit 4 to the byte at `flag_a` and bit 5 to the byte at `flag_b` (both 0 or
+/// 1). The shift count wraps at 32 like the processor's.
+pub fn fn_00691040(
+    e: &mut Engine,
+    this: Ptr<NavMeshTriangle>,
+    edge: u16,
+    value: Ptr,
+    flag_a: Ptr,
+    flag_b: Ptr,
+) {
+    let flags = e.get(this, NavMeshTriangle::TriangleFlags);
+    let shift = (edge as u32).wrapping_mul(6).wrapping_add(0x10);
+    let bits = flags >> (shift & 31);
+    e.mem.set_u16(value.addr(), (bits & 0xf) as u16);
+    e.mem.set_u8(flag_a.addr(), (bits & 0x10 != 0) as u8);
+    e.mem.set_u8(flag_b.addr(), (bits & 0x20 != 0) as u8);
+}
+
+// Translated from 006910a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Rebuilds the cover array: clears it (keeping the buffer), then appends the
+/// index of every triangle that does not have flag `0x20` set and for which
+/// `00690770` (the cover flags test) holds.
+pub fn fn_006910a0(e: &mut Engine, this: Ptr<NavMesh>) {
+    e.call(ARRAY_CLEAR, &args![this.at(NavMesh::CoverArray), 0u32]);
+    let count = array_size(e, this.at(NavMesh::Triangles));
+    for index in 0..count {
+        let tri = mesh_triangle(e, this, index as u16);
+        if fn_00691140(e, tri, TRIANGLE_FLAG_0X20) {
+            continue;
+        }
+        let tri = mesh_triangle(e, this, index as u16);
+        if fn_00690770(e, tri) {
+            e.with_stack(4, |e, slot| {
+                e.mem.set_u16(slot.addr(), index as u16);
+                fn_00691820(e, this.at(NavMesh::CoverArray), slot);
+            });
+        }
+    }
+}
+
+// Translated from 00691140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when any bit of `mask` is set in the triangle's flags.
+pub fn fn_00691140(e: &mut Engine, this: Ptr<NavMeshTriangle>, mask: u32) -> bool {
+    e.get(this, NavMeshTriangle::TriangleFlags) & mask != 0
+}
+
+// Translated from 00691160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NavMeshTriangle::NavMeshTriangle`, by its body: sets the three vertex
+/// indexes and the three neighbour slots to `0xFFFF` and the flags to 0.
+/// Returns `this`.
+pub fn fn_00691160(e: &mut Engine, this: Ptr<NavMeshTriangle>) -> Ptr<NavMeshTriangle> {
+    for slot in 0..6 {
+        e.mem.set_u16(this.addr() + 2 * slot, NO_NEIGHBOUR);
+    }
+    e.set(this, NavMeshTriangle::TriangleFlags, 0);
+    this
+}
+
+// Translated from 006911c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Number of cells of the mesh's search grid: its side length squared (the
+/// side is read through `00559450`, the first word of the grid).
+pub fn fn_006911c0(e: &mut Engine, this: Ptr<NavMesh>) -> u32 {
+    let grid = this.byte_add(MESH_GRID_OFFSET);
+    let rows = e.call(POINTER_GET, &args![grid]).u32();
+    let columns = e.call(POINTER_GET, &args![grid]).u32();
+    columns.wrapping_mul(rows)
+}
+
+// Translated from 006911f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards `index` to `00691210` on the mesh's search grid; returns its
+/// result, the address of the cell.
+pub fn fn_006911f0(e: &mut Engine, this: Ptr<NavMesh>, index: u32) -> Ptr {
+    fn_00691210(e, this.byte_add(MESH_GRID_OFFSET).cast(), index)
+}
+
+// Translated from 00691210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Address of cell `index` (a 16-byte array) of the grid, null when `index`
+/// is not below `iGridSize * iGridSize`.
+pub fn fn_00691210(e: &mut Engine, this: Ptr<NavMeshGrid>, index: u32) -> Ptr {
+    let size = e.get(this, NavMeshGrid::iGridSize);
+    if index >= size.wrapping_mul(size) {
+        return Ptr::NULL;
+    }
+    let data = e.get(this, NavMeshGrid::GridData);
+    Ptr::new(index.wrapping_shl(4).wrapping_add(data.addr()))
+}
+
+// Translated from 00691240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards `point` to `00691260` on the mesh's search grid; returns its
+/// result, the cell number.
+pub fn fn_00691240(e: &mut Engine, this: Ptr<NavMesh>, point: Ptr) -> u32 {
+    fn_00691260(e, this.byte_add(MESH_GRID_OFFSET).cast(), point)
+}
+
+// Translated from 00691260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cell number (`row * iGridSize + column`) of the grid cell holding the
+/// point at `point` (two floats are read).
+pub fn fn_00691260(e: &mut Engine, this: Ptr<NavMeshGrid>, point: Ptr) -> u32 {
+    let size = e.get(this, NavMeshGrid::iGridSize);
+    e.with_stack(8, |e, cell| {
+        fn_006912a0(e, this, point, cell, cell.byte_add(4));
+        let row = e.mem.u32(cell.addr());
+        let column = e.mem.u32(cell.addr() + 4);
+        row.wrapping_mul(size).wrapping_add(column)
+    })
+}
+
+/// `floor`, truncation and clamping to `0..size - 1` of one grid coordinate
+/// (the sequence `006912a0` runs for its row and its column).
+fn grid_coordinate(e: &mut Engine, position: f32, size: u32) -> u32 {
+    let rounded = e.call(FLOAT_FLOOR, &args![position]).f64();
+    let cell = e.call(FLOAT_TO_INT, &args![rounded]).i32();
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), cell as u32);
+        e.call(CLAMP_INT, &args![slot, 0i32, size.wrapping_sub(1)]);
+        e.mem.u32(slot.addr())
+    })
+}
+
+// Translated from 006912a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Grid cell of the point at `point` (x, y floats): the offset from the
+/// grid's minimum corner divided by the section lengths, floored, truncated
+/// and clamped to `0..iGridSize - 1`. The column (from x) is stored at
+/// `out_column`, the row (from y) at `out_row`.
+pub fn fn_006912a0(
+    e: &mut Engine,
+    this: Ptr<NavMeshGrid>,
+    point: Ptr,
+    out_row: Ptr,
+    out_column: Ptr,
+) {
+    let x = e.mem.f32(point.addr()) as f64;
+    let y = e.mem.f32(point.addr() + 4) as f64;
+    let min_x = e.get(this, NavMeshGrid::GridBoundsMin_x) as f64;
+    let min_y = e.get(this, NavMeshGrid::GridBoundsMin_y) as f64;
+    let offset_x = (x - min_x) as f32;
+    let offset_y = (y - min_y) as f32;
+    let column_length = e.get(this, NavMeshGrid::fColumnSectionLen) as f64;
+    let row_length = e.get(this, NavMeshGrid::fRowSectionLen) as f64;
+    let column_position = (offset_x as f64 / column_length) as f32;
+    let row_position = (offset_y as f64 / row_length) as f32;
+    let size = e.get(this, NavMeshGrid::iGridSize);
+    let column = grid_coordinate(e, column_position, size);
+    e.mem.set_u32(out_column.addr(), column);
+    let row = grid_coordinate(e, row_position, size);
+    e.mem.set_u32(out_row.addr(), row);
+}
+
+// Translated from 00691350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Lists the grid cells that triangle `triangle` can touch: clears the word
+/// array `out`, finds the smallest and largest row and column of the three
+/// vertices (`006912a0`), and for every cell in that rectangle whose list
+/// contains the triangle (`006914e0`) appends the cell number. Returns the
+/// number of cells found.
+pub fn fn_00691350(
+    e: &mut Engine,
+    this: Ptr<NavMesh>,
+    triangle: u16,
+    out: Ptr<BSSimpleArray>,
+) -> u32 {
+    let tri = triangle_element(e, this, triangle as u32);
+    e.call(ARRAY_CLEAR, &args![out, 0u32]);
+    let grid: Ptr<NavMeshGrid> = this.byte_add(MESH_GRID_OFFSET).cast();
+    let (mut max_row, mut min_row) = (0u32, u32::MAX);
+    let (mut max_column, mut min_column) = (0u32, u32::MAX);
+    for corner in 0..3i32 {
+        let vertex_index = triangle_vertex(e, tri, corner);
+        let vertex = fn_0068f0a0(e, this, vertex_index);
+        let (row, column) = e.with_stack(8, |e, cell| {
+            fn_006912a0(e, grid, vertex, cell, cell.byte_add(4));
+            (e.mem.u32(cell.addr()), e.mem.u32(cell.addr() + 4))
+        });
+        max_row = e.call(UNSIGNED_MAX, &args![max_row, row]).u32();
+        min_row = e.call(UNSIGNED_MIN, &args![min_row, row]).u32();
+        max_column = e.call(UNSIGNED_MAX, &args![max_column, column]).u32();
+        min_column = e.call(UNSIGNED_MIN, &args![min_column, column]).u32();
+    }
+    let mut row = min_row;
+    while row < max_row.wrapping_add(1) {
+        let mut column = min_column;
+        while column < max_column.wrapping_add(1) {
+            if fn_006914e0(e, grid, triangle, column, row) {
+                let size = e.call(POINTER_GET, &args![grid]).u32();
+                let cell_number = size.wrapping_mul(row).wrapping_add(column);
+                e.with_stack(4, |e, slot| {
+                    e.mem.set_u32(slot.addr(), cell_number);
+                    e.call(ARRAY_PUSH_WORD, &args![out, slot]);
+                });
+            }
+            column = column.wrapping_add(1);
+        }
+        row = row.wrapping_add(1);
+    }
+    array_size(e, out)
+}
+
+// Translated from 006914e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the list of cell `(column, row)` of the grid (`row * iGridSize +
+/// column`) contains triangle `triangle` (`0069da10`).
+pub fn fn_006914e0(
+    e: &mut Engine,
+    this: Ptr<NavMeshGrid>,
+    triangle: u16,
+    column: u32,
+    row: u32,
+) -> bool {
+    let size = e.get(this, NavMeshGrid::iGridSize);
+    let cell = row.wrapping_mul(size).wrapping_add(column);
+    e.call(GRID_CELL_CONTAINS, &args![this, triangle, cell])
+        .bool()
+}
+
+// Translated from 00691510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds a static avoid node: builds a `NavMeshStaticAvoidNode` for triangle
+/// `triangle` from the point at `point`, `radius` and `cost`
+/// (`00691590`), sets flag `0x80000000` on the triangle (`00691570`) and
+/// appends the node to the mesh's static avoid nodes (`00692000`); returns
+/// what that returns (the new index).
+pub fn fn_00691510(
+    e: &mut Engine,
+    this: Ptr<NavMesh>,
+    point: Ptr,
+    triangle: u16,
+    radius: f32,
+    cost: f32,
+) -> u32 {
+    e.with_stack(0x28, |e, node| {
+        fn_00691590(e, node.cast(), point, triangle, radius, cost);
+        let tri = triangle_element(e, this, triangle as u32);
+        fn_00691570(e, tri, TRIANGLE_FLAG_HAS_AVOID_NODE);
+        let nodes = this.at(NavMesh::StaticAvoidNodes);
+        e.call(AVOID_NODE_ADD, &args![nodes, node]).u32()
+    })
+}
+
+// Translated from 00691570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the bits of `mask` in the triangle's flags.
+pub fn fn_00691570(e: &mut Engine, this: Ptr<NavMeshTriangle>, mask: u32) {
+    let flags = e.get(this, NavMeshTriangle::TriangleFlags);
+    e.set(this, NavMeshTriangle::TriangleFlags, flags | mask);
+}
+
+// Translated from 00691590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NavMeshStaticAvoidNode::NavMeshStaticAvoidNode`, by its body: builds the
+/// base (`006915d0`) from `point`, `radius` and `cost` and stores the
+/// triangle index. Returns `this`.
+pub fn fn_00691590(
+    e: &mut Engine,
+    this: Ptr<NavMeshStaticAvoidNode>,
+    point: Ptr,
+    triangle: u16,
+    radius: f32,
+    cost: f32,
+) -> Ptr<NavMeshStaticAvoidNode> {
+    fn_006915d0(e, this, point, radius, cost);
+    e.set(this, NavMeshStaticAvoidNode::usTriangle, triangle);
+    this
+}
+
+// Translated from 006915d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PathingAvoidNode::PathingAvoidNode`, by its body: copies the three floats
+/// at `point` into `Point1`, leaves `Point2` to its (empty) constructor
+/// `006815c0`, and stores `radius`, `cost` and type 0. Returns `this`.
+pub fn fn_006915d0(
+    e: &mut Engine,
+    this: Ptr<NavMeshStaticAvoidNode>,
+    point: Ptr,
+    radius: f32,
+    cost: f32,
+) -> Ptr<NavMeshStaticAvoidNode> {
+    for word in 0..3 {
+        let value = e.mem.u32(point.addr() + 4 * word);
+        e.mem.set_u32(this.addr() + 4 * word, value);
+    }
+    e.call(POINT_CONSTRUCTOR, &args![this.byte_add(0xc)]);
+    e.set(this, NavMeshStaticAvoidNode::fRadius, radius);
+    e.set(this, NavMeshStaticAvoidNode::fCost, cost);
+    e.set(this, NavMeshStaticAvoidNode::eType, 0);
+    this
+}
+
+// Translated from 00691620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Number of static avoid nodes of the mesh.
+pub fn fn_00691620(e: &mut Engine, this: Ptr<NavMesh>) -> u32 {
+    array_size(e, this.at(NavMesh::StaticAvoidNodes))
+}
+
+// Translated from 00691640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards `index` to `00691750` on the mesh's static avoid nodes; returns
+/// the address of that node.
+pub fn fn_00691640(e: &mut Engine, this: Ptr<NavMesh>, index: u32) -> Ptr {
+    fn_00691750(e, this.at(NavMesh::StaticAvoidNodes), index)
+}
+
+// Translated from 00691660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NavMesh::GetStaticAvoidNodesForTri` (Xbox PDB): appends the address of
+/// every static avoid node whose triangle is `triangle` to the word array
+/// `out`; true when `out` is not empty afterwards.
+pub fn nav_mesh_get_static_avoid_nodes_for_tri(
+    e: &mut Engine,
+    this: Ptr<NavMesh>,
+    triangle: u16,
+    out: Ptr<BSSimpleArray>,
+) -> bool {
+    let nodes = this.at(NavMesh::StaticAvoidNodes);
+    let count = array_size(e, nodes);
+    for index in 0..count {
+        let node = fn_00691750(e, nodes, index);
+        if e.call(AVOID_NODE_TRIANGLE, &args![node]).u16() == triangle {
+            let node = fn_00691750(e, nodes, index);
+            e.with_stack(4, |e, slot| {
+                e.mem.set_u32(slot.addr(), node.addr());
+                e.call(ARRAY_PUSH_WORD, &args![out, slot]);
+            });
+        }
+    }
+    !e.call(ARRAY_IS_EMPTY, &args![out]).bool()
+}
+
+// Translated from 006916f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the `NiTMap<unsigned short, NiPointer<ObstacleData>>`
+/// (its scalar deleting destructor is `00691770`): the base constructor
+/// `006918c0` with `buckets`, then the map's vtable. Returns `this`.
+pub fn fn_006916f0(e: &mut Engine, this: Ptr<NiTPointerMap>, buckets: u32) -> Ptr<NiTPointerMap> {
+    fn_006918c0(e, this, buckets);
+    e.mem.set_u32(this.addr(), OBSTACLE_MAP_VTABLE);
+    this
+}
+
+// Translated from 00691720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the `NiTMap<unsigned short, NavMeshPOVData>` (its scalar
+/// deleting destructor is `006917a0`): the base constructor `00691de0` with
+/// `buckets`, then the map's vtable. Returns `this`.
+pub fn fn_00691720(e: &mut Engine, this: Ptr<NiTPointerMap>, buckets: u32) -> Ptr<NiTPointerMap> {
+    e.call(POV_MAP_BASE_CONSTRUCTOR, &args![this, buckets]);
+    e.mem.set_u32(this.addr(), POV_MAP_VTABLE);
+    this
+}
+
+// Translated from 00691750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Address of element `index` of a `BSSimpleArray` of 40-byte elements (the
+/// static avoid nodes): `pBuffer + index * 0x28`.
+pub fn fn_00691750(e: &mut Engine, this: Ptr<BSSimpleArray>, index: u32) -> Ptr {
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    Ptr::new(index.wrapping_mul(0x28).wrapping_add(buffer))
+}
+
+// Translated from 00691770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<unsigned short, NiPointer<ObstacleData>>::scalar deleting
+/// destructor` (Xbox PDB): runs the destructor body (`006919a0`) and, when bit
+/// 0 of `flags` is set, frees the object. Returns `this`.
+pub fn ni_t_map_obstacle_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTPointerMap>,
+    flags: u32,
+) -> Ptr<NiTPointerMap> {
+    e.call(OBSTACLE_MAP_DESTRUCTOR_BODY, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006917a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<unsigned short, NavMeshPOVData>::scalar deleting destructor`
+/// (Xbox PDB): runs the destructor body (`00691ea0`) and, when bit 0 of
+/// `flags` is set, frees the object. Returns `this`.
+pub fn ni_t_map_pov_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTPointerMap>,
+    flags: u32,
+) -> Ptr<NiTPointerMap> {
+    e.call(POV_MAP_DESTRUCTOR_BODY, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006917d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of a `BSSimpleArray<unsigned short>`: stores the vtable and
+/// initialises the array with `(0, 0)` (`00692290`). Returns `this`.
+pub fn fn_006917d0(e: &mut Engine, this: Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray> {
+    e.mem.set_u32(this.addr(), U16_ARRAY_VTABLE);
+    e.call(U16_ARRAY_INITIALISE, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 00691800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of a `BSSimpleArray<unsigned short>`: stores the vtable and
+/// clears the array, freeing its buffer.
+pub fn fn_00691800(e: &mut Engine, this: Ptr<BSSimpleArray>) {
+    e.mem.set_u32(this.addr(), U16_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 00691820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Appends the `unsigned short` at `value` to a `BSSimpleArray<unsigned
+/// short>`: makes room (`00692200`), constructs the element (`005ef650`) and
+/// stores the value. Returns the new element's index.
+pub fn fn_00691820(e: &mut Engine, this: Ptr<BSSimpleArray>, value: Ptr) -> u32 {
+    let index = e.call(U16_ARRAY_GROW, &args![this]).u32();
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    let element = buffer.wrapping_add(index.wrapping_mul(2));
+    e.call(U16_ARRAY_CONSTRUCT_ELEMENTS, &args![this, element, 1u32]);
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    let stored = e.mem.u16(value.addr());
+    e.mem
+        .set_u16(buffer.wrapping_add(index.wrapping_mul(2)), stored);
+    index
+}
+
+// Translated from 00691870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Allocates storage for `count` `unsigned short` elements (`operator new`
+/// of `count * 2` bytes). `this` is not used.
+pub fn fn_00691870(e: &mut Engine, _this: Ptr<BSSimpleArray>, count: u32) -> Ptr {
+    e.call(OPERATOR_NEW, &args![count.wrapping_shl(1)]).ptr()
+}
+
+// Translated from 006918a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Frees the storage of `count` `unsigned short` elements at `block` (the
+/// sized deallocation `0042f5d0` with `count * 2`). `this` is not used.
+pub fn fn_006918a0(e: &mut Engine, _this: Ptr<BSSimpleArray>, block: Ptr, count: u32) {
+    e.call(DEALLOCATE_SIZED, &args![block, count.wrapping_shl(1)]);
+}
+
+// Translated from 006918c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Base constructor of the `NiTMap` instances: stores the base vtable and the
+/// bucket count, sets the item count to 0, allocates `buckets * 4` bytes for
+/// the bucket table (`00aa1070`) and zeroes them. Returns `this`.
+pub fn fn_006918c0(e: &mut Engine, this: Ptr<NiTPointerMap>, buckets: u32) -> Ptr<NiTPointerMap> {
+    e.mem.set_u32(this.addr(), MAP_BASE_VTABLE);
+    e.set(this, NiTPointerMap::m_uiHashSize, buckets);
+    e.set(this, NiTPointerMap::m_uiCount, 0);
+    let size = buckets.wrapping_shl(2);
+    let table = e.call(ALLOCATE, &args![size]).u32();
+    e.set(this, NiTPointerMap::m_ppkHashTable, table);
+    let size = buckets.wrapping_shl(2);
+    e.call(MEMORY_SET, &args![table, 0u32, size]);
+    this
+}
+
+// Translated from 00691930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<unsigned short, NiPointer<ObstacleData>>>,
+/// unsigned short, NiPointer<ObstacleData>>::SetValue` (Xbox PDB): stores
+/// `key` in the item and assigns `value` (an `NiPointer` passed by value) to
+/// the item's value (`006e5cc0`), then destroys the passed `NiPointer`
+/// (`0045cec0`). `this` is not used. Left out: the exception-unwinding frame.
+pub fn ni_t_map_base_obstacle_data_set_value(
+    e: &mut Engine,
+    _this: Ptr<NiTPointerMap>,
+    item: Ptr,
+    key: u16,
+    value: Ptr,
+) {
+    e.mem.set_u16(item.addr() + 4, key);
+    e.with_stack(4, |e, argument| {
+        e.mem.set_u32(argument.addr(), value.addr());
+        e.call(POINTER_ASSIGN_FROM, &args![item.byte_add(8), argument]);
+        e.call(POINTER_RELEASE, &args![argument]);
+    });
+}
+
+// Translated from 00691a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the vertex array (`BSSimpleArray<NavMeshVertex>`): stores
+/// the vtable and initialises the array with `(0, 0)` (`0069ba70`). Returns
+/// `this`.
+pub fn fn_00691a60(e: &mut Engine, this: Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray> {
+    e.mem.set_u32(this.addr(), VERTEX_ARRAY_VTABLE);
+    e.call(VERTEX_ARRAY_INITIALISE, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 00691a90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the vertex array: stores the vtable and clears the array,
+/// freeing its buffer.
+pub fn fn_00691a90(e: &mut Engine, this: Ptr<BSSimpleArray>) {
+    e.mem.set_u32(this.addr(), VERTEX_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 00691ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Appends a copy of the 12-byte element at `value` to a `BSSimpleArray` of
+/// 12-byte elements (the vertices): makes room (`00978bc0`), constructs the
+/// element (`0069b9d0`) and copies the three words. Returns the new
+/// element's index.
+pub fn fn_00691ab0(e: &mut Engine, this: Ptr<BSSimpleArray>, value: Ptr) -> u32 {
+    let index = e.call(VERTEX_ARRAY_GROW, &args![this]).u32();
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    let element = index.wrapping_mul(12).wrapping_add(buffer);
+    e.call(VERTEX_ARRAY_CONSTRUCT_ELEMENTS, &args![this, element, 1u32]);
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    let element = index.wrapping_mul(12).wrapping_add(buffer);
+    for word in 0..3 {
+        let copied = e.mem.u32(value.addr() + 4 * word);
+        e.mem.set_u32(element + 4 * word, copied);
+    }
+    index
+}
+
+// Translated from 00691b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the triangle array (`BSSimpleArray<NavMeshTriangle>`):
+/// stores the vtable and initialises the array with `(0, 0)` (`00644400`).
+/// Returns `this`.
+pub fn fn_00691b10(e: &mut Engine, this: Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray> {
+    e.mem.set_u32(this.addr(), TRIANGLE_ARRAY_VTABLE);
+    e.call(TRIANGLE_ARRAY_INITIALISE, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 00691b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the triangle array: stores the vtable and clears the array,
+/// freeing its buffer.
+pub fn fn_00691b40(e: &mut Engine, this: Ptr<BSSimpleArray>) {
+    e.mem.set_u32(this.addr(), TRIANGLE_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 00691b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Appends a copy of the 16-byte element at `value` to a `BSSimpleArray` of
+/// 16-byte elements (the triangles): makes room (`006f31f0`), constructs the
+/// element (`00644490`) and copies the four words. Returns the new element's
+/// index.
+pub fn fn_00691b60(e: &mut Engine, this: Ptr<BSSimpleArray>, value: Ptr) -> u32 {
+    let index = e.call(TRIANGLE_ARRAY_GROW, &args![this]).u32();
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    let element = index.wrapping_shl(4).wrapping_add(buffer);
+    e.call(
+        TRIANGLE_ARRAY_CONSTRUCT_ELEMENTS,
+        &args![this, element, 1u32],
+    );
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    let element = index.wrapping_shl(4).wrapping_add(buffer);
+    for word in 0..4 {
+        let copied = e.mem.u32(value.addr() + 4 * word);
+        e.mem.set_u32(element + 4 * word, copied);
+    }
+    index
+}
+
+// Translated from 00691bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the extra edge info array (`BSSimpleArray<EdgeExtraInfo>`):
+/// stores the vtable and initialises the array with `(0, 0)` (`006923f0`).
+/// Returns `this`.
+pub fn fn_00691bc0(e: &mut Engine, this: Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray> {
+    e.mem.set_u32(this.addr(), EXTRA_INFO_ARRAY_VTABLE);
+    e.call(EXTRA_INFO_ARRAY_INITIALISE, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 00691bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the extra edge info array: stores the vtable and clears the
+/// array, freeing its buffer.
+pub fn fn_00691bf0(e: &mut Engine, this: Ptr<BSSimpleArray>) {
+    e.mem.set_u32(this.addr(), EXTRA_INFO_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1651,6 +2336,112 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00690fe0, fn_00690fe0(Ptr<NavMesh>, Ptr) -> u32),
         entry!(0x00691000, fn_00691000(Ptr<NavMesh>, Ptr) -> u32),
+        entry!(0x00691020, fn_00691020(Ptr<NavMesh>, Ptr) -> u32),
+        entry!(
+            0x00691040,
+            fn_00691040(Ptr<NavMeshTriangle>, u16, Ptr, Ptr, Ptr)
+        ),
+        entry!(0x006910a0, fn_006910a0(Ptr<NavMesh>)),
+        entry!(0x00691140, fn_00691140(Ptr<NavMeshTriangle>, u32) -> bool),
+        entry!(
+            0x00691160,
+            fn_00691160(Ptr<NavMeshTriangle>) -> Ptr<NavMeshTriangle>
+        ),
+        entry!(0x006911c0, fn_006911c0(Ptr<NavMesh>) -> u32),
+        entry!(0x006911f0, fn_006911f0(Ptr<NavMesh>, u32) -> Ptr),
+        entry!(0x00691210, fn_00691210(Ptr<NavMeshGrid>, u32) -> Ptr),
+        entry!(0x00691240, fn_00691240(Ptr<NavMesh>, Ptr) -> u32),
+        entry!(0x00691260, fn_00691260(Ptr<NavMeshGrid>, Ptr) -> u32),
+        entry!(0x006912a0, fn_006912a0(Ptr<NavMeshGrid>, Ptr, Ptr, Ptr)),
+        entry!(
+            0x00691350,
+            fn_00691350(Ptr<NavMesh>, u16, Ptr<BSSimpleArray>) -> u32
+        ),
+        entry!(
+            0x006914e0,
+            fn_006914e0(Ptr<NavMeshGrid>, u16, u32, u32) -> bool
+        ),
+        entry!(
+            0x00691510,
+            fn_00691510(Ptr<NavMesh>, Ptr, u16, f32, f32) -> u32
+        ),
+        entry!(0x00691570, fn_00691570(Ptr<NavMeshTriangle>, u32)),
+        entry!(
+            0x00691590,
+            fn_00691590(
+                Ptr<NavMeshStaticAvoidNode>,
+                Ptr,
+                u16,
+                f32,
+                f32,
+            ) -> Ptr<NavMeshStaticAvoidNode>
+        ),
+        entry!(
+            0x006915d0,
+            fn_006915d0(Ptr<NavMeshStaticAvoidNode>, Ptr, f32, f32) -> Ptr<NavMeshStaticAvoidNode>
+        ),
+        entry!(0x00691620, fn_00691620(Ptr<NavMesh>) -> u32),
+        entry!(0x00691640, fn_00691640(Ptr<NavMesh>, u32) -> Ptr),
+        entry!(
+            0x00691660,
+            nav_mesh_get_static_avoid_nodes_for_tri(Ptr<NavMesh>, u16, Ptr<BSSimpleArray>) -> bool
+        ),
+        entry!(
+            0x006916f0,
+            fn_006916f0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00691720,
+            fn_00691720(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(0x00691750, fn_00691750(Ptr<BSSimpleArray>, u32) -> Ptr),
+        entry!(
+            0x00691770,
+            ni_t_map_obstacle_data_scalar_deleting_destructor(
+                Ptr<NiTPointerMap>,
+                u32,
+            ) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x006917a0,
+            ni_t_map_pov_data_scalar_deleting_destructor(
+                Ptr<NiTPointerMap>,
+                u32,
+            ) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x006917d0,
+            fn_006917d0(Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray>
+        ),
+        entry!(0x00691800, fn_00691800(Ptr<BSSimpleArray>)),
+        entry!(0x00691820, fn_00691820(Ptr<BSSimpleArray>, Ptr) -> u32),
+        entry!(0x00691870, fn_00691870(Ptr<BSSimpleArray>, u32) -> Ptr),
+        entry!(0x006918a0, fn_006918a0(Ptr<BSSimpleArray>, Ptr, u32)),
+        entry!(
+            0x006918c0,
+            fn_006918c0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00691930,
+            ni_t_map_base_obstacle_data_set_value(Ptr<NiTPointerMap>, Ptr, u16, Ptr)
+        ),
+        entry!(
+            0x00691a60,
+            fn_00691a60(Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray>
+        ),
+        entry!(0x00691a90, fn_00691a90(Ptr<BSSimpleArray>)),
+        entry!(0x00691ab0, fn_00691ab0(Ptr<BSSimpleArray>, Ptr) -> u32),
+        entry!(
+            0x00691b10,
+            fn_00691b10(Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray>
+        ),
+        entry!(0x00691b40, fn_00691b40(Ptr<BSSimpleArray>)),
+        entry!(0x00691b60, fn_00691b60(Ptr<BSSimpleArray>, Ptr) -> u32),
+        entry!(
+            0x00691bc0,
+            fn_00691bc0(Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray>
+        ),
+        entry!(0x00691bf0, fn_00691bf0(Ptr<BSSimpleArray>)),
     ]
 }
 
@@ -3138,6 +3929,598 @@ mod tests {
         assert_eq!(
             e.call(0x0069_1000, &args![mesh, 9u32]).u32(),
             (0x1000 + 0x38) * 100 + 9
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Second batch: 00691020 to 00691bf0
+    // -----------------------------------------------------------------
+
+    /// Double for `BSSimpleArray::Clear` (keeps the buffer, size 0).
+    fn clear_array(e: &mut Engine, a: &[u32]) -> Ret {
+        e.mem.set_u32(a[0] + 8, 0);
+        Ret::default()
+    }
+
+    /// Double for the word-array append: writes `*a[1]` after the last element
+    /// (the buffer is allocated on first use, 64 bytes) and bumps the size.
+    fn push_word(e: &mut Engine, a: &[u32]) -> Ret {
+        let mut buffer = e.mem.u32(a[0] + 4);
+        if buffer == 0 {
+            buffer = e.mem.alloc(64);
+            e.mem.set_u32(a[0] + 4, buffer);
+        }
+        let size = e.mem.u32(a[0] + 8);
+        let value = e.mem.u32(a[1]);
+        e.mem.set_u32(buffer + 4 * size, value);
+        e.mem.set_u32(a[0] + 8, size + 1);
+        result(size)
+    }
+
+    /// Double for "make room for one more element": allocates a 256-byte
+    /// buffer on first use, bumps the size and returns the new index.
+    fn grow_array(e: &mut Engine, a: &[u32]) -> Ret {
+        if e.mem.u32(a[0] + 4) == 0 {
+            let buffer = e.mem.alloc(256);
+            e.mem.set_u32(a[0] + 4, buffer);
+        }
+        let size = e.mem.u32(a[0] + 8);
+        e.mem.set_u32(a[0] + 8, size + 1);
+        result(size)
+    }
+
+    /// An engine with the doubles the grid functions call (`floor`, the
+    /// clamp, unsigned minimum and maximum, the first word of an object).
+    fn grid_engine() -> Engine {
+        let mut e = engine();
+        e.register(FLOAT_FLOOR, |_, a| Ret {
+            st0: (f32::from_bits(a[0]) as f64).floor(),
+            ..Ret::default()
+        });
+        e.register(CLAMP_INT, |e, a| {
+            let value = e.mem.u32(a[0]) as i32;
+            e.mem
+                .set_u32(a[0], value.clamp(a[1] as i32, a[2] as i32) as u32);
+            Ret::default()
+        });
+        e.register(UNSIGNED_MAX, |_, a| result(a[0].max(a[1])));
+        e.register(UNSIGNED_MIN, |_, a| result(a[0].min(a[1])));
+        e.register(POINTER_GET, |e, a| result(e.mem.u32(a[0])));
+        e.register(ARRAY_CLEAR, clear_array);
+        e.register(ARRAY_PUSH_WORD, push_word);
+        e
+    }
+
+    /// A grid at the mesh's grid offset: `size` cells per side, minimum
+    /// corner (0, 0), sections `length` long.
+    fn set_grid(e: &mut Engine, mesh: Ptr<NavMesh>, size: u32, length: f32) -> Ptr<NavMeshGrid> {
+        let grid: Ptr<NavMeshGrid> = mesh.byte_add(MESH_GRID_OFFSET).cast();
+        e.set(grid, NavMeshGrid::iGridSize, size);
+        e.set(grid, NavMeshGrid::fColumnSectionLen, length);
+        e.set(grid, NavMeshGrid::fRowSectionLen, length);
+        grid
+    }
+
+    fn point(e: &mut Engine, x: f32, y: f32) -> Ptr {
+        let p = Ptr::new(e.mem.alloc(12));
+        e.mem.set_f32(p.addr(), x);
+        e.mem.set_f32(p.addr() + 4, y);
+        p
+    }
+
+    fn words(e: &Engine, array: Ptr<BSSimpleArray>) -> Vec<u32> {
+        let buffer = e.mem.u32(array.addr() + 4);
+        (0..e.mem.u32(array.addr() + 8))
+            .map(|i| e.mem.u32(buffer + 4 * i))
+            .collect()
+    }
+
+    #[test]
+    fn extra_info_is_appended_to_the_extra_edge_info_array() {
+        let mut e = Engine::new();
+        e.register(EXTRA_INFO_ADD, |_, a| result(a[0] * 3 + a[1]));
+        let mesh: Ptr<NavMesh> = Ptr::new(0x1000);
+        assert_eq!(
+            e.call(0x0069_1020, &args![mesh, 5u32]).u32(),
+            (0x1000 + 0x48) * 3 + 5
+        );
+    }
+
+    #[test]
+    fn edge_bits_are_unpacked_from_the_triangle_flags() {
+        let mut e = Engine::new();
+        let tri: Ptr<NavMeshTriangle> = e.new_object();
+        let out = Ptr::<()>::new(e.mem.alloc(8));
+        let (flag_a, flag_b) = (out.byte_add(2), out.byte_add(3));
+        e.set(tri, NavMeshTriangle::TriangleFlags, 0x2b << 22);
+        e.call(0x0069_1040, &args![tri, 1u16, out, flag_a, flag_b]);
+        assert_eq!(e.mem.u16(out.addr()), 0xb);
+        assert_eq!(e.mem.u8(flag_a.addr()), 0);
+        assert_eq!(e.mem.u8(flag_b.addr()), 1);
+        e.set(tri, NavMeshTriangle::TriangleFlags, 0x1f << 16);
+        e.call(0x0069_1040, &args![tri, 0u16, out, flag_a, flag_b]);
+        assert_eq!(e.mem.u16(out.addr()), 0xf);
+        assert_eq!(e.mem.u8(flag_a.addr()), 1);
+        assert_eq!(e.mem.u8(flag_b.addr()), 0);
+    }
+
+    #[test]
+    fn cover_array_lists_cover_triangles_without_flag_0x20() {
+        let mut e = engine();
+        e.register(ARRAY_CLEAR, clear_array);
+        e.register(U16_ARRAY_GROW, grow_array);
+        noops(&mut e, &[U16_ARRAY_CONSTRUCT_ELEMENTS]);
+        // Triangle 0: cover; 1: cover but flag 0x20; 2: no cover; 3: cover.
+        let mesh = mesh_with(
+            &mut e,
+            &[],
+            &[
+                ([0, 0, 0], [0; 3], 0x0002_0000),
+                ([0, 0, 0], [0; 3], 0x0002_0020),
+                ([0, 0, 0], [0; 3], 0),
+                ([0, 0, 0], [0; 3], 0x0400_0000),
+            ],
+        );
+        // A stale entry is dropped by the clear.
+        e.mem.set_u32(mesh.addr() + 0x78 + 8, 9);
+        e.call_log = Some(vec![]);
+        e.call(0x0069_10a0, &args![mesh]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, ARRAY_CLEAR),
+            vec![vec![mesh.addr() + 0x78, 0]]
+        );
+        let cover = e.mem.u32(mesh.addr() + 0x78 + 4);
+        assert_eq!(e.mem.u32(mesh.addr() + 0x78 + 8), 2);
+        assert_eq!(e.mem.u16(cover), 0);
+        assert_eq!(e.mem.u16(cover + 2), 3);
+    }
+
+    #[test]
+    fn flag_test_is_true_when_any_masked_bit_is_set() {
+        let mut e = Engine::new();
+        let tri: Ptr<NavMeshTriangle> = e.new_object();
+        e.set(tri, NavMeshTriangle::TriangleFlags, 0b0110);
+        assert!(e.call(0x0069_1140, &args![tri, 0b0100u32]).bool());
+        assert!(!e.call(0x0069_1140, &args![tri, 0b1001u32]).bool());
+    }
+
+    #[test]
+    fn a_new_triangle_has_no_vertices_neighbours_or_flags() {
+        let mut e = Engine::new();
+        let tri: Ptr<NavMeshTriangle> = e.new_object();
+        e.mem.write(tri.addr(), &[7u8; 16]);
+        assert_eq!(e.call(0x0069_1160, &args![tri]).u32(), tri.addr());
+        for slot in 0..6 {
+            assert_eq!(e.mem.u16(tri.addr() + 2 * slot), 0xffff);
+        }
+        assert_eq!(e.mem.u32(tri.addr() + 0xc), 0);
+    }
+
+    #[test]
+    fn grid_cell_count_is_the_side_squared() {
+        let mut e = Engine::new();
+        e.register(POINTER_GET, |e, a| result(e.mem.u32(a[0])));
+        let mesh: Ptr<NavMesh> = e.new_object();
+        set_grid(&mut e, mesh, 5, 1.0);
+        assert_eq!(e.call(0x0069_11c0, &args![mesh]).u32(), 25);
+    }
+
+    #[test]
+    fn grid_cell_address_is_null_past_the_last_cell() {
+        let mut e = Engine::new();
+        let mesh: Ptr<NavMesh> = e.new_object();
+        let grid = set_grid(&mut e, mesh, 2, 1.0);
+        e.set(grid, NavMeshGrid::GridData, Ptr::new(0x5000));
+        assert_eq!(e.call(0x0069_1210, &args![grid, 3u32]).u32(), 0x5000 + 48);
+        assert_eq!(e.call(0x0069_1210, &args![grid, 4u32]).u32(), 0);
+        // The mesh's forwarding version asks the grid inside the mesh.
+        assert_eq!(e.call(0x0069_11f0, &args![mesh, 1u32]).u32(), 0x5000 + 16);
+        assert_eq!(e.call(0x0069_11f0, &args![mesh, 9u32]).u32(), 0);
+    }
+
+    #[test]
+    fn point_to_grid_cell_clamps_and_numbers_rows_first() {
+        let mut e = grid_engine();
+        let mesh: Ptr<NavMesh> = e.new_object();
+        let grid = set_grid(&mut e, mesh, 4, 10.0);
+        let inside = point(&mut e, 25.0, 35.0);
+        // Column 2, row 3: 3 * 4 + 2.
+        assert_eq!(e.call(0x0069_1260, &args![grid, inside]).u32(), 14);
+        assert_eq!(e.call(0x0069_1240, &args![mesh, inside]).u32(), 14);
+        // Far outside on both sides: clamped to column 0 and row 3.
+        let outside = point(&mut e, -5.0, 1000.0);
+        let out = Ptr::<()>::new(e.mem.alloc(8));
+        e.call(0x0069_12a0, &args![grid, outside, out, out.byte_add(4)]);
+        assert_eq!(e.mem.u32(out.addr()), 3);
+        assert_eq!(e.mem.u32(out.addr() + 4), 0);
+    }
+
+    #[test]
+    fn grid_cells_of_a_triangle_are_those_whose_list_has_it() {
+        let mut e = grid_engine();
+        // Corners in cells (column, row): (0, 0), (1, 0), (1, 1).
+        let mesh = mesh_with(
+            &mut e,
+            &[[5.0, 5.0, 0.0], [15.0, 5.0, 0.0], [15.0, 15.0, 0.0]],
+            &[([0, 1, 2], [0xffff; 3], 0)],
+        );
+        set_grid(&mut e, mesh, 4, 10.0);
+        // Cell (column, row) lists the triangle except (0, 1): cell number
+        // row * 4 + column.
+        e.register(GRID_CELL_CONTAINS, |_, a| {
+            assert_eq!(a[1], 0);
+            result((a[2] != 4) as u32)
+        });
+        let out: Ptr<BSSimpleArray> = e.new_object();
+        e.mem.set_u32(out.addr() + 8, 7);
+        let count = e.call(0x0069_1350, &args![mesh, 0u16, out]).u32();
+        assert_eq!(count, 3);
+        // Rows are the outer loop: row 0 (cells 0, 1), row 1 (cell 5).
+        assert_eq!(words(&e, out), vec![0, 1, 5]);
+    }
+
+    #[test]
+    fn grid_cell_membership_asks_the_cell_by_row_and_column() {
+        let mut e = Engine::new();
+        e.register(GRID_CELL_CONTAINS, |_, a| result((a[2] == 11) as u32));
+        let grid: Ptr<NavMeshGrid> = e.new_object();
+        e.set(grid, NavMeshGrid::iGridSize, 4);
+        // Column 3, row 2 is cell 2 * 4 + 3.
+        assert!(e.call(0x0069_14e0, &args![grid, 6u16, 3u32, 2u32]).bool());
+        assert!(!e.call(0x0069_14e0, &args![grid, 6u16, 2u32, 3u32]).bool());
+    }
+
+    #[test]
+    fn a_static_avoid_node_is_built_flagged_and_appended() {
+        use std::{cell::RefCell, rc::Rc};
+        let mut e = engine();
+        noops(&mut e, &[POINT_CONSTRUCTOR]);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = seen.clone();
+        e.register_double(AVOID_NODE_ADD, move |e, a| {
+            let bytes: Vec<u8> = (0..0x28).map(|i| e.mem.u8(a[1] + i)).collect();
+            log.borrow_mut().push((a[0], bytes));
+            result(6)
+        });
+        let mesh = mesh_with(&mut e, &[], &[([0; 3], [0; 3], 1), ([0; 3], [0; 3], 2)]);
+        let at = Ptr::<()>::new(e.mem.alloc(12));
+        for (i, v) in [1.5f32, 2.5, 3.5].iter().enumerate() {
+            e.mem.set_f32(at.addr() + 4 * i as u32, *v);
+        }
+        let index = e
+            .call(0x0069_1510, &args![mesh, at, 1u16, 4.0f32, 0.5f32])
+            .u32();
+        assert_eq!(index, 6);
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, mesh.addr() + 0xf4);
+        let node = &seen[0].1;
+        assert_eq!(f32::from_le_bytes(node[0..4].try_into().unwrap()), 1.5);
+        assert_eq!(f32::from_le_bytes(node[8..12].try_into().unwrap()), 3.5);
+        assert_eq!(
+            f32::from_le_bytes(node[0x18..0x1c].try_into().unwrap()),
+            4.0
+        );
+        assert_eq!(
+            f32::from_le_bytes(node[0x1c..0x20].try_into().unwrap()),
+            0.5
+        );
+        assert_eq!(node[0x24], 1);
+        assert_eq!(triangle_ptr_flags(&e, mesh, 1), 0x8000_0002);
+        assert_eq!(triangle_ptr_flags(&e, mesh, 0), 1);
+    }
+
+    fn triangle_ptr_flags(e: &Engine, mesh: Ptr<NavMesh>, index: u32) -> u32 {
+        e.mem.u32(triangle_ptr(e, mesh, index).addr() + 0xc)
+    }
+
+    #[test]
+    fn triangle_flags_are_or_ed() {
+        let mut e = Engine::new();
+        let tri: Ptr<NavMeshTriangle> = e.new_object();
+        e.set(tri, NavMeshTriangle::TriangleFlags, 0b0101);
+        e.call(0x0069_1570, &args![tri, 0b0011u32]);
+        assert_eq!(e.mem.u32(tri.addr() + 0xc), 0b0111);
+    }
+
+    #[test]
+    fn avoid_node_constructor_stores_the_triangle_after_the_base() {
+        let mut e = Engine::new();
+        noops(&mut e, &[POINT_CONSTRUCTOR]);
+        let node: Ptr<NavMeshStaticAvoidNode> = e.new_object();
+        let at = point(&mut e, 9.0, 8.0);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0069_1590, &args![node, at, 42u16, 2.0f32, 3.0f32]);
+        assert_eq!(result.u32(), node.addr());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, POINT_CONSTRUCTOR),
+            vec![vec![node.addr() + 0xc]]
+        );
+        assert_eq!(e.mem.f32(node.addr()), 9.0);
+        assert_eq!(e.mem.f32(node.addr() + 0x18), 2.0);
+        assert_eq!(e.mem.f32(node.addr() + 0x1c), 3.0);
+        assert_eq!(e.mem.u16(node.addr() + 0x24), 42);
+    }
+
+    #[test]
+    fn avoid_node_base_copies_the_point_and_clears_the_type() {
+        let mut e = Engine::new();
+        noops(&mut e, &[POINT_CONSTRUCTOR]);
+        let node: Ptr<NavMeshStaticAvoidNode> = e.new_object();
+        e.mem.set_u32(node.addr() + 0x20, 99);
+        let at = Ptr::<()>::new(e.mem.alloc(12));
+        for (i, v) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+            e.mem.set_f32(at.addr() + 4 * i as u32, *v);
+        }
+        assert_eq!(
+            e.call(0x0069_15d0, &args![node, at, 7.0f32, 8.0f32]).u32(),
+            node.addr()
+        );
+        assert_eq!(e.mem.f32(node.addr() + 8), 3.0);
+        assert_eq!(e.mem.f32(node.addr() + 0x18), 7.0);
+        assert_eq!(e.mem.f32(node.addr() + 0x1c), 8.0);
+        assert_eq!(e.mem.u32(node.addr() + 0x20), 0);
+    }
+
+    #[test]
+    fn avoid_node_count_and_element_address() {
+        let mut e = engine();
+        let mesh: Ptr<NavMesh> = e.new_object();
+        e.mem.set_u32(mesh.addr() + 0xf4 + 4, 0x7000);
+        e.mem.set_u32(mesh.addr() + 0xf4 + 8, 3);
+        assert_eq!(e.call(0x0069_1620, &args![mesh]).u32(), 3);
+        assert_eq!(e.call(0x0069_1640, &args![mesh, 2u32]).u32(), 0x7000 + 80);
+        assert_eq!(
+            e.call(
+                0x0069_1750,
+                &args![mesh.at(NavMesh::StaticAvoidNodes), 1u32]
+            )
+            .u32(),
+            0x7000 + 40
+        );
+    }
+
+    #[test]
+    fn avoid_nodes_of_a_triangle_are_collected() {
+        let mut e = engine();
+        e.register(ARRAY_PUSH_WORD, push_word);
+        e.register(AVOID_NODE_TRIANGLE, |e, a| {
+            result(e.mem.u16(a[0] + 0x24) as u32)
+        });
+        e.register(ARRAY_IS_EMPTY, |e, a| {
+            result((e.mem.u32(a[0] + 8) == 0) as u32)
+        });
+        let mesh: Ptr<NavMesh> = e.new_object();
+        let nodes = e.mem.alloc(0x28 * 3);
+        for (i, triangle) in [3u16, 5, 3].iter().enumerate() {
+            e.mem.set_u16(nodes + 0x28 * i as u32 + 0x24, *triangle);
+        }
+        e.mem.set_u32(mesh.addr() + 0xf4 + 4, nodes);
+        e.mem.set_u32(mesh.addr() + 0xf4 + 8, 3);
+        let out: Ptr<BSSimpleArray> = e.new_object();
+        assert!(e.call(0x0069_1660, &args![mesh, 3u16, out]).bool());
+        assert_eq!(words(&e, out), vec![nodes, nodes + 0x50]);
+        let none: Ptr<BSSimpleArray> = e.new_object();
+        assert!(!e.call(0x0069_1660, &args![mesh, 9u16, none]).bool());
+        assert!(words(&e, none).is_empty());
+    }
+
+    #[test]
+    fn map_base_constructor_allocates_and_clears_the_buckets() {
+        let mut e = Engine::new();
+        e.register(ALLOCATE, |e, a| result(e.mem.alloc(a[0])));
+        noops(&mut e, &[MEMORY_SET]);
+        let map: Ptr<NiTPointerMap> = e.new_object();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0069_18c0, &args![map, 0x25u32]).u32(), map.addr());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(map.addr()), 0x0106_abf8);
+        assert_eq!(e.get(map, NiTPointerMap::m_uiHashSize), 0x25);
+        assert_eq!(e.get(map, NiTPointerMap::m_uiCount), 0);
+        let table = e.get(map, NiTPointerMap::m_ppkHashTable);
+        assert_eq!(calls_to(&log, ALLOCATE), vec![vec![0x94]]);
+        assert_eq!(calls_to(&log, MEMORY_SET), vec![vec![table, 0, 0x94]]);
+    }
+
+    #[test]
+    fn obstacle_map_constructor_stores_its_own_vtable_over_the_base() {
+        let mut e = Engine::new();
+        e.register(ALLOCATE, |e, a| result(e.mem.alloc(a[0])));
+        noops(&mut e, &[MEMORY_SET]);
+        let map: Ptr<NiTPointerMap> = e.new_object();
+        assert_eq!(e.call(0x0069_16f0, &args![map, 7u32]).u32(), map.addr());
+        assert_eq!(e.mem.u32(map.addr()), 0x0106_aba4);
+        assert_eq!(e.get(map, NiTPointerMap::m_uiHashSize), 7);
+    }
+
+    #[test]
+    fn pov_map_constructor_calls_its_base_then_stores_the_vtable() {
+        let mut e = Engine::new();
+        noops(&mut e, &[POV_MAP_BASE_CONSTRUCTOR]);
+        let map: Ptr<NiTPointerMap> = e.new_object();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0069_1720, &args![map, 0x25u32]).u32(), map.addr());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, POV_MAP_BASE_CONSTRUCTOR),
+            vec![vec![map.addr(), 0x25]]
+        );
+        assert_eq!(e.mem.u32(map.addr()), 0x0106_abc4);
+    }
+
+    #[test]
+    fn map_scalar_deleting_destructors_free_only_when_asked() {
+        let mut e = Engine::new();
+        noops(
+            &mut e,
+            &[
+                OBSTACLE_MAP_DESTRUCTOR_BODY,
+                POV_MAP_DESTRUCTOR_BODY,
+                OPERATOR_DELETE,
+            ],
+        );
+        let map: Ptr<NiTPointerMap> = Ptr::new(0x3000);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0069_1770, &args![map, 1u32]).u32(), 0x3000);
+        assert_eq!(e.call(0x0069_1770, &args![map, 0u32]).u32(), 0x3000);
+        assert_eq!(e.call(0x0069_17a0, &args![map, 3u32]).u32(), 0x3000);
+        assert_eq!(e.call(0x0069_17a0, &args![map, 2u32]).u32(), 0x3000);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, OBSTACLE_MAP_DESTRUCTOR_BODY).len(), 2);
+        assert_eq!(calls_to(&log, POV_MAP_DESTRUCTOR_BODY).len(), 2);
+        // Only the calls with bit 0 set free the block.
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![0x3000]; 2]);
+    }
+
+    #[test]
+    fn member_array_constructors_store_vtable_then_initialise() {
+        let mut e = Engine::new();
+        noops(
+            &mut e,
+            &[
+                U16_ARRAY_INITIALISE,
+                VERTEX_ARRAY_INITIALISE,
+                TRIANGLE_ARRAY_INITIALISE,
+                EXTRA_INFO_ARRAY_INITIALISE,
+            ],
+        );
+        let array: Ptr<BSSimpleArray> = e.new_object();
+        e.call_log = Some(vec![]);
+        for (constructor, initialise, vtable) in [
+            (0x0069_17d0, U16_ARRAY_INITIALISE, 0x0106_abe4),
+            (0x0069_1a60, VERTEX_ARRAY_INITIALISE, 0x0106_ac18),
+            (0x0069_1b10, TRIANGLE_ARRAY_INITIALISE, 0x0106_ac2c),
+            (0x0069_1bc0, EXTRA_INFO_ARRAY_INITIALISE, 0x0106_ac40),
+        ] {
+            e.mem.set_u32(array.addr(), 0);
+            assert_eq!(e.call(constructor, &args![array]).u32(), array.addr());
+            assert_eq!(e.mem.u32(array.addr()), vtable);
+            let log = e.call_log.as_ref().unwrap().clone();
+            assert_eq!(calls_to(&log, initialise), vec![vec![array.addr(), 0, 0]]);
+        }
+    }
+
+    #[test]
+    fn member_array_destructors_store_vtable_then_free_the_buffer() {
+        let mut e = Engine::new();
+        noops(&mut e, &[ARRAY_CLEAR]);
+        let array: Ptr<BSSimpleArray> = e.new_object();
+        for (destructor, vtable) in [
+            (0x0069_1800, 0x0106_abe4),
+            (0x0069_1a90, 0x0106_ac18),
+            (0x0069_1b40, 0x0106_ac2c),
+            (0x0069_1bf0, 0x0106_ac40),
+        ] {
+            e.call_log = Some(vec![]);
+            e.mem.set_u32(array.addr(), 0);
+            e.call(destructor, &args![array]);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(e.mem.u32(array.addr()), vtable);
+            assert_eq!(calls_to(&log, ARRAY_CLEAR), vec![vec![array.addr(), 1]]);
+        }
+    }
+
+    #[test]
+    fn a_word_is_appended_to_the_u16_array_after_construction() {
+        let mut e = Engine::new();
+        e.register(U16_ARRAY_GROW, grow_array);
+        e.register_double(U16_ARRAY_CONSTRUCT_ELEMENTS, |e, a| {
+            // The element is constructed before the value is stored.
+            e.mem.set_u16(a[1], 0xdead);
+            Ret::default()
+        });
+        let array: Ptr<BSSimpleArray> = e.new_object();
+        let value = Ptr::<()>::new(e.mem.alloc(4));
+        e.mem.set_u16(value.addr(), 0x1234);
+        assert_eq!(e.call(0x0069_1820, &args![array, value]).u32(), 0);
+        e.mem.set_u16(value.addr(), 0x5678);
+        assert_eq!(e.call(0x0069_1820, &args![array, value]).u32(), 1);
+        let buffer = e.mem.u32(array.addr() + 4);
+        assert_eq!(e.mem.u16(buffer), 0x1234);
+        assert_eq!(e.mem.u16(buffer + 2), 0x5678);
+    }
+
+    #[test]
+    fn u16_array_storage_sizes_are_twice_the_element_count() {
+        let mut e = Engine::new();
+        e.register(OPERATOR_NEW, |_, a| result(a[0] + 1));
+        noops(&mut e, &[DEALLOCATE_SIZED]);
+        let array: Ptr<BSSimpleArray> = Ptr::new(0x100);
+        assert_eq!(e.call(0x0069_1870, &args![array, 10u32]).u32(), 21);
+        e.call_log = Some(vec![]);
+        e.call(0x0069_18a0, &args![array, Ptr::<()>::new(0x400), 10u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, DEALLOCATE_SIZED), vec![vec![0x400, 20]]);
+    }
+
+    #[test]
+    fn obstacle_item_value_is_assigned_then_the_argument_released() {
+        let mut e = Engine::new();
+        e.register_double(POINTER_ASSIGN_FROM, |e, a| {
+            // The argument is the address of a word holding the pointer.
+            let held = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], held);
+            Ret::default()
+        });
+        noops(&mut e, &[POINTER_RELEASE]);
+        let item = Ptr::<()>::new(e.mem.alloc(12));
+        let map: Ptr<NiTPointerMap> = Ptr::new(0x100);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x0069_1930,
+            &args![map, item, 0x1234u16, Ptr::<()>::new(0x9000)],
+        );
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u16(item.addr() + 4), 0x1234);
+        assert_eq!(e.mem.u32(item.addr() + 8), 0x9000);
+        let release = calls_to(&log, POINTER_RELEASE);
+        assert_eq!(release.len(), 1);
+        assert_eq!(
+            calls_to(&log, POINTER_ASSIGN_FROM)[0][1],
+            release[0][0],
+            "the same temporary is assigned from and released"
+        );
+    }
+
+    #[test]
+    fn vertex_and_triangle_arrays_append_copies_after_construction() {
+        let mut e = Engine::new();
+        e.register(VERTEX_ARRAY_GROW, grow_array);
+        e.register(TRIANGLE_ARRAY_GROW, grow_array);
+        noops(
+            &mut e,
+            &[
+                VERTEX_ARRAY_CONSTRUCT_ELEMENTS,
+                TRIANGLE_ARRAY_CONSTRUCT_ELEMENTS,
+            ],
+        );
+        let vertices: Ptr<BSSimpleArray> = e.new_object();
+        let triangles: Ptr<BSSimpleArray> = e.new_object();
+        let source = Ptr::<()>::new(e.mem.alloc(16));
+        for word in 0..4 {
+            e.mem.set_u32(source.addr() + 4 * word, 0x10 + word);
+        }
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0069_1ab0, &args![vertices, source]).u32(), 0);
+        assert_eq!(e.call(0x0069_1ab0, &args![vertices, source]).u32(), 1);
+        assert_eq!(e.call(0x0069_1b60, &args![triangles, source]).u32(), 0);
+        assert_eq!(e.call(0x0069_1b60, &args![triangles, source]).u32(), 1);
+        let log = e.call_log.take().unwrap();
+        let vertex_buffer = e.mem.u32(vertices.addr() + 4);
+        // Three words per vertex, 12 bytes apart; the fourth word is not copied.
+        assert_eq!(e.mem.u32(vertex_buffer + 12 + 8), 0x12);
+        assert_eq!(e.mem.u32(vertex_buffer + 12 + 12), 0);
+        let triangle_buffer = e.mem.u32(triangles.addr() + 4);
+        assert_eq!(e.mem.u32(triangle_buffer + 16 + 12), 0x13);
+        assert_eq!(
+            calls_to(&log, VERTEX_ARRAY_CONSTRUCT_ELEMENTS)[1],
+            vec![vertices.addr(), vertex_buffer + 12, 1]
+        );
+        assert_eq!(
+            calls_to(&log, TRIANGLE_ARRAY_CONSTRUCT_ELEMENTS)[1],
+            vec![triangles.addr(), triangle_buffer + 16, 1]
         );
     }
 }
