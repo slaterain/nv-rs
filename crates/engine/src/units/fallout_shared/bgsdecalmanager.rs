@@ -11,12 +11,10 @@
 //! emitted here, and the `BSCullingProcess` constructor and destructor the
 //! occlusion query uses.
 //!
-//! Progress: the first 40 of the unit's open functions are translated
-//! (`004a0030` to `004a1ff0`); the next session continues at `004a2020`.
-//! Callees at later addresses of this unit (`004a2020`, `004a2070`,
-//! `004a2cf0`, `004a2d50`, `004a4460`, `004a4500`, `004a47b0`) are called
-//! by address until they are translated; replace those `e.call`s with
-//! direct calls then.
+//! Progress: every function of the unit's work list is translated (the
+//! first session `004a0030` to `004a1ff0`, the second `004a2020` to
+//! `004a47b0`). `004a4460` and `004a4500` (called by address) are not in
+//! this file's queue; they belong to the neighbouring range.
 //!
 //! Notes for the next session:
 //! - `BSTempEffectSimpleDecal` belongs to `bstempeffectsimpledecal.cpp`;
@@ -56,36 +54,87 @@ layout! {
     }
 
     /// The decal description `AddDecal` is given (no type for it in the
-    /// Xbox PDB dump; the size is just past the last field read, not the
-    /// real size). The names describe what the code does with each field.
-    pub struct DecalPlacement: 0x78 {
+    /// Xbox PDB dump; the size is just past the last field its constructor
+    /// `fn_004a37b0` writes). The names describe what the code does with
+    /// each field.
+    pub struct DecalPlacement: 0x7c {
         /// The point the decal is placed at (a `NiPoint3`).
         0x00 origin: Inline<NiPoint3>,
         /// The direction of the decal (a `NiPoint3`; the projected path
         /// normalizes it).
         0x0C direction: Inline<NiPoint3>,
+        /// A third `NiPoint3`, set to the same default as the other two.
+        0x18 third_vector: Inline<NiPoint3>,
         /// An object whose virtual at `+0x1d0` returns the node a type 2
         /// decal is projected onto.
         0x24 source_object: Ptr,
         /// The object (scene graph node) the decal is placed on.
         0x28 target: Ptr,
+        /// A second node: `AddProjectedDecalRecurse` looks in its children
+        /// for the first geometry.
+        0x2C second_node: Ptr,
+        /// An object whose sub-object at `+0x30` is asked (virtual `+0x90`)
+        /// for the node the projected decal goes on.
+        0x30 owner_object: Ptr,
+        /// `AddProjectedDecalRecurse` counts it down while it is positive
+        /// and reports "keep going" while it is negative.
+        0x34 skip_count: i32,
         /// A size; the larger of this and `size_b` is the decal's reach.
         0x38 size_a: f32,
         /// The other size.
         0x3C size_b: f32,
+        /// A float passed to the projected decal constructor.
+        0x40 value_40: f32,
+        /// A float passed to the projected decal constructor.
+        0x44 value_44: f32,
         /// An object passed to the decal caster (texture set lookup);
         /// when non-null the new decal is also queued on the pending list.
         0x48 object_48: Ptr,
+        /// A float the emitter fills.
+        0x4C value_4c: f32,
+        /// The node the skinned decals are attached to (created on first
+        /// use).
+        0x50 skin_node: Ptr,
+        /// A float the emitter fills.
+        0x54 value_54: f32,
+        /// A float the emitter fills.
+        0x58 value_58: f32,
         /// A float the reach test divides by; the test only runs when it
         /// is positive.
         0x5C value_5c: f32,
+        /// A colour (a `NiPoint3`).
+        0x60 colour: Inline<NiPoint3>,
+        /// A word passed to the projected decal constructor.
+        0x6C value_6c: u32,
+        /// A byte the emitter fills.
+        0x70 flag_70: u8,
         /// Set by `AddDecal` for type 4 before it adds the geometry decal.
         0x71 flag_71: u8,
         /// When set (and the occlusion setting is on) the new decal gets
         /// an occlusion query.
         0x72 occlusion_query_wanted: u8,
+        /// A byte the emitter fills.
+        0x73 flag_73: u8,
+        /// A byte the emitter fills.
+        0x74 flag_74: u8,
+        /// A byte the emitter fills.
+        0x75 flag_75: u8,
+        /// A byte the emitter fills.
+        0x76 flag_76: u8,
         /// When set, type 1 skips its distance limit.
         0x77 skip_distance_limit: u8,
+    }
+
+    /// `BGSDecalEmitter` (Xbox PDB), 0x10 bytes.
+    pub struct BGSDecalEmitter: 0x10 {
+        /// `iDecalsToEmit` (Xbox PDB).
+        0x00 iDecalsToEmit: i32,
+        /// `bFinished` (Xbox PDB).
+        0x04 bFinished: bool,
+        /// `pDecalImpactData` (Xbox PDB): `BGSImpactData*`.
+        0x08 pDecalImpactData: Ptr,
+        /// `spParticleData` (Xbox PDB): `NiPointer<BSTempEffectParticle>`.
+        0x0C spParticleData: Ptr,
     }
 }
 
@@ -149,9 +198,6 @@ const LIST_CONTAINS: u32 = 0x0049_c680;
 const LIST_REMOVE_ALL: u32 = 0x004e_d900;
 /// Constructs an empty `NiTPointerList`.
 const LIST_CONSTRUCTOR: u32 = 0x0048_f200;
-/// Destructor body of the local list `AddDecal` builds. Later in this
-/// unit.
-const LIST_LOCAL_DESTRUCTOR_BODY: u32 = 0x004a_47b0;
 /// `NiPointer` release (`this` = the pointer slot).
 const NI_POINTER_RELEASE: u32 = 0x0045_cec0;
 /// `NiPointer` assign (`this` = the slot, then the new pointer).
@@ -321,18 +367,9 @@ const CHILD_AT: u32 = 0x0043_b4a0;
 const SCOPE_BEGIN: u32 = 0x0040_4eb0;
 /// Profiling scope destructor.
 const SCOPE_END: u32 = 0x0040_4ee0;
-/// The emitter destructor body (`BGSDecalEmitter`). Later in this unit.
-const EMITTER_DESTRUCTOR_BODY: u32 = 0x004a_2cf0;
-/// Per-emitter update. Later in this unit.
-const EMITTER_UPDATE: u32 = 0x004a_2d50;
 /// Whether the emitter has finished.
 const EMITTER_FINISHED: u32 = 0x004f_1540;
-/// `AddProjectedDecalRecurse` (Xbox PDB name). Later in this unit.
-const ADD_PROJECTED_DECAL_RECURSE: u32 = 0x004a_2070;
-/// A test on the model object, taking a tag number (`this`, 0x1a). Later
-/// in this unit.
-const MODEL_HAS_TAG: u32 = 0x004a_2020;
-/// Whether an entry of a bound list is the end marker. Later in this unit.
+/// Whether an entry of a bound list is the end marker.
 const BOUND_IS_END: u32 = 0x004a_4460;
 /// The next entry of a bound list.
 const BOUND_NEXT: u32 = 0x0072_6070;
@@ -373,6 +410,207 @@ const CULLING_BASE_DESTRUCTOR: u32 = 0x00a6_93e0;
 /// The object whose virtual at `+0xa8` `fn_004a1ff0` calls (`this` = the
 /// node).
 const OBJECT_OF_NODE: u32 = 0x0054_95f0;
+
+// ---------------------------------------------------------------------
+// Callees of `AddProjectedDecalRecurse` and the emitter update
+
+/// The value pointer of a float setting (`this` = the setting): `this + 4`,
+/// or the address of a zeroed float when `this` is null.
+const SETTING_FLOAT_POINTER: u32 = 0x0040_3e20;
+/// `NiAVObject::GetProperty` (Xbox PDB name; `this` = the object, then the
+/// property type).
+const GET_PROPERTY: u32 = 0x00a5_9d30;
+/// The dword at `+0xc0` of a geometry (`this` = the geometry).
+const GEOMETRY_DATA: u32 = 0x0040_30b0;
+/// The first word of the `NiPointer` at `+0xbc` of an object (`this` = the
+/// object).
+const OBJECT_LINK: u32 = 0x0043_fad0;
+/// The dword at `+0x18` of an object (`this` = the object): the child list
+/// the projected decal looks in.
+const OBJECT_CHILD_LIST: u32 = 0x0096_11e0;
+/// `BGSDecalNode::BGSDecalNode` (Xbox PDB name; `this` = the memory, then
+/// the list, then 1).
+const DECAL_NODE_CONSTRUCTOR: u32 = 0x004e_e120;
+/// The number of decals on a decal node (`this` = the node).
+const DECAL_NODE_COUNT: u32 = 0x0045_3470;
+/// Constructor of the 0x64-byte temp effect the skinned decals use (Xbox
+/// PDB `BSTempEffectGeometryDecal`, size 0x64): `this` = the memory, then
+/// 13 words (the placement's `+0x48`, the lifetime, the placement, the
+/// node, the origin, the direction, two floats and the placement's `+0x6c`).
+const GEOMETRY_DECAL_CONSTRUCTOR: u32 = 0x0068_3900;
+/// The dword at `+0x5c` of a temp effect (`this` = the effect).
+const TEMP_EFFECT_COUNT: u32 = 0x0059_e300;
+/// `NiNode` constructor (`this` = the 0xac bytes of memory, then 0).
+const NODE_CONSTRUCTOR: u32 = 0x00a5_ecb0;
+/// Sets a value on the new skin node (`this` = the node, then the value
+/// `fn_004a2c60` returns).
+const NODE_SET_VALUE: u32 = 0x00a5_b950;
+/// Takes the temp effect (`this` = the dword at `+0xac` of the decal node,
+/// then the address of a `NiPointer` holding the effect).
+const NODE_ATTACH_EFFECT: u32 = 0x0063_1540;
+/// `ProcessLists::AddTempEffect` (Xbox PDB name; `this` = [`PROCESS_LISTS`],
+/// then the effect).
+const ADD_TEMP_EFFECT: u32 = 0x0097_3fd0;
+/// The global `ProcessLists` object.
+const PROCESS_LISTS: u32 = 0x011e_0e80;
+/// The worldspace of a pathing location (`this` = the location).
+const GET_WORLDSPACE: u32 = 0x0044_1110;
+/// The filter `IS_MODEL_NODE` tests the node the owner object returns
+/// against.
+const OWNER_NODE_FILTER: u32 = 0x011f_444c;
+/// Integer setting: the maximum of skinned decals per frame.
+const SETTING_MAX_SKINNED_DECALS_PER_FRAME: u32 = 0x011c_5858;
+/// Integer setting: the number of decals a decal node takes.
+const SETTING_MAX_DECALS_PER_NODE: u32 = 0x011c_589c;
+/// The counter of skinned decals this frame.
+const SKINNED_DECALS_THIS_FRAME: u32 = 0x011c_57e8;
+/// The global `fn_004a2c60` returns.
+const SKIN_NODE_VALUE: u32 = 0x011c_61d0;
+/// Node-name prefixes `AddProjectedDecalRecurse` never puts a decal on, in
+/// the order it tests them: (address of the text, length compared).
+const PROJECTED_SKIPPED_NAME_PREFIXES: [(u32, u32); 5] = [
+    (0x0101_e47c, 5), // "Decal"
+    (0x0101_e474, 7), // "FaceGen"
+    (0x0101_e460, 5), // "Bip01"
+    (0x0101_e468, 9), // "BSFaceGen"
+    (0x0101_e520, 4), // "Hair"
+];
+const TEXT_SKINNED_FRAME_LIMIT: u32 = 0x0101_e528;
+const TEXT_SKINNED_FRAME_COUNT: u32 = 0x0101_e4f4;
+const TEXT_PLACING_SKIN_DECAL: u32 = 0x0101_e4d4;
+
+/// `MenuConsole::Instance` (Xbox PDB name; cdecl, one argument).
+const MENU_CONSOLE_INSTANCE: u32 = 0x0071_b160;
+/// Whether the console's byte at `+0x38` is positive (`this` = the
+/// console).
+const MENU_CONSOLE_ACTIVE: u32 = 0x004a_4020;
+/// Whether the game state forbids new decals (no parameters).
+const DECALS_BLOCKED: u32 = 0x004a_4040;
+/// The dword at `+0xc` (`this` = the object).
+const EFFECT_PARENT: u32 = 0x0084_e3a0;
+/// The first word of the `NiPointer` at `+0x18` (`this` = the object).
+const EFFECT_NODE: u32 = 0x0049_0e40;
+/// The float at `+0x10` (`this` = the effect), in `ST0`.
+const EFFECT_END_TIME: u32 = 0x0062_1b00;
+/// The float at `+8` (`this` = the effect), in `ST0`.
+const EFFECT_TIME: u32 = 0x0048_8d50;
+/// The address of the rotation matrix at `+0x34` of a node (`this` = the
+/// node).
+const NODE_ROTATION: u32 = 0x006a_9540;
+/// The address of the world translation at `+0x58` of a node (`this` = the
+/// node).
+const NODE_WORLD_TRANSLATION: u32 = 0x0043_c490;
+/// `RandomFloat` (Xbox PDB name; cdecl: lowest, highest), in `ST0`.
+const RANDOM_FLOAT: u32 = 0x0047_6b70;
+/// The lower size bound of the emitter's impact data (`this` = the data),
+/// in `ST0`.
+const IMPACT_SIZE_MINIMUM: u32 = 0x004a_40a0;
+/// The upper size bound of the emitter's impact data, in `ST0`.
+const IMPACT_SIZE_MAXIMUM: u32 = 0x004a_40c0;
+/// Sets a flag word on the decal caster (`this` = the caster, 0).
+const DECAL_CASTER_SET_FLAG: u32 = 0x0062_33c0;
+/// Constructs the ray cast command (an `hkpWorldRayCastCommand` on Xbox).
+const RAY_COMMAND_CONSTRUCTOR: u32 = 0x004a_3c20;
+/// Stores the filter word in the command's input (`this`, filter).
+const RAY_COMMAND_SET_FILTER: u32 = 0x004a_3f70;
+/// Stores the start of the ray (`this`, address of a `NiPoint3`).
+const RAY_COMMAND_SET_FROM: u32 = 0x004a_3da0;
+/// Stores the end of the ray (`this`, address of a `NiPoint3`).
+const RAY_COMMAND_SET_TO: u32 = 0x004a_3eb0;
+/// Stores the result collector (`this`, collector).
+const RAY_COMMAND_SET_RESULTS: u32 = 0x004a_3fb0;
+/// Stores a dword (`this` = the address, then the value): returns `this`.
+const STORE_WORD: u32 = 0x008c_71b0;
+/// The collector of a command (`this` = the command): `+0xa8`.
+const COMMAND_COLLECTOR: u32 = 0x008c_dd90;
+/// The hit array of a collector (`this` = the collector): `+0x10`.
+const COLLECTOR_HITS: u32 = 0x0046_0140;
+/// The number of entries of the hit array (`this` = the array): `+4`.
+const HITS_COUNT: u32 = 0x0072_6070;
+/// Entry `index` of the hit array (`this` = the array, then the index):
+/// `[this] + index * 0x60`.
+const HITS_ENTRY: u32 = 0x004a_46b0;
+/// The count of the item list at `+0x14` of a collidable's owner (`this` =
+/// the owner).
+const OWNER_LIST_COUNT: u32 = 0x0043_b540;
+/// Looks something up from a count and a layer (`this` = the count, then
+/// the layer).
+const LAYER_LOOKUP: u32 = 0x00c8_4f10;
+/// The dword at `+0x48` (`this` = the emitter's impact data).
+const IMPACT_DATA_OBJECT: u32 = 0x0067_33e0;
+/// Finds the object at a point (`this` = the `TES` object, then the address
+/// of a `NiPoint3`).
+const TES_OBJECT_AT_POINT: u32 = 0x0045_7620;
+/// `bhkUtilFunctions::GetNiAVObject` (Xbox PDB name; cdecl, one argument).
+const GET_NI_AV_OBJECT: u32 = 0x00c7_fa90;
+/// The cell at a point (`this` = the `TES` object, then the point by value).
+const TES_CELL_AT_POINT: u32 = 0x0045_19d0;
+/// Adds the decal placement (`this` = the cell, then the placement, 1, 0).
+const ADD_PLACEMENT: u32 = 0x004a_3fe0;
+/// Float getters of the emitter's impact data (`this` = the data), in
+/// `ST0`.
+const IMPACT_FLOAT_4C: u32 = 0x004a_41c0;
+const IMPACT_FLOAT_54: u32 = 0x004a_40e0;
+const IMPACT_FLOAT_58: u32 = 0x009a_9350;
+const IMPACT_FLOAT_5C: u32 = 0x0059_8040;
+/// The decal's scale (`this` = the data), in `ST0`.
+const IMPACT_SCALE: u32 = 0x004a_4240;
+/// Byte getters of the impact data (`this` = the data).
+const IMPACT_BYTE_73: u32 = 0x004a_4100;
+const IMPACT_BYTE_74: u32 = 0x004a_4180;
+const IMPACT_BYTE_75: u32 = 0x004a_4140;
+const IMPACT_BYTE_76: u32 = 0x004a_41e0;
+/// The packed colour of the impact data (`this` = the data).
+const IMPACT_COLOUR: u32 = 0x004a_4220;
+/// Float to float helper (cdecl, one argument), in `ST0`.
+const ROUND_HELPER: u32 = 0x0040_6cc0;
+/// `_ftol2` (the value as a leading `f64`).
+const FTOL2: u32 = 0x00ec_62c0;
+/// Constructor of the hit array (`this` = the address inside the
+/// collector).
+const HIT_ARRAY_CONSTRUCTOR: u32 = 0x0062_6870;
+/// Constructor of the array's storage (`this` = the collector; then the
+/// address of the array, the argument, 8).
+const HIT_ARRAY_STORAGE: u32 = 0x0062_e230;
+/// `_vector_constructor_iterator_` (cdecl: array, element size, count,
+/// constructor).
+const VECTOR_CONSTRUCTOR_ITERATOR: u32 = 0x0040_1050;
+/// The constructor of one hit (passed to the iterator).
+const HIT_CONSTRUCTOR: u32 = 0x004a_3d00;
+/// Destructor of the hit array (`this` = the address inside the collector).
+const HIT_ARRAY_DESTRUCTOR: u32 = 0x004a_46d0;
+/// Tail of the list destructor body `fn_004a47b0` (`this` = the list).
+const LIST_DESTRUCTOR_TAIL: u32 = 0x0048_3710;
+/// `hkpAllRayHitCollector` vtable while it is complete, and its base
+/// class's (pure virtual) one.
+const COLLECTOR_VTABLE: u32 = 0x0101_e588;
+const COLLECTOR_BASE_VTABLE: u32 = 0x0101_e594;
+/// The `NiPoint3` the placement constructor copies three times.
+const DEFAULT_POINT: u32 = 0x011f_426c;
+/// Floats the placement constructor copies: `+0x54`, `+0x58`, `+0x5c`.
+const PLACEMENT_DEFAULT_54: u32 = 0x0101_e570;
+const PLACEMENT_DEFAULT_58: u32 = 0x0101_e580;
+const PLACEMENT_DEFAULT_5C: u32 = 0x0101_e57c;
+/// 48.0 (float): the emitter placement's `value_40`.
+const EMITTER_VALUE_40: u32 = 0x0101_e574;
+/// 4.0 (float): the highest value the emitter's random byte draws.
+const EMITTER_RANDOM_MAXIMUM: u32 = 0x0101_e570;
+/// -20.0 and 20.0 (floats): the random offset of the ray end.
+const RAY_JITTER_MINIMUM: u32 = 0x0101_e578;
+const RAY_JITTER_MAXIMUM: u32 = 0x0101_7868;
+/// 255.0 (double).
+const COLOUR_SCALE: u32 = 0x0101_e568;
+/// Float setting: the ray length of the emitter.
+const SETTING_RAY_LENGTH: u32 = 0x011c_5818;
+/// Float setting: the ray end's drop per unit of effect progress.
+const SETTING_RAY_DROP: u32 = 0x011c_584c;
+/// Integer setting: when positive the emitter draws its ray.
+const SETTING_DRAW_RAY: u32 = 0x011c_5868;
+/// Returns an indexed item of an object (`this` = the object, then the
+/// address of a 16-byte scratch object, then the index).
+const INDEXED_ITEM: u32 = 0x0045_8700;
+/// The float value of an item (`this` = the item), in `ST0`.
+const ITEM_VALUE: u32 = 0x0045_86d0;
 
 // ---------------------------------------------------------------------
 // Globals and constants of the exe
@@ -687,7 +925,7 @@ pub fn fn_004a03f0(e: &mut Engine, this: Ptr<BGSDecalManager>) {
             if emitter == 0 {
                 continue;
             }
-            e.call(EMITTER_UPDATE, &args![emitter]);
+            fn_004a2d50(e, Ptr::new(emitter));
             if e.call(EMITTER_FINISHED, &args![emitter]).bool() {
                 e.call(EMITTER_LIST_REMOVE, &args![emitters, node]);
                 fn_004a0490(e, Ptr::new(emitter), 1);
@@ -701,7 +939,7 @@ pub fn fn_004a03f0(e: &mut Engine, this: Ptr<BGSDecalManager>) {
 /// body (`004a2cf0`) and frees the emitter when bit 0 of `flags` is set.
 /// Returns `this`.
 pub fn fn_004a0490(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    e.call(EMITTER_DESTRUCTOR_BODY, &args![this]);
+    fn_004a2cf0(e, this);
     if flags & 1 != 0 {
         e.call(FREE, &args![this]);
     }
@@ -1312,7 +1550,7 @@ fn add_decal_type_2(
             let bound_source = e.call(GET_WORLD_BOUND, &args![target]).u32();
             let distance = distance_to_bound(e, f, bound_source);
             if projected_decal_allowed(e, distance, force) {
-                e.call(ADD_PROJECTED_DECAL_RECURSE, &args![this, placement]);
+                bgs_decal_manager_add_projected_decal_recurse(e, this, placement);
             } else {
                 log_skin_limit(e);
             }
@@ -1336,7 +1574,7 @@ fn add_decal_type_2(
             if projected != 0 && !fn_004a19d0(e, Ptr::new(node)) {
                 e.mem.set_u32(p + 0x28, projected);
                 if projected_decal_allowed(e, distance, force) {
-                    e.call(ADD_PROJECTED_DECAL_RECURSE, &args![this, placement]);
+                    bgs_decal_manager_add_projected_decal_recurse(e, this, placement);
                 } else {
                     log_skin_limit(e);
                 }
@@ -1470,7 +1708,7 @@ pub fn fn_004a1a10(e: &mut Engine, _this: Ptr, a: u32, b: u8) {
 // Translated from 004a1a30 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Runs `004a47b0` (a destructor body later in this unit) on the object.
 pub fn fn_004a1a30(e: &mut Engine, this: Ptr) {
-    e.call(LIST_LOCAL_DESTRUCTOR_BODY, &args![this]);
+    fn_004a47b0(e, this);
 }
 
 // Translated from 004a1a50 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1553,7 +1791,7 @@ pub fn bgs_decal_manager_add_geometry_decal_recurse(
 
     let model_data = e.call(NODE_MODEL_DATA, &args![node]).u32();
     let model_object = e.call(MODEL_DATA_OBJECT, &args![model_data]).u32();
-    if model_object != 0 && e.call(MODEL_HAS_TAG, &args![model_object, 0x1au32]).bool() {
+    if model_object != 0 && fn_004a2020(e, Ptr::new(model_object), 0x1a) {
         return true;
     }
     let geometry_list = e.call(NODE_GEOMETRY_LIST, &args![node]).u32();
@@ -1663,6 +1901,956 @@ pub fn fn_004a1ff0(e: &mut Engine, this: Ptr) -> u16 {
     e.vcall(object, 0xa8, &args![]).u16()
 }
 
+// Translated from 004a2020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit `bit` of the bit set whose words start at `this + 0x20` is
+/// set (`bit / 32` selects the word, `bit % 32` the bit).
+pub fn fn_004a2020(e: &mut Engine, this: Ptr, bit: u32) -> bool {
+    let word = e.mem.u32(this.addr() + 0x20 + (bit >> 5) * 4);
+    word & (1u32 << (bit % 32)) != 0
+}
+
+// Translated from 004a2070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSDecalManager::AddProjectedDecalRecurse` (Xbox PDB): adds the
+/// skinned (projected) decals for the placement's target, or recurses into
+/// the children of a node target. Returns false when the target was
+/// handled and the caller should stop, true when it should go on.
+///
+/// Nothing happens (false) while the decal lifetime setting is not
+/// positive, and the per-frame limit of skinned decals ends the call with
+/// true. The node `owner_object` returns (when it passes the model filter)
+/// is held in a `NiPointer`; without one the call returns false. A target
+/// whose name starts with one of `PROJECTED_SKIPPED_NAME_PREFIXES`, or
+/// that is hidden, gets no decal (true). A geometry target first spends
+/// `skip_count`; otherwise it needs a skin property and geometry data,
+/// finds or creates the `BGSDecalNode` among its parent's children (full
+/// nodes end the call with true), creates the skinned decal temp effect
+/// (and the placement's `skin_node` on first use), attaches it and hands it
+/// to `ProcessLists::AddTempEffect`; a first geometry found in
+/// `second_node` gets a second decal the same way. A node target
+/// recurses into its children, hanging the skin node on the first accepted
+/// child of the failing one.
+pub fn bgs_decal_manager_add_projected_decal_recurse(
+    e: &mut Engine,
+    this: Ptr<BGSDecalManager>,
+    placement: Ptr<DecalPlacement>,
+) -> bool {
+    let p = placement.addr();
+    let pointer = e
+        .call(SETTING_FLOAT_POINTER, &args![SETTING_DECAL_LIFETIME])
+        .u32();
+    let lifetime = e.mem.f32(pointer) as f64;
+    // Greater than zero, or unordered.
+    if !(lifetime > e.global::<f64>(ZERO) || lifetime.is_nan()) {
+        return false;
+    }
+    let limit = setting_int(e, SETTING_MAX_SKINNED_DECALS_PER_FRAME);
+    if e.global::<i32>(SKINNED_DECALS_THIS_FRAME) >= limit {
+        if setting_flag(e, SETTING_DEBUG_LOG) {
+            e.call(LOG, &args![TEXT_SKINNED_FRAME_LIMIT]);
+        }
+        return true;
+    }
+    e.with_stack(8, |e, frame| {
+        let found_slot = frame.addr();
+        let scratch_slot = frame.addr() + 4;
+        e.call(NI_POINTER_INIT, &args![found_slot, 0u32]);
+        let result = projected_with_found_slot(e, this, p, found_slot, scratch_slot);
+        e.call(NI_POINTER_RELEASE, &args![found_slot]);
+        result
+    })
+}
+
+/// The part of `AddProjectedDecalRecurse` that runs with the `NiPointer`
+/// slot `found_slot` constructed.
+fn projected_with_found_slot(
+    e: &mut Engine,
+    this: Ptr<BGSDecalManager>,
+    p: u32,
+    found_slot: u32,
+    scratch_slot: u32,
+) -> bool {
+    let placement: Ptr<DecalPlacement> = Ptr::new(p);
+    let owner = e.mem.u32(p + 0x30);
+    if owner != 0 {
+        e.call(NI_POINTER_INIT, &args![scratch_slot, 0u32]);
+        // The sub-object at `+0x30` of the owner has its own vtable.
+        e.vcall(owner + 0x30, 0x90, &args![0u32, scratch_slot]);
+        let candidate = e.call(FIRST_WORD, &args![scratch_slot]).u32();
+        if e.call(IS_MODEL_NODE, &args![OWNER_NODE_FILTER, candidate])
+            .bool()
+        {
+            e.call(NI_POINTER_ASSIGN, &args![found_slot, candidate]);
+        }
+        e.call(NI_POINTER_RELEASE, &args![scratch_slot]);
+    }
+    if e.call(FIRST_WORD, &args![found_slot]).u32() == 0 {
+        return false;
+    }
+    let target = e.mem.u32(p + 0x28);
+    if target == 0 {
+        return true;
+    }
+    let holder = e.call(NODE_NAME_HOLDER, &args![target]).u32();
+    let name = e.call(NAME_TEXT, &args![holder]).u32();
+    if name != 0 {
+        for (prefix, length) in PROJECTED_SKIPPED_NAME_PREFIXES {
+            if e.call(STRNCMP, &args![name, prefix, length]).u32() == 0 {
+                return true;
+            }
+        }
+    }
+    if e.call(NODE_IS_HIDDEN, &args![target]).bool() {
+        return true;
+    }
+    if e.vcall(target, 0x1c, &args![]).u32() != 0 {
+        return projected_geometry(e, p, target);
+    }
+    if e.vcall(target, 0xc, &args![]).u32() == 0 {
+        return true;
+    }
+    let mut index = 0u32;
+    while index < e.call(CHILD_COUNT, &args![target]).u32() {
+        let child = e.call(CHILD_AT, &args![target, index]).u32();
+        if child != 0 {
+            e.mem.set_u32(p + 0x28, child);
+            let keep_going = bgs_decal_manager_add_projected_decal_recurse(e, this, placement);
+            if !keep_going && e.mem.u32(p + 0x28) != 0 {
+                let skin_node = e.mem.u32(p + 0x50);
+                if skin_node != 0 {
+                    let list = e.call(OBJECT_CHILD_LIST, &args![e.mem.u32(p + 0x28)]).u32();
+                    if let Some(accepted) = first_accepted_child(e, list) {
+                        e.vcall(accepted, 0xdc, &args![skin_node, 1u32]);
+                    }
+                }
+                return false;
+            }
+        }
+        index += 1;
+    }
+    true
+}
+
+/// The first child of `list` the geometry filter accepts.
+fn first_accepted_child(e: &mut Engine, list: u32) -> Option<u32> {
+    let mut index = 0u32;
+    while index < e.call(CHILD_COUNT, &args![list]).u32() {
+        let child = e.call(CHILD_AT, &args![list, index]).u32();
+        if child != 0
+            && e.call(GEOMETRY_ACCEPTED, &args![GEOMETRY_FILTER, child])
+                .bool()
+        {
+            return Some(child);
+        }
+        index += 1;
+    }
+    None
+}
+
+/// The geometry branch of `AddProjectedDecalRecurse`: `target` answers its
+/// virtual at `+0x1c` with true.
+fn projected_geometry(e: &mut Engine, p: u32, target: u32) -> bool {
+    let skip_count = e.mem.i32(p + 0x34);
+    if skip_count > 0 {
+        e.mem.set_i32(p + 0x34, skip_count - 1);
+        return true;
+    }
+    let property = e.call(GET_PROPERTY, &args![target, 3u32]).u32();
+    let geometry_data = e.call(GEOMETRY_DATA, &args![target]).u32();
+    if property != 0 && geometry_data != 0 {
+        let outcome = e.with_stack(4, |e, second_slot| {
+            let second = second_slot.addr();
+            e.call(NI_POINTER_INIT, &args![second, 0u32]);
+            let outcome = projected_decals(e, p, target, second);
+            e.call(NI_POINTER_RELEASE, &args![second]);
+            outcome
+        });
+        if let Some(result) = outcome {
+            return result;
+        }
+    }
+    e.mem.i32(p + 0x34) < 0
+}
+
+/// Builds the skinned decal the placement's target gets, and the one for
+/// the first geometry under `second_node`. `second` is the constructed
+/// `NiPointer` slot the first temp effect is stored in. Returns `Some`
+/// when the call ends early.
+fn projected_decals(e: &mut Engine, p: u32, target: u32, second: u32) -> Option<bool> {
+    if e.call(OBJECT_LINK, &args![target]).u32() != 0 {
+        let placement_target = e.mem.u32(p + 0x28);
+        let list = e.call(OBJECT_CHILD_LIST, &args![placement_target]).u32();
+        let mut decal_node = first_accepted_child(e, list).unwrap_or(0);
+        if decal_node == 0 {
+            let memory = e.call(ALLOCATE_OBJECT, &args![0xb4u32]).u32();
+            decal_node = if memory != 0 {
+                e.call(DECAL_NODE_CONSTRUCTOR, &args![memory, list, 1u32])
+                    .u32()
+            } else {
+                0
+            };
+        } else {
+            let count = e.call(DECAL_NODE_COUNT, &args![decal_node]).u32();
+            let maximum = e
+                .call(SETTING_INT_POINTER, &args![SETTING_MAX_DECALS_PER_NODE])
+                .u32();
+            if count >= e.mem.u32(maximum) {
+                return Some(true);
+            }
+        }
+        let count = e.global::<i32>(SKINNED_DECALS_THIS_FRAME).wrapping_add(1);
+        e.set_global(SKINNED_DECALS_THIS_FRAME, count);
+        if setting_flag(e, SETTING_DEBUG_LOG) {
+            e.call(LOG, &args![TEXT_SKINNED_FRAME_COUNT, count]);
+        }
+        let memory = e.call(ALLOCATE_OBJECT, &args![0x64u32]).u32();
+        let effect = if memory != 0 {
+            let lifetime = e
+                .call(SETTING_FLOAT_VALUE, &args![SETTING_DECAL_LIFETIME])
+                .f32();
+            let mut words = vec![memory, e.mem.u32(p + 0x48)];
+            lifetime.put(&mut words);
+            words.push(p);
+            words.push(target);
+            for i in 0..3 {
+                words.push(e.mem.u32(p + 4 * i));
+            }
+            for i in 0..3 {
+                words.push(e.mem.u32(p + 0x0c + 4 * i));
+            }
+            words.push(e.mem.u32(p + 0x38));
+            words.push(e.mem.u32(p + 0x44));
+            words.push(e.mem.u32(p + 0x6c));
+            e.call(GEOMETRY_DECAL_CONSTRUCTOR, &words).u32()
+        } else {
+            0
+        };
+        let ended = e.with_stack(4, |e, slot| {
+            let effect_slot = slot.addr();
+            e.call(NI_POINTER_INIT, &args![effect_slot, effect]);
+            let held = e.call(FIRST_WORD, &args![effect_slot]).u32();
+            e.vcall(held, 0x8c, &args![]);
+            let held = e.call(FIRST_WORD, &args![effect_slot]).u32();
+            if e.call(TEMP_EFFECT_COUNT, &args![held]).i32() <= 0 {
+                e.call(NI_POINTER_RELEASE, &args![effect_slot]);
+                return true;
+            }
+            if e.mem.u32(p + 0x50) == 0 {
+                let memory = e.call(ALLOCATE_OBJECT, &args![0xacu32]).u32();
+                let skin_node = if memory != 0 {
+                    e.call(NODE_CONSTRUCTOR, &args![memory, 0u32]).u32()
+                } else {
+                    0
+                };
+                e.mem.set_u32(p + 0x50, skin_node);
+                let value = fn_004a2c60(e);
+                let skin_node = e.mem.u32(p + 0x50);
+                e.call(NODE_SET_VALUE, &args![skin_node, value]);
+                e.vcall(decal_node, 0xdc, &args![e.mem.u32(p + 0x50), 1u32]);
+                let placed = e.global::<i32>(SKINNED_DECAL_COUNT).wrapping_add(1);
+                e.set_global(SKINNED_DECAL_COUNT, placed);
+                if setting_flag(e, SETTING_DEBUG_LOG) {
+                    e.call(LOG, &args![TEXT_PLACING_SKIN_DECAL, placed]);
+                }
+            }
+            let held = e.call(FIRST_WORD, &args![effect_slot]).u32();
+            let flag = e.vcall(held, 0x98, &args![1u32]).u32();
+            let skin_node = e.mem.u32(p + 0x50);
+            e.vcall(skin_node, 0xdc, &args![flag]);
+            let skin_node = e.mem.u32(p + 0x50);
+            let held = e.call(FIRST_WORD, &args![effect_slot]).u32();
+            fn_004a2c00(e, Ptr::new(held), skin_node);
+            let held = e.call(FIRST_WORD, &args![effect_slot]).u32();
+            e.with_stack(4, |e, temporary| {
+                let temporary = temporary.addr();
+                e.call(NI_POINTER_INIT, &args![temporary, held]);
+                let attach_to = e.mem.u32(decal_node + 0xac);
+                e.call(NODE_ATTACH_EFFECT, &args![attach_to, temporary]);
+                e.call(NI_POINTER_RELEASE, &args![temporary]);
+            });
+            e.with_stack(0x0c, |e, zero| {
+                let zero = zero.addr();
+                e.call(POINT3_CONSTRUCTOR_ZERO, &args![zero, 0u32, 0u32, 0u32]);
+                e.call(UPDATE_WITH_ZERO, &args![decal_node, zero]);
+            });
+            let held = e.call(FIRST_WORD, &args![effect_slot]).u32();
+            e.call(ADD_TEMP_EFFECT, &args![PROCESS_LISTS, held]);
+            let held = e.call(FIRST_WORD, &args![effect_slot]).u32();
+            e.call(NI_POINTER_ASSIGN, &args![second, held]);
+            e.call(NI_POINTER_RELEASE, &args![effect_slot]);
+            false
+        });
+        if ended {
+            return Some(true);
+        }
+    }
+
+    let second_node = e.mem.u32(p + 0x2c);
+    if second_node != 0 {
+        let mut geometry = 0u32;
+        let mut index = 0u32;
+        while index < e.call(CHILD_COUNT, &args![second_node]).u32() && geometry == 0 {
+            let child = e.call(CHILD_AT, &args![second_node, index]).u32();
+            if child != 0 {
+                if e.vcall(child, 0x1c, &args![]).u32() != 0 {
+                    geometry = child;
+                } else if e.vcall(child, 0xc, &args![]).u32() != 0 {
+                    let mut inner = 0u32;
+                    while inner < e.call(CHILD_COUNT, &args![child]).u32() && geometry == 0 {
+                        let grandchild = e.call(CHILD_AT, &args![child, inner]).u32();
+                        if grandchild != 0 && e.vcall(grandchild, 0x1c, &args![]).u32() != 0 {
+                            geometry = grandchild;
+                        }
+                        inner += 1;
+                    }
+                }
+            }
+            index += 1;
+        }
+        if geometry != 0 {
+            let property = e.call(GET_PROPERTY, &args![geometry, 3u32]).u32();
+            let geometry_data = e.call(GEOMETRY_DATA, &args![geometry]).u32();
+            if property != 0 && geometry_data != 0 {
+                let masked = if fn_004a2c20(e, property) {
+                    property
+                } else {
+                    0
+                };
+                if masked != 0 {
+                    e.with_stack(4, |e, slot| {
+                        let slot = slot.addr();
+                        e.call(NI_POINTER_INIT, &args![slot, 0u32]);
+                        if e.call(OBJECT_LINK, &args![target]).u32() != 0 {
+                            let memory = e.call(ALLOCATE_OBJECT, &args![0x64u32]).u32();
+                            let effect = if memory != 0 {
+                                e.with_stack(0x0c, |e, direction| {
+                                    let direction = direction.addr();
+                                    let adjusted =
+                                        fn_004a0bd0(e, Ptr::new(p + 0x0c), Ptr::new(direction))
+                                            .addr();
+                                    let lifetime = e
+                                        .call(SETTING_FLOAT_VALUE, &args![SETTING_DECAL_LIFETIME])
+                                        .f32();
+                                    let mut words = vec![memory, e.mem.u32(p + 0x48)];
+                                    lifetime.put(&mut words);
+                                    words.push(p);
+                                    words.push(geometry);
+                                    for i in 0..3 {
+                                        words.push(e.mem.u32(p + 4 * i));
+                                    }
+                                    for i in 0..3 {
+                                        words.push(e.mem.u32(adjusted + 4 * i));
+                                    }
+                                    1.0f32.put(&mut words);
+                                    words.push(e.mem.u32(p + 0x44));
+                                    words.push(e.mem.u32(p + 0x6c));
+                                    e.call(GEOMETRY_DECAL_CONSTRUCTOR, &words).u32()
+                                })
+                            } else {
+                                0
+                            };
+                            e.call(NI_POINTER_ASSIGN, &args![slot, effect]);
+                            e.vcall(effect, 0x8c, &args![]);
+                        }
+                        if e.call(FIRST_WORD, &args![slot]).u32() != 0 {
+                            let held = e.call(FIRST_WORD, &args![slot]).u32();
+                            e.call(ADD_TEMP_EFFECT, &args![PROCESS_LISTS, held]);
+                        }
+                        e.call(NI_POINTER_RELEASE, &args![slot]);
+                    });
+                }
+            }
+        }
+    }
+    None
+}
+
+// Translated from 004a2c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Assigns `value` to the `NiPointer` at `this + 0x34`.
+pub fn fn_004a2c00(e: &mut Engine, this: Ptr, value: u32) {
+    e.call(NI_POINTER_ASSIGN, &args![this.addr() + 0x34, value]);
+}
+
+// Translated from 004a2c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the object's worldspace (`00441110`, which is
+/// `PathingLocation::GetWorldspace` in the map) is between 1 and 12; false
+/// for a null object.
+pub fn fn_004a2c20(e: &mut Engine, object: u32) -> bool {
+    if object == 0 {
+        return false;
+    }
+    let worldspace = e.call(GET_WORLDSPACE, &args![object]).i32();
+    (1..=12).contains(&worldspace)
+}
+
+// Translated from 004a2c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The global dword at `0x011c61d0`.
+pub fn fn_004a2c60(e: &mut Engine) -> u32 {
+    e.global::<u32>(SKIN_NODE_VALUE)
+}
+
+// Translated from 004a2c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSDecalEmitter` constructor: empties the particle `NiPointer`, then
+/// assigns `particle_data`, and stores the impact data and the decal count;
+/// `bFinished` starts false. Returns `this`.
+pub fn fn_004a2c70(
+    e: &mut Engine,
+    this: Ptr<BGSDecalEmitter>,
+    particle_data: u32,
+    impact_data: u32,
+    decals_to_emit: u32,
+) -> Ptr<BGSDecalEmitter> {
+    let slot = this.addr() + 0x0c;
+    e.call(NI_POINTER_INIT, &args![slot, 0u32]);
+    e.call(NI_POINTER_ASSIGN, &args![slot, particle_data]);
+    e.set(
+        this,
+        BGSDecalEmitter::pDecalImpactData,
+        Ptr::new(impact_data),
+    );
+    e.set(this, BGSDecalEmitter::iDecalsToEmit, decals_to_emit as i32);
+    e.set(this, BGSDecalEmitter::bFinished, false);
+    this
+}
+
+// Translated from 004a2cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSDecalEmitter` destructor body: empties the particle `NiPointer` at
+/// `+0xc`, then releases it.
+pub fn fn_004a2cf0(e: &mut Engine, this: Ptr) {
+    let slot = this.addr() + 0x0c;
+    e.call(NI_POINTER_ASSIGN, &args![slot, 0u32]);
+    e.call(NI_POINTER_RELEASE, &args![slot]);
+}
+
+/// Reads entry `index` of the hit array of `command`'s collector.
+fn ray_hit(e: &mut Engine, command: u32, index: u32) -> u32 {
+    let collector = e.call(COMMAND_COLLECTOR, &args![command]).u32();
+    let hits = e.call(COLLECTOR_HITS, &args![collector]).u32();
+    e.call(HITS_ENTRY, &args![hits, index]).u32()
+}
+
+// Translated from 004a2d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Updates one `BGSDecalEmitter`: while its particle effect runs, casts a
+/// ray from the effect's node (along its Z column, jittered, and lowered
+/// as the effect progresses) with a decal caster, and for the first hit
+/// builds a `DecalPlacement` (the hit point, the hit normal, a random size
+/// from the impact data, the hit object and the impact data's colour and
+/// flags) and hands it to the cell at the hit through `004a3fe0`; one
+/// decal done counts `iDecalsToEmit` down.
+///
+/// Nothing happens while the console is up or the game state blocks
+/// decals. The emitter is marked finished when the effect has no parent or
+/// node, when it has no decals left or no impact data, or when the effect's
+/// time (`+8`) is below its end time (`+0x10`). With the draw setting on, a
+/// debug line shows the ray.
+pub fn fn_004a2d50(e: &mut Engine, this: Ptr<BGSDecalEmitter>) {
+    let t = this.addr();
+    let console = e.call(MENU_CONSOLE_INSTANCE, &args![1u32]).u32();
+    if e.call(MENU_CONSOLE_ACTIVE, &args![console]).bool()
+        || e.call(DECALS_BLOCKED, &args![]).bool()
+    {
+        return;
+    }
+    let effect_slot = t + 0x0c;
+    let effect = e.call(FIRST_WORD, &args![effect_slot]).u32();
+    let mut ready = e.call(EFFECT_PARENT, &args![effect]).u32() != 0;
+    if ready {
+        let effect = e.call(FIRST_WORD, &args![effect_slot]).u32();
+        ready = e.call(EFFECT_NODE, &args![effect]).u32() != 0;
+    }
+    if !ready {
+        e.set(this, BGSDecalEmitter::bFinished, true);
+        return;
+    }
+    let impact = e.get(this, BGSDecalEmitter::pDecalImpactData).addr();
+    if e.get(this, BGSDecalEmitter::iDecalsToEmit) <= 0 || impact == 0 {
+        e.set(this, BGSDecalEmitter::bFinished, true);
+        return;
+    }
+    let effect = e.call(FIRST_WORD, &args![effect_slot]).u32();
+    let end_time = e.call(EFFECT_END_TIME, &args![effect]).f64();
+    let effect = e.call(FIRST_WORD, &args![effect_slot]).u32();
+    let time = e.call(EFFECT_TIME, &args![effect]).f64();
+    // Finished when the time is below the end time (or unordered).
+    if time < end_time || time.is_nan() || end_time.is_nan() {
+        e.set(this, BGSDecalEmitter::bFinished, true);
+        return;
+    }
+    e.with_stack(0x600, |e, frame| {
+        // The game's frame, addressed by the offsets below its frame
+        // pointer.
+        let ebp = frame.addr() + 0x5f0;
+        let forward = ebp - 0x2c;
+        let position = ebp - 0x38;
+        let ray_end = ebp - 0x11c;
+        let command = ebp - 0x100;
+        let collector = ebp - 0x480;
+
+        e.call(EMPTY_CONSTRUCTOR, &args![forward]);
+        let effect = e.call(FIRST_WORD, &args![effect_slot]).u32();
+        let node = e.call(EFFECT_NODE, &args![effect]).u32();
+        let rotation = e.call(NODE_ROTATION, &args![node]).u32();
+        e.call(MATRIX_GET_COLUMN, &args![rotation, 2u32, forward]);
+        fn_004a0c10(e, Ptr::new(forward));
+        let effect = e.call(FIRST_WORD, &args![effect_slot]).u32();
+        let node = e.call(EFFECT_NODE, &args![effect]).u32();
+        let translation = e.call(NODE_WORLD_TRANSLATION, &args![node]).u32();
+        copy_words(e, position, translation, 3);
+
+        let size_maximum = e.call(IMPACT_SIZE_MAXIMUM, &args![impact]).f32();
+        let size_minimum = e.call(IMPACT_SIZE_MINIMUM, &args![impact]).f32();
+        let size = e
+            .call(RANDOM_FLOAT, &args![size_minimum, size_maximum])
+            .f32();
+        let caster = e.call(DECAL_CASTER_CREATE, &args![size, 1u32]).u32();
+        e.call(DECAL_CASTER_SET_FLAG, &args![caster, 0u32]);
+        fn_004a1a10(e, Ptr::new(caster), 8, 0);
+        fn_004a1a10(e, Ptr::new(caster), 0x1d, 0);
+        let effect = e.call(FIRST_WORD, &args![effect_slot]).u32();
+        let parent = e.call(EFFECT_PARENT, &args![effect]).u32();
+        let world = if parent != 0 {
+            e.call(OBJECT_TEXTURE_SET, &args![parent]).u32()
+        } else {
+            0
+        };
+        e.call(RAY_COMMAND_CONSTRUCTOR, &args![command]);
+        if world == 0 {
+            return;
+        }
+        e.call(DECAL_CASTER_SET_TEXTURE_SET, &args![caster, world]);
+
+        // The ray: along the effect's Z column, jittered, lowered with the
+        // effect's progress.
+        let pointer = e
+            .call(SETTING_FLOAT_POINTER, &args![SETTING_RAY_LENGTH])
+            .u32();
+        let length = e.mem.f32(pointer);
+        let scaled = e
+            .call(POINT3_MULTIPLY, &args![forward, ebp - 0x110, length])
+            .u32();
+        e.call(POINT3_ADD, &args![position, ray_end, scaled]);
+        for axis in 0..3u32 {
+            let low = e.global::<f32>(RAY_JITTER_MINIMUM);
+            let high = e.global::<f32>(RAY_JITTER_MAXIMUM);
+            let jitter = e.call(RANDOM_FLOAT, &args![low, high]).f32();
+            let value = e.mem.f32(ray_end + 4 * axis);
+            e.mem
+                .set_f32(ray_end + 4 * axis, (jitter as f64 + value as f64) as f32);
+        }
+        let pointer = e
+            .call(SETTING_FLOAT_POINTER, &args![SETTING_RAY_DROP])
+            .u32();
+        let drop = -(e.mem.f32(pointer) as f64);
+        let effect = e.call(FIRST_WORD, &args![effect_slot]).u32();
+        let end_time = e.call(EFFECT_END_TIME, &args![effect]).f64();
+        let effect = e.call(FIRST_WORD, &args![effect_slot]).u32();
+        let time = e.call(EFFECT_TIME, &args![effect]).f64();
+        let lowered = ((end_time / time) * drop) as f32;
+        let z = e.mem.f32(ray_end + 8);
+        e.mem
+            .set_f32(ray_end + 8, (z as f64 + lowered as f64) as f32);
+
+        let draw = e.call(SETTING_INT_POINTER, &args![SETTING_DRAW_RAY]).u32();
+        if e.mem.i32(draw) > 0 {
+            let end_colour = e
+                .call(
+                    COLOR_CONSTRUCTOR,
+                    &args![ebp - 0x144, 0.0f32, 1.0f32, 1.0f32, 1.0f32],
+                )
+                .u32();
+            let start_colour = e
+                .call(
+                    COLOR_CONSTRUCTOR,
+                    &args![ebp - 0x154, 0.0f32, 1.0f32, 0.0f32, 1.0f32],
+                )
+                .u32();
+            let line = e
+                .call(
+                    MAKE_DEBUG_LINE,
+                    &args![position, start_colour, ray_end, end_colour, 1u32],
+                )
+                .u32();
+            let seconds = e.global::<f32>(DEBUG_LINE_SECONDS);
+            let tes = e.global::<u32>(TES_OBJECT);
+            e.call(ADD_TEMP_DEBUG_OBJECT, &args![tes, line, seconds]);
+        }
+
+        let filter = ebp - 0x15c;
+        e.call(STORE_WORD, &args![filter, 0u32]);
+        fn_004a39f0(e, Ptr::new(filter), 0x27);
+        let filter_word = e.mem.u32(filter);
+        e.call(RAY_COMMAND_SET_FILTER, &args![command, filter_word]);
+        e.call(RAY_COMMAND_SET_FROM, &args![command, position]);
+        e.call(RAY_COMMAND_SET_TO, &args![command, ray_end]);
+        fn_004a3a70(e, Ptr::new(collector));
+        e.call(RAY_COMMAND_SET_RESULTS, &args![command, collector]);
+        // The result byte of the cast is not used.
+        e.vcall(world, 0xc8, &args![command]);
+
+        let collector_now = e.call(COMMAND_COLLECTOR, &args![command]).u32();
+        let hits = e.call(COLLECTOR_HITS, &args![collector_now]).u32();
+        let count = e.call(HITS_COUNT, &args![hits]).i32();
+        let mut placed = false;
+        let mut index = 0i32;
+        while !placed && index < count {
+            let index_word = index as u32;
+            let hit = ray_hit(e, command, index_word);
+            let collidable = e.mem.u32(hit + 0x50);
+            if collidable != 0 {
+                // The last used shape key layer of the hit.
+                let mut layer = u32::MAX;
+                for key in 0..8u32 {
+                    let hit = ray_hit(e, command, index_word);
+                    if e.mem.u32(hit + 0x20 + key * 4) == u32::MAX {
+                        break;
+                    }
+                    let hit = ray_hit(e, command, index_word);
+                    layer = e.mem.u32(hit + 0x20 + key * 4);
+                }
+                let owner = e.call(FIRST_WORD, &args![collidable]).u32();
+                let owner_count = fn_004a3a40(e, owner);
+                if owner_count != 0 {
+                    let _layer_object = e.call(LAYER_LOOKUP, &args![owner_count, layer]).u32();
+                    let impact_object = if impact != 0 {
+                        e.call(IMPACT_DATA_OBJECT, &args![impact]).u32()
+                    } else {
+                        0
+                    };
+                    if impact_object != 0 {
+                        placed = emit_decal(
+                            e,
+                            ebp,
+                            (command, position, ray_end),
+                            (index_word, collidable),
+                            (size, impact, impact_object),
+                        );
+                    }
+                }
+            }
+            index += 1;
+        }
+        if placed {
+            let remaining = e.get(this, BGSDecalEmitter::iDecalsToEmit);
+            e.set(
+                this,
+                BGSDecalEmitter::iDecalsToEmit,
+                remaining.wrapping_sub(1),
+            );
+        }
+        fn_004a3bc0(e, Ptr::new(collector));
+    });
+}
+
+/// The per-hit part of the emitter update: builds the placement for the hit
+/// `index` and hands it over. Returns whether a decal was placed (false
+/// when the hit's object has no reference).
+fn emit_decal(
+    e: &mut Engine,
+    ebp: u32,
+    ray: (u32, u32, u32),
+    hit: (u32, u32),
+    decal: (f32, u32, u32),
+) -> bool {
+    let (command, position, ray_end) = ray;
+    let (index, collidable) = hit;
+    let (size, impact, impact_object) = decal;
+    let difference = ebp - 0x4b8;
+    let scaled = ebp - 0x4c4;
+    let hit_point = ebp - 0x4d0;
+    let normal = ebp - 0x4dc;
+    let flags_word = ebp - 0x4e0;
+    let placement = ebp - 0x570;
+
+    let span = e
+        .call(POINT3_SUBTRACT, &args![ray_end, difference, position])
+        .u32();
+    let entry = ray_hit(e, command, index);
+    let fraction = e.mem.f32(entry + 0x10);
+    let scaled_ptr = fn_004a3760(e, Ptr::new(scaled), fraction, Ptr::new(span)).addr();
+    e.call(POINT3_ADD, &args![position, hit_point, scaled_ptr]);
+    e.call(EMPTY_CONSTRUCTOR, &args![normal]);
+    let entry = ray_hit(e, command, index);
+    fn_004a3970(e, Ptr::new(normal), Ptr::new(entry));
+    let items = e.call(OWNER_LIST_COUNT, &args![collidable]).u32();
+    let stored = e.call(STORE_WORD, &args![flags_word, items]).u32();
+    let is_terrain = fn_004a3a20(e, Ptr::new(stored)) == 1;
+    let tes = e.global::<u32>(TES_OBJECT);
+    let mut object;
+    if is_terrain {
+        object = e.call(TES_OBJECT_AT_POINT, &args![tes, hit_point]).u32();
+        if object != 0 && e.call(OBJECT_CHILD_LIST, &args![object]).u32() != 0 {
+            object = e.call(OBJECT_CHILD_LIST, &args![object]).u32();
+        }
+    } else {
+        object = e.call(GET_NI_AV_OBJECT, &args![collidable]).u32();
+    }
+    let reference = e.call(FIND_REFERENCE_FOR_3D, &args![object]).u32();
+    if !is_terrain && (reference == 0 || !fn_004a1060(e, Ptr::new(reference), 1)) {
+        return false;
+    }
+    let (x, y, z) = (
+        e.mem.u32(hit_point),
+        e.mem.u32(hit_point + 4),
+        e.mem.u32(hit_point + 8),
+    );
+    let cell = e.call(TES_CELL_AT_POINT, &args![tes, x, y, z]).u32();
+    fn_004a37b0(e, Ptr::new(placement));
+    copy_words(e, placement, hit_point, 3);
+    copy_words(e, placement + 0x0c, normal, 3);
+    e.mem.set_f32(placement + 0x38, size);
+    e.mem.set_f32(placement + 0x3c, size);
+    let value_40 = e.global::<f32>(EMITTER_VALUE_40);
+    e.mem.set_f32(placement + 0x40, value_40);
+    let scale = e.call(IMPACT_SCALE, &args![]).f32();
+    e.mem.set_f32(placement + 0x44, scale);
+    let maximum = e.global::<f32>(EMITTER_RANDOM_MAXIMUM);
+    let random = e.call(RANDOM_FLOAT, &args![0.0f32, maximum]).f32();
+    let rounded = e.call(ROUND_HELPER, &args![random]).f32();
+    let byte = e.call(FTOL2, &args![rounded as f64]).u32() as u8;
+    e.mem.set_u8(placement + 0x70, byte);
+    e.mem.set_u32(placement + 0x28, object);
+    e.mem.set_u32(placement + 0x30, impact_object);
+    let byte_73 = e.call(IMPACT_BYTE_73, &args![impact]).u8();
+    e.mem.set_u8(placement + 0x73, byte_73);
+    let float_4c = e.call(IMPACT_FLOAT_4C, &args![impact]).f32();
+    e.mem.set_f32(placement + 0x4c, float_4c);
+    let byte_76 = e.call(IMPACT_BYTE_76, &args![impact]).u8();
+    e.mem.set_u8(placement + 0x76, byte_76);
+    let byte_74 = e.call(IMPACT_BYTE_74, &args![impact]).u8();
+    e.mem.set_u8(placement + 0x74, byte_74);
+    let byte_75 = e.call(IMPACT_BYTE_75, &args![impact]).u8();
+    e.mem.set_u8(placement + 0x75, byte_75);
+    let float_54 = e.call(IMPACT_FLOAT_54, &args![impact]).f32();
+    e.mem.set_f32(placement + 0x54, float_54);
+    let float_58 = e.call(IMPACT_FLOAT_58, &args![impact]).f32();
+    e.mem.set_f32(placement + 0x58, float_58);
+    let float_5c = e.call(IMPACT_FLOAT_5C, &args![impact]).f32();
+    e.mem.set_f32(placement + 0x5c, float_5c);
+    // The packed colour: blue, green and red bytes become x, y and z.
+    let colour_scale = e.global::<f64>(COLOUR_SCALE);
+    let packed = e.call(IMPACT_COLOUR, &args![impact]).u32();
+    let red = ((((packed >> 16) & 0xff) as f64) / colour_scale) as f32;
+    let packed = e.call(IMPACT_COLOUR, &args![impact]).u32();
+    let green = (((((packed & 0xffff) as i32) >> 8) & 0xff) as f64 / colour_scale) as f32;
+    let packed = e.call(IMPACT_COLOUR, &args![impact]).u32();
+    let blue = (((packed & 0xff) as f64) / colour_scale) as f32;
+    let point = ebp - 0x594;
+    e.call(POINT3_CONSTRUCTOR, &args![point, blue, green, red]);
+    copy_words(e, placement + 0x60, point, 3);
+    e.call(ADD_PLACEMENT, &args![cell, placement, 1u32, 0u32]);
+    true
+}
+
+// Translated from 004a3760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `result = scalar * vector` through the `NiPoint3` constructor (cdecl:
+/// result, scalar, vector); returns `result`.
+pub fn fn_004a3760(e: &mut Engine, result: Ptr, scalar: f32, vector: Ptr) -> Ptr {
+    let v = vector.addr();
+    let z = (scalar as f64 * e.mem.f32(v + 8) as f64) as f32;
+    let y = (scalar as f64 * e.mem.f32(v + 4) as f64) as f32;
+    let x = (scalar as f64 * e.mem.f32(v) as f64) as f32;
+    e.call(POINT3_CONSTRUCTOR, &args![result, x, y, z]);
+    result
+}
+
+// Translated from 004a37b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DecalPlacement` constructor: empty vectors at `+0`, `+0xc` and `+0x18`
+/// (then each set to the global point `0x011f426c`), a zero point at
+/// `+0x60` (then set to (1, 1, 1)), and the defaults of the other fields.
+/// Returns `this`.
+pub fn fn_004a37b0(e: &mut Engine, this: Ptr<DecalPlacement>) -> Ptr<DecalPlacement> {
+    let t = this.addr();
+    e.call(EMPTY_CONSTRUCTOR, &args![t]);
+    e.call(EMPTY_CONSTRUCTOR, &args![t + 0x0c]);
+    e.call(EMPTY_CONSTRUCTOR, &args![t + 0x18]);
+    e.call(POINT3_CONSTRUCTOR, &args![t + 0x60, 0.0f32, 0.0f32, 0.0f32]);
+    for offset in [0u32, 0x0c, 0x18] {
+        copy_words(e, t + offset, DEFAULT_POINT, 3);
+    }
+    for offset in [0x24u32, 0x28, 0x2c, 0x30] {
+        e.mem.set_u32(t + offset, 0);
+    }
+    e.mem.set_u32(t + 0x34, 0xffff_ffff);
+    for offset in [0x38u32, 0x3c, 0x40, 0x44] {
+        e.mem.set_f32(t + offset, 0.0);
+    }
+    e.mem.set_u8(t + 0x70, 0);
+    e.mem.set_u8(t + 0x71, 0);
+    e.mem.set_u8(t + 0x72, 1);
+    e.mem.set_u32(t + 0x48, 0);
+    e.mem.set_u8(t + 0x73, 0);
+    e.mem.set_f32(t + 0x4c, 0.0);
+    e.mem.set_u8(t + 0x76, 0);
+    e.mem.set_u32(t + 0x50, 0);
+    e.mem.set_u8(t + 0x74, 1);
+    e.mem.set_u8(t + 0x75, 0);
+    copy_words(e, t + 0x54, PLACEMENT_DEFAULT_54, 1);
+    copy_words(e, t + 0x58, PLACEMENT_DEFAULT_58, 1);
+    copy_words(e, t + 0x5c, PLACEMENT_DEFAULT_5C, 1);
+    e.with_stack(0x0c, |e, temporary| {
+        let temporary = temporary.addr();
+        let ones = e
+            .call(
+                POINT3_CONSTRUCTOR,
+                &args![temporary, 1.0f32, 1.0f32, 1.0f32],
+            )
+            .u32();
+        copy_words(e, t + 0x60, ones, 3);
+    });
+    e.mem.set_u8(t + 0x77, 0);
+    e.mem.set_u8(t + 0x78, 0);
+    e.mem.set_u8(t + 0x79, 0);
+    e.mem.set_u32(t + 0x6c, 0);
+    this
+}
+
+// Translated from 004a3970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads the three floats `00458700`/`004586d0` return for the indices 0, 1
+/// and 2 of `source` into `out` (cdecl: out, source); returns `out`. The
+/// stack-cookie check is not translated.
+pub fn fn_004a3970(e: &mut Engine, out: Ptr, source: Ptr) -> Ptr {
+    e.with_stack(0x30, |e, frame| {
+        for index in 0..3u32 {
+            let scratch = frame.addr() + 0x10 * index;
+            let item = e.call(INDEXED_ITEM, &args![source, scratch, index]).u32();
+            let value = e.call(ITEM_VALUE, &args![item]).f32();
+            e.mem.set_f32(out.addr() + 4 * index, value);
+        }
+    });
+    out
+}
+
+// Translated from 004a39f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Replaces the low seven bits of the dword at `this` with those of
+/// `value`.
+pub fn fn_004a39f0(e: &mut Engine, this: Ptr, value: u32) {
+    let word = e.mem.u32(this.addr());
+    e.mem
+        .set_u32(this.addr(), (word & 0xffff_ff80) | (value & 0x7f));
+}
+
+// Translated from 004a3a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The high 16 bits of the dword at `this`.
+pub fn fn_004a3a20(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr()) >> 16
+}
+
+// Translated from 004a3a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The item count of the list (`0044ddc0`), or 0 for a null list (cdecl,
+/// one argument).
+pub fn fn_004a3a40(e: &mut Engine, list: u32) -> u32 {
+    if list == 0 {
+        0
+    } else {
+        e.call(LIST_COUNT, &args![list]).u32()
+    }
+}
+
+// Translated from 004a3a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpAllRayHitCollector::hkpAllRayHitCollector` (Xbox PDB): the base
+/// class sets up first, then the complete vtable is stored and the hit
+/// array (`m_hits`, an inplace array of 8 `hkpWorldRayCastOutput` at
+/// `+0x10`) is constructed and reset. Returns `this`.
+pub fn fn_004a3a70(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_004a3b30(e, this);
+    e.mem.set_u32(this.addr(), COLLECTOR_VTABLE);
+    fn_004a4730(e, this.byte_add(0x10), 0);
+    fn_004a3b70(e, this);
+    this
+}
+
+// Translated from 004a3ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the base class's (pure virtual) vtable `0x0101e594` in `this`.
+pub fn fn_004a3ae0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), COLLECTOR_BASE_VTABLE);
+}
+
+// Translated from 004a3b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor of the collector's base class: stores the
+/// base vtable and frees `this` when bit 0 of `flags` is set. Returns
+/// `this`.
+pub fn fn_004a3b00(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_004a3ae0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004a3b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the collector's base class (`hkpRayHitCollector`): stores
+/// the base vtable and the early-out fraction. Returns `this`.
+pub fn fn_004a3b30(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), COLLECTOR_BASE_VTABLE);
+    fn_004a3b50(e, this);
+    this
+}
+
+// Translated from 004a3b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpRayHitCollector::reset`-style setter: `m_earlyOutHitFraction`
+/// (`+4`) = 1.0.
+pub fn fn_004a3b50(e: &mut Engine, this: Ptr) {
+    e.mem.set_f32(this.addr() + 4, 1.0);
+}
+
+// Translated from 004a3b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resets the collector: runs `00626870` on the hit array (`+0x10`), then
+/// sets the early-out fraction to 1.0.
+pub fn fn_004a3b70(e: &mut Engine, this: Ptr) {
+    e.call(HIT_ARRAY_CONSTRUCTOR, &args![this.addr() + 0x10]);
+    fn_004a3b50(e, this);
+}
+
+// Translated from 004a3b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpAllRayHitCollector::_scalar_deleting_destructor_` (Xbox PDB): runs
+/// the destructor and frees `this` when bit 0 of `flags` is set. Returns
+/// `this`.
+pub fn fn_004a3b90(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_004a3bc0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004a3bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpAllRayHitCollector::~hkpAllRayHitCollector` (Xbox PDB): stores the
+/// complete vtable, destroys the hit array and ends with the base class's
+/// destructor body.
+pub fn fn_004a3bc0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), COLLECTOR_VTABLE);
+    fn_004a4440(e, this.byte_add(0x10));
+    fn_004a3ae0(e, this);
+}
+
+// Translated from 004a4440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the hit array (`004a46d0`).
+pub fn fn_004a4440(e: &mut Engine, this: Ptr) {
+    e.call(HIT_ARRAY_DESTRUCTOR, &args![this]);
+}
+
+// Translated from 004a4730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs the hit array in place: its storage (`0062e230`, with the
+/// array's inline storage at `+0x10`, the argument and capacity 8), then 8
+/// hits of 0x60 bytes through `_vector_constructor_iterator_`. Returns
+/// `this`.
+pub fn fn_004a4730(e: &mut Engine, this: Ptr, argument: u32) -> Ptr {
+    let storage = this.addr() + 0x10;
+    e.call(HIT_ARRAY_STORAGE, &args![this, storage, argument, 8u32]);
+    e.call(
+        VECTOR_CONSTRUCTOR_ITERATOR,
+        &args![storage, 0x60u32, 8u32, HIT_CONSTRUCTOR],
+    );
+    this
+}
+
+// Translated from 004a47b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of a pointer list: removes all items, then ends with
+/// `00483710`.
+pub fn fn_004a47b0(e: &mut Engine, this: Ptr) {
+    e.call(LIST_REMOVE_ALL, &args![this]);
+    e.call(LIST_DESTRUCTOR_TAIL, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1721,6 +2909,43 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x004a1f90, fn_004a1f90(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x004a1ff0, fn_004a1ff0(Ptr) -> u16),
+        entry!(0x004a2020, fn_004a2020(Ptr, u32) -> bool),
+        entry!(
+            0x004a2070,
+            bgs_decal_manager_add_projected_decal_recurse(
+                Ptr<BGSDecalManager>,
+                Ptr<DecalPlacement>,
+            ) -> bool
+        ),
+        entry!(0x004a2c00, fn_004a2c00(Ptr, u32)),
+        entry!(0x004a2c20, fn_004a2c20(u32) -> bool),
+        entry!(0x004a2c60, fn_004a2c60() -> u32),
+        entry!(
+            0x004a2c70,
+            fn_004a2c70(Ptr<BGSDecalEmitter>, u32, u32, u32) -> Ptr<BGSDecalEmitter>
+        ),
+        entry!(0x004a2cf0, fn_004a2cf0(Ptr)),
+        entry!(0x004a2d50, fn_004a2d50(Ptr<BGSDecalEmitter>)),
+        entry!(0x004a3760, fn_004a3760(Ptr, f32, Ptr) -> Ptr),
+        entry!(
+            0x004a37b0,
+            fn_004a37b0(Ptr<DecalPlacement>) -> Ptr<DecalPlacement>
+        ),
+        entry!(0x004a3970, fn_004a3970(Ptr, Ptr) -> Ptr),
+        entry!(0x004a39f0, fn_004a39f0(Ptr, u32)),
+        entry!(0x004a3a20, fn_004a3a20(Ptr) -> u32),
+        entry!(0x004a3a40, fn_004a3a40(u32) -> u32),
+        entry!(0x004a3a70, fn_004a3a70(Ptr) -> Ptr),
+        entry!(0x004a3ae0, fn_004a3ae0(Ptr)),
+        entry!(0x004a3b00, fn_004a3b00(Ptr, u32) -> Ptr),
+        entry!(0x004a3b30, fn_004a3b30(Ptr) -> Ptr),
+        entry!(0x004a3b50, fn_004a3b50(Ptr)),
+        entry!(0x004a3b70, fn_004a3b70(Ptr)),
+        entry!(0x004a3b90, fn_004a3b90(Ptr, u32) -> Ptr),
+        entry!(0x004a3bc0, fn_004a3bc0(Ptr)),
+        entry!(0x004a4440, fn_004a4440(Ptr)),
+        entry!(0x004a4730, fn_004a4730(Ptr, u32) -> Ptr),
+        entry!(0x004a47b0, fn_004a47b0(Ptr)),
     ]
 }
 
@@ -1849,7 +3074,6 @@ mod tests {
         LIST_CONTAINS,
         LIST_REMOVE_ALL,
         LIST_CONSTRUCTOR,
-        LIST_LOCAL_DESTRUCTOR_BODY,
         NI_POINTER_RELEASE,
         NI_POINTER_ASSIGN,
         NI_POINTER_INIT,
@@ -1921,11 +3145,7 @@ mod tests {
         CHILD_AT,
         SCOPE_BEGIN,
         SCOPE_END,
-        EMITTER_DESTRUCTOR_BODY,
-        EMITTER_UPDATE,
         EMITTER_FINISHED,
-        ADD_PROJECTED_DECAL_RECURSE,
-        MODEL_HAS_TAG,
         BOUND_IS_END,
         BOUND_NEXT,
         IS_MODEL_NODE,
@@ -1947,6 +3167,69 @@ mod tests {
         CULLING_BASE_CONSTRUCTOR,
         CULLING_BASE_DESTRUCTOR,
         OBJECT_OF_NODE,
+        SETTING_FLOAT_POINTER,
+        GET_PROPERTY,
+        GEOMETRY_DATA,
+        OBJECT_LINK,
+        OBJECT_CHILD_LIST,
+        DECAL_NODE_CONSTRUCTOR,
+        DECAL_NODE_COUNT,
+        GEOMETRY_DECAL_CONSTRUCTOR,
+        TEMP_EFFECT_COUNT,
+        NODE_CONSTRUCTOR,
+        NODE_SET_VALUE,
+        NODE_ATTACH_EFFECT,
+        ADD_TEMP_EFFECT,
+        GET_WORLDSPACE,
+        MENU_CONSOLE_INSTANCE,
+        MENU_CONSOLE_ACTIVE,
+        DECALS_BLOCKED,
+        EFFECT_PARENT,
+        EFFECT_NODE,
+        EFFECT_END_TIME,
+        EFFECT_TIME,
+        NODE_ROTATION,
+        NODE_WORLD_TRANSLATION,
+        RANDOM_FLOAT,
+        IMPACT_SIZE_MINIMUM,
+        IMPACT_SIZE_MAXIMUM,
+        DECAL_CASTER_SET_FLAG,
+        RAY_COMMAND_CONSTRUCTOR,
+        RAY_COMMAND_SET_FILTER,
+        RAY_COMMAND_SET_FROM,
+        RAY_COMMAND_SET_TO,
+        RAY_COMMAND_SET_RESULTS,
+        STORE_WORD,
+        COMMAND_COLLECTOR,
+        COLLECTOR_HITS,
+        HITS_COUNT,
+        HITS_ENTRY,
+        OWNER_LIST_COUNT,
+        LAYER_LOOKUP,
+        IMPACT_DATA_OBJECT,
+        TES_OBJECT_AT_POINT,
+        GET_NI_AV_OBJECT,
+        TES_CELL_AT_POINT,
+        ADD_PLACEMENT,
+        IMPACT_FLOAT_4C,
+        IMPACT_FLOAT_54,
+        IMPACT_FLOAT_58,
+        IMPACT_FLOAT_5C,
+        IMPACT_SCALE,
+        IMPACT_BYTE_73,
+        IMPACT_BYTE_74,
+        IMPACT_BYTE_75,
+        IMPACT_BYTE_76,
+        IMPACT_COLOUR,
+        ROUND_HELPER,
+        FTOL2,
+        HIT_ARRAY_CONSTRUCTOR,
+        HIT_ARRAY_STORAGE,
+        VECTOR_CONSTRUCTOR_ITERATOR,
+        HIT_ARRAY_DESTRUCTOR,
+        LIST_DESTRUCTOR_TAIL,
+        INDEXED_ITEM,
+        ITEM_VALUE,
     ];
 
     /// An engine with the exe's constants and the pages the code reads
@@ -1960,6 +3243,8 @@ mod tests {
             0x011d_e000,
             0x011f_9000,
             0x011a_9000,
+            0x011c_6000,
+            0x011f_4000,
             0x0101_1000,
             0x0101_2000,
             0x0101_6000,
@@ -1992,6 +3277,7 @@ mod tests {
             (0x0101_e468, b"BSFaceGen"),
             (0x0101_e460, b"Bip01"),
             (0x0101_e450, b"Debug Decal Box"),
+            (0x0101_e520, b"Hair"),
         ] {
             e.mem.set_cstr(address, text);
         }
@@ -2010,6 +3296,7 @@ mod tests {
         e.register(SETTING_VALUE_POINTER, |_, a| ret(slot(a[0])));
         e.register(SETTING_INT_POINTER, |_, a| ret(slot(a[0])));
         e.register(SETTING_FLOAT_VALUE, |e, a| ret_float(e.mem.f32(slot(a[0]))));
+        e.register(SETTING_FLOAT_POINTER, |_, a| ret(slot(a[0])));
         e.register(GET_GLOBAL_OBJECT, |_, _| ret(GLOBAL_OBJECT));
         for address in [NI_POINTER_ASSIGN, NI_POINTER_INIT] {
             e.register(address, |e, a| {
@@ -2185,7 +3472,7 @@ mod tests {
         let mut e = rig();
         let manager = new_manager(&mut e);
         let list = manager.addr() + 0x14;
-        let (first, second) = (0x1000u32, 0x2000u32);
+        let (first, second) = (e.mem.alloc(0x10), e.mem.alloc(0x10));
         let nodes = build_list(&mut e, list, &[first, 0, second]);
         e.register_double(EMITTER_FINISHED, move |_, a| ret((a[0] == first) as u32));
         let removed: Rc<RefCell<Vec<(u32, u32)>>> = Rc::default();
@@ -2195,9 +3482,10 @@ mod tests {
             Ret::default()
         });
         e.call(0x004a03f0, &args![manager]);
-        assert_eq!(first_words(&e, EMITTER_UPDATE), vec![first, second]);
+        assert_eq!(e.mem.u8(first + 4), 1);
+        assert_eq!(e.mem.u8(second + 4), 1);
         assert_eq!(*removed.borrow(), vec![(list, nodes[0])]);
-        assert_eq!(first_words(&e, EMITTER_DESTRUCTOR_BODY), vec![first]);
+        assert_eq!(first_words(&e, NI_POINTER_RELEASE), vec![first + 0x0c]);
         assert_eq!(first_words(&e, FREE), vec![first]);
     }
 
@@ -2206,7 +3494,7 @@ mod tests {
         let mut e = rig();
         let emitter = e.mem.alloc(0x10);
         assert_eq!(e.call(0x004a0490, &args![emitter, 1u32]).u32(), emitter);
-        assert_eq!(first_words(&e, EMITTER_DESTRUCTOR_BODY), vec![emitter]);
+        assert_eq!(first_words(&e, NI_POINTER_RELEASE), vec![emitter + 0x0c]);
         assert_eq!(first_words(&e, FREE), vec![emitter]);
         e.call(0x004a0490, &args![emitter, 0u32]);
         assert_eq!(calls(&e, FREE).len(), 1);
@@ -2472,7 +3760,8 @@ mod tests {
     fn local_list_destructor_body_is_called() {
         let mut e = rig();
         e.call(0x004a1a30, &args![0x1000u32]);
-        assert_eq!(calls(&e, LIST_LOCAL_DESTRUCTOR_BODY), vec![vec![0x1000]]);
+        assert_eq!(calls(&e, LIST_REMOVE_ALL), vec![vec![0x1000]]);
+        assert_eq!(calls(&e, LIST_DESTRUCTOR_TAIL), vec![vec![0x1000]]);
     }
 
     #[test]
@@ -2893,6 +4182,15 @@ mod tests {
         set_flag(e, SETTING_DEBUG_LOG, true);
     }
 
+    /// How often `AddProjectedDecalRecurse` ran: each run starts by asking for
+    /// the lifetime setting's value pointer.
+    fn projected_calls(e: &Engine) -> usize {
+        first_words(e, SETTING_FLOAT_POINTER)
+            .iter()
+            .filter(|w| **w == SETTING_DECAL_LIFETIME)
+            .count()
+    }
+
     fn visits(e: &Engine) -> usize {
         first_words(e, LOG)
             .iter()
@@ -3081,15 +4379,7 @@ mod tests {
             e.set_global(SKINNED_DECAL_COUNT, count);
             add_decal(&mut e, manager, placement, 2, force);
             let case = format!("limit {limit} count {count} force {force}");
-            assert_eq!(
-                calls(&e, ADD_PROJECTED_DECAL_RECURSE),
-                if projected {
-                    vec![vec![manager.addr(), placement.addr()]]
-                } else {
-                    vec![]
-                },
-                "{case}"
-            );
+            assert_eq!(projected_calls(&e), projected as usize, "{case}");
             assert_eq!(
                 calls(&e, LOG),
                 if logged {
@@ -3126,10 +4416,7 @@ mod tests {
         set_int(&mut e, SETTING_MAX_SKIN_DECALS, 5);
         add_decal(&mut e, manager, placement, 2, false);
         assert_eq!(e.get(placement, DecalPlacement::target).addr(), projected);
-        assert_eq!(
-            calls(&e, ADD_PROJECTED_DECAL_RECURSE),
-            vec![vec![manager.addr(), placement.addr()]]
-        );
+        assert_eq!(projected_calls(&e), 1);
         assert_eq!(calls(&e, GET_WORLD_BOUND), vec![vec![node_object]]);
         assert_eq!(calls(&e, FLAG_TEST), vec![vec![node_object, 0x400]]);
 
@@ -3149,7 +4436,7 @@ mod tests {
         set_flag(&mut e, SETTING_SKINNED_DECALS, true);
         add_decal(&mut e, manager, placement, 2, true);
         assert_eq!(e.get(placement, DecalPlacement::target).addr(), 0);
-        assert!(calls(&e, ADD_PROJECTED_DECAL_RECURSE).is_empty());
+        assert_eq!(projected_calls(&e), 0);
     }
 
     /// The decal caster doubles for the probing path of type 2: `hits`
@@ -3250,8 +4537,10 @@ mod tests {
         assert_eq!(e.get(placement, DecalPlacement::target).addr(), hit_a);
         let list = calls(&e, LIST_CONSTRUCTOR)[0][0];
         assert_eq!(*added.borrow(), vec![(list, hit_a)]);
-        assert_eq!(calls(&e, LIST_REMOVE_ALL), vec![vec![list]]);
-        assert_eq!(calls(&e, LIST_LOCAL_DESTRUCTOR_BODY), vec![vec![list]]);
+        // `AddDecal` empties the list itself; the destructor body does it again
+        // and ends with `00483710`.
+        assert_eq!(calls(&e, LIST_REMOVE_ALL), vec![vec![list], vec![list]]);
+        assert_eq!(calls(&e, LIST_DESTRUCTOR_TAIL), vec![vec![list]]);
         assert_eq!(calls(&e, EMPTY_CONSTRUCTOR).len(), 4);
     }
 
@@ -3279,7 +4568,7 @@ mod tests {
         );
         assert_eq!(get_vec(&e, placement.addr() + 0x0c), [0.0, 0.0, -1.0]);
         assert!(calls(&e, LIST_ADD_HEAD).is_empty());
-        assert_eq!(calls(&e, LIST_REMOVE_ALL).len(), 1);
+        assert_eq!(calls(&e, LIST_REMOVE_ALL).len(), 2);
     }
 
     #[test]
@@ -3326,7 +4615,7 @@ mod tests {
         let placement = new_placement(&mut e, 0x1111);
         add_decal(&mut e, manager, placement, 2, true);
         assert!(calls(&e, DECAL_CASTER_CAST).is_empty());
-        assert!(calls(&e, ADD_PROJECTED_DECAL_RECURSE).is_empty());
+        assert_eq!(projected_calls(&e), 0);
     }
 
     // -----------------------------------------------------------------
@@ -3493,6 +4782,7 @@ mod tests {
         rejected: u32,
         accepted: u32,
         decal: u32,
+        model: u32,
     }
 
     fn new_leaf(e: &mut Engine) -> Leaf {
@@ -3502,12 +4792,13 @@ mod tests {
         let (list, rejected, accepted) =
             (e.mem.alloc(0x40), e.mem.alloc(0x200), e.mem.alloc(0x200));
         let decal = new_decal(e);
+        let model = e.mem.alloc(0x100);
         set_int(e, SETTING_MAX_DECALS_PER_FRAME, 10);
         e.set_global(DECALS_THIS_FRAME, 2i32);
         set_float(e, SETTING_DECAL_LIFETIME, 12.5);
         e.register(IS_MODEL_NODE, |_, _| ret(1));
         e.register(NODE_MODEL_DATA, |_, _| ret(0xd1));
-        e.register(MODEL_DATA_OBJECT, |_, _| ret(0xd2));
+        e.register_double(MODEL_DATA_OBJECT, move |_, _| ret(model));
         e.register_double(NODE_GEOMETRY_LIST, move |_, _| ret(list));
         e.register_double(
             GEOMETRY_ACCEPTED,
@@ -3529,6 +4820,7 @@ mod tests {
             rejected,
             accepted,
             decal,
+            model,
         }
     }
 
@@ -3544,7 +4836,7 @@ mod tests {
             calls(&e, IS_MODEL_NODE),
             vec![vec![MODEL_FILTER, leaf.node]]
         );
-        assert_eq!(calls(&e, MODEL_HAS_TAG), vec![vec![0xd2, 0x1a]]);
+        assert_eq!(calls(&e, MODEL_DATA_OBJECT), vec![vec![0xd1]]);
         assert_eq!(
             calls(&e, GEOMETRY_ACCEPTED),
             vec![
@@ -3637,7 +4929,8 @@ mod tests {
     fn a_tagged_model_and_a_missing_geometry_list_end_early() {
         let mut e = rig();
         let leaf = new_leaf(&mut e);
-        e.register(MODEL_HAS_TAG, |_, _| ret(1));
+        // Bit 0x1a of the model object's bit set (words from `+0x20`).
+        e.mem.set_u32(leaf.model + 0x20, 1 << 0x1a);
         assert!(recurse(&mut e, leaf.manager, leaf.placement));
         assert!(calls(&e, NODE_GEOMETRY_LIST).is_empty());
 
@@ -3652,7 +4945,7 @@ mod tests {
         let leaf = new_leaf(&mut e);
         e.register(MODEL_DATA_OBJECT, |_, _| ret(0));
         assert!(recurse(&mut e, leaf.manager, leaf.placement));
-        assert!(calls(&e, MODEL_HAS_TAG).is_empty());
+        assert_eq!(calls(&e, NODE_GEOMETRY_LIST).len(), 1);
     }
 
     #[test]
@@ -3715,5 +5008,1360 @@ mod tests {
         assert!(recurse(&mut e, leaf.manager, leaf.placement));
         assert!(calls(&e, BOUND_NEXT).is_empty());
         assert_eq!(calls(&e, DECAL_CONSTRUCTOR).len(), 1);
+    }
+
+    // -----------------------------------------------------------------
+    // The translations of the second half of the unit
+
+    /// A vtable at `at` with the given (byte offset, target) slots.
+    fn vtable_slots(e: &mut Engine, at: u32, slots: &[(u32, u32)]) {
+        let size = slots
+            .iter()
+            .map(|(offset, _)| offset / 4 + 1)
+            .max()
+            .unwrap();
+        let mut words = vec![0u32; size as usize];
+        for (offset, target) in slots {
+            words[(*offset / 4) as usize] = *target;
+        }
+        e.put_vtable(at, &words);
+    }
+
+    /// Doubles that give `AddProjectedDecalRecurse`'s callees the game's
+    /// shape: `NiPointer` slots hold what they are given, and the `fn_`
+    /// addresses of the test vtables return zero until a test says
+    /// otherwise.
+    const NODE_VTABLE: u32 = 0x0460_0000;
+    const OWNER_VTABLE: u32 = 0x0461_0000;
+    const NODE_IS_NODE: u32 = 0x0600_0201;
+    const NODE_IS_GEOMETRY: u32 = 0x0600_0202;
+    const EFFECT_INITIALIZE: u32 = 0x0600_0203;
+    const EFFECT_FLAG: u32 = 0x0600_0204;
+    const ATTACH_SKIN: u32 = 0x0600_0205;
+    const OWNER_NODE: u32 = 0x0600_0206;
+    const FOUND_NODE: u32 = 0x9001;
+    const SKIN_VALUE: u32 = 0x1234;
+
+    struct Projected {
+        manager: Ptr<BGSDecalManager>,
+        placement: Ptr<DecalPlacement>,
+        target: u32,
+        list: u32,
+        decal_node: u32,
+        skin_node: u32,
+        effect: u32,
+    }
+
+    /// A geometry target whose owner answers with a model node, with all
+    /// the objects the skinned decal needs.
+    fn projected_scene(e: &mut Engine) -> Projected {
+        vtable_slots(
+            e,
+            NODE_VTABLE,
+            &[
+                (0x0c, NODE_IS_NODE),
+                (0x1c, NODE_IS_GEOMETRY),
+                (0x8c, EFFECT_INITIALIZE),
+                (0x98, EFFECT_FLAG),
+                (0xdc, ATTACH_SKIN),
+            ],
+        );
+        vtable_slots(e, OWNER_VTABLE, &[(0x90, OWNER_NODE)]);
+        for target in [NODE_IS_NODE, EFFECT_INITIALIZE, ATTACH_SKIN] {
+            e.register(target, |_, _| Ret::default());
+        }
+        let manager = new_manager(e);
+        let target = object_with_vtable(e, 0x40, NODE_VTABLE);
+        let owner = e.mem.alloc(0x40);
+        e.mem.set_u32(owner + 0x30, OWNER_VTABLE);
+        let placement = new_placement(e, target);
+        e.set(placement, DecalPlacement::owner_object, Ptr::new(owner));
+        e.set(placement, DecalPlacement::skip_count, -1);
+        put_vec(e, placement.addr(), [1.0, 2.0, 3.0]);
+        put_vec(e, placement.addr() + 0x0c, [0.0, 0.0, 1.0]);
+        e.set(placement, DecalPlacement::size_a, 2.0);
+        e.set(placement, DecalPlacement::value_44, 5.0);
+        e.set(placement, DecalPlacement::value_6c, 7);
+        e.set(placement, DecalPlacement::object_48, Ptr::new(0x4848));
+        // The owner's sub-object writes the model node into the slot.
+        e.register_double(OWNER_NODE, move |e, a| {
+            e.mem.set_u32(a[2], FOUND_NODE);
+            Ret::default()
+        });
+        e.register(IS_MODEL_NODE, |_, _| ret(1));
+        e.register_double(NODE_IS_GEOMETRY, move |_, a| ret((a[0] == target) as u32));
+        set_float(e, SETTING_DECAL_LIFETIME, 12.5);
+        set_int(e, SETTING_MAX_SKINNED_DECALS_PER_FRAME, 5);
+        set_int(e, SETTING_MAX_DECALS_PER_NODE, 4);
+        e.set_global(SKINNED_DECALS_THIS_FRAME, 1i32);
+        e.set_global(SKINNED_DECAL_COUNT, 3i32);
+        e.set_global(SKIN_NODE_VALUE, SKIN_VALUE);
+        e.register(GET_PROPERTY, |_, _| ret(0x7001));
+        e.register(GEOMETRY_DATA, |_, _| ret(0x7002));
+        e.register(OBJECT_LINK, |_, _| ret(0x7003));
+        let list = e.mem.alloc(0x40);
+        e.register_double(OBJECT_CHILD_LIST, move |_, _| ret(list));
+        set_children(e, &[(list, vec![0x8001])]);
+        e.register(ALLOCATE_OBJECT, |_, _| ret(0x6000));
+        let decal_node = object_with_vtable(e, 0x100, NODE_VTABLE);
+        e.mem.set_u32(decal_node + 0xac, 0xacac);
+        e.register_double(DECAL_NODE_CONSTRUCTOR, move |_, _| ret(decal_node));
+        let skin_node = object_with_vtable(e, 0x100, NODE_VTABLE);
+        e.register_double(NODE_CONSTRUCTOR, move |_, _| ret(skin_node));
+        let effect = object_with_vtable(e, 0x100, NODE_VTABLE);
+        e.register_double(GEOMETRY_DECAL_CONSTRUCTOR, move |_, _| ret(effect));
+        e.register(TEMP_EFFECT_COUNT, |_, _| ret(1));
+        e.register_double(EFFECT_FLAG, move |_, _| ret(0x55));
+        Projected {
+            manager,
+            placement,
+            target,
+            list,
+            decal_node,
+            skin_node,
+            effect,
+        }
+    }
+
+    fn projected(e: &mut Engine, scene: &Projected) -> bool {
+        e.call(0x004a2070, &args![scene.manager, scene.placement])
+            .bool()
+    }
+
+    #[test]
+    fn a_missing_lifetime_or_the_frame_limit_stop_the_projected_decal() {
+        let mut e = rig();
+        let scene = projected_scene(&mut e);
+        set_float(&mut e, SETTING_DECAL_LIFETIME, 0.0);
+        assert!(!projected(&mut e, &scene));
+        assert!(calls(&e, SETTING_INT_POINTER).is_empty());
+        // A negative lifetime stops it too; a positive one does not.
+        set_float(&mut e, SETTING_DECAL_LIFETIME, -1.0);
+        assert!(!projected(&mut e, &scene));
+        assert!(calls(&e, SETTING_INT_POINTER).is_empty());
+
+        // The per-frame limit: true, with a log line when asked.
+        let mut e = rig();
+        let scene = projected_scene(&mut e);
+        e.set_global(SKINNED_DECALS_THIS_FRAME, 5i32);
+        set_flag(&mut e, SETTING_DEBUG_LOG, true);
+        assert!(projected(&mut e, &scene));
+        assert_eq!(calls(&e, LOG), vec![vec![TEXT_SKINNED_FRAME_LIMIT]]);
+        assert!(calls(&e, NI_POINTER_INIT).is_empty());
+        set_flag(&mut e, SETTING_DEBUG_LOG, false);
+        e.call_log = Some(vec![]);
+        assert!(projected(&mut e, &scene));
+        assert!(calls(&e, LOG).is_empty());
+    }
+
+    #[test]
+    fn the_projected_decal_needs_a_model_node_from_the_owner() {
+        // No owner: the found slot stays empty.
+        let mut e = rig();
+        let scene = projected_scene(&mut e);
+        e.set(scene.placement, DecalPlacement::owner_object, Ptr::new(0));
+        assert!(!projected(&mut e, &scene));
+        assert!(calls(&e, NODE_NAME_HOLDER).is_empty());
+
+        // The node fails the model filter.
+        let mut e = rig();
+        let scene = projected_scene(&mut e);
+        e.register(IS_MODEL_NODE, |_, _| ret(0));
+        assert!(!projected(&mut e, &scene));
+        assert_eq!(
+            calls(&e, IS_MODEL_NODE),
+            vec![vec![OWNER_NODE_FILTER, FOUND_NODE]]
+        );
+        // Both slots are released.
+        assert_eq!(calls(&e, NI_POINTER_RELEASE).len(), 2);
+
+        // Without a target the call ends with true.
+        let mut e = rig();
+        let scene = projected_scene(&mut e);
+        e.set(scene.placement, DecalPlacement::target, Ptr::new(0));
+        assert!(projected(&mut e, &scene));
+        assert!(calls(&e, NODE_NAME_HOLDER).is_empty());
+    }
+
+    #[test]
+    fn skipped_names_and_hidden_targets_get_no_projected_decal() {
+        for (name, skipped) in [
+            (&b"Decal"[..], true),
+            (b"DecalNode", true),
+            (b"FaceGenHead", true),
+            (b"Bip01 Head", true),
+            (b"BSFaceGenNiNode", true),
+            (b"Hair01", true),
+            (b"Torso", false),
+        ] {
+            let mut e = rig();
+            let scene = projected_scene(&mut e);
+            set_names(&mut e, &[(scene.target, name)]);
+            // Not skipped: falls on through the hidden test to the skip
+            // count, which is spent here.
+            e.set(scene.placement, DecalPlacement::skip_count, 2);
+            assert!(projected(&mut e, &scene));
+            assert_eq!(
+                calls(&e, NODE_IS_HIDDEN).is_empty(),
+                skipped,
+                "{}",
+                String::from_utf8_lossy(name)
+            );
+        }
+        // Prefixes are tried in order: Decal, FaceGen, Bip01, BSFaceGen, Hair.
+        let mut e = rig();
+        let scene = projected_scene(&mut e);
+        set_names(&mut e, &[(scene.target, b"Hair")]);
+        assert!(projected(&mut e, &scene));
+        let lengths: Vec<u32> = calls(&e, STRNCMP).iter().map(|w| w[2]).collect();
+        assert_eq!(lengths, vec![5, 7, 5, 9, 4]);
+
+        // A hidden target ends the call before its virtuals are asked.
+        let mut e = rig();
+        let scene = projected_scene(&mut e);
+        e.register(NODE_IS_HIDDEN, |_, _| ret(1));
+        e.mem.set_u32(scene.target, 0);
+        assert!(projected(&mut e, &scene));
+    }
+
+    #[test]
+    fn a_geometry_target_first_spends_the_skip_count() {
+        let mut e = rig();
+        let scene = projected_scene(&mut e);
+        e.set(scene.placement, DecalPlacement::skip_count, 2);
+        assert!(projected(&mut e, &scene));
+        assert_eq!(e.get(scene.placement, DecalPlacement::skip_count), 1);
+        assert!(calls(&e, GET_PROPERTY).is_empty());
+
+        // Without the skin property or the geometry data nothing is built;
+        // the result says whether the count is below zero.
+        for (property, data, skip, expected) in [
+            (0u32, 0x7002u32, 0i32, false),
+            (0x7001, 0, 0, false),
+            (0, 0, -1, true),
+        ] {
+            let mut e = rig();
+            let scene = projected_scene(&mut e);
+            e.set(scene.placement, DecalPlacement::skip_count, skip);
+            e.register_double(GET_PROPERTY, move |_, _| ret(property));
+            e.register_double(GEOMETRY_DATA, move |_, _| ret(data));
+            assert_eq!(projected(&mut e, &scene), expected);
+            assert_eq!(calls(&e, GET_PROPERTY), vec![vec![scene.target, 3]]);
+            assert!(calls(&e, OBJECT_LINK).is_empty());
+        }
+    }
+
+    #[test]
+    fn a_geometry_target_gets_a_skinned_decal_on_a_new_decal_node() {
+        let mut e = rig();
+        let scene = projected_scene(&mut e);
+        set_flag(&mut e, SETTING_DEBUG_LOG, true);
+        assert!(projected(&mut e, &scene));
+        let p = scene.placement.addr();
+        // The decal node is created on the target's child list.
+        assert_eq!(
+            calls(&e, DECAL_NODE_CONSTRUCTOR),
+            vec![vec![0x6000, scene.list, 1]]
+        );
+        assert_eq!(
+            calls(&e, ALLOCATE_OBJECT),
+            vec![vec![0xb4], vec![0x64], vec![0xac]]
+        );
+        assert!(calls(&e, DECAL_NODE_COUNT).is_empty());
+        // The temp effect: object_48, lifetime, placement, target, origin,
+        // direction, size_a, value_44, value_6c.
+        assert_eq!(
+            calls(&e, GEOMETRY_DECAL_CONSTRUCTOR),
+            vec![vec![
+                0x6000,
+                0x4848,
+                12.5f32.to_bits(),
+                p,
+                scene.target,
+                1.0f32.to_bits(),
+                2.0f32.to_bits(),
+                3.0f32.to_bits(),
+                0,
+                0,
+                1.0f32.to_bits(),
+                2.0f32.to_bits(),
+                5.0f32.to_bits(),
+                7,
+            ]]
+        );
+        // Counters and log lines.
+        assert_eq!(e.global::<i32>(SKINNED_DECALS_THIS_FRAME), 2);
+        assert_eq!(e.global::<i32>(SKINNED_DECAL_COUNT), 4);
+        assert_eq!(
+            calls(&e, LOG),
+            vec![
+                vec![TEXT_SKINNED_FRAME_COUNT, 2],
+                vec![TEXT_PLACING_SKIN_DECAL, 4]
+            ]
+        );
+        // The skin node is created on first use and takes the global value.
+        assert_eq!(
+            e.get(scene.placement, DecalPlacement::skin_node).addr(),
+            scene.skin_node
+        );
+        assert_eq!(
+            calls(&e, NODE_SET_VALUE),
+            vec![vec![scene.skin_node, SKIN_VALUE]]
+        );
+        // The decal node takes the skin node; the skin node takes the
+        // effect's flag.
+        assert_eq!(
+            calls(&e, ATTACH_SKIN),
+            vec![
+                vec![scene.decal_node, scene.skin_node, 1],
+                vec![scene.skin_node, 0x55]
+            ]
+        );
+        assert_eq!(calls(&e, EFFECT_INITIALIZE), vec![vec![scene.effect]]);
+        assert_eq!(calls(&e, EFFECT_FLAG), vec![vec![scene.effect, 1]]);
+        // `fn_004a2c00` hangs the skin node on the effect.
+        let assigns = calls(&e, NI_POINTER_ASSIGN);
+        assert!(assigns.contains(&vec![scene.effect + 0x34, scene.skin_node]));
+        // The effect is attached to the decal node's `+0xac` object, moved
+        // to the origin, added to the process lists, and kept in the slot.
+        let attach = &calls(&e, NODE_ATTACH_EFFECT)[0];
+        assert_eq!(attach[0], 0xacac);
+        let zero = calls(&e, POINT3_CONSTRUCTOR_ZERO)[0][0];
+        assert_eq!(
+            calls(&e, UPDATE_WITH_ZERO),
+            vec![vec![scene.decal_node, zero]]
+        );
+        assert_eq!(
+            calls(&e, ADD_TEMP_EFFECT),
+            vec![vec![PROCESS_LISTS, scene.effect]]
+        );
+        assert!(assigns
+            .iter()
+            .any(|w| w[1] == scene.effect && w[0] != scene.effect + 0x34));
+        // Found slot, owner slot, effect slot, temporary slot and the
+        // second slot are all released.
+        assert_eq!(calls(&e, NI_POINTER_RELEASE).len(), 5);
+        // skip_count was -1: "keep going".
+        assert_eq!(e.get(scene.placement, DecalPlacement::skip_count), -1);
+    }
+
+    #[test]
+    fn an_existing_decal_node_and_skin_node_are_reused() {
+        let mut e = rig();
+        let scene = projected_scene(&mut e);
+        let existing = scene.decal_node;
+        set_children(&mut e, &[(scene.list, vec![existing])]);
+        e.register_double(
+            GEOMETRY_ACCEPTED,
+            move |_, a| ret((a[1] == existing) as u32),
+        );
+        e.register_double(DECAL_NODE_COUNT, |_, _| ret(3));
+        e.set(
+            scene.placement,
+            DecalPlacement::skin_node,
+            Ptr::new(scene.skin_node),
+        );
+        assert!(projected(&mut e, &scene));
+        assert!(calls(&e, DECAL_NODE_CONSTRUCTOR).is_empty());
+        assert!(calls(&e, NODE_CONSTRUCTOR).is_empty());
+        assert!(calls(&e, NODE_SET_VALUE).is_empty());
+        assert_eq!(calls(&e, DECAL_NODE_COUNT), vec![vec![scene.decal_node]]);
+        assert_eq!(calls(&e, ALLOCATE_OBJECT), vec![vec![0x64]]);
+        // The existing decal node is the child: it takes no new skin node
+        // (that is only done on creation), but the effect's flag goes to
+        // the skin node.
+        assert_eq!(calls(&e, ATTACH_SKIN), vec![vec![scene.skin_node, 0x55]]);
+        assert_eq!(calls(&e, ADD_TEMP_EFFECT).len(), 1);
+
+        // A full decal node ends the call with true and builds nothing.
+        let mut e = rig();
+        let scene = projected_scene(&mut e);
+        let existing = scene.decal_node;
+        set_children(&mut e, &[(scene.list, vec![existing])]);
+        e.register_double(
+            GEOMETRY_ACCEPTED,
+            move |_, a| ret((a[1] == existing) as u32),
+        );
+        e.register_double(DECAL_NODE_COUNT, |_, _| ret(4));
+        e.set(scene.placement, DecalPlacement::skip_count, 0);
+        assert!(projected(&mut e, &scene));
+        assert!(calls(&e, GEOMETRY_DECAL_CONSTRUCTOR).is_empty());
+        assert_eq!(e.global::<i32>(SKINNED_DECALS_THIS_FRAME), 1);
+        // The slots are still released: found, owner and second.
+        assert_eq!(calls(&e, NI_POINTER_RELEASE).len(), 3);
+    }
+
+    #[test]
+    fn an_effect_without_a_count_is_dropped() {
+        let mut e = rig();
+        let scene = projected_scene(&mut e);
+        e.register(TEMP_EFFECT_COUNT, |_, _| ret(0));
+        assert!(projected(&mut e, &scene));
+        // The counter has been bumped and the effect initialized, but
+        // nothing is attached.
+        assert_eq!(e.global::<i32>(SKINNED_DECALS_THIS_FRAME), 2);
+        assert_eq!(calls(&e, EFFECT_INITIALIZE).len(), 1);
+        assert!(calls(&e, NODE_CONSTRUCTOR).is_empty());
+        assert!(calls(&e, ADD_TEMP_EFFECT).is_empty());
+        // Found slot, owner slot, effect slot and second slot.
+        assert_eq!(calls(&e, NI_POINTER_RELEASE).len(), 4);
+    }
+
+    #[test]
+    fn the_second_node_gets_a_decal_on_its_first_geometry() {
+        let mut e = rig();
+        let scene = projected_scene(&mut e);
+        let second_node = object_with_vtable(&mut e, 0x40, NODE_VTABLE);
+        let inner = object_with_vtable(&mut e, 0x40, NODE_VTABLE);
+        let junk = object_with_vtable(&mut e, 0x40, NODE_VTABLE);
+        let leaf = object_with_vtable(&mut e, 0x40, NODE_VTABLE);
+        let (target, inner_node) = (scene.target, inner);
+        e.set(
+            scene.placement,
+            DecalPlacement::second_node,
+            Ptr::new(second_node),
+        );
+        e.register_double(NODE_IS_GEOMETRY, move |_, a| {
+            ret((a[0] == target || a[0] == leaf) as u32)
+        });
+        e.register_double(NODE_IS_NODE, move |_, a| ret((a[0] == inner_node) as u32));
+        set_children(
+            &mut e,
+            &[
+                (scene.list, vec![0x8001]),
+                (second_node, vec![inner]),
+                (inner, vec![junk, leaf]),
+            ],
+        );
+        e.register_double(GET_WORLDSPACE, |_, _| ret(3));
+        let effects = Rc::new(RefCell::new(vec![0xe002u32, scene.effect]));
+        let queue = effects.clone();
+        e.register_double(GEOMETRY_DECAL_CONSTRUCTOR, move |_, _| {
+            ret(queue.borrow_mut().pop().unwrap())
+        });
+        // The second effect needs a vtable for its initialize call.
+        let second_effect = object_with_vtable(&mut e, 0x100, NODE_VTABLE);
+        effects.borrow_mut()[0] = second_effect;
+        assert!(projected(&mut e, &scene));
+        let constructors = calls(&e, GEOMETRY_DECAL_CONSTRUCTOR);
+        assert_eq!(constructors.len(), 2);
+        let second = &constructors[1];
+        assert_eq!(second[4], leaf);
+        // The direction is the negated one; then 1.0, value_44, value_6c.
+        assert_eq!(
+            second[8..11],
+            [
+                (-0.0f32).to_bits(),
+                (-0.0f32).to_bits(),
+                (-1.0f32).to_bits()
+            ]
+        );
+        assert_eq!(second[11..14], [1.0f32.to_bits(), 5.0f32.to_bits(), 7]);
+        assert_eq!(calls(&e, GET_PROPERTY).last().unwrap(), &vec![leaf, 3]);
+        assert_eq!(calls(&e, GET_WORLDSPACE), vec![vec![0x7001]]);
+        // Both effects reach the process lists.
+        assert_eq!(
+            calls(&e, ADD_TEMP_EFFECT),
+            vec![
+                vec![PROCESS_LISTS, scene.effect],
+                vec![PROCESS_LISTS, second_effect]
+            ]
+        );
+
+        // A worldspace outside 1..=12 builds no second decal.
+        for worldspace in [0u32, 13] {
+            let mut e = rig();
+            let scene = projected_scene(&mut e);
+            let second_node = object_with_vtable(&mut e, 0x40, NODE_VTABLE);
+            let leaf = object_with_vtable(&mut e, 0x40, NODE_VTABLE);
+            let target = scene.target;
+            e.set(
+                scene.placement,
+                DecalPlacement::second_node,
+                Ptr::new(second_node),
+            );
+            e.register_double(NODE_IS_GEOMETRY, move |_, a| {
+                ret((a[0] == target || a[0] == leaf) as u32)
+            });
+            set_children(
+                &mut e,
+                &[(scene.list, vec![0x8001]), (second_node, vec![leaf])],
+            );
+            e.register_double(GET_WORLDSPACE, move |_, _| ret(worldspace));
+            assert!(projected(&mut e, &scene));
+            assert_eq!(calls(&e, GEOMETRY_DECAL_CONSTRUCTOR).len(), 1);
+        }
+    }
+
+    #[test]
+    fn a_node_target_recurses_and_stops_at_the_first_failing_child() {
+        let mut e = rig();
+        let scene = projected_scene(&mut e);
+        let (first, second) = (
+            object_with_vtable(&mut e, 0x40, NODE_VTABLE),
+            object_with_vtable(&mut e, 0x40, NODE_VTABLE),
+        );
+        let target = scene.target;
+        e.register_double(NODE_IS_GEOMETRY, move |_, a| {
+            ret((a[0] == first || a[0] == second) as u32)
+        });
+        e.register_double(NODE_IS_NODE, move |_, a| ret((a[0] == target) as u32));
+        // The failing child's parent list holds an accepted decal node.
+        let accepted = scene.decal_node;
+        set_children(
+            &mut e,
+            &[(target, vec![first, second]), (scene.list, vec![accepted])],
+        );
+        e.register_double(
+            GEOMETRY_ACCEPTED,
+            move |_, a| ret((a[1] == accepted) as u32),
+        );
+        // Both children are geometries without a skin property: with the
+        // count at zero each recursion reports "stop".
+        e.register(GET_PROPERTY, |_, _| ret(0));
+        e.set(scene.placement, DecalPlacement::skip_count, 0);
+        e.set(
+            scene.placement,
+            DecalPlacement::skin_node,
+            Ptr::new(scene.skin_node),
+        );
+        assert!(!projected(&mut e, &scene));
+        // Only the first child was visited, and it is the target now.
+        assert_eq!(e.get(scene.placement, DecalPlacement::target).addr(), first);
+        assert_eq!(calls(&e, GET_PROPERTY), vec![vec![first, 3]]);
+        // The accepted decal node takes the skin node.
+        assert_eq!(
+            calls(&e, ATTACH_SKIN),
+            vec![vec![scene.decal_node, scene.skin_node, 1]]
+        );
+
+        // Without a skin node nothing is attached.
+        let mut e = rig();
+        let scene = projected_scene(&mut e);
+        let first = object_with_vtable(&mut e, 0x40, NODE_VTABLE);
+        let target = scene.target;
+        e.register_double(NODE_IS_GEOMETRY, move |_, a| ret((a[0] == first) as u32));
+        e.register_double(NODE_IS_NODE, move |_, a| ret((a[0] == target) as u32));
+        set_children(&mut e, &[(target, vec![first])]);
+        e.register(GET_PROPERTY, |_, _| ret(0));
+        e.set(scene.placement, DecalPlacement::skip_count, 0);
+        assert!(!projected(&mut e, &scene));
+        assert!(calls(&e, ATTACH_SKIN).is_empty());
+
+        // Children that all say "keep going" end with true; the target is
+        // the last child visited and null children are skipped.
+        let mut e = rig();
+        let scene = projected_scene(&mut e);
+        let (first, second) = (
+            object_with_vtable(&mut e, 0x40, NODE_VTABLE),
+            object_with_vtable(&mut e, 0x40, NODE_VTABLE),
+        );
+        let target = scene.target;
+        e.register_double(NODE_IS_GEOMETRY, move |_, a| {
+            ret((a[0] == first || a[0] == second) as u32)
+        });
+        e.register_double(NODE_IS_NODE, move |_, a| ret((a[0] == target) as u32));
+        set_children(&mut e, &[(target, vec![first, 0, second])]);
+        e.register(GET_PROPERTY, |_, _| ret(0));
+        e.set(scene.placement, DecalPlacement::skip_count, -1);
+        assert!(projected(&mut e, &scene));
+        assert_eq!(
+            e.get(scene.placement, DecalPlacement::target).addr(),
+            second
+        );
+        assert_eq!(calls(&e, GET_PROPERTY).len(), 2);
+
+        // A target that is neither geometry nor node ends with true.
+        let mut e = rig();
+        let scene = projected_scene(&mut e);
+        e.register(NODE_IS_GEOMETRY, |_, _| ret(0));
+        assert!(projected(&mut e, &scene));
+        assert!(calls(&e, CHILD_COUNT).is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // The small functions
+
+    #[test]
+    fn a_bit_of_the_bit_set_is_tested() {
+        let mut e = rig();
+        let set = e.mem.alloc(0x40);
+        e.mem.set_u32(set + 0x20, 1 << 5);
+        e.mem.set_u32(set + 0x24, 1 << 31);
+        assert!(e.call(0x004a2020, &args![set, 5u32]).bool());
+        assert!(!e.call(0x004a2020, &args![set, 4u32]).bool());
+        assert!(e.call(0x004a2020, &args![set, 63u32]).bool());
+        assert!(!e.call(0x004a2020, &args![set, 32u32]).bool());
+    }
+
+    #[test]
+    fn the_skin_node_is_assigned_at_0x34() {
+        let mut e = rig();
+        let object = e.mem.alloc(0x40);
+        e.call(0x004a2c00, &args![object, 0x77u32]);
+        assert_eq!(
+            calls(&e, NI_POINTER_ASSIGN),
+            vec![vec![object + 0x34, 0x77]]
+        );
+    }
+
+    #[test]
+    fn worldspaces_from_1_to_12_are_accepted() {
+        let mut e = rig();
+        let worldspace = Rc::new(RefCell::new(0u32));
+        let current = worldspace.clone();
+        e.register_double(GET_WORLDSPACE, move |_, _| ret(*current.borrow()));
+        for (value, expected) in [
+            (0u32, false),
+            (1, true),
+            (7, true),
+            (12, true),
+            (13, false),
+            (u32::MAX, false),
+        ] {
+            *worldspace.borrow_mut() = value;
+            assert_eq!(
+                e.call(0x004a2c20, &args![0x1000u32]).bool(),
+                expected,
+                "{value}"
+            );
+        }
+        // A null object is refused without asking.
+        let before = calls(&e, GET_WORLDSPACE).len();
+        *worldspace.borrow_mut() = 5;
+        assert!(!e.call(0x004a2c20, &args![0u32]).bool());
+        assert_eq!(calls(&e, GET_WORLDSPACE).len(), before);
+    }
+
+    #[test]
+    fn the_skin_node_value_is_a_global() {
+        let mut e = rig();
+        e.set_global(SKIN_NODE_VALUE, 0x4242u32);
+        assert_eq!(e.call(0x004a2c60, &args![]).u32(), 0x4242);
+    }
+
+    #[test]
+    fn the_emitter_constructor_stores_its_arguments() {
+        let mut e = rig();
+        let emitter = e.mem.alloc(0x10);
+        e.mem.set_u8(emitter + 4, 1);
+        let returned = e.call(0x004a2c70, &args![emitter, 0x11u32, 0x22u32, 5u32]);
+        assert_eq!(returned.u32(), emitter);
+        assert_eq!(e.mem.u32(emitter), 5);
+        assert_eq!(e.mem.u8(emitter + 4), 0);
+        assert_eq!(e.mem.u32(emitter + 8), 0x22);
+        assert_eq!(e.mem.u32(emitter + 0x0c), 0x11);
+        // The slot is emptied first, then assigned.
+        assert_eq!(
+            e.call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|(a, w)| (*a, w.clone()))
+                .skip(1)
+                .collect::<Vec<_>>(),
+            vec![
+                (NI_POINTER_INIT, vec![emitter + 0x0c, 0]),
+                (NI_POINTER_ASSIGN, vec![emitter + 0x0c, 0x11]),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_emitter_destructor_empties_and_releases_the_particle_pointer() {
+        let mut e = rig();
+        let emitter = e.mem.alloc(0x10);
+        e.mem.set_u32(emitter + 0x0c, 0x77);
+        e.call(0x004a2cf0, &args![emitter]);
+        assert_eq!(e.mem.u32(emitter + 0x0c), 0);
+        assert_eq!(calls(&e, NI_POINTER_ASSIGN), vec![vec![emitter + 0x0c, 0]]);
+        assert_eq!(calls(&e, NI_POINTER_RELEASE), vec![vec![emitter + 0x0c]]);
+    }
+
+    #[test]
+    fn a_scaled_vector_goes_through_the_point_constructor() {
+        let mut e = rig();
+        let vector = e.mem.alloc(12);
+        let result = e.mem.alloc(12);
+        put_vec(&mut e, vector, [1.0, -2.0, 4.0]);
+        let returned = e.call(0x004a3760, &args![result, 0.5f32, vector]);
+        assert_eq!(returned.u32(), result);
+        assert_eq!(get_vec(&e, result), [0.5, -1.0, 2.0]);
+        // The constructor gets x, y, z in order.
+        assert_eq!(
+            calls(&e, POINT3_CONSTRUCTOR),
+            vec![vec![
+                result,
+                0.5f32.to_bits(),
+                (-1.0f32).to_bits(),
+                2.0f32.to_bits()
+            ]]
+        );
+    }
+
+    /// Floats the placement constructor copies from the exe.
+    fn set_placement_defaults(e: &mut Engine) {
+        e.map(0x011f_4000, 0x1000);
+        put_vec(e, DEFAULT_POINT, [0.25, 0.5, 0.75]);
+        e.set_global(PLACEMENT_DEFAULT_54, 4.0f32);
+        e.set_global(PLACEMENT_DEFAULT_58, 15.0f32);
+        e.set_global(PLACEMENT_DEFAULT_5C, 16.0f32);
+    }
+
+    #[test]
+    fn the_placement_constructor_sets_the_defaults() {
+        let mut e = rig();
+        set_placement_defaults(&mut e);
+        let placement = e.mem.alloc(0x7c);
+        // Dirty memory: every field must be written.
+        for i in 0..0x1fu32 {
+            e.mem.set_u32(placement + 4 * i, 0xdead_beef);
+        }
+        let returned = e.call(0x004a37b0, &args![placement]);
+        assert_eq!(returned.u32(), placement);
+        let p = Ptr::<DecalPlacement>::new(placement);
+        for offset in [0u32, 0x0c, 0x18] {
+            assert_eq!(get_vec(&e, placement + offset), [0.25, 0.5, 0.75]);
+        }
+        assert_eq!(e.get(p, DecalPlacement::source_object).addr(), 0);
+        assert_eq!(e.get(p, DecalPlacement::target).addr(), 0);
+        assert_eq!(e.get(p, DecalPlacement::second_node).addr(), 0);
+        assert_eq!(e.get(p, DecalPlacement::owner_object).addr(), 0);
+        assert_eq!(e.get(p, DecalPlacement::skip_count), -1);
+        for field in [
+            DecalPlacement::size_a,
+            DecalPlacement::size_b,
+            DecalPlacement::value_40,
+            DecalPlacement::value_44,
+            DecalPlacement::value_4c,
+        ] {
+            assert_eq!(e.get(p, field), 0.0);
+        }
+        assert_eq!(e.get(p, DecalPlacement::object_48).addr(), 0);
+        assert_eq!(e.get(p, DecalPlacement::skin_node).addr(), 0);
+        assert_eq!(e.get(p, DecalPlacement::value_54), 4.0);
+        assert_eq!(e.get(p, DecalPlacement::value_58), 15.0);
+        assert_eq!(e.get(p, DecalPlacement::value_5c), 16.0);
+        assert_eq!(get_vec(&e, placement + 0x60), [1.0, 1.0, 1.0]);
+        assert_eq!(e.get(p, DecalPlacement::value_6c), 0);
+        assert_eq!(e.get(p, DecalPlacement::flag_70), 0);
+        assert_eq!(e.get(p, DecalPlacement::flag_71), 0);
+        assert_eq!(e.get(p, DecalPlacement::occlusion_query_wanted), 1);
+        assert_eq!(e.get(p, DecalPlacement::flag_73), 0);
+        assert_eq!(e.get(p, DecalPlacement::flag_74), 1);
+        assert_eq!(e.get(p, DecalPlacement::flag_75), 0);
+        assert_eq!(e.get(p, DecalPlacement::flag_76), 0);
+        assert_eq!(e.get(p, DecalPlacement::skip_distance_limit), 0);
+        assert_eq!(e.mem.u8(placement + 0x78), 0);
+        assert_eq!(e.mem.u8(placement + 0x79), 0);
+        // Three empty vectors, the zero point and the (1, 1, 1) point.
+        assert_eq!(
+            calls(&e, EMPTY_CONSTRUCTOR),
+            vec![
+                vec![placement],
+                vec![placement + 0x0c],
+                vec![placement + 0x18]
+            ]
+        );
+        let points = calls(&e, POINT3_CONSTRUCTOR);
+        assert_eq!(points.len(), 2);
+        assert_eq!(points[0], vec![placement + 0x60, 0, 0, 0]);
+        assert_eq!(points[1][1..], [1.0f32.to_bits(); 3]);
+    }
+
+    #[test]
+    fn indexed_floats_are_read_through_the_item_calls() {
+        let mut e = rig();
+        e.register(INDEXED_ITEM, |_, a| ret(a[2]));
+        e.register(ITEM_VALUE, |_, a| ret_float(a[0] as f32 * 0.5 + 1.0));
+        let out = e.mem.alloc(12);
+        let source = 0x5000u32;
+        let returned = e.call(0x004a3970, &args![out, source]);
+        assert_eq!(returned.u32(), out);
+        assert_eq!(get_vec(&e, out), [1.0, 1.5, 2.0]);
+        let items = calls(&e, INDEXED_ITEM);
+        assert_eq!(
+            items.iter().map(|w| (w[0], w[2])).collect::<Vec<_>>(),
+            vec![(source, 0), (source, 1), (source, 2)]
+        );
+        // Three distinct 16-byte scratch objects.
+        assert_ne!(items[0][1], items[1][1]);
+        assert_ne!(items[1][1], items[2][1]);
+    }
+
+    #[test]
+    fn the_low_seven_bits_are_replaced() {
+        let mut e = rig();
+        let word = e.mem.alloc(4);
+        e.mem.set_u32(word, 0xffff_ffff);
+        e.call(0x004a39f0, &args![word, 0x1a7u32]);
+        assert_eq!(e.mem.u32(word), 0xffff_ffa7);
+        e.mem.set_u32(word, 0x1234_5600);
+        e.call(0x004a39f0, &args![word, 0x27u32]);
+        assert_eq!(e.mem.u32(word), 0x1234_5627);
+    }
+
+    #[test]
+    fn the_high_half_of_the_word_is_returned() {
+        let mut e = rig();
+        let word = e.mem.alloc(4);
+        e.mem.set_u32(word, 0xabcd_1234);
+        assert_eq!(e.call(0x004a3a20, &args![word]).u32(), 0xabcd);
+    }
+
+    #[test]
+    fn a_null_list_has_no_items() {
+        let mut e = rig();
+        assert_eq!(e.call(0x004a3a40, &args![0u32]).u32(), 0);
+        assert!(calls(&e, LIST_COUNT).is_empty());
+        let list = e.mem.alloc(0x10);
+        e.mem.set_u32(list + 8, 9);
+        assert_eq!(e.call(0x004a3a40, &args![list]).u32(), 9);
+    }
+
+    #[test]
+    fn the_collector_is_built_base_first_and_torn_down_in_reverse() {
+        let mut e = rig();
+        let collector = e.mem.alloc(0x320);
+        let returned = e.call(0x004a3a70, &args![collector]);
+        assert_eq!(returned.u32(), collector);
+        assert_eq!(e.mem.u32(collector), COLLECTOR_VTABLE);
+        assert_eq!(e.mem.f32(collector + 4), 1.0);
+        let array = collector + 0x10;
+        let log: Vec<(u32, Vec<u32>)> = e.call_log.as_ref().unwrap()[1..].to_vec();
+        assert_eq!(
+            log,
+            vec![
+                (HIT_ARRAY_STORAGE, vec![array, array + 0x10, 0, 8]),
+                (
+                    VECTOR_CONSTRUCTOR_ITERATOR,
+                    vec![array + 0x10, 0x60, 8, HIT_CONSTRUCTOR]
+                ),
+                (HIT_ARRAY_CONSTRUCTOR, vec![array]),
+            ]
+        );
+
+        // The destructor stores the complete vtable, destroys the array and
+        // ends with the base vtable.
+        e.call_log = Some(vec![]);
+        e.call(0x004a3bc0, &args![collector]);
+        assert_eq!(e.mem.u32(collector), COLLECTOR_BASE_VTABLE);
+        assert_eq!(calls(&e, HIT_ARRAY_DESTRUCTOR), vec![vec![array]]);
+    }
+
+    #[test]
+    fn the_collector_base_class_functions() {
+        let mut e = rig();
+        let object = e.mem.alloc(0x20);
+        e.call(0x004a3ae0, &args![object]);
+        assert_eq!(e.mem.u32(object), COLLECTOR_BASE_VTABLE);
+
+        // The constructor stores the vtable and the early-out fraction.
+        let object = e.mem.alloc(0x20);
+        assert_eq!(e.call(0x004a3b30, &args![object]).u32(), object);
+        assert_eq!(e.mem.u32(object), COLLECTOR_BASE_VTABLE);
+        assert_eq!(e.mem.f32(object + 4), 1.0);
+
+        // The setter alone.
+        e.mem.set_f32(object + 4, 0.25);
+        e.call(0x004a3b50, &args![object]);
+        assert_eq!(e.mem.f32(object + 4), 1.0);
+
+        // The reset runs the array call, then sets the fraction.
+        e.mem.set_f32(object + 4, 0.25);
+        e.call_log = Some(vec![]);
+        e.call(0x004a3b70, &args![object]);
+        assert_eq!(calls(&e, HIT_ARRAY_CONSTRUCTOR), vec![vec![object + 0x10]]);
+        assert_eq!(e.mem.f32(object + 4), 1.0);
+
+        // The two deleting destructors free only when bit 0 is set.
+        for (address, vtable_after) in [
+            (0x004a3b00u32, COLLECTOR_BASE_VTABLE),
+            (0x004a3b90, COLLECTOR_BASE_VTABLE),
+        ] {
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(address, &args![object, 1u32]).u32(), object);
+            assert_eq!(e.mem.u32(object), vtable_after);
+            assert_eq!(calls(&e, FREE), vec![vec![object]]);
+            e.call_log = Some(vec![]);
+            e.call(address, &args![object, 2u32]);
+            assert!(calls(&e, FREE).is_empty());
+        }
+    }
+
+    #[test]
+    fn the_hit_array_is_constructed_and_destroyed_through_its_calls() {
+        let mut e = rig();
+        let array = 0x7000u32;
+        assert_eq!(e.call(0x004a4730, &args![array, 0x33u32]).u32(), array);
+        assert_eq!(
+            calls(&e, HIT_ARRAY_STORAGE),
+            vec![vec![array, array + 0x10, 0x33, 8]]
+        );
+        assert_eq!(
+            calls(&e, VECTOR_CONSTRUCTOR_ITERATOR),
+            vec![vec![array + 0x10, 0x60, 8, HIT_CONSTRUCTOR]]
+        );
+        e.call(0x004a4440, &args![array]);
+        assert_eq!(calls(&e, HIT_ARRAY_DESTRUCTOR), vec![vec![array]]);
+    }
+
+    // -----------------------------------------------------------------
+    // The emitter update
+
+    const CAST_VTABLE: u32 = 0x0462_0000;
+    const CAST_SLOT: u32 = 0x0600_0301;
+    const EFFECT_SLOT_VALUE: u32 = 0xe001;
+    const PARENT: u32 = 0x9101;
+    const EFFECT_NODE_VALUE: u32 = 0x9201;
+    const IMPACT_OBJECT: u32 = 0x7777;
+    const CELL: u32 = 0xce11;
+
+    struct Emitter {
+        emitter: Ptr<BGSDecalEmitter>,
+        /// Every placement `ADD_PLACEMENT` was given, as words.
+        placements: Rc<RefCell<Vec<Vec<u32>>>>,
+        /// The ray start and end the command was given.
+        rays: Rc<RefCell<Vec<[f32; 6]>>>,
+        collidables: Vec<u32>,
+        hits_data: u32,
+    }
+
+    /// An emitter with a running effect, a world that answers the ray cast
+    /// with one hit per entry of `hits` (the value is the word
+    /// `OWNER_LIST_COUNT` returns for the hit's collidable; 0x10000 makes
+    /// it terrain), and doubles that behave as the game's getters do.
+    fn emitter_scene(e: &mut Engine, hits: &[u32]) -> Emitter {
+        e.map(0x011c_6000, 0x1000);
+        e.map(0x011f_4000, 0x1000);
+        set_placement_defaults(e);
+        e.set_global(RAY_JITTER_MINIMUM, -20.0f32);
+        e.set_global(RAY_JITTER_MAXIMUM, 20.0f32);
+        e.set_global(EMITTER_VALUE_40, 48.0f32);
+        e.set_global(EMITTER_RANDOM_MAXIMUM, 4.0f32);
+        e.set_global(COLOUR_SCALE, 255.0f64);
+        let emitter: Ptr<BGSDecalEmitter> = e.new_object();
+        let impact = e.mem.alloc(0x100);
+        e.set(emitter, BGSDecalEmitter::iDecalsToEmit, 2);
+        e.set(emitter, BGSDecalEmitter::pDecalImpactData, Ptr::new(impact));
+        e.mem.set_u32(emitter.addr() + 0x0c, EFFECT_SLOT_VALUE);
+
+        e.register(EFFECT_PARENT, |_, a| {
+            ret(if a[0] == EFFECT_SLOT_VALUE { PARENT } else { 0 })
+        });
+        e.register(EFFECT_NODE, |_, a| {
+            ret(if a[0] == EFFECT_SLOT_VALUE {
+                EFFECT_NODE_VALUE
+            } else {
+                0
+            })
+        });
+        e.register(EFFECT_END_TIME, |_, _| ret_float(1.0));
+        e.register(EFFECT_TIME, |_, _| ret_float(2.0));
+        // The node's rotation: its Z column is (0, 0, 1).
+        let rotation = e.mem.alloc(0x24);
+        e.register_double(NODE_ROTATION, move |_, _| ret(rotation));
+        e.register(MATRIX_GET_COLUMN, |e, a| {
+            put_vec(e, a[2], [0.0, 0.0, 1.0]);
+            Ret::default()
+        });
+        let translation = e.mem.alloc(12);
+        put_vec(e, translation, [1.0, 2.0, 3.0]);
+        e.register_double(NODE_WORLD_TRANSLATION, move |_, _| ret(translation));
+        e.register(IMPACT_SIZE_MINIMUM, |_, _| ret_float(2.0));
+        e.register(IMPACT_SIZE_MAXIMUM, |_, _| ret_float(6.0));
+        // The random numbers are the midpoints of their ranges.
+        e.register(RANDOM_FLOAT, |_, a| {
+            ret_float((f32::from_bits(a[0]) + f32::from_bits(a[1])) / 2.0)
+        });
+        e.register(DECAL_CASTER_CREATE, |_, _| ret(0xca57));
+        e.register(MENU_CONSOLE_INSTANCE, |_, _| ret(0xc0));
+
+        // The ray command: the setters store, the getters read.
+        e.register(RAY_COMMAND_SET_RESULTS, |e, a| {
+            e.mem.set_u32(a[0] + 0xa8, a[1]);
+            Ret::default()
+        });
+        e.register(COMMAND_COLLECTOR, |e, a| ret(e.mem.u32(a[0] + 0xa8)));
+        e.register(COLLECTOR_HITS, |_, a| ret(a[0] + 0x10));
+        e.register(HITS_COUNT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(HITS_ENTRY, |e, a| ret(e.mem.u32(a[0]) + a[1] * 0x60));
+        let rays: Rc<RefCell<Vec<[f32; 6]>>> = Rc::default();
+        let from: Rc<RefCell<[f32; 3]>> = Rc::default();
+        let (start, end) = (from.clone(), from.clone());
+        let ray_log = rays.clone();
+        e.register_double(RAY_COMMAND_SET_FROM, move |e, a| {
+            *start.borrow_mut() = get_vec(e, a[1]);
+            Ret::default()
+        });
+        e.register_double(RAY_COMMAND_SET_TO, move |e, a| {
+            let to = get_vec(e, a[1]);
+            let from = *end.borrow();
+            ray_log
+                .borrow_mut()
+                .push([from[0], from[1], from[2], to[0], to[1], to[2]]);
+            Ret::default()
+        });
+
+        // The hits.
+        let data = e.mem.alloc(0x60 * hits.len().max(1) as u32);
+        let mut collidables = vec![];
+        for (i, flags) in hits.iter().enumerate() {
+            let hit = data + 0x60 * i as u32;
+            e.mem.set_f32(hit + 0x10, 0.5);
+            for key in 0..8u32 {
+                e.mem.set_u32(hit + 0x20 + 4 * key, u32::MAX);
+            }
+            e.mem.set_u32(hit + 0x20, 5);
+            e.mem.set_u32(hit + 0x24, 9);
+            let collidable = e.mem.alloc(0x20);
+            let owner = e.mem.alloc(0x10);
+            e.mem.set_u32(owner + 8, 1);
+            e.mem.set_u32(collidable, owner);
+            e.mem.set_u32(collidable + 4, *flags);
+            e.mem.set_u32(hit + 0x50, collidable);
+            collidables.push(collidable);
+        }
+        let count = hits.len() as u32;
+        vtable_slots(e, CAST_VTABLE, &[(0xc8, CAST_SLOT)]);
+        e.register_double(CAST_SLOT, move |e, a| {
+            let collector = e.mem.u32(a[1] + 0xa8);
+            e.mem.set_u32(collector + 0x10, data);
+            e.mem.set_u32(collector + 0x14, count);
+            ret(1)
+        });
+        let world = object_with_vtable(e, 0x40, CAST_VTABLE);
+        e.register_double(OBJECT_TEXTURE_SET, move |_, a| {
+            ret(if a[0] == PARENT { world } else { 0 })
+        });
+        e.register(STORE_WORD, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            ret(a[0])
+        });
+        e.register(OWNER_LIST_COUNT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(LAYER_LOOKUP, |_, _| ret(1));
+        e.register(IMPACT_DATA_OBJECT, |_, _| ret(IMPACT_OBJECT));
+        // The hit normal: (0, 0.5, 1).
+        e.register(INDEXED_ITEM, |_, a| ret(a[2]));
+        e.register(ITEM_VALUE, |_, a| ret_float(a[0] as f32 * 0.5));
+        e.register(FTOL2, |_, a| {
+            ret(f64::from_bits(a[0] as u64 | (a[1] as u64) << 32) as u32)
+        });
+        e.register(ROUND_HELPER, |_, a| ret_float(f32::from_bits(a[0])));
+        e.register(TES_OBJECT_AT_POINT, |_, _| ret(0xc110));
+        e.register(OBJECT_CHILD_LIST, |_, _| ret(0xc111));
+        e.register(GET_NI_AV_OBJECT, |_, a| ret(a[0] + 1));
+        e.register(FIND_REFERENCE_FOR_3D, |_, a| ret(a[0]));
+        e.register(TES_CELL_AT_POINT, |_, _| ret(CELL));
+        let placements: Rc<RefCell<Vec<Vec<u32>>>> = Rc::default();
+        let log = placements.clone();
+        e.register_double(ADD_PLACEMENT, move |e, a| {
+            let words = (0..0x7c / 4).map(|i| e.mem.u32(a[1] + 4 * i)).collect();
+            log.borrow_mut().push(words);
+            Ret::default()
+        });
+        e.register(IMPACT_SCALE, |_, _| ret_float(0.75));
+        e.register(IMPACT_BYTE_73, |_, _| ret(1));
+        e.register(IMPACT_BYTE_74, |_, _| ret(0));
+        e.register(IMPACT_BYTE_75, |_, _| ret(1));
+        e.register(IMPACT_BYTE_76, |_, _| ret(1));
+        e.register(IMPACT_FLOAT_4C, |_, _| ret_float(1.5));
+        e.register(IMPACT_FLOAT_54, |_, _| ret_float(2.5));
+        e.register(IMPACT_FLOAT_58, |_, _| ret_float(3.5));
+        e.register(IMPACT_FLOAT_5C, |_, _| ret_float(4.5));
+        e.register(IMPACT_COLOUR, |_, _| ret(0x00ff_8040));
+        set_float(e, SETTING_RAY_LENGTH, 10.0);
+        set_float(e, SETTING_RAY_DROP, 4.0);
+        Emitter {
+            emitter,
+            placements,
+            rays,
+            collidables,
+            hits_data: data,
+        }
+    }
+
+    fn update(e: &mut Engine, scene: &Emitter) {
+        e.call(0x004a2d50, &args![scene.emitter]);
+    }
+
+    fn finished(e: &Engine, scene: &Emitter) -> bool {
+        e.get(scene.emitter, BGSDecalEmitter::bFinished)
+    }
+
+    #[test]
+    fn nothing_happens_while_the_console_is_up_or_decals_are_blocked() {
+        for (console, blocked) in [(true, false), (false, true), (true, true)] {
+            let mut e = rig();
+            let scene = emitter_scene(&mut e, &[0x10000]);
+            e.register_double(MENU_CONSOLE_ACTIVE, move |_, _| ret(console as u32));
+            e.register_double(DECALS_BLOCKED, move |_, _| ret(blocked as u32));
+            update(&mut e, &scene);
+            assert!(!finished(&e, &scene));
+            assert_eq!(calls(&e, MENU_CONSOLE_ACTIVE), vec![vec![0xc0]]);
+            assert!(calls(&e, EFFECT_PARENT).is_empty());
+            assert!(scene.placements.borrow().is_empty());
+        }
+    }
+
+    #[test]
+    fn an_emitter_whose_effect_cannot_run_is_finished() {
+        // No parent, no node, no decals left, no impact data, time before
+        // the end time.
+        for case in 0..6 {
+            let mut e = rig();
+            let scene = emitter_scene(&mut e, &[0x10000]);
+            match case {
+                0 => e.register(EFFECT_PARENT, |_, _| ret(0)),
+                1 => e.register(EFFECT_NODE, |_, _| ret(0)),
+                2 => e.set(scene.emitter, BGSDecalEmitter::iDecalsToEmit, 0),
+                3 => e.set(
+                    scene.emitter,
+                    BGSDecalEmitter::pDecalImpactData,
+                    Ptr::new(0),
+                ),
+                4 => e.register(EFFECT_TIME, |_, _| ret_float(0.5)),
+                _ => {
+                    // NaN is unordered: finished too.
+                    e.register(EFFECT_TIME, |_, _| ret_float(f32::NAN))
+                }
+            }
+            update(&mut e, &scene);
+            assert!(finished(&e, &scene), "case {case}");
+            assert!(calls(&e, DECAL_CASTER_CREATE).is_empty(), "case {case}");
+        }
+        // Time equal to the end time is not "before".
+        let mut e = rig();
+        let scene = emitter_scene(&mut e, &[0x10000]);
+        e.register(EFFECT_TIME, |_, _| ret_float(1.0));
+        update(&mut e, &scene);
+        assert!(!finished(&e, &scene));
+        assert_eq!(calls(&e, DECAL_CASTER_CREATE).len(), 1);
+    }
+
+    #[test]
+    fn without_a_world_only_the_caster_and_the_command_are_made() {
+        let mut e = rig();
+        let scene = emitter_scene(&mut e, &[0x10000]);
+        e.register(OBJECT_TEXTURE_SET, |_, _| ret(0));
+        update(&mut e, &scene);
+        assert!(!finished(&e, &scene));
+        // The caster takes the random size (the midpoint, 4) and its two
+        // collision calls.
+        assert_eq!(
+            calls(&e, DECAL_CASTER_CREATE),
+            vec![vec![4.0f32.to_bits(), 1]]
+        );
+        assert_eq!(calls(&e, DECAL_CASTER_SET_FLAG), vec![vec![0xca57, 0]]);
+        assert_eq!(
+            calls(&e, COLLISION_CALL),
+            vec![vec![0x27, 8, 0], vec![0x27, 0x1d, 0]]
+        );
+        assert_eq!(calls(&e, RAY_COMMAND_CONSTRUCTOR).len(), 1);
+        assert!(calls(&e, DECAL_CASTER_SET_TEXTURE_SET).is_empty());
+        assert!(calls(&e, RAY_COMMAND_SET_FROM).is_empty());
+        assert!(scene.placements.borrow().is_empty());
+        assert_eq!(e.get(scene.emitter, BGSDecalEmitter::iDecalsToEmit), 2);
+    }
+
+    #[test]
+    fn a_terrain_hit_places_a_decal_and_counts_it() {
+        let mut e = rig();
+        let scene = emitter_scene(&mut e, &[0x10000]);
+        update(&mut e, &scene);
+        assert!(!finished(&e, &scene));
+        assert_eq!(e.get(scene.emitter, BGSDecalEmitter::iDecalsToEmit), 1);
+        // The caster is given the world's object.
+        assert_eq!(
+            calls(&e, DECAL_CASTER_SET_TEXTURE_SET),
+            vec![vec![0xca57, calls(&e, CAST_SLOT)[0][0]]]
+        );
+        // The ray: from the node's translation along its Z column, 10 long,
+        // then lowered by 4 * end / time = 2 (the jitter is zero).
+        assert_eq!(*scene.rays.borrow(), vec![[1.0, 2.0, 3.0, 1.0, 2.0, 11.0]]);
+        // The filter word is 0x27.
+        let command = calls(&e, RAY_COMMAND_SET_FILTER)[0][0];
+        assert_eq!(calls(&e, RAY_COMMAND_SET_FILTER), vec![vec![command, 0x27]]);
+        assert_eq!(calls(&e, CAST_SLOT)[0][1], command);
+        // The last shape key before the first -1 is the layer.
+        assert_eq!(calls(&e, LAYER_LOOKUP), vec![vec![1, 9]]);
+        // The cell at the hit point (1, 2, 7) takes the placement.
+        assert_eq!(
+            calls(&e, TES_CELL_AT_POINT),
+            vec![vec![
+                e.global::<u32>(TES_OBJECT),
+                1.0f32.to_bits(),
+                2.0f32.to_bits(),
+                7.0f32.to_bits()
+            ]]
+        );
+        let adds = calls(&e, ADD_PLACEMENT);
+        assert_eq!(adds.len(), 1);
+        assert_eq!((adds[0][0], adds[0][2], adds[0][3]), (CELL, 1, 0));
+        let placements = scene.placements.borrow();
+        assert_eq!(placements.len(), 1);
+        let words = &placements[0];
+        let f = |offset: usize| f32::from_bits(words[offset / 4]);
+        assert_eq!([f(0), f(4), f(8)], [1.0, 2.0, 7.0]);
+        assert_eq!([f(0x0c), f(0x10), f(0x14)], [0.0, 0.5, 1.0]);
+        assert_eq!([f(0x38), f(0x3c), f(0x40), f(0x44)], [4.0, 4.0, 48.0, 0.75]);
+        // The terrain's object: the first list of the object the TES finds.
+        assert_eq!(words[0x28 / 4], 0xc111);
+        assert_eq!(words[0x30 / 4], IMPACT_OBJECT);
+        // The bytes at 0x70..0x77: the truncated random draw (the midpoint
+        // of 0..4), flag_71 (cleared), occlusion_query_wanted (set by the
+        // constructor), then the impact data's bytes for 0x73..0x76.
+        let byte = |offset: usize| (words[offset / 4] >> (8 * (offset % 4))) as u8;
+        assert_eq!(
+            (0x70..0x78).map(byte).collect::<Vec<_>>(),
+            vec![2, 0, 1, 1, 0, 1, 1, 0]
+        );
+        assert_eq!(f(0x4c), 1.5);
+        assert_eq!([f(0x54), f(0x58), f(0x5c)], [2.5, 3.5, 4.5]);
+        // The colour: blue, green, red bytes of 0x00ff8040.
+        assert_eq!(
+            [f(0x60), f(0x64), f(0x68)],
+            [
+                (0x40 as f64 / 255.0) as f32,
+                (0x80 as f64 / 255.0) as f32,
+                (0xff as f64 / 255.0) as f32
+            ]
+        );
+        // The collector is built and destroyed once.
+        assert_eq!(calls(&e, HIT_ARRAY_CONSTRUCTOR).len(), 1);
+        assert_eq!(calls(&e, HIT_ARRAY_DESTRUCTOR).len(), 1);
+    }
+
+    #[test]
+    fn a_hit_on_an_object_needs_a_reference_that_takes_decals() {
+        // Two non-terrain hits: the first object has no reference, the
+        // second's reference has a refused form type.
+        let mut e = rig();
+        let scene = emitter_scene(&mut e, &[0, 0, 0]);
+        let (first, second, third) = (
+            scene.collidables[0],
+            scene.collidables[1],
+            scene.collidables[2],
+        );
+        // The object of a hit is its collidable + 1.
+        e.register_double(FIND_REFERENCE_FOR_3D, move |_, a| {
+            ret(if a[0] == first + 1 { 0 } else { a[0] })
+        });
+        e.register_double(REFERENCE_BASE_FORM, move |_, a| ret(a[0]));
+        let refused = second + 1;
+        e.register_double(FORM_TYPE, move |_, a| {
+            ret(if a[0] == refused { 0x23 } else { 0x24 })
+        });
+        update(&mut e, &scene);
+        assert_eq!(e.get(scene.emitter, BGSDecalEmitter::iDecalsToEmit), 1);
+        let placements = scene.placements.borrow();
+        assert_eq!(placements.len(), 1);
+        // The third hit is the one that was placed, on its own object.
+        assert_eq!(placements[0][0x28 / 4], third + 1);
+        assert_eq!(calls(&e, GET_NI_AV_OBJECT).len(), 3);
+        // Terrain was never asked.
+        assert!(calls(&e, TES_OBJECT_AT_POINT).is_empty());
+    }
+
+    #[test]
+    fn a_hit_without_impact_object_or_owner_items_is_skipped() {
+        let mut e = rig();
+        let scene = emitter_scene(&mut e, &[0x10000]);
+        e.register(IMPACT_DATA_OBJECT, |_, _| ret(0));
+        update(&mut e, &scene);
+        assert!(scene.placements.borrow().is_empty());
+        assert_eq!(e.get(scene.emitter, BGSDecalEmitter::iDecalsToEmit), 2);
+        assert_eq!(calls(&e, LAYER_LOOKUP).len(), 1);
+
+        // A collidable whose owner has no items is skipped before that.
+        let mut e = rig();
+        let scene = emitter_scene(&mut e, &[0x10000]);
+        let owner = e.mem.u32(scene.collidables[0]);
+        e.mem.set_u32(owner + 8, 0);
+        update(&mut e, &scene);
+        assert!(calls(&e, LAYER_LOOKUP).is_empty());
+        assert!(scene.placements.borrow().is_empty());
+
+        // A hit without a collidable is skipped first of all.
+        let mut e = rig();
+        let scene = emitter_scene(&mut e, &[0x10000]);
+        e.mem.set_u32(scene.hits_data + 0x50, 0);
+        update(&mut e, &scene);
+        assert!(calls(&e, FIRST_WORD)
+            .iter()
+            .all(|w| w[0] != scene.collidables[0]));
+        assert!(calls(&e, LAYER_LOOKUP).is_empty());
+        assert!(scene.placements.borrow().is_empty());
+    }
+
+    #[test]
+    fn the_ray_end_is_jittered_and_lowered_with_the_effect_progress() {
+        let mut e = rig();
+        let scene = emitter_scene(&mut e, &[]);
+        // The jitter draws (-20, 20) give 1; the size draw gives 4.
+        e.register(RANDOM_FLOAT, |_, a| {
+            let (low, high) = (f32::from_bits(a[0]), f32::from_bits(a[1]));
+            ret_float(if low == -20.0 {
+                1.0
+            } else {
+                (low + high) / 2.0
+            })
+        });
+        // end time 3, time 3: the whole drop of 4.
+        e.register(EFFECT_END_TIME, |_, _| ret_float(3.0));
+        e.register(EFFECT_TIME, |_, _| ret_float(3.0));
+        update(&mut e, &scene);
+        assert_eq!(*scene.rays.borrow(), vec![[1.0, 2.0, 3.0, 2.0, 3.0, 10.0]]);
+        // No hits: nothing placed, the count is kept, the collector gone.
+        assert_eq!(e.get(scene.emitter, BGSDecalEmitter::iDecalsToEmit), 2);
+        assert_eq!(calls(&e, HIT_ARRAY_DESTRUCTOR).len(), 1);
+    }
+
+    #[test]
+    fn the_draw_setting_shows_the_ray_as_a_debug_line() {
+        let mut e = rig();
+        let scene = emitter_scene(&mut e, &[]);
+        e.set_global(TES_OBJECT, 0x7000u32);
+        e.register(MAKE_DEBUG_LINE, |_, _| ret(0x1111));
+        update(&mut e, &scene);
+        assert!(calls(&e, COLOR_CONSTRUCTOR).is_empty());
+        assert!(calls(&e, MAKE_DEBUG_LINE).is_empty());
+
+        let mut e = rig();
+        let scene = emitter_scene(&mut e, &[]);
+        e.set_global(TES_OBJECT, 0x7000u32);
+        e.register(MAKE_DEBUG_LINE, |_, _| ret(0x1111));
+        set_int(&mut e, SETTING_DRAW_RAY, 1);
+        update(&mut e, &scene);
+        let colours = calls(&e, COLOR_CONSTRUCTOR);
+        assert_eq!(colours.len(), 2);
+        assert_eq!(
+            colours[0][1..],
+            [
+                0.0f32.to_bits(),
+                1.0f32.to_bits(),
+                1.0f32.to_bits(),
+                1.0f32.to_bits()
+            ]
+        );
+        assert_eq!(
+            colours[1][1..],
+            [
+                0.0f32.to_bits(),
+                1.0f32.to_bits(),
+                0.0f32.to_bits(),
+                1.0f32.to_bits()
+            ]
+        );
+        // start, start colour (the second), end, end colour (the first), 1.
+        let line = &calls(&e, MAKE_DEBUG_LINE)[0];
+        assert_eq!(
+            (line[1], line[3], line[4]),
+            (colours[1][0], colours[0][0], 1)
+        );
+        assert_eq!(
+            calls(&e, ADD_TEMP_DEBUG_OBJECT),
+            vec![vec![0x7000, 0x1111, 30.0f32.to_bits()]]
+        );
     }
 }
