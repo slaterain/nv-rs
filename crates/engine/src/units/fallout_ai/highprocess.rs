@@ -1332,6 +1332,322 @@ pub fn middle_high_process_get_should_check_magic_node(
     e.get(this, MiddleHighProcess::bCheckMagicNode)
 }
 
+// Translated from 008d81c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::SetShouldCheckMagicNode` (Xbox PDB) stores the low byte of its argument in `bCheckMagicNode` at +0x168.
+pub fn middle_high_process_set_should_check_magic_node(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x168, value);
+}
+
+// Translated from 008d81e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::GetCurrentWeapon` (Xbox PDB) returns `pWeapon (ItemChange*)` at +0x114.
+pub fn middle_high_process_get_current_weapon(e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(e.mem.u32(this.addr() + 0x114))
+}
+
+// Translated from 008d8200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::IsCurrentWeaponThrown` (Xbox PDB) returns `bWeaponThrown` at +0x126.
+pub fn middle_high_process_is_current_weapon_thrown(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 0x126) != 0
+}
+
+// Translated from 008d8220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::IsCurrentWeaponGrenade` (Xbox PDB) returns `bWeaponGrenade` at +0x124.
+pub fn middle_high_process_is_current_weapon_grenade(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 0x124) != 0
+}
+
+// Translated from 008d8270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::IsHeavyBodyArmorWorn` (Xbox PDB) returns `bHeavyArmorWorn` at +0x127.
+pub fn middle_high_process_is_heavy_body_armor_worn(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 0x127) != 0
+}
+
+// Translated from 008d8290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::IsPowerBodyArmorWorn` (Xbox PDB) returns `bPowerArmorWorn` at +0x128.
+pub fn middle_high_process_is_power_body_armor_worn(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 0x128) != 0
+}
+
+// Translated from 008d82b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::IsPowerArmorHelmetWorn` (Xbox PDB) returns `bPowerArmorHelmet` at +0x129.
+pub fn middle_high_process_is_power_armor_helmet_worn(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 0x129) != 0
+}
+
+// Translated from 008d82d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::HasBackPackWorn` (Xbox PDB) returns `bHasBackPackWorn` at +0x12a.
+pub fn middle_high_process_has_back_pack_worn(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 0x12a) != 0
+}
+
+// Translated from 008d82f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::SetFireNode` (Xbox PDB) stores its argument in `pFireNode (NiAVObject*)` at +0x130.
+pub fn middle_high_process_set_fire_node(e: &mut Engine, this: Ptr, value: Ptr) {
+    e.mem.set_u32(this.addr() + 0x130, value.addr());
+}
+
+// Translated from 008d8330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::GetAimLooking` (Xbox PDB) returns `fAimLooking` at +0x1d0.
+pub fn middle_high_process_get_aim_looking(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0x1d0)
+}
+
+// Translated from 008d8380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::SetShotsToFire` (Xbox PDB) stores the low byte of its argument in `cShotsToFire` at +0x1d8.
+pub fn middle_high_process_set_shots_to_fire(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x1d8, value);
+}
+
+// Translated from 008d83a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::GetShotsToFire` (Xbox PDB) returns `cShotsToFire` at +0x1d8.
+pub fn middle_high_process_get_shots_to_fire(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x1d8)
+}
+
+// Translated from 008d83c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::GetAutomaticShotDelay` (Xbox PDB) returns `fAutomaticShotDelay` at +0x1d4.
+pub fn middle_high_process_get_automatic_shot_delay(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0x1d4)
+}
+
+// Translated from 008d8500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::SetAcquireObject` (Xbox PDB) stores its argument in `pAcquireObject (ObjectstoAcquire*)` at +0x64.
+pub fn middle_high_process_set_acquire_object(e: &mut Engine, this: Ptr, value: Ptr) {
+    e.mem.set_u32(this.addr() + 0x64, value.addr());
+}
+
+// Translated from 008d8520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::GetSavedAcquireObject` (Xbox PDB) returns `pSavedAcquireObject (ObjectstoAcquire*)` at +0x68.
+pub fn middle_high_process_get_saved_acquire_object(e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(e.mem.u32(this.addr() + 0x68))
+}
+
+// Translated from 008d8560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::SetKnockState` (Xbox PDB) stores the low byte of its argument in `cKnockState` at +0x13c.
+pub fn middle_high_process_set_knock_state(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x13c, value);
+}
+
+// Translated from 008d8580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::GetCurrentPackageSpell` (Xbox PDB) returns `pCurrentPackageSpell (MagicItem*)` at +0x164.
+pub fn middle_high_process_get_current_package_spell(e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(e.mem.u32(this.addr() + 0x164))
+}
+
+// Translated from 008d85a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::SetCurrentPackageSpell` (Xbox PDB) stores its argument in `pCurrentPackageSpell (MagicItem*)` at +0x164.
+pub fn middle_high_process_set_current_package_spell(e: &mut Engine, this: Ptr, value: Ptr) {
+    e.mem.set_u32(this.addr() + 0x164, value.addr());
+}
+
+// Translated from 008d85c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::SetLastBoundWeapon` (Xbox PDB) stores its argument in `pLastBoundWeapon (TESObjectWEAP*)` at +0x15c.
+pub fn middle_high_process_set_last_bound_weapon(e: &mut Engine, this: Ptr, value: Ptr) {
+    e.mem.set_u32(this.addr() + 0x15c, value.addr());
+}
+
+// Translated from 008d85e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::GetLastBoundWeapon` (Xbox PDB) returns `pLastBoundWeapon (TESObjectWEAP*)` at +0x15c.
+pub fn middle_high_process_get_last_bound_weapon(e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(e.mem.u32(this.addr() + 0x15c))
+}
+
+// Translated from 008d8600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::GetShouldRefreshMagicShadersEffects` (Xbox PDB) returns `bRefreshMagicShaderEffects` at +0x17c.
+pub fn middle_high_process_get_should_refresh_magic_shaders_effects(
+    e: &mut Engine,
+    this: Ptr,
+) -> bool {
+    e.mem.u8(this.addr() + 0x17c) != 0
+}
+
+// Translated from 008d8620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::SetAlphaMult` (Xbox PDB) stores its argument in `fAlphaMult` at +0x170.
+pub fn middle_high_process_set_alpha_mult(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_f32(this.addr() + 0x170, value);
+}
+
+// Translated from 008d8640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::SetScriptRefractionPower` (Xbox PDB) stores its argument in `fScriptRefractPower` at +0x174.
+pub fn middle_high_process_set_script_refraction_power(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_f32(this.addr() + 0x174, value);
+}
+
+// Translated from 008d8660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::GetIdleDoneOnce` (Xbox PDB) returns `bDoneOnce` at +0xe0.
+pub fn middle_high_process_get_idle_done_once(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 0xe0) != 0
+}
+
+// Translated from 008d86c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::GetPickpocketed` (Xbox PDB) returns `bPickPocketed` at +0x188.
+pub fn middle_high_process_get_pickpocketed(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 0x188) != 0
+}
+
+// Translated from 008d86e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::SetPickpocketed` (Xbox PDB) stores the low byte of its argument in `bPickPocketed` at +0x188.
+pub fn middle_high_process_set_pickpocketed(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x188, value);
+}
+
+// Translated from 008d8700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::SetForceNextUpdate` (Xbox PDB) stores the low byte of its argument in `bForceNextUpdate` at +0x18d.
+pub fn middle_high_process_set_force_next_update(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x18d, value);
+}
+
+/// The `ActorPackage` that `MiddleHighProcess` embeds as `RunOncePackage`
+/// (Xbox PDB) at +0xe4: the functions below pass its address on.
+const RUN_ONCE_PACKAGE_OFFSET: u32 = 0xe4;
+/// `spCharController` (`NiPointer<bhkCharacterController>`, Xbox PDB) at +0x138.
+const CHAR_CONTROLLER_OFFSET: u32 = 0x138;
+/// Reads the first word of an object (`00559450`; the `NiPointer` getter).
+const READ_FIRST_WORD: u32 = 0x0055_9450;
+/// Stores its argument at +0xc of the object (`0041fd00`).
+const WRITE_WORD_AT_0C: u32 = 0x0041_fd00;
+/// Reads the word at +0xc of the object (`0084e3a0`).
+const READ_WORD_AT_0C: u32 = 0x0084_e3a0;
+/// Adds its argument to the word at +0xc of the object (`0049bb50`).
+const ADD_TO_WORD_AT_0C: u32 = 0x0049_bb50;
+/// Reads the word at +4 of the object (`00726070`).
+const READ_WORD_AT_04: u32 = 0x0072_6070;
+/// `NiPointer<..>::operator=(const NiPointer&)` (`006e5cc0`): takes the
+/// address of the source pointer.
+const NI_POINTER_ASSIGN: u32 = 0x006e_5cc0;
+/// `NiPointer` destructor (`0045cec0`): releases the pointer it holds.
+const NI_POINTER_DESTROY: u32 = 0x0045_cec0;
+/// The double `pi / 180` (`01023128`) that `AddGunDrift` multiplies by.
+const DEGREES_TO_RADIANS: u32 = 0x0102_3128;
+
+// Translated from 008d8240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::IsCurrentWeaponGrenadeOrMine` (Xbox PDB): true when
+/// any of `bWeaponGrenade` (+0x124), `bWeaponMine` (+0x125) or
+/// `bWeaponThrown` (+0x126) is set.
+pub fn middle_high_process_is_current_weapon_grenade_or_mine(e: &mut Engine, this: Ptr) -> bool {
+    let grenade = e.mem.u8(this.addr() + 0x124) as u32;
+    let mine = e.mem.u8(this.addr() + 0x125) as u32;
+    let thrown = e.mem.u8(this.addr() + 0x126) as u32;
+    (grenade | mine | thrown) != 0
+}
+
+// Translated from 008d8310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::IsRunningRunOnce` (Xbox PDB): true when the virtual
+/// call at vtable offset 0x20c returns non-zero.
+pub fn middle_high_process_is_running_run_once(e: &mut Engine, this: Ptr) -> bool {
+    e.vcall(this.addr(), 0x20c, &args![]).u32() != 0
+}
+
+// Translated from 008d8350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::AddGunDrift` (Xbox PDB): subtracts
+/// `amount * (pi / 180)` (the double at `01023128`) from `fAimLooking`
+/// (+0x1d0), rounding to `float` at the store.
+pub fn middle_high_process_add_gun_drift(e: &mut Engine, this: Ptr, amount: f32) {
+    let factor = e.global::<f64>(DEGREES_TO_RADIANS);
+    let current = e.mem.f32(this.addr() + 0x1d0) as f64;
+    let result = current - amount as f64 * factor;
+    e.mem.set_f32(this.addr() + 0x1d0, result as f32);
+}
+
+// Translated from 008d83e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map: returns `00559450(&RunOncePackage)`, the first word
+/// of the embedded package at +0xe4.
+pub fn fn_008d83e0(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(
+        READ_FIRST_WORD,
+        &args![this.addr() + RUN_ONCE_PACKAGE_OFFSET],
+    )
+    .u32()
+}
+
+// Translated from 008d8400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::SetRunOnceProcedureIndex` (Xbox PDB): calls
+/// `0041fd00(&RunOncePackage, value)`.
+pub fn middle_high_process_set_run_once_procedure_index(e: &mut Engine, this: Ptr, value: u32) {
+    e.call(
+        WRITE_WORD_AT_0C,
+        &args![this.addr() + RUN_ONCE_PACKAGE_OFFSET, value],
+    );
+}
+
+// Translated from 008d8420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::GetRunOnceProcedureIndex` (Xbox PDB): returns
+/// `0084e3a0(&RunOncePackage)`.
+pub fn middle_high_process_get_run_once_procedure_index(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(
+        READ_WORD_AT_0C,
+        &args![this.addr() + RUN_ONCE_PACKAGE_OFFSET],
+    )
+    .u32()
+}
+
+// Translated from 008d8440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::AddToRunOnceProcedureIndex` (Xbox PDB): calls
+/// `0049bb50(&RunOncePackage, value)`.
+pub fn middle_high_process_add_to_run_once_procedure_index(e: &mut Engine, this: Ptr, value: u32) {
+    e.call(
+        ADD_TO_WORD_AT_0C,
+        &args![this.addr() + RUN_ONCE_PACKAGE_OFFSET, value],
+    );
+}
+
+// Translated from 008d8460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::GetRunOncePackageInstanceData` (Xbox PDB): returns
+/// `00726070(&RunOncePackage)`.
+pub fn middle_high_process_get_run_once_package_instance_data(e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(
+        e.call(
+            READ_WORD_AT_04,
+            &args![this.addr() + RUN_ONCE_PACKAGE_OFFSET],
+        )
+        .u32(),
+    )
+}
+
+// Translated from 008d8480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::GetCharController` (Xbox PDB): returns
+/// `00559450(&spCharController)`, the controller held by the `NiPointer`
+/// at +0x138.
+pub fn middle_high_process_get_char_controller(e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(
+        e.call(
+            READ_FIRST_WORD,
+            &args![this.addr() + CHAR_CONTROLLER_OFFSET],
+        )
+        .u32(),
+    )
+}
+
+// Translated from 008d84a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::SetCharController` (Xbox PDB): assigns the
+/// `NiPointer` at +0x138 from a temporary `NiPointer` that holds `value`
+/// (`006e5cc0`), then destroys the temporary (`0045cec0`). C++ exception
+/// unwinding of the temporary is not translated.
+pub fn middle_high_process_set_char_controller(e: &mut Engine, this: Ptr, value: Ptr) {
+    e.with_stack(4, |e, temporary| {
+        e.mem.set_u32(temporary.addr(), value.addr());
+        e.call(
+            NI_POINTER_ASSIGN,
+            &args![this.addr() + CHAR_CONTROLLER_OFFSET, temporary],
+        );
+        e.call(NI_POINTER_DESTROY, &args![temporary]);
+    });
+}
+
+// Translated from 008d8680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::ClearFaceAnimationData` (Xbox PDB) sets
+/// `m_pFaceAnimationData` (+0x178) to null.
+pub fn middle_high_process_clear_face_animation_data(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr() + 0x178, 0);
+}
+
+// Translated from 008d86a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::SetRefreshFlareFlags` (Xbox PDB) sets
+/// `bRefreshFlareFlags` (+0x180) to 1.
+pub fn middle_high_process_set_refresh_flare_flags(e: &mut Engine, this: Ptr) {
+    e.mem.set_u8(this.addr() + 0x180, 1);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1520,6 +1836,72 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x006ec0d0, bst_common_message_queue_actor_pathing_message_try_push(Ptr, Ptr) -> bool),
         entry!(0x006ec390, bst_common_message_queue_actor_pathing_message_try_pop(Ptr, Ptr) -> bool),
+        entry!(
+            0x008d81c0,
+            middle_high_process_set_should_check_magic_node(Ptr, u8)
+        ),
+        entry!(0x008d81e0, middle_high_process_get_current_weapon(Ptr) -> Ptr),
+        entry!(0x008d8200, middle_high_process_is_current_weapon_thrown(Ptr) -> bool),
+        entry!(0x008d8220, middle_high_process_is_current_weapon_grenade(Ptr) -> bool),
+        entry!(0x008d8270, middle_high_process_is_heavy_body_armor_worn(Ptr) -> bool),
+        entry!(0x008d8290, middle_high_process_is_power_body_armor_worn(Ptr) -> bool),
+        entry!(0x008d82b0, middle_high_process_is_power_armor_helmet_worn(Ptr) -> bool),
+        entry!(0x008d82d0, middle_high_process_has_back_pack_worn(Ptr) -> bool),
+        entry!(0x008d82f0, middle_high_process_set_fire_node(Ptr, Ptr)),
+        entry!(0x008d8330, middle_high_process_get_aim_looking(Ptr) -> f32),
+        entry!(0x008d8380, middle_high_process_set_shots_to_fire(Ptr, u8)),
+        entry!(0x008d83a0, middle_high_process_get_shots_to_fire(Ptr) -> u8),
+        entry!(0x008d83c0, middle_high_process_get_automatic_shot_delay(Ptr) -> f32),
+        entry!(0x008d8500, middle_high_process_set_acquire_object(Ptr, Ptr)),
+        entry!(0x008d8520, middle_high_process_get_saved_acquire_object(Ptr) -> Ptr),
+        entry!(0x008d8560, middle_high_process_set_knock_state(Ptr, u8)),
+        entry!(0x008d8580, middle_high_process_get_current_package_spell(Ptr) -> Ptr),
+        entry!(
+            0x008d85a0,
+            middle_high_process_set_current_package_spell(Ptr, Ptr)
+        ),
+        entry!(
+            0x008d85c0,
+            middle_high_process_set_last_bound_weapon(Ptr, Ptr)
+        ),
+        entry!(0x008d85e0, middle_high_process_get_last_bound_weapon(Ptr) -> Ptr),
+        entry!(0x008d8600, middle_high_process_get_should_refresh_magic_shaders_effects(Ptr) -> bool),
+        entry!(0x008d8620, middle_high_process_set_alpha_mult(Ptr, f32)),
+        entry!(
+            0x008d8640,
+            middle_high_process_set_script_refraction_power(Ptr, f32)
+        ),
+        entry!(0x008d8660, middle_high_process_get_idle_done_once(Ptr) -> bool),
+        entry!(0x008d86c0, middle_high_process_get_pickpocketed(Ptr) -> bool),
+        entry!(0x008d86e0, middle_high_process_set_pickpocketed(Ptr, u8)),
+        entry!(
+            0x008d8700,
+            middle_high_process_set_force_next_update(Ptr, u8)
+        ),
+        entry!(0x008d8240, middle_high_process_is_current_weapon_grenade_or_mine(Ptr) -> bool),
+        entry!(0x008d8310, middle_high_process_is_running_run_once(Ptr) -> bool),
+        entry!(0x008d8350, middle_high_process_add_gun_drift(Ptr, f32)),
+        entry!(0x008d83e0, fn_008d83e0(Ptr) -> u32),
+        entry!(
+            0x008d8400,
+            middle_high_process_set_run_once_procedure_index(Ptr, u32)
+        ),
+        entry!(0x008d8420, middle_high_process_get_run_once_procedure_index(Ptr) -> u32),
+        entry!(
+            0x008d8440,
+            middle_high_process_add_to_run_once_procedure_index(Ptr, u32)
+        ),
+        entry!(0x008d8460, middle_high_process_get_run_once_package_instance_data(Ptr) -> Ptr),
+        entry!(0x008d8480, middle_high_process_get_char_controller(Ptr) -> Ptr),
+        entry!(
+            0x008d84a0,
+            middle_high_process_set_char_controller(Ptr, Ptr)
+        ),
+        entry!(
+            0x008d8680,
+            middle_high_process_clear_face_animation_data(Ptr)
+        ),
+        entry!(0x008d86a0, middle_high_process_set_refresh_flare_flags(Ptr)),
     ]
 }
 
@@ -2967,5 +3349,440 @@ mod tests {
         assert!(!e.call(0x008d81a0, &args![this]).bool());
         e.mem.set_u8(this.addr() + 0x168, 1);
         assert!(e.call(0x008d81a0, &args![this]).bool());
+    }
+    #[test]
+    fn test_middle_high_process_set_should_check_magic_node() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.call(0x008d81c0, &args![this, 0x1234_5677u32]);
+        assert_eq!(e.mem.u8(this.addr() + 0x168), 0x77);
+        assert_eq!(
+            e.mem.u8(this.addr() + 0x168 + 1),
+            0,
+            "only the one byte is written"
+        );
+    }
+
+    #[test]
+    fn test_middle_high_process_get_current_weapon() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.mem.set_u32(this.addr() + 0x114, 0x1234_5678);
+        assert_eq!(e.call(0x008d81e0, &args![this]).u32(), 0x1234_5678);
+    }
+
+    #[test]
+    fn test_middle_high_process_is_current_weapon_thrown() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        assert!(!e.call(0x008d8200, &args![this]).bool());
+        e.mem.set_u8(this.addr() + 0x126, 1);
+        assert!(e.call(0x008d8200, &args![this]).bool());
+    }
+
+    #[test]
+    fn test_middle_high_process_is_current_weapon_grenade() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        assert!(!e.call(0x008d8220, &args![this]).bool());
+        e.mem.set_u8(this.addr() + 0x124, 1);
+        assert!(e.call(0x008d8220, &args![this]).bool());
+    }
+
+    #[test]
+    fn test_middle_high_process_is_heavy_body_armor_worn() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        assert!(!e.call(0x008d8270, &args![this]).bool());
+        e.mem.set_u8(this.addr() + 0x127, 1);
+        assert!(e.call(0x008d8270, &args![this]).bool());
+    }
+
+    #[test]
+    fn test_middle_high_process_is_power_body_armor_worn() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        assert!(!e.call(0x008d8290, &args![this]).bool());
+        e.mem.set_u8(this.addr() + 0x128, 1);
+        assert!(e.call(0x008d8290, &args![this]).bool());
+    }
+
+    #[test]
+    fn test_middle_high_process_is_power_armor_helmet_worn() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        assert!(!e.call(0x008d82b0, &args![this]).bool());
+        e.mem.set_u8(this.addr() + 0x129, 1);
+        assert!(e.call(0x008d82b0, &args![this]).bool());
+    }
+
+    #[test]
+    fn test_middle_high_process_has_back_pack_worn() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        assert!(!e.call(0x008d82d0, &args![this]).bool());
+        e.mem.set_u8(this.addr() + 0x12a, 1);
+        assert!(e.call(0x008d82d0, &args![this]).bool());
+    }
+
+    #[test]
+    fn test_middle_high_process_set_fire_node() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.call(0x008d82f0, &args![this, Ptr::<()>::new(0x1234_5678)]);
+        assert_eq!(e.mem.u32(this.addr() + 0x130), 0x1234_5678);
+        assert_eq!(
+            e.mem.u32(this.addr() + 0x130 + 4),
+            0,
+            "only the one field is written"
+        );
+    }
+
+    #[test]
+    fn test_middle_high_process_get_aim_looking() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.mem.set_f32(this.addr() + 0x1d0, 1.5);
+        assert_eq!(e.call(0x008d8330, &args![this]).f32(), 1.5);
+    }
+
+    #[test]
+    fn test_middle_high_process_set_shots_to_fire() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.call(0x008d8380, &args![this, 0x1234_5677u32]);
+        assert_eq!(e.mem.u8(this.addr() + 0x1d8), 0x77);
+        assert_eq!(
+            e.mem.u8(this.addr() + 0x1d8 + 1),
+            0,
+            "only the one byte is written"
+        );
+    }
+
+    #[test]
+    fn test_middle_high_process_get_shots_to_fire() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.mem.set_u8(this.addr() + 0x1d8, 7);
+        assert_eq!(e.call(0x008d83a0, &args![this]).u32() & 0xff, 7);
+    }
+
+    #[test]
+    fn test_middle_high_process_get_automatic_shot_delay() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.mem.set_f32(this.addr() + 0x1d4, 1.5);
+        assert_eq!(e.call(0x008d83c0, &args![this]).f32(), 1.5);
+    }
+
+    #[test]
+    fn test_middle_high_process_set_acquire_object() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.call(0x008d8500, &args![this, Ptr::<()>::new(0x1234_5678)]);
+        assert_eq!(e.mem.u32(this.addr() + 0x64), 0x1234_5678);
+        assert_eq!(
+            e.mem.u32(this.addr() + 0x64 + 4),
+            0,
+            "only the one field is written"
+        );
+    }
+
+    #[test]
+    fn test_middle_high_process_get_saved_acquire_object() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.mem.set_u32(this.addr() + 0x68, 0x1234_5678);
+        assert_eq!(e.call(0x008d8520, &args![this]).u32(), 0x1234_5678);
+    }
+
+    #[test]
+    fn test_middle_high_process_set_knock_state() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.call(0x008d8560, &args![this, 0x1234_5677u32]);
+        assert_eq!(e.mem.u8(this.addr() + 0x13c), 0x77);
+        assert_eq!(
+            e.mem.u8(this.addr() + 0x13c + 1),
+            0,
+            "only the one byte is written"
+        );
+    }
+
+    #[test]
+    fn test_middle_high_process_get_current_package_spell() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.mem.set_u32(this.addr() + 0x164, 0x1234_5678);
+        assert_eq!(e.call(0x008d8580, &args![this]).u32(), 0x1234_5678);
+    }
+
+    #[test]
+    fn test_middle_high_process_set_current_package_spell() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.call(0x008d85a0, &args![this, Ptr::<()>::new(0x1234_5678)]);
+        assert_eq!(e.mem.u32(this.addr() + 0x164), 0x1234_5678);
+        assert_eq!(
+            e.mem.u32(this.addr() + 0x164 + 4),
+            0,
+            "only the one field is written"
+        );
+    }
+
+    #[test]
+    fn test_middle_high_process_set_last_bound_weapon() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.call(0x008d85c0, &args![this, Ptr::<()>::new(0x1234_5678)]);
+        assert_eq!(e.mem.u32(this.addr() + 0x15c), 0x1234_5678);
+        assert_eq!(
+            e.mem.u32(this.addr() + 0x15c + 4),
+            0,
+            "only the one field is written"
+        );
+    }
+
+    #[test]
+    fn test_middle_high_process_get_last_bound_weapon() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.mem.set_u32(this.addr() + 0x15c, 0x1234_5678);
+        assert_eq!(e.call(0x008d85e0, &args![this]).u32(), 0x1234_5678);
+    }
+
+    #[test]
+    fn test_middle_high_process_get_should_refresh_magic_shaders_effects() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        assert!(!e.call(0x008d8600, &args![this]).bool());
+        e.mem.set_u8(this.addr() + 0x17c, 1);
+        assert!(e.call(0x008d8600, &args![this]).bool());
+    }
+
+    #[test]
+    fn test_middle_high_process_set_alpha_mult() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.call(0x008d8620, &args![this, 2.5f32]);
+        assert_eq!(e.mem.f32(this.addr() + 0x170), 2.5);
+        assert_eq!(
+            e.mem.u32(this.addr() + 0x170 + 4),
+            0,
+            "only the one field is written"
+        );
+    }
+
+    #[test]
+    fn test_middle_high_process_set_script_refraction_power() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.call(0x008d8640, &args![this, 2.5f32]);
+        assert_eq!(e.mem.f32(this.addr() + 0x174), 2.5);
+        assert_eq!(
+            e.mem.u32(this.addr() + 0x174 + 4),
+            0,
+            "only the one field is written"
+        );
+    }
+
+    #[test]
+    fn test_middle_high_process_get_idle_done_once() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        assert!(!e.call(0x008d8660, &args![this]).bool());
+        e.mem.set_u8(this.addr() + 0xe0, 1);
+        assert!(e.call(0x008d8660, &args![this]).bool());
+    }
+
+    #[test]
+    fn test_middle_high_process_get_pickpocketed() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        assert!(!e.call(0x008d86c0, &args![this]).bool());
+        e.mem.set_u8(this.addr() + 0x188, 1);
+        assert!(e.call(0x008d86c0, &args![this]).bool());
+    }
+
+    #[test]
+    fn test_middle_high_process_set_pickpocketed() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.call(0x008d86e0, &args![this, 0x1234_5677u32]);
+        assert_eq!(e.mem.u8(this.addr() + 0x188), 0x77);
+        assert_eq!(
+            e.mem.u8(this.addr() + 0x188 + 1),
+            0,
+            "only the one byte is written"
+        );
+    }
+
+    #[test]
+    fn test_middle_high_process_set_force_next_update() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.call(0x008d8700, &args![this, 0x1234_5677u32]);
+        assert_eq!(e.mem.u8(this.addr() + 0x18d), 0x77);
+        assert_eq!(
+            e.mem.u8(this.addr() + 0x18d + 1),
+            0,
+            "only the one byte is written"
+        );
+    }
+
+    #[test]
+    fn test_middle_high_process_is_current_weapon_grenade_or_mine() {
+        for offset in [0x124u32, 0x125, 0x126] {
+            let mut e = Engine::new();
+            let this = process(&mut e);
+            assert!(!e.call(0x008d8240, &args![this]).bool());
+            e.mem.set_u8(this.addr() + offset, 1);
+            assert!(
+                e.call(0x008d8240, &args![this]).bool(),
+                "flag at {offset:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_middle_high_process_is_running_run_once() {
+        for (result, expected) in [(0u32, false), (7, true), (0x100, true)] {
+            let mut e = Engine::new();
+            let this = process(&mut e);
+            e.put_vtable(0x0200_0000, &[0; 0x84]);
+            e.mem.set_u32(0x0200_0000 + 0x20c, 0x0200_1000);
+            e.mem.set_u32(this.addr(), 0x0200_0000);
+            e.register_double(0x0200_1000, move |_, _| word(result));
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x008d8310, &args![this]).bool(), expected);
+            assert_eq!(e.call_log.as_ref().unwrap().len(), 2, "entry + vcall");
+        }
+    }
+    #[test]
+
+    fn test_middle_high_process_add_gun_drift() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.mem.map(0x0102_3128, 8);
+        e.set_global(0x0102_3128, std::f64::consts::PI / 180.0);
+        e.mem.set_f32(this.addr() + 0x1d0, 1.0);
+        e.call(0x008d8350, &args![this, 10.0f32]);
+        let expected = (1.0f64 - 10.0f64 * (std::f64::consts::PI / 180.0)) as f32;
+        assert_eq!(e.mem.f32(this.addr() + 0x1d0), expected);
+    }
+
+    /// Doubles for the package getters at +0xe4 / the `NiPointer` at +0x138
+    /// that record the object address they receive.
+    fn record_receiver(e: &mut Engine, address: u32, result: u32) {
+        e.register_double(address, move |e, a| {
+            e.mem.set_u32(0x0300_0000, a[0]);
+            e.mem.set_u32(0x0300_0004, a.get(1).copied().unwrap_or(0));
+            word(result)
+        });
+    }
+
+    fn calling_setup(e: &mut Engine) -> Ptr {
+        e.mem.map(0x0300_0000, 8);
+        process(e)
+    }
+
+    #[test]
+    fn test_fn_008d83e0() {
+        let mut e = Engine::new();
+        let this = calling_setup(&mut e);
+        record_receiver(&mut e, 0x0055_9450, 0x1234_5678);
+        assert_eq!(e.call(0x008d83e0, &args![this]).u32(), 0x1234_5678);
+        assert_eq!(e.mem.u32(0x0300_0000), this.addr() + 0xe4);
+    }
+
+    #[test]
+    fn test_middle_high_process_set_run_once_procedure_index() {
+        let mut e = Engine::new();
+        let this = calling_setup(&mut e);
+        record_receiver(&mut e, 0x0041_fd00, 0);
+        e.call(0x008d8400, &args![this, 5u32]);
+        assert_eq!(e.mem.u32(0x0300_0000), this.addr() + 0xe4);
+        assert_eq!(e.mem.u32(0x0300_0004), 5);
+    }
+
+    #[test]
+    fn test_middle_high_process_get_run_once_procedure_index() {
+        let mut e = Engine::new();
+        let this = calling_setup(&mut e);
+        record_receiver(&mut e, 0x0084_e3a0, 9);
+        assert_eq!(e.call(0x008d8420, &args![this]).u32(), 9);
+        assert_eq!(e.mem.u32(0x0300_0000), this.addr() + 0xe4);
+    }
+
+    #[test]
+    fn test_middle_high_process_add_to_run_once_procedure_index() {
+        let mut e = Engine::new();
+        let this = calling_setup(&mut e);
+        record_receiver(&mut e, 0x0049_bb50, 0);
+        e.call(0x008d8440, &args![this, 3u32]);
+        assert_eq!(e.mem.u32(0x0300_0000), this.addr() + 0xe4);
+        assert_eq!(e.mem.u32(0x0300_0004), 3);
+    }
+
+    #[test]
+    fn test_middle_high_process_get_run_once_package_instance_data() {
+        let mut e = Engine::new();
+        let this = calling_setup(&mut e);
+        record_receiver(&mut e, 0x0072_6070, 0x2222_0000);
+        assert_eq!(e.call(0x008d8460, &args![this]).u32(), 0x2222_0000);
+        assert_eq!(e.mem.u32(0x0300_0000), this.addr() + 0xe4);
+    }
+
+    #[test]
+    fn test_middle_high_process_get_char_controller() {
+        let mut e = Engine::new();
+        let this = calling_setup(&mut e);
+        record_receiver(&mut e, 0x0055_9450, 0x3333_0000);
+        assert_eq!(e.call(0x008d8480, &args![this]).u32(), 0x3333_0000);
+        assert_eq!(e.mem.u32(0x0300_0000), this.addr() + 0x138);
+    }
+
+    #[test]
+    fn test_middle_high_process_set_char_controller() {
+        let mut e = Engine::new();
+        let this = calling_setup(&mut e);
+        // The assign double stores the source pointer's value into the
+        // destination `NiPointer`, as the real one does.
+        e.register(0x006e_5cc0, |e, a| {
+            let source = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], source);
+            word(a[0])
+        });
+        e.register(0x0045_cec0, |e, a| {
+            e.mem.set_u32(0x0300_0004, e.mem.u32(a[0]));
+            word(0)
+        });
+        e.call(0x008d84a0, &args![this, Ptr::<()>::new(0x4444_0000)]);
+        assert_eq!(e.mem.u32(this.addr() + 0x138), 0x4444_0000);
+        assert_eq!(
+            e.mem.u32(0x0300_0004),
+            0x4444_0000,
+            "the temporary is destroyed after the assignment"
+        );
+    }
+
+    #[test]
+    fn test_middle_high_process_clear_face_animation_data() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.mem.set_u32(this.addr() + 0x178, 0x1234_5678);
+        e.mem.set_u32(this.addr() + 0x17c, 0x1111);
+        e.call(0x008d8680, &args![this]);
+        assert_eq!(e.mem.u32(this.addr() + 0x178), 0);
+        assert_eq!(e.mem.u32(this.addr() + 0x17c), 0x1111, "only the one field");
+    }
+
+    #[test]
+    fn test_middle_high_process_set_refresh_flare_flags() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.call(0x008d86a0, &args![this]);
+        assert_eq!(e.mem.u8(this.addr() + 0x180), 1);
+        assert_eq!(e.mem.u8(this.addr() + 0x181), 0, "only the one byte");
     }
 }
