@@ -25,8 +25,7 @@
 //!   where the game compares the unrounded `ST0`, `.f64()`.
 //! - Offsets that are not in a declared layout are named in comments with
 //!   the Xbox PDB field they correspond to.
-//! - Translated so far: everything up to `006db3b0`; the next session continues
-//!   at `006db3e0` (the first function the queue lists as open after it).
+//! - Translated: the whole unit (the last session did `006db3e0` to `006dc070`).
 
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -1304,6 +1303,58 @@ const CANDIDATE_ARRAY_VTABLE: u32 = 0x0106_cc28;
 /// The vtable `fn_006dae60` stores in a `BSSimpleArray<PathingCoverLocation,
 /// 1024>`.
 const COVER_LOCATION_ARRAY_VTABLE: u32 = 0x0106_cbec;
+/// Vtables stored by the array constructors `fn_006db4a0` (the array whose
+/// scalar deleting destructor `006dbb80` is `BSSimpleArray<NavmeshTriFan,
+/// 1024>`), `fn_006db7a0`, `fn_006db890` / `fn_006db950` (scrap-heap
+/// arrays; `006dbc90` names them `BSScrapArray<CrossedTriangle,1024>`) and
+/// `fn_006db9e0` (`006dbcc0`: `BSSimpleArray<NavMeshTriHandle,1024>`).
+const TRI_FAN_ARRAY_VTABLE: u32 = 0x0106_cc3c;
+const FLOAT_SCRAP_ARRAY_VTABLE: u32 = 0x0106_c6e0;
+const CROSSED_TRIANGLE_SCRAP_ARRAY_VTABLE: u32 = 0x0106_cc78;
+const TRI_HANDLE_ARRAY_VTABLE: u32 = 0x0106_cca0;
+/// `ECX` = array (to construct), stack (0, 0): the base initialization of
+/// the array of 0xC-byte entries.
+const TRI_FAN_ARRAY_INIT: u32 = 0x0069_ba70;
+/// `ECX` = array of 0xC-byte entries, stack (first element, count):
+/// constructs entries.
+const TRI_FAN_ARRAY_CONSTRUCT: u32 = 0x0069_b9d0;
+/// `ECX` = array of 0x20-byte entries: reserves a slot (size + 1), returns
+/// the old size.
+const EDGE_PROXY_ARRAY_ADD_SLOT: u32 = 0x006b_4060;
+/// `ECX` = array of 0x20-byte entries, stack (first element, count):
+/// constructs entries.
+const EDGE_PROXY_ARRAY_CONSTRUCT: u32 = 0x006d_c130;
+/// `ECX` = array of 0x18-byte entries: reserves a slot, returns the old
+/// size.
+const PATH_POINT_ARRAY_ADD_SLOT: u32 = 0x006d_c260;
+/// `ECX` = array of 0x18-byte entries, stack (first element, count):
+/// constructs entries.
+const PATH_POINT_ENTRY_CONSTRUCT: u32 = 0x006d_05e0;
+/// `ECX` = float array, stack (value): appends it (`fn_006db540` at the
+/// end of the array).
+const FLOAT_ARRAY_APPEND: u32 = 0x006d_c320;
+/// `ECX` = float array, stack (destination, source, count): moves `count`
+/// entries.
+const FLOAT_ARRAY_COPY: u32 = 0x0042_fb60;
+/// `ECX` = float array, stack (first element, count): constructs entries.
+const FLOAT_ARRAY_CONSTRUCT: u32 = 0x0072_6bf0;
+/// `ECX` = float scrap-heap array (to construct): the base constructor
+/// (the body is shared with [`NAVMESH_LIST_CONSTRUCT`]).
+const FLOAT_SCRAP_ARRAY_BASE_CONSTRUCT: u32 = NAVMESH_LIST_CONSTRUCT;
+/// `ECX` = float array, stack (capacity, size): the array initialization.
+const FLOAT_ARRAY_INIT: u32 = 0x0042_fcb0;
+/// `ECX` = crossed-triangle scrap-heap array (to construct): the base
+/// constructor.
+const CROSSED_TRIANGLE_SCRAP_ARRAY_BASE_CONSTRUCT: u32 = 0x006d_c370;
+/// `ECX` = array, stack (capacity, size): the array initialization of the
+/// crossed-triangle scrap-heap array and of the triangle handle array.
+const CROSSED_TRIANGLE_ARRAY_INIT: u32 = 0x006d_c440;
+/// `ECX` = crossed-triangle scrap-heap array: the base destructor.
+const CROSSED_TRIANGLE_SCRAP_ARRAY_BASE_DESTRUCT: u32 = 0x006d_b930;
+/// `ECX` = float `BSSimpleArray`: destructor.
+const FLOAT_SIMPLE_ARRAY_DESTRUCT: u32 = 0x006d_b720;
+/// `ECX` = cover location array: reserves a slot, returns the old size.
+const COVER_LOCATION_ARRAY_ADD_SLOT: u32 = 0x006d_c500;
 
 /// `cdecl (block, bytes)`: resizes a block from [`MEMORY_ALLOCATE`] (the
 /// `MemoryManager` reallocation), returns the new block.
@@ -7774,6 +7825,419 @@ pub fn fn_006db3b0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 006db3e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the candidate array (`BSSimpleArray<
+/// FastNavMeshEdgeLocationProxy_1024>` by the name of `006dbb10`): the
+/// vtable, then the clearing of the array with its buffer (`008454f0` with
+/// 1).
+pub fn fn_006db3e0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), CANDIDATE_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 006db400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Appends a copy of `item` to the candidate array (entries of 0x20
+/// bytes): reserves a slot (`006b4060`), constructs the entry (`006dc130`),
+/// assigns `item` to it (`fn_006dbb40`) and returns the entry's index.
+pub fn fn_006db400(e: &mut Engine, this: Ptr, item: Ptr) -> u32 {
+    let index = e.call(EDGE_PROXY_ARRAY_ADD_SLOT, &args![this]).u32();
+    let buffer = e.mem.u32(this.addr() + 4);
+    e.call(
+        EDGE_PROXY_ARRAY_CONSTRUCT,
+        &args![this, index.wrapping_mul(0x20).wrapping_add(buffer), 1u32],
+    );
+    let buffer = e.mem.u32(this.addr() + 4);
+    fn_006dbb40(
+        e,
+        Ptr::new(index.wrapping_mul(0x20).wrapping_add(buffer)),
+        item,
+    );
+    index
+}
+
+// Translated from 006db450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Appends a copy of `item` to the array of 0x18-byte path points:
+/// reserves a slot (`006dc260`), constructs the entry (`006d05e0`),
+/// assigns `item` to it (`006cf900`) and returns the entry's index.
+pub fn fn_006db450(e: &mut Engine, this: Ptr, item: Ptr) -> u32 {
+    let index = e.call(PATH_POINT_ARRAY_ADD_SLOT, &args![this]).u32();
+    let buffer = e.mem.u32(this.addr() + 4);
+    e.call(
+        PATH_POINT_ENTRY_CONSTRUCT,
+        &args![this, index.wrapping_mul(0x18).wrapping_add(buffer), 1u32],
+    );
+    let buffer = e.mem.u32(this.addr() + 4);
+    e.call(
+        PATH_POINT_ASSIGN,
+        &args![index.wrapping_mul(0x18).wrapping_add(buffer), item],
+    );
+    index
+}
+
+// Translated from 006db4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the array of 0xC-byte entries (`BSSimpleArray<
+/// NavmeshTriFan_1024>` by the name of `006dbb80`): the vtable and the base
+/// initialization (`0069ba70` with 0, 0). Returns `this`.
+pub fn fn_006db4a0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), TRI_FAN_ARRAY_VTABLE);
+    e.call(TRI_FAN_ARRAY_INIT, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 006db4d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the array of 0xC-byte entries: the vtable, then the
+/// clearing of the array with its buffer (`008454f0` with 1).
+pub fn fn_006db4d0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), TRI_FAN_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 006db4f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Appends a copy of `item` to the array of 0xC-byte entries: reserves a
+/// slot (`00978bc0`), constructs the entry (`0069b9d0`), assigns `item` to
+/// it (`fn_006dbbb0`) and returns the entry's index.
+pub fn fn_006db4f0(e: &mut Engine, this: Ptr, item: Ptr) -> u32 {
+    let index = e.call(ARRAY_ADD_SLOT, &args![this]).u32();
+    let buffer = e.mem.u32(this.addr() + 4);
+    e.call(
+        TRI_FAN_ARRAY_CONSTRUCT,
+        &args![this, index.wrapping_mul(0xc).wrapping_add(buffer), 1u32],
+    );
+    let buffer = e.mem.u32(this.addr() + 4);
+    fn_006dbbb0(
+        e,
+        Ptr::new(index.wrapping_mul(0xc).wrapping_add(buffer)),
+        item,
+    );
+    index
+}
+
+// Translated from 006db540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Inserts the float at `item` into the float array at `index`. At the end
+/// of the array it is appended (`006dc320`). Otherwise, when the array is
+/// full (`00438b90`) the entries move to a buffer of the grown capacity
+/// (`009a3910`, allocated through virtual slot 4): the ones before `index`,
+/// then the ones from `index` on, one place up; the old buffer is freed
+/// (`006a8500`). When it is not full the entries from `index` on move up
+/// one place in place. The size grows by one and the value is stored.
+pub fn fn_006db540(e: &mut Engine, this: Ptr, index: u32, item: Ptr) {
+    let this = this.addr();
+    if index == e.mem.u32(this + 8) {
+        e.call(FLOAT_ARRAY_APPEND, &args![this, item]);
+        return;
+    }
+    if e.call(ARRAY_IS_FULL, &args![this]).bool() {
+        let capacity = e.call(ARRAY_GROWN_CAPACITY, &args![this]).u32();
+        let new_buffer = e.vcall(this, 4, &args![capacity]).u32();
+        let old_buffer = e.mem.u32(this + 4);
+        e.call(
+            FLOAT_ARRAY_COPY,
+            &args![this, new_buffer, old_buffer, index],
+        );
+        e.call(
+            FLOAT_ARRAY_CONSTRUCT,
+            &args![this, new_buffer.wrapping_add(index.wrapping_mul(4)), 1u32],
+        );
+        let size = e.mem.u32(this + 8);
+        let old_buffer = e.mem.u32(this + 4);
+        e.call(
+            FLOAT_ARRAY_COPY,
+            &args![
+                this,
+                new_buffer
+                    .wrapping_add(index.wrapping_mul(4))
+                    .wrapping_add(4),
+                old_buffer.wrapping_add(index.wrapping_mul(4)),
+                size.wrapping_sub(index)
+            ],
+        );
+        e.call(ARRAY_FREE_BUFFER, &args![this]);
+        e.mem.set_u32(this + 4, new_buffer);
+        e.mem.set_u32(this + 0xc, capacity);
+    } else {
+        let size = e.mem.u32(this + 8);
+        let buffer = e.mem.u32(this + 4);
+        e.call(
+            FLOAT_ARRAY_COPY,
+            &args![
+                this,
+                buffer.wrapping_add(index.wrapping_mul(4)).wrapping_add(4),
+                buffer.wrapping_add(index.wrapping_mul(4)),
+                size.wrapping_sub(index)
+            ],
+        );
+        let buffer = e.mem.u32(this + 4);
+        e.call(
+            FLOAT_ARRAY_CONSTRUCT,
+            &args![this, buffer.wrapping_add(index.wrapping_mul(4)), 1u32],
+        );
+    }
+    let size = e.mem.u32(this + 8);
+    e.mem.set_u32(this + 8, size.wrapping_add(1));
+    let buffer = e.mem.u32(this + 4);
+    // The game moves the float through the x87 stack; the bits are copied.
+    let value = e.mem.u32(item.addr());
+    e.mem
+        .set_u32(buffer.wrapping_add(index.wrapping_mul(4)), value);
+}
+
+// Translated from 006db7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the float scrap-heap array: the base constructor
+/// (`0042f800`), the vtable, the allocator (`allocator`, else the thread's
+/// scrap heap) at +0x10, and the array initialization (`0042fcb0`) with
+/// `capacity` and `size`. Returns `this`.
+pub fn fn_006db7a0(e: &mut Engine, this: Ptr, capacity: u32, size: u32, allocator: u32) -> Ptr {
+    e.call(FLOAT_SCRAP_ARRAY_BASE_CONSTRUCT, &args![this]);
+    e.mem.set_u32(this.addr(), FLOAT_SCRAP_ARRAY_VTABLE);
+    let allocator = if allocator != 0 {
+        allocator
+    } else {
+        let manager = e.call(MEMORY_MANAGER_OBJECT, &args![]).u32();
+        e.call(GET_THREAD_SCRAP_HEAP, &args![manager]).u32()
+    };
+    e.mem.set_u32(this.addr() + 0x10, allocator);
+    e.call(FLOAT_ARRAY_INIT, &args![this, capacity, size]);
+    this
+}
+
+// Translated from 006db890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the crossed-triangle scrap-heap array: like
+/// `fn_006db7a0` with the base constructor `006dc370`, its own vtable and
+/// the initialization `006dc440`. Returns `this`.
+pub fn fn_006db890(e: &mut Engine, this: Ptr, capacity: u32, size: u32, allocator: u32) -> Ptr {
+    e.call(CROSSED_TRIANGLE_SCRAP_ARRAY_BASE_CONSTRUCT, &args![this]);
+    e.mem
+        .set_u32(this.addr(), CROSSED_TRIANGLE_SCRAP_ARRAY_VTABLE);
+    let allocator = if allocator != 0 {
+        allocator
+    } else {
+        let manager = e.call(MEMORY_MANAGER_OBJECT, &args![]).u32();
+        e.call(GET_THREAD_SCRAP_HEAP, &args![manager]).u32()
+    };
+    e.mem.set_u32(this.addr() + 0x10, allocator);
+    e.call(CROSSED_TRIANGLE_ARRAY_INIT, &args![this, capacity, size]);
+    this
+}
+
+// Translated from 006db950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the crossed-triangle scrap-heap array: the vtable,
+/// the clearing of the array with its buffer (`008454f0` with 1) and the
+/// base destructor (`006db930`).
+pub fn fn_006db950(e: &mut Engine, this: Ptr) {
+    e.mem
+        .set_u32(this.addr(), CROSSED_TRIANGLE_SCRAP_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+    e.call(CROSSED_TRIANGLE_SCRAP_ARRAY_BASE_DESTRUCT, &args![this]);
+}
+
+// Translated from 006db9e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the triangle handle array (`BSSimpleArray<
+/// NavMeshTriHandle_1024>` by the name of `006dbcc0`): the vtable and the
+/// array initialization (`006dc440` with 0, 0). Returns `this`.
+pub fn fn_006db9e0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), TRI_HANDLE_ARRAY_VTABLE);
+    e.call(CROSSED_TRIANGLE_ARRAY_INIT, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 006dba10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the triangle handle array: the vtable, then the
+/// clearing of the array with its buffer (`008454f0` with 1).
+pub fn fn_006dba10(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), TRI_HANDLE_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 006dba80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<PathingCoverLocation_1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the destructor `fn_006dae90` and, when bit 0 of
+/// `flags` is set, frees the object (`00401030`). Returns `this`.
+pub fn fn_006dba80(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006dae90(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006dbab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<PathingNode_P_1024>::_scalar_deleting_destructor_` (Xbox
+/// PDB): runs the destructor `006db330` and, when bit 0 of `flags` is set,
+/// frees the object. Returns `this`.
+pub fn fn_006dbab0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(SCRAP_ARRAY_BASE_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006dbae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<PathingNode_P_1024>::_scalar_deleting_destructor_` (Xbox
+/// PDB): runs the destructor `fn_006db350` and, when bit 0 of `flags` is
+/// set, frees the object. Returns `this`.
+pub fn fn_006dbae0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006db350(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006dbb10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<FastNavMeshEdgeLocationProxy_1024>::
+/// _scalar_deleting_destructor_` (Xbox PDB): runs the destructor
+/// `fn_006db3e0` and, when bit 0 of `flags` is set, frees the object.
+/// Returns `this`.
+pub fn fn_006dbb10(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006db3e0(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006dbb40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Assignment of the 0x20-byte candidate entry: the base copy (`006cf900`,
+/// a path point) and the words at +0x18 and +0x1C. Returns `this`.
+pub fn fn_006dbb40(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
+    e.call(PATH_POINT_ASSIGN, &args![this, other]);
+    // The game moves both words through the x87 stack; the bits are copied.
+    let first = e.mem.u32(other.addr() + 0x18);
+    e.mem.set_u32(this.addr() + 0x18, first);
+    let second = e.mem.u32(other.addr() + 0x1c);
+    e.mem.set_u32(this.addr() + 0x1c, second);
+    this
+}
+
+// Translated from 006dbb80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NavmeshTriFan_1024>::_scalar_deleting_destructor_` (Xbox
+/// PDB): runs the destructor `fn_006db4d0` and, when bit 0 of `flags` is
+/// set, frees the object. Returns `this`.
+pub fn fn_006dbb80(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006db4d0(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006dbbb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Assignment of the 0xC-byte triangle fan entry: the navmesh and triangle
+/// copy (`0069a690`, a triangle reference) and the three bytes at +8.
+/// Returns `this`.
+pub fn fn_006dbbb0(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
+    e.call(TRIANGLE_REFERENCE_ASSIGN, &args![this, other]);
+    for i in 0..3 {
+        let byte = e.mem.u8(other.addr() + 8 + i);
+        e.mem.set_u8(this.addr() + 8 + i, byte);
+    }
+    this
+}
+
+// Translated from 006dbc00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<float_1024>::_scalar_deleting_destructor_` (Xbox PDB):
+/// runs the destructor `006db720` and, when bit 0 of `flags` is set, frees
+/// the object. Returns `this`.
+pub fn fn_006dbc00(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(FLOAT_SIMPLE_ARRAY_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006dbc30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<float_1024>::_scalar_deleting_destructor_` (Xbox PDB):
+/// runs the destructor `006db740` and, when bit 0 of `flags` is set, frees
+/// the object. Returns `this`.
+pub fn fn_006dbc30(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(KEY_ARRAY_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006dbc60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CrossedTriangle_1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the destructor `006db930` and, when bit 0 of `flags` is
+/// set, frees the object. Returns `this`.
+pub fn fn_006dbc60(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(CROSSED_TRIANGLE_SCRAP_ARRAY_BASE_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006dbc90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<CrossedTriangle_1024>::_scalar_deleting_destructor_` (Xbox
+/// PDB): runs the destructor `fn_006db950` and, when bit 0 of `flags` is
+/// set, frees the object. Returns `this`.
+pub fn fn_006dbc90(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006db950(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006dbcc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NavMeshTriHandle_1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the destructor `fn_006dba10` and, when bit 0 of `flags`
+/// is set, frees the object. Returns `this`.
+pub fn fn_006dbcc0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006dba10(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006dbd90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Appends a copy of `item` to the cover location array (entries of 0x54
+/// bytes): reserves a slot (`006dc500`), constructs the entry
+/// (`006dbe40`), assigns `item` to it (`006e4430`) and returns the entry's
+/// index.
+pub fn fn_006dbd90(e: &mut Engine, this: Ptr, item: Ptr) -> u32 {
+    let index = e.call(COVER_LOCATION_ARRAY_ADD_SLOT, &args![this]).u32();
+    let buffer = e.mem.u32(this.addr() + 4);
+    e.call(
+        COVER_LOCATIONS_CONSTRUCT,
+        &args![this, index.wrapping_mul(0x54).wrapping_add(buffer), 1u32],
+    );
+    let buffer = e.mem.u32(this.addr() + 4);
+    e.call(
+        COVER_LOCATION_ASSIGN,
+        &args![index.wrapping_mul(0x54).wrapping_add(buffer), item],
+    );
+    index
+}
+
+// Translated from 006dc070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The initialization of the cover location array: empty buffer, size and
+/// capacity; the capacity is at least `size`. A buffer is allocated through
+/// virtual slot 4 when the capacity is not 0, and `size` entries are
+/// constructed in it (`006dbe40`).
+pub fn fn_006dc070(e: &mut Engine, this: Ptr, capacity: u32, size: u32) {
+    let this = this.addr();
+    e.mem.set_u32(this + 4, 0);
+    e.mem.set_u32(this + 8, 0);
+    e.mem.set_u32(this + 0xc, 0);
+    let capacity = capacity.max(size);
+    if capacity != 0 {
+        let buffer = e.vcall(this, 4, &args![capacity]).u32();
+        e.mem.set_u32(this + 4, buffer);
+        e.mem.set_u32(this + 0xc, capacity);
+    }
+    if size != 0 {
+        let buffer = e.mem.u32(this + 4);
+        e.call(COVER_LOCATIONS_CONSTRUCT, &args![this, buffer, size]);
+        e.mem.set_u32(this + 8, size);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -7984,6 +8448,32 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006db290, fn_006db290(Ptr, u32, u32, u32) -> Ptr),
         entry!(0x006db350, fn_006db350(Ptr)),
         entry!(0x006db3b0, fn_006db3b0(Ptr) -> Ptr),
+        entry!(0x006db3e0, fn_006db3e0(Ptr)),
+        entry!(0x006db400, fn_006db400(Ptr, Ptr) -> u32),
+        entry!(0x006db450, fn_006db450(Ptr, Ptr) -> u32),
+        entry!(0x006db4a0, fn_006db4a0(Ptr) -> Ptr),
+        entry!(0x006db4d0, fn_006db4d0(Ptr)),
+        entry!(0x006db4f0, fn_006db4f0(Ptr, Ptr) -> u32),
+        entry!(0x006db540, fn_006db540(Ptr, u32, Ptr)),
+        entry!(0x006db7a0, fn_006db7a0(Ptr, u32, u32, u32) -> Ptr),
+        entry!(0x006db890, fn_006db890(Ptr, u32, u32, u32) -> Ptr),
+        entry!(0x006db950, fn_006db950(Ptr)),
+        entry!(0x006db9e0, fn_006db9e0(Ptr) -> Ptr),
+        entry!(0x006dba10, fn_006dba10(Ptr)),
+        entry!(0x006dba80, fn_006dba80(Ptr, u32) -> Ptr),
+        entry!(0x006dbab0, fn_006dbab0(Ptr, u32) -> Ptr),
+        entry!(0x006dbae0, fn_006dbae0(Ptr, u32) -> Ptr),
+        entry!(0x006dbb10, fn_006dbb10(Ptr, u32) -> Ptr),
+        entry!(0x006dbb40, fn_006dbb40(Ptr, Ptr) -> Ptr),
+        entry!(0x006dbb80, fn_006dbb80(Ptr, u32) -> Ptr),
+        entry!(0x006dbbb0, fn_006dbbb0(Ptr, Ptr) -> Ptr),
+        entry!(0x006dbc00, fn_006dbc00(Ptr, u32) -> Ptr),
+        entry!(0x006dbc30, fn_006dbc30(Ptr, u32) -> Ptr),
+        entry!(0x006dbc60, fn_006dbc60(Ptr, u32) -> Ptr),
+        entry!(0x006dbc90, fn_006dbc90(Ptr, u32) -> Ptr),
+        entry!(0x006dbcc0, fn_006dbcc0(Ptr, u32) -> Ptr),
+        entry!(0x006dbd90, fn_006dbd90(Ptr, Ptr) -> u32),
+        entry!(0x006dc070, fn_006dc070(Ptr, u32, u32)),
     ]
 }
 
@@ -7996,6 +8486,27 @@ mod tests {
     /// Every callee outside this file: each gets a double that returns zero
     /// unless a test installs a better one.
     const CALLEES: &[u32] = &[
+        TRI_FAN_ARRAY_INIT,
+        TRI_FAN_ARRAY_CONSTRUCT,
+        EDGE_PROXY_ARRAY_ADD_SLOT,
+        EDGE_PROXY_ARRAY_CONSTRUCT,
+        PATH_POINT_ARRAY_ADD_SLOT,
+        PATH_POINT_ENTRY_CONSTRUCT,
+        FLOAT_ARRAY_APPEND,
+        FLOAT_ARRAY_COPY,
+        FLOAT_ARRAY_CONSTRUCT,
+        FLOAT_ARRAY_INIT,
+        CROSSED_TRIANGLE_SCRAP_ARRAY_BASE_CONSTRUCT,
+        CROSSED_TRIANGLE_ARRAY_INIT,
+        CROSSED_TRIANGLE_SCRAP_ARRAY_BASE_DESTRUCT,
+        FLOAT_SIMPLE_ARRAY_DESTRUCT,
+        COVER_LOCATION_ARRAY_ADD_SLOT,
+        PATH_POINT_ASSIGN,
+        TRIANGLE_REFERENCE_ASSIGN,
+        KEY_ARRAY_DESTRUCT,
+        ARRAY_ADD_SLOT,
+        MEMORY_FREE,
+        NAVMESH_LIST_CONSTRUCT,
         TIMER_SCOPE_CONSTRUCT,
         TIMER_SCOPE_DESTROY,
         MEMORY_ALLOCATE,
@@ -15304,8 +15815,415 @@ mod tests {
         assert!(calls_to(&log_of(&mut e), ARRAY_SHRUNK_CAPACITY).is_empty());
     }
 
+    /// An array object whose vtable slot 1 (+4, the allocation) is
+    /// `function`.
+    fn array_with_allocator(e: &mut Engine, vtable: u32, function: u32) -> u32 {
+        e.put_vtable(vtable, &[0, function]);
+        let array = e.mem.alloc(0x14);
+        e.mem.set_u32(array, vtable);
+        array
+    }
+
+    #[test]
+    fn small_array_constructors_and_destructors_store_their_vtable() {
+        let mut e = engine();
+        let array = e.mem.alloc(0x14);
+        let this = Ptr::new(array);
+        e.call_log = Some(vec![]);
+        fn_006db3e0(&mut e, this);
+        assert_eq!(e.mem.u32(array), CANDIDATE_ARRAY_VTABLE);
+        assert_eq!(log_of(&mut e), vec![(ARRAY_CLEAR, vec![array, 1])]);
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006db4a0(&mut e, this), this);
+        assert_eq!(e.mem.u32(array), TRI_FAN_ARRAY_VTABLE);
+        assert_eq!(
+            log_of(&mut e),
+            vec![(TRI_FAN_ARRAY_INIT, vec![array, 0, 0])]
+        );
+        e.mem.set_u32(array, 0);
+        e.call_log = Some(vec![]);
+        fn_006db4d0(&mut e, this);
+        assert_eq!(e.mem.u32(array), TRI_FAN_ARRAY_VTABLE);
+        assert_eq!(log_of(&mut e), vec![(ARRAY_CLEAR, vec![array, 1])]);
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006db9e0(&mut e, this), this);
+        assert_eq!(e.mem.u32(array), TRI_HANDLE_ARRAY_VTABLE);
+        assert_eq!(
+            log_of(&mut e),
+            vec![(CROSSED_TRIANGLE_ARRAY_INIT, vec![array, 0, 0])]
+        );
+        e.mem.set_u32(array, 0);
+        e.call_log = Some(vec![]);
+        fn_006dba10(&mut e, this);
+        assert_eq!(e.mem.u32(array), TRI_HANDLE_ARRAY_VTABLE);
+        assert_eq!(log_of(&mut e), vec![(ARRAY_CLEAR, vec![array, 1])]);
+    }
+
+    #[test]
+    fn scrap_array_constructors_choose_the_allocator() {
+        let mut e = engine();
+        let array = e.mem.alloc(0x14);
+        let this = Ptr::new(array);
+        // The float scrap array takes the allocator it is given...
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006db7a0(&mut e, this, 0x20, 3, 0x7700), this);
+        assert_eq!(e.mem.u32(array), FLOAT_SCRAP_ARRAY_VTABLE);
+        assert_eq!(e.mem.u32(array + 0x10), 0x7700);
+        assert_eq!(
+            log_of(&mut e),
+            vec![
+                (FLOAT_SCRAP_ARRAY_BASE_CONSTRUCT, vec![array]),
+                (FLOAT_ARRAY_INIT, vec![array, 0x20, 3])
+            ]
+        );
+        // ... or the thread's scrap heap.
+        e.register(MEMORY_MANAGER_OBJECT, |_, _| ret(0x11f_6238));
+        e.register_double(GET_THREAD_SCRAP_HEAP, |_, a| {
+            assert_eq!(a[0], 0x11f_6238);
+            ret(0x8800)
+        });
+        fn_006db7a0(&mut e, this, 8, 0, 0);
+        assert_eq!(e.mem.u32(array + 0x10), 0x8800);
+        // The crossed-triangle scrap array does the same with its own callees.
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006db890(&mut e, this, 0x10, 2, 0x7710), this);
+        assert_eq!(e.mem.u32(array), CROSSED_TRIANGLE_SCRAP_ARRAY_VTABLE);
+        assert_eq!(e.mem.u32(array + 0x10), 0x7710);
+        assert_eq!(
+            log_of(&mut e),
+            vec![
+                (CROSSED_TRIANGLE_SCRAP_ARRAY_BASE_CONSTRUCT, vec![array]),
+                (CROSSED_TRIANGLE_ARRAY_INIT, vec![array, 0x10, 2])
+            ]
+        );
+        fn_006db890(&mut e, this, 0x10, 0, 0);
+        assert_eq!(e.mem.u32(array + 0x10), 0x8800);
+        // Its destructor clears the array, then runs the base destructor.
+        e.mem.set_u32(array, 0);
+        e.call_log = Some(vec![]);
+        fn_006db950(&mut e, this);
+        assert_eq!(e.mem.u32(array), CROSSED_TRIANGLE_SCRAP_ARRAY_VTABLE);
+        assert_eq!(
+            log_of(&mut e),
+            vec![
+                (ARRAY_CLEAR, vec![array, 1]),
+                (CROSSED_TRIANGLE_SCRAP_ARRAY_BASE_DESTRUCT, vec![array])
+            ]
+        );
+    }
+
+    #[test]
+    fn scalar_deleting_destructors_free_only_when_bit_zero_is_set() {
+        type Destructor = fn(&mut Engine, Ptr, u32) -> Ptr;
+        type Calls = Vec<(u32, Vec<u32>)>;
+        let cases: Vec<(Destructor, Calls)> = vec![
+            (
+                fn_006dba80,
+                vec![(COVER_LOCATION_ARRAY_CLEAR, vec![0x3000, 1])],
+            ),
+            (fn_006dbab0, vec![(SCRAP_ARRAY_BASE_DESTRUCT, vec![0x3000])]),
+            (
+                fn_006dbae0,
+                vec![
+                    (ARRAY_CLEAR, vec![0x3000, 1]),
+                    (SCRAP_ARRAY_BASE_DESTRUCT, vec![0x3000]),
+                ],
+            ),
+            (fn_006dbb10, vec![(ARRAY_CLEAR, vec![0x3000, 1])]),
+            (fn_006dbb80, vec![(ARRAY_CLEAR, vec![0x3000, 1])]),
+            (
+                fn_006dbc00,
+                vec![(FLOAT_SIMPLE_ARRAY_DESTRUCT, vec![0x3000])],
+            ),
+            (fn_006dbc30, vec![(KEY_ARRAY_DESTRUCT, vec![0x3000])]),
+            (
+                fn_006dbc60,
+                vec![(CROSSED_TRIANGLE_SCRAP_ARRAY_BASE_DESTRUCT, vec![0x3000])],
+            ),
+            (
+                fn_006dbc90,
+                vec![
+                    (ARRAY_CLEAR, vec![0x3000, 1]),
+                    (CROSSED_TRIANGLE_SCRAP_ARRAY_BASE_DESTRUCT, vec![0x3000]),
+                ],
+            ),
+            (fn_006dbcc0, vec![(ARRAY_CLEAR, vec![0x3000, 1])]),
+        ];
+        for (destructor, inner) in cases {
+            let mut e = engine();
+            e.map(0x3000, 0x100);
+            // Without the flag only the destructor runs...
+            e.call_log = Some(vec![]);
+            assert_eq!(destructor(&mut e, Ptr::new(0x3000), 0), Ptr::new(0x3000));
+            assert_eq!(log_of(&mut e), inner);
+            // ... with it, the object is freed afterwards (other bits are ignored).
+            e.call_log = Some(vec![]);
+            assert_eq!(destructor(&mut e, Ptr::new(0x3000), 3), Ptr::new(0x3000));
+            let mut with_free = inner;
+            with_free.push((MEMORY_FREE, vec![0x3000]));
+            assert_eq!(log_of(&mut e), with_free);
+            e.call_log = Some(vec![]);
+            destructor(&mut e, Ptr::new(0x3000), 2);
+            assert!(calls_to(&log_of(&mut e), MEMORY_FREE).is_empty());
+        }
+    }
+
+    #[test]
+    fn appending_to_the_candidate_array_assigns_the_entry() {
+        let mut e = engine();
+        let buffer = e.mem.alloc(0x100);
+        let array = array_with(&mut e, 2, 8, buffer);
+        let item = e.mem.alloc(0x20);
+        e.mem.set_u32(item + 0x18, 0x3f80_0000);
+        e.mem.set_u32(item + 0x1c, 0xc000_0000);
+        e.register(EDGE_PROXY_ARRAY_ADD_SLOT, |_, _| ret(2));
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006db400(&mut e, Ptr::new(array), Ptr::new(item)), 2);
+        let entry = buffer + 2 * 0x20;
+        assert_eq!(
+            log_of(&mut e),
+            vec![
+                (EDGE_PROXY_ARRAY_ADD_SLOT, vec![array]),
+                (EDGE_PROXY_ARRAY_CONSTRUCT, vec![array, entry, 1]),
+                (PATH_POINT_ASSIGN, vec![entry, item])
+            ]
+        );
+        assert_eq!(e.mem.u32(entry + 0x18), 0x3f80_0000);
+        assert_eq!(e.mem.u32(entry + 0x1c), 0xc000_0000);
+    }
+
+    #[test]
+    fn candidate_entry_assignment_copies_the_base_and_two_words() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x20);
+        let other = e.mem.alloc(0x20);
+        e.mem.set_u32(other + 0x14, 0x1111);
+        e.mem.set_u32(other + 0x18, 7);
+        e.mem.set_u32(other + 0x1c, 9);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            fn_006dbb40(&mut e, Ptr::new(this), Ptr::new(other)),
+            Ptr::new(this)
+        );
+        assert_eq!(log_of(&mut e), vec![(PATH_POINT_ASSIGN, vec![this, other])]);
+        // The base copy is the callee's; only +0x18 and +0x1C are copied here.
+        assert_eq!(e.mem.u32(this + 0x14), 0);
+        assert_eq!((e.mem.u32(this + 0x18), e.mem.u32(this + 0x1c)), (7, 9));
+    }
+
+    #[test]
+    fn appending_to_the_path_point_array_assigns_the_entry() {
+        let mut e = engine();
+        let array = array_with(&mut e, 3, 8, 0x5000);
+        e.register(PATH_POINT_ARRAY_ADD_SLOT, |_, _| ret(3));
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006db450(&mut e, Ptr::new(array), Ptr::new(0x9000)), 3);
+        let entry = 0x5000 + 3 * 0x18;
+        assert_eq!(
+            log_of(&mut e),
+            vec![
+                (PATH_POINT_ARRAY_ADD_SLOT, vec![array]),
+                (PATH_POINT_ENTRY_CONSTRUCT, vec![array, entry, 1]),
+                (PATH_POINT_ASSIGN, vec![entry, 0x9000])
+            ]
+        );
+    }
+
+    #[test]
+    fn appending_to_the_triangle_fan_array_assigns_the_entry() {
+        let mut e = engine();
+        let buffer = e.mem.alloc(0x100);
+        let array = array_with(&mut e, 1, 8, buffer);
+        let item = e.mem.alloc(0x10);
+        for i in 0..4 {
+            e.mem.set_u8(item + 8 + i, 1 + i as u8);
+        }
+        e.register(ARRAY_ADD_SLOT, |_, _| ret(1));
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006db4f0(&mut e, Ptr::new(array), Ptr::new(item)), 1);
+        let entry = buffer + 0xc;
+        assert_eq!(
+            log_of(&mut e),
+            vec![
+                (ARRAY_ADD_SLOT, vec![array]),
+                (TRI_FAN_ARRAY_CONSTRUCT, vec![array, entry, 1]),
+                (TRIANGLE_REFERENCE_ASSIGN, vec![entry, item])
+            ]
+        );
+        // Three bytes from +8, not the fourth.
+        assert_eq!(
+            (
+                e.mem.u8(entry + 8),
+                e.mem.u8(entry + 9),
+                e.mem.u8(entry + 10),
+                e.mem.u8(entry + 11)
+            ),
+            (1, 2, 3, 0)
+        );
+    }
+
+    #[test]
+    fn appending_to_the_cover_location_array_assigns_the_entry() {
+        let mut e = engine();
+        let array = array_with(&mut e, 4, 8, 0x6000);
+        e.register(COVER_LOCATION_ARRAY_ADD_SLOT, |_, _| ret(4));
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_006dbd90(&mut e, Ptr::new(array), Ptr::new(0x9100)), 4);
+        let entry = 0x6000 + 4 * 0x54;
+        assert_eq!(
+            log_of(&mut e),
+            vec![
+                (COVER_LOCATION_ARRAY_ADD_SLOT, vec![array]),
+                (COVER_LOCATIONS_CONSTRUCT, vec![array, entry, 1]),
+                (COVER_LOCATION_ASSIGN, vec![entry, 0x9100])
+            ]
+        );
+    }
+
+    #[test]
+    fn inserting_a_float_at_the_end_appends() {
+        let mut e = engine();
+        let buffer = e.mem.alloc(0x40);
+        let array = array_with(&mut e, 3, 8, buffer);
+        e.call_log = Some(vec![]);
+        fn_006db540(&mut e, Ptr::new(array), 3, Ptr::new(0x9200));
+        assert_eq!(
+            log_of(&mut e),
+            vec![(FLOAT_ARRAY_APPEND, vec![array, 0x9200])]
+        );
+        assert_eq!(e.mem.u32(array + 8), 3);
+    }
+
+    #[test]
+    fn inserting_a_float_in_place_moves_the_tail_up() {
+        let mut e = engine();
+        let buffer = e.mem.alloc(0x40);
+        let array = array_with(&mut e, 3, 8, buffer);
+        let value = e.mem.alloc(8);
+        e.mem.set_u32(value, 0x4048_0000);
+        e.register(ARRAY_IS_FULL, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        fn_006db540(&mut e, Ptr::new(array), 1, Ptr::new(value));
+        assert_eq!(
+            log_of(&mut e),
+            vec![
+                (ARRAY_IS_FULL, vec![array]),
+                (FLOAT_ARRAY_COPY, vec![array, buffer + 8, buffer + 4, 2]),
+                (FLOAT_ARRAY_CONSTRUCT, vec![array, buffer + 4, 1])
+            ]
+        );
+        assert_eq!(e.mem.u32(array + 8), 4);
+        assert_eq!(e.mem.u32(array + 4), buffer);
+        assert_eq!(e.mem.u32(buffer + 4), 0x4048_0000);
+    }
+
+    #[test]
+    fn inserting_a_float_into_a_full_array_moves_to_a_bigger_buffer() {
+        let mut e = engine();
+        let old_buffer = e.mem.alloc(0x40);
+        let new_buffer = e.mem.alloc(0x80);
+        let array = array_with_allocator(&mut e, 0x00a7_0000, 0x00a7_1000);
+        e.mem.set_u32(array + 4, old_buffer);
+        e.mem.set_u32(array + 8, 3);
+        e.mem.set_u32(array + 0xc, 3);
+        let value = e.mem.alloc(8);
+        e.mem.set_u32(value, 0x4048_0000);
+        e.register(ARRAY_IS_FULL, |_, _| ret(1));
+        e.register(ARRAY_GROWN_CAPACITY, |_, _| ret(6));
+        e.register_double(0x00a7_1000, move |_, a| {
+            assert_eq!(a[1], 6);
+            ret(new_buffer)
+        });
+        e.call_log = Some(vec![]);
+        fn_006db540(&mut e, Ptr::new(array), 1, Ptr::new(value));
+        let log = log_of(&mut e);
+        assert_eq!(
+            calls_to(&log, FLOAT_ARRAY_COPY),
+            vec![
+                vec![array, new_buffer, old_buffer, 1],
+                vec![array, new_buffer + 8, old_buffer + 4, 2]
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, FLOAT_ARRAY_CONSTRUCT),
+            vec![vec![array, new_buffer + 4, 1]]
+        );
+        assert_eq!(calls_to(&log, ARRAY_FREE_BUFFER), vec![vec![array]]);
+        assert_eq!(
+            (
+                e.mem.u32(array + 4),
+                e.mem.u32(array + 8),
+                e.mem.u32(array + 0xc)
+            ),
+            (new_buffer, 4, 6)
+        );
+        assert_eq!(e.mem.u32(new_buffer + 4), 0x4048_0000);
+    }
+
+    #[test]
+    fn triangle_fan_entry_assignment_copies_exactly_three_bytes() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x10);
+        let other = e.mem.alloc(0x10);
+        for i in 0..4 {
+            e.mem.set_u8(other + 8 + i, 0x10 + i as u8);
+        }
+        assert_eq!(
+            fn_006dbbb0(&mut e, Ptr::new(this), Ptr::new(other)),
+            Ptr::new(this)
+        );
+        assert_eq!(e.mem.u8(this + 10), 0x12);
+        assert_eq!(e.mem.u8(this + 11), 0);
+    }
+
+    #[test]
+    fn cover_location_array_initialization_allocates_and_constructs() {
+        let mut e = engine();
+        let buffer = e.mem.alloc(0x100);
+        let array = array_with_allocator(&mut e, 0x00a7_2000, 0x00a7_3000);
+        e.register_double(0x00a7_3000, move |_, a| {
+            assert_eq!(a[1], 5);
+            ret(buffer)
+        });
+        // The capacity is raised to the size.
+        e.call_log = Some(vec![]);
+        fn_006dc070(&mut e, Ptr::new(array), 2, 5);
+        assert_eq!(
+            log_of(&mut e),
+            vec![
+                (0x00a7_3000, vec![array, 5]),
+                (COVER_LOCATIONS_CONSTRUCT, vec![array, buffer, 5])
+            ]
+        );
+        assert_eq!(
+            (
+                e.mem.u32(array + 4),
+                e.mem.u32(array + 8),
+                e.mem.u32(array + 0xc)
+            ),
+            (buffer, 5, 5)
+        );
+        // Nothing requested: nothing allocated, nothing constructed.
+        e.call_log = Some(vec![]);
+        fn_006dc070(&mut e, Ptr::new(array), 0, 0);
+        assert!(log_of(&mut e).is_empty());
+        assert_eq!(
+            (
+                e.mem.u32(array + 4),
+                e.mem.u32(array + 8),
+                e.mem.u32(array + 0xc)
+            ),
+            (0, 0, 0)
+        );
+        // Room without entries: only the allocation.
+        e.call_log = Some(vec![]);
+        fn_006dc070(&mut e, Ptr::new(array), 5, 0);
+        assert_eq!(log_of(&mut e).len(), 1);
+        assert_eq!(e.mem.u32(array + 0xc), 5);
+    }
+
     #[test]
     fn funcs_cover_every_translated_function() {
-        assert_eq!(funcs().len(), 120);
+        assert_eq!(funcs().len(), 146);
     }
 }
