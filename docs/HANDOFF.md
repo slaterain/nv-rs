@@ -42,11 +42,11 @@ machinery runs.
 
 ## How the translation machinery runs (private, not in the repo)
 
-Everything private lives in `C:\Users\alexa\nv-re\work\phase0` (state notes in
+Everything private lives in `%USERPROFILE%\nv-re\work\phase0` (state notes in
 `STATE.md`, scripts in `bin/`).
 
-- Lead worktree: `C:\Users\alexa\nv-re\work\wt-phase0` (branch
-  `claude/engine-crate`). Agent worktrees: `C:\Users\alexa\nv-re\work\agents\aNN`,
+- Lead worktree: `%USERPROFILE%\nv-re\work\wt-phase0` (branch
+  `claude/engine-crate`). Agent worktrees: `%USERPROFILE%\nv-re\work\agents\aNN`,
   task files `agents\tasks\aNN.md`, scratch `agents\scratch\aNN`.
 - Private read-only Ghidra server for agents: 127.0.0.1:8090
   (`bin/start-srv.ps1`). Never write to the shared server on 8089.
@@ -54,7 +54,7 @@ Everything private lives in `C:\Users\alexa\nv-re\work\phase0` (state notes in
   (collects its file, checks names, fmt, clippy, tests, commits, logs to
   `progress.tsv`, writes its next task), then launch an Agent (model sonnet,
   background) with: "Read the task file
-  C:\Users\alexa\nv-re\work\agents\tasks\aNN.md and carry out the task it
+  %USERPROFILE%\nv-re\work\agents\tasks\aNN.md and carry out the task it
   describes, exactly as written. It names your working directory, your files
   and the rules."
 - Ship the rolling PR when both checks pass: `bin/ship.sh <pr>` (squash-merges,
