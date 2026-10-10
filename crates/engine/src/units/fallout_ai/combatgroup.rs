@@ -6,8 +6,8 @@
 //! `CombatMember`) and the small `CombatGroupCluster` / `CombatSearchLocation`
 //! records. The unit is translated over several sessions, in address order:
 //! this part covers `0069cfe0`, `00985410` to `00986c60`, `009871c0` to
-//! `0098a4d0` and `0098a580` to `0098fd10`; the next function of the queue is
-//! `00990500` (`CombatGroup::ComputeMemberHealthPercentage`).
+//! `0098a4d0` and `0098a580` to `0098fd10`; the last function, `00990500`
+//! (`CombatGroup::ComputeMemberHealthPercentage`), completes the unit.
 //!
 //! Conventions of this file:
 //! - Layouts first (below); embedded structs that other units own
@@ -522,6 +522,16 @@ const SEARCH_LOCATION_ARRAY_INSTANCE: ArrayInstance = ArrayInstance {
     construct: 0x0098_fc70,
     move_tail: 0x006c_0010,
 };
+
+layout! {
+    /// `CombatGroupData` (Xbox PDB), 0x38 bytes: only the fields used so far.
+    pub struct CombatGroupData: 0x38 {
+        /// `pCombatGroup` (Xbox PDB): `CombatGroup*`.
+        0x00 pCombatGroup: Ptr<CombatGroup>,
+        /// `fMemberHealthPercentage` (Xbox PDB): cached, 0 means not computed.
+        0x14 fMemberHealthPercentage: f32,
+    }
+}
 
 layout! {
     /// `CombatTarget` (Xbox PDB), 0x68 bytes on both builds. The four
@@ -3022,6 +3032,20 @@ pub fn fn_0098a4d0(e: &mut Engine, this: Ptr<CombatGroup>) -> f32 {
         sum = (value as f64 / divisor as f64 + sum as f64) as f32;
     }
     (sum as f64 / count as f64) as f32
+}
+
+// Translated from 00990500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::ComputeMemberHealthPercentage` (Xbox PDB; the body is a
+/// `CombatGroupData` method): the cached `fMemberHealthPercentage`; when it
+/// is 0 it is first computed by `fn_0098a4d0` on `pCombatGroup` and stored.
+pub fn fn_00990500(e: &mut Engine, this: Ptr<CombatGroupData>) -> f32 {
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    if e.get(this, CombatGroupData::fMemberHealthPercentage) as f64 == zero {
+        let group = e.get(this, CombatGroupData::pCombatGroup);
+        let value = fn_0098a4d0(e, group);
+        e.set(this, CombatGroupData::fMemberHealthPercentage, value);
+    }
+    e.get(this, CombatGroupData::fMemberHealthPercentage)
 }
 
 /// Reads a `NiPointer` (`[slot]`) as the game's getter `00559450` does.
@@ -6544,6 +6568,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0098fab0, fn_0098fab0(Ptr<BSSimpleArray>, u32, u32)),
         entry!(0x0098fbe0, fn_0098fbe0(Ptr<BSSimpleArray>, u32, u32)),
         entry!(0x0098fd10, fn_0098fd10(Ptr<BSSimpleArray>, u32, u32)),
+        entry!(0x00990500, fn_00990500(Ptr<CombatGroupData>) -> f32),
     ]
 }
 
@@ -9010,6 +9035,26 @@ mod tests {
         assert_eq!(fn_0098a4d0(&mut e, group), 2.75);
         let empty = group_with(&mut e, &[], &[]);
         assert!(fn_0098a4d0(&mut e, empty).is_nan());
+    }
+
+    #[test]
+    fn member_health_percentage_is_cached() {
+        let mut e = Engine::new();
+        e.map(ZERO_DOUBLE, 8);
+        e.mem.set_f64(ZERO_DOUBLE, 0.0);
+        let group = e.new_object::<CombatGroup>();
+        let data = e.new_object::<CombatGroupData>();
+        e.set(data, CombatGroupData::pCombatGroup, group);
+        e.set(data, CombatGroupData::fMemberHealthPercentage, 0.5);
+        // Cached: the group is not touched.
+        assert_eq!(fn_00990500(&mut e, data), 0.5);
+        // Zero: computed from the (empty) group, 0/0, and stored.
+        e.set(data, CombatGroupData::fMemberHealthPercentage, 0.0);
+        e.register(MEMBER_COUNT, |_, _| 0u32.into_ret());
+        assert!(fn_00990500(&mut e, data).is_nan());
+        assert!(e
+            .get(data, CombatGroupData::fMemberHealthPercentage)
+            .is_nan());
     }
 
     // ---- search, strength, cluster and save tests ----
