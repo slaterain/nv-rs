@@ -8296,6 +8296,8187 @@ fn follow_finish(e: &mut Engine, f: &Follow) {
     e.call(ACTOR_END_MOVEMENT, &args![actor]);
 }
 
+// ---- Third session: `008e5e90` to the end of the range ----
+
+/// `PathingRequest` size on the stack (the constructor `006e2420` fills it).
+const REQUEST_STACK_SIZE: u32 = 0xb4;
+/// `Animation::SpecialIdleWorking` (`00498f80`).
+const ANIMATION_SPECIAL_IDLE_WORKING: u32 = 0x0049_8f80;
+/// `Animation::SpecialIdlePlaying` (`004985b0`).
+const ANIMATION_SPECIAL_IDLE_PLAYING: u32 = 0x0049_85b0;
+/// `TESPackage::GetFollowPackageData` (Xbox PDB, `00675950`).
+const PACKAGE_FOLLOW_DATA: u32 = 0x0067_5950;
+/// The package's second `PackageLocation` (`00672dd0`), or null.
+const PACKAGE_SECOND_LOCATION: u32 = 0x0067_2dd0;
+/// `TESPackage::GetSecondLocationCoord` (Xbox PDB, `00675360`): `(out, actor)`.
+const PACKAGE_SECOND_LOCATION_COORD: u32 = 0x0067_5360;
+/// `TESPackage::GetSecondLocationWorld` (Xbox PDB, `00674fd0`): `(actor)`.
+const PACKAGE_SECOND_LOCATION_WORLD: u32 = 0x0067_4fd0;
+/// `TESPackage::GetSecondLocationCell` (Xbox PDB, `006751a0`): `(actor)`.
+const PACKAGE_SECOND_LOCATION_CELL: u32 = 0x0067_51a0;
+/// `TESObjectREFR::IsFurniture` (Xbox PDB, `00568680`).
+const REFERENCE_IS_FURNITURE: u32 = 0x0056_8680;
+/// `TESObjectREFR::GetMarkerUsed` (Xbox PDB, `00567f80`): `(index, flag)`.
+const REFERENCE_GET_MARKER_USED: u32 = 0x0056_7f80;
+/// `TESObjectREFR::GetClosestFreeMarker` (Xbox PDB, `005686b0`).
+const REFERENCE_GET_CLOSEST_FREE_MARKER: u32 = 0x0056_86b0;
+/// `MiddleHighProcess::AlignToFurnitureAndAddPostAnimSitSleep` (Xbox PDB,
+/// `00921350`): `(actor)`.
+const PROCESS_ALIGN_TO_FURNITURE: u32 = 0x0092_1350;
+/// `007af430` (`BGSSaveFormBuffer::GetForm` in the map; the body is the
+/// reference's base form getter used as `REFERENCE_GET_FORM`).
+const FORM_TYPE_OF: u32 = 0x0040_1170;
+/// The game global compared with a reference's base form (`011ca248`).
+const MARKER_FORM_GLOBAL: u32 = 0x011c_a248;
+/// `00568650`: a `FurnitureMark`'s float (`this` is the marker; reads the
+/// `u16` at +0xc divided by 1000).
+const FURNITURE_MARKER_HEADING: u32 = 0x0056_8650;
+/// `004b15e0` (cdecl): angle difference `(from, to, out)`; the result in
+/// `ST0`.
+const ANGLE_DIFFERENCE: u32 = 0x004b_15e0;
+/// `0043d4d0` (`this` = `011cda1c`): the pointer to the integer of that
+/// setting.
+const DEGREES_SETTING: u32 = 0x011c_da1c;
+/// `GetDistanceFromReference` limit for the furniture walk (double `010179e0`).
+const FURNITURE_NEAR_DISTANCE: u32 = 0x0101_79e0;
+/// Float at `0102226c` used as the radius of the furniture walk.
+const FURNITURE_WALK_RADIUS: u32 = 0x0102_226c;
+/// Float 20.0 (`01017868`) and 10.0 (`01017b78`): package radii.
+const RADIUS_CELL_FLAG: u32 = 0x0101_7868;
+const RADIUS_FLAG_SET: u32 = 0x0101_7b78;
+/// Setting at `011cdd0c`, the float radius of the furniture requests.
+const FURNITURE_REQUEST_SETTING: u32 = 0x011c_dd0c;
+/// Setting at `011cd950`: the distance beyond which the target is walked to.
+const TRAVEL_TARGET_DISTANCE_SETTING: u32 = 0x011c_d950;
+/// `ArrowProjectile::DeleteAttachedArrows` (Xbox PDB, `008cddd0`, cdecl).
+const DELETE_ATTACHED_ARROWS: u32 = 0x008c_ddd0;
+/// `Actor::QueueUnEquipObject` (Xbox PDB, `0088c790`).
+const ACTOR_QUEUE_UNEQUIP_OBJECT: u32 = 0x0088_c790;
+/// `0041d8a0`: the package's list at +0x38 (`this + 0x38`).
+const PACKAGE_LIST_AT_38: u32 = 0x0041_d8a0;
+/// `Calendar::GetDay` (Xbox PDB, `00867d60`), `this` = `011de7b8`.
+const CALENDAR_GET_DAY: u32 = 0x0086_7d60;
+const CALENDAR: u32 = 0x011d_e7b8;
+/// `0067a480`: package flag 0x2000.
+const PACKAGE_FLAG_2000: u32 = 0x0067_a480;
+/// Package flag checks used with `GetOncePerDay` (`00670f90`).
+const PACKAGE_ONCE_PER_DAY: u32 = 0x0067_0f90;
+const PACKAGE_FLAG_ENUM_A: u32 = 0x0067_0f40;
+const PACKAGE_FLAG_ENUM_B: u32 = 0x0067_0f60;
+const DATA_HANDLER_GLOBAL: u32 = 0x011c_3f2c;
+const ENUM_CALLBACK_A: u32 = 0x0090_d480;
+const ENUM_CALLBACK_B: u32 = 0x0090_d570;
+const ENUM_RADIUS: u32 = 0x0103_0020;
+/// `Procedure::GetProcedureCount` (Xbox PDB, `0096a820`, cdecl; it takes the
+/// procedure type) and `009611e0`, the getter of `TESPackage::ePROCEDURE_TYPE`
+/// (+0x18 on PC).
+const PROCEDURE_GET_COUNT: u32 = 0x0096_a820;
+const PACKAGE_PROCEDURE_TYPE: u32 = 0x0096_11e0;
+/// `Actor::` helper `008bb5c0(this = actor, float, byte)`: rotates the actor.
+const ACTOR_REQUEST_ROTATE: u32 = 0x008b_b5c0;
+/// `PACKAGE_LOCATION_GET_REFERENCE`; `00430830` returns `this + 0x24`.
+const REFERENCE_ROTATION_ADDRESS: u32 = 0x0043_0830;
+/// `NiPoint3` length (`00457990`, `ST0`).
+const POINT_LENGTH_FLOAT: u32 = 0x0045_7990;
+
+// Virtual slots of the process used by `ProcessTravel` (Xbox PDB names).
+const SLOT_GET_CURRENT_FURNITURE_INDEX: u32 = 0x4d0;
+const SLOT_GET_LOCKED_LOCATION: u32 = 0x1bc;
+const SLOT_SET_LOCKED_LOCATION: u32 = 0x1c0;
+const SLOT_GET_CURRENT_WEAPON: u32 = 0x148;
+const SLOT_GET_CURRENT_AMMO: u32 = 0x14c;
+const SLOT_GET_FORCE_ROTATE: u32 = 0x688;
+// Virtual slots of the package (`TESPackage`/`ActorPackage`, called on the
+// running package): `(actor, flag, float, 0)` and the second-location form.
+const PACKAGE_SLOT_FIND_LOCATION: u32 = 0x13c;
+const PACKAGE_SLOT_FIND_SECOND_LOCATION: u32 = 0x140;
+const ACTOR_SLOT_0X28C: u32 = 0x28c;
+const ACTOR_SLOT_0X16C: u32 = 0x16c;
+const ACTOR_SLOT_0X2A8: u32 = 0x2a8;
+const ACTOR_SLOT_0X2C4: u32 = 0x2c4;
+
+// Fields of the process used by several functions below (`MiddleHighProcess`
+// and `LowProcess` names from the Xbox PDB; the PC offsets are equal).
+const PROCESS_TARGET: u32 = 0x40;
+const PROCESS_GENERIC_LOCATION: u32 = 0x44;
+const PROCESS_CURRENT_FURNITURE_INDEX: u32 = 0x144;
+const PROCESS_FURNITURE_MARKER: u32 = 0x148;
+const PROCESS_DONE_CLOTHES_CHANGE: u32 = 0x189;
+const PROCESS_PACKAGE_IDLE_TIMER: u32 = 0x198;
+const PROCESS_ANIM_ACTION_SUCCESS: u32 = 0x22a;
+const PROCESS_PACKAGE_EVAL_TIMER: u32 = 0x2b4;
+const PROCESS_SHOTS_FIRED: u32 = 0x2c0;
+const PROCESS_SHOTS_TO_FIRE: u32 = 0x2c2;
+
+/// Runs `body` on a freshly constructed `PathingRequest` (a stack local of
+/// the game's code) and destroys it afterwards (`006e2620`).
+fn with_pathing_request<R>(e: &mut Engine, body: impl FnOnce(&mut Engine, Ptr) -> R) -> R {
+    e.with_stack(REQUEST_STACK_SIZE, |e, request| {
+        e.call(PATHING_REQUEST_CONSTRUCTOR, &args![request]);
+        let result = body(e, request);
+        e.call(PATHING_REQUEST_DESTRUCTOR, &args![request]);
+        result
+    })
+}
+
+/// The three words of the `NiPoint3` the actor's slot `0x1f4` points to.
+fn actor_position_words(e: &mut Engine, actor: u32) -> [u32; 3] {
+    let position = e.vcall(actor, ACTOR_SLOT_POSITION, &args![]).u32();
+    [
+        e.mem.u32(position),
+        e.mem.u32(position + 4),
+        e.mem.u32(position + 8),
+    ]
+}
+
+// Translated from 008e7c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. Tests `LowProcess::m_uFlags` against the mask
+/// `0x40` (`008d7e60`) and returns the result.
+pub fn fn_008e7c00(e: &mut Engine, this: Ptr<LowProcess>) -> bool {
+    fn_008d7e60(e, this, 0x40)
+}
+
+// Translated from 008e7c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. A setter of the `PathingRequest` the callers
+/// pass: stores a float at +0x8c and sets the byte at +0x99 to 1.
+pub fn fn_008e7c20(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_f32(this.addr() + 0x8c, value);
+    e.mem.set_u8(this.addr() + 0x99, 1);
+}
+
+// Translated from 008e7c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. A setter of the `PathingRequest` the callers
+/// pass: stores a byte at +0x9c.
+pub fn fn_008e7c50(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x9c, value);
+}
+
+/// The shared tail of the package's location search: for the package slot
+/// `0x13c` (own location) or `0x140` (second location, which also takes the
+/// reference to start from). Returns the slot's byte result.
+fn package_find_location(
+    e: &mut Engine,
+    package: u32,
+    second: bool,
+    start: u32,
+    actor: u32,
+    flag: u8,
+) -> bool {
+    let limit = e.global::<f32>(NO_LIMIT_FLOAT);
+    if second {
+        e.vcall(
+            package,
+            PACKAGE_SLOT_FIND_SECOND_LOCATION,
+            &args![start, actor, flag, limit, 0u32],
+        )
+        .bool()
+    } else {
+        e.vcall(
+            package,
+            PACKAGE_SLOT_FIND_LOCATION,
+            &args![actor, flag, limit, 0u32],
+        )
+        .bool()
+    }
+}
+
+/// The reference at `process + 0x40` when it answers true to slot `0xfc`
+/// (a mobile object), else 0.
+fn process_target_if_mobile(e: &mut Engine, process: u32) -> u32 {
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if target != 0
+        && e.vcall(target, ACTOR_SLOT_IS_MOBILE_OBJECT, &args![])
+            .bool()
+    {
+        e.mem.u32(process + PROCESS_TARGET)
+    } else {
+        0
+    }
+}
+
+/// `EndMoveMessage(actor)` (virtual `+0x294`) of the process.
+fn travel_end_move_message(e: &mut Engine, process: u32, actor: u32) {
+    e.vcall(process, SLOT_END_MOVE_MESSAGE, &args![actor]);
+}
+
+/// `AddToProcedureIndexRunning(actor, 1)` (virtual `+0x288`) of the process.
+fn travel_add_procedure(e: &mut Engine, process: u32, actor: u32) {
+    e.vcall(
+        process,
+        SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+        &args![actor, 1u32],
+    );
+}
+
+/// Sets `fPackageEvalTimer` (+0x2b4) to zero when the package has flag 2
+/// (`008b1ff0`) and its target word (`00671d10`) is zero: the guard the
+/// furniture branches repeat.
+fn travel_reset_eval_timer_if_flag_2(e: &mut Engine, process: u32, package: u32) {
+    if e.call(PACKAGE_FLAG_2, &args![package]).bool()
+        && e.call(PACKAGE_TARGET_WORD, &args![package]).u32() == 0
+    {
+        e.mem.set_f32(process + PROCESS_PACKAGE_EVAL_TIMER, 0.0);
+    }
+}
+
+/// `MiddleHighProcess` function `00915ef0` (`this` = process, argument: the
+/// actor): forwards to `Actor::` `008b3b90`; true when the actor's movement is
+/// done.
+const PROCESS_MOVEMENT_DONE: u32 = 0x0091_5ef0;
+/// `0043d4d0` (`this` = the setting): the pointer to the setting's integer.
+const SETTING_INTEGER_POINTER: u32 = 0x0043_d4d0;
+
+/// The float radius of the furniture requests: the value of the setting at
+/// `011cdd0c` (`00403e20`).
+fn travel_request_radius(e: &mut Engine) -> f32 {
+    let value = e
+        .call(SETTING_VALUE, &args![FURNITURE_REQUEST_SETTING])
+        .u32();
+    e.mem.f32(value)
+}
+/// `TESDataHandler::EnumReferencesCloseToPoint` over the actor's surroundings
+/// with `callback` (the enumeration `ProcessTravel` runs for two package
+/// flags).
+fn travel_enumerate_references(e: &mut Engine, actor: u32, callback: u32) {
+    let radius = e.global::<f32>(ENUM_RADIUS);
+    let first_position = e.vcall(actor, ACTOR_SLOT_POSITION, &args![]).u32();
+    let second_position = e.vcall(actor, ACTOR_SLOT_POSITION, &args![]).u32();
+    let cell = e.call(REFERENCE_PATHING_CELL, &args![actor]).u32();
+    let handler = e.global::<u32>(DATA_HANDLER_GLOBAL);
+    e.call(
+        ENUM_REFERENCES_CLOSE_TO_POINT,
+        &args![
+            handler,
+            cell,
+            second_position,
+            radius,
+            first_position,
+            radius,
+            callback,
+            actor
+        ],
+    );
+}
+
+/// `Actor::BuildRequest` as `ProcessTravel` calls it: `(actor, request,
+/// position, cell, world space, radius, 0)`.
+fn travel_build_request(
+    e: &mut Engine,
+    actor: u32,
+    request: Ptr,
+    position: u32,
+    cell: u32,
+    world: u32,
+    radius: f32,
+) {
+    e.call(
+        ACTOR_BUILD_REQUEST,
+        &args![actor, request, position, cell, world, radius, 0u32],
+    );
+}
+
+// Translated from 008e5e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ProcessTravel` (Xbox PDB): moves the actor to the running
+/// package's location. The four stack parameters after the actor are named
+/// for how the code uses them: `keep_going` (set to 1 by one branch) lets
+/// the function go on after the arrival checks, `end_on_arrival` adds one to
+/// the procedure index when the travel is over, `animation_id` (-1 for none)
+/// is the movement animation word for `SetActorsAnimation`, and
+/// `use_second_location` selects the package's second location.
+///
+/// In order: returns without a running package, or while a special idle works
+/// or plays on the actor's animation (when `008e7c00` says so). Follow
+/// packages (type 1) end the procedure without follow data, otherwise switch
+/// to the second location and call `SetTarget`; packages of type 0xf and 0x1c
+/// end the procedure unless their location is the actor's own reference of
+/// location type 3. It then finds the location's reference (the process'
+/// generic location when the package gives none and there is no run-once
+/// package) and its distance from the actor. For a furniture reference (types
+/// other than 5 and 12) it handles the current furniture: arrival in the sit
+/// or sleep states 4 and 9, a used marker, or leaving the furniture. When the
+/// actor is pathing complete, is the player, or the furniture is another one,
+/// it reserves the furniture and walks to its marker (a request built with
+/// `Actor::BuildRequest`; for the player the marker position and heading are
+/// applied directly) or asks the package for a location (slots `0x13c` and
+/// `0x140`). On arrival it clears the shot counters and runs the end of
+/// travel: the facing, the once-per-day bookkeeping, the two reference
+/// enumerations, the locked location and the unequip of weapon and ammo.
+/// Otherwise it builds the request to the package location, to the generic
+/// location, or sets the movement animation (slots `0x34c` and `0x350`).
+/// C++ exception states are not translated.
+pub fn high_process_process_travel(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    mut keep_going: u8,
+    end_on_arrival: u8,
+    mut animation_id: i32,
+    mut use_second_location: u8,
+) {
+    let process = this.addr();
+    let a = actor.addr();
+    let package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    // The byte the code keeps at ebp-0x2d: set to 0 and never changed.
+    let flag_byte: u8 = 0;
+    if package == 0 {
+        return;
+    }
+    let package_type = e.call(PACKAGE_TYPE, &args![package]).u32();
+    let animation = e.vcall(a, ACTOR_SLOT_ANIMATION, &args![]).u32();
+    if fn_008e7c00(e, this.cast()) && animation != 0 {
+        if e.call(ANIMATION_SPECIAL_IDLE_WORKING, &args![animation])
+            .bool()
+            || e.call(ANIMATION_SPECIAL_IDLE_PLAYING, &args![animation])
+                .bool()
+        {
+            return;
+        }
+    }
+    let not_type_5_or_12 = !(package_type == 0xc || package_type == 5);
+    if package_type == 1 {
+        let follow_data = e.call(PACKAGE_FOLLOW_DATA, &args![package]).u32();
+        if e.mem.u32(follow_data + 4) == 0 {
+            travel_add_procedure(e, process, a);
+        } else {
+            use_second_location = 1;
+            e.vcall(process, SLOT_SET_TARGET, &args![actor]);
+        }
+    } else if package_type == 0xf || package_type == 0x1c {
+        let location = e.call(PACKAGE_LOCATION_WORD, &args![package]).u32();
+        let mut end_now = location == 0;
+        if !end_now {
+            let reference = e
+                .call(PACKAGE_GET_LOCATION_REFERENCE, &args![package, actor])
+                .u32();
+            if reference == a {
+                let location = e.call(PACKAGE_LOCATION_WORD, &args![package]).u32();
+                if e.call(PACKAGE_LOCATION_TYPE, &args![location]).u32() != 3 {
+                    end_now = true;
+                }
+            }
+        }
+        if end_now {
+            travel_add_procedure(e, process, a);
+            return;
+        }
+    }
+    // The distance from the actor to the package's location.
+    let location_distance = e.with_stack(12, |e, coord| {
+        let point = if use_second_location != 0 {
+            e.call(PACKAGE_SECOND_LOCATION_COORD, &args![package, coord, actor])
+                .u32()
+        } else {
+            e.call(PACKAGE_LOCATION_COORD, &args![package, coord, actor])
+                .u32()
+        };
+        e.call(ACTOR_DISTANCE_TO_POINT, &args![actor, point]).f32()
+    });
+    // The location's reference.
+    let mut location_ref = 0u32;
+    if use_second_location != 0 && e.call(PACKAGE_SECOND_LOCATION, &args![package]).u32() != 0 {
+        let second_location = e.call(PACKAGE_SECOND_LOCATION, &args![package]).u32();
+        location_ref = e
+            .call(PACKAGE_LOCATION_GET_REFERENCE, &args![second_location])
+            .u32();
+    } else if e.call(PACKAGE_LOCATION_WORD, &args![package]).u32() != 0 {
+        let location = e.call(PACKAGE_LOCATION_WORD, &args![package]).u32();
+        location_ref = e
+            .call(PACKAGE_LOCATION_GET_REFERENCE, &args![location])
+            .u32();
+    }
+    if location_ref == 0
+        && e.mem.u32(process + PROCESS_GENERIC_LOCATION) != 0
+        && e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32() == 0
+    {
+        location_ref = e.mem.u32(process + PROCESS_GENERIC_LOCATION);
+    } else {
+        e.mem.set_u32(process + PROCESS_GENERIC_LOCATION, 0);
+    }
+    // The result of the package's location search.
+    let mut found = false;
+    let is_furniture = |e: &mut Engine| e.call(REFERENCE_IS_FURNITURE, &args![location_ref]).bool();
+    if not_type_5_or_12 && location_ref != 0 && is_furniture(e) {
+        // The code copies the actor's position to a local it never reads.
+        let _position = actor_position_words(e, a);
+        let furniture_index = e
+            .vcall(process, SLOT_GET_CURRENT_FURNITURE_INDEX, &args![])
+            .u32();
+        let at_current = e.mem.u32(process + PROCESS_CURRENT_FURNITURE) == location_ref
+            && e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4;
+        if at_current || e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 9 {
+            travel_reset_eval_timer_if_flag_2(e, process, package);
+            if end_on_arrival != 0 {
+                travel_add_procedure(e, process, a);
+            }
+            travel_end_move_message(e, process, a);
+            return;
+        }
+        let current_furniture = e.mem.u32(process + PROCESS_CURRENT_FURNITURE);
+        if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 0
+            && e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool()
+            && a != player_pointer(e)
+            && e.mem.u32(process + PROCESS_CURRENT_FURNITURE) != 0
+            && e.call(
+                REFERENCE_GET_MARKER_USED,
+                &args![current_furniture, furniture_index, 1u32],
+            )
+            .bool()
+        {
+            if end_on_arrival != 0 {
+                travel_add_procedure(e, process, a);
+            }
+            e.call(PROCESS_CLEAR_FURNITURE_MARKER, &args![this]);
+            travel_end_move_message(e, process, a);
+            return;
+        }
+        if e.mem.u32(process + PROCESS_CURRENT_FURNITURE) != 0
+            && location_ref != e.mem.u32(process + PROCESS_CURRENT_FURNITURE)
+            && (e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4
+                || e.vcall(process, SLOT_GET_SIT_SLEEP_STATE, &args![]).i32() == 9)
+        {
+            e.vcall(a, ACTOR_SLOT_0X418, &args![]);
+            return;
+        }
+    }
+    if location_ref != 0
+        && is_furniture(e)
+        && !e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool()
+        && e.mem.u32(process + PROCESS_CURRENT_FURNITURE) == 0
+        && e.mem.u8(process + PROCESS_CURRENT_FURNITURE_INDEX) != 0x7f
+    {
+        e.mem
+            .set_u8(process + PROCESS_CURRENT_FURNITURE_INDEX, 0x7f);
+    }
+    let enter = e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool()
+        || a == player_pointer(e)
+        || (location_ref != 0
+            && e.mem.u32(process + PROCESS_CURRENT_FURNITURE) != location_ref
+            && is_furniture(e));
+    if enter {
+        if location_ref != 0 && is_furniture(e) {
+            // The furniture is reserved and its marker walked to.
+            if e.mem.u32(process + PROCESS_CURRENT_FURNITURE) == 0 {
+                e.mem
+                    .set_u32(process + PROCESS_CURRENT_FURNITURE, location_ref);
+                e.call(PROCESS_CLEAR_FURNITURE_MARKER, &args![this]);
+            }
+            let mut look_for_marker = false;
+            if e.mem.u8(process + PROCESS_CURRENT_FURNITURE_INDEX) == 0x7f
+                && e.call(REFERENCE_PATHING_CELL, &args![actor]).u32() != 0
+            {
+                look_for_marker = true;
+                let cell = e.call(REFERENCE_PATHING_CELL, &args![actor]).u32();
+                if e.call(CELL_FLAG_TEST, &args![cell]).bool() {
+                    let own_cell = e.call(REFERENCE_PATHING_CELL, &args![actor]).u32();
+                    let furniture = e.mem.u32(process + PROCESS_CURRENT_FURNITURE);
+                    let furniture_cell = e.call(REFERENCE_PATHING_CELL, &args![furniture]).u32();
+                    if own_cell != furniture_cell {
+                        look_for_marker = false;
+                    }
+                }
+            }
+            if look_for_marker {
+                let position = actor_position_words(e, a);
+                let (found_marker, marker_index) = e.with_stack(16, |e, block| {
+                    for (i, word) in position.iter().enumerate() {
+                        e.mem.set_u32(block.addr() + i as u32 * 4, *word);
+                    }
+                    e.mem.set_u32(block.addr() + 12, 0);
+                    let furniture = e.mem.u32(process + PROCESS_CURRENT_FURNITURE);
+                    let found_marker = e
+                        .call(
+                            REFERENCE_GET_CLOSEST_FREE_MARKER,
+                            &args![
+                                furniture,
+                                block,
+                                1u32,
+                                1u32,
+                                process + PROCESS_FURNITURE_MARKER,
+                                block.addr() + 12,
+                                1u32
+                            ],
+                        )
+                        .bool();
+                    (found_marker, e.mem.u8(block.addr() + 12))
+                });
+                if !found_marker {
+                    let furniture = e.mem.u32(process + PROCESS_CURRENT_FURNITURE);
+                    let distance = e
+                        .call(
+                            DISTANCE_FROM_REFERENCE,
+                            &args![furniture, actor, 0u32, 0u32],
+                        )
+                        .f64();
+                    if !(distance > e.global::<f64>(FURNITURE_NEAR_DISTANCE)) {
+                        if end_on_arrival != 0 {
+                            travel_add_procedure(e, process, a);
+                        }
+                        if e.vcall(process, SLOT_GET_SIT_SLEEP_STATE, &args![]).u32() == 0 {
+                            e.vcall(process, SLOT_CLEAR_FURNITURE, &args![actor]);
+                        }
+                        travel_end_move_message(e, process, a);
+                        return;
+                    }
+                    with_pathing_request(e, |e, request| {
+                        let radius = e.global::<f32>(FURNITURE_WALK_RADIUS);
+                        let furniture = e.mem.u32(process + PROCESS_CURRENT_FURNITURE);
+                        let world = e.call(REFERENCE_GET_WORLD_SPACE, &args![furniture]).u32();
+                        let cell = e.call(REFERENCE_PATHING_CELL, &args![furniture]).u32();
+                        let furniture_position =
+                            e.vcall(furniture, ACTOR_SLOT_POSITION, &args![]).u32();
+                        travel_build_request(
+                            e,
+                            a,
+                            request,
+                            furniture_position,
+                            cell,
+                            world,
+                            radius,
+                        );
+                        fn_008e7c50(e, request, 0);
+                        if !e
+                            .call(ACTOR_SET_PATHFINDING_GOAL_REQUEST, &args![actor, request])
+                            .bool()
+                        {
+                            return;
+                        }
+                        let furniture = e.mem.u32(process + PROCESS_CURRENT_FURNITURE);
+                        if e.vcall(furniture, ACTOR_SLOT_NODE, &args![]).u32() != 0 {
+                            if end_on_arrival != 0 {
+                                travel_add_procedure(e, process, a);
+                            }
+                            if e.vcall(process, SLOT_GET_SIT_SLEEP_STATE, &args![]).u32() == 0 {
+                                e.vcall(process, SLOT_CLEAR_FURNITURE, &args![actor]);
+                            }
+                            travel_end_move_message(e, process, a);
+                        }
+                    });
+                    return;
+                }
+                if a == player_pointer(e) {
+                    let marker_position = e
+                        .call(
+                            NODE_ITEM_ADDRESS,
+                            &args![process + PROCESS_FURNITURE_MARKER],
+                        )
+                        .u32();
+                    let player = e.global::<u32>(PLAYER_POINTER);
+                    e.vcall(player, ACTOR_SLOT_0X2A8, &args![marker_position]);
+                    let heading = e
+                        .call(
+                            FURNITURE_MARKER_HEADING,
+                            &args![process + PROCESS_FURNITURE_MARKER],
+                        )
+                        .f32();
+                    e.vcall(player, ACTOR_SLOT_0X2C4, &args![heading]);
+                    e.call(ACTOR_STOP_MOVING, &args![player]);
+                    e.mem
+                        .set_u8(process + PROCESS_CURRENT_FURNITURE_INDEX, marker_index);
+                } else {
+                    let heading = e
+                        .call(
+                            FURNITURE_MARKER_HEADING,
+                            &args![process + PROCESS_FURNITURE_MARKER],
+                        )
+                        .f32();
+                    // The actor's slot `0x2bc` and the angle difference feed
+                    // values the code never reads again (the difference is
+                    // stored in a float, then dropped), as does the radians
+                    // value of the integer setting.
+                    let current = e.vcall(a, ACTOR_SLOT_0X2BC, &args![0u32]).f32();
+                    e.with_stack(4, |e, out| {
+                        e.mem.set_f32(out.addr(), 0.0);
+                        e.call(ANGLE_DIFFERENCE, &args![current, heading, out]);
+                    });
+                    let degrees = e
+                        .call(SETTING_INTEGER_POINTER, &args![DEGREES_SETTING])
+                        .u32();
+                    let _degrees = e.mem.i32(degrees);
+                    let accepted = with_pathing_request(e, |e, request| {
+                        let radius = travel_request_radius(e);
+                        let furniture = e.mem.u32(process + PROCESS_CURRENT_FURNITURE);
+                        let world = e.call(REFERENCE_GET_WORLD_SPACE, &args![furniture]).u32();
+                        let cell = e.call(REFERENCE_PATHING_CELL, &args![furniture]).u32();
+                        travel_build_request(
+                            e,
+                            a,
+                            request,
+                            process + PROCESS_FURNITURE_MARKER,
+                            cell,
+                            world,
+                            radius,
+                        );
+                        fn_008e7c20(e, request, heading);
+                        fn_008e7c50(e, request, 1);
+                        e.call(ACTOR_SET_PATHFINDING_GOAL_REQUEST, &args![actor, request])
+                            .bool()
+                    });
+                    if !accepted {
+                        return;
+                    }
+                    e.mem
+                        .set_u8(process + PROCESS_CURRENT_FURNITURE_INDEX, marker_index);
+                }
+            }
+            // The package's location search from the furniture.
+            if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() != 0 {
+                found = true;
+            } else {
+                let furniture = e.mem.u32(process + PROCESS_CURRENT_FURNITURE);
+                let index = e.mem.u8(process + PROCESS_CURRENT_FURNITURE_INDEX);
+                if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 0
+                    && index != 0x7f
+                    && e.call(
+                        REFERENCE_GET_MARKER_USED,
+                        &args![furniture, u32::from(index), 1u32],
+                    )
+                    .bool()
+                    && !e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool()
+                {
+                    e.vcall(process, SLOT_CLEAR_FURNITURE, &args![actor]);
+                    travel_end_move_message(e, process, a);
+                    travel_add_procedure(e, process, a);
+                    return;
+                }
+                let start = process_target_if_mobile(e, process);
+                found = package_find_location(
+                    e,
+                    package,
+                    use_second_location != 0,
+                    start,
+                    a,
+                    flag_byte,
+                );
+            }
+        } else {
+            let start = process_target_if_mobile(e, process);
+            found =
+                package_find_location(e, package, use_second_location != 0, start, a, flag_byte);
+        }
+    }
+    // The radius of the package around its location.
+    let mut radius = e
+        .call(
+            PACKAGE_RADIUS_ACTOR_TO_LOCATION,
+            &args![package, actor, use_second_location],
+        )
+        .f32();
+    if e.call(PACKAGE_TYPE, &args![package]).u32() == 5
+        && e.call(PACKAGE_LOCATION_CELL, &args![package, actor]).u32() != 0
+    {
+        let cell = e.call(PACKAGE_LOCATION_CELL, &args![package, actor]).u32();
+        if e.call(CELL_FLAG_TEST, &args![cell]).bool() {
+            radius = e.global::<f32>(RADIUS_CELL_FLAG);
+        }
+    }
+    if flag_byte != 0 {
+        radius = e.global::<f32>(RADIUS_FLAG_SET);
+    }
+    let arrived = (found && e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool())
+        || e.call(PROCESS_MOVEMENT_DONE, &args![this, actor]).bool();
+    if arrived {
+        e.mem.set_f32(process + PROCESS_PACKAGE_IDLE_TIMER, 0.0);
+        if e.call(PACKAGE_TYPE, &args![package]).u32() == 3
+            && location_ref != 0
+            && is_furniture(e)
+            && found
+        {
+            let food = e.call(ACTOR_GET_BEST_FOOD_ITEM, &args![actor]).u32();
+            if food == 0 {
+                travel_add_procedure(e, process, a);
+                travel_end_move_message(e, process, a);
+                return;
+            }
+        }
+        if e.mem.i16(process + PROCESS_SHOTS_FIRED) != 0 {
+            e.call(DELETE_ATTACHED_ARROWS, &args![location_ref, 1u32]);
+            e.mem.set_i16(process + PROCESS_SHOTS_FIRED, 0);
+            e.mem.set_i16(process + PROCESS_SHOTS_TO_FIRE, -1);
+        }
+        if not_type_5_or_12 && location_ref != 0 && is_furniture(e) && found {
+            if e.mem.u32(process + PROCESS_CURRENT_FURNITURE) == 0 {
+                e.mem
+                    .set_u32(process + PROCESS_CURRENT_FURNITURE, location_ref);
+                e.call(PROCESS_CLEAR_FURNITURE_MARKER, &args![this]);
+            }
+            let own_cell = e.call(REFERENCE_PATHING_CELL, &args![actor]).u32();
+            let furniture = e.mem.u32(process + PROCESS_CURRENT_FURNITURE);
+            let furniture_cell = e.call(REFERENCE_PATHING_CELL, &args![furniture]).u32();
+            if own_cell == furniture_cell {
+                if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4
+                    || e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 9
+                {
+                    travel_reset_eval_timer_if_flag_2(e, process, package);
+                    if end_on_arrival != 0 {
+                        travel_add_procedure(e, process, a);
+                    }
+                    travel_end_move_message(e, process, a);
+                } else if e.mem.i16(process + PROCESS_ANIM_ACTION_SUCCESS) == 0 {
+                    travel_add_procedure(e, process, a);
+                    e.mem.set_u32(process + PROCESS_GENERIC_LOCATION, 0);
+                    travel_end_move_message(e, process, a);
+                    e.mem.set_i16(process + PROCESS_ANIM_ACTION_SUCCESS, 1);
+                    return;
+                } else {
+                    e.call(PROCESS_ALIGN_TO_FURNITURE, &args![this, actor]);
+                }
+            }
+        } else {
+            let done = e.call(PROCESS_MOVEMENT_DONE, &args![this, actor]).bool();
+            travel_end_move_message(e, process, a);
+            if !done {
+                let mut face = location_ref != 0
+                    && e.call(REFERENCE_GET_FORM, &args![location_ref]).u32()
+                        == e.global::<u32>(MARKER_FORM_GLOBAL);
+                if !face {
+                    let location = e.call(PACKAGE_LOCATION_WORD, &args![package]).u32();
+                    if location != 0 && e.call(PACKAGE_LOCATION_TYPE, &args![location]).u32() == 3 {
+                        face = true;
+                    }
+                }
+                if face
+                    && !e.call(PROCESS_MOVEMENT_DONE, &args![this, actor]).bool()
+                    && e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 0
+                    && !e.vcall(process, SLOT_GET_FORCE_ROTATE, &args![]).bool()
+                {
+                    let rotation_address = if location_ref != 0 {
+                        e.call(REFERENCE_ROTATION_ADDRESS, &args![location_ref])
+                            .u32()
+                    } else {
+                        e.with_stack(12, |e, out| e.vcall(a, ACTOR_SLOT_0X16C, &args![out]).u32())
+                    };
+                    let rotation = e.mem.f32(rotation_address + 8);
+                    e.call(ACTOR_REQUEST_ROTATE, &args![actor, rotation, 0u32]);
+                }
+            }
+            if done
+                && (e.call(PACKAGE_FLAG_2, &args![package]).bool()
+                    || (e.call(PACKAGE_FLAG_4, &args![package]).bool()
+                        && e.call(PACKAGE_TYPE, &args![package]).u32() == 6))
+            {
+                keep_going = 1;
+            } else if end_on_arrival != 0 {
+                travel_add_procedure(e, process, a);
+            }
+            if e.call(PACKAGE_FLAG_2, &args![package]).bool()
+                && !e.call(PACKAGE_ONCE_PER_DAY, &args![package]).bool()
+                && e.call(PACKAGE_TARGET_WORD, &args![package]).u32() == 0
+            {
+                e.mem.set_f32(process + PROCESS_PACKAGE_EVAL_TIMER, 0.0);
+            }
+            travel_once_per_day(e, a, package);
+            if !e.vcall(process, SLOT_GET_LOCKED_LOCATION, &args![]).bool() {
+                if e.call(PACKAGE_FLAG_ENUM_A, &args![package]).bool() {
+                    travel_enumerate_references(e, a, ENUM_CALLBACK_A);
+                }
+                e.vcall(process, SLOT_SET_LOCKED_LOCATION, &args![1u32]);
+            }
+            if e.call(PACKAGE_FLAG_ENUM_B, &args![package]).bool() {
+                travel_enumerate_references(e, a, ENUM_CALLBACK_B);
+            }
+            if e.mem.u8(process + PROCESS_DONE_CLOTHES_CHANGE) == 0
+                && e.call(PACKAGE_FLAG_200000, &args![package]).bool()
+            {
+                e.mem.set_u8(process + PROCESS_DONE_CLOTHES_CHANGE, 1);
+                let weapon = e.vcall(process, SLOT_GET_CURRENT_WEAPON, &args![]).u32();
+                if weapon != 0 {
+                    let word = e.call(WORD_AT_8, &args![weapon]).u32();
+                    e.call(
+                        ACTOR_QUEUE_UNEQUIP_OBJECT,
+                        &args![actor, word, 1u32, 0u32, 0u32, 0u32, 1u32],
+                    );
+                }
+                let ammo = e.vcall(process, SLOT_GET_CURRENT_AMMO, &args![]).u32();
+                if ammo != 0 {
+                    let next = e.call(NODE_NEXT, &args![ammo]).u32();
+                    let word = e.call(WORD_AT_8, &args![ammo]).u32();
+                    e.call(
+                        ACTOR_QUEUE_UNEQUIP_OBJECT,
+                        &args![actor, word, next, 0u32, 0u32, 0u32, 1u32],
+                    );
+                }
+            }
+        }
+        if !(e.call(PROCESS_MOVEMENT_DONE, &args![this, actor]).bool() && keep_going != 0) {
+            return;
+        }
+    }
+    if found && e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() {
+        travel_add_procedure(e, process, a);
+        return;
+    }
+    if !found && e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() {
+        let located = package_find_location(e, package, use_second_location != 0, a, a, flag_byte);
+        if !located && !e.call(PROCESS_MOVEMENT_DONE, &args![this, actor]).bool() {
+            if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4
+                || e.vcall(process, SLOT_GET_SIT_SLEEP_STATE, &args![]).i32() == 9
+            {
+                e.vcall(a, ACTOR_SLOT_0X418, &args![]);
+                return;
+            }
+            if location_ref != 0 && is_furniture(e) {
+                let position = actor_position_words(e, a);
+                let current_furniture = e.mem.u32(process + PROCESS_CURRENT_FURNITURE);
+                if current_furniture != 0
+                    && e.vcall(current_furniture, ACTOR_SLOT_NODE, &args![]).u32() == 0
+                {
+                    // A request to the current furniture's own position.
+                    let accepted = with_pathing_request(e, |e, request| {
+                        let radius = travel_request_radius(e);
+                        let world = e.call(PACKAGE_LOCATION_WORLD, &args![package, actor]).u32();
+                        let cell = e.call(PACKAGE_LOCATION_CELL, &args![package, actor]).u32();
+                        let furniture = e.mem.u32(process + PROCESS_CURRENT_FURNITURE);
+                        let furniture_position =
+                            e.vcall(furniture, ACTOR_SLOT_POSITION, &args![]).u32();
+                        travel_build_request(
+                            e,
+                            a,
+                            request,
+                            furniture_position,
+                            cell,
+                            world,
+                            radius,
+                        );
+                        fn_008e7c50(e, request, 1);
+                        e.call(ACTOR_SET_PATHFINDING_GOAL_REQUEST, &args![actor, request])
+                            .bool()
+                    });
+                    if !accepted {
+                        return;
+                    }
+                } else {
+                    let found_marker = if current_furniture != 0
+                        && e.vcall(current_furniture, ACTOR_SLOT_NODE, &args![]).u32() != 0
+                    {
+                        Some(e.with_stack(16, |e, block| {
+                            for (i, word) in position.iter().enumerate() {
+                                e.mem.set_u32(block.addr() + i as u32 * 4, *word);
+                            }
+                            e.mem.set_u32(block.addr() + 12, 0);
+                            let furniture = e.mem.u32(process + PROCESS_CURRENT_FURNITURE);
+                            let found_marker = e
+                                .call(
+                                    REFERENCE_GET_CLOSEST_FREE_MARKER,
+                                    &args![
+                                        furniture,
+                                        block,
+                                        1u32,
+                                        1u32,
+                                        process + PROCESS_FURNITURE_MARKER,
+                                        block.addr() + 12,
+                                        1u32
+                                    ],
+                                )
+                                .bool();
+                            found_marker.then(|| e.mem.u8(block.addr() + 12))
+                        }))
+                        .flatten()
+                    } else {
+                        None
+                    };
+                    match found_marker {
+                        None => {
+                            travel_end_move_message(e, process, a);
+                            travel_finish_procedures(e, process, package);
+                            return;
+                        }
+                        Some(marker_index) => {
+                            let accepted = with_pathing_request(e, |e, request| {
+                                let radius = travel_request_radius(e);
+                                let world =
+                                    e.call(PACKAGE_LOCATION_WORLD, &args![package, actor]).u32();
+                                let cell =
+                                    e.call(PACKAGE_LOCATION_CELL, &args![package, actor]).u32();
+                                travel_build_request(
+                                    e,
+                                    a,
+                                    request,
+                                    process + PROCESS_FURNITURE_MARKER,
+                                    cell,
+                                    world,
+                                    radius,
+                                );
+                                let heading = e
+                                    .call(
+                                        FURNITURE_MARKER_HEADING,
+                                        &args![process + PROCESS_FURNITURE_MARKER],
+                                    )
+                                    .f32();
+                                fn_008e7c20(e, request, heading);
+                                fn_008e7c50(e, request, 1);
+                                e.call(ACTOR_SET_PATHFINDING_GOAL_REQUEST, &args![actor, request])
+                                    .bool()
+                            });
+                            if !accepted {
+                                return;
+                            }
+                            e.mem
+                                .set_u32(process + PROCESS_CURRENT_FURNITURE, location_ref);
+                            e.mem
+                                .set_u8(process + PROCESS_CURRENT_FURNITURE_INDEX, marker_index);
+                        }
+                    }
+                }
+            } else if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 0 {
+                let accepted = with_pathing_request(e, |e, request| {
+                    if use_second_location != 0 {
+                        let world = e
+                            .call(PACKAGE_SECOND_LOCATION_WORLD, &args![package, actor])
+                            .u32();
+                        let cell = e
+                            .call(PACKAGE_SECOND_LOCATION_CELL, &args![package, actor])
+                            .u32();
+                        let position = e.with_stack(12, |e, coord| {
+                            e.call(PACKAGE_SECOND_LOCATION_COORD, &args![package, coord, actor])
+                                .u32()
+                        });
+                        travel_build_request(e, a, request, position, cell, world, radius);
+                    } else {
+                        let world = e.call(PACKAGE_LOCATION_WORLD, &args![package, actor]).u32();
+                        let cell = e.call(PACKAGE_LOCATION_CELL, &args![package, actor]).u32();
+                        let position = e.with_stack(12, |e, coord| {
+                            e.call(PACKAGE_LOCATION_COORD, &args![package, coord, actor])
+                                .u32()
+                        });
+                        travel_build_request(e, a, request, position, cell, world, radius);
+                    }
+                    if location_ref != 0 {
+                        let form = e.call(REFERENCE_GET_FORM, &args![location_ref]).u32();
+                        if form != 0
+                            && (form == e.global::<u32>(MARKER_FORM_GLOBAL)
+                                || e.call(FORM_TYPE_OF, &args![form]).u32() == 0x30)
+                        {
+                            let rotation_address = e
+                                .call(REFERENCE_ROTATION_ADDRESS, &args![location_ref])
+                                .u32();
+                            let rotation = e.mem.f32(rotation_address + 8);
+                            fn_008e7c20(e, request, rotation);
+                        }
+                    }
+                    fn_008e7c50(e, request, 0);
+                    e.call(ACTOR_SET_PATHFINDING_GOAL_REQUEST, &args![actor, request])
+                        .bool()
+                });
+                if !accepted {
+                    return;
+                }
+            }
+        }
+    }
+    if e.call(PROCESS_MOVEMENT_DONE, &args![this, actor]).bool()
+        && !e.call(PACKAGE_FLAG_2, &args![package]).bool()
+        && !e.call(PACKAGE_FLAG_4, &args![package]).bool()
+    {
+        travel_finish_procedures(e, process, package);
+        return;
+    }
+    if !found && e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 0 {
+        let walk_target = travel_walk_target(e, process, package);
+        if walk_target != 0 {
+            let target_position = e.vcall(walk_target, ACTOR_SLOT_POSITION, &args![]).u32();
+            let remaining = e.with_stack(12, |e, out| {
+                let difference = e
+                    .call(
+                        POINT_DIFFERENCE,
+                        &args![process + PROCESS_LAST_SEEN_POSITION, out, target_position],
+                    )
+                    .u32();
+                e.call(POINT_LENGTH_FLOAT, &args![difference]).f32()
+            });
+            let setting = e
+                .call(SETTING_VALUE, &args![TRAVEL_TARGET_DISTANCE_SETTING])
+                .u32();
+            let limit = e.mem.f32(setting);
+            if limit < remaining
+                || (radius < location_distance
+                    && e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool())
+            {
+                let accepted = with_pathing_request(e, |e, request| {
+                    let world = e.call(REFERENCE_GET_WORLD_SPACE, &args![walk_target]).u32();
+                    let cell = e.call(REFERENCE_PATHING_CELL, &args![walk_target]).u32();
+                    let position = e.vcall(walk_target, ACTOR_SLOT_POSITION, &args![]).u32();
+                    travel_build_request(e, a, request, position, cell, world, radius);
+                    fn_008e7c50(e, request, 0);
+                    if !e
+                        .call(ACTOR_SET_PATHFINDING_GOAL_REQUEST, &args![actor, request])
+                        .bool()
+                    {
+                        return false;
+                    }
+                    let position = e.vcall(walk_target, ACTOR_SLOT_POSITION, &args![]).u32();
+                    for word in 0..3 {
+                        let value = e.mem.u32(position + word * 4);
+                        e.mem
+                            .set_u32(process + PROCESS_LAST_SEEN_POSITION + word * 4, value);
+                    }
+                    true
+                });
+                if !accepted {
+                    return;
+                }
+            }
+        }
+        if a == player_pointer(e) {
+            if location_ref == 0 || !is_furniture(e) {
+                e.vcall(a, ACTOR_SLOT_0X418, &args![]);
+            }
+        } else {
+            if e.call(PACKAGE_FLAG_2000, &args![package]).bool() {
+                animation_id = 0x201;
+            } else if animation_id == -1 {
+                let flag = travel_package_is_0x15_or_0x12(e, process);
+                animation_id = e
+                    .vcall(
+                        process,
+                        SLOT_CALCULATE_MOVE_MODE,
+                        &args![
+                            actor,
+                            location_distance,
+                            radius,
+                            radius + radius,
+                            flag,
+                            1u32
+                        ],
+                    )
+                    .i32();
+            }
+            e.vcall(
+                process,
+                SLOT_SET_ACTORS_ANIMATION,
+                &args![actor, animation_id, 1u32],
+            );
+            // The location coordinate, which the code copies over with the
+            // furniture marker and then drops.
+            e.with_stack(12, |e, coord| {
+                e.call(PACKAGE_LOCATION_COORD, &args![package, coord, actor]);
+                if location_ref != 0 && is_furniture(e) {
+                    for word in 0..3 {
+                        let value = e.mem.u32(process + PROCESS_FURNITURE_MARKER + word * 4);
+                        e.mem.set_u32(coord.addr() + word * 4, value);
+                    }
+                }
+            });
+        }
+    }
+    if found {
+        if !e.call(ACTOR_IS_PATHING, &args![actor]).bool() {
+            travel_add_procedure(e, process, a);
+        }
+    } else if (e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4
+        || e.vcall(process, SLOT_GET_SIT_SLEEP_STATE, &args![]).i32() == 9)
+        && !found
+    {
+        e.vcall(a, ACTOR_SLOT_0X418, &args![]);
+    }
+}
+
+/// The once-per-day bookkeeping of the travel packages: when the package is
+/// once-per-day (`00670f90`), has no next entry in its list at `+0x38`
+/// (`0041d8a0`, `00726070`) and has type 6, the actor's virtual `+0x28c` gets
+/// the package and the day (`Calendar::GetDay`).
+fn travel_once_per_day(e: &mut Engine, actor: u32, package: u32) {
+    if e.call(PACKAGE_ONCE_PER_DAY, &args![package]).bool() {
+        let list = e.call(PACKAGE_LIST_AT_38, &args![package]).u32();
+        let list_has_next = if list != 0 {
+            let list = e.call(PACKAGE_LIST_AT_38, &args![package]).u32();
+            e.call(NODE_NEXT, &args![list]).u32() != 0
+        } else {
+            false
+        };
+        if !list_has_next && e.call(PACKAGE_TYPE, &args![package]).u32() == 6 {
+            let day = e.call(CALENDAR_GET_DAY, &args![CALENDAR]).u8();
+            e.vcall(actor, ACTOR_SLOT_0X28C, &args![package, u32::from(day)]);
+        }
+    }
+}
+
+/// `SetProcedureIndexRunning(procedureCount - 1)` for the package's procedure
+/// (`009611e0` gets the procedure, `Procedure::GetProcedureCount`).
+fn travel_finish_procedures(e: &mut Engine, process: u32, package: u32) {
+    let procedure = e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32();
+    let count = e.call(PROCEDURE_GET_COUNT, &args![procedure]).i32();
+    e.vcall(
+        process,
+        SLOT_SET_PROCEDURE_INDEX_RUNNING,
+        &args![count.wrapping_sub(1)],
+    );
+}
+
+/// The actor `ProcessBackUp` and `ProcessTravel` walk to: the package
+/// location's reference, else the process' generic location, when the
+/// reference answers true to slot `0x100` (an actor); else 0.
+fn travel_walk_target(e: &mut Engine, process: u32, package: u32) -> u32 {
+    let mut walk_target = 0u32;
+    if e.call(PACKAGE_LOCATION_WORD, &args![package]).u32() != 0 {
+        let location = e.call(PACKAGE_LOCATION_WORD, &args![package]).u32();
+        let mut candidate = e
+            .call(PACKAGE_LOCATION_GET_REFERENCE, &args![location])
+            .u32();
+        if candidate == 0 {
+            candidate = e.vcall(process, SLOT_GET_GENERIC_LOCATION, &args![]).u32();
+        }
+        if candidate != 0 && e.vcall(candidate, ACTOR_SLOT_IS_ACTOR, &args![]).bool() {
+            walk_target = candidate;
+        }
+    }
+    walk_target
+}
+
+/// Whether the process' current package (virtual `+0x22c`) has type 0x15 or
+/// 0x12 (the flag given to `CalculateMoveMode`).
+fn travel_package_is_0x15_or_0x12(e: &mut Engine, process: u32) -> u32 {
+    let mut flag = 0u32;
+    if e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32() != 0 {
+        let current = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+        if e.call(PACKAGE_TYPE, &args![current]).u32() == 0x15 {
+            flag = 1;
+        } else {
+            let current = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+            if e.call(PACKAGE_TYPE, &args![current]).u32() == 0x12 {
+                flag = 1;
+            }
+        }
+    }
+    flag
+}
+
+/// `RTTI` type descriptor of `BackUpPackage` (`.?AVBackUpPackage@@`).
+const TYPE_BACK_UP_PACKAGE: u32 = 0x011a_32e0;
+/// `BackUpPackage` position getter (`009ed350`, `this` = the package, one
+/// argument: the three-word `NiPoint3` to fill, returned).
+const BACK_UP_PACKAGE_POSITION: u32 = 0x009e_d350;
+/// `Actor::ForceMoveMode` (Xbox PDB, `008b3a20`): one argument.
+const ACTOR_FORCE_MOVE_MODE: u32 = 0x008b_3a20;
+/// The float `0102f0f8` given to the actor's slot `0x2cc` by `ProcessBackUp`.
+const BACK_UP_VIEW_DISTANCE: u32 = 0x0102_f0f8;
+
+/// The part of `ProcessBackUp` after the back-up position was copied into
+/// `position` (a stack local of the original).
+fn process_back_up_from(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    package: u32,
+    position: Ptr,
+) {
+    let process = this.addr();
+    let a = actor.addr();
+    let flag_byte: u8 = 0;
+    let distance = e
+        .call(ACTOR_DISTANCE_TO_POINT, &args![actor, position])
+        .f32();
+    let mut found = false;
+    if e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() || a == player_pointer(e) {
+        let view_distance = e.global::<f32>(BACK_UP_VIEW_DISTANCE);
+        found = e
+            .vcall(
+                a,
+                ACTOR_SLOT_CAN_SEE_POSITION,
+                &args![position, view_distance, 1u32, 0u32],
+            )
+            .bool();
+    }
+    let mut radius = e
+        .call(
+            PACKAGE_RADIUS_ACTOR_TO_LOCATION,
+            &args![package, actor, 0u32],
+        )
+        .f32();
+    if flag_byte != 0 {
+        radius = e.global::<f32>(RADIUS_FLAG_SET);
+    }
+    if (found && e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool())
+        || e.call(PROCESS_MOVEMENT_DONE, &args![this, actor]).bool()
+    {
+        e.mem.set_f32(process + PROCESS_PACKAGE_IDLE_TIMER, 0.0);
+        // The result is stored and never read again.
+        e.call(PROCESS_MOVEMENT_DONE, &args![this, actor]);
+        travel_end_move_message(e, process, a);
+        travel_add_procedure(e, process, a);
+        if e.call(PACKAGE_FLAG_2, &args![package]).bool()
+            && !e.call(PACKAGE_ONCE_PER_DAY, &args![package]).bool()
+            && e.call(PACKAGE_TARGET_WORD, &args![package]).u32() == 0
+        {
+            e.mem.set_f32(process + PROCESS_PACKAGE_EVAL_TIMER, 0.0);
+        }
+        travel_once_per_day(e, a, package);
+        if !e.vcall(process, SLOT_GET_LOCKED_LOCATION, &args![]).bool() {
+            if e.call(PACKAGE_FLAG_ENUM_A, &args![package]).bool() {
+                travel_enumerate_references(e, a, ENUM_CALLBACK_A);
+            }
+            e.vcall(process, SLOT_SET_LOCKED_LOCATION, &args![1u32]);
+        }
+        if e.call(PACKAGE_FLAG_ENUM_B, &args![package]).bool() {
+            travel_enumerate_references(e, a, ENUM_CALLBACK_B);
+        }
+        if !e.call(PROCESS_MOVEMENT_DONE, &args![this, actor]).bool() {
+            return;
+        }
+    }
+    if found && e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() {
+        travel_add_procedure(e, process, a);
+        return;
+    }
+    if !found
+        && e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool()
+        && !package_find_location(e, package, false, a, a, flag_byte)
+        && !e.call(PROCESS_MOVEMENT_DONE, &args![this, actor]).bool()
+    {
+        if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4
+            || e.vcall(process, SLOT_GET_SIT_SLEEP_STATE, &args![]).i32() == 9
+        {
+            e.vcall(a, ACTOR_SLOT_0X418, &args![]);
+            return;
+        }
+        if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 0 {
+            let accepted = with_pathing_request(e, |e, request| {
+                let world = e.call(PACKAGE_LOCATION_WORLD, &args![package, actor]).u32();
+                let cell = e.call(PACKAGE_LOCATION_CELL, &args![package, actor]).u32();
+                travel_build_request(e, a, request, position.addr(), cell, world, radius);
+                e.call(ACTOR_FORCE_MOVE_MODE, &args![actor, 0x202u32]);
+                fn_008e7c50(e, request, 0);
+                e.call(ACTOR_SET_PATHFINDING_GOAL_REQUEST, &args![actor, request])
+                    .bool()
+            });
+            if !accepted {
+                return;
+            }
+        }
+    }
+    if e.call(PROCESS_MOVEMENT_DONE, &args![this, actor]).bool()
+        && !e.call(PACKAGE_FLAG_2, &args![package]).bool()
+        && !e.call(PACKAGE_FLAG_4, &args![package]).bool()
+    {
+        travel_finish_procedures(e, process, package);
+        return;
+    }
+    if !found && e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 0 {
+        let walk_target = travel_walk_target(e, process, package);
+        if walk_target != 0 {
+            let target_position = e.vcall(walk_target, ACTOR_SLOT_POSITION, &args![]).u32();
+            let remaining = e.with_stack(12, |e, out| {
+                let difference = e
+                    .call(
+                        POINT_DIFFERENCE,
+                        &args![process + PROCESS_LAST_SEEN_POSITION, out, target_position],
+                    )
+                    .u32();
+                e.call(POINT_LENGTH_FLOAT, &args![difference]).f32()
+            });
+            let setting = e
+                .call(SETTING_VALUE, &args![TRAVEL_TARGET_DISTANCE_SETTING])
+                .u32();
+            let limit = e.mem.f32(setting);
+            if limit < remaining
+                || (radius < distance && e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool())
+            {
+                let accepted = with_pathing_request(e, |e, request| {
+                    let world = e.call(REFERENCE_GET_WORLD_SPACE, &args![walk_target]).u32();
+                    let cell = e.call(REFERENCE_PATHING_CELL, &args![walk_target]).u32();
+                    travel_build_request(e, a, request, position.addr(), cell, world, radius);
+                    fn_008e7c20(e, request, 0.0);
+                    fn_008e7c50(e, request, 0);
+                    e.call(ACTOR_FORCE_MOVE_MODE, &args![actor, 0x202u32]);
+                    if !e
+                        .call(ACTOR_SET_PATHFINDING_GOAL_REQUEST, &args![actor, request])
+                        .bool()
+                    {
+                        return false;
+                    }
+                    let target_position = e.vcall(walk_target, ACTOR_SLOT_POSITION, &args![]).u32();
+                    for word in 0..3 {
+                        let value = e.mem.u32(target_position + word * 4);
+                        e.mem
+                            .set_u32(process + PROCESS_LAST_SEEN_POSITION + word * 4, value);
+                    }
+                    true
+                });
+                if !accepted {
+                    return;
+                }
+            }
+        }
+        if a != player_pointer(e) {
+            // The code starts from -1 and tests it again after the flag
+            // check, so the calculation is made whenever the flag is clear.
+            let animation_id = if e.call(PACKAGE_FLAG_2000, &args![package]).bool() {
+                0x201
+            } else {
+                let flag = travel_package_is_0x15_or_0x12(e, process);
+                e.vcall(
+                    process,
+                    SLOT_CALCULATE_MOVE_MODE,
+                    &args![actor, distance, radius, radius + radius, flag, 1u32],
+                )
+                .i32()
+            };
+            e.vcall(
+                process,
+                SLOT_SET_ACTORS_ANIMATION,
+                &args![actor, animation_id, 1u32],
+            );
+            e.with_stack(12, |e, coord| {
+                e.call(PACKAGE_LOCATION_COORD, &args![package, coord, actor]);
+            });
+        }
+    }
+    if found {
+        if !e.call(ACTOR_IS_PATHING, &args![actor]).bool() {
+            travel_add_procedure(e, process, a);
+        }
+    } else if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4
+        || e.vcall(process, SLOT_GET_SIT_SLEEP_STATE, &args![]).i32() == 9
+    {
+        e.vcall(a, ACTOR_SLOT_0X418, &args![]);
+    }
+}
+
+// Translated from 008e7c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ProcessBackUp` (Xbox PDB): the process of a `BackUpPackage`
+/// (the running package, cast with `__RTDynamicCast`; nothing happens when
+/// the cast fails). Like `ProcessTravel` it returns while a special idle
+/// works or plays; it copies the back-up position (`009ed350`), measures the
+/// distance to it, asks the actor whether it can see the position (slot
+/// `0x2cc`, only when pathing is complete or for the player), and on arrival
+/// runs the end-of-travel bookkeeping (end move message, one procedure added,
+/// once-per-day, the two enumerations). Otherwise it builds a request to the
+/// position with `ForceMoveMode(0x202)`, walks toward the package's target
+/// actor, or sets the movement animation (slots `0x34c` and `0x350`). C++
+/// exception states are not translated.
+pub fn high_process_process_back_up(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) {
+    let process = this.addr();
+    let a = actor.addr();
+    let package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    let back_up = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![
+                package,
+                0i32,
+                Ptr::<()>::new(TYPE_PACKAGE),
+                Ptr::<()>::new(TYPE_BACK_UP_PACKAGE),
+                0i32
+            ],
+        )
+        .u32();
+    if package == 0 || back_up == 0 {
+        return;
+    }
+    // The package type is read and not used again.
+    e.call(PACKAGE_TYPE, &args![package]);
+    let animation = e.vcall(a, ACTOR_SLOT_ANIMATION, &args![]).u32();
+    if fn_008e7c00(e, this.cast()) && animation != 0 {
+        if e.call(ANIMATION_SPECIAL_IDLE_WORKING, &args![animation])
+            .bool()
+            || e.call(ANIMATION_SPECIAL_IDLE_PLAYING, &args![animation])
+                .bool()
+        {
+            return;
+        }
+    }
+    e.with_stack(12, |e, position| {
+        e.call(BACK_UP_PACKAGE_POSITION, &args![back_up, position]);
+        process_back_up_from(e, this, actor, package, position);
+    });
+}
+
+/// `TESPackage::GetDialogueSayToFlag` (Xbox PDB, `00672710`).
+const PACKAGE_DIALOGUE_SAY_TO_FLAG: u32 = 0x0067_2710;
+/// `TESPackage::GetDialogueTopic` (Xbox PDB, `00672760`).
+const PACKAGE_DIALOGUE_TOPIC: u32 = 0x0067_2760;
+/// `TESPackage::GetDialogueDoNotControlTarget` (Xbox PDB, `006727b0`).
+const PACKAGE_DIALOGUE_DO_NOT_CONTROL_TARGET: u32 = 0x0067_27b0;
+/// `TESPackage::GetDialogueNoHeadtrack` (Xbox PDB, `00672800`).
+const PACKAGE_DIALOGUE_NO_HEADTRACK: u32 = 0x0067_2800;
+/// `TESPackage::` flag 0x20000 of the word at +0x1c (`0067a4f0`).
+const PACKAGE_FLAG_20000: u32 = 0x0067_a4f0;
+/// `004997b0` (`this` = the actor): reads the actor's move mode (`008846e0`)
+/// and answers true when bit 0x400 is set and bit 0x800 is clear.
+const MOVE_MODE_RUNNING_ONLY: u32 = 0x0049_97b0;
+/// `00884f80` (`this` = the actor): clears two move-mode bits when it has a
+/// process.
+const ACTOR_CLEAR_RUN_BITS: u32 = 0x0088_4f80;
+/// `Actor::SetPathfindingGoal_ov3` (Xbox PDB, `008b36f0`): `(reference,
+/// float, 0)`.
+const ACTOR_SET_PATHFINDING_GOAL_REFERENCE: u32 = 0x008b_36f0;
+/// `Actor::GetCurrentPathfindingGoal` (Xbox PDB, `008b3840`): `(out)`.
+const ACTOR_GET_CURRENT_PATHFINDING_GOAL: u32 = 0x008b_3840;
+/// `NiPoint3` subtraction in place (`004578c0`): `this -= argument`.
+const POINT_SUBTRACT: u32 = 0x0045_78c0;
+/// Squared length of the `NiPoint3` in `this` (`004a7290`, `ST0`) is
+/// `POINT_SQUARED_LENGTH`.
+/// `Actor::GetPackageSetAsPcurrent` (Xbox PDB, `00881510`).
+const ACTOR_GET_PACKAGE_SET_AS_CURRENT: u32 = 0x0088_1510;
+/// `Actor::IsTryingToEnterFurniture` (Xbox PDB, `008c13d0`).
+const ACTOR_IS_TRYING_TO_ENTER_FURNITURE: u32 = 0x008c_13d0;
+/// `DialoguePackage::GetTargetOfConversation` (Xbox PDB, `008d80e0`).
+const DIALOGUE_TARGET_OF_CONVERSATION: u32 = 0x008d_80e0;
+/// `DialoguePackage::GetActorStartedConversation` (Xbox PDB, `009ee040`).
+const DIALOGUE_ACTOR_STARTED_CONVERSATION: u32 = 0x009e_e040;
+/// `00671d10` followed by `0044ddc0`: see [`PACKAGE_TARGET_WORD`].
+/// `0057bd60` (`this` = reference, one argument): stores the argument at
+/// +0x70.
+const REFERENCE_SET_WORD_AT_70: u32 = 0x0057_bd60;
+/// The double `01012060` the floats of the dialogue code are compared with.
+const ZERO_DOUBLE_VALUE: u32 = 0x0101_2060;
+/// Float 120.0 (`01017e70`): the default talking distance.
+const DIALOGUE_DEFAULT_DISTANCE: u32 = 0x0101_7e70;
+/// Float 400.0 (`010311a8`): the default distance of a moving target.
+const DIALOGUE_DEFAULT_TARGET_DISTANCE: u32 = 0x0103_11a8;
+/// Double `0102f078`: the squared distance above which the target is walked to.
+const DIALOGUE_SQUARED_DISTANCE: u32 = 0x0102_f078;
+
+// Virtual slots of the process used by `ProcessDialogueActivate` (Xbox PDB).
+const SLOT_IS_TALKING: u32 = 0x4b8;
+const SLOT_SAVE_PACKAGE_TO_EXTRA_DATA: u32 = 0x710;
+const SLOT_PROCESS_TRAVEL: u32 = 0x2bc;
+const SLOT_CLEAR_SCRIPT_HEAD_TRACK_TARGET: u32 = 0x648;
+const SLOT_SET_HEAD_TRACK_TARGET: u32 = 0x63c;
+const SLOT_GET_CURRENT_PROCEDURE_INDEX_FOR_DIALOGUE: u32 = 0x23c;
+// Virtual slots of the dialogue package.
+const DIALOGUE_SLOT_REACHED_TARGET: u32 = 0x144;
+// Virtual slots of an actor (PC byte offsets).
+const ACTOR_SLOT_SET_PACKAGE: u32 = 0x27c;
+const ACTOR_SLOT_0X288: u32 = 0x288;
+const ACTOR_SLOT_ADD_PACKAGE: u32 = 0x2f4;
+const FORM_SLOT_0X124: u32 = 0x124;
+
+// Translated from 008e95a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. Getter of the byte at +0xbd of a
+/// `DialoguePackage` (`bCreatedPack`, Xbox PDB +0xcd).
+pub fn fn_008e95a0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0xbd)
+}
+
+// Translated from 008e95c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. Getter of the byte at +0xbf of a
+/// `DialoguePackage` (`bTargetContinueMoving`, Xbox PDB +0xcf).
+pub fn fn_008e95c0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0xbf)
+}
+
+// Translated from 008e95e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. Getter of the byte at +0xc0 of a
+/// `DialoguePackage` (`bTargetMoveTowardStarter`, Xbox PDB +0xd0).
+pub fn fn_008e95e0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0xc0)
+}
+
+// Translated from 008e9600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. Setter of the byte at +0xc2 of a
+/// `DialoguePackage` (`bReachedAmbushLocation`, Xbox PDB +0xd2).
+pub fn fn_008e9600(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0xc2, value);
+}
+
+// Translated from 008e9620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. Getter of the byte at +0xc2 of a
+/// `DialoguePackage` (`bReachedAmbushLocation`, Xbox PDB +0xd2).
+pub fn fn_008e9620(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0xc2)
+}
+
+/// The float the dialogue code builds from a package's target word: 0.0
+/// without one, else the integer at +8 of the target (`00671d10` then
+/// `0044ddc0`) converted to a float.
+fn dialogue_package_distance(e: &mut Engine, package: u32) -> f32 {
+    let mut distance = 0.0f32;
+    if e.call(PACKAGE_TARGET_WORD, &args![package]).u32() != 0 {
+        let target = e.call(PACKAGE_TARGET_WORD, &args![package]).u32();
+        let word = e.call(WORD_AT_8, &args![target]).i32();
+        distance = word as f32;
+    }
+    distance
+}
+
+/// The package's search slot `0x140` with the arguments the dialogue code
+/// passes: `(target, actor, 0, -1.0, flag)`.
+fn dialogue_second_search(
+    e: &mut Engine,
+    package: u32,
+    target: u32,
+    actor: u32,
+    flag: u32,
+) -> bool {
+    let limit = e.global::<f32>(NO_LIMIT_FLOAT);
+    e.vcall(
+        package,
+        PACKAGE_SLOT_FIND_SECOND_LOCATION,
+        &args![target, actor, 0u32, limit, flag],
+    )
+    .bool()
+}
+
+/// The package's own-location search slot `0x13c` with `(actor, 0, -1.0, 0)`.
+fn dialogue_first_search(e: &mut Engine, package: u32, actor: u32) -> bool {
+    let limit = e.global::<f32>(NO_LIMIT_FLOAT);
+    e.vcall(
+        package,
+        PACKAGE_SLOT_FIND_LOCATION,
+        &args![actor, 0u32, limit, 0u32],
+    )
+    .bool()
+}
+
+/// `ProcessDialogueActivate` for a "say to" package whose process target is
+/// the player (the first branch of the function).
+fn dialogue_say_to_player(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    package: u32,
+) -> bool {
+    let process = this.addr();
+    let a = actor.addr();
+    if e.vcall(process, SLOT_IS_TALKING, &args![actor]).bool() {
+        return true;
+    }
+    let mut mobile = 0u32;
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if e.vcall(target, ACTOR_SLOT_IS_MOBILE_OBJECT, &args![])
+        .bool()
+    {
+        mobile = e.mem.u32(process + PROCESS_TARGET);
+    }
+    if e.call(PACKAGE_SECOND_LOCATION, &args![package]).u32() != 0
+        && !dialogue_first_search(e, package, a)
+    {
+        e.vcall(
+            process,
+            SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+            &args![actor, u32::MAX],
+        );
+        return false;
+    }
+    if e.call(PACKAGE_SECOND_LOCATION, &args![package]).u32() != 0
+        && !dialogue_second_search(e, package, mobile, a, 1)
+    {
+        return true;
+    }
+    let mut limit = dialogue_package_distance(e, package);
+    if f64::from(limit) <= e.global::<f64>(ZERO_DOUBLE_VALUE) {
+        limit = e.global::<f32>(DIALOGUE_DEFAULT_DISTANCE);
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    let distance = e
+        .call(DISTANCE_FROM_REFERENCE, &args![actor, target, 0u32, 0u32])
+        .f64();
+    if f64::from(limit) < distance {
+        if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() != 0 {
+            e.vcall(a, ACTOR_SLOT_0X418, &args![]);
+            return true;
+        }
+        if e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() {
+            if e.call(PACKAGE_FLAG_2000, &args![package]).bool() {
+                e.call(ACTOR_SET_MOVE_MODE, &args![actor, 0x200u32]);
+            }
+            if e.call(PACKAGE_FLAG_20000, &args![package]).bool() {
+                if !e.call(MOVE_MODE_RUNNING_ONLY, &args![actor]).bool() {
+                    e.call(ACTOR_CLEAR_RUN_BITS, &args![actor]);
+                }
+                e.call(ACTOR_SET_MOVE_MODE, &args![actor, 0x400u32]);
+            }
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            e.call(
+                ACTOR_SET_PATHFINDING_GOAL_REFERENCE,
+                &args![actor, target, limit, 0u32],
+            );
+        }
+        return true;
+    }
+    travel_end_move_message(e, process, a);
+    let pathing_and_not_rotating = e.call(ACTOR_IS_PATHING, &args![actor]).bool()
+        && !e.call(ACTOR_IS_ROTATING, &args![actor]).bool();
+    if pathing_and_not_rotating {
+        return true;
+    }
+    let player = e.global::<u32>(PLAYER_POINTER);
+    if !e
+        .call(
+            ACTOR_LINE_OF_SIGHT,
+            &args![actor, 0u32, player, 1u32, 0u32, 0u32],
+        )
+        .bool()
+    {
+        return true;
+    }
+    let mut topic = e.call(PACKAGE_DIALOGUE_TOPIC, &args![package]).u32();
+    if topic == 0 {
+        topic = e.call(GET_TOPIC, &args![1u32, 0u32]).u32();
+    }
+    if mobile != 0
+        && e.mem.u32(process + PROCESS_TARGET) != player_pointer(e)
+        && !e
+            .call(PACKAGE_DIALOGUE_NO_HEADTRACK, &args![package])
+            .bool()
+    {
+        let mobile_process = e.call(ACTOR_PROCESS, &args![mobile]).u32();
+        e.vcall(
+            mobile_process,
+            SLOT_CLEAR_SCRIPT_HEAD_TRACK_TARGET,
+            &args![0u32],
+        );
+        let mobile_process = e.call(ACTOR_PROCESS, &args![mobile]).u32();
+        e.vcall(mobile_process, SLOT_SET_EXTRA_HEAD_TRACK, &args![actor]);
+        e.call(REFERENCE_SET_WORD_AT_70, &args![mobile, actor]);
+    }
+    let own_process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+    e.vcall(
+        own_process,
+        SLOT_CLEAR_SCRIPT_HEAD_TRACK_TARGET,
+        &args![0u32],
+    );
+    let own_process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    e.vcall(own_process, SLOT_SET_EXTRA_HEAD_TRACK, &args![target]);
+    e.call(REFERENCE_SET_WORD_AT_70, &args![actor, mobile]);
+    let own_process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+    e.vcall(
+        own_process,
+        SLOT_PROCESS_GREET,
+        &args![actor, topic, 0u32, 0u32, 1u32, 1u32],
+    );
+    true
+}
+
+/// The branch of `ProcessDialogueActivate` taken when the package created the
+/// conversation (`bCreatedPack`, `008e95a0`).
+fn dialogue_created_conversation(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    package: u32,
+    conversation: u32,
+    target_of: u32,
+    started_by: u32,
+) -> bool {
+    let process = this.addr();
+    let a = actor.addr();
+    let conversation_pointer = Ptr::<()>::new(conversation);
+    if a == target_of {
+        if fn_008e95c0(e, conversation_pointer) == 0 {
+            travel_add_procedure(e, process, a);
+        } else {
+            let mut limit = dialogue_package_distance(e, package);
+            if f64::from(limit) <= e.global::<f64>(ZERO_DOUBLE_VALUE) {
+                limit = e.global::<f32>(DIALOGUE_DEFAULT_TARGET_DISTANCE);
+            }
+            let go = if e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() {
+                let distance = e
+                    .call(
+                        DISTANCE_FROM_REFERENCE,
+                        &args![actor, started_by, 0u32, 0u32],
+                    )
+                    .f64();
+                f64::from(limit) < distance
+            } else {
+                e.with_stack(12, |e, goal| {
+                    e.call(ACTOR_GET_CURRENT_PATHFINDING_GOAL, &args![actor, goal]);
+                    let position = e.vcall(started_by, ACTOR_SLOT_POSITION, &args![]).u32();
+                    e.call(POINT_SUBTRACT, &args![goal, position]);
+                    let squared = e.call(POINT_SQUARED_LENGTH, &args![goal]).f64();
+                    squared > e.global::<f64>(DIALOGUE_SQUARED_DISTANCE)
+                })
+            };
+            if go {
+                e.call(
+                    ACTOR_SET_PATHFINDING_GOAL_REFERENCE,
+                    &args![actor, started_by, limit, 0u32],
+                );
+            }
+        }
+        return true;
+    }
+    if target_of == player_pointer(e) {
+        let player = e.global::<u32>(PLAYER_POINTER);
+        if a == player && e.call(ACTOR_CURRENT_PACKAGE, &args![player]).u32() != 0 {
+            let current = e.call(ACTOR_CURRENT_PACKAGE, &args![player]).u32();
+            if e.call(PACKAGE_TYPE, &args![current]).u32() == 6 {
+                return true;
+            }
+        }
+        if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() != 0
+            && e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() != 4
+        {
+            return true;
+        }
+    }
+    let first_package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    if e.vcall(process, SLOT_PROCESS_ACTIVATE, &args![actor, 1u32])
+        .bool()
+    {
+        let running = e
+            .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+            .u32();
+        if running == 0
+            || running != first_package
+            || e.call(PACKAGE_PROCEDURE_TYPE, &args![running]).u32() != 0xa
+        {
+            return false;
+        }
+        let target_process = e.call(ACTOR_PROCESS, &args![target_of]).u32();
+        if target_process != 0 {
+            let run_once = e
+                .vcall(target_process, SLOT_GET_RUN_ONCE_PACKAGE, &args![])
+                .u32();
+            if run_once == 0 || e.call(PACKAGE_PROCEDURE_TYPE, &args![run_once]).u32() != 0xa {
+                e.vcall(
+                    target_of,
+                    ACTOR_SLOT_ADD_PACKAGE,
+                    &args![conversation, 1u32, 1u32],
+                );
+                let run_once = e
+                    .vcall(target_process, SLOT_GET_RUN_ONCE_PACKAGE, &args![])
+                    .u32();
+                if e.call(PACKAGE_PROCEDURE_TYPE, &args![run_once]).u32() == 0xa {
+                    e.vcall(
+                        target_process,
+                        SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                        &args![target_of, 2u32],
+                    );
+                }
+            }
+        }
+        let package = e
+            .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+            .u32();
+        if e.call(PACKAGE_TYPE, &args![package]).u32() == 0x1c {
+            travel_add_procedure(e, process, a);
+        }
+        return true;
+    }
+    if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() != 0 {
+        if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4
+            && e.call(PACKAGE_GET_LOCATION_REFERENCE, &args![conversation, actor])
+                .u32()
+                != 0
+        {
+            let reference = e
+                .call(PACKAGE_GET_LOCATION_REFERENCE, &args![conversation, actor])
+                .u32();
+            if e.call(REFERENCE_IS_FURNITURE, &args![reference]).bool() {
+                if conversation == e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32() {
+                    e.vcall(
+                        process,
+                        SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                        &args![actor, 2u32],
+                    );
+                }
+                return false;
+            }
+        }
+        if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4
+            || e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 9
+            || e.call(ACTOR_IS_TRYING_TO_ENTER_FURNITURE, &args![actor])
+                .bool()
+        {
+            if conversation == e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32() {
+                e.vcall(
+                    process,
+                    SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                    &args![actor, 2u32],
+                );
+            } else {
+                e.vcall(a, ACTOR_SLOT_0X288, &args![]);
+                e.vcall(a, ACTOR_SLOT_0X418, &args![]);
+            }
+            return false;
+        }
+    }
+    true
+}
+
+/// The branch of `ProcessDialogueActivate` for a conversation whose target is
+/// not the player and which did not create the package. The function returns
+/// true on every path here.
+fn dialogue_target_not_player(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    conversation: u32,
+    target_of: u32,
+) {
+    let process = this.addr();
+    let a = actor.addr();
+    let conversation_pointer = Ptr::<()>::new(conversation);
+    if target_of == a {
+        if !e.vcall(target_of, ACTOR_SLOT_IS_ACTOR, &args![]).bool() {
+            travel_add_procedure(e, process, a);
+            fn_008e9600(e, conversation_pointer, 1);
+            return;
+        }
+        if !e
+            .call(PACKAGE_DIALOGUE_DO_NOT_CONTROL_TARGET, &args![conversation])
+            .bool()
+            && e.call(PACKAGE_SECOND_LOCATION, &args![conversation]).u32() != 0
+            && !dialogue_second_search(e, conversation, target_of, a, 0)
+        {
+            let target_process = e.call(ACTOR_PROCESS, &args![target_of]).u32();
+            e.vcall(
+                target_process,
+                SLOT_PROCESS_TRAVEL,
+                &args![target_of, 0u32, 0u32, u32::MAX, 1u32],
+            );
+            return;
+        }
+        travel_add_procedure(e, process, a);
+        fn_008e9600(e, conversation_pointer, 1);
+        return;
+    }
+    if e.call(PACKAGE_SECOND_LOCATION, &args![conversation]).u32() != 0
+        && !dialogue_second_search(e, conversation, target_of, a, 1)
+    {
+        return;
+    }
+    if e.call(PACKAGE_SECOND_LOCATION, &args![conversation]).u32() != 0
+        && !e
+            .call(PACKAGE_DIALOGUE_DO_NOT_CONTROL_TARGET, &args![conversation])
+            .bool()
+        && e.call(ACTOR_CURRENT_PACKAGE, &args![target_of]).u32() != conversation
+    {
+        let target_process = e.call(ACTOR_PROCESS, &args![target_of]).u32();
+        e.vcall(
+            target_process,
+            SLOT_SAVE_PACKAGE_TO_EXTRA_DATA,
+            &args![target_of],
+        );
+        let current = e.call(ACTOR_CURRENT_PACKAGE, &args![actor]).u32();
+        e.vcall(
+            target_of,
+            ACTOR_SLOT_ADD_PACKAGE,
+            &args![current, 0u32, 1u32],
+        );
+        let target_process = e.call(ACTOR_PROCESS, &args![target_of]).u32();
+        e.vcall(target_process, SLOT_SET_TARGET, &args![target_of]);
+        let target_process = e.call(ACTOR_PROCESS, &args![target_of]).u32();
+        e.vcall(
+            target_process,
+            SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+            &args![target_of, 1u32],
+        );
+        e.call(REFERENCE_SET_WORD_AT_70, &args![target_of, actor]);
+    }
+    if e.vcall(process, SLOT_PROCESS_ACTIVATE, &args![actor, 1u32])
+        .bool()
+    {
+        let package = e
+            .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+            .u32();
+        if e.call(PACKAGE_TYPE, &args![package]).u32() == 0x1c {
+            if e.vcall(
+                process,
+                SLOT_GET_CURRENT_PROCEDURE_INDEX_FOR_DIALOGUE,
+                &args![],
+            )
+            .i32()
+                == 1
+            {
+                travel_add_procedure(e, process, a);
+            }
+            fn_008e9600(e, conversation_pointer, 1);
+        }
+    }
+}
+
+/// The branch of `ProcessDialogueActivate` for a conversation whose target
+/// is the player and which did not create the package. The function returns
+/// true on every path here.
+fn dialogue_target_is_player(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    conversation: u32,
+    target_of: u32,
+) {
+    let a = actor.addr();
+    let player = e.global::<u32>(PLAYER_POINTER);
+    let mut on_the_spot = false;
+    if a == player && e.call(ACTOR_CURRENT_PACKAGE, &args![player]).u32() != 0 {
+        let current = e.call(ACTOR_CURRENT_PACKAGE, &args![player]).u32();
+        if e.call(PACKAGE_TYPE, &args![current]).u32() == 6 {
+            on_the_spot = true;
+        }
+    }
+    if !on_the_spot {
+        let state = e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32();
+        if state == 0 || e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4 {
+            dialogue_player_free_actor(e, this, actor, conversation, target_of);
+            return;
+        }
+    }
+    if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 9 {
+        e.vcall(a, ACTOR_SLOT_0X418, &args![]);
+    }
+}
+
+/// The rest of the "target is the player" branch for an actor in state 0 or 4.
+fn dialogue_player_free_actor(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    conversation: u32,
+    target_of: u32,
+) {
+    let process = this.addr();
+    let a = actor.addr();
+    let conversation_pointer = Ptr::<()>::new(conversation);
+    let player = e.global::<u32>(PLAYER_POINTER);
+    if e.call(PACKAGE_SECOND_LOCATION, &args![conversation]).u32() != 0
+        && (!dialogue_second_search(e, conversation, target_of, a, 1)
+            || e.vcall(
+                conversation,
+                DIALOGUE_SLOT_REACHED_TARGET,
+                &args![actor, 0u32],
+            )
+            .bool())
+    {
+        if e.call(PACKAGE_SECOND_LOCATION, &args![conversation]).u32() == 0 {
+            return;
+        }
+        if !dialogue_second_search(e, conversation, target_of, a, 1) {
+            return;
+        }
+        e.call(ACTOR_STOP_MOVING, &args![actor]);
+        fn_008e9600(e, conversation_pointer, 1);
+        let own_process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+        e.vcall(
+            own_process,
+            SLOT_SET_HEAD_TRACK_TARGET,
+            &args![4u32, player],
+        );
+        let player_form = e.call(REFERENCE_GET_FORM, &args![player]).u32();
+        e.vcall(
+            player_form,
+            FORM_SLOT_0X124,
+            &args![player, actor, 0u32, 0u32, 1u32],
+        );
+        return;
+    }
+    if fn_008e9620(e, conversation_pointer) == 0
+        && e.call(PACKAGE_GET_LOCATION_REFERENCE, &args![conversation, actor])
+            .u32()
+            != 0
+    {
+        let reference = e
+            .call(PACKAGE_GET_LOCATION_REFERENCE, &args![conversation, actor])
+            .u32();
+        if e.call(REFERENCE_IS_FURNITURE, &args![reference]).bool() {
+            let reference = e
+                .call(PACKAGE_GET_LOCATION_REFERENCE, &args![conversation, actor])
+                .u32();
+            if !e.call(REFERENCE_IS_FURNITURE, &args![reference]).bool() {
+                return;
+            }
+            if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() != 4
+                && e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() != 9
+            {
+                return;
+            }
+        }
+    }
+    fn_008e9600(e, conversation_pointer, 1);
+    if e.vcall(process, SLOT_PROCESS_ACTIVATE, &args![actor, 1u32])
+        .bool()
+    {
+        let package = e
+            .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+            .u32();
+        if e.call(PACKAGE_TYPE, &args![package]).u32() == 0x1c {
+            travel_add_procedure(e, process, a);
+        }
+    }
+}
+
+// Translated from 008e8600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ProcessDialogueActivate` (Xbox PDB): the dialogue package's
+/// per-frame work for `actor`. Returns whether the package goes on (true) or
+/// is finished/refused (false).
+///
+/// A "say to" package whose process target is the player waits while the
+/// process is talking, runs the package's location searches (slots `0x13c` and
+/// `0x140`), walks toward the player when farther than the package's
+/// distance (default 120.0), and otherwise sets the head tracking and starts
+/// the greeting through the actor's own process (`ProcessGreet`, slot
+/// `0x2a4`). Other packages that are not type 0x1c set the target and forward
+/// to the actor (slot `0x27c`); a conversation (type 0x1c) ends interrupt
+/// packages, controls the movement of the conversation's target and starter
+/// (the `DialoguePackage` flags `008e95a0` to `008e9620`) and runs
+/// `ProcessActivate` (slot `0x7c8`). The branches are split into the
+/// private functions above.
+pub fn high_process_process_dialogue_activate(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+) -> bool {
+    let process = this.addr();
+    let a = actor.addr();
+    let package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    if e.mem.u32(process + PROCESS_TARGET) == 0 {
+        e.vcall(process, SLOT_SET_TARGET_FOR_PACKAGE, &args![actor]);
+    }
+    if e.call(PACKAGE_DIALOGUE_SAY_TO_FLAG, &args![package]).bool()
+        && e.mem.u32(process + PROCESS_TARGET) == player_pointer(e)
+    {
+        return dialogue_say_to_player(e, this, actor, package);
+    }
+    if e.call(PACKAGE_TYPE, &args![package]).u32() != 0x1c {
+        if e.mem.u32(process + PROCESS_TARGET) == 0 {
+            if !e
+                .vcall(process, SLOT_SET_TARGET_FOR_PACKAGE, &args![actor])
+                .bool()
+            {
+                e.vcall(
+                    process,
+                    SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                    &args![actor, 3u32],
+                );
+                return false;
+            }
+        } else {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            if e.vcall(target, ACTOR_SLOT_STATE, &args![]).i32() == 9 {
+                let target = e.mem.u32(process + PROCESS_TARGET);
+                e.vcall(target, ACTOR_SLOT_0X418, &args![]);
+                return true;
+            }
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            if e.vcall(target, ACTOR_SLOT_STATE, &args![]).i32() != 4
+                && e.vcall(target, ACTOR_SLOT_STATE, &args![]).i32() != 0
+            {
+                return false;
+            }
+        }
+        e.vcall(a, ACTOR_SLOT_SET_PACKAGE, &args![package]);
+        return true;
+    }
+    // A conversation package (type 0x1c).
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if target != 0 && e.vcall(target, ACTOR_SLOT_0X22C, &args![0u32]).bool() {
+        let current = e
+            .call(ACTOR_GET_PACKAGE_SET_AS_CURRENT, &args![actor])
+            .u32();
+        if current != 0 {
+            e.vcall(a, ACTOR_SLOT_0X288, &args![]);
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            e.call(PACKAGE_SET_NEVER_RUN, &args![current, target, 1u32]);
+            return false;
+        }
+    }
+    let conversation = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    let conversation_pointer = Ptr::<()>::new(conversation);
+    let target_of = e
+        .call(DIALOGUE_TARGET_OF_CONVERSATION, &args![conversation])
+        .u32();
+    let started_by = e
+        .call(DIALOGUE_ACTOR_STARTED_CONVERSATION, &args![conversation])
+        .u32();
+    let pathing_with_flag =
+        fn_008e9620(e, conversation_pointer) != 0 && e.call(ACTOR_IS_PATHING, &args![actor]).bool();
+    if !pathing_with_flag
+        && e.call(PACKAGE_LOCATION_WORD, &args![conversation]).u32() != 0
+        && e.call(PACKAGE_SECOND_LOCATION, &args![conversation]).u32() != 0
+        && !dialogue_first_search(e, conversation, started_by)
+        && !dialogue_second_search(e, conversation, target_of, started_by, 0)
+    {
+        e.vcall(
+            process,
+            SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+            &args![actor, u32::MAX],
+        );
+        return false;
+    }
+    if e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32() == conversation
+        && e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32() != 0
+    {
+        let current = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+        if e.call(PACKAGE_PROCEDURE_TYPE, &args![current]).u32() == 0x25
+            && e.call(PACKAGE_SECOND_LOCATION, &args![conversation]).u32() != 0
+            && fn_008e95c0(e, conversation_pointer) != 0
+            && fn_008e95e0(e, conversation_pointer) == 0
+            && !dialogue_second_search(e, conversation, target_of, started_by, 0)
+        {
+            e.call(ACTOR_END_INTERRUPT_PACKAGE, &args![actor, 0u32]);
+            return false;
+        }
+    }
+    if fn_008e95a0(e, conversation_pointer) != 0 {
+        return dialogue_created_conversation(
+            e,
+            this,
+            actor,
+            package,
+            conversation,
+            target_of,
+            started_by,
+        );
+    }
+    if target_of != player_pointer(e) {
+        dialogue_target_not_player(e, this, actor, conversation, target_of);
+    } else {
+        dialogue_target_is_player(e, this, actor, conversation, target_of);
+    }
+    true
+}
+
+/// `Actor::` helper `005ce9d0` (`this` = the actor, one byte argument): stores
+/// the byte at +0x125.
+const ACTOR_SET_BYTE_AT_125: u32 = 0x005c_e9d0;
+/// `BSSimpleList` add (`005ae3d0`, `this` = the list, argument: the address of
+/// a word holding the item): sets the head node's item when it is empty,
+/// otherwise inserts a new head.
+const LIST_ADD_HEAD: u32 = 0x005a_e3d0;
+/// `PackageTarget::GetTargType` (Xbox PDB, `00519b00`, `this` = the target).
+const PACKAGE_TARGET_TYPE: u32 = 0x0051_9b00;
+/// `PackageTarget::GetTargObject` (Xbox PDB, `00680050`).
+const PACKAGE_TARGET_OBJECT: u32 = 0x0068_0050;
+/// `PackageTarget::GetTargObjectType` (Xbox PDB, `00680080`).
+const PACKAGE_TARGET_OBJECT_TYPE: u32 = 0x0068_0080;
+/// `PackageTarget::GetTargReference` (Xbox PDB, `00680020`) is
+/// `PACKAGE_TARGET_GET_REFERENCE`.
+/// `00569b80` (`this` = a reference): the reference's own word used when the
+/// package target names a reference type.
+const REFERENCE_TARGET_WORD: u32 = 0x0056_9b80;
+/// `TESPackage::GetAcquireRadius` (Xbox PDB, `006728a0`): `(actor, out)`.
+const PACKAGE_ACQUIRE_RADIUS: u32 = 0x0067_28a0;
+/// `ItemChange::ItemChange` (Xbox PDB, `004bc550`): `(object, count)`.
+const ITEM_CHANGE_CONSTRUCTOR: u32 = 0x004b_c550;
+/// `NiPointer` assignment from another `NiPointer` (`006e5cc0`).
+const NI_POINTER_ASSIGN: u32 = 0x006e_5cc0;
+/// `NiPointer<KFModel>` assignment from another one (`009052e0`).
+const KF_MODEL_POINTER_ASSIGN: u32 = 0x0090_52e0;
+/// Virtual slot `0x278` of the process: `GetActorPackageThatIsRunning` (Xbox
+/// PDB), the object whose word at +8 `CheckIfHasObject` reads.
+const SLOT_GET_ACTOR_PACKAGE_THAT_IS_RUNNING: u32 = 0x278;
+/// Virtual slot `0x33c` of the process: `EnterCombat` (Xbox PDB).
+const SLOT_ENTER_COMBAT: u32 = 0x33c;
+/// Virtual slot `0x818` of the process: `EvaluateOrderAcquireList` (Xbox PDB).
+const SLOT_EVALUATE_ORDER_ACQUIRE_LIST: u32 = 0x818;
+/// The list of the items being searched for (`+0x108`), passed to
+/// `Actor::HasObjects`.
+const PROCESS_HAS_OBJECTS_LIST: u32 = 0x108;
+
+// Translated from 008ebb50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ProcessSteal` (Xbox PDB): sets the byte at +0x125 of the
+/// actor, makes it run (move mode `0x400`, after `00884f80` when it is not
+/// already only running), runs `ProcessActivate(actor, 0)` (slot `0x7c8`) and,
+/// when that answers true, undoes it (`00884f80` when running, the byte back
+/// to 0, `ClearMoveMode(0x400)`).
+pub fn high_process_process_steal(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) {
+    let process = this.addr();
+    e.call(ACTOR_SET_BYTE_AT_125, &args![actor, 1u32]);
+    if !e.call(MOVE_MODE_RUNNING_ONLY, &args![actor]).bool() {
+        e.call(ACTOR_CLEAR_RUN_BITS, &args![actor]);
+    }
+    e.call(ACTOR_SET_MOVE_MODE, &args![actor, 0x400u32]);
+    if e.vcall(process, SLOT_PROCESS_ACTIVATE, &args![actor, 0u32])
+        .bool()
+    {
+        if e.call(MOVE_MODE_RUNNING_ONLY, &args![actor]).bool() {
+            e.call(ACTOR_CLEAR_RUN_BITS, &args![actor]);
+        }
+        e.call(ACTOR_SET_BYTE_AT_125, &args![actor, 0u32]);
+        e.call(ACTOR_CLEAR_MOVE_MODE, &args![actor, 0x400u32]);
+    }
+}
+
+// Translated from 008ebbe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. With a process target: when the target's slot
+/// `0x22c` (argument 0) is false it calls `EnterCombat` (slot `0x33c`) against
+/// the target with the combat flags `(0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0)`,
+/// otherwise `ProcessActivate(actor, 0)`.
+pub fn fn_008ebbe0(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) {
+    let process = this.addr();
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if target != 0 {
+        if !e.vcall(target, ACTOR_SLOT_0X22C, &args![0u32]).bool() {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            e.vcall(
+                process,
+                SLOT_ENTER_COMBAT,
+                &args![
+                    actor, target, 0u32, 0u32, 0u32, 0u32, 1u32, 1u32, 0u32, 0u32, 0u32, 1u32, 0u32
+                ],
+            );
+        } else {
+            e.vcall(process, SLOT_PROCESS_ACTIVATE, &args![actor, 0u32]);
+        }
+    }
+}
+
+// Translated from 008ed400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::AddTalkedtoActor` (Xbox PDB): adds `actor` to the
+/// `pLastSpokeToList` (+0x264) with `005ae3d0`, which takes the address of the
+/// word holding the actor.
+pub fn high_process_add_talkedto_actor(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) {
+    let list = e.get(this, HighProcess::pLastSpokeToList);
+    e.with_stack(4, |e, holder| {
+        e.mem.set_u32(holder.addr(), actor.addr());
+        e.call(LIST_ADD_HEAD, &args![list, holder]);
+    });
+}
+
+// Translated from 008ee220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::CheckIfHasObject` (Xbox PDB): whether `actor` (`this`'s first
+/// argument) has the objects the running package's target names. Without a
+/// package target it is false. By the target type (`PackageTarget::
+/// GetTargType`): 0 and 3 (a reference or the object of a reference: the word
+/// at +8 of the object slot `0x278` returns, else the target's reference, or
+/// for type 3 the reference's own word) check the reference's base form and
+/// count (`0084e3a0`); 1 checks the target's object; 2 checks its object type;
+/// any other type is false. All go through `Actor::HasObjects` with the list
+/// at `+0x108`.
+pub fn high_process_check_if_has_object(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    count: u32,
+) -> bool {
+    let process = this.addr();
+    let package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    let target = if package == 0 {
+        0
+    } else {
+        e.call(PACKAGE_TARGET_WORD, &args![package]).u32()
+    };
+    if target == 0 {
+        return false;
+    }
+    let target_type = e.call(PACKAGE_TARGET_TYPE, &args![target]).u32();
+    let list = process + PROCESS_HAS_OBJECTS_LIST;
+    match target_type {
+        0 | 3 => {
+            let holder = e
+                .vcall(process, SLOT_GET_ACTOR_PACKAGE_THAT_IS_RUNNING, &args![])
+                .u32();
+            let mut reference = e.call(WORD_AT_8, &args![holder]).u32();
+            if reference == 0 {
+                reference = if target_type == 0 {
+                    e.call(PACKAGE_TARGET_GET_REFERENCE, &args![target]).u32()
+                } else {
+                    e.call(REFERENCE_TARGET_WORD, &args![actor]).u32()
+                };
+            }
+            if reference == 0 {
+                return false;
+            }
+            let reference_count = e.call(WORD_AT_0XC, &args![reference]).u32();
+            let form = e.call(REFERENCE_GET_FORM, &args![reference]).u32();
+            e.call(
+                ACTOR_HAS_OBJECTS,
+                &args![actor, form, 0u32, 1u32, reference_count, list],
+            )
+            .bool()
+        }
+        1 => {
+            let object = e.call(PACKAGE_TARGET_OBJECT, &args![target]).u32();
+            e.call(
+                ACTOR_HAS_OBJECTS,
+                &args![actor, object, 0u32, count, 0u32, list],
+            )
+            .bool()
+        }
+        2 => {
+            let object_type = e.call(PACKAGE_TARGET_OBJECT_TYPE, &args![target]).u32();
+            e.call(
+                ACTOR_HAS_OBJECTS,
+                &args![actor, 0u32, object_type, count, 0u32, list],
+            )
+            .bool()
+        }
+        _ => false,
+    }
+}
+
+// Translated from 008ee370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::IsActorInsideAmbushArea` (Xbox PDB): whether the running
+/// package's second-location search (slot `0x140`, arguments `(location,
+/// actor, 0, -1.0, 0)`) finds `actor` inside; false without a package.
+pub fn high_process_is_actor_inside_ambush_area(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    location: Ptr,
+) -> bool {
+    let package = e
+        .vcall(this.addr(), SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    package != 0 && dialogue_second_search(e, package, location.addr(), actor.addr(), 0)
+}
+
+// Translated from 008eea80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. Tests bit 0 of the 16-bit word at +0x24.
+pub fn fn_008eea80(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u16(this.addr() + 0x24) & 1 != 0
+}
+
+// Translated from 008eeac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ProcessSurfaceOneHour` (Xbox PDB): the one-hour version of
+/// `ProcessSurface`. Without an actor nothing happens. Otherwise it builds a
+/// `PathingRequest` to the actor's position raised to the relevant water
+/// height plus 25.0 (`010181e8`), gives it the radius 25.0 (`006e2960`), the
+/// `+0xa1` byte 1, sets it as the pathfinding goal and calls the virtual
+/// `+0x214` (`ClearRunOncePackage`). The SEH frame is not translated.
+pub fn high_process_process_surface_one_hour(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) {
+    if actor.is_null() {
+        return;
+    }
+    let a = actor.addr();
+    let rise = e.global::<f32>(SURFACE_HEIGHT_OFFSET);
+    let position = actor_position_words(e, a);
+    e.with_stack(12, |e, block| {
+        e.mem.set_u32(block.addr(), position[0]);
+        e.mem.set_u32(block.addr() + 4, position[1]);
+        e.mem.set_u32(block.addr() + 8, position[2]);
+        let water = e.call(REFERENCE_WATER_HEIGHT, &args![actor]).f64();
+        e.mem
+            .set_f32(block.addr() + 8, (water + f64::from(rise)) as f32);
+        with_pathing_request(e, |e, request| {
+            let world = e.call(REFERENCE_GET_WORLD_SPACE, &args![actor]).u32();
+            let cell = e.call(REFERENCE_PATHING_CELL, &args![actor]).u32();
+            e.call(
+                ACTOR_BUILD_REQUEST,
+                &args![actor, request, block, cell, world, rise, 0u32],
+            );
+            e.call(PATHING_REQUEST_SET_RADIUS, &args![request, rise]);
+            fn_008df1c0(e, request, 1);
+            e.call(ACTOR_SET_PATHFINDING_GOAL_REQUEST, &args![actor, request]);
+            e.vcall(this.addr(), SLOT_CLEAR_RUN_ONCE_PACKAGE, &args![]);
+        });
+    });
+}
+
+// Translated from 008eebf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::CreateWeaponAcquireList` (Xbox PDB): empties the `ObjectList`
+/// (+0x5c), clears `pObjecttoAcquire` (+0x84), stores `count` as `eFormType`
+/// (+0x8c), finds the acquire radius (`TESPackage::GetAcquireRadius` on the
+/// current package, else the setting at `011cdebc`) and enumerates the
+/// references around the actor with the acquire callback (`0090dd80`). Then it
+/// clears the two fields again, evaluates the list (`EvaluateOrderAcquireList`,
+/// slot `0x818`) and, when it is not empty, builds an `ItemChange` for the
+/// first entry's object (count 1) and adds the entry's word at +0x14 to its
+/// list. Returns that `ItemChange`, or null. C++ exception states are not
+/// translated.
+pub fn high_process_create_weapon_acquire_list(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    count: u32,
+) -> Ptr {
+    let process = this.addr();
+    let a = actor.addr();
+    let mut result = 0u32;
+    e.call(LIST_CLEAR, &args![process + LOW_OBJECT_LIST]);
+    let cell = e.call(REFERENCE_PATHING_CELL, &args![actor]).u32();
+    let position = actor_position_words(e, a);
+    e.mem.set_u32(process + LOW_OBJECT_TO_ACQUIRE, 0);
+    e.mem.set_u32(process + LOW_FORM_TYPE, count);
+    let mut radius = 0.0f32;
+    let mut found_radius = false;
+    if e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32() != 0 {
+        let current = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+        let (found, value) = e.with_stack(4, |e, out| {
+            e.mem.set_f32(out.addr(), 0.0);
+            let found = e
+                .call(PACKAGE_ACQUIRE_RADIUS, &args![current, actor, out])
+                .bool();
+            (found, e.mem.f32(out.addr()))
+        });
+        found_radius = found;
+        radius = value;
+    }
+    if !found_radius {
+        let setting = e
+            .call(SETTING_VALUE, &args![EXTERIOR_SEARCH_RADIUS_SETTING])
+            .u32();
+        radius = e.mem.f32(setting);
+    }
+    let handler = e.global::<u32>(DATA_HANDLER_GLOBAL);
+    let second_position = e.vcall(a, ACTOR_SLOT_POSITION, &args![]).u32();
+    e.with_stack(12, |e, block| {
+        for (i, word) in position.iter().enumerate() {
+            e.mem.set_u32(block.addr() + i as u32 * 4, *word);
+        }
+        e.call(
+            ENUM_REFERENCES_CLOSE_TO_POINT,
+            &args![
+                handler,
+                cell,
+                block,
+                radius,
+                second_position,
+                radius,
+                ACQUIRE_CALLBACK,
+                actor
+            ],
+        );
+    });
+    e.mem.set_u32(process + LOW_FORM_TYPE, 0);
+    e.mem.set_u32(process + LOW_OBJECT_TO_ACQUIRE, 0);
+    e.vcall(process, SLOT_EVALUATE_ORDER_ACQUIRE_LIST, &args![actor]);
+    if !e
+        .call(LIST_IS_EMPTY, &args![process + LOW_OBJECT_LIST])
+        .bool()
+    {
+        let slot = e
+            .call(NODE_ITEM_ADDRESS, &args![process + LOW_OBJECT_LIST])
+            .u32();
+        let entry = e.mem.u32(slot);
+        let memory = e.call(0x0040_1000, &args![0xcu32]).u32();
+        let item_change = if memory != 0 {
+            let object = e.mem.u32(entry + 4);
+            e.call(ITEM_CHANGE_CONSTRUCTOR, &args![memory, object, 1u32])
+                .u32()
+        } else {
+            0
+        };
+        result = item_change;
+        let list = e.call(NI_POINTER_GET, &args![item_change]).u32();
+        e.call(LIST_ADD_HEAD, &args![list, entry + 0x14]);
+    }
+    Ptr::new(result)
+}
+
+// Translated from 008eedc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ModDetectionModifierTimer` (Xbox PDB): subtracts the frame
+/// time (`0084d030` on the frame timer) from `fDetectionModifierTimer`
+/// (+0x3c0).
+pub fn high_process_mod_detection_modifier_timer(e: &mut Engine, this: Ptr<HighProcess>) {
+    let frame = e.call(FRAME_TIME, &args![FRAME_TIMER]).f64();
+    let timer = e.get(this, HighProcess::fDetectionModifierTimer);
+    e.set(
+        this,
+        HighProcess::fDetectionModifierTimer,
+        (f64::from(timer) - frame) as f32,
+    );
+}
+
+// Translated from 008eedf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetCurrentProcessAnimIdleLoaded` (Xbox PDB): the process
+/// keeps two animation `NiPointer`s (+0x354, +0x358) with their `KFModel`
+/// pointers (+0x35c, +0x360). With both arguments null, the second pair is
+/// copied over the first and then cleared. Otherwise, when the first slot is
+/// taken and `animation` is not null, the pair is stored in the second slot;
+/// else in the first.
+pub fn high_process_set_current_process_anim_idle_loaded(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    animation: Ptr,
+    model: Ptr,
+) {
+    let base = this.addr();
+    if animation.is_null() && model.is_null() {
+        e.call(NI_POINTER_ASSIGN, &args![base + 0x354, base + 0x358]);
+        e.call(KF_MODEL_POINTER_ASSIGN, &args![base + 0x35c, base + 0x360]);
+        e.call(NI_POINTER_SET, &args![base + 0x358, animation]);
+        e.call(KF_MODEL_POINTER_SET, &args![base + 0x360, model]);
+    } else if e.call(NI_POINTER_GET, &args![base + 0x354]).u32() != 0 && !animation.is_null() {
+        e.call(NI_POINTER_SET, &args![base + 0x358, animation]);
+        e.call(KF_MODEL_POINTER_SET, &args![base + 0x360, model]);
+    } else {
+        e.call(NI_POINTER_SET, &args![base + 0x354, animation]);
+        e.call(KF_MODEL_POINTER_SET, &args![base + 0x35c, model]);
+    }
+}
+
+// Translated from 008f21a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. Getter of `bSkippedUpdate` (+0x2c7).
+pub fn fn_008f21a0(e: &mut Engine, this: Ptr<HighProcess>) -> u8 {
+    e.get(this, HighProcess::bSkippedUpdate)
+}
+
+// Translated from 008f21c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. Returns the byte global at `011dc034`.
+pub fn fn_008f21c0(e: &mut Engine) -> u8 {
+    e.global::<u8>(0x011d_c034)
+}
+
+// Translated from 008f21d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. Getter of the 16-bit word at +0x12.
+pub fn fn_008f21d0(e: &mut Engine, this: Ptr) -> u16 {
+    e.mem.u16(this.addr() + 0x12)
+}
+
+// Translated from 008f25e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. The scalar deleting destructor of `Crime`
+/// (`Crime::~Crime`, `009eb660`): destroys the object and, when bit 0 of
+/// `flags` is set, frees it (`00401030`). Returns `this`.
+pub fn fn_008f25e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x009e_b660, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 008f3550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. Without a running package it returns false.
+/// Otherwise it calls `EndMoveMessage(actor)` and the package's slot `0x13c`
+/// `(actor, 0, -1.0, 0)`; when that is false and the actor's state is not 9 it
+/// calls `SetProcedureIndexRunning(0)`, else `SetCurrentActionComplete(1)`
+/// (slot `0x118`). The result is false on every path.
+pub fn fn_008f3550(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) -> bool {
+    let process = this.addr();
+    let a = actor.addr();
+    let package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    if package == 0 {
+        return false;
+    }
+    travel_end_move_message(e, process, a);
+    if !dialogue_first_search(e, package, a) && e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() != 9 {
+        e.vcall(process, SLOT_SET_PROCEDURE_INDEX_RUNNING, &args![0u32]);
+    } else {
+        e.vcall(process, SLOT_SET_CURRENT_ACTION_COMPLETE, &args![1u32]);
+    }
+    false
+}
+
+// Translated from 008f3600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. Like `008f3550`, but with the state 4 in place
+/// of 9: it returns true after `SetProcedureIndexRunning(0)`, and false after
+/// `SetCurrentActionComplete(1)` or without a running package.
+pub fn fn_008f3600(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) -> bool {
+    let process = this.addr();
+    let a = actor.addr();
+    let package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    if package == 0 {
+        return false;
+    }
+    travel_end_move_message(e, process, a);
+    if !dialogue_first_search(e, package, a) && e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() != 4 {
+        e.vcall(process, SLOT_SET_PROCEDURE_INDEX_RUNNING, &args![0u32]);
+        true
+    } else {
+        e.vcall(process, SLOT_SET_CURRENT_ACTION_COMPLETE, &args![1u32]);
+        false
+    }
+}
+
+/// `0046f070` (`this` = a form): a test the acquire code applies to a form of
+/// type 0x1e.
+const FORM_ACQUIRE_TEST: u32 = 0x0046_f070;
+/// `eUseItem` of `MiddleHighProcess` (+0x108).
+const PROCESS_USE_ITEM: u32 = 0x108;
+const SLOT_CHECK_IF_HAS_OBJECT: u32 = 0x80c;
+const SLOT_PROCESS_PICK_POCKET: u32 = 0x838;
+const SLOT_PROCESS_STEAL: u32 = 0x834;
+const SLOT_PROCESS_BUY_OBJECT_ACQUIRE: u32 = 0x830;
+const SLOT_GET_PROCEDURE_INDEX_RUNNING: u32 = 0x280;
+/// The `ePROCEDURE_TYPE` field of a `TESPackage` (+0x18 on PC).
+const PROCEDURE_TYPE_FIELD: u32 = 0x18;
+
+/// `ProcessAcquire` after `CheckIfHasObject` answered true the second time:
+/// the move on to the next procedure.
+fn acquire_has_object(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr, package: u32) {
+    let process = this.addr();
+    let a = actor.addr();
+    travel_end_move_message(e, process, a);
+    if e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32() != 0 {
+        travel_add_procedure(e, process, a);
+    } else if !dialogue_first_search(e, package, a)
+        && e.call(PACKAGE_TYPE, &args![package]).u32() == 3
+    {
+        e.vcall(process, SLOT_SET_PROCEDURE_INDEX_RUNNING, &args![0u32]);
+    } else {
+        let list = e.call(PACKAGE_LIST_AT_38, &args![package]).u32();
+        if e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32() == 0x1a
+            && e.call(NODE_NEXT, &args![list]).u32() == 0
+        {
+            e.vcall(
+                process,
+                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                &args![actor, 2u32],
+            );
+        } else {
+            travel_add_procedure(e, process, a);
+        }
+    }
+    if e.call(ACTOR_MOVE_MODE, &args![actor]).u32() == 0x400 {
+        e.call(ACTOR_CLEAR_RUN_BITS, &args![actor]);
+        e.call(ACTOR_CLEAR_MOVE_MODE, &args![actor, 0x400u32]);
+    }
+}
+
+/// The default case of `ProcessAcquire`: what to do with the acquire object
+/// (or the target) for the packages that are not dispatched by object type.
+fn acquire_default_case(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr, package: u32) {
+    let process = this.addr();
+    let a = actor.addr();
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if target == 0 {
+        travel_add_procedure(e, process, a);
+        return;
+    }
+    let acquire = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
+    if e.vcall(target, ACTOR_SLOT_IS_ACTOR, &args![]).bool() {
+        if acquire == 0 {
+            travel_add_procedure(e, process, a);
+            return;
+        }
+        let kind = e.mem.u32(acquire + ACQUIRE_KIND);
+        if kind == 4 {
+            e.vcall(process, SLOT_PROCESS_PICK_POCKET, &args![actor]);
+        } else if kind == 5 {
+            fn_008ebbe0(e, this, actor);
+        } else if kind == 2 {
+            e.vcall(process, SLOT_PROCESS_BUY_OBJECT_ACQUIRE, &args![actor]);
+        } else {
+            e.vcall(process, SLOT_PROCESS_ACTIVATE, &args![actor, 0u32]);
+        }
+    } else if acquire != 0 {
+        let first = e.mem.u32(acquire);
+        e.vcall(process, SLOT_SET_EXTRA_HEAD_TRACK, &args![first]);
+        if e.mem.u32(acquire + ACQUIRE_KIND) == 3 {
+            e.vcall(process, SLOT_PROCESS_STEAL, &args![actor]);
+        } else {
+            let current = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+            let activation = if e.mem.u32(current + PROCEDURE_TYPE_FIELD) == 5 {
+                0u32
+            } else {
+                1u32
+            };
+            e.vcall(process, SLOT_PROCESS_ACTIVATE, &args![actor, activation]);
+        }
+    } else {
+        let target_word = e.call(PACKAGE_TARGET_WORD, &args![package]).u32();
+        if target_word != 0 {
+            let target_word = e.call(PACKAGE_TARGET_WORD, &args![package]).u32();
+            let reference = e
+                .call(PACKAGE_TARGET_GET_REFERENCE, &args![target_word])
+                .u32();
+            if reference == e.mem.u32(process + PROCESS_TARGET) {
+                e.vcall(process, SLOT_PROCESS_ACTIVATE, &args![actor, 1u32]);
+                return;
+            }
+        }
+        travel_add_procedure(e, process, a);
+    }
+}
+
+/// `ProcessAcquire` for the packages of type 8 and 0x10 after the target has
+/// been set: the target's object type decides.
+fn acquire_by_object_type(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr, package: u32) {
+    let process = this.addr();
+    let a = actor.addr();
+    let target_word = e.call(PACKAGE_TARGET_WORD, &args![package]).u32();
+    if target_word != 0 {
+        let target_word = e.call(PACKAGE_TARGET_WORD, &args![package]).u32();
+        if e.call(PACKAGE_TARGET_TYPE, &args![target_word]).u32() != 0 {
+            let target_word = e.call(PACKAGE_TARGET_WORD, &args![package]).u32();
+            if e.call(PACKAGE_TARGET_TYPE, &args![target_word]).u32() != 3
+                && e.call(PACKAGE_SEARCH_LOCATION, &args![package]).u32() == 0
+            {
+                e.vcall(process, SLOT_SET_TARGET, &args![0u32]);
+                travel_add_procedure(e, process, a);
+                return;
+            }
+        }
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    let object_type = if target != 0 {
+        let form = e.call(REFERENCE_GET_FORM, &args![target]).u32();
+        e.call(PACKAGE_OBJECT_TYPE_FROM_FORM, &args![form]).u32()
+    } else {
+        let target_word = e.call(PACKAGE_TARGET_WORD, &args![package]).u32();
+        e.call(PACKAGE_TARGET_OBJECT_TYPE, &args![target_word])
+            .u32()
+    };
+    // The object type minus one indexes a byte table choosing one of three
+    // cases: types 1, 5, 6, 10, 11, 14, 15, 21 and 24 store the type and
+    // advance the procedure, type 8 tests the target's form first, and every
+    // other type takes the default case.
+    match object_type {
+        1 | 5 | 6 | 10 | 0xb | 0xe | 0xf | 0x15 | 0x18 => {
+            e.mem.set_u32(process + PROCESS_USE_ITEM, object_type);
+            travel_add_procedure(e, process, a);
+        }
+        8 => {
+            let mut special_form = 0u32;
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            let form = e.call(REFERENCE_GET_FORM, &args![target]).u32();
+            if e.call(FORM_TYPE_OF, &args![form]).u32() == 0x1e {
+                let target = e.mem.u32(process + PROCESS_TARGET);
+                special_form = e.call(REFERENCE_GET_FORM, &args![target]).u32();
+            }
+            if special_form != 0 && !e.call(FORM_ACQUIRE_TEST, &args![special_form]).bool() {
+                travel_add_procedure(e, process, a);
+            }
+            e.mem.set_u32(process + PROCESS_USE_ITEM, object_type);
+        }
+        _ => acquire_default_case(e, this, actor, package),
+    }
+}
+
+/// The first branch of `ProcessAcquire` for a package of type 0 whose object
+/// type is 12 or 19 to 23: the activation, then taking the next object of the
+/// `ObjectList` (or finishing and setting up the default worn items).
+fn acquire_take_next_object(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr, target_word: u32) {
+    let process = this.addr();
+    let a = actor.addr();
+    e.vcall(process, SLOT_PROCESS_ACTIVATE, &args![actor, 1u32]);
+    if e.vcall(process, SLOT_GET_PROCEDURE_INDEX_RUNNING, &args![])
+        .i32()
+        <= 1
+    {
+        return;
+    }
+    if !e
+        .call(LIST_IS_EMPTY, &args![process + LOW_OBJECT_LIST])
+        .bool()
+    {
+        e.vcall(
+            process,
+            SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+            &args![actor, u32::MAX],
+        );
+        let slot = e
+            .call(NODE_ITEM_ADDRESS, &args![process + LOW_OBJECT_LIST])
+            .u32();
+        let entry = e.mem.u32(slot);
+        e.mem.set_u32(process + LOW_ACQUIRE_OBJECT, entry);
+        e.call(
+            LIST_REMOVE_ITEM,
+            &args![process + LOW_OBJECT_LIST, process + LOW_ACQUIRE_OBJECT],
+        );
+        let acquire = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
+        let first = e.mem.u32(acquire);
+        e.vcall(process, SLOT_SET_TARGET, &args![first]);
+        return;
+    }
+    travel_add_procedure(e, process, a);
+    if e.call(PACKAGE_TARGET_OBJECT_TYPE, &args![target_word])
+        .i32()
+        != 0x13
+        && e.call(PACKAGE_TARGET_OBJECT_TYPE, &args![target_word])
+            .i32()
+            != 0x14
+    {
+        return;
+    }
+    let first_flag = 1u32;
+    let mut second_flag = 1u32;
+    if e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32() != 0 {
+        let current = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+        if e.call(PACKAGE_FLAG_200000, &args![current]).bool() {
+            second_flag = 0;
+        }
+    }
+    if e.vcall(a, ACTOR_SLOT_0X218, &args![]).bool() {
+        let form = e.call(REFERENCE_GET_FORM, &args![actor]).u32();
+        if form != 0 {
+            e.call(
+                NPC_FORM_EQUIP,
+                &args![form, actor, first_flag, second_flag, 0u32, 1u32],
+            );
+        }
+    } else if e.vcall(a, ACTOR_SLOT_0X21C, &args![]).bool() {
+        let form = e.call(REFERENCE_GET_FORM, &args![actor]).u32();
+        if form != 0 {
+            e.call(
+                CREATURE_INIT_DEFAULT_WORN,
+                &args![form, actor, first_flag, second_flag, 1u32],
+            );
+        }
+    }
+}
+
+// Translated from 008ebc60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ProcessAcquire` (Xbox PDB): the acquire package's per-frame
+/// work for `actor`. Without a running package nothing happens. An actor
+/// sitting or sleeping (states 4 and 9 of `GetSitSleepState`) is made to
+/// stand up (actor slot `0x418`). The package's initial target count (at
+/// least 1) is given to `CheckIfHasObject` (slot `0x80c`):
+/// - when the actor does not have the object yet, the target is set
+///   (`SetTargetForPackage`) if it is missing, flagged or there is no acquire
+///   object; a package of type 0 whose object type is 12 or 19 to 23 then
+///   runs the activation and takes the next object of the `ObjectList` (see
+///   [`acquire_take_next_object`]);
+/// - when it has the object, the procedure index advances (2 for a package
+///   whose procedure type is 0x1a, else 1) and the first test is final;
+/// - otherwise the second test decides: true moves on
+///   ([`acquire_has_object`]), false sets the target again and dispatches on
+///   the package type (8 and 0x10 by object type, see
+///   [`acquire_by_object_type`], the others by the acquire object's kind,
+///   [`acquire_default_case`]).
+pub fn high_process_process_acquire(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) {
+    let process = this.addr();
+    let a = actor.addr();
+    let package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    if package == 0 {
+        return;
+    }
+    if e.vcall(process, SLOT_GET_SIT_SLEEP_STATE, &args![]).i32() == 4
+        || e.vcall(process, SLOT_GET_SIT_SLEEP_STATE, &args![]).i32() == 9
+    {
+        e.vcall(a, ACTOR_SLOT_0X418, &args![]);
+    }
+    let mut count = e.call(PACKAGE_INITIAL_TARGET_COUNT, &args![package]).i32();
+    if count <= 0 {
+        count = 1;
+    }
+    let target_word = e.call(PACKAGE_TARGET_WORD, &args![package]).u32();
+    if !e
+        .vcall(process, SLOT_CHECK_IF_HAS_OBJECT, &args![actor, count])
+        .bool()
+    {
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        if target == 0
+            || e.call(REFERENCE_FLAG_20, &args![target]).bool()
+            || e.call(REFERENCE_FLAG_800, &args![target]).bool()
+            || e.mem.u32(process + LOW_ACQUIRE_OBJECT) == 0
+        {
+            e.vcall(process, SLOT_SET_TARGET_FOR_PACKAGE, &args![actor]);
+        }
+    } else {
+        let current = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+        let by_procedure_type = current != 0 && {
+            let current = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+            e.mem.u32(current + PROCEDURE_TYPE_FIELD) == 0x1a
+        };
+        if by_procedure_type {
+            e.vcall(
+                process,
+                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                &args![actor, 2u32],
+            );
+        } else {
+            travel_add_procedure(e, process, a);
+        }
+        return;
+    }
+    if e.call(PACKAGE_TYPE, &args![package]).u32() == 0 {
+        let type_is_12 = e
+            .call(PACKAGE_TARGET_OBJECT_TYPE, &args![target_word])
+            .i32()
+            == 0xc;
+        let in_range = type_is_12
+            || (e
+                .call(PACKAGE_TARGET_OBJECT_TYPE, &args![target_word])
+                .i32()
+                >= 0x13
+                && e.call(PACKAGE_TARGET_OBJECT_TYPE, &args![target_word])
+                    .i32()
+                    <= 0x17);
+        if in_range {
+            acquire_take_next_object(e, this, actor, target_word);
+            return;
+        }
+    }
+    if e.vcall(process, SLOT_CHECK_IF_HAS_OBJECT, &args![actor, count])
+        .bool()
+    {
+        acquire_has_object(e, this, actor, package);
+        return;
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if target == 0
+        || e.call(REFERENCE_FLAG_20, &args![target]).bool()
+        || e.call(REFERENCE_FLAG_800, &args![target]).bool()
+    {
+        e.vcall(process, SLOT_SET_TARGET_FOR_PACKAGE, &args![actor]);
+    }
+    let package_type = e.call(PACKAGE_TYPE, &args![package]).u32();
+    if package_type == 8 || e.call(PACKAGE_TYPE, &args![package]).u32() == 0x10 {
+        acquire_by_object_type(e, this, actor, package);
+    } else {
+        acquire_default_case(e, this, actor, package);
+    }
+}
+
+/// `ExtraDataList::GetPackageExtra` (Xbox PDB, `0041cb10`, `this` = the extra
+/// data list): the package of the package extra, or 0.
+const EXTRA_GET_PACKAGE: u32 = 0x0041_cb10;
+/// `ExtraDataList::SetPackageExtraActionComplete` (Xbox PDB, `0041cbd0`).
+const EXTRA_SET_PACKAGE_ACTION_COMPLETE: u32 = 0x0041_cbd0;
+/// `0x00574900` (`this` = a reference): the byte at +0x81.
+const REFERENCE_BYTE_AT_81: u32 = 0x0057_4900;
+/// `005e3fc0` (`this` = a dialogue package): the word at +0xa4, the
+/// package's `Conversation`.
+const DIALOGUE_CONVERSATION: u32 = 0x005e_3fc0;
+/// `005e3fa0` (`this` = a reference): the word at +0x6c.
+const REFERENCE_WORD_AT_6C: u32 = 0x005e_3fa0;
+/// `00516bf0` (`this` = a form): the word at +0x90.
+const FORM_WORD_AT_90: u32 = 0x0051_6bf0;
+/// `Conversation::Conversation` (Xbox PDB, `0083b850`): `(actor that
+/// started, target, topic)`.
+const CONVERSATION_CONSTRUCTOR: u32 = 0x0083_b850;
+/// `00994ef0` (`this` = a dialogue package, one argument): stores the
+/// conversation at +0xa4.
+const DIALOGUE_SET_CONVERSATION: u32 = 0x0099_4ef0;
+/// `0067a690` (`this` = a package): the flag 0x100000 of the word at +0x1c.
+const PACKAGE_FLAG_100000: u32 = 0x0067_a690;
+/// `008a3b30` (`this` = an actor): whether the move mode has a bit of 0x30.
+const ACTOR_MOVE_MODE_BITS_30: u32 = 0x008a_3b30;
+/// `008bb520` (`this` = an actor, four words): `(x, y, z, 0)`, turns the
+/// actor toward the position.
+const ACTOR_REQUEST_TURN_TO: u32 = 0x008b_b520;
+/// `GetZAngleFromVector` (Xbox PDB, `004b13c0`, cdecl, a pointer): `ST0`.
+const Z_ANGLE_FROM_VECTOR: u32 = 0x004b_13c0;
+/// `BSSoundHandle::IsValid` (Xbox PDB, `00ad8ce0`).
+const SOUND_HANDLE_IS_VALID: u32 = 0x00ad_8ce0;
+/// `DialoguePackage::Speak` (Xbox PDB, `009ee0a0`): one argument.
+const DIALOGUE_PACKAGE_SPEAK: u32 = 0x009e_e0a0;
+/// `0045cd60` (`this` = a process): the word at +0x28.
+const PROCESS_WORD_AT_28: u32 = 0x0045_cd60;
+/// The double pi (`0101ff40`).
+const PI_DOUBLE: u32 = 0x0101_ff40;
+/// The double degrees-to-radians factor (`01023128`).
+const DEGREES_TO_RADIANS: u32 = 0x0102_3128;
+/// Settings read by `ProcessDialogue`: integer settings at `011cd480` and
+/// `011cda1c`.
+const DIALOGUE_TURN_SETTING: u32 = 0x011c_d480;
+// Virtual slots used by `ProcessDialogue`.
+const SLOT_GET_GREETING_TIMER: u32 = 0x4b0;
+const SLOT_GET_SOUND_HANDLE: u32 = 0x48c;
+const SLOT_GET_CURRENT_ACTION_COMPLETE_DIALOGUE: u32 = 0x11c;
+const ACTOR_SLOT_GET_LAST_SPEAKING_EMOTION: u32 = 0x2e8;
+
+/// `ProcessDialogue`'s turn of the conversation target toward the actor that
+/// started it (first block of the function). The Z angle of the vector from
+/// the starter to the target, the starter's angle slot and the angle
+/// difference (`004b15e0`) are computed and stored in locals the code never
+/// reads again; the turn itself is `008bb520(target; starter position, 0)`.
+fn dialogue_turn_target(e: &mut Engine, target_of: u32, started_by: u32) {
+    let target_position = e.vcall(target_of, ACTOR_SLOT_POSITION, &args![]).u32();
+    let angle = e.with_stack(12, |e, difference| {
+        let starter_position = e.vcall(started_by, ACTOR_SLOT_POSITION, &args![]).u32();
+        e.call(
+            POINT_DIFFERENCE,
+            &args![starter_position, difference, target_position],
+        );
+        e.call(Z_ANGLE_FROM_VECTOR, &args![difference]).f32()
+    });
+    e.with_stack(4, |e, out| {
+        e.mem.set_f32(out.addr(), 0.0);
+        let current = e.vcall(started_by, ACTOR_SLOT_0X2BC, &args![0u32]).f64();
+        let shifted = (current + e.global::<f64>(PI_DOUBLE)) as f32;
+        e.call(ANGLE_DIFFERENCE, &args![shifted, angle, out]);
+    });
+    let turn = e
+        .call(SETTING_INTEGER_POINTER, &args![DIALOGUE_TURN_SETTING])
+        .u32();
+    let _ = e.mem.i32(turn);
+    if e.call(ACTOR_MOVE_MODE_BITS_30, &args![target_of]).bool() {
+        let turn = e
+            .call(SETTING_INTEGER_POINTER, &args![DEGREES_SETTING])
+            .u32();
+        let _ = e.mem.i32(turn);
+    }
+    let position = actor_position_words(e, started_by);
+    e.call(
+        ACTOR_REQUEST_TURN_TO,
+        &args![target_of, position[0], position[1], position[2], 0u32],
+    );
+}
+
+/// The second turn block of `ProcessDialogue`: the starter turns toward the
+/// target when the angle between them exceeds the turn setting.
+fn dialogue_turn_starter(e: &mut Engine, target_of: u32, started_by: u32) {
+    let starter_position = e.vcall(started_by, ACTOR_SLOT_POSITION, &args![]).u32();
+    let angle = e.with_stack(12, |e, difference| {
+        let target_position = e.vcall(target_of, ACTOR_SLOT_POSITION, &args![]).u32();
+        e.call(
+            POINT_DIFFERENCE,
+            &args![target_position, difference, starter_position],
+        );
+        e.call(Z_ANGLE_FROM_VECTOR, &args![difference]).f32()
+    });
+    let difference = e.with_stack(4, |e, out| {
+        e.mem.set_f32(out.addr(), 0.0);
+        let current = e.vcall(target_of, ACTOR_SLOT_0X2BC, &args![0u32]).f64();
+        let shifted = (current + e.global::<f64>(PI_DOUBLE)) as f32;
+        e.call(ANGLE_DIFFERENCE, &args![shifted, angle, out]).f32()
+    });
+    let absolute = e.call(FLOAT_ABSOLUTE_FOR_LOD, &args![difference]).f64();
+    let setting = e
+        .call(SETTING_INTEGER_POINTER, &args![DIALOGUE_TURN_SETTING])
+        .u32();
+    let limit = f64::from(e.mem.i32(setting)) * e.global::<f64>(DEGREES_TO_RADIANS);
+    if limit < absolute {
+        let position = actor_position_words(e, target_of);
+        e.call(
+            ACTOR_REQUEST_TURN_TO,
+            &args![started_by, position[0], position[1], position[2], 0u32],
+        );
+    }
+}
+
+// Translated from 008ec460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ProcessDialogue` (Xbox PDB): the per-frame work of a
+/// conversation package (type 0x1c) for `actor`. Any other package type adds
+/// the procedure index -2. The conversation is between the package's target
+/// (`DialoguePackage::GetTargetOfConversation`) and the actor that started it;
+/// both need a process, and when the starter is the player and the target is
+/// not, both must currently run this package, otherwise `Actor` virtual
+/// `+0x288` is called on `actor` and the function ends. Then: an actor whose
+/// last speaking emotion is set and whose greeting timer is not positive
+/// stops; the target's process gets the procedure index 2 when it is flagged;
+/// a package without a conversation creates one (`Conversation::Conversation`)
+/// for two non-player actors; unless the package flag 0x100000 is set the two
+/// actors are turned toward each other; the package's timer at +0x90 counts
+/// down; and when the action is complete and no sound plays, the actors
+/// stop, the timers are cleared and the actor's slot `0x288` is called, else
+/// `DialoguePackage::Speak(1)`. C++ exception states are not translated.
+pub fn high_process_process_dialogue(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) {
+    let process = this.addr();
+    let a = actor.addr();
+    let package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    if e.call(PACKAGE_TYPE, &args![package]).u32() != 0x1c {
+        e.vcall(
+            process,
+            SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+            &args![actor, u32::MAX - 1],
+        );
+        return;
+    }
+    let extra_list = e.call(REFERENCE_EXTRA_DATA, &args![actor]).u32();
+    let package_extra = e.call(EXTRA_GET_PACKAGE, &args![extra_list]).u32();
+    if package_extra != 0 && e.call(PACKAGE_TYPE, &args![package_extra]).u32() == 0xf {
+        let extra_list = e.call(REFERENCE_EXTRA_DATA, &args![actor]).u32();
+        e.call(EXTRA_SET_PACKAGE_ACTION_COMPLETE, &args![extra_list, 1u32]);
+    }
+    let conversation = package;
+    let target_of = e
+        .call(DIALOGUE_TARGET_OF_CONVERSATION, &args![conversation])
+        .u32();
+    let started_by = e
+        .call(DIALOGUE_ACTOR_STARTED_CONVERSATION, &args![conversation])
+        .u32();
+    let player = player_pointer(e);
+    let both_run_it = target_of != 0
+        && started_by != 0
+        && e.call(ACTOR_PROCESS, &args![target_of]).u32() != 0
+        && e.call(ACTOR_PROCESS, &args![started_by]).u32() != 0
+        && (started_by != player
+            || target_of == player
+            || (e.call(ACTOR_CURRENT_PACKAGE, &args![started_by]).u32() == conversation
+                && e.call(ACTOR_CURRENT_PACKAGE, &args![target_of]).u32() == conversation));
+    if !both_run_it {
+        e.vcall(a, ACTOR_SLOT_0X288, &args![]);
+        return;
+    }
+    if a != 0
+        && e.vcall(a, ACTOR_SLOT_GET_LAST_SPEAKING_EMOTION, &args![])
+            .bool()
+    {
+        let timer = e.vcall(process, SLOT_GET_GREETING_TIMER, &args![]).f64();
+        if timer <= e.global::<f64>(ZERO_DOUBLE_VALUE) {
+            e.vcall(a, ACTOR_SLOT_0X288, &args![]);
+            return;
+        }
+    }
+    if target_of != 0 && e.call(REFERENCE_BYTE_AT_81, &args![target_of]).bool() {
+        let target_process = e.call(ACTOR_PROCESS, &args![target_of]).u32();
+        e.vcall(
+            target_process,
+            SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+            &args![target_of, 2u32],
+        );
+    }
+    if e.call(DIALOGUE_CONVERSATION, &args![conversation]).u32() == 0 {
+        let topic = e.call(PACKAGE_DIALOGUE_TOPIC, &args![conversation]).u32();
+        if target_of != player && started_by != player {
+            let mut other = target_of;
+            if e.call(REFERENCE_BYTE_AT_81, &args![target_of]).bool() {
+                other = e.call(REFERENCE_WORD_AT_6C, &args![target_of]).u32();
+                let form = e.call(REFERENCE_GET_FORM, &args![other]).u32();
+                if e.call(FORM_WORD_AT_90, &args![form]).u32() != 0 {
+                    other = e.call(FORM_WORD_AT_90, &args![form]).u32();
+                }
+            }
+            let memory = e.call(0x0040_1000, &args![0xcu32]).u32();
+            let created = if memory != 0 {
+                e.call(
+                    CONVERSATION_CONSTRUCTOR,
+                    &args![memory, started_by, other, topic],
+                )
+                .u32()
+            } else {
+                0
+            };
+            e.call(DIALOGUE_SET_CONVERSATION, &args![conversation, created]);
+        }
+    }
+    if !e.call(PACKAGE_FLAG_100000, &args![conversation]).bool() {
+        if e.vcall(target_of, ACTOR_SLOT_IS_ACTOR, &args![]).bool()
+            && !e
+                .call(PACKAGE_DIALOGUE_DO_NOT_CONTROL_TARGET, &args![conversation])
+                .bool()
+            && e.vcall(target_of, ACTOR_SLOT_STATE, &args![]).i32() == 0
+            && target_of != a
+        {
+            dialogue_turn_target(e, target_of, started_by);
+        }
+        if e.vcall(started_by, ACTOR_SLOT_IS_ACTOR, &args![]).bool()
+            && e.vcall(started_by, ACTOR_SLOT_STATE, &args![]).i32() == 0
+            && started_by != target_of
+            && !e.call(ACTOR_MOVE_MODE_BITS_30, &args![started_by]).bool()
+        {
+            dialogue_turn_starter(e, target_of, started_by);
+        }
+    }
+    let timer = e.mem.f32(conversation + 0x90);
+    if f64::from(timer) > e.global::<f64>(ZERO_DOUBLE_VALUE) {
+        let frame = e.call(FRAME_TIME, &args![FRAME_TIMER]).f64();
+        e.mem
+            .set_f32(conversation + 0x90, (f64::from(timer) - frame) as f32);
+        return;
+    }
+    let mut silent = false;
+    if e.vcall(process, SLOT_GET_CURRENT_ACTION_COMPLETE_DIALOGUE, &args![])
+        .bool()
+    {
+        silent = e.with_stack(12, |e, handle| {
+            let returned = e
+                .vcall(process, SLOT_GET_SOUND_HANDLE, &args![handle, 0u32])
+                .u32();
+            let valid = e.call(SOUND_HANDLE_IS_VALID, &args![returned]).bool();
+            e.call(SOUND_HANDLE_DESTRUCTOR, &args![handle]);
+            !valid
+        });
+    }
+    if !silent {
+        e.call(DIALOGUE_PACKAGE_SPEAK, &args![conversation, 1u32]);
+        return;
+    }
+    let same_package = e.call(ACTOR_CURRENT_PACKAGE, &args![target_of]).u32()
+        == e.call(ACTOR_CURRENT_PACKAGE, &args![started_by]).u32();
+    if fn_008e95c0(e, Ptr::new(conversation)) == 0
+        && !e
+            .call(PACKAGE_DIALOGUE_DO_NOT_CONTROL_TARGET, &args![conversation])
+            .bool()
+        && e.vcall(target_of, ACTOR_SLOT_IS_ACTOR, &args![]).bool()
+    {
+        e.call(ACTOR_STOP_MOVING, &args![target_of]);
+    }
+    if same_package {
+        let other = if started_by == a {
+            target_of
+        } else {
+            started_by
+        };
+        let mut other_process = 0u32;
+        if e.call(ACTOR_PROCESS, &args![other]).u32() != 0 {
+            let candidate = e.call(ACTOR_PROCESS, &args![other]).u32();
+            if e.call(PROCESS_WORD_AT_28, &args![candidate]).u32() == 0 {
+                other_process = e.call(ACTOR_PROCESS, &args![other]).u32();
+            }
+        }
+        if other_process != 0 {
+            e.mem
+                .set_f32(other_process + PROCESS_PACKAGE_EVAL_TIMER, 0.0);
+        }
+    }
+    e.mem.set_f32(process + PROCESS_PACKAGE_EVAL_TIMER, 0.0);
+    e.vcall(a, ACTOR_SLOT_0X288, &args![]);
+}
+
+/// `TESObjectREFR::GetInterior` (Xbox PDB, `00575d10`).
+const REFERENCE_GET_INTERIOR: u32 = 0x0057_5d10;
+/// `TESObjectCell::` enumeration around a point (`0054d4b0`, cdecl): `(cell,
+/// position, radius, position, radius, callback, argument)`.
+const CELL_ENUMERATE_AROUND: u32 = 0x0054_d4b0;
+/// The callback `CallforHelp` gives the enumerations (`008e3ea0`).
+const CALL_FOR_HELP_CALLBACK: u32 = 0x008e_3ea0;
+/// The integer setting at `011cdbec`: the radius of the call for help.
+const CALL_FOR_HELP_RADIUS_SETTING: u32 = 0x011c_dbec;
+/// `ProcessLists` global (`011e0e80`) and `ProcessLists::SendActorsYellAlarm`
+/// (Xbox PDB, `009711e0`): `(reference, list)`.
+const PROCESS_LISTS_GLOBAL: u32 = 0x011e_0e80;
+const PROCESS_LISTS_SEND_ACTORS_YELL_ALARM: u32 = 0x0097_11e0;
+/// The static `BSSimpleList` at `011e025c` the yell fills.
+const YELL_ALARM_LIST: u32 = 0x011e_025c;
+/// `00579670` and `00493bb0` (`this` = an actor): two flag tests the call for
+/// help applies to each candidate.
+const CANDIDATE_FLAG_579670: u32 = 0x0057_9670;
+const CANDIDATE_FLAG_493BB0: u32 = 0x0049_3bb0;
+/// `Actor::IsAlarmed` (Xbox PDB, `008a61b0`).
+const ACTOR_IS_ALARMED: u32 = 0x008a_61b0;
+/// `008905f0` (`this` = a crime or the source of the call): the byte at +0x2c.
+const BYTE_AT_2C: u32 = 0x0089_05f0;
+/// `TESActorBaseData::IsInEvilFactionsOnly` (Xbox PDB, `0047d740`).
+const IS_IN_EVIL_FACTIONS_ONLY: u32 = 0x0047_d740;
+/// Actor virtual slot `0x304`: `SetSurfacing` (Xbox PDB) in the Xbox
+/// numbering; the call for help uses it as a yes/no test of the candidate.
+const ACTOR_SLOT_0X304: u32 = 0x304;
+/// `Actor::GetClass` (Xbox PDB, `00884350`) and `TESClass::IsGuard` (Xbox PDB,
+/// `005f6e60`).
+const ACTOR_GET_CLASS: u32 = 0x0088_4350;
+const CLASS_IS_GUARD: u32 = 0x005f_6e60;
+/// `005a03f0` (`this` = an actor, a mask): whether the byte at +0x680 has
+/// any of the bits.
+const ACTOR_BYTE_AT_680_TEST: u32 = 0x005a_03f0;
+/// `006130e0` (`this` = an alarm package): the address of the list at +0x80.
+const PACKAGE_CRIME_LIST: u32 = 0x0061_30e0;
+/// `0059bb30` (`this` = a crime): the word at +0x24; `0084e3a0` is
+/// [`WORD_AT_0XC`].
+const CRIME_WORD_AT_24: u32 = 0x0059_bb30;
+/// `004181e0` (`this` = an actor): the actor's base form.
+const ACTOR_BASE_FORM: u32 = 0x0041_81e0;
+/// `TESActorBaseData::GetFactionRank` (Xbox PDB, `0047d680`): `(faction,
+/// flag)`.
+const ACTOR_BASE_FACTION_RANK: u32 = 0x0047_d680;
+/// The double -1.0 (`0101a6b0`) the faction rank is compared with.
+const MINUS_ONE_DOUBLE: u32 = 0x0101_a6b0;
+/// `0041cd70` (`this` = an extra data list): the word of the extra of type
+/// 0x1a.
+const EXTRA_GET_TYPE_1A: u32 = 0x0041_cd70;
+/// `009f94d0` and `008db4c0` (`this` = that extra's data): add to the words
+/// at +0x84 (an integer) and +0x80 (a float).
+const EXTRA_ADD_INTEGER_AT_84: u32 = 0x009f_94d0;
+const EXTRA_ADD_FLOAT_AT_80: u32 = 0x008d_b4c0;
+/// Virtual slot `0x344` of the process: `CallforHelp` (Xbox PDB).
+const SLOT_CALL_FOR_HELP: u32 = 0x344;
+/// Virtual slot `0x298` of the process: `ProcessFollow` (Xbox PDB).
+const SLOT_PROCESS_FOLLOW: u32 = 0x298;
+/// Actor virtual slots `0x448` (a yes/no test of the target) and `0x400`
+/// (takes the extra data of the target).
+const ACTOR_SLOT_0X448: u32 = 0x448;
+const ACTOR_SLOT_0X400: u32 = 0x400;
+
+// Translated from 008ecbb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::CallforHelp` (Xbox PDB), as the exe has it: a `thiscall`
+/// whose `this` is not used; the three arguments are the caller (an actor
+/// reference), the threat the helpers are asked to attack and the reference
+/// the search is made around. Takes the caller's base form when it is of type
+/// 0x2a, enumerates the references around the caller within the radius of
+/// the setting at `011cdbec` (the cell enumeration `0054d4b0` indoors, else
+/// `TESDataHandler::EnumReferencesCloseToPoint`) with the callback
+/// `008e3ea0`, asks `ProcessLists::SendActorsYellAlarm` for the actors that
+/// heard it and walks that list: each actor that is not alarmed, not flagged
+/// by `00579670`/`00493bb0` and passes the slot-`0x304`, evil-faction and
+/// `GetShouldAttackActor` tests gets its process fetched. What the original
+/// would do next (adding a reference to the process lists) is dead code in
+/// the exe (a flag it clears just before is always zero) and is not
+/// translated. The list is cleared and deleted at the end.
+pub fn high_process_call_for_help(
+    e: &mut Engine,
+    _this: Ptr<HighProcess>,
+    caller: Ptr,
+    threat: Ptr,
+    source: Ptr,
+) {
+    let c = caller.addr();
+    let mut caller_form = 0u32;
+    let form = e.call(REFERENCE_GET_FORM, &args![caller]).u32();
+    if e.call(FORM_TYPE_OF, &args![form]).u32() == 0x2a {
+        caller_form = e.call(REFERENCE_GET_FORM, &args![caller]).u32();
+    }
+    // The word at +8 of the source, kept when it is an actor (not read again).
+    let word = e.call(WORD_AT_8, &args![source]).u32();
+    if word != 0 {
+        e.vcall(word, ACTOR_SLOT_IS_ACTOR, &args![]);
+    }
+    let interior = e.call(REFERENCE_GET_INTERIOR, &args![caller]).bool();
+    let setting = e
+        .call(
+            SETTING_INTEGER_POINTER,
+            &args![CALL_FOR_HELP_RADIUS_SETTING],
+        )
+        .u32();
+    let first_radius = e.mem.i32(setting) as f32;
+    let first_position = e.vcall(c, ACTOR_SLOT_POSITION, &args![]).u32();
+    let setting = e
+        .call(
+            SETTING_INTEGER_POINTER,
+            &args![CALL_FOR_HELP_RADIUS_SETTING],
+        )
+        .u32();
+    let second_radius = e.mem.i32(setting) as f32;
+    let second_position = e.vcall(c, ACTOR_SLOT_POSITION, &args![]).u32();
+    let cell = e.call(REFERENCE_PATHING_CELL, &args![caller]).u32();
+    if interior {
+        e.call(
+            CELL_ENUMERATE_AROUND,
+            &args![
+                cell,
+                second_position,
+                second_radius,
+                first_position,
+                first_radius,
+                CALL_FOR_HELP_CALLBACK,
+                source
+            ],
+        );
+    } else {
+        let handler = e.global::<u32>(DATA_HANDLER_GLOBAL);
+        e.call(
+            ENUM_REFERENCES_CLOSE_TO_POINT,
+            &args![
+                handler,
+                cell,
+                second_position,
+                second_radius,
+                first_position,
+                first_radius,
+                CALL_FOR_HELP_CALLBACK,
+                source
+            ],
+        );
+    }
+    let list = e
+        .call(
+            PROCESS_LISTS_SEND_ACTORS_YELL_ALARM,
+            &args![PROCESS_LISTS_GLOBAL, source, YELL_ALARM_LIST],
+        )
+        .u32();
+    e.call(LIST_CLEAR, &args![YELL_ALARM_LIST]);
+    let mut node = list;
+    while node != 0 && {
+        let slot = e.call(NODE_ITEM_ADDRESS, &args![node]).u32();
+        e.mem.u32(slot) != 0
+    } {
+        let mut candidate = 0u32;
+        let slot = e.call(NODE_ITEM_ADDRESS, &args![node]).u32();
+        let item = e.mem.u32(slot);
+        if e.vcall(item, ACTOR_SLOT_IS_ACTOR, &args![]).bool() {
+            let slot = e.call(NODE_ITEM_ADDRESS, &args![node]).u32();
+            candidate = e.mem.u32(slot);
+        }
+        node = e.call(NODE_NEXT, &args![node]).u32();
+        if candidate != 0
+            && !e.call(ACTOR_IS_ALARMED, &args![candidate]).bool()
+            && !e.call(CANDIDATE_FLAG_579670, &args![candidate]).bool()
+            && !e.call(CANDIDATE_FLAG_493BB0, &args![candidate]).bool()
+            && (!e.vcall(candidate, ACTOR_SLOT_0X304, &args![]).bool()
+                || !e.call(BYTE_AT_2C, &args![source]).bool())
+        {
+            let evil_only_ok = e.vcall(candidate, ACTOR_SLOT_0X304, &args![]).bool()
+                && !e
+                    .call(IS_IN_EVIL_FACTIONS_ONLY, &args![caller_form + 0x30])
+                    .bool();
+            let attack = if evil_only_ok {
+                true
+            } else if e.vcall(candidate, ACTOR_SLOT_0X304, &args![]).bool() {
+                false
+            } else {
+                e.with_stack(4, |e, out| {
+                    e.call(
+                        ACTOR_GET_SHOULD_ATTACK,
+                        &args![candidate, threat, 0u32, out, 0u32],
+                    )
+                    .bool()
+                })
+            };
+            if attack {
+                // The process of the candidate is fetched; the code that used
+                // it is unreachable.
+                e.call(ACTOR_PROCESS, &args![candidate]);
+            }
+        }
+    }
+    if list != 0 {
+        e.call(LIST_CLEAR, &args![list]);
+        e.call(LIST_DELETE, &args![list, 1u32]);
+    }
+}
+
+// Translated from 008ecf20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ProcessAlarm` (Xbox PDB): the alarm package's per-frame work
+/// for `actor`. The package's target reference is the one to be warned about.
+/// If it is the player and the player has bit 8 at `+0x680`, only
+/// `EndMoveMessage` is called. A sitting or sleeping actor (states 4 and 9)
+/// is made to stand (actor slot `0x418`). Guards add the procedure index 1.
+/// Otherwise the package's list of crimes (+0x80) is walked: for each crime
+/// that is not flagged (`008905f0`) `CallforHelp` (slot `0x344`) is called;
+/// crimes of type 0 or 1 committed by the player may set a flag when the
+/// actor's faction rank allows it, and `GetShouldAttackActor` decides whether
+/// the actor attacks the target (`EnterCombat`, slot `0x33c`, after ending
+/// the interrupt package). With no crime left unflagged the procedure
+/// advances (3 or 2, or the actor takes the target's extra data), else 4,
+/// or, for the player as target that answers true to the actor slot
+/// `0x448`, the process follows the player (slot `0x298`).
+pub fn high_process_process_alarm(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) {
+    let process = this.addr();
+    let a = actor.addr();
+    let current = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+    let mut flag_set = false;
+    let target_word = e.call(PACKAGE_TARGET_WORD, &args![current]).u32();
+    let target_ref = e
+        .call(PACKAGE_TARGET_GET_REFERENCE, &args![target_word])
+        .u32();
+    let extra_list = e.call(REFERENCE_EXTRA_DATA, &args![actor]).u32();
+    let _package_extra = e.call(EXTRA_GET_PACKAGE, &args![extra_list]).u32();
+    if target_ref == player_pointer(e) {
+        let player = e.global::<u32>(PLAYER_POINTER);
+        if e.call(ACTOR_BYTE_AT_680_TEST, &args![player, 8u32]).bool() {
+            travel_end_move_message(e, process, a);
+            return;
+        }
+    }
+    let mut found = false;
+    if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() != 0
+        && (e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4
+            || e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 9)
+    {
+        e.vcall(a, ACTOR_SLOT_0X418, &args![]);
+        return;
+    }
+    if current == 0 {
+        return;
+    }
+    let class = e.call(ACTOR_GET_CLASS, &args![actor]).u32();
+    if e.call(CLASS_IS_GUARD, &args![class]).bool() {
+        travel_add_procedure(e, process, a);
+        return;
+    }
+    let mut list = e.call(PACKAGE_CRIME_LIST, &args![current]).u32();
+    let mut all_clear = true;
+    while list != 0 && {
+        let slot = e.call(NODE_ITEM_ADDRESS, &args![list]).u32();
+        e.mem.u32(slot) != 0
+    } {
+        let slot = e.call(NODE_ITEM_ADDRESS, &args![list]).u32();
+        let entry = e.mem.u32(slot);
+        let word = e.call(WORD_AT_8, &args![entry]).u32();
+        let mut actor_word = 0u32;
+        if word != 0 && e.vcall(word, ACTOR_SLOT_IS_ACTOR, &args![]).bool() {
+            actor_word = word;
+        }
+        if !e.call(BYTE_AT_2C, &args![entry]).bool() {
+            e.vcall(
+                process,
+                SLOT_CALL_FOR_HELP,
+                &args![actor, target_ref, entry],
+            );
+        }
+        if e.call(BYTE_AT_2C, &args![entry]).bool() {
+            all_clear = false;
+        } else if e.call(NODE_NEXT, &args![entry]).u32() == 0
+            || e.call(NODE_NEXT, &args![entry]).u32() == 1
+        {
+            if e.call(WORD_AT_0XC, &args![entry]).u32() == player_pointer(e) {
+                let form_word = e.call(CRIME_WORD_AT_24, &args![entry]).u32();
+                let mut faction = 0u32;
+                if form_word != 0 && e.call(FORM_TYPE_OF, &args![form_word]).u32() == 8 {
+                    faction = form_word;
+                }
+                let mut set = false;
+                if e.call(NODE_NEXT, &args![entry]).u32() == 1 {
+                    set = true;
+                } else {
+                    let own_form = e.call(REFERENCE_GET_FORM, &args![actor]).u32();
+                    let crime_form = e.call(CRIME_WORD_AT_24, &args![entry]).u32();
+                    if own_form == crime_form {
+                        set = true;
+                    } else if faction != 0 {
+                        let is_player = u32::from(a == player_pointer(e));
+                        let base = e.call(ACTOR_BASE_FORM, &args![actor]).u32();
+                        let rank = e
+                            .call(
+                                ACTOR_BASE_FACTION_RANK,
+                                &args![base + 0x30, faction, is_player],
+                            )
+                            .i32();
+                        if f64::from(rank) > e.global::<f64>(MINUS_ONE_DOUBLE) {
+                            set = true;
+                        }
+                    }
+                }
+                if set {
+                    flag_set = true;
+                }
+            }
+        }
+        if !found {
+            let attacks = if e.call(NODE_NEXT, &args![entry]).i32() <= 2 {
+                e.with_stack(4, |e, out| {
+                    e.call(
+                        ACTOR_GET_SHOULD_ATTACK,
+                        &args![actor, target_ref, 0u32, out, 0u32],
+                    )
+                    .bool()
+                })
+            } else {
+                actor_word != 0
+                    && e.with_stack(4, |e, out| {
+                        e.call(
+                            ACTOR_GET_SHOULD_ATTACK,
+                            &args![actor, target_ref, 0u32, out, 0u32],
+                        )
+                        .bool()
+                    })
+            };
+            if attacks {
+                found = true;
+            }
+        }
+        list = e.call(NODE_NEXT, &args![list]).u32();
+    }
+    if found {
+        e.call(ACTOR_END_INTERRUPT_PACKAGE, &args![actor, 0u32]);
+        e.vcall(
+            process,
+            SLOT_ENTER_COMBAT,
+            &args![
+                actor, target_ref, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 1u32, 0u32
+            ],
+        );
+    } else if all_clear {
+        if flag_set {
+            e.vcall(
+                process,
+                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                &args![actor, 3u32],
+            );
+        } else if e.vcall(target_ref, ACTOR_SLOT_0X448, &args![]).bool() {
+            e.call(ACTOR_END_INTERRUPT_PACKAGE, &args![actor, 0u32]);
+            let target_extra_list = e.call(REFERENCE_EXTRA_DATA, &args![target_ref]).u32();
+            let extra = e.call(EXTRA_GET_TYPE_1A, &args![target_extra_list]).u32();
+            if extra != 0 {
+                e.call(EXTRA_ADD_INTEGER_AT_84, &args![extra, 0u32]);
+                e.call(EXTRA_ADD_FLOAT_AT_80, &args![extra, 0.0f32]);
+            }
+            e.vcall(a, ACTOR_SLOT_0X400, &args![extra]);
+        } else {
+            e.vcall(
+                process,
+                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                &args![actor, 2u32],
+            );
+        }
+    } else {
+        let extra_list = e.call(REFERENCE_EXTRA_DATA, &args![actor]).u32();
+        let package_extra = e.call(EXTRA_GET_PACKAGE, &args![extra_list]).u32();
+        let keep_going = target_ref == player_pointer(e)
+            || (package_extra != 0
+                && e.call(PACKAGE_TYPE, &args![package_extra]).u32() == 4
+                && dialogue_first_search(e, package_extra, a));
+        if !keep_going {
+            e.vcall(
+                process,
+                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                &args![actor, 4u32],
+            );
+        } else if target_ref == player_pointer(e)
+            && e.vcall(target_ref, ACTOR_SLOT_0X448, &args![]).bool()
+        {
+            let player = e.global::<u32>(PLAYER_POINTER);
+            e.vcall(process, SLOT_SET_TARGET, &args![player]);
+            e.vcall(
+                process,
+                SLOT_PROCESS_FOLLOW,
+                &args![actor, 0u32, 0x101u32, 0u32],
+            );
+        } else {
+            e.vcall(
+                process,
+                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                &args![actor, 4u32],
+            );
+        }
+    }
+}
+
+/// `PathingRequestClosePoint::PathingRequestClosePoint` (Xbox PDB,
+/// `006e3f30`).
+const CLOSE_POINT_REQUEST_CONSTRUCTOR: u32 = 0x006e_3f30;
+/// The destructor of that request (`006dad70`).
+const CLOSE_POINT_REQUEST_DESTRUCTOR: u32 = 0x006d_ad70;
+/// `PathingLocation::PathingLocation` (Xbox PDB, `006dce60`, `this` = the
+/// location): `(position, cell)`; returns `this`.
+const PATHING_LOCATION_NEW: u32 = 0x006d_ce60;
+/// The request's location setter (`006d3ac0`).
+const CLOSE_POINT_SET_LOCATION: u32 = 0x006d_3ac0;
+/// The request's `+0xb0` setter (`00507610`, a float).
+const CLOSE_POINT_SET_LIMIT: u32 = 0x0050_7610;
+/// The request's radius setter (`006e5ee0`, a float).
+const CLOSE_POINT_SET_RADIUS: u32 = 0x006e_5ee0;
+/// Submits the request (`006d33c0`, cdecl): `(request, goal out)`.
+const CLOSE_POINT_SUBMIT: u32 = 0x006d_33c0;
+/// `min` of two floats (`0040ebd0`, cdecl): `(a, b)`, a float in `ST0`.
+const FLOAT_MINIMUM: u32 = 0x0040_ebd0;
+/// `NiPoint3::UnitizeGetLength` (Xbox PDB, `00457910`, `this` = the point):
+/// normalizes it in place and returns its length in `ST0`.
+const POINT_UNITIZE_GET_LENGTH: u32 = 0x0045_7910;
+/// `NiPoint3` length (`00457990`) is [`POINT_LENGTH_FLOAT`].
+/// `TESDataHandler::GetCellFromWorldCoord` (Xbox PDB, `00461bc0`, `this` is
+/// the word at `011c3f2c`): `(x, y, world space, 0)`.
+const GET_CELL_FROM_WORLD_COORD: u32 = 0x0046_1bc0;
+/// `ActorMover::IsPathingComplete` (Xbox PDB, `009dcd40`, `this` = the actor's
+/// mover, the word at +0x190).
+const ACTOR_MOVER_IS_PATHING_COMPLETE: u32 = 0x009d_cd40;
+/// `Actor::GetFatiguePercentage` (Xbox PDB, `00893530`, `ST0`).
+const ACTOR_GET_FATIGUE_PERCENTAGE: u32 = 0x0089_3530;
+/// `0087f990` (`this` = an actor): an integer from the actor's base form.
+const ACTOR_BASE_FORM_BYTE: u32 = 0x0087_f990;
+/// `006434f0` (cdecl): `(integer, float)`, a delay in `ST0`.
+const DELAY_FROM_FATIGUE: u32 = 0x0064_34f0;
+/// `Interface::GetTargetREFR` (Xbox PDB, `00703180`).
+const INTERFACE_GET_TARGET_REFERENCE: u32 = 0x0070_3180;
+/// `00703c00` (cdecl): prints a line to the console.
+const CONSOLE_PRINT: u32 = 0x0070_3c00;
+/// `0055d520` (`this` = a reference): the reference's name.
+const REFERENCE_NAME: u32 = 0x0055_d520;
+/// `sprintf` (`00ec623a`, cdecl).
+const SPRINTF_FUNCTION: u32 = 0x00ec_623a;
+/// "%s is wandering to point x %.02f and y %.02f" (`01088220`).
+const WANDERING_FORMAT: u32 = 0x0108_8220;
+/// Floats and doubles read by `ProcessWander`.
+const WANDER_SMALL_RADIUS: u32 = 0x0101_2638;
+const WANDER_RADIUS_FACTOR: u32 = 0x0101_de30;
+const WANDER_RADIUS_DIVISOR: u32 = 0x0101_1590;
+const WANDER_EXTRA_DISTANCE: u32 = 0x0104_84f0;
+const WANDER_LIMIT_FLOAT: u32 = 0x0101_e340;
+const WANDER_POINT_RADIUS: u32 = 0x0102_2454;
+const WANDER_NEAR_DISTANCE: u32 = 0x0102_fc70;
+const WANDER_ARRIVED_DISTANCE: u32 = 0x0102_0998;
+const WANDER_DELAY_LIMIT: u32 = 0x0102_0758;
+const WANDER_FAR_DISTANCE: u32 = 0x0101_e2c0;
+const WANDER_GOAL_RADIUS: u32 = 0x0101_b268;
+const WANDER_RESET_TIMER: u32 = 0x0101_7868;
+/// The delay timer (`fDelayTimer`, +0x2d0) and the acquire timer (+0x2e0,
+/// `fEvaluateAcquireTimer`) of the process.
+const PROCESS_DELAY_TIMER: u32 = 0x2d0;
+const PROCESS_WANDER_TIMER: u32 = 0x2e0;
+
+/// Runs `body` on a `PathingRequestClosePoint` (a stack local of the game's
+/// code) whose location is the point `target` in `cell`; the request is
+/// destroyed afterwards.
+fn with_close_point_request<R>(
+    e: &mut Engine,
+    target: u32,
+    cell: u32,
+    body: impl FnOnce(&mut Engine, Ptr) -> R,
+) -> R {
+    e.with_stack(0xd0, |e, request| {
+        e.call(CLOSE_POINT_REQUEST_CONSTRUCTOR, &args![request]);
+        e.with_stack(0x30, |e, location| {
+            let made = e
+                .call(PATHING_LOCATION_NEW, &args![location, target, cell])
+                .u32();
+            e.call(CLOSE_POINT_SET_LOCATION, &args![request, made]);
+            e.call(PATHING_LOCATION_DESTRUCTOR, &args![location]);
+        });
+        let result = body(e, request);
+        e.call(CLOSE_POINT_REQUEST_DESTRUCTOR, &args![request]);
+        result
+    })
+}
+
+/// The request `ProcessWander` makes toward `target` when the actor is
+/// inside the walk radius: the limit is the smaller of the float `0101e340`
+/// and three quarters of the radius, the radius is given too, and the
+/// request is submitted with `goal` as its output.
+fn wander_request_with_limit(e: &mut Engine, target: u32, cell: u32, radius: f32, goal: u32) {
+    with_close_point_request(e, target, cell, |e, request| {
+        let scaled = (f64::from(radius) * e.global::<f64>(WANDER_RADIUS_FACTOR)) as f32;
+        let ceiling = e.global::<f32>(WANDER_LIMIT_FLOAT);
+        let limit = e.call(FLOAT_MINIMUM, &args![ceiling, scaled]).f32();
+        e.call(CLOSE_POINT_SET_LIMIT, &args![request, limit]);
+        e.call(CLOSE_POINT_SET_RADIUS, &args![request, radius]);
+        e.call(CLOSE_POINT_SUBMIT, &args![request, goal]);
+    });
+}
+
+// Translated from 008ed420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ProcessWander` (Xbox PDB): the wandering package's per-frame
+/// work for `actor`. `position` (may be null) overrides the package's
+/// location; `radius_argument` (when not positive: the package's distance
+/// number for the actor, `00676280`) is the wander radius.
+///
+/// While the greeting flag is set it only calls `EndMoveMessage`. Package
+/// types 0 and 0x11, 3 (eating: with a food item the actor goes to eat) and 4
+/// first run the package's own search (slot `0x13c`), ending the procedure
+/// when it fails; types 12 and 14 do not wander. The target position is the
+/// package's location (or the reference's, the actor's own for a location
+/// of type 1, or `position`). A small radius makes the actor face the
+/// location's marker; otherwise a timer (+0x2e0) and the movement
+/// animation (slot `0x350`) drive the walk: when the path is complete and
+/// the actor is free the distance to the target decides between asking the
+/// pathfinder for a close point (`PathingRequestClosePoint`), setting a goal
+/// with `SetPathfindingGoal` and the delay timer (+0x2d0, computed from the
+/// actor's fatigue), and ending the procedure; a console line names the
+/// target when the actor is the console's target. C++ exception states are
+/// not translated.
+pub fn high_process_process_wander(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    position: Ptr,
+    radius_argument: f32,
+) {
+    let process = this.addr();
+    let a = actor.addr();
+    if e.get(this, HighProcess::bGreetingFlag) != 0 {
+        travel_end_move_message(e, process, a);
+        return;
+    }
+    let mut can_wander = true;
+    let mut at_point = false;
+    let package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    let mut radius = if radius_argument > 0.0 {
+        radius_argument
+    } else {
+        f64::from(
+            e.call(PACKAGE_DISTANCE_FOR_ACTOR, &args![package, actor])
+                .u32(),
+        ) as f32
+    };
+    let mut is_wanderer = true;
+    if e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32() != 1 {
+        is_wanderer = false;
+        match e.call(PACKAGE_TYPE, &args![package]).u32() {
+            0 | 0x11 => {
+                if !dialogue_first_search(e, package, a) {
+                    travel_end_move_message(e, process, a);
+                    e.vcall(
+                        process,
+                        SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                        &args![actor, (-2i32) as u32],
+                    );
+                    return;
+                }
+            }
+            3 => {
+                let food = e.call(ACTOR_GET_BEST_FOOD_ITEM, &args![actor]).u32();
+                if !dialogue_first_search(e, package, a) {
+                    travel_end_move_message(e, process, a);
+                    e.vcall(
+                        process,
+                        SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                        &args![actor, (-2i32) as u32],
+                    );
+                    return;
+                }
+                if food != 0 && e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4 {
+                    let word = e.call(WORD_AT_8, &args![food]).u32();
+                    e.mem.set_u32(process + LOW_ITEM_BEING_USED, word);
+                    e.vcall(process, SLOT_SET_CURRENT_ACTION_COMPLETE, &args![1u32]);
+                    e.vcall(
+                        process,
+                        SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                        &args![actor, u32::MAX],
+                    );
+                    return;
+                }
+                if food != 0 {
+                    e.vcall(
+                        process,
+                        SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                        &args![actor, u32::MAX],
+                    );
+                    return;
+                }
+                if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4 {
+                    return;
+                }
+            }
+            4 => {
+                if !dialogue_first_search(e, package, a) {
+                    travel_end_move_message(e, process, a);
+                    e.vcall(
+                        process,
+                        SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                        &args![actor, (-2i32) as u32],
+                    );
+                    return;
+                }
+                if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 9 {
+                    e.vcall(
+                        process,
+                        SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                        &args![actor, u32::MAX],
+                    );
+                    return;
+                }
+            }
+            0xc | 0xe => {
+                is_wanderer = true;
+                can_wander = false;
+            }
+            _ => {}
+        }
+    }
+    e.with_stack(12, |e, target| {
+        let mut location_ref = 0u32;
+        e.call(PACKAGE_LOCATION_COORD, &args![package, target, actor]);
+        let location = e.call(PACKAGE_LOCATION_WORD, &args![package]).u32();
+        if location != 0 {
+            location_ref = e
+                .call(PACKAGE_LOCATION_GET_REFERENCE, &args![location])
+                .u32();
+            if location_ref == 0 && e.call(PACKAGE_LOCATION_TYPE, &args![location]).u32() == 1 {
+                at_point = true;
+                let own = actor_position_words(e, a);
+                for (i, word) in own.iter().enumerate() {
+                    e.mem.set_u32(target.addr() + i as u32 * 4, *word);
+                }
+            }
+            if location_ref == 0 {
+                location_ref = e.vcall(process, SLOT_GET_GENERIC_LOCATION, &args![]).u32();
+            }
+        }
+        if e.mem.u32(process + PROCESS_GENERIC_LOCATION) != 0
+            && e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32() == 0
+        {
+            location_ref = e.mem.u32(process + PROCESS_GENERIC_LOCATION);
+        }
+        if !position.is_null() {
+            for i in 0..3 {
+                let word = e.mem.u32(position.addr() + i * 4);
+                e.mem.set_u32(target.addr() + i * 4, word);
+            }
+        }
+        if f64::from(radius) < e.global::<f64>(WANDER_SMALL_RADIUS)
+            && is_wanderer
+            && !at_point
+            && can_wander
+        {
+            if !dialogue_first_search(e, package, a) {
+                e.vcall(
+                    process,
+                    SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                    &args![actor, u32::MAX],
+                );
+            } else if is_wanderer
+                && location_ref != 0
+                && e.call(REFERENCE_GET_FORM, &args![location_ref]).u32()
+                    == e.global::<u32>(MARKER_FORM_GLOBAL)
+            {
+                let rotation_address = e
+                    .call(REFERENCE_ROTATION_ADDRESS, &args![location_ref])
+                    .u32();
+                let rotation = e.mem.f32(rotation_address + 8);
+                e.call(ACTOR_REQUEST_ROTATE, &args![actor, rotation, 0u32]);
+            }
+            return;
+        }
+        if !is_wanderer && can_wander {
+            let timer = e.mem.f32(process + PROCESS_WANDER_TIMER);
+            if timer <= 0.0 && e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() {
+                travel_end_move_message(e, process, a);
+                e.vcall(
+                    process,
+                    SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                    &args![actor, u32::MAX],
+                );
+                let reset = e.global::<f32>(WANDER_RESET_TIMER);
+                e.mem.set_f32(process + PROCESS_WANDER_TIMER, reset);
+                return;
+            }
+            let frame = e.call(FRAME_TIME, &args![FRAME_TIMER]).f64();
+            e.mem.set_f32(
+                process + PROCESS_WANDER_TIMER,
+                (f64::from(timer) - frame) as f32,
+            );
+        }
+        if !e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() {
+            e.vcall(
+                process,
+                SLOT_SET_ACTORS_ANIMATION,
+                &args![actor, 0x101u32, 1u32],
+            );
+            return;
+        }
+        let mover = e.mem.u32(a + 0x190);
+        let free = e
+            .call(ACTOR_MOVER_IS_PATHING_COMPLETE, &args![mover])
+            .bool()
+            && {
+                e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4
+                    || e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 0
+                    || e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 9
+            };
+        if !free {
+            // The furniture marker case: `IsPathingComplete` is asked again.
+            if e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() {
+                return;
+            }
+            let furniture = e.mem.u32(process + PROCESS_CURRENT_FURNITURE);
+            if furniture != 0
+                && e.call(
+                    REFERENCE_GET_MARKER_USED,
+                    &args![
+                        furniture,
+                        e.mem.u8(process + PROCESS_CURRENT_FURNITURE_INDEX),
+                        1u32
+                    ],
+                )
+                .bool()
+            {
+                travel_end_move_message(e, process, a);
+                e.mem.set_f32(process + PROCESS_DELAY_TIMER, 0.0);
+                e.mem.set_u32(process + PROCESS_CURRENT_FURNITURE, 0);
+                e.call(PROCESS_CLEAR_FURNITURE_MARKER, &args![this]);
+                return;
+            }
+            e.vcall(
+                process,
+                SLOT_SET_ACTORS_ANIMATION,
+                &args![actor, 0x101u32, 1u32],
+            );
+            return;
+        }
+        // The actor stands and the mover is done: it walks to the target.
+        let own = actor_position_words(e, a);
+        e.with_stack(12, |e, goal| {
+            for (i, word) in own.iter().enumerate() {
+                e.mem.set_u32(goal.addr() + i as u32 * 4, *word);
+            }
+            let mut cell = e.call(REFERENCE_PATHING_CELL, &args![actor]).u32();
+            let remaining = e.with_stack(12, |e, difference| {
+                e.call(POINT_DIFFERENCE, &args![target, difference, goal]);
+                e.call(POINT_UNITIZE_GET_LENGTH, &args![difference]).f32()
+            });
+            if f64::from(remaining) > f64::from(radius) + e.global::<f64>(WANDER_EXTRA_DISTANCE)
+                && can_wander
+            {
+                e.vcall(process, SLOT_SET_PROCEDURE_INDEX_RUNNING, &args![0u32]);
+                return;
+            }
+            let own_cell = e.call(REFERENCE_PATHING_CELL, &args![actor]).u32();
+            let indoors = e.call(CELL_FLAG_TEST, &args![own_cell]).bool();
+            if indoors {
+                if at_point {
+                    radius = e.global::<f32>(WANDER_POINT_RADIUS);
+                }
+                e.with_stack(12, |e, difference| {
+                    e.call(POINT_DIFFERENCE, &args![target, difference, goal]);
+                    e.call(POINT_UNITIZE_GET_LENGTH, &args![difference]);
+                });
+                let distance = e.call(ACTOR_DISTANCE_TO_POINT, &args![actor, goal]).f64();
+                if distance <= e.global::<f64>(WANDER_NEAR_DISTANCE) {
+                    wander_request_with_limit(e, target.addr(), cell, radius, goal.addr());
+                }
+            } else {
+                let world = e.call(REFERENCE_GET_WORLD_SPACE, &args![actor]).u32();
+                let handler = e.global::<u32>(DATA_HANDLER_GLOBAL);
+                let x = e.mem.f32(target.addr());
+                let y = e.mem.f32(target.addr() + 4);
+                cell = e
+                    .call(
+                        GET_CELL_FROM_WORLD_COORD,
+                        &args![handler, x, y, world, 0u32],
+                    )
+                    .u32();
+                if cell != 0 {
+                    wander_request_with_limit(e, target.addr(), cell, radius, goal.addr());
+                }
+            }
+            let distance = e.call(ACTOR_DISTANCE_TO_POINT, &args![actor, goal]).f64();
+            if distance <= e.global::<f64>(WANDER_ARRIVED_DISTANCE) {
+                e.mem.set_f32(process + PROCESS_DELAY_TIMER, 0.0);
+            }
+            let delay = e.mem.f32(process + PROCESS_DELAY_TIMER);
+            if f64::from(delay) > e.global::<f64>(WANDER_DELAY_LIMIT) {
+                let frame = e.call(FRAME_TIME, &args![FRAME_TIMER]).f64();
+                e.mem.set_f32(
+                    process + PROCESS_DELAY_TIMER,
+                    (f64::from(delay) - frame) as f32,
+                );
+                return;
+            }
+            let own_cell = e.call(REFERENCE_PATHING_CELL, &args![actor]).u32();
+            let indoors = e.call(CELL_FLAG_TEST, &args![own_cell]).bool();
+            let print_target = !indoors;
+            if !indoors {
+                let length = e.with_stack(12, |e, difference| {
+                    e.call(POINT_DIFFERENCE, &args![goal, difference, target]);
+                    e.call(POINT_LENGTH_FLOAT, &args![difference]).f32()
+                });
+                if radius < length {
+                    let own_cell = e.call(REFERENCE_PATHING_CELL, &args![actor]).u32();
+                    with_close_point_request(e, target.addr(), own_cell, |e, request| {
+                        let limit =
+                            (f64::from(radius) / e.global::<f64>(WANDER_RADIUS_DIVISOR)) as f32;
+                        e.call(CLOSE_POINT_SET_LIMIT, &args![request, limit]);
+                        e.call(CLOSE_POINT_SET_RADIUS, &args![request, radius]);
+                        e.call(CLOSE_POINT_SUBMIT, &args![request, goal]);
+                        // The code then measures goal - target once more into a local
+                        // it never reads again.
+                        e.with_stack(12, |e, difference| {
+                            let sum = e
+                                .call(POINT_DIFFERENCE, &args![goal, difference, target])
+                                .u32();
+                            let words = [e.mem.u32(sum), e.mem.u32(sum + 4), e.mem.u32(sum + 8)];
+                            e.with_stack(12, |e, copy| {
+                                for (i, word) in words.iter().enumerate() {
+                                    e.mem.set_u32(copy.addr() + i as u32 * 4, *word);
+                                }
+                                e.call(POINT_LENGTH_FLOAT, &args![copy]);
+                            });
+                        });
+                    });
+                }
+            }
+            let state = e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32();
+            if state != 0 {
+                if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4
+                    || e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 9
+                {
+                    e.vcall(a, ACTOR_SLOT_0X418, &args![]);
+                } else {
+                    return;
+                }
+            }
+            let world = e.call(REFERENCE_GET_WORLD_SPACE, &args![actor]).u32();
+            let goal_cell = e.call(REFERENCE_PATHING_CELL, &args![actor]).u32();
+            let goal_radius = e.global::<f32>(WANDER_GOAL_RADIUS);
+            if !e
+                .call(
+                    ACTOR_SET_PATHFINDING_GOAL,
+                    &args![actor, goal, goal_cell, world, goal_radius, 0u32],
+                )
+                .bool()
+            {
+                return;
+            }
+            let distance = e.call(ACTOR_DISTANCE_TO_POINT, &args![actor, goal]).f64();
+            if distance < e.global::<f64>(WANDER_FAR_DISTANCE) {
+                e.mem.set_f32(process + PROCESS_DELAY_TIMER, 0.0);
+            } else {
+                let fatigue = e.call(ACTOR_GET_FATIGUE_PERCENTAGE, &args![actor]).f32();
+                let base = e.call(ACTOR_BASE_FORM_BYTE, &args![actor]).u32();
+                let delay = e.call(DELAY_FROM_FATIGUE, &args![base, fatigue]).f32();
+                e.mem.set_f32(process + PROCESS_DELAY_TIMER, delay);
+            }
+            if print_target && e.call(INTERFACE_GET_TARGET_REFERENCE, &args![]).u32() == a {
+                let x = f64::from(e.mem.f32(goal.addr()));
+                let y = f64::from(e.mem.f32(goal.addr() + 4));
+                let name = e.call(REFERENCE_NAME, &args![actor]).u32();
+                e.with_stack(0x134, |e, buffer| {
+                    e.call(
+                        SPRINTF_FUNCTION,
+                        &args![buffer, WANDERING_FORMAT, name, x, y],
+                    );
+                    e.call(CONSOLE_PRINT, &args![buffer]);
+                });
+            }
+        });
+    });
+}
+
+/// `PathingRequestCover::PathingRequestCover` (Xbox PDB, `006e4080`).
+const COVER_REQUEST_CONSTRUCTOR: u32 = 0x006e_4080;
+/// `PathingLocation::PathingLocation` with a world space (Xbox PDB,
+/// `006dcea0`, `this` = the location): `(position, world space)`.
+const PATHING_LOCATION_NEW_IN_WORLD: u32 = 0x006d_cea0;
+/// Setters of the cover request: a float (`006e4340`), a float (`006e4320`),
+/// an integer (`004030d0`), the actor's height (`0051b840`) and sneak height
+/// (`005076c0`), and a flag (`008eeaa0`).
+const COVER_SET_FLOAT_A: u32 = 0x006e_4340;
+const COVER_SET_FLOAT_B: u32 = 0x006e_4320;
+const COVER_SET_INTEGER: u32 = 0x0040_30d0;
+const COVER_SET_HEIGHT: u32 = 0x0051_b840;
+const COVER_SET_SNEAK_HEIGHT: u32 = 0x0050_76c0;
+const COVER_SET_FLAG: u32 = 0x008e_eaa0;
+const ACTOR_GET_SNEAK_HEIGHT: u32 = 0x0088_54d0;
+/// `008eea60` (`this` = an actor): a flag given to the cover request.
+const ACTOR_COVER_FLAG: u32 = 0x008e_ea60;
+/// The array of cover locations: its constructor (`006dae60`), `Clear`
+/// (`006dae90`) and element getter (`009052c0`, `this` = the array,
+/// argument: the index).
+const COVER_ARRAY_CONSTRUCTOR: u32 = 0x006d_ae60;
+const COVER_ARRAY_CLEAR: u32 = 0x006d_ae90;
+const COVER_ARRAY_ELEMENT: u32 = 0x0090_52c0;
+/// Finds the cover (`006d62e0`, cdecl): `(request, array)`.
+const COVER_FIND: u32 = 0x006d_62e0;
+/// A cover location's world space (`00441110`) and cell (`006dd4f0`).
+const COVER_LOCATION_WORLD: u32 = 0x0044_1110;
+const COVER_LOCATION_CELL: u32 = 0x006d_d4f0;
+/// `TESPackage::IsTargetAtSecondLocation` (Xbox PDB, `00677570`): `(actor,
+/// float)`.
+const PACKAGE_IS_TARGET_AT_SECOND_LOCATION: u32 = 0x0067_7570;
+/// The float 1024.0 given to the cover request (`010236e0`), the double 400.0
+/// (`0106b178`) and the setting `011cd55c`: the distance within which the
+/// player's presence is acted on.
+const COVER_REQUEST_FLOAT: u32 = 0x0102_36e0;
+const AMBUSH_LARGE_RADIUS: u32 = 0x0106_b178;
+const AMBUSH_DISTANCE_SETTING: u32 = 0x011c_d55c;
+/// Virtual slot `0x84c` of the process: used for a large package radius.
+const SLOT_AMBUSH_LARGE_RADIUS: u32 = 0x84c;
+/// `bHiding` (+0x458) of the process is `HighProcess::bHiding`.
+const ACTOR_UNKNOWN_BYTE_20C: u32 = 0x20c;
+
+// Translated from 008ee3e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ProcessAmbushWait` (Xbox PDB): the ambush package's per-frame
+/// work for `actor`.
+///
+/// If the actor would attack the player, detects them and the player is
+/// within the setting at `011cd55c`, the actor attacks (actor slot `0x424`),
+/// its byte at +0x125 is cleared and `bHiding` is reset. When the package has
+/// a target, an unset target or one with flag 0x800 sets the target
+/// (`SetTargetForPackage`) when the timer at +0x2e0 has run out (otherwise the
+/// timer counts down); a target with flag 0x20 or one the actor activates is
+/// given up (`SetNeverRun`). If the actor is within the package radius plus
+/// 50.0 of the location it hides: a package that wants cover builds a
+/// `PathingRequestCover`, finds a cover location and sets it as the
+/// pathfinding goal; otherwise a large package radius (above 400.0) is given
+/// to slot `0x84c`. Outside it the procedure index -1 is added. Finally a
+/// target actor at the package's second location with no reason to fight is
+/// attacked or lets the actor end its move. C++ exception states are not
+/// translated.
+pub fn high_process_process_ambush_wait(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) {
+    let process = this.addr();
+    let a = actor.addr();
+    let package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    let (second_position, location_radius, cover_float) = e.with_stack(24, |e, block| {
+        let first = block;
+        let second = Ptr::<()>::new(block.addr() + 12);
+        e.call(PACKAGE_LOCATION_COORD, &args![package, first, actor]);
+        e.call(
+            PACKAGE_SECOND_LOCATION_COORD,
+            &args![package, second, actor],
+        );
+        let cover_float = e.global::<f32>(COVER_REQUEST_FLOAT);
+        let radius = e
+            .call(
+                PACKAGE_RADIUS_ACTOR_TO_LOCATION,
+                &args![package, actor, 0u32],
+            )
+            .f32();
+        (
+            [
+                e.mem.u32(second.addr()),
+                e.mem.u32(second.addr() + 4),
+                e.mem.u32(second.addr() + 8),
+            ],
+            radius,
+            cover_float,
+        )
+    });
+    // The player's detection of the actor.
+    let player = e.global::<u32>(PLAYER_POINTER);
+    let attack = e.with_stack(8, |e, block| {
+        e.mem.set_u32(block.addr(), 0);
+        e.mem.set_u8(block.addr() + 4, 0);
+        let attacks = e
+            .call(
+                ACTOR_GET_SHOULD_ATTACK,
+                &args![actor, player, 0u32, block, 0u32],
+            )
+            .bool();
+        if attacks
+            && e.call(
+                ACTOR_DETECTION_LEVEL,
+                &args![
+                    actor,
+                    0u32,
+                    player,
+                    block.addr() + 4,
+                    0u32,
+                    0u32,
+                    0u32,
+                    0u32
+                ],
+            )
+            .i32()
+                > 0
+        {
+            let distance = e
+                .call(DISTANCE_FROM_REFERENCE, &args![player, actor, 0u32, 0u32])
+                .f64();
+            let setting = e.call(SETTING_VALUE, &args![AMBUSH_DISTANCE_SETTING]).u32();
+            return distance <= f64::from(e.mem.f32(setting));
+        }
+        false
+    });
+    if attack {
+        e.vcall(
+            a,
+            ACTOR_SLOT_COMBAT_CONTROLLER_ATTACK,
+            &args![player, 0u32, 1u32, 1u32, 0u32, 0u32, 1u32, 0u32],
+        );
+        e.call(ACTOR_SET_BYTE_AT_125, &args![actor, 0u32]);
+        e.set(this, HighProcess::bHiding, 0);
+    }
+    if e.call(PACKAGE_TARGET_WORD, &args![package]).u32() != 0 {
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        if target == 0 || e.call(REFERENCE_FLAG_800, &args![target]).bool() {
+            let timer = e.mem.f32(process + PROCESS_WANDER_TIMER);
+            if timer <= 0.0 {
+                e.vcall(process, SLOT_SET_TARGET_FOR_PACKAGE, &args![actor]);
+                if e.mem.u32(process + PROCESS_TARGET) == 0 {
+                    let reset = e.global::<f32>(RADIUS_FLAG_SET);
+                    e.mem.set_f32(process + PROCESS_WANDER_TIMER, reset);
+                }
+            } else {
+                let frame = e.call(FRAME_TIME, &args![FRAME_TIMER]).f64();
+                e.mem.set_f32(
+                    process + PROCESS_WANDER_TIMER,
+                    (f64::from(timer) - frame) as f32,
+                );
+            }
+        } else if e.call(REFERENCE_FLAG_20, &args![target]).bool() {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            if e.call(REFERENCE_FLAG_20, &args![target]).bool() {
+                e.call(PACKAGE_SET_NEVER_RUN, &args![package, target, 1u32]);
+            }
+            e.call(ACTOR_SET_BYTE_AT_125, &args![actor, 0u32]);
+            e.set(this, HighProcess::bHiding, 0);
+            e.vcall(
+                process,
+                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                &args![actor, 2u32],
+            );
+            return;
+        } else if e.vcall(target, ACTOR_SLOT_0X22C, &args![1u32]).bool()
+            && e.mem.u32(process + LOW_ACQUIRE_OBJECT) == 0
+        {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            e.call(PACKAGE_SET_NEVER_RUN, &args![package, target, 1u32]);
+            e.call(ACTOR_SET_BYTE_AT_125, &args![actor, 0u32]);
+            e.set(this, HighProcess::bHiding, 0);
+            return;
+        }
+    }
+    // The distance from the actor to the package's location.
+    let distance = e.with_stack(12, |e, coord| {
+        let point = e
+            .call(PACKAGE_LOCATION_COORD, &args![package, coord, actor])
+            .u32();
+        e.call(ACTOR_DISTANCE_TO_POINT, &args![actor, point]).f32()
+    });
+    let reach = e
+        .call(
+            PACKAGE_RADIUS_ACTOR_TO_LOCATION,
+            &args![package, actor, 0u32],
+        )
+        .f64()
+        + e.global::<f64>(WANDER_FAR_DISTANCE);
+    if !(f64::from(distance) > reach) {
+        if fn_008eea80(e, Ptr::new(package)) {
+            if e.get(this, HighProcess::bHiding) == 0 {
+                ambush_find_cover(
+                    e,
+                    this,
+                    actor,
+                    package,
+                    second_position,
+                    location_radius,
+                    cover_float,
+                );
+            } else {
+                e.call(ACTOR_SET_BYTE_AT_125, &args![actor, 1u32]);
+            }
+        } else {
+            let radius = e
+                .call(
+                    PACKAGE_RADIUS_ACTOR_TO_LOCATION,
+                    &args![package, actor, 0u32],
+                )
+                .f64();
+            if e.global::<f64>(AMBUSH_LARGE_RADIUS) < radius {
+                let radius = e
+                    .call(
+                        PACKAGE_RADIUS_ACTOR_TO_LOCATION,
+                        &args![package, actor, 0u32],
+                    )
+                    .f32();
+                let position = e.vcall(a, ACTOR_SLOT_POSITION, &args![]).u32();
+                e.vcall(
+                    process,
+                    SLOT_AMBUSH_LARGE_RADIUS,
+                    &args![actor, position, radius],
+                );
+            }
+        }
+    } else {
+        e.call(ACTOR_SET_BYTE_AT_125, &args![actor, 0u32]);
+        e.set(this, HighProcess::bHiding, 0);
+        e.vcall(
+            process,
+            SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+            &args![actor, u32::MAX],
+        );
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if target == 0 {
+        return;
+    }
+    let at_second = e
+        .call(
+            PACKAGE_IS_TARGET_AT_SECOND_LOCATION,
+            &args![package, actor, e.global::<f32>(NO_LIMIT_FLOAT)],
+        )
+        .bool();
+    if !at_second {
+        return;
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if !e.vcall(target, ACTOR_SLOT_IS_ACTOR, &args![]).bool() {
+        return;
+    }
+    let player = player_pointer(e);
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if target == player && e.mem.u8(player + ACTOR_UNKNOWN_BYTE_20C) != 0 {
+        return;
+    }
+    if !e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() {
+        travel_end_move_message(e, process, a);
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    let attacks = e.with_stack(4, |e, out| {
+        e.mem.set_u32(out.addr(), 0);
+        e.call(
+            ACTOR_GET_SHOULD_ATTACK,
+            &args![actor, target, 0u32, out, 0u32],
+        )
+        .bool()
+    });
+    if !attacks {
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        e.vcall(
+            a,
+            ACTOR_SLOT_COMBAT_CONTROLLER_ATTACK,
+            &args![target, 0u32, 1u32, 1u32, 0u32, 0u32, 1u32, 0u32],
+        );
+        e.set(this, HighProcess::bHiding, 0);
+        e.call(ACTOR_SET_BYTE_AT_125, &args![actor, 0u32]);
+    }
+}
+
+/// The cover search of `ProcessAmbushWait`: a `PathingRequestCover` for the
+/// package's second location, with the two floats, the integer 200, the
+/// actor's heights and a flag; when a cover location is found its position
+/// is made the pathfinding goal and `bHiding` is set.
+fn ambush_find_cover(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    package: u32,
+    second_position: [u32; 3],
+    location_radius: f32,
+    cover_float: f32,
+) {
+    e.with_stack(0x100, |e, request| {
+        e.call(COVER_REQUEST_CONSTRUCTOR, &args![request]);
+        e.with_stack(0x30, |e, location| {
+            e.with_stack(12, |e, position| {
+                for (i, word) in second_position.iter().enumerate() {
+                    e.mem.set_u32(position.addr() + i as u32 * 4, *word);
+                }
+                let world = e
+                    .call(PACKAGE_SECOND_LOCATION_WORLD, &args![package, actor])
+                    .u32();
+                e.call(
+                    PATHING_LOCATION_NEW_IN_WORLD,
+                    &args![location, position, world],
+                );
+                e.call(CLOSE_POINT_SET_LOCATION, &args![request, location]);
+                e.call(COVER_SET_FLOAT_A, &args![request, cover_float]);
+                e.call(COVER_SET_FLOAT_B, &args![request, location_radius]);
+                e.call(COVER_SET_INTEGER, &args![request, 200u32]);
+                let height = e.call(ACTOR_GET_HEIGHT, &args![actor]).f32();
+                e.call(COVER_SET_HEIGHT, &args![request, height]);
+                let sneak = e.call(ACTOR_GET_SNEAK_HEIGHT, &args![actor, 0u32]).f32();
+                e.call(COVER_SET_SNEAK_HEIGHT, &args![request, sneak]);
+                let flag = e.call(ACTOR_COVER_FLAG, &args![actor]).u8();
+                e.call(COVER_SET_FLAG, &args![request, u32::from(flag)]);
+                e.with_stack(0x10, |e, array| {
+                    e.call(COVER_ARRAY_CONSTRUCTOR, &args![array]);
+                    if e.call(COVER_FIND, &args![request, array]).u32() != 0
+                        && e.call(WORD_AT_8, &args![array]).u32() != 0
+                    {
+                        let cover = e.call(COVER_ARRAY_ELEMENT, &args![array, 0u32]).u32();
+                        let limit = e.global::<f32>(NO_LIMIT_FLOAT);
+                        let world = e.call(COVER_LOCATION_WORLD, &args![cover]).u32();
+                        let cell = e.call(COVER_LOCATION_CELL, &args![cover]).u32();
+                        e.with_stack(12, |e, out| {
+                            let coordinates = e
+                                .call(PATHING_LOCATION_COORDINATES, &args![cover, out])
+                                .u32();
+                            e.call(
+                                ACTOR_SET_PATHFINDING_GOAL,
+                                &args![actor, coordinates, cell, world, limit, 0u32],
+                            );
+                        });
+                        e.set(this, HighProcess::bHiding, 1);
+                    }
+                    e.call(COVER_ARRAY_CLEAR, &args![array]);
+                });
+                e.call(PATHING_LOCATION_DESTRUCTOR, &args![location]);
+            });
+        });
+        e.call(CLOSE_POINT_REQUEST_DESTRUCTOR, &args![request]);
+    });
+}
+
+/// The integer setting at `011cdc8c`: the delay of the take-back timer.
+const TAKE_BACK_TIMER_SETTING: u32 = 0x011c_dc8c;
+/// `ExtraDataList::GetPlayerCrimeList` (Xbox PDB, `0041cf00`).
+const EXTRA_GET_PLAYER_CRIME_LIST: u32 = 0x0041_cf00;
+/// `ExtraDataList::GetMerchantContainer` (Xbox PDB, `00421400`).
+const EXTRA_GET_MERCHANT_CONTAINER: u32 = 0x0042_1400;
+/// `ExtraDataList::GetContainerChanges` (Xbox PDB, `00418520`).
+const EXTRA_GET_CONTAINER_CHANGES: u32 = 0x0041_8520;
+/// `InventoryChanges::RemoveStolenItems` (Xbox PDB, `004cb5f0`, `this` = the
+/// changes): `(from, to, crime word)`.
+const INVENTORY_REMOVE_STOLEN_ITEMS: u32 = 0x004c_b5f0;
+/// `009726e0` (`this` = the `ProcessLists` global, argument: a crime): removes
+/// the crime from the process lists' crime table.
+const PROCESS_LISTS_REMOVE_CRIME: u32 = 0x0097_26e0;
+/// The double 1000.0 (`01017b70`).
+const TAKE_BACK_DISTANCE: u32 = 0x0101_7b70;
+
+// Translated from 008f21f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. A package that has the actor take back what the
+/// player stole (it removes stolen items from the player's container
+/// changes). The actor first stands up (actor slot `0x418` when its state is
+/// not 0) and gets the player as target when it has none. The take-back timer
+/// (`fTakeBackTimer`, +0x448) is set from the setting at `011cdc8c` when it is
+/// -1.0, otherwise reduced by the frame time. Once it is not positive the
+/// actor attacks the player (slot `0x424`). While it runs: without a package,
+/// or when the package's slot `0x144` agrees, the actor greets the player
+/// (`ProcessGreet` with the topic `GetTopic(2, 9)`) and, for every crime of the
+/// player of type 0 or 1, takes the stolen items from the player into the
+/// actor (or its merchant container), removes the crime from the lists and
+/// deletes it; if the greeting is already done it advances the procedure (or
+/// follows the player when the actor's package extra is of type 4). Otherwise
+/// it walks to the player with `ProcessTravel` (animation `0x101`, or `0x201`
+/// beyond 1000.0).
+pub fn fn_008f21f0(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) {
+    let process = this.addr();
+    let a = actor.addr();
+    let player = e.global::<u32>(PLAYER_POINTER);
+    let package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() != 0 {
+        e.vcall(a, ACTOR_SLOT_0X418, &args![]);
+    }
+    if e.mem.u32(process + PROCESS_TARGET) == 0 {
+        e.vcall(process, SLOT_SET_TARGET, &args![player]);
+    }
+    let timer = e.get(this, HighProcess::fTakeBackTimer);
+    if timer == -1.0 {
+        let setting = e.call(SETTING_VALUE, &args![TAKE_BACK_TIMER_SETTING]).u32();
+        let value = e.mem.f32(setting);
+        e.set(this, HighProcess::fTakeBackTimer, value);
+    } else {
+        let frame = e.call(FRAME_TIME, &args![FRAME_TIMER]).f64();
+        e.set(
+            this,
+            HighProcess::fTakeBackTimer,
+            (f64::from(timer) - frame) as f32,
+        );
+    }
+    let timer = e.get(this, HighProcess::fTakeBackTimer);
+    if timer <= 0.0 {
+        e.vcall(
+            a,
+            ACTOR_SLOT_COMBAT_CONTROLLER_ATTACK,
+            &args![player, 0u32, 1u32, 0u32, 0u32, 0u32, 1u32, 0u32],
+        );
+        return;
+    }
+    if package == 0
+        || e.vcall(package, PACKAGE_SLOT_0X144, &args![actor, 0u32])
+            .bool()
+    {
+        if e.vcall(process, SLOT_GET_CURRENT_ACTION_COMPLETE_DIALOGUE, &args![])
+            .bool()
+        {
+            let extra_list = e.call(REFERENCE_EXTRA_DATA, &args![actor]).u32();
+            let package_extra = e.call(EXTRA_GET_PACKAGE, &args![extra_list]).u32();
+            if package_extra == 0 || e.call(PACKAGE_TYPE, &args![package_extra]).u32() != 4 {
+                travel_add_procedure(e, process, a);
+            } else {
+                e.vcall(process, SLOT_SET_TARGET, &args![player]);
+                e.vcall(
+                    process,
+                    SLOT_PROCESS_FOLLOW,
+                    &args![actor, 0u32, 0x101u32, 0u32],
+                );
+            }
+            return;
+        }
+        e.vcall(process, SLOT_SET_CURRENT_ACTION_COMPLETE, &args![1u32]);
+        let player_position = e.vcall(player, ACTOR_SLOT_POSITION, &args![]).u32();
+        let words = [
+            e.mem.u32(player_position),
+            e.mem.u32(player_position + 4),
+            e.mem.u32(player_position + 8),
+        ];
+        e.call(
+            ACTOR_REQUEST_TURN_TO,
+            &args![actor, words[0], words[1], words[2], 0u32],
+        );
+        let topic = e.call(GET_TOPIC, &args![2u32, 9u32]).u32();
+        e.call(REFERENCE_SET_WORD_AT_70, &args![actor, player]);
+        let own_process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+        e.vcall(
+            own_process,
+            SLOT_PROCESS_GREET,
+            &args![actor, topic, 0u32, 0u32, 1u32, 0u32],
+        );
+        e.set(this, HighProcess::bActivateAnim, 1);
+        let form = e.call(REFERENCE_GET_FORM, &args![player]).u32();
+        e.call(FIND_SPECIAL_IDLE_TO_PLAY, &args![this, actor, form, player]);
+        // The player's crimes of type 0 or 1 are settled one by one.
+        let extra_list = e.call(REFERENCE_EXTRA_DATA, &args![actor]).u32();
+        let mut list = e
+            .call(EXTRA_GET_PLAYER_CRIME_LIST, &args![extra_list])
+            .u32();
+        while list != 0 && {
+            let slot = e.call(NODE_ITEM_ADDRESS, &args![list]).u32();
+            e.mem.u32(slot) != 0
+        } {
+            let slot = e.call(NODE_ITEM_ADDRESS, &args![list]).u32();
+            let crime = e.mem.u32(slot);
+            let settles = crime != 0
+                && (e.call(NODE_NEXT, &args![crime]).u32() == 0
+                    || e.call(NODE_NEXT, &args![crime]).u32() == 1);
+            if !settles {
+                list = e.call(NODE_NEXT, &args![list]).u32();
+                continue;
+            }
+            let extra_list = e.call(REFERENCE_EXTRA_DATA, &args![actor]).u32();
+            let merchant = e
+                .call(EXTRA_GET_MERCHANT_CONTAINER, &args![extra_list])
+                .u32();
+            let holder = if merchant != 0 {
+                let extra_list = e.call(REFERENCE_EXTRA_DATA, &args![actor]).u32();
+                e.call(EXTRA_GET_MERCHANT_CONTAINER, &args![extra_list])
+                    .u32()
+            } else {
+                a
+            };
+            let crime_word = e.call(CRIME_WORD_AT_24, &args![crime]).u32();
+            let player_extra = e.call(REFERENCE_EXTRA_DATA, &args![player]).u32();
+            let changes = e
+                .call(EXTRA_GET_CONTAINER_CHANGES, &args![player_extra])
+                .u32();
+            e.call(
+                INVENTORY_REMOVE_STOLEN_ITEMS,
+                &args![changes, player, holder, crime_word],
+            );
+            e.with_stack(4, |e, holder_word| {
+                e.mem.set_u32(holder_word.addr(), crime);
+                e.call(LIST_REMOVE_ITEM, &args![list, holder_word]);
+            });
+            e.call(
+                PROCESS_LISTS_REMOVE_CRIME,
+                &args![PROCESS_LISTS_GLOBAL, crime],
+            );
+            if crime != 0 {
+                fn_008f25e0(e, Ptr::new(crime), 1);
+            }
+            let extra_list = e.call(REFERENCE_EXTRA_DATA, &args![actor]).u32();
+            list = e
+                .call(EXTRA_GET_PLAYER_CRIME_LIST, &args![extra_list])
+                .u32();
+        }
+        return;
+    }
+    let distance = e
+        .call(DISTANCE_FROM_REFERENCE, &args![actor, player, 0u32, 0u32])
+        .f64();
+    let animation = if distance <= e.global::<f64>(TAKE_BACK_DISTANCE) {
+        0x101u32
+    } else {
+        0x201u32
+    };
+    e.vcall(
+        process,
+        SLOT_PROCESS_TRAVEL,
+        &args![actor, 0u32, 0u32, animation, 0u32],
+    );
+}
+
+/// `00962720` (`this` = the player, argument: an actor): whether the actor is
+/// in the player's list (a follower or similar).
+const PLAYER_KNOWS_ACTOR: u32 = 0x0096_2720;
+/// `00962620` (`this` = the player): how many such actors the player has.
+const PLAYER_ACTOR_COUNT: u32 = 0x0096_2620;
+/// The integer setting at `011cdad0`: the most such actors allowed.
+const PLAYER_ACTOR_LIMIT_SETTING: u32 = 0x011c_dad0;
+/// `00674f30` (`this` = a package, one byte): clears or sets the package's
+/// flag 0x10000.
+const PACKAGE_SET_FLAG_10000: u32 = 0x0067_4f30;
+/// `00546ca0` (`this` = a cell, argument: an actor): whether the actor may
+/// be there (the cell has an owner the actor is not).
+const CELL_ACTOR_CHECK: u32 = 0x0054_6ca0;
+/// `TESPackage::GetPackageRadiusActorToRefTarget` (Xbox PDB, `006787e0`):
+/// `(actor, 0)`, a float in `ST0`.
+const PACKAGE_RADIUS_ACTOR_TO_REF_TARGET: u32 = 0x0067_87e0;
+
+// Translated from 008f31d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ProcessFollowOneHour` (Xbox PDB): the one-hour version of
+/// `ProcessFollow` for `actor` (the second argument is not read; `end` asks
+/// that the procedure index be advanced where the code gives up). Returns
+/// false on every path. Without a package nothing happens. A package with
+/// the flag 0x10000 stops at once when the player already has this actor
+/// (`00962720`) or too many such actors (the setting at `011cdad0`),
+/// otherwise the flag is cleared. A missing target is requested; a missing,
+/// flagged (0x20, 0x800) or unusable target ends the procedure (with a
+/// `SetNeverRun` for the first two kinds when it is flagged 0x20 or the target
+/// refuses via its slot `0x22c`). A package that is created clears the
+/// current package and re-checks for a new one. Otherwise the actor is sent
+/// toward the target (`SetPathfindingGoal` to the package location with the
+/// radius to the target) when it is farther than that radius, unless the
+/// target is the player and the actor is already pathing.
+pub fn fn_008f31d0(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    _unused: u32,
+    end: u8,
+) -> bool {
+    let process = this.addr();
+    let a = actor.addr();
+    let package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    if package == 0 {
+        return false;
+    }
+    if e.call(PACKAGE_FLAG_10000, &args![package]).bool() {
+        let player = e.global::<u32>(PLAYER_POINTER);
+        if e.call(PLAYER_KNOWS_ACTOR, &args![player, actor]).bool() {
+            return false;
+        }
+        let count = e.call(PLAYER_ACTOR_COUNT, &args![player]).i32();
+        let limit_pointer = e
+            .call(SETTING_INTEGER_POINTER, &args![PLAYER_ACTOR_LIMIT_SETTING])
+            .u32();
+        if count >= e.mem.i32(limit_pointer) {
+            return false;
+        }
+        e.call(PACKAGE_SET_FLAG_10000, &args![package, 0u32]);
+    }
+    if e.mem.u32(process + PROCESS_TARGET) == 0 {
+        e.vcall(process, SLOT_SET_TARGET_FOR_PACKAGE, &args![actor]);
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if target == 0 {
+        if end != 0 {
+            travel_add_procedure(e, process, a);
+        }
+        return false;
+    }
+    if e.call(REFERENCE_FLAG_20, &args![target]).bool()
+        || e.call(REFERENCE_FLAG_800, &args![target]).bool()
+    {
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        if e.call(REFERENCE_FLAG_20, &args![target]).bool() {
+            e.call(PACKAGE_SET_NEVER_RUN, &args![package, target, 1u32]);
+        }
+        if end != 0 {
+            travel_add_procedure(e, process, a);
+        }
+        return false;
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if e.vcall(target, ACTOR_SLOT_0X22C, &args![1u32]).bool() {
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        e.call(PACKAGE_SET_NEVER_RUN, &args![package, target, 1u32]);
+        return false;
+    }
+    let mut accept = e.mem.u32(process + PROCESS_TARGET) == 0;
+    if !accept {
+        let location = e.call(PACKAGE_LOCATION_WORD, &args![package]).u32();
+        if location != 0 {
+            let location = e.call(PACKAGE_LOCATION_WORD, &args![package]).u32();
+            if e.call(PACKAGE_LOCATION_TYPE, &args![location]).i32() < 2
+                && dialogue_first_search(e, package, a)
+            {
+                accept = true;
+            }
+        }
+    }
+    if accept {
+        if end != 0 {
+            travel_add_procedure(e, process, a);
+        }
+        if e.call(PACKAGE_GET_IS_CREATED, &args![package]).bool() {
+            e.vcall(process, SLOT_CLEAR_CURRENT_PACKAGE, &args![]);
+            e.vcall(process, SLOT_CHECK_FOR_NEW_PACKAGE, &args![actor, 0u32]);
+            return false;
+        }
+    }
+    if e.call(PACKAGE_GET_IS_CREATED, &args![package]).bool() {
+        let current = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+        if current != 0 {
+            let cell = e.call(REFERENCE_PATHING_CELL, &args![actor]).u32();
+            if e.call(PACKAGE_FLAG_200, &args![current]).bool()
+                && e.call(PACKAGE_FLAG_1, &args![current]).bool()
+                && cell != 0
+                && e.call(CELL_ACTOR_CHECK, &args![cell, actor]).bool()
+            {
+                let target = e.mem.u32(process + PROCESS_TARGET);
+                if e.call(
+                    ACTOR_LINE_OF_SIGHT,
+                    &args![actor, 0u32, target, 1u32, 0u32, 0u32],
+                )
+                .bool()
+                {
+                    travel_end_move_message(e, process, a);
+                    return false;
+                }
+            }
+        }
+    }
+    let radius = e
+        .call(
+            PACKAGE_RADIUS_ACTOR_TO_REF_TARGET,
+            &args![package, actor, 0u32],
+        )
+        .f32();
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if target != 0 {
+        let distance = e
+            .call(DISTANCE_FROM_REFERENCE, &args![actor, target, 0u32, 0u32])
+            .f64();
+        if f64::from(radius) < distance {
+            if target == player_pointer(e) && e.call(ACTOR_IS_PATHING, &args![actor]).bool() {
+                return false;
+            }
+            let world = e.call(PACKAGE_LOCATION_WORLD, &args![package, actor]).u32();
+            let cell = e.call(PACKAGE_LOCATION_CELL, &args![package, actor]).u32();
+            let coord = e.with_stack(12, |e, buffer| {
+                e.call(PACKAGE_LOCATION_COORD, &args![package, buffer, actor])
+                    .u32()
+            });
+            e.call(
+                ACTOR_SET_PATHFINDING_GOAL,
+                &args![actor, coord, cell, world, radius, 0u32],
+            );
+        }
+    }
+    false
+}
+
+/// Float 100.0 (`01016410`): the radius of the wander goal of `008f36c0`.
+const WANDER_GOAL_RADIUS_FAR: u32 = 0x0101_6410;
+/// Virtual slot `0x2ac` of the process: `ProcessGetUpOneHour` (Xbox PDB).
+const SLOT_PROCESS_GET_UP_ONE_HOUR: u32 = 0x2ac;
+
+// Translated from 008f36c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. A one-hour wander step (the sibling of
+/// `ProcessWander`): returns false on every path. If the actor has no cell, or
+/// the process has no package, nothing happens. A package whose procedure
+/// type is not 1 adds the procedure index -1. The package's location
+/// coordinate is the target; the cell is the actor's, or looked up from the
+/// coordinate (`GetCellFromWorldCoord`) when the actor has none. A
+/// `PathingRequestClosePoint` to that point (limit 32.0, radius the package's
+/// distance number for the actor) is submitted into the position, a standing
+/// actor (state not 0) is told to get up (`ProcessGetUpOneHour`, slot
+/// `0x2ac`), and `SetPathfindingGoal` goes to the position with the radius
+/// 100.0; the console line of `ProcessWander` is printed when the actor is the
+/// console's target. The second stack argument is not read.
+pub fn fn_008f36c0(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr, _unused: u32) -> bool {
+    let process = this.addr();
+    let a = actor.addr();
+    if e.call(REFERENCE_PATHING_CELL, &args![actor]).u32() == 0 {
+        return false;
+    }
+    let package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    if package == 0 {
+        return false;
+    }
+    if e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32() != 1 {
+        e.vcall(
+            process,
+            SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+            &args![actor, u32::MAX],
+        );
+    }
+    e.with_stack(12, |e, position| {
+        e.call(PACKAGE_LOCATION_COORD, &args![package, position, actor]);
+        let mut cell = e.call(REFERENCE_PATHING_CELL, &args![actor]).u32();
+        if cell == 0 {
+            let world = e.call(REFERENCE_GET_WORLD_SPACE, &args![actor]).u32();
+            let handler = e.global::<u32>(DATA_HANDLER_GLOBAL);
+            let x = e.mem.f32(position.addr());
+            let y = e.mem.f32(position.addr() + 4);
+            cell = e
+                .call(
+                    GET_CELL_FROM_WORLD_COORD,
+                    &args![handler, x, y, world, 0u32],
+                )
+                .u32();
+        }
+        with_close_point_request(e, position.addr(), cell, |e, request| {
+            let limit = e.global::<f32>(WANDER_LIMIT_FLOAT);
+            e.call(CLOSE_POINT_SET_LIMIT, &args![request, limit]);
+            let distance = e
+                .call(PACKAGE_DISTANCE_FOR_ACTOR, &args![package, actor])
+                .u32();
+            let radius = f64::from(distance) as f32;
+            e.call(CLOSE_POINT_SET_RADIUS, &args![request, radius]);
+            e.call(CLOSE_POINT_SUBMIT, &args![request, position]);
+            if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() != 0 {
+                e.vcall(process, SLOT_PROCESS_GET_UP_ONE_HOUR, &args![actor]);
+            }
+            let goal_radius = e.global::<f32>(WANDER_GOAL_RADIUS_FAR);
+            let goal_cell = e.call(REFERENCE_PATHING_CELL, &args![actor]).u32();
+            let world = e.call(REFERENCE_GET_WORLD_SPACE, &args![actor]).u32();
+            e.call(
+                ACTOR_SET_PATHFINDING_GOAL,
+                &args![actor, position, goal_cell, world, goal_radius, 0u32],
+            );
+            if e.call(INTERFACE_GET_TARGET_REFERENCE, &args![]).u32() == a {
+                let x = f64::from(e.mem.f32(position.addr()));
+                let y = f64::from(e.mem.f32(position.addr() + 4));
+                let name = e.call(REFERENCE_NAME, &args![actor]).u32();
+                e.with_stack(0x134, |e, buffer| {
+                    e.call(
+                        SPRINTF_FUNCTION,
+                        &args![buffer, WANDERING_FORMAT, name, x, y],
+                    );
+                    e.call(CONSOLE_PRINT, &args![buffer]);
+                });
+            }
+        });
+    });
+    false
+}
+
+/// `00568e50` (`this` = a reference): its linked-door extra data, or 0.
+const REFERENCE_LINKED_DOOR_EXTRA: u32 = 0x0056_8e50;
+/// The integer setting at `011cde98`: how close to the door position counts
+/// as arrived.
+const ACTIVATE_DOOR_DISTANCE_SETTING: u32 = 0x011c_de98;
+/// `PlayerCharacter::IsSleepingorResting` (Xbox PDB, `0094df60`).
+const PLAYER_IS_SLEEPING_OR_RESTING: u32 = 0x0094_df60;
+/// `005c1a00` (`this` = the player): stores a word at +0x654 and a byte at
+/// +0x658 (the sleeping/resting state).
+const PLAYER_SET_SLEEP_STATE: u32 = 0x005c_1a00;
+/// `MobileObject::GetCurrentProcessType` (Xbox PDB, `00931850`).
+const MOBILE_GET_CURRENT_PROCESS_TYPE: u32 = 0x0093_1850;
+/// Virtual slot `0x4ec` of the process: `SetTargetActivated` (Xbox PDB).
+const SLOT_SET_TARGET_ACTIVATED: u32 = 0x4ec;
+/// Virtual slot `0x148` of a package: asked with `(actor, 300)`.
+const PACKAGE_SLOT_0X148: u32 = 0x148;
+/// The number of items still to activate (`iNumberItemsActivate`, +0x58 of
+/// the process).
+const PROCESS_NUMBER_ITEMS_ACTIVATE: u32 = 0x58;
+
+/// The arrival test of `ProcessActivateOneHour` for a target with a linked
+/// door: the distance from the actor to the door's teleport position must not
+/// exceed the setting at `011cde98`.
+fn activate_one_hour_door_arrived(e: &mut Engine, actor: Ptr, target: u32) -> bool {
+    let position = e.vcall(actor.addr(), ACTOR_SLOT_POSITION, &args![]).u32();
+    let door = e.call(LINKED_DOOR_TELEPORT_POSITION, &args![target]).u32();
+    let distance = e.with_stack(12, |e, difference| {
+        e.call(POINT_DIFFERENCE, &args![door, difference, position]);
+        e.call(POINT_LENGTH_FLOAT, &args![difference]).f64()
+    });
+    let setting = e
+        .call(
+            SETTING_INTEGER_POINTER,
+            &args![ACTIVATE_DOOR_DISTANCE_SETTING],
+        )
+        .u32();
+    distance <= f64::from(e.mem.i32(setting))
+}
+
+/// The activation of the target with the acquire object's item and count
+/// (`TESObjectREFR::Activate(actor, 1, item, count)`), after which the
+/// process drops the acquire object, counts one item off and clears its
+/// target.
+fn activate_one_hour_use_item(e: &mut Engine, process: u32, actor: Ptr, target: u32) {
+    let entry = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
+    let item = e.mem.u32(entry + 4);
+    let count = e.mem.u32(entry + 0xc);
+    e.call(REFERENCE_ACTIVATE, &args![target, actor, 1u32, item, count]);
+    let remaining = e
+        .mem
+        .i32(process + PROCESS_NUMBER_ITEMS_ACTIVATE)
+        .wrapping_sub(1);
+    e.mem
+        .set_i32(process + PROCESS_NUMBER_ITEMS_ACTIVATE, remaining);
+    let acquire = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
+    if acquire != 0 {
+        e.call(ACQUIRE_OBJECT_DELETE, &args![acquire, 1u32]);
+    }
+    e.mem.set_u32(process + LOW_ACQUIRE_OBJECT, 0);
+    e.vcall(process, SLOT_SET_TARGET, &args![0u32]);
+}
+
+// Translated from 008f3940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ProcessActivateOneHour` (Xbox PDB): the one-hour version of
+/// `ProcessActivate` for `actor` (the second stack argument is not read).
+/// Returns true only when the target was activated and the procedure
+/// advanced. Without a package nothing happens. The actor ends its move when
+/// not pathing, a missing target is requested (and the procedure advanced
+/// without one), a target refusing via its slot `0x22c` with no acquire
+/// object, or one flagged 0x20/0x800, ends the procedure (`SetNeverRun` for
+/// the first and the 0x20 kind). A package of type 9 whose slot `0x148`
+/// refuses adds -1. If the actor has not arrived (a linked door's teleport
+/// position within the setting at `011cde98`, else the package's slot
+/// `0x144`) and its move is not done, it is sent to the target (`ProcessGetUp
+/// OneHour` when standing, then `SetPathfindingGoal` with the package's
+/// radius) and the arrival test is repeated unless its process type is set.
+/// Once arrived: a target that is not an actor is activated (with the
+/// acquire object's item and count when there is one), the item count is
+/// decremented and the procedure advanced (2 for procedure type `0x1a`
+/// without a next entry, else 1); an actor target is dealt with by state: a
+/// sleeping player is woken (procedure -2), an acquire object of the right
+/// kind is activated, or combat is started (`EnterCombat`, slot `0x33c`).
+pub fn high_process_process_activate_one_hour(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    _unused: u32,
+) -> bool {
+    let process = this.addr();
+    let a = actor.addr();
+    let package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    let arrived;
+    if package == 0 {
+        return false;
+    }
+    if !e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() {
+        travel_end_move_message(e, process, a);
+    }
+    if e.mem.u32(process + PROCESS_TARGET) == 0 {
+        e.vcall(process, SLOT_SET_TARGET_FOR_PACKAGE, &args![actor]);
+    }
+    if e.mem.u32(process + PROCESS_TARGET) == 0 {
+        travel_add_procedure(e, process, a);
+        return false;
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if e.vcall(target, ACTOR_SLOT_0X22C, &args![1u32]).bool()
+        && e.mem.u32(process + LOW_ACQUIRE_OBJECT) == 0
+    {
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        e.call(PACKAGE_SET_NEVER_RUN, &args![package, target, 1u32]);
+        return false;
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if e.call(REFERENCE_FLAG_20, &args![target]).bool()
+        || e.call(REFERENCE_FLAG_800, &args![target]).bool()
+    {
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        if e.call(REFERENCE_FLAG_20, &args![target]).bool() {
+            e.call(PACKAGE_SET_NEVER_RUN, &args![package, target, 1u32]);
+        }
+        travel_add_procedure(e, process, a);
+        return false;
+    }
+    if e.call(PACKAGE_TYPE, &args![package]).u32() == 9
+        && !e
+            .vcall(package, PACKAGE_SLOT_0X148, &args![actor, 300u32])
+            .bool()
+    {
+        e.vcall(
+            process,
+            SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+            &args![actor, u32::MAX],
+        );
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if e.call(REFERENCE_LINKED_DOOR_EXTRA, &args![target]).u32() != 0 {
+        arrived = activate_one_hour_door_arrived(e, actor, target);
+    } else {
+        arrived = e
+            .vcall(package, PACKAGE_SLOT_0X144, &args![actor, 0u32])
+            .bool();
+    }
+    let mut arrived = arrived;
+    if !arrived && !e.call(PROCESS_MOVEMENT_DONE, &args![this, actor]).bool() {
+        if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() != 0 {
+            e.vcall(process, SLOT_PROCESS_GET_UP_ONE_HOUR, &args![actor]);
+        }
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        let destination = if e.call(REFERENCE_LINKED_DOOR_EXTRA, &args![target]).u32() == 0 {
+            let position = e.vcall(target, ACTOR_SLOT_POSITION, &args![]).u32();
+            [
+                e.mem.u32(position),
+                e.mem.u32(position + 4),
+                e.mem.u32(position + 8),
+            ]
+        } else {
+            let position = e.call(LINKED_DOOR_TELEPORT_POSITION, &args![target]).u32();
+            [
+                e.mem.u32(position),
+                e.mem.u32(position + 4),
+                e.mem.u32(position + 8),
+            ]
+        };
+        let radius = e
+            .call(
+                PACKAGE_RADIUS_ACTOR_TO_REF_TARGET,
+                &args![package, actor, 0u32],
+            )
+            .f32();
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        let world = e.call(REFERENCE_GET_WORLD_SPACE, &args![target]).u32();
+        let cell = e.call(REFERENCE_PATHING_CELL, &args![target]).u32();
+        e.with_stack(12, |e, block| {
+            for (i, word) in destination.iter().enumerate() {
+                e.mem.set_u32(block.addr() + i as u32 * 4, *word);
+            }
+            e.call(
+                ACTOR_SET_PATHFINDING_GOAL,
+                &args![actor, block, cell, world, radius, 0u32],
+            );
+        });
+        if e.call(MOBILE_GET_CURRENT_PROCESS_TYPE, &args![actor]).i32() != 0 {
+            return false;
+        }
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        arrived = if e.call(REFERENCE_LINKED_DOOR_EXTRA, &args![target]).u32() == 0 {
+            e.vcall(package, PACKAGE_SLOT_0X144, &args![actor, 0u32])
+                .bool()
+        } else {
+            activate_one_hour_door_arrived(e, actor, target)
+        };
+    }
+    if !arrived {
+        return false;
+    }
+    if e.call(PROCESS_MOVEMENT_DONE, &args![this, actor]).bool()
+        && e.call(PACKAGE_FLAG_4, &args![package]).bool()
+    {
+        return false;
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if !e.vcall(target, ACTOR_SLOT_IS_ACTOR, &args![]).bool() {
+        e.vcall(process, SLOT_SET_TARGET_ACTIVATED, &args![1u32]);
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        if e.mem.u32(process + LOW_ACQUIRE_OBJECT) == 0 {
+            e.call(REFERENCE_ACTIVATE, &args![target, actor, 0u32, 0u32, 1u32]);
+            travel_add_procedure(e, process, a);
+            return true;
+        }
+        activate_one_hour_use_item(e, process, actor, target);
+        if e.mem.i32(process + PROCESS_NUMBER_ITEMS_ACTIVATE) < 1 {
+            let list = e.call(PACKAGE_LIST_AT_38, &args![package]).u32();
+            if e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32() == 0x1a
+                && e.call(NODE_NEXT, &args![list]).u32() == 0
+            {
+                e.vcall(
+                    process,
+                    SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                    &args![actor, 2u32],
+                );
+            } else {
+                travel_add_procedure(e, process, a);
+            }
+            return true;
+        }
+        return false;
+    }
+    let player = e.global::<u32>(PLAYER_POINTER);
+    if target == player
+        && e.call(PLAYER_IS_SLEEPING_OR_RESTING, &args![player]).bool()
+        && e.mem.u8(player + ACTOR_UNKNOWN_BYTE_20C) == 0
+    {
+        e.call(PLAYER_SET_SLEEP_STATE, &args![player, 0u32, 1u32]);
+        e.vcall(
+            process,
+            SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+            &args![actor, (-2i32) as u32],
+        );
+        return false;
+    }
+    let acquire = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
+    if acquire == 0 {
+        if target != player_pointer(e) {
+            e.vcall(
+                process,
+                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                &args![actor, 2u32],
+            );
+        }
+        return false;
+    }
+    let refuses = e.vcall(target, ACTOR_SLOT_0X22C, &args![0u32]).bool();
+    let acquire = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
+    if refuses || e.mem.u8(acquire + 8) != 0 {
+        activate_one_hour_use_item(e, process, actor, target);
+    } else {
+        let acquire = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
+        if e.mem.u8(acquire + 9) != 0 {
+            e.vcall(
+                process,
+                SLOT_ENTER_COMBAT,
+                &args![
+                    actor, target, 0u32, 0u32, 0u32, 0u32, 1u32, 0u32, 1u32, 0u32, 0u32, 1u32, 0u32
+                ],
+            );
+        }
+    }
+    if e.mem.i32(process + PROCESS_NUMBER_ITEMS_ACTIVATE) <= 0 {
+        e.vcall(
+            process,
+            SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+            &args![actor, 2u32],
+        );
+    }
+    false
+}
+
+/// The integer-scaled settings the acquire distance of an escorted actor uses
+/// (`011cdbac` indoors, `011cd82c` per unit).
+const ESCORT_INDOOR_DISTANCE_SETTING: u32 = 0x011c_dbac;
+const ESCORT_DISTANCE_PER_UNIT_SETTING: u32 = 0x011c_d82c;
+
+// Translated from 008f2610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the one-hour version of `ProcessEscort`
+/// (`008dfa10`) for `actor` (the second stack argument is not read). It
+/// returns false on every path.
+///
+/// Without a running package nothing happens. Without an inventory entry
+/// (`008a2d40`) the process first gets a target for the package and, when it is
+/// not an actor that is carrying the item, only procedure 1 is added to the
+/// running ones and the movement ended. An escorted actor (the process target,
+/// an actor other than `actor`) whose current package is neither type 1 nor a
+/// created one (unless it is the player) ends the escort
+/// (`SetProcedureIndexRunning(0)`). The distance to keep from the escorted
+/// actor is the package target's number (at least 1; 200 if less) scaled by a
+/// setting, or the number itself for the player. When the package's location
+/// exists and its search (slot `0x13c`) succeeds: with no escorted actor the
+/// inventory item is handed over to the container (`00892e90`) or to the
+/// actor's slot `0x3cc` (and for object types 12 and 19 to 23 the following
+/// objects to acquire are, and the worn items set up), then
+/// `SetCurrentActionComplete(1)` and procedure 1; with an escorted actor that
+/// is near enough, the escort ends for the escorted actor too. Without a
+/// location the actor is stopped (for the player) or sent to the package
+/// location with `SetPathfindingGoal`. The two zero-initialised local
+/// vectors the original compares with each other are read here as zero vectors.
+pub fn fn_008f2610(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr, _unused: u32) -> bool {
+    let process = this.addr();
+    let a = actor.addr();
+    let package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    if package == 0 {
+        return false;
+    }
+    let mut item = e.call(ACTOR_PACKAGE_ITEM, &args![actor]).u32();
+    if item == 0 {
+        let mut stop = false;
+        let target = e.mem.u32(process + LOW_TARGET);
+        if target != 0 {
+            if e.vcall(target, ACTOR_SLOT_IS_ACTOR, &args![]).bool() {
+                stop = true;
+            } else {
+                let word = e.call(WORD_AT_0XC, &args![target]).u32();
+                if e.call(REFERENCE_HOLDS_OBJECT, &args![actor, word]).bool() {
+                    stop = true;
+                }
+            }
+        }
+        if !stop {
+            e.vcall(process, SLOT_SET_TARGET_FOR_PACKAGE, &args![actor]);
+            let target = e.mem.u32(process + LOW_TARGET);
+            if target != 0 {
+                if e.vcall(target, ACTOR_SLOT_IS_ACTOR, &args![]).bool() {
+                    stop = true;
+                } else {
+                    let word = e.call(WORD_AT_0XC, &args![target]).u32();
+                    if e.call(REFERENCE_HOLDS_OBJECT, &args![actor, word]).bool() {
+                        stop = true;
+                    }
+                }
+            }
+            if !stop {
+                e.vcall(
+                    process,
+                    SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                    &args![actor, 1u32],
+                );
+                if !e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() {
+                    e.vcall(process, SLOT_END_MOVE_MESSAGE, &args![actor]);
+                }
+                return false;
+            }
+        }
+    }
+    let entry = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
+    if item == 0 && entry != 0 && e.mem.u32(entry) == a {
+        let object = e.mem.u32(entry + 4);
+        item = e
+            .call(REFERENCE_GET_INVENTORY_ITEM, &args![actor, object, 0u32])
+            .u32();
+    }
+    let mut has_escorted = false;
+    let target = e.mem.u32(process + LOW_TARGET);
+    if target != 0 && e.vcall(target, ACTOR_SLOT_IS_ACTOR, &args![]).bool() && target != a {
+        has_escorted = true;
+        let target_process = e.call(ACTOR_PROCESS, &args![target]).u32();
+        let target_package = e
+            .vcall(target_process, SLOT_GET_CURRENT_PACKAGE, &args![])
+            .u32();
+        if target != player_pointer(e)
+            && (target_package == 0
+                || (e.call(PACKAGE_TYPE, &args![target_package]).i32() != 1
+                    && !e
+                        .call(PACKAGE_GET_IS_CREATED, &args![target_package])
+                        .bool()))
+        {
+            e.vcall(process, SLOT_SET_PROCEDURE_INDEX_RUNNING, &args![0u32]);
+            return false;
+        }
+    }
+    // Everything from here works on `reach`, the vector from the target to
+    // the actor, and the distance to keep (`radius`).
+    let own_position = actor_position_words(e, a);
+    let mut vector = own_position;
+    if has_escorted {
+        let target = e.mem.u32(process + LOW_TARGET);
+        let target_position = e.vcall(target, ACTOR_SLOT_POSITION, &args![]).u32();
+        let own = e.vcall(a, ACTOR_SLOT_POSITION, &args![]).u32();
+        vector = e.with_stack(12, |e, difference| {
+            let result = e
+                .call(POINT_DIFFERENCE, &args![own, difference, target_position])
+                .u32();
+            [
+                e.mem.u32(result),
+                e.mem.u32(result + 4),
+                e.mem.u32(result + 8),
+            ]
+        });
+    }
+    let mut radius = 0.0f32;
+    if has_escorted {
+        let target_word = e.call(PACKAGE_TARGET_WORD, &args![package]).u32();
+        let mut number = e.call(WORD_AT_8, &args![target_word]).i32();
+        if number < 1 {
+            number = 200;
+        }
+        let target = e.mem.u32(process + LOW_TARGET);
+        if target == player_pointer(e) {
+            radius = number as f32;
+        } else {
+            let own_cell = e.call(REFERENCE_PATHING_CELL, &args![actor]).u32();
+            if own_cell != 0 && {
+                let own_cell = e.call(REFERENCE_PATHING_CELL, &args![actor]).u32();
+                e.call(CELL_FLAG_TEST, &args![own_cell]).bool()
+            } {
+                let setting = e
+                    .call(SETTING_VALUE, &args![ESCORT_INDOOR_DISTANCE_SETTING])
+                    .u32();
+                radius = e.mem.f32(setting);
+            } else {
+                let setting = e
+                    .call(SETTING_VALUE, &args![ESCORT_DISTANCE_PER_UNIT_SETTING])
+                    .u32();
+                radius = (f64::from(e.mem.f32(setting)) * f64::from(number)) as f32;
+            }
+        }
+    }
+    let package_location = e.call(PACKAGE_LOCATION_WORD, &args![package]).u32();
+    if package_location != 0 && dialogue_first_search(e, package, a) {
+        if !has_escorted {
+            let package_target = e.call(PACKAGE_TARGET_WORD, &args![package]).u32();
+            if item != 0 {
+                let mut first = escort_first_entry(e, item, 0);
+                let mut target_form = 0;
+                if first != 0 && e.call(EXTRA_DATA_REFERENCE_POINTER, &args![first]).u32() != 0 {
+                    let reference = e.call(EXTRA_DATA_REFERENCE_POINTER, &args![first]).u32();
+                    target_form = e.call(WORD_AT_0XC, &args![reference]).u32();
+                }
+                let location_word = e.call(PACKAGE_LOCATION_WORD, &args![package]).u32();
+                let mut container = e
+                    .call(PACKAGE_LOCATION_GET_REFERENCE, &args![location_word])
+                    .u32();
+                if container == 0 {
+                    container = e.mem.u32(process + LOW_GENERIC_LOCATION);
+                }
+                let has_container =
+                    container != 0 && e.call(REFERENCE_HAS_CONTAINER, &args![container]).u32() != 0;
+                if has_container {
+                    let count = e.call(PACKAGE_INITIAL_TARGET_COUNT, &args![package]).u32();
+                    let amount = e.call(WORD_AT_8, &args![item]).u32();
+                    e.call(
+                        ACTOR_PUT_IN_CONTAINER,
+                        &args![actor, amount, first, container, count, target_form],
+                    );
+                    e.set(this, HighProcess::bActivateAnim, 0);
+                } else {
+                    first = escort_first_entry(e, item, first);
+                    let position = escort_location_position(e, process, package_location);
+                    let count = e.call(PACKAGE_INITIAL_TARGET_COUNT, &args![package]).u32();
+                    let amount = e.call(WORD_AT_8, &args![item]).u32();
+                    e.vcall(
+                        a,
+                        ACTOR_SLOT_0X3CC,
+                        &args![amount, first, count, position, 0u32],
+                    );
+                    e.set(this, HighProcess::bActivateAnim, 0);
+                }
+                escort_free_item(e, item);
+                let object_type = e
+                    .call(PACKAGE_TARGET_GET_OBJECT_TYPE, &args![package_target])
+                    .i32();
+                if object_type == 0xc
+                    || (e
+                        .call(PACKAGE_TARGET_GET_OBJECT_TYPE, &args![package_target])
+                        .i32()
+                        >= 0x13
+                        && e.call(PACKAGE_TARGET_GET_OBJECT_TYPE, &args![package_target])
+                            .i32()
+                            <= 0x17)
+                {
+                    while !e
+                        .call(LIST_IS_EMPTY, &args![process + LOW_OBJECT_LIST])
+                        .bool()
+                    {
+                        let node = e
+                            .call(NODE_ITEM_ADDRESS, &args![process + LOW_OBJECT_LIST])
+                            .u32();
+                        let next = e.mem.u32(node);
+                        e.mem.set_u32(process + LOW_ACQUIRE_OBJECT, next);
+                        e.call(
+                            LIST_REMOVE_ITEM,
+                            &args![process + LOW_OBJECT_LIST, process + LOW_ACQUIRE_OBJECT],
+                        );
+                        let entry = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
+                        let wanted = e.mem.u32(entry);
+                        e.vcall(process, SLOT_SET_TARGET, &args![wanted]);
+                        let object = e.mem.u32(e.mem.u32(process + LOW_ACQUIRE_OBJECT) + 4);
+                        let next_item = e
+                            .call(REFERENCE_GET_INVENTORY_ITEM, &args![actor, object, 0u32])
+                            .u32();
+                        let entry = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
+                        if entry != 0 {
+                            e.call(ACQUIRE_OBJECT_DELETE, &args![entry, 1u32]);
+                        }
+                        e.mem.set_u32(process + LOW_ACQUIRE_OBJECT, 0);
+                        if container != 0
+                            && e.call(REFERENCE_HAS_CONTAINER, &args![container]).u32() != 0
+                        {
+                            let count = e.call(PACKAGE_INITIAL_TARGET_COUNT, &args![package]).u32();
+                            let amount = e.call(WORD_AT_8, &args![next_item]).u32();
+                            e.call(
+                                ACTOR_PUT_IN_CONTAINER,
+                                &args![actor, amount, first, container, count, target_form],
+                            );
+                        } else {
+                            first = escort_first_entry(e, next_item, first);
+                            let position = escort_location_position(e, process, package_location);
+                            let count = e.call(PACKAGE_INITIAL_TARGET_COUNT, &args![package]).u32();
+                            let amount = e.call(WORD_AT_8, &args![next_item]).u32();
+                            e.vcall(
+                                a,
+                                ACTOR_SLOT_0X3CC,
+                                &args![amount, first, count, position, 0u32],
+                            );
+                        }
+                        escort_free_item(e, next_item);
+                    }
+                    let mut second_flag = 1u32;
+                    let current = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+                    if current != 0 {
+                        let current = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+                        if e.call(PACKAGE_FLAG_200000, &args![current]).bool() {
+                            second_flag = 0;
+                        }
+                    }
+                    if e.vcall(a, ACTOR_SLOT_0X218, &args![]).bool() {
+                        let form = e.call(REFERENCE_GET_FORM, &args![actor]).u32();
+                        if form != 0 {
+                            e.call(
+                                NPC_FORM_EQUIP,
+                                &args![form, actor, 1u32, second_flag, 0u32, 1u32],
+                            );
+                        }
+                    } else if e.vcall(a, ACTOR_SLOT_0X21C, &args![]).bool() {
+                        let form = e.call(REFERENCE_GET_FORM, &args![actor]).u32();
+                        if form != 0 {
+                            e.call(
+                                CREATURE_INIT_DEFAULT_WORN,
+                                &args![form, actor, 1u32, second_flag, 1u32],
+                            );
+                        }
+                    }
+                }
+                e.vcall(process, SLOT_SET_CURRENT_ACTION_COMPLETE, &args![1u32]);
+            }
+            e.vcall(
+                process,
+                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                &args![actor, 1u32],
+            );
+        } else {
+            // The lengths of the two local vectors the original never fills.
+            let length = e.with_stack(12, |e, own| {
+                for (i, word) in vector.iter().enumerate() {
+                    e.mem.set_u32(own.addr() + i as u32 * 4, *word);
+                }
+                e.call(POINT_LENGTH_FLOAT, &args![own]).f64()
+            });
+            if f64::from(radius) >= length {
+                let first =
+                    e.with_stack(12, |e, zero| e.call(POINT_LENGTH_FLOAT, &args![zero]).f64());
+                let second =
+                    e.with_stack(12, |e, zero| e.call(POINT_LENGTH_FLOAT, &args![zero]).f64());
+                if !(second < first) {
+                    travel_add_procedure(e, process, a);
+                    let target = e.mem.u32(process + LOW_TARGET);
+                    let target_process = e.call(ACTOR_PROCESS, &args![target]).u32();
+                    if e.vcall(target_process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+                        .u32()
+                        != 0
+                    {
+                        let target_process = e.call(ACTOR_PROCESS, &args![target]).u32();
+                        e.vcall(
+                            target_process,
+                            SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                            &args![actor, 1u32],
+                        );
+                        let target_process = e.call(ACTOR_PROCESS, &args![target]).u32();
+                        let running = e
+                            .vcall(target_process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+                            .u32();
+                        if e.call(PACKAGE_GET_IS_CREATED, &args![running]).bool() {
+                            let target_process = e.call(ACTOR_PROCESS, &args![target]).u32();
+                            e.vcall(target_process, SLOT_CLEAR_CURRENT_PACKAGE, &args![]);
+                            if e.call(ACTOR_IS_PATHING_COMPLETE, &args![target]).bool() {
+                                e.call(ACTOR_END_MOVEMENT, &args![target]);
+                            }
+                            e.vcall(process, SLOT_SET_CURRENT_ACTION_COMPLETE, &args![1u32]);
+                            e.vcall(process, SLOT_CHECK_FOR_NEW_PACKAGE, &args![actor, 0u32]);
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        if !e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() {
+            e.vcall(process, SLOT_END_MOVE_MESSAGE, &args![actor]);
+        }
+        return false;
+    }
+    // No location (or its search failed): walk to the package's location.
+    let radius = e
+        .call(
+            PACKAGE_RADIUS_ACTOR_TO_REF_TARGET,
+            &args![package, actor, 0u32],
+        )
+        .f32();
+    let target = e.mem.u32(process + LOW_TARGET);
+    if target == player_pointer(e) {
+        e.call(ACTOR_FORCE_STOP_MOVING, &args![actor]);
+        return false;
+    }
+    if target != 0 && e.vcall(target, ACTOR_SLOT_IS_ACTOR, &args![]).bool() {
+        let distance = e
+            .call(DISTANCE_FROM_REFERENCE, &args![actor, target, 0u32, 0u32])
+            .f64();
+        if !(f64::from(radius) < distance) {
+            return false;
+        }
+    }
+    let world = e.call(PACKAGE_LOCATION_WORLD, &args![package, actor]).u32();
+    let cell = e.call(PACKAGE_LOCATION_CELL, &args![package, actor]).u32();
+    let coord = e.with_stack(12, |e, buffer| {
+        e.call(PACKAGE_LOCATION_COORD, &args![package, buffer, actor])
+            .u32()
+    });
+    e.call(
+        ACTOR_SET_PATHFINDING_GOAL,
+        &args![actor, coord, cell, world, radius, 0u32],
+    );
+    false
+}
+
+/// `HighProcess` vtable slots `ProcessActivate` calls (Xbox PDB names).
+const SLOT_GET_TALKING_TO_PC: u32 = 0x2d8;
+const SLOT_FREE_UP_SPECIAL_IDLE: u32 = 0x394;
+const SLOT_CAN_FORCE_GREET: u32 = 0x3fc;
+const SLOT_GET_FURNITURE_MARKER: u32 = 0x4d4;
+const SLOT_SET_ACTION_HEAD_TRACK_TARGET: u32 = 0x628;
+/// `Actor` function `008b3750` (`this` = the actor): `(position, cell, world
+/// space, radius, heading, 0)`; the goal for a furniture marker. Unnamed in
+/// the engine map.
+const ACTOR_SET_PATHFINDING_GOAL_WITH_HEADING: u32 = 0x008b_3750;
+/// `004036b0` (`this` = a package): the word at +0xb8, the reference the
+/// package acts on.
+const PACKAGE_TARGET_REFERENCE_WORD: u32 = 0x0040_36b0;
+/// The doubles `ProcessActivate` compares distances with (800.0 for the
+/// player, 600.0 for the package location).
+const ACTIVATE_PLAYER_FAR_DISTANCE: u32 = 0x0108_8218;
+const ACTIVATE_PACKAGE_FAR_DISTANCE: u32 = 0x0108_8210;
+/// The floats of the furniture goals: the radius of a request (5.0) and of a
+/// marker goal (20.0).
+const ACTIVATE_GOAL_RADIUS: u32 = 0x0101_712c;
+const ACTIVATE_MARKER_RADIUS: u32 = 0x0101_7868;
+/// The process fields `ProcessActivate` uses besides the shared ones.
+/// `MiddleHighProcess::IsCurrentWeaponMine` (Xbox PDB, `005ce8f0`; `this` is the
+/// actor here).
+const PROCESS_IS_CURRENT_WEAPON_MINE: u32 = 0x005c_e8f0;
+/// `008e9620` (`this` = a dialogue package): the byte `fn_008e9620` reads.
+const DIALOGUE_PACKAGE_REACHED_LOCATION: u32 = 0x008e_9620;
+const PROCESS_SAVED_ACQUIRE_OBJECT: u32 = 0x68;
+const PROCESS_CURRENT_FURNITURE_REFERENCE: u32 = 0x140;
+
+/// The world space and the pathing cell of `reference` (`00575d70` then
+/// `008d6f30`), in the order the code asks for them.
+fn reference_world_and_cell(e: &mut Engine, reference: u32) -> (u32, u32) {
+    let world = e.call(REFERENCE_GET_WORLD_SPACE, &args![reference]).u32();
+    let cell = e.call(REFERENCE_PATHING_CELL, &args![reference]).u32();
+    (world, cell)
+}
+
+/// `Actor::SetPathfindingGoal(position, cell, world space, radius, 0)`.
+fn activate_set_goal(
+    e: &mut Engine,
+    actor: u32,
+    position: u32,
+    cell: u32,
+    world: u32,
+    radius: f32,
+) -> bool {
+    e.call(
+        ACTOR_SET_PATHFINDING_GOAL,
+        &args![actor, position, cell, world, radius, 0u32],
+    )
+    .bool()
+}
+
+/// Deletes the process' acquire object (`007b3fa0`) when there is one and
+/// clears the field.
+fn activate_drop_acquire_object(e: &mut Engine, process: u32) {
+    let entry = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
+    if entry != 0 {
+        e.call(ACQUIRE_OBJECT_DELETE, &args![entry, 1u32]);
+    }
+    e.mem.set_u32(process + LOW_ACQUIRE_OBJECT, 0);
+}
+
+/// True when the procedure table of the package's procedure type has the
+/// action 0x36 at the process' current procedure index.
+fn activate_procedure_is_0x36(e: &mut Engine, process: u32, package: u32) -> bool {
+    let kind = e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32();
+    let index = e
+        .vcall(process, SLOT_GET_CURRENT_PROCEDURE_INDEX, &args![])
+        .u32();
+    let table = e.mem.u32(0x011a_3ff0 + kind.wrapping_mul(4));
+    e.mem.u32(table.wrapping_add(index.wrapping_mul(4))) == 0x36
+}
+
+/// The part of `ProcessActivate` after the actor has not arrived yet: the
+/// goal is renewed when the target moved enough, and the movement mode is
+/// chosen. Returns false (the only result of this stretch).
+fn activate_walk_to_target(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    package: u32,
+    radius: f32,
+    flag: bool,
+) -> bool {
+    let process = this.addr();
+    let a = actor.addr();
+    let run_once = e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32();
+    let mut pursue = false;
+    if run_once != 0 {
+        let run_once = e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32();
+        if e.call(PACKAGE_TYPE, &args![run_once]).i32() == 0x1c {
+            pursue = true;
+        }
+    }
+    if !pursue
+        && (e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4
+            || e.vcall(process, SLOT_GET_SIT_SLEEP_STATE, &args![]).i32() == 9)
+    {
+        if e.call(PACKAGE_TYPE, &args![package]).i32() == 0x1c {
+            let location = e.call(PACKAGE_LOCATION_WORD, &args![package]).u32();
+            if location != 0 {
+                let location = e.call(PACKAGE_LOCATION_WORD, &args![package]).u32();
+                if e.call(PACKAGE_LOCATION_GET_REFERENCE, &args![location])
+                    .u32()
+                    != 0
+                {
+                    let location = e.call(PACKAGE_LOCATION_WORD, &args![package]).u32();
+                    let reference = e
+                        .call(PACKAGE_LOCATION_GET_REFERENCE, &args![location])
+                        .u32();
+                    if e.call(REFERENCE_IS_FURNITURE, &args![reference]).bool()
+                        && e.call(DIALOGUE_PACKAGE_REACHED_LOCATION, &args![package])
+                            .bool()
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+        e.vcall(a, ACTOR_SLOT_0X418, &args![]);
+        return false;
+    }
+    // How far the target moved since the goal was set.
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    let target_position = e.vcall(target, ACTOR_SLOT_POSITION, &args![]).u32();
+    let moved = e.with_stack(12, |e, out| {
+        let difference = e
+            .call(
+                POINT_DIFFERENCE,
+                &args![process + PROCESS_LAST_SEEN_POSITION, out, target_position],
+            )
+            .u32();
+        e.call(POINT_LENGTH_FLOAT, &args![difference]).f32()
+    });
+    let renew = if e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() {
+        true
+    } else {
+        let scaled = (f64::from(radius) * e.global::<f64>(WANDER_RADIUS_FACTOR)) as f32;
+        let setting = e
+            .call(SETTING_VALUE, &args![TRAVEL_TARGET_DISTANCE_SETTING])
+            .u32();
+        let ceiling = e.mem.f32(setting);
+        let limit = e.call(FLOAT_MINIMUM, &args![ceiling, scaled]).f32();
+        limit < moved
+    };
+    if renew {
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        if e.call(REFERENCE_LINKED_DOOR_EXTRA, &args![target]).u32() != 0 {
+            let (world, cell) = reference_world_and_cell(e, target);
+            let door = e.call(LINKED_DOOR_TELEPORT_POSITION, &args![target]).u32();
+            if !activate_set_goal(e, a, door, cell, world, radius) {
+                return false;
+            }
+        } else if !e.call(REFERENCE_IS_FURNITURE, &args![target]).bool() {
+            let seated_actor = e.vcall(target, ACTOR_SLOT_IS_ACTOR, &args![]).bool()
+                && e.vcall(target, ACTOR_SLOT_STATE, &args![]).i32() == 4;
+            if seated_actor {
+                let target_process = e.call(ACTOR_PROCESS, &args![target]).u32();
+                let marker = e
+                    .vcall(target_process, SLOT_GET_FURNITURE_MARKER, &args![])
+                    .u32();
+                let goal_radius = e.global::<f32>(ACTIVATE_GOAL_RADIUS);
+                let (world, cell) = reference_world_and_cell(e, target);
+                if marker == 0 {
+                    let position = e.vcall(target, ACTOR_SLOT_POSITION, &args![]).u32();
+                    if !activate_set_goal(e, a, position, cell, world, radius) {
+                        return false;
+                    }
+                } else if !activate_set_goal(e, a, marker, cell, world, goal_radius) {
+                    return false;
+                }
+            } else {
+                let (world, cell) = reference_world_and_cell(e, target);
+                let position = e.vcall(target, ACTOR_SLOT_POSITION, &args![]).u32();
+                if !activate_set_goal(e, a, position, cell, world, radius) {
+                    return false;
+                }
+            }
+        } else {
+            // A furniture target: the nearest free marker is walked to.
+            let position = actor_position_words(e, a);
+            let (found, marker_index) = e.with_stack(16, |e, block| {
+                for (i, word) in position.iter().enumerate() {
+                    e.mem.set_u32(block.addr() + i as u32 * 4, *word);
+                }
+                e.mem.set_u32(block.addr() + 12, 0);
+                let found = e
+                    .call(
+                        REFERENCE_GET_CLOSEST_FREE_MARKER,
+                        &args![
+                            target,
+                            block,
+                            1u32,
+                            1u32,
+                            process + PROCESS_FURNITURE_MARKER,
+                            block.addr() + 12,
+                            1u32
+                        ],
+                    )
+                    .bool();
+                (found, e.mem.u8(block.addr() + 12))
+            });
+            if !found {
+                e.mem
+                    .set_u32(process + PROCESS_CURRENT_FURNITURE_REFERENCE, 0);
+                e.vcall(process, SLOT_END_MOVE_MESSAGE, &args![actor]);
+                e.vcall(process, SLOT_SET_TARGET, &args![0u32]);
+                if flag {
+                    travel_add_procedure(e, process, a);
+                }
+                return false;
+            }
+            let accepted = with_pathing_request(e, |e, request| {
+                let goal_radius = e.global::<f32>(ACTIVATE_GOAL_RADIUS);
+                let (world, cell) = reference_world_and_cell(e, target);
+                travel_build_request(
+                    e,
+                    a,
+                    request,
+                    process + PROCESS_FURNITURE_MARKER,
+                    cell,
+                    world,
+                    goal_radius,
+                );
+                fn_008e7c50(e, request, 1);
+                e.call(ACTOR_SET_PATHFINDING_GOAL_REQUEST, &args![actor, request])
+                    .bool()
+            });
+            if !accepted {
+                return false;
+            }
+            e.mem
+                .set_u8(process + PROCESS_CURRENT_FURNITURE_INDEX, marker_index);
+        }
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        let position = e.vcall(target, ACTOR_SLOT_POSITION, &args![]).u32();
+        for word in 0..3 {
+            let value = e.mem.u32(position + word * 4);
+            e.mem
+                .set_u32(process + PROCESS_LAST_SEEN_POSITION + word * 4, value);
+        }
+    }
+    if e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool() {
+        return false;
+    }
+    if e.call(PROCESS_IS_CURRENT_WEAPON_GRENADE, &args![actor])
+        .bool()
+        || e.call(PACKAGE_FLAG_2000, &args![package]).bool()
+        || e.call(ACTOR_CREATURE_LIKE, &args![actor]).bool()
+        || e.call(PACKAGE_TYPE, &args![package]).i32() == 0x15
+        || {
+            let current = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+            current != 0 && {
+                let current = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+                e.call(PACKAGE_TYPE, &args![current]).i32() == 0x12
+            }
+        }
+    {
+        e.call(ACTOR_SET_MOVE_MODE, &args![actor, 0x200u32]);
+    }
+    let player = player_pointer(e);
+    if e.call(PROCESS_IS_CURRENT_WEAPON_MINE, &args![actor]).bool()
+        || (e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![actor]).bool()
+            && e.call(MOVE_MODE_RUNNING_ONLY, &args![player]).bool())
+    {
+        if !e.call(MOVE_MODE_RUNNING_ONLY, &args![actor]).bool() {
+            e.call(ACTOR_CLEAR_RUN_BITS, &args![actor]);
+        }
+        e.call(ACTOR_SET_MOVE_MODE, &args![actor, 0x400u32]);
+    }
+    // The code copies the target's position to a local it never reads.
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    e.vcall(target, ACTOR_SLOT_POSITION, &args![]);
+    false
+}
+
+/// Starts the special idle for the target once (`bActivateAnim`) the way
+/// `ProcessActivate` does: frees the previous idle of the actor
+/// (`FreeUpSpecialIdle`), and asks for the idle to play. `track_first` tells
+/// whether the head-track target is set before the idle is looked for (it is
+/// after it in the branch that works without an acquire object). Returns the
+/// result of the idle search.
+fn activate_start_special_idle(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    track_first: bool,
+) -> bool {
+    let process = this.addr();
+    e.set(this, HighProcess::bActivateAnim, 1);
+    e.vcall(process, SLOT_FREE_UP_SPECIAL_IDLE, &args![actor]);
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if track_first {
+        e.vcall(process, SLOT_SET_ACTION_HEAD_TRACK_TARGET, &args![target]);
+    }
+    let form = e.call(REFERENCE_GET_FORM, &args![target]).u32();
+    let found = e
+        .call(FIND_SPECIAL_IDLE_TO_PLAY, &args![this, actor, form, target])
+        .bool();
+    if !track_first {
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        e.vcall(process, SLOT_SET_ACTION_HEAD_TRACK_TARGET, &args![target]);
+    }
+    found
+}
+
+/// True when the actor has no special idle on its animation, or when it is
+/// done playing.
+fn activate_idle_done_or_none(e: &mut Engine, animation: u32) -> bool {
+    animation == 0
+        || e.call(ANIMATION_SPECIAL_IDLE_DONE_PLAYING, &args![animation])
+            .bool()
+}
+
+/// The activation of the process' target by `actor` with the acquire
+/// object's item and count (`TESObjectREFR::Activate(actor, flag, item,
+/// count)`), or with item 0 and count 1 when there is none.
+fn activate_target_with_entry(e: &mut Engine, process: u32, actor: u32, flag: u32) -> bool {
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    let entry = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
+    let (item, count) = if entry != 0 {
+        (e.mem.u32(entry + 4), e.mem.u32(entry + 0xc))
+    } else {
+        (0, 1)
+    };
+    e.call(REFERENCE_ACTIVATE, &args![target, actor, flag, item, count])
+        .bool()
+}
+
+/// `ProcessActivate` with the flag set, once the target is reached: the
+/// stretch when the actor still has to deal with the target. `Some(result)`
+/// returns from the function; `None` goes on to the final check.
+fn activate_arrived_flagged(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    package: u32,
+    movement_done: bool,
+    keep: &mut bool,
+) -> Option<bool> {
+    let process = this.addr();
+    let a = actor.addr();
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if target != 0 && target == player_pointer(e) && !movement_done {
+        let target_process = e.call(ACTOR_PROCESS, &args![target]).u32();
+        if !e
+            .vcall(target_process, SLOT_CAN_FORCE_GREET, &args![actor])
+            .bool()
+        {
+            return Some(false);
+        }
+    }
+    if movement_done {
+        if !e.call(PACKAGE_FLAG_4, &args![package]).bool() {
+            if e.call(PACKAGE_TYPE, &args![package]).i32() == 2 {
+                let mut other = 0;
+                let target = e.mem.u32(process + PROCESS_TARGET);
+                if target != 0 && e.vcall(target, ACTOR_SLOT_IS_ACTOR, &args![]).bool() {
+                    other = e.mem.u32(process + PROCESS_TARGET);
+                }
+                if other != 0 {
+                    let other_process = e.call(ACTOR_PROCESS, &args![other]).u32();
+                    e.vcall(
+                        other_process,
+                        SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                        &args![other, 1u32],
+                    );
+                }
+                return Some(true);
+            }
+            // The original tests `movement_done` again here and takes the
+            // animation stretch otherwise; it cannot be reached.
+            e.set(this, HighProcess::bActivateAnim, 0);
+            e.vcall(process, SLOT_CLEAR_ACTION_HEAD_TRACK, &args![1u32]);
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            if e.call(REFERENCE_IS_FURNITURE, &args![target]).bool() {
+                let own_process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+                let marker = e
+                    .vcall(own_process, SLOT_GET_FURNITURE_MARKER, &args![])
+                    .u32();
+                let target = e.mem.u32(process + PROCESS_TARGET);
+                let (world, cell) = reference_world_and_cell(e, target);
+                activate_set_goal(e, a, marker, cell, world, 0.0);
+                return Some(true);
+            }
+            if e.mem.u32(process + LOW_ACQUIRE_OBJECT) != 0
+                && e.mem.i32(process + PROCESS_NUMBER_ITEMS_ACTIVATE) <= 0
+            {
+                travel_finish_procedures(e, process, package);
+            } else if e.mem.u32(process + LOW_ACQUIRE_OBJECT) != 0 {
+                e.vcall(process, SLOT_SET_TARGET, &args![0u32]);
+                activate_drop_acquire_object(e, process);
+            }
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            if target != 0 {
+                let (world, cell) = reference_world_and_cell(e, target);
+                let position = e.vcall(target, ACTOR_SLOT_POSITION, &args![]).u32();
+                activate_set_goal(e, a, position, cell, world, 0.0);
+                return Some(false);
+            }
+            return Some(true);
+        }
+        // The package walks to the target and the function ends.
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        if e.call(REFERENCE_IS_FURNITURE, &args![target]).bool() {
+            let own_process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+            let marker = e
+                .vcall(own_process, SLOT_GET_FURNITURE_MARKER, &args![])
+                .u32();
+            let (world, cell) = reference_world_and_cell(e, target);
+            activate_set_goal(e, a, marker, cell, world, 0.0);
+        } else {
+            let radius = e
+                .call(
+                    PACKAGE_RADIUS_ACTOR_TO_REF_TARGET,
+                    &args![package, actor, 0u32],
+                )
+                .f32();
+            let (world, cell) = reference_world_and_cell(e, target);
+            let position = e.vcall(target, ACTOR_SLOT_POSITION, &args![]).u32();
+            activate_set_goal(e, a, position, cell, world, radius);
+        }
+        return Some(false);
+    }
+    // The actor has not finished moving.
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if e.mem.u32(process + LOW_ACQUIRE_OBJECT) != 0
+        && !e.call(REFERENCE_IS_FURNITURE, &args![target]).bool()
+        && !e
+            .vcall(target, ACTOR_SLOT_IS_MOBILE_OBJECT, &args![])
+            .bool()
+    {
+        // The animation is read and not used in this stretch.
+        e.vcall(a, ACTOR_SLOT_ANIMATION, &args![]);
+        let entry = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
+        let entry_reference = e.mem.u32(entry);
+        e.vcall(
+            process,
+            SLOT_SET_ACTION_HEAD_TRACK_TARGET,
+            &args![entry_reference],
+        );
+        *keep = !(e.call(ACTOR_MOVE_MODE_HAS_SPEED, &args![actor]).bool()
+            || e.call(ACTOR_IS_ROTATING, &args![actor]).bool());
+        if *keep {
+            if e.get(this, HighProcess::bActivateAnim) == 0 {
+                if activate_start_special_idle(e, this, actor, true) {
+                    e.set(this, HighProcess::fIdleTimer, 1.0);
+                    return Some(false);
+                }
+                e.set(this, HighProcess::fIdleTimer, 0.0);
+            }
+            let timer = e.get(this, HighProcess::fIdleTimer);
+            if timer > 0.0 || timer.is_nan() {
+                let frame = e.call(FRAME_TIME, &args![FRAME_TIMER]).f32();
+                e.set(this, HighProcess::fIdleTimer, timer - frame);
+            } else {
+                let entry = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
+                let item = e.mem.u32(entry + 4);
+                let count = e.mem.u32(entry + 0xc);
+                let entry_reference = e.mem.u32(entry);
+                e.call(
+                    REFERENCE_ACTIVATE,
+                    &args![entry_reference, actor, 1u32, item, count],
+                );
+                let remaining = e
+                    .mem
+                    .i32(process + PROCESS_NUMBER_ITEMS_ACTIVATE)
+                    .wrapping_sub(1);
+                e.mem
+                    .set_i32(process + PROCESS_NUMBER_ITEMS_ACTIVATE, remaining);
+                e.set(this, HighProcess::bActivateAnim, 0);
+                e.vcall(process, SLOT_CLEAR_ACTION_HEAD_TRACK, &args![1u32]);
+                if e.mem.i32(process + PROCESS_NUMBER_ITEMS_ACTIVATE) <= 0 {
+                    travel_add_procedure(e, process, a);
+                    e.vcall(process, SLOT_SET_TARGET_ACTIVATED, &args![1u32]);
+                    e.vcall(process, SLOT_SET_CURRENT_ACTION_COMPLETE, &args![1u32]);
+                    e.set(this, HighProcess::bActivateAnim, 0);
+                }
+            }
+        }
+        return None;
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if !e
+        .vcall(target, ACTOR_SLOT_IS_MOBILE_OBJECT, &args![])
+        .bool()
+        && !e.call(REFERENCE_IS_FURNITURE, &args![target]).bool()
+    {
+        // An object that is neither furniture nor an actor.
+        let animation = e.vcall(a, ACTOR_SLOT_ANIMATION, &args![]).u32();
+        if e.get(this, HighProcess::bActivateAnim) == 0 {
+            activate_start_special_idle(e, this, actor, true);
+            return Some(false);
+        }
+        if activate_idle_done_or_none(e, animation) {
+            travel_add_procedure(e, process, a);
+            activate_target_with_entry(e, process, a, 1);
+            e.vcall(process, SLOT_SET_TARGET_ACTIVATED, &args![1u32]);
+            if activate_procedure_is_0x36(e, process, package) {
+                e.vcall(process, SLOT_SET_CURRENT_ACTION_COMPLETE, &args![1u32]);
+            }
+            e.vcall(process, SLOT_CLEAR_ACTION_HEAD_TRACK, &args![1u32]);
+            e.set(this, HighProcess::bActivateAnim, 0);
+        }
+        return None;
+    }
+    // A furniture or an actor as target.
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if e.call(REFERENCE_IS_FURNITURE, &args![target]).bool() {
+        if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4
+            || e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 9
+        {
+            travel_add_procedure(e, process, a);
+            e.vcall(process, SLOT_SET_TARGET_ACTIVATED, &args![1u32]);
+            if activate_procedure_is_0x36(e, process, package) {
+                e.vcall(process, SLOT_SET_CURRENT_ACTION_COMPLETE, &args![1u32]);
+            }
+            return Some(true);
+        }
+        if e.mem.i16(process + PROCESS_ANIM_ACTION_SUCCESS) == 0 {
+            travel_add_procedure(e, process, a);
+            e.mem.set_u32(process + PROCESS_GENERIC_LOCATION, 0);
+            travel_end_move_message(e, process, a);
+            e.mem.set_i16(process + PROCESS_ANIM_ACTION_SUCCESS, 1);
+            return Some(true);
+        }
+        e.call(PROCESS_ALIGN_TO_FURNITURE, &args![this, actor]);
+        return None;
+    }
+    // An actor: the hour it is met at is remembered.
+    let hour = e.call(CALENDAR_GET_HOUR, &args![CALENDAR_INSTANCE]).f32();
+    e.set(this, HighProcess::fDetectListTimer, hour);
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if !e.vcall(a, ACTOR_SLOT_0X218, &args![]).bool()
+        && e.vcall(target, ACTOR_SLOT_0X218, &args![]).bool()
+    {
+        e.call(REFERENCE_ACTIVATE, &args![target, actor, 0u32, 0u32, 1u32]);
+        return Some(true);
+    }
+    let mut other = 0;
+    if e.vcall(target, ACTOR_SLOT_IS_ACTOR, &args![]).bool() {
+        other = e.mem.u32(process + PROCESS_TARGET);
+    }
+    if other != 0
+        && e.call(ACTOR_IS_TRYING_TO_ENTER_FURNITURE, &args![other])
+            .bool()
+    {
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        let target_process = e.call(ACTOR_PROCESS, &args![target]).u32();
+        e.vcall(target_process, SLOT_PROCESS_GET_UP_ONE_HOUR, &args![target]);
+        return Some(false);
+    }
+    if e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32() == 0x16
+        && e.call(PACKAGE_ONCE_PER_DAY, &args![package]).bool()
+        && e.call(PACKAGE_LIST_AT_38, &args![package]).u32() != 0
+    {
+        let list = e.call(PACKAGE_LIST_AT_38, &args![package]).u32();
+        if e.call(NODE_NEXT, &args![list]).u32() == 0 {
+            e.vcall(
+                process,
+                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                &args![actor, 2u32],
+            );
+            let day = e.call(CALENDAR_GET_DAY, &args![CALENDAR]).u8();
+            e.vcall(a, ACTOR_SLOT_0X28C, &args![package, u32::from(day)]);
+        }
+    }
+    if !e.call(PACKAGE_GET_IS_CREATED, &args![package]).bool() {
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        if e.vcall(target, ACTOR_SLOT_0X22C, &args![1u32]).bool()
+            && e.mem.u32(process + LOW_ACQUIRE_OBJECT) == 0
+        {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            e.call(PACKAGE_SET_NEVER_RUN, &args![package, target, 1u32]);
+        }
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    e.call(REFERENCE_ACTIVATE, &args![target, actor, 1u32, 0u32, 1u32]);
+    Some(true)
+}
+
+/// `ProcessActivate` without the flag, once the target is reached.
+/// `Some(result)` returns from the function; `None` goes on to the final
+/// check.
+fn activate_arrived_unflagged(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    package: u32,
+    movement_done: bool,
+) -> Option<bool> {
+    let process = this.addr();
+    let a = actor.addr();
+    if movement_done {
+        if e.call(PACKAGE_FLAG_4, &args![package]).bool() {
+            let radius = e
+                .call(
+                    PACKAGE_RADIUS_ACTOR_TO_REF_TARGET,
+                    &args![package, actor, 0u32],
+                )
+                .f32();
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            let (world, cell) = reference_world_and_cell(e, target);
+            let position = e.vcall(target, ACTOR_SLOT_POSITION, &args![]).u32();
+            activate_set_goal(e, a, position, cell, world, radius);
+            return Some(false);
+        }
+        if e.call(PACKAGE_TYPE, &args![package]).i32() == 2 {
+            let mut other = 0;
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            if target != 0 && e.vcall(target, ACTOR_SLOT_IS_ACTOR, &args![]).bool() {
+                other = e.mem.u32(process + PROCESS_TARGET);
+            }
+            if other != 0 {
+                let current = e.call(ACTOR_CURRENT_PACKAGE, &args![other]).u32();
+                let waits = current != 0 && {
+                    let current = e.call(ACTOR_CURRENT_PACKAGE, &args![other]).u32();
+                    e.call(PACKAGE_PROCEDURE_TYPE, &args![current]).u32() == 6
+                };
+                if waits {
+                    let other_process = e.call(ACTOR_PROCESS, &args![other]).u32();
+                    e.vcall(
+                        other_process,
+                        SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                        &args![other, 1u32],
+                    );
+                } else {
+                    e.vcall(
+                        process,
+                        SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                        &args![other, u32::MAX],
+                    );
+                    return Some(false);
+                }
+            }
+        }
+        return None;
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if e.call(REFERENCE_IS_FURNITURE, &args![target]).bool() {
+        if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4
+            || e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 9
+        {
+            e.vcall(process, SLOT_SET_TARGET_ACTIVATED, &args![1u32]);
+            return Some(true);
+        }
+        if e.mem.i16(process + PROCESS_ANIM_ACTION_SUCCESS) == 0 {
+            travel_add_procedure(e, process, a);
+            e.mem.set_u32(process + PROCESS_GENERIC_LOCATION, 0);
+            travel_end_move_message(e, process, a);
+            e.mem.set_i16(process + PROCESS_ANIM_ACTION_SUCCESS, 1);
+            return Some(true);
+        }
+        e.call(PROCESS_ALIGN_TO_FURNITURE, &args![this, actor]);
+        return None;
+    }
+    if e.mem.u32(process + LOW_ACQUIRE_OBJECT) != 0 {
+        let animation = e.vcall(a, ACTOR_SLOT_ANIMATION, &args![]).u32();
+        if e.get(this, HighProcess::bActivateAnim) == 0 {
+            activate_start_special_idle(e, this, actor, false);
+            return Some(false);
+        }
+        if activate_idle_done_or_none(e, animation) {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            let entry = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
+            let item = e.mem.u32(entry + 4);
+            let count = e.mem.u32(entry + 0xc);
+            if !e
+                .call(REFERENCE_ACTIVATE, &args![target, actor, 0u32, item, count])
+                .bool()
+            {
+                e.vcall(process, SLOT_SET_TARGET, &args![0u32]);
+            } else {
+                let entry = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
+                if entry != 0
+                    && e.mem.i32(process + PROCESS_NUMBER_ITEMS_ACTIVATE) <= e.mem.i32(entry + 0xc)
+                {
+                    travel_add_procedure(e, process, a);
+                }
+                activate_drop_acquire_object(e, process);
+                e.vcall(process, SLOT_SET_TARGET, &args![0u32]);
+            }
+            e.set(this, HighProcess::bActivateAnim, 0);
+            e.vcall(process, SLOT_CLEAR_ACTION_HEAD_TRACK, &args![1u32]);
+        }
+        return None;
+    }
+    if e.call(PACKAGE_TYPE, &args![package]).i32() == 7 {
+        travel_add_procedure(e, process, a);
+        travel_end_move_message(e, process, a);
+        return Some(true);
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if e.vcall(target, ACTOR_SLOT_0X218, &args![]).bool() {
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        let state = e.vcall(target, ACTOR_SLOT_STATE, &args![]).i32();
+        if state == 0
+            || e.vcall(target, ACTOR_SLOT_STATE, &args![]).i32() == 4
+            || e.vcall(target, ACTOR_SLOT_STATE, &args![]).i32() == 9
+        {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            e.call(REFERENCE_ACTIVATE, &args![target, actor, 0u32, 0u32, 1u32]);
+        }
+        return None;
+    }
+    let animation = e.vcall(a, ACTOR_SLOT_ANIMATION, &args![]).u32();
+    if e.get(this, HighProcess::bActivateAnim) == 0 {
+        activate_start_special_idle(e, this, actor, false);
+        return Some(false);
+    }
+    if animation != 0
+        && e.call(ANIMATION_SPECIAL_IDLE_DONE_PLAYING, &args![animation])
+            .bool()
+    {
+        e.vcall(process, SLOT_CLEAR_ACTION_HEAD_TRACK, &args![1u32]);
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        e.call(REFERENCE_ACTIVATE, &args![target, actor, 0u32, 0u32, 1u32]);
+        e.set(this, HighProcess::bActivateAnim, 0);
+    }
+    None
+}
+
+// Translated from 008e9640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ProcessActivate` (Xbox PDB): the per-frame handling of a
+/// package that makes the actor use or activate its target (an object, a
+/// furniture, a door or another actor). `flag` (the second stack argument) is
+/// the caller's "this is the activate package itself" flag: set, the actor
+/// goes through the acquire object's items; clear, it does the single
+/// activation. Returns true when the activation was done or the function
+/// handled the frame completely.
+///
+/// In order: nothing happens while the screen fades in or while the actor
+/// is neither sitting (`GetSitSleepState` 4) nor free (0). The target for the
+/// package is requested when there is none or it has flag `0x20`; without a
+/// target the procedure advances (flag set), and a target with flag `0x20`
+/// or `0x800` ends the package for it (`SetNeverRun` for the first). A target
+/// that refuses the actor (slot `0x22c`) without an acquire object ends the
+/// interrupt package or sets `SetNeverRun`. For follow packages (type
+/// `0x1c`) the player target and the far package location end the interrupt
+/// package. A furniture or seated actor whose form is one of the two marker
+/// forms only sets the head-track target and returns true. The furniture
+/// reservation, the closest free marker, the arrival test (linked door
+/// distance, or the package's slot `0x144`) and the movement-done test lead
+/// either to `activate_walk_to_target` (the goal is renewed and the move
+/// mode set) or to the arrival stretches, which end in the final check that
+/// drops the acquire object when the actor is idle.
+pub fn high_process_process_activate(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    actor: Ptr,
+    flag: u8,
+) -> bool {
+    let process = this.addr();
+    let a = actor.addr();
+    let flag = flag != 0;
+    let fader = e.global::<u32>(FADER_MANAGER);
+    if e.call(FADER_GET_ALPHA, &args![fader, 1u32]).f64() > 0.0 {
+        return false;
+    }
+    if e.vcall(process, SLOT_GET_SIT_SLEEP_STATE, &args![]).i32() != 4
+        && e.vcall(process, SLOT_GET_SIT_SLEEP_STATE, &args![]).i32() != 0
+    {
+        return false;
+    }
+    let package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    let extra_list = e.call(REFERENCE_EXTRA_DATA, &args![actor]).u32();
+    let extra_package = e.call(EXTRA_GET_PACKAGE, &args![extra_list]).u32();
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if target == 0 || e.call(REFERENCE_FLAG_20, &args![target]).bool() {
+        e.vcall(process, SLOT_SET_TARGET_FOR_PACKAGE, &args![actor]);
+    }
+    if e.mem.u32(process + PROCESS_TARGET) == 0 {
+        if flag {
+            travel_add_procedure(e, process, a);
+        }
+        return false;
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if e.call(REFERENCE_FLAG_20, &args![target]).bool()
+        || e.call(REFERENCE_FLAG_800, &args![target]).bool()
+    {
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        if e.call(REFERENCE_FLAG_20, &args![target]).bool() {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            e.call(PACKAGE_SET_NEVER_RUN, &args![package, target, 1u32]);
+        }
+        if flag {
+            travel_add_procedure(e, process, a);
+        }
+        return false;
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if e.vcall(target, ACTOR_SLOT_0X22C, &args![1u32]).bool()
+        && e.mem.u32(process + LOW_ACQUIRE_OBJECT) == 0
+    {
+        let run_once = e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32();
+        if package == run_once {
+            e.call(ACTOR_END_INTERRUPT_PACKAGE, &args![actor, 0u32]);
+        } else {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            e.call(PACKAGE_SET_NEVER_RUN, &args![package, target, 1u32]);
+        }
+        return false;
+    }
+    let saved_target = e.mem.u32(process + PROCESS_TARGET);
+    if e.call(PACKAGE_TYPE, &args![package]).i32() == 0x1c {
+        let player = player_pointer(e);
+        if e.mem.u32(process + PROCESS_TARGET) == player
+            && e.vcall(process, SLOT_GET_TALKING_TO_PC, &args![]).bool()
+            && e.call(DISTANCE_FROM_REFERENCE, &args![player, actor, 0u32, 0u32])
+                .f64()
+                > e.global::<f64>(ACTIVATE_PLAYER_FAR_DISTANCE)
+            && e.call(ACTOR_IS_PATHING_COMPLETE, &args![player]).bool()
+        {
+            if extra_package != 0 {
+                let far = e.with_stack(12, |e, buffer| {
+                    let coord = e
+                        .call(PACKAGE_LOCATION_COORD, &args![extra_package, buffer, actor])
+                        .u32();
+                    e.call(ACTOR_DISTANCE_TO_POINT, &args![actor, coord]).f32()
+                });
+                if f64::from(far) > e.global::<f64>(ACTIVATE_PACKAGE_FAR_DISTANCE) {
+                    e.call(ACTOR_END_INTERRUPT_PACKAGE, &args![actor, 0u32]);
+                    return false;
+                }
+            }
+        } else if e.call(PACKAGE_TARGET_REFERENCE_WORD, &args![package]).u32() != 0 {
+            let reference = e.call(PACKAGE_TARGET_REFERENCE_WORD, &args![package]).u32();
+            e.vcall(process, SLOT_SET_TARGET, &args![reference]);
+        }
+    }
+    let location_ref = e
+        .call(PACKAGE_GET_LOCATION_REFERENCE, &args![package, actor])
+        .u32();
+    if (location_ref != 0 && e.call(REFERENCE_IS_FURNITURE, &args![location_ref]).bool())
+        || e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 4
+    {
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        let form = e.call(REFERENCE_GET_FORM, &args![target]).u32();
+        let marker_form = form == e.global::<u32>(FORM_WORD_B) || {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            e.call(REFERENCE_GET_FORM, &args![target]).u32() == e.global::<u32>(FORM_WORD_A)
+        };
+        if marker_form {
+            e.vcall(
+                process,
+                SLOT_SET_ACTION_HEAD_TRACK_TARGET,
+                &args![location_ref],
+            );
+            return true;
+        }
+    }
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    let linked_door = e.call(REFERENCE_LINKED_DOOR_EXTRA, &args![target]).u32();
+    let mut arrived = false;
+    let radius = e
+        .call(
+            PACKAGE_RADIUS_ACTOR_TO_REF_TARGET,
+            &args![package, actor, 0u32],
+        )
+        .f32();
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if e.call(REFERENCE_IS_FURNITURE, &args![target]).bool() {
+        let current = e.mem.u32(process + PROCESS_CURRENT_FURNITURE_REFERENCE);
+        if current == 0 || current != e.mem.u32(process + PROCESS_TARGET) {
+            if e.mem.u32(process + PROCESS_CURRENT_FURNITURE_REFERENCE) == 0
+                || (e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() != 4
+                    && e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() != 9)
+            {
+                let target = e.mem.u32(process + PROCESS_TARGET);
+                e.mem
+                    .set_u32(process + PROCESS_CURRENT_FURNITURE_REFERENCE, target);
+                e.call(PROCESS_CLEAR_FURNITURE_MARKER, &args![this]);
+            } else {
+                e.vcall(a, ACTOR_SLOT_0X418, &args![]);
+            }
+        }
+        if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() != 0 {
+            arrived = true;
+        }
+        if e.mem.u32(process + PROCESS_CURRENT_FURNITURE_REFERENCE) != 0
+            && e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 0
+        {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            let index = e.mem.u8(process + PROCESS_CURRENT_FURNITURE_INDEX);
+            if e.call(
+                REFERENCE_GET_MARKER_USED,
+                &args![target, u32::from(index), 1u32],
+            )
+            .bool()
+                && !e.call(ACTOR_IS_PATHING_COMPLETE, &args![actor]).bool()
+            {
+                e.mem
+                    .set_u32(process + PROCESS_CURRENT_FURNITURE_REFERENCE, 0);
+                travel_end_move_message(e, process, a);
+                e.vcall(process, SLOT_SET_TARGET, &args![0u32]);
+                return false;
+            }
+        }
+        // The code copies the actor's position next to the marker index.
+        let position = actor_position_words(e, a);
+        if e.mem.u8(process + PROCESS_CURRENT_FURNITURE_INDEX) == 0x7f {
+            let own_cell = e.call(REFERENCE_PATHING_CELL, &args![actor]).u32();
+            let furniture = e.mem.u32(process + PROCESS_CURRENT_FURNITURE_REFERENCE);
+            let furniture_cell = e.call(REFERENCE_PATHING_CELL, &args![furniture]).u32();
+            if own_cell == furniture_cell {
+                let target = e.mem.u32(process + PROCESS_TARGET);
+                let (found, marker_index) = e.with_stack(16, |e, block| {
+                    for (i, word) in position.iter().enumerate() {
+                        e.mem.set_u32(block.addr() + i as u32 * 4, *word);
+                    }
+                    e.mem.set_u32(block.addr() + 12, 0);
+                    let found = e
+                        .call(
+                            REFERENCE_GET_CLOSEST_FREE_MARKER,
+                            &args![
+                                target,
+                                block,
+                                1u32,
+                                1u32,
+                                process + PROCESS_FURNITURE_MARKER,
+                                block.addr() + 12,
+                                1u32
+                            ],
+                        )
+                        .bool();
+                    (found, e.mem.u8(block.addr() + 12))
+                });
+                if !found {
+                    e.mem
+                        .set_u32(process + PROCESS_CURRENT_FURNITURE_REFERENCE, 0);
+                    e.vcall(process, SLOT_SET_TARGET, &args![0u32]);
+                    if flag {
+                        if e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32() == 2 {
+                            e.vcall(
+                                process,
+                                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                                &args![actor, u32::MAX],
+                            );
+                        } else {
+                            travel_add_procedure(e, process, a);
+                        }
+                    }
+                    return false;
+                }
+                let target = e.mem.u32(process + PROCESS_TARGET);
+                e.mem
+                    .set_u32(process + PROCESS_CURRENT_FURNITURE_REFERENCE, target);
+                let heading = e
+                    .call(
+                        FURNITURE_MARKER_HEADING,
+                        &args![process + PROCESS_FURNITURE_MARKER],
+                    )
+                    .f32();
+                let marker_radius = e.global::<f32>(ACTIVATE_MARKER_RADIUS);
+                let (world, cell) = reference_world_and_cell(e, target);
+                if !e
+                    .call(
+                        ACTOR_SET_PATHFINDING_GOAL_WITH_HEADING,
+                        &args![
+                            actor,
+                            process + PROCESS_FURNITURE_MARKER,
+                            cell,
+                            world,
+                            marker_radius,
+                            heading,
+                            0u32
+                        ],
+                    )
+                    .bool()
+                {
+                    return false;
+                }
+                e.mem
+                    .set_u8(process + PROCESS_CURRENT_FURNITURE_INDEX, marker_index);
+            }
+        }
+    }
+    if linked_door == 0 {
+        if !arrived {
+            arrived = e
+                .vcall(package, PACKAGE_SLOT_0X144, &args![actor, 0u32])
+                .bool();
+        }
+    } else {
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        if activate_one_hour_door_arrived(e, actor, target) {
+            arrived = true;
+        }
+    }
+    let movement_done = e.call(PROCESS_MOVEMENT_DONE, &args![this, actor]).bool();
+    if !arrived && !movement_done {
+        return activate_walk_to_target(e, this, actor, package, radius, flag);
+    }
+    e.vcall(process, SLOT_SET_TARGET, &args![saved_target]);
+    if !e.call(ACTOR_FLEE_ARRIVAL_CHECK, &args![actor]).bool() {
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        if e.call(REFERENCE_GET_FORM, &args![target]).u32() == e.global::<u32>(FORM_WORD_B)
+            && !e.call(PROCESS_MOVEMENT_DONE, &args![this, actor]).bool()
+        {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            let rotation_address = e.call(REFERENCE_ROTATION_ADDRESS, &args![target]).u32();
+            let rotation = e.mem.f32(rotation_address + 8);
+            e.call(ACTOR_REQUEST_ROTATE, &args![actor, rotation, 0u32]);
+        }
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        if target != a
+            && e.vcall(target, ACTOR_SLOT_IS_ACTOR, &args![]).bool()
+            && e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() != 4
+        {
+            if e.vcall(a, ACTOR_SLOT_STATE, &args![]).i32() == 9 {
+                e.vcall(a, ACTOR_SLOT_0X418, &args![]);
+                return true;
+            }
+            let position = e.vcall(target, ACTOR_SLOT_POSITION, &args![]).u32();
+            let words = [
+                e.mem.u32(position),
+                e.mem.u32(position + 4),
+                e.mem.u32(position + 8),
+            ];
+            e.call(
+                ACTOR_REQUEST_TURN_TO,
+                &args![actor, words[0], words[1], words[2], 0u32],
+            );
+        }
+    }
+    let mut keep = true;
+    let outcome = if flag {
+        activate_arrived_flagged(e, this, actor, package, movement_done, &mut keep)
+    } else {
+        activate_arrived_unflagged(e, this, actor, package, movement_done)
+    };
+    if let Some(result) = outcome {
+        return result;
+    }
+    // The final check: with the actor's idle done the acquire object is
+    // dropped.
+    let animation = e.vcall(a, ACTOR_SLOT_ANIMATION, &args![]).u32();
+    if activate_idle_done_or_none(e, animation)
+        && e.mem.u32(process + LOW_ACQUIRE_OBJECT) != 0
+        && (e.mem.u32(process + PROCESS_TARGET) == 0 || {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            !e.call(REFERENCE_IS_FURNITURE, &args![target]).bool()
+        })
+        && (keep || !e.call(ACTOR_IS_PATHING, &args![actor]).bool())
+    {
+        activate_drop_acquire_object(e, process);
+        e.vcall(process, SLOT_SET_TARGET, &args![0u32]);
+        e.mem.set_u32(process + PROCESS_SAVED_ACQUIRE_OBJECT, 0);
+        return true;
+    }
+    false
+}
+
+/// `HighProcess` vtable slots `Update` calls (Xbox PDB names).
+const SLOT_COMPUTE_LAST_TIME_PROCESSED: u32 = 0x28;
+const SLOT_EVALUATE_DETECTION_FOR_ACTOR: u32 = 0x68;
+const SLOT_CREATE_FOLLOW_NO_ESCORT: u32 = 0x1dc;
+const SLOT_SET_IS_AGGRESSOR: u32 = 0x1c8;
+const SLOT_CHECK_IF_SOMEONE_TO_TALK_WITH: u32 = 0x200;
+const SLOT_GET_ALERT: u32 = 0x31c;
+const SLOT_GET_FINISHING_COMBAT_PACKAGE: u32 = 0x324;
+const SLOT_SET_FINISHING_COMBAT_PACKAGE: u32 = 0x328;
+const SLOT_IS_RUNNING_RUN_ONCE: u32 = 0x35c;
+const SLOT_GET_WANT_WEAPON_DRAWN: u32 = 0x44c;
+const SLOT_SET_WANT_WEAPON_DRAWN: u32 = 0x450;
+const SLOT_GET_LIP_QUEUED: u32 = 0x150;
+const SLOT_CONTINUING_PACKAGE_FOR_PC: u32 = 0x4e0;
+const SLOT_SET_SIT_SLEEP_STATE: u32 = 0x4c0;
+const SLOT_GET_NEED_TALK_PLAYER: u32 = 0x604;
+const SLOT_SET_NEED_TALK_PLAYER: u32 = 0x600;
+const SLOT_CAN_SET_ACTION_HEAD_TRACK_TARGET: u32 = 0x66c;
+const SLOT_RANDOMLY_PLAY_SPECIAL_IDLES: u32 = 0xd4;
+const SLOT_CLEAR_CURRENT_DATA_FOR_PROCESS: u32 = 0x524;
+const SLOT_RESET_TARGET: u32 = 0x82c;
+const SLOT_GET_LINE_SIGHT_ON_ACTOR: u32 = 0x2cc;
+const SLOT_IS_PACKAGE_DONE_ONCE: u32 = 0x5a4;
+const SLOT_PACKAGE_DONE: u32 = 0x5a0;
+const SLOT_SET_PACKAGE_DONE_ONCE: u32 = 0x5a8;
+const SLOT_LOAD_PACKAGE_FROM_EXTRA_DATA: u32 = 0x714;
+const SLOT_INSERT_INTO_DETECTION_ARRAY: u32 = 0x508;
+const SLOT_GET_CURRENT_SPELL: u32 = 0x3c8;
+const SLOT_PROCESS_PURSUE: u32 = 0x29c;
+const SLOT_PROCESS_OBSERVE_COMBAT: u32 = 0x2a8;
+const SLOT_PROCESS_FLEE: u32 = 0x2a0;
+const SLOT_PROCESS_SANDMAN: u32 = 0x7c;
+const SLOT_PROCESS_CANNIBAL: u32 = 0x80;
+const SLOT_PROCESS_ESCORT: u32 = 0x7b4;
+const SLOT_PROCESS_SLEEP: u32 = 0x7b8;
+const SLOT_PROCESS_EAT: u32 = 0x7bc;
+const SLOT_PROCESS_ALARM: u32 = 0x7c4;
+const SLOT_PROCESS_ACQUIRE: u32 = 0x7d0;
+const SLOT_PROCESS_ACCOMPANY: u32 = 0x7cc;
+const SLOT_PROCESS_AMBUSH_WAIT: u32 = 0x7d4;
+const SLOT_PROCESS_USE_ITEM_AT: u32 = 0x7d8;
+const SLOT_PROCESS_USE_WEAPON: u32 = 0x7dc;
+const SLOT_PROCESS_CHOOSE_SPELL: u32 = 0x7e0;
+const SLOT_PROCESS_FLEE_NON_COMBAT: u32 = 0x7e4;
+const SLOT_PROCESS_AVOID_AREA: u32 = 0x7e8;
+const SLOT_PROCESS_SAND_BOX: u32 = 0x7ec;
+const SLOT_PROCESS_MOVEMENT_BLOCKED: u32 = 0x7f0;
+const SLOT_PROCESS_GUARD: u32 = 0x7f4;
+const SLOT_PROCESS_PATROL: u32 = 0x7fc;
+const SLOT_PROCESS_SUMMON_CREATURE_DEFEND: u32 = 0x800;
+const SLOT_PROCESS_CLEAR_MOUNT_POSITION: u32 = 0x804;
+const SLOT_PROCESS_NOTIFY: u32 = 0x808;
+const SLOT_PROCESS_DIALOGUE: u32 = 0x83c;
+const SLOT_PROCESS_DIALOGUE_ACTIVATE: u32 = 0x840;
+const SLOT_PROCESS_REMOVE_WORN: u32 = 0x848;
+const SLOT_PROCESS_WANDER: u32 = 0x84c;
+const SLOT_PROCESS_USE_IDLE_MARKER: u32 = 0x868;
+/// Actor slots `Update` calls (PC offsets, described only): the actor is in
+/// the dying state; its leader (compared with the player); the object worn in
+/// the slot given.
+const ACTOR_SLOT_0X2E8: u32 = 0x2e8;
+const ACTOR_SLOT_0X2C8: u32 = 0x2c8;
+const ACTOR_SLOT_0X3BC: u32 = 0x3bc;
+/// The process fields `Update` uses besides the shared ones.
+const PROCESS_BONE_LOD: u32 = 0x2e4;
+const PROCESS_FLAG_18A: u32 = 0x18a;
+const PROCESS_PATH_LOOK_AT_TARGET: u32 = 0x2ac;
+/// The empty destructor of the static handle `Update` declares sits on this
+/// object (`this` of `00483710`).
+const UPDATE_SCOPE_OBJECT: u32 = 0x011e_0246;
+/// `00450ff0` (`this` = a cell): true when the cell's state is 6 (attached).
+const UPDATE_CELL_IS_ATTACHED: u32 = 0x0045_0ff0;
+/// `00493830` (`this` = the process' animation): true when its list at +0x104
+/// is not empty.
+const ANIMATION_HAS_QUEUED_ITEMS: u32 = 0x0049_3830;
+/// `00437bd0` (`this` = an actor): true when `004f8960` answers 3.
+const ACTOR_UNIQUE_STATE_IS_3: u32 = 0x0043_7bd0;
+/// `00436aa0` (`this` = a reference): the address of the field at +0x30.
+const REFERENCE_FIELD_AT_0X30: u32 = 0x0043_6aa0;
+/// `0047c850` (`this` = the actor base data object): always false.
+const ACTOR_BASE_FLAG_ALWAYS_FALSE: u32 = 0x0047_c850;
+const ACTOR_BASE_DATA_GLOBAL: u32 = 0x011d_e45c;
+/// `TESPackage` flag tests: bit 0x800000 of the word at +0x1c, bit 0x80 of the
+/// word at +0x22; `IsNeverToRun`; the use-weapon and patrol data and the
+/// bytes they test.
+const PACKAGE_FLAG_800000: u32 = 0x0067_a460;
+const PACKAGE_FLAG_80_AT_22: u32 = 0x0067_abd0;
+const PACKAGE_IS_NEVER_TO_RUN: u32 = 0x0067_4e40;
+const PACKAGE_USE_WEAPON_DATA: u32 = 0x0067_58f0;
+const PACKAGE_PATROL_DATA: u32 = 0x0067_5920;
+const USE_WEAPON_DATA_BYTE_11: u32 = 0x0082_4060;
+const PATROL_DATA_BYTE_4: u32 = 0x004f_1540;
+/// `009f41c0` (`this` = the sandbox package's instance data): resets it.
+const SANDBOX_PACKAGE_RESET: u32 = 0x009f_41c0;
+/// `Actor` functions: `008a8f60` (what happens after the package changed),
+/// `008a6840` (`draw`: draws or holsters the weapon), `0088c830`
+/// (`EquipObject`), `008a08e0` (`ClearInCombat`), `008a6650` (`IsFleeing`),
+/// `008a78f0` (`ShouldSkipFallOutBehavior`), `008bc3d0`
+/// (`StartGreetingPlayer`), `008b3cd0` (`SetLookAtTarget`), `00881570`
+/// (`IsRunningRunOnce`), `00881650` (`GetCurrentPackageTarget`), `00895110`
+/// (`PickAnimations`), `00885520` (submerged test), `00881860` (moves toward a
+/// navmesh point), `008b01c0` (`DoDeathStuff`), `008a5e40` (`SetAlert`).
+const ACTOR_AFTER_PACKAGE_CHANGE: u32 = 0x008a_8f60;
+const ACTOR_DRAW_WEAPON: u32 = 0x008a_6840;
+const ACTOR_EQUIP_OBJECT: u32 = 0x0088_c830;
+const ACTOR_CLEAR_IN_COMBAT: u32 = 0x008a_08e0;
+const ACTOR_IS_FLEEING: u32 = 0x008a_6650;
+const ACTOR_SHOULD_SKIP_FALL_OUT_BEHAVIOR: u32 = 0x008a_78f0;
+const ACTOR_START_GREETING_PLAYER: u32 = 0x008b_c3d0;
+const ACTOR_SET_LOOK_AT_TARGET: u32 = 0x008b_3cd0;
+const ACTOR_IS_RUNNING_RUN_ONCE: u32 = 0x0088_1570;
+const ACTOR_GET_CURRENT_PACKAGE_TARGET: u32 = 0x0088_1650;
+const ACTOR_PICK_ANIMATIONS: u32 = 0x0089_5110;
+const ACTOR_IS_SUBMERGED: u32 = 0x0088_5520;
+const ACTOR_MOVE_TO_NAV_MESH: u32 = 0x0088_1860;
+const ACTOR_DO_DEATH_STUFF: u32 = 0x008b_01c0;
+/// `MobileObject` and process helpers: `009336c0` (`IsinDialogue`),
+/// `00935ae0` (the idle update of a reference), `00929960` (the
+/// middle-high-process update), `008c8fd0` (stores the byte `bSkippedUpdate`),
+/// `00901550` (`UpdateHeadTrackTargets`), `008e5730` (the bone level of
+/// detail), `0080ced0` (refreshes the process flag at +0x18a).
+const MOBILE_IS_IN_DIALOGUE: u32 = 0x0093_36c0;
+const MOBILE_UPDATE_IDLES: u32 = 0x0093_5ae0;
+const PROCESS_UPDATE_MIDDLE_HIGH: u32 = 0x0092_9960;
+const PROCESS_SET_SKIPPED_UPDATE: u32 = 0x008c_8fd0;
+const PROCESS_UPDATE_HEAD_TRACK_TARGETS: u32 = 0x0090_1550;
+const PROCESS_UPDATE_BONE_LOD: u32 = 0x008e_5730;
+const PROCESS_REFRESH_FLAG_18A: u32 = 0x0080_ced0;
+/// Process functions `Update` dispatches to by address.
+const PROCESS_PROCESS_CREATE_FOLLOW: u32 = 0x008d_b4f0;
+const PROCESS_PROCESS_8DB240: u32 = 0x008d_b240;
+const PROCESS_PROCESS_SURFACE: u32 = 0x008d_f060;
+const PROCESS_PROCESS_ALERT_BEHAVIOR: u32 = 0x008d_d8e0;
+const PROCESS_PROCESS_SEARCH_FOR_TARGET: u32 = 0x008d_d980;
+const PROCESS_PROCESS_BACK_UP: u32 = 0x008e_7c70;
+const PROCESS_PROCESS_TAKE_BACK: u32 = 0x008f_21f0;
+const PROCESS_PROCESS_AVOID_AREA: u32 = 0x0090_8f40;
+const PROCESS_SHOULD_WAIT_FOR_ESCORT_TARGET: u32 = 0x008d_f1e0;
+const PROCESS_NODE_FIND_FLAG_4534F0: u32 = 0x0045_34f0;
+/// `0067f970` (`this` = a package location): true for a generic location.
+const PACKAGE_LOCATION_IS_GENERIC: u32 = 0x0067_f970;
+/// The settings and constants `Update` reads: the greeting distance, the
+/// number of followers the player may have, the hour step of a waiting
+/// package, the factor of the script end time, the largest float.
+const SETTING_GREET_DISTANCE: u32 = 0x011c_d414;
+const SETTING_PLAYER_FOLLOWER_LIMIT: u32 = 0x011c_dad0;
+const SETTING_PACKAGE_HOUR_STEP: u32 = 0x011c_d968;
+const SCRIPT_END_TIME_SCALE: u32 = 0x0101_7a40;
+const DEATH_TIMER_MAX: u32 = 0x0102_31b0;
+/// `Interface::IsMenuIDVisible` (`00702680`, cdecl `(menu id, 0)`).
+const MENU_ID_VISIBLE: u32 = 0x0070_2680;
+/// `00621b00` (`this` = the process + 4): the float at +0x10.
+const PROCESS_SCRIPT_START_HOUR: u32 = 0x0062_1b00;
+/// Byte getters: `0087eed0` (+0xbe of a dialogue package), `008e95c0` (+0xbf),
+/// `008defe0` (+0x6cc of the player).
+const DIALOGUE_PACKAGE_BYTE_BE: u32 = 0x0087_eed0;
+const DIALOGUE_PACKAGE_CONTINUES_MOVING: u32 = 0x008e_95c0;
+const PLAYER_BYTE_6CC: u32 = 0x008d_efe0;
+/// `00ad8ce0` (`this` = the sound handle's object): true when it is valid.
+const SOUND_HANDLE_IS_VALID_OBJECT: u32 = 0x00ad_8ce0;
+/// `00408840` (cdecl, one float): the absolute value in `ST0`.
+const FLOAT_ABSOLUTE_VALUE: u32 = 0x0040_8840;
+
+/// The `Update` end of scope: a call to the empty destructor of the static
+/// `BSSoundHandle` the function declares (`00483710`).
+fn update_scope_end(e: &mut Engine) {
+    e.call(SOUND_HANDLE_DESTRUCTOR, &args![UPDATE_SCOPE_OBJECT]);
+}
+
+/// The common end of `Update`: the actor's process gets
+/// `ComputeLastTimeProcessed` (virtual `+0x28`).
+fn update_finish(e: &mut Engine, actor: u32) {
+    let actor_process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+    e.vcall(actor_process, SLOT_COMPUTE_LAST_TIME_PROCESSED, &args![]);
+    update_scope_end(e);
+}
+
+/// The value of the process-type table (`011a3ff0`) for the package's
+/// procedure type at the process' running procedure index.
+fn update_procedure_action(e: &mut Engine, process: u32, package: u32) -> u32 {
+    let kind = e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32();
+    let index = e
+        .vcall(process, SLOT_GET_PROCEDURE_INDEX_RUNNING, &args![])
+        .u32();
+    let table = e.mem.u32(0x011a_3ff0 + kind.wrapping_mul(4));
+    e.mem.u32(table.wrapping_add(index.wrapping_mul(4)))
+}
+
+/// The ranged weapon handling of `Update`: when the process has no current
+/// weapon, the item worn in slot 6 (virtual `+0x3bc` of the actor) is
+/// equipped (`Actor::EquipObject`), then the weapon is drawn.
+fn update_draw_weapon(e: &mut Engine, process: u32, mobile: u32) {
+    if e.vcall(process, SLOT_GET_CURRENT_WEAPON, &args![]).u32() == 0 {
+        let item = e.vcall(mobile, ACTOR_SLOT_0X3BC, &args![6u32]).u32();
+        if item != 0 {
+            let mut extra = 0;
+            if e.call(NI_POINTER_GET, &args![item]).u32() != 0 {
+                let node = e.call(NI_POINTER_GET, &args![item]).u32();
+                let words = e.call(NODE_ITEM_ADDRESS, &args![node]).u32();
+                extra = e.mem.u32(words);
+            }
+            let object = e.call(WORD_AT_8, &args![item]).u32();
+            e.call(
+                ACTOR_EQUIP_OBJECT,
+                &args![mobile, object, 1u32, extra, 1u32, 0u32, 1u32],
+            );
+        }
+    }
+    e.call(ACTOR_DRAW_WEAPON, &args![mobile, 1u32]);
+    e.vcall(process, SLOT_SET_WANT_WEAPON_DRAWN, &args![1u32]);
+}
+
+/// The actor turns to the package location's reference when it is a marker
+/// form or the package location is of type 3 and the actor is idle and has not
+/// finished moving (`MiddleHighProcess` `00915ef0`): the angle between the
+/// two references is rotated to when it is more than one degree.
+fn update_turn_to_location(e: &mut Engine, this: Ptr<HighProcess>, mobile: u32, package: u32) {
+    let process = this.addr();
+    let mut reference = 0;
+    if e.call(PACKAGE_LOCATION_WORD, &args![package]).u32() != 0 {
+        let location = e.call(PACKAGE_LOCATION_WORD, &args![package]).u32();
+        reference = e
+            .call(PACKAGE_LOCATION_GET_REFERENCE, &args![location])
+            .u32();
+    }
+    let generic = e.mem.u32(process + PROCESS_GENERIC_LOCATION);
+    if generic != 0 {
+        reference = generic;
+    }
+    let turns = if reference != 0
+        && e.call(REFERENCE_GET_FORM, &args![reference]).u32() == e.global::<u32>(FORM_WORD_B)
+    {
+        true
+    } else if reference != 0 && e.call(PACKAGE_LOCATION_WORD, &args![package]).u32() != 0 {
+        let location = e.call(PACKAGE_LOCATION_WORD, &args![package]).u32();
+        e.call(PACKAGE_LOCATION_TYPE, &args![location]).i32() == 3
+    } else {
+        false
+    };
+    if !turns
+        || e.call(PROCESS_MOVEMENT_DONE, &args![this, mobile]).bool()
+        || e.vcall(mobile, ACTOR_SLOT_STATE, &args![]).i32() != 0
+    {
+        return;
+    }
+    let reference_rotation = e.call(REFERENCE_ROTATION_ADDRESS, &args![reference]).u32();
+    let own_rotation = e.call(REFERENCE_ROTATION_ADDRESS, &args![mobile]).u32();
+    let difference = e.mem.f32(reference_rotation + 8) - e.mem.f32(own_rotation + 8);
+    let size = e.call(FLOAT_ABSOLUTE_VALUE, &args![difference]).f64();
+    if size > e.global::<f64>(DEGREES_TO_RADIANS) {
+        let reference_rotation = e.call(REFERENCE_ROTATION_ADDRESS, &args![reference]).u32();
+        let rotation = e.mem.f32(reference_rotation + 8);
+        e.call(ACTOR_REQUEST_ROTATE, &args![mobile, rotation, 1u32]);
+    }
+}
+
+/// The detection and greeting stretch of `Update` for an actor that is not
+/// the player. `no_ai` is the actor's byte at `+0x104` (`00493bb0`).
+///
+/// With nothing talking, fleeing or paralysed (and no sound playing for the
+/// process) the player's detection level against the actor is worked out; a
+/// detected, close, quiet player is greeted by sight. Otherwise the idle chatter
+/// timer runs down or a random line is said and the timer restarts.
+fn update_detection_and_greeting(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    mobile: u32,
+    package: u32,
+    no_ai: bool,
+) {
+    let process = this.addr();
+    let player = player_pointer(e);
+    let mut detecting = false;
+    if !e.call(PLAYER_GREET_TEST, &args![player]).bool()
+        && !e.call(ACTOR_CREATURE_LIKE, &args![mobile]).bool()
+        && !e.call(ACTOR_IS_FLEEING, &args![mobile, 0u32]).bool()
+        && !e.call(ACTOR_UNIQUE_STATE_IS_3, &args![mobile]).bool()
+        && !e.vcall(mobile, ACTOR_SLOT_PAUSED_A, &args![]).bool()
+    {
+        // The process' sound handle is built in a temporary and destroyed
+        // again.
+        detecting = e.with_stack(16, |e, handle| {
+            let valid_object = e
+                .vcall(process, SLOT_GET_SOUND_HANDLE, &args![handle, 0u32])
+                .u32();
+            let free = !e
+                .call(SOUND_HANDLE_IS_VALID_OBJECT, &args![valid_object])
+                .bool()
+                && !e.vcall(process, SLOT_ASK_GREETING, &args![]).bool()
+                && !e.call(PLAYER_BYTE_6CC, &args![player]).bool();
+            e.call(SOUND_HANDLE_DESTRUCTOR, &args![handle]);
+            free
+        });
+    }
+    if !detecting {
+        if e.vcall(process, SLOT_ASK_GREETING, &args![]).bool() {
+            let movement_stopped =
+                e.vcall(process, SLOT_GET_MOVEMENT_STOPPED, &args![]).u32() & 0xff;
+            let lip_queued = e.vcall(process, SLOT_GET_LIP_QUEUED, &args![]).u32() & 0xff;
+            e.vcall(
+                process,
+                SLOT_PROCESS_GREET,
+                &args![mobile, 0u32, 0u32, movement_stopped, lip_queued, 0u32],
+            );
+        }
+        return;
+    }
+    let detection = e.with_stack(4, |e, seen| {
+        e.call(
+            ACTOR_DETECTION_LEVEL,
+            &args![
+                mobile,
+                0u32,
+                player,
+                seen,
+                u32::from(no_ai),
+                0u32,
+                0u32,
+                0u32
+            ],
+        )
+        .i32()
+    });
+    if detection > 0
+        && !e.call(ACTOR_WEAPON_IS_MINE, &args![mobile]).bool()
+        && !e.call(MOVE_MODE_RUNNING_ONLY, &args![player]).bool()
+        && !e.vcall(player, ACTOR_SLOT_0X448, &args![]).bool()
+        && (e.vcall(mobile, ACTOR_SLOT_0X2C8, &args![]).u32() != player
+            || e.call(ACTOR_IS_RUNNING_RUN_ONCE, &args![mobile]).bool())
+        && e.vcall(process, SLOT_CAN_SET_ACTION_HEAD_TRACK_TARGET, &args![])
+            .bool()
+    {
+        let distance = e
+            .call(DISTANCE_FROM_REFERENCE, &args![player, mobile, 0u32, 0u32])
+            .f64();
+        let setting = e.call(SETTING_VALUE, &args![SETTING_GREET_DISTANCE]).u32();
+        // The setting is compared as a float with the distance.
+        if !(f64::from(e.mem.f32(setting)) < distance) {
+            let in_combat = e.with_stack(4, |e, flag| {
+                e.mem.set_u8(flag.addr(), 0);
+                e.call(PLAYER_IS_IN_COMBAT, &args![player, flag]).bool()
+            });
+            if !in_combat
+                && !e
+                    .call(ACTOR_SHOULD_SKIP_FALL_OUT_BEHAVIOR, &args![mobile, 0u32])
+                    .bool()
+                && !e
+                    .call(ACTOR_IS_CONTINUING_PACKAGE_FOR_PC, &args![mobile])
+                    .bool()
+                && !no_ai
+                && !e.call(ACTOR_IS_ALARMED, &args![mobile]).bool()
+                && (!e.call(MOBILE_IS_IN_DIALOGUE, &args![mobile]).bool()
+                    || e.call(ACTOR_MOVE_MODE_HAS_SPEED, &args![mobile]).bool())
+                && e.vcall(process, SLOT_GET_TARGET, &args![]).u32() != player
+                && e.vcall(process, SLOT_GET_GREETING_TIMER, &args![]).f64() <= 0.0
+            {
+                let topic = e.call(GET_TOPIC, &args![1u32, 0u32]).u32();
+                e.call(ACTOR_START_GREETING_PLAYER, &args![mobile, topic]);
+            }
+            return;
+        }
+    }
+    let timer = e.get(this, HighProcess::fIdleChatterTimer);
+    if timer > 0.0 || timer.is_nan() || e.call(MOBILE_IS_IN_DIALOGUE, &args![mobile]).bool() {
+        let frame = e.call(FRAME_TIME, &args![FRAME_TIMER]).f32();
+        e.set(this, HighProcess::fIdleChatterTimer, timer - frame);
+    } else if package == 0
+        || (e.call(PACKAGE_TYPE, &args![package]).i32() != 0xf
+            && e.call(PACKAGE_FLAG_80_AT_22, &args![package]).bool())
+    {
+        let topic = e.call(GET_TOPIC, &args![1u32, 3u32]).u32();
+        if topic != 0 {
+            e.vcall(
+                process,
+                SLOT_PROCESS_GREET,
+                &args![mobile, topic, 0u32, 0u32, 1u32, 0u32],
+            );
+        }
+        let high = e.call(SETTING_VALUE, &args![FLEE_TIMER_HIGH_SETTING]).u32();
+        let low = e.call(SETTING_VALUE, &args![FLEE_TIMER_LOW_SETTING]).u32();
+        let low = e.mem.f32(low);
+        let high = e.mem.f32(high);
+        let next = e.call(RANDOM_BETWEEN, &args![low, high]).f32();
+        e.set(this, HighProcess::fIdleChatterTimer, next);
+    }
+}
+
+/// `Update` for the procedure action `0xd` (a package that makes the actor
+/// walk to and talk or deal with its target). Returns whether the common end
+/// of `Update` follows (false: `Update` returns at once).
+fn update_case_target_package(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    mobile: u32,
+    package: u32,
+) -> bool {
+    let process = this.addr();
+    let player = player_pointer(e);
+    if e.call(ACTOR_CREATURE_LIKE, &args![mobile]).bool() {
+        travel_add_procedure(e, process, mobile);
+        return true;
+    }
+    if e.mem.u32(process + PROCESS_TARGET) == 0 {
+        e.vcall(process, SLOT_SET_TARGET_FOR_PACKAGE, &args![mobile]);
+    }
+    if e.mem.u32(process + PROCESS_TARGET) == 0 {
+        travel_add_procedure(e, process, mobile);
+        e.call(ACTOR_STOP_MOVING, &args![mobile]);
+        return true;
+    }
+    let kind = e.call(PACKAGE_TYPE, &args![package]).i32();
+    if kind == 0x1c {
+        let starter = e
+            .call(DIALOGUE_ACTOR_STARTED_CONVERSATION, &args![package])
+            .u32();
+        if e.mem.u32(process + PROCESS_TARGET) == player {
+            e.call(ACTOR_END_INTERRUPT_PACKAGE, &args![mobile, 0u32]);
+            return false;
+        }
+        let done = if starter == mobile {
+            e.call(DIALOGUE_PACKAGE_BYTE_BE, &args![package]).u8()
+        } else {
+            e.call(DIALOGUE_PACKAGE_CONTINUES_MOVING, &args![package])
+                .u8()
+        };
+        if done != 0 {
+            travel_add_procedure(e, process, mobile);
+            return false;
+        }
+        if starter == 0 || e.call(ACTOR_PROCESS, &args![starter]).u32() == 0 {
+            e.call(ACTOR_END_INTERRUPT_PACKAGE, &args![mobile, 0u32]);
+            return false;
+        }
+        if e.vcall(starter, ACTOR_SLOT_IS_ACTOR, &args![]).bool()
+            && e.call(ACTOR_FLEE_ARRIVAL_CHECK, &args![starter]).bool()
+        {
+            e.call(ACTOR_END_INTERRUPT_PACKAGE, &args![mobile, 0u32]);
+            return false;
+        }
+        let starter_process = e.call(ACTOR_PROCESS, &args![starter]).u32();
+        if e.vcall(starter_process, SLOT_GET_PROCEDURE_INDEX_RUNNING, &args![])
+            .i32()
+            == 2
+        {
+            let starter_process = e.call(ACTOR_PROCESS, &args![starter]).u32();
+            travel_add_procedure(e, starter_process, starter);
+        }
+    } else if kind == 1 {
+        let follow = e.call(PACKAGE_FOLLOW_DATA, &args![package]).u32();
+        if e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32() == 7
+            && e.call(PACKAGE_SECOND_LOCATION, &args![package]).u32() != 0
+        {
+            let radius = e.mem.f32(follow + 8);
+            if e.call(
+                PACKAGE_IS_TARGET_AT_SECOND_LOCATION,
+                &args![package, mobile, radius],
+            )
+            .bool()
+            {
+                travel_add_procedure(e, process, mobile);
+            }
+        } else {
+            let count = e.call(PLAYER_ACTOR_COUNT, &args![player]).i32();
+            let limit = e
+                .call(
+                    SETTING_INTEGER_POINTER,
+                    &args![SETTING_PLAYER_FOLLOWER_LIMIT],
+                )
+                .u32();
+            if count < e.mem.i32(limit) {
+                travel_add_procedure(e, process, mobile);
+            }
+        }
+    } else {
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        if e.call(REFERENCE_FLAG_20, &args![target]).bool()
+            || e.call(REFERENCE_FLAG_800, &args![target]).bool()
+        {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            if e.call(REFERENCE_FLAG_20, &args![target]).bool() {
+                let target = e.mem.u32(process + PROCESS_TARGET);
+                e.call(PACKAGE_SET_NEVER_RUN, &args![package, target, 1u32]);
+            }
+            travel_add_procedure(e, process, mobile);
+        } else {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            if e.vcall(target, ACTOR_SLOT_0X22C, &args![1u32]).bool() {
+                let target = e.mem.u32(process + PROCESS_TARGET);
+                e.call(PACKAGE_SET_NEVER_RUN, &args![package, target, 1u32]);
+                return false;
+            }
+            if e.call(PACKAGE_TYPE, &args![package]).i32() == 0xf {
+                e.vcall(
+                    process,
+                    SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                    &args![mobile, u32::MAX],
+                );
+                return false;
+            }
+            if e.call(PACKAGE_TYPE, &args![package]).i32() != 0x1c
+                && !e.call(PACKAGE_FLAG_10000, &args![package]).bool()
+            {
+                update_case_target_package_walk(e, this, mobile, package);
+            }
+        }
+    }
+    e.call(ACTOR_STOP_MOVING, &args![mobile]);
+    true
+}
+
+/// The last stretch of the target package: what the process does for the
+/// package kinds that are not follow, dialogue or a plain flagged target
+/// (type 1 of the actor's own package, a procedure of type `0x16` that waits
+/// for the hour, and an escort).
+fn update_case_target_package_walk(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    mobile: u32,
+    package: u32,
+) {
+    let process = this.addr();
+    let player = player_pointer(e);
+    let own = e.call(ACTOR_CURRENT_PACKAGE, &args![mobile]).u32();
+    if e.call(PACKAGE_TYPE, &args![own]).i32() == 1 {
+        let target = e.call(PACKAGE_TARGET_WORD, &args![package]).u32();
+        let wanted = e.call(WORD_AT_8, &args![target]).i32() as f32;
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        let distance = e
+            .call(DISTANCE_FROM_REFERENCE, &args![mobile, target, 0u32, 0u32])
+            .f64();
+        if f64::from(wanted) < distance {
+            travel_add_procedure(e, process, mobile);
+        }
+        return;
+    }
+    if e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32() == 0x16 {
+        let hour = e.call(CALENDAR_GET_HOUR, &args![CALENDAR_INSTANCE]).f32();
+        let step = e
+            .call(SETTING_VALUE, &args![SETTING_PACKAGE_HOUR_STEP])
+            .u32();
+        let step = e.mem.f32(step);
+        let stamp = e.get(this, HighProcess::fDetectListTimer);
+        if !(hour < step + stamp) {
+            e.set(this, HighProcess::fDetectListTimer, hour);
+            e.vcall(
+                process,
+                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                &args![mobile, u32::MAX],
+            );
+        }
+        return;
+    }
+    let own = e.call(ACTOR_CURRENT_PACKAGE, &args![mobile]).u32();
+    if e.call(PACKAGE_TYPE, &args![own]).i32() != 2 {
+        return;
+    }
+    let mut other = 0;
+    let target = e.mem.u32(process + PROCESS_TARGET);
+    if target != 0 && e.vcall(target, ACTOR_SLOT_IS_ACTOR, &args![]).bool() {
+        other = e.mem.u32(process + PROCESS_TARGET);
+        if e.vcall(
+            process,
+            SLOT_GET_LINE_SIGHT_ON_ACTOR,
+            &args![mobile, other, 0u32, 1u32],
+        )
+        .bool()
+        {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            e.vcall(process, SLOT_SET_ACTION_HEAD_TRACK_TARGET, &args![target]);
+        }
+    }
+    if other == 0 {
+        return;
+    }
+    if other == player {
+        let world = e
+            .call(PACKAGE_LOCATION_WORLD, &args![package, mobile])
+            .u32();
+        let cell = e.call(PACKAGE_LOCATION_CELL, &args![package, mobile]).u32();
+        e.with_stack(12, |e, buffer| {
+            let coord = e
+                .call(PACKAGE_LOCATION_COORD, &args![package, buffer, mobile])
+                .u32();
+            e.with_stack(0x34, |e, location| {
+                e.call(
+                    PATHING_LOCATION_FROM_COORD,
+                    &args![location, coord, cell, world],
+                );
+                let waits = e
+                    .call(
+                        PROCESS_SHOULD_WAIT_FOR_ESCORT_TARGET,
+                        &args![this, mobile, other, location, 0u32],
+                    )
+                    .bool();
+                if !waits {
+                    e.call(ACTOR_CLEAR_LOOK_AT_TARGET, &args![mobile]);
+                    e.vcall(process, SLOT_CLEAR_ALL_HEAD_TRACK_TARGETS, &args![]);
+                    travel_add_procedure(e, process, mobile);
+                }
+                e.call(PATHING_LOCATION_DESTRUCTOR, &args![location]);
+            });
+        });
+        return;
+    }
+    let other_package = e.call(ACTOR_CURRENT_PACKAGE, &args![other]).u32();
+    if other_package == 0 || e.call(PACKAGE_TYPE, &args![other_package]).i32() != 1 {
+        e.call(ACTOR_CLEAR_LOOK_AT_TARGET, &args![mobile]);
+        e.vcall(process, SLOT_CLEAR_ALL_HEAD_TRACK_TARGETS, &args![]);
+        e.vcall(
+            process,
+            SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+            &args![mobile, (-2i32) as u32],
+        );
+    } else {
+        let other_process = e.call(ACTOR_PROCESS, &args![other]).u32();
+        e.vcall(
+            other_process,
+            SLOT_SET_PROCEDURE_INDEX_RUNNING,
+            &args![1u32],
+        );
+        travel_add_procedure(e, process, mobile);
+    }
+}
+
+/// `Update` for the procedure action `0x36`: the package that only runs while
+/// its procedures are not finished (scripted and idle packages). Returns
+/// whether the common end of `Update` follows.
+fn update_case_script_package(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    mobile: u32,
+    mut package: u32,
+) -> bool {
+    let process = this.addr();
+    let player = player_pointer(e);
+    if e.call(PACKAGE_FLAG_800000, &args![package]).bool() {
+        e.call(ACTOR_SET_ALERT, &args![mobile, 0u32]);
+    }
+    if e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32() == 0 {
+        e.set(this, HighProcess::fScriptPackageEndTime, 0.0);
+    }
+    if !e.vcall(process, SLOT_IS_PACKAGE_DONE_ONCE, &args![]).bool()
+        && !e.call(PACKAGE_GET_IS_CREATED, &args![package]).bool()
+        && e.call(PACKAGE_IS_INTERRUPT, &args![package]).bool()
+    {
+        let extra = e.call(REFERENCE_EXTRA_DATA, &args![mobile]).u32();
+        e.call(SCRIPT_SET_ACTION_FLAG, &args![package, extra, 0x400u32]);
+        e.vcall(process, SLOT_PACKAGE_DONE, &args![mobile, package]);
+        e.vcall(process, SLOT_SET_PACKAGE_DONE_ONCE, &args![1u32]);
+    }
+    // These package types are over at once.
+    let kind = e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32();
+    if matches!(kind, 1 | 4 | 5 | 0x29 | 0x2d) {
+        e.vcall(
+            process,
+            SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+            &args![mobile, u32::MAX],
+        );
+        return false;
+    }
+    if e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32() == 0x2c {
+        let data = e.call(PACKAGE_USE_WEAPON_DATA, &args![package]).u32();
+        if data != 0
+            && (e.call(USE_WEAPON_DATA_BYTE_11, &args![data]).bool() || {
+                let bursts = e.get(this, HighProcess::sBurstsFired);
+                let wanted = e.call(0x008f_21d0, &args![data]).u32() & 0xffff;
+                i32::from(bursts) < wanted as i32
+            })
+            && e.mem.f32(process + PROCESS_PACKAGE_IDLE_TIMER) <= 0.0
+        {
+            e.vcall(
+                process,
+                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                &args![mobile, u32::MAX],
+            );
+        }
+    }
+    if e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32() == 0x26 {
+        let patrol = e.call(PACKAGE_PATROL_DATA, &args![package]).u32();
+        let loops = patrol != 0 && e.call(PATROL_DATA_BYTE_4, &args![patrol]).bool();
+        let mut restarted = false;
+        let list = e.call(PACKAGE_LIST_AT_38, &args![package]).u32();
+        let finished = list == 0 || {
+            let next = e.call(NODE_NEXT, &args![list]).i32();
+            next <= 0
+        };
+        if finished && !loops {
+            e.vcall(process, SLOT_SET_CURRENT_ACTION_COMPLETE, &args![1u32]);
+            e.vcall(process, SLOT_CLEAR_CURRENT_DATA_FOR_PROCESS, &args![mobile]);
+            e.vcall(process, SLOT_CLEAR_CURRENT_PACKAGE, &args![]);
+            restarted = e
+                .vcall(process, SLOT_CHECK_FOR_NEW_PACKAGE, &args![mobile, 1u32])
+                .bool();
+        }
+        if loops && !restarted {
+            e.vcall(
+                process,
+                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                &args![mobile, u32::MAX],
+            );
+        }
+        return false;
+    }
+    if e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32() == 0x25 {
+        let instance = e
+            .vcall(process, SLOT_GET_INSTANCE_DATA_THAT_IS_RUNNING, &args![])
+            .u32();
+        if instance != 0 {
+            e.call(SANDBOX_PACKAGE_RESET, &args![instance]);
+            e.vcall(process, SLOT_SET_PROCEDURE_INDEX_RUNNING, &args![0u32]);
+        }
+        return false;
+    }
+    if e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32() == 0x1c
+        && e.call(PACKAGE_TARGET_WORD, &args![package]).u32() != 0
+        && e.call(PACKAGE_INITIAL_TARGET_COUNT, &args![package]).u32() == 0
+    {
+        e.vcall(
+            process,
+            SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+            &args![mobile, (-3i32) as u32],
+        );
+        return false;
+    }
+    if e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32() != 0 {
+        if e.call(PACKAGE_TYPE, &args![package]).i32() == 3
+            || e.call(PACKAGE_TYPE, &args![package]).i32() == 4
+        {
+            e.vcall(
+                process,
+                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                &args![mobile, u32::MAX],
+            );
+            return false;
+        }
+    } else {
+        if !package_find_location(e, package, false, 0, mobile, 1) && mobile != player {
+            e.vcall(
+                process,
+                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                &args![mobile, u32::MAX],
+            );
+            return false;
+        }
+        if !e.call(ACTOR_IS_PATHING_COMPLETE, &args![mobile]).bool()
+            || e.call(ACTOR_IS_ROTATING, &args![mobile]).bool()
+        {
+            return false;
+        }
+        update_turn_to_location(e, this, mobile, package);
+    }
+    if e.get(this, HighProcess::bContinuingPackageforPC) != 0 {
+        e.vcall(
+            process,
+            SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+            &args![mobile, u32::MAX],
+        );
+        e.vcall(process, SLOT_SET_CURRENT_ACTION_COMPLETE, &args![0u32]);
+        return false;
+    }
+    if package != 0 && e.call(PACKAGE_ONCE_PER_DAY, &args![package]).bool() {
+        let day = e.call(CALENDAR_GET_DAY, &args![CALENDAR]).u8();
+        e.vcall(mobile, ACTOR_SLOT_0X28C, &args![package, u32::from(day)]);
+    }
+    if e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32() == 2
+        || e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32() == 0x1a
+    {
+        if !e
+            .vcall(process, SLOT_GET_CURRENT_ACTION_COMPLETE, &args![])
+            .bool()
+        {
+            e.vcall(
+                process,
+                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                &args![mobile, u32::MAX],
+            );
+        } else {
+            if e.mem.u32(process + PROCESS_TARGET) == 0 {
+                e.vcall(process, SLOT_SET_TARGET_FOR_PACKAGE, &args![mobile]);
+            }
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            if target != 0
+                && e.call(REFERENCE_IS_FURNITURE, &args![target]).bool()
+                && e.vcall(process, SLOT_GET_SIT_SLEEP_STATE, &args![]).i32() == 0
+            {
+                e.vcall(
+                    process,
+                    SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                    &args![mobile, u32::MAX],
+                );
+            }
+        }
+        return false;
+    }
+    let list = e.call(PACKAGE_LIST_AT_38, &args![package]).u32();
+    if e.call(NODE_NEXT, &args![list]).u32() == 0
+        && e.call(PACKAGE_TYPE, &args![package]).i32() != 0x12
+    {
+        e.vcall(process, SLOT_SET_TARGET, &args![0u32]);
+        if !e
+            .vcall(process, SLOT_CONTINUING_PACKAGE_FOR_PC, &args![])
+            .bool()
+        {
+            if e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32() == 0 {
+                if package != 0 && e.call(PACKAGE_GET_IS_CREATED, &args![package]).bool() {
+                    if e.call(PACKAGE_IS_INTERRUPT, &args![package]).bool() {
+                        e.vcall(process, SLOT_CLEAR_CURRENT_PACKAGE, &args![]);
+                        e.vcall(process, SLOT_LOAD_PACKAGE_FROM_EXTRA_DATA, &args![mobile]);
+                        package = e
+                            .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+                            .u32();
+                    }
+                    if !e.call(ACTOR_IS_PATHING_COMPLETE, &args![mobile]).bool() {
+                        travel_end_move_message(e, process, mobile);
+                    }
+                }
+            } else {
+                e.vcall(process, SLOT_CLEAR_RUN_ONCE_PACKAGE, &args![]);
+                package = e
+                    .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+                    .u32();
+            }
+        }
+        if package != 0
+            && (e.call(PACKAGE_ONCE_PER_DAY, &args![package]).bool()
+                || e.call(PACKAGE_FLAG_2, &args![package]).bool()
+                || e.call(PACKAGE_FLAG_4, &args![package]).bool())
+        {
+            e.set(this, HighProcess::fPackageEvalTimer, 0.0);
+        }
+        activate_drop_acquire_object(e, process);
+        e.mem.set_u32(process + LOW_ITEM_BEING_USED, 0);
+        while !e
+            .call(LIST_IS_EMPTY, &args![process + LOW_OBJECT_LIST])
+            .bool()
+        {
+            let node = e
+                .call(NODE_ITEM_ADDRESS, &args![process + LOW_OBJECT_LIST])
+                .u32();
+            let entry = e.mem.u32(node);
+            if entry != 0 {
+                e.call(ACQUIRE_OBJECT_DELETE, &args![entry, 1u32]);
+            }
+            e.with_stack(4, |e, slot| {
+                e.mem.set_u32(slot.addr(), entry);
+                e.call(LIST_REMOVE_ITEM, &args![process + LOW_OBJECT_LIST, slot]);
+            });
+        }
+        e.set(this, HighProcess::fDetectListTimer, 0.0);
+        e.mem.set_u32(process + PROCESS_GENERIC_LOCATION, 0);
+        e.call(LIST_CLEAR, &args![process + 0x6c]);
+    }
+    if e.vcall(process, SLOT_GET_FINISHING_COMBAT_PACKAGE, &args![])
+        .bool()
+    {
+        e.vcall(process, SLOT_SET_FINISHING_COMBAT_PACKAGE, &args![0u32]);
+    }
+    true
+}
+
+/// `Package::FindLocation` (virtual `+0x13c`) as `Update` calls it: `(actor,
+/// 0, no limit, last)`.
+fn update_find_location(e: &mut Engine, package: u32, mobile: u32, last: u32) -> bool {
+    let limit = e.global::<f32>(NO_LIMIT_FLOAT);
+    e.vcall(
+        package,
+        PACKAGE_SLOT_FIND_LOCATION,
+        &args![mobile, 0u32, limit, last],
+    )
+    .bool()
+}
+
+/// The part of `Update` that runs for a reference that is not an actor: with
+/// the reference's flag byte `+0x81` set, a running package whose procedure
+/// action is `0xc` gets `ProcessDialogue`.
+fn update_non_actor(e: &mut Engine, this: Ptr<HighProcess>, actor: u32) {
+    let process = this.addr();
+    if e.call(REFERENCE_BYTE_AT_81, &args![actor]).bool() {
+        let package = e
+            .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+            .u32();
+        if package != 0 && update_procedure_action(e, process, package) == 0xc {
+            e.vcall(process, SLOT_PROCESS_DIALOGUE, &args![actor]);
+        }
+    }
+}
+
+/// The dying actor stretch of `Update`.
+fn update_dying_actor(e: &mut Engine, this: Ptr<HighProcess>, mobile: u32) {
+    let process = this.addr();
+    let run_once = e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32();
+    let timer = e.vcall(process, SLOT_GET_GREETING_TIMER, &args![]).f64();
+    if timer == e.global::<f64>(DEATH_TIMER_MAX) {
+        e.call(ACTOR_DO_DEATH_STUFF, &args![mobile]);
+    } else if run_once != 0 && e.call(PACKAGE_TYPE, &args![run_once]).i32() == 0x1c {
+        if update_procedure_action(e, process, run_once) == 0x36 {
+            e.call(ACTOR_DO_DEATH_STUFF, &args![mobile]);
+        } else {
+            e.vcall(process, SLOT_PROCESS_DIALOGUE, &args![mobile]);
+        }
+    } else {
+        let timer = e.vcall(process, SLOT_GET_GREETING_TIMER, &args![]).f64();
+        if timer <= 0.0 {
+            e.call(ACTOR_DO_DEATH_STUFF, &args![mobile]);
+        }
+    }
+}
+
+/// The weapon-drawn handling of `Update`: an actor under a package that wants
+/// it, or that has been alerted, draws (equipping the item worn in slot 6
+/// first when it has no weapon); one that is not in such a package holsters it
+/// again.
+fn update_weapon_state(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    mobile: u32,
+    package: u32,
+    extra_package: u32,
+) {
+    let process = this.addr();
+    let player = player_pointer(e);
+    let mut checked = package;
+    if e.vcall(process, SLOT_IS_RUNNING_RUN_ONCE, &args![]).bool() {
+        checked = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+    }
+    let wants = !e.call(ACTOR_CREATURE_LIKE, &args![mobile]).bool()
+        && ((checked != 0 && e.call(PACKAGE_FLAG_800000, &args![checked]).bool())
+            || (extra_package != 0 && e.call(PACKAGE_FLAG_800000, &args![extra_package]).bool())
+            || e.vcall(process, SLOT_GET_ALERT, &args![]).bool()
+            || e.get(this, HighProcess::bWeaponAlertDrawn) != 0);
+    if wants {
+        if e.vcall(process, SLOT_GET_SIT_SLEEP_STATE, &args![]).i32() == 0
+            && e.vcall(process, SLOT_GET_ANIM_ACTION, &args![]).i32() == -1
+        {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            if checked == 0
+                || e.call(PACKAGE_TYPE, &args![checked]).i32() != 0x1c
+                || mobile != target
+            {
+                if !e.vcall(process, SLOT_GET_WEAPON_DRAWN, &args![]).bool()
+                    && !e
+                        .vcall(process, SLOT_GET_WANT_WEAPON_DRAWN, &args![])
+                        .bool()
+                {
+                    update_draw_weapon(e, process, mobile);
+                }
+            } else if extra_package == 0
+                || !e.call(PACKAGE_FLAG_800000, &args![extra_package]).bool()
+            {
+                e.call(ACTOR_DRAW_WEAPON, &args![mobile, 0u32]);
+                e.vcall(process, SLOT_SET_WANT_WEAPON_DRAWN, &args![0u32]);
+            } else {
+                update_draw_weapon(e, process, mobile);
+            }
+        }
+    } else if mobile != player
+        && !e.call(ACTOR_CREATURE_LIKE, &args![mobile]).bool()
+        && e.vcall(process, SLOT_GET_WEAPON_DRAWN, &args![]).bool()
+        && e.vcall(process, SLOT_GET_WANT_WEAPON_DRAWN, &args![])
+            .bool()
+    {
+        e.call(ACTOR_DRAW_WEAPON, &args![mobile, 0u32]);
+        e.vcall(process, SLOT_SET_WANT_WEAPON_DRAWN, &args![0u32]);
+    }
+}
+
+/// The awake-and-aware timer of `Update` (`fAwarePlayerTimer`, +0x34c) with
+/// the run-once follow package: the timer runs down, and a follow package set
+/// as run-once ends when it is over. Returns the running package afterwards.
+fn update_aware_timer(e: &mut Engine, this: Ptr<HighProcess>, mobile: u32, package: u32) -> u32 {
+    let process = this.addr();
+    let mut package = package;
+    let aware = e.get(this, HighProcess::fAwarePlayerTimer);
+    let mut skip = false;
+    if aware < 0.0 {
+        let run_once = e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32();
+        if run_once == 0 {
+            skip = true;
+        } else {
+            let run_once = e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32();
+            if e.call(PACKAGE_TYPE, &args![run_once]).i32() != 1 {
+                skip = true;
+            }
+        }
+    }
+    if skip {
+        return package;
+    }
+    let aware = e.get(this, HighProcess::fAwarePlayerTimer);
+    if !(aware > 0.0 || aware.is_nan()) {
+        let run_once = e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32();
+        if run_once != 0 {
+            let run_once = e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32();
+            if e.call(PACKAGE_TYPE, &args![run_once]).i32() == 1 {
+                e.set(this, HighProcess::fAwarePlayerTimer, 0.0);
+                travel_end_move_message(e, process, mobile);
+                e.vcall(process, SLOT_CLEAR_RUN_ONCE_PACKAGE, &args![]);
+                e.vcall(process, SLOT_CLEAR_ACTION_HEAD_TRACK, &args![1u32]);
+                e.vcall(process, SLOT_SET_TARGET, &args![0u32]);
+                package = e
+                    .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+                    .u32();
+                return package;
+            }
+        }
+    }
+    let frame = e.call(FRAME_TIME, &args![FRAME_TIMER]).f32();
+    let aware = e.get(this, HighProcess::fAwarePlayerTimer);
+    e.set(this, HighProcess::fAwarePlayerTimer, aware - frame);
+    package
+}
+
+/// The generic location bookkeeping of `Update`: a package with a generic
+/// location (other than the scripted action `0x36`) sets its location, or
+/// resets the procedure when the process' generic location is a furniture the
+/// actor has left.
+fn update_generic_location(e: &mut Engine, this: Ptr<HighProcess>, mobile: u32, package: u32) {
+    let process = this.addr();
+    if e.call(PACKAGE_LOCATION_WORD, &args![package]).u32() == 0 {
+        return;
+    }
+    let location = e.call(PACKAGE_LOCATION_WORD, &args![package]).u32();
+    if !e.call(PACKAGE_LOCATION_IS_GENERIC, &args![location]).bool() {
+        return;
+    }
+    if update_procedure_action(e, process, package) == 0x36 {
+        return;
+    }
+    let generic = e.mem.u32(process + PROCESS_GENERIC_LOCATION);
+    if generic == 0 {
+        e.vcall(process, SLOT_SET_LOCATION_FOR_PACKAGE, &args![mobile, 0u32]);
+        e.vcall(process, SLOT_SET_PROCEDURE_INDEX_RUNNING, &args![0u32]);
+    } else if e.call(REFERENCE_IS_FURNITURE, &args![generic]).bool()
+        && e.vcall(mobile, ACTOR_SLOT_STATE, &args![]).i32() == 0
+    {
+        e.vcall(process, SLOT_SET_PROCEDURE_INDEX_RUNNING, &args![0u32]);
+    }
+}
+
+/// The dispatch of `Update` on the procedure action of the running package.
+/// Returns whether the common end of `Update` follows.
+fn update_dispatch(
+    e: &mut Engine,
+    this: Ptr<HighProcess>,
+    mobile: u32,
+    package: u32,
+    action: u32,
+    new_package: bool,
+) -> bool {
+    let process = this.addr();
+    match action {
+        0x00 => {
+            e.vcall(
+                process,
+                SLOT_PROCESS_TRAVEL,
+                &args![mobile, u32::from(new_package), 1u32, u32::MAX, 0u32],
+            );
+        }
+        0x01 => {
+            let limit = e.global::<f32>(NO_LIMIT_FLOAT);
+            e.vcall(process, SLOT_PROCESS_WANDER, &args![mobile, 0u32, limit]);
+        }
+        0x02 => {
+            e.vcall(process, SLOT_PROCESS_ACTIVATE, &args![mobile, 1u32]);
+        }
+        0x03 => {
+            e.vcall(process, SLOT_PROCESS_ACQUIRE, &args![mobile]);
+        }
+        0x04 => {
+            e.vcall(process, SLOT_PROCESS_SLEEP, &args![mobile]);
+        }
+        0x05 => {
+            e.vcall(process, SLOT_PROCESS_EAT, &args![mobile, 0u32]);
+        }
+        0x06 => {
+            e.vcall(
+                process,
+                SLOT_PROCESS_FOLLOW,
+                &args![mobile, 1u32, 0x101u32, 0u32],
+            );
+        }
+        0x07 => {
+            e.vcall(process, SLOT_PROCESS_ESCORT, &args![mobile]);
+        }
+        0x08 => {
+            e.vcall(process, SLOT_PROCESS_ALARM, &args![mobile]);
+        }
+        0x0a => {
+            e.vcall(process, SLOT_PROCESS_FLEE, &args![mobile]);
+        }
+        0x0c => {
+            e.vcall(process, SLOT_PROCESS_DIALOGUE, &args![mobile]);
+        }
+        0x0d => return update_case_target_package(e, this, mobile, package),
+        0x0e => {
+            if e.call(ACTOR_IS_PLAYING_LOWER_BODY_SPECIAL_IDLE, &args![mobile])
+                .bool()
+            {
+                let animation = e.vcall(mobile, ACTOR_SLOT_ANIMATION, &args![]).u32();
+                if animation != 0 {
+                    e.call(ANIMATION_SPECIAL_IDLE_FREE, &args![animation, 1u32, 0u32]);
+                }
+            }
+            e.vcall(process, SLOT_PROCESS_ACTIVATE, &args![mobile, 0u32]);
+        }
+        0x0f => {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            let state = e
+                .vcall(process, SLOT_GET_DETECTION_STATE, &args![target, 0u32])
+                .u32();
+            if target != 0 {
+                if state == 0 {
+                    e.vcall(
+                        process,
+                        SLOT_INSERT_INTO_DETECTION_ARRAY,
+                        &args![target, 3u32],
+                    );
+                } else {
+                    e.mem.set_u32(state + 4, 3);
+                }
+            }
+            e.vcall(
+                process,
+                SLOT_PROCESS_PURSUE,
+                &args![mobile, 0u32, 1u32, 0x101u32],
+            );
+        }
+        0x10 => {
+            e.vcall(
+                process,
+                SLOT_PROCESS_GREET,
+                &args![mobile, 0u32, 0u32, 0u32, 1u32, 0u32],
+            );
+        }
+        0x11 => {
+            e.call(PROCESS_PROCESS_CREATE_FOLLOW, &args![this, mobile]);
+        }
+        0x12 => {
+            e.vcall(process, SLOT_PROCESS_OBSERVE_COMBAT, &args![mobile]);
+        }
+        0x15 => {
+            e.call(PROCESS_PROCESS_8DB240, &args![this, mobile]);
+        }
+        0x16 => {
+            e.vcall(process, SLOT_ADD_POST_ANIMATION_ACTION, &args![8u32]);
+        }
+        0x1a => {
+            e.vcall(process, SLOT_PROCESS_NOTIFY, &args![mobile]);
+        }
+        0x1b => {
+            e.vcall(process, SLOT_PROCESS_ACCOMPANY, &args![mobile]);
+        }
+        0x1c => {
+            e.vcall(process, SLOT_PROCESS_USE_ITEM_AT, &args![mobile]);
+        }
+        0x1d => {
+            e.vcall(process, SLOT_PROCESS_SANDMAN, &args![mobile]);
+        }
+        0x1e => {
+            e.vcall(process, SLOT_PROCESS_AMBUSH_WAIT, &args![mobile]);
+        }
+        0x1f => {
+            e.call(PROCESS_PROCESS_SURFACE, &args![this, mobile]);
+        }
+        0x20 => {
+            if e.vcall(process, SLOT_GET_CURRENT_SPELL, &args![]).u32() == 0 {
+                travel_add_procedure(e, process, mobile);
+            }
+        }
+        0x21 => {
+            e.vcall(process, SLOT_PROCESS_CHOOSE_SPELL, &args![mobile]);
+        }
+        0x22 => {
+            e.vcall(process, SLOT_PROCESS_FLEE_NON_COMBAT, &args![mobile]);
+        }
+        0x23 => {
+            e.vcall(
+                process,
+                SLOT_PROCESS_REMOVE_WORN,
+                &args![mobile, 1u32, 0u32],
+            );
+        }
+        0x24 => {
+            e.call(PROCESS_PROCESS_SEARCH_FOR_TARGET, &args![this, mobile]);
+        }
+        0x25 => {
+            e.vcall(process, SLOT_PROCESS_CLEAR_MOUNT_POSITION, &args![mobile]);
+        }
+        0x26 => {
+            e.vcall(process, SLOT_PROCESS_SUMMON_CREATURE_DEFEND, &args![mobile]);
+        }
+        0x27 => {
+            e.vcall(process, SLOT_PROCESS_AVOID_AREA, &args![mobile]);
+        }
+        0x28 => {
+            e.call(PROCESS_NODE_FIND_FLAG_4534F0, &args![this, mobile]);
+        }
+        0x29 => {
+            e.call(PROCESS_PROCESS_TAKE_BACK, &args![this, mobile]);
+        }
+        0x2a => {
+            e.vcall(process, SLOT_PROCESS_SAND_BOX, &args![mobile]);
+        }
+        0x2b => {
+            let target = e.mem.u32(process + PROCESS_TARGET);
+            e.vcall(
+                process,
+                SLOT_PROCESS_USE_IDLE_MARKER,
+                &args![mobile, target],
+            );
+        }
+        0x2c => {
+            e.vcall(process, SLOT_PROCESS_PATROL, &args![mobile]);
+        }
+        0x2d => {
+            e.call(PROCESS_PROCESS_AVOID_AREA, &args![this, mobile]);
+        }
+        0x2e => {
+            travel_add_procedure(e, process, mobile);
+        }
+        0x2f => {
+            e.vcall(process, SLOT_PROCESS_GUARD, &args![mobile]);
+        }
+        0x30 => {
+            e.call(PROCESS_PROCESS_ALERT_BEHAVIOR, &args![this, mobile]);
+        }
+        0x31 => {
+            e.vcall(process, SLOT_PROCESS_DIALOGUE_ACTIVATE, &args![mobile]);
+        }
+        0x32 => {
+            e.vcall(process, SLOT_PROCESS_USE_WEAPON, &args![mobile]);
+        }
+        0x33 => {
+            e.vcall(process, SLOT_PROCESS_MOVEMENT_BLOCKED, &args![mobile]);
+        }
+        0x34 => {
+            e.vcall(process, SLOT_PROCESS_CANNIBAL, &args![mobile]);
+        }
+        0x35 => {
+            e.call(PROCESS_PROCESS_BACK_UP, &args![this, mobile]);
+        }
+        0x36 => return update_case_script_package(e, this, mobile, package),
+        _ => {}
+    }
+    true
+}
+
+// Translated from 008eeec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::Update` (Xbox PDB): the per-frame update of the actor
+/// `actor`'s high process. C++ exception states are not translated.
+///
+/// Nothing happens for a null reference, for a reference that is neither
+/// marked (flag byte `+0x81`) nor has a 3D node and no flag 0x20/0x800, for
+/// one whose cell is not attached (state 6), or while the actor fades (state 3,
+/// or 4 for an actor), or when the animation of the process has queued items.
+/// The greeting timer is run down. An actor in the dying state gets
+/// `DoDeathStuff`. For other references only the `ProcessDialogue` check
+/// (procedure action `0xc`) is left.
+///
+/// An actor goes through, in order: the cell bookkeeping and the bone level of
+/// detail, the "random idles" for a state-3 actor (which ends the update), the
+/// first-time combat entry for an actor without combat target, the goodbye to
+/// the player, the evaluation of the detection (which may end the update), the
+/// timers of the detection modifier, the look-at target, the detection and
+/// greeting stretch for an actor that is not the player's, the package
+/// checks (script end time, never-run, `CheckForNewPackage`, the target count
+/// of the new package), the weapon-drawn handling, the sitting/sleeping
+/// handling, the generic location bookkeeping, the facing of the package
+/// location and finally the dispatch on the procedure action of the running
+/// package (`011a3ff0` indexed by the procedure type and the running procedure
+/// index): travel, wander, activate, acquire, sleep, eat, follow, escort,
+/// alarm, flee, dialogue, the other process functions, and the long script
+/// package stretch for action `0x36`. The last step of an update that did not
+/// return early is the actor's process `ComputeLastTimeProcessed`.
+pub fn high_process_update(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) {
+    let process = this.addr();
+    let a = actor.addr();
+    update_scope_end(e);
+    if a == 0 {
+        return;
+    }
+    if !e.call(REFERENCE_BYTE_AT_81, &args![actor]).bool()
+        && (e.vcall(a, ACTOR_SLOT_NODE, &args![]).u32() == 0
+            || e.call(REFERENCE_FLAG_20, &args![actor]).bool()
+            || e.call(REFERENCE_FLAG_800, &args![actor]).bool())
+    {
+        return;
+    }
+    let cell = e.call(REFERENCE_PATHING_CELL, &args![actor]).u32();
+    if cell == 0 || !e.call(UPDATE_CELL_IS_ATTACHED, &args![cell]).bool() {
+        return;
+    }
+    let fade_state = e.get(this, HighProcess::eFadeState);
+    if (e.vcall(a, ACTOR_SLOT_IS_ACTOR, &args![]).bool() && fade_state == 4) || fade_state == 3 {
+        return;
+    }
+    if !e.call(REFERENCE_BYTE_AT_81, &args![actor]).bool() {
+        let animation = e.vcall(process, SLOT_GET_ANIMATION, &args![]).u32();
+        if animation == 0 {
+            return;
+        }
+        let animation = e.vcall(process, SLOT_GET_ANIMATION, &args![]).u32();
+        if e.call(ANIMATION_HAS_QUEUED_ITEMS, &args![animation]).bool() {
+            return;
+        }
+    }
+    if !e.call(REFERENCE_BYTE_AT_81, &args![actor]).bool() {
+        e.call(MOBILE_UPDATE_IDLES, &args![actor]);
+    }
+    let mobile = if e.vcall(a, ACTOR_SLOT_IS_ACTOR, &args![]).bool() {
+        a
+    } else {
+        0
+    };
+    let frame = e.call(FRAME_TIME, &args![FRAME_TIMER]).f32();
+    let greeting = e.get(this, HighProcess::fGreetingTimer);
+    e.set(this, HighProcess::fGreetingTimer, greeting - frame);
+    let skipped_update = e.call(0x008f_21a0, &args![this]).u8() != 0;
+    e.call(PROCESS_SET_SKIPPED_UPDATE, &args![this, 0u32]);
+    e.call(PROCESS_UPDATE_HEAD_TRACK_TARGETS, &args![this]);
+    if mobile == 0 {
+        update_non_actor(e, this, a);
+        update_finish(e, a);
+        return;
+    }
+    let frame = e.call(FRAME_TIME, &args![FRAME_TIMER]).f32();
+    let check_to_talk = e.get(this, HighProcess::fCheckToTalkTimer);
+    e.set(this, HighProcess::fCheckToTalkTimer, check_to_talk - frame);
+    if e.vcall(mobile, ACTOR_SLOT_0X2E8, &args![]).bool() {
+        update_dying_actor(e, this, mobile);
+        return;
+    }
+    let position = e.call(REFERENCE_FIELD_AT_0X30, &args![mobile]).u32();
+    e.call(ACTOR_IS_SUBMERGED, &args![mobile, position, cell, 0.5f32]);
+    if skipped_update {
+        e.call(ACTOR_MOVE_TO_NAV_MESH, &args![mobile, 0u32]);
+    }
+    if e.mem.u32(process + PROCESS_BONE_LOD) != 0
+        && e.vcall(mobile, ACTOR_SLOT_NODE, &args![]).u32() != 0
+    {
+        e.call(PROCESS_UPDATE_BONE_LOD, &args![this, mobile]);
+    }
+    if e.mem.u8(process + PROCESS_FLAG_18A) != 0 || e.call(0x008f_21c0, &args![]).u8() != 0 {
+        let flag = e.mem.u8(process + PROCESS_FLAG_18A);
+        let flag = e
+            .call(PROCESS_REFRESH_FLAG_18A, &args![mobile, u32::from(flag)])
+            .u8();
+        e.mem.set_u8(process + PROCESS_FLAG_18A, flag);
+    }
+    if e.call(ACTOR_UNIQUE_STATE_IS_3, &args![mobile]).bool() {
+        e.call(PROCESS_UPDATE_MIDDLE_HIGH, &args![this, mobile, 0u32]);
+        e.vcall(process, SLOT_RANDOMLY_PLAY_SPECIAL_IDLES, &args![mobile]);
+        e.call(ACTOR_PICK_ANIMATIONS, &args![mobile, 1.0f32, 1.0f32]);
+        let actor_process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+        e.vcall(actor_process, SLOT_COMPUTE_LAST_TIME_PROCESSED, &args![]);
+        return;
+    }
+    let base_data = e.global::<u32>(ACTOR_BASE_DATA_GLOBAL);
+    if !e
+        .call(ACTOR_BASE_FLAG_ALWAYS_FALSE, &args![base_data])
+        .bool()
+        && e.call(ACTOR_CREATURE_LIKE, &args![mobile]).bool()
+        && e.vcall(mobile, ACTOR_SLOT_0X428, &args![]).u32() == 0
+    {
+        let target = e
+            .call(ACTOR_GET_CURRENT_PACKAGE_TARGET, &args![mobile])
+            .u32();
+        let fleeing = u32::from(e.call(ACTOR_IS_FLEEING, &args![mobile, 0u32]).bool());
+        let mut other = 0;
+        if target != 0 && e.vcall(target, ACTOR_SLOT_IS_ACTOR, &args![]).bool() {
+            other = target;
+        }
+        e.call(ACTOR_END_INTERRUPT_PACKAGE, &args![mobile, 0u32]);
+        if e.vcall(
+            process,
+            SLOT_ENTER_COMBAT,
+            &args![
+                mobile, other, 1u32, fleeing, 0u32, fleeing, 0u32, 0u32, 0u32, 0u32, 0u32, 1u32,
+                0u32
+            ],
+        )
+        .bool()
+        {
+            return;
+        }
+    }
+    if e.get(this, HighProcess::bSayGoodByePlayer) != 0
+        && !e.call(MENU_ID_VISIBLE, &args![0x3f1u32, 0u32]).bool()
+    {
+        e.call(0x0090_1740, &args![this, mobile]);
+        e.set(this, HighProcess::bSayGoodByePlayer, 0);
+        return;
+    }
+    update_scope_end(e);
+    if e.get(this, HighProcess::bEvaluateDetection) != 0
+        && e.vcall(process, SLOT_EVALUATE_DETECTION_FOR_ACTOR, &args![mobile])
+            .bool()
+    {
+        return;
+    }
+    update_scope_end(e);
+    let modifier_timer = e.get(this, HighProcess::fDetectionModifierTimer);
+    if modifier_timer > 0.0 {
+        let frame = e.call(FRAME_TIME, &args![FRAME_TIMER]).f32();
+        e.set(
+            this,
+            HighProcess::fDetectionModifierTimer,
+            modifier_timer - frame,
+        );
+    } else {
+        e.set(this, HighProcess::fDetectionModifer, 0.0);
+    }
+    let look_at = e.mem.u32(process + PROCESS_PATH_LOOK_AT_TARGET);
+    if look_at != 0 {
+        let look_position = e.vcall(look_at, ACTOR_SLOT_POSITION, &args![]).u32();
+        let words = [
+            e.mem.u32(look_position),
+            e.mem.u32(look_position + 4),
+            e.mem.u32(look_position + 8),
+        ];
+        e.call(
+            ACTOR_SET_LOOK_AT_TARGET,
+            &args![mobile, words[0], words[1], words[2]],
+        );
+    }
+    let no_ai = e.call(ACTOR_CREATURE_LIKE, &args![mobile]).bool();
+    if !no_ai {
+        e.vcall(process, SLOT_SET_IS_AGGRESSOR, &args![0u32]);
+    }
+    let mut package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    let current_package = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+    if (package == 0 || e.call(PACKAGE_TYPE, &args![package]).i32() != 0x12)
+        && (current_package == 0 || e.call(PACKAGE_TYPE, &args![current_package]).i32() != 0x12)
+        && e.call(ACTOR_CREATURE_LIKE, &args![mobile]).bool()
+    {
+        e.call(ACTOR_CLEAR_IN_COMBAT, &args![mobile, 1u32]);
+    }
+    if e.vcall(process, SLOT_GET_NEED_TALK_PLAYER, &args![]).bool()
+        && (package == 0 || e.call(PACKAGE_TYPE, &args![package]).i32() != 0x1a)
+    {
+        e.vcall(process, SLOT_SET_NEED_TALK_PLAYER, &args![0u32]);
+    }
+    update_detection_and_greeting(e, this, mobile, package, no_ai);
+    let player = player_pointer(e);
+    if !e.call(PLAYER_GREET_TEST, &args![player]).bool()
+        && !e.vcall(process, SLOT_ASK_GREETING, &args![]).bool()
+        && !e.call(PLAYER_BYTE_6CC, &args![player]).bool()
+    {
+        e.vcall(process, SLOT_CHECK_IF_SOMEONE_TO_TALK_WITH, &args![mobile]);
+    }
+    let mut new_package = false;
+    let mut never_to_run = false;
+    package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    let end_time = e.get(this, HighProcess::fScriptPackageEndTime);
+    if end_time != 0.0 {
+        let hour = e.call(CALENDAR_GET_HOUR, &args![CALENDAR_INSTANCE]).f32();
+        let start = e.call(PROCESS_SCRIPT_START_HOUR, &args![process + 4]).f32();
+        let elapsed = e.call(FLOAT_ABSOLUTE_VALUE, &args![hour - start]).f64() as f32;
+        let elapsed = (f64::from(elapsed) * e.global::<f64>(SCRIPT_END_TIME_SCALE)) as f32;
+        if end_time <= elapsed {
+            e.set(this, HighProcess::fPackageEvalTimer, 0.0);
+            never_to_run = true;
+            e.vcall(
+                process,
+                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                &args![mobile, 3u32],
+            );
+            if package != 0 && e.call(PACKAGE_ONCE_PER_DAY, &args![package]).bool() {
+                let day = e.call(CALENDAR_GET_DAY, &args![CALENDAR]).u8();
+                e.vcall(mobile, ACTOR_SLOT_0X28C, &args![package, u32::from(day)]);
+            }
+        }
+    }
+    if e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32() != 0 {
+        let current = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+        never_to_run = e.call(PACKAGE_IS_NEVER_TO_RUN, &args![current]).bool();
+    }
+    if mobile != player && e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32() == 0 {
+        let current = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+        let interrupt = current != 0 && {
+            let current = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+            e.call(PACKAGE_IS_INTERRUPT, &args![current]).bool()
+        };
+        if !interrupt {
+            new_package = e
+                .vcall(
+                    process,
+                    SLOT_CHECK_FOR_NEW_PACKAGE,
+                    &args![mobile, u32::from(never_to_run)],
+                )
+                .bool();
+        }
+    }
+    package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    if a != player
+        && (new_package
+            || (package == 0 && !e.call(ACTOR_IS_PATHING_COMPLETE, &args![mobile]).bool()))
+    {
+        e.vcall(process, SLOT_CLEAR_CURRENT_DATA_FOR_PROCESS, &args![mobile]);
+        package = e
+            .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+            .u32();
+        if package != 0 {
+            let target = e.call(PACKAGE_TARGET_WORD, &args![package]).u32();
+            if target != 0
+                && e.call(PACKAGE_TARGET_TYPE, &args![target]).i32() != 0
+                && e.call(PACKAGE_TARGET_TYPE, &args![target]).i32() != 3
+            {
+                let count = e.call(PACKAGE_INITIAL_TARGET_COUNT, &args![package]).u32();
+                e.mem
+                    .set_u32(process + PROCESS_NUMBER_ITEMS_ACTIVATE, count);
+            }
+        }
+    }
+    if e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32() == 0 {
+        let state = e.vcall(mobile, ACTOR_SLOT_STATE, &args![]).i32();
+        if state == 5 || state == 10 {
+            e.vcall(mobile, ACTOR_SLOT_0X418, &args![]);
+        }
+    }
+    package = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    e.call(PROCESS_UPDATE_MIDDLE_HIGH, &args![this, mobile, 0u32]);
+    e.vcall(process, SLOT_RANDOMLY_PLAY_SPECIAL_IDLES, &args![mobile]);
+    if new_package {
+        e.call(ACTOR_AFTER_PACKAGE_CHANGE, &args![mobile]);
+        e.vcall(process, SLOT_SET_LOCATION_FOR_PACKAGE, &args![mobile, 0u32]);
+    }
+    if e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32() == 0
+        && package != 0
+        && !e.call(PACKAGE_IS_INTERRUPT, &args![package]).bool()
+        && e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32() != 0
+    {
+        let current = e.vcall(process, SLOT_GET_CURRENT_PACKAGE, &args![]).u32();
+        let action = update_procedure_action(e, process, current);
+        if action != 0
+            && (e
+                .vcall(process, SLOT_CONTINUING_PACKAGE_FOR_PC, &args![])
+                .bool()
+                || (e.call(PACKAGE_FLAG_200, &args![package]).bool()
+                    && e.call(PACKAGE_FLAG_1, &args![package]).bool()
+                    && cell != 0
+                    && e.call(CELL_ACTOR_CHECK, &args![cell, mobile]).bool()))
+        {
+            e.vcall(process, SLOT_CREATE_FOLLOW_NO_ESCORT, &args![mobile, 0u32]);
+            package = e
+                .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+                .u32();
+        }
+    }
+    package = update_aware_timer(e, this, mobile, package);
+    e.vcall(process, SLOT_RESET_TARGET, &args![]);
+    let extra_list = e.call(REFERENCE_EXTRA_DATA, &args![mobile]).u32();
+    let extra_package = e.call(EXTRA_GET_PACKAGE, &args![extra_list]).u32();
+    update_weapon_state(e, this, mobile, package, extra_package);
+    let state = e.vcall(mobile, ACTOR_SLOT_STATE, &args![]).i32();
+    if state != 0
+        && e.vcall(mobile, ACTOR_SLOT_STATE, &args![]).i32() != 9
+        && e.vcall(mobile, ACTOR_SLOT_STATE, &args![]).i32() != 4
+    {
+        if package != 0 && update_procedure_action(e, process, package) == 0x16 {
+            e.vcall(process, SLOT_ADD_POST_ANIMATION_ACTION, &args![8u32]);
+        } else if e.mem.i16(process + PROCESS_ANIM_ACTION_SUCCESS) == 0 {
+            if e.mem.u32(process + PROCESS_CURRENT_FURNITURE) == 0 {
+                e.vcall(
+                    process,
+                    SLOT_SET_SIT_SLEEP_STATE,
+                    &args![mobile, 0u32, 0u32, 0x7fu32],
+                );
+            } else {
+                e.vcall(process, SLOT_PROCESS_GET_UP_ONE_HOUR, &args![mobile]);
+            }
+        } else {
+            e.call(PROCESS_ALIGN_TO_FURNITURE, &args![this, mobile]);
+        }
+    }
+    if package == 0 || e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).i32() == -1 {
+        update_finish(e, a);
+        return;
+    }
+    if e.call(PACKAGE_TYPE, &args![package]).i32() == 0x1c
+        && e.vcall(process, SLOT_GET_PROCEDURE_INDEX_RUNNING, &args![])
+            .i32()
+            >= 3
+    {
+        let target = e.mem.u32(process + PROCESS_TARGET);
+        if target != 0
+            && e.call(PACKAGE_TARGET_REFERENCE_WORD, &args![package]).u32() == 0
+            && e.call(MOBILE_OBJECT_PROCESS_TYPE, &args![target]).i32()
+                != e.call(PROCESS_WORD_AT_28, &args![this]).i32()
+        {
+            e.vcall(mobile, ACTOR_SLOT_0X288, &args![]);
+            package = e
+                .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+                .u32();
+            e.vcall(process, SLOT_RESET_TARGET, &args![]);
+        }
+    }
+    update_generic_location(e, this, mobile, package);
+    if !e.call(ACTOR_CREATURE_LIKE, &args![mobile]).bool()
+        && e.call(ACTOR_IS_PATHING_COMPLETE, &args![mobile]).bool()
+        && package != 0
+        && update_find_location(e, package, mobile, 0)
+        && e.call(PACKAGE_TYPE, &args![package]).i32() != 0xc
+        && e.call(PACKAGE_TYPE, &args![package]).i32() != 0xe
+        && e.call(PACKAGE_TYPE, &args![package]).i32() != 0x10
+        && !e.vcall(process, SLOT_ASK_GREETING, &args![]).bool()
+    {
+        update_turn_to_location(e, this, mobile, package);
+    }
+    let action = update_procedure_action(e, process, package);
+    let tail = update_dispatch(e, this, mobile, package, action, new_package);
+    if tail {
+        update_finish(e, a);
+    }
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -8517,6 +16698,106 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             high_process_run_detection(Ptr<HighProcess>, Ptr, f32)
         ),
         entry!(0x008dddf0, high_process_process_flee(Ptr<HighProcess>, Ptr)),
+        entry!(0x008e7c00, fn_008e7c00(Ptr<LowProcess>) -> bool),
+        entry!(0x008e7c20, fn_008e7c20(Ptr, f32)),
+        entry!(0x008e7c50, fn_008e7c50(Ptr, u8)),
+        entry!(
+            0x008e5e90,
+            high_process_process_travel(Ptr<HighProcess>, Ptr, u8, u8, i32, u8)
+        ),
+        entry!(
+            0x008e7c70,
+            high_process_process_back_up(Ptr<HighProcess>, Ptr)
+        ),
+        entry!(0x008e95a0, fn_008e95a0(Ptr) -> u8),
+        entry!(0x008e95c0, fn_008e95c0(Ptr) -> u8),
+        entry!(0x008e95e0, fn_008e95e0(Ptr) -> u8),
+        entry!(0x008e9600, fn_008e9600(Ptr, u8)),
+        entry!(0x008e9620, fn_008e9620(Ptr) -> u8),
+        entry!(
+            0x008e8600,
+            high_process_process_dialogue_activate(Ptr<HighProcess>, Ptr) -> bool
+        ),
+        entry!(
+            0x008ebb50,
+            high_process_process_steal(Ptr<HighProcess>, Ptr)
+        ),
+        entry!(0x008ebbe0, fn_008ebbe0(Ptr<HighProcess>, Ptr)),
+        entry!(
+            0x008ed400,
+            high_process_add_talkedto_actor(Ptr<HighProcess>, Ptr)
+        ),
+        entry!(
+            0x008ee220,
+            high_process_check_if_has_object(Ptr<HighProcess>, Ptr, u32) -> bool
+        ),
+        entry!(
+            0x008ee370,
+            high_process_is_actor_inside_ambush_area(Ptr<HighProcess>, Ptr, Ptr) -> bool
+        ),
+        entry!(0x008eea80, fn_008eea80(Ptr) -> bool),
+        entry!(
+            0x008eeac0,
+            high_process_process_surface_one_hour(Ptr<HighProcess>, Ptr)
+        ),
+        entry!(
+            0x008eebf0,
+            high_process_create_weapon_acquire_list(Ptr<HighProcess>, Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x008eedc0,
+            high_process_mod_detection_modifier_timer(Ptr<HighProcess>)
+        ),
+        entry!(
+            0x008eedf0,
+            high_process_set_current_process_anim_idle_loaded(Ptr<HighProcess>, Ptr, Ptr)
+        ),
+        entry!(0x008f21a0, fn_008f21a0(Ptr<HighProcess>) -> u8),
+        entry!(0x008f21c0, fn_008f21c0() -> u8),
+        entry!(0x008f21d0, fn_008f21d0(Ptr) -> u16),
+        entry!(0x008f25e0, fn_008f25e0(Ptr, u32) -> Ptr),
+        entry!(0x008f3550, fn_008f3550(Ptr<HighProcess>, Ptr) -> bool),
+        entry!(0x008f3600, fn_008f3600(Ptr<HighProcess>, Ptr) -> bool),
+        entry!(
+            0x008ebc60,
+            high_process_process_acquire(Ptr<HighProcess>, Ptr)
+        ),
+        entry!(
+            0x008ec460,
+            high_process_process_dialogue(Ptr<HighProcess>, Ptr)
+        ),
+        entry!(
+            0x008ecbb0,
+            high_process_call_for_help(Ptr<HighProcess>, Ptr, Ptr, Ptr)
+        ),
+        entry!(
+            0x008ecf20,
+            high_process_process_alarm(Ptr<HighProcess>, Ptr)
+        ),
+        entry!(
+            0x008ed420,
+            high_process_process_wander(Ptr<HighProcess>, Ptr, Ptr, f32)
+        ),
+        entry!(
+            0x008ee3e0,
+            high_process_process_ambush_wait(Ptr<HighProcess>, Ptr)
+        ),
+        entry!(0x008f21f0, fn_008f21f0(Ptr<HighProcess>, Ptr)),
+        entry!(
+            0x008f31d0,
+            fn_008f31d0(Ptr<HighProcess>, Ptr, u32, u8) -> bool
+        ),
+        entry!(0x008f36c0, fn_008f36c0(Ptr<HighProcess>, Ptr, u32) -> bool),
+        entry!(
+            0x008f3940,
+            high_process_process_activate_one_hour(Ptr<HighProcess>, Ptr, u32) -> bool
+        ),
+        entry!(0x008f2610, fn_008f2610(Ptr<HighProcess>, Ptr, u32) -> bool),
+        entry!(
+            0x008e9640,
+            high_process_process_activate(Ptr<HighProcess>, Ptr, u8) -> bool
+        ),
+        entry!(0x008eeec0, high_process_update(Ptr<HighProcess>, Ptr)),
     ]
 }
 
@@ -15696,5 +23977,4580 @@ mod tests {
             calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
             vec![vec![p.addr(), actor, 1]]
         );
+    }
+
+    // ---- Third session: `008e5e90` onwards ----
+
+    #[test]
+    fn test_small_travel_helpers() {
+        let mut e = Engine::new();
+        // 008e7c00: the m_uFlags mask 0x40 test of 008d7e60.
+        let p = block(&mut e);
+        e.mem.set_u8(p.addr() + 0x30, 0x40);
+        assert!(e.call(0x008e7c00, &args![p]).bool());
+        e.mem.set_u8(p.addr() + 0x30, 0x3f);
+        assert!(!e.call(0x008e7c00, &args![p]).bool());
+        // 008e7c20 and 008e7c50 write the request's fields.
+        let request = block(&mut e);
+        e.call(0x008e7c20, &args![request, 2.5f32]);
+        assert_eq!(e.mem.f32(request.addr() + 0x8c), 2.5);
+        assert_eq!(e.mem.u8(request.addr() + 0x99), 1);
+        e.call(0x008e7c50, &args![request, 7u32]);
+        assert_eq!(e.mem.u8(request.addr() + 0x9c), 7);
+        assert_eq!(e.mem.u8(request.addr() + 0x9d), 0);
+    }
+
+    /// The callees `ProcessTravel` reaches, stubbed to return zero.
+    fn travel_stubs(e: &mut Engine) {
+        stub(
+            e,
+            &[
+                ANIMATION_SPECIAL_IDLE_WORKING,
+                ANIMATION_SPECIAL_IDLE_PLAYING,
+                PACKAGE_FOLLOW_DATA,
+                PACKAGE_LOCATION_WORD,
+                PACKAGE_GET_LOCATION_REFERENCE,
+                PACKAGE_LOCATION_TYPE,
+                PACKAGE_SECOND_LOCATION_COORD,
+                PACKAGE_LOCATION_COORD,
+                ACTOR_DISTANCE_TO_POINT,
+                PACKAGE_SECOND_LOCATION,
+                PACKAGE_LOCATION_GET_REFERENCE,
+                REFERENCE_IS_FURNITURE,
+                ACTOR_IS_PATHING_COMPLETE,
+                ACTOR_IS_PATHING,
+                REFERENCE_GET_MARKER_USED,
+                PROCESS_CLEAR_FURNITURE_MARKER,
+                REFERENCE_PATHING_CELL,
+                CELL_FLAG_TEST,
+                REFERENCE_GET_CLOSEST_FREE_MARKER,
+                DISTANCE_FROM_REFERENCE,
+                REFERENCE_GET_WORLD_SPACE,
+                ACTOR_BUILD_REQUEST,
+                ACTOR_SET_PATHFINDING_GOAL_REQUEST,
+                PATHING_REQUEST_CONSTRUCTOR,
+                PATHING_REQUEST_DESTRUCTOR,
+                ACTOR_STOP_MOVING,
+                FURNITURE_MARKER_HEADING,
+                ANGLE_DIFFERENCE,
+                SETTING_INTEGER_POINTER,
+                PACKAGE_RADIUS_ACTOR_TO_LOCATION,
+                PACKAGE_LOCATION_CELL,
+                PACKAGE_LOCATION_WORLD,
+                PACKAGE_SECOND_LOCATION_CELL,
+                PACKAGE_SECOND_LOCATION_WORLD,
+                PACKAGE_FLAG_2,
+                PACKAGE_FLAG_4,
+                PACKAGE_TARGET_WORD,
+                PACKAGE_ONCE_PER_DAY,
+                PACKAGE_LIST_AT_38,
+                CALENDAR_GET_DAY,
+                PACKAGE_FLAG_ENUM_A,
+                PACKAGE_FLAG_ENUM_B,
+                PACKAGE_FLAG_200000,
+                PACKAGE_FLAG_2000,
+                WORD_AT_8,
+                ACTOR_QUEUE_UNEQUIP_OBJECT,
+                ACTOR_GET_BEST_FOOD_ITEM,
+                DELETE_ATTACHED_ARROWS,
+                PROCESS_ALIGN_TO_FURNITURE,
+                REFERENCE_GET_FORM,
+                PROCESS_MOVEMENT_DONE,
+                ACTOR_REQUEST_ROTATE,
+                REFERENCE_ROTATION_ADDRESS,
+                PACKAGE_PROCEDURE_TYPE,
+                PROCEDURE_GET_COUNT,
+                POINT_DIFFERENCE,
+                POINT_LENGTH_FLOAT,
+                FORM_TYPE_OF,
+                ENUM_REFERENCES_CLOSE_TO_POINT,
+                NODE_NEXT,
+                NODE_ITEM_ADDRESS,
+            ],
+        );
+        // The setting getter returns the address of a float.
+        let value = e.mem.alloc(8);
+        e.mem.set_f32(value, 50.0);
+        returning(e, SETTING_VALUE, value);
+        global_f32(e, NO_LIMIT_FLOAT, -1.0);
+        global_word(e, PLAYER_POINTER, 0x1234);
+        global_word(e, DATA_HANDLER_GLOBAL, 0x4321);
+        global_f32(e, ENUM_RADIUS, 2000.0);
+        global_f32(e, RADIUS_CELL_FLAG, 20.0);
+        global_f64(e, FURNITURE_NEAR_DISTANCE, 200.0);
+        global_f32(e, FURNITURE_WALK_RADIUS, 100.0);
+        global_word(e, MARKER_FORM_GLOBAL, 0x7777);
+    }
+
+    /// A process whose running package is `package`, an actor in state 0 whose
+    /// slots answer zero (the position slot points to three words).
+    fn travel_world(e: &mut Engine) -> (Ptr<HighProcess>, u32, u32) {
+        travel_stubs(e);
+        let package = object_with_slots(
+            e,
+            PACKAGE_TABLE,
+            &[
+                (PACKAGE_SLOT_FIND_LOCATION, 0),
+                (PACKAGE_SLOT_FIND_SECOND_LOCATION, 0),
+            ],
+        );
+        let p = block(e);
+        give_vtable(
+            e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[
+                (SLOT_GET_PACKAGE_THAT_IS_RUNNING, package),
+                (SLOT_GET_RUN_ONCE_PACKAGE, 0),
+                (SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING, 0),
+                (SLOT_END_MOVE_MESSAGE, 0),
+                (SLOT_SET_TARGET, 0),
+                (SLOT_GET_SIT_SLEEP_STATE, 0),
+                (SLOT_CLEAR_FURNITURE, 0),
+                (SLOT_GET_LOCKED_LOCATION, 1),
+                (SLOT_SET_LOCKED_LOCATION, 0),
+                (SLOT_GET_CURRENT_WEAPON, 0),
+                (SLOT_GET_CURRENT_AMMO, 0),
+                (SLOT_GET_FORCE_ROTATE, 0),
+                (SLOT_GET_CURRENT_FURNITURE_INDEX, 0),
+                (SLOT_SET_PROCEDURE_INDEX_RUNNING, 0),
+                (SLOT_GET_CURRENT_PACKAGE, 0),
+                (SLOT_CALCULATE_MOVE_MODE, 0x55),
+                (SLOT_SET_ACTORS_ANIMATION, 0),
+                (SLOT_GET_GENERIC_LOCATION, 0),
+            ],
+        );
+        let position = e.mem.alloc(16);
+        let actor = object_with_slots(
+            e,
+            ACTOR_TABLE,
+            &[
+                (ACTOR_SLOT_ANIMATION, 0),
+                (ACTOR_SLOT_STATE, 0),
+                (ACTOR_SLOT_POSITION, position),
+                (ACTOR_SLOT_NODE, 0),
+                (ACTOR_SLOT_0X418, 0),
+                (ACTOR_SLOT_0X28C, 0),
+                (ACTOR_SLOT_0X16C, position),
+                (ACTOR_SLOT_0X2BC, 0),
+                (ACTOR_SLOT_CAN_SEE_POSITION, 0),
+            ],
+        );
+        returning(e, PACKAGE_TYPE, 7);
+        (p, actor, package)
+    }
+
+    #[test]
+    fn test_process_travel_does_nothing_without_a_package() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = travel_world(&mut e);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_PACKAGE_THAT_IS_RUNNING, 0)],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x008e5e90, &args![p, actor, 0u32, 1u32, -1i32, 0u32]);
+        assert!(calls_to(&e, PACKAGE_TYPE).is_empty());
+        assert!(calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)).is_empty());
+    }
+
+    #[test]
+    fn test_process_travel_waits_for_a_special_idle() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = travel_world(&mut e);
+        // The process flag 0x40 holds and the actor has an animation that
+        // is playing a special idle.
+        e.mem.set_u8(p.addr() + 0x30, 0x40);
+        give_vtable(
+            &mut e,
+            actor,
+            ACTOR_TABLE,
+            &[(ACTOR_SLOT_ANIMATION, 0x6600)],
+        );
+        returning(&mut e, ANIMATION_SPECIAL_IDLE_PLAYING, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008e5e90, &args![p, actor, 0u32, 1u32, -1i32, 0u32]);
+        assert_eq!(
+            calls_to(&e, ANIMATION_SPECIAL_IDLE_PLAYING),
+            vec![vec![0x6600]]
+        );
+        assert!(calls_to(&e, PACKAGE_LOCATION_COORD).is_empty());
+    }
+
+    #[test]
+    fn test_process_travel_follow_package_without_data_adds_the_procedure() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = travel_world(&mut e);
+        returning(&mut e, PACKAGE_TYPE, 1);
+        let follow_data = e.mem.alloc(16);
+        returning(&mut e, PACKAGE_FOLLOW_DATA, follow_data);
+        e.call_log = Some(vec![]);
+        e.call(0x008e5e90, &args![p, actor, 0u32, 0u32, -1i32, 0u32]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING))[0],
+            vec![p.addr(), actor, 1]
+        );
+        assert!(calls_to(&e, process_slot(SLOT_SET_TARGET)).is_empty());
+        // With follow data the target is set and the second location is used.
+        e.mem.set_u32(follow_data + 4, 9);
+        e.call_log = Some(vec![]);
+        e.call(0x008e5e90, &args![p, actor, 0u32, 0u32, -1i32, 0u32]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_TARGET)),
+            vec![vec![p.addr(), actor]]
+        );
+        assert_eq!(calls_to(&e, PACKAGE_SECOND_LOCATION_COORD).len(), 1);
+    }
+
+    #[test]
+    fn test_process_travel_types_f_and_1c_end_unless_their_location_is_the_actor() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = travel_world(&mut e);
+        returning(&mut e, PACKAGE_TYPE, 0xf);
+        e.call_log = Some(vec![]);
+        e.call(0x008e5e90, &args![p, actor, 0u32, 1u32, -1i32, 0u32]);
+        // No package location: the procedure is added and the function ends.
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        assert!(calls_to(&e, PACKAGE_LOCATION_COORD).is_empty());
+        // A location whose reference is the actor with location type 3 goes on.
+        returning(&mut e, PACKAGE_LOCATION_WORD, 0x7000);
+        returning(&mut e, PACKAGE_GET_LOCATION_REFERENCE, actor);
+        returning(&mut e, PACKAGE_LOCATION_TYPE, 3);
+        e.call_log = Some(vec![]);
+        e.call(0x008e5e90, &args![p, actor, 0u32, 1u32, -1i32, 0u32]);
+        assert_eq!(calls_to(&e, ACTOR_DISTANCE_TO_POINT).len(), 1);
+        // Another location type ends it.
+        returning(&mut e, PACKAGE_LOCATION_TYPE, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x008e5e90, &args![p, actor, 0u32, 1u32, -1i32, 0u32]);
+        assert!(calls_to(&e, ACTOR_DISTANCE_TO_POINT).is_empty());
+    }
+
+    #[test]
+    fn test_process_travel_arrival_ends_the_move() {
+        let mut e = Engine::new();
+        let (p, actor, package) = travel_world(&mut e);
+        // The package's search answers true and the actor is pathing complete.
+        give_vtable(
+            &mut e,
+            package,
+            PACKAGE_TABLE,
+            &[(PACKAGE_SLOT_FIND_LOCATION, 1)],
+        );
+        returning(&mut e, ACTOR_IS_PATHING_COMPLETE, 1);
+        e.mem.set_f32(p.addr() + 0x198, 3.0);
+        e.mem.set_i16(p.addr() + 0x2c0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x008e5e90, &args![p, actor, 0u32, 1u32, -1i32, 0u32]);
+        // The search is called with (actor, 0, -1.0, 0).
+        assert_eq!(
+            calls_to(&e, slot_target(PACKAGE_TABLE, PACKAGE_SLOT_FIND_LOCATION)),
+            vec![vec![package, actor, 0, (-1.0f32).to_bits(), 0]]
+        );
+        assert_eq!(e.mem.f32(p.addr() + 0x198), 0.0, "the idle timer is reset");
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_END_MOVE_MESSAGE)),
+            vec![vec![p.addr(), actor]]
+        );
+        // Procedure index added once (end_on_arrival), then once more at the
+        // end because the search and the pathing are both done.
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_process_travel_without_a_location_builds_a_request_to_the_package() {
+        let mut e = Engine::new();
+        let (p, actor, package) = travel_world(&mut e);
+        give_vtable(
+            &mut e,
+            package,
+            PACKAGE_TABLE,
+            &[(PACKAGE_SLOT_FIND_LOCATION, 0)],
+        );
+        returning(&mut e, ACTOR_IS_PATHING_COMPLETE, 1);
+        returning(&mut e, ACTOR_SET_PATHFINDING_GOAL_REQUEST, 1);
+        returning(&mut e, PACKAGE_LOCATION_WORLD, 0xaa);
+        returning(&mut e, PACKAGE_LOCATION_CELL, 0xbb);
+        returning(&mut e, PACKAGE_LOCATION_COORD, 0xcc);
+        returning_float(&mut e, PACKAGE_RADIUS_ACTOR_TO_LOCATION, 35.0);
+        e.register(PATHING_REQUEST_CONSTRUCTOR, |_, a| ret(a[0]));
+        e.call_log = Some(vec![]);
+        e.call(0x008e5e90, &args![p, actor, 0u32, 0u32, -1i32, 0u32]);
+        let builds = calls_to(&e, ACTOR_BUILD_REQUEST);
+        assert_eq!(builds.len(), 1);
+        // (actor, request, position, cell, world, radius, 0)
+        assert_eq!(builds[0][0], actor);
+        assert_eq!(builds[0][2], 0xcc);
+        assert_eq!(builds[0][3], 0xbb);
+        assert_eq!(builds[0][4], 0xaa);
+        assert_eq!(builds[0][5], 35.0f32.to_bits());
+        assert_eq!(builds[0][6], 0);
+        let request = builds[0][1];
+        assert_eq!(e.mem.u8(request + 0x9c), 0, "the 0x9c byte is set to 0");
+        assert_eq!(
+            calls_to(&e, ACTOR_SET_PATHFINDING_GOAL_REQUEST),
+            vec![vec![actor, request]]
+        );
+        assert_eq!(
+            calls_to(&e, PATHING_REQUEST_DESTRUCTOR),
+            vec![vec![request]]
+        );
+    }
+
+    #[test]
+    fn test_process_travel_sets_the_movement_animation() {
+        let mut e = Engine::new();
+        let (p, actor, package) = travel_world(&mut e);
+        give_vtable(
+            &mut e,
+            package,
+            PACKAGE_TABLE,
+            &[(PACKAGE_SLOT_FIND_LOCATION, 0)],
+        );
+        returning_float(&mut e, PACKAGE_RADIUS_ACTOR_TO_LOCATION, 30.0);
+        returning_float(&mut e, ACTOR_DISTANCE_TO_POINT, 300.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008e5e90, &args![p, actor, 0u32, 0u32, -1i32, 0u32]);
+        // Slot 0x34c gets (actor, distance, radius, 2 * radius, 0, 1) and its
+        // answer goes to slot 0x350 with 1.
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_CALCULATE_MOVE_MODE)),
+            vec![vec![
+                p.addr(),
+                actor,
+                300.0f32.to_bits(),
+                30.0f32.to_bits(),
+                60.0f32.to_bits(),
+                0,
+                1
+            ]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_ACTORS_ANIMATION)),
+            vec![vec![p.addr(), actor, 0x55, 1]]
+        );
+        // An animation word given by the caller, or the flag 0x2000 (0x201),
+        // skips the calculation.
+        returning(&mut e, PACKAGE_FLAG_2000, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008e5e90, &args![p, actor, 0u32, 0u32, -1i32, 0u32]);
+        assert!(calls_to(&e, process_slot(SLOT_CALCULATE_MOVE_MODE)).is_empty());
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_ACTORS_ANIMATION)),
+            vec![vec![p.addr(), actor, 0x201, 1]]
+        );
+    }
+
+    /// A back-up package: casts succeed, the position getter fills three words.
+    fn back_up_world(e: &mut Engine) -> (Ptr<HighProcess>, u32, u32) {
+        let (p, actor, package) = travel_world(e);
+        stub(e, &[ACTOR_FORCE_MOVE_MODE, BACK_UP_PACKAGE_POSITION]);
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        global_f32(e, BACK_UP_VIEW_DISTANCE, 75.0);
+        (p, actor, package)
+    }
+
+    #[test]
+    fn test_process_back_up_needs_a_back_up_package() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = back_up_world(&mut e);
+        // The cast fails.
+        e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        e.call(0x008e7c70, &args![p, actor]);
+        assert!(calls_to(&e, PACKAGE_TYPE).is_empty());
+        // No package at all: the cast is still asked (with a null package).
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_PACKAGE_THAT_IS_RUNNING, 0)],
+        );
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.call_log = Some(vec![]);
+        e.call(0x008e7c70, &args![p, actor]);
+        assert!(calls_to(&e, BACK_UP_PACKAGE_POSITION).is_empty());
+    }
+
+    #[test]
+    fn test_process_back_up_arrival_ends_the_move() {
+        let mut e = Engine::new();
+        let (p, actor, package) = back_up_world(&mut e);
+        // The actor sees the position and pathing is complete.
+        returning(&mut e, ACTOR_IS_PATHING_COMPLETE, 1);
+        give_vtable(
+            &mut e,
+            actor,
+            ACTOR_TABLE,
+            &[(ACTOR_SLOT_CAN_SEE_POSITION, 1)],
+        );
+        e.mem.set_f32(p.addr() + 0x198, 4.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008e7c70, &args![p, actor]);
+        let casts = calls_to(&e, RT_DYNAMIC_CAST);
+        assert_eq!(
+            casts,
+            vec![vec![package, 0, TYPE_PACKAGE, TYPE_BACK_UP_PACKAGE, 0]]
+        );
+        let position = calls_to(&e, BACK_UP_PACKAGE_POSITION)[0][1];
+        // The sight slot gets (position, 75.0, 1, 0).
+        assert_eq!(
+            calls_to(&e, actor_slot(ACTOR_SLOT_CAN_SEE_POSITION)),
+            vec![vec![actor, position, 75.0f32.to_bits(), 1, 0]]
+        );
+        assert_eq!(e.mem.f32(p.addr() + 0x198), 0.0);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_END_MOVE_MESSAGE)),
+            vec![vec![p.addr(), actor]]
+        );
+        // The procedure is added on arrival, and again at the end since the
+        // search and the pathing are both done.
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_process_back_up_builds_a_request_to_the_position() {
+        let mut e = Engine::new();
+        let (p, actor, package) = back_up_world(&mut e);
+        returning(&mut e, ACTOR_IS_PATHING_COMPLETE, 1);
+        returning(&mut e, ACTOR_SET_PATHFINDING_GOAL_REQUEST, 1);
+        returning(&mut e, PACKAGE_LOCATION_WORLD, 0xaa);
+        returning(&mut e, PACKAGE_LOCATION_CELL, 0xbb);
+        returning_float(&mut e, PACKAGE_RADIUS_ACTOR_TO_LOCATION, 12.0);
+        e.register(PATHING_REQUEST_CONSTRUCTOR, |_, a| ret(a[0]));
+        let _ = package;
+        e.call_log = Some(vec![]);
+        e.call(0x008e7c70, &args![p, actor]);
+        let position = calls_to(&e, BACK_UP_PACKAGE_POSITION)[0][1];
+        let builds = calls_to(&e, ACTOR_BUILD_REQUEST);
+        assert_eq!(builds.len(), 1);
+        assert_eq!(builds[0][2], position);
+        assert_eq!(builds[0][3], 0xbb);
+        assert_eq!(builds[0][4], 0xaa);
+        assert_eq!(builds[0][5], 12.0f32.to_bits());
+        // ForceMoveMode(0x202) comes before the byte at +0x9c is cleared.
+        assert_eq!(
+            calls_to(&e, ACTOR_FORCE_MOVE_MODE),
+            vec![vec![actor, 0x202]]
+        );
+        assert_eq!(calls_to(&e, PATHING_REQUEST_DESTRUCTOR).len(), 1);
+    }
+
+    #[test]
+    fn test_process_back_up_sets_the_movement_animation_for_other_actors() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = back_up_world(&mut e);
+        returning_float(&mut e, PACKAGE_RADIUS_ACTOR_TO_LOCATION, 30.0);
+        returning_float(&mut e, ACTOR_DISTANCE_TO_POINT, 300.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008e7c70, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_CALCULATE_MOVE_MODE)),
+            vec![vec![
+                p.addr(),
+                actor,
+                300.0f32.to_bits(),
+                30.0f32.to_bits(),
+                60.0f32.to_bits(),
+                0,
+                1
+            ]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_ACTORS_ANIMATION)),
+            vec![vec![p.addr(), actor, 0x55, 1]]
+        );
+        // The player is not given an animation.
+        global_word(&mut e, PLAYER_POINTER, actor);
+        e.call_log = Some(vec![]);
+        e.call(0x008e7c70, &args![p, actor]);
+        assert!(calls_to(&e, process_slot(SLOT_SET_ACTORS_ANIMATION)).is_empty());
+    }
+
+    #[test]
+    fn test_dialogue_package_flag_accessors() {
+        let mut e = Engine::new();
+        let package = block(&mut e);
+        e.mem.set_u8(package.addr() + 0xbd, 1);
+        e.mem.set_u8(package.addr() + 0xbf, 2);
+        e.mem.set_u8(package.addr() + 0xc0, 3);
+        assert_eq!(e.call(0x008e95a0, &args![package]).u8(), 1);
+        assert_eq!(e.call(0x008e95c0, &args![package]).u8(), 2);
+        assert_eq!(e.call(0x008e95e0, &args![package]).u8(), 3);
+        assert_eq!(e.call(0x008e9620, &args![package]).u8(), 0);
+        e.call(0x008e9600, &args![package, 5u32]);
+        assert_eq!(e.mem.u8(package.addr() + 0xc2), 5);
+        assert_eq!(e.call(0x008e9620, &args![package]).u8(), 5);
+        assert_eq!(e.mem.u8(package.addr() + 0xc1), 0, "only +0xc2 is written");
+    }
+
+    /// The callees `ProcessDialogueActivate` reaches, stubbed to return zero.
+    fn dialogue_stubs(e: &mut Engine) {
+        stub(
+            e,
+            &[
+                PACKAGE_DIALOGUE_SAY_TO_FLAG,
+                PACKAGE_DIALOGUE_TOPIC,
+                PACKAGE_DIALOGUE_DO_NOT_CONTROL_TARGET,
+                PACKAGE_DIALOGUE_NO_HEADTRACK,
+                PACKAGE_FLAG_2000,
+                PACKAGE_FLAG_20000,
+                MOVE_MODE_RUNNING_ONLY,
+                ACTOR_CLEAR_RUN_BITS,
+                ACTOR_SET_PATHFINDING_GOAL_REFERENCE,
+                ACTOR_LINE_OF_SIGHT,
+                ACTOR_IS_ROTATING,
+                ACTOR_IS_PATHING,
+                ACTOR_IS_PATHING_COMPLETE,
+                ACTOR_GET_CURRENT_PATHFINDING_GOAL,
+                POINT_SUBTRACT,
+                POINT_SQUARED_LENGTH,
+                ACTOR_GET_PACKAGE_SET_AS_CURRENT,
+                ACTOR_IS_TRYING_TO_ENTER_FURNITURE,
+                DIALOGUE_TARGET_OF_CONVERSATION,
+                DIALOGUE_ACTOR_STARTED_CONVERSATION,
+                REFERENCE_SET_WORD_AT_70,
+                PACKAGE_TYPE,
+                PACKAGE_TARGET_WORD,
+                WORD_AT_8,
+                PACKAGE_SECOND_LOCATION,
+                PACKAGE_LOCATION_WORD,
+                PACKAGE_GET_LOCATION_REFERENCE,
+                REFERENCE_IS_FURNITURE,
+                REFERENCE_GET_FORM,
+                PACKAGE_PROCEDURE_TYPE,
+                ACTOR_END_INTERRUPT_PACKAGE,
+                ACTOR_SET_MOVE_MODE,
+                ACTOR_STOP_MOVING,
+                ACTOR_CURRENT_PACKAGE,
+                DISTANCE_FROM_REFERENCE,
+                PACKAGE_SET_NEVER_RUN,
+                GET_TOPIC,
+            ],
+        );
+        global_f32(e, NO_LIMIT_FLOAT, -1.0);
+        global_f64(e, ZERO_DOUBLE_VALUE, 0.0);
+        global_f32(e, DIALOGUE_DEFAULT_DISTANCE, 120.0);
+        global_f32(e, DIALOGUE_DEFAULT_TARGET_DISTANCE, 400.0);
+        global_f64(e, DIALOGUE_SQUARED_DISTANCE, 10000.0);
+    }
+
+    /// A process, its actor, a player and a package. The player is an object
+    /// with the "other" table; the process target is set by the caller.
+    fn dialogue_world(e: &mut Engine) -> (Ptr<HighProcess>, u32, u32, u32) {
+        dialogue_stubs(e);
+        let player = object_with_slots(
+            e,
+            OTHER_TABLE,
+            &[
+                (ACTOR_SLOT_IS_MOBILE_OBJECT, 1),
+                (ACTOR_SLOT_IS_ACTOR, 1),
+                (ACTOR_SLOT_STATE, 0),
+                (ACTOR_SLOT_0X418, 0),
+                (ACTOR_SLOT_0X22C, 0),
+                (ACTOR_SLOT_0X288, 0),
+                (ACTOR_SLOT_ADD_PACKAGE, 0),
+                (ACTOR_SLOT_POSITION, 0),
+            ],
+        );
+        global_word(e, PLAYER_POINTER, player);
+        let package = object_with_slots(
+            e,
+            PACKAGE_TABLE,
+            &[
+                (PACKAGE_SLOT_FIND_LOCATION, 1),
+                (PACKAGE_SLOT_FIND_SECOND_LOCATION, 1),
+                (DIALOGUE_SLOT_REACHED_TARGET, 0),
+            ],
+        );
+        let p = block(e);
+        give_vtable(
+            e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[
+                (SLOT_GET_PACKAGE_THAT_IS_RUNNING, package),
+                (SLOT_SET_TARGET_FOR_PACKAGE, 1),
+                (SLOT_IS_TALKING, 0),
+                (SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING, 0),
+                (SLOT_END_MOVE_MESSAGE, 0),
+                (SLOT_PROCESS_ACTIVATE, 0),
+                (SLOT_GET_RUN_ONCE_PACKAGE, 0),
+                (SLOT_GET_CURRENT_PACKAGE, 0),
+                (SLOT_GET_CURRENT_PROCEDURE_INDEX_FOR_DIALOGUE, 0),
+                (SLOT_SET_TARGET, 0),
+            ],
+        );
+        let actor = object_with_slots(
+            e,
+            ACTOR_TABLE,
+            &[
+                (ACTOR_SLOT_STATE, 0),
+                (ACTOR_SLOT_0X418, 0),
+                (ACTOR_SLOT_SET_PACKAGE, 0),
+                (ACTOR_SLOT_0X288, 0),
+                (ACTOR_SLOT_POSITION, 0),
+            ],
+        );
+        let own_process = object_with_slots(
+            e,
+            0x7500_0000,
+            &[
+                (SLOT_CLEAR_SCRIPT_HEAD_TRACK_TARGET, 0),
+                (SLOT_SET_EXTRA_HEAD_TRACK, 0),
+                (SLOT_PROCESS_GREET, 0),
+                (SLOT_SET_HEAD_TRACK_TARGET, 0),
+                (SLOT_PROCESS_TRAVEL, 0),
+                (SLOT_SAVE_PACKAGE_TO_EXTRA_DATA, 0),
+                (SLOT_SET_TARGET, 0),
+                (SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING, 0),
+                (SLOT_GET_RUN_ONCE_PACKAGE, 0),
+            ],
+        );
+        returning(e, ACTOR_PROCESS, own_process);
+        returning(e, PACKAGE_TYPE, 7);
+        (p, actor, player, package)
+    }
+
+    #[test]
+    fn test_process_dialogue_activate_say_to_player_waits_while_talking() {
+        let mut e = Engine::new();
+        let (p, actor, player, package) = dialogue_world(&mut e);
+        e.mem.set_u32(p.addr() + 0x40, player);
+        returning(&mut e, PACKAGE_DIALOGUE_SAY_TO_FLAG, 1);
+        give_vtable(&mut e, p.addr(), PROCESS_TABLE, &[(SLOT_IS_TALKING, 1)]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008e8600, &args![p, actor]).u32() & 0xff, 1);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_IS_TALKING)),
+            vec![vec![p.addr(), actor]]
+        );
+        assert!(calls_to(&e, slot_target(PACKAGE_TABLE, PACKAGE_SLOT_FIND_LOCATION)).is_empty());
+        let _ = package;
+    }
+
+    #[test]
+    fn test_process_dialogue_activate_say_to_player_walks_to_the_player() {
+        let mut e = Engine::new();
+        let (p, actor, player, _package) = dialogue_world(&mut e);
+        e.mem.set_u32(p.addr() + 0x40, player);
+        returning(&mut e, PACKAGE_DIALOGUE_SAY_TO_FLAG, 1);
+        returning(&mut e, ACTOR_IS_PATHING_COMPLETE, 1);
+        returning(&mut e, PACKAGE_FLAG_2000, 1);
+        returning(&mut e, PACKAGE_FLAG_20000, 1);
+        // The player is 500 away, the default talking distance is 120.
+        e.register(DISTANCE_FROM_REFERENCE, |_, _| Ret {
+            st0: 500.0,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008e8600, &args![p, actor]).u32() & 0xff, 1);
+        // The search slots were asked: (actor, 0, -1.0, 0) only when the
+        // package has a second location, which it has not.
+        assert!(calls_to(&e, slot_target(PACKAGE_TABLE, PACKAGE_SLOT_FIND_LOCATION)).is_empty());
+        assert_eq!(
+            calls_to(&e, ACTOR_SET_MOVE_MODE),
+            vec![vec![actor, 0x200], vec![actor, 0x400]]
+        );
+        assert_eq!(calls_to(&e, ACTOR_CLEAR_RUN_BITS), vec![vec![actor]]);
+        assert_eq!(
+            calls_to(&e, ACTOR_SET_PATHFINDING_GOAL_REFERENCE),
+            vec![vec![actor, player, 120.0f32.to_bits(), 0]]
+        );
+        // A moving actor only stops (slot 0x418).
+        give_vtable(&mut e, actor, ACTOR_TABLE, &[(ACTOR_SLOT_STATE, 4)]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008e8600, &args![p, actor]).u32() & 0xff, 1);
+        assert_eq!(
+            calls_to(&e, actor_slot(ACTOR_SLOT_0X418)),
+            vec![vec![actor]]
+        );
+        assert!(calls_to(&e, ACTOR_SET_PATHFINDING_GOAL_REFERENCE).is_empty());
+    }
+
+    #[test]
+    fn test_process_dialogue_activate_say_to_player_starts_the_greeting() {
+        let mut e = Engine::new();
+        let (p, actor, player, _package) = dialogue_world(&mut e);
+        e.mem.set_u32(p.addr() + 0x40, player);
+        returning(&mut e, PACKAGE_DIALOGUE_SAY_TO_FLAG, 1);
+        returning(&mut e, ACTOR_LINE_OF_SIGHT, 1);
+        returning(&mut e, GET_TOPIC, 0x9999);
+        // The package has no target word, so the limit is 120.0; the
+        // distance 50.0 is inside it.
+        e.register(DISTANCE_FROM_REFERENCE, |_, _| Ret {
+            st0: 50.0,
+            ..Ret::default()
+        });
+        let own_process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008e8600, &args![p, actor]).u32() & 0xff, 1);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_END_MOVE_MESSAGE)),
+            vec![vec![p.addr(), actor]]
+        );
+        assert_eq!(calls_to(&e, GET_TOPIC), vec![vec![1, 0]]);
+        assert_eq!(
+            calls_to(&e, slot_target(0x7500_0000, SLOT_SET_EXTRA_HEAD_TRACK)),
+            vec![vec![own_process, player]]
+        );
+        let greet = calls_to(&e, slot_target(0x7500_0000, SLOT_PROCESS_GREET));
+        assert_eq!(greet.len(), 1);
+        assert_eq!(greet[0], vec![own_process, actor, 0x9999, 0, 0, 1, 1]);
+        assert_eq!(
+            calls_to(&e, REFERENCE_SET_WORD_AT_70),
+            vec![vec![actor, player]]
+        );
+    }
+
+    #[test]
+    fn test_process_dialogue_activate_other_packages_forward_to_the_actor() {
+        let mut e = Engine::new();
+        let (p, actor, _player, package) = dialogue_world(&mut e);
+        // No target and nothing to set it: the procedure index 3 is added.
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_SET_TARGET_FOR_PACKAGE, 0)],
+        );
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008e8600, &args![p, actor]).u32() & 0xff, 0);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 3]]
+        );
+        // With a target in state 0 the actor is given the package.
+        let target = object_with_slots(
+            &mut e,
+            0x7600_0000,
+            &[(ACTOR_SLOT_STATE, 0), (ACTOR_SLOT_0X418, 0)],
+        );
+        e.mem.set_u32(p.addr() + 0x40, target);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008e8600, &args![p, actor]).u32() & 0xff, 1);
+        assert_eq!(
+            calls_to(&e, actor_slot(ACTOR_SLOT_SET_PACKAGE)),
+            vec![vec![actor, package]]
+        );
+        // A target in state 9 is stopped and the package goes on.
+        give_vtable(&mut e, target, 0x7600_0000, &[(ACTOR_SLOT_STATE, 9)]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008e8600, &args![p, actor]).u32() & 0xff, 1);
+        assert_eq!(
+            calls_to(&e, slot_target(0x7600_0000, ACTOR_SLOT_0X418)),
+            vec![vec![target]]
+        );
+        assert!(calls_to(&e, actor_slot(ACTOR_SLOT_SET_PACKAGE)).is_empty());
+        // A target in another state ends it.
+        give_vtable(&mut e, target, 0x7600_0000, &[(ACTOR_SLOT_STATE, 2)]);
+        assert_eq!(e.call(0x008e8600, &args![p, actor]).u32() & 0xff, 0);
+    }
+
+    #[test]
+    fn test_process_dialogue_activate_conversation_with_an_interrupt_package() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package) = dialogue_world(&mut e);
+        returning(&mut e, PACKAGE_TYPE, 0x1c);
+        let target = object_with_slots(&mut e, 0x7600_0000, &[(ACTOR_SLOT_0X22C, 1)]);
+        e.mem.set_u32(p.addr() + 0x40, target);
+        returning(&mut e, ACTOR_GET_PACKAGE_SET_AS_CURRENT, 0xabc0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008e8600, &args![p, actor]).u32() & 0xff, 0);
+        assert_eq!(
+            calls_to(&e, actor_slot(ACTOR_SLOT_0X288)),
+            vec![vec![actor]]
+        );
+        assert_eq!(
+            calls_to(&e, PACKAGE_SET_NEVER_RUN),
+            vec![vec![0xabc0, target, 1]]
+        );
+    }
+
+    /// A conversation (package type 0x1c) between `target_of` and `started_by`.
+    fn conversation_world(
+        e: &mut Engine,
+        created: bool,
+    ) -> (Ptr<HighProcess>, u32, u32, u32, u32, u32) {
+        let (p, actor, player, package) = dialogue_world(e);
+        returning(e, PACKAGE_TYPE, 0x1c);
+        let target_of = object_with_slots(
+            e,
+            0x7600_0000,
+            &[
+                (ACTOR_SLOT_STATE, 0),
+                (ACTOR_SLOT_IS_ACTOR, 1),
+                (ACTOR_SLOT_0X418, 0),
+                (ACTOR_SLOT_ADD_PACKAGE, 0),
+            ],
+        );
+        let started_by = object_with_slots(e, 0x7700_0000, &[(ACTOR_SLOT_POSITION, 0)]);
+        returning(e, DIALOGUE_TARGET_OF_CONVERSATION, target_of);
+        returning(e, DIALOGUE_ACTOR_STARTED_CONVERSATION, started_by);
+        e.mem.set_u8(package + 0xbd, created as u8);
+        (p, actor, player, package, target_of, started_by)
+    }
+
+    #[test]
+    fn test_process_dialogue_activate_created_conversation_for_the_target() {
+        let mut e = Engine::new();
+        let (p, actor, _player, package, _target_of, started_by) = conversation_world(&mut e, true);
+        // The actor is the conversation's target.
+        returning(&mut e, DIALOGUE_TARGET_OF_CONVERSATION, actor);
+        // Without bTargetContinueMoving the procedure just advances.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008e8600, &args![p, actor]).u32() & 0xff, 1);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        // With the flag, a pathing actor farther than 400.0 (the default) is
+        // sent toward the starter.
+        e.mem.set_u8(package + 0xbf, 1);
+        returning(&mut e, ACTOR_IS_PATHING_COMPLETE, 1);
+        e.register(DISTANCE_FROM_REFERENCE, |_, _| Ret {
+            st0: 900.0,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008e8600, &args![p, actor]).u32() & 0xff, 1);
+        assert_eq!(
+            calls_to(&e, ACTOR_SET_PATHFINDING_GOAL_REFERENCE),
+            vec![vec![actor, started_by, 400.0f32.to_bits(), 0]]
+        );
+        // A package target word of 50 gives the limit 50.0 and a closer
+        // distance does not walk.
+        returning(&mut e, PACKAGE_TARGET_WORD, 0x4000);
+        returning(&mut e, WORD_AT_8, 50);
+        e.register(DISTANCE_FROM_REFERENCE, |_, _| Ret {
+            st0: 40.0,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008e8600, &args![p, actor]).u32() & 0xff, 1);
+        assert!(calls_to(&e, ACTOR_SET_PATHFINDING_GOAL_REFERENCE).is_empty());
+    }
+
+    #[test]
+    fn test_process_dialogue_activate_conversation_target_that_is_not_an_actor() {
+        let mut e = Engine::new();
+        let (p, actor, _player, package, _target_of, _started_by) =
+            conversation_world(&mut e, false);
+        // The actor is the target but is not an actor object.
+        let target = object_with_slots(&mut e, 0x7800_0000, &[(ACTOR_SLOT_IS_ACTOR, 0)]);
+        returning(&mut e, DIALOGUE_TARGET_OF_CONVERSATION, target);
+        let _ = actor;
+        let actor = target;
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008e8600, &args![p, actor]).u32() & 0xff, 1);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        assert_eq!(e.mem.u8(package + 0xc2), 1, "bReachedAmbushLocation is set");
+    }
+
+    #[test]
+    fn test_process_dialogue_activate_conversation_for_the_player_target() {
+        let mut e = Engine::new();
+        let (p, actor, player, package, _target_of, _started_by) =
+            conversation_world(&mut e, false);
+        returning(&mut e, DIALOGUE_TARGET_OF_CONVERSATION, player);
+        // The actor is free (state 0), the package has no second location and
+        // is not at an ambush location: the flag is set and ProcessActivate
+        // answers true for a conversation package.
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_PROCESS_ACTIVATE, 1)],
+        );
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008e8600, &args![p, actor]).u32() & 0xff, 1);
+        assert_eq!(e.mem.u8(package + 0xc2), 1);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        // With a second location whose search fails, nothing more happens.
+        returning(&mut e, PACKAGE_SECOND_LOCATION, 0x1234);
+        give_vtable(
+            &mut e,
+            package,
+            PACKAGE_TABLE,
+            &[(PACKAGE_SLOT_FIND_SECOND_LOCATION, 0)],
+        );
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008e8600, &args![p, actor]).u32() & 0xff, 1);
+        assert!(calls_to(&e, ACTOR_STOP_MOVING).is_empty());
+        // When the search succeeds and the package says the target was
+        // reached (slot 0x144), the actor stops, the flag is set and the
+        // actor faces the player.
+        let form = object_with_slots(&mut e, 0x7900_0000, &[(FORM_SLOT_0X124, 0)]);
+        returning(&mut e, REFERENCE_GET_FORM, form);
+        let own_process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+        give_vtable(
+            &mut e,
+            package,
+            PACKAGE_TABLE,
+            &[
+                (PACKAGE_SLOT_FIND_SECOND_LOCATION, 1),
+                (DIALOGUE_SLOT_REACHED_TARGET, 1),
+            ],
+        );
+        e.mem.set_u8(package + 0xc2, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008e8600, &args![p, actor]).u32() & 0xff, 1);
+        assert_eq!(calls_to(&e, ACTOR_STOP_MOVING), vec![vec![actor]]);
+        assert_eq!(e.mem.u8(package + 0xc2), 1);
+        assert_eq!(
+            calls_to(&e, slot_target(0x7500_0000, SLOT_SET_HEAD_TRACK_TARGET)),
+            vec![vec![own_process, 4, player]]
+        );
+        assert_eq!(
+            calls_to(&e, slot_target(0x7900_0000, FORM_SLOT_0X124)),
+            vec![vec![form, player, actor, 0, 0, 1]]
+        );
+    }
+
+    #[test]
+    fn test_process_steal_runs_and_undoes_the_move_mode() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = travel_world(&mut e);
+        stub(
+            &mut e,
+            &[
+                ACTOR_SET_BYTE_AT_125,
+                MOVE_MODE_RUNNING_ONLY,
+                ACTOR_CLEAR_RUN_BITS,
+                ACTOR_SET_MOVE_MODE,
+                ACTOR_CLEAR_MOVE_MODE,
+            ],
+        );
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_PROCESS_ACTIVATE, 0)],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x008ebb50, &args![p, actor]);
+        // The activation is refused: the move mode stays as it was set.
+        assert_eq!(calls_to(&e, ACTOR_SET_BYTE_AT_125), vec![vec![actor, 1]]);
+        assert_eq!(calls_to(&e, ACTOR_CLEAR_RUN_BITS), vec![vec![actor]]);
+        assert_eq!(calls_to(&e, ACTOR_SET_MOVE_MODE), vec![vec![actor, 0x400]]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_PROCESS_ACTIVATE)),
+            vec![vec![p.addr(), actor, 0]]
+        );
+        assert!(calls_to(&e, ACTOR_CLEAR_MOVE_MODE).is_empty());
+        // Accepted: the byte is reset and the move mode cleared; the run
+        // bits are only touched when the actor is "running only".
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_PROCESS_ACTIVATE, 1)],
+        );
+        returning(&mut e, MOVE_MODE_RUNNING_ONLY, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008ebb50, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, ACTOR_SET_BYTE_AT_125),
+            vec![vec![actor, 1], vec![actor, 0]]
+        );
+        assert_eq!(calls_to(&e, ACTOR_CLEAR_RUN_BITS), vec![vec![actor]]);
+        assert_eq!(
+            calls_to(&e, ACTOR_CLEAR_MOVE_MODE),
+            vec![vec![actor, 0x400]]
+        );
+    }
+
+    #[test]
+    fn test_fn_008ebbe0_enters_combat_or_activates() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package) = dialogue_world(&mut e);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_ENTER_COMBAT, 0), (SLOT_PROCESS_ACTIVATE, 0)],
+        );
+        // No target: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x008ebbe0, &args![p, actor]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        // A target whose slot 0x22c is false: EnterCombat.
+        let target = object_with_slots(&mut e, 0x7600_0000, &[(ACTOR_SLOT_0X22C, 0)]);
+        e.mem.set_u32(p.addr() + 0x40, target);
+        e.call_log = Some(vec![]);
+        e.call(0x008ebbe0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ENTER_COMBAT)),
+            vec![vec![
+                p.addr(),
+                actor,
+                target,
+                0,
+                0,
+                0,
+                0,
+                1,
+                1,
+                0,
+                0,
+                0,
+                1,
+                0
+            ]]
+        );
+        assert_eq!(
+            calls_to(&e, slot_target(0x7600_0000, ACTOR_SLOT_0X22C)),
+            vec![vec![target, 0]]
+        );
+        // True: ProcessActivate(actor, 0).
+        give_vtable(&mut e, target, 0x7600_0000, &[(ACTOR_SLOT_0X22C, 1)]);
+        e.call_log = Some(vec![]);
+        e.call(0x008ebbe0, &args![p, actor]);
+        assert!(calls_to(&e, process_slot(SLOT_ENTER_COMBAT)).is_empty());
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_PROCESS_ACTIVATE)),
+            vec![vec![p.addr(), actor, 0]]
+        );
+    }
+
+    #[test]
+    fn test_high_process_add_talkedto_actor() {
+        let mut e = Engine::new();
+        let p = block(&mut e);
+        e.mem.set_u32(p.addr() + 0x264, 0x4444);
+        global_word(&mut e, 0x7a00_0000, 0);
+        e.register(LIST_ADD_HEAD, |e, a| {
+            // The argument is the address of a word holding the actor.
+            let item = e.mem.u32(a[1]);
+            e.mem.set_u32(0x7a00_0000, item);
+            ret(0)
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x008ed400, &args![p, 0x5555u32]);
+        assert_eq!(e.mem.u32(0x7a00_0000), 0x5555);
+        let calls = calls_to(&e, LIST_ADD_HEAD);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0][0], 0x4444, "the list is pLastSpokeToList");
+    }
+
+    /// A process whose package has a target word, with the object-checking
+    /// doubles.
+    fn has_object_world(e: &mut Engine, target_type: u32) -> (Ptr<HighProcess>, u32) {
+        let (p, actor, _player, package) = dialogue_world(e);
+        stub(
+            e,
+            &[
+                PACKAGE_TARGET_TYPE,
+                PACKAGE_TARGET_OBJECT,
+                PACKAGE_TARGET_OBJECT_TYPE,
+                REFERENCE_TARGET_WORD,
+                ACTOR_HAS_OBJECTS,
+                WORD_AT_0XC,
+                PACKAGE_TARGET_GET_REFERENCE,
+            ],
+        );
+        let _ = package;
+        returning(e, PACKAGE_TARGET_WORD, 0x6000);
+        returning(e, PACKAGE_TARGET_TYPE, target_type);
+        returning(e, ACTOR_HAS_OBJECTS, 1);
+        give_vtable(
+            e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_ACTOR_PACKAGE_THAT_IS_RUNNING, 0x6100)],
+        );
+        (p, actor)
+    }
+
+    #[test]
+    fn test_high_process_check_if_has_object_by_target_type() {
+        let mut e = Engine::new();
+        let (p, actor) = has_object_world(&mut e, 1);
+        let list = p.addr() + 0x108;
+        // Type 1: the target's object.
+        returning(&mut e, PACKAGE_TARGET_OBJECT, 0x7001);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008ee220, &args![p, actor, 3u32]).bool());
+        assert_eq!(
+            calls_to(&e, ACTOR_HAS_OBJECTS),
+            vec![vec![actor, 0x7001, 0, 3, 0, list]]
+        );
+        // Type 2: the object type.
+        returning(&mut e, PACKAGE_TARGET_TYPE, 2);
+        returning(&mut e, PACKAGE_TARGET_OBJECT_TYPE, 0x13);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008ee220, &args![p, actor, 3u32]).bool());
+        assert_eq!(
+            calls_to(&e, ACTOR_HAS_OBJECTS),
+            vec![vec![actor, 0, 0x13, 3, 0, list]]
+        );
+        // Type 0: the word at +8 of the package object, else the target's
+        // reference.
+        returning(&mut e, PACKAGE_TARGET_TYPE, 0);
+        returning(&mut e, WORD_AT_8, 0);
+        returning(&mut e, PACKAGE_TARGET_GET_REFERENCE, 0x7100);
+        returning(&mut e, WORD_AT_0XC, 9);
+        returning(&mut e, REFERENCE_GET_FORM, 0x7200);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008ee220, &args![p, actor, 3u32]).bool());
+        assert_eq!(
+            calls_to(&e, ACTOR_HAS_OBJECTS),
+            vec![vec![actor, 0x7200, 0, 1, 9, list]]
+        );
+        assert_eq!(calls_to(&e, WORD_AT_0XC), vec![vec![0x7100]]);
+        // Type 3 takes the actor's own word when the package object gives none.
+        returning(&mut e, PACKAGE_TARGET_TYPE, 3);
+        returning(&mut e, REFERENCE_TARGET_WORD, 0x7300);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008ee220, &args![p, actor, 3u32]).bool());
+        assert_eq!(calls_to(&e, WORD_AT_0XC), vec![vec![0x7300]]);
+        // A reference found through the package object is used first.
+        returning(&mut e, WORD_AT_8, 0x7400);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008ee220, &args![p, actor, 3u32]).bool());
+        assert_eq!(calls_to(&e, WORD_AT_0XC), vec![vec![0x7400]]);
+        // No reference: false. Another type: false.
+        returning(&mut e, WORD_AT_8, 0);
+        returning(&mut e, REFERENCE_TARGET_WORD, 0);
+        assert!(!e.call(0x008ee220, &args![p, actor, 3u32]).bool());
+        returning(&mut e, PACKAGE_TARGET_TYPE, 4);
+        assert!(!e.call(0x008ee220, &args![p, actor, 3u32]).bool());
+        // No target word: false.
+        returning(&mut e, PACKAGE_TARGET_WORD, 0);
+        returning(&mut e, PACKAGE_TARGET_TYPE, 1);
+        assert!(!e.call(0x008ee220, &args![p, actor, 3u32]).bool());
+    }
+
+    #[test]
+    fn test_high_process_is_actor_inside_ambush_area() {
+        let mut e = Engine::new();
+        let (p, actor, _player, package) = dialogue_world(&mut e);
+        global_f32(&mut e, NO_LIMIT_FLOAT, -1.0);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008ee370, &args![p, actor, 0x8888u32]).bool());
+        assert_eq!(
+            calls_to(
+                &e,
+                slot_target(PACKAGE_TABLE, PACKAGE_SLOT_FIND_SECOND_LOCATION)
+            ),
+            vec![vec![package, 0x8888, actor, 0, (-1.0f32).to_bits(), 0]]
+        );
+        give_vtable(
+            &mut e,
+            package,
+            PACKAGE_TABLE,
+            &[(PACKAGE_SLOT_FIND_SECOND_LOCATION, 0)],
+        );
+        assert!(!e.call(0x008ee370, &args![p, actor, 0x8888u32]).bool());
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_PACKAGE_THAT_IS_RUNNING, 0)],
+        );
+        assert!(!e.call(0x008ee370, &args![p, actor, 0x8888u32]).bool());
+    }
+
+    #[test]
+    fn test_small_getters_of_the_last_stretch() {
+        let mut e = Engine::new();
+        let p = block(&mut e);
+        e.mem.set_u16(p.addr() + 0x24, 2);
+        assert!(!e.call(0x008eea80, &args![p]).bool());
+        e.mem.set_u16(p.addr() + 0x24, 3);
+        assert!(e.call(0x008eea80, &args![p]).bool());
+        e.mem.set_u8(p.addr() + 0x2c7, 5);
+        assert_eq!(e.call(0x008f21a0, &args![p]).u8(), 5);
+        global_word(&mut e, 0x011d_c034, 0x0102);
+        assert_eq!(e.call(0x008f21c0, &args![]).u8(), 2);
+        e.mem.set_u16(p.addr() + 0x12, 0xbeef);
+        assert_eq!(e.call(0x008f21d0, &args![p]).u16(), 0xbeef);
+    }
+
+    #[test]
+    fn test_fn_008f25e0_is_a_scalar_deleting_destructor() {
+        let mut e = Engine::new();
+        stub(&mut e, &[0x009e_b660, OPERATOR_DELETE]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008f25e0, &args![0x1234u32, 0u32]).u32(), 0x1234);
+        assert_eq!(calls_to(&e, 0x009e_b660), vec![vec![0x1234]]);
+        assert!(calls_to(&e, OPERATOR_DELETE).is_empty());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008f25e0, &args![0x1234u32, 1u32]).u32(), 0x1234);
+        assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![0x1234]]);
+    }
+
+    #[test]
+    fn test_fn_008f3550_and_008f3600_finish_the_procedure() {
+        let mut e = Engine::new();
+        let (p, actor, _player, package) = dialogue_world(&mut e);
+        global_f32(&mut e, NO_LIMIT_FLOAT, -1.0);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[
+                (SLOT_SET_PROCEDURE_INDEX_RUNNING, 0),
+                (SLOT_SET_CURRENT_ACTION_COMPLETE, 0),
+            ],
+        );
+        // The search fails and the actor is in state 0: the procedure restarts.
+        give_vtable(
+            &mut e,
+            package,
+            PACKAGE_TABLE,
+            &[(PACKAGE_SLOT_FIND_LOCATION, 0)],
+        );
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008f3550, &args![p, actor]).bool());
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), 0]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_END_MOVE_MESSAGE)),
+            vec![vec![p.addr(), actor]]
+        );
+        assert!(e.call(0x008f3600, &args![p, actor]).bool());
+        // State 9 (or 4 for the other one) completes the action instead.
+        give_vtable(&mut e, actor, ACTOR_TABLE, &[(ACTOR_SLOT_STATE, 9)]);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008f3550, &args![p, actor]).bool());
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_CURRENT_ACTION_COMPLETE)),
+            vec![vec![p.addr(), 1]]
+        );
+        give_vtable(&mut e, actor, ACTOR_TABLE, &[(ACTOR_SLOT_STATE, 4)]);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008f3600, &args![p, actor]).bool());
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_CURRENT_ACTION_COMPLETE)),
+            vec![vec![p.addr(), 1]]
+        );
+        // A successful search completes the action as well; no package: false.
+        give_vtable(
+            &mut e,
+            package,
+            PACKAGE_TABLE,
+            &[(PACKAGE_SLOT_FIND_LOCATION, 1)],
+        );
+        assert!(!e.call(0x008f3600, &args![p, actor]).bool());
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_PACKAGE_THAT_IS_RUNNING, 0)],
+        );
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008f3550, &args![p, actor]).bool());
+        assert!(!e.call(0x008f3600, &args![p, actor]).bool());
+        assert!(calls_to(&e, process_slot(SLOT_END_MOVE_MESSAGE)).is_empty());
+    }
+
+    #[test]
+    fn test_mod_detection_modifier_timer() {
+        let mut e = Engine::new();
+        let p = block(&mut e);
+        returning_float(&mut e, FRAME_TIME, 0.25);
+        e.mem.set_f32(p.addr() + 0x3c0, 1.0);
+        e.call(0x008eedc0, &args![p]);
+        assert_eq!(e.mem.f32(p.addr() + 0x3c0), 0.75);
+    }
+
+    #[test]
+    fn test_set_current_process_anim_idle_loaded() {
+        let mut e = Engine::new();
+        let p = block(&mut e);
+        stub(
+            &mut e,
+            &[
+                NI_POINTER_ASSIGN,
+                KF_MODEL_POINTER_ASSIGN,
+                NI_POINTER_SET,
+                KF_MODEL_POINTER_SET,
+            ],
+        );
+        let base = p.addr();
+        // Both null: the second pair is copied over the first and cleared.
+        e.call_log = Some(vec![]);
+        e.call(0x008eedf0, &args![p, 0u32, 0u32]);
+        assert_eq!(
+            call_order(&e),
+            vec![
+                NI_POINTER_ASSIGN,
+                KF_MODEL_POINTER_ASSIGN,
+                NI_POINTER_SET,
+                KF_MODEL_POINTER_SET
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, NI_POINTER_ASSIGN),
+            vec![vec![base + 0x354, base + 0x358]]
+        );
+        assert_eq!(calls_to(&e, NI_POINTER_SET), vec![vec![base + 0x358, 0]]);
+        assert_eq!(
+            calls_to(&e, KF_MODEL_POINTER_SET),
+            vec![vec![base + 0x360, 0]]
+        );
+        // The first slot is empty: it receives the pair.
+        returning(&mut e, NI_POINTER_GET, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x008eedf0, &args![p, 0xaau32, 0xbbu32]);
+        assert_eq!(calls_to(&e, NI_POINTER_SET), vec![vec![base + 0x354, 0xaa]]);
+        assert_eq!(
+            calls_to(&e, KF_MODEL_POINTER_SET),
+            vec![vec![base + 0x35c, 0xbb]]
+        );
+        // The first slot is taken: the second one receives the pair.
+        returning(&mut e, NI_POINTER_GET, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008eedf0, &args![p, 0xaau32, 0xbbu32]);
+        assert_eq!(calls_to(&e, NI_POINTER_SET), vec![vec![base + 0x358, 0xaa]]);
+        assert_eq!(
+            calls_to(&e, KF_MODEL_POINTER_SET),
+            vec![vec![base + 0x360, 0xbb]]
+        );
+        // ... unless the new animation is null.
+        e.call_log = Some(vec![]);
+        e.call(0x008eedf0, &args![p, 0u32, 0xbbu32]);
+        assert_eq!(calls_to(&e, NI_POINTER_SET), vec![vec![base + 0x354, 0]]);
+    }
+
+    #[test]
+    fn test_process_surface_one_hour() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = travel_world(&mut e);
+        global_f32(&mut e, SURFACE_HEIGHT_OFFSET, 25.0);
+        returning_float(&mut e, REFERENCE_WATER_HEIGHT, 100.0);
+        stub(&mut e, &[PATHING_REQUEST_SET_RADIUS]);
+        e.register(PATHING_REQUEST_CONSTRUCTOR, |_, a| ret(a[0]));
+        returning(&mut e, REFERENCE_GET_WORLD_SPACE, 0xaa);
+        returning(&mut e, REFERENCE_PATHING_CELL, 0xbb);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_CLEAR_RUN_ONCE_PACKAGE, 0)],
+        );
+        // Nothing happens without an actor.
+        e.call_log = Some(vec![]);
+        e.call(0x008eeac0, &args![p, 0u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008eeac0, &args![p, actor]);
+        let builds = calls_to(&e, ACTOR_BUILD_REQUEST);
+        assert_eq!(builds.len(), 1);
+        let position = builds[0][2];
+        assert_eq!(builds[0][3], 0xbb);
+        assert_eq!(builds[0][4], 0xaa);
+        assert_eq!(builds[0][5], 25.0f32.to_bits());
+        // The raised position: water height 100 + 25 in the z word.
+        assert_eq!(calls_to(&e, ACTOR_SET_PATHFINDING_GOAL_REQUEST).len(), 1);
+        assert_eq!(
+            calls_to(&e, PATHING_REQUEST_SET_RADIUS),
+            vec![vec![builds[0][1], 25.0f32.to_bits()]]
+        );
+        let _ = position;
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_CLEAR_RUN_ONCE_PACKAGE)),
+            vec![vec![p.addr()]]
+        );
+        assert_eq!(calls_to(&e, PATHING_REQUEST_DESTRUCTOR).len(), 1);
+    }
+
+    #[test]
+    fn test_create_weapon_acquire_list() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = travel_world(&mut e);
+        stub(
+            &mut e,
+            &[
+                LIST_CLEAR,
+                PACKAGE_ACQUIRE_RADIUS,
+                ENUM_REFERENCES_CLOSE_TO_POINT,
+                LIST_IS_EMPTY,
+                LIST_ADD_HEAD,
+            ],
+        );
+        e.register(NODE_ITEM_ADDRESS, |_, a| ret(a[0]));
+        e.register(NI_POINTER_GET, |e, a| ret(e.mem.u32(a[0])));
+        e.register(ITEM_CHANGE_CONSTRUCTOR, |_, a| ret(a[0]));
+        let setting = e.mem.alloc(8);
+        e.mem.set_f32(setting, 750.0);
+        returning(&mut e, SETTING_VALUE, setting);
+        returning(&mut e, REFERENCE_PATHING_CELL, 0xcc);
+        global_word(&mut e, DATA_HANDLER_GLOBAL, 0x4321);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[
+                (SLOT_GET_CURRENT_PACKAGE, 0),
+                (SLOT_EVALUATE_ORDER_ACQUIRE_LIST, 0),
+            ],
+        );
+        // The list head node's item is an entry whose object word is at +4.
+        let entry = e.mem.alloc(0x40);
+        e.mem.set_u32(entry + 4, 0x9999);
+        e.mem.set_u32(p.addr() + 0x5c, entry);
+        e.mem.set_u32(p.addr() + 0x84, 5);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x008eebf0, &args![p, actor, 7u32]).u32();
+        assert_eq!(calls_to(&e, LIST_CLEAR), vec![vec![p.addr() + 0x5c]]);
+        // No current package: the exterior radius setting is used.
+        let enumerations = calls_to(&e, ENUM_REFERENCES_CLOSE_TO_POINT);
+        assert_eq!(enumerations.len(), 1);
+        assert_eq!(enumerations[0][0], 0x4321);
+        assert_eq!(enumerations[0][1], 0xcc);
+        assert_eq!(enumerations[0][3], 750.0f32.to_bits());
+        assert_eq!(enumerations[0][5], 750.0f32.to_bits());
+        assert_eq!(enumerations[0][6], ACQUIRE_CALLBACK);
+        assert_eq!(enumerations[0][7], actor);
+        // Both fields are cleared again and the order list evaluated.
+        assert_eq!(e.mem.u32(p.addr() + 0x84), 0);
+        assert_eq!(e.mem.u32(p.addr() + 0x8c), 0);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_EVALUATE_ORDER_ACQUIRE_LIST)),
+            vec![vec![p.addr(), actor]]
+        );
+        // An ItemChange is made for the first entry with count 1 and the
+        // entry's word at +0x14 is added to its list.
+        let made = calls_to(&e, ITEM_CHANGE_CONSTRUCTOR);
+        assert_eq!(made.len(), 1);
+        assert_eq!(&made[0][1..], &[0x9999, 1]);
+        assert_eq!(result, made[0][0]);
+        assert_eq!(calls_to(&e, LIST_ADD_HEAD).len(), 1);
+        assert_eq!(calls_to(&e, LIST_ADD_HEAD)[0][1], entry + 0x14);
+        // The count was stored for the enumeration.
+        // (checked through the empty case below)
+        returning(&mut e, LIST_IS_EMPTY, 1);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008eebf0, &args![p, actor, 7u32]).u32(), 0);
+        assert!(calls_to(&e, ITEM_CHANGE_CONSTRUCTOR).is_empty());
+    }
+
+    /// A process for `ProcessAcquire`: every slot it can reach answers zero.
+    fn acquire_travel_world(e: &mut Engine) -> (Ptr<HighProcess>, u32, u32) {
+        let (p, actor, _player, package) = dialogue_world(e);
+        stub(
+            e,
+            &[
+                PACKAGE_INITIAL_TARGET_COUNT,
+                PACKAGE_TARGET_OBJECT_TYPE,
+                REFERENCE_FLAG_20,
+                REFERENCE_FLAG_800,
+                LIST_IS_EMPTY,
+                NODE_ITEM_ADDRESS,
+                LIST_REMOVE_ITEM,
+                PACKAGE_FLAG_200000,
+                REFERENCE_GET_FORM,
+                NPC_FORM_EQUIP,
+                CREATURE_INIT_DEFAULT_WORN,
+                PACKAGE_PROCEDURE_TYPE,
+                PACKAGE_LIST_AT_38,
+                NODE_NEXT,
+                ACTOR_MOVE_MODE,
+                ACTOR_CLEAR_RUN_BITS,
+                ACTOR_CLEAR_MOVE_MODE,
+                PACKAGE_TARGET_TYPE,
+                PACKAGE_SEARCH_LOCATION,
+                FORM_TYPE_OF,
+                FORM_ACQUIRE_TEST,
+                PACKAGE_OBJECT_TYPE_FROM_FORM,
+                PACKAGE_TARGET_GET_REFERENCE,
+            ],
+        );
+        returning(e, PACKAGE_INITIAL_TARGET_COUNT, 4);
+        returning(e, PACKAGE_TARGET_WORD, 0x6000);
+        returning(e, PACKAGE_TYPE, 0);
+        give_vtable(
+            e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[
+                (SLOT_GET_SIT_SLEEP_STATE, 0),
+                (SLOT_CHECK_IF_HAS_OBJECT, 0),
+                (SLOT_GET_PROCEDURE_INDEX_RUNNING, 0),
+                (SLOT_PROCESS_PICK_POCKET, 0),
+                (SLOT_PROCESS_STEAL, 0),
+                (SLOT_PROCESS_BUY_OBJECT_ACQUIRE, 0),
+                (SLOT_SET_EXTRA_HEAD_TRACK, 0),
+            ],
+        );
+        e.mem.set_u32(package + 0x18, 0);
+        (p, actor, package)
+    }
+
+    #[test]
+    fn test_process_acquire_does_nothing_without_a_package_and_stands_up() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = acquire_travel_world(&mut e);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_PACKAGE_THAT_IS_RUNNING, 0)],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x008ebc60, &args![p, actor]);
+        assert_eq!(
+            e.call_log.as_ref().unwrap().len(),
+            1 + 1,
+            "only the package slot"
+        );
+        // A sitting actor is told to stand.
+        let package = object_with_slots(&mut e, PACKAGE_TABLE, &[(PACKAGE_SLOT_FIND_LOCATION, 0)]);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[
+                (SLOT_GET_PACKAGE_THAT_IS_RUNNING, package),
+                (SLOT_GET_SIT_SLEEP_STATE, 4),
+            ],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x008ebc60, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, actor_slot(ACTOR_SLOT_0X418)),
+            vec![vec![actor]]
+        );
+    }
+
+    #[test]
+    fn test_process_acquire_with_the_object_advances_the_procedure() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = acquire_travel_world(&mut e);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_CHECK_IF_HAS_OBJECT, 1)],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x008ebc60, &args![p, actor]);
+        // The target count from the package (4) is passed along.
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_CHECK_IF_HAS_OBJECT)),
+            vec![vec![p.addr(), actor, 4]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        // A current package with procedure type 0x1a adds 2.
+        let current = e.mem.alloc(0x40);
+        e.mem.set_u32(current + 0x18, 0x1a);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_CURRENT_PACKAGE, current)],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x008ebc60, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 2]]
+        );
+    }
+
+    #[test]
+    fn test_process_acquire_sets_a_missing_target() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = acquire_travel_world(&mut e);
+        // A package of type 1 (not 0, 8, 0x10): the default case; no target
+        // at all gives SetTargetForPackage (once after each failed check) and
+        // then procedure 1.
+        returning(&mut e, PACKAGE_TYPE, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008ebc60, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_TARGET_FOR_PACKAGE)),
+            vec![vec![p.addr(), actor]; 2]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+    }
+
+    #[test]
+    fn test_process_acquire_takes_the_next_object_of_the_list() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = acquire_travel_world(&mut e);
+        // A package of type 0 whose object type is 12.
+        returning(&mut e, PACKAGE_TARGET_OBJECT_TYPE, 0xc);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[
+                (SLOT_GET_PROCEDURE_INDEX_RUNNING, 2),
+                (SLOT_PROCESS_ACTIVATE, 0),
+            ],
+        );
+        // The head entry of the ObjectList at +0x5c, whose first word is the
+        // object reference.
+        let entry = e.mem.alloc(0x40);
+        e.mem.set_u32(entry, 0xabcd);
+        e.mem.set_u32(p.addr() + 0x5c, entry);
+        e.register(NODE_ITEM_ADDRESS, |_, a| ret(a[0]));
+        e.call_log = Some(vec![]);
+        e.call(0x008ebc60, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_PROCESS_ACTIVATE)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, u32::MAX]]
+        );
+        assert_eq!(e.mem.u32(p.addr() + 0x64), entry);
+        assert_eq!(
+            calls_to(&e, LIST_REMOVE_ITEM),
+            vec![vec![p.addr() + 0x5c, p.addr() + 0x64]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_TARGET)),
+            vec![vec![p.addr(), 0xabcd]]
+        );
+        // With only one procedure the function ends after the activation.
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_PROCEDURE_INDEX_RUNNING, 1)],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x008ebc60, &args![p, actor]);
+        assert!(calls_to(&e, LIST_REMOVE_ITEM).is_empty());
+        // An empty list ends the procedure, and object type 0x13 sets up the
+        // actor's worn items (a creature here).
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_PROCEDURE_INDEX_RUNNING, 2)],
+        );
+        returning(&mut e, LIST_IS_EMPTY, 1);
+        returning(&mut e, PACKAGE_TARGET_OBJECT_TYPE, 0x13);
+        give_vtable(
+            &mut e,
+            actor,
+            ACTOR_TABLE,
+            &[(ACTOR_SLOT_0X218, 0), (ACTOR_SLOT_0X21C, 1)],
+        );
+        returning(&mut e, REFERENCE_GET_FORM, 0x7777);
+        e.call_log = Some(vec![]);
+        e.call(0x008ebc60, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, CREATURE_INIT_DEFAULT_WORN),
+            vec![vec![0x7777, actor, 1, 1, 1]]
+        );
+        // A package flag clears the second flag.
+        returning(&mut e, PACKAGE_FLAG_200000, 1);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_CURRENT_PACKAGE, 0x6600)],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x008ebc60, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, CREATURE_INIT_DEFAULT_WORN),
+            vec![vec![0x7777, actor, 1, 0, 1]]
+        );
+        // An NPC uses the other equip function.
+        give_vtable(&mut e, actor, ACTOR_TABLE, &[(ACTOR_SLOT_0X218, 1)]);
+        e.call_log = Some(vec![]);
+        e.call(0x008ebc60, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, NPC_FORM_EQUIP),
+            vec![vec![0x7777, actor, 1, 0, 0, 1]]
+        );
+    }
+
+    #[test]
+    fn test_process_acquire_second_check_moves_on() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = acquire_travel_world(&mut e);
+        // The first check answers false, the second true: slot 0x80c is asked
+        // twice. The process counts its calls.
+        let counter = 0x7b00_0000u32;
+        global_word(&mut e, counter, 0);
+        returning(&mut e, PACKAGE_TYPE, 3);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_RUN_ONCE_PACKAGE, 0x4444)],
+        );
+        e.register_double(
+            slot_target(PROCESS_TABLE, SLOT_CHECK_IF_HAS_OBJECT),
+            move |e, _| {
+                let n = e.mem.u32(counter);
+                e.mem.set_u32(counter, n + 1);
+                ret(if n >= 1 { 1 } else { 0 })
+            },
+        );
+        returning(&mut e, ACTOR_MOVE_MODE, 0x400);
+        e.call_log = Some(vec![]);
+        e.call(0x008ebc60, &args![p, actor]);
+        assert_eq!(e.mem.u32(counter), 2);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_END_MOVE_MESSAGE)),
+            vec![vec![p.addr(), actor]]
+        );
+        // A run-once package: procedure 1 is added; the move mode 0x400 is
+        // cleared.
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        assert_eq!(calls_to(&e, ACTOR_CLEAR_RUN_BITS), vec![vec![actor]]);
+        assert_eq!(
+            calls_to(&e, ACTOR_CLEAR_MOVE_MODE),
+            vec![vec![actor, 0x400]]
+        );
+    }
+
+    #[test]
+    fn test_process_acquire_dispatches_on_the_acquire_object_kind() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = acquire_travel_world(&mut e);
+        returning(&mut e, PACKAGE_TYPE, 1);
+        // A target that is an actor and an acquire object of kind 4.
+        let target = object_with_slots(&mut e, 0x7600_0000, &[(ACTOR_SLOT_IS_ACTOR, 1)]);
+        let acquire = e.mem.alloc(0x40);
+        e.mem.set_u32(acquire + 0x18, 4);
+        e.mem.set_u32(p.addr() + 0x40, target);
+        e.mem.set_u32(p.addr() + 0x64, acquire);
+        e.call_log = Some(vec![]);
+        e.call(0x008ebc60, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_PROCESS_PICK_POCKET)),
+            vec![vec![p.addr(), actor]]
+        );
+        e.mem.set_u32(acquire + 0x18, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x008ebc60, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_PROCESS_BUY_OBJECT_ACQUIRE)),
+            vec![vec![p.addr(), actor]]
+        );
+        e.mem.set_u32(acquire + 0x18, 9);
+        e.call_log = Some(vec![]);
+        e.call(0x008ebc60, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_PROCESS_ACTIVATE)),
+            vec![vec![p.addr(), actor, 0]]
+        );
+        // A non-actor target with an acquire object: the head track target is
+        // the object's first word and kind 3 steals.
+        give_vtable(&mut e, target, 0x7600_0000, &[(ACTOR_SLOT_IS_ACTOR, 0)]);
+        e.mem.set_u32(acquire, 0x1357);
+        e.mem.set_u32(acquire + 0x18, 3);
+        e.call_log = Some(vec![]);
+        e.call(0x008ebc60, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_EXTRA_HEAD_TRACK)),
+            vec![vec![p.addr(), 0x1357]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_PROCESS_STEAL)),
+            vec![vec![p.addr(), actor]]
+        );
+    }
+
+    #[test]
+    fn test_process_acquire_object_type_cases_for_type_8_packages() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = acquire_travel_world(&mut e);
+        returning(&mut e, PACKAGE_TYPE, 8);
+        // No target: the type comes from the package's target word (5), and
+        // types of that group store themselves and advance.
+        returning(&mut e, PACKAGE_TARGET_OBJECT_TYPE, 5);
+        e.call_log = Some(vec![]);
+        e.call(0x008ebc60, &args![p, actor]);
+        assert_eq!(e.mem.u32(p.addr() + 0x108), 5);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+    }
+
+    /// A conversation between `target_of` and `started_by` (two plain actors,
+    /// neither of them the player) for `ProcessDialogue`.
+    fn process_dialogue_world(e: &mut Engine) -> (Ptr<HighProcess>, u32, u32, u32, u32) {
+        let (p, actor, _player, package, target_of, started_by) = conversation_world(e, false);
+        stub(
+            e,
+            &[
+                REFERENCE_EXTRA_DATA,
+                EXTRA_GET_PACKAGE,
+                EXTRA_SET_PACKAGE_ACTION_COMPLETE,
+                REFERENCE_BYTE_AT_81,
+                DIALOGUE_CONVERSATION,
+                REFERENCE_WORD_AT_6C,
+                FORM_WORD_AT_90,
+                CONVERSATION_CONSTRUCTOR,
+                DIALOGUE_SET_CONVERSATION,
+                PACKAGE_FLAG_100000,
+                ACTOR_MOVE_MODE_BITS_30,
+                ACTOR_REQUEST_TURN_TO,
+                Z_ANGLE_FROM_VECTOR,
+                SOUND_HANDLE_IS_VALID,
+                DIALOGUE_PACKAGE_SPEAK,
+                PROCESS_WORD_AT_28,
+                POINT_DIFFERENCE,
+                ANGLE_DIFFERENCE,
+                FLOAT_ABSOLUTE_FOR_LOD,
+                SOUND_HANDLE_DESTRUCTOR,
+            ],
+        );
+        let setting = e.mem.alloc(8);
+        e.mem.set_i32(setting, 90);
+        returning(e, SETTING_INTEGER_POINTER, setting);
+        global_f64(e, PI_DOUBLE, std::f64::consts::PI);
+        global_f64(e, DEGREES_TO_RADIANS, 0.017_453_292_384_743_69);
+        global_f64(e, ZERO_DOUBLE_VALUE, 0.0);
+        // The conversation has one already; the turn blocks are skipped by
+        // the package flag unless a test clears it.
+        returning(e, DIALOGUE_CONVERSATION, 0x5151);
+        returning(e, PACKAGE_FLAG_100000, 1);
+        returning(e, ACTOR_PROCESS, 0x7c00_0000);
+        give_vtable(
+            e,
+            actor,
+            ACTOR_TABLE,
+            &[(ACTOR_SLOT_GET_LAST_SPEAKING_EMOTION, 0)],
+        );
+        give_vtable(
+            e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[
+                (SLOT_GET_CURRENT_ACTION_COMPLETE_DIALOGUE, 0),
+                (SLOT_GET_SOUND_HANDLE, 0),
+                (SLOT_GET_GREETING_TIMER, 0),
+            ],
+        );
+        (p, actor, package, target_of, started_by)
+    }
+
+    #[test]
+    fn test_process_dialogue_other_package_types_add_minus_two() {
+        let mut e = Engine::new();
+        let (p, actor, _package, _target_of, _started_by) = process_dialogue_world(&mut e);
+        returning(&mut e, PACKAGE_TYPE, 7);
+        e.call_log = Some(vec![]);
+        e.call(0x008ec460, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, (-2i32) as u32]]
+        );
+        assert!(calls_to(&e, DIALOGUE_TARGET_OF_CONVERSATION).is_empty());
+    }
+
+    #[test]
+    fn test_process_dialogue_needs_both_actors_to_run_the_package() {
+        let mut e = Engine::new();
+        let (p, actor, package, target_of, started_by) = process_dialogue_world(&mut e);
+        // A missing process for the target: the actor's slot 0x288.
+        e.register_double(ACTOR_PROCESS, move |_, a| {
+            ret(if a[0] == target_of { 0 } else { 0x7c00_0000 })
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x008ec460, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, actor_slot(ACTOR_SLOT_0X288)),
+            vec![vec![actor]]
+        );
+        assert!(calls_to(&e, DIALOGUE_PACKAGE_SPEAK).is_empty());
+        // The starter is the player and the target is not: both must run the
+        // package.
+        returning(&mut e, ACTOR_PROCESS, 0x7c00_0000);
+        global_word(&mut e, PLAYER_POINTER, started_by);
+        returning(&mut e, ACTOR_CURRENT_PACKAGE, package + 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008ec460, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, actor_slot(ACTOR_SLOT_0X288)),
+            vec![vec![actor]]
+        );
+        returning(&mut e, ACTOR_CURRENT_PACKAGE, package);
+        e.call_log = Some(vec![]);
+        e.call(0x008ec460, &args![p, actor]);
+        assert!(calls_to(&e, actor_slot(ACTOR_SLOT_0X288)).len() <= 1);
+        assert!(!calls_to(&e, DIALOGUE_PACKAGE_SPEAK).is_empty());
+    }
+
+    #[test]
+    fn test_process_dialogue_creates_the_conversation() {
+        let mut e = Engine::new();
+        let (p, actor, package, target_of, started_by) = process_dialogue_world(&mut e);
+        returning(&mut e, DIALOGUE_CONVERSATION, 0);
+        returning(&mut e, PACKAGE_DIALOGUE_TOPIC, 0x3030);
+        e.register(CONVERSATION_CONSTRUCTOR, |_, a| ret(a[0] + 1));
+        e.call_log = Some(vec![]);
+        e.call(0x008ec460, &args![p, actor]);
+        let made = calls_to(&e, CONVERSATION_CONSTRUCTOR);
+        assert_eq!(made.len(), 1);
+        assert_eq!(&made[0][1..], &[started_by, target_of, 0x3030]);
+        assert_eq!(
+            calls_to(&e, DIALOGUE_SET_CONVERSATION),
+            vec![vec![package, made[0][0] + 1]]
+        );
+    }
+
+    #[test]
+    fn test_process_dialogue_counts_down_the_package_timer() {
+        let mut e = Engine::new();
+        let (p, actor, package, _target_of, _started_by) = process_dialogue_world(&mut e);
+        returning_float(&mut e, FRAME_TIME, 0.5);
+        e.mem.set_f32(package + 0x90, 2.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008ec460, &args![p, actor]);
+        assert_eq!(e.mem.f32(package + 0x90), 1.5);
+        assert!(calls_to(&e, DIALOGUE_PACKAGE_SPEAK).is_empty());
+    }
+
+    #[test]
+    fn test_process_dialogue_speaks_or_finishes() {
+        let mut e = Engine::new();
+        let (p, actor, package, target_of, started_by) = process_dialogue_world(&mut e);
+        // The action is not complete: the package speaks.
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[
+                (SLOT_GET_CURRENT_ACTION_COMPLETE_DIALOGUE, 0),
+                (SLOT_GET_SOUND_HANDLE, 0),
+            ],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x008ec460, &args![p, actor]);
+        assert_eq!(calls_to(&e, DIALOGUE_PACKAGE_SPEAK), vec![vec![package, 1]]);
+        // Complete with an invalid sound handle: the actors are finished.
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[
+                (SLOT_GET_CURRENT_ACTION_COMPLETE_DIALOGUE, 1),
+                (SLOT_GET_SOUND_HANDLE, 0x7d00),
+            ],
+        );
+        returning(&mut e, ACTOR_CURRENT_PACKAGE, package);
+        e.mem.set_f32(p.addr() + 0x2b4, 9.0);
+        let other_process = e.mem.alloc(0x400);
+        e.mem.set_f32(other_process + 0x2b4, 9.0);
+        // Both actors answer with the same current package; the starter is
+        // not the actor, so the starter's process is the one reset.
+        let _ = (target_of, started_by);
+        returning(&mut e, ACTOR_PROCESS, other_process);
+        e.call_log = Some(vec![]);
+        e.call(0x008ec460, &args![p, actor]);
+        assert!(calls_to(&e, DIALOGUE_PACKAGE_SPEAK).is_empty());
+        assert_eq!(
+            calls_to(&e, SOUND_HANDLE_IS_VALID).len(),
+            1,
+            "the handle returned by slot 0x48c is tested"
+        );
+        assert_eq!(calls_to(&e, SOUND_HANDLE_IS_VALID)[0], vec![0x7d00]);
+        assert_eq!(calls_to(&e, SOUND_HANDLE_DESTRUCTOR).len(), 1);
+        assert_eq!(e.mem.f32(p.addr() + 0x2b4), 0.0);
+        assert_eq!(e.mem.f32(other_process + 0x2b4), 0.0);
+        assert_eq!(
+            calls_to(&e, actor_slot(ACTOR_SLOT_0X288)),
+            vec![vec![actor]]
+        );
+        // A valid handle still plays: it speaks again.
+        returning(&mut e, SOUND_HANDLE_IS_VALID, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008ec460, &args![p, actor]);
+        assert_eq!(calls_to(&e, DIALOGUE_PACKAGE_SPEAK), vec![vec![package, 1]]);
+    }
+
+    #[test]
+    fn test_process_dialogue_turns_the_actors_toward_each_other() {
+        let mut e = Engine::new();
+        let (p, actor, package, target_of, started_by) = process_dialogue_world(&mut e);
+        let _ = package;
+        // The package flag is clear: the target is turned toward the starter's
+        // position.
+        returning(&mut e, PACKAGE_FLAG_100000, 0);
+        let starter_position = e.mem.alloc(16);
+        let target_position = e.mem.alloc(16);
+        e.mem.set_f32(starter_position, 1.0);
+        e.mem.set_f32(starter_position + 4, 2.0);
+        e.mem.set_f32(starter_position + 8, 3.0);
+        give_vtable(
+            &mut e,
+            started_by,
+            0x7700_0000,
+            &[
+                (ACTOR_SLOT_POSITION, starter_position),
+                (ACTOR_SLOT_IS_ACTOR, 1),
+                (ACTOR_SLOT_STATE, 0),
+                (ACTOR_SLOT_0X2BC, 0),
+            ],
+        );
+        give_vtable(
+            &mut e,
+            target_of,
+            0x7600_0000,
+            &[
+                (ACTOR_SLOT_ADD_PACKAGE, 0),
+                (ACTOR_SLOT_0X2BC, 0),
+                (ACTOR_SLOT_POSITION, target_position),
+            ],
+        );
+        // The starter is the player's equal here: not turned (move bits set).
+        returning(&mut e, ACTOR_MOVE_MODE_BITS_30, 1);
+        returning_float(&mut e, FRAME_TIME, 0.0);
+        e.mem.set_f32(package + 0x90, 5.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008ec460, &args![p, actor]);
+        let turns = calls_to(&e, ACTOR_REQUEST_TURN_TO);
+        assert_eq!(turns.len(), 1, "only the target turns: {turns:?}");
+        assert_eq!(
+            turns[0],
+            vec![
+                target_of,
+                1.0f32.to_bits(),
+                2.0f32.to_bits(),
+                3.0f32.to_bits(),
+                0
+            ]
+        );
+        assert_eq!(calls_to(&e, Z_ANGLE_FROM_VECTOR).len(), 1);
+        assert_eq!(calls_to(&e, ANGLE_DIFFERENCE).len(), 1);
+    }
+
+    /// A caller, a source and one candidate for `CallforHelp`.
+    fn call_for_help_world(e: &mut Engine) -> (Ptr<HighProcess>, u32, u32, u32, u32) {
+        let (p, _actor, _player, _package) = dialogue_world(e);
+        stub(
+            e,
+            &[
+                FORM_TYPE_OF,
+                WORD_AT_8,
+                REFERENCE_GET_INTERIOR,
+                CELL_ENUMERATE_AROUND,
+                ENUM_REFERENCES_CLOSE_TO_POINT,
+                LIST_CLEAR,
+                LIST_DELETE,
+                ACTOR_IS_ALARMED,
+                CANDIDATE_FLAG_579670,
+                CANDIDATE_FLAG_493BB0,
+                BYTE_AT_2C,
+                IS_IN_EVIL_FACTIONS_ONLY,
+                REFERENCE_PATHING_CELL,
+            ],
+        );
+        let setting = e.mem.alloc(8);
+        e.mem.set_i32(setting, 700);
+        returning(e, SETTING_INTEGER_POINTER, setting);
+        returning(e, REFERENCE_GET_FORM, 0x4000);
+        global_word(e, DATA_HANDLER_GLOBAL, 0x4321);
+        returning(e, REFERENCE_PATHING_CELL, 0xcc);
+        e.register(NODE_ITEM_ADDRESS, |_, a| ret(a[0]));
+        e.register(NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        let position = e.mem.alloc(16);
+        let caller = object_with_slots(e, ACTOR_TABLE, &[(ACTOR_SLOT_POSITION, position)]);
+        let candidate = object_with_slots(
+            e,
+            0x7600_0000,
+            &[(ACTOR_SLOT_IS_ACTOR, 1), (ACTOR_SLOT_0X304, 0)],
+        );
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, candidate);
+        returning(e, PROCESS_LISTS_SEND_ACTORS_YELL_ALARM, node);
+        (p, caller, candidate, node, position)
+    }
+
+    #[test]
+    fn test_call_for_help_exterior_asks_the_helpers_that_would_attack() {
+        let mut e = Engine::new();
+        let (p, caller, candidate, node, position) = call_for_help_world(&mut e);
+        returning(&mut e, ACTOR_GET_SHOULD_ATTACK, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008ecbb0, &args![p, caller, 0x1111u32, 0x2222u32]);
+        let enumerations = calls_to(&e, ENUM_REFERENCES_CLOSE_TO_POINT);
+        assert_eq!(
+            enumerations,
+            vec![vec![
+                0x4321,
+                0xcc,
+                position,
+                700.0f32.to_bits(),
+                position,
+                700.0f32.to_bits(),
+                CALL_FOR_HELP_CALLBACK,
+                0x2222
+            ]]
+        );
+        assert!(calls_to(&e, CELL_ENUMERATE_AROUND).is_empty());
+        assert_eq!(
+            calls_to(&e, PROCESS_LISTS_SEND_ACTORS_YELL_ALARM),
+            vec![vec![PROCESS_LISTS_GLOBAL, 0x2222, YELL_ALARM_LIST]]
+        );
+        // The candidate would attack: its process is fetched.
+        assert_eq!(calls_to(&e, ACTOR_PROCESS), vec![vec![candidate]]);
+        assert_eq!(
+            calls_to(&e, ACTOR_GET_SHOULD_ATTACK).len(),
+            1,
+            "{:?}",
+            calls_to(&e, ACTOR_GET_SHOULD_ATTACK)
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_GET_SHOULD_ATTACK)[0][..3],
+            [candidate, 0x1111, 0]
+        );
+        // The list is emptied and deleted at the end.
+        assert_eq!(
+            calls_to(&e, LIST_CLEAR),
+            vec![vec![YELL_ALARM_LIST], vec![node]]
+        );
+        assert_eq!(calls_to(&e, LIST_DELETE), vec![vec![node, 1]]);
+    }
+
+    #[test]
+    fn test_call_for_help_interior_and_unfit_candidates() {
+        let mut e = Engine::new();
+        let (p, caller, _candidate, _node, position) = call_for_help_world(&mut e);
+        returning(&mut e, REFERENCE_GET_INTERIOR, 1);
+        returning(&mut e, ACTOR_IS_ALARMED, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008ecbb0, &args![p, caller, 0x1111u32, 0x2222u32]);
+        // Indoors the cell enumeration is used and the data handler is not.
+        assert!(calls_to(&e, ENUM_REFERENCES_CLOSE_TO_POINT).is_empty());
+        assert_eq!(
+            calls_to(&e, CELL_ENUMERATE_AROUND),
+            vec![vec![
+                0xcc,
+                position,
+                700.0f32.to_bits(),
+                position,
+                700.0f32.to_bits(),
+                CALL_FOR_HELP_CALLBACK,
+                0x2222
+            ]]
+        );
+        // An alarmed candidate is skipped entirely.
+        assert!(calls_to(&e, ACTOR_GET_SHOULD_ATTACK).is_empty());
+        assert!(calls_to(&e, ACTOR_PROCESS).is_empty());
+    }
+
+    /// An alarm package whose crime list has one crime entry.
+    fn alarm_world(e: &mut Engine) -> (Ptr<HighProcess>, u32, u32, u32, u32) {
+        let (p, actor, player, package) = dialogue_world(e);
+        stub(
+            e,
+            &[
+                EXTRA_GET_PACKAGE,
+                REFERENCE_EXTRA_DATA,
+                PACKAGE_TARGET_GET_REFERENCE,
+                ACTOR_BYTE_AT_680_TEST,
+                ACTOR_GET_CLASS,
+                CLASS_IS_GUARD,
+                PACKAGE_CRIME_LIST,
+                BYTE_AT_2C,
+                CRIME_WORD_AT_24,
+                ACTOR_BASE_FORM,
+                ACTOR_BASE_FACTION_RANK,
+                EXTRA_GET_TYPE_1A,
+                EXTRA_ADD_INTEGER_AT_84,
+                EXTRA_ADD_FLOAT_AT_80,
+                FORM_TYPE_OF,
+                WORD_AT_8,
+                WORD_AT_0XC,
+            ],
+        );
+        e.register(NODE_ITEM_ADDRESS, |_, a| ret(a[0]));
+        e.register(NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        global_f64(e, MINUS_ONE_DOUBLE, -1.0);
+        global_f32(e, NO_LIMIT_FLOAT, -1.0);
+        // The crime entry is a block whose +4 word is the crime type.
+        let entry = e.mem.alloc(0x40);
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, entry);
+        returning(e, PACKAGE_CRIME_LIST, node);
+        let target = object_with_slots(
+            e,
+            0x7600_0000,
+            &[(ACTOR_SLOT_0X448, 0), (ACTOR_SLOT_0X400, 0)],
+        );
+        returning(e, PACKAGE_TARGET_GET_REFERENCE, target);
+        give_vtable(
+            e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[
+                (SLOT_GET_CURRENT_PACKAGE, package),
+                (SLOT_CALL_FOR_HELP, 0),
+                (SLOT_ENTER_COMBAT, 0),
+                (SLOT_PROCESS_FOLLOW, 0),
+            ],
+        );
+        give_vtable(
+            e,
+            actor,
+            ACTOR_TABLE,
+            &[
+                (ACTOR_SLOT_0X400, 0),
+                (ACTOR_SLOT_0X418, 0),
+                (ACTOR_SLOT_STATE, 0),
+            ],
+        );
+        let _ = player;
+        (p, actor, entry, target, package)
+    }
+
+    #[test]
+    fn test_process_alarm_early_exits() {
+        let mut e = Engine::new();
+        let (p, actor, _entry, target, _package) = alarm_world(&mut e);
+        // A guard adds procedure 1 before anything else happens.
+        returning(&mut e, CLASS_IS_GUARD, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008ecf20, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        assert!(calls_to(&e, process_slot(SLOT_CALL_FOR_HELP)).is_empty());
+        // A sitting actor stands up.
+        returning(&mut e, CLASS_IS_GUARD, 0);
+        give_vtable(&mut e, actor, ACTOR_TABLE, &[(ACTOR_SLOT_STATE, 4)]);
+        e.call_log = Some(vec![]);
+        e.call(0x008ecf20, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, actor_slot(ACTOR_SLOT_0X418)),
+            vec![vec![actor]]
+        );
+        // The player as target with bit 8 only ends the move.
+        give_vtable(&mut e, actor, ACTOR_TABLE, &[(ACTOR_SLOT_STATE, 0)]);
+        let player = e.global::<u32>(PLAYER_POINTER);
+        let _ = target;
+        returning(&mut e, PACKAGE_TARGET_GET_REFERENCE, player);
+        returning(&mut e, ACTOR_BYTE_AT_680_TEST, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008ecf20, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_END_MOVE_MESSAGE)),
+            vec![vec![p.addr(), actor]]
+        );
+        assert_eq!(calls_to(&e, ACTOR_BYTE_AT_680_TEST), vec![vec![player, 8]]);
+    }
+
+    #[test]
+    fn test_process_alarm_walks_the_crimes() {
+        let mut e = Engine::new();
+        let (p, actor, entry, target, _package) = alarm_world(&mut e);
+        stub(
+            &mut e,
+            &[ACTOR_GET_SHOULD_ATTACK, ACTOR_END_INTERRUPT_PACKAGE],
+        );
+        // An unflagged crime asks for help; nothing found and nothing
+        // flagged: the target does not answer slot 0x448, procedure 2.
+        e.call_log = Some(vec![]);
+        e.call(0x008ecf20, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_CALL_FOR_HELP)),
+            vec![vec![p.addr(), actor, target, entry]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 2]]
+        );
+        // The actor should attack: the interrupt ends and combat starts.
+        returning(&mut e, ACTOR_GET_SHOULD_ATTACK, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008ecf20, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, ACTOR_END_INTERRUPT_PACKAGE),
+            vec![vec![actor, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ENTER_COMBAT)),
+            vec![vec![
+                p.addr(),
+                actor,
+                target,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0
+            ]]
+        );
+        // A flagged crime leaves the all-clear: procedure 4 (the extra data
+        // list is empty so the keep-going test fails).
+        returning(&mut e, ACTOR_GET_SHOULD_ATTACK, 0);
+        returning(&mut e, BYTE_AT_2C, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008ecf20, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 4]]
+        );
+        assert!(calls_to(&e, process_slot(SLOT_CALL_FOR_HELP)).is_empty());
+    }
+
+    #[test]
+    fn test_process_alarm_the_target_that_answers_takes_the_extra_data() {
+        let mut e = Engine::new();
+        let (p, actor, _entry, target, _package) = alarm_world(&mut e);
+        stub(
+            &mut e,
+            &[ACTOR_GET_SHOULD_ATTACK, ACTOR_END_INTERRUPT_PACKAGE],
+        );
+        give_vtable(&mut e, target, 0x7600_0000, &[(ACTOR_SLOT_0X448, 1)]);
+        returning(&mut e, EXTRA_GET_TYPE_1A, 0x5252);
+        e.call_log = Some(vec![]);
+        e.call(0x008ecf20, &args![p, actor]);
+        assert_eq!(calls_to(&e, EXTRA_ADD_INTEGER_AT_84), vec![vec![0x5252, 0]]);
+        assert_eq!(calls_to(&e, EXTRA_ADD_FLOAT_AT_80), vec![vec![0x5252, 0]]);
+        assert_eq!(
+            calls_to(&e, actor_slot(ACTOR_SLOT_0X400)),
+            vec![vec![actor, 0x5252]]
+        );
+    }
+
+    /// A world for `ProcessWander`: a wandering package whose searches
+    /// succeed, a free actor, and every callee stubbed.
+    fn wander_world(e: &mut Engine) -> (Ptr<HighProcess>, u32, u32) {
+        let (p, actor, _player, package) = dialogue_world(e);
+        stub(
+            e,
+            &[
+                PACKAGE_DISTANCE_FOR_ACTOR,
+                PACKAGE_PROCEDURE_TYPE,
+                ACTOR_GET_BEST_FOOD_ITEM,
+                PACKAGE_LOCATION_COORD,
+                PACKAGE_LOCATION_WORD,
+                PACKAGE_LOCATION_GET_REFERENCE,
+                PACKAGE_LOCATION_TYPE,
+                REFERENCE_GET_FORM,
+                REFERENCE_ROTATION_ADDRESS,
+                ACTOR_REQUEST_ROTATE,
+                ACTOR_IS_PATHING_COMPLETE,
+                ACTOR_MOVER_IS_PATHING_COMPLETE,
+                POINT_DIFFERENCE,
+                POINT_UNITIZE_GET_LENGTH,
+                CELL_FLAG_TEST,
+                REFERENCE_PATHING_CELL,
+                REFERENCE_GET_WORLD_SPACE,
+                GET_CELL_FROM_WORLD_COORD,
+                CLOSE_POINT_REQUEST_CONSTRUCTOR,
+                CLOSE_POINT_REQUEST_DESTRUCTOR,
+                PATHING_LOCATION_NEW,
+                CLOSE_POINT_SET_LOCATION,
+                CLOSE_POINT_SET_LIMIT,
+                CLOSE_POINT_SET_RADIUS,
+                CLOSE_POINT_SUBMIT,
+                PATHING_LOCATION_DESTRUCTOR,
+                FLOAT_MINIMUM,
+                ACTOR_DISTANCE_TO_POINT,
+                ACTOR_SET_PATHFINDING_GOAL,
+                ACTOR_GET_FATIGUE_PERCENTAGE,
+                ACTOR_BASE_FORM_BYTE,
+                DELAY_FROM_FATIGUE,
+                INTERFACE_GET_TARGET_REFERENCE,
+                SPRINTF_FUNCTION,
+                CONSOLE_PRINT,
+                REFERENCE_NAME,
+                REFERENCE_GET_MARKER_USED,
+                PROCESS_CLEAR_FURNITURE_MARKER,
+                POINT_LENGTH_FLOAT,
+            ],
+        );
+        global_f64(e, ZERO_DOUBLE_VALUE, 0.0);
+        global_f64(e, WANDER_SMALL_RADIUS, 60.0);
+        global_f32(e, WANDER_RESET_TIMER, 20.0);
+        global_f64(e, WANDER_RADIUS_FACTOR, 0.75);
+        global_f64(e, WANDER_RADIUS_DIVISOR, 2.0);
+        global_f64(e, WANDER_EXTRA_DISTANCE, 250.0);
+        global_f32(e, WANDER_LIMIT_FLOAT, 32.0);
+        global_f32(e, WANDER_POINT_RADIUS, 800.0);
+        global_f64(e, WANDER_NEAR_DISTANCE, 20.0);
+        global_f64(e, WANDER_ARRIVED_DISTANCE, 5.0);
+        global_f64(e, WANDER_DELAY_LIMIT, 10.0);
+        global_f64(e, WANDER_FAR_DISTANCE, 50.0);
+        global_f32(e, WANDER_GOAL_RADIUS, 50.0);
+        global_word(e, MARKER_FORM_GLOBAL, 0x7777);
+        global_word(e, DATA_HANDLER_GLOBAL, 0x4321);
+        let position = e.mem.alloc(16);
+        let actor_object = actor;
+        give_vtable(
+            e,
+            actor_object,
+            ACTOR_TABLE,
+            &[
+                (ACTOR_SLOT_STATE, 0),
+                (ACTOR_SLOT_POSITION, position),
+                (ACTOR_SLOT_0X418, 0),
+            ],
+        );
+        give_vtable(
+            e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[
+                (SLOT_GET_GENERIC_LOCATION, 0),
+                (SLOT_GET_RUN_ONCE_PACKAGE, 0),
+                (SLOT_SET_ACTORS_ANIMATION, 0),
+                (SLOT_SET_PROCEDURE_INDEX_RUNNING, 0),
+                (SLOT_SET_CURRENT_ACTION_COMPLETE, 0),
+            ],
+        );
+        returning(e, PACKAGE_TYPE, 7);
+        returning(e, PACKAGE_PROCEDURE_TYPE, 3);
+        (p, actor, package)
+    }
+
+    #[test]
+    fn test_process_wander_greeting_flag_only_ends_the_move() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = wander_world(&mut e);
+        e.mem.set_u8(p.addr() + 0x32c, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008ed420, &args![p, actor, 0u32, 0.0f32]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_END_MOVE_MESSAGE)),
+            vec![vec![p.addr(), actor]]
+        );
+        assert!(calls_to(&e, process_slot(SLOT_GET_PACKAGE_THAT_IS_RUNNING)).is_empty());
+    }
+
+    #[test]
+    fn test_process_wander_failed_search_ends_the_procedure() {
+        let mut e = Engine::new();
+        let (p, actor, package) = wander_world(&mut e);
+        // Package type 0: the search fails, so procedure -2 is added.
+        returning(&mut e, PACKAGE_TYPE, 0);
+        give_vtable(
+            &mut e,
+            package,
+            PACKAGE_TABLE,
+            &[(PACKAGE_SLOT_FIND_LOCATION, 0)],
+        );
+        global_f32(&mut e, NO_LIMIT_FLOAT, -1.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008ed420, &args![p, actor, 0u32, 100.0f32]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_END_MOVE_MESSAGE)),
+            vec![vec![p.addr(), actor]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, (-2i32) as u32]]
+        );
+        assert!(calls_to(&e, PACKAGE_LOCATION_COORD).is_empty());
+        // Type 4 with the search succeeding and the actor in state 9: -1.
+        returning(&mut e, PACKAGE_TYPE, 4);
+        give_vtable(
+            &mut e,
+            package,
+            PACKAGE_TABLE,
+            &[(PACKAGE_SLOT_FIND_LOCATION, 1)],
+        );
+        give_vtable(&mut e, actor, ACTOR_TABLE, &[(ACTOR_SLOT_STATE, 9)]);
+        e.call_log = Some(vec![]);
+        e.call(0x008ed420, &args![p, actor, 0u32, 100.0f32]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, u32::MAX]]
+        );
+    }
+
+    #[test]
+    fn test_process_wander_food_package_with_a_food_item() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = wander_world(&mut e);
+        global_f32(&mut e, NO_LIMIT_FLOAT, -1.0);
+        returning(&mut e, PACKAGE_TYPE, 3);
+        returning(&mut e, ACTOR_GET_BEST_FOOD_ITEM, 0x5000);
+        returning(&mut e, WORD_AT_8, 0x5008);
+        give_vtable(&mut e, actor, ACTOR_TABLE, &[(ACTOR_SLOT_STATE, 4)]);
+        e.call_log = Some(vec![]);
+        e.call(0x008ed420, &args![p, actor, 0u32, 100.0f32]);
+        // Sitting with food: the item being used (+0x34) is set and the
+        // action completes.
+        assert_eq!(e.mem.u32(p.addr() + 0x34), 0x5008);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_CURRENT_ACTION_COMPLETE)),
+            vec![vec![p.addr(), 1]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, u32::MAX]]
+        );
+        // Standing with food: only the procedure advances.
+        give_vtable(&mut e, actor, ACTOR_TABLE, &[(ACTOR_SLOT_STATE, 0)]);
+        e.mem.set_u32(p.addr() + 0x34, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x008ed420, &args![p, actor, 0u32, 100.0f32]);
+        assert_eq!(e.mem.u32(p.addr() + 0x34), 0);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, u32::MAX]]
+        );
+    }
+
+    #[test]
+    fn test_process_wander_small_radius_faces_the_marker() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = wander_world(&mut e);
+        global_f32(&mut e, NO_LIMIT_FLOAT, -1.0);
+        // A wandering procedure (type 1) with radius 30 < 60: a free
+        // search faces the location's marker.
+        returning(&mut e, PACKAGE_PROCEDURE_TYPE, 1);
+        returning(&mut e, PACKAGE_LOCATION_WORD, 0x6100);
+        returning(&mut e, PACKAGE_LOCATION_GET_REFERENCE, 0x6200);
+        returning(&mut e, REFERENCE_GET_FORM, 0x7777);
+        let rotation = e.mem.alloc(16);
+        e.mem.set_f32(rotation + 8, 1.5);
+        returning(&mut e, REFERENCE_ROTATION_ADDRESS, rotation);
+        e.call_log = Some(vec![]);
+        e.call(0x008ed420, &args![p, actor, 0u32, 30.0f32]);
+        assert_eq!(
+            calls_to(&e, ACTOR_REQUEST_ROTATE),
+            vec![vec![actor, 1.5f32.to_bits(), 0]]
+        );
+        assert!(calls_to(&e, ACTOR_IS_PATHING_COMPLETE).is_empty());
+        // A failing search ends the procedure instead.
+        let package = e
+            .vcall(p.addr(), SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+            .u32();
+        give_vtable(
+            &mut e,
+            package,
+            PACKAGE_TABLE,
+            &[(PACKAGE_SLOT_FIND_LOCATION, 0)],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x008ed420, &args![p, actor, 0u32, 30.0f32]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, u32::MAX]]
+        );
+    }
+
+    #[test]
+    fn test_process_wander_timer_and_animation() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = wander_world(&mut e);
+        global_f32(&mut e, NO_LIMIT_FLOAT, -1.0);
+        // Radius 100 (not small), not a wanderer: the timer at +0x2e0 runs.
+        e.mem.set_f32(p.addr() + 0x2e0, 0.0);
+        returning(&mut e, ACTOR_IS_PATHING_COMPLETE, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008ed420, &args![p, actor, 0u32, 100.0f32]);
+        // Expired and pathing complete: the move ends and the timer restarts.
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_END_MOVE_MESSAGE)),
+            vec![vec![p.addr(), actor]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, u32::MAX]]
+        );
+        assert_eq!(e.mem.f32(p.addr() + 0x2e0), 20.0);
+        // A running timer counts down by the frame time; a path that is not
+        // complete only sets the movement animation.
+        e.mem.set_f32(p.addr() + 0x2e0, 5.0);
+        returning_float(&mut e, FRAME_TIME, 1.5);
+        returning(&mut e, ACTOR_IS_PATHING_COMPLETE, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x008ed420, &args![p, actor, 0u32, 100.0f32]);
+        assert_eq!(e.mem.f32(p.addr() + 0x2e0), 3.5);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_ACTORS_ANIMATION)),
+            vec![vec![p.addr(), actor, 0x101, 1]]
+        );
+    }
+
+    #[test]
+    fn test_process_wander_walks_to_the_target() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = wander_world(&mut e);
+        global_f32(&mut e, NO_LIMIT_FLOAT, -1.0);
+        e.mem.set_f32(p.addr() + 0x2e0, 5.0);
+        returning_float(&mut e, FRAME_TIME, 0.0);
+        returning(&mut e, ACTOR_IS_PATHING_COMPLETE, 1);
+        returning(&mut e, ACTOR_MOVER_IS_PATHING_COMPLETE, 1);
+        returning(&mut e, REFERENCE_PATHING_CELL, 0xcc);
+        returning(&mut e, REFERENCE_GET_WORLD_SPACE, 0xaa);
+        returning(&mut e, ACTOR_SET_PATHFINDING_GOAL, 1);
+        returning_float(&mut e, POINT_UNITIZE_GET_LENGTH, 10.0);
+        returning_float(&mut e, POINT_LENGTH_FLOAT, 10.0);
+        returning_float(&mut e, ACTOR_DISTANCE_TO_POINT, 100.0);
+        returning_float(&mut e, ACTOR_GET_FATIGUE_PERCENTAGE, 0.5);
+        returning(&mut e, ACTOR_BASE_FORM_BYTE, 3);
+        returning_float(&mut e, DELAY_FROM_FATIGUE, 7.0);
+        e.mem.set_f32(p.addr() + 0x2d0, 0.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008ed420, &args![p, actor, 0u32, 100.0f32]);
+        // The exterior cell is looked up from the target position and a close
+        // point request is made, then the goal is set.
+        assert_eq!(calls_to(&e, GET_CELL_FROM_WORLD_COORD).len(), 1);
+        let goals = calls_to(&e, ACTOR_SET_PATHFINDING_GOAL);
+        assert_eq!(goals.len(), 1);
+        assert_eq!(&goals[0][2..], &[0xcc, 0xaa, 50.0f32.to_bits(), 0]);
+        // Far from the target (distance 100 > 50): the delay comes from the
+        // fatigue.
+        assert_eq!(
+            calls_to(&e, DELAY_FROM_FATIGUE),
+            vec![vec![3, 0.5f32.to_bits()]]
+        );
+        assert_eq!(e.mem.f32(p.addr() + 0x2d0), 7.0);
+        // Close to the goal (distance 5): the delay resets to 0.
+        returning_float(&mut e, ACTOR_DISTANCE_TO_POINT, 5.0);
+        e.mem.set_f32(p.addr() + 0x2d0, 3.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008ed420, &args![p, actor, 0u32, 100.0f32]);
+        assert_eq!(e.mem.f32(p.addr() + 0x2d0), 0.0);
+        assert!(calls_to(&e, DELAY_FROM_FATIGUE).is_empty());
+    }
+
+    #[test]
+    fn test_process_wander_too_far_restarts_the_procedure() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = wander_world(&mut e);
+        global_f32(&mut e, NO_LIMIT_FLOAT, -1.0);
+        e.mem.set_f32(p.addr() + 0x2e0, 5.0);
+        returning_float(&mut e, FRAME_TIME, 0.0);
+        returning(&mut e, ACTOR_IS_PATHING_COMPLETE, 1);
+        returning(&mut e, ACTOR_MOVER_IS_PATHING_COMPLETE, 1);
+        // The target is 400 away; the radius is 100 (+250 = 350 < 400).
+        returning_float(&mut e, POINT_UNITIZE_GET_LENGTH, 400.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008ed420, &args![p, actor, 0u32, 100.0f32]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), 0]]
+        );
+        assert!(calls_to(&e, ACTOR_SET_PATHFINDING_GOAL).is_empty());
+    }
+
+    /// A world for `ProcessAmbushWait`.
+    fn ambush_world(e: &mut Engine) -> (Ptr<HighProcess>, u32, u32) {
+        let (p, actor, player, package) = dialogue_world(e);
+        stub(
+            e,
+            &[
+                PACKAGE_LOCATION_COORD,
+                PACKAGE_SECOND_LOCATION_COORD,
+                PACKAGE_RADIUS_ACTOR_TO_LOCATION,
+                ACTOR_GET_SHOULD_ATTACK,
+                ACTOR_DETECTION_LEVEL,
+                REFERENCE_FLAG_20,
+                REFERENCE_FLAG_800,
+                ACTOR_SET_BYTE_AT_125,
+                ACTOR_DISTANCE_TO_POINT,
+                PACKAGE_SECOND_LOCATION_WORLD,
+                COVER_REQUEST_CONSTRUCTOR,
+                PATHING_LOCATION_NEW_IN_WORLD,
+                CLOSE_POINT_SET_LOCATION,
+                COVER_SET_FLOAT_A,
+                COVER_SET_FLOAT_B,
+                COVER_SET_INTEGER,
+                COVER_SET_HEIGHT,
+                COVER_SET_SNEAK_HEIGHT,
+                COVER_SET_FLAG,
+                ACTOR_GET_HEIGHT,
+                ACTOR_GET_SNEAK_HEIGHT,
+                ACTOR_COVER_FLAG,
+                COVER_ARRAY_CONSTRUCTOR,
+                COVER_ARRAY_CLEAR,
+                COVER_ARRAY_ELEMENT,
+                COVER_FIND,
+                COVER_LOCATION_WORLD,
+                COVER_LOCATION_CELL,
+                PATHING_LOCATION_COORDINATES,
+                PACKAGE_IS_TARGET_AT_SECOND_LOCATION,
+                PATHING_LOCATION_DESTRUCTOR,
+                CLOSE_POINT_REQUEST_DESTRUCTOR,
+                ACTOR_SET_PATHFINDING_GOAL,
+                PACKAGE_SET_NEVER_RUN,
+                ACTOR_IS_PATHING_COMPLETE,
+                WORD_AT_8,
+            ],
+        );
+        let setting = e.mem.alloc(8);
+        e.mem.set_f32(setting, 300.0);
+        returning(e, SETTING_VALUE, setting);
+        global_f32(e, COVER_REQUEST_FLOAT, 1024.0);
+        global_f32(e, NO_LIMIT_FLOAT, -1.0);
+        global_f64(e, WANDER_FAR_DISTANCE, 50.0);
+        global_f64(e, AMBUSH_LARGE_RADIUS, 400.0);
+        global_f32(e, RADIUS_FLAG_SET, 10.0);
+        let _ = player;
+        give_vtable(
+            e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[
+                (SLOT_AMBUSH_LARGE_RADIUS, 0),
+                (SLOT_SET_TARGET_FOR_PACKAGE, 0),
+            ],
+        );
+        give_vtable(
+            e,
+            actor,
+            ACTOR_TABLE,
+            &[
+                (ACTOR_SLOT_COMBAT_CONTROLLER_ATTACK, 0),
+                (ACTOR_SLOT_POSITION, 0),
+                (ACTOR_SLOT_0X22C, 0),
+            ],
+        );
+        (p, actor, package)
+    }
+
+    #[test]
+    fn test_process_ambush_wait_attacks_a_detected_player_in_range() {
+        let mut e = Engine::new();
+        let (p, actor, _package) = ambush_world(&mut e);
+        let player = e.global::<u32>(PLAYER_POINTER);
+        returning(&mut e, ACTOR_GET_SHOULD_ATTACK, 1);
+        returning(&mut e, ACTOR_DETECTION_LEVEL, 5);
+        // The player is 100 away, inside the setting's 300.
+        e.register(DISTANCE_FROM_REFERENCE, |_, _| Ret {
+            st0: 100.0,
+            ..Ret::default()
+        });
+        e.set(p, HighProcess::bHiding, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008ee3e0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, actor_slot(ACTOR_SLOT_COMBAT_CONTROLLER_ATTACK)),
+            vec![vec![actor, player, 0, 1, 1, 0, 0, 1, 0]]
+        );
+        assert_eq!(calls_to(&e, ACTOR_SET_BYTE_AT_125)[0], vec![actor, 0]);
+        // Hiding was reset by the attack (and the package has no location
+        // within reach to set it again).
+        assert_eq!(e.get(p, HighProcess::bHiding), 0);
+        // Out of the setting's range: no attack.
+        e.register(DISTANCE_FROM_REFERENCE, |_, _| Ret {
+            st0: 400.0,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x008ee3e0, &args![p, actor]);
+        assert!(calls_to(&e, actor_slot(ACTOR_SLOT_COMBAT_CONTROLLER_ATTACK)).is_empty());
+    }
+
+    #[test]
+    fn test_process_ambush_wait_targets_flagged_and_unflagged() {
+        let mut e = Engine::new();
+        let (p, actor, package) = ambush_world(&mut e);
+        returning(&mut e, PACKAGE_TARGET_WORD, 0x6000);
+        // No target and an expired timer: the target is requested and the
+        // timer restarts at 10.0.
+        e.mem.set_f32(p.addr() + 0x2e0, 0.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008ee3e0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_TARGET_FOR_PACKAGE)),
+            vec![vec![p.addr(), actor]]
+        );
+        assert_eq!(e.mem.f32(p.addr() + 0x2e0), 10.0);
+        // A running timer counts down.
+        e.mem.set_f32(p.addr() + 0x2e0, 4.0);
+        returning_float(&mut e, FRAME_TIME, 1.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008ee3e0, &args![p, actor]);
+        assert_eq!(e.mem.f32(p.addr() + 0x2e0), 3.0);
+        // A target with flag 0x20 is given up: SetNeverRun, procedure 2.
+        let target = object_with_slots(
+            &mut e,
+            0x7600_0000,
+            &[(ACTOR_SLOT_0X22C, 0), (ACTOR_SLOT_IS_ACTOR, 0)],
+        );
+        e.mem.set_u32(p.addr() + 0x40, target);
+        returning(&mut e, REFERENCE_FLAG_20, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008ee3e0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, PACKAGE_SET_NEVER_RUN),
+            vec![vec![package, target, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 2]]
+        );
+        assert!(
+            calls_to(&e, PACKAGE_LOCATION_COORD).len() <= 1,
+            "returns early"
+        );
+    }
+
+    #[test]
+    fn test_process_ambush_wait_leaves_when_far_and_hides_when_near() {
+        let mut e = Engine::new();
+        let (p, actor, package) = ambush_world(&mut e);
+        // Far from the location (distance 500 > radius 100 + 50): -1.
+        returning_float(&mut e, PACKAGE_RADIUS_ACTOR_TO_LOCATION, 100.0);
+        returning_float(&mut e, ACTOR_DISTANCE_TO_POINT, 500.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008ee3e0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, u32::MAX]]
+        );
+        // Near, with the package wanting cover: a cover request is made.
+        returning_float(&mut e, ACTOR_DISTANCE_TO_POINT, 20.0);
+        e.mem.set_u16(package + 0x24, 1);
+        returning(&mut e, COVER_FIND, 1);
+        let cover_list = e.mem.alloc(0x20);
+        e.mem.set_u32(cover_list + 8, 5);
+        returning(&mut e, WORD_AT_8, 5);
+        returning(&mut e, COVER_ARRAY_ELEMENT, 0x6600);
+        returning(&mut e, COVER_LOCATION_WORLD, 0xaa);
+        returning(&mut e, COVER_LOCATION_CELL, 0xbb);
+        returning(&mut e, PATHING_LOCATION_COORDINATES, 0xcc);
+        e.register(COVER_REQUEST_CONSTRUCTOR, |_, a| ret(a[0]));
+        e.call_log = Some(vec![]);
+        e.call(0x008ee3e0, &args![p, actor]);
+        let goals = calls_to(&e, ACTOR_SET_PATHFINDING_GOAL);
+        assert_eq!(goals.len(), 1);
+        assert_eq!(&goals[0][1..], &[0xcc, 0xbb, 0xaa, (-1.0f32).to_bits(), 0]);
+        assert_eq!(e.get(p, HighProcess::bHiding), 1);
+        assert_eq!(calls_to(&e, COVER_SET_INTEGER)[0][1], 200);
+        assert_eq!(calls_to(&e, COVER_ARRAY_CLEAR).len(), 1);
+        assert_eq!(calls_to(&e, CLOSE_POINT_REQUEST_DESTRUCTOR).len(), 1);
+        // Already hiding: only the byte at +0x125 of the actor is set.
+        e.call_log = Some(vec![]);
+        e.call(0x008ee3e0, &args![p, actor]);
+        assert!(calls_to(&e, COVER_FIND).is_empty());
+        assert_eq!(calls_to(&e, ACTOR_SET_BYTE_AT_125), vec![vec![actor, 1]]);
+        // Without the cover bit, a package radius above 400 reaches slot 0x84c.
+        e.mem.set_u16(package + 0x24, 0);
+        returning_float(&mut e, PACKAGE_RADIUS_ACTOR_TO_LOCATION, 450.0);
+        returning_float(&mut e, ACTOR_DISTANCE_TO_POINT, 200.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008ee3e0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_AMBUSH_LARGE_RADIUS)).len(),
+            1
+        );
+    }
+
+    /// A world for `008f21f0`.
+    fn take_back_world(e: &mut Engine) -> (Ptr<HighProcess>, u32, u32) {
+        let (p, actor, player, package) = dialogue_world(e);
+        stub(
+            e,
+            &[
+                REFERENCE_EXTRA_DATA,
+                EXTRA_GET_PACKAGE,
+                EXTRA_GET_PLAYER_CRIME_LIST,
+                EXTRA_GET_MERCHANT_CONTAINER,
+                EXTRA_GET_CONTAINER_CHANGES,
+                INVENTORY_REMOVE_STOLEN_ITEMS,
+                PROCESS_LISTS_REMOVE_CRIME,
+                CRIME_WORD_AT_24,
+                LIST_REMOVE_ITEM,
+                REFERENCE_SET_WORD_AT_70,
+                ACTOR_REQUEST_TURN_TO,
+                FIND_SPECIAL_IDLE_TO_PLAY,
+                REFERENCE_GET_FORM,
+                OPERATOR_DELETE,
+                0x009e_b660,
+            ],
+        );
+        let setting = e.mem.alloc(8);
+        e.mem.set_f32(setting, 30.0);
+        returning(e, SETTING_VALUE, setting);
+        global_f64(e, TAKE_BACK_DISTANCE, 1000.0);
+        e.register(NODE_ITEM_ADDRESS, |_, a| ret(a[0]));
+        e.register(NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        returning(e, GET_TOPIC, 0x9090);
+        let position = e.mem.alloc(16);
+        e.mem.set_f32(position, 4.0);
+        give_vtable(
+            e,
+            player,
+            OTHER_TABLE,
+            &[(ACTOR_SLOT_POSITION, position), (ACTOR_SLOT_STATE, 0)],
+        );
+        give_vtable(
+            e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[
+                (SLOT_GET_CURRENT_ACTION_COMPLETE_DIALOGUE, 0),
+                (SLOT_SET_CURRENT_ACTION_COMPLETE, 0),
+                (SLOT_PROCESS_FOLLOW, 0),
+                (SLOT_PROCESS_TRAVEL, 0),
+                (SLOT_SET_TARGET, 0),
+            ],
+        );
+        give_vtable(e, package, PACKAGE_TABLE, &[(PACKAGE_SLOT_0X144, 1)]);
+        give_vtable(
+            e,
+            actor,
+            ACTOR_TABLE,
+            &[
+                (ACTOR_SLOT_COMBAT_CONTROLLER_ATTACK, 0),
+                (ACTOR_SLOT_STATE, 0),
+            ],
+        );
+        (p, actor, player)
+    }
+
+    #[test]
+    fn test_fn_008f21f0_timer_and_attack() {
+        let mut e = Engine::new();
+        let (p, actor, player) = take_back_world(&mut e);
+        // -1.0 starts the timer from the setting (30.0) and gives the player
+        // as target.
+        e.set(p, HighProcess::fTakeBackTimer, -1.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008f21f0, &args![p, actor]);
+        assert_eq!(e.get(p, HighProcess::fTakeBackTimer), 30.0);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_TARGET)),
+            vec![vec![p.addr(), player]]
+        );
+        // A running timer is reduced by the frame time.
+        returning_float(&mut e, FRAME_TIME, 2.0);
+        e.call(0x008f21f0, &args![p, actor]);
+        assert_eq!(e.get(p, HighProcess::fTakeBackTimer), 28.0);
+        // An expired timer attacks the player and does nothing else.
+        e.set(p, HighProcess::fTakeBackTimer, 1.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008f21f0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, actor_slot(ACTOR_SLOT_COMBAT_CONTROLLER_ATTACK)),
+            vec![vec![actor, player, 0, 1, 0, 0, 0, 1, 0]]
+        );
+        assert!(calls_to(&e, process_slot(SLOT_GET_CURRENT_ACTION_COMPLETE_DIALOGUE)).is_empty());
+    }
+
+    #[test]
+    fn test_fn_008f21f0_greets_and_takes_the_stolen_items_back() {
+        let mut e = Engine::new();
+        let (p, actor, player) = take_back_world(&mut e);
+        e.set(p, HighProcess::fTakeBackTimer, 20.0);
+        returning_float(&mut e, FRAME_TIME, 0.0);
+        // The actor's process (greeting) and one crime of type 0 in the list.
+        let crime = e.mem.alloc(0x40);
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, crime);
+        returning(&mut e, EXTRA_GET_PLAYER_CRIME_LIST, node);
+        returning(&mut e, CRIME_WORD_AT_24, 0x3434);
+        returning(&mut e, EXTRA_GET_CONTAINER_CHANGES, 0x5656);
+        e.register_double(EXTRA_GET_PLAYER_CRIME_LIST, move |e, _| {
+            // The list is empty once the crime has been removed.
+            let removed = e.mem.u32(0x7c10_0000);
+            ret(if removed == 0 { node } else { 0 })
+        });
+        global_word(&mut e, 0x7c10_0000, 0);
+        e.register_double(PROCESS_LISTS_REMOVE_CRIME, |e, _| {
+            e.mem.set_u32(0x7c10_0000, 1);
+            ret(0)
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x008f21f0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_CURRENT_ACTION_COMPLETE)),
+            vec![vec![p.addr(), 1]]
+        );
+        // The actor turns toward the player's position.
+        assert_eq!(
+            calls_to(&e, ACTOR_REQUEST_TURN_TO),
+            vec![vec![actor, 4.0f32.to_bits(), 0, 0, 0]]
+        );
+        assert_eq!(calls_to(&e, GET_TOPIC), vec![vec![2, 9]]);
+        let own_process = 0x7500_0000;
+        let greets = calls_to(&e, slot_target(own_process, SLOT_PROCESS_GREET));
+        assert_eq!(greets.len(), 1);
+        assert_eq!(&greets[0][1..], &[actor, 0x9090, 0, 0, 1, 0]);
+        assert_eq!(e.get(p, HighProcess::bActivateAnim), 1);
+        // The stolen items are taken from the player to the actor.
+        assert_eq!(
+            calls_to(&e, INVENTORY_REMOVE_STOLEN_ITEMS),
+            vec![vec![0x5656, player, actor, 0x3434]]
+        );
+        assert_eq!(calls_to(&e, 0x009e_b660), vec![vec![crime]]);
+        assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![crime]]);
+        let _ = (p, actor);
+    }
+
+    #[test]
+    fn test_fn_008f21f0_finishes_or_walks_to_the_player() {
+        let mut e = Engine::new();
+        let (p, actor, _player) = take_back_world(&mut e);
+        e.set(p, HighProcess::fTakeBackTimer, 20.0);
+        returning_float(&mut e, FRAME_TIME, 0.0);
+        // The greeting is done: no package extra, so the procedure advances.
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_CURRENT_ACTION_COMPLETE_DIALOGUE, 1)],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x008f21f0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        // The package disagrees (slot 0x144 false): the actor walks to the
+        // player, with the longer animation beyond 1000.
+        let package = e
+            .vcall(p.addr(), SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+            .u32();
+        give_vtable(&mut e, package, PACKAGE_TABLE, &[(PACKAGE_SLOT_0X144, 0)]);
+        e.register(DISTANCE_FROM_REFERENCE, |_, _| Ret {
+            st0: 400.0,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x008f21f0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_PROCESS_TRAVEL)),
+            vec![vec![p.addr(), actor, 0, 0, 0x101, 0]]
+        );
+        e.register(DISTANCE_FROM_REFERENCE, |_, _| Ret {
+            st0: 4000.0,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x008f21f0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_PROCESS_TRAVEL)),
+            vec![vec![p.addr(), actor, 0, 0, 0x201, 0]]
+        );
+    }
+
+    /// A world for `ProcessFollowOneHour` and `ProcessActivateOneHour`.
+    fn one_hour_world(e: &mut Engine) -> (Ptr<HighProcess>, u32, u32, u32) {
+        let (p, actor, player, package) = dialogue_world(e);
+        stub(
+            e,
+            &[
+                PACKAGE_FLAG_10000,
+                PLAYER_KNOWS_ACTOR,
+                PLAYER_ACTOR_COUNT,
+                PACKAGE_SET_FLAG_10000,
+                REFERENCE_FLAG_20,
+                REFERENCE_FLAG_800,
+                PACKAGE_GET_IS_CREATED,
+                PACKAGE_FLAG_200,
+                PACKAGE_FLAG_1,
+                CELL_ACTOR_CHECK,
+                ACTOR_LINE_OF_SIGHT,
+                PACKAGE_RADIUS_ACTOR_TO_REF_TARGET,
+                PACKAGE_LOCATION_WORLD,
+                PACKAGE_LOCATION_CELL,
+                PACKAGE_LOCATION_COORD,
+                PACKAGE_LOCATION_TYPE,
+                REFERENCE_LINKED_DOOR_EXTRA,
+                LINKED_DOOR_TELEPORT_POSITION,
+                PROCESS_MOVEMENT_DONE,
+                MOBILE_GET_CURRENT_PROCESS_TYPE,
+                PLAYER_IS_SLEEPING_OR_RESTING,
+                PLAYER_SET_SLEEP_STATE,
+                ACTOR_SET_PATHFINDING_GOAL,
+                ACTOR_IS_PATHING,
+                POINT_DIFFERENCE,
+                POINT_LENGTH_FLOAT,
+                ACQUIRE_OBJECT_DELETE,
+                REFERENCE_ACTIVATE,
+                PACKAGE_LIST_AT_38,
+                PACKAGE_PROCEDURE_TYPE,
+                REFERENCE_PATHING_CELL,
+                REFERENCE_GET_WORLD_SPACE,
+                PACKAGE_LOCATION_WORD,
+                GET_CELL_FROM_WORLD_COORD,
+                CLOSE_POINT_REQUEST_CONSTRUCTOR,
+                CLOSE_POINT_REQUEST_DESTRUCTOR,
+                PATHING_LOCATION_NEW,
+                CLOSE_POINT_SET_LOCATION,
+                CLOSE_POINT_SET_LIMIT,
+                CLOSE_POINT_SET_RADIUS,
+                CLOSE_POINT_SUBMIT,
+                PATHING_LOCATION_DESTRUCTOR,
+                INTERFACE_GET_TARGET_REFERENCE,
+                SPRINTF_FUNCTION,
+                CONSOLE_PRINT,
+                REFERENCE_NAME,
+                PACKAGE_DISTANCE_FOR_ACTOR,
+            ],
+        );
+        e.register(NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        let setting = e.mem.alloc(8);
+        e.mem.set_i32(setting, 3);
+        returning(e, SETTING_INTEGER_POINTER, setting);
+        global_f32(e, NO_LIMIT_FLOAT, -1.0);
+        global_f32(e, WANDER_LIMIT_FLOAT, 32.0);
+        global_f32(e, WANDER_GOAL_RADIUS_FAR, 100.0);
+        global_word(e, DATA_HANDLER_GLOBAL, 0x4321);
+        give_vtable(
+            e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[
+                (SLOT_SET_TARGET_ACTIVATED, 0),
+                (SLOT_PROCESS_GET_UP_ONE_HOUR, 0),
+                (SLOT_CLEAR_CURRENT_PACKAGE, 0),
+                (SLOT_CHECK_FOR_NEW_PACKAGE, 0),
+                (SLOT_GET_CURRENT_PACKAGE, 0),
+                (SLOT_ENTER_COMBAT, 0),
+                (SLOT_SET_TARGET, 0),
+            ],
+        );
+        give_vtable(
+            e,
+            package,
+            PACKAGE_TABLE,
+            &[(PACKAGE_SLOT_0X148, 1), (PACKAGE_SLOT_0X144, 1)],
+        );
+        let position = e.mem.alloc(16);
+        give_vtable(
+            e,
+            actor,
+            ACTOR_TABLE,
+            &[(ACTOR_SLOT_STATE, 0), (ACTOR_SLOT_POSITION, position)],
+        );
+        (p, actor, player, package)
+    }
+
+    #[test]
+    fn test_process_follow_one_hour_target_handling() {
+        let mut e = Engine::new();
+        let (p, actor, _player, package) = one_hour_world(&mut e);
+        // No target and no way to set one: the procedure advances when asked.
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_SET_TARGET_FOR_PACKAGE, 0)],
+        );
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008f31d0, &args![p, actor, 0u32, 1u32]).bool());
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008f31d0, &args![p, actor, 0u32, 0u32]).bool());
+        assert!(calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)).is_empty());
+        // A target with flag 0x20 gives up (SetNeverRun) and advances.
+        let target = object_with_slots(&mut e, 0x7600_0000, &[(ACTOR_SLOT_0X22C, 0)]);
+        e.mem.set_u32(p.addr() + 0x40, target);
+        returning(&mut e, REFERENCE_FLAG_20, 1);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008f31d0, &args![p, actor, 0u32, 1u32]).bool());
+        assert_eq!(
+            calls_to(&e, PACKAGE_SET_NEVER_RUN),
+            vec![vec![package, target, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        // A target that refuses through slot 0x22c: SetNeverRun, no advance.
+        returning(&mut e, REFERENCE_FLAG_20, 0);
+        give_vtable(&mut e, target, 0x7600_0000, &[(ACTOR_SLOT_0X22C, 1)]);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008f31d0, &args![p, actor, 0u32, 1u32]).bool());
+        assert_eq!(calls_to(&e, PACKAGE_SET_NEVER_RUN).len(), 1);
+        assert!(calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)).is_empty());
+    }
+
+    #[test]
+    fn test_process_follow_one_hour_moves_toward_the_target() {
+        let mut e = Engine::new();
+        let (p, actor, _player, package) = one_hour_world(&mut e);
+        let target = object_with_slots(&mut e, 0x7600_0000, &[(ACTOR_SLOT_0X22C, 0)]);
+        e.mem.set_u32(p.addr() + 0x40, target);
+        returning_float(&mut e, PACKAGE_RADIUS_ACTOR_TO_REF_TARGET, 50.0);
+        e.register(DISTANCE_FROM_REFERENCE, |_, _| Ret {
+            st0: 300.0,
+            ..Ret::default()
+        });
+        returning(&mut e, PACKAGE_LOCATION_WORLD, 0xaa);
+        returning(&mut e, PACKAGE_LOCATION_CELL, 0xbb);
+        returning(&mut e, PACKAGE_LOCATION_COORD, 0xcc);
+        // The package location is missing, so the goal check at the end runs.
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008f31d0, &args![p, actor, 0u32, 1u32]).bool());
+        let goals = calls_to(&e, ACTOR_SET_PATHFINDING_GOAL);
+        assert_eq!(goals.len(), 1);
+        assert_eq!(&goals[0][1..], &[0xcc, 0xbb, 0xaa, 50.0f32.to_bits(), 0]);
+        // Close enough: no goal.
+        e.register(DISTANCE_FROM_REFERENCE, |_, _| Ret {
+            st0: 10.0,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x008f31d0, &args![p, actor, 0u32, 1u32]);
+        assert!(calls_to(&e, ACTOR_SET_PATHFINDING_GOAL).is_empty());
+        // The flag 0x10000 package stops when the player already has the actor.
+        returning(&mut e, PACKAGE_FLAG_10000, 1);
+        returning(&mut e, PLAYER_KNOWS_ACTOR, 1);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008f31d0, &args![p, actor, 0u32, 1u32]).bool());
+        assert!(calls_to(&e, PACKAGE_SET_FLAG_10000).is_empty());
+        // Otherwise the player's count is limited by the setting (3).
+        returning(&mut e, PLAYER_KNOWS_ACTOR, 0);
+        returning(&mut e, PLAYER_ACTOR_COUNT, 3);
+        e.call_log = Some(vec![]);
+        e.call(0x008f31d0, &args![p, actor, 0u32, 1u32]);
+        assert!(calls_to(&e, PACKAGE_SET_FLAG_10000).is_empty());
+        returning(&mut e, PLAYER_ACTOR_COUNT, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x008f31d0, &args![p, actor, 0u32, 1u32]);
+        assert_eq!(calls_to(&e, PACKAGE_SET_FLAG_10000), vec![vec![package, 0]]);
+    }
+
+    #[test]
+    fn test_fn_008f36c0_sets_a_wander_goal() {
+        let mut e = Engine::new();
+        let (p, actor, _player, package) = one_hour_world(&mut e);
+        // The actor has a cell and the package type is not 1.
+        returning(&mut e, REFERENCE_PATHING_CELL, 0xcc);
+        returning(&mut e, REFERENCE_GET_WORLD_SPACE, 0xaa);
+        returning(&mut e, PACKAGE_PROCEDURE_TYPE, 2);
+        returning(&mut e, PACKAGE_DISTANCE_FOR_ACTOR, 250);
+        returning(&mut e, INTERFACE_GET_TARGET_REFERENCE, actor);
+        returning(&mut e, REFERENCE_NAME, 0x6060);
+        e.register(CLOSE_POINT_REQUEST_CONSTRUCTOR, |_, a| ret(a[0]));
+        let _ = package;
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008f36c0, &args![p, actor, 0u32]).bool());
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, u32::MAX]]
+        );
+        assert_eq!(calls_to(&e, CLOSE_POINT_SET_LIMIT).len(), 1);
+        assert_eq!(calls_to(&e, CLOSE_POINT_SET_LIMIT)[0][1], 32.0f32.to_bits());
+        assert_eq!(
+            calls_to(&e, CLOSE_POINT_SET_RADIUS)[0][1],
+            250.0f32.to_bits()
+        );
+        let goals = calls_to(&e, ACTOR_SET_PATHFINDING_GOAL);
+        assert_eq!(goals.len(), 1);
+        assert_eq!(&goals[0][2..], &[0xcc, 0xaa, 100.0f32.to_bits(), 0]);
+        // The console line names the actor.
+        assert_eq!(calls_to(&e, SPRINTF_FUNCTION).len(), 1);
+        assert_eq!(
+            calls_to(&e, SPRINTF_FUNCTION)[0][1..3],
+            [WANDERING_FORMAT, 0x6060]
+        );
+        assert_eq!(calls_to(&e, CONSOLE_PRINT).len(), 1);
+        assert_eq!(calls_to(&e, CLOSE_POINT_REQUEST_DESTRUCTOR).len(), 1);
+        // A standing (state not 0) actor is told to get up first.
+        give_vtable(&mut e, actor, ACTOR_TABLE, &[(ACTOR_SLOT_STATE, 4)]);
+        e.call_log = Some(vec![]);
+        e.call(0x008f36c0, &args![p, actor, 0u32]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_PROCESS_GET_UP_ONE_HOUR)),
+            vec![vec![p.addr(), actor]]
+        );
+        // No cell for the actor: nothing.
+        returning(&mut e, REFERENCE_PATHING_CELL, 0);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008f36c0, &args![p, actor, 0u32]).bool());
+        assert!(calls_to(&e, ACTOR_SET_PATHFINDING_GOAL).is_empty());
+    }
+
+    #[test]
+    fn test_process_activate_one_hour_activates_a_target() {
+        let mut e = Engine::new();
+        let (p, actor, _player, package) = one_hour_world(&mut e);
+        returning(&mut e, ACTOR_IS_PATHING_COMPLETE, 1);
+        let target = object_with_slots(
+            &mut e,
+            0x7600_0000,
+            &[(ACTOR_SLOT_0X22C, 0), (ACTOR_SLOT_IS_ACTOR, 0)],
+        );
+        e.mem.set_u32(p.addr() + 0x40, target);
+        // The package's slot 0x144 says we arrived: a non-actor target without
+        // an acquire object is activated and the procedure advances.
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008f3940, &args![p, actor, 0u32]).bool());
+        assert_eq!(
+            calls_to(&e, REFERENCE_ACTIVATE),
+            vec![vec![target, actor, 0, 0, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_TARGET_ACTIVATED)),
+            vec![vec![p.addr(), 1]]
+        );
+        let _ = package;
+    }
+
+    #[test]
+    fn test_process_activate_one_hour_uses_the_acquire_object() {
+        let mut e = Engine::new();
+        let (p, actor, _player, package) = one_hour_world(&mut e);
+        returning(&mut e, ACTOR_IS_PATHING_COMPLETE, 1);
+        let target = object_with_slots(
+            &mut e,
+            0x7600_0000,
+            &[(ACTOR_SLOT_0X22C, 0), (ACTOR_SLOT_IS_ACTOR, 0)],
+        );
+        e.mem.set_u32(p.addr() + 0x40, target);
+        let entry = e.mem.alloc(0x40);
+        e.mem.set_u32(entry + 4, 0x7001);
+        e.mem.set_u32(entry + 0xc, 5);
+        e.mem.set_u32(p.addr() + 0x64, entry);
+        e.mem.set_i32(p.addr() + 0x58, 1);
+        e.call_log = Some(vec![]);
+        // The only item is used up: the procedure advances and the result is
+        // true.
+        assert!(e.call(0x008f3940, &args![p, actor, 0u32]).bool());
+        assert_eq!(
+            calls_to(&e, REFERENCE_ACTIVATE),
+            vec![vec![target, actor, 1, 0x7001, 5]]
+        );
+        assert_eq!(e.mem.i32(p.addr() + 0x58), 0);
+        assert_eq!(e.mem.u32(p.addr() + 0x64), 0);
+        assert_eq!(calls_to(&e, ACQUIRE_OBJECT_DELETE), vec![vec![entry, 1]]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_TARGET)),
+            vec![vec![p.addr(), 0]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        let _ = package;
+    }
+
+    #[test]
+    fn test_process_activate_one_hour_early_exits_and_walking() {
+        let mut e = Engine::new();
+        let (p, actor, _player, package) = one_hour_world(&mut e);
+        // No package: nothing.
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_PACKAGE_THAT_IS_RUNNING, 0)],
+        );
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008f3940, &args![p, actor, 0u32]).bool());
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_PACKAGE_THAT_IS_RUNNING, package)],
+        );
+        // No target: the procedure advances.
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_SET_TARGET_FOR_PACKAGE, 0)],
+        );
+        returning(&mut e, ACTOR_IS_PATHING_COMPLETE, 0);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008f3940, &args![p, actor, 0u32]).bool());
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_END_MOVE_MESSAGE)),
+            vec![vec![p.addr(), actor]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        // The package says not arrived and the move is not done: a goal is
+        // set at the target's position with the package's radius.
+        let position = e.mem.alloc(16);
+        e.mem.set_f32(position, 8.0);
+        let target = object_with_slots(
+            &mut e,
+            0x7600_0000,
+            &[
+                (ACTOR_SLOT_0X22C, 0),
+                (ACTOR_SLOT_IS_ACTOR, 0),
+                (ACTOR_SLOT_POSITION, position),
+            ],
+        );
+        e.mem.set_u32(p.addr() + 0x40, target);
+        give_vtable(&mut e, package, PACKAGE_TABLE, &[(PACKAGE_SLOT_0X144, 0)]);
+        returning_float(&mut e, PACKAGE_RADIUS_ACTOR_TO_REF_TARGET, 30.0);
+        returning(&mut e, REFERENCE_GET_WORLD_SPACE, 0xaa);
+        returning(&mut e, REFERENCE_PATHING_CELL, 0xbb);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008f3940, &args![p, actor, 0u32]).bool());
+        let goals = calls_to(&e, ACTOR_SET_PATHFINDING_GOAL);
+        assert_eq!(goals.len(), 1);
+        assert_eq!(&goals[0][2..], &[0xbb, 0xaa, 30.0f32.to_bits(), 0]);
+        // The process type being set ends the function without arriving.
+        returning(&mut e, MOBILE_GET_CURRENT_PROCESS_TYPE, 2);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008f3940, &args![p, actor, 0u32]).bool());
+    }
+
+    #[test]
+    fn test_fn_008f2610_without_a_package_does_nothing() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package) = dialogue_world(&mut e);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_PACKAGE_THAT_IS_RUNNING, 0)],
+        );
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008f2610, &args![p, actor, 0]).bool());
+        assert!(calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)).is_empty());
+    }
+
+    #[test]
+    fn test_fn_008f2610_runs_without_escorted_actor_and_returns_false() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package) = dialogue_world(&mut e);
+        returning(&mut e, ACTOR_PACKAGE_ITEM, 0);
+        e.call_log = Some(vec![]);
+        // With no inventory item and no target, the process asks for one and
+        // advances procedure 1.
+        assert!(!e.call(0x008f2610, &args![p, actor, 0]).bool());
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_TARGET_FOR_PACKAGE)),
+            vec![vec![p.addr(), actor]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+    }
+
+    /// A world for `008e9640`: the one-hour world with the stubs and slots
+    /// `ProcessActivate` needs. The returned target is a plain object (not an
+    /// actor, not furniture).
+    fn process_activate_world(e: &mut Engine) -> (Ptr<HighProcess>, u32, u32, u32, u32) {
+        let (p, actor, player, package) = one_hour_world(e);
+        stub(
+            e,
+            &[
+                REFERENCE_EXTRA_DATA,
+                EXTRA_GET_PACKAGE,
+                ACTOR_FLEE_ARRIVAL_CHECK,
+                REFERENCE_ROTATION_ADDRESS,
+                ACTOR_REQUEST_ROTATE,
+                ACTOR_REQUEST_TURN_TO,
+                PROCESS_ALIGN_TO_FURNITURE,
+                PROCESS_CLEAR_FURNITURE_MARKER,
+                REFERENCE_GET_MARKER_USED,
+                REFERENCE_GET_CLOSEST_FREE_MARKER,
+                FURNITURE_MARKER_HEADING,
+                ACTOR_SET_PATHFINDING_GOAL_WITH_HEADING,
+                ANIMATION_SPECIAL_IDLE_DONE_PLAYING,
+                FIND_SPECIAL_IDLE_TO_PLAY,
+                PACKAGE_ONCE_PER_DAY,
+                CALENDAR_GET_DAY,
+                PROCEDURE_GET_COUNT,
+                ACTOR_MOVE_MODE_HAS_SPEED,
+                ACTOR_CREATURE_LIKE,
+                PROCESS_IS_CURRENT_WEAPON_GRENADE,
+                PROCESS_IS_CURRENT_WEAPON_MINE,
+                PROCESS_GET_FORCE_NEXT_UPDATE,
+                ACTOR_DISTANCE_TO_POINT,
+                PACKAGE_TARGET_REFERENCE_WORD,
+                PACKAGE_FLAG_4,
+            ],
+        );
+        e.register_double(CALENDAR_GET_HOUR, |_, _| Ret {
+            st0: 13.0,
+            ..Ret::default()
+        });
+        e.register_double(FLOAT_MINIMUM, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0]).min(f32::from_bits(a[1]))),
+            ..Ret::default()
+        });
+        returning(e, PACKAGE_TYPE, 0);
+        returning(e, ACTOR_SET_PATHFINDING_GOAL, 1);
+        returning_float(e, FADER_GET_ALPHA, 0.0);
+        returning_float(e, FRAME_TIME, 0.25);
+        global_word(e, FADER_MANAGER, 0x4000);
+        global_word(e, FORM_WORD_A, 0x5551);
+        global_word(e, FORM_WORD_B, 0x5552);
+        global_f64(e, ACTIVATE_PLAYER_FAR_DISTANCE, 800.0);
+        global_f64(e, ACTIVATE_PACKAGE_FAR_DISTANCE, 600.0);
+        global_f32(e, ACTIVATE_GOAL_RADIUS, 5.0);
+        global_f32(e, ACTIVATE_MARKER_RADIUS, 20.0);
+        global_f64(e, WANDER_RADIUS_FACTOR, 0.75);
+        let setting = e.mem.alloc(8);
+        e.mem.set_f32(setting, 10.0);
+        returning(e, SETTING_VALUE, setting);
+        // The procedure table of the package's type 0 has the action 0x36 at
+        // index 0.
+        let procedures = e.mem.alloc(16);
+        e.mem.set_u32(procedures, 0x36);
+        e.map(0x011a_3ff0, 0x40);
+        e.mem.set_u32(0x011a_3ff0, procedures);
+        give_vtable(
+            e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[
+                (SLOT_GET_SIT_SLEEP_STATE, 0),
+                (SLOT_GET_RUN_ONCE_PACKAGE, 0),
+                (SLOT_GET_TALKING_TO_PC, 0),
+                (SLOT_FREE_UP_SPECIAL_IDLE, 0),
+                (SLOT_SET_ACTION_HEAD_TRACK_TARGET, 0),
+                (SLOT_CLEAR_ACTION_HEAD_TRACK, 0),
+                (SLOT_SET_CURRENT_ACTION_COMPLETE, 0),
+                (SLOT_CAN_FORCE_GREET, 1),
+                (SLOT_GET_CURRENT_PROCEDURE_INDEX, 0),
+                (SLOT_SET_TARGET_ACTIVATED, 0),
+            ],
+        );
+        let position = e.mem.alloc(16);
+        e.mem.set_f32(position, 8.0);
+        give_vtable(
+            e,
+            actor,
+            ACTOR_TABLE,
+            &[
+                (ACTOR_SLOT_STATE, 0),
+                (ACTOR_SLOT_POSITION, position),
+                (ACTOR_SLOT_ANIMATION, 0),
+                (ACTOR_SLOT_0X418, 0),
+                (ACTOR_SLOT_0X218, 0),
+                (ACTOR_SLOT_0X28C, 0),
+            ],
+        );
+        let target_position = e.mem.alloc(16);
+        e.mem.set_f32(target_position, 24.0);
+        let target = object_with_slots(
+            e,
+            0x7600_0000,
+            &[
+                (ACTOR_SLOT_0X22C, 0),
+                (ACTOR_SLOT_IS_ACTOR, 0),
+                (ACTOR_SLOT_IS_MOBILE_OBJECT, 0),
+                (ACTOR_SLOT_POSITION, target_position),
+                (ACTOR_SLOT_STATE, 0),
+                (ACTOR_SLOT_0X218, 0),
+            ],
+        );
+        e.mem.set_u32(p.addr() + 0x40, target);
+        (p, actor, player, package, target)
+    }
+
+    #[test]
+    fn test_process_activate_early_exits() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package, _target) = process_activate_world(&mut e);
+        // While the screen fades in nothing happens.
+        returning_float(&mut e, FADER_GET_ALPHA, 0.5);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008e9640, &args![p, actor, 1u32]).bool());
+        assert!(calls_to(&e, process_slot(SLOT_GET_PACKAGE_THAT_IS_RUNNING)).is_empty());
+        // A process that is neither sitting (4) nor free (0) does nothing.
+        returning_float(&mut e, FADER_GET_ALPHA, 0.0);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_SIT_SLEEP_STATE, 7)],
+        );
+        assert!(!e.call(0x008e9640, &args![p, actor, 1u32]).bool());
+        assert!(calls_to(&e, process_slot(SLOT_GET_PACKAGE_THAT_IS_RUNNING)).is_empty());
+        // Without a target and a way to get one the procedure advances only
+        // with the flag.
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_SIT_SLEEP_STATE, 4)],
+        );
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_SET_TARGET_FOR_PACKAGE, 0)],
+        );
+        e.mem.set_u32(p.addr() + 0x40, 0);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008e9640, &args![p, actor, 1u32]).bool());
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_TARGET_FOR_PACKAGE)),
+            vec![vec![p.addr(), actor]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008e9640, &args![p, actor, 0u32]).bool());
+        assert!(calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)).is_empty());
+    }
+
+    #[test]
+    fn test_process_activate_gives_up_on_flagged_and_refusing_targets() {
+        let mut e = Engine::new();
+        let (p, actor, _player, package, target) = process_activate_world(&mut e);
+        // A target with flag 0x20 is given up (SetNeverRun) and the
+        // procedure advances with the flag.
+        returning(&mut e, REFERENCE_FLAG_20, 1);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_SET_TARGET_FOR_PACKAGE, 0)],
+        );
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008e9640, &args![p, actor, 1u32]).bool());
+        assert_eq!(
+            calls_to(&e, PACKAGE_SET_NEVER_RUN),
+            vec![vec![package, target, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        returning(&mut e, REFERENCE_FLAG_20, 0);
+        // A target that refuses with no acquire object: the run-once package
+        // being the running one ends the interrupt package; another one is
+        // set to never run.
+        give_vtable(&mut e, target, 0x7600_0000, &[(ACTOR_SLOT_0X22C, 1)]);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_RUN_ONCE_PACKAGE, package)],
+        );
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008e9640, &args![p, actor, 0u32]).bool());
+        assert_eq!(
+            calls_to(&e, ACTOR_END_INTERRUPT_PACKAGE),
+            vec![vec![actor, 0]]
+        );
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_RUN_ONCE_PACKAGE, 0x1234)],
+        );
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008e9640, &args![p, actor, 0u32]).bool());
+        assert!(calls_to(&e, ACTOR_END_INTERRUPT_PACKAGE).is_empty());
+        assert_eq!(
+            calls_to(&e, PACKAGE_SET_NEVER_RUN),
+            vec![vec![package, target, 1]]
+        );
+    }
+
+    #[test]
+    fn test_process_activate_marker_form_sets_the_head_track() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package, _target) = process_activate_world(&mut e);
+        returning(&mut e, REFERENCE_IS_FURNITURE, 1);
+        returning(&mut e, PACKAGE_GET_LOCATION_REFERENCE, 0x6600);
+        returning(&mut e, REFERENCE_GET_FORM, 0x5552);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008e9640, &args![p, actor, 0u32]).bool());
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_ACTION_HEAD_TRACK_TARGET)),
+            vec![vec![p.addr(), 0x6600]]
+        );
+        // The other marker form does the same.
+        returning(&mut e, REFERENCE_GET_FORM, 0x5551);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008e9640, &args![p, actor, 0u32]).bool());
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_ACTION_HEAD_TRACK_TARGET)).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_process_activate_walks_to_a_target_that_is_not_reached() {
+        let mut e = Engine::new();
+        let (p, actor, _player, package, _target) = process_activate_world(&mut e);
+        give_vtable(&mut e, package, PACKAGE_TABLE, &[(PACKAGE_SLOT_0X144, 0)]);
+        returning(&mut e, PROCESS_MOVEMENT_DONE, 0);
+        returning(&mut e, ACTOR_IS_PATHING_COMPLETE, 0);
+        returning_float(&mut e, PACKAGE_RADIUS_ACTOR_TO_REF_TARGET, 30.0);
+        returning_float(&mut e, POINT_LENGTH_FLOAT, 100.0);
+        returning(&mut e, REFERENCE_GET_WORLD_SPACE, 0xaa);
+        returning(&mut e, REFERENCE_PATHING_CELL, 0xbb);
+        returning(&mut e, PROCESS_IS_CURRENT_WEAPON_GRENADE, 1);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008e9640, &args![p, actor, 0u32]).bool());
+        // The target moved more than the smaller of the setting (10.0) and
+        // three quarters of the radius: a goal is set at its position.
+        let goals = calls_to(&e, ACTOR_SET_PATHFINDING_GOAL);
+        assert_eq!(goals.len(), 1);
+        assert_eq!(&goals[0][2..], &[0xbb, 0xaa, 30.0f32.to_bits(), 0]);
+        // Its position is remembered and a grenade makes the actor run only.
+        assert_eq!(e.mem.f32(p.addr() + 0xfc), 24.0);
+        assert_eq!(calls_to(&e, ACTOR_SET_MOVE_MODE), vec![vec![actor, 0x200]]);
+        // A target that moved little is not walked to again.
+        returning_float(&mut e, POINT_LENGTH_FLOAT, 5.0);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008e9640, &args![p, actor, 0u32]).bool());
+        assert!(calls_to(&e, ACTOR_SET_PATHFINDING_GOAL).is_empty());
+    }
+
+    #[test]
+    fn test_process_activate_unflagged_plays_the_idle_then_activates() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package, target) = process_activate_world(&mut e);
+        returning(&mut e, FIND_SPECIAL_IDLE_TO_PLAY, 0);
+        e.call_log = Some(vec![]);
+        // The first call starts the special idle.
+        assert!(!e.call(0x008e9640, &args![p, actor, 0u32]).bool());
+        assert_eq!(e.get(p, HighProcess::bActivateAnim), 1);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_FREE_UP_SPECIAL_IDLE)),
+            vec![vec![p.addr(), actor]]
+        );
+        assert_eq!(calls_to(&e, FIND_SPECIAL_IDLE_TO_PLAY).len(), 1);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_ACTION_HEAD_TRACK_TARGET)),
+            vec![vec![p.addr(), target]]
+        );
+        // Once the idle is done playing the target is activated.
+        let animation = e.mem.alloc(0x40);
+        give_vtable(
+            &mut e,
+            actor,
+            ACTOR_TABLE,
+            &[(ACTOR_SLOT_ANIMATION, animation)],
+        );
+        returning(&mut e, ANIMATION_SPECIAL_IDLE_DONE_PLAYING, 1);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008e9640, &args![p, actor, 0u32]).bool());
+        assert_eq!(
+            calls_to(&e, REFERENCE_ACTIVATE),
+            vec![vec![target, actor, 0, 0, 1]]
+        );
+        assert_eq!(e.get(p, HighProcess::bActivateAnim), 0);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_CLEAR_ACTION_HEAD_TRACK)),
+            vec![vec![p.addr(), 1]]
+        );
+    }
+
+    #[test]
+    fn test_process_activate_flagged_activates_and_advances() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package, target) = process_activate_world(&mut e);
+        // No acquire object and the idle already started: the target is
+        // activated, the procedure advances and (action 0x36) the action
+        // completes.
+        e.set(p, HighProcess::bActivateAnim, 1);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008e9640, &args![p, actor, 1u32]).bool());
+        assert_eq!(
+            calls_to(&e, REFERENCE_ACTIVATE),
+            vec![vec![target, actor, 1, 0, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_TARGET_ACTIVATED)),
+            vec![vec![p.addr(), 1]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_CURRENT_ACTION_COMPLETE)),
+            vec![vec![p.addr(), 1]]
+        );
+        assert_eq!(e.get(p, HighProcess::bActivateAnim), 0);
+    }
+
+    #[test]
+    fn test_process_activate_flagged_uses_the_acquire_object() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package, _target) = process_activate_world(&mut e);
+        let entry = e.mem.alloc(0x40);
+        e.mem.set_u32(entry, 0x7700);
+        e.mem.set_u32(entry + 4, 0x7001);
+        e.mem.set_u32(entry + 0xc, 5);
+        e.mem.set_u32(p.addr() + 0x64, entry);
+        e.mem.set_i32(p.addr() + 0x58, 1);
+        // The idle starts first, with the timer set from its result.
+        returning(&mut e, FIND_SPECIAL_IDLE_TO_PLAY, 1);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008e9640, &args![p, actor, 1u32]).bool());
+        assert_eq!(e.get(p, HighProcess::fIdleTimer), 1.0);
+        // The timer runs down by the frame time.
+        // (The special idle is still playing.)
+        let animation = e.mem.alloc(0x40);
+        give_vtable(
+            &mut e,
+            actor,
+            ACTOR_TABLE,
+            &[(ACTOR_SLOT_ANIMATION, animation)],
+        );
+        returning(&mut e, ANIMATION_SPECIAL_IDLE_DONE_PLAYING, 0);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008e9640, &args![p, actor, 1u32]).bool());
+        assert_eq!(e.get(p, HighProcess::fIdleTimer), 0.75);
+        assert!(calls_to(&e, REFERENCE_ACTIVATE).is_empty());
+        // At zero the entry's object is activated with its item and count,
+        // the last item ends the procedure and the acquire object is dropped
+        // by the final check.
+        e.set(p, HighProcess::fIdleTimer, 0.0);
+        returning(&mut e, ANIMATION_SPECIAL_IDLE_DONE_PLAYING, 1);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008e9640, &args![p, actor, 1u32]).bool());
+        assert_eq!(
+            calls_to(&e, REFERENCE_ACTIVATE),
+            vec![vec![0x7700, actor, 1, 0x7001, 5]]
+        );
+        assert_eq!(e.mem.i32(p.addr() + 0x58), 0);
+        assert_eq!(e.mem.u32(p.addr() + 0x64), 0);
+        assert_eq!(calls_to(&e, ACQUIRE_OBJECT_DELETE), vec![vec![entry, 1]]);
+        // The target is set again to the one the process had, then cleared.
+        let set_targets = calls_to(&e, process_slot(SLOT_SET_TARGET));
+        assert_eq!(set_targets.len(), 2);
+        assert_eq!(set_targets[1], vec![p.addr(), 0]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+    }
+
+    #[test]
+    fn test_process_activate_furniture_target_with_the_actor_seated() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package, _target) = process_activate_world(&mut e);
+        returning(&mut e, REFERENCE_IS_FURNITURE, 1);
+        // The actor already is in the furniture (state 4), which counts as
+        // arrived; the flagged call advances and completes the action.
+        give_vtable(&mut e, actor, ACTOR_TABLE, &[(ACTOR_SLOT_STATE, 4)]);
+        let target = e.mem.u32(p.addr() + 0x40);
+        e.mem.set_u32(p.addr() + 0x140, target);
+        e.mem.set_u8(p.addr() + 0x144, 1);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008e9640, &args![p, actor, 1u32]).bool());
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_TARGET_ACTIVATED)),
+            vec![vec![p.addr(), 1]]
+        );
+        // Without the flag only the target is marked as activated.
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008e9640, &args![p, actor, 0u32]).bool());
+        assert!(calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)).is_empty());
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_TARGET_ACTIVATED)),
+            vec![vec![p.addr(), 1]]
+        );
+    }
+
+    #[test]
+    fn test_process_activate_movement_done_with_a_path_package() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package, _target) = process_activate_world(&mut e);
+        returning(&mut e, PROCESS_MOVEMENT_DONE, 1);
+        returning(&mut e, PACKAGE_FLAG_4, 1);
+        returning_float(&mut e, PACKAGE_RADIUS_ACTOR_TO_REF_TARGET, 12.0);
+        returning(&mut e, REFERENCE_GET_WORLD_SPACE, 0xaa);
+        returning(&mut e, REFERENCE_PATHING_CELL, 0xbb);
+        // With the package's flag 4 the actor is sent to the target (flag
+        // clear or set) and the function returns false.
+        for flag in [0u32, 1u32] {
+            e.call_log = Some(vec![]);
+            assert!(!e.call(0x008e9640, &args![p, actor, flag]).bool());
+            let goals = calls_to(&e, ACTOR_SET_PATHFINDING_GOAL);
+            assert_eq!(goals.len(), 1);
+            assert_eq!(&goals[0][2..], &[0xbb, 0xaa, 12.0f32.to_bits(), 0]);
+        }
+        // Without it, and with the flag, the arrival at a target with no
+        // acquire object clears the animation flag and walks to the target.
+        returning(&mut e, PACKAGE_FLAG_4, 0);
+        e.set(p, HighProcess::bActivateAnim, 1);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x008e9640, &args![p, actor, 1u32]).bool());
+        assert_eq!(e.get(p, HighProcess::bActivateAnim), 0);
+        assert_eq!(calls_to(&e, ACTOR_SET_PATHFINDING_GOAL).len(), 1);
+    }
+
+    /// A world for `008eeec0`: a high process whose actor is a plain actor in
+    /// an attached cell, with every callee an inert double. Every slot of the
+    /// process, actor and package tables answers 0 until a test says
+    /// otherwise. The returned values: process, actor, player, package,
+    /// cell.
+    fn update_world(e: &mut Engine) -> (Ptr<HighProcess>, u32, u32, u32, u32) {
+        let all: Vec<(u32, u32)> = (0..0x240u32).map(|i| (i * 4, 0)).collect();
+        let p = block(e);
+        let package = object_with_slots(e, PACKAGE_TABLE, &all);
+        let player = object_with_slots(e, OTHER_TABLE, &all);
+        let actor = object_with_slots(e, ACTOR_TABLE, &all);
+        give_vtable(e, p.addr(), PROCESS_TABLE, &all);
+        global_word(e, PLAYER_POINTER, player);
+        global_word(e, FADER_MANAGER, 0x4000);
+        global_word(e, FORM_WORD_A, 0x5551);
+        global_word(e, FORM_WORD_B, 0x5552);
+        global_word(e, ACTOR_BASE_DATA_GLOBAL, 0x7a7a);
+        global_f64(e, DEATH_TIMER_MAX, 3.4028234663852886e+38);
+        global_f64(e, SCRIPT_END_TIME_SCALE, 100.0);
+        global_f64(e, DEGREES_TO_RADIANS, 0.01745329238474369);
+        global_f32(e, NO_LIMIT_FLOAT, -1.0);
+        global_f32(e, ACTIVATE_GOAL_RADIUS, 5.0);
+        e.map(0x011a_3ff0, 0x400);
+        let setting = e.mem.alloc(8);
+        e.mem.set_f32(setting, 10.0);
+        returning(e, SETTING_VALUE, setting);
+        returning(e, REFERENCE_PATHING_CELL, 0xcc00);
+        returning(e, UPDATE_CELL_IS_ATTACHED, 1);
+        returning(e, REFERENCE_BYTE_AT_81, 1);
+        returning_float(e, FRAME_TIME, 0.5);
+        returning_float(e, FADER_GET_ALPHA, 0.0);
+        stub(
+            e,
+            &[
+                SOUND_HANDLE_DESTRUCTOR,
+                NODE_NEXT,
+                PACKAGE_LIST_AT_38,
+                SOUND_HANDLE_IS_VALID_OBJECT,
+                ACTOR_DO_DEATH_STUFF,
+                REFERENCE_FLAG_20,
+                REFERENCE_FLAG_800,
+                ANIMATION_HAS_QUEUED_ITEMS,
+                MOBILE_UPDATE_IDLES,
+                PROCESS_SET_SKIPPED_UPDATE,
+                PROCESS_UPDATE_HEAD_TRACK_TARGETS,
+                REFERENCE_FIELD_AT_0X30,
+                ACTOR_IS_SUBMERGED,
+                ACTOR_MOVE_TO_NAV_MESH,
+                PROCESS_UPDATE_BONE_LOD,
+                PROCESS_REFRESH_FLAG_18A,
+                0x008f_21c0,
+                0x008f_21a0,
+                ACTOR_UNIQUE_STATE_IS_3,
+                ACTOR_BASE_FLAG_ALWAYS_FALSE,
+                ACTOR_CREATURE_LIKE,
+                ACTOR_GET_CURRENT_PACKAGE_TARGET,
+                ACTOR_IS_FLEEING,
+                ACTOR_END_INTERRUPT_PACKAGE,
+                MENU_ID_VISIBLE,
+                0x0090_1740,
+                ACTOR_SET_LOOK_AT_TARGET,
+                ACTOR_CLEAR_IN_COMBAT,
+                PLAYER_GREET_TEST,
+                PLAYER_BYTE_6CC,
+                ACTOR_DETECTION_LEVEL,
+                ACTOR_WEAPON_IS_MINE,
+                MOVE_MODE_RUNNING_ONLY,
+                ACTOR_IS_RUNNING_RUN_ONCE,
+                DISTANCE_FROM_REFERENCE,
+                PLAYER_IS_IN_COMBAT,
+                ACTOR_SHOULD_SKIP_FALL_OUT_BEHAVIOR,
+                ACTOR_IS_CONTINUING_PACKAGE_FOR_PC,
+                ACTOR_IS_ALARMED,
+                MOBILE_IS_IN_DIALOGUE,
+                ACTOR_MOVE_MODE_HAS_SPEED,
+                GET_TOPIC,
+                ACTOR_START_GREETING_PLAYER,
+                RANDOM_BETWEEN,
+                CALENDAR_GET_HOUR,
+                CALENDAR_GET_DAY,
+                PROCESS_SCRIPT_START_HOUR,
+                FLOAT_ABSOLUTE_VALUE,
+                PACKAGE_ONCE_PER_DAY,
+                PACKAGE_IS_NEVER_TO_RUN,
+                PACKAGE_IS_INTERRUPT,
+                PACKAGE_TARGET_WORD,
+                PACKAGE_TARGET_TYPE,
+                PACKAGE_INITIAL_TARGET_COUNT,
+                PROCESS_UPDATE_MIDDLE_HIGH,
+                ACTOR_AFTER_PACKAGE_CHANGE,
+                PACKAGE_FLAG_200,
+                PACKAGE_FLAG_1,
+                CELL_ACTOR_CHECK,
+                REFERENCE_EXTRA_DATA,
+                EXTRA_GET_PACKAGE,
+                PACKAGE_FLAG_800000,
+                ACTOR_DRAW_WEAPON,
+                ACTOR_EQUIP_OBJECT,
+                NI_POINTER_GET,
+                NODE_ITEM_ADDRESS,
+                WORD_AT_8,
+                PROCESS_ALIGN_TO_FURNITURE,
+                PACKAGE_TYPE,
+                MOBILE_OBJECT_PROCESS_TYPE,
+                PROCESS_WORD_AT_28,
+                PACKAGE_TARGET_REFERENCE_WORD,
+                PACKAGE_LOCATION_WORD,
+                PACKAGE_LOCATION_IS_GENERIC,
+                REFERENCE_IS_FURNITURE,
+                ACTOR_IS_PATHING_COMPLETE,
+                PACKAGE_LOCATION_TYPE,
+                REFERENCE_GET_FORM,
+                PROCESS_MOVEMENT_DONE,
+                PROCESS_PROCESS_CREATE_FOLLOW,
+                PROCESS_PROCESS_8DB240,
+                PROCESS_PROCESS_SURFACE,
+                PROCESS_PROCESS_ALERT_BEHAVIOR,
+                PROCESS_PROCESS_SEARCH_FOR_TARGET,
+                PROCESS_PROCESS_BACK_UP,
+                PROCESS_PROCESS_TAKE_BACK,
+                PROCESS_PROCESS_AVOID_AREA,
+                PROCESS_NODE_FIND_FLAG_4534F0,
+                PACKAGE_FLAG_80_AT_22,
+                ACTOR_IS_PLAYING_LOWER_BODY_SPECIAL_IDLE,
+                ANIMATION_SPECIAL_IDLE_FREE,
+                REFERENCE_ROTATION_ADDRESS,
+                ACTOR_REQUEST_ROTATE,
+                PACKAGE_FLAG_2,
+                PACKAGE_FLAG_4,
+                ACQUIRE_OBJECT_DELETE,
+                LIST_IS_EMPTY,
+                LIST_CLEAR,
+                LIST_REMOVE_ITEM,
+                PACKAGE_GET_IS_CREATED,
+                SCRIPT_SET_ACTION_FLAG,
+                ACTOR_SET_ALERT,
+                PACKAGE_USE_WEAPON_DATA,
+                PACKAGE_PATROL_DATA,
+                SANDBOX_PACKAGE_RESET,
+                PACKAGE_LOCATION_WORLD,
+                PACKAGE_LOCATION_CELL,
+                PACKAGE_LOCATION_COORD,
+                PATHING_LOCATION_FROM_COORD,
+                PROCESS_SHOULD_WAIT_FOR_ESCORT_TARGET,
+                PATHING_LOCATION_DESTRUCTOR,
+                ACTOR_CLEAR_LOOK_AT_TARGET,
+                ACTOR_STOP_MOVING,
+                ACTOR_FLEE_ARRIVAL_CHECK,
+                DIALOGUE_ACTOR_STARTED_CONVERSATION,
+                DIALOGUE_PACKAGE_BYTE_BE,
+                DIALOGUE_PACKAGE_CONTINUES_MOVING,
+                ACTOR_PROCESS,
+                ACTOR_CURRENT_PACKAGE,
+                PACKAGE_FOLLOW_DATA,
+                PACKAGE_SECOND_LOCATION,
+                PACKAGE_IS_TARGET_AT_SECOND_LOCATION,
+                PLAYER_ACTOR_COUNT,
+                SETTING_INTEGER_POINTER,
+                PACKAGE_SET_NEVER_RUN,
+                PACKAGE_FLAG_10000,
+                PROCEDURE_GET_COUNT,
+                ACTOR_PICK_ANIMATIONS,
+            ],
+        );
+        returning_float(e, CALENDAR_GET_HOUR, 13.0);
+        returning_float(e, PROCESS_SCRIPT_START_HOUR, 12.0);
+        e.register_double(FLOAT_ABSOLUTE_VALUE, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0]).abs()),
+            ..Ret::default()
+        });
+        // The actor's process is its own double.
+        let actor_process = object_with_slots(e, 0x7700_0000, &all);
+        returning(e, ACTOR_PROCESS, actor_process);
+        let position = e.mem.alloc(16);
+        give_vtable(
+            e,
+            actor,
+            ACTOR_TABLE,
+            &[(ACTOR_SLOT_IS_ACTOR, 1), (ACTOR_SLOT_POSITION, position)],
+        );
+        give_vtable(
+            e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_PACKAGE_THAT_IS_RUNNING, package)],
+        );
+        give_vtable(
+            e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_ANIM_ACTION, u32::MAX)],
+        );
+        give_vtable(
+            e,
+            package,
+            PACKAGE_TABLE,
+            &[(PACKAGE_SLOT_FIND_LOCATION, 0)],
+        );
+        // Procedure type 0 has the action 0x36 at index 0 by default.
+        let procedures = e.mem.alloc(0x40);
+        e.mem.set_u32(0x011a_3ff0, procedures);
+        returning(e, PACKAGE_PROCEDURE_TYPE, 0);
+        (p, actor, player, package, 0xcc00)
+    }
+
+    /// Makes the dispatch run `action` for the process.
+    fn update_set_action(e: &mut Engine, action: u32) {
+        let procedures = e.mem.u32(0x011a_3ff0);
+        e.mem.set_u32(procedures, action);
+    }
+
+    #[test]
+    fn test_update_early_exits() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package, _cell) = update_world(&mut e);
+        // A null reference does nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, 0u32]);
+        assert_eq!(calls_to(&e, SOUND_HANDLE_DESTRUCTOR).len(), 1);
+        // An unattached cell does nothing more.
+        returning(&mut e, UPDATE_CELL_IS_ATTACHED, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert!(calls_to(&e, FRAME_TIME).is_empty());
+        returning(&mut e, UPDATE_CELL_IS_ATTACHED, 1);
+        // The fade state 3 stops an actor, 4 only an actor.
+        e.set(p, HighProcess::eFadeState, 3);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert!(calls_to(&e, FRAME_TIME).is_empty());
+        e.set(p, HighProcess::eFadeState, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert!(calls_to(&e, FRAME_TIME).is_empty());
+        // Without the +0x81 flag a reference with no 3D node is skipped, and
+        // one whose animation has queued items too.
+        e.set(p, HighProcess::eFadeState, 0);
+        returning(&mut e, REFERENCE_BYTE_AT_81, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert!(calls_to(&e, FRAME_TIME).is_empty());
+        give_vtable(&mut e, actor, ACTOR_TABLE, &[(ACTOR_SLOT_NODE, 0x4444)]);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_ANIMATION, 0x5555)],
+        );
+        returning(&mut e, ANIMATION_HAS_QUEUED_ITEMS, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert!(calls_to(&e, FRAME_TIME).is_empty());
+    }
+
+    #[test]
+    fn test_update_runs_down_the_timers_and_dispatches_wander_and_travel() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package, _cell) = update_world(&mut e);
+        e.set(p, HighProcess::fGreetingTimer, 5.0);
+        e.set(p, HighProcess::fCheckToTalkTimer, 7.0);
+        update_set_action(&mut e, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert_eq!(e.get(p, HighProcess::fGreetingTimer), 4.5);
+        assert_eq!(e.get(p, HighProcess::fCheckToTalkTimer), 6.5);
+        // Action 0 is ProcessTravel, the process of the actor ends it.
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_PROCESS_TRAVEL)),
+            vec![vec![p.addr(), actor, 0, 1, u32::MAX, 0]]
+        );
+        assert_eq!(
+            calls_to(
+                &e,
+                slot_target(0x7700_0000, SLOT_COMPUTE_LAST_TIME_PROCESSED)
+            )
+            .len(),
+            1
+        );
+        update_set_action(&mut e, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_PROCESS_WANDER)),
+            vec![vec![p.addr(), actor, 0, (-1.0f32).to_bits()]]
+        );
+    }
+
+    #[test]
+    fn test_update_dispatches_on_the_procedure_action() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package, _cell) = update_world(&mut e);
+        let cases: [(u32, u32, Vec<u32>); 8] = [
+            (2, SLOT_PROCESS_ACTIVATE, vec![p.addr(), actor, 1]),
+            (3, SLOT_PROCESS_ACQUIRE, vec![p.addr(), actor]),
+            (6, SLOT_PROCESS_FOLLOW, vec![p.addr(), actor, 1, 0x101, 0]),
+            (0xc, SLOT_PROCESS_DIALOGUE, vec![p.addr(), actor]),
+            (0x23, SLOT_PROCESS_REMOVE_WORN, vec![p.addr(), actor, 1, 0]),
+            (
+                0x2e,
+                SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
+                vec![p.addr(), actor, 1],
+            ),
+            (0x34, SLOT_PROCESS_CANNIBAL, vec![p.addr(), actor]),
+            (
+                0x10,
+                SLOT_PROCESS_GREET,
+                vec![p.addr(), actor, 0, 0, 0, 1, 0],
+            ),
+        ];
+        for (action, slot, expected) in cases {
+            update_set_action(&mut e, action);
+            e.call_log = Some(vec![]);
+            e.call(0x008e_eec0, &args![p, actor]);
+            assert_eq!(
+                calls_to(&e, process_slot(slot)),
+                vec![expected],
+                "action {action:#x}"
+            );
+        }
+        // The functions of other units are called by address.
+        for (action, address) in [
+            (0x11, PROCESS_PROCESS_CREATE_FOLLOW),
+            (0x1f, PROCESS_PROCESS_SURFACE),
+            (0x29, PROCESS_PROCESS_TAKE_BACK),
+            (0x30, PROCESS_PROCESS_ALERT_BEHAVIOR),
+            (0x35, PROCESS_PROCESS_BACK_UP),
+            (0x2d, PROCESS_PROCESS_AVOID_AREA),
+        ] {
+            update_set_action(&mut e, action);
+            e.call_log = Some(vec![]);
+            e.call(0x008e_eec0, &args![p, actor]);
+            assert_eq!(calls_to(&e, address), vec![vec![p.addr(), actor]]);
+        }
+        // An action without a case does nothing but the common end.
+        update_set_action(&mut e, 0x40);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert_eq!(
+            calls_to(
+                &e,
+                slot_target(0x7700_0000, SLOT_COMPUTE_LAST_TIME_PROCESSED)
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_update_non_actor_references_only_check_dialogue() {
+        let mut e = Engine::new();
+        let (p, _actor, _player, _package, _cell) = update_world(&mut e);
+        let thing = object_with_slots(
+            &mut e,
+            0x7600_0000,
+            &(0..0x80u32).map(|i| (i * 4, 0)).collect::<Vec<_>>(),
+        );
+        update_set_action(&mut e, 0xc);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, thing]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_PROCESS_DIALOGUE)),
+            vec![vec![p.addr(), thing]]
+        );
+        // Other actions are left alone.
+        update_set_action(&mut e, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, thing]);
+        assert!(calls_to(&e, process_slot(SLOT_PROCESS_DIALOGUE)).is_empty());
+        assert!(calls_to(&e, process_slot(SLOT_PROCESS_ACTIVATE)).is_empty());
+    }
+
+    #[test]
+    fn test_update_dying_actor() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package, _cell) = update_world(&mut e);
+        give_vtable(&mut e, actor, ACTOR_TABLE, &[(ACTOR_SLOT_0X2E8, 1)]);
+        // The largest float as the greeting timer means death at once.
+        float_slot(
+            &mut e,
+            PROCESS_TABLE,
+            SLOT_GET_GREETING_TIMER,
+            3.4028234663852886e+38,
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert_eq!(calls_to(&e, ACTOR_DO_DEATH_STUFF), vec![vec![actor]]);
+        // A timer above zero does nothing, one at zero kills.
+        float_slot(&mut e, PROCESS_TABLE, SLOT_GET_GREETING_TIMER, 1.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert!(calls_to(&e, ACTOR_DO_DEATH_STUFF).is_empty());
+        float_slot(&mut e, PROCESS_TABLE, SLOT_GET_GREETING_TIMER, 0.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert_eq!(calls_to(&e, ACTOR_DO_DEATH_STUFF), vec![vec![actor]]);
+        // None of these runs the common end.
+        assert!(calls_to(
+            &e,
+            slot_target(0x7700_0000, SLOT_COMPUTE_LAST_TIME_PROCESSED)
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn test_update_script_package_is_finished_when_the_end_time_passes() {
+        let mut e = Engine::new();
+        let (p, actor, _player, package, _cell) = update_world(&mut e);
+        update_set_action(&mut e, 0x36);
+        // The script end time 50 is at most |13 - 12| * 100 = 100: the
+        // package is over for the process: three procedures are added.
+        e.set(p, HighProcess::fScriptPackageEndTime, 50.0);
+        returning(&mut e, PACKAGE_ONCE_PER_DAY, 1);
+        returning(&mut e, CALENDAR_GET_DAY, 9);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING))[0],
+            vec![p.addr(), actor, 3]
+        );
+        assert_eq!(
+            calls_to(&e, actor_slot(ACTOR_SLOT_0X28C)),
+            vec![vec![actor, package, 9]]
+        );
+        assert_eq!(e.get(p, HighProcess::fPackageEvalTimer), 0.0);
+    }
+
+    #[test]
+    fn test_update_script_package_ends_for_procedure_kinds_that_are_over_at_once() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package, _cell) = update_world(&mut e);
+        update_set_action(&mut e, 0x36);
+        returning(&mut e, PACKAGE_PROCEDURE_TYPE, 4);
+        e.mem.set_u32(0x011a_3ff0 + 4 * 4, e.mem.u32(0x011a_3ff0));
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, u32::MAX]]
+        );
+        // The return skips the common end.
+        assert!(calls_to(
+            &e,
+            slot_target(0x7700_0000, SLOT_COMPUTE_LAST_TIME_PROCESSED)
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn test_update_draws_the_weapon_for_an_alerted_actor() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package, _cell) = update_world(&mut e);
+        update_set_action(&mut e, 0x40);
+        // An alert actor without a drawn weapon equips and draws it.
+        give_vtable(&mut e, p.addr(), PROCESS_TABLE, &[(SLOT_GET_ALERT, 1)]);
+        let item = e.mem.alloc(0x40);
+        give_vtable(&mut e, actor, ACTOR_TABLE, &[(ACTOR_SLOT_0X3BC, item)]);
+        returning(&mut e, NI_POINTER_GET, 0);
+        returning(&mut e, WORD_AT_8, 0x9001);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, ACTOR_EQUIP_OBJECT),
+            vec![vec![actor, 0x9001, 1, 0, 1, 0, 1]]
+        );
+        assert_eq!(calls_to(&e, ACTOR_DRAW_WEAPON), vec![vec![actor, 1]]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_WANT_WEAPON_DRAWN)),
+            vec![vec![p.addr(), 1]]
+        );
+        // Once the weapon is drawn and wanted, and the alert is gone, it is
+        // holstered again.
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[
+                (SLOT_GET_ALERT, 0),
+                (SLOT_GET_WEAPON_DRAWN, 1),
+                (SLOT_GET_WANT_WEAPON_DRAWN, 1),
+            ],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert_eq!(calls_to(&e, ACTOR_DRAW_WEAPON), vec![vec![actor, 0]]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_WANT_WEAPON_DRAWN)),
+            vec![vec![p.addr(), 0]]
+        );
+    }
+
+    #[test]
+    fn test_update_aware_timer_runs_down_and_ends_a_run_once_follow() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package, _cell) = update_world(&mut e);
+        update_set_action(&mut e, 0x40);
+        e.set(p, HighProcess::fAwarePlayerTimer, 2.0);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert_eq!(e.get(p, HighProcess::fAwarePlayerTimer), 1.5);
+        // At zero with a run-once package of type 1 the follow is ended.
+        let run_once = e.mem.alloc(0x40);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_RUN_ONCE_PACKAGE, run_once)],
+        );
+        returning(&mut e, PACKAGE_TYPE, 1);
+        e.set(p, HighProcess::fAwarePlayerTimer, 0.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert_eq!(e.get(p, HighProcess::fAwarePlayerTimer), 0.0);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_CLEAR_RUN_ONCE_PACKAGE)).len(),
+            1
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_END_MOVE_MESSAGE)),
+            vec![vec![p.addr(), actor]]
+        );
+        // A negative timer without a run-once package is left alone.
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_RUN_ONCE_PACKAGE, 0)],
+        );
+        e.set(p, HighProcess::fAwarePlayerTimer, -1.0);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert_eq!(e.get(p, HighProcess::fAwarePlayerTimer), -1.0);
+    }
+
+    #[test]
+    fn test_update_target_package_with_a_follow_package() {
+        let mut e = Engine::new();
+        let (p, actor, _player, _package, _cell) = update_world(&mut e);
+        update_set_action(&mut e, 0xd);
+        let target = object_with_slots(
+            &mut e,
+            0x7600_0000,
+            &(0..0x80u32).map(|i| (i * 4, 0)).collect::<Vec<_>>(),
+        );
+        e.mem.set_u32(p.addr() + 0x40, target);
+        // A follow package (type 1) outside the second-location case
+        // advances when the player has fewer followers than the setting.
+        returning(&mut e, PACKAGE_TYPE, 1);
+        let limit = e.mem.alloc(8);
+        e.mem.set_i32(limit, 3);
+        returning(&mut e, SETTING_INTEGER_POINTER, limit);
+        returning(&mut e, PLAYER_ACTOR_COUNT, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+        assert_eq!(calls_to(&e, ACTOR_STOP_MOVING), vec![vec![actor]]);
+        returning(&mut e, PLAYER_ACTOR_COUNT, 3);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert!(calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)).is_empty());
+        // Without a target the process asks for one and advances.
+        e.mem.set_u32(p.addr() + 0x40, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_TARGET_FOR_PACKAGE)),
+            vec![vec![p.addr(), actor]]
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, 1]]
+        );
+    }
+
+    #[test]
+    fn test_update_script_package_sandbox_and_patrol() {
+        let mut e = Engine::new();
+        let (p, actor, _player, package, _cell) = update_world(&mut e);
+        update_set_action(&mut e, 0x36);
+        // Procedure type 0x25 resets the running sandbox instance.
+        returning(&mut e, PACKAGE_PROCEDURE_TYPE, 0x25);
+        e.mem
+            .set_u32(0x011a_3ff0 + 0x25 * 4, e.mem.u32(0x011a_3ff0));
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_GET_INSTANCE_DATA_THAT_IS_RUNNING, 0x6a6a)],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert_eq!(calls_to(&e, SANDBOX_PACKAGE_RESET), vec![vec![0x6a6a]]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), 0]]
+        );
+        // A patrol package (0x26) with an empty list and no loop asks for a
+        // new package and ends the update.
+        returning(&mut e, PACKAGE_PROCEDURE_TYPE, 0x26);
+        e.mem
+            .set_u32(0x011a_3ff0 + 0x26 * 4, e.mem.u32(0x011a_3ff0));
+        returning(&mut e, PACKAGE_PATROL_DATA, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_CHECK_FOR_NEW_PACKAGE)).last(),
+            Some(&vec![p.addr(), actor, 1])
+        );
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_SET_CURRENT_ACTION_COMPLETE)),
+            vec![vec![p.addr(), 1]]
+        );
+        let _ = package;
+    }
+
+    #[test]
+    fn test_update_greets_the_player_who_is_detected_close_by() {
+        let mut e = Engine::new();
+        let (p, actor, player, _package, _cell) = update_world(&mut e);
+        update_set_action(&mut e, 0x40);
+        returning(&mut e, ACTOR_DETECTION_LEVEL, 3);
+        give_vtable(
+            &mut e,
+            p.addr(),
+            PROCESS_TABLE,
+            &[(SLOT_CAN_SET_ACTION_HEAD_TRACK_TARGET, 1)],
+        );
+        float_slot(&mut e, PROCESS_TABLE, SLOT_GET_GREETING_TIMER, 0.0);
+        returning_float(&mut e, DISTANCE_FROM_REFERENCE, 4.0);
+        returning(&mut e, GET_TOPIC, 0x3030);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, ACTOR_START_GREETING_PLAYER),
+            vec![vec![actor, 0x3030]]
+        );
+        // A far player is not greeted by sight; the idle chatter timer runs
+        // down instead.
+        returning_float(&mut e, DISTANCE_FROM_REFERENCE, 400.0);
+        e.set(p, HighProcess::fIdleChatterTimer, 3.0);
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert!(calls_to(&e, ACTOR_START_GREETING_PLAYER).is_empty());
+        assert_eq!(e.get(p, HighProcess::fIdleChatterTimer), 2.5);
+        let _ = player;
     }
 }
