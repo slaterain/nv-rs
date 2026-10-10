@@ -5,8 +5,9 @@
 //! they fight), the two element classes of its arrays (`CombatTarget`,
 //! `CombatMember`) and the small `CombatGroupCluster` / `CombatSearchLocation`
 //! records. The unit is translated over several sessions, in address order:
-//! this part covers `0069cfe0` and `00985410` to `00986c60`; the next
-//! function of the queue is `009871c0`.
+//! this part covers `0069cfe0`, `00985410` to `00986c60` and `009871c0` to
+//! `0098a4d0`; the next
+//! function of the queue is `0098a580`.
 //!
 //! Conventions of this file:
 //! - Layouts first (below); embedded structs that other units own
@@ -138,6 +139,73 @@ const MAX_FLOAT: u32 = 0x0108_d540;
 const MINUS_ONE: u32 = 0x0101_2054;
 /// `0.0` as a `double`.
 const ZERO_DOUBLE: u32 = 0x0101_2060;
+/// Integer `Setting` value pointer (`this` = the setting): the setting's
+/// `int`.
+const SETTING_INT_VALUE: u32 = 0x0043_d4d0;
+/// `NiPointer::operator->`-like getter (`[this]`).
+const NI_POINTER_GET: u32 = 0x0055_9450;
+/// `VirtualActorPathHandler::GetDistanceTraveled` (Xbox PDB), in ST0.
+const PATH_HANDLER_DISTANCE_TRAVELLED: u32 = 0x004a_7bd0;
+/// The actor test `00437bd0(actor)`, in AL (the map files it under
+/// `extradataobjects.cpp`).
+const ACTOR_TEST_00437BD0: u32 = 0x0043_7bd0;
+/// `&this->TargetArray` of another group (`this + 8`).
+const OTHER_TARGET_ARRAY: u32 = 0x0041_3f40;
+/// `&this->MemberArray` of another group (`this + 0x18`).
+const OTHER_MEMBER_ARRAY: u32 = 0x0050_0940;
+/// Cluster `index` (a signed byte) of the group, or null (`0098de60`).
+const CLUSTER_BY_INDEX: u32 = 0x0098_de60;
+/// `BSSimpleArray<T *>::Add(&value)` (returns the index).
+const POINTER_ARRAY_ADD: u32 = 0x007c_b2e0;
+/// `COMBAT: Error merging groups.  Could not add member %08X %s`, and the
+/// same for a target.
+const MERGE_MEMBER_ERROR: u32 = 0x0108_d6a0;
+const MERGE_TARGET_ERROR: u32 = 0x0108_d664;
+/// `operator new(size)`.
+const OPERATOR_NEW: u32 = 0x00aa_13e0;
+/// `BSSimpleArray<PathingAvoidNode, 1024>` constructor (`this`).
+const AVOID_ARRAY_CONSTRUCT: u32 = 0x006e_3850;
+/// `PathingAvoidNode` constructor (`this`; point, two floats), 0x24 bytes.
+const AVOID_NODE_CONSTRUCT: u32 = 0x0069_15d0;
+/// `BSSimpleArray<PathingAvoidNode_1024>::Add(node)` (Xbox PDB).
+const AVOID_ARRAY_ADD: u32 = 0x0090_5450;
+/// `NiPoint3` arithmetic, all `thiscall`: `operator[](index)` returning
+/// the address of the component; `+` and `-` (`this`; result, other);
+/// `this * (1 / divisor)` into a result (`this`; result, divisor);
+/// the same in place (`this`; divisor); `this * factor` into a result;
+/// `+=`; the dot product and the squared length (ST0); `UnitizeGetLength`
+/// (ST0); the conversion of a `BGSWorldLocation` that returns `this`.
+const POINT_COMPONENT: u32 = 0x004a_51b0;
+const POINT_ADD: u32 = 0x0043_9e90;
+const POINT_SUBTRACT: u32 = 0x0043_9ef0;
+const POINT_SCALE_DOWN: u32 = 0x0053_d280;
+const POINT_DIVIDE_IN_PLACE: u32 = 0x0049_41c0;
+const POINT_SCALE: u32 = 0x0045_bb20;
+const POINT_ACCUMULATE: u32 = 0x0063_c8a0;
+const POINT_DOT: u32 = 0x004b_6190;
+const POINT_LENGTH_SQUARED: u32 = 0x004a_7290;
+const POINT_UNITIZE_GET_LENGTH: u32 = 0x0045_7910;
+const POINT_NO_OP: u32 = 0x0068_15c0;
+/// The `cdecl` wrapper around `004019b0` that `fn_00989490` and the
+/// intersection test use on a `float` (a square root).
+const SQUARE_ROOT: u32 = 0x0045_79e0;
+/// The compiler's vector constructor iterator (`ptr, size, count,
+/// constructor`).
+const VECTOR_CONSTRUCTOR: u32 = 0x0040_1050;
+/// `2.0f`.
+const TWO_FLOAT: u32 = 0x0101_62c0;
+/// `1024.0f`.
+const SPHERE_MINIMUM_RADIUS: u32 = 0x0102_36e0;
+/// `4.0` as a `double`.
+const FOUR_DOUBLE: u32 = 0x0101_db80;
+/// The zero `NiPoint3` (three words) the accumulators start from.
+const ZERO_POINT: u32 = 0x011f_426c;
+/// `0.33` and `0.67` as `double`s.
+const FRACTION_LOW: u32 = 0x0102_6998;
+const FRACTION_HIGH: u32 = 0x0105_1680;
+/// 8 corners x 3 axes of bytes: non-zero means the corner takes the
+/// maximum on that axis.
+const CORNER_TABLE: u32 = 0x0108_d57c;
 
 layout! {
     /// `CombatTarget` (Xbox PDB), 0x68 bytes on both builds. The four
@@ -317,6 +385,25 @@ fn bool_setting(e: &mut Engine, setting: u32) -> bool {
 fn float_setting(e: &mut Engine, setting: u32) -> f32 {
     let value = e.call(SETTING_FLOAT_VALUE, &args![setting]).u32();
     e.mem.f32(value)
+}
+
+/// Age of a `CombatTimeStamp` (`00435e00`): game time now minus the stamp.
+fn time_stamp_age(e: &mut Engine, stamp: Ptr) -> f32 {
+    e.call(TIME_STAMP_AGE, &args![stamp]).f32()
+}
+
+/// Reads the `int` an integer setting accessor points at.
+fn int_setting(e: &mut Engine, setting: u32) -> u32 {
+    let value = e.call(SETTING_INT_VALUE, &args![setting]).u32();
+    e.mem.u32(value)
+}
+
+/// Copies one `NiPoint3` (three words) from `from` to `to`.
+fn copy_point(e: &mut Engine, to: Ptr, from: u32) {
+    for word in 0..3 {
+        let value = e.mem.u32(from + 4 * word);
+        e.mem.set_u32(to.addr() + 4 * word, value);
+    }
 }
 
 // Translated from 0069cfe0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1560,6 +1647,1067 @@ fn choose_target(e: &mut Engine, this: Ptr<CombatGroup>, actor: Ptr, frame: Ptr)
     best_actor
 }
 
+// Translated from 009871c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Target `index` of the group: `TARGET_AT` on `TargetArray` (the address
+/// of the element, returned as `0096a2b0` returns it). The map has no name.
+pub fn fn_009871c0(e: &mut Engine, this: Ptr<CombatGroup>, index: u32) -> Ptr<CombatTarget> {
+    e.call(
+        TARGET_AT,
+        &args![this.byte_add(CombatGroup::TARGET_ARRAY), index],
+    )
+    .ptr()
+}
+
+// Translated from 009871e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatTarget`: whether `fDetectionEventTimeStamp` (read as the `float`
+/// itself) equals the `double` zero.
+pub fn fn_009871e0(e: &mut Engine, this: Ptr<CombatTarget>) -> bool {
+    let stamp = e.get(this, CombatTarget::fDetectionEventTimeStamp);
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    stamp as f64 == zero
+}
+
+// Translated from 00987220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: whether `target` should be dropped from consideration
+/// (the map has no name; the body is a chain of time and distance tests).
+/// In order, it answers true when:
+/// - every member is fleeing (`fn_0098a2e0`) and either the target was last
+///   detected longer ago than the setting `011ce290`, or longer ago than the
+///   setting `011ce750` and no member lies within the setting `011ce38c` of
+///   the target's actor (`fn_00989880`);
+/// - the target was last noticed longer ago than the setting `011ce744`
+///   and has no attackers, or longer ago than `011cf368` and either the
+///   group's one search has a path handler that has travelled no distance,
+///   or no member lies within the setting `011cf3fc` of the actor;
+/// - a search is running (`iSearchCount`) and it exceeds the target's
+///   search-noticed count plus the integer setting `011cef50`; or the
+///   search started less than the setting `011cf0a4` ago, the last
+///   attacked-member stamp is older than it, the last detected stamp is
+///   still `-FLT_MAX` and the last noticed stamp is older than `011cf3b4`;
+/// - the actor has the property `00437bd0` tests.
+///
+/// Otherwise the answer is the actor's virtual method 0x22c (argument 0)
+/// being true while its virtual method 0x2e8 is false.
+pub fn fn_00987220(e: &mut Engine, this: Ptr<CombatGroup>, target: Ptr<CombatTarget>) -> bool {
+    let actor = e.get(target, CombatTarget::pActor);
+    let last_detected = target.byte_add(CombatTarget::fLastDetectedTimeStamp.off);
+    let last_noticed = target.byte_add(CombatTarget::fLastNoticedTimeStamp.off);
+    if fn_0098a2e0(e, this) {
+        let age = time_stamp_age(e, last_detected);
+        if float_setting(e, 0x011c_e290) < age {
+            return true;
+        }
+        let age = time_stamp_age(e, last_detected);
+        if float_setting(e, 0x011c_e750) < age {
+            let radius = float_setting(e, 0x011c_e38c);
+            if fn_00989880(e, this, actor, radius).is_null() {
+                return true;
+            }
+        }
+    }
+    let age = time_stamp_age(e, last_noticed);
+    if float_setting(e, 0x011c_e744) < age {
+        if e.get(target, CombatTarget::sAttackerCount) == 0 {
+            return true;
+        }
+        let age = time_stamp_age(e, last_noticed);
+        if float_setting(e, 0x011c_f368) < age {
+            let mut stationary = false;
+            let handler_slot = this.byte_add(CombatGroup::spPathingLOSGridMap.off);
+            if e.get(this, CombatGroup::iSearchCount) == 1
+                && e.call(NI_POINTER_GET, &args![handler_slot]).u32() != 0
+            {
+                let handler = e.call(NI_POINTER_GET, &args![handler_slot]).u32();
+                let travelled = e
+                    .call(PATH_HANDLER_DISTANCE_TRAVELLED, &args![handler])
+                    .f32();
+                let zero: f64 = e.global(ZERO_DOUBLE);
+                if travelled as f64 == zero {
+                    stationary = true;
+                }
+            }
+            if stationary {
+                return true;
+            }
+            let radius = float_setting(e, 0x011c_f3fc);
+            if fn_00989880(e, this, actor, radius).is_null() {
+                return true;
+            }
+        }
+    }
+    let search_count = e.get(this, CombatGroup::iSearchCount);
+    if search_count != 0 {
+        let noticed = e.get(target, CombatTarget::sLastSearchNoticed) as u32;
+        let limit = noticed.wrapping_add(int_setting(e, 0x011c_ef50));
+        if search_count > limit {
+            return true;
+        }
+        let search_started = this.byte_add(CombatGroup::fSearchStartedTimeStamp.off);
+        let age = time_stamp_age(e, search_started);
+        if float_setting(e, 0x011c_f0a4) > age {
+            let attacked = target.byte_add(CombatTarget::fLastAttackedMemberTimeStamp.off);
+            let age = time_stamp_age(e, attacked);
+            if float_setting(e, 0x011c_f0a4) <= age {
+                let detected = time_stamp(e, last_detected);
+                if detected == -e.global::<f32>(MAX_FLOAT) {
+                    let age = time_stamp_age(e, last_noticed);
+                    if float_setting(e, 0x011c_f3b4) < age {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    if e.call(ACTOR_TEST_00437BD0, &args![actor]).bool() {
+        return true;
+    }
+    if !e.vcall(actor.addr(), 0x22c, &args![0u32]).bool() {
+        return false;
+    }
+    !e.vcall(actor.addr(), 0x2e8, &args![]).bool()
+}
+
+// Translated from 009874b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::IncrementAttackerCount` (Xbox PDB): one more attacker on
+/// the actor's target entry, if it has one.
+pub fn combat_group_increment_attacker_count(e: &mut Engine, this: Ptr<CombatGroup>, actor: Ptr) {
+    let target = fn_009865d0(e, this, actor);
+    if !target.is_null() {
+        let count = e.get(target, CombatTarget::sAttackerCount);
+        e.set(target, CombatTarget::sAttackerCount, count.wrapping_add(1));
+    }
+}
+
+// Translated from 009874f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// One attacker fewer on the actor's target entry, if it has one (the
+/// counterpart of `CombatGroup::IncrementAttackerCount`; no check against
+/// zero).
+pub fn fn_009874f0(e: &mut Engine, this: Ptr<CombatGroup>, actor: Ptr) {
+    let target = fn_009865d0(e, this, actor);
+    if !target.is_null() {
+        let count = e.get(target, CombatTarget::sAttackerCount);
+        e.set(target, CombatTarget::sAttackerCount, count.wrapping_sub(1));
+    }
+}
+
+// Translated from 00987530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::MergeGroup` (Xbox PDB): moves everything of `other` into
+/// this group. Returns false, changing nothing, when this group cannot add
+/// one of `other`'s targets or `other` cannot add one of this group's
+/// targets (`CanAddTarget`, `fn_009866d0`). Otherwise `other`'s clusters
+/// are appended to this group's cluster array (`other`'s cluster count read
+/// as a signed byte, each cluster fetched by `0098de60`) and `other`'s
+/// cluster array is cleared; each member of `other` is added with
+/// `AddMember` and told its new group by virtual method 0x3fc, with its
+/// entry copied over (`fn_00985980`), or logged when it cannot be added;
+/// each target is added with `AddTarget` and its entry merged
+/// (`fn_00985520`), or logged. The music state of `other` is taken when it
+/// is not -1. Returns true.
+pub fn combat_group_merge_group(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    other: Ptr<CombatGroup>,
+) -> bool {
+    let other_targets = e.call(OTHER_TARGET_ARRAY, &args![other]).u32();
+    let mut index = 0;
+    while index < e.call(ARRAY_SIZE, &args![other_targets]).u32() {
+        let target = e
+            .call(TARGET_AT, &args![other_targets, index])
+            .ptr::<CombatTarget>();
+        let actor = e.get(target, CombatTarget::pActor);
+        if !combat_group_can_add_target(e, this, actor) {
+            return false;
+        }
+        index += 1;
+    }
+    let my_targets = this.byte_add(CombatGroup::TARGET_ARRAY);
+    let mut index = 0;
+    while index < e.call(ARRAY_SIZE, &args![my_targets]).u32() {
+        let target = e
+            .call(TARGET_AT, &args![my_targets, index])
+            .ptr::<CombatTarget>();
+        let actor = e.get(target, CombatTarget::pActor);
+        if !combat_group_can_add_target(e, other, actor) {
+            return false;
+        }
+        index += 1;
+    }
+    let mut index = 0u32;
+    while index < fn_009877c0(e, other) as u8 as i8 as i32 as u32 {
+        let cluster = e.call(CLUSTER_BY_INDEX, &args![other, index & 0xff]).u32();
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), cluster);
+            e.call(
+                POINTER_ARRAY_ADD,
+                &args![this.byte_add(CombatGroup::CLUSTER_ARRAY), slot],
+            );
+        });
+        index += 1;
+    }
+    fn_009877e0(e, other);
+    let other_members = e.call(OTHER_MEMBER_ARRAY, &args![other]).u32();
+    let mut index = 0;
+    while index < e.call(ARRAY_SIZE, &args![other_members]).u32() {
+        let member = e
+            .call(MEMBER_AT, &args![other_members, index])
+            .ptr::<CombatMember>();
+        let actor = e.get(member, CombatMember::pActor);
+        if combat_group_add_member(e, this, actor) {
+            e.vcall(actor.addr(), 0x3fc, &args![this]);
+            let mine = fn_009865f0(e, this, actor);
+            if !mine.is_null() {
+                fn_00985980(e, mine, member);
+            }
+        } else {
+            let name = e.vcall(actor.addr(), 0x130, &args![]).u32();
+            let form_id = e.call(FORM_ID, &args![actor]).u32();
+            e.call(LOG_MESSAGE, &args![MERGE_MEMBER_ERROR, form_id, name]);
+        }
+        index += 1;
+    }
+    let mut index = 0;
+    while index < e.call(ARRAY_SIZE, &args![other_targets]).u32() {
+        let target = e
+            .call(TARGET_AT, &args![other_targets, index])
+            .ptr::<CombatTarget>();
+        let actor = e.get(target, CombatTarget::pActor);
+        if combat_group_add_target(e, this, actor) {
+            let mine = fn_009865d0(e, this, actor);
+            if !mine.is_null() {
+                fn_00985520(e, mine, target);
+            }
+        } else {
+            let name = e.vcall(actor.addr(), 0x130, &args![]).u32();
+            let form_id = e.call(FORM_ID, &args![actor]).u32();
+            e.call(LOG_MESSAGE, &args![MERGE_TARGET_ERROR, form_id, name]);
+        }
+        index += 1;
+    }
+    let state = fn_00987800(e, other);
+    if state != -1 {
+        e.set(this, CombatGroup::cCombatMusicState, state);
+    }
+    true
+}
+
+// Translated from 009877c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: the size of `ClusterArray` (`0044ddc0`).
+pub fn fn_009877c0(e: &mut Engine, this: Ptr<CombatGroup>) -> u32 {
+    e.call(
+        ARRAY_SIZE,
+        &args![this.byte_add(CombatGroup::CLUSTER_ARRAY)],
+    )
+    .u32()
+}
+
+// Translated from 009877e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: calls `008454f0(ClusterArray, 1)`, the array's
+/// clear-and-release.
+pub fn fn_009877e0(e: &mut Engine, this: Ptr<CombatGroup>) {
+    e.call(
+        0x0084_54f0,
+        &args![this.byte_add(CombatGroup::CLUSTER_ARRAY), 1u32],
+    );
+}
+
+// Translated from 00987800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: `cCombatMusicState`.
+pub fn fn_00987800(e: &mut Engine, this: Ptr<CombatGroup>) -> i8 {
+    e.get(this, CombatGroup::cCombatMusicState)
+}
+
+// Translated from 00989010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSWorldLocation::SetLocation` (Xbox PDB): sets the three coordinates
+/// from the point at `point` and the space (`pSpace`, at +0x0c) to `space`.
+pub fn bgs_world_location_set_location(e: &mut Engine, this: Ptr, point: Ptr, space: u32) {
+    for word in 0..3 {
+        let value = e.mem.u32(point.addr() + 4 * word);
+        e.mem.set_u32(this.addr() + 4 * word, value);
+    }
+    e.mem.set_u32(this.addr() + 0x0c, space);
+}
+
+// Translated from 00989040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: the detection level of `target` as the detection call
+/// `009887b0` gives it with no actor of its own (argument 0); the level
+/// starts at -100 and the call's other outputs (a time stamp, two flags)
+/// are dropped.
+pub fn fn_00989040(e: &mut Engine, this: Ptr<CombatGroup>, target: Ptr) -> i32 {
+    // The game's locals: +0 the level, +4 the stamp, +8 / +9 the flags.
+    e.with_stack(0x10, |e, frame| {
+        let level = frame;
+        let stamp = frame.byte_add(4);
+        let first_flag = frame.byte_add(8);
+        let second_flag = frame.byte_add(9);
+        e.mem.set_i32(level.addr(), -100);
+        e.call(TIME_STAMP_ZERO, &args![stamp]);
+        e.mem.set_u8(first_flag.addr(), 0);
+        e.mem.set_u8(second_flag.addr(), 0);
+        e.call(
+            0x0098_87b0,
+            &args![this, 0u32, target, level, stamp, first_flag, second_flag],
+        );
+        e.mem.i32(level.addr())
+    })
+}
+
+// Translated from 00989090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: writes the actor's `fLastDetectedTimeStamp` into the
+/// time stamp at `result`, or `-FLT_MAX` (`CombatTimeStamp` setter) when the
+/// actor is not a target. Returns `result`.
+pub fn fn_00989090(e: &mut Engine, this: Ptr<CombatGroup>, result: Ptr, actor: Ptr) -> Ptr {
+    let target = fn_009865d0(e, this, actor);
+    if target.is_null() {
+        let lowest = -e.global::<f32>(MAX_FLOAT);
+        e.call(TIME_STAMP_SET, &args![result, lowest]);
+    } else {
+        let value = e
+            .mem
+            .u32(target.addr() + CombatTarget::fLastDetectedTimeStamp.off);
+        e.mem.set_u32(result.addr(), value);
+    }
+    result
+}
+
+// Translated from 009890e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: copies the actor's `LastDetectedLocation` to `out` when
+/// the actor is a target and the location's space (`0084e3a0`, the word at
+/// +0x0c) is not null.
+pub fn fn_009890e0(e: &mut Engine, this: Ptr<CombatGroup>, actor: Ptr, out: Ptr) -> bool {
+    let target = fn_009865d0(e, this, actor);
+    if target.is_null() {
+        return false;
+    }
+    let location = target.byte_add(CombatTarget::LAST_DETECTED_LOCATION);
+    if e.call(FORM_ID, &args![location]).u32() == 0 {
+        return false;
+    }
+    copy_location(e, out, location);
+    true
+}
+
+// Translated from 00989140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: for target number `index` (`fn_009871c0`), when `time` is
+/// later than its `fLastSeenTimeStamp` age (`00435e00`), copies its
+/// `LastSeenLocation` to `out` and returns true.
+pub fn fn_00989140(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    index: u32,
+    out: Ptr,
+    time: f32,
+) -> bool {
+    let target = fn_009871c0(e, this, index);
+    if target.is_null() {
+        return false;
+    }
+    let age = time_stamp_age(e, target.byte_add(CombatTarget::fLastSeenTimeStamp.off));
+    let later = time > age;
+    if !later {
+        return false;
+    }
+    copy_location(e, out, target.byte_add(CombatTarget::LAST_SEEN_LOCATION));
+    true
+}
+
+// Translated from 009891a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: the actor's target entry's `cMemberLOSCount`, or 0.
+pub fn fn_009891a0(e: &mut Engine, this: Ptr<CombatGroup>, actor: Ptr) -> u8 {
+    let target = fn_009865d0(e, this, actor);
+    if target.is_null() {
+        0
+    } else {
+        e.get(target, CombatTarget::cMemberLOSCount)
+    }
+}
+
+// Translated from 009891d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: with a group strategy set (`pGroupStrategy`), looks up
+/// `first` with `0097ae90` and `second` with `009611e0`; when the second
+/// answers non-null and is the strategy assignment of the member
+/// `first` (`fn_0098a310`), clears that assignment (`fn_0098a360`).
+pub fn fn_009891d0(e: &mut Engine, this: Ptr<CombatGroup>, first: Ptr, second: Ptr) {
+    if e.get(this, CombatGroup::pGroupStrategy).is_null() {
+        return;
+    }
+    let actor = e.call(0x0097_ae90, &args![first]).u32();
+    let wanted = e.call(0x0096_11e0, &args![second]).u32();
+    if wanted != 0 && fn_0098a310(e, this, Ptr::new(actor)) == wanted {
+        fn_0098a360(e, this, Ptr::new(actor), 0);
+    }
+}
+
+// Translated from 00989230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: records that the target `actor` just attacked a member:
+/// its `fLastAttackedMemberTimeStamp` becomes the game time now and its
+/// `LastAttackedMemberLocation` the actor's world location. Nothing for a
+/// null actor or a non-target.
+pub fn fn_00989230(e: &mut Engine, this: Ptr<CombatGroup>, actor: Ptr) {
+    if actor.is_null() {
+        return;
+    }
+    let target = fn_009865d0(e, this, actor);
+    if target.is_null() {
+        return;
+    }
+    // The game's locals: +0 a time stamp, +0x10 a world location.
+    e.with_stack(0x20, |e, frame| {
+        let now = e.call(GAME_TIME_NOW, &args![]).f32();
+        e.call(TIME_STAMP_SET, &args![frame, now]);
+        let stamp = e.mem.u32(frame.addr());
+        e.mem.set_u32(
+            target.addr() + CombatTarget::fLastAttackedMemberTimeStamp.off,
+            stamp,
+        );
+        let location = e
+            .call(GET_WORLD_LOCATION, &args![actor, frame.byte_add(0x10)])
+            .ptr();
+        copy_location(
+            e,
+            target.byte_add(CombatTarget::LAST_ATTACKED_MEMBER_LOCATION),
+            location,
+        );
+    });
+}
+
+/// The array of avoid nodes the three functions below fill: the caller's, or
+/// a new 0x18-byte one (`operator new` `00aa13e0`, built by `006e3850`).
+fn avoid_array_or_new(e: &mut Engine, array: Ptr) -> Ptr {
+    if !array.is_null() {
+        return array;
+    }
+    let block = e.call(OPERATOR_NEW, &args![0x18u32]).u32();
+    if block == 0 {
+        Ptr::NULL
+    } else {
+        e.call(AVOID_ARRAY_CONSTRUCT, &args![block]).ptr()
+    }
+}
+
+/// Builds a `PathingAvoidNode` (0x24 bytes, `006915d0`) on the stack and
+/// adds it to `array` (`00905450`).
+fn add_avoid_node(e: &mut Engine, array: Ptr, point: Ptr, first: f32, second: f32) {
+    e.with_stack(0x24, |e, node| {
+        e.call(AVOID_NODE_CONSTRUCT, &args![node, point, first, second]);
+        e.call(AVOID_ARRAY_ADD, &args![array, node]);
+    });
+}
+
+// Translated from 009892a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: adds an avoid node for every target (except `exclude`)
+/// lying inside a sphere around the middle of `actor`'s position
+/// (virtual method 0x1f4) and `point` (the half of their sum), whose
+/// squared radius is `(radius^2 + |point - middle|^2)` times the setting
+/// `011cf380` squared. Each node is placed at the target's position with
+/// the settings `011ce648` and `011cfcf8` as its two values. `array` is
+/// the avoid node array to fill, a new one when null; it is returned.
+/// (The compiler's exception frame is not translated.)
+pub fn fn_009892a0(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    actor: Ptr,
+    point: Ptr,
+    radius: f32,
+    array: Ptr,
+    exclude: Ptr,
+) -> Ptr {
+    // The game's locals: +0x00 the actor position plus `point` (then the
+    // middle at +0x0c), +0x18 the offset from the middle to `point`, +0x24
+    // the target position copy, +0x30 the offset from the middle to it.
+    e.with_stack(0x40, |e, frame| {
+        let sum = frame;
+        let middle = frame.byte_add(0x0c);
+        let offset = frame.byte_add(0x18);
+        let position = frame.byte_add(0x24);
+        let difference = frame.byte_add(0x30);
+        let actor_position = e.vcall(actor.addr(), 0x1f4, &args![]).u32();
+        let two: f32 = e.global(TWO_FLOAT);
+        let added = e.call(POINT_ADD, &args![actor_position, sum, point]).u32();
+        e.call(POINT_SCALE_DOWN, &args![added, middle, two]);
+        e.call(POINT_SUBTRACT, &args![point, offset, middle]);
+        let length = e.call(POINT_LENGTH_SQUARED, &args![offset]).f32();
+        let mut limit = (radius as f64 * radius as f64 + length as f64) as f32;
+        let setting_a = float_setting(e, 0x011c_f380);
+        let setting_b = float_setting(e, 0x011c_f380);
+        limit = (setting_a as f64 * setting_b as f64 * limit as f64) as f32;
+        let mut array = array;
+        let count = e.call(TARGET_COUNT, &args![this]).u32();
+        for index in 0..count {
+            let target_actor = e.call(TARGET_ACTOR_AT, &args![this, index]).u32();
+            if target_actor == exclude.addr() {
+                continue;
+            }
+            let found = e.vcall(target_actor, 0x1f4, &args![]).u32();
+            copy_point(e, position, found);
+            e.call(POINT_SUBTRACT, &args![middle, difference, position]);
+            let distance = e.call(POINT_LENGTH_SQUARED, &args![difference]).f32();
+            let inside = limit > distance;
+            if !inside {
+                continue;
+            }
+            array = avoid_array_or_new(e, array);
+            let second = float_setting(e, 0x011c_fcf8);
+            let first = float_setting(e, 0x011c_e648);
+            add_avoid_node(e, array, position, first, second);
+        }
+        array
+    })
+}
+
+// Translated from 00989490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: adds one avoid node for the group's bounding sphere:
+/// centre and squared extent from `fn_00989eb0` (the targets' box), the
+/// radius being the square root (`004579e0`) of the squared extent when that
+/// exceeds the square of 1024.0 (else 1024.0), and the second value the
+/// setting `011cfcf8` times the `double` 4.0. The three words before the
+/// array are not read (`_unused_1` .. `_unused_3`). `array` is filled, a new
+/// one when null; it is returned.
+pub fn fn_00989490(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    array: Ptr,
+) -> Ptr {
+    e.with_stack(0x10, |e, centre| {
+        e.call(POINT_NO_OP, &args![centre]);
+        let mut radius: f32 = e.global(SPHERE_MINIMUM_RADIUS);
+        let squared = fn_00989eb0(e, this, centre);
+        if squared as f64 > radius as f64 * radius as f64 {
+            radius = e.call(SQUARE_ROOT, &args![squared]).f32();
+        }
+        let array = avoid_array_or_new(e, array);
+        let setting = float_setting(e, 0x011c_fcf8);
+        let factor: f64 = e.global(FOUR_DOUBLE);
+        let second = (setting as f64 * factor) as f32;
+        add_avoid_node(e, array, centre, radius, second);
+        array
+    })
+}
+
+// Translated from 009895a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: adds an avoid node for every target whose world location
+/// lies within the setting `011cea50` of `actor`'s (squared distance
+/// compared with the setting squared), at that location, with the settings
+/// `011ce900` and `011ceb2c` as its values. `array` is filled, a new one
+/// when null; it is returned. (The exception frame is not translated.)
+pub fn fn_009895a0(e: &mut Engine, this: Ptr<CombatGroup>, actor: Ptr, array: Ptr) -> Ptr {
+    let mut array = array;
+    let count = e.call(TARGET_COUNT, &args![this]).u32();
+    let a = float_setting(e, 0x011c_ea50);
+    let b = float_setting(e, 0x011c_ea50);
+    let limit = (a as f64 * b as f64) as f32;
+    // The game's locals: +0 the actor's location, +0x10 a target's.
+    e.with_stack(0x20, |e, frame| {
+        let actor_location = frame;
+        let target_location = frame.byte_add(0x10);
+        e.call(GET_WORLD_LOCATION, &args![actor, actor_location]);
+        for index in 0..count {
+            let target_actor = e.call(TARGET_ACTOR_AT, &args![this, index]).u32();
+            e.call(GET_WORLD_LOCATION, &args![target_actor, target_location]);
+            let distance = e
+                .call(DISTANCE_SQUARED, &args![actor_location, target_location])
+                .f32();
+            let inside = limit > distance;
+            if !inside {
+                continue;
+            }
+            array = avoid_array_or_new(e, array);
+            let second = float_setting(e, 0x011c_eb2c);
+            let first = float_setting(e, 0x011c_e900);
+            let point = e.call(POINT_NO_OP, &args![target_location]).u32();
+            add_avoid_node(e, array, Ptr::new(point), first, second);
+        }
+    });
+    array
+}
+
+// Translated from 00989700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::FindTargetNearLocation` (Xbox PDB): the actor of the first
+/// target (in array order) whose world location is closer to `location`
+/// than `radius`, or null. With `only_recent` set, targets must first pass
+/// `fn_009897a0`.
+pub fn combat_group_find_target_near_location(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    location: Ptr,
+    radius: f32,
+    only_recent: bool,
+) -> Ptr {
+    let limit = (radius as f64 * radius as f64) as f32;
+    let count = e.call(TARGET_COUNT, &args![this]).u32();
+    for index in 0..count {
+        let target = fn_009871c0(e, this, index);
+        if only_recent && !fn_009897a0(e, target) {
+            continue;
+        }
+        let actor = e.get(target, CombatTarget::pActor);
+        let distance = e.with_stack(0x10, |e, found| {
+            e.call(GET_WORLD_LOCATION, &args![actor, found]);
+            e.call(DISTANCE_SQUARED, &args![location, found]).f32()
+        });
+        if limit > distance {
+            return actor;
+        }
+    }
+    Ptr::NULL
+}
+
+// Translated from 009897a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatTarget`: whether the setting `011ce9b4` is later than the age of
+/// `fLastDetectedTimeStamp`.
+pub fn fn_009897a0(e: &mut Engine, this: Ptr<CombatTarget>) -> bool {
+    let age = time_stamp_age(e, this.byte_add(CombatTarget::fLastDetectedTimeStamp.off));
+    float_setting(e, 0x011c_e9b4) > age
+}
+
+// Translated from 009897f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: the first member actor, other than `exclude`, whose world
+/// location is closer to `location` than `radius`; null when none.
+pub fn fn_009897f0(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    location: Ptr,
+    radius: f32,
+    exclude: Ptr,
+) -> Ptr {
+    let limit = (radius as f64 * radius as f64) as f32;
+    let count = e.call(MEMBER_COUNT, &args![this]).u32();
+    for index in 0..count {
+        let actor = e.call(MEMBER_ACTOR_AT, &args![this, index]).u32();
+        if actor == exclude.addr() {
+            continue;
+        }
+        let distance = e.with_stack(0x10, |e, found| {
+            e.call(GET_WORLD_LOCATION, &args![actor, found]);
+            e.call(DISTANCE_SQUARED, &args![location, found]).f32()
+        });
+        if limit > distance {
+            return Ptr::new(actor);
+        }
+    }
+    Ptr::NULL
+}
+
+// Translated from 00989880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: `fn_009897f0` around the world location of `actor`
+/// (with `actor` itself excluded): the first other member within `radius`.
+pub fn fn_00989880(e: &mut Engine, this: Ptr<CombatGroup>, actor: Ptr, radius: f32) -> Ptr {
+    e.with_stack(0x10, |e, location| {
+        let location = e.call(GET_WORLD_LOCATION, &args![actor, location]).ptr();
+        fn_009897f0(e, this, location, radius, actor)
+    })
+}
+
+// Translated from 009898b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: the member actor, other than `exclude`, whose world
+/// location is nearest to `location` and nearer than `max_distance` (no
+/// limit when it is `FLT_MAX`); null when none.
+pub fn fn_009898b0(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    location: Ptr,
+    exclude: Ptr,
+    max_distance: f32,
+) -> Ptr {
+    let maximum: f32 = e.global(MAX_FLOAT);
+    let mut best = if max_distance == maximum {
+        maximum
+    } else {
+        (max_distance as f64 * max_distance as f64) as f32
+    };
+    let mut nearest = Ptr::NULL;
+    let count = e.call(MEMBER_COUNT, &args![this]).u32();
+    for index in 0..count {
+        let actor = e.call(MEMBER_ACTOR_AT, &args![this, index]).u32();
+        if actor == exclude.addr() {
+            continue;
+        }
+        let distance = e.with_stack(0x10, |e, found| {
+            e.call(GET_WORLD_LOCATION, &args![actor, found]);
+            e.call(DISTANCE_SQUARED, &args![location, found]).f32()
+        });
+        if best > distance {
+            best = distance;
+            nearest = Ptr::new(actor);
+        }
+    }
+    nearest
+}
+
+// Translated from 00989970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: `fn_009898b0` from the world location of `actor`, with
+/// `actor` excluded: the member nearest to it within `radius`.
+pub fn fn_00989970(e: &mut Engine, this: Ptr<CombatGroup>, actor: Ptr, radius: f32) -> Ptr {
+    e.with_stack(0x10, |e, location| {
+        let location = e.call(GET_WORLD_LOCATION, &args![actor, location]).ptr();
+        fn_009898b0(e, this, location, actor, radius)
+    })
+}
+
+// Translated from 009899a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::CheckMemberTargetIntersection` (Xbox PDB): whether the
+/// members and the targets lie on opposite sides of the group.
+/// Nothing is checked (false) when either side is empty or both have one
+/// actor. Otherwise the centres of the members (`M`) and of the targets
+/// (`T`) and of both together (`A`) are taken from the actors' positions
+/// (virtual method 0x1f4); `d = T - M` is the direction, and the point
+/// `P = M + unit(d) * f(dot(A - M, d))` (`f` = `004579e0`) is found. The
+/// members and targets that lie behind `P` along `M - P` (negative dot
+/// product) are counted; the answer is true when those fractions are both
+/// above the `double` at `01026998` (0.33) or both below the one at
+/// `01051680` (0.67).
+pub fn combat_group_check_member_target_intersection(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+) -> bool {
+    let member_count = e.call(MEMBER_COUNT, &args![this]).u32();
+    let target_count = e.call(TARGET_COUNT, &args![this]).u32();
+    if member_count == 0 || target_count == 0 || (member_count == 1 && target_count == 1) {
+        return false;
+    }
+    let member_positions = e.mem.alloc(12 * member_count);
+    let target_positions = e.mem.alloc(12 * target_count);
+    // The game's NiPoint3 locals, in one block of 0x60 bytes: +0x00 the
+    // sum (then centre) of the members, +0x0c of the targets, +0x18 of both,
+    // +0x24 the direction, +0x30 the offset from M to A, +0x3c the scaled
+    // direction, +0x48 the point P, +0x54 M - P, +0x60 a temporary.
+    let frame = e.mem.alloc(0x6c);
+    let member_sum: Ptr = Ptr::new(frame);
+    let target_sum: Ptr = Ptr::new(frame + 0x0c);
+    let total: Ptr = Ptr::new(frame + 0x18);
+    let direction: Ptr = Ptr::new(frame + 0x24);
+    let to_all: Ptr = Ptr::new(frame + 0x30);
+    let scaled: Ptr = Ptr::new(frame + 0x3c);
+    let behind_point: Ptr = Ptr::new(frame + 0x48);
+    let reference: Ptr = Ptr::new(frame + 0x54);
+    let temporary: Ptr = Ptr::new(frame + 0x60);
+    for sum in [member_sum, target_sum] {
+        for word in 0..3 {
+            let value = e.mem.u32(ZERO_POINT + 4 * word);
+            e.mem.set_u32(sum.addr() + 4 * word, value);
+        }
+    }
+    for index in 0..member_count {
+        let actor = e.call(MEMBER_ACTOR_AT, &args![this, index]).u32();
+        let found = e.vcall(actor, 0x1f4, &args![]).u32();
+        let slot = Ptr::new(member_positions + 12 * index);
+        copy_point(e, slot, found);
+        e.call(POINT_ACCUMULATE, &args![member_sum, slot]);
+    }
+    for index in 0..target_count {
+        let actor = e.call(TARGET_ACTOR_AT, &args![this, index]).u32();
+        let found = e.vcall(actor, 0x1f4, &args![]).u32();
+        let slot = Ptr::new(target_positions + 12 * index);
+        copy_point(e, slot, found);
+        e.call(POINT_ACCUMULATE, &args![target_sum, slot]);
+    }
+    e.call(POINT_ADD, &args![member_sum, total, target_sum]);
+    e.call(
+        POINT_DIVIDE_IN_PLACE,
+        &args![member_sum, member_count as f32],
+    );
+    e.call(
+        POINT_DIVIDE_IN_PLACE,
+        &args![target_sum, target_count as f32],
+    );
+    e.call(
+        POINT_DIVIDE_IN_PLACE,
+        &args![total, member_count.wrapping_add(target_count) as f32],
+    );
+    e.call(POINT_SUBTRACT, &args![target_sum, direction, member_sum]);
+    e.call(POINT_SUBTRACT, &args![total, to_all, member_sum]);
+    let along = e.call(POINT_DOT, &args![to_all, direction]).f32();
+    let distance = e.call(SQUARE_ROOT, &args![along]).f32();
+    e.call(POINT_UNITIZE_GET_LENGTH, &args![direction]);
+    let scaled = e
+        .call(POINT_SCALE, &args![direction, scaled, distance])
+        .u32();
+    e.call(POINT_ADD, &args![member_sum, behind_point, scaled]);
+    e.call(POINT_SUBTRACT, &args![member_sum, reference, behind_point]);
+    let mut members_behind = 0u32;
+    for index in 0..member_count {
+        e.call(
+            POINT_SUBTRACT,
+            &args![member_positions + 12 * index, temporary, behind_point],
+        );
+        let dot = e.call(POINT_DOT, &args![temporary, reference]).f32();
+        if (dot as f64) < e.global::<f64>(ZERO_DOUBLE) {
+            members_behind += 1;
+        }
+    }
+    let mut targets_behind = 0u32;
+    for index in 0..target_count {
+        e.call(
+            POINT_SUBTRACT,
+            &args![target_positions + 12 * index, temporary, behind_point],
+        );
+        let dot = e.call(POINT_DOT, &args![temporary, reference]).f32();
+        if (dot as f64) < e.global::<f64>(ZERO_DOUBLE) {
+            targets_behind += 1;
+        }
+    }
+    let member_fraction = (members_behind as f64 / member_count as f64) as f32 as f64;
+    let target_fraction = (targets_behind as f64 / target_count as f64) as f32 as f64;
+    let low: f64 = e.global(FRACTION_LOW);
+    let high: f64 = e.global(FRACTION_HIGH);
+    e.mem.free(frame);
+    e.mem.free(target_positions);
+    e.mem.free(member_positions);
+    (member_fraction > low && target_fraction > low)
+        || (member_fraction < high && target_fraction < high)
+}
+
+/// Builds the box of the actors of `count_at` / `actor_at` (the group's
+/// members or targets) in `corners` (eight `NiPoint3`s): unless `keep` is
+/// set, corner `c`'s component `a` starts at `-FLT_MAX` when the table at
+/// `0108d57c` (3 bytes per corner) holds a non-zero byte and `FLT_MAX`
+/// otherwise; then every actor position (virtual method 0x1f4) raises (table
+/// non-zero) or lowers (zero) the components.
+fn expand_corners(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    corners: Ptr,
+    keep: bool,
+    count_at: u32,
+    actor_at: u32,
+) {
+    if !keep {
+        for corner in 0..8u32 {
+            for axis in 0..3u32 {
+                let flag = e.mem.u8(CORNER_TABLE + corner * 3 + axis);
+                let maximum: f32 = e.global(MAX_FLOAT);
+                let start = if flag != 0 { -maximum } else { maximum };
+                let slot = e
+                    .call(POINT_COMPONENT, &args![corners.addr() + corner * 12, axis])
+                    .u32();
+                e.mem.set_f32(slot, start);
+            }
+        }
+    }
+    let count = e.call(count_at, &args![this]).u32();
+    let position = e.mem.alloc(12);
+    for index in 0..count {
+        let actor = e.call(actor_at, &args![this, index]).u32();
+        let found = e.vcall(actor, 0x1f4, &args![]).u32();
+        copy_point(e, Ptr::new(position), found);
+        for corner in 0..8u32 {
+            for axis in 0..3u32 {
+                let own = e.call(POINT_COMPONENT, &args![position, axis]).u32();
+                let value = e.mem.f32(own);
+                let flag = e.mem.u8(CORNER_TABLE + corner * 3 + axis);
+                let slot = e
+                    .call(POINT_COMPONENT, &args![corners.addr() + corner * 12, axis])
+                    .u32();
+                let current = e.mem.f32(slot);
+                let replace = if flag != 0 {
+                    current < value
+                } else {
+                    current > value
+                };
+                if replace {
+                    let slot = e
+                        .call(POINT_COMPONENT, &args![corners.addr() + corner * 12, axis])
+                        .u32();
+                    e.mem.set_f32(slot, value);
+                }
+            }
+        }
+    }
+    e.mem.free(position);
+}
+
+/// The centre and the squared diagonal of the box `fill` builds: eight
+/// corner `NiPoint3`s are constructed (`00401050` over `006815c0`), filled,
+/// and the sum of the first (all maxima) and last (all minima) corners
+/// halved is written to `out`; the result is the squared length of their
+/// difference (`004a7290`).
+fn box_centre(e: &mut Engine, out: Ptr, fill: impl FnOnce(&mut Engine, Ptr)) -> f32 {
+    // The game's locals: eight corners (0x60 bytes), then the sum, the
+    // halved sum and the difference.
+    e.with_stack(0x90, |e, frame| {
+        let last_corner = frame.byte_add(0x54);
+        let sum = frame.byte_add(0x60);
+        let halved = frame.byte_add(0x6c);
+        let difference = frame.byte_add(0x78);
+        e.call(
+            VECTOR_CONSTRUCTOR,
+            &args![frame, 0x0cu32, 8u32, POINT_NO_OP],
+        );
+        fill(e, frame);
+        let two: f32 = e.global(TWO_FLOAT);
+        let added = e.call(POINT_ADD, &args![frame, sum, last_corner]).u32();
+        let centre = e.call(POINT_SCALE_DOWN, &args![added, halved, two]).u32();
+        copy_point(e, out, centre);
+        e.call(POINT_SUBTRACT, &args![frame, difference, last_corner]);
+        e.call(POINT_LENGTH_SQUARED, &args![difference]).f32()
+    })
+}
+
+// Translated from 00989e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: the centre (written to `out`) of the box around the
+/// members' positions, and its squared diagonal (`fn_00989f40`).
+pub fn fn_00989e20(e: &mut Engine, this: Ptr<CombatGroup>, out: Ptr) -> f32 {
+    box_centre(e, out, |e, corners| fn_00989f40(e, this, corners, false))
+}
+
+// Translated from 00989eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: the centre (written to `out`) of the box around the
+/// targets' positions, and its squared diagonal (`fn_0098a110`).
+pub fn fn_00989eb0(e: &mut Engine, this: Ptr<CombatGroup>, out: Ptr) -> f32 {
+    box_centre(e, out, |e, corners| fn_0098a110(e, this, corners, false))
+}
+
+// Translated from 00989f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: extends the eight `corners` (`NiPoint3`s) to contain the
+/// members' positions (see `expand_corners`); `keep` leaves the corners'
+/// current values as the starting point.
+pub fn fn_00989f40(e: &mut Engine, this: Ptr<CombatGroup>, corners: Ptr, keep: bool) {
+    expand_corners(e, this, corners, keep, MEMBER_COUNT, MEMBER_ACTOR_AT);
+}
+
+// Translated from 0098a110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: the same for the targets' positions.
+pub fn fn_0098a110(e: &mut Engine, this: Ptr<CombatGroup>, corners: Ptr, keep: bool) {
+    expand_corners(e, this, corners, keep, TARGET_COUNT, TARGET_ACTOR_AT);
+}
+
+// Translated from 0098a2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: whether the group has fleeing members and no
+/// non-fleeing one.
+pub fn fn_0098a2e0(e: &mut Engine, this: Ptr<CombatGroup>) -> bool {
+    e.get(this, CombatGroup::iNonFleeingMemberCount) == 0
+        && e.get(this, CombatGroup::iFleeingMemberCount) != 0
+}
+
+// Translated from 0098a310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: the actor's member entry's `iGroupStrategyAssignment`, or 0.
+pub fn fn_0098a310(e: &mut Engine, this: Ptr<CombatGroup>, actor: Ptr) -> u32 {
+    let member = fn_009865f0(e, this, actor);
+    if member.is_null() {
+        0
+    } else {
+        e.get(member, CombatMember::iGroupStrategyAssignment)
+    }
+}
+
+// Translated from 0098a340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: `iGroupStrategyAssignment` of member number `index`.
+pub fn fn_0098a340(e: &mut Engine, this: Ptr<CombatGroup>, index: u32) -> u32 {
+    let member = e
+        .call(
+            MEMBER_AT,
+            &args![this.byte_add(CombatGroup::MEMBER_ARRAY), index],
+        )
+        .ptr::<CombatMember>();
+    e.get(member, CombatMember::iGroupStrategyAssignment)
+}
+
+// Translated from 0098a360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: sets the actor's member entry's
+/// `iGroupStrategyAssignment`, when it has an entry.
+pub fn fn_0098a360(e: &mut Engine, this: Ptr<CombatGroup>, actor: Ptr, assignment: u32) {
+    let member = fn_009865f0(e, this, actor);
+    if !member.is_null() {
+        e.set(member, CombatMember::iGroupStrategyAssignment, assignment);
+    }
+}
+
+// Translated from 0098a390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::SetMemberGroupStrategyAssignment` (Xbox PDB): sets
+/// `iGroupStrategyAssignment` of member number `index`.
+pub fn combat_group_set_member_group_strategy_assignment(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    index: u32,
+    assignment: u32,
+) {
+    let member = e
+        .call(
+            MEMBER_AT,
+            &args![this.byte_add(CombatGroup::MEMBER_ARRAY), index],
+        )
+        .ptr::<CombatMember>();
+    e.set(member, CombatMember::iGroupStrategyAssignment, assignment);
+}
+
+// Translated from 0098a3c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: clears every member's `iGroupStrategyAssignment`.
+pub fn fn_0098a3c0(e: &mut Engine, this: Ptr<CombatGroup>) {
+    let count = e.call(MEMBER_COUNT, &args![this]).u32();
+    for index in 0..count {
+        let member = e
+            .call(
+                MEMBER_AT,
+                &args![this.byte_add(CombatGroup::MEMBER_ARRAY), index],
+            )
+            .ptr::<CombatMember>();
+        e.set(member, CombatMember::iGroupStrategyAssignment, 0);
+    }
+}
+
+// Translated from 0098a410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::FindMemberWithStrategyAssignment` (Xbox PDB): the actor of
+/// the first member with `iGroupStrategyAssignment` equal to `assignment`
+/// (`fn_0098a340`), or null.
+pub fn combat_group_find_member_with_strategy_assignment(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    assignment: u32,
+) -> Ptr {
+    let count = e.call(MEMBER_COUNT, &args![this]).u32();
+    for index in 0..count {
+        if fn_0098a340(e, this, index) == assignment {
+            return e.call(MEMBER_ACTOR_AT, &args![this, index]).ptr();
+        }
+    }
+    Ptr::NULL
+}
+
+// Translated from 0098a470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::CheckGroupStrategyChosenTimeStamp` (Xbox PDB): true when
+/// no strategy has been chosen yet (`fLastGroupStrategyChosenTimeStamp` is
+/// zero) or the last chosen index differs from `index`; otherwise whether
+/// `limit` is below the age of that time stamp.
+pub fn combat_group_check_group_strategy_chosen_time_stamp(
+    e: &mut Engine,
+    this: Ptr<CombatGroup>,
+    index: u32,
+    limit: f32,
+) -> bool {
+    let stamp = this.byte_add(CombatGroup::fLastGroupStrategyChosenTimeStamp.off);
+    let value = time_stamp(e, stamp);
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    if value as f64 == zero {
+        return true;
+    }
+    if e.get(this, CombatGroup::iLastGroupStrategyChosenIndex) != index {
+        return true;
+    }
+    let age = time_stamp_age(e, stamp);
+    limit < age
+}
+
+// Translated from 0098a4d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup`: the members' average of `a / b`, where `a` is the `float`
+/// returned by virtual method 0xc and `b` the integer returned by virtual
+/// method 0 of the object embedded in each member actor at +0xa4 (both
+/// called with argument 0x10; the object looks like an actor value owner).
+/// With no members the quotient `0 / 0` is returned.
+pub fn fn_0098a4d0(e: &mut Engine, this: Ptr<CombatGroup>) -> f32 {
+    let mut sum = 0.0f32;
+    let count = e.call(MEMBER_COUNT, &args![this]).u32();
+    for index in 0..count {
+        let actor = e.call(MEMBER_ACTOR_AT, &args![this, index]).u32();
+        let owner = actor + 0xa4;
+        let value = e.vcall(owner, 0x0c, &args![0x10u32]).f32();
+        let divisor = e.vcall(owner, 0x00, &args![0x10u32]).i32();
+        sum = (value as f64 / divisor as f64 + sum as f64) as f32;
+    }
+    (sum as f64 / count as f64) as f32
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1672,6 +2820,88 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00986bd0, fn_00986bd0(Ptr<CombatGroup>)),
         entry!(0x00986c40, fn_00986c40(Ptr<CombatGroup>) -> bool),
         entry!(0x00986c60, fn_00986c60(Ptr<CombatGroup>, Ptr) -> Ptr),
+        entry!(
+            0x009871c0,
+            fn_009871c0(Ptr<CombatGroup>, u32) -> Ptr<CombatTarget>
+        ),
+        entry!(0x009871e0, fn_009871e0(Ptr<CombatTarget>) -> bool),
+        entry!(
+            0x00987220,
+            fn_00987220(Ptr<CombatGroup>, Ptr<CombatTarget>) -> bool
+        ),
+        entry!(
+            0x009874b0,
+            combat_group_increment_attacker_count(Ptr<CombatGroup>, Ptr)
+        ),
+        entry!(0x009874f0, fn_009874f0(Ptr<CombatGroup>, Ptr)),
+        entry!(
+            0x00987530,
+            combat_group_merge_group(Ptr<CombatGroup>, Ptr<CombatGroup>) -> bool
+        ),
+        entry!(0x009877c0, fn_009877c0(Ptr<CombatGroup>) -> u32),
+        entry!(0x009877e0, fn_009877e0(Ptr<CombatGroup>)),
+        entry!(0x00987800, fn_00987800(Ptr<CombatGroup>) -> i8),
+        entry!(0x00989010, bgs_world_location_set_location(Ptr, Ptr, u32)),
+        entry!(0x00989040, fn_00989040(Ptr<CombatGroup>, Ptr) -> i32),
+        entry!(0x00989090, fn_00989090(Ptr<CombatGroup>, Ptr, Ptr) -> Ptr),
+        entry!(0x009890e0, fn_009890e0(Ptr<CombatGroup>, Ptr, Ptr) -> bool),
+        entry!(
+            0x00989140,
+            fn_00989140(Ptr<CombatGroup>, u32, Ptr, f32) -> bool
+        ),
+        entry!(0x009891a0, fn_009891a0(Ptr<CombatGroup>, Ptr) -> u8),
+        entry!(0x009891d0, fn_009891d0(Ptr<CombatGroup>, Ptr, Ptr)),
+        entry!(0x00989230, fn_00989230(Ptr<CombatGroup>, Ptr)),
+        entry!(
+            0x009892a0,
+            fn_009892a0(Ptr<CombatGroup>, Ptr, Ptr, f32, Ptr, Ptr) -> Ptr
+        ),
+        entry!(
+            0x00989490,
+            fn_00989490(Ptr<CombatGroup>, u32, u32, u32, Ptr) -> Ptr
+        ),
+        entry!(0x009895a0, fn_009895a0(Ptr<CombatGroup>, Ptr, Ptr) -> Ptr),
+        entry!(
+            0x00989700,
+            combat_group_find_target_near_location(Ptr<CombatGroup>, Ptr, f32, bool) -> Ptr
+        ),
+        entry!(0x009897a0, fn_009897a0(Ptr<CombatTarget>) -> bool),
+        entry!(
+            0x009897f0,
+            fn_009897f0(Ptr<CombatGroup>, Ptr, f32, Ptr) -> Ptr
+        ),
+        entry!(0x00989880, fn_00989880(Ptr<CombatGroup>, Ptr, f32) -> Ptr),
+        entry!(
+            0x009898b0,
+            fn_009898b0(Ptr<CombatGroup>, Ptr, Ptr, f32) -> Ptr
+        ),
+        entry!(0x00989970, fn_00989970(Ptr<CombatGroup>, Ptr, f32) -> Ptr),
+        entry!(
+            0x009899a0,
+            combat_group_check_member_target_intersection(Ptr<CombatGroup>) -> bool
+        ),
+        entry!(0x00989e20, fn_00989e20(Ptr<CombatGroup>, Ptr) -> f32),
+        entry!(0x00989eb0, fn_00989eb0(Ptr<CombatGroup>, Ptr) -> f32),
+        entry!(0x00989f40, fn_00989f40(Ptr<CombatGroup>, Ptr, bool)),
+        entry!(0x0098a110, fn_0098a110(Ptr<CombatGroup>, Ptr, bool)),
+        entry!(0x0098a2e0, fn_0098a2e0(Ptr<CombatGroup>) -> bool),
+        entry!(0x0098a310, fn_0098a310(Ptr<CombatGroup>, Ptr) -> u32),
+        entry!(0x0098a340, fn_0098a340(Ptr<CombatGroup>, u32) -> u32),
+        entry!(0x0098a360, fn_0098a360(Ptr<CombatGroup>, Ptr, u32)),
+        entry!(
+            0x0098a390,
+            combat_group_set_member_group_strategy_assignment(Ptr<CombatGroup>, u32, u32)
+        ),
+        entry!(0x0098a3c0, fn_0098a3c0(Ptr<CombatGroup>)),
+        entry!(
+            0x0098a410,
+            combat_group_find_member_with_strategy_assignment(Ptr<CombatGroup>, u32) -> Ptr
+        ),
+        entry!(
+            0x0098a470,
+            combat_group_check_group_strategy_chosen_time_stamp(Ptr<CombatGroup>, u32, f32) -> bool
+        ),
+        entry!(0x0098a4d0, fn_0098a4d0(Ptr<CombatGroup>) -> f32),
     ]
 }
 
@@ -1705,6 +2935,8 @@ mod tests {
             0x0101_f000,
             0x0102_0000,
             0x0102_3000,
+            0x0102_6000,
+            0x0105_1000,
             0x0103_2000,
             0x0108_d000,
             0x011a_4000,
@@ -1769,7 +3001,7 @@ mod tests {
         e.register(LOG_MESSAGE, |_, _| Ret::default());
 
         let mut slots = vec![0u32; 0x120];
-        for slot in [0x130u32, 0x1d0, 0x1f4, 0x22c, 0x230, 0x3fc, 0x428] {
+        for slot in [0x130u32, 0x1d0, 0x1f4, 0x22c, 0x230, 0x2e8, 0x3fc, 0x428] {
             slots[(slot / 4) as usize] = fake(slot);
         }
         e.put_vtable(ACTOR_VTABLE, &slots);
@@ -3253,5 +4485,888 @@ mod tests {
         s.e.mem.set_u8(s.process + 0x100, 1);
         assert_eq!(choose(&mut s), s.targets[0]);
         assert_eq!(calls(&s.e, 0x0097_ee90).len(), 2);
+    }
+
+    // ---- tests of 009871c0 .. 0098a4d0 ----
+
+    fn place(e: &mut Engine, actor: Ptr, x: f32, y: f32, z: f32) {
+        for (i, v) in [x, y, z].into_iter().enumerate() {
+            e.mem.set_f32(actor.addr() + 0x40 + 4 * i as u32, v);
+        }
+        e.mem.set_u32(actor.addr() + 0x4c, 0x77);
+    }
+
+    fn point(e: &mut Engine, x: f32, y: f32, z: f32) -> Ptr {
+        let p = e.mem.alloc(16);
+        for (i, v) in [x, y, z].into_iter().enumerate() {
+            e.mem.set_f32(p + 4 * i as u32, v);
+        }
+        Ptr::new(p)
+    }
+
+    /// An `array_engine` whose world locations are the actors' position
+    /// slot (+0x40, four words), with squared distances over three words,
+    /// real `NiPoint3` arithmetic, and the constants and tables of the
+    /// geometry functions.
+    fn geometry_engine() -> Engine {
+        let mut e = array_engine();
+        e.register(GET_WORLD_LOCATION, |e, a| {
+            for word in 0..4 {
+                let value = e.mem.u32(a[0] + 0x40 + 4 * word);
+                e.mem.set_u32(a[1] + 4 * word, value);
+            }
+            a[1].into_ret()
+        });
+        e.register(DISTANCE_SQUARED, |e, a| {
+            let mut sum = 0.0f32;
+            for word in 0..3 {
+                let d = e.mem.f32(a[0] + 4 * word) - e.mem.f32(a[1] + 4 * word);
+                sum += d * d;
+            }
+            sum.into_ret()
+        });
+        e.register(POINT_COMPONENT, |_, a| (a[0] + 4 * a[1]).into_ret());
+        e.register(POINT_ADD, |e, a| {
+            for i in 0..3 {
+                let v = e.mem.f32(a[0] + 4 * i) + e.mem.f32(a[2] + 4 * i);
+                e.mem.set_f32(a[1] + 4 * i, v);
+            }
+            a[1].into_ret()
+        });
+        e.register(POINT_SUBTRACT, |e, a| {
+            for i in 0..3 {
+                let v = e.mem.f32(a[0] + 4 * i) - e.mem.f32(a[2] + 4 * i);
+                e.mem.set_f32(a[1] + 4 * i, v);
+            }
+            a[1].into_ret()
+        });
+        e.register(POINT_SCALE_DOWN, |e, a| {
+            let inverse = 1.0 / f32::from_bits(a[2]);
+            for i in 0..3 {
+                let v = e.mem.f32(a[0] + 4 * i) * inverse;
+                e.mem.set_f32(a[1] + 4 * i, v);
+            }
+            a[1].into_ret()
+        });
+        e.register(POINT_DIVIDE_IN_PLACE, |e, a| {
+            let inverse = 1.0 / f32::from_bits(a[1]);
+            for i in 0..3 {
+                let v = e.mem.f32(a[0] + 4 * i) * inverse;
+                e.mem.set_f32(a[0] + 4 * i, v);
+            }
+            a[0].into_ret()
+        });
+        e.register(POINT_SCALE, |e, a| {
+            let factor = f32::from_bits(a[2]);
+            for i in 0..3 {
+                let v = e.mem.f32(a[0] + 4 * i) * factor;
+                e.mem.set_f32(a[1] + 4 * i, v);
+            }
+            a[1].into_ret()
+        });
+        e.register(POINT_ACCUMULATE, |e, a| {
+            for i in 0..3 {
+                let v = e.mem.f32(a[0] + 4 * i) + e.mem.f32(a[1] + 4 * i);
+                e.mem.set_f32(a[0] + 4 * i, v);
+            }
+            a[0].into_ret()
+        });
+        e.register(POINT_DOT, |e, a| {
+            let mut sum = 0.0f32;
+            for i in 0..3 {
+                sum += e.mem.f32(a[0] + 4 * i) * e.mem.f32(a[1] + 4 * i);
+            }
+            sum.into_ret()
+        });
+        e.register(POINT_LENGTH_SQUARED, |e, a| {
+            let mut sum = 0.0f32;
+            for i in 0..3 {
+                sum += e.mem.f32(a[0] + 4 * i) * e.mem.f32(a[0] + 4 * i);
+            }
+            sum.into_ret()
+        });
+        e.register(POINT_UNITIZE_GET_LENGTH, |e, a| {
+            let mut sum = 0.0f32;
+            for i in 0..3 {
+                sum += e.mem.f32(a[0] + 4 * i) * e.mem.f32(a[0] + 4 * i);
+            }
+            let length = sum.sqrt();
+            for i in 0..3 {
+                let v = e.mem.f32(a[0] + 4 * i) / length;
+                e.mem.set_f32(a[0] + 4 * i, v);
+            }
+            length.into_ret()
+        });
+        e.register(POINT_NO_OP, |_, a| a[0].into_ret());
+        e.register(SQUARE_ROOT, |_, a| f32::from_bits(a[0]).sqrt().into_ret());
+        e.register(VECTOR_CONSTRUCTOR, |_, _| Ret::default());
+        e.register(SETTING_INT_VALUE, |_, a| a[0].into_ret());
+        e.set_global(TWO_FLOAT, 2.0f32);
+        e.set_global(SPHERE_MINIMUM_RADIUS, 1024.0f32);
+        e.set_global(FOUR_DOUBLE, 4.0f64);
+        e.set_global(FRACTION_LOW, 0.33f32 as f64);
+        e.set_global(FRACTION_HIGH, 0.67f32 as f64);
+        e.mem.write(
+            CORNER_TABLE,
+            &[
+                1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0,
+            ],
+        );
+        e
+    }
+
+    type Nodes = std::rc::Rc<std::cell::RefCell<Vec<([f32; 3], f32, f32)>>>;
+
+    /// Doubles for the avoid node classes; the returned list collects
+    /// (point, first value, second value) of every node built.
+    fn avoid_nodes(e: &mut Engine) -> Nodes {
+        let nodes: Nodes = Default::default();
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(AVOID_ARRAY_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], 0xa11a);
+            a[0].into_ret()
+        });
+        let sink = nodes.clone();
+        e.register_double(AVOID_NODE_CONSTRUCT, move |e, a| {
+            sink.borrow_mut().push((
+                [e.mem.f32(a[1]), e.mem.f32(a[1] + 4), e.mem.f32(a[1] + 8)],
+                f32::from_bits(a[2]),
+                f32::from_bits(a[3]),
+            ));
+            a[0].into_ret()
+        });
+        e.register(AVOID_ARRAY_ADD, |_, _| 0u32.into_ret());
+        nodes
+    }
+
+    #[test]
+    fn target_by_index_is_the_array_element() {
+        let mut e = engine();
+        let (a, b) = (actor(&mut e, 1), actor(&mut e, 2));
+        let group = group_with(&mut e, &[a, b], &[]);
+        assert_eq!(fn_009871c0(&mut e, group, 1), target_entry(&e, group, 1));
+    }
+
+    #[test]
+    fn detection_event_stamp_is_zero_test() {
+        let mut e = engine();
+        let target = e.new_object::<CombatTarget>();
+        assert!(fn_009871e0(&mut e, target));
+        e.set(target, CombatTarget::fDetectionEventTimeStamp, 0.5);
+        assert!(!fn_009871e0(&mut e, target));
+    }
+
+    /// Group with one target and the stamps all fresh (age 0), the settings
+    /// the chain of `fn_00987220` compares with at 1000.
+    fn drop_scene(e: &mut Engine) -> (Ptr<CombatGroup>, Ptr<CombatTarget>, Ptr) {
+        let who = actor(e, 5);
+        let group = group_with(e, &[who], &[]);
+        let target = target_entry(e, group, 0);
+        fresh_stamps(e, group, target);
+        for setting in [
+            0x011c_e290u32,
+            0x011c_e750,
+            0x011c_e744,
+            0x011c_f368,
+            0x011c_f3b4,
+            0x011c_f0a4,
+        ] {
+            e.set_global(setting, 1000.0f32);
+        }
+        e.register(ACTOR_TEST_00437BD0, |e, a| e.mem.u8(a[0] + 0x39).into_ret());
+        e.register(fake(0x2e8), |e, a| e.mem.u8(a[0] + 0x36).into_ret());
+        (group, target, who)
+    }
+
+    /// All the time stamps `fn_00987220` reads are the game time now.
+    fn fresh_stamps(e: &mut Engine, group: Ptr<CombatGroup>, target: Ptr<CombatTarget>) {
+        for off in [0x4cu32, 0x50, 0x54, 0x58, 0x5c, 0x60] {
+            e.mem.set_f32(target.addr() + off, NOW);
+        }
+        e.mem.set_f32(group.addr() + 0xe8, NOW);
+    }
+
+    #[test]
+    fn drop_chain_ends_with_the_actor_virtuals() {
+        let mut e = geometry_engine();
+        let (group, target, who) = drop_scene(&mut e);
+        for (checks, second, expected) in [(0, 0, false), (1, 0, true), (1, 1, false)] {
+            e.mem.set_u8(who.addr() + 0x34, checks);
+            e.mem.set_u8(who.addr() + 0x36, second);
+            assert_eq!(fn_00987220(&mut e, group, target), expected);
+        }
+        // The actor property alone answers true.
+        e.mem.set_u8(who.addr() + 0x34, 0);
+        e.mem.set_u8(who.addr() + 0x39, 1);
+        assert!(fn_00987220(&mut e, group, target));
+    }
+
+    #[test]
+    fn drop_chain_fleeing_group_and_old_detection() {
+        let mut e = geometry_engine();
+        let (group, target, who) = drop_scene(&mut e);
+        e.set(group, CombatGroup::iFleeingMemberCount, 2);
+        assert!(!fn_00987220(&mut e, group, target));
+        // Detected 10 seconds ago, limit 5: dropped at once.
+        e.mem.set_f32(target.addr() + 0x50, NOW - 10.0);
+        e.set_global(0x011c_e290, 5.0f32);
+        assert!(fn_00987220(&mut e, group, target));
+        // Limit 50 not reached; the second limit (1) is, and no member is
+        // near (no members): dropped.
+        e.set_global(0x011c_e290, 50.0f32);
+        e.set_global(0x011c_e750, 1.0f32);
+        e.set_global(0x011c_e38c, 10.0f32);
+        assert!(fn_00987220(&mut e, group, target));
+        // A member within the radius keeps the target.
+        let near = actor(&mut e, 6);
+        place(&mut e, near, 1.0, 0.0, 0.0);
+        place(&mut e, who, 0.0, 0.0, 0.0);
+        let group = group_with(&mut e, &[who], &[near]);
+        let target = target_entry(&e, group, 0);
+        fresh_stamps(&mut e, group, target);
+        e.mem.set_f32(target.addr() + 0x50, NOW - 10.0);
+        e.set(group, CombatGroup::iFleeingMemberCount, 2);
+        assert!(!fn_00987220(&mut e, group, target));
+    }
+
+    #[test]
+    fn drop_chain_old_notice() {
+        let mut e = geometry_engine();
+        let (group, target, who) = drop_scene(&mut e);
+        e.mem.set_f32(target.addr() + 0x58, NOW - 10.0);
+        e.set_global(0x011c_e744, 5.0f32);
+        // No attackers: dropped.
+        assert!(fn_00987220(&mut e, group, target));
+        e.set(target, CombatTarget::sAttackerCount, 1);
+        e.set_global(0x011c_f368, 50.0f32);
+        assert!(!fn_00987220(&mut e, group, target));
+        // The second limit reached: dropped when no member is near.
+        e.set_global(0x011c_f368, 5.0f32);
+        e.set_global(0x011c_f3fc, 10.0f32);
+        assert!(fn_00987220(&mut e, group, target));
+        // A member near the target's actor keeps it, unless the search's
+        // path handler has not moved.
+        let near = actor(&mut e, 6);
+        place(&mut e, near, 1.0, 0.0, 0.0);
+        place(&mut e, who, 0.0, 0.0, 0.0);
+        let group = group_with(&mut e, &[who], &[near]);
+        let target = target_entry(&e, group, 0);
+        fresh_stamps(&mut e, group, target);
+        e.mem.set_f32(target.addr() + 0x58, NOW - 10.0);
+        e.set(target, CombatTarget::sAttackerCount, 1);
+        assert!(!fn_00987220(&mut e, group, target));
+        e.set(group, CombatGroup::iSearchCount, 1);
+        e.mem.set_u32(group.addr() + 0xd4, 0x1234);
+        e.set_global(0x011c_ef50, 10u32);
+        e.set_global(0x011c_f0a4, -1.0f32);
+        e.register(NI_POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(PATH_HANDLER_DISTANCE_TRAVELLED, |_, _| 0.0f32.into_ret());
+        assert!(fn_00987220(&mut e, group, target));
+        e.register(PATH_HANDLER_DISTANCE_TRAVELLED, |_, _| 2.0f32.into_ret());
+        assert!(!fn_00987220(&mut e, group, target));
+    }
+
+    #[test]
+    fn drop_chain_search_tests() {
+        let mut e = geometry_engine();
+        let (group, target, _) = drop_scene(&mut e);
+        e.set(group, CombatGroup::iSearchCount, 5);
+        e.set(target, CombatTarget::sLastSearchNoticed, 1);
+        e.set_global(0x011c_ef50, 2u32);
+        // 5 searches against 1 + 2: dropped.
+        assert!(fn_00987220(&mut e, group, target));
+        e.set_global(0x011c_ef50, 4u32);
+        // Search started 1 second ago (< 3), last attacked-member stamp 10
+        // seconds ago (>= 3), last detected stamp -FLT_MAX, noticed 10
+        // seconds ago against 5: dropped.
+        e.set_global(0x011c_f0a4, 3.0f32);
+        e.mem.set_f32(group.addr() + 0xe8, NOW - 1.0);
+        e.mem.set_f32(target.addr() + 0x60, NOW - 10.0);
+        e.mem.set_f32(target.addr() + 0x50, -f32::MAX);
+        e.mem.set_f32(target.addr() + 0x58, NOW - 10.0);
+        e.set_global(0x011c_f3b4, 5.0f32);
+        assert!(fn_00987220(&mut e, group, target));
+        // Each condition missing keeps the target.
+        e.set_global(0x011c_f3b4, 50.0f32);
+        assert!(!fn_00987220(&mut e, group, target));
+        e.set_global(0x011c_f3b4, 5.0f32);
+        e.mem.set_f32(target.addr() + 0x50, NOW);
+        assert!(!fn_00987220(&mut e, group, target));
+        e.mem.set_f32(target.addr() + 0x50, -f32::MAX);
+        e.mem.set_f32(target.addr() + 0x60, NOW - 1.0);
+        assert!(!fn_00987220(&mut e, group, target));
+        e.mem.set_f32(target.addr() + 0x60, NOW - 10.0);
+        e.mem.set_f32(group.addr() + 0xe8, NOW - 5.0);
+        assert!(!fn_00987220(&mut e, group, target));
+    }
+
+    #[test]
+    fn attacker_count_goes_up_and_down_for_known_targets() {
+        let mut e = engine();
+        let (a, b) = (actor(&mut e, 1), actor(&mut e, 2));
+        let group = group_with(&mut e, &[a], &[]);
+        let entry = target_entry(&e, group, 0);
+        combat_group_increment_attacker_count(&mut e, group, a);
+        combat_group_increment_attacker_count(&mut e, group, a);
+        fn_009874f0(&mut e, group, a);
+        assert_eq!(e.get(entry, CombatTarget::sAttackerCount), 1);
+        combat_group_increment_attacker_count(&mut e, group, b);
+        fn_009874f0(&mut e, group, b);
+        assert_eq!(e.get(entry, CombatTarget::sAttackerCount), 1);
+        fn_009874f0(&mut e, group, a);
+        fn_009874f0(&mut e, group, a);
+        assert_eq!(e.get(entry, CombatTarget::sAttackerCount), 0xffff);
+    }
+
+    #[test]
+    fn merge_group_moves_clusters_members_targets_and_music() {
+        let mut e = array_engine();
+        let (t1, m1) = (actor(&mut e, 1), actor(&mut e, 2));
+        let (t2, m2) = (actor(&mut e, 3), actor(&mut e, 4));
+        let this = group_with(&mut e, &[t1], &[m1]);
+        let other = group_with(&mut e, &[t2], &[m2]);
+        e.set(this, CombatGroup::cCombatMusicState, -1);
+        e.set(other, CombatGroup::cCombatMusicState, 3);
+        let member: Ptr<CombatMember> = Ptr::new(e.mem.u32(other.addr() + 0x1c));
+        e.set(member, CombatMember::fDamagePerSecond, 5.0);
+        e.set(member, CombatMember::fCombatStrength, 7.0);
+        e.register(OTHER_TARGET_ARRAY, |_, a| (a[0] + 8).into_ret());
+        e.register(OTHER_MEMBER_ARRAY, |_, a| (a[0] + 0x18).into_ret());
+        // Two clusters in `other` (the size of its cluster array is at
+        // +0x140).
+        e.mem.set_u32(other.addr() + 0x140, 2);
+        e.register(CLUSTER_BY_INDEX, |_, a| (0xc100 + a[1]).into_ret());
+        let added = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = added.clone();
+        e.register_double(POINTER_ARRAY_ADD, move |e, a| {
+            sink.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            0u32.into_ret()
+        });
+        e.register(0x0084_54f0, |_, _| Ret::default());
+        assert!(combat_group_merge_group(&mut e, this, other));
+        assert_eq!(
+            *added.borrow(),
+            vec![(this.addr() + 0x138, 0xc100), (this.addr() + 0x138, 0xc101)]
+        );
+        assert_eq!(calls(&e, 0x0084_54f0), vec![vec![other.addr() + 0x138, 1]]);
+        // The member came over, was told its group and got the other's
+        // numbers; so did the target.
+        assert_eq!(array_len(&e, this, 0x18), 2);
+        let mine = fn_009865f0(&mut e, this, m2);
+        assert_eq!(e.get(mine, CombatMember::fDamagePerSecond), 5.0);
+        assert_eq!(e.get(mine, CombatMember::fCombatStrength), 7.0);
+        assert_eq!(calls(&e, fake(0x3fc)), vec![vec![m2.addr(), this.addr()]]);
+        assert_eq!(array_len(&e, this, 8), 2);
+        assert!(!fn_009865d0(&mut e, this, t2).is_null());
+        assert_eq!(e.get(this, CombatGroup::cCombatMusicState), 3);
+        // A music state of -1 is not taken.
+        e.set(other, CombatGroup::cCombatMusicState, -1);
+        assert!(combat_group_merge_group(&mut e, this, other));
+        assert_eq!(e.get(this, CombatGroup::cCombatMusicState), 3);
+    }
+
+    #[test]
+    fn merge_group_refuses_incompatible_actors_and_logs_failed_adds() {
+        let mut e = array_engine();
+        let (t1, m1) = (actor(&mut e, 1), actor(&mut e, 2));
+        let (t2, m2) = (actor(&mut e, 3), actor(&mut e, 4));
+        let this = group_with(&mut e, &[t1], &[m1]);
+        let other = group_with(&mut e, &[t2], &[m2]);
+        e.register(OTHER_TARGET_ARRAY, |_, a| (a[0] + 8).into_ret());
+        e.register(OTHER_MEMBER_ARRAY, |_, a| (a[0] + 0x18).into_ret());
+        e.register(0x0084_54f0, |_, _| Ret::default());
+        record(&mut e, &[POINTER_ARRAY_ADD]);
+        // `this` has a member that cannot fight other's target.
+        e.mem.set_u8(m1.addr() + 0x3c, 1);
+        assert!(!combat_group_merge_group(&mut e, this, other));
+        // `other` has a member that cannot fight this group's target.
+        e.mem.set_u8(m1.addr() + 0x3c, 0);
+        e.mem.set_u8(m2.addr() + 0x3c, 1);
+        assert!(!combat_group_merge_group(&mut e, this, other));
+        assert!(calls(&e, 0x0084_54f0).is_empty());
+        assert_eq!(array_len(&e, this, 0x18), 1);
+        // A member of `other` that is a target of `this` cannot be added,
+        // and a target of `other` that is a member of `this` neither.
+        e.mem.set_u8(m2.addr() + 0x3c, 0);
+        let other = group_with(&mut e, &[m1], &[t1]);
+        assert!(combat_group_merge_group(&mut e, this, other));
+        let logs = calls(&e, LOG_MESSAGE);
+        assert_eq!(logs.last().unwrap(), &vec![MERGE_TARGET_ERROR, 2, 0xbeef]);
+        assert!(logs.contains(&vec![MERGE_MEMBER_ERROR, 1, 0xbeef]));
+        assert_eq!(array_len(&e, this, 0x18), 1);
+        assert_eq!(array_len(&e, this, 8), 1);
+    }
+
+    #[test]
+    fn cluster_and_music_accessors() {
+        let mut e = engine();
+        let group = e.new_object::<CombatGroup>();
+        e.mem.set_u32(group.addr() + 0x140, 4);
+        assert_eq!(fn_009877c0(&mut e, group), 4);
+        e.set(group, CombatGroup::cCombatMusicState, -1);
+        assert_eq!(fn_00987800(&mut e, group), -1);
+        record(&mut e, &[0x0084_54f0]);
+        fn_009877e0(&mut e, group);
+        assert_eq!(calls(&e, 0x0084_54f0), vec![vec![group.addr() + 0x138, 1]]);
+    }
+
+    #[test]
+    fn set_location_copies_the_point_and_sets_the_space() {
+        let mut e = engine();
+        let location = e.mem.alloc(16);
+        let source = point(&mut e, 1.0, 2.0, 3.0);
+        bgs_world_location_set_location(&mut e, Ptr::new(location), source, 0x44);
+        assert_eq!(e.mem.f32(location), 1.0);
+        assert_eq!(e.mem.f32(location + 4), 2.0);
+        assert_eq!(e.mem.f32(location + 8), 3.0);
+        assert_eq!(e.mem.u32(location + 12), 0x44);
+    }
+
+    #[test]
+    fn detection_level_call_has_no_actor_and_starts_at_minus_one_hundred() {
+        let mut e = engine();
+        e.register_double(0x0098_87b0, |e, a| {
+            assert_eq!(&a[..3], &[0x5000_0000, 0, 0x77]);
+            assert_eq!(e.mem.i32(a[3]), -100);
+            assert_eq!(e.mem.u8(a[5]), 0);
+            assert_eq!(e.mem.u8(a[6]), 0);
+            e.mem.set_i32(a[3], 42);
+            Ret::default()
+        });
+        let level = fn_00989040(&mut e, Ptr::new(0x5000_0000), Ptr::new(0x77));
+        assert_eq!(level, 42);
+    }
+
+    #[test]
+    fn last_detected_stamp_or_minus_max() {
+        let mut e = engine();
+        let who = actor(&mut e, 1);
+        let group = group_with(&mut e, &[who], &[]);
+        let target = target_entry(&e, group, 0);
+        e.set(target, CombatTarget::fLastDetectedTimeStamp, 12.5);
+        let result = e.mem.alloc(4);
+        let stranger = actor(&mut e, 2);
+        assert_eq!(
+            fn_00989090(&mut e, group, Ptr::new(result), stranger),
+            Ptr::new(result)
+        );
+        assert_eq!(e.mem.f32(result), -f32::MAX);
+        fn_00989090(&mut e, group, Ptr::new(result), who);
+        assert_eq!(e.mem.f32(result), 12.5);
+    }
+
+    #[test]
+    fn last_detected_and_seen_locations() {
+        let mut e = engine();
+        let who = actor(&mut e, 1);
+        let stranger = actor(&mut e, 9);
+        let group = group_with(&mut e, &[who], &[]);
+        let target = target_entry(&e, group, 0);
+        let out = e.mem.alloc(16);
+        // No space in the detected location: nothing is copied.
+        assert!(!fn_009890e0(&mut e, group, who, Ptr::new(out)));
+        assert!(!fn_009890e0(&mut e, group, stranger, Ptr::new(out)));
+        for word in 0..4 {
+            e.mem.set_u32(target.addr() + 0x18 + 4 * word, 0x10 + word);
+        }
+        assert!(fn_009890e0(&mut e, group, who, Ptr::new(out)));
+        assert_eq!(e.mem.u32(out + 12), 0x13);
+        assert_eq!(e.mem.u32(out), 0x10);
+        // Seen location: copied when the time given is later than the age.
+        for word in 0..4 {
+            e.mem.set_u32(target.addr() + 0x28 + 4 * word, 0x20 + word);
+        }
+        e.set(target, CombatTarget::fLastSeenTimeStamp, NOW - 10.0);
+        let seen = e.mem.alloc(16);
+        assert!(!fn_00989140(&mut e, group, 0, Ptr::new(seen), 10.0));
+        assert!(fn_00989140(&mut e, group, 0, Ptr::new(seen), 10.5));
+        assert_eq!(e.mem.u32(seen), 0x20);
+        assert_eq!(e.mem.u32(seen + 12), 0x23);
+    }
+
+    #[test]
+    fn member_los_count_defaults_to_zero() {
+        let mut e = engine();
+        let who = actor(&mut e, 1);
+        let stranger = actor(&mut e, 2);
+        let group = group_with(&mut e, &[who], &[]);
+        let target = target_entry(&e, group, 0);
+        e.set(target, CombatTarget::cMemberLOSCount, 3);
+        assert_eq!(fn_009891a0(&mut e, group, who), 3);
+        assert_eq!(fn_009891a0(&mut e, group, stranger), 0);
+    }
+
+    #[test]
+    fn strategy_assignment_is_cleared_only_when_it_matches() {
+        let mut e = engine();
+        let who = actor(&mut e, 1);
+        let group = group_with(&mut e, &[], &[who]);
+        let member: Ptr<CombatMember> = Ptr::new(e.mem.u32(group.addr() + 0x1c));
+        e.register(0x0097_ae90, |_, a| a[0].into_ret());
+        e.register(0x0096_11e0, |_, a| (a[0] & 0xff).into_ret());
+        e.set(member, CombatMember::iGroupStrategyAssignment, 7);
+        // No group strategy: nothing happens.
+        fn_009891d0(&mut e, group, who, Ptr::new(7));
+        assert_eq!(e.get(member, CombatMember::iGroupStrategyAssignment), 7);
+        e.set(group, CombatGroup::pGroupStrategy, Ptr::new(0x999));
+        fn_009891d0(&mut e, group, who, Ptr::new(8));
+        assert_eq!(e.get(member, CombatMember::iGroupStrategyAssignment), 7);
+        fn_009891d0(&mut e, group, who, Ptr::new(0));
+        assert_eq!(e.get(member, CombatMember::iGroupStrategyAssignment), 7);
+        fn_009891d0(&mut e, group, who, Ptr::new(7));
+        assert_eq!(e.get(member, CombatMember::iGroupStrategyAssignment), 0);
+    }
+
+    #[test]
+    fn attacked_member_stamp_and_location() {
+        let mut e = geometry_engine();
+        let who = actor(&mut e, 1);
+        let stranger = actor(&mut e, 2);
+        place(&mut e, who, 1.0, 2.0, 3.0);
+        let group = group_with(&mut e, &[who], &[]);
+        let target = target_entry(&e, group, 0);
+        fn_00989230(&mut e, group, Ptr::NULL);
+        assert_eq!(
+            e.get(target, CombatTarget::fLastAttackedMemberTimeStamp),
+            0.0
+        );
+        fn_00989230(&mut e, group, stranger);
+        assert_eq!(
+            e.get(target, CombatTarget::fLastAttackedMemberTimeStamp),
+            0.0
+        );
+        fn_00989230(&mut e, group, who);
+        assert_eq!(
+            e.get(target, CombatTarget::fLastAttackedMemberTimeStamp),
+            NOW
+        );
+        assert_eq!(e.mem.f32(target.addr() + 0x38), 1.0);
+        assert_eq!(e.mem.f32(target.addr() + 0x40), 3.0);
+        assert_eq!(e.mem.u32(target.addr() + 0x44), 0x77);
+    }
+
+    #[test]
+    fn avoid_nodes_around_the_middle_of_two_points() {
+        let mut e = geometry_engine();
+        let nodes = avoid_nodes(&mut e);
+        let me = actor(&mut e, 1);
+        place(&mut e, me, 0.0, 0.0, 0.0);
+        let (near, far, skipped) = (actor(&mut e, 2), actor(&mut e, 3), actor(&mut e, 4));
+        place(&mut e, near, 5.0, 0.0, 1.0);
+        place(&mut e, far, 5.0, 0.0, 10.0);
+        place(&mut e, skipped, 5.0, 0.0, 0.5);
+        let group = group_with(&mut e, &[near, far, skipped], &[]);
+        e.set_global(0x011c_f380, 1.0f32);
+        e.set_global(0x011c_e648, 1.5f32);
+        e.set_global(0x011c_fcf8, 2.5f32);
+        let target = point(&mut e, 10.0, 0.0, 0.0);
+        // Middle (5, 0, 0): squared limit (2 * 2 + 25) * 1 = 29.
+        let array = fn_009892a0(&mut e, group, me, target, 2.0, Ptr::NULL, skipped);
+        assert_eq!(e.mem.u32(array.addr()), 0xa11a);
+        assert_eq!(*nodes.borrow(), vec![([5.0, 0.0, 1.0], 1.5, 2.5)]);
+        assert_eq!(calls(&e, AVOID_ARRAY_ADD).len(), 1);
+        // A given array is reused.
+        let again = fn_009892a0(&mut e, group, me, target, 2.0, array, Ptr::NULL);
+        assert_eq!(again, array);
+        assert_eq!(nodes.borrow().len(), 3);
+        assert_eq!(calls(&e, OPERATOR_NEW).len(), 1);
+    }
+
+    #[test]
+    fn avoid_node_for_the_targets_bounding_sphere() {
+        let mut e = geometry_engine();
+        let nodes = avoid_nodes(&mut e);
+        e.set_global(0x011c_fcf8, 2.0f32);
+        let (a, b) = (actor(&mut e, 1), actor(&mut e, 2));
+        place(&mut e, a, 0.0, 0.0, 0.0);
+        place(&mut e, b, 10.0, 0.0, 0.0);
+        let group = group_with(&mut e, &[a, b], &[]);
+        // Small box: the radius stays 1024, the second value is 2 * 4.
+        let array = fn_00989490(&mut e, group, 0, 0, 0, Ptr::NULL);
+        assert_eq!(e.mem.u32(array.addr()), 0xa11a);
+        assert_eq!(*nodes.borrow(), vec![([5.0, 0.0, 0.0], 1024.0, 8.0)]);
+        // A huge one: the radius is the square root of the squared extent.
+        place(&mut e, b, 3000.0, 0.0, 0.0);
+        let again = fn_00989490(&mut e, group, 0, 0, 0, array);
+        assert_eq!(again, array);
+        assert_eq!(nodes.borrow()[1], ([1500.0, 0.0, 0.0], 3000.0, 8.0));
+    }
+
+    #[test]
+    fn avoid_nodes_for_targets_near_an_actor() {
+        let mut e = geometry_engine();
+        let nodes = avoid_nodes(&mut e);
+        e.set_global(0x011c_ea50, 10.0f32);
+        e.set_global(0x011c_e900, 1.5f32);
+        e.set_global(0x011c_eb2c, 2.5f32);
+        let me = actor(&mut e, 1);
+        place(&mut e, me, 0.0, 0.0, 0.0);
+        let (near, far) = (actor(&mut e, 2), actor(&mut e, 3));
+        place(&mut e, near, 5.0, 0.0, 0.0);
+        place(&mut e, far, 20.0, 0.0, 0.0);
+        let group = group_with(&mut e, &[far, near], &[]);
+        let array = fn_009895a0(&mut e, group, me, Ptr::NULL);
+        assert_eq!(e.mem.u32(array.addr()), 0xa11a);
+        assert_eq!(*nodes.borrow(), vec![([5.0, 0.0, 0.0], 1.5, 2.5)]);
+        // Nothing near: null stays null.
+        let empty = group_with(&mut e, &[far], &[]);
+        assert!(fn_009895a0(&mut e, empty, me, Ptr::NULL).is_null());
+    }
+
+    /// A group whose members sit at the given x positions (y = z = 0).
+    fn members_at(e: &mut Engine, xs: &[f32]) -> (Ptr<CombatGroup>, Vec<Ptr>) {
+        let actors: Vec<Ptr> = xs
+            .iter()
+            .enumerate()
+            .map(|(i, &x)| {
+                let a = actor(e, 10 + i as u32);
+                place(e, a, x, 0.0, 0.0);
+                a
+            })
+            .collect();
+        let group = group_with(e, &[], &actors);
+        (group, actors)
+    }
+
+    #[test]
+    fn member_search_by_radius_and_nearest() {
+        let mut e = geometry_engine();
+        let (group, members) = members_at(&mut e, &[5.0, 3.0, 20.0]);
+        let origin = point(&mut e, 0.0, 0.0, 0.0);
+        // First within 10, excluding the first, then excluding nothing.
+        assert_eq!(
+            fn_009897f0(&mut e, group, origin, 10.0, members[0]),
+            members[1]
+        );
+        assert_eq!(
+            fn_009897f0(&mut e, group, origin, 10.0, Ptr::NULL),
+            members[0]
+        );
+        assert!(fn_009897f0(&mut e, group, origin, 2.0, Ptr::NULL).is_null());
+        // Nearest.
+        assert_eq!(
+            fn_009898b0(&mut e, group, origin, Ptr::NULL, f32::MAX),
+            members[1]
+        );
+        assert_eq!(
+            fn_009898b0(&mut e, group, origin, members[1], 100.0),
+            members[0]
+        );
+        assert!(fn_009898b0(&mut e, group, origin, Ptr::NULL, 2.0).is_null());
+        // From an actor's own location, the actor excluded.
+        let me = actor(&mut e, 99);
+        place(&mut e, me, 4.0, 0.0, 0.0);
+        assert_eq!(fn_00989880(&mut e, group, me, 2.0), members[0]);
+        assert_eq!(fn_00989970(&mut e, group, me, 100.0), members[0]);
+        assert!(fn_00989880(&mut e, group, me, 0.5).is_null());
+        // The actor itself is not found.
+        assert_eq!(fn_00989880(&mut e, group, members[0], 3.0), members[1]);
+    }
+
+    #[test]
+    fn target_near_location_with_and_without_the_recency_test() {
+        let mut e = geometry_engine();
+        let (far, stale, fresh) = (actor(&mut e, 1), actor(&mut e, 2), actor(&mut e, 3));
+        place(&mut e, far, 20.0, 0.0, 0.0);
+        place(&mut e, stale, 5.0, 0.0, 0.0);
+        place(&mut e, fresh, 6.0, 0.0, 0.0);
+        let group = group_with(&mut e, &[far, stale, fresh], &[]);
+        let origin = point(&mut e, 0.0, 0.0, 0.0);
+        e.set_global(0x011c_e9b4, 50.0f32);
+        for (i, stamp) in [NOW, NOW - 60.0, NOW - 1.0].into_iter().enumerate() {
+            let entry = target_entry(&e, group, i as u32);
+            e.set(entry, CombatTarget::fLastDetectedTimeStamp, stamp);
+        }
+        let first = target_entry(&e, group, 0);
+        assert!(fn_009897a0(&mut e, first));
+        let second = target_entry(&e, group, 1);
+        assert!(!fn_009897a0(&mut e, second));
+        assert_eq!(
+            combat_group_find_target_near_location(&mut e, group, origin, 10.0, false),
+            stale
+        );
+        assert_eq!(
+            combat_group_find_target_near_location(&mut e, group, origin, 10.0, true),
+            fresh
+        );
+        assert!(
+            combat_group_find_target_near_location(&mut e, group, origin, 1.0, false).is_null()
+        );
+    }
+
+    /// A group with members and targets at the given x positions.
+    fn sides(e: &mut Engine, members: &[f32], targets: &[f32]) -> Ptr<CombatGroup> {
+        let make = |e: &mut Engine, xs: &[f32], base: u32| -> Vec<Ptr> {
+            xs.iter()
+                .enumerate()
+                .map(|(i, &x)| {
+                    let a = actor(e, base + i as u32);
+                    place(e, a, x, 0.0, 0.0);
+                    a
+                })
+                .collect()
+        };
+        let members = make(e, members, 10);
+        let targets = make(e, targets, 50);
+        group_with(e, &targets, &members)
+    }
+
+    #[test]
+    fn member_target_intersection() {
+        let mut e = geometry_engine();
+        // Nothing to compare.
+        let group = sides(&mut e, &[], &[1.0]);
+        assert!(!combat_group_check_member_target_intersection(
+            &mut e, group
+        ));
+        let group = sides(&mut e, &[1.0], &[]);
+        assert!(!combat_group_check_member_target_intersection(
+            &mut e, group
+        ));
+        let group = sides(&mut e, &[1.0], &[5.0]);
+        assert!(!combat_group_check_member_target_intersection(
+            &mut e, group
+        ));
+        // Members 0 and 2 against targets 10 and 12: only the targets are
+        // behind the point P (fractions 0 and 1), which is neither "both
+        // above 0.33" nor "both below 0.67".
+        let group = sides(&mut e, &[0.0, 2.0], &[10.0, 12.0]);
+        assert!(!combat_group_check_member_target_intersection(
+            &mut e, group
+        ));
+        // Members 0 and 100 against targets 20 and 30: P lies at about
+        // 32.3 on the other side, so one member and both targets are
+        // behind it (0.5 and 1.0).
+        let group = sides(&mut e, &[0.0, 100.0], &[20.0, 30.0]);
+        assert!(combat_group_check_member_target_intersection(&mut e, group));
+    }
+
+    #[test]
+    fn bounding_boxes_of_members_and_targets() {
+        let mut e = geometry_engine();
+        let (m1, m2) = (actor(&mut e, 1), actor(&mut e, 2));
+        place(&mut e, m1, 1.0, 5.0, 3.0);
+        place(&mut e, m2, 4.0, 2.0, 9.0);
+        let (t1, t2) = (actor(&mut e, 3), actor(&mut e, 4));
+        place(&mut e, t1, -2.0, 0.0, 0.0);
+        place(&mut e, t2, 2.0, 4.0, 6.0);
+        let group = group_with(&mut e, &[t1, t2], &[m1, m2]);
+        let out = e.mem.alloc(12);
+        // Members: box (1, 2, 3) .. (4, 5, 9).
+        let squared = fn_00989e20(&mut e, group, Ptr::new(out));
+        assert_eq!(
+            [e.mem.f32(out), e.mem.f32(out + 4), e.mem.f32(out + 8)],
+            [2.5, 3.5, 6.0]
+        );
+        assert_eq!(squared, 54.0);
+        // Targets: box (-2, 0, 0) .. (2, 4, 6).
+        let squared = fn_00989eb0(&mut e, group, Ptr::new(out));
+        assert_eq!(
+            [e.mem.f32(out), e.mem.f32(out + 4), e.mem.f32(out + 8)],
+            [0.0, 2.0, 3.0]
+        );
+        assert_eq!(squared, 16.0 + 16.0 + 36.0);
+        // The corners: corner 0 holds the maxima, corner 7 the minima, and
+        // `keep` extends what is there.
+        let corners = e.mem.alloc(96);
+        fn_00989f40(&mut e, group, Ptr::new(corners), false);
+        assert_eq!(e.mem.f32(corners), 4.0);
+        assert_eq!(e.mem.f32(corners + 4), 5.0);
+        assert_eq!(e.mem.f32(corners + 7 * 12 + 8), 3.0);
+        // Corner 1 (table 1, 1, 0) holds max x, max y and min z.
+        assert_eq!(e.mem.f32(corners + 12 + 8), 3.0);
+        fn_0098a110(&mut e, group, Ptr::new(corners), true);
+        assert_eq!(e.mem.f32(corners), 4.0);
+        assert_eq!(e.mem.f32(corners + 7 * 12), -2.0);
+        assert_eq!(e.mem.f32(corners + 7 * 12 + 8), 0.0);
+    }
+
+    #[test]
+    fn fleeing_state_and_strategy_assignments() {
+        let mut e = engine();
+        let (a, b) = (actor(&mut e, 1), actor(&mut e, 2));
+        let stranger = actor(&mut e, 3);
+        let group = group_with(&mut e, &[], &[a, b]);
+        assert!(!fn_0098a2e0(&mut e, group));
+        e.set(group, CombatGroup::iFleeingMemberCount, 1);
+        assert!(fn_0098a2e0(&mut e, group));
+        e.set(group, CombatGroup::iNonFleeingMemberCount, 1);
+        assert!(!fn_0098a2e0(&mut e, group));
+
+        combat_group_set_member_group_strategy_assignment(&mut e, group, 1, 9);
+        assert_eq!(fn_0098a340(&mut e, group, 1), 9);
+        assert_eq!(fn_0098a340(&mut e, group, 0), 0);
+        assert_eq!(fn_0098a310(&mut e, group, b), 9);
+        assert_eq!(fn_0098a310(&mut e, group, stranger), 0);
+        fn_0098a360(&mut e, group, a, 4);
+        fn_0098a360(&mut e, group, stranger, 5);
+        assert_eq!(fn_0098a340(&mut e, group, 0), 4);
+        assert_eq!(
+            combat_group_find_member_with_strategy_assignment(&mut e, group, 9),
+            b
+        );
+        assert!(combat_group_find_member_with_strategy_assignment(&mut e, group, 6).is_null());
+        fn_0098a3c0(&mut e, group);
+        assert_eq!(fn_0098a340(&mut e, group, 0), 0);
+        assert_eq!(fn_0098a340(&mut e, group, 1), 0);
+    }
+
+    #[test]
+    fn strategy_chosen_stamp_check() {
+        let mut e = engine();
+        let group = e.new_object::<CombatGroup>();
+        // No stamp yet: true.
+        assert!(combat_group_check_group_strategy_chosen_time_stamp(
+            &mut e, group, 2, 1.0
+        ));
+        e.set(
+            group,
+            CombatGroup::fLastGroupStrategyChosenTimeStamp,
+            NOW - 10.0,
+        );
+        e.set(group, CombatGroup::iLastGroupStrategyChosenIndex, 2);
+        // Another strategy: true.
+        assert!(combat_group_check_group_strategy_chosen_time_stamp(
+            &mut e, group, 3, 100.0
+        ));
+        // The same strategy: true only when the limit is below the age.
+        assert!(!combat_group_check_group_strategy_chosen_time_stamp(
+            &mut e, group, 2, 10.0
+        ));
+        assert!(combat_group_check_group_strategy_chosen_time_stamp(
+            &mut e, group, 2, 9.0
+        ));
+    }
+
+    #[test]
+    fn average_of_value_over_divisor_of_members() {
+        let mut e = engine();
+        // The object with the two virtual methods is at +0xa4 of each
+        // member actor.
+        let mut members = vec![];
+        for _ in 0..2 {
+            let big = e.mem.alloc(0x100);
+            e.mem.set_u32(big, ACTOR_VTABLE);
+            e.mem.set_u32(big + 0xa4, 0x7200_0000);
+            members.push(Ptr::new(big));
+        }
+        e.put_vtable(0x7200_0000, &[fake(0x500), 0, 0, fake(0x50c)]);
+        e.register(fake(0x500), |e, a| {
+            assert_eq!(a[1], 0x10);
+            e.mem.u32(a[0] - 0xa4 + 0x50).into_ret()
+        });
+        e.register(fake(0x50c), |e, a| {
+            assert_eq!(a[1], 0x10);
+            e.mem.f32(a[0] - 0xa4 + 0x54).into_ret()
+        });
+        // Member 0: 30 / 10 = 3; member 1: 5 / 2 = 2.5; average 2.75.
+        e.mem.set_u32(members[0].addr() + 0x50, 10);
+        e.mem.set_f32(members[0].addr() + 0x54, 30.0);
+        e.mem.set_u32(members[1].addr() + 0x50, 2);
+        e.mem.set_f32(members[1].addr() + 0x54, 5.0);
+        let group = group_with(&mut e, &[], &members);
+        assert_eq!(fn_0098a4d0(&mut e, group), 2.75);
+        let empty = group_with(&mut e, &[], &[]);
+        assert!(fn_0098a4d0(&mut e, empty).is_nan());
     }
 }
