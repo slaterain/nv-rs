@@ -6476,6 +6476,66 @@ mod tests {
         assert_eq!(r.e.call(0x0087_23d0, &args![this, 1u32]).u32(), 0);
     }
 
+    /// `log` (without the function's own entry) as the frame model's callees.
+    fn model_log(log: &Log) -> Vec<world::frame::interface::Callee> {
+        addrs(log)
+            .into_iter()
+            .map(world::frame::interface::Callee::Direct)
+            .collect()
+    }
+
+    fn check_model(address: u32, s: &world::frame::interface::InterfaceState, log: &Log) {
+        use world::frame::interface::{follows, function};
+        let model = function(address).expect("modelled");
+        let log = model_log(log);
+        follows(model, s, &log, &[]).unwrap_or_else(|why| panic!("{address:08x} {s:?}: {why}"));
+    }
+
+    /// `Main::PostSwapProcess` (`008705d0`) and `Main::OnIdle_PostThreadsProcess`
+    /// (`00870610`) follow `world::frame::interface`'s model for one and more threads
+    /// (docs/FRAME_SKELETON.md, PR 7).
+    #[test]
+    fn post_swap_and_post_threads_follow_the_frame_model() {
+        use world::frame::interface::InterfaceState;
+        for threads in [1u32, 2] {
+            let s = InterfaceState {
+                threads: threads as i32,
+                ..InterfaceState::default()
+            };
+            let mut r = Rig::new();
+            let this = r.object(0x10);
+            r.setting(SETTING_DWORD_PTR, &[threads]);
+            let (_, log) = r.run(0x008705d0, &args![this]);
+            check_model(0x0087_05d0, &s, &log);
+            let mut r = Rig::new();
+            let this = r.object(0x10);
+            let interface = r.object(0x600);
+            r.set(GET_GLOBAL_011D8A80, &[interface]);
+            r.setting(SETTING_DWORD_PTR, &[threads]);
+            let (_, log) = r.run(0x00870610, &args![this]);
+            check_model(0x0087_0610, &s, &log);
+        }
+    }
+
+    /// `Main::RenderMenuBackground` (`00871dc0`): nothing without the player's cell and
+    /// 3D; else the world drawn once under the menus' modifier.
+    #[test]
+    fn menu_background_follows_the_frame_model() {
+        use world::frame::interface::InterfaceState;
+        let hidden = InterfaceState {
+            player_shown: false,
+            ..InterfaceState::default()
+        };
+        let mut r = Rig::new();
+        let this = r.object(0x200);
+        let (_, log) = r.run(0x0087_1dc0, &args![this]);
+        check_model(0x0087_1dc0, &hidden, &log);
+        let (mut r, this, _, _) = menu_background_rig((800, 300));
+        let (_, log) = r.run(0x0087_1dc0, &args![this]);
+        check_model(0x0087_1dc0, &InterfaceState::default(), &log);
+        assert!(addrs(&log).contains(&0x0087_06b0));
+    }
+
     /// The rig of the menu-background render: a player with a vtable, a
     /// renderer whose group answers `800 x 300`, and a menu target whose
     /// first buffer answers `target_size`.
