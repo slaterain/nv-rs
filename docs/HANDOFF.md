@@ -1,4 +1,4 @@
-# Handoff: engine port push (2026-10-10, morning)
+# Handoff: engine port push (2026-10-10, evening)
 
 For the next Claude session leading the nv-rs engine port. Read AGENTS.md,
 docs/MILESTONES.md, docs/ENGINE_PORT_PLAN.md, docs/FRAME_SKELETON.md and
@@ -6,6 +6,20 @@ docs/ENGINE_CRATE.md first. This file says where things stand and how the
 machinery runs.
 
 ## Resume here
+
+Codex takeover, 2026-10-10: #109 passed both CI checks and was squash-merged
+as `b995218`. The lead branch was rebased to that commit and pushed. There
+is no new rolling PR yet (no unmerged commits at that point). The ship
+script stopped after the merge/rebase; recovery verified main and recreated
+the automatically deleted remote branch with a normal push.
+
+Active in this session: a01 and a04 restarted from their partial files;
+the interface/render agent owns p2 and is finishing WIP `4576013`, rebasing
+onto main first. a03, a05 and a06 are waiting for an available agent and
+still have their original task files: do not reset them before first restart.
+The session supports three child agents plus the lead; rotate translation
+slots while p2 runs. No slot has been collected yet. Play build remains 39.
+The older instructions below describe the starting state, not current agents.
 
 The previous lead stopped because the account hit its weekly usage limit at
 about 04:30 on 2026-10-10. All six agents died mid-task; nothing is running.
