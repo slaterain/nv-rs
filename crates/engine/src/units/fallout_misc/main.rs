@@ -8155,6 +8155,66 @@ mod tests {
             }
         }
 
+        /// The calls `0086fbe0` makes are `world::frame::world_time`'s model of it, exactly, for
+        /// each of its tests (docs/FRAME_SKELETON.md, PR 5).
+        #[test]
+        fn update_current_grid_cell_0086fbe0_follows_the_frame_model() {
+            use world::frame::world_time::{function, steps_run, Callee, WorldState};
+            let model = function(0x0086_fbe0).expect("modelled");
+            let game = WorldState::default();
+            let tests = WorldState {
+                cell_tests: true,
+                ..game
+            };
+            let states = [
+                game,
+                WorldState {
+                    menu_flag: true,
+                    ..game
+                },
+                WorldState {
+                    new_game_loading: true,
+                    ..game
+                },
+                WorldState {
+                    world_frozen: true,
+                    ..game
+                },
+                tests,
+                WorldState {
+                    interior_loaded: true,
+                    ..tests
+                },
+            ];
+            for s in states {
+                let mut e = idle_engine();
+                let main = main_object(&mut e);
+                e.set_global(IN_MENU_FLAG, u8::from(s.menu_flag));
+                e.set_global(0x011d_8907, u8::from(s.new_game_loading));
+                e.mem
+                    .set_u8(main.addr() + MAIN_FREEZE_TIME, u8::from(s.world_frozen));
+                let tests = u32::from(s.cell_tests);
+                e.register_double(0x0045_1530, move |_, _| tests.into_ret());
+                let interior = if s.interior_loaded { 0x6200u32 } else { 0 };
+                e.register_double(0x005f_36f0, move |_, _| interior.into_ret());
+                e.call_log = Some(vec![]);
+                e.call(0x0086_fbe0, &args![main]);
+                let calls: Vec<u32> = take_log(&mut e)
+                    .into_iter()
+                    .skip(1)
+                    .map(|(a, _)| a)
+                    .collect();
+                let want: Vec<u32> = steps_run(&s, model)
+                    .into_iter()
+                    .map(|i| match model.steps[i].callee {
+                        Callee::Direct(a) => a,
+                        other => panic!("{other:?}"),
+                    })
+                    .collect();
+                assert_eq!(calls, want, "{s:?}");
+            }
+        }
+
         // ----- 0086fbe0 / 0086fc60 -----------------------------------------------------------
 
         #[test]

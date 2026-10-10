@@ -986,6 +986,52 @@ The maintainer set a one-week fast track (about 1.9 billion tokens).
   (generated).
 - Next action: PR 5 (the world and time stage).
 
+### Phase 1 PR 5: the world and time stage (`claude/phase1-world-stage`, 2026-10-09)
+
+- Evidence: `crates/world/src/frame/world_time.rs`
+  (`world::frame::world_time`): the 12 functions stage 4 calls, as their
+  work calls in call-site order with gates from their own branches (all from
+  the disassembly): `TES::TestAllCells` (25 sub-steps), `Calendar::Update`
+  (7), `TES::RunAnimations` (3), `ProcessLists::RunActorScripts` (1),
+  `UpdateRadiationList` (9), `ChangeProcessLevelTempList` (17),
+  `UpdateFollowerTempList` (2), `GarbageCollector::Update` (18) and
+  `ClearTempEffects` (4), `BSTreeManager::Update` (7, untranslated),
+  `Main::OnIdle_UpdateCurrentGridCell` (6) and `TES::UpdateCurrentGridCell`
+  (22: the first load, queueing inside the centre cell, the detach and
+  attach across a border, the terrain). The grid update stops in menu mode,
+  while a new game's loading menu is up (`[011d8907]`) and with the world
+  frozen; the trees' clock and wind stop in menu mode. Correction: the
+  stage's slot +0x104 call is `BSSceneGraph::SetViewDistanceBasedOnFrameRate`
+  (`00c52590`), not the sky's update (`Sky::Update` is in stage 6).
+  FRAME_SKELETON.md "PR 5 result".
+- Viewer: `frame_order::WorldSet` (each sub-step a set under its gate on
+  `ThisWorld`). Mapped: `trees::blow_wind` (new, split from `sway_trees`)
+  under the wind update's gate; at their sub-steps but ungated, with
+  reasons: `sway_trees` (camera axes, light, levels of detail),
+  `run_scripts` at `RunActorScripts`' `RunScript` (with the game clock,
+  `Calendar::Update`'s work), `stream_squares` at `GridCellArray::SetCenter`
+  and the distant land and objects at `BGSTerrainManager::Update` (moved
+  from `ViewerSet::Loading`). Doors, movies and the weather chain placed for
+  order after the scripts. Open: the cell tests, `RunAnimations` (AI thread
+  with threads > 1), the radiation, process-level and follower lists, the
+  garbage collector, the rest of the tree manager and the grid.
+- Tests: `world_time` 13 (order against `frame.tsv` to depth 3, a test per
+  gate); engine: the translations of `0086fbe0`, `00867a40`, `00455640`,
+  `00452580`, `004556d0`, `00978550`, `009777a0`, `0096eb40`, `0096e9b0`,
+  `00868850`, `00868d10` checked against the model under their gates;
+  viewer: world sets in the exe's order, menu mode stops the gated sets, the
+  fixed inputs.
+- Behaviour: trees hold still in menu mode; the squares and distant land
+  stream after the player's move in the same frame; weather before trees.
+- Files: `crates/world/src/frame/world_time.rs` (new),
+  `crates/world/src/frame.rs`, engine tests in
+  `fallout_misc/{main,calendar,garbagecollector}.rs`,
+  `fallout_shared/tes.rs`, `fallout_ai/processlists.rs`,
+  `viewer/src/frame_order.rs`, `viewer/src/main.rs`, `viewer/src/trees.rs`,
+  `docs/FRAME_SKELETON.md`, `docs/LEDGER.md` (generated).
+- Next action: PR 6 (the AI task stage: `Sky::Update` and the weather chain
+  move there with `TES::UpdateCellAnimations`).
+
 ## Deferred
 
 Cosmetic material/lighting discrepancies, isolated facial polish, sun glare,

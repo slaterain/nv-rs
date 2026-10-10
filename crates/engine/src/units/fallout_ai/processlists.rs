@@ -14232,5 +14232,149 @@ mod tests {
         assert_eq!(e.mem.u32(array + 0xc), 4);
     }
 
+    // ---- the frame's model (docs/FRAME_SKELETON.md, PR 5) ----
+
+    /// The callees of the engine's log as `world::frame::world_time` names
+    /// them: the slot doubles as vtable calls, the rest direct.
+    fn model_callees(e: &Engine) -> Vec<world::frame::world_time::Callee> {
+        use world::frame::world_time::Callee;
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(a, _)| match *a {
+                a if (SLOT_BASE..SLOT_BASE + 0x1000).contains(&a) => Callee::Virtual(a - SLOT_BASE),
+                a => Callee::Direct(a),
+            })
+            .collect()
+    }
+
+    fn model(address: u32) -> &'static world::frame::world_time::Function {
+        world::frame::world_time::function(address).expect("modelled")
+    }
+
+    /// `ProcessLists::RunActorScripts` (`00978550`) follows the model.
+    #[test]
+    fn run_actor_scripts_follows_the_frame_model() {
+        use world::frame::world_time::{follows, WorldState};
+        let mut e = fixture();
+        let (lists, _, _) = actor_world(&mut e);
+        stubs(&mut e, &[0x0056_5870]);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_8550, &args![lists]);
+        follows(
+            model(0x0097_8550),
+            &WorldState::default(),
+            &model_callees(&e),
+            &[],
+        )
+        .expect("follows");
+        assert_eq!(calls(&e, 0x0056_5870).len(), 1);
+    }
+
+    /// `ProcessLists::UpdateRadiationList` (`009777a0`) follows the model:
+    /// a source, the sources ended, no iterator.
+    #[test]
+    fn radiation_follows_the_frame_model() {
+        use world::frame::world_time::{follows, Callee, WorldState};
+        let f = model(0x0097_77a0);
+        // `00977c90` (the level kept) is called as a Rust function.
+        let ignore = [Callee::Direct(0x0097_7c90)];
+        let mut w = radiation_world();
+        w.e.map(0x7000_0000, 0x1000);
+        w.e.map(0x7800_0000, 0x1000);
+        w.e.mem.set_f32(w.process + 0x43c, 5.0);
+        stub(&mut w.e, 0x008b_cc80, 1);
+        let lists = w.lists;
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x0097_77a0, &args![lists]);
+        let sources = WorldState {
+            radiation_sources: true,
+            ..WorldState::default()
+        };
+        follows(f, &sources, &model_callees(&w.e), &ignore).expect("sources");
+        assert_eq!(calls(&w.e, 0x0090_42a0).len(), 1);
+
+        let mut w = radiation_world();
+        stub(&mut w.e, 0x004b_9ba0, 0);
+        w.e.set_global(0x011f_12d8u32, 1u8);
+        let lists = w.lists;
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x0097_77a0, &args![lists]);
+        let ended = WorldState {
+            radiation_ended: true,
+            ..WorldState::default()
+        };
+        follows(f, &ended, &model_callees(&w.e), &ignore).expect("ended");
+
+        let mut w = radiation_world();
+        stub(&mut w.e, 0x009c_1a50, 0);
+        let lists = w.lists;
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x0097_77a0, &args![lists]);
+        follows(f, &WorldState::default(), &model_callees(&w.e), &ignore).expect("none");
+    }
+
+    /// `ProcessLists::ChangeProcessLevelTempList` (`0096eb40`) follows the
+    /// model: nothing but the rest test while the player rests.
+    #[test]
+    fn change_levels_follows_the_frame_model() {
+        use world::frame::world_time::{follows, WorldState};
+        let f = model(0x0096_eb40);
+        let (mut e, lists, _, _) = change_scene();
+        stub(&mut e, 0x0094_df60, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0096_eb40, &args![lists]);
+        let resting = WorldState {
+            resting: true,
+            ..WorldState::default()
+        };
+        follows(f, &resting, &model_callees(&e), &[]).expect("resting");
+        let (mut e, lists, _, _) = change_scene();
+        e.call_log = Some(vec![]);
+        e.call(0x0096_eb40, &args![lists]);
+        follows(f, &WorldState::default(), &model_callees(&e), &[]).expect("moving");
+    }
+
+    /// `ProcessLists::UpdateFollowerTempList` (`0096e9b0`) follows the model.
+    #[test]
+    fn followers_follow_the_frame_model() {
+        use world::frame::world_time::{follows, WorldState};
+        let mut e = fixture();
+        let objects: Vec<u32> = (0..2).map(|_| object(&mut e)).collect();
+        let lists: Ptr<ProcessLists> = e.new_object();
+        fill_list(&mut e, lists.addr() + TEMP_SHOULD_MOVE_LIST, &objects);
+        let processes = give_processes(&mut e, &objects);
+        let leader = object(&mut e);
+        let player = object(&mut e);
+        e.set_global(PLAYER, player);
+        on_slot(&mut e, SLOT_IS_ACTOR, |_| 1);
+        stub(&mut e, 0x0057_6d30, 0);
+        let escort = processes[0];
+        on_slot(
+            &mut e,
+            0x27c,
+            move |p| if p == escort { 0x5002 } else { 0x5001 },
+        );
+        on_call(
+            &mut e,
+            PACKAGE_TYPE,
+            |pkg| if pkg == 0x5002 { 2 } else { 1 },
+        );
+        stub(&mut e, 0x0088_1650, leader);
+        stubs(&mut e, &[slot(0xc8), 0x008b_c790]);
+        e.call_log = Some(vec![]);
+        e.call(0x0096_e9b0, &args![lists]);
+        follows(
+            model(0x0096_e9b0),
+            &WorldState::default(),
+            &model_callees(&e),
+            &[],
+        )
+        .expect("follows");
+        assert_eq!(calls(&e, slot(0xc8)).len(), 1);
+        assert_eq!(calls(&e, 0x008b_c790).len(), 1);
+    }
+
     // <<more tests>>
 }

@@ -62,11 +62,13 @@
 //! The viewer orders its per-frame systems by these stages and steps and
 //! runs them under these gates (`viewer/src/frame_order.rs`, Phase 1 PR 3).
 //! The player's step, `Main::OnIdle_UpdatePlayer`, is split further in
-//! [`player`] (Phase 1 PR 4).
+//! [`player`] (Phase 1 PR 4); the world and time stage's callees in
+//! [`world_time`] (Phase 1 PR 5).
 
 // Translated from 0086e650 (decompiled, FalloutNV.exe 1.4.0.525)
 
 pub mod player;
+pub mod world_time;
 
 /// FRAME_SKELETON.md's stages, for grouping only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -134,8 +136,10 @@ pub enum Gate {
     LoadingMenuOpen,
     /// The world runs: menu mode clear (`0086e918`, `0086e946`) and the world
     /// not frozen (`0086e923`, `0086e955`). The screen splatters, the cell
-    /// tests, the sky's update (slot +0x104 of the object `00559450`
-    /// returns), `Calendar::Update` with the frame time (`0084d030`).
+    /// tests, the "World" scene graph's view distance (its slot +0x104 with the
+    /// frame time, `BSSceneGraph::SetViewDistanceBasedOnFrameRate`,
+    /// [`world_time::SCENE_GRAPH_UPDATE`]), `Calendar::Update` with the frame
+    /// time (`0084d030`).
     WorldRuns,
     /// The second cell-test question (`0086ef70`, `TES` +0x52): as
     /// `WorldRuns`, and `00451530` (`TES` +0x51 or +0x52 set) held
@@ -606,11 +610,11 @@ pub const STEPS: [FrameStep; 143] = [
     step(0x0055_9450, None, Stage::WorldAndTime, Gate::WorldRuns, Wiring::Open),
     step(0x0084_d030, None, Stage::WorldAndTime, Gate::WorldRuns, Wiring::Open),
     step(0x0084_d030, None, Stage::WorldAndTime, Gate::WorldRuns, Wiring::Open),
-    step(0x0086_7a40, Some("Calendar::Update"), Stage::WorldAndTime, Gate::WorldRuns, Wiring::Partial("world::scripting GameState::advance_clock (game time; its calendar is labelled a guess)")),
+    step(0x0086_7a40, Some("Calendar::Update"), Stage::WorldAndTime, Gate::WorldRuns, Wiring::Partial("world::scripting GameState::advance_clock (game time; its calendar is labelled a guess; world_time::CALENDAR_UPDATE)")),
     step(0x0043_d4d0, None, Stage::WorldAndTime, Gate::WorldRuns, Wiring::Open),
     step(0x0045_5640, Some("TES::RunAnimations"), Stage::WorldAndTime, Gate::WorldRunsSingleThread, Wiring::Open),
     step(0x0040_fbf0, None, Stage::WorldAndTime, Gate::Always, Wiring::Open),
-    step(0x0097_8550, Some("ProcessLists::RunActorScripts"), Stage::WorldAndTime, Gate::Always, Wiring::Open),
+    step(0x0097_8550, Some("ProcessLists::RunActorScripts"), Stage::WorldAndTime, Gate::Always, Wiring::Partial("viewer: scripts::run_scripts, ordered here (it runs every script it knows, and the game clock; world_time::RUN_ACTOR_SCRIPTS)")),
     step(0x0043_d4d0, None, Stage::WorldAndTime, Gate::Always, Wiring::Open),
     step(0x0097_77a0, Some("ProcessLists::UpdateRadiationList"), Stage::WorldAndTime, Gate::ProcessListsThreaded, Wiring::Open),
     step(0x0096_eb40, Some("ProcessLists::ChangeProcessLevelTempList"), Stage::WorldAndTime, Gate::ProcessListsThreaded, Wiring::Open),
@@ -627,8 +631,8 @@ pub const STEPS: [FrameStep; 143] = [
     step(0x0086_8850, Some("GarbageCollector::Update"), Stage::WorldAndTime, Gate::Always, Wiring::Open),
     step(0x0086_8d10, Some("GarbageCollector::ClearTempEffects"), Stage::WorldAndTime, Gate::Always, Wiring::Open),
     step(0x0052_4c90, None, Stage::WorldAndTime, Gate::Always, Wiring::Open),
-    step(0x0066_52e0, Some("BSTreeManager::Update"), Stage::WorldAndTime, Gate::Always, Wiring::Partial("speedtree::wind (the wind update 006658b0 only; viewer: trees)")),
-    step(0x0086_fbe0, Some("Main::OnIdle_UpdateCurrentGridCell"), Stage::WorldAndTime, Gate::Always, Wiring::Partial("world::ref_scripts (the grid-move test of TES::UpdateCurrentGridCell 00452580 only)")),
+    step(0x0066_52e0, Some("BSTreeManager::Update"), Stage::WorldAndTime, Gate::Always, Wiring::Partial("world_time::TREE_MANAGER_UPDATE (the wind update 006658b0 is speedtree::wind, viewer: trees::blow_wind; the camera's axes in trees::sway_trees)")),
+    step(0x0086_fbe0, Some("Main::OnIdle_UpdateCurrentGridCell"), Stage::WorldAndTime, Gate::Always, Wiring::Partial("world_time::UPDATE_CURRENT_GRID_CELL (world::ref_scripts has its grid-move test; viewer: exterior::stream_squares and the distant land at its sub-steps)")),
     step(0x0043_d4d0, None, Stage::InterfaceAndScene, Gate::Always, Wiring::Open),
     step(0x0086_fd70, Some("Main::OnIdle_DoInterfaceIdle"), Stage::InterfaceAndScene, Gate::InterfaceIdleSingleThread, Wiring::Open),
     step(0x0048_3710, None, Stage::InterfaceAndScene, Gate::Always, Wiring::Open),

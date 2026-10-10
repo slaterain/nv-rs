@@ -553,4 +553,93 @@ mod tests {
         let bare: Ptr<Calendar> = e.new_object();
         assert_eq!(e.call(0x0086_7da0, &args![bare]).f32(), 12.0);
     }
+
+    /// `Calendar::Update`'s calls follow `world::frame::world_time`'s model of
+    /// it for each of its tests (docs/FRAME_SKELETON.md, PR 5): the
+    /// `TESGlobal` setter on the globals of the reached sub-steps, in order.
+    #[test]
+    fn update_follows_the_frame_model() {
+        use world::frame::world_time::{follows, function, steps_run, Callee, WorldState};
+        let model = function(0x0086_7a40).expect("modelled");
+        // The global each setter call site writes (indices into
+        // `calendar_with`'s list).
+        let global_of = |site: u32| match site {
+            0x0086_7ae6 | 0x0086_7c35 => 4,
+            0x0086_7bd7 => 0,
+            0x0086_7be9 => 1,
+            0x0086_7bfb => 2,
+            0x0086_7c50 => 3,
+            _ => usize::MAX,
+        };
+        // (year, month, day, hour, days passed, time scale), seconds, stale.
+        let cases: [([f32; 6], f32, bool, WorldState); 5] = [
+            (
+                [2277.0, 9.0, 3.0, 10.0, 5.0, 30.0],
+                120.0,
+                false,
+                WorldState::default(),
+            ),
+            (
+                [2277.0, 9.0, 3.0, 10.0, 5.0, 30.0],
+                120.0,
+                true,
+                WorldState {
+                    calendar_rewrite: true,
+                    ..WorldState::default()
+                },
+            ),
+            (
+                [2277.0, 9.0, 3.0, 23.5, 5.0, 30.0],
+                120.0,
+                false,
+                WorldState {
+                    midnight: true,
+                    ..WorldState::default()
+                },
+            ),
+            (
+                [2277.0, 3.0, 30.0, 23.5, 5.0, 30.0],
+                120.0,
+                false,
+                WorldState {
+                    midnight: true,
+                    month_ends: true,
+                    ..WorldState::default()
+                },
+            ),
+            (
+                [2277.0, 11.0, 31.0, 23.5, 5.0, 30.0],
+                120.0,
+                false,
+                WorldState {
+                    midnight: true,
+                    month_ends: true,
+                    year_ends: true,
+                    ..WorldState::default()
+                },
+            ),
+        ];
+        for (values, seconds, stale, s) in cases {
+            let mut e = calendar_engine();
+            let (calendar, globals) = calendar_with(&mut e, values);
+            e.set(calendar, Calendar::bDaysPassedStale, stale);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_7a40, &args![calendar, seconds]);
+            let log = e.call_log.take().unwrap();
+            let callees: Vec<Callee> = log.iter().map(|(a, _)| Callee::Direct(*a)).collect();
+            follows(model, &s, &callees, &[]).unwrap_or_else(|why| panic!("{s:?}: {why}"));
+            let set: Vec<u32> = log
+                .iter()
+                .filter(|(a, _)| *a == TES_GLOBAL_SET_VALUE)
+                .map(|(_, w)| w[0])
+                .collect();
+            let want: Vec<u32> = steps_run(&s, model)
+                .into_iter()
+                .map(|i| model.steps[i].sites[0])
+                .filter(|&site| global_of(site) != usize::MAX)
+                .map(|site| globals[global_of(site)].addr())
+                .collect();
+            assert_eq!(set, want, "{s:?}");
+        }
+    }
 }

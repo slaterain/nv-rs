@@ -1999,4 +1999,113 @@ mod tests {
         );
         assert_eq!(simple_contents(&e, NAVMESH_GARBAGE_FLAG_SET), vec![0x47]);
     }
+
+    // ---- the frame's model (docs/FRAME_SKELETON.md, PR 5) ----
+
+    /// The logged callees as `world::frame::world_time` names them (the
+    /// references' destructor double is their vtable slot +0x10).
+    fn model_callees(e: &Engine) -> Vec<world::frame::world_time::Callee> {
+        use world::frame::world_time::Callee;
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(a, _)| match *a {
+                DESTRUCTOR_TARGET => Callee::Virtual(0x10),
+                a => Callee::Direct(a),
+            })
+            .collect()
+    }
+
+    /// The callees the translations call as Rust functions, so not in the
+    /// log: the collector's lock and unlock, the biped's destructor, the
+    /// array moves, the 3D object's unmarking and the effects' removal.
+    const RUST_CALLED: [u32; 8] = [
+        0x0086_7f50,
+        0x0086_7f80,
+        0x0041_8e00,
+        0x0086_94c0,
+        0x0086_8ce0,
+        0x0086_9420,
+        0x004d_ffa0,
+        0x0086_9510,
+    ];
+
+    fn rust_called() -> Vec<world::frame::world_time::Callee> {
+        RUST_CALLED
+            .iter()
+            .map(|&a| world::frame::world_time::Callee::Direct(a))
+            .collect()
+    }
+
+    /// `GarbageCollector::Update` (`00868850`) follows the model for each
+    /// queue that can come first.
+    #[test]
+    fn update_follows_the_frame_model() {
+        use world::frame::world_time::{follows, function, Garbage, WorldState};
+        let model = function(0x0086_8850).expect("modelled");
+        let cases: [(Garbage, bool); 8] = [
+            (Garbage::None, true),
+            (Garbage::Animations, true),
+            (Garbage::Animations, false),
+            (Garbage::BipedsSet, true),
+            (Garbage::BipedsClear, true),
+            (Garbage::Objects3dClear, true),
+            (Garbage::ReferencesSet, true),
+            (Garbage::ReferencesClear, true),
+        ];
+        for (garbage, free) in cases {
+            let mut e = gc_engine();
+            empty_arrays(&mut e);
+            match garbage {
+                Garbage::Animations => make_array(&mut e, ANIM_GARBAGE, &[0x1008, 0x1010]),
+                Garbage::BipedsSet => {
+                    let biped = e.mem.alloc(16);
+                    make_array(&mut e, BIPED_GARBAGE_FLAG_SET, &[biped]);
+                }
+                Garbage::BipedsClear => make_array(&mut e, BIPED_GARBAGE_FLAG_CLEAR, &[0x11]),
+                Garbage::Objects3dClear => make_array(&mut e, ACTOR_3D_GARBAGE_FLAG_CLEAR, &[0x21]),
+                Garbage::ReferencesSet => {
+                    let reference = make_object(&mut e, true);
+                    make_array(&mut e, OBJECT_GARBAGE_FLAG_SET, &[reference]);
+                }
+                Garbage::ReferencesClear => make_array(&mut e, OBJECT_GARBAGE_FLAG_CLEAR, &[0x46]),
+                _ => {}
+            }
+            set_lock_available(&mut e, free);
+            start_log(&mut e);
+            e.call(0x0086_8850, &args![]);
+            let s = WorldState {
+                garbage,
+                model_loader_free: free,
+                ..WorldState::default()
+            };
+            follows(model, &s, &model_callees(&e), &rust_called())
+                .unwrap_or_else(|why| panic!("{garbage:?} {free}: {why}"));
+        }
+    }
+
+    /// `GarbageCollector::ClearTempEffects` (`00868d10`) follows the model.
+    #[test]
+    fn clear_temp_effects_follows_the_frame_model() {
+        use world::frame::world_time::{follows, function, WorldState};
+        let model = function(0x0086_8d10).expect("modelled");
+        for (queued, free) in [(false, true), (true, false), (true, true)] {
+            let mut e = gc_engine();
+            empty_arrays(&mut e);
+            if queued {
+                make_array(&mut e, EFFECT_GARBAGE_FLAG_SET, &[0x61]);
+            }
+            set_lock_available(&mut e, free);
+            start_log(&mut e);
+            e.call(0x0086_8d10, &args![]);
+            let s = WorldState {
+                temp_effects: queued,
+                model_loader_free: free,
+                ..WorldState::default()
+            };
+            follows(model, &s, &model_callees(&e), &rust_called())
+                .unwrap_or_else(|why| panic!("{queued} {free}: {why}"));
+        }
+    }
 }

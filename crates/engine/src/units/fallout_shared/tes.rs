@@ -11742,6 +11742,16 @@ mod tests {
     /// Returns the engine, the `TES`, the cell, the log, and the words of the
     /// position request the player was given.
     fn visit_run(mode: i32, logging: bool) -> (Engine, Ptr<TES>, u32, CallLog, RequestWords) {
+        visit_run_with(mode, logging, |_, _| {})
+    }
+
+    /// [`visit_run`], with `before` run on the engine and the `TES` just before
+    /// the call.
+    fn visit_run_with(
+        mode: i32,
+        logging: bool,
+        before: impl FnOnce(&mut Engine, Ptr<TES>),
+    ) -> (Engine, Ptr<TES>, u32, CallLog, RequestWords) {
         let (mut e, tes, _) = switch_engine();
         let _ = tac_common(&mut e);
         let cell = named_form(&mut e, "Vault");
@@ -11811,6 +11821,7 @@ mod tests {
         });
         e.set(tes, TES::pfnTACCallbackFunc, Ptr::new(0x0300_0200));
         e.set(tes, TES::pTACCallbackData, Ptr::new(0x1234));
+        before(&mut e, tes);
         let log = run_logged(&mut e, |e| {
             e.call(0x0045_56d0, &args![tes, mode]);
         });
@@ -12032,4 +12043,162 @@ mod tests {
         assert_eq!(e.global::<u32>(TEST_EXTERIOR_COUNT), 1);
     }
     // END SESSION 4 TESTS
+
+    // ---- the frame's model (docs/FRAME_SKELETON.md, PR 5) ----
+
+    /// The callees of a log as `world::frame::world_time` names them: the
+    /// import slot and the callback double by what they are, the rest
+    /// direct.
+    fn model_callees(log: &CallLog) -> Vec<world::frame::world_time::Callee> {
+        use world::frame::world_time::Callee;
+        log.iter()
+            .map(|(a, _)| match *a {
+                IMPORT_SEND_INPUT => Callee::Import(IMPORT_SEND_INPUT),
+                0x0300_0200 => Callee::Pointer(0x54),
+                0x0300_0010 => Callee::Virtual(0x10),
+                a => Callee::Direct(a),
+            })
+            .collect()
+    }
+
+    /// `TES::RunAnimations` (`00455640`) follows the model, indoors and out.
+    #[test]
+    fn run_animations_follows_the_frame_model() {
+        use world::frame::world_time::{follows, function, Callee, WorldState};
+        let model = function(0x0045_5640).expect("modelled");
+        for interior in [false, true] {
+            let (mut e, tes, _, _) = buffers_engine(1, &[0; 3], &[0; 3]);
+            e.map(COUNTER_011C56E8, 4);
+            e.set(tes, TES::pGridCellA, Ptr::new(0x6400));
+            noop(&mut e, &[CELL_PASS_A, GRID_CELL_ARRAY_PASS_A]);
+            if interior {
+                returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+            }
+            let log = run_logged(&mut e, |e| {
+                e.call(0x0045_5640, &args![tes]);
+            });
+            let s = WorldState {
+                interior_loaded: interior,
+                ..WorldState::default()
+            };
+            // `00455680` is called as a Rust function (its count's clear).
+            follows(
+                model,
+                &s,
+                &model_callees(&log),
+                &[Callee::Direct(0x0045_5680)],
+            )
+            .unwrap_or_else(|why| panic!("interior {interior}: {why}"));
+        }
+    }
+
+    /// `TES::UpdateCurrentGridCell` (`00452580`) follows the model: the
+    /// first load, inside the centre cell, and across a border outdoors and
+    /// with an interior loaded.
+    #[test]
+    fn update_current_grid_cell_follows_the_frame_model() {
+        use world::frame::world_time::{follows, function, Callee, GridMove, WorldState};
+        let model = function(0x0045_2580).expect("modelled");
+        // Called as Rust functions, so not in the log: the texture clean-up,
+        // the first load, the loading flag and the grid array's load.
+        let ignore = vec![
+            Callee::Direct(0x0045_2490),
+            Callee::Direct(0x0045_15a0),
+            Callee::Direct(0x0045_2e40),
+            Callee::Direct(0x0045_2ff0),
+        ];
+        let inside = WorldState::default();
+        let (mut e, tes, _, _) = update_engine(5);
+        let pos = position(&mut e, 10.0 * 4096.0 + 2048.0, 20.0 * 4096.0 + 2048.0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2580, &args![tes, pos, 0u8]);
+        });
+        follows(model, &inside, &model_callees(&log), &ignore).expect("inside");
+        // Into the next column: the cells coming into range are queued.
+        let (mut e, tes, _, _) = update_engine(5);
+        let pos = position(&mut e, 11.0 * 4096.0 + 100.0, 20.0 * 4096.0 + 2048.0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2580, &args![tes, pos, 0u8]);
+        });
+        follows(model, &inside, &model_callees(&log), &ignore).expect("queueing");
+        assert!(model_callees(&log).contains(&Callee::Direct(EXTERIOR_CELL_LOADER_QUEUE_CELL_LOAD)));
+
+        let first = WorldState {
+            grid: GridMove::First,
+            ..inside
+        };
+        let (mut e, tes, _, _) = update_engine(5);
+        e.set(tes, TES::iCurrentGridX, 0x7fff_ffff);
+        e.set_global(GRID_LOAD_IN_PROGRESS, 1u8);
+        let pos = position(&mut e, 5.0 * 4096.0 + 10.0, 7.0 * 4096.0 + 10.0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2580, &args![tes, pos, 0u8]);
+        });
+        // The first load (`004515a0`, a Rust function here) calls the water
+        // listener's update itself.
+        let mut first_ignore = ignore.clone();
+        first_ignore.push(Callee::Direct(0x0062_f460));
+        follows(model, &first, &model_callees(&log), &first_ignore).expect("first");
+
+        let crossed = WorldState {
+            grid: GridMove::Crossed,
+            ..inside
+        };
+        let (mut e, tes, _, _) = update_engine(5);
+        install_player(&mut e, 0);
+        e.set(tes, TES::pWorldSpace, Ptr::new(0));
+        returns(&mut e, 0x0046_0140, 0x7100);
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, 0x6abc);
+        returns(&mut e, 0x0068_15c0, slot);
+        let log = grid_move(&mut e, tes, 12, 0);
+        follows(model, &crossed, &model_callees(&log), &ignore).expect("crossed");
+        assert!(model_callees(&log).contains(&Callee::Virtual(0x10)));
+
+        let indoors = WorldState {
+            interior_loaded: true,
+            ..crossed
+        };
+        let (mut e, tes, _, _) = update_engine(5);
+        install_player(&mut e, 0);
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        let log = grid_move(&mut e, tes, 12, 0);
+        follows(model, &indoors, &model_callees(&log), &ignore).expect("indoors");
+        assert!(!model_callees(&log).contains(&Callee::Virtual(0x10)));
+    }
+
+    /// `TES::TestAllCells(0)` (`004556d0`) as the frame calls it, while a test
+    /// runs over one interior: a turn that visits it and ends the run follows
+    /// the model, with and without the logging.
+    #[test]
+    fn test_all_cells_turn_follows_the_frame_model() {
+        use world::frame::world_time::{follows, function, Callee, WorldState};
+        let model = function(0x0045_56d0).expect("modelled");
+        for logging in [false, true] {
+            let (_, _, _, log, _) = visit_run_with(0, logging, |e, tes| {
+                e.set(tes, TES::bRunningCellTests, true);
+                e.set_global(TEST_MODE, 2u32);
+                e.set_global(TEST_INTERIOR_COUNT, 1u32);
+                e.set_global(TEST_INTERIOR_INDEX, 0u32);
+            });
+            let s = WorldState {
+                interior_loaded: true,
+                test_cell_found: true,
+                test_cell_interior: true,
+                test_logging: logging,
+                test_callback: true,
+                test_done: true,
+                ..WorldState::default()
+            };
+            // `00453dc0` (placing the player in the interior) is called as a
+            // Rust function.
+            follows(
+                model,
+                &s,
+                &model_callees(&log),
+                &[Callee::Direct(0x0045_3dc0)],
+            )
+            .unwrap_or_else(|why| panic!("logging {logging}: {why}"));
+        }
+    }
 }

@@ -31,15 +31,15 @@ Map provenance:
 | | Functions | Share |
 | --- | ---: | ---: |
 | translated | 9483 | 14.3% |
-| traced | 4461 | 6.7% |
-| platform | 3421 | 5.2% |
+| traced | 4467 | 6.7% |
+| platform | 3420 | 5.2% |
 | library | 21916 | 33.1% |
-| open | 26978 | 40.7% |
+| open | 26973 | 40.7% |
 | **all** | **66259** | |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 13542 (33.4%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 13547 (33.4%) are translated or traced.
 
-Rust cites 14353 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 14436 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -70,20 +70,20 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Subsystem | Functions | KB | Named | translated | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 64 | 0 | 21270 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 6166 | 995 | 0 | 0 | 3309 | 68.4% |
+| fallout shared | 10470 | 2065 | 3149 | 6166 | 996 | 0 | 0 | 3308 | 68.4% |
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 77 | 0 | 0 | 6461 | 2.0% |
 | fallout/ai | 4849 | 1475 | 1888 | 1876 | 612 | 0 | 0 | 2361 | 51.3% |
-| fallout/interface | 2645 | 991 | 1247 | 503 | 741 | 0 | 0 | 1401 | 47.0% |
+| fallout/interface | 2645 | 991 | 1247 | 503 | 742 | 0 | 0 | 1400 | 47.1% |
 | (unplaced) | 2353 | 470 | 0 | 30 | 390 | 1 | 0 | 1932 | 17.8% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 315 | 199 | 0 | 0 | 1274 | 28.7% |
-| NiMain | 1619 | 261 | 1134 | 3 | 74 | 0 | 0 | 1542 | 4.8% |
+| NiMain | 1619 | 261 | 1134 | 3 | 75 | 0 | 0 | 1541 | 4.8% |
 | BSHavok | 1615 | 316 | 1134 | 22 | 139 | 0 | 0 | 1454 | 10.0% |
 | BSShader | 1549 | 608 | 350 | 0 | 141 | 1408 | 0 | 0 | - |
 | NiAnimation | 1279 | 171 | 903 | 0 | 32 | 0 | 0 | 1247 | 2.5% |
 | fallout/misc | 1045 | 171 | 353 | 311 | 128 | 0 | 0 | 606 | 42.0% |
-| BSMain | 991 | 192 | 478 | 0 | 62 | 0 | 0 | 929 | 6.3% |
+| BSMain | 991 | 192 | 478 | 0 | 63 | 0 | 0 | 928 | 6.4% |
 | NiXenonRenderer | 965 | 172 | 298 | 0 | 5 | 960 | 0 | 0 | - |
-| SpeedTree | 732 | 234 | 151 | 0 | 111 | 621 | 0 | 0 | - |
+| SpeedTree | 732 | 234 | 151 | 0 | 112 | 620 | 0 | 0 | - |
 | fallout/magic | 705 | 162 | 378 | 7 | 67 | 0 | 0 | 631 | 10.5% |
 | LIBCMT | 682 | 124 | 503 | 0 | 21 | 31 | 630 | 0 | - |
 | NiParticle | 649 | 89 | 540 | 0 | 66 | 0 | 0 | 583 | 10.2% |
@@ -101,7 +101,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | fallout shared/sky | 164 | 59 | 51 | 2 | 33 | 0 | 0 | 129 | 21.3% |
 | fallout shared/region system | 159 | 26 | 74 | 0 | 20 | 0 | 0 | 139 | 12.6% |
 | fallout shared/tempeffects | 149 | 48 | 58 | 0 | 22 | 0 | 0 | 127 | 14.8% |
-| fallout shared/speedtree | 115 | 33 | 57 | 1 | 18 | 0 | 0 | 96 | 16.5% |
+| fallout shared/speedtree | 115 | 33 | 57 | 1 | 19 | 0 | 0 | 95 | 17.4% |
 | NiSystem | 92 | 7 | 39 | 1 | 4 | 0 | 0 | 87 | 5.4% |
 | BSSystemUtilities | 86 | 5 | 25 | 0 | 1 | 85 | 0 | 0 | - |
 | fallout/dialogue | 74 | 14 | 46 | 0 | 18 | 0 | 0 | 56 | 24.3% |
@@ -128,8 +128,8 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | Depth | Call sites | Functions | translated | traced | platform | library | open |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
-| 1 | 143 | 117 | 94 | 29 | 3 | 0 | 17 |
-| 2 | 1575 | 583 | 1000 | 413 | 25 | 4 | 133 |
+| 1 | 143 | 117 | 94 | 31 | 3 | 0 | 15 |
+| 2 | 1575 | 583 | 1000 | 414 | 24 | 4 | 133 |
 | 3 | 4973 | 1303 | 3074 | 1156 | 160 | 26 | 557 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
@@ -184,7 +184,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 46 | `004e0110` | `ScreenSplatter::Update` | open |
 | 47 | `004de600` | `ScreenCustomSplatter::Update` | open |
 | 48 | `00683a60` | - | traced |
-| 49 | `00a81a20` | - | open |
+| 49 | `00a81a20` | - | traced |
 | 50 | `00451530` | - | translated |
 | 51 | `0086ef70` | - | translated |
 | 52 | `004556d0` | `TES::TestAllCells` | translated |
@@ -212,7 +212,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 74 | `00868850` | `GarbageCollector::Update` | translated |
 | 75 | `00868d10` | `GarbageCollector::ClearTempEffects` | translated |
 | 76 | `00524c90` | - | traced |
-| 77 | `006652e0` | `BSTreeManager::Update` | open |
+| 77 | `006652e0` | `BSTreeManager::Update` | traced |
 | 78 | `0086fbe0` | `Main::OnIdle_UpdateCurrentGridCell` | translated |
 | 79 | `0043d4d0` | - | translated |
 | 80 | `0086fd70` | `Main::OnIdle_DoInterfaceIdle` | translated |

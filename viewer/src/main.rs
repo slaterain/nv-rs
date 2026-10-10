@@ -482,19 +482,13 @@ fn main() {
         // is an order inside one set that the frame doesn't give, and says
         // why it stays.
         //
-        // Ahead of the frame: a newly loaded place on screen, then the land
-        // streamed around the player (`ViewerSet::Loading`).
+        // Ahead of the frame: a newly loaded place on screen
+        // (`ViewerSet::Loading`). The land around the player streams in stage
+        // 4, at the grid's update (below).
         .add_systems(
             Update,
-            (
-                spawn_scene,
-                exterior::enter_exterior,
-                exterior::stream_squares,
-                exterior::stream_distant_land,
-                lod_objects::stream_distant_objects,
-            )
-                // Kept: each loader works on what the one before put in
-                // place (the scene, the exterior, its squares).
+            (spawn_scene, exterior::enter_exterior)
+                // Kept: the exterior is entered once the scene is.
                 .chain()
                 .in_set(ViewerSet::Loading),
         )
@@ -635,21 +629,39 @@ fn main() {
                 // inside its stage already.)
                 .chain(),
         )
-        // Stage 4, the world and time: the scripts (`Runner::update` holds
-        // parts of `Calendar::Update`, step 56, and of the current grid
-        // cell's update, step 78; `ProcessLists::RunActorScripts` is step
-        // 60), then the doors, movies and sky.
+        // Stage 4, the world and time (`world::frame::world_time`, its
+        // callees' sub-steps as `frame_order::WorldSet`s,
+        // docs/FRAME_SKELETON.md "PR 5 result").
+        //
+        // The scripts at `ProcessLists::RunActorScripts` (step 60), in its
+        // `TESObjectREFR::RunScript` sub-step: `run_scripts` runs every
+        // script it knows (references', quests', items'; the exe's other
+        // script runs aren't traced) and, first, the game clock
+        // (`Runner::update`'s `advance_clock`, the work of `Calendar::Update`,
+        // step 56, which it skips in menus as that step's gate does). The
+        // `--use` test aid presses E for it first.
+        .add_systems(
+            Update,
+            (scripts::start_use, scripts::run_scripts)
+                // Kept: the test aid's E before the scripts read it.
+                .chain()
+                .in_set(frame_order::WorldSet::at(
+                    frame_order::RUN_ACTOR_SCRIPTS,
+                    frame_order::RUN_SCRIPT_AT,
+                )),
+        )
+        // Placed for order only, right after the scripts (no sub-step of the
+        // stage is theirs): E on doors and the doors' swings; movies, which
+        // start from the scripts' `PlayBink`; the weather, sky, daylight and
+        // emittance, whose exe counterpart, `Sky::Update`, is called from
+        // `TES::UpdateCellAnimations` (`004536ae`) and
+        // `TES::UpdateCellMainThread` (`00453811`) in stage 6 (the AI stage's
+        // order is PR 6; the frame's slot +0x104 call in this stage is the
+        // scene graph's view distance, not the sky).
         .add_systems(
             Update,
             (
-                // The scripts, then E on doors, then the doors' swings.
-                (
-                    scripts::start_use,
-                    scripts::run_scripts,
-                    walk::doors,
-                    doors::update_doors,
-                )
-                    .chain(),
+                (walk::doors, doors::update_doors).chain(),
                 (movie::start_movies, movie::play_movies).chain(),
                 (
                     weather::run_weather,
@@ -660,12 +672,53 @@ fn main() {
                 )
                     .chain(),
             )
-                // Kept: the viewer's order. The frame puts the sky's update
-                // (step 53) before `Calendar::Update` (step 56), but neither
-                // is wired to these systems yet; movies start from the
-                // scripts' `PlayBink`, whose place isn't traced.
+                // Kept: the viewer's order among them.
                 .chain()
-                .in_set(FrameSet::Stage(Stage::WorldAndTime)),
+                .in_set(FrameSet::Stage(Stage::WorldAndTime))
+                .after(FrameSet::step(frame_order::RUN_ACTOR_SCRIPTS))
+                .before(FrameSet::after(frame_order::RUN_ACTOR_SCRIPTS)),
+        )
+        // The land around the player: `Main::OnIdle_UpdateCurrentGridCell`
+        // (step 78), whose `TES::UpdateCurrentGridCell` moves the exterior
+        // grid with the player once the player's update has moved them. The
+        // squares stream at `GridCellArray::SetCenter` (the cells detached
+        // and attached around the new centre), the distant land and objects
+        // at `BGSTerrainManager::Update`; both outside their gates (the grid
+        // update stops in menu mode, and the terrain update runs only on a
+        // grid move): the viewer's squares also finish loading a place just
+        // entered, which the exe does at once in the position request
+        // (`PlayerCharacter::HandlePositionPlayerRequest`) in any mode, and
+        // its distant land follows the camera every frame.
+        .add_systems(
+            Update,
+            (
+                exterior::stream_squares
+                    .after(frame_order::WorldSet::at(
+                        frame_order::UPDATE_CURRENT_GRID_CELL,
+                        frame_order::GRID_SET_CENTER_AT,
+                    ))
+                    .before(frame_order::WorldSet::after(
+                        frame_order::UPDATE_CURRENT_GRID_CELL,
+                        frame_order::GRID_SET_CENTER_AT,
+                    )),
+                (
+                    exterior::stream_distant_land,
+                    lod_objects::stream_distant_objects,
+                )
+                    .chain()
+                    .after(frame_order::WorldSet::at(
+                        frame_order::UPDATE_CURRENT_GRID_CELL,
+                        frame_order::TERRAIN_UPDATE_AT,
+                    ))
+                    .before(frame_order::WorldSet::after(
+                        frame_order::UPDATE_CURRENT_GRID_CELL,
+                        frame_order::TERRAIN_UPDATE_AT,
+                    )),
+            )
+                // Kept: each loader works on what the one before put in
+                // place (the squares, then the distant land under them).
+                .chain()
+                .in_set(FrameSet::step(frame_order::UPDATE_CURRENT_GRID_CELL_STEP)),
         )
         // Stage 6, the AI work (on the AI linear task threads with threads
         // > 1, as `main` leaves the PC: FRAME_SKELETON.md "The actor

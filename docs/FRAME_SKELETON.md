@@ -1,8 +1,8 @@
 # Phase 1: the frame skeleton (proposal)
 
 Drafted 2026-10-09 at the end of Phase 0 ([ENGINE_PORT_PLAN.md](ENGINE_PORT_PLAN.md),
-[LEDGER.md](LEDGER.md)); PR 1 (the frame map), PR 2 (`world::frame`), PR 3 (the viewer's order) and PR 4 (the player stage) done 2026-10-09, the rest is
-not implemented yet. Names are from the Xbox 360 prototype (Xbox PDB,
+[LEDGER.md](LEDGER.md)); PR 1 (the frame map), PR 2 (`world::frame`), PR 3 (the viewer's order), PR 4 (the player stage) and PR 5 (the world and time stage) done 2026-10-09, the
+rest is not implemented yet. Names are from the Xbox 360 prototype (Xbox PDB,
 ADR-0002), PC addresses from `research/engine-map/engine_map.tsv` and
 `research/engine-map/frame.tsv`.
 
@@ -621,6 +621,127 @@ world system yet.
   player systems (`view_input`, the look) still read Bevy's input that the
   menus clear. That moves with PR 7.
 
+## PR 5 result: the world and time stage
+
+`crates/world/src/frame/world_time.rs` (`world::frame::world_time`,
+2026-10-09) models the callees of stage 4 (steps 48-78) the way
+`world::frame::player` models the player's step: for each function the
+calls that do its work (not the queries: getters, settings, list nodes, the
+frame time), in the order of their call sites, each with a gate read from
+the function's own branches (`SubGate`, evaluated on a `WorldState`) and,
+where the call also depends on its block's own tests (a list entry, a
+per-actor value), those branches (`own_tests`, not modelled). Every call
+site and branch named is from the disassembly of FalloutNV.exe 1.4.0.525
+(the read-only Ghidra server); the Xbox PDB names are the engine map's
+(left out where the map names a function only by the linker's folding).
+
+### The functions
+
+| Function | Sub-steps | Gates (branches) |
+| --- | --- | --- |
+| `TES::TestAllCells` `004556d0` (called with 0 while `bRunningCellTests`, `TES` +0x51) | 25: a mouse move (`SendInput`, so the machine doesn't idle), entering the next world space (`TES::SetWorldSpace`, a print), the exterior walk (`TESWorldSpace::LoadCell`, `00454e70`) or the interior walk (`00461980`), the visit (`Calendar::Update` by 10, placing the player: `00453dc0` indoors, `00454450` or `TES::UpdateCurrentGridCell` outdoors; `PlayerCharacter::RequestPositionPlayer`, `HandlePositionPlayerRequest`, `IOManager::LoadQueuedPriority`, four memory calls), the cell's line (print and `MessageHandler::Output`), the callback at `TES` +0x54, `TESSaveLoadGame::TestAllCells`, the end (`MessageHandler::IncDisableWarningCount`) | enter (`00455a2c`, `00455a39`, `00455ab1`); exterior/interior walk (`00455ba3`, `00455bbc`); a cell found and visited (`00455d5e`, `00455d66`, `00455dd7`); interior or not and an interior loaded (`00455ea3`, `00455eea`); logging (`004560c4`, `00456204`); the callback (`00456451`); mode 4/5 (`00456476`, `0045647f`); done (`0045649f`) |
+| `Calendar::Update` `00867a40` | 7: the `TESGlobal` setter (`0046dce0`) on days passed (rewritten), the month's days (`004b10d0`), year, month, day, days passed, hour | the rewrite: the calendar's flag +0x1c or the hour more than 1 past the last (`00867a9b`, `00867ab3`); midnight (`00867b00`); the month ends (`00867b85`); the year ends (`00867bb1`) |
+| `TES::RunAnimations` `00455640` | 3: the count `[011c56e8]` cleared (`00455680`), `TESObjectCELL::RunAnimations` or `GridCellArray::RunAnimations` | an interior loaded (`00455656`) |
+| `ProcessLists::RunActorScripts` `00978550` | 1: `TESObjectREFR::RunScript` on each actor of process level 0 | own tests `0097858b`, `009785a3`, `009785ba` |
+| `ProcessLists::UpdateRadiationList` `009777a0` | 9: per source and exposed actor `HighProcess::AddAvoidPathingArea`, `Actor::SetMoveMode`, `Actor::InitiateAvoidPackage`, the level kept (`00977c90`) and pushed (process slot +0x768); the player's; the levels reset when the sources end | sources (`009777cb`, `0097780b`); ended (`009777e0`-`009777fa`, `00977b99`) |
+| `ProcessLists::ChangeProcessLevelTempList` `0096eb40` | 17: `PlayerCharacter::IsSleepingorResting`, then per entry of the `TempShouldMoveList`: `ProcessLists::AddReference`, `ProcessArray::RemoveActor`, deleted (slot +0x10), released (`00931e80`), dead and gone (slot +0x324, dropped items `00572270`), the move to its level (slot +0xd8 with 0, +0x224, process +0x364, `ProcessArray::AddActor`, +0x260), the rest flagged (slot +0xd8 with 1) | not resting (`0096eb5c`); per-entry own tests |
+| `ProcessLists::UpdateFollowerTempList` `0096e9b0` | 2: the process's slot +0xc8 (an escort package, type 2) or `Actor::AddFollower` | per-entry own tests |
+| `GarbageCollector::Update` `00868850` | 18: the collector's lock (`00867f50`/`00867f80`) around one batch of the first queue with entries: animations (`00418d20`), bipeds, 3D objects (`00868ce0`), references (slot +0x10), navmeshes (`00401970`), or a flag-clear array moved to its flag-set twin; the model loader's lock released (`004aaf10`) | the queues in order (`008688bf`, `00868976`, `00868a2d`, `00868a5c`, `00868ae6`, `00868b15`, `00868c0c`, `00868c3b`, `00868ca5`); the model loader's lock for the destroying ones (`008688d5`, `0086898c`, `00868b2b`) |
+| `GarbageCollector::ClearTempEffects` `00868d10` | 4: the lock, `RemoveAll` on the flag-set effects, the model loader's lock released, the unlock | effects queued and the lock free (`00868d1f`, `00868d31`) |
+| `BSTreeManager::Update(camera, stopped)` `006652e0` (not translated; disassembly only) | 7: SpeedTree's clock (`00b07060`), `CSpeedTreeRT::SetCamera`, the wind's speed from the sky (`TES` +0x68, its +0xcc; 0 indoors), its direction (`004bc450`), the wind update (`006658b0`), `iCanopyShadowScale:SpeedTree` (`00664720`), `fCanopyShadowGrassMult:SpeedTree` (`00665520`) | the world runs (`006652f4`, `006653a9`); a camera (`00665322`); the sky (`006653b6`, `006653c9`); outdoors (`006653dc`) |
+| `Main::OnIdle_UpdateCurrentGridCell` `0086fbe0` | all 6 calls: the player's position, `TES::UpdateCurrentGridCell`, the cell tests' flag, then (cell tests outdoors) the world spaces refreshed | not menu mode (`0086fbf1`), no new game's loading menu (`[011d8907]`, set by the start menu's `ConfirmNewGame` at `007d3354`, cleared by the loading menu's destructor at `0078883c`; `0086fbfc`), not frozen (`0086fc07`); cell tests (`0086fc32`), outdoors (`0086fc41`) |
+| `TES::UpdateCurrentGridCell` `00452580` | 22: always the last-loaded list cleared and the bounds refreshed; with no grid yet the area loaded at once (`TES::ShowLoadingMenu`, `004515a0`); inside the centre cell the loads coming into range queued (`ExteriorCellLoader::QueueCellLoad`, `TES::CleanUpUnusedTextures` first when asked); across a border the queued loads cancelled (`00528110`), the cells detached and attached around the new centre (`TES::SetWorldSpace` when none, `GridCellArray::SetCenter` through the grid array's slot +0x10, `TES::InitModelsToLoad`, `TES::GridArrayLoad`), textures cleaned up, `BGSTerrainManager::Update` at the player | the data handler (`00452624`); the first load (`00452637`, `00452643`); inside or crossed (`004527a4`, `004527be`, `004527ca`); the reload with no interior or a script running (`00452b5a`, `00452b62`); outdoors (`00452d75`) |
+
+The rest of the stage is `0086e650`'s own queries and locks (the parallel
+update's manager, the cell tests' flags, the frame time, the thread count,
+the process lists' lock `011f11a0` around the lists, the memory manager's
+call `00878080`, the texture purge request and `PurgeUnusedTextures`, the
+scene graph's camera for the tree manager), and one call that isn't direct:
+slot +0x104 of the "World" scene graph (`[011deb7c]`, vtable `01083b5c`)
+with the frame time at `0086e9b5`. That slot holds `00c52590`,
+`BSSceneGraph::SetViewDistanceBasedOnFrameRate`: PR 2 called it the sky's
+update, which it is not (`Sky::Update` `0063ac70` is called from
+`TES::UpdateCellAnimations` at `004536ae` and `TES::UpdateCellMainThread`
+at `00453811`, stage 6); `world::frame`'s doc is corrected.
+
+### Tests
+
+`world::frame::world_time` (13): every direct call is in `frame.tsv`'s call
+list under its function, in order (depth 3 for `00452580` under
+`0086fbe0`); sites, gate branches and own tests inside their functions and
+before their calls; the scene graph's call between the two frame-time
+reads; a test per function's gates; the `follows` check. The engine crate
+drives the translations and checks their calls against the model
+(`follows`: every reached sub-step without own tests is called, in order,
+and nothing only unreached sub-steps call; callees the translation calls as
+Rust functions are named and left out): `0086fbe0` exactly under 6 input
+combinations; `00867a40` under 5 (with the globals each setter writes);
+`00455640` indoors and out; `00452580` inside the cell, queueing, the first
+load, crossing outdoors and with an interior loaded; `004556d0` visiting an
+interior with and without logging; `00978550`; `009777a0` with a source,
+ended and without the iterator; `0096eb40` resting and not; `0096e9b0`;
+`00868850` for each queue (and the busy lock); `00868d10` three ways.
+`006652e0` has no translation, so no such test.
+
+### The viewer
+
+`viewer/src/frame_order.rs`: `WorldSet::Sub(function, i)` for each
+sub-step, inside the set of the frame step that calls the function (its
+first call: the process lists' threads > 1 steps, which the viewer's thread
+count reaches) or, for `TES::UpdateCurrentGridCell`, inside
+`0086fbe0`'s sub-step that calls it; each chained in call order and run
+under its gate on `ThisWorld`, which `begin_frame` fills from `ThisFrame`
+(the world runs, menu mode, the frozen world, the cell tests) and the
+viewer (indoors: no `exterior::Exterior`; the sky outdoors), the rest
+fixed at `WorldState::default` (no new game's loading menu, nothing for
+the garbage collector, no radiation, not resting, the position inside the
+grid's centre cell: none of these gates has a viewer system under it).
+
+Where the stage's systems went (checked by reading each):
+
+| System | Place |
+| --- | --- |
+| `trees::blow_wind` (new: the wind's step, split out of `sway_trees`) | in the wind update's set (`BSTreeManager::Update`, `006654dd`): under its gate, the world runs |
+| `trees::sway_trees` | in step 77, right after the wind update, outside its gate: it applies the wind's last frame and the camera's axes (`CSpeedTreeRT::SetCamera`, called in menus too), the light and the trees' levels of detail (their places not traced) |
+| `trees::stream_trees` | stage 4 before step 77 (for order: in the exe the trees come with the cells' attach, step 78; kept ahead so new trees get this frame's wind and light) |
+| `scripts::start_use`, `scripts::run_scripts` | in `RunActorScripts`' `TESObjectREFR::RunScript` set (step 60; the step and sub-step are ungated): it runs every script it knows and, first, the game clock (`advance_clock`, `Calendar::Update`'s work, step 56, skipped in menus by its own test) |
+| `walk::doors`, `doors::update_doors`, the movies, `weather::run_weather`, `follow_sky`, `daylight::follow_the_clock`, the emittance pair | for order, right after step 60 and before step 61; the weather and sky are `Sky::Update`'s work, which is in stage 6 (PR 6) |
+| `exterior::stream_squares` (from `ViewerSet::Loading`) | in step 78 at `GridCellArray::SetCenter`'s sub-step, outside its gates: it also finishes the loads of a place just entered, which the exe does at once in the position request in any mode |
+| `exterior::stream_distant_land`, `lod_objects::stream_distant_objects` (from `ViewerSet::Loading`) | in step 78 at `BGSTerrainManager::Update`'s sub-step, outside its gates (they follow the camera every frame; the exe's terrain update runs on a grid move) |
+| `spawn_scene`, `exterior::enter_exterior` | stay in `ViewerSet::Loading` |
+
+`world_time` records them as `Partial` wiring on `Calendar::Update`'s
+setters, `RunScript`, `SetCamera`, the wind update, `QueueCellLoad`,
+`SetCenter` and `BGSTerrainManager::Update` (13 sub-steps); every other
+sub-step is open: `TES::TestAllCells` (the viewer has no cell test),
+`TES::RunAnimations` (with threads > 1 it runs on the AI thread, stage 6,
+where `move_pieces` stays), the radiation, process-level and follower
+lists (the viewer's offstage movement, `ai::move_offstage`, and its
+companions, `companions::come_along`, are its own and stay in stage 6),
+the garbage collector and the temporary effects' clean-up (Bevy despawns
+what the viewer removes), and the rest of the tree manager and the grid.
+
+Tests (`frame_order::tests`): the world sets in the exe's order with the
+systems added in reverse (the calendar's step, the scripts, what follows
+them, the wind and the sway, the squares and the distant land, the grid's
+last calls); menu mode stops the calendar's step, the wind and the grid's
+sub-steps but not the scripts' step, the sway or the loaders; the fixed
+inputs.
+
+### Behaviour differences
+
+- The trees hold still in menu mode (the game's menus, the Pip-Boy, the
+  dialogue menu, V.A.T.S.'s menu), as the exe's tree manager stops its clock
+  and wind there (`006652f4`, `006653a9`); they swayed before.
+- The squares around the player and the distant land now stream after the
+  player's update in the same frame (the exe's grid update, step 78, after
+  the player's step 14), instead of at the start of the next frame; a
+  square that finished loading is put on screen in the frame it is
+  received either way.
+- The doors, movies and weather run strictly after the scripts and before
+  the trees (the weather and the trees had no order): the trees' light
+  follows this frame's weather.
+
 ## PR sequence
 
 Each PR names one next action, regenerates the ledger and passes the
@@ -654,7 +775,8 @@ acceptance routes, as in B1.
    "PR 4 result" above.
 5. **World and time stage.** `TES::TestAllCells`, `Calendar::Update`,
    `Main::OnIdle_UpdateCurrentGridCell` (cell attach and detach), the
-   process-level temp lists, `GarbageCollector::Update`.
+   process-level temp lists, `GarbageCollector::Update`. *Done*: "PR 5
+   result" above.
 6. **AI task stage.** The tasks `AITaskManager` starts in stage 6 and joins
    in stage 8: actor process updates, animation, the Havok step. Our single
    thread runs them in the game's order; the thread split itself is

@@ -19,9 +19,16 @@
 //! further into its calls and `PlayerCharacter::Update`'s sub-steps
 //! ([`PlayerSet`], `world::frame::player`, docs/FRAME_SKELETON.md "PR 4
 //! result"), under their gates on [`ThisPlayer`].
+//!
+//! The world and time stage's callees (`TES::TestAllCells`, `Calendar::Update`,
+//! the process lists' passes, the garbage collector, `BSTreeManager::Update`,
+//! `Main::OnIdle_UpdateCurrentGridCell` and `TES::UpdateCurrentGridCell`) are
+//! split into their sub-steps ([`WorldSet`], `world::frame::world_time`,
+//! docs/FRAME_SKELETON.md "PR 5 result"), under their gates on [`ThisWorld`].
 
 use bevy::prelude::*;
 use world::frame::player::{self, PlayerState, UPDATE, UPDATE_PLAYER};
+use world::frame::world_time::{self, WorldState, FUNCTIONS};
 use world::frame::{self, FrameState, Stage, STEPS};
 
 /// The game's frame as system sets.
@@ -37,6 +44,11 @@ impl FrameSet {
     /// The set of the first step that calls `address`.
     pub fn step(address: u32) -> FrameSet {
         FrameSet::Step(frame::step_of(address).expect("a call of Main::OnIdle"))
+    }
+
+    /// The set of the step after the first step that calls `address`.
+    pub fn after(address: u32) -> FrameSet {
+        FrameSet::Step(frame::step_of(address).expect("a call of Main::OnIdle") + 1)
     }
 }
 
@@ -143,6 +155,87 @@ pub const MOVE_AT: u32 = 0x0094_280b;
 /// The animation update of the view the player is in (the second
 /// `Actor::UpdateAnimationMovement` of the free branch).
 pub const OWN_VIEW_ANIMATION_AT: u32 = 0x0094_3806;
+
+/// The world and time stage's callees as system sets
+/// (`world::frame::world_time`, Phase 1 PR 5): each sub-step of each
+/// modelled function, in call order inside the set of the frame step that
+/// calls the function (its first, the one the viewer's thread count reaches:
+/// the process lists are called twice, threads > 1 first) or of its
+/// caller's sub-step (`TES::UpdateCurrentGridCell` inside
+/// `Main::OnIdle_UpdateCurrentGridCell`'s call of it); each under its gate
+/// on [`ThisWorld`].
+///
+/// As for the player's sets, a system that belongs at a sub-step but also
+/// does work while the sub-step's gate is closed is ordered at it from
+/// outside its set: see where each is added.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WorldSet {
+    /// Sub-step `.1` of the function at `.0` (an index into its
+    /// `world::frame::world_time::Function::steps`).
+    Sub(u32, usize),
+}
+
+impl WorldSet {
+    /// The set of `function`'s sub-step whose call is at `site`.
+    pub fn at(function: u32, site: u32) -> WorldSet {
+        WorldSet::Sub(function, Self::index(function, site))
+    }
+
+    /// The set of the sub-step after the one at `site`.
+    pub fn after(function: u32, site: u32) -> WorldSet {
+        WorldSet::Sub(function, Self::index(function, site) + 1)
+    }
+
+    fn index(function: u32, site: u32) -> usize {
+        let f = world_time::function(function).expect("a modelled function");
+        world_time::step_at(f, site).expect("a sub-step")
+    }
+}
+
+/// `ProcessLists::RunActorScripts` (step 60).
+pub const RUN_ACTOR_SCRIPTS: u32 = 0x0097_8550;
+/// `TESObjectREFR::RunScript`'s call in it.
+pub const RUN_SCRIPT_AT: u32 = 0x0097_85bf;
+/// The wind update's call (`006658b0`) in `BSTreeManager::Update`.
+pub const TREE_WIND_AT: u32 = 0x0066_54dd;
+/// `Main::OnIdle_UpdateCurrentGridCell` (step 78).
+pub const UPDATE_CURRENT_GRID_CELL_STEP: u32 = 0x0086_fbe0;
+/// `TES::UpdateCurrentGridCell`.
+pub const UPDATE_CURRENT_GRID_CELL: u32 = 0x0045_2580;
+/// `GridCellArray::SetCenter`'s call (the grid array's slot +0x10) in
+/// `TES::UpdateCurrentGridCell`: the cells detached and attached around the
+/// new centre.
+pub const GRID_SET_CENTER_AT: u32 = 0x0045_2c40;
+/// `BGSTerrainManager::Update`'s call in `TES::UpdateCurrentGridCell`.
+pub const TERRAIN_UPDATE_AT: u32 = 0x0045_2d9f;
+
+/// The world and time stage's inputs, filled with [`ThisFrame`]
+/// ([`begin_frame`]).
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Default)]
+pub struct ThisWorld(pub WorldState);
+
+/// The world stage's inputs from the frame's and the viewer's values. Those
+/// the viewer has no source for are fixed (docs/FRAME_SKELETON.md, "PR 5
+/// result"):
+///
+/// - the world runs, menu mode, the frozen world, the cell tests: the
+///   frame's ([`ThisFrame`]);
+/// - an interior loaded, the sky: whether the viewer is indoors (no
+///   `exterior::Exterior`); the scene graph's camera is there;
+/// - the rest at `WorldState::default`: no new game's loading menu, no cell
+///   test's walk, the calendar's carries, radiation, resting and the garbage
+///   queues not tracked (nothing in the viewer sits under those gates), the
+///   data handler there, the position inside the grid's centre cell (the
+///   viewer's squares stream on their own, `exterior::stream_squares`, which
+///   is ordered at the grid's sub-steps but not under their gates), no
+///   script running.
+pub fn viewer_world_state(frame: &FrameState, indoors: bool) -> WorldState {
+    WorldState {
+        interior_loaded: indoors,
+        sky: !indoors,
+        ..world_time::from_frame(frame)
+    }
+}
 
 /// The frame's inputs to the gates, filled once per frame ([`begin_frame`]).
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
@@ -252,7 +345,12 @@ pub fn begin_frame(
     vats: Option<Res<crate::vats::Vats>>,
     draw: Res<crate::game_menus::MenuDraw>,
     walker: Res<crate::walk::Player>,
-    (mut this, mut this_player): (ResMut<ThisFrame>, ResMut<ThisPlayer>),
+    exterior: Option<Res<crate::exterior::Exterior>>,
+    (mut this, mut this_player, mut this_world): (
+        ResMut<ThisFrame>,
+        ResMut<ThisPlayer>,
+        ResMut<ThisWorld>,
+    ),
 ) {
     let vats_mode = vats.as_ref().map_or(0, |v| v.manager_mode());
     let in_dialogue = conversation.0.as_ref().is_some_and(|t| !t.is_line_only());
@@ -264,6 +362,7 @@ pub fn begin_frame(
         top_menu: draw.1.last().copied(),
     });
     this_player.0 = viewer_player_state(&this.0, walker.walking, in_dialogue);
+    this_world.0 = viewer_world_state(&this.0, exterior.is_none());
 }
 
 /// Configures the sets in `Update`: the viewer's two sets ahead, the
@@ -311,6 +410,7 @@ pub fn configure(app: &mut App) {
         }
     }
     configure_player(app);
+    configure_world(app);
 }
 
 /// The player stage's sets ([`PlayerSet`]): the calls of `0086f940` inside
@@ -356,6 +456,61 @@ fn configure_player(app: &mut App) {
             PlayerSet::Update(UPDATE.len() - 1).before(PlayerSet::Call(call + 1)),
         ),
     );
+}
+
+/// The world stage's sets ([`WorldSet`]): each modelled function's
+/// sub-steps inside the set of its call (a frame step, or its caller's
+/// sub-step), in call order under their gates on [`ThisWorld`].
+fn configure_world(app: &mut App) {
+    app.init_resource::<ThisWorld>();
+    for f in &FUNCTIONS {
+        let address = f.address;
+        let (step, around) = if f.caller == world_time::ON_IDLE {
+            let step = frame::step_of(address).expect("a call of Main::OnIdle");
+            (Some(FrameSet::Step(step)), None)
+        } else {
+            let caller = world_time::function(f.caller).expect("a modelled caller");
+            let k = world_time::step_at(caller, f.call_sites[0]).expect("the caller's call");
+            let parent = WorldSet::Sub(f.caller, k);
+            let before = k.checked_sub(1).map(|j| WorldSet::Sub(f.caller, j));
+            let after = (k + 1 < caller.steps.len()).then_some(WorldSet::Sub(f.caller, k + 1));
+            (None, Some((parent, before, after)))
+        };
+        let n = f.steps.len();
+        for i in 0..n {
+            let set = WorldSet::Sub(address, i);
+            match (step, around) {
+                (Some(step), _) => app.configure_sets(Update, set.in_set(step)),
+                (None, Some((parent, _, _))) => app.configure_sets(Update, set.in_set(parent)),
+                (None, None) => unreachable!(),
+            };
+            app.configure_sets(
+                Update,
+                set.run_if(move |this: Res<ThisWorld>| {
+                    let f = world_time::function(address).expect("modelled");
+                    world_time::step_runs(&this.0, f, i)
+                }),
+            );
+            if i + 1 < n {
+                app.configure_sets(
+                    Update,
+                    WorldSet::Sub(address, i).before(WorldSet::Sub(address, i + 1)),
+                );
+            }
+        }
+        // A nested function's sub-steps also follow its caller's sub-step
+        // before the call and come before the one after it (as the player's
+        // update's do), so a system ordered at one of them from outside the
+        // sets keeps its place when they are empty.
+        if let Some((_, before, after)) = around {
+            if let Some(b) = before {
+                app.configure_sets(Update, WorldSet::Sub(address, 0).after(b));
+            }
+            if let Some(a) = after {
+                app.configure_sets(Update, WorldSet::Sub(address, n - 1).before(a));
+            }
+        }
+    }
 }
 
 /// The frame's sets and [`begin_frame`].
@@ -645,5 +800,121 @@ mod tests {
         assert!(!s.fading && !s.forced_activation && !s.knocked_or_paralysed);
         assert!(!viewer_player_state(&FrameState::default(), false, false).updates());
         assert!(viewer_player_state(&FrameState::default(), true, true).in_dialogue);
+    }
+
+    /// An app with the sets, the frame's state and the world stage's.
+    fn world_app(frame: FrameState, indoors: bool) -> App {
+        let mut app = frame_app(frame);
+        app.insert_resource(ThisWorld(viewer_world_state(&frame, indoors)));
+        app
+    }
+
+    /// Adds the world stage's systems the way `main.rs` and `trees.rs`
+    /// place them, in reverse.
+    fn add_world_systems(app: &mut App) {
+        let tree = TREE_MANAGER_UPDATE;
+        let grid = UPDATE_CURRENT_GRID_CELL;
+        app.add_systems(
+            Update,
+            note("grid query").in_set(WorldSet::at(UPDATE_CURRENT_GRID_CELL_STEP, 0x0086_fc28)),
+        )
+        .add_systems(
+            Update,
+            note("distant land")
+                .in_set(FrameSet::step(UPDATE_CURRENT_GRID_CELL_STEP))
+                .after(WorldSet::at(grid, TERRAIN_UPDATE_AT))
+                .before(WorldSet::after(grid, TERRAIN_UPDATE_AT)),
+        )
+        .add_systems(
+            Update,
+            note("squares")
+                .in_set(FrameSet::step(UPDATE_CURRENT_GRID_CELL_STEP))
+                .after(WorldSet::at(grid, GRID_SET_CENTER_AT))
+                .before(WorldSet::after(grid, GRID_SET_CENTER_AT)),
+        )
+        .add_systems(
+            Update,
+            note("sway")
+                .in_set(FrameSet::step(tree))
+                .after(WorldSet::at(tree, TREE_WIND_AT))
+                .before(WorldSet::after(tree, TREE_WIND_AT)),
+        )
+        .add_systems(
+            Update,
+            note("wind").in_set(WorldSet::at(tree, TREE_WIND_AT)),
+        )
+        .add_systems(
+            Update,
+            note("doors")
+                .in_set(FrameSet::Stage(Stage::WorldAndTime))
+                .after(FrameSet::step(RUN_ACTOR_SCRIPTS))
+                .before(FrameSet::after(RUN_ACTOR_SCRIPTS)),
+        )
+        .add_systems(
+            Update,
+            note("scripts").in_set(WorldSet::at(RUN_ACTOR_SCRIPTS, RUN_SCRIPT_AT)),
+        )
+        .add_systems(Update, note("calendar").in_set(FrameSet::step(0x0086_7a40)));
+    }
+
+    /// The world stage's sets run in the exe's order: the calendar (step 56),
+    /// the scripts (step 60), what follows them, the tree manager's wind and
+    /// the sway after it (step 77), the grid's squares and distant land at
+    /// `TES::UpdateCurrentGridCell`'s sub-steps, then the rest of
+    /// `Main::OnIdle_UpdateCurrentGridCell` (step 78).
+    #[test]
+    fn world_sets_run_in_the_exes_order() {
+        let mut app = world_app(FrameState::default(), false);
+        add_world_systems(&mut app);
+        app.update();
+        assert_eq!(
+            app.world().resource::<Ran>().0,
+            [
+                "calendar",
+                "scripts",
+                "doors",
+                "wind",
+                "sway",
+                "squares",
+                "distant land",
+                "grid query"
+            ]
+        );
+    }
+
+    /// The gates: in menu mode the calendar, the wind and the grid's update
+    /// stop (`0086e946`, `006653a9`, `0086fbf1`); the scripts' step, the
+    /// sway and the loaders ordered outside the gates run.
+    #[test]
+    fn world_gates_stop_their_sets() {
+        let menu = viewer_frame_state(FrameInputs {
+            menu_up: true,
+            ..FrameInputs::default()
+        });
+        let mut app = world_app(menu, false);
+        add_world_systems(&mut app);
+        app.update();
+        assert_eq!(
+            app.world().resource::<Ran>().0,
+            ["scripts", "doors", "sway", "squares", "distant land"]
+        );
+    }
+
+    /// The world stage's fixed inputs: the frame's modes, indoors or out from
+    /// the viewer, the rest at the normal case.
+    #[test]
+    fn world_fixed_inputs() {
+        let game = viewer_frame_state(FrameInputs::default());
+        let out = viewer_world_state(&game, false);
+        assert!(out.world_runs && out.sky && !out.interior_loaded && out.scene_camera);
+        assert_eq!(out.grid, world_time::GridMove::Inside);
+        let inside = viewer_world_state(&game, true);
+        assert!(inside.interior_loaded && !inside.sky);
+        let menu = viewer_frame_state(FrameInputs {
+            menu_up: true,
+            ..FrameInputs::default()
+        });
+        let s = viewer_world_state(&menu, false);
+        assert!(s.menu_flag && !s.world_runs);
     }
 }

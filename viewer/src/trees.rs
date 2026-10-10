@@ -178,18 +178,43 @@ impl Plugin for TreePlugin {
             MaterialPlugin::<BranchMaterial>::default(),
         ))
         .init_resource::<TreeField>()
-        // The trees put on screen with the world (stage 4), then swayed: the
-        // wind is part of `BSTreeManager::Update` (step 77,
-        // `crate::frame_order`).
+        // The trees put on screen with the world (stage 4), then swayed:
+        // `BSTreeManager::Update` (step 77, `world::frame::world_time`,
+        // docs/FRAME_SKELETON.md "PR 5 result"). The wind moves at its wind
+        // update (`006654dd`), under its gate (the world runs); the rest of
+        // the sway right after it, outside the gate: the camera's axes
+        // (`CSpeedTreeRT::SetCamera`, called in menus too), the light and
+        // the levels of detail (their places in the exe aren't traced).
         .add_systems(
             Update,
             (
-                stream_trees.in_set(crate::frame_order::FrameSet::Stage(
-                    world::frame::Stage::WorldAndTime,
-                )),
-                sway_trees.in_set(crate::frame_order::FrameSet::step(
+                // Placed for order only: in the exe the trees are the cells'
+                // references, attached with the grid (step 78); kept ahead of
+                // the tree manager so that a tree put on screen gets this
+                // frame's wind and light.
+                stream_trees
+                    .in_set(crate::frame_order::FrameSet::Stage(
+                        world::frame::Stage::WorldAndTime,
+                    ))
+                    .before(crate::frame_order::FrameSet::step(
+                        crate::frame_order::TREE_MANAGER_UPDATE,
+                    )),
+                blow_wind.in_set(crate::frame_order::WorldSet::at(
                     crate::frame_order::TREE_MANAGER_UPDATE,
+                    crate::frame_order::TREE_WIND_AT,
                 )),
+                sway_trees
+                    .in_set(crate::frame_order::FrameSet::step(
+                        crate::frame_order::TREE_MANAGER_UPDATE,
+                    ))
+                    .after(crate::frame_order::WorldSet::at(
+                        crate::frame_order::TREE_MANAGER_UPDATE,
+                        crate::frame_order::TREE_WIND_AT,
+                    ))
+                    .before(crate::frame_order::WorldSet::after(
+                        crate::frame_order::TREE_MANAGER_UPDATE,
+                        crate::frame_order::TREE_WIND_AT,
+                    )),
             )
                 // Kept: the trees on screen before they sway.
                 .chain(),
@@ -236,6 +261,9 @@ pub struct TreeField {
     gpu: HashMap<(FormId, i32), GpuTree>,
     settings: Option<TreeSettings>,
     wind: Wind,
+    /// The wind's last frame ([`blow_wind`]); kept while the wind update
+    /// doesn't run (menu mode), so the trees hold still.
+    frame: Option<WindFrame>,
     trig: FastTrig,
     /// The light last worked out (ambient, sun colour with the sunlight
     /// dimmer, toward the sun, tree dimmer, fog colour, fog range), the
@@ -266,6 +294,7 @@ impl Default for TreeField {
             gpu: HashMap::new(),
             settings: None,
             wind: Wind::default(),
+            frame: None,
             trig: FastTrig::new(),
             light: None,
             shown: None,
@@ -600,16 +629,59 @@ fn branch_mesh(b: &BranchMesh) -> Mesh {
     out
 }
 
-/// Every frame outdoors: the wind (`speedtree::wind`), the camera's axes for
-/// the leaf cards, the light once the clock has moved a game minute, and
-/// each tree's levels of detail for its distance from the camera.
+/// Outdoors, while the world runs: the wind moves on (`speedtree::wind`,
+/// the wind update `006658b0`, which `BSTreeManager::Update` calls only when
+/// it isn't told the world is stopped, `006653a9`; this system sits in that
+/// sub-step's set, `crate::frame_order::WorldSet`). The frame is kept for
+/// [`sway_trees`]; in menu mode the trees hold the pose they had.
+pub fn blow_wind(
+    game: Res<GameFiles>,
+    state: Res<DialogueState>,
+    exterior: Option<Res<Exterior>>,
+    time: Res<Time>,
+    mut field: ResMut<TreeField>,
+    mut weathers: ResMut<crate::weather::Weathers>,
+) {
+    let field = &mut *field;
+    let Some(exterior) = exterior else {
+        return;
+    };
+    if field.gpu.is_empty() {
+        return;
+    }
+    let order = &game.0.order;
+    let Some(weather) = weathers.mix(order, &state.0, exterior.weather) else {
+        return;
+    };
+    // The wind this frame: the weather's (0 to 1).
+    let tree_settings = field.settings.unwrap_or_else(|| game.0.tree_settings());
+    let wind_settings = WindSettings {
+        rock_amount_sway: tree_settings.rock_amount_sway,
+        rustle_amount_sway: tree_settings.rustle_amount_sway,
+        rock_speed_sway: tree_settings.rock_speed_sway,
+        rustle_speed_sway: tree_settings.rustle_speed_sway,
+        rock_time_scale: tree_settings.rock_time_scale,
+        rustle_time_scale: tree_settings.rustle_time_scale,
+    };
+    field.frame = Some(field.wind.update(
+        weather.wind(),
+        time.delta_secs(),
+        &wind_settings,
+        &field.trig,
+    ));
+}
+
+/// Every frame outdoors: the wind's last frame ([`blow_wind`]) and the
+/// camera's axes for the leaf cards (`CSpeedTreeRT::SetCamera`, which
+/// `BSTreeManager::Update` calls in menus too), the light once the clock has
+/// moved a game minute, and each tree's levels of detail for its distance
+/// from the camera.
 #[allow(clippy::too_many_arguments)]
 pub fn sway_trees(
     game: Res<GameFiles>,
     state: Res<DialogueState>,
     exterior: Option<Res<Exterior>>,
     settings: Res<crate::Settings>,
-    time: Res<Time>,
     cameras: Query<&Transform, With<FlyCamera>>,
     mut field: ResMut<TreeField>,
     mut leaf_materials: ResMut<Assets<LeafMaterial>>,
@@ -690,22 +762,10 @@ pub fn sway_trees(
         });
     }
 
-    // The wind this frame: the weather's (0 to 1).
+    // The wind's last frame (none before the first: the materials keep the
+    // still wind they were made with).
     let tree_settings = field.settings.unwrap_or_else(|| game.0.tree_settings());
-    let wind_settings = WindSettings {
-        rock_amount_sway: tree_settings.rock_amount_sway,
-        rustle_amount_sway: tree_settings.rustle_amount_sway,
-        rock_speed_sway: tree_settings.rock_speed_sway,
-        rustle_speed_sway: tree_settings.rustle_speed_sway,
-        rock_time_scale: tree_settings.rock_time_scale,
-        rustle_time_scale: tree_settings.rustle_time_scale,
-    };
-    let frame = field.wind.update(
-        weather.wind(),
-        time.delta_secs(),
-        &wind_settings,
-        &field.trig,
-    );
+    let frame = field.frame;
 
     // The camera's axes in the game's (`00bb1a90`).
     let game_axis = |v: Vec3| Vec4::new(v.x, -v.z, v.y, 0.0);
@@ -718,7 +778,7 @@ pub fn sway_trees(
             leaf_params(
                 &mut m.extension.params,
                 gpu,
-                &frame,
+                frame.as_ref(),
                 light.as_ref(),
                 right,
                 up,
@@ -726,7 +786,9 @@ pub fn sway_trees(
         }
         if let Some(m) = branch_materials.get_mut(&gpu.branch_material) {
             let p = &mut m.extension.params;
-            p.wind = wind_rows(&frame);
+            if let Some(frame) = &frame {
+                p.wind = wind_rows(frame);
+            }
             if let Some(l) = &light {
                 p.ambient = l.ambient;
                 p.sun_color = l.sun_color;
@@ -799,25 +861,27 @@ fn wind_rows(frame: &WindFrame) -> [Vec4; 16] {
 fn leaf_params(
     p: &mut LeafParams,
     gpu: &GpuTree,
-    frame: &WindFrame,
+    frame: Option<&WindFrame>,
     light: Option<&TreeLight>,
     right: Vec4,
     up: Vec4,
 ) {
     let m = &gpu.model;
-    p.wind = wind_rows(frame);
-    p.rock = Vec4::new(
-        frame.rock_amount,
-        m.rock_speed * frame.rock_time,
-        m.rock_amount,
-        0.0,
-    );
-    p.rustle = Vec4::new(
-        frame.rustle_amount,
-        m.rustle_speed * frame.rustle_time,
-        m.rustle_amount,
-        0.0,
-    );
+    if let Some(frame) = frame {
+        p.wind = wind_rows(frame);
+        p.rock = Vec4::new(
+            frame.rock_amount,
+            m.rock_speed * frame.rock_time,
+            m.rock_amount,
+            0.0,
+        );
+        p.rustle = Vec4::new(
+            frame.rustle_amount,
+            m.rustle_speed * frame.rustle_time,
+            m.rustle_amount,
+            0.0,
+        );
+    }
     p.billboard_right = right;
     p.billboard_up = up;
     if let Some(l) = light {
