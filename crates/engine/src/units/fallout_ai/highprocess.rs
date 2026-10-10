@@ -1422,6 +1422,12 @@ pub fn middle_high_process_get_saved_acquire_object(e: &mut Engine, this: Ptr) -
     Ptr::new(e.mem.u32(this.addr() + 0x68))
 }
 
+// Translated from 008d8540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::GetKnockState` (Xbox PDB) returns `cKnockState` at +0x13c, sign-extended from a signed byte.
+pub fn middle_high_process_get_knock_state(e: &mut Engine, this: Ptr) -> i32 {
+    e.mem.u8(this.addr() + 0x13c) as i8 as i32
+}
+
 // Translated from 008d8560 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `MiddleHighProcess::SetKnockState` (Xbox PDB) stores the low byte of its argument in `cKnockState` at +0x13c.
 pub fn middle_high_process_set_knock_state(e: &mut Engine, this: Ptr, value: u8) {
@@ -1854,6 +1860,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x008d83c0, middle_high_process_get_automatic_shot_delay(Ptr) -> f32),
         entry!(0x008d8500, middle_high_process_set_acquire_object(Ptr, Ptr)),
         entry!(0x008d8520, middle_high_process_get_saved_acquire_object(Ptr) -> Ptr),
+        entry!(0x008d8540, middle_high_process_get_knock_state(Ptr) -> i32),
         entry!(0x008d8560, middle_high_process_set_knock_state(Ptr, u8)),
         entry!(0x008d8580, middle_high_process_get_current_package_spell(Ptr) -> Ptr),
         entry!(
@@ -3494,6 +3501,16 @@ mod tests {
         let this = process(&mut e);
         e.mem.set_u32(this.addr() + 0x68, 0x1234_5678);
         assert_eq!(e.call(0x008d8520, &args![this]).u32(), 0x1234_5678);
+    }
+
+    #[test]
+    fn test_middle_high_process_get_knock_state() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.mem.set_u8(this.addr() + 0x13c, 0x05);
+        assert_eq!(e.call(0x008d8540, &args![this]).u32(), 5);
+        e.mem.set_u8(this.addr() + 0x13c, 0xff);
+        assert_eq!(e.call(0x008d8540, &args![this]).u32() as i32, -1);
     }
 
     #[test]
