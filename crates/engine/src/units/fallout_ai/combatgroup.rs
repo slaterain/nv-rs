@@ -6,8 +6,8 @@
 //! `CombatMember`) and the small `CombatGroupCluster` / `CombatSearchLocation`
 //! records. The unit is translated over several sessions, in address order:
 //! this part covers `0069cfe0`, `00985410` to `00986c60`, `009871c0` to
-//! `0098a4d0` and `0098a580` to `0098de90`; the next function of the queue is
-//! `0098e3d0` (`CombatGroup::LoadGame`).
+//! `0098a4d0` and `0098a580` to `0098fd10`; the next function of the queue is
+//! `00990500` (`CombatGroup::ComputeMemberHealthPercentage`).
 //!
 //! Conventions of this file:
 //! - Layouts first (below); embedded structs that other units own
@@ -413,6 +413,115 @@ const STATE_TARGET_RECORD: u32 = 0x0070_58c0;
 /// comparison function.
 const CLUSTER_SEARCH: u32 = 0x0071_9b20;
 const CLUSTER_COMPARE: u32 = 0x009a_3830;
+
+// Constants of `LoadGame`, `InitLoadGame` and the `BSSimpleArray<T, 1024>`
+// instances of this unit (the third part of the unit, from `0098e3d0`).
+/// `BGSLoadGameBuffer::LoadVariableSizedValue` (Xbox PDB; `buffer`): a count.
+const LOAD_SIZED_VALUE: u32 = 0x0086_4a60;
+/// `BGSLoadGameBuffer::LoadFormID` (`buffer`, no stack word): the form ID
+/// read; `LoadGame` looks it up with `FORM_LOOKUP` and down-casts it.
+const LOAD_FORM_ID_VALUE: u32 = 0x0086_48a0;
+/// `CombatTimer::LoadGame` (Xbox PDB; `timer`, `buffer`).
+const TIMER_LOAD: u32 = 0x009a_5f20;
+/// `PathingLOSGridMap::LoadGame` (Xbox PDB; `grid`, `buffer`).
+const LOS_GRID_MAP_LOAD: u32 = 0x006e_0d20;
+/// Form lookup `004839c0(form ID)` (cdecl) that the loaders feed to
+/// `RT_DYNAMIC_CAST`.
+const FORM_LOOKUP: u32 = 0x0048_39c0;
+/// `__RTDynamicCast(object, 0, source type, target type, 0)`.
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// The type descriptors the loaders cast between: the source (the same one
+/// `00985930` uses), the target `00985930` and `InitLoadGame` cast to, and
+/// the target the door loader casts to.
+const CAST_SOURCE_TYPE: u32 = 0x0118_3028;
+const CAST_TARGET_TYPE: u32 = 0x0118_46d4;
+const CAST_DOOR_TARGET_TYPE: u32 = 0x0118_41cc;
+/// `BSSimpleArray<CombatSearchDoor>::SetSize(count, 1)` as `LoadGame` calls it.
+const SEARCH_DOOR_RESIZE: u32 = 0x006a_8890;
+/// `CombatManager::TargetLocalActor` (Xbox PDB; manager, actor, group).
+const MANAGER_TARGET_LOCAL_ACTOR: u32 = 0x0099_2a50;
+/// The word at `+0x80` of a process (`004fb070`); `fn_0098eb30` compares it
+/// with the group.
+const PROCESS_WORD_80: u32 = 0x004f_b070;
+/// Table of group strategies, indexed by the byte a save stores.
+const STRATEGY_TABLE: u32 = 0x011f_18b4;
+/// Size of the `PathingLOSGridMap` object `LoadGame` allocates.
+const LOS_GRID_MAP_SIZE: u32 = 0x54;
+/// `BSSimpleArray` helpers shared by the instances of this unit:
+/// `(array; pointer, count)` destroys elements, `(array; to, from, count)`
+/// copies elements, `(available, count)` (cdecl) gives the number of tail
+/// elements `RemoveAt` moves, `(from, bytes)` (cdecl) is the reallocation
+/// primitive.
+const ARRAY_DESTRUCT_ELEMENTS: u32 = 0x0072_ba80;
+const ARRAY_COPY_ELEMENTS: u32 = 0x0042_fb60;
+const ARRAY_MOVE_COUNT: u32 = 0x0042_f5a0;
+const ARRAY_REALLOC_BYTES: u32 = 0x0042_f5d0;
+/// The pointer-array shrink test (`this`), the new reserve it wants
+/// (`this`), and the release of the old buffer (`this`).
+const POINTER_ARRAY_SHOULD_SHRINK: u32 = 0x006f_3170;
+const POINTER_ARRAY_SHRUNK_RESERVE: u32 = 0x0086_9600;
+const ARRAY_RELEASE_BUFFER: u32 = 0x006a_8500;
+/// Growth of an array that is full: whether it is (`this`) and the new
+/// reserve (`this`).
+const ARRAY_IS_FULL: u32 = 0x0043_8b90;
+const ARRAY_GROWN_RESERVE: u32 = 0x009a_3910;
+/// `BSSimpleArray<CombatMember>` slot reservation (`this`): the new index.
+const MEMBER_ARRAY_RESERVE_SLOT: u32 = 0x0078_81d0;
+/// Element `i` of a `BSSimpleArray<CombatTarget>` (`array`, `i`), the
+/// instance `fn_0098f580` copies through.
+const TARGET_ARRAY_ELEMENT: u32 = 0x0096_a330;
+/// `MemoryManager` singleton getter and `GetThreadScrapHeap` (`manager`).
+const MEMORY_MANAGER: u32 = 0x0040_1020;
+const THREAD_SCRAP_HEAP: u32 = 0x00aa_42e0;
+/// Base constructor of the scrap-heap array (`this`) and its initialiser
+/// (`this`; two words).
+const SCRAP_ARRAY_BASE_CONSTRUCT: u32 = 0x006c_f180;
+const SCRAP_ARRAY_INIT: u32 = 0x006d_0140;
+/// Initialisers of the `CombatSearchDoor` and `CombatGroupCluster *` arrays
+/// (`this`; two words).
+const SEARCH_DOOR_ARRAY_INIT: u32 = 0x006b_3f40;
+const CLUSTER_POINTER_ARRAY_INIT: u32 = 0x006b_3eb0;
+/// Vtables of the array instances of this unit.
+const TARGET_ARRAY_VTABLE: u32 = 0x0108_d6f4;
+const MEMBER_ARRAY_VTABLE: u32 = 0x0108_d708;
+const SEARCH_LOCATION_ARRAY_VTABLE: u32 = 0x0108_d71c;
+const SEARCH_DOOR_ARRAY_VTABLE: u32 = 0x0108_d730;
+const CLUSTER_POINTER_ARRAY_VTABLE: u32 = 0x0108_d744;
+const GROUP_MEMBER_DATA_ARRAY_VTABLE: u32 = 0x0108_d758;
+const SCRAP_ARRAY_VTABLE: u32 = 0x0106_d864;
+
+/// The element size and the callees that differ between the
+/// `BSSimpleArray<T, 1024>` instances with a `SetSize` / `RemoveAt` in this
+/// unit: `grow(array; new reserve, count)`, `construct(array; first, count)`
+/// and `move_tail(array; to, from, count)`.
+struct ArrayInstance {
+    element: u32,
+    grow: u32,
+    construct: u32,
+    move_tail: u32,
+}
+
+/// `BSSimpleArray<CombatTarget, 1024>`.
+const TARGET_ARRAY_INSTANCE: ArrayInstance = ArrayInstance {
+    element: 0x68,
+    grow: 0x0098_fa00,
+    construct: 0x0098_f840,
+    move_tail: 0x0098_f960,
+};
+/// `BSSimpleArray<CombatMember, 1024>`.
+const MEMBER_ARRAY_INSTANCE: ArrayInstance = ArrayInstance {
+    element: 0x14,
+    grow: 0x009a_3c50,
+    construct: 0x0098_fb40,
+    move_tail: 0x009a_3b20,
+};
+/// `BSSimpleArray<CombatSearchLocation, 1024>`.
+const SEARCH_LOCATION_ARRAY_INSTANCE: ArrayInstance = ArrayInstance {
+    element: 0x1c,
+    grow: 0x006b_ff60,
+    construct: 0x0098_fc70,
+    move_tail: 0x006c_0010,
+};
 
 layout! {
     /// `CombatTarget` (Xbox PDB), 0x68 bytes on both builds. The four
@@ -5168,6 +5277,876 @@ fn array_count<T>(e: &mut Engine, array: Ptr<T>) -> u32 {
     }
 }
 
+/// `LoadFormID` of the loaders: reads a form ID from the buffer, looks the
+/// form up and casts it with `__RTDynamicCast` to `target_type`. Returns the
+/// cast result.
+fn load_form_cast(e: &mut Engine, buffer: Ptr, target_type: u32) -> u32 {
+    let form_id = e.call(LOAD_FORM_ID_VALUE, &args![buffer]).u32();
+    let form = e.call(FORM_LOOKUP, &args![form_id]).u32();
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, CAST_SOURCE_TYPE, target_type, 0u32],
+    )
+    .u32()
+}
+
+/// Loads `size` bytes from the buffer into the object at `base + offset`.
+fn load_field<T>(e: &mut Engine, buffer: Ptr, base: Ptr<T>, offset: u32, size: u32) {
+    e.call(LOAD_BYTES, &args![buffer, base.byte_add(offset), size]);
+}
+
+/// `CombatTimer::LoadGame` of the timer at `offset` in the group.
+fn load_timer(e: &mut Engine, buffer: Ptr, this: Ptr<CombatGroup>, offset: u32) {
+    e.call(TIMER_LOAD, &args![this.byte_add(offset), buffer]);
+}
+
+// Translated from 0098e3d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::LoadGame` (Xbox PDB): reads what [`combat_group_save_game`]
+/// wrote, in the same order. The clusters (count, a new 0x14-byte cluster
+/// each, read by `fn_00985b10`), the targets (resized, each
+/// `CombatTarget::LoadGame`), the members (each `CombatMember::LoadGame`);
+/// the strategy byte (the strategy table entry when it is not 0xff, else the
+/// strategy stays); `bStrategyForced`; the choose and update timers;
+/// `iLastGroupStrategyChosenIndex` and its time stamp; the avoid-threat
+/// dialogue, cluster-update and target-update timers; the ten detection
+/// dialogue timers; `iSearchCount`. When that is not zero the search state
+/// follows: the searching member (form ID), the focal point, the two search
+/// timers, `fSearchStartedTimeStamp` (only when the buffer's version, the
+/// result of its virtual method at slot 0, is 5 or more), the centre, the
+/// radius, the search locations, the teleport doors (two form IDs cast to the
+/// door type and three bytes each) and, behind a flag byte, a new
+/// `PathingLOSGridMap` (0x54 bytes) that is loaded; `bUpdateSearchDebugGeometry`
+/// is then set. Last come the combat strength timer, the four strength
+/// values, the music timer and `cCombatMusicState`. The C++ exception frame
+/// is not translated.
+pub fn combat_group_load_game(e: &mut Engine, this: Ptr<CombatGroup>, buffer: Ptr) {
+    let clusters = this.byte_add(CombatGroup::CLUSTER_ARRAY);
+    let count = e.call(LOAD_SIZED_VALUE, &args![buffer]).u32();
+    e.call(POINTER_ARRAY_SET_SIZE, &args![clusters, count, 1u32]);
+    for index in 0..count {
+        let slot = e.call(CLUSTER_AT, &args![clusters, index]).u32();
+        let memory = e.call(OPERATOR_NEW_SMALL, &args![0x14u32]).u32();
+        let cluster = if memory == 0 {
+            Ptr::NULL
+        } else {
+            fn_0098dc00(e, Ptr::new(memory))
+        };
+        e.mem.set_u32(slot, cluster.addr());
+        fn_00985b10(e, cluster, buffer, this.addr());
+    }
+    let targets = this.byte_add(CombatGroup::TARGET_ARRAY);
+    let count = e.call(LOAD_SIZED_VALUE, &args![buffer]).u32();
+    fn_0098ed80(e, targets.cast(), count, 1);
+    for index in 0..count {
+        let target = e
+            .call(TARGET_AT, &args![targets, index])
+            .ptr::<CombatTarget>();
+        combat_target_load_game(e, target, buffer, this.addr());
+    }
+    let members = this.byte_add(CombatGroup::MEMBER_ARRAY);
+    let count = e.call(LOAD_SIZED_VALUE, &args![buffer]).u32();
+    fn_0098f040(e, members.cast(), count, 1);
+    for index in 0..count {
+        let member = e
+            .call(MEMBER_AT, &args![members, index])
+            .ptr::<CombatMember>();
+        combat_member_load_game(e, member, buffer, this);
+    }
+    let strategy_byte = e.with_stack(4, |e, byte| {
+        e.mem.set_u8(byte.addr(), 0xff);
+        e.call(LOAD_BYTES, &args![buffer, byte, 1u32]);
+        e.mem.u8(byte.addr()) as i8
+    });
+    if strategy_byte != -1 {
+        let strategy = fn_0098e980(e, i32::from(strategy_byte));
+        e.set(this, CombatGroup::pGroupStrategy, Ptr::new(strategy));
+    }
+    load_field(e, buffer, this, CombatGroup::bStrategyForced.off, 1);
+    load_timer(e, buffer, this, CombatGroup::CHOOSE_STRATEGY_TIMER);
+    load_timer(e, buffer, this, CombatGroup::UPDATE_STRATEGY_TIMER);
+    load_field(
+        e,
+        buffer,
+        this,
+        CombatGroup::iLastGroupStrategyChosenIndex.off,
+        4,
+    );
+    e.call(
+        TIME_STAMP_LOAD,
+        &args![
+            this.byte_add(CombatGroup::fLastGroupStrategyChosenTimeStamp.off),
+            buffer
+        ],
+    );
+    load_timer(e, buffer, this, CombatGroup::AVOID_THREAT_DIALOGUE_TIMER);
+    load_timer(e, buffer, this, CombatGroup::CLUSTER_UPDATE_TIMER);
+    load_timer(e, buffer, this, CombatGroup::TARGET_UPDATE_TIMER);
+    for timer in 0..10u32 {
+        load_timer(
+            e,
+            buffer,
+            this,
+            CombatGroup::DETECTION_DIALOGUE_TIMERS + timer * 8,
+        );
+    }
+    load_field(e, buffer, this, CombatGroup::iSearchCount.off, 4);
+    if e.get(this, CombatGroup::iSearchCount) != 0 {
+        e.call(
+            LOAD_FORM_ID,
+            &args![buffer, this.byte_add(CombatGroup::pSearchingMember.off)],
+        );
+        load_field(e, buffer, this, CombatGroup::SEARCH_FOCAL_POINT, 0xc);
+        load_timer(e, buffer, this, CombatGroup::SEARCH_UPDATE_TIMER);
+        load_timer(e, buffer, this, CombatGroup::SEARCH_AREA_UPDATE_TIMER);
+        if e.vcall(buffer.addr(), 0, &args![]).u8() >= 5 {
+            e.call(
+                TIME_STAMP_LOAD,
+                &args![
+                    this.byte_add(CombatGroup::fSearchStartedTimeStamp.off),
+                    buffer
+                ],
+            );
+        }
+        e.call(
+            WORLD_LOCATION_LOAD,
+            &args![this.byte_add(CombatGroup::SEARCH_CENTER), buffer],
+        );
+        load_field(e, buffer, this, CombatGroup::fSearchRadius.off, 4);
+        let locations = this.byte_add(CombatGroup::SEARCH_LOCATIONS);
+        let count = e.call(LOAD_SIZED_VALUE, &args![buffer]).u32();
+        fn_0098f2f0(e, locations.cast(), count, 1);
+        for index in 0..count {
+            let entry = fn_0098ebc0(e, locations, index);
+            let entry = Ptr::<CombatSearchLocation>::new(entry);
+            e.call(WORLD_LOCATION_LOAD, &args![entry, buffer]);
+            load_field(e, buffer, entry, CombatSearchLocation::fScore.off, 4);
+            e.call(
+                LOAD_FORM_ID,
+                &args![buffer, entry.byte_add(CombatSearchLocation::iTargetID.off)],
+            );
+            e.call(
+                TIME_STAMP_LOAD,
+                &args![entry.byte_add(CombatSearchLocation::fTimeStamp.off), buffer],
+            );
+        }
+        let doors = this.byte_add(CombatGroup::SEARCH_TELEPORT_DOORS);
+        let count = e.call(LOAD_SIZED_VALUE, &args![buffer]).u32();
+        e.call(SEARCH_DOOR_RESIZE, &args![doors, count, 1u32]);
+        for index in 0..count {
+            let door = e
+                .call(SEARCH_DOOR_ELEMENT, &args![doors, index])
+                .ptr::<()>();
+            let reference = load_form_cast(e, buffer, CAST_DOOR_TARGET_TYPE);
+            e.mem.set_u32(door.addr(), reference);
+            let linked = load_form_cast(e, buffer, CAST_DOOR_TARGET_TYPE);
+            e.mem.set_u32(door.addr() + 4, linked);
+            for offset in [8u32, 9, 0xa] {
+                e.call(LOAD_BYTES, &args![buffer, door.byte_add(offset), 1u32]);
+            }
+        }
+        let has_grid = e.with_stack(4, |e, flag| {
+            e.mem.set_u8(flag.addr(), 0);
+            e.call(LOAD_BYTES, &args![buffer, flag, 1u32]);
+            e.mem.u8(flag.addr()) != 0
+        });
+        if has_grid {
+            let memory = e.call(OPERATOR_NEW, &args![LOS_GRID_MAP_SIZE]).u32();
+            let grid = if memory == 0 {
+                0
+            } else {
+                e.call(LOS_GRID_MAP_CONSTRUCT, &args![memory]).u32()
+            };
+            let grid_slot = this.byte_add(CombatGroup::spPathingLOSGridMap.off);
+            e.call(NI_POINTER_ASSIGN, &args![grid_slot, grid]);
+            let loaded = ni_pointer_get(e, grid_slot);
+            e.call(LOS_GRID_MAP_LOAD, &args![loaded, buffer]);
+        }
+        e.set(this, CombatGroup::bUpdateSearchDebugGeometry, true);
+    }
+    load_timer(e, buffer, this, CombatGroup::COMBAT_STRENGTH_TIMER);
+    load_field(e, buffer, this, CombatGroup::fMemberCombatStrength.off, 4);
+    load_field(
+        e,
+        buffer,
+        this,
+        CombatGroup::fAverageMemberDamagePerSecond.off,
+        4,
+    );
+    load_field(e, buffer, this, CombatGroup::fTargetCombatStrength.off, 4);
+    load_field(
+        e,
+        buffer,
+        this,
+        CombatGroup::fAverageTargetCombatStrength.off,
+        4,
+    );
+    load_timer(e, buffer, this, CombatGroup::COMBAT_MUSIC_UPDATE_TIMER);
+    load_field(e, buffer, this, CombatGroup::cCombatMusicState.off, 1);
+}
+
+// Translated from 0098e980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Entry `index` of the table of group strategies at `011f18b4` (cdecl).
+pub fn fn_0098e980(e: &mut Engine, index: i32) -> u32 {
+    e.global::<u32>(STRATEGY_TABLE.wrapping_add((index as u32).wrapping_mul(4)))
+}
+
+// Translated from 0098e990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup::InitLoadGame` (Xbox PDB): after a load, turns the saved
+/// references of the group into pointers. Every target's and member's actor
+/// word is resolved with `fn_00985930` (`forwarded` is passed through to it
+/// and ignored there); an entry whose actor is gone is removed (the index
+/// steps back); a surviving target is announced to the combat manager
+/// (`TargetLocalActor`, actor and group). When a search is running the
+/// searching member is looked up and cast the same way. At the end the
+/// counts are refreshed. The C++ exception frame is not translated.
+pub fn combat_group_init_load_game(e: &mut Engine, this: Ptr<CombatGroup>, forwarded: u32) {
+    let targets = this.byte_add(CombatGroup::TARGET_ARRAY);
+    let mut count = e.call(ARRAY_SIZE, &args![targets]).u32();
+    let mut index = 0u32;
+    while index < count {
+        let target = e.call(TARGET_AT, &args![targets, index]).u32();
+        fn_00985930(e, Ptr::new(target), forwarded, this.addr());
+        let actor = e.mem.u32(target);
+        if actor != 0 {
+            let manager = combat_manager(e);
+            e.call(
+                MANAGER_TARGET_LOCAL_ACTOR,
+                &args![manager, actor, this.addr()],
+            );
+        } else {
+            fn_0098ef10(e, targets.cast(), index, 1);
+            index = index.wrapping_sub(1);
+            count = count.wrapping_sub(1);
+        }
+        index = index.wrapping_add(1);
+    }
+    let members = this.byte_add(CombatGroup::MEMBER_ARRAY);
+    let mut count = e.call(ARRAY_SIZE, &args![members]).u32();
+    let mut index = 0u32;
+    while index < count {
+        let member = e.call(MEMBER_AT, &args![members, index]).u32();
+        fn_00985930(e, Ptr::new(member), forwarded, this.addr());
+        if e.mem.u32(member) == 0 {
+            fn_0098f1f0(e, members.cast(), index, 1);
+            index = index.wrapping_sub(1);
+            count = count.wrapping_sub(1);
+        }
+        index = index.wrapping_add(1);
+    }
+    if e.call(SEARCH_RUNNING, &args![this]).bool() {
+        let searching = e.get(this, CombatGroup::pSearchingMember);
+        let resolved = if searching.is_null() {
+            0
+        } else {
+            let form = e.call(FORM_LOOKUP, &args![searching]).u32();
+            e.call(
+                RT_DYNAMIC_CAST,
+                &args![form, 0u32, CAST_SOURCE_TYPE, CAST_TARGET_TYPE, 0u32],
+            )
+            .u32()
+        };
+        e.set(this, CombatGroup::pSearchingMember, Ptr::new(resolved));
+    }
+    combat_group_update_counts(e, this);
+}
+
+// Translated from 0098eb30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGroup` (the map has no name): first `fn_0098cf70`, then every
+/// member other than the player whose actor has no process (virtual method
+/// at slot 0x428), or whose process' word at `+0x80` is not this group, is
+/// removed with `fn_009869a0` (the index steps back). The second stack word
+/// is never read.
+pub fn fn_0098eb30(e: &mut Engine, this: Ptr<CombatGroup>, _unused_1: u32) {
+    fn_0098cf70(e, this);
+    let mut index = 0u32;
+    while index < e.call(MEMBER_COUNT, &args![this]).u32() {
+        let actor = e.call(MEMBER_ACTOR_AT, &args![this, index]).u32();
+        if actor != e.global::<u32>(PLAYER) {
+            let process = e.vcall(actor, 0x428, &args![]).u32();
+            if process == 0 || e.call(PROCESS_WORD_80, &args![process]).u32() != this.addr() {
+                fn_009869a0(e, this, Ptr::new(actor));
+                index = index.wrapping_sub(1);
+            }
+        }
+        index = index.wrapping_add(1);
+    }
+}
+
+// Translated from 0098ebc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Element `index` of a `BSSimpleArray<CombatSearchLocation>`: forwards to
+/// the instance at `006bf670` and returns its result.
+pub fn fn_0098ebc0(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    e.call(SEARCH_LOCATION_SLOT, &args![this, index]).u32()
+}
+
+// Translated from 0098ebe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<T *, 1024>` removal of `count` pointers from `index` (the
+/// map has no name). When `count` reaches the size the array is cleared
+/// (`008454f0`, with `shrink`) and nothing else happens. Otherwise the
+/// removed slots are destroyed and the tail is copied down; with `shrink`
+/// set and `006f3170` agreeing, the array first moves to a buffer of the
+/// size `00869600` asks for (the tail copy there keeps `size - count` as its
+/// count, as the code does). The size drops by `count`.
+pub fn fn_0098ebe0(e: &mut Engine, this: Ptr<BSSimpleArray>, index: u32, count: u32, shrink: u8) {
+    let size = e.get(this, BSSimpleArray::iSize);
+    if count >= size {
+        e.call(ARRAY_CLEAR, &args![this, u32::from(shrink)]);
+        return;
+    }
+    let slot = |buffer: u32| buffer.wrapping_add(index.wrapping_mul(4));
+    if shrink != 0 && e.call(POINTER_ARRAY_SHOULD_SHRINK, &args![this]).bool() {
+        let new_reserved = e.call(POINTER_ARRAY_SHRUNK_RESERVE, &args![this]).u32();
+        let new_buffer = e.vcall(this.addr(), 4, &args![new_reserved]).u32();
+        let old_buffer = e.get(this, BSSimpleArray::pBuffer);
+        e.call(
+            ARRAY_COPY_ELEMENTS,
+            &args![this, new_buffer, old_buffer, index],
+        );
+        let old_buffer = e.get(this, BSSimpleArray::pBuffer);
+        e.call(
+            ARRAY_DESTRUCT_ELEMENTS,
+            &args![this, slot(old_buffer), count],
+        );
+        let size = e.get(this, BSSimpleArray::iSize);
+        let old_buffer = e.get(this, BSSimpleArray::pBuffer);
+        e.call(
+            ARRAY_COPY_ELEMENTS,
+            &args![
+                this,
+                slot(new_buffer),
+                slot(old_buffer).wrapping_add(count.wrapping_mul(4)),
+                size.wrapping_sub(count)
+            ],
+        );
+        e.call(ARRAY_RELEASE_BUFFER, &args![this]);
+        e.set(this, BSSimpleArray::pBuffer, new_buffer);
+        e.set(this, BSSimpleArray::iReservedSize, new_reserved);
+    } else {
+        let buffer = e.get(this, BSSimpleArray::pBuffer);
+        e.call(ARRAY_DESTRUCT_ELEMENTS, &args![this, slot(buffer), count]);
+        let size = e.get(this, BSSimpleArray::iSize);
+        let buffer = e.get(this, BSSimpleArray::pBuffer);
+        e.call(
+            ARRAY_COPY_ELEMENTS,
+            &args![
+                this,
+                slot(buffer),
+                slot(buffer).wrapping_add(count.wrapping_mul(4)),
+                size.wrapping_sub(index).wrapping_sub(count)
+            ],
+        );
+    }
+    let size = e.get(this, BSSimpleArray::iSize);
+    e.set(this, BSSimpleArray::iSize, size.wrapping_sub(count));
+}
+
+/// `BSSimpleArray<T, 1024>::SetSize(new_size, shrink)` for one instance.
+/// Zero clears the array (`008454f0`). Growing past the reserve allocates
+/// (virtual method at `+4`) when there is no buffer yet, else calls the
+/// instance's `grow`; the new elements are constructed. Shrinking destroys
+/// the dropped elements and, with `shrink` set and the new size at most a
+/// quarter of the reserve, reallocates to exactly the new size. Within the
+/// reserve and above the size, the new elements are constructed.
+fn array_set_size(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    new_size: u32,
+    shrink: u8,
+    kind: &ArrayInstance,
+) {
+    if new_size == 0 {
+        e.call(ARRAY_CLEAR, &args![this, u32::from(shrink)]);
+        return;
+    }
+    let reserved = e.get(this, BSSimpleArray::iReservedSize);
+    let size = e.get(this, BSSimpleArray::iSize);
+    if new_size > reserved {
+        if reserved == 0 {
+            let buffer = e.vcall(this.addr(), 4, &args![new_size]).u32();
+            e.set(this, BSSimpleArray::pBuffer, buffer);
+        } else {
+            e.call(kind.grow, &args![this, new_size, size]);
+        }
+        e.set(this, BSSimpleArray::iReservedSize, new_size);
+        let buffer = e.get(this, BSSimpleArray::pBuffer);
+        e.call(
+            kind.construct,
+            &args![
+                this,
+                size.wrapping_mul(kind.element).wrapping_add(buffer),
+                new_size.wrapping_sub(size)
+            ],
+        );
+        e.set(this, BSSimpleArray::iSize, new_size);
+    } else if new_size < size {
+        let buffer = e.get(this, BSSimpleArray::pBuffer);
+        e.call(
+            ARRAY_DESTRUCT_ELEMENTS,
+            &args![
+                this,
+                new_size.wrapping_mul(kind.element).wrapping_add(buffer),
+                size - new_size
+            ],
+        );
+        e.set(this, BSSimpleArray::iSize, new_size);
+        if shrink != 0 && new_size <= e.get(this, BSSimpleArray::iReservedSize) >> 2 {
+            e.call(kind.grow, &args![this, new_size, new_size]);
+            e.set(this, BSSimpleArray::iReservedSize, new_size);
+        }
+    } else {
+        let buffer = e.get(this, BSSimpleArray::pBuffer);
+        e.call(
+            kind.construct,
+            &args![
+                this,
+                size.wrapping_mul(kind.element).wrapping_add(buffer),
+                new_size - size
+            ],
+        );
+        e.set(this, BSSimpleArray::iSize, new_size);
+    }
+}
+
+/// `BSSimpleArray<T, 1024>::RemoveAt(index, count)` for one instance: the
+/// number `n` of tail elements to move is `0042f5a0(size - index - count,
+/// count)`; the removed elements are destroyed and the last `n` elements of
+/// the array are moved into the start of the hole.
+fn array_remove_at(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    index: u32,
+    count: u32,
+    kind: &ArrayInstance,
+) {
+    let size = e.get(this, BSSimpleArray::iSize);
+    let tail = e
+        .call(
+            ARRAY_MOVE_COUNT,
+            &args![size.wrapping_sub(index).wrapping_sub(count), count],
+        )
+        .u32();
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    let hole = index.wrapping_mul(kind.element).wrapping_add(buffer);
+    e.call(ARRAY_DESTRUCT_ELEMENTS, &args![this, hole, count]);
+    let size = e.get(this, BSSimpleArray::iSize);
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    let from = size
+        .wrapping_mul(kind.element)
+        .wrapping_add(buffer)
+        .wrapping_sub(tail.wrapping_mul(kind.element));
+    let hole = index.wrapping_mul(kind.element).wrapping_add(buffer);
+    e.call(kind.move_tail, &args![this, hole, from, tail]);
+    e.set(this, BSSimpleArray::iSize, size.wrapping_sub(count));
+}
+
+/// The array initialisers' common body: empty buffer, size and reserve, then
+/// a buffer for `max(reserve, count)` elements (virtual method at `+4`) and
+/// `count` constructed elements.
+fn array_init(e: &mut Engine, this: Ptr<BSSimpleArray>, reserve: u32, count: u32, construct: u32) {
+    e.set(this, BSSimpleArray::pBuffer, 0);
+    e.set(this, BSSimpleArray::iSize, 0);
+    e.set(this, BSSimpleArray::iReservedSize, 0);
+    let reserve = reserve.max(count);
+    if reserve != 0 {
+        let buffer = e.vcall(this.addr(), 4, &args![reserve]).u32();
+        e.set(this, BSSimpleArray::pBuffer, buffer);
+        e.set(this, BSSimpleArray::iReservedSize, reserve);
+    }
+    if count != 0 {
+        let buffer = e.get(this, BSSimpleArray::pBuffer);
+        e.call(construct, &args![this, buffer, count]);
+        e.set(this, BSSimpleArray::iSize, count);
+    }
+}
+
+/// `BSSimpleArray<T, 1024>::Add`'s slot growth: when the array is full
+/// (`00438b90`) it gets a first buffer of 4 (virtual method at `+4`) or the
+/// reserve `009a3910` asks for (`grow`, with the size). Counts one more
+/// element and returns its index.
+fn array_reserve_slot(e: &mut Engine, this: Ptr<BSSimpleArray>, grow: u32) -> u32 {
+    if e.call(ARRAY_IS_FULL, &args![this]).bool() {
+        if e.get(this, BSSimpleArray::iReservedSize) == 0 {
+            let buffer = e.vcall(this.addr(), 4, &args![4u32]).u32();
+            e.set(this, BSSimpleArray::pBuffer, buffer);
+            e.set(this, BSSimpleArray::iReservedSize, 4);
+        } else {
+            let reserve = e.call(ARRAY_GROWN_RESERVE, &args![this]).u32();
+            let size = e.get(this, BSSimpleArray::iSize);
+            e.call(grow, &args![this, reserve, size]);
+            e.set(this, BSSimpleArray::iReservedSize, reserve);
+        }
+    }
+    let size = e.get(this, BSSimpleArray::iSize).wrapping_add(1);
+    e.set(this, BSSimpleArray::iSize, size);
+    size.wrapping_sub(1)
+}
+
+// Translated from 0098ed30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatTarget, 1024>` constructor: vtable `0108d6f4`, empty
+/// (`fn_0098fab0(0, 0)`). Returns `this`.
+pub fn fn_0098ed30(e: &mut Engine, this: Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray> {
+    e.mem.set_u32(this.addr(), TARGET_ARRAY_VTABLE);
+    fn_0098fab0(e, this, 0, 0);
+    this
+}
+
+// Translated from 0098ed60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatTarget, 1024>` destructor: vtable `0108d6f4`, then
+/// the array is cleared (`008454f0(1)`).
+pub fn fn_0098ed60(e: &mut Engine, this: Ptr<BSSimpleArray>) {
+    e.mem.set_u32(this.addr(), TARGET_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 0098ed80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatTarget, 1024>::SetSize(new_size, shrink)` (the map
+/// has no name): see `array_set_size`, elements of 0x68 bytes.
+pub fn fn_0098ed80(e: &mut Engine, this: Ptr<BSSimpleArray>, new_size: u32, shrink: u8) {
+    array_set_size(e, this, new_size, shrink, &TARGET_ARRAY_INSTANCE);
+}
+
+// Translated from 0098eec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatTarget, 1024>::Add(element)`: reserves a slot
+/// (`fn_0098f7b0`), constructs it (`0098f840`) and copies the 0x68-byte
+/// element in. Returns the index.
+pub fn fn_0098eec0(e: &mut Engine, this: Ptr<BSSimpleArray>, element: Ptr<CombatTarget>) -> u32 {
+    let index = fn_0098f7b0(e, this);
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    let slot = index.wrapping_mul(0x68).wrapping_add(buffer);
+    e.call(TARGET_ARRAY_INSTANCE.construct, &args![this, slot, 1u32]);
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    let slot = buffer.wrapping_add(index.wrapping_mul(0x68));
+    for word in 0..0x1a {
+        let value = e.mem.u32(element.addr() + 4 * word);
+        e.mem.set_u32(slot + 4 * word, value);
+    }
+    index
+}
+
+// Translated from 0098ef10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatTarget, 1024>::RemoveAt(index, count)`: see
+/// `array_remove_at`, elements of 0x68 bytes.
+pub fn fn_0098ef10(e: &mut Engine, this: Ptr<BSSimpleArray>, index: u32, count: u32) {
+    array_remove_at(e, this, index, count, &TARGET_ARRAY_INSTANCE);
+}
+
+// Translated from 0098efa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatTarget, 1024>::_Allocate` (Xbox PDB): the game's
+/// allocator (`00401000`) for `count` elements of 0x68 bytes. `this` is not
+/// read.
+pub fn bs_simple_array_combat_target_allocate(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
+    e.call(OPERATOR_NEW_SMALL, &args![count.wrapping_mul(0x68)])
+        .u32()
+}
+
+// Translated from 0098efd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatTarget, 1024>::_Reallocate` (Xbox PDB): calls the
+/// reallocation primitive `0042f5d0(buffer, count * 0x68)`. `this` is not
+/// read.
+pub fn bs_simple_array_combat_target_reallocate(
+    e: &mut Engine,
+    _this: Ptr,
+    buffer: u32,
+    count: u32,
+) {
+    e.call(
+        ARRAY_REALLOC_BYTES,
+        &args![buffer, count.wrapping_mul(0x68)],
+    );
+}
+
+// Translated from 0098eff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatMember, 1024>` constructor: vtable `0108d708`, empty
+/// (`fn_0098fbe0(0, 0)`). Returns `this`.
+pub fn fn_0098eff0(e: &mut Engine, this: Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray> {
+    e.mem.set_u32(this.addr(), MEMBER_ARRAY_VTABLE);
+    fn_0098fbe0(e, this, 0, 0);
+    this
+}
+
+// Translated from 0098f020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatMember, 1024>` destructor: vtable `0108d708`, then
+/// the array is cleared (`008454f0(1)`).
+pub fn fn_0098f020(e: &mut Engine, this: Ptr<BSSimpleArray>) {
+    e.mem.set_u32(this.addr(), MEMBER_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 0098f040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatMember, 1024>::SetSize(new_size, shrink)`: see
+/// `array_set_size`, elements of 0x14 bytes.
+pub fn fn_0098f040(e: &mut Engine, this: Ptr<BSSimpleArray>, new_size: u32, shrink: u8) {
+    array_set_size(e, this, new_size, shrink, &MEMBER_ARRAY_INSTANCE);
+}
+
+// Translated from 0098f180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatMember, 1024>::Add(element)`: reserves a slot
+/// (`007881d0`), constructs it (`0098fb40`) and copies the 0x14-byte element
+/// in. Returns the index.
+pub fn fn_0098f180(e: &mut Engine, this: Ptr<BSSimpleArray>, element: Ptr<CombatMember>) -> u32 {
+    let index = e.call(MEMBER_ARRAY_RESERVE_SLOT, &args![this]).u32();
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    let slot = index.wrapping_mul(0x14).wrapping_add(buffer);
+    e.call(MEMBER_ARRAY_INSTANCE.construct, &args![this, slot, 1u32]);
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    let slot = buffer.wrapping_add(index.wrapping_mul(0x14));
+    for word in 0..5 {
+        let value = e.mem.u32(element.addr() + 4 * word);
+        e.mem.set_u32(slot + 4 * word, value);
+    }
+    index
+}
+
+// Translated from 0098f1f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatMember, 1024>::RemoveAt(index, count)`: see
+/// `array_remove_at`, elements of 0x14 bytes.
+pub fn fn_0098f1f0(e: &mut Engine, this: Ptr<BSSimpleArray>, index: u32, count: u32) {
+    array_remove_at(e, this, index, count, &MEMBER_ARRAY_INSTANCE);
+}
+
+// Translated from 0098f280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatMember, 1024>::_Reallocate`: calls the reallocation
+/// primitive `0042f5d0(buffer, count * 0x14)`. `this` is not read.
+pub fn fn_0098f280(e: &mut Engine, _this: Ptr, buffer: u32, count: u32) {
+    e.call(
+        ARRAY_REALLOC_BYTES,
+        &args![buffer, count.wrapping_mul(0x14)],
+    );
+}
+
+// Translated from 0098f2a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatSearchLocation, 1024>` constructor: vtable
+/// `0108d71c`, empty (`fn_0098fd10(0, 0)`). Returns `this`.
+pub fn fn_0098f2a0(e: &mut Engine, this: Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray> {
+    e.mem.set_u32(this.addr(), SEARCH_LOCATION_ARRAY_VTABLE);
+    fn_0098fd10(e, this, 0, 0);
+    this
+}
+
+// Translated from 0098f2d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatSearchLocation, 1024>` destructor: vtable
+/// `0108d71c`, then the array is cleared (`008454f0(1)`).
+pub fn fn_0098f2d0(e: &mut Engine, this: Ptr<BSSimpleArray>) {
+    e.mem.set_u32(this.addr(), SEARCH_LOCATION_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 0098f2f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatSearchLocation, 1024>::SetSize(new_size, shrink)`:
+/// see `array_set_size`, elements of 0x1c bytes.
+pub fn fn_0098f2f0(e: &mut Engine, this: Ptr<BSSimpleArray>, new_size: u32, shrink: u8) {
+    array_set_size(e, this, new_size, shrink, &SEARCH_LOCATION_ARRAY_INSTANCE);
+}
+
+// Translated from 0098f430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatSearchLocation, 1024>::RemoveAt(index, count)`: see
+/// `array_remove_at`, elements of 0x1c bytes.
+pub fn fn_0098f430(e: &mut Engine, this: Ptr<BSSimpleArray>, index: u32, count: u32) {
+    array_remove_at(e, this, index, count, &SEARCH_LOCATION_ARRAY_INSTANCE);
+}
+
+// Translated from 0098f4c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatSearchDoor, 1024>` constructor: vtable `0108d730`,
+/// then the initialiser `006b3f40(0, 0)`. Returns `this`.
+pub fn fn_0098f4c0(e: &mut Engine, this: Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray> {
+    e.mem.set_u32(this.addr(), SEARCH_DOOR_ARRAY_VTABLE);
+    e.call(SEARCH_DOOR_ARRAY_INIT, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 0098f4f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatSearchDoor, 1024>` destructor: vtable `0108d730`,
+/// then the array is cleared (`008454f0(1)`).
+pub fn fn_0098f4f0(e: &mut Engine, this: Ptr<BSSimpleArray>) {
+    e.mem.set_u32(this.addr(), SEARCH_DOOR_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 0098f510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatGroupCluster *, 1024>` constructor: vtable
+/// `0108d744`, then the initialiser `006b3eb0(0, 0)`. Returns `this`.
+pub fn fn_0098f510(e: &mut Engine, this: Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray> {
+    e.mem.set_u32(this.addr(), CLUSTER_POINTER_ARRAY_VTABLE);
+    e.call(CLUSTER_POINTER_ARRAY_INIT, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 0098f540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatGroupCluster *, 1024>` destructor: vtable
+/// `0108d744`, then the array is cleared (`008454f0(1)`).
+pub fn fn_0098f540(e: &mut Engine, this: Ptr<BSSimpleArray>) {
+    e.mem.set_u32(this.addr(), CLUSTER_POINTER_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 0098f560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<GroupMemberData, 1024>` destructor: vtable `0108d758`,
+/// then the array is cleared (`008454f0(1)`).
+pub fn fn_0098f560(e: &mut Engine, this: Ptr<BSSimpleArray>) {
+    e.mem.set_u32(this.addr(), GROUP_MEMBER_DATA_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 0098f580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies a `BSSimpleArray<CombatTarget, 1024>` into `other`: sizes `other`
+/// to this array's size (`fn_0098ed80`, shrink on), then copies the 0x68
+/// bytes of each element into `other`'s element `i` (`0096a330`).
+pub fn fn_0098f580(e: &mut Engine, this: Ptr<BSSimpleArray>, other: Ptr<BSSimpleArray>) {
+    let size = e.get(this, BSSimpleArray::iSize);
+    fn_0098ed80(e, other, size, 1);
+    let mut index = 0u32;
+    while index < e.get(this, BSSimpleArray::iSize) {
+        let from = e.get(this, BSSimpleArray::pBuffer) + index * 0x68;
+        let to = e.call(TARGET_ARRAY_ELEMENT, &args![other, index]).u32();
+        for word in 0..0x1a {
+            let value = e.mem.u32(from + 4 * word);
+            e.mem.set_u32(to + 4 * word, value);
+        }
+        index += 1;
+    }
+}
+
+// Translated from 0098f5f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of a scrap-heap array (vtable `0106d864`; the engine map has
+/// no name): the base constructor `006cf180`, the vtable, the heap word at
+/// `+0x10` (`heap`, or the thread's scrap heap when `heap` is zero) and the
+/// initialiser `006d0140(first, second)`. Returns `this`. The C++ exception
+/// frame is not translated.
+pub fn fn_0098f5f0(e: &mut Engine, this: Ptr, first: u32, second: u32, heap: u32) -> Ptr {
+    e.call(SCRAP_ARRAY_BASE_CONSTRUCT, &args![this]);
+    e.mem.set_u32(this.addr(), SCRAP_ARRAY_VTABLE);
+    let heap = if heap == 0 {
+        let manager = e.call(MEMORY_MANAGER, &args![]).u32();
+        e.call(THREAD_SCRAP_HEAP, &args![manager]).u32()
+    } else {
+        heap
+    };
+    e.mem.set_u32(this.addr() + 0x10, heap);
+    e.call(SCRAP_ARRAY_INIT, &args![this, first, second]);
+    this
+}
+
+/// Scalar deleting destructor of one of this unit's array instances:
+/// destructs, then frees `this` when bit 0 of `flags` is set. Returns
+/// `this`.
+fn scalar_deleting(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+    destruct: fn(&mut Engine, Ptr<BSSimpleArray>),
+) -> Ptr<BSSimpleArray> {
+    destruct(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 0098f690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatTarget, 1024>::_scalar_deleting_destructor_` (Xbox
+/// PDB): `fn_0098ed60`, then `operator delete` when bit 0 of `flags` is set.
+pub fn bs_simple_array_combat_target_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    scalar_deleting(e, this, flags, fn_0098ed60)
+}
+
+// Translated from 0098f6c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatMember, 1024>::_scalar_deleting_destructor_` (Xbox
+/// PDB): `fn_0098f020`, then `operator delete` when bit 0 of `flags` is set.
+pub fn bs_simple_array_combat_member_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    scalar_deleting(e, this, flags, fn_0098f020)
+}
+
+// Translated from 0098f6f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatSearchLocation, 1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): `fn_0098f2d0`, then `operator delete` when bit 0 of `flags`
+/// is set.
+pub fn bs_simple_array_combat_search_location_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    scalar_deleting(e, this, flags, fn_0098f2d0)
+}
+
+// Translated from 0098f720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatSearchDoor, 1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): `fn_0098f4f0`, then `operator delete` when bit 0 of `flags`
+/// is set.
+pub fn bs_simple_array_combat_search_door_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    scalar_deleting(e, this, flags, fn_0098f4f0)
+}
+
+// Translated from 0098f750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatGroupCluster *, 1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): `fn_0098f540`, then `operator delete` when bit 0 of `flags`
+/// is set.
+pub fn bs_simple_array_combat_group_cluster_pointer_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    scalar_deleting(e, this, flags, fn_0098f540)
+}
+
+// Translated from 0098f780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<GroupMemberData, 1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): `fn_0098f560`, then `operator delete` when bit 0 of `flags`
+/// is set.
+pub fn bs_simple_array_group_member_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    scalar_deleting(e, this, flags, fn_0098f560)
+}
+
+// Translated from 0098f7b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<CombatTarget, 1024>` slot reservation (the map has no
+/// name): see `array_reserve_slot`, growing with `0098fa00`. Returns the new
+/// element's index.
+pub fn fn_0098f7b0(e: &mut Engine, this: Ptr<BSSimpleArray>) -> u32 {
+    array_reserve_slot(e, this, TARGET_ARRAY_INSTANCE.grow)
+}
+
+// Translated from 0098fab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Initialiser of a `BSSimpleArray<CombatTarget, 1024>` (called by its
+/// constructor with `(0, 0)`): see `array_init`, constructing with
+/// `0098f840`.
+pub fn fn_0098fab0(e: &mut Engine, this: Ptr<BSSimpleArray>, reserve: u32, count: u32) {
+    array_init(e, this, reserve, count, TARGET_ARRAY_INSTANCE.construct);
+}
+
+// Translated from 0098fbe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Initialiser of a `BSSimpleArray<CombatMember, 1024>`: see `array_init`,
+/// constructing with `0098fb40`.
+pub fn fn_0098fbe0(e: &mut Engine, this: Ptr<BSSimpleArray>, reserve: u32, count: u32) {
+    array_init(e, this, reserve, count, MEMBER_ARRAY_INSTANCE.construct);
+}
+
+// Translated from 0098fd10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Initialiser of a `BSSimpleArray<CombatSearchLocation, 1024>`: see
+/// `array_init`, constructing with `0098fc70`.
+pub fn fn_0098fd10(e: &mut Engine, this: Ptr<BSSimpleArray>, reserve: u32, count: u32) {
+    array_init(
+        e,
+        this,
+        reserve,
+        count,
+        SEARCH_LOCATION_ARRAY_INSTANCE.construct,
+    );
+}
 /// Writes `size` bytes of the object at `base + offset` to the save buffer.
 fn save_field<T>(e: &mut Engine, buffer: Ptr, base: Ptr<T>, offset: u32, size: u32) {
     e.call(
@@ -5448,6 +6427,123 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0098de30, fn_0098de30(Ptr<CombatGroup>, u32) -> u32),
         entry!(0x0098de60, fn_0098de60(Ptr<CombatGroup>, i8) -> u32),
         entry!(0x0098de90, combat_group_save_game(Ptr<CombatGroup>, Ptr)),
+        entry!(0x0098e3d0, combat_group_load_game(Ptr<CombatGroup>, Ptr)),
+        entry!(0x0098e980, fn_0098e980(i32) -> u32),
+        entry!(
+            0x0098e990,
+            combat_group_init_load_game(Ptr<CombatGroup>, u32)
+        ),
+        entry!(0x0098eb30, fn_0098eb30(Ptr<CombatGroup>, u32)),
+        entry!(0x0098ebc0, fn_0098ebc0(Ptr, u32) -> u32),
+        entry!(0x0098ebe0, fn_0098ebe0(Ptr<BSSimpleArray>, u32, u32, u8)),
+        entry!(
+            0x0098ed30,
+            fn_0098ed30(Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray>
+        ),
+        entry!(0x0098ed60, fn_0098ed60(Ptr<BSSimpleArray>)),
+        entry!(0x0098ed80, fn_0098ed80(Ptr<BSSimpleArray>, u32, u8)),
+        entry!(
+            0x0098eec0,
+            fn_0098eec0(Ptr<BSSimpleArray>, Ptr<CombatTarget>) -> u32
+        ),
+        entry!(0x0098ef10, fn_0098ef10(Ptr<BSSimpleArray>, u32, u32)),
+        entry!(
+            0x0098efa0,
+            bs_simple_array_combat_target_allocate(Ptr, u32) -> u32
+        ),
+        entry!(
+            0x0098efd0,
+            bs_simple_array_combat_target_reallocate(Ptr, u32, u32)
+        ),
+        entry!(
+            0x0098eff0,
+            fn_0098eff0(Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray>
+        ),
+        entry!(0x0098f020, fn_0098f020(Ptr<BSSimpleArray>)),
+        entry!(0x0098f040, fn_0098f040(Ptr<BSSimpleArray>, u32, u8)),
+        entry!(
+            0x0098f180,
+            fn_0098f180(Ptr<BSSimpleArray>, Ptr<CombatMember>) -> u32
+        ),
+        entry!(0x0098f1f0, fn_0098f1f0(Ptr<BSSimpleArray>, u32, u32)),
+        entry!(0x0098f280, fn_0098f280(Ptr, u32, u32)),
+        entry!(
+            0x0098f2a0,
+            fn_0098f2a0(Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray>
+        ),
+        entry!(0x0098f2d0, fn_0098f2d0(Ptr<BSSimpleArray>)),
+        entry!(0x0098f2f0, fn_0098f2f0(Ptr<BSSimpleArray>, u32, u8)),
+        entry!(0x0098f430, fn_0098f430(Ptr<BSSimpleArray>, u32, u32)),
+        entry!(
+            0x0098f4c0,
+            fn_0098f4c0(Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray>
+        ),
+        entry!(0x0098f4f0, fn_0098f4f0(Ptr<BSSimpleArray>)),
+        entry!(
+            0x0098f510,
+            fn_0098f510(Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray>
+        ),
+        entry!(0x0098f540, fn_0098f540(Ptr<BSSimpleArray>)),
+        entry!(0x0098f560, fn_0098f560(Ptr<BSSimpleArray>)),
+        entry!(
+            0x0098f580,
+            fn_0098f580(Ptr<BSSimpleArray>, Ptr<BSSimpleArray>)
+        ),
+        entry!(0x0098f5f0, fn_0098f5f0(Ptr, u32, u32, u32) -> Ptr),
+        entry!(
+            0x0098f690,
+            bs_simple_array_combat_target_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            )
+                -> Ptr<BSSimpleArray>
+        ),
+        entry!(
+            0x0098f6c0,
+            bs_simple_array_combat_member_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            )
+                -> Ptr<BSSimpleArray>
+        ),
+        entry!(
+            0x0098f6f0,
+            bs_simple_array_combat_search_location_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            )
+                -> Ptr<BSSimpleArray>
+        ),
+        entry!(
+            0x0098f720,
+            bs_simple_array_combat_search_door_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            )
+                -> Ptr<BSSimpleArray>
+        ),
+        entry!(
+            0x0098f750,
+            bs_simple_array_combat_group_cluster_pointer_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            )
+                -> Ptr<
+                BSSimpleArray,
+            >
+        ),
+        entry!(
+            0x0098f780,
+            bs_simple_array_group_member_data_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            )
+                -> Ptr<BSSimpleArray>
+        ),
+        entry!(0x0098f7b0, fn_0098f7b0(Ptr<BSSimpleArray>) -> u32),
+        entry!(0x0098fab0, fn_0098fab0(Ptr<BSSimpleArray>, u32, u32)),
+        entry!(0x0098fbe0, fn_0098fbe0(Ptr<BSSimpleArray>, u32, u32)),
+        entry!(0x0098fd10, fn_0098fd10(Ptr<BSSimpleArray>, u32, u32)),
     ]
 }
 
@@ -10063,5 +11159,969 @@ mod tests {
         assert_eq!(e.mem.u32(g + 0xd4), 0);
         assert_eq!(calls(&e, NI_POINTER_ASSIGN), vec![vec![g + 0xd4, 0]]);
         assert!(calls(&e, LOS_GRID_MAP_STEP).is_empty());
+    }
+
+    // ---- Part 3: LoadGame, InitLoadGame and the BSSimpleArray instances ----
+
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+
+    /// Vtable of the fake arrays: slot `+4` allocates `count * 0x70` bytes.
+    const ARRAY_VTABLE: u32 = 0x7300_0000;
+    /// The fake allocator.
+    const ALLOCATOR: u32 = 0x7300_0100;
+
+    /// `engine()` plus the array helpers doubled over memory: the allocator
+    /// behind the fake vtable, the minimum, element destruction (nothing),
+    /// and the three tail movers (a byte copy of `count` elements).
+    fn bsarray_engine() -> Engine {
+        let mut e = engine();
+        e.put_vtable(ARRAY_VTABLE, &[0, ALLOCATOR]);
+        e.register(ALLOCATOR, |e, a| e.mem.alloc(a[1].max(1) * 0x70).into_ret());
+        e.register(ARRAY_MOVE_COUNT, |_, a| a[0].min(a[1]).into_ret());
+        e.register(ARRAY_DESTRUCT_ELEMENTS, |_, _| Ret::default());
+        fn move_elements(e: &mut Engine, a: &[u32], size: u32) -> Ret {
+            for i in 0..a[3] * size {
+                let byte = e.mem.u8(a[2] + i);
+                e.mem.set_u8(a[1] + i, byte);
+            }
+            Ret::default()
+        }
+        e.register(TARGET_ARRAY_INSTANCE.move_tail, |e, a| {
+            move_elements(e, a, 0x68)
+        });
+        e.register(MEMBER_ARRAY_INSTANCE.move_tail, |e, a| {
+            move_elements(e, a, 0x14)
+        });
+        e.register(SEARCH_LOCATION_ARRAY_INSTANCE.move_tail, |e, a| {
+            move_elements(e, a, 0x1c)
+        });
+        e
+    }
+
+    /// An array object with the fake vtable and the given buffer, size and
+    /// reserve.
+    fn fake_array(e: &mut Engine, buffer: u32, size: u32, reserved: u32) -> Ptr<BSSimpleArray> {
+        let array = e.new_object::<BSSimpleArray>();
+        e.mem.set_u32(array.addr(), ARRAY_VTABLE);
+        e.set(array, BSSimpleArray::pBuffer, buffer);
+        e.set(array, BSSimpleArray::iSize, size);
+        e.set(array, BSSimpleArray::iReservedSize, reserved);
+        array
+    }
+
+    #[test]
+    fn fn_0098e980_reads_the_strategy_table() {
+        let mut e = engine();
+        e.set_global(STRATEGY_TABLE + 8, 0xabcdu32);
+        assert_eq!(fn_0098e980(&mut e, 2), 0xabcd);
+        assert_eq!(fn_0098e980(&mut e, 0), 0);
+    }
+
+    #[test]
+    fn init_load_game_resolves_actors_and_drops_the_missing_ones() {
+        let mut e = bsarray_engine();
+        // The form lookup keeps the word; the cast turns the "gone" actor
+        // (address kept in a test global) into null and keeps the rest.
+        e.register(FORM_LOOKUP, |_, a| a[0].into_ret());
+        e.register(RT_DYNAMIC_CAST, |e, a| {
+            (if a[0] == e.global::<u32>(0x0101_2100) {
+                0
+            } else {
+                a[0]
+            })
+            .into_ret()
+        });
+        record(
+            &mut e,
+            &[
+                MANAGER_TARGET_LOCAL_ACTOR,
+                MANAGER_REMOVE_MEMBER,
+                UNTINT_SCENEGRAPH,
+            ],
+        );
+        e.set_global(COMBAT_MANAGER, 0x4242u32);
+        e.register(SEARCH_RUNNING, |_, _| true.into_ret());
+        let a = actor(&mut e, 1);
+        let b = actor(&mut e, 2);
+        let gone = actor(&mut e, 3);
+        let searching = actor(&mut e, 4);
+        e.set_global(0x0101_2100, gone.addr());
+        let group = group_with(&mut e, &[a, gone, b], &[gone, a, gone]);
+        let g = group.addr();
+        e.set(group, CombatGroup::pSearchingMember, searching);
+        combat_group_init_load_game(&mut e, group, 0x77);
+        // Targets [a, b] remain, each announced to the combat manager once.
+        assert_eq!(e.mem.u32(g + 0x10), 2);
+        let targets = e.mem.u32(g + 0x0c);
+        assert_eq!(e.mem.u32(targets), a.addr());
+        assert_eq!(e.mem.u32(targets + 0x68), b.addr());
+        assert_eq!(
+            calls(&e, MANAGER_TARGET_LOCAL_ACTOR),
+            vec![vec![0x4242, a.addr(), g], vec![0x4242, b.addr(), g]]
+        );
+        // Members: only `a` remains (the removal re-checks the moved entry).
+        assert_eq!(e.mem.u32(g + 0x20), 1);
+        assert_eq!(e.mem.u32(e.mem.u32(g + 0x1c)), a.addr());
+        // The running search keeps its (cast) searching member.
+        assert_eq!(e.get(group, CombatGroup::pSearchingMember), searching);
+        // No search: the searching member word is left alone.
+        e.register(SEARCH_RUNNING, |_, _| false.into_ret());
+        e.set(group, CombatGroup::pSearchingMember, gone);
+        combat_group_init_load_game(&mut e, group, 0x77);
+        assert_eq!(e.get(group, CombatGroup::pSearchingMember), gone);
+        // A running search with no searching member keeps null.
+        e.register(SEARCH_RUNNING, |_, _| true.into_ret());
+        e.set(group, CombatGroup::pSearchingMember, Ptr::NULL);
+        combat_group_init_load_game(&mut e, group, 0x77);
+        assert!(e.get(group, CombatGroup::pSearchingMember).is_null());
+    }
+
+    #[test]
+    fn fn_0098eb30_removes_members_without_this_group() {
+        let mut e = bsarray_engine();
+        e.map(0x011d_e000, 0x1000);
+        record(&mut e, &[MANAGER_REMOVE_MEMBER]);
+        e.register(PROCESS_WORD_80, |e, a| e.mem.u32(a[0] + 0x80).into_ret());
+        let player = actor(&mut e, 1);
+        let ours = actor(&mut e, 2);
+        let without_process = actor(&mut e, 3);
+        let other_group = actor(&mut e, 4);
+        let group = group_with(&mut e, &[], &[player, ours, without_process, other_group]);
+        e.set_global(PLAYER, player.addr());
+        for (who, owner) in [(ours, group.addr()), (other_group, 0x9999)] {
+            let process = e.mem.alloc(0x90);
+            e.mem.set_u32(process + 0x80, owner);
+            e.mem.set_u32(who.addr() + 0x38, process);
+        }
+        // `fn_0098cf70` (real) has no targets to recount; the player has no
+        // process but is skipped.
+        fn_0098eb30(&mut e, group, 0);
+        assert_eq!(e.mem.u32(group.addr() + 0x20), 2);
+        let buffer = e.mem.u32(group.addr() + 0x1c);
+        assert_eq!(e.mem.u32(buffer), player.addr());
+        assert_eq!(e.mem.u32(buffer + 0x14), ours.addr());
+        let removed: Vec<u32> = calls(&e, MANAGER_REMOVE_MEMBER)
+            .iter()
+            .map(|c| c[2])
+            .collect();
+        assert_eq!(removed, vec![without_process.addr(), other_group.addr()]);
+    }
+
+    #[test]
+    fn fn_0098ebc0_forwards_to_the_location_slot_accessor() {
+        let mut e = engine();
+        e.register(SEARCH_LOCATION_SLOT, |_, a| {
+            (a[0] + 0x100 + a[1]).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_0098ebc0(&mut e, Ptr::new(0x40), 3), 0x143);
+        assert_eq!(calls(&e, SEARCH_LOCATION_SLOT), vec![vec![0x40, 3]]);
+    }
+
+    #[test]
+    fn fn_0098ebe0_clears_removes_in_place_or_moves_to_a_smaller_buffer() {
+        let mut e = bsarray_engine();
+        record(
+            &mut e,
+            &[
+                ARRAY_CLEAR,
+                POINTER_ARRAY_SHOULD_SHRINK,
+                POINTER_ARRAY_SHRUNK_RESERVE,
+                ARRAY_COPY_ELEMENTS,
+                ARRAY_RELEASE_BUFFER,
+            ],
+        );
+        // The count reaches the size: cleared, size untouched.
+        let buffer = e.mem.alloc(32);
+        let array = fake_array(&mut e, buffer, 3, 4);
+        fn_0098ebe0(&mut e, array, 1, 3, 1);
+        assert_eq!(calls(&e, ARRAY_CLEAR), vec![vec![array.addr(), 1]]);
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 3);
+        // In place (no shrink): destroy `count` slots, copy the tail down.
+        e.call_log = Some(vec![]);
+        fn_0098ebe0(&mut e, array, 1, 1, 0);
+        assert_eq!(
+            calls(&e, ARRAY_DESTRUCT_ELEMENTS),
+            vec![vec![array.addr(), buffer + 4, 1]]
+        );
+        assert_eq!(
+            calls(&e, ARRAY_COPY_ELEMENTS),
+            vec![vec![array.addr(), buffer + 4, buffer + 8, 1]]
+        );
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 2);
+        assert!(calls(&e, POINTER_ARRAY_SHOULD_SHRINK).is_empty());
+        // Shrink requested but refused by `006f3170`: still in place.
+        e.call_log = Some(vec![]);
+        fn_0098ebe0(&mut e, array, 0, 1, 1);
+        assert_eq!(calls(&e, POINTER_ARRAY_SHOULD_SHRINK).len(), 1);
+        assert!(calls(&e, ARRAY_RELEASE_BUFFER).is_empty());
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 1);
+        // Shrink accepted: a new buffer of the size `00869600` asks for.
+        e.register(POINTER_ARRAY_SHOULD_SHRINK, |_, _| true.into_ret());
+        e.register(POINTER_ARRAY_SHRUNK_RESERVE, |_, _| 5u32.into_ret());
+        let array = fake_array(&mut e, buffer, 4, 8);
+        e.call_log = Some(vec![]);
+        fn_0098ebe0(&mut e, array, 1, 1, 1);
+        let new_buffer = e.get(array, BSSimpleArray::pBuffer);
+        assert_ne!(new_buffer, buffer);
+        assert_eq!(e.get(array, BSSimpleArray::iReservedSize), 5);
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 3);
+        assert_eq!(
+            calls(&e, ARRAY_COPY_ELEMENTS),
+            vec![
+                vec![array.addr(), new_buffer, buffer, 1],
+                vec![array.addr(), new_buffer + 4, buffer + 8, 3],
+            ]
+        );
+        assert_eq!(calls(&e, ARRAY_RELEASE_BUFFER), vec![vec![array.addr()]]);
+    }
+
+    /// Runs the `SetSize` of one instance through its cases.
+    fn check_set_size(
+        set_size: fn(&mut Engine, Ptr<BSSimpleArray>, u32, u8),
+        kind: &ArrayInstance,
+    ) {
+        let mut e = bsarray_engine();
+        record(&mut e, &[ARRAY_CLEAR, kind.grow, kind.construct]);
+        let array = fake_array(&mut e, 0, 0, 0);
+        let a = array.addr();
+        // Zero clears.
+        set_size(&mut e, array, 0, 1);
+        assert_eq!(calls(&e, ARRAY_CLEAR), vec![vec![a, 1]]);
+        // No buffer yet: allocate, construct all.
+        e.call_log = Some(vec![]);
+        set_size(&mut e, array, 3, 1);
+        let buffer = e.get(array, BSSimpleArray::pBuffer);
+        assert_ne!(buffer, 0);
+        assert_eq!(calls(&e, ALLOCATOR), vec![vec![a, 3]]);
+        assert_eq!(calls(&e, kind.construct), vec![vec![a, buffer, 3]]);
+        assert_eq!(e.get(array, BSSimpleArray::iReservedSize), 3);
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 3);
+        // Past the reserve: the instance's grow, then the new tail.
+        e.call_log = Some(vec![]);
+        set_size(&mut e, array, 5, 1);
+        assert_eq!(calls(&e, kind.grow), vec![vec![a, 5, 3]]);
+        let buffer = e.get(array, BSSimpleArray::pBuffer);
+        assert_eq!(
+            calls(&e, kind.construct),
+            vec![vec![a, buffer + 3 * kind.element, 2]]
+        );
+        assert_eq!(e.get(array, BSSimpleArray::iReservedSize), 5);
+        // Within the reserve: construct only the extra element.
+        e.set(array, BSSimpleArray::iSize, 3);
+        e.call_log = Some(vec![]);
+        set_size(&mut e, array, 4, 1);
+        assert!(calls(&e, kind.grow).is_empty());
+        assert_eq!(
+            calls(&e, kind.construct),
+            vec![vec![a, buffer + 3 * kind.element, 1]]
+        );
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 4);
+        // Shrinking destroys the dropped elements; the reserve only
+        // follows when the new size is at most a quarter of it.
+        e.call_log = Some(vec![]);
+        set_size(&mut e, array, 2, 1);
+        assert_eq!(
+            calls(&e, ARRAY_DESTRUCT_ELEMENTS),
+            vec![vec![a, buffer + 2 * kind.element, 2]]
+        );
+        assert!(calls(&e, kind.grow).is_empty());
+        assert_eq!(e.get(array, BSSimpleArray::iReservedSize), 5);
+        e.call_log = Some(vec![]);
+        set_size(&mut e, array, 1, 0);
+        assert!(calls(&e, kind.grow).is_empty());
+        e.set(array, BSSimpleArray::iSize, 2);
+        set_size(&mut e, array, 1, 1);
+        assert_eq!(calls(&e, kind.grow), vec![vec![a, 1, 1]]);
+        assert_eq!(e.get(array, BSSimpleArray::iReservedSize), 1);
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 1);
+    }
+
+    #[test]
+    fn fn_0098ed80_sets_the_size_of_a_target_array() {
+        check_set_size(fn_0098ed80, &TARGET_ARRAY_INSTANCE);
+    }
+
+    #[test]
+    fn fn_0098f040_sets_the_size_of_a_member_array() {
+        check_set_size(fn_0098f040, &MEMBER_ARRAY_INSTANCE);
+    }
+
+    #[test]
+    fn fn_0098f2f0_sets_the_size_of_a_search_location_array() {
+        check_set_size(fn_0098f2f0, &SEARCH_LOCATION_ARRAY_INSTANCE);
+    }
+
+    /// Runs the `RemoveAt` of one instance: five elements whose bytes are
+    /// their index, remove one in the middle, then the last two.
+    fn check_remove_at(
+        remove_at: fn(&mut Engine, Ptr<BSSimpleArray>, u32, u32),
+        kind: &ArrayInstance,
+    ) {
+        let mut e = bsarray_engine();
+        let buffer = e.mem.alloc(kind.element * 5);
+        for index in 0..5 {
+            for byte in 0..kind.element {
+                e.mem
+                    .set_u8(buffer + index * kind.element + byte, index as u8 + 1);
+            }
+        }
+        let array = fake_array(&mut e, buffer, 5, 8);
+        record(&mut e, &[]);
+        remove_at(&mut e, array, 1, 1);
+        // Tail count min(5 - 1 - 1, 1) = 1: the last element fills the hole.
+        assert_eq!(
+            calls(&e, ARRAY_DESTRUCT_ELEMENTS),
+            vec![vec![array.addr(), buffer + kind.element, 1]]
+        );
+        assert_eq!(calls(&e, ARRAY_MOVE_COUNT), vec![vec![3, 1]]);
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 4);
+        assert_eq!(e.mem.u8(buffer + kind.element), 5);
+        assert_eq!(e.mem.u8(buffer), 1);
+        // Removing the last two: nothing left to move.
+        e.call_log = Some(vec![]);
+        remove_at(&mut e, array, 2, 2);
+        assert_eq!(
+            calls(&e, kind.move_tail),
+            vec![vec![
+                array.addr(),
+                buffer + 2 * kind.element,
+                buffer + 4 * kind.element,
+                0
+            ]]
+        );
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 2);
+    }
+
+    #[test]
+    fn fn_0098ef10_removes_target_elements() {
+        check_remove_at(fn_0098ef10, &TARGET_ARRAY_INSTANCE);
+    }
+
+    #[test]
+    fn fn_0098f1f0_removes_member_elements() {
+        check_remove_at(fn_0098f1f0, &MEMBER_ARRAY_INSTANCE);
+    }
+
+    #[test]
+    fn fn_0098f430_removes_search_location_elements() {
+        check_remove_at(fn_0098f430, &SEARCH_LOCATION_ARRAY_INSTANCE);
+    }
+
+    #[test]
+    fn fn_0098f7b0_reserves_the_next_slot_and_grows_a_full_array() {
+        let mut e = bsarray_engine();
+        record(
+            &mut e,
+            &[
+                ARRAY_IS_FULL,
+                ARRAY_GROWN_RESERVE,
+                TARGET_ARRAY_INSTANCE.grow,
+            ],
+        );
+        // Room left: only the size moves.
+        let array = fake_array(&mut e, 0x1000, 2, 4);
+        assert_eq!(fn_0098f7b0(&mut e, array), 2);
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 3);
+        assert!(calls(&e, ALLOCATOR).is_empty());
+        // Full with no buffer: a first buffer of four.
+        e.register(ARRAY_IS_FULL, |_, _| true.into_ret());
+        let empty = fake_array(&mut e, 0, 0, 0);
+        assert_eq!(fn_0098f7b0(&mut e, empty), 0);
+        assert_eq!(calls(&e, ALLOCATOR), vec![vec![empty.addr(), 4]]);
+        assert_eq!(e.get(empty, BSSimpleArray::iReservedSize), 4);
+        assert_ne!(e.get(empty, BSSimpleArray::pBuffer), 0);
+        assert_eq!(e.get(empty, BSSimpleArray::iSize), 1);
+        // Full with a buffer: `009a3910` picks the new reserve.
+        e.register(ARRAY_GROWN_RESERVE, |_, _| 8u32.into_ret());
+        let full = fake_array(&mut e, 0x1000, 4, 4);
+        assert_eq!(fn_0098f7b0(&mut e, full), 4);
+        assert_eq!(
+            calls(&e, TARGET_ARRAY_INSTANCE.grow),
+            vec![vec![full.addr(), 8, 4]]
+        );
+        assert_eq!(e.get(full, BSSimpleArray::iReservedSize), 8);
+        assert_eq!(e.get(full, BSSimpleArray::iSize), 5);
+    }
+
+    #[test]
+    fn fn_0098eec0_adds_a_target_element() {
+        let mut e = bsarray_engine();
+        record(
+            &mut e,
+            &[
+                ARRAY_IS_FULL,
+                ARRAY_GROWN_RESERVE,
+                TARGET_ARRAY_INSTANCE.construct,
+            ],
+        );
+        let buffer = e.mem.alloc(0x68 * 4);
+        let array = fake_array(&mut e, buffer, 1, 4);
+        let element = e.new_object::<CombatTarget>();
+        for word in 0..0x1a {
+            e.mem.set_u32(element.addr() + 4 * word, 0x100 + word);
+        }
+        assert_eq!(fn_0098eec0(&mut e, array, element), 1);
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 2);
+        assert_eq!(
+            calls(&e, TARGET_ARRAY_INSTANCE.construct),
+            vec![vec![array.addr(), buffer + 0x68, 1]]
+        );
+        for word in 0..0x1a {
+            assert_eq!(e.mem.u32(buffer + 0x68 + 4 * word), 0x100 + word);
+        }
+        // The word before it is untouched.
+        assert_eq!(e.mem.u32(buffer + 0x68 - 4), 0);
+    }
+
+    #[test]
+    fn fn_0098f180_adds_a_member_element() {
+        let mut e = bsarray_engine();
+        record(&mut e, &[MEMBER_ARRAY_INSTANCE.construct]);
+        e.register(MEMBER_ARRAY_RESERVE_SLOT, |e, a| {
+            let size = e.mem.u32(a[0] + 8);
+            e.mem.set_u32(a[0] + 8, size + 1);
+            size.into_ret()
+        });
+        let buffer = e.mem.alloc(0x14 * 4);
+        let array = fake_array(&mut e, buffer, 2, 4);
+        let element = e.new_object::<CombatMember>();
+        for word in 0..5 {
+            e.mem.set_u32(element.addr() + 4 * word, 0x200 + word);
+        }
+        assert_eq!(fn_0098f180(&mut e, array, element), 2);
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 3);
+        assert_eq!(
+            calls(&e, MEMBER_ARRAY_INSTANCE.construct),
+            vec![vec![array.addr(), buffer + 0x28, 1]]
+        );
+        for word in 0..5 {
+            assert_eq!(e.mem.u32(buffer + 0x28 + 4 * word), 0x200 + word);
+        }
+    }
+
+    #[test]
+    fn target_array_allocate_and_reallocate_scale_by_the_element_size() {
+        let mut e = engine();
+        e.register(OPERATOR_NEW_SMALL, |_, a| (a[0] + 1).into_ret());
+        e.register(ARRAY_REALLOC_BYTES, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            bs_simple_array_combat_target_allocate(&mut e, Ptr::NULL, 3),
+            0x68 * 3 + 1
+        );
+        bs_simple_array_combat_target_reallocate(&mut e, Ptr::NULL, 0x5000, 2);
+        fn_0098f280(&mut e, Ptr::NULL, 0x6000, 2);
+        assert_eq!(
+            calls(&e, ARRAY_REALLOC_BYTES),
+            vec![vec![0x5000, 0xd0], vec![0x6000, 0x28]]
+        );
+    }
+
+    /// A constructor: sets the vtable and, with the initialiser doubled,
+    /// calls it.
+    fn check_constructor(
+        constructor: fn(&mut Engine, Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray>,
+        vtable: u32,
+    ) {
+        let mut e = engine();
+        record(
+            &mut e,
+            &[SEARCH_DOOR_ARRAY_INIT, CLUSTER_POINTER_ARRAY_INIT],
+        );
+        let array = e.new_object::<BSSimpleArray>();
+        for word in 1..4 {
+            e.mem.set_u32(array.addr() + 4 * word, 0xdead);
+        }
+        assert_eq!(constructor(&mut e, array), array);
+        assert_eq!(e.mem.u32(array.addr()), vtable);
+        // The arrays with their own `SetSize` initialise themselves empty.
+        if vtable == SEARCH_DOOR_ARRAY_VTABLE || vtable == CLUSTER_POINTER_ARRAY_VTABLE {
+            let init = if vtable == SEARCH_DOOR_ARRAY_VTABLE {
+                SEARCH_DOOR_ARRAY_INIT
+            } else {
+                CLUSTER_POINTER_ARRAY_INIT
+            };
+            assert_eq!(calls(&e, init), vec![vec![array.addr(), 0, 0]]);
+        } else {
+            for word in 1..4 {
+                assert_eq!(e.mem.u32(array.addr() + 4 * word), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn fn_0098ed30_constructs_a_target_array() {
+        check_constructor(fn_0098ed30, TARGET_ARRAY_VTABLE);
+    }
+
+    #[test]
+    fn fn_0098eff0_constructs_a_member_array() {
+        check_constructor(fn_0098eff0, MEMBER_ARRAY_VTABLE);
+    }
+
+    #[test]
+    fn fn_0098f2a0_constructs_a_search_location_array() {
+        check_constructor(fn_0098f2a0, SEARCH_LOCATION_ARRAY_VTABLE);
+    }
+
+    #[test]
+    fn fn_0098f4c0_constructs_a_search_door_array() {
+        check_constructor(fn_0098f4c0, SEARCH_DOOR_ARRAY_VTABLE);
+    }
+
+    #[test]
+    fn fn_0098f510_constructs_a_cluster_pointer_array() {
+        check_constructor(fn_0098f510, CLUSTER_POINTER_ARRAY_VTABLE);
+    }
+
+    /// A destructor: sets the vtable, then clears the array with flag 1.
+    fn check_destructor(destructor: fn(&mut Engine, Ptr<BSSimpleArray>), vtable: u32) {
+        let mut e = engine();
+        record(&mut e, &[ARRAY_CLEAR]);
+        let array = e.new_object::<BSSimpleArray>();
+        destructor(&mut e, array);
+        assert_eq!(e.mem.u32(array.addr()), vtable);
+        assert_eq!(calls(&e, ARRAY_CLEAR), vec![vec![array.addr(), 1]]);
+    }
+
+    #[test]
+    fn fn_0098ed60_destroys_a_target_array() {
+        check_destructor(fn_0098ed60, TARGET_ARRAY_VTABLE);
+    }
+
+    #[test]
+    fn fn_0098f020_destroys_a_member_array() {
+        check_destructor(fn_0098f020, MEMBER_ARRAY_VTABLE);
+    }
+
+    #[test]
+    fn fn_0098f2d0_destroys_a_search_location_array() {
+        check_destructor(fn_0098f2d0, SEARCH_LOCATION_ARRAY_VTABLE);
+    }
+
+    #[test]
+    fn fn_0098f4f0_destroys_a_search_door_array() {
+        check_destructor(fn_0098f4f0, SEARCH_DOOR_ARRAY_VTABLE);
+    }
+
+    #[test]
+    fn fn_0098f540_destroys_a_cluster_pointer_array() {
+        check_destructor(fn_0098f540, CLUSTER_POINTER_ARRAY_VTABLE);
+    }
+
+    #[test]
+    fn fn_0098f560_destroys_a_group_member_data_array() {
+        check_destructor(fn_0098f560, GROUP_MEMBER_DATA_ARRAY_VTABLE);
+    }
+
+    /// A scalar deleting destructor: destructs (vtable set), then frees only
+    /// with bit 0 of the flags; returns `this`.
+    fn check_scalar_deleting(
+        function: fn(&mut Engine, Ptr<BSSimpleArray>, u32) -> Ptr<BSSimpleArray>,
+        vtable: u32,
+    ) {
+        let mut e = engine();
+        record(&mut e, &[ARRAY_CLEAR, OPERATOR_DELETE]);
+        let array = e.new_object::<BSSimpleArray>();
+        assert_eq!(function(&mut e, array, 0), array);
+        assert_eq!(e.mem.u32(array.addr()), vtable);
+        assert_eq!(calls(&e, ARRAY_CLEAR), vec![vec![array.addr(), 1]]);
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        assert_eq!(function(&mut e, array, 3), array);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![array.addr()]]);
+    }
+
+    #[test]
+    fn target_array_scalar_deleting_destructor() {
+        check_scalar_deleting(
+            bs_simple_array_combat_target_scalar_deleting_destructor,
+            TARGET_ARRAY_VTABLE,
+        );
+    }
+
+    #[test]
+    fn member_array_scalar_deleting_destructor() {
+        check_scalar_deleting(
+            bs_simple_array_combat_member_scalar_deleting_destructor,
+            MEMBER_ARRAY_VTABLE,
+        );
+    }
+
+    #[test]
+    fn search_location_array_scalar_deleting_destructor() {
+        check_scalar_deleting(
+            bs_simple_array_combat_search_location_scalar_deleting_destructor,
+            SEARCH_LOCATION_ARRAY_VTABLE,
+        );
+    }
+
+    #[test]
+    fn search_door_array_scalar_deleting_destructor() {
+        check_scalar_deleting(
+            bs_simple_array_combat_search_door_scalar_deleting_destructor,
+            SEARCH_DOOR_ARRAY_VTABLE,
+        );
+    }
+
+    #[test]
+    fn cluster_pointer_array_scalar_deleting_destructor() {
+        check_scalar_deleting(
+            bs_simple_array_combat_group_cluster_pointer_scalar_deleting_destructor,
+            CLUSTER_POINTER_ARRAY_VTABLE,
+        );
+    }
+
+    #[test]
+    fn group_member_data_array_scalar_deleting_destructor() {
+        check_scalar_deleting(
+            bs_simple_array_group_member_data_scalar_deleting_destructor,
+            GROUP_MEMBER_DATA_ARRAY_VTABLE,
+        );
+    }
+
+    /// An initialiser: empties the array, then reserves `max(reserve,
+    /// count)` and constructs `count` elements.
+    fn check_init(init: fn(&mut Engine, Ptr<BSSimpleArray>, u32, u32), construct: u32) {
+        let mut e = bsarray_engine();
+        record(&mut e, &[construct]);
+        let array = fake_array(&mut e, 0xdead, 7, 9);
+        let a = array.addr();
+        init(&mut e, array, 0, 0);
+        assert_eq!(e.get(array, BSSimpleArray::pBuffer), 0);
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 0);
+        assert_eq!(e.get(array, BSSimpleArray::iReservedSize), 0);
+        assert!(calls(&e, ALLOCATOR).is_empty());
+        // A reserve without elements.
+        init(&mut e, array, 2, 0);
+        assert_eq!(calls(&e, ALLOCATOR), vec![vec![a, 2]]);
+        assert_eq!(e.get(array, BSSimpleArray::iReservedSize), 2);
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 0);
+        assert!(calls(&e, construct).is_empty());
+        // Elements beyond the reserve: the reserve is raised to the count.
+        e.call_log = Some(vec![]);
+        init(&mut e, array, 1, 3);
+        let buffer = e.get(array, BSSimpleArray::pBuffer);
+        assert_eq!(calls(&e, ALLOCATOR), vec![vec![a, 3]]);
+        assert_eq!(calls(&e, construct), vec![vec![a, buffer, 3]]);
+        assert_eq!(e.get(array, BSSimpleArray::iReservedSize), 3);
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 3);
+    }
+
+    #[test]
+    fn fn_0098fab0_initialises_a_target_array() {
+        check_init(fn_0098fab0, TARGET_ARRAY_INSTANCE.construct);
+    }
+
+    #[test]
+    fn fn_0098fbe0_initialises_a_member_array() {
+        check_init(fn_0098fbe0, MEMBER_ARRAY_INSTANCE.construct);
+    }
+
+    #[test]
+    fn fn_0098fd10_initialises_a_search_location_array() {
+        check_init(fn_0098fd10, SEARCH_LOCATION_ARRAY_INSTANCE.construct);
+    }
+
+    #[test]
+    fn fn_0098f580_copies_the_target_elements_into_another_array() {
+        let mut e = bsarray_engine();
+        record(&mut e, &[TARGET_ARRAY_INSTANCE.construct]);
+        e.register(TARGET_ARRAY_ELEMENT, |e, a| {
+            (e.mem.u32(a[0] + 4) + a[1] * 0x68).into_ret()
+        });
+        let buffer = e.mem.alloc(0x68 * 2);
+        for word in 0..0x1a {
+            e.mem.set_u32(buffer + 4 * word, 0x10 + word);
+            e.mem.set_u32(buffer + 0x68 + 4 * word, 0x80 + word);
+        }
+        let source = fake_array(&mut e, buffer, 2, 2);
+        let other = fake_array(&mut e, 0, 0, 0);
+        fn_0098f580(&mut e, source, other);
+        assert_eq!(e.get(other, BSSimpleArray::iSize), 2);
+        let copy = e.get(other, BSSimpleArray::pBuffer);
+        for word in 0..0x1a {
+            assert_eq!(e.mem.u32(copy + 4 * word), 0x10 + word);
+            assert_eq!(e.mem.u32(copy + 0x68 + 4 * word), 0x80 + word);
+        }
+        assert_eq!(
+            calls(&e, TARGET_ARRAY_ELEMENT),
+            vec![vec![other.addr(), 0], vec![other.addr(), 1]]
+        );
+    }
+
+    #[test]
+    fn fn_0098f5f0_constructs_a_scrap_array_with_the_given_or_the_scrap_heap() {
+        let mut e = engine();
+        record(&mut e, &[SCRAP_ARRAY_BASE_CONSTRUCT, SCRAP_ARRAY_INIT]);
+        e.register(MEMORY_MANAGER, |_, _| 0x1111u32.into_ret());
+        e.register(THREAD_SCRAP_HEAP, |_, a| (a[0] + 0x2222).into_ret());
+        let object = e.mem.alloc(0x20);
+        let this = Ptr::new(object);
+        assert_eq!(fn_0098f5f0(&mut e, this, 7, 8, 0x5555), this);
+        assert_eq!(e.mem.u32(object), SCRAP_ARRAY_VTABLE);
+        assert_eq!(e.mem.u32(object + 0x10), 0x5555);
+        assert_eq!(calls(&e, SCRAP_ARRAY_BASE_CONSTRUCT), vec![vec![object]]);
+        assert_eq!(calls(&e, SCRAP_ARRAY_INIT), vec![vec![object, 7, 8]]);
+        assert!(calls(&e, MEMORY_MANAGER).is_empty());
+        // Heap zero: the thread's scrap heap of the memory manager.
+        fn_0098f5f0(&mut e, this, 1, 2, 0);
+        assert_eq!(e.mem.u32(object + 0x10), 0x1111 + 0x2222);
+        assert_eq!(calls(&e, THREAD_SCRAP_HEAP), vec![vec![0x1111]]);
+    }
+
+    /// Doubles every callee `combat_group_load_game` reaches and runs it.
+    /// `sizes` are the counts `LoadVariableSizedValue` returns in turn;
+    /// `bytes` the values written by the size-1 reads outside the group (a
+    /// `None` leaves the byte); `strategy` the strategy byte the buffer
+    /// holds; `search_count` the `iSearchCount` read.
+    fn load_run(
+        version: u32,
+        sizes: &[u32],
+        bytes: &[Option<u8>],
+        strategy: u8,
+        search_count: u32,
+    ) -> (Engine, Ptr<CombatGroup>, Ptr) {
+        let mut e = bsarray_engine();
+        let group = e.new_object::<CombatGroup>();
+        let g = group.addr();
+        for offset in [0x08u32, 0x18, 0x110] {
+            e.mem.set_u32(g + offset, ARRAY_VTABLE);
+        }
+        e.set_global(STRATEGY_TABLE + 4, 0x5151u32);
+        e.set_global(STRATEGY_TABLE + 8, 0x5252u32);
+        let buffer = buffer_with_version(&mut e, version);
+        record(
+            &mut e,
+            &[
+                ARRAY_CLEAR,
+                TARGET_ARRAY_INSTANCE.construct,
+                MEMBER_ARRAY_INSTANCE.construct,
+                SEARCH_LOCATION_ARRAY_INSTANCE.construct,
+                WORLD_LOCATION_CONSTRUCT,
+                LOAD_FORM_ID,
+                WORLD_LOCATION_LOAD,
+                TIME_STAMP_LOAD,
+                TIMER_LOAD,
+                LOS_GRID_MAP_LOAD,
+            ],
+        );
+        e.register(POINTER_ARRAY_SET_SIZE, |e, a| {
+            let slots = e.mem.alloc(a[1] * 4 + 8);
+            e.mem.set_u32(a[0] + 4, slots);
+            Ret::default()
+        });
+        e.register(SEARCH_DOOR_RESIZE, |e, a| {
+            let doors = e.mem.alloc(a[1] * 12 + 12);
+            e.mem.set_u32(a[0] + 4, doors);
+            Ret::default()
+        });
+        e.register(SEARCH_DOOR_ELEMENT, |e, a| {
+            (e.mem.u32(a[0] + 4) + a[1] * 12).into_ret()
+        });
+        e.register(SEARCH_LOCATION_SLOT, |e, a| {
+            (e.mem.u32(a[0] + 4) + a[1] * 0x1c).into_ret()
+        });
+        e.register(OPERATOR_NEW_SMALL, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(LOS_GRID_MAP_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(NI_POINTER_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(NI_POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(FORM_LOOKUP, |_, a| (a[0] + 0x1000).into_ret());
+        e.register(RT_DYNAMIC_CAST, |_, a| (a[0] + 0x10000).into_ret());
+        let next_form = Rc::new(RefCell::new(0x100u32));
+        e.register_double(LOAD_FORM_ID_VALUE, move |_, _| {
+            let mut id = next_form.borrow_mut();
+            *id += 1;
+            (*id).into_ret()
+        });
+        let queue = Rc::new(RefCell::new(VecDeque::from(sizes.to_vec())));
+        e.register_double(LOAD_SIZED_VALUE, move |_, _| {
+            queue.borrow_mut().pop_front().unwrap().into_ret()
+        });
+        let outside = Rc::new(RefCell::new(VecDeque::from(bytes.to_vec())));
+        e.register_double(LOAD_BYTES, move |e, a| {
+            let (destination, size) = (a[1], a[2]);
+            if destination == g + 0xd0 {
+                e.mem.set_u32(destination, search_count);
+            } else if size == 1 && e.mem.u8(destination) == 0xff {
+                // The strategy byte (the code presets it to 0xff).
+                e.mem.set_u8(destination, strategy);
+            } else if size == 1 && !(g..g + 0x15c).contains(&destination) {
+                if let Some(Some(value)) = outside.borrow_mut().pop_front() {
+                    e.mem.set_u8(destination, value);
+                }
+            }
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        combat_group_load_game(&mut e, group, buffer);
+        (e, group, buffer)
+    }
+
+    #[test]
+    fn load_game_without_a_search_reads_clusters_timers_and_strengths() {
+        let (e, group, buffer) = load_run(14, &[2, 0, 0], &[], 1, 0);
+        let g = group.addr();
+        let b = buffer.addr();
+        assert_eq!(
+            calls(&e, POINTER_ARRAY_SET_SIZE),
+            vec![vec![g + 0x138, 2, 1]]
+        );
+        assert_eq!(calls(&e, OPERATOR_NEW_SMALL), vec![vec![0x14], vec![0x14]]);
+        let slots = e.mem.u32(g + 0x138 + 4);
+        let first = e.mem.u32(slots);
+        let second = e.mem.u32(slots + 4);
+        assert!(first != 0 && second != 0 && first != second);
+        // Each cluster is read by `fn_00985b10`: 0x10 bytes, then a count.
+        let cluster_reads: Vec<Vec<u32>> = calls(&e, LOAD_BYTES)
+            .into_iter()
+            .filter(|c| c[1] == first || c[1] == first + 0x10)
+            .collect();
+        assert_eq!(
+            cluster_reads,
+            vec![vec![b, first, 0x10], vec![b, first + 0x10, 4]]
+        );
+        // The strategy byte (1) selects the table entry.
+        assert_eq!(e.get(group, CombatGroup::pGroupStrategy), Ptr::new(0x5151));
+        let timers: Vec<u32> = calls(&e, TIMER_LOAD)
+            .iter()
+            .map(|c| {
+                assert_eq!(c[1], b);
+                c[0] - g
+            })
+            .collect();
+        let mut expected = vec![0x30u32, 0x38, 0x48, 0xb0, 0xa8];
+        expected.extend((0..10).map(|i| 0x58 + 8 * i));
+        expected.extend([0x50, 0xb8]);
+        assert_eq!(timers, expected);
+        let stamps: Vec<u32> = calls(&e, TIME_STAMP_LOAD)
+            .iter()
+            .map(|c| c[0] - g)
+            .collect();
+        assert_eq!(stamps, vec![0x44]);
+        let group_reads: Vec<(u32, u32)> = calls(&e, LOAD_BYTES)
+            .iter()
+            .filter(|c| (g..g + 0x15c).contains(&c[1]))
+            .map(|c| (c[1] - g, c[2]))
+            .collect();
+        assert_eq!(
+            group_reads,
+            vec![
+                (0x2c, 1),
+                (0x40, 4),
+                (0xd0, 4),
+                (0xc0, 4),
+                (0xc4, 4),
+                (0xc8, 4),
+                (0xcc, 4),
+                (0x154, 1)
+            ]
+        );
+        // No search: none of its state is read and the flag stays off.
+        assert!(calls(&e, LOAD_FORM_ID).is_empty());
+        assert!(!e.get(group, CombatGroup::bUpdateSearchDebugGeometry));
+        // Resized arrays are empty.
+        assert_eq!(
+            calls(&e, ARRAY_CLEAR),
+            vec![vec![g + 8, 1], vec![g + 0x18, 1]]
+        );
+    }
+
+    #[test]
+    fn load_game_keeps_the_strategy_for_0xff_and_reads_targets_and_members() {
+        let (e, group, buffer) = load_run(14, &[0, 1, 1], &[], 0xff, 0);
+        let g = group.addr();
+        let b = buffer.addr();
+        assert_eq!(e.get(group, CombatGroup::pGroupStrategy), Ptr::NULL);
+        // One target and one member were sized and read (the first word of
+        // each is read through `LoadFormID`).
+        assert_eq!(e.mem.u32(g + 0x10), 1);
+        assert_eq!(e.mem.u32(g + 0x20), 1);
+        let target = e.mem.u32(g + 0x0c);
+        let member = e.mem.u32(g + 0x1c);
+        let form_reads: Vec<Vec<u32>> = calls(&e, LOAD_FORM_ID);
+        assert_eq!(form_reads, vec![vec![b, target], vec![b, member]]);
+        // The target's two one-byte counts are read from inside it.
+        let target_bytes: Vec<Vec<u32>> = calls(&e, LOAD_BYTES)
+            .into_iter()
+            .filter(|c| c[2] == 1 && (target..target + 0x68).contains(&c[1]))
+            .collect();
+        assert_eq!(
+            target_bytes,
+            vec![vec![b, target + 0x64, 1], vec![b, target + 0x65, 1]]
+        );
+    }
+
+    #[test]
+    fn load_game_with_a_search_reads_locations_doors_and_the_grid() {
+        for version in [4u32, 5] {
+            let (e, group, buffer) = load_run(
+                version,
+                &[0, 0, 0, 1, 1],
+                &[None, None, None, Some(1)],
+                0xff,
+                1,
+            );
+            let g = group.addr();
+            let b = buffer.addr();
+            let entry = e.mem.u32(g + 0x110 + 4);
+            let form_ids: Vec<Vec<u32>> = calls(&e, LOAD_FORM_ID);
+            assert_eq!(form_ids, vec![vec![b, g + 0xec], vec![b, entry + 0x14]]);
+            let stamps: Vec<u32> = calls(&e, TIME_STAMP_LOAD).iter().map(|c| c[0]).collect();
+            let mut expected = vec![g + 0x44];
+            if version >= 5 {
+                expected.push(g + 0xe8);
+            }
+            expected.push(entry + 0x10);
+            assert_eq!(stamps, expected, "version {version}");
+            let timers: Vec<u32> = calls(&e, TIMER_LOAD).iter().map(|c| c[0] - g).collect();
+            assert!(timers.contains(&0xd8) && timers.contains(&0xe0));
+            assert_eq!(
+                calls(&e, WORLD_LOCATION_LOAD),
+                vec![vec![g + 0xf0, b], vec![entry, b]]
+            );
+            let reads: Vec<(u32, u32)> = calls(&e, LOAD_BYTES)
+                .iter()
+                .filter(|c| (g..g + 0x15c).contains(&c[1]))
+                .map(|c| (c[1] - g, c[2]))
+                .collect();
+            assert!(reads.contains(&(0x100, 0xc)) && reads.contains(&(0x10c, 4)));
+            assert_eq!(
+                calls(&e, LOAD_BYTES)
+                    .iter()
+                    .filter(|c| c[1] == entry + 0x18)
+                    .count(),
+                1
+            );
+            // The door: two cast form IDs and three bytes.
+            let door = e.mem.u32(g + 0x120 + 4);
+            assert_eq!(e.mem.u32(door), 0x101 + 0x1000 + 0x10000);
+            assert_eq!(e.mem.u32(door + 4), 0x102 + 0x1000 + 0x10000);
+            for offset in [8u32, 9, 0xa] {
+                assert!(calls(&e, LOAD_BYTES).contains(&vec![b, door + offset, 1]));
+            }
+            assert_eq!(calls(&e, SEARCH_DOOR_RESIZE), vec![vec![g + 0x120, 1, 1]]);
+            // The grid flag was set: a 0x54-byte grid is built and loaded.
+            let grid = e.mem.u32(g + 0xd4);
+            assert_ne!(grid, 0);
+            assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0x54]]);
+            assert_eq!(calls(&e, LOS_GRID_MAP_LOAD), vec![vec![grid, b]]);
+            assert!(e.get(group, CombatGroup::bUpdateSearchDebugGeometry));
+        }
+    }
+
+    #[test]
+    fn load_game_with_a_search_and_no_grid_flag_builds_no_grid() {
+        let (e, group, _) = load_run(5, &[0, 0, 0, 0, 0], &[Some(0)], 0xff, 1);
+        assert_eq!(e.mem.u32(group.addr() + 0xd4), 0);
+        assert!(calls(&e, OPERATOR_NEW).is_empty());
+        assert!(calls(&e, LOS_GRID_MAP_LOAD).is_empty());
+        assert!(e.get(group, CombatGroup::bUpdateSearchDebugGeometry));
     }
 }
