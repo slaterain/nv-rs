@@ -29,6 +29,12 @@ own and aims to behave exactly like the original (1:1).
   recordings of the original game. Nothing is invented or tuned by eye. The
   method is described in [docs/METHODOLOGY.md](docs/METHODOLOGY.md) and the
   decisions behind it in [docs/adr/](docs/adr/README.md).
+- **Ported system by system.** Every function in `FalloutNV.exe` is mapped
+  and tracked in a ledger ([docs/LEDGER.md](docs/LEDGER.md)). The game's code
+  is being translated into Rust function by function in the `engine` crate,
+  each piece marked with the address it came from and tested, in the order
+  that matters most for running the game. The plan is in
+  [docs/ENGINE_PORT_PLAN.md](docs/ENGINE_PORT_PLAN.md).
 - **Checked against the original.** Tools in [`research/`](research/) record
   what the original program actually does (function results on the real CPU,
   live arguments and state) so that Rust code can be tested against it.
@@ -46,32 +52,53 @@ nv-rs/
 ├── Cargo.toml         # core workspace (no external crates)
 ├── crates/            # readers, game rules, tools and test fixtures (table below)
 ├── viewer/            # the Bevy app (its own workspace, Bevy 0.16)
-├── research/          # Ghidra scripts and native oracle tools
+├── research/          # Ghidra scripts, the engine map and native oracle tools
 │   ├── ghidra/        # identity, complete export, function cards, name import
+│   ├── engine-map/    # every function of the exe, by unit and subsystem
 │   └── nv-oracle/     # nv-call, nv-probe, nv-inject (own workspace, 32-bit Windows)
-├── docs/              # roadmap, method, decisions, topic findings
-├── scripts/           # packaging
+├── docs/              # roadmap, method, decisions, ledger, topic findings
+├── scripts/           # acceptance routes, the ledger, packaging
 └── distribution/      # files shipped in playtest packages
 ```
 
 | Group | Crates | What they do |
 | --- | --- | --- |
-| **Formats** | `esm`, `bsa`, `nif`, `dds`, `mp3`, `speedtree`, `shaders`, `assets`, `fos` | Read the game's files: plugins and records, archives, meshes and animations, textures, audio, trees, compiled shaders, the loose-file/archive lookup, and the original game's saves (read-only). |
-| **Game** | `world`, `physics`, `script`, `ui`, `preview`, `cellview` | The game's rules: world state, actors, AI, combat, dialogue, quests, inventory, saves, collision, the script engine, menus built from the game's XML, and per-cell scene data. |
+| **Formats** | `esm`, `bsa`, `nif`, `dds`, `mp3`, `bink`, `speedtree`, `shaders`, `assets`, `fos` | Read the game's files: plugins and records, archives, meshes and animations, textures, audio, movies, trees, compiled shaders, the loose-file/archive lookup, and the original game's saves (read-only). |
+| **Engine port** | `engine` | `FalloutNV.exe` translated function by function, running on a model of the game's memory ([ADR-0006](docs/adr/0006-engine-crate-memory-model.md), [docs/ENGINE_CRATE.md](docs/ENGINE_CRATE.md)). |
+| **Game** | `world`, `physics`, `script`, `scriptgen`, `ui`, `preview`, `cellview` | The game's rules: world state and the per-frame order, actors, AI, combat, dialogue, quests, inventory, saves, collision, the script engine and the game's scripts translated to Rust, menus built from the game's XML, and per-cell scene data. |
 | **Tools** | `nvinspect` | Command-line inspection of real game data: records, cells, meshes, collision walks, coverage tables and more. |
 | **Test content** | `testdata` | Builds synthetic plugins, archives and meshes for tests, so tests never need game files. |
-| **Engine** | `viewer` (binary `nv-viewer`) | The Bevy app: rendering, audio and input on top of the game crates. |
-
-This layout stays: a proposal to merge the groups into five crates
-([ADR-0004](docs/adr/0004-mudcrab-style-layout.md)) was rejected.
+| **App** | `viewer` (binary `nv-viewer`) | The Bevy app: rendering, audio and input on top of the game crates. |
 
 ---
 
 ## Roadmap
 
-Milestones are worked in order, and each has an acceptance gate checked
-against the original game. Status and evidence are in
-[docs/MILESTONES.md](docs/MILESTONES.md).
+### Engine port
+
+The main work right now. Progress is measured in the ledger
+([docs/LEDGER.md](docs/LEDGER.md)).
+
+- [x] **Phase 0: the map and the ledger.** Every function in the exe has a
+  unit, a subsystem and a status.
+- [ ] **Translation** (ongoing): over 10,000 of the exe's functions are
+  translated so far (about 15% of the whole program; counting only game
+  code, about 35% is translated or traced). Most are not yet switched on
+  in play.
+- [ ] **Phase 1: the frame skeleton** (nearly done): the game's per-frame
+  order, from the main loop down, drives the order of the app's systems
+  ([docs/FRAME_SKELETON.md](docs/FRAME_SKELETON.md)).
+- [ ] **Phase 2: the state model and saves:** the game's state lives in the
+  translated code's memory, checked by reading a real save and writing it
+  back identically.
+- [ ] **Phase 3 onward:** whole systems switched over one at a time: the
+  script engine, conditions, AI, animation, menus, the rest of Havok and
+  audio.
+
+### Milestones
+
+Each milestone has an acceptance gate checked against the original game.
+Status and evidence are in [docs/MILESTONES.md](docs/MILESTONES.md).
 
 - [ ] **M1: Opening and persistent world** (active): the opening movie and
   wakeup, Doc Mitchell's character creation, leaving for Goodsprings, and
@@ -97,7 +124,8 @@ navigation, dialogue, barter, the Pip-Boy, radio, physics and ragdolls,
 terminals and hacking; crafting, Caravan and parts of Dead Money are in but
 mostly checked by tests so far. These
 three routes are replayed automatically on every change
-(`scripts/acceptance.ps1`).
+(`scripts/acceptance.ps1`). Much of this was built before the engine port
+and will be replaced, system by system, by the translated code.
 
 What it isn't yet: a complete playthrough. Parts of the routes are still
 driven by console lines, the face editor isn't built, and nothing has been
@@ -139,8 +167,8 @@ acceptance routes (Windows, PowerShell):
 powershell -File scripts\acceptance.ps1 -Data "<path to Fallout New Vegas\Data>" -Build
 ```
 
-Windows is the tested platform; a macOS / Metal port is being worked on in
-a fork.
+Windows is the tested platform. Native Linux and macOS (Metal) support are
+in open pull requests.
 
 ---
 
@@ -151,8 +179,10 @@ a fork.
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute: claiming tasks, pull requests, forks |
 | [docs/TASKS.md](docs/TASKS.md) | Open tasks: major systems (claim on GitHub) and the maintainer's list |
 | [docs/MILESTONES.md](docs/MILESTONES.md) | Active work, blockers, evidence and the next action |
+| [docs/ENGINE_PORT_PLAN.md](docs/ENGINE_PORT_PLAN.md), [docs/LEDGER.md](docs/LEDGER.md) | The engine port: plan, phases, and what is translated so far |
+| [docs/ENGINE_CRATE.md](docs/ENGINE_CRATE.md), [docs/FRAME_SKELETON.md](docs/FRAME_SKELETON.md) | How translated code is written and tested; the per-frame order |
 | [docs/METHODOLOGY.md](docs/METHODOLOGY.md) | How the game's program is read and reimplemented, with sources |
-| [docs/adr/](docs/adr/README.md) | Decisions: method, symbols, decompiled code, layout, tools |
+| [docs/adr/](docs/adr/README.md) | Decisions: method, symbols, decompiled code, tools, the engine memory model |
 | [docs/RESEARCH_WORKFLOW.md](docs/RESEARCH_WORKFLOW.md) | Day-to-day research steps and provenance |
 | [research/ghidra](research/ghidra/README.md), [research/nv-oracle](research/nv-oracle/README.md) | The research tools and how to run them |
 | [docs/TECHNICAL_REFERENCE.md](docs/TECHNICAL_REFERENCE.md) | Detailed feature descriptions |
@@ -178,8 +208,15 @@ AI agents). The way in:
    small pull request against `main` that passes the checks and the
    acceptance routes.
 
-**Already have work in a fork?** `main` moved forward a long way on
-2026-10-07. Sync your fork first, then follow
+**Where help matters most now:** with the game's own code being ported
+system by system, hand-written gameplay logic (quest scripts, AI, combat
+rules, menus) will be replaced as the translated systems come online. The
+most useful contributions are platform support, acceptance routes and
+playthrough tests, research into how the original behaves, tools, and bug
+reports from test builds, especially anything that behaves differently from
+the original game.
+
+**Already have work in a fork?** Sync your fork first, then follow
 ["Already working in a fork?"](CONTRIBUTING.md#already-working-in-a-fork-start-here)
 to get your work claimed, rebased and into a pull request.
 
