@@ -22,9 +22,8 @@
 //! `count` elements, +8 frees, +0xC reallocates `(block, count)`), exactly as
 //! the game does, so the tests put the two vtables in memory.
 //!
-//! Not translated yet, for the next session: `00c4a960` and `00c4a990`
-//! (scalar deleting destructors of the two arrays) and `00c4a9c0` (`Clear`,
-//! shared by both arrays; called here by address, [`ARRAY_CLEAR`]).
+//! `Clear` (`00c4a9c0`) is shared by both arrays and is called by address
+//! ([`ARRAY_CLEAR`]); the unit is complete.
 //!
 //! C++ exception unwinding frames (constructor, destructor,
 //! `_ConstructItems`) are not translated.
@@ -75,8 +74,11 @@ const ARRAY_SLOT_FREE: u32 = 0x8;
 const ARRAY_SLOT_REALLOCATE: u32 = 0xc;
 
 /// `BSSimpleArray<...>::Clear(bool free)`: empties the array and, with the
-/// flag, frees its buffer (not translated yet; shared by both arrays).
+/// flag, frees its buffer (shared by both arrays).
 pub(crate) const ARRAY_CLEAR: u32 = 0x00c4_a9c0;
+/// `MemoryManager::Deallocate(block)` (Xbox PDB), a method of the singleton
+/// at [`MEMORY_MANAGER`].
+const MEMORY_DEALLOCATE: u32 = 0x00aa_4060;
 /// `NiPlane::NiPlane()` (Xbox PDB).
 const NI_PLANE_CONSTRUCT: u32 = 0x00a6_9940;
 /// `NiPlane::NiPlane_ov4(v0, v1, v2)` (Xbox PDB): the plane through three
@@ -1737,6 +1739,57 @@ pub fn bs_simple_array_function_op_reallocate(
     .u32()
 }
 
+// Translated from 00c4a960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NiFrustumPlanes, 1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the destructor and, when bit 0 of `flags` is set, gives
+/// the object itself back to the memory manager. Returns `this`.
+pub fn bs_simple_array_ni_frustum_planes_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Array,
+    flags: u32,
+) -> u32 {
+    bs_simple_array_ni_frustum_planes_destructor(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this.addr()
+}
+
+// Translated from 00c4a990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<BSCompoundFrustum::FunctionOp, 1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the destructor and, when bit 0 of `flags` is set, gives
+/// the object itself back to the memory manager. Returns `this`.
+pub fn bs_simple_array_function_op_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Array,
+    flags: u32,
+) -> u32 {
+    fn_00c4a8e0(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this.addr()
+}
+
+// Translated from 00c4a9c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<...>::Clear` (Xbox PDB, shared by both arrays): with a
+/// buffer present, `free` gives the buffer back through the array's free
+/// slot (+8) and zeroes the buffer and reserved size; the used size is
+/// zeroed either way. The game's empty loop over the elements (no element
+/// destructor) is left out.
+pub fn bs_simple_array_clear(e: &mut Engine, this: Array, free: bool) {
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    if buffer == 0 {
+        return;
+    }
+    if free {
+        e.vcall(this.addr(), ARRAY_SLOT_FREE, &args![buffer]);
+        e.set(this, BSSimpleArray::pBuffer, 0);
+        e.set(this, BSSimpleArray::iReservedSize, 0);
+    }
+    e.set(this, BSSimpleArray::iSize, 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1873,6 +1926,18 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00c4a930,
             bs_simple_array_function_op_reallocate(Ptr<BSSimpleArray>, u32, u32) -> u32
         ),
+        entry!(
+            0x00c4a960,
+            bs_simple_array_ni_frustum_planes_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            ) -> u32
+        ),
+        entry!(
+            0x00c4a990,
+            bs_simple_array_function_op_scalar_deleting_destructor(Ptr<BSSimpleArray>, u32) -> u32
+        ),
+        entry!(0x00c4a9c0, bs_simple_array_clear(Ptr<BSSimpleArray>, bool)),
     ]
 }
 
@@ -3325,5 +3390,77 @@ mod tests {
             vec![vec![MEMORY_MANAGER, block, 48]]
         );
         assert_ne!(result, 0);
+    }
+
+    /// The real `Clear`, over the engine's double.
+    fn real_clear(e: &mut Engine, a: &[u32]) -> Ret {
+        bs_simple_array_clear(e, Ptr::new(a[0]), a[1] as u8 != 0);
+        Ret::default()
+    }
+
+    #[test]
+    fn clear_without_a_buffer_changes_nothing() {
+        let mut e = engine();
+        e.register(ARRAY_CLEAR, real_clear);
+        let array = e.new_object::<BSSimpleArray>();
+        e.set(array, BSSimpleArray::iSize, 3);
+        e.call(ARRAY_CLEAR, &args![array, true]);
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 3);
+    }
+
+    #[test]
+    fn clear_keeps_the_buffer_unless_asked_to_free() {
+        let mut e = engine();
+        e.register(ARRAY_CLEAR, real_clear);
+        let array = e.new_object::<BSSimpleArray>();
+        let block = e.mem.alloc(24);
+        e.set(array, BSSimpleArray::pBuffer, block);
+        e.set(array, BSSimpleArray::iSize, 2);
+        e.set(array, BSSimpleArray::iReservedSize, 4);
+        e.call(ARRAY_CLEAR, &args![array, false]);
+        assert_eq!(e.get(array, BSSimpleArray::pBuffer), block);
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 0);
+        assert_eq!(e.get(array, BSSimpleArray::iReservedSize), 4);
+    }
+
+    #[test]
+    fn clear_with_free_gives_the_buffer_back() {
+        let mut e = engine();
+        e.register(ARRAY_CLEAR, real_clear);
+        let array = e.new_object::<BSSimpleArray>();
+        e.mem.set_u32(array.addr(), OPS_ARRAY_VTABLE);
+        let block = e.mem.alloc(24);
+        e.set(array, BSSimpleArray::pBuffer, block);
+        e.set(array, BSSimpleArray::iSize, 2);
+        e.set(array, BSSimpleArray::iReservedSize, 4);
+        e.call(ARRAY_CLEAR, &args![array, true]);
+        assert_eq!(e.get(array, BSSimpleArray::pBuffer), 0);
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 0);
+        assert_eq!(e.get(array, BSSimpleArray::iReservedSize), 0);
+        assert_eq!(e.mem.block_size(block), None);
+    }
+
+    #[test]
+    fn scalar_deleting_destructors_free_the_object_only_with_bit_zero() {
+        for (addr, vtable) in [
+            (0x00c4_a960u32, PLANES_ARRAY_VTABLE),
+            (0x00c4_a990, OPS_ARRAY_VTABLE),
+        ] {
+            let mut e = engine();
+            e.register(MEMORY_DEALLOCATE, noop);
+            let array = e.new_object::<BSSimpleArray>();
+            e.call_log = Some(vec![]);
+            let result = e.call(addr, &args![array, 0u32]).u32();
+            assert_eq!(result, array.addr());
+            assert_eq!(e.mem.u32(array.addr()), vtable);
+            assert_eq!(calls(&e, ARRAY_CLEAR), vec![vec![array.addr(), 1]]);
+            assert!(calls(&e, MEMORY_DEALLOCATE).is_empty());
+            let result = e.call(addr, &args![array, 3u32]).u32();
+            assert_eq!(result, array.addr());
+            assert_eq!(
+                calls(&e, MEMORY_DEALLOCATE),
+                vec![vec![MEMORY_MANAGER, array.addr()]]
+            );
+        }
     }
 }
