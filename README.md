@@ -4,7 +4,7 @@
 [![Engine](https://img.shields.io/badge/Engine-Bevy_0.16-blue.svg)](https://bevyengine.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE-MIT)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE-APACHE)
-[![Platform](https://img.shields.io/badge/Platform-Windows-purple.svg)](docs/PLAYTESTING.md)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-purple.svg)](docs/PLAYTESTING.md)
 [![Status](https://img.shields.io/badge/Status-experimental-lightgrey.svg)](docs/MILESTONES.md)
 
 A from-scratch reimplementation of **Fallout: New Vegas** in **Rust** with the
@@ -139,8 +139,29 @@ acceptance routes (Windows, PowerShell):
 powershell -File scripts\acceptance.ps1 -Data "<path to Fallout New Vegas\Data>" -Build
 ```
 
-Windows is the tested platform; a macOS / Metal port is being worked on in
-a fork.
+#### Linux (Vulkan and Wayland)
+
+The Bevy viewer supports native Wayland and X11 windows and renders through
+wgpu. On Fedora, install `alsa-lib-devel` and `libudev-devel`; Debian and
+Ubuntu need `libasound2-dev` and `libudev-dev`. Install a Vulkan loader and a
+working GPU driver for your system.
+
+From a Wayland session, run with your own game data folder. Winit prefers
+Wayland when `WAYLAND_DISPLAY` is set; unsetting `DISPLAY` makes that choice
+explicit:
+
+```sh
+cd viewer
+env -u DISPLAY WGPU_BACKEND=vulkan cargo run --release -- \
+  "/path/to/Fallout New Vegas/Data" GSDocMitchellHouse
+```
+
+For Steam/Proton installations, pass the active plugin list and INI when
+needed with `--plugins` and `--ini`. Linux package launchers are not provided;
+this command runs the viewer from source.
+
+Windows remains the packaged playtest platform. Linux has a viewer build
+check in CI; macOS / Metal support is being worked on in a fork.
 
 ---
 

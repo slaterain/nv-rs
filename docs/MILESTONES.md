@@ -1,6 +1,6 @@
 # nv-rs milestones
 
-Updated 2026-10-06. Priority tracker and session handoff.
+Updated 2026-10-09. Priority tracker and session handoff.
 
 ## Baseline
 
@@ -13,6 +13,10 @@ menu behavior prevents calling that a faithful opening. Evidence remains in
 ENGINE_REFERENCE.md, CLAUDE_REFERENCE.md and %USERPROFILE%\nv-re\findings.
 The clean public source history was prepared on 2026-10-03. Earlier private
 history is retained separately; do not publish its build outputs.
+Linux viewer (2026-10-09): an optimized build launched on Fedora through
+native Wayland with Vulkan and loaded GSDocMitchellHouse from the local Data
+folder, with X11 disabled. The Linux CI check compiles the viewer; gameplay
+has not been compared with the original game on Linux.
 
 ## Ordered gates
 
