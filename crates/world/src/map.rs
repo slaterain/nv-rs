@@ -151,6 +151,7 @@ pub fn shown(state: &GameState, m: &MapMarker) -> bool {
 pub fn can_travel(state: &GameState, m: &MapMarker) -> bool {
     state.discovered.contains(&m.reference)
         || m.flags & 0x03 == 0x03
+        || state.map_marker_travel.contains(&m.reference)
         || (m.flags & 0x02 != 0 && state.map_markers.contains(&m.reference))
 }
 

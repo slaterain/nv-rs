@@ -395,6 +395,8 @@ pub struct GameState {
     pub weather: crate::weather::WeatherState,
     /// Map markers scripts revealed (`ShowMap`).
     pub map_markers: HashSet<FormId>,
+    /// Map markers scripts made fast-travel destinations (`ShowMap … 1`).
+    pub map_marker_travel: HashSet<FormId>,
     /// Image space modifiers (`IMAD`) scripts applied, oldest first.
     pub modifiers: Vec<FormId>,
     /// The button the player pressed in the last message box (the box's
@@ -1358,6 +1360,23 @@ pub enum PackageActionKind {
 /// stage 36 and carries on from a `MenuMode 1036` block.
 pub const RACE_SEX_MENU: u16 = 1036;
 
+/// Menu classes which `MenuMode 1` treats as the Pip-Boy (`0059c380`,
+/// FalloutNV.exe 1.4.0.525).
+const PIPBOY_MENU_CLASSES: [u16; 5] = [1002, 1003, 1023, 1035, 1061];
+
+/// Whether a running menu class satisfies a script's `MenuMode n` test
+/// (`0059c380`; `005c4240` dispatches its menu-mode blocks).
+pub(crate) fn menu_mode_matches(requested: i64, open: Option<u16>) -> bool {
+    let Some(open) = open else {
+        return false;
+    };
+    match requested {
+        0 => true,
+        1 => PIPBOY_MENU_CLASSES.contains(&open),
+        n => i64::from(open) == n,
+    }
+}
+
 /// What `PlayBink` asks for. The command's four optional integers have no
 /// names in the PC program; their effects were read from its handler
 /// (`005d15d0`) and the movie player it calls (1.4.0.525):
@@ -2137,10 +2156,23 @@ impl Facts<'_> {
             }
             "GetMapMarkerVisible" => {
                 let marker = on?;
-                flag(
-                    s.map_markers.contains(&marker)
-                        || map_marker_flags(self.order, marker)? & 1 != 0,
-                )
+                // FalloutNV.exe 1.4.0.525, `005daac0` calls `005a51e0`:
+                // 0 is hidden, 1 is visible, and 2 is visible and fast-travelable.
+                let flags = map_marker_flags(self.order, marker)?;
+                let visible = flags & 1 != 0
+                    || s.map_markers.contains(&marker)
+                    || s.discovered.contains(&marker);
+                let travel = visible
+                    && (flags & 2 != 0
+                        || s.map_marker_travel.contains(&marker)
+                        || s.discovered.contains(&marker));
+                f64::from(if travel {
+                    2
+                } else if visible {
+                    1
+                } else {
+                    0
+                })
             }
             "GetIsCurrentPackage" => {
                 let wanted = arg(0).form();
@@ -3757,7 +3789,7 @@ impl<'a> Runner<'a> {
         for q in running {
             self.run_blocks(q, None, "menumode", |b| match b.args.first() {
                 None => true,
-                Some(Arg::Number(n)) => *n as u16 == menu,
+                Some(Arg::Number(n)) => menu_mode_matches(*n as i64, Some(menu)),
                 Some(_) => false,
             });
         }
@@ -4452,7 +4484,13 @@ impl<'a> Runner<'a> {
                 self.state.scales.insert(target?, arg(0).number() as f32);
             }
             "ShowMap" => {
-                self.state.map_markers.insert(arg(0).form());
+                // `005c8620` sets the visible bit (`0044de40`); a nonzero
+                // second argument also sets the fast-travel bit (`0044de80`).
+                let marker = arg(0).form();
+                self.state.map_markers.insert(marker);
+                if arg(1).number() != 0.0 {
+                    self.state.map_marker_travel.insert(marker);
+                }
             }
             // Always the player's, whoever it's called on (`005d5140`).
             "RewardXP" => {

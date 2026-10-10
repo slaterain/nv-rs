@@ -311,6 +311,7 @@ fn main() {
             ready_at: None,
         })
         .insert_resource(dialogue::AutoSay(args.say.iter().cloned().collect()))
+        .insert_resource(dialogue::AutoSayId(args.say_ids.iter().copied().collect()))
         .insert_resource(test_keys::TestKeys::new(key_presses))
         .insert_resource(viewmodel::StartWeapon(args.weapon.clone()))
         .insert_resource(lockpick::StartLock(args.lockpick.clone()))

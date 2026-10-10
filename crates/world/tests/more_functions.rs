@@ -329,6 +329,15 @@ fn what_the_viewer_saw() {
     assert_eq!(q(&mut state, "MenuMode 1"), 1.0);
     assert_eq!(q(&mut state, "MenuMode 1002"), 1.0);
     assert_eq!(q(&mut state, "MenuMode 1036"), 0.0);
+    state.more.menu_open = Some(1035);
+    assert_eq!(q(&mut state, "MenuMode 1"), 1.0);
+    assert_eq!(q(&mut state, "MenuMode 1035"), 1.0);
+    state.more.menu_open = Some(1061);
+    assert_eq!(q(&mut state, "MenuMode 1"), 1.0);
+    state.more.menu_open = Some(1036);
+    assert_eq!(q(&mut state, "MenuMode 0"), 1.0);
+    assert_eq!(q(&mut state, "MenuMode 1"), 0.0);
+    assert_eq!(q(&mut state, "MenuMode 1036"), 1.0);
 }
 
 #[test]

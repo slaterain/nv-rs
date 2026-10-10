@@ -936,6 +936,7 @@ fn menu_keys(keys: &ButtonInput<KeyCode>) -> Vec<Key> {
 pub struct Around<'w> {
     time: Res<'w, Time>,
     game: Res<'w, GameFiles>,
+    scripts: Res<'w, crate::scripts::Scripts>,
     state: ResMut<'w, DialogueState>,
     menus: ResMut<'w, Menus>,
     player: ResMut<'w, Player>,
@@ -2186,6 +2187,7 @@ pub(crate) fn update_pipboy(
     let Around {
         time,
         game,
+        scripts,
         mut state,
         mut menus,
         mut player,
@@ -2306,6 +2308,13 @@ pub(crate) fn update_pipboy(
     }
     // A note's audio going on.
     let note_audio = advance_note(&mut commands, pipboy, &mut wavs, now);
+
+    // The engine runs quest Menumode blocks while the Pip-Boy's menu is
+    // open. Its `MenuMode 1` condition covers the top Pip-Boy screen and
+    // its repair/mod overlays (`0059c380`, `005c4240`, 1.4.0.525).
+    if let Some(menu) = pipboy.top_class() {
+        world::scripting::Runner::new(order, &scripts.0, &mut state.0).menu_mode(menu as u16);
+    }
 
     let Some(b) = pipboy.built.as_mut() else {
         return;

@@ -623,8 +623,6 @@ fn movement_of(state: &GameState, who: FormId) -> u16 {
 /// The Pip-Boy's menus, all of which `MenuMode 1` asks about (`00702680`
 /// with 1: stats 1003, inventory 1002, repair 1035, item mods 1061, map
 /// 1023).
-const PIPBOY_MENUS: [u16; 5] = [1003, 1002, 1035, 1061, 1023];
-
 /// A function that reads, asked about `on`: `Some(answer)` when it's one of
 /// these.
 pub(crate) fn value(
@@ -789,12 +787,7 @@ fn read(facts: &Facts, name: &str, on: Option<FormId>, args: &[Value]) -> Option
         // whether a Pip-Boy menu is, any other number that menu.
         "MenuMode" => {
             let menu = arg(0).number() as i64;
-            let open = s.more.menu_open;
-            flag(match menu {
-                0 => open.is_some(),
-                1 => open.is_some_and(|m| PIPBOY_MENUS.contains(&m)),
-                n => open.is_some_and(|m| i64::from(m) == n),
-            })
+            flag(crate::scripting::menu_mode_matches(menu, s.more.menu_open))
         }
         // `005c7800`: the player's +0x75c.
         "GetInCharGen" => flag(s.more.in_chargen),
