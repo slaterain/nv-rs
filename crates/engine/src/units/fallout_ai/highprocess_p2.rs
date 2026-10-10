@@ -18,6 +18,10 @@ use crate::prelude::*;
 const LIST_REMOVE_ITEM: u32 = 0x0090_5330;
 /// `NiPointer` getter (`00559450`): the first word of `this`.
 const NI_POINTER_GET: u32 = 0x0055_9450;
+/// `BSSoundHandle` assignment (`00418900`): `this` = destination, source.
+const SOUND_HANDLE_ASSIGN: u32 = 0x0041_8900;
+/// `BSSoundHandle` destructor (`00483710`).
+const SOUND_HANDLE_DESTROY: u32 = 0x0048_3710;
 
 // Translated from 008d8720 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `MiddleHighProcess::SetIsSummonedCreature` (Xbox PDB) stores its argument in `bSummonedCreature` at +0x18b.
@@ -304,6 +308,279 @@ pub fn high_process_mod_number_guards_arresting(
     );
 }
 
+// Translated from 008d8cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetNumberGuardsArresting` (Xbox PDB) stores its argument in `iNumberGuardsPersuing` at +0x39c.
+pub fn high_process_set_number_guards_arresting(e: &mut Engine, this: Ptr, value: i32) {
+    e.mem.set_u32(this.addr() + 0x39c, value as u32);
+}
+
+// Translated from 008d8cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetAutomaticFireAtLeastOnce` (Xbox PDB) returns `bAutomaticFireAtLeastOne` at +0x2f4.
+pub fn high_process_get_automatic_fire_at_least_once(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x2f4)
+}
+
+// Translated from 008d8d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetAutomaticFireAtLeastOnce` (Xbox PDB) stores its argument in `bAutomaticFireAtLeastOne` at +0x2f4.
+pub fn high_process_set_automatic_fire_at_least_once(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x2f4, value);
+}
+
+// Translated from 008d8da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::IsDoingSayTo` (Xbox PDB) returns `bIsDoingSayTo` at +0x459.
+pub fn high_process_is_doing_say_to(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x459)
+}
+
+// Translated from 008d8dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetDoingSayTo` (Xbox PDB) stores its argument in `bIsDoingSayTo` at +0x459.
+pub fn high_process_set_doing_say_to(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x459, value);
+}
+
+// Translated from 008d8de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetLastSpeakingEmotion` (Xbox PDB) returns `eLastSpeakingEmotion (DIALOGUE_EMOTION)` at +0x36c.
+pub fn high_process_get_last_speaking_emotion(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x36c)
+}
+
+// Translated from 008d8e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetLastSpeakingEmotion` (Xbox PDB) stores its argument in `eLastSpeakingEmotion (DIALOGUE_EMOTION)` at +0x36c.
+pub fn high_process_set_last_speaking_emotion(e: &mut Engine, this: Ptr, value: u32) {
+    e.mem.set_u32(this.addr() + 0x36c, value);
+}
+
+// Translated from 008d8e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetLastGreeted` (Xbox PDB) returns `pGreetActor (TESObjectREFR*)` at +0x30c.
+pub fn high_process_get_last_greeted(e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(e.mem.u32(this.addr() + 0x30c))
+}
+
+// Translated from 008d8e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetLastGreeted` (Xbox PDB) stores its argument in `pGreetActor (TESObjectREFR*)` at +0x30c.
+pub fn high_process_set_last_greeted(e: &mut Engine, this: Ptr, value: Ptr) {
+    e.mem.set_u32(this.addr() + 0x30c, value.addr());
+}
+
+// Translated from 008d8f10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetGreetingFlag` (Xbox PDB) returns `bGreetingFlag` at +0x32c.
+pub fn high_process_get_greeting_flag(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x32c)
+}
+
+// Translated from 008d8f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetGreetingFlag` (Xbox PDB) stores its argument in `bGreetingFlag` at +0x32c.
+pub fn high_process_set_greeting_flag(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x32c, value);
+}
+
+// Translated from 008d8f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetSoundDelay` (Xbox PDB) returns `fSoundDelay` at +0x310.
+pub fn high_process_get_sound_delay(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0x310)
+}
+
+// Translated from 008d8f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetSoundDelay` (Xbox PDB) stores its argument in `fSoundDelay` at +0x310.
+pub fn high_process_set_sound_delay(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_f32(this.addr() + 0x310, value);
+}
+
+// Translated from 008d8f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetGreetingTimer` (Xbox PDB) returns `fGreetingTimer` at +0x330.
+pub fn high_process_get_greeting_timer(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0x330)
+}
+
+// Translated from 008d8fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetGreetingTimer` (Xbox PDB) stores its argument in `fGreetingTimer` at +0x330.
+pub fn high_process_set_greeting_timer(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_f32(this.addr() + 0x330, value);
+}
+
+// Translated from 008d8fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetDetectAlert` (Xbox PDB) returns `bWeaponAlertDrawn` at +0x349.
+pub fn high_process_get_detect_alert(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x349)
+}
+
+// Translated from 008d8ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetDetectAlert` (Xbox PDB) stores its argument in `bWeaponAlertDrawn` at +0x349.
+pub fn high_process_set_detect_alert(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x349, value);
+}
+
+// Translated from 008d9010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetIdleTimer` (Xbox PDB) returns `fIdleTimer` at +0x334.
+pub fn high_process_get_idle_timer(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0x334)
+}
+
+// Translated from 008d9030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetIdleTimer` (Xbox PDB) stores its argument in `fIdleTimer` at +0x334.
+pub fn high_process_set_idle_timer(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_f32(this.addr() + 0x334, value);
+}
+
+// Translated from 008d9050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ContinuingPackageforPC` (Xbox PDB) returns `bContinuingPackageforPC` at +0x374.
+pub fn high_process_continuing_packagefor_pc(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x374)
+}
+
+// Translated from 008d9070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetContinuingPackage` (Xbox PDB) stores its argument in `bContinuingPackageforPC` at +0x374.
+pub fn high_process_set_continuing_package(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x374, value);
+}
+
+// Translated from 008d9090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetAwarePlayerTimer` (Xbox PDB) returns `fAwarePlayerTimer` at +0x34c.
+pub fn high_process_get_aware_player_timer(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0x34c)
+}
+
+// Translated from 008d90e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetBreathTimer` (Xbox PDB) stores its argument in `fBreathTimer` at +0x33c.
+pub fn high_process_set_breath_timer(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_f32(this.addr() + 0x33c, value);
+}
+
+// Translated from 008d9100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetBreathTimer` (Xbox PDB) returns `fBreathTimer` at +0x33c.
+pub fn high_process_get_breath_timer(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0x33c)
+}
+
+// Translated from 008d9120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetPackageEndTimerValue` (Xbox PDB) stores its argument in `fScriptPackageEndTime` at +0x378.
+pub fn high_process_set_package_end_timer_value(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_f32(this.addr() + 0x378, value);
+}
+
+// Translated from 008d9140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetPackageEndTimerValue` (Xbox PDB) returns `fScriptPackageEndTime` at +0x378.
+pub fn high_process_get_package_end_timer_value(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0x378)
+}
+
+// Translated from 008d9160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetAnimationActiveFlag` (Xbox PDB) stores its argument in `bActivateAnim` at +0x375.
+pub fn high_process_set_animation_active_flag(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x375, value);
+}
+
+// Translated from 008d9180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetMovementStoped` (Xbox PDB) returns `bStop` at +0x3a0.
+pub fn high_process_get_movement_stoped(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x3a0)
+}
+
+// Translated from 008d91c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetCurrentlyReanimating` (Xbox PDB) stores its argument in `bCurrentlyReanimating` at +0x3b9.
+pub fn high_process_set_currently_reanimating(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x3b9, value);
+}
+
+// Translated from 008d91e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetCurrentlyReanimating` (Xbox PDB) returns `bCurrentlyReanimating` at +0x3b9.
+pub fn high_process_get_currently_reanimating(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x3b9)
+}
+
+// Translated from 008d9200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetWaitingforLipFile` (Xbox PDB) returns `bWaitingForLipFile` at +0x3d0.
+pub fn high_process_get_waitingfor_lip_file(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x3d0)
+}
+
+// Translated from 008d9220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetWaitingforLipFile` (Xbox PDB) stores its argument in `bWaitingForLipFile` at +0x3d0.
+pub fn high_process_set_waitingfor_lip_file(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x3d0, value);
+}
+
+// Translated from 008d9240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetLipAnim` (Xbox PDB) returns `pLipSynicAnim (LipSynchAnim*)` at +0x3cc.
+pub fn high_process_get_lip_anim(e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(e.mem.u32(this.addr() + 0x3cc))
+}
+
+// Translated from 008d8d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SaveWeaponLastPos` (Xbox PDB) stores the three coordinates in `WeaponLastPos (NiPoint3)` at +0x300.
+pub fn high_process_save_weapon_last_pos(e: &mut Engine, this: Ptr, x: f32, y: f32, z: f32) {
+    e.mem.set_f32(this.addr() + 0x300, x);
+    e.mem.set_f32(this.addr() + 0x304, y);
+    e.mem.set_f32(this.addr() + 0x308, z);
+}
+
+// Translated from 008d8d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetWeaponLastPos` (Xbox PDB) returns the address of `WeaponLastPos (NiPoint3)` at +0x300.
+pub fn high_process_get_weapon_last_pos(_e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(this.addr() + 0x300)
+}
+
+// Translated from 008d8d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ResetSearchChatterTimer` (Xbox PDB) sets `fIdleChatterTimer` at +0x298 to zero.
+pub fn high_process_reset_search_chatter_timer(e: &mut Engine, this: Ptr) {
+    e.mem.set_f32(this.addr() + 0x298, 0.0);
+}
+
+// Translated from 008d8e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetSoundHandle` (Xbox PDB) copies the `index`th `BSSoundHandle` of
+/// `SoundHandle` (12-byte elements from +0x314) into `result` with the handle assignment
+/// (`00418900`) and returns `result`.
+pub fn high_process_get_sound_handle(e: &mut Engine, this: Ptr, result: Ptr, index: u32) -> Ptr {
+    let slot = this
+        .addr()
+        .wrapping_add(index.wrapping_mul(0xc))
+        .wrapping_add(0x314);
+    e.call(SOUND_HANDLE_ASSIGN, &args![result, slot]);
+    result
+}
+
+// Translated from 008d8ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetSoundHandle` (Xbox PDB) assigns the by-value `BSSoundHandle` (three
+/// words) to the `index`th element of `SoundHandle` (12-byte elements from +0x314) with the
+/// handle assignment (`00418900`), then destroys the argument copy (`00483710`).
+/// C++ exception unwinding is not translated.
+pub fn high_process_set_sound_handle(
+    e: &mut Engine,
+    this: Ptr,
+    index: u32,
+    handle_0: u32,
+    handle_1: u32,
+    handle_2: u32,
+) {
+    let slot = this
+        .addr()
+        .wrapping_add(index.wrapping_mul(0xc))
+        .wrapping_add(0x314);
+    e.with_stack(12, |e, copy| {
+        e.mem.set_u32(copy.addr(), handle_0);
+        e.mem.set_u32(copy.addr() + 4, handle_1);
+        e.mem.set_u32(copy.addr() + 8, handle_2);
+        e.call(SOUND_HANDLE_ASSIGN, &args![slot, copy]);
+        e.call(SOUND_HANDLE_DESTROY, &args![copy]);
+    });
+}
+
+// Translated from 008d90b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ModAwarePlayerTimer` (Xbox PDB) adds `delta` to `fAwarePlayerTimer` at +0x34c.
+pub fn high_process_mod_aware_player_timer(e: &mut Engine, this: Ptr, delta: f32) {
+    let timer = e.mem.f32(this.addr() + 0x34c);
+    e.mem.set_f32(
+        this.addr() + 0x34c,
+        (f64::from(timer) + f64::from(delta)) as f32,
+    );
+}
+
+// Translated from 008d91a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ClearMovementStoped` (Xbox PDB) clears `bStop` at +0x3a0.
+pub fn high_process_clear_movement_stoped(e: &mut Engine, this: Ptr) {
+    e.mem.set_u8(this.addr() + 0x3a0, 0);
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -395,6 +672,61 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x008d8c40,
             middle_high_process_set_anim_action_success(Ptr, i16)
         ),
+        entry!(
+            0x008d8cd0,
+            high_process_set_number_guards_arresting(Ptr, i32)
+        ),
+        entry!(0x008d8cf0, high_process_get_automatic_fire_at_least_once(Ptr) -> u8),
+        entry!(
+            0x008d8d10,
+            high_process_set_automatic_fire_at_least_once(Ptr, u8)
+        ),
+        entry!(0x008d8da0, high_process_is_doing_say_to(Ptr) -> u8),
+        entry!(0x008d8dc0, high_process_set_doing_say_to(Ptr, u8)),
+        entry!(0x008d8de0, high_process_get_last_speaking_emotion(Ptr) -> u32),
+        entry!(0x008d8e00, high_process_set_last_speaking_emotion(Ptr, u32)),
+        entry!(0x008d8e20, high_process_get_last_greeted(Ptr) -> Ptr),
+        entry!(0x008d8e40, high_process_set_last_greeted(Ptr, Ptr)),
+        entry!(0x008d8f10, high_process_get_greeting_flag(Ptr) -> u8),
+        entry!(0x008d8f30, high_process_set_greeting_flag(Ptr, u8)),
+        entry!(0x008d8f50, high_process_get_sound_delay(Ptr) -> f32),
+        entry!(0x008d8f70, high_process_set_sound_delay(Ptr, f32)),
+        entry!(0x008d8f90, high_process_get_greeting_timer(Ptr) -> f32),
+        entry!(0x008d8fb0, high_process_set_greeting_timer(Ptr, f32)),
+        entry!(0x008d8fd0, high_process_get_detect_alert(Ptr) -> u8),
+        entry!(0x008d8ff0, high_process_set_detect_alert(Ptr, u8)),
+        entry!(0x008d9010, high_process_get_idle_timer(Ptr) -> f32),
+        entry!(0x008d9030, high_process_set_idle_timer(Ptr, f32)),
+        entry!(0x008d9050, high_process_continuing_packagefor_pc(Ptr) -> u8),
+        entry!(0x008d9070, high_process_set_continuing_package(Ptr, u8)),
+        entry!(0x008d9090, high_process_get_aware_player_timer(Ptr) -> f32),
+        entry!(0x008d90e0, high_process_set_breath_timer(Ptr, f32)),
+        entry!(0x008d9100, high_process_get_breath_timer(Ptr) -> f32),
+        entry!(
+            0x008d9120,
+            high_process_set_package_end_timer_value(Ptr, f32)
+        ),
+        entry!(0x008d9140, high_process_get_package_end_timer_value(Ptr) -> f32),
+        entry!(0x008d9160, high_process_set_animation_active_flag(Ptr, u8)),
+        entry!(0x008d9180, high_process_get_movement_stoped(Ptr) -> u8),
+        entry!(0x008d91c0, high_process_set_currently_reanimating(Ptr, u8)),
+        entry!(0x008d91e0, high_process_get_currently_reanimating(Ptr) -> u8),
+        entry!(0x008d9200, high_process_get_waitingfor_lip_file(Ptr) -> u8),
+        entry!(0x008d9220, high_process_set_waitingfor_lip_file(Ptr, u8)),
+        entry!(0x008d9240, high_process_get_lip_anim(Ptr) -> Ptr),
+        entry!(
+            0x008d8d30,
+            high_process_save_weapon_last_pos(Ptr, f32, f32, f32)
+        ),
+        entry!(0x008d8d60, high_process_get_weapon_last_pos(Ptr) -> Ptr),
+        entry!(0x008d8d80, high_process_reset_search_chatter_timer(Ptr)),
+        entry!(0x008d8e60, high_process_get_sound_handle(Ptr, Ptr, u32) -> Ptr),
+        entry!(
+            0x008d8ea0,
+            high_process_set_sound_handle(Ptr, u32, u32, u32, u32)
+        ),
+        entry!(0x008d90b0, high_process_mod_aware_player_timer(Ptr, f32)),
+        entry!(0x008d91a0, high_process_clear_movement_stoped(Ptr)),
     ]
 }
 
@@ -762,5 +1094,272 @@ mod tests {
     #[test]
     fn test_middle_high_process_set_anim_action_success() {
         check_word16_setter(0x008d8c40, 0x22a);
+    }
+
+    #[test]
+    fn test_high_process_set_number_guards_arresting() {
+        check_setter(0x008d8cd0, 0x39c, 0x1234_5678);
+    }
+
+    #[test]
+    fn test_high_process_get_automatic_fire_at_least_once() {
+        check_byte_getter(0x008d8cf0, 0x2f4);
+    }
+
+    #[test]
+    fn test_high_process_set_automatic_fire_at_least_once() {
+        check_byte_setter(0x008d8d10, 0x2f4);
+    }
+
+    #[test]
+    fn test_high_process_is_doing_say_to() {
+        check_byte_getter(0x008d8da0, 0x459);
+    }
+
+    #[test]
+    fn test_high_process_set_doing_say_to() {
+        check_byte_setter(0x008d8dc0, 0x459);
+    }
+
+    #[test]
+    fn test_high_process_get_last_speaking_emotion() {
+        check_getter(0x008d8de0, 0x36c, 0x1234_5678);
+    }
+
+    #[test]
+    fn test_high_process_set_last_speaking_emotion() {
+        check_setter(0x008d8e00, 0x36c, 0x1234_5678);
+    }
+
+    #[test]
+    fn test_high_process_get_last_greeted() {
+        check_getter(0x008d8e20, 0x30c, 0x1234_5678);
+    }
+
+    #[test]
+    fn test_high_process_set_last_greeted() {
+        check_setter(0x008d8e40, 0x30c, 0x1234_5678);
+    }
+
+    #[test]
+    fn test_high_process_get_greeting_flag() {
+        check_byte_getter(0x008d8f10, 0x32c);
+    }
+
+    #[test]
+    fn test_high_process_set_greeting_flag() {
+        check_byte_setter(0x008d8f30, 0x32c);
+    }
+
+    #[test]
+    fn test_high_process_get_sound_delay() {
+        check_float_getter(0x008d8f50, 0x310);
+    }
+
+    #[test]
+    fn test_high_process_set_sound_delay() {
+        check_float_setter(0x008d8f70, 0x310);
+    }
+
+    #[test]
+    fn test_high_process_get_greeting_timer() {
+        check_float_getter(0x008d8f90, 0x330);
+    }
+
+    #[test]
+    fn test_high_process_set_greeting_timer() {
+        check_float_setter(0x008d8fb0, 0x330);
+    }
+
+    #[test]
+    fn test_high_process_get_detect_alert() {
+        check_byte_getter(0x008d8fd0, 0x349);
+    }
+
+    #[test]
+    fn test_high_process_set_detect_alert() {
+        check_byte_setter(0x008d8ff0, 0x349);
+    }
+
+    #[test]
+    fn test_high_process_get_idle_timer() {
+        check_float_getter(0x008d9010, 0x334);
+    }
+
+    #[test]
+    fn test_high_process_set_idle_timer() {
+        check_float_setter(0x008d9030, 0x334);
+    }
+
+    #[test]
+    fn test_high_process_continuing_packagefor_pc() {
+        check_byte_getter(0x008d9050, 0x374);
+    }
+
+    #[test]
+    fn test_high_process_set_continuing_package() {
+        check_byte_setter(0x008d9070, 0x374);
+    }
+
+    #[test]
+    fn test_high_process_get_aware_player_timer() {
+        check_float_getter(0x008d9090, 0x34c);
+    }
+
+    #[test]
+    fn test_high_process_set_breath_timer() {
+        check_float_setter(0x008d90e0, 0x33c);
+    }
+
+    #[test]
+    fn test_high_process_get_breath_timer() {
+        check_float_getter(0x008d9100, 0x33c);
+    }
+
+    #[test]
+    fn test_high_process_set_package_end_timer_value() {
+        check_float_setter(0x008d9120, 0x378);
+    }
+
+    #[test]
+    fn test_high_process_get_package_end_timer_value() {
+        check_float_getter(0x008d9140, 0x378);
+    }
+
+    #[test]
+    fn test_high_process_set_animation_active_flag() {
+        check_byte_setter(0x008d9160, 0x375);
+    }
+
+    #[test]
+    fn test_high_process_get_movement_stoped() {
+        check_byte_getter(0x008d9180, 0x3a0);
+    }
+
+    #[test]
+    fn test_high_process_set_currently_reanimating() {
+        check_byte_setter(0x008d91c0, 0x3b9);
+    }
+
+    #[test]
+    fn test_high_process_get_currently_reanimating() {
+        check_byte_getter(0x008d91e0, 0x3b9);
+    }
+
+    #[test]
+    fn test_high_process_get_waitingfor_lip_file() {
+        check_byte_getter(0x008d9200, 0x3d0);
+    }
+
+    #[test]
+    fn test_high_process_set_waitingfor_lip_file() {
+        check_byte_setter(0x008d9220, 0x3d0);
+    }
+
+    #[test]
+    fn test_high_process_get_lip_anim() {
+        check_getter(0x008d9240, 0x3cc, 0x1234_5678);
+    }
+
+    #[test]
+    fn test_high_process_save_weapon_last_pos() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.call(0x008d8d30, &args![this, 1.5f32, -2.5f32, 3.25f32]);
+        assert_eq!(e.mem.f32(this.addr() + 0x300), 1.5);
+        assert_eq!(e.mem.f32(this.addr() + 0x304), -2.5);
+        assert_eq!(e.mem.f32(this.addr() + 0x308), 3.25);
+        assert_eq!(e.mem.u32(this.addr() + 0x30c), 0);
+        assert_eq!(e.mem.u32(this.addr() + 0x2fc), 0);
+    }
+
+    #[test]
+    fn test_high_process_get_weapon_last_pos() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        assert_eq!(e.call(0x008d8d60, &args![this]).u32(), this.addr() + 0x300);
+    }
+
+    #[test]
+    fn test_high_process_reset_search_chatter_timer() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.mem.set_f32(this.addr() + 0x298, 9.0);
+        e.call(0x008d8d80, &args![this]);
+        assert_eq!(e.mem.f32(this.addr() + 0x298), 0.0);
+    }
+
+    type SoundCalls = Rc<RefCell<Vec<(u32, u32, [u32; 3])>>>;
+
+    /// Doubles the sound handle assignment and destructor, recording the calls.
+    fn record_sound_handle_calls(e: &mut Engine) -> SoundCalls {
+        let seen: SoundCalls = Rc::new(RefCell::new(vec![]));
+        let log = seen.clone();
+        e.register_double(SOUND_HANDLE_ASSIGN, move |e, a| {
+            let words = [e.mem.u32(a[1]), e.mem.u32(a[1] + 4), e.mem.u32(a[1] + 8)];
+            log.borrow_mut().push((SOUND_HANDLE_ASSIGN, a[0], words));
+            a[0].into_ret()
+        });
+        let log = seen.clone();
+        e.register_double(SOUND_HANDLE_DESTROY, move |_e, a| {
+            log.borrow_mut().push((SOUND_HANDLE_DESTROY, a[0], [0; 3]));
+            Ret::default()
+        });
+        seen
+    }
+
+    #[test]
+    fn test_high_process_get_sound_handle() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        let out = Ptr::<()>::new(e.mem.alloc(12));
+        let seen = record_sound_handle_calls(&mut e);
+        e.mem.set_u32(this.addr() + 0x314 + 2 * 12, 7);
+        e.mem.set_u32(this.addr() + 0x314 + 2 * 12 + 4, 8);
+        e.mem.set_u32(this.addr() + 0x314 + 2 * 12 + 8, 9);
+        let ret = e.call(0x008d8e60, &args![this, out, 2u32]).u32();
+        assert_eq!(ret, out.addr());
+        assert_eq!(
+            *seen.borrow(),
+            vec![(SOUND_HANDLE_ASSIGN, out.addr(), [7, 8, 9])]
+        );
+    }
+
+    #[test]
+    fn test_high_process_set_sound_handle() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        let seen = record_sound_handle_calls(&mut e);
+        e.call(0x008d8ea0, &args![this, 1u32, 4u32, 5u32, 6u32]);
+        let log = seen.borrow();
+        assert_eq!(log.len(), 2);
+        assert_eq!(
+            log[0],
+            (SOUND_HANDLE_ASSIGN, this.addr() + 0x314 + 12, [4, 5, 6])
+        );
+        assert_eq!(log[1].0, SOUND_HANDLE_DESTROY);
+        assert_ne!(log[1].1, 0);
+    }
+
+    #[test]
+    fn test_high_process_mod_aware_player_timer() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.mem.set_f32(this.addr() + 0x34c, 1.5);
+        e.call(0x008d90b0, &args![this, 2.25f32]);
+        assert_eq!(e.mem.f32(this.addr() + 0x34c), 3.75);
+        e.call(0x008d90b0, &args![this, -4.0f32]);
+        assert_eq!(e.mem.f32(this.addr() + 0x34c), -0.25);
+    }
+
+    #[test]
+    fn test_high_process_clear_movement_stoped() {
+        let mut e = Engine::new();
+        let this = process(&mut e);
+        e.mem.set_u8(this.addr() + 0x3a0, 1);
+        e.mem.set_u8(this.addr() + 0x3a1, 0xff);
+        e.call(0x008d91a0, &args![this]);
+        assert_eq!(e.mem.u8(this.addr() + 0x3a0), 0);
+        assert_eq!(e.mem.u8(this.addr() + 0x3a1), 0xff);
     }
 }
