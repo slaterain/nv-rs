@@ -30,16 +30,16 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 8555 | 12.9% |
-| traced | 4487 | 6.8% |
+| translated | 8780 | 13.3% |
+| traced | 4451 | 6.7% |
 | platform | 3422 | 5.2% |
 | library | 21917 | 33.1% |
-| open | 27878 | 42.1% |
+| open | 27689 | 41.8% |
 | **all** | **66259** | |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 12642 (31.2%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 12831 (31.7%) are translated or traced.
 
-Rust cites 13388 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 13578 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -70,27 +70,27 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Subsystem | Functions | KB | Named | translated | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 63 | 0 | 21271 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 6102 | 1002 | 0 | 0 | 3366 | 67.9% |
+| fallout shared | 10470 | 2065 | 3149 | 6141 | 998 | 0 | 0 | 3331 | 68.2% |
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 77 | 0 | 0 | 6461 | 2.0% |
-| fallout/ai | 4849 | 1475 | 1888 | 1319 | 646 | 0 | 0 | 2884 | 40.5% |
-| fallout/interface | 2645 | 991 | 1247 | 503 | 739 | 0 | 0 | 1403 | 47.0% |
-| (unplaced) | 2353 | 470 | 0 | 30 | 380 | 1 | 0 | 1942 | 17.4% |
-| fallout shared/pathfinding | 1788 | 365 | 452 | 212 | 158 | 0 | 0 | 1418 | 20.7% |
-| NiMain | 1619 | 261 | 1134 | 3 | 72 | 0 | 0 | 1544 | 4.6% |
-| BSHavok | 1615 | 316 | 1134 | 22 | 135 | 0 | 0 | 1458 | 9.7% |
+| fallout/ai | 4849 | 1475 | 1888 | 1465 | 622 | 0 | 0 | 2762 | 43.0% |
+| fallout/interface | 2645 | 991 | 1247 | 503 | 741 | 0 | 0 | 1401 | 47.0% |
+| (unplaced) | 2353 | 470 | 0 | 30 | 382 | 1 | 0 | 1940 | 17.5% |
+| fallout shared/pathfinding | 1788 | 365 | 452 | 212 | 162 | 0 | 0 | 1414 | 20.9% |
+| NiMain | 1619 | 261 | 1134 | 3 | 73 | 0 | 0 | 1543 | 4.7% |
+| BSHavok | 1615 | 316 | 1134 | 22 | 138 | 0 | 0 | 1455 | 9.9% |
 | BSShader | 1549 | 608 | 350 | 0 | 140 | 1409 | 0 | 0 | - |
 | NiAnimation | 1279 | 171 | 903 | 0 | 32 | 0 | 0 | 1247 | 2.5% |
 | fallout/misc | 1045 | 171 | 353 | 271 | 133 | 0 | 0 | 641 | 38.7% |
 | BSMain | 991 | 192 | 478 | 0 | 62 | 0 | 0 | 929 | 6.3% |
 | NiXenonRenderer | 965 | 172 | 298 | 0 | 5 | 960 | 0 | 0 | - |
 | SpeedTree | 732 | 234 | 151 | 0 | 111 | 621 | 0 | 0 | - |
-| fallout/magic | 705 | 162 | 378 | 7 | 66 | 0 | 0 | 632 | 10.4% |
+| fallout/magic | 705 | 162 | 378 | 7 | 67 | 0 | 0 | 631 | 10.5% |
 | LIBCMT | 682 | 124 | 503 | 0 | 21 | 31 | 630 | 0 | - |
 | NiParticle | 649 | 89 | 540 | 0 | 66 | 0 | 0 | 583 | 10.2% |
-| fallout shared/havok | 478 | 60 | 110 | 7 | 69 | 0 | 0 | 402 | 15.9% |
+| fallout shared/havok | 478 | 60 | 110 | 7 | 71 | 0 | 0 | 400 | 16.3% |
 | FaceGen | 474 | 164 | 51 | 0 | 10 | 0 | 0 | 464 | 2.1% |
 | fallout shared/facegen | 433 | 63 | 91 | 0 | 55 | 0 | 0 | 378 | 12.7% |
-| BSMenu | 361 | 136 | 221 | 1 | 86 | 0 | 0 | 274 | 24.1% |
+| BSMenu | 361 | 136 | 221 | 41 | 63 | 0 | 0 | 257 | 28.8% |
 | BSAudio | 304 | 75 | 141 | 0 | 31 | 0 | 0 | 273 | 10.2% |
 | fallout shared/magic | 296 | 43 | 83 | 5 | 69 | 0 | 0 | 222 | 25.0% |
 | BSSystem | 275 | 54 | 36 | 1 | 36 | 238 | 0 | 0 | - |
@@ -128,9 +128,9 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | Depth | Call sites | Functions | translated | traced | platform | library | open |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
-| 1 | 143 | 117 | 89 | 29 | 3 | 0 | 22 |
-| 2 | 1575 | 583 | 891 | 481 | 25 | 4 | 174 |
-| 3 | 4973 | 1303 | 2833 | 1294 | 160 | 26 | 660 |
+| 1 | 143 | 117 | 93 | 29 | 3 | 0 | 18 |
+| 2 | 1575 | 583 | 914 | 485 | 25 | 4 | 147 |
+| 3 | 4973 | 1303 | 2966 | 1205 | 160 | 26 | 616 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
@@ -177,7 +177,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 39 | `00457d70` | `TES::ShowLoadingMenu` | translated |
 | 40 | `0086efe0` | `Main::OnIdle_ScaleLOD` | translated |
 | 41 | `00524c90` | - | traced |
-| 42 | `004a0ea0` | - | traced |
+| 42 | `004a0ea0` | - | translated |
 | 43 | `00b6dd00` | - | platform |
 | 44 | `0086f450` | `Main::OnIdle_HandleMenuBackground` | translated |
 | 45 | `007011d0` | `FaderManager::UpdateFaders` | traced |
@@ -195,12 +195,12 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 57 | `0043d4d0` | - | translated |
 | 58 | `00455640` | `TES::RunAnimations` | translated |
 | 59 | `0040fbf0` | - | translated |
-| 60 | `00978550` | `ProcessLists::RunActorScripts` | open |
+| 60 | `00978550` | `ProcessLists::RunActorScripts` | translated |
 | 61 | `0043d4d0` | - | translated |
-| 62 | `009777a0` | `ProcessLists::UpdateRadiationList` | open |
+| 62 | `009777a0` | `ProcessLists::UpdateRadiationList` | translated |
 | 63 | `0096eb40` | `ProcessLists::ChangeProcessLevelTempList` | translated |
 | 64 | `0096e9b0` | `ProcessLists::UpdateFollowerTempList` | translated |
-| 65 | `009777a0` | `ProcessLists::UpdateRadiationList` | open |
+| 65 | `009777a0` | `ProcessLists::UpdateRadiationList` | translated |
 | 66 | `008d0600` | `ProcessLists::PrintLists` | translated |
 | 67 | `0096eb40` | `ProcessLists::ChangeProcessLevelTempList` | translated |
 | 68 | `0096e9b0` | `ProcessLists::UpdateFollowerTempList` | translated |
@@ -217,7 +217,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 79 | `0043d4d0` | - | translated |
 | 80 | `0086fd70` | `Main::OnIdle_DoInterfaceIdle` | translated |
 | 81 | `00483710` | - | translated |
-| 82 | `0049fef0` | `BGSDecalManager::GetInstance` | open |
+| 82 | `0049fef0` | `BGSDecalManager::GetInstance` | traced |
 | 83 | `0049fff0` | `BGSDecalManager::UpdateDecals` | open |
 | 84 | `00524c90` | - | traced |
 | 85 | `00712e60` | - | translated |
