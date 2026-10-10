@@ -157,10 +157,19 @@ impl Plugin for WeaponEffectsPlugin {
                     .chain()
                     // In the AI work (stage 6, `crate::frame_order`): after the
                     // player's stage (attack, objects' shots, the view model) by
-                    // the stages' order. Kept: people's moves, same stage.
+                    // the stages' order. Kept: after people's moves. Placed for
+                    // order only, after the actors' movement pass
+                    // (`crate::frame_order::AiSet`), outside its gate (the
+                    // flashes' and firing sounds' exact place isn't traced).
                     .after(crate::ai::move_actors)
                     .in_set(crate::frame_order::FrameSet::Stage(
                         world::frame::Stage::AiStart,
+                    ))
+                    .after(crate::frame_order::AiSet::Call(
+                        crate::frame_order::ACTORS_MOVEMENT,
+                    ))
+                    .before(crate::frame_order::AiSet::next(
+                        crate::frame_order::ACTORS_MOVEMENT,
                     )),
             )
             .add_systems(

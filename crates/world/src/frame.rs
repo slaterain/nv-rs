@@ -63,10 +63,13 @@
 //! runs them under these gates (`viewer/src/frame_order.rs`, Phase 1 PR 3).
 //! The player's step, `Main::OnIdle_UpdatePlayer`, is split further in
 //! [`player`] (Phase 1 PR 4); the world and time stage's callees in
-//! [`world_time`] (Phase 1 PR 5).
+//! [`world_time`] (Phase 1 PR 5); the AI task stage (the AI linear task
+//! threads' work, the Havok step, the actor updates, the sky) in
+//! [`ai_stage`] (Phase 1 PR 6).
 
 // Translated from 0086e650 (decompiled, FalloutNV.exe 1.4.0.525)
 
+pub mod ai_stage;
 pub mod player;
 pub mod world_time;
 

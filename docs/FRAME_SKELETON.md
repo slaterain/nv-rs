@@ -1,7 +1,7 @@
 # Phase 1: the frame skeleton (proposal)
 
 Drafted 2026-10-09 at the end of Phase 0 ([ENGINE_PORT_PLAN.md](ENGINE_PORT_PLAN.md),
-[LEDGER.md](LEDGER.md)); PR 1 (the frame map), PR 2 (`world::frame`), PR 3 (the viewer's order), PR 4 (the player stage) and PR 5 (the world and time stage) done 2026-10-09, the
+[LEDGER.md](LEDGER.md)); PR 1 (the frame map), PR 2 (`world::frame`), PR 3 (the viewer's order), PR 4 (the player stage), PR 5 (the world and time stage) done 2026-10-09 and PR 6 (the AI task stage) 2026-10-10, the
 rest is not implemented yet. Names are from the Xbox 360 prototype (Xbox PDB,
 ADR-0002), PC addresses from `research/engine-map/engine_map.tsv` and
 `research/engine-map/frame.tsv`.
@@ -742,6 +742,169 @@ inputs.
   the trees (the weather and the trees had no order): the trees' light
   follows this frame's weather.
 
+## PR 6 result: the AI task stage
+
+`crates/world/src/frame/ai_stage.rs` (`world::frame::ai_stage`, 2026-10-10)
+models the work `Main::OnIdle` starts in stage 6 and joins in stage 8 the
+way `world::frame::world_time` models stage 4: the AI linear task threads'
+calls in the exe's order, and inside them and the main thread's
+`Main::OnIdle_UpdateAnimationsAndEffects` the calls doing the work, each
+with a gate read from its function's own branches (`SubGate` on an
+`AiState`) and, where its block tests more, those branches (`own_tests`,
+not modelled). Every call site and branch is from the disassembly of
+FalloutNV.exe 1.4.0.525 (the read-only Ghidra server).
+
+### Which threads
+
+`AILinearTaskThreadManager::CreateThreads` (`008c7290`) makes one thread on
+the combined function `008c7bd0` when `iNumHWThreads` is at most 2
+(`008c7307`: `cmp [eax],2` / `jle`), else the pair `008c7da0` and
+`008c7f50`. `main` sets the count to the processor count and raises 1 to 2
+(`0086a950`-`0086a990`), so a two-processor PC runs the combined function
+and anything with more processors (nearly every PC today) the pair; with
+a count of 1 (not reachable through `main`'s raise) no thread is made and
+stage 6 starts the AI task queue (`008ca070`), which stays unmodelled.
+
+The threads hand over by events: `008c79e0(thread, stage)` sets the event
+of `stage` in the slot's table and records the stage (only when the slot
+has a thread), `008c7a70(thread, stage)` waits for it, `008c7d80` records a
+stage without an event (the combined function, which has no partner), and
+`008c80d0` (→ `008c80b0`) waits for the render semaphore that
+`SetMainRendering(0)` (`008c80e0` → `008c80c0`, `Main::Swap`'s last call)
+signals: the calls after it run once the main thread has drawn the frame.
+
+| Function | Calls in order (handshakes in brackets) |
+| --- | --- |
+| combined `008c7bd0` (count 2) | [set 0.0] `Main::OnIdle_DoInterfaceIdle` [set 0.1], `ThreadBeginInput`, `CombatManager::Update`, `RunActorAnimationUpdates`, `ParallelActorAnimationMovementUpdates`, `TES::RunAnimations`, `RunActorMagicUpdates`, `CombatManager::UpdateCombatants`, `UpdateHighListPackages`, `UpdatePlayerFollowers`, `RunDetectionForAllActors`, `UpdateActorsMovement`, `PrintLists` (empty), `RunActorUpdates`, `RunActorRagdollAnimationUpdates`, `UpdateDestructibleObjects`, `TES::UpdateCellAnimations` [mark 1.6, render wait], the obstacle manager (`bObstacleAvoidance`, `008c7d2c`), `ThreadEndInput`, the two `ClearOptimizations` [mark 0.11, 1.7] |
+| thread 1 `008c7da0` | [set 0.0] interface idle [0.1], begin input, `CombatManager::Update`, the two animation passes [0.2], `TES::RunAnimations` [0.3], `UpdateCombatants` [0.4], magic [0.5], packages [0.6], followers [0.10, wait 1.1, 1.3], `RunActorUpdates` [0.7], end input [0.8, wait 1.7, render wait, 0.9], the obstacle manager (`008c7f23`), `ClearOptimizations` ×2 [0.11] |
+| thread 2 `008c7f50` | [set 1.0, wait 0.1] begin input, detection [1.1, 1.2, wait 0.2], movement [1.3], `PrintLists`, ragdolls [1.4], destructibles [1.5, wait 0.4], `TES::UpdateCellAnimations` [1.6], end input [wait 0.8, 1.7], `ClearOptimizations` ×2 [wait 0.9, 0.11] |
+
+(Names: `Main::OnIdle_DoInterfaceIdle`, `CombatManager::Update`,
+`TES::RunAnimations`, `TES::UpdateCellAnimations`, the obstacle manager's
+and the scripts' are PR 1's pairs or the engine map's; the rest are PR 1's
+position-only leads, flagged `lead` in the model.) Note the pair's thread 1
+does the combatants before the magic, the combined function the other way
+round; the movement waits for the animation passes, the actor updates for
+the movement, the Havok step for `UpdateCombatants`, but the actor updates
+and the ragdolls, destructibles and Havok step aren't ordered against each
+other.
+
+`schedule(threads)` gives the viewer's one thread an order the exe can run:
+the combined function's own with a count of 2; with more, thread 1 until it
+waits for what thread 2 hasn't signalled, then thread 2, and so on, which
+keeps both threads' orders and every wait (thread 2's movement, ragdolls,
+destructibles and Havok step come before thread 1's actor updates). Both
+orders split at the render wait. The thread split itself is platform.
+
+### The functions
+
+| Function | Sub-steps | Gates (branches) |
+| --- | --- | --- |
+| `Main::OnIdle_UpdateAnimationsAndEffects` `0086fc60` (main thread, step after `StartThreads`) | 6: the temporary effects (`ProcessLists::UpdateTempEffectsParallel` with threads > 1, else `UpdateTempEffects`), `TES::UpdateCellAnimations` (one thread outside menu mode) or `TES::UpdateCellMainThread`, `BSParticleSystemManager::UpdateParallel` (two arms) | all: menu mode clear, or the dialogue flag `[011dea2c]` (`Interface::InDialog`, set at `0086e6ec`/`0086e7d3`) or fader 1, and the world not frozen (`0086fc72`, `0086fc7d`, `0086fc88`, `0086fc97`); threads (`0086fcaa`, `0086fd3d`); one thread and no menu (`0086fceb`, `0086fcf6`) |
+| `TES::UpdateCellAnimations` `00453550` (the AI thread; with one thread `0086fc60`) | 13: the wind for the trees' modifier and Havok's wind listener (zero indoors), `TES::LockHavokUpdateMT(1)`, `TESObjectCELL::UpdateManagedNodes` (an interior) or `GridCellArray::UpdateManagedNodes`, the unlock, the task queue (`0087aa90`), the collision listener (`00623640`), `Sky::Update` and `TES::UpdateCellMainThread` (one thread only), `ProcessLists::PostProcessProjectiles` | indoors (`00453568`, `004535f7`); threads > 1 (`0045363b`); one thread (`00453666`, `004536c0`) |
+| `TES::UpdateCellMainThread` `004537c0` | 2: `Sky::Update` (in dialogue with `fAnimationMult` times the frame time), the temporary node manager's update (`00a59c60`) | none |
+| `GridCellArray::UpdateManagedNodes` `004ba9a0` (disassembly only) | 2: the exterior world's step `00554780`, then each loaded grid cell's `00551890` | own tests (`004baa7d`) |
+| `00554780` | `bhkWorld::Update` (slot +0xc4) on the world in `011ca0d8` | own test: a world (`00554790`) |
+| `TESObjectCELL::UpdateManagedNodes` `00551890` | its first call only: `bhkWorld::Update` on the cell's own world; the rest of its 2,793 bytes not split | own tests: an interior, attached, with a world (`005518af`, `005518c1`, `005518d5`) |
+| `ProcessLists::RunActorUpdates` `0096c7c0` (disassembly only) | slot +0x2f8 with 0.0 on each high-process actor with `bProcessMe` (+0xbc): `Actor::Update` (the `Actor` and `Creature` vtables, `0108454c`, `010873a4`) or the `Character` override `008d3550` (`01086d64`), which calls `Actor::Update` first | own tests (`0096c80c`, `0096c823`, `0096c837`) |
+| `Actor::Update` `00888b50` | 19: the floats reset, the process woken (long steps), slot +0x44c, the animation speed, the controller's head target, the power attack flag, the process's +0x704, the life state, the weapon's attack sound, the move mode, the 3D placed (first-person player: `00440460`, `00952290`; others `0088b150`, the process's +0x428), the lighting, the water depth, `008b3230`, `008c1470` | ready: the 3D, a cell, the cell's state (`00888c5e`, `00888c64`, `00888c73`) and the time under `[010848d0]` (`00888c88`, else only the process's +0x5f8); a controller (`00888de3`) and not the player (`00888df5`); the first-person player (`00888d9e`, `00888db0`, `00889810`); swimming: not the first-person player, a controller, not menu mode (`008898ad`, `008898b7`, `008898c7`) |
+
+Corrections to earlier sections: with AI threads, `Sky::Update` is not
+called by `TES::UpdateCellAnimations` (its call, `004536ae`, is for one
+thread only) but by `TES::UpdateCellMainThread` from the main thread's
+`0086fc60`; and the lower process levels' moves (the viewer's
+`ai::move_offstage`) are stage 7's: `Main::PostSwapProcess` →
+`Main::OnIdle_UpdateProcessLists` (`0086f890`) →
+`ProcessLists::UpdateProcessLists` (`0096d810`) → `0096b810`, `0096b470`,
+`0096b050`. The actors' movement pass (`0096db30`) also moves the list's
+projectiles (`009bec10`, the `Projectile` vtables' slot +0x2f8,
+`Projectile::Update` `009becc0`) and explosions (`009ae580`).
+
+### Tests
+
+`world::frame::ai_stage` (14): `0086fc60`'s, `00453550`'s and `004537c0`'s
+direct calls are in `frame.tsv` under them in order; every site and branch
+inside its function and before its call; each caller calls there; the
+threads made per count; the combined order for 2; the pair's order keeps
+every wait and each thread's order and puts the render once; the frame
+starts and joins the threads under one test with `Main::Swap` between; a
+test per function's gates; the first caller each count reaches; the
+inputs from the frame; `follows`. The engine crate drives the
+translations: `0086fc60` under 15 input combinations (threads 1, 2, 4 ×
+game mode, menu mode, dialogue, fader, frozen; exactly the reached calls);
+`00453550` under 12 (threads 1, 2, 4 × indoors or not × dialogue);
+`004537c0` with and without dialogue; `Actor::Update` for a person, a long
+step, no 3D, the first-person player and a swimmer with a controller. The
+thread functions, `0096c7c0` and `004ba9a0` have no translation.
+
+### The viewer
+
+`viewer/src/frame_order.rs`: `AiSet::Call(callee)` for each work call of
+the schedule for the machine's thread count (`AiSet::Again` for the second
+thread's own input and optimizations), chained in that order inside
+`StartThreads`' step (before the render wait) or `WaitForThreads`' (after
+it), so under the frame's gate for the AI work and each under its own on
+`ThisAi`; `AiSet::Sub(function, i)` for each sub-step, inside the call (or
+frame step, or sub-step) through which the count reaches the function
+first; `ThisAi` filled by `begin_frame` from `ThisFrame` (threads, menu
+mode, fader, frozen, obstacle avoidance), the dialogue menu and indoors.
+
+| System | Place |
+| --- | --- |
+| `hud::update_hud`, `local_map::update_local_map`, `pipboy::update_pipboy`, `pipboy_light` | at the interface idle (the threads' first call), outside its gate: without AI work the main thread makes the call (step 105) |
+| `look::set_up`, `sitting::idle_requests`, `look::follow_player`, `actors::script_idles`, `actors::animate_actors`, then `dress::redress`, the faces and `dialogue::focus_camera` | at `RunActorAnimationUpdates`, outside its gate (they handle menu mode and the dialogue menu's speaker themselves) |
+| `move_pieces` | in `TES::RunAnimations`' call, under its gate |
+| `ai::move_actors` (and `ground_log`) | at `UpdateActorsMovement`, just before it, outside its gate (its own menu and dialogue handling) |
+| `fighting::resolve_shots`, `bolts::fly_bolts`, `explosives::fly_thrown` | in `UpdateActorsMovement`'s call, under its gate (the pass's projectiles) |
+| `hiteffects::play_hits`, `impact_fx`'s two, `weapon_fx`' three, `bolts::hide_culled_bodies` | after that call, outside its gate, for order only |
+| `clutter::simulate`, `play_contact_sounds` | in `TES::UpdateCellAnimations`' call between its lock and unlock sub-steps, under its gate (the Havok step); `grab_held` before it and `draw` after it, outside |
+| `weather::run_weather` | in `TES::UpdateCellMainThread`'s `Sky::Update` sub-step (under `0086fc60`'s gates) |
+| `follow_sky`, `daylight::follow_the_clock`, the emittance pair | right after it, outside its gate (the camera moves in menus; they change with the clock and the weather) |
+| `ai::move_offstage` | stage 7, in `Main::PostSwapProcess`' step |
+| `map::find_markers`, `hud::follow_quest_targets`, `bring_in_*`, `scripts::save_and_load`, `companions::come_along` | stage 6 before the threads' start, for order only (not traced) |
+| doors (`walk::doors`, `doors::update_doors`), movies | stay in stage 4 after the scripts (movies run inside `PlayBink`'s script command, `005d15d0`; the doors' per-frame place isn't traced, their leaves move in `move_pieces`) |
+
+`ai_stage` records Partial wiring on five thread calls (the interface
+idle, the animation updates, `TES::RunAnimations`, the movement, the
+ragdolls) and five sub-steps (the wind listener's wind, `Sky::Update`,
+both Havok steps, `Actor::Update`'s 3D placement). Open: the task queue's
+input, `CombatManager::Update` and `UpdateCombatants`, the second animation
+pass, magic, packages and followers (`move_actors` evaluates packages
+itself but isn't split), detection, `RunActorUpdates`/`Actor::Update`
+(no system is the per-actor update), destructibles, the obstacle manager,
+the scripts' optimizations, the temporary effects, particles,
+`PostProcessProjectiles`, the temporary node manager, and the one-thread
+task queue `008ca070`.
+
+Tests (`frame_order::tests`): the AI sets in the exe's order for 2 and 8
+threads with systems added in reverse (the interface idle, the poses, the
+cells' animations, the movement and its projectiles, the hits, the actor
+updates and the Havok step in each count's order, the sky, the offstage
+moves); menu mode stops the gated sets (the cells' animations, the
+projectiles, the actor updates, the Havok step and the sky) but not the
+systems ordered outside them, and the dialogue menu keeps the sky; the
+inputs.
+
+Acceptance: doc, vcg02 and vms16 pass with the change (release viewer,
+this machine's processor count, so the pair's order).
+
+### Behaviour differences
+
+- In menu mode (the game's menus, the Pip-Boy, V.A.T.S.'s menu, a message
+  box; and the dialogue menu) loose objects (`clutter`), bolts, thrown
+  things and people's shots hold still, as do models' own animations (fans,
+  door leaves): the exe runs no AI threads then. Outside the dialogue menu
+  the weather's step waits too (`0086fc60`).
+- People are posed before they move (the exe's animation pass comes before
+  the movement): a change of gait shows a frame later.
+- The weather now steps after the trees sway (stage 4 reads the sky's wind
+  from the last frame, as `BSTreeManager::Update` does).
+- People out of sight move after the frame's render work (stage 7) instead
+  of before the people on screen: someone walking into the loaded squares
+  comes on screen a frame later.
+- With more than two processors the Havok step runs before the actor
+  updates' place (thread 2 before thread 1's `RunActorUpdates`); no viewer
+  system sits at the actor updates, so nothing visible follows from it.
 ## PR sequence
 
 Each PR names one next action, regenerates the ledger and passes the
@@ -780,7 +943,8 @@ acceptance routes, as in B1.
 6. **AI task stage.** The tasks `AITaskManager` starts in stage 6 and joins
    in stage 8: actor process updates, animation, the Havok step. Our single
    thread runs them in the game's order; the thread split itself is
-   `platform`.
+   `platform`. *Done*: "PR 6 result" above (the count of 2 runs the combined
+   function, more the pair; the one-thread task queue stays open).
 7. **Interface and render stage.** `Interface::Idle` and its pre/post
    steps, `LastMinuteUpdate`, the menu background, `Main::Swap`'s
    pre/post-swap work (the renderer itself stays Bevy).

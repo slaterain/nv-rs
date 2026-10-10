@@ -1032,6 +1032,57 @@ The maintainer set a one-week fast track (about 1.9 billion tokens).
 - Next action: PR 6 (the AI task stage: `Sky::Update` and the weather chain
   move there with `TES::UpdateCellAnimations`).
 
+### Phase 1 PR 6: the AI task stage (`claude/phase1-ai-stage`, 2026-10-10)
+
+- Evidence: `crates/world/src/frame/ai_stage.rs`
+  (`world::frame::ai_stage`), all from the disassembly: the AI linear task
+  thread functions as their work calls and handshakes (the combined
+  `008c7bd0`, made when `iNumHWThreads` ≤ 2, `008c7307`; the pair
+  `008c7da0`/`008c7f50` otherwise, so on most PCs; events `008c79e0`/
+  `008c7a70`, the render wait `008c80d0`), `schedule()` putting them in one
+  order the exe can run (each thread's order and every wait kept); and the
+  work calls with gates of `Main::OnIdle_UpdateAnimationsAndEffects`
+  (`0086fc60`: nothing in menu mode unless in dialogue or fader 1, nor with
+  the world frozen), `TES::UpdateCellAnimations` (`00453550`: wind, the
+  Havok step between `LockHavokUpdateMT` 1/0, `Sky::Update` only with one
+  thread), `TES::UpdateCellMainThread` (`004537c0`: `Sky::Update`),
+  `GridCellArray::UpdateManagedNodes` (`004ba9a0`), the two
+  `bhkWorld::Update` sites (`00554780`, `00551890`),
+  `ProcessLists::RunActorUpdates` (`0096c7c0`: slot +0x2f8 per processed
+  actor) and `Actor::Update` (`00888b50`, 19 sub-steps). Corrections: with
+  AI threads the sky is the main thread's (`004537c0`), and the offstage
+  moves are stage 7's (`Main::PostSwapProcess` → `0086f890` → `0096d810`).
+  FRAME_SKELETON.md "PR 6 result".
+- Viewer: `frame_order::AiSet` (thread calls inside `StartThreads`' and
+  `WaitForThreads`' steps, sub-steps nested, gates on `ThisAi`). Under
+  gates: `move_pieces` (`TES::RunAnimations`), the projectiles
+  (`resolve_shots`, `fly_bolts`, `fly_thrown`, the movement pass), the
+  Havok step (`clutter::simulate`, contact sounds), the weather's step
+  (`Sky::Update`). At their calls outside the gates, with reasons: the HUD
+  and Pip-Boy (interface idle), the posing, idles, head tracking, clothes
+  and faces (animation pass), `move_actors` (movement). `move_offstage`
+  moved to stage 7. Doors and movies stay in stage 4.
+- Tests: `ai_stage` 14; engine: `0086fc60` (15 states), `00453550` (12),
+  `004537c0`, `Actor::Update` (5) follow the model; viewer: AI sets in the
+  exe's order for 2 and 8 threads, menu mode stops the gated sets,
+  dialogue keeps the sky. Acceptance: doc, vcg02 and vms16 pass (57 s,
+  399 s, 339 s; no panic).
+- Behaviour: loose objects, bolts, thrown things, people's shots and
+  models' own animations hold still in menu mode (and the dialogue menu);
+  the weather's step waits in menus other than dialogue; people are posed
+  before they move (a gait change shows a frame later); offstage people
+  move after the render work.
+- Files: `crates/world/src/frame/ai_stage.rs` (new),
+  `crates/world/src/frame.rs`, engine tests in `fallout_misc/main.rs`,
+  `fallout_shared/tes.rs`, `fallout_ai/actor_p2.rs`,
+  `viewer/src/frame_order.rs`, `viewer/src/main.rs` and the plugins
+  `bolts`, `clutter`, `companions`, `explosives`, `hiteffects`, `hud`,
+  `impact_fx`, `local_map`, `pipboy`, `weapon_fx`; `docs/FRAME_SKELETON.md`,
+  `docs/LEDGER.md` (generated).
+- Next action: PR 7 (the interface and render stage: `Interface::Idle`,
+  `LastMinuteUpdate`, `Main::Swap`'s pre/post work, and
+  `Main::OnIdle_UpdateProcessLists`' calls).
+
 ## Deferred
 
 Cosmetic material/lighting discrepancies, isolated facial polish, sun glare,

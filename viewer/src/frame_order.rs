@@ -25,8 +25,17 @@
 //! `Main::OnIdle_UpdateCurrentGridCell` and `TES::UpdateCurrentGridCell`) are
 //! split into their sub-steps ([`WorldSet`], `world::frame::world_time`,
 //! docs/FRAME_SKELETON.md "PR 5 result"), under their gates on [`ThisWorld`].
+//!
+//! The AI task stage (the AI linear task threads' work between
+//! `AILinearTaskThreadManager::StartThreads` and `WaitForThreads`, and the
+//! main thread's `Main::OnIdle_UpdateAnimationsAndEffects` with the Havok
+//! step, the actor updates and the sky inside them) is split into the
+//! threads' calls in one order the exe runs them in and the sub-steps of
+//! the functions they call ([`AiSet`], `world::frame::ai_stage`,
+//! docs/FRAME_SKELETON.md "PR 6 result"), under their gates on [`ThisAi`].
 
 use bevy::prelude::*;
+use world::frame::ai_stage::{self, AiState};
 use world::frame::player::{self, PlayerState, UPDATE, UPDATE_PLAYER};
 use world::frame::world_time::{self, WorldState, FUNCTIONS};
 use world::frame::{self, FrameState, Stage, STEPS};
@@ -237,6 +246,138 @@ pub fn viewer_world_state(frame: &FrameState, indoors: bool) -> WorldState {
     }
 }
 
+/// The AI task stage as system sets (`world::frame::ai_stage`, Phase 1
+/// PR 6).
+///
+/// The AI linear task threads' work calls, in [`ai_stage::schedule`]'s
+/// order for the thread count: those before the render wait inside
+/// `AILinearTaskThreadManager::StartThreads`' step (stage 6), those after it
+/// inside `WaitForThreads`' (stage 8), so they run under the frame's gate
+/// for the AI work, and each under its own ([`ai_stage::thread_call_runs`]).
+/// The thread split itself is platform: this one thread runs both threads'
+/// calls in an order they can run in. Inside a call (or a frame step) the
+/// sub-steps of the function it calls, in call order, under their gates on
+/// [`ThisAi`].
+///
+/// As for the other stages' sets, a system that belongs at a call but also
+/// does work while its gate is closed (in menu mode, in the dialogue menu)
+/// is ordered at it from outside the sets: see where each is added.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AiSet {
+    /// The threads' first work call of the function at `.0`.
+    Call(u32),
+    /// The other thread's call of the same function (each thread's own
+    /// input and scripts' optimizations).
+    Again(u32),
+    /// Sub-step `.1` of the modelled function at `.0` (an index into its
+    /// `world::frame::ai_stage::Function::steps`).
+    Sub(u32, usize),
+}
+
+impl AiSet {
+    /// The set of `function`'s sub-step whose call is at `site`.
+    pub fn at(function: u32, site: u32) -> AiSet {
+        let f = ai_stage::function(function).expect("a modelled function");
+        AiSet::Sub(function, ai_stage::step_at(f, site).expect("a sub-step"))
+    }
+
+    /// The set of the threads' work call after the first one to `callee`,
+    /// in this machine's order.
+    pub fn next(callee: u32) -> AiSet {
+        Self::next_with(callee, thread_count())
+    }
+
+    /// The set of the threads' work call before it.
+    pub fn prev(callee: u32) -> AiSet {
+        Self::prev_with(callee, thread_count())
+    }
+
+    /// [`AiSet::next`] for a thread count.
+    pub fn next_with(callee: u32, threads: i32) -> AiSet {
+        let sets = ai_call_sets(threads);
+        let i = sets
+            .iter()
+            .position(|s| s.0 == AiSet::Call(callee))
+            .expect("a call");
+        sets[i + 1].0
+    }
+
+    /// [`AiSet::prev`] for a thread count.
+    pub fn prev_with(callee: u32, threads: i32) -> AiSet {
+        let sets = ai_call_sets(threads);
+        let i = sets
+            .iter()
+            .position(|s| s.0 == AiSet::Call(callee))
+            .expect("a call");
+        sets[i - 1].0
+    }
+}
+
+/// `AILinearTaskThreadManager::StartThreads` (stage 6).
+pub const START_THREADS: u32 = ai_stage::START_THREADS;
+/// `AILinearTaskThreadManager::WaitForThreads` (stage 8).
+pub const WAIT_FOR_THREADS: u32 = ai_stage::WAIT_FOR_THREADS;
+/// `Main::PostSwapProcess` (stage 7), whose `Main::OnIdle_UpdateProcessLists`
+/// (`0086f890`) runs `ProcessLists::UpdateProcessLists` (`0096d810`): the
+/// lower process levels' moves (`0096b810`, `0096b470`, `0096b050`).
+pub const POST_SWAP_PROCESS: u32 = 0x0087_05d0;
+/// `Main::OnIdle_UpdateAnimationsAndEffects` (stage 6, after the threads
+/// start).
+pub const UPDATE_ANIMATIONS_AND_EFFECTS: u32 = ai_stage::UPDATE_ANIMATIONS_AND_EFFECTS;
+/// `TES::UpdateCellMainThread`, which the main thread calls there with
+/// threads > 1.
+pub const UPDATE_CELL_MAIN_THREAD: u32 = ai_stage::UPDATE_CELL_MAIN_THREAD;
+/// `Sky::Update`'s call in it.
+pub const SKY_UPDATE_AT: u32 = 0x0045_3811;
+/// `TES::UpdateCellAnimations`, the Havok step's function.
+pub const UPDATE_CELL_ANIMATIONS: u32 = ai_stage::UPDATE_CELL_ANIMATIONS;
+/// `TES::LockHavokUpdateMT(1)`'s call in it, before the managed nodes.
+pub const HAVOK_LOCK_AT: u32 = 0x0045_35ee;
+/// `TES::LockHavokUpdateMT(0)`'s call, after them.
+pub const HAVOK_UNLOCK_AT: u32 = 0x0045_3629;
+/// The threads' calls the viewer's systems sit at.
+pub use ai_stage::{ACTORS_MOVEMENT, ACTOR_ANIMATION_UPDATES, INTERFACE_IDLE, RUN_ANIMATIONS};
+
+/// The threads' work calls as sets in [`ai_stage::scheduled_calls`]' order,
+/// each with its thread function, step and whether it comes after the
+/// render.
+fn ai_call_sets(threads: i32) -> Vec<(AiSet, u32, usize, bool)> {
+    let mut seen = Vec::new();
+    ai_stage::scheduled_calls(threads)
+        .into_iter()
+        .map(|(t, i, after)| {
+            let th = ai_stage::thread(t).expect("a thread function");
+            let ai_stage::ThreadOp::Call { callee, .. } = th.steps[i].op else {
+                unreachable!("a work call")
+            };
+            let set = if seen.contains(&callee) {
+                AiSet::Again(callee)
+            } else {
+                seen.push(callee);
+                AiSet::Call(callee)
+            };
+            (set, t, i, after)
+        })
+        .collect()
+}
+
+/// The AI stage's inputs, filled with [`ThisFrame`] ([`begin_frame`]).
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Default)]
+pub struct ThisAi(pub AiState);
+
+/// The AI stage's inputs from the frame's and the viewer's values
+/// (docs/FRAME_SKELETON.md, "PR 6 result"):
+///
+/// - the thread count, menu mode, the fader, the frozen world, obstacle
+///   avoidance: the frame's ([`ThisFrame`]);
+/// - dialogue (`[011dea2c]`, `Interface::InDialog`): the dialogue menu up;
+/// - an interior loaded: no `exterior::Exterior`;
+/// - the rest at `AiState::default`: `Actor::Update`'s per-actor inputs
+///   (no viewer system sits under its gates).
+pub fn viewer_ai_state(frame: &FrameState, in_dialogue: bool, indoors: bool) -> AiState {
+    ai_stage::from_frame(frame, in_dialogue, indoors)
+}
+
 /// The frame's inputs to the gates, filled once per frame ([`begin_frame`]).
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct ThisFrame(pub FrameState);
@@ -346,10 +487,11 @@ pub fn begin_frame(
     draw: Res<crate::game_menus::MenuDraw>,
     walker: Res<crate::walk::Player>,
     exterior: Option<Res<crate::exterior::Exterior>>,
-    (mut this, mut this_player, mut this_world): (
+    (mut this, mut this_player, mut this_world, mut this_ai): (
         ResMut<ThisFrame>,
         ResMut<ThisPlayer>,
         ResMut<ThisWorld>,
+        ResMut<ThisAi>,
     ),
 ) {
     let vats_mode = vats.as_ref().map_or(0, |v| v.manager_mode());
@@ -363,6 +505,7 @@ pub fn begin_frame(
     });
     this_player.0 = viewer_player_state(&this.0, walker.walking, in_dialogue);
     this_world.0 = viewer_world_state(&this.0, exterior.is_none());
+    this_ai.0 = viewer_ai_state(&this.0, in_dialogue, exterior.is_none());
 }
 
 /// Configures the sets in `Update`: the viewer's two sets ahead, the
@@ -370,6 +513,11 @@ pub fn begin_frame(
 /// the viewer's last set after; each stage and step under its gate on
 /// [`ThisFrame`].
 pub fn configure(app: &mut App) {
+    configure_with(app, thread_count());
+}
+
+/// [`configure`] for a thread count (the AI stage's order depends on it).
+pub fn configure_with(app: &mut App, threads: i32) {
     app.init_resource::<ThisFrame>();
     let stages = frame::stages();
     app.configure_sets(
@@ -411,6 +559,132 @@ pub fn configure(app: &mut App) {
     }
     configure_player(app);
     configure_world(app);
+    configure_ai(app, threads);
+}
+
+/// The AI stage's sets ([`AiSet`]) for a thread count: the threads' calls
+/// in their order inside `StartThreads`' step (before the render wait) and
+/// `WaitForThreads`' (after it), each under its gate on [`ThisAi`]; each
+/// modelled function's sub-steps inside the set of the call (or frame
+/// step, or sub-step) through which this thread count reaches it first,
+/// in call order under their gates.
+pub fn configure_ai(app: &mut App, threads: i32) {
+    app.init_resource::<ThisAi>();
+    let sets = ai_call_sets(threads);
+    // Each set with the ones around it, for the nested sets' anchors below.
+    let mut around: Vec<(AiSet, Option<AiSet>, Option<AiSet>)> = Vec::new();
+    for after in [false, true] {
+        let step = if after {
+            WAIT_FOR_THREADS
+        } else {
+            START_THREADS
+        };
+        let index = frame::step_of(step).expect("a call of Main::OnIdle");
+        let part: Vec<&(AiSet, u32, usize, bool)> = sets.iter().filter(|s| s.3 == after).collect();
+        for (k, &&(set, t, i, _)) in part.iter().enumerate() {
+            app.configure_sets(
+                Update,
+                set.in_set(FrameSet::Step(index))
+                    .run_if(move |this: Res<ThisAi>| {
+                        let th = ai_stage::thread(t).expect("a thread function");
+                        ai_stage::thread_call_runs(&this.0, th, i)
+                    }),
+            );
+            if k + 1 < part.len() {
+                app.configure_sets(Update, set.before(part[k + 1].0));
+            }
+            let prev = k.checked_sub(1).map(|j| part[j].0);
+            let next = part.get(k + 1).map(|s| s.0);
+            around.push((set, prev, next));
+        }
+        // The calls also follow the frame's step before `StartThreads`
+        // (`WaitForThreads`) and come before the one after it, so that a
+        // system ordered at an empty call set keeps its place.
+        if let (Some(first), Some(last)) = (part.first(), part.last()) {
+            app.configure_sets(
+                Update,
+                (
+                    first.0.after(FrameSet::Step(index - 1)),
+                    last.0.before(FrameSet::Step(index + 1)),
+                ),
+            );
+        }
+    }
+    for f in &ai_stage::FUNCTIONS {
+        let Some(caller) = ai_stage::first_caller(f, threads) else {
+            continue;
+        };
+        let address = f.address;
+        // The set the sub-steps go in, and its neighbours.
+        let (parent, prev, next): (FrameSet, Option<FrameSet>, Option<FrameSet>);
+        let (ai_parent, ai_prev, ai_next): (Option<AiSet>, Option<AiSet>, Option<AiSet>);
+        if caller.function == ai_stage::ON_IDLE {
+            let i = frame::step_of(address).expect("a call of Main::OnIdle");
+            (parent, prev, next) = (
+                FrameSet::Step(i),
+                Some(FrameSet::Step(i - 1)),
+                Some(FrameSet::Step(i + 1)),
+            );
+            (ai_parent, ai_prev, ai_next) = (None, None, None);
+        } else if ai_stage::thread(caller.function).is_some() {
+            let (set, p, n) = *around
+                .iter()
+                .find(|a| a.0 == AiSet::Call(address))
+                .expect("the thread's call");
+            (parent, prev, next) = (FrameSet::Step(0), None, None);
+            (ai_parent, ai_prev, ai_next) = (Some(set), p, n);
+        } else {
+            let c = ai_stage::function(caller.function).expect("a modelled caller");
+            let k = ai_stage::step_at(c, caller.site).expect("the caller's call");
+            (parent, prev, next) = (FrameSet::Step(0), None, None);
+            (ai_parent, ai_prev, ai_next) = (
+                Some(AiSet::Sub(caller.function, k)),
+                k.checked_sub(1).map(|j| AiSet::Sub(caller.function, j)),
+                (k + 1 < c.steps.len()).then_some(AiSet::Sub(caller.function, k + 1)),
+            );
+        }
+        let n = f.steps.len();
+        for i in 0..n {
+            let set = AiSet::Sub(address, i);
+            match ai_parent {
+                Some(p) => app.configure_sets(Update, set.in_set(p)),
+                None => app.configure_sets(Update, set.in_set(parent)),
+            };
+            app.configure_sets(
+                Update,
+                set.run_if(move |this: Res<ThisAi>| {
+                    let f = ai_stage::function(address).expect("modelled");
+                    ai_stage::step_runs(&this.0, f, i)
+                }),
+            );
+            if i + 1 < n {
+                app.configure_sets(Update, set.before(AiSet::Sub(address, i + 1)));
+            }
+        }
+        // The sub-steps also follow what comes before their call and come
+        // before what follows it (the hierarchy alone doesn't order them),
+        // so a system ordered at one from outside the sets keeps its place
+        // when they are empty.
+        let (first, last) = (AiSet::Sub(address, 0), AiSet::Sub(address, n - 1));
+        match ai_parent {
+            Some(_) => {
+                if let Some(p) = ai_prev {
+                    app.configure_sets(Update, first.after(p));
+                }
+                if let Some(x) = ai_next {
+                    app.configure_sets(Update, last.before(x));
+                }
+            }
+            None => {
+                if let Some(p) = prev {
+                    app.configure_sets(Update, first.after(p));
+                }
+                if let Some(x) = next {
+                    app.configure_sets(Update, last.before(x));
+                }
+            }
+        }
+    }
 }
 
 /// The player stage's sets ([`PlayerSet`]): the calls of `0086f940` inside
@@ -916,5 +1190,193 @@ mod tests {
         });
         let s = viewer_world_state(&menu, false);
         assert!(s.menu_flag && !s.world_runs);
+    }
+
+    /// An app with the sets for a thread count, the frame's state and the AI
+    /// stage's (dialogue up or not, outdoors).
+    fn ai_app(frame: FrameState, threads: i32, in_dialogue: bool) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        configure_with(&mut app, threads);
+        let frame = FrameState { threads, ..frame };
+        app.insert_resource(ThisFrame(frame))
+            .insert_resource(ThisAi(viewer_ai_state(&frame, in_dialogue, false)))
+            .init_resource::<Ran>();
+        app
+    }
+
+    /// Adds systems the way `main.rs` and the plugins place the AI stage's,
+    /// in reverse.
+    fn add_ai_systems(app: &mut App, threads: i32) {
+        let stage = FrameSet::Stage(Stage::AiStart);
+        let cells = UPDATE_CELL_ANIMATIONS;
+        app.add_systems(
+            Update,
+            note("offstage").in_set(FrameSet::step(POST_SWAP_PROCESS)),
+        )
+        .add_systems(
+            Update,
+            note("daylight")
+                .in_set(stage)
+                .after(AiSet::at(UPDATE_CELL_MAIN_THREAD, SKY_UPDATE_AT))
+                .before(FrameSet::after(UPDATE_ANIMATIONS_AND_EFFECTS)),
+        )
+        .add_systems(
+            Update,
+            note("weather").in_set(AiSet::at(UPDATE_CELL_MAIN_THREAD, SKY_UPDATE_AT)),
+        )
+        .add_systems(
+            Update,
+            note("actor update").in_set(AiSet::Sub(ai_stage::ACTOR_UPDATE, 0)),
+        )
+        .add_systems(
+            Update,
+            note("havok")
+                .in_set(AiSet::Call(cells))
+                .after(AiSet::at(cells, HAVOK_LOCK_AT))
+                .before(AiSet::at(cells, HAVOK_UNLOCK_AT)),
+        )
+        .add_systems(
+            Update,
+            note("hits")
+                .in_set(stage)
+                .after(AiSet::Call(ACTORS_MOVEMENT))
+                .before(AiSet::next_with(ACTORS_MOVEMENT, threads)),
+        )
+        .add_systems(Update, note("bolts").in_set(AiSet::Call(ACTORS_MOVEMENT)))
+        .add_systems(
+            Update,
+            note("move")
+                .in_set(stage)
+                .after(AiSet::prev_with(ACTORS_MOVEMENT, threads))
+                .before(AiSet::Call(ACTORS_MOVEMENT)),
+        )
+        .add_systems(Update, note("pieces").in_set(AiSet::Call(RUN_ANIMATIONS)))
+        .add_systems(
+            Update,
+            note("pose")
+                .in_set(stage)
+                .after(AiSet::Call(ACTOR_ANIMATION_UPDATES))
+                .before(AiSet::next_with(ACTOR_ANIMATION_UPDATES, threads)),
+        )
+        .add_systems(
+            Update,
+            note("hud")
+                .in_set(stage)
+                .after(AiSet::Call(INTERFACE_IDLE))
+                .before(AiSet::next_with(INTERFACE_IDLE, threads)),
+        )
+        .add_systems(
+            Update,
+            note("markers")
+                .in_set(stage)
+                .before(FrameSet::step(START_THREADS))
+                .before(AiSet::Call(INTERFACE_IDLE)),
+        );
+    }
+
+    /// The AI stage's sets run in the exe's order: with two threads the
+    /// combined thread's (the interface idle, the animations, the cells'
+    /// animations, the movement and its projectiles, the actor updates, the
+    /// Havok step), with more the pair's (thread 2's Havok step before thread
+    /// 1's actor updates, which wait only for its movement); then the main
+    /// thread's sky, then the lower process levels after the render.
+    #[test]
+    fn ai_sets_run_in_the_exes_order() {
+        let run = |threads: i32| {
+            let mut app = ai_app(FrameState::default(), threads, false);
+            add_ai_systems(&mut app, threads);
+            app.update();
+            app.world().resource::<Ran>().0.clone()
+        };
+        assert_eq!(
+            run(2),
+            [
+                "markers",
+                "hud",
+                "pose",
+                "pieces",
+                "move",
+                "bolts",
+                "hits",
+                "actor update",
+                "havok",
+                "weather",
+                "daylight",
+                "offstage"
+            ]
+        );
+        assert_eq!(
+            run(8),
+            [
+                "markers",
+                "hud",
+                "pose",
+                "pieces",
+                "move",
+                "bolts",
+                "hits",
+                "havok",
+                "actor update",
+                "weather",
+                "daylight",
+                "offstage"
+            ]
+        );
+    }
+
+    /// The gates: in menu mode no AI work starts (`0086ec1d`-`0086ec74`), so
+    /// the cells' animations, the projectiles, the actor updates and the
+    /// Havok step stop, and the sky's update with them (`0086fc72`); the
+    /// systems ordered at their calls from outside run. In the dialogue menu
+    /// the sky goes on (`0086fc7d`).
+    #[test]
+    fn ai_gates_stop_their_sets() {
+        let menu = viewer_frame_state(FrameInputs {
+            menu_up: true,
+            ..FrameInputs::default()
+        });
+        let ungated = [
+            "markers", "hud", "pose", "move", "hits", "daylight", "offstage",
+        ];
+        for threads in [2, 8] {
+            let mut app = ai_app(menu, threads, false);
+            add_ai_systems(&mut app, threads);
+            app.update();
+            assert_eq!(app.world().resource::<Ran>().0, ungated);
+            let mut app = ai_app(menu, threads, true);
+            add_ai_systems(&mut app, threads);
+            app.update();
+            assert_eq!(
+                app.world().resource::<Ran>().0,
+                ["markers", "hud", "pose", "move", "hits", "weather", "daylight", "offstage"]
+            );
+        }
+    }
+
+    /// The AI stage's inputs: the frame's thread count and modes, dialogue
+    /// and indoors from the viewer.
+    #[test]
+    fn ai_fixed_inputs() {
+        let game = viewer_frame_state(FrameInputs::default());
+        let s = viewer_ai_state(&game, false, true);
+        assert!(s.threads >= 2 && s.interior_loaded && !s.menu_flag && s.obstacle_avoidance);
+        assert!(s.animations_run());
+        let menu = viewer_frame_state(FrameInputs {
+            menu_up: true,
+            ..FrameInputs::default()
+        });
+        assert!(!viewer_ai_state(&menu, false, false).animations_run());
+        assert!(viewer_ai_state(&menu, true, false).animations_run());
+        // The sets the viewer's systems use exist for this machine's count.
+        let threads = thread_count();
+        assert_eq!(
+            AiSet::next_with(INTERFACE_IDLE, threads),
+            AiSet::Call(0x0087_a6b0)
+        );
+        assert_eq!(
+            AiSet::prev_with(ACTORS_MOVEMENT, threads),
+            AiSet::Call(0x0096_c330)
+        );
     }
 }

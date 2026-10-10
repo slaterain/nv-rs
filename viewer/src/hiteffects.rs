@@ -120,12 +120,22 @@ impl Plugin for HitEffectsPlugin {
             .add_systems(
                 Update,
                 // In the AI work (stage 6, `crate::frame_order`), after the
-                // player's attack (stage 2) by the stages' order.
+                // player's attack (stage 2) by the stages' order. Placed for
+                // order only, right after the actors' movement pass, whose
+                // projectiles strike (`crate::frame_order::AiSet`), outside its
+                // gate: it also plays the player's hits (its exact place isn't
+                // traced).
                 play_hits
-                    // Kept: people's moves are in the same stage.
+                    // Kept: after people's moves.
                     .after(crate::ai::move_actors)
                     .in_set(crate::frame_order::FrameSet::Stage(
                         world::frame::Stage::AiStart,
+                    ))
+                    .after(crate::frame_order::AiSet::Call(
+                        crate::frame_order::ACTORS_MOVEMENT,
+                    ))
+                    .before(crate::frame_order::AiSet::next(
+                        crate::frame_order::ACTORS_MOVEMENT,
                     )),
             );
     }

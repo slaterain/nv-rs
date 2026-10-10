@@ -31,15 +31,15 @@ Map provenance:
 | | Functions | Share |
 | --- | ---: | ---: |
 | translated | 9742 | 14.7% |
-| traced | 4469 | 6.7% |
+| traced | 4484 | 6.8% |
 | platform | 3418 | 5.2% |
 | library | 21915 | 33.1% |
-| open | 26715 | 40.3% |
+| open | 26700 | 40.3% |
 | **all** | **66259** | |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 13805 (34.1%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 13820 (34.1%) are translated or traced.
 
-Rust cites 14709 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 14772 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -70,9 +70,9 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Subsystem | Functions | KB | Named | translated | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 65 | 0 | 21269 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 6205 | 981 | 0 | 0 | 3284 | 68.6% |
+| fallout shared | 10470 | 2065 | 3149 | 6205 | 982 | 0 | 0 | 3283 | 68.6% |
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 77 | 0 | 0 | 6461 | 2.0% |
-| fallout/ai | 4849 | 1475 | 1888 | 1955 | 615 | 0 | 0 | 2279 | 53.0% |
+| fallout/ai | 4849 | 1475 | 1888 | 1955 | 629 | 0 | 0 | 2265 | 53.3% |
 | fallout/interface | 2645 | 991 | 1247 | 583 | 737 | 0 | 0 | 1325 | 49.9% |
 | (unplaced) | 2353 | 470 | 0 | 30 | 395 | 1 | 0 | 1927 | 18.1% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 315 | 209 | 0 | 0 | 1264 | 29.3% |
@@ -128,9 +128,9 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | Depth | Call sites | Functions | translated | traced | platform | library | open |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
-| 1 | 143 | 117 | 96 | 31 | 3 | 0 | 13 |
-| 2 | 1575 | 583 | 1014 | 401 | 24 | 4 | 132 |
-| 3 | 4973 | 1303 | 3231 | 1156 | 154 | 26 | 406 |
+| 1 | 143 | 117 | 96 | 34 | 3 | 0 | 10 |
+| 2 | 1575 | 583 | 1014 | 405 | 24 | 4 | 128 |
+| 3 | 4973 | 1303 | 3231 | 1160 | 154 | 26 | 402 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
@@ -234,9 +234,9 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 96 | `00b5ac90` | `ShadowSceneNode::UpdateOcclusionPlaneVisibility` | platform |
 | 97 | `0045b070` | `TES::UpdateMultiBoundVisibility` | translated |
 | 98 | `0043d4d0` | - | translated |
-| 99 | `008c80e0` | `AILinearTaskThreadManager::SetMainRendering` | open |
+| 99 | `008c80e0` | `AILinearTaskThreadManager::SetMainRendering` | traced |
 | 100 | `00713d80` | - | translated |
-| 101 | `008c78c0` | `AILinearTaskThreadManager::StartThreads` | open |
+| 101 | `008c78c0` | `AILinearTaskThreadManager::StartThreads` | traced |
 | 102 | `008ca070` | `AITaskManager::StartTasksDuringRendering` | traced |
 | 103 | `0086fc60` | `Main::OnIdle_UpdateAnimationsAndEffects` | translated |
 | 104 | `0043d4d0` | - | translated |
@@ -265,7 +265,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 127 | `004dc360` | - | translated |
 | 128 | `0043d4d0` | - | translated |
 | 129 | `00713d80` | - | translated |
-| 130 | `008c7990` | `AILinearTaskThreadManager::WaitForThreads` | open |
+| 130 | `008c7990` | `AILinearTaskThreadManager::WaitForThreads` | traced |
 | 131 | `008ca300` | `AITaskManager::WaitForTasksDuringRendering` | traced |
 | 132 | `0086f6a0` | `Main::UpdateNonRenderSafeAITasks` | translated |
 | 133 | `00870610` | `Main::OnIdle_PostThreadsProcess` | translated |

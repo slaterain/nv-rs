@@ -650,33 +650,59 @@ fn main() {
                     frame_order::RUN_SCRIPT_AT,
                 )),
         )
-        // Placed for order only, right after the scripts (no sub-step of the
-        // stage is theirs): E on doors and the doors' swings; movies, which
-        // start from the scripts' `PlayBink`; the weather, sky, daylight and
-        // emittance, whose exe counterpart, `Sky::Update`, is called from
-        // `TES::UpdateCellAnimations` (`004536ae`) and
-        // `TES::UpdateCellMainThread` (`00453811`) in stage 6 (the AI stage's
-        // order is PR 6; the frame's slot +0x104 call in this stage is the
-        // scene graph's view distance, not the sky).
+        // Right after the scripts: movies, which run inside the script
+        // command that starts them (`PlayBink`'s handler `005d15d0` calls the
+        // movie player, whose loop owns the screen until the movie ends; here
+        // the clock stops instead, `movie`); and, placed for order only (no
+        // sub-step of the stage is theirs, their per-frame place isn't
+        // traced), E on load doors and the doors' swings, which scripts and E
+        // start (their leaves are moved by `move_pieces`, at
+        // `TES::RunAnimations` in the AI stage).
         .add_systems(
             Update,
             (
                 (walk::doors, doors::update_doors).chain(),
                 (movie::start_movies, movie::play_movies).chain(),
-                (
-                    weather::run_weather,
-                    follow_sky,
-                    daylight::follow_the_clock,
-                    emittance::arrive_indoors,
-                    emittance::follow_emittance,
-                )
-                    .chain(),
             )
                 // Kept: the viewer's order among them.
                 .chain()
                 .in_set(FrameSet::Stage(Stage::WorldAndTime))
                 .after(FrameSet::step(frame_order::RUN_ACTOR_SCRIPTS))
                 .before(FrameSet::after(frame_order::RUN_ACTOR_SCRIPTS)),
+        )
+        // The sky: `Sky::Update`, which `TES::UpdateCellMainThread`
+        // (`004537c0`) calls (`00453811`) from the main thread's
+        // `Main::OnIdle_UpdateAnimationsAndEffects` (stage 6) when there are
+        // AI threads (with one thread `TES::UpdateCellAnimations` calls it
+        // too, `004536ae`). The weather's step (a new square's weather, the
+        // transition at the game's hour) is in its sub-step, under its gates:
+        // not in menu mode unless in dialogue (`0086fc72`-`0086fc97`). The
+        // sky centred on the eye, the daylight and the glows follow it outside
+        // the gate: they also follow the camera, which moves in menus (the
+        // V.A.T.S. and dialogue views), and change only when the clock or the
+        // weather has moved.
+        .add_systems(
+            Update,
+            (
+                weather::run_weather.in_set(frame_order::AiSet::at(
+                    frame_order::UPDATE_CELL_MAIN_THREAD,
+                    frame_order::SKY_UPDATE_AT,
+                )),
+                (
+                    follow_sky,
+                    daylight::follow_the_clock,
+                    emittance::arrive_indoors,
+                    emittance::follow_emittance,
+                )
+                    // Kept: the viewer's order among them.
+                    .chain()
+                    .in_set(FrameSet::Stage(Stage::AiStart))
+                    .after(frame_order::AiSet::at(
+                        frame_order::UPDATE_CELL_MAIN_THREAD,
+                        frame_order::SKY_UPDATE_AT,
+                    ))
+                    .before(FrameSet::after(frame_order::UPDATE_ANIMATIONS_AND_EFFECTS)),
+            ),
         )
         // The land around the player: `Main::OnIdle_UpdateCurrentGridCell`
         // (step 78), whose `TES::UpdateCurrentGridCell` moves the exterior
@@ -720,39 +746,56 @@ fn main() {
                 .chain()
                 .in_set(FrameSet::step(frame_order::UPDATE_CURRENT_GRID_CELL_STEP)),
         )
-        // Stage 6, the AI work (on the AI linear task threads with threads
-        // > 1, as `main` leaves the PC: FRAME_SKELETON.md "The actor
-        // updates"): people moved, shot and posed. Map markers, the HUD's
-        // quest targets and saving keep their place here; theirs in the
-        // frame isn't traced.
+        // Stage 6, the AI work: on the AI linear task threads with threads
+        // > 1, as `main` leaves the PC (`world::frame::ai_stage`,
+        // `frame_order::AiSet`, docs/FRAME_SKELETON.md "PR 6 result"). Placed
+        // for order only, ahead of the threads' start (their places in the
+        // frame aren't traced): map markers, the HUD's quest targets, saving,
+        // companions coming along, and people and things scripts enabled or
+        // made coming on screen (before anyone moves).
         .add_systems(
             Update,
             (
-                (
-                    map::find_markers,
-                    hud::follow_quest_targets,
-                    ai::move_offstage,
-                    (bring_in_enabled, bring_in_people).chain(),
-                    bring_in_made,
-                    ai::move_actors,
-                    // People's shots fly once everyone has moved.
-                    fighting::resolve_shots.after(ai::move_actors),
-                    ai::ground_log.after(ai::move_actors),
-                    scripts::save_and_load,
-                ),
-                (
-                    look::set_up,
-                    sitting::idle_requests,
-                    look::follow_player,
-                    actors::script_idles,
-                    actors::animate_actors,
-                )
-                    .chain(),
+                map::find_markers,
+                hud::follow_quest_targets,
+                (bring_in_enabled, bring_in_people).chain(),
+                bring_in_made,
+                scripts::save_and_load,
             )
-                // Kept: people are posed where they moved to (the AI
-                // thread's own order, `008c7bd0`, is Phase 1 PR 6).
+                .in_set(FrameSet::Stage(Stage::AiStart))
+                .before(FrameSet::step(frame_order::START_THREADS))
+                // (and before what is ordered at the threads' calls from
+                // outside their sets)
+                .before(frame_order::AiSet::Call(frame_order::INTERFACE_IDLE)),
+        )
+        // The actors' animation updates (`ProcessLists::RunActorAnimationUpdates`,
+        // `0096cca0`, a lead: each processed actor's slot +0x268), the
+        // threads' work before anyone moves: the idles scripts and lines
+        // asked for, the head tracking, then each actor's animations run on
+        // and their joints posed (and the dead's ragdolls, whose exe pass,
+        // `0096cb50`, comes after the actor updates). At the call but outside
+        // its gate: `animate_actors` and the AI hold still in menu mode
+        // themselves, except the dialogue menu's speaker, who turns to face
+        // the player (the exe runs no AI threads in menu mode; how its
+        // dialogue menu moves the speaker isn't traced).
+        .add_systems(
+            Update,
+            (
+                look::set_up,
+                sitting::idle_requests,
+                look::follow_player,
+                actors::script_idles,
+                actors::animate_actors,
+            )
+                // Kept: the viewer's order among them.
                 .chain()
-                .in_set(FrameSet::Stage(Stage::AiStart)),
+                .in_set(FrameSet::Stage(Stage::AiStart))
+                .after(frame_order::AiSet::Call(
+                    frame_order::ACTOR_ANIMATION_UPDATES,
+                ))
+                .before(frame_order::AiSet::next(
+                    frame_order::ACTOR_ANIMATION_UPDATES,
+                )),
         )
         // People redrawn where what they wear or hold changed, once posed
         // (their new face pieces then get their faces).
@@ -760,10 +803,13 @@ fn main() {
         .add_systems(
             Update,
             dress::redress
-                // Kept: after the pose, before the faces (as above).
+                // Kept: after the pose, before the faces.
                 .after(actors::animate_actors)
                 .before(faces::start_lines)
-                .in_set(FrameSet::Stage(Stage::AiStart)),
+                .in_set(FrameSet::Stage(Stage::AiStart))
+                .before(frame_order::AiSet::next(
+                    frame_order::ACTOR_ANIMATION_UPDATES,
+                )),
         )
         // Faces: lines' lip sync and blinking, once lines have started and
         // the bones have moved.
@@ -774,18 +820,64 @@ fn main() {
                 faces::release_voices,
                 faces::animate_faces,
                 // The dialogue menu's view on the speaker, once their head
-                // has moved.
+                // has moved (the menu's update, `00762950`, is the
+                // interface's; kept with the head).
                 dialogue::focus_camera,
             )
                 .chain()
                 // Kept: the faces move with the posed heads.
                 .after(actors::animate_actors)
+                .in_set(FrameSet::Stage(Stage::AiStart))
+                .before(frame_order::AiSet::next(
+                    frame_order::ACTOR_ANIMATION_UPDATES,
+                )),
+        )
+        // Models' own animations (a ceiling fan's blades, the doors' leaves,
+        // a script's `PlayGroup`): the cells' animations, `TES::RunAnimations`
+        // (`00455640`, on the AI thread with threads > 1), under its gate: they
+        // hold still in menu mode.
+        .add_systems(
+            Update,
+            move_pieces.in_set(frame_order::AiSet::Call(frame_order::RUN_ANIMATIONS)),
+        )
+        // The movement (`ProcessLists::UpdateActorsMovement`, `0096db30`, a
+        // lead): people walk their paths, use furniture, greet and talk
+        // (`move_actors`, which also evaluates their packages, the threads'
+        // `0096bcd0` before it, and puts their 3D where they moved,
+        // `Actor::Update`'s `0088b150` after it; at the call but outside its
+        // gate, as it handles menu mode and the dialogue menu itself).
+        .add_systems(
+            Update,
+            (
+                ai::move_actors
+                    .after(frame_order::AiSet::prev(frame_order::ACTORS_MOVEMENT))
+                    .before(frame_order::AiSet::Call(frame_order::ACTORS_MOVEMENT)),
+                // A diagnostic, after the moves.
+                ai::ground_log.after(ai::move_actors),
+            )
                 .in_set(FrameSet::Stage(Stage::AiStart)),
         )
-        // Models' own animations (a ceiling fan's blades): the cells'
-        // animations (`TES::UpdateCellAnimations`, `00453550`, on the AI
-        // thread).
-        .add_systems(Update, move_pieces.in_set(FrameSet::Stage(Stage::AiStart)))
+        // The process list's projectiles and explosions move in the same pass
+        // (`009bec10`, `009ae580` on its non-actor objects), under its gate:
+        // people's shots once everyone has moved (they hold still in menu
+        // mode).
+        .add_systems(
+            Update,
+            fighting::resolve_shots
+                .after(ai::move_actors)
+                .in_set(frame_order::AiSet::Call(frame_order::ACTORS_MOVEMENT)),
+        )
+        // People out of sight walk on: `Main::PostSwapProcess` (stage 7)
+        // calls `Main::OnIdle_UpdateProcessLists` (`0086f890`), whose
+        // `ProcessLists::UpdateProcessLists` (`0096d810`) moves the lower
+        // process levels (`0096b810`, `0096b470`, `0096b050`, the passes
+        // `move_offstage` follows). In that step, whose own calls aren't
+        // modelled yet (Phase 1 PR 7); `move_offstage` holds still in the
+        // dialogue menu itself.
+        .add_systems(
+            Update,
+            ai::move_offstage.in_set(FrameSet::step(frame_order::POST_SWAP_PROCESS)),
+        )
         // After the frame (`ViewerSet::AfterFrame`): the viewer's tools and
         // output. Billboards turn to the camera once it has moved; the
         // console key's switch between walking and flying takes effect the

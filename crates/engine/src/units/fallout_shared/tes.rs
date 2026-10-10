@@ -12201,4 +12201,68 @@ mod tests {
             .unwrap_or_else(|why| panic!("logging {logging}: {why}"));
         }
     }
+
+    // ---- the AI stage's model (docs/FRAME_SKELETON.md, PR 6) ----
+
+    /// `TES::UpdateCellAnimations` (`00453550`) follows the model: one thread
+    /// and more, indoors and out, in dialogue.
+    #[test]
+    fn update_cell_animations_follows_the_frame_model() {
+        use world::frame::ai_stage::{follows, function, AiState, Callee};
+        let model = function(0x0045_3550).expect("modelled");
+        for threads in [1, 2, 4] {
+            for interior in [false, true] {
+                for dialog in [false, true] {
+                    let (mut e, tes) = frame_engine(threads);
+                    if interior {
+                        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+                    }
+                    if dialog {
+                        returns(&mut e, 0x0070_50d0, 1);
+                    }
+                    let log = run_logged(&mut e, |e| {
+                        e.call(0x0045_3550, &args![tes, 0.5f32]);
+                    });
+                    let s = AiState {
+                        threads,
+                        interior_loaded: interior,
+                        in_dialog: dialog,
+                        ..AiState::default()
+                    };
+                    // `004537c0` is called as a Rust function (its own calls
+                    // are in the log).
+                    follows(
+                        model,
+                        &s,
+                        &model_callees(&log),
+                        &[Callee::Direct(0x0045_37c0)],
+                    )
+                    .unwrap_or_else(|why| panic!("{s:?}: {why}"));
+                }
+            }
+        }
+    }
+
+    /// `TES::UpdateCellMainThread` (`004537c0`) follows the model.
+    #[test]
+    fn update_cell_main_thread_follows_the_frame_model() {
+        use world::frame::ai_stage::{follows, function, AiState};
+        let model = function(0x0045_37c0).expect("modelled");
+        for dialog in [false, true] {
+            let (mut e, tes) = frame_engine(2);
+            returns(&mut e, 0x0096_11e0, 0x9200);
+            if dialog {
+                returns(&mut e, 0x0070_50d0, 1);
+            }
+            let log = run_logged(&mut e, |e| {
+                e.call(0x0045_37c0, &args![tes]);
+            });
+            let s = AiState {
+                in_dialog: dialog,
+                ..AiState::default()
+            };
+            follows(model, &s, &model_callees(&log), &[])
+                .unwrap_or_else(|why| panic!("{s:?}: {why}"));
+        }
+    }
 }

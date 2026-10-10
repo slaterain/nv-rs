@@ -11264,6 +11264,124 @@ mod tests {
         assert!(was_called(&e, ACTOR_TIMED_UPDATE));
     }
 
+    /// `Actor::Update` (`00888b50`) follows `world::frame::ai_stage`'s model
+    /// (docs/FRAME_SKELETON.md, PR 6): a person without and with a
+    /// character controller (in water), a long step, no 3D, the player in
+    /// first person.
+    #[test]
+    fn update_follows_the_frame_model() {
+        use world::frame::ai_stage::{follows, function, AiState, Callee};
+        let model = function(0x0088_8b50).expect("modelled");
+        // The virtual calls the model names, by the slot they go through.
+        let slots = [
+            (ACTOR_TABLE, VSLOT_UPDATE_0X44C),
+            (PROCESS_TABLE, PROCESS_VSLOT_0X5F8),
+            (PROCESS_TABLE, PROCESS_VSLOT_0X704),
+            (PROCESS_TABLE, PROCESS_VSLOT_0X428),
+        ];
+        let callees = |e: &Engine| -> Vec<Callee> {
+            logged(e)
+                .into_iter()
+                .map(|(a, _)| {
+                    slots
+                        .iter()
+                        .find(|&&(t, s)| slot_target(t, s) == a)
+                        .map_or(Callee::Direct(a), |&(_, s)| Callee::Virtual(s))
+                })
+                .collect()
+        };
+        // Called as Rust functions, so not in the log: the power attack flag,
+        // the 3D's placement, the flag byte and the water's depth; and the
+        // placement's own `00440460` (the first-person player's is checked
+        // below).
+        let ignore = [
+            Callee::Direct(0x0088_b070),
+            Callee::Direct(0x0088_b150),
+            Callee::Direct(0x0044_0460),
+            Callee::Direct(0x0088_b020),
+            Callee::Direct(0x0088_5560),
+        ];
+        let prepare = |e: &mut Engine| {
+            for (t, s) in slots {
+                slot(e, t, s, Ret::default());
+            }
+        };
+        let npc = AiState {
+            actor_controller: false,
+            ..AiState::default()
+        };
+        // A person.
+        let mut e = engine2();
+        let actor = update_setup(&mut e);
+        let player = e.mem.u32(PLAYER_CHARACTER);
+        with_process(&mut e, Ptr::new(player));
+        prepare(&mut e);
+        e.call_log = Some(vec![]);
+        actor_update(&mut e, actor, 0.1);
+        follows(model, &npc, &callees(&e), &ignore).expect("a person");
+        // A long step only wakes the process.
+        let long = AiState {
+            actor_long_step: true,
+            ..npc
+        };
+        let mut e = engine2();
+        let actor = update_setup(&mut e);
+        prepare(&mut e);
+        e.call_log = Some(vec![]);
+        actor_update(&mut e, actor, 1000.0);
+        follows(model, &long, &callees(&e), &ignore).expect("a long step");
+        // No 3D: nothing but the reset.
+        let not_ready = AiState {
+            actor_ready: false,
+            ..npc
+        };
+        let mut e = engine2();
+        let actor = actor2(&mut e);
+        let other = actor2(&mut e);
+        set_player(&mut e, other);
+        with_process(&mut e, actor);
+        prepare(&mut e);
+        e.call_log = Some(vec![]);
+        actor_update(&mut e, actor, 0.1);
+        follows(model, &not_ready, &callees(&e), &ignore).expect("no 3D");
+        // The player in first person (+0x64a clear): its 3D put at its
+        // position.
+        let player_state = AiState {
+            actor_is_player: true,
+            ..npc
+        };
+        let mut e = engine2();
+        let actor = update_setup(&mut e);
+        set_player(&mut e, actor);
+        prepare(&mut e);
+        double(&mut e, PLAYER_STATE_TEST, eax(0));
+        e.call_log = Some(vec![]);
+        actor_update(&mut e, actor, 0.1);
+        follows(model, &player_state, &callees(&e), &ignore).expect("the player");
+        assert!(was_called(&e, SET_WORLD_POSITION));
+        // A person with a controller, in deep water.
+        let swimmer = AiState::default();
+        let mut e = engine2();
+        let actor = update_setup(&mut e);
+        let player = e.mem.u32(PLAYER_CHARACTER);
+        with_process(&mut e, Ptr::new(player));
+        prepare(&mut e);
+        let controller = e.mem.alloc(0x600);
+        double(&mut e, GET_CHAR_CONTROLLER, eax(controller));
+        double(&mut e, IS_IN_MENU_MODE, eax(0));
+        e.set_global(WATER_THRESHOLD_A, 1.0f64);
+        e.set_global(WATER_THRESHOLD_B, 2.0f64);
+        e.set_global(WATER_THRESHOLD_C, 3.0f64);
+        slot(&mut e, ACTOR_TABLE, VSLOT_ACTOR_FLAG_0X360, eax(0));
+        slot(&mut e, PROCESS_TABLE, PROCESS_VSLOT_0X300, st0(0.1));
+        slot(&mut e, PROCESS_TABLE, PROCESS_VSLOT_0X2FC, Ret::default());
+        double(&mut e, ACTOR_TEST_0X87F5C0, eax(0));
+        e.call_log = Some(vec![]);
+        actor_update(&mut e, actor, 0.1);
+        follows(model, &swimmer, &callees(&e), &ignore).expect("a swimmer");
+        assert!(was_called(&e, CONTROLLER_SET_TARGET));
+    }
+
     #[test]
     fn character_update_clears_the_dead_flag_and_kicks_the_ragdoll() {
         let mut e = engine2();

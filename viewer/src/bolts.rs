@@ -112,19 +112,34 @@ impl Plugin for BoltsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Bolts>().add_systems(
             Update,
-            // In the AI work (stage 6, `crate::frame_order`), after the
-            // player's attack (stage 2) by the stages' order.
             (
+                // The process list's projectiles move in the actors' movement
+                // pass (`ProcessLists::UpdateActorsMovement`, `0096db30`: its
+                // non-actor objects get `009bec10`, `Projectile`'s slot +0x2f8),
+                // on the AI threads (`crate::frame_order::AiSet`), under its
+                // gate: bolts hold still in menu mode. After the player's attack
+                // (stage 2) by the stages' order.
                 fly_bolts
-                    // Kept: people's shots and the hits' effects are in the
-                    // same stage; the frame doesn't order them yet.
+                    // Kept: after people's shots (same pass), before the hits'
+                    // effects.
                     .after(crate::fighting::resolve_shots)
-                    .before(crate::hiteffects::play_hits),
-                hide_culled_bodies,
-            )
-                .in_set(crate::frame_order::FrameSet::Stage(
-                    world::frame::Stage::AiStart,
-                )),
+                    .before(crate::hiteffects::play_hits)
+                    .in_set(crate::frame_order::AiSet::Call(
+                        crate::frame_order::ACTORS_MOVEMENT,
+                    )),
+                // Placed for order only (its place isn't traced): culled
+                // corpses hidden after the pass, before the next call.
+                hide_culled_bodies
+                    .in_set(crate::frame_order::FrameSet::Stage(
+                        world::frame::Stage::AiStart,
+                    ))
+                    .after(crate::frame_order::AiSet::Call(
+                        crate::frame_order::ACTORS_MOVEMENT,
+                    ))
+                    .before(crate::frame_order::AiSet::next(
+                        crate::frame_order::ACTORS_MOVEMENT,
+                    )),
+            ),
         );
     }
 }

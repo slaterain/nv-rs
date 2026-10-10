@@ -137,21 +137,28 @@ impl Plugin for PipboyPlugin {
                     .before(crate::menus::run_menus)
                     .in_set(crate::frame_order::ViewerSet::Interface),
             )
-            // The Pip-Boy's screen is the interface idle's, which with
-            // threads > 1 runs on the AI thread in stage 6
-            // (`crate::frame_order`): after the scripts (stage 4) and the
-            // first-person model (stage 2) by the stages' order.
+            // The Pip-Boy's screen is the interface idle's
+            // (`Main::OnIdle_DoInterfaceIdle`), the AI threads' first call
+            // with threads > 1 (`crate::frame_order::AiSet`): after the scripts
+            // (stage 4) and the first-person model (stage 2) by the stages'
+            // order. At the call but outside its gate: without AI work (menu
+            // mode, which the Pip-Boy is) the main thread makes the call
+            // instead (frame step 105).
             .add_systems(
                 Update,
                 (
                     // Kept: the light follows the screen's state.
                     pipboy_light.after(update_pipboy),
-                    // Kept: the interface idle comes first on the AI thread
-                    // (`008c7bd0`), before the people are posed.
-                    update_pipboy.before(crate::actors::animate_actors),
+                    update_pipboy,
                 )
                     .in_set(crate::frame_order::FrameSet::Stage(
                         world::frame::Stage::AiStart,
+                    ))
+                    .after(crate::frame_order::AiSet::Call(
+                        crate::frame_order::INTERFACE_IDLE,
+                    ))
+                    .before(crate::frame_order::AiSet::next(
+                        crate::frame_order::INTERFACE_IDLE,
                     )),
             );
     }

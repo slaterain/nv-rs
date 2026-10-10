@@ -8215,6 +8215,67 @@ mod tests {
             }
         }
 
+        /// The calls `0086fc60` makes follow `world::frame::ai_stage`'s model of it for each of its
+        /// tests: the thread count, menu mode with and without the dialogue and fader flags, the
+        /// frozen world (docs/FRAME_SKELETON.md, PR 6).
+        #[test]
+        fn update_animations_and_effects_0086fc60_follows_the_frame_model() {
+            use world::frame::ai_stage::{follows, function, steps_run, AiState, Callee};
+            let model = function(0x0086_fc60).expect("modelled");
+            let game = AiState::default();
+            let menu = AiState {
+                menu_flag: true,
+                in_menu_mode: true,
+                ..game
+            };
+            let mut states = Vec::new();
+            for threads in [1, 2, 4] {
+                for s in [
+                    game,
+                    menu,
+                    AiState {
+                        in_dialog: true,
+                        ..menu
+                    },
+                    AiState {
+                        fader_visible: true,
+                        ..menu
+                    },
+                    AiState {
+                        world_frozen: true,
+                        ..game
+                    },
+                ] {
+                    states.push(AiState { threads, ..s });
+                }
+            }
+            for s in states {
+                let mut e = idle_engine();
+                let main = main_object(&mut e);
+                set_processors(&mut e, s.threads as u32);
+                e.set_global(TES_OBJECT, 0x6100u32);
+                e.set_global(IN_MENU_FLAG, u8::from(s.menu_flag));
+                e.set_global(IN_DIALOG_FLAG, u8::from(s.in_dialog));
+                e.set_global(FADER_ONE_FLAG, u8::from(s.fader_visible));
+                e.mem
+                    .set_u8(main.addr() + MAIN_FREEZE_TIME, u8::from(s.world_frozen));
+                e.call_log = Some(vec![]);
+                e.call(0x0086_fc60, &args![main]);
+                let log: Vec<Callee> = take_log(&mut e)
+                    .into_iter()
+                    .skip(1)
+                    .map(|(a, _)| Callee::Direct(a))
+                    .collect();
+                follows(model, &s, &log, &[]).unwrap_or_else(|why| panic!("{s:?}: {why}"));
+                // Exactly the reached calls (the model has no own tests here).
+                let seen = log
+                    .iter()
+                    .filter(|c| model.steps.iter().any(|st| st.callee == **c))
+                    .count();
+                assert_eq!(seen, steps_run(&s, model).len(), "{s:?}");
+            }
+        }
+
         // ----- 0086fbe0 / 0086fc60 -----------------------------------------------------------
 
         #[test]
