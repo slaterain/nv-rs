@@ -31,15 +31,15 @@ Map provenance:
 | | Functions | Share |
 | --- | ---: | ---: |
 | translated | 9002 | 13.6% |
-| traced | 4427 | 6.7% |
+| traced | 4428 | 6.7% |
 | platform | 3421 | 5.2% |
 | library | 21917 | 33.1% |
-| open | 27492 | 41.5% |
+| open | 27491 | 41.5% |
 | **all** | **66259** | |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 13028 (32.1%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 13029 (32.2%) are translated or traced.
 
-Rust cites 13776 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 13822 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -72,7 +72,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 63 | 0 | 21271 | 0 | - |
 | fallout shared | 10470 | 2065 | 3149 | 6166 | 985 | 0 | 0 | 3319 | 68.3% |
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 77 | 0 | 0 | 6461 | 2.0% |
-| fallout/ai | 4849 | 1475 | 1888 | 1585 | 612 | 0 | 0 | 2652 | 45.3% |
+| fallout/ai | 4849 | 1475 | 1888 | 1585 | 613 | 0 | 0 | 2651 | 45.3% |
 | fallout/interface | 2645 | 991 | 1247 | 503 | 741 | 0 | 0 | 1401 | 47.0% |
 | (unplaced) | 2353 | 470 | 0 | 30 | 382 | 1 | 0 | 1940 | 17.5% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 250 | 178 | 0 | 0 | 1360 | 23.9% |
@@ -130,7 +130,7 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | 1 | 143 | 117 | 93 | 29 | 3 | 0 | 18 |
 | 2 | 1575 | 583 | 969 | 433 | 25 | 4 | 144 |
-| 3 | 4973 | 1303 | 3036 | 1155 | 160 | 26 | 596 |
+| 3 | 4973 | 1303 | 3036 | 1156 | 160 | 26 | 595 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 

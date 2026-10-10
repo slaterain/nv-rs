@@ -61,8 +61,12 @@
 //!
 //! The viewer orders its per-frame systems by these stages and steps and
 //! runs them under these gates (`viewer/src/frame_order.rs`, Phase 1 PR 3).
+//! The player's step, `Main::OnIdle_UpdatePlayer`, is split further in
+//! [`player`] (Phase 1 PR 4).
 
 // Translated from 0086e650 (decompiled, FalloutNV.exe 1.4.0.525)
+
+pub mod player;
 
 /// FRAME_SKELETON.md's stages, for grouping only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -560,7 +564,7 @@ pub const STEPS: [FrameStep; 143] = [
     step(0x004b_7210, None, Stage::FrameStart, Gate::Always, Wiring::Open),
     step(0x0042_4940, None, Stage::FrameStart, Gate::Always, Wiring::Open),
     step(0x0087_82b0, Some("MemoryLevelManager::RunNonDestructiveFree"), Stage::FrameStart, Gate::FreeMemory, Wiring::Open),
-    step(0x0086_f940, Some("Main::OnIdle_UpdatePlayer"), Stage::Player, Gate::Always, Wiring::Open),
+    step(0x0086_f940, Some("Main::OnIdle_UpdatePlayer"), Stage::Player, Gate::Always, Wiring::Partial("world::frame::player (its calls and PlayerCharacter::Update's sub-steps, in order, with their gates; viewer: frame_order::PlayerSet)")),
     step(0x006f_f580, None, Stage::Player, Gate::Always, Wiring::Open),
     step(0x006f_f860, None, Stage::Player, Gate::Always, Wiring::Open),
     step(0x0086_fd90, Some("Main::OnIdle_UpdateImageSpace"), Stage::Player, Gate::Always, Wiring::Open),

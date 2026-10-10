@@ -942,6 +942,50 @@ The maintainer set a one-week fast track (about 1.9 billion tokens).
   with menu mode tested by the player so the interface can move into its
   stage).
 
+### Phase 1 PR 4: the player stage (`claude/phase1-player-stage`, 2026-10-09)
+
+- Evidence: `crates/world/src/frame/player.rs` (`world::frame::player`):
+  `Main::OnIdle_UpdatePlayer` (`0086f940`) as its 30 calls in order (27
+  direct, equal to `frame.tsv`'s depth-2 rows, and three through the
+  player's vtable: the 3D twice, `PlayerCharacter::Update` at slot +0x2f8,
+  `0108ad34`) with 15 gates, and `PlayerCharacter::Update` (`0093e860`) as
+  58 sub-steps (the calls that do the player's work, at their call sites)
+  with 16 gates: V.A.T.S. ended, a forced activation, the fade, knocked
+  down or paralysed, the controlled branch (AI-controlled or dead) and its
+  time-out, the free branch, dialogue, V.A.T.S. ending, a muzzle flash;
+  each gate with its branch addresses, steps whose own block tests more
+  (controls, timers, the weapon) list those branches. In menu mode the
+  player's update doesn't run (only `ForceGrenadeHold`) unless the Pip-Boy
+  is opening; the fly camera (`Main` +6) replaces it.
+  FRAME_SKELETON.md "PR 4 result".
+- Viewer: `frame_order::PlayerSet` (calls and sub-steps as sets under
+  their gates on `ThisPlayer`). Mapped: `fly_camera` (UpdateFlyCamera),
+  `player_attack` (the attack, `00948310`), `walk` (the move, `009ea570`);
+  inside the update's gated call: `scope_sway`, `player_furniture`; at
+  their sub-step but ungated (they work in menus too): `look_around`
+  (UpdateHeadingAndLooking), `player_idle::animate` (the own view's
+  animation update); ungated around the step, with reasons: `view_input`,
+  `give_start_weapon`, the body, and ten systems after it. All 30 calls and
+  58 sub-steps stay open (none is a world system).
+- Tests: `world::frame::player` 16 (order against `frame.tsv`, a test per
+  gate); engine (new dev-dependency on `world`): the translations of
+  `0086f940` (16 input combinations, exact call list) and `0093e860` (13,
+  every reached step called in order) follow the model; viewer: player
+  sets in the exe's order, menu mode and the fly camera stop their sets,
+  the fixed inputs.
+- Behaviour: in menu mode (menus, Pip-Boy, dialogue, V.A.T.S.'s menu,
+  message boxes) walking, attacks, the scope's sway and the furniture stop
+  (the player no longer falls while a menu is up; `player_attack`'s HUD
+  line and timers wait); the attack runs before the move; flying, the move
+  follows the mouse a frame later.
+- Files: `crates/world/src/frame/player.rs` (new),
+  `crates/world/src/frame.rs`, `crates/engine/Cargo.toml`,
+  `crates/engine/src/units/fallout_misc/main.rs` and
+  `fallout_ai/playercharacter.rs` (tests only), `viewer/src/frame_order.rs`,
+  `viewer/src/main.rs`, `docs/FRAME_SKELETON.md`, `docs/LEDGER.md`
+  (generated).
+- Next action: PR 5 (the world and time stage).
+
 ## Deferred
 
 Cosmetic material/lighting discrepancies, isolated facial polish, sun glare,

@@ -1,7 +1,7 @@
 # Phase 1: the frame skeleton (proposal)
 
 Drafted 2026-10-09 at the end of Phase 0 ([ENGINE_PORT_PLAN.md](ENGINE_PORT_PLAN.md),
-[LEDGER.md](LEDGER.md)); PR 1 (the frame map), PR 2 (`world::frame`) and PR 3 (the viewer's order) done 2026-10-09, the rest is
+[LEDGER.md](LEDGER.md)); PR 1 (the frame map), PR 2 (`world::frame`), PR 3 (the viewer's order) and PR 4 (the player stage) done 2026-10-09, the rest is
 not implemented yet. Names are from the Xbox 360 prototype (Xbox PDB,
 ADR-0002), PC addresses from `research/engine-map/engine_map.tsv` and
 `research/engine-map/frame.tsv`.
@@ -471,6 +471,156 @@ inputs. `world::frame` gained `stages`, `stage_reached`, `step_runs` and
 vms16 pass; on `main` before the change vcg02 missed "XP +50" in one run
 while doc and vms16 passed, so no route got worse.
 
+## PR 4 result: the player stage
+
+`crates/world/src/frame/player.rs` (`world::frame::player`, 2026-10-09)
+models the player's step, `Main::OnIdle_UpdatePlayer` (`0086f940`, step 14),
+and `PlayerCharacter::Update` (`0093e860`), which it calls through slot
++0x2f8 of the player's vtable (`0108aa3c`, written by `PlayerCharacter`'s
+constructor at `009381c6`; the slot at `0108ad34` holds `0093e860`), the way
+`world::frame` models `Main::OnIdle`: calls in the exe's order, each with a
+gate read from the branches, with their addresses, and the viewer's sets in
+that order (`frame_order::PlayerSet`). The disassembly of both functions
+agrees with the engine's translations (`fallout_misc/main.rs`,
+`fallout_ai/playercharacter.rs`) on every branch named here.
+
+### `Main::OnIdle_UpdatePlayer`
+
+All 30 calls (`UPDATE_PLAYER`): the 27 direct ones, which are `frame.tsv`'s
+depth-2 rows under it (a test compares them), and three through the
+player's vtable (+0x1d0, the player's 3D `00950b60`, twice; +0x2f8, the
+update). In order, with their gates:
+
+| Calls | Gate (branches) |
+| --- | --- |
+| `PlayerCharacter::HandlePositionPlayerRequest` `0093bea0` | none; a request carried out (a door, `MoveTo`, fast travel) returns (`0086f959`) |
+| `Interface::IsPipboyOpening` `00709bc0` | menu mode, `[011dea2b]` as the frame's first read left it (`0086f968`) |
+| `PlayerCharacter::ForceGrenadeHold` `009481d0` | menu mode and the Pip-Boy not opening (`0086f974`); returns. Its body holds a grenade throw's animation (anim action 5) in place |
+| the 3D (+0x1d0), the frame time (`0084d030`), `PlayerCharacter::UpdateFlyCamera` `009466d0` (with `Main` +7, the frozen world) | the fly camera, `Main` +6 (`0086f98f`; toggled by `TFC`, `00961e30`); the update with the 3D (`0086f9a9`); returns |
+| the 3D, the frame time, `VATS::GetPlayerUpdateMult` `009c8cc0`, **`PlayerCharacter::Update`** (+0x2f8) with their product | not the above; the 3D exists (`0086f9e9`) |
+| `008d6f30` (the parent cell), `00436aa0` (the position) | not the above (also without the 3D) |
+| `00425fd0` (interior), `00550200` (the position in the cell's square) | a cell (`0086fa72`); an exterior (`0086fa85`) |
+| `TESObjectCELL::GetWorldSpace`, `TESDataHandler::GetCellFromWorldCoord` | the player left its cell's square (`0086fa9c`) |
+| `00450fb0`, `00450ff0` (the grid cell's state 3, 6), `TES::UpdateCurrentGridCell`, `00451530`, `TES::ShowLoadingMenu` | the cell under it found (`0086facd`); `00450ff0` when not 3 (`0086fae0`); the tracker moved when neither (`0086faef`); the loading menu with the cell tests (`0086fb12`) |
+| `0086fba0`, `0086fbc0`, `TESObjectCELL::AddReference`, `TESObjectCELL::GetAcousticSpace`, `0086fbb0`, `0086fbc0`, `0086fba0`, `BSShaderManager::GetAccumulator`, `BSShaderAccumulator::ClearAllBoundVolumes` | the cell found; the last with an accumulator (`0086fb81`) |
+
+So the player's update stops in menu mode (only the grenade hold runs)
+unless the Pip-Boy is opening, and the fly camera replaces it.
+
+### `PlayerCharacter::Update`
+
+58 sub-steps (`UPDATE`): not each of its 886 call instructions (most are
+queries: the controls' states `00a24660`, settings, getters, vector
+arithmetic, sound handles) but the calls that do the player's work, each at
+its call sites. Its paths: the bookkeeping first; a forced activation
+(`00944320`) ends it; the player's fade (`HighProcess::FadeUpdate`)
+refreshes both views and ends it; an AI-controlled (`0093a740`:
+`bAiControlledToPos`/`FromPos`/`Activate`/`Package`) or dead (slot +0x22c:
+the life state, `004f8960`, 1, 2 or 6) player takes the controlled branch
+and ends there; everyone else the free branch (`009408e4`). A step may also
+depend on its own block's tests (a control pressed, a timer, the weapon's
+state): those branches are listed with it (`own_tests`), not modelled.
+
+| # | Sub-steps (call sites) | Gate (branches) |
+| --- | --- | --- |
+| 1 | `PlayerCharacter::SetFirstPerson` (`0093e8df`/`0093e8ee`) | V.A.T.S. ended, `[011f21d0]` (`0093e8ca`) |
+| 2-5 | `HUDMainMenu::SetTargetType` (`0093edba`); with own tests `UpdateHardcoreMode` (`0093f374`), `ProcessLists::SortActorsCloseToPlayer` (`0093f5dc`), `ReturnToLastKnownGoodPosition` (`0093f62a`) | none |
+| 6-7 | `TESObjectREFR::Activate` (`0093f64f`), `00519020` | a forced activation (`0093f639`); ends |
+| 8-9 | `bhkRagdollPenetrationUtil::Update` (`0093f8c2`), **`PlayerCharacter::UpdateHeadingAndLooking`** (`0093f8d9`) | no forced activation |
+| 10 | `HighProcess::FadeUpdate` (`0093f927`) | asked unless the view key's flags (`[011e07b8]`, `[011e07c1]`) are set and the process's slot +0x610 answers 0 (`0093f8f2`, `0093f8fd`, `0093f917`) |
+| 11-16 | `ForceGrenadeHold`, the two views' animation updates (`008d3550`, `Actor::UpdateAnimationMovement`, twice), `PlayerCharacter::UpdateCamera` (`0093fa08`) | it answered true (`0093f931`); ends |
+| 17-18 | `VATS::QuitVATSPlayback` (`0093fba7`), `ForceTemp3rdPerson` (`0093fbd3`) | knocked down (the process's slot +0x40c) or paralysed (slot +0x234) (`0093fb85`, `0093fb9c`); the second in first person (`0093fbcc`) |
+| 19 | `Actor::GetOutofFurnitureQuick` (`0093fd3f`) | controlled (`0093fbe5`, `0093fbfe`) with the AI-control counter past its limit (`0093fc6a`, `0093fc82`, `0093fc97`); ends |
+| 20-31 | `00886360` (own test `0093fe99`), the mover's move vector `009ea570`, `Actor::PickAnimations`, the two views' animations, `UpdateCamera`, `0054a070`, `ShadowSceneNode::UpdateObjectLighting`; `Actor::UpdateMagic` and the Activate control's `Activate` (own tests) when not dead (`009403d9`, `009403f4`) | controlled, no time-out; ends at `009408c2` |
+| 32-35 | `PlayerCharacter::UpdateMenuModeButton` (`00940c78`), `HavokActivateDroppedReference`, `UpdateTemp3rdPerson`, `UpdateTemp1stPerson` | the free branch |
+| 36 | **the attack** `00948310` (`009420fc`; own tests: dead, paralysed, the anim action, the grab type, the process's slot +0x3f8, the weapon flag 0x800) | free |
+| 37 | `Actor::PickAnimations` (`009426ae`) | free |
+| 38 | **the move**: the mover's move vector `009ea570` (`0094280b`), which its slot +0x14 then moves by | free |
+| 39 | `PlayerCharacter::CheckBorderRegion` (`00942835`) | free |
+| 40-42 | with own tests: the Toggle POV control's `SetFirstPerson` (`00942cc0`/`00942dc9`), the Activate control's `Activate` (`00943250`, `0094328e`, `00943348`), vanity mode's `ForceTemp3rdPerson` (`0094360e`) | free |
+| 43-44 | the grab controls `0095f6c0` (`0094363c`), `Actor::UpdateMagic` (`0094371b`; the same life-state tests, `009436fb`, `00943712`) | free |
+| 45 | the fields of view `0095de30` (`0094375e`) | free, not in dialogue (`00943752`) |
+| 46-50 | the two views' animations (`00943787`..`00943806`: the view the player isn't in first, its own second), the process's pending animation flags `008ba600` (`0094380e`) | free |
+| 51 | `PlayerCharacter::UpdateCamera` (`00943825`) | free, `[011f21d0]` not set again (`0094381c`) |
+| 52-56 | `0054a070`, `UpdateObjectLighting`, `MuzzleFlash::Update` (with a muzzle flash, `0094387d`), `00555c20`, `CharacterProgression::BeginLevelUp` (own tests) | free |
+| 57-58 | `PlayerCharacter::UpdatePlayerCombat` (`00943a7e`), `PlayerCharacter::UpdateAutoAimActor` (`009440a6`) | free |
+
+Names are the engine map's; those it pairs by alignment only
+(`ForceGrenadeHold`, `UpdateFlyCamera`, `UpdateHeadingAndLooking`) are
+leads (`ForceGrenadeHold`'s body fits its name).
+
+### Tests
+
+`world::frame::player` (16): the direct calls equal `frame.tsv`; call
+sites in order; every gate names branches inside its function; slot +0x2f8
+is the update; one test per gate. The engine crate (a new dev-dependency on
+`world`) drives the translations: `0086f940` under 16 input combinations
+(each gate of the first table) logs exactly the calls `calls_run`
+predicts, in order (the translation calls the small setters
+`0086fba0`/`0086fbb0`/`0086fbc0` as Rust functions, so they aren't in its
+log); `0093e860` under 13 (game mode, V.A.T.S. ended, a forced activation,
+fading, the fade test skipped, knocked down in first and in third person,
+AI-controlled, timed out, dead, dialogue, V.A.T.S. ending, a muzzle flash)
+calls every reached sub-step without own tests, in order, and no listed
+function outside that order; two own-test steps call once their tests
+pass.
+
+### The viewer
+
+`viewer/src/frame_order.rs`: `PlayerSet::Call(i)` for each call of
+`0086f940`, inside step 14's set, and `PlayerSet::Update(i)` for each
+sub-step, inside the call of the update, each chained in call order and
+run under its gate on `ThisPlayer`, which `begin_frame` fills with
+`ThisFrame`: menu mode and the Pip-Boy's opening from the frame, the fly
+camera from the viewer's free camera (`walk::Player::walking` off; it is
+`TFC` without an argument: the world runs), dialogue from the dialogue
+menu, the rest fixed (no position request, the 3D there, not
+AI-controlled, not dead, not knocked down, no fade).
+
+Where the stage's 20 systems went (checked by reading each):
+
+| System | Place |
+| --- | --- |
+| `fly_camera` | in `UpdateFlyCamera`'s set (call 6): runs only flying, outside menu mode |
+| `combat::player_attack` | in the attack's set (sub-step 36) |
+| `walk::walk` | in the move's set (sub-step 38) |
+| `scope::scope_sway` | inside the update's call, ahead of the look (its place isn't traced) |
+| `sitting::player_furniture` | inside the update's call, right after the move (the exe's seated player is on the controlled branch, which isn't modelled) |
+| `look_around` | at `UpdateHeadingAndLooking` (after sub-step 9, before 10), outside its gate: it also turns the camera to the view angles, which V.A.T.S.'s menu turns, and is the free camera's look |
+| `player_idle::animate` | at the own view's animation update (after sub-step 49, before 50), outside its gate: it takes idle requests in menus too |
+| `player_camera::view_input` | in step 14 ahead of its calls, ungated: its exe parts (the Toggle POV control, the temporary views, vanity mode, the knocked-down third person) come after the look, but the look reads its `mouse_taken` in the same frame, and it takes the Pip-Boy's and the dialogue's views, which are menu mode |
+| `viewmodel::give_start_weapon` | ahead of step 14 (the viewer's `--weapon`) |
+| `player_body::update_player_body` | after the furniture, ungated (it builds the third-person body, in menus too) |
+| `object_shots`, `report_facing_up`, `swap_textures`, `show_dropped_weapons`, `update_scope`, `update_view_model`, `apply_shot_camera`, `crosshair::pick`, `dialogue::talk`, `chatter::say_lines` | after step 14, in the viewer's order: not the player's update (their place isn't traced), the HUD's and the renderer's work that goes on in menus, V.A.T.S.'s shot camera last, the crosshair and E on people |
+
+In gated sets: 5 (`fly_camera`, `player_attack` and `walk` in their
+sub-steps' sets, `scope_sway` and `player_furniture` in the update's
+call). At their sub-step without its gate: 2 (`look_around`,
+`player_idle::animate`). `world::frame::player` records the four mapped
+ones as `Partial` wiring. Every call and sub-step stays open: none is a
+world system yet.
+
+### Behaviour differences
+
+- In menu mode (the game's menus, the Pip-Boy, the dialogue menu,
+  V.A.T.S.'s menu, a message box) walking, attacks, the scope's sway and the
+  furniture stop, as the exe's player update does: the player no longer
+  falls or slides while a menu is up, and `player_attack`'s HUD line, its
+  counter-attack and Ammo Swap timers and its death countdown wait for the
+  menu to close (they were updated every frame).
+- The attack now runs before the move, the furniture and the first-person
+  camera tracks (the exe's order, `009420fc` before `0094280b`): an attack
+  aims from where the view was at the start of the frame. Sneak and Aim
+  pressed in the same frame now leave the sights down (the viewer's sneak
+  toggle is in `walk`; the exe's crouch block, `00940d5b`, comes before
+  the aim).
+- Flying, the free camera moves before the mouse look (`UpdateFlyCamera` is
+  call 6, the look sits at the update's place): the move's direction
+  follows the mouse a frame later.
+- The menus (`ViewerSet::Interface`) stay ahead of the stages: the ungated
+  player systems (`view_input`, the look) still read Bevy's input that the
+  menus clear. That moves with PR 7.
+
 ## PR sequence
 
 Each PR names one next action, regenerates the ledger and passes the
@@ -500,7 +650,8 @@ acceptance routes, as in B1.
    bug was fixed by it: the menus stay ahead of the player, see there).
 4. **Player stage.** `Main::OnIdle_UpdatePlayer` (`0086f940`) and the call
    order inside `PlayerCharacter::Update` (`0093e860`, 22.6 KB, the largest
-   game function on this path): order only, calling our systems.
+   game function on this path): order only, calling our systems. *Done*:
+   "PR 4 result" above.
 5. **World and time stage.** `TES::TestAllCells`, `Calendar::Update`,
    `Main::OnIdle_UpdateCurrentGridCell` (cell attach and detach), the
    process-level temp lists, `GarbageCollector::Update`.

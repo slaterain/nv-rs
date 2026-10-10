@@ -94,7 +94,7 @@ use bevy::render::view::screenshot::{save_to_disk, Screenshot, ScreenshotCapture
 use bevy::window::{CursorGrabMode, WindowResolution};
 use cellview::{space, Blend, Game, GpuFormat, TextureData, ViewerScene};
 use exterior::{ExteriorStart, PendingExterior};
-use frame_order::{FrameSet, ViewerSet};
+use frame_order::{FrameSet, PlayerSet, ViewerSet};
 use grade::{GradePlugin, ImageSpaceGrade};
 use lighting::{
     DrawKey, GameLight, GameLighting, GameLightingPlugin, GameLit, GameLitMaterial, MAX_LIGHTS,
@@ -514,56 +514,110 @@ fn main() {
                 .chain()
                 .in_set(ViewerSet::Interface),
         )
-        // Stage 2, the player (`Main::OnIdle_UpdatePlayer`, `0086f940`): the
-        // view, walking, furniture, the player's idles, attacks and the
-        // first-person model; the crosshair's pick and E on people.
+        // Stage 2, the player (`Main::OnIdle_UpdatePlayer`, `0086f940`, step
+        // 14): its calls and `PlayerCharacter::Update`'s sub-steps are sets
+        // (`frame_order::PlayerSet`, `world::frame::player`,
+        // docs/FRAME_SKELETON.md "PR 4 result"), in the exe's order under
+        // their gates: in menu mode only the grenade hold, with the fly
+        // camera only its update, else the player's update.
+        //
+        // Ahead of the step: the viewer's `--weapon`, given once the place
+        // is ready (not the game's).
         .add_systems(
             Update,
-            (
-                scope::scope_sway,
-                look_around,
-                fly_camera,
-                (
-                    viewmodel::give_start_weapon,
-                    walk::walk,
-                    // The player in furniture: on the seat, turned with it.
-                    sitting::player_furniture,
-                    // Apply queued camera tracks before aiming/interactions.
-                    player_idle::animate,
-                    combat::player_attack,
-                    combat::object_shots,
-                    actors::report_facing_up,
-                    swaps::swap_textures,
-                    combat::show_dropped_weapons,
-                    scope::update_scope,
-                    viewmodel::update_view_model,
-                    // A V.A.T.S. camera shot takes the view last.
-                    vats::apply_shot_camera,
-                )
-                    .chain(),
-                // What the crosshair is on, for everything E and the HUD do.
-                (crosshair::pick, dialogue::talk, chatter::say_lines).chain(),
-            )
-                // Kept: the order inside `PlayerCharacter::Update`
-                // (`0093e860`) is Phase 1 PR 4; until then the viewer's (the
-                // scope's sway before the mouse look writes the turn, the
-                // view placed before what aims from it). Objects' shots, the
-                // spine's facing, texture swaps, dropped weapons and people's
-                // lines aren't the player's; their place in the frame isn't
-                // traced and they keep theirs in this chain.
-                .chain()
-                .in_set(FrameSet::Stage(Stage::Player)),
+            viewmodel::give_start_weapon
+                .in_set(FrameSet::Stage(Stage::Player))
+                .before(FrameSet::step(frame_order::UPDATE_PLAYER_STEP)),
         )
         .add_systems(
             Update,
             (
-                // Kept: the view key and the third-person view's input
-                // before the mouse look uses the view.
-                player_camera::view_input.before(look_around),
-                // Kept: the body follows the seat the player took.
-                player_body::update_player_body.after(sitting::player_furniture),
-            )
+                // The view key, the wheel, the third-person view and
+                // vanity mode; the Pip-Boy's and the dialogue's views. Its
+                // exe parts are on the free branch (the Toggle POV control
+                // at `00942c48`, `UpdateTemp3rdPerson`/`1stPerson`, the
+                // vanity orbit at `00943487`) and the knocked-down
+                // `ForceTemp3rdPerson` (`0093fbd3`), all after the look;
+                // kept ahead of the step and outside its gates: the mouse
+                // look reads its `mouse_taken` in the same frame (the exe's
+                // look runs before the view key's block, which reads the
+                // flags the previous frame left, `0093f8e9`), and it also
+                // takes the Pip-Boy's and the dialogue's views, which are
+                // menu mode here.
+                player_camera::view_input
+                    .in_set(FrameSet::step(frame_order::UPDATE_PLAYER_STEP))
+                    .before(PlayerSet::Call(0)),
+                // The free camera (` key): `PlayerCharacter::UpdateFlyCamera`
+                // in place of the player's update.
+                fly_camera.in_set(PlayerSet::call(frame_order::UPDATE_FLY_CAMERA)),
+                // The scope's sway on the view, inside the player's update
+                // ahead of the look (its place in the exe isn't traced).
+                scope::scope_sway
+                    .in_set(PlayerSet::update())
+                    .before(PlayerSet::at(frame_order::HEADING_AND_LOOKING_AT)),
+                // The mouse look, at `PlayerCharacter::UpdateHeadingAndLooking`
+                // but outside its gate: it also turns the camera to the view
+                // angles every frame, which V.A.T.S.'s menu turns, and is the
+                // free camera's look while flying.
+                look_around
+                    .in_set(FrameSet::step(frame_order::UPDATE_PLAYER_STEP))
+                    .after(PlayerSet::at(frame_order::HEADING_AND_LOOKING_AT))
+                    .before(PlayerSet::after(frame_order::HEADING_AND_LOOKING_AT)),
+                // Attacks (`00948310`, with the Aim and Ammo Swap controls
+                // read before it on the free branch).
+                combat::player_attack.in_set(PlayerSet::at(frame_order::ATTACK_AT)),
+                // Walking: the move (`009ea570` and the mover's slot +0x14).
+                walk::walk.in_set(PlayerSet::at(frame_order::MOVE_AT)),
+                // The player in furniture: on the seat, turned with it, after
+                // the move and before the camera tracks (the exe's seated
+                // player is on the controlled branch, `0094076c`..`009407c8`,
+                // which the viewer doesn't model).
+                sitting::player_furniture
+                    .in_set(PlayerSet::update())
+                    .after(PlayerSet::at(frame_order::MOVE_AT))
+                    .before(PlayerSet::after(frame_order::MOVE_AT)),
+                // The first-person view's camera tracks, at its animation
+                // update but outside its gate: it takes idle requests in
+                // menus too.
+                player_idle::animate
+                    .in_set(FrameSet::step(frame_order::UPDATE_PLAYER_STEP))
+                    .after(PlayerSet::at(frame_order::OWN_VIEW_ANIMATION_AT))
+                    .before(PlayerSet::after(frame_order::OWN_VIEW_ANIMATION_AT)),
+            ),
+        )
+        // Kept: the body follows the seat the player took (not a sub-step:
+        // it builds and places the third-person body, in menus too).
+        .add_systems(
+            Update,
+            player_body::update_player_body
+                .after(sitting::player_furniture)
                 .in_set(FrameSet::Stage(Stage::Player)),
+        )
+        // After the player's step: what isn't the player's update (objects'
+        // shots, the spine's facing, texture swaps, dropped weapons, people's
+        // lines: their place in the frame isn't traced), the scope's overlay
+        // and the first-person model (the HUD's and the renderer's work,
+        // which goes on in menus), a V.A.T.S. camera shot taking the view
+        // last, and what the crosshair is on, for everything E and the HUD
+        // do.
+        .add_systems(
+            Update,
+            (
+                combat::object_shots,
+                actors::report_facing_up,
+                swaps::swap_textures,
+                combat::show_dropped_weapons,
+                scope::update_scope,
+                viewmodel::update_view_model,
+                vats::apply_shot_camera,
+                crosshair::pick,
+                dialogue::talk,
+                chatter::say_lines,
+            )
+                // Kept: the viewer's order among them.
+                .chain()
+                .in_set(FrameSet::Stage(Stage::Player))
+                .after(FrameSet::step(frame_order::UPDATE_PLAYER_STEP)),
         )
         // Stage 3, housekeeping: the cell's grade (G, for comparing), the
         // menus' background (step 44, `Main::OnIdle_HandleMenuBackground`,

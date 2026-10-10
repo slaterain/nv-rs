@@ -18817,4 +18817,153 @@ mod tests {
         // Parts 1 and 2: (1 + 3) / 2 = 2 on x.
         assert_eq!(read_floats(&e, LOOK_CENTER), [2.0, 0.0, 0.0]);
     }
+
+    /// A double that answers 1, put in a vtable slot by the order test.
+    const ANSWERS_ONE: u32 = 0x00b1_0000;
+
+    /// `Update` in [`update_world`] with the inputs of
+    /// `world::frame::player::PlayerState` set through its globals, fields
+    /// and doubles: the calls it makes, in order.
+    fn update_calls(s: &world::frame::player::PlayerState) -> Vec<u32> {
+        let mut e = engine();
+        let this = update_world(&mut e);
+        e.register(ANSWERS_ONE, |_, _| int(1));
+        let answer = |e: &mut Engine, table: u32, slot: u32| {
+            e.mem.set_u32(table + slot, ANSWERS_ONE);
+        };
+        e.set_global::<u8>(VATS_ENDED_FLAG, s.vats_ended.into());
+        if s.forced_activation {
+            e.register(0x0094_4320, |_, _| int(0x4455));
+        }
+        e.set_global::<u8>(STATE_FLAG_011E07B8, s.fade_test_skipped.into());
+        if s.fading {
+            e.register(0x008f_ec10, |_, _| int(1));
+        }
+        if s.knocked_or_paralysed {
+            answer(&mut e, 0x0201_0000, 0x234);
+        }
+        e.set(this, PlayerCharacter::b3rdPerson, s.third_person);
+        e.set(this, PlayerCharacter::bAiControlledFromPos, s.ai_controlled);
+        if s.dead {
+            answer(&mut e, 0x0201_0000, 0x22c);
+        }
+        if s.control_time_out {
+            e.set_global(CONTROL_COUNTER_011E0798, 1.0f32);
+        }
+        if s.in_dialogue {
+            e.register(0x0070_50d0, |_, _| int(1));
+        }
+        if s.vats_ending {
+            // The flag set again just before the camera's test (`0094381c`).
+            e.register(0x008b_a600, |e, _| {
+                e.set_global::<u8>(VATS_ENDED_FLAG, 1);
+                Ret::default()
+            });
+        }
+        if s.muzzle_flash {
+            answer(&mut e, 0x0202_0000, 0x6b8);
+        }
+        e.call_log = Some(vec![]);
+        player_character_update(&mut e, this, 0.5);
+        call_addresses(&e)
+    }
+
+    /// The calls `Update` makes follow `world::frame::player::UPDATE` for
+    /// each of its gates: every step the gates let through is called, in
+    /// order, except where its own tests (not modelled) keep it from
+    /// calling, and nothing else of the list is (docs/FRAME_SKELETON.md,
+    /// PR 4).
+    #[test]
+    fn update_follows_the_frame_model() {
+        use world::frame::player::{steps_run, PlayerState, UPDATE};
+        let game = PlayerState::default();
+        let ai = PlayerState {
+            ai_controlled: true,
+            ..game
+        };
+        let knocked = PlayerState {
+            knocked_or_paralysed: true,
+            ..game
+        };
+        let states = [
+            game,
+            PlayerState {
+                vats_ended: true,
+                ..game
+            },
+            PlayerState {
+                forced_activation: true,
+                ..game
+            },
+            PlayerState {
+                fading: true,
+                ..game
+            },
+            PlayerState {
+                fading: true,
+                fade_test_skipped: true,
+                ..game
+            },
+            knocked,
+            PlayerState {
+                third_person: true,
+                ..knocked
+            },
+            ai,
+            PlayerState {
+                control_time_out: true,
+                ..ai
+            },
+            PlayerState { dead: true, ..game },
+            PlayerState {
+                in_dialogue: true,
+                ..game
+            },
+            PlayerState {
+                vats_ending: true,
+                ..game
+            },
+            PlayerState {
+                muzzle_flash: true,
+                ..game
+            },
+        ];
+        let listed: Vec<u32> = UPDATE.iter().map(|s| s.address).collect();
+        for s in states {
+            let calls: Vec<u32> = update_calls(&s)
+                .into_iter()
+                .filter(|a| listed.contains(a))
+                .collect();
+            let mut next = calls.iter().peekable();
+            for i in steps_run(&s) {
+                let step = &UPDATE[i];
+                if next.peek() == Some(&&step.address) {
+                    next.next();
+                } else {
+                    assert!(
+                        !step.own_tests.is_empty(),
+                        "{s:?}: step {i} ({:08x} at {:08x}) not called; then {:08x?}",
+                        step.address,
+                        step.sites[0],
+                        next.clone().collect::<Vec<_>>()
+                    );
+                }
+            }
+            assert_eq!(next.next(), None, "{s:?}: called beyond the model");
+        }
+    }
+
+    /// Steps with own tests do call once those pass: the hardcore update
+    /// (`004d1360`, `0093f36f`) and the return to the last good position
+    /// (`0093f619`).
+    #[test]
+    fn update_steps_with_own_tests_call_when_they_pass() {
+        let mut e = engine();
+        let this = update_world(&mut e);
+        e.register(0x004d_1360, |_, _| int(1));
+        e.set(this, PlayerCharacter::bReturnToLastKnownGoodPosition, true);
+        player_character_update(&mut e, this, 0.5);
+        assert_eq!(called(&e, 0x0096_9c30).len(), 1);
+        assert_eq!(called(&e, 0x0094_dbe0), vec![vec![this.addr(), 1]]);
+    }
 }

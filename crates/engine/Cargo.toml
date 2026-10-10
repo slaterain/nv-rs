@@ -7,3 +7,8 @@ rust-version.workspace = true
 description = "FalloutNV.exe translated function by function into Rust, on a model of the game's memory (ADR-0006)"
 
 [dependencies]
+
+[dev-dependencies]
+# The frame's player stage (`world::frame::player`), which the tests of
+# `0086f940` and `0093e860` compare their call order with.
+world = { path = "../world" }

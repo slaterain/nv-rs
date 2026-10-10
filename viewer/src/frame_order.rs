@@ -14,8 +14,14 @@
 //!
 //! Two sets run ahead of the stages and one after them
 //! ([`ViewerSet`]); see there for what they hold and why.
+//!
+//! The player's step (`Main::OnIdle_UpdatePlayer`, step 14) is split
+//! further into its calls and `PlayerCharacter::Update`'s sub-steps
+//! ([`PlayerSet`], `world::frame::player`, docs/FRAME_SKELETON.md "PR 4
+//! result"), under their gates on [`ThisPlayer`].
 
 use bevy::prelude::*;
+use world::frame::player::{self, PlayerState, UPDATE, UPDATE_PLAYER};
 use world::frame::{self, FrameState, Stage, STEPS};
 
 /// The game's frame as system sets.
@@ -59,9 +65,11 @@ pub enum ViewerSet {
     /// with one thread or on the AI thread in stage 6; the player's update
     /// (stage 2) reads the controls `Main::OnIdle_PollControls` polled in the
     /// previous frame (step 33), after that frame's interface idle, so there
-    /// too the interface meets the input before the player does. It moves
-    /// into its stage once the player's update tests menu mode itself
-    /// (Phase 1 PR 4 and PR 7).
+    /// too the interface meets the input before the player does. The
+    /// player's update now stops in menu mode ([`PlayerSet`], PR 4), but
+    /// the player systems ordered outside its gates (`view_input`, the
+    /// mouse look) still read the input the menus clear, so it stays here
+    /// until PR 7.
     Interface,
     /// Last: what is not in `Main::OnIdle`, the viewer's own tools
     /// (screenshots, help, the cursor, exposure, the F12 report, the frame
@@ -73,9 +81,102 @@ pub enum ViewerSet {
     AfterFrame,
 }
 
+/// The player stage as system sets (`world::frame::player`, Phase 1 PR 4):
+/// inside step 14's set (`Main::OnIdle_UpdatePlayer`, `0086f940`) each of
+/// its calls in call order, and inside the call of
+/// `PlayerCharacter::Update` (slot +0x2f8) each of that function's
+/// sub-steps in call order; each under its gate on [`ThisPlayer`].
+///
+/// A player system that is (part of) a sub-step goes in the sub-step's set.
+/// One that belongs at a sub-step but also does work while that sub-step's
+/// gate is closed (in menu mode, in V.A.T.S.'s menu) is ordered at the
+/// sub-step from outside its set, so that it keeps running: see where each
+/// is added in `main.rs`.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PlayerSet {
+    /// A call of `0086f940` (an index into `world::frame::player::UPDATE_PLAYER`).
+    Call(usize),
+    /// A sub-step of `PlayerCharacter::Update` (an index into
+    /// `world::frame::player::UPDATE`).
+    Update(usize),
+}
+
+impl PlayerSet {
+    /// The set of the first call of `0086f940` to `address`.
+    pub fn call(address: u32) -> PlayerSet {
+        PlayerSet::Call(player::call_of(address).expect("a call of Main::OnIdle_UpdatePlayer"))
+    }
+
+    /// The set of the call of `PlayerCharacter::Update`.
+    pub fn update() -> PlayerSet {
+        PlayerSet::Call(player::update_call())
+    }
+
+    /// The set of the sub-step of `PlayerCharacter::Update` whose call is at
+    /// `site`.
+    pub fn at(site: u32) -> PlayerSet {
+        PlayerSet::Update(Self::index(site))
+    }
+
+    /// The set of the sub-step after the one at `site`.
+    pub fn after(site: u32) -> PlayerSet {
+        PlayerSet::Update(Self::index(site) + 1)
+    }
+
+    fn index(site: u32) -> usize {
+        player::step_at(site).expect("a sub-step of PlayerCharacter::Update")
+    }
+}
+
+/// `Main::OnIdle_UpdatePlayer` (step 14).
+pub const UPDATE_PLAYER_STEP: u32 = player::UPDATE_PLAYER_ADDRESS;
+/// `PlayerCharacter::UpdateFlyCamera` (`0086f940`'s call at `0086f9c7`).
+pub const UPDATE_FLY_CAMERA: u32 = 0x0094_66d0;
+/// `PlayerCharacter::UpdateHeadingAndLooking`'s call in
+/// `PlayerCharacter::Update`.
+pub const HEADING_AND_LOOKING_AT: u32 = 0x0093_f8d9;
+/// The attack's call (`00948310`) on the free branch.
+pub const ATTACK_AT: u32 = 0x0094_20fc;
+/// The move vector given to the player's mover (`009ea570`) on the free
+/// branch; its slot +0x14 then moves the player.
+pub const MOVE_AT: u32 = 0x0094_280b;
+/// The animation update of the view the player is in (the second
+/// `Actor::UpdateAnimationMovement` of the free branch).
+pub const OWN_VIEW_ANIMATION_AT: u32 = 0x0094_3806;
+
 /// The frame's inputs to the gates, filled once per frame ([`begin_frame`]).
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct ThisFrame(pub FrameState);
+
+/// The player stage's inputs, filled with [`ThisFrame`] ([`begin_frame`]).
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Default)]
+pub struct ThisPlayer(pub PlayerState);
+
+/// The player stage's inputs from the frame's and the viewer's values. Those
+/// the viewer has no source for are fixed (docs/FRAME_SKELETON.md, "PR 4
+/// result"):
+///
+/// - menu mode and the Pip-Boy's opening: the frame's ([`ThisFrame`]);
+/// - the fly camera: the viewer's free camera (the ` key,
+///   `walk::Player::walking` off), which is `TFC` without an argument: the
+///   player isn't updated, the world runs (`world_frozen` stays off);
+/// - dialogue (`Interface::InDialog`): the dialogue menu up;
+/// - the rest at `PlayerState::default`: no position request (the viewer's
+///   doors and `MoveTo` load in `ViewerSet::Loading`), the player's 3D there
+///   (its systems test `walk::Player::ready` themselves), not
+///   AI-controlled, not dead (the exe's dead player takes the controlled
+///   branch, but the viewer's death countdown is in `combat::player_attack`,
+///   which sits on the free branch, and would stop), not knocked down, no
+///   fade, no forced activation, no muzzle flash.
+pub fn viewer_player_state(frame: &FrameState, walking: bool, in_dialogue: bool) -> PlayerState {
+    PlayerState {
+        menu_flag: frame.menu_flag(),
+        pipboy_opening: frame.pipboy_opening,
+        fly_camera: !walking,
+        in_dialogue,
+        ..PlayerState::default()
+    }
+}
 
 impl Default for ThisFrame {
     fn default() -> ThisFrame {
@@ -150,7 +251,8 @@ pub fn begin_frame(
     conversation: Res<crate::dialogue::Conversation>,
     vats: Option<Res<crate::vats::Vats>>,
     draw: Res<crate::game_menus::MenuDraw>,
-    mut this: ResMut<ThisFrame>,
+    walker: Res<crate::walk::Player>,
+    (mut this, mut this_player): (ResMut<ThisFrame>, ResMut<ThisPlayer>),
 ) {
     let vats_mode = vats.as_ref().map_or(0, |v| v.manager_mode());
     let in_dialogue = conversation.0.as_ref().is_some_and(|t| !t.is_line_only());
@@ -161,6 +263,7 @@ pub fn begin_frame(
         vats_mode,
         top_menu: draw.1.last().copied(),
     });
+    this_player.0 = viewer_player_state(&this.0, walker.walking, in_dialogue);
 }
 
 /// Configures the sets in `Update`: the viewer's two sets ahead, the
@@ -207,6 +310,52 @@ pub fn configure(app: &mut App) {
             app.configure_sets(Update, FrameSet::Step(i).before(FrameSet::Step(i + 1)));
         }
     }
+    configure_player(app);
+}
+
+/// The player stage's sets ([`PlayerSet`]): the calls of `0086f940` inside
+/// its step, the sub-steps of `PlayerCharacter::Update` inside its call,
+/// each in call order under its gate on [`ThisPlayer`].
+fn configure_player(app: &mut App) {
+    app.init_resource::<ThisPlayer>();
+    let step = FrameSet::step(UPDATE_PLAYER_STEP);
+    for i in 0..UPDATE_PLAYER.len() {
+        app.configure_sets(
+            Update,
+            PlayerSet::Call(i)
+                .in_set(step)
+                .run_if(move |this: Res<ThisPlayer>| player::call_runs(&this.0, i)),
+        );
+        if i + 1 < UPDATE_PLAYER.len() {
+            app.configure_sets(Update, PlayerSet::Call(i).before(PlayerSet::Call(i + 1)));
+        }
+    }
+    for i in 0..UPDATE.len() {
+        app.configure_sets(
+            Update,
+            PlayerSet::Update(i)
+                .in_set(PlayerSet::update())
+                .run_if(move |this: Res<ThisPlayer>| player::step_runs(&this.0, i)),
+        );
+        if i + 1 < UPDATE.len() {
+            app.configure_sets(
+                Update,
+                PlayerSet::Update(i).before(PlayerSet::Update(i + 1)),
+            );
+        }
+    }
+    // The sub-steps also follow the calls before the update's and come
+    // before the calls after it as an order of their own (the hierarchy
+    // alone doesn't order them), so a system ordered at a sub-step from
+    // outside the sets keeps its place when the update's sets are empty.
+    let call = player::update_call();
+    app.configure_sets(
+        Update,
+        (
+            PlayerSet::Update(0).after(PlayerSet::Call(call - 1)),
+            PlayerSet::Update(UPDATE.len() - 1).before(PlayerSet::Call(call + 1)),
+        ),
+    );
 }
 
 /// The frame's sets and [`begin_frame`].
@@ -375,5 +524,126 @@ mod tests {
             ..FrameInputs::default()
         });
         assert!(frame::Gate::SleepWaitMenuTop.holds(&sleeping));
+    }
+
+    /// An app with the sets, the frame's state and the player's.
+    fn player_app(player: PlayerState) -> App {
+        let mut app = frame_app(FrameState::default());
+        app.insert_resource(ThisPlayer(player));
+        app
+    }
+
+    /// The player's sets run in the exe's order inside step 14: the calls of
+    /// `0086f940` in call order, `PlayerCharacter::Update`'s sub-steps
+    /// inside its call, in theirs; a system ordered at a sub-step from
+    /// outside its set runs there. Systems are added in reverse.
+    #[test]
+    fn player_sets_run_in_the_exes_order() {
+        let mut app = player_app(PlayerState::default());
+        app.add_systems(
+            Update,
+            note("after step")
+                .in_set(FrameSet::Stage(Stage::Player))
+                .after(FrameSet::step(UPDATE_PLAYER_STEP)),
+        )
+        .add_systems(
+            Update,
+            note("animation").in_set(PlayerSet::at(OWN_VIEW_ANIMATION_AT)),
+        )
+        .add_systems(Update, note("move").in_set(PlayerSet::at(MOVE_AT)))
+        .add_systems(Update, note("attack").in_set(PlayerSet::at(ATTACK_AT)))
+        .add_systems(
+            Update,
+            note("look")
+                .in_set(FrameSet::step(UPDATE_PLAYER_STEP))
+                .after(PlayerSet::at(HEADING_AND_LOOKING_AT))
+                .before(PlayerSet::after(HEADING_AND_LOOKING_AT)),
+        )
+        .add_systems(
+            Update,
+            note("heading").in_set(PlayerSet::at(HEADING_AND_LOOKING_AT)),
+        )
+        .add_systems(Update, note("cell").in_set(PlayerSet::call(0x0043_6aa0)))
+        .add_systems(Update, note("request").in_set(PlayerSet::call(0x0093_bea0)))
+        .add_systems(
+            Update,
+            note("before step")
+                .in_set(FrameSet::Stage(Stage::Player))
+                .before(FrameSet::step(UPDATE_PLAYER_STEP)),
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<Ran>().0,
+            [
+                "before step",
+                "request",
+                "heading",
+                "look",
+                "attack",
+                "move",
+                "animation",
+                "cell",
+                "after step"
+            ]
+        );
+    }
+
+    /// The gates: in menu mode only the grenade hold of the player's update
+    /// runs (`0086f968`, `0086f974`), with the fly camera only its update
+    /// (`0086f98f`); a system ordered from outside the sets runs either way.
+    #[test]
+    fn player_gates_stop_their_sets() {
+        let add = |app: &mut App| {
+            app.add_systems(Update, note("grenade").in_set(PlayerSet::call(0x0094_81d0)))
+                .add_systems(
+                    Update,
+                    note("fly").in_set(PlayerSet::call(UPDATE_FLY_CAMERA)),
+                )
+                .add_systems(Update, note("move").in_set(PlayerSet::at(MOVE_AT)))
+                .add_systems(
+                    Update,
+                    note("look")
+                        .in_set(FrameSet::step(UPDATE_PLAYER_STEP))
+                        .after(PlayerSet::at(HEADING_AND_LOOKING_AT))
+                        .before(PlayerSet::after(HEADING_AND_LOOKING_AT)),
+                );
+        };
+        let run = |state: PlayerState| {
+            let mut app = player_app(state);
+            add(&mut app);
+            app.update();
+            app.world().resource::<Ran>().0.clone()
+        };
+        let menu = viewer_frame_state(FrameInputs {
+            menu_up: true,
+            ..FrameInputs::default()
+        });
+        assert_eq!(
+            run(viewer_player_state(&FrameState::default(), true, false)),
+            ["look", "move"]
+        );
+        assert_eq!(
+            run(viewer_player_state(&menu, true, false)),
+            ["grenade", "look"]
+        );
+        assert_eq!(
+            run(viewer_player_state(&FrameState::default(), false, false)),
+            ["fly", "look"]
+        );
+        // Menu mode wins over the fly camera.
+        assert_eq!(
+            run(viewer_player_state(&menu, false, false)),
+            ["grenade", "look"]
+        );
+    }
+
+    /// The player stage's fixed inputs: the free branch with nothing pending.
+    #[test]
+    fn player_fixed_inputs() {
+        let s = viewer_player_state(&FrameState::default(), true, false);
+        assert!(s.updates() && !s.controlled() && !s.position_request && s.has_3d);
+        assert!(!s.fading && !s.forced_activation && !s.knocked_or_paralysed);
+        assert!(!viewer_player_state(&FrameState::default(), false, false).updates());
+        assert!(viewer_player_state(&FrameState::default(), true, true).in_dialogue);
     }
 }

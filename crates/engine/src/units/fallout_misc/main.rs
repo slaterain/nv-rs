@@ -8008,6 +8008,153 @@ mod tests {
             assert_eq!(calls_to(&log, 0x0054_8230).len(), 1);
         }
 
+        /// The function address the player's slot +0x2f8 (`PlayerCharacter::Update`) holds in
+        /// the order test: a double that does nothing.
+        const UPDATE_DOUBLE: u32 = 0x0000_2300;
+
+        /// `0086f940` with the inputs of `world::frame::player::PlayerState` set through its
+        /// callees' doubles: the calls it makes, in order.
+        fn update_player_calls(s: &world::frame::player::PlayerState) -> Vec<u32> {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            let flag = |b: bool| u32::from(b);
+            let (request, opening) = (flag(s.position_request), flag(s.pipboy_opening));
+            e.register_double(0x0093_bea0, move |_, _| request.into_ret());
+            e.register_double(0x0070_9bc0, move |_, _| opening.into_ret());
+            e.set_global(IN_MENU_FLAG, u8::from(s.menu_flag));
+            e.mem
+                .set_u8(main.addr() + MAIN_FLY_CAMERA, u8::from(s.fly_camera));
+            e.register(UPDATE_DOUBLE, |_, _| Ret::default());
+            let three_d = if s.has_3d { YES } else { NOTHING };
+            let player = object_with_vtable(&mut e, &[(0x1d0, three_d), (0x2f8, UPDATE_DOUBLE)]);
+            e.set_global(PLAYER_OBJECT, player);
+            let cell = if s.in_cell { 0x700u32 } else { 0 };
+            e.register_double(0x008d_6f30, move |_, _| cell.into_ret());
+            let (interior, inside) = (flag(s.interior), flag(!s.left_cell));
+            e.register_double(0x0042_5fd0, move |_, _| interior.into_ret());
+            e.register_double(0x0055_0200, move |_, _| inside.into_ret());
+            e.register(0x0054_ddd0, |_, _| 0x55u32.into_ret());
+            let found = if s.grid_cell_found { 0x800u32 } else { 0 };
+            e.register_double(0x0046_1bc0, move |_, _| found.into_ret());
+            let state = s.grid_cell_state;
+            e.register_double(0x0045_0fb0, move |_, _| u32::from(state == 3).into_ret());
+            e.register_double(0x0045_0ff0, move |_, _| u32::from(state == 6).into_ret());
+            let tests = flag(s.cell_tests);
+            e.register_double(0x0045_1530, move |_, _| tests.into_ret());
+            let accumulator = if s.accumulator { 0x1111u32 } else { 0 };
+            e.register_double(0x00b4_f5c0, move |_, _| accumulator.into_ret());
+            for address in [
+                0x0094_81d0,
+                0x0094_66d0,
+                0x009c_8cc0,
+                0x0045_2580,
+                0x0045_7d70,
+                0x0054_8230,
+                0x0054_7590,
+                0x00b6_55b0,
+            ] {
+                e.register(address, |_, _| Ret::default());
+            }
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f940, &args![main]);
+            let to_model = |a: u32| match a {
+                YES | NOTHING => world::frame::player::player_slot(0x1d0),
+                UPDATE_DOUBLE => world::frame::player::UPDATE_ADDRESS,
+                other => other,
+            };
+            // The log starts with the call of `0086f940` itself.
+            take_log(&mut e)
+                .into_iter()
+                .skip(1)
+                .map(|(a, _)| to_model(a))
+                .collect()
+        }
+
+        /// The calls `0086f940` makes are `world::frame::player::UPDATE_PLAYER`'s that its gates
+        /// let through, in its order, for each of its tests (docs/FRAME_SKELETON.md, PR 4).
+        #[test]
+        fn update_player_0086f940_follows_the_frame_model() {
+            use world::frame::player::{calls_run, PlayerState, UPDATE_PLAYER};
+            let game = PlayerState::default();
+            let left = PlayerState {
+                left_cell: true,
+                ..game
+            };
+            let states = [
+                game,
+                PlayerState {
+                    position_request: true,
+                    ..game
+                },
+                PlayerState {
+                    menu_flag: true,
+                    ..game
+                },
+                PlayerState {
+                    menu_flag: true,
+                    pipboy_opening: true,
+                    ..game
+                },
+                PlayerState {
+                    pipboy_opening: true,
+                    ..game
+                },
+                PlayerState {
+                    fly_camera: true,
+                    ..game
+                },
+                PlayerState {
+                    fly_camera: true,
+                    has_3d: false,
+                    ..game
+                },
+                PlayerState {
+                    has_3d: false,
+                    ..game
+                },
+                PlayerState {
+                    in_cell: false,
+                    ..game
+                },
+                PlayerState {
+                    interior: true,
+                    ..left
+                },
+                left,
+                PlayerState {
+                    cell_tests: true,
+                    ..left
+                },
+                PlayerState {
+                    grid_cell_state: 3,
+                    ..left
+                },
+                PlayerState {
+                    grid_cell_state: 6,
+                    ..left
+                },
+                PlayerState {
+                    grid_cell_found: false,
+                    ..left
+                },
+                PlayerState {
+                    accumulator: false,
+                    ..left
+                },
+            ];
+            // The translation calls this file's three small setters as Rust functions, not
+            // through the engine, so they aren't in the log.
+            let direct = [0x0086_fba0, 0x0086_fbb0, 0x0086_fbc0];
+            for s in states {
+                let want: Vec<u32> = calls_run(&s)
+                    .into_iter()
+                    .map(|i| UPDATE_PLAYER[i].callee.address())
+                    .filter(|a| !direct.contains(a))
+                    .collect();
+                assert_eq!(update_player_calls(&s), want, "{s:?}");
+            }
+        }
+
         // ----- 0086fbe0 / 0086fc60 -----------------------------------------------------------
 
         #[test]
