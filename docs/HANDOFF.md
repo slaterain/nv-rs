@@ -36,9 +36,9 @@ machinery runs.
     main before merging). It opens its own PR. Merge after both checks pass,
     rebasing first if translation PRs merged meanwhile (LEDGER.md and engine
     unit test modules can conflict; keep both sides' tests).
-  - After that: PR 6 is the AI task stage (Actor::Update, AI
-    threads, the Havok step via TES::UpdateCellAnimations 00453550), PR 7
-    interface and render. Then Phase 2 (state model in engine memory, save
+    PR 6 covers Actor::Update, the AI threads and the Havok step via
+    TES::UpdateCellAnimations 00453550.
+  - After that: PR 7 interface and render. Then Phase 2 (state model in engine memory, save
     round trip; see ENGINE_PORT_PLAN.md).
 - **Rolling translation PR:** #106 (branch `claude/engine-crate`).
 - **Play build** (the user's `Desktop\nv-rs-play`): Build 38 = main with #105.
