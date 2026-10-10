@@ -6879,6 +6879,1104 @@ pub fn high_process_set_action_head_track_target(e: &mut Engine, this: Ptr, targ
     }
 }
 
+// ---- Head-track targets (+0x3f8, six words; flags at +0x410, six bytes), dialogue and guard ----
+//
+// The six head-track slots are, in order: default, action, script, combat, dialog and
+// use-weapon (the engine map's setter names). The highest flagged slot is the current
+// target.
+
+/// Stores `target` in head-track slot `index`; a non-null target flags the slot,
+/// tells the process (`009014d0`) and marks the reference as targeted
+/// (`TESObjectREFR::SetTargeted`, `00564db0`), a null target unflags it.
+fn set_head_track_slot(e: &mut Engine, this: Ptr, index: u32, target: u32) {
+    let base = this.addr();
+    e.mem
+        .set_u32(base + HEAD_TRACKING_TARGETS + 4 * index, target);
+    if target != 0 {
+        e.mem.set_u8(base + HEAD_TRACKING_TARGET_FLAGS + index, 1);
+        high_process_on_new_head_track_target(e, this);
+        e.call(SET_TARGETED_REFERENCE, &args![target, 1u32]);
+    } else {
+        e.mem.set_u8(base + HEAD_TRACKING_TARGET_FLAGS + index, 0);
+    }
+}
+
+/// Empties head-track slot `index`; with `restore_default` the old target becomes the
+/// default target and the process is told through its slot `0x268` with the float of the
+/// game setting at `011cdbb8`, otherwise it is told through `009014d0`.
+fn clear_head_track_slot(e: &mut Engine, this: Ptr, index: u32, restore_default: bool) {
+    let base = this.addr();
+    let old = e.mem.u32(base + HEAD_TRACKING_TARGETS + 4 * index);
+    e.mem.set_u32(base + HEAD_TRACKING_TARGETS + 4 * index, 0);
+    e.mem.set_u8(base + HEAD_TRACKING_TARGET_FLAGS + index, 0);
+    if restore_default {
+        e.mem.set_u32(base + HEAD_TRACKING_TARGETS, old);
+        let delay = setting_float(e, 0x011c_dbb8);
+        e.vcall(base, 0x268, &args![delay]);
+    } else {
+        high_process_on_new_head_track_target(e, this);
+    }
+}
+
+// Translated from 00900f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetScriptHeadTrackTarget` (Xbox PDB): slot 2.
+pub fn high_process_set_script_head_track_target(e: &mut Engine, this: Ptr, target: u32) {
+    set_head_track_slot(e, this, 2, target);
+}
+
+// Translated from 00900fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetCombatHeadTrackTarget` (Xbox PDB): slot 3.
+pub fn high_process_set_combat_head_track_target(e: &mut Engine, this: Ptr, target: u32) {
+    set_head_track_slot(e, this, 3, target);
+}
+
+// Translated from 00900ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetHeadTrackTarget` (Xbox PDB): the slot `index` is not range checked.
+pub fn high_process_set_head_track_target(e: &mut Engine, this: Ptr, index: u32, target: u32) {
+    set_head_track_slot(e, this, index, target);
+}
+
+// Translated from 00901050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetDialogHeadTrackTarget` (Xbox PDB): slot 4.
+pub fn high_process_set_dialog_head_track_target(e: &mut Engine, this: Ptr, target: u32) {
+    set_head_track_slot(e, this, 4, target);
+}
+
+// Translated from 009010a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetUseWeaponHeadTrackTarget` (Xbox PDB): slot 5.
+pub fn high_process_set_use_weapon_head_track_target(e: &mut Engine, this: Ptr, target: u32) {
+    set_head_track_slot(e, this, 5, target);
+}
+
+// Translated from 009010f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ClearDefaultHeadTrackTarget` (Xbox PDB): empties slot 0.
+pub fn high_process_clear_default_head_track_target(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base + HEAD_TRACKING_TARGETS, 0);
+    e.mem.set_u8(base + HEAD_TRACKING_TARGET_FLAGS, 0);
+    high_process_on_new_head_track_target(e, this);
+}
+
+// Translated from 00901120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ClearActionHeadTrackTarget` (Xbox PDB): empties slot 1;
+/// `restore_default` hands the old target to slot 0.
+pub fn high_process_clear_action_head_track_target(e: &mut Engine, this: Ptr, restore_default: u8) {
+    clear_head_track_slot(e, this, 1, restore_default != 0);
+}
+
+// Translated from 00901190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ClearScriptHeadTrackTarget` (Xbox PDB): empties slot 2.
+pub fn high_process_clear_script_head_track_target(e: &mut Engine, this: Ptr, restore_default: u8) {
+    clear_head_track_slot(e, this, 2, restore_default != 0);
+}
+
+// Translated from 00901200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ClearCombatHeadTrackTarget` (Xbox PDB): empties slot 3.
+pub fn high_process_clear_combat_head_track_target(e: &mut Engine, this: Ptr) {
+    clear_head_track_slot(e, this, 3, false);
+}
+
+// Translated from 00901230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ClearDialogHeadTrackTarget` (Xbox PDB): empties slot 4.
+pub fn high_process_clear_dialog_head_track_target(e: &mut Engine, this: Ptr, restore_default: u8) {
+    clear_head_track_slot(e, this, 4, restore_default != 0);
+}
+
+// Translated from 009012a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ClearUseWeaponHeadTrackTarget` (Xbox PDB): empties slot 5.
+pub fn high_process_clear_use_weapon_head_track_target(
+    e: &mut Engine,
+    this: Ptr,
+    restore_default: u8,
+) {
+    clear_head_track_slot(e, this, 5, restore_default != 0);
+}
+
+// Translated from 00901310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ClearAllHeadTrackTargets` (Xbox PDB): empties the six slots.
+pub fn high_process_clear_all_head_track_targets(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    for index in 0..6 {
+        e.mem.set_u32(base + HEAD_TRACKING_TARGETS + 4 * index, 0);
+        e.mem.set_u8(base + HEAD_TRACKING_TARGET_FLAGS + index, 0);
+    }
+    high_process_on_new_head_track_target(e, this);
+}
+
+// Translated from 00901360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ClearPathLookTarget` (Xbox PDB): forgets the path look target (+0x2ac)
+/// when it is `target`.
+pub fn high_process_clear_path_look_target(e: &mut Engine, this: Ptr, target: u32) {
+    if e.mem.u32(this.addr() + 0x2ac) == target {
+        e.mem.set_u32(this.addr() + 0x2ac, 0);
+    }
+}
+
+// Translated from 00901390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::RemoveHeadTrackTarget` (Xbox PDB): empties every slot holding `target`.
+pub fn high_process_remove_head_track_target(e: &mut Engine, this: Ptr, target: u32) {
+    let base = this.addr();
+    for index in 0..6 {
+        if e.mem.u32(base + HEAD_TRACKING_TARGETS + 4 * index) == target {
+            e.mem.set_u32(base + HEAD_TRACKING_TARGETS + 4 * index, 0);
+            e.mem.set_u8(base + HEAD_TRACKING_TARGET_FLAGS + index, 0);
+        }
+    }
+    high_process_on_new_head_track_target(e, this);
+}
+
+// Translated from 00901400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::CanSetDefaultHeadTrackTarget` (Xbox PDB): false when any of slots 1 to 5
+/// is flagged; otherwise true when the process's slot `0x264` (a float) is below the
+/// double at `01012060` (zero).
+pub fn high_process_can_set_default_head_track_target(e: &mut Engine, this: Ptr) -> bool {
+    let base = this.addr();
+    for index in (1..6).rev() {
+        if e.mem.u8(base + HEAD_TRACKING_TARGET_FLAGS + index) != 0 {
+            return false;
+        }
+    }
+    let value = e.vcall(base, 0x264, &args![]).f64();
+    value < e.global::<f64>(0x0101_2060)
+}
+
+// Translated from 00901460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::CanSetActionHeadTrackTarget` (Xbox PDB): true when none of slots 1 to 5
+/// is flagged.
+pub fn high_process_can_set_action_head_track_target(e: &mut Engine, this: Ptr) -> bool {
+    let base = this.addr();
+    (1..6).all(|index| e.mem.u8(base + HEAD_TRACKING_TARGET_FLAGS + index) == 0)
+}
+
+// Translated from 009014a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::CanSetCombatHeadTrackTarget` (Xbox PDB): true when slot 4 (dialog) is
+/// not flagged.
+pub fn high_process_can_set_combat_head_track_target(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + HEAD_TRACKING_TARGET_FLAGS + 4) == 0
+}
+
+// Translated from 009014d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::OnNewHeadTrackTarget` (Xbox PDB): the current target (the highest
+/// flagged slot, or none) is cached at +0x41c; a change clears the byte at +0x420.
+pub fn high_process_on_new_head_track_target(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let mut current = 0;
+    for index in (0..6).rev() {
+        if e.mem.u8(base + HEAD_TRACKING_TARGET_FLAGS + index) != 0 {
+            current = e.mem.u32(base + HEAD_TRACKING_TARGETS + 4 * index);
+            break;
+        }
+    }
+    if e.mem.u32(base + 0x41c) != current {
+        e.mem.set_u8(base + 0x420, 0);
+        e.mem.set_u32(base + 0x41c, current);
+    }
+}
+
+// Translated from 00901550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::UpdateHeadTrackTargets` (Xbox PDB): unflags and empties every flagged slot
+/// whose target is null or for which `00440d80` is true; when any was emptied the process
+/// is told through `009014d0`.
+pub fn high_process_update_head_track_targets(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let mut changed = false;
+    for index in (0..6).rev() {
+        if e.mem.u8(base + HEAD_TRACKING_TARGET_FLAGS + index) == 0 {
+            continue;
+        }
+        let target = e.mem.u32(base + HEAD_TRACKING_TARGETS + 4 * index);
+        if target == 0 || e.call(0x0044_0d80, &args![target]).bool() {
+            e.mem.set_u8(base + HEAD_TRACKING_TARGET_FLAGS + index, 0);
+            e.mem.set_u32(base + HEAD_TRACKING_TARGETS + 4 * index, 0);
+            changed = true;
+        }
+    }
+    if changed {
+        high_process_on_new_head_track_target(e, this);
+    }
+}
+
+// Translated from 009015f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetCurrentHeadTrackTarget` (Xbox PDB): the target of the highest flagged
+/// slot, or null.
+pub fn high_process_get_current_head_track_target(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    for index in (0..6).rev() {
+        if e.mem.u8(base + HEAD_TRACKING_TARGET_FLAGS + index) != 0 {
+            return e.mem.u32(base + HEAD_TRACKING_TARGETS + 4 * index);
+        }
+    }
+    0
+}
+
+// Translated from 00901640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetCurrentHeadTrackTarget_ov2` (Xbox PDB): the target stored in slot
+/// `index` (not range checked).
+pub fn high_process_get_current_head_track_target_ov2(
+    e: &mut Engine,
+    this: Ptr,
+    index: u32,
+) -> u32 {
+    e.mem.u32(this.addr() + HEAD_TRACKING_TARGETS + 4 * index)
+}
+
+// Translated from 00901660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetCurrentHeadTrackType` (Xbox PDB): the index of the highest flagged
+/// slot, or 0.
+pub fn high_process_get_current_head_track_type(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    for index in (0..6).rev() {
+        if e.mem.u8(base + HEAD_TRACKING_TARGET_FLAGS + index) != 0 {
+            return index;
+        }
+    }
+    0
+}
+
+// Translated from 009016a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::GetCurrentHeadTrackTypeString` (Xbox PDB): the string for the type the
+/// process's slot `0x67c` returns (0 to 4: `0104e6a0`, `010883ec`, `010883e4`, `010883dc`,
+/// `010883d4`), `0101a6c0` for any other.
+pub fn high_process_get_current_head_track_type_string(e: &mut Engine, this: Ptr) -> u32 {
+    match e.vcall(this.addr(), 0x67c, &args![]).u32() {
+        0 => 0x0104_e6a0,
+        1 => 0x0108_83ec,
+        2 => 0x0108_83e4,
+        3 => 0x0108_83dc,
+        4 => 0x0108_83d4,
+        _ => 0x0101_a6c0,
+    }
+}
+
+// Translated from 00901710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::SetDetectionModifier` (Xbox PDB): calls the process's slot `0x4a8`
+/// (no argument, result unused) and stores `modifier` at +0x3bc.
+pub fn high_process_set_detection_modifier(e: &mut Engine, this: Ptr, modifier: f32) {
+    e.vcall(this.addr(), 0x4a8, &args![]);
+    e.mem.set_f32(this.addr() + 0x3bc, modifier);
+}
+
+// Translated from 00901740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (the body ignores `this`): `0061a2d0(1, 2)` gives a value `item`;
+/// `0057bd60(actor, player)` is called; with an `item` the actor's process (slot `0x2a4`)
+/// gets `(actor, item, 0, 1, 0, 0)`. Then, unless the actor's slot `0x214` is nonzero or
+/// `009344a0(actor)` has type 6, the actor's process slot `0x1dc` gets `(actor, 1)`.
+pub fn fn_00901740(e: &mut Engine, _this: Ptr, actor: u32) {
+    let item = e.call(0x0061_a2d0, &args![1u32, 2u32]).u32();
+    let player = e.mem.u32(PLAYER);
+    e.call(0x0057_bd60, &args![actor, player]);
+    if item != 0 {
+        let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+        e.vcall(process, 0x2a4, &args![actor, item, 0u32, 1u32, 0u32, 0u32]);
+    }
+    if e.vcall(actor, 0x214, &args![]).u32() == 0 {
+        let form = e.call(0x0093_44a0, &args![actor]).u32();
+        if form == 0 || e.call(PACKAGE_TYPE, &args![form]).u32() != 6 {
+            let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+            e.vcall(process, 0x1dc, &args![actor, 1u32]);
+        }
+    }
+}
+
+// Translated from 00901800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ComputeCanInitiateDialogueWithNPC` (Xbox PDB): whether `actor` may start
+/// a dialogue with `other`. False when the player is busy (`00969860`, `008defe0`), the
+/// process runs no package (slot `0x27c`), `actor` is not an actor or is dead, the
+/// process's wait (+0x2a8) is positive, `actor` is in a conversation (`008a78f0`), `other`
+/// is the actor, the player or not a loaded actor, `other` cannot be seen (`00893190`) or
+/// its process refuses (slot `0x1f8`). With the global byte `011f1221` clear the answer is
+/// then true, otherwise it is whether the detection state's float (`00435e00`) is below the
+/// double at `0101db88`.
+pub fn high_process_compute_can_initiate_dialogue_with_npc(
+    e: &mut Engine,
+    this: Ptr,
+    actor: u32,
+    other: u32,
+) -> bool {
+    let base = this.addr();
+    let player = e.mem.u32(PLAYER);
+    if e.call(0x0096_9860, &args![player]).bool() || e.call(0x008d_efe0, &args![player]).bool() {
+        return false;
+    }
+    if e.vcall(base, 0x27c, &args![]).u32() == 0 {
+        return false;
+    }
+    if !e.call(0x0088_4480, &args![actor]).bool() || e.call(0x0057_9670, &args![actor]).bool() {
+        return false;
+    }
+    if f64::from(e.mem.f32(base + 0x2a8)) > e.global::<f64>(0x0101_2060) {
+        return false;
+    }
+    if e.call(0x008a_78f0, &args![actor, 1u32]).bool()
+        || other == actor
+        || other == player
+        || !e.call(0x0088_4480, &args![other]).bool()
+        || e.vcall(other, 0x1d0, &args![]).u32() == 0
+        || !e.call(0x0089_3190, &args![other, actor]).bool()
+    {
+        return false;
+    }
+    e.call(0x0088_1510, &args![actor]);
+    e.call(0x0088_1510, &args![other]);
+    let other_process = e.call(ACTOR_PROCESS, &args![other]).u32();
+    if other_process == 0 || !e.vcall(other_process, 0x1f8, &args![other, actor]).bool() {
+        return false;
+    }
+    if e.mem.u8(0x011f_1221) == 0 {
+        return true;
+    }
+    let state = e.vcall(base, 0x504, &args![other, 0u32]).u32();
+    if state == 0 {
+        return false;
+    }
+    let value = e.call(0x0043_5e00, &args![state + 0x18]).f64();
+    value < e.global::<f64>(0x0101_db88)
+}
+
+// Translated from 00901990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ComputeCanRespondToDialogueFromNPC` (Xbox PDB): false when the process's
+/// slot `0x52c` is nonzero, its greeting flag (slot `0x30c`) is set, `actor` is in a
+/// conversation (`008a78f0`) or the object of its slot `0x22c` fails `00678610`.
+pub fn high_process_compute_can_respond_to_dialogue_from_npc(
+    e: &mut Engine,
+    this: Ptr,
+    actor: u32,
+    _unused_2: u32,
+) -> bool {
+    let base = this.addr();
+    if e.vcall(base, 0x52c, &args![]).u32() != 0
+        || e.vcall(base, 0x30c, &args![]).bool()
+        || e.call(0x008a_78f0, &args![actor, 1u32]).bool()
+    {
+        return false;
+    }
+    if e.vcall(base, 0x22c, &args![]).u32() != 0 {
+        let object = e.vcall(base, 0x22c, &args![]).u32();
+        if e.call(0x0067_8610, &args![object]).bool() {
+            return false;
+        }
+    }
+    true
+}
+
+// Translated from 00901a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ProcessSandBoxDialogue` (Xbox PDB): makes `actor` start a dialogue with
+/// `other` (an actor, accepted by the process's slot `0x1f4`). The location used is the
+/// package's (`0055b980`) unless the process's slot `0x274` is a form of type 12 giving
+/// one; the actor's process slot `0x280` runs the dialogue. The exception-unwinding frame
+/// is not translated.
+pub fn high_process_process_sand_box_dialogue(
+    e: &mut Engine,
+    this: Ptr,
+    actor: u32,
+    other: u32,
+) -> bool {
+    let base = this.addr();
+    if other == 0 || !e.vcall(other, 0x100, &args![]).bool() {
+        return false;
+    }
+    if !e.vcall(base, 0x1f4, &args![actor, other]).bool() {
+        return false;
+    }
+    let form = e.call(0x0093_44a0, &args![other]).u32();
+    let mut flag = 0u32;
+    if form != 0
+        && e.call(0x0096_11e0, &args![form]).u32() == 0x25
+        && fn_00901c50(e, Ptr::new(form))
+    {
+        flag = 1;
+    }
+    let package = e.vcall(base, 0x27c, &args![]).u32();
+    let mut location = if package != 0 {
+        e.call(PACKAGE_LOCATION, &args![package]).u32()
+    } else {
+        0
+    };
+    e.with_stack(12, |e, object| {
+        e.call(0x0067_f030, &args![object]);
+        let source = e.vcall(base, 0x274, &args![]).u32();
+        if source != 0 && e.vcall(source, 0x8, &args![]).u32() == 0xc {
+            let inner = e.call(0x0044_edb0, &args![source]).u32();
+            if inner != 0 {
+                e.call(0x0067_f3c0, &args![object, inner]);
+                location = object.addr();
+            }
+        }
+        let low = setting_float(e, 0x011c_d038);
+        let high = setting_float(e, 0x011c_d328);
+        let value = e.call(0x0064_65f0, &args![high, low]).f32();
+        e.mem.set_f32(base + 0x2c8, value);
+        e.vcall(base, 0x1f0, &args![other]);
+        if e.call(ACTOR_PROCESS, &args![other]).u32() != 0 {
+            let other_process = e.call(ACTOR_PROCESS, &args![other]).u32();
+            e.vcall(other_process, 0x1f0, &args![actor]);
+        }
+        let result = e
+            .vcall(
+                actor,
+                0x280,
+                &args![other, location, location, 1u32, 0u32, 0u32, 0u32, 1u32, flag],
+            )
+            .bool();
+        e.call(0x0067_f110, &args![object]);
+        result
+    })
+}
+
+// Translated from 00901c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: true when bit 2 of the word at +0x24 is clear.
+pub fn fn_00901c50(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u16(this.addr() + 0x24) & 4 == 0
+}
+
+// Translated from 00901c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ProcessUseIdleMarker` (Xbox PDB): keeps `actor` at the idle marker
+/// `marker` (or at the process's target, +0x40). A given marker goes to slot `0x12c`; with
+/// neither it asks slot `0x8c` and gives up unless the target then has a form of type
+/// 0x30. An actor that is not to move (`00915ef0`) ends its move (slots `0x294`, `0x288`
+/// with -1). A pathing actor (`008b3bd0`) is steered through slots `0x34c` / `0x350` when
+/// farther than the float at `0101e6ec` from the marker. Otherwise, when far from the
+/// target (squared distance above the square of the float at `01017b78`, or height gap
+/// above the float at `01016410`) it is told to move (`008b37c0`); near it, an actor not
+/// at the target's height is turned (`008bb5c0`); else an idle is chosen from the
+/// collection (`0047a030`) and started through slot `0x44`: mode 0 at random, mode 1 in
+/// turn (the chosen index +0x190, the idle +0x194, its delay +0x198). The
+/// exception-unwinding frame is not translated.
+pub fn high_process_process_use_idle_marker(e: &mut Engine, this: Ptr, actor: u32, marker: u32) {
+    let base = this.addr();
+    let marker_form = e.call(FORM_OF_REFERENCE, &args![marker]).u32();
+    let mode = e.call(0x0047_9e80, &args![marker_form + 0x30]).u32();
+    if marker != 0 {
+        e.vcall(base, 0x12c, &args![marker]);
+    } else if e.mem.u32(base + TARGET) == 0 {
+        e.vcall(base, 0x8c, &args![actor]);
+        let target = e.mem.u32(base + TARGET);
+        if target == 0 || e.call(FORM_OF_REFERENCE, &args![target]).u32() == 0 {
+            return;
+        }
+        let form = e.call(FORM_OF_REFERENCE, &args![target]).u32();
+        if e.call(0x0040_1170, &args![form]).u32() != 0x30 {
+            return;
+        }
+    }
+    if e.call(0x0091_5ef0, &args![base, actor]).bool() {
+        e.vcall(base, 0x294, &args![actor]);
+        e.vcall(base, 0x288, &args![actor, 0xffff_ffffu32]);
+        return;
+    }
+    if e.call(0x008b_3bd0, &args![actor]).bool() {
+        let package = e.vcall(base, 0x27c, &args![]).u32();
+        let distance = e
+            .call(REFERENCE_GET_DISTANCE, &args![actor, marker, 0u32, 0u32])
+            .f32();
+        let far = e.global::<f32>(0x0101_e6ec);
+        let mut steps = 0x101u32;
+        let outside = far < distance;
+        if outside {
+            let radius = e.call(0x0067_8670, &args![package, actor, 0u32]).f32();
+            let double = (f64::from(radius) + f64::from(radius)) as f32;
+            steps = e
+                .vcall(
+                    base,
+                    0x34c,
+                    &args![actor, distance, radius, double, 0u32, 0u32],
+                )
+                .u32();
+        }
+        e.vcall(base, 0x350, &args![actor, steps, outside as u32]);
+        return;
+    }
+    let limit_height = e.global::<f32>(0x0101_6410);
+    let limit_distance = e.global::<f32>(0x0101_7b78);
+    let limit_squared = (f64::from(limit_distance) * f64::from(limit_distance)) as f32;
+    let target = e.mem.u32(base + TARGET);
+    let target_position = e.vcall(target, 0x1f4, &args![]).u32();
+    let actor_position = e.vcall(actor, 0x1f4, &args![]).u32();
+    let (squared, height) = e.with_stack(12, |e, out| {
+        e.call(0x0043_9ef0, &args![target_position, out, actor_position]);
+        let squared = e.call(0x0059_5c80, &args![out]).f64();
+        (squared, e.mem.f32(out.addr() + 8))
+    });
+    let far_away = if f64::from(limit_squared) < squared {
+        true
+    } else {
+        let gap = e.call(0x0040_8860, &args![height]).f64();
+        f64::from(limit_height) < gap
+    };
+    if far_away {
+        let target = e.mem.u32(base + TARGET);
+        e.call(0x008b_37c0, &args![actor, target, limit_distance, 0u32]);
+        return;
+    }
+    if e.mem.u32(base + TARGET) != 0
+        && !e.call(0x0091_5ef0, &args![base, actor]).bool()
+        && e.vcall(actor, 0x214, &args![]).u32() == 0
+    {
+        let target = e.mem.u32(base + TARGET);
+        let target_node = e.call(0x0043_0830, &args![target]).u32();
+        let target_height = e.mem.f32(target_node + 8);
+        let actor_node = e.call(0x0043_0830, &args![actor]).u32();
+        let actor_height = e.mem.f32(actor_node + 8);
+        let angle = e.with_stack(4, |e, zero| {
+            e.mem.set_f32(zero.addr(), 0.0);
+            e.call(0x004b_15e0, &args![actor_height, target_height, zero])
+                .f32()
+        });
+        let wrapped = e.call(0x0040_8840, &args![angle]).f64();
+        if e.global::<f64>(0x0101_ffa0) < wrapped {
+            e.call(0x008b_b5c0, &args![actor, target_height, 1u32]);
+            return;
+        }
+    }
+    e.vcall(base, 0x660, &args![]);
+    e.with_stack(16, |e, idles| {
+        e.call(0x0090_58e0, &args![idles, 10u32]);
+        let target = e.mem.u32(base + TARGET);
+        let count = e
+            .call(
+                0x0047_a030,
+                &args![marker_form + 0x30, actor, target, idles],
+            )
+            .u32();
+        if count > 0 {
+            let owner = e.vcall(actor, 0x1e4, &args![]).u32();
+            if owner != 0
+                && (e.mem.u32(base + 0x194) == 0 || e.call(0x0049_85f0, &args![owner]).bool())
+                && !e.vcall(actor, 0x234, &args![]).bool()
+            {
+                e.mem.set_u32(base + 0x194, 0);
+                if mode == 0 {
+                    let random = e.call(0x00ec_adb8, &args![]).u32();
+                    let index = random % count;
+                    let slot = e.call(0x0087_7a30, &args![idles, index]).u32();
+                    let idle = e.mem.u32(slot);
+                    e.mem.set_u32(base + 0x194, idle);
+                    e.mem.set_u32(base + 0x190, index);
+                    if idle != 0 {
+                        let delay = e.global::<f32>(0x0103_0ff0);
+                        e.mem.set_f32(base + 0x198, delay);
+                    }
+                } else if mode == 1 {
+                    let last = e.mem.u32(base + 0x190);
+                    let next = if last == 0xffff_ffff || last.wrapping_add(1) >= count {
+                        0
+                    } else {
+                        last + 1
+                    };
+                    e.mem.set_u32(base + 0x190, next);
+                    let slot = e.call(0x0087_7a30, &args![idles, next]).u32();
+                    let idle = e.mem.u32(slot);
+                    e.mem.set_u32(base + 0x194, idle);
+                    let delay = e.global::<f32>(0x0101_2054);
+                    e.mem.set_f32(base + 0x198, delay);
+                }
+                let idle = e.mem.u32(base + 0x194);
+                if idle != 0 {
+                    e.vcall(base, 0x44, &args![actor, idle, 2u32, 1u32, 0u32, 0u32]);
+                }
+            }
+        }
+        e.call(0x0090_5910, &args![idles]);
+    });
+}
+
+// Translated from 00902190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::CreateMuzzleFlash` (Xbox PDB): when the process has none (+0x3d4), a
+/// new 0x20-byte object built by `009bacb0(first, second)` (null if the allocation failed).
+pub fn high_process_create_muzzle_flash(e: &mut Engine, this: Ptr, first: u32, second: u32) {
+    let base = this.addr();
+    if e.mem.u32(base + 0x3d4) != 0 {
+        return;
+    }
+    let block = e.call(OPERATOR_NEW, &args![0x20u32]).u32();
+    let flash = if block != 0 {
+        e.call(0x009b_acb0, &args![block, first, second]).u32()
+    } else {
+        0
+    };
+    e.mem.set_u32(base + 0x3d4, flash);
+}
+
+// Translated from 00902230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ClearMuzzleFlash` (Xbox PDB): destroys the muzzle flash (+0x3d4) with its
+/// deleting destructor (`008d9f70`, flag 1) and forgets it.
+pub fn high_process_clear_muzzle_flash(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let flash = e.mem.u32(base + 0x3d4);
+    if flash != 0 {
+        e.call(0x008d_9f70, &args![flash, 1u32]);
+    }
+    e.mem.set_u32(base + 0x3d4, 0);
+}
+
+// Translated from 00902290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ProcessGuard` (Xbox PDB): one step of the guard package for `actor`. The
+/// guard state (`008d0430`; the process's slot `0x270` when slot `0x20c` has a type-14
+/// object) selects the phase through its mode (`00726070`): 0 `fn_00902640`, 1
+/// `fn_009026c0`, 2 `high_process_process_guard_wait_to_attack`. Without a state the
+/// process ends (slot `0x284`, -1). Before the phase the guard reference (+0x128) is
+/// brought in line with the package's, an actor of type 4 or 9 without combat state
+/// (`0x35c`) is sent to melee idle, and an actor with no path move (`0x4b4`) gets a
+/// distance check against the package target (or the package location) and the movement
+/// slots `0x34c` / `0x350`.
+pub fn high_process_process_guard(e: &mut Engine, this: Ptr, actor: u32) {
+    let base = this.addr();
+    let mut state = e.call(0x008d_0430, &args![base]).u32();
+    if e.vcall(base, 0x20c, &args![]).u32() != 0 {
+        let object = e.vcall(base, 0x20c, &args![]).u32();
+        if e.call(PACKAGE_TYPE, &args![object]).u32() == 0xe {
+            state = e.vcall(base, 0x270, &args![]).u32();
+        }
+    }
+    if state == 0 {
+        e.vcall(base, 0x284, &args![0xffff_ffffu32]);
+        return;
+    }
+    e.mem.set_u8(base + 0x349, 0);
+    let package = e.vcall(base, 0x27c, &args![]).u32();
+    let initial = e.call(0x0067_59e0, &args![package, actor]).u32();
+    let mut guard = if initial != 0 { initial } else { actor };
+    let list = e.call(EXTRA_DATA_LIST, &args![guard]).u32();
+    let reference = e.call(0x0041_c8d0, &args![list]).u32();
+    if reference != 0 {
+        guard = reference;
+    }
+    if e.vcall(base, 0x128, &args![]).u32() != guard {
+        e.vcall(base, 0x12c, &args![guard]);
+        let list = e.call(EXTRA_DATA_LIST, &args![guard]).u32();
+        e.call(0x0042_1310, &args![list, actor]);
+        e.vcall(guard, 0x48, &args![0x8000_0000u32]);
+    }
+    if !e.vcall(base, 0x35c, &args![]).bool() {
+        let kind = e.vcall(actor, 0x214, &args![]).u32();
+        if kind == 4 || e.vcall(actor, 0x214, &args![]).u32() == 9 {
+            e.call(0x006e_cd40, &args![state, 0u32]);
+            e.vcall(actor, 0x418, &args![]);
+            return;
+        }
+    }
+    let mut inside = true;
+    if !e.vcall(actor, 0x4b4, &args![]).bool() {
+        let radius;
+        if e.call(PACKAGE_LOCATION, &args![package]).u32() != 0 {
+            let minus_one = e.global::<f32>(0x0101_2054);
+            inside = e
+                .vcall(package, 0x13c, &args![actor, 0u32, minus_one, 0u32])
+                .bool();
+            radius = e.call(0x0067_6280, &args![package, actor]).u32() as f32;
+        } else {
+            let target = e.call(PACKAGE_GET_TARGET, &args![package]).u32();
+            radius = if target != 0 {
+                e.call(0x0044_ddc0, &args![target]).i32() as f32
+            } else {
+                e.global::<f32>(0x0101_8f5c)
+            };
+            let distance = e
+                .call(REFERENCE_GET_DISTANCE, &args![actor, guard, 0u32, 0u32])
+                .f64();
+            inside = f64::from(radius) > distance;
+        }
+        if e.call(LIST_NEXT, &args![state]).u32() != 0
+            && ((e.call(0x008b_3bb0, &args![actor]).bool() && !inside)
+                || e.call(0x008b_3b90, &args![actor]).bool())
+        {
+            e.vcall(base, 0x7f8, &args![actor, state]);
+        }
+        let owner = e.mem.u32(actor + 0x190);
+        let remaining = if !inside && owner != 0 {
+            e.call(0x009d_cc50, &args![owner]).f32()
+        } else {
+            0.0
+        };
+        let double = (f64::from(radius) + f64::from(radius)) as f32;
+        let steps = e
+            .vcall(
+                base,
+                0x34c,
+                &args![actor, remaining, radius, double, 0u32, 0u32],
+            )
+            .u32();
+        e.call(0x0067_8670, &args![package, actor, 0u32]);
+        e.vcall(base, 0x350, &args![actor, steps, 1u32]);
+    }
+    match e.call(LIST_NEXT, &args![state]).u32() {
+        0 => fn_00902640(e, this, actor, state),
+        1 => fn_009026c0(e, this, actor, state, inside as u8),
+        2 => high_process_process_guard_wait_to_attack(e, this, actor, state),
+        _ => {}
+    }
+}
+
+// Translated from 00902640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the process's slot `0x7f8` gets `(actor, state)`, then the state's counter
+/// (+0xc) and timer (+0x10) are reset.
+pub fn fn_00902640(e: &mut Engine, this: Ptr, actor: u32, state: u32) {
+    e.vcall(this.addr(), 0x7f8, &args![actor, state]);
+    fn_009026a0(e, Ptr::new(state));
+    fn_00902680(e, Ptr::new(state));
+}
+
+// Translated from 00902680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: clears the guard state's timer (the float at +0x10).
+pub fn fn_00902680(e: &mut Engine, this: Ptr) {
+    e.mem.set_f32(this.addr() + 0x10, 0.0);
+}
+
+// Translated from 009026a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: clears the guard state's counter (the word at +0xc).
+pub fn fn_009026a0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr() + 0xc, 0);
+}
+
+// Translated from 009026c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the guard phase that looks for an intruder. `inside` says whether the actor
+/// is within the guard area (computed by the caller). The package's guard radius
+/// (`00671d10` then `0044ddc0`) is squared and the list at +0x25c is searched, when the
+/// package allows it (`0067a7e0`), for the first detected actor that is not the guard
+/// reference, has a process with `0045cd60` false, is not dead or otherwise excluded
+/// (slots `0x22c`, `0x2e8`, `0x230`, `0x234`, `00437bd0`), has a positive count (+8), is
+/// closer to the guard reference than the radius, is not owned by the reference's owner
+/// and that the actor should attack (`008b06d0`). Found: when `inside` the actor stops
+/// moving (slot `0x294`) and turns to it (`008bb520`), the intruder is recorded
+/// (`009f2970`), the actor is warned (`high_process_process_guard_warn`) and the state
+/// moves to 2. None: head-track slots `0x644` / `0x654` are cleared, the look-at target is
+/// cleared (`008b3d30`), and, when `inside`, the actor is walked (slot `0x84c`) back
+/// towards the package location (or the guard reference when the radius is positive), else
+/// turned to face the package location's or the process's reference (+0x44) height
+/// (`008bb5c0`) when it differs by more than the double at `01023128`.
+pub fn fn_009026c0(e: &mut Engine, this: Ptr, actor: u32, state: u32, inside: u8) {
+    let base = this.addr();
+    let package = e.vcall(base, 0x27c, &args![]).u32();
+    let has_location = e.call(PACKAGE_LOCATION, &args![package]).u32() != 0;
+    let guard = e.vcall(base, 0x128, &args![]).u32();
+    // The game stores the result of this test and never reads it; the calls are kept.
+    if has_location {
+        let minus_one = e.global::<f32>(0x0101_2054);
+        e.vcall(package, 0x13c, &args![actor, 0u32, minus_one, 0u32]);
+    } else {
+        e.call(REFERENCE_GET_DISTANCE, &args![actor, guard, 0u32, 0u32]);
+        let target = e.call(PACKAGE_GET_TARGET, &args![package]).u32();
+        e.call(0x0044_ddc0, &args![target]);
+    }
+    let package_now = e.vcall(base, 0x27c, &args![]).u32();
+    let target = e.call(PACKAGE_GET_TARGET, &args![package_now]).u32();
+    let radius = e.call(0x0044_ddc0, &args![target]).i32() as f32;
+    let radius_squared = (f64::from(radius) * f64::from(radius)) as f32;
+    let mut found = 0u32;
+    let mut node = e.mem.u32(base + DETECTED_ACTOR_LIST);
+    let package_now = e.vcall(base, 0x27c, &args![]).u32();
+    if !e.call(0x0067_a7e0, &args![package_now]).bool() {
+        node = 0;
+    }
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let entry = list_item(e, node);
+        node = list_next(e, node);
+        let candidate = e.mem.u32(entry);
+        if candidate == 0 || candidate == guard {
+            continue;
+        }
+        if e.call(ACTOR_PROCESS, &args![candidate]).u32() == 0 {
+            continue;
+        }
+        let process = e.call(ACTOR_PROCESS, &args![candidate]).u32();
+        if e.call(0x0045_cd60, &args![process]).u32() != 0 {
+            continue;
+        }
+        if e.vcall(candidate, 0x22c, &args![0u32]).bool()
+            || e.vcall(candidate, 0x2e8, &args![]).bool()
+            || e.vcall(candidate, 0x230, &args![]).bool()
+            || e.vcall(candidate, 0x234, &args![]).bool()
+            || e.call(REFERENCE_TEST_00437BD0, &args![candidate]).bool()
+        {
+            continue;
+        }
+        if (e.mem.u32(entry + 8) as i32) < 1 {
+            continue;
+        }
+        let guard_now = e.vcall(base, 0x128, &args![]).u32();
+        let guard_position = e.vcall(guard_now, 0x1f4, &args![]).u32();
+        let candidate_position = e.vcall(candidate, 0x1f4, &args![]).u32();
+        let length = e.with_stack(12, |e, out| {
+            let result = e
+                .call(0x0043_9ef0, &args![candidate_position, out, guard_position])
+                .u32();
+            e.call(0x004a_7290, &args![result]).f32()
+        });
+        if radius_squared <= length {
+            continue;
+        }
+        if guard != 0 {
+            if e.call(0x0056_7790, &args![guard]).u32() != 0
+                && e.call(0x0057_85e0, &args![guard, candidate, 1u32]).bool()
+            {
+                continue;
+            }
+            let attack = e.with_stack(4, |e, flag| {
+                e.mem.set_u32(flag.addr(), 0);
+                e.call(0x008b_06d0, &args![actor, candidate, 1u32, flag, 0u32])
+                    .bool()
+            });
+            if !attack {
+                continue;
+            }
+        }
+        found = candidate;
+        break;
+    }
+    if found != 0 {
+        if inside != 0 {
+            e.vcall(base, 0x294, &args![actor]);
+            let position = e.vcall(found, 0x1f4, &args![0u32]).u32();
+            let (x, y, z) = (
+                e.mem.u32(position),
+                e.mem.u32(position + 4),
+                e.mem.u32(position + 8),
+            );
+            e.call(0x008b_b520, &args![actor, x, y, z]);
+        }
+        e.call(0x009f_2970, &args![state, found]);
+        high_process_process_guard_warn(e, this, actor, state);
+        e.call(0x006e_cd40, &args![state, 2u32]);
+        return;
+    }
+    e.vcall(base, 0x644, &args![0u32]);
+    e.vcall(base, 0x654, &args![0u32]);
+    e.call(0x008b_3d30, &args![actor]);
+    if inside == 0 {
+        return;
+    }
+    let mut handled = false;
+    if has_location {
+        let package_now = e.vcall(base, 0x27c, &args![]).u32();
+        if e.call(0x0067_6280, &args![package_now, actor]).u32() > 0 {
+            let minus_one = e.global::<f32>(0x0101_2054);
+            e.vcall(base, 0x84c, &args![actor, 0u32, minus_one]);
+            handled = true;
+        }
+    } else if f64::from(radius_squared) > e.global::<f64>(0x0101_2060) {
+        let root = e.call(0x0040_19d0, &args![radius_squared]).f32();
+        let position = e.vcall(guard, 0x1f4, &args![]).u32();
+        e.vcall(base, 0x84c, &args![actor, position, root]);
+        handled = true;
+    }
+    if handled {
+        return;
+    }
+    let mut location = 0u32;
+    let location_object = e.call(PACKAGE_LOCATION, &args![package]).u32();
+    if location_object != 0 {
+        location = e.call(0x0067_f390, &args![location_object]).u32();
+    }
+    let override_reference = e.mem.u32(base + 0x44);
+    if override_reference != 0 {
+        location = override_reference;
+    }
+    if e.call(0x008b_3bd0, &args![actor]).bool() || e.vcall(actor, 0x214, &args![]).u32() != 0 {
+        return;
+    }
+    let usable = (location != 0
+        && e.call(FORM_OF_REFERENCE, &args![location]).u32() == e.mem.u32(0x011c_a248))
+        || (location != 0
+            && location_object != 0
+            && e.call(0x0067_8ca0, &args![location_object]).u32() == 3);
+    if !usable {
+        return;
+    }
+    let location_node = e.call(0x0043_0830, &args![location]).u32();
+    let location_height = e.mem.f32(location_node + 8);
+    let actor_node = e.call(0x0043_0830, &args![actor]).u32();
+    let difference = (f64::from(location_height) - f64::from(e.mem.f32(actor_node + 8))) as f32;
+    let wrapped = e.call(WRAP_ANGLE, &args![difference]).f64();
+    if e.global::<f64>(0x0102_3128) < wrapped {
+        e.call(
+            TURN_ACTOR_SET_ROTATION,
+            &args![actor, location_height, 1u32],
+        );
+    }
+}
+
+// Translated from 00902bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ProcessGuardWarn` (Xbox PDB): reads the state's target (`0044ddc0`) and
+/// the guard reference's `00567790` (slot `0x128`; neither result is used), draws a value
+/// with `0061a2d0(2, 0x14)`, counts the warning (`fn_00902c60`), clears the timer and hands
+/// the actor's process (slot `0x2a4`) `(actor, value, 0, 0, 1, 0)`.
+pub fn high_process_process_guard_warn(e: &mut Engine, this: Ptr, actor: u32, state: u32) {
+    let base = this.addr();
+    e.call(0x0044_ddc0, &args![state]);
+    let guard = e.vcall(base, 0x128, &args![]).u32();
+    if guard != 0 {
+        e.call(0x0056_7790, &args![guard]);
+    }
+    let value = e.call(0x0061_a2d0, &args![2u32, 0x14u32]).u32();
+    fn_00902c60(e, Ptr::new(state));
+    fn_00902680(e, Ptr::new(state));
+    e.vcall(base, 0x2a4, &args![actor, value, 0u32, 0u32, 1u32, 0u32]);
+}
+
+// Translated from 00902c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: adds one to the guard state's counter (the word at +0xc).
+pub fn fn_00902c60(e: &mut Engine, this: Ptr) {
+    let counter = e.mem.u32(this.addr() + 0xc);
+    e.mem.set_u32(this.addr() + 0xc, counter.wrapping_add(1));
+}
+
+// Translated from 00902c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HighProcess::ProcessGuardWaitToAttack` (Xbox PDB): the guard phase in which the actor
+/// waits to attack the state's target (`0044ddc0`). With the process flag +0x368 the actor
+/// (if it has no path move, slot `0x4b4`) is told to go to the target (slot `0x2a4`). With
+/// no guard reference (slot `0x128`) or a target that is gone or dead (slots `0x22c`,
+/// `0x2e8`, `0x230`, `0x234`, `00437bd0`) the state returns to 0. Otherwise the target is
+/// head-tracked (slot `0x628`) and, within the squared package radius (`00671d10` /
+/// `0044ddc0`), aimed at (`high_process_aim_at_target`) and the weapon / animation slots
+/// are set; beyond it the actor stands down (state 1, slots `0x400`, `0x654`). Within a
+/// closer radius (the game setting at `011cd1f8` times the radius) the target is attacked
+/// (slot `0x33c`); otherwise, when the state's time (`00621b00`) has reached the setting
+/// at `011cd5fc`, the warning count (`0084e3a0`) against the package's limit decides
+/// between attacking and warning. The exception-unwinding frame is not translated.
+pub fn high_process_process_guard_wait_to_attack(
+    e: &mut Engine,
+    this: Ptr,
+    actor: u32,
+    state: u32,
+) {
+    let base = this.addr();
+    let mut flagged = false;
+    let target = e.call(0x0044_ddc0, &args![state]).u32();
+    if e.mem.u32(base + 0x368) != 0 {
+        flagged = true;
+        if e.vcall(actor, 0x4b4, &args![]).bool() && target != 0 {
+            e.vcall(base, 0x2a4, &args![target, 0u32, 0u32, 0u32, 0u32, 0u32]);
+        }
+    }
+    let guard = e.vcall(base, 0x128, &args![]).u32();
+    if guard == 0 {
+        e.call(0x006e_cd40, &args![state, 0u32]);
+        fn_00902640(e, this, actor, state);
+        return;
+    }
+    if target == 0
+        || e.vcall(target, 0x22c, &args![0u32]).bool()
+        || e.vcall(target, 0x2e8, &args![]).bool()
+        || e.vcall(target, 0x230, &args![]).bool()
+        || e.vcall(target, 0x234, &args![]).bool()
+        || e.call(REFERENCE_TEST_00437BD0, &args![target]).bool()
+    {
+        e.call(0x006e_cd40, &args![state, 0u32]);
+        fn_00902640(e, this, actor, state);
+        return;
+    }
+    let package = e.vcall(base, 0x27c, &args![]).u32();
+    let guard_target = e.call(PACKAGE_GET_TARGET, &args![package]).u32();
+    let radius = e.call(0x0044_ddc0, &args![guard_target]).i32() as f32;
+    let scale = setting_float(e, 0x011c_d1f8);
+    let near = (f64::from(radius) * f64::from(scale)) as f32;
+    let radius_squared = (f64::from(radius) * f64::from(radius)) as f32;
+    let near_squared = (f64::from(near) * f64::from(near)) as f32;
+    let guard_position = e.vcall(guard, 0x1f4, &args![]).u32();
+    let target_position = e.vcall(target, 0x1f4, &args![]).u32();
+    let length = e.with_stack(12, |e, out| {
+        let result = e
+            .call(0x0043_9ef0, &args![target_position, out, guard_position])
+            .u32();
+        e.call(0x004a_7290, &args![result]).f32()
+    });
+    let in_range = length < radius_squared;
+    let inner = in_range && length < near_squared;
+    let chosen = if in_range { target } else { guard };
+    e.vcall(base, 0x628, &args![chosen]);
+    if in_range {
+        high_process_aim_at_target(e, this, Ptr::new(actor), Ptr::new(target), 0);
+    } else {
+        e.call(0x008b_3d30, &args![actor]);
+    }
+    if !in_range {
+        e.vcall(base, 0x400, &args![0u32]);
+        let package = e.vcall(base, 0x27c, &args![]).u32();
+        if package == 0 || !e.call(0x0067_a460, &args![package]).bool() {
+            e.call(0x008a_6840, &args![actor, 0u32]);
+        }
+        e.call(0x006e_cd40, &args![state, 1u32]);
+        fn_00902680(e, Ptr::new(state));
+        fn_009026a0(e, Ptr::new(state));
+        e.vcall(base, 0x654, &args![1u32]);
+        return;
+    }
+    let animation = e.vcall(base, 0x1b8, &args![]).u32();
+    let stand = setting_float(e, 0x011c_dd30);
+    e.vcall(base, 0x338, &args![stand]);
+    if !e.call(0x0049_85f0, &args![animation]).bool() {
+        e.call(0x0049_8910, &args![animation, 1u32, 0u32]);
+    }
+    e.mem.set_u8(base + 0x349, 1);
+    if !e.call(0x008a_16d0, &args![actor]).bool() {
+        e.call(0x008a_6840, &args![actor, 1u32]);
+    }
+    if e.call(GET_CURRENT_WEAPON, &args![actor]).u32() != 0
+        && e.call(0x008a_16d0, &args![actor]).bool()
+    {
+        let weapon = e.call(GET_CURRENT_WEAPON, &args![actor]).u32();
+        if e.call(0x004c_0c60, &args![weapon]).bool() {
+            e.vcall(base, 0x400, &args![1u32]);
+        }
+    }
+    e.vcall(base, 0x638, &args![chosen]);
+    if flagged {
+        return;
+    }
+    let seconds = e.call(0x0084_d030, &args![0x011f_6394u32]).f32();
+    e.call(0x0090_3160, &args![state, seconds]);
+    let mut attack = inner;
+    let mut warn = false;
+    if !inner {
+        let elapsed = e.call(0x0062_1b00, &args![state]).f64();
+        if f64::from(setting_float(e, 0x011c_d5fc)) <= elapsed {
+            let package = e.vcall(base, 0x27c, &args![]).u32();
+            let warnings = if package != 0 {
+                e.call(0x0067_5980, &args![package]).u32()
+            } else {
+                0
+            };
+            let limit = if warnings != 0 {
+                e.call(0x0044_ddc0, &args![warnings]).i32()
+            } else {
+                2
+            };
+            let count = e.call(GET_FORM_ID, &args![state]).i32();
+            attack = count > limit;
+            warn = !attack;
+        }
+    }
+    if attack {
+        let weapon_state = e.call(0x0044_ddc0, &args![state]).u32();
+        let engaged = e
+            .vcall(
+                base,
+                0x33c,
+                &args![
+                    actor,
+                    weapon_state,
+                    0u32,
+                    0u32,
+                    0u32,
+                    0u32,
+                    0u32,
+                    0u32,
+                    0u32,
+                    0u32,
+                    0u32,
+                    1u32,
+                    0u32
+                ],
+            )
+            .bool();
+        if engaged && e.call(LIST_NEXT, &args![base + 4]).u32() == state {
+            e.call(0x006e_cd40, &args![state, 0u32]);
+        }
+    } else if warn {
+        high_process_process_guard_warn(e, this, actor, state);
+    }
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -7003,6 +8101,82 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00900f00,
             high_process_set_action_head_track_target(Ptr, u32)
+        ),
+        entry!(
+            0x00900f50,
+            high_process_set_script_head_track_target(Ptr, u32)
+        ),
+        entry!(
+            0x00900fa0,
+            high_process_set_combat_head_track_target(Ptr, u32)
+        ),
+        entry!(
+            0x00900ff0,
+            high_process_set_head_track_target(Ptr, u32, u32)
+        ),
+        entry!(
+            0x00901050,
+            high_process_set_dialog_head_track_target(Ptr, u32)
+        ),
+        entry!(
+            0x009010a0,
+            high_process_set_use_weapon_head_track_target(Ptr, u32)
+        ),
+        entry!(
+            0x009010f0,
+            high_process_clear_default_head_track_target(Ptr)
+        ),
+        entry!(
+            0x00901120,
+            high_process_clear_action_head_track_target(Ptr, u8)
+        ),
+        entry!(
+            0x00901190,
+            high_process_clear_script_head_track_target(Ptr, u8)
+        ),
+        entry!(0x00901200, high_process_clear_combat_head_track_target(Ptr)),
+        entry!(
+            0x00901230,
+            high_process_clear_dialog_head_track_target(Ptr, u8)
+        ),
+        entry!(
+            0x009012a0,
+            high_process_clear_use_weapon_head_track_target(Ptr, u8)
+        ),
+        entry!(0x00901310, high_process_clear_all_head_track_targets(Ptr)),
+        entry!(0x00901360, high_process_clear_path_look_target(Ptr, u32)),
+        entry!(0x00901390, high_process_remove_head_track_target(Ptr, u32)),
+        entry!(0x00901400, high_process_can_set_default_head_track_target(Ptr) -> bool),
+        entry!(0x00901460, high_process_can_set_action_head_track_target(Ptr) -> bool),
+        entry!(0x009014a0, high_process_can_set_combat_head_track_target(Ptr) -> bool),
+        entry!(0x009014d0, high_process_on_new_head_track_target(Ptr)),
+        entry!(0x00901550, high_process_update_head_track_targets(Ptr)),
+        entry!(0x009015f0, high_process_get_current_head_track_target(Ptr) -> u32),
+        entry!(0x00901640, high_process_get_current_head_track_target_ov2(Ptr, u32) -> u32),
+        entry!(0x00901660, high_process_get_current_head_track_type(Ptr) -> u32),
+        entry!(0x009016a0, high_process_get_current_head_track_type_string(Ptr) -> u32),
+        entry!(0x00901710, high_process_set_detection_modifier(Ptr, f32)),
+        entry!(0x00901740, fn_00901740(Ptr, u32)),
+        entry!(0x00901800, high_process_compute_can_initiate_dialogue_with_npc(Ptr, u32, u32) -> bool),
+        entry!(0x00901990, high_process_compute_can_respond_to_dialogue_from_npc(Ptr, u32, u32) -> bool),
+        entry!(0x00901a20, high_process_process_sand_box_dialogue(Ptr, u32, u32) -> bool),
+        entry!(0x00901c50, fn_00901c50(Ptr) -> bool),
+        entry!(
+            0x00901c70,
+            high_process_process_use_idle_marker(Ptr, u32, u32)
+        ),
+        entry!(0x00902190, high_process_create_muzzle_flash(Ptr, u32, u32)),
+        entry!(0x00902230, high_process_clear_muzzle_flash(Ptr)),
+        entry!(0x00902290, high_process_process_guard(Ptr, u32)),
+        entry!(0x00902640, fn_00902640(Ptr, u32, u32)),
+        entry!(0x00902680, fn_00902680(Ptr)),
+        entry!(0x009026a0, fn_009026a0(Ptr)),
+        entry!(0x009026c0, fn_009026c0(Ptr, u32, u32, u8)),
+        entry!(0x00902bd0, high_process_process_guard_warn(Ptr, u32, u32)),
+        entry!(0x00902c60, fn_00902c60(Ptr)),
+        entry!(
+            0x00902c80,
+            high_process_process_guard_wait_to_attack(Ptr, u32, u32)
         ),
     ]
 }
@@ -11169,5 +12343,1500 @@ mod tests {
         assert_eq!(e.mem.u8(process + 0x411), 0);
         assert!(calls_to(&e, 0x0090_14d0).is_empty());
         assert!(calls_to(&e, 0x0056_4db0).is_empty());
+    }
+
+    // ---- Head-track targets, dialogue and guard (008f3fe0 range, third part) ----------
+
+    /// Registers the game-setting accessor `00403e20` as the game does (the value is the
+    /// float at `this + 4`) and maps a setting object at `object`.
+    fn put_setting(e: &mut Engine, object: u32, value: f32) {
+        e.map(object, 8);
+        e.mem.set_f32(object + 4, value);
+        e.register_double(0x0040_3e20, |_, a| ret(a[0] + 4));
+    }
+
+    /// Maps a `double` constant.
+    fn put_double(e: &mut Engine, addr: u32, value: f64) {
+        e.map(addr, 8);
+        e.mem.set_f64(addr, value);
+    }
+
+    /// Maps a `float` constant.
+    fn put_float(e: &mut Engine, addr: u32, value: f32) {
+        global(e, addr, value.to_bits());
+    }
+
+    const HEAD_WORDS: u32 = 0x3f8;
+    const HEAD_FLAGS: u32 = 0x410;
+
+    fn check_head_track_setter(setter: u32, index: u32) {
+        let mut e = Engine::new();
+        stub(&mut e, 0x0056_4db0, 0);
+        let proc = e.mem.alloc(0x500);
+        e.call_log = Some(vec![]);
+        e.call(setter, &args![proc, 0x7001u32]);
+        assert_eq!(e.mem.u32(proc + HEAD_WORDS + 4 * index), 0x7001);
+        assert_eq!(e.mem.u8(proc + HEAD_FLAGS + index), 1);
+        assert_eq!(e.mem.u32(proc + 0x41c), 0x7001);
+        assert_eq!(calls_to(&e, 0x0056_4db0), vec![vec![0x7001, 1]]);
+        e.call(setter, &args![proc, 0u32]);
+        assert_eq!(e.mem.u32(proc + HEAD_WORDS + 4 * index), 0);
+        assert_eq!(e.mem.u8(proc + HEAD_FLAGS + index), 0);
+        assert_eq!(calls_to(&e, 0x0056_4db0).len(), 1);
+    }
+
+    #[test]
+    fn test_high_process_set_script_head_track_target() {
+        check_head_track_setter(0x0090_0f50, 2);
+    }
+
+    #[test]
+    fn test_high_process_set_combat_head_track_target() {
+        check_head_track_setter(0x0090_0fa0, 3);
+    }
+
+    #[test]
+    fn test_high_process_set_dialog_head_track_target() {
+        check_head_track_setter(0x0090_1050, 4);
+    }
+
+    #[test]
+    fn test_high_process_set_use_weapon_head_track_target() {
+        check_head_track_setter(0x0090_10a0, 5);
+    }
+
+    #[test]
+    fn test_high_process_set_head_track_target() {
+        let mut e = Engine::new();
+        stub(&mut e, 0x0056_4db0, 0);
+        let proc = e.mem.alloc(0x500);
+        e.call(0x0090_0ff0, &args![proc, 3u32, 0x7003u32]);
+        assert_eq!(e.mem.u32(proc + HEAD_WORDS + 12), 0x7003);
+        assert_eq!(e.mem.u8(proc + HEAD_FLAGS + 3), 1);
+        e.call(0x0090_0ff0, &args![proc, 3u32, 0u32]);
+        assert_eq!(e.mem.u32(proc + HEAD_WORDS + 12), 0);
+        assert_eq!(e.mem.u8(proc + HEAD_FLAGS + 3), 0);
+    }
+
+    #[test]
+    fn test_high_process_clear_default_head_track_target() {
+        let mut e = Engine::new();
+        let proc = e.mem.alloc(0x500);
+        e.mem.set_u32(proc + HEAD_WORDS, 0x7000);
+        e.mem.set_u8(proc + HEAD_FLAGS, 1);
+        e.mem.set_u32(proc + 0x41c, 0x7000);
+        e.call(0x0090_10f0, &args![proc]);
+        assert_eq!(e.mem.u32(proc + HEAD_WORDS), 0);
+        assert_eq!(e.mem.u8(proc + HEAD_FLAGS), 0);
+        assert_eq!(e.mem.u32(proc + 0x41c), 0);
+    }
+
+    /// A clear function with a restore flag: slot `index` is emptied; with the flag the old
+    /// target moves to slot 0 and the process's slot `0x268` gets the setting's float,
+    /// without it the current target is recomputed.
+    fn check_head_track_clear(clear: u32, index: u32) {
+        let mut e = Engine::new();
+        put_setting(&mut e, 0x011c_dbb8, 2.5);
+        let table = vtable(&mut e, &[(0x268, 0x00aa_f268)]);
+        let proc = object(&mut e, 0x500, table);
+        stub(&mut e, 0x00aa_f268, 0);
+        e.mem.set_u32(proc + HEAD_WORDS + 4 * index, 0x7002);
+        e.mem.set_u8(proc + HEAD_FLAGS + index, 1);
+        e.call_log = Some(vec![]);
+        e.call(clear, &args![proc, 1u32]);
+        assert_eq!(e.mem.u32(proc + HEAD_WORDS + 4 * index), 0);
+        assert_eq!(e.mem.u8(proc + HEAD_FLAGS + index), 0);
+        assert_eq!(e.mem.u32(proc + HEAD_WORDS), 0x7002);
+        assert_eq!(
+            calls_to(&e, 0x00aa_f268),
+            vec![vec![proc, 2.5f32.to_bits()]]
+        );
+        // Without the flag nothing is handed on and the cached target follows.
+        e.mem.set_u32(proc + HEAD_WORDS + 4 * index, 0x7003);
+        e.mem.set_u8(proc + HEAD_FLAGS + index, 1);
+        e.mem.set_u32(proc + 0x41c, 0x7003);
+        e.call_log = Some(vec![]);
+        e.call(clear, &args![proc, 0u32]);
+        assert!(calls_to(&e, 0x00aa_f268).is_empty());
+        assert_eq!(e.mem.u32(proc + 0x41c), 0);
+        assert_eq!(e.mem.u32(proc + HEAD_WORDS), 0x7002);
+    }
+
+    #[test]
+    fn test_high_process_clear_action_head_track_target() {
+        check_head_track_clear(0x0090_1120, 1);
+    }
+
+    #[test]
+    fn test_high_process_clear_script_head_track_target() {
+        check_head_track_clear(0x0090_1190, 2);
+    }
+
+    #[test]
+    fn test_high_process_clear_dialog_head_track_target() {
+        check_head_track_clear(0x0090_1230, 4);
+    }
+
+    #[test]
+    fn test_high_process_clear_use_weapon_head_track_target() {
+        check_head_track_clear(0x0090_12a0, 5);
+    }
+
+    #[test]
+    fn test_high_process_clear_combat_head_track_target() {
+        let mut e = Engine::new();
+        let proc = e.mem.alloc(0x500);
+        e.mem.set_u32(proc + HEAD_WORDS + 12, 0x7004);
+        e.mem.set_u8(proc + HEAD_FLAGS + 3, 1);
+        e.mem.set_u32(proc + 0x41c, 0x7004);
+        e.call(0x0090_1200, &args![proc]);
+        assert_eq!(e.mem.u32(proc + HEAD_WORDS + 12), 0);
+        assert_eq!(e.mem.u8(proc + HEAD_FLAGS + 3), 0);
+        assert_eq!(e.mem.u32(proc + 0x41c), 0);
+    }
+
+    #[test]
+    fn test_high_process_clear_all_head_track_targets() {
+        let mut e = Engine::new();
+        let proc = e.mem.alloc(0x500);
+        for index in 0..6 {
+            e.mem.set_u32(proc + HEAD_WORDS + 4 * index, 0x7000 + index);
+            e.mem.set_u8(proc + HEAD_FLAGS + index, 1);
+        }
+        e.mem.set_u32(proc + 0x41c, 0x7005);
+        e.call(0x0090_1310, &args![proc]);
+        for index in 0..6 {
+            assert_eq!(e.mem.u32(proc + HEAD_WORDS + 4 * index), 0);
+            assert_eq!(e.mem.u8(proc + HEAD_FLAGS + index), 0);
+        }
+        assert_eq!(e.mem.u32(proc + 0x41c), 0);
+    }
+
+    #[test]
+    fn test_high_process_clear_path_look_target() {
+        let mut e = Engine::new();
+        let proc = e.mem.alloc(0x500);
+        e.mem.set_u32(proc + 0x2ac, 0x7001);
+        e.call(0x0090_1360, &args![proc, 0x7002u32]);
+        assert_eq!(e.mem.u32(proc + 0x2ac), 0x7001);
+        e.call(0x0090_1360, &args![proc, 0x7001u32]);
+        assert_eq!(e.mem.u32(proc + 0x2ac), 0);
+    }
+
+    #[test]
+    fn test_high_process_remove_head_track_target() {
+        let mut e = Engine::new();
+        let proc = e.mem.alloc(0x500);
+        for index in 0..6 {
+            e.mem.set_u8(proc + HEAD_FLAGS + index, 1);
+            e.mem.set_u32(proc + HEAD_WORDS + 4 * index, 0x7000);
+        }
+        e.mem.set_u32(proc + HEAD_WORDS + 8, 0x7777);
+        e.mem.set_u32(proc + 0x41c, 0x7000);
+        e.call(0x0090_1390, &args![proc, 0x7000u32]);
+        for index in [0u32, 1, 3, 4, 5] {
+            assert_eq!(e.mem.u32(proc + HEAD_WORDS + 4 * index), 0);
+            assert_eq!(e.mem.u8(proc + HEAD_FLAGS + index), 0);
+        }
+        assert_eq!(e.mem.u32(proc + HEAD_WORDS + 8), 0x7777);
+        assert_eq!(e.mem.u8(proc + HEAD_FLAGS + 2), 1);
+        assert_eq!(e.mem.u32(proc + 0x41c), 0x7777);
+    }
+
+    #[test]
+    fn test_high_process_can_set_default_head_track_target() {
+        let mut e = Engine::new();
+        put_double(&mut e, 0x0101_2060, 0.0);
+        let table = vtable(&mut e, &[(0x264, 0x00aa_f264)]);
+        let proc = object(&mut e, 0x500, table);
+        stub_float(&mut e, 0x00aa_f264, -1.0);
+        assert!(e.call(0x0090_1400, &args![proc]).bool());
+        stub_float(&mut e, 0x00aa_f264, 0.0);
+        assert!(!e.call(0x0090_1400, &args![proc]).bool());
+        // A flagged slot 1 to 5 refuses without asking; slot 0 does not count.
+        stub_float(&mut e, 0x00aa_f264, -1.0);
+        e.mem.set_u8(proc + HEAD_FLAGS, 1);
+        assert!(e.call(0x0090_1400, &args![proc]).bool());
+        e.mem.set_u8(proc + HEAD_FLAGS + 1, 1);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0090_1400, &args![proc]).bool());
+        assert!(calls_to(&e, 0x00aa_f264).is_empty());
+    }
+
+    #[test]
+    fn test_high_process_can_set_action_head_track_target() {
+        let mut e = Engine::new();
+        let proc = e.mem.alloc(0x500);
+        e.mem.set_u8(proc + HEAD_FLAGS, 1);
+        assert!(e.call(0x0090_1460, &args![proc]).bool());
+        e.mem.set_u8(proc + HEAD_FLAGS + 5, 1);
+        assert!(!e.call(0x0090_1460, &args![proc]).bool());
+    }
+
+    #[test]
+    fn test_high_process_can_set_combat_head_track_target() {
+        let mut e = Engine::new();
+        let proc = e.mem.alloc(0x500);
+        assert!(e.call(0x0090_14a0, &args![proc]).bool());
+        e.mem.set_u8(proc + HEAD_FLAGS + 4, 1);
+        assert!(!e.call(0x0090_14a0, &args![proc]).bool());
+    }
+
+    #[test]
+    fn test_high_process_on_new_head_track_target() {
+        let mut e = Engine::new();
+        let proc = e.mem.alloc(0x500);
+        e.mem.set_u8(proc + HEAD_FLAGS + 1, 1);
+        e.mem.set_u32(proc + HEAD_WORDS + 4, 0x7001);
+        e.mem.set_u8(proc + HEAD_FLAGS + 3, 1);
+        e.mem.set_u32(proc + HEAD_WORDS + 12, 0x7003);
+        e.mem.set_u8(proc + 0x420, 1);
+        e.call(0x0090_14d0, &args![proc]);
+        assert_eq!(e.mem.u32(proc + 0x41c), 0x7003);
+        assert_eq!(e.mem.u8(proc + 0x420), 0);
+        // Unchanged: the byte stays.
+        e.mem.set_u8(proc + 0x420, 1);
+        e.call(0x0090_14d0, &args![proc]);
+        assert_eq!(e.mem.u8(proc + 0x420), 1);
+        // Nothing flagged: the cache is emptied.
+        e.mem.set_u8(proc + HEAD_FLAGS + 1, 0);
+        e.mem.set_u8(proc + HEAD_FLAGS + 3, 0);
+        e.call(0x0090_14d0, &args![proc]);
+        assert_eq!(e.mem.u32(proc + 0x41c), 0);
+        assert_eq!(e.mem.u8(proc + 0x420), 0);
+    }
+
+    #[test]
+    fn test_high_process_update_head_track_targets() {
+        let mut e = Engine::new();
+        e.register_double(0x0044_0d80, |_, a| ret((a[0] == 0x7002) as u32));
+        let proc = e.mem.alloc(0x500);
+        // Slot 1 holds a target that 00440d80 rejects, slot 2 one it accepts, slot 3 is
+        // flagged with a null target, slot 4 holds a word but is not flagged.
+        e.mem.set_u8(proc + HEAD_FLAGS + 1, 1);
+        e.mem.set_u32(proc + HEAD_WORDS + 4, 0x7001);
+        e.mem.set_u8(proc + HEAD_FLAGS + 2, 1);
+        e.mem.set_u32(proc + HEAD_WORDS + 8, 0x7002);
+        e.mem.set_u8(proc + HEAD_FLAGS + 3, 1);
+        e.mem.set_u32(proc + HEAD_WORDS + 16, 0x7004);
+        e.mem.set_u32(proc + 0x41c, 0x7002);
+        e.call(0x0090_1550, &args![proc]);
+        assert_eq!(e.mem.u8(proc + HEAD_FLAGS + 1), 1);
+        assert_eq!(e.mem.u32(proc + HEAD_WORDS + 4), 0x7001);
+        assert_eq!(e.mem.u8(proc + HEAD_FLAGS + 2), 0);
+        assert_eq!(e.mem.u32(proc + HEAD_WORDS + 8), 0);
+        assert_eq!(e.mem.u8(proc + HEAD_FLAGS + 3), 0);
+        assert_eq!(e.mem.u32(proc + HEAD_WORDS + 16), 0x7004);
+        assert_eq!(e.mem.u32(proc + 0x41c), 0x7001);
+    }
+
+    #[test]
+    fn test_high_process_get_current_head_track_target_and_type() {
+        let mut e = Engine::new();
+        let proc = e.mem.alloc(0x500);
+        assert_eq!(e.call(0x0090_15f0, &args![proc]).u32(), 0);
+        assert_eq!(e.call(0x0090_1660, &args![proc]).u32(), 0);
+        e.mem.set_u8(proc + HEAD_FLAGS + 2, 1);
+        e.mem.set_u32(proc + HEAD_WORDS + 8, 0x7002);
+        e.mem.set_u32(proc + HEAD_WORDS + 12, 0x7003);
+        assert_eq!(e.call(0x0090_15f0, &args![proc]).u32(), 0x7002);
+        assert_eq!(e.call(0x0090_1660, &args![proc]).u32(), 2);
+        assert_eq!(e.call(0x0090_1640, &args![proc, 3u32]).u32(), 0x7003);
+    }
+
+    #[test]
+    fn test_high_process_get_current_head_track_type_string() {
+        let mut e = Engine::new();
+        let table = vtable(&mut e, &[(0x67c, 0x00aa_f67c)]);
+        let proc = object(&mut e, 0x500, table);
+        for (kind, text) in [
+            (0u32, 0x0104_e6a0u32),
+            (1, 0x0108_83ec),
+            (2, 0x0108_83e4),
+            (3, 0x0108_83dc),
+            (4, 0x0108_83d4),
+            (5, 0x0101_a6c0),
+        ] {
+            stub(&mut e, 0x00aa_f67c, kind);
+            assert_eq!(e.call(0x0090_16a0, &args![proc]).u32(), text);
+        }
+    }
+
+    #[test]
+    fn test_high_process_set_detection_modifier() {
+        let mut e = Engine::new();
+        let table = vtable(&mut e, &[(0x4a8, 0x00aa_f4a8)]);
+        let proc = object(&mut e, 0x500, table);
+        stub(&mut e, 0x00aa_f4a8, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_1710, &args![proc, 1.25f32]);
+        assert_eq!(e.mem.f32(proc + 0x3bc), 1.25);
+        assert_eq!(calls_to(&e, 0x00aa_f4a8), vec![vec![proc]]);
+    }
+
+    #[test]
+    fn test_fn_00901740() {
+        let mut e = Engine::new();
+        let player = 0x7f00u32;
+        global(&mut e, 0x011d_ea3c, player);
+        stub(&mut e, 0x0061_a2d0, 0x9001);
+        stub(&mut e, 0x0057_bd60, 0);
+        let process_table = vtable(&mut e, &[(0x2a4, 0x00aa_f2a4), (0x1dc, 0x00aa_f1dc)]);
+        let their_process = object(&mut e, 0x500, process_table);
+        stub(&mut e, 0x00aa_f2a4, 0);
+        stub(&mut e, 0x00aa_f1dc, 0);
+        stub(&mut e, 0x008d_8520, their_process);
+        stub(&mut e, 0x0093_44a0, 0x5555);
+        stub(&mut e, 0x0041_ca90, 6);
+        let actor_table = vtable(&mut e, &[(0x214, 0x00aa_f214)]);
+        let actor = object(&mut e, 0x200, actor_table);
+        stub(&mut e, 0x00aa_f214, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_1740, &args![0u32, actor]);
+        assert_eq!(calls_to(&e, 0x0061_a2d0), vec![vec![1, 2]]);
+        assert_eq!(calls_to(&e, 0x0057_bd60), vec![vec![actor, player]]);
+        assert_eq!(
+            calls_to(&e, 0x00aa_f2a4),
+            vec![vec![their_process, actor, 0x9001, 0, 1, 0, 0]]
+        );
+        // Type 6: the second process call is skipped.
+        assert!(calls_to(&e, 0x00aa_f1dc).is_empty());
+        stub(&mut e, 0x0041_ca90, 5);
+        e.call(0x0090_1740, &args![0u32, actor]);
+        assert_eq!(
+            calls_to(&e, 0x00aa_f1dc),
+            vec![vec![their_process, actor, 1]]
+        );
+        // A nonzero slot 0x214 skips it too, and a null item skips the first call.
+        stub(&mut e, 0x00aa_f214, 1);
+        stub(&mut e, 0x0061_a2d0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_1740, &args![0u32, actor]);
+        assert!(calls_to(&e, 0x00aa_f1dc).is_empty());
+        assert!(calls_to(&e, 0x00aa_f2a4).is_empty());
+    }
+
+    /// Everything `ComputeCanInitiateDialogueWithNPC` asks, answering "yes" throughout.
+    /// Returns (process, actor, other, other's process).
+    fn initiate_setup(e: &mut Engine) -> (u32, u32, u32) {
+        let player = e.mem.alloc(0x10);
+        global(e, 0x011d_ea3c, player);
+        put_double(e, 0x0101_2060, 0.0);
+        put_double(e, 0x0101_db88, 1.0);
+        e.map(0x011f_1221, 4);
+        e.mem.set_u8(0x011f_1221, 0);
+        stub(e, 0x0096_9860, 0);
+        stub(e, 0x008d_efe0, 0);
+        stub(e, 0x0088_4480, 1);
+        stub(e, 0x0057_9670, 0);
+        stub(e, 0x008a_78f0, 0);
+        stub(e, 0x0089_3190, 1);
+        stub(e, 0x0088_1510, 0);
+        let other_process_table = vtable(e, &[(0x1f8, 0x00aa_f1f8)]);
+        let other_process = object(e, 0x500, other_process_table);
+        stub(e, 0x00aa_f1f8, 1);
+        stub(e, 0x008d_8520, other_process);
+        let other_table = vtable(e, &[(0x1d0, 0x00aa_f1d0)]);
+        let other = object(e, 0x200, other_table);
+        stub(e, 0x00aa_f1d0, 0x6001);
+        let actor = e.mem.alloc(0x200);
+        let table = vtable(e, &[(0x27c, 0x00aa_f27c), (0x504, 0x00aa_f504)]);
+        let proc = object(e, 0x500, table);
+        stub(e, 0x00aa_f27c, 0x6002);
+        let state = e.mem.alloc(0x40);
+        stub(e, 0x00aa_f504, state);
+        stub_float(e, 0x0043_5e00, 0.5);
+        (proc, actor, other)
+    }
+
+    #[test]
+    fn test_high_process_compute_can_initiate_dialogue_with_npc() {
+        let mut e = Engine::new();
+        let (proc, actor, other) = initiate_setup(&mut e);
+        let run = |e: &mut Engine| e.call(0x0090_1800, &args![proc, actor, other]).bool();
+        assert!(run(&mut e));
+        // The player is busy.
+        stub(&mut e, 0x0096_9860, 1);
+        assert!(!run(&mut e));
+        stub(&mut e, 0x0096_9860, 0);
+        // A positive wait in the process.
+        e.mem.set_f32(proc + 0x2a8, 1.0);
+        assert!(!run(&mut e));
+        e.mem.set_f32(proc + 0x2a8, 0.0);
+        // The actor is already in a conversation.
+        stub(&mut e, 0x008a_78f0, 1);
+        assert!(!run(&mut e));
+        stub(&mut e, 0x008a_78f0, 0);
+        // The other is the actor itself.
+        assert!(!e.call(0x0090_1800, &args![proc, actor, actor]).bool());
+        // Its process refuses.
+        stub(&mut e, 0x00aa_f1f8, 0);
+        assert!(!run(&mut e));
+        stub(&mut e, 0x00aa_f1f8, 1);
+        // With the global byte set the detection state's float decides.
+        e.mem.set_u8(0x011f_1221, 1);
+        assert!(run(&mut e));
+        stub_float(&mut e, 0x0043_5e00, 2.0);
+        assert!(!run(&mut e));
+        stub(&mut e, 0x00aa_f504, 0);
+        assert!(!run(&mut e));
+    }
+
+    #[test]
+    fn test_high_process_compute_can_respond_to_dialogue_from_npc() {
+        let mut e = Engine::new();
+        let table = vtable(
+            &mut e,
+            &[
+                (0x52c, 0x00aa_f52c),
+                (0x30c, 0x00aa_f30c),
+                (0x22c, 0x00aa_f22c),
+            ],
+        );
+        let proc = object(&mut e, 0x500, table);
+        stub(&mut e, 0x00aa_f52c, 0);
+        stub(&mut e, 0x00aa_f30c, 0);
+        stub(&mut e, 0x00aa_f22c, 0);
+        stub(&mut e, 0x008a_78f0, 0);
+        stub(&mut e, 0x0067_8610, 0);
+        let actor = 0x6001u32;
+        let run = |e: &mut Engine| e.call(0x0090_1990, &args![proc, actor, 0u32]).bool();
+        assert!(run(&mut e));
+        stub(&mut e, 0x00aa_f22c, 0x6100);
+        assert!(run(&mut e));
+        stub(&mut e, 0x0067_8610, 1);
+        assert!(!run(&mut e));
+        stub(&mut e, 0x00aa_f22c, 0);
+        assert!(run(&mut e));
+        stub(&mut e, 0x00aa_f52c, 1);
+        assert!(!run(&mut e));
+        stub(&mut e, 0x00aa_f52c, 0);
+        stub(&mut e, 0x00aa_f30c, 1);
+        assert!(!run(&mut e));
+        stub(&mut e, 0x00aa_f30c, 0);
+        stub(&mut e, 0x008a_78f0, 1);
+        assert!(!run(&mut e));
+    }
+
+    #[test]
+    fn test_fn_00901c50() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x40);
+        assert!(e.call(0x0090_1c50, &args![block]).bool());
+        e.mem.set_u16(block + 0x24, 0x0004);
+        assert!(!e.call(0x0090_1c50, &args![block]).bool());
+        e.mem.set_u16(block + 0x24, 0xfffb);
+        assert!(e.call(0x0090_1c50, &args![block]).bool());
+    }
+
+    #[test]
+    fn test_high_process_process_sand_box_dialogue() {
+        let mut e = Engine::new();
+        put_setting(&mut e, 0x011c_d038, 1.0);
+        put_setting(&mut e, 0x011c_d328, 2.0);
+        let table = vtable(
+            &mut e,
+            &[
+                (0x27c, 0x00aa_f27c),
+                (0x274, 0x00aa_f274),
+                (0x1f4, 0x00aa_f1f4),
+                (0x1f0, 0x00aa_f1f0),
+            ],
+        );
+        let proc = object(&mut e, 0x500, table);
+        stub(&mut e, 0x00aa_f27c, 0x6002);
+        stub(&mut e, 0x00aa_f274, 0);
+        stub(&mut e, 0x00aa_f1f4, 1);
+        stub(&mut e, 0x00aa_f1f0, 0);
+        let other_process_table = vtable(&mut e, &[(0x1f0, 0x00aa_f2f0)]);
+        let other_process = object(&mut e, 0x500, other_process_table);
+        stub(&mut e, 0x00aa_f2f0, 0);
+        stub(&mut e, 0x008d_8520, other_process);
+        let other_table = vtable(&mut e, &[(0x100, 0x00aa_f100)]);
+        let other = object(&mut e, 0x200, other_table);
+        stub(&mut e, 0x00aa_f100, 1);
+        let actor_table = vtable(&mut e, &[(0x280, 0x00aa_f280)]);
+        let actor = object(&mut e, 0x200, actor_table);
+        stub(&mut e, 0x00aa_f280, 1);
+        stub(&mut e, 0x0093_44a0, 0x7100);
+        stub(&mut e, 0x0096_11e0, 0x25);
+        let form_flags = e.mem.alloc(0x40);
+        stub(&mut e, 0x0093_44a0, form_flags);
+        stub(&mut e, 0x0055_b980, 0x5100);
+        stub(&mut e, 0x0067_f030, 0);
+        stub(&mut e, 0x0067_f110, 0);
+        e.register_double(0x0064_65f0, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0]) * 10.0 + f32::from_bits(a[1])),
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0090_1a20, &args![proc, actor, other]).bool());
+        // The form has the flag clear: the last argument is 1; the package's location is
+        // used; the random value is 2 * 10 + 1.
+        assert_eq!(
+            calls_to(&e, 0x00aa_f280),
+            vec![vec![actor, other, 0x5100, 0x5100, 1, 0, 0, 0, 1, 1]]
+        );
+        assert_eq!(e.mem.f32(proc + 0x2c8), 21.0);
+        assert_eq!(calls_to(&e, 0x00aa_f1f0), vec![vec![proc, other]]);
+        assert_eq!(calls_to(&e, 0x00aa_f2f0), vec![vec![other_process, actor]]);
+        assert_eq!(calls_to(&e, 0x0067_f110).len(), 1);
+        // The flag bit set: the last argument is 0. A form of another type too.
+        e.mem.set_u16(form_flags + 0x24, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_1a20, &args![proc, actor, other]);
+        assert_eq!(calls_to(&e, 0x00aa_f280)[0][9], 0);
+        // A slot 0x274 object of type 12 supplies its own location.
+        let source_table = vtable(&mut e, &[(0x8, 0x00aa_f008)]);
+        let source = object(&mut e, 0x40, source_table);
+        stub(&mut e, 0x00aa_f008, 0xc);
+        stub(&mut e, 0x00aa_f274, source);
+        stub(&mut e, 0x0044_edb0, 0x5300);
+        stub(&mut e, 0x0067_f3c0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_1a20, &args![proc, actor, other]);
+        let call = &calls_to(&e, 0x00aa_f280)[0];
+        assert_ne!(call[2], 0x5100);
+        assert_eq!(call[2], call[3]);
+        assert_eq!(calls_to(&e, 0x0067_f3c0).len(), 1);
+        assert_eq!(calls_to(&e, 0x0067_f3c0)[0][1], 0x5300);
+        // Not an actor, or refused by the process: false, nothing run.
+        stub(&mut e, 0x00aa_f100, 0);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0090_1a20, &args![proc, actor, other]).bool());
+        assert!(!e.call(0x0090_1a20, &args![proc, actor, 0u32]).bool());
+        stub(&mut e, 0x00aa_f100, 1);
+        stub(&mut e, 0x00aa_f1f4, 0);
+        assert!(!e.call(0x0090_1a20, &args![proc, actor, other]).bool());
+        assert!(calls_to(&e, 0x00aa_f280).is_empty());
+    }
+
+    /// The doubles the idle-marker function needs; the actor and the process record their
+    /// slot calls. Returns (process, actor, target).
+    fn idle_setup(e: &mut Engine, mode: u32) -> (u32, u32, u32) {
+        let process_table = vtable(
+            e,
+            &[
+                (0x12c, 0x00aa_f12c),
+                (0x8c, 0x00aa_f08c),
+                (0x294, 0x00aa_f294),
+                (0x288, 0x00aa_f288),
+                (0x27c, 0x00aa_f27c),
+                (0x34c, 0x00aa_f34c),
+                (0x350, 0x00aa_f350),
+                (0x660, 0x00aa_f660),
+                (0x44, 0x00aa_f044),
+            ],
+        );
+        let proc = object(e, 0x500, process_table);
+        for slot in [
+            0x00aa_f12c,
+            0x00aa_f08c,
+            0x00aa_f294,
+            0x00aa_f288,
+            0x00aa_f660,
+            0x00aa_f044,
+            0x00aa_f350,
+        ] {
+            stub(e, slot, 0);
+        }
+        stub(e, 0x00aa_f27c, 0x5100);
+        stub(e, 0x00aa_f34c, 0x77);
+        let position = e.mem.alloc(12);
+        let target_table = vtable(e, &[(0x1f4, 0x00aa_f1f4)]);
+        let target = object(e, 0x200, target_table);
+        stub(e, 0x00aa_f1f4, position);
+        let owner = e.mem.alloc(0x10);
+        let actor_table = vtable(
+            e,
+            &[
+                (0x1f4, 0x00aa_f1f4),
+                (0x214, 0x00aa_f214),
+                (0x1e4, 0x00aa_f1e4),
+                (0x234, 0x00aa_f234),
+            ],
+        );
+        let actor = object(e, 0x200, actor_table);
+        stub(e, 0x00aa_f214, 0);
+        stub(e, 0x00aa_f1e4, owner);
+        stub(e, 0x00aa_f234, 0);
+        let marker_form = e.mem.alloc(0x40);
+        stub(e, 0x007a_f430, marker_form);
+        stub(e, 0x0047_9e80, mode);
+        stub(e, 0x0040_1170, 0x30);
+        stub(e, 0x0091_5ef0, 0);
+        stub(e, 0x008b_3bd0, 0);
+        put_float(e, 0x0101_e6ec, 64.0);
+        put_float(e, 0x0101_6410, 100.0);
+        put_float(e, 0x0101_7b78, 10.0);
+        put_float(e, 0x0103_0ff0, 0.75);
+        put_float(e, 0x0101_2054, -1.0);
+        put_double(e, 0x0101_ffa0, 0.1);
+        stub(e, 0x0043_9ef0, 0);
+        e.mem.set_u32(proc + 0x40, target);
+        (proc, actor, target)
+    }
+
+    #[test]
+    fn test_high_process_process_use_idle_marker_stops_moving_and_paths() {
+        let mut e = Engine::new();
+        let (proc, actor, _target) = idle_setup(&mut e, 0);
+        // A marker is passed to slot 0x12c; an actor that may not move is stopped.
+        stub(&mut e, 0x0091_5ef0, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_1c70, &args![proc, actor, 0x6600u32]);
+        assert_eq!(calls_to(&e, 0x00aa_f12c), vec![vec![proc, 0x6600]]);
+        assert_eq!(calls_to(&e, 0x00aa_f294), vec![vec![proc, actor]]);
+        assert_eq!(
+            calls_to(&e, 0x00aa_f288),
+            vec![vec![proc, actor, 0xffff_ffff]]
+        );
+        // A pathing actor farther than 64 from the marker: slot 0x34c, then 0x350.
+        stub(&mut e, 0x0091_5ef0, 0);
+        stub(&mut e, 0x008b_3bd0, 1);
+        stub_float(&mut e, 0x0057_23b0, 100.0);
+        stub_float(&mut e, 0x0067_8670, 5.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_1c70, &args![proc, actor, 0x6600u32]);
+        assert_eq!(
+            calls_to(&e, 0x00aa_f34c),
+            vec![vec![
+                proc,
+                actor,
+                100.0f32.to_bits(),
+                5.0f32.to_bits(),
+                10.0f32.to_bits(),
+                0,
+                0
+            ]]
+        );
+        assert_eq!(calls_to(&e, 0x00aa_f350), vec![vec![proc, actor, 0x77, 1]]);
+        // Closer than 64: the plain step value 0x101 and a clear flag.
+        stub_float(&mut e, 0x0057_23b0, 10.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_1c70, &args![proc, actor, 0x6600u32]);
+        assert!(calls_to(&e, 0x00aa_f34c).is_empty());
+        assert_eq!(calls_to(&e, 0x00aa_f350), vec![vec![proc, actor, 0x101, 0]]);
+    }
+
+    #[test]
+    fn test_high_process_process_use_idle_marker_target_far_or_turning() {
+        let mut e = Engine::new();
+        let (proc, actor, target) = idle_setup(&mut e, 0);
+        // No marker, a target whose form has type 0x30: the squared distance 1000 is
+        // above 10 * 10, so the actor is told to move.
+        stub_float(&mut e, 0x0059_5c80, 1000.0);
+        stub(&mut e, 0x008b_37c0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_1c70, &args![proc, actor, 0u32]);
+        assert_eq!(
+            calls_to(&e, 0x008b_37c0),
+            vec![vec![actor, target, 10.0f32.to_bits(), 0]]
+        );
+        // Near, but the height gap is above 100.
+        stub_float(&mut e, 0x0059_5c80, 1.0);
+        e.register_double(0x0040_8860, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])),
+            ..Ret::default()
+        });
+        // The z value is read from the out buffer: write it through 00439ef0.
+        e.register_double(0x0043_9ef0, |e, a| {
+            e.mem.set_f32(a[1] + 8, 250.0);
+            ret(a[1])
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0090_1c70, &args![proc, actor, 0u32]);
+        assert_eq!(calls_to(&e, 0x008b_37c0).len(), 1);
+        // Near and level, but the heights differ: the actor is turned to the target's.
+        e.register_double(0x0043_9ef0, |e, a| {
+            e.mem.set_f32(a[1] + 8, 1.0);
+            ret(a[1])
+        });
+        let target_node = e.mem.alloc(0x20);
+        e.mem.set_f32(target_node + 8, 3.0);
+        let actor_node = e.mem.alloc(0x20);
+        e.mem.set_f32(actor_node + 8, 2.0);
+        e.register_double(0x0043_0830, move |_, a| {
+            ret(if a[0] == target {
+                target_node
+            } else {
+                actor_node
+            })
+        });
+        stub_float(&mut e, 0x004b_15e0, 0.5);
+        e.register_double(0x0040_8840, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])),
+            ..Ret::default()
+        });
+        stub(&mut e, 0x008b_b5c0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_1c70, &args![proc, actor, 0u32]);
+        assert_eq!(calls_to(&e, 0x008b_37c0).len(), 0);
+        assert_eq!(
+            calls_to(&e, 0x004b_15e0)[0][..2],
+            [2.0f32.to_bits(), 3.0f32.to_bits()]
+        );
+        assert_eq!(
+            calls_to(&e, 0x008b_b5c0),
+            vec![vec![actor, 3.0f32.to_bits(), 1]]
+        );
+        assert!(calls_to(&e, 0x00aa_f044).is_empty());
+    }
+
+    #[test]
+    fn test_high_process_process_use_idle_marker_picks_an_idle() {
+        let mut e = Engine::new();
+        let (proc, actor, target) = idle_setup(&mut e, 0);
+        stub_float(&mut e, 0x0059_5c80, 1.0);
+        e.register_double(0x0043_9ef0, |e, a| {
+            e.mem.set_f32(a[1] + 8, 1.0);
+            ret(a[1])
+        });
+        e.register_double(0x0040_8860, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])),
+            ..Ret::default()
+        });
+        let node = e.mem.alloc(0x20);
+        e.register_double(0x0043_0830, move |_, _| ret(node));
+        stub_float(&mut e, 0x004b_15e0, 0.0);
+        e.register_double(0x0040_8840, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])),
+            ..Ret::default()
+        });
+        stub(&mut e, 0x0090_58e0, 0);
+        stub(&mut e, 0x0090_5910, 0);
+        stub(&mut e, 0x0047_a030, 3);
+        stub(&mut e, 0x00ec_adb8, 7);
+        let table = e.mem.alloc(12);
+        for (index, idle) in [0x1010u32, 0x1020, 0x1030].into_iter().enumerate() {
+            e.mem.set_u32(table + 4 * index as u32, idle);
+        }
+        e.register_double(0x0087_7a30, move |_, a| ret(table + 4 * a[1]));
+        // Mode 0: random, 7 % 3 = 1.
+        e.call_log = Some(vec![]);
+        e.call(0x0090_1c70, &args![proc, actor, 0u32]);
+        assert_eq!(e.mem.u32(proc + 0x194), 0x1020);
+        assert_eq!(e.mem.u32(proc + 0x190), 1);
+        assert_eq!(e.mem.f32(proc + 0x198), 0.75);
+        assert_eq!(calls_to(&e, 0x0047_a030)[0][1..3], [actor, target]);
+        assert_eq!(
+            calls_to(&e, 0x00aa_f044),
+            vec![vec![proc, actor, 0x1020, 2, 1, 0, 0]]
+        );
+        assert_eq!(calls_to(&e, 0x00aa_f660).len(), 1);
+        assert_eq!(calls_to(&e, 0x0090_5910).len(), 1);
+        // A current idle that is still playing (004985f0 false) keeps it.
+        stub(&mut e, 0x0049_85f0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_1c70, &args![proc, actor, 0u32]);
+        assert!(calls_to(&e, 0x00aa_f044).is_empty());
+        assert_eq!(e.mem.u32(proc + 0x194), 0x1020);
+        // Mode 1: in turn, wrapping to 0 after the last one; the delay is -1.
+        stub(&mut e, 0x0047_9e80, 1);
+        stub(&mut e, 0x0049_85f0, 1);
+        e.mem.set_u32(proc + 0x190, 1);
+        e.call(0x0090_1c70, &args![proc, actor, 0u32]);
+        assert_eq!(e.mem.u32(proc + 0x190), 2);
+        assert_eq!(e.mem.u32(proc + 0x194), 0x1030);
+        assert_eq!(e.mem.f32(proc + 0x198), -1.0);
+        e.call(0x0090_1c70, &args![proc, actor, 0u32]);
+        assert_eq!(e.mem.u32(proc + 0x190), 0);
+        assert_eq!(e.mem.u32(proc + 0x194), 0x1010);
+        // The actor is busy (slot 0x234): nothing changes.
+        stub(&mut e, 0x00aa_f234, 1);
+        e.mem.set_u32(proc + 0x190, 0);
+        e.call(0x0090_1c70, &args![proc, actor, 0u32]);
+        assert_eq!(e.mem.u32(proc + 0x190), 0);
+        assert_eq!(e.mem.u32(proc + 0x194), 0x1010);
+    }
+
+    #[test]
+    fn test_high_process_process_use_idle_marker_gives_up_without_a_target() {
+        let mut e = Engine::new();
+        let (proc, actor, _target) = idle_setup(&mut e, 0);
+        e.mem.set_u32(proc + 0x40, 0);
+        e.call_log = Some(vec![]);
+        // No marker and no target: slot 0x8c is asked, and the function ends.
+        e.call(0x0090_1c70, &args![proc, actor, 0u32]);
+        assert_eq!(calls_to(&e, 0x00aa_f08c), vec![vec![proc, actor]]);
+        assert!(calls_to(&e, 0x0091_5ef0).is_empty());
+        // Slot 0x8c finds a target whose form has another type: also over.
+        let target = e.mem.alloc(0x40);
+        e.register_double(0x00aa_f08c, move |e, a| {
+            e.mem.set_u32(a[0] + 0x40, target);
+            ret(0)
+        });
+        stub(&mut e, 0x0040_1170, 0x31);
+        e.call(0x0090_1c70, &args![proc, actor, 0u32]);
+        assert!(calls_to(&e, 0x0091_5ef0).is_empty());
+    }
+
+    #[test]
+    fn test_high_process_create_muzzle_flash() {
+        let mut e = Engine::new();
+        e.register_double(0x0040_1000, |e, a| ret(e.mem.alloc(a[0])));
+        stub(&mut e, 0x009b_acb0, 0x9100);
+        let proc = e.mem.alloc(0x500);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2190, &args![proc, 0x11u32, 0x22u32]);
+        assert_eq!(e.mem.u32(proc + 0x3d4), 0x9100);
+        let call = &calls_to(&e, 0x009b_acb0)[0];
+        assert_eq!((call[1], call[2]), (0x11, 0x22));
+        assert_eq!(calls_to(&e, 0x0040_1000), vec![vec![0x20]]);
+        // Already present: nothing happens. A failed allocation stores null.
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2190, &args![proc, 1u32, 2u32]);
+        assert!(calls_to(&e, 0x0040_1000).is_empty());
+        e.mem.set_u32(proc + 0x3d4, 0);
+        stub(&mut e, 0x0040_1000, 0);
+        e.call(0x0090_2190, &args![proc, 1u32, 2u32]);
+        assert_eq!(e.mem.u32(proc + 0x3d4), 0);
+        assert!(calls_to(&e, 0x009b_acb0).is_empty());
+    }
+
+    #[test]
+    fn test_high_process_clear_muzzle_flash() {
+        let mut e = Engine::new();
+        stub(&mut e, 0x008d_9f70, 0);
+        let proc = e.mem.alloc(0x500);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2230, &args![proc]);
+        assert!(calls_to(&e, 0x008d_9f70).is_empty());
+        e.mem.set_u32(proc + 0x3d4, 0x9100);
+        e.call(0x0090_2230, &args![proc]);
+        assert_eq!(calls_to(&e, 0x008d_9f70), vec![vec![0x9100, 1]]);
+        assert_eq!(e.mem.u32(proc + 0x3d4), 0);
+    }
+
+    #[test]
+    fn test_guard_state_helpers() {
+        let mut e = Engine::new();
+        let state = e.mem.alloc(0x20);
+        e.mem.set_u32(state + 0xc, 5);
+        e.mem.set_f32(state + 0x10, 3.0);
+        e.call(0x0090_2c60, &args![state]);
+        assert_eq!(e.mem.u32(state + 0xc), 6);
+        e.call(0x0090_26a0, &args![state]);
+        assert_eq!(e.mem.u32(state + 0xc), 0);
+        e.call(0x0090_2680, &args![state]);
+        assert_eq!(e.mem.f32(state + 0x10), 0.0);
+    }
+
+    #[test]
+    fn test_fn_00902640() {
+        let mut e = Engine::new();
+        let table = vtable(&mut e, &[(0x7f8, 0x00aa_f7f8)]);
+        let proc = object(&mut e, 0x500, table);
+        stub(&mut e, 0x00aa_f7f8, 0);
+        let state = e.mem.alloc(0x20);
+        e.mem.set_u32(state + 0xc, 5);
+        e.mem.set_f32(state + 0x10, 3.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2640, &args![proc, 0x6001u32, state]);
+        assert_eq!(calls_to(&e, 0x00aa_f7f8), vec![vec![proc, 0x6001, state]]);
+        assert_eq!(e.mem.u32(state + 0xc), 0);
+        assert_eq!(e.mem.f32(state + 0x10), 0.0);
+    }
+
+    #[test]
+    fn test_high_process_process_guard_warn() {
+        let mut e = Engine::new();
+        let table = vtable(&mut e, &[(0x128, 0x00aa_f128), (0x2a4, 0x00aa_f2a4)]);
+        let proc = object(&mut e, 0x500, table);
+        stub(&mut e, 0x00aa_f128, 0x6100);
+        stub(&mut e, 0x00aa_f2a4, 0);
+        stub(&mut e, 0x0044_ddc0, 0);
+        stub(&mut e, 0x0056_7790, 0);
+        stub(&mut e, 0x0061_a2d0, 0x9001);
+        let state = e.mem.alloc(0x20);
+        e.mem.set_u32(state + 0xc, 1);
+        e.mem.set_f32(state + 0x10, 4.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2bd0, &args![proc, 0x6001u32, state]);
+        assert_eq!(calls_to(&e, 0x0061_a2d0), vec![vec![2, 0x14]]);
+        assert_eq!(e.mem.u32(state + 0xc), 2);
+        assert_eq!(e.mem.f32(state + 0x10), 0.0);
+        assert_eq!(
+            calls_to(&e, 0x00aa_f2a4),
+            vec![vec![proc, 0x6001, 0x9001, 0, 0, 1, 0]]
+        );
+        assert_eq!(calls_to(&e, 0x0056_7790), vec![vec![0x6100]]);
+    }
+
+    /// A guard process and actor with the doubles `ProcessGuard` needs; the state's mode
+    /// is the word at +4 (`00726070`).
+    fn guard_setup(e: &mut Engine, mode: u32) -> (u32, u32, u32) {
+        let process_table = vtable(
+            e,
+            &[
+                (0x20c, 0x00aa_f20c),
+                (0x270, 0x00aa_f270),
+                (0x284, 0x00aa_f284),
+                (0x27c, 0x00aa_f27c),
+                (0x128, 0x00aa_f128),
+                (0x12c, 0x00aa_f12c),
+                (0x35c, 0x00aa_f35c),
+                (0x34c, 0x00aa_f34c),
+                (0x350, 0x00aa_f350),
+                (0x7f8, 0x00aa_f7f8),
+                (0x644, 0x00aa_f644),
+                (0x654, 0x00aa_f654),
+            ],
+        );
+        let proc = object(e, 0x500, process_table);
+        for slot in [
+            0x00aa_f20c,
+            0x00aa_f270,
+            0x00aa_f284,
+            0x00aa_f12c,
+            0x00aa_f35c,
+            0x00aa_f350,
+            0x00aa_f7f8,
+            0x00aa_f644,
+            0x00aa_f654,
+        ] {
+            stub(e, slot, 0);
+        }
+        stub(e, 0x00aa_f34c, 0x77);
+        let package_table = vtable(e, &[(0x13c, 0x00aa_f13c)]);
+        let package = object(e, 0x80, package_table);
+        stub(e, 0x00aa_f27c, package);
+        stub(e, 0x00aa_f13c, 1);
+        let actor_table = vtable(
+            e,
+            &[
+                (0x214, 0x00aa_f214),
+                (0x4b4, 0x00aa_f4b4),
+                (0x418, 0x00aa_f418),
+                (0x1f4, 0x00aa_f1f4),
+            ],
+        );
+        let actor = object(e, 0x200, actor_table);
+        stub(e, 0x00aa_f214, 0);
+        stub(e, 0x00aa_f4b4, 0);
+        stub(e, 0x00aa_f418, 0);
+        let state = e.mem.alloc(0x40);
+        e.mem.set_u32(state + 4, mode);
+        stub(e, 0x008d_0430, state);
+        e.register_double(0x0072_6070, |e, a| ret(e.mem.u32(a[0] + 4)));
+        stub(e, 0x0067_59e0, 0);
+        stub(e, 0x005d_43c0, 0x8800);
+        stub(e, 0x0041_c8d0, 0);
+        stub(e, 0x00aa_f128, actor);
+        stub(e, 0x0041_ca90, 1);
+        stub(e, 0x0055_b980, 0);
+        stub(e, 0x0067_1d10, 0);
+        stub(e, 0x0067_a7e0, 0);
+        stub(e, 0x008b_3d30, 0);
+        stub(e, 0x0044_ddc0, 0);
+        stub(e, 0x0067_8670, 0);
+        stub(e, 0x008b_3bb0, 0);
+        stub(e, 0x008b_3b90, 0);
+        stub(e, 0x006e_cd40, 0);
+        put_float(e, 0x0101_8f5c, 5.0);
+        put_float(e, 0x0101_2054, -1.0);
+        stub_float(e, 0x0057_23b0, 100.0);
+        (proc, actor, state)
+    }
+
+    #[test]
+    fn test_high_process_process_guard() {
+        let mut e = Engine::new();
+        let (proc, actor, state) = guard_setup(&mut e, 3);
+        // No state at all: slot 0x284 with -1.
+        stub(&mut e, 0x008d_0430, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2290, &args![proc, actor]);
+        assert_eq!(calls_to(&e, 0x00aa_f284), vec![vec![proc, 0xffff_ffff]]);
+        // The state comes from slot 0x270 when slot 0x20c has an object of type 14.
+        stub(&mut e, 0x00aa_f20c, 0x5001);
+        stub(&mut e, 0x0041_ca90, 0xe);
+        stub(&mut e, 0x00aa_f270, state);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2290, &args![proc, actor]);
+        assert!(calls_to(&e, 0x00aa_f284).is_empty());
+        assert_eq!(e.mem.u8(proc + 0x349), 0);
+        stub(&mut e, 0x00aa_f20c, 0);
+        stub(&mut e, 0x008d_0430, state);
+        // The guard reference differs from the process's: it is installed and flagged.
+        let guard_table = vtable(&mut e, &[(0x48, 0x00aa_f048)]);
+        let guard = object(&mut e, 0x100, guard_table);
+        stub(&mut e, 0x00aa_f048, 0);
+        stub(&mut e, 0x0067_59e0, guard);
+        stub(&mut e, 0x0042_1310, 0);
+        stub(&mut e, 0x00aa_f128, 0x6666);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2290, &args![proc, actor]);
+        assert_eq!(calls_to(&e, 0x00aa_f12c), vec![vec![proc, guard]]);
+        assert_eq!(calls_to(&e, 0x0042_1310), vec![vec![0x8800, actor]]);
+        assert_eq!(calls_to(&e, 0x00aa_f048), vec![vec![guard, 0x8000_0000]]);
+        stub(&mut e, 0x0067_59e0, 0);
+        stub(&mut e, 0x00aa_f128, actor);
+        // An actor of type 4 with no combat state is sent to melee idle.
+        stub(&mut e, 0x00aa_f214, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2290, &args![proc, actor]);
+        assert_eq!(calls_to(&e, 0x006e_cd40), vec![vec![state, 0]]);
+        assert_eq!(calls_to(&e, 0x00aa_f418), vec![vec![actor]]);
+        assert!(calls_to(&e, 0x00aa_f34c).is_empty());
+        stub(&mut e, 0x00aa_f214, 0);
+        // Mode 3 runs no phase. The package target gives no radius: the global 5.0; the
+        // distance 100 puts the actor outside, so slot 0x34c gets (actor, 0, 5, 10, 0, 0).
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2290, &args![proc, actor]);
+        assert_eq!(
+            calls_to(&e, 0x00aa_f34c),
+            vec![vec![
+                proc,
+                actor,
+                0,
+                5.0f32.to_bits(),
+                10.0f32.to_bits(),
+                0,
+                0
+            ]]
+        );
+        assert_eq!(calls_to(&e, 0x00aa_f350), vec![vec![proc, actor, 0x77, 1]]);
+        assert!(calls_to(&e, 0x00aa_f7f8).is_empty());
+        // An actor that is pathing (slot 0x4b4) skips all of it.
+        stub(&mut e, 0x00aa_f4b4, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2290, &args![proc, actor]);
+        assert!(calls_to(&e, 0x00aa_f34c).is_empty());
+        stub(&mut e, 0x00aa_f4b4, 0);
+        // Mode 0 runs fn_00902640; the nonzero mode of the check lets 008b3b90 call 0x7f8.
+        e.mem.set_u32(state + 4, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2290, &args![proc, actor]);
+        assert_eq!(calls_to(&e, 0x00aa_f7f8), vec![vec![proc, actor, state]]);
+        e.mem.set_u32(state + 4, 1);
+        stub(&mut e, 0x008b_3b90, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2290, &args![proc, actor]);
+        assert_eq!(calls_to(&e, 0x00aa_f7f8), vec![vec![proc, actor, state]]);
+        // Mode 1 (fn_009026c0 with the actor outside): the head-track slots are cleared.
+        assert_eq!(calls_to(&e, 0x00aa_f644), vec![vec![proc, 0]]);
+        assert_eq!(calls_to(&e, 0x00aa_f654), vec![vec![proc, 0]]);
+    }
+
+    #[test]
+    fn test_high_process_process_guard_has_a_location() {
+        let mut e = Engine::new();
+        let (proc, actor, state) = guard_setup(&mut e, 3);
+        // With a package location the answer of the package's slot 0x13c and the unsigned
+        // result of 00676280 give "inside" and the radius.
+        stub(&mut e, 0x0055_b980, 0x5100);
+        stub(&mut e, 0x0067_6280, 7);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2290, &args![proc, actor]);
+        assert_eq!(
+            calls_to(&e, 0x00aa_f34c),
+            vec![vec![
+                proc,
+                actor,
+                0,
+                7.0f32.to_bits(),
+                14.0f32.to_bits(),
+                0,
+                0
+            ]]
+        );
+        // Mode 2 is the wait-to-attack phase: with no target it returns to state 0.
+        e.mem.set_u32(state + 4, 2);
+        stub(&mut e, 0x0044_ddc0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2290, &args![proc, actor]);
+        assert!(calls_to(&e, 0x006e_cd40).contains(&vec![state, 0]));
+    }
+
+    /// Entries for the detected-actor list: one candidate at +0x25c with the doubles
+    /// `fn_009026c0` needs. Returns (process, actor, state, candidate).
+    fn intruder_setup(e: &mut Engine) -> (u32, u32, u32, u32) {
+        let (proc, actor, state) = guard_setup(e, 1);
+        e.register_double(0x0068_15c0, |_, a| ret(a[0]));
+        stub(e, 0x0082_56d0, 0);
+        let candidate_table = vtable(
+            e,
+            &[
+                (0x22c, 0x00aa_f22c),
+                (0x2e8, 0x00aa_f2e8),
+                (0x230, 0x00aa_f230),
+                (0x234, 0x00aa_f234),
+                (0x1f4, 0x00aa_f1f4),
+            ],
+        );
+        let candidate = object(e, 0x200, candidate_table);
+        for slot in [0x00aa_f22c, 0x00aa_f2e8, 0x00aa_f230, 0x00aa_f234] {
+            stub(e, slot, 0);
+        }
+        let position = e.mem.alloc(12);
+        e.mem.set_f32(position, 1.0);
+        e.mem.set_f32(position + 4, 2.0);
+        e.mem.set_f32(position + 8, 3.0);
+        stub(e, 0x00aa_f1f4, position);
+        let entry = e.mem.alloc(0x10);
+        e.mem.set_u32(entry, candidate);
+        e.mem.set_u32(entry + 8, 5);
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, entry);
+        e.mem.set_u32(proc + 0x25c, node);
+        stub(e, 0x0067_a7e0, 1);
+        stub(e, 0x0044_ddc0, 10);
+        let their_process = e.mem.alloc(0x40);
+        stub(e, 0x008d_8520, their_process);
+        stub(e, 0x0045_cd60, 0);
+        stub(e, 0x0043_7bd0, 0);
+        stub(e, 0x0043_9ef0, 0);
+        stub_float(e, 0x004a_7290, 4.0);
+        stub(e, 0x0056_7790, 0);
+        stub(e, 0x008b_06d0, 1);
+        stub(e, 0x008b_b520, 0);
+        stub(e, 0x009f_2970, 0);
+        stub(e, 0x0061_a2d0, 0x9001);
+        let table = vtable(e, &[(0x294, 0x00aa_f294), (0x2a4, 0x00aa_f2a4)]);
+        let _ = table;
+        (proc, actor, state, candidate)
+    }
+
+    #[test]
+    fn test_fn_009026c0_finds_an_intruder() {
+        let mut e = Engine::new();
+        let (proc, actor, state, candidate) = intruder_setup(&mut e);
+        // The process's slots 0x294 and 0x2a4 are not in guard_setup's table: add them.
+        let table = e.mem.u32(proc);
+        e.mem.set_u32(table + 0x294, 0x00aa_f294);
+        e.mem.set_u32(table + 0x2a4, 0x00aa_f2a4);
+        stub(&mut e, 0x00aa_f294, 0);
+        stub(&mut e, 0x00aa_f2a4, 0);
+        stub(&mut e, 0x0067_f390, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_26c0, &args![proc, actor, state, 1u8]);
+        assert_eq!(calls_to(&e, 0x009f_2970), vec![vec![state, candidate]]);
+        assert_eq!(calls_to(&e, 0x006e_cd40), vec![vec![state, 2]]);
+        assert_eq!(calls_to(&e, 0x00aa_f294), vec![vec![proc, actor]]);
+        assert_eq!(
+            calls_to(&e, 0x008b_b520),
+            vec![vec![
+                actor,
+                1.0f32.to_bits(),
+                2.0f32.to_bits(),
+                3.0f32.to_bits()
+            ]]
+        );
+        assert_eq!(calls_to(&e, 0x008b_06d0).len(), 1);
+        assert_eq!(calls_to(&e, 0x008b_06d0)[0][1..3], [candidate, 1]);
+        // The warning ran (the actor's process got slot 0x2a4 and the counter moved).
+        assert_eq!(calls_to(&e, 0x00aa_f2a4).len(), 1);
+        assert_eq!(e.mem.u32(state + 0xc), 1);
+        // Not inside: the actor is not stopped or turned.
+        e.call_log = Some(vec![]);
+        e.call(0x0090_26c0, &args![proc, actor, state, 0u8]);
+        assert!(calls_to(&e, 0x00aa_f294).is_empty());
+        assert!(calls_to(&e, 0x008b_b520).is_empty());
+        assert_eq!(calls_to(&e, 0x006e_cd40), vec![vec![state, 2]]);
+        // Too far (4 against a squared radius of 100: closer; make it 400), refused by the
+        // checks, or not to be attacked: none is found.
+        stub_float(&mut e, 0x004a_7290, 400.0);
+        stub(&mut e, 0x008b_3d30, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_26c0, &args![proc, actor, state, 0u8]);
+        assert!(calls_to(&e, 0x009f_2970).is_empty());
+        assert_eq!(calls_to(&e, 0x00aa_f644), vec![vec![proc, 0]]);
+        assert_eq!(calls_to(&e, 0x008b_3d30), vec![vec![actor]]);
+        stub_float(&mut e, 0x004a_7290, 4.0);
+        stub(&mut e, 0x008b_06d0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_26c0, &args![proc, actor, state, 0u8]);
+        assert!(calls_to(&e, 0x009f_2970).is_empty());
+        stub(&mut e, 0x008b_06d0, 1);
+        stub(&mut e, 0x0045_cd60, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_26c0, &args![proc, actor, state, 0u8]);
+        assert!(calls_to(&e, 0x009f_2970).is_empty());
+        stub(&mut e, 0x0045_cd60, 0);
+        let candidate_table = e.mem.u32(candidate);
+        stub(&mut e, 0x00aa_f230, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_26c0, &args![proc, actor, state, 0u8]);
+        assert!(calls_to(&e, 0x009f_2970).is_empty());
+        let _ = candidate_table;
+        stub(&mut e, 0x00aa_f230, 0);
+        // The package does not allow the search (0067a7e0 false): nothing is found.
+        stub(&mut e, 0x0067_a7e0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_26c0, &args![proc, actor, state, 0u8]);
+        assert!(calls_to(&e, 0x009f_2970).is_empty());
+    }
+
+    #[test]
+    fn test_fn_009026c0_walks_back_when_nothing_is_found() {
+        let mut e = Engine::new();
+        let (proc, actor, state, _candidate) = intruder_setup(&mut e);
+        stub(&mut e, 0x0067_a7e0, 0);
+        stub(&mut e, 0x008b_3d30, 0);
+        let table = e.mem.u32(proc);
+        e.mem.set_u32(table + 0x84c, 0x00aa_f84c);
+        stub(&mut e, 0x00aa_f84c, 0);
+        // Without a package location: the radius 10 squared (100) is positive, so the
+        // actor walks (slot 0x84c) to the guard reference with the root 10.
+        let guard_table = vtable(&mut e, &[(0x1f4, 0x00aa_f1f4)]);
+        let guard = object(&mut e, 0x100, guard_table);
+        stub(&mut e, 0x00aa_f128, guard);
+        stub_float(&mut e, 0x0040_19d0, 10.0);
+        let position = e.mem.alloc(12);
+        stub(&mut e, 0x00aa_f1f4, position);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_26c0, &args![proc, actor, state, 1u8]);
+        assert_eq!(
+            calls_to(&e, 0x00aa_f84c),
+            vec![vec![proc, actor, position, 10.0f32.to_bits()]]
+        );
+        assert_eq!(calls_to(&e, 0x0040_19d0), vec![vec![100.0f32.to_bits()]]);
+        // With a package location and a positive 00676280: slot 0x84c gets (actor, 0, -1).
+        stub(&mut e, 0x0055_b980, 0x5100);
+        stub(&mut e, 0x0067_6280, 3);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_26c0, &args![proc, actor, state, 1u8]);
+        assert_eq!(
+            calls_to(&e, 0x00aa_f84c),
+            vec![vec![proc, actor, 0, (-1.0f32).to_bits()]]
+        );
+        // Neither: the radius is 0, there is no location; the actor is turned to the
+        // override reference's height when it is the form 011ca248 and the height differs.
+        stub(&mut e, 0x0055_b980, 0);
+        stub(&mut e, 0x0044_ddc0, 0);
+        let reference = e.mem.alloc(0x40);
+        e.mem.set_u32(proc + 0x44, reference);
+        let form = 0x4400u32;
+        global(&mut e, 0x011c_a248, form);
+        stub(&mut e, 0x007a_f430, form);
+        stub(&mut e, 0x008b_3bd0, 0);
+        let reference_node = e.mem.alloc(0x20);
+        e.mem.set_f32(reference_node + 8, 5.0);
+        let actor_node = e.mem.alloc(0x20);
+        e.mem.set_f32(actor_node + 8, 1.0);
+        e.register_double(0x0043_0830, move |_, a| {
+            ret(if a[0] == reference {
+                reference_node
+            } else {
+                actor_node
+            })
+        });
+        e.register_double(0x0040_8840, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])),
+            ..Ret::default()
+        });
+        put_double(&mut e, 0x0102_3128, 0.5);
+        put_double(&mut e, 0x0101_2060, 0.0);
+        stub(&mut e, 0x008b_b5c0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_26c0, &args![proc, actor, state, 1u8]);
+        assert_eq!(
+            calls_to(&e, 0x008b_b5c0),
+            vec![vec![actor, 5.0f32.to_bits(), 1]]
+        );
+        // A gap that is not above 0.5 leaves the actor alone; so does a moving actor.
+        e.mem.set_f32(actor_node + 8, 4.8);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_26c0, &args![proc, actor, state, 1u8]);
+        assert!(calls_to(&e, 0x008b_b5c0).is_empty());
+        e.mem.set_f32(actor_node + 8, 1.0);
+        stub(&mut e, 0x008b_3bd0, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_26c0, &args![proc, actor, state, 1u8]);
+        assert!(calls_to(&e, 0x008b_b5c0).is_empty());
+    }
+
+    /// Setup for `ProcessGuardWaitToAttack`: a target in the guard's reach.
+    /// Returns (process, actor, state, target).
+    fn wait_setup(e: &mut Engine) -> (u32, u32, u32, u32) {
+        let (proc, actor, state) = guard_setup(e, 2);
+        let table = e.mem.u32(proc);
+        for (slot, double) in [
+            (0x628u32, 0x00aa_f628u32),
+            (0x400, 0x00aa_f400),
+            (0x638, 0x00aa_f638),
+            (0x338, 0x00aa_f338),
+            (0x33c, 0x00aa_f33c),
+            (0x1b8, 0x00aa_f1b8),
+            (0x2a4, 0x00aa_f2a4),
+        ] {
+            e.mem.set_u32(table + slot, double);
+            stub(e, double, 0);
+        }
+        let animation = e.mem.alloc(0x40);
+        stub(e, 0x00aa_f1b8, animation);
+        let guard_table = vtable(e, &[(0x1f4, 0x00aa_f1f4)]);
+        let guard = object(e, 0x100, guard_table);
+        stub(e, 0x00aa_f128, guard);
+        let position = e.mem.alloc(12);
+        stub(e, 0x00aa_f1f4, position);
+        let target_table = vtable(
+            e,
+            &[
+                (0x22c, 0x00aa_f22c),
+                (0x2e8, 0x00aa_f2e8),
+                (0x230, 0x00aa_f230),
+                (0x234, 0x00aa_f234),
+                (0x1f4, 0x00aa_f1f4),
+            ],
+        );
+        let target = object(e, 0x200, target_table);
+        for slot in [0x00aa_f22c, 0x00aa_f2e8, 0x00aa_f230, 0x00aa_f234] {
+            stub(e, slot, 0);
+        }
+        e.register_double(0x0044_ddc0, move |_, a| {
+            // The state's target (0x0044ddc0 is also the package-radius reader).
+            ret(if a[0] == state { target } else { 10 })
+        });
+        stub(e, 0x0043_7bd0, 0);
+        stub(e, 0x0043_9ef0, 0);
+        put_setting(e, 0x011c_d1f8, 0.5);
+        put_setting(e, 0x011c_dd30, 1.5);
+        put_setting(e, 0x011c_d5fc, 3.0);
+        stub(e, 0x0049_85f0, 1);
+        stub(e, 0x0049_8910, 0);
+        stub(e, 0x008a_16d0, 1);
+        stub(e, 0x008a_6840, 0);
+        stub(e, 0x008a_1710, 0);
+        stub(e, 0x008b_3d30, 0);
+        stub(e, 0x0067_a460, 1);
+        // The aim function, run for real, needs these.
+        stub(e, 0x009a_8600, position);
+        stub(e, 0x008b_3cd0, 0);
+        stub(e, 0x009a_8050, position);
+        stub(e, 0x009a_6ae0, 1);
+        stub_float(e, 0x0084_d030, 0.25);
+        stub(e, 0x0090_3160, 0);
+        stub_float(e, 0x0062_1b00, 5.0);
+        stub(e, 0x0067_5980, 0);
+        stub(e, 0x0084_e3a0, 0);
+        stub(e, 0x0061_a2d0, 0x9001);
+        stub(e, 0x0056_7790, 0);
+        (proc, actor, state, target)
+    }
+
+    #[test]
+    fn test_high_process_process_guard_wait_to_attack_resets_the_state() {
+        let mut e = Engine::new();
+        let (proc, actor, state, _target) = wait_setup(&mut e);
+        // No guard reference: the state returns to 0 and fn_00902640 runs.
+        stub(&mut e, 0x00aa_f128, 0);
+        e.mem.set_u32(state + 0xc, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2c80, &args![proc, actor, state]);
+        assert_eq!(calls_to(&e, 0x006e_cd40), vec![vec![state, 0]]);
+        assert_eq!(calls_to(&e, 0x00aa_f7f8), vec![vec![proc, actor, state]]);
+        assert_eq!(e.mem.u32(state + 0xc), 0);
+        // A dead target does the same.
+        let guard = e.mem.alloc(0x100);
+        let guard_table = vtable(&mut e, &[(0x1f4, 0x00aa_f1f4)]);
+        e.mem.set_u32(guard, guard_table);
+        stub(&mut e, 0x00aa_f128, guard);
+        stub(&mut e, 0x00aa_f230, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2c80, &args![proc, actor, state]);
+        assert_eq!(calls_to(&e, 0x006e_cd40), vec![vec![state, 0]]);
+        // The flag at +0x368 sends a pathless actor to the target first.
+        stub(&mut e, 0x00aa_f230, 0);
+        e.mem.set_u32(proc + 0x368, 1);
+        stub(&mut e, 0x00aa_f128, 0);
+        let actor_table = e.mem.u32(actor);
+        e.mem.set_u32(actor_table + 0x4b4, 0x00aa_f4b4);
+        stub(&mut e, 0x00aa_f4b4, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2c80, &args![proc, actor, state]);
+        assert_eq!(
+            calls_to(&e, 0x00aa_f2a4)[0],
+            vec![
+                proc,
+                e.call(0x0044_ddc0, &args![state]).u32(),
+                0,
+                0,
+                0,
+                0,
+                0
+            ]
+        );
+    }
+
+    #[test]
+    fn test_high_process_process_guard_wait_to_attack_in_range() {
+        let mut e = Engine::new();
+        let (proc, actor, state, target) = wait_setup(&mut e);
+        // Radius 10: 100 squared, the near radius is 5 (25 squared). A length of 50 is in
+        // range but not near: the elapsed time 5 is above the setting 3, the count 0 is
+        // not above the limit 2: the warning runs.
+        stub_float(&mut e, 0x004a_7290, 50.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2c80, &args![proc, actor, state]);
+        assert_eq!(calls_to(&e, 0x00aa_f628), vec![vec![proc, target]]);
+        assert_eq!(calls_to(&e, 0x00aa_f638), vec![vec![proc, target]]);
+        assert_eq!(
+            calls_to(&e, 0x00aa_f338),
+            vec![vec![proc, 1.5f32.to_bits()]]
+        );
+        assert_eq!(e.mem.u8(proc + 0x349), 1);
+        assert_eq!(
+            calls_to(&e, 0x0090_3160),
+            vec![vec![state, 0.25f32.to_bits()]]
+        );
+        assert_eq!(e.mem.u32(state + 0xc), 1);
+        assert!(calls_to(&e, 0x00aa_f33c).is_empty());
+        // A count above the limit attacks, and the state resets when the process's
+        // own list head is the state.
+        stub(&mut e, 0x0084_e3a0, 3);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2c80, &args![proc, actor, state]);
+        let call = &calls_to(&e, 0x00aa_f33c)[0];
+        assert_eq!(call.len(), 14);
+        assert_eq!(call[..3], [proc, actor, target]);
+        assert_eq!(call[12], 1);
+        // Near: attack at once.
+        stub(&mut e, 0x0084_e3a0, 0);
+        stub_float(&mut e, 0x004a_7290, 10.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2c80, &args![proc, actor, state]);
+        assert_eq!(calls_to(&e, 0x00aa_f33c).len(), 1);
+        // The time has not reached the setting: neither attack nor warning.
+        stub_float(&mut e, 0x004a_7290, 50.0);
+        stub_float(&mut e, 0x0062_1b00, 1.0);
+        e.mem.set_u32(state + 0xc, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2c80, &args![proc, actor, state]);
+        assert!(calls_to(&e, 0x00aa_f33c).is_empty());
+        assert_eq!(e.mem.u32(state + 0xc), 0);
+        // With the process flag nothing after the weapon set-up runs.
+        e.mem.set_u32(proc + 0x368, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2c80, &args![proc, actor, state]);
+        assert!(calls_to(&e, 0x0090_3160).is_empty());
+        assert_eq!(calls_to(&e, 0x00aa_f638).len(), 1);
+    }
+
+    #[test]
+    fn test_high_process_process_guard_wait_to_attack_out_of_range() {
+        let mut e = Engine::new();
+        let (proc, actor, state, _target) = wait_setup(&mut e);
+        stub_float(&mut e, 0x004a_7290, 500.0);
+        stub(&mut e, 0x0067_a460, 0);
+        e.mem.set_u32(state + 0xc, 4);
+        e.mem.set_f32(state + 0x10, 2.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2c80, &args![proc, actor, state]);
+        let guard = e.vcall(proc, 0x128, &args![]).u32();
+        assert_eq!(calls_to(&e, 0x00aa_f628), vec![vec![proc, guard]]);
+        assert_eq!(calls_to(&e, 0x00aa_f400), vec![vec![proc, 0]]);
+        assert_eq!(calls_to(&e, 0x008a_6840), vec![vec![actor, 0]]);
+        assert_eq!(calls_to(&e, 0x006e_cd40), vec![vec![state, 1]]);
+        assert_eq!(e.mem.u32(state + 0xc), 0);
+        assert_eq!(e.mem.f32(state + 0x10), 0.0);
+        assert_eq!(calls_to(&e, 0x00aa_f654), vec![vec![proc, 1]]);
+        assert_eq!(calls_to(&e, 0x008b_3d30), vec![vec![actor]]);
+        // The package allows the stance (0067a460 true): the weapon is left alone.
+        stub(&mut e, 0x0067_a460, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_2c80, &args![proc, actor, state]);
+        assert!(calls_to(&e, 0x008a_6840).is_empty());
     }
 }
