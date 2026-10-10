@@ -30,16 +30,16 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 9002 | 13.6% |
+| translated | 9117 | 13.8% |
 | traced | 4428 | 6.7% |
 | platform | 3421 | 5.2% |
 | library | 21917 | 33.1% |
-| open | 27491 | 41.5% |
+| open | 27376 | 41.3% |
 | **all** | **66259** | |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 13029 (32.2%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 13144 (32.4%) are translated or traced.
 
-Rust cites 13822 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 13946 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -70,12 +70,12 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Subsystem | Functions | KB | Named | translated | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 63 | 0 | 21271 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 6166 | 985 | 0 | 0 | 3319 | 68.3% |
+| fallout shared | 10470 | 2065 | 3149 | 6166 | 988 | 0 | 0 | 3316 | 68.3% |
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 77 | 0 | 0 | 6461 | 2.0% |
-| fallout/ai | 4849 | 1475 | 1888 | 1585 | 613 | 0 | 0 | 2651 | 45.3% |
+| fallout/ai | 4849 | 1475 | 1888 | 1660 | 612 | 0 | 0 | 2577 | 46.9% |
 | fallout/interface | 2645 | 991 | 1247 | 503 | 741 | 0 | 0 | 1401 | 47.0% |
 | (unplaced) | 2353 | 470 | 0 | 30 | 382 | 1 | 0 | 1940 | 17.5% |
-| fallout shared/pathfinding | 1788 | 365 | 452 | 250 | 178 | 0 | 0 | 1360 | 23.9% |
+| fallout shared/pathfinding | 1788 | 365 | 452 | 250 | 179 | 0 | 0 | 1359 | 24.0% |
 | NiMain | 1619 | 261 | 1134 | 3 | 73 | 0 | 0 | 1543 | 4.7% |
 | BSHavok | 1615 | 316 | 1134 | 22 | 138 | 0 | 0 | 1455 | 9.9% |
 | BSShader | 1549 | 608 | 350 | 0 | 141 | 1408 | 0 | 0 | - |
@@ -90,7 +90,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | fallout shared/havok | 478 | 60 | 110 | 7 | 73 | 0 | 0 | 398 | 16.7% |
 | FaceGen | 474 | 164 | 51 | 0 | 10 | 0 | 0 | 464 | 2.1% |
 | fallout shared/facegen | 433 | 63 | 91 | 0 | 55 | 0 | 0 | 378 | 12.7% |
-| BSMenu | 361 | 136 | 221 | 80 | 43 | 0 | 0 | 238 | 34.1% |
+| BSMenu | 361 | 136 | 221 | 120 | 40 | 0 | 0 | 201 | 44.3% |
 | BSAudio | 304 | 75 | 141 | 0 | 31 | 0 | 0 | 273 | 10.2% |
 | fallout shared/magic | 296 | 43 | 83 | 5 | 69 | 0 | 0 | 222 | 25.0% |
 | BSSystem | 275 | 54 | 36 | 1 | 36 | 238 | 0 | 0 | - |
@@ -130,7 +130,7 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | 1 | 143 | 117 | 93 | 29 | 3 | 0 | 18 |
 | 2 | 1575 | 583 | 969 | 433 | 25 | 4 | 144 |
-| 3 | 4973 | 1303 | 3036 | 1156 | 160 | 26 | 595 |
+| 3 | 4973 | 1303 | 3036 | 1159 | 160 | 26 | 592 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
