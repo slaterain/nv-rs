@@ -17,7 +17,8 @@
 //! - The C++ exception frames and the stack-protector cookie checks
 //!   (`00ec408c`) are not translated.
 //! - Session 1 covers the first 40 functions in address order, `00846f30` to
-//!   `00849a70`. The next session continues at `00849a90`.
+//!   `00849a70`. Session 2 covers the next 40, `00849a90` to `0084b650`; the
+//!   next session continues at `0084b6c0`.
 //! - A `BGSChangeFlags` is one `u32`; `008c71b0` stores a value into one
 //!   (`this`, value) and returns `this`. The game builds temporaries of it on
 //!   its stack to pass them by value; [`change_flags`] does the same.
@@ -26,6 +27,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::types::NiTPointerMap;
 
 // ---- Globals -------------------------------------------------------------
 
@@ -230,8 +232,9 @@ pub(crate) const UNLOADED_FORM_BUFFER_ADVANCED: u32 = 0x0086_6390;
 pub(crate) const UNLOADED_FORM_BUFFER_CLEAR: u32 = 0x0066_65a0;
 /// `BGSSaveLoadChangesMap`: first position `(map)`, next `(map, &position,
 /// &key, &value)`, get flags `(map, &out, id)`, set flags `(map, id,
-/// flags)`, add flags `(map, id, flags)`, remove `(map, id)`, "flags already
-/// known" `(map, id, flags)`, get the entry `(map, &out, id)`, store a
+/// flags)`, add flags `(map, id, flags)`, remove `(map, id)`, clear flags
+/// `(map, id, flags)` (clears them from the entry; false when flags remain or
+/// the id is dynamic, otherwise the entry is removed), get the entry `(map, &out, id)`, store a
 /// buffer for an id `(map, id, header_flags, unloaded_buffer)`, and
 /// `(map, id)` returning the entry of a form id (or 0).
 pub(crate) const MAP_FIRST_POSITION: u32 = 0x004b_9ba0;
@@ -240,7 +243,7 @@ pub(crate) const CHANGES_MAP_GET_FLAGS: u32 = 0x0084_56e0;
 pub(crate) const CHANGES_MAP_SET_FLAGS: u32 = 0x0084_58b0;
 pub(crate) const CHANGES_MAP_ADD_FLAGS: u32 = 0x0084_57b0;
 pub(crate) const CHANGES_MAP_REMOVE: u32 = 0x0084_5a20;
-pub(crate) const CHANGES_MAP_KNOWS_FLAGS: u32 = 0x0084_5a80;
+pub(crate) const CHANGES_MAP_CLEAR_FLAGS: u32 = 0x0084_5a80;
 pub(crate) const CHANGES_MAP_GET_ENTRY: u32 = 0x0084_5760;
 pub(crate) const CHANGES_MAP_STORE_BUFFER: u32 = 0x0084_5960;
 pub(crate) const CHANGES_MAP_ENTRY_FOR: u32 = 0x009a_4250;
@@ -362,6 +365,150 @@ pub(crate) const GAME_CREATE_FOLLOW_UP: u32 = 0x0085_35e0;
 pub(crate) const GAME_LOADING_FLAG_TEST: u32 = 0x0042_ce10;
 pub(crate) const STORED_BUFFER_TYPE: u32 = 0x0085_3640;
 
+// ---- Session 2: texts, globals and callees (functions from 00849a90 on) ----
+
+/// A `double` 0.0 in `.rdata` that `QueueInitPackageLocations` compares with.
+pub(crate) const ZERO_DOUBLE: u32 = 0x0101_2060;
+/// Offset of the per-thread flag word in the TLS block: bit 0 is the one
+/// `004623f0` sets and clears, bit 1 (mask 2) the one `00849c00` sets and clears.
+pub(crate) const THREAD_FLAGS_OFFSET: u32 = 0x294;
+/// `"CELLS: Worldspace or Cell %08X could not be found while loading a %s
+/// reference.  Its loading will be skipped."`.
+pub(crate) const MISSING_PLACE_WARNING: u32 = 0x0107_f200;
+/// `"moved"` and `"created"`: the `%s` of the warning above.
+pub(crate) const TEXT_MOVED: u32 = 0x0107_f270;
+pub(crate) const TEXT_CREATED: u32 = 0x0107_f278;
+/// `"Reference %s %08X with type %s and with changes %08X could not revert its
+/// changed location"`.
+pub(crate) const REVERT_LOCATION_WARNING: u32 = 0x0107_f280;
+/// `"FORMS: Form %08X with form type %i %s was re-numbered by
+/// BGSSaveLoadGame::ClearForm()"`.
+pub(crate) const RENUMBERED_WARNING: u32 = 0x0107_f2e0;
+/// `"FORMS: Trying to set new form ID %08X for old form ID %08X, but already in
+/// map with value %08X"`.
+pub(crate) const CHANGED_ID_CONFLICT_WARNING: u32 = 0x0107_f338;
+/// `"CleanupExpiredData removed havok from %i refs: %i removed all changes and
+/// %i unloaded refs removed partial changes"`.
+pub(crate) const CLEANUP_NOTE: u32 = 0x0107_f398;
+/// `"During cleanup, form %08X with changeflags %08X and no unloaded form
+/// buffer could not be found"`.
+pub(crate) const CLEANUP_MISSING_BUFFER_WARNING: u32 = 0x0107_f410;
+/// Vtables of the classes this file constructs: the package location map
+/// (`NiTMap<unsigned int,Actor *>`), the expiry queue (`NiTMap<__int64,int>`),
+/// the form buffer array (`BSSimpleArray<BGSLoadFormBuffer *,1024>`) and the
+/// base class of the package location map (`0084b650`).
+pub(crate) const PACKAGE_LOCATION_MAP_VTABLE: u32 = 0x0107_f474;
+pub(crate) const EXPIRY_QUEUE_VTABLE: u32 = 0x0107_f494;
+pub(crate) const FORM_BUFFER_ARRAY_VTABLE: u32 = 0x0107_f4b4;
+pub(crate) const HASH_MAP_BASE_VTABLE: u32 = 0x0107_f4c8;
+/// `(this = form)`: bit 0x4000 of the word at +8 (`iFormFlags`, Xbox PDB).
+pub(crate) const FORM_FLAG_4000_TEST: u32 = 0x0040_77c0;
+/// `(this = form)`: bit 0x20 of the word at +8 (`iFormFlags`, Xbox PDB).
+pub(crate) const FORM_FLAG_20_TEST: u32 = 0x0044_0d80;
+/// `(this = game)`: the test `00570f40` ends in; the callers use it as "changes
+/// are being recorded".
+pub(crate) const GAME_RECORDING_TEST: u32 = 0x0057_0f00;
+/// `BGSSaveLoadChangesMap` test `(map, id, mask)`: the entry of `id` exists
+/// and its flags have a bit of `mask`.
+pub(crate) const CHANGES_MAP_HAS_FLAGS: u32 = 0x0084_5720;
+/// A `BGSChangeFlags` word: test `(this = &flags, mask)` (any bit of `mask`
+/// set) and clear `(this = &flags, mask)`.
+pub(crate) const FLAGS_TEST: u32 = 0x0042_80f0;
+pub(crate) const FLAGS_CLEAR: u32 = 0x0056_2210;
+/// `(this = reference, 0)`: asks the reference for a location (slot `0x138`)
+/// and moves it there when that place is loaded or the reference persists;
+/// true when it moved.
+pub(crate) const REFERENCE_MOVE_TO_LOCATION: u32 = 0x0056_1ef0;
+/// `TESObjectREFR::GetRefPersists` (Xbox PDB) `(this = reference)`.
+pub(crate) const REFERENCE_IS_PERSISTENT: u32 = 0x0056_53d0;
+/// `(this = form)`: the length of the text `FORM_SLOT_NAME` returns (0 when
+/// there is none).
+pub(crate) const FORM_NAME_LENGTH: u32 = 0x0047_4cb0;
+/// `(this = reference)`: the reference's full name.
+pub(crate) const REFERENCE_FULL_NAME: u32 = 0x0055_d520;
+/// `(this = actor)`: the word at +0x20, which the code treats as an object with
+/// a sub-object at +0x100.
+pub(crate) const ACTOR_PROCESS: u32 = 0x0041_81e0;
+/// `Actor::InitPackageLocations(this, flag)` (Xbox PDB).
+pub(crate) const ACTOR_INIT_PACKAGE_LOCATIONS: u32 = 0x0089_3340;
+/// `TESDataHandler::GetNextID(this = data handler, 1)` (Xbox PDB).
+pub(crate) const DATA_HANDLER_GET_NEXT_ID: u32 = 0x0046_9800;
+/// `TESObjectCELL::GetDetachTime`, `GetWorldSpace`, `GetDataX` and `GetDataY`
+/// (Xbox PDB), each on `this = cell`.
+pub(crate) const CELL_DETACH_TIME: u32 = 0x0054_6af0;
+pub(crate) const CELL_WORLD_SPACE: u32 = 0x0054_ddd0;
+pub(crate) const CELL_DATA_X: u32 = 0x0054_4c30;
+pub(crate) const CELL_DATA_Y: u32 = 0x0054_4c60;
+/// `TESWorldSpace::GetCellFromWorldCoord(this = worldspace, &position)` (Xbox
+/// PDB).
+pub(crate) const WORLD_SPACE_CELL_FROM_COORD: u32 = 0x0058_7550;
+/// cdecl `(x, y)`: the two 16-bit grid coordinates packed as `x << 16 | y`.
+pub(crate) const PACK_GRID_COORDS: u32 = 0x0058_7410;
+/// cdecl `(f32)`: rounds to an integer.
+pub(crate) const ROUND_TO_INT: u32 = 0x0040_6d90;
+/// `(this = calendar)`: the game time stamp the expiry test compares with.
+pub(crate) const CALENDAR_TIME_STAMP: u32 = 0x0086_7e30;
+/// `()`: how long a detached cell's data is kept.
+pub(crate) const EXPIRY_LIMIT: u32 = 0x0052_6100;
+/// cdecl `(file, kind, struct)`: 0 when `kind` is 0, otherwise reads the
+/// initial data of `kind` from `file` and runs `0084e930` on it with `struct`
+/// (returning its result).
+pub(crate) const LOAD_INITIAL_DATA_FROM_FILE: u32 = 0x0084_e850;
+/// `(this = initial data, &cell, &world)`: the place the initial data puts the
+/// reference at.
+pub(crate) const LOCATION_CELL_AND_WORLD: u32 = 0x0084_e610;
+/// cdecl `(id, &initial_data, form)`: makes the reference of an initial data
+/// structure (reusing `form` when given).
+pub(crate) const CREATE_REFERENCE: u32 = 0x0084_f8e0;
+/// `BGSReconstructFormsInAllFilesMap::AddReference` (Xbox PDB, second
+/// overload) `(this, world, x, y, id, flags)`.
+pub(crate) const RECONSTRUCT_ADD_REFERENCE_AT: u32 = 0x0084_38b0;
+/// The destructor body of the reconstruct map, and the two accessors of the
+/// reference list inside it: count `(this = list)` and element `(this = list,
+/// index)`.
+pub(crate) const RECONSTRUCT_DESTRUCT: u32 = 0x0084_34d0;
+pub(crate) const FORM_LIST_COUNT: u32 = 0x0084_3bb0;
+pub(crate) const FORM_LIST_ELEMENT: u32 = 0x0084_3330;
+/// `BGSSaveLoadReferencesMap`: `LoadReferencesForCell(this, cell, &reconstruct)`,
+/// `RemoveReference(this, cell_key, id, &place)` (Xbox PDB) and
+/// `BGSCellNumericIDArrayMap::RemoveReference(this, a, b)` (Xbox PDB).
+pub(crate) const REFERENCES_MAP_LOAD_FOR_CELL: u32 = 0x0085_2d20;
+pub(crate) const REFERENCES_MAP_REMOVE_EXTERIOR: u32 = 0x0085_2cd0;
+pub(crate) const REFERENCES_MAP_REMOVE: u32 = 0x0085_2a10;
+/// `(this = map, key, &out)`: true when the map has `key`, with its value in
+/// `*out`.
+pub(crate) const MAP_GET_VALUE: u32 = 0x0085_3130;
+/// `NiTMapBase::RemoveAt(this = map, key)` (Xbox PDB name of the body).
+pub(crate) const MAP_REMOVE_AT: u32 = 0x0040_5430;
+/// `BGSSaveLoadQueuedSubBufferMap::QueueSubBuffer(this, a, b, c)` (Xbox PDB).
+pub(crate) const QUEUED_SUB_BUFFERS_QUEUE: u32 = 0x0086_52f0;
+/// `BGSSaveLoadHistory::AddNoteVarArgs(this, format, va_list)` (Xbox PDB).
+pub(crate) const HISTORY_ADD_NOTE_VA: u32 = 0x0084_e020;
+/// The expiry queue (`NiTMap<__int64,int>`): insert `(this, key_low,
+/// key_high, time)`, find `(this, key_low, key_high, &out)` (true when found),
+/// the destructor body `(this)` and the base constructor `(this, size)`.
+pub(crate) const EXPIRY_QUEUE_INSERT: u32 = 0x0084_b7c0;
+pub(crate) const EXPIRY_QUEUE_FIND: u32 = 0x0084_b8b0;
+pub(crate) const EXPIRY_QUEUE_DESTRUCT: u32 = 0x0084_b9c0;
+pub(crate) const EXPIRY_QUEUE_BASE_CONSTRUCT: u32 = 0x0084_b750;
+/// `BGSUnloadedFormBuffer`: `GetSize(this)`, `Initialize(this, data, size,
+/// type, flag)` (Xbox PDB), the initial data type's data size (cdecl `(kind)`,
+/// `BGSSaveLoadInitialData::GetInitialDataTypeDataSize`, Xbox PDB) and
+/// `LoadVariableSizedValueFromBuffer(buffer, &out)` (cdecl, Xbox PDB).
+pub(crate) const UNLOADED_FORM_BUFFER_SIZE: u32 = 0x0086_63e0;
+pub(crate) const UNLOADED_FORM_BUFFER_INITIALIZE: u32 = 0x0086_65d0;
+pub(crate) const INITIAL_DATA_TYPE_SIZE: u32 = 0x0084_e800;
+pub(crate) const LOAD_VARIABLE_SIZED_VALUE: u32 = 0x0084_6080;
+/// Allocates `size` bytes (the allocator the maps' bucket arrays use).
+pub(crate) const ALLOCATE_BYTES: u32 = 0x00aa_1070;
+/// `(this = array, reserved, size)`: the form buffer array's base setup.
+pub(crate) const ARRAY_BASE_SETUP: u32 = 0x006b_3eb0;
+/// Three words in `.data` (0x011f426c to 0x011f4274) the game copies into the
+/// position and rotation it passes to reference slot `0x138`.
+pub(crate) const DEFAULT_POSITION: u32 = 0x011f_426c;
+/// `(this = &word, value)`: whether the word equals `value`.
+pub(crate) const FLAGS_EQUAL: u32 = 0x0082_2510;
+
 // Virtual slots (byte offsets) the translations use. The names are the Xbox
 // PDB's; the three marked "not confirmed" sit at offsets where the PDB's
 // slot has another name or signature, so only the use is described.
@@ -397,6 +544,22 @@ const REFERENCE_SLOT_RELEASE: u32 = 0x244;
 /// Player slot `0x228` (not confirmed: the Xbox PDB lists `IsDead` here),
 /// called with `0`.
 const PLAYER_SLOT_RESET: u32 = 0x228;
+/// `~TESForm` (Xbox PDB), the deleting destructor, called with `1`.
+const FORM_SLOT_DELETE: u32 = 0x10;
+/// Form slot `0x128` (not confirmed: the Xbox PDB lists `Activate` here and
+/// `SetFormID` at `0x12c`): called with a new form id from the data handler.
+const FORM_SLOT_SET_NEW_ID: u32 = 0x128;
+/// Reference slot `0x138` (not confirmed: the Xbox PDB lists
+/// `VoiceSoundFunction` here): `(&position, &rotation, &location, 0)`, true
+/// when it filled them in.
+const REFERENCE_SLOT_LOCATION: u32 = 0x138;
+/// Reference slots `0x224` and `0x324` (not confirmed: the Xbox PDB lists
+/// `SetParentCell` at `0x224`), called without arguments by `00849a90`.
+const REFERENCE_SLOT_UNLOAD_TEST_A: u32 = 0x224;
+const REFERENCE_SLOT_UNLOAD_TEST_B: u32 = 0x324;
+/// Slot `0xc` of the object at +0x100 of an actor's `004181e0` result, called
+/// with `0x10`; it returns its value in `ST0`.
+const PROCESS_SLOT_VALUE: u32 = 0x0c;
 
 layout! {
     /// `BGSSaveLoadGame` (Xbox PDB), 0x24C bytes: the object that writes and
@@ -926,7 +1089,7 @@ pub fn bgssaveloadgame_save_game(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, fil
             let map = e.get(this, BGSSaveLoadGame::pChangesMap);
             let flags = e.mem.u32(known_flags_slot);
             let known = e
-                .call(CHANGES_MAP_KNOWS_FLAGS, &args![map, key, flags])
+                .call(CHANGES_MAP_CLEAR_FLAGS, &args![map, key, flags])
                 .bool();
             if known {
                 continue;
@@ -1922,7 +2085,7 @@ fn unload_form_body(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, form: Ptr, force
     if read_word(e, flags_slot) != 0 {
         let map = e.get(this, BGSSaveLoadGame::pChangesMap);
         let flags = e.mem.u32(flags_slot);
-        if e.call(CHANGES_MAP_KNOWS_FLAGS, &args![map, form_id, flags])
+        if e.call(CHANGES_MAP_CLEAR_FLAGS, &args![map, form_id, flags])
             .bool()
         {
             e.call(SAVE_FORM_BUFFER_DESTRUCT, &args![buffer]);
@@ -1984,6 +2147,1129 @@ pub fn fn_00849a50(e: &mut Engine, this: Ptr, id: u32) {
 /// b)` (the engine map names it `PathingLOSMap::Setup`: folded code).
 pub fn fn_00849a70(e: &mut Engine, this: Ptr, a: u32, b: u32) {
     e.call(REFERENCES_MAP_SETUP, &args![this.byte_add(0x10), a, b]);
+}
+
+// ---- Session 2: 00849a90 to 0084b650 ---------------------------------------
+
+// Translated from 00849a90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `form` may be unloaded: not when bit 0x4000 of its form flags is
+/// set; and a reference for which virtual slot `0x224` is true and slot `0x324`
+/// false is kept as well. `this` is not read.
+pub fn fn_00849a90(e: &mut Engine, _this: Ptr<BGSSaveLoadGame>, form: Ptr) -> bool {
+    if e.call(FORM_FLAG_4000_TEST, &args![form]).bool() {
+        return false;
+    }
+    if e.vcall(form.addr(), FORM_SLOT_IS_REFERENCE, &args![])
+        .bool()
+        && e.vcall(form.addr(), REFERENCE_SLOT_UNLOAD_TEST_A, &args![])
+            .bool()
+        && !e
+            .vcall(form.addr(), REFERENCE_SLOT_UNLOAD_TEST_B, &args![])
+            .bool()
+    {
+        return false;
+    }
+    true
+}
+
+// Translated from 00849b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadGame::LoadCell` (Xbox PDB): unless a load is running, loads the
+/// cell's form, then the references the references map holds for that cell:
+/// they are collected into a temporary reconstruct map (0x34 bytes, built on
+/// the stack), its closing step runs with the thread flag of mask 2 set, and
+/// each reference found is loaded with `LoadForm`. The C++ exception frame
+/// around the temporary is not translated.
+pub fn bgssaveloadgame_load_cell(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, cell: Ptr) {
+    if e.call(GAME_LOADING_FLAG_TEST, &args![this]).bool() {
+        return;
+    }
+    bgssaveloadgame_load_form(e, this, cell);
+    e.with_stack(0x34, |e, pending| {
+        e.call(RECONSTRUCT_FORMS_CONSTRUCT, &args![pending]);
+        let references = e.get(this, BGSSaveLoadGame::pReferencesMap);
+        e.call(
+            REFERENCES_MAP_LOAD_FOR_CELL,
+            &args![references, cell, pending],
+        );
+        fn_00849c00(e, true);
+        e.call(RECONSTRUCT_FINISH_A, &args![pending]);
+        fn_00849c00(e, false);
+        let count = fn_00849c80(e, pending);
+        for index in 0..count {
+            let reference = fn_00849ca0(e, pending, index);
+            bgssaveloadgame_load_form(e, this, Ptr::new(reference));
+        }
+        e.call(RECONSTRUCT_DESTRUCT, &args![pending]);
+    });
+}
+
+// Translated from 00849c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`on`) or clears bit 1 (mask 2) of the per-thread flag word at +0x294
+/// of the TLS block. `this` is not read.
+pub fn fn_00849c00(e: &mut Engine, on: bool) {
+    let word = e.tls() + THREAD_FLAGS_OFFSET;
+    update_flag(e, word, 2, on);
+}
+
+// Translated from 00849c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The number of references in a reconstruct map: `00843bb0` on its list at
+/// +0x10.
+pub fn fn_00849c80(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(FORM_LIST_COUNT, &args![this.byte_add(0x10)]).u32()
+}
+
+// Translated from 00849ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The reference at `index` of a reconstruct map: `00843330` on its list at
+/// +0x10.
+pub fn fn_00849ca0(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    e.call(FORM_LIST_ELEMENT, &args![this.byte_add(0x10), index])
+        .u32()
+}
+
+// Translated from 00849cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00849ce0` on the references map (`[+0x10]`).
+pub fn fn_00849cc0(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, id: u32) -> bool {
+    let references = e.get(this, BGSSaveLoadGame::pReferencesMap);
+    fn_00849ce0(e, references, id)
+}
+
+// Translated from 00849ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Looks `id` up in a map (`00853130(this, id, &out)`; the out slot is the
+/// parameter's own stack slot) and returns whether it is there.
+pub fn fn_00849ce0(e: &mut Engine, this: Ptr, id: u32) -> bool {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), id);
+        e.call(MAP_GET_VALUE, &args![this, id, slot]).bool()
+    })
+}
+
+// Translated from 00849d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadGame::CheckInitialData` (Xbox PDB): checks the initial data a
+/// saved reference carries against what is loaded. `buffer` is the form's
+/// `BGSLoadFormBuffer`, `file` the save file and `id_map` the form id map
+/// swapped in while a kind 6 entry is read. Returns what `0084e850` returned
+/// for kind 5 and 6 (0 otherwise).
+///
+/// With the buffer's header kind (`0084e730`) 5 (created) or 6 (moved), the
+/// initial data is read and the place it names is found. A form that cannot
+/// be the one saved (not a reference for kind 5, another base form) is
+/// cleared and detached from the buffer. When the place is loaded or flag 2
+/// of the data is set, a kind 5 reference is created (`0084f8e0`) and handed
+/// to the buffer (or the buffer is told to skip it), and a kind 6 reference
+/// without a live form is added to the reconstruct map. Otherwise the
+/// reference is recorded in the references map, or a warning is issued and
+/// the buffer skipped; a form that was loaded for it is removed from its cell
+/// and deleted. With any other kind, a kind 6 entry (by the old change flags)
+/// with no live form has its stored initial data read and its original place
+/// added to the reconstruct map when that cell is loaded; a live reference
+/// that is not persistent and whose location is not loaded is deleted.
+pub fn bgssaveloadgame_check_initial_data(
+    e: &mut Engine,
+    this: Ptr<BGSSaveLoadGame>,
+    file: Ptr,
+    buffer: Ptr,
+    id_map: Ptr,
+) -> u32 {
+    e.with_stack(0xe0, |e, frame| {
+        check_initial_data_body(e, this, file, buffer, id_map, frame.addr())
+    })
+}
+
+/// The slots of `CheckInitialData`'s stack frame, as offsets into the block
+/// the entry point allocates.
+const CHECK_HEADER_FLAGS: u32 = 0x00;
+const CHECK_OLD_FLAGS: u32 = 0x04;
+const CHECK_CELL: u32 = 0x08;
+const CHECK_WORLD: u32 = 0x0c;
+const CHECK_COMBINED_FLAGS: u32 = 0x10;
+const CHECK_ENTRY: u32 = 0x14;
+const CHECK_LOCATION_FORM: u32 = 0x18;
+const CHECK_POSITION: u32 = 0x20;
+const CHECK_ROTATION: u32 = 0x30;
+const CHECK_INITIAL_DATA: u32 = 0x40;
+const CHECK_SECOND_INITIAL_DATA: u32 = 0x70;
+
+fn check_initial_data_body(
+    e: &mut Engine,
+    this: Ptr<BGSSaveLoadGame>,
+    file: Ptr,
+    buffer: Ptr,
+    id_map: Ptr,
+    frame: u32,
+) -> u32 {
+    let world = e.global::<u32>(WORLD);
+    let player = e.global::<u32>(PLAYER);
+    let header_flags_slot = frame + CHECK_HEADER_FLAGS;
+    let old_flags_slot = frame + CHECK_OLD_FLAGS;
+    let cell_slot = frame + CHECK_CELL;
+    let world_slot = frame + CHECK_WORLD;
+    let init = frame + CHECK_INITIAL_DATA;
+    let mut result = 0u32;
+    let form_type = e.call(LOAD_FORM_BUFFER_HEADER_TYPE, &args![buffer]).u32();
+    e.call(FORM_BUFFER_HEADER_FLAGS, &args![buffer, header_flags_slot]);
+    e.call(LOAD_FORM_BUFFER_OLD_FLAGS, &args![buffer, old_flags_slot]);
+    let header_flags = e.mem.u32(header_flags_slot);
+    let old_flags = e.mem.u32(old_flags_slot);
+    let id = e.call(BUFFER_FORM_ID, &args![buffer]).u32();
+    let mut form = e.vcall(buffer.addr(), BUFFER_SLOT_GET_FORM, &args![]).u32();
+    let kind = e
+        .call(INITIAL_DATA_KIND, &args![id, form_type, header_flags])
+        .u32();
+    if kind == 5 || kind == 6 {
+        fn_00849280(e, Ptr::new(init));
+        result = e
+            .call(LOAD_INITIAL_DATA_FROM_FILE, &args![file, kind, init])
+            .u32();
+        let mut owner = 0u32;
+        if form != 0 {
+            let mut mismatch = false;
+            if !e.vcall(form, FORM_SLOT_IS_REFERENCE, &args![]).bool() {
+                mismatch = kind == 5;
+            } else {
+                owner = form;
+                if kind == 5 {
+                    let base = e.call(BUFFER_GET_FORM, &args![owner]).u32();
+                    let base_id = e.call(FORM_ID_WORD, &args![base]).u32();
+                    if base_id != e.mem.u32(init + 4) {
+                        mismatch = true;
+                    }
+                }
+            }
+            if mismatch {
+                bgssaveloadgame_clear_form(e, this, Ptr::new(form));
+                e.call(LOAD_FORM_BUFFER_SET_FORM, &args![buffer, 0u32]);
+                let none = change_flags(e, 0);
+                e.call(LOAD_FORM_BUFFER_SET_OLD_FLAGS, &args![buffer, none]);
+                form = 0;
+                owner = 0;
+            }
+        }
+        e.mem.set_u32(cell_slot, 0);
+        e.mem.set_u32(world_slot, 0);
+        e.call(LOCATION_CELL_AND_WORLD, &args![init, cell_slot, world_slot]);
+        let cell = e.mem.u32(cell_slot);
+        let place_loaded = cell != 0
+            && e.call(WORLD_IS_CELL_LOADED, &args![world, cell, 0u32])
+                .bool();
+        let flag_two = e.mem.u8(init + 0x2c) & 2 != 0;
+        let reconstruct = e.get(this, BGSSaveLoadGame::pReconstructForms);
+        if place_loaded || flag_two {
+            if kind == 5 {
+                if form != 0 {
+                    let combined = frame + CHECK_COMBINED_FLAGS;
+                    e.call(
+                        COMBINE_CHANGE_FLAGS,
+                        &args![combined, old_flags, header_flags, form_type, 1u32],
+                    );
+                    if read_word(e, combined) != 0 {
+                        bgssaveloadgame_delete_form(e, this, Ptr::new(form));
+                        form = 0;
+                        let none = change_flags(e, 0);
+                        e.call(LOAD_FORM_BUFFER_SET_OLD_FLAGS, &args![buffer, none]);
+                    }
+                }
+                form = e.call(CREATE_REFERENCE, &args![id, init, form]).u32();
+                if form != 0 {
+                    e.call(LOAD_FORM_BUFFER_SET_FORM, &args![buffer, form]);
+                } else {
+                    fn_00848d90(e, Ptr::new(buffer.addr()), true);
+                }
+            } else if kind == 6 && form == 0 {
+                e.mem.set_u32(cell_slot, 0);
+                e.mem.set_u32(world_slot, 0);
+                e.call(GET_ORIGINAL_LOCATION, &args![init, cell_slot, world_slot]);
+                let original_cell = e.mem.u32(cell_slot);
+                if original_cell != 0 {
+                    e.call(
+                        RECONSTRUCT_ADD_REFERENCE,
+                        &args![reconstruct, original_cell, id, 0u32],
+                    );
+                } else {
+                    let original_world = e.mem.u32(world_slot);
+                    let x = e.mem.u32(init + 0xc);
+                    let y = e.mem.u32(init + 0x10);
+                    e.call(
+                        RECONSTRUCT_ADD_REFERENCE_AT,
+                        &args![reconstruct, original_world, x, y, id, 0u32],
+                    );
+                }
+                e.call(LOAD_FORM_BUFFER_SET_LOADED, &args![buffer, 1u32]);
+                fn_0084a360(e, Ptr::new(buffer.addr()), true);
+            }
+            return result;
+        }
+        // The place is not loaded and the data does not insist on it.
+        if owner != 0 && (e.call(REFERENCE_IS_PERSISTENT, &args![owner]).bool() || owner == player)
+        {
+            return result;
+        }
+        let references = e.get(this, BGSSaveLoadGame::pReferencesMap);
+        let first_word = e.mem.u32(init);
+        if cell != 0 && e.call(CELL_FLAG_ZERO_TEST, &args![cell]).bool() {
+            fn_00849a70(e, references, first_word, id);
+            if kind == 6 {
+                fn_00849a50(e, references, id);
+            }
+        } else if e.mem.u32(world_slot) != 0 {
+            e.call(
+                REFERENCES_MAP_ADD_UNLOADED,
+                &args![references, first_word, id, init + 0x14],
+            );
+            if kind == 6 {
+                fn_00849a50(e, references, id);
+            }
+        } else {
+            let name = if kind == 5 { TEXT_CREATED } else { TEXT_MOVED };
+            e.call(
+                SAVE_GAME_WARNING,
+                &args![MISSING_PLACE_WARNING, first_word, name],
+            );
+            fn_00848d90(e, Ptr::new(buffer.addr()), true);
+        }
+        if owner != 0 {
+            let parent = e.call(REFERENCE_PARENT_CELL, &args![owner]).u32();
+            if parent != 0 {
+                let parent = e.call(REFERENCE_PARENT_CELL, &args![owner]).u32();
+                e.call(CELL_REMOVE_REFERENCE, &args![parent, owner]);
+            }
+            bgssaveloadgame_delete_form(e, this, Ptr::new(form));
+            e.call(LOAD_FORM_BUFFER_SET_FORM, &args![buffer, 0u32]);
+        }
+        return result;
+    }
+    let second_kind = e
+        .call(INITIAL_DATA_KIND, &args![id, form_type, old_flags])
+        .u32();
+    if second_kind != 6 {
+        return result;
+    }
+    if form == 0 {
+        let entry_slot = frame + CHECK_ENTRY;
+        let changes = e.get(this, BGSSaveLoadGame::pChangesMap);
+        e.call(CHANGES_MAP_GET_ENTRY, &args![changes, entry_slot, id]);
+        if read_word(e, entry_slot) != 0 {
+            let second_init = frame + CHECK_SECOND_INITIAL_DATA;
+            let saved_map = e.get(this, BGSSaveLoadGame::pFormIDMap);
+            e.set(this, BGSSaveLoadGame::pFormIDMap, id_map);
+            fn_00849280(e, Ptr::new(second_init));
+            let advanced = e
+                .call(UNLOADED_FORM_BUFFER_ADVANCED, &args![entry_slot])
+                .u32();
+            e.call(
+                LOAD_INITIAL_DATA_STRUCT,
+                &args![advanced, second_kind, second_init],
+            );
+            e.mem.set_u32(cell_slot, 0);
+            e.mem.set_u32(world_slot, 0);
+            e.call(
+                GET_ORIGINAL_LOCATION,
+                &args![second_init, cell_slot, world_slot],
+            );
+            let cell = e.mem.u32(cell_slot);
+            if cell != 0
+                && e.call(WORLD_IS_CELL_LOADED, &args![world, cell, 0u32])
+                    .bool()
+            {
+                let reconstruct = e.get(this, BGSSaveLoadGame::pReconstructForms);
+                e.call(
+                    RECONSTRUCT_ADD_REFERENCE,
+                    &args![reconstruct, cell, id, 0u32],
+                );
+                e.call(LOAD_FORM_BUFFER_SET_LOADED, &args![buffer, 1u32]);
+                fn_0084a360(e, Ptr::new(buffer.addr()), true);
+            }
+            e.set(this, BGSSaveLoadGame::pFormIDMap, saved_map);
+        }
+    } else if e.vcall(form, FORM_SLOT_IS_REFERENCE, &args![]).bool()
+        && !e.call(REFERENCE_IS_PERSISTENT, &args![form]).bool()
+    {
+        // The reference's own location (the three words at `DEFAULT_POSITION`
+        // are what the call starts from) must be in a loaded cell.
+        let location_slot = frame + CHECK_LOCATION_FORM;
+        let position = frame + CHECK_POSITION;
+        let rotation = frame + CHECK_ROTATION;
+        e.mem.set_u32(location_slot, 0);
+        for offset in [0u32, 4, 8] {
+            let value = e.global::<u32>(DEFAULT_POSITION + offset);
+            e.mem.set_u32(position + offset, value);
+            e.mem.set_u32(rotation + offset, value);
+        }
+        let mut remove = false;
+        if !e
+            .vcall(
+                form,
+                REFERENCE_SLOT_LOCATION,
+                &args![position, rotation, location_slot, 0u32],
+            )
+            .bool()
+        {
+            remove = true;
+        } else {
+            let location = e.mem.u32(location_slot);
+            let place = if e.call(FORM_GET_TYPE, &args![location]).u32() == 0x41 {
+                e.call(WORLD_SPACE_CELL_FROM_COORD, &args![location, position])
+                    .u32()
+            } else {
+                location
+            };
+            if place == 0
+                || !e
+                    .call(WORLD_IS_CELL_LOADED, &args![world, place, 0u32])
+                    .bool()
+            {
+                remove = true;
+            }
+        }
+        if remove {
+            bgssaveloadgame_delete_form(e, this, Ptr::new(form));
+            e.call(LOAD_FORM_BUFFER_SET_FORM, &args![buffer, 0u32]);
+            let none = change_flags(e, 0);
+            e.call(LOAD_FORM_BUFFER_SET_OLD_FLAGS, &args![buffer, none]);
+        }
+    }
+    result
+}
+
+// Translated from 0084a360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`on`) or clears bit 1 (mask 2) of a `BGSLoadFormBuffer`'s `iFlags`.
+pub fn fn_0084a360(e: &mut Engine, this: Ptr<BGSLoadFormBuffer>, on: bool) {
+    update_flag(e, this.addr() + 0x28, 2, on);
+}
+
+// Translated from 0084a3a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadGame::HandleUnrevertibleChanges` (Xbox PDB): `form_slot` is the
+/// address of the pointer to the form (cleared when the form is deleted),
+/// `flags` a `BGSChangeFlags` passed by value, and `delete_unpersistent`
+/// decides what happens to a reference whose location cannot be restored.
+/// Returns true for the player and when no flags are left at the end.
+///
+/// For a reference with changes in mask 0xe: a dynamic form id or a successful
+/// move to its location (`00561ef0`) clears those bits and queues an actor's
+/// package locations; otherwise a non-persistent reference is deleted when
+/// `delete_unpersistent` is set, and the rest raise a warning.
+pub fn bgssaveloadgame_handle_unrevertible_changes(
+    e: &mut Engine,
+    this: Ptr<BGSSaveLoadGame>,
+    form_slot: Ptr,
+    flags: u32,
+    delete_unpersistent: bool,
+) -> bool {
+    let player = e.global::<u32>(PLAYER);
+    let form = e.mem.u32(form_slot.addr());
+    if form == player {
+        return true;
+    }
+    e.with_stack(4, |e, flag_slot| {
+        e.mem.set_u32(flag_slot.addr(), flags);
+        if e.vcall(form, FORM_SLOT_IS_REFERENCE, &args![]).bool()
+            && e.call(FLAGS_TEST, &args![flag_slot, 0xeu32]).bool()
+        {
+            let id = e.call(FORM_ID_WORD, &args![form]).u32();
+            let data_handler = e.global::<u32>(DATA_HANDLER);
+            if e.call(IS_DYNAMIC_FORM_ID, &args![data_handler, id]).bool()
+                || e.call(REFERENCE_MOVE_TO_LOCATION, &args![form, 0u32])
+                    .bool()
+            {
+                e.call(FLAGS_CLEAR, &args![flag_slot, 0xeu32]);
+                if read_word(e, flag_slot.addr()) == 0
+                    && e.vcall(form, FORM_SLOT_IS_ACTOR, &args![]).bool()
+                {
+                    bgssaveloadgame_queue_init_package_locations(e, this, Ptr::new(form));
+                }
+            } else if !delete_unpersistent || e.call(REFERENCE_IS_PERSISTENT, &args![form]).bool() {
+                let name = if e.call(FORM_NAME_LENGTH, &args![form]).u32() != 0 {
+                    e.vcall(form, FORM_SLOT_NAME, &args![]).u32()
+                } else {
+                    e.call(REFERENCE_FULL_NAME, &args![form]).u32()
+                };
+                let flags_now = read_word(e, flag_slot.addr());
+                let base = e.call(BUFFER_GET_FORM, &args![form]).u32();
+                let type_name = e.call(FORM_TYPE_NAME, &args![base]).u32();
+                let id = e.call(FORM_ID_WORD, &args![form]).u32();
+                e.call(
+                    SAVE_GAME_WARNING,
+                    &args![REVERT_LOCATION_WARNING, name, id, type_name, flags_now],
+                );
+            } else {
+                bgssaveloadgame_delete_form(e, this, Ptr::new(form));
+                e.mem.set_u32(form_slot.addr(), 0);
+            }
+        }
+        read_word(e, flag_slot.addr()) == 0
+    })
+}
+
+// Translated from 0084a520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadGame::QueueInitPackageLocations` (Xbox PDB): when the value
+/// slot `0xc` of the object at +0x100 of the actor's `004181e0` result gives
+/// (called with `0x10`, result in `ST0`) is above 0.0, the actor is added to
+/// the package location map (`this + 0x34`) under its form id.
+pub fn bgssaveloadgame_queue_init_package_locations(
+    e: &mut Engine,
+    this: Ptr<BGSSaveLoadGame>,
+    actor: Ptr,
+) {
+    let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+    let value = e
+        .vcall(process + 0x100, PROCESS_SLOT_VALUE, &args![0x10u32])
+        .f64();
+    if value > e.global::<f64>(ZERO_DOUBLE) {
+        let id = e.call(FORM_ID_WORD, &args![actor]).u32();
+        e.call(MAP_SET_AT, &args![this.byte_add(0x34), id, actor]);
+    }
+}
+
+// Translated from 0084a580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadGame::CancelInitPackageLocations` (Xbox PDB): removes the
+/// actor's form id from the package location map.
+pub fn bgssaveloadgame_cancel_init_package_locations(
+    e: &mut Engine,
+    this: Ptr<BGSSaveLoadGame>,
+    actor: Ptr,
+) {
+    let id = e.call(FORM_ID_WORD, &args![actor]).u32();
+    e.call(MAP_REMOVE_AT, &args![this.byte_add(0x34), id]);
+}
+
+// Translated from 0084a5b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The pass after a load: every actor in the package location map that has a
+/// saved acquire object (`008d8520`) gets `InitPackageLocations(1)`; then the
+/// map is flushed (`00438af0`).
+pub fn fn_0084a5b0(e: &mut Engine, this: Ptr<BGSSaveLoadGame>) {
+    let map = this.byte_add(0x34);
+    e.with_stack(0xc, |e, slots| {
+        let position = slots.addr();
+        let key = position + 4;
+        let value = position + 8;
+        let first = e.call(MAP_FIRST_POSITION, &args![map]).u32();
+        e.mem.set_u32(position, first);
+        while e.mem.u32(position) != 0 {
+            e.mem.set_u32(key, 0);
+            e.mem.set_u32(value, 0);
+            e.call(MAP_NEXT, &args![map, position, key, value]);
+            let actor = e.mem.u32(value);
+            if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![actor]).u32() != 0 {
+                e.call(ACTOR_INIT_PACKAGE_LOCATIONS, &args![actor, 1u32]);
+            }
+        }
+    });
+    e.call(CHANGED_FORM_ID_MAP_FLUSH, &args![map]);
+}
+
+// Translated from 0084a620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether a change of `form` is recorded: the game must be recording
+/// (`00570f00`) or `force` set, the form must not have bit 0x4000 of its form
+/// flags, and a form with bit 0x20 must not have a dynamic form id.
+pub fn fn_0084a620(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, form: Ptr, force: bool) -> bool {
+    if !(e.call(GAME_RECORDING_TEST, &args![this]).bool() || force) {
+        return false;
+    }
+    if e.call(FORM_FLAG_4000_TEST, &args![form]).bool() {
+        return false;
+    }
+    let id = e.call(FORM_ID_WORD, &args![form]).u32();
+    if e.call(FORM_FLAG_20_TEST, &args![form]).bool() {
+        let data_handler = e.global::<u32>(DATA_HANDLER);
+        if e.call(IS_DYNAMIC_FORM_ID, &args![data_handler, id]).bool() {
+            return false;
+        }
+    }
+    true
+}
+
+// Translated from 0084a690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadGame::AddChange` (Xbox PDB): when `0084a620` allows it, adds
+/// `flags` to the form's entry in the changes map.
+pub fn bgssaveloadgame_add_change(
+    e: &mut Engine,
+    this: Ptr<BGSSaveLoadGame>,
+    form: Ptr,
+    flags: u32,
+    force: bool,
+) {
+    if fn_0084a620(e, this, form, force) {
+        let id = e.call(FORM_ID_WORD, &args![form]).u32();
+        let changes = e.get(this, BGSSaveLoadGame::pChangesMap);
+        e.call(CHANGES_MAP_ADD_FLAGS, &args![changes, id, flags]);
+    }
+}
+
+// Translated from 0084a6d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadGame::GetChange` (Xbox PDB): whether the form's entry in the
+/// changes map has a bit of `mask` (`00845720`).
+pub fn bgssaveloadgame_get_change(
+    e: &mut Engine,
+    this: Ptr<BGSSaveLoadGame>,
+    form: Ptr,
+    mask: u32,
+) -> bool {
+    let id = e.call(FORM_ID_WORD, &args![form]).u32();
+    let changes = e.get(this, BGSSaveLoadGame::pChangesMap);
+    e.call(CHANGES_MAP_HAS_FLAGS, &args![changes, id, mask])
+        .bool()
+}
+
+// Translated from 0084a700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The same test on the old changes map (`[+4]`); false when there is none.
+pub fn fn_0084a700(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, form: Ptr, mask: u32) -> bool {
+    let old = e.get(this, BGSSaveLoadGame::pOldChangesMap);
+    if old.is_null() {
+        return false;
+    }
+    let id = e.call(FORM_ID_WORD, &args![form]).u32();
+    e.call(CHANGES_MAP_HAS_FLAGS, &args![old, id, mask]).bool()
+}
+
+// Translated from 0084a740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether changes to `form` are recorded: the game is recording (`00570f00`)
+/// and the form does not have bit 0x4000 of its form flags.
+pub fn fn_0084a740(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, form: Ptr) -> bool {
+    e.call(GAME_RECORDING_TEST, &args![this]).bool()
+        && !e.call(FORM_FLAG_4000_TEST, &args![form]).bool()
+}
+
+// Translated from 0084a780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When changes to `form` are recorded (`0084a740`), clears `flags` from its
+/// entry in the changes map (`00845a80`).
+pub fn fn_0084a780(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, form: Ptr, flags: u32) {
+    if fn_0084a740(e, this, form) {
+        let id = e.call(FORM_ID_WORD, &args![form]).u32();
+        let changes = e.get(this, BGSSaveLoadGame::pChangesMap);
+        e.call(CHANGES_MAP_CLEAR_FLAGS, &args![changes, id, flags]);
+    }
+}
+
+// Translated from 0084a7c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadGame::RemoveChanges` (Xbox PDB): removes the form's entry from
+/// the changes map unless it has a stored unloaded buffer (the word at +4 of
+/// the entry).
+pub fn bgssaveloadgame_remove_changes(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, form: Ptr) {
+    let id = e.call(FORM_ID_WORD, &args![form]).u32();
+    let changes = e.get(this, BGSSaveLoadGame::pChangesMap);
+    let entry = e.call(CHANGES_MAP_ENTRY_FOR, &args![changes, id]).u32();
+    if entry != 0 && read_word(e, entry + 4) == 0 {
+        let changes = e.get(this, BGSSaveLoadGame::pChangesMap);
+        e.call(CHANGES_MAP_REMOVE, &args![changes, id]);
+    }
+}
+
+// Translated from 0084a810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadGame::QueueSubBuffer` (Xbox PDB): forwards its three words to
+/// `QueueSubBuffer` of the queued sub buffers map (`[+0x14]`).
+pub fn bgssaveloadgame_queue_sub_buffer(
+    e: &mut Engine,
+    this: Ptr<BGSSaveLoadGame>,
+    a: u32,
+    b: u32,
+    c: u32,
+) {
+    let queue = e.get(this, BGSSaveLoadGame::pQueuedSubBuffersMap);
+    e.call(QUEUED_SUB_BUFFERS_QUEUE, &args![queue, a, b, c]);
+}
+
+// Translated from 0084a840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Applies the changes of a load to the live forms: with the load flag set,
+/// the global data is reset (`0084c270(1)`), `00848e70(0, 0)` runs, the package
+/// locations are initialised (`0084a5b0`) and the load flag is cleared.
+pub fn fn_0084a840(e: &mut Engine, this: Ptr<BGSSaveLoadGame>) {
+    fn_00848ca0(e, this, true);
+    e.call(GLOBAL_DATA_RESET, &args![1u32]);
+    fn_00848e70(e, this, Ptr::NULL, Ptr::NULL);
+    fn_0084a5b0(e, this);
+    fn_00848ca0(e, this, false);
+}
+
+// Translated from 0084a880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadGame::ClearForm` (Xbox PDB): gives a form a new id from the
+/// data handler (form slot `0x128`) or, for form types 0x3a to 0x40, 0x49 and
+/// 0x69, deletes it. Types 4, 0x11, 0x12, 0x2a, 0x2b, 0x39, 0x42 and 0x43 are
+/// renumbered silently; every other type is renumbered with a warning.
+pub fn bgssaveloadgame_clear_form(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, form: Ptr) {
+    if form.is_null() {
+        return;
+    }
+    let form_type = e.call(FORM_GET_TYPE, &args![form]).u32();
+    match form_type {
+        0x3a..=0x40 | 0x49 | 0x69 => bgssaveloadgame_delete_form(e, this, form),
+        0x04 | 0x11 | 0x12 | 0x2a | 0x2b | 0x39 | 0x42 | 0x43 => renumber_form(e, form),
+        _ => {
+            let type_name = e.call(TYPE_NAME_FOR, &args![form_type & 0xff]).u32();
+            let id = e.call(FORM_ID_WORD, &args![form]).u32();
+            e.call(
+                SAVE_GAME_WARNING,
+                &args![RENUMBERED_WARNING, id, form_type, type_name],
+            );
+            renumber_form(e, form);
+        }
+    }
+}
+
+/// Gives `form` the next form id of the data handler (form slot `0x128`).
+fn renumber_form(e: &mut Engine, form: Ptr) {
+    let data_handler = e.global::<u32>(DATA_HANDLER);
+    let new_id = e
+        .call(DATA_HANDLER_GET_NEXT_ID, &args![data_handler, 1u32])
+        .u32();
+    e.vcall(form.addr(), FORM_SLOT_SET_NEW_ID, &args![new_id]);
+}
+
+// Translated from 0084a9c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadGame::ClearFormID` (Xbox PDB): `ClearForm` of the form with this
+/// id (null when there is none).
+pub fn bgssaveloadgame_clear_form_id(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, id: u32) {
+    let form: Ptr = e.call(LOOKUP_FORM, &args![id]).ptr();
+    bgssaveloadgame_clear_form(e, this, form);
+}
+
+// Translated from 0084a9f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadGame::DeleteForm` (Xbox PDB): calls form slot `0x10` (the
+/// deleting destructor) with `1` on a form that is not null.
+pub fn bgssaveloadgame_delete_form(e: &mut Engine, _this: Ptr<BGSSaveLoadGame>, form: Ptr) {
+    if !form.is_null() {
+        e.vcall(form.addr(), FORM_SLOT_DELETE, &args![1u32]);
+    }
+}
+
+// Translated from 0084aa30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadGame::AddChangedFormID` (Xbox PDB): maps `old_id` to `new_id` in
+/// the changed form id map (`[+0x18]`), with a warning when `old_id` was
+/// already mapped (the new value replaces the old one).
+pub fn bgssaveloadgame_add_changed_form_id(
+    e: &mut Engine,
+    this: Ptr<BGSSaveLoadGame>,
+    old_id: u32,
+    new_id: u32,
+) {
+    let map = e.get(this, BGSSaveLoadGame::pChangedFormIDMap);
+    e.with_stack(4, |e, slot| {
+        if e.call(MAP_GET_VALUE, &args![map, old_id, slot]).bool() {
+            let existing = e.mem.u32(slot.addr());
+            e.call(
+                SAVE_GAME_WARNING,
+                &args![CHANGED_ID_CONFLICT_WARNING, new_id, old_id, existing],
+            );
+        }
+    });
+    e.call(MAP_SET_AT, &args![map, old_id, new_id]);
+}
+
+// Translated from 0084aa90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The id `old_id` was changed to in the changed form id map, 0 when it was
+/// not.
+pub fn fn_0084aa90(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, old_id: u32) -> u32 {
+    let map = e.get(this, BGSSaveLoadGame::pChangedFormIDMap);
+    e.with_stack(4, |e, slot| {
+        if e.call(MAP_GET_VALUE, &args![map, old_id, slot]).bool() {
+            e.mem.u32(slot.addr())
+        } else {
+            0
+        }
+    })
+}
+
+// Translated from 0084aad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the changes map has an entry for the id.
+pub fn fn_0084aad0(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, id: u32) -> bool {
+    let changes = e.get(this, BGSSaveLoadGame::pChangesMap);
+    e.call(CHANGES_MAP_ENTRY_FOR, &args![changes, id]).u32() != 0
+}
+
+// Translated from 0084ab00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadGame::SaveGameWarningFunction` (Xbox PDB): forwards the format
+/// and the `va_list` to `AddNoteVarArgs` of the history (`[+0x1c]`).
+pub fn bgssaveloadgame_save_game_warning_function(
+    e: &mut Engine,
+    this: Ptr<BGSSaveLoadGame>,
+    format: u32,
+    arguments: u32,
+) {
+    let history = e.get(this, BGSSaveLoadGame::pHistory);
+    e.call(HISTORY_ADD_NOTE_VA, &args![history, format, arguments]);
+}
+
+// Translated from 0084ab20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadGame::CleanupExpiredData` (Xbox PDB): drops the havok state of
+/// references in cells that have been detached for too long.
+///
+/// With the per-thread flag bit 0 cleared (restored at the end), the first
+/// pass walks the changes map. For every entry with change bit 0x40000000 the
+/// cell is found (from the stored unloaded buffer when it is a cell buffer,
+/// type 0x39, or from the live cell) together with the time it was detached,
+/// and a cell detached for longer than `00526100` (against the calendar's
+/// stamp `00867e30`) is put into a temporary expiry queue under the 64-bit key
+/// `area | grid << 32`. When the queue is not empty the second pass walks the
+/// map again: for every entry that is not a dynamic form id, the place of a
+/// reference (type 0x3a) is worked out the same way; an entry whose place is
+/// in the queue, that has change bit 4 and not bit 2, loses its stored
+/// reference map entry and either its whole entry (flags exactly 4) or the
+/// change bits 0xc together with its initial data (the unloaded buffer is
+/// rebuilt without them). The history gets a note with the three counts. The
+/// C++ exception frame around the queue is not translated.
+pub fn bgssaveloadgame_cleanup_expired_data(e: &mut Engine, this: Ptr<BGSSaveLoadGame>) {
+    let saved_flag = e.call(SET_THREAD_FLAG, &args![this, 0u32]).u8();
+    e.with_stack(0x10, |e, queue| {
+        fn_0084b4e0(e, Ptr::new(queue.addr()), 0x25);
+        e.with_stack(0xa0, |e, frame| {
+            cleanup_expired_data_body(e, this, queue.addr(), frame.addr());
+        });
+        e.call(CHANGED_FORM_ID_MAP_FLUSH, &args![queue]);
+        e.call(SET_THREAD_FLAG, &args![this, saved_flag as u32]);
+        e.call(EXPIRY_QUEUE_DESTRUCT, &args![queue]);
+    });
+}
+
+/// Slots of the stack frame of the cleanup passes (offsets into the block).
+const CLEANUP_POSITION: u32 = 0x00;
+const CLEANUP_KEY: u32 = 0x04;
+const CLEANUP_ENTRY: u32 = 0x08;
+const CLEANUP_FOUND: u32 = 0x0c;
+const CLEANUP_VALUE_SIZE: u32 = 0x10;
+const CLEANUP_INITIAL_DATA: u32 = 0x20;
+const CLEANUP_SECOND_INITIAL_DATA: u32 = 0x50;
+
+/// The 64-bit key of the expiry queue as two words: the area id, then (when
+/// the cell has grid coordinates, `x != 0x7fffffff`) the packed coordinates
+/// (`00587410(x & 0xffff, y & 0xffff)`) in the high word.
+fn expiry_key(e: &mut Engine, area: u32, x: u32, y: u32) -> (u32, u32) {
+    if x != 0x7fff_ffff {
+        let packed = e
+            .call(PACK_GRID_COORDS, &args![x & 0xffff, y & 0xffff])
+            .u32();
+        (area, packed)
+    } else {
+        (area, 0)
+    }
+}
+
+/// A place coordinate as the game rounds it: the float with these bits through
+/// `00406d90`, shifted right by 12 (arithmetic).
+fn grid_of(e: &mut Engine, value: u32) -> u32 {
+    let rounded = e.call(ROUND_TO_INT, &args![f32::from_bits(value)]).i32();
+    (rounded >> 12) as u32
+}
+
+fn cleanup_expired_data_body(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, queue: u32, frame: u32) {
+    let data_handler = e.global::<u32>(DATA_HANDLER);
+    let position = frame + CLEANUP_POSITION;
+    let key_slot = frame + CLEANUP_KEY;
+    let entry_slot = frame + CLEANUP_ENTRY;
+    let init = frame + CLEANUP_INITIAL_DATA;
+    let now = e.call(CALENDAR_TIME_STAMP, &args![CALENDAR]).u32();
+    let mut expired = 0u32;
+
+    // ---- first pass: which cells have expired --------------------------------
+    let changes = e.get(this, BGSSaveLoadGame::pChangesMap);
+    let first = e.call(MAP_FIRST_POSITION, &args![changes]).u32();
+    e.mem.set_u32(position, first);
+    while e.mem.u32(position) != 0 {
+        e.mem.set_u32(key_slot, 0);
+        e.mem.set_u32(entry_slot, 0);
+        let changes = e.get(this, BGSSaveLoadGame::pChangesMap);
+        e.call(MAP_NEXT, &args![changes, position, key_slot, entry_slot]);
+        let key = e.mem.u32(key_slot);
+        let entry = e.mem.u32(entry_slot);
+        let mut area = key;
+        if !e.call(FLAGS_TEST, &args![entry, 0x4000_0000u32]).bool() {
+            continue;
+        }
+        let mut detach_time = 0u32;
+        let mut x = 0x7fff_ffffu32;
+        let mut y = 0x7fff_ffffu32;
+        if read_word(e, entry + 4) != 0 {
+            if fn_00849220(e, Ptr::new(entry + 4)) == 0x39 {
+                let flags = e.mem.u32(entry);
+                let kind = e.call(INITIAL_DATA_KIND, &args![key, 0x39u32, flags]).u32();
+                if kind != 0 {
+                    let advanced = e
+                        .call(UNLOADED_FORM_BUFFER_ADVANCED, &args![entry + 4])
+                        .u32();
+                    e.call(LOAD_INITIAL_DATA_STRUCT, &args![advanced, kind, init]);
+                    detach_time = e.mem.u32(init + 0xc);
+                    if kind != 3 {
+                        area = e.mem.u32(init);
+                        x = e.mem.u32(init + 4);
+                        y = e.mem.u32(init + 8);
+                    }
+                }
+            }
+        } else {
+            let cell = e.call(LOOKUP_FORM, &args![key]).u32();
+            if cell != 0 && e.call(FORM_GET_TYPE, &args![cell]).u32() == 0x39 {
+                detach_time = e.call(CELL_DETACH_TIME, &args![cell]).u32();
+                if !e.call(CELL_FLAG_ZERO_TEST, &args![cell]).bool() {
+                    let world_space = e.call(CELL_WORLD_SPACE, &args![cell]).u32();
+                    area = e.call(FORM_ID_WORD, &args![world_space]).u32();
+                    x = e.call(CELL_DATA_X, &args![cell]).u32();
+                    y = e.call(CELL_DATA_Y, &args![cell]).u32();
+                }
+            }
+        }
+        if detach_time != 0 && now.wrapping_sub(detach_time) > e.call(EXPIRY_LIMIT, &args![]).u32()
+        {
+            let (low, high) = expiry_key(e, area, x, y);
+            e.call(EXPIRY_QUEUE_INSERT, &args![queue, low, high, detach_time]);
+            expired += 1;
+        }
+    }
+    if expired == 0 {
+        return;
+    }
+
+    // ---- second pass: strip the havok state of references in those cells -----
+    let mut references_removed = 0u32;
+    let mut all_removed = 0u32;
+    let mut partial_removed = 0u32;
+    let changes = e.get(this, BGSSaveLoadGame::pChangesMap);
+    let first = e.call(MAP_FIRST_POSITION, &args![changes]).u32();
+    e.mem.set_u32(position, first);
+    while e.mem.u32(position) != 0 {
+        e.mem.set_u32(key_slot, 0);
+        e.mem.set_u32(entry_slot, 0);
+        let changes = e.get(this, BGSSaveLoadGame::pChangesMap);
+        e.call(MAP_NEXT, &args![changes, position, key_slot, entry_slot]);
+        let key = e.mem.u32(key_slot);
+        let entry = e.mem.u32(entry_slot);
+        if e.call(IS_DYNAMIC_FORM_ID, &args![data_handler, key]).bool() {
+            continue;
+        }
+        let mut area = 0u32;
+        let mut x = 0u32;
+        let mut y = 0u32;
+        let mut reference = 0u32;
+        let form_type;
+        if read_word(e, entry + 4) != 0 {
+            form_type = fn_00849220(e, Ptr::new(entry + 4));
+        } else {
+            let form = e.call(LOOKUP_FORM, &args![key]).u32();
+            if form != 0 {
+                form_type = e.call(FORM_GET_TYPE, &args![form]).u32();
+                if e.vcall(form, FORM_SLOT_IS_REFERENCE, &args![]).bool() {
+                    reference = form;
+                }
+            } else {
+                form_type = 0;
+                let flags = read_word(e, entry);
+                e.call(
+                    SAVE_GAME_WARNING,
+                    &args![CLEANUP_MISSING_BUFFER_WARNING, key, flags],
+                );
+            }
+        }
+        if form_type == 0x3a {
+            if read_word(e, entry + 4) != 0 {
+                let flags = e.mem.u32(entry);
+                let kind = e
+                    .call(INITIAL_DATA_KIND, &args![key, form_type, flags])
+                    .u32();
+                if kind != 0 {
+                    fn_00849280(e, Ptr::new(init));
+                    let advanced = e
+                        .call(UNLOADED_FORM_BUFFER_ADVANCED, &args![entry + 4])
+                        .u32();
+                    e.call(LOAD_INITIAL_DATA_STRUCT, &args![advanced, kind, init]);
+                    area = e.mem.u32(init);
+                    let float_x = e.mem.u32(init + 0x14);
+                    let float_y = e.mem.u32(init + 0x18);
+                    x = grid_of(e, float_x);
+                    y = grid_of(e, float_y);
+                }
+            } else if reference != 0 {
+                let parent = e.call(REFERENCE_PARENT_CELL, &args![reference]).u32();
+                let world_space = e.call(REFERENCE_WORLD_SPACE, &args![reference]).u32();
+                if parent != 0 && e.call(CELL_FLAG_ZERO_TEST, &args![parent]).bool() {
+                    area = e.call(FORM_ID_WORD, &args![parent]).u32();
+                } else if world_space != 0 {
+                    area = e.call(FORM_ID_WORD, &args![world_space]).u32();
+                    let place = e.vcall(reference, REFERENCE_SLOT_PLACE, &args![]).u32();
+                    // The third word of the place is copied by the game but not
+                    // used.
+                    let float_x = e.mem.u32(place);
+                    let float_y = e.mem.u32(place + 4);
+                    x = grid_of(e, float_x);
+                    y = grid_of(e, float_y);
+                }
+            }
+        }
+        if area != 0 {
+            let (low, high) = expiry_key(e, area, x, y);
+            let found = frame + CLEANUP_FOUND;
+            e.mem.set_u32(found, 0);
+            if e.call(EXPIRY_QUEUE_FIND, &args![queue, low, high, found])
+                .bool()
+                && e.call(FLAGS_TEST, &args![entry, 4u32]).bool()
+                && !e.call(FLAGS_TEST, &args![entry, 2u32]).bool()
+            {
+                references_removed += 1;
+                let flags = e.mem.u32(entry);
+                let kind = e
+                    .call(INITIAL_DATA_KIND, &args![key, form_type, flags])
+                    .u32();
+                let second_init = frame + CLEANUP_SECOND_INITIAL_DATA;
+                fn_00849280(e, Ptr::new(second_init));
+                let references_map = e.get(this, BGSSaveLoadGame::pReferencesMap);
+                if read_word(e, entry + 4) != 0 && kind == 6 {
+                    let advanced = e
+                        .call(UNLOADED_FORM_BUFFER_ADVANCED, &args![entry + 4])
+                        .u32();
+                    e.call(
+                        LOAD_INITIAL_DATA_STRUCT,
+                        &args![advanced, kind, second_init],
+                    );
+                    fn_0084b470(e, references_map, key);
+                    let cell_id = e.mem.u32(second_init);
+                    let cell = e.call(LOOKUP_FORM, &args![cell_id]).u32();
+                    if cell != 0 && e.call(FORM_GET_TYPE, &args![cell]).u32() == 0x41 {
+                        e.call(
+                            REFERENCES_MAP_REMOVE_EXTERIOR,
+                            &args![references_map, cell_id, key, second_init + 0x14],
+                        );
+                    } else {
+                        fn_0084b490(e, references_map, cell_id, key);
+                    }
+                }
+                if e.call(FLAGS_EQUAL, &args![entry, 4u32]).bool() {
+                    let changes = e.get(this, BGSSaveLoadGame::pChangesMap);
+                    e.call(CHANGES_MAP_REMOVE, &args![changes, key]);
+                    all_removed += 1;
+                } else {
+                    if read_word(e, entry + 4) != 0 && kind != 0 {
+                        let advanced = e
+                            .call(UNLOADED_FORM_BUFFER_ADVANCED, &args![entry + 4])
+                            .u32();
+                        let header_size = e.call(INITIAL_DATA_TYPE_SIZE, &args![kind]).u32();
+                        let after_header = advanced.wrapping_add(header_size);
+                        let size_slot = frame + CLEANUP_VALUE_SIZE;
+                        e.mem.set_u32(size_slot, 0);
+                        let length_size = e
+                            .call(LOAD_VARIABLE_SIZED_VALUE, &args![after_header, size_slot])
+                            .u32();
+                        let value_size = e.mem.u32(size_slot);
+                        let data = length_size
+                            .wrapping_add(value_size)
+                            .wrapping_add(after_header);
+                        let old_buffer = read_word(e, entry + 4);
+                        let flag = fn_0084b450(e, Ptr::new(entry + 4));
+                        let total = e.call(UNLOADED_FORM_BUFFER_SIZE, &args![entry + 4]).u32();
+                        let remaining = total
+                            .wrapping_sub(header_size)
+                            .wrapping_sub(length_size)
+                            .wrapping_sub(value_size);
+                        e.call(UNLOADED_FORM_BUFFER_CLEAR, &args![entry + 4]);
+                        e.call(
+                            UNLOADED_FORM_BUFFER_INITIALIZE,
+                            &args![entry + 4, data, remaining, form_type, flag],
+                        );
+                        e.call(OPERATOR_DELETE, &args![old_buffer]);
+                        partial_removed += 1;
+                    }
+                    e.call(FLAGS_CLEAR, &args![entry, 0xcu32]);
+                }
+                if reference != 0 {
+                    e.call(REFERENCE_MOVE_TO_LOCATION, &args![reference, 0u32]);
+                }
+            }
+        }
+    }
+    if references_removed != 0 {
+        let history = e.get(this, BGSSaveLoadGame::pHistory);
+        e.call(
+            HISTORY_ADD_NOTE,
+            &args![
+                history,
+                CLEANUP_NOTE,
+                references_removed,
+                all_removed,
+                partial_removed
+            ],
+        );
+    }
+}
+
+// Translated from 0084b450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at +1 of the block `*this` points to (the unloaded form buffer's
+/// flag byte).
+pub fn fn_0084b450(e: &mut Engine, this: Ptr) -> u8 {
+    let block = e.mem.u32(this.addr());
+    e.mem.u8(block + 1)
+}
+
+// Translated from 0084b470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<...>::RemoveAt(this, key)` (Xbox PDB name of the body, `00405430`).
+pub fn fn_0084b470(e: &mut Engine, this: Ptr, key: u32) {
+    e.call(MAP_REMOVE_AT, &args![this, key]);
+}
+
+// Translated from 0084b490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSCellNumericIDArrayMap::RemoveReference(a, b)` (Xbox PDB) on the member
+/// at +0x10 of the references map (`00852a10`).
+pub fn fn_0084b490(e: &mut Engine, this: Ptr, a: u32, b: u32) {
+    e.call(REFERENCES_MAP_REMOVE, &args![this.byte_add(0x10), a, b]);
+}
+
+// Translated from 0084b4b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the package location map `NiTMap<unsigned int,Actor *>`
+/// (`this`, bucket count): the base constructor `0084b650`, then its own
+/// vtable.
+pub fn fn_0084b4b0(e: &mut Engine, this: Ptr<NiTPointerMap>, size: u32) -> Ptr<NiTPointerMap> {
+    fn_0084b650(e, this, size);
+    e.mem.set_u32(this.addr(), PACKAGE_LOCATION_MAP_VTABLE);
+    this
+}
+
+// Translated from 0084b4e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the expiry queue `NiTMap<__int64,int>` (`this`, bucket
+/// count): its base constructor `0084b750`, then its own vtable.
+pub fn fn_0084b4e0(e: &mut Engine, this: Ptr, size: u32) -> Ptr {
+    e.call(EXPIRY_QUEUE_BASE_CONSTRUCT, &args![this, size]);
+    e.mem.set_u32(this.addr(), EXPIRY_QUEUE_VTABLE);
+    this
+}
+
+// Translated from 0084b510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<unsigned int,Actor *>::scalar deleting destructor` (Xbox PDB): the
+/// destructor body `0084b6c0`, then the block is freed when bit 0 of `flags`
+/// is set.
+pub fn fn_0084b510(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    scalar_deleting_destructor(e, this, flags, PACKAGE_LOCATION_MAP_DESTRUCT)
+}
+
+// Translated from 0084b540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<__int64,int>::scalar deleting destructor` (Xbox PDB): the
+/// destructor body `0084b9c0`, then the block is freed when bit 0 of `flags`
+/// is set.
+pub fn fn_0084b540(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    scalar_deleting_destructor(e, this, flags, EXPIRY_QUEUE_DESTRUCT)
+}
+
+// Translated from 0084b570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the form buffer array `BSSimpleArray<BGSLoadFormBuffer *,
+/// 1024>`: its vtable, then the base setup `006b3eb0(0, 0)`.
+pub fn fn_0084b570(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), FORM_BUFFER_ARRAY_VTABLE);
+    e.call(ARRAY_BASE_SETUP, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 0084b5a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the form buffer array: its vtable, then `Clear(1)`
+/// (`008454f0`).
+pub fn fn_0084b5a0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), FORM_BUFFER_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 0084b650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The base constructor of the package location map (`this`, bucket count):
+/// the base vtable, the bucket count at +4, a zero item count at +0xc and a
+/// zeroed bucket array of `size * 4` bytes at +8 (`00aa1070`, `memset`).
+pub fn fn_0084b650(e: &mut Engine, this: Ptr<NiTPointerMap>, size: u32) -> Ptr<NiTPointerMap> {
+    e.mem.set_u32(this.addr(), HASH_MAP_BASE_VTABLE);
+    e.set(this, NiTPointerMap::m_uiHashSize, size);
+    e.set(this, NiTPointerMap::m_uiCount, 0);
+    let buckets = e.call(ALLOCATE_BYTES, &args![size << 2]).u32();
+    e.set(this, NiTPointerMap::m_ppkHashTable, buckets);
+    e.call(MEMORY_SET, &args![buckets, 0u32, size << 2]);
+    this
 }
 
 /// This unit's translated functions, by exe address.
@@ -2056,6 +3342,108 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00849a50, fn_00849a50(Ptr, u32)),
         entry!(0x00849a70, fn_00849a70(Ptr, u32, u32)),
+        entry!(0x00849a90, fn_00849a90(Ptr<BGSSaveLoadGame>, Ptr) -> bool),
+        entry!(
+            0x00849b10,
+            bgssaveloadgame_load_cell(Ptr<BGSSaveLoadGame>, Ptr)
+        ),
+        entry!(0x00849c00, fn_00849c00(bool)),
+        entry!(0x00849c80, fn_00849c80(Ptr) -> u32),
+        entry!(0x00849ca0, fn_00849ca0(Ptr, u32) -> u32),
+        entry!(0x00849cc0, fn_00849cc0(Ptr<BGSSaveLoadGame>, u32) -> bool),
+        entry!(0x00849ce0, fn_00849ce0(Ptr, u32) -> bool),
+        entry!(
+            0x00849d00,
+            bgssaveloadgame_check_initial_data(Ptr<BGSSaveLoadGame>, Ptr, Ptr, Ptr) -> u32
+        ),
+        entry!(0x0084a360, fn_0084a360(Ptr<BGSLoadFormBuffer>, bool)),
+        entry!(
+            0x0084a3a0,
+            bgssaveloadgame_handle_unrevertible_changes(
+                Ptr<BGSSaveLoadGame>,
+                Ptr,
+                u32,
+                bool,
+            ) -> bool
+        ),
+        entry!(
+            0x0084a520,
+            bgssaveloadgame_queue_init_package_locations(Ptr<BGSSaveLoadGame>, Ptr)
+        ),
+        entry!(
+            0x0084a580,
+            bgssaveloadgame_cancel_init_package_locations(Ptr<BGSSaveLoadGame>, Ptr)
+        ),
+        entry!(0x0084a5b0, fn_0084a5b0(Ptr<BGSSaveLoadGame>)),
+        entry!(
+            0x0084a620,
+            fn_0084a620(Ptr<BGSSaveLoadGame>, Ptr, bool) -> bool
+        ),
+        entry!(
+            0x0084a690,
+            bgssaveloadgame_add_change(Ptr<BGSSaveLoadGame>, Ptr, u32, bool)
+        ),
+        entry!(
+            0x0084a6d0,
+            bgssaveloadgame_get_change(Ptr<BGSSaveLoadGame>, Ptr, u32) -> bool
+        ),
+        entry!(
+            0x0084a700,
+            fn_0084a700(Ptr<BGSSaveLoadGame>, Ptr, u32) -> bool
+        ),
+        entry!(0x0084a740, fn_0084a740(Ptr<BGSSaveLoadGame>, Ptr) -> bool),
+        entry!(0x0084a780, fn_0084a780(Ptr<BGSSaveLoadGame>, Ptr, u32)),
+        entry!(
+            0x0084a7c0,
+            bgssaveloadgame_remove_changes(Ptr<BGSSaveLoadGame>, Ptr)
+        ),
+        entry!(
+            0x0084a810,
+            bgssaveloadgame_queue_sub_buffer(Ptr<BGSSaveLoadGame>, u32, u32, u32)
+        ),
+        entry!(0x0084a840, fn_0084a840(Ptr<BGSSaveLoadGame>)),
+        entry!(
+            0x0084a880,
+            bgssaveloadgame_clear_form(Ptr<BGSSaveLoadGame>, Ptr)
+        ),
+        entry!(
+            0x0084a9c0,
+            bgssaveloadgame_clear_form_id(Ptr<BGSSaveLoadGame>, u32)
+        ),
+        entry!(
+            0x0084a9f0,
+            bgssaveloadgame_delete_form(Ptr<BGSSaveLoadGame>, Ptr)
+        ),
+        entry!(
+            0x0084aa30,
+            bgssaveloadgame_add_changed_form_id(Ptr<BGSSaveLoadGame>, u32, u32)
+        ),
+        entry!(0x0084aa90, fn_0084aa90(Ptr<BGSSaveLoadGame>, u32) -> u32),
+        entry!(0x0084aad0, fn_0084aad0(Ptr<BGSSaveLoadGame>, u32) -> bool),
+        entry!(
+            0x0084ab00,
+            bgssaveloadgame_save_game_warning_function(Ptr<BGSSaveLoadGame>, u32, u32)
+        ),
+        entry!(
+            0x0084ab20,
+            bgssaveloadgame_cleanup_expired_data(Ptr<BGSSaveLoadGame>)
+        ),
+        entry!(0x0084b450, fn_0084b450(Ptr) -> u8),
+        entry!(0x0084b470, fn_0084b470(Ptr, u32)),
+        entry!(0x0084b490, fn_0084b490(Ptr, u32, u32)),
+        entry!(
+            0x0084b4b0,
+            fn_0084b4b0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(0x0084b4e0, fn_0084b4e0(Ptr, u32) -> Ptr),
+        entry!(0x0084b510, fn_0084b510(Ptr, u32) -> Ptr),
+        entry!(0x0084b540, fn_0084b540(Ptr, u32) -> Ptr),
+        entry!(0x0084b570, fn_0084b570(Ptr) -> Ptr),
+        entry!(0x0084b5a0, fn_0084b5a0(Ptr)),
+        entry!(
+            0x0084b650,
+            fn_0084b650(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
     ]
 }
 
@@ -2830,7 +4218,7 @@ mod tests {
             })
         });
         e.register(FORM_GET_TYPE, |_, _| rv(0x2a));
-        e.register(CHANGES_MAP_KNOWS_FLAGS, |_, a| rv((a[1] == 0x400) as u32));
+        e.register(CHANGES_MAP_CLEAR_FLAGS, |_, a| rv((a[1] == 0x400) as u32));
         SaveSetup {
             e,
             this,
@@ -2909,7 +4297,7 @@ mod tests {
         );
         assert_eq!(calls(e, SAVE_FORM_BUFFER_SAVE), vec![vec![buffer, file]]);
         assert_eq!(
-            calls(e, CHANGES_MAP_KNOWS_FLAGS),
+            calls(e, CHANGES_MAP_CLEAR_FLAGS),
             vec![vec![0x4000_0000, 0x300, 6], vec![0x4000_0000, 0x400, 8]]
         );
         let _ = s.saved_value;
@@ -4220,7 +5608,7 @@ mod tests {
     #[test]
     fn unload_form_stops_when_the_changes_are_already_known() {
         let mut s = unload_setup();
-        s.e.register(CHANGES_MAP_KNOWS_FLAGS, |_, _| rv(1));
+        s.e.register(CHANGES_MAP_CLEAR_FLAGS, |_, _| rv(1));
         bgssaveloadgame_unload_form(&mut s.e, s.this, Ptr::new(s.form), false);
         assert_guarded(&s.e);
         let buffer = calls(&s.e, SAVE_FORM_BUFFER_CONSTRUCT)[0][0];
@@ -4229,7 +5617,7 @@ mod tests {
             vec![vec![buffer, 0x300, 7, 0x2a, 0x1b]]
         );
         assert_eq!(
-            calls(&s.e, CHANGES_MAP_KNOWS_FLAGS),
+            calls(&s.e, CHANGES_MAP_CLEAR_FLAGS),
             vec![vec![0x4000_0000, 0x300, 7]]
         );
         assert_eq!(calls(&s.e, SAVE_FORM_BUFFER_DESTRUCT), vec![vec![buffer]]);
@@ -4335,12 +5723,1474 @@ mod tests {
         assert!(calls(&s.e, MAP_SET_AT).is_empty());
     }
 
+    // ---- session 2: 00849a90 to 0084b650 ------------------------------------------
+
+    /// Every external function the session 2 translations call.
+    const EXTERNAL_SESSION_2: [u32; 47] = [
+        FORM_FLAG_4000_TEST,
+        FORM_FLAG_20_TEST,
+        GAME_RECORDING_TEST,
+        CHANGES_MAP_HAS_FLAGS,
+        FLAGS_TEST,
+        FLAGS_CLEAR,
+        REFERENCE_MOVE_TO_LOCATION,
+        REFERENCE_IS_PERSISTENT,
+        FORM_NAME_LENGTH,
+        REFERENCE_FULL_NAME,
+        ACTOR_PROCESS,
+        ACTOR_INIT_PACKAGE_LOCATIONS,
+        DATA_HANDLER_GET_NEXT_ID,
+        CELL_DETACH_TIME,
+        CELL_WORLD_SPACE,
+        CELL_DATA_X,
+        CELL_DATA_Y,
+        WORLD_SPACE_CELL_FROM_COORD,
+        PACK_GRID_COORDS,
+        ROUND_TO_INT,
+        CALENDAR_TIME_STAMP,
+        EXPIRY_LIMIT,
+        LOAD_INITIAL_DATA_FROM_FILE,
+        LOCATION_CELL_AND_WORLD,
+        CREATE_REFERENCE,
+        RECONSTRUCT_ADD_REFERENCE_AT,
+        RECONSTRUCT_DESTRUCT,
+        FORM_LIST_COUNT,
+        FORM_LIST_ELEMENT,
+        REFERENCES_MAP_LOAD_FOR_CELL,
+        REFERENCES_MAP_REMOVE_EXTERIOR,
+        REFERENCES_MAP_REMOVE,
+        MAP_GET_VALUE,
+        MAP_REMOVE_AT,
+        QUEUED_SUB_BUFFERS_QUEUE,
+        HISTORY_ADD_NOTE_VA,
+        EXPIRY_QUEUE_INSERT,
+        EXPIRY_QUEUE_FIND,
+        EXPIRY_QUEUE_DESTRUCT,
+        EXPIRY_QUEUE_BASE_CONSTRUCT,
+        UNLOADED_FORM_BUFFER_SIZE,
+        UNLOADED_FORM_BUFFER_INITIALIZE,
+        INITIAL_DATA_TYPE_SIZE,
+        LOAD_VARIABLE_SIZED_VALUE,
+        ALLOCATE_BYTES,
+        ARRAY_BASE_SETUP,
+        FLAGS_EQUAL,
+    ];
+
+    /// `engine()` with the session 2 externals doubled, the bit tests and the
+    /// map getters behaving, and the page of `ZERO_DOUBLE` mapped.
+    fn engine2() -> Engine {
+        let mut e = engine();
+        for address in EXTERNAL_SESSION_2 {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.map(0x0101_2000, 0x1000);
+        e.register(FLAGS_TEST, |e, a| rv((e.mem.u32(a[0]) & a[1] != 0) as u32));
+        e.register(FLAGS_CLEAR, |e, a| {
+            let word = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], word & !a[1]);
+            Ret::default()
+        });
+        e.register(FLAGS_EQUAL, |e, a| rv((e.mem.u32(a[0]) == a[1]) as u32));
+        e.register(ALLOCATE_BYTES, |e, a| rv(e.mem.alloc(a[0])));
+        e
+    }
+
+    // ---- 00849a90 ------------------------------------------------------------
+
+    #[test]
+    fn can_unload_form_follows_the_flag_and_the_two_reference_slots() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.mem.set_u32(TEST_VTABLE + 0x224, FAKE_TARGET + 0x224);
+        e.mem.set_u32(TEST_VTABLE + 0x324, FAKE_TARGET + 0x324);
+        e.register(FAKE_TARGET + 0x224, |_, _| rv(1));
+        e.register(FAKE_TARGET + 0x324, |_, _| rv(0));
+        let form = object(&mut e);
+        // Flag 0x4000 set: refused without asking the form.
+        e.register(FORM_FLAG_4000_TEST, |_, _| rv(1));
+        assert!(!fn_00849a90(&mut e, this, Ptr::new(form)));
+        assert!(calls(&e, FAKE_TARGET + 0xf0).is_empty());
+        e.register(FORM_FLAG_4000_TEST, |_, _| rv(0));
+        // Not a reference: may unload.
+        assert!(fn_00849a90(&mut e, this, Ptr::new(form)));
+        // A reference with slot 0x224 true and slot 0x324 false: kept.
+        e.register(FAKE_TARGET + 0xf0, |_, _| rv(1));
+        assert!(!fn_00849a90(&mut e, this, Ptr::new(form)));
+        // Slot 0x324 true: may unload.
+        e.register(FAKE_TARGET + 0x324, |_, _| rv(1));
+        assert!(fn_00849a90(&mut e, this, Ptr::new(form)));
+        // Slot 0x224 false: may unload.
+        e.register(FAKE_TARGET + 0x324, |_, _| rv(0));
+        e.register(FAKE_TARGET + 0x224, |_, _| rv(0));
+        assert!(fn_00849a90(&mut e, this, Ptr::new(form)));
+    }
+
+    // ---- 00849b10 and its helpers --------------------------------------------
+
+    #[test]
+    fn load_cell_does_nothing_during_a_load() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.register(GAME_LOADING_FLAG_TEST, |_, _| rv(1));
+        bgssaveloadgame_load_cell(&mut e, this, Ptr::new(0xce11));
+        assert_eq!(order(&e), vec![GAME_LOADING_FLAG_TEST]);
+    }
+
+    #[test]
+    fn load_cell_loads_the_cell_then_each_reference_of_its_reconstruct_map() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.set(this, BGSSaveLoadGame::pReferencesMap, Ptr::new(0x4000_0010));
+        e.register(FORM_LIST_COUNT, |_, _| rv(2));
+        e.register(FORM_LIST_ELEMENT, |_, a| rv(0x1100 + a[1]));
+        let seen = Rc::new(Cell::new(0u32));
+        let flag_seen = seen.clone();
+        e.register_double(RECONSTRUCT_FINISH_A, move |e, _| {
+            let word = e.tls() + THREAD_FLAGS_OFFSET;
+            flag_seen.set(e.mem.u32(word));
+            Ret::default()
+        });
+        bgssaveloadgame_load_cell(&mut e, this, Ptr::new(0xce11));
+        // LoadForm of the cell and of the two references, each asking the
+        // form id of its argument.
+        let ids: Vec<u32> = calls(&e, FORM_ID_WORD).iter().map(|w| w[0]).collect();
+        assert_eq!(ids, vec![0xce11, 0x1100, 0x1101]);
+        let pending = calls(&e, RECONSTRUCT_FORMS_CONSTRUCT)[0][0];
+        assert_eq!(
+            calls(&e, REFERENCES_MAP_LOAD_FOR_CELL),
+            vec![vec![0x4000_0010, 0xce11, pending]]
+        );
+        assert_eq!(calls(&e, RECONSTRUCT_FINISH_A), vec![vec![pending]]);
+        assert_eq!(calls(&e, FORM_LIST_COUNT), vec![vec![pending + 0x10]]);
+        assert_eq!(
+            calls(&e, FORM_LIST_ELEMENT),
+            vec![vec![pending + 0x10, 0], vec![pending + 0x10, 1]]
+        );
+        assert_eq!(calls(&e, RECONSTRUCT_DESTRUCT), vec![vec![pending]]);
+        // The thread flag was set around the closing step only.
+        assert_eq!(seen.get() & 2, 2);
+        let word = e.tls() + THREAD_FLAGS_OFFSET;
+        assert_eq!(e.mem.u32(word) & 2, 0);
+    }
+
+    #[test]
+    fn thread_flag_helper_sets_and_clears_mask_2_only() {
+        let mut e = engine2();
+        let word = e.tls() + THREAD_FLAGS_OFFSET;
+        e.mem.set_u32(word, 0x11);
+        fn_00849c00(&mut e, true);
+        assert_eq!(e.mem.u32(word), 0x13);
+        fn_00849c00(&mut e, false);
+        assert_eq!(e.mem.u32(word), 0x11);
+    }
+
+    #[test]
+    fn reconstruct_accessors_use_the_list_at_0x10() {
+        let mut e = engine2();
+        e.register(FORM_LIST_COUNT, |_, _| rv(7));
+        e.register(FORM_LIST_ELEMENT, |_, a| rv(a[1] * 3));
+        assert_eq!(fn_00849c80(&mut e, Ptr::new(0x5000_0000)), 7);
+        assert_eq!(fn_00849ca0(&mut e, Ptr::new(0x5000_0000), 4), 12);
+        assert_eq!(calls(&e, FORM_LIST_COUNT), vec![vec![0x5000_0010]]);
+        assert_eq!(calls(&e, FORM_LIST_ELEMENT), vec![vec![0x5000_0010, 4]]);
+    }
+
+    #[test]
+    fn id_lookup_passes_the_key_and_its_own_slot() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.set(this, BGSSaveLoadGame::pReferencesMap, Ptr::new(0x4000_0010));
+        let slot_value = Rc::new(Cell::new(0u32));
+        let seen = slot_value.clone();
+        e.register_double(MAP_GET_VALUE, move |e, a| {
+            seen.set(e.mem.u32(a[2]));
+            rv(1)
+        });
+        assert!(fn_00849cc0(&mut e, this, 0x77));
+        assert_eq!(calls(&e, MAP_GET_VALUE)[0][..2], [0x4000_0010, 0x77]);
+        assert_eq!(slot_value.get(), 0x77);
+        e.register(MAP_GET_VALUE, |_, _| rv(0));
+        assert!(!fn_00849ce0(&mut e, Ptr::new(0x4000_0020), 5));
+    }
+
+    // ---- 00849d00 ------------------------------------------------------------
+
+    struct CheckSetup {
+        e: Engine,
+        this: Ptr<BGSSaveLoadGame>,
+        buffer: u32,
+        form: Rc<Cell<u32>>,
+    }
+
+    /// A check with the buffer header kind `kind`, form id 0x300, type 0x41,
+    /// header flags 0x33 and old flags 0x44. The buffer's slot 4 returns the
+    /// form cell, `INITIAL_DATA_KIND` the kind by the flags it is asked with
+    /// (`0x33` header flags: `kind`; `0x44` old flags: `second_kind`).
+    fn check_setup(kind: u32, second_kind: u32, form: u32) -> CheckSetup {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.set(this, BGSSaveLoadGame::pChangesMap, Ptr::new(0x4000_0000));
+        e.set(this, BGSSaveLoadGame::pReferencesMap, Ptr::new(0x4000_0010));
+        e.set(
+            this,
+            BGSSaveLoadGame::pReconstructForms,
+            Ptr::new(0x4000_0020),
+        );
+        e.set(this, BGSSaveLoadGame::pFormIDMap, Ptr::new(0x4000_0030));
+        e.set_global(WORLD, 0x4000_0100u32);
+        e.set_global(PLAYER, 0x4000_0200u32);
+        e.set_global(DATA_HANDLER, 0x4000_0300u32);
+        let buffer = object(&mut e);
+        let form_cell = Rc::new(Cell::new(form));
+        let slot_form = form_cell.clone();
+        e.register_double(FAKE_TARGET + 4, move |_, _| rv(slot_form.get()));
+        e.register(LOAD_FORM_BUFFER_HEADER_TYPE, |_, _| rv(0x41));
+        e.register(BUFFER_FORM_ID, |_, _| rv(0x300));
+        e.register(FORM_BUFFER_HEADER_FLAGS, |e, a| {
+            e.mem.set_u32(a[1], 0x33);
+            rv(a[1])
+        });
+        e.register(LOAD_FORM_BUFFER_OLD_FLAGS, |e, a| {
+            e.mem.set_u32(a[1], 0x44);
+            rv(a[1])
+        });
+        let kinds = (kind, second_kind);
+        e.register_double(INITIAL_DATA_KIND, move |_, a| {
+            rv(if a[2] == 0x33 { kinds.0 } else { kinds.1 })
+        });
+        e.register(LOAD_INITIAL_DATA_FROM_FILE, |_, _| rv(0xabc));
+        e.register(FORM_ID_WORD, |_, a| rv(a[0] + 1));
+        e.register(CELL_FLAG_ZERO_TEST, |_, _| rv(0));
+        CheckSetup {
+            e,
+            this,
+            buffer,
+            form: form_cell,
+        }
+    }
+
+    fn run_check(s: &mut CheckSetup) -> u32 {
+        bgssaveloadgame_check_initial_data(
+            &mut s.e,
+            s.this,
+            Ptr::new(0x4000_0400),
+            Ptr::new(s.buffer),
+            Ptr::new(0x4000_0500),
+        )
+    }
+
+    #[test]
+    fn check_initial_data_creates_a_reference_in_a_loaded_place() {
+        let mut s = check_setup(5, 0, 0);
+        s.e.register(LOCATION_CELL_AND_WORLD, |e, a| {
+            e.mem.set_u32(a[1], 0xce11);
+            Ret::default()
+        });
+        s.e.register(WORLD_IS_CELL_LOADED, |_, _| rv(1));
+        s.e.register(CREATE_REFERENCE, |_, _| rv(0x6000_0001));
+        assert_eq!(run_check(&mut s), 0xabc);
+        let init = calls(&s.e, LOAD_INITIAL_DATA_FROM_FILE)[0][2];
+        assert_eq!(
+            calls(&s.e, LOAD_INITIAL_DATA_FROM_FILE),
+            vec![vec![0x4000_0400, 5, init]]
+        );
+        assert_eq!(calls(&s.e, CREATE_REFERENCE), vec![vec![0x300, init, 0]]);
+        assert_eq!(
+            calls(&s.e, WORLD_IS_CELL_LOADED),
+            vec![vec![0x4000_0100, 0xce11, 0]]
+        );
+        assert_eq!(
+            calls(&s.e, LOAD_FORM_BUFFER_SET_FORM),
+            vec![vec![s.buffer, 0x6000_0001]]
+        );
+    }
+
+    #[test]
+    fn check_initial_data_skips_the_buffer_when_the_reference_cannot_be_made() {
+        let mut s = check_setup(5, 0, 0);
+        // The data's flag byte 2 makes the place count as loaded.
+        s.e.register_double(LOAD_INITIAL_DATA_FROM_FILE, |e, a| {
+            e.mem.set_u8(a[2] + 0x2c, 2);
+            rv(1)
+        });
+        s.e.register(CREATE_REFERENCE, |_, _| rv(0));
+        run_check(&mut s);
+        assert_eq!(s.e.mem.u32(s.buffer + 0x28) & 1, 1);
+        assert!(calls(&s.e, LOAD_FORM_BUFFER_SET_FORM).is_empty());
+    }
+
+    #[test]
+    fn check_initial_data_replaces_a_created_form_that_changed() {
+        // Kind 5 with a live reference that has stored changes: the old form is
+        // deleted, the old flags cleared and a new reference made.
+        let mut s = check_setup(5, 0, 0);
+        let form = object(&mut s.e);
+        s.form.set(form);
+        s.e.register(FAKE_TARGET + 0xf0, |_, _| rv(1));
+        s.e.register(BUFFER_GET_FORM, |_, _| rv(0x6000_0800));
+        // The base form's id is not the data's (init + 4 is 0): mismatch.
+        s.e.register(FORM_GET_TYPE, |_, _| rv(0x2a));
+        s.e.register(LOCATION_CELL_AND_WORLD, |e, a| {
+            e.mem.set_u32(a[1], 0xce11);
+            Ret::default()
+        });
+        s.e.register(WORLD_IS_CELL_LOADED, |_, _| rv(1));
+        s.e.register(CREATE_REFERENCE, |_, a| rv(a[2] + 0x100));
+        run_check(&mut s);
+        // Mismatch: ClearForm of the form (type 0x2a: renumbered), buffer form
+        // and old flags reset, then a fresh reference is made without a form.
+        assert_eq!(calls(&s.e, FORM_GET_TYPE), vec![vec![form]]);
+        assert_eq!(
+            calls(&s.e, LOAD_FORM_BUFFER_SET_OLD_FLAGS),
+            vec![vec![s.buffer, 0]]
+        );
+        assert_eq!(calls(&s.e, CREATE_REFERENCE)[0][2], 0);
+        assert_eq!(calls(&s.e, LOAD_FORM_BUFFER_SET_FORM)[0], vec![s.buffer, 0]);
+    }
+
+    #[test]
+    fn check_initial_data_deletes_a_changed_form_and_recreates_it() {
+        // Same base form: not a mismatch; the combined flags are not zero, so
+        // the form is deleted (slot 0x10 with 1) before the reference is made.
+        let mut s = check_setup(5, 0, 0);
+        let form = object(&mut s.e);
+        s.form.set(form);
+        s.e.register(FAKE_TARGET + 0xf0, |_, _| rv(1));
+        s.e.register(BUFFER_GET_FORM, |_, _| rv(0x6000_0800));
+        // FORM_ID_WORD(base) = 0x6000_0801 = the data's word at init + 4.
+        s.e.register_double(LOAD_INITIAL_DATA_FROM_FILE, |e, a| {
+            e.mem.set_u32(a[2] + 4, 0x6000_0801);
+            rv(1)
+        });
+        s.e.register(LOCATION_CELL_AND_WORLD, |e, a| {
+            e.mem.set_u32(a[1], 0xce11);
+            Ret::default()
+        });
+        s.e.register(WORLD_IS_CELL_LOADED, |_, _| rv(1));
+        s.e.register(COMBINE_CHANGE_FLAGS, |e, a| {
+            e.mem.set_u32(a[0], 0x8);
+            Ret::default()
+        });
+        s.e.register(CREATE_REFERENCE, |_, _| rv(0x6000_0020));
+        run_check(&mut s);
+        assert_eq!(calls(&s.e, FAKE_TARGET + 0x10).len(), 1);
+        assert_eq!(
+            calls(&s.e, COMBINE_CHANGE_FLAGS)[0][1..],
+            [0x44, 0x33, 0x41, 1]
+        );
+        assert_eq!(calls(&s.e, CREATE_REFERENCE)[0][2], 0);
+        assert_eq!(
+            calls(&s.e, LOAD_FORM_BUFFER_SET_OLD_FLAGS),
+            vec![vec![s.buffer, 0]]
+        );
+    }
+
+    #[test]
+    fn check_initial_data_adds_a_moved_reference_to_the_reconstruct_map() {
+        let mut s = check_setup(6, 0, 0);
+        s.e.register(LOCATION_CELL_AND_WORLD, |e, a| {
+            e.mem.set_u32(a[1], 0xce11);
+            Ret::default()
+        });
+        s.e.register(WORLD_IS_CELL_LOADED, |_, _| rv(1));
+        s.e.register(GET_ORIGINAL_LOCATION, |e, a| {
+            e.mem.set_u32(a[1], 0xce22);
+            Ret::default()
+        });
+        run_check(&mut s);
+        assert_eq!(
+            calls(&s.e, RECONSTRUCT_ADD_REFERENCE),
+            vec![vec![0x4000_0020, 0xce22, 0x300, 0]]
+        );
+        assert_eq!(
+            calls(&s.e, LOAD_FORM_BUFFER_SET_LOADED),
+            vec![vec![s.buffer, 1]]
+        );
+        assert_eq!(s.e.mem.u32(s.buffer + 0x28) & 2, 2);
+        assert!(calls(&s.e, CREATE_REFERENCE).is_empty());
+    }
+
+    #[test]
+    fn check_initial_data_uses_the_world_coordinates_without_an_original_cell() {
+        let mut s = check_setup(6, 0, 0);
+        s.e.register_double(LOAD_INITIAL_DATA_FROM_FILE, |e, a| {
+            e.mem.set_u32(a[2] + 0xc, 0x11);
+            e.mem.set_u32(a[2] + 0x10, 0x22);
+            e.mem.set_u8(a[2] + 0x2c, 2);
+            rv(1)
+        });
+        s.e.register(GET_ORIGINAL_LOCATION, |e, a| {
+            e.mem.set_u32(a[2], 0x5151);
+            Ret::default()
+        });
+        run_check(&mut s);
+        assert_eq!(
+            calls(&s.e, RECONSTRUCT_ADD_REFERENCE_AT),
+            vec![vec![0x4000_0020, 0x5151, 0x11, 0x22, 0x300, 0]]
+        );
+    }
+
+    #[test]
+    fn check_initial_data_records_an_unloaded_reference() {
+        // Not loaded, an interior cell: the references map is set up with the
+        // data's first word; kind 6 marks the id too.
+        let mut s = check_setup(6, 0, 0);
+        s.e.register_double(LOAD_INITIAL_DATA_FROM_FILE, |e, a| {
+            e.mem.set_u32(a[2], 0x7777);
+            rv(1)
+        });
+        s.e.register(LOCATION_CELL_AND_WORLD, |e, a| {
+            e.mem.set_u32(a[1], 0xce11);
+            Ret::default()
+        });
+        s.e.register(WORLD_IS_CELL_LOADED, |_, _| rv(0));
+        s.e.register(CELL_FLAG_ZERO_TEST, |_, _| rv(1));
+        run_check(&mut s);
+        assert_eq!(
+            calls(&s.e, REFERENCES_MAP_SETUP),
+            vec![vec![0x4000_0010 + 0x10, 0x7777, 0x300]]
+        );
+        assert_eq!(calls(&s.e, CELL_FLAG_ZERO_TEST), vec![vec![0xce11]]);
+    }
+
+    #[test]
+    fn check_initial_data_records_an_unloaded_reference_by_world() {
+        let mut s = check_setup(5, 0, 0);
+        s.e.register_double(LOAD_INITIAL_DATA_FROM_FILE, |e, a| {
+            e.mem.set_u32(a[2], 0x7777);
+            rv(1)
+        });
+        s.e.register(LOCATION_CELL_AND_WORLD, |e, a| {
+            e.mem.set_u32(a[2], 0xaa);
+            Ret::default()
+        });
+        run_check(&mut s);
+        let init = calls(&s.e, LOAD_INITIAL_DATA_FROM_FILE)[0][2];
+        assert_eq!(
+            calls(&s.e, REFERENCES_MAP_ADD_UNLOADED),
+            vec![vec![0x4000_0010, 0x7777, 0x300, init + 0x14]]
+        );
+    }
+
+    #[test]
+    fn check_initial_data_warns_when_no_place_is_known() {
+        for (kind, text) in [(5, TEXT_CREATED), (6, TEXT_MOVED)] {
+            let mut s = check_setup(kind, 0, 0);
+            s.e.register_double(LOAD_INITIAL_DATA_FROM_FILE, |e, a| {
+                e.mem.set_u32(a[2], 0x7777);
+                rv(1)
+            });
+            run_check(&mut s);
+            assert_eq!(
+                calls(&s.e, SAVE_GAME_WARNING),
+                vec![vec![MISSING_PLACE_WARNING, 0x7777, text]]
+            );
+            assert_eq!(s.e.mem.u32(s.buffer + 0x28) & 1, 1);
+        }
+    }
+
+    #[test]
+    fn check_initial_data_removes_the_loaded_reference_of_an_unplaceable_moved_reference() {
+        // A reference form that is neither persistent nor the player, with no
+        // place: warned about, then removed from its cell and deleted.
+        let mut s = check_setup(6, 0, 0);
+        let form = object(&mut s.e);
+        s.form.set(form);
+        s.e.register(FAKE_TARGET + 0xf0, |_, _| rv(1));
+        s.e.register(REFERENCE_PARENT_CELL, |_, _| rv(0xce11));
+        run_check(&mut s);
+        assert_eq!(calls(&s.e, CELL_REMOVE_REFERENCE), vec![vec![0xce11, form]]);
+        assert_eq!(calls(&s.e, FAKE_TARGET + 0x10).len(), 1);
+        assert_eq!(
+            calls(&s.e, LOAD_FORM_BUFFER_SET_FORM),
+            vec![vec![s.buffer, 0]]
+        );
+    }
+
+    #[test]
+    fn check_initial_data_leaves_a_persistent_or_player_reference_alone() {
+        let mut s = check_setup(6, 0, 0);
+        let form = object(&mut s.e);
+        s.form.set(form);
+        s.e.register(FAKE_TARGET + 0xf0, |_, _| rv(1));
+        s.e.register(REFERENCE_IS_PERSISTENT, |_, _| rv(1));
+        run_check(&mut s);
+        assert!(calls(&s.e, FAKE_TARGET + 0x10).is_empty());
+        assert!(calls(&s.e, SAVE_GAME_WARNING).is_empty());
+
+        let mut s = check_setup(6, 0, 0);
+        let form = object(&mut s.e);
+        s.form.set(form);
+        s.e.set_global(PLAYER, form);
+        s.e.register(FAKE_TARGET + 0xf0, |_, _| rv(1));
+        run_check(&mut s);
+        assert!(calls(&s.e, SAVE_GAME_WARNING).is_empty());
+    }
+
+    #[test]
+    fn check_initial_data_without_a_form_reconstructs_a_stored_kind_6_entry() {
+        let mut s = check_setup(0, 6, 0);
+        let entry = entry_value(&mut s.e, 0x44, 0x5151);
+        s.e.register_double(CHANGES_MAP_GET_ENTRY, move |e, a| {
+            e.mem.set_u32(a[1], entry);
+            Ret::default()
+        });
+        s.e.register(UNLOADED_FORM_BUFFER_ADVANCED, |_, _| rv(0x9000));
+        s.e.register(GET_ORIGINAL_LOCATION, |e, a| {
+            e.mem.set_u32(a[1], 0xce22);
+            Ret::default()
+        });
+        s.e.register(WORLD_IS_CELL_LOADED, |_, _| rv(1));
+        let this = s.this;
+        run_check(&mut s);
+        assert_eq!(
+            calls(&s.e, RECONSTRUCT_ADD_REFERENCE),
+            vec![vec![0x4000_0020, 0xce22, 0x300, 0]]
+        );
+        assert_eq!(
+            calls(&s.e, LOAD_FORM_BUFFER_SET_LOADED),
+            vec![vec![s.buffer, 1]]
+        );
+        assert_eq!(s.e.mem.u32(s.buffer + 0x28) & 2, 2);
+        // The form id map is back to the original afterwards.
+        assert_eq!(
+            s.e.get(this, BGSSaveLoadGame::pFormIDMap),
+            Ptr::new(0x4000_0030)
+        );
+    }
+
+    #[test]
+    fn check_initial_data_deletes_a_live_reference_whose_location_is_not_loaded() {
+        let mut s = check_setup(0, 6, 0);
+        let form = object(&mut s.e);
+        s.form.set(form);
+        s.e.register(FAKE_TARGET + 0xf0, |_, _| rv(1));
+        s.e.register(FAKE_TARGET + 0x138, |e, a| {
+            e.mem.set_u32(a[3], 0xce44);
+            rv(1)
+        });
+        s.e.register(FORM_GET_TYPE, |_, _| rv(0x41));
+        s.e.register(WORLD_SPACE_CELL_FROM_COORD, |_, _| rv(0xce33));
+        s.e.register(WORLD_IS_CELL_LOADED, |_, _| rv(0));
+        run_check(&mut s);
+        assert_eq!(
+            calls(&s.e, WORLD_IS_CELL_LOADED),
+            vec![vec![0x4000_0100, 0xce33, 0]]
+        );
+        assert_eq!(calls(&s.e, FAKE_TARGET + 0x10).len(), 1);
+        assert_eq!(
+            calls(&s.e, LOAD_FORM_BUFFER_SET_FORM),
+            vec![vec![s.buffer, 0]]
+        );
+        assert_eq!(
+            calls(&s.e, LOAD_FORM_BUFFER_SET_OLD_FLAGS),
+            vec![vec![s.buffer, 0]]
+        );
+    }
+
+    #[test]
+    fn check_initial_data_keeps_a_live_reference_whose_location_is_loaded() {
+        let mut s = check_setup(0, 6, 0);
+        let form = object(&mut s.e);
+        s.form.set(form);
+        s.e.register(FAKE_TARGET + 0xf0, |_, _| rv(1));
+        s.e.register(FAKE_TARGET + 0x138, |e, a| {
+            e.mem.set_u32(a[3], 0xce44);
+            rv(1)
+        });
+        s.e.register(FORM_GET_TYPE, |_, _| rv(0x2a));
+        s.e.register(WORLD_IS_CELL_LOADED, |_, _| rv(1));
+        assert_eq!(run_check(&mut s), 0);
+        assert!(calls(&s.e, FAKE_TARGET + 0x10).is_empty());
+        // A reference without a location is removed.
+        let mut s = check_setup(0, 6, 0);
+        let form = object(&mut s.e);
+        s.form.set(form);
+        s.e.register(FAKE_TARGET + 0xf0, |_, _| rv(1));
+        run_check(&mut s);
+        assert_eq!(calls(&s.e, FAKE_TARGET + 0x10).len(), 1);
+    }
+
+    #[test]
+    fn check_initial_data_ignores_other_kinds() {
+        let mut s = check_setup(1, 2, 0);
+        assert_eq!(run_check(&mut s), 0);
+        assert!(calls(&s.e, LOAD_INITIAL_DATA_FROM_FILE).is_empty());
+        assert!(calls(&s.e, CREATE_REFERENCE).is_empty());
+    }
+
+    // ---- 0084a360 to 0084a5b0 ------------------------------------------------
+
+    #[test]
+    fn buffer_flag_helper_sets_and_clears_mask_2() {
+        let mut e = engine2();
+        let buffer = e.mem.alloc(0x30);
+        e.mem.set_u32(buffer + 0x28, 0x5);
+        fn_0084a360(&mut e, Ptr::new(buffer), true);
+        assert_eq!(e.mem.u32(buffer + 0x28), 7);
+        fn_0084a360(&mut e, Ptr::new(buffer), false);
+        assert_eq!(e.mem.u32(buffer + 0x28), 5);
+    }
+
+    struct RevertSetup {
+        e: Engine,
+        this: Ptr<BGSSaveLoadGame>,
+        form: u32,
+        form_slot: u32,
+    }
+
+    fn revert_setup() -> RevertSetup {
+        let mut e = engine2();
+        let this = game(&mut e);
+        let form = object(&mut e);
+        let form_slot = e.mem.alloc(4);
+        e.mem.set_u32(form_slot, form);
+        e.set_global(PLAYER, 0x4000_0200u32);
+        e.set_global(DATA_HANDLER, 0x4000_0300u32);
+        e.register(FAKE_TARGET + 0xf0, |_, _| rv(1));
+        e.register(FORM_ID_WORD, |_, _| rv(0x300));
+        RevertSetup {
+            e,
+            this,
+            form,
+            form_slot,
+        }
+    }
+
+    #[test]
+    fn unrevertible_changes_always_accept_the_player() {
+        let mut s = revert_setup();
+        s.e.set_global(PLAYER, s.form);
+        assert!(bgssaveloadgame_handle_unrevertible_changes(
+            &mut s.e,
+            s.this,
+            Ptr::new(s.form_slot),
+            0xe,
+            true
+        ));
+        assert!(calls(&s.e, FLAGS_TEST).is_empty());
+    }
+
+    #[test]
+    fn unrevertible_changes_clear_the_bits_of_a_dynamic_reference_and_queue_its_actor() {
+        let mut s = revert_setup();
+        s.e.register(IS_DYNAMIC_FORM_ID, |_, _| rv(1));
+        s.e.register(FAKE_TARGET + 0x100, |_, _| rv(1));
+        let process = s.e.mem.alloc(0x200);
+        s.e.mem.set_u32(process + 0x100, TEST_VTABLE);
+        s.e.mem.set_u32(TEST_VTABLE + 0xc, FAKE_TARGET + 0xc);
+        s.e.register_double(ACTOR_PROCESS, move |_, _| rv(process));
+        s.e.register(FAKE_TARGET + 0xc, |_, _| Ret {
+            st0: 1.5,
+            ..Ret::default()
+        });
+        s.e.mem.set_f64(ZERO_DOUBLE, 0.0);
+        // Only bit 0x2 (outside mask 0xe's bit... 0x6 has 0x2 and 0x4): after the
+        // clear, nothing is left of 0x6.
+        let done = bgssaveloadgame_handle_unrevertible_changes(
+            &mut s.e,
+            s.this,
+            Ptr::new(s.form_slot),
+            0x6,
+            true,
+        );
+        assert!(done);
+        assert!(calls(&s.e, REFERENCE_MOVE_TO_LOCATION).is_empty());
+        assert_eq!(
+            calls(&s.e, MAP_SET_AT),
+            vec![vec![s.this.addr() + 0x34, 0x300, s.form]]
+        );
+        // Bits outside the mask stay: the result is false.
+        let kept = bgssaveloadgame_handle_unrevertible_changes(
+            &mut s.e,
+            s.this,
+            Ptr::new(s.form_slot),
+            0x1006,
+            true,
+        );
+        assert!(!kept);
+    }
+
+    #[test]
+    fn unrevertible_changes_accept_a_reference_that_moves_back() {
+        let mut s = revert_setup();
+        s.e.register(REFERENCE_MOVE_TO_LOCATION, |_, _| rv(1));
+        assert!(bgssaveloadgame_handle_unrevertible_changes(
+            &mut s.e,
+            s.this,
+            Ptr::new(s.form_slot),
+            0x2,
+            false
+        ));
+        assert_eq!(
+            calls(&s.e, REFERENCE_MOVE_TO_LOCATION),
+            vec![vec![s.form, 0]]
+        );
+        // The form is not an actor here: nothing is queued.
+        assert!(calls(&s.e, MAP_SET_AT).is_empty());
+    }
+
+    #[test]
+    fn unrevertible_changes_delete_a_non_persistent_reference_on_request() {
+        let mut s = revert_setup();
+        let done = bgssaveloadgame_handle_unrevertible_changes(
+            &mut s.e,
+            s.this,
+            Ptr::new(s.form_slot),
+            0x2,
+            true,
+        );
+        assert!(!done, "the flags are still there");
+        assert_eq!(calls(&s.e, FAKE_TARGET + 0x10).len(), 1);
+        assert_eq!(s.e.mem.u32(s.form_slot), 0);
+        assert!(calls(&s.e, SAVE_GAME_WARNING).is_empty());
+    }
+
+    #[test]
+    fn unrevertible_changes_warn_otherwise() {
+        let mut s = revert_setup();
+        s.e.register(FORM_NAME_LENGTH, |_, _| rv(3));
+        s.e.register(FAKE_TARGET + 0x130, |_, _| rv(0xaaaa));
+        s.e.register(BUFFER_GET_FORM, |_, _| rv(0xbbbb));
+        s.e.register(FORM_TYPE_NAME, |_, a| rv(a[0] + 1));
+        bgssaveloadgame_handle_unrevertible_changes(
+            &mut s.e,
+            s.this,
+            Ptr::new(s.form_slot),
+            0x2,
+            false,
+        );
+        assert_eq!(
+            calls(&s.e, SAVE_GAME_WARNING),
+            vec![vec![REVERT_LOCATION_WARNING, 0xaaaa, 0x300, 0xbbbc, 0x2]]
+        );
+        assert_eq!(s.e.mem.u32(s.form_slot), s.form);
+        // A persistent reference warns even when deletion was requested, with
+        // the full name when the type name text is empty.
+        let mut s = revert_setup();
+        s.e.register(REFERENCE_IS_PERSISTENT, |_, _| rv(1));
+        s.e.register(REFERENCE_FULL_NAME, |_, _| rv(0xcccc));
+        bgssaveloadgame_handle_unrevertible_changes(
+            &mut s.e,
+            s.this,
+            Ptr::new(s.form_slot),
+            0x2,
+            true,
+        );
+        assert_eq!(calls(&s.e, SAVE_GAME_WARNING)[0][1], 0xcccc);
+        assert!(calls(&s.e, FAKE_TARGET + 0x10).is_empty());
+    }
+
+    #[test]
+    fn unrevertible_changes_ignore_other_forms_and_masks() {
+        let mut s = revert_setup();
+        s.e.register(FAKE_TARGET + 0xf0, |_, _| rv(0));
+        assert!(!bgssaveloadgame_handle_unrevertible_changes(
+            &mut s.e,
+            s.this,
+            Ptr::new(s.form_slot),
+            0x5,
+            true
+        ));
+        assert!(calls(&s.e, FLAGS_TEST).is_empty());
+        let mut s = revert_setup();
+        assert!(!bgssaveloadgame_handle_unrevertible_changes(
+            &mut s.e,
+            s.this,
+            Ptr::new(s.form_slot),
+            0x1,
+            true
+        ));
+        assert!(calls(&s.e, FORM_ID_WORD).is_empty());
+    }
+
+    #[test]
+    fn queue_init_package_locations_needs_a_positive_value() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.mem.set_f64(ZERO_DOUBLE, 0.0);
+        let process = e.mem.alloc(0x200);
+        e.mem.set_u32(process + 0x100, TEST_VTABLE);
+        e.mem.set_u32(TEST_VTABLE + 0xc, FAKE_TARGET + 0xc);
+        e.register_double(ACTOR_PROCESS, move |_, _| rv(process));
+        e.register(FORM_ID_WORD, |_, _| rv(0x300));
+        e.register(FAKE_TARGET + 0xc, |_, _| Ret {
+            st0: 0.0,
+            ..Ret::default()
+        });
+        bgssaveloadgame_queue_init_package_locations(&mut e, this, Ptr::new(0x77));
+        assert!(calls(&e, MAP_SET_AT).is_empty());
+        assert_eq!(
+            calls(&e, FAKE_TARGET + 0xc),
+            vec![vec![process + 0x100, 0x10]]
+        );
+        e.register(FAKE_TARGET + 0xc, |_, _| Ret {
+            st0: 0.25,
+            ..Ret::default()
+        });
+        bgssaveloadgame_queue_init_package_locations(&mut e, this, Ptr::new(0x77));
+        assert_eq!(
+            calls(&e, MAP_SET_AT),
+            vec![vec![this.addr() + 0x34, 0x300, 0x77]]
+        );
+    }
+
+    #[test]
+    fn cancel_init_package_locations_removes_the_form_id() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.register(FORM_ID_WORD, |_, _| rv(0x300));
+        bgssaveloadgame_cancel_init_package_locations(&mut e, this, Ptr::new(0x77));
+        assert_eq!(
+            calls(&e, MAP_REMOVE_AT),
+            vec![vec![this.addr() + 0x34, 0x300]]
+        );
+    }
+
+    #[test]
+    fn after_load_pass_initialises_the_actors_that_have_an_acquire_object() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        let remaining = Rc::new(Cell::new(2u32));
+        e.register(MAP_FIRST_POSITION, |_, _| rv(1));
+        let counter = remaining.clone();
+        e.register_double(MAP_NEXT, move |e, a| {
+            let left = counter.get();
+            counter.set(left - 1);
+            e.mem.set_u32(a[1], if left > 1 { 1 } else { 0 });
+            e.mem.set_u32(a[2], 0x300 + left);
+            e.mem.set_u32(a[3], 0x7000 + left);
+            Ret::default()
+        });
+        e.register(GET_SAVED_ACQUIRE_OBJECT, |_, a| rv((a[0] == 0x7002) as u32));
+        fn_0084a5b0(&mut e, this);
+        assert_eq!(calls(&e, GET_SAVED_ACQUIRE_OBJECT).len(), 2);
+        assert_eq!(
+            calls(&e, ACTOR_INIT_PACKAGE_LOCATIONS),
+            vec![vec![0x7002, 1]]
+        );
+        assert_eq!(
+            calls(&e, CHANGED_FORM_ID_MAP_FLUSH),
+            vec![vec![this.addr() + 0x34]]
+        );
+        assert_eq!(calls(&e, MAP_NEXT)[0][0], this.addr() + 0x34);
+    }
+
+    // ---- 0084a620 to 0084a840 ------------------------------------------------
+
+    #[test]
+    fn change_recording_test_checks_the_state_the_flags_and_dynamic_ids() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.set_global(DATA_HANDLER, 0x4000_0300u32);
+        e.register(FORM_ID_WORD, |_, _| rv(0x300));
+        let form = Ptr::new(0x77);
+        // Neither recording nor forced.
+        assert!(!fn_0084a620(&mut e, this, form, false));
+        // Forced, nothing else in the way.
+        assert!(fn_0084a620(&mut e, this, form, true));
+        // Recording, but the form has bit 0x4000.
+        e.register(GAME_RECORDING_TEST, |_, _| rv(1));
+        e.register(FORM_FLAG_4000_TEST, |_, _| rv(1));
+        assert!(!fn_0084a620(&mut e, this, form, false));
+        e.register(FORM_FLAG_4000_TEST, |_, _| rv(0));
+        assert!(fn_0084a620(&mut e, this, form, false));
+        // With bit 0x20 a dynamic id is refused.
+        e.register(FORM_FLAG_20_TEST, |_, _| rv(1));
+        e.register(IS_DYNAMIC_FORM_ID, |_, _| rv(1));
+        assert!(!fn_0084a620(&mut e, this, form, false));
+        e.register(IS_DYNAMIC_FORM_ID, |_, _| rv(0));
+        assert!(fn_0084a620(&mut e, this, form, false));
+        assert_eq!(calls(&e, IS_DYNAMIC_FORM_ID)[0], vec![0x4000_0300, 0x300]);
+    }
+
+    #[test]
+    fn add_change_records_the_flags_only_when_allowed() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.set(this, BGSSaveLoadGame::pChangesMap, Ptr::new(0x4000_0000));
+        e.register(FORM_ID_WORD, |_, _| rv(0x300));
+        bgssaveloadgame_add_change(&mut e, this, Ptr::new(0x77), 0x40, false);
+        assert!(calls(&e, CHANGES_MAP_ADD_FLAGS).is_empty());
+        bgssaveloadgame_add_change(&mut e, this, Ptr::new(0x77), 0x40, true);
+        assert_eq!(
+            calls(&e, CHANGES_MAP_ADD_FLAGS),
+            vec![vec![0x4000_0000, 0x300, 0x40]]
+        );
+    }
+
+    #[test]
+    fn change_queries_use_the_current_and_the_old_map() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.set(this, BGSSaveLoadGame::pChangesMap, Ptr::new(0x4000_0000));
+        e.register(FORM_ID_WORD, |_, _| rv(0x300));
+        e.register(CHANGES_MAP_HAS_FLAGS, |_, a| {
+            rv((a[0] == 0x4000_0000) as u32)
+        });
+        assert!(bgssaveloadgame_get_change(&mut e, this, Ptr::new(0x77), 8));
+        assert_eq!(
+            calls(&e, CHANGES_MAP_HAS_FLAGS),
+            vec![vec![0x4000_0000, 0x300, 8]]
+        );
+        // No old map: false without asking.
+        assert!(!fn_0084a700(&mut e, this, Ptr::new(0x77), 8));
+        assert_eq!(calls(&e, CHANGES_MAP_HAS_FLAGS).len(), 1);
+        e.set(this, BGSSaveLoadGame::pOldChangesMap, Ptr::new(0x4000_0040));
+        assert!(!fn_0084a700(&mut e, this, Ptr::new(0x77), 8));
+        assert_eq!(calls(&e, CHANGES_MAP_HAS_FLAGS)[1][0], 0x4000_0040);
+    }
+
+    #[test]
+    fn recorded_form_test_and_flag_clear() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.set(this, BGSSaveLoadGame::pChangesMap, Ptr::new(0x4000_0000));
+        e.register(FORM_ID_WORD, |_, _| rv(0x300));
+        let form = Ptr::new(0x77);
+        assert!(!fn_0084a740(&mut e, this, form));
+        fn_0084a780(&mut e, this, form, 0x10);
+        assert!(calls(&e, CHANGES_MAP_CLEAR_FLAGS).is_empty());
+        e.register(GAME_RECORDING_TEST, |_, _| rv(1));
+        assert!(fn_0084a740(&mut e, this, form));
+        fn_0084a780(&mut e, this, form, 0x10);
+        assert_eq!(
+            calls(&e, CHANGES_MAP_CLEAR_FLAGS),
+            vec![vec![0x4000_0000, 0x300, 0x10]]
+        );
+        e.register(FORM_FLAG_4000_TEST, |_, _| rv(1));
+        assert!(!fn_0084a740(&mut e, this, form));
+    }
+
+    #[test]
+    fn remove_changes_keeps_an_entry_with_a_stored_buffer() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.set(this, BGSSaveLoadGame::pChangesMap, Ptr::new(0x4000_0000));
+        e.register(FORM_ID_WORD, |_, _| rv(0x300));
+        e.register(READ_WORD, |e, a| rv(e.mem.u32(a[0])));
+        // No entry.
+        bgssaveloadgame_remove_changes(&mut e, this, Ptr::new(0x77));
+        assert!(calls(&e, CHANGES_MAP_REMOVE).is_empty());
+        // An entry with a stored buffer stays.
+        let entry = entry_value(&mut e, 4, 0x5151);
+        e.register_double(CHANGES_MAP_ENTRY_FOR, move |_, _| rv(entry));
+        bgssaveloadgame_remove_changes(&mut e, this, Ptr::new(0x77));
+        assert!(calls(&e, CHANGES_MAP_REMOVE).is_empty());
+        // Without a stored buffer it goes.
+        e.mem.set_u32(entry + 4, 0);
+        bgssaveloadgame_remove_changes(&mut e, this, Ptr::new(0x77));
+        assert_eq!(
+            calls(&e, CHANGES_MAP_REMOVE),
+            vec![vec![0x4000_0000, 0x300]]
+        );
+    }
+
+    #[test]
+    fn queue_sub_buffer_forwards_to_the_queued_map() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.set(
+            this,
+            BGSSaveLoadGame::pQueuedSubBuffersMap,
+            Ptr::new(0x4000_0014),
+        );
+        bgssaveloadgame_queue_sub_buffer(&mut e, this, 1, 2, 3);
+        assert_eq!(
+            calls(&e, QUEUED_SUB_BUFFERS_QUEUE),
+            vec![vec![0x4000_0014, 1, 2, 3]]
+        );
+    }
+
+    #[test]
+    fn load_finish_sequence_runs_in_order_with_the_load_flag_set() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        let current = object(&mut e);
+        e.set(this, BGSSaveLoadGame::pChangesMap, Ptr::new(current));
+        e.set(
+            this,
+            BGSSaveLoadGame::pReconstructForms,
+            Ptr::new(0x4000_0020),
+        );
+        e.register(MAP_FIRST_POSITION, |_, _| rv(0));
+        let flag_during = Rc::new(Cell::new(0u32));
+        let seen = flag_during.clone();
+        let this_addr = this.addr();
+        e.register_double(GLOBAL_DATA_RESET, move |e, _| {
+            seen.set(e.mem.u32(this_addr + 0x244));
+            Ret::default()
+        });
+        fn_0084a840(&mut e, this);
+        let log = order(&e);
+        let reset = log.iter().position(|a| *a == GLOBAL_DATA_RESET).unwrap();
+        let flush = log
+            .iter()
+            .position(|a| *a == CHANGED_FORM_ID_MAP_FLUSH)
+            .unwrap();
+        let finish = log.iter().position(|a| *a == RECONSTRUCT_FINISH_A).unwrap();
+        assert!(reset < finish && finish < flush);
+        assert_eq!(calls(&e, GLOBAL_DATA_RESET), vec![vec![1]]);
+        // The load flag was set during the reset and is clear afterwards.
+        assert_eq!(flag_during.get() & 2, 2);
+        assert_eq!(e.get(this, BGSSaveLoadGame::iGlobalFlags) & 2, 0);
+    }
+
+    // ---- ClearForm and the id helpers -----------------------------------------
+
+    #[test]
+    fn clear_form_renumbers_deletes_or_warns_by_type() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.set_global(DATA_HANDLER, 0x4000_0300u32);
+        e.register(FORM_ID_WORD, |_, _| rv(0x300));
+        e.register(DATA_HANDLER_GET_NEXT_ID, |_, _| rv(0x01_000099));
+        e.register(TYPE_NAME_FOR, |_, a| rv(0x5000 + a[0]));
+        let form = object(&mut e);
+        // Null form: nothing happens.
+        bgssaveloadgame_clear_form(&mut e, this, Ptr::NULL);
+        assert!(order(&e).is_empty());
+        // Silent renumbering.
+        for form_type in [0x04, 0x11, 0x12, 0x2a, 0x2b, 0x39, 0x42, 0x43] {
+            e.register_double(FORM_GET_TYPE, move |_, _| rv(form_type));
+            bgssaveloadgame_clear_form(&mut e, this, Ptr::new(form));
+        }
+        assert_eq!(calls(&e, FAKE_TARGET + 0x128).len(), 8);
+        assert_eq!(calls(&e, FAKE_TARGET + 0x128)[0], vec![form, 0x01_000099]);
+        assert_eq!(calls(&e, DATA_HANDLER_GET_NEXT_ID)[0], vec![0x4000_0300, 1]);
+        assert!(calls(&e, SAVE_GAME_WARNING).is_empty());
+        // Deletion.
+        for form_type in [0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x49, 0x69] {
+            e.register_double(FORM_GET_TYPE, move |_, _| rv(form_type));
+            bgssaveloadgame_clear_form(&mut e, this, Ptr::new(form));
+        }
+        assert_eq!(calls(&e, FAKE_TARGET + 0x10).len(), 9);
+        assert_eq!(calls(&e, FAKE_TARGET + 0x128).len(), 8);
+        // Anything else: warning, then renumbering. Types 0x41, 0x6a and 0x02.
+        for form_type in [0x41u32, 0x6a, 0x02, 0xff] {
+            e.register_double(FORM_GET_TYPE, move |_, _| rv(form_type));
+            bgssaveloadgame_clear_form(&mut e, this, Ptr::new(form));
+        }
+        assert_eq!(calls(&e, FAKE_TARGET + 0x128).len(), 12);
+        assert_eq!(
+            calls(&e, SAVE_GAME_WARNING)[0],
+            vec![RENUMBERED_WARNING, 0x300, 0x41, 0x5041]
+        );
+        assert_eq!(calls(&e, SAVE_GAME_WARNING).len(), 4);
+    }
+
+    #[test]
+    fn clear_form_id_looks_the_form_up() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.register(LOOKUP_FORM, |_, _| rv(0));
+        bgssaveloadgame_clear_form_id(&mut e, this, 0x300);
+        assert_eq!(calls(&e, LOOKUP_FORM), vec![vec![0x300]]);
+        assert!(calls(&e, FORM_GET_TYPE).is_empty());
+        let form = object(&mut e);
+        e.register_double(LOOKUP_FORM, move |_, _| rv(form));
+        e.register(FORM_GET_TYPE, |_, _| rv(0x3a));
+        bgssaveloadgame_clear_form_id(&mut e, this, 0x300);
+        assert_eq!(calls(&e, FAKE_TARGET + 0x10).len(), 1);
+    }
+
+    #[test]
+    fn delete_form_calls_slot_0x10_with_one() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        let form = object(&mut e);
+        bgssaveloadgame_delete_form(&mut e, this, Ptr::NULL);
+        assert!(order(&e).is_empty());
+        bgssaveloadgame_delete_form(&mut e, this, Ptr::new(form));
+        assert_eq!(calls(&e, FAKE_TARGET + 0x10), vec![vec![form, 1]]);
+    }
+
+    #[test]
+    fn changed_form_id_map_warns_on_a_second_mapping() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.set(
+            this,
+            BGSSaveLoadGame::pChangedFormIDMap,
+            Ptr::new(0x4000_0018),
+        );
+        bgssaveloadgame_add_changed_form_id(&mut e, this, 0x100, 0x200);
+        assert!(calls(&e, SAVE_GAME_WARNING).is_empty());
+        assert_eq!(calls(&e, MAP_SET_AT), vec![vec![0x4000_0018, 0x100, 0x200]]);
+        e.register(MAP_GET_VALUE, |e, a| {
+            e.mem.set_u32(a[2], 0x300);
+            rv(1)
+        });
+        bgssaveloadgame_add_changed_form_id(&mut e, this, 0x100, 0x400);
+        assert_eq!(
+            calls(&e, SAVE_GAME_WARNING),
+            vec![vec![CHANGED_ID_CONFLICT_WARNING, 0x400, 0x100, 0x300]]
+        );
+        assert_eq!(calls(&e, MAP_SET_AT)[1], vec![0x4000_0018, 0x100, 0x400]);
+    }
+
+    #[test]
+    fn changed_id_and_entry_lookups() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.set(
+            this,
+            BGSSaveLoadGame::pChangedFormIDMap,
+            Ptr::new(0x4000_0018),
+        );
+        e.set(this, BGSSaveLoadGame::pChangesMap, Ptr::new(0x4000_0000));
+        assert_eq!(fn_0084aa90(&mut e, this, 0x100), 0);
+        e.register(MAP_GET_VALUE, |e, a| {
+            e.mem.set_u32(a[2], 0x300);
+            rv(1)
+        });
+        assert_eq!(fn_0084aa90(&mut e, this, 0x100), 0x300);
+        assert_eq!(calls(&e, MAP_GET_VALUE)[1][..2], [0x4000_0018, 0x100]);
+        assert!(!fn_0084aad0(&mut e, this, 0x100));
+        e.register(CHANGES_MAP_ENTRY_FOR, |_, _| rv(0x9000));
+        assert!(fn_0084aad0(&mut e, this, 0x100));
+        assert_eq!(
+            calls(&e, CHANGES_MAP_ENTRY_FOR)[0],
+            vec![0x4000_0000, 0x100]
+        );
+    }
+
+    #[test]
+    fn save_game_warning_function_forwards_to_the_history() {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.set(this, BGSSaveLoadGame::pHistory, Ptr::new(0x4000_001c));
+        bgssaveloadgame_save_game_warning_function(&mut e, this, 0x1111, 0x2222);
+        assert_eq!(
+            calls(&e, HISTORY_ADD_NOTE_VA),
+            vec![vec![0x4000_001c, 0x1111, 0x2222]]
+        );
+    }
+
+    // ---- CleanupExpiredData ---------------------------------------------------
+
+    /// What a scripted `MAP_NEXT` hands out: the key and the entry value.
+    fn script_map(e: &mut Engine, entries: Vec<(u32, u32)>) {
+        let queue = Rc::new(RefCell::new(entries));
+        e.register(MAP_FIRST_POSITION, |_, _| rv(1));
+        let walk = Rc::new(Cell::new(0usize));
+        let cursor = walk.clone();
+        let pending = queue.clone();
+        e.register_double(MAP_NEXT, move |e, a| {
+            let all = pending.borrow();
+            let index = cursor.get() % all.len();
+            cursor.set(cursor.get() + 1);
+            e.mem.set_u32(a[2], all[index].0);
+            e.mem.set_u32(a[3], all[index].1);
+            e.mem
+                .set_u32(a[1], if index + 1 < all.len() { 1 } else { 0 });
+            Ret::default()
+        });
+    }
+
+    struct CleanupSetup {
+        e: Engine,
+        this: Ptr<BGSSaveLoadGame>,
+    }
+
+    fn cleanup_setup() -> CleanupSetup {
+        let mut e = engine2();
+        let this = game(&mut e);
+        e.set(this, BGSSaveLoadGame::pChangesMap, Ptr::new(0x4000_0000));
+        e.set(this, BGSSaveLoadGame::pReferencesMap, Ptr::new(0x4000_0010));
+        e.set(this, BGSSaveLoadGame::pHistory, Ptr::new(0x4000_001c));
+        e.set_global(DATA_HANDLER, 0x4000_0300u32);
+        e.register(CALENDAR_TIME_STAMP, |_, _| rv(1000));
+        e.register(EXPIRY_LIMIT, |_, _| rv(50));
+        e.register(SET_THREAD_FLAG, |_, _| rv(1));
+        e.register(PACK_GRID_COORDS, |_, a| rv((a[0] << 16) | a[1]));
+        e.register(ROUND_TO_INT, |_, a| rv(f32::from_bits(a[0]) as i32 as u32));
+        e.register(READ_WORD, |e, a| rv(e.mem.u32(a[0])));
+        e.register(IS_DYNAMIC_FORM_ID, |_, _| rv(0));
+        CleanupSetup { e, this }
+    }
+
+    #[test]
+    fn cleanup_does_nothing_when_no_cell_has_expired() {
+        let mut s = cleanup_setup();
+        let entry = entry_value(&mut s.e, 0x4000_0000, 0);
+        script_map(&mut s.e, vec![(0x500, entry)]);
+        s.e.register(LOOKUP_FORM, |_, _| rv(0xce11));
+        s.e.register(FORM_GET_TYPE, |_, _| rv(0x39));
+        s.e.register(CELL_DETACH_TIME, |_, _| rv(990));
+        bgssaveloadgame_cleanup_expired_data(&mut s.e, s.this);
+        assert!(calls(&s.e, EXPIRY_QUEUE_INSERT).is_empty());
+        assert!(calls(&s.e, EXPIRY_QUEUE_FIND).is_empty());
+        assert!(calls(&s.e, HISTORY_ADD_NOTE).is_empty());
+        // The thread flag is cleared first and then given back; the queue is
+        // built, flushed and destroyed.
+        let thread = calls(&s.e, SET_THREAD_FLAG);
+        assert_eq!(thread[0][1], 0);
+        assert_eq!(thread[1][1], 1);
+        let queue = calls(&s.e, EXPIRY_QUEUE_BASE_CONSTRUCT)[0].clone();
+        assert_eq!(queue[1], 0x25);
+        assert_eq!(calls(&s.e, EXPIRY_QUEUE_DESTRUCT), vec![vec![queue[0]]]);
+        assert_eq!(calls(&s.e, CHANGED_FORM_ID_MAP_FLUSH), vec![vec![queue[0]]]);
+        assert_eq!(s.e.mem.u32(queue[0]), EXPIRY_QUEUE_VTABLE);
+    }
+
+    #[test]
+    fn cleanup_removes_a_whole_entry_of_a_live_reference_in_an_expired_cell() {
+        let mut s = cleanup_setup();
+        // Entry 1: a loaded exterior cell detached at time 100 (grid 5, 6 of
+        // worldspace id 0x3a1). Entry 2: a live reference in that cell with
+        // exactly change bit 4.
+        let cell_entry = entry_value(&mut s.e, 0x4000_0000, 0);
+        let ref_entry = entry_value(&mut s.e, 4, 0);
+        script_map(&mut s.e, vec![(0x500, cell_entry), (0x600, ref_entry)]);
+        let reference = object(&mut s.e);
+        let cell = object(&mut s.e);
+        s.e.register_double(LOOKUP_FORM, move |_, a| {
+            rv(if a[0] == 0x500 { cell } else { reference })
+        });
+        s.e.register_double(FORM_GET_TYPE, move |_, a| {
+            rv(if a[0] == cell { 0x39 } else { 0x3a })
+        });
+        s.e.register(CELL_DETACH_TIME, |_, _| rv(100));
+        s.e.register(CELL_WORLD_SPACE, |_, _| rv(0xaa));
+        s.e.register(FORM_ID_WORD, |_, a| rv(a[0] + 0x3a0 - 0xaa));
+        s.e.register(CELL_DATA_X, |_, _| rv(5));
+        s.e.register(CELL_DATA_Y, |_, _| rv(6));
+        s.e.register(FAKE_TARGET + 0xf0, |_, _| rv(1));
+        s.e.register(REFERENCE_WORLD_SPACE, |_, _| rv(0xaa));
+        let place = s.e.mem.alloc(12);
+        s.e.mem.set_u32(place, (5.0f32 * 4096.0).to_bits());
+        s.e.mem.set_u32(place + 4, (6.0f32 * 4096.0).to_bits());
+        s.e.register_double(FAKE_TARGET + 0x1f4, move |_, _| rv(place));
+        s.e.register(EXPIRY_QUEUE_FIND, |_, _| rv(1));
+        bgssaveloadgame_cleanup_expired_data(&mut s.e, s.this);
+        // First pass: the cell went into the queue under (worldspace, grid).
+        assert_eq!(
+            calls(&s.e, EXPIRY_QUEUE_INSERT)
+                .iter()
+                .map(|w| w[1..].to_vec())
+                .collect::<Vec<_>>(),
+            vec![vec![0x3a0, (5 << 16) | 6, 100]]
+        );
+        // Second pass: the reference's key is the same; its entry is removed.
+        let found = &calls(&s.e, EXPIRY_QUEUE_FIND)[0];
+        assert_eq!(found[1..3], [0x3a0, (5 << 16) | 6]);
+        assert_eq!(
+            calls(&s.e, CHANGES_MAP_REMOVE),
+            vec![vec![0x4000_0000, 0x600]]
+        );
+        assert_eq!(
+            calls(&s.e, REFERENCE_MOVE_TO_LOCATION),
+            vec![vec![reference, 0]]
+        );
+        assert_eq!(
+            calls(&s.e, HISTORY_ADD_NOTE),
+            vec![vec![0x4000_001c, CLEANUP_NOTE, 1, 1, 0]]
+        );
+    }
+
+    #[test]
+    fn cleanup_rebuilds_the_stored_buffer_of_a_partially_cleaned_entry() {
+        let mut s = cleanup_setup();
+        let cell_block = s.e.mem.alloc(0x10);
+        let ref_block = s.e.mem.alloc(0x10);
+        s.e.mem.set_u8(ref_block + 1, 0x5a);
+        let cell_entry = entry_value(&mut s.e, 0x4000_0000, cell_block);
+        let ref_entry = entry_value(&mut s.e, 0x4000_000c, ref_block);
+        script_map(&mut s.e, vec![(0x3a0, cell_entry), (0x600, ref_entry)]);
+        s.e.register_double(STORED_BUFFER_TYPE, move |_, a| {
+            rv(if a[0] == cell_block { 0x39 } else { 0x3a })
+        });
+        s.e.register(INITIAL_DATA_KIND, |_, a| {
+            rv(if a[1] == 0x39 { 3 } else { 6 })
+        });
+        s.e.register(LOAD_INITIAL_DATA_STRUCT, |e, a| {
+            if a[1] == 3 {
+                e.mem.set_u32(a[2] + 0xc, 100);
+            } else {
+                e.mem.set_u32(a[2], 0x3a0);
+            }
+            Ret::default()
+        });
+        s.e.register(UNLOADED_FORM_BUFFER_ADVANCED, |_, _| rv(0x9000));
+        s.e.register(EXPIRY_QUEUE_FIND, |_, _| rv(1));
+        s.e.register(INITIAL_DATA_TYPE_SIZE, |_, _| rv(3));
+        s.e.register(LOAD_VARIABLE_SIZED_VALUE, |e, a| {
+            e.mem.set_u32(a[1], 10);
+            rv(2)
+        });
+        s.e.register(UNLOADED_FORM_BUFFER_SIZE, |_, _| rv(40));
+        bgssaveloadgame_cleanup_expired_data(&mut s.e, s.this);
+        // The cell is queued under its own id (a kind 3 buffer has no grid).
+        assert_eq!(
+            calls(&s.e, EXPIRY_QUEUE_INSERT)
+                .iter()
+                .map(|w| w[1..].to_vec())
+                .collect::<Vec<_>>(),
+            vec![vec![0x3a0, 0, 100]]
+        );
+        // The reference map forgets the reference (no cell form: by key pair).
+        assert_eq!(calls(&s.e, MAP_REMOVE_AT), vec![vec![0x4000_0010, 0x600]]);
+        assert_eq!(
+            calls(&s.e, REFERENCES_MAP_REMOVE),
+            vec![vec![0x4000_0020, 0x3a0, 0x600]]
+        );
+        // The buffer is rebuilt past the initial data and the old block freed.
+        assert_eq!(
+            calls(&s.e, UNLOADED_FORM_BUFFER_INITIALIZE),
+            vec![vec![
+                ref_entry + 4,
+                0x9000 + 3 + 2 + 10,
+                40 - 3 - 2 - 10,
+                0x3a,
+                0x5a
+            ]]
+        );
+        assert_eq!(
+            calls(&s.e, UNLOADED_FORM_BUFFER_CLEAR),
+            vec![vec![ref_entry + 4]]
+        );
+        assert_eq!(calls(&s.e, OPERATOR_DELETE), vec![vec![ref_block]]);
+        // Change bits 0xc are cleared; the entry stays.
+        assert_eq!(s.e.mem.u32(ref_entry), 0x4000_0000);
+        assert!(calls(&s.e, CHANGES_MAP_REMOVE).is_empty());
+        assert_eq!(
+            calls(&s.e, HISTORY_ADD_NOTE),
+            vec![vec![0x4000_001c, CLEANUP_NOTE, 1, 0, 1]]
+        );
+    }
+
+    #[test]
+    fn cleanup_warns_about_an_entry_without_a_form_or_buffer_and_skips_entries_not_in_the_queue() {
+        let mut s = cleanup_setup();
+        let cell_entry = entry_value(&mut s.e, 0x4000_0000, 0);
+        let lost_entry = entry_value(&mut s.e, 0x8, 0);
+        let other_entry = entry_value(&mut s.e, 4, 0);
+        let dynamic_entry = entry_value(&mut s.e, 4, 0);
+        script_map(
+            &mut s.e,
+            vec![
+                (0x500, cell_entry),
+                (0x601, lost_entry),
+                (0x602, other_entry),
+                (0xff00_0001, dynamic_entry),
+            ],
+        );
+        let cell = object(&mut s.e);
+        s.e.register_double(LOOKUP_FORM, move |_, a| {
+            rv(if a[0] == 0x500 { cell } else { 0 })
+        });
+        s.e.register(FORM_GET_TYPE, |_, _| rv(0x39));
+        s.e.register(CELL_DETACH_TIME, |_, _| rv(100));
+        s.e.register(CELL_FLAG_ZERO_TEST, |_, _| rv(1));
+        s.e.register(IS_DYNAMIC_FORM_ID, |_, a| rv((a[1] >= 0xff00_0000) as u32));
+        bgssaveloadgame_cleanup_expired_data(&mut s.e, s.this);
+        // An interior cell: no worldspace, so the key stays its own id.
+        assert_eq!(calls(&s.e, EXPIRY_QUEUE_INSERT).len(), 1);
+        assert_eq!(
+            calls(&s.e, SAVE_GAME_WARNING)
+                .iter()
+                .map(|w| (w[0], w[1], w[2]))
+                .collect::<Vec<_>>(),
+            vec![
+                (CLEANUP_MISSING_BUFFER_WARNING, 0x601, 0x8),
+                (CLEANUP_MISSING_BUFFER_WARNING, 0x602, 0x4)
+            ]
+        );
+        // Nothing was found in the queue (no reference was resolved).
+        assert!(calls(&s.e, EXPIRY_QUEUE_FIND).is_empty());
+        assert!(calls(&s.e, HISTORY_ADD_NOTE).is_empty());
+    }
+
+    // ---- small constructors and destructors ----------------------------------
+
+    #[test]
+    fn small_helpers_read_and_forward() {
+        let mut e = engine2();
+        let block = e.mem.alloc(8);
+        let inner = e.mem.alloc(8);
+        e.mem.set_u32(block, inner);
+        e.mem.set_u8(inner + 1, 0x42);
+        assert_eq!(fn_0084b450(&mut e, Ptr::new(block)), 0x42);
+        fn_0084b470(&mut e, Ptr::new(0x4000_0050), 0x300);
+        assert_eq!(calls(&e, MAP_REMOVE_AT), vec![vec![0x4000_0050, 0x300]]);
+        fn_0084b490(&mut e, Ptr::new(0x4000_0050), 1, 2);
+        assert_eq!(
+            calls(&e, REFERENCES_MAP_REMOVE),
+            vec![vec![0x4000_0060, 1, 2]]
+        );
+    }
+
+    #[test]
+    fn hash_map_constructors_set_up_buckets_and_vtables() {
+        let mut e = engine2();
+        let map = e.mem.alloc(0x10);
+        let this = fn_0084b4b0(&mut e, Ptr::new(map), 0x25);
+        assert_eq!(this, Ptr::new(map));
+        assert_eq!(e.mem.u32(map), PACKAGE_LOCATION_MAP_VTABLE);
+        assert_eq!(e.mem.u32(map + 4), 0x25);
+        assert_eq!(e.mem.u32(map + 0xc), 0);
+        let buckets = e.mem.u32(map + 8);
+        assert_ne!(buckets, 0);
+        assert_eq!(e.mem.u32(buckets + 0x24 * 4), 0);
+        assert_eq!(calls(&e, ALLOCATE_BYTES), vec![vec![0x94]]);
+        assert_eq!(calls(&e, MEMORY_SET), vec![vec![buckets, 0, 0x94]]);
+        // The base constructor alone leaves its own vtable.
+        let base = e.mem.alloc(0x10);
+        fn_0084b650(&mut e, Ptr::new(base), 3);
+        assert_eq!(e.mem.u32(base), HASH_MAP_BASE_VTABLE);
+        assert_eq!(e.mem.u32(base + 4), 3);
+    }
+
+    #[test]
+    fn expiry_queue_constructor_uses_its_base_and_vtable() {
+        let mut e = engine2();
+        let queue = e.mem.alloc(0x10);
+        let result = fn_0084b4e0(&mut e, Ptr::new(queue), 0x25);
+        assert_eq!(result, Ptr::new(queue));
+        assert_eq!(
+            calls(&e, EXPIRY_QUEUE_BASE_CONSTRUCT),
+            vec![vec![queue, 0x25]]
+        );
+        assert_eq!(e.mem.u32(queue), EXPIRY_QUEUE_VTABLE);
+    }
+
+    #[test]
+    fn scalar_deleting_destructors_free_only_when_asked() {
+        let mut e = engine2();
+        let this = Ptr::new(0x5000_0000);
+        assert_eq!(fn_0084b510(&mut e, this, 0), this);
+        assert_eq!(
+            calls(&e, PACKAGE_LOCATION_MAP_DESTRUCT),
+            vec![vec![0x5000_0000]]
+        );
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        assert_eq!(fn_0084b510(&mut e, this, 1), this);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![0x5000_0000]]);
+        assert_eq!(fn_0084b540(&mut e, this, 3), this);
+        assert_eq!(calls(&e, EXPIRY_QUEUE_DESTRUCT), vec![vec![0x5000_0000]]);
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 2);
+    }
+
+    #[test]
+    fn form_buffer_array_constructor_and_destructor() {
+        let mut e = engine2();
+        let array = e.mem.alloc(0x10);
+        assert_eq!(fn_0084b570(&mut e, Ptr::new(array)), Ptr::new(array));
+        assert_eq!(e.mem.u32(array), FORM_BUFFER_ARRAY_VTABLE);
+        assert_eq!(calls(&e, ARRAY_BASE_SETUP), vec![vec![array, 0, 0]]);
+        e.mem.set_u32(array, 0);
+        fn_0084b5a0(&mut e, Ptr::new(array));
+        assert_eq!(e.mem.u32(array), FORM_BUFFER_ARRAY_VTABLE);
+        assert_eq!(calls(&e, ARRAY_CLEAR), vec![vec![array, 1]]);
+    }
+
     // ---- registration --------------------------------------------------------------
 
     #[test]
     fn every_function_is_registered_under_its_address() {
         let table = funcs();
-        assert_eq!(table.len(), 40);
+        assert_eq!(table.len(), 80);
         let mut e = Engine::new();
         for (address, _) in table {
             assert!(e.is_translated(address), "{address:08x}");
