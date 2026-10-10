@@ -9,8 +9,8 @@ machinery runs.
 
 Codex takeover, 2026-10-10: rolling PRs #109 and #112 passed both CI
 checks and were squash-merged as `b995218` and `d854fbe`. Current rolling
-PR #114 contains the later navigation-render and exterior-cell loader
-batches, ledger and handoff. The lead branch is `claude/engine-crate`.
+PR #114 contains the later navigation-render, exterior-cell loader,
+Havok-world and AI task-manager batches, ledger and handoff. The lead branch is `claude/engine-crate`.
 
 Phase 1 PR 7 (#113) passed both checks and merged as `f917219`.
 The lead branch is rebased onto that main.
@@ -20,8 +20,11 @@ release builds. Doc Mitchell, Back in the Saddle and Ghost Town Gunfight
 acceptance routes passed; private evidence is under
 `%USERPROFILE%/nv-re/acceptance/pr7-resume-20261010`. This is not a
 comparison with the original game. Exact menu-input placement and GPU
-renderer work remain open in FRAME_SKELETON.md. Build 40 is compiling
-from merged main in p2; play copy remains 39 until publication is verified.
+renderer work remain open in FRAME_SKELETON.md. Build 40 was published
+from merged main at 19:47 local after a fresh release build and Doc route
+(63 s). Source and app copy SHA-256 match; WHATS-NEW uses LF. The other
+two routes are rerunning in p2; logs are in
+`%USERPROFILE%/nv-re/acceptance/build40-main-20261010`.
 
 Slot state: a01 is active on its prepared navigation continuation; a04
 is active on b0160 explosion.cpp. a03's next b0331 pathmanager.cpp task
@@ -60,8 +63,8 @@ deletion path to bypass that denial.
 
 Next steps:
 
-1. Finish the merged-main viewer build and Doc route, then publish play
-   build 40 with a plain-language WHATS-NEW entry and verify the copy.
+1. Finish the two remaining build-40 acceptance routes and Phase 2
+   rebased checks; build 40 is already published and verified.
 2. Collect completed slots with one `cycle.sh NN 0 0` at a time. Never
    cycle an active agent's worktree. Rotate prepared tasks as capacity opens.
 3. Ship rolling PR #114 when both checks pass; rebase affected branches
@@ -79,7 +82,7 @@ Next steps:
   functions are translated (15.8% of all, see LEDGER.md), each with a
   `// Translated from <addr>` marker and tests. They run in the crate's
   emulated 32-bit memory, not yet in play.
-- **Units finished:** main.cpp, actor.cpp (all 7 parts), playercharacter.cpp
+- **Previously translated units (dependency closure is not established):** main.cpp, actor.cpp (all 7 parts), playercharacter.cpp
   (all parts), interface.cpp, interfacemanager.cpp, processlists.cpp,
   tesobjectrefr.cpp, extradatalist.cpp, extradataobjects.cpp, tesscript*.cpp,
   tesform, tesfile, tesland, tesworldspace, teswater, tesnpc, package,
@@ -89,8 +92,8 @@ Next steps:
   pathinglocation.cpp, bgssceneinfo.cpp, bgssaveloadgame.cpp, and others.
 - **In progress (translation lanes; see "Resume here" for current owners):**
   navmesh_util.cpp (a01, active), pathmanager.cpp (a03, prepared), explosion.cpp
-  (a04, active), aitaskmanager.cpp lane 2 (a05; MovementTaskData still needs its
-  layout, see the file header), bhkworld.obj (a06).
+  (a04, active), aitaskmanager.cpp lane 2 (a05, prepared; partial behavior
+  listed in the file header), bhkworld.obj (a06, prepared).
 - **Phase 1 (frame skeleton) wiring:**
   - PR 1 frame map (#84), PR 2 `world::frame` (#86), PR 3 Bevy order from the
     frame (#90): merged.
@@ -104,7 +107,7 @@ Next steps:
     ENGINE_PORT_PLAN.md).
 - **Rolling translation PR:** #109 and #112 merged; #114 is open on branch
   `claude/engine-crate` (see "Resume here").
-- **Play build** (the user's `Desktop\nv-rs-play`): Build 39 = main with #107.
+- **Play build** (the user's `Desktop\nv-rs-play`): Build 40 = main `f917219` with #113.
   After the next wiring PR merges, build `viewer` in release from main
   (`cargo build --release --manifest-path viewer/Cargo.toml`), copy
   `viewer/target/release/nv-viewer.exe` into `app` (or `next` if the viewer is

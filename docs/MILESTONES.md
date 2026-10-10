@@ -99,6 +99,12 @@ or save round trip is established. Evidence, ownership and the next count
 destructor dependency: [ENGINE_STATE.md](ENGINE_STATE.md). Next action:
 merge after CI, then close that dependency for a count adapter.
 
+Build 40 published from merged main `f917219` at 19:47 local. Release
+build and the fresh Doc Mitchell route passed (63 s); startup loaded
+417 objects and 406 meshes in 3.8 s. App executable hash matches the
+built source binary, and WHATS-NEW uses LF. The two longer routes are
+rerunning. Next action: finish those checks and the Phase 2 adapter PR.
+
 Next session: start with [HANDOFF.md](HANDOFF.md). Open tasks:
 [TASKS.md](TASKS.md); contributor rules: [CONTRIBUTING.md](../CONTRIBUTING.md).
 
