@@ -9,7 +9,7 @@
 //! placed between the `Sky` methods; each says whose method it is.
 //!
 //! Layouts and helpers are at the top; the functions follow in address
-//! order. The next session continues at `0063d060` (the next function the queue lists).
+//! order. The last session translated `0063d060` to `0063ef20`, the end of the unit.
 //!
 //! x87 note: the game computes in extended precision and stores `float`
 //! results. The translations compute in `f64` and round to `f32` at every
@@ -287,6 +287,133 @@ const NODE_UPDATE_CONTROLLERS: u32 = 0x00a5_9c60;
 const SETTING_WORD_VALUE: u32 = 0x0043_d4d0;
 const MOON_CONSTRUCT: u32 = 0x0063_4a70;
 
+// ---- callees and data of the weather transition, sound, texture, save and
+// image-space code (`0063d060` to `0063ef20`) ----
+
+/// `Clouds::ClearTransTextures` (Xbox PDB), `Clouds::RemoveTextures`
+/// (`006349e0`), `Precipitation::FlushAll` (Xbox PDB), the unload of a `Moon`
+/// (`006369a0`) and of the `Sun` (`00642940`); all `__thiscall`, no arguments.
+const CLOUDS_CLEAR_TRANS_TEXTURES: u32 = 0x0063_4930;
+const CLOUDS_REMOVE_TEXTURES: u32 = 0x0063_49e0;
+const PRECIPITATION_FLUSH_ALL: u32 = 0x0063_7800;
+const MOON_UNLOAD_TEXTURES: u32 = 0x0063_69a0;
+const SUN_UNLOAD_TEXTURES: u32 = 0x0064_2940;
+/// A `PlayerCharacter` method (`ECX` = the player, `RET 4`) that
+/// `ForceWeather` calls with `0`.
+const PLAYER_METHOD_0093A7A0: u32 = 0x0093_a7a0;
+/// The weather list of a climate: `ECX` = climate + `0x30`; returns the
+/// weather the climate picks (`0063d5c0` forwards to it).
+const CLIMATE_PICK_WEATHER: u32 = 0x0058_27d0;
+/// The climate's byte at `+0x54` (`ECX` = climate), whose complement
+/// scales the time the sky waits before it picks a new weather.
+const CLIMATE_UPDATE_BYTE: u32 = 0x0045_1cd0;
+/// The double `1/255` (`0.003921569`).
+const RECIPROCAL_255: u32 = 0x0102_31e8;
+/// The `float` `0.99902...` and the `float` `0.001` that `Sky` passes as the
+/// high and low ends to [`WEATHER_BYTE_FRACTION`].
+const FRACTION_HIGH_SOUND: u32 = 0x0102_31e0;
+const FRACTION_LOW: u32 = 0x0101_7d00;
+/// The form id of the default weather list entry that `0063d1d0` looks up
+/// (`004839c0`, `cdecl`) when the climate has none.
+const DEFAULT_WEATHER_FORM_ID: u32 = 0x15e;
+/// The type descriptor of `TESWeather`.
+const TYPE_DESCRIPTOR_WEATHER: u32 = 0x0118_629c;
+/// The global holding the object of the region list, and its accessor
+/// (`ECX` = the global's value) that returns the list's owner; the regions are
+/// the list at `+4`. `TESRegion::UpdateWeather` (Xbox PDB) is called on each.
+const REGION_HOLDER: u32 = 0x011c_3f2c;
+const REGION_LIST_OWNER: u32 = 0x0041_69d0;
+const REGION_UPDATE_WEATHER: u32 = 0x004f_1050;
+/// Two accessors that `0063d1d0` chains: of the player (`ECX` = the player
+/// global's value) an object, and of that object a weather (zero when it has
+/// none; the engine map names `0059bb30` `D3DTexture_LockRect` because of
+/// folded code).
+const PLAYER_WEATHER_OWNER: u32 = 0x0054_54d0;
+const WEATHER_OF_OWNER: u32 = 0x0059_bb30;
+/// Float settings read by the weather transition: the low and high ends of
+/// the transition fraction and the acceleration setting.
+const TRANSITION_LOW_SETTING: u32 = 0x011c_cc08;
+const TRANSITION_HIGH_SETTING: u32 = 0x011c_cc88;
+const TRANSITION_ACCELERATION_SETTING: u32 = 0x011c_cc28;
+/// `Sky` byte at `011ccd04`: set when a sound was marked and the sound list
+/// must be rebuilt.
+const SOUNDS_DIRTY: u32 = 0x011c_cd04;
+/// The byte at `011ccb74` counts the sounds of type 3 (see `SetMode`).
+const SOUND_TYPE_3_COUNT: u32 = SET_MODE_FLAG;
+/// `BSSimpleList` constructor (`ECX`, no arguments, returns `this`),
+/// destructor, and `AddHead`-style insertion (`RET 4`, a pointer to the
+/// item).
+const LIST_CONSTRUCT: u32 = 0x0096_a2d0;
+const LIST_DESTRUCT: u32 = 0x0046_ffb0;
+const LIST_INSERT: u32 = 0x005a_e3d0;
+/// A random number (`cdecl`, no arguments).
+const RANDOM_NUMBER: u32 = 0x0048_7f50;
+/// `BSSoundHandle` methods: `IsValid`, `Play(flag)` (`RET 4`), `GetVolume`
+/// (returns `ST0`) and `SetVolume(volume)` (`RET 4`).
+const SOUND_HANDLE_IS_VALID: u32 = 0x00ad_8ce0;
+const SOUND_HANDLE_PLAY: u32 = 0x00ad_8830;
+const SOUND_HANDLE_GET_VOLUME: u32 = 0x00ad_8a20;
+const SOUND_HANDLE_SET_VOLUME: u32 = 0x00ad_89e0;
+/// `BSAudio::QInstance` (Xbox PDB; returns the audio object) and
+/// `BSAudio::GetSoundHandleByNumericID` (Xbox PDB; `ECX` = audio, `RET 0xc`:
+/// the handle to fill, the id, the flags; returns the handle).
+const AUDIO_INSTANCE: u32 = 0x0045_3a70;
+const AUDIO_GET_SOUND_HANDLE: u32 = 0x00ad_73b0;
+/// `Interface::IsInMenuMode` and `Interface::IsInGameLoadingMenuOpen` (Xbox
+/// PDB; `cdecl`, no arguments).
+const IS_IN_MENU_MODE: u32 = 0x0070_2360;
+const IS_LOADING_MENU_OPEN: u32 = 0x0070_5ea0;
+/// `fabs` of a `float` (`cdecl`, result in `ST0`) and the double `0.01`
+/// (`0.009999999776482582`).
+const ABS_FLOAT: u32 = 0x0040_8840;
+const VOLUME_EPSILON: u32 = 0x0101_6408;
+/// `Clouds::...(layer)` accessor of the weather: the cloud texture entry of a
+/// layer (`RET 4`, null when none), and the text format `"%s%s"`, the
+/// formatter (`cdecl`: text, format, arguments), and the existence test of a
+/// file (`cdecl`: path, 0, 0, -1).
+const WEATHER_CLOUD_ENTRY: u32 = 0x0063_47a0;
+const FORMAT_STRING: u32 = 0x0040_6f60;
+const PATH_FORMAT: u32 = 0x0101_996c;
+const FILE_EXISTS: u32 = 0x0045_6a20;
+/// `"Textures\Sky\MoonShadow.dds"`.
+const MOON_SHADOW_PATH: u32 = 0x0104_ed3c;
+/// The global holding the save-game buffer object and its methods
+/// (`ECX` = buffer): the version byte (`008df040`), `SaveNumericID` (`RET 8`:
+/// pointer, size) and the raw data save (`008579b0`, `RET 8`: pointer, size).
+const SAVE_BUFFER_GLOBAL: u32 = 0x011d_e45c;
+const SAVE_VERSION: u32 = 0x008d_f040;
+const SAVE_NUMERIC_ID: u32 = 0x0085_7a10;
+const SAVE_DATA: u32 = 0x0085_79b0;
+/// A form's id (`ECX` = form, returns a word).
+const FORM_ID_OF: u32 = 0x0084_e3a0;
+/// The second save format: `SaveFormID` (`RET 8`: form, 0) and data save
+/// (`RET 0xc`: pointer, size, 0).
+const SAVE_FORM_ID_OV2: u32 = 0x0086_5df0;
+const SAVE_DATA_OV2: u32 = 0x0086_5e50;
+/// The load buffer's methods: the next form id (no arguments) and the data
+/// load (`RET 8`: pointer, size).
+const LOAD_FORM_ID: u32 = 0x0086_48a0;
+const LOAD_DATA: u32 = 0x0086_4980;
+/// The image-space modifier instance: the object's size, its constructor
+/// (`ECX` = block), the registration of a holder with the manager (the
+/// accessor `0043b5d0`, `ECX` = the global `011dea10`'s value, returns the
+/// manager; `00631540`, `RET 4`: the holder), the flag setter (`RET 4`), the
+/// weight setter (`RET 4`, `float`) and the form setter (`RET 4`).
+const IMAGE_SPACE_SIZE: u32 = 0x30;
+const IMAGE_SPACE_CONSTRUCT: u32 = 0x0052_9490;
+const IMAGE_SPACE_MANAGER: u32 = 0x0043_b5d0;
+const IMAGE_SPACE_ADD: u32 = 0x0063_1540;
+const IMAGE_SPACE_SET_FLAG: u32 = 0x005b_bd60;
+const IMAGE_SPACE_SET_WEIGHT: u32 = 0x0063_f790;
+const IMAGE_SPACE_SET_FORM: u32 = 0x0050_f9a0;
+/// The weather's image-space form for a time of day (`ECX` = weather + `0x18`,
+/// `RET 4`: the index) and the default form (no arguments).
+const WEATHER_IMAGE_SPACE_FOR_TIME: u32 = 0x0058_22a0;
+const DEFAULT_IMAGE_SPACE: u32 = 0x0053_2ff0;
+/// `ECX` = the sky: whether flag 1 or 2 of `uiFlags` is set (the sound code
+/// uses it as "the weather sounds apply"; `00634870`, a function of another unit).
+const SOUNDS_APPLY: u32 = 0x0063_4870;
+
 layout! {
     /// `Sky` (Xbox PDB), 0x138 bytes; the offsets used here match the PC
     /// code. `Sky::pInstance` is the singleton.
@@ -301,6 +428,10 @@ layout! {
         0x10 pCurrentWeather: Ptr,
         /// `pLastWeather` (Xbox PDB): `TESWeather*`.
         0x14 pLastWeather: Ptr,
+        /// `pDefaultWeather` (Xbox PDB): `TESWeather*`.
+        0x18 pDefaultWeather: Ptr,
+        /// `pOverrideWeather` (Xbox PDB): `TESWeather*`.
+        0x1C pOverrideWeather: Ptr,
         /// `pAtmosphere` (Xbox PDB).
         0x20 pAtmosphere: Ptr,
         /// `pStars` (Xbox PDB).
@@ -332,6 +463,8 @@ layout! {
         0xE8 fFogPower: f32,
         /// `fCurrentGameHour` (Xbox PDB).
         0xEC fCurrentGameHour: f32,
+        /// `fLastWeatherUpdate` (Xbox PDB).
+        0xF0 fLastWeatherUpdate: f32,
         /// `fCurrentWeatherPct` (Xbox PDB).
         0xF4 fCurrentWeatherPct: f32,
         /// `eMode` (Xbox PDB): `Sky::SKY_MODE`.
@@ -344,8 +477,19 @@ layout! {
         0x104 uiFlashTime: u32,
         /// `uiLastMoonPhaseUpdate` (Xbox PDB).
         0x108 uiLastMoonPhaseUpdate: u32,
+        /// `fAccelBeginPct` (Xbox PDB).
+        0x110 fAccelBeginPct: f32,
         /// `uiFlags` (Xbox PDB).
         0x118 uiFlags: u32,
+        /// `pCurrentWeatherImageSpaceMod` (Xbox PDB): the instance for the
+        /// current weather's first image-space modifier.
+        0x11C pCurrentWeatherImageSpaceMod: Ptr,
+        /// `pCurrentWeatherImageSpaceMod2` (Xbox PDB).
+        0x120 pCurrentWeatherImageSpaceMod2: Ptr,
+        /// `pLastWeatherImageSpaceMod` (Xbox PDB).
+        0x124 pLastWeatherImageSpaceMod: Ptr,
+        /// `pLastWeatherImageSpaceMod2` (Xbox PDB).
+        0x128 pLastWeatherImageSpaceMod2: Ptr,
         /// `fHighNoon` (Xbox PDB).
         0x12C fHighNoon: f32,
     }
@@ -1989,6 +2133,1396 @@ pub fn fn_0063d040(e: &mut Engine, this: Ptr) -> Ptr {
     ni_pointer_get(e, this.addr() + 0x14)
 }
 
+// ---- the weather, sound, texture, save and image-space functions ----
+
+/// The item of a `BSSimpleList` node (`LIST_NODE_ITEM` returns its address).
+fn list_item(e: &mut Engine, node: u32) -> u32 {
+    let slot: Ptr = e.call(LIST_NODE_ITEM, &args![node]).ptr();
+    e.mem.u32(slot.addr())
+}
+
+/// The next node of a `BSSimpleList` node (zero at the end).
+fn list_next(e: &mut Engine, node: u32) -> u32 {
+    e.call(LIST_NODE_NEXT, &args![node]).u32()
+}
+
+/// Inserts `item` into the list at `list` (`LIST_INSERT` takes the address of
+/// a local holding the item).
+fn list_insert(e: &mut Engine, list: u32, item: u32) {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), item);
+        e.call(LIST_INSERT, &args![list, slot]);
+    });
+}
+
+/// Clears the clouds' transition textures when the sky has clouds.
+fn clear_cloud_transitions(e: &mut Engine, this: Ptr<Sky>) {
+    let clouds = e.get(this, Sky::pClouds);
+    if !clouds.is_null() {
+        e.call(CLOUDS_CLEAR_TRANS_TEXTURES, &args![clouds]);
+    }
+}
+
+/// Flushes the precipitation when the sky has one.
+fn flush_precipitation(e: &mut Engine, this: Ptr<Sky>) {
+    let precipitation = e.get(this, Sky::pPrecip);
+    if !precipitation.is_null() {
+        e.call(PRECIPITATION_FLUSH_ALL, &args![precipitation]);
+    }
+}
+
+// Translated from 0063d060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Sky::ResetWeather` (Xbox PDB): sets flag 1, forgets the override, last and
+/// current weather, resets the acceleration (`0063e860(false)`), clears the
+/// clouds' transition textures and flushes the precipitation (when they
+/// exist) and recomputes the image-space values.
+pub fn sky_reset_weather(e: &mut Engine, this: Ptr<Sky>) {
+    let flags = e.get(this, Sky::uiFlags);
+    e.set(this, Sky::uiFlags, flags | 1);
+    e.set(this, Sky::pOverrideWeather, Ptr::NULL);
+    e.set(this, Sky::pLastWeather, Ptr::NULL);
+    e.set(this, Sky::pCurrentWeather, Ptr::NULL);
+    fn_0063e860(e, this, false);
+    clear_cloud_transitions(e, this);
+    flush_precipitation(e, this);
+    sky_update_hdr_values(e, this);
+}
+
+// Translated from 0063d0e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Sky::ForceWeather` (Xbox PDB): makes `weather` the current weather at
+/// once. With `override_weather` clear it becomes the default weather and the
+/// override is cleared; with it set the weather becomes the override and the
+/// default is cleared. The last weather is cleared, the acceleration reset
+/// (`0063e860(false)`), the blend is 1.0 and the last update hour is the
+/// current hour, the player gets its `0093a7a0(0)` call, flag 2 is set and
+/// flag 1 cleared, the image-space values are recomputed, and the clouds'
+/// transition textures and the precipitation are cleared.
+pub fn sky_force_weather(e: &mut Engine, this: Ptr<Sky>, weather: Ptr, override_weather: bool) {
+    if override_weather {
+        e.set(this, Sky::pOverrideWeather, weather);
+        e.set(this, Sky::pCurrentWeather, weather);
+        e.set(this, Sky::pDefaultWeather, Ptr::NULL);
+    } else {
+        e.set(this, Sky::pDefaultWeather, weather);
+        e.set(this, Sky::pCurrentWeather, weather);
+        e.set(this, Sky::pOverrideWeather, Ptr::NULL);
+    }
+    e.set(this, Sky::pLastWeather, Ptr::NULL);
+    fn_0063e860(e, this, false);
+    e.set(this, Sky::fCurrentWeatherPct, 1.0);
+    let hour = e.get(this, Sky::fCurrentGameHour);
+    e.set(this, Sky::fLastWeatherUpdate, hour);
+    let player: u32 = e.global(PLAYER_CHARACTER);
+    e.call(PLAYER_METHOD_0093A7A0, &args![player, 0u32]);
+    let flags = e.get(this, Sky::uiFlags);
+    e.set(this, Sky::uiFlags, flags | 2);
+    let flags = e.get(this, Sky::uiFlags);
+    e.set(this, Sky::uiFlags, flags & !1);
+    sky_update_hdr_values(e, this);
+    clear_cloud_transitions(e, this);
+    flush_precipitation(e, this);
+}
+
+/// Hours between the last weather update and now: the hour difference, plus 24
+/// when the last update hour is later than the current hour (a day wrapped).
+/// The `float` compare keeps its NaN behaviour (no wrap).
+fn hours_since_last_update(e: &mut Engine, this: Ptr<Sky>) -> f64 {
+    let hour = e.get(this, Sky::fCurrentGameHour);
+    let last = e.get(this, Sky::fLastWeatherUpdate);
+    let wrap = if last > hour { 24.0 } else { 0.0 };
+    (wrap + hour as f64) - last as f64
+}
+
+// Translated from 0063d1d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Weather transition update (a `Sky` method the map leaves unnamed; it is
+/// called from `Sky::Update`). Does nothing without a climate. When flag 1 is
+/// clear and there is a default weather it only continues when the time since
+/// the last update exceeds a limit from the climate's byte (`(255 - byte) *
+/// 22 / 255 + 1` hours) while there is no last weather. It then asks the
+/// climate for a weather (`0063d5c0`; the form with id `0x15e` cast to a
+/// weather when the climate has none) and runs `TESRegion::UpdateWeather` on
+/// every region of the region list. Then it chooses the weather to show: the
+/// default weather (replaced by the player's area weather outside mode 2)
+/// when there is no override and the world flag does not apply, else the
+/// override (so with the world flag set and a current weather only an
+/// override can change the weather). A weather that differs from the current one
+/// becomes current (the current one becomes the last, or the last is cleared
+/// and the precipitation flushed in fast travel or mode 1) and flag 1 is set;
+/// otherwise flag 1 is cleared. Then `fCurrentWeatherPct` is 0 without a
+/// weather, 1 without a last weather, else the hours since the last update
+/// divided by the transition length (`WEATHER_BYTE_FRACTION`, index 3, with the
+/// two transition settings); with flag 8 it is re-scaled by the acceleration
+/// setting. A blend above 1 ends the transition. It ends with
+/// `Sky::UpdateHDRValues`.
+pub fn fn_0063d1d0(e: &mut Engine, this: Ptr<Sky>) {
+    let climate = e.get(this, Sky::pCurrentClimate);
+    if climate.is_null() {
+        return;
+    }
+    let mut refresh = true;
+    if e.get(this, Sky::uiFlags) & 1 == 0 && !e.get(this, Sky::pDefaultWeather).is_null() {
+        let elapsed = hours_since_last_update(e, this);
+        let byte = e.call(CLIMATE_UPDATE_BYTE, &args![climate]).u8() as u32;
+        let scale: f64 = e.global(RECIPROCAL_255);
+        let limit = ((0xff - byte) * 0x16) as i32 as f64 * scale + 1.0;
+        // Both the comparison and the last-weather test must hold.
+        refresh = limit < elapsed && e.get(this, Sky::pLastWeather).is_null();
+    }
+    if refresh {
+        let climate = e.get(this, Sky::pCurrentClimate);
+        let weather = fn_0063d5c0(e, climate);
+        e.set(this, Sky::pDefaultWeather, weather);
+        if e.get(this, Sky::pDefaultWeather).is_null() {
+            let form: Ptr = e.call(LOOKUP_FORM, &args![DEFAULT_WEATHER_FORM_ID]).ptr();
+            let weather = e
+                .call(
+                    DYNAMIC_CAST,
+                    &args![
+                        form,
+                        0u32,
+                        TYPE_DESCRIPTOR_FORM,
+                        TYPE_DESCRIPTOR_WEATHER,
+                        0u32
+                    ],
+                )
+                .ptr();
+            e.set(this, Sky::pDefaultWeather, weather);
+        }
+        let holder: u32 = e.global(REGION_HOLDER);
+        let owner: Ptr = e.call(REGION_LIST_OWNER, &args![holder]).ptr();
+        let mut node = if owner.is_null() { 0 } else { owner.addr() + 4 };
+        while node != 0 {
+            if list_item(e, node) == 0 {
+                break;
+            }
+            let region = list_item(e, node);
+            e.call(REGION_UPDATE_WEATHER, &args![region]);
+            node = list_next(e, node);
+        }
+    }
+
+    // Which weather to show.
+    let mut use_default = e.get(this, Sky::pOverrideWeather).is_null();
+    if !e.get(this, Sky::pCurrentWeather).is_null() {
+        let state: u32 = e.global(WORLD_STATE_POINTER);
+        if e.call(WORLD_STATE_FLAG, &args![state]).bool() {
+            use_default = false;
+        }
+    }
+    let wanted: Ptr = if use_default {
+        let mut chosen = e.get(this, Sky::pDefaultWeather);
+        let player: u32 = e.global(PLAYER_CHARACTER);
+        let owner: u32 = e.call(PLAYER_WEATHER_OWNER, &args![player]).u32();
+        if owner != 0
+            && e.call(WEATHER_OF_OWNER, &args![owner]).u32() != 0
+            && e.get(this, Sky::eMode) != 2
+        {
+            chosen = e.call(WEATHER_OF_OWNER, &args![owner]).ptr();
+        }
+        chosen
+    } else {
+        e.get(this, Sky::pOverrideWeather)
+    };
+
+    let unchanged = wanted.is_null()
+        || (!e.get(this, Sky::pLastWeather).is_null() && e.get(this, Sky::uiFlags) & 0x10 == 0)
+        || wanted == e.get(this, Sky::pCurrentWeather);
+    if unchanged {
+        let flags = e.get(this, Sky::uiFlags);
+        e.set(this, Sky::uiFlags, flags & !1);
+    } else {
+        if e.get(this, Sky::uiFlags) & 0x10 == 0 && e.get(this, Sky::eMode) != 1 {
+            let current = e.get(this, Sky::pCurrentWeather);
+            e.set(this, Sky::pLastWeather, current);
+        } else {
+            e.set(this, Sky::pLastWeather, Ptr::NULL);
+            flush_precipitation(e, this);
+        }
+        e.set(this, Sky::pCurrentWeather, wanted);
+        let state: u32 = e.global(WORLD_STATE_POINTER);
+        if !e.call(WORLD_STATE_FLAG, &args![state]).bool() {
+            let hour = e.get(this, Sky::fCurrentGameHour);
+            e.set(this, Sky::fLastWeatherUpdate, hour);
+        }
+        let flags = e.get(this, Sky::uiFlags);
+        e.set(this, Sky::uiFlags, flags | 1);
+    }
+
+    // The blend between the last and the current weather.
+    if e.get(this, Sky::pCurrentWeather).is_null() {
+        e.set(this, Sky::fCurrentWeatherPct, 0.0);
+    } else if e.get(this, Sky::pLastWeather).is_null() {
+        e.set(this, Sky::fCurrentWeatherPct, 1.0);
+    } else {
+        let elapsed = hours_since_last_update(e, this);
+        let low_slot: Ptr = e
+            .call(SETTING_FLOAT_VALUE, &args![TRANSITION_LOW_SETTING])
+            .ptr();
+        let low = e.mem.f32(low_slot.addr());
+        let high_slot: Ptr = e
+            .call(SETTING_FLOAT_VALUE, &args![TRANSITION_HIGH_SETTING])
+            .ptr();
+        let high = e.mem.f32(high_slot.addr());
+        let current = e.get(this, Sky::pCurrentWeather);
+        let length = e
+            .call(WEATHER_BYTE_FRACTION, &args![current, 3u32, high, low])
+            .f32();
+        e.set(
+            this,
+            Sky::fCurrentWeatherPct,
+            (elapsed / length as f64) as f32,
+        );
+    }
+    if e.get(this, Sky::uiFlags) & 8 != 0 {
+        let pct = e.get(this, Sky::fCurrentWeatherPct);
+        let begin = e.get(this, Sky::fAccelBeginPct);
+        let diff = pct as f64 - begin as f64;
+        let slot: Ptr = e
+            .call(SETTING_FLOAT_VALUE, &args![TRANSITION_ACCELERATION_SETTING])
+            .ptr();
+        let acceleration = e.mem.f32(slot.addr());
+        let begin = e.get(this, Sky::fAccelBeginPct);
+        e.set(
+            this,
+            Sky::fCurrentWeatherPct,
+            ((acceleration as f64 + 1.0) * diff + begin as f64) as f32,
+        );
+    }
+    let one: f64 = e.global(DOUBLE_ONE);
+    if e.get(this, Sky::fCurrentWeatherPct) as f64 > one {
+        e.set(this, Sky::pLastWeather, Ptr::NULL);
+        e.set(this, Sky::fCurrentWeatherPct, 1.0);
+        fn_0063e860(e, this, false);
+    }
+    sky_update_hdr_values(e, this);
+}
+
+// Translated from 0063d5c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESClimate` method (by its caller): forwards the climate's weather list
+/// (embedded at `+0x30`) to `005827d0`, which picks a weather; returns it.
+pub fn fn_0063d5c0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(CLIMATE_PICK_WEATHER, &args![this.addr() + 0x30])
+        .ptr()
+}
+
+/// Rebuilds the sky's sound list for `fn_0063d5e0` (the sounds were marked by
+/// `fn_0063dd90`): a new list receives the sounds that are not marked, the
+/// marked ones are released and deleted (the type-3 count goes down), the old
+/// list is cleared and deleted, and the new list becomes `pSkySoundList`. The
+/// local list the game builds and then walks is always empty, so the walk over
+/// it stops at once; it is kept as the game has it. Returns the new list.
+fn rebuild_sound_list(e: &mut Engine, this: Ptr<Sky>) -> u32 {
+    let old_head = e.get(this, Sky::pSkySoundList).addr();
+    let block: Ptr = e.call(OPERATOR_NEW, &args![8u32]).ptr();
+    let new_list = if block.is_null() {
+        0
+    } else {
+        e.call(LIST_CONSTRUCT, &args![block]).u32()
+    };
+    e.with_stack(8, |e, scratch| {
+        e.call(LIST_CONSTRUCT, &args![scratch]);
+        let mut node = old_head;
+        while node != 0 {
+            let sound = list_item(e, node);
+            if sound == 0 {
+                break;
+            }
+            if fn_0063dd70(e, Ptr::new(sound)) {
+                if e.mem.u32(sound + 0x10) == 3 {
+                    let count: u8 = e.global(SOUND_TYPE_3_COUNT);
+                    e.set_global(SOUND_TYPE_3_COUNT, count.wrapping_sub(1));
+                }
+                e.call(SOUND_HANDLE_RELEASE, &args![sound]);
+                fn_0063a3c0(e, Ptr::new(sound), 1);
+            } else {
+                list_insert(e, new_list, sound);
+            }
+            node = list_next(e, node);
+        }
+
+        let mut walk = scratch.addr();
+        while walk != 0 {
+            let sound = list_item(e, walk);
+            if sound == 0 {
+                break;
+            }
+            walk = list_next(e, walk);
+            if e.call(SOUND_HANDLE_IS_VALID, &args![sound]).bool() {
+                let mut found = false;
+                let mut other = new_list;
+                while !found && other != 0 {
+                    let candidate = list_item(e, other);
+                    if candidate == 0 {
+                        break;
+                    }
+                    if e.mem.u32(candidate + 0x14) == e.mem.u32(sound + 0x14) {
+                        found = true;
+                    }
+                    other = list_next(e, other);
+                }
+                if !found {
+                    e.call(SOUND_HANDLE_RELEASE, &args![sound]);
+                    fn_0063a3c0(e, Ptr::new(sound), 1);
+                }
+            } else {
+                fn_0063a3c0(e, Ptr::new(sound), 1);
+            }
+        }
+        e.call(LIST_CLEAR, &args![scratch]);
+        let list = e.get(this, Sky::pSkySoundList);
+        e.call(LIST_CLEAR, &args![list]);
+        let list = e.get(this, Sky::pSkySoundList);
+        if !list.is_null() {
+            e.call(LIST_SCALAR_DELETING_DESTRUCTOR, &args![list, 1u32]);
+        }
+        e.set(this, Sky::pSkySoundList, Ptr::new(new_list));
+        e.set_global(SOUNDS_DIRTY, 0u8);
+        e.call(LIST_DESTRUCT, &args![scratch]);
+    });
+    new_list
+}
+
+/// The weather the sound of `sound` is not for: the last weather when the
+/// sound belongs to the current weather, else the current one.
+fn other_weather(e: &mut Engine, this: Ptr<Sky>, sound: Ptr<SkySound>) -> Ptr {
+    if e.get(sound, SkySound::pWeather) == e.get(this, Sky::pCurrentWeather) {
+        e.get(this, Sky::pLastWeather)
+    } else {
+        e.get(this, Sky::pCurrentWeather)
+    }
+}
+
+/// `(pct - start) / (1 - start)` of two `float`s, rounded to `float`: how far
+/// past `start` the blend is.
+fn rise_fraction(pct: f32, start: f32) -> f32 {
+    ((pct as f64 - start as f64) / (1.0 - start as f64)) as f32
+}
+
+/// `1 - pct / end` of two `float`s, rounded to `float`: how far the blend is
+/// from `end` when it falls.
+fn fall_fraction(pct: f32, end: f32) -> f32 {
+    (1.0 - pct as f64 / end as f64) as f32
+}
+
+// Translated from 0063d5e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The sky's weather sounds update (a `Sky` method the map leaves unnamed;
+/// called from `Sky::Update`). When the dirty byte `011ccd04` is set the sound
+/// list is rebuilt without the marked sounds. When flag 1 or 2 is set the
+/// current weather's sounds are added (`0063ddb0`). Then every valid sound is
+/// handled: in modes 2 and 3 a sound of the current or last weather is
+/// played at a volume that follows the blend `fCurrentWeatherPct` (a
+/// type-3 sound starts at random, once in `byte * count` ticks, through
+/// `WEATHER_BYTE_FRACTION` indices 8 and 9 and records the flash time in
+/// `fFlash`; the others fade through the indices 6 and 7 or by the blend
+/// itself); any other sound is stopped unless the other weather has the same
+/// sound, and marked for removal. The compiler's exception frame is not
+/// translated. A type-3 sound whose divisor `byte * count` is zero makes the
+/// game fault on the division; here it panics.
+pub fn fn_0063d5e0(e: &mut Engine, this: Ptr<Sky>) {
+    let mut node = e.get(this, Sky::pSkySoundList).addr();
+    if e.global::<u8>(SOUNDS_DIRTY) != 0 {
+        node = rebuild_sound_list(e, this);
+    }
+    if e.call(SOUNDS_APPLY, &args![this]).bool() {
+        let weather = e.get(this, Sky::pCurrentWeather);
+        fn_0063ddb0(e, this, weather);
+    }
+    while node != 0 {
+        let sound_address = list_item(e, node);
+        if sound_address == 0 {
+            break;
+        }
+        let sound: Ptr<SkySound> = Ptr::new(sound_address);
+        if !e.call(SOUND_HANDLE_IS_VALID, &args![sound]).bool() {
+            node = list_next(e, node);
+            continue;
+        }
+        let mode = e.get(this, Sky::eMode);
+        let sound_weather = e.get(sound, SkySound::pWeather);
+        if (mode == 3 || mode == 2)
+            && (sound_weather == e.get(this, Sky::pCurrentWeather)
+                || sound_weather == e.get(this, Sky::pLastWeather))
+        {
+            if e.get(sound, SkySound::eSoundType) == 3 {
+                random_weather_sound(e, this, sound);
+            } else {
+                blended_weather_sound(e, this, sound);
+            }
+        } else {
+            if e.call(SOUND_HANDLE_IS_PLAYING, &args![sound]).bool() {
+                let other = other_weather(e, this, sound);
+                let form_id = e.get(sound, SkySound::uiFormID);
+                if !fn_0063e060(e, this, form_id, other) {
+                    e.call(SOUND_HANDLE_STOP, &args![sound]);
+                }
+            }
+            fn_0063dd90(e, sound);
+            e.set_global(SOUNDS_DIRTY, 1u8);
+        }
+        node = list_next(e, node);
+    }
+}
+
+/// The type-3 (random, thunder-like) sound of `fn_0063d5e0`: when it is not
+/// playing and `fn_00639c90(sound, 0x1e)` accepts, it starts with probability
+/// `1 / (weather byte at +0xea * count)` per call, at a volume from the blend,
+/// and records the flash volume and time.
+fn random_weather_sound(e: &mut Engine, this: Ptr<Sky>, sound: Ptr<SkySound>) {
+    if e.call(SOUND_HANDLE_IS_PLAYING, &args![sound]).bool() || !fn_00639c90(e, sound.cast(), 0x1e)
+    {
+        return;
+    }
+    let random = e.call(RANDOM_NUMBER, &[]).u32();
+    let weather = e.get(sound, SkySound::pWeather);
+    let byte = fn_0063dd50(e, weather, 10) as u32;
+    let count = e.global::<u8>(SOUND_TYPE_3_COUNT) as u32;
+    if random % (byte * count) != 0 {
+        return;
+    }
+    let pct = e.get(this, Sky::fCurrentWeatherPct);
+    let current = e.get(this, Sky::pCurrentWeather);
+    let volume = if e.get(sound, SkySound::pWeather) == current {
+        let high: f32 = e.global(FRACTION_HIGH_SOUND);
+        let start = e
+            .call(WEATHER_BYTE_FRACTION, &args![current, 8u32, high, 0.0f32])
+            .f32();
+        if start > pct {
+            0.0
+        } else {
+            rise_fraction(pct, start)
+        }
+    } else {
+        let last = e.get(this, Sky::pLastWeather);
+        let low: f32 = e.global(FRACTION_LOW);
+        let end = e
+            .call(WEATHER_BYTE_FRACTION, &args![last, 9u32, 1.0f32, low])
+            .f32();
+        if end > pct {
+            fall_fraction(pct, end)
+        } else {
+            0.0
+        }
+    };
+    let zero: f64 = e.global(DOUBLE_ZERO);
+    if volume as f64 != zero {
+        sky_sound_play(e, sound, volume);
+        e.set(this, Sky::fFlash, volume);
+        let ticks = e.call(TICK_COUNT_GET, &args![TICK_COUNTER]).u32();
+        e.set(this, Sky::uiFlashTime, ticks);
+    }
+}
+
+/// The other sound types of `fn_0063d5e0`: computes the volume of the sound
+/// (`volume`) and of the same sound in the other weather (`other_volume`) from
+/// the blend, and plays the sound at `volume` unless the other weather has
+/// the sound and its volume is higher.
+fn blended_weather_sound(e: &mut Engine, this: Ptr<Sky>, sound: Ptr<SkySound>) {
+    let pct = e.get(this, Sky::fCurrentWeatherPct);
+    let current = e.get(this, Sky::pCurrentWeather);
+    let own = e.get(sound, SkySound::pWeather) == current;
+    let (volume, other_volume);
+    if e.get(sound, SkySound::eSoundType) == 1 {
+        let high: f32 = e.global(FRACTION_HIGH_SOUND);
+        let rise = e
+            .call(WEATHER_BYTE_FRACTION, &args![current, 6u32, high, 0.0f32])
+            .f32();
+        let last = e.get(this, Sky::pLastWeather);
+        let fall = if last.is_null() {
+            0.0
+        } else {
+            let low: f32 = e.global(FRACTION_LOW);
+            e.call(WEATHER_BYTE_FRACTION, &args![last, 7u32, 1.0f32, low])
+                .f32()
+        };
+        let rising = if rise > pct {
+            0.0
+        } else {
+            rise_fraction(pct, rise)
+        };
+        let falling = if fall > pct {
+            fall_fraction(pct, fall)
+        } else {
+            0.0
+        };
+        if own {
+            volume = rising;
+            other_volume = falling;
+        } else {
+            volume = falling;
+            other_volume = rising;
+        }
+    } else if own {
+        volume = pct;
+        other_volume = (1.0 - pct as f64) as f32;
+    } else {
+        volume = (1.0 - pct as f64) as f32;
+        other_volume = pct;
+    }
+    let other = other_weather(e, this, sound);
+    let form_id = e.get(sound, SkySound::uiFormID);
+    if !fn_0063e060(e, this, form_id, other) || other_volume <= volume {
+        sky_sound_play(e, sound, volume);
+    }
+}
+
+// Translated from 0063dd50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWeather` method (by its caller): the byte at `+0xe0 + index`.
+pub fn fn_0063dd50(e: &mut Engine, this: Ptr, index: i32) -> u8 {
+    e.mem
+        .u8(this.addr().wrapping_add(index as u32).wrapping_add(0xe0))
+}
+
+// Translated from 0063dd70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SkySound` method (by its caller): whether bit 31 of `uiData` is set (the
+/// sound is marked for removal).
+pub fn fn_0063dd70(e: &mut Engine, this: Ptr<SkySound>) -> bool {
+    e.get(this, SkySound::uiData) & 0x8000_0000 != 0
+}
+
+// Translated from 0063dd90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SkySound` method (by its caller): sets bit 31 of `uiData` (marks the
+/// sound for removal).
+pub fn fn_0063dd90(e: &mut Engine, this: Ptr<SkySound>) {
+    let data = e.get(this, SkySound::uiData);
+    e.set(this, SkySound::uiData, data | 0x8000_0000);
+}
+
+// Translated from 0063ddb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds the sounds of `weather` (the list at `+0x1f8`, items `{ form id, sound
+/// type }`) to the sky's sound list unless a sound with the same form id,
+/// weather and type is already there. Each sound gets its handle (obtained
+/// with `BSAudio::GetSoundHandleByNumericID` and flags `0x21`, plus `0x10`
+/// for a type other than 3; skipped for a type-1 sound while the precipitation
+/// setting is off); a sound that is already in the list only releases the
+/// handle, a new one becomes a `SkySound` (`00639bf0`) inserted in the list
+/// (the type-3 count goes up for type 3). The compiler's exception frame is
+/// not translated.
+pub fn fn_0063ddb0(e: &mut Engine, this: Ptr<Sky>, weather: Ptr) {
+    if weather.is_null() {
+        return;
+    }
+    let mut node = fn_0063dff0(e, weather).addr();
+    while node != 0 {
+        let description = list_item(e, node);
+        if description == 0 {
+            break;
+        }
+        e.with_stack(12, |e, handle| {
+            e.call(SOUND_HANDLE_CONSTRUCT, &args![handle]);
+            let setting: Ptr = e
+                .call(SETTING_BYTE_VALUE, &args![SETTING_PRECIPITATION])
+                .ptr();
+            let sound_type = e.mem.u32(description + 4);
+            if e.mem.u8(setting.addr()) != 0 || sound_type != 1 {
+                let mut flags = 0x21u32;
+                if sound_type != 3 {
+                    flags |= 0x10;
+                }
+                e.with_stack(12, |e, request| {
+                    let audio: u32 = e.call(AUDIO_INSTANCE, &[]).u32();
+                    let id = e.mem.u32(description);
+                    let filled = e
+                        .call(AUDIO_GET_SOUND_HANDLE, &args![audio, request, id, flags])
+                        .u32();
+                    e.call(SOUND_HANDLE_ASSIGN, &args![handle, filled]);
+                    e.call(SOUND_HANDLE_DESTRUCT, &args![request]);
+                });
+            }
+            let form_id = e.mem.u32(description);
+            let mut found = false;
+            let mut other = e.get(this, Sky::pSkySoundList).addr();
+            while !found && other != 0 {
+                let existing = list_item(e, other);
+                if existing == 0 {
+                    break;
+                }
+                found = e.mem.u32(existing + 0x14) == form_id
+                    && e.mem.u32(existing + 0xc) == weather.addr()
+                    && e.mem.u32(existing + 0x10) == sound_type;
+                other = list_next(e, other);
+            }
+            if !found {
+                let block: Ptr = e.call(OPERATOR_NEW, &args![0x1cu32]).ptr();
+                let sound: Ptr<SkySound> = if block.is_null() {
+                    Ptr::NULL
+                } else {
+                    e.with_stack(12, |e, copy| {
+                        e.call(SOUND_HANDLE_ASSIGN, &args![copy, handle]);
+                        let id = e.mem.u32(copy.addr());
+                        let flag = e.mem.u32(copy.addr() + 4);
+                        let state = e.mem.u32(copy.addr() + 8);
+                        fn_00639bf0(
+                            e,
+                            block.cast(),
+                            id,
+                            flag,
+                            state,
+                            weather,
+                            sound_type,
+                            form_id,
+                        )
+                    })
+                };
+                let list = e.get(this, Sky::pSkySoundList).addr();
+                list_insert(e, list, sound.addr());
+                if sound_type == 3 {
+                    let count: u8 = e.global(SOUND_TYPE_3_COUNT);
+                    e.set_global(SOUND_TYPE_3_COUNT, count.wrapping_add(1));
+                }
+            } else {
+                e.call(SOUND_HANDLE_RELEASE, &args![handle]);
+            }
+            node = list_next(e, node);
+            e.call(SOUND_HANDLE_DESTRUCT, &args![handle]);
+        });
+    }
+}
+
+// Translated from 0063dff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWeather` method (by its caller): the address of the weather sound list
+/// embedded at `+0x1f8`.
+pub fn fn_0063dff0(_e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(this.addr().wrapping_add(0x1f8))
+}
+
+// Translated from 0063e010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stops every sound of the sky's sound list (`BSSoundHandle::Stop`), up to
+/// the first empty node.
+pub fn fn_0063e010(e: &mut Engine, this: Ptr<Sky>) {
+    let mut node = e.get(this, Sky::pSkySoundList).addr();
+    while node != 0 {
+        if list_item(e, node) == 0 {
+            break;
+        }
+        let sound = list_item(e, node);
+        e.call(SOUND_HANDLE_STOP, &args![sound]);
+        node = list_next(e, node);
+    }
+}
+
+// Translated from 0063e060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the sky's sound list has a sound with form id `form_id` that
+/// belongs to `weather`; the walk stops at the first empty node.
+pub fn fn_0063e060(e: &mut Engine, this: Ptr<Sky>, form_id: u32, weather: Ptr) -> bool {
+    let mut node = e.get(this, Sky::pSkySoundList).addr();
+    while node != 0 {
+        if list_item(e, node) == 0 {
+            return false;
+        }
+        // The game reads the node's item again for each test.
+        let sound: Ptr<SkySound> = Ptr::new(list_item(e, node));
+        if e.get(sound, SkySound::uiFormID) == form_id {
+            let sound: Ptr<SkySound> = Ptr::new(list_item(e, node));
+            if e.get(sound, SkySound::pWeather) == weather {
+                return true;
+            }
+        }
+        node = list_next(e, node);
+    }
+    false
+}
+
+// Translated from 0063e0d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SkySound::Play` (Xbox PDB): does nothing in menu mode or while the game
+/// loading menu is open. Otherwise, a sound whose handle is no longer valid
+/// gets a new handle (`GetSoundHandleByNumericID` with flags `0x20`); a type-3
+/// sound that is not playing starts (`Play(0)`), another type starts (`Play(1)`)
+/// when `fn_00639c90(1000)` accepts and it is not playing; then, when the
+/// handle's volume differs from `volume` by more than 0.01, the volume is set.
+/// The compiler's exception frame is not translated.
+pub fn sky_sound_play(e: &mut Engine, this: Ptr<SkySound>, volume: f32) {
+    if e.call(IS_IN_MENU_MODE, &[]).bool() || e.call(IS_LOADING_MENU_OPEN, &[]).bool() {
+        return;
+    }
+    if !e.call(SOUND_HANDLE_IS_VALID, &args![this]).bool() {
+        let id = ni_pointer_get(e, this.addr()).addr();
+        e.with_stack(12, |e, request| {
+            let audio: u32 = e.call(AUDIO_INSTANCE, &[]).u32();
+            e.call(AUDIO_GET_SOUND_HANDLE, &args![audio, request, id, 0x20u32]);
+            e.call(SOUND_HANDLE_ASSIGN, &args![this, request]);
+            e.call(SOUND_HANDLE_DESTRUCT, &args![request]);
+        });
+    }
+    if e.get(this, SkySound::eSoundType) == 3 {
+        if !e.call(SOUND_HANDLE_IS_PLAYING, &args![this]).bool() {
+            e.call(SOUND_HANDLE_PLAY, &args![this, 0u32]);
+        }
+    } else if fn_00639c90(e, this.cast(), 1000)
+        && !e.call(SOUND_HANDLE_IS_PLAYING, &args![this]).bool()
+    {
+        e.call(SOUND_HANDLE_PLAY, &args![this, 1u32]);
+    }
+    let current = e.call(SOUND_HANDLE_GET_VOLUME, &args![this]).f32();
+    let difference = (current as f64 - volume as f64) as f32;
+    let magnitude = e.call(ABS_FLOAT, &args![difference]).f64();
+    let epsilon: f64 = e.global(VOLUME_EPSILON);
+    if magnitude > epsilon {
+        e.call(SOUND_HANDLE_SET_VOLUME, &args![this, volume]);
+    }
+}
+
+// Translated from 0063e210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Sky::UnloadAllTextures` (Xbox PDB): removes the clouds' textures and
+/// transition textures, unloads both moons and the sun, and releases the stars'
+/// node (`0063e290`); each only when it exists.
+pub fn sky_unload_all_textures(e: &mut Engine, this: Ptr<Sky>) {
+    let clouds = e.get(this, Sky::pClouds);
+    if !clouds.is_null() {
+        e.call(CLOUDS_REMOVE_TEXTURES, &args![clouds]);
+        let clouds = e.get(this, Sky::pClouds);
+        e.call(CLOUDS_CLEAR_TRANS_TEXTURES, &args![clouds]);
+    }
+    for field in [Sky::pMasser, Sky::pSecunda] {
+        let moon = e.get(this, field);
+        if !moon.is_null() {
+            let moon = e.get(this, field);
+            e.call(MOON_UNLOAD_TEXTURES, &args![moon]);
+        }
+    }
+    let sun = e.get(this, Sky::pSun);
+    if !sun.is_null() {
+        e.call(SUN_UNLOAD_TEXTURES, &args![sun]);
+    }
+    let stars = e.get(this, Sky::pStars);
+    if !stars.is_null() {
+        fn_0063e290(e, stars);
+    }
+}
+
+// Translated from 0063e290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Stars` method (by its caller `Sky::UnloadAllTextures`): when the
+/// `NiPointer` at `+4` holds an object, calls its virtual slot `0xe8` with the
+/// object of the `NiPointer` at `+8`; then clears the `NiPointer` at `+8`.
+pub fn fn_0063e290(e: &mut Engine, this: Ptr) {
+    if !ni_pointer_get(e, this.addr() + 4).is_null() {
+        let object = ni_pointer_get(e, this.addr() + 4);
+        let argument = ni_pointer_get(e, this.addr() + 8);
+        e.vcall(object.addr(), 0xe8, &args![argument]);
+    }
+    ni_pointer_assign(e, this.addr() + 8, Ptr::NULL);
+}
+
+/// One layer of the current weather's cloud textures for `fn_0063e2f0`: when
+/// the weather has a valid texture entry for `layer`, formats its path
+/// (`"%s%s"`: the entry's virtual slot `0x18` result and its name) and, when
+/// the file exists and the layer's node has the properties, loads the texture
+/// into the layer's type-5 property's texture slot and the type-3 property.
+fn load_cloud_layer(e: &mut Engine, this: Ptr<Sky>, layer: i32) {
+    let weather = e.get(this, Sky::pCurrentWeather);
+    if e.call(WEATHER_CLOUD_ENTRY, &args![weather, layer])
+        .ptr::<()>()
+        .is_null()
+    {
+        return;
+    }
+    let weather = e.get(this, Sky::pCurrentWeather);
+    let entry: Ptr = e.call(WEATHER_CLOUD_ENTRY, &args![weather, layer]).ptr();
+    if e.call(TEXTURE_ENTRY_VALID, &args![entry]).u32() == 0 {
+        return;
+    }
+    e.with_stack(8, |e, text| {
+        e.call(STRING_CONSTRUCT, &args![text]);
+        let weather = e.get(this, Sky::pCurrentWeather);
+        let first: Ptr = e.call(WEATHER_CLOUD_ENTRY, &args![weather, layer]).ptr();
+        let weather = e.get(this, Sky::pCurrentWeather);
+        let second: Ptr = e.call(WEATHER_CLOUD_ENTRY, &args![weather, layer]).ptr();
+        let name = e.call(TEXTURE_ENTRY_NAME, &args![second]).u32();
+        let prefix = e.vcall(first.addr(), 0x18, &[]).u32();
+        e.call(FORMAT_STRING, &args![text, PATH_FORMAT, prefix, name]);
+        let path = ni_pointer_get(e, text.addr());
+        if e.call(FILE_EXISTS, &args![path, 0u32, 0u32, 0xffff_ffffu32])
+            .u32()
+            != 0
+        {
+            let clouds = e.get(this, Sky::pClouds);
+            let node = fn_0063c440(e, clouds, layer);
+            let property: Ptr = e.call(NODE_GET_PROPERTY, &args![node, 5u32]).ptr();
+            if !property.is_null() {
+                e.with_stack(4, |e, holder| {
+                    e.call(NI_POINTER_FROM_RAW, &args![holder, 0u32]);
+                    let path = ni_pointer_get(e, text.addr());
+                    e.call(TEXTURE_LOAD, &args![path, 1u32, holder, 1u32, 0u32]);
+                    let texture = ni_pointer_get(e, holder.addr());
+                    let clouds = e.get(this, Sky::pClouds);
+                    let node = fn_0063c440(e, clouds, layer);
+                    let property: Ptr = e.call(NODE_GET_PROPERTY, &args![node, 3u32]).ptr();
+                    e.call(PROPERTY_SET_TEXTURE, &args![property, texture]);
+                    e.call(NI_POINTER_DESTRUCTOR, &args![holder]);
+                });
+            }
+        }
+        e.call(STRING_DESTRUCT, &args![text]);
+    });
+}
+
+// Translated from 0063e2f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Loads the textures of the visible sky (a `Sky` method the map leaves
+/// unnamed; `Sky::SetMode` runs it when mode 2 or 3 is entered). With clouds, a
+/// current weather and the world flag clear, loads each cloud layer's texture
+/// from the weather (`"%s%s"` path of the entry, when the file exists). Each
+/// moon gets `"Textures\Sky\MoonShadow.dds"` as its shadow texture, its node
+/// marked by whether it loaded, and its state word set to 2. With a sun and a
+/// climate, loads the sun's two textures from the climate (both entries use
+/// index 0 here; the glare name `"Sky\SunGlare.dds"` becomes
+/// `"Textures\Sky\SunGlareNonHDR.dds"` while the flag byte `011f941e` is
+/// clear) into the properties of the sun's nodes and marks the nodes by
+/// whether a texture loaded (the flag is not reset between the two loads, as
+/// in the game). With stars and a climate, loads the stars' geometry. The
+/// compiler's exception frame is not translated.
+pub fn fn_0063e2f0(e: &mut Engine, this: Ptr<Sky>) {
+    with_timer(e, 0x8dc, |e| {
+        let clouds = e.get(this, Sky::pClouds);
+        if !clouds.is_null() && !e.get(this, Sky::pCurrentWeather).is_null() {
+            let state: u32 = e.global(WORLD_STATE_POINTER);
+            if !e.call(WORLD_STATE_FLAG, &args![state]).bool() {
+                let mut layer = 0i32;
+                loop {
+                    let clouds = e.get(this, Sky::pClouds);
+                    let count = e.call(CLOUDS_LAYER_COUNT, &args![clouds]).i32();
+                    if layer >= count {
+                        break;
+                    }
+                    load_cloud_layer(e, this, layer);
+                    layer += 1;
+                }
+            }
+        }
+
+        for field in [Sky::pMasser, Sky::pSecunda] {
+            let moon = e.get(this, field);
+            if moon.is_null() {
+                continue;
+            }
+            let node = ni_pointer_get(e, moon.addr() + 0x14);
+            let property: Ptr = e.call(NODE_GET_PROPERTY, &args![node, 3u32]).ptr();
+            e.with_stack(4, |e, holder| {
+                e.call(NI_POINTER_FROM_RAW, &args![holder, 0u32]);
+                e.call(
+                    TEXTURE_LOAD,
+                    &args![MOON_SHADOW_PATH, 1u32, holder, 1u32, 0u32],
+                );
+                let texture = ni_pointer_get(e, holder.addr());
+                if !texture.is_null() {
+                    e.call(PROPERTY_SET_TEXTURE, &args![property, texture]);
+                }
+                let node = ni_pointer_get(e, moon.addr() + 0x14);
+                e.call(
+                    NODE_SET_FLAG_BIT_20,
+                    &args![node, (!texture.is_null()) as u32],
+                );
+                let moon = e.get(this, field);
+                e.mem.set_u32(moon.addr() + 0x70, 2);
+                e.call(NI_POINTER_DESTRUCTOR, &args![holder]);
+            });
+        }
+
+        let sun = e.get(this, Sky::pSun);
+        if !sun.is_null() && !e.get(this, Sky::pCurrentClimate).is_null() {
+            load_sun_textures_at_entry_zero(e, this, sun);
+        }
+
+        let stars = e.get(this, Sky::pStars);
+        let climate = e.get(this, Sky::pCurrentClimate);
+        if !stars.is_null() && !climate.is_null() {
+            let geometry = fn_0063cfe0(e, climate);
+            e.call(STARS_LOAD_GEOMETRY, &args![stars, geometry]);
+        }
+    });
+}
+
+/// The sun part of `fn_0063e2f0`.
+fn load_sun_textures_at_entry_zero(e: &mut Engine, this: Ptr<Sky>, sun: Ptr) {
+    e.with_stack(8, |e, text| {
+        e.call(STRING_CONSTRUCT, &args![text]);
+        let node: Ptr = e.call(SUN_FIRST_NODE, &args![sun]).ptr();
+        let glare_property: Ptr = e.call(NODE_GET_PROPERTY, &args![node, 3u32]).ptr();
+        let mut texture = Ptr::NULL;
+        e.with_stack(4, |e, holder| {
+            e.call(NI_POINTER_FROM_RAW, &args![holder, 0u32]);
+            let climate = e.get(this, Sky::pCurrentClimate);
+            let entry = fn_0063cfa0(e, climate, 0);
+            if !entry.is_null() && e.call(TEXTURE_ENTRY_VALID, &args![entry]).u32() != 0 {
+                let prefix = e.vcall(entry.addr(), 0x18, &[]).u32();
+                e.call(STRING_ASSIGN, &args![text, prefix]);
+                let name = e.call(TEXTURE_ENTRY_NAME, &args![entry]).u32();
+                e.call(STRING_APPEND, &args![text, name]);
+                texture = load_texture(e, text, holder, glare_property);
+            }
+            let node: Ptr = e.call(HOLDER_NODE, &args![sun]).ptr();
+            e.call(
+                NODE_SET_FLAG_BIT_20,
+                &args![node, (!texture.is_null()) as u32],
+            );
+
+            let node = fn_0063d040(e, sun);
+            let property: Ptr = e.call(NODE_GET_PROPERTY, &args![node, 3u32]).ptr();
+            let climate = e.get(this, Sky::pCurrentClimate);
+            let entry = fn_0063cfa0(e, climate, 0);
+            if !entry.is_null() && e.call(TEXTURE_ENTRY_VALID, &args![entry]).u32() != 0 {
+                let mut use_default = false;
+                if e.global::<u8>(INITIAL_FLAG) == 0 {
+                    let name = e.call(TEXTURE_ENTRY_NAME, &args![entry]).u32();
+                    use_default = e.call(STRING_COMPARE, &args![name, SUN_GLARE_NAME]).u32() == 0;
+                }
+                if use_default {
+                    e.call(STRING_ASSIGN, &args![text, SUN_GLARE_NON_HDR_PATH]);
+                } else {
+                    let prefix = e.vcall(entry.addr(), 0x18, &[]).u32();
+                    e.call(STRING_ASSIGN, &args![text, prefix]);
+                    let name = e.call(TEXTURE_ENTRY_NAME, &args![entry]).u32();
+                    e.call(STRING_APPEND, &args![text, name]);
+                }
+                e.with_stack(4, |e, second_holder| {
+                    e.call(NI_POINTER_FROM_RAW, &args![second_holder, 0u32]);
+                    texture = load_texture(e, text, second_holder, property);
+                    e.call(NI_POINTER_DESTRUCTOR, &args![second_holder]);
+                });
+            }
+            let node: Ptr = e.call(SUN_GET_NODE, &args![sun]).ptr();
+            e.call(
+                NODE_SET_FLAG_BIT_20,
+                &args![node, (!texture.is_null()) as u32],
+            );
+            e.call(NI_POINTER_DESTRUCTOR, &args![holder]);
+        });
+        e.call(STRING_DESTRUCT, &args![text]);
+    });
+}
+
+// Translated from 0063e860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Starts or ends the weather blend acceleration (a `Sky` method the map
+/// leaves unnamed). With `start` set and a last weather, flag 8 not yet set:
+/// sets flag 8 and remembers the current blend in `fAccelBeginPct`. Without
+/// `start` or without a last weather: clears flag 8 and `fAccelBeginPct`.
+pub fn fn_0063e860(e: &mut Engine, this: Ptr<Sky>, start: bool) {
+    let has_last = !e.get(this, Sky::pLastWeather).is_null();
+    if start && has_last && e.get(this, Sky::uiFlags) & 8 == 0 {
+        let flags = e.get(this, Sky::uiFlags);
+        e.set(this, Sky::uiFlags, flags | 8);
+        let pct = e.get(this, Sky::fCurrentWeatherPct);
+        e.set(this, Sky::fAccelBeginPct, pct);
+    } else if !start || !has_last {
+        let flags = e.get(this, Sky::uiFlags);
+        e.set(this, Sky::uiFlags, flags & !8);
+        e.set(this, Sky::fAccelBeginPct, 0.0);
+    }
+}
+
+// Translated from 0063e8f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Sky::SetFastTravel` (Xbox PDB): with `fast_travel` set, forgets the
+/// override weather and sets flag `0x10`; otherwise clears flag `0x10`.
+pub fn sky_set_fast_travel(e: &mut Engine, this: Ptr<Sky>, fast_travel: bool) {
+    if fast_travel {
+        e.set(this, Sky::pOverrideWeather, Ptr::NULL);
+        let flags = e.get(this, Sky::uiFlags);
+        e.set(this, Sky::uiFlags, flags | 0x10);
+    } else {
+        let flags = e.get(this, Sky::uiFlags);
+        e.set(this, Sky::uiFlags, flags & !0x10);
+    }
+}
+
+/// The save format version (`008df040` on the save buffer global).
+fn save_version(e: &mut Engine) -> u32 {
+    let buffer: u32 = e.global(SAVE_BUFFER_GLOBAL);
+    e.call(SAVE_VERSION, &args![buffer]).u8() as u32
+}
+
+// Translated from 0063e940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Size in bytes of the sky's save data (a `Sky` method the map leaves
+/// unnamed; `this` is not read): 28 bytes, plus 4 from save version `0x5d`
+/// (the override weather's id) and 8 from version `0x69` (the flags and the
+/// acceleration start). The compiler's additions of 4 are summed.
+pub fn fn_0063e940(e: &mut Engine, _this: Ptr) -> u16 {
+    let mut size: u16 = 12;
+    if save_version(e) >= 0x5d {
+        size += 4;
+    }
+    size += 16;
+    if save_version(e) >= 0x69 {
+        size += 8;
+    }
+    size
+}
+
+/// Saves the id of `form` (zero when null) through `SaveNumericID`.
+fn save_form_id(e: &mut Engine, form: Ptr) {
+    e.with_stack(4, |e, slot| {
+        let id = if form.is_null() {
+            0
+        } else {
+            e.call(FORM_ID_OF, &args![form]).u32()
+        };
+        e.mem.set_u32(slot.addr(), id);
+        let buffer: u32 = e.global(SAVE_BUFFER_GLOBAL);
+        e.call(SAVE_NUMERIC_ID, &args![buffer, slot, 4u32]);
+    });
+}
+
+// Translated from 0063e9f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Sky::SaveGame` (Xbox PDB): writes the current, last and default weather
+/// ids, the override weather id (from save version `0x5d`), the hour, last
+/// update hour, blend and mode, and from version `0x69` the flags and the
+/// acceleration start.
+pub fn sky_save_game(e: &mut Engine, this: Ptr<Sky>) {
+    for field in [
+        Sky::pCurrentWeather,
+        Sky::pLastWeather,
+        Sky::pDefaultWeather,
+    ] {
+        let weather = e.get(this, field);
+        save_form_id(e, weather);
+    }
+    if save_version(e) >= 0x5d {
+        let weather = e.get(this, Sky::pOverrideWeather);
+        save_form_id(e, weather);
+    }
+    let buffer: u32 = e.global(SAVE_BUFFER_GLOBAL);
+    for offset in [0xecu32, 0xf0, 0xf4, 0xf8] {
+        e.call(SAVE_DATA, &args![buffer, this.addr() + offset, 4u32]);
+    }
+    if save_version(e) >= 0x69 {
+        let buffer: u32 = e.global(SAVE_BUFFER_GLOBAL);
+        for offset in [0x118u32, 0x110] {
+            e.call(SAVE_DATA, &args![buffer, this.addr() + offset, 4u32]);
+        }
+    }
+}
+
+// Translated from 0063eb70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Sky::SaveGame_ov2` (Xbox PDB): writes the four weather ids (current, last,
+/// default, override) and the fields at `+0xec`, `+0xf0`, `+0xf4`, `+0x118`,
+/// `+0x110`, `+0xb4`, `+0xb8`, `+0xbc`, `+0xe4`, `+0xe8` and `+0xf8` (4 bytes
+/// each) into the save buffer `buffer`.
+pub fn sky_save_game_ov2(e: &mut Engine, this: Ptr<Sky>, buffer: Ptr) {
+    for field in [
+        Sky::pCurrentWeather,
+        Sky::pLastWeather,
+        Sky::pDefaultWeather,
+        Sky::pOverrideWeather,
+    ] {
+        let weather = e.get(this, field);
+        e.call(SAVE_FORM_ID_OV2, &args![buffer, weather, 0u32]);
+    }
+    for offset in [
+        0xecu32, 0xf0, 0xf4, 0x118, 0x110, 0xb4, 0xb8, 0xbc, 0xe4, 0xe8, 0xf8,
+    ] {
+        e.call(
+            SAVE_DATA_OV2,
+            &args![buffer, this.addr() + offset, 4u32, 0u32],
+        );
+    }
+}
+
+/// Reads a weather from the load buffer: the saved form id, looked up
+/// (`004839c0`) and cast from `TESForm` to `TESWeather`.
+fn load_weather(e: &mut Engine, buffer: Ptr) -> Ptr {
+    let id = e.call(LOAD_FORM_ID, &args![buffer]).u32();
+    let form: Ptr = e.call(LOOKUP_FORM, &args![id]).ptr();
+    e.call(
+        DYNAMIC_CAST,
+        &args![
+            form,
+            0u32,
+            TYPE_DESCRIPTOR_FORM,
+            TYPE_DESCRIPTOR_WEATHER,
+            0u32
+        ],
+    )
+    .ptr()
+}
+
+// Translated from 0063ecb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Sky::LoadGame` (Xbox PDB): does nothing while the world flag `0x40` of the
+/// world state is set (`0063ef00`). Otherwise flushes the precipitation,
+/// clears the clouds' transition textures and flags the clouds (`0063a610`),
+/// reads the four weathers (current, last, default, override), the hour, last
+/// update hour and blend, the flags (only bit 8 is taken), the acceleration
+/// start, the colour at `+0xb4` (12 bytes before buffer version `0x12`, three
+/// words from it; the version is the buffer's virtual slot 0), and the fields
+/// at `+0xe4`, `+0xe8` and `+0xf8`, then runs `Sky::Update(0.0)` and
+/// `Sky::UpdateHDRValues`.
+pub fn sky_load_game(e: &mut Engine, this: Ptr<Sky>, buffer: Ptr) {
+    let state: u32 = e.global(WORLD_STATE_POINTER);
+    if fn_0063ef00(e, Ptr::new(state)) {
+        return;
+    }
+    flush_precipitation(e, this);
+    let clouds = e.get(this, Sky::pClouds);
+    if !clouds.is_null() {
+        e.call(CLOUDS_CLEAR_TRANS_TEXTURES, &args![clouds]);
+        let clouds = e.get(this, Sky::pClouds);
+        fn_0063a610(e, clouds);
+    }
+    for field in [
+        Sky::pCurrentWeather,
+        Sky::pLastWeather,
+        Sky::pDefaultWeather,
+        Sky::pOverrideWeather,
+    ] {
+        let weather = load_weather(e, buffer);
+        e.set(this, field, weather);
+    }
+    for offset in [0xecu32, 0xf0, 0xf4] {
+        e.call(LOAD_DATA, &args![buffer, this.addr() + offset, 4u32]);
+    }
+    e.with_stack(4, |e, saved_flags| {
+        e.call(LOAD_DATA, &args![buffer, saved_flags, 4u32]);
+        let saved = e.mem.u32(saved_flags.addr());
+        let flags = e.get(this, Sky::uiFlags);
+        e.set(this, Sky::uiFlags, (flags & !8) | (saved & 8));
+    });
+    e.call(LOAD_DATA, &args![buffer, this.addr() + 0x110, 4u32]);
+    if e.vcall(buffer.addr(), 0, &[]).u8() >= 0x12 {
+        for offset in [0xb4u32, 0xb8, 0xbc] {
+            e.call(LOAD_DATA, &args![buffer, this.addr() + offset, 4u32]);
+        }
+    } else {
+        e.call(LOAD_DATA, &args![buffer, this.addr() + 0xb4, 0xcu32]);
+    }
+    for offset in [0xe4u32, 0xe8, 0xf8] {
+        e.call(LOAD_DATA, &args![buffer, this.addr() + offset, 4u32]);
+    }
+    sky_update(e, this, 0.0);
+    sky_update_hdr_values(e, this);
+}
+
+// Translated from 0063ef00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// World state accessor (by its caller): whether bit `0x40` of the word at
+/// `+0x244` is set.
+pub fn fn_0063ef00(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr().wrapping_add(0x244)) & 0x40 != 0
+}
+
+/// Creates one image-space modifier instance (`0x30` bytes, `NiObject`
+/// allocation and constructor).
+fn new_image_space_instance(e: &mut Engine) -> Ptr {
+    let block: Ptr = e.call(NI_OBJECT_NEW, &args![IMAGE_SPACE_SIZE]).ptr();
+    if block.is_null() {
+        Ptr::NULL
+    } else {
+        e.call(IMAGE_SPACE_CONSTRUCT, &args![block]).ptr()
+    }
+}
+
+/// Registers `instance` with the image-space manager through a temporary
+/// `NiPointer` holder.
+fn register_image_space_instance(e: &mut Engine, instance: Ptr) {
+    e.with_stack(4, |e, holder| {
+        e.call(NI_POINTER_FROM_RAW, &args![holder, instance]);
+        let owner: u32 = e.global(INTERIOR_CELL_HOLDER);
+        let manager: Ptr = e.call(IMAGE_SPACE_MANAGER, &args![owner]).ptr();
+        e.call(IMAGE_SPACE_ADD, &args![manager, holder]);
+        e.call(NI_POINTER_DESTRUCTOR, &args![holder]);
+    });
+}
+
+/// The weather's image-space form for the time-of-day index `index`, or the
+/// default form when it has none (or there is no weather).
+fn weather_image_space(e: &mut Engine, weather: Ptr, index: u32) -> Ptr {
+    let mut form = Ptr::NULL;
+    if !weather.is_null() {
+        form = e
+            .call(
+                WEATHER_IMAGE_SPACE_FOR_TIME,
+                &args![weather.addr() + 0x18, index],
+            )
+            .ptr();
+    }
+    if form.is_null() {
+        form = e.call(DEFAULT_IMAGE_SPACE, &[]).ptr();
+    }
+    form
+}
+
+/// Sets `instance`'s weight to `weight`, and, when there is a form, its form.
+fn drive_image_space(e: &mut Engine, instance: Ptr, weight: f32, form: Ptr) {
+    if !form.is_null() {
+        e.call(IMAGE_SPACE_SET_WEIGHT, &args![instance, weight]);
+        e.call(IMAGE_SPACE_SET_FORM, &args![instance, form]);
+    }
+}
+
+// Translated from 0063ef20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Sky::UpdateHDRValues` (Xbox PDB): drives the four image-space modifier
+/// instances (`+0x11c`, `+0x120` for the current weather, `+0x124`, `+0x128`
+/// for the last one) from the time of day and the weather blend. The first
+/// call creates the four instances (registered with the manager, flagged `1`,
+/// byte `+8` set). In modes 0 and 1 all four weights are 0. Otherwise the hour
+/// (`fCurrentGameHour`) is placed against the climate's transition hours
+/// (sunrise begin and end, sunset begin and end, and `fHighNoon`): in dawn
+/// (indices 0 then 3/1), morning (1, 4), afternoon (4, 1), dusk (2 then 3/1) it
+/// has two image-space forms and a blend between them; at night it has one
+/// (index 3); a hour order the data does not allow logs the "Transition times
+/// stored in climate data are invalid" error and uses index 1. The current
+/// weather's instances get `pct * blend` and `(1 - blend) * pct`; the last
+/// weather's (when it exists and the blend is below 1) get `(1 - pct) * blend`
+/// and `(1 - pct) * (1 - blend)`, else 0. A missing form falls back to the
+/// default one (`00532ff0`). The compiler's exception frame is not
+/// translated.
+pub fn sky_update_hdr_values(e: &mut Engine, this: Ptr<Sky>) {
+    if e.get(this, Sky::pCurrentWeatherImageSpaceMod).is_null() {
+        let instance = new_image_space_instance(e);
+        e.set(this, Sky::pCurrentWeatherImageSpaceMod, instance);
+        let instance = new_image_space_instance(e);
+        e.set(this, Sky::pLastWeatherImageSpaceMod, instance);
+        let last = e.get(this, Sky::pLastWeatherImageSpaceMod);
+        register_image_space_instance(e, last);
+        let current = e.get(this, Sky::pCurrentWeatherImageSpaceMod);
+        register_image_space_instance(e, current);
+        let instance = new_image_space_instance(e);
+        e.set(this, Sky::pCurrentWeatherImageSpaceMod2, instance);
+        let instance = new_image_space_instance(e);
+        e.set(this, Sky::pLastWeatherImageSpaceMod2, instance);
+        let last = e.get(this, Sky::pLastWeatherImageSpaceMod2);
+        register_image_space_instance(e, last);
+        let current = e.get(this, Sky::pCurrentWeatherImageSpaceMod2);
+        register_image_space_instance(e, current);
+        for field in [
+            Sky::pCurrentWeatherImageSpaceMod,
+            Sky::pLastWeatherImageSpaceMod,
+            Sky::pCurrentWeatherImageSpaceMod2,
+            Sky::pLastWeatherImageSpaceMod2,
+        ] {
+            let instance = e.get(this, field);
+            e.call(IMAGE_SPACE_SET_FLAG, &args![instance, 1u32]);
+        }
+        for field in [
+            Sky::pCurrentWeatherImageSpaceMod,
+            Sky::pLastWeatherImageSpaceMod,
+            Sky::pCurrentWeatherImageSpaceMod2,
+            Sky::pLastWeatherImageSpaceMod2,
+        ] {
+            let instance = e.get(this, field);
+            e.mem.set_u8(instance.addr() + 8, 1);
+        }
+    }
+
+    let mode = e.get(this, Sky::eMode);
+    if mode == 1 || mode == 0 {
+        for field in [
+            Sky::pCurrentWeatherImageSpaceMod,
+            Sky::pCurrentWeatherImageSpaceMod2,
+            Sky::pLastWeatherImageSpaceMod,
+            Sky::pLastWeatherImageSpaceMod2,
+        ] {
+            let instance = e.get(this, field);
+            e.call(IMAGE_SPACE_SET_WEIGHT, &args![instance, 0.0f32]);
+        }
+        return;
+    }
+
+    let mut second = false;
+    let mut blend = 1.0f32;
+    let mut index_second = 0u32;
+    let sunrise_begin = fn_0063b9b0(e, this);
+    let sunrise_end = e.call(SKY_SUNRISE_END, &args![this]).f32();
+    let sunset_begin = e.call(SKY_SUNSET_BEGIN, &args![this]).f32();
+    let sunset_end = fn_0063ba30(e, this);
+    let hour = e.get(this, Sky::fCurrentGameHour);
+    let noon = e.get(this, Sky::fHighNoon);
+    let half: f64 = e.global(DOUBLE_HALF);
+    let index_first: u32;
+    if sunrise_begin < hour && hour < sunrise_end {
+        // Dawn: two forms, the blend peaks at the middle of the transition.
+        second = true;
+        index_first = 0;
+        let span = ((sunrise_end as f64 - sunrise_begin as f64) * half) as f32;
+        let middle = (sunrise_begin as f64 + span as f64) as f32;
+        let distance = if middle > hour {
+            index_second = 3;
+            middle as f64 - hour as f64
+        } else {
+            index_second = 1;
+            hour as f64 - middle as f64
+        };
+        blend = (1.0 - distance / span as f64) as f32;
+    } else if sunrise_end < hour && noon > hour {
+        second = true;
+        index_first = 1;
+        index_second = 4;
+        let span = (noon as f64 - sunrise_end as f64) as f32;
+        blend = (1.0 - (noon as f64 - hour as f64) / span as f64) as f32;
+    } else if hour > noon && sunset_begin > hour {
+        second = true;
+        index_first = 4;
+        index_second = 1;
+        let span = (sunset_begin as f64 - noon as f64) as f32;
+        blend = (1.0 - (sunset_begin as f64 - hour as f64) / span as f64) as f32;
+    } else if sunset_begin < hour && sunset_end > hour {
+        second = true;
+        index_first = 2;
+        let span = ((sunset_end as f64 - sunset_begin as f64) * half) as f32;
+        let middle = (sunset_begin as f64 + span as f64) as f32;
+        let distance = if middle > hour {
+            index_second = 1;
+            middle as f64 - hour as f64
+        } else {
+            index_second = 3;
+            hour as f64 - middle as f64
+        };
+        blend = (1.0 - distance / span as f64) as f32;
+    } else if sunset_end <= hour || sunrise_begin >= hour {
+        index_first = 3;
+    } else {
+        e.call(LOG_MASTERFILE_ERROR, &args![TRANSITION_TIMES_MESSAGE]);
+        index_first = 1;
+    }
+
+    let current = e.get(this, Sky::pCurrentWeather);
+    let pct = e.get(this, Sky::fCurrentWeatherPct);
+    let form = weather_image_space(e, current, index_first);
+    let instance = e.get(this, Sky::pCurrentWeatherImageSpaceMod);
+    drive_image_space(e, instance, (pct as f64 * blend as f64) as f32, form);
+    if second {
+        let current = e.get(this, Sky::pCurrentWeather);
+        let form = weather_image_space(e, current, index_second);
+        let instance = e.get(this, Sky::pCurrentWeatherImageSpaceMod2);
+        drive_image_space(
+            e,
+            instance,
+            ((1.0 - blend as f64) * pct as f64) as f32,
+            form,
+        );
+    } else {
+        let instance = e.get(this, Sky::pCurrentWeatherImageSpaceMod2);
+        e.call(IMAGE_SPACE_SET_WEIGHT, &args![instance, 0.0f32]);
+    }
+
+    let last = e.get(this, Sky::pLastWeather);
+    let one: f64 = e.global(DOUBLE_ONE);
+    if !last.is_null() && (pct as f64) < one {
+        let form = weather_image_space(e, last, index_first);
+        let instance = e.get(this, Sky::pLastWeatherImageSpaceMod);
+        drive_image_space(
+            e,
+            instance,
+            ((1.0 - pct as f64) * blend as f64) as f32,
+            form,
+        );
+        if second {
+            let form = weather_image_space(e, last, index_second);
+            let instance = e.get(this, Sky::pLastWeatherImageSpaceMod2);
+            drive_image_space(
+                e,
+                instance,
+                ((1.0 - pct as f64) * (1.0 - blend as f64)) as f32,
+                form,
+            );
+        } else {
+            let instance = e.get(this, Sky::pLastWeatherImageSpaceMod2);
+            e.call(IMAGE_SPACE_SET_WEIGHT, &args![instance, 0.0f32]);
+        }
+    } else {
+        for field in [
+            Sky::pLastWeatherImageSpaceMod,
+            Sky::pLastWeatherImageSpaceMod2,
+        ] {
+            let instance = e.get(this, field);
+            e.call(IMAGE_SPACE_SET_WEIGHT, &args![instance, 0.0f32]);
+        }
+    }
+}
 // @@FUNCS
 
 /// This unit's translated functions, by exe address.
@@ -2046,6 +3580,30 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0063d000, fn_0063d000(Ptr) -> bool),
         entry!(0x0063d020, fn_0063d020(Ptr) -> bool),
         entry!(0x0063d040, fn_0063d040(Ptr) -> Ptr),
+        entry!(0x0063d060, sky_reset_weather(Ptr<Sky>)),
+        entry!(0x0063d0e0, sky_force_weather(Ptr<Sky>, Ptr, bool)),
+        entry!(0x0063d1d0, fn_0063d1d0(Ptr<Sky>)),
+        entry!(0x0063d5c0, fn_0063d5c0(Ptr) -> Ptr),
+        entry!(0x0063d5e0, fn_0063d5e0(Ptr<Sky>)),
+        entry!(0x0063dd50, fn_0063dd50(Ptr, i32) -> u8),
+        entry!(0x0063dd70, fn_0063dd70(Ptr<SkySound>) -> bool),
+        entry!(0x0063dd90, fn_0063dd90(Ptr<SkySound>)),
+        entry!(0x0063ddb0, fn_0063ddb0(Ptr<Sky>, Ptr)),
+        entry!(0x0063dff0, fn_0063dff0(Ptr) -> Ptr),
+        entry!(0x0063e010, fn_0063e010(Ptr<Sky>)),
+        entry!(0x0063e060, fn_0063e060(Ptr<Sky>, u32, Ptr) -> bool),
+        entry!(0x0063e0d0, sky_sound_play(Ptr<SkySound>, f32)),
+        entry!(0x0063e210, sky_unload_all_textures(Ptr<Sky>)),
+        entry!(0x0063e290, fn_0063e290(Ptr)),
+        entry!(0x0063e2f0, fn_0063e2f0(Ptr<Sky>)),
+        entry!(0x0063e860, fn_0063e860(Ptr<Sky>, bool)),
+        entry!(0x0063e8f0, sky_set_fast_travel(Ptr<Sky>, bool)),
+        entry!(0x0063e940, fn_0063e940(Ptr) -> u16),
+        entry!(0x0063e9f0, sky_save_game(Ptr<Sky>)),
+        entry!(0x0063eb70, sky_save_game_ov2(Ptr<Sky>, Ptr)),
+        entry!(0x0063ecb0, sky_load_game(Ptr<Sky>, Ptr)),
+        entry!(0x0063ef00, fn_0063ef00(Ptr) -> bool),
+        entry!(0x0063ef20, sky_update_hdr_values(Ptr<Sky>)),
     ]
 }
 
@@ -3867,5 +5425,1501 @@ mod tests {
         assert_eq!(e.call(0x0063_d040, &args![sun]).u32(), 0xabcd);
     }
 
+    // ---- tests of the weather transition, sound and texture functions ----
+
+    fn calls_to(log: &[(u32, Vec<u32>)], address: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, args)| args.clone())
+            .collect()
+    }
+
+    /// Doubles for the image-space drive: the form for index `i` is
+    /// `0x100 + i`, the default form is 1.
+    fn hdr_doubles(e: &mut Engine) {
+        e.register(IMAGE_SPACE_SET_WEIGHT, |_, _| Ret::default());
+        e.register(IMAGE_SPACE_SET_FORM, |_, _| Ret::default());
+        e.register(WEATHER_IMAGE_SPACE_FOR_TIME, |_, a| ret(0x100 + a[1]));
+        e.register(DEFAULT_IMAGE_SPACE, |_, _| ret(1));
+    }
+
+    const INSTANCE_CURRENT: u32 = 0x7101;
+    const INSTANCE_CURRENT_2: u32 = 0x7102;
+    const INSTANCE_LAST: u32 = 0x7103;
+    const INSTANCE_LAST_2: u32 = 0x7104;
+
+    /// A sky in mode 0 whose four image-space instances exist (so that
+    /// `Sky::UpdateHDRValues` only sets four weights of 0).
+    fn sky_with_instances(e: &mut Engine) -> Ptr<Sky> {
+        let sky = new_sky(e);
+        e.set(
+            sky,
+            Sky::pCurrentWeatherImageSpaceMod,
+            Ptr::new(INSTANCE_CURRENT),
+        );
+        e.set(
+            sky,
+            Sky::pCurrentWeatherImageSpaceMod2,
+            Ptr::new(INSTANCE_CURRENT_2),
+        );
+        e.set(sky, Sky::pLastWeatherImageSpaceMod, Ptr::new(INSTANCE_LAST));
+        e.set(
+            sky,
+            Sky::pLastWeatherImageSpaceMod2,
+            Ptr::new(INSTANCE_LAST_2),
+        );
+        sky
+    }
+
+    /// The weights set on `instance`, in order.
+    fn weights_of(log: &[(u32, Vec<u32>)], instance: u32) -> Vec<f32> {
+        calls_to(log, IMAGE_SPACE_SET_WEIGHT)
+            .iter()
+            .filter(|args| args[0] == instance)
+            .map(|args| f32::from_bits(args[1]))
+            .collect()
+    }
+
+    fn weather_engine() -> Engine {
+        let mut e = with_data(engine());
+        hdr_doubles(&mut e);
+        e.set_global(WORLD_STATE_POINTER, 0x9000u32);
+        e.register(WORLD_STATE_FLAG, |_, _| ret(0));
+        e.set_global(PLAYER_CHARACTER, 0x7000u32);
+        e.register(PLAYER_WEATHER_OWNER, |_, _| ret(0));
+        e.register(WEATHER_OF_OWNER, |_, _| ret(0));
+        e.register(CLIMATE_UPDATE_BYTE, |_, _| ret(255));
+        e.register(SETTING_FLOAT_VALUE, |_, a| ret(a[0]));
+        e.register(PRECIPITATION_FLUSH_ALL, |_, _| Ret::default());
+        e.register(CLOUDS_CLEAR_TRANS_TEXTURES, |_, _| Ret::default());
+        e.set_global(REGION_HOLDER, 0x8000u32);
+        e.register(REGION_LIST_OWNER, |_, _| ret(0));
+        e.register(REGION_UPDATE_WEATHER, |_, _| Ret::default());
+        e.register(CLIMATE_PICK_WEATHER, |_, _| ret(0x4000));
+        e
+    }
+
+    #[test]
+    fn reset_weather_forgets_the_weathers_and_clears_the_effects() {
+        let mut e = weather_engine();
+        let sky = sky_with_instances(&mut e);
+        e.set(sky, Sky::uiFlags, 8);
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(0x100));
+        e.set(sky, Sky::pLastWeather, Ptr::new(0x200));
+        e.set(sky, Sky::pOverrideWeather, Ptr::new(0x300));
+        e.set(sky, Sky::fAccelBeginPct, 0.3);
+        e.set(sky, Sky::pClouds, Ptr::new(0x5000));
+        e.set(sky, Sky::pPrecip, Ptr::new(0x6000));
+        e.call_log = Some(vec![]);
+        e.call(0x0063_d060, &args![sky]);
+        // Flag 8 (acceleration) is cleared with its start value, flag 1 set.
+        assert_eq!(e.get(sky, Sky::uiFlags), 1);
+        assert_eq!(e.get(sky, Sky::fAccelBeginPct), 0.0);
+        assert!(e.get(sky, Sky::pCurrentWeather).is_null());
+        assert!(e.get(sky, Sky::pLastWeather).is_null());
+        assert!(e.get(sky, Sky::pOverrideWeather).is_null());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            addresses(&log)[..3],
+            [
+                0x0063_d060,
+                CLOUDS_CLEAR_TRANS_TEXTURES,
+                PRECIPITATION_FLUSH_ALL
+            ]
+        );
+        assert!(log.contains(&(CLOUDS_CLEAR_TRANS_TEXTURES, vec![0x5000])));
+        assert!(log.contains(&(PRECIPITATION_FLUSH_ALL, vec![0x6000])));
+        // The image-space values are recomputed (mode 0: four weights of 0).
+        assert_eq!(calls_to(&log, IMAGE_SPACE_SET_WEIGHT).len(), 4);
+
+        // Without clouds and precipitation neither is touched.
+        let sky = sky_with_instances(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_d060, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        assert!(!addresses(&log).contains(&CLOUDS_CLEAR_TRANS_TEXTURES));
+        assert!(!addresses(&log).contains(&PRECIPITATION_FLUSH_ALL));
+    }
+
+    #[test]
+    fn force_weather_makes_the_weather_default_or_override() {
+        let mut e = weather_engine();
+        e.register(PLAYER_METHOD_0093A7A0, |_, _| Ret::default());
+        let sky = sky_with_instances(&mut e);
+        e.set(sky, Sky::uiFlags, 0x9);
+        e.set(sky, Sky::fCurrentGameHour, 9.5);
+        e.set(sky, Sky::pLastWeather, Ptr::new(0x200));
+        e.set(sky, Sky::pOverrideWeather, Ptr::new(0x300));
+        e.set(sky, Sky::pClouds, Ptr::new(0x5000));
+        e.call_log = Some(vec![]);
+        e.call(0x0063_d0e0, &args![sky, 0x400u32, false]);
+        assert_eq!(e.get(sky, Sky::pDefaultWeather).addr(), 0x400);
+        assert_eq!(e.get(sky, Sky::pCurrentWeather).addr(), 0x400);
+        assert!(e.get(sky, Sky::pOverrideWeather).is_null());
+        assert!(e.get(sky, Sky::pLastWeather).is_null());
+        assert_eq!(e.get(sky, Sky::fCurrentWeatherPct), 1.0);
+        assert_eq!(e.get(sky, Sky::fLastWeatherUpdate), 9.5);
+        // Flag 8 cleared by the acceleration reset, flag 2 set, flag 1 cleared.
+        assert_eq!(e.get(sky, Sky::uiFlags), 2);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(PLAYER_METHOD_0093A7A0, vec![0x7000, 0])));
+        // The clouds are cleared after the image-space update.
+        let last_weight = log
+            .iter()
+            .rposition(|(a, _)| *a == IMAGE_SPACE_SET_WEIGHT)
+            .unwrap();
+        let clear = log
+            .iter()
+            .position(|(a, _)| *a == CLOUDS_CLEAR_TRANS_TEXTURES)
+            .unwrap();
+        assert!(last_weight < clear);
+
+        e.call(0x0063_d0e0, &args![sky, 0x500u32, true]);
+        assert_eq!(e.get(sky, Sky::pOverrideWeather).addr(), 0x500);
+        assert_eq!(e.get(sky, Sky::pCurrentWeather).addr(), 0x500);
+        assert!(e.get(sky, Sky::pDefaultWeather).is_null());
+    }
+
+    #[test]
+    fn weather_update_does_nothing_without_a_climate() {
+        let mut e = weather_engine();
+        let sky = sky_with_instances(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_d1d0, &args![sky]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn weather_update_asks_the_climate_and_updates_the_regions() {
+        let mut e = weather_engine();
+        let sky = sky_with_instances(&mut e);
+        let climate = e.mem.alloc(0x100);
+        e.set(sky, Sky::pCurrentClimate, Ptr::new(climate));
+        e.set(sky, Sky::uiFlags, 1);
+        e.set(sky, Sky::fCurrentGameHour, 9.0);
+        // The region list: one node `{ region, next = 0 }` at `owner + 4`.
+        let owner = e.mem.alloc(0x10);
+        e.mem.set_u32(owner + 4, 0x5500);
+        e.register_double(REGION_LIST_OWNER, move |_, _| ret(owner));
+        e.call_log = Some(vec![]);
+        e.call(0x0063_d1d0, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(CLIMATE_PICK_WEATHER, vec![climate + 0x30])));
+        assert!(log.contains(&(REGION_UPDATE_WEATHER, vec![0x5500])));
+        assert!(!addresses(&log).contains(&LOOKUP_FORM));
+        // The picked weather is the default and becomes current; there was
+        // no current weather, so there is no last one and the blend is 1.
+        assert_eq!(e.get(sky, Sky::pDefaultWeather).addr(), 0x4000);
+        assert_eq!(e.get(sky, Sky::pCurrentWeather).addr(), 0x4000);
+        assert!(e.get(sky, Sky::pLastWeather).is_null());
+        assert_eq!(e.get(sky, Sky::fCurrentWeatherPct), 1.0);
+        assert_eq!(e.get(sky, Sky::fLastWeatherUpdate), 9.0);
+        assert_eq!(e.get(sky, Sky::uiFlags), 1);
+        assert_eq!(calls_to(&log, IMAGE_SPACE_SET_WEIGHT).len(), 4);
+
+        // A climate with no weather: the form 0x15e is looked up and cast.
+        e.register(CLIMATE_PICK_WEATHER, |_, _| ret(0));
+        e.register(LOOKUP_FORM, |_, a| ret(0x3000 + a[0]));
+        e.register(DYNAMIC_CAST, |_, a| ret(a[0] + 0x1000));
+        let sky = sky_with_instances(&mut e);
+        e.set(sky, Sky::pCurrentClimate, Ptr::new(climate));
+        e.set(sky, Sky::uiFlags, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_d1d0, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(LOOKUP_FORM, vec![0x15e])));
+        assert!(log.contains(&(
+            DYNAMIC_CAST,
+            vec![0x315e, 0, TYPE_DESCRIPTOR_FORM, TYPE_DESCRIPTOR_WEATHER, 0]
+        )));
+        assert_eq!(e.get(sky, Sky::pDefaultWeather).addr(), 0x415e);
+    }
+
+    #[test]
+    fn weather_update_blends_the_last_and_current_weather() {
+        let mut e = weather_engine();
+        e.set_global(0x011c_cc08, 0.0f32);
+        e.set_global(0x011c_cc88, 1.0f32);
+        e.register(WEATHER_BYTE_FRACTION, |_, _| ret_float(4.0));
+        let sky = sky_with_instances(&mut e);
+        e.set(sky, Sky::pCurrentClimate, Ptr::new(0x1000));
+        e.set(sky, Sky::pDefaultWeather, Ptr::new(0x4000));
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(0x4000));
+        e.set(sky, Sky::pLastWeather, Ptr::new(0x4100));
+        e.set(sky, Sky::uiFlags, 1 << 20);
+        e.set(sky, Sky::fCurrentGameHour, 10.0);
+        e.set(sky, Sky::fLastWeatherUpdate, 8.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_d1d0, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        // The last weather exists, so the climate is not asked again; the
+        // transition length comes from the current weather (index 3, high
+        // end, low end).
+        assert!(!addresses(&log).contains(&CLIMATE_PICK_WEATHER));
+        assert_eq!(
+            calls_to(&log, WEATHER_BYTE_FRACTION),
+            [[0x4000, 3, 1.0f32.to_bits(), 0.0f32.to_bits()]]
+        );
+        assert_eq!(e.get(sky, Sky::fCurrentWeatherPct), 0.5);
+        assert_eq!(e.get(sky, Sky::uiFlags), 1 << 20);
+
+        // The acceleration flag re-scales the blend:
+        // (setting + 1) * (pct - start) + start.
+        e.set_global(0x011c_cc28, 1.0f32);
+        e.set(sky, Sky::uiFlags, 8);
+        e.set(sky, Sky::fAccelBeginPct, 0.25);
+        e.call(0x0063_d1d0, &args![sky]);
+        assert_eq!(e.get(sky, Sky::fCurrentWeatherPct), 0.75);
+
+        // A blend above 1 ends the transition and the acceleration.
+        e.set(sky, Sky::uiFlags, 0);
+        e.set(sky, Sky::fCurrentGameHour, 14.0);
+        e.call(0x0063_d1d0, &args![sky]);
+        assert_eq!(e.get(sky, Sky::fCurrentWeatherPct), 1.0);
+        assert!(e.get(sky, Sky::pLastWeather).is_null());
+    }
+
+    #[test]
+    fn weather_update_wraps_the_day_and_uses_the_override() {
+        let mut e = weather_engine();
+        e.set_global(0x011c_cc88, 1.0f32);
+        e.register(WEATHER_BYTE_FRACTION, |_, _| ret_float(4.0));
+        let sky = sky_with_instances(&mut e);
+        e.set(sky, Sky::pCurrentClimate, Ptr::new(0x1000));
+        e.set(sky, Sky::pDefaultWeather, Ptr::new(0x4000));
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(0x4000));
+        e.set(sky, Sky::pOverrideWeather, Ptr::new(0x4200));
+        e.set(sky, Sky::fCurrentGameHour, 1.0);
+        e.set(sky, Sky::fLastWeatherUpdate, 23.0);
+        e.set(sky, Sky::uiFlags, 1 << 20);
+        e.call(0x0063_d1d0, &args![sky]);
+        // The override differs from the current weather: the current one
+        // becomes the last, flag 1 is set and the update hour is now; the
+        // blend is then 0 hours over the transition length.
+        assert_eq!(e.get(sky, Sky::pLastWeather).addr(), 0x4000);
+        assert_eq!(e.get(sky, Sky::pCurrentWeather).addr(), 0x4200);
+        assert_eq!(e.get(sky, Sky::fLastWeatherUpdate), 1.0);
+        assert_eq!(e.get(sky, Sky::uiFlags), (1 << 20) | 1);
+        assert_eq!(e.get(sky, Sky::fCurrentWeatherPct), 0.0);
+
+        // Fast travel (flag 0x10) drops the last weather instead and
+        // flushes the precipitation.
+        let sky = sky_with_instances(&mut e);
+        e.set(sky, Sky::pCurrentClimate, Ptr::new(0x1000));
+        e.set(sky, Sky::pDefaultWeather, Ptr::new(0x4000));
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(0x4100));
+        e.set(sky, Sky::pPrecip, Ptr::new(0x6000));
+        e.set(sky, Sky::uiFlags, 0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_d1d0, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(PRECIPITATION_FLUSH_ALL, vec![0x6000])));
+        assert_eq!(e.get(sky, Sky::pCurrentWeather).addr(), 0x4000);
+        assert!(e.get(sky, Sky::pLastWeather).is_null());
+
+        // Without an override the player's area weather replaces the
+        // default one outside mode 2.
+        e.register(PLAYER_WEATHER_OWNER, |_, _| ret(0x6500));
+        e.register(WEATHER_OF_OWNER, |_, a| {
+            assert_eq!(a[0], 0x6500);
+            ret(0x4300)
+        });
+        let sky = sky_with_instances(&mut e);
+        e.set(sky, Sky::pCurrentClimate, Ptr::new(0x1000));
+        e.set(sky, Sky::pDefaultWeather, Ptr::new(0x4000));
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(0x4100));
+        e.set(sky, Sky::uiFlags, 0x10);
+        e.call(0x0063_d1d0, &args![sky]);
+        assert_eq!(e.get(sky, Sky::pCurrentWeather).addr(), 0x4300);
+        // Mode 2 keeps the default weather.
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(0x4100));
+        e.set(sky, Sky::eMode, 2);
+        // (The image-space update of a visible mode reads the climate hours.)
+        e.set_global(SUNRISE_BEGIN_CACHE, 6.0f32);
+        e.set_global(SUNSET_END_CACHE, 22.0f32);
+        e.register(SKY_SUNRISE_END, |_, _| ret_float(8.0));
+        e.register(SKY_SUNSET_BEGIN, |_, _| ret_float(18.0));
+        e.call(0x0063_d1d0, &args![sky]);
+        assert_eq!(e.get(sky, Sky::pCurrentWeather).addr(), 0x4000);
+    }
+
+    #[test]
+    fn weather_update_with_the_world_flag_only_follows_the_override() {
+        let mut e = weather_engine();
+        e.register(WORLD_STATE_FLAG, |_, _| ret(1));
+        let sky = sky_with_instances(&mut e);
+        e.set(sky, Sky::pCurrentClimate, Ptr::new(0x1000));
+        e.set(sky, Sky::pDefaultWeather, Ptr::new(0x4000));
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(0x4100));
+        e.set(sky, Sky::uiFlags, 0x10);
+        e.set(sky, Sky::fCurrentGameHour, 5.0);
+        // No override: the current weather stays (and flag 1 is cleared).
+        e.call(0x0063_d1d0, &args![sky]);
+        assert_eq!(e.get(sky, Sky::pCurrentWeather).addr(), 0x4100);
+        // An override replaces it; the update hour is not touched while the
+        // world flag is set.
+        e.set(sky, Sky::pOverrideWeather, Ptr::new(0x4200));
+        e.call(0x0063_d1d0, &args![sky]);
+        assert_eq!(e.get(sky, Sky::pCurrentWeather).addr(), 0x4200);
+        assert_eq!(e.get(sky, Sky::fLastWeatherUpdate), 0.0);
+        assert_eq!(e.get(sky, Sky::uiFlags) & 1, 1);
+    }
+
+    #[test]
+    fn climate_weather_forwarder_passes_the_embedded_list() {
+        let mut e = engine();
+        e.register(CLIMATE_PICK_WEATHER, |_, a| ret(a[0] + 1));
+        assert_eq!(e.call(0x0063_d5c0, &args![0x1000u32]).u32(), 0x1031);
+    }
+
+    #[test]
+    fn acceleration_starts_only_with_a_last_weather() {
+        let mut e = engine();
+        let sky = new_sky(&mut e);
+        e.set(sky, Sky::fCurrentWeatherPct, 0.4);
+        // No last weather: the acceleration is cleared.
+        e.set(sky, Sky::uiFlags, 8);
+        e.set(sky, Sky::fAccelBeginPct, 0.9);
+        e.call(0x0063_e860, &args![sky, true]);
+        assert_eq!(e.get(sky, Sky::uiFlags), 0);
+        assert_eq!(e.get(sky, Sky::fAccelBeginPct), 0.0);
+        // A last weather: starts and remembers the blend...
+        e.set(sky, Sky::pLastWeather, Ptr::new(0x4100));
+        e.call(0x0063_e860, &args![sky, true]);
+        assert_eq!(e.get(sky, Sky::uiFlags), 8);
+        assert_eq!(e.get(sky, Sky::fAccelBeginPct), 0.4);
+        // ...but a running acceleration keeps its start value.
+        e.set(sky, Sky::fCurrentWeatherPct, 0.7);
+        e.call(0x0063_e860, &args![sky, true]);
+        assert_eq!(e.get(sky, Sky::fAccelBeginPct), 0.4);
+        // Without `start` it ends.
+        e.call(0x0063_e860, &args![sky, false]);
+        assert_eq!(e.get(sky, Sky::uiFlags), 0);
+        assert_eq!(e.get(sky, Sky::fAccelBeginPct), 0.0);
+    }
+
+    #[test]
+    fn fast_travel_flag_drops_the_override() {
+        let mut e = engine();
+        let sky = new_sky(&mut e);
+        e.set(sky, Sky::pOverrideWeather, Ptr::new(0x300));
+        e.set(sky, Sky::uiFlags, 1);
+        e.call(0x0063_e8f0, &args![sky, true]);
+        assert!(e.get(sky, Sky::pOverrideWeather).is_null());
+        assert_eq!(e.get(sky, Sky::uiFlags), 0x11);
+        e.set(sky, Sky::pOverrideWeather, Ptr::new(0x300));
+        e.call(0x0063_e8f0, &args![sky, false]);
+        assert_eq!(e.get(sky, Sky::pOverrideWeather).addr(), 0x300);
+        assert_eq!(e.get(sky, Sky::uiFlags), 1);
+    }
+
+    // ---- sound ----
+
+    /// A weather sound: handle id at +0, weather at +0xc, type at +0x10, form
+    /// id at +0x14 and data at +0x18.
+    fn make_sound(e: &mut Engine, weather: u32, sound_type: u32, form_id: u32) -> u32 {
+        let sound = e.mem.alloc(0x1c);
+        e.mem.set_u32(sound, 5);
+        e.mem.set_u32(sound + 0xc, weather);
+        e.mem.set_u32(sound + 0x10, sound_type);
+        e.mem.set_u32(sound + 0x14, form_id);
+        sound
+    }
+
+    /// A list of `{ item, next }` nodes; the head is returned (an empty list
+    /// is one empty node).
+    fn make_list(e: &mut Engine, items: &[u32]) -> u32 {
+        let head = e.mem.alloc(8);
+        let mut node = head;
+        for (index, item) in items.iter().enumerate() {
+            e.mem.set_u32(node, *item);
+            if index + 1 < items.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        head
+    }
+
+    fn list_items(e: &Engine, head: u32) -> Vec<u32> {
+        let mut items = vec![];
+        let mut node = head;
+        while node != 0 && e.mem.u32(node) != 0 {
+            items.push(e.mem.u32(node));
+            node = e.mem.u32(node + 4);
+        }
+        items
+    }
+
+    /// Doubles for the sound handles (a handle is valid when its id is not
+    /// -1; the byte at +4 says it is playing) and the list helpers.
+    fn sound_engine() -> Engine {
+        let mut e = with_data(engine());
+        e.register(SOUND_HANDLE_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], u32::MAX);
+            ret(a[0])
+        });
+        e.register(SOUND_HANDLE_ASSIGN, |e, a| {
+            for word in 0..3 {
+                let value = e.mem.u32(a[1] + 4 * word);
+                e.mem.set_u32(a[0] + 4 * word, value);
+            }
+            ret(a[0])
+        });
+        e.register(SOUND_HANDLE_DESTRUCT, |_, _| Ret::default());
+        e.register(SOUND_HANDLE_RELEASE, |_, _| Ret::default());
+        e.register(SOUND_HANDLE_STOP, |_, _| Ret::default());
+        e.register(SOUND_HANDLE_PLAY, |_, _| Ret::default());
+        e.register(SOUND_HANDLE_IS_VALID, |e, a| {
+            ret((e.mem.u32(a[0]) != u32::MAX) as u32)
+        });
+        e.register(SOUND_HANDLE_IS_PLAYING, |e, a| {
+            ret(e.mem.u8(a[0] + 4) as u32)
+        });
+        e.register(SKY_SOUND_BASE_DESTRUCT, |_, _| Ret::default());
+        e.register(MEMSET, |_, _| Ret::default());
+        e.register(LIST_CONSTRUCT, |_, a| ret(a[0]));
+        e.register(LIST_DESTRUCT, |_, _| Ret::default());
+        e.register(LIST_CLEAR, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, 0);
+            Ret::default()
+        });
+        e.register(LIST_SCALAR_DELETING_DESTRUCTOR, |_, _| Ret::default());
+        e.register(LIST_INSERT, |e, a| {
+            let item = e.mem.u32(a[1]);
+            let mut node = a[0];
+            if e.mem.u32(node) != 0 {
+                while e.mem.u32(node + 4) != 0 {
+                    node = e.mem.u32(node + 4);
+                }
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+            e.mem.set_u32(node, item);
+            Ret::default()
+        });
+        e.register(SOUNDS_APPLY, |_, _| ret(0));
+        e.register(IS_IN_MENU_MODE, |_, _| ret(0));
+        e.register(IS_LOADING_MENU_OPEN, |_, _| ret(0));
+        e.register(ABS_FLOAT, |_, a| ret_float(f32::from_bits(a[0]).abs()));
+        e.register(SOUND_HANDLE_GET_VOLUME, |_, _| ret_float(0.2));
+        e.register(SOUND_HANDLE_SET_VOLUME, |_, _| Ret::default());
+        e.register(TICK_COUNT_GET, |_, _| ret(1234));
+        e.set_global(VOLUME_EPSILON, 0.01f64);
+        e
+    }
+
+    /// Doubles under `fn_00639c90`: it accepts when `limit < size`.
+    fn size_limit(e: &mut Engine, size: u32, limit: u32) {
+        e.register_double(0x0045_7fe0, move |_, _| ret(size));
+        e.register(0x0063_9ce0, |_, _| ret(0));
+        e.register_double(0x0042_f5a0, move |_, _| ret(limit));
+        e.register(0x0063_9d00, |_, _| Ret::default());
+    }
+
+    #[test]
+    fn sounds_marked_for_removal_are_dropped_when_the_list_is_rebuilt() {
+        let mut e = sound_engine();
+        let weather = 0x4000;
+        let marked = make_sound(&mut e, weather, 3, 7);
+        e.mem.set_u32(marked + 0x18, 0x8000_0000);
+        let kept = make_sound(&mut e, weather, 0, 8);
+        // The kept sound has no valid handle, so the update loop skips it.
+        e.mem.set_u32(kept, u32::MAX);
+        let old_list = make_list(&mut e, &[marked, kept]);
+        let sky = new_sky(&mut e);
+        e.set(sky, Sky::pSkySoundList, Ptr::new(old_list));
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(weather));
+        e.set_global(SOUNDS_DIRTY, 1u8);
+        e.set_global(SOUND_TYPE_3_COUNT, 2u8);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_d5e0, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        // The marked sound is released and deleted, the count of type-3
+        // sounds goes down, the kept one moves to the new list.
+        assert!(log.contains(&(SOUND_HANDLE_RELEASE, vec![marked])));
+        assert!(log.contains(&(SKY_SOUND_BASE_DESTRUCT, vec![marked])));
+        assert!(log.contains(&(OPERATOR_DELETE, vec![marked])));
+        assert!(!log.contains(&(SOUND_HANDLE_RELEASE, vec![kept])));
+        assert_eq!(e.global::<u8>(SOUND_TYPE_3_COUNT), 1);
+        assert_eq!(e.global::<u8>(SOUNDS_DIRTY), 0);
+        let new_list = e.get(sky, Sky::pSkySoundList).addr();
+        assert_ne!(new_list, old_list);
+        assert_eq!(list_items(&e, new_list), [kept]);
+        // The old list is cleared and deleted (flag 1), and the scratch list
+        // is cleared and destroyed.
+        assert!(log.contains(&(LIST_CLEAR, vec![old_list])));
+        assert!(log.contains(&(LIST_SCALAR_DELETING_DESTRUCTOR, vec![old_list, 1])));
+        assert_eq!(calls_to(&log, LIST_DESTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn sounds_outside_the_visible_modes_are_stopped_and_marked() {
+        let mut e = sound_engine();
+        let sound = make_sound(&mut e, 0x4000, 0, 7);
+        e.mem.set_u8(sound + 4, 1);
+        let list = make_list(&mut e, &[sound]);
+        let sky = new_sky(&mut e);
+        e.set(sky, Sky::pSkySoundList, Ptr::new(list));
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(0x4100));
+        e.set(sky, Sky::eMode, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_d5e0, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        // The other weather (the current one) has no sound 7: stop.
+        assert!(log.contains(&(SOUND_HANDLE_STOP, vec![sound])));
+        assert_eq!(e.mem.u32(sound + 0x18), 0x8000_0000);
+        assert_eq!(e.global::<u8>(SOUNDS_DIRTY), 1);
+
+        // When the other weather has the same sound it keeps playing.
+        let other = make_sound(&mut e, 0x4100, 0, 7);
+        let list = make_list(&mut e, &[sound, other]);
+        e.set(sky, Sky::pSkySoundList, Ptr::new(list));
+        e.mem.set_u32(sound + 0x18, 0);
+        e.set_global(SOUNDS_DIRTY, 0u8);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_d5e0, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        assert!(!addresses(&log).contains(&SOUND_HANDLE_STOP));
+        assert_eq!(e.mem.u32(sound + 0x18), 0x8000_0000);
+    }
+
+    #[test]
+    fn weather_sounds_follow_the_blend() {
+        let mut e = sound_engine();
+        size_limit(&mut e, 10, 20);
+        let sound = make_sound(&mut e, 0x4000, 0, 7);
+        let list = make_list(&mut e, &[sound]);
+        let sky = new_sky(&mut e);
+        e.set(sky, Sky::pSkySoundList, Ptr::new(list));
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(0x4000));
+        e.set(sky, Sky::eMode, 3);
+        e.set(sky, Sky::fCurrentWeatherPct, 0.25);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_d5e0, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        // A plain sound of the current weather plays at the blend (the
+        // handle's volume 0.2 differs from 0.25 by more than 0.01).
+        assert_eq!(
+            calls_to(&log, SOUND_HANDLE_SET_VOLUME),
+            [[sound, 0.25f32.to_bits()]]
+        );
+        assert!(!addresses(&log).contains(&SOUND_HANDLE_STOP));
+
+        // A sound of the last weather plays at 1 - blend.
+        let mut e = sound_engine();
+        size_limit(&mut e, 10, 20);
+        let sound = make_sound(&mut e, 0x4100, 2, 7);
+        let list = make_list(&mut e, &[sound]);
+        let sky = new_sky(&mut e);
+        e.set(sky, Sky::pSkySoundList, Ptr::new(list));
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(0x4000));
+        e.set(sky, Sky::pLastWeather, Ptr::new(0x4100));
+        e.set(sky, Sky::eMode, 2);
+        e.set(sky, Sky::fCurrentWeatherPct, 0.25);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_d5e0, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, SOUND_HANDLE_SET_VOLUME),
+            [[sound, 0.75f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn type_one_sounds_fade_in_and_out_with_the_weather_fractions() {
+        let mut e = sound_engine();
+        size_limit(&mut e, 10, 20);
+        // Index 6: the rising end (0.25); index 7: the falling start (0.5).
+        e.register(WEATHER_BYTE_FRACTION, |_, a| match a[1] {
+            6 => ret_float(0.25),
+            7 => ret_float(0.5),
+            _ => panic!("unexpected index"),
+        });
+        let sound = make_sound(&mut e, 0x4000, 1, 7);
+        let list = make_list(&mut e, &[sound]);
+        let sky = new_sky(&mut e);
+        e.set(sky, Sky::pSkySoundList, Ptr::new(list));
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(0x4000));
+        e.set(sky, Sky::pLastWeather, Ptr::new(0x4100));
+        e.set(sky, Sky::eMode, 3);
+        e.set(sky, Sky::fCurrentWeatherPct, 0.5);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_d5e0, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        let fractions = calls_to(&log, WEATHER_BYTE_FRACTION);
+        assert_eq!(fractions.len(), 2);
+        assert_eq!(fractions[0][..2], [0x4000, 6]);
+        assert_eq!(fractions[1][..2], [0x4100, 7]);
+        // (0.5 - 0.25) / (1 - 0.25) rising; the falling sound has not
+        // started (0.5 is not above the blend 0.5).
+        let expected = ((0.5f64 - 0.25) / (1.0 - 0.25)) as f32;
+        assert_eq!(
+            calls_to(&log, SOUND_HANDLE_SET_VOLUME),
+            [[sound, expected.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn type_three_sounds_start_at_random_and_record_the_flash() {
+        let mut e = sound_engine();
+        let weather = e.mem.alloc(0x400);
+        e.mem.set_u8(weather + 0xea, 2);
+        e.register(RANDOM_NUMBER, |_, _| ret(20));
+        e.set_global(FRACTION_HIGH_SOUND, 0.99f32);
+        e.register(WEATHER_BYTE_FRACTION, |_, a| {
+            assert_eq!(a[1], 8);
+            ret_float(0.5)
+        });
+        size_limit(&mut e, 100, 10);
+        e.set_global(SOUND_TYPE_3_COUNT, 5u8);
+        let sound = make_sound(&mut e, weather, 3, 7);
+        let list = make_list(&mut e, &[sound]);
+        let sky = new_sky(&mut e);
+        e.set(sky, Sky::pSkySoundList, Ptr::new(list));
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(weather));
+        e.set(sky, Sky::eMode, 3);
+        e.set(sky, Sky::fCurrentWeatherPct, 0.75);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_d5e0, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        // 20 % (2 * 5) == 0: the sound starts at (0.75 - 0.5) / (1 - 0.5);
+        // the fraction is asked with index 8, the high end from the exe's
+        // data and 0 as the low end.
+        assert_eq!(
+            calls_to(&log, WEATHER_BYTE_FRACTION),
+            [[weather, 8, 0.99f32.to_bits(), 0.0f32.to_bits()]]
+        );
+        assert_eq!(calls_to(&log, SOUND_HANDLE_PLAY), [[sound, 0]]);
+        assert_eq!(e.get(sky, Sky::fFlash), 0.5);
+        assert_eq!(e.get(sky, Sky::uiFlashTime), 1234);
+
+        // A roll that is not a multiple of the divisor does nothing.
+        e.register(RANDOM_NUMBER, |_, _| ret(21));
+        e.set(sky, Sky::fFlash, 0.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_d5e0, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        assert!(!addresses(&log).contains(&SOUND_HANDLE_PLAY));
+        assert_eq!(e.get(sky, Sky::fFlash), 0.0);
+    }
+
+    #[test]
+    fn weather_sound_accessors_read_and_mark() {
+        let mut e = engine();
+        let weather = e.mem.alloc(0x400);
+        e.mem.set_u8(weather + 0xe0 + 3, 9);
+        assert_eq!(e.call(0x0063_dd50, &args![weather, 3i32]).u8(), 9);
+        assert_eq!(e.call(0x0063_dff0, &args![weather]).u32(), weather + 0x1f8);
+        let sound = make_sound(&mut e, 0, 0, 0);
+        assert!(!e.call(0x0063_dd70, &args![sound]).bool());
+        e.call(0x0063_dd90, &args![sound]);
+        assert!(e.call(0x0063_dd70, &args![sound]).bool());
+        assert_eq!(e.mem.u32(sound + 0x18), 0x8000_0000);
+    }
+
+    #[test]
+    fn weather_sounds_are_added_unless_already_listed() {
+        let mut e = sound_engine();
+        e.register(SETTING_BYTE_VALUE, |_, a| ret(a[0]));
+        e.register(AUDIO_INSTANCE, |_, _| ret(0xa000));
+        e.register(AUDIO_GET_SOUND_HANDLE, |e, a| {
+            // (audio, out, id, flags): a handle with the id.
+            assert_eq!(a[0], 0xa000);
+            e.mem.set_u32(a[1], a[2]);
+            e.mem.set_u32(a[1] + 4, a[3]);
+            ret(a[1])
+        });
+        e.set_global(SETTING_PRECIPITATION, 1u8);
+        let weather = e.mem.alloc(0x400);
+        // Two descriptions: `{ form id 70, type 3 }` and `{ 71, type 1 }`.
+        let first = e.mem.alloc(8);
+        e.mem.set_u32(first, 70);
+        e.mem.set_u32(first + 4, 3);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(second, 71);
+        e.mem.set_u32(second + 4, 1);
+        let descriptions = make_list(&mut e, &[first, second]);
+        // `weather + 0x1f8` is the head node itself: copy the first node.
+        let node_item = e.mem.u32(descriptions);
+        let node_next = e.mem.u32(descriptions + 4);
+        e.mem.set_u32(weather + 0x1f8, node_item);
+        e.mem.set_u32(weather + 0x1fc, node_next);
+        let existing = make_sound(&mut e, weather, 1, 71);
+        let list = make_list(&mut e, &[existing]);
+        let sky = new_sky(&mut e);
+        e.set(sky, Sky::pSkySoundList, Ptr::new(list));
+        e.set_global(SOUND_TYPE_3_COUNT, 0u8);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_ddb0, &args![sky, weather]);
+        let log = e.call_log.take().unwrap();
+        // Handles are requested with 0x21 (type 3) and 0x31 (other types).
+        let requests = calls_to(&log, AUDIO_GET_SOUND_HANDLE);
+        assert_eq!(requests.len(), 2);
+        assert_eq!((requests[0][2], requests[0][3]), (70, 0x21));
+        assert_eq!((requests[1][2], requests[1][3]), (71, 0x31));
+        // Sound 70 is new: a SkySound is inserted and counted; sound 71 is
+        // already listed, so only its handle is released.
+        let items = list_items(&e, list);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0], existing);
+        let added = items[1];
+        assert_eq!(e.mem.u32(added), 70);
+        assert_eq!(e.mem.u32(added + 0xc), weather);
+        assert_eq!(e.mem.u32(added + 0x10), 3);
+        assert_eq!(e.mem.u32(added + 0x14), 70);
+        assert_eq!(e.global::<u8>(SOUND_TYPE_3_COUNT), 1);
+        assert_eq!(calls_to(&log, SOUND_HANDLE_RELEASE).len(), 1);
+        // A request and a handle per description, plus the copy that the
+        // `SkySound` constructor destroys.
+        assert_eq!(calls_to(&log, SOUND_HANDLE_DESTRUCT).len(), 5);
+
+        // A type-1 sound is skipped while the precipitation setting is off.
+        e.set_global(SETTING_PRECIPITATION, 0u8);
+        e.mem.set_u32(weather + 0x1f8, second);
+        e.mem.set_u32(weather + 0x1fc, 0);
+        let list = make_list(&mut e, &[]);
+        e.set(sky, Sky::pSkySoundList, Ptr::new(list));
+        e.call_log = Some(vec![]);
+        e.call(0x0063_ddb0, &args![sky, weather]);
+        let log = e.call_log.take().unwrap();
+        assert!(!addresses(&log).contains(&AUDIO_GET_SOUND_HANDLE));
+        // No weather: nothing happens at all.
+        e.call_log = Some(vec![]);
+        e.call(0x0063_ddb0, &args![sky, 0u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn sound_list_searches_stop_at_the_first_empty_node() {
+        let mut e = sound_engine();
+        let first = make_sound(&mut e, 0x4000, 0, 7);
+        let second = make_sound(&mut e, 0x4100, 0, 8);
+        let list = make_list(&mut e, &[first, second]);
+        let sky = new_sky(&mut e);
+        e.set(sky, Sky::pSkySoundList, Ptr::new(list));
+        assert!(e.call(0x0063_e060, &args![sky, 8u32, 0x4100u32]).bool());
+        assert!(!e.call(0x0063_e060, &args![sky, 8u32, 0x4000u32]).bool());
+        assert!(!e.call(0x0063_e060, &args![sky, 9u32, 0x4100u32]).bool());
+        let empty = make_list(&mut e, &[]);
+        e.set(sky, Sky::pSkySoundList, Ptr::new(empty));
+        assert!(!e.call(0x0063_e060, &args![sky, 7u32, 0x4000u32]).bool());
+
+        e.set(sky, Sky::pSkySoundList, Ptr::new(list));
+        e.call_log = Some(vec![]);
+        e.call(0x0063_e010, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, SOUND_HANDLE_STOP), [[first], [second]]);
+    }
+
+    #[test]
+    fn sky_sound_play_respects_menus_and_sets_the_volume() {
+        let mut e = sound_engine();
+        size_limit(&mut e, 10, 20);
+        e.register(AUDIO_INSTANCE, |_, _| ret(0xa000));
+        e.register(AUDIO_GET_SOUND_HANDLE, |e, a| {
+            e.mem.set_u32(a[1], a[2]);
+            ret(a[1])
+        });
+        let sound = make_sound(&mut e, 0x4000, 3, 7);
+        // In menu mode nothing happens.
+        e.register(IS_IN_MENU_MODE, |_, _| ret(1));
+        e.call_log = Some(vec![]);
+        e.call(0x0063_e0d0, &args![sound, 0.5f32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 2);
+        // While the loading menu is open nothing happens either.
+        e.register(IS_IN_MENU_MODE, |_, _| ret(0));
+        e.register(IS_LOADING_MENU_OPEN, |_, _| ret(1));
+        e.call_log = Some(vec![]);
+        e.call(0x0063_e0d0, &args![sound, 0.5f32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 3);
+        e.register(IS_LOADING_MENU_OPEN, |_, _| ret(0));
+
+        // A sound without a valid handle asks for a new one (flags 0x20,
+        // the id read from the sound), a type-3 sound starts with Play(0).
+        e.mem.set_u32(sound, u32::MAX);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_e0d0, &args![sound, 0.5f32]);
+        let log = e.call_log.take().unwrap();
+        // NiPointer::get is the double of `engine()`: it reads the word.
+        let request = &calls_to(&log, AUDIO_GET_SOUND_HANDLE)[0];
+        assert_eq!((request[2], request[3]), (u32::MAX, 0x20));
+        assert_eq!(calls_to(&log, SOUND_HANDLE_PLAY), [[sound, 0]]);
+        // The volume 0.2 differs from 0.5 by more than 0.01.
+        assert_eq!(
+            calls_to(&log, SOUND_HANDLE_SET_VOLUME),
+            [[sound, 0.5f32.to_bits()]]
+        );
+
+        // A volume within 0.01 is left alone; a playing type-3 sound is not
+        // started again.
+        e.mem.set_u32(sound, 5);
+        e.mem.set_u8(sound + 4, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_e0d0, &args![sound, 0.205f32]);
+        let log = e.call_log.take().unwrap();
+        assert!(!addresses(&log).contains(&SOUND_HANDLE_PLAY));
+        assert!(!addresses(&log).contains(&SOUND_HANDLE_SET_VOLUME));
+    }
+
+    #[test]
+    fn sky_sound_play_starts_other_types_when_allowed() {
+        let mut e = sound_engine();
+        let sound = make_sound(&mut e, 0x4000, 0, 7);
+        // `fn_00639c90(1000)` rejects: no Play.
+        size_limit(&mut e, 10, 20);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_e0d0, &args![sound, 0.2f32]);
+        let log = e.call_log.take().unwrap();
+        assert!(!addresses(&log).contains(&SOUND_HANDLE_PLAY));
+        // It accepts: Play(1).
+        size_limit(&mut e, 100, 10);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_e0d0, &args![sound, 0.2f32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, SOUND_HANDLE_PLAY), [[sound, 1]]);
+        assert!(log.contains(&(0x0063_9d00, vec![sound, 100 + 1000])));
+    }
+
+    // ---- textures, save, load and image-space values ----
+
+    #[test]
+    fn unloading_the_textures_unloads_every_component() {
+        let mut e = engine();
+        install_vtable(&mut e);
+        for address in [
+            CLOUDS_REMOVE_TEXTURES,
+            CLOUDS_CLEAR_TRANS_TEXTURES,
+            MOON_UNLOAD_TEXTURES,
+            SUN_UNLOAD_TEXTURES,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        let sky = new_sky(&mut e);
+        // Without components nothing is called.
+        e.call_log = Some(vec![]);
+        e.call(0x0063_e210, &args![sky]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+
+        e.set(sky, Sky::pClouds, Ptr::new(0x5000));
+        e.set(sky, Sky::pMasser, Ptr::new(0x5100));
+        e.set(sky, Sky::pSecunda, Ptr::new(0x5200));
+        e.set(sky, Sky::pSun, Ptr::new(0x5300));
+        // The stars: `+4` holds an object with a vtable, `+8` another one.
+        let stars = e.mem.alloc(0x10);
+        let object = object_with_vtable(&mut e, 0x10);
+        e.mem.set_u32(stars + 4, object.addr());
+        e.mem.set_u32(stars + 8, 0x5500);
+        e.set(sky, Sky::pStars, Ptr::new(stars));
+        e.call_log = Some(vec![]);
+        e.call(0x0063_e210, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            addresses(&log),
+            [
+                0x0063_e210,
+                CLOUDS_REMOVE_TEXTURES,
+                CLOUDS_CLEAR_TRANS_TEXTURES,
+                MOON_UNLOAD_TEXTURES,
+                MOON_UNLOAD_TEXTURES,
+                SUN_UNLOAD_TEXTURES,
+                NI_POINTER_GET,
+                NI_POINTER_GET,
+                NI_POINTER_GET,
+                SLOT_BASE + 0xe8,
+                NI_POINTER_ASSIGN,
+            ]
+        );
+        assert!(log.contains(&(MOON_UNLOAD_TEXTURES, vec![0x5100])));
+        assert!(log.contains(&(MOON_UNLOAD_TEXTURES, vec![0x5200])));
+        // The stars' second object is passed to the first one's slot 0xe8
+        // and the second pointer is cleared.
+        assert!(log.contains(&(SLOT_BASE + 0xe8, vec![object.addr(), 0x5500])));
+        assert_eq!(e.mem.u32(stars + 8), 0);
+    }
+
+    #[test]
+    fn stars_release_does_nothing_but_clear_without_an_object() {
+        let mut e = engine();
+        let stars = e.mem.alloc(0x10);
+        e.mem.set_u32(stars + 8, 0x5500);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_e290, &args![stars]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            addresses(&log),
+            [0x0063_e290, NI_POINTER_GET, NI_POINTER_ASSIGN]
+        );
+        assert_eq!(e.mem.u32(stars + 8), 0);
+    }
+
+    /// The doubles of the texture loading, with a vtable whose slot 0x18
+    /// returns 0x6100.
+    fn texture_engine() -> Engine {
+        let mut e = climate_update_engine();
+        e.register(WORLD_STATE_FLAG, |_, _| ret(0));
+        e.set_global(WORLD_STATE_POINTER, 0x9000u32);
+        e.register(CLOUDS_LAYER_COUNT, |_, _| ret(2));
+        e.register(NODE_GET_PROPERTY, |_, a| ret(0x8100 + a[0]));
+        e.register(WEATHER_CLOUD_ENTRY, |e, a| {
+            // Layer 0 has an entry (an object with the vtable), layer 1 none.
+            assert_eq!(a[0], 0x4000);
+            if a[1] == 0 {
+                let entry = e.mem.alloc(0x10);
+                e.mem.set_u32(entry, VTABLE);
+                ret(entry)
+            } else {
+                ret(0)
+            }
+        });
+        e.register(FORMAT_STRING, |_, _| Ret::default());
+        e.register(FILE_EXISTS, |_, _| ret(1));
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e
+    }
+
+    #[test]
+    fn visible_sky_textures_are_loaded_for_clouds_moons_sun_and_stars() {
+        let mut e = texture_engine();
+        let sky = new_sky(&mut e);
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(0x4000));
+        // Clouds: layer nodes at `clouds + 8 + 4 * layer`.
+        let clouds = e.mem.alloc(0x20);
+        e.mem.set_u32(clouds + 8, 0x5800);
+        e.mem.set_u32(clouds + 12, 0x5900);
+        e.set(sky, Sky::pClouds, Ptr::new(clouds));
+        // One moon (Masser) whose node is at `+0x14`.
+        let moon = e.mem.alloc(0x80);
+        e.mem.set_u32(moon + 0x14, 0x5a00);
+        e.set(sky, Sky::pMasser, Ptr::new(moon));
+        // The sun and the climate with its entries.
+        let climate = e.mem.alloc(0x80);
+        e.mem.set_u32(climate + 0x18, VTABLE);
+        e.mem.set_u32(climate + 0x38, VTABLE);
+        e.set(sky, Sky::pCurrentClimate, Ptr::new(climate));
+        let sun = e.mem.alloc(0x30);
+        e.mem.set_u32(sun + 8, 0x5100);
+        e.mem.set_u32(sun + 0xc, 0x5200);
+        e.mem.set_u32(sun + 0x14, 0x5300);
+        e.set(sky, Sky::pSun, Ptr::new(sun));
+        let stars = e.mem.alloc(0x10);
+        e.set(sky, Sky::pStars, Ptr::new(stars));
+        e.call_log = Some(vec![]);
+        e.call(0x0063_e2f0, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        // The scope timer wraps everything, with the source line 0x8dc.
+        assert_eq!(addresses(&log)[1], TIMER_SCOPE_CONSTRUCT);
+        assert_eq!(*log[1].1.last().unwrap(), 0x8dc);
+        assert_eq!(*addresses(&log).last().unwrap(), TIMER_SCOPE_DESTROY);
+        // Layer 0 is formatted ("%s%s": prefix, name), exists, and loads
+        // into the property types 5 and 3 of the layer's node; layer 1 has
+        // no entry.
+        let formats = calls_to(&log, FORMAT_STRING);
+        assert_eq!(formats.len(), 1);
+        assert_eq!(formats[0][1..], [PATH_FORMAT, 0x6100, 0x6200]);
+        assert_eq!(calls_to(&log, FILE_EXISTS).len(), 1);
+        assert!(log.contains(&(NODE_GET_PROPERTY, vec![0x5800, 5])));
+        assert!(log.contains(&(NODE_GET_PROPERTY, vec![0x5800, 3])));
+        assert!(!log.contains(&(NODE_GET_PROPERTY, vec![0x5900, 5])));
+        // The moon shadow texture loads with the constant path; the moon's
+        // node is flagged and its state word is 2.
+        assert_eq!(
+            calls_to(&log, TEXTURE_LOAD)
+                .iter()
+                .filter(|args| args[0] == MOON_SHADOW_PATH)
+                .count(),
+            1
+        );
+        assert!(log.contains(&(NODE_SET_FLAG_BIT_20, vec![0x5a00, 1])));
+        assert_eq!(e.mem.u32(moon + 0x70), 2);
+        // The sun: both entries are entry 0 of the climate (+0x38), so the
+        // path is built twice; both sun nodes are flagged.
+        assert_eq!(calls_to(&log, STRING_ASSIGN).len(), 2);
+        assert!(log.contains(&(NODE_SET_FLAG_BIT_20, vec![0x5100, 1])));
+        assert!(log.contains(&(NODE_SET_FLAG_BIT_20, vec![0x5200, 1])));
+        // The stars get the climate's geometry value (slot 0x14).
+        assert!(log.contains(&(STARS_LOAD_GEOMETRY, vec![stars, 0x5150])));
+    }
+
+    #[test]
+    fn sky_textures_wait_for_the_weather_and_use_the_non_hdr_glare() {
+        let mut e = texture_engine();
+        let sky = new_sky(&mut e);
+        // No weather and no climate: only the timer runs.
+        let clouds = e.mem.alloc(0x20);
+        e.set(sky, Sky::pClouds, Ptr::new(clouds));
+        e.call_log = Some(vec![]);
+        e.call(0x0063_e2f0, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            addresses(&log),
+            [0x0063_e2f0, TIMER_SCOPE_CONSTRUCT, TIMER_SCOPE_DESTROY]
+        );
+
+        // With the world flag set the cloud textures are not loaded; a sun
+        // entry named like the HDR glare is replaced while the flag byte is
+        // clear.
+        e.register(WORLD_STATE_FLAG, |_, _| ret(1));
+        e.register(STRING_COMPARE, |_, a| {
+            assert_eq!((a[0], a[1]), (0x6200, SUN_GLARE_NAME));
+            ret(0)
+        });
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(0x4000));
+        let climate = e.mem.alloc(0x80);
+        e.mem.set_u32(climate + 0x18, VTABLE);
+        e.mem.set_u32(climate + 0x38, VTABLE);
+        e.set(sky, Sky::pCurrentClimate, Ptr::new(climate));
+        let sun = e.mem.alloc(0x30);
+        e.mem.set_u32(sun + 8, 0x5100);
+        e.mem.set_u32(sun + 0xc, 0x5200);
+        e.mem.set_u32(sun + 0x14, 0x5300);
+        e.set(sky, Sky::pSun, Ptr::new(sun));
+        e.set_global(INITIAL_FLAG, 0u8);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_e2f0, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        assert!(!addresses(&log).contains(&WEATHER_CLOUD_ENTRY));
+        assert!(calls_to(&log, STRING_ASSIGN)
+            .iter()
+            .any(|args| args[1] == SUN_GLARE_NON_HDR_PATH));
+    }
+
+    #[test]
+    fn save_size_depends_on_the_save_version() {
+        let mut e = with_data(engine());
+        e.set_global(SAVE_BUFFER_GLOBAL, 0x9100u32);
+        for (version, size) in [(0x5cu32, 28u32), (0x5d, 32), (0x68, 32), (0x69, 40)] {
+            e.register_double(SAVE_VERSION, move |_, _| ret(version));
+            assert_eq!(e.call(0x0063_e940, &args![0x1000u32]).u32(), size);
+        }
+    }
+
+    /// Doubles for the save buffer: the version, form ids (`form + 1`) and
+    /// the recording of everything written.
+    fn save_engine(version: u32) -> Engine {
+        let mut e = with_data(engine());
+        e.set_global(SAVE_BUFFER_GLOBAL, 0x9100u32);
+        e.register_double(SAVE_VERSION, move |_, _| ret(version));
+        e.register(FORM_ID_OF, |_, a| ret(a[0] + 1));
+        e.register(SAVE_NUMERIC_ID, |e, a| {
+            assert_eq!((a[0], a[2]), (0x9100, 4));
+            let _ = e.mem.u32(a[1]);
+            Ret::default()
+        });
+        e.register(SAVE_DATA, |_, _| Ret::default());
+        e
+    }
+
+    #[test]
+    fn save_game_writes_ids_and_fields_by_version() {
+        let mut e = save_engine(0x5d);
+        let sky = new_sky(&mut e);
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(0x100));
+        e.set(sky, Sky::pDefaultWeather, Ptr::new(0x300));
+        e.set(sky, Sky::pOverrideWeather, Ptr::new(0x400));
+        e.register_double(SAVE_NUMERIC_ID, |e, a| {
+            assert_eq!(a[2], 4);
+            let id = e.mem.u32(a[1]);
+            // Record the id in the engine's memory: a word table at 0x0118_0000.
+            let count = e.mem.u32(0x0118_0000);
+            e.mem.set_u32(0x0118_0004 + 4 * count, id);
+            e.mem.set_u32(0x0118_0000, count + 1);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0063_e9f0, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        // Ids: current (0x101), last (null: 0), default (0x301) and, from
+        // version 0x5d, the override (0x401).
+        let count = e.mem.u32(0x0118_0000);
+        let ids: Vec<u32> = (0..count).map(|i| e.mem.u32(0x0118_0004 + 4 * i)).collect();
+        assert_eq!(ids, [0x101, 0, 0x301, 0x401]);
+        // The four plain fields, but not the flags (version 0x69).
+        let fields: Vec<u32> = calls_to(&log, SAVE_DATA)
+            .iter()
+            .map(|args| args[1] - sky.addr())
+            .collect();
+        assert_eq!(fields, [0xec, 0xf0, 0xf4, 0xf8]);
+
+        // Version 0x5c has no override id; version 0x69 saves the flags and
+        // the acceleration start.
+        for (version, id_count, field_count) in [(0x5cu32, 3u32, 4usize), (0x69, 4, 6)] {
+            e.register_double(SAVE_VERSION, move |_, _| ret(version));
+            e.mem.set_u32(0x0118_0000, 0);
+            e.call_log = Some(vec![]);
+            e.call(0x0063_e9f0, &args![sky]);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(e.mem.u32(0x0118_0000), id_count);
+            let fields: Vec<u32> = calls_to(&log, SAVE_DATA)
+                .iter()
+                .map(|args| args[1] - sky.addr())
+                .collect();
+            assert_eq!(fields.len(), field_count);
+            if version == 0x69 {
+                assert_eq!(fields[4..], [0x118, 0x110]);
+            }
+        }
+    }
+
+    #[test]
+    fn save_game_ov2_writes_four_ids_and_eleven_fields() {
+        let mut e = engine();
+        e.register(SAVE_FORM_ID_OV2, |_, _| Ret::default());
+        e.register(SAVE_DATA_OV2, |_, _| Ret::default());
+        let sky = new_sky(&mut e);
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(0x100));
+        e.set(sky, Sky::pLastWeather, Ptr::new(0x200));
+        e.set(sky, Sky::pDefaultWeather, Ptr::new(0x300));
+        e.set(sky, Sky::pOverrideWeather, Ptr::new(0x400));
+        e.call_log = Some(vec![]);
+        e.call(0x0063_eb70, &args![sky, 0x9200u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, SAVE_FORM_ID_OV2),
+            [
+                [0x9200, 0x100, 0],
+                [0x9200, 0x200, 0],
+                [0x9200, 0x300, 0],
+                [0x9200, 0x400, 0]
+            ]
+        );
+        let fields: Vec<u32> = calls_to(&log, SAVE_DATA_OV2)
+            .iter()
+            .map(|args| {
+                assert_eq!((args[0], args[2], args[3]), (0x9200, 4, 0));
+                args[1] - sky.addr()
+            })
+            .collect();
+        assert_eq!(
+            fields,
+            [0xec, 0xf0, 0xf4, 0x118, 0x110, 0xb4, 0xb8, 0xbc, 0xe4, 0xe8, 0xf8]
+        );
+    }
+
+    /// A data-load double that writes `value` to every 4-byte target outside
+    /// the sky (the temporary that receives the saved flags).
+    fn load_data_double(e: &mut Engine, sky: Ptr<Sky>, value: u32) {
+        let sky_address = sky.addr();
+        e.register_double(LOAD_DATA, move |e, a| {
+            if a[2] == 4 && !(sky_address..sky_address + 0x138).contains(&a[1]) {
+                e.mem.set_u32(a[1], value);
+            }
+            Ret::default()
+        });
+    }
+
+    /// Doubles for the load buffer: the buffer (an object whose vtable slot 0
+    /// returns `version`), the form ids 1, 2, ... and the lookup and cast.
+    fn load_engine(version: u32) -> (Engine, u32) {
+        let mut e = with_data(engine());
+        install_vtable(&mut e);
+        e.register_double(SLOT_BASE, move |_, _| ret(version));
+        e.set_global(WORLD_STATE_POINTER, 0x9000u32);
+        e.register(CLOUDS_CLEAR_TRANS_TEXTURES, |_, _| Ret::default());
+        e.register(PRECIPITATION_FLUSH_ALL, |_, _| Ret::default());
+        e.register(LOAD_FORM_ID, |e, _| {
+            let next = e.mem.u32(0x0118_0010) + 1;
+            e.mem.set_u32(0x0118_0010, next);
+            ret(next)
+        });
+        e.register(LOOKUP_FORM, |_, a| ret(a[0] + 0x1000));
+        e.register(DYNAMIC_CAST, |_, a| {
+            assert_eq!(
+                a[1..],
+                [0, TYPE_DESCRIPTOR_FORM, TYPE_DESCRIPTOR_WEATHER, 0]
+            );
+            ret(a[0] + 0x1000)
+        });
+        hdr_doubles(&mut e);
+        e.register(PLAYER_PARENT_CELL, |_, _| ret(0));
+        let buffer = object_with_vtable(&mut e, 0x10).addr();
+        (e, buffer)
+    }
+
+    #[test]
+    fn load_game_reads_the_weathers_fields_and_updates() {
+        let (mut e, buffer) = load_engine(0x12);
+        let state = e.mem.alloc(0x300);
+        e.set_global(WORLD_STATE_POINTER, state);
+        let sky = sky_with_instances(&mut e);
+        load_data_double(&mut e, sky, 0xc);
+        e.set(sky, Sky::uiFlags, 0x10);
+        let clouds = e.mem.alloc(0x80);
+        e.set(sky, Sky::pClouds, Ptr::new(clouds));
+        e.set(sky, Sky::pPrecip, Ptr::new(0x6000));
+        e.call_log = Some(vec![]);
+        e.call(0x0063_ecb0, &args![sky, buffer]);
+        let log = e.call_log.take().unwrap();
+        // The precipitation, then the clouds are cleared (and flagged).
+        assert!(log.contains(&(PRECIPITATION_FLUSH_ALL, vec![0x6000])));
+        assert!(log.contains(&(CLOUDS_CLEAR_TRANS_TEXTURES, vec![clouds])));
+        assert_eq!(e.mem.u8(clouds + 0x5a), 1);
+        // The four weathers: id + 0x1000 (lookup) + 0x1000 (cast).
+        assert_eq!(e.get(sky, Sky::pCurrentWeather).addr(), 0x2001);
+        assert_eq!(e.get(sky, Sky::pLastWeather).addr(), 0x2002);
+        assert_eq!(e.get(sky, Sky::pDefaultWeather).addr(), 0x2003);
+        assert_eq!(e.get(sky, Sky::pOverrideWeather).addr(), 0x2004);
+        // Only bit 8 comes from the saved flags (the double writes 0xc).
+        assert_eq!(e.get(sky, Sky::uiFlags), 0x18);
+        let loads: Vec<(u32, u32)> = calls_to(&log, LOAD_DATA)
+            .iter()
+            .map(|args| (args[1].wrapping_sub(sky.addr()), args[2]))
+            .filter(|(offset, _)| *offset < 0x138)
+            .collect();
+        assert_eq!(
+            loads,
+            [
+                (0xec, 4),
+                (0xf0, 4),
+                (0xf4, 4),
+                (0x110, 4),
+                (0xb4, 4),
+                (0xb8, 4),
+                (0xbc, 4),
+                (0xe4, 4),
+                (0xe8, 4),
+                (0xf8, 4)
+            ]
+        );
+        // The update (no parent cell, so it ends at once) and the image-space
+        // update (mode 0) follow.
+        assert_eq!(calls_to(&log, IMAGE_SPACE_SET_WEIGHT).len(), 4);
+        assert!(addresses(&log).contains(&PLAYER_PARENT_CELL));
+    }
+
+    #[test]
+    fn load_game_reads_the_old_colour_in_one_block_and_obeys_the_world_flag() {
+        let (mut e, buffer) = load_engine(0x11);
+        let state = e.mem.alloc(0x300);
+        e.set_global(WORLD_STATE_POINTER, state);
+        let sky = sky_with_instances(&mut e);
+        load_data_double(&mut e, sky, 0);
+        e.set(sky, Sky::uiFlags, 0x8);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_ecb0, &args![sky, buffer]);
+        let log = e.call_log.take().unwrap();
+        // Saved flags without bit 8 clear it; before buffer version 0x12 the
+        // colour at +0xb4 is one 12-byte block.
+        assert_eq!(e.get(sky, Sky::uiFlags), 0);
+        assert!(calls_to(&log, LOAD_DATA)
+            .iter()
+            .any(|args| args[1] == sky.addr() + 0xb4 && args[2] == 12));
+        assert!(!calls_to(&log, LOAD_DATA)
+            .iter()
+            .any(|args| args[1] == sky.addr() + 0xb8));
+
+        // The world flag 0x40 makes the load do nothing.
+        e.mem.set_u32(state + 0x244, 0x40);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_ecb0, &args![sky, buffer]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn world_state_flag_is_bit_0x40_of_the_word_at_0x244() {
+        let mut e = engine();
+        let state = e.mem.alloc(0x300);
+        assert!(!e.call(0x0063_ef00, &args![state]).bool());
+        e.mem.set_u32(state + 0x244, 0x40);
+        assert!(e.call(0x0063_ef00, &args![state]).bool());
+        e.mem.set_u32(state + 0x244, 0xffff_ffbf);
+        assert!(!e.call(0x0063_ef00, &args![state]).bool());
+    }
+
+    // ---- image-space values ----
+
+    #[test]
+    fn hdr_values_create_the_four_instances_once() {
+        let mut e = with_data(engine());
+        hdr_doubles(&mut e);
+        e.register(IMAGE_SPACE_CONSTRUCT, |_, a| ret(a[0]));
+        e.register(NI_POINTER_FROM_RAW, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            ret(a[0])
+        });
+        e.register(IMAGE_SPACE_MANAGER, |_, a| {
+            assert_eq!(a[0], 0x5000);
+            ret(0xaa00)
+        });
+        // The manager's add records the instance the holder holds (the
+        // holder is a temporary) in a table at 0x0118_0104.
+        e.register(IMAGE_SPACE_ADD, |e, a| {
+            let count = e.mem.u32(0x0118_0100);
+            let instance = e.mem.u32(a[1]);
+            e.mem.set_u32(0x0118_0104 + 4 * count, instance);
+            e.mem.set_u32(0x0118_0100, count + 1);
+            Ret::default()
+        });
+        e.register(IMAGE_SPACE_SET_FLAG, |_, _| Ret::default());
+        e.set_global(INTERIOR_CELL_HOLDER, 0x5000u32);
+        let sky = new_sky(&mut e);
+        e.set(sky, Sky::eMode, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_ef20, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        let current = e.get(sky, Sky::pCurrentWeatherImageSpaceMod).addr();
+        let last = e.get(sky, Sky::pLastWeatherImageSpaceMod).addr();
+        let current_2 = e.get(sky, Sky::pCurrentWeatherImageSpaceMod2).addr();
+        let last_2 = e.get(sky, Sky::pLastWeatherImageSpaceMod2).addr();
+        for instance in [current, last, current_2, last_2] {
+            assert_ne!(instance, 0);
+            assert_eq!(e.mem.u8(instance + 8), 1);
+            assert_eq!(e.mem.block_size(instance), Some(IMAGE_SPACE_SIZE));
+        }
+        // Registered in the game's order: last, current, last 2, current 2;
+        // flagged in the order current, last, current 2, last 2.
+        assert!(calls_to(&log, IMAGE_SPACE_ADD)
+            .iter()
+            .all(|args| args[0] == 0xaa00));
+        let added: Vec<u32> = (0..e.mem.u32(0x0118_0100))
+            .map(|i| e.mem.u32(0x0118_0104 + 4 * i))
+            .collect();
+        assert_eq!(added, [last, current, last_2, current_2]);
+        let flagged: Vec<u32> = calls_to(&log, IMAGE_SPACE_SET_FLAG)
+            .iter()
+            .map(|args| {
+                assert_eq!(args[1], 1);
+                args[0]
+            })
+            .collect();
+        assert_eq!(flagged, [current, last, current_2, last_2]);
+        // Mode 1: all four weights are 0.
+        for instance in [current, last, current_2, last_2] {
+            assert_eq!(weights_of(&log, instance), [0.0]);
+        }
+        // A second call creates nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x0063_ef20, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        assert!(!addresses(&log).contains(&IMAGE_SPACE_CONSTRUCT));
+    }
+
+    /// A sky in mode 3 at `hour` with the climate hours 6 / 8 (sunrise),
+    /// noon 13, and 18 / 22 (sunset), in the weather `0x4000`.
+    fn hdr_sky(e: &mut Engine, hour: f32) -> Ptr<Sky> {
+        hdr_doubles(e);
+        e.set_global(SUNRISE_BEGIN_CACHE, 6.0f32);
+        e.set_global(SUNSET_END_CACHE, 22.0f32);
+        e.register(SKY_SUNRISE_END, |_, _| ret_float(8.0));
+        e.register(SKY_SUNSET_BEGIN, |_, _| ret_float(18.0));
+        let sky = sky_with_instances(e);
+        e.set(sky, Sky::eMode, 3);
+        e.set(sky, Sky::fCurrentGameHour, hour);
+        e.set(sky, Sky::fHighNoon, 13.0);
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(0x4000));
+        e.set(sky, Sky::fCurrentWeatherPct, 1.0);
+        sky
+    }
+
+    fn forms_of(log: &[(u32, Vec<u32>)], instance: u32) -> Vec<u32> {
+        calls_to(log, IMAGE_SPACE_SET_FORM)
+            .iter()
+            .filter(|args| args[0] == instance)
+            .map(|args| args[1])
+            .collect()
+    }
+
+    #[test]
+    fn hdr_values_blend_two_forms_through_the_day() {
+        // (hour, first index, second index, blend)
+        let cases = [
+            (6.5f32, 0u32, 3u32, 0.5f32),
+            (7.0, 0, 1, 1.0),
+            (10.0, 1, 4, 0.4),
+            (15.0, 4, 1, 0.4),
+            (20.0, 2, 3, 1.0),
+            (19.0, 2, 1, 0.5),
+        ];
+        for (hour, first, second, blend) in cases {
+            let mut e = with_data(engine());
+            let sky = hdr_sky(&mut e, hour);
+            e.call_log = Some(vec![]);
+            e.call(0x0063_ef20, &args![sky]);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(forms_of(&log, INSTANCE_CURRENT), [0x100 + first], "{hour}");
+            assert_eq!(
+                forms_of(&log, INSTANCE_CURRENT_2),
+                [0x100 + second],
+                "{hour}"
+            );
+            // The weight of the first is pct * blend, of the second
+            // (1 - blend) * pct (pct is 1 here).
+            let first_weight = weights_of(&log, INSTANCE_CURRENT);
+            let second_weight = weights_of(&log, INSTANCE_CURRENT_2);
+            assert!((first_weight[0] - blend).abs() < 1e-6, "{hour}");
+            assert!((second_weight[0] - (1.0 - blend)).abs() < 1e-6, "{hour}");
+            // The forms come from the weather at +0x18, asked with the index.
+            assert!(log.contains(&(WEATHER_IMAGE_SPACE_FOR_TIME, vec![0x4018, first])));
+            // No last weather: its instances get 0.
+            assert_eq!(weights_of(&log, INSTANCE_LAST), [0.0]);
+            assert_eq!(weights_of(&log, INSTANCE_LAST_2), [0.0]);
+        }
+    }
+
+    #[test]
+    fn hdr_values_at_night_use_one_form_and_the_last_weather_fades() {
+        let mut e = with_data(engine());
+        let sky = hdr_sky(&mut e, 23.0);
+        e.set(sky, Sky::pLastWeather, Ptr::new(0x4100));
+        e.set(sky, Sky::fCurrentWeatherPct, 0.25);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_ef20, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        // Night is index 3, a single form; the second instances get 0.
+        assert_eq!(forms_of(&log, INSTANCE_CURRENT), [0x103]);
+        assert!(forms_of(&log, INSTANCE_CURRENT_2).is_empty());
+        assert_eq!(weights_of(&log, INSTANCE_CURRENT), [0.25]);
+        assert_eq!(weights_of(&log, INSTANCE_CURRENT_2), [0.0]);
+        // The last weather gets (1 - pct) * blend (blend 1), also index 3.
+        assert_eq!(forms_of(&log, INSTANCE_LAST), [0x103]);
+        assert_eq!(weights_of(&log, INSTANCE_LAST), [0.75]);
+        assert_eq!(weights_of(&log, INSTANCE_LAST_2), [0.0]);
+        assert!(log.contains(&(WEATHER_IMAGE_SPACE_FOR_TIME, vec![0x4118, 3])));
+
+        // A blend of 1 (or more) silences the last weather.
+        e.set(sky, Sky::fCurrentWeatherPct, 1.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_ef20, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(weights_of(&log, INSTANCE_LAST), [0.0]);
+        assert_eq!(weights_of(&log, INSTANCE_LAST_2), [0.0]);
+        assert!(forms_of(&log, INSTANCE_LAST).is_empty());
+    }
+
+    #[test]
+    fn hdr_values_blend_the_last_weather_in_the_morning() {
+        let mut e = with_data(engine());
+        let sky = hdr_sky(&mut e, 10.0);
+        e.set(sky, Sky::pLastWeather, Ptr::new(0x4100));
+        e.set(sky, Sky::fCurrentWeatherPct, 0.5);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_ef20, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        // blend 0.4: (1 - pct) * blend and (1 - pct) * (1 - blend).
+        assert!((weights_of(&log, INSTANCE_LAST)[0] - 0.2).abs() < 1e-6);
+        assert!((weights_of(&log, INSTANCE_LAST_2)[0] - 0.3).abs() < 1e-6);
+        assert_eq!(forms_of(&log, INSTANCE_LAST), [0x101]);
+        assert_eq!(forms_of(&log, INSTANCE_LAST_2), [0x104]);
+    }
+
+    #[test]
+    fn hdr_values_fall_back_to_the_default_form_and_log_bad_climate_data() {
+        let mut e = with_data(engine());
+        let sky = hdr_sky(&mut e, 13.0);
+        // Hour 13 is exactly noon: no interval holds it. The data error is
+        // logged and index 1 is used; a weather without a form falls back to
+        // the default form.
+        e.register(WEATHER_IMAGE_SPACE_FOR_TIME, |_, _| ret(0));
+        e.register(LOG_MASTERFILE_ERROR, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0063_ef20, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(LOG_MASTERFILE_ERROR, vec![TRANSITION_TIMES_MESSAGE])));
+        assert!(log.contains(&(WEATHER_IMAGE_SPACE_FOR_TIME, vec![0x4018, 1])));
+        assert_eq!(forms_of(&log, INSTANCE_CURRENT), [1]);
+    }
     // @@TESTS
 }
