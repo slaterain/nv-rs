@@ -3,7 +3,7 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::highprocess`]; anything public there may be used here.
 //!
-//! This block covers `00903160` to `00905510`: the combat detection lists,
+//! This part covers `00903160` to `00905ae0` and four accessors elsewhere (`009b6600`, `009b88a0`, `009b88c0`, `009ee020`): the combat detection lists,
 //! the radiation and package-start handlers, the detection-event and
 //! avoid-area bookkeeping, the idle-conversation checks, the sandman and
 //! cannibal handlers, and the first container helpers of the pathing
@@ -1623,6 +1623,401 @@ fn locked_vcall_spinning(e: &mut Engine, this: Ptr, slot: u32, message: Ptr) -> 
     result
 }
 
+/// Vtable of `BSTCommonLLMessageQueue<ActorPathingMessage>` (`010883f8`).
+const LL_QUEUE_VTABLE: u32 = 0x0108_83f8;
+/// Vtable of `BSTCommonMessageQueue<ActorPathingMessage>` (`01088418`).
+const COMMON_QUEUE_VTABLE: u32 = 0x0108_8418;
+/// Vtable of the message queue's base class (`01088438`).
+const QUEUE_BASE_VTABLE: u32 = 0x0108_8438;
+/// Vtable of `BSSimpleArray<TESIdleForm *,1024>` (`01088450`).
+const IDLE_FORM_ARRAY_VTABLE: u32 = 0x0108_8450;
+/// `ActorPathingMessage` constructor (`006e9bd0`, 0x10 bytes) and destructor
+/// (`00800190`), and its assignment (`006e9c60`: `this` = destination, the
+/// argument the source).
+const MESSAGE_CONSTRUCT: u32 = 0x006e_9bd0;
+const MESSAGE_DESTRUCT: u32 = 0x0080_0190;
+const MESSAGE_ASSIGN: u32 = 0x006e_9c60;
+/// `BSTCommonMessageQueue<ActorPathingMessage>::TryPop` (`006ec390`, Xbox PDB).
+const QUEUE_TRY_POP: u32 = 0x006e_c390;
+/// Free-list pop (`006ecd60`): takes the lock, stores the first free node in
+/// the out parameter (or 0) and answers whether there was one.
+const FREE_LIST_TAKE: u32 = 0x006e_cd60;
+/// Free-list push (`006ecc70`): links the node the argument points to in
+/// front of the free nodes, and zeroes that pointer.
+const FREE_LIST_GIVE: u32 = 0x006e_cc70;
+/// Construction of a free-list node holding a message (`00905b00`).
+const FREE_NODE_CONSTRUCT: u32 = 0x0090_5b00;
+/// `BSSimpleList` node constructor (`00470440`): `this` = the node, the
+/// argument a pointer to the item.
+const LIST_NODE_CONSTRUCT: u32 = 0x0047_0440;
+/// Array constructor helper (`006b3eb0`): `this`, a size and a count.
+const ARRAY_CONSTRUCT: u32 = 0x006b_3eb0;
+/// Array clear (`008454f0`): `this` and a flag (1 = also free the buffer).
+const ARRAY_CLEAR: u32 = 0x0084_54f0;
+/// Is the array full (`00438b90`): count equals capacity.
+const ARRAY_IS_FULL: u32 = 0x0043_8b90;
+/// Next capacity (`009a3910`): twice the capacity up to 0x400, then
+/// 0x400 more.
+const ARRAY_NEXT_CAPACITY: u32 = 0x009a_3910;
+/// Array resize (`006e3d30`): `this`, the new capacity and the count.
+const ARRAY_RESIZE: u32 = 0x006e_3d30;
+/// Reference release (`00401970`) and acquire (`0040f6e0`) of the object
+/// `+ 0x14`.
+const REFERENCE_RELEASE: u32 = 0x0040_1970;
+const REFERENCE_ACQUIRE: u32 = 0x0040_f6e0;
+/// Scalar deleting destructor of the message holder at `009bc890`
+/// (`this`, flags).
+const MESSAGE_HOLDER_DESTRUCT: u32 = 0x009b_c890;
+
+// Translated from 00905580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `BSTCommonLLMessageQueue<ActorPathingMessage>` (the class
+/// whose destructor is `009055c0`; unnamed in the map): the base constructor
+/// (`00905990`), then the vtable, the free list `free_list` at +8, no head
+/// node at +0xc and the tail pointer at +0x10 aiming at the head slot.
+/// Returns `this`.
+pub fn fn_00905580(e: &mut Engine, this: Ptr, free_list: u32) -> Ptr {
+    fn_00905990(e, this);
+    let base = this.addr();
+    e.mem.set_u32(base, LL_QUEUE_VTABLE);
+    e.mem.set_u32(base + 8, free_list);
+    e.mem.set_u32(base + 0xc, 0);
+    e.mem.set_u32(base + 0x10, base + 0xc);
+    this
+}
+
+// Translated from 009055c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCommonLLMessageQueue<ActorPathingMessage>::~BSTCommonLLMessageQueue`
+/// (Xbox PDB): installs its vtable, pops every queued message into a
+/// temporary `ActorPathingMessage` until `TryPop` (`006ec390`) says the
+/// queue is empty, destroys the temporary and runs the base destructor
+/// (`00905650`). The C++ unwinding state is not translated.
+pub fn bst_common_ll_message_queue_actor_pathing_message_destructor(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), LL_QUEUE_VTABLE);
+    e.with_stack(0x10, |e, message| {
+        e.call(MESSAGE_CONSTRUCT, &args![message]);
+        while e.call(QUEUE_TRY_POP, &args![this, message]).bool() {}
+        e.call(MESSAGE_DESTRUCT, &args![message]);
+    });
+    fn_00905650(e, this);
+}
+
+// Translated from 00905650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of `BSTCommonMessageQueue<ActorPathingMessage>` (unnamed in the
+/// map): installs its vtable and runs the base destructor (`00905670`).
+/// Returns `this`.
+pub fn fn_00905650(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), COMMON_QUEUE_VTABLE);
+    fn_00905670(e, this)
+}
+
+// Translated from 00905670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the message queue's base class (unnamed in the map): only
+/// installs its vtable. Returns `this`.
+pub fn fn_00905670(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), QUEUE_BASE_VTABLE);
+    this
+}
+
+// Translated from 00905690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor of `BSTCommonMessageQueue<ActorPathingMessage>`
+/// (unnamed in the map): the destructor (`00905650`), then `operator delete`
+/// when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_00905690(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00905650(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 009056c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTMessageQueue<ActorPathingMessage>::_scalar_deleting_destructor_` (Xbox
+/// PDB): the base destructor (`00905670`), then `operator delete` when bit 0
+/// of `flags` is set. Returns `this`.
+pub fn bst_message_queue_actor_pathing_message_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00905670(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 009056f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCommonLLMessageQueue<ActorPathingMessage>::DoTryPush` (Xbox PDB): with
+/// a free list at +8, takes a free node for `message` (`00905aa0`); on
+/// success appends it at the tail (the tail pointer at +0x10, reset to the
+/// head slot at +0xc when the queue is empty) and returns true. False when
+/// there is no free list or no free node.
+pub fn bst_common_ll_message_queue_actor_pathing_message_do_try_push(
+    e: &mut Engine,
+    this: Ptr,
+    message: Ptr,
+) -> bool {
+    let base = this.addr();
+    let free_list = e.mem.u32(base + 8);
+    if free_list == 0 {
+        return false;
+    }
+    let taken = e.with_stack(4, |e, out| {
+        if fn_00905aa0(e, Ptr::new(free_list), out, message) {
+            Some(e.mem.u32(out.addr()))
+        } else {
+            None
+        }
+    });
+    let Some(node) = taken else {
+        return false;
+    };
+    if e.mem.u32(base + 0xc) == 0 {
+        e.mem.set_u32(base + 0x10, base + 0xc);
+    }
+    let tail = e.mem.u32(base + 0x10);
+    e.mem.set_u32(tail, node);
+    e.mem.set_u32(node + 8, 0);
+    e.mem.set_u32(base + 0x10, node + 8);
+    true
+}
+
+// Translated from 00905770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCommonLLMessageQueue<ActorPathingMessage>::DoTryPop` (Xbox PDB): with a
+/// head node at +0xc, assigns its message (`006e9c60`) to `message`, makes
+/// the next node (+8) the head, hands the node back to the free list
+/// (`009059c0`) and returns true; false when the queue is empty. The tail
+/// pointer is left as it is.
+pub fn bst_common_ll_message_queue_actor_pathing_message_do_try_pop(
+    e: &mut Engine,
+    this: Ptr,
+    message: Ptr,
+) -> bool {
+    let base = this.addr();
+    let node = e.mem.u32(base + 0xc);
+    if node == 0 {
+        return false;
+    }
+    let item = e.call(LIST_NODE_ITEM, &args![node]).u32();
+    e.call(MESSAGE_ASSIGN, &args![message, item]);
+    let next = e.mem.u32(node + 8);
+    e.mem.set_u32(base + 0xc, next);
+    let free_list = e.mem.u32(base + 8);
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), node);
+        bst_free_list_actor_pathing_message_deallocate(e, Ptr::new(free_list), slot);
+    });
+    true
+}
+
+// Translated from 009057d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Assignment of a reference-counted pointer (unnamed in the map): `this`
+/// points at the pointer slot. When the new object differs from the stored
+/// one, releases the old one (`00401970` on its +0x14) if any, stores the
+/// new one and acquires it (`0040f6e0` on its +0x14) if not null. Returns
+/// `this`.
+pub fn fn_009057d0(e: &mut Engine, this: Ptr, object: u32) -> Ptr {
+    let old = e.mem.u32(this.addr());
+    if old != object {
+        if old != 0 {
+            e.call(REFERENCE_RELEASE, &args![old + 0x14]);
+        }
+        e.mem.set_u32(this.addr(), object);
+        if object != 0 {
+            e.call(REFERENCE_ACQUIRE, &args![object + 0x14]);
+        }
+    }
+    this
+}
+
+// Translated from 00905820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleList` append (unnamed in the map; `this` is the list's head
+/// node, `item` points at the item to add). Does nothing when the item is
+/// null. Walks to the last node; if that node already holds an item, a new
+/// 8-byte node is allocated (`operator new`, node constructor `00470440`)
+/// and linked after it, otherwise the item goes into that node. The C++
+/// unwinding state around the allocation is not translated.
+pub fn fn_00905820(e: &mut Engine, this: Ptr, item: Ptr) {
+    if e.mem.u32(item.addr()) == 0 {
+        return;
+    }
+    let mut node = this.addr();
+    loop {
+        let next = e.mem.u32(node + 4);
+        if next == 0 {
+            break;
+        }
+        node = next;
+    }
+    if e.mem.u32(node) != 0 {
+        let memory = e.call(OPERATOR_NEW, &args![8u32]).u32();
+        let created = if memory != 0 {
+            e.call(LIST_NODE_CONSTRUCT, &args![memory, item]).u32()
+        } else {
+            0
+        };
+        e.mem.set_u32(node + 4, created);
+    } else {
+        let value = e.mem.u32(item.addr());
+        e.mem.set_u32(node, value);
+    }
+}
+
+// Translated from 009058e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of a `BSSimpleArray<TESIdleForm *,1024>` (the class whose
+/// destructor is `00905910`; unnamed in the map): installs the vtable and
+/// runs the array constructor helper (`006b3eb0`) with `size` as both the
+/// size and the count. Returns `this`.
+pub fn fn_009058e0(e: &mut Engine, this: Ptr, size: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), IDLE_FORM_ARRAY_VTABLE);
+    e.call(ARRAY_CONSTRUCT, &args![this, size, size]);
+    this
+}
+
+// Translated from 00905910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of `BSSimpleArray<TESIdleForm *,1024>` (unnamed in the map):
+/// installs the vtable and clears the array, freeing its buffer
+/// (`008454f0` with 1).
+pub fn fn_00905910(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), IDLE_FORM_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 00905930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCommonLLMessageQueue<ActorPathingMessage>::_scalar_deleting_destructor_`
+/// (Xbox PDB): the destructor (`009055c0`), then `operator delete` when bit 0
+/// of `flags` is set. Returns `this`.
+pub fn bst_common_ll_message_queue_actor_pathing_message_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    bst_common_ll_message_queue_actor_pathing_message_destructor(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00905960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<TESIdleForm *,1024>::_scalar_deleting_destructor_` (Xbox
+/// PDB, `BSSimpleArray<TESIdleForm_P_1024>`): the destructor (`00905910`),
+/// then `operator delete` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_simple_array_tes_idle_form_p_1024_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00905910(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00905990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `BSTCommonMessageQueue<ActorPathingMessage>` (unnamed in
+/// the map): the base constructor (`009059f0`), then its vtable and a zero
+/// at +4 (the lock word). Returns `this`.
+pub fn fn_00905990(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_009059f0(e, this);
+    e.mem.set_u32(this.addr(), COMMON_QUEUE_VTABLE);
+    e.mem.set_u32(this.addr() + 4, 0);
+    this
+}
+
+// Translated from 009059c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTFreeList<ActorPathingMessage>::Deallocate` (Xbox PDB): releases the
+/// message of the node `*node_slot` (`00905ae0`), then gives the node back
+/// to the free list (`006ecc70`, which zeroes the slot).
+pub fn bst_free_list_actor_pathing_message_deallocate(e: &mut Engine, this: Ptr, node_slot: Ptr) {
+    let node = e.mem.u32(node_slot.addr());
+    fn_00905ae0(e, Ptr::new(node));
+    e.call(FREE_LIST_GIVE, &args![this, node_slot]);
+}
+
+// Translated from 009059f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the message queue's base class (unnamed in the map): only
+/// installs the vtable. Returns `this`.
+pub fn fn_009059f0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), QUEUE_BASE_VTABLE);
+    this
+}
+
+// Translated from 00905a10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reserves one more element of a `BSSimpleArray` (unnamed in the map; the
+/// fields are the buffer at +4, count at +8 and capacity at +0xc). When the
+/// array is full (`00438b90`): with no capacity yet, allocates 4 elements
+/// through the allocator at vtable +4 and takes capacity 4; otherwise grows
+/// to the next capacity (`009a3910`) with the resize helper (`006e3d30`).
+/// Then counts the new element and returns its index.
+pub fn fn_00905a10(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    if e.call(ARRAY_IS_FULL, &args![this]).bool() {
+        if e.mem.u32(base + 0xc) == 0 {
+            let capacity = 4u32;
+            let buffer = e.vcall(base, 4, &args![capacity]).u32();
+            e.mem.set_u32(base + 4, buffer);
+            e.mem.set_u32(base + 0xc, capacity);
+        } else {
+            let capacity = e.call(ARRAY_NEXT_CAPACITY, &args![this]).u32();
+            let count = e.mem.u32(base + 8);
+            e.call(ARRAY_RESIZE, &args![this, capacity, count]);
+            e.mem.set_u32(base + 0xc, capacity);
+        }
+    }
+    let count = e.mem.u32(base + 8).wrapping_add(1);
+    e.mem.set_u32(base + 8, count);
+    count.wrapping_sub(1)
+}
+
+// Translated from 00905aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Takes a free node for a message (unnamed in the map; `this` is the free
+/// list): `006ecd60` stores a node in `*out_node`; if it found one, the node
+/// is constructed for `message` (`00905b00`) and the result is true.
+pub fn fn_00905aa0(e: &mut Engine, this: Ptr, out_node: Ptr, message: Ptr) -> bool {
+    if !e.call(FREE_LIST_TAKE, &args![this, out_node]).bool() {
+        return false;
+    }
+    let node = e.mem.u32(out_node.addr());
+    e.call(FREE_NODE_CONSTRUCT, &args![node, message]);
+    true
+}
+
+// Translated from 00905ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Releases the message held by a free-list node (unnamed in the map): the
+/// holder's scalar deleting destructor (`009bc890`) with flags 0, so the
+/// message is destroyed but the memory is kept.
+pub fn fn_00905ae0(e: &mut Engine, this: Ptr) {
+    e.call(MESSAGE_HOLDER_DESTRUCT, &args![this, 0u32]);
+}
+
+// Translated from 009b6600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::GetWeaponEnchantmentVisuals` (Xbox PDB): the
+/// `pCurrentWeaponEffect (TESEffectShader*)` at +0x16c.
+pub fn middle_high_process_get_weapon_enchantment_visuals(e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(e.mem.u32(this.addr() + 0x16c))
+}
+
+// Translated from 009b88a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LowProcess::GetDeathTime` (Xbox PDB): the float at +0xa8.
+pub fn low_process_get_death_time(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0xa8)
+}
+
+// Translated from 009b88c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LowProcess::GetTrackedDamage` (Xbox PDB): the float at +0xac.
+pub fn low_process_get_tracked_damage(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0xac)
+}
+
+// Translated from 009ee020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::GetBSBound` (Xbox PDB): the `pBSBound (BSBound*)` at
+/// +0x224.
+pub fn middle_high_process_get_bs_bound(e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(e.mem.u32(this.addr() + 0x224))
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1752,6 +2147,51 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00905450, bs_simple_array_pathing_avoid_node_add(Ptr, Ptr) -> u32),
         entry!(0x009054a0, bst_common_message_queue_actor_pathing_message_push(Ptr, Ptr) -> bool),
         entry!(0x00905510, bst_common_message_queue_actor_pathing_message_pop(Ptr, Ptr) -> bool),
+        entry!(0x00905580, fn_00905580(Ptr, u32) -> Ptr),
+        entry!(
+            0x009055c0,
+            bst_common_ll_message_queue_actor_pathing_message_destructor(Ptr)
+        ),
+        entry!(0x00905650, fn_00905650(Ptr) -> Ptr),
+        entry!(0x00905670, fn_00905670(Ptr) -> Ptr),
+        entry!(0x00905690, fn_00905690(Ptr, u32) -> Ptr),
+        entry!(
+            0x009056c0,
+            bst_message_queue_actor_pathing_message_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x009056f0,
+            bst_common_ll_message_queue_actor_pathing_message_do_try_push(Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00905770,
+            bst_common_ll_message_queue_actor_pathing_message_do_try_pop(Ptr, Ptr) -> bool
+        ),
+        entry!(0x009057d0, fn_009057d0(Ptr, u32) -> Ptr),
+        entry!(0x00905820, fn_00905820(Ptr, Ptr)),
+        entry!(0x009058e0, fn_009058e0(Ptr, u32) -> Ptr),
+        entry!(0x00905910, fn_00905910(Ptr)),
+        entry!(
+            0x00905930,
+            bst_common_ll_message_queue_actor_pathing_message_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00905960,
+            bs_simple_array_tes_idle_form_p_1024_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00905990, fn_00905990(Ptr) -> Ptr),
+        entry!(
+            0x009059c0,
+            bst_free_list_actor_pathing_message_deallocate(Ptr, Ptr)
+        ),
+        entry!(0x009059f0, fn_009059f0(Ptr) -> Ptr),
+        entry!(0x00905a10, fn_00905a10(Ptr) -> u32),
+        entry!(0x00905aa0, fn_00905aa0(Ptr, Ptr, Ptr) -> bool),
+        entry!(0x00905ae0, fn_00905ae0(Ptr)),
+        entry!(0x009b6600, middle_high_process_get_weapon_enchantment_visuals(Ptr) -> Ptr),
+        entry!(0x009b88a0, low_process_get_death_time(Ptr) -> f32),
+        entry!(0x009b88c0, low_process_get_tracked_damage(Ptr) -> f32),
+        entry!(0x009ee020, middle_high_process_get_bs_bound(Ptr) -> Ptr),
     ]
 }
 
@@ -4029,5 +4469,402 @@ mod tests {
         });
         e.call(0x0090_5510, &args![queue, 0x88u32]);
         assert_eq!(tries.get(), 2);
+    }
+
+    // ---- 00905580 .. 009ee020 ----------------------------------------------
+
+    /// An engine with call logging, for the functions of this block; each test
+    /// registers the callees it reaches.
+    fn bare() -> Engine {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn quiet(e: &mut Engine, addresses: &[u32]) {
+        for address in addresses {
+            e.register(*address, |_, _| Ret::default());
+        }
+    }
+
+    #[test]
+    fn test_fn_00905580() {
+        let mut e = bare();
+        let queue = e.mem.alloc(0x14);
+        e.mem.set_u32(queue + 4, 0xdead);
+        e.mem.set_u32(queue + 0xc, 0xbeef);
+        assert_eq!(e.call(0x0090_5580, &args![queue, 0x5555u32]).u32(), queue);
+        assert_eq!(e.mem.u32(queue), 0x0108_83f8);
+        assert_eq!(
+            e.mem.u32(queue + 4),
+            0,
+            "the base constructor clears the lock"
+        );
+        assert_eq!(e.mem.u32(queue + 8), 0x5555);
+        assert_eq!(e.mem.u32(queue + 0xc), 0);
+        assert_eq!(e.mem.u32(queue + 0x10), queue + 0xc);
+    }
+
+    #[test]
+    fn test_bst_common_ll_message_queue_actor_pathing_message_destructor() {
+        let mut e = bare();
+        quiet(&mut e, &[0x006e_9bd0, 0x0080_0190]);
+        let pops = Rc::new(Cell::new(0));
+        let counter = pops.clone();
+        // Two messages are queued, the third pop finds the queue empty.
+        e.register_double(0x006e_c390, move |_, _| {
+            counter.set(counter.get() + 1);
+            word((counter.get() <= 2) as u32)
+        });
+        let queue = e.mem.alloc(0x14);
+        e.call(0x0090_55c0, &args![queue]);
+        assert_eq!(pops.get(), 3);
+        // The same temporary is constructed first, popped into and destroyed.
+        let construct = calls(&e, 0x006e_9bd0);
+        assert_eq!(construct.len(), 1);
+        let message = construct[0][0];
+        assert_eq!(calls(&e, 0x0080_0190), vec![vec![message]]);
+        assert!(calls(&e, 0x006e_c390)
+            .iter()
+            .all(|a| a == &vec![queue, message]));
+        // The base destructors leave the base vtable.
+        assert_eq!(e.mem.u32(queue), 0x0108_8438);
+    }
+
+    #[test]
+    fn test_fn_00905650_and_00905670() {
+        let mut e = bare();
+        let object = e.mem.alloc(8);
+        assert_eq!(e.call(0x0090_5670, &args![object]).u32(), object);
+        assert_eq!(e.mem.u32(object), 0x0108_8438);
+        e.mem.set_u32(object, 0);
+        assert_eq!(e.call(0x0090_5650, &args![object]).u32(), object);
+        assert_eq!(e.mem.u32(object), 0x0108_8438, "ends in the base vtable");
+    }
+
+    #[test]
+    fn test_scalar_deleting_destructors_of_the_queues() {
+        for (address, vtable) in [(0x0090_5690u32, 0x0108_8438u32), (0x0090_56c0, 0x0108_8438)] {
+            let mut e = bare();
+            quiet(&mut e, &[OPERATOR_DELETE]);
+            let object = e.mem.alloc(8);
+            assert_eq!(e.call(address, &args![object, 0u32]).u32(), object);
+            assert_eq!(e.mem.u32(object), vtable);
+            assert!(calls(&e, OPERATOR_DELETE).is_empty());
+            assert_eq!(e.call(address, &args![object, 3u32]).u32(), object);
+            assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![object]]);
+        }
+    }
+
+    /// A free list double: the free node, and the nodes constructed for
+    /// messages.
+    fn push_scene(e: &mut Engine, free_node: u32) {
+        e.register_double(0x006e_cd60, move |e, a| {
+            if free_node == 0 {
+                return word(0);
+            }
+            e.mem.set_u32(a[1], free_node);
+            word(1)
+        });
+        quiet(e, &[0x0090_5b00]);
+    }
+
+    #[test]
+    fn test_bst_common_ll_message_queue_actor_pathing_message_do_try_push() {
+        let mut e = bare();
+        let queue = e.mem.alloc(0x14);
+        // No free list: nothing happens.
+        assert!(!e.call(0x0090_56f0, &args![queue, 0x77u32]).bool());
+        let free_list = e.mem.alloc(0x10);
+        e.mem.set_u32(queue + 8, free_list);
+        // A free list without a free node: false.
+        push_scene(&mut e, 0);
+        assert!(!e.call(0x0090_56f0, &args![queue, 0x77u32]).bool());
+        assert_eq!(e.mem.u32(queue + 0xc), 0);
+        // The first message becomes the head and the tail.
+        let first = e.mem.alloc(0x10);
+        push_scene(&mut e, first);
+        assert!(e.call(0x0090_56f0, &args![queue, 0x77u32]).bool());
+        assert_eq!(calls(&e, 0x0090_5b00), vec![vec![first, 0x77]]);
+        assert_eq!(e.mem.u32(queue + 0xc), first);
+        assert_eq!(e.mem.u32(first + 8), 0);
+        assert_eq!(e.mem.u32(queue + 0x10), first + 8);
+        // The second is linked after it.
+        let second = e.mem.alloc(0x10);
+        push_scene(&mut e, second);
+        assert!(e.call(0x0090_56f0, &args![queue, 0x78u32]).bool());
+        assert_eq!(e.mem.u32(queue + 0xc), first);
+        assert_eq!(e.mem.u32(first + 8), second);
+        assert_eq!(e.mem.u32(queue + 0x10), second + 8);
+    }
+
+    #[test]
+    fn test_bst_common_ll_message_queue_actor_pathing_message_do_try_pop() {
+        let mut e = bare();
+        quiet(&mut e, &[MESSAGE_ASSIGN_ADDRESS, 0x009b_c890]);
+        e.register(LIST_NODE_ITEM, |_, a| word(a[0] + 0x100));
+        e.register_double(0x006e_cc70, |e, a| {
+            e.mem.set_u32(a[1], 0);
+            Ret::default()
+        });
+        let free_list = e.mem.alloc(0x10);
+        let queue = e.mem.alloc(0x14);
+        e.mem.set_u32(queue + 8, free_list);
+        let message = e.mem.alloc(0x10);
+        // Empty: false and nothing assigned.
+        assert!(!e.call(0x0090_5770, &args![queue, message]).bool());
+        assert!(calls(&e, MESSAGE_ASSIGN_ADDRESS).is_empty());
+        // Two nodes: the head is consumed and handed back.
+        let first = e.mem.alloc(0x10);
+        let second = e.mem.alloc(0x10);
+        e.mem.set_u32(first + 8, second);
+        e.mem.set_u32(queue + 0xc, first);
+        e.mem.set_u32(queue + 0x10, second + 8);
+        assert!(e.call(0x0090_5770, &args![queue, message]).bool());
+        assert_eq!(
+            calls(&e, MESSAGE_ASSIGN_ADDRESS),
+            vec![vec![message, first + 0x100]]
+        );
+        assert_eq!(e.mem.u32(queue + 0xc), second);
+        assert_eq!(
+            e.mem.u32(queue + 0x10),
+            second + 8,
+            "the tail is not touched"
+        );
+        // The node's message is released and the node given back.
+        assert_eq!(calls(&e, 0x009b_c890), vec![vec![first, 0]]);
+        let give = calls(&e, 0x006e_cc70);
+        assert_eq!(give.len(), 1);
+        assert_eq!(give[0][0], free_list);
+        // The last node empties the queue.
+        assert!(e.call(0x0090_5770, &args![queue, message]).bool());
+        assert_eq!(e.mem.u32(queue + 0xc), 0);
+        assert!(!e.call(0x0090_5770, &args![queue, message]).bool());
+    }
+
+    /// `ActorPathingMessage` assignment (`006e9c60`).
+    const MESSAGE_ASSIGN_ADDRESS: u32 = 0x006e_9c60;
+
+    #[test]
+    fn test_fn_009057d0() {
+        let mut e = bare();
+        quiet(&mut e, &[0x0040_1970, 0x0040_f6e0]);
+        let slot = e.mem.alloc(4);
+        // Empty slot: only the acquire.
+        assert_eq!(e.call(0x0090_57d0, &args![slot, 0x1000u32]).u32(), slot);
+        assert_eq!(e.mem.u32(slot), 0x1000);
+        assert!(calls(&e, 0x0040_1970).is_empty());
+        assert_eq!(calls(&e, 0x0040_f6e0), vec![vec![0x1014]]);
+        // The same object again: nothing.
+        e.call(0x0090_57d0, &args![slot, 0x1000u32]);
+        assert_eq!(calls(&e, 0x0040_f6e0).len(), 1);
+        // Another object: release the old, acquire the new.
+        e.call(0x0090_57d0, &args![slot, 0x2000u32]);
+        assert_eq!(e.mem.u32(slot), 0x2000);
+        assert_eq!(calls(&e, 0x0040_1970), vec![vec![0x1014]]);
+        assert_eq!(calls(&e, 0x0040_f6e0).last().unwrap(), &vec![0x2014]);
+        // Null: release only.
+        e.call(0x0090_57d0, &args![slot, 0u32]);
+        assert_eq!(e.mem.u32(slot), 0);
+        assert_eq!(calls(&e, 0x0040_1970).last().unwrap(), &vec![0x2014]);
+        assert_eq!(calls(&e, 0x0040_f6e0).len(), 2);
+    }
+
+    #[test]
+    fn test_fn_00905820() {
+        let mut e = bare();
+        let created = e.mem.alloc(8);
+        e.register_double(OPERATOR_NEW, move |_, _| word(created));
+        e.register(0x0047_0440, |e, a| {
+            let item = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], item);
+            e.mem.set_u32(a[0] + 4, 0);
+            word(a[0])
+        });
+        let item = e.mem.alloc(4);
+        let head = e.mem.alloc(8);
+        // A null item adds nothing.
+        e.call(0x0090_5820, &args![head, item]);
+        assert_eq!(e.mem.u32(head), 0);
+        assert!(calls(&e, OPERATOR_NEW).is_empty());
+        // An empty head takes the item itself.
+        e.mem.set_u32(item, 0x42);
+        e.call(0x0090_5820, &args![head, item]);
+        assert_eq!(e.mem.u32(head), 0x42);
+        assert!(calls(&e, OPERATOR_NEW).is_empty());
+        // A used head gets a new node after the last one.
+        let tail = e.mem.alloc(8);
+        e.mem.set_u32(tail, 0x41);
+        e.mem.set_u32(head + 4, tail);
+        e.call(0x0090_5820, &args![head, item]);
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![8]]);
+        assert_eq!(e.mem.u32(tail + 4), created);
+        assert_eq!(e.mem.u32(created), 0x42);
+        assert_eq!(e.mem.u32(head + 4), tail, "the head's link is unchanged");
+    }
+
+    #[test]
+    fn test_fn_00905820_allocation_fails() {
+        let mut e = bare();
+        e.register(OPERATOR_NEW, |_, _| word(0));
+        quiet(&mut e, &[0x0047_0440]);
+        let item = e.mem.alloc(4);
+        e.mem.set_u32(item, 0x42);
+        let head = e.mem.alloc(8);
+        e.mem.set_u32(head, 0x41);
+        e.call(0x0090_5820, &args![head, item]);
+        assert_eq!(e.mem.u32(head + 4), 0);
+        assert!(calls(&e, 0x0047_0440).is_empty());
+    }
+
+    #[test]
+    fn test_fn_009058e0_and_00905910() {
+        let mut e = bare();
+        quiet(&mut e, &[0x006b_3eb0, 0x0084_54f0]);
+        let array = e.mem.alloc(0x10);
+        assert_eq!(e.call(0x0090_58e0, &args![array, 12u32]).u32(), array);
+        assert_eq!(e.mem.u32(array), 0x0108_8450);
+        assert_eq!(calls(&e, 0x006b_3eb0), vec![vec![array, 12, 12]]);
+        e.mem.set_u32(array, 0);
+        e.call(0x0090_5910, &args![array]);
+        assert_eq!(e.mem.u32(array), 0x0108_8450);
+        assert_eq!(calls(&e, 0x0084_54f0), vec![vec![array, 1]]);
+    }
+
+    #[test]
+    fn test_bst_common_ll_message_queue_actor_pathing_message_scalar_deleting_destructor() {
+        let mut e = bare();
+        quiet(
+            &mut e,
+            &[0x006e_9bd0, 0x0080_0190, 0x006e_c390, OPERATOR_DELETE],
+        );
+        let queue = e.mem.alloc(0x14);
+        assert_eq!(e.call(0x0090_5930, &args![queue, 0u32]).u32(), queue);
+        assert_eq!(calls(&e, 0x006e_9bd0).len(), 1, "the destructor ran");
+        assert_eq!(e.mem.u32(queue), 0x0108_8438);
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        e.call(0x0090_5930, &args![queue, 1u32]);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![queue]]);
+    }
+
+    #[test]
+    fn test_bs_simple_array_tes_idle_form_p_1024_scalar_deleting_destructor() {
+        let mut e = bare();
+        quiet(&mut e, &[0x0084_54f0, OPERATOR_DELETE]);
+        let array = e.mem.alloc(0x10);
+        assert_eq!(e.call(0x0090_5960, &args![array, 0u32]).u32(), array);
+        assert_eq!(calls(&e, 0x0084_54f0), vec![vec![array, 1]]);
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        e.call(0x0090_5960, &args![array, 1u32]);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![array]]);
+    }
+
+    #[test]
+    fn test_fn_00905990_and_009059f0() {
+        let mut e = bare();
+        let object = e.mem.alloc(8);
+        assert_eq!(e.call(0x0090_59f0, &args![object]).u32(), object);
+        assert_eq!(e.mem.u32(object), 0x0108_8438);
+        e.mem.set_u32(object + 4, 9);
+        assert_eq!(e.call(0x0090_5990, &args![object]).u32(), object);
+        assert_eq!(e.mem.u32(object), 0x0108_8418);
+        assert_eq!(e.mem.u32(object + 4), 0);
+    }
+
+    #[test]
+    fn test_bst_free_list_actor_pathing_message_deallocate() {
+        let mut e = bare();
+        quiet(&mut e, &[0x009b_c890, 0x006e_cc70]);
+        let free_list = e.mem.alloc(0x10);
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, 0x3000);
+        e.call(0x0090_59c0, &args![free_list, slot]);
+        // The node's message is released first, then the slot is given back.
+        assert_eq!(calls(&e, 0x009b_c890), vec![vec![0x3000, 0]]);
+        assert_eq!(calls(&e, 0x006e_cc70), vec![vec![free_list, slot]]);
+        let log = e.call_log.as_ref().unwrap();
+        let release = log.iter().position(|(a, _)| *a == 0x009b_c890).unwrap();
+        let give = log.iter().position(|(a, _)| *a == 0x006e_cc70).unwrap();
+        assert!(release < give);
+    }
+
+    fn array_scene(e: &mut Engine, count: u32, capacity: u32) -> u32 {
+        let array = e.mem.alloc(0x10);
+        vtable(e, array, VALUE_VT);
+        e.mem.set_u32(array + 4, 0x6000);
+        e.mem.set_u32(array + 8, count);
+        e.mem.set_u32(array + 0xc, capacity);
+        e.register(0x0043_8b90, |e, a| {
+            word((e.mem.u32(a[0] + 8) == e.mem.u32(a[0] + 0xc)) as u32)
+        });
+        quiet(e, &[0x006e_3d30]);
+        e.register(0x009a_3910, |_, _| word(8));
+        array
+    }
+
+    #[test]
+    fn test_fn_00905a10_first_allocation() {
+        let mut e = bare();
+        let array = array_scene(&mut e, 0, 0);
+        slot_ret(&mut e, VALUE_VT, 4, 0x7000);
+        assert_eq!(e.call(0x0090_5a10, &args![array]).u32(), 0);
+        assert_eq!(slot_calls(&e, VALUE_VT, 4), vec![vec![array, 4]]);
+        assert_eq!(e.mem.u32(array + 4), 0x7000);
+        assert_eq!(e.mem.u32(array + 8), 1);
+        assert_eq!(e.mem.u32(array + 0xc), 4);
+    }
+
+    #[test]
+    fn test_fn_00905a10_grow_and_room() {
+        let mut e = bare();
+        let array = array_scene(&mut e, 4, 4);
+        assert_eq!(e.call(0x0090_5a10, &args![array]).u32(), 4);
+        assert_eq!(calls(&e, 0x006e_3d30), vec![vec![array, 8, 4]]);
+        assert_eq!(e.mem.u32(array + 8), 5);
+        assert_eq!(e.mem.u32(array + 0xc), 8);
+        // Room left: only the count changes.
+        assert_eq!(e.call(0x0090_5a10, &args![array]).u32(), 5);
+        assert_eq!(calls(&e, 0x006e_3d30).len(), 1);
+        assert_eq!(e.mem.u32(array + 8), 6);
+        assert_eq!(e.mem.u32(array + 4), 0x6000);
+    }
+
+    #[test]
+    fn test_fn_00905aa0() {
+        let mut e = bare();
+        quiet(&mut e, &[0x0090_5b00]);
+        let out = e.mem.alloc(4);
+        push_scene(&mut e, 0);
+        assert!(!e.call(0x0090_5aa0, &args![0x5000u32, out, 0x77u32]).bool());
+        assert!(calls(&e, 0x0090_5b00).is_empty());
+        push_scene(&mut e, 0x8000);
+        assert!(e.call(0x0090_5aa0, &args![0x5000u32, out, 0x77u32]).bool());
+        assert_eq!(
+            calls(&e, 0x006e_cd60),
+            vec![vec![0x5000, out], vec![0x5000, out]]
+        );
+        assert_eq!(calls(&e, 0x0090_5b00), vec![vec![0x8000, 0x77]]);
+    }
+
+    #[test]
+    fn test_fn_00905ae0() {
+        let mut e = bare();
+        quiet(&mut e, &[0x009b_c890]);
+        e.call(0x0090_5ae0, &args![0x4000u32]);
+        assert_eq!(calls(&e, 0x009b_c890), vec![vec![0x4000, 0]]);
+    }
+
+    #[test]
+    fn test_process_getters() {
+        let mut e = bare();
+        let process = e.mem.alloc(0x240);
+        e.mem.set_u32(process + 0x16c, 0x1234);
+        e.mem.set_u32(process + 0x224, 0x5678);
+        e.mem.set_f32(process + 0xa8, 12.5);
+        e.mem.set_f32(process + 0xac, -3.0);
+        assert_eq!(e.call(0x009b_6600, &args![process]).u32(), 0x1234);
+        assert_eq!(e.call(0x009e_e020, &args![process]).u32(), 0x5678);
+        assert_eq!(e.call(0x009b_88a0, &args![process]).f32(), 12.5);
+        assert_eq!(e.call(0x009b_88c0, &args![process]).f32(), -3.0);
     }
 }
