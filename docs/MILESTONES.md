@@ -33,6 +33,15 @@ reading do not establish them.
 
 ## Active work: M1
 
+Reference #122 and rolling #123 passed both checks and merged as `6bea9a1`
+and `8b5eebe`. Loaded-area bounds are published in rolling #124 with fresh
+CI. Animation collection `6dbf98f` passes 13,820 combined engine tests,
+strict lint and formatting; 37 functions are complete, two retain SEH
+partials and `005f3a20` remains open. A fresh worker started that routine.
+Root now validates the buffered count/health writer and payload-decoder
+probe. Build 40 remains the play version. Next action: finish that bounded
+probe while the other slots continue, then collect the prepared Init3D batch.
+
 Loaded-area bounds collected as `86886d9`: 29 complete functions and three
 explicit exception-cleanup partials; 13,790 combined engine tests, strict
 lint and formatting pass. A fresh MobileObject worker started immediately.
