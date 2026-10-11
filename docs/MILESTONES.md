@@ -33,6 +33,14 @@ reading do not establish them.
 
 ## Active work: M1
 
+Continuous batch update, 2026-10-10: build 40 from merged #113 passed
+Doc Mitchell (63 s), Back in the Saddle (410 s) and Ghost Town Gunfight
+(339 s) scripted acceptance routes. Navigation continuation adds 36
+complete translations with four explicit skips; 13,487 combined engine
+tests, lint and formatting pass. Phase 2 list adapter PR #115 passed local
+core checks and awaits CI. Next action: continue the prepared translation
+slots and validate the count-payload dependency (see ENGINE_STATE.md).
+
 Engine-port takeover, 2026-10-10 evening: rolling translation PR #109
 passed both CI checks and merged as `b995218`; these translations are
 unit-tested engine code, not new playable behavior. Interrupted a01/a04
