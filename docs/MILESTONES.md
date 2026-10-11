@@ -33,6 +33,14 @@ reading do not establish them.
 
 ## Active work: M1
 
+Rolling #131 merged `7cda9bf` after both CI checks; #133 publishes the next
+movement/effect batch with fresh CI. The effect collection passed 14,095
+combined engine tests, strict lint and formatting, and its fresh worker
+immediately continued. Root's script-loading follow-on has five reviewed
+dependencies and six matching native constructor cases, with Rust checks
+queued behind HUD and movement. Next action: collect those slots, validate
+the script dependencies, then continue native action-list loading.
+
 Persistence dependency #132 is published at `6513c26`; all 15,781 workspace
 tests, strict lint, formatting and release/debug builds pass. The normal
 engine registry preserves 10,201 original count/health-only item payloads

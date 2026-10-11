@@ -7,6 +7,23 @@ machinery runs.
 
 ## Resume here
 
+Latest: rolling #131 passed both CI checks and merged `7cda9bf` at 04:57
+local. `ship.sh 131` completed and created attached #133 at `f264324`,
+covering movement persistence and effect-item routines. Its CI is fresh.
+Effect collection is now `6cdf2b2` (source `7cc22ff`), with 14,095 combined
+engine tests plus doctest, strict lint and formatting passing. Fresh
+`/root/a04_round15` immediately started the remaining normal effect-item
+entries at `00404a80`; its 34-body draft is ready and compiler-held.
+
+a03 owns the compiler for its large HUD partial, followed by cycle03/fresh
+worker, a01's twenty-body dialogue/movement batch and cycle01, root's
+persistence checks, then a04. Root's script follow-on now contains five
+dependencies and nine prepared tests in `tesscript.rs` and
+`tesscriptrunmanager.rs`, plus `ENGINE_STATE.md`. Six native constructor
+vectors pass; independent source review found no mismatch. Rust checks
+are pending. Interpreter `005e1160` and action-list semantics remain open.
+PR #132 core passes, viewer CI is pending. Build 40 remains current.
+
 Latest, 04:49 local: persistence follow-on #132 is published and attached at
 `6513c26`, with three dependency helpers and four regressions. All 15,781
 workspace tests (13,928 engine), strict lint, formatting and release/debug
