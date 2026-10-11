@@ -43,7 +43,17 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
   checks; cycle01 session 80637 collected `4c16784` with 14,279 combined
   engine tests passing. Fresh `/root/a01_round18` immediately began the
   remaining twenty-two audio bodies from `00ad7e90`. Root owns the sole
-  compiler for two-helper checks (session 52391), then I/O validates.
+  compiler for two-helper checks: focused tests and all 16,062 workspace
+  tests pass (14,209 engine unit tests). After simplifying an identical
+  test constant flagged by lint, strict lint and formatting pass; release
+  and debug builds continue in session 98564. Then run both private probes,
+  followed by I/O, HUD and audio validation. All three slot sources are
+  ready: I/O twenty-four bodies, HUD forty through `0077f5c0`, and audio
+  twenty-two through `00ad87d0`. Audio also has seventeen passing native
+  timer/empty-call cases. Review fixed HUD callback capture timing and a
+  full-EAX predicate; I/O has additional pointer/flag reload regressions.
+  I/O's eighteen and audio's nineteen remaining markers are SEH-only;
+  reviewed partial-only lane advancement is allowed after validation.
 - Root #138 is attached/published at `e7cf965` on
   `codex/phase2-script-action-parser`: `expression.rs`,
   `tesscriptrunmanager.rs` and topic `ENGINE_STATE.md` contain six helpers
