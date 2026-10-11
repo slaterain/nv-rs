@@ -33,6 +33,14 @@ reading do not establish them.
 
 ## Active work: M1
 
+Rolling #116 passed both checks and merged as `c23f744` on 2026-10-10
+local time. Pathfinding's reviewed corrections and 35 further functions
+pass 13,680 combined engine tests, lint and formatting; a fresh agent
+owns its next task. The next rolling batch remains local until explosion's
+owner-reload correction passes. Lead reference-constructor helpers and
+form callback-reload regressions are in focused validation. Next action:
+collect the checked explosion correction and open the next rolling PR.
+
 Continuous update, 2026-10-10: navigation's relocation fix and three more
 functions pass 13,638 combined engine tests, lint and formatting. A fresh
 agent owns its three remaining geometry functions. Pathfinding validates

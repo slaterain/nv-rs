@@ -7,14 +7,15 @@ machinery runs.
 
 ## Resume here
 
-Codex takeover, 2026-10-10: rolling PRs #109, #112 and #114 passed both CI
-checks and were squash-merged as `b995218`, `d854fbe` and `89e1a0b`.
-Current rolling PR #116 contains the later navigation continuation and
-explosion helpers, ledger and handoff. The explosion review corrections have been collected and checked;
-#116 needs fresh CI on the updated head before merging. The lead branch is `claude/engine-crate`.
+Codex takeover, 2026-10-10: rolling PRs #109, #112, #114 and #116 passed
+both CI checks and were squash-merged as `b995218`, `d854fbe`, `89e1a0b`
+and `c23f744`. The lead branch is `claude/engine-crate`. Its later batches
+remain local pending the explosion owner-reload correction; after that
+collection passes, push with a lease against old remote head `2a2f132`
+and open/attach the next rolling PR.
 
 Phase 1 PR 7 (#113) passed both checks and merged as `f917219`.
-The lead branch is rebased onto current main `94165e8`.
+The lead branch is rebased onto current main `c23f744`.
 Only ledger/milestone conflicts needed resolution. Local validation
 passed 15,108 core tests, 182 viewer release tests, formatting, lint and
 release builds. Doc Mitchell, Back in the Saddle and Ghost Town Gunfight
@@ -34,32 +35,29 @@ three children. Fresh agent creation works again; each collected slot gets
 a fresh worker, with heavy compilation serialized across all worktrees.
 
 Slot state: a01 navigation continuation is owned by fresh worker
-`/root/a01_round6`. Collection `d403120` adds three complete functions and
+`/root/a01_round6`. Collection `aae9bdb` adds three complete functions and
 fixes `0069b030` to reload its buffer after a callback that may relocate it.
 The regression verifies the old storage is untouched; 13,638 combined
 engine tests, lint and formatting pass. Three large geometry functions
 remain: `006987d0`, `00699b60`, `006bd040`. The fresh worker researches
-these while a03 has the exclusive heavy-compiler window.
-a03 b0331 pathmanager.cpp is running under fresh `/root/a03_round3`.
-Its first 35 complete / five partial functions were collected as `5e7dbdf`;
-13,599 combined engine tests, lint and formatting pass. The five exception
-cleanup partials remain queued explicitly; 65 entries remain overall.
-Review by the fresh worker found normal-path argument defects in local
-`006eac70` and `006e9cc0`: by-value words and addresses of local argument
-slots were confused, and a key must be reloaded after cancellation.
-That worker owns the corrections and regressions. Keep the local follow-on
-unpublished until these corrections are collected; a01's fix is collected.
-Remote #116 excludes both affected batches; `HOLD_LATER_PUSH=1 bin/ship.sh
-116` can merge it and retain the later commits locally.
+these while the lead has the exclusive heavy-compiler window.
+a03 b0331 pathmanager.cpp is running under fresh `/root/a03_round4`.
+Collection `639f269` adds 29 complete and six partial functions plus all
+reviewed corrections to earlier argument-slot ownership, output ordering,
+callback reloads and completion pointers. The combined 13,680 engine
+tests, lint and formatting pass. Forty entries remain: 15 explicit
+exception-cleanup partials and 25 untouched, starting `006ec5b0`.
 a04 b0160 explosion.cpp is running under fresh worker `/root/a04_round5`.
-Its latest 21-function continuation was collected as `094fbe7`; 13,633
+Its latest 21-function continuation was collected as `de42191`; 13,633
 combined engine tests, lint and formatting pass. Native sort permutations
 cover duplicate keys, NaN, signed zero and infinities. Sixteen entries
 remain, starting `009ac5a0`. New PC review requires `009b0f80` to reload
 the owner after its virtual IsActor callback; the fresh worker owns that
 correction and a mutation regression. It must also mark the already
 documented omitted exception cleanup as explicit partials. Keep this local
-batch unpublished until corrected; remote #116 excludes it.
+batch unpublished until corrected; merged #116 excludes it. The fix and
+further queued translations are prepared but await compilation after the
+lead's window.
 a06's next b0360 and a05's next b0158 (12 entries starting `008ca620`)
 are prepared and waiting for capacity. Never collect/reset an active slot.
 a05's collected batch has 28 complete / 12 partial functions; gaps remain
