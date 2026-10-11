@@ -145,10 +145,19 @@ registration, `nisystem/bsniallocator.rs`, `bscore/memorymanager.rs`
 and `fallout_shared/form_support.rs`.
 Three native allocator-header vectors pass. No public reference adapter
 exists yet; next validate and continue the real startup dependency chain.
+Final in-flight check: `CARGO_PROFILE_DEV_DEBUG=0 cargo test -j 2 -p engine
+allocator_` compiled successfully, with 18 tests passing and one failing.
+`allocator_support::tests::initialization_uses_real_constructors_and_global_holder`
+expects `block_size(holder) == Some(4)` at line 102, but gets `Some(8)`.
+Investigate actual platform allocation sizing before changing the assertion.
+No repair or further checks were started after the usage stop. Full engine/
+workspace tests, clippy, debug/release builds and the updated private
+`reference-bootstrap-allocator.rs` probe remain pending. Session 30566 is
+closed; no compiler is active. Root worktree is clean at `6a1be1b`.
 
 Simultaneous engine compilers exhausted host memory; ONE heavy engine
 compile may run at a time. Root started allocator-focused validation
-at the usage boundary (session 30566; final outcome recorded below).
+at the usage boundary (session 30566, now closed; outcome recorded above).
 Resume a04 then a01 validation after completing the lead's dependency
 checks. Other workers wait,
 continuing research/review. The lead grants each next window explicitly.
