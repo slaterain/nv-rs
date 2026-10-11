@@ -66,12 +66,13 @@ Lead Phase 2 work:
   payload probe checks 20 health and 14 count values across 3,319 lists /
   3,365 forms with the source unchanged. This is not a save round trip.
 - Managed checkout `%USERPROFILE%/.codex/worktrees/phase2-extra-data/wt-phase0`
-  is `codex/phase2-reference-state`, rebased onto `3a92d0a`. Checkpoint
-  `b23fa5a` follows `b218f8f`, `c62ee74`, `82d53a1`. Ten form helpers,
-  nine allocator/counter helpers and form callback-reload corrections pass
-  13,716 engine tests, doc tests, engine clippy, formatting and debug build.
+  is `codex/phase2-reference-state`, based on `3a92d0a`. PR #122 is open
+  and attached at consolidated commit `0653079`. Ten form helpers,
+  nine allocator/counter helpers, form callback-reload corrections and the
+  new Reference adapter pass 15,587 core tests (13,734 engine), workspace
+  clippy with warnings denied, formatting, release and debug builds.
   Native spot checks: five header, two zero-capacity array and three
-  allocator-header vectors. Full workspace/release checks remain pending.
+  allocator-header vectors. Core/viewer CI now gates merging #122.
 - The allocator test failure was a fixture expectation: `Mem::alloc` rounds
   to eight bytes. The fixed test verifies requests of 4/13 separately from
   backing blocks of 8/16. Twenty allocator-focused tests pass.
@@ -80,17 +81,18 @@ Lead Phase 2 work:
   and count removal while preserving health. It initializes only the PC
   allocator sequence through `00aa2020`, not full BSSystemUtility startup.
   No game-function doubles or game-file writes. No public creation API yet.
-- Uncommitted `reference.rs` plus `lib.rs` add an existing-reference handle
-  and embedded-list accessor. A generated isolation/aliasing regression is
-  prepared; formatting passes, validation is running. The private probe was
-  updated to exercise this new handle, but that revision has not run yet.
-  World consumers, payload conversion and FOS writing remain open.
+- `reference.rs` plus `lib.rs` add an existing-reference handle and embedded
+  list accessor. Its generated isolation/aliasing regression and updated
+  installed-executable probe pass. Independent source review found no
+  concrete adapter issues. World consumers, payload conversion and FOS
+  writing remain open. Next research traces buffered extra-data saving
+  (`00426a30`) and the currently scaffolded save-buffer constructors.
 
 ONE heavy engine compiler across all worktrees, `-j2`, existing debug cache,
-`CARGO_PROFILE_DEV_DEBUG=0`. Root owns the compiler: session 87210 runs
-private `codex-audit/check-reference-adapter.ps1` (focused, workspace,
-strict lint, fmt, release, debug). Then a04, cycle04, a01, cycle01, a03.
-Disk is about 3.8 GB free. Automatic approval review previously blocked
+`CARGO_PROFILE_DEV_DEBUG=0`. a04 owns the compiler now; root validation
+session 87210 completed successfully. Then cycle04, a01, cycle01, a03
+when ready. Root save-buffer follow-on is research only. Disk is about
+2 GB free. Automatic approval review previously blocked
 idle p3 target deletion; nothing was deleted. Do not bypass that denial.
 Private task.sh warns rather than deleting caches and retains scratch.
 Private ship.sh now safely recreates an absent merged branch with an empty
@@ -107,8 +109,8 @@ No original-game comparison was performed. Exact menu-input/GPU renderer
 boundaries remain in FRAME_SKELETON.md. These translation batches do not
 establish new playable features.
 
-Next action: finish root reference validation/probe, then grant a04 the
-compiler. Ship #121 once both current-head checks pass and continue
+Next action: collect a04 after validation. Ship #121 and merge #122 once
+both current-head checks pass (rebase #122 if main advances), and continue
 collecting and immediately restarting finished translation slots.
 
 ## Where things stand

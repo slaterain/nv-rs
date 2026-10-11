@@ -33,6 +33,13 @@ reading do not establish them.
 
 ## Active work: M1
 
+Reference adapter #122 is open at `0653079` after 15,587 core tests,
+strict workspace lint, formatting, release/debug builds and the real
+registry probe pass. The handle keeps reference lists isolated and aliases
+the same object when copied. No viewer consumer or save round trip exists.
+Next action: collect the prepared Explosion batch and trace buffered
+extra-data saving while #121/#122 await their current-head CI gates.
+
 Multibound collection `20c6123` passes 13,751 combined engine tests,
 strict lint and formatting. Three exception-cleanup partials remain
 explicit; eight generated cases also match the native executable. Its
