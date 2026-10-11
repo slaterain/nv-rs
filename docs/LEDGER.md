@@ -37,6 +37,24 @@ Map provenance:
 | open | 25920 | 39.1% |
 | **all** | **66259** | |
 
+Translation totals count markers, not complete behavior. **12** engine functions
+have explicit incomplete markers and remain `partial` in the task queue.
+
+| Partial engine function | Gap location |
+| --- | --- |
+| `008c9330` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1407` |
+| `008c9430` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1423` |
+| `008c94e0` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1438` |
+| `008c9ae0` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1590` |
+| `008c9bd0` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1615` |
+| `008c9c70` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1509` |
+| `008c9d70` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1536` |
+| `008c9e40` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1546` |
+| `008c9ef0` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1663` |
+| `008ca070` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1562` |
+| `008ca350` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1571` |
+| `008ca480` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1782` |
+
 Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14600 (36.0%) are translated or traced.
 
 Rust cites 15631 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
