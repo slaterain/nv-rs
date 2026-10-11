@@ -33,10 +33,11 @@ reading do not establish them.
 
 ## Active work: M1
 
-Continuous update, 2026-10-10: explosion continuation passes 13,633
-combined engine tests, lint and formatting. A fresh agent owns the next
-task and a required callback-pointer reload correction in that local
-batch. Navigation validates next, then pathfinding's review corrections.
+Continuous update, 2026-10-10: navigation's relocation fix and three more
+functions pass 13,638 combined engine tests, lint and formatting. A fresh
+agent owns its three remaining geometry functions. Pathfinding validates
+its review corrections next; explosion's owner reload fix is prepared
+while its fresh agent continues the queued functions.
 Count #117 and health #118 pass local checks and await CI; the health
 probe checks 20 health and 14 count payloads with the save unchanged.
 Reference-constructor dependency work is prepared but uncompiled.

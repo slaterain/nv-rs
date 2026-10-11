@@ -34,12 +34,12 @@ three children. Fresh agent creation works again; each collected slot gets
 a fresh worker, with heavy compilation serialized across all worktrees.
 
 Slot state: a01 navigation continuation is owned by fresh worker
-`/root/a01_round5`. Its latest 36 complete / 4 skipped batch was collected
-as `4c39fa0`; 13,577 combined engine tests, lint and formatting pass.
-That batch is local only: PC review found that `0069b030` must reload the
-array buffer after `006927d0`, which may relocate it. The fresh worker owns
-this required correction and a relocation regression before the batch is
-pushed. Six queue entries remain, starting with open `006987d0`.
+`/root/a01_round6`. Collection `d403120` adds three complete functions and
+fixes `0069b030` to reload its buffer after a callback that may relocate it.
+The regression verifies the old storage is untouched; 13,638 combined
+engine tests, lint and formatting pass. Three large geometry functions
+remain: `006987d0`, `00699b60`, `006bd040`. The fresh worker researches
+these while a03 has the exclusive heavy-compiler window.
 a03 b0331 pathmanager.cpp is running under fresh `/root/a03_round3`.
 Its first 35 complete / five partial functions were collected as `5e7dbdf`;
 13,599 combined engine tests, lint and formatting pass. The five exception
@@ -48,7 +48,7 @@ Review by the fresh worker found normal-path argument defects in local
 `006eac70` and `006e9cc0`: by-value words and addresses of local argument
 slots were confused, and a key must be reloaded after cancellation.
 That worker owns the corrections and regressions. Keep the local follow-on
-unpublished until these and a01's relocation correction are collected.
+unpublished until these corrections are collected; a01's fix is collected.
 Remote #116 excludes both affected batches; `HOLD_LATER_PUSH=1 bin/ship.sh
 116` can merge it and retain the later commits locally.
 a04 b0160 explosion.cpp is running under fresh worker `/root/a04_round5`.
@@ -94,10 +94,13 @@ and release build. The real-save probe passes all 20 health and 14 count
 payloads with the source hash unchanged; count source is unchanged in
 this validated follow-on. No root process is active. The managed checkout
 is now `codex/phase2-reference-state`, commit `10220cb`, based on #115.
-It adds two uncompiled helpers in `form_support.rs` and registration only.
-Five native header vectors pass; the prior real-registry reference probe
-stops at missing `00402d30`. Next validate those helpers and continue the
-actual constructor dependency chain; no public reference adapter exists yet.
+It adds two uncompiled helpers in `form_support.rs` and registration;
+eight further constructor/allocation helpers and tests are uncommitted.
+Five native header and two zero-capacity array vectors pass. Unit tests
+use a generated allocator fixture; actual Gamebryo allocator startup is
+still missing. The prior real-registry reference probe stops at missing
+`00402d30`. Next validate these helpers after a03 collection and continue
+the dependency chain; no public reference adapter exists yet.
 
 Simultaneous engine compilers exhausted host memory; ONE heavy engine
 compile may run at a time. a01 has the current validation window;
