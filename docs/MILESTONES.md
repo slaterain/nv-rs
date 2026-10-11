@@ -33,27 +33,22 @@ reading do not establish them.
 
 ## Active work: M1
 
-Continuous translation remains active on 2026-10-11. #134 through #143
-merged after both current-head CI checks; no rolling PR is currently open.
-The final HUD bodies pass 121 focused and 14,386 engine tests plus strict
-lint, formatting and hygiene; its release build is finishing. Water's thirty-seven normal
-bodies and TaskQueueInterface's first forty are independently reviewed;
-their fifteen and six native cases pass, and Rust checks await a compiler.
-
-Root's saved-item batch has three helpers, four Rust regressions and
-eighteen matching native cases. Focused and full workspace tests pass;
-strict lint and formatting pass; release/debug builds continue. Debug probes
-load and rewrite two original script-bearing inventory payloads exactly,
-with both real BEGIN handlers exercised in each. The first historical mod
-order is unavailable. The second uses a save with all ten official plugins
-available and initializes three real declared variables. Generated receivers and partial
-startup limit both fixtures; whole-save preservation, ordinary script bodies,
-world integration and original-game acceptance remain open. Two local full
-compiler pipelines are active. Build 40 remains current, without a confirmed
-next-build date. Next action: collect HUD, validate water, and finish the
-optimized inventory probes before publishing the saved-item helpers.
-[HANDOFF.md](HANDOFF.md) tracks ownership and validation.
-
+Continuous translation remains active. #143 merged after both CI checks.
+HUD's final six normal bodies passed validation and collection `34ee119`:
+14,410 combined engine tests, doctest, strict lint and formatting. Seventeen
+compiler-only partials remain explicit. A fresh worker immediately started
+save/load file and change-map translation. Water and taskqueue now validate
+in two compiler lanes. Root #144 publishes three saved-item helpers after
+16,238 workspace tests, strict lint, formatting and release/debug builds.
+Both final release probes preserve selected original scripted item payloads
+byte-for-byte and run the expected BEGIN handlers; one uses actual declared
+variable defaults from the installed official plugins in saved order.
+Ordinary script bodies, historical overrides and whole-save/world integration
+remain open. Root's next bounded correction has seventy-eight native cases
+and eight drafted Rust regressions; compilation is queued. Build 40 remains
+current with no next-play date confirmed. Next action: merge #144 after both
+CI checks, validate the queued batches, and continue the saved-local path.
+[HANDOFF.md](HANDOFF.md) tracks active ownership and exact restart steps.
 Script-loading dependency #135 is published at `86d19a0`: 15,876 workspace
 tests including doctests, strict lint, formatting and release/debug builds
 pass. It adds five helpers and ten regressions, with ten matching native

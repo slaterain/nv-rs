@@ -7,57 +7,53 @@ machinery runs.
 
 ## Resume here
 
-### Current state, 2026-10-11 15:16 EDT
+### Current state, 2026-10-11 15:40 EDT
 
-This section supersedes the earlier active-state notes below.
+This section supersedes the historical notes below.
 
-- #143 merged as `a24bc31` after both current-head checks passed at
-  `254d207`. ship143 session 78829 completed successfully; never rerun it.
-  Later documentation stays local until the next validated code collection.
-  No rolling PR is currently open. Audio collection passed 14,403 combined
-  engine tests, the doctest, strict lint and formatting.
-- `/root/a03_round19` owns only `fallout_interface/hudmainmenu.rs`.
-  Its six final normal bodies pass 121 focused and 14,386 engine tests,
-  the doctest, strict lint, formatting and all 49 hygiene checks. Release
-  compilation is finishing.
-  Fifteen independently reviewed compiler-only partials remain. Once clean
-  and committed, cycle03 once with reviewed partial-only advancement and
-  immediately start a fresh agent on the new task.
-- `/root/a04_water_complete` owns only `fallout_shared/bgsautowater.rs`.
-  All thirty-seven normal bodies have independent PC review; fifteen native
-  cases pass. Five SEH-only partials remain. Forty-four Rust tests are drafted
-  but unrun; compiler held. A static audit fixed a test cursor/tail alias.
-- `/root/a01_round19` owns only `fallout_misc/taskqueueinterface.rs`.
-  Its first forty normal bodies through `0087b600` have independent PC
-  review and six matching native constructor cases. Forty-two Rust tests
-  remain unrun; compiler held. Four entries are complete and thirty-six
-  retain explicit compiler-only partials. The next fresh batch must skip
-  these reviewed markers and start the remaining normal bodies at `0087b650`.
-- Root owns three saved-item helpers, four Rust regressions and
-  `docs/ENGINE_STATE.md` in the separate `codex/phase2-reference-predicate`
-  checkout. Source is frozen at `90e3821`, based on merged #142; only its
-  documentation is dirty. Eighteen native cases and the focused and full
-  workspace tests (16,238 including doctests), strict lint and formatting
-  pass. Session 91094 now runs release then debug builds. Do not duplicate
-  or rebase during these checks.
-- The first original script-bearing item probe passed in debug before the
-  final rebase; its optimized rerun remains pending. Its historical mod
-  order is unavailable, so installed base-game script data is an explicit
-  limitation. A metadata scan found three saved nonzero-variable instances
-  whose missing mod scripts cannot be replaced by their incompatible base
-  record. Save 138 has all ten official plugins available in its saved order.
-  A second debug probe using that save and a real three-variable script
-  passes the exact 34-byte rewrite and both real BEGIN handlers. Both final
-  optimized probes still await the release build. Neither establishes ordinary
-  body execution, whole-save preservation or world integration.
-- Root and HUD occupy the two full compiler pipelines. Water checks follow
-  when a pipeline becomes free; no third full compiler. No further deletion
-  attempts after automatic review rejected cleanup and the user removed
-  idle caches manually.
-- Build 40 remains current. No next play-build date or new visible feature
-  is confirmed. Continue cycling and shipping until stopped, preserving the
-  user's 98% weekly usage stop/handoff rule (57% around 14:57 EDT).
-
+- #143 merged `a24bc31` after both current-head CI checks. Its shipping
+  session 78829 is DONE; never rerun ship143.
+- HUD source `aabfc8b` passed 121 focused and 14,386 engine tests, the
+  doctest, strict lint, formatting, 49 hygiene checks and release build.
+  cycle03 session 72751 is DONE: collection `34ee119` passes 14,410
+  combined engine tests, the doctest, strict lint and formatting. Seventeen
+  reviewed compiler-only partials remain explicit (two legacy comments
+  needed their missing addresses). All ordinary HUD bodies are translated.
+  Fresh `/root/a03_round20` started immediately on b0223, owning only
+  `fallout_misc/bgssaveloadchangesmap.rs` and `bgssaveloadfile.rs`.
+  It is compiler-held and must not reset the slot.
+- `/root/a04_water_complete` owns `fallout_shared/bgsautowater.rs`:
+  thirty-seven normal bodies, five SEH-only partials, forty-four drafted
+  tests and fifteen passing native comparisons. It is validating now;
+  initial pointer type-annotation errors were corrected, tests still await
+  results. `/root/a01_round19` now has the other compiler lane for its
+  forty TaskQueueInterface bodies and forty-two tests. Four are complete;
+  thirty-six retain reviewed compiler-only partials. After collection its
+  fresh worker must continue ordinary bodies at `0087b650`.
+- Root PR #144 is published and attached at `94e709c`, branch
+  `codex/phase2-reference-predicate`. Three helpers and four regressions
+  pass 16,238 workspace tests, strict lint, formatting and release/debug
+  builds. Eighteen native cases pass. Both final release probes load a
+  selected original scripted inventory item and write it byte-identically,
+  with both expected BEGIN handlers. One uses an official save's exact
+  ten-plugin order and actual three-variable defaults. Its saved variable
+  list is empty. Historical plugin contents, ordinary script execution,
+  whole-save preservation and world/viewer integration remain unverified.
+  Merge #144 only after both current-head CI checks pass.
+- Root follow-on source checkpoint `d1b4123` on
+  `codex/phase2-script-local-values` owns `fallout_shared/tesscript.rs`,
+  `fallout_misc/bgsloadgamebuffer.rs` and topic `ENGINE_STATE.md`. It fixes
+  raw flag copying, signaling-NaN stores and live list-item lookup, and adds
+  two saved-form reader helpers. Eight regressions are drafted but unrun;
+  seventy-eight native cases and independent PC/source review pass.
+  Rebase after #144 merges, then run the prepared full check pipeline and
+  final nine-vector normal-registry release probe when a lane is free.
+- Limit full Cargo pipelines to two: water and taskqueue now own them.
+  Root and fresh a03 are source-only. No deletion attempts after automatic
+  review rejected cleanup and the user removed idle caches manually.
+- Build 40 remains current, without a confirmed next-play date or new
+  visible feature. Continue cycling and shipping until stopped. Preserve
+  the user's 98% weekly stop/handoff rule (62% around 15:35 EDT).
 ### Active again, 2026-10-11 after the usage reset
 
 This section supersedes the historical stopped state below. User requested
