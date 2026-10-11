@@ -33,6 +33,13 @@ reading do not establish them.
 
 ## Active work: M1
 
+Count adapter #117 passed both checks and merged as `cbca26e` on
+2026-10-10 local time. Health #118 is rebased onto main with unchanged
+implementation and fresh CI. Lead form dependencies pass 124 focused and
+13,466 engine tests, lint and formatting; the reference probe reaches the
+uninitialized allocator. Its traced startup helpers are prepared. Next
+action: validate those dependencies and the pending explosion corrections.
+
 Rolling #116 passed both checks and merged as `c23f744` on 2026-10-10
 local time. Pathfinding's reviewed corrections and 35 further functions
 pass 13,680 combined engine tests, lint and formatting; a fresh agent

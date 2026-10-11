@@ -30,8 +30,8 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 10674 | 16.1% |
-| traced | 4478 | 6.8% |
+| translated | 10675 | 16.1% |
+| traced | 4477 | 6.8% |
 | platform | 3417 | 5.2% |
 | library | 21915 | 33.1% |
 | open | 25775 | 38.9% |
@@ -103,7 +103,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Subsystem | Functions | KB | Named | translated | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 65 | 0 | 21269 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 6305 | 991 | 0 | 0 | 3174 | 69.7% |
+| fallout shared | 10470 | 2065 | 3149 | 6306 | 990 | 0 | 0 | 3174 | 69.7% |
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 78 | 0 | 0 | 6460 | 2.0% |
 | fallout/ai | 4849 | 1475 | 1888 | 2223 | 620 | 0 | 0 | 2006 | 58.6% |
 | fallout/interface | 2645 | 991 | 1247 | 583 | 741 | 0 | 0 | 1321 | 50.1% |

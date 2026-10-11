@@ -15,7 +15,7 @@ collection passes, push with a lease against old remote head `2a2f132`
 and open/attach the next rolling PR.
 
 Phase 1 PR 7 (#113) passed both checks and merged as `f917219`.
-The lead branch is rebased onto current main `c23f744`.
+The lead branch is rebased onto current main `cbca26e` (count PR #117).
 Only ledger/milestone conflicts needed resolution. Local validation
 passed 15,108 core tests, 182 viewer release tests, formatting, lint and
 release builds. Doc Mitchell, Back in the Saddle and Ghost Town Gunfight
@@ -35,20 +35,20 @@ three children. Fresh agent creation works again; each collected slot gets
 a fresh worker, with heavy compilation serialized across all worktrees.
 
 Slot state: a01 navigation continuation is owned by fresh worker
-`/root/a01_round6`. Collection `aae9bdb` adds three complete functions and
+`/root/a01_round6`. Collection `b50add8` adds three complete functions and
 fixes `0069b030` to reload its buffer after a callback that may relocate it.
 The regression verifies the old storage is untouched; 13,638 combined
 engine tests, lint and formatting pass. Three large geometry functions
 remain: `006987d0`, `00699b60`, `006bd040`. The fresh worker researches
 these while the lead has the exclusive heavy-compiler window.
 a03 b0331 pathmanager.cpp is running under fresh `/root/a03_round4`.
-Collection `639f269` adds 29 complete and six partial functions plus all
+Collection `7321030` adds 29 complete and six partial functions plus all
 reviewed corrections to earlier argument-slot ownership, output ordering,
 callback reloads and completion pointers. The combined 13,680 engine
 tests, lint and formatting pass. Forty entries remain: 15 explicit
 exception-cleanup partials and 25 untouched, starting `006ec5b0`.
 a04 b0160 explosion.cpp is running under fresh worker `/root/a04_round5`.
-Its latest 21-function continuation was collected as `de42191`; 13,633
+Its latest 21-function continuation was collected as `00532d6`; 13,633
 combined engine tests, lint and formatting pass. Native sort permutations
 cover duplicate keys, NaN, signed zero and infinities. Sixteen entries
 remain, starting `009ac5a0`. New PC review requires `009b0f80` to reload
@@ -81,10 +81,10 @@ The installed-executable real-registry probe passes construction, add,
 lookup and detach. No world/viewer consumer or save writer is added.
 Private probes/native vectors and the read-only 11-save baseline are in
 `phase0/codex-audit`; FOS_SAVES.md records the decoder limits.
-The count follow-on is ready PR #117 at `9b40334`, based on #115's merge
-and targeting main. Health PR #118 at `8cb6152` is stacked on count;
-rebase and retarget to main after count merges, never merge into its
-feature branch. Both have fresh CI. Their milestone notes are separate
+The count follow-on #117 passed both checks and merged as `cbca26e` at
+21:56 local time. Health PR #118 passed both checks before being rebased
+onto that main; its new head `9caa44a` targets main and awaits fresh CI.
+The health implementation is unchanged. Their milestone notes are separate
 from rolling history, and their generated ledger changes are deferred to
 rolling integration. Merge-tree checks against #116 pass without conflicts.
 Health checks passed: 74 focused tests, all 15,315 core tests, lint, formatting
@@ -114,12 +114,12 @@ deletion path to bypass that denial.
 Next steps:
 
 1. Continue reference-constructor dependency research/validation while
-   count and health PRs await CI. Build 40 and all three routes passed.
+   health PR #118 awaits CI. Build 40 and all three routes passed.
 2. Collect completed slots with one `cycle.sh NN 0 0` at a time. Never
    cycle an active agent's worktree. Rotate prepared tasks as capacity opens.
-3. Ship updated #116 when both checks pass; rebase affected branches
-   after another merge, retaining tests and regenerating the ledger.
-4. Merge #117 after both checks pass; retarget #118 onto main afterward.
+3. After the explosion correction passes collection, push and open the
+   next rolling PR; ship when both checks pass. Preserve local review holds.
+4. Merge #118 after both fresh checks pass on its new main-based head.
    Payload conversion, world ownership and save round trips
    remain open; decoding a save does not prove a lossless round trip.
 
