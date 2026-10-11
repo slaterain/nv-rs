@@ -40,7 +40,10 @@ That batch is local only: PC review found that `0069b030` must reload the
 array buffer after `006927d0`, which may relocate it. The fresh worker owns
 this required correction and a relocation regression before the batch is
 pushed. Six queue entries remain, starting with open `006987d0`.
-a03 b0331 pathmanager.cpp is running under `/root/a03`.
+a03 b0331 pathmanager.cpp is running under fresh `/root/a03_round3`.
+Its first 35 complete / five partial functions were collected as `d3d0a6a`;
+13,599 combined engine tests, lint and formatting pass. The five exception
+cleanup partials remain queued explicitly; 65 entries remain overall.
 a04 b0160 explosion.cpp is running under fresh worker `/root/a04_round4`.
 Its 24-function continuation and all reviewed ABI/NaN/accessor corrections
 were collected as `57fdb72`; 13,541 combined engine tests, lint and formatting
@@ -60,7 +63,7 @@ each collection. Native spot checks cover five `00698620` point products
 and 512 `006a5da0` flag combinations, not whole units. These translations
 are not newly playable behavior.
 
-Lead Phase 2 PR #115 is open at `c819461` after rebasing onto #114, branch
+Lead Phase 2 PR #115 passed both CI checks and merged as `94165e8`, branch
 `codex/phase2-extra-data`, in managed worktree
 `%USERPROFILE%/.codex/worktrees/phase2-extra-data/wt-phase0`.
 It adds the engine-owned ExtraData list handle and four traced helpers.
@@ -78,13 +81,14 @@ rustc memory allocation, before tests; no assertion failure. It is closed.
 Retry tests, clippy and release serially; private logs are
 `phase2-count-rebased-*`.
 Its real-save count probe passes 14 payloads across 3,319 extra lists.
-The count follow-on is draft PR #117 at `117d104`, stacked on #115; retarget
-onto main after #115 merges. No root cargo process is active. The managed
+The count follow-on is draft PR #117 at `f67404e`, rebased onto #115's merge
+and retargeted to main; fresh CI is running. The managed
 checkout is now `codex/phase2-extra-health`, with adapter and constructor
-changes committed as `44b2515`. A native vector caught signaling-NaN handling in
-`00431d10`; the fix and health adapter tests are not yet compiled. Simultaneous engine test
+changes committed as `3807051` after rebasing onto the count follow-on.
+A native vector caught signaling-NaN handling in `00431d10`; focused health
+tests are compiling in root session 61575. Simultaneous engine test
 compilers exhausted host memory; ONE heavy engine compile may run at a
-time now. a03 has the current validation window; a01, a04 and root wait,
+time now. Root has the current validation window; a01, a03 and a04 wait,
 continuing research/review. The lead grants each next window explicitly.
 Machine note: automatic policy blocked removal of idle p3's target cache;
 nothing was deleted. Private `task.sh` now warns below 40 GB free instead

@@ -33,6 +33,15 @@ reading do not establish them.
 
 ## Active work: M1
 
+Phase 2 list adapter #115 passed both checks and merged as `94165e8` on
+2026-10-10 local time. Count follow-on #117 now targets main with fresh CI;
+health adaptation is in local validation. Pathfinding collection adds 35
+complete functions and five explicit exception-cleanup partials; 13,599
+combined engine tests, lint and formatting pass. A fresh agent is on its
+next task. Next action: finish health validation and ship remote #116
+after its viewer check passes; the local navigation relocation fix still
+gates publishing the subsequent batch.
+
 Navigation collection, 2026-10-10: 36 further functions pass 13,577
 combined engine tests, lint and formatting. PC review found a buffer
 relocation case in `0069b030` that still needs a correction and regression;
