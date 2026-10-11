@@ -33,6 +33,13 @@ reading do not establish them.
 
 ## Active work: M1
 
+Navigation collection `d24c517` passes 13,698 combined engine tests,
+lint and formatting. Two additional normal paths retain explicit
+exception-cleanup partials; the last edge-repair body remains unregistered.
+A fresh worker researches it while pathfinding validates. Rolling #119
+and health #118 have passed core CI and await viewer CI.
+Next action: collect pathfinding and validate the lead allocator helpers.
+
 Explosion's owner/weapon callback-reload correction and nine further
 functions pass 13,695 combined engine tests, lint and formatting.
 Collection `a2fe87a` removes the publishing hold on the next rolling

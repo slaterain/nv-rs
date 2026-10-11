@@ -37,13 +37,15 @@ three children. Fresh agent creation works again; each collected slot gets
 a fresh worker, with heavy compilation serialized across all worktrees.
 
 Slot state: a01 navigation continuation is owned by fresh worker
-`/root/a01_round6`. Collection `b50add8` adds three complete functions and
+`/root/a01_round7`. Collection `b50add8` adds three complete functions and
 fixes `0069b030` to reload its buffer after a callback that may relocate it.
 The regression verifies the old storage is untouched; 13,638 combined
 engine tests, lint and formatting pass. Two normal-path geometry translations
-(`006987d0`, `006bd040`) are prepared with explicit exception-cleanup
-partials and callback regressions, but await compilation. `00699b60` remains
-unregistered: its edge/list ownership and repair paths are unresolved.
+(`006987d0`, `006bd040`) were collected as `d24c517`, with explicit
+exception-cleanup partials and callback regressions. All 13,698 combined
+engine tests, lint and formatting pass. This follow-on stays local behind
+PR #119. `00699b60` remains unregistered: its edge/list ownership and
+repair paths are unresolved; the fresh worker owns that investigation.
 a03 b0331 pathmanager.cpp is running under fresh `/root/a03_round4`.
 Collection `7321030` adds 29 complete and six partial functions plus all
 reviewed corrections to earlier argument-slot ownership, output ordering,
@@ -108,8 +110,8 @@ Three native allocator-header vectors pass. No public reference adapter
 exists yet; next validate and continue the real startup dependency chain.
 
 Simultaneous engine compilers exhausted host memory; ONE heavy engine
-compile may run at a time. a01 has the current validation window;
-a03 is next, then root. Other workers wait,
+compile may run at a time. a03 has the current validation window;
+root is next. Other workers wait,
 continuing research/review. The lead grants each next window explicitly.
 Machine note: automatic policy blocked removal of idle p3's target cache;
 nothing was deleted. Private `task.sh` now warns below 40 GB free instead

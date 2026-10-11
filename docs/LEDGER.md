@@ -30,18 +30,20 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 10682 | 16.1% |
-| traced | 4470 | 6.7% |
+| translated | 10683 | 16.1% |
+| traced | 4469 | 6.7% |
 | platform | 3417 | 5.2% |
 | library | 21915 | 33.1% |
 | open | 25775 | 38.9% |
 | **all** | **66259** | |
 
-Translation totals count markers, not complete behavior. **38** engine functions
+Translation totals count markers, not complete behavior. **40** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
 | --- | --- |
+| `006987d0` | `crates/engine/src/units/fallout_shared_pathfinding/navmesh_util.rs:3346` |
+| `006bd040` | `crates/engine/src/units/fallout_shared_pathfinding/navmesh_util.rs:3221` |
 | `006e9cc0` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:55` |
 | `006e9db0` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:82` |
 | `006e9fc0` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:139` |
@@ -119,7 +121,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | fallout/ai | 4849 | 1475 | 1888 | 2230 | 613 | 0 | 0 | 2006 | 58.6% |
 | fallout/interface | 2645 | 991 | 1247 | 583 | 741 | 0 | 0 | 1321 | 50.1% |
 | (unplaced) | 2353 | 470 | 0 | 30 | 412 | 1 | 0 | 1910 | 18.8% |
-| fallout shared/pathfinding | 1788 | 365 | 452 | 680 | 180 | 0 | 0 | 928 | 48.1% |
+| fallout shared/pathfinding | 1788 | 365 | 452 | 681 | 179 | 0 | 0 | 928 | 48.1% |
 | NiMain | 1619 | 261 | 1134 | 3 | 76 | 0 | 0 | 1540 | 4.9% |
 | BSHavok | 1615 | 316 | 1134 | 59 | 134 | 0 | 0 | 1422 | 12.0% |
 | BSShader | 1549 | 608 | 350 | 0 | 142 | 1407 | 0 | 0 | - |
