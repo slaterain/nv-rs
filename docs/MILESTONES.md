@@ -49,7 +49,7 @@ bodies collected as `1fc794c` after 14,311 combined engine tests; a fresh
 worker immediately started BGSAutoWater. Audio collected as `ceaf531`
 (after shipping rebase) with 14,279 combined
 engine tests passing; its fresh worker immediately began the remaining
-twenty-two bodies, now source-ready. Root #140 publishes two script
+twenty-two bodies, now under validation. Root #140 merged two script
 accessors: all 16,062 workspace tests, strict lint, formatting and
 release/debug builds pass, alongside forty-one native cases. The original
 compiled-script probe now passes both real event handlers. The saved-item

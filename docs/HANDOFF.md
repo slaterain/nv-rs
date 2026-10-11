@@ -21,6 +21,8 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
   remote merge happened first; private `finish-ship139.sh` then completed
   rebase/ledger/push and opened attached rolling #141 at `7a6cc48`. This
   continuation is DONE; never rerun ship139. Ship #141 when both checks pass.
+  #140 merged `4166432` after both current-head checks passed; its head was
+  `192b46e`. #141 core passes and viewer remains pending.
 - cycle04 session 86301 completed: source `5c914204` collected as `ddeecbd`,
   all normal effect-item bodies through `00405400`. Ten verified SEH-only
   partials were retained with reviewed partial-only advancement. Fresh
@@ -80,7 +82,8 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
   ran but stopped at `008d0360`; the rewrite assertion has not run.
   Root now owns `fallout_ai/baseprocess.rs` and
   `fallout_shared/tesactorbasedata.rs` on
-  `codex/phase2-reference-predicate`, based on #140. It drafts that true
+  `codex/phase2-reference-predicate`, rebased on merged #140 at `4166432`.
+  Its source checkpoint is `3c3bedb`, with Rust checks still pending. It drafts that true
   predicate and the following false predicate `0047c850`, confirmed from
   the real reference vtable and load-buffer call chain. Twelve native cases
   pass; independent PC/vtable/test-wiring review found no mismatch. Three
