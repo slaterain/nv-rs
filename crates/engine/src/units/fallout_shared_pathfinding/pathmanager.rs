@@ -52,6 +52,8 @@ pub fn pathing_task_data_scalar_deleting_destructor(e: &mut Engine, this: Ptr, f
 }
 
 // Translated from 006e9cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006e9cc0 - compiler-generated exception cleanup remains unimplemented
+// open: exceptional exit cleanup of constructed members and by-value token is omitted.
 /// Constructs the pathing task data object. PC code initializes its embedded
 /// arrays at `+0x40`, `+0x50`, and quick-bit storage at `+0x60`.
 pub fn pathing_task_data_construct(e: &mut Engine, this: Ptr, request: u32, source: u32) -> Ptr {
@@ -70,18 +72,15 @@ pub fn pathing_task_data_construct(e: &mut Engine, this: Ptr, request: u32, sour
             0x006e_bf30,
             &args![temporaries, Ptr::<()>::new(temporaries.addr() + 4)],
         );
-        fn_006e9db0(
-            e,
-            this,
-            Ptr::new(request),
-            Ptr::<()>::new(temporaries.addr() + 4).addr(),
-        );
+        fn_006e9db0(e, this, Ptr::new(request), e.mem.u32(temporaries.addr()));
         e.call(0x006e_bf90, &args![Ptr::<()>::new(temporaries.addr() + 4)]);
     });
     this
 }
 
 // Translated from 006e9db0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006e9db0 - compiler-generated exception cleanup remains unimplemented
+// open: exceptional exit cleanup of constructed members and by-value token is omitted.
 /// Assigns the request pointer and copies the cancellation source into the
 /// task data's embedded state.
 pub fn fn_006e9db0(e: &mut Engine, this: Ptr, request: Ptr, source: u32) {
@@ -178,10 +177,10 @@ pub fn pathing_task_data_process(e: &mut Engine, this: Ptr) {
                             e.call(0x0080_0190, &args![message]);
                         });
                         e.with_stack(8, |e, message| {
-                            e.call(0x004b_0680, &args![message, 0u32, this]);
-                            let category = e.call(0x0047_d0b0, &args![message]).u32();
+                            let queued = e.call(0x004b_0680, &args![message, 0u32, this]).u32();
+                            let category = e.call(0x0047_d0b0, &args![]).u32();
                             let queue = e.call(0x0055_9450, &args![category]).u32();
-                            fn_006eb7f0(e, Ptr::new(queue), message.addr());
+                            fn_006eb7f0(e, Ptr::new(queue), queued);
                             e.call(0x0048_3710, &args![message]);
                         });
                     } else {
@@ -192,10 +191,10 @@ pub fn pathing_task_data_process(e: &mut Engine, this: Ptr) {
                             e.call(0x0080_0190, &args![message]);
                         });
                         e.with_stack(8, |e, message| {
-                            e.call(0x004b_0680, &args![message, 1u32, this]);
-                            let category = e.call(0x0047_d0b0, &args![message]).u32();
+                            let queued = e.call(0x004b_0680, &args![message, 1u32, this]).u32();
+                            let category = e.call(0x0047_d0b0, &args![]).u32();
                             let queue = e.call(0x0055_9450, &args![category]).u32();
-                            fn_006eb7f0(e, Ptr::new(queue), message.addr());
+                            fn_006eb7f0(e, Ptr::new(queue), queued);
                             e.call(0x0048_3710, &args![message]);
                         });
                     }
@@ -215,10 +214,10 @@ pub fn pathing_task_data_process(e: &mut Engine, this: Ptr) {
                     e.call(0x0080_0190, &args![message]);
                 });
                 e.with_stack(8, |e, message| {
-                    e.call(0x004b_0680, &args![message, 1u32, this]);
-                    let category = e.call(0x0047_d0b0, &args![message]).u32();
+                    let queued = e.call(0x004b_0680, &args![message, 1u32, this]).u32();
+                    let category = e.call(0x0047_d0b0, &args![]).u32();
                     let queue = e.call(0x0055_9450, &args![category]).u32();
-                    fn_006eb7f0(e, Ptr::new(queue), message.addr());
+                    fn_006eb7f0(e, Ptr::new(queue), queued);
                     e.call(0x0048_3710, &args![message]);
                 });
             } else {
@@ -286,13 +285,17 @@ pub fn fn_006ea490(e: &mut Engine, this: Ptr) -> bool {
 }
 
 // Translated from 006ea510 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006ea510 - compiler-generated allocation exception cleanup remains unimplemented
+// open: allocation-construction exception handlers are omitted.
 /// Finds a matching ray-cast request or appends a new request and result slot.
 /// The executable's tolerance is read from its float constant at `0x0101e2bc`.
 pub fn fn_006ea510(e: &mut Engine, this: Ptr, start: Ptr, goal: Ptr, result_out: u32) -> i32 {
     let mut result = 0i32;
     e.call(0x0040_fbf0, &args![this.addr() + 0x20, 0u32]);
-    let count = e.call(0x0044_ddc0, &args![this.addr() + 0x50]).u32();
-    for index in 0..count {
+    let mut next_index = 0u32;
+    while next_index < e.call(0x0044_ddc0, &args![this.addr() + 0x50]).u32() {
+        let index = next_index;
+        next_index = next_index.wrapping_add(1);
         let path_slot = e.call(0x0087_7a30, &args![this.addr() + 0x50, index]).u32();
         let path = e.mem.u32(path_slot);
         if e.mem.u32(path) != 2 {
@@ -304,20 +307,26 @@ pub fn fn_006ea510(e: &mut Engine, this: Ptr, start: Ptr, goal: Ptr, result_out:
         if !e
             .call(0x006d_eeb0, &args![request + 8, start, tolerance])
             .bool()
-            || !e
-                .call(0x006d_eeb0, &args![request + 0x30, goal, tolerance])
-                .bool()
         {
             continue;
         }
-        result = e.mem.u32(path + 4) as i32;
+        let tolerance = e.global::<f32>(0x0101_e2bc);
+        let request_slot = e.call(0x0087_7a30, &args![this.addr() + 0x40, index]).u32();
+        let request = e.mem.u32(request_slot);
+        if !e
+            .call(0x006d_eeb0, &args![request + 0x30, goal, tolerance])
+            .bool()
+        {
+            continue;
+        }
+        let path_slot = e.call(0x0087_7a30, &args![this.addr() + 0x50, index]).u32();
+        result = e.mem.u32(e.mem.u32(path_slot) + 4) as i32;
         match result {
             0 => fn_006ea330(e, this),
             1 => {
-                let result_slot = e
-                    .call(0x0087_7a30, &args![this.addr() + 0x50, index, result_out])
-                    .u32();
-                e.call(0x006c_f940, &args![e.mem.u32(result_slot) + 8]);
+                let result_slot = e.call(0x0087_7a30, &args![this.addr() + 0x50, index]).u32();
+                // The earlier PUSH of result_out survives the array accessor.
+                e.call(0x006c_f940, &args![e.mem.u32(result_slot) + 8, result_out]);
             }
             2 => {}
             _ => result = 2,
@@ -327,7 +336,11 @@ pub fn fn_006ea510(e: &mut Engine, this: Ptr, start: Ptr, goal: Ptr, result_out:
     }
 
     let request_storage = e.call(0x0040_1000, &args![0x68u32]).u32();
-    let request = e.call(0x006c_b3a0, &args![request_storage]).u32();
+    let request = if request_storage == 0 {
+        0
+    } else {
+        e.call(0x006c_b3a0, &args![request_storage]).u32()
+    };
     let request_pointer = Ptr::<()>::new(request);
     let request_owner = e.call(0x0055_9450, &args![this.addr() + 0x18]).u32();
     e.mem.set_u32(request + 4, request_owner);
@@ -335,7 +348,11 @@ pub fn fn_006ea510(e: &mut Engine, this: Ptr, start: Ptr, goal: Ptr, result_out:
     e.call(0x006d_cce0, &args![request + 0x30, goal]);
     e.mem.set_u32(request, 2);
     let path_storage = e.call(0x0040_1000, &args![0x18u32]).u32();
-    let path = e.call(0x006c_b480, &args![path_storage]).u32();
+    let path = if path_storage == 0 {
+        0
+    } else {
+        e.call(0x006c_b480, &args![path_storage]).u32()
+    };
     e.mem.set_u32(path, e.mem.u32(request));
     e.mem.set_u32(path + 4, 0);
     e.with_stack(8, |e, holders| {
@@ -350,6 +367,8 @@ pub fn fn_006ea510(e: &mut Engine, this: Ptr, start: Ptr, goal: Ptr, result_out:
 }
 
 // Translated from 006ea780 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006ea780 - compiler-generated allocation exception cleanup remains unimplemented
+// open: allocation-construction exception handlers are omitted.
 /// Finds a ray-cast request by its navmesh mode and goal, or appends a new
 /// request and path result. The mode is stored as `!navmesh_mode` by the PC
 /// executable.
@@ -363,9 +382,11 @@ pub fn fn_006ea780(
 ) -> i32 {
     let mut result = 0i32;
     e.call(0x0040_fbf0, &args![this.addr() + 0x20, 0u32]);
-    let count = e.call(0x0044_ddc0, &args![this.addr() + 0x50]).u32();
     let path_kind = u32::from(navmesh_mode == 0);
-    for index in 0..count {
+    let mut next_index = 0u32;
+    while next_index < e.call(0x0044_ddc0, &args![this.addr() + 0x50]).u32() {
+        let index = next_index;
+        next_index = next_index.wrapping_add(1);
         let path_slot = e.call(0x0087_7a30, &args![this.addr() + 0x50, index]).u32();
         let path = e.mem.u32(path_slot);
         if e.mem.u32(path) != path_kind {
@@ -380,14 +401,14 @@ pub fn fn_006ea780(
         {
             continue;
         }
-        result = e.mem.u32(path + 4) as i32;
+        let path_slot = e.call(0x0087_7a30, &args![this.addr() + 0x50, index]).u32();
+        result = e.mem.u32(e.mem.u32(path_slot) + 4) as i32;
         match result {
             0 => fn_006ea330(e, this),
             1 => {
-                let result_slot = e
-                    .call(0x0087_7a30, &args![this.addr() + 0x50, index, result_out])
-                    .u32();
-                e.call(0x006c_f940, &args![e.mem.u32(result_slot) + 8]);
+                let result_slot = e.call(0x0087_7a30, &args![this.addr() + 0x50, index]).u32();
+                // The earlier PUSH of result_out survives the array accessor.
+                e.call(0x006c_f940, &args![e.mem.u32(result_slot) + 8, result_out]);
             }
             2 => {}
             _ => result = 2,
@@ -397,7 +418,11 @@ pub fn fn_006ea780(
     }
 
     let request_storage = e.call(0x0040_1000, &args![0x68u32]).u32();
-    let request = e.call(0x006c_b3a0, &args![request_storage]).u32();
+    let request = if request_storage == 0 {
+        0
+    } else {
+        e.call(0x006c_b3a0, &args![request_storage]).u32()
+    };
     let request_pointer = Ptr::<()>::new(request);
     let request_owner = e.call(0x0055_9450, &args![this.addr() + 0x18]).u32();
     e.mem.set_u32(request + 4, request_owner);
@@ -405,7 +430,11 @@ pub fn fn_006ea780(
     e.call(0x006c_f8a0, &args![start, request + 0x58]);
     e.mem.set_u32(request, path_kind);
     let path_storage = e.call(0x0040_1000, &args![0x18u32]).u32();
-    let path = e.call(0x006c_b480, &args![path_storage]).u32();
+    let path = if path_storage == 0 {
+        0
+    } else {
+        e.call(0x006c_b480, &args![path_storage]).u32()
+    };
     e.mem.set_u32(path, e.mem.u32(request));
     e.mem.set_u32(path + 4, 0);
     e.with_stack(8, |e, holders| {
@@ -503,23 +532,38 @@ pub fn path_manager_impl_destroy(e: &mut Engine, this: Ptr) {
 /// cancellation result. SEH and compiler-generated cancellation cleanup are
 /// omitted; source ownership is passed through the observed helper calls.
 pub fn fn_006eac70(e: &mut Engine, this: Ptr, source_a: u32, source_b: u32) -> bool {
-    let allocation = e.call(0x0040_1000, &args![0x80u32]).u32();
-    let data = if allocation == 0 {
-        0
-    } else {
-        pathing_task_data_construct(e, Ptr::new(allocation), source_a, source_b).addr()
-    };
-    e.with_stack(0x48, |e, locals| {
-        let data_ref = locals.addr();
-        let guard = locals.addr() + 8;
+    e.with_stack(0x50, |e, locals| {
+        let request_slot = locals.addr();
+        let token_slot = locals.addr() + 4;
+        let token_copy = locals.addr() + 8;
+        let data_ref = locals.addr() + 12;
+        let guard = locals.addr() + 16;
+        // The two arguments are by-value smart-pointer words. Native LEA
+        // instructions pass their stack slots to accessors and destructors.
+        e.mem.set_u32(request_slot, source_a);
+        e.mem.set_u32(token_slot, source_b);
+        let allocation = e.call(0x0040_1000, &args![0x80u32]).u32();
+        let data = if allocation == 0 {
+            0
+        } else {
+            e.call(0x006e_bf30, &args![token_copy, token_slot]);
+            pathing_task_data_construct(
+                e,
+                Ptr::new(allocation),
+                request_slot,
+                e.mem.u32(token_copy),
+            )
+            .addr()
+        };
         e.mem.set_u32(data_ref, data);
         e.call(0x006c_5e40, &args![guard]);
-        e.call(0x006e_cd40, &args![guard, data_ref]);
-        let key = e.call(0x0055_9450, &args![source_a]).u32();
+        e.call(0x006e_cd40, &args![guard, data]);
+        let key = e.call(0x0055_9450, &args![request_slot]).u32();
         let map = this.addr() + 0x1480;
         e.vcall(map, 0x10, &args![key, data_ref, 1u32]);
         let cancelled = e.call(0x006c_5ec0, &args![this, guard, 0u32]).bool();
         if !cancelled {
+            let key = e.call(0x0055_9450, &args![request_slot]).u32();
             e.vcall(map, 0x14, &args![key]);
             let retained = e.mem.u32(data_ref);
             if retained != 0 {
@@ -527,8 +571,8 @@ pub fn fn_006eac70(e: &mut Engine, this: Ptr, source_a: u32, source_b: u32) -> b
             }
         }
         e.call(0x006c_5e70, &args![guard]);
-        e.call(0x0045_cec0, &args![Ptr::<()>::new(source_a)]);
-        e.call(0x006e_bf90, &args![Ptr::<()>::new(source_b)]);
+        e.call(0x0045_cec0, &args![request_slot]);
+        e.call(0x006e_bf90, &args![token_slot]);
         cancelled
     })
 }
@@ -604,7 +648,9 @@ pub fn fn_006eae40(e: &mut Engine, this: Ptr) {
         {
             let kind = e.mem.i32(completion);
             if (0..=1).contains(&kind) {
-                let key = e.call(0x0055_9450, &args![completion + 0x18]).u32();
+                // PC loads the task-data pointer from the completion before +0x18.
+                let data = e.mem.u32(completion + 4);
+                let key = e.call(0x0055_9450, &args![data + 0x18]).u32();
                 e.vcall(this.addr() + 0x1480, 0x14, &args![key]);
                 let reference = e.mem.u32(completion + 4);
                 if reference != 0 {
@@ -634,8 +680,8 @@ pub fn fn_006eae40(e: &mut Engine, this: Ptr) {
             .bool()
         {
             if e.call(0x008c_7aa0, &args![]).bool() {
-                let item = e.call(0x0055_9450, &args![path_holder]).u32();
                 let global = e.call(0x0055_9450, &args![0x011d_6e5cu32]).u32();
+                let item = e.call(0x0055_9450, &args![path_holder]).u32();
                 let resolved = e.call(0x0045_37b0, &args![item, global, 1u32, 0u32]).u32();
                 e.call(0x0087_ac00, &args![resolved]);
             } else {
@@ -783,8 +829,8 @@ pub fn fn_006eb440(e: &mut Engine, this: Ptr) {
     fn_006eb670(e, this, 0);
     e.with_stack(0x70, |e, locals| {
         let completion = locals.addr();
+        fn_006ea9d0(e, Ptr::new(completion));
         loop {
-            fn_006ea9d0(e, Ptr::new(completion));
             if !e
                 .vcall(this.addr() + 0x0c10, 0x10, &args![completion])
                 .bool()
@@ -793,7 +839,9 @@ pub fn fn_006eb440(e: &mut Engine, this: Ptr) {
             }
             let kind = e.mem.i32(completion);
             if (0..=1).contains(&kind) {
-                let key = e.call(0x0055_9450, &args![completion + 0x18]).u32();
+                // PC loads the task-data pointer from the completion before +0x18.
+                let data = e.mem.u32(completion + 4);
+                let key = e.call(0x0055_9450, &args![data + 0x18]).u32();
                 e.vcall(this.addr() + 0x1480, 0x14, &args![key]);
                 let reference = e.mem.u32(completion + 4);
                 if reference != 0 {
@@ -809,7 +857,7 @@ pub fn fn_006eb440(e: &mut Engine, this: Ptr) {
         while !e.call(0x006e_bde0, &args![task_stack]).bool() {
             if e.call(
                 0x0044_c640,
-                &args![this.addr() + 0x1480, task_stack, task_out, first_out, 1u32],
+                &args![this.addr() + 0x1480, task_stack, first_out, task_out, 1u32],
             )
             .bool()
             {
@@ -920,9 +968,473 @@ pub fn fn_006eb850(e: &mut Engine, this: Ptr) {
     }
 }
 
+// Translated from 006eb890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the manager implementation and conditionally frees its storage.
+pub fn fn_006eb890(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    path_manager_impl_destruct(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 006eb8c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006eb8c0 - compiler-generated exception cleanup remains unimplemented
+// open: exceptional exit cleanup is not represented by the engine ABI.
+/// `PathManager::Initialize` (Xbox PDB): allocates, constructs and initializes its implementation.
+pub fn fn_006eb8c0(e: &mut Engine, this: Ptr) -> bool {
+    e.with_stack(4, |e, guard| {
+        e.call(
+            0x0040_4eb0,
+            &args![guard, 0x2du32, 1u32, 0x0106_d560u32, 0x56au32],
+        );
+        let allocation = e.call(0x0040_1000, &args![0x14c0u32]).u32();
+        let implementation = if allocation == 0 {
+            Ptr::NULL
+        } else {
+            path_manager_impl_construct(e, Ptr::new(allocation))
+        };
+        e.mem.set_u32(this.addr(), implementation.addr());
+        let initialized = path_manager_impl_initialize(e, implementation);
+        e.call(0x0040_4ee0, &args![guard]);
+        initialized
+    })
+}
+
+// Translated from 006eb980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stops the task group, reloads the owned implementation, deletes it and clears ownership.
+pub fn fn_006eb980(e: &mut Engine, this: Ptr) {
+    path_manager_impl_destroy(e, Ptr::new(e.mem.u32(this.addr())));
+    let implementation = e.mem.u32(this.addr());
+    if implementation != 0 {
+        fn_006eb890(e, Ptr::new(implementation), 1);
+    }
+    e.mem.set_u32(this.addr(), 0);
+}
+
+// Translated from 006eb9d0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006eb9d0 - compiler-generated exception cleanup remains unimplemented
+// open: exceptional exits do not destroy the active smart-pointer temporaries.
+/// `PathManager::BuildPath` (Xbox PDB): queues a copied request when both
+/// asynchronous gates are set; otherwise builds and dispatches a result now.
+pub fn fn_006eb9d0(
+    e: &mut Engine,
+    this: Ptr,
+    request: u32,
+    listener: u32,
+    asynchronous: u8,
+) -> bool {
+    e.with_stack(0x20, |e, locals| {
+        let request_slot = locals.addr();
+        let listener_slot = locals.addr() + 4;
+        let request_copy = locals.addr() + 8;
+        let listener_copy = locals.addr() + 12;
+        let solution_slot = locals.addr() + 16;
+        let message = Ptr::new(locals.addr() + 20);
+        e.mem.set_u32(request_slot, request);
+        e.mem.set_u32(listener_slot, listener);
+        let setting = e.call(0x0040_8d60, &args![0x011d_77ccu32]).u32();
+        let accepted = if e.mem.u8(setting) != 0 && asynchronous != 0 {
+            e.call(0x006e_bf30, &args![listener_copy, listener_slot]);
+            e.call(0x0055_9a40, &args![request_copy, request_slot]);
+            fn_006eac70(
+                e,
+                Ptr::new(e.mem.u32(this.addr())),
+                e.mem.u32(request_copy),
+                e.mem.u32(listener_copy),
+            )
+        } else {
+            let allocation = e.call(0x00aa_13e0, &args![0x44u32]).u32();
+            let solution = if allocation == 0 {
+                0
+            } else {
+                e.call(0x006e_7650, &args![allocation]).u32()
+            };
+            e.call(0x0063_3c90, &args![solution_slot, solution]);
+            let solution = e.call(0x0055_9450, &args![solution_slot]).u32();
+            let request = e.call(0x0055_9450, &args![request_slot]).u32();
+            let built = e.call(0x006d_0900, &args![request, solution]).bool();
+            let listener = e.call(0x0055_9450, &args![listener_slot]).u32();
+            fn_006e9c00(e, message, u32::from(!built), solution_slot);
+            e.vcall(listener, 4, &args![message]);
+            e.call(0x0080_0190, &args![message]);
+            e.call(0x0045_cec0, &args![solution_slot]);
+            true
+        };
+        e.call(0x0045_cec0, &args![request_slot]);
+        e.call(0x006e_bf90, &args![listener_slot]);
+        accepted
+    })
+}
+
+// Translated from 006ebbd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Routes a message through the owned implementation, preserving AL.
+pub fn fn_006ebbd0(e: &mut Engine, this: Ptr, message: u32, mode: u8) -> bool {
+    fn_006eb200(e, Ptr::new(e.mem.u32(this.addr())), message, mode)
+}
+
+// Translated from 006ebbf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PathManager::GetRayCastPathToNavMesh` (Xbox PDB): forwards all five stack words.
+pub fn fn_006ebbf0(
+    e: &mut Engine,
+    this: Ptr,
+    key: u32,
+    start: Ptr,
+    goal: Ptr,
+    output: u32,
+    mode: u8,
+) -> i32 {
+    fn_006eb250(
+        e,
+        Ptr::new(e.mem.u32(this.addr())),
+        key,
+        start,
+        goal,
+        output,
+        mode,
+    )
+}
+
+// Translated from 006ebc20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PathManager::GetRayCastPath` (Xbox PDB): forwards all four stack words.
+pub fn fn_006ebc20(e: &mut Engine, this: Ptr, key: u32, start: Ptr, goal: Ptr, output: u32) -> i32 {
+    fn_006eb2b0(
+        e,
+        Ptr::new(e.mem.u32(this.addr())),
+        key,
+        start,
+        goal,
+        output,
+    )
+}
+
+// Translated from 006ebc50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Updates the owned implementation.
+pub fn fn_006ebc50(e: &mut Engine, this: Ptr) {
+    fn_006eae40(e, Ptr::new(e.mem.u32(this.addr())))
+}
+
+// Translated from 006ebc70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Pauses the owned implementation.
+pub fn fn_006ebc70(e: &mut Engine, this: Ptr) {
+    fn_006eb310(e, Ptr::new(e.mem.u32(this.addr())))
+}
+
+// Translated from 006ebc90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Queries the paused state of the owned implementation.
+pub fn fn_006ebc90(e: &mut Engine, this: Ptr) -> bool {
+    fn_006eb390(e, Ptr::new(e.mem.u32(this.addr())))
+}
+
+// Translated from 006ebcb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Queries the running state of the owned implementation.
+pub fn fn_006ebcb0(e: &mut Engine, this: Ptr) -> bool {
+    fn_006eb420(e, Ptr::new(e.mem.u32(this.addr())))
+}
+
+// Translated from 006ebcd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resumes the owned implementation.
+pub fn fn_006ebcd0(e: &mut Engine, this: Ptr) {
+    fn_006eb3b0(e, Ptr::new(e.mem.u32(this.addr())))
+}
+
+// Translated from 006ebcf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cancels the owned implementation.
+pub fn fn_006ebcf0(e: &mut Engine, this: Ptr) {
+    fn_006eb440(e, Ptr::new(e.mem.u32(this.addr())))
+}
+
+// Translated from 006ebd10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PathManager::ClearInventoryPointersFromCurrentRequests` (Xbox PDB): forwards the key.
+pub fn fn_006ebd10(e: &mut Engine, this: Ptr, key: u32) {
+    fn_006eb6b0(e, Ptr::new(e.mem.u32(this.addr())), key)
+}
+
+// Translated from 006ebd30 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006ebd30 - compiler-generated exception cleanup remains unimplemented
+// open: exceptional exit cleanup is not represented by the engine ABI.
+/// Destroys the 256 embedded messages, then the queue base.
+pub fn fn_006ebd30(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0106_d634);
+    e.call(
+        0x00ec_5fce,
+        &args![this.addr() + 12, 12u32, 256u32, 0x0048_3710u32],
+    );
+    fn_006ebda0(e, this);
+}
+
+// Translated from 006ebda0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resets the base vtable without releasing storage.
+pub fn fn_006ebda0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0106_d63c);
+}
+
+// Translated from 006ebdc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resets the base vtable without releasing storage.
+pub fn fn_006ebdc0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0106_d644);
+}
+
+// Translated from 006ebde0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the iterator exhausted flag, bit 1 of its byte at +12.
+pub fn fn_006ebde0(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 12) & 2 != 0
+}
+
+// Translated from 006ebe00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs the object destructor, freeing storage only for delete flag bit zero.
+pub fn fn_006ebe00(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006ebd30(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 006ebe30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs the object destructor, freeing storage only for delete flag bit zero.
+pub fn fn_006ebe30(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006ebda0(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 006ebe60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs the object destructor, freeing storage only for delete flag bit zero.
+pub fn fn_006ebe60(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006ebdc0(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 006ebe90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Initializes the empty array.
+pub fn fn_006ebe90(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), 0x0106_d650);
+    e.call(0x006b_3eb0, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 006ebec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Restores the array vtable and releases its buffer.
+pub fn fn_006ebec0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0106_d650);
+    e.call(0x0084_54f0, &args![this, 1u32]);
+}
+
+// Translated from 006ebee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Initializes the empty array.
+pub fn fn_006ebee0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), 0x0106_d664);
+    e.call(0x006b_3eb0, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 006ebf10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Restores the array vtable and releases its buffer.
+pub fn fn_006ebf10(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0106_d664);
+    e.call(0x0084_54f0, &args![this, 1u32]);
+}
+
+// Translated from 006ebfb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Assigns a token pointer, releasing the old owner before reloading and retaining the source.
+pub fn fn_006ebfb0(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
+    if e.mem.u32(this.addr()) != e.mem.u32(source.addr()) {
+        let previous = e.mem.u32(this.addr());
+        if previous != 0 {
+            e.call(0x0040_1970, &args![previous + 0x14]);
+        }
+        let replacement = e.mem.u32(source.addr());
+        e.mem.set_u32(this.addr(), replacement);
+        if replacement != 0 {
+            e.call(0x0040_f6e0, &args![replacement + 0x14]);
+        }
+    }
+    this
+}
+
+// Translated from 006ec000 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006ec000 - compiler-generated exception cleanup remains unimplemented
+// open: exceptional exit cleanup is not represented by the engine ABI.
+/// Constructs the fixed 256-element message pool and gives its storage to the base.
+pub fn fn_006ec000(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x006e_cc40, &args![this]);
+    e.mem.set_u32(this.addr(), 0x0106_d634);
+    e.call(
+        0x00ec_782f,
+        &args![
+            this.addr() + 12,
+            12u32,
+            256u32,
+            0x006e_d0e0u32,
+            0x0048_3710u32
+        ],
+    );
+    e.call(0x006e_d040, &args![this, 256u32, this.addr() + 12]);
+    this
+}
+
+// Translated from 006ec090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs an empty linked message queue with the supplied free-list owner.
+pub fn fn_006ec090(e: &mut Engine, this: Ptr, pool: u32) -> Ptr {
+    e.call(0x006e_cb40, &args![this]);
+    e.mem.set_u32(this.addr(), 0x0106_d678);
+    e.mem.set_u32(this.addr() + 8, pool);
+    e.mem.set_u32(this.addr() + 12, 0);
+    e.mem.set_u32(this.addr() + 16, this.addr() + 12);
+    this
+}
+
+// Translated from 006ec130 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006ec130 - compiler-generated exception cleanup remains unimplemented
+// open: exceptional exit cleanup is not represented by the engine ABI.
+/// Drains the linked queue, destroys its local message, then destroys the base.
+pub fn fn_006ec130(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0106_d678);
+    e.with_stack(8, |e, message| {
+        fn_006ea9d0(e, message);
+        while e.call(0x006e_c390, &args![this, message]).bool() {}
+        e.call(0x0048_3710, &args![message]);
+    });
+    e.call(0x006e_c1c0, &args![this]);
+}
+
+// Translated from 006ec230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTMessageQueue<PathingMessage>` scalar deleting destructor (Xbox PDB).
+pub fn fn_006ec230(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x006e_c1e0, &args![this]);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 006ec260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCommonLLMessageQueue<PathingMessage>::DoTryPush` (Xbox PDB): appends an allocated node.
+pub fn fn_006ec260(e: &mut Engine, this: Ptr, message: u32) -> bool {
+    let pool = e.mem.u32(this.addr() + 8);
+    if pool == 0 {
+        return false;
+    }
+    e.with_stack(4, |e, node| {
+        if !e.call(0x006e_cd00, &args![pool, node, message]).bool() {
+            return false;
+        }
+        if e.mem.u32(this.addr() + 12) == 0 {
+            e.mem.set_u32(this.addr() + 16, this.addr() + 12);
+        }
+        let tail = e.mem.u32(this.addr() + 16);
+        let allocated = e.mem.u32(node.addr());
+        e.mem.set_u32(tail, allocated);
+        e.mem.set_u32(allocated + 8, 0);
+        e.mem.set_u32(this.addr() + 16, allocated + 8);
+        true
+    })
+}
+
+// Translated from 006ec2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCommonLLMessageQueue<PathingMessage>::DoTryPop` (Xbox PDB): copies a message and returns its node.
+pub fn fn_006ec2e0(e: &mut Engine, this: Ptr, output: Ptr) -> bool {
+    let head = e.mem.u32(this.addr() + 12);
+    if head == 0 {
+        return false;
+    }
+    e.with_stack(4, |e, node| {
+        e.mem.set_u32(node.addr(), head);
+        let source = e.call(0x0068_15c0, &args![head]).ptr();
+        fn_006eaa00(e, output, source);
+        e.mem.set_u32(this.addr() + 12, e.mem.u32(head + 8));
+        let pool = e.mem.u32(this.addr() + 8);
+        e.call(0x006e_cb10, &args![pool, node]);
+    });
+    true
+}
+
+// Translated from 006ec340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs the 256-slot static pointer queue with zero count and cursors.
+pub fn fn_006ec340(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x006e_cb70, &args![this]);
+    e.mem.set_u32(this.addr(), 0x0106_d6d0);
+    for offset in [0x408, 0x40c, 0x410] {
+        e.mem.set_u32(this.addr() + offset, 0);
+    }
+    this
+}
+
+// Translated from 006ec3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resets the static queue vtable before delegating base destruction.
+pub fn fn_006ec3f0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0106_d6d0);
+    e.call(0x006e_c410, &args![this]);
+}
+
+// Translated from 006ec4b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006ec4b0 - compiler-generated exception cleanup remains unimplemented
+// open: exceptional exit cleanup is not represented by the engine ABI.
+/// `BSTCommonStaticMessageQueue<NiPointer<NiAVObject>,256>::DoTryPush` (Xbox PDB).
+pub fn fn_006ec4b0(e: &mut Engine, this: Ptr, source: u32) -> bool {
+    if e.mem.u32(this.addr() + 0x408) >= 256 {
+        return false;
+    }
+    let index = e.mem.u32(this.addr() + 0x40c);
+    let slot = this
+        .addr()
+        .wrapping_add(8)
+        .wrapping_add(index.wrapping_mul(4));
+    let destination = e.call(0x006e_6da0, &args![4u32, slot]).u32();
+    if destination != 0 {
+        e.call(0x0055_9a40, &args![destination, source]);
+    }
+    let next = e.mem.u32(this.addr() + 0x40c).wrapping_add(1) % 256;
+    e.mem.set_u32(this.addr() + 0x40c, next);
+    let count = e.mem.u32(this.addr() + 0x408).wrapping_add(1);
+    e.mem.set_u32(this.addr() + 0x408, count);
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x006e_b9d0, fn_006eb9d0(Ptr, u32, u32, u8) -> bool),
+        entry!(0x006e_b890, fn_006eb890(Ptr, u32) -> Ptr),
+        entry!(0x006e_b8c0, fn_006eb8c0(Ptr) -> bool),
+        entry!(0x006e_b980, fn_006eb980(Ptr)),
+        entry!(0x006e_bbd0, fn_006ebbd0(Ptr, u32, u8) -> bool),
+        entry!(0x006e_bbf0, fn_006ebbf0(Ptr, u32, Ptr, Ptr, u32, u8) -> i32),
+        entry!(0x006e_bc20, fn_006ebc20(Ptr, u32, Ptr, Ptr, u32) -> i32),
+        entry!(0x006e_bc50, fn_006ebc50(Ptr)),
+        entry!(0x006e_bc70, fn_006ebc70(Ptr)),
+        entry!(0x006e_bc90, fn_006ebc90(Ptr) -> bool),
+        entry!(0x006e_bcb0, fn_006ebcb0(Ptr) -> bool),
+        entry!(0x006e_bcd0, fn_006ebcd0(Ptr)),
+        entry!(0x006e_bcf0, fn_006ebcf0(Ptr)),
+        entry!(0x006e_bd10, fn_006ebd10(Ptr, u32)),
+        entry!(0x006e_bd30, fn_006ebd30(Ptr)),
+        entry!(0x006e_bda0, fn_006ebda0(Ptr)),
+        entry!(0x006e_bdc0, fn_006ebdc0(Ptr)),
+        entry!(0x006e_bde0, fn_006ebde0(Ptr) -> bool),
+        entry!(0x006e_be00, fn_006ebe00(Ptr, u32) -> Ptr),
+        entry!(0x006e_be30, fn_006ebe30(Ptr, u32) -> Ptr),
+        entry!(0x006e_be60, fn_006ebe60(Ptr, u32) -> Ptr),
+        entry!(0x006e_be90, fn_006ebe90(Ptr) -> Ptr),
+        entry!(0x006e_bec0, fn_006ebec0(Ptr)),
+        entry!(0x006e_bee0, fn_006ebee0(Ptr) -> Ptr),
+        entry!(0x006e_bf10, fn_006ebf10(Ptr)),
+        entry!(0x006e_bfb0, fn_006ebfb0(Ptr, Ptr) -> Ptr),
+        entry!(0x006e_c000, fn_006ec000(Ptr) -> Ptr),
+        entry!(0x006e_c090, fn_006ec090(Ptr, u32) -> Ptr),
+        entry!(0x006e_c130, fn_006ec130(Ptr)),
+        entry!(0x006e_c230, fn_006ec230(Ptr, u32) -> Ptr),
+        entry!(0x006e_c260, fn_006ec260(Ptr, u32) -> bool),
+        entry!(0x006e_c2e0, fn_006ec2e0(Ptr, Ptr) -> bool),
+        entry!(0x006e_c340, fn_006ec340(Ptr) -> Ptr),
+        entry!(0x006e_c3f0, fn_006ec3f0(Ptr)),
+        entry!(0x006e_c4b0, fn_006ec4b0(Ptr, u32) -> bool),
         entry!(0x006e_9bd0, actor_pathing_message_construct(Ptr) -> Ptr),
         entry!(0x006e_9c00, fn_006e9c00(Ptr, u32, u32) -> Ptr),
         entry!(0x006e_9c30, fn_006e9c30(Ptr, Ptr) -> Ptr),
@@ -1191,7 +1703,8 @@ mod tests {
             if index == 0 {
                 e.mem.set_u32(args[1], 1);
                 e.mem.set_u32(args[1] + 4, retained);
-                e.mem.set_u32(args[1] + 0x18, 0x9988);
+                e.mem.set_u32(retained + 0x18, 0x9988);
+                e.mem.set_u32(args[1] + 0x18, 0xdeadbeef);
                 result(1)
             } else {
                 Ret::default()
@@ -1217,7 +1730,9 @@ mod tests {
         let got_task_for_double = got_task.clone();
         e.register_double(0x0044_c640, move |e, args| {
             if !got_task_for_double.replace(true) {
-                e.mem.set_u32(args[2], task_data);
+                // 006eb551/006eb555: data comes from the fourth argument.
+                e.mem.set_u32(args[2], 0xdeadbeef);
+                e.mem.set_u32(args[3], task_data);
                 result(1)
             } else {
                 Ret::default()
@@ -1767,5 +2282,1129 @@ mod remaining_tests {
         fn_006eb7b0(&mut e, Ptr::new(manager));
         assert_eq!(queue_calls.get(), 1);
         assert_eq!(event_calls.get(), 1);
+    }
+}
+
+#[cfg(test)]
+mod continuation_tests {
+    use super::*;
+    use std::{cell::RefCell, rc::Rc};
+    const OBJECT: u32 = 0x20000;
+    const OWNER: u32 = 0x22000;
+    fn result(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+    fn fixture() -> Engine {
+        let mut e = Engine::new();
+        e.mem.map(OBJECT, 0x4000);
+        e.mem.set_u32(OWNER, OBJECT);
+        e.call_log = Some(vec![]);
+        for address in [
+            0x0040_1030,
+            0x0040_4eb0,
+            0x0040_4ee0,
+            0x0044_dee0,
+            0x00aa_5fc0,
+            0x0044_fae0,
+            0x006e_c660,
+            0x006e_c870,
+            0x0044_fb00,
+            0x0048_3710,
+            0x006c_09d0,
+            0x00b0_0c20,
+            0x0045_38a0,
+            0x0045_38c0,
+            0x00aa_6220,
+            0x00aa_62e0,
+            0x0045_cec0,
+            0x0063_3c90,
+            0x0044_c480,
+            0x00aa_6060,
+            0x006e_cc40,
+            0x00ec_782f,
+            0x006e_d040,
+            0x006e_cb40,
+            0x006e_cb70,
+            0x006e_c410,
+            0x006e_c390,
+            0x006e_c1c0,
+            0x00ec_5fce,
+            0x006e_c1e0,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(0x006e_c970, |e, a| {
+            e.mem.set_u8(a[0] + 12, 2);
+            Ret::default()
+        });
+        e.register(0x00b0_0a00, |_, _| result(0x24000));
+        e.register(0x00b0_0a80, |_, _| result(1));
+        e.register(0x006c_08e0, |_, _| result(1));
+        e.register(0x0077_0000, |_, _| Ret::default());
+        e.put_vtable(0x30000, &[0, 0x0077_0000, 0x0077_0000, 0, 0x0077_0000]);
+        for offset in [0xc10, 0xc50, 0x1064, 0x1480] {
+            e.mem.set_u32(OBJECT + offset, 0x30000);
+        }
+        e
+    }
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == address)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+    #[test]
+    fn delete_flags_006eb890() {
+        for flags in [0, 2, 1, 3] {
+            let mut e = fixture();
+            assert_eq!(fn_006eb890(&mut e, Ptr::new(OBJECT), flags).addr(), OBJECT);
+            assert_eq!(
+                calls(&e, 0x0040_1030),
+                if flags & 1 != 0 {
+                    vec![vec![OBJECT]]
+                } else {
+                    vec![]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn delete_flags_006ebe00() {
+        for flags in [0, 2, 1, 3] {
+            let mut e = fixture();
+            assert_eq!(fn_006ebe00(&mut e, Ptr::new(OBJECT), flags).addr(), OBJECT);
+            assert_eq!(
+                calls(&e, 0x0040_1030),
+                if flags & 1 != 0 {
+                    vec![vec![OBJECT]]
+                } else {
+                    vec![]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn delete_flags_006ebe30() {
+        for flags in [0, 2, 1, 3] {
+            let mut e = fixture();
+            assert_eq!(fn_006ebe30(&mut e, Ptr::new(OBJECT), flags).addr(), OBJECT);
+            assert_eq!(
+                calls(&e, 0x0040_1030),
+                if flags & 1 != 0 {
+                    vec![vec![OBJECT]]
+                } else {
+                    vec![]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn delete_flags_006ebe60() {
+        for flags in [0, 2, 1, 3] {
+            let mut e = fixture();
+            assert_eq!(fn_006ebe60(&mut e, Ptr::new(OBJECT), flags).addr(), OBJECT);
+            assert_eq!(
+                calls(&e, 0x0040_1030),
+                if flags & 1 != 0 {
+                    vec![vec![OBJECT]]
+                } else {
+                    vec![]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn delete_flags_006ec230() {
+        for flags in [0, 2, 1, 3] {
+            let mut e = fixture();
+            assert_eq!(fn_006ec230(&mut e, Ptr::new(OBJECT), flags).addr(), OBJECT);
+            assert_eq!(
+                calls(&e, 0x0040_1030),
+                if flags & 1 != 0 {
+                    vec![vec![OBJECT]]
+                } else {
+                    vec![]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn initialize_allocation_success_and_null_failure() {
+        for allocation in [OBJECT, 0] {
+            let mut e = fixture();
+            e.register_double(0x0040_1000, move |_, a| {
+                assert_eq!(a, &[0x14c0]);
+                result(allocation)
+            });
+            if allocation == 0 {
+                e.register(0x00b0_0a80, |_, _| result(0));
+            }
+            assert_eq!(fn_006eb8c0(&mut e, Ptr::new(OWNER)), allocation != 0);
+            assert_eq!(e.mem.u32(OWNER), allocation);
+            let guards = calls(&e, 0x0040_4eb0);
+            assert_eq!(&guards[0][1..], &[0x2d, 1, 0x0106_d560, 0x56a]);
+            assert_eq!(calls(&e, 0x0040_4ee0), vec![vec![guards[0][0]]]);
+        }
+    }
+
+    #[test]
+    fn destroy_reloads_owner_after_stop_callback() {
+        let mut e = fixture();
+        e.register(0x006c_09d0, |e, a| {
+            assert_eq!(a, &[OBJECT]);
+            e.mem.set_u32(OWNER, 0);
+            Ret::default()
+        });
+        fn_006eb980(&mut e, Ptr::new(OWNER));
+        assert_eq!(e.mem.u32(OWNER), 0);
+        assert!(calls(&e, 0x0040_1030).is_empty());
+        e.mem.set_u32(OWNER, OBJECT);
+        e.register(0x006c_09d0, |_, _| Ret::default());
+        fn_006eb980(&mut e, Ptr::new(OWNER));
+        assert_eq!(calls(&e, 0x0040_1030), vec![vec![OBJECT]]);
+        assert_eq!(e.mem.u32(OWNER), 0);
+    }
+
+    #[test]
+    fn route_wrapper_preserves_mode_and_return() {
+        let mut e = fixture();
+        for mode in [0, 1, 255] {
+            assert!(fn_006ebbd0(&mut e, Ptr::new(OWNER), 0x1234, mode));
+        }
+        assert_eq!(
+            calls(&e, 0x0077_0000),
+            vec![
+                vec![OBJECT + 0x1064, 0x1234],
+                vec![OBJECT + 0xc50, 0x1234],
+                vec![OBJECT + 0xc50, 0x1234]
+            ]
+        );
+    }
+
+    #[test]
+    fn lookup_wrapper_006ebbf0() {
+        let mut e = fixture();
+        assert_eq!(
+            fn_006ebbf0(
+                &mut e,
+                Ptr::new(OWNER),
+                9,
+                Ptr::new(0x100),
+                Ptr::new(0x200),
+                0x300,
+                7
+            ),
+            2
+        );
+        let lookup = calls(&e, 0x0077_0000);
+        assert_eq!(&lookup[0][..2], &[OBJECT + 0x1480, 9]);
+    }
+
+    #[test]
+    fn lookup_wrapper_006ebc20() {
+        let mut e = fixture();
+        assert_eq!(
+            fn_006ebc20(
+                &mut e,
+                Ptr::new(OWNER),
+                9,
+                Ptr::new(0x100),
+                Ptr::new(0x200),
+                0x300
+            ),
+            2
+        );
+        let lookup = calls(&e, 0x0077_0000);
+        assert_eq!(&lookup[0][..2], &[OBJECT + 0x1480, 9]);
+    }
+
+    #[test]
+    fn update_wrapper_advances_retry() {
+        let mut e = fixture();
+        e.mem.set_u32(OBJECT + PATH_MANAGER_IMPL_STATE, 1);
+        fn_006ebc50(&mut e, Ptr::new(OWNER));
+        assert_eq!(e.mem.u32(OBJECT + PATH_MANAGER_IMPL_PAUSE_RETRIES), 1);
+    }
+
+    #[test]
+    fn state_wrapper_006ebc70() {
+        let mut e = fixture();
+        e.mem.set_u32(OBJECT + PATH_MANAGER_IMPL_STATE, 0);
+        fn_006ebc70(&mut e, Ptr::new(OWNER));
+        assert_eq!(e.mem.u32(OBJECT + PATH_MANAGER_IMPL_STATE), 1);
+    }
+
+    #[test]
+    fn state_wrapper_006ebcd0() {
+        let mut e = fixture();
+        e.mem.set_u32(OBJECT + PATH_MANAGER_IMPL_STATE, 2);
+        fn_006ebcd0(&mut e, Ptr::new(OWNER));
+        assert_eq!(e.mem.u32(OBJECT + PATH_MANAGER_IMPL_STATE), 3);
+    }
+
+    #[test]
+    fn state_wrapper_006ebcf0() {
+        let mut e = fixture();
+        e.mem.set_u32(OBJECT + PATH_MANAGER_IMPL_STATE, 0);
+        fn_006ebcf0(&mut e, Ptr::new(OWNER));
+        assert_eq!(e.mem.u32(OBJECT + PATH_MANAGER_IMPL_STATE), 2);
+    }
+
+    #[test]
+    fn query_wrapper_006ebc90() {
+        let mut e = fixture();
+        for state in 0..4 {
+            e.mem.set_u32(OBJECT + PATH_MANAGER_IMPL_STATE, state);
+            assert_eq!(fn_006ebc90(&mut e, Ptr::new(OWNER)), state == 2);
+        }
+    }
+
+    #[test]
+    fn query_wrapper_006ebcb0() {
+        let mut e = fixture();
+        for state in 0..4 {
+            e.mem.set_u32(OBJECT + PATH_MANAGER_IMPL_STATE, state);
+            assert_eq!(fn_006ebcb0(&mut e, Ptr::new(OWNER)), state == 0);
+        }
+    }
+
+    #[test]
+    fn clear_wrapper_locks_implementation() {
+        let mut e = fixture();
+        fn_006ebd10(&mut e, Ptr::new(OWNER), 0x1234);
+        assert_eq!(
+            calls(&e, 0x0045_38a0),
+            vec![vec![OBJECT + 0xc38, 0x0106_d5f8]]
+        );
+        assert_eq!(calls(&e, 0x0045_38c0), vec![vec![OBJECT + 0xc38]]);
+    }
+
+    #[test]
+    fn pool_destructor_uses_exact_vector_extent() {
+        let mut e = fixture();
+        fn_006ebd30(&mut e, Ptr::new(OBJECT));
+        assert_eq!(
+            calls(&e, 0x00ec_5fce),
+            vec![vec![OBJECT + 12, 12, 256, 0x0048_3710]]
+        );
+        assert_eq!(e.mem.u32(OBJECT), 0x0106_d63c);
+    }
+
+    #[test]
+    fn base_vtable_006ebda0() {
+        let mut e = fixture();
+        e.mem.set_u32(OBJECT + 4, 0xaabbccdd);
+        fn_006ebda0(&mut e, Ptr::new(OBJECT));
+        assert_eq!(e.mem.u32(OBJECT), 0x0106_d63c);
+        assert_eq!(e.mem.u32(OBJECT + 4), 0xaabbccdd);
+    }
+
+    #[test]
+    fn base_vtable_006ebdc0() {
+        let mut e = fixture();
+        e.mem.set_u32(OBJECT + 4, 0xaabbccdd);
+        fn_006ebdc0(&mut e, Ptr::new(OBJECT));
+        assert_eq!(e.mem.u32(OBJECT), 0x0106_d644);
+        assert_eq!(e.mem.u32(OBJECT + 4), 0xaabbccdd);
+    }
+
+    #[test]
+    fn iterator_exhaustion_reads_only_bit_one() {
+        let mut e = fixture();
+        for byte in [0, 1, 2, 3, 128, 255] {
+            e.mem.set_u8(OBJECT + 12, byte);
+            assert_eq!(fn_006ebde0(&mut e, Ptr::new(OBJECT)), byte & 2 != 0);
+        }
+    }
+
+    #[test]
+    fn array_lifecycle_006ebe90() {
+        let mut e = fixture();
+        e.register(0x006b_3eb0, |e, a| {
+            assert_eq!(a, &[OBJECT, 0, 0]);
+            assert_eq!(e.mem.u32(OBJECT), 0x0106_d650);
+            Ret::default()
+        });
+        fn_006ebe90(&mut e, Ptr::new(OBJECT));
+        assert_eq!(calls(&e, 0x006b_3eb0).len(), 1);
+    }
+
+    #[test]
+    fn array_lifecycle_006ebec0() {
+        let mut e = fixture();
+        e.register(0x0084_54f0, |e, a| {
+            assert_eq!(a, &[OBJECT, 1]);
+            assert_eq!(e.mem.u32(OBJECT), 0x0106_d650);
+            Ret::default()
+        });
+        fn_006ebec0(&mut e, Ptr::new(OBJECT));
+        assert_eq!(calls(&e, 0x0084_54f0).len(), 1);
+    }
+
+    #[test]
+    fn array_lifecycle_006ebee0() {
+        let mut e = fixture();
+        e.register(0x006b_3eb0, |e, a| {
+            assert_eq!(a, &[OBJECT, 0, 0]);
+            assert_eq!(e.mem.u32(OBJECT), 0x0106_d664);
+            Ret::default()
+        });
+        fn_006ebee0(&mut e, Ptr::new(OBJECT));
+        assert_eq!(calls(&e, 0x006b_3eb0).len(), 1);
+    }
+
+    #[test]
+    fn array_lifecycle_006ebf10() {
+        let mut e = fixture();
+        e.register(0x0084_54f0, |e, a| {
+            assert_eq!(a, &[OBJECT, 1]);
+            assert_eq!(e.mem.u32(OBJECT), 0x0106_d664);
+            Ret::default()
+        });
+        fn_006ebf10(&mut e, Ptr::new(OBJECT));
+        assert_eq!(calls(&e, 0x0084_54f0).len(), 1);
+    }
+
+    #[test]
+    fn token_assignment_reloads_source_after_release_and_handles_alias() {
+        let mut e = fixture();
+        e.mem.set_u32(OBJECT, 0x50000);
+        e.mem.set_u32(OBJECT + 4, 0x60000);
+        e.register(0x0040_1970, |e, a| {
+            assert_eq!(a, &[0x50014]);
+            e.mem.set_u32(OBJECT + 4, 0x70000);
+            Ret::default()
+        });
+        e.register(0x0040_f6e0, |_, a| {
+            assert_eq!(a, &[0x70014]);
+            Ret::default()
+        });
+        assert_eq!(
+            fn_006ebfb0(&mut e, Ptr::new(OBJECT), Ptr::new(OBJECT + 4)).addr(),
+            OBJECT
+        );
+        assert_eq!(e.mem.u32(OBJECT), 0x70000);
+        fn_006ebfb0(&mut e, Ptr::new(OBJECT), Ptr::new(OBJECT));
+        assert_eq!(calls(&e, 0x0040_1970).len(), 1);
+        e.mem.set_u32(OBJECT, 0);
+        e.mem.set_u32(OBJECT + 4, 0);
+        fn_006ebfb0(&mut e, Ptr::new(OBJECT), Ptr::new(OBJECT + 4));
+        assert_eq!(calls(&e, 0x0040_f6e0).len(), 1);
+    }
+
+    #[test]
+    fn pool_constructor_supplies_element_ctor_and_dtor() {
+        let mut e = fixture();
+        assert_eq!(fn_006ec000(&mut e, Ptr::new(OBJECT)).addr(), OBJECT);
+        assert_eq!(
+            calls(&e, 0x00ec_782f),
+            vec![vec![OBJECT + 12, 12, 256, 0x006e_d0e0, 0x0048_3710]]
+        );
+        assert_eq!(calls(&e, 0x006e_d040), vec![vec![OBJECT, 256, OBJECT + 12]]);
+        assert_eq!(e.mem.u32(OBJECT), 0x0106_d634);
+    }
+
+    #[test]
+    fn linked_queue_constructor_initializes_empty_tail() {
+        let mut e = fixture();
+        assert_eq!(
+            fn_006ec090(&mut e, Ptr::new(OBJECT), 0x50000).addr(),
+            OBJECT
+        );
+        assert_eq!(e.mem.u32(OBJECT), 0x0106_d678);
+        assert_eq!(e.mem.u32(OBJECT + 8), 0x50000);
+        assert_eq!(e.mem.u32(OBJECT + 12), 0);
+        assert_eq!(e.mem.u32(OBJECT + 16), OBJECT + 12);
+    }
+
+    #[test]
+    fn linked_destructor_drains_until_false_before_cleanup() {
+        let mut e = fixture();
+        let pops = Rc::new(RefCell::new(0));
+        let observed = pops.clone();
+        e.register_double(0x006e_c390, move |_, a| {
+            assert_eq!(a[0], OBJECT);
+            let mut n = observed.borrow_mut();
+            *n += 1;
+            result(u32::from(*n < 3))
+        });
+        fn_006ec130(&mut e, Ptr::new(OBJECT));
+        assert_eq!(*pops.borrow(), 3);
+        assert_eq!(calls(&e, 0x0048_3710).len(), 1);
+        assert_eq!(calls(&e, 0x006e_c1c0), vec![vec![OBJECT]]);
+    }
+
+    #[test]
+    fn linked_push_handles_missing_pool_failure_empty_and_nonempty() {
+        let mut e = fixture();
+        assert!(!fn_006ec260(&mut e, Ptr::new(OBJECT), 11));
+        e.mem.set_u32(OBJECT + 8, 0x50000);
+        e.register(0x006e_cd00, |_, _| result(0));
+        assert!(!fn_006ec260(&mut e, Ptr::new(OBJECT), 11));
+        e.register(0x006e_cd00, |e, a| {
+            assert_eq!(a[0], 0x50000);
+            e.mem.set_u32(a[1], a[2]);
+            result(1)
+        });
+        assert!(fn_006ec260(&mut e, Ptr::new(OBJECT), OBJECT + 0x100));
+        assert_eq!(e.mem.u32(OBJECT + 12), OBJECT + 0x100);
+        assert!(fn_006ec260(&mut e, Ptr::new(OBJECT), OBJECT + 0x200));
+        assert_eq!(e.mem.u32(OBJECT + 0x108), OBJECT + 0x200);
+        assert_eq!(e.mem.u32(OBJECT + 16), OBJECT + 0x208);
+        assert_eq!(e.mem.u32(OBJECT + 0x208), 0);
+    }
+
+    #[test]
+    fn linked_pop_copies_payload_then_releases_node() {
+        let mut e = fixture();
+        assert!(!fn_006ec2e0(
+            &mut e,
+            Ptr::new(OBJECT),
+            Ptr::new(OBJECT + 0x200)
+        ));
+        e.mem.set_u32(OBJECT + 8, 0x50000);
+        e.mem.set_u32(OBJECT + 12, OBJECT + 0x100);
+        e.mem.set_u32(OBJECT + 0x100, 7);
+        e.mem.set_u32(OBJECT + 0x104, 0xabcdef01);
+        e.mem.set_u32(OBJECT + 0x108, OBJECT + 0x180);
+        e.register(0x0068_15c0, |_, a| result(a[0]));
+        e.register(0x006e_cb10, |e, a| {
+            assert_eq!(a[0], 0x50000);
+            assert_eq!(e.mem.u32(a[1]), OBJECT + 0x100);
+            assert_eq!(e.mem.u32(OBJECT + 12), OBJECT + 0x180);
+            Ret::default()
+        });
+        assert!(fn_006ec2e0(
+            &mut e,
+            Ptr::new(OBJECT),
+            Ptr::new(OBJECT + 0x200)
+        ));
+        assert_eq!(e.mem.u32(OBJECT + 0x200), 7);
+        assert_eq!(e.mem.u32(OBJECT + 0x204), 0xabcdef01);
+    }
+
+    #[test]
+    fn static_queue_constructor_resets_all_three_words() {
+        let mut e = fixture();
+        for offset in [0x408, 0x40c, 0x410] {
+            e.mem.set_u32(OBJECT + offset, 99);
+        }
+        assert_eq!(fn_006ec340(&mut e, Ptr::new(OBJECT)).addr(), OBJECT);
+        assert_eq!(e.mem.u32(OBJECT), 0x0106_d6d0);
+        for offset in [0x408, 0x40c, 0x410] {
+            assert_eq!(e.mem.u32(OBJECT + offset), 0);
+        }
+    }
+
+    #[test]
+    fn static_queue_destructor_sets_vtable_before_base_call() {
+        let mut e = fixture();
+        e.register(0x006e_c410, |e, a| {
+            assert_eq!(a, &[OBJECT]);
+            assert_eq!(e.mem.u32(OBJECT), 0x0106_d6d0);
+            Ret::default()
+        });
+        fn_006ec3f0(&mut e, Ptr::new(OBJECT));
+        assert_eq!(calls(&e, 0x006e_c410).len(), 1);
+    }
+
+    #[test]
+    fn static_push_full_wrap_null_placement_and_callback_reload() {
+        let mut e = fixture();
+        e.mem.set_u32(OBJECT + 0x408, 256);
+        assert!(!fn_006ec4b0(&mut e, Ptr::new(OBJECT), 0x50000));
+        assert!(calls(&e, 0x006e_6da0).is_empty());
+        e.mem.set_u32(OBJECT + 0x408, 255);
+        e.mem.set_u32(OBJECT + 0x40c, 255);
+        e.register(0x006e_6da0, |_, a| {
+            assert_eq!(a, &[4, OBJECT + 8 + 255 * 4]);
+            result(0)
+        });
+        assert!(fn_006ec4b0(&mut e, Ptr::new(OBJECT), 0x50000));
+        assert_eq!(e.mem.u32(OBJECT + 0x408), 256);
+        assert_eq!(e.mem.u32(OBJECT + 0x40c), 0);
+        e.mem.set_u32(OBJECT + 0x408, 0);
+        e.register(0x006e_6da0, |_, a| result(a[1]));
+        e.register(0x0055_9a40, |e, a| {
+            assert_eq!(a, &[OBJECT + 8, 0x50000]);
+            e.mem.set_u32(OBJECT + 0x408, 40);
+            e.mem.set_u32(OBJECT + 0x40c, 99);
+            Ret::default()
+        });
+        assert!(fn_006ec4b0(&mut e, Ptr::new(OBJECT), 0x50000));
+        assert_eq!(e.mem.u32(OBJECT + 0x408), 41);
+        assert_eq!(e.mem.u32(OBJECT + 0x40c), 100);
+    }
+    #[test]
+    fn task_submission_passes_pointer_values_and_owns_argument_slots() {
+        // 006eaccb passes the request slot; 006ead05 passes the data value.
+        // 006ead4c reloads the key, and 006e9d67 copies the token argument.
+        for accepted in [false, true] {
+            let mut e = fixture();
+            const DATA: u32 = 0x25000;
+            const REQUEST: u32 = 0x50000;
+            const TOKEN: u32 = 0x60000;
+            e.mem.map(DATA, 0x80);
+            e.put_vtable(PATHING_TASK_DATA_VTABLE, &[0x0077_0050]);
+            e.register(0x0077_0050, |_, a| {
+                assert_eq!(a, &[DATA, 1]);
+                Ret::default()
+            });
+            e.register(0x0040_1000, |_, a| {
+                assert_eq!(a, &[0x80]);
+                result(DATA)
+            });
+            for address in [
+                0x006c_7850,
+                0x0096_a2d0,
+                0x006b_3eb0,
+                0x006c_5e40,
+                0x006c_5e70,
+                0x0040_f6e0,
+            ] {
+                e.register(address, |_, _| Ret::default());
+            }
+            e.register(0x006e_bf60, |e, a| {
+                assert_eq!(a, &[DATA + 0x60, 0]);
+                e.mem.set_u32(a[0], 0);
+                result(a[0])
+            });
+            e.register(0x006e_bf30, |e, a| {
+                assert_ne!(a[1], TOKEN);
+                assert_eq!(e.mem.u32(a[1]), TOKEN);
+                e.mem.set_u32(a[0], e.mem.u32(a[1]));
+                result(a[0])
+            });
+            e.register(0x006e_5cc0, |e, a| {
+                assert_eq!(a[0], DATA + 0x18);
+                assert_eq!(e.mem.u32(a[1]), REQUEST);
+                e.mem.set_u32(a[0], e.mem.u32(a[1]));
+                result(a[0])
+            });
+            e.register(0x006e_cd40, |_, a| {
+                assert_eq!(a[1], DATA);
+                Ret::default()
+            });
+            let request_slot = Rc::new(RefCell::new(0));
+            let seen_slot = request_slot.clone();
+            e.register_double(0x0055_9450, move |e, a| {
+                assert_ne!(a[0], REQUEST);
+                *seen_slot.borrow_mut() = a[0];
+                result(e.mem.u32(a[0]))
+            });
+            e.put_vtable(0x30000, &[0, 0, 0, 0, 0x0077_0060, 0x0077_0070]);
+            e.register(0x0077_0060, |e, a| {
+                assert_eq!(a[1], REQUEST);
+                assert_eq!(e.mem.u32(a[2]), DATA);
+                result(1)
+            });
+            e.register(0x0077_0070, |_, a| {
+                assert_eq!(a[1], REQUEST + 4);
+                Ret::default()
+            });
+            e.register_double(0x006c_5ec0, move |e, _| {
+                e.mem.set_u32(*request_slot.borrow(), REQUEST + 4);
+                result(u32::from(accepted))
+            });
+            e.register(0x0045_cec0, |e, a| {
+                assert_eq!(e.mem.u32(a[0]), REQUEST + 4);
+                Ret::default()
+            });
+            e.register(0x006e_bf90, |e, a| {
+                assert_ne!(a[0], TOKEN);
+                assert_eq!(e.mem.u32(a[0]), TOKEN);
+                Ret::default()
+            });
+            assert_eq!(
+                fn_006eac70(&mut e, Ptr::new(OBJECT), REQUEST, TOKEN),
+                accepted
+            );
+            assert_eq!(e.mem.u32(DATA + 0x18), REQUEST);
+            assert_eq!(e.mem.u32(DATA + 0x60), TOKEN);
+            assert_eq!(calls(&e, 0x0077_0050).len(), usize::from(!accepted));
+            assert_eq!(calls(&e, 0x006e_bf90).len(), 3);
+        }
+    }
+
+    #[test]
+    fn build_path_synchronous_gates_result_kind_and_owned_cleanup() {
+        for (setting, mode) in [(0, 1), (1, 0)] {
+            for built in [false, true] {
+                for allocation in [0, 0x25000] {
+                    let mut e = fixture();
+                    e.mem.set_u8(OBJECT + 0x180, setting);
+                    e.register(0x0040_8d60, |_, a| {
+                        assert_eq!(a, &[0x011d_77cc]);
+                        result(OBJECT + 0x180)
+                    });
+                    e.register_double(0x00aa_13e0, move |_, a| {
+                        assert_eq!(a, &[0x44]);
+                        result(allocation)
+                    });
+                    e.register_double(0x006e_7650, move |_, a| {
+                        assert_eq!(a, &[allocation]);
+                        result(allocation)
+                    });
+                    e.register(0x0063_3c90, |e, a| {
+                        e.mem.set_u32(a[0], a[1]);
+                        result(a[0])
+                    });
+                    e.register(0x0055_9450, |e, a| result(e.mem.u32(a[0])));
+                    e.register(0x0055_9a40, |e, a| {
+                        e.mem.set_u32(a[0], e.mem.u32(a[1]));
+                        result(a[0])
+                    });
+                    e.register_double(0x006d_0900, move |_, a| {
+                        assert_eq!(a, &[0x50000, allocation]);
+                        result(u32::from(built))
+                    });
+                    e.mem.set_u32(OBJECT + 0x100, 0x31000);
+                    e.put_vtable(0x31000, &[0, 0x0077_0080]);
+                    e.register_double(0x0077_0080, move |e, a| {
+                        assert_eq!(a[0], OBJECT + 0x100);
+                        assert_eq!(e.mem.u32(a[1]), u32::from(!built));
+                        assert_eq!(e.mem.u32(a[1] + 4), allocation);
+                        Ret::default()
+                    });
+                    e.register(0x0080_0190, |_, _| Ret::default());
+                    e.register(0x006e_bf90, |e, a| {
+                        assert_eq!(e.mem.u32(a[0]), OBJECT + 0x100);
+                        Ret::default()
+                    });
+                    assert!(fn_006eb9d0(
+                        &mut e,
+                        Ptr::new(OWNER),
+                        0x50000,
+                        OBJECT + 0x100,
+                        mode
+                    ));
+                    assert_eq!(calls(&e, 0x0077_0080).len(), 1);
+                    assert_eq!(calls(&e, 0x0045_cec0).len(), 2);
+                    assert_eq!(calls(&e, 0x006e_bf90).len(), 1);
+                    assert_eq!(calls(&e, 0x006e_7650).len(), usize::from(allocation != 0));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn build_path_asynchronous_copies_words_and_preserves_submission_result() {
+        for accepted in [false, true] {
+            let mut e = fixture();
+            e.mem.set_u8(OBJECT + 0x180, 1);
+            e.register(0x0040_8d60, |_, _| result(OBJECT + 0x180));
+            for address in [0x006e_bf30, 0x0055_9a40] {
+                e.register(address, |e, a| {
+                    e.mem.set_u32(a[0], e.mem.u32(a[1]));
+                    result(a[0])
+                });
+            }
+            e.register(0x0040_1000, |_, a| {
+                assert_eq!(a, &[0x80]);
+                result(0)
+            });
+            e.register(0x006c_5e40, |_, _| Ret::default());
+            e.register(0x006c_5e70, |_, _| Ret::default());
+            e.register(0x006e_cd40, |_, a| {
+                assert_eq!(a[1], 0);
+                Ret::default()
+            });
+            e.register(0x0055_9450, |e, a| {
+                assert_eq!(e.mem.u32(a[0]), 0x50000);
+                result(e.mem.u32(a[0]))
+            });
+            e.put_vtable(0x30000, &[0, 0, 0, 0, 0x0077_0090, 0x0077_00a0]);
+            e.register(0x0077_0090, |e, a| {
+                assert_eq!(a[1], 0x50000);
+                assert_eq!(e.mem.u32(a[2]), 0);
+                result(1)
+            });
+            e.register(0x0077_00a0, |_, a| {
+                assert_eq!(a[1], 0x50000);
+                Ret::default()
+            });
+            e.register_double(0x006c_5ec0, move |_, _| result(u32::from(accepted)));
+            e.register(0x0045_cec0, |e, a| {
+                assert_eq!(e.mem.u32(a[0]), 0x50000);
+                Ret::default()
+            });
+            e.register(0x006e_bf90, |e, a| {
+                assert_eq!(e.mem.u32(a[0]), 0x60000);
+                Ret::default()
+            });
+            assert_eq!(
+                fn_006eb9d0(&mut e, Ptr::new(OWNER), 0x50000, 0x60000, 255),
+                accepted
+            );
+            assert_eq!(calls(&e, 0x0045_cec0).len(), 2);
+            assert_eq!(calls(&e, 0x006e_bf90).len(), 2);
+            assert!(calls(&e, 0x00aa_13e0).is_empty());
+        }
+    }
+    #[test]
+    fn update_completion_uses_pointee_key_and_preserves_output_slot_order() {
+        // 006eaf25/006eaf29: task output is EBP-0x34, the fourth ABI word;
+        // 006eaffd loads the completion's second word before adding 0x18.
+        let mut e = fixture();
+        let popped = Rc::new(RefCell::new(false));
+        let seen = popped.clone();
+        e.register(0x006e_c970, |_, _| Ret::default());
+        let visited = Rc::new(RefCell::new(false));
+        let predicate = visited.clone();
+        e.register_double(0x006e_bde0, move |_, _| {
+            result(u32::from(*predicate.borrow()))
+        });
+        e.register_double(0x0044_c640, move |e, a| {
+            assert_eq!(a[0], OBJECT + 0x1480);
+            e.mem.set_u32(a[2], 0xdeadbeef);
+            e.mem.set_u32(a[3], OBJECT + 0x200);
+            *visited.borrow_mut() = true;
+            result(1)
+        });
+        e.register(0x005d_c980, |_, a| {
+            assert_eq!(a, &[OBJECT + 0x200]);
+            result(0)
+        });
+        e.put_vtable(0x30000, &[0, 0, 0, 0, 0x0077_0100, 0x0077_0110]);
+        e.register_double(0x0077_0100, move |e, a| {
+            if a[0] == OBJECT + 0xc10 && !*seen.borrow() {
+                *seen.borrow_mut() = true;
+                e.mem.set_u32(a[1], 0);
+                e.mem.set_u32(a[1] + 4, OBJECT + 0x100);
+                e.mem.set_u32(a[1] + 0x18, 0xdeadbeef);
+                result(1)
+            } else {
+                result(0)
+            }
+        });
+        e.mem.set_u32(OBJECT + 0x118, 0x12345678);
+        e.mem.set_u32(OBJECT + 0x100, 0x31000);
+        e.put_vtable(0x31000, &[0x0077_0120]);
+        e.register(0x0055_9450, |e, a| {
+            assert_eq!(a, &[OBJECT + 0x118]);
+            result(e.mem.u32(a[0]))
+        });
+        e.register(0x0077_0110, |_, a| {
+            assert_eq!(a, &[OBJECT + 0x1480, 0x12345678]);
+            Ret::default()
+        });
+        e.register(0x0077_0120, |_, a| {
+            assert_eq!(a, &[OBJECT + 0x100, 1]);
+            Ret::default()
+        });
+        fn_006eae40(&mut e, Ptr::new(OBJECT));
+        assert!(*popped.borrow());
+        assert_eq!(calls(&e, 0x0077_0110).len(), 1);
+        assert_eq!(calls(&e, 0x0077_0120).len(), 1);
+    }
+
+    #[test]
+    fn process_nonempty_notifications_keep_pending_argument_off_singleton_call() {
+        // At 006ea15c/006ea1e8/006ea2c6 PUSH EAX belongs to 006eb7f0,
+        // not the intervening zero-argument singleton getter 0047d0b0.
+        for (signaled, built) in [(true, true), (true, false), (false, false)] {
+            let mut e = fixture();
+            const TASK: u32 = 0x25000;
+            const LISTENER: u32 = 0x26000;
+            const FORWARDED: u32 = 0x27000;
+            e.mem.map(TASK, 0x100);
+            e.mem.map(LISTENER, 4);
+            e.mem.set_u8(TASK + 4, 1);
+            e.mem.set_u32(TASK + 0x18, 0x50000);
+            e.mem.set_u32(TASK + 0x60, LISTENER);
+            e.mem.set_u8(OBJECT + PATH_MANAGER_IMPL_CANCEL_PATHS, 1);
+            e.register(0x0047_d0b0, |_, a| {
+                assert!(a.is_empty());
+                result(OBJECT)
+            });
+            e.register(0x0071_7e50, |_, a| {
+                assert_eq!(a, &[OBJECT]);
+                result(OBJECT)
+            });
+            e.register(0x0055_9450, |e, a| {
+                if a[0] == OBJECT {
+                    result(OBJECT)
+                } else {
+                    result(e.mem.u32(a[0]))
+                }
+            });
+            e.register_double(0x00aa_6120, move |_, _| result(u32::from(signaled)));
+            e.register(0x00aa_62c0, |_, _| Ret::default());
+            for address in [
+                0x0040_fbf0,
+                0x0040_fba0,
+                0x0044_ddc0,
+                0x00aa_13e0,
+                0x005d_c980,
+                0x0080_0190,
+            ] {
+                e.register(address, |_, _| Ret::default());
+            }
+            e.register(0x0066_b0d0, |e, a| {
+                assert_eq!(a, &[TASK + 0x1c, 0]);
+                e.mem.set_u32(a[0], a[1]);
+                result(a[0])
+            });
+            e.register_double(0x006d_0900, move |_, a| {
+                assert_eq!(a, &[0x50000, 0]);
+                result(u32::from(built))
+            });
+            e.register(0x0055_9a40, |e, a| {
+                e.mem.set_u32(a[0], e.mem.u32(a[1]));
+                result(a[0])
+            });
+            e.mem.set_u32(LISTENER, 0x31000);
+            e.put_vtable(0x31000, &[0, 0x0077_0200]);
+            e.register_double(0x0077_0200, move |e, a| {
+                assert_eq!(a[0], LISTENER);
+                assert_eq!(e.mem.u32(a[1]), u32::from(!built));
+                Ret::default()
+            });
+            e.register_double(0x004b_0680, move |_, a| {
+                assert_eq!(a[1..], [u32::from(!built), TASK]);
+                result(FORWARDED)
+            });
+            e.register(0x0077_0000, |_, a| {
+                assert_eq!(a, &[OBJECT + 0xc10, FORWARDED]);
+                Ret::default()
+            });
+            pathing_task_data_process(&mut e, Ptr::new(TASK));
+            assert_eq!(calls(&e, 0x0077_0200).len(), 1);
+            assert_eq!(calls(&e, 0x0077_0000).len(), 1);
+            assert_eq!(calls(&e, 0x00aa_62c0).len(), usize::from(signaled));
+            assert_eq!(e.mem.u8(TASK + 4), u8::from(!built));
+        }
+    }
+    #[test]
+    fn update_resubmits_completed_task_using_pointer_value() {
+        let mut e = fixture();
+        let visited = Rc::new(RefCell::new(false));
+        let predicate = visited.clone();
+        e.register(0x006e_c970, |_, _| Ret::default());
+        e.register_double(0x006e_bde0, move |_, _| {
+            result(u32::from(*predicate.borrow()))
+        });
+        e.register_double(0x0044_c640, move |e, a| {
+            e.mem.set_u32(a[2], 0xdeadbeef);
+            e.mem.set_u32(a[3], OBJECT + 0x200);
+            *visited.borrow_mut() = true;
+            result(1)
+        });
+        e.register(0x005d_c980, |_, a| {
+            assert_eq!(a, &[OBJECT + 0x200]);
+            result(1)
+        });
+        for address in [
+            0x0040_fbf0,
+            0x0040_fba0,
+            0x0044_ddc0,
+            0x006c_5e40,
+            0x006c_5e70,
+            0x006c_5ec0,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(0x0060_d4b0, |_, a| {
+            assert_eq!(a, &[OBJECT + 0x200, 0]);
+            Ret::default()
+        });
+        e.register(0x006e_cd40, |_, a| {
+            assert_eq!(a[1], OBJECT + 0x200);
+            Ret::default()
+        });
+        fn_006eae40(&mut e, Ptr::new(OBJECT));
+        assert_eq!(calls(&e, 0x0060_d4b0).len(), 1);
+        assert_eq!(calls(&e, 0x006e_cd40).len(), 1);
+        assert_eq!(calls(&e, 0x006c_5ec0).len(), 1);
+    }
+
+    #[test]
+    fn update_drains_both_change_queues_and_notifies_each_listener_mode() {
+        for scene_mode in [false, true] {
+            let mut e = fixture();
+            const LISTENER: u32 = OBJECT + 0x200;
+            const ITEM: u32 = 0x50000;
+            let pops = Rc::new(RefCell::new([false; 2]));
+            e.register_double(0x0077_0000, move |e, a| {
+                let index = match a[0] {
+                    x if x == OBJECT + 0x1064 => 0,
+                    x if x == OBJECT + 0xc50 => 1,
+                    _ => return result(0),
+                };
+                if pops.borrow()[index] {
+                    return result(0);
+                }
+                pops.borrow_mut()[index] = true;
+                e.mem.set_u32(a[1], ITEM + index as u32);
+                result(1)
+            });
+            e.register_double(0x008c_7aa0, move |_, a| {
+                assert!(a.is_empty());
+                result(u32::from(scene_mode))
+            });
+            let getter_order = Rc::new(RefCell::new(Vec::new()));
+            let getter_log = getter_order.clone();
+            e.register_double(0x0055_9450, move |e, a| {
+                let global = a[0] == 0x011d_6e5c;
+                getter_log.borrow_mut().push(global);
+                result(if global { LISTENER } else { e.mem.u32(a[0]) })
+            });
+            e.mem.set_u32(LISTENER, 0x31000);
+            let mut table = vec![0; 0x3b];
+            table[0xe8 / 4] = 0x0077_0300;
+            table[0xdc / 4] = 0x0077_0310;
+            e.put_vtable(0x31000, &table);
+            e.register(0x0077_0300, |_, a| {
+                assert_eq!(a, &[LISTENER, ITEM]);
+                Ret::default()
+            });
+            e.register(0x0077_0310, |_, a| {
+                assert_eq!(a, &[LISTENER, ITEM + 1, 1]);
+                Ret::default()
+            });
+            e.register(0x0043_d410, |e, a| {
+                assert_eq!(a[1..], [0, 0, 0]);
+                for offset in [0, 4, 8] {
+                    e.mem.set_u32(a[0] + offset, 0);
+                }
+                result(a[0])
+            });
+            e.register(0x00a5_9c60, |e, a| {
+                assert_eq!(a[0], LISTENER);
+                assert_eq!(e.mem.u32(a[1]), 0);
+                Ret::default()
+            });
+            e.register(0x0045_37b0, |_, a| {
+                match a[0] {
+                    ITEM => assert_eq!(a, &[ITEM]),
+                    x if x == ITEM + 1 => assert_eq!(a, &[ITEM + 1, LISTENER, 1, 0]),
+                    LISTENER => assert_eq!(a, &[LISTENER]),
+                    _ => panic!("unexpected generated scene lookup"),
+                }
+                result(a[0] + 0x100)
+            });
+            e.register(0x0087_ac60, |_, a| {
+                assert_eq!(a, &[ITEM + 0x100]);
+                Ret::default()
+            });
+            e.register(0x0087_ac00, |_, a| {
+                assert_eq!(a, &[ITEM + 0x101]);
+                Ret::default()
+            });
+            e.register(0x0087_ad50, |_, a| {
+                assert_eq!(a, &[LISTENER + 0x100]);
+                Ret::default()
+            });
+            fn_006eae40(&mut e, Ptr::new(OBJECT));
+            if scene_mode {
+                // 006eb106 resolves the global before the pending item at 006eb111.
+                assert_eq!(*getter_order.borrow(), vec![false, true, false, true]);
+                assert_eq!(calls(&e, 0x0087_ad50).len(), 1);
+            } else {
+                assert_eq!(*getter_order.borrow(), vec![true, false, true, false, true]);
+                assert_eq!(calls(&e, 0x00a5_9c60).len(), 1);
+            }
+        }
+    }
+    #[test]
+    fn successful_ray_wrappers_reload_slots_and_pass_output_to_copy() {
+        // 006ea622/006ea86a push the output before 00877a30, but it belongs
+        // to the later 006cf940 call at 006ea637/006ea87f.
+        for navmesh in [false, true] {
+            let mut e = fixture();
+            const TASK: u32 = 0x25000;
+            const PATH: u32 = 0x26000;
+            const REQUEST: u32 = 0x27000;
+            const SLOTS: u32 = 0x28000;
+            const START: u32 = 0x29000;
+            const GOAL: u32 = 0x29100;
+            const OUTPUT: u32 = 0x29200;
+            e.mem.map(TASK, 0x4000);
+            e.mem.set_u32(SLOTS, REQUEST);
+            e.mem.set_u32(SLOTS + 4, PATH);
+            e.mem.set_u32(PATH, if navmesh { 1 } else { 2 });
+            e.mem.set_u32(PATH + 4, 0);
+            e.mem.set_u32(PATH + 0x84, 1);
+            e.mem.map(0x0101_e000, 0x1000);
+            e.set_global(0x0101_e2bc, 0.125f32);
+            e.register(0x0077_0000, |e, a| {
+                assert_eq!(&a[..2], &[OBJECT + 0x1480, 0x1234]);
+                e.mem.set_u32(a[2], TASK);
+                result(1)
+            });
+            for address in [0x0040_fbf0, 0x0040_fba0] {
+                e.register(address, |_, _| Ret::default());
+            }
+            e.register(0x0044_ddc0, |_, a| {
+                assert_eq!(a, &[TASK + 0x50]);
+                result(1)
+            });
+            e.register(0x0087_7a30, |_, a| {
+                assert_eq!(a.len(), 2);
+                assert_eq!(a[1], 0);
+                result(if a[0] == TASK + 0x40 {
+                    SLOTS
+                } else {
+                    assert_eq!(a[0], TASK + 0x50);
+                    SLOTS + 4
+                })
+            });
+            let compared = Rc::new(RefCell::new(0));
+            let count = compared.clone();
+            e.register_double(0x006d_eeb0, move |e, a| {
+                assert_eq!(a[2], 0.125f32.to_bits());
+                let index = *count.borrow();
+                if navmesh {
+                    assert_eq!(&a[..2], &[REQUEST + 0x30, GOAL]);
+                } else if index == 0 {
+                    assert_eq!(&a[..2], &[REQUEST + 8, START]);
+                } else {
+                    assert_eq!(&a[..2], &[REQUEST + 0xb0, GOAL]);
+                }
+                *count.borrow_mut() += 1;
+                e.mem.set_u32(SLOTS, REQUEST + 0x80);
+                e.mem.set_u32(SLOTS + 4, PATH + 0x80);
+                result(1)
+            });
+            e.register(0x006c_f940, |_, a| {
+                assert_eq!(a, &[PATH + 0x88, OUTPUT]);
+                Ret::default()
+            });
+            let status = if navmesh {
+                fn_006ebbf0(
+                    &mut e,
+                    Ptr::new(OWNER),
+                    0x1234,
+                    Ptr::new(START),
+                    Ptr::new(GOAL),
+                    OUTPUT,
+                    0,
+                )
+            } else {
+                fn_006ebc20(
+                    &mut e,
+                    Ptr::new(OWNER),
+                    0x1234,
+                    Ptr::new(START),
+                    Ptr::new(GOAL),
+                    OUTPUT,
+                )
+            };
+            assert_eq!(status, 1);
+            assert_eq!(*compared.borrow(), if navmesh { 1 } else { 2 });
+            assert_eq!(calls(&e, 0x006c_f940).len(), 1);
+            assert_eq!(calls(&e, 0x0040_fba0), vec![vec![TASK + 0x20]]);
+        }
     }
 }
