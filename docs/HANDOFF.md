@@ -7,6 +7,14 @@ machinery runs.
 
 ## Resume here
 
+Rolling #126 passed both checks and merged as `97e7572` at 02:47 local.
+`ship.sh 126` completed; attached rolling #127 is at `cb42c4d` with fresh
+CI, containing MobileObject collection now `7a1f056` and loader collection
+now `43a8ee1`. Save-buffer #125 has passed core CI and awaits viewer CI at
+`685c26c`; its shared-ledger delta is absent, so do not rebase it merely to
+refresh counts. Root inventory session `34376` has passed all 15,690 core
+tests, strict lint and formatting; release/debug builds and the probe remain.
+
 Latest batch: animation loader source `99fb056` collected as `6c569b7`;
 13,879 combined engine tests, strict lint and formatting pass. All 44
 unit entries have normal behavior; only SEH cleanup at `005f21c0`,
