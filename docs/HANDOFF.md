@@ -91,18 +91,20 @@ Health checks passed: 74 focused tests, all 15,315 core tests, lint, formatting
 and release build. The real-save probe passes all 20 health and 14 count
 payloads with the source hash unchanged; count source is unchanged in
 this validated follow-on. No root process is active. The managed checkout
-is now `codex/phase2-reference-state`, commit `10220cb`, based on #115.
-It adds two uncompiled helpers in `form_support.rs` and registration;
-eight further constructor/allocation helpers and tests are uncommitted.
-Five native header and two zero-capacity array vectors pass. Unit tests
-use a generated allocator fixture; actual Gamebryo allocator startup is
-still missing. The prior real-registry reference probe stops at missing
-`00402d30`. Next validate these helpers after a03 collection and continue
-the dependency chain; no public reference adapter exists yet.
+is now `codex/phase2-reference-state`, commit `9469f51`, based on #115.
+Ten form-construction helpers and two callback-reload fixes pass 124
+focused tests, all 13,466 engine tests, lint, formatting and debug build.
+Five native header and two zero-capacity array vectors pass. The actual
+reference probe now reaches `00aa1070` and stops at the uninitialized
+allocator. Seven allocator startup/allocation helpers and their tests are
+prepared but uncompiled in `nisystem/allocator_support.rs`, its module
+registration, `nisystem/bsniallocator.rs` and `bscore/memorymanager.rs`.
+Three native allocator-header vectors pass. No public reference adapter
+exists yet; next validate and continue the real startup dependency chain.
 
 Simultaneous engine compilers exhausted host memory; ONE heavy engine
-compile may run at a time. a01 has the current validation window;
-a03 is next, then root, then a04. Other workers wait,
+compile may run at a time. a04 has the current validation window;
+a01 is next, then a03, then root. Other workers wait,
 continuing research/review. The lead grants each next window explicitly.
 Machine note: automatic policy blocked removal of idle p3's target cache;
 nothing was deleted. Private `task.sh` now warns below 40 GB free instead
