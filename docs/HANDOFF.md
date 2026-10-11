@@ -7,6 +7,23 @@ machinery runs.
 
 ## Resume here
 
+Latest, 03:30 local: #127 passed both CI checks and merged `72003ab` at
+03:23:48. `ship.sh 127` completed; #129 is attached at `12f6153`, titled
+"Engine: translate explosion effect processing", with fresh CI. That
+explosion collection is now `dc89abd` after rebasing. #128 core passed;
+viewer remains pending. It can merge at its exact checked head independently.
+Movement source `6ae7a25` passed 65 focused / 13,889 source engine / doc /
+strict lint / fmt / 49 hygiene tests. Cycle01 completed as `c757035` with
+13,925 combined engine tests plus doc, lint and fmt. Fresh `/root/a01_round14`
+immediately started the next normal entries at `00931880`; four reviewed
+SEH-only partials remain in the ledger. a03 now owns the compiler, then
+cycle03, root reader/probes, and a04. a04 has both remaining normal bodies
+drafted and reviewed, with a full blocked-then-clear ray test; all seventeen
+remaining partials have verified PC exception frames. After its checks,
+partial-only lane advancement is reviewed/allowed. Root's fuller ItemChange
+probe now requires byte-identical payloads after loading and writing again;
+it has not run. Usage is 60% at 03:27; the 98% stop rule remains active.
+
 Rolling #126 passed both checks and merged as `97e7572` at 02:47 local.
 `ship.sh 126` completed; attached rolling #127 is at `cb42c4d` with fresh
 CI, containing MobileObject collection now `7a1f056` and loader collection

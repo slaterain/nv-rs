@@ -33,6 +33,15 @@ reading do not establish them.
 
 ## Active work: M1
 
+Rolling #127 passed both CI checks and merged `72003ab`; #129 publishes
+explosion effect processing at `12f6153` with fresh CI. Movement continuation
+collected as `c757035`: 13,925 combined engine tests, doctest, strict lint
+and formatting pass. Six larger bodies now have normal paths implemented;
+four compiler exception-cleanup partials remain explicit. A fresh worker
+immediately continues at `00931880`. HUD now validates; the inventory reader
+and byte-identical payload round-trip probe follow. Build 40 remains current.
+Next action: collect HUD, then validate the inventory reader.
+
 Rolling #126 merged `97e7572` after both CI checks; #127 publishes the
 collected movement helpers and animation loader with fresh CI. Inventory
 follow-on #128 (`4b68ea0`) passes 15,691 core tests, strict lint, formatting and
