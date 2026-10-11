@@ -33,6 +33,13 @@ reading do not establish them.
 
 ## Active work: M1
 
+Multibound collection `20c6123` passes 13,751 combined engine tests,
+strict lint and formatting. Three exception-cleanup partials remain
+explicit; eight generated cases also match the native executable. Its
+fresh slot now translates TESAnimGroup. Rolling #120 merged as `3a92d0a`;
+#121 has fresh CI. Next action: finish reference-adapter workspace checks
+and the real-registry probe, then validate the prepared Explosion batch.
+
 Navigation collection `a902f84` passes 13,724 combined engine tests, lint
 and formatting, including the immediate-vtable correction. Its three
 exception-cleanup partials remain explicit; the fresh slot advances to
