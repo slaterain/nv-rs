@@ -12,8 +12,9 @@ both CI checks and were squash-merged as `b995218`, `d854fbe`, `89e1a0b`
 and `c23f744`. The lead branch is `claude/engine-crate`. Its later batches
 include explosion collection `a2fe87a`: the owner/weapon callback-reload
 correction and nine more functions pass 13,695 combined engine tests,
-lint and formatting. Publish with a lease against old remote head
-`2a2f132` and open/attach the next rolling PR.
+lint and formatting. Rolling PR #119 is open and attached at head
+`43d1cb7`, awaiting both CI checks. The old remote branch was absent
+after #116 merged; an empty-ref lease safely recreated it.
 
 Phase 1 PR 7 (#113) passed both checks and merged as `f917219`.
 The lead branch is rebased onto current main `cbca26e` (count PR #117).
