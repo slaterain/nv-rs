@@ -7,6 +7,27 @@ machinery runs.
 
 ## Resume here
 
+Latest, 04:33 local: movement collection `757af70` passes 14,051 combined
+engine tests, doctest, strict lint and formatting. Fresh `/root/a01_round15`
+immediately starts its remaining normal bodies at `009339a0`; ten SEH-only
+partials remain explicit. Root now owns the compiler, session `57033`, for
+the persistence follow-on; a04 then a03 follow. a03's next HUD body remains
+explicitly partial beyond `00776731`; reviewed argument/global reload fixes
+are in its draft. a04's forty-body effect-item batch is ready, uncompiled.
+
+Reader #130 merged `bad2f96` after both CI checks. Rolling #131 is attached,
+head `d6dcc8e`, rebased onto that merge with only generated-ledger conflicts;
+fresh core/viewer CI is required. Later movement `757af70` remains local.
+Root branch `codex/phase2-inventory-form-map` is based on merged #130;
+stash `a4d2a67` is applied and retained, never apply it again. Its three
+helpers/four tests cover form-map allocation and a shared buffer setter.
+The draft count/health probe reads eight real saves and rewrites all 10,201
+selected item payloads byte-identically, including eighteen multi-stack
+entries; three full-record decode failures are excluded. This is not a FOS
+round trip. The broader inventory probe reaches missing `005a8b80` in script
+loading; investigate next after this batch. Final generated-registry probes
+remain pending after the build. Build 40 remains current. Usage 78%.
+
 Latest, 04:22 local: HUD collection `5c12df2` passed combined engine tests,
 strict lint and formatting, including the reviewed radiation audio correction.
 Fresh `/root/a03_round16` immediately continues large `00775a00` in b0236.
