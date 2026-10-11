@@ -30,11 +30,11 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 10617 | 16.0% |
-| traced | 4487 | 6.8% |
+| translated | 10637 | 16.1% |
+| traced | 4485 | 6.8% |
 | platform | 3417 | 5.2% |
 | library | 21915 | 33.1% |
-| open | 25823 | 39.0% |
+| open | 25805 | 38.9% |
 | **all** | **66259** | |
 
 Translation totals count markers, not complete behavior. **17** engine functions
@@ -60,9 +60,9 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `008ca350` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1571` |
 | `008ca480` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1782` |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14697 (36.3%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14715 (36.3%) are translated or traced.
 
-Rust cites 15729 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 15750 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -95,7 +95,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 65 | 0 | 21269 | 0 | - |
 | fallout shared | 10470 | 2065 | 3149 | 6305 | 991 | 0 | 0 | 3174 | 69.7% |
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 78 | 0 | 0 | 6460 | 2.0% |
-| fallout/ai | 4849 | 1475 | 1888 | 2203 | 622 | 0 | 0 | 2024 | 58.3% |
+| fallout/ai | 4849 | 1475 | 1888 | 2223 | 620 | 0 | 0 | 2006 | 58.6% |
 | fallout/interface | 2645 | 991 | 1247 | 583 | 741 | 0 | 0 | 1321 | 50.1% |
 | (unplaced) | 2353 | 470 | 0 | 30 | 411 | 1 | 0 | 1911 | 18.7% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 643 | 188 | 0 | 0 | 957 | 46.5% |
@@ -153,7 +153,7 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | 1 | 143 | 117 | 99 | 32 | 3 | 0 | 9 |
 | 2 | 1575 | 583 | 1050 | 397 | 24 | 4 | 100 |
-| 3 | 4973 | 1303 | 3390 | 1076 | 154 | 26 | 327 |
+| 3 | 4973 | 1303 | 3391 | 1075 | 154 | 26 | 327 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
