@@ -97,7 +97,12 @@ The installed-executable real-registry probe now passes counts 2, 5, -2,
 doubles or installation writes are used. The general subclass destruction
 boundary remains open; this establishes only the count dependency chain.
 The focused ExtraData filter passed 172 tests, including the new destructor
-and count lifecycle checks. Full checks remain pending for this follow-on.
+and count lifecycle checks. The full core suite then passed 15,156 tests
+on the #113 base, including explicit allocation-release assertions. Count
+source is unchanged after rebasing onto #114 plus the list-adapter PR.
+The repeat compile exhausted host memory alongside other engine compilers;
+it failed before tests. Validation is now serialized, with final CI and
+release build still pending for this follow-on.
 
 A read-only probe of the user's early Doc Mitchell autosave decoded 3,365
 reference/actor change forms and visited 3,319 extra lists. Its 14 count
