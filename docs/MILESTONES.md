@@ -33,6 +33,16 @@ reading do not establish them.
 
 ## Active work: M1
 
+HUD collection `0eb6b3c` passes 14,100 combined engine tests, doctest,
+strict lint and formatting; its fresh worker has drafted the remaining
+item prompts, details and layout, now under review. Movement validates its
+next twenty routines. Root's five script-loading dependencies have ten
+passing native cases and ten prepared Rust regressions, with Rust checks
+queued after movement collection. Both #132 and #133 pass core CI and
+await viewer CI. Build 40 remains current; no next-play-build date is
+confirmed. Next action: collect movement, validate script dependencies,
+then validate the effect and HUD batches.
+
 Rolling #131 merged `7cda9bf` after both CI checks; #133 publishes the next
 movement/effect batch with fresh CI. The effect collection passed 14,095
 combined engine tests, strict lint and formatting, and its fresh worker

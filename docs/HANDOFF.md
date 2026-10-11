@@ -7,6 +7,20 @@ machinery runs.
 
 ## Resume here
 
+Latest, 05:19 local: HUD source `6c4df88` was collected as `0eb6b3c`
+through cycle03, passing 14,100 combined engine tests, doctest, strict lint
+and formatting. Fresh `/root/a03_round17` immediately continued and has
+drafted the remaining normal `00775a00` paths; review is correcting late
+HUD reloads and float storage boundaries. No cargo grant for that worker.
+`/root/a01_round15` owns the compiler for twenty movement/dialogue bodies:
+lint and formatting pass; one fixture correction is undergoing tests.
+After commit: cycle01 exactly once, immediately fresh worker, then root
+compiler for `codex-audit/check-inventory-locals.ps1`, followed by a04/a03.
+Root has five helpers and ten Rust regressions, still uncompiled; all ten
+native constructor/manager cases pass. Both #132 (`6513c26`) and #133
+(`f264324`) have passing core CI and pending viewer CI. Ship when both
+current-head checks pass. Build 40 remains current with no confirmed ETA.
+
 Latest: rolling #131 passed both CI checks and merged `7cda9bf` at 04:57
 local. `ship.sh 131` completed and created attached #133 at `f264324`,
 covering movement persistence and effect-item routines. Its CI is fresh.
