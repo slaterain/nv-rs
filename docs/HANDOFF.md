@@ -15,8 +15,10 @@ was 25,230,925,824 bytes afterward. Automatic review had rejected our
 deletion attempt with only "blocked by policy"; no bypass was attempted.
 
 - #135 merged `7907420` and #134 merged `89bbde4`, each after both CI checks.
-  #136 also merged `95ab97a` after both checks. Rolling #137 is attached at
-  `64cde5f`, with fresh core/viewer checks running. Ship it when both pass.
+  #136 also merged `95ab97a` after both checks. #137 merged `935701e`, and
+  root #138 merged `1614889`, each after both current-head checks passed.
+  Rolling #139 is attached at `f8f2f32`, with fresh core/viewer checks
+  running. Ship it when both pass.
 - cycle04 session 86301 completed: source `5c914204` collected as `ddeecbd`,
   all normal effect-item bodies through `00405400`. Ten verified SEH-only
   partials were retained with reviewed partial-only advancement. Fresh
@@ -35,9 +37,10 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
   I/O collection is complete: source `a802ff8` became `75bd3b5`, with
   14,239 combined engine tests and strict checks passing. Fresh
   `/root/a04_round17` immediately continued b0626 from `00c3ffb0`.
-  a03 now owns an intermediate focused compiler pass for 24 entries,
-  then yields to audio while it finishes the rest of its forty-entry task.
-  Root's next two-helper follow-on is source-only.
+  a03's intermediate focused pass succeeded (93 tests), and audio owns the
+  sole compiler. HUD continues toward forty entries. I/O's remaining
+  twenty-four bodies and callback-mutation regressions are source-ready.
+  Root's two-helper follow-on is next after audio collection, then I/O.
 - Root #138 is attached/published at `e7cf965` on
   `codex/phase2-script-action-parser`: `expression.rs`,
   `tesscriptrunmanager.rs` and topic `ENGINE_STATE.md` contain six helpers
@@ -54,7 +57,8 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
   `00500940` in `fallout_shared/bgsterminal.rs`. Forty-one native cases
   pass; Rust checks for this follow-on have not run. The private original
   item-payload probe is prepared but unrun. Both paths also need a04's
-  collected TLS guards (currently in #137). Full Script form/save-ID
+  collected TLS guards (merged in #137 and integrated into root's checkout
+  at `e1e1393`). Full Script form/save-ID
   integration remains open; no whole-save claim.
 - a04's collected I/O management batch has forty bodies and fifty tests,
   with twelve SEH-only partials. All checks passed. Review

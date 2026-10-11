@@ -34,7 +34,7 @@ reading do not establish them.
 ## Active work: M1
 
 Resumed continuous translation on 2026-10-11 after the usage reset.
-#134, #135 and #136 merged after both CI checks; rolling #137 awaits checks.
+#134 through #138 merged after both CI checks; rolling #139 awaits checks.
 The 34-body effect-item batch passed all checks and collection (`ddeecbd`);
 a fresh worker immediately began I/O management. HUD also passed collection
 (`82e56ee` after rebase, 14,177 combined engine tests) and restarted. Movement
@@ -45,8 +45,10 @@ alongside thirty native cases. The actual-bytecode probe stops at an open
 flag predicate. Root drafts that predicate and a header accessor, with
 forty-one native cases passing and Rust checks queued. I/O collected as
 `75bd3b5` with 14,239 combined engine tests passing, and a fresh worker
-immediately continued. HUD runs an intermediate focused check, then audio
-validates while HUD finishes its remaining entries.
+immediately continued. HUD's intermediate focused check passed 93 tests;
+audio now validates while HUD finishes its remaining entries. The remaining
+twenty-four I/O bodies are drafted with callback-mutation regressions and
+await compiler access. Root has integrated #137's TLS guards for the probes.
 The evaluator implements
 BEGIN/action-list paths only; other modes stay explicitly unsupported.
 The user freed the idle build caches, restoring about 25 GB at verification.
