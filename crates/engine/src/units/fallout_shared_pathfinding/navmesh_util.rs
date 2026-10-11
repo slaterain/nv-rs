@@ -10,14 +10,16 @@
 //! is the mesh) or of its embedded search grid at `NavMesh + 0xA8`
 //! ([`NavMeshGrid`], `this` is the grid).
 //!
-//! Continuations have translated 110 of this unit's 113 entries. The current
-//! batch closes the door-record, neighboring-portal, and undo-operation
-//! initialization paths, and fixes the append helper's buffer reload after
-//! construction. Three larger geometry/undo routines remain unregistered.
+//! Earlier batches fully translated 110 of the 113 entries. This batch closes
+//! the door-record, neighboring-portal, and undo-operation initialization
+//! paths, fixes the append helper's buffer reload after construction, and adds
+//! normal-path translations for two larger geometry routines. One topology-
+//! repair routine remains unregistered; exception-unwind cleanup is partial in
+//! the two new translations.
 //!
-// open: 006987d0 - full transformed obstacle-footprint/grid scan and triangle intersection predicate; its consumers dispatch by address until translated.
-// open: 00699b60 - edge-pair map rebuild, winding/proximity repair, allocation ownership, and final per-triangle nearest-vertex selection.
-// open: 006bd040 - transformed obstacle corners, projected heights, vertex/edge creation, and long-edge undo ownership updates.
+// translated: 006987d0 - normal-path obstacle-footprint scan; exception unwind omitted.
+// open: 00699b60 - edge-pair map rebuild, winding/proximity repair, allocation ownership, and nearest-vertex selection; exception unwind omitted.
+// translated: 006bd040 - normal-path body; exception unwind omitted.
 //
 //! Conventions in this file:
 //! - Methods the engine map leaves unnamed are `fn_<address>`, named by what
@@ -3209,11 +3211,370 @@ pub fn fn_006bc8e0(e: &mut Engine, this: Ptr, mesh: Ptr, undo: Ptr) -> bool {
     true
 }
 
+// Translated from 006bd040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Builds the obstacle's four transformed corners, projects their heights
+/// against the mesh, appends the resulting vertices and perimeter edges to
+/// this operation's undo arrays, and marks edges longer than 64 units for
+/// undo ownership. The operation stores the mesh at `this`, its obstacle
+/// `NiPointer` at `this + 4`, created vertex pointers at `this + 0x1c`, and
+/// created edge pointers at `this + 0x30`. C++ exception unwinding is omitted.
+// Translation incomplete: 006bd040 - exception unwind cleanup for temporary point arrays and smart pointers.
+pub fn fn_006bd040(e: &mut Engine, this: Ptr) {
+    let obstacle_pointer = this.byte_add(4);
+    e.with_stack(0x108, |e, scratch| {
+        let corners = scratch.byte_add(0xc8);
+        for (index, (x_offset, y_offset)) in
+            [(0x40, 0x44), (0x40, 0x50), (0x4c, 0x50), (0x4c, 0x44)]
+                .into_iter()
+                .enumerate()
+        {
+            let obstacle = e.call(POINTER_GET, &args![obstacle_pointer]).ptr::<()>();
+            let z = e.mem.f32(obstacle.addr() + 0x48);
+            let obstacle = e.call(POINTER_GET, &args![obstacle_pointer]).ptr::<()>();
+            let y = e.mem.f32(obstacle.addr() + y_offset);
+            let obstacle = e.call(POINTER_GET, &args![obstacle_pointer]).ptr::<()>();
+            let x = e.mem.f32(obstacle.addr() + x_offset);
+            let point = corners.byte_add(index as u32 * 12);
+            e.call(POINT3_CONSTRUCT, &args![point, x, y, z]);
+        }
+
+        let first_obstacle = e.call(POINTER_GET, &args![obstacle_pointer]).ptr::<()>();
+        let second_obstacle = e.call(POINTER_GET, &args![obstacle_pointer]).ptr::<()>();
+        let height_delta =
+            e.mem.f32(first_obstacle.addr() + 0x6c) - e.mem.f32(second_obstacle.addr() + 0x60);
+        let height_index = e.call(0x006a_d3b0, &args![height_delta, 1u32, 0u32]).u16();
+
+        let projected = scratch.byte_add(0x90);
+        for index in 0..4u32 {
+            // The executable pushes this translation pointer before the
+            // separate smart-pointer reload used to obtain the matrix.
+            let translation_object = e.call(POINTER_GET, &args![obstacle_pointer]).ptr::<()>();
+            let matrix_object = e.call(POINTER_GET, &args![obstacle_pointer]).ptr::<()>();
+            let matrix = matrix_object.byte_add(0x1c);
+            let output = scratch.byte_add(0x14);
+            let corner = corners.byte_add(index * 12);
+            let rotated = e
+                .call(0x004b_4500, &args![matrix, output, corner])
+                .ptr::<()>();
+            let point = projected.byte_add(index * 12);
+            e.call(
+                POINT3_ADD,
+                &args![rotated, point, translation_object.byte_add(0x10)],
+            );
+            let z = e.mem.f32(point.addr() + 8);
+            let z_out = scratch.byte_add(0x70);
+            e.mem.set_f32(z_out.addr(), z);
+            let limit: f32 = e.global(0x0101_e704);
+            let mesh = Ptr::<NavMesh>::new(e.mem.u32(this.addr()));
+            if e.call(0x0069_7b70, &args![mesh, point, limit, height_delta, z_out])
+                .bool()
+            {
+                e.mem.set_f32(point.addr() + 8, e.mem.f32(z_out.addr()));
+            }
+        }
+
+        let mut vertex_handles = [Ptr::<()>::NULL; 4];
+        for index in 0..4u32 {
+            let point = projected.byte_add(index * 12);
+            let mesh = Ptr::<NavMesh>::new(e.mem.u32(this.addr()));
+            let vertex_index = e.call(0x0069_0fe0, &args![mesh, point]).u16();
+            let mesh = Ptr::<NavMesh>::new(e.mem.u32(this.addr()));
+            let vertex = e
+                .call(0x006b_f3c0, &args![mesh, vertex_index, 1u32, 0u32, 0u32])
+                .ptr::<()>();
+            vertex_handles[index as usize] = vertex;
+            e.with_stack(4, |e, item| {
+                e.mem.set_u32(item.addr(), vertex.addr());
+                e.call(ARRAY_ADD_DWORD, &args![this.byte_add(0x1c), item]);
+            });
+        }
+
+        let mut edges = [Ptr::<()>::NULL; 4];
+        for index in 0..4u32 {
+            let next = (index + 1) % 4;
+            let mesh = Ptr::<NavMesh>::new(e.mem.u32(this.addr()));
+            edges[index as usize] = e
+                .call(
+                    0x006b_f4d0,
+                    &args![
+                        mesh,
+                        vertex_handles[index as usize],
+                        vertex_handles[next as usize],
+                        1u32
+                    ],
+                )
+                .ptr::<()>();
+            e.with_stack(4, |e, item| {
+                e.mem.set_u32(item.addr(), edges[index as usize].addr());
+                e.call(ARRAY_ADD_DWORD, &args![this.byte_add(0x30), item]);
+            });
+        }
+
+        let long_edge_threshold: f64 = e.global(SIXTY_FOUR);
+        for edge in edges {
+            let first_index = e.mem.u16(e.mem.u32(edge.addr()));
+            let second_index = e.mem.u16(e.mem.u32(edge.addr() + 4));
+            let mesh = Ptr::<NavMesh>::new(e.mem.u32(this.addr()));
+            let first_vertex = e
+                .call(VERTEX_POINTER, &args![mesh, first_index])
+                .ptr::<()>();
+            let mesh = Ptr::<NavMesh>::new(e.mem.u32(this.addr()));
+            let second_vertex = e
+                .call(VERTEX_POINTER, &args![mesh, second_index])
+                .ptr::<()>();
+            let difference = scratch.byte_add(0x20);
+            e.call(
+                POINT3_SUBTRACT,
+                &args![first_vertex, difference, second_vertex],
+            );
+            if e.call(POINT3_SQUARED_LENGTH_2D, &args![difference]).f64() > long_edge_threshold {
+                e.mem.set_u16(edge.addr() + 0x16, height_index);
+                e.mem.set_u8(edge.addr() + 0x18, 1);
+                e.mem.set_u8(edge.addr() + 0x19, 1);
+                e.call(0x006e_5cc0, &args![edge.byte_add(0x1c), obstacle_pointer]);
+            }
+        }
+    });
+}
+
+// Translated from 006987d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds triangle indices from the cells covered by a transformed obstacle
+/// footprint when the triangle is not disabled, its bounds overlap, and its
+/// center, vertical ray, or one of its edges intersects the footprint. The
+/// three stack arguments are the reference smart-pointer, the adjustment
+/// point, and the output triangle array. C++ exception unwinding is omitted.
+// Translation incomplete: 006987d0 - exception unwind cleanup for temporary vectors and references.
+pub fn fn_006987d0(
+    e: &mut Engine,
+    this: Ptr<NavMesh>,
+    reference: Ptr,
+    adjustment: Ptr,
+    triangles: Ptr,
+) {
+    e.with_stack(0x150, |e, scratch| {
+        let grid = mesh_grid(this);
+        let min_row = scratch.byte_add(0x00);
+        let min_column = scratch.byte_add(0x04);
+        let max_row = scratch.byte_add(0x08);
+        let max_column = scratch.byte_add(0x0c);
+        let reference_object = e.call(POINTER_GET, &args![reference]).ptr::<()>();
+        e.call(
+            GRID_CELL_OF_POINT,
+            &args![grid, reference_object.byte_add(0x58), min_row, min_column],
+        );
+        let reference_object = e.call(POINTER_GET, &args![reference]).ptr::<()>();
+        e.call(
+            GRID_CELL_OF_POINT,
+            &args![grid, reference_object.byte_add(0x64), max_row, max_column],
+        );
+
+        let corners = scratch.byte_add(0x10);
+        for (index, (x_offset, y_offset, y_sign, x_sign)) in [
+            (0x40, 0x44, -1.0f32, -1.0f32),
+            (0x40, 0x50, 1.0, -1.0),
+            (0x4c, 0x50, 1.0, 1.0),
+            (0x4c, 0x44, -1.0, 1.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let object = e.call(POINTER_GET, &args![reference]).ptr::<()>();
+            let z = e.mem.f32(object.addr() + 0x48);
+            let object = e.call(POINTER_GET, &args![reference]).ptr::<()>();
+            let y = e.mem.f32(object.addr() + y_offset) + e.mem.f32(adjustment.addr() + 4) * y_sign;
+            let object = e.call(POINTER_GET, &args![reference]).ptr::<()>();
+            let x = e.mem.f32(object.addr() + x_offset) + e.mem.f32(adjustment.addr()) * x_sign;
+            e.call(
+                POINT3_CONSTRUCT,
+                &args![corners.byte_add(index as u32 * 12), x, y, z],
+            );
+        }
+        let first = e.call(POINTER_GET, &args![reference]).ptr::<()>();
+        let second = e.call(POINTER_GET, &args![reference]).ptr::<()>();
+        let height_delta = e.mem.f32(first.addr() + 0x6c) - e.mem.f32(second.addr() + 0x60);
+
+        let mut row = e.mem.u32(min_row.addr());
+        let last_row = e.mem.u32(max_row.addr());
+        while row <= last_row {
+            let mut column = e.mem.u32(min_column.addr());
+            let last_column = e.mem.u32(max_column.addr());
+            while column <= last_column {
+                let cell_triangles = fn_006967c0(e, grid, column, row);
+                if !cell_triangles.is_null() {
+                    let mut item_index = 0;
+                    while item_index < array_size(e, cell_triangles) {
+                        let item = e
+                            .call(ARRAY_ELEMENT_2, &args![cell_triangles, item_index])
+                            .ptr::<()>();
+                        if e.call(
+                            ARRAY_FIND_WORD,
+                            &args![triangles, item, 0u32, WORD_COMPARATOR],
+                        )
+                        .i32()
+                            == -1
+                        {
+                            let triangle_index = e.mem.u16(item.addr());
+                            let triangle = triangle_of(e, this, triangle_index as u32);
+                            if !e.call(TRIANGLE_FLAGS_SET, &args![triangle, 0x20u32]).bool() {
+                                let low = scratch.byte_add(0x70);
+                                let high = scratch.byte_add(0x7c);
+                                let float_max: f32 = e.global(FLOAT_MAX);
+                                let neg_float_max: f32 = e.global(NEGATIVE_FLOAT_MAX);
+                                write_point(e, low.addr(), [float_max; 3]);
+                                write_point(e, high.addr(), [neg_float_max; 3]);
+                                for vertex_index in 0..3u32 {
+                                    let vertex = corner_pointer(e, this, triangle, vertex_index);
+                                    for axis in 0..3u32 {
+                                        let component = e.mem.f32(vertex.addr() + axis * 4);
+                                        let previous_low = e.mem.f32(low.addr() + axis * 4);
+                                        let previous_high = e.mem.f32(high.addr() + axis * 4);
+                                        let low_value = e
+                                            .call(0x0040_ebd0, &args![previous_low, component])
+                                            .f32();
+                                        let high_value = e
+                                            .call(0x0040_4010, &args![previous_high, component])
+                                            .f32();
+                                        e.mem.set_f32(low.addr() + axis * 4, low_value);
+                                        e.mem.set_f32(high.addr() + axis * 4, high_value);
+                                    }
+                                }
+                                let z_pad: f64 = e.global(0x0102_e430);
+                                let max_z = (e.mem.f32(high.addr() + 8) as f64 + z_pad) as f32;
+                                e.mem.set_f32(high.addr() + 8, max_z);
+                                let object = e.call(POINTER_GET, &args![reference]).ptr::<()>();
+                                let transformed_center = scratch.byte_add(0x88);
+                                e.call(
+                                    POINT3_ADD,
+                                    &args![object.byte_add(0x64), transformed_center, adjustment],
+                                );
+                                let object = e.call(POINTER_GET, &args![reference]).ptr::<()>();
+                                let transformed_origin = scratch.byte_add(0x94);
+                                e.call(
+                                    POINT3_SUBTRACT,
+                                    &args![object.byte_add(0x58), transformed_origin, adjustment],
+                                );
+                                let bounds_overlap = e
+                                    .call(
+                                        0x006d_93d0,
+                                        &args![transformed_origin, transformed_center, low, high],
+                                    )
+                                    .bool();
+                                if bounds_overlap {
+                                    let accepted = e.call(
+                                        GET_CENTER,
+                                        &args![this, triangle_index, scratch.byte_add(0xac)],
+                                    );
+                                    let center = accepted.ptr::<()>();
+                                    let center_inside = e
+                                        .call(
+                                            0x006c_3570,
+                                            &args![center, reference, height_delta, 128.0f32],
+                                        )
+                                        .bool();
+                                    let mut intersects = center_inside;
+                                    if !intersects {
+                                        let object =
+                                            e.call(POINTER_GET, &args![reference]).ptr::<()>();
+                                        let probe_point = object.byte_add(0x10);
+                                        let height_out = scratch.byte_add(0x64);
+                                        intersects = e
+                                            .call(
+                                                0x0069_7730,
+                                                &args![
+                                                    this,
+                                                    triangle_index,
+                                                    probe_point,
+                                                    height_out,
+                                                    height_delta,
+                                                    128.0f32
+                                                ],
+                                            )
+                                            .bool();
+                                    }
+                                    if !intersects {
+                                        for edge in 0..3u32 {
+                                            let next = if edge == 2 { 0 } else { edge + 1 };
+                                            let first_diff = scratch.byte_add(0xb8);
+                                            let first_local = scratch.byte_add(0xd0);
+                                            let matrix_object =
+                                                e.call(POINTER_GET, &args![reference]).ptr::<()>();
+                                            let transform = matrix_object.byte_add(0x1c + 0x10);
+                                            let translation_object =
+                                                e.call(POINTER_GET, &args![reference]).ptr::<()>();
+                                            let translation = translation_object.byte_add(0x10);
+                                            let first_vertex =
+                                                corner_pointer(e, this, triangle, edge);
+                                            e.call(
+                                                POINT3_SUBTRACT,
+                                                &args![first_vertex, first_diff, translation],
+                                            );
+                                            let first_local = e
+                                                .call(
+                                                    0x004b_3ae0,
+                                                    &args![first_local, first_diff, transform],
+                                                )
+                                                .ptr();
+                                            let second_diff = scratch.byte_add(0xc4);
+                                            let second_local = scratch.byte_add(0xdc);
+                                            let matrix_object =
+                                                e.call(POINTER_GET, &args![reference]).ptr::<()>();
+                                            let transform = matrix_object.byte_add(0x1c + 0x10);
+                                            let translation_object =
+                                                e.call(POINTER_GET, &args![reference]).ptr::<()>();
+                                            let translation = translation_object.byte_add(0x10);
+                                            let second_vertex =
+                                                corner_pointer(e, this, triangle, next);
+                                            e.call(
+                                                POINT3_SUBTRACT,
+                                                &args![second_vertex, second_diff, translation],
+                                            );
+                                            let second_local = e
+                                                .call(
+                                                    0x004b_3ae0,
+                                                    &args![second_local, second_diff, transform],
+                                                )
+                                                .ptr();
+                                            for obstacle_edge in 0..4u32 {
+                                                let obstacle_next = (obstacle_edge + 1) % 4;
+                                                if fn_00696540(
+                                                    e,
+                                                    first_local,
+                                                    second_local,
+                                                    corners.byte_add(obstacle_edge * 12),
+                                                    corners.byte_add(obstacle_next * 12),
+                                                ) {
+                                                    intersects = true;
+                                                    break;
+                                                }
+                                            }
+                                            if intersects {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if intersects {
+                                        e.call(ARRAY_ADD_WORD, &args![triangles, item]);
+                                    }
+                                }
+                            }
+                        }
+                        item_index += 1;
+                    }
+                }
+                column = column.wrapping_add(1);
+            }
+            row = row.wrapping_add(1);
+        }
+    });
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0069aa20, fn_0069aa20(Ptr<NavMesh>) -> bool),
         entry!(0x006997e0, fn_006997e0(Ptr<NavMesh>, Ptr, Ptr) -> bool),
         entry!(0x006bc8e0, fn_006bc8e0(Ptr, Ptr, Ptr) -> bool),
+        entry!(0x006bd040, fn_006bd040(Ptr)),
+        entry!(0x006987d0, fn_006987d0(Ptr<NavMesh>, Ptr, Ptr, Ptr)),
         entry!(0x006953b0, nav_mesh_fix_portals_from_nav_mesh_deletion(Ptr)),
         entry!(0x00695660, fn_00695660(Ptr<NavMesh>, u16)),
         entry!(0x006957d0, fn_006957d0(Ptr<NavMeshTriangle>) -> bool),
@@ -3388,6 +3749,426 @@ mod tests {
             st0: value as f64,
             ..Ret::default()
         }
+    }
+
+    #[test]
+    fn obstacle_undo_reloads_smart_pointers_and_mesh_between_calls() {
+        let mut e = Engine::new();
+        e.map(0x0101_e000, 0x1000);
+        e.map(0x0102_4000, 0x1000);
+        let operation = Ptr::new(e.mem.alloc(0x40));
+        let mesh_a = e.mem.alloc(0x100);
+        let mesh_b = e.mem.alloc(0x100);
+        let mesh_c = e.mem.alloc(0x100);
+        let pointer = e.mem.alloc(4);
+        let translation_object = e.mem.alloc(0x100);
+        let matrix_object = e.mem.alloc(0x100);
+        let returned_transform = e.mem.alloc(12);
+        let pointer_gets = Rc::new(RefCell::new(0usize));
+        let get_index = pointer_gets.clone();
+        e.mem.set_u32(operation.addr(), mesh_a);
+        e.mem.set_u32(operation.addr() + 4, pointer);
+        e.mem.set_f32(translation_object + 0x6c, 100.0);
+        e.mem.set_f32(matrix_object + 0x60, 10.0);
+        e.mem.set_f32(0x0101_e704, 500.0);
+        e.mem.set_f64(SIXTY_FOUR, 64.0);
+        e.register_double(POINTER_GET, move |e, a| {
+            assert_eq!(a[0], operation.addr() + 4);
+            let mut index = get_index.borrow_mut();
+            let call = *index;
+            *index += 1;
+            if call == 13 {
+                // The first returned object stays in ESI, while this second
+                // getter changes its field before the native code reads it.
+                e.mem.set_f32(translation_object + 0x6c, 125.0);
+            }
+            let object = if call % 2 == 0 || call == 12 {
+                translation_object
+            } else {
+                matrix_object
+            };
+            ret(object)
+        });
+        let height_seen = Rc::new(RefCell::new(None));
+        let captured_height = height_seen.clone();
+        e.register_double(0x006a_d3b0, move |_, a| {
+            *captured_height.borrow_mut() = Some(a.to_vec());
+            ret(7)
+        });
+        let matrix_seen = Rc::new(RefCell::new(Vec::new()));
+        let captured_matrix = matrix_seen.clone();
+        e.register_double(0x004b_4500, move |e, a| {
+            captured_matrix.borrow_mut().push((a[0], a[1]));
+            e.mem.set_f32(returned_transform, 1.0);
+            e.mem.set_f32(returned_transform + 4, 2.0);
+            e.mem.set_f32(returned_transform + 8, 3.0);
+            ret(returned_transform)
+        });
+        let add_receivers = Rc::new(RefCell::new(Vec::new()));
+        let captured_add = add_receivers.clone();
+        e.register_double(POINT3_ADD, move |e, a| {
+            captured_add.borrow_mut().push((a[0], a[2]));
+            let output = a[1];
+            let receiver = a[0];
+            let translation = a[2];
+            for axis in 0..3 {
+                let value = e.mem.f32(receiver + axis * 4) + e.mem.f32(translation + axis * 4);
+                e.mem.set_f32(output + axis * 4, value);
+            }
+            ret(output)
+        });
+        e.register_double(POINT3_CONSTRUCT, |e, a| {
+            for axis in 0..3 {
+                e.mem
+                    .set_f32(a[0] + axis * 4, f32::from_bits(a[axis as usize + 1]));
+            }
+            ret(a[0])
+        });
+        let projection_meshes = Rc::new(RefCell::new(Vec::new()));
+        let captured_projection = projection_meshes.clone();
+        e.register_double(0x0069_7b70, move |e, a| {
+            captured_projection.borrow_mut().push(a[0]);
+            e.mem.set_u32(operation.addr(), mesh_b);
+            ret(0)
+        });
+        let vertex_calls = Rc::new(RefCell::new(Vec::new()));
+        let captured_vertex = vertex_calls.clone();
+        e.register_double(0x0069_0fe0, move |e, a| {
+            captured_vertex.borrow_mut().push(a[0]);
+            e.mem.set_u32(operation.addr(), mesh_c);
+            ret(0)
+        });
+        let create_edge_meshes = Rc::new(RefCell::new(Vec::new()));
+        let captured_edge_mesh = create_edge_meshes.clone();
+        e.register_double(0x006b_f3c0, move |e, a| {
+            captured_edge_mesh.borrow_mut().push(a[0]);
+            ret(e.mem.alloc(8))
+        });
+        e.register_double(0x006b_f4d0, |e, a| {
+            let edge = e.mem.alloc(0x30);
+            e.mem.set_u32(edge, a[1]);
+            e.mem.set_u32(edge + 4, a[2]);
+            ret(edge)
+        });
+        e.register_double(ARRAY_ADD_DWORD, |_, _| ret(0));
+        e.register_double(VERTEX_POINTER, |e, a| {
+            let point = e.mem.alloc(12);
+            e.mem.set_f32(point, a[1] as f32);
+            e.mem.set_f32(point + 4, 0.0);
+            e.mem.set_f32(point + 8, 0.0);
+            ret(point)
+        });
+        e.register_double(POINT3_SUBTRACT, |e, a| {
+            for axis in 0..3 {
+                let value = e.mem.f32(a[0] + axis * 4) - e.mem.f32(a[2] + axis * 4);
+                e.mem.set_f32(a[1] + axis * 4, value);
+            }
+            ret(a[1])
+        });
+        e.register_double(POINT3_SQUARED_LENGTH_2D, |_, _| ret_float(0.0));
+        e.register_double(0x006e_5cc0, |_, _| ret(0));
+
+        fn_006bd040(&mut e, operation);
+
+        assert_eq!(
+            height_seen.borrow().as_ref().unwrap(),
+            &vec![115.0f32.to_bits(), 1, 0]
+        );
+        assert_eq!(matrix_seen.borrow()[0].0, matrix_object + 0x1c);
+        assert_eq!(
+            add_receivers.borrow()[0],
+            (returned_transform, translation_object + 0x10)
+        );
+        assert_eq!(projection_meshes.borrow()[0], mesh_a);
+        assert_eq!(projection_meshes.borrow()[1], mesh_b);
+        assert_eq!(vertex_calls.borrow()[0], mesh_b);
+        assert_eq!(create_edge_meshes.borrow()[0], mesh_c);
+    }
+
+    #[test]
+    fn obstacle_triangle_collector_skips_disabled_triangles() {
+        let mut e = Engine::new();
+        e.map(0x0101_5000, 0x3000);
+        e.map(0x0102_e000, 0x1000);
+        let mesh = Ptr::<NavMesh>::new(e.mem.alloc(0x200));
+        let grid = mesh_grid(mesh);
+        let cell = e.mem.alloc(16);
+        let cell_items = e.mem.alloc(2);
+        let output = Ptr::new(e.mem.alloc(16));
+        let triangle = Ptr::<()>::new(e.mem.alloc(16));
+        let reference = Ptr::new(e.mem.alloc(4));
+        let adjustment = Ptr::new(e.mem.alloc(12));
+        let object = e.mem.alloc(0x80);
+        e.mem.set_u32(grid.addr(), 1);
+        e.mem.set_u32(grid.addr() + 0x24, cell);
+        e.mem.set_u32(cell + 4, cell_items);
+        e.mem.set_u32(cell + 8, 1);
+        e.mem.set_u16(cell_items, 3);
+        e.mem.set_f32(object + 0x40, -1.0);
+        e.mem.set_f32(object + 0x44, -1.0);
+        e.mem.set_f32(object + 0x48, 0.0);
+        e.mem.set_f32(object + 0x4c, 1.0);
+        e.mem.set_f32(object + 0x50, 1.0);
+        e.mem.set_f32(object + 0x60, 0.0);
+        e.mem.set_f32(object + 0x6c, 0.0);
+        e.mem.set_f32(0x0101_6970, f32::MAX);
+        e.mem.set_f32(0x0101_5f5c, -f32::MAX);
+        e.mem.set_f64(0x0102_e430, 128.0);
+        e.register_double(POINTER_GET, move |_, _| ret(object));
+        e.register_double(GRID_CELL_OF_POINT, |e, a| {
+            e.mem.set_u32(a[2], 0);
+            e.mem.set_u32(a[3], 0);
+            ret(0)
+        });
+        e.register_double(POINT3_CONSTRUCT, |e, a| {
+            for axis in 0..3 {
+                e.mem
+                    .set_f32(a[0] + axis * 4, f32::from_bits(a[axis as usize + 1]));
+            }
+            ret(a[0])
+        });
+        e.register_double(ARRAY_SIZE, move |_, a| {
+            ret(if a[0] == cell { 1 } else { 0 })
+        });
+        e.register_double(ARRAY_ELEMENT_2, move |_, a| ret(cell_items + a[1] * 2));
+        e.register_double(ARRAY_FIND_WORD, |_, _| ret(u32::MAX));
+        e.register_double(GET_TRIANGLE, move |_, _| ret(triangle.addr()));
+        e.register_double(TRIANGLE_FLAGS_SET, |_, a| {
+            assert_eq!(a[1], 0x20);
+            ret(1)
+        });
+
+        fn_006987d0(&mut e, mesh, reference, adjustment, output);
+
+        assert_eq!(e.mem.u32(output.addr() + 8), 0);
+    }
+
+    #[test]
+    fn obstacle_triangle_collector_accepts_intersection_deduplicates_and_rejects_bounds() {
+        let mut e = Engine::new();
+        e.map(0x0101_5000, 0x3000);
+        e.map(0x0102_e000, 0x1000);
+        let mesh = Ptr::<NavMesh>::new(e.mem.alloc(0x200));
+        let grid = mesh_grid(mesh);
+        let cells = e.mem.alloc(4 * 16);
+        let mut cell_arrays = Vec::new();
+        for cell_index in 0..4u32 {
+            let cell = cells + cell_index * 16;
+            let item = e.mem.alloc(2);
+            e.mem.set_u32(cell + 4, item);
+            e.mem.set_u32(cell + 8, 1);
+            e.mem.set_u16(item, 3);
+            cell_arrays.push(cell);
+        }
+        let output = Ptr::new(e.mem.alloc(16));
+        let output_items = e.mem.alloc(8);
+        e.mem.set_u32(output.addr() + 4, output_items);
+        let reference = Ptr::new(e.mem.alloc(4));
+        let adjustment = Ptr::new(e.mem.alloc(12));
+        let object = e.mem.alloc(0x80);
+        let corner_z_source = e.mem.alloc(0x80);
+        let corner_y_source = e.mem.alloc(0x80);
+        let corner_x_source = e.mem.alloc(0x80);
+        let triangle = e.mem.alloc(16);
+        let vertices = [e.mem.alloc(12), e.mem.alloc(12), e.mem.alloc(12)];
+        e.mem.set_u32(grid.addr(), 2);
+        e.mem.set_u32(grid.addr() + 0x24, cells);
+        e.mem.set_f32(object + 0x40, -2.0);
+        e.mem.set_f32(object + 0x44, -2.0);
+        e.mem.set_f32(object + 0x48, 0.0);
+        e.mem.set_f32(object + 0x4c, 2.0);
+        e.mem.set_f32(object + 0x50, 2.0);
+        for axis in 0..3 {
+            e.mem.set_f32(object + 0x58 + axis * 4, -1.0);
+            e.mem.set_f32(object + 0x64 + axis * 4, 1.0);
+        }
+        e.mem.set_f32(corner_z_source + 0x48, 5.0);
+        e.mem.set_f32(corner_y_source + 0x44, -2.0);
+        e.mem.set_f32(corner_x_source + 0x40, -2.0);
+        // One triangle edge crosses the obstacle's vertical side at x=-2.
+        for (axis, point) in [[-3.0, 0.0, 0.0], [3.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+            .into_iter()
+            .enumerate()
+        {
+            write_point(&mut e, vertices[axis], point);
+        }
+        e.mem.set_f32(0x0101_6970, f32::MAX);
+        e.mem.set_f32(0x0101_5f5c, -f32::MAX);
+        e.mem.set_f64(0x0102_e430, 128.0);
+
+        let grid_calls = Rc::new(RefCell::new(0u32));
+        let captured_grid_calls = grid_calls.clone();
+        e.register_double(GRID_CELL_OF_POINT, move |e, a| {
+            let mut calls = captured_grid_calls.borrow_mut();
+            let upper = *calls > 0;
+            *calls += 1;
+            e.mem.set_u32(a[2], u32::from(upper));
+            e.mem.set_u32(a[3], u32::from(upper));
+            ret(0)
+        });
+        let pointer_gets = Rc::new(RefCell::new(0u32));
+        let captured_pointer_gets = pointer_gets.clone();
+        e.register_double(POINTER_GET, move |_, _| {
+            let mut call = captured_pointer_gets.borrow_mut();
+            let current = *call;
+            *call += 1;
+            ret(match current {
+                2 => corner_z_source,
+                3 => corner_y_source,
+                4 => corner_x_source,
+                _ => object,
+            })
+        });
+        let corners_built = Rc::new(RefCell::new(Vec::new()));
+        let captured_corners_built = corners_built.clone();
+        e.register_double(POINT3_CONSTRUCT, move |e, a| {
+            for axis in 0..3 {
+                e.mem
+                    .set_f32(a[0] + axis * 4, f32::from_bits(a[axis as usize + 1]));
+            }
+            captured_corners_built.borrow_mut().push([
+                f32::from_bits(a[1]),
+                f32::from_bits(a[2]),
+                f32::from_bits(a[3]),
+            ]);
+            ret(a[0])
+        });
+        e.register_double(ARRAY_SIZE, move |e, a| {
+            if cell_arrays.contains(&a[0]) {
+                ret(1)
+            } else {
+                ret(e.mem.u32(a[0] + 8))
+            }
+        });
+        e.register_double(ARRAY_ELEMENT_2, |e, a| ret(e.mem.u32(a[0] + 4) + a[1] * 2));
+        e.register_double(ARRAY_FIND_WORD, |e, a| {
+            let key = e.mem.u16(a[1]);
+            let count = e.mem.u32(a[0] + 8);
+            let buffer = e.mem.u32(a[0] + 4);
+            for index in 0..count {
+                if e.mem.u16(buffer + index * 2) == key {
+                    return ret(index);
+                }
+            }
+            ret(u32::MAX)
+        });
+        e.register_double(ARRAY_ADD_WORD, |e, a| {
+            let count = e.mem.u32(a[0] + 8);
+            let buffer = e.mem.u32(a[0] + 4);
+            let value = e.mem.u16(a[1]);
+            e.mem.set_u16(buffer + count * 2, value);
+            e.mem.set_u32(a[0] + 8, count + 1);
+            ret(count)
+        });
+        e.register_double(GET_TRIANGLE, move |_, _| ret(triangle));
+        e.register_double(TRIANGLE_VERTEX, |_, a| ret(a[1]));
+        e.register_double(VERTEX_POINTER, move |_, a| ret(vertices[a[1] as usize]));
+        e.register_double(TRIANGLE_FLAGS_SET, |_, _| ret(0));
+        e.register_double(0x0040_ebd0, |_, a| {
+            ret_float(f32::min(f32::from_bits(a[0]), f32::from_bits(a[1])))
+        });
+        e.register_double(0x0040_4010, |_, a| {
+            ret_float(f32::max(f32::from_bits(a[0]), f32::from_bits(a[1])))
+        });
+        e.register_double(POINT3_ADD, |e, a| {
+            for axis in 0..3 {
+                let value = e.mem.f32(a[0] + axis * 4) + e.mem.f32(a[2] + axis * 4);
+                e.mem.set_f32(a[1] + axis * 4, value);
+            }
+            ret(a[1])
+        });
+        e.register_double(POINT3_SUBTRACT, |e, a| {
+            for axis in 0..3 {
+                let value = e.mem.f32(a[0] + axis * 4) - e.mem.f32(a[2] + axis * 4);
+                e.mem.set_f32(a[1] + axis * 4, value);
+            }
+            ret(a[1])
+        });
+        e.register_double(0x004b_3ae0, |e, a| {
+            for axis in 0..3 {
+                let value = e.mem.f32(a[1] + axis * 4);
+                e.mem.set_f32(a[0] + axis * 4, value);
+            }
+            ret(a[0])
+        });
+        let overlap_calls = Rc::new(RefCell::new(0u32));
+        let captured_overlap_calls = overlap_calls.clone();
+        e.register_double(0x006d_93d0, move |e, a| {
+            assert_eq!(a.len(), 4);
+            *captured_overlap_calls.borrow_mut() += 1;
+            let overlaps = (0..3).all(|axis| {
+                let origin = e.mem.f32(a[0] + axis * 4);
+                let center = e.mem.f32(a[1] + axis * 4);
+                let low = e.mem.f32(a[2] + axis * 4);
+                let high = e.mem.f32(a[3] + axis * 4);
+                center > low && origin < high
+            });
+            ret(overlaps as u32)
+        });
+        let center_calls = Rc::new(RefCell::new(0u32));
+        let captured_center_calls = center_calls.clone();
+        e.register_double(GET_CENTER, move |e, a| {
+            *captured_center_calls.borrow_mut() += 1;
+            write_point(e, a[2], [0.0; 3]);
+            ret(a[2])
+        });
+        let center_hits = Rc::new(RefCell::new(0u32));
+        let captured_center_hits = center_hits.clone();
+        e.register_double(0x006c_3570, move |_, _| {
+            *captured_center_hits.borrow_mut() += 1;
+            ret(0)
+        });
+        e.register_double(0x0069_7730, |_, _| ret(0));
+        e.register_double(POINT2_CONSTRUCT, |e, a| {
+            e.mem.set_f32(a[0], f32::from_bits(a[1]));
+            e.mem.set_f32(a[0] + 4, f32::from_bits(a[2]));
+            ret(a[0])
+        });
+        let segment_calls = Rc::new(RefCell::new(0u32));
+        let captured_segment_calls = segment_calls.clone();
+        e.register_double(SEGMENTS_INTERSECT_2D, move |e, a| {
+            let points: Vec<[f32; 2]> = a
+                .iter()
+                .map(|pointer| [e.mem.f32(*pointer), e.mem.f32(*pointer + 4)])
+                .collect();
+            *captured_segment_calls.borrow_mut() += 1;
+            let [[ax, ay], [bx, by], [cx, cy], [dx, dy]] = points.as_slice() else {
+                unreachable!()
+            };
+            let cross = |p: [f32; 2], q: [f32; 2], r: [f32; 2]| {
+                (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+            };
+            let first = [*ax, *ay];
+            let second = [*bx, *by];
+            let third = [*cx, *cy];
+            let fourth = [*dx, *dy];
+            let crosses = cross(first, second, third) * cross(first, second, fourth) <= 0.0
+                && cross(third, fourth, first) * cross(third, fourth, second) <= 0.0;
+            ret(crosses as u32)
+        });
+
+        fn_006987d0(&mut e, mesh, reference, adjustment, output);
+        assert_eq!(e.mem.u32(output.addr() + 8), 1);
+        assert_eq!(e.mem.u16(output_items), 3);
+        assert_eq!(*overlap_calls.borrow(), 1);
+        assert_eq!(*center_calls.borrow(), 1);
+        assert_eq!(*center_hits.borrow(), 1);
+        assert_eq!(*segment_calls.borrow(), 1);
+        assert_eq!(
+            corners_built.borrow()[0],
+            [-2.0, -2.0, 5.0],
+            "corner fields come from fresh pointer getter returns per coordinate"
+        );
+
+        e.mem.set_u32(output.addr() + 8, 0);
+        e.mem.set_f32(object + 0x58, 100.0);
+        e.mem.set_f32(object + 0x64, 100.0);
+        fn_006987d0(&mut e, mesh, reference, adjustment, output);
+        assert_eq!(e.mem.u32(output.addr() + 8), 0);
+        assert_eq!(*overlap_calls.borrow(), 2);
+        assert_eq!(*center_calls.borrow(), 1);
+        assert_eq!(*center_hits.borrow(), 1);
+        assert_eq!(*segment_calls.borrow(), 1);
     }
 
     #[test]
