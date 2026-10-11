@@ -1335,7 +1335,8 @@ pub fn script_locals_save_game(e: &mut Engine, this: Ptr<ScriptLocals>, buffer: 
                 if fn_005a9480(e, this, id) {
                     e.mem.set_u32(numeric, 0);
                     e.call(GET_NUMERIC_ID_FROM_DOUBLE, &args![numeric, variable + 8]);
-                    e.mem.set_u32(id_word, id | 0x8000_0000);
+                    // PC 005a9e37 reloads the ID after the conversion helper.
+                    e.mem.set_u32(id_word, e.mem.u32(variable) | 0x8000_0000);
                     e.call(BUFFER_SAVE_BYTES, &args![buffer, id_word, 4u32, 0u32]);
                     let form_id = e.mem.u32(numeric);
                     e.call(BUFFER_SAVE_FORM_ID, &args![buffer, form_id, 0u32]);
@@ -1351,7 +1352,9 @@ pub fn script_locals_save_game(e: &mut Engine, this: Ptr<ScriptLocals>, buffer: 
         let effect_data = e.get(this, ScriptLocals::m_pScriptEffectData).addr();
         e.mem.set_u8(flag, (effect_data != 0) as u8);
         e.call(BUFFER_SAVE_BYTES, &args![buffer, flag, 1u32, 0u32]);
-        if effect_data != 0 {
+        // PC 005a9ece tests the live stack byte, then reloads the pointer.
+        if e.mem.u8(flag) != 0 {
+            let effect_data = e.get(this, ScriptLocals::m_pScriptEffectData).addr();
             e.call(BUFFER_SAVE_BYTES, &args![buffer, effect_data, 8u32, 0u32]);
         }
         let any_form_flag = fn_005a8ef0(e, this, 0, 0x1000);
@@ -4881,7 +4884,7 @@ mod tests {
             e.register(addr, |_, _| Ret::default());
         }
         e.register(GET_NUMERIC_ID_FROM_DOUBLE, |e, a| {
-            let id = e.mem.f64(a[1]) as u32;
+            let id = e.mem.u32(a[1]);
             e.mem.set_u32(a[0], id);
             Ret::default()
         });
@@ -4894,6 +4897,8 @@ mod tests {
         let buffer = install_save_buffer(&mut e);
         let this = locals(&mut e);
         let vars = set_variables(&mut e, this, &[(1, 5.0), (2, 0.0), (3, 6.0)]);
+        // Reference locals contain opaque form bits, not a numeric f64 ID.
+        e.mem.set_f64(vars[2] + 8, f64::from_bits(6));
         let master = script_with_references(&mut e, &[3]);
         e.set(this, ScriptLocals::m_pMasterScript, Ptr::new(master.addr()));
         let effect = e.mem.alloc(8);
@@ -4936,6 +4941,74 @@ mod tests {
         assert_eq!(buffer_calls[7], (BUFFER_SAVE_BYTES, vec![b, effect, 8, 0]));
         assert_eq!(buffer_calls[8].1[2..], [1, 0]);
         assert_eq!(buffer_calls.len(), 9);
+    }
+
+    #[test]
+    fn save_game_reloads_reference_id_after_numeric_conversion() {
+        let mut e = script_engine();
+        let buffer = install_save_buffer(&mut e);
+        let this = locals(&mut e);
+        let vars = set_variables(&mut e, this, &[(3, f64::from_bits(0xff123456))]);
+        let master = script_with_references(&mut e, &[3]);
+        e.set(this, ScriptLocals::m_pMasterScript, Ptr::new(master.addr()));
+        set_actions(&mut e, this, &[(0, 0)]);
+        e.register_double(GET_NUMERIC_ID_FROM_DOUBLE, |e, a| {
+            e.mem.set_u32(a[0], e.mem.u32(a[1]));
+            e.mem.set_u32(a[1] - 8, 7);
+            Ret::default()
+        });
+        let headers = Rc::new(RefCell::new(Vec::new()));
+        let captured = headers.clone();
+        e.register_double(BUFFER_SAVE_BYTES, move |e, a| {
+            if a[2] == 4 {
+                captured.borrow_mut().push(e.mem.u32(a[1]));
+            }
+            Ret::default()
+        });
+        e.call(0x005a9db0, &args![this, buffer]);
+        assert_eq!(*headers.borrow(), [0x80000007]);
+        assert_eq!(e.mem.u32(vars[0]), 7);
+    }
+
+    #[test]
+    fn save_game_reloads_effect_flag_and_pointer_after_flag_write() {
+        for (has_effect, new_flag) in [(true, 1u8), (true, 0), (false, 1)] {
+            let mut e = script_engine();
+            let buffer = install_save_buffer(&mut e);
+            let this = locals(&mut e);
+            set_actions(&mut e, this, &[(0, 0)]);
+            let original = e.mem.alloc(8);
+            let replacement = e.mem.alloc(8);
+            e.set(
+                this,
+                ScriptLocals::m_pScriptEffectData,
+                Ptr::new(if has_effect { original } else { 0 }),
+            );
+            let first_flag = Rc::new(Cell::new(true));
+            let payloads = Rc::new(RefCell::new(Vec::new()));
+            let captured = payloads.clone();
+            e.register_double(BUFFER_SAVE_BYTES, move |e, a| {
+                if a[2] == 1 && first_flag.replace(false) {
+                    assert_eq!(e.mem.u8(a[1]), has_effect as u8);
+                    e.mem.set_u8(a[1], new_flag);
+                    e.set(
+                        this,
+                        ScriptLocals::m_pScriptEffectData,
+                        Ptr::new(replacement),
+                    );
+                } else if a[2] == 8 {
+                    captured.borrow_mut().push(a[1]);
+                }
+                Ret::default()
+            });
+            e.call(0x005a9db0, &args![this, buffer]);
+            let expected = if new_flag != 0 {
+                vec![replacement]
+            } else {
+                vec![]
+            };
+            assert_eq!(*payloads.borrow(), expected);
+        }
     }
 
     /// Doubles for the `BGSLoadGameBuffer`: the sized value count is
@@ -7702,6 +7775,101 @@ mod tests {
             locals.addr(),
             &[]
         ));
+    }
+
+    // PC 005a9db0: eighteen native FCW 027F / MXCSR 1F80 vectors.
+    #[test]
+    fn save_game_matches_native_numeric_reference_and_guard_vectors() {
+        for bits in [
+            0u64,
+            0x8000000000000000,
+            42.5f64.to_bits(),
+            0x7ff0000000000000,
+            0xfff0000000000000,
+            1,
+            0x7ff8000000001234,
+            0x7ff0000000001234,
+            0xfff0000000002345,
+        ] {
+            for flags in [0u32, 0x1000] {
+                let mut e = Engine::new();
+                for global in [0x011de134, 0x011ddf38, 0x011c3f2c] {
+                    e.map(global, 4);
+                }
+                let base = e.mem.alloc(0x200);
+                e.mem.set_u32(0x011de134, base + 0x130);
+                e.mem.set_u32(0x011ddf38, base + 0x140);
+                e.mem.set_u32(0x011c3f2c, 0);
+                let mut bytes = vec![0xa5; 0x200];
+                for (offset, word) in [
+                    (0x10, base + 0x50),
+                    (0x18, base + 0xd0),
+                    (0x1c, base + 0xc0),
+                    (0x20, 0),
+                    (0x30, 0x01082324),
+                    (0x34, base + 0x180),
+                    (0x38, 64),
+                    (0x3c, 0),
+                    (0x40, 0),
+                    (0x94, base + 0xb0),
+                    (0x98, 0),
+                    (0xbc, 2),
+                    (0xc0, base + 0xf0),
+                    (0xc4, base + 0xc8),
+                    (0xc8, base + 0x110),
+                    (0xcc, 0),
+                    (0xd0, base + 0xe0),
+                    (0xd4, 0),
+                    (0xe0, 0),
+                    (0xe4, flags),
+                    (0xf0, 1),
+                    (0x110, 2),
+                    (0x148, 0),
+                ] {
+                    bytes[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
+                }
+                bytes[0x13c] = 0;
+                bytes[0xf8..0x100].copy_from_slice(&bits.to_le_bytes());
+                bytes[0x118..0x120].copy_from_slice(&0xff123456u64.to_le_bytes());
+                e.mem.write(base, &bytes);
+                // Ordered positive/negative zero are omitted; unordered NaNs
+                // are included with the source bits unchanged, including sNaNs.
+                let zero = matches!(bits, 0 | 0x8000000000000000);
+                let mut stream = if zero {
+                    vec![4, 0x7c]
+                } else {
+                    let mut data = vec![8, 0x7c, 1, 0, 0, 0, 0x7c];
+                    data.extend_from_slice(&bits.to_le_bytes());
+                    data.push(0x7c);
+                    data
+                };
+                stream.extend_from_slice(&[
+                    2,
+                    0,
+                    0,
+                    0x80,
+                    0x7c,
+                    0x92,
+                    0x34,
+                    0x56,
+                    0x7c,
+                    0,
+                    0x7c,
+                    (flags != 0) as u8,
+                    0x7c,
+                ]);
+                let mut expected = bytes;
+                expected[0x180..0x180 + stream.len()].copy_from_slice(&stream);
+                expected[0x3c..0x40].copy_from_slice(&(stream.len() as u32).to_le_bytes());
+                expected[0x40..0x44].copy_from_slice(&(if zero { 5u32 } else { 7 }).to_le_bytes());
+                e.call(0x005a9db0, &[base + 0x10, base + 0x30]);
+                assert_eq!(
+                    e.mem.bytes(base, 0x200),
+                    expected,
+                    "{bits:016x}/{flags:04x}"
+                );
+            }
+        }
     }
 
     // PC 005a9f20: nine native FCW 027F / MXCSR 1F80 generated-buffer vectors.

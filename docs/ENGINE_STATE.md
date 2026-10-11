@@ -23,17 +23,26 @@ to zero. It checks the index after the decoder has run; the second tests
 the three bytes with the PC short-circuit order. Reference locals store
 the form ID as opaque low 32 bits in the eight-byte slot, not a numeric
 floating-point conversion. An older test double incorrectly modeled the
-latter; its fixture now uses the real helper.
+latter; its fixture now uses the real helper. The matching writer helper,
+`00865db0`, initializes and encodes the compact ID, then appends its three
+bytes. Its unused second argument remains unused, as in the PC executable.
+`ScriptLocals::SaveGame` (`005a9db0`) also reloads the reference-variable ID,
+effect flag and effect pointer after the respective helper calls, matching
+the PC reads instead of retaining values from before those calls.
 
-Seventy-eight private native cases pass: forty copy cases (including
+One hundred and two private native cases pass: forty copy cases (including
 aliases), eighteen setters, nine full generated LoadGame buffers and eleven
-reader cases. Guards, raw flags, first-match behavior, return widths and
+reader cases, six writer cases and eighteen full generated SaveGame buffers.
+The SaveGame cases include signed zero, infinities, a subnormal, quiet and
+signaling NaNs, created-reference IDs and both action-flag states. Guards,
+raw flags, first-match behavior, return widths and
 stack cleanup are checked where defined. Native calls use FalloutNV.exe
 1.4.0.525 with FCW `027f` and MXCSR `1f80`. Independent PC/source review
-found no mismatch. Eight new Rust regressions are drafted but have not run;
+found two additional SaveGame reload gaps; both are corrected with callback
+regressions. Thirteen new Rust regressions are drafted but have not run;
 formatting and diff checks pass. Full Cargo checks are queued behind the
-active translation batches. The final nine-buffer normal-registry release
-probe is prepared and unrun.
+active translation batches. The final normal-registry release probes cover
+nine LoadGame and eighteen SaveGame buffers and remain unrun.
 
 These generated buffers contain nonzero numeric and created-reference
 locals. They do not establish restoration of the unavailable mod scripts
