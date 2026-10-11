@@ -47,9 +47,9 @@ Ordinary script bodies, historical overrides and whole-save/world integration
 remain open. Root's next bounded correction has 102 native cases and
 thirteen drafted Rust regressions; compilation is queued. Taskqueue's
 14,445 engine tests pass, with lint/build checks continuing. Rolling #145
-awaits both CI checks; #144's core passes and viewer remains pending. Build 40 remains
-current with no next-play date confirmed. Next action: merge #144 after both
-CI checks, validate the queued batches, and continue the saved-local path.
+was rebased onto merged #144 and awaits both fresh CI checks. Build 40 remains
+current with no next-play date confirmed. Next action: validate the queued
+batches, ship #145 after both checks, and continue the saved-local path.
 [HANDOFF.md](HANDOFF.md) tracks active ownership and exact restart steps.
 Script-loading dependency #135 is published at `86d19a0`: 15,876 workspace
 tests including doctests, strict lint, formatting and release/debug builds

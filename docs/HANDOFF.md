@@ -7,15 +7,16 @@ machinery runs.
 
 ## Resume here
 
-### Current state, 2026-10-11 16:04 EDT
+### Current state, 2026-10-11 16:10 EDT
 
 This section supersedes the historical notes below.
 
 - #143 merged `a24bc31` after both current-head CI checks. Its shipping
   session 78829 is DONE; never rerun ship143.
-- Rolling #145 is open and attached at `df1a5e4`, with both CI checks
-  pending. Ship it when both current-head checks pass. #144's core CI
-  passes; its viewer check is still running.
+- #144 merged `4116868` after both current-head CI checks passed.
+  Rolling #145 remains open and attached, now rebased onto that merge with
+  its ledger regenerated. Both fresh current-head checks must pass before
+  shipping; checks for the prior `df1a5e4` head do not validate this rebase.
 - HUD source `aabfc8b` passed 121 focused and 14,386 engine tests, the
   doctest, strict lint, formatting, 49 hygiene checks and release build.
   cycle03 session 72751 is DONE: collection `34ee119` passes 14,410
@@ -35,7 +36,7 @@ This section supersedes the historical notes below.
   and 14,445 engine tests pass; strict lint and release checks continue.
   After collection its
   fresh worker must continue ordinary bodies at `0087b650`.
-- Root PR #144 is published and attached at `94e709c`, branch
+- Root PR #144 merged from `94e709c`, branch
   `codex/phase2-reference-predicate`. Three helpers and four regressions
   pass 16,238 workspace tests, strict lint, formatting and release/debug
   builds. Eighteen native cases pass. Both final release probes load a
@@ -44,8 +45,8 @@ This section supersedes the historical notes below.
   ten-plugin order and actual three-variable defaults. Its saved variable
   list is empty. Historical plugin contents, ordinary script execution,
   whole-save preservation and world/viewer integration remain unverified.
-  Merge #144 only after both current-head CI checks pass.
-- Root follow-on source checkpoints `d1b4123` and `a5a5952` on
+  Both current-head CI checks passed before merging.
+- Root follow-on source checkpoints `8ebef74` and `e705c1d` on
   `codex/phase2-script-local-values` owns `fallout_shared/tesscript.rs`,
   `fallout_misc/bgsloadgamebuffer.rs`, `bgssavegamebuffer.rs` and topic
   `ENGINE_STATE.md`. It fixes
@@ -54,9 +55,12 @@ This section supersedes the historical notes below.
   reloads the reference ID and effect flag/pointer after helper calls.
   Thirteen regressions are drafted but unrun; 102 native cases pass.
   Independent PC/source review passes, including the corrected test fixtures.
-  Rebase after #144 merges, then run the prepared full check pipeline and
+  It is rebased onto #144; run the prepared full check pipeline and
   final normal-registry release probes (nine LoadGame and eighteen SaveGame
-  vectors) when a lane is free.
+  vectors) when a lane is free. An additional eighteen native three-leg
+  SaveGame/LoadGame/SaveGame chains pass, carrying actual results forward;
+  their prepared Rust release probe remains unrun. Its baseline stops at
+  the now-added writer `00865db0`.
 - Fresh a03's b0223 batch now has forty normal bodies and forty-three
   drafted tests. Thirty-three native cases and independent PC review pass.
   Eight compiler-only partials remain explicit. Cargo checks are queued.
