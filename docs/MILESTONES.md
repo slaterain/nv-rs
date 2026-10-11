@@ -33,6 +33,13 @@ reading do not establish them.
 
 ## Active work: M1
 
+Resumed after the usage reset. Rolling #119 passed both checks and merged
+as `951c0c7`; the checked pathfinding follow-on is being published next.
+The allocator test failure was an incorrect backing-size expectation:
+the platform heap rounds to eight bytes. The revised test checks both
+requested and backing sizes; validation is running. Next action: finish
+the reference bootstrap probe and resume serialized slot validation.
+
 At the saved 98% usage stop, pathfinding collection `ded5afd` passes
 13,717 combined engine tests, lint and formatting. Its 17 remaining
 exception-cleanup partials stay recorded; a03 advanced to b0060 and

@@ -7,15 +7,13 @@ machinery runs.
 
 ## Resume here
 
-Stopped at the user's saved 98% account-usage threshold on 2026-10-10.
-Resume continuous slot cycling when the next lead takes over. No game
-assets were changed or committed. Build 40 remains the published play copy.
-Immediate actions: check rolling #119 (head `b7b69b2`, core passed,
-viewer pending at handoff); ship with `bin/ship.sh 119` once both checks
-pass. Local pathfinding collection `ded5afd` and handoff/ledger updates
-are intentionally not pushed over that CI head. Then resume a01/a04's
-uncommitted prepared work without resetting their worktrees, and start
-a03's already-written b0060 task without cycling it first.
+User resumed after the usage reset. Continuous slot cycling is active.
+Rolling #119 passed both checks and merged as `951c0c7`. The lead branch
+is rebased onto it; pathfinding collection is now `3052c07` (13,717 tests
+passed) and is being published in the next rolling PR. Build 40 remains
+the published play copy. a03 resumed b0060 research without a reset;
+`/root/a04_resume` owns the preserved Explosion continuation. a01's
+prepared work remains intact and awaits its compiler window.
 
 Codex takeover, 2026-10-10: rolling PRs #109, #112, #114 and #116 passed
 both CI checks and were squash-merged as `b995218`, `d854fbe`, `89e1a0b`
@@ -28,7 +26,7 @@ included. Fresh CI gates this combined head. The old remote branch was absent
 after #116 merged; an empty-ref lease safely recreated it.
 
 Phase 1 PR 7 (#113) passed both checks and merged as `f917219`.
-The lead branch is rebased onto current main `a0ee61d` (health PR #118).
+The lead branch is rebased onto current main `951c0c7` (rolling PR #119).
 Only ledger/milestone conflicts needed resolution. Local validation
 passed 15,108 core tests, 182 viewer release tests, formatting, lint and
 release builds. Doc Mitchell, Back in the Saddle and Ghost Town Gunfight
