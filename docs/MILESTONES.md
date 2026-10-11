@@ -33,6 +33,13 @@ reading do not establish them.
 
 ## Active work: M1
 
+Explosion collection `5380adf` passes 13,990 combined engine tests and
+strict lint/formatting; a fresh worker starts effect items. HUD now
+validates its audio correction before the next rolling publication.
+The separately compiled form-map draft enables a byte-identical two-stack
+payload load/write probe; formal engine validation remains pending.
+Next action: collect HUD and publish the accumulated rolling batch.
+
 Rolling #129 merged `1389dab` after both CI checks. Later movement/HUD
 collections remain local pending a reviewed HUD audio-call correction.
 Reader #130 passes 15,771 workspace tests, strict lint, formatting and

@@ -7,6 +7,16 @@ machinery runs.
 
 ## Resume here
 
+Latest, 04:09 local: explosion collection `5380adf` passes 13,990 combined
+engine tests, doctest, strict lint and formatting. Reviewed partial-only
+advancement retains all seventeen exception-cleanup gaps. Fresh
+`/root/a04_round14` immediately started b0677, effectitem.cpp, compiler held.
+a03 now validates its eight-body HUD batch plus radiation audio correction;
+then cycle03/fresh worker, a01/cycle01 and root's map follow-on. Keep the
+later rolling push held until the HUD correction is collected. Root's
+separately compiled map draft passes the full item load and byte-identical
+41-byte rewrite; formal generated-registry validation is still pending.
+
 Latest, 04:00 local: rolling #129 passed both checks and merged `1389dab`
 at 03:56:28. `ship.sh 129` completed with `HOLD_LATER_PUSH=1`: the later
 movement/HUD collections are rebased locally but unpublished. Do not ship
