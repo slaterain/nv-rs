@@ -33,14 +33,6 @@ reading do not establish them.
 
 ## Active work: M1
 
-Phase 2 count dependency, 2026-10-10: the missing base destructor now
-matches a generated native sentinel case. Count creation, signed updates
-and removal pass through the real engine registry. A read-only early Doc
-Mitchell save probe checked 14 count payloads across 3,319 extra lists;
-its source hash stayed unchanged. This is count-only adaptation, not a
-save round trip. Next action: complete follow-on checks and CI before
-merging; details in [ENGINE_STATE.md](ENGINE_STATE.md).
-
 Engine-port takeover, 2026-10-10 evening: rolling translation PR #109
 passed both CI checks and merged as `b995218`; these translations are
 unit-tested engine code, not new playable behavior. Interrupted a01/a04
@@ -106,6 +98,15 @@ onto merged PR #113. No world consumer
 or save round trip is established. Evidence, ownership and the next count
 destructor dependency: [ENGINE_STATE.md](ENGINE_STATE.md). Next action:
 merge after CI, then close that dependency for a count adapter.
+
+Phase 2 count dependency, 2026-10-10: list adapter #115 is merged.
+The missing base destructor now matches a generated native sentinel case.
+Count creation, signed updates and removal pass through the real registry.
+A read-only Doc Mitchell save probe checked 14 count payloads across 3,319
+extra lists, with its source hash unchanged. Local core checks and release
+validation pass, including the unchanged count source in the health
+follow-on. This is count-only adaptation, not a save round trip. Next
+action: merge after CI; details in [ENGINE_STATE.md](ENGINE_STATE.md).
 
 Next session: start with [HANDOFF.md](HANDOFF.md). Open tasks:
 [TASKS.md](TASKS.md); contributor rules: [CONTRIBUTING.md](../CONTRIBUTING.md).

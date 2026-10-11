@@ -101,8 +101,11 @@ and count lifecycle checks. The full core suite then passed 15,156 tests
 on the #113 base, including explicit allocation-release assertions. Count
 source is unchanged after rebasing onto #114 plus the list-adapter PR.
 The repeat compile exhausted host memory alongside other engine compilers;
-it failed before tests. Validation is now serialized, with final CI and
-release build still pending for this follow-on.
+it failed before tests. Validation is now serialized. On the merged
+list-adapter base, the health follow-on with unchanged count source passed
+all 15,315 core tests, clippy, formatting and the release build. Fresh CI
+still gates this count PR. The generated ledger is refreshed by the
+rolling integration batch after merge, avoiding competing snapshots.
 
 A read-only probe of the user's early Doc Mitchell autosave decoded 3,365
 reference/actor change forms and visited 3,319 extra lists. Its 14 count
@@ -111,6 +114,6 @@ the real registry, then removed successfully. Lists without a count read
 as 1. The save SHA-256 remained unchanged. This checks count payloads only;
 other extras are not imported by the probe and no save bytes are written.
 
-Next action: finish the follow-on checks, then select the next payload
-required by that save. World ownership and full save
+Next action: merge after CI, then continue the health payload adapter.
+World ownership and full save
 round trips remain open.
