@@ -13,20 +13,21 @@ then immediately start a fresh agent on its new task. Never reset or cycle
 a slot with unfinished work. Ship rolling PRs once both current-head checks
 pass. The saved 98% usage stop/handoff rule still applies.
 
-Rolling #120 passed both checks and merged as `3a92d0a`. The lead branch
-`claude/engine-crate` is rebased onto it. PR #121 is open and attached at
-`f1819d2`, containing the checked Explosion and NavMesh follow-ons. Its
-fresh core/viewer CI gates merging. Keep later local commits behind that
-head. Multibound collection `20c6123` is validated locally: 13,751 combined
-engine tests, lint and formatting pass; three SEH partials remain explicit.
+Rolling #121 passed both checks and merged as `eda98da`. The lead branch
+`claude/engine-crate` is rebased onto it. The next rolling batch is ready
+to publish: multibound `feac2df` and Explosion Initialize `e4de812` pass
+13,756 combined engine tests, lint and formatting. Three multibound SEH
+partials and Initialize's SEH partial remain explicit. Inspect the attached
+rolling PR after publication; retain later local commits behind its head.
 Merged rolling PRs: #109 `b995218`, #112 `d854fbe`, #114 `89e1a0b`,
-#116 `c23f744`, #119 `951c0c7`, #120 `3a92d0a`. Leave unrelated contributor PRs alone.
+#116 `c23f744`, #119 `951c0c7`, #120 `3a92d0a`, #121 `eda98da`.
+Leave unrelated contributor PRs alone.
 
 Slot state:
 
 - a01 `/root/a01_loadedarea`, `agent-01`: fresh b0405 worker owns
   `fallout_shared_havok/loadedareabound.rs` (32 functions), prepared but
-  uncompiled. All 32 bodies and 34 tests are written; three constructors
+  validating with the exclusive compiler. All 32 bodies and 34 tests are written; three constructors
   or destructors retain explicit SEH partials. Reviewed argument arity,
   callback reloads and wrapping pointer arithmetic are corrected.
   cycle01 collected `a902f84`: `00699b60` normal path and the `0069ad40`
@@ -34,20 +35,27 @@ Slot state:
   tests, lint and formatting; the source also passed 49 hygiene tests.
   Exactly three NavMesh SEH partials remain: `006987d0`, `00699b60`,
   `006bd040`. Reviewed partial-only advancement retains them in the ledger.
-- a04 `/root/a04_round10`, `agent-04`: fresh worker after cycle04 collected
+- a04 `/root/a04_round11`, `agent-04`: fresh worker after cycle04 collected
   `d781c3b`. `009ae280` and `009b2940` normal paths remain SEH-partial;
   98 focused and 13,722 combined engine tests, lint and formatting pass.
   The source commit also passed 49 hygiene tests. Five larger paths remain
   untouched: `009acd60`, `009ad670`, `009ae6e0`, `009b00a0`, `009b1810`.
-  `009acd60` is now prepared with five tests, uncompiled and uncommitted.
+  `009acd60` is now collected as `e4de812`, source `6d0bb52`: five focused
+  tests, 13,727 source engine tests, strict lint/fmt and 49 hygiene pass.
   Argument order, callback reloads, impact-object naming and x87 stores
   were reviewed against the PC instructions. It remains SEH partial.
-  The other four bodies remain untouched; later-address evidence is in
+  The fresh worker starts `009ad670`; the other three bodies remain
+  untouched. Later-address evidence is in
   private `agents/scratch/a04/round9-009b1810-handoff.md`. Research/editing
-  only until the compiler grant. Thirteen collected SEH partials remain
-  recorded; the prepared Initialize body adds a fourteenth.
+  only until the compiler grant. Fourteen collected SEH partials remain.
 - a03 `/root/a03_animgroup`, `agent-03`: fresh b0041 worker owns
-  `fallout_shared/tesanimgroup.rs` (40 functions), research/editing only.
+  `fallout_shared/tesanimgroup.rs` (40 functions), prepared, compiler held.
+  37 complete bodies and two SEH partials are registered. `005f3a20` remains
+  unregistered/open; its full normal path is unfinished, with private
+  `scratch/a03/005f3a20-handoff.md` for the next cycle. Reviews corrected
+  array callback reloads, table stride, an erroneous constructor cleanup
+  call, x87 stores and filename-parser callback ordering. Thirteen native
+  leaf vectors passed; Rust tests are still uncompiled.
   cycle03 collected all 30 multibound entries as `20c6123`; source
   `0947e87` passed 27 focused / 13,744 engine / 49 hygiene tests, strict
   lint and formatting. Combined lead tests pass 13,751. Seven generated
@@ -66,8 +74,9 @@ Lead Phase 2 work:
   payload probe checks 20 health and 14 count values across 3,319 lists /
   3,365 forms with the source unchanged. This is not a save round trip.
 - Managed checkout `%USERPROFILE%/.codex/worktrees/phase2-extra-data/wt-phase0`
-  is `codex/phase2-reference-state`, based on `3a92d0a`. PR #122 is open
-  and attached at consolidated commit `0653079`. Ten form helpers,
+  now uses follow-on branch `codex/phase2-extra-save-buffer`.
+  PR #122 (`codex/phase2-reference-state`) is open and attached, rebased
+  onto #121 as `8e11001`, with fresh CI. Its ten form helpers,
   nine allocator/counter helpers, form callback-reload corrections and the
   new Reference adapter pass 15,587 core tests (13,734 engine), workspace
   clippy with warnings denied, formatting, release and debug builds.
@@ -87,12 +96,18 @@ Lead Phase 2 work:
   concrete adapter issues. World consumers, payload conversion and FOS
   writing remain open. Next research traces buffered extra-data saving
   (`00426a30`) and the currently scaffolded save-buffer constructors.
+- The follow-on has five uncommitted files: form_support, bgsloadformbuffer,
+  bgssaveloadinitialdata, bgssavegamebuffer and bgssaveformbuffer. Nine
+  constructor/getter dependencies and generated tests are prepared but
+  uncompiled; six guarded constructor vectors passed the native executable.
+  Byte-writing/growth dependencies remain open. Private evidence uses the
+  `codex-audit/save-boundary-*` and `save-buffer-headers-native*` files.
 
 ONE heavy engine compiler across all worktrees, `-j2`, existing debug cache,
-`CARGO_PROFILE_DEV_DEBUG=0`. a04 owns the compiler now; root validation
-session 87210 completed successfully. Then cycle04, a01, cycle01, a03
-when ready. Root save-buffer follow-on is research only. Disk is about
-2 GB free. Automatic approval review previously blocked
+`CARGO_PROFILE_DEV_DEBUG=0`. a01 owns the compiler now; root validation
+session 87210 and cycle04 session 14042 completed successfully. Then
+cycle01, a03, cycle03, root save-buffer checks when prepared. Disk is about
+3 GB free. Automatic approval review previously blocked
 idle p3 target deletion; nothing was deleted. Do not bypass that denial.
 Private task.sh warns rather than deleting caches and retains scratch.
 Private ship.sh now safely recreates an absent merged branch with an empty
@@ -109,8 +124,8 @@ No original-game comparison was performed. Exact menu-input/GPU renderer
 boundaries remain in FRAME_SKELETON.md. These translation batches do not
 establish new playable features.
 
-Next action: collect a04 after validation. Ship #121 and merge #122 once
-both current-head checks pass (rebase #122 if main advances), and continue
+Next action: publish the checked rolling batch and collect a01 after
+validation. Merge #122 after both current-head checks pass, and continue
 collecting and immediately restarting finished translation slots.
 
 ## Where things stand
@@ -145,7 +160,7 @@ collecting and immediately restarting finished translation slots.
     Acceptance passed; exact open boundaries remain in FRAME_SKELETON.md.
   - Phase 2 (state model in engine memory, save round trip; see
     ENGINE_PORT_PLAN.md).
-- **Rolling translation PR:** #109, #112, #114, #116, #119 and #120 merged; #121 is open on branch
+- **Rolling translation PR:** #109, #112, #114, #116, #119, #120 and #121 merged; next batch on branch
   `claude/engine-crate` (see "Resume here").
 - **Play build** (the user's `Desktop\nv-rs-play`): Build 40 = main `f917219` with #113.
   After the next wiring PR merges, build `viewer` in release from main

@@ -33,6 +33,13 @@ reading do not establish them.
 
 ## Active work: M1
 
+Rolling #121 merged as `eda98da`. Explosion Initialize collection
+`e4de812` passes 13,756 combined engine tests, strict lint and formatting;
+exception cleanup remains partial. Its fresh worker starts `009ad670`.
+Reference #122 is rebased with fresh CI; the follow-on has six native
+save-buffer constructor cases, but its Rust code is not compiled yet.
+Next action: publish multibound/Initialize and collect loaded-area bounds.
+
 Reference adapter #122 is open at `0653079` after 15,587 core tests,
 strict workspace lint, formatting, release/debug builds and the real
 registry probe pass. The handle keeps reference lists isolated and aliases
