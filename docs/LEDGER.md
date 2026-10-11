@@ -30,14 +30,14 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 10793 | 16.3% |
-| traced | 4434 | 6.7% |
+| translated | 10811 | 16.3% |
+| traced | 4430 | 6.7% |
 | platform | 3417 | 5.2% |
-| library | 21915 | 33.1% |
-| open | 25700 | 38.8% |
+| library | 21913 | 33.1% |
+| open | 25688 | 38.8% |
 | **all** | **66259** | |
 
-Translation totals count markers, not complete behavior. **55** engine functions
+Translation totals count markers, not complete behavior. **56** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
@@ -71,6 +71,7 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `006ec4b0` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:1377` |
 | `006ec660` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:1422` |
 | `006ec870` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:1492` |
+| `008659c0` | `crates/engine/src/units/fallout_misc/bgssaveformbuffer.rs:17` |
 | `008c9330` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1407` |
 | `008c9430` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1423` |
 | `008c94e0` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1438` |
@@ -98,9 +99,9 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `009b2cb0` | `crates/engine/src/units/fallout_ai/explosion.rs:2289` |
 | `009b2d30` | `crates/engine/src/units/fallout_ai/explosion.rs:2303` |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14820 (36.6%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14832 (36.6%) are translated or traced.
 
-Rust cites 15882 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 15896 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -135,18 +136,18 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 78 | 0 | 0 | 6460 | 2.0% |
 | fallout/ai | 4849 | 1475 | 1888 | 2234 | 609 | 0 | 0 | 2006 | 58.6% |
 | fallout/interface | 2645 | 991 | 1247 | 583 | 741 | 0 | 0 | 1321 | 50.1% |
-| (unplaced) | 2353 | 470 | 0 | 35 | 410 | 1 | 0 | 1907 | 18.9% |
+| (unplaced) | 2353 | 470 | 0 | 37 | 409 | 1 | 0 | 1906 | 19.0% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 707 | 174 | 0 | 0 | 907 | 49.3% |
 | NiMain | 1619 | 261 | 1134 | 3 | 76 | 0 | 0 | 1540 | 4.9% |
 | BSHavok | 1615 | 316 | 1134 | 59 | 134 | 0 | 0 | 1422 | 12.0% |
 | BSShader | 1549 | 608 | 350 | 0 | 142 | 1407 | 0 | 0 | - |
 | NiAnimation | 1279 | 171 | 903 | 0 | 32 | 0 | 0 | 1247 | 2.5% |
-| fallout/misc | 1045 | 171 | 353 | 425 | 134 | 0 | 0 | 486 | 53.5% |
+| fallout/misc | 1045 | 171 | 353 | 441 | 129 | 0 | 0 | 475 | 54.5% |
 | BSMain | 991 | 192 | 478 | 43 | 68 | 0 | 0 | 880 | 11.2% |
 | NiXenonRenderer | 965 | 172 | 298 | 0 | 5 | 960 | 0 | 0 | - |
 | SpeedTree | 732 | 234 | 151 | 0 | 112 | 620 | 0 | 0 | - |
 | fallout/magic | 705 | 162 | 378 | 7 | 69 | 0 | 0 | 629 | 10.8% |
-| LIBCMT | 682 | 124 | 503 | 0 | 21 | 31 | 630 | 0 | - |
+| LIBCMT | 682 | 124 | 503 | 0 | 23 | 31 | 628 | 0 | - |
 | NiParticle | 649 | 89 | 540 | 0 | 66 | 0 | 0 | 583 | 10.2% |
 | fallout shared/havok | 478 | 60 | 110 | 39 | 68 | 0 | 0 | 371 | 22.4% |
 | FaceGen | 474 | 164 | 51 | 0 | 10 | 0 | 0 | 464 | 2.1% |
@@ -190,8 +191,8 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | 1 | 143 | 117 | 101 | 30 | 3 | 0 | 9 |
-| 2 | 1575 | 583 | 1055 | 392 | 24 | 4 | 100 |
-| 3 | 4973 | 1303 | 3434 | 1034 | 154 | 26 | 325 |
+| 2 | 1575 | 583 | 1059 | 388 | 24 | 4 | 100 |
+| 3 | 4973 | 1303 | 3445 | 1023 | 154 | 26 | 325 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
