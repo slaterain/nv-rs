@@ -14,7 +14,7 @@ explosion helpers, ledger and handoff. The explosion review corrections have bee
 #116 needs fresh CI on the updated head before merging. The lead branch is `claude/engine-crate`.
 
 Phase 1 PR 7 (#113) passed both checks and merged as `f917219`.
-The lead branch is rebased onto current main `89e1a0b`.
+The lead branch is rebased onto current main `94165e8`.
 Only ledger/milestone conflicts needed resolution. Local validation
 passed 15,108 core tests, 182 viewer release tests, formatting, lint and
 release builds. Doc Mitchell, Back in the Saddle and Ghost Town Gunfight
@@ -35,13 +35,13 @@ a fresh worker, with heavy compilation serialized across all worktrees.
 
 Slot state: a01 navigation continuation is owned by fresh worker
 `/root/a01_round5`. Its latest 36 complete / 4 skipped batch was collected
-as `76d6618`; 13,577 combined engine tests, lint and formatting pass.
+as `4c39fa0`; 13,577 combined engine tests, lint and formatting pass.
 That batch is local only: PC review found that `0069b030` must reload the
 array buffer after `006927d0`, which may relocate it. The fresh worker owns
 this required correction and a relocation regression before the batch is
 pushed. Six queue entries remain, starting with open `006987d0`.
 a03 b0331 pathmanager.cpp is running under fresh `/root/a03_round3`.
-Its first 35 complete / five partial functions were collected as `d3d0a6a`;
+Its first 35 complete / five partial functions were collected as `5e7dbdf`;
 13,599 combined engine tests, lint and formatting pass. The five exception
 cleanup partials remain queued explicitly; 65 entries remain overall.
 Review by the fresh worker found normal-path argument defects in local
@@ -88,14 +88,16 @@ rustc memory allocation, before tests; no assertion failure. It is closed.
 Retry tests, clippy and release serially; private logs are
 `phase2-count-rebased-*`.
 Its real-save count probe passes 14 payloads across 3,319 extra lists.
-The count follow-on is draft PR #117 at `f67404e`, rebased onto #115's merge
+The count follow-on is ready PR #117 at `6cf3758`, rebased onto #115's merge
 and retargeted to main; fresh CI is running. The managed
 checkout is now `codex/phase2-extra-health`, with adapter and constructor
-changes committed as `3807051` after rebasing onto the count follow-on.
-A native vector caught signaling-NaN handling in `00431d10`; focused health
-tests are compiling in root session 61575. Simultaneous engine test
+changes at `cef42bb`, open as PR #118 stacked on the count follow-on.
+Health checks passed: 74 focused tests, all 15,315 core tests, lint, formatting
+and release build. The real-save probe passes all 20 health and 14 count
+payloads with the source hash unchanged. No root process is active.
+Simultaneous engine test
 compilers exhausted host memory; ONE heavy engine compile may run at a
-time now. Root has the current validation window; a01, a03 and a04 wait,
+time now. a04 has the current validation window; a01, a03 and root wait,
 continuing research/review. The lead grants each next window explicitly.
 Machine note: automatic policy blocked removal of idle p3's target cache;
 nothing was deleted. Private `task.sh` now warns below 40 GB free instead
