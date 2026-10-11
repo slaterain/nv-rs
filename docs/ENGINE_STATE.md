@@ -84,8 +84,10 @@ set. The private harness uses generated form headers and partial allocator
 startup; it is not production runtime initialization. Its strict source
 validation reparses the captured save and would need admission-time caching
 in a production API. Unknown payload semantics, whole-save writing and
-world/viewer integration remain open. The next bounded step is a reusable
-immutable source envelope, separate from gameplay mutation and selection.
+world/viewer integration remain open. The reusable immutable source envelope
+is now drafted as `fos::inventory_source`; its 38 package tests and strict
+package lint pass, while full workspace validation is queued. Its scope and
+source-preservation rules are described in [FOS_SAVES.md](FOS_SAVES.md).
 
 ## Script-extra follow-on
 
