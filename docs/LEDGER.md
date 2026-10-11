@@ -30,14 +30,14 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 10675 | 16.1% |
-| traced | 4477 | 6.8% |
+| translated | 10682 | 16.1% |
+| traced | 4470 | 6.7% |
 | platform | 3417 | 5.2% |
 | library | 21915 | 33.1% |
 | open | 25775 | 38.9% |
 | **all** | **66259** | |
 
-Translation totals count markers, not complete behavior. **27** engine functions
+Translation totals count markers, not complete behavior. **38** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
@@ -69,6 +69,17 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `008ca070` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1562` |
 | `008ca350` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1571` |
 | `008ca480` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1782` |
+| `009abf30` | `crates/engine/src/units/fallout_ai/explosion.rs:641` |
+| `009ac200` | `crates/engine/src/units/fallout_ai/explosion.rs:1031` |
+| `009ac5a0` | `crates/engine/src/units/fallout_ai/explosion.rs:189` |
+| `009ac9c0` | `crates/engine/src/units/fallout_ai/explosion.rs:302` |
+| `009ae140` | `crates/engine/src/units/fallout_ai/explosion.rs:701` |
+| `009afaf0` | `crates/engine/src/units/fallout_ai/explosion.rs:751` |
+| `009b0e00` | `crates/engine/src/units/fallout_ai/explosion.rs:1140` |
+| `009b1090` | `crates/engine/src/units/fallout_ai/explosion.rs:922` |
+| `009b22c0` | `crates/engine/src/units/fallout_ai/explosion.rs:1622` |
+| `009b2cb0` | `crates/engine/src/units/fallout_ai/explosion.rs:1834` |
+| `009b2d30` | `crates/engine/src/units/fallout_ai/explosion.rs:1848` |
 
 Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14745 (36.4%) are translated or traced.
 
@@ -105,7 +116,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 65 | 0 | 21269 | 0 | - |
 | fallout shared | 10470 | 2065 | 3149 | 6306 | 990 | 0 | 0 | 3174 | 69.7% |
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 78 | 0 | 0 | 6460 | 2.0% |
-| fallout/ai | 4849 | 1475 | 1888 | 2223 | 620 | 0 | 0 | 2006 | 58.6% |
+| fallout/ai | 4849 | 1475 | 1888 | 2230 | 613 | 0 | 0 | 2006 | 58.6% |
 | fallout/interface | 2645 | 991 | 1247 | 583 | 741 | 0 | 0 | 1321 | 50.1% |
 | (unplaced) | 2353 | 470 | 0 | 30 | 412 | 1 | 0 | 1910 | 18.8% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 680 | 180 | 0 | 0 | 928 | 48.1% |

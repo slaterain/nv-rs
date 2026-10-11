@@ -33,6 +33,14 @@ reading do not establish them.
 
 ## Active work: M1
 
+Explosion's owner/weapon callback-reload correction and nine further
+functions pass 13,695 combined engine tests, lint and formatting.
+Collection `a2fe87a` removes the publishing hold on the next rolling
+batch. A fresh worker owns its 18 remaining entries (eleven explicit
+exception-cleanup partials and seven untranslated). Navigation validates
+next. These translations do not yet establish newly playable behavior.
+Next action: publish the checked batch and collect the next finished slot.
+
 Count adapter #117 passed both checks and merged as `cbca26e` on
 2026-10-10 local time. Health #118 is rebased onto main with unchanged
 implementation and fresh CI. Lead form dependencies pass 124 focused and

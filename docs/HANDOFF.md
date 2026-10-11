@@ -10,9 +10,10 @@ machinery runs.
 Codex takeover, 2026-10-10: rolling PRs #109, #112, #114 and #116 passed
 both CI checks and were squash-merged as `b995218`, `d854fbe`, `89e1a0b`
 and `c23f744`. The lead branch is `claude/engine-crate`. Its later batches
-remain local pending the explosion owner-reload correction; after that
-collection passes, push with a lease against old remote head `2a2f132`
-and open/attach the next rolling PR.
+include explosion collection `a2fe87a`: the owner/weapon callback-reload
+correction and nine more functions pass 13,695 combined engine tests,
+lint and formatting. Publish with a lease against old remote head
+`2a2f132` and open/attach the next rolling PR.
 
 Phase 1 PR 7 (#113) passed both checks and merged as `f917219`.
 The lead branch is rebased onto current main `cbca26e` (count PR #117).
@@ -48,7 +49,7 @@ reviewed corrections to earlier argument-slot ownership, output ordering,
 callback reloads and completion pointers. The combined 13,680 engine
 tests, lint and formatting pass. Forty entries remain: 15 explicit
 exception-cleanup partials and 25 untouched, starting `006ec5b0`.
-a04 b0160 explosion.cpp is running under fresh worker `/root/a04_round5`.
+a04 b0160 explosion.cpp is running under fresh worker `/root/a04_round6`.
 Its latest 21-function continuation was collected as `00532d6`; 13,633
 combined engine tests, lint and formatting pass. Native sort permutations
 cover duplicate keys, NaN, signed zero and infinities. Sixteen entries
@@ -56,9 +57,10 @@ remain, starting `009ac5a0`. New PC review requires `009b0f80` to reload
 the owner after its virtual IsActor callback; the fresh worker owns that
 correction and a mutation regression. It must also mark the already
 documented omitted exception cleanup as explicit partials. Keep this local
-batch unpublished until corrected; merged #116 excludes it. The fix and
-further queued translations are prepared but await compilation after the
-lead's window.
+batch was held until corrected; merged #116 excludes it. Collection
+`a2fe87a` now passes all checks: six new complete functions, three new
+partials and eight older partials explicitly marked. The fresh task has
+18 entries: eleven exception-cleanup partials and seven untranslated.
 a06's next b0360 and a05's next b0158 (12 entries starting `008ca620`)
 are prepared and waiting for capacity. Never collect/reset an active slot.
 a05's collected batch has 28 complete / 12 partial functions; gaps remain
@@ -105,8 +107,8 @@ Three native allocator-header vectors pass. No public reference adapter
 exists yet; next validate and continue the real startup dependency chain.
 
 Simultaneous engine compilers exhausted host memory; ONE heavy engine
-compile may run at a time. a04 has the current validation window;
-a01 is next, then a03, then root. Other workers wait,
+compile may run at a time. a01 has the current validation window;
+a03 is next, then root. Other workers wait,
 continuing research/review. The lead grants each next window explicitly.
 Machine note: automatic policy blocked removal of idle p3's target cache;
 nothing was deleted. Private `task.sh` now warns below 40 GB free instead
