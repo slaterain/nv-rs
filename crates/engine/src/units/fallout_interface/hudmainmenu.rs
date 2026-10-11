@@ -2290,6 +2290,7 @@ pub fn hud_main_menu_update_radiation_meter_conditions(
 }
 
 // Translated from 007738c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007738c0 - the compiler's SEH unwind frame is omitted.
 /// `HUDMainMenu::SetRadiationLevel` (Xbox PDB): starts or fades the
 /// radiation sound and updates the meter for positive radiation.
 /// The compiler's SEH/unwind bookkeeping is omitted.
@@ -2308,10 +2309,13 @@ pub fn hud_main_menu_set_radiation_level(e: &mut Engine, radiation: f32, accumul
         let valid = e.call(0x00ad_8ce0, &args![sound]).bool();
         if !valid && accumulated > 0.0 {
             e.with_stack(12, |e, handle| {
-                let instance = e
-                    .call(0x0045_3a70, &args![handle, 0x0107_3498_u32, 0x11_u32])
+                let instance = e.call(0x0045_3a70, &args![]).u32();
+                let sample = e
+                    .call(
+                        0x00ad_7550,
+                        &args![instance, handle, 0x0107_3498_u32, 0x11_u32],
+                    )
                     .u32();
-                let sample = e.call(0x00ad_7550, &args![instance]).u32();
                 e.call(0x0041_8900, &args![sound, sample]);
                 e.call(0x0048_3710, &args![handle]);
             });
@@ -2409,6 +2413,529 @@ pub fn hud_main_menu_update_meter(
     position = position.wrapping_add(x_offset);
     hud_trait(e, target.addr(), 0xfb1, displayed_width as u32);
     hud_trait(e, target.addr(), 0xfa1, position as u32);
+}
+
+// Translated from 00774b00 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00774b00 - the compiler's SEH unwind frame is omitted.
+/// `HUDMainMenu::UpdateMeter_ov2` (Xbox PDB): sizes and positions two
+/// overlapping meter tiles, including the center anchor's child tile and
+/// alpha fades.
+pub fn hud_main_menu_update_meter_ov2(
+    e: &mut Engine,
+    first: Ptr,
+    second: Ptr,
+    mut first_fraction: f32,
+    mut second_fraction: f32,
+    anchor: i32,
+    minimum_images: i32,
+) {
+    for (bit, name, slot) in [
+        (1_u32, 0x0107_3424_u32, 0x011d_9c28_u32),
+        (2, 0x0107_3418, 0x011d_9c24),
+        (4, 0x0107_3430, 0x011d_9c20),
+        (8, 0x0107_34b8, 0x011d_9c1c),
+    ] {
+        let flags = e.mem.u32(0x011d_9c2c);
+        if flags & bit == 0 {
+            e.mem.set_u32(0x011d_9c2c, flags | bit);
+            let trait_id = e.call(0x00a0_0940, &args![name, u32::MAX]).u32();
+            e.mem.set_u32(slot, trait_id);
+        }
+    }
+    if first.is_null() || second.is_null() || e.mem.u32(0x011d_96c0) == 0 {
+        return;
+    }
+    for fraction in [&mut first_fraction, &mut second_fraction] {
+        if f64::from(*fraction) > e.global::<f64>(0x0101_2070) {
+            *fraction = 1.0;
+        } else if f64::from(*fraction) < e.global::<f64>(0x0101_2060) {
+            *fraction = 0.0;
+        }
+    }
+    let total_trait = e.mem.u32(0x011d_9c28);
+    let total_raw = e.call(0x00a0_11b0, &args![first, total_trait]).f64();
+    let total_width = x87_to_int(e, total_raw);
+    let image_trait = e.mem.u32(0x011d_9c24);
+    let image_raw = e.call(0x00a0_11b0, &args![first, image_trait]).f64();
+    let image_width = x87_to_int(e, image_raw);
+    let scale = if anchor == 2 {
+        image_width.wrapping_shl(1)
+    } else {
+        image_width
+    };
+    let first_positive = if f64::from(first_fraction) >= e.global::<f64>(0x0101_2060) {
+        first_fraction
+    } else {
+        0.0
+    };
+    let _first_width_before_second_conversion = x87_to_int(
+        e,
+        f64::from(total_width) * f64::from(first_positive) / f64::from(scale),
+    )
+    .wrapping_mul(scale);
+    let mut second_width = x87_to_int(
+        e,
+        f64::from(total_width) * f64::from(second_fraction) / f64::from(scale),
+    )
+    .wrapping_mul(scale);
+    // The PC body recalculates the first width after both conversions, so
+    // preserve this callback-visible ordering rather than reuse first_width.
+    let first_positive = if f64::from(first_fraction) >= e.global::<f64>(0x0101_2060) {
+        first_fraction
+    } else {
+        0.0
+    };
+    let first_width = x87_to_int(
+        e,
+        f64::from(total_width) * f64::from(first_positive) / f64::from(scale),
+    )
+    .wrapping_mul(scale);
+    let original_x_trait = e.mem.u32(0x011d_9c20);
+    let original_x_raw = e.call(0x00a0_11b0, &args![first, original_x_trait]).f64();
+    let mut first_x = x87_to_int(e, original_x_raw);
+    if anchor == 1 {
+        first_x = first_x.wrapping_sub(first_width);
+    } else if anchor == 2 {
+        first_x = first_x.wrapping_sub(first_width / 2);
+    }
+    let original_x_trait = e.mem.u32(0x011d_9c20);
+    let original_x_raw = e.call(0x00a0_11b0, &args![second, original_x_trait]).f64();
+    let mut second_x = x87_to_int(e, original_x_raw);
+    if anchor == 1 {
+        let width_difference = second_width.wrapping_sub(first_width);
+        second_x = first_x.wrapping_sub(width_difference);
+        let original_x_trait = e.mem.u32(0x011d_9c20);
+        let original_x_raw = e.call(0x00a0_11b0, &args![second, original_x_trait]).f64();
+        let original_x = x87_to_int(e, original_x_raw);
+        second_width = e
+            .call(
+                0x004a_8f20,
+                &args![width_difference, original_x.wrapping_sub(second_x)],
+            )
+            .i32();
+    } else if anchor == 0 {
+        second_x = second_x.wrapping_add(first_width);
+    } else if anchor == 2 {
+        second_x = second_x.wrapping_sub(second_width / 2);
+        second_width = first_x.wrapping_sub(second_x);
+        let child_storage = e.call(0x0073_ac90, &args![second.addr() + 4]).u32();
+        let child = e.mem.u32(child_storage);
+        hud_trait(e, child, 0xfb1, second_width as u32);
+        hud_trait(e, child, 0xfa1, first_x.wrapping_add(first_width) as u32);
+        if !e.call(0x00a0_7ed0, &args![child, 0xfa9_u32]).bool() {
+            let duration: f32 = quiet_f32(e.global(0x0102_3cd8));
+            e.call(
+                0x00a0_7c60,
+                &args![child, 0xfa9_u32, 0.0_f32, duration, 1.0_f32, 1_u32],
+            );
+        }
+    }
+    if first_width == 0 && second_width < image_width.wrapping_mul(minimum_images) {
+        second_width = image_width.wrapping_mul(minimum_images);
+    }
+    hud_trait(e, first.addr(), 0xfb1, first_width as u32);
+    hud_trait(e, first.addr(), 0xfa1, first_x as u32);
+    hud_trait(e, second.addr(), 0xfb1, second_width as u32);
+    hud_trait(e, second.addr(), 0xfa1, second_x as u32);
+    if !e.call(0x00a0_7ed0, &args![second, 0xfa9_u32]).bool() {
+        let duration: f32 = quiet_f32(e.global(0x0102_3cd8));
+        e.call(
+            0x00a0_7c60,
+            &args![second, 0xfa9_u32, 0.0_f32, duration, 1.0_f32, 1_u32],
+        );
+    }
+}
+
+// Translated from 00774fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00774fd0 - the compiler's SEH unwind frame is omitted.
+/// `HUDMainMenu::ShowSubtitle` (Xbox PDB): queues a subtitle when the text
+/// and actor/setting gate allow it, deriving its duration from the sound
+/// handle or the configured per-character fallback.
+#[allow(clippy::too_many_arguments)]
+pub fn hud_main_menu_show_subtitle(
+    e: &mut Engine,
+    this: Ptr<HUDMainMenu>,
+    text: Ptr,
+    sound_0: u32,
+    sound_1: u32,
+    sound_2: u32,
+    point_0: u32,
+    point_1: u32,
+    point_2: u32,
+    speaker: Ptr,
+    force_priority: u8,
+) -> bool {
+    e.with_stack(12, |e, sound| {
+        e.mem.set_u32(sound.addr(), sound_0);
+        e.mem.set_u32(sound.addr() + 4, sound_1);
+        e.mem.set_u32(sound.addr() + 8, sound_2);
+        let mut shown = false;
+        let actor = if speaker.is_null() || !e.vcall(speaker.addr(), 0x100, &args![]).bool() {
+            0
+        } else {
+            e.call(
+                0x00ec_43fb,
+                &args![speaker, 0_u32, 0x0118_41cc_u32, 0x0118_46d4_u32, 0_u32],
+            )
+            .u32()
+        };
+        if !text.is_null() {
+            let subtitles_setting = e.call(0x0040_8d60, &args![0x011d_8928_u32]).u32();
+            let allowed = e.mem.u8(subtitles_setting) != 0
+                || (actor != 0 && e.call(0x008c_1bc0, &args![actor]).bool());
+            if allowed {
+                let allocated = e.call(0x0040_1000, &args![0x11c_u32]).u32();
+                let subtitle = if allocated == 0 {
+                    0
+                } else {
+                    fn_00775210(e, Ptr::new(allocated)).addr()
+                };
+                e.call(0x0040_6d30, &args![subtitle, 0x104_u32, text]);
+                for (offset, value) in [(0x10c, point_0), (0x110, point_1), (0x114, point_2)] {
+                    e.mem.set_u32(subtitle + offset, value);
+                }
+                let duration_ms = e.call(0x00ad_8b30, &args![sound]).i32();
+                let duration = (f64::from(duration_ms) / e.global::<f64>(0x0101_7b70)) as f32;
+                e.mem.set_f32(subtitle + 0x108, duration);
+                if f64::from(duration) == e.global::<f64>(0x0101_2060) {
+                    let length = e.call(0x00ec_6130, &args![text]).u32();
+                    let rate_setting = e.call(0x0040_3e20, &args![0x011d_2178_u32]).u32();
+                    let fallback = (f64::from(e.mem.f32(rate_setting)) * f64::from(length)) as f32;
+                    e.mem.set_f32(subtitle + 0x108, fallback);
+                }
+                let priority = if force_priority != 0 {
+                    i32::MAX
+                } else if speaker.addr() == e.mem.u32(0x011d_ea3c) {
+                    0
+                } else if speaker.is_null() {
+                    1
+                } else {
+                    2
+                };
+                e.mem.set_i32(subtitle + 0x118, priority);
+                let now = e.call(0x0082_5c00, &args![this.addr() + 0x224]).u32();
+                e.mem.set_u32(subtitle + 0x104, now);
+                e.with_stack(4, |e, pointer| {
+                    e.mem.set_u32(pointer.addr(), subtitle);
+                    e.call(0x007c_b2e0, &args![this.addr() + 0x198, pointer]);
+                });
+                shown = true;
+            }
+        }
+        e.call(0x0048_3710, &args![sound]);
+        shown
+    })
+}
+
+// Translated from 00775210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Initializes the three-word point member at +0x10c in the newly
+/// allocated subtitle record, then returns that record.
+pub fn fn_00775210(e: &mut Engine, subtitle: Ptr) -> Ptr {
+    e.call(0x0068_15c0, &args![subtitle.addr() + 0x10c]);
+    subtitle
+}
+
+// Translated from 00775230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Chooses the subtitle record by squared distance from the player,
+/// priority and the forced-priority sentinel. The returned pointer remains
+/// in the menu's subtitle array.
+pub fn fn_00775230(e: &mut Engine, this: Ptr<HUDMainMenu>) -> Ptr {
+    let mut selected = 0;
+    let mut best_distance: f32 = quiet_f32(e.global(0x0101_6970));
+    let player = e.mem.u32(0x011d_ea3c);
+    let player_position = e.vcall(player, 0x1f4, &args![]).u32();
+    e.with_stack(24, |e, scratch| {
+        let difference = scratch.addr();
+        let copied_position = difference + 12;
+        for offset in [0_u32, 4, 8] {
+            e.mem.set_u32(
+                copied_position + offset,
+                e.mem.u32(player_position + offset),
+            );
+        }
+        let mut index = 0_u32;
+        loop {
+            let count = e.call(0x0044_ddc0, &args![this.addr() + 0x198]).u32();
+            if index >= count {
+                break;
+            }
+            let element = e
+                .call(0x0087_7a30, &args![this.addr() + 0x198, index])
+                .u32();
+            let subtitle = e.mem.u32(element);
+            let vector = e
+                .call(
+                    0x0043_9ef0,
+                    &args![subtitle + 0x10c, difference, copied_position],
+                )
+                .u32();
+            let distance = e.call(0x004a_7290, &args![vector]).f64() as f32;
+            let in_range = if selected == 0 {
+                let threshold: f32 = quiet_f32(e.global(0x0101_3d84));
+                let threshold = e.call(0x0068_5d20, &args![threshold, 2_u32]).f64();
+                f64::from(distance) <= threshold
+            } else {
+                true
+            };
+            let mut choose = selected == 0 && in_range;
+            if selected != 0 && distance < best_distance {
+                let element = e
+                    .call(0x0087_7a30, &args![this.addr() + 0x198, index])
+                    .u32();
+                let subtitle = e.mem.u32(element);
+                choose = e.mem.i32(subtitle + 0x118) >= e.mem.i32(selected + 0x118);
+            }
+            if !choose {
+                let element = e
+                    .call(0x0087_7a30, &args![this.addr() + 0x198, index])
+                    .u32();
+                let subtitle = e.mem.u32(element);
+                choose = e.mem.i32(subtitle + 0x118) == i32::MAX;
+            }
+            if choose {
+                let element = e
+                    .call(0x0087_7a30, &args![this.addr() + 0x198, index])
+                    .u32();
+                selected = e.mem.u32(element);
+                best_distance = distance;
+            }
+            index = index.wrapping_add(1);
+        }
+    });
+    Ptr::new(selected)
+}
+
+// Translated from 00775380 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00775380 - the compiler's SEH unwind frame is omitted.
+/// Queues a HUD corner message, choosing its default icon from the PC jump
+/// table when no path is supplied, and replacing or appending the current
+/// message according to the list state.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00775380(
+    e: &mut Engine,
+    this: Ptr<HUDMainMenu>,
+    text: Ptr,
+    icon_kind: u32,
+    icon_path: Ptr,
+    sound_name: Ptr,
+    duration: f32,
+    urgent: u8,
+) -> bool {
+    if text.is_null() {
+        return false;
+    }
+    let record = e.call(0x0040_1000, &args![0x310_u32]).u32();
+    e.call(0x0040_6d30, &args![record, 0x104_u32, text]);
+    e.mem.set_f32(record + 0x30c, quiet_f32(duration));
+    if !icon_path.is_null() && e.mem.u8(icon_path.addr()) != 0 {
+        e.call(0x0040_6d30, &args![record + 0x104, 0x104_u32, icon_path]);
+    } else {
+        // The four cases are ordered by the jump table at 00775658.
+        let default_icon = match icon_kind {
+            0 => Some(0x0102_08e0_u32),
+            1 => Some(0x0103_a830),
+            2 => Some(0x0102_08a0),
+            3 => Some(0x0104_bfe8),
+            _ => None,
+        };
+        if let Some(path) = default_icon {
+            e.call(0x0040_6d30, &args![record + 0x104, 0x104_u32, path]);
+        }
+    }
+    if sound_name.is_null() {
+        e.mem.set_u8(record + 0x208, 0);
+    } else {
+        e.call(0x0040_6d30, &args![record + 0x208, 0x104_u32, sound_name]);
+    }
+    e.with_stack(4, |e, record_pointer| {
+        e.mem.set_u32(record_pointer.addr(), record);
+        let list = this.addr() + 0x18c;
+        if e.call(0x0082_56d0, &args![list]).bool() {
+            e.call(0x0090_5820, &args![list, record_pointer]);
+            let first_node = e.call(0x0068_15c0, &args![list]).u32();
+            let first_record = e.mem.u32(first_node);
+            let menu = e.mem.u32(0x011d_96c0);
+            e.call(
+                0x00a0_1350,
+                &args![e.mem.u32(menu + 0x90), 0xfc4_u32, first_record, 1_u32],
+            );
+            let first_node = e.call(0x0068_15c0, &args![list]).u32();
+            let first_record = e.mem.u32(first_node);
+            let menu = e.mem.u32(0x011d_96c0);
+            e.call(
+                0x00a0_1350,
+                &args![
+                    e.mem.u32(menu + 0x8c),
+                    0xfcc_u32,
+                    first_record + 0x104,
+                    1_u32
+                ],
+            );
+            if !sound_name.is_null() {
+                e.with_stack(12, |e, sound| {
+                    let instance = e.call(0x0045_3a70, &args![]).u32();
+                    let handle = e
+                        .call(0x00ad_7550, &args![instance, sound, sound_name, 0x121_u32])
+                        .u32();
+                    e.call(0x00ad_8830, &args![handle, 0_u32]);
+                    e.call(0x0048_3710, &args![sound]);
+                });
+            }
+        } else {
+            let mut tail = list;
+            loop {
+                let next = e.call(0x0072_6070, &args![tail]).u32();
+                if next == 0 {
+                    break;
+                }
+                tail = e.call(0x0072_6070, &args![tail]).u32();
+            }
+            let node = e.call(0x0068_15c0, &args![tail]).u32();
+            let old_record = e.mem.u32(node);
+            let duplicate = e.call(0x0040_8b20, &args![old_record, record]).i32() == 0;
+            if duplicate {
+                e.call(0x0040_1030, &args![record]);
+            } else if urgent == 0 {
+                e.call(0x0090_5820, &args![list, record_pointer]);
+            } else {
+                let first_node = e.call(0x0068_15c0, &args![list]).u32();
+                let first_record = e.mem.u32(first_node);
+                e.mem.set_f32(first_record + 0x30c, 0.0);
+                e.call(0x005a_e3d0, &args![list, record_pointer]);
+            }
+        }
+    });
+    true
+}
+
+// Translated from 00775670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HUDMainMenu::HideSubtitle` (Xbox PDB): clears the visible subtitle tile
+/// and the menu's current subtitle pointer, updating its text when the
+/// dialogue menu is not visible.
+pub fn hud_main_menu_hide_subtitle(e: &mut Engine, this: Ptr<HUDMainMenu>) {
+    if !e.call(0x0070_2680, &args![0x3f5_u32, 0_u32]).bool() {
+        let hud = e.mem.u32(0x011d_96c0);
+        let subtitle_tile = e.mem.u32(hud + 0x98);
+        e.call(
+            0x00a0_1350,
+            &args![subtitle_tile, 0xfc4_u32, 0x0102_0770_u32, 1_u32],
+        );
+    }
+    let hud = e.mem.u32(0x011d_96c0);
+    let subtitle_tile = e.mem.u32(hud + 0x98);
+    hud_trait(e, subtitle_tile, 0xfa3, 0);
+    e.mem.set_u32(this.addr() + 0x1a8, 0);
+}
+
+// Translated from 007756e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HUDMainMenu::HideMessage` (Xbox PDB): removes the currently displayed
+/// message from the linked list, then shows the next one or fades the three
+/// message tiles when the list becomes empty.
+pub fn hud_main_menu_hide_message(e: &mut Engine, this: Ptr<HUDMainMenu>) {
+    let list = this.addr() + 0x18c;
+    if e.call(0x0082_56d0, &args![list]).bool() {
+        return;
+    }
+    let mut node = list;
+    while node != 0 {
+        let node_value = e.call(0x0068_15c0, &args![node]).u32();
+        let record = e.mem.u32(node_value);
+        if record != 0 {
+            let menu = e.mem.u32(0x011d_96c0);
+            let tile = e.mem.u32(menu + 0x90);
+            let displayed = e.call(0x00a0_11f0, &args![tile, 0xfc4_u32]).u32();
+            if e.call(0x0040_8b20, &args![record, displayed]).i32() == 0 {
+                e.with_stack(4, |e, record_pointer| {
+                    e.mem.set_u32(record_pointer.addr(), record);
+                    e.call(0x0090_5330, &args![list, record_pointer]);
+                });
+                e.call(0x0040_1030, &args![record]);
+                if !e.call(0x0082_56d0, &args![list]).bool() {
+                    let first_node = e.call(0x0068_15c0, &args![list]).u32();
+                    let first_record = e.mem.u32(first_node);
+                    if e.mem.u8(first_record + 0x208) != 0 {
+                        let first_node = e.call(0x0068_15c0, &args![list]).u32();
+                        let first_record = e.mem.u32(first_node);
+                        e.with_stack(12, |e, sound| {
+                            let player = e.mem.u32(0x011d_ea3c);
+                            e.call(
+                                0x0093_3270,
+                                &args![
+                                    player,
+                                    sound,
+                                    first_record + 0x208,
+                                    0_u32,
+                                    0x121_u32,
+                                    0_u32
+                                ],
+                            );
+                            e.call(0x0048_3710, &args![sound]);
+                        });
+                    }
+                    let first_node = e.call(0x0068_15c0, &args![list]).u32();
+                    let first_record = e.mem.u32(first_node);
+                    let menu = e.mem.u32(0x011d_96c0);
+                    let tile = e.mem.u32(menu + 0x90);
+                    e.call(0x00a0_1350, &args![tile, 0xfc4_u32, first_record, 1_u32]);
+                    let first_node = e.call(0x0068_15c0, &args![list]).u32();
+                    let first_record = e.mem.u32(first_node);
+                    let menu = e.mem.u32(0x011d_96c0);
+                    let tile = e.mem.u32(menu + 0x8c);
+                    e.call(
+                        0x00a0_1350,
+                        &args![tile, 0xfcc_u32, first_record + 0x104, 1_u32],
+                    );
+                    let now = e.call(0x0082_5c00, &args![this.addr() + 0x224]).u32();
+                    e.mem.set_u32(this.addr() + 0x194, now);
+                } else {
+                    for offset in [0x90_u32, 0x8c, 0x94] {
+                        let start = quiet_f32(e.mem.f32(0x011d_979c));
+                        let duration: f32 = quiet_f32(e.global(0x0102_1f44));
+                        let menu = e.mem.u32(0x011d_96c0);
+                        let tile = e.mem.u32(menu + offset);
+                        e.call(
+                            0x00a0_7c60,
+                            &args![tile, 0xfa9_u32, start, 0.0_f32, duration, 0_u32],
+                        );
+                    }
+                    e.mem.set_u32(this.addr() + 0x194, 0);
+                }
+                return;
+            }
+        }
+        node = e.call(0x0072_6070, &args![node]).u32();
+    }
+}
+
+// Translated from 00775920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Frees every queued HUD message, clears the message tiles and hides the
+/// subtitle in the order used by the PC menu.
+pub fn fn_00775920(e: &mut Engine, this: Ptr<HUDMainMenu>) {
+    let list = this.addr() + 0x18c;
+    let mut node = list;
+    while node != 0 {
+        if e.call(0x0082_56d0, &args![node]).bool() {
+            break;
+        }
+        let node_value = e.call(0x0068_15c0, &args![node]).u32();
+        let record = e.mem.u32(node_value);
+        e.call(0x0040_1030, &args![record]);
+        node = e.call(0x0072_6070, &args![node]).u32();
+    }
+    e.call(0x0047_0470, &args![list]);
+    let hud = e.mem.u32(0x011d_96c0);
+    let tile = e.mem.u32(hud + 0x94);
+    hud_set_float(e, tile, 0xfa9, 0.0);
+    let hud = e.mem.u32(0x011d_96c0);
+    let tile = e.mem.u32(hud + 0x90);
+    hud_set_text(e, tile, 0x0102_0770);
+    let hud = e.mem.u32(0x011d_96c0);
+    let tile = e.mem.u32(hud + 0x90);
+    hud_set_float(e, tile, 0xfa9, 0.0);
+    let hud = e.mem.u32(0x011d_96c0);
+    let tile = e.mem.u32(hud + 0x8c);
+    hud_set_float(e, tile, 0xfa9, 0.0);
+    hud_main_menu_hide_subtitle(e, this);
 }
 
 // Translated from 00773e90 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3155,6 +3682,34 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0077_48b0,
             hud_main_menu_update_meter(Ptr, f32, i32, i32, i32)
         ),
+        entry!(
+            0x0077_4b00,
+            hud_main_menu_update_meter_ov2(Ptr, Ptr, f32, f32, i32, i32)
+        ),
+        entry!(
+            0x0077_4fd0,
+            hud_main_menu_show_subtitle(
+                Ptr<HUDMainMenu>,
+                Ptr,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                Ptr,
+                u8,
+            ) -> bool
+        ),
+        entry!(0x0077_5210, fn_00775210(Ptr) -> Ptr),
+        entry!(0x0077_5230, fn_00775230(Ptr<HUDMainMenu>) -> Ptr),
+        entry!(
+            0x0077_5380,
+            fn_00775380(Ptr<HUDMainMenu>, Ptr, u32, Ptr, Ptr, f32, u8) -> bool
+        ),
+        entry!(0x0077_5670, hud_main_menu_hide_subtitle(Ptr<HUDMainMenu>)),
+        entry!(0x0077_56e0, hud_main_menu_hide_message(Ptr<HUDMainMenu>)),
+        entry!(0x0077_5920, fn_00775920(Ptr<HUDMainMenu>)),
     ]
 }
 
@@ -3457,6 +4012,50 @@ mod tests {
         e.call_log = Some(vec![]);
         hud_main_menu_set_radiation_level(&mut e, 1.0, 2.0);
         assert!(e.call_log.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn radiation_sound_passes_pending_words_to_sound_factory() {
+        let mut e = Engine::new();
+        e.map(0x011d_9000, 0x1000);
+        e.map(0x0101_2000, 0x1000);
+        e.mem.set_f64(0x0101_2060, 0.0);
+        let menu = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        e.mem.set_u32(tile(menu, 0x13), 0x5130);
+        e.register_double(0x00ad_8ce0, |_, _| Ret::default());
+        e.register_double(0x0045_3a70, |_, words| {
+            assert!(words.is_empty());
+            Ret {
+                eax: 0x6200,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00ad_7550, |_, words| {
+            assert_eq!(words.len(), 4);
+            assert_eq!(words[0], 0x6200);
+            assert_ne!(words[1], 0);
+            assert_eq!(words[2..], [0x0107_3498, 0x11]);
+            Ret {
+                eax: 0x6300,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0041_8900, |_, words| {
+            assert_eq!(words[1], 0x6300);
+            Ret::default()
+        });
+        e.register_double(0x0048_3710, |_, _| Ret::default());
+        e.register_double(0x00ad_8830, |_, words| {
+            assert_eq!(words[1], 0);
+            Ret::default()
+        });
+        e.register_double(0x00a0_11b0, |_, _| Ret {
+            st0: 1_000_000.0,
+            ..Ret::default()
+        });
+        e.register_double(0x0082_5c00, |_, _| Ret::default());
+        hud_main_menu_set_radiation_level(&mut e, 0.0, 1.0);
     }
 
     #[test]
@@ -3940,6 +4539,610 @@ mod tests {
             .map(|(_, words)| words.clone())
             .collect();
         assert_eq!(changes[0], args![target, 0xfb1_u32, 0_u32]);
+    }
+
+    fn meter_pair_engine() -> (Engine, Ptr, Ptr, u32) {
+        let (mut e, first) = meter_engine();
+        let second: Ptr = Ptr::new(e.mem.alloc(0x20));
+        let child = e.mem.alloc(0x20);
+        let child_storage = e.mem.alloc(4);
+        e.mem.set_u32(child_storage, child);
+        e.map(0x0102_3000, 0x1000);
+        e.mem.set_f32(0x0102_3cd8, 255.0);
+        e.mem.set_u32(0x011d_9c2c, 15);
+        e.mem.set_u32(0x011d_9c28, 0x101);
+        e.mem.set_u32(0x011d_9c24, 0x102);
+        e.mem.set_u32(0x011d_9c20, 0x103);
+        e.register_double(0x00a0_11b0, |_, words| Ret {
+            st0: match words[1] {
+                0x101 => 20.0,
+                0x102 => 4.0,
+                0x103 => 100.0,
+                _ => panic!("unexpected trait"),
+            },
+            ..Ret::default()
+        });
+        e.register_double(0x004a_8f20, |_, words| Ret {
+            eax: (words[0] as i32).min(words[1] as i32) as u32,
+            ..Ret::default()
+        });
+        e.register_double(0x0073_ac90, move |_, words| {
+            assert_eq!(words, &[second.addr() + 4]);
+            Ret {
+                eax: child_storage,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00a0_7ed0, |_, _| Ret::default());
+        e.register_double(0x00a0_7c60, |_, _| Ret::default());
+        (e, first, second, child)
+    }
+
+    #[test]
+    fn meter_pair_positions_both_tiles_and_center_child() {
+        for (anchor, expected) in [
+            (0, vec![(0xfb1, 8), (0xfa1, 100), (0xfb1, 12), (0xfa1, 108)]),
+            (1, vec![(0xfb1, 8), (0xfa1, 92), (0xfb1, 4), (0xfa1, 88)]),
+            (2, vec![(0xfb1, 8), (0xfa1, 96), (0xfb1, 4), (0xfa1, 92)]),
+        ] {
+            let (mut e, first, second, child) = meter_pair_engine();
+            hud_main_menu_update_meter_ov2(&mut e, first, second, 0.4, 0.6, anchor, 0);
+            let writes: Vec<_> = e
+                .call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter(|(address, _)| *address == 0x0070_0320)
+                .map(|(_, words)| (words[0], words[1], words[2]))
+                .collect();
+            let mut expected_writes = Vec::new();
+            if anchor == 2 {
+                expected_writes.extend([(child, 0xfb1, 4), (child, 0xfa1, 104)]);
+            }
+            expected_writes.extend(expected.into_iter().enumerate().map(
+                |(index, (trait_id, value))| {
+                    (
+                        if index < 2 {
+                            first.addr()
+                        } else {
+                            second.addr()
+                        },
+                        trait_id,
+                        value,
+                    )
+                },
+            ));
+            assert_eq!(writes, expected_writes, "anchor {anchor}");
+            let fades: Vec<_> = e
+                .call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter(|(address, _)| *address == 0x00a0_7c60)
+                .map(|(_, words)| words.clone())
+                .collect();
+            let targets = if anchor == 2 {
+                vec![child, second.addr()]
+            } else {
+                vec![second.addr()]
+            };
+            assert_eq!(
+                fades,
+                targets
+                    .into_iter()
+                    .map(|target| args![target, 0xfa9_u32, 0.0_f32, 255.0_f32, 1.0_f32, 1_u32])
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn meter_pair_initializes_traits_before_null_guard_and_keeps_minimum() {
+        let (mut e, first, second, _) = meter_pair_engine();
+        e.mem.set_u32(0x011d_9c2c, 0);
+        e.register_double(0x00a0_0940, |_, words| Ret {
+            eax: words[0],
+            ..Ret::default()
+        });
+        hud_main_menu_update_meter_ov2(&mut e, Ptr::new(0), second, 0.0, 0.1, 0, 2);
+        let initializers: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x00a0_0940)
+            .map(|(_, words)| words.clone())
+            .collect();
+        assert_eq!(
+            initializers,
+            vec![
+                args![0x0107_3424_u32, u32::MAX],
+                args![0x0107_3418_u32, u32::MAX],
+                args![0x0107_3430_u32, u32::MAX],
+                args![0x0107_34b8_u32, u32::MAX],
+            ]
+        );
+        assert_eq!(e.mem.u32(0x011d_9c2c), 15);
+
+        e.mem.set_u32(0x011d_9c28, 0x101);
+        e.mem.set_u32(0x011d_9c24, 0x102);
+        e.mem.set_u32(0x011d_9c20, 0x103);
+        e.call_log = Some(vec![]);
+        hud_main_menu_update_meter_ov2(&mut e, first, second, 0.0, 0.1, 0, 2);
+        let writes: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x0070_0320)
+            .map(|(_, words)| words.clone())
+            .collect();
+        assert_eq!(writes[2], args![second, 0xfb1_u32, 8_u32]);
+    }
+
+    #[test]
+    fn subtitle_constructor_initializes_embedded_point() {
+        let mut e = Engine::new();
+        let subtitle: Ptr = Ptr::new(e.mem.alloc(0x11c));
+        e.register_double(0x0068_15c0, |e, words| {
+            e.mem.set_u32(words[0], 0x1234);
+            Ret::default()
+        });
+        assert_eq!(fn_00775210(&mut e, subtitle), subtitle);
+        assert_eq!(e.mem.u32(subtitle.addr() + 0x10c), 0x1234);
+    }
+
+    #[test]
+    fn subtitle_gate_and_zero_sound_duration_fallback() {
+        let mut e = Engine::new();
+        e.map(0x0101_2000, 0x1000);
+        e.map(0x0101_7000, 0x1000);
+        e.map(0x011d_2000, 0x1000);
+        e.map(0x011d_8000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        e.mem.set_f64(0x0101_2060, 0.0);
+        e.mem.set_f64(0x0101_7b70, 1000.0);
+        e.mem.set_u32(0x011d_ea3c, 0x5000);
+        let setting = e.mem.alloc(4);
+        e.mem.set_u8(setting, 1);
+        let rate = e.mem.alloc(4);
+        e.mem.set_f32(rate, 0.5);
+        let subtitle = e.mem.alloc(0x11c);
+        let menu = e.new_object::<HUDMainMenu>();
+        let text: Ptr = Ptr::new(e.mem.alloc(8));
+        e.register_double(0x0048_3710, |e, words| {
+            assert_eq!(e.mem.u32(words[0]), 0xfeed);
+            Ret::default()
+        });
+        e.register_double(0x0040_8d60, move |_, words| {
+            assert_eq!(words, &[0x011d_8928]);
+            Ret {
+                eax: setting,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0040_1000, move |_, words| {
+            assert_eq!(words, &[0x11c]);
+            Ret {
+                eax: subtitle,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0068_15c0, |_, _| Ret::default());
+        e.register_double(0x0040_6d30, |_, _| Ret::default());
+        e.register_double(0x00ad_8b30, |_, _| Ret::default());
+        e.register_double(0x00ec_6130, |_, _| Ret {
+            eax: 5,
+            ..Ret::default()
+        });
+        e.register_double(0x0040_3e20, move |_, words| {
+            assert_eq!(words, &[0x011d_2178]);
+            Ret {
+                eax: rate,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0082_5c00, |_, _| Ret {
+            eax: 42,
+            ..Ret::default()
+        });
+        e.register_double(0x007c_b2e0, move |e, words| {
+            assert_eq!(e.mem.u32(words[1]), subtitle);
+            Ret::default()
+        });
+        assert!(!hud_main_menu_show_subtitle(
+            &mut e,
+            menu,
+            Ptr::new(0),
+            0xfeed,
+            0,
+            0,
+            1,
+            2,
+            3,
+            Ptr::new(0),
+            0,
+        ));
+        assert!(hud_main_menu_show_subtitle(
+            &mut e,
+            menu,
+            text,
+            0xfeed,
+            0,
+            0,
+            1,
+            2,
+            3,
+            Ptr::new(0),
+            0,
+        ));
+        assert_eq!(e.mem.f32(subtitle + 0x108), 2.5);
+        assert_eq!(e.mem.u32(subtitle + 0x104), 42);
+        assert_eq!(e.mem.u32(subtitle + 0x10c), 1);
+        assert_eq!(e.mem.u32(subtitle + 0x110), 2);
+        assert_eq!(e.mem.u32(subtitle + 0x114), 3);
+        assert_eq!(e.mem.i32(subtitle + 0x118), 1);
+
+        e.mem.set_u8(setting, 0);
+        e.call_log = Some(vec![]);
+        assert!(!hud_main_menu_show_subtitle(
+            &mut e,
+            menu,
+            text,
+            0xfeed,
+            0,
+            0,
+            1,
+            2,
+            3,
+            Ptr::new(0),
+            0,
+        ));
+        assert!(!e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|(address, _)| *address == 0x0040_1000));
+    }
+
+    #[test]
+    fn subtitle_selection_respects_priority_and_forced_sentinel() {
+        let mut e = Engine::new();
+        e.map(0x0101_3000, 0x1000);
+        e.map(0x0101_6000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        e.mem.set_u32(0x0101_3d84, 0x7f80_0001);
+        e.mem.set_f32(0x0101_6970, f32::MAX);
+        let menu = e.new_object::<HUDMainMenu>();
+        let player = e.mem.alloc(4);
+        let position = e.mem.alloc(12);
+        e.mem.set_u32(0x011d_ea3c, player);
+        let mut slots = [0_u32; 0x7e];
+        slots[0x1f4 / 4] = 0x0300_1000;
+        e.put_vtable(0x0300_0000, &slots);
+        e.mem.set_u32(player, 0x0300_0000);
+        e.register_double(0x0300_1000, move |_, _| Ret {
+            eax: position,
+            ..Ret::default()
+        });
+        let records: Vec<u32> = (0..3).map(|_| e.mem.alloc(0x11c)).collect();
+        for (record, distance, priority) in [
+            (records[0], 10.0, 1),
+            (records[1], 5.0, 0),
+            (records[2], 7.0, i32::MAX),
+        ] {
+            e.mem.set_f32(record + 0x10c, distance);
+            e.mem.set_i32(record + 0x118, priority);
+        }
+        let elements = e.mem.alloc(12);
+        for (index, record) in records.iter().enumerate() {
+            e.mem.set_u32(elements + index as u32 * 4, *record);
+        }
+        e.register_double(0x0044_ddc0, |_, _| Ret {
+            eax: 3,
+            ..Ret::default()
+        });
+        e.register_double(0x0087_7a30, move |_, words| Ret {
+            eax: elements + words[1] * 4,
+            ..Ret::default()
+        });
+        e.register_double(0x0043_9ef0, |e, words| {
+            e.mem.set_f32(words[1], e.mem.f32(words[0]));
+            Ret {
+                eax: words[1],
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x004a_7290, |e, words| Ret {
+            st0: f64::from(e.mem.f32(words[0])),
+            ..Ret::default()
+        });
+        e.register_double(0x0068_5d20, |_, words| {
+            assert_eq!(words, &args![f32::from_bits(0x7fc0_0001), 2_u32]);
+            Ret {
+                st0: 20.0,
+                ..Ret::default()
+            }
+        });
+        assert_eq!(fn_00775230(&mut e, menu).addr(), records[2]);
+    }
+
+    #[test]
+    fn hud_message_uses_pc_icon_table_and_shows_first_record() {
+        let mut e = Engine::new();
+        e.map(0x011d_9000, 0x1000);
+        let menu = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        e.mem.set_u32(menu.addr() + 0x90, 0x9000);
+        e.mem.set_u32(menu.addr() + 0x8c, 0x9004);
+        let text: Ptr = Ptr::new(e.mem.alloc(12));
+        let record = e.mem.alloc(0x310);
+        e.register_double(0x0040_1000, move |_, words| {
+            assert_eq!(words, &[0x310]);
+            Ret {
+                eax: record,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0040_6d30, |_, _| Ret::default());
+        e.register_double(0x0082_56d0, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register_double(0x0090_5820, |e, words| {
+            e.mem.set_u32(words[0], e.mem.u32(words[1]));
+            Ret::default()
+        });
+        e.register_double(0x0068_15c0, |_, words| Ret {
+            eax: words[0],
+            ..Ret::default()
+        });
+        e.register_double(0x00a0_1350, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert!(!fn_00775380(
+            &mut e,
+            menu,
+            Ptr::new(0),
+            0,
+            Ptr::new(0),
+            Ptr::new(0),
+            1.0,
+            0,
+        ));
+        assert!(fn_00775380(
+            &mut e,
+            menu,
+            text,
+            0,
+            Ptr::new(0),
+            Ptr::new(0),
+            1.5,
+            0,
+        ));
+        assert_eq!(e.mem.f32(record + 0x30c), 1.5);
+        let calls = e.call_log.as_ref().unwrap();
+        assert!(calls.iter().any(|(address, words)| {
+            *address == 0x0040_6d30 && words == &args![record + 0x104, 0x104_u32, 0x0102_08e0_u32]
+        }));
+        assert!(calls.iter().any(|(address, words)| {
+            *address == 0x00a0_1350 && words == &args![0x9000_u32, 0xfc4_u32, record, 1_u32]
+        }));
+
+        let sound_name: Ptr = Ptr::new(e.mem.alloc(8));
+        e.register_double(0x0045_3a70, |_, words| {
+            assert!(words.is_empty());
+            Ret {
+                eax: 0x6200,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00ad_7550, move |_, words| {
+            assert_eq!(words.len(), 4);
+            assert_eq!(words[0], 0x6200);
+            assert_eq!(words[2], sound_name.addr());
+            assert_eq!(words[3], 0x121);
+            Ret {
+                eax: 0x6300,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00ad_8830, |_, words| {
+            assert_eq!(words, &[0x6300, 0]);
+            Ret::default()
+        });
+        e.register_double(0x0048_3710, |_, _| Ret::default());
+        assert!(fn_00775380(
+            &mut e,
+            menu,
+            text,
+            0,
+            Ptr::new(0),
+            sound_name,
+            f32::from_bits(0x7f80_0001),
+            0,
+        ));
+        assert_eq!(e.mem.u32(record + 0x30c), 0x7fc0_0001);
+    }
+
+    #[test]
+    fn urgent_hud_message_ends_current_timer_before_insertion() {
+        let mut e = Engine::new();
+        let menu = e.new_object::<HUDMainMenu>();
+        let current = e.mem.alloc(0x310);
+        let incoming = e.mem.alloc(0x310);
+        let text: Ptr = Ptr::new(e.mem.alloc(8));
+        e.mem.set_u32(menu.addr() + 0x18c, current);
+        e.mem.set_u32(menu.addr() + 0x190, 0);
+        e.mem.set_f32(current + 0x30c, 9.0);
+        e.register_double(0x0040_1000, move |_, _| Ret {
+            eax: incoming,
+            ..Ret::default()
+        });
+        e.register_double(0x0040_6d30, |_, _| Ret::default());
+        e.register_double(0x0082_56d0, |_, _| Ret::default());
+        e.register_double(0x0072_6070, |e, words| Ret {
+            eax: e.mem.u32(words[0] + 4),
+            ..Ret::default()
+        });
+        e.register_double(0x0068_15c0, |_, words| Ret {
+            eax: words[0],
+            ..Ret::default()
+        });
+        e.register_double(0x0040_8b20, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register_double(0x005a_e3d0, move |e, words| {
+            assert_eq!(e.mem.f32(current + 0x30c), 0.0);
+            assert_eq!(e.mem.u32(words[1]), incoming);
+            Ret::default()
+        });
+        fn_00775380(&mut e, menu, text, 3, Ptr::new(0), Ptr::new(0), 4.0, 1);
+        assert_eq!(e.mem.f32(current + 0x30c), 0.0);
+        assert_eq!(e.mem.f32(incoming + 0x30c), 4.0);
+    }
+
+    #[test]
+    fn hide_subtitle_clears_text_only_outside_dialogue() {
+        for dialogue_visible in [false, true] {
+            let mut e = Engine::new();
+            e.map(0x011d_9000, 0x1000);
+            let menu = e.new_object::<HUDMainMenu>();
+            e.mem.set_u32(0x011d_96c0, menu.addr());
+            e.mem.set_u32(menu.addr() + 0x98, 0x2345);
+            e.mem.set_u32(menu.addr() + 0x1a8, 0x6789);
+            e.register_double(0x0070_2680, move |_, _| Ret {
+                eax: u32::from(dialogue_visible),
+                ..Ret::default()
+            });
+            e.register_double(0x00a0_1350, |_, _| Ret::default());
+            e.register_double(0x0070_0320, |_, _| Ret::default());
+            e.call_log = Some(vec![]);
+            hud_main_menu_hide_subtitle(&mut e, menu);
+            assert_eq!(e.mem.u32(menu.addr() + 0x1a8), 0);
+            let calls = e.call_log.as_ref().unwrap();
+            assert_eq!(
+                calls.iter().any(|(address, _)| *address == 0x00a0_1350),
+                !dialogue_visible
+            );
+            assert!(calls.iter().any(|(address, words)| {
+                *address == 0x0070_0320 && words == &args![0x2345_u32, 0xfa3_u32, 0_u32]
+            }));
+        }
+    }
+
+    #[test]
+    fn hide_message_fades_tiles_after_last_record() {
+        let mut e = Engine::new();
+        e.map(0x0102_1000, 0x1000);
+        e.map(0x011d_9000, 0x1000);
+        e.mem.set_f32(0x0102_1f44, 0.35);
+        e.mem.set_f32(0x011d_979c, 200.0);
+        let menu = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        let record = e.mem.alloc(0x310);
+        e.mem.set_u32(menu.addr() + 0x18c, record);
+        e.mem.set_u32(menu.addr() + 0x194, 99);
+        for (offset, tile) in [(0x90, 0x10), (0x8c, 0x11), (0x94, 0x12)] {
+            e.mem.set_u32(menu.addr() + offset, tile);
+        }
+        e.register_double(0x0082_56d0, |e, words| Ret {
+            eax: u32::from(e.mem.u32(words[0]) == 0),
+            ..Ret::default()
+        });
+        e.register_double(0x0068_15c0, |_, words| Ret {
+            eax: words[0],
+            ..Ret::default()
+        });
+        e.register_double(0x00a0_11f0, |_, _| Ret {
+            eax: 0x7777,
+            ..Ret::default()
+        });
+        e.register_double(0x0040_8b20, |_, _| Ret::default());
+        e.register_double(0x0090_5330, |e, words| {
+            assert_eq!(e.mem.u32(words[1]), e.mem.u32(words[0]));
+            e.mem.set_u32(words[0], 0);
+            Ret::default()
+        });
+        e.register_double(0x0040_1030, |_, _| Ret::default());
+        e.register_double(0x00a0_7c60, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        hud_main_menu_hide_message(&mut e, menu);
+        assert_eq!(e.mem.u32(menu.addr() + 0x194), 0);
+        let fades: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x00a0_7c60)
+            .map(|(_, words)| words.clone())
+            .collect();
+        assert_eq!(fades.len(), 3);
+        assert_eq!(
+            fades[0],
+            args![0x10_u32, 0xfa9_u32, 200.0_f32, 0.0_f32, 0.35_f32, 0_u32]
+        );
+    }
+
+    #[test]
+    fn clear_messages_frees_records_then_clears_tiles_and_subtitle() {
+        let mut e = Engine::new();
+        e.map(0x011d_9000, 0x1000);
+        let menu = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        let record = e.mem.alloc(0x310);
+        e.mem.set_u32(menu.addr() + 0x18c, record);
+        e.mem.set_u32(menu.addr() + 0x190, 0);
+        e.mem.set_u32(menu.addr() + 0x1a8, 0x8000);
+        for (offset, tile) in [(0x94, 0x11), (0x90, 0x12), (0x8c, 0x13), (0x98, 0x14)] {
+            e.mem.set_u32(menu.addr() + offset, tile);
+        }
+        e.register_double(0x0082_56d0, |e, words| Ret {
+            eax: u32::from(e.mem.u32(words[0]) == 0),
+            ..Ret::default()
+        });
+        e.register_double(0x0068_15c0, |_, words| Ret {
+            eax: words[0],
+            ..Ret::default()
+        });
+        e.register_double(0x0072_6070, |e, words| Ret {
+            eax: e.mem.u32(words[0] + 4),
+            ..Ret::default()
+        });
+        e.register_double(0x0040_1030, |_, _| Ret::default());
+        e.register_double(0x0047_0470, |e, words| {
+            e.mem.set_u32(words[0], 0);
+            Ret::default()
+        });
+        e.register_double(0x00a0_12d0, |_, _| Ret::default());
+        e.register_double(0x00a0_1350, |_, _| Ret::default());
+        e.register_double(0x0070_2680, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register_double(0x0070_0320, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        fn_00775920(&mut e, menu);
+        assert_eq!(e.mem.u32(menu.addr() + 0x1a8), 0);
+        assert_eq!(e.mem.u32(menu.addr() + 0x18c), 0);
+        let calls = e.call_log.as_ref().unwrap();
+        let free_at = calls
+            .iter()
+            .position(|(address, words)| *address == 0x0040_1030 && words == &args![record])
+            .unwrap();
+        let clear_at = calls
+            .iter()
+            .position(|(address, _)| *address == 0x0047_0470)
+            .unwrap();
+        assert!(free_at < clear_at);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x00a0_12d0)
+                .count(),
+            3
+        );
     }
 
     #[test]
