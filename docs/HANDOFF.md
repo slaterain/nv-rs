@@ -7,6 +7,33 @@ machinery runs.
 
 ## Resume here
 
+Latest, 05:26 local: #132 merged `4ba17e6` and rolling #133 merged
+`c975484`, each after core and viewer CI passed. `ship.sh 133` completed
+and created attached #134 at `a762d6f`, covering actor dialogue and HUD
+target information. Its fresh CI must pass before shipping. Movement source
+`d3269c3` was collected through cycle01; the rebased collection is
+`c95399b`, with 14,126 combined engine tests, doctest, strict lint and
+formatting passing. HUD collection is now `c9a17b4` after that rebase.
+Fresh `/root/a01_round16` immediately continued at `00935f60`; sixteen
+earlier SEH-only partials remain explicit and six normal bodies remain.
+
+Root owns the heavy compiler, session `33662`, running the private
+`codex-audit/check-inventory-locals.ps1`. Focused tests pass; workspace,
+lint, formatting and release/debug builds are still in progress. The root
+checkout is on `codex/phase2-inventory-script-locals`, based on #132's
+merge, with only `tesscript.rs`, `tesscriptrunmanager.rs` and
+`ENGINE_STATE.md` changed. Scoped stash `c11039c` is applied and retained;
+never apply it again. a04's frozen 34-body batch gets the compiler next,
+then a03's remaining HUD body. Both are drafted and uncompiled. The HUD
+review fixes cover callback reloads, float storage, signed target types,
+constructor return pointers and unordered comparisons.
+
+Six further native cases for the next parser `005e13a0` pass, checking
+signed opcode/length words, reference-prefix behavior and RET24; this
+parser is still untranslated. Private `inventory-script-next.md` records
+the evidence. Usage 94%; stop and hand off at 98% as requested. Build 40
+remains current, without a confirmed next-build date or feature list.
+
 Latest, 05:19 local: HUD source `6c4df88` was collected as `0eb6b3c`
 through cycle03, passing 14,100 combined engine tests, doctest, strict lint
 and formatting. Fresh `/root/a03_round17` immediately continued and has

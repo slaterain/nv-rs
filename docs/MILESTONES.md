@@ -33,6 +33,15 @@ reading do not establish them.
 
 ## Active work: M1
 
+#132 and #133 merged after both CI checks; rolling #134 now publishes
+the next actor dialogue/HUD collection with fresh CI. Collection passes
+14,126 combined engine tests, strict lint and formatting. A fresh movement
+worker immediately continues; root's five script dependencies pass focused
+tests and now run full checks. Six native cases establish the next parser's
+signed fields and reference-prefix behavior, but it is still untranslated.
+Build 40 remains current. Next action: publish the validated script helpers,
+then collect the queued effect/HUD batches and continue script loading.
+
 HUD collection `0eb6b3c` passes 14,100 combined engine tests, doctest,
 strict lint and formatting; its fresh worker has drafted the remaining
 item prompts, details and layout, now under review. Movement validates its
