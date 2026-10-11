@@ -33,6 +33,15 @@ reading do not establish them.
 
 ## Active work: M1
 
+HUD collection `74cd13b` passes 13,970 combined engine tests, doctest,
+strict lint and formatting. A fresh worker immediately continues its next
+normal routines. Inventory writer #128 merged `14c77da` after both CI
+checks; the reader is rebased and validating, with full ItemChange payload
+round-trip probes next. Movement and explosion drafts await their compiler
+turns. Rolling #129 awaits viewer CI. Build 40 remains current; inventory
+stack preservation has no playable consumer or next-build date yet.
+Next action: finish reader checks and exercise the two-stack round trip.
+
 Rolling #127 passed both CI checks and merged `72003ab`; #129 publishes
 explosion effect processing at `12f6153` with fresh CI. Movement continuation
 collected as `c757035`: 13,925 combined engine tests, doctest, strict lint

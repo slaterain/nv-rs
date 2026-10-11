@@ -7,6 +7,22 @@ machinery runs.
 
 ## Resume here
 
+Latest, 03:46 local: inventory writer #128 passed both checks and merged
+`14c77da` at 03:39:58. Root reader checkout is rebased onto that merge;
+scoped stash `9ca22a2` is applied and retained (do not apply again).
+Cycle03 completed HUD collection `74cd13b`: 13,970 combined engine tests,
+one doctest, strict lint and formatting pass. Fresh `/root/a03_round15`
+immediately continues at `00774b00`; preserve Create/DoIdle SEH partials.
+Root now owns the compiler for `check-inventory-load.ps1`, session `3847`,
+then the buffered-reader and full ItemChange payload probes. Both probes
+remain unrun. a04 follows, then a01; both have reviewed drafts ready.
+a01 has forty new normal entries through `00933890`, with sound argument
+arity and signaling-NaN store corrections. a04 has both remaining normal
+explosion bodies; reviewed partial-only advancement remains authorized
+after successful checks. Rolling #129 core passes and viewer is pending
+at `12f6153`; ship when both pass. Build 40 remains current, without a
+confirmed next play-build date or shipped inventory consumer.
+
 Latest, 03:30 local: #127 passed both CI checks and merged `72003ab` at
 03:23:48. `ship.sh 127` completed; #129 is attached at `12f6153`, titled
 "Engine: translate explosion effect processing", with fresh CI. That
