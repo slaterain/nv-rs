@@ -33,6 +33,13 @@ reading do not establish them.
 
 ## Active work: M1
 
+Init3D collected as `407caf3`: 13,824 combined engine tests, strict lint
+and formatting pass; SEH cleanup remains explicit. Fresh a04 immediately
+starts the next explosion routine while a01 validates MobileObject.
+Root's inventory form-ID/map follow-on is prepared with seven native
+vectors and static review, but has not compiled. Next action: collect
+MobileObject and the animation loader, then validate the inventory probe.
+
 Save-buffer #125 is open at `7c58130`: all 15,641 core tests, strict lint,
 formatting and release/debug builds pass. The real-registry count/health
 writer produces a payload that the FOS decoder reads back correctly; a
