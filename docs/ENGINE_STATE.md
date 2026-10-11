@@ -96,6 +96,17 @@ before the saved script extra is loaded. The item rewrite assertion has
 not run. Next action: translate that PC dependency and rerun the original
 item load/write probe. Whole-save and world/viewer integration remain open.
 
+The following source-only batch drafts `008d0360` (AL=true) and
+`0047c850` (AL=false), both thirteen-byte folded PC bodies with no receiver
+read or stack arguments. The reference vtable uses these for the load
+buffer's reference/actor queries. Twelve guarded native cases confirm the
+low-byte results, zero stack cleanup and no writes, including null and
+unmapped receivers. Three Rust regressions are drafted, including the real
+load-buffer virtual-call chain; Rust checks and the updated item probe
+have not run. Independent review confirmed both PC bodies, the real
+reference vtable slots and the generated load-buffer test wiring. Neither
+mapped source unit supplies a reliable Xbox name for all shared callers.
+
 ## List boundary
 
 The handle delegates construction, count, bitmap lookup, cached lookup,
