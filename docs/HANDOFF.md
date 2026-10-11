@@ -7,49 +7,53 @@ machinery runs.
 
 ## Resume here
 
-### Current state, 2026-10-11 14:20 EDT
+### Current state, 2026-10-11 14:53 EDT
 
 This section supersedes the earlier active-state notes below.
 
-- #142 merged `6eec14b` after both checks. The remote merge occurred during
-  collection; private `finish-ship142.sh` completed afterward. Never rerun
-  ship142 or that continuation. Attached #143 is OPEN at `254d207`, with
-  core and viewer CI running. Ship it when both current-head checks pass.
-- Audio source `c4dcd1a` collected successfully through cycle01 session
-  69247, now `d1ebd14` after rebase: 14,403 combined engine tests, doctest,
-  strict lint and formatting pass. Its nineteen SEH-only partials remain.
-  Fresh `/root/a01_round19` immediately started b0213, owning only
-  `fallout_misc/taskqueueinterface.rs`; compiler held.
-- `/root/a03_round19` owns only `fallout_interface/hudmainmenu.rs`, six
-  remaining normal bodies through `0077f9d0`. Its serial focused/full/lint/
-  formatting/hygiene/release checks are running. Fifteen reviewed compiler
-  scaffolding partials remain. After a clean validated commit, cycle03 once
-  with reviewed partial-only advancement and immediately start a fresh agent.
+- #143 merged as `a24bc31` after both current-head checks passed at
+  `254d207`. ship143 session 78829 completed successfully; never rerun it.
+  Later documentation stays local until the next validated code collection.
+  No rolling PR is currently open. Audio collection passed 14,403 combined
+  engine tests, the doctest, strict lint and formatting.
+- `/root/a03_round19` owns only `fallout_interface/hudmainmenu.rs`.
+  Its six final normal bodies pass 121 focused and 14,386 engine tests,
+  the doctest and strict lint. Formatting and remaining checks are finishing.
+  Fifteen independently reviewed compiler-only partials remain. Once clean
+  and committed, cycle03 once with reviewed partial-only advancement and
+  immediately start a fresh agent on the new task.
 - `/root/a04_water_complete` owns only `fallout_shared/bgsautowater.rs`.
-  All thirty-seven normal bodies are drafted and independently reviewed;
-  five SEH-only partials remain. Fifteen native comparator/plane cases pass.
-  Rust tests are still UNRUN; compiler held until a current pipeline ends.
-  The earlier water owner is interrupted and must not resume editing.
-- Root's separate `codex/phase2-reference-predicate` checkout is clean at
-  `90e3821`, based on merged #142. It owns `fallout_ai/baseprocess.rs`,
-  `fallout_shared/tesactorbasedata.rs`, `fallout_misc/bgsloadformbuffer.rs`
-  and `docs/ENGINE_STATE.md`: three helpers, four Rust regressions,
-  eighteen matching native cases. Final checks run in root session 91094
-  through private `check-reference-predicates.ps1`; do not duplicate them.
-  The preceding debug probe passed one original scripted inventory item:
-  exact original payload reserialization, both real BEGIN handlers once,
-  expected locals/action entry and no script errors. Generated receivers,
-  partial startup and unresolved references inside skipped bodies limit this
-  result; ordinary body execution and whole-save/world acceptance remain
-  open. Run the prepared release probe after the optimized build passes,
-  record actual results, then publish and attach the root PR.
-- Root and HUD are the two active check pipelines. No third compiler.
-  Memory was tight and C: had about 11.8 GB free at 14:19. No further
-  deletion attempts; earlier automatic review blocked deletion and the
-  user subsequently removed idle caches manually.
-- Build 40 remains current; no new play-build date or visible feature is
-  confirmed. Continue cycling and shipping until stopped, preserving the
-  user's 98% weekly-usage stop/handoff rule (48% at about 14:00).
+  All thirty-seven normal bodies have independent PC review; fifteen native
+  cases pass. Five SEH-only partials remain. Forty-four Rust tests are drafted
+  but unrun; compiler held. A static audit fixed a test cursor/tail alias.
+- `/root/a01_round19` owns only `fallout_misc/taskqueueinterface.rs`.
+  Its first forty normal bodies through `0087b600` have independent PC
+  review and six matching native constructor cases. Forty-one Rust tests
+  remain unrun; compiler held. Four entries are complete and thirty-six
+  retain explicit compiler-only partials. The next fresh batch must skip
+  these reviewed markers and start the remaining normal bodies at `0087b650`.
+- Root owns three saved-item helpers, four Rust regressions and
+  `docs/ENGINE_STATE.md` in the separate `codex/phase2-reference-predicate`
+  checkout. Source is frozen at `90e3821`, based on merged #142; only its
+  documentation is dirty. Eighteen native cases and the focused and full
+  workspace tests pass. Session 91094 now runs strict lint, then formatting,
+  release and debug builds. Do not duplicate or rebase during these checks.
+- The first original script-bearing item probe passed in debug before the
+  final rebase; its optimized rerun remains pending. Its historical mod
+  order is unavailable, so installed base-game script data is an explicit
+  limitation. A metadata scan found three saved nonzero-variable instances
+  whose missing mod scripts cannot be replaced by their incompatible base
+  record. Save 138 has all ten official plugins available in its saved order.
+  A second probe using that save and a real three-variable script is prepared
+  and independently reviewed, but unrun. Neither probe establishes ordinary
+  body execution, whole-save preservation or world integration.
+- Root and HUD occupy the two full compiler pipelines. Water checks follow
+  when a pipeline becomes free; no third full compiler. No further deletion
+  attempts after automatic review rejected cleanup and the user removed
+  idle caches manually.
+- Build 40 remains current. No next play-build date or new visible feature
+  is confirmed. Continue cycling and shipping until stopped, preserving the
+  user's 98% weekly usage stop/handoff rule (53% around 14:30 EDT).
 
 ### Active again, 2026-10-11 after the usage reset
 

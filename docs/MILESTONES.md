@@ -33,27 +33,26 @@ reading do not establish them.
 
 ## Active work: M1
 
-Continuous translation remains active on 2026-10-11. #134 through #142
-merged after both current-head CI checks. Attached rolling #143 publishes
-the final twenty-two normal BSAudio bodies at `254d207`; core and viewer
-CI are running. Audio collection (`d1ebd14` after rebase) passed 14,403
-combined engine tests and the doctest, strict lint and formatting. A fresh
-worker immediately started TaskQueueInterface. HUD's six remaining normal
-bodies now validate; all thirty-seven normal BGSAutoWater bodies are drafted
-and reviewed, with fifteen matching native cases, awaiting Rust checks.
+Continuous translation remains active on 2026-10-11. #134 through #143
+merged after both current-head CI checks; no rolling PR is currently open.
+The final HUD bodies pass 121 focused and 14,386 engine tests plus strict
+lint, with remaining validation finishing. Water's thirty-seven normal
+bodies and TaskQueueInterface's first forty are independently reviewed;
+their fifteen and six native cases pass, and Rust checks await a compiler.
 
-Root's saved-item dependency batch contains three helpers and four Rust
-regressions, with eighteen matching native cases. The debug probe now loads
-and rewrites one original script-bearing inventory payload byte-for-byte;
-both real BEGIN event handlers run once and the expected locals/action
-entry assertions pass. Generated receivers and partial startup limit this
-evidence: ordinary script bodies, whole-save round trips, world integration
-and original-game acceptance remain open. Final root workspace, lint,
-formatting and release checks are running, followed by the optimized probe.
-Two local check pipelines are active; other compilers are held for memory.
-Build 40 remains current, with no confirmed next-play-build date. Next
-action: finish and collect HUD, validate water, and publish the saved-item
-helpers after their checks. [HANDOFF.md](HANDOFF.md) tracks ownership.
+Root's saved-item batch has three helpers, four Rust regressions and
+eighteen matching native cases. Focused and full workspace tests pass;
+strict lint, formatting and release/debug builds continue. A debug probe
+loads and rewrites one original script-bearing inventory payload exactly,
+with both real BEGIN handlers exercised. Its historical mod order is
+unavailable. A second, unrun probe uses a save with all ten official plugins
+available and a real three-variable script. Generated receivers and partial
+startup limit both fixtures; whole-save preservation, ordinary script bodies,
+world integration and original-game acceptance remain open. Two local full
+compiler pipelines are active. Build 40 remains current, without a confirmed
+next-build date. Next action: collect HUD, validate water, and finish the
+optimized inventory probes before publishing the saved-item helpers.
+[HANDOFF.md](HANDOFF.md) tracks ownership and validation.
 
 Script-loading dependency #135 is published at `86d19a0`: 15,876 workspace
 tests including doctests, strict lint, formatting and release/debug builds
