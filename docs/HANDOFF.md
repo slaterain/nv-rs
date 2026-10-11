@@ -7,6 +7,31 @@ machinery runs.
 
 ## Resume here
 
+Latest, 05:35 local: root's five script-loading helpers are committed and
+pushed as `86d19a0` on `codex/phase2-inventory-script-locals`; attached
+PR #135 is open with fresh core/viewer CI. The checkout is clean. All local
+checks passed: 1,320 focused tests, 15,876 workspace tests including doctests
+(14,023 engine unit tests), strict lint, formatting, release and debug builds.
+Session `33662` is complete. Native evidence and the next parser's six cases
+are recorded in `ENGINE_STATE.md` and private `inventory-script-next.md`.
+
+`/root/a04_round15` now owns the compiler for its frozen 34-body batch.
+After a clean commit, cycle04 once with reviewed `ADVANCE_PARTIAL_ONLY=1`
+if only its ten verified SEH-only partials remain; immediately start a fresh
+worker, compiler-held. Then grant `/root/a03_round17` its remaining normal
+HUD body, followed by `/root/a01_round16`'s nine remaining normal movement
+bodies. Those two drafts are uncompiled and restricted to their own unit
+files. a01 now has seventeen total SEH-only partials; the earlier estimate
+of six remaining normal bodies was incorrect, superseded by the ledger.
+Its callback mode reloads and pending argument corrections are drafted
+with regressions. The source-only formatting/hygiene scans pass.
+
+Rolling #134 remains open at `a762d6f`, both CI checks still running.
+Ship with `ship.sh 134` when both current-head checks pass. #135 also needs
+both checks before merging. Usage is 97%; stop and hand off at 98%.
+No new play copy is warranted by these unconnected engine dependencies.
+Build 40 remains current, with whole-save/world integration still pending.
+
 Latest, 05:26 local: #132 merged `4ba17e6` and rolling #133 merged
 `c975484`, each after core and viewer CI passed. `ship.sh 133` completed
 and created attached #134 at `a762d6f`, covering actor dialogue and HUD

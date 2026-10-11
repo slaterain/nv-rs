@@ -33,6 +33,14 @@ reading do not establish them.
 
 ## Active work: M1
 
+Script-loading dependency #135 is published at `86d19a0`: 15,876 workspace
+tests including doctests, strict lint, formatting and release/debug builds
+pass. It adds five helpers and ten regressions, with ten matching native
+cases; interpreter/script-form integration remains open. The effect batch
+now validates, followed by the ready HUD and movement drafts. #134/#135
+await both CI checks. Next action: collect those validated slots and continue
+the real script-loading path. Build 40 remains current without a new ETA.
+
 #132 and #133 merged after both CI checks; rolling #134 now publishes
 the next actor dialogue/HUD collection with fresh CI. Collection passes
 14,126 combined engine tests, strict lint and formatting. A fresh movement
