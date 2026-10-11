@@ -96,16 +96,41 @@ before the saved script extra is loaded. The item rewrite assertion has
 not run. Next action: translate that PC dependency and rerun the original
 item load/write probe. Whole-save and world/viewer integration remain open.
 
-The following source-only batch drafts `008d0360` (AL=true) and
+The following batch implements `008d0360` (AL=true) and
 `0047c850` (AL=false), both thirteen-byte folded PC bodies with no receiver
 read or stack arguments. The reference vtable uses these for the load
 buffer's reference/actor queries. Twelve guarded native cases confirm the
 low-byte results, zero stack cleanup and no writes, including null and
 unmapped receivers. Three Rust regressions are drafted, including the real
-load-buffer virtual-call chain; Rust checks and the updated item probe
-have not run. Independent review confirmed both PC bodies, the real
+load-buffer virtual-call chain. The debug build passes; final Rust checks
+remain pending. Independent review confirmed both PC bodies, the real
 reference vtable slots and the generated load-buffer test wiring. Neither
 mapped source unit supplies a reliable Xbox name for all shared callers.
+
+The updated original-item probe passes those predicates and reaches
+`ScriptLocals::LoadGame`, then stops at the missing version getter
+`008a81c0`. Its rewrite assertion has still not run. That getter is now
+drafted in `bgsloadformbuffer.rs`: PC code reads the byte at receiver
++0x1c into AL, without stack arguments or writes. The reference buffer
+vtable confirms its slot, and the caller observes the byte-sized result.
+Six native cases pass, including high-bit values and unchanged surrounding
+bytes; independent PC/caller review agrees. One additional Rust regression
+is prepared. The three-function debug build passes; final Rust tests,
+lint, formatting and release validation remain pending. The superseded
+two-function test compile was canceled before expanding this batch.
+
+The updated normal-registry probe now passes for the original script-bearing
+item payload: loading reconstructs its script/locals/action entry and
+writing reproduces the exact original bytes. Both real BEGIN event handlers
+run once, with no parser/evaluator error callbacks. It uses the original
+change-form version, full save-ID mappings and the installed script's exact
+header/bytecode. Three records that fail complete decoding remain excluded
+from the eight-save entry scan; this success is for one selected original
+item, not all 168,641 scanned entries. Generated form/reference receivers,
+partial allocator startup and unresolved references used only in skipped
+bodies remain explicit. No game-function doubles or game-file writes are
+used. Ordinary script-body execution, whole-FOS and world/viewer integration
+remain open.
 
 ## List boundary
 
