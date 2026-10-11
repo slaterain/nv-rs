@@ -44,7 +44,8 @@ Slot state:
   were reviewed against the PC instructions. It remains SEH partial.
   The other four bodies remain untouched; later-address evidence is in
   private `agents/scratch/a04/round9-009b1810-handoff.md`. Research/editing
-  only until the compiler grant. Thirteen SEH partials remain recorded.
+  only until the compiler grant. Thirteen collected SEH partials remain
+  recorded; the prepared Initialize body adds a fourteenth.
 - a03 `/root/a03_animgroup`, `agent-03`: fresh b0041 worker owns
   `fallout_shared/tesanimgroup.rs` (40 functions), research/editing only.
   cycle03 collected all 30 multibound entries as `20c6123`; source
@@ -128,7 +129,7 @@ collecting and immediately restarting finished translation slots.
   BSMenu/tile.cpp, highprocess.cpp parts 1, 2, 4 and 5, navmesh.cpp,
   pathinglocation.cpp, bgssceneinfo.cpp, bgssaveloadgame.cpp, and others.
 - **In progress (translation lanes; see "Resume here" for current owners):**
-  navmesh_util.cpp (a01, prepared), multiboundmarkerdata.cpp (a03, active), explosion.cpp
+  loadedareabound.cpp (a01, prepared), tesanimgroup.cpp (a03, active), explosion.cpp
   (a04, active), aitaskmanager.cpp lane 2 (a05, prepared; partial behavior
   listed in the file header), bhkworld.obj (a06, prepared).
 - **Phase 1 (frame skeleton) wiring:**
