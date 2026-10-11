@@ -62,9 +62,11 @@ without deletion, and check empty membership. It maps the user's installed
 executable data with `Engine::with_exe`; no game-function doubles or game
 file writes are used. This proves that bounded dependency chain, not a
 save round trip or original-game gameplay comparison. Full core checks
-passed: 15,124 tests across suites, clippy with warnings denied,
-formatting, release build and the four ledger-tool tests. These local
-checks used the pre-PR-7 base; the final rebased head needs its own CI.
+passed after rebasing onto merged PR #113: 15,154 tests across suites
+(13,301 engine tests), clippy with warnings denied, formatting and the
+release build. The four ledger-tool tests also pass. A separate read-only
+source review found no actionable issues; that review did not independently
+verify the private probes. CI still gates merging the PR.
 
 ## Open boundary
 
