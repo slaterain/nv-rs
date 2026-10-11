@@ -33,6 +33,12 @@ reading do not establish them.
 
 ## Active work: M1
 
+Rolling PR #114 passed both CI checks and merged as `89e1a0b` on
+2026-10-10 local time. #116 now holds the subsequent navigation/explosion
+batch, with review corrections required before merge. #115 is rebased
+onto new main with unchanged adapter source and fresh CI. Next action:
+collect corrected slots and finish the count-payload follow-on checks.
+
 Explosion collection, 2026-10-10: 24 functions added, 16 skipped;
 13,511 combined engine tests plus formatting/lint pass. Native review
 found a return-value/NaN copy correction and accessor-description issues;

@@ -7,13 +7,14 @@ machinery runs.
 
 ## Resume here
 
-Codex takeover, 2026-10-10: rolling PRs #109 and #112 passed both CI
-checks and were squash-merged as `b995218` and `d854fbe`. Current rolling
-PR #114 contains the later navigation-render, exterior-cell loader,
-Havok-world and AI task-manager batches, ledger and handoff. The lead branch is `claude/engine-crate`.
+Codex takeover, 2026-10-10: rolling PRs #109, #112 and #114 passed both CI
+checks and were squash-merged as `b995218`, `d854fbe` and `89e1a0b`.
+Current rolling PR #116 contains the later navigation continuation and
+explosion helpers, ledger and handoff. The explosion review corrections
+listed below are required before #116 merges. The lead branch is `claude/engine-crate`.
 
 Phase 1 PR 7 (#113) passed both checks and merged as `f917219`.
-The lead branch is rebased onto that main.
+The lead branch is rebased onto current main `89e1a0b`.
 Only ledger/milestone conflicts needed resolution. Local validation
 passed 15,108 core tests, 182 viewer release tests, formatting, lint and
 release builds. Doc Mitchell, Back in the Saddle and Ghost Town Gunfight
@@ -57,7 +58,7 @@ each collection. Native spot checks cover five `00698620` point products
 and 512 `006a5da0` flag combinations, not whole units. These translations
 are not newly playable behavior.
 
-Lead Phase 2 PR #115 is open at `f0e7293`, branch
+Lead Phase 2 PR #115 is open at `c819461` after rebasing onto #114, branch
 `codex/phase2-extra-data`, in managed worktree
 `%USERPROFILE%/.codex/worktrees/phase2-extra-data/wt-phase0`.
 It adds the engine-owned ExtraData list handle and four traced helpers.
@@ -69,9 +70,11 @@ Private probes/native vectors and the read-only 11-save baseline are in
 `phase0/codex-audit`; FOS_SAVES.md records the decoder limits.
 The lead has now switched that managed checkout to a separate follow-on
 branch `codex/phase2-extra-count`, closing the count destruction dependency;
-commit `1b0b1a2` is separate from #115 and still needs full checks.
+commit `ec6a70e` is separate from #115. Its pre-rebase full core test suite
+passed 15,156 tests; final checks on the new base are running in session
+75073 (tests, clippy, release), private logs `phase2-count-rebased-*`.
 Its real-save count probe passes 14 payloads across 3,319 extra lists.
-The managed checkout is temporarily back on #115 for the coming rebase.
+The managed checkout is on `codex/phase2-extra-count`; do not switch branches during its checks.
 Machine note: automatic policy blocked removal of idle p3's target cache;
 nothing was deleted. Private `task.sh` now warns below 40 GB free instead
 of deleting caches, and retains scratch evidence. Do not use another
@@ -83,7 +86,7 @@ Next steps:
    is published and all three acceptance routes have passed.
 2. Collect completed slots with one `cycle.sh NN 0 0` at a time. Never
    cycle an active agent's worktree. Rotate prepared tasks as capacity opens.
-3. Ship rolling PR #114 when both checks pass; rebase affected branches
+3. Collect the required explosion corrections into #116, then ship when both checks pass; rebase affected branches
    after another merge, retaining tests and regenerating the ledger.
 4. Rebase #115 after the next main merge and require both CI checks.
    Payload conversion, world ownership and save round trips
@@ -121,7 +124,7 @@ Next steps:
     Acceptance passed; exact open boundaries remain in FRAME_SKELETON.md.
   - Phase 2 (state model in engine memory, save round trip; see
     ENGINE_PORT_PLAN.md).
-- **Rolling translation PR:** #109 and #112 merged; #114 is open on branch
+- **Rolling translation PR:** #109, #112 and #114 merged; #116 is open on branch
   `claude/engine-crate` (see "Resume here").
 - **Play build** (the user's `Desktop\nv-rs-play`): Build 40 = main `f917219` with #113.
   After the next wiring PR merges, build `viewer` in release from main
