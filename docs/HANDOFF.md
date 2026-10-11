@@ -13,7 +13,11 @@ then immediately start a fresh agent on its new task. Never reset or cycle
 a slot with unfinished work. Ship rolling PRs once both current-head checks
 pass. The saved 98% usage stop/handoff rule still applies.
 
-Save-buffer PR #125 is open/attached at `7c58130`, based on merged #123.
+Rolling #124 passed both checks and merged as `c6ac7eb` at 02:12 local.
+`ship.sh 124` succeeded; rolling #126 is open/attached at `9343898`, with
+animation collection now `00a246f` and Init3D now `ca298df`. Fresh CI gates it.
+Save-buffer PR #125 is rebased onto #124 at `574c3c5`, with fresh CI.
+Only the generated ledger conflicted and was regenerated; source unchanged.
 Its 18 dependencies pass 15,641 core tests (13,788 engine), strict workspace
 lint, formatting, release and debug builds. The real-registry probe writes
 count 5 / health 42.5 and the FOS payload decoder reads exactly both back.
@@ -107,13 +111,19 @@ Lead Phase 2 work:
   3,365 forms with the source unchanged. This is not a save round trip.
 - Managed checkout `%USERPROFILE%/.codex/worktrees/phase2-extra-data/wt-phase0`
   now uses follow-on branch `codex/phase2-inventory-payload`, based on #125.
-  The checked save-buffer branch remains pushed separately at `7c58130`.
-  Inventory follow-on has 15 new helpers and 14 tests prepared but
+  The checked save-buffer branch remains pushed separately at `574c3c5`.
+  Inventory follow-on has 16 new helpers and 15 tests prepared but
   uncompiled: form-ID encoding, bidirectional maps, constructors and
   callback allocation/release. Root owns its twelve unit files; no other
   agent may edit them. `git status` lists the exact files. Seven native
   generated vectors pass (created-ID decoding and key equality), and
-  independent static review found no concrete mismatch. No world changes.
+  independent static review of the first fifteen bodies found no concrete
+  mismatch. The last helper constructs a list node (`00470440`), checked
+  against PC assembly. Private `inventory-buffer-probe.rs` is prepared but
+  not run; it writes one entry with delta -2 and two distinct count/health
+  stacks, then uses the FOS inventory decoder. No world changes.
+  Safety stash `063e7833f97201d3ff909bb96784ddd3f0050afb` was applied after
+  rebasing the follow-on onto updated #125; retain but do not reapply it.
   PR #122 (`codex/phase2-reference-state`) merged as `6bea9a1` after both
   checks passed on head `8e11001`. Its ten form helpers,
   nine allocator/counter helpers, form callback-reload corrections and the

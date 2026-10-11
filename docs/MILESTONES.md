@@ -33,6 +33,13 @@ reading do not establish them.
 
 ## Active work: M1
 
+Rolling #124 passed both checks and merged `c6ac7eb`. Rolling #126 now
+publishes animation parsing and Init3D; save-buffer #125 is rebased with
+fresh CI. MobileObject is validating; the animation loader is queued.
+Root inventory writing has 16 helpers/15 tests prepared and a two-stack
+probe ready, uncompiled. Next action: collect the queued slot batches and
+validate that probe; Build 40 remains current.
+
 Init3D collected as `407caf3`: 13,824 combined engine tests, strict lint
 and formatting pass; SEH cleanup remains explicit. Fresh a04 immediately
 starts the next explosion routine while a01 validates MobileObject.
