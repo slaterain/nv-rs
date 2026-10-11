@@ -32,19 +32,26 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
   14,189 combined engine tests; collected commit is now `4cc1b3f` after
   shipping. Its seventeen verified SEH-only partials remain explicit.
   Fresh `/root/a01_round17` immediately started BSAudio task b0694.
-  Root owns the compiler, followed by a04 and then a03.
-- Root branch `codex/phase2-script-action-parser` in the existing managed
-  checkout starts from merged #134/#135. Only `expression.rs` and
-  `tesscriptrunmanager.rs` and topic `ENGINE_STATE.md` are edited: six helpers
+  I/O now owns the compiler, followed by a03 and then a01. Root's current
+  checks completed; its next two-helper follow-on is source-only.
+- Root #138 is attached/published at `e7cf965` on
+  `codex/phase2-script-action-parser`: `expression.rs`,
+  `tesscriptrunmanager.rs` and topic `ENGINE_STATE.md` contain six helpers
   and eighteen new regressions. Thirty native cases pass (six parser, nine
   constructors, four entry and eleven evaluator), with raw evidence private
-  under `codex-audit`. Rust checks are running in session 69981. CExpression is 0x710 bytes,
+  under `codex-audit`. All 16,011 workspace tests, strict lint, formatting
+  and release/debug builds pass. CExpression is 0x710 bytes,
   not a pointer wrapper. EvaluateLine `005e1550` now drafts BEGIN and action-list
   paths; non-BEGIN ordinary execution/parse stays explicit partial and panics.
-  Independent PC review of all six helpers passed. A private probe using
-  actual SCPT bytecode and normal-registry event handlers is prepared,
-  but has not run. Full Script form/save-ID integration remains open;
-  no whole-save claim.
+  Independent PC review of all six helpers passed. The actual-bytecode
+  normal-registry probe ran but stopped immediately at open `004013e0`.
+  Root continues on `codex/phase2-script-form-flags`, based on #138, with
+  drafted `004013e0` in `unplaced/run_00401000.rs` and header accessor
+  `00500940` in `fallout_shared/bgsterminal.rs`. Forty-one native cases
+  pass; Rust checks for this follow-on have not run. The private original
+  item-payload probe is prepared but unrun. Both paths also need a04's
+  collected TLS guards (currently in #137). Full Script form/save-ID
+  integration remains open; no whole-save claim.
 - a04 I/O management now has forty drafted bodies and fifty tests, with
   twelve SEH-only partials. Source-only checks pass; no cargo yet. Review
   corrected callback argument words, live queue/array/count reloads, signed

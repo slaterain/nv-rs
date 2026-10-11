@@ -39,14 +39,17 @@ The 34-body effect-item batch passed all checks and collection (`ddeecbd`);
 a fresh worker immediately began I/O management. HUD also passed collection
 (`82e56ee` after rebase, 14,177 combined engine tests) and restarted. Movement
 also collected (`4cc1b3f`, 14,189 combined tests) and restarted on BSAudio.
-Root owns the compiler for its script parser/action-list batch, then I/O.
-Root now has six drafted helpers and eighteen regressions, with thirty
-matching native cases; Rust checks are running. The evaluator implements
+#138 publishes six script helpers and eighteen regressions: all 16,011
+workspace tests, strict lint, formatting and release/debug builds pass,
+alongside thirty native cases. The actual-bytecode probe stops at an open
+flag predicate. Root drafts that predicate and a header accessor, with
+forty-one native cases passing and Rust checks queued; I/O now validates.
+The evaluator implements
 BEGIN/action-list paths only; other modes stay explicitly unsupported.
 The user freed the idle build caches, restoring about 25 GB at verification.
 Build 40 remains current; whole-save and playable inventory integration
-are still pending. Next action: validate the script helpers and actual
-bytecode probe, then collect I/O. [HANDOFF.md](HANDOFF.md) tracks ownership.
+are still pending. Next action: collect I/O, continue HUD/audio checks and
+close the probe dependencies. [HANDOFF.md](HANDOFF.md) tracks ownership.
 
 Script-loading dependency #135 is published at `86d19a0`: 15,876 workspace
 tests including doctests, strict lint, formatting and release/debug builds
