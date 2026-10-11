@@ -33,7 +33,9 @@ This section supersedes the historical notes below.
   results. `/root/a01_round19` now has the other compiler lane for its
   forty TaskQueueInterface bodies and forty-two tests. Four are complete;
   thirty-six retain reviewed compiler-only partials. Its forty-two focused
-  and 14,445 engine tests pass; strict lint and release checks continue.
+  and 14,445 engine tests pass. Clippy session 69339 was interrupted without
+  diagnostics when system committed-memory headroom fell below 400 MB;
+  rerun it, then hygiene and release, after the memory-capacity grant.
   After collection its
   fresh worker must continue ordinary bodies at `0087b650`.
 - Root PR #144 merged from `94e709c`, branch
@@ -64,8 +66,10 @@ This section supersedes the historical notes below.
 - Fresh a03's b0223 batch now has forty normal bodies and forty-three
   drafted tests. Thirty-three native cases and independent PC review pass.
   Eight compiler-only partials remain explicit. Cargo checks are queued.
-- Limit full Cargo pipelines to two: water and taskqueue now own them.
-  Root and fresh a03 are source-only. No deletion attempts after automatic
+- Only water currently owns a compiler lane. Two large checks exhausted
+  committed-memory headroom; stopping taskqueue Clippy recovered about
+  8 GB. Gate subsequent checks on available memory. Taskqueue, root and
+  fresh a03 are held. No deletion attempts after automatic
   review rejected cleanup and the user removed idle caches manually.
 - Build 40 remains current, without a confirmed next-play date or new
   visible feature. Continue cycling and shipping until stopped. Preserve

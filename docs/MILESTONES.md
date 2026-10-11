@@ -46,7 +46,8 @@ variable defaults from the installed official plugins in saved order.
 Ordinary script bodies, historical overrides and whole-save/world integration
 remain open. Root's next bounded correction has 102 native cases and
 thirteen drafted Rust regressions; compilation is queued. Taskqueue's
-14,445 engine tests pass, with lint/build checks continuing. Rolling #145
+14,445 engine tests pass; lint was interrupted for memory pressure and
+must rerun before collection. Water compiles alone for now. Rolling #145
 was rebased onto merged #144 and awaits both fresh CI checks. Build 40 remains
 current with no next-play date confirmed. Next action: validate the queued
 batches, ship #145 after both checks, and continue the saved-local path.
