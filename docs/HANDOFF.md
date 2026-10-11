@@ -32,8 +32,12 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
   14,189 combined engine tests; collected commit is now `4cc1b3f` after
   shipping. Its seventeen verified SEH-only partials remain explicit.
   Fresh `/root/a01_round17` immediately started BSAudio task b0694.
-  I/O now owns the compiler, followed by a03 and then a01. Root's current
-  checks completed; its next two-helper follow-on is source-only.
+  I/O collection is complete: source `a802ff8` became `75bd3b5`, with
+  14,239 combined engine tests and strict checks passing. Fresh
+  `/root/a04_round17` immediately continued b0626 from `00c3ffb0`.
+  a03 now owns an intermediate focused compiler pass for 24 entries,
+  then yields to audio while it finishes the rest of its forty-entry task.
+  Root's next two-helper follow-on is source-only.
 - Root #138 is attached/published at `e7cf965` on
   `codex/phase2-script-action-parser`: `expression.rs`,
   `tesscriptrunmanager.rs` and topic `ENGINE_STATE.md` contain six helpers
@@ -52,8 +56,8 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
   item-payload probe is prepared but unrun. Both paths also need a04's
   collected TLS guards (currently in #137). Full Script form/save-ID
   integration remains open; no whole-save claim.
-- a04 I/O management now has forty drafted bodies and fifty tests, with
-  twelve SEH-only partials. Source-only checks pass; no cargo yet. Review
+- a04's collected I/O management batch has forty bodies and fifty tests,
+  with twelve SEH-only partials. All checks passed. Review
   corrected callback argument words, live queue/array/count reloads, signed
   construction loops and the incompatible Xbox layout. A suspect Xbox
   name for `005a8040` was removed in favor of a neutral PC accessor.
