@@ -39,19 +39,19 @@ The 34-body effect-item batch passed all checks and collection (`ddeecbd`);
 a fresh worker immediately began I/O management. HUD also passed collection
 (`82e56ee` after rebase, 14,177 combined engine tests) and restarted. Movement
 also collected (`4cc1b3f`, 14,189 combined tests) and restarted on BSAudio.
-#138 publishes six script helpers and eighteen regressions: all 16,011
-workspace tests, strict lint, formatting and release/debug builds pass,
-alongside thirty native cases. The actual-bytecode probe stops at an open
-flag predicate. Root drafts that predicate and a header accessor, with
-forty-one native cases passing and Rust checks queued. I/O collected as
+#138 merged six script helpers and eighteen regressions. I/O collected as
 `75bd3b5` with 14,239 combined engine tests passing, and a fresh worker
 immediately continued. HUD's intermediate focused check passed 93 tests;
-audio now validates while HUD finishes its remaining entries. The remaining
-twenty-four I/O bodies are drafted with callback-mutation regressions and
-await compiler access. Audio collected as `4c16784` with 14,279 combined
+its forty-body batch is now source-ready. I/O's remaining twenty-four bodies
+are under compiler validation. Audio collected as `4c16784` with 14,279 combined
 engine tests passing; its fresh worker immediately began the remaining
-twenty-two bodies. Root now validates the two script dependencies with
-#137's TLS guards integrated, before rerunning the real-item probes.
+twenty-two bodies, now source-ready. Root #140 publishes two script
+accessors: all 16,062 workspace tests, strict lint, formatting and
+release/debug builds pass, alongside forty-one native cases. The original
+compiled-script probe now passes both real event handlers. The saved-item
+probe stops at owner reference predicate `008d0360`; its rewrite assertion
+has not run. Root drafts that predicate and the following false predicate
+`0047c850`, with twelve native cases passing; Rust checks are queued.
 The evaluator implements
 BEGIN/action-list paths only; other modes stay explicitly unsupported.
 The user freed the idle build caches, restoring about 25 GB at verification.

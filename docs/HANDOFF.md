@@ -42,12 +42,11 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
   mutation regressions are source-ready. Audio source `fae652b` passed all
   checks; cycle01 session 80637 collected `4c16784` with 14,279 combined
   engine tests passing. Fresh `/root/a01_round18` immediately began the
-  remaining twenty-two audio bodies from `00ad7e90`. Root owns the sole
-  compiler for two-helper checks: focused tests and all 16,062 workspace
-  tests pass (14,209 engine unit tests). After simplifying an identical
-  test constant flagged by lint, strict lint and formatting pass; release
-  and debug builds continue in session 98564. Then run both private probes,
-  followed by I/O, HUD and audio validation. All three slot sources are
+  remaining twenty-two audio bodies from `00ad7e90`. Root's two-helper
+  checks completed: all 16,062 workspace tests (14,209 engine unit tests),
+  strict lint, formatting and release/debug builds pass. I/O now owns the
+  sole compiler (82 focused tests passed), followed by HUD, audio, then
+  root's new predicate follow-on. All three slot sources are
   ready: I/O twenty-four bodies, HUD forty through `0077f5c0`, and audio
   twenty-two through `00ad87d0`. Audio also has seventeen passing native
   timer/empty-call cases. Review fixed HUD callback capture timing and a
@@ -63,16 +62,18 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
   and release/debug builds pass. CExpression is 0x710 bytes,
   not a pointer wrapper. EvaluateLine `005e1550` now drafts BEGIN and action-list
   paths; non-BEGIN ordinary execution/parse stays explicit partial and panics.
-  Independent PC review of all six helpers passed. The actual-bytecode
-  normal-registry probe ran but stopped immediately at open `004013e0`.
-  Root continues on `codex/phase2-script-form-flags`, based on #138, with
-  drafted `004013e0` in `unplaced/run_00401000.rs` and header accessor
-  `00500940` in `fallout_shared/bgsterminal.rs`. Forty-one native cases
-  pass; Rust checks for this follow-on have not run. The private original
-  item-payload probe is prepared but unrun. Both paths also need a04's
-  collected TLS guards (merged in #137 and integrated into root's checkout
-  at `e1e1393`). Full Script form/save-ID
-  integration remains open; no whole-save claim.
+  Independent PC review of all six helpers passed. #140 now publishes
+  `004013e0` and `00500940` at `192b46e`, with forty-one native cases and
+  all local checks passing. Both PRs are attached; #138 is already merged.
+  The actual-bytecode normal-registry probe now passes both real BEGIN
+  handlers and its expected action entry. The original item-payload probe
+  ran but stopped at `008d0360`; the rewrite assertion has not run.
+  Root now owns `fallout_ai/baseprocess.rs` and
+  `fallout_shared/tesactorbasedata.rs` on
+  `codex/phase2-reference-predicate`, based on #140. It drafts that true
+  predicate and the following false predicate `0047c850`, confirmed from
+  the real reference vtable and load-buffer call chain. Twelve native cases
+  pass; these new Rust checks have not run. No whole-save claim.
 - a04's collected I/O management batch has forty bodies and fifty tests,
   with twelve SEH-only partials. All checks passed. Review
   corrected callback argument words, live queue/array/count reloads, signed
