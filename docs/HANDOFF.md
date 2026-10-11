@@ -7,6 +7,50 @@ machinery runs.
 
 ## Resume here
 
+### Current state, 2026-10-11 14:20 EDT
+
+This section supersedes the earlier active-state notes below.
+
+- #142 merged `6eec14b` after both checks. The remote merge occurred during
+  collection; private `finish-ship142.sh` completed afterward. Never rerun
+  ship142 or that continuation. Attached #143 is OPEN at `254d207`, with
+  core and viewer CI running. Ship it when both current-head checks pass.
+- Audio source `c4dcd1a` collected successfully through cycle01 session
+  69247, now `d1ebd14` after rebase: 14,403 combined engine tests, doctest,
+  strict lint and formatting pass. Its nineteen SEH-only partials remain.
+  Fresh `/root/a01_round19` immediately started b0213, owning only
+  `fallout_misc/taskqueueinterface.rs`; compiler held.
+- `/root/a03_round19` owns only `fallout_interface/hudmainmenu.rs`, six
+  remaining normal bodies through `0077f9d0`. Its serial focused/full/lint/
+  formatting/hygiene/release checks are running. Fifteen reviewed compiler
+  scaffolding partials remain. After a clean validated commit, cycle03 once
+  with reviewed partial-only advancement and immediately start a fresh agent.
+- `/root/a04_water_complete` owns only `fallout_shared/bgsautowater.rs`.
+  All thirty-seven normal bodies are drafted and independently reviewed;
+  five SEH-only partials remain. Fifteen native comparator/plane cases pass.
+  Rust tests are still UNRUN; compiler held until a current pipeline ends.
+  The earlier water owner is interrupted and must not resume editing.
+- Root's separate `codex/phase2-reference-predicate` checkout is clean at
+  `90e3821`, based on merged #142. It owns `fallout_ai/baseprocess.rs`,
+  `fallout_shared/tesactorbasedata.rs`, `fallout_misc/bgsloadformbuffer.rs`
+  and `docs/ENGINE_STATE.md`: three helpers, four Rust regressions,
+  eighteen matching native cases. Final checks run in root session 91094
+  through private `check-reference-predicates.ps1`; do not duplicate them.
+  The preceding debug probe passed one original scripted inventory item:
+  exact original payload reserialization, both real BEGIN handlers once,
+  expected locals/action entry and no script errors. Generated receivers,
+  partial startup and unresolved references inside skipped bodies limit this
+  result; ordinary body execution and whole-save/world acceptance remain
+  open. Run the prepared release probe after the optimized build passes,
+  record actual results, then publish and attach the root PR.
+- Root and HUD are the two active check pipelines. No third compiler.
+  Memory was tight and C: had about 11.8 GB free at 14:19. No further
+  deletion attempts; earlier automatic review blocked deletion and the
+  user subsequently removed idle caches manually.
+- Build 40 remains current; no new play-build date or visible feature is
+  confirmed. Continue cycling and shipping until stopped, preserving the
+  user's 98% weekly-usage stop/handoff rule (48% at about 14:00).
+
 ### Active again, 2026-10-11 after the usage reset
 
 This section supersedes the historical stopped state below. User requested

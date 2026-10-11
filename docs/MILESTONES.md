@@ -33,36 +33,27 @@ reading do not establish them.
 
 ## Active work: M1
 
-Resumed continuous translation on 2026-10-11 after the usage reset.
-#134 through #141 merged after both CI checks; rolling #142 now publishes
-the validated HUD batch at `ed11d75` and awaits fresh checks.
-The 34-body effect-item batch passed all checks and collection (`ddeecbd`);
-a fresh worker immediately began I/O management. HUD also passed collection
-(`82e56ee` after rebase, 14,177 combined engine tests) and restarted. Movement
-also collected (`4cc1b3f`, 14,189 combined tests) and restarted on BSAudio.
-#138 merged six script helpers and eighteen regressions. I/O collected as
-`75bd3b5` with 14,239 combined engine tests passing, and a fresh worker
-immediately continued. HUD's intermediate focused check passed 93 tests;
-its forty-body batch now passed final validation and collection (`faae60d`,
-14,379 combined engine tests). A fresh HUD worker immediately continued
-from `0077f5e0`, and audio now validates. I/O's remaining twenty-four
-bodies collected as `1fc794c` after 14,311 combined engine tests; a fresh
-worker immediately started BGSAutoWater. Audio collected as `ceaf531`
-(after shipping rebase) with 14,279 combined
-engine tests passing; its fresh worker immediately began the remaining
-twenty-two bodies, now under validation. Root #140 merged two script
-accessors: all 16,062 workspace tests, strict lint, formatting and
-release/debug builds pass, alongside forty-one native cases. The original
-compiled-script probe now passes both real event handlers. The saved-item
-probe stops at owner reference predicate `008d0360`; its rewrite assertion
-has not run. Root drafts that predicate and the following false predicate
-`0047c850`, with twelve native cases passing; Rust checks are queued.
-The evaluator implements
-BEGIN/action-list paths only; other modes stay explicitly unsupported.
-The user freed the idle build caches, restoring about 25 GB at verification.
-Build 40 remains current; whole-save and playable inventory integration
-are still pending. Next action: collect audio after its checks and
-close the probe dependencies. [HANDOFF.md](HANDOFF.md) tracks ownership.
+Continuous translation remains active on 2026-10-11. #134 through #142
+merged after both current-head CI checks. Attached rolling #143 publishes
+the final twenty-two normal BSAudio bodies at `254d207`; core and viewer
+CI are running. Audio collection (`d1ebd14` after rebase) passed 14,403
+combined engine tests and the doctest, strict lint and formatting. A fresh
+worker immediately started TaskQueueInterface. HUD's six remaining normal
+bodies now validate; all thirty-seven normal BGSAutoWater bodies are drafted
+and reviewed, with fifteen matching native cases, awaiting Rust checks.
+
+Root's saved-item dependency batch contains three helpers and four Rust
+regressions, with eighteen matching native cases. The debug probe now loads
+and rewrites one original script-bearing inventory payload byte-for-byte;
+both real BEGIN event handlers run once and the expected locals/action
+entry assertions pass. Generated receivers and partial startup limit this
+evidence: ordinary script bodies, whole-save round trips, world integration
+and original-game acceptance remain open. Final root workspace, lint,
+formatting and release checks are running, followed by the optimized probe.
+Two local check pipelines are active; other compilers are held for memory.
+Build 40 remains current, with no confirmed next-play-build date. Next
+action: finish and collect HUD, validate water, and publish the saved-item
+helpers after their checks. [HANDOFF.md](HANDOFF.md) tracks ownership.
 
 Script-loading dependency #135 is published at `86d19a0`: 15,876 workspace
 tests including doctests, strict lint, formatting and release/debug builds
