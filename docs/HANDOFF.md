@@ -89,7 +89,13 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
   `check-reference-predicates.ps1` supplies the later full check chain.
   No whole-save claim.
 - Water has 34 of 37 normal bodies drafted; `0049c930`, `0049db60` and
-  `0049e410` are still being translated. Fifteen native comparator/plane
+  `0049e410` are still being translated. The initial water agent is
+  interrupted; `/root/a04_water_complete` owns and audits its uncommitted
+  source, including a still-incomplete early-exit draft for `0049db60`.
+  Do not collect or reset this slot before the full normal paths and checks
+  finish. The replacement also restores the external predicate call in
+  `0049c860`, which the first agent incorrectly inlined while editing its
+  description. Fifteen native comparator/plane
   cases pass. Review corrected array callback reloads, the membership
   argument, fourth-corner Y selection and NaN classification. The apparent
   constructor-size and uninitialized-pair conflicts were decompiler
