@@ -7,7 +7,7 @@ machinery runs.
 
 ## Resume here
 
-### Current state, 2026-10-11 14:53 EDT
+### Current state, 2026-10-11 15:16 EDT
 
 This section supersedes the earlier active-state notes below.
 
@@ -18,7 +18,8 @@ This section supersedes the earlier active-state notes below.
   engine tests, the doctest, strict lint and formatting.
 - `/root/a03_round19` owns only `fallout_interface/hudmainmenu.rs`.
   Its six final normal bodies pass 121 focused and 14,386 engine tests,
-  the doctest and strict lint. Formatting and remaining checks are finishing.
+  the doctest, strict lint, formatting and all 49 hygiene checks. Release
+  compilation is finishing.
   Fifteen independently reviewed compiler-only partials remain. Once clean
   and committed, cycle03 once with reviewed partial-only advancement and
   immediately start a fresh agent on the new task.
@@ -28,7 +29,7 @@ This section supersedes the earlier active-state notes below.
   but unrun; compiler held. A static audit fixed a test cursor/tail alias.
 - `/root/a01_round19` owns only `fallout_misc/taskqueueinterface.rs`.
   Its first forty normal bodies through `0087b600` have independent PC
-  review and six matching native constructor cases. Forty-one Rust tests
+  review and six matching native constructor cases. Forty-two Rust tests
   remain unrun; compiler held. Four entries are complete and thirty-six
   retain explicit compiler-only partials. The next fresh batch must skip
   these reviewed markers and start the remaining normal bodies at `0087b650`.
@@ -36,16 +37,18 @@ This section supersedes the earlier active-state notes below.
   `docs/ENGINE_STATE.md` in the separate `codex/phase2-reference-predicate`
   checkout. Source is frozen at `90e3821`, based on merged #142; only its
   documentation is dirty. Eighteen native cases and the focused and full
-  workspace tests pass. Session 91094 now runs strict lint, then formatting,
-  release and debug builds. Do not duplicate or rebase during these checks.
+  workspace tests (16,238 including doctests), strict lint and formatting
+  pass. Session 91094 now runs release then debug builds. Do not duplicate
+  or rebase during these checks.
 - The first original script-bearing item probe passed in debug before the
   final rebase; its optimized rerun remains pending. Its historical mod
   order is unavailable, so installed base-game script data is an explicit
   limitation. A metadata scan found three saved nonzero-variable instances
   whose missing mod scripts cannot be replaced by their incompatible base
   record. Save 138 has all ten official plugins available in its saved order.
-  A second probe using that save and a real three-variable script is prepared
-  and independently reviewed, but unrun. Neither probe establishes ordinary
+  A second debug probe using that save and a real three-variable script
+  passes the exact 34-byte rewrite and both real BEGIN handlers. Both final
+  optimized probes still await the release build. Neither establishes ordinary
   body execution, whole-save preservation or world integration.
 - Root and HUD occupy the two full compiler pipelines. Water checks follow
   when a pipeline becomes free; no third full compiler. No further deletion
@@ -53,7 +56,7 @@ This section supersedes the earlier active-state notes below.
   idle caches manually.
 - Build 40 remains current. No next play-build date or new visible feature
   is confirmed. Continue cycling and shipping until stopped, preserving the
-  user's 98% weekly usage stop/handoff rule (53% around 14:30 EDT).
+  user's 98% weekly usage stop/handoff rule (57% around 14:57 EDT).
 
 ### Active again, 2026-10-11 after the usage reset
 

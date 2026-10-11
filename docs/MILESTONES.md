@@ -36,17 +36,17 @@ reading do not establish them.
 Continuous translation remains active on 2026-10-11. #134 through #143
 merged after both current-head CI checks; no rolling PR is currently open.
 The final HUD bodies pass 121 focused and 14,386 engine tests plus strict
-lint, with remaining validation finishing. Water's thirty-seven normal
+lint, formatting and hygiene; its release build is finishing. Water's thirty-seven normal
 bodies and TaskQueueInterface's first forty are independently reviewed;
 their fifteen and six native cases pass, and Rust checks await a compiler.
 
 Root's saved-item batch has three helpers, four Rust regressions and
 eighteen matching native cases. Focused and full workspace tests pass;
-strict lint, formatting and release/debug builds continue. A debug probe
-loads and rewrites one original script-bearing inventory payload exactly,
-with both real BEGIN handlers exercised. Its historical mod order is
-unavailable. A second, unrun probe uses a save with all ten official plugins
-available and a real three-variable script. Generated receivers and partial
+strict lint and formatting pass; release/debug builds continue. Debug probes
+load and rewrite two original script-bearing inventory payloads exactly,
+with both real BEGIN handlers exercised in each. The first historical mod
+order is unavailable. The second uses a save with all ten official plugins
+available and initializes three real declared variables. Generated receivers and partial
 startup limit both fixtures; whole-save preservation, ordinary script bodies,
 world integration and original-game acceptance remain open. Two local full
 compiler pipelines are active. Build 40 remains current, without a confirmed
