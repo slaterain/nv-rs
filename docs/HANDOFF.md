@@ -7,6 +7,16 @@ machinery runs.
 
 ## Resume here
 
+Stopped at the user's saved 98% account-usage threshold on 2026-10-10.
+Resume continuous slot cycling when the next lead takes over. No game
+assets were changed or committed. Build 40 remains the published play copy.
+Immediate actions: check rolling #119 (head `b7b69b2`, core passed,
+viewer pending at handoff); ship with `bin/ship.sh 119` once both checks
+pass. Local pathfinding collection `ded5afd` and handoff/ledger updates
+are intentionally not pushed over that CI head. Then resume a01/a04's
+uncommitted prepared work without resetting their worktrees, and start
+a03's already-written b0060 task without cycling it first.
+
 Codex takeover, 2026-10-10: rolling PRs #109, #112, #114 and #116 passed
 both CI checks and were squash-merged as `b995218`, `d854fbe`, `89e1a0b`
 and `c23f744`. The lead branch is `claude/engine-crate`. Its later batches
@@ -52,7 +62,7 @@ compiled or committed it. It also corrects `0069ad40`: PC `0069ad56`
 stores immediate vtable address `0106b184`; merged #116 mistakenly loaded
 the first word there. A regression distinguishes the address from its
 contents. Formatting, diff and name scans pass. Validation remains open.
-a03 b0331 pathmanager.cpp is running under fresh `/root/a03_round4`.
+a03 b0331 pathmanager.cpp completed under `/root/a03_round4`.
 Collection `7321030` adds 29 complete and six partial functions plus all
 reviewed corrections to earlier argument-slot ownership, output ordering,
 callback reloads and completion pointers. The combined 13,680 engine
@@ -62,9 +72,14 @@ The 25 bodies are now prepared (23 complete and two SEH partials), with
 lead corrections for guard ownership, overflow, callback reloads, pending
 stack arguments and lock/barrier ordering. Focused tests pass 81/81 and
 full engine tests pass 13,697. Lint-only saturating arithmetic rewrites
-are in final validation before commit/collection. After collection, use
-`ADVANCE_PARTIAL_ONLY=1` only if the queue confirms its remaining 17
-entries are all explicit unsupported exception-cleanup partials.
+passed final validation. Collection `ded5afd` passes 13,717 combined
+engine tests, lint and formatting. The queue confirmed all 17 remaining
+entries are explicit exception-cleanup partials; cycle03 advanced using
+`ADVANCE_PARTIAL_ONLY=1`, retaining those entries in the ledger.
+Fresh `/root/a03_round5` read b0060 (`multiboundmarkerdata.cpp`, 30
+non-done entries: ten open, twenty traced) before the usage stop. Its
+worktree is clean; private `scratch/a03/b0060-helper-audit.txt` holds
+GET-only PC research for 23 functions. No translation or validation yet.
 a04 b0160 explosion.cpp is running under fresh worker `/root/a04_round6`.
 Its latest 21-function continuation was collected as `00532d6`; 13,633
 combined engine tests, lint and formatting pass. Native sort permutations
@@ -132,8 +147,10 @@ Three native allocator-header vectors pass. No public reference adapter
 exists yet; next validate and continue the real startup dependency chain.
 
 Simultaneous engine compilers exhausted host memory; ONE heavy engine
-compile may run at a time. a03 has the current validation window;
-root is next, followed by a04 and a01. Other workers wait,
+compile may run at a time. Root started allocator-focused validation
+at the usage boundary (session 30566; final outcome recorded below).
+Resume a04 then a01 validation after completing the lead's dependency
+checks. Other workers wait,
 continuing research/review. The lead grants each next window explicitly.
 Machine note: automatic policy blocked removal of idle p3's target cache;
 nothing was deleted. Private `task.sh` now warns below 40 GB free instead

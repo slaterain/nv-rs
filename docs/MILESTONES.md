@@ -33,6 +33,14 @@ reading do not establish them.
 
 ## Active work: M1
 
+At the saved 98% usage stop, pathfinding collection `ded5afd` passes
+13,717 combined engine tests, lint and formatting. Its 17 remaining
+exception-cleanup partials stay recorded; a03 advanced to b0060 and
+saved research without source edits. a01/a04 have uncompiled follow-ons
+preserved in their worktrees. Rolling #119 core passes, viewer pending.
+Next action: ship #119 after both checks pass, then resume the recorded
+dependency and slot validation queue in HANDOFF.md.
+
 Health adapter #118 passed both checks and merged as `a0ee61d` on
 2026-10-10 at 22:32 local time. Rolling #119 is rebased onto that main
 and includes the checked navigation continuation; fresh CI gates it.
