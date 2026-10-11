@@ -33,6 +33,13 @@ reading do not establish them.
 
 ## Active work: M1
 
+Navigation collection `a902f84` passes 13,724 combined engine tests, lint
+and formatting, including the immediate-vtable correction. Its three
+exception-cleanup partials remain explicit; the fresh slot advances to
+loaded-area bounds. Multibound validation is running, with eight generated
+native cases available as regression expectations. Next action: collect
+multibound, then validate the reference adapter and bootstrap probe.
+
 Explosion collection `d781c3b` passes 13,722 combined engine tests, lint
 and formatting. Both added normal paths retain exception-cleanup partials;
 the fresh agent owns the five untouched bodies. Navigation now validates.

@@ -24,14 +24,13 @@ Merged rolling PRs: #109 `b995218`, #112 `d854fbe`, #114 `89e1a0b`,
 
 Slot state:
 
-- a01 `/root/a01_round7`, `agent-01`: owns the compiler now. Uncommitted `navmesh_util.rs` contains
-  the full normal path of `00699b60`, explicitly SEH-partial, plus edge-pair
-  and nearest-vertex regressions. It corrects `0069ad40` at PC `0069ad56`
-  to store immediate vtable address `0106b184`; merged #116 mistakenly
-  dereferenced it. Formatting/name/diff checks pass; compilation, tests,
-  lint and commit remain pending. Prior `006987d0`/`006bd040` partials stay
-  explicit. Private evidence is in `agents/scratch/a01`, including
-  `00699b60.asm`, `0069ad40.asm` and `root-00699b60-disasm.txt`.
+- a01 `/root/a01_loadedarea`, `agent-01`: fresh b0405 worker owns
+  `fallout_shared_havok/loadedareabound.rs` (32 functions), research only.
+  cycle01 collected `a902f84`: `00699b60` normal path and the `0069ad40`
+  immediate-vtable correction pass 121 focused and 13,724 combined engine
+  tests, lint and formatting; the source also passed 49 hygiene tests.
+  Exactly three NavMesh SEH partials remain: `006987d0`, `00699b60`,
+  `006bd040`. Reviewed partial-only advancement retains them in the ledger.
 - a04 `/root/a04_round10`, `agent-04`: fresh worker after cycle04 collected
   `d781c3b`. `009ae280` and `009b2940` normal paths remain SEH-partial;
   98 focused and 13,722 combined engine tests, lint and formatting pass.
@@ -40,13 +39,14 @@ Slot state:
   The fresh worker starts at `009acd60`; later-address evidence is in
   private `agents/scratch/a04/round9-009b1810-handoff.md`. Research/editing
   only until the compiler grant. Thirteen SEH partials remain recorded.
-- a03 `/root/a03_round5`, `agent-03`: b0060 `multiboundmarkerdata.cpp`,
+- a03 `/root/a03_round5`, `agent-03`: owns the compiler now. b0060 `multiboundmarkerdata.cpp`,
   30 entries. All 30 are prepared; lead review required u32 shift semantics,
   callback reloads, constructor return pointers, temporary lifetime and
   bounds-layout corrections, plus x87 NaN handling and SEH markers.
-  Final static review still found a center-array `.addr()` compile error;
-  the worker is fixing it with a dedicated live stack buffer. Compilation
-  remains held. Its previous pathmanager lane retains
+  A dedicated live stack buffer now holds the copied center, and the
+  native temporary constructors/order are retained. Seven generated shift
+  cases and one matrix signaling-NaN case passed the native executable;
+  their Rust golden tests await compilation. The previous pathmanager lane retains
   17 exception-cleanup partials in the ledger; cycle advanced only after
   confirming no untouched entries, using `ADVANCE_PARTIAL_ONLY=1`.
 - a05 b0158 and a06 b0360 remain prepared but idle. Runtime permits three
@@ -80,8 +80,8 @@ Lead Phase 2 work:
   World consumers, payload conversion and FOS writing remain open.
 
 ONE heavy engine compiler across all worktrees, `-j2`, existing debug cache,
-`CARGO_PROFILE_DEV_DEBUG=0`. Current queue: a01, cycle01, a03, cycle03,
-then root's new adapter/full checks and a04. No root compiler active.
+`CARGO_PROFILE_DEV_DEBUG=0`. Current queue: a03, cycle03, root's new
+adapter/full checks, a04, then a01 as ready. No root compiler active.
 Disk is about 2.5 GB free. Automatic approval review previously blocked
 idle p3 target deletion; nothing was deleted. Do not bypass that denial.
 Private task.sh warns rather than deleting caches and retains scratch.
@@ -97,7 +97,7 @@ No original-game comparison was performed. Exact menu-input/GPU renderer
 boundaries remain in FRAME_SKELETON.md. These translation batches do not
 establish new playable features.
 
-Next action: collect a01 once validation passes; ship #120 once both checks
+Next action: collect a03 once validation passes; ship #120 once both checks
 pass (core passed; viewer pending). Continue the compiler queue and validate
 the reference handle/probe.
 
