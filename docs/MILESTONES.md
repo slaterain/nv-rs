@@ -44,8 +44,10 @@ Both final release probes preserve selected original scripted item payloads
 byte-for-byte and run the expected BEGIN handlers; one uses actual declared
 variable defaults from the installed official plugins in saved order.
 Ordinary script bodies, historical overrides and whole-save/world integration
-remain open. Root's next bounded correction has seventy-eight native cases
-and eight drafted Rust regressions; compilation is queued. Build 40 remains
+remain open. Root's next bounded correction has 102 native cases and
+thirteen drafted Rust regressions; compilation is queued. Taskqueue's
+14,445 engine tests pass, with lint/build checks continuing. Rolling #145
+awaits both CI checks; #144's core passes and viewer remains pending. Build 40 remains
 current with no next-play date confirmed. Next action: merge #144 after both
 CI checks, validate the queued batches, and continue the saved-local path.
 [HANDOFF.md](HANDOFF.md) tracks active ownership and exact restart steps.

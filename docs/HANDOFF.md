@@ -7,12 +7,15 @@ machinery runs.
 
 ## Resume here
 
-### Current state, 2026-10-11 15:40 EDT
+### Current state, 2026-10-11 16:04 EDT
 
 This section supersedes the historical notes below.
 
 - #143 merged `a24bc31` after both current-head CI checks. Its shipping
   session 78829 is DONE; never rerun ship143.
+- Rolling #145 is open and attached at `df1a5e4`, with both CI checks
+  pending. Ship it when both current-head checks pass. #144's core CI
+  passes; its viewer check is still running.
 - HUD source `aabfc8b` passed 121 focused and 14,386 engine tests, the
   doctest, strict lint, formatting, 49 hygiene checks and release build.
   cycle03 session 72751 is DONE: collection `34ee119` passes 14,410
@@ -28,7 +31,9 @@ This section supersedes the historical notes below.
   initial pointer type-annotation errors were corrected, tests still await
   results. `/root/a01_round19` now has the other compiler lane for its
   forty TaskQueueInterface bodies and forty-two tests. Four are complete;
-  thirty-six retain reviewed compiler-only partials. After collection its
+  thirty-six retain reviewed compiler-only partials. Its forty-two focused
+  and 14,445 engine tests pass; strict lint and release checks continue.
+  After collection its
   fresh worker must continue ordinary bodies at `0087b650`.
 - Root PR #144 is published and attached at `94e709c`, branch
   `codex/phase2-reference-predicate`. Three helpers and four regressions
@@ -40,20 +45,27 @@ This section supersedes the historical notes below.
   list is empty. Historical plugin contents, ordinary script execution,
   whole-save preservation and world/viewer integration remain unverified.
   Merge #144 only after both current-head CI checks pass.
-- Root follow-on source checkpoint `d1b4123` on
+- Root follow-on source checkpoints `d1b4123` and `a5a5952` on
   `codex/phase2-script-local-values` owns `fallout_shared/tesscript.rs`,
-  `fallout_misc/bgsloadgamebuffer.rs` and topic `ENGINE_STATE.md`. It fixes
+  `fallout_misc/bgsloadgamebuffer.rs`, `bgssavegamebuffer.rs` and topic
+  `ENGINE_STATE.md`. It fixes
   raw flag copying, signaling-NaN stores and live list-item lookup, and adds
-  two saved-form reader helpers. Eight regressions are drafted but unrun;
-  seventy-eight native cases and independent PC/source review pass.
+  two saved-form reader helpers and the numeric-form writer. SaveGame
+  reloads the reference ID and effect flag/pointer after helper calls.
+  Thirteen regressions are drafted but unrun; 102 native cases pass.
+  Independent PC/source review passes, including the corrected test fixtures.
   Rebase after #144 merges, then run the prepared full check pipeline and
-  final nine-vector normal-registry release probe when a lane is free.
+  final normal-registry release probes (nine LoadGame and eighteen SaveGame
+  vectors) when a lane is free.
+- Fresh a03's b0223 batch now has forty normal bodies and forty-three
+  drafted tests. Thirty-three native cases and independent PC review pass.
+  Eight compiler-only partials remain explicit. Cargo checks are queued.
 - Limit full Cargo pipelines to two: water and taskqueue now own them.
   Root and fresh a03 are source-only. No deletion attempts after automatic
   review rejected cleanup and the user removed idle caches manually.
 - Build 40 remains current, without a confirmed next-play date or new
   visible feature. Continue cycling and shipping until stopped. Preserve
-  the user's 98% weekly stop/handoff rule (62% around 15:35 EDT).
+  the user's 98% weekly stop/handoff rule (70% around 16:02 EDT).
 ### Active again, 2026-10-11 after the usage reset
 
 This section supersedes the historical stopped state below. User requested
