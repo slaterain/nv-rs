@@ -42,7 +42,9 @@ also collected (`4cc1b3f`, 14,189 combined tests) and restarted on BSAudio.
 #138 merged six script helpers and eighteen regressions. I/O collected as
 `75bd3b5` with 14,239 combined engine tests passing, and a fresh worker
 immediately continued. HUD's intermediate focused check passed 93 tests;
-its forty-body batch is now under validation. I/O's remaining twenty-four
+its forty-body batch now passed final validation and collection (`faae60d`,
+14,379 combined engine tests). A fresh HUD worker immediately continued
+from `0077f5e0`, and audio now validates. I/O's remaining twenty-four
 bodies collected as `1fc794c` after 14,311 combined engine tests; a fresh
 worker immediately started BGSAutoWater. Audio collected as `ceaf531`
 (after shipping rebase) with 14,279 combined
@@ -58,7 +60,7 @@ The evaluator implements
 BEGIN/action-list paths only; other modes stay explicitly unsupported.
 The user freed the idle build caches, restoring about 25 GB at verification.
 Build 40 remains current; whole-save and playable inventory integration
-are still pending. Next action: continue HUD/audio checks and
+are still pending. Next action: collect audio after its checks and
 close the probe dependencies. [HANDOFF.md](HANDOFF.md) tracks ownership.
 
 Script-loading dependency #135 is published at `86d19a0`: 15,876 workspace
