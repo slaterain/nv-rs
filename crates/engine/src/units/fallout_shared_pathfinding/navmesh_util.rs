@@ -10,20 +10,14 @@
 //! is the mesh) or of its embedded search grid at `NavMesh + 0xA8`
 //! ([`NavMeshGrid`], `this` is the grid).
 //!
-//! This continuation follows the preserved translations through `006986d0`
-//! and examines the next 40 queue entries:
-//! 36 functions from the window are translated below; four remain open and
-//! unregistered.
-//! `006987d0`'s grid/triangle geometry predicate and candidate removal,
-//! `006997e0`'s cancellation and obstacle mutation/result path, `00699b60`'s
-//! edge-pair rebuild/repair state machine, and `0069aa20`'s portal-edge
-//! proximity matching and insertion still need exact translations. The next
-//! continuation resumes at `006987d0` before moving past `0069aa20`.
+//! Continuations have translated 110 of this unit's 113 entries. The current
+//! batch closes the door-record, neighboring-portal, and undo-operation
+//! initialization paths, and fixes the append helper's buffer reload after
+//! construction. Three larger geometry/undo routines remain unregistered.
 //!
-// open: 006987d0 - complete grid-footprint/triangle-edge predicate, cancellation path, and candidate removal.
-// open: 006997e0 - cancellation checks, obstacle-data mutation, and final result path.
-// open: 00699b60 - full extra-edge pair rebuild/reset and allocation/release matching.
-// open: 0069aa20 - portal-edge neighbor matching, proximity/normal tests, and insertion.
+// open: 006987d0 - full transformed obstacle-footprint/grid scan and triangle intersection predicate; its consumers dispatch by address until translated.
+// open: 00699b60 - edge-pair map rebuild, winding/proximity repair, allocation ownership, and final per-triangle nearest-vertex selection.
+// open: 006bd040 - transformed obstacle corners, projected heights, vertex/edge creation, and long-edge undo ownership updates.
 //
 //! Conventions in this file:
 //! - Methods the engine map leaves unnamed are `fn_<address>`, named by what
@@ -2193,6 +2187,69 @@ pub fn fn_006997b0(e: &mut Engine, this: Ptr, key: u16, out: Ptr) {
     e.call(0x0069_afb0, &args![this.byte_add(0xe0), key, out]);
 }
 
+// Translated from 006997e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Collects triangles intersecting the narrowed obstacle bounds, then marks
+/// them as closed-door triangles and appends records for this door. Existing
+/// records for the same door are preserved. Normal-path temporary destruction
+/// is retained; compiler exception unwinding is omitted.
+pub fn fn_006997e0(e: &mut Engine, this: Ptr<NavMesh>, door: Ptr, bounds: Ptr) -> bool {
+    e.with_stack(52, |e, scratch| {
+        let extent = scratch;
+        let adjustment = scratch.byte_add(12);
+        let triangles = scratch.byte_add(24);
+        let reference = scratch.byte_add(40);
+        let record = scratch.byte_add(44);
+        e.call(
+            0x0043_9ef0,
+            &args![bounds.byte_add(0x4c), extent, bounds.byte_add(0x40)],
+        );
+        for axis in 0..3 {
+            let initial = e.mem.u32(0x011f_426c + axis * 4);
+            e.mem.set_u32(adjustment.addr() + axis * 4, initial);
+        }
+        let absolute = |e: &mut Engine, axis: u32| {
+            let value = e.mem.f32(extent.addr() + axis * 4);
+            e.call(0x0040_8840, &args![value]).f64()
+        };
+        let x = absolute(e, 0);
+        let y = absolute(e, 1);
+        // TEST AH,0x41 takes the alternate branch for <= and unordered.
+        let candidate = if y > x { 0 } else { 1 };
+        let smaller = absolute(e, candidate);
+        let z = absolute(e, 2);
+        let axis = if z > smaller { candidate } else { 2 };
+        let value = -absolute(e, axis) * e.mem.f64(0x0106_b168);
+        e.mem.set_f32(adjustment.addr() + axis * 4, value as f32);
+        e.call(0x0069_17d0, &args![triangles]);
+        e.call(0x0063_3c90, &args![reference, bounds]);
+        // The same-unit spatial collector remains open; dispatch by address
+        // until its translation is available, preserving its real ABI.
+        e.call(0x0069_87d0, &args![this, reference, adjustment, triangles]);
+        e.call(0x0045_cec0, &args![reference]);
+        let mut index = 0u32;
+        while index < e.call(ARRAY_SIZE, &args![triangles]).u32() {
+            let element = e.call(0x005e_eda0, &args![triangles, index]).u32();
+            let triangle_index = e.mem.u16(element);
+            let existing = nav_mesh_get_closed_door_info_for_triangle(e, this, triangle_index);
+            if existing.is_null() || e.mem.u32(existing.addr()) != door.addr() {
+                let element = e.call(0x005e_eda0, &args![triangles, index]).u32();
+                let triangle_index = e.mem.u16(element);
+                let triangle = e.call(0x0055_82f0, &args![this, triangle_index]).u32();
+                e.call(0x0069_1570, &args![triangle, 0x1000u32]);
+                e.call(0x0069_2870, &args![record]);
+                e.mem.set_u32(record.addr(), door.addr());
+                let element = e.call(0x005e_eda0, &args![triangles, index]).u32();
+                let triangle_index = e.mem.u16(element);
+                e.mem.set_u16(record.addr() + 4, triangle_index);
+                fn_0069b030(e, this.byte_add(0x68), record);
+            }
+            index = index.wrapping_add(1);
+        }
+        e.call(0x0069_1800, &args![triangles]);
+    });
+    true
+}
+
 // Translated from 00699af0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Returns the first closed-door edge record at `NavMesh + 0x68` whose
 /// triangle index matches `triangle`, or null if no entry matches.
@@ -2339,6 +2396,108 @@ pub fn fn_0069a7a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
 pub fn fn_0069a7d0(e: &mut Engine, this: Ptr) {
     e.call(0x0069_b2f0, &args![this.byte_add(0x18)]);
     e.call(0x0069_b2f0, &args![this.byte_add(8)]);
+}
+
+// Translated from 0069aa20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Repairs the neighboring mesh's portal record when it has one candidate
+/// edge or when reversed endpoints identify a unique match. Normal reference
+/// cleanup is retained; compiler exception unwinding is omitted.
+pub fn fn_0069aa20(e: &mut Engine, this: Ptr<NavMesh>) -> bool {
+    let mut triangle_index = 0u32;
+    while triangle_index < e.call(0x0055_8200, &args![this]).u32() {
+        let triangle = e
+            .call(0x0055_82f0, &args![this, triangle_index as u16])
+            .u32();
+        if triangle != 0 && e.call(0x0069_0e10, &args![triangle]).bool() {
+            for edge in 0..3i32 {
+                if !e.call(0x0068_f1d0, &args![triangle, edge]).bool() {
+                    continue;
+                }
+                let extra_index = e.call(0x0068_f2c0, &args![triangle, edge]).u16();
+                let extra = e.call(0x0069_3d30, &args![this, extra_index]).u32();
+                e.with_stack(76, |e, scratch| {
+                    let reference = scratch;
+                    let start = scratch.byte_add(4);
+                    let end = scratch.byte_add(16);
+                    let other_start = scratch.byte_add(28);
+                    let other_end = scratch.byte_add(40);
+                    let difference = scratch.byte_add(52);
+                    let second_difference = scratch.byte_add(64);
+                    e.call(0x0042_fb00, &args![reference]);
+                    let holder = Ptr::new(e.mem.u32(extra + 4));
+                    if fn_0069ad00(e, holder, reference) {
+                        let other_index = e.mem.u16(extra + 8);
+                        let other_mesh = e.call(POINTER_GET, &args![reference]).ptr::<NavMesh>();
+                        let other_triangle =
+                            e.call(0x0055_82f0, &args![other_mesh, other_index]).u32();
+                        if other_triangle != 0 {
+                            let mut candidates = 0;
+                            let mut chosen = -1i32;
+                            for candidate in 0..3i32 {
+                                if e.call(0x0068_f1d0, &args![other_triangle, candidate])
+                                    .bool()
+                                {
+                                    candidates += 1;
+                                    chosen = candidate;
+                                }
+                            }
+                            if candidates != 0 {
+                                e.call(
+                                    0x0068_f0c0,
+                                    &args![this, triangle_index as u16, edge, start, end],
+                                );
+                                for candidate in 0..3i32 {
+                                    let other_index = e.mem.u16(extra + 8);
+                                    let other_mesh = e.call(POINTER_GET, &args![reference]).u32();
+                                    e.call(
+                                        0x0068_f0c0,
+                                        &args![
+                                            other_mesh,
+                                            other_index,
+                                            candidate,
+                                            other_start,
+                                            other_end
+                                        ],
+                                    );
+                                    let delta = e
+                                        .call(0x0043_9ef0, &args![start, difference, other_end])
+                                        .u32();
+                                    let distance = e.call(0x004a_7290, &args![delta]).f64();
+                                    if distance < e.mem.f64(0x0106_b178) {
+                                        let delta = e
+                                            .call(
+                                                0x0043_9ef0,
+                                                &args![end, second_difference, other_start],
+                                            )
+                                            .u32();
+                                        let distance = e.call(0x004a_7290, &args![delta]).f64();
+                                        if distance < e.mem.f64(0x0106_b178) {
+                                            chosen = candidate;
+                                            candidates = 1;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if candidates == 1 {
+                                let other_index = e.mem.u16(extra + 8);
+                                let other_mesh =
+                                    e.call(POINTER_GET, &args![reference]).ptr::<NavMesh>();
+                                let target = fn_006976a0(e, other_mesh, other_index, chosen);
+                                let mesh_info = e.call(0x0068_efb0, &args![this]).u32();
+                                e.mem.set_u32(target.addr() + 4, mesh_info);
+                                e.mem.set_u16(target.addr() + 8, triangle_index as u16);
+                                e.mem.set_u32(target.addr(), 3);
+                            }
+                        }
+                    }
+                    e.call(0x0042_fa40, &args![reference]);
+                });
+            }
+        }
+        triangle_index = triangle_index.wrapping_add(1);
+    }
+    true
 }
 
 // Translated from 0069ad00 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2651,6 +2810,8 @@ pub fn fn_0069b030(e: &mut Engine, this: Ptr, value: Ptr) -> u32 {
     let index = e.call(0x0084_5460, &args![this]).u32();
     let target = e.mem.u32(this.addr() + 4) + index * 8;
     e.call(0x0069_27d0, &args![this, target, 1u32]);
+    // The constructor call may relocate the backing buffer; PC reloads +4.
+    let target = e.mem.u32(this.addr() + 4) + index * 8;
     fn_0069a690(e, Ptr::new(target), value);
     index
 }
@@ -3030,8 +3191,29 @@ pub fn fn_0069b8a0(e: &mut Engine, _this: Ptr) -> Ptr {
 }
 
 /// This unit's translated functions, by exe address.
+// Translated from 006bc8e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the mesh and undo data, resets the operation, and reserves the
+/// mesh's vertex and triangle arrays from the undo record's counts.
+pub fn fn_006bc8e0(e: &mut Engine, this: Ptr, mesh: Ptr, undo: Ptr) -> bool {
+    e.mem.set_u32(this.addr(), mesh.addr());
+    e.mem.set_u32(this.addr() + 8, undo.addr());
+    e.call(0x006b_ebd0, &args![this]);
+    let undo = e.mem.u32(this.addr() + 8);
+    let mesh = e.mem.u32(this.addr());
+    let vertices = e.mem.u32(undo + 0x10);
+    e.call(0x0069_4890, &args![mesh + 0x28, vertices, 1u32]);
+    let undo = e.mem.u32(this.addr() + 8);
+    let mesh = e.mem.u32(this.addr());
+    let triangles = e.mem.u32(undo + 0x18);
+    e.call(0x0069_49d0, &args![mesh + 0x38, triangles, 1u32]);
+    true
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0069aa20, fn_0069aa20(Ptr<NavMesh>) -> bool),
+        entry!(0x006997e0, fn_006997e0(Ptr<NavMesh>, Ptr, Ptr) -> bool),
+        entry!(0x006bc8e0, fn_006bc8e0(Ptr, Ptr, Ptr) -> bool),
         entry!(0x006953b0, nav_mesh_fix_portals_from_nav_mesh_deletion(Ptr)),
         entry!(0x00695660, fn_00695660(Ptr<NavMesh>, u16)),
         entry!(0x006957d0, fn_006957d0(Ptr<NavMeshTriangle>) -> bool),
@@ -5794,6 +5976,301 @@ mod tests {
         assert_eq!(e.mem.u16(buffer + 20), 0x5566);
     }
 
+    #[test]
+    fn edge_handle_append_reloads_buffer_after_constructor_relocation() {
+        let mut e = Engine::new();
+        let this = Ptr::new(e.mem.alloc(16));
+        let old_buffer = e.mem.alloc(24);
+        let new_buffer = e.mem.alloc(24);
+        let source = Ptr::new(e.mem.alloc(8));
+        e.mem.set_u32(this.addr() + 4, old_buffer);
+        e.mem.set_u32(old_buffer + 16, 0xaaaa_bbbb);
+        e.mem.set_u32(old_buffer + 20, 0xcccc_dddd);
+        e.mem.set_u32(new_buffer + 20, 0xeeee_ffff);
+        e.mem.set_u32(source.addr(), 0x1122_3344);
+        e.mem.set_u16(source.addr() + 4, 0x5566);
+        recorder(&mut e, 0x0084_5460, 2);
+        e.register_double(0x0069_27d0, move |e, a| {
+            assert_eq!(a, &[this.addr(), old_buffer + 16, 1]);
+            e.mem.set_u32(this.addr() + 4, new_buffer);
+            ret(0)
+        });
+        assert_eq!(fn_0069b030(&mut e, this, source), 2);
+        assert_eq!(e.mem.u32(new_buffer + 16), 0x1122_3344);
+        assert_eq!(e.mem.u32(new_buffer + 20), 0xeeee_5566);
+        assert_eq!(e.mem.u32(old_buffer + 16), 0xaaaa_bbbb);
+        assert_eq!(e.mem.u32(old_buffer + 20), 0xcccc_dddd);
+    }
+
+    #[test]
+    fn undo_operation_reserves_arrays_and_reloads_mutated_members() {
+        let mut e = Engine::new();
+        let operation = Ptr::new(e.mem.alloc(12));
+        let mesh = Ptr::new(e.mem.alloc(0x48));
+        let undo = Ptr::new(e.mem.alloc(0x20));
+        let replacement_mesh = e.mem.alloc(0x48);
+        let replacement_undo = e.mem.alloc(0x20);
+        e.mem.set_u32(undo.addr() + 0x10, 17);
+        e.mem.set_u32(undo.addr() + 0x18, 19);
+        e.mem.set_u32(replacement_undo + 0x18, 23);
+        e.mem.set_u32(operation.addr() + 4, 0x1234_5678);
+        e.register_double(0x006b_ebd0, move |e, a| {
+            assert_eq!(a, &[operation.addr()]);
+            assert_eq!(e.mem.u32(operation.addr()), mesh.addr());
+            assert_eq!(e.mem.u32(operation.addr() + 8), undo.addr());
+            ret(0)
+        });
+        e.register_double(0x0069_4890, move |e, a| {
+            assert_eq!(a, &[mesh.addr() + 0x28, 17, 1]);
+            e.mem.set_u32(operation.addr(), replacement_mesh);
+            e.mem.set_u32(operation.addr() + 8, replacement_undo);
+            ret(0)
+        });
+        let triangles = recorder(&mut e, 0x0069_49d0, 0);
+        assert!(fn_006bc8e0(&mut e, operation, mesh, undo));
+        assert_eq!(
+            &*triangles.borrow(),
+            &[vec![replacement_mesh + 0x38, 23, 1]]
+        );
+        assert_eq!(e.mem.u32(operation.addr() + 4), 0x1234_5678);
+    }
+
+    #[test]
+    fn closed_door_collection_selects_smallest_extent_and_releases_temporaries() {
+        for (extent, chosen) in [
+            ([1.0f32, -2.0, 3.0], 0),
+            ([3.0, -1.0, 2.0], 1),
+            ([2.0, 3.0, -1.0], 2),
+            ([3.0, 2.0, -1.0], 2),
+            ([2.0, 2.0, 2.0], 2),
+            ([f32::NAN, 2.0, 3.0], 1),
+        ] {
+            let mut e = Engine::new();
+            let mesh = e.new_object::<NavMesh>();
+            let bounds = Ptr::new(e.mem.alloc(0x58));
+            e.map(0x011f_4000, 0x1000);
+            e.map(0x0106_b000, 0x1000);
+            e.mem.set_f64(0x0106_b168, 0.49000000953674316);
+            for axis in 0..3 {
+                e.mem.set_f32(0x011f_426c + axis * 4, 10.0 + axis as f32);
+            }
+            e.register_double(0x0043_9ef0, move |e, a| {
+                assert_eq!(a[0], bounds.addr() + 0x4c);
+                assert_eq!(a[2], bounds.addr() + 0x40);
+                for (axis, value) in extent.iter().enumerate() {
+                    e.mem.set_f32(a[1] + axis as u32 * 4, *value);
+                }
+                ret(a[1])
+            });
+            e.register(0x0040_8840, |_, a| ret_float(f32::from_bits(a[0]).abs()));
+            recorder(&mut e, 0x0069_17d0, 0);
+            recorder(&mut e, 0x0063_3c90, 0);
+            e.register_double(0x0069_87d0, move |e, a| {
+                assert_eq!(a[0], mesh.addr());
+                for (axis, component) in extent.iter().enumerate() {
+                    let expected = if axis == chosen {
+                        (-f64::from(component.abs()) * 0.49000000953674316) as f32
+                    } else {
+                        10.0 + axis as f32
+                    };
+                    assert_eq!(e.mem.f32(a[2] + axis as u32 * 4), expected);
+                }
+                ret(0)
+            });
+            recorder(&mut e, ARRAY_SIZE, 0);
+            let reference_destroy = recorder(&mut e, 0x0045_cec0, 0);
+            let array_destroy = recorder(&mut e, 0x0069_1800, 0);
+            assert!(fn_006997e0(&mut e, mesh, Ptr::new(0x1234), bounds));
+            assert_eq!(reference_destroy.borrow().len(), 1);
+            assert_eq!(array_destroy.borrow().len(), 1);
+        }
+    }
+
+    #[test]
+    fn closed_door_collection_appends_absent_and_different_door_records() {
+        for old_door in [None, Some(0x1234u32), Some(0x5678u32)] {
+            let mut e = Engine::new();
+            let mesh = e.new_object::<NavMesh>();
+            let bounds = Ptr::new(e.mem.alloc(0x58));
+            let element = e.mem.alloc(2);
+            let existing = e.mem.alloc(8);
+            let buffer = e.mem.alloc(16);
+            e.mem.set_u16(element, 7);
+            e.mem.set_u16(existing + 4, 7);
+            e.mem.set_u32(existing, old_door.unwrap_or(0));
+            e.mem.set_u32(mesh.addr() + 0x6c, buffer);
+            e.map(0x011f_4000, 0x1000);
+            e.map(0x0106_b000, 0x1000);
+            e.mem.set_f64(0x0106_b168, 0.49);
+            e.register(0x0043_9ef0, |e, a| {
+                for axis in 0..3 {
+                    e.mem.set_f32(a[1] + axis * 4, 2.0);
+                }
+                ret(a[1])
+            });
+            e.register(0x0040_8840, |_, a| ret_float(f32::from_bits(a[0]).abs()));
+            for address in [
+                0x0069_17d0,
+                0x0063_3c90,
+                0x0069_87d0,
+                0x0045_cec0,
+                0x0069_1800,
+                0x0069_2870,
+                0x0069_27d0,
+            ] {
+                recorder(&mut e, address, 0);
+            }
+            e.register_double(ARRAY_SIZE, move |_, a| {
+                ret(if a[0] == mesh.addr() + 0x68 {
+                    u32::from(old_door.is_some())
+                } else {
+                    1
+                })
+            });
+            recorder(&mut e, 0x005e_eda0, element);
+            recorder(&mut e, 0x0069_50d0, existing);
+            recorder(&mut e, 0x0055_82f0, 0x8765);
+            recorder(&mut e, 0x0084_5460, 1);
+            let flag = recorder(&mut e, 0x0069_1570, 0);
+            assert!(fn_006997e0(&mut e, mesh, Ptr::new(0x1234), bounds));
+            if old_door == Some(0x1234) {
+                assert!(flag.borrow().is_empty());
+                assert_eq!(e.mem.u32(buffer + 8), 0);
+            } else {
+                assert_eq!(&*flag.borrow(), &[vec![0x8765, 0x1000]]);
+                assert_eq!(e.mem.u32(buffer + 8), 0x1234);
+                assert_eq!(e.mem.u16(buffer + 12), 7);
+            }
+        }
+    }
+
+    #[test]
+    fn portal_repair_covers_rejections_unique_fallback_and_endpoint_matching() {
+        // mode: null source, inactive source, no portal, prohibited holder,
+        // empty reference, missing neighbor, then the candidate cases.
+        for mode in 0..15 {
+            let mut e = Engine::new();
+            let mesh = e.new_object::<NavMesh>();
+            let neighbor = e.new_object::<NavMesh>();
+            let source_triangle = e.mem.alloc(16);
+            let neighbor_triangle = e.mem.alloc(16);
+            let extra = e.mem.alloc(12);
+            let holder = e.mem.alloc(0x58);
+            let target = e.mem.alloc(12);
+            e.mem.set_u32(extra + 4, holder);
+            e.mem.set_u16(extra + 8, 7);
+            e.mem.set_u32(holder + 0x54, 0x1111);
+            e.mem.set_u32(target, 0xaaaa);
+            e.map(0x0106_b000, 0x1000);
+            e.mem.set_f64(0x0106_b178, 400.0);
+            recorder(&mut e, 0x0055_8200, 1);
+            e.register_double(0x0055_82f0, move |_, a| {
+                if a[0] == mesh.addr() {
+                    assert_eq!(a[1], 0);
+                    ret(if mode == 0 { 0 } else { source_triangle })
+                } else {
+                    assert_eq!(a, &[neighbor.addr(), 7]);
+                    ret(if mode == 5 { 0 } else { neighbor_triangle })
+                }
+            });
+            recorder(&mut e, 0x0069_0e10, u32::from(mode != 1));
+            e.register_double(0x0068_f1d0, move |_, a| {
+                ret(u32::from(if a[0] == source_triangle {
+                    mode != 2 && a[1] == 0
+                } else {
+                    let count = if mode == 6 {
+                        0
+                    } else if mode == 7 {
+                        1
+                    } else {
+                        2
+                    };
+                    a[1] < count
+                }))
+            });
+            recorder(&mut e, 0x0068_f2c0, 9);
+            e.register_double(0x0069_3d30, move |_, a| {
+                assert_eq!(a, &[mesh.addr(), 9]);
+                ret(extra)
+            });
+            recorder(&mut e, 0x0042_fb00, 0);
+            recorder(&mut e, 0x0068_f320, u32::from(mode == 3));
+            e.register_double(0x0069_0890, |_, a| {
+                assert_eq!(a[1], 0x1111);
+                ret(0)
+            });
+            recorder(
+                &mut e,
+                POINTER_GET,
+                if mode == 4 { 0 } else { neighbor.addr() },
+            );
+            e.register_double(0x0068_f0c0, move |e, a| {
+                assert_eq!(a.len(), 5);
+                let first = if a[0] == mesh.addr() {
+                    assert_eq!(&a[1..3], &[0, 0]);
+                    1
+                } else {
+                    assert_eq!(a[0], neighbor.addr());
+                    assert_eq!(a[1], u32::from(e.mem.u16(extra + 8)));
+                    assert!(a[2] < 3);
+                    3
+                };
+                e.mem.set_u32(a[3], first);
+                e.mem.set_u32(a[4], first + 1);
+                ret(0)
+            });
+            e.register(0x0043_9ef0, |e, a| {
+                assert_eq!(a.len(), 3);
+                let endpoints = (e.mem.u32(a[0]), e.mem.u32(a[2]));
+                assert!(matches!(endpoints, (1, 4) | (2, 3)));
+                ret(a[1])
+            });
+            let distances = Rc::new(RefCell::new(0usize));
+            let distance_count = distances.clone();
+            e.register_double(0x004a_7290, move |e, _| {
+                let mut count = distance_count.borrow_mut();
+                if mode == 14 && *count == 0 {
+                    // Reload the changed neighbor index for the next
+                    // candidate and the final insertion.
+                    e.mem.set_u16(extra + 8, 11);
+                }
+                let value = match mode {
+                    9 => 1.0,                     // Both endpoints match on candidate zero.
+                    10 if *count % 2 == 0 => 1.0, // Second endpoint rejects.
+                    11 => f32::NAN,               // Unordered comparison rejects.
+                    12 if *count >= 1 => 1.0,     // Candidate one matches.
+                    13 if *count % 2 == 0 => 1.0,
+                    13 => f32::NAN, // Second endpoint unordered rejects.
+                    14 if *count >= 1 => 1.0,
+                    _ => 400.0, // Equality rejects; single candidate survives.
+                };
+                *count += 1;
+                ret_float(value)
+            });
+            let selected = recorder(&mut e, GET_EDGE_EXTRA_INFO, target);
+            recorder(&mut e, 0x0068_efb0, 0x1234);
+            let destroyed = recorder(&mut e, 0x0042_fa40, 0);
+            assert!(fn_0069aa20(&mut e, mesh));
+            assert_eq!(destroyed.borrow().len(), usize::from(mode >= 3));
+            if [7, 9, 12, 14].contains(&mode) {
+                let expected_edge = u32::from(mode == 12 || mode == 14);
+                let expected_triangle = if mode == 14 { 11 } else { 7 };
+                assert_eq!(
+                    &*selected.borrow(),
+                    &[vec![neighbor.addr(), expected_triangle, expected_edge]]
+                );
+                assert_eq!(e.mem.u32(target), 3);
+                assert_eq!(e.mem.u32(target + 4), 0x1234);
+                assert_eq!(e.mem.u16(target + 8), 0);
+            } else {
+                assert!(selected.borrow().is_empty());
+                assert_eq!(e.mem.u32(target), 0xaaaa);
+            }
+            if mode == 6 {
+                assert_eq!(*distances.borrow(), 0);
+            }
+        }
+    }
     #[test]
     fn obstacle_map_is_empty_reads_item_count() {
         let mut e = Engine::new();
