@@ -7,6 +7,42 @@ machinery runs.
 
 ## Resume here
 
+### Current state, 2026-10-11 16:47 EDT
+
+This section supersedes the historical notes below.
+
+- #145 merged `fb4b846` after both current-head core and viewer checks
+  passed at head `58a404c`. Shipping session 30959 is DONE; never rerun it.
+  Lead's two later documentation commits were rebased and retained locally
+  with `HOLD_LATER_PUSH=1`. No new rolling PR is open yet.
+- Root saved-local branch `codex/phase2-script-local-values` remains on
+  source `af1de08`, based on merged #144. Session 74945 is the sole heavy
+  compiler pipeline: all 1,343 script, eight reader and ten writer focused
+  tests pass, followed by all 16,273 workspace tests including doctests.
+  Strict lint is now running; formatting, release/debug builds and final
+  normal-registry load/save/three-leg-chain probes remain pending. Only
+  `docs/ENGINE_STATE.md` is dirty in that checkout. Three copied native
+  overlap-fixture strings were corrected before the passing run; production
+  behavior was unchanged by that test correction. Do not rebase or edit
+  source during the running checks.
+- a01 taskqueue retains its earlier focused/full-engine passes; interrupted
+  Clippy, hygiene and release remain queued. Water's corrected forty-four
+  tests and a03's forty-three save-file/change-map tests remain queued.
+  All three slots stay compiler-held. After root checks, finish a01 and
+  collect/restart it, then water, then a03. Use one Cargo job and one
+  heavy compiler pipeline; only one cycle script may run at a time.
+- Private inventory projection probes preserve eighteen original multi-stack
+  item payloads and a generated three-stack item, including explicit zero
+  counts, health bits and Worn markers. This is read-only feasibility, not
+  world integration. a03 now prepares a private source-bound owner prototype
+  with fresh save mappings and complete provenance; no compilation grant.
+  Whole-save preservation, live inventory integration and play acceptance
+  remain open. Build 40 stays current with no confirmed next-play date.
+- Future root focused tests should use the same workspace selection as the
+  full test run to reuse compiled tests. The current running pipeline used
+  the old engine-only focused selection and must not be restarted solely
+  for that optimization. Preserve the user's 98% weekly stop/handoff rule.
+
 ### Current state, 2026-10-11 16:19 EDT
 
 This section supersedes the historical notes below.

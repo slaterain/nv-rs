@@ -33,7 +33,19 @@ reading do not establish them.
 
 ## Active work: M1
 
-Continuous translation remains active. #143 merged after both CI checks.
+Continuous translation remains active. #145 merged `fb4b846` after both
+current-head checks passed. Root's saved-local batch passes all focused
+checks and 16,273 workspace tests including doctests; strict lint is running,
+with release/debug builds and final load/save/three-leg-chain probes pending.
+Taskqueue, water and save-file drafts retain their documented validation
+state and wait for the single heavy compiler lane. Private inventory probes
+preserve eighteen original multi-stack item payloads plus generated count,
+health and Worn cases; source-bound ownership and world integration remain
+open. Build 40 is current, with no confirmed next-play date. Next action:
+finish and publish the saved-local batch, then collect each validated slot
+and immediately restart its worker. [HANDOFF.md](HANDOFF.md) tracks ownership.
+
+#143 merged after both CI checks.
 HUD's final six normal bodies passed validation and collection `34ee119`:
 14,410 combined engine tests, doctest, strict lint and formatting. Seventeen
 compiler-only partials remain explicit. A fresh worker immediately started
