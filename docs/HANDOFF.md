@@ -10,8 +10,8 @@ machinery runs.
 Codex takeover, 2026-10-10: rolling PRs #109, #112 and #114 passed both CI
 checks and were squash-merged as `b995218`, `d854fbe` and `89e1a0b`.
 Current rolling PR #116 contains the later navigation continuation and
-explosion helpers, ledger and handoff. The explosion review corrections
-listed below are required before #116 merges. The lead branch is `claude/engine-crate`.
+explosion helpers, ledger and handoff. The explosion review corrections have been collected and checked;
+#116 needs fresh CI on the updated head before merging. The lead branch is `claude/engine-crate`.
 
 Phase 1 PR 7 (#113) passed both checks and merged as `f917219`.
 The lead branch is rebased onto current main `89e1a0b`.
@@ -37,13 +37,11 @@ Slot state: a01 navigation continuation is owned by worker `/root/a04`
 (not the explosion worker). Its previous 36 complete / 4 skipped batch was
 collected as `a8b4daf`; the new task starts with open `006987d0`.
 a03 b0331 pathmanager.cpp is running under `/root/a03`.
-a04 b0160 explosion.cpp is running under fresh worker `/root/a04_round3`.
-Its prior 24 complete / 16 skipped batch was collected as `520c406`, with
-13,511 combined engine tests passing. Review corrections MUST land before
-this explosion batch merges: `009ae540` returns its destination and its
-x87 copies quiet signaling NaNs; `009afc30`/`009afc50` wrap getters, not
-destructors; `009afc70` calls a byte setter, not an assertion. The new
-worker has the native vectors and missing branch-test requirements.
+a04 b0160 explosion.cpp is running under fresh worker `/root/a04_round4`.
+Its 24-function continuation and all reviewed ABI/NaN/accessor corrections
+were collected as `57fdb72`; 13,541 combined engine tests, lint and formatting
+pass. Native copy vectors and missing branch tests are included. 37 queue
+entries remain, starting `009ac200`. a04 is researching with cargo held.
 a06's next b0360 and a05's next b0158 (12 entries starting `008ca620`)
 are prepared and waiting for capacity. Never collect/reset an active slot.
 a05's collected batch has 28 complete / 12 partial functions; gaps remain
@@ -76,10 +74,13 @@ rustc memory allocation, before tests; no assertion failure. It is closed.
 Retry tests, clippy and release serially; private logs are
 `phase2-count-rebased-*`.
 Its real-save count probe passes 14 payloads across 3,319 extra lists.
-The managed checkout is on `codex/phase2-extra-count` with a generated
-ledger change. No root cargo process is active. Simultaneous engine test
+The count follow-on is draft PR #117 at `117d104`, stacked on #115; retarget
+onto main after #115 merges. No root cargo process is active. The managed
+checkout is now `codex/phase2-extra-health`, with uncommitted adapter and
+constructor-test changes. A native vector caught signaling-NaN handling in
+`00431d10`; the fix and health adapter tests are not yet compiled. Simultaneous engine test
 compilers exhausted host memory; ONE heavy engine compile may run at a
-time now. a04 has the current validation window; a01/a03 and root wait,
+time now. a01 has the current validation window; a03, a04 and root wait,
 continuing research/review. The lead grants each next window explicitly.
 Machine note: automatic policy blocked removal of idle p3's target cache;
 nothing was deleted. Private `task.sh` now warns below 40 GB free instead
@@ -92,7 +93,7 @@ Next steps:
    is published and all three acceptance routes have passed.
 2. Collect completed slots with one `cycle.sh NN 0 0` at a time. Never
    cycle an active agent's worktree. Rotate prepared tasks as capacity opens.
-3. Collect the required explosion corrections into #116, then ship when both checks pass; rebase affected branches
+3. Ship updated #116 when both checks pass; rebase affected branches
    after another merge, retaining tests and regenerating the ledger.
 4. Rebase #115 after the next main merge and require both CI checks.
    Payload conversion, world ownership and save round trips

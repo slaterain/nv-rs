@@ -33,6 +33,13 @@ reading do not establish them.
 
 ## Active work: M1
 
+Review corrections collected, 2026-10-10: a04 adds 24 further functions
+and fixes the reviewed point-copy/accessor ABIs and x87 NaN stores;
+13,541 combined engine tests, lint and formatting pass. The ledger now
+keeps 12 documented AI partials in the task queue, with five tool tests
+passing. Fresh a04 research continues while a01 validates in the single
+compile window. Next action: ship updated #116 after both CI checks pass.
+
 Rolling PR #114 passed both CI checks and merged as `89e1a0b` on
 2026-10-10 local time. #116 now holds the subsequent navigation/explosion
 batch, with review corrections required before merge. #115 is rebased
