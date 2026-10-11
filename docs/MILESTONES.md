@@ -35,9 +35,12 @@ reading do not establish them.
 
 Rolling #126 merged `97e7572` after both CI checks; #127 publishes the
 collected movement helpers and animation loader with fresh CI. Inventory
-follow-on passes 15,690 core tests, strict lint and formatting; its builds
-and two-stack probe are still running/pending. Build 40 remains current.
-Next action: finish the inventory probe and collect explosion effects.
+follow-on `1bb06b6` passes 15,691 core tests, strict lint, formatting and
+release/debug builds. Its real-registry probe preserves two separate
+count/condition stacks in a 41-byte payload. Native loading and a world
+consumer remain unfinished. Build 40 remains current.
+Next action: publish the writer follow-on after #125 and validate loading;
+collect explosion effects when the current compiler run passes.
 
 Animation loader collected as `6c569b7`: 13,879 combined engine tests,
 strict lint and formatting pass. Three compiler-cleanup partials remain

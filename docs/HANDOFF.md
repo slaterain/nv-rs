@@ -12,18 +12,31 @@ Rolling #126 passed both checks and merged as `97e7572` at 02:47 local.
 CI, containing MobileObject collection now `7a1f056` and loader collection
 now `43a8ee1`. Save-buffer #125 has passed core CI and awaits viewer CI at
 `685c26c`; its shared-ledger delta is absent, so do not rebase it merely to
-refresh counts. Root inventory session `34376` has passed all 15,690 core
-tests, strict lint and formatting; release/debug builds and the probe remain.
+refresh counts. Root inventory follow-on is committed as `1bb06b6` on
+`codex/phase2-inventory-payload` in the managed phase2-extra-data checkout,
+based on #125. Final session `30664` passed 15,691 core tests (13,838
+engine), strict lint, formatting and release/debug builds. Seventeen
+dependencies now let the real-registry writer produce a 41-byte payload
+with delta -2 and two separate count/condition stacks (2/42.5 and 7/17.5).
+The payload decoder consumes it fully and the save-ID map resolves the
+item correctly. No FOS file, native load round trip or world consumer yet.
+After #125 merges, rebase this committed follow-on onto main and publish
+its PR. Private evidence: `codex-audit/inventory-buffer-*` and
+`inventory-next-native*`; ten generated native vectors pass.
 
 Latest batch: animation loader source `99fb056` collected as `6c569b7`;
 13,879 combined engine tests, strict lint and formatting pass. All 44
 unit entries have normal behavior; only SEH cleanup at `005f21c0`,
 `005f22d0`, `005f3a20` remains partial. Reviewed partial-only advancement
 retains these gaps. Fresh `/root/a03_hudmainmenu` immediately started b0236,
-HUDMainMenu, compiler held. Root now owns the compiler: session `34376`,
-private `codex-audit/check-inventory-buffer.ps1`, then the prepared
-`run-inventory-buffer-probe.ps1`. a04's six-test effect batch waits next;
-a01 continues the full movement body, then has its compiler turn.
+HUDMainMenu, compiler held. a04 owns the compiler from 02:59 local for
+its reviewed six-test explosion `009ae6e0` batch; then cycle04/fresh worker,
+a01 and a03. a01's Move/controller drafts remain unregistered during
+branch review. a03 has 37 registered HUD bodies and drafts of DoIdle and
+SetMenuMode; Create remains in progress. Review corrections include vector
+receiver/output argument order, post-callback globals and x87 boundaries.
+Root next traces the native load-buffer dependency chain. Build 40 remains
+current; no reliable next-build date or confirmed feature list exists yet.
 
 User resumed after the usage reset on 2026-10-11. Continuous translation
 is active: collect each finished, committed slot with `cycle.sh NN 0 0`,
