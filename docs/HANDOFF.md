@@ -7,6 +7,48 @@ machinery runs.
 
 ## Resume here
 
+### Current state, 2026-10-11 17:21 EDT
+
+This section supersedes the historical notes below.
+
+- #145 is merged `fb4b846`; shipping session 30959 is DONE.
+- Root #146 is open and attached at `787d282` on
+  `codex/phase2-script-local-values`. All focused checks, 16,273 workspace
+  tests including doctests, strict lint, formatting and release/debug builds
+  pass. Session 74945 is DONE. Final release probe session 98029 is also
+  DONE PASS: nine LoadGame buffers, eighteen SaveGame buffers and eighteen
+  complete SaveGame/LoadGame/SaveGame chains match native expectations.
+  Both current-head GitHub checks are running. Merge after both pass.
+- The same root checkout now owns the next branch,
+  `codex/phase2-inventory-source`, source checkpoint `446fefd`, based on #146.
+  Seven fos files were promoted from the reviewed private mirror only after
+  all source baseline and draft hashes matched. Promotion is DONE; never
+  reapply the mirror blindly. A test's intentionally reversed range was
+  expressed as a Range struct literal to satisfy Clippy without changing
+  its rejection case. The 38 package tests, strict package lint and full
+  workspace formatting pass. Full workspace tests/lint/release remain
+  queued; no PR for this batch yet. Rebase onto the verified #146 merge
+  when safe, before final full validation.
+- The source envelope keeps exact immutable source bytes/context and
+  ordered item/stack/extra spans through the existing complete decoder.
+  A private probe against the frozen mirror matches all eighteen original
+  multi-stack targets across eight saves, with three known decode failures
+  and three null-holder records preserved explicitly. This is source
+  preservation, not runtime import or whole-save writing. a03 now prepares
+  a private composition probe from the new envelope API into the existing
+  normal engine registry; no repository or slot changes are authorized there.
+- a01 owns the sole heavy compiler lane, last reported strict Clippy
+  session 75392 after its existing forty-two focused and 14,445 engine
+  tests passed. Hygiene and release must finish before a clean commit,
+  collection and immediate fresh worker. Water and a03 remain held with
+  their documented source drafts. After a01 collection, validate water,
+  then a03. Root's next full workspace pipeline waits for capacity.
+- Do not rebase or otherwise edit lead during an active collection. If #146
+  passes while a cycle runs, merge the passing remote PR first and defer
+  lead synchronization until that cycle finishes. Run only one cycle at a
+  time. Build 40 remains current, with no confirmed next-play date.
+  Preserve the 98% weekly stop/handoff rule (81% around 17:02 EDT).
+
 ### Current state, 2026-10-11 16:47 EDT
 
 This section supersedes the historical notes below.
