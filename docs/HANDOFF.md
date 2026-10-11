@@ -37,10 +37,13 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
   I/O collection is complete: source `a802ff8` became `75bd3b5`, with
   14,239 combined engine tests and strict checks passing. Fresh
   `/root/a04_round17` immediately continued b0626 from `00c3ffb0`.
-  a03's intermediate focused pass succeeded (93 tests), and audio owns the
-  sole compiler. HUD continues toward forty entries. I/O's remaining
-  twenty-four bodies and callback-mutation regressions are source-ready.
-  Root's two-helper follow-on is next after audio collection, then I/O.
+  a03's intermediate focused pass succeeded (93 tests); HUD continues
+  toward forty entries. I/O's remaining twenty-four bodies and callback
+  mutation regressions are source-ready. Audio source `fae652b` passed all
+  checks; cycle01 session 80637 collected `4c16784` with 14,279 combined
+  engine tests passing. Fresh `/root/a01_round18` immediately began the
+  remaining twenty-two audio bodies from `00ad7e90`. Root owns the sole
+  compiler for two-helper checks (session 52391), then I/O validates.
 - Root #138 is attached/published at `e7cf965` on
   `codex/phase2-script-action-parser`: `expression.rs`,
   `tesscriptrunmanager.rs` and topic `ENGINE_STATE.md` contain six helpers

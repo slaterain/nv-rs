@@ -48,7 +48,10 @@ forty-one native cases passing and Rust checks queued. I/O collected as
 immediately continued. HUD's intermediate focused check passed 93 tests;
 audio now validates while HUD finishes its remaining entries. The remaining
 twenty-four I/O bodies are drafted with callback-mutation regressions and
-await compiler access. Root has integrated #137's TLS guards for the probes.
+await compiler access. Audio collected as `4c16784` with 14,279 combined
+engine tests passing; its fresh worker immediately began the remaining
+twenty-two bodies. Root now validates the two script dependencies with
+#137's TLS guards integrated, before rerunning the real-item probes.
 The evaluator implements
 BEGIN/action-list paths only; other modes stay explicitly unsupported.
 The user freed the idle build caches, restoring about 25 GB at verification.
