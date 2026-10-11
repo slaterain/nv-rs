@@ -36,14 +36,16 @@ reading do not establish them.
 Resumed continuous translation on 2026-10-11 after the usage reset.
 #134 and #135 merged after both CI checks; rolling #136 awaits its checks.
 The 34-body effect-item batch passed all checks and collection (`ddeecbd`);
-a fresh worker immediately began I/O management. HUD validation owns the
-compiler, followed by movement and root's script parser/action-list batch.
-The latter has ten drafted regressions, six native parser cases and nine
-matching native expression-constructor cases; Rust checks remain queued.
+a fresh worker immediately began I/O management. HUD also passed collection
+(`8aaf167`, 14,177 combined engine tests) and immediately restarted. Movement
+owns the compiler, followed by root's script parser/action-list batch and I/O.
+Root now has six drafted helpers and eighteen regressions, with thirty
+matching native cases; Rust checks remain queued. The evaluator implements
+BEGIN/action-list paths only; other modes stay explicitly unsupported.
 The user freed the idle build caches, restoring about 25 GB at verification.
 Build 40 remains current; whole-save and playable inventory integration
-are still pending. Next action: validate and collect HUD, then movement,
-and validate the script helpers. [HANDOFF.md](HANDOFF.md) tracks ownership.
+are still pending. Next action: validate and collect movement, validate the
+script helpers, then I/O. [HANDOFF.md](HANDOFF.md) tracks ownership.
 
 Script-loading dependency #135 is published at `86d19a0`: 15,876 workspace
 tests including doctests, strict lint, formatting and release/debug builds

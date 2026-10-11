@@ -22,18 +22,30 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
   partials were retained with reviewed partial-only advancement. Fresh
   `/root/a04_round16` immediately started b0626, owning only
   `bsmain/iomanager.rs`; next forty entries `00456520` through `00c3fe80`.
-- `/root/a03_round17` now owns the sole heavy compiler for its reviewed
-  remaining HUD body. After its passing commit, cycle03 once and immediately
-  launch a fresh worker. Then grant `/root/a01_round16` its nine-body
-  movement batch. Both stay on existing owned files; no resets before commit.
+- HUD source `ecf56da` passed 64 focused, 14,103 engine and 49 hygiene tests,
+  strict lint and formatting. cycle03 session 41605 completed, collection
+  `8aaf167`, with 14,177 combined engine tests and strict checks passing.
+  Fresh `/root/a03_round18` immediately started its next forty HUD entries
+  from `00778930`, compiler held. `/root/a01_round16` now owns the compiler
+  for nine movement bodies. Its seventeen SEH-only partials are verified;
+  three missing historical markers were restored after PC checks. After
+  its clean passing commit, cycle01 once with reviewed partial advancement,
+  start a fresh worker immediately, then grant root, followed by a04.
 - Root branch `codex/phase2-script-action-parser` in the existing managed
   checkout starts from merged #134/#135. Only `expression.rs` and
-  `tesscriptrunmanager.rs` are edited: five helpers and ten new regressions.
-  PC review is clean; six native parser vectors and nine native constructor
-  vectors match return values, cleanup and memory, with raw evidence private
-  under `codex-audit`. Rust checks have NOT run. Root compiler follows HUD
-  and movement. CExpression is 0x710 bytes, not a pointer wrapper. EvaluateLine
-  `005e1550` and actual Script form/save-ID integration remain dependencies.
+  `tesscriptrunmanager.rs` and topic `ENGINE_STATE.md` are edited: six helpers
+  and eighteen new regressions. Thirty native cases pass (six parser, nine
+  constructors, four entry and eleven evaluator), with raw evidence private
+  under `codex-audit`. Rust checks have NOT run. CExpression is 0x710 bytes,
+  not a pointer wrapper. EvaluateLine `005e1550` now drafts BEGIN and action-list
+  paths; non-BEGIN ordinary execution/parse stays explicit partial and panics.
+  Review of that sixth helper is pending. Actual Script form/save-ID and
+  event-handler integration remain dependencies; no whole-save claim.
+- a04 I/O management now has forty drafted bodies and fifty tests, with
+  twelve SEH-only partials. Source-only checks pass; no cargo yet. Review
+  corrected callback argument words, live queue/array/count reloads, signed
+  construction loops and the incompatible Xbox layout. A suspect Xbox
+  name for `005a8040` was removed in favor of a neutral PC accessor.
 - Build 40 is current, with no confirmed next-play-build date. These leaf
   translations alone do not justify a play publication. Continue cycling
   until stopped; retain the user's 98% usage handoff rule.
