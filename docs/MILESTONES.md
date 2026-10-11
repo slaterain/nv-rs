@@ -33,6 +33,13 @@ reading do not establish them.
 
 ## Active work: M1
 
+Explosion collection `d781c3b` passes 13,722 combined engine tests, lint
+and formatting. Both added normal paths retain exception-cleanup partials;
+the fresh agent owns the five untouched bodies. Navigation now validates.
+Multibound review corrections are prepared but uncompiled. Rolling #120
+passes core CI and awaits viewer CI. Next action: collect navigation and
+finish the reference adapter after the queued multibound checks.
+
 Reference bootstrap now passes through the real translated registry:
 construction, embedded list access, count/health changes and count removal
 preserving health. Dependencies pass 13,716 engine tests, lint, formatting

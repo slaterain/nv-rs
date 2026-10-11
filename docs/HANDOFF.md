@@ -24,7 +24,7 @@ Merged rolling PRs: #109 `b995218`, #112 `d854fbe`, #114 `89e1a0b`,
 
 Slot state:
 
-- a01 `/root/a01_round7`, `agent-01`: uncommitted `navmesh_util.rs` contains
+- a01 `/root/a01_round7`, `agent-01`: owns the compiler now. Uncommitted `navmesh_util.rs` contains
   the full normal path of `00699b60`, explicitly SEH-partial, plus edge-pair
   and nearest-vertex regressions. It corrects `0069ad40` at PC `0069ad56`
   to store immediate vtable address `0106b184`; merged #116 mistakenly
@@ -32,17 +32,21 @@ Slot state:
   lint and commit remain pending. Prior `006987d0`/`006bd040` partials stay
   explicit. Private evidence is in `agents/scratch/a01`, including
   `00699b60.asm`, `0069ad40.asm` and `root-00699b60-disasm.txt`.
-- a04 `/root/a04_resume`, `agent-04`: owns the compiler now. Uncommitted
-  `explosion.rs` contains `009ae280` and `009b2940` normal paths, both
-  SEH-partial. Lead review corrected stack offsets, argument ownership,
-  returned pointers, null handling, signed counts, full-EAX comparisons,
-  flag preservation and AL return. On resume, `005dbe10` was confirmed
-  zero-argument; the pending zero belongs to `00622290` (RET 0xC).
-  Focused tests pass 98/98; full engine validation is active in session 66120.
-  Five larger normal paths remain open; `009b1810` research is underway.
+- a04 `/root/a04_round10`, `agent-04`: fresh worker after cycle04 collected
+  `d781c3b`. `009ae280` and `009b2940` normal paths remain SEH-partial;
+  98 focused and 13,722 combined engine tests, lint and formatting pass.
+  The source commit also passed 49 hygiene tests. Five larger paths remain
+  untouched: `009acd60`, `009ad670`, `009ae6e0`, `009b00a0`, `009b1810`.
+  The fresh worker starts at `009acd60`; later-address evidence is in
+  private `agents/scratch/a04/round9-009b1810-handoff.md`. Research/editing
+  only until the compiler grant. Thirteen SEH partials remain recorded.
 - a03 `/root/a03_round5`, `agent-03`: b0060 `multiboundmarkerdata.cpp`,
-  30 entries. All 30 are prepared; ABI audit and regression tests are in
-  progress, with compilation held. Its previous pathmanager lane retains
+  30 entries. All 30 are prepared; lead review required u32 shift semantics,
+  callback reloads, constructor return pointers, temporary lifetime and
+  bounds-layout corrections, plus x87 NaN handling and SEH markers.
+  Final static review still found a center-array `.addr()` compile error;
+  the worker is fixing it with a dedicated live stack buffer. Compilation
+  remains held. Its previous pathmanager lane retains
   17 exception-cleanup partials in the ledger; cycle advanced only after
   confirming no untouched entries, using `ADVANCE_PARTIAL_ONLY=1`.
 - a05 b0158 and a06 b0360 remain prepared but idle. Runtime permits three
@@ -76,8 +80,8 @@ Lead Phase 2 work:
   World consumers, payload conversion and FOS writing remain open.
 
 ONE heavy engine compiler across all worktrees, `-j2`, existing debug cache,
-`CARGO_PROFILE_DEV_DEBUG=0`. Current queue: a04, cycle04, a01, cycle01,
-a03, cycle03, then root's new adapter/full checks. No root compiler active.
+`CARGO_PROFILE_DEV_DEBUG=0`. Current queue: a01, cycle01, a03, cycle03,
+then root's new adapter/full checks and a04. No root compiler active.
 Disk is about 2.5 GB free. Automatic approval review previously blocked
 idle p3 target deletion; nothing was deleted. Do not bypass that denial.
 Private task.sh warns rather than deleting caches and retains scratch.
@@ -93,8 +97,9 @@ No original-game comparison was performed. Exact menu-input/GPU renderer
 boundaries remain in FRAME_SKELETON.md. These translation batches do not
 establish new playable features.
 
-Next action: collect a04 once validation passes; ship #120 once both checks
-pass. Continue the compiler queue and validate the reference handle/probe.
+Next action: collect a01 once validation passes; ship #120 once both checks
+pass (core passed; viewer pending). Continue the compiler queue and validate
+the reference handle/probe.
 
 ## Where things stand
 
