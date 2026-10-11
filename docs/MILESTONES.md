@@ -33,6 +33,14 @@ reading do not establish them.
 
 ## Active work: M1
 
+MobileObject collected as `8f92810`: 34 complete functions and 13,864
+combined engine tests, strict lint and formatting pass. A fresh worker
+immediately tackles its larger remaining bodies. Animation loader now
+validates; root's two-stack inventory probe follows. Rolling #126 and
+save-buffer #125 await CI. Build 40 remains current; these translations
+have no viewer consumer yet, so no next-build date is established.
+Next action: collect the loader and validate the inventory payload probe.
+
 Rolling #124 passed both checks and merged `c6ac7eb`. Rolling #126 now
 publishes animation parsing and Init3D; save-buffer #125 is rebased with
 fresh CI. MobileObject is validating; the animation loader is queued.
