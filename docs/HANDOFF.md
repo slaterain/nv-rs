@@ -25,7 +25,11 @@ The managed phase2-extra-data checkout now uses `codex/phase2-inventory-load`,
 based on #128. Its two dirty unit files are `bgsloadgamebuffer.rs` and
 `bgsloadformbuffer.rs`: eleven reader helpers and eight tests, uncompiled.
 Peer review is clean and ten generated native reader vectors pass.
-`inventory-load-probe.rs` and its runner are prepared, unrun. Scoped stash
+`inventory-load-probe.rs` and its runner are prepared, unrun. The fuller
+`inventory-item-load-probe.rs` also exercises the ItemChange loader through
+the real form map and installed RTTI, with a generated TESBoundObject header;
+it is prepared but unrun. `check-inventory-load.ps1` serializes root checks.
+Scoped stash
 `9e0dd23` has been applied and retained; do not apply it again.
 
 Latest batch: animation loader source `99fb056` collected as `6c569b7`;
@@ -39,9 +43,12 @@ collected as `b9871e9` at 03:13 local: 113 focused, 13,830 source engine,
 Only compiler SEH cleanup is partial. Fresh `/root/a04_round13` immediately
 started `009b00a0`, then `009b1810`, compiler held. a01 now owns the compiler;
 then a03 and root. All six larger movement bodies have drafts and tests;
-Move remains unregistered pending its final vector/control-flow checks.
-a03 now has 40 registered HUD bodies, Create and DoIdle SEH-only partials,
-and continues required per-function tests before compiler validation.
+Move is now registered after the vector/control-flow review and 65 focused
+tests pass; full engine checks are underway. a03 now has 40 registered HUD
+bodies and 45 tests, Create and DoIdle SEH-only partials, and awaits its
+compiler grant. Both remaining explosion bodies are drafted and under review.
+ProcessTargets has no PC exception frame; its mistaken SEH partial marker
+is being removed. RunLOSPick retains its actual compiler-cleanup partial.
 Review corrections include vector
 receiver/output argument order, post-callback globals and x87 boundaries.
 Root reader validation waits after the slots. Build 40 remains
