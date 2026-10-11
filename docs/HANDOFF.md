@@ -7,6 +7,26 @@ machinery runs.
 
 ## Resume here
 
+Latest, 04:49 local: persistence follow-on #132 is published and attached at
+`6513c26`, with three dependency helpers and four regressions. All 15,781
+workspace tests (13,928 engine), strict lint, formatting and release/debug
+builds pass. Both probes now pass using the normal generated registry:
+the synthetic two-stack payload and 10,201 original count/health-only item
+payloads from eight saves, including eighteen multi-stack entries. Three
+containing records that fail full decoding remain excluded. Generated form,
+map, mode and partial allocator startup are explicit boundaries; this is
+still not whole-save or playable inventory acceptance.
+
+Root's clean published map branch has a new follow-on branch,
+`codex/phase2-inventory-script-locals`: constructor `005a8b80` and two tests
+are drafted in `tesscript.rs`, uncompiled. Three guarded native vectors pass.
+Do not claim script extras work: their actual script forms and save-ID maps
+are not yet supplied by the broader exploratory fixture. a04 owns the
+compiler; a03, a01, then root follow their respective collect/cycle steps.
+Rolling #131 core passes and viewer CI remains pending at `d6dcc8e`.
+Build 40 remains current, with no confirmed next-build date or feature list.
+Usage 84%; retain the 98% stop/handoff rule.
+
 Latest, 04:33 local: movement collection `757af70` passes 14,051 combined
 engine tests, doctest, strict lint and formatting. Fresh `/root/a01_round15`
 immediately starts its remaining normal bodies at `009339a0`; ten SEH-only
