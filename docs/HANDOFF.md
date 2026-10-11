@@ -17,8 +17,10 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
 - #135 merged `7907420` and #134 merged `89bbde4`, each after both CI checks.
   #136 also merged `95ab97a` after both checks. #137 merged `935701e`, and
   root #138 merged `1614889`, each after both current-head checks passed.
-  Rolling #139 is attached at `f8f2f32`, with fresh core/viewer checks
-  running. Ship it when both pass.
+  #139 merged `575378a` after both checks. Collection was active, so the
+  remote merge happened first; private `finish-ship139.sh` then completed
+  rebase/ledger/push and opened attached rolling #141 at `7a6cc48`. This
+  continuation is DONE; never rerun ship139. Ship #141 when both checks pass.
 - cycle04 session 86301 completed: source `5c914204` collected as `ddeecbd`,
   all normal effect-item bodies through `00405400`. Ten verified SEH-only
   partials were retained with reviewed partial-only advancement. Fresh
@@ -45,9 +47,13 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
   remaining twenty-two audio bodies from `00ad7e90`. Root's two-helper
   checks completed: all 16,062 workspace tests (14,209 engine unit tests),
   strict lint, formatting and release/debug builds pass. I/O now owns the
-  sole compiler (82 focused tests passed), followed by HUD, audio, then
-  root's new predicate follow-on. All three slot sources are
-  ready: I/O twenty-four bodies, HUD forty through `0077f5c0`, and audio
+  sole compiler checks all passed: 82 focused, 14,271 engine, strict lint,
+  formatting, 49 hygiene checks and release build. Source `49b2fe1` collected
+  through cycle04 session 29733 with 14,311 combined tests; collection is
+  `1fc794c` after shipping rebase. Fresh `/root/a04_round18` immediately began
+  BGSAutoWater b0046 (source-only). HUD now owns the compiler, followed by
+  audio, then root's predicate follow-on. HUD has forty bodies through
+  `0077f5c0`, and audio
   twenty-two through `00ad87d0`. Audio also has seventeen passing native
   timer/empty-call cases. Review fixed HUD callback capture timing and a
   full-EAX predicate; I/O has additional pointer/flag reload regressions.
@@ -73,7 +79,10 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
   `codex/phase2-reference-predicate`, based on #140. It drafts that true
   predicate and the following false predicate `0047c850`, confirmed from
   the real reference vtable and load-buffer call chain. Twelve native cases
-  pass; these new Rust checks have not run. No whole-save claim.
+  pass; three new Rust regressions have not run. Private
+  `check-reference-probe.ps1` builds debug and reruns the item probe first;
+  `check-reference-predicates.ps1` supplies the later full check chain.
+  No whole-save claim.
 - a04's collected I/O management batch has forty bodies and fifty tests,
   with twelve SEH-only partials. All checks passed. Review
   corrected callback argument words, live queue/array/count reloads, signed

@@ -34,7 +34,7 @@ reading do not establish them.
 ## Active work: M1
 
 Resumed continuous translation on 2026-10-11 after the usage reset.
-#134 through #138 merged after both CI checks; rolling #139 awaits checks.
+#134 through #139 merged after both CI checks; rolling #141 awaits checks.
 The 34-body effect-item batch passed all checks and collection (`ddeecbd`);
 a fresh worker immediately began I/O management. HUD also passed collection
 (`82e56ee` after rebase, 14,177 combined engine tests) and restarted. Movement
@@ -42,8 +42,10 @@ also collected (`4cc1b3f`, 14,189 combined tests) and restarted on BSAudio.
 #138 merged six script helpers and eighteen regressions. I/O collected as
 `75bd3b5` with 14,239 combined engine tests passing, and a fresh worker
 immediately continued. HUD's intermediate focused check passed 93 tests;
-its forty-body batch is now source-ready. I/O's remaining twenty-four bodies
-are under compiler validation. Audio collected as `4c16784` with 14,279 combined
+its forty-body batch is now under validation. I/O's remaining twenty-four
+bodies collected as `1fc794c` after 14,311 combined engine tests; a fresh
+worker immediately started BGSAutoWater. Audio collected as `ceaf531`
+(after shipping rebase) with 14,279 combined
 engine tests passing; its fresh worker immediately began the remaining
 twenty-two bodies, now source-ready. Root #140 publishes two script
 accessors: all 16,062 workspace tests, strict lint, formatting and
