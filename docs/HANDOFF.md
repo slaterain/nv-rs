@@ -7,6 +7,30 @@ machinery runs.
 
 ## Resume here
 
+Latest, 04:00 local: rolling #129 passed both checks and merged `1389dab`
+at 03:56:28. `ship.sh 129` completed with `HOLD_LATER_PUSH=1`: the later
+movement/HUD collections are rebased locally but unpublished. Do not ship
+the queued HUD until a03's correction to `007738c0` is collected: its audio
+singleton getter had been given another callee's pending stack arguments.
+After that collection, regenerate the ledger and publish the next rolling
+PR (no rolling PR is currently open). HUD collection is now `f34752a`.
+
+Inventory reader #130 is open/attached at `2b81e2a`, with fresh CI. Local
+checks on merged #128 passed 15,771 workspace / 13,918 engine tests, strict
+lint, fmt and release/debug builds; it rebased cleanly onto #129. The
+buffered two-stack reader probe passes, consuming all 41 bytes. The fuller
+ItemChange probe stops while inserting its generated form into the real
+map: allocator `0043a010` is missing. No byte-identical rewrite result yet.
+Root is now on `codex/phase2-inventory-form-map`, based on #130, with two
+helpers and three tests drafted in `fallout_shared/form_map_support.rs`
+and its generated `mod.rs`, uncompiled. The allocator's refill `0043a080`
+is included; PC evidence is private `codex-audit/inventory-map-*`.
+a01 is reviewing this draft. a04 owns the heavy compiler, then cycle04,
+a01/cycle01, a03/cycle03; root's map follow-on waits. a03's next collection
+is eight normal bodies plus the radiation audio fix; three new SEH partials
+are explicit. Large `00775a00` remains wholly open for a fresh continuation.
+Build 40 remains current. Usage was 66% at 03:48; stop/handoff at 98%.
+
 Latest, 03:46 local: inventory writer #128 passed both checks and merged
 `14c77da` at 03:39:58. Root reader checkout is rebased onto that merge;
 scoped stash `9ca22a2` is applied and retained (do not apply again).

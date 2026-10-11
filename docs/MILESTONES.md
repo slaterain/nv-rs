@@ -33,6 +33,16 @@ reading do not establish them.
 
 ## Active work: M1
 
+Rolling #129 merged `1389dab` after both CI checks. Later movement/HUD
+collections remain local pending a reviewed HUD audio-call correction.
+Reader #130 passes 15,771 workspace tests, strict lint, formatting and
+release/debug builds; its two-stack buffered read consumes all 41 bytes.
+Full ItemChange loading reaches missing form-map allocator `0043a010`
+before loading. That allocator and its refill are drafted, uncompiled.
+Explosion now validates; movement and the next HUD batch follow. Build 40
+remains current. Next action: collect these slots and validate form-map
+allocation to unblock the full payload load/write probe.
+
 HUD collection `74cd13b` passes 13,970 combined engine tests, doctest,
 strict lint and formatting. A fresh worker immediately continues its next
 normal routines. Inventory writer #128 merged `14c77da` after both CI
