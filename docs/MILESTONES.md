@@ -33,6 +33,14 @@ reading do not establish them.
 
 ## Active work: M1
 
+Reference bootstrap now passes through the real translated registry:
+construction, embedded list access, count/health changes and count removal
+preserving health. Dependencies pass 13,716 engine tests, lint, formatting
+and debug build. An existing-reference handle and isolation test are
+prepared but uncompiled. Explosion's focused suite passes 98 tests;
+full validation is active. Next action: collect Explosion and validate the
+reference adapter after the queued slot checks.
+
 Resumed after the usage reset. Rolling #119 passed both checks and merged
 as `951c0c7`; the checked pathfinding follow-on is being published next.
 The allocator test failure was an incorrect backing-size expectation:
