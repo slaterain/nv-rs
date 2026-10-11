@@ -43,12 +43,15 @@ also collected (`4cc1b3f`, 14,189 combined tests) and restarted on BSAudio.
 workspace tests, strict lint, formatting and release/debug builds pass,
 alongside thirty native cases. The actual-bytecode probe stops at an open
 flag predicate. Root drafts that predicate and a header accessor, with
-forty-one native cases passing and Rust checks queued; I/O now validates.
+forty-one native cases passing and Rust checks queued. I/O collected as
+`75bd3b5` with 14,239 combined engine tests passing, and a fresh worker
+immediately continued. HUD runs an intermediate focused check, then audio
+validates while HUD finishes its remaining entries.
 The evaluator implements
 BEGIN/action-list paths only; other modes stay explicitly unsupported.
 The user freed the idle build caches, restoring about 25 GB at verification.
 Build 40 remains current; whole-save and playable inventory integration
-are still pending. Next action: collect I/O, continue HUD/audio checks and
+are still pending. Next action: continue HUD/audio checks and
 close the probe dependencies. [HANDOFF.md](HANDOFF.md) tracks ownership.
 
 Script-loading dependency #135 is published at `86d19a0`: 15,876 workspace
