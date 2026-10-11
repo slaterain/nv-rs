@@ -33,6 +33,11 @@ reading do not establish them.
 
 ## Active work: M1
 
+Health adapter #118 passed both checks and merged as `a0ee61d` on
+2026-10-10 at 22:32 local time. Rolling #119 is rebased onto that main
+and includes the checked navigation continuation; fresh CI gates it.
+Next action: finish pathfinding collection and validate allocator startup.
+
 Navigation collection `d24c517` passes 13,698 combined engine tests,
 lint and formatting. Two additional normal paths retain explicit
 exception-cleanup partials; the last edge-repair body remains unregistered.

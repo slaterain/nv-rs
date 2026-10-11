@@ -12,12 +12,13 @@ both CI checks and were squash-merged as `b995218`, `d854fbe`, `89e1a0b`
 and `c23f744`. The lead branch is `claude/engine-crate`. Its later batches
 include explosion collection `a2fe87a`: the owner/weapon callback-reload
 correction and nine more functions pass 13,695 combined engine tests,
-lint and formatting. Rolling PR #119 is open and attached at head
-`43d1cb7`, awaiting both CI checks. The old remote branch was absent
+lint and formatting. Rolling PR #119 is open and attached, now rebased
+onto health merge `a0ee61d` with the checked navigation continuation
+included. Fresh CI gates this combined head. The old remote branch was absent
 after #116 merged; an empty-ref lease safely recreated it.
 
 Phase 1 PR 7 (#113) passed both checks and merged as `f917219`.
-The lead branch is rebased onto current main `cbca26e` (count PR #117).
+The lead branch is rebased onto current main `a0ee61d` (health PR #118).
 Only ledger/milestone conflicts needed resolution. Local validation
 passed 15,108 core tests, 182 viewer release tests, formatting, lint and
 release builds. Doc Mitchell, Back in the Saddle and Ghost Town Gunfight
@@ -43,8 +44,8 @@ The regression verifies the old storage is untouched; 13,638 combined
 engine tests, lint and formatting pass. Two normal-path geometry translations
 (`006987d0`, `006bd040`) were collected as `d24c517`, with explicit
 exception-cleanup partials and callback regressions. All 13,698 combined
-engine tests, lint and formatting pass. This follow-on stays local behind
-PR #119. `00699b60` remains unregistered: its edge/list ownership and
+engine tests, lint and formatting pass. This follow-on is included in
+rebased PR #119. `00699b60` remains unregistered: its edge/list ownership and
 repair paths are unresolved; the fresh worker owns that investigation.
 a03 b0331 pathmanager.cpp is running under fresh `/root/a03_round4`.
 Collection `7321030` adds 29 complete and six partial functions plus all
@@ -88,9 +89,9 @@ lookup and detach. No world/viewer consumer or save writer is added.
 Private probes/native vectors and the read-only 11-save baseline are in
 `phase0/codex-audit`; FOS_SAVES.md records the decoder limits.
 The count follow-on #117 passed both checks and merged as `cbca26e` at
-21:56 local time. Health PR #118 passed both checks before being rebased
-onto that main; its new head `9caa44a` targets main and awaits fresh CI.
-The health implementation is unchanged. Their milestone notes are separate
+21:56 local time. Health PR #118 passed both fresh checks and merged as
+`a0ee61d` at 22:32 local time. The health implementation is unchanged.
+Their milestone notes are separate
 from rolling history, and their generated ledger changes are deferred to
 rolling integration. Merge-tree checks against #116 pass without conflicts.
 Health checks passed: 74 focused tests, all 15,315 core tests, lint, formatting
