@@ -7,7 +7,7 @@ machinery runs.
 
 ## Resume here
 
-### Current state, 2026-10-11 16:10 EDT
+### Current state, 2026-10-11 16:19 EDT
 
 This section supersedes the historical notes below.
 
@@ -29,8 +29,10 @@ This section supersedes the historical notes below.
 - `/root/a04_water_complete` owns `fallout_shared/bgsautowater.rs`:
   thirty-seven normal bodies, five SEH-only partials, forty-four drafted
   tests and fifteen passing native comparisons. It is validating now;
-  initial pointer type-annotation errors were corrected, tests still await
-  results. `/root/a01_round19` now has the other compiler lane for its
+  focused tests reached 41/44. Three incorrect expectations were corrected
+  against PC assembly (pop element address, plane threshold and independent
+  Y-edge handling); production is unchanged and the corrected tests await
+  a rerun. `/root/a01_round19` owns the draft for its
   forty TaskQueueInterface bodies and forty-two tests. Four are complete;
   thirty-six retain reviewed compiler-only partials. Its forty-two focused
   and 14,445 engine tests pass. Clippy session 69339 was interrupted without
@@ -55,7 +57,10 @@ This section supersedes the historical notes below.
   raw flag copying, signaling-NaN stores and live list-item lookup, and adds
   two saved-form reader helpers and the numeric-form writer. SaveGame
   reloads the reference ID and effect flag/pointer after helper calls.
-  Thirteen regressions are drafted but unrun; 102 native cases pass.
+  Thirteen regressions are drafted; root validation session 90996 now runs
+  the prepared checks with one Cargo job. No completed result yet.
+  The initial session 55330 was stopped immediately to change from two jobs;
+  it produced no result. The 102 native cases pass.
   Independent PC/source review passes, including the corrected test fixtures.
   It is rebased onto #144; run the prepared full check pipeline and
   final normal-registry release probes (nine LoadGame and eighteen SaveGame
@@ -66,14 +71,16 @@ This section supersedes the historical notes below.
 - Fresh a03's b0223 batch now has forty normal bodies and forty-three
   drafted tests. Thirty-three native cases and independent PC review pass.
   Eight compiler-only partials remain explicit. Cargo checks are queued.
-- Only water currently owns a compiler lane. Two large checks exhausted
+- Root currently owns the only compiler lane. Two large checks exhausted
   committed-memory headroom; stopping taskqueue Clippy recovered about
-  8 GB. Gate subsequent checks on available memory. Taskqueue, root and
-  fresh a03 are held. No deletion attempts after automatic
+  8 GB. Gate subsequent checks on available memory and use one Cargo job
+  to avoid simultaneous library/test compilation. All three slots are held.
+  After root checks, finish a01 validation/collection and restart it, then
+  water and a03. No deletion attempts after automatic
   review rejected cleanup and the user removed idle caches manually.
 - Build 40 remains current, without a confirmed next-play date or new
   visible feature. Continue cycling and shipping until stopped. Preserve
-  the user's 98% weekly stop/handoff rule (70% around 16:02 EDT).
+  the user's 98% weekly stop/handoff rule (73% around 16:18 EDT).
 ### Active again, 2026-10-11 after the usage reset
 
 This section supersedes the historical stopped state below. User requested
