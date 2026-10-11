@@ -71,10 +71,16 @@ Private probes/native vectors and the read-only 11-save baseline are in
 The lead has now switched that managed checkout to a separate follow-on
 branch `codex/phase2-extra-count`, closing the count destruction dependency;
 commit `ec6a70e` is separate from #115. Its pre-rebase full core test suite
-passed 15,156 tests; final checks on the new base are running in session
-75073 (tests, clippy, release), private logs `phase2-count-rebased-*`.
+passed 15,156 tests. The rebased attempt (session 75073) failed during
+rustc memory allocation, before tests; no assertion failure. It is closed.
+Retry tests, clippy and release serially; private logs are
+`phase2-count-rebased-*`.
 Its real-save count probe passes 14 payloads across 3,319 extra lists.
-The managed checkout is on `codex/phase2-extra-count`; do not switch branches during its checks.
+The managed checkout is on `codex/phase2-extra-count` with a generated
+ledger change. No root cargo process is active. Simultaneous engine test
+compilers exhausted host memory; ONE heavy engine compile may run at a
+time now. a04 has the current validation window; a01/a03 and root wait,
+continuing research/review. The lead grants each next window explicitly.
 Machine note: automatic policy blocked removal of idle p3's target cache;
 nothing was deleted. Private `task.sh` now warns below 40 GB free instead
 of deleting caches, and retains scratch evidence. Do not use another
