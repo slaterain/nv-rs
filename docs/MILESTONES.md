@@ -33,6 +33,14 @@ reading do not establish them.
 
 ## Active work: M1
 
+Navigation collection, 2026-10-10: 36 further functions pass 13,577
+combined engine tests, lint and formatting. PC review found a buffer
+relocation case in `0069b030` that still needs a correction and regression;
+this batch remains local until fixed. A fresh navigation agent is working
+on that correction and the six remaining queue entries. Pathfinding now
+has the serialized compiler window. Next action: collect checked work and
+ship the existing remote #116 when both checks pass.
+
 Review corrections collected, 2026-10-10: a04 adds 24 further functions
 and fixes the reviewed point-copy/accessor ABIs and x87 NaN stores;
 13,541 combined engine tests, lint and formatting pass. The ledger now

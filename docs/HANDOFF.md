@@ -30,12 +30,16 @@ two routes also passed (VCG02 410 s, VMS16 339 s); logs are in
 Continuous translation remains active until the user says stop: collect each
 finished slot with cycle.sh, immediately start its prepared next task, and
 ship rolling PRs as soon as both checks pass. Runtime currently permits only
-three children and rejects fresh threads because of stale pending slots;
-idle workers are reused for new prepared tasks.
+three children. Fresh agent creation works again; each collected slot gets
+a fresh worker, with heavy compilation serialized across all worktrees.
 
-Slot state: a01 navigation continuation is owned by worker `/root/a04`
-(not the explosion worker). Its previous 36 complete / 4 skipped batch was
-collected as `a8b4daf`; the new task starts with open `006987d0`.
+Slot state: a01 navigation continuation is owned by fresh worker
+`/root/a01_round5`. Its latest 36 complete / 4 skipped batch was collected
+as `76d6618`; 13,577 combined engine tests, lint and formatting pass.
+That batch is local only: PC review found that `0069b030` must reload the
+array buffer after `006927d0`, which may relocate it. The fresh worker owns
+this required correction and a relocation regression before the batch is
+pushed. Six queue entries remain, starting with open `006987d0`.
 a03 b0331 pathmanager.cpp is running under `/root/a03`.
 a04 b0160 explosion.cpp is running under fresh worker `/root/a04_round4`.
 Its 24-function continuation and all reviewed ABI/NaN/accessor corrections
@@ -76,11 +80,11 @@ Retry tests, clippy and release serially; private logs are
 Its real-save count probe passes 14 payloads across 3,319 extra lists.
 The count follow-on is draft PR #117 at `117d104`, stacked on #115; retarget
 onto main after #115 merges. No root cargo process is active. The managed
-checkout is now `codex/phase2-extra-health`, with uncommitted adapter and
-constructor-test changes. A native vector caught signaling-NaN handling in
+checkout is now `codex/phase2-extra-health`, with adapter and constructor
+changes committed as `44b2515`. A native vector caught signaling-NaN handling in
 `00431d10`; the fix and health adapter tests are not yet compiled. Simultaneous engine test
 compilers exhausted host memory; ONE heavy engine compile may run at a
-time now. a01 has the current validation window; a03, a04 and root wait,
+time now. a03 has the current validation window; a01, a04 and root wait,
 continuing research/review. The lead grants each next window explicitly.
 Machine note: automatic policy blocked removal of idle p3's target cache;
 nothing was deleted. Private `task.sh` now warns below 40 GB free instead
