@@ -89,6 +89,17 @@ is now drafted as `fos::inventory_source`; its 38 package tests and strict
 package lint pass, while full workspace validation is queued. Its scope and
 source-preservation rules are described in [FOS_SAVES.md](FOS_SAVES.md).
 
+A second private probe passes the actual new `ItemEnvelope` objects into
+the saved-local batch's final release engine registry. All eighteen original
+targets consume the complete input, retain ordered Count/Health values and
+the separate signed count delta, and reproduce the untouched item bytes.
+Owned snapshots retain their source envelopes after both the source container
+and engine are dropped. The same three decode failures and three unresolved
+holders remain outside admission. This uses generated form headers and
+partial allocator setup; it establishes bounded composition, not production
+startup or world integration. The probe still uses the frozen standalone
+fos build; rerun against final workspace artifacts after queued validation.
+
 ## Script-extra follow-on
 
 The current normal-registry debug and release probes load one original script-bearing
