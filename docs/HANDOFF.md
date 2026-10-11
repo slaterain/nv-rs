@@ -7,6 +7,16 @@ machinery runs.
 
 ## Resume here
 
+Latest batch: animation loader source `99fb056` collected as `6c569b7`;
+13,879 combined engine tests, strict lint and formatting pass. All 44
+unit entries have normal behavior; only SEH cleanup at `005f21c0`,
+`005f22d0`, `005f3a20` remains partial. Reviewed partial-only advancement
+retains these gaps. Fresh `/root/a03_hudmainmenu` immediately started b0236,
+HUDMainMenu, compiler held. Root now owns the compiler: session `34376`,
+private `codex-audit/check-inventory-buffer.ps1`, then the prepared
+`run-inventory-buffer-probe.ps1`. a04's six-test effect batch waits next;
+a01 continues the full movement body, then has its compiler turn.
+
 User resumed after the usage reset on 2026-10-11. Continuous translation
 is active: collect each finished, committed slot with `cycle.sh NN 0 0`,
 then immediately start a fresh agent on its new task. Never reset or cycle

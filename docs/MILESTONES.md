@@ -33,6 +33,13 @@ reading do not establish them.
 
 ## Active work: M1
 
+Animation loader collected as `6c569b7`: 13,879 combined engine tests,
+strict lint and formatting pass. Three compiler-cleanup partials remain
+explicit; a fresh worker immediately started HUDMainMenu. Root now validates
+the inventory payload dependencies and two-stack probe. Build 40 remains
+current, without a new viewer consumer. Next action: finish this bounded
+writer check, then collect the reviewed explosion effects batch.
+
 MobileObject collected as `8f92810`: 34 complete functions and 13,864
 combined engine tests, strict lint and formatting pass. A fresh worker
 immediately tackles its larger remaining bodies. Animation loader now
