@@ -33,11 +33,16 @@ Latest batch: animation loader source `99fb056` collected as `6c569b7`;
 unit entries have normal behavior; only SEH cleanup at `005f21c0`,
 `005f22d0`, `005f3a20` remains partial. Reviewed partial-only advancement
 retains these gaps. Fresh `/root/a03_hudmainmenu` immediately started b0236,
-HUDMainMenu, compiler held. a04 owns the compiler from 02:59 local for
-its reviewed six-test explosion `009ae6e0` batch; then cycle04/fresh worker,
-a01 and a03. a01's Move/controller drafts remain unregistered during
-branch review. a03 has 37 registered HUD bodies and drafts of DoIdle and
-SetMenuMode; Create remains in progress. Review corrections include vector
+HUDMainMenu, compiler held. Explosion `009ae6e0` source `64750e3` was
+collected as `b9871e9` at 03:13 local: 113 focused, 13,830 source engine,
+49 hygiene and 13,885 combined engine tests plus doc, lint and fmt pass.
+Only compiler SEH cleanup is partial. Fresh `/root/a04_round13` immediately
+started `009b00a0`, then `009b1810`, compiler held. a01 now owns the compiler;
+then a03 and root. All six larger movement bodies have drafts and tests;
+Move remains unregistered pending its final vector/control-flow checks.
+a03 now has 40 registered HUD bodies, Create and DoIdle SEH-only partials,
+and continues required per-function tests before compiler validation.
+Review corrections include vector
 receiver/output argument order, post-callback globals and x87 boundaries.
 Root reader validation waits after the slots. Build 40 remains
 current; no reliable next-build date or confirmed feature list exists yet.

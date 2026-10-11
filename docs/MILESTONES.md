@@ -42,7 +42,10 @@ consumer remain unfinished. Build 40 remains current.
 Save-buffer #125 merged `68387b4` after both CI checks. Eleven reader
 helpers are peer-reviewed with ten matching native vectors, uncompiled.
 Next action: validate loading and the two-stack native reader probe;
-collect explosion effects when the current compiler run passes.
+Explosion effects collected as `b9871e9`: 13,885 combined engine tests,
+strict lint and formatting pass; compiler SEH cleanup stays partial.
+A fresh worker immediately started the next explosion body. Movement now
+validates, then HUD and the inventory reader.
 
 Animation loader collected as `6c569b7`: 13,879 combined engine tests,
 strict lint and formatting pass. Three compiler-cleanup partials remain
