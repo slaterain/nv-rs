@@ -33,6 +33,14 @@ reading do not establish them.
 
 ## Active work: M1
 
+HUD collection `5c12df2` passes combined engine tests, strict lint and
+formatting, including its audio correction. A fresh worker continues the
+next large HUD function. The accumulated movement/HUD/explosion batch can
+now be published; movement save/load validation runs next. Reader #130
+core CI passes and viewer CI is pending. Build 40 remains current: the
+inventory payload work still has no playable consumer or release date.
+Next action: publish the rolling batch and validate the form-map helpers.
+
 Explosion collection `5380adf` passes 13,990 combined engine tests and
 strict lint/formatting; a fresh worker starts effect items. HUD now
 validates its audio correction before the next rolling publication.

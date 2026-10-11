@@ -7,6 +7,19 @@ machinery runs.
 
 ## Resume here
 
+Latest, 04:22 local: HUD collection `5c12df2` passed combined engine tests,
+strict lint and formatting, including the reviewed radiation audio correction.
+Fresh `/root/a03_round16` immediately continues large `00775a00` in b0236.
+The publication hold is released: publish the accumulated movement, HUD and
+explosion batch after regenerating the ledger. a01 now owns the compiler for
+its forty-body continuation; then cycle01/fresh worker, root's two map helpers,
+then a04's forty effect-item routines. Effect-item review includes thirty-six
+matching native float vectors and callback reload/argument ownership fixes.
+Reader #130 core CI passes; viewer CI remains pending at `2b81e2a`.
+Build 40 remains current, without a confirmed next play-build date or feature
+list. Inventory stack preservation still has no playable consumer. Usage is
+75%; retain the 98% stop/handoff rule.
+
 Latest, 04:09 local: explosion collection `5380adf` passes 13,990 combined
 engine tests, doctest, strict lint and formatting. Reviewed partial-only
 advancement retains all seventeen exception-cleanup gaps. Fresh
