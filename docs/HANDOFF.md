@@ -13,6 +13,16 @@ then immediately start a fresh agent on its new task. Never reset or cycle
 a slot with unfinished work. Ship rolling PRs once both current-head checks
 pass. The saved 98% usage stop/handoff rule still applies.
 
+Save-buffer PR #125 is open/attached at `7c58130`, based on merged #123.
+Its 18 dependencies pass 15,641 core tests (13,788 engine), strict workspace
+lint, formatting, release and debug builds. The real-registry probe writes
+count 5 / health 42.5 and the FOS payload decoder reads exactly both back.
+It uses the executable's flag table, a generated mode receiver and partial
+allocator startup; no game-function doubles, FOS file or full round trip.
+Private evidence is in `phase0/codex-audit/save-buffer-probe-result.txt`.
+Root session `37952` finished; a04 now owns the compiler. Then collect
+a04, a01 and a03 in order, starting fresh workers after each cycle.
+
 Reference #122 and rolling #123 passed both checks and merged as `6bea9a1`
 and `8b5eebe`. Rolling #124 is open/attached at `9c519be`, containing loaded
 area bounds (`e61c6a9`, formerly `86886d9`): 13,790 combined engine tests,
@@ -60,7 +70,11 @@ Slot state:
   Worker is also reviewing root save-buffer code read-only while held.
 - a03 `/root/a03_loadanimgroup`, `agent-03`: fresh b0041 worker owns
   `fallout_shared/tesanimgroup.rs`, continuing the full `005f3a20` normal
-  path with compiler held. Its predecessor committed `f85e4d8` and cycle03
+  path with compiler held. Five new bodies and 14 tests are prepared;
+  static checks pass. Peer review corrected note-getter callback reloads,
+  empty-note log arity, sound error scanning and tail diagnostic reloads.
+  The file has 41 complete bodies and three SEH partials including the
+  loader; runtime checks remain queued. Its predecessor committed `f85e4d8` and cycle03
   collected `6dbf98f`: focused 13 / full 13,764 / hygiene 49 pass, strict
   lint/fmt pass. Seven queue entries remain, including two SEH partials.
   37 complete bodies and two SEH partials are registered. `005f3a20` remains
@@ -109,25 +123,24 @@ Lead Phase 2 work:
   concrete adapter issues. World consumers, payload conversion and FOS
   writing remain open. Next research traces buffered extra-data saving
   (`00426a30`) and the currently scaffolded save-buffer constructors.
-- The follow-on has nine uncommitted files: form_support, bgsloadformbuffer,
+- The follow-on is committed in #125: form_support, bgsloadformbuffer,
   bgssaveloadinitialdata, bgssavegamebuffer, bgssaveformbuffer,
   bgsloadgamesubbuffer, run_008660b0, run_008661e0 and run_00ec7ce3. Eighteen
-  constructor/getter/writer dependencies and generated tests are validating
-  in root session `87335`; six guarded constructor vectors passed the native executable.
-  Byte writing, growth, insertion and variable-size value paths are drafted;
-  CRT checked movement at `00ec7ce3` is also drafted with three native
+  constructor/getter/writer dependencies and generated tests pass validation
+  in completed root session `37952`; six guarded constructor vectors passed the native executable.
+  Byte writing, growth, insertion and variable-size value paths are checked;
+  CRT checked movement at `00ec7ce3` is checked with three native
   generated cases passing. Its error handler/TLS callees remain untraced;
   error-path tests use doubles. Private evidence uses the
   `codex-audit/save-boundary-*` and `save-buffer-headers-native*` files.
-  `ENGINE_STATE.md` is also dirty. Private `save-buffer-probe.rs` uses real
+  `ENGINE_STATE.md` and the ledger are committed. Private `save-buffer-probe.rs` uses real
   executable tables, a generated mode receiver and the translated writer,
-  then checks the bytes through the FOS payload decoder; it has not run yet.
+  then checks the bytes through the FOS payload decoder; it passes.
 
 ONE heavy engine compiler across all worktrees, `-j2`, existing debug cache,
-`CARGO_PROFILE_DEV_DEBUG=0`. Root save-buffer session `87335` owns the
-compiler; cycle03 session `81560` completed. Next: a04 Init3D/cycle04,
-then a01 MobileObject/cycle01, then a03 when ready. Disk is about
-3.8 GB free. Automatic approval review previously blocked
+`CARGO_PROFILE_DEV_DEBUG=0`. a04 Init3D owns the compiler; root save-buffer
+session `37952` completed. Next: cycle04, then a01 MobileObject/cycle01,
+then a03 when ready. Disk is about 2.3 GB free. Automatic approval review previously blocked
 idle p3 target deletion; nothing was deleted. Do not bypass that denial.
 Private task.sh warns rather than deleting caches and retains scratch.
 Private ship.sh now safely recreates an absent merged branch with an empty

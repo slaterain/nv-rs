@@ -33,6 +33,14 @@ reading do not establish them.
 
 ## Active work: M1
 
+Save-buffer #125 is open at `7c58130`: all 15,641 core tests, strict lint,
+formatting and release/debug builds pass. The real-registry count/health
+writer produces a payload that the FOS decoder reads back correctly; a
+full save round trip and viewer integration remain open. a04 Init3D now
+validates; a01 and the reviewed animation loader wait for the compiler.
+Build 40 remains current. Next action: collect these batches and trace
+per-stack state ownership before adding a world consumer.
+
 Reference #122 and rolling #123 passed both checks and merged as `6bea9a1`
 and `8b5eebe`. Loaded-area bounds are published in rolling #124 with fresh
 CI. Animation collection `6dbf98f` passes 13,820 combined engine tests,
