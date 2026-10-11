@@ -36,7 +36,13 @@ Slot state: a01 navigation continuation is owned by worker `/root/a04`
 (not the explosion worker). Its previous 36 complete / 4 skipped batch was
 collected as `a8b4daf`; the new task starts with open `006987d0`.
 a03 b0331 pathmanager.cpp is running under `/root/a03`.
-a04 b0160 explosion.cpp is running under `/root/a04_next`.
+a04 b0160 explosion.cpp is running under fresh worker `/root/a04_round3`.
+Its prior 24 complete / 16 skipped batch was collected as `520c406`, with
+13,511 combined engine tests passing. Review corrections MUST land before
+this explosion batch merges: `009ae540` returns its destination and its
+x87 copies quiet signaling NaNs; `009afc30`/`009afc50` wrap getters, not
+destructors; `009afc70` calls a byte setter, not an assertion. The new
+worker has the native vectors and missing branch-test requirements.
 a06's next b0360 and a05's next b0158 (12 entries starting `008ca620`)
 are prepared and waiting for capacity. Never collect/reset an active slot.
 a05's collected batch has 28 complete / 12 partial functions; gaps remain
@@ -63,7 +69,9 @@ Private probes/native vectors and the read-only 11-save baseline are in
 `phase0/codex-audit`; FOS_SAVES.md records the decoder limits.
 The lead has now switched that managed checkout to a separate follow-on
 branch `codex/phase2-extra-count`, closing the count destruction dependency;
-this work is uncommitted and must stay separate from #115.
+commit `1b0b1a2` is separate from #115 and still needs full checks.
+Its real-save count probe passes 14 payloads across 3,319 extra lists.
+The managed checkout is temporarily back on #115 for the coming rebase.
 Machine note: automatic policy blocked removal of idle p3's target cache;
 nothing was deleted. Private `task.sh` now warns below 40 GB free instead
 of deleting caches, and retains scratch evidence. Do not use another

@@ -33,6 +33,14 @@ reading do not establish them.
 
 ## Active work: M1
 
+Explosion collection, 2026-10-10: 24 functions added, 16 skipped;
+13,511 combined engine tests plus formatting/lint pass. Native review
+found a return-value/NaN copy correction and accessor-description issues;
+the next a04 task owns those fixes and missing branch tests before this
+batch merges. Other slots continue. Next action: collect the corrections
+and ship rolling PR #114 when its viewer check passes (it excludes this
+new explosion batch).
+
 Continuous batch update, 2026-10-10: build 40 from merged #113 passed
 Doc Mitchell (63 s), Back in the Saddle (410 s) and Ghost Town Gunfight
 (339 s) scripted acceptance routes. Navigation continuation adds 36
