@@ -33,6 +33,15 @@ reading do not establish them.
 
 ## Active work: M1
 
+Stopped at the user's 98% usage threshold on 2026-10-11, 05:40 local.
+#132/#133 merged after passing CI; #134/#135 remain open awaiting CI.
+The script dependency batch is validated and published. Effect-item tests,
+lint and formatting pass but its hygiene check was interrupted; the HUD
+and movement follow-ons remain uncompiled drafts. All files are preserved
+and no compiler process remains. [HANDOFF.md](HANDOFF.md) records exact
+resume steps. Next action on resume: finish effect hygiene, collect it and
+restart its slot, then validate HUD and movement. Build 40 stays current.
+
 Script-loading dependency #135 is published at `86d19a0`: 15,876 workspace
 tests including doctests, strict lint, formatting and release/debug builds
 pass. It adds five helpers and ten regressions, with ten matching native
