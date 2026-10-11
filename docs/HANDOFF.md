@@ -44,6 +44,13 @@ a03 b0331 pathmanager.cpp is running under fresh `/root/a03_round3`.
 Its first 35 complete / five partial functions were collected as `d3d0a6a`;
 13,599 combined engine tests, lint and formatting pass. The five exception
 cleanup partials remain queued explicitly; 65 entries remain overall.
+Review by the fresh worker found normal-path argument defects in local
+`006eac70` and `006e9cc0`: by-value words and addresses of local argument
+slots were confused, and a key must be reloaded after cancellation.
+That worker owns the corrections and regressions. Keep the local follow-on
+unpublished until these and a01's relocation correction are collected.
+Remote #116 excludes both affected batches; `HOLD_LATER_PUSH=1 bin/ship.sh
+116` can merge it and retain the later commits locally.
 a04 b0160 explosion.cpp is running under fresh worker `/root/a04_round4`.
 Its 24-function continuation and all reviewed ABI/NaN/accessor corrections
 were collected as `57fdb72`; 13,541 combined engine tests, lint and formatting
