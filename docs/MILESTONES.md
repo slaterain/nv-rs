@@ -33,13 +33,17 @@ reading do not establish them.
 
 ## Active work: M1
 
-Continuous translation remains active. #147 is held as a draft for a
-PC-confirmed taskqueue callback return correction. Its published checks
-cannot authorize merging until the correction passes local and fresh CI
-checks. Water release currently owns the sole compiler; its other checks
-pass. Next action: validate the correction with water's collection, publish
-the corrected rolling head, and continue queued validation.
-[HANDOFF.md](HANDOFF.md) records exact states.
+The user requested a stop and handoff to Claude on October 11. Automatic
+translation and the recurring Codex check are paused; no new tasks start.
+[HANDOFF.md](HANDOFF.md) now records the full session results, exact checkout
+states, evidence and resumption order. Water's release passed and its clean
+slot commit `22c7549` is ready but uncollected. #147 remains a draft: the published green
+head omits the locally committed callback-return correction, whose normal
+checks remain unrun. The final taskqueue/save-file and inventory-source
+drafts are preserved with their pending checks. Build 40 is unchanged.
+Next action for the next lead: inspect the handoff, preserve all local work,
+then validate the return correction and ready water batch before publishing
+a corrected #147 head with fresh core/viewer checks.
 
 #146 merged `05ee5a0` after both
 current-head checks passed. Taskqueue collection `c766db2` passes 14,469
