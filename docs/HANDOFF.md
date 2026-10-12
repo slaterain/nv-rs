@@ -7,6 +7,47 @@ machinery runs.
 
 ## Resume here
 
+### Current state, 2026-10-11 20:05 EDT
+
+This section supersedes the historical notes below.
+
+- #146 merged `05ee5a0` at 19:31 EDT after both exact-head core/viewer
+  checks passed. Lead's later documentation was rebased before collection.
+- cycle01 session 27282 is DONE PASS; never rerun it. Taskqueue source
+  `0ee2d55` collected as `c766db2`: 14,469 combined engine tests, one
+  passing doctest (one ignored), strict Clippy and formatting pass. The
+  slot also passed 42 focused tests, hygiene49 and its workspace release
+  build. Forty ordinary bodies are implemented; four are complete and
+  thirty-six retain reviewed compiler-only cookie/exception partials.
+- Fresh worker a01_round20 immediately started the newly written b0213
+  task. It continues the remaining thirty-one ordinary bodies beginning
+  `0087b650`; do not loop over the already reviewed compiler-only partials.
+  It is source-only until an explicit compiler grant.
+- Water a04_water_complete now owns the sole heavy compiler. Rerun the
+  corrected forty-four focused tests, then remaining full checks/release;
+  commit cleanly before cycle04. Its source retains five explicit exception
+  partials. a03_round20's save-file/change-map batch remains unchanged and
+  compiler-held; it follows water. Run only one cycle at a time, and start
+  a fresh worker immediately after each successful cycle writes its task.
+- Root inventory-source branch `codex/phase2-inventory-source`, checkpoint
+  `e024a28`, is rebased onto #146's actual merge. The 38 package tests,
+  strict package lint and formatting passed before that rebase. Full
+  workspace validation is queued after slots; no PR for this source yet.
+  Private check-inventory-source.ps1 and run-inventory-source-final.ps1 are
+  prepared and parser-checked only. Run them in that order; the final probe
+  must use actual Cargo release artifacts rather than the frozen mirror.
+- The new private composition probe passes eighteen original ItemEnvelopes
+  through the current release engine, with complete reads, exact untouched
+  writes and owned snapshots surviving engine disposal. Three decode
+  failures and three unresolved holders remain explicit exclusions. Its
+  generated form/allocator setup is not production startup, gameplay import
+  or whole-save acceptance. Root ENGINE_STATE.md records this evidence.
+- The thread heartbeat keep-nv-rs-translation-moving is active every fifteen
+  minutes. Inspect live process state before resuming; never duplicate a
+  cycle or compiler. Preserve the 98% weekly stop/handoff rule and pause the
+  heartbeat there or on an explicit stop. Usage was 88% at 20:03 EDT.
+  Build 40 remains current; no new play-build date is confirmed.
+
 ### Current state, 2026-10-11 17:21 EDT
 
 This section supersedes the historical notes below.

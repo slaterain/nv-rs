@@ -33,16 +33,18 @@ reading do not establish them.
 
 ## Active work: M1
 
-Continuous translation remains active. #146 publishes the saved-local fixes
-after all 16,273 workspace tests, strict lint, formatting, release/debug
-builds and final native-comparison probes pass. Both GitHub checks run.
-Root's next immutable inventory-source batch is committed locally: 38
-package tests, strict package lint, formatting and a private eighteen-item
-source comparison pass; full workspace checks remain queued. a01 now owns
-the heavy compiler lane, followed by water and a03. Build 40 is current,
-without a confirmed next-play date. Next action: ship #146 after both checks,
-collect/restart each validated translation slot and finish source-envelope
-workspace validation. [HANDOFF.md](HANDOFF.md) records exact states.
+Continuous translation remains active. #146 merged `05ee5a0` after both
+current-head checks passed. Taskqueue collection `c766db2` passes 14,469
+engine tests, its doctest, strict lint and formatting; forty ordinary bodies
+are implemented, with thirty-six compiler-only partials retained explicitly.
+A fresh worker continues its remaining thirty-one ordinary bodies. Water
+now owns the sole heavy compiler, followed by a03's save-file batch and the
+root inventory-source workspace checks. The latter passes 38 package tests
+and private eighteen-item source/composition probes, but remains outside
+gameplay. Build 40 is current, without a confirmed next-play date. Next
+action: publish this validated taskqueue batch, collect/restart each ready
+slot and finish inventory-source validation. [HANDOFF.md](HANDOFF.md)
+records exact states.
 
 #145 merged `fb4b846` after both
 current-head checks passed. Root's saved-local batch passes all focused
