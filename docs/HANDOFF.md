@@ -7,6 +7,25 @@ machinery runs.
 
 ## Resume here
 
+### Release hold, 2026-10-11 20:22 EDT
+
+PR #147 is DRAFT and must not ship its published `d35327b` head, even if
+both checks pass. The next taskqueue pass exposed a discarded return in
+`0087a890`: PC preserves the virtual callback's AL and caller `0087d160`
+tests it. Root and an independent reader verified both disassemblies.
+Lead now corrects the function and registry return type to `u8`, with the
+existing regression checking noncanonical low byte `7f` and zero under
+nonzero upper bytes. Formatting passes; normal Cargo checks are pending.
+Keep this correction local until the next water collection validates the
+combined lead, then push the corrected head and require both fresh CI checks.
+
+Water's corrected 44 tests, 14,355 full engine tests plus doctest, strict
+lint, formatting and hygiene49 pass. Release session 92015 owns the sole
+heavy compiler. Fresh a01 has all 31 remaining bodies and 49 new tests
+drafted, but its required Cargo checks are unrun. A private lightweight
+harness and independent a03 PC review are in progress. a03's own save-file
+slot stays compiler-held. Usage reached 90%; heartbeat remains active.
+
 ### Current state, 2026-10-11 20:05 EDT
 
 This section supersedes the historical notes below.

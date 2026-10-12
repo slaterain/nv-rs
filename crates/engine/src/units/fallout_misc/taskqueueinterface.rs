@@ -79,8 +79,8 @@ pub fn fn_0087a670(
 
 // Translated from 0087a890 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Forwards the argument through the object's virtual slot +4.
-pub fn fn_0087a890(e: &mut Engine, this: Ptr, argument: u32) {
-    e.vcall(this.addr(), 4, &args![argument]);
+pub fn fn_0087a890(e: &mut Engine, this: Ptr, argument: u32) -> u8 {
+    e.vcall(this.addr(), 4, &args![argument]).u8()
 }
 
 // Translation incomplete: 0087aad0 - compiler exception unwinding for the temporary reference is not implemented.
@@ -666,7 +666,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0087a670,
             fn_0087a670(Ptr<TaskQueueInterface>, Ptr, Ptr) -> Ptr<TaskQueueInterface>
         ),
-        entry!(0x0087a890, fn_0087a890(Ptr, u32)),
+        entry!(0x0087a890, fn_0087a890(Ptr, u32) -> u8),
         entry!(
             0x0087aa40,
             task_queue_interface_queue_weapon_fire(Ptr<TaskQueueInterface>, u32, u32)
@@ -1298,15 +1298,24 @@ mod tests {
         e.register_double(0x0f00_0010, move |e, a| {
             assert_eq!(a, &[object.addr(), 0xfedc_ba98]);
             e.mem.set_u32(object.addr(), second_table);
-            Ret::default()
+            Ret {
+                eax: 0xfeed_be7f,
+                ..Ret::default()
+            }
         });
         e.register_double(0x0f00_0020, move |_, a| {
             assert_eq!(a, &[object.addr(), 0x7654_3210]);
-            Ret::default()
+            Ret {
+                eax: 0xfeed_be00,
+                ..Ret::default()
+            }
         });
         e.call_log = Some(vec![]);
-        e.call(0x0087_a890, &args![object, 0xfedc_ba98u32]);
-        e.call(0x0087_a890, &args![object, 0x7654_3210u32]);
+        assert_eq!(
+            e.call(0x0087_a890, &args![object, 0xfedc_ba98u32]).u8(),
+            0x7f
+        );
+        assert_eq!(e.call(0x0087_a890, &args![object, 0x7654_3210u32]).u8(), 0);
         let calls: Vec<_> = e
             .call_log
             .take()

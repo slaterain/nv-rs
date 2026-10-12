@@ -33,7 +33,15 @@ reading do not establish them.
 
 ## Active work: M1
 
-Continuous translation remains active. #146 merged `05ee5a0` after both
+Continuous translation remains active. #147 is held as a draft for a
+PC-confirmed taskqueue callback return correction. Its published checks
+cannot authorize merging until the correction passes local and fresh CI
+checks. Water release currently owns the sole compiler; its other checks
+pass. Next action: validate the correction with water's collection, publish
+the corrected rolling head, and continue queued validation.
+[HANDOFF.md](HANDOFF.md) records exact states.
+
+#146 merged `05ee5a0` after both
 current-head checks passed. Taskqueue collection `c766db2` passes 14,469
 engine tests, its doctest, strict lint and formatting; forty ordinary bodies
 are implemented, with thirty-six compiler-only partials retained explicitly.
