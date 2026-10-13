@@ -365,6 +365,8 @@ fn x87_float(value: f32) -> f32 {
 /// The body of `fn_00631d60`; `ebp` is the game's frame pointer, the objects
 /// sit at their `EBP`-relative offsets.
 #[allow(clippy::too_many_arguments)]
+// The virtual call stays an `if` in the arm: a match guard would hide its side effect.
+#[allow(clippy::collapsible_match)]
 fn pick(
     e: &mut Engine,
     ebp: u32,

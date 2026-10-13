@@ -328,11 +328,8 @@ mod tests {
         assert_eq!(e.mem.f32(GRADIENTS + 4 * 255), -1.0 / 256.0);
         // Reference shuffle.
         let mut perm: Vec<u32> = (0..256).collect();
-        let mut n = 256u32;
-        for i in (1..256).rev() {
-            let j = (n % 256) as usize;
-            n += 1;
-            perm.swap(i, j);
+        for (n, i) in (256u32..).zip((1..256).rev()) {
+            perm.swap(i, (n % 256) as usize);
         }
         for (i, value) in perm.iter().enumerate() {
             assert_eq!(e.mem.u32(PERMUTATION + 4 * i as u32), *value);
