@@ -263,16 +263,15 @@ mod tests {
 
     /// An object with a vtable whose slot 0x48 is a recording double, and
     /// doubles for the extra data functions. Returns (object, log).
-    fn extra_world(
-        e: &mut Engine,
-        existing: u32,
-        flags: u32,
-    ) -> (Ptr, Rc<RefCell<Vec<(u32, Vec<u32>)>>>) {
+    /// Calls recorded by the doubles: address and argument words.
+    type CallLog = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    fn extra_world(e: &mut Engine, existing: u32, flags: u32) -> (Ptr, CallLog) {
         let object = e.mem.alloc(0x20);
         let vtable = e.mem.alloc(0x80);
         e.mem.set_u32(object, vtable);
         e.mem.set_u32(vtable + 0x48, 0x0900_0048);
-        let log: Rc<RefCell<Vec<(u32, Vec<u32>)>>> = Rc::default();
+        let log: CallLog = Rc::default();
         for (address, result) in [
             (0x0900_0048, 0),
             (FIND_EXTRA, existing),

@@ -6655,7 +6655,10 @@ mod tests {
 
     /// The controls list scene: a real `operator new`, the options list
     /// with a vtable, and the label tables.
-    fn controls_scene(r: &mut Rig, mode: u32) -> (Ptr<StartMenu>, Rc<RefCell<Vec<(u32, u32)>>>) {
+    /// Label calls recorded by the controls-list doubles.
+    type LabelLog = Rc<RefCell<Vec<(u32, u32)>>>;
+
+    fn controls_scene(r: &mut Rig, mode: u32) -> (Ptr<StartMenu>, LabelLog) {
         let menu = r.menu();
         r.e.mem.set_u32(menu.addr() + 0x1c8, mode);
         r.e.mem.set_u32(menu.addr() + 0x68, 0x6800);

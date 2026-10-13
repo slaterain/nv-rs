@@ -22,6 +22,10 @@
 //! are not translated; every function that has one carries a
 //! `Translation incomplete` marker.
 
+// The x87 comparisons below must fail on NaN exactly as the exe's flag tests
+// do, so negated comparisons are kept on purpose.
+#![allow(clippy::neg_cmp_op_on_partial_ord)]
+
 #[allow(unused_imports)]
 use super::startmenu::*;
 #[allow(unused_imports)]
@@ -948,10 +952,10 @@ pub fn start_menu_finish_prep_save_load(e: &mut Engine, this: Ptr<StartMenu>) {
             let tile = list_tile_at(e, list, index);
             let entry = e.call(LIST_DATA_AT, &args![list, index, 0u32]).u32();
             if tile != 0 && entry != 0 {
-                if e.call(FILE_ENTRY_IS_AUTOSAVE, &args![entry]).bool() {
-                    e.call(LIST_REMOVE_AT, &args![list, index, 0u32]);
-                    count = count.wrapping_sub(1);
-                } else if e.call(FILE_ENTRY_NAME_TEST_B10, &args![entry]).bool() {
+                // The exe tests the name only when the entry is not an autosave.
+                if e.call(FILE_ENTRY_IS_AUTOSAVE, &args![entry]).bool()
+                    || e.call(FILE_ENTRY_NAME_TEST_B10, &args![entry]).bool()
+                {
                     e.call(LIST_REMOVE_AT, &args![list, index, 0u32]);
                     count = count.wrapping_sub(1);
                 }
@@ -2518,7 +2522,7 @@ pub fn start_menu_user_option_user_option(
                 StartMenuUserOption::pTemplate,
                 USER_OPTION_TOGGLE_TEMPLATE,
             );
-            let size = num_settings.checked_mul(4).unwrap_or(u32::MAX);
+            let size = num_settings.saturating_mul(4); // operator new[] overflow passes 0xffffffff
             let array = e.call(OPERATOR_NEW, &args![size]).u32();
             e.set(this, StartMenuUserOption::pValueStrings, array);
             for index in 0..num_settings {
