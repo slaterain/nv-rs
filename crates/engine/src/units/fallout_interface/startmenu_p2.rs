@@ -8,7 +8,11 @@
 //! the info panel, the idle handling), the options list and its key
 //! remapping, `StartMenu::Fade`, `StartMenu::UserOption`, and the
 //! constructor, destructor, `AddItem`, `RemoveAll` and `Sort` of
-//! `ListBox<StartMenu::Option*>`.
+//! `ListBox<StartMenu::Option*>`. The second batch (`007d74f0` .. `007da040`,
+//! 49 functions) holds the rest of the unit: the state, selection, highlight
+//! and removal functions of `ListBox<StartMenu::Option*>` and its twin
+//! `ListBox<BGSSaveLoadFileEntry*>`, `ListBox<int>::SetEnabled`, and a few
+//! small array helpers.
 //!
 //! Callees are called by address. Most tile functions (`BSMenu/tile.cpp`)
 //! have no name in the engine map, so the constants below describe each by
@@ -30,6 +34,7 @@
 use super::startmenu::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::types::BSSimpleArray;
 
 // ---- globals ---------------------------------------------------------------
 
@@ -493,6 +498,79 @@ const MEDIA_FN_8304C0: u32 = 0x0083_04c0;
 const STRING_CHARACTERS: u32 = 0x00b0_08d0;
 /// `XUserInterface::XUIIsUp` (name from the engine map).
 const XUI_IS_UP: u32 = 0x0070_edf0;
+
+// ---- the list boxes' own traits, statics and callees (second half) ---------------
+
+/// `"_enabled"`.
+const TRAIT_NAME_ENABLED: u32 = 0x0107_0244;
+/// `"_selected"`.
+const TRAIT_NAME_SELECTED: u32 = 0x0107_1b64;
+/// `"_scroll_delta"`.
+const TRAIT_NAME_SCROLL_DELTA: u32 = 0x0106_f90c;
+/// `"_number_of_items"`.
+const TRAIT_NAME_NUMBER_OF_ITEMS: u32 = 0x0106_f8f8;
+/// `"_highlight_y"`.
+const TRAIT_NAME_HIGHLIGHT_Y: u32 = 0x0106_f8c0;
+/// `"_selected_height"`.
+const TRAIT_NAME_SELECTED_HEIGHT: u32 = 0x0106_f8ac;
+/// `"lb_highlight_box"`.
+const NAME_HIGHLIGHT_BOX: u32 = 0x0106_f898;
+/// `"top"`.
+const NAME_TOP: u32 = 0x0106_f894;
+/// `"bottom"`.
+const NAME_BOTTOM: u32 = 0x0106_f88c;
+/// `"left"`.
+const NAME_LEFT: u32 = 0x0106_f884;
+/// `"right"`.
+const NAME_RIGHT: u32 = 0x0106_f87c;
+/// `double` 1.0 (`01012070`), subtracted from the container's `_num_filtered`
+/// value when a filtered-out item is removed.
+const ONE_AS_DOUBLE: u32 = 0x0101_2070;
+/// Vtable stored by `ListBox<BGSSaveLoadFileEntry*>`'s constructor (RTTI:
+/// `ListBox<BGSSaveLoadFileEntry*>`).
+const FILE_ENTRY_LIST_BOX_VTABLE: u32 = 0x0107_7094;
+/// Vtable stored by the constructor `007d9f90` and the destructor `007d9ff0`
+/// (the one `BSSimpleArray<StartMenu::Option*>`'s scalar deleting destructor
+/// runs).
+const OPTION_ARRAY_VTABLE: u32 = 0x0107_71d8;
+/// Vtable stored by the constructor `007da010`.
+const USER_OPTION_ARRAY_VTABLE: u32 = 0x0107_71ec;
+
+/// `Tile::IsVisible(tile) -> bool` (name from the engine map).
+const TILE_IS_VISIBLE: u32 = 0x00a0_40a0;
+/// `(list, tile) -> bool` (`007242f0`, `fallout/interface/menumanager.cpp`
+/// in the engine map): walks the list's items and answers whether one of them
+/// has this tile; tested before a tile is highlighted or selected.
+const LIST_CONTAINS_TILE: u32 = 0x0072_42f0;
+/// `Tile::GetChildByName(tile, name)` (name from the engine map).
+const TILE_GET_CHILD_BY_NAME: u32 = 0x00a0_3da0;
+/// `(tile, name) -> tile` (`00a08b20`, cdecl, `BSMenu/tile.cpp` in the engine
+/// map): the tile the name designates relative to the first argument; the
+/// list boxes ask for `lb_highlight_box` below their container.
+const TILE_FIND_BY_NAME: u32 = 0x00a0_8b20;
+/// `(tile, byte)` (`0071aa60`): stores the byte at `tile + 0x35`.
+const TILE_STORE_BYTE_35: u32 = 0x0071_aa60;
+/// `(tile) -> byte` (`0071aa80`): the byte at `tile + 0x35`.
+const TILE_LOAD_BYTE_35: u32 = 0x0071_aa80;
+/// `(value, multiple) -> float` (`004bd510`, cdecl, result in `ST0`): rounds
+/// `value` up to a multiple of `multiple` (translated in
+/// `fallout shared/inventorychanges.cpp`).
+const ROUND_UP_TO_MULTIPLE: u32 = 0x004b_d510;
+/// `(float) -> float` (`004e4430`, cdecl, result in `ST0`): rounds the value
+/// up (translated in `fallout shared/teswater.cpp`); the total-height
+/// computation applies it before truncating.
+const ROUND_FLOAT: u32 = 0x004e_4430;
+/// `(element, flags)` (`005aa3f0`): a scalar deleting destructor whose body is
+/// `007d9ec0`; `007d9e80` runs it over elements 12 bytes apart.
+const ARRAY_ELEMENT_DESTROY: u32 = 0x005a_a3f0;
+/// `(array)` frees the buffer through the array's vtable (`006a8500`).
+const ARRAY_BUFFER_RELEASE: u32 = 0x006a_8500;
+/// `(array, 0, 0)` zeroes the array's fields (`006b3eb0`).
+const ARRAY_INIT: u32 = 0x006b_3eb0;
+/// `(array, 1)` the array destructor body (`008454f0`).
+const ARRAY_DESTRUCT_BODY: u32 = 0x0084_54f0;
+/// The destructor body of the second array (`007da070`, outside this part).
+const USER_OPTION_ARRAY_DESTRUCT: u32 = 0x007d_a070;
 
 layout! {
     /// `StartMenu` (Xbox PDB), 0x1CC bytes on the Xbox; the PC build has two
@@ -2995,9 +3073,15 @@ pub fn list_box_option_ptr_construct(
     e: &mut Engine,
     this: Ptr<ListBoxLayout>,
 ) -> Ptr<ListBoxLayout> {
+    construct_list_box(e, this, OPTION_LIST_BOX_VTABLE)
+}
+
+/// The body of the constructor shared by both list box instances: `vtable`
+/// is the instance's vtable.
+fn construct_list_box(e: &mut Engine, this: Ptr<ListBoxLayout>, vtable: u32) -> Ptr<ListBoxLayout> {
     e.call(LIST_BOX_BASE_CONSTRUCT, &args![this]);
     e.call(EMBEDDED_LIST_CONSTRUCT, &args![this.byte_add(4)]);
-    e.mem.set_u32(this.addr(), OPTION_LIST_BOX_VTABLE);
+    e.mem.set_u32(this.addr(), vtable);
     e.set(this, ListBoxLayout::pScrollBar, Ptr::new(0));
     e.set(this, ListBoxLayout::pHighlightedItem, Ptr::new(0));
     e.set(this, ListBoxLayout::pContainerRect, Ptr::new(0));
@@ -3047,6 +3131,23 @@ pub fn list_box_option_add_item(
     position: u32,
     template: u32,
 ) -> Ptr {
+    add_item(
+        e,
+        this,
+        (data, text, position, template),
+        (OPTION_LIST_SYNCHRONIZE, OPTION_LIST_SET_TOTAL_LIST_HEIGHT),
+    )
+}
+
+/// The body of `AddItem` shared by both list box instances; the last argument
+/// holds the addresses of the instance's `Synchronize` and
+/// `SetTotalListHeight`.
+fn add_item(
+    e: &mut Engine,
+    this: Ptr<ListBoxLayout>,
+    (data, text, position, template): (u32, u32, u32, u32),
+    (synchronize, set_total_list_height): (u32, u32),
+) -> Ptr {
     let container = e.get(this, ListBoxLayout::pContainerRect);
     if container.is_null() {
         return Ptr::NULL;
@@ -3087,7 +3188,7 @@ pub fn list_box_option_add_item(
         let list_item = make_list_item(e);
         e.call(LIST_INSERT, &args![this.byte_add(4), list_item, position]);
         if e.call(LIST_FLAG_TEST, &args![this, 0u32]).bool() {
-            e.call(OPTION_LIST_SYNCHRONIZE, &args![this]);
+            e.call(synchronize, &args![this]);
         }
     } else {
         let list_item = make_list_item(e);
@@ -3097,7 +3198,7 @@ pub fn list_box_option_add_item(
         });
         if e.call(LIST_FLAG_TEST, &args![this, 0u32]).bool() {
             e.call(LIST_INIT_TILE_POSITION, &args![this, item]);
-            e.call(OPTION_LIST_SET_TOTAL_LIST_HEIGHT, &args![this]);
+            e.call(set_total_list_height, &args![this]);
         }
         let index = e.get(this, ListBoxLayout::usNextIndex);
         e.set(this, ListBoxLayout::usNextIndex, index.wrapping_add(1));
@@ -3135,6 +3236,24 @@ pub fn list_box_option_add_item(
 /// (`007d9460`), clears the highlight and updates the highlight box
 /// (`007d9140`).
 pub fn list_box_option_remove_all(e: &mut Engine, this: Ptr<ListBoxLayout>) {
+    remove_all(
+        e,
+        this,
+        (
+            OPTION_LIST_SET_TOTAL_LIST_HEIGHT,
+            OPTION_LIST_UPDATE_HIGHLIGHT_BOX_POS,
+        ),
+    );
+}
+
+/// The body of `RemoveAll` shared by both list box instances; the last
+/// argument holds the addresses of the instance's `SetTotalListHeight` and
+/// `UpdateHighlightBoxPos`.
+fn remove_all(
+    e: &mut Engine,
+    this: Ptr<ListBoxLayout>,
+    (set_total_list_height, update_highlight_box_pos): (u32, u32),
+) {
     loop {
         let node = e.get(this, ListBoxLayout::m_pkNext);
         if node.is_null() {
@@ -3204,9 +3323,9 @@ pub fn list_box_option_remove_all(e: &mut Engine, this: Ptr<ListBoxLayout>) {
             .u32();
         set_float(e, container, reset_trait, 0.0, true);
     }
-    e.call(OPTION_LIST_SET_TOTAL_LIST_HEIGHT, &args![this]);
+    e.call(set_total_list_height, &args![this]);
     e.set(this, ListBoxLayout::pHighlightedItem, Ptr::new(0));
-    e.call(OPTION_LIST_UPDATE_HIGHLIGHT_BOX_POS, &args![this]);
+    e.call(update_highlight_box_pos, &args![this]);
 }
 
 // Translated from 007d74c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3216,6 +3335,1240 @@ pub fn list_box_option_remove_all(e: &mut Engine, this: Ptr<ListBoxLayout>) {
 pub fn list_box_option_sort(e: &mut Engine, this: Ptr<ListBoxLayout>, argument: u32) {
     e.call(LIST_SORT, &args![this.byte_add(4), argument]);
     e.call(OPTION_LIST_SYNCHRONIZE, &args![this]);
+}
+
+// ---- the second half: list box state, selection, removal and the arrays ---------
+
+/// `ListBoxItem` (a node's item, built by `007a62e0`): the tile at +0.
+const LIST_ITEM_TILE: u32 = 0;
+/// `ListBoxItem`: the data pointer at +4.
+const LIST_ITEM_DATA: u32 = 4;
+/// `ListBoxItem`: a byte at +8, set by `Filter` to 1 when the filter drops the
+/// item.
+const LIST_ITEM_FILTERED: u32 = 8;
+
+/// `ListBox<BGSSaveLoadFileEntry*>::Synchronize` (`007d9590`).
+const FILE_ENTRY_LIST_SYNCHRONIZE: u32 = 0x007d_9590;
+/// `ListBox<BGSSaveLoadFileEntry*>::SetTotalListHeight` (`007d9d50`).
+const FILE_ENTRY_LIST_SET_TOTAL_LIST_HEIGHT: u32 = 0x007d_9d50;
+/// `ListBox<BGSSaveLoadFileEntry*>::UpdateHighlightBoxPos` (`007d97a0`).
+const FILE_ENTRY_LIST_UPDATE_HIGHLIGHT_BOX_POS: u32 = 0x007d_97a0;
+/// `ListBox<BGSSaveLoadFileEntry*>::GetAt(list, index, flag) -> item`
+/// (name from the engine map).
+const FILE_ENTRY_LIST_GET_AT: u32 = 0x007a_6fa0;
+
+/// A trait id the game looks up once, in a function-local static: `guard`
+/// holds the "initialized" bits (`bit` is this static's), `cache` the id,
+/// `name` the trait's name.
+#[derive(Clone, Copy)]
+struct StaticTrait {
+    guard: u32,
+    bit: u32,
+    cache: u32,
+    name: u32,
+}
+
+const fn static_trait_of(guard: u32, bit: u32, cache: u32, name: u32) -> StaticTrait {
+    StaticTrait {
+        guard,
+        bit,
+        cache,
+        name,
+    }
+}
+
+const OPTION_SET_ENABLED_TRAIT: StaticTrait =
+    static_trait_of(0x011d_ac70, 1, 0x011d_ac6c, TRAIT_NAME_ENABLED);
+const OPTION_IS_ENABLED_TRAIT: StaticTrait =
+    static_trait_of(0x011d_ac78, 1, 0x011d_ac74, TRAIT_NAME_ENABLED);
+const OPTION_IS_SELECTED_TRAIT: StaticTrait =
+    static_trait_of(0x011d_ac80, 1, 0x011d_ac7c, TRAIT_NAME_SELECTED);
+const DOWNLOADS_SET_ENABLED_TRAIT: StaticTrait =
+    static_trait_of(0x011d_ac88, 1, 0x011d_ac84, TRAIT_NAME_ENABLED);
+const FILE_ENTRY_FILTER_TRAIT: StaticTrait =
+    static_trait_of(0x011d_ac90, 1, 0x011d_ac8c, LIST_RESET_TRAIT_NAME);
+const FILE_ENTRY_NUM_UNFILTERED_TRAIT: StaticTrait =
+    static_trait_of(0x011d_ac98, 1, 0x011d_ac94, LIST_RESET_TRAIT_NAME);
+const FILE_ENTRY_SET_ENABLED_TRAIT: StaticTrait =
+    static_trait_of(0x011d_aca0, 1, 0x011d_ac9c, TRAIT_NAME_ENABLED);
+const FILE_ENTRY_IS_ENABLED_TRAIT: StaticTrait =
+    static_trait_of(0x011d_aca8, 1, 0x011d_aca4, TRAIT_NAME_ENABLED);
+const OPTION_SELECT_TRAIT: StaticTrait =
+    static_trait_of(0x011d_acb0, 1, 0x011d_acac, TRAIT_NAME_SELECTED);
+const OPTION_HIGHLIGHT_Y_TRAIT: StaticTrait =
+    static_trait_of(0x011d_acbc, 1, 0x011d_acb8, TRAIT_NAME_HIGHLIGHT_Y);
+const OPTION_SELECTED_HEIGHT_TRAIT: StaticTrait =
+    static_trait_of(0x011d_acbc, 2, 0x011d_acb4, TRAIT_NAME_SELECTED_HEIGHT);
+const FILE_ENTRY_SELECT_TRAIT: StaticTrait =
+    static_trait_of(0x011d_acc4, 1, 0x011d_acc0, TRAIT_NAME_SELECTED);
+const FILE_ENTRY_HIGHLIGHT_Y_TRAIT: StaticTrait =
+    static_trait_of(0x011d_acd0, 1, 0x011d_accc, TRAIT_NAME_HIGHLIGHT_Y);
+const FILE_ENTRY_SELECTED_HEIGHT_TRAIT: StaticTrait =
+    static_trait_of(0x011d_acd0, 2, 0x011d_acc8, TRAIT_NAME_SELECTED_HEIGHT);
+const OPTION_NUM_UNFILTERED_TRAIT: StaticTrait =
+    static_trait_of(0x011d_acd8, 1, 0x011d_acd4, LIST_RESET_TRAIT_NAME);
+
+/// A list box's `IsEnabled`.
+type ListBoxQuery = fn(&mut Engine, Ptr<ListBoxLayout>) -> bool;
+/// A list box's `UpdateHighlightBoxPos`, `SetTotalListHeight`, ...
+type ListBoxAction = fn(&mut Engine, Ptr<ListBoxLayout>);
+/// A list box's `NumUnfiltered`.
+type ListBoxCount = fn(&mut Engine, Ptr<ListBoxLayout>) -> i32;
+/// A list box's selection function `(list, tile) -> bool`.
+type ListBoxTileAction = fn(&mut Engine, Ptr<ListBoxLayout>, Ptr) -> bool;
+
+/// The trait id of a function-local static: `Tile::AddUserTrait(name, -1)`
+/// the first time (the guard bit is set before the call), the cached id
+/// afterwards.
+fn static_trait(e: &mut Engine, which: StaticTrait) -> u32 {
+    let guard = e.mem.u32(which.guard);
+    if guard & which.bit == 0 {
+        e.mem.set_u32(which.guard, guard | which.bit);
+        let id = user_trait(e, which.name);
+        e.mem.set_u32(which.cache, id);
+    }
+    e.mem.u32(which.cache)
+}
+
+/// `Tile::IsTrue(tile, trait)`.
+fn tile_is_true(e: &mut Engine, tile: Ptr, trait_id: u32) -> bool {
+    e.call(TILE_IS_TRUE, &args![tile, trait_id]).bool()
+}
+
+/// x87 `FISTP` to 64 bits with truncation, low 32 bits (what the code reads
+/// back): the "integer indefinite" value (low half 0) for NaN and for values
+/// that do not fit.
+fn fistp_truncate(value: f64) -> i32 {
+    let wide = if value.is_nan()
+        || value >= 9_223_372_036_854_775_808.0
+        || value < -9_223_372_036_854_775_808.0
+    {
+        i64::MIN
+    } else {
+        value.trunc() as i64
+    };
+    wide as i32
+}
+
+/// The first node of the list: the embedded list sits at `this + 4` (the code
+/// guards a null `this`).
+fn first_node(this: Ptr<ListBoxLayout>) -> u32 {
+    if this.is_null() {
+        0
+    } else {
+        this.addr() + 4
+    }
+}
+
+/// The `ListBoxItem*` in a node's item slot (`006815c0` returns the node's own
+/// address, which is the slot).
+fn node_item(e: &mut Engine, node: u32) -> u32 {
+    let slot = e.call(LIST_NODE_SELF, &args![node]).u32();
+    e.mem.u32(slot)
+}
+
+/// The tile of a node's item.
+fn node_tile(e: &mut Engine, node: u32) -> u32 {
+    let item = node_item(e, node);
+    e.mem.u32(item + LIST_ITEM_TILE)
+}
+
+/// The node after `node` (`00726070`, the word at +4).
+fn node_next(e: &mut Engine, node: u32) -> u32 {
+    e.call(WORD_AT_4, &args![node]).u32()
+}
+
+/// `SetEnabled`: sets the container tile's `_enabled` trait.
+fn set_enabled(e: &mut Engine, this: Ptr<ListBoxLayout>, which: StaticTrait, enabled: u8) {
+    let id = static_trait(e, which);
+    let container = e.get(this, ListBoxLayout::pContainerRect);
+    set_int(e, container, id, i32::from(enabled));
+}
+
+/// `IsEnabled`: the container exists and its `_enabled` trait is true.
+fn is_enabled(e: &mut Engine, this: Ptr<ListBoxLayout>, which: StaticTrait) -> bool {
+    let id = static_trait(e, which);
+    let container = e.get(this, ListBoxLayout::pContainerRect);
+    !container.is_null() && tile_is_true(e, container, id)
+}
+
+/// `Highlight`: makes `tile` (or nothing, for null) the highlighted item when
+/// the list is enabled, the list holds the tile and the tile is enabled.
+fn highlight(
+    e: &mut Engine,
+    this: Ptr<ListBoxLayout>,
+    tile: Ptr,
+    enabled: ListBoxQuery,
+    update_highlight_box_pos: ListBoxAction,
+) -> bool {
+    if !enabled(e, this) {
+        return false;
+    }
+    if !tile.is_null() {
+        if !e.call(LIST_CONTAINS_TILE, &args![this, tile]).bool() {
+            return false;
+        }
+        let id = user_trait(e, TRAIT_NAME_ENABLED);
+        if !tile_is_true(e, tile, id) {
+            return false;
+        }
+    }
+    e.set(this, ListBoxLayout::pHighlightedItem, tile);
+    update_highlight_box_pos(e, this);
+    true
+}
+
+/// `GetHighlightTarget`: the tile a move in `direction` lands on, or null.
+/// Directions 1 and 2 step by -1 and +1; 0xF and 0x10 step by minus and plus
+/// one page (the container's `0xFB0` value over its `_scroll_delta` value,
+/// rounded up and truncated); the others do not move. The step is added to
+/// the highlighted item's index (`0xFAC` trait; the first or last index when
+/// nothing is highlighted), clamped, and the first enabled tile at or beyond
+/// that index in the stepping direction (then back the other way) is chosen.
+/// The result is null when it is the highlighted tile itself.
+fn highlight_target(
+    e: &mut Engine,
+    this: Ptr<ListBoxLayout>,
+    direction: u32,
+    enabled: ListBoxQuery,
+) -> u32 {
+    let container = e.get(this, ListBoxLayout::pContainerRect);
+    let step: i32 = match direction {
+        1 => -1,
+        2 => 1,
+        0xf | 0x10 => {
+            if container.is_null() {
+                0
+            } else {
+                let visible = tile_value(e, container, TRAIT_0FB0);
+                let visible = if direction == 0xf { -visible } else { visible };
+                let delta_trait = e
+                    .call(TILE_TEXT_TO_TRAIT, &args![TRAIT_NAME_SCROLL_DELTA])
+                    .u32();
+                let delta = tile_value(e, container, delta_trait);
+                let pages = (visible / delta) as f32;
+                let rounded = e.call(ROUND_UP_TO_MULTIPLE, &args![pages, 1.0f32]).f32();
+                float_to_int(e, f64::from(rounded))
+            }
+        }
+        _ => 0,
+    };
+    let mut found = 0u32;
+    let count = i32::from(e.get(this, ListBoxLayout::usNextIndex));
+    if enabled(e, this) && step != 0 && count != 0 {
+        let last = count - 1;
+        let highlighted = e.get(this, ListBoxLayout::pHighlightedItem);
+        let mut index = if !highlighted.is_null() {
+            let current_value = tile_value(e, highlighted, TRAIT_0FAC);
+            let current = float_to_int(e, current_value);
+            let moved = current.wrapping_add(step);
+            if moved < 0 {
+                0
+            } else if moved > last {
+                last
+            } else {
+                moved
+            }
+        } else if step > 0 {
+            0
+        } else {
+            last
+        };
+        loop {
+            // the item whose index trait equals `index`
+            let mut node = first_node(this);
+            while found == 0 && node != 0 {
+                if node_item(e, node) == 0 {
+                    break;
+                }
+                let tile = node_tile(e, node);
+                let value = tile_value(e, Ptr::new(tile), TRAIT_0FAC);
+                if value == f64::from(index) {
+                    found = node_tile(e, node);
+                }
+                node = node_next(e, node);
+            }
+            if found == 0 {
+                break;
+            }
+            let id = user_trait(e, TRAIT_NAME_ENABLED);
+            if tile_is_true(e, Ptr::new(found), id) {
+                break;
+            }
+            found = 0;
+            if step > 0 {
+                index += 1;
+                if index > last {
+                    // past the end: walk back from the one before the last
+                    index = last - 1;
+                    loop {
+                        if found != 0 {
+                            let id = user_trait(e, TRAIT_NAME_ENABLED);
+                            if tile_is_true(e, Ptr::new(found), id) {
+                                break;
+                            }
+                        }
+                        if index < 0 {
+                            break;
+                        }
+                        found = list_tile_at(e, this, index);
+                        index -= 1;
+                    }
+                    break;
+                }
+            } else {
+                index -= 1;
+                if index < 0 {
+                    // before the start: walk forward from index 1
+                    index = 1;
+                    loop {
+                        if found != 0 {
+                            let id = user_trait(e, TRAIT_NAME_ENABLED);
+                            if tile_is_true(e, Ptr::new(found), id) {
+                                break;
+                            }
+                        }
+                        if index > last {
+                            break;
+                        }
+                        found = list_tile_at(e, this, index);
+                        index += 1;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    if found != e.get(this, ListBoxLayout::pHighlightedItem).addr() {
+        found
+    } else {
+        0
+    }
+}
+
+/// The selection function behind `SetSelection` and its sibling: when the
+/// list is enabled and holds the tile, sets the tile's `_selected` trait for
+/// `mode` 0 (selects when it is not), 1 (deselects when it is) or 2 (toggles).
+/// True when the trait was written.
+fn select(
+    e: &mut Engine,
+    this: Ptr<ListBoxLayout>,
+    tile: Ptr,
+    mode: u32,
+    (enabled, which): (ListBoxQuery, StaticTrait),
+) -> bool {
+    if !enabled(e, this) || tile.is_null() {
+        return false;
+    }
+    if !e.call(LIST_CONTAINS_TILE, &args![this, tile]).bool() {
+        return false;
+    }
+    let id = static_trait(e, which);
+    let selected = tile_is_true(e, tile, id);
+    match mode {
+        0 if !selected => {
+            set_int(e, tile, id, 1);
+            true
+        }
+        1 if selected => {
+            set_int(e, tile, id, 0);
+            true
+        }
+        2 => {
+            set_int(e, tile, id, i32::from(!selected));
+            true
+        }
+        _ => false,
+    }
+}
+
+/// `DeselectAll`: runs `deselect` on the tile of every item; with
+/// `skip_filtered` set the items the filter dropped are left alone.
+fn deselect_all(
+    e: &mut Engine,
+    this: Ptr<ListBoxLayout>,
+    skip_filtered: u8,
+    deselect: ListBoxTileAction,
+) {
+    let mut node = first_node(this);
+    while node != 0 {
+        if node_item(e, node) == 0 {
+            break;
+        }
+        let skip = skip_filtered != 0 && {
+            let item = node_item(e, node);
+            e.mem.u8(item + LIST_ITEM_FILTERED) != 0
+        };
+        if !skip {
+            let tile = node_tile(e, node);
+            deselect(e, this, Ptr::new(tile));
+        }
+        node = node_next(e, node);
+    }
+}
+
+/// `Synchronize`: numbers the unfiltered items again (the `0xFAC` trait and
+/// the position of each), then recomputes the total height and the highlight
+/// box.
+fn synchronize(
+    e: &mut Engine,
+    this: Ptr<ListBoxLayout>,
+    (set_total_list_height, update_highlight_box_pos): (ListBoxAction, ListBoxAction),
+) {
+    e.set(this, ListBoxLayout::usNextIndex, 0);
+    e.set(this, ListBoxLayout::fTotalListHeight, 0.0);
+    let mut node = first_node(this);
+    while node != 0 {
+        if node_item(e, node) == 0 {
+            break;
+        }
+        let item = node_item(e, node);
+        if e.mem.u8(item + LIST_ITEM_FILTERED) == 0 {
+            let index = e.get(this, ListBoxLayout::usNextIndex);
+            e.set(this, ListBoxLayout::usNextIndex, index.wrapping_add(1));
+            let tile = node_tile(e, node);
+            set_int(e, Ptr::new(tile), TRAIT_0FAC, i32::from(index));
+            let tile = node_tile(e, node);
+            e.call(LIST_INIT_TILE_POSITION, &args![this, tile]);
+        }
+        node = node_next(e, node);
+    }
+    set_total_list_height(e, this);
+    update_highlight_box_pos(e, this);
+}
+
+/// `NumUnfiltered`: the number of items minus the container's
+/// `_num_filtered` value (truncated).
+fn num_unfiltered(e: &mut Engine, this: Ptr<ListBoxLayout>, which: StaticTrait) -> i32 {
+    let id = static_trait(e, which);
+    let items = e.call(LIST_COUNT, &args![this]).i32();
+    let container = e.get(this, ListBoxLayout::pContainerRect);
+    let filtered = fistp_truncate(tile_value(e, container, id));
+    items.wrapping_sub(filtered)
+}
+
+/// A tile's flag byte (`tile + 0x35`) set to `flag`, and the tile queued for
+/// an update (flags 8).
+fn mark_tile(e: &mut Engine, tile: u32, flag: u32) {
+    e.call(TILE_STORE_BYTE_35, &args![tile, flag]);
+    e.call(TILE_ADD_NEEDS_UPDATE, &args![tile, 8u32]);
+}
+
+/// `UpdateHighlightBoxPos`: without a highlighted item the container's
+/// `_highlight_y` is -1 and `_selected_height` 0; otherwise both follow the
+/// highlighted tile (the `0xFA2` and `0xFB0` values) through actions, and the
+/// `lb_highlight_box` tile and its four edges get their flag byte set to the
+/// highlighted tile's own flag byte.
+fn update_highlight_box_pos(
+    e: &mut Engine,
+    this: Ptr<ListBoxLayout>,
+    (y_static, height_static): (StaticTrait, StaticTrait),
+) {
+    let y_trait = static_trait(e, y_static);
+    let height_trait = static_trait(e, height_static);
+    let container = e.get(this, ListBoxLayout::pContainerRect);
+    if container.is_null() {
+        return;
+    }
+    let highlighted = e.get(this, ListBoxLayout::pHighlightedItem);
+    if highlighted.is_null() {
+        set_int(e, container, y_trait, -1);
+        set_int(e, container, height_trait, 0);
+        return;
+    }
+    let y_value = e.call(TILE_GET_VALUE, &args![container, y_trait]).u32();
+    let height_value = e
+        .call(TILE_GET_VALUE, &args![container, height_trait])
+        .u32();
+    e.call(
+        TILE_VALUE_ADD_ACTION,
+        &args![y_value, 0x7d0u32, highlighted, TRAIT_0FA2],
+    );
+    e.call(TILE_VALUE_CALCULATE, &args![y_value, 0u32]);
+    e.call(
+        TILE_VALUE_ADD_ACTION,
+        &args![height_value, 0x7d0u32, highlighted, TRAIT_0FB0],
+    );
+    e.call(TILE_VALUE_CALCULATE, &args![height_value, 0u32]);
+    let flag = u32::from(e.call(TILE_LOAD_BYTE_35, &args![highlighted]).bool());
+    let box_tile = e
+        .call(TILE_FIND_BY_NAME, &args![container, NAME_HIGHLIGHT_BOX])
+        .u32();
+    if box_tile == 0 {
+        return;
+    }
+    let top = e
+        .call(TILE_GET_CHILD_BY_NAME, &args![box_tile, NAME_TOP])
+        .u32();
+    if top != 0 {
+        mark_tile(e, top, flag);
+        // the other three edges are not checked for null
+        for name in [NAME_BOTTOM, NAME_LEFT, NAME_RIGHT] {
+            let edge = e.call(TILE_GET_CHILD_BY_NAME, &args![box_tile, name]).u32();
+            mark_tile(e, edge, flag);
+        }
+    }
+    mark_tile(e, box_tile, flag);
+}
+
+/// `SetTotalListHeight`: when the container's visible height (`0xFB0`) is
+/// smaller than the total list height, the list needs
+/// `max(1 + trunc(round_up((total - visible) * unfiltered / total)), 2)`
+/// scroll steps; the container's `_scroll_delta` becomes
+/// `(total - visible) / (steps - 1)` when there are more than one, and the
+/// scroll bar's `_number_of_items` the number of steps.
+fn set_total_list_height(e: &mut Engine, this: Ptr<ListBoxLayout>, unfiltered: ListBoxCount) {
+    let container = e.get(this, ListBoxLayout::pContainerRect);
+    if container.is_null() {
+        return;
+    }
+    let visible = tile_value(e, container, TRAIT_0FB0) as f32;
+    let mut steps = 1i32;
+    let total = e.get(this, ListBoxLayout::fTotalListHeight);
+    let zero: f64 = e.global(COMPARE_ZERO);
+    if f64::from(total) > zero && f64::from(visible) > zero {
+        if f64::from(visible) < f64::from(total) {
+            let count = unfiltered(e, this) as u32;
+            let ratio = (f64::from(count) * (f64::from(total) - f64::from(visible))
+                / f64::from(total)) as f32;
+            let rounded = e.call(ROUND_FLOAT, &args![ratio]).f32();
+            let whole = float_to_int(e, f64::from(rounded));
+            steps = e.call(MAX_INT, &args![whole.wrapping_add(1), 2i32]).i32();
+        }
+        if steps > 1 {
+            let delta = ((f64::from(total) - f64::from(visible)) / f64::from(steps - 1)) as f32;
+            let delta_trait = e
+                .call(TILE_TEXT_TO_TRAIT, &args![TRAIT_NAME_SCROLL_DELTA])
+                .u32();
+            set_float(e, container, delta_trait, delta, true);
+        }
+    }
+    let scroll_bar = e.get(this, ListBoxLayout::pScrollBar);
+    if !scroll_bar.is_null() {
+        let items_trait = e
+            .call(TILE_TEXT_TO_TRAIT, &args![TRAIT_NAME_NUMBER_OF_ITEMS])
+            .u32();
+        set_int(e, scroll_bar, items_trait, steps);
+    }
+}
+
+// Translated from 007d74f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StartMenu::Option*>::SetEnabled` (Xbox PDB): sets the container
+/// tile's `_enabled` trait to `enabled` (zero-extended byte). The trait id is
+/// looked up once, in a function-local static.
+// Translation incomplete: 007d74f0 - the exception-unwinding frame around the static initialization is not translated.
+pub fn list_box_option_set_enabled(e: &mut Engine, this: Ptr<ListBoxLayout>, enabled: u8) {
+    set_enabled(e, this, OPTION_SET_ENABLED_TRAIT, enabled);
+}
+
+// Translated from 007d7580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StartMenu::Option*>::IsEnabled` (Xbox PDB): the container exists
+/// and its `_enabled` trait is true.
+// Translation incomplete: 007d7580 - the exception-unwinding frame around the static initialization is not translated.
+pub fn list_box_option_is_enabled(e: &mut Engine, this: Ptr<ListBoxLayout>) -> bool {
+    is_enabled(e, this, OPTION_IS_ENABLED_TRAIT)
+}
+
+// Translated from 007d7630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The container tile exists and `Tile::IsVisible` (`00a040a0`) holds for it.
+pub fn fn_007d7630(e: &mut Engine, this: Ptr<ListBoxLayout>) -> bool {
+    let container = e.get(this, ListBoxLayout::pContainerRect);
+    !container.is_null() && e.call(TILE_IS_VISIBLE, &args![container]).bool()
+}
+
+// Translated from 007d7670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StartMenu::Option*>::Highlight` (Xbox PDB): see [`highlight`].
+pub fn list_box_option_highlight(e: &mut Engine, this: Ptr<ListBoxLayout>, tile: Ptr) -> bool {
+    highlight(
+        e,
+        this,
+        tile,
+        list_box_option_is_enabled,
+        list_box_option_update_highlight_box_pos,
+    )
+}
+
+// Translated from 007d76e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StartMenu::Option*>::GetHighlightTarget` (Xbox PDB): see
+/// [`highlight_target`].
+pub fn list_box_option_get_highlight_target(
+    e: &mut Engine,
+    this: Ptr<ListBoxLayout>,
+    direction: u32,
+) -> u32 {
+    highlight_target(e, this, direction, list_box_option_is_enabled)
+}
+
+// Translated from 007d7a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Selects the tile (`007d9000` with mode 0). Its twin `007d8d60` is named
+/// `ListBox<BGSSaveLoadFileEntry*>::SetSelection` in the Xbox PDB.
+pub fn fn_007d7a80(e: &mut Engine, this: Ptr<ListBoxLayout>, tile: Ptr) -> bool {
+    fn_007d9000(e, this, tile, 0)
+}
+
+// Translated from 007d7aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StartMenu::Option*>::IsSelected` (Xbox PDB): the tile's
+/// `_selected` trait is true (false for a null tile). `this` is not used.
+// Translation incomplete: 007d7aa0 - the exception-unwinding frame around the static initialization is not translated.
+pub fn list_box_option_is_selected(e: &mut Engine, _unused_this: Ptr, tile: Ptr) -> bool {
+    let id = static_trait(e, OPTION_IS_SELECTED_TRAIT);
+    id != 0 && !tile.is_null() && tile_is_true(e, tile, id)
+}
+
+// Translated from 007d7b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StartMenu::Option*>::DeselectAll` (Xbox PDB): deselects (`007d8fe0`)
+/// the tile of every item; with `skip_filtered` nonzero the items the filter
+/// dropped are left alone.
+pub fn list_box_option_deselect_all(e: &mut Engine, this: Ptr<ListBoxLayout>, skip_filtered: u8) {
+    deselect_all(e, this, skip_filtered, fn_007d8fe0);
+}
+
+// Translated from 007d7bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<int>::SetEnabled` (Xbox PDB): sets the container tile's
+/// `_enabled` trait to `enabled` (zero-extended byte).
+// Translation incomplete: 007d7bd0 - the exception-unwinding frame around the static initialization is not translated.
+pub fn list_box_int_set_enabled(e: &mut Engine, this: Ptr<ListBoxLayout>, enabled: u8) {
+    set_enabled(e, this, DOWNLOADS_SET_ENABLED_TRAIT, enabled);
+}
+
+// Translated from 007d7c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of `ListBox<BGSSaveLoadFileEntry*>`: the same steps as
+/// [`list_box_option_ptr_construct`] with the file entry list's vtable.
+/// Returns `this`.
+// Translation incomplete: 007d7c60 - the exception-unwinding frame (the base destructors if a later step throws) is not translated.
+pub fn list_box_file_entry_construct(
+    e: &mut Engine,
+    this: Ptr<ListBoxLayout>,
+) -> Ptr<ListBoxLayout> {
+    construct_list_box(e, this, FILE_ENTRY_LIST_BOX_VTABLE)
+}
+
+// Translated from 007d7d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor body of `ListBox<BGSSaveLoadFileEntry*>`: installs the
+/// vtable, empties the list (`RemoveAll`, `007d81f0`), runs `007211c0` and the
+/// embedded list's destructor (`0046ffb0` on `this + 4`).
+// Translation incomplete: 007d7d30 - the exception-unwinding frame is not translated.
+pub fn list_box_file_entry_destruct(e: &mut Engine, this: Ptr<ListBoxLayout>) {
+    e.mem.set_u32(this.addr(), FILE_ENTRY_LIST_BOX_VTABLE);
+    list_box_file_entry_remove_all(e, this);
+    e.call(LIST_BOX_FN_7211C0, &args![this]);
+    e.call(EMBEDDED_LIST_DESTRUCT, &args![this.byte_add(4)]);
+}
+
+// Translated from 007d7da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<BGSSaveLoadFileEntry*>::AddItem` (Xbox PDB): the same steps as
+/// [`list_box_option_add_item`] with this list's `Synchronize` (`007d9590`) and
+/// `SetTotalListHeight` (`007d9d50`).
+// Translation incomplete: 007d7da0 - the exception-unwinding frame (freeing the new ListBoxItem if its constructor throws) is not translated.
+pub fn list_box_file_entry_add_item(
+    e: &mut Engine,
+    this: Ptr<ListBoxLayout>,
+    data: u32,
+    text: u32,
+    position: u32,
+    template: u32,
+) -> Ptr {
+    add_item(
+        e,
+        this,
+        (data, text, position, template),
+        (
+            FILE_ENTRY_LIST_SYNCHRONIZE,
+            FILE_ENTRY_LIST_SET_TOTAL_LIST_HEIGHT,
+        ),
+    )
+}
+
+// Translated from 007d8040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes the item whose tile is `tile` (`007d9ac0` on its node and the node
+/// before it); false for a null tile or an empty list. When the tile is not in
+/// the list the walk ends at the null node and `007d9ac0` is called with it.
+pub fn fn_007d8040(e: &mut Engine, this: Ptr<ListBoxLayout>, tile: u32) -> bool {
+    if tile == 0 || e.call(LIST_IS_EMPTY_NODE, &args![this.byte_add(4)]).bool() {
+        return false;
+    }
+    let mut node = first_node(this);
+    let mut previous = first_node(this);
+    while node != 0 {
+        let item = node_item(e, node);
+        if e.mem.u32(item) == tile {
+            break;
+        }
+        previous = node;
+        node = node_next(e, node);
+    }
+    fn_007d9ac0(e, this, node, previous)
+}
+
+// Translated from 007d80f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes an item (`007d9ac0` on its node and the node before it): with
+/// `by_position` nonzero the item at position `key` of the list, else the one
+/// whose index trait (`0xFAC`) equals `key`. False for an empty list; when
+/// nothing matches the walk ends at the null node and `007d9ac0` is called
+/// with it.
+pub fn fn_007d80f0(e: &mut Engine, this: Ptr<ListBoxLayout>, key: u32, by_position: u8) -> bool {
+    if e.call(LIST_IS_EMPTY_NODE, &args![this.byte_add(4)]).bool() {
+        return false;
+    }
+    let mut node = first_node(this);
+    let mut previous = first_node(this);
+    if by_position != 0 {
+        let mut position = 0u32;
+        while node != 0 {
+            let current = position;
+            position = position.wrapping_add(1);
+            if current == key {
+                break;
+            }
+            previous = node;
+            node = node_next(e, node);
+        }
+    } else {
+        while node != 0 {
+            let tile = node_tile(e, node);
+            let value = tile_value(e, Ptr::new(tile), TRAIT_0FAC);
+            if value == f64::from(key) {
+                break;
+            }
+            previous = node;
+            node = node_next(e, node);
+        }
+    }
+    fn_007d9ac0(e, this, node, previous)
+}
+
+// Translated from 007d81f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<BGSSaveLoadFileEntry*>::RemoveAll` (Xbox PDB): the same steps as
+/// [`list_box_option_remove_all`] with this list's `SetTotalListHeight`
+/// (`007d9d50`) and `UpdateHighlightBoxPos` (`007d97a0`).
+pub fn list_box_file_entry_remove_all(e: &mut Engine, this: Ptr<ListBoxLayout>) {
+    remove_all(
+        e,
+        this,
+        (
+            FILE_ENTRY_LIST_SET_TOTAL_LIST_HEIGHT,
+            FILE_ENTRY_LIST_UPDATE_HIGHLIGHT_BOX_POS,
+        ),
+    );
+}
+
+// Translated from 007d8420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<BGSSaveLoadFileEntry*>::Sort` (Xbox PDB): sorts the embedded list
+/// with `argument` (`0083fd60` on `this + 4`) and synchronizes the tiles
+/// (`007d9590`).
+pub fn list_box_file_entry_sort(e: &mut Engine, this: Ptr<ListBoxLayout>, argument: u32) {
+    e.call(LIST_SORT, &args![this.byte_add(4), argument]);
+    list_box_file_entry_synchronize(e, this);
+}
+
+// Translated from 007d8450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<BGSSaveLoadFileEntry*>::Filter` (Xbox PDB): runs `filter` (cdecl,
+/// `(data) -> bool`) over every item's data. An item for which it returns
+/// true is marked filtered out (its byte at +8 is 1, its index trait becomes
+/// -1, the container's `_num_filtered` counts it); the others are numbered
+/// again from 0 and positioned. The highlight moves on: a filtered-out
+/// highlighted item is dropped and its old index remembered, and the item that
+/// takes that index (else the one `007d8ee0` returns) is highlighted. Then the
+/// container's `_num_filtered` is stored, the total height recomputed and the
+/// highlight box updated.
+///
+/// With a null `filter` nothing is filtered out.
+// Translation incomplete: 007d8450 - the exception-unwinding frame around the static initialization is not translated.
+pub fn list_box_file_entry_filter(e: &mut Engine, this: Ptr<ListBoxLayout>, filter: u32) {
+    let num_filtered_trait = static_trait(e, FILE_ENTRY_FILTER_TRAIT);
+    let mut filtered_count = 0i32;
+    let mut remembered_index = -1i32;
+    e.set(this, ListBoxLayout::usNextIndex, 0);
+    e.set(this, ListBoxLayout::fTotalListHeight, 0.0);
+    let mut node = first_node(this);
+    while node != 0 {
+        if node_item(e, node) == 0 {
+            break;
+        }
+        let filtered = filter != 0 && {
+            let item = node_item(e, node);
+            let data = e.mem.u32(item + LIST_ITEM_DATA);
+            e.call(filter, &args![data]).bool()
+        };
+        let item = node_item(e, node);
+        e.mem.set_u8(item + LIST_ITEM_FILTERED, u8::from(filtered));
+        let item = node_item(e, node);
+        if e.mem.u8(item + LIST_ITEM_FILTERED) == 0 {
+            let position = e.get(this, ListBoxLayout::usNextIndex);
+            if remembered_index >= 0 && i32::from(position) == remembered_index {
+                let tile = node_tile(e, node);
+                e.set(this, ListBoxLayout::pHighlightedItem, Ptr::new(tile));
+            }
+            let index = e.get(this, ListBoxLayout::usNextIndex);
+            e.set(this, ListBoxLayout::usNextIndex, index.wrapping_add(1));
+            let tile = node_tile(e, node);
+            set_int(e, Ptr::new(tile), TRAIT_0FAC, i32::from(index));
+            let tile = node_tile(e, node);
+            e.call(LIST_INIT_TILE_POSITION, &args![this, tile]);
+        } else {
+            let tile = node_tile(e, node);
+            if tile == e.get(this, ListBoxLayout::pHighlightedItem).addr() {
+                let tile = node_tile(e, node);
+                let value = tile_value(e, Ptr::new(tile), TRAIT_0FAC);
+                remembered_index = float_to_int(e, value);
+                e.set(this, ListBoxLayout::pHighlightedItem, Ptr::new(0));
+            }
+            let tile = node_tile(e, node);
+            set_int(e, Ptr::new(tile), TRAIT_0FAC, -1);
+            filtered_count += 1;
+        }
+        node = node_next(e, node);
+    }
+    let container = e.get(this, ListBoxLayout::pContainerRect);
+    e.call(
+        TILE_SET_INTEGER_VALUE,
+        &args![container, num_filtered_trait, filtered_count],
+    );
+    list_box_file_entry_set_total_list_height(e, this);
+    if e.get(this, ListBoxLayout::pHighlightedItem).is_null() && remembered_index >= 0 {
+        let tile = list_tile_at(e, this, remembered_index);
+        e.set(this, ListBoxLayout::pHighlightedItem, Ptr::new(tile));
+    }
+    if e.get(this, ListBoxLayout::pHighlightedItem).is_null() && remembered_index >= 0 {
+        let tile = fn_007d8ee0(e, this);
+        e.set(this, ListBoxLayout::pHighlightedItem, Ptr::new(tile));
+    }
+    list_box_file_entry_update_highlight_box_pos(e, this);
+}
+
+// Translated from 007d86c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The data pointer of the item `GetAt(index, flag)` (`007a6fa0`) returns, or
+/// 0 when there is none.
+pub fn fn_007d86c0(e: &mut Engine, this: Ptr<ListBoxLayout>, index: u32, flag: u8) -> u32 {
+    let item = e
+        .call(FILE_ENTRY_LIST_GET_AT, &args![this, index, u32::from(flag)])
+        .u32();
+    if item == 0 {
+        0
+    } else {
+        e.mem.u32(item + LIST_ITEM_DATA)
+    }
+}
+
+// Translated from 007d8700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The number of items minus the container's `_num_filtered` value
+/// (truncated). Same body as `007d9ee0`, which the Xbox PDB names
+/// `ListBox<StartMenu::Option*>::NumUnfiltered`.
+// Translation incomplete: 007d8700 - the exception-unwinding frame around the static initialization is not translated.
+pub fn fn_007d8700(e: &mut Engine, this: Ptr<ListBoxLayout>) -> i32 {
+    num_unfiltered(e, this, FILE_ENTRY_NUM_UNFILTERED_TRAIT)
+}
+
+// Translated from 007d87b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The container's `_number_of_visible_items` value truncated to an integer,
+/// 0 without a container.
+pub fn fn_007d87b0(e: &mut Engine, this: Ptr<ListBoxLayout>) -> i32 {
+    let container = e.get(this, ListBoxLayout::pContainerRect);
+    if container.is_null() {
+        return 0;
+    }
+    let height_trait = user_trait(e, LIST_HEIGHT_TRAIT_NAME);
+    fistp_truncate(tile_value(e, container, height_trait))
+}
+
+// Translated from 007d8810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<BGSSaveLoadFileEntry*>::SetEnabled` (Xbox PDB): sets the
+/// container tile's `_enabled` trait to `enabled` (zero-extended byte).
+// Translation incomplete: 007d8810 - the exception-unwinding frame around the static initialization is not translated.
+pub fn list_box_file_entry_set_enabled(e: &mut Engine, this: Ptr<ListBoxLayout>, enabled: u8) {
+    set_enabled(e, this, FILE_ENTRY_SET_ENABLED_TRAIT, enabled);
+}
+
+// Translated from 007d88a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<BGSSaveLoadFileEntry*>::IsEnabled` (Xbox PDB): the container
+/// exists and its `_enabled` trait is true.
+// Translation incomplete: 007d88a0 - the exception-unwinding frame around the static initialization is not translated.
+pub fn list_box_file_entry_is_enabled(e: &mut Engine, this: Ptr<ListBoxLayout>) -> bool {
+    is_enabled(e, this, FILE_ENTRY_IS_ENABLED_TRAIT)
+}
+
+// Translated from 007d8950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<BGSSaveLoadFileEntry*>::Highlight` (Xbox PDB): see [`highlight`].
+pub fn list_box_file_entry_highlight(e: &mut Engine, this: Ptr<ListBoxLayout>, tile: Ptr) -> bool {
+    highlight(
+        e,
+        this,
+        tile,
+        list_box_file_entry_is_enabled,
+        list_box_file_entry_update_highlight_box_pos,
+    )
+}
+
+// Translated from 007d89c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<BGSSaveLoadFileEntry*>::GetHighlightTarget` (Xbox PDB): see
+/// [`highlight_target`].
+pub fn list_box_file_entry_get_highlight_target(
+    e: &mut Engine,
+    this: Ptr<ListBoxLayout>,
+    direction: u32,
+) -> u32 {
+    highlight_target(e, this, direction, list_box_file_entry_is_enabled)
+}
+
+// Translated from 007d8d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<BGSSaveLoadFileEntry*>::SetSelection` (Xbox PDB): selects the tile
+/// (`007d9660` with mode 0).
+pub fn list_box_file_entry_set_selection(
+    e: &mut Engine,
+    this: Ptr<ListBoxLayout>,
+    tile: Ptr,
+) -> bool {
+    fn_007d9660(e, this, tile, 0)
+}
+
+// Translated from 007d8d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Deselects the tile (`007d9660` with mode 1).
+pub fn fn_007d8d80(e: &mut Engine, this: Ptr<ListBoxLayout>, tile: Ptr) -> bool {
+    fn_007d9660(e, this, tile, 1)
+}
+
+// Translated from 007d8da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<BGSSaveLoadFileEntry*>::DeselectAll` (Xbox PDB): deselects
+/// (`007d8d80`) the tile of every item; with `skip_filtered` nonzero the items
+/// the filter dropped are left alone.
+pub fn list_box_file_entry_deselect_all(
+    e: &mut Engine,
+    this: Ptr<ListBoxLayout>,
+    skip_filtered: u8,
+) {
+    deselect_all(e, this, skip_filtered, fn_007d8d80);
+}
+
+// Translated from 007d8e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empties an array shaped like a `BSSimpleArray` (buffer +4, size +8,
+/// reserved +0xC) of 12-byte elements: destroys the elements (`007d9e80`);
+/// with `free_buffer` nonzero it also releases the buffer (`006a8500`) and
+/// zeroes the buffer and reserved size. The size becomes 0. Nothing happens
+/// without a buffer.
+pub fn fn_007d8e20(e: &mut Engine, this: Ptr<BSSimpleArray>, free_buffer: u8) {
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    if buffer == 0 {
+        return;
+    }
+    let size = e.get(this, BSSimpleArray::iSize);
+    fn_007d9e80(e, this.cast(), buffer, size);
+    if free_buffer != 0 {
+        e.call(ARRAY_BUFFER_RELEASE, &args![this]);
+        e.set(this, BSSimpleArray::pBuffer, 0);
+        e.set(this, BSSimpleArray::iReservedSize, 0);
+    }
+    e.set(this, BSSimpleArray::iSize, 0);
+}
+
+// Translated from 007d8e80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The scalar deleting destructor of `ListBox<StartMenu::Option*>` (it runs
+/// the destructor body `007d6f80`): frees the object when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn fn_007d8e80(e: &mut Engine, this: Ptr<ListBoxLayout>, flags: u32) -> Ptr<ListBoxLayout> {
+    list_box_option_ptr_destruct(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 007d8eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<BGSSaveLoadFileEntry*>::_scalar_deleting_destructor_` (Xbox PDB):
+/// runs the destructor body `007d7d30` and frees the object when bit 0 of
+/// `flags` is set. Returns `this`.
+pub fn list_box_file_entry_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ListBoxLayout>,
+    flags: u32,
+) -> Ptr<ListBoxLayout> {
+    list_box_file_entry_destruct(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 007d8ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The tile the list's virtual `GetTileAt` (slot +0x14) returns for the index
+/// of the last unfiltered item (`007d8700` minus one) with flag 0. (The Xbox
+/// PDB name the map gives this address, `NumUnfiltered`, does not describe the
+/// body.)
+pub fn fn_007d8ee0(e: &mut Engine, this: Ptr<ListBoxLayout>) -> u32 {
+    let count = fn_007d8700(e, this);
+    list_tile_at(e, this, count.wrapping_sub(1))
+}
+
+// Translated from 007d8f10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StartMenu::Option*>::Synchronize` (Xbox PDB): see [`synchronize`].
+pub fn list_box_option_synchronize(e: &mut Engine, this: Ptr<ListBoxLayout>) {
+    synchronize(
+        e,
+        this,
+        (
+            list_box_option_set_total_list_height,
+            list_box_option_update_highlight_box_pos,
+        ),
+    );
+}
+
+// Translated from 007d8fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Deselects the tile (`007d9000` with mode 1).
+pub fn fn_007d8fe0(e: &mut Engine, this: Ptr<ListBoxLayout>, tile: Ptr) -> bool {
+    fn_007d9000(e, this, tile, 1)
+}
+
+// Translated from 007d9000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The selection function of the options list: see [`select`] (the list's
+/// `IsEnabled` is `007d7580`).
+// Translation incomplete: 007d9000 - the exception-unwinding frame around the static initialization is not translated.
+pub fn fn_007d9000(e: &mut Engine, this: Ptr<ListBoxLayout>, tile: Ptr, mode: u32) -> bool {
+    select(
+        e,
+        this,
+        tile,
+        mode,
+        (list_box_option_is_enabled, OPTION_SELECT_TRAIT),
+    )
+}
+
+// Translated from 007d9140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StartMenu::Option*>::UpdateHighlightBoxPos` (Xbox PDB): see
+/// [`update_highlight_box_pos`].
+// Translation incomplete: 007d9140 - the exception-unwinding frame around the static initialization is not translated.
+pub fn list_box_option_update_highlight_box_pos(e: &mut Engine, this: Ptr<ListBoxLayout>) {
+    update_highlight_box_pos(
+        e,
+        this,
+        (OPTION_HIGHLIGHT_Y_TRAIT, OPTION_SELECTED_HEIGHT_TRAIT),
+    );
+}
+
+// Translated from 007d9460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StartMenu::Option*>::SetTotalListHeight` (Xbox PDB): see
+/// [`set_total_list_height`].
+pub fn list_box_option_set_total_list_height(e: &mut Engine, this: Ptr<ListBoxLayout>) {
+    set_total_list_height(e, this, list_box_option_num_unfiltered);
+}
+
+// Translated from 007d9590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<BGSSaveLoadFileEntry*>::Synchronize` (Xbox PDB): see
+/// [`synchronize`].
+pub fn list_box_file_entry_synchronize(e: &mut Engine, this: Ptr<ListBoxLayout>) {
+    synchronize(
+        e,
+        this,
+        (
+            list_box_file_entry_set_total_list_height,
+            list_box_file_entry_update_highlight_box_pos,
+        ),
+    );
+}
+
+// Translated from 007d9660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The selection function of the file entry list: see [`select`] (the list's
+/// `IsEnabled` is `007d88a0`).
+// Translation incomplete: 007d9660 - the exception-unwinding frame around the static initialization is not translated.
+pub fn fn_007d9660(e: &mut Engine, this: Ptr<ListBoxLayout>, tile: Ptr, mode: u32) -> bool {
+    select(
+        e,
+        this,
+        tile,
+        mode,
+        (list_box_file_entry_is_enabled, FILE_ENTRY_SELECT_TRAIT),
+    )
+}
+
+// Translated from 007d97a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<BGSSaveLoadFileEntry*>::UpdateHighlightBoxPos` (Xbox PDB): see
+/// [`update_highlight_box_pos`].
+// Translation incomplete: 007d97a0 - the exception-unwinding frame around the static initialization is not translated.
+pub fn list_box_file_entry_update_highlight_box_pos(e: &mut Engine, this: Ptr<ListBoxLayout>) {
+    update_highlight_box_pos(
+        e,
+        this,
+        (
+            FILE_ENTRY_HIGHLIGHT_Y_TRAIT,
+            FILE_ENTRY_SELECTED_HEIGHT_TRAIT,
+        ),
+    );
+}
+
+// Translated from 007d9ac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes the item of `node` (`previous` is the node before it, 0 or the node
+/// itself for the head) from the file entry list. If its tile is the
+/// highlighted one, the highlight moves to the next node's tile, else the
+/// previous node's (else nothing) and the interface manager focuses it
+/// (`SetCurrentFocusTarget`, trait `0xFC3`). A filtered-out item lowers the
+/// container's `_num_filtered` value by one. The item's tile is destroyed
+/// through its vtable, its data deleted when the list owns it (flag 1), the
+/// `ListBoxItem` freed and the node unlinked and deleted (the head's slot is
+/// refilled from the second node, which is deleted instead). With auto update
+/// (flag 0) the list synchronizes. False for a null node.
+pub fn fn_007d9ac0(e: &mut Engine, this: Ptr<ListBoxLayout>, node: u32, previous: u32) -> bool {
+    if node == 0 {
+        return false;
+    }
+    let tile = node_tile(e, node);
+    if tile == e.get(this, ListBoxLayout::pHighlightedItem).addr() {
+        let replacement = if node_next(e, node) != 0 {
+            let next = node_next(e, node);
+            node_tile(e, next)
+        } else if previous != 0 && previous != node {
+            node_tile(e, previous)
+        } else {
+            0
+        };
+        e.set(this, ListBoxLayout::pHighlightedItem, Ptr::new(replacement));
+        if replacement != 0 {
+            let manager = e.call(INTERFACE_MANAGER, &[]).u32();
+            e.call(
+                SET_CURRENT_FOCUS_TARGET,
+                &args![manager, replacement, TRAIT_0FC3, 1u32],
+            );
+        }
+    }
+    if !e.get(this, ListBoxLayout::pContainerRect).is_null() {
+        let item = node_item(e, node);
+        if e.mem.u8(item + LIST_ITEM_FILTERED) != 0 {
+            let container = e.get(this, ListBoxLayout::pContainerRect);
+            let filtered_trait = e
+                .call(TILE_TEXT_TO_TRAIT, &args![LIST_RESET_TRAIT_NAME])
+                .u32();
+            let filtered = tile_value(e, container, filtered_trait);
+            let one: f64 = e.global(ONE_AS_DOUBLE);
+            let lowered = (filtered - one) as f32;
+            let filtered_trait = e
+                .call(TILE_TEXT_TO_TRAIT, &args![LIST_RESET_TRAIT_NAME])
+                .u32();
+            set_float(e, container, filtered_trait, lowered, true);
+        }
+    }
+    let tile = node_tile(e, node);
+    if tile != 0 {
+        e.vcall(tile, 0x00, &args![1u32]);
+    }
+    if e.call(LIST_FLAG_TEST, &args![this, 1u32]).bool() {
+        let item = node_item(e, node);
+        let data = e.mem.u32(item + LIST_ITEM_DATA);
+        if data != 0 {
+            e.call(OPTION_SCALAR_DELETING_DESTRUCTOR, &args![data, 1u32]);
+        }
+    }
+    let item = node_item(e, node);
+    e.call(OPERATOR_DELETE, &args![item]);
+    if node == first_node(this) {
+        let second = e.get(this, ListBoxLayout::m_pkNext).addr();
+        if second != 0 {
+            let after_second = node_next(e, second);
+            e.set(this, ListBoxLayout::m_pkNext, Ptr::new(after_second));
+            let second_item = node_item(e, second);
+            e.set(this, ListBoxLayout::m_item, Ptr::new(second_item));
+            e.call(LIST_NODE_SET_NEXT, &args![second, 0u32]);
+            e.call(LIST_NODE_SCALAR_DELETING_DESTRUCTOR, &args![second, 1u32]);
+        } else {
+            e.set(this, ListBoxLayout::m_item, Ptr::new(0));
+        }
+    } else {
+        let following = node_next(e, node);
+        e.call(LIST_NODE_SET_NEXT, &args![previous, following]);
+        e.call(LIST_NODE_SET_NEXT, &args![node, 0u32]);
+        e.call(LIST_NODE_SCALAR_DELETING_DESTRUCTOR, &args![node, 1u32]);
+    }
+    if e.call(LIST_FLAG_TEST, &args![this, 0u32]).bool() {
+        list_box_file_entry_synchronize(e, this);
+    }
+    true
+}
+
+// Translated from 007d9d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<BGSSaveLoadFileEntry*>::SetTotalListHeight` (Xbox PDB): see
+/// [`set_total_list_height`].
+pub fn list_box_file_entry_set_total_list_height(e: &mut Engine, this: Ptr<ListBoxLayout>) {
+    set_total_list_height(e, this, fn_007d8700);
+}
+
+// Translated from 007d9e80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs the 12-byte element destroyer `005aa3f0` (with flags 0) over `count`
+/// elements starting at `elements`. `this` is not used.
+pub fn fn_007d9e80(e: &mut Engine, _unused_this: Ptr, elements: u32, count: u32) {
+    for index in 0..count {
+        e.call(
+            ARRAY_ELEMENT_DESTROY,
+            &args![index.wrapping_mul(12).wrapping_add(elements), 0u32],
+        );
+    }
+}
+
+// Translated from 007d9ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs the string destructor (`004037d0`) on the object.
+pub fn fn_007d9ec0(e: &mut Engine, this: Ptr) {
+    e.call(STRING_DESTRUCT, &args![this]);
+}
+
+// Translated from 007d9ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StartMenu::Option*>::NumUnfiltered` (Xbox PDB): the number of
+/// items minus the container's `_num_filtered` value (truncated).
+// Translation incomplete: 007d9ee0 - the exception-unwinding frame around the static initialization is not translated.
+pub fn list_box_option_num_unfiltered(e: &mut Engine, this: Ptr<ListBoxLayout>) -> i32 {
+    num_unfiltered(e, this, OPTION_NUM_UNFILTERED_TRAIT)
+}
+
+// Translated from 007d9f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the array vtable `010771d8` (the one the destructor `007d9ff0`
+/// stores) and zeroes the array (`006b3eb0(this, 0, 0)`). Returns `this`.
+pub fn fn_007d9f90(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), OPTION_ARRAY_VTABLE);
+    e.call(ARRAY_INIT, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 007d9fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<StartMenu::Option_P_1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the destructor `007d9ff0` and frees the object when bit 0
+/// of `flags` is set. Returns `this`.
+pub fn bs_simple_array_option_ptr_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_007d9ff0(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 007d9ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the array vtable `010771d8` and runs the array destructor body
+/// (`008454f0(this, 1)`).
+pub fn fn_007d9ff0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), OPTION_ARRAY_VTABLE);
+    e.call(ARRAY_DESTRUCT_BODY, &args![this, 1u32]);
+}
+
+// Translated from 007da010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the array vtable `010771ec` (the one `007da070` stores) and zeroes
+/// the array (`006b3eb0(this, 0, 0)`). Returns `this`.
+pub fn fn_007da010(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), USER_OPTION_ARRAY_VTABLE);
+    e.call(ARRAY_INIT, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 007da040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<StartMenu::UserOption_P_1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the destructor body `007da070` and frees the object when
+/// bit 0 of `flags` is set. Returns `this`.
+pub fn bs_simple_array_user_option_ptr_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(USER_OPTION_ARRAY_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
 }
 
 /// This part's translated functions, by exe address.
@@ -3330,6 +4683,145 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x007d7290, list_box_option_remove_all(Ptr<ListBoxLayout>)),
         entry!(0x007d74c0, list_box_option_sort(Ptr<ListBoxLayout>, u32)),
+        entry!(
+            0x007d74f0,
+            list_box_option_set_enabled(Ptr<ListBoxLayout>, u8)
+        ),
+        entry!(
+            0x007d7580,
+            list_box_option_is_enabled(Ptr<ListBoxLayout>) -> bool
+        ),
+        entry!(0x007d7630, fn_007d7630(Ptr<ListBoxLayout>) -> bool),
+        entry!(
+            0x007d7670,
+            list_box_option_highlight(Ptr<ListBoxLayout>, Ptr) -> bool
+        ),
+        entry!(
+            0x007d76e0,
+            list_box_option_get_highlight_target(Ptr<ListBoxLayout>, u32) -> u32
+        ),
+        entry!(0x007d7a80, fn_007d7a80(Ptr<ListBoxLayout>, Ptr) -> bool),
+        entry!(0x007d7aa0, list_box_option_is_selected(Ptr, Ptr) -> bool),
+        entry!(
+            0x007d7b50,
+            list_box_option_deselect_all(Ptr<ListBoxLayout>, u8)
+        ),
+        entry!(0x007d7bd0, list_box_int_set_enabled(Ptr<ListBoxLayout>, u8)),
+        entry!(
+            0x007d7c60,
+            list_box_file_entry_construct(Ptr<ListBoxLayout>) -> Ptr<ListBoxLayout>
+        ),
+        entry!(0x007d7d30, list_box_file_entry_destruct(Ptr<ListBoxLayout>)),
+        entry!(
+            0x007d7da0,
+            list_box_file_entry_add_item(Ptr<ListBoxLayout>, u32, u32, u32, u32) -> Ptr
+        ),
+        entry!(0x007d8040, fn_007d8040(Ptr<ListBoxLayout>, u32) -> bool),
+        entry!(0x007d80f0, fn_007d80f0(Ptr<ListBoxLayout>, u32, u8) -> bool),
+        entry!(
+            0x007d81f0,
+            list_box_file_entry_remove_all(Ptr<ListBoxLayout>)
+        ),
+        entry!(
+            0x007d8420,
+            list_box_file_entry_sort(Ptr<ListBoxLayout>, u32)
+        ),
+        entry!(
+            0x007d8450,
+            list_box_file_entry_filter(Ptr<ListBoxLayout>, u32)
+        ),
+        entry!(0x007d86c0, fn_007d86c0(Ptr<ListBoxLayout>, u32, u8) -> u32),
+        entry!(0x007d8700, fn_007d8700(Ptr<ListBoxLayout>) -> i32),
+        entry!(0x007d87b0, fn_007d87b0(Ptr<ListBoxLayout>) -> i32),
+        entry!(
+            0x007d8810,
+            list_box_file_entry_set_enabled(Ptr<ListBoxLayout>, u8)
+        ),
+        entry!(
+            0x007d88a0,
+            list_box_file_entry_is_enabled(Ptr<ListBoxLayout>) -> bool
+        ),
+        entry!(
+            0x007d8950,
+            list_box_file_entry_highlight(Ptr<ListBoxLayout>, Ptr) -> bool
+        ),
+        entry!(
+            0x007d89c0,
+            list_box_file_entry_get_highlight_target(Ptr<ListBoxLayout>, u32) -> u32
+        ),
+        entry!(
+            0x007d8d60,
+            list_box_file_entry_set_selection(Ptr<ListBoxLayout>, Ptr) -> bool
+        ),
+        entry!(0x007d8d80, fn_007d8d80(Ptr<ListBoxLayout>, Ptr) -> bool),
+        entry!(
+            0x007d8da0,
+            list_box_file_entry_deselect_all(Ptr<ListBoxLayout>, u8)
+        ),
+        entry!(0x007d8e20, fn_007d8e20(Ptr<BSSimpleArray>, u8)),
+        entry!(
+            0x007d8e80,
+            fn_007d8e80(Ptr<ListBoxLayout>, u32) -> Ptr<ListBoxLayout>
+        ),
+        entry!(
+            0x007d8eb0,
+            list_box_file_entry_scalar_deleting_destructor(
+                Ptr<ListBoxLayout>,
+                u32,
+            ) -> Ptr<ListBoxLayout>
+        ),
+        entry!(0x007d8ee0, fn_007d8ee0(Ptr<ListBoxLayout>) -> u32),
+        entry!(0x007d8f10, list_box_option_synchronize(Ptr<ListBoxLayout>)),
+        entry!(0x007d8fe0, fn_007d8fe0(Ptr<ListBoxLayout>, Ptr) -> bool),
+        entry!(
+            0x007d9000,
+            fn_007d9000(Ptr<ListBoxLayout>, Ptr, u32) -> bool
+        ),
+        entry!(
+            0x007d9140,
+            list_box_option_update_highlight_box_pos(Ptr<ListBoxLayout>)
+        ),
+        entry!(
+            0x007d9460,
+            list_box_option_set_total_list_height(Ptr<ListBoxLayout>)
+        ),
+        entry!(
+            0x007d9590,
+            list_box_file_entry_synchronize(Ptr<ListBoxLayout>)
+        ),
+        entry!(
+            0x007d9660,
+            fn_007d9660(Ptr<ListBoxLayout>, Ptr, u32) -> bool
+        ),
+        entry!(
+            0x007d97a0,
+            list_box_file_entry_update_highlight_box_pos(Ptr<ListBoxLayout>)
+        ),
+        entry!(
+            0x007d9ac0,
+            fn_007d9ac0(Ptr<ListBoxLayout>, u32, u32) -> bool
+        ),
+        entry!(
+            0x007d9d50,
+            list_box_file_entry_set_total_list_height(Ptr<ListBoxLayout>)
+        ),
+        entry!(0x007d9e80, fn_007d9e80(Ptr, u32, u32)),
+        entry!(0x007d9ec0, fn_007d9ec0(Ptr)),
+        entry!(
+            0x007d9ee0,
+            list_box_option_num_unfiltered(Ptr<ListBoxLayout>) -> i32
+        ),
+        entry!(0x007d9f90, fn_007d9f90(Ptr) -> Ptr),
+        entry!(
+            0x007d9fc0,
+            bs_simple_array_option_ptr_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x007d9ff0, fn_007d9ff0(Ptr)),
+        entry!(0x007da010, fn_007da010(Ptr) -> Ptr),
+        entry!(
+            0x007da040,
+            bs_simple_array_user_option_ptr_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
     ]
 }
 
@@ -3344,6 +4836,23 @@ mod tests {
     /// return zero, then give the ones a case needs their own behaviour.
     const CALLEES: &[u32] = &[
         ABSOLUTE_VALUE,
+        ARRAY_BUFFER_RELEASE,
+        ARRAY_DESTRUCT_BODY,
+        ARRAY_ELEMENT_DESTROY,
+        ARRAY_INIT,
+        FILE_ENTRY_LIST_GET_AT,
+        FILE_ENTRY_LIST_SET_TOTAL_LIST_HEIGHT,
+        FILE_ENTRY_LIST_SYNCHRONIZE,
+        FILE_ENTRY_LIST_UPDATE_HIGHLIGHT_BOX_POS,
+        LIST_CONTAINS_TILE,
+        ROUND_FLOAT,
+        ROUND_UP_TO_MULTIPLE,
+        TILE_FIND_BY_NAME,
+        TILE_GET_CHILD_BY_NAME,
+        TILE_IS_VISIBLE,
+        TILE_LOAD_BYTE_35,
+        TILE_STORE_BYTE_35,
+        USER_OPTION_ARRAY_DESTRUCT,
         ACTION_MAPPING_ITEM_FN,
         ARRAY_COUNT,
         ARRAY_ELEMENT,
@@ -3693,16 +5202,18 @@ mod tests {
     }
 
     #[test]
-    fn registrations_cover_the_sixty_functions() {
-        let table = funcs();
-        assert_eq!(table.len(), 60);
-        let mut addresses: Vec<u32> = table.iter().map(|(a, _)| *a).collect();
+    fn registrations_cover_the_first_sixty_functions() {
+        let first: Vec<u32> = funcs()
+            .iter()
+            .map(|(a, _)| *a)
+            .filter(|a| *a <= 0x007d_74c0)
+            .collect();
+        assert_eq!(first.len(), 60);
+        let mut addresses = first.clone();
         addresses.sort_unstable();
         addresses.dedup();
         assert_eq!(addresses.len(), 60);
-        assert!(addresses
-            .iter()
-            .all(|a| (0x007d_3aa0..=0x007d_74c0).contains(a)));
+        assert!(addresses.iter().all(|a| *a >= 0x007d_3aa0));
     }
 
     #[test]
@@ -6211,5 +7722,1239 @@ mod tests {
             order(&e, &[LIST_SORT, OPTION_LIST_SYNCHRONIZE]),
             vec![LIST_SORT, OPTION_LIST_SYNCHRONIZE]
         );
+    }
+
+    // ---- the second half: list box state, selection, removal and the arrays ----
+
+    const ENABLED_ID: u32 = TRAIT_NAME_ENABLED & 0xffff;
+    const SELECTED_ID: u32 = TRAIT_NAME_SELECTED & 0xffff;
+    /// The id the `_num_filtered` name gets from [`install_traits`].
+    const FILTERED_ID: u32 = LIST_RESET_TRAIT_NAME & 0xffff;
+
+    /// A list box with a container tile.
+    fn list_with_container(e: &mut Engine) -> (Ptr<ListBoxLayout>, u32) {
+        let list = e.new_object::<ListBoxLayout>();
+        let container = tile(30);
+        e.set(list, ListBoxLayout::pContainerRect, Ptr::new(container));
+        (list, container)
+    }
+
+    /// Gives each trait name an id (the low half of the name's address) and
+    /// answers `Tile::IsTrue`: `_enabled` is true except for the `disabled`
+    /// tiles, `_selected` only for the `selected` ones.
+    fn install_traits(e: &mut Engine, selected: &[u32], disabled: &[u32]) {
+        e.register(TILE_ADD_USER_TRAIT, |_, a| ret(a[0] & 0xffff));
+        let selected = selected.to_vec();
+        let disabled = disabled.to_vec();
+        e.register_double(TILE_IS_TRUE, move |_, a| {
+            let truth = match a[1] {
+                ENABLED_ID => !disabled.contains(&a[0]),
+                SELECTED_ID => selected.contains(&a[0]),
+                _ => false,
+            };
+            ret(u32::from(truth))
+        });
+    }
+
+    /// Items on `list`, one per tile: node 0 is the embedded head (at
+    /// `list + 4`), the others are allocated; an item is {tile, data, filtered
+    /// byte}. Returns each item's node and item address.
+    fn fill_list(e: &mut Engine, list: Ptr<ListBoxLayout>, tiles: &[u32]) -> Vec<(u32, u32)> {
+        e.register(LIST_NODE_SELF, |_, a| ret(a[0]));
+        e.register(WORD_AT_4, |e, a| ret(e.mem.u32(a[0] + 4)));
+        let mut placed: Vec<(u32, u32)> = Vec::new();
+        for (index, tile) in tiles.iter().enumerate() {
+            let node = if index == 0 {
+                list.addr() + 4
+            } else {
+                e.mem.alloc(8)
+            };
+            let item = e.mem.alloc(12);
+            e.mem.set_u32(item, *tile);
+            e.mem.set_u32(item + 4, 0xd0 + index as u32);
+            e.mem.set_u32(node, item);
+            if let Some((previous, _)) = placed.last() {
+                e.mem.set_u32(previous + 4, node);
+            }
+            placed.push((node, item));
+        }
+        e.set(list, ListBoxLayout::usNextIndex, tiles.len() as u16);
+        placed
+    }
+
+    /// The `0xFAC` value of each tile is its position in `tiles`.
+    fn install_indexes(e: &mut Engine, tiles: &[u32]) {
+        let tiles = tiles.to_vec();
+        e.register_double(TILE_GET_FLOAT, move |_, a| {
+            float_ret(if a[1] == TRAIT_0FAC {
+                tiles
+                    .iter()
+                    .position(|t| *t == a[0])
+                    .map_or(-1.0, |p| p as f64)
+            } else {
+                0.0
+            })
+        });
+    }
+
+    /// Four items (tiles 40 to 43, indexes 0 to 3) on a list with a vtable
+    /// whose `GetTileAt` (slot +0x14) answers with the tile of that index.
+    fn four_item_list(e: &mut Engine) -> (Ptr<ListBoxLayout>, u32, Vec<u32>) {
+        let (list, container) = list_with_container(e);
+        let tiles: Vec<u32> = (40..44).map(tile).collect();
+        fill_list(e, list, &tiles);
+        install_indexes(e, &tiles);
+        list_vtable(e, list);
+        let at = tiles.clone();
+        e.register_double(slot_fn(0x14), move |_, a| ret(at[a[1] as usize]));
+        (list, container, tiles)
+    }
+
+    /// The guard bit of `which` is set and its cache holds `id`.
+    fn assert_static(e: &Engine, which: StaticTrait, id: u32) {
+        assert_eq!(e.mem.u32(which.guard) & which.bit, which.bit);
+        assert_eq!(e.mem.u32(which.cache), id);
+    }
+
+    fn check_set_enabled(set: fn(&mut Engine, Ptr<ListBoxLayout>, u8), which: StaticTrait) {
+        let mut e = engine();
+        install_traits(&mut e, &[], &[]);
+        let (list, container) = list_with_container(&mut e);
+        set(&mut e, list, 1);
+        set(&mut e, list, 0);
+        assert_eq!(
+            calls(&e, TILE_SET_INT),
+            vec![
+                vec![container, ENABLED_ID, 1],
+                vec![container, ENABLED_ID, 0]
+            ]
+        );
+        // the trait id is looked up once
+        assert_eq!(
+            calls(&e, TILE_ADD_USER_TRAIT),
+            vec![vec![TRAIT_NAME_ENABLED, u32::MAX]]
+        );
+        assert_static(&e, which, ENABLED_ID);
+    }
+
+    fn check_is_enabled(is: fn(&mut Engine, Ptr<ListBoxLayout>) -> bool, which: StaticTrait) {
+        let mut e = engine();
+        install_traits(&mut e, &[], &[]);
+        let list = e.new_object::<ListBoxLayout>();
+        assert!(!is(&mut e, list));
+        assert!(calls(&e, TILE_IS_TRUE).is_empty());
+        let container = tile(30);
+        e.set(list, ListBoxLayout::pContainerRect, Ptr::new(container));
+        assert!(is(&mut e, list));
+        assert_eq!(calls(&e, TILE_IS_TRUE), vec![vec![container, ENABLED_ID]]);
+        install_traits(&mut e, &[], &[container]);
+        assert!(!is(&mut e, list));
+        assert_static(&e, which, ENABLED_ID);
+    }
+
+    fn check_highlight(
+        highlight: fn(&mut Engine, Ptr<ListBoxLayout>, Ptr) -> bool,
+        is_enabled_guard: u32,
+    ) {
+        let mut e = engine();
+        let (list, _) = list_with_container(&mut e);
+        install_traits(&mut e, &[], &[tile(41)]);
+        stub(&mut e, LIST_CONTAINS_TILE, 1);
+        assert!(highlight(&mut e, list, Ptr::new(tile(40))));
+        assert_eq!(
+            e.get(list, ListBoxLayout::pHighlightedItem),
+            Ptr::new(tile(40))
+        );
+        // the highlight box followed it, and the list's `IsEnabled` ran
+        assert!(!calls(&e, TILE_GET_VALUE).is_empty());
+        assert_eq!(e.mem.u32(is_enabled_guard) & 1, 1);
+        // a disabled tile is refused
+        assert!(!highlight(&mut e, list, Ptr::new(tile(41))));
+        assert_eq!(
+            e.get(list, ListBoxLayout::pHighlightedItem),
+            Ptr::new(tile(40))
+        );
+        // so is a tile the list does not hold
+        stub(&mut e, LIST_CONTAINS_TILE, 0);
+        assert!(!highlight(&mut e, list, Ptr::new(tile(42))));
+        // nothing clears the highlight
+        assert!(highlight(&mut e, list, Ptr::NULL));
+        assert_eq!(e.get(list, ListBoxLayout::pHighlightedItem), Ptr::NULL);
+        // a disabled list refuses everything
+        install_traits(&mut e, &[], &[tile(30)]);
+        assert!(!highlight(&mut e, list, Ptr::NULL));
+    }
+
+    fn check_highlight_target(target: fn(&mut Engine, Ptr<ListBoxLayout>, u32) -> u32) {
+        let mut e = engine();
+        let (list, container, tiles) = four_item_list(&mut e);
+        install_traits(&mut e, &[], &[tiles[2]]);
+        // no highlight: +1 starts at the first tile
+        assert_eq!(target(&mut e, list, 2), tiles[0]);
+        // -1 starts at the last one
+        assert_eq!(target(&mut e, list, 1), tiles[3]);
+        e.set(list, ListBoxLayout::pHighlightedItem, Ptr::new(tiles[1]));
+        // +1 lands on the disabled tile 2, so tile 3 is chosen
+        assert_eq!(target(&mut e, list, 2), tiles[3]);
+        // -1 moves back to tile 0
+        assert_eq!(target(&mut e, list, 1), tiles[0]);
+        // directions that do not move
+        assert_eq!(target(&mut e, list, 7), 0);
+        // at the first tile -1 stays on it, which gives no target
+        e.set(list, ListBoxLayout::pHighlightedItem, Ptr::new(tiles[0]));
+        assert_eq!(target(&mut e, list, 1), 0);
+        // paging: a page is the visible height over the scroll delta
+        e.register(ROUND_UP_TO_MULTIPLE, |_, a| {
+            float_ret(f64::from(f32::from_bits(a[0])))
+        });
+        stub(&mut e, TILE_TEXT_TO_TRAIT, 0xd1d1);
+        let at = tiles.clone();
+        e.register_double(TILE_GET_FLOAT, move |_, a| {
+            float_ret(match (a[0] == container, a[1]) {
+                (true, TRAIT_0FB0) => 2.0,
+                (true, 0xd1d1) => 1.0,
+                (false, TRAIT_0FAC) => at
+                    .iter()
+                    .position(|t| *t == a[0])
+                    .map_or(-1.0, |p| p as f64),
+                _ => 0.0,
+            })
+        });
+        e.set(list, ListBoxLayout::pHighlightedItem, Ptr::new(tiles[0]));
+        assert_eq!(target(&mut e, list, 0x10), tiles[3]);
+        e.set(list, ListBoxLayout::pHighlightedItem, Ptr::new(tiles[3]));
+        assert_eq!(target(&mut e, list, 0xf), tiles[1]);
+        assert_eq!(
+            calls(&e, TILE_TEXT_TO_TRAIT)[0],
+            vec![TRAIT_NAME_SCROLL_DELTA]
+        );
+        // a disabled list has no target
+        install_traits(&mut e, &[], &[container]);
+        assert_eq!(target(&mut e, list, 2), 0);
+    }
+
+    fn check_select(
+        select: fn(&mut Engine, Ptr<ListBoxLayout>, Ptr, u32) -> bool,
+        which: StaticTrait,
+    ) {
+        let mut e = engine();
+        let (list, _) = list_with_container(&mut e);
+        let (chosen, other) = (tile(40), tile(41));
+        install_traits(&mut e, &[other], &[]);
+        stub(&mut e, LIST_CONTAINS_TILE, 1);
+        // mode 0 selects what is not selected, and only that
+        assert!(select(&mut e, list, Ptr::new(chosen), 0));
+        assert!(!select(&mut e, list, Ptr::new(other), 0));
+        // mode 1 deselects what is selected
+        assert!(select(&mut e, list, Ptr::new(other), 1));
+        assert!(!select(&mut e, list, Ptr::new(chosen), 1));
+        // mode 2 toggles
+        assert!(select(&mut e, list, Ptr::new(chosen), 2));
+        assert!(select(&mut e, list, Ptr::new(other), 2));
+        // other modes, a null tile and a tile the list lacks do nothing
+        assert!(!select(&mut e, list, Ptr::new(chosen), 3));
+        assert!(!select(&mut e, list, Ptr::NULL, 0));
+        stub(&mut e, LIST_CONTAINS_TILE, 0);
+        assert!(!select(&mut e, list, Ptr::new(chosen), 0));
+        assert_eq!(
+            calls(&e, TILE_SET_INT),
+            vec![
+                vec![chosen, SELECTED_ID, 1],
+                vec![other, SELECTED_ID, 0],
+                vec![chosen, SELECTED_ID, 1],
+                vec![other, SELECTED_ID, 0]
+            ]
+        );
+        assert_static(&e, which, SELECTED_ID);
+        // a disabled list selects nothing
+        install_traits(&mut e, &[], &[tile(30)]);
+        stub(&mut e, LIST_CONTAINS_TILE, 1);
+        assert!(!select(&mut e, list, Ptr::new(chosen), 0));
+    }
+
+    fn check_deselect_all(deselect_all: fn(&mut Engine, Ptr<ListBoxLayout>, u8)) {
+        let mut e = engine();
+        let (list, _) = list_with_container(&mut e);
+        let tiles: Vec<u32> = (40..43).map(tile).collect();
+        let placed = fill_list(&mut e, list, &tiles);
+        // the second item was filtered out; the first and third are selected
+        e.mem.set_u8(placed[1].1 + LIST_ITEM_FILTERED, 1);
+        install_traits(&mut e, &[tiles[0], tiles[1], tiles[2]], &[]);
+        stub(&mut e, LIST_CONTAINS_TILE, 1);
+        deselect_all(&mut e, list, 1);
+        assert_eq!(
+            calls(&e, TILE_SET_INT),
+            vec![
+                vec![tiles[0], SELECTED_ID, 0],
+                vec![tiles[2], SELECTED_ID, 0]
+            ]
+        );
+        e.call_log = Some(Vec::new());
+        deselect_all(&mut e, list, 0);
+        assert_eq!(calls(&e, TILE_SET_INT).len(), 3);
+    }
+
+    fn check_synchronize(synchronize: fn(&mut Engine, Ptr<ListBoxLayout>)) {
+        let mut e = engine();
+        let (list, _) = list_with_container(&mut e);
+        let tiles: Vec<u32> = (40..43).map(tile).collect();
+        let placed = fill_list(&mut e, list, &tiles);
+        e.mem.set_u8(placed[1].1 + LIST_ITEM_FILTERED, 1);
+        e.set(list, ListBoxLayout::fTotalListHeight, 9.0);
+        install_traits(&mut e, &[], &[]);
+        synchronize(&mut e, list);
+        // the filtered item is skipped; the others are numbered 0 and 1
+        assert_eq!(
+            calls(&e, TILE_SET_INT)
+                .into_iter()
+                .filter(|c| c[1] == TRAIT_0FAC)
+                .collect::<Vec<_>>(),
+            vec![vec![tiles[0], TRAIT_0FAC, 0], vec![tiles[2], TRAIT_0FAC, 1]]
+        );
+        assert_eq!(
+            calls(&e, LIST_INIT_TILE_POSITION),
+            vec![vec![list.addr(), tiles[0]], vec![list.addr(), tiles[2]]]
+        );
+        assert_eq!(e.get(list, ListBoxLayout::usNextIndex), 2);
+        assert_eq!(e.get(list, ListBoxLayout::fTotalListHeight), 0.0);
+    }
+
+    /// A list with a highlighted tile whose flag byte `TILE_LOAD_BYTE_35`
+    /// answers with `flag`, and the tiles `lb_highlight_box` and its edges.
+    fn check_update_highlight_box_pos(
+        update: fn(&mut Engine, Ptr<ListBoxLayout>),
+        y: StaticTrait,
+        height: StaticTrait,
+    ) {
+        let mut e = engine();
+        e.register(TILE_ADD_USER_TRAIT, |_, a| ret(a[0] & 0xffff));
+        // no container: only the static traits are looked up
+        let bare = e.new_object::<ListBoxLayout>();
+        update(&mut e, bare);
+        assert!(calls(&e, TILE_SET_INT).is_empty());
+        assert_static(&e, y, TRAIT_NAME_HIGHLIGHT_Y & 0xffff);
+        assert_static(&e, height, TRAIT_NAME_SELECTED_HEIGHT & 0xffff);
+        // no highlight: y is -1 and the height 0
+        let (list, container) = list_with_container(&mut e);
+        update(&mut e, list);
+        assert_eq!(
+            calls(&e, TILE_SET_INT),
+            vec![
+                vec![container, TRAIT_NAME_HIGHLIGHT_Y & 0xffff, u32::MAX],
+                vec![container, TRAIT_NAME_SELECTED_HEIGHT & 0xffff, 0]
+            ]
+        );
+        // a highlight
+        e.call_log = Some(Vec::new());
+        let highlighted = tile(40);
+        e.set(list, ListBoxLayout::pHighlightedItem, Ptr::new(highlighted));
+        e.register(TILE_GET_VALUE, |_, a| ret(0x9000 + a[1]));
+        stub(&mut e, TILE_LOAD_BYTE_35, 1);
+        e.register(TILE_FIND_BY_NAME, |_, a| {
+            ret(if a[1] == NAME_HIGHLIGHT_BOX {
+                0x8000
+            } else {
+                0
+            })
+        });
+        e.register(TILE_GET_CHILD_BY_NAME, |_, a| ret(0x8000 + (a[1] & 0xff)));
+        update(&mut e, list);
+        let y_value = 0x9000 + (TRAIT_NAME_HIGHLIGHT_Y & 0xffff);
+        let height_value = 0x9000 + (TRAIT_NAME_SELECTED_HEIGHT & 0xffff);
+        assert_eq!(
+            calls(&e, TILE_VALUE_ADD_ACTION),
+            vec![
+                vec![y_value, 0x7d0, highlighted, TRAIT_0FA2],
+                vec![height_value, 0x7d0, highlighted, TRAIT_0FB0]
+            ]
+        );
+        assert_eq!(
+            calls(&e, TILE_VALUE_CALCULATE),
+            vec![vec![y_value, 0], vec![height_value, 0]]
+        );
+        // the four edges (top, bottom, left, right), then the box itself
+        let marked = calls(&e, TILE_STORE_BYTE_35);
+        let names = [NAME_TOP, NAME_BOTTOM, NAME_LEFT, NAME_RIGHT];
+        let mut expected: Vec<Vec<u32>> =
+            names.iter().map(|n| vec![0x8000 + (n & 0xff), 1]).collect();
+        expected.push(vec![0x8000, 1]);
+        assert_eq!(marked, expected);
+        assert_eq!(
+            calls(&e, TILE_FIND_BY_NAME),
+            vec![vec![container, NAME_HIGHLIGHT_BOX]]
+        );
+        assert_eq!(calls(&e, TILE_ADD_NEEDS_UPDATE).len(), 5);
+        assert!(calls(&e, TILE_ADD_NEEDS_UPDATE).iter().all(|c| c[1] == 8));
+        // a box without a top edge only marks itself
+        e.call_log = Some(Vec::new());
+        e.register(TILE_GET_CHILD_BY_NAME, |_, _| Ret::default());
+        stub(&mut e, TILE_LOAD_BYTE_35, 0);
+        update(&mut e, list);
+        assert_eq!(calls(&e, TILE_STORE_BYTE_35), vec![vec![0x8000, 0]]);
+        // no box at all
+        e.call_log = Some(Vec::new());
+        stub(&mut e, TILE_FIND_BY_NAME, 0);
+        update(&mut e, list);
+        assert!(calls(&e, TILE_STORE_BYTE_35).is_empty());
+    }
+
+    fn check_set_total_list_height(set: fn(&mut Engine, Ptr<ListBoxLayout>)) {
+        let mut e = engine();
+        let (list, container) = list_with_container(&mut e);
+        let scroll_bar = tile(31);
+        e.set(list, ListBoxLayout::pScrollBar, Ptr::new(scroll_bar));
+        e.set(list, ListBoxLayout::fTotalListHeight, 10.0);
+        install_traits(&mut e, &[], &[]);
+        stub(&mut e, TILE_TEXT_TO_TRAIT, 0xabc3);
+        stub(&mut e, LIST_COUNT, 5);
+        e.register(ROUND_FLOAT, |_, a| {
+            float_ret(f64::from(f32::from_bits(a[0]).ceil()))
+        });
+        e.register(MAX_INT, |_, a| ret((a[0] as i32).max(a[1] as i32) as u32));
+        e.register_double(TILE_GET_FLOAT, move |_, a| {
+            float_ret(match (a[0] == container, a[1]) {
+                (true, TRAIT_0FB0) => 2.0,
+                (true, FILTERED_ID) => 1.0,
+                _ => 0.0,
+            })
+        });
+        set(&mut e, list);
+        // 5 items - 1 filtered = 4; 4 * (10 - 2) / 10 = 3.2 -> 4; 4 + 1 = 5 steps
+        assert_eq!(calls(&e, MAX_INT), vec![vec![5, 2]]);
+        assert_eq!(
+            calls(&e, TILE_SET_FLOAT),
+            vec![vec![container, 0xabc3, 2.0f32.to_bits(), 1]]
+        );
+        assert_eq!(calls(&e, TILE_SET_INT), vec![vec![scroll_bar, 0xabc3, 5]]);
+        assert_eq!(
+            calls(&e, TILE_TEXT_TO_TRAIT),
+            vec![
+                vec![TRAIT_NAME_SCROLL_DELTA],
+                vec![TRAIT_NAME_NUMBER_OF_ITEMS]
+            ]
+        );
+        // a list that fits needs one step and no scroll delta
+        e.set(list, ListBoxLayout::fTotalListHeight, 2.0);
+        e.call_log = Some(Vec::new());
+        set(&mut e, list);
+        assert!(calls(&e, TILE_SET_FLOAT).is_empty());
+        assert_eq!(calls(&e, TILE_SET_INT), vec![vec![scroll_bar, 0xabc3, 1]]);
+        // without a container nothing happens
+        let bare = e.new_object::<ListBoxLayout>();
+        e.call_log = Some(Vec::new());
+        set(&mut e, bare);
+        assert!(e.call_log.as_ref().unwrap().is_empty());
+    }
+
+    fn check_num_unfiltered(count: fn(&mut Engine, Ptr<ListBoxLayout>) -> i32, which: StaticTrait) {
+        let mut e = engine();
+        let (list, container) = list_with_container(&mut e);
+        install_traits(&mut e, &[], &[]);
+        stub(&mut e, LIST_COUNT, 7);
+        e.register_double(TILE_GET_FLOAT, move |_, a| {
+            float_ret(if a[0] == container && a[1] == FILTERED_ID {
+                2.75
+            } else {
+                0.0
+            })
+        });
+        assert_eq!(count(&mut e, list), 5);
+        assert_static(&e, which, FILTERED_ID);
+    }
+
+    #[test]
+    fn the_second_half_registers_forty_nine_functions() {
+        let table = funcs();
+        assert_eq!(table.len(), 109);
+        let mut addresses: Vec<u32> = table.iter().map(|(a, _)| *a).collect();
+        addresses.sort_unstable();
+        addresses.dedup();
+        assert_eq!(addresses.len(), 109);
+        assert!(addresses
+            .iter()
+            .all(|a| (0x007d_3aa0..=0x007d_a040).contains(a)));
+        assert_eq!(addresses.iter().filter(|a| **a > 0x007d_74c0).count(), 49);
+    }
+
+    #[test]
+    fn the_float_to_integer_helper_is_fistp_truncation() {
+        assert_eq!(fistp_truncate(2.75), 2);
+        assert_eq!(fistp_truncate(-2.75), -2);
+        assert_eq!(fistp_truncate(f64::NAN), 0);
+        assert_eq!(fistp_truncate(1.0e30), 0);
+        assert_eq!(fistp_truncate(4_294_967_296.0 + 7.0), 7);
+    }
+
+    #[test]
+    fn option_list_set_enabled_writes_the_trait() {
+        check_set_enabled(list_box_option_set_enabled, OPTION_SET_ENABLED_TRAIT);
+    }
+
+    #[test]
+    fn option_list_is_enabled_needs_a_container_with_the_trait() {
+        check_is_enabled(list_box_option_is_enabled, OPTION_IS_ENABLED_TRAIT);
+    }
+
+    #[test]
+    fn the_container_visibility_test_needs_a_container() {
+        let mut e = engine();
+        let list = e.new_object::<ListBoxLayout>();
+        assert!(!fn_007d7630(&mut e, list));
+        let container = tile(30);
+        e.set(list, ListBoxLayout::pContainerRect, Ptr::new(container));
+        assert!(!fn_007d7630(&mut e, list));
+        stub(&mut e, TILE_IS_VISIBLE, 1);
+        assert!(fn_007d7630(&mut e, list));
+        assert_eq!(calls(&e, TILE_IS_VISIBLE).last(), Some(&vec![container]));
+    }
+
+    #[test]
+    fn option_list_highlight_checks_the_list_and_the_tile() {
+        check_highlight(list_box_option_highlight, 0x011d_ac78);
+    }
+
+    #[test]
+    fn option_list_highlight_target_steps_over_disabled_tiles() {
+        check_highlight_target(list_box_option_get_highlight_target);
+    }
+
+    #[test]
+    fn selecting_in_the_options_list_is_mode_zero() {
+        let mut e = engine();
+        let (list, _) = list_with_container(&mut e);
+        install_traits(&mut e, &[], &[]);
+        stub(&mut e, LIST_CONTAINS_TILE, 1);
+        assert!(fn_007d7a80(&mut e, list, Ptr::new(tile(40))));
+        assert_eq!(
+            calls(&e, TILE_SET_INT),
+            vec![vec![tile(40), SELECTED_ID, 1]]
+        );
+    }
+
+    #[test]
+    fn option_list_is_selected_reads_the_selected_trait() {
+        let mut e = engine();
+        install_traits(&mut e, &[tile(40)], &[]);
+        let list = Ptr::new(0x1234);
+        assert!(list_box_option_is_selected(
+            &mut e,
+            list,
+            Ptr::new(tile(40))
+        ));
+        assert!(!list_box_option_is_selected(
+            &mut e,
+            list,
+            Ptr::new(tile(41))
+        ));
+        assert!(!list_box_option_is_selected(&mut e, list, Ptr::NULL));
+        assert_eq!(calls(&e, TILE_IS_TRUE).len(), 2);
+        assert_static(&e, OPTION_IS_SELECTED_TRAIT, SELECTED_ID);
+        // an unusable trait id means nothing is selected
+        e.mem.set_u32(OPTION_IS_SELECTED_TRAIT.cache, 0);
+        assert!(!list_box_option_is_selected(
+            &mut e,
+            list,
+            Ptr::new(tile(40))
+        ));
+    }
+
+    #[test]
+    fn option_list_deselect_all_can_skip_filtered_items() {
+        check_deselect_all(list_box_option_deselect_all);
+    }
+
+    #[test]
+    fn the_downloads_list_set_enabled_writes_the_trait() {
+        check_set_enabled(list_box_int_set_enabled, DOWNLOADS_SET_ENABLED_TRAIT);
+    }
+
+    #[test]
+    fn the_file_entry_list_constructor_stores_its_vtable() {
+        let mut e = engine();
+        let list = e.new_object::<ListBoxLayout>();
+        for offset in (4..0x30).step_by(4) {
+            e.mem.set_u32(list.addr() + offset, 0xffff_ffff);
+        }
+        assert_eq!(list_box_file_entry_construct(&mut e, list), list);
+        assert_eq!(e.mem.u32(list.addr()), FILE_ENTRY_LIST_BOX_VTABLE);
+        assert_eq!(calls(&e, LIST_BOX_BASE_CONSTRUCT), vec![vec![list.addr()]]);
+        assert_eq!(
+            calls(&e, EMBEDDED_LIST_CONSTRUCT),
+            vec![vec![list.addr() + 4]]
+        );
+        for field in [0x0c, 0x10, 0x14, 0x18] {
+            assert_eq!(e.mem.u32(list.addr() + field), 0);
+        }
+        assert_eq!(e.mem.u16(list.addr() + 0x1c), 0);
+        assert_eq!(e.mem.u16(list.addr() + 0x2c), 0);
+        for field in [0x20, 0x24, 0x28] {
+            assert_eq!(e.mem.f32(list.addr() + field), 0.0);
+        }
+        assert_eq!(calls(&e, LIST_BOX_FN_7A1950), vec![vec![list.addr(), 0, 1]]);
+        assert_eq!(calls(&e, LIST_BOX_FN_721130), vec![vec![list.addr()]]);
+    }
+
+    #[test]
+    fn the_file_entry_list_destructor_empties_the_list_first() {
+        let mut e = engine();
+        let list = e.new_object::<ListBoxLayout>();
+        list_box_file_entry_destruct(&mut e, list);
+        assert_eq!(e.mem.u32(list.addr()), FILE_ENTRY_LIST_BOX_VTABLE);
+        assert_eq!(
+            order(
+                &e,
+                &[
+                    FILE_ENTRY_LIST_SET_TOTAL_LIST_HEIGHT,
+                    FILE_ENTRY_LIST_UPDATE_HIGHLIGHT_BOX_POS,
+                    LIST_BOX_FN_7211C0,
+                    EMBEDDED_LIST_DESTRUCT
+                ]
+            ),
+            vec![
+                FILE_ENTRY_LIST_SET_TOTAL_LIST_HEIGHT,
+                FILE_ENTRY_LIST_UPDATE_HIGHLIGHT_BOX_POS,
+                LIST_BOX_FN_7211C0,
+                EMBEDDED_LIST_DESTRUCT
+            ]
+        );
+        assert_eq!(
+            calls(&e, EMBEDDED_LIST_DESTRUCT),
+            vec![vec![list.addr() + 4]]
+        );
+    }
+
+    #[test]
+    fn adding_a_file_entry_uses_the_file_entry_list_functions() {
+        let mut e = engine();
+        let (list, _) = adding_list(&mut e);
+        stub(&mut e, LIST_FLAG_TEST, 1);
+        stub(&mut e, TILE_GET_VALUE, 1);
+        let item = list_box_file_entry_add_item(&mut e, list, 0xd1, 0, 0, 0);
+        assert_eq!(item, Ptr::new(0x5500));
+        assert_eq!(
+            calls(&e, FILE_ENTRY_LIST_SET_TOTAL_LIST_HEIGHT),
+            vec![vec![list.addr()]]
+        );
+        assert!(calls(&e, OPTION_LIST_SET_TOTAL_LIST_HEIGHT).is_empty());
+        // inserted after a position: the file entry list synchronizes
+        list_box_file_entry_add_item(&mut e, list, 0xd2, 0, 0x7700, 0);
+        assert_eq!(
+            calls(&e, FILE_ENTRY_LIST_SYNCHRONIZE),
+            vec![vec![list.addr()]]
+        );
+        assert!(calls(&e, OPTION_LIST_SYNCHRONIZE).is_empty());
+    }
+
+    /// Three items whose tiles have a destructor double; the highlight is on
+    /// the tile of `highlighted`.
+    fn removable_list(
+        e: &mut Engine,
+        highlighted: usize,
+    ) -> (Ptr<ListBoxLayout>, Vec<u32>, Vec<(u32, u32)>) {
+        let (list, _) = list_with_container(e);
+        let tiles = vec![tile_object(e), tile_object(e), tile_object(e)];
+        let placed = fill_list(e, list, &tiles);
+        e.set(
+            list,
+            ListBoxLayout::pHighlightedItem,
+            Ptr::new(tiles[highlighted]),
+        );
+        e.register(LIST_NODE_SET_NEXT, |e, a| {
+            e.mem.set_u32(a[0] + 4, a[1]);
+            Ret::default()
+        });
+        e.register(LIST_FLAG_TEST, |_, a| ret(a[1]));
+        stub(e, INTERFACE_MANAGER, 0x4000);
+        (list, tiles, placed)
+    }
+
+    #[test]
+    fn removing_a_middle_node_moves_the_highlight_to_the_next_tile() {
+        let mut e = engine();
+        let (list, tiles, placed) = removable_list(&mut e, 1);
+        let (head, middle, last) = (placed[0].0, placed[1].0, placed[2].0);
+        assert!(fn_007d9ac0(&mut e, list, middle, head));
+        assert_eq!(
+            e.get(list, ListBoxLayout::pHighlightedItem),
+            Ptr::new(tiles[2])
+        );
+        assert_eq!(
+            calls(&e, SET_CURRENT_FOCUS_TARGET),
+            vec![vec![0x4000, tiles[2], TRAIT_0FC3, 1]]
+        );
+        // the tile is destroyed, the data deleted (the list owns it), the
+        // item freed, the node unlinked and deleted
+        assert_eq!(
+            calls(&e, tile_dtor_slot(&e, tiles[1])),
+            vec![vec![tiles[1], 1]]
+        );
+        assert_eq!(
+            calls(&e, OPTION_SCALAR_DELETING_DESTRUCTOR),
+            vec![vec![0xd1, 1]]
+        );
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![placed[1].1]]);
+        assert_eq!(
+            calls(&e, LIST_NODE_SET_NEXT),
+            vec![vec![head, last], vec![middle, 0]]
+        );
+        assert_eq!(
+            calls(&e, LIST_NODE_SCALAR_DELETING_DESTRUCTOR),
+            vec![vec![middle, 1]]
+        );
+        assert_eq!(e.mem.u32(head + 4), last);
+        // a null node is refused
+        assert!(!fn_007d9ac0(&mut e, list, 0, head));
+    }
+
+    /// The address of the destructor double of a tile made by `tile_object`.
+    fn tile_dtor_slot(e: &Engine, tile: u32) -> u32 {
+        let vtable = e.mem.u32(tile);
+        e.mem.u32(vtable)
+    }
+
+    #[test]
+    fn removing_the_head_pulls_the_second_node_up() {
+        let mut e = engine();
+        let (list, tiles, placed) = removable_list(&mut e, 2);
+        let (head, second) = (placed[0].0, placed[1].0);
+        assert_eq!(head, list.addr() + 4);
+        assert!(fn_007d9ac0(&mut e, list, head, head));
+        // the second node's item is now the head's, its node is deleted
+        assert_eq!(e.get(list, ListBoxLayout::m_item), Ptr::new(placed[1].1));
+        assert_eq!(e.mem.u32(head + 4), placed[2].0);
+        assert_eq!(calls(&e, LIST_NODE_SET_NEXT), vec![vec![second, 0]]);
+        assert_eq!(
+            calls(&e, LIST_NODE_SCALAR_DELETING_DESTRUCTOR),
+            vec![vec![second, 1]]
+        );
+        // the highlighted tile was not removed
+        assert_eq!(
+            e.get(list, ListBoxLayout::pHighlightedItem),
+            Ptr::new(tiles[2])
+        );
+        assert!(calls(&e, SET_CURRENT_FOCUS_TARGET).is_empty());
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![placed[0].1]]);
+    }
+
+    #[test]
+    fn removing_the_only_node_empties_the_list_and_may_synchronize() {
+        let mut e = engine();
+        let (list, _) = list_with_container(&mut e);
+        let tiles = vec![tile_object(&mut e)];
+        let placed = fill_list(&mut e, list, &tiles);
+        e.set(list, ListBoxLayout::pHighlightedItem, Ptr::new(tiles[0]));
+        e.register(LIST_FLAG_TEST, |_, a| ret(1 - a[1]));
+        assert!(fn_007d9ac0(&mut e, list, placed[0].0, placed[0].0));
+        assert_eq!(e.get(list, ListBoxLayout::m_item), Ptr::NULL);
+        // no next node and the node is the previous one: nothing to highlight
+        assert_eq!(e.get(list, ListBoxLayout::pHighlightedItem), Ptr::NULL);
+        assert!(calls(&e, SET_CURRENT_FOCUS_TARGET).is_empty());
+        // the data is not owned, but auto update (flag 0) is on
+        assert!(calls(&e, OPTION_SCALAR_DELETING_DESTRUCTOR).is_empty());
+        assert_eq!(e.get(list, ListBoxLayout::usNextIndex), 0);
+    }
+
+    #[test]
+    fn removing_a_filtered_item_lowers_the_filtered_count() {
+        let mut e = engine();
+        let (list, tiles, placed) = removable_list(&mut e, 0);
+        let container = e.get(list, ListBoxLayout::pContainerRect).addr();
+        e.mem.set_u8(placed[1].1 + LIST_ITEM_FILTERED, 1);
+        e.set_global(ONE_AS_DOUBLE, 1.0f64);
+        stub(&mut e, TILE_TEXT_TO_TRAIT, 0xabc2);
+        stub_float(&mut e, TILE_GET_FLOAT, 5.0);
+        assert!(fn_007d9ac0(&mut e, list, placed[1].0, placed[0].0));
+        assert_eq!(
+            calls(&e, TILE_SET_FLOAT),
+            vec![vec![container, 0xabc2, 4.0f32.to_bits(), 1]]
+        );
+        assert_eq!(
+            calls(&e, TILE_TEXT_TO_TRAIT),
+            vec![vec![LIST_RESET_TRAIT_NAME], vec![LIST_RESET_TRAIT_NAME]]
+        );
+        // the highlight stayed on the first tile
+        assert_eq!(
+            e.get(list, ListBoxLayout::pHighlightedItem),
+            Ptr::new(tiles[0])
+        );
+    }
+
+    #[test]
+    fn removing_by_tile_finds_the_node_and_the_one_before() {
+        let mut e = engine();
+        let (list, tiles, placed) = removable_list(&mut e, 0);
+        assert!(!fn_007d8040(&mut e, list, 0));
+        assert!(fn_007d8040(&mut e, list, tiles[2]));
+        assert_eq!(
+            calls(&e, LIST_NODE_SET_NEXT),
+            vec![vec![placed[1].0, 0], vec![placed[2].0, 0]]
+        );
+        // an empty list is refused
+        stub(&mut e, LIST_IS_EMPTY_NODE, 1);
+        assert!(!fn_007d8040(&mut e, list, tiles[1]));
+        assert_eq!(
+            calls(&e, LIST_IS_EMPTY_NODE).last(),
+            Some(&vec![list.addr() + 4])
+        );
+    }
+
+    #[test]
+    fn removing_by_position_or_index_trait() {
+        let mut e = engine();
+        let (list, tiles, placed) = removable_list(&mut e, 0);
+        install_indexes(&mut e, &tiles);
+        // position 1: the second node, whose previous is the head
+        assert!(fn_007d80f0(&mut e, list, 1, 1));
+        assert_eq!(
+            calls(&e, LIST_NODE_SET_NEXT)[0],
+            vec![placed[0].0, placed[2].0]
+        );
+        // the item whose index trait is 2 (the last node; the previous node
+        // is now the head)
+        e.call_log = Some(Vec::new());
+        let (list, tiles, placed) = removable_list(&mut e, 0);
+        install_indexes(&mut e, &tiles);
+        assert!(fn_007d80f0(&mut e, list, 2, 0));
+        assert_eq!(calls(&e, LIST_NODE_SET_NEXT)[0], vec![placed[1].0, 0]);
+        // an empty list is refused
+        stub(&mut e, LIST_IS_EMPTY_NODE, 1);
+        assert!(!fn_007d80f0(&mut e, list, 0, 1));
+    }
+
+    #[test]
+    fn removing_everything_from_the_file_entry_list_uses_its_own_functions() {
+        let mut e = engine();
+        let list = e.new_object::<ListBoxLayout>();
+        e.set(list, ListBoxLayout::usNextIndex, 3);
+        list_box_file_entry_remove_all(&mut e, list);
+        assert_eq!(e.get(list, ListBoxLayout::usNextIndex), 0);
+        assert_eq!(
+            order(
+                &e,
+                &[
+                    FILE_ENTRY_LIST_SET_TOTAL_LIST_HEIGHT,
+                    FILE_ENTRY_LIST_UPDATE_HIGHLIGHT_BOX_POS,
+                    OPTION_LIST_SET_TOTAL_LIST_HEIGHT,
+                    OPTION_LIST_UPDATE_HIGHLIGHT_BOX_POS
+                ]
+            ),
+            vec![
+                FILE_ENTRY_LIST_SET_TOTAL_LIST_HEIGHT,
+                FILE_ENTRY_LIST_UPDATE_HIGHLIGHT_BOX_POS
+            ]
+        );
+    }
+
+    #[test]
+    fn sorting_the_file_entry_list_synchronizes_its_tiles() {
+        let mut e = engine();
+        let (list, _) = list_with_container(&mut e);
+        fill_list(&mut e, list, &[]);
+        install_traits(&mut e, &[], &[]);
+        e.set(list, ListBoxLayout::fTotalListHeight, 4.0);
+        list_box_file_entry_sort(&mut e, list, 0x7a7a);
+        assert_eq!(calls(&e, LIST_SORT), vec![vec![list.addr() + 4, 0x7a7a]]);
+        assert_eq!(e.get(list, ListBoxLayout::fTotalListHeight), 0.0);
+    }
+
+    #[test]
+    fn filtering_the_file_entry_list_renumbers_and_moves_the_highlight() {
+        let mut e = engine();
+        let (list, container) = list_with_container(&mut e);
+        let tiles: Vec<u32> = (40..43).map(tile).collect();
+        let placed = fill_list(&mut e, list, &tiles);
+        install_indexes(&mut e, &tiles);
+        install_traits(&mut e, &[], &[]);
+        list_vtable(&mut e, list);
+        e.set(list, ListBoxLayout::pHighlightedItem, Ptr::new(tiles[1]));
+        // the filter drops the item whose data is 0xd1 (the highlighted one)
+        e.register_double(0x6400_0000, |_, a| ret((a[0] == 0xd1) as u32));
+        list_box_file_entry_filter(&mut e, list, 0x6400_0000);
+        assert_eq!(
+            calls(&e, 0x6400_0000),
+            vec![vec![0xd0], vec![0xd1], vec![0xd2]]
+        );
+        let flags: Vec<u8> = placed
+            .iter()
+            .map(|(_, item)| e.mem.u8(item + LIST_ITEM_FILTERED))
+            .collect();
+        assert_eq!(flags, vec![0, 1, 0]);
+        let numbering: Vec<Vec<u32>> = calls(&e, TILE_SET_INT)
+            .into_iter()
+            .filter(|c| c[1] == TRAIT_0FAC)
+            .collect();
+        assert_eq!(
+            numbering,
+            vec![
+                vec![tiles[0], TRAIT_0FAC, 0],
+                vec![tiles[1], TRAIT_0FAC, u32::MAX],
+                vec![tiles[2], TRAIT_0FAC, 1]
+            ]
+        );
+        assert_eq!(
+            calls(&e, LIST_INIT_TILE_POSITION),
+            vec![vec![list.addr(), tiles[0]], vec![list.addr(), tiles[2]]]
+        );
+        // the container counts one filtered item
+        assert_eq!(
+            calls(&e, TILE_SET_INTEGER_VALUE),
+            vec![vec![container, FILTERED_ID, 1]]
+        );
+        // the dropped highlight went to the item that took its index (1)
+        assert_eq!(
+            e.get(list, ListBoxLayout::pHighlightedItem),
+            Ptr::new(tiles[2])
+        );
+        assert_eq!(e.get(list, ListBoxLayout::usNextIndex), 2);
+        assert_static(&e, FILE_ENTRY_FILTER_TRAIT, FILTERED_ID);
+    }
+
+    #[test]
+    fn filtering_without_a_filter_keeps_everything_and_falls_back_to_the_last_tile() {
+        let mut e = engine();
+        let (list, _) = list_with_container(&mut e);
+        let tiles: Vec<u32> = (40..43).map(tile).collect();
+        fill_list(&mut e, list, &tiles);
+        install_indexes(&mut e, &tiles);
+        install_traits(&mut e, &[], &[]);
+        list_box_file_entry_filter(&mut e, list, 0);
+        assert_eq!(e.get(list, ListBoxLayout::usNextIndex), 3);
+        assert_eq!(e.get(list, ListBoxLayout::pHighlightedItem), Ptr::NULL);
+        // a remembered index with no tile at that position (the filter drops
+        // the last item and it was highlighted) falls back to `007d8ee0`
+        list_vtable(&mut e, list);
+        e.register_double(slot_fn(0x14), |_, a| {
+            ret(if a[1] == 2 { 0 } else { 0x7777 })
+        });
+        stub(&mut e, LIST_COUNT, 2);
+        e.set(list, ListBoxLayout::pHighlightedItem, Ptr::new(tiles[2]));
+        e.register_double(0x6400_0000, |_, a| ret((a[0] == 0xd2) as u32));
+        list_box_file_entry_filter(&mut e, list, 0x6400_0000);
+        assert_eq!(
+            e.get(list, ListBoxLayout::pHighlightedItem),
+            Ptr::new(0x7777)
+        );
+    }
+
+    #[test]
+    fn the_file_entry_data_lookup_reads_the_item_data() {
+        let mut e = engine();
+        let list = Ptr::new(0x6100_0000);
+        let item = e.mem.alloc(12);
+        e.mem.set_u32(item + LIST_ITEM_DATA, 0xd9);
+        stub(&mut e, FILE_ENTRY_LIST_GET_AT, item);
+        assert_eq!(fn_007d86c0(&mut e, list, 3, 1), 0xd9);
+        assert_eq!(
+            calls(&e, FILE_ENTRY_LIST_GET_AT),
+            vec![vec![list.addr(), 3, 1]]
+        );
+        stub(&mut e, FILE_ENTRY_LIST_GET_AT, 0);
+        assert_eq!(fn_007d86c0(&mut e, list, 4, 0), 0);
+    }
+
+    #[test]
+    fn the_file_entry_unfiltered_count_subtracts_the_filtered_value() {
+        check_num_unfiltered(fn_007d8700, FILE_ENTRY_NUM_UNFILTERED_TRAIT);
+    }
+
+    #[test]
+    fn the_visible_item_count_is_the_truncated_container_value() {
+        let mut e = engine();
+        let list = e.new_object::<ListBoxLayout>();
+        assert_eq!(fn_007d87b0(&mut e, list), 0);
+        assert!(e.call_log.as_ref().unwrap().is_empty());
+        let container = tile(30);
+        e.set(list, ListBoxLayout::pContainerRect, Ptr::new(container));
+        stub(&mut e, TILE_ADD_USER_TRAIT, 0xabc);
+        stub_float(&mut e, TILE_GET_FLOAT, 6.9);
+        assert_eq!(fn_007d87b0(&mut e, list), 6);
+        assert_eq!(
+            calls(&e, TILE_ADD_USER_TRAIT),
+            vec![vec![LIST_HEIGHT_TRAIT_NAME, u32::MAX]]
+        );
+        assert_eq!(calls(&e, TILE_GET_FLOAT), vec![vec![container, 0xabc]]);
+    }
+
+    #[test]
+    fn file_entry_list_set_enabled_writes_the_trait() {
+        check_set_enabled(
+            list_box_file_entry_set_enabled,
+            FILE_ENTRY_SET_ENABLED_TRAIT,
+        );
+    }
+
+    #[test]
+    fn file_entry_list_is_enabled_needs_a_container_with_the_trait() {
+        check_is_enabled(list_box_file_entry_is_enabled, FILE_ENTRY_IS_ENABLED_TRAIT);
+    }
+
+    #[test]
+    fn file_entry_list_highlight_checks_the_list_and_the_tile() {
+        check_highlight(list_box_file_entry_highlight, 0x011d_aca8);
+    }
+
+    #[test]
+    fn file_entry_list_highlight_target_steps_over_disabled_tiles() {
+        check_highlight_target(list_box_file_entry_get_highlight_target);
+    }
+
+    #[test]
+    fn file_entry_list_set_selection_is_mode_zero() {
+        let mut e = engine();
+        let (list, _) = list_with_container(&mut e);
+        install_traits(&mut e, &[tile(41)], &[]);
+        stub(&mut e, LIST_CONTAINS_TILE, 1);
+        assert!(list_box_file_entry_set_selection(
+            &mut e,
+            list,
+            Ptr::new(tile(40))
+        ));
+        assert!(!list_box_file_entry_set_selection(
+            &mut e,
+            list,
+            Ptr::new(tile(41))
+        ));
+        assert_eq!(
+            calls(&e, TILE_SET_INT),
+            vec![vec![tile(40), SELECTED_ID, 1]]
+        );
+    }
+
+    #[test]
+    fn deselecting_in_the_file_entry_list_is_mode_one() {
+        let mut e = engine();
+        let (list, _) = list_with_container(&mut e);
+        install_traits(&mut e, &[tile(41)], &[]);
+        stub(&mut e, LIST_CONTAINS_TILE, 1);
+        assert!(fn_007d8d80(&mut e, list, Ptr::new(tile(41))));
+        assert!(!fn_007d8d80(&mut e, list, Ptr::new(tile(40))));
+        assert_eq!(
+            calls(&e, TILE_SET_INT),
+            vec![vec![tile(41), SELECTED_ID, 0]]
+        );
+    }
+
+    #[test]
+    fn file_entry_list_deselect_all_can_skip_filtered_items() {
+        check_deselect_all(list_box_file_entry_deselect_all);
+    }
+
+    #[test]
+    fn emptying_the_twelve_byte_array_destroys_elements_and_may_free_the_buffer() {
+        let mut e = engine();
+        let array = e.new_object::<BSSimpleArray>();
+        fn_007d8e20(&mut e, array, 1);
+        assert!(e.call_log.as_ref().unwrap().is_empty());
+        e.set(array, BSSimpleArray::pBuffer, 0x6200_0000);
+        e.set(array, BSSimpleArray::iSize, 2);
+        e.set(array, BSSimpleArray::iReservedSize, 8);
+        fn_007d8e20(&mut e, array, 0);
+        assert_eq!(
+            calls(&e, ARRAY_ELEMENT_DESTROY),
+            vec![vec![0x6200_0000, 0], vec![0x6200_000c, 0]]
+        );
+        assert!(calls(&e, ARRAY_BUFFER_RELEASE).is_empty());
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 0);
+        assert_eq!(e.get(array, BSSimpleArray::pBuffer), 0x6200_0000);
+        e.set(array, BSSimpleArray::iSize, 1);
+        fn_007d8e20(&mut e, array, 1);
+        assert_eq!(calls(&e, ARRAY_BUFFER_RELEASE), vec![vec![array.addr()]]);
+        assert_eq!(e.get(array, BSSimpleArray::pBuffer), 0);
+        assert_eq!(e.get(array, BSSimpleArray::iReservedSize), 0);
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 0);
+    }
+
+    #[test]
+    fn the_option_list_scalar_deleting_destructor_frees_on_request() {
+        let mut e = engine();
+        let list = e.new_object::<ListBoxLayout>();
+        assert_eq!(fn_007d8e80(&mut e, list, 0), list);
+        assert_eq!(e.mem.u32(list.addr()), OPTION_LIST_BOX_VTABLE);
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        assert_eq!(fn_007d8e80(&mut e, list, 3), list);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![list.addr()]]);
+    }
+
+    #[test]
+    fn the_file_entry_list_scalar_deleting_destructor_frees_on_request() {
+        let mut e = engine();
+        let list = e.new_object::<ListBoxLayout>();
+        assert_eq!(
+            list_box_file_entry_scalar_deleting_destructor(&mut e, list, 0),
+            list
+        );
+        assert_eq!(e.mem.u32(list.addr()), FILE_ENTRY_LIST_BOX_VTABLE);
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        list_box_file_entry_scalar_deleting_destructor(&mut e, list, 1);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![list.addr()]]);
+    }
+
+    #[test]
+    fn the_last_unfiltered_tile_comes_from_the_virtual_tile_lookup() {
+        let mut e = engine();
+        let (list, container) = list_with_container(&mut e);
+        install_traits(&mut e, &[], &[]);
+        stub(&mut e, LIST_COUNT, 6);
+        e.register_double(TILE_GET_FLOAT, move |_, a| {
+            float_ret(if a[0] == container && a[1] == FILTERED_ID {
+                2.0
+            } else {
+                0.0
+            })
+        });
+        list_vtable(&mut e, list);
+        e.register_double(slot_fn(0x14), |_, a| ret(0x7000 + a[1]));
+        // 6 items - 2 filtered = 4, the tile of index 3
+        assert_eq!(fn_007d8ee0(&mut e, list), 0x7003);
+        assert_eq!(calls(&e, slot_fn(0x14)), vec![vec![list.addr(), 3, 0]]);
+    }
+
+    #[test]
+    fn option_list_synchronize_renumbers_the_unfiltered_items() {
+        check_synchronize(list_box_option_synchronize);
+    }
+
+    #[test]
+    fn deselecting_in_the_options_list_is_mode_one() {
+        let mut e = engine();
+        let (list, _) = list_with_container(&mut e);
+        install_traits(&mut e, &[tile(41)], &[]);
+        stub(&mut e, LIST_CONTAINS_TILE, 1);
+        assert!(fn_007d8fe0(&mut e, list, Ptr::new(tile(41))));
+        assert!(!fn_007d8fe0(&mut e, list, Ptr::new(tile(40))));
+        assert_eq!(
+            calls(&e, TILE_SET_INT),
+            vec![vec![tile(41), SELECTED_ID, 0]]
+        );
+    }
+
+    #[test]
+    fn the_options_list_selection_function_handles_the_three_modes() {
+        check_select(fn_007d9000, OPTION_SELECT_TRAIT);
+    }
+
+    #[test]
+    fn option_list_update_highlight_box_pos_follows_the_highlight() {
+        check_update_highlight_box_pos(
+            list_box_option_update_highlight_box_pos,
+            OPTION_HIGHLIGHT_Y_TRAIT,
+            OPTION_SELECTED_HEIGHT_TRAIT,
+        );
+    }
+
+    #[test]
+    fn option_list_set_total_list_height_computes_the_scroll_steps() {
+        check_set_total_list_height(list_box_option_set_total_list_height);
+    }
+
+    #[test]
+    fn file_entry_list_synchronize_renumbers_the_unfiltered_items() {
+        check_synchronize(list_box_file_entry_synchronize);
+    }
+
+    #[test]
+    fn the_file_entry_list_selection_function_handles_the_three_modes() {
+        check_select(fn_007d9660, FILE_ENTRY_SELECT_TRAIT);
+    }
+
+    #[test]
+    fn file_entry_list_update_highlight_box_pos_follows_the_highlight() {
+        check_update_highlight_box_pos(
+            list_box_file_entry_update_highlight_box_pos,
+            FILE_ENTRY_HIGHLIGHT_Y_TRAIT,
+            FILE_ENTRY_SELECTED_HEIGHT_TRAIT,
+        );
+    }
+
+    #[test]
+    fn file_entry_list_set_total_list_height_computes_the_scroll_steps() {
+        check_set_total_list_height(list_box_file_entry_set_total_list_height);
+    }
+
+    #[test]
+    fn the_element_destroyer_runs_over_twelve_byte_elements() {
+        let mut e = engine();
+        fn_007d9e80(&mut e, Ptr::NULL, 0x6200_0000, 3);
+        assert_eq!(
+            calls(&e, ARRAY_ELEMENT_DESTROY),
+            vec![
+                vec![0x6200_0000, 0],
+                vec![0x6200_000c, 0],
+                vec![0x6200_0018, 0]
+            ]
+        );
+        e.call_log = Some(Vec::new());
+        fn_007d9e80(&mut e, Ptr::NULL, 0x6200_0000, 0);
+        assert!(e.call_log.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_string_destructor_wrapper_forwards_this() {
+        let mut e = engine();
+        fn_007d9ec0(&mut e, Ptr::new(0x6200_0040));
+        assert_eq!(calls(&e, STRING_DESTRUCT), vec![vec![0x6200_0040]]);
+    }
+
+    #[test]
+    fn option_list_num_unfiltered_subtracts_the_filtered_value() {
+        check_num_unfiltered(list_box_option_num_unfiltered, OPTION_NUM_UNFILTERED_TRAIT);
+    }
+
+    #[test]
+    fn the_first_array_constructor_stores_its_vtable_and_clears_it() {
+        let mut e = engine();
+        let array = Ptr::new(e.mem.alloc(0x10));
+        assert_eq!(fn_007d9f90(&mut e, array), array);
+        assert_eq!(e.mem.u32(array.addr()), OPTION_ARRAY_VTABLE);
+        assert_eq!(calls(&e, ARRAY_INIT), vec![vec![array.addr(), 0, 0]]);
+    }
+
+    #[test]
+    fn the_first_array_scalar_deleting_destructor_frees_on_request() {
+        let mut e = engine();
+        let array = Ptr::new(e.mem.alloc(0x10));
+        assert_eq!(
+            bs_simple_array_option_ptr_scalar_deleting_destructor(&mut e, array, 0),
+            array
+        );
+        assert_eq!(calls(&e, ARRAY_DESTRUCT_BODY), vec![vec![array.addr(), 1]]);
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        bs_simple_array_option_ptr_scalar_deleting_destructor(&mut e, array, 1);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![array.addr()]]);
+    }
+
+    #[test]
+    fn the_first_array_destructor_stores_its_vtable_and_runs_the_body() {
+        let mut e = engine();
+        let array = Ptr::new(e.mem.alloc(0x10));
+        fn_007d9ff0(&mut e, array);
+        assert_eq!(e.mem.u32(array.addr()), OPTION_ARRAY_VTABLE);
+        assert_eq!(calls(&e, ARRAY_DESTRUCT_BODY), vec![vec![array.addr(), 1]]);
+    }
+
+    #[test]
+    fn the_second_array_constructor_stores_its_vtable_and_clears_it() {
+        let mut e = engine();
+        let array = Ptr::new(e.mem.alloc(0x10));
+        assert_eq!(fn_007da010(&mut e, array), array);
+        assert_eq!(e.mem.u32(array.addr()), USER_OPTION_ARRAY_VTABLE);
+        assert_eq!(calls(&e, ARRAY_INIT), vec![vec![array.addr(), 0, 0]]);
+    }
+
+    #[test]
+    fn the_second_array_scalar_deleting_destructor_frees_on_request() {
+        let mut e = engine();
+        let array = Ptr::new(e.mem.alloc(0x10));
+        assert_eq!(
+            bs_simple_array_user_option_ptr_scalar_deleting_destructor(&mut e, array, 0),
+            array
+        );
+        assert_eq!(
+            calls(&e, USER_OPTION_ARRAY_DESTRUCT),
+            vec![vec![array.addr()]]
+        );
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        bs_simple_array_user_option_ptr_scalar_deleting_destructor(&mut e, array, 1);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![array.addr()]]);
     }
 }
