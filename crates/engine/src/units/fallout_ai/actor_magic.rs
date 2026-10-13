@@ -1180,15 +1180,15 @@ pub fn fn_008c3650(e: &mut Engine, this: Ptr) -> u32 {
         return 0;
     }
     let player_ptr = player(e);
-    let start;
-    if actor == player_ptr && e.call(FN_00950BB0, &args![player_ptr, 0u32]).u32() != 0 && {
-        let sub = e.call(FN_00950BB0, &args![player_ptr, 0u32]).u32();
-        e.call(FN_00456610, &args![sub]).bool()
-    } {
-        start = e.call(FN_00950A60, &args![player_ptr, 1u32]).u32();
-    } else {
-        start = e.vcall(actor, ACTOR_SLOT_0X1E4, &[]).u32();
-    }
+    let start =
+        if actor == player_ptr && e.call(FN_00950BB0, &args![player_ptr, 0u32]).u32() != 0 && {
+            let sub = e.call(FN_00950BB0, &args![player_ptr, 0u32]).u32();
+            e.call(FN_00456610, &args![sub]).bool()
+        } {
+            e.call(FN_00950A60, &args![player_ptr, 1u32]).u32()
+        } else {
+            e.vcall(actor, ACTOR_SLOT_0X1E4, &[]).u32()
+        };
     let step_one = if start != 0 {
         e.call(FN_00496940, &args![start]).u32()
     } else {
@@ -1882,9 +1882,12 @@ pub fn fn_008c48d0(
                         );
                         if enchantment != 0 && e.call(FN_005F36F0, &args![enchantment]).i32() == 2 {
                             let holder = e.call(FN_00639B40, &args![effect]).u32();
-                            if holder == 0 || e.call(TYPE_BYTE, &args![holder]).i32() != 0x29 {
-                                apply = false;
-                            } else if e.call(TYPE_BYTE, &args![holder]).i32() == 0x29 && !flag {
+                            // The exe reads the type byte a second time only when the first
+                            // test passes, so both reads stay, in order.
+                            if holder == 0
+                                || e.call(TYPE_BYTE, &args![holder]).i32() != 0x29
+                                || (e.call(TYPE_BYTE, &args![holder]).i32() == 0x29 && !flag)
+                            {
                                 apply = false;
                             }
                         }
