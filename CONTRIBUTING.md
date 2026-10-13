@@ -20,51 +20,41 @@ Since 2026-10-09 the project is porting `FalloutNV.exe` system by system
 the executable is listed in [docs/LEDGER.md](docs/LEDGER.md) and is
 translated into Rust in the `engine` crate, marked with its address. The
 hand-written systems in `world` and the other game crates are being
-replaced by that translated code, one whole system at a time. So the most
-useful help is help with the port; new hand-written gameplay code is
-likely to be replaced.
+replaced by that translated code, one whole system at a time. The
+translation itself is done by the maintainer's sessions, so new
+hand-written gameplay code is likely to be replaced, and translations
+from contributors can't be merged (they would collide with the
+maintainer's queue).
 
-In order of usefulness:
+Where help is useful, in order:
 
-1. **Translate open parts of the executable.** About 25,000 game
-   functions are still `open` in the ledger (2026-10-12). The largest open
-   blocks are the Havok SDK (about 6,500 functions), the Gamebryo
-   libraries (`NiMain`, `NiAnimation`, `NiParticle`, `NiCollision`; about
-   3,600), `BSMain` (about 800), FaceGen (about 850) and magic
-   (`fallout/magic`, about 600). The method is in
-   [docs/ENGINE_CRATE.md](docs/ENGINE_CRATE.md): one source unit per file,
-   each function marked with its address and tested, and compiler-only
-   gaps (security cookies, exception unwinding) left explicitly partial.
-   Open a `[task] Translate <unit>` issue naming the unit from the
-   ledger's "By subsystem" table; the maintainer takes claimed units out
-   of the automatic translation queue so two people never translate the
-   same file.
-2. **Check translations against the real executable.** Pure functions can
+1. **Check translations against the real executable.** Pure functions can
    be run on the real CPU with `nv-call`
    ([`research/nv-oracle`](research/nv-oracle/)) and compared with their
    Rust translation. Adding these comparisons for translated functions
    that don't have them yet needs only your own copy of the game. Commit
    the test cases and addresses, never the executable or its output.
-3. **Compare with the original game.** Several systems are implemented
+   Report a mismatch as an issue with the address and the inputs.
+2. **Compare with the original game.** Several systems are implemented
    and traced but have never been compared with the running game
    (terminals, menu fades, mods and plugins; see
    [docs/MILESTONES.md](docs/MILESTONES.md)). Recording the original game
    and comparing automatically is the comparison harness task (#22); a
    complete opening-to-Goodsprings recording is #3.
-4. **Platforms.** The Linux port (#61) and the macOS/Metal port are open.
+3. **Platforms.** The Linux port (#61) and the macOS/Metal port are open.
    Check the open pull requests first and build on them.
-5. **Coverage and routes.** The `[task]` issues for quest, creature and
+4. **Coverage and routes.** The `[task]` issues for quest, creature and
    weapon coverage and acceptance routes (#13–#24) are still open. Their
    value now is mostly the routes and the lists of what's missing, which
    become checks for the port.
 
 Not open for contributions, because the maintainer's sessions are doing
-them and parallel versions would conflict: the frame order (Phase 1,
+them and parallel versions would conflict: translating the executable
+(all of the ledger), the frame order (Phase 1,
 [docs/FRAME_SKELETON.md](docs/FRAME_SKELETON.md)), the game-state model
-and original saves (Phase 2), wiring translated systems into the running
-game (the script engine first), and the translation lanes the
-maintainer's agents are working on. Bug reports from playing are always
-welcome as issues.
+and original saves (Phase 2), and wiring translated systems into the
+running game (the script engine first). Bug reports from playing are
+always welcome as issues.
 
 ## Updating an older fork
 
@@ -148,8 +138,7 @@ large way; small fixes anywhere are welcome with a test.
 | Dead Money (DLC01), crafting and the recipe menu | Dead Money contributor | docs/HANDOFF_DEAD_MONEY.md. |
 | macOS / Metal port | open | Pull request #108 (`abusager13`) is a start; coordinate there. |
 | Linux port | open | #61; pull requests #62 and #91 are starts. |
-| Engine port: frame order, game-state model and saves, wiring systems into the game | maintainer | ENGINE_PORT_PLAN, FRAME_SKELETON, ENGINE_STATE. |
-| Engine port: translating ledger units | open, by unit | Claim with a `[task] Translate <unit>` issue (see above). |
+| Engine port: translating the executable, frame order, game-state model and saves, wiring systems into the game | maintainer | ENGINE_PORT_PLAN, ENGINE_CRATE, FRAME_SKELETON, ENGINE_STATE. Not open for contributions. |
 
 Everything else is open through the `[task]` issues.
 
