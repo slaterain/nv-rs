@@ -14,21 +14,31 @@
 //!   field name in a comment where the offset matches the PDB. A class's
 //!   identity comes from the RTTI type descriptor of the vtable the code
 //!   stores (`.?AVStatsMenu@@`, ...).
-//! - Calls to functions of this file that the queue lists after the ones
-//!   translated so far (the `ListBox` constructors and destructors,
-//!   `00721060` on) go through their exe address; the factory calls every
-//!   menu constructor through its address, as one table.
+//! - The menu constructors and destructors call the `ListBox` and
+//!   `BSSimpleArray` constructors and destructors of this file through
+//!   their exe address (they run the translations registered here); the
+//!   factory calls every menu constructor through its address, as one
+//!   table. Functions of this file that the queue lists after the ones
+//!   translated so far (the per-instance `ListBox` methods from `007242c0`
+//!   on) are called through their address too.
+//! - The six `ListBox<T>` instances (`ActorValue::Index`, `PerkRankData *`,
+//!   `MiscStatManager::MiscStatID`, `StatsMenu::StatusEffect *`,
+//!   `TESReputation *`, `unsigned int`) have the same code apart from the
+//!   vtable and the instance's own methods they call; one body each
+//!   (`list_box_*`) serves all six, with a `ListBoxInstance` naming those
+//!   addresses.
 //! - The compiler's exception-unwinding frames (`FS:[0]`) and the security
 //!   cookie the prologues mix into them are not translated; the functions
 //!   that have them carry a `Translation incomplete` marker.
 //! - `float` stores of `FLDZ` are `0.0`.
 //!
-//! The functions from `00720a30` (`QuantityMenu::GetClass`) on are not
-//! translated yet.
+//! The functions from `00724140` (the `ListBox<StatsMenu::StatusEffect *>`
+//! deleting destructor) on are not translated yet.
 
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::units::fallout_interface::run_007e6320::TextEditMenu;
+use crate::units::fallout_interface::startmenu::ListBox;
 use crate::units::fallout_interface::tutorialmenu::TutorialMenu;
 
 /// The allocator, cdecl (size): the block or null.
@@ -109,8 +119,9 @@ const TEXT_EDITOR_CONSTRUCT: u32 = 0x0071_6980;
 const TEXT_EDITOR_DESTRUCT: u32 = 0x0071_6a10;
 /// String set, thiscall (text, length).
 const STRING_SET: u32 = 0x0040_37f0;
-/// An empty constructor, thiscall: returns `this` and writes nothing.
-const EMPTY_CONSTRUCTOR: u32 = 0x0068_15c0;
+/// Thiscall: returns `this` and writes nothing (an empty constructor; the
+/// list box code calls it on a list node to reach the node's item word).
+const RETURN_THIS: u32 = 0x0068_15c0;
 /// Sound handle constructor, thiscall.
 const SOUND_HANDLE_CONSTRUCT: u32 = 0x0041_a250;
 /// An empty function (`RET`) the surgery menu destructor calls on its two
@@ -125,7 +136,7 @@ const POINTER_ASSIGN: u32 = 0x0066_b0d0;
 /// Smart pointer destructor, thiscall.
 const POINTER_DESTRUCT: u32 = 0x0045_cec0;
 /// Thiscall: constructs the VATS menu's action list box (+0xB0; the
-/// `ListBox<unsigned int>` constructor of this unit, later in the queue).
+/// `ListBox<unsigned int>` constructor of this unit, `fn_00723750`).
 const VATS_ACTION_LIST_CONSTRUCT: u32 = 0x0072_3750;
 /// Thiscall: constructs the VATS menu's command at +0x11C.
 const VATS_COMMAND_CONSTRUCT: u32 = 0x009c_a4a0;
@@ -133,7 +144,7 @@ const VATS_COMMAND_CONSTRUCT: u32 = 0x009c_a4a0;
 const VATS_MENU_DESTRUCT: u32 = 0x007e_9130;
 
 /// The stats menu's list box constructors and destructors (this unit,
-/// later in the queue), by the offset of the list box.
+/// `fn_00721060` and the like), by the offset of the list box.
 const STATS_LIST_BOX_CONSTRUCTORS: [(u32, u32); 6] = [
     (0x180, 0x0072_1060),
     (0x1b0, 0x0072_1060),
@@ -152,7 +163,7 @@ const STATS_LIST_BOX_DESTRUCTORS: [(u32, u32); 6] = [
 ];
 
 /// Constructors and destructors of the page arrays' `BSSimpleArray`
-/// members (this unit, later in the queue), thiscall.
+/// members (this unit, `fn_00723f00` and the like), thiscall.
 const BOOK_BUTTONS_CONSTRUCT: u32 = 0x0072_3f50;
 const BOOK_TEXT_ITEMS_CONSTRUCT: u32 = 0x0072_3f00;
 const BOOK_TEXT_ITEMS_DESTRUCT: u32 = 0x0072_3f30;
@@ -163,6 +174,215 @@ const LOVE_TESTER_TEXT_ITEMS_DESTRUCT: u32 = 0x0072_3fd0;
 const LOVE_TESTER_BUTTONS_DESTRUCT: u32 = 0x0072_4070;
 const LOVE_TESTER_GLOWS_CONSTRUCT: u32 = 0x0072_3ff0;
 const LOVE_TESTER_GLOWS_DESTRUCT: u32 = 0x0072_4020;
+
+/// The global the `QuantityMenu` destructor clears.
+const QUANTITY_MENU_GLOBAL: u32 = 0x011d_a618;
+
+/// `Tile::GetMenuByClass` (engine map), cdecl (menu class): the open menu
+/// of that class, or null.
+const GET_MENU_BY_CLASS: u32 = 0x00a0_9030;
+/// Thiscall on a tile (trait id): a float in `ST0`.
+const TILE_GET_FLOAT: u32 = 0x00a0_11b0;
+/// `Tile::GetMenu` (engine map), thiscall on a tile.
+const TILE_GET_MENU: u32 = 0x00a0_3c90;
+/// `Tile::IsTrue` (engine map), thiscall on a tile (trait id): `AL`.
+const TILE_IS_TRUE: u32 = 0x00a0_1230;
+/// Thiscall on a tile (trait id, float, word); the list box code passes
+/// the `"_num_filtered"` trait, `0.0` and 1.
+const TILE_SET_FLOAT: u32 = 0x00a0_12d0;
+/// `Tile::TextToTrait` (engine map), cdecl (name): the trait id.
+const TEXT_TO_TRAIT: u32 = 0x00a0_1860;
+/// `Tile::AddUserTrait` (engine map), cdecl (name, word).
+const ADD_USER_TRAIT: u32 = 0x00a0_0940;
+/// `"_num_filtered"`.
+const NUM_FILTERED_TEXT: u32 = 0x0106_f8d0;
+/// `"_scroll_delta"`.
+const SCROLL_DELTA_TEXT: u32 = 0x0106_f90c;
+/// `"_enabled"`.
+const ENABLED_TEXT: u32 = 0x0107_0244;
+/// The compiler's float to integer conversion (`_ftol2`): the value in
+/// `ST0` (a leading `f64`), the integer in `EAX`.
+const FTOL2: u32 = 0x00ec_62c0;
+/// `__RTDynamicCast`, cdecl (object, vftable offset, source type, target
+/// type, is reference).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// RTTI type descriptors `ReloadMenu` casts with (`.?AVTile@@`,
+/// `.?AVContainerMenu@@`, `.?AVBookMenu@@`, `.?AVTESBoundObject@@`,
+/// `.?AVTESObjectBOOK@@`).
+const TILE_TYPE: u32 = 0x0119_f4cc;
+const CONTAINER_MENU_TYPE: u32 = 0x0119_f758;
+const BOOK_MENU_TYPE: u32 = 0x0119_f400;
+const BOUND_OBJECT_TYPE: u32 = 0x0118_3108;
+const BOOK_TYPE: u32 = 0x0118_a650;
+
+/// `ReloadMenu`'s callees, all cdecl: a flag it reads first (unnamed;
+/// its body tests the global `011daac0` and `004a4080`) and the start menu
+/// class (`0070ede0` returns `0x3f5`).
+const RELOAD_FLAG: u32 = 0x004a_4040;
+const START_MENU_CLASS: u32 = 0x0070_ede0;
+/// Unnamed; its body creates the map menu through `MapMenu::Create`.
+const CREATE_MAP_MENU: u32 = 0x0070_4140;
+/// `Interface::CreateRepairMenu` (engine map).
+const CREATE_REPAIR_MENU: u32 = 0x0070_4490;
+/// `Interface::CreateItemModMenu` (engine map).
+const CREATE_ITEM_MOD_MENU: u32 = 0x0070_46c0;
+/// Unnamed creators `ReloadMenu` calls for classes `0x3ea` and `0x3eb`.
+const CREATE_MENU_3EA: u32 = 0x0070_48c0;
+const CREATE_MENU_3EB: u32 = 0x0070_4be0;
+/// `HUDMainMenu::Create` (engine map).
+const HUD_MAIN_MENU_CREATE: u32 = 0x0076_bfe0;
+/// `StartMenu::Create` (engine map), cdecl (flag, word): `AL`.
+const START_MENU_CREATE: u32 = 0x007c_b7d0;
+/// `LoadingMenu::Create` (engine map), cdecl (three words).
+const LOADING_MENU_CREATE: u32 = 0x0078_8cc0;
+/// `LevelUpMenu::Create` (engine map).
+const LEVEL_UP_MENU_CREATE: u32 = 0x0078_4c80;
+/// `ContainerMenu::Create` (engine map), cdecl (two words).
+const CONTAINER_MENU_CREATE: u32 = 0x0075_b310;
+/// `BookMenu::Create` (engine map), cdecl (two words).
+const BOOK_MENU_CREATE: u32 = 0x0073_ad50;
+/// Thiscall getters (unnamed): the word at +0x74, +0x30 and +0x20.
+const WORD_AT_74: u32 = 0x004f_d3a0;
+const WORD_AT_30: u32 = 0x0067_1d10;
+const WORD_AT_20: u32 = 0x007a_f430;
+/// `InterfaceManager::NewTimer` (engine map), cdecl (menu, float).
+const NEW_TIMER: u32 = 0x0071_64c0;
+/// `BGSMenuPacker::RecomputePacking` (engine map), thiscall (word).
+const RECOMPUTE_PACKING: u32 = 0x0070_37c0;
+/// Thiscall getter (unnamed; the word at +0x24) the open menu checks call
+/// on a menu.
+const WORD_AT_24: u32 = 0x0059_bb30;
+
+/// The tile list `GetFrontmostMenu` and `IsMenuOpen` walk: `004b7210`
+/// returns the global `011d8a80`, `00586150` (thiscall) the word at +0x9C
+/// of that, and the list sits at +4 of the result.
+const LIST_OWNER: u32 = 0x004b_7210;
+const LIST_HOLDER: u32 = 0x0058_6150;
+/// Thiscall on the list: its first node (the word at +0).
+const LIST_HEAD: u32 = 0x0055_9450;
+/// Thiscall on the list (node): the node's data slot (`node + 8`).
+const LIST_NODE_DATA: u32 = 0x0063_17a0;
+/// Thiscall on the list (node): the next node (the node's word at +0), or
+/// null for a null node.
+const LIST_NEXT: u32 = 0x007b_52d0;
+/// Thiscall on the list (address of a node variable): advances the
+/// variable to the next node and returns the old node's data slot.
+const LIST_ADVANCE: u32 = 0x0057_cbe0;
+/// The float `GetFrontmostMenu` starts its search with (`-1e8`).
+const FRONTMOST_START_VALUE: u32 = 0x0107_0218;
+/// The double a menu's trait `0xfa7` must not equal for
+/// `GetFrontmostMenu` (`6008.0`).
+const FRONTMOST_EXCLUDED_VALUE: u32 = 0x0107_0210;
+
+/// `ListBoxBase`'s vtable (RTTI `.?AVListBoxBase@@`).
+const LIST_BOX_BASE_VTABLE: u32 = 0x0107_0418;
+/// The object at `011d8b54` every list box constructor passes itself to
+/// (`005ae3d0`, by the address of its argument) and every destructor
+/// again (`00905330`), thiscall.
+const LIST_BOX_COLLECTION: u32 = 0x011d_8b54;
+const LIST_BOX_COLLECTION_ADD: u32 = 0x005a_e3d0;
+const LIST_BOX_COLLECTION_REMOVE: u32 = 0x0090_5330;
+/// Thiscall (two words) the list box constructor calls with 0 and 1.
+const LIST_BOX_INIT_FLAGS: u32 = 0x007a_1950;
+/// Thiscall (bit number): whether that bit of `usFlags` (+0x2C) is set
+/// (this unit, later in the queue).
+const LIST_BOX_HAS_FLAG: u32 = 0x0072_42c0;
+/// Thiscall (tile): `AL` (this unit, later in the queue).
+const LIST_BOX_BELONGS_TO: u32 = 0x0072_42f0;
+/// Thiscall (word) on the embedded list (+4).
+const LIST_SORT: u32 = 0x0083_fd60;
+/// Thiscall on a list node (word): stores the word at +4 (the node's next
+/// pointer; the engine map's name for the folded body is
+/// `CombatProcedureAttackMelee::Initialize`).
+const NODE_SET_NEXT: u32 = 0x006e_cd40;
+/// A list node's deleting destructor, thiscall (flags).
+const NODE_DELETE: u32 = 0x0047_02f0;
+/// A byte flag: while it is set, `RemoveAll` leaves the items' tiles alone.
+const KEEP_ITEM_TILES: u32 = 0x011d_8909;
+/// Cdecl (float, float): a float in `ST0`; `GetHighlightTarget` passes the
+/// scroll step and `1.0`.
+const SCROLL_ROUND: u32 = 0x004b_d510;
+
+/// `BSSimpleArray` set-up and release, thiscall: `006b3eb0` (two words, 0
+/// and 0) and `008454f0` (one word, 1).
+const SIMPLE_ARRAY_INIT: u32 = 0x006b_3eb0;
+const SIMPLE_ARRAY_RELEASE: u32 = 0x0084_54f0;
+/// The `BSSimpleArray` vtables (RTTI): `SPECIALBookMenu::SpecialBookTextItem`,
+/// `SpecialBookButton`, `LoveTesterMenu::LoveTesterTextItem`,
+/// `LoveTesterLightBulbGlows` and `LoveTesterButton` pointers.
+const BOOK_TEXT_ITEMS_VTABLE: u32 = 0x0107_03b4;
+const BOOK_BUTTONS_VTABLE: u32 = 0x0107_03c8;
+const LOVE_TESTER_TEXT_ITEMS_VTABLE: u32 = 0x0107_03dc;
+const LOVE_TESTER_GLOWS_VTABLE: u32 = 0x0107_03f0;
+const LOVE_TESTER_BUTTONS_VTABLE: u32 = 0x0107_0404;
+
+/// One `ListBox<T>` instance: its vtable and the instance's own methods
+/// (this unit, later in the queue; the engine map names them for the
+/// `ListBox<ActorValue::Index>` copy) that the shared bodies call, all
+/// thiscall without arguments.
+#[derive(Clone, Copy)]
+struct ListBoxInstance {
+    vtable: u32,
+    /// `Synchronize`.
+    synchronize: u32,
+    /// `IsEnabled`: `AL`.
+    is_enabled: u32,
+    /// `UpdateHighlightBoxPos`.
+    update_highlight_box_pos: u32,
+    /// `SetTotalListHeight`.
+    set_total_list_height: u32,
+}
+
+/// `ListBox<ActorValue::Index>` (RTTI `.?AV?$ListBox@W4Index@ActorValue@@@@`).
+const LIST_BOX_ACTOR_VALUE: ListBoxInstance = ListBoxInstance {
+    vtable: 0x0107_0220,
+    synchronize: 0x0072_4360,
+    is_enabled: 0x0072_4430,
+    update_highlight_box_pos: 0x0072_44e0,
+    set_total_list_height: 0x0072_4800,
+};
+/// `ListBox<PerkRankData *>` (RTTI `.?AV?$ListBox@PAUPerkRankData@@@@`).
+const LIST_BOX_PERK_RANK_DATA: ListBoxInstance = ListBoxInstance {
+    vtable: 0x0107_02ec,
+    synchronize: 0x0072_4930,
+    is_enabled: 0x0072_4a00,
+    update_highlight_box_pos: 0x0072_4ab0,
+    set_total_list_height: 0x0072_4dd0,
+};
+/// `ListBox<MiscStatManager::MiscStatID>` (RTTI
+/// `.?AV?$ListBox@W4MiscStatID@MiscStatManager@@@@`).
+const LIST_BOX_MISC_STAT_ID: ListBoxInstance = ListBoxInstance {
+    vtable: 0x0107_0314,
+    synchronize: 0x0072_4f00,
+    is_enabled: 0x0072_4fd0,
+    update_highlight_box_pos: 0x0072_5080,
+    set_total_list_height: 0x0072_53a0,
+};
+/// `ListBox<StatsMenu::StatusEffect *>` (RTTI
+/// `.?AV?$ListBox@PAUStatusEffect@StatsMenu@@@@`).
+const LIST_BOX_STATUS_EFFECT: ListBoxInstance = ListBoxInstance {
+    vtable: 0x0107_033c,
+    synchronize: 0x0072_54d0,
+    is_enabled: 0x0072_55a0,
+    update_highlight_box_pos: 0x0072_5650,
+    set_total_list_height: 0x0072_5970,
+};
+/// `ListBox<TESReputation *>` (RTTI `.?AV?$ListBox@PAVTESReputation@@@@`).
+const LIST_BOX_TES_REPUTATION: ListBoxInstance = ListBoxInstance {
+    vtable: 0x0107_0364,
+    synchronize: 0x0072_5aa0,
+    is_enabled: 0x0072_5b70,
+    update_highlight_box_pos: 0x0072_5c20,
+    set_total_list_height: 0x0072_5f40,
+};
+/// `ListBox<unsigned int>` (RTTI `.?AV?$ListBox@I@@`).
+const LIST_BOX_UNSIGNED_INT: ListBoxInstance = ListBoxInstance {
+    vtable: 0x0107_038c,
+    synchronize: 0x0072_6090,
+    is_enabled: 0x0072_6160,
+    update_highlight_box_pos: 0x0072_6210,
+    set_total_list_height: 0x0072_6530,
+};
 
 /// `CreateMenuByClass`'s table, in class order: (menu class, allocation
 /// size, constructor). Read from the jump tables at `0071f154` (targets)
@@ -246,6 +466,301 @@ fn free_if_flagged(e: &mut Engine, this: Ptr, flags: u32) {
     }
 }
 
+/// The tile list `GetFrontmostMenu` and `IsMenuOpen` walk, fetched the
+/// way the code does each time (`004b7210`, `00586150`, +4).
+fn tile_list(e: &mut Engine) -> u32 {
+    let owner = e.call(LIST_OWNER, &args![]).u32();
+    e.call(LIST_HOLDER, &args![owner]).u32() + 4
+}
+
+/// `Tile::IsTrue(tile, Tile::AddUserTrait("_enabled", -1))`.
+fn tile_enabled(e: &mut Engine, tile: u32) -> bool {
+    let enabled = e
+        .call(ADD_USER_TRAIT, &args![ENABLED_TEXT, 0xffff_ffffu32])
+        .u32();
+    e.call(TILE_IS_TRUE, &args![tile, enabled]).bool()
+}
+
+/// The item word of a list node, reached through `006815c0` as the code
+/// does.
+fn node_item(e: &mut Engine, node: u32) -> u32 {
+    let node = e.call(RETURN_THIS, &args![node]).u32();
+    e.mem.u32(node)
+}
+
+/// Deletes one `ListBoxItem` (Xbox PDB: `pTile` +0, `data` +4): the tile
+/// through its deleting destructor (vtable slot 0, flag 1) unless
+/// `KEEP_ITEM_TILES` is set, the data (`004459e0` with 1) when the list's
+/// flag bit 1 is set, then frees the item. `item` re-reads the item word
+/// each time, as the code does.
+fn list_box_delete_item(e: &mut Engine, this: Ptr<ListBox>, item: impl Fn(&mut Engine) -> u32) {
+    if e.global::<u8>(KEEP_ITEM_TILES) == 0 {
+        let entry = item(e);
+        let tile = e.mem.u32(entry);
+        if tile != 0 {
+            e.vcall(tile, 0, &args![1u32]);
+        }
+    }
+    if e.call(LIST_BOX_HAS_FLAG, &args![this, 1u32]).bool() {
+        let entry = item(e);
+        let data = e.mem.u32(entry + 4);
+        if data != 0 {
+            e.call(ITEM_DELETE, &args![data, 1u32]);
+        }
+    }
+    let entry = item(e);
+    e.call(FREE, &args![entry]);
+}
+
+/// The `ListBox<T>` constructor body: the `ListBoxBase` base, the embedded
+/// list (+4), the vtable, the fields cleared, `007a1950` with 0 and 1, and
+/// the list box passed to the collection (`fn_00721130`).
+fn list_box_construct(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    instance: ListBoxInstance,
+) -> Ptr<ListBox> {
+    fn_007240c0(e, this.cast());
+    e.call(LIST_CONSTRUCT, &args![this.addr() + 4]);
+    set_vtable(e, this.cast(), instance.vtable);
+    e.set(this, ListBox::pScrollBar, Ptr::NULL);
+    e.set(this, ListBox::pHighlightedItem, Ptr::NULL);
+    e.set(this, ListBox::pContainerRect, Ptr::NULL);
+    e.set(this, ListBox::pTemplateName, Ptr::NULL);
+    e.set(this, ListBox::usFlags, 0);
+    e.set(this, ListBox::usNextIndex, 0);
+    e.set(this, ListBox::fSavedScrollbarValue, 0.0);
+    e.set(this, ListBox::fSavedHighlightIndex, 0.0);
+    e.set(this, ListBox::fTotalListHeight, 0.0);
+    e.call(LIST_BOX_INIT_FLAGS, &args![this, 0u32, 1u32]);
+    fn_00721130(e, this.addr());
+    this
+}
+
+/// The `ListBox<T>` destructor body: restores the vtable, empties the list
+/// (`RemoveAll`), passes the list box to the collection's second method
+/// (`fn_007211c0`) and destroys the embedded list (+4).
+fn list_box_destruct(e: &mut Engine, this: Ptr<ListBox>, instance: ListBoxInstance) {
+    set_vtable(e, this.cast(), instance.vtable);
+    list_box_remove_all(e, this, instance);
+    fn_007211c0(e, this.addr());
+    e.call(LIST_DESTRUCT, &args![this.addr() + 4]);
+}
+
+/// `ListBox<T>::RemoveAll` (Xbox PDB): deletes the items of the nodes
+/// after the first (while the node and its item are non-null: the item,
+/// then the node's next pointer cleared and the node deleted, the list
+/// then pointing at the following node), then the first node's item;
+/// clears the first item, `usNextIndex` and `fTotalListHeight`, sets the
+/// container's `"_num_filtered"` trait to 0 when there is a container,
+/// recomputes the list height, clears `pHighlightedItem` and moves the
+/// highlight box. Every field is re-read where the code re-reads it.
+fn list_box_remove_all(e: &mut Engine, this: Ptr<ListBox>, instance: ListBoxInstance) {
+    let base = this.addr();
+    let second = |e: &mut Engine| e.mem.u32(base + 8);
+    while second(e) != 0 {
+        let node = second(e);
+        if node_item(e, node) == 0 {
+            break;
+        }
+        let node = second(e);
+        let next = word_at_four(e, Ptr::new(node));
+        list_box_delete_item(e, this, |e| {
+            let node = e.mem.u32(base + 8);
+            node_item(e, node)
+        });
+        let node = second(e);
+        e.call(NODE_SET_NEXT, &args![node, 0u32]);
+        let node = second(e);
+        if node != 0 {
+            e.call(NODE_DELETE, &args![node, 1u32]);
+        }
+        e.mem.set_u32(base + 8, next);
+    }
+    if e.mem.u32(base + 4) != 0 {
+        list_box_delete_item(e, this, |e| e.mem.u32(base + 4));
+    }
+    e.mem.set_u32(base + 4, 0);
+    e.set(this, ListBox::usNextIndex, 0);
+    e.set(this, ListBox::fTotalListHeight, 0.0);
+    if !e.get(this, ListBox::pContainerRect).is_null() {
+        let num_filtered = e.call(TEXT_TO_TRAIT, &args![NUM_FILTERED_TEXT]).u32();
+        let container = e.get(this, ListBox::pContainerRect);
+        e.call(
+            TILE_SET_FLOAT,
+            &args![container, num_filtered, 0.0f32.to_bits(), 1u32],
+        );
+    }
+    e.call(instance.set_total_list_height, &args![this]);
+    e.set(this, ListBox::pHighlightedItem, Ptr::NULL);
+    e.call(instance.update_highlight_box_pos, &args![this]);
+}
+
+/// `ListBox<T>::Sort` (Xbox PDB): sorts the embedded list (`0083fd60` on
+/// +4 with `compare`), then `Synchronize`.
+fn list_box_sort(e: &mut Engine, this: Ptr<ListBox>, instance: ListBoxInstance, compare: u32) {
+    e.call(LIST_SORT, &args![this.addr() + 4, compare]);
+    e.call(instance.synchronize, &args![this]);
+}
+
+/// `ListBox<T>::Highlight` (Xbox PDB): when the list is enabled and `tile`
+/// is null, or belongs to the list (`007242f0`) and is `"_enabled"`, makes
+/// it `pHighlightedItem`, moves the highlight box and returns true;
+/// otherwise false.
+fn list_box_highlight(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    instance: ListBoxInstance,
+    tile: u32,
+) -> bool {
+    if !e.call(instance.is_enabled, &args![this]).bool() {
+        return false;
+    }
+    if tile != 0
+        && !(e.call(LIST_BOX_BELONGS_TO, &args![this, tile]).bool() && tile_enabled(e, tile))
+    {
+        return false;
+    }
+    e.set(this, ListBox::pHighlightedItem, Ptr::new(tile));
+    e.call(instance.update_highlight_box_pos, &args![this]);
+    true
+}
+
+/// The step of a page scroll in `GetHighlightTarget`: 0 without a
+/// container, otherwise the container's trait `0xfb0` (negated for a page
+/// up) divided by its `"_scroll_delta"` trait, stored as a `float`, passed
+/// with `1.0` to `004bd510` and converted with `_ftol2`.
+fn list_box_page_step(e: &mut Engine, this: Ptr<ListBox>, negate: bool) -> i32 {
+    let container = e.get(this, ListBox::pContainerRect);
+    if container.is_null() {
+        return 0;
+    }
+    let extent = e.call(TILE_GET_FLOAT, &args![container, 0xfb0u32]).f64();
+    let numerator = if negate { -extent } else { extent };
+    let scroll_delta = e.call(TEXT_TO_TRAIT, &args![SCROLL_DELTA_TEXT]).u32();
+    let container = e.get(this, ListBox::pContainerRect);
+    let delta = e
+        .call(TILE_GET_FLOAT, &args![container, scroll_delta])
+        .f64();
+    let step = x87_quiet_bits(((numerator / delta) as f32).to_bits());
+    let rounded = e.call(SCROLL_ROUND, &args![step, 1.0f32.to_bits()]).f64();
+    e.call(FTOL2, &args![rounded]).i32()
+}
+
+/// `ListBox<T>::GetHighlightTarget` (Xbox PDB): the tile a move in
+/// `direction` highlights (1 up, 2 down, 0xF page up, 0x10 page down;
+/// anything else does not move), or 0 when there is none or it is the one
+/// already highlighted. See the body for the search; `GetTileAt` is
+/// vtable slot +0x14.
+fn list_box_get_highlight_target(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    instance: ListBoxInstance,
+    direction: u32,
+) -> u32 {
+    let step = match direction {
+        1 => -1,
+        2 => 1,
+        0xf => list_box_page_step(e, this, true),
+        0x10 => list_box_page_step(e, this, false),
+        _ => 0,
+    };
+    let mut target = 0u32;
+    let count = if e.call(instance.is_enabled, &args![this]).bool() && step != 0 {
+        e.get(this, ListBox::usNextIndex)
+    } else {
+        0
+    };
+    if count != 0 {
+        let last = i32::from(count) - 1;
+        let highlighted = e.get(this, ListBox::pHighlightedItem);
+        let mut index = if !highlighted.is_null() {
+            let value = e.call(TILE_GET_FLOAT, &args![highlighted, 0xfacu32]).f64();
+            let moved = e.call(FTOL2, &args![value]).i32().wrapping_add(step);
+            if moved < 0 {
+                0
+            } else if moved > last {
+                last
+            } else {
+                moved
+            }
+        } else if step > 0 {
+            0
+        } else {
+            last
+        };
+        'search: loop {
+            // The item tile whose trait 0xfac equals the index.
+            let mut node = if this.is_null() { 0 } else { this.addr() + 4 };
+            while target == 0 && node != 0 && node_item(e, node) != 0 {
+                let item = node_item(e, node);
+                let tile = e.mem.u32(item);
+                let value = e.call(TILE_GET_FLOAT, &args![tile, 0xfacu32]).f64();
+                if f64::from(index) == value {
+                    let item = node_item(e, node);
+                    target = e.mem.u32(item);
+                }
+                node = word_at_four(e, Ptr::new(node));
+            }
+            if target == 0 || tile_enabled(e, target) {
+                break;
+            }
+            target = 0;
+            if step > 0 {
+                index = index.wrapping_add(1);
+                if index > last {
+                    // Past the end: back from the one before the last.
+                    index = last - 1;
+                    loop {
+                        if target != 0 && tile_enabled(e, target) {
+                            break 'search;
+                        }
+                        if index < 0 {
+                            break 'search;
+                        }
+                        target = e.vcall(this.addr(), 0x14, &args![index, 0u32]).u32();
+                        index -= 1;
+                    }
+                }
+            } else if step < 0 {
+                index = index.wrapping_sub(1);
+                if index < 0 {
+                    // Before the start: on from index 1.
+                    index = 1;
+                    loop {
+                        if target != 0 && tile_enabled(e, target) {
+                            break 'search;
+                        }
+                        if index > last {
+                            break 'search;
+                        }
+                        target = e.vcall(this.addr(), 0x14, &args![index, 0u32]).u32();
+                        index += 1;
+                    }
+                }
+            }
+        }
+    }
+    if target != e.get(this, ListBox::pHighlightedItem).addr() {
+        target
+    } else {
+        0
+    }
+}
+
+/// A `BSSimpleArray` constructor: the vtable, then `006b3eb0` with 0 and
+/// 0. Returns `this`.
+fn simple_array_construct(e: &mut Engine, this: Ptr, vtable: u32) -> Ptr {
+    set_vtable(e, this, vtable);
+    e.call(SIMPLE_ARRAY_INIT, &args![this, 0u32, 0u32]);
+    this
+}
+
+/// A `BSSimpleArray` destructor: the vtable, then `008454f0` with 1.
+fn simple_array_destruct(e: &mut Engine, this: Ptr, vtable: u32) {
+    set_vtable(e, this, vtable);
+    e.call(SIMPLE_ARRAY_RELEASE, &args![this, 1u32]);
+}
 // Translated from 0071e290 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `MenuManager::Instance` (Xbox PDB), cdecl: with `create` set and no
 /// instance yet, allocates one byte, constructs the manager in it
@@ -681,15 +1196,15 @@ pub fn fn_0071fbf0(e: &mut Engine, this: Ptr) -> Ptr {
     let base = this.addr();
     e.call(MENU_CONSTRUCT, &args![this]);
     set_vtable(e, this, SURGERY_MENU_VTABLE);
-    e.call(EMPTY_CONSTRUCTOR, &args![base + 0x74]);
-    e.call(EMPTY_CONSTRUCTOR, &args![base + 0x7c]);
+    e.call(RETURN_THIS, &args![base + 0x74]);
+    e.call(RETURN_THIS, &args![base + 0x7c]);
     e.call(SOUND_HANDLE_CONSTRUCT, &args![base + 0x94]);
     e.call(SOUND_HANDLE_CONSTRUCT, &args![base + 0xa0]);
     construct_pointer_array(e, this, 0xc8, 6);
     e.call(POINTER_CONSTRUCT, &args![base + 0xf0, 0u32]);
     e.call(POINTER_CONSTRUCT, &args![base + 0xf4, 0u32]);
     for offset in [0xf8, 0x104, 0x128, 0x150] {
-        e.call(EMPTY_CONSTRUCTOR, &args![base + offset]);
+        e.call(RETURN_THIS, &args![base + offset]);
     }
     memset(e, base + 0x2c, 0x48);
     for global in SURGERY_STATIC_POINTERS {
@@ -1033,6 +1548,651 @@ pub fn fn_00720a10(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 00720a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QuantityMenu::GetClass` (Xbox PDB): `0x3f8`.
+pub fn quantity_menu_get_class(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x3f8
+}
+
+// Translated from 00720a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QuantityMenu::_scalar_deleting_destructor_` (Xbox PDB): runs the
+/// destructor and frees `this` when bit 0 of `flags` is set.
+pub fn quantity_menu_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00720a70(e, this);
+    free_if_flagged(e, this, flags);
+    this
+}
+
+// Translated from 00720a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `QuantityMenu` destructor: restores the vtable, clears the global
+/// `011da618` and destroys the `Menu` base.
+pub fn fn_00720a70(e: &mut Engine, this: Ptr) {
+    set_vtable(e, this, QUANTITY_MENU_VTABLE);
+    e.set_global(QUANTITY_MENU_GLOBAL, 0u32);
+    e.call(MENU_DESTRUCT, &args![this]);
+}
+
+/// The steps after `ReloadMenu` creates a menu with a timer: the created
+/// tile's trait `0xfc1` (a float) goes with the tile's menu to
+/// `InterfaceManager::NewTimer`, and `RecomputePacking(8)` runs on the
+/// tile's menu (fetched again).
+fn reload_with_timer(e: &mut Engine, create: u32) -> u32 {
+    let tile = e.call(create, &args![]).u32();
+    let delay = e.call(TILE_GET_FLOAT, &args![tile, 0xfc1u32]).f32();
+    let menu = e.call(TILE_GET_MENU, &args![tile]).u32();
+    e.call(NEW_TIMER, &args![menu, delay.to_bits()]);
+    let menu = e.call(TILE_GET_MENU, &args![tile]).u32();
+    e.call(RECOMPUTE_PACKING, &args![menu, 8u32]);
+    tile
+}
+
+// Translated from 00720aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MenuManager::ReloadMenu` (Xbox PDB): reads a flag (`004a4040`),
+/// deletes the open menu of `class` (vtable slot 0, flag 1), then creates
+/// it again and returns what the creator returns (0 for classes it does
+/// not handle):
+/// - `0x3ff` (`fn_00720df0`), `0x40b`, `0x425`, `0x3ea`, `0x3eb`: the
+///   creator, then the timer and packing steps (`reload_with_timer`);
+/// - `0x3ec`: `HUDMainMenu::Create`;
+/// - the start menu class (`0070ede0`) when `StartMenu::Create(flag, 0)`
+///   succeeds: the menu of that class;
+/// - `0x3ef`: `LoadingMenu::Create(0, 1, 0)`; `0x403`: `LevelUpMenu::Create`;
+/// - `0x3f0`: the open menu of class `0x3f0` cast to `ContainerMenu`; when
+///   it is one, `ContainerMenu::Create(<its word at +0x74>, 1)`;
+/// - `0x402`: the open menu of class `0x3f0` cast to `BookMenu`; when it is
+///   one, its word at +0x30 (`x`), `x`'s word at +0x20 cast from
+///   `TESBoundObject` to `TESObjectBOOK`, the cast menu deleted, then
+///   `BookMenu::Create(book, x)`.
+///
+/// `this` is not read.
+pub fn menu_manager_reload_menu(e: &mut Engine, _this: Ptr, class: u32) -> u32 {
+    let open = e.call(GET_MENU_BY_CLASS, &args![class]).u32();
+    let flag = e.call(RELOAD_FLAG, &args![]).u8();
+    if open != 0 {
+        e.vcall(open, 0, &args![1u32]);
+    }
+    let timed_creator = if fn_00720df0(e) == class {
+        Some(CREATE_MAP_MENU)
+    } else {
+        match class {
+            0x40b => Some(CREATE_REPAIR_MENU),
+            0x425 => Some(CREATE_ITEM_MOD_MENU),
+            0x3ea => Some(CREATE_MENU_3EA),
+            0x3eb => Some(CREATE_MENU_3EB),
+            _ => None,
+        }
+    };
+    if let Some(create) = timed_creator {
+        return reload_with_timer(e, create);
+    }
+    if class == 0x3ec {
+        return e.call(HUD_MAIN_MENU_CREATE, &args![]).u32();
+    }
+    if e.call(START_MENU_CLASS, &args![]).u32() == class
+        && e.call(START_MENU_CREATE, &args![u32::from(flag), 0u32])
+            .bool()
+    {
+        return e.call(GET_MENU_BY_CLASS, &args![class]).u32();
+    }
+    match class {
+        0x3ef => e.call(LOADING_MENU_CREATE, &args![0u32, 1u32, 0u32]).u32(),
+        0x403 => e.call(LEVEL_UP_MENU_CREATE, &args![]).u32(),
+        0x3f0 => {
+            let open = e.call(GET_MENU_BY_CLASS, &args![0x3f0u32]).u32();
+            let container = e
+                .call(
+                    DYNAMIC_CAST,
+                    &args![open, 0u32, TILE_TYPE, CONTAINER_MENU_TYPE, 0u32],
+                )
+                .u32();
+            if container == 0 {
+                return 0;
+            }
+            let word = e.call(WORD_AT_74, &args![container]).u32();
+            e.call(CONTAINER_MENU_CREATE, &args![word, 1u32]).u32()
+        }
+        0x402 => {
+            let open = e.call(GET_MENU_BY_CLASS, &args![0x3f0u32]).u32();
+            let book_menu = e
+                .call(
+                    DYNAMIC_CAST,
+                    &args![open, 0u32, TILE_TYPE, BOOK_MENU_TYPE, 0u32],
+                )
+                .u32();
+            if book_menu == 0 {
+                return 0;
+            }
+            let reference = e.call(WORD_AT_30, &args![book_menu]).u32();
+            let object = e.call(WORD_AT_20, &args![reference]).u32();
+            let book = e
+                .call(
+                    DYNAMIC_CAST,
+                    &args![object, 0u32, BOUND_OBJECT_TYPE, BOOK_TYPE, 0u32],
+                )
+                .u32();
+            e.vcall(book_menu, 0, &args![1u32]);
+            e.call(BOOK_MENU_CREATE, &args![book, reference]).u32()
+        }
+        _ => 0,
+    }
+}
+
+// Translated from 00720df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns `0x3ff`, the class `ReloadMenu` compares first. Takes no
+/// argument (it does not read `ECX`).
+pub fn fn_00720df0(_e: &mut Engine) -> u32 {
+    0x3ff
+}
+
+// Translated from 00720e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MenuManager::DeleteMenu` (Xbox PDB): deletes the open menu of `class`
+/// (vtable slot 0, flag 1) and returns true; false when none is open.
+/// `this` is not read.
+pub fn menu_manager_delete_menu(e: &mut Engine, _this: Ptr, class: u32) -> bool {
+    let open = e.call(GET_MENU_BY_CLASS, &args![class]).u32();
+    if open == 0 {
+        return false;
+    }
+    e.vcall(open, 0, &args![1u32]);
+    true
+}
+
+// Translated from 00720e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MenuManager::GetFrontmostMenu` (Xbox PDB): walks the tile list
+/// (`tile_list`) and returns the menu of the tile whose menu has a tile
+/// (+4) with the largest trait `0xfad` above `-1e8`, among those whose
+/// trait `0xfa7` is not `6008.0` (a NaN passes) and whose word at +0x24 is
+/// neither 2 nor 4; null when none qualifies. The comparisons are the
+/// x87 flag tests (`depth < value`, ordered; `!=` with NaN passing). `this`
+/// is not read.
+pub fn menu_manager_get_frontmost_menu(e: &mut Engine, _this: Ptr) -> u32 {
+    let mut frontmost = 0;
+    let mut depth = f32::from_bits(x87_quiet_bits(e.global::<u32>(FRONTMOST_START_VALUE)));
+    let list = tile_list(e);
+    let mut node = e.call(LIST_HEAD, &args![list]).u32();
+    while node != 0 {
+        let list = tile_list(e);
+        let slot = e.call(LIST_NODE_DATA, &args![list, node]).u32();
+        let tile = e.mem.u32(slot);
+        let menu = if tile != 0 {
+            e.call(TILE_GET_MENU, &args![tile]).u32()
+        } else {
+            0
+        };
+        if menu != 0 && word_at_four(e, Ptr::new(menu)) != 0 {
+            let menu_tile = word_at_four(e, Ptr::new(menu));
+            let value = e.call(TILE_GET_FLOAT, &args![menu_tile, 0xfadu32]).f64();
+            if f64::from(depth) < value {
+                let menu_tile = word_at_four(e, Ptr::new(menu));
+                let kind = e.call(TILE_GET_FLOAT, &args![menu_tile, 0xfa7u32]).f64();
+                if kind != e.global::<f64>(FRONTMOST_EXCLUDED_VALUE)
+                    && e.call(WORD_AT_24, &args![menu]).u32() != 2
+                    && e.call(WORD_AT_24, &args![menu]).u32() != 4
+                {
+                    let menu_tile = word_at_four(e, Ptr::new(menu));
+                    depth = e.call(TILE_GET_FLOAT, &args![menu_tile, 0xfadu32]).f32();
+                    frontmost = menu;
+                }
+            }
+        }
+        let list = tile_list(e);
+        node = e.call(LIST_NEXT, &args![list, node]).u32();
+    }
+    frontmost
+}
+
+// Translated from 00720f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MenuManager::IsMenuOpen` (Xbox PDB): walks the tile list (advancing a
+/// node variable on the stack through `0057cbe0`) to the first tile whose
+/// menu has a tile (+4) and whose class (vtable slot +0x34) is `class`;
+/// true when that menu's tile has trait `0xfa3` true (`Tile::IsTrue`) and
+/// the menu's word at +0x24 is not 2. False when no menu matches. `this`
+/// is not read.
+pub fn menu_manager_is_menu_open(e: &mut Engine, _this: Ptr, class: u32) -> bool {
+    let list = tile_list(e);
+    let first = e.call(LIST_HEAD, &args![list]).u32();
+    e.with_stack(4, |e, cursor| {
+        e.mem.set_u32(cursor.addr(), first);
+        while e.mem.u32(cursor.addr()) != 0 {
+            let list = tile_list(e);
+            let slot = e.call(LIST_ADVANCE, &args![list, cursor]).u32();
+            let tile = e.mem.u32(slot);
+            let menu = if tile != 0 {
+                e.call(TILE_GET_MENU, &args![tile]).u32()
+            } else {
+                0
+            };
+            if menu != 0
+                && word_at_four(e, Ptr::new(menu)) != 0
+                && e.vcall(menu, 0x34, &args![]).u32() == class
+            {
+                let menu_tile = word_at_four(e, Ptr::new(menu));
+                return e.call(TILE_IS_TRUE, &args![menu_tile, 0xfa3u32]).bool()
+                    && e.call(WORD_AT_24, &args![menu]).u32() != 2;
+            }
+        }
+        false
+    })
+}
+
+// Translated from 00721060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `ListBox<ActorValue::Index>` constructor (`list_box_construct`).
+/// Returns `this`.
+// Translation incomplete: 00721060 - the C++ exception-unwinding frame (FS:[0]) that destroys the embedded list when a later step throws is not translated
+pub fn fn_00721060(e: &mut Engine, this: Ptr<ListBox>) -> Ptr<ListBox> {
+    list_box_construct(e, this, LIST_BOX_ACTOR_VALUE)
+}
+
+// Translated from 00721130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cdecl (list box): passes the address of its argument (a stack word
+/// holding the list box) to `005ae3d0` on the object at `011d8b54`. Every
+/// list box constructor of this unit calls it.
+pub fn fn_00721130(e: &mut Engine, list_box: u32) {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), list_box);
+        e.call(LIST_BOX_COLLECTION_ADD, &args![LIST_BOX_COLLECTION, slot]);
+    });
+}
+
+// Translated from 00721150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `ListBox<ActorValue::Index>` destructor (`list_box_destruct`).
+// Translation incomplete: 00721150 - the C++ exception-unwinding frame (FS:[0]) that destroys the embedded list when a step throws is not translated
+pub fn fn_00721150(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_destruct(e, this, LIST_BOX_ACTOR_VALUE);
+}
+
+// Translated from 007211c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cdecl (list box): passes the address of its argument (a stack word
+/// holding the list box) to `00905330` on the object at `011d8b54`. Every
+/// list box destructor of this unit calls it.
+pub fn fn_007211c0(e: &mut Engine, list_box: u32) {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), list_box);
+        e.call(
+            LIST_BOX_COLLECTION_REMOVE,
+            &args![LIST_BOX_COLLECTION, slot],
+        );
+    });
+}
+
+// Translated from 007211e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum ActorValue::Index>::RemoveAll` (Xbox PDB):
+/// `list_box_remove_all`.
+pub fn list_box_actor_value_remove_all(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_remove_all(e, this, LIST_BOX_ACTOR_VALUE);
+}
+
+// Translated from 00721410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum ActorValue::Index>::Sort` (Xbox PDB): `list_box_sort`.
+pub fn list_box_actor_value_sort(e: &mut Engine, this: Ptr<ListBox>, compare: u32) {
+    list_box_sort(e, this, LIST_BOX_ACTOR_VALUE, compare);
+}
+
+// Translated from 00721440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum ActorValue::Index>::Highlight` (Xbox PDB):
+/// `list_box_highlight`.
+pub fn list_box_actor_value_highlight(e: &mut Engine, this: Ptr<ListBox>, tile: u32) -> bool {
+    list_box_highlight(e, this, LIST_BOX_ACTOR_VALUE, tile)
+}
+
+// Translated from 007214b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum ActorValue::Index>::GetHighlightTarget` (Xbox PDB):
+/// `list_box_get_highlight_target`.
+pub fn list_box_actor_value_get_highlight_target(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    direction: u32,
+) -> u32 {
+    list_box_get_highlight_target(e, this, LIST_BOX_ACTOR_VALUE, direction)
+}
+
+// Translated from 00721850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `ListBox<PerkRankData *>` constructor (`list_box_construct`).
+/// Returns `this`.
+// Translation incomplete: 00721850 - the C++ exception-unwinding frame (FS:[0]) that destroys the embedded list when a later step throws is not translated
+pub fn fn_00721850(e: &mut Engine, this: Ptr<ListBox>) -> Ptr<ListBox> {
+    list_box_construct(e, this, LIST_BOX_PERK_RANK_DATA)
+}
+
+// Translated from 00721920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `ListBox<PerkRankData *>` destructor (`list_box_destruct`).
+// Translation incomplete: 00721920 - the C++ exception-unwinding frame (FS:[0]) that destroys the embedded list when a step throws is not translated
+pub fn fn_00721920(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_destruct(e, this, LIST_BOX_PERK_RANK_DATA);
+}
+
+// Translated from 00721990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<PerkRankData *>::RemoveAll` (Xbox PDB): `list_box_remove_all`.
+pub fn list_box_perk_rank_data_remove_all(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_remove_all(e, this, LIST_BOX_PERK_RANK_DATA);
+}
+
+// Translated from 00721bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<PerkRankData *>::Sort` (Xbox PDB): `list_box_sort`.
+pub fn list_box_perk_rank_data_sort(e: &mut Engine, this: Ptr<ListBox>, compare: u32) {
+    list_box_sort(e, this, LIST_BOX_PERK_RANK_DATA, compare);
+}
+
+// Translated from 00721bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<PerkRankData *>::Highlight` (Xbox PDB): `list_box_highlight`.
+pub fn list_box_perk_rank_data_highlight(e: &mut Engine, this: Ptr<ListBox>, tile: u32) -> bool {
+    list_box_highlight(e, this, LIST_BOX_PERK_RANK_DATA, tile)
+}
+
+// Translated from 00721c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<PerkRankData *>::GetHighlightTarget` (Xbox PDB):
+/// `list_box_get_highlight_target`.
+pub fn list_box_perk_rank_data_get_highlight_target(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    direction: u32,
+) -> u32 {
+    list_box_get_highlight_target(e, this, LIST_BOX_PERK_RANK_DATA, direction)
+}
+
+// Translated from 00722000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `ListBox<MiscStatManager::MiscStatID>` constructor
+/// (`list_box_construct`). Returns `this`.
+// Translation incomplete: 00722000 - the C++ exception-unwinding frame (FS:[0]) that destroys the embedded list when a later step throws is not translated
+pub fn fn_00722000(e: &mut Engine, this: Ptr<ListBox>) -> Ptr<ListBox> {
+    list_box_construct(e, this, LIST_BOX_MISC_STAT_ID)
+}
+
+// Translated from 007220d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `ListBox<MiscStatManager::MiscStatID>` destructor
+/// (`list_box_destruct`).
+// Translation incomplete: 007220d0 - the C++ exception-unwinding frame (FS:[0]) that destroys the embedded list when a step throws is not translated
+pub fn fn_007220d0(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_destruct(e, this, LIST_BOX_MISC_STAT_ID);
+}
+
+// Translated from 00722140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum MiscStatManager::MiscStatID>::RemoveAll` (Xbox PDB):
+/// `list_box_remove_all`.
+pub fn list_box_misc_stat_id_remove_all(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_remove_all(e, this, LIST_BOX_MISC_STAT_ID);
+}
+
+// Translated from 00722370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum MiscStatManager::MiscStatID>::Sort` (Xbox PDB):
+/// `list_box_sort`.
+pub fn list_box_misc_stat_id_sort(e: &mut Engine, this: Ptr<ListBox>, compare: u32) {
+    list_box_sort(e, this, LIST_BOX_MISC_STAT_ID, compare);
+}
+
+// Translated from 007223a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum MiscStatManager::MiscStatID>::Highlight` (Xbox PDB):
+/// `list_box_highlight`.
+pub fn list_box_misc_stat_id_highlight(e: &mut Engine, this: Ptr<ListBox>, tile: u32) -> bool {
+    list_box_highlight(e, this, LIST_BOX_MISC_STAT_ID, tile)
+}
+
+// Translated from 00722410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum MiscStatManager::MiscStatID>::GetHighlightTarget` (Xbox
+/// PDB): `list_box_get_highlight_target`.
+pub fn list_box_misc_stat_id_get_highlight_target(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    direction: u32,
+) -> u32 {
+    list_box_get_highlight_target(e, this, LIST_BOX_MISC_STAT_ID, direction)
+}
+
+// Translated from 007227b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `ListBox<StatsMenu::StatusEffect *>` constructor
+/// (`list_box_construct`). Returns `this`.
+// Translation incomplete: 007227b0 - the C++ exception-unwinding frame (FS:[0]) that destroys the embedded list when a later step throws is not translated
+pub fn fn_007227b0(e: &mut Engine, this: Ptr<ListBox>) -> Ptr<ListBox> {
+    list_box_construct(e, this, LIST_BOX_STATUS_EFFECT)
+}
+
+// Translated from 00722880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `ListBox<StatsMenu::StatusEffect *>` destructor
+/// (`list_box_destruct`).
+// Translation incomplete: 00722880 - the C++ exception-unwinding frame (FS:[0]) that destroys the embedded list when a step throws is not translated
+pub fn fn_00722880(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_destruct(e, this, LIST_BOX_STATUS_EFFECT);
+}
+
+// Translated from 007228f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StatsMenu::StatusEffect *>::RemoveAll` (Xbox PDB):
+/// `list_box_remove_all`.
+pub fn list_box_status_effect_remove_all(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_remove_all(e, this, LIST_BOX_STATUS_EFFECT);
+}
+
+// Translated from 00722b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StatsMenu::StatusEffect *>::Sort` (Xbox PDB): `list_box_sort`.
+pub fn list_box_status_effect_sort(e: &mut Engine, this: Ptr<ListBox>, compare: u32) {
+    list_box_sort(e, this, LIST_BOX_STATUS_EFFECT, compare);
+}
+
+// Translated from 00722b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StatsMenu::StatusEffect *>::Highlight` (Xbox PDB):
+/// `list_box_highlight`.
+pub fn list_box_status_effect_highlight(e: &mut Engine, this: Ptr<ListBox>, tile: u32) -> bool {
+    list_box_highlight(e, this, LIST_BOX_STATUS_EFFECT, tile)
+}
+
+// Translated from 00722bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StatsMenu::StatusEffect *>::GetHighlightTarget` (Xbox PDB):
+/// `list_box_get_highlight_target`.
+pub fn list_box_status_effect_get_highlight_target(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    direction: u32,
+) -> u32 {
+    list_box_get_highlight_target(e, this, LIST_BOX_STATUS_EFFECT, direction)
+}
+
+// Translated from 00722f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `ListBox<TESReputation *>` constructor (`list_box_construct`).
+/// Returns `this`.
+// Translation incomplete: 00722f60 - the C++ exception-unwinding frame (FS:[0]) that destroys the embedded list when a later step throws is not translated
+pub fn fn_00722f60(e: &mut Engine, this: Ptr<ListBox>) -> Ptr<ListBox> {
+    list_box_construct(e, this, LIST_BOX_TES_REPUTATION)
+}
+
+// Translated from 00723070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `ListBox<TESReputation *>` destructor (`list_box_destruct`).
+// Translation incomplete: 00723070 - the C++ exception-unwinding frame (FS:[0]) that destroys the embedded list when a step throws is not translated
+pub fn fn_00723070(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_destruct(e, this, LIST_BOX_TES_REPUTATION);
+}
+
+// Translated from 007230e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<TESReputation *>::RemoveAll` (Xbox PDB): `list_box_remove_all`.
+pub fn list_box_tes_reputation_remove_all(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_remove_all(e, this, LIST_BOX_TES_REPUTATION);
+}
+
+// Translated from 00723310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<TESReputation *>::Sort` (Xbox PDB): `list_box_sort`.
+pub fn list_box_tes_reputation_sort(e: &mut Engine, this: Ptr<ListBox>, compare: u32) {
+    list_box_sort(e, this, LIST_BOX_TES_REPUTATION, compare);
+}
+
+// Translated from 00723340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<TESReputation *>::Highlight` (Xbox PDB): `list_box_highlight`.
+pub fn list_box_tes_reputation_highlight(e: &mut Engine, this: Ptr<ListBox>, tile: u32) -> bool {
+    list_box_highlight(e, this, LIST_BOX_TES_REPUTATION, tile)
+}
+
+// Translated from 007233b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<TESReputation *>::GetHighlightTarget` (Xbox PDB):
+/// `list_box_get_highlight_target`.
+pub fn list_box_tes_reputation_get_highlight_target(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    direction: u32,
+) -> u32 {
+    list_box_get_highlight_target(e, this, LIST_BOX_TES_REPUTATION, direction)
+}
+
+// Translated from 00723750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `ListBox<unsigned int>` constructor (`list_box_construct`).
+/// Returns `this`.
+// Translation incomplete: 00723750 - the C++ exception-unwinding frame (FS:[0]) that destroys the embedded list when a later step throws is not translated
+pub fn fn_00723750(e: &mut Engine, this: Ptr<ListBox>) -> Ptr<ListBox> {
+    list_box_construct(e, this, LIST_BOX_UNSIGNED_INT)
+}
+
+// Translated from 00723820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `ListBox<unsigned int>` destructor (`list_box_destruct`).
+// Translation incomplete: 00723820 - the C++ exception-unwinding frame (FS:[0]) that destroys the embedded list when a step throws is not translated
+pub fn fn_00723820(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_destruct(e, this, LIST_BOX_UNSIGNED_INT);
+}
+
+// Translated from 00723890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<unsigned int>::RemoveAll` (Xbox PDB): `list_box_remove_all`.
+pub fn list_box_unsigned_int_remove_all(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_remove_all(e, this, LIST_BOX_UNSIGNED_INT);
+}
+
+// Translated from 00723ac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<unsigned int>::Sort` (Xbox PDB): `list_box_sort`.
+pub fn list_box_unsigned_int_sort(e: &mut Engine, this: Ptr<ListBox>, compare: u32) {
+    list_box_sort(e, this, LIST_BOX_UNSIGNED_INT, compare);
+}
+
+// Translated from 00723af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<unsigned int>::Highlight` (Xbox PDB): `list_box_highlight`.
+pub fn list_box_unsigned_int_highlight(e: &mut Engine, this: Ptr<ListBox>, tile: u32) -> bool {
+    list_box_highlight(e, this, LIST_BOX_UNSIGNED_INT, tile)
+}
+
+// Translated from 00723b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<unsigned int>::GetHighlightTarget` (Xbox PDB):
+/// `list_box_get_highlight_target`.
+pub fn list_box_unsigned_int_get_highlight_target(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    direction: u32,
+) -> u32 {
+    list_box_get_highlight_target(e, this, LIST_BOX_UNSIGNED_INT, direction)
+}
+
+// Translated from 00723f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSSimpleArray<SPECIALBookMenu::SpecialBookTextItem *>` constructor
+/// (`simple_array_construct`). Returns `this`.
+pub fn fn_00723f00(e: &mut Engine, this: Ptr) -> Ptr {
+    simple_array_construct(e, this, BOOK_TEXT_ITEMS_VTABLE)
+}
+
+// Translated from 00723f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSSimpleArray<SPECIALBookMenu::SpecialBookTextItem *>` destructor
+/// (`simple_array_destruct`).
+pub fn fn_00723f30(e: &mut Engine, this: Ptr) {
+    simple_array_destruct(e, this, BOOK_TEXT_ITEMS_VTABLE);
+}
+
+// Translated from 00723f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSSimpleArray<SPECIALBookMenu::SpecialBookButton *>` constructor
+/// (`simple_array_construct`). Returns `this`.
+pub fn fn_00723f50(e: &mut Engine, this: Ptr) -> Ptr {
+    simple_array_construct(e, this, BOOK_BUTTONS_VTABLE)
+}
+
+// Translated from 00723f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSSimpleArray<SPECIALBookMenu::SpecialBookButton *>` destructor
+/// (`simple_array_destruct`).
+pub fn fn_00723f80(e: &mut Engine, this: Ptr) {
+    simple_array_destruct(e, this, BOOK_BUTTONS_VTABLE);
+}
+
+// Translated from 00723fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSSimpleArray<LoveTesterMenu::LoveTesterTextItem *>` constructor
+/// (`simple_array_construct`). Returns `this`.
+pub fn fn_00723fa0(e: &mut Engine, this: Ptr) -> Ptr {
+    simple_array_construct(e, this, LOVE_TESTER_TEXT_ITEMS_VTABLE)
+}
+
+// Translated from 00723fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSSimpleArray<LoveTesterMenu::LoveTesterTextItem *>` destructor
+/// (`simple_array_destruct`).
+pub fn fn_00723fd0(e: &mut Engine, this: Ptr) {
+    simple_array_destruct(e, this, LOVE_TESTER_TEXT_ITEMS_VTABLE);
+}
+
+// Translated from 00723ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSSimpleArray<LoveTesterMenu::LoveTesterLightBulbGlows *>`
+/// constructor (`simple_array_construct`). Returns `this`.
+pub fn fn_00723ff0(e: &mut Engine, this: Ptr) -> Ptr {
+    simple_array_construct(e, this, LOVE_TESTER_GLOWS_VTABLE)
+}
+
+// Translated from 00724020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSSimpleArray<LoveTesterMenu::LoveTesterLightBulbGlows *>`
+/// destructor (`simple_array_destruct`).
+pub fn fn_00724020(e: &mut Engine, this: Ptr) {
+    simple_array_destruct(e, this, LOVE_TESTER_GLOWS_VTABLE);
+}
+
+// Translated from 00724040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSSimpleArray<LoveTesterMenu::LoveTesterButton *>` constructor
+/// (`simple_array_construct`). Returns `this`.
+pub fn fn_00724040(e: &mut Engine, this: Ptr) -> Ptr {
+    simple_array_construct(e, this, LOVE_TESTER_BUTTONS_VTABLE)
+}
+
+// Translated from 00724070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSSimpleArray<LoveTesterMenu::LoveTesterButton *>` destructor
+/// (`simple_array_destruct`).
+pub fn fn_00724070(e: &mut Engine, this: Ptr) {
+    simple_array_destruct(e, this, LOVE_TESTER_BUTTONS_VTABLE);
+}
+
+// Translated from 00724090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum ActorValue::Index>::_scalar_deleting_destructor_` (Xbox
+/// PDB): runs the destructor (`fn_00721150`) and frees `this` when bit 0
+/// of `flags` is set.
+pub fn list_box_actor_value_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    flags: u32,
+) -> Ptr<ListBox> {
+    fn_00721150(e, this);
+    free_if_flagged(e, this.cast(), flags);
+    this
+}
+
+// Translated from 007240c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `ListBoxBase` constructor: the vtable (RTTI `.?AVListBoxBase@@`).
+/// Returns `this`.
+pub fn fn_007240c0(e: &mut Engine, this: Ptr) -> Ptr {
+    set_vtable(e, this, LIST_BOX_BASE_VTABLE);
+    this
+}
+
+// Translated from 007240e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<PerkRankData *>::_scalar_deleting_destructor_` (Xbox PDB):
+/// runs the destructor (`fn_00721920`) and frees `this` when bit 0 of
+/// `flags` is set.
+pub fn list_box_perk_rank_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    flags: u32,
+) -> Ptr<ListBox> {
+    fn_00721920(e, this);
+    free_if_flagged(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00724110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum MiscStatManager::MiscStatID>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the destructor (`fn_007220d0`) and frees `this` when
+/// bit 0 of `flags` is set.
+pub fn list_box_misc_stat_id_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    flags: u32,
+) -> Ptr<ListBox> {
+    fn_007220d0(e, this);
+    free_if_flagged(e, this.cast(), flags);
+    this
+}
+
 // Translated from 00726070 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Reads the word at +4. Folded callers include a list's next-node pointer
 /// and an inventory entry's signed count; the accessor preserves all bits.
@@ -1142,6 +2302,111 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00720860, fn_00720860(Ptr)),
         entry!(0x007209e0, tutorial_menu_attach_tile_by_id(Ptr, i32, u32)),
         entry!(0x00720a10, fn_00720a10(Ptr) -> Ptr),
+        entry!(0x00720a30, quantity_menu_get_class(Ptr) -> u32),
+        entry!(0x00720a40, quantity_menu_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x00720a70, fn_00720a70(Ptr)),
+        entry!(0x00720aa0, menu_manager_reload_menu(Ptr, u32) -> u32),
+        entry!(0x00720df0, fn_00720df0() -> u32),
+        entry!(0x00720e00, menu_manager_delete_menu(Ptr, u32) -> bool),
+        entry!(0x00720e60, menu_manager_get_frontmost_menu(Ptr) -> u32),
+        entry!(0x00720f90, menu_manager_is_menu_open(Ptr, u32) -> bool),
+        entry!(0x00721060, fn_00721060(Ptr<ListBox>) -> Ptr<ListBox>),
+        entry!(0x00721130, fn_00721130(u32)),
+        entry!(0x00721150, fn_00721150(Ptr<ListBox>)),
+        entry!(0x007211c0, fn_007211c0(u32)),
+        entry!(0x007211e0, list_box_actor_value_remove_all(Ptr<ListBox>)),
+        entry!(0x00721410, list_box_actor_value_sort(Ptr<ListBox>, u32)),
+        entry!(
+            0x00721440,
+            list_box_actor_value_highlight(Ptr<ListBox>, u32) -> bool
+        ),
+        entry!(
+            0x007214b0,
+            list_box_actor_value_get_highlight_target(Ptr<ListBox>, u32) -> u32
+        ),
+        entry!(0x00721850, fn_00721850(Ptr<ListBox>) -> Ptr<ListBox>),
+        entry!(0x00721920, fn_00721920(Ptr<ListBox>)),
+        entry!(0x00721990, list_box_perk_rank_data_remove_all(Ptr<ListBox>)),
+        entry!(0x00721bc0, list_box_perk_rank_data_sort(Ptr<ListBox>, u32)),
+        entry!(
+            0x00721bf0,
+            list_box_perk_rank_data_highlight(Ptr<ListBox>, u32) -> bool
+        ),
+        entry!(
+            0x00721c60,
+            list_box_perk_rank_data_get_highlight_target(Ptr<ListBox>, u32) -> u32
+        ),
+        entry!(0x00722000, fn_00722000(Ptr<ListBox>) -> Ptr<ListBox>),
+        entry!(0x007220d0, fn_007220d0(Ptr<ListBox>)),
+        entry!(0x00722140, list_box_misc_stat_id_remove_all(Ptr<ListBox>)),
+        entry!(0x00722370, list_box_misc_stat_id_sort(Ptr<ListBox>, u32)),
+        entry!(
+            0x007223a0,
+            list_box_misc_stat_id_highlight(Ptr<ListBox>, u32) -> bool
+        ),
+        entry!(
+            0x00722410,
+            list_box_misc_stat_id_get_highlight_target(Ptr<ListBox>, u32) -> u32
+        ),
+        entry!(0x007227b0, fn_007227b0(Ptr<ListBox>) -> Ptr<ListBox>),
+        entry!(0x00722880, fn_00722880(Ptr<ListBox>)),
+        entry!(0x007228f0, list_box_status_effect_remove_all(Ptr<ListBox>)),
+        entry!(0x00722b20, list_box_status_effect_sort(Ptr<ListBox>, u32)),
+        entry!(
+            0x00722b50,
+            list_box_status_effect_highlight(Ptr<ListBox>, u32) -> bool
+        ),
+        entry!(
+            0x00722bc0,
+            list_box_status_effect_get_highlight_target(Ptr<ListBox>, u32) -> u32
+        ),
+        entry!(0x00722f60, fn_00722f60(Ptr<ListBox>) -> Ptr<ListBox>),
+        entry!(0x00723070, fn_00723070(Ptr<ListBox>)),
+        entry!(0x007230e0, list_box_tes_reputation_remove_all(Ptr<ListBox>)),
+        entry!(0x00723310, list_box_tes_reputation_sort(Ptr<ListBox>, u32)),
+        entry!(
+            0x00723340,
+            list_box_tes_reputation_highlight(Ptr<ListBox>, u32) -> bool
+        ),
+        entry!(
+            0x007233b0,
+            list_box_tes_reputation_get_highlight_target(Ptr<ListBox>, u32) -> u32
+        ),
+        entry!(0x00723750, fn_00723750(Ptr<ListBox>) -> Ptr<ListBox>),
+        entry!(0x00723820, fn_00723820(Ptr<ListBox>)),
+        entry!(0x00723890, list_box_unsigned_int_remove_all(Ptr<ListBox>)),
+        entry!(0x00723ac0, list_box_unsigned_int_sort(Ptr<ListBox>, u32)),
+        entry!(
+            0x00723af0,
+            list_box_unsigned_int_highlight(Ptr<ListBox>, u32) -> bool
+        ),
+        entry!(
+            0x00723b60,
+            list_box_unsigned_int_get_highlight_target(Ptr<ListBox>, u32) -> u32
+        ),
+        entry!(0x00723f00, fn_00723f00(Ptr) -> Ptr),
+        entry!(0x00723f30, fn_00723f30(Ptr)),
+        entry!(0x00723f50, fn_00723f50(Ptr) -> Ptr),
+        entry!(0x00723f80, fn_00723f80(Ptr)),
+        entry!(0x00723fa0, fn_00723fa0(Ptr) -> Ptr),
+        entry!(0x00723fd0, fn_00723fd0(Ptr)),
+        entry!(0x00723ff0, fn_00723ff0(Ptr) -> Ptr),
+        entry!(0x00724020, fn_00724020(Ptr)),
+        entry!(0x00724040, fn_00724040(Ptr) -> Ptr),
+        entry!(0x00724070, fn_00724070(Ptr)),
+        entry!(
+            0x00724090,
+            list_box_actor_value_scalar_deleting_destructor(Ptr<ListBox>, u32) -> Ptr<ListBox>
+        ),
+        entry!(0x007240c0, fn_007240c0(Ptr) -> Ptr),
+        entry!(
+            0x007240e0,
+            list_box_perk_rank_data_scalar_deleting_destructor(Ptr<ListBox>, u32) -> Ptr<ListBox>
+        ),
+        entry!(
+            0x00724110,
+            list_box_misc_stat_id_scalar_deleting_destructor(Ptr<ListBox>, u32) -> Ptr<ListBox>
+        ),
         entry!(0x00726070, word_at_four(Ptr) -> u32),
     ]
 }
@@ -1183,7 +2448,7 @@ mod tests {
             TEXT_EDITOR_CONSTRUCT,
             TEXT_EDITOR_DESTRUCT,
             STRING_SET,
-            EMPTY_CONSTRUCTOR,
+            RETURN_THIS,
             SOUND_HANDLE_CONSTRUCT,
             EMPTY_FUNCTION,
             POINTER_CONSTRUCT_DEFAULT,
@@ -1744,7 +3009,7 @@ mod tests {
         let this = filled(&mut e, 0x160);
         assert_eq!(e.call(0x0071_fbf0, &args![this]).u32(), this);
         assert_eq!(e.mem.u32(this), SURGERY_MENU_VTABLE);
-        let empty: Vec<u32> = calls(&e, EMPTY_CONSTRUCTOR).iter().map(|c| c[0]).collect();
+        let empty: Vec<u32> = calls(&e, RETURN_THIS).iter().map(|c| c[0]).collect();
         let expected: Vec<u32> = [0x74, 0x7c, 0xf8, 0x104, 0x128, 0x150]
             .iter()
             .map(|o| this + o)
@@ -2198,5 +3463,843 @@ mod tests {
             assert_eq!(e.call(0x00726070, &args![object]).u32(), word);
             assert_eq!(e.mem.bytes(object, 12), before);
         }
+    }
+
+    /// Every `ListBox` instance with the addresses of its constructor,
+    /// destructor, `RemoveAll`, `Sort`, `Highlight` and
+    /// `GetHighlightTarget`.
+    const LIST_BOXES: [(ListBoxInstance, [u32; 6]); 6] = [
+        (
+            LIST_BOX_ACTOR_VALUE,
+            [
+                0x0072_1060,
+                0x0072_1150,
+                0x0072_11e0,
+                0x0072_1410,
+                0x0072_1440,
+                0x0072_14b0,
+            ],
+        ),
+        (
+            LIST_BOX_PERK_RANK_DATA,
+            [
+                0x0072_1850,
+                0x0072_1920,
+                0x0072_1990,
+                0x0072_1bc0,
+                0x0072_1bf0,
+                0x0072_1c60,
+            ],
+        ),
+        (
+            LIST_BOX_MISC_STAT_ID,
+            [
+                0x0072_2000,
+                0x0072_20d0,
+                0x0072_2140,
+                0x0072_2370,
+                0x0072_23a0,
+                0x0072_2410,
+            ],
+        ),
+        (
+            LIST_BOX_STATUS_EFFECT,
+            [
+                0x0072_27b0,
+                0x0072_2880,
+                0x0072_28f0,
+                0x0072_2b20,
+                0x0072_2b50,
+                0x0072_2bc0,
+            ],
+        ),
+        (
+            LIST_BOX_TES_REPUTATION,
+            [
+                0x0072_2f60,
+                0x0072_3070,
+                0x0072_30e0,
+                0x0072_3310,
+                0x0072_3340,
+                0x0072_33b0,
+            ],
+        ),
+        (
+            LIST_BOX_UNSIGNED_INT,
+            [
+                0x0072_3750,
+                0x0072_3820,
+                0x0072_3890,
+                0x0072_3ac0,
+                0x0072_3af0,
+                0x0072_3b60,
+            ],
+        ),
+    ];
+
+    /// A scratch word the collection doubles copy the list box into.
+    const SEEN: u32 = 0x0320_0000;
+    /// Test vtables: menus and tiles (slot 0 `TEST_DELETE`, slot +0x14
+    /// `TEST_TILE_AT`, slot +0x34 `TEST_GET_CLASS`).
+    const TEST_VTABLE: u32 = 0x0330_0000;
+    const TEST_DELETE: u32 = 0x0330_1000;
+    const TEST_TILE_AT: u32 = 0x0330_1010;
+    const TEST_GET_CLASS: u32 = 0x0330_1020;
+    /// The tiles `TEST_TILE_AT` returns, by index.
+    const TILE_TABLE: u32 = 0x0340_0000;
+
+    fn st0(value: f64) -> Ret {
+        Ret {
+            st0: value,
+            ..Ret::default()
+        }
+    }
+
+    /// `engine()` with this file's functions registered again (it doubles
+    /// some of them), the callees of the functions from `00720a30` on
+    /// answering 0, the node accessor returning its node, `_ftol2`
+    /// truncating, and the test vtable.
+    fn full_engine() -> Engine {
+        let mut e = engine();
+        for (addr, f) in funcs() {
+            e.register(addr, f);
+        }
+        let mut externals = vec![
+            GET_MENU_BY_CLASS,
+            TILE_GET_FLOAT,
+            TILE_GET_MENU,
+            TILE_IS_TRUE,
+            TILE_SET_FLOAT,
+            TEXT_TO_TRAIT,
+            ADD_USER_TRAIT,
+            DYNAMIC_CAST,
+            RELOAD_FLAG,
+            START_MENU_CLASS,
+            CREATE_MAP_MENU,
+            CREATE_REPAIR_MENU,
+            CREATE_ITEM_MOD_MENU,
+            CREATE_MENU_3EA,
+            CREATE_MENU_3EB,
+            HUD_MAIN_MENU_CREATE,
+            START_MENU_CREATE,
+            LOADING_MENU_CREATE,
+            LEVEL_UP_MENU_CREATE,
+            CONTAINER_MENU_CREATE,
+            BOOK_MENU_CREATE,
+            WORD_AT_74,
+            WORD_AT_30,
+            WORD_AT_20,
+            NEW_TIMER,
+            RECOMPUTE_PACKING,
+            WORD_AT_24,
+            LIST_OWNER,
+            LIST_HOLDER,
+            LIST_HEAD,
+            LIST_NODE_DATA,
+            LIST_NEXT,
+            LIST_ADVANCE,
+            LIST_BOX_INIT_FLAGS,
+            LIST_BOX_HAS_FLAG,
+            LIST_BOX_BELONGS_TO,
+            LIST_SORT,
+            NODE_SET_NEXT,
+            NODE_DELETE,
+            SCROLL_ROUND,
+            SIMPLE_ARRAY_INIT,
+            SIMPLE_ARRAY_RELEASE,
+            TEST_DELETE,
+            TEST_TILE_AT,
+            TEST_GET_CLASS,
+        ];
+        for (instance, _) in LIST_BOXES {
+            externals.extend([
+                instance.synchronize,
+                instance.is_enabled,
+                instance.update_highlight_box_pos,
+                instance.set_total_list_height,
+            ]);
+        }
+        for addr in externals {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(RETURN_THIS, |_, a| word(a[0]));
+        e.register(FTOL2, |_, a| {
+            let value = f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32);
+            word(value as i32 as u32)
+        });
+        e.map(SEEN, 4);
+        for addr in [LIST_BOX_COLLECTION_ADD, LIST_BOX_COLLECTION_REMOVE] {
+            e.register(addr, |e, a| {
+                let value = e.mem.u32(a[1]);
+                e.mem.set_u32(SEEN, value);
+                Ret::default()
+            });
+        }
+        let mut slots = vec![TEST_DELETE; 14];
+        slots[5] = TEST_TILE_AT;
+        slots[13] = TEST_GET_CLASS;
+        e.put_vtable(TEST_VTABLE, &slots);
+        e.map(TILE_TABLE, 0x40);
+        for global in [
+            QUANTITY_MENU_GLOBAL,
+            KEEP_ITEM_TILES,
+            FRONTMOST_EXCLUDED_VALUE,
+        ] {
+            e.map(global, 12);
+        }
+        e
+    }
+
+    /// An object of `size` bytes with the test vtable.
+    fn object(e: &mut Engine, size: u32) -> u32 {
+        let block = e.mem.alloc(size);
+        e.mem.set_u32(block, TEST_VTABLE);
+        block
+    }
+
+    #[test]
+    fn class_getters() {
+        let mut e = full_engine();
+        assert_eq!(e.call(0x0072_0a30, &args![0u32]).u32(), 0x3f8);
+        assert_eq!(e.call(0x0072_0df0, &args![]).u32(), 0x3ff);
+    }
+
+    #[test]
+    fn quantity_menu_deleting_destructor() {
+        let mut e = full_engine();
+        let this = e.mem.alloc(0x44);
+        check_deleting_destructor(&mut e, 0x0072_0a40, this);
+        assert_eq!(calls(&e, MENU_DESTRUCT).len(), 2);
+    }
+
+    #[test]
+    fn quantity_menu_destructor() {
+        let mut e = full_engine();
+        let this = e.mem.alloc(0x44);
+        e.set_global(QUANTITY_MENU_GLOBAL, this);
+        e.call(0x0072_0a70, &args![this]);
+        assert_eq!(e.mem.u32(this), QUANTITY_MENU_VTABLE);
+        assert_eq!(e.global::<u32>(QUANTITY_MENU_GLOBAL), 0);
+        assert_eq!(calls(&e, MENU_DESTRUCT), vec![vec![this]]);
+    }
+
+    #[test]
+    fn reload_menu_with_timer() {
+        for (class, creator) in [
+            (0x3ffu32, CREATE_MAP_MENU),
+            (0x40b, CREATE_REPAIR_MENU),
+            (0x425, CREATE_ITEM_MOD_MENU),
+            (0x3ea, CREATE_MENU_3EA),
+            (0x3eb, CREATE_MENU_3EB),
+        ] {
+            let mut e = full_engine();
+            let open = object(&mut e, 8);
+            e.register_double(GET_MENU_BY_CLASS, move |_, _| word(open));
+            e.register(creator, |_, _| word(0x5000));
+            e.register(TILE_GET_FLOAT, |_, _| st0(2.5));
+            e.register(TILE_GET_MENU, |_, _| word(0x6000));
+            assert_eq!(e.call(0x0072_0aa0, &args![0u32, class]).u32(), 0x5000);
+            assert_eq!(calls(&e, GET_MENU_BY_CLASS), vec![vec![class]]);
+            assert_eq!(calls(&e, TEST_DELETE), vec![vec![open, 1]]);
+            assert_eq!(calls(&e, creator), vec![Vec::<u32>::new()]);
+            assert_eq!(calls(&e, TILE_GET_FLOAT), vec![vec![0x5000, 0xfc1]]);
+            assert_eq!(calls(&e, NEW_TIMER), vec![vec![0x6000, 2.5f32.to_bits()]]);
+            assert_eq!(calls(&e, TILE_GET_MENU), vec![vec![0x5000]; 2]);
+            assert_eq!(calls(&e, RECOMPUTE_PACKING), vec![vec![0x6000, 8]]);
+        }
+    }
+
+    #[test]
+    fn reload_menu_other_creators() {
+        let mut e = full_engine();
+        e.register(HUD_MAIN_MENU_CREATE, |_, _| word(0x77));
+        assert_eq!(e.call(0x0072_0aa0, &args![0u32, 0x3ecu32]).u32(), 0x77);
+        assert!(calls(&e, TEST_DELETE).is_empty());
+        assert!(calls(&e, NEW_TIMER).is_empty());
+        assert!(calls(&e, START_MENU_CLASS).is_empty());
+
+        e.register(LOADING_MENU_CREATE, |_, _| word(0x88));
+        assert_eq!(e.call(0x0072_0aa0, &args![0u32, 0x3efu32]).u32(), 0x88);
+        assert_eq!(calls(&e, LOADING_MENU_CREATE), vec![vec![0, 1, 0]]);
+
+        e.register(LEVEL_UP_MENU_CREATE, |_, _| word(0x99));
+        assert_eq!(e.call(0x0072_0aa0, &args![0u32, 0x403u32]).u32(), 0x99);
+
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0072_0aa0, &args![0u32, 0x400u32]).u32(), 0);
+        assert_eq!(calls(&e, GET_MENU_BY_CLASS), vec![vec![0x400]]);
+        assert_eq!(calls(&e, START_MENU_CLASS).len(), 1);
+        assert!(calls(&e, START_MENU_CREATE).is_empty());
+    }
+
+    #[test]
+    fn reload_menu_start_menu() {
+        let mut e = full_engine();
+        e.register(START_MENU_CLASS, |_, _| word(0x3f5));
+        e.register(RELOAD_FLAG, |_, _| word(0xff01));
+        e.register(GET_MENU_BY_CLASS, |_, a| {
+            word(if a[0] == 0x3f5 { 0 } else { 1 })
+        });
+        e.call(0x0072_0aa0, &args![0u32, 0x3f5u32]);
+        // The flag is the low byte; creation failed: one lookup only.
+        assert_eq!(calls(&e, START_MENU_CREATE), vec![vec![1, 0]]);
+        assert_eq!(calls(&e, GET_MENU_BY_CLASS).len(), 1);
+        e.register(START_MENU_CREATE, |_, _| word(1));
+        e.call_log = Some(vec![]);
+        e.call(0x0072_0aa0, &args![0u32, 0x3f5u32]);
+        assert_eq!(calls(&e, GET_MENU_BY_CLASS), vec![vec![0x3f5]; 2]);
+    }
+
+    #[test]
+    fn reload_menu_container_and_book() {
+        let mut e = full_engine();
+        let open = object(&mut e, 8);
+        e.register_double(GET_MENU_BY_CLASS, move |_, _| word(open));
+        e.register(DYNAMIC_CAST, |_, a| word(a[0]));
+        e.register(WORD_AT_74, |_, _| word(0x74));
+        e.register(CONTAINER_MENU_CREATE, |_, _| word(0xc0));
+        assert_eq!(e.call(0x0072_0aa0, &args![0u32, 0x3f0u32]).u32(), 0xc0);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![open, 0, TILE_TYPE, CONTAINER_MENU_TYPE, 0]]
+        );
+        assert_eq!(calls(&e, WORD_AT_74), vec![vec![open]]);
+        assert_eq!(calls(&e, CONTAINER_MENU_CREATE), vec![vec![0x74, 1]]);
+
+        e.call_log = Some(vec![]);
+        e.register(WORD_AT_30, |_, _| word(0x30));
+        e.register(WORD_AT_20, |_, _| word(0x20));
+        e.register(BOOK_MENU_CREATE, |_, _| word(0xb0));
+        assert_eq!(e.call(0x0072_0aa0, &args![0u32, 0x402u32]).u32(), 0xb0);
+        assert_eq!(calls(&e, GET_MENU_BY_CLASS), vec![vec![0x402], vec![0x3f0]]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![
+                vec![open, 0, TILE_TYPE, BOOK_MENU_TYPE, 0],
+                vec![0x20, 0, BOUND_OBJECT_TYPE, BOOK_TYPE, 0]
+            ]
+        );
+        assert_eq!(calls(&e, WORD_AT_20), vec![vec![0x30]]);
+        assert_eq!(calls(&e, TEST_DELETE), vec![vec![open, 1]; 2]);
+        assert_eq!(calls(&e, BOOK_MENU_CREATE), vec![vec![0x20, 0x30]]);
+
+        // Failed casts create nothing.
+        e.register(DYNAMIC_CAST, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0072_0aa0, &args![0u32, 0x3f0u32]).u32(), 0);
+        assert_eq!(e.call(0x0072_0aa0, &args![0u32, 0x402u32]).u32(), 0);
+        assert!(calls(&e, CONTAINER_MENU_CREATE).is_empty());
+        assert!(calls(&e, WORD_AT_30).is_empty());
+        assert!(calls(&e, BOOK_MENU_CREATE).is_empty());
+    }
+
+    #[test]
+    fn delete_menu_deletes_the_open_menu() {
+        let mut e = full_engine();
+        assert!(!e.call(0x0072_0e00, &args![0u32, 0x3f0u32]).bool());
+        let open = object(&mut e, 8);
+        e.register_double(GET_MENU_BY_CLASS, move |_, _| word(open));
+        assert!(e.call(0x0072_0e00, &args![0u32, 0x3f0u32]).bool());
+        assert_eq!(calls(&e, GET_MENU_BY_CLASS), vec![vec![0x3f0]; 2]);
+        assert_eq!(calls(&e, TEST_DELETE), vec![vec![open, 1]]);
+    }
+
+    /// The tile list doubles: owner `0x100`, holder `0x200` (list
+    /// `0x204`), nodes `[next, -, tile]`, a tile's word 0 its menu, a menu
+    /// tile's trait `t` the float at `(t - 0xfa0) * 4`, `Tile::IsTrue` the
+    /// word there, the menu's word at +0x24 its mode and +0x20 its class.
+    fn menu_list_engine() -> Engine {
+        let mut e = full_engine();
+        e.register(LIST_OWNER, |_, _| word(0x100));
+        e.register(LIST_HOLDER, |_, _| word(0x200));
+        e.register(LIST_NODE_DATA, |_, a| word(a[1] + 8));
+        e.register(LIST_NEXT, |e, a| word(e.mem.u32(a[1])));
+        e.register(LIST_ADVANCE, |e, a| {
+            let node = e.mem.u32(a[1]);
+            let next = e.mem.u32(node);
+            e.mem.set_u32(a[1], next);
+            word(node + 8)
+        });
+        e.register(TILE_GET_MENU, |e, a| word(e.mem.u32(a[0])));
+        e.register(TILE_GET_FLOAT, |e, a| {
+            st0(f64::from(e.mem.f32(a[0] + (a[1] - 0xfa0) * 4)))
+        });
+        e.register(TILE_IS_TRUE, |e, a| {
+            word(e.mem.u32(a[0] + (a[1] - 0xfa0) * 4))
+        });
+        e.register(WORD_AT_24, |e, a| word(e.mem.u32(a[0] + 0x24)));
+        e.register(TEST_GET_CLASS, |e, a| word(e.mem.u32(a[0] + 0x20)));
+        e
+    }
+
+    /// Links `menus` (menu tile traits `0xfad`, `0xfa7`, `0xfa3` as words,
+    /// mode, class) into the list and returns the menus; a `None` adds a
+    /// node whose tile has no menu.
+    fn add_menus(e: &mut Engine, menus: &[Option<(u32, u32, u32, u32, u32)>]) -> Vec<u32> {
+        let mut nodes = Vec::new();
+        let mut result = Vec::new();
+        for entry in menus {
+            let node = e.mem.alloc(12);
+            let tile = e.mem.alloc(4);
+            e.mem.set_u32(node + 8, tile);
+            if let Some((depth, kind, open, mode, class)) = *entry {
+                let menu = object(e, 0x28);
+                let menu_tile = e.mem.alloc(0x40);
+                e.mem.set_u32(tile, menu);
+                e.mem.set_u32(menu + 4, menu_tile);
+                e.mem.set_u32(menu + 0x20, class);
+                e.mem.set_u32(menu + 0x24, mode);
+                e.mem.set_u32(menu_tile + 0x34, depth);
+                e.mem.set_u32(menu_tile + 0x1c, kind);
+                e.mem.set_u32(menu_tile + 0xc, open);
+                result.push(menu);
+            } else {
+                result.push(0);
+            }
+            nodes.push(node);
+        }
+        for pair in nodes.windows(2) {
+            e.mem.set_u32(pair[0], pair[1]);
+        }
+        let first = nodes[0];
+        e.register_double(LIST_HEAD, move |_, _| word(first));
+        result
+    }
+
+    #[test]
+    fn get_frontmost_menu_takes_the_deepest_eligible_menu() {
+        let mut e = menu_list_engine();
+        e.set_global(FRONTMOST_START_VALUE, (-1e8f32).to_bits());
+        e.set_global(FRONTMOST_EXCLUDED_VALUE, 6008.0f64);
+        let f = |v: f32| v.to_bits();
+        let menus = add_menus(
+            &mut e,
+            &[
+                Some((f(5.0), 0, 0, 0, 0)),
+                None,
+                Some((f(10.0), f(6008.0), 0, 0, 0)),
+                Some((f(7.0), 0, 0, 2, 0)),
+                Some((f(8.0), 0, 0, 4, 0)),
+                Some((0x7fc0_0000, 0, 0, 0, 0)),
+                Some((f(6.0), 0x7fc0_0000, 0, 0, 0)),
+                Some((f(3.0), 0, 0, 0, 0)),
+            ],
+        );
+        assert_eq!(e.call(0x0072_0e60, &args![0u32]).u32(), menus[6]);
+        assert_eq!(calls(&e, LIST_HEAD), vec![vec![0x204]]);
+        assert_eq!(calls(&e, LIST_NEXT).len(), 8);
+    }
+
+    #[test]
+    fn get_frontmost_menu_skips_menus_without_a_tile() {
+        let mut e = menu_list_engine();
+        e.set_global(FRONTMOST_START_VALUE, (-1e8f32).to_bits());
+        let menus = add_menus(&mut e, &[Some((0, 0, 0, 0, 0))]);
+        e.mem.set_u32(menus[0] + 4, 0);
+        assert_eq!(e.call(0x0072_0e60, &args![0u32]).u32(), 0);
+        assert!(calls(&e, TILE_GET_FLOAT).is_empty());
+    }
+
+    #[test]
+    fn is_menu_open_checks_the_first_menu_of_the_class() {
+        let mut e = menu_list_engine();
+        let menus = add_menus(
+            &mut e,
+            &[
+                None,
+                Some((0, 0, 0, 0, 0x3e9)),
+                Some((0, 0, 1, 0, 0x3f0)),
+                Some((0, 0, 1, 2, 0x3f1)),
+            ],
+        );
+        assert!(e.call(0x0072_0f90, &args![0u32, 0x3f0u32]).bool());
+        assert_eq!(
+            calls(&e, TILE_IS_TRUE),
+            vec![vec![e.mem.u32(menus[2] + 4), 0xfa3]]
+        );
+        assert!(!e.call(0x0072_0f90, &args![0u32, 0x3e9u32]).bool());
+        assert!(!e.call(0x0072_0f90, &args![0u32, 0x3f1u32]).bool());
+        assert!(!e.call(0x0072_0f90, &args![0u32, 0x500u32]).bool());
+        assert_eq!(calls(&e, LIST_ADVANCE).len(), 3 + 2 + 4 + 4);
+    }
+
+    #[test]
+    fn list_box_constructors() {
+        for (instance, [constructor, ..]) in LIST_BOXES {
+            let mut e = full_engine();
+            let this = filled(&mut e, 0x30);
+            assert_eq!(e.call(constructor, &args![this]).u32(), this);
+            assert_eq!(e.mem.u32(this), instance.vtable);
+            for offset in [0xc, 0x10, 0x14, 0x18, 0x20, 0x24, 0x28] {
+                assert_eq!(e.mem.u32(this + offset), 0);
+            }
+            assert_eq!(e.mem.u16(this + 0x1c), 0);
+            assert_eq!(e.mem.u16(this + 0x2c), 0);
+            assert_eq!(e.mem.u16(this + 0x1e), 0xaaaa);
+            assert_eq!(e.mem.u16(this + 0x2e), 0xaaaa);
+            assert_eq!(calls(&e, LIST_CONSTRUCT), vec![vec![this + 4]]);
+            assert_eq!(calls(&e, LIST_BOX_INIT_FLAGS), vec![vec![this, 0, 1]]);
+            assert_eq!(
+                calls(&e, LIST_BOX_COLLECTION_ADD)[0][0],
+                LIST_BOX_COLLECTION
+            );
+            assert_eq!(e.mem.u32(SEEN), this);
+        }
+    }
+
+    #[test]
+    fn list_box_base_constructor() {
+        let mut e = full_engine();
+        let this = e.mem.alloc(4);
+        assert_eq!(e.call(0x0072_40c0, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), LIST_BOX_BASE_VTABLE);
+    }
+
+    #[test]
+    fn list_box_collection_calls_pass_the_argument_by_address() {
+        let mut e = full_engine();
+        e.call(0x0072_1130, &args![0x1234u32]);
+        assert_eq!(e.mem.u32(SEEN), 0x1234);
+        assert_eq!(
+            calls(&e, LIST_BOX_COLLECTION_ADD)[0][0],
+            LIST_BOX_COLLECTION
+        );
+        e.call(0x0072_11c0, &args![0x5678u32]);
+        assert_eq!(e.mem.u32(SEEN), 0x5678);
+        assert_eq!(
+            calls(&e, LIST_BOX_COLLECTION_REMOVE)[0][0],
+            LIST_BOX_COLLECTION
+        );
+    }
+
+    #[test]
+    fn list_box_destructors() {
+        for (instance, [_, destructor, ..]) in LIST_BOXES {
+            let mut e = full_engine();
+            let this = e.mem.alloc(0x30);
+            e.call(destructor, &args![this]);
+            assert_eq!(e.mem.u32(this), instance.vtable);
+            assert_eq!(e.mem.u32(SEEN), this);
+            assert_eq!(
+                sequence(
+                    &e,
+                    &[
+                        instance.set_total_list_height,
+                        instance.update_highlight_box_pos,
+                        LIST_BOX_COLLECTION_REMOVE,
+                        LIST_DESTRUCT,
+                    ]
+                )
+                .iter()
+                .map(|(addr, words)| (*addr, words[0]))
+                .collect::<Vec<_>>(),
+                vec![
+                    (instance.set_total_list_height, this),
+                    (instance.update_highlight_box_pos, this),
+                    (LIST_BOX_COLLECTION_REMOVE, LIST_BOX_COLLECTION),
+                    (LIST_DESTRUCT, this + 4),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn list_box_deleting_destructors() {
+        for (addr, instance) in [
+            (0x0072_4090, LIST_BOX_ACTOR_VALUE),
+            (0x0072_40e0, LIST_BOX_PERK_RANK_DATA),
+            (0x0072_4110, LIST_BOX_MISC_STAT_ID),
+        ] {
+            let mut e = full_engine();
+            let this = e.mem.alloc(0x30);
+            check_deleting_destructor(&mut e, addr, this);
+            assert_eq!(e.mem.u32(this), instance.vtable);
+            assert_eq!(calls(&e, LIST_DESTRUCT), vec![vec![this + 4]; 2]);
+        }
+    }
+
+    /// An item `[tile, data, -]` with a tile of the test vtable.
+    fn list_item(e: &mut Engine, data: u32) -> (u32, u32) {
+        let item = e.mem.alloc(12);
+        let tile = object(e, 0x10);
+        e.mem.set_u32(item, tile);
+        e.mem.set_u32(item + 4, data);
+        (item, tile)
+    }
+
+    #[test]
+    fn list_box_remove_all_deletes_every_item() {
+        for (instance, [_, _, remove_all, ..]) in LIST_BOXES {
+            let mut e = full_engine();
+            e.register(LIST_BOX_HAS_FLAG, |_, _| word(1));
+            e.register(TEXT_TO_TRAIT, |_, _| word(0x55));
+            let this = e.mem.alloc(0x30);
+            let (item0, tile0) = list_item(&mut e, 0xd0);
+            let (item1, tile1) = list_item(&mut e, 0xd1);
+            let (item2, tile2) = list_item(&mut e, 0xd2);
+            let node1 = e.mem.alloc(8);
+            let node2 = e.mem.alloc(8);
+            e.mem.set_u32(this + 4, item0);
+            e.mem.set_u32(this + 8, node1);
+            e.mem.set_u32(node1, item1);
+            e.mem.set_u32(node1 + 4, node2);
+            e.mem.set_u32(node2, item2);
+            e.mem.set_u32(this + 0xc, 0x7000);
+            e.mem.set_u32(this + 0x10, 0x7100);
+            e.mem.set_u16(this + 0x1c, 3);
+            e.mem.set_f32(this + 0x20, 9.0);
+            e.call(remove_all, &args![this]);
+            assert_eq!(
+                calls(&e, TEST_DELETE),
+                vec![vec![tile1, 1], vec![tile2, 1], vec![tile0, 1]]
+            );
+            assert_eq!(calls(&e, LIST_BOX_HAS_FLAG), vec![vec![this, 1]; 3]);
+            assert_eq!(
+                calls(&e, ITEM_DELETE),
+                vec![vec![0xd1, 1], vec![0xd2, 1], vec![0xd0, 1]]
+            );
+            assert_eq!(calls(&e, FREE), vec![vec![item1], vec![item2], vec![item0]]);
+            assert_eq!(
+                calls(&e, NODE_SET_NEXT),
+                vec![vec![node1, 0], vec![node2, 0]]
+            );
+            assert_eq!(calls(&e, NODE_DELETE), vec![vec![node1, 1], vec![node2, 1]]);
+            for offset in [4, 8, 0x10, 0x20] {
+                assert_eq!(e.mem.u32(this + offset), 0);
+            }
+            assert_eq!(e.mem.u16(this + 0x1c), 0);
+            assert_eq!(calls(&e, TEXT_TO_TRAIT), vec![vec![NUM_FILTERED_TEXT]]);
+            assert_eq!(calls(&e, TILE_SET_FLOAT), vec![vec![0x7000, 0x55, 0, 1]]);
+            assert_eq!(
+                sequence(
+                    &e,
+                    &[
+                        instance.set_total_list_height,
+                        instance.update_highlight_box_pos
+                    ]
+                ),
+                vec![
+                    (instance.set_total_list_height, vec![this]),
+                    (instance.update_highlight_box_pos, vec![this]),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn list_box_remove_all_keeps_tiles_and_data_when_told() {
+        let mut e = full_engine();
+        e.set_global(KEEP_ITEM_TILES, 1u8);
+        let this = e.mem.alloc(0x30);
+        let (item0, _) = list_item(&mut e, 0xd0);
+        // A second node without an item stops the walk.
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, item0);
+        e.mem.set_u32(this + 8, node);
+        e.call(0x0072_11e0, &args![this]);
+        assert!(calls(&e, TEST_DELETE).is_empty());
+        assert!(calls(&e, ITEM_DELETE).is_empty());
+        assert_eq!(calls(&e, FREE), vec![vec![item0]]);
+        assert!(calls(&e, NODE_DELETE).is_empty());
+        assert!(calls(&e, TILE_SET_FLOAT).is_empty());
+        assert_eq!(e.mem.u32(this + 4), 0);
+        assert_eq!(e.mem.u32(this + 8), node);
+    }
+
+    #[test]
+    fn list_box_sort_sorts_then_synchronizes() {
+        for (instance, [_, _, _, sort, ..]) in LIST_BOXES {
+            let mut e = full_engine();
+            let this = e.mem.alloc(0x30);
+            e.call(sort, &args![this, 0x42u32]);
+            assert_eq!(
+                sequence(&e, &[LIST_SORT, instance.synchronize]),
+                vec![
+                    (LIST_SORT, vec![this + 4, 0x42]),
+                    (instance.synchronize, vec![this])
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn list_box_highlight() {
+        for (instance, [_, _, _, _, highlight, _]) in LIST_BOXES {
+            let mut e = full_engine();
+            let this = e.mem.alloc(0x30);
+            e.mem.set_u32(this + 0x10, 0x99);
+            assert!(!e.call(highlight, &args![this, 0u32]).bool());
+            e.register(instance.is_enabled, |_, _| word(1));
+            assert!(!e.call(highlight, &args![this, 0x500u32]).bool());
+            assert!(calls(&e, ADD_USER_TRAIT).is_empty());
+            e.register(LIST_BOX_BELONGS_TO, |_, _| word(1));
+            e.register(ADD_USER_TRAIT, |_, _| word(0x66));
+            assert!(!e.call(highlight, &args![this, 0x500u32]).bool());
+            assert_eq!(e.mem.u32(this + 0x10), 0x99);
+            assert!(calls(&e, instance.update_highlight_box_pos).is_empty());
+            e.register(TILE_IS_TRUE, |_, _| word(1));
+            assert!(e.call(highlight, &args![this, 0x500u32]).bool());
+            assert_eq!(e.mem.u32(this + 0x10), 0x500);
+            assert_eq!(calls(&e, LIST_BOX_BELONGS_TO)[0], vec![this, 0x500]);
+            assert_eq!(
+                calls(&e, ADD_USER_TRAIT)[0],
+                vec![ENABLED_TEXT, 0xffff_ffff]
+            );
+            assert_eq!(calls(&e, TILE_IS_TRUE)[0], vec![0x500, 0x66]);
+            assert!(e.call(highlight, &args![this, 0u32]).bool());
+            assert_eq!(e.mem.u32(this + 0x10), 0);
+            assert_eq!(
+                calls(&e, instance.update_highlight_box_pos),
+                vec![vec![this]; 2]
+            );
+        }
+    }
+
+    /// A list box of three items whose tiles have the indices 0 to 2
+    /// (trait `0xfac`, the float at +8) and are enabled (the word at +4);
+    /// a container whose trait `0xfb0` is 30 and whose scroll delta is 10.
+    fn target_fixture(instance: ListBoxInstance) -> (Engine, u32, [u32; 3], u32) {
+        let mut e = full_engine();
+        e.register(instance.is_enabled, |_, _| word(1));
+        e.register(TILE_GET_FLOAT, |e, a| {
+            let offset = if a[1] == 0xfac || a[1] == 0xfb0 {
+                8
+            } else {
+                0xc
+            };
+            st0(f64::from(e.mem.f32(a[0] + offset)))
+        });
+        e.register(TILE_IS_TRUE, |e, a| word(e.mem.u32(a[0] + 4)));
+        e.register(TEXT_TO_TRAIT, |_, _| word(0x66));
+        e.register(SCROLL_ROUND, |_, a| st0(f64::from(f32::from_bits(a[0]))));
+        e.register(TEST_TILE_AT, |e, a| word(e.mem.u32(TILE_TABLE + 4 * a[1])));
+        let this = object(&mut e, 0x30);
+        let mut tiles = [0; 3];
+        let mut nodes = vec![this + 4];
+        for (index, tile) in tiles.iter_mut().enumerate() {
+            let (item, item_tile) = list_item(&mut e, 0);
+            e.mem.set_f32(item_tile + 8, index as f32);
+            e.mem.set_u32(item_tile + 4, 1);
+            e.mem.set_u32(TILE_TABLE + 4 * index as u32, item_tile);
+            *tile = item_tile;
+            if index == 0 {
+                e.mem.set_u32(this + 4, item);
+            } else {
+                let node = e.mem.alloc(8);
+                e.mem.set_u32(node, item);
+                let previous = *nodes.last().unwrap();
+                e.mem.set_u32(previous + 4, node);
+                nodes.push(node);
+            }
+        }
+        e.mem.set_u16(this + 0x1c, 3);
+        let container = e.mem.alloc(0x10);
+        e.mem.set_f32(container + 8, 30.0);
+        e.mem.set_f32(container + 0xc, 10.0);
+        (e, this, tiles, container)
+    }
+
+    #[test]
+    fn list_box_get_highlight_target_steps() {
+        for (instance, [.., target_of]) in LIST_BOXES {
+            let target = |highlighted: Option<usize>, disabled: &[usize], direction: u32| {
+                let (mut e, this, tiles, _) = target_fixture(instance);
+                if let Some(index) = highlighted {
+                    e.mem.set_u32(this + 0x10, tiles[index]);
+                }
+                for &index in disabled {
+                    e.mem.set_u32(tiles[index] + 4, 0);
+                }
+                let found = e.call(target_of, &args![this, direction]).u32();
+                let at: Calls = calls(&e, TEST_TILE_AT)
+                    .iter()
+                    .map(|words| words[1..].to_vec())
+                    .collect();
+                (tiles.iter().position(|&t| t == found), found, at)
+            };
+            // Down from nothing: the first; up from 1: 0.
+            assert_eq!(target(None, &[], 2).0, Some(0));
+            assert_eq!(target(Some(1), &[], 1).0, Some(0));
+            // Down from the last stays on it: no new target.
+            assert_eq!(target(Some(2), &[], 2).1, 0);
+            // A disabled item is skipped.
+            assert_eq!(target(Some(0), &[1], 2).0, Some(2));
+            // Past the end: back from index 1 through GetTileAt.
+            let (index, _, at) = target(Some(1), &[1, 2], 2);
+            assert_eq!(index, Some(0));
+            assert_eq!(at, vec![vec![1, 0], vec![0, 0]]);
+            // Before the start: on from index 1 through GetTileAt.
+            let (index, _, at) = target(Some(1), &[0, 1], 1);
+            assert_eq!(index, Some(2));
+            assert_eq!(at, vec![vec![1, 0], vec![2, 0]]);
+            // No move for other directions.
+            assert_eq!(target(Some(1), &[], 5).1, 0);
+        }
+    }
+
+    #[test]
+    fn list_box_get_highlight_target_pages_and_disabled_lists() {
+        for (instance, [.., target_of]) in LIST_BOXES {
+            let (mut e, this, tiles, container) = target_fixture(instance);
+            // Page down without a container does not move.
+            assert_eq!(e.call(target_of, &args![this, 0x10u32]).u32(), 0);
+            assert!(calls(&e, TILE_GET_FLOAT).is_empty());
+            assert_eq!(calls(&e, instance.is_enabled).len(), 1);
+            e.mem.set_u32(this + 0xc, container);
+            e.mem.set_u32(this + 0x10, tiles[0]);
+            assert_eq!(e.call(target_of, &args![this, 0x10u32]).u32(), tiles[2]);
+            assert_eq!(calls(&e, TEXT_TO_TRAIT), vec![vec![SCROLL_DELTA_TEXT]]);
+            assert_eq!(
+                calls(&e, TILE_GET_FLOAT)[..2],
+                [vec![container, 0xfb0], vec![container, 0x66]]
+            );
+            assert_eq!(
+                calls(&e, SCROLL_ROUND),
+                vec![vec![3.0f32.to_bits(), 1.0f32.to_bits()]]
+            );
+            e.call_log = Some(vec![]);
+            e.mem.set_u32(this + 0x10, tiles[2]);
+            assert_eq!(e.call(target_of, &args![this, 0xfu32]).u32(), tiles[0]);
+            assert_eq!(
+                calls(&e, SCROLL_ROUND),
+                vec![vec![(-3.0f32).to_bits(), 1.0f32.to_bits()]]
+            );
+            // A disabled list does not move.
+            e.register(instance.is_enabled, |_, _| Ret::default());
+            assert_eq!(e.call(target_of, &args![this, 1u32]).u32(), 0);
+        }
+    }
+
+    #[test]
+    fn simple_array_constructors_and_destructors() {
+        for (constructor, destructor, vtable) in [
+            (0x0072_3f00, 0x0072_3f30, BOOK_TEXT_ITEMS_VTABLE),
+            (0x0072_3f50, 0x0072_3f80, BOOK_BUTTONS_VTABLE),
+            (0x0072_3fa0, 0x0072_3fd0, LOVE_TESTER_TEXT_ITEMS_VTABLE),
+            (0x0072_3ff0, 0x0072_4020, LOVE_TESTER_GLOWS_VTABLE),
+            (0x0072_4040, 0x0072_4070, LOVE_TESTER_BUTTONS_VTABLE),
+        ] {
+            let mut e = full_engine();
+            let this = e.mem.alloc(0x10);
+            assert_eq!(e.call(constructor, &args![this]).u32(), this);
+            assert_eq!(e.mem.u32(this), vtable);
+            assert_eq!(calls(&e, SIMPLE_ARRAY_INIT), vec![vec![this, 0, 0]]);
+            e.mem.set_u32(this, 0);
+            e.call(destructor, &args![this]);
+            assert_eq!(e.mem.u32(this), vtable);
+            assert_eq!(calls(&e, SIMPLE_ARRAY_RELEASE), vec![vec![this, 1]]);
+        }
+    }
+
+    #[test]
+    fn vats_menu_constructor_runs_the_list_box_constructor() {
+        let mut e = full_engine();
+        let this = e.mem.alloc(0x144);
+        e.call(0x0072_0040, &args![this]);
+        assert_eq!(e.mem.u32(this + 0xb0), LIST_BOX_UNSIGNED_INT.vtable);
+        assert_eq!(
+            calls(&e, LIST_BOX_INIT_FLAGS),
+            vec![vec![this + 0xb0, 0, 1]]
+        );
     }
 }
