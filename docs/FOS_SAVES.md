@@ -28,7 +28,7 @@ tested, and `world::fos_import` builds nv-rs's `GameState` from a save
 - The `.nvse` files next to the saves are the script extender's co-saves, a
   separate format, not covered here.
 
-## Immutable inventory sources (workspace validation pending)
+## Immutable inventory sources
 
 `fos::inventory_source::InventorySource` captures an owned immutable save
 and preserves its REFR/ACHR/ACRE inventories as original item, stack and
@@ -57,7 +57,7 @@ Records without an inventory flag are reported without decoding other fields.
 All 38 package tests and strict package lint pass, including eleven new
 generated regressions covering source boundaries, opaque payloads, failures,
 raw float bits, actor/player paths, Havok rebasing, separate save contexts
-and ownership. Full workspace checks remain queued. This read-only API does
+and ownership. Full workspace checks pass (2026-10-12). This read-only API does
 not remap to installed plugins, import gameplay state, edit inventory or
 write an original save. Engine ownership and whole-save acceptance remain
 tracked in [ENGINE_STATE.md](ENGINE_STATE.md).

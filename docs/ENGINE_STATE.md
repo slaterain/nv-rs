@@ -85,8 +85,9 @@ startup; it is not production runtime initialization. Its strict source
 validation reparses the captured save and would need admission-time caching
 in a production API. Unknown payload semantics, whole-save writing and
 world/viewer integration remain open. The reusable immutable source envelope
-is now drafted as `fos::inventory_source`; its 38 package tests and strict
-package lint pass, while full workspace validation is queued. Its scope and
+is now `fos::inventory_source`. Its 38 package tests pass; on 2026-10-12
+all 16,291 workspace tests (one ignored), strict workspace lint, formatting
+and the release build passed with one Cargo job. Its scope and
 source-preservation rules are described in [FOS_SAVES.md](FOS_SAVES.md).
 
 A second private probe passes the actual new `ItemEnvelope` objects into
@@ -97,8 +98,12 @@ Owned snapshots retain their source envelopes after both the source container
 and engine are dropped. The same three decode failures and three unresolved
 holders remain outside admission. This uses generated form headers and
 partial allocator setup; it establishes bounded composition, not production
-startup or world integration. The probe still uses the frozen standalone
-fos build; rerun against final workspace artifacts after queued validation.
+startup or world integration. Both private probes were rerun on 2026-10-12
+against this branch's final release `fos` and `engine` libraries rather than
+the frozen standalone build. The read-only comparison checked 36,623 decoded
+records and 168,638 preserved items with zero invalid captures; all eighteen
+original targets pass both the envelope comparison and the engine bridge,
+with the same three decode failures and three unresolved holders.
 
 ## Script-extra follow-on
 
