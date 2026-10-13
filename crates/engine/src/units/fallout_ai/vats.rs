@@ -18,6 +18,11 @@
 //! Call conventions: arguments of every call are the words the exe pushes (read from the
 //! disassembly; the decompiler often hangs a pushed word on the wrong callee), `this` first.
 
+// Match arms mirror the exe's switch; folding an inner `if` into a guard
+// would let a failed guard fall through to later arms, which the exe does
+// not do.
+#![allow(clippy::collapsible_match)]
+
 #[allow(unused_imports)]
 use crate::prelude::*;
 
@@ -1955,22 +1960,21 @@ pub fn fn_009c9fe0(e: &mut Engine, this: Ptr<Vats>, out: Ptr, distance: f32) -> 
     let reference = e.global::<u32>(TARGET_REFERENCE);
     if command_target != 0 || reference != 0 {
         // The exe starts the aim point as the vector at 0x011f426c; both branches overwrite it.
-        let aim;
         let aimed = if command_target != 0 {
             command_target
         } else {
             reference
         };
         let object = e.vcall(aimed, 0x1d0, &args![]).u32();
-        if object != 0 {
+        let aim = if object != 0 {
             let object = e.vcall(aimed, 0x1d0, &args![]).u32();
             let bound = e.call(GET_WORLD_BOUND, &args![object]).u32();
             let slot = e.call(LIST_ITEM_SLOT, &args![bound]).u32();
-            aim = read_vec3(e, slot);
+            read_vec3(e, slot)
         } else {
             let position = e.vcall(aimed, 0x1f4, &args![]).u32();
-            aim = read_vec3(e, position);
-        }
+            read_vec3(e, position)
+        };
         let start_block = e.mem.alloc(12);
         write_vec3(e, start_block, start);
         let aim_block = e.mem.alloc(12);
