@@ -31,9 +31,6 @@ pub fn delete_item(e: &mut Engine, this: Ptr, item: Ptr) {
     e.call(0x006b8310, &args![this.addr().wrapping_add(0xc), item]);
 }
 
-/// `008530c0(this, word)`: the base initializer `00852fa0` runs first (not
-/// translated here).
-const BASE_INITIALIZER: u32 = 0x0085_30c0;
 /// `00aa1070`: the allocator (cdecl, byte count).
 const ALLOCATE: u32 = 0x00aa_1070;
 /// `00403d30` (`memset`, cdecl: destination, value, byte count).
@@ -73,11 +70,19 @@ pub fn fn_00853370(e: &mut Engine, this: Ptr, bucket_count: u32) -> Ptr {
     this
 }
 
+// Translated from 008530c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the bucket-table initializer with the vtable
+/// `01080088` (same body as `00853270`). Returns `this`.
+pub fn fn_008530c0(e: &mut Engine, this: Ptr, bucket_count: u32) -> Ptr {
+    init_bucket_table(e, this, 0x0108_0088, bucket_count);
+    this
+}
+
 // Translated from 00852fa0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map: `008530c0(this, word)` and then the vtable
 /// `01080028`. Returns `this`.
 pub fn fn_00852fa0(e: &mut Engine, this: Ptr, word: u32) -> Ptr {
-    e.call(BASE_INITIALIZER, &args![this, word]);
+    fn_008530c0(e, this, word);
     e.mem.set_u32(this.addr(), 0x0108_0028);
     this
 }
@@ -128,6 +133,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00853240, delete_item(Ptr, Ptr)),
         entry!(0x00853270, fn_00853270(Ptr, u32) -> Ptr),
         entry!(0x00853370, fn_00853370(Ptr, u32) -> Ptr),
+        entry!(0x008530c0, fn_008530c0(Ptr, u32) -> Ptr),
         entry!(0x00852fa0, fn_00852fa0(Ptr, u32) -> Ptr),
         entry!(0x00852fd0, fn_00852fd0(Ptr, u32) -> Ptr),
         entry!(0x00853000, fn_00853000(Ptr, u32) -> Ptr),
@@ -151,7 +157,6 @@ mod tests {
             }
             Ret::default()
         });
-        e.register(BASE_INITIALIZER, |_, _| Ret::default());
     }
 
     #[test]
@@ -172,17 +177,31 @@ mod tests {
     }
 
     #[test]
+    fn fn_008530c0_builds_a_zeroed_bucket_table() {
+        let mut e = Engine::new();
+        doubles(&mut e);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xc, 5);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008530c0, &args![this, 3u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x0108_0088);
+        assert_eq!(e.mem.u32(this + 4), 3);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        let table = e.mem.u32(this + 8);
+        assert_eq!(e.mem.bytes(table, 12), vec![0; 12]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (ALLOCATE, vec![12]));
+        assert_eq!(log[2], (MEMSET, vec![table, 0, 12]));
+    }
+
+    #[test]
     fn the_wrappers_store_their_own_vtables() {
         let mut e = Engine::new();
         doubles(&mut e);
         let this = e.mem.alloc(0x10);
-        e.call_log = Some(vec![]);
         e.call(0x00852fa0, &args![this, 0x11u32]);
         assert_eq!(e.mem.u32(this), 0x0108_0028);
-        assert_eq!(
-            e.call_log.take().unwrap()[1],
-            (BASE_INITIALIZER, vec![this, 0x11])
-        );
+        assert_eq!(e.mem.u32(this + 4), 0x11, "the base initializer ran");
         e.call(0x00852fd0, &args![this, 2u32]);
         assert_eq!((e.mem.u32(this), e.mem.u32(this + 4)), (0x0108_0048, 2));
         e.call(0x00853000, &args![this, 3u32]);

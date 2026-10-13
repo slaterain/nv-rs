@@ -15,9 +15,10 @@ pub fn append_bytes(e: &mut Engine, this: Ptr, source: Ptr, size: u32, no_separa
     );
 }
 
-/// `008656c0(this, word)`: the base initializer `00865660` runs first (not
-/// translated here).
-const BASE_INITIALIZER: u32 = 0x0086_56c0;
+/// `00aa1070`: the allocator (cdecl, byte count).
+const ALLOCATE: u32 = 0x00aa_1070;
+/// `00403d30` (`memset`, cdecl: destination, value, byte count).
+const MEMSET: u32 = 0x0040_3d30;
 /// `00438af0(this)`: the base teardown (`fallout shared/run_00438af0`).
 const BASE_TEARDOWN: u32 = 0x0043_8af0;
 /// `00aa10f0(pointer)`: releases a block (cdecl, one argument).
@@ -25,11 +26,29 @@ const FREE_BLOCK: u32 = 0x00aa_10f0;
 /// `__ehvec_ctor` (`00ec782f`, CRT): constructs an array of elements.
 const VECTOR_CONSTRUCT: u32 = 0x00ec_782f;
 
+// Translated from 008656c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: stores the vtable `010822a8`, the bucket count
+/// at +4 and 0 at +0xc, allocates `4 * count` bytes for the table (+8) and
+/// zeroes it. Returns `this`.
+pub fn fn_008656c0(e: &mut Engine, this: Ptr, bucket_count: u32) -> Ptr {
+    let t = this.addr();
+    e.mem.set_u32(t, 0x0108_22a8);
+    e.mem.set_u32(t + 4, bucket_count);
+    e.mem.set_u32(t + 0xc, 0);
+    let bytes = e.mem.u32(t + 4) << 2;
+    let table = e.call(ALLOCATE, &args![bytes]).u32();
+    e.mem.set_u32(t + 8, table);
+    let bytes = e.mem.u32(t + 4) << 2;
+    let table = e.mem.u32(t + 8);
+    e.call(MEMSET, &args![table, 0u32, bytes]);
+    this
+}
+
 // Translated from 00865660 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map: `008656c0(this, word)`, then the vtable
 /// `01082288`. Returns `this`.
 pub fn fn_00865660(e: &mut Engine, this: Ptr, word: u32) -> Ptr {
-    e.call(BASE_INITIALIZER, &args![this, word]);
+    fn_008656c0(e, this, word);
     e.mem.set_u32(this.addr(), 0x0108_2288);
     this
 }
@@ -78,6 +97,7 @@ pub fn fn_008651d0(e: &mut Engine, this: Ptr) -> Ptr {
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00865570, append_bytes(Ptr, Ptr, u32, u8)),
+        entry!(0x008656c0, fn_008656c0(Ptr, u32) -> Ptr),
         entry!(0x00865660, fn_00865660(Ptr, u32) -> Ptr),
         entry!(0x00865200, fn_00865200(Ptr) -> u32),
         entry!(0x00865840, fn_00865840(Ptr) -> u32),
@@ -91,7 +111,16 @@ mod tests {
     use super::*;
 
     fn doubles(e: &mut Engine) {
-        e.register(BASE_INITIALIZER, |_, _| Ret::default());
+        e.register(ALLOCATE, |e, a| Ret {
+            eax: e.mem.alloc(a[0]),
+            ..Ret::default()
+        });
+        e.register(MEMSET, |e, a| {
+            for i in 0..a[2] {
+                e.mem.set_u8(a[0] + i, a[1] as u8);
+            }
+            Ret::default()
+        });
         e.register(BASE_TEARDOWN, |_, _| Ret::default());
         e.register(FREE_BLOCK, |_, a| Ret {
             eax: a[0] + 1,
@@ -101,24 +130,34 @@ mod tests {
     }
 
     #[test]
+    fn fn_008656c0_builds_a_zeroed_bucket_table() {
+        let mut e = Engine::new();
+        doubles(&mut e);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xc, 5);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008656c0, &args![this, 3u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x0108_22a8);
+        assert_eq!(e.mem.u32(this + 4), 3);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        let table = e.mem.u32(this + 8);
+        assert_eq!(e.mem.bytes(table, 12), vec![0; 12]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (ALLOCATE, vec![12]));
+        assert_eq!(log[2], (MEMSET, vec![table, 0, 12]));
+    }
+
+    #[test]
     fn fn_00865660_and_00865200_store_the_vtable() {
         let mut e = Engine::new();
         doubles(&mut e);
         let this = e.mem.alloc(0x10);
-        e.call_log = Some(vec![]);
         assert_eq!(e.call(0x00865660, &args![this, 9u32]).u32(), this);
         assert_eq!(e.mem.u32(this), 0x0108_2288);
-        assert_eq!(
-            e.call_log.take().unwrap()[1],
-            (BASE_INITIALIZER, vec![this, 9])
-        );
+        assert_eq!(e.mem.u32(this + 4), 9, "the base initializer ran");
         e.mem.set_u32(this, 0);
-        e.call_log = Some(vec![]);
         assert_eq!(e.call(0x00865200, &args![this]).u32(), this);
-        assert_eq!(
-            e.call_log.take().unwrap()[1],
-            (BASE_INITIALIZER, vec![this, 0x25])
-        );
+        assert_eq!(e.mem.u32(this + 4), 0x25);
     }
 
     #[test]

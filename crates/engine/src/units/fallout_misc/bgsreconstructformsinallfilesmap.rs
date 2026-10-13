@@ -10,8 +10,8 @@ use crate::prelude::*;
 /// `00844db0(this, bucket_count)`: the hash-table base initializer below.
 /// `00844130` and `008433d0` pass `0x25` as the bucket count.
 const BUCKET_COUNT: u32 = 0x25;
-/// `008453a0(this, 0, 0)`: initializer `00844a90` runs after storing its
-/// vtable (outside this unit's translated range; open).
+/// `008453a0(this, 0, 0)` (`run_00845230`): runs after `00844a90` stores its
+/// vtable.
 const MAP_INITIALIZER: u32 = 0x0084_53a0;
 /// `00aa1070`: the allocator (cdecl, byte count), as `00853270` uses it.
 const ALLOCATE: u32 = 0x00aa_1070;
