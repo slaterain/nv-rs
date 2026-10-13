@@ -208,11 +208,25 @@ locals and back unchanged:
 NV_DATA="<...>/Fallout New Vegas/Data" cargo test -p host --release --test real_quest_locals -- --ignored --nocapture
 ```
 
-Open: the quest and global halves of the bridge (a quest's locals at
-`TESQuest` +0x5c, a global's value at `TESGlobal` +0x24) need those forms,
-whose constructors (`0060c4b0`, `005a6320`) are not translated yet; S6
-(quest scripts through the game's interpreter in the live game) needs
-them and the other referenced forms (see the script track plan).
+`host::global_form` makes a global (`CreateFormOfType(6)`, the `TESGlobal`
+constructor `005a6320`, then `FNAM`/`FLTV` where `TESGlobal::Load` puts
+them) and carries its value to and from the float at +0x24 that the
+interpreter reads (`00526ac0`); the same ignored test checks every global
+of `FalloutNV.esm`.
+
+Open: the quest half (a quest's locals at `TESQuest` +0x5c, read by
+`0059e300` and `0060d4d0`). The `TESQuest` constructor (`0060c4b0`) flags
+a change through `TESForm::ForceChange` and `BGSSaveLoadGame::AddChange`
+(`0084a690`), which needs the save/load game singleton (`011ddf38`,
+made by `BGSSaveLoadGame::Create` `00847480` in the `TES` constructor).
+`Create` stops at `006b3eb0`; measured by answering each untranslated
+callee with 0 (so later paths are approximate), it reaches eight more
+(`007d6bd0`, `00845550`, `00852a70`, `008651d0`, `00822600`, `0084b5c0`,
+`008433d0`, `008535e0`), and the quest constructor then `009a4250`.
+(`008c71b0`, the one-word store `ForceChange` builds its flags with, is
+translated in `fallout_misc/bgschangeflags.rs`.) S6 (quest scripts
+through the game's interpreter in the live game) needs the quest forms
+and the other referenced forms (see the script track plan).
 
 ## Lessons from the first sessions (2026-10-09)
 

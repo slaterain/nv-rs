@@ -101,3 +101,37 @@ fn quest_script_variables_go_through_the_games_locals_and_back() {
         "compiled variables the world's script doesn't name: {unnamed:?}"
     );
 }
+
+/// Every global of `FalloutNV.esm` made ([`host::global_form::GlobalForm::load`])
+/// and its value read as the interpreter reads it (`00526ac0`), then
+/// written and read again.
+#[test]
+#[ignore = "needs the player's FalloutNV.exe and FalloutNV.esm (set NV_DATA)"]
+fn globals_hold_the_worlds_values_where_the_interpreter_reads_them() {
+    use host::global_form::{read_global, write_global, GlobalForm};
+    let data = PathBuf::from(std::env::var("NV_DATA").expect("NV_DATA: the game's Data folder"));
+    let mut host = host::Host::start(&data).unwrap_or_else(|e| panic!("{e}"));
+    let plugin = Plugin::open(data.join("FalloutNV.esm")).expect("FalloutNV.esm");
+    let e = &mut host.engine;
+    let mut globals = 0;
+    for entry in plugin.records_of_type(FourCC(*b"GLOB")) {
+        let record = plugin.record(entry).expect("GLOB");
+        let name = record.editor_id().unwrap_or_default();
+        let global = GlobalForm::load(e, record.header.form_id, &record).unwrap();
+        let stored = record
+            .get(FourCC(*b"FLTV"))
+            .map(|s| f32::from_le_bytes(s.data[..4].try_into().unwrap()))
+            .unwrap_or(0.0);
+        assert_eq!(e.mem.u8(global.form + 4), 0x06, "{name}");
+        assert_eq!(
+            read_global(e, &global).to_bits(),
+            stored.to_bits(),
+            "{name}"
+        );
+        write_global(e, &global, stored + 1.5);
+        assert_eq!(read_global(e, &global), stored + 1.5, "{name}");
+        globals += 1;
+    }
+    println!("globals: {globals}");
+    assert!(globals > 100, "{globals} globals");
+}

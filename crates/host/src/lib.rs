@@ -14,6 +14,7 @@
 //! the world as plain owned data. What it is connected to: docs/ENGINE_CRATE.md
 //! ("In the running game").
 
+pub mod global_form;
 pub mod script_form;
 
 use engine::Engine;
