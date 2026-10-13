@@ -696,7 +696,7 @@ pub fn fn_00854830(e: &mut Engine, this: Ptr) -> Ptr {
 
 // Translated from 00854880 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map: adds one record to a statistics block: count
-/// + 1, the three sizes added to the three sums, and the total of the three
+/// plus 1, the three sizes added to the three sums, and the total of the three
 /// sizes taken into the minimum (`+0x10`, unsigned) and the maximum (`+0x14`).
 pub fn fn_00854880(e: &mut Engine, this: Ptr, data: u32, overhead: u32, debug: u32) {
     let t = this.addr();
