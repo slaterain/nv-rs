@@ -37,11 +37,38 @@ pub fn set_numeric_id(e: &mut Engine, this: Ptr, id: u32) {
     e.mem.set_u8(this.addr().wrapping_add(2), index as u8);
 }
 
+/// The byte table `008535e0` fills: `0x79` bytes at `011de360`, indexed by
+/// the values of the dword table at `011a2428`.
+const INDEX_BYTES: u32 = 0x011d_e360;
+/// The number of entries of the dword table, kept in a global the loop
+/// re-reads every pass.
+const INDEX_COUNT: u32 = 0x011d_e3e0;
+/// The dword table at `011a2428`.
+const INDEX_OFFSETS: u32 = 0x011a_2428;
+
+// Translated from 008535e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (the initializer `BGSSaveLoadGame::Create`
+/// runs last): fills the 0x79 bytes at `011de360` with 0xff (`memset`),
+/// stores 0x37 in `011de3e0`, then for `i` from 0 while `i < [011de3e0]`
+/// writes the byte `i` at `011de360 + table[i]` (`table` is the dword array
+/// at `011a2428`).
+pub fn fn_008535e0(e: &mut Engine) {
+    e.call(0x0040_3d30, &args![INDEX_BYTES, 0xffu32, 0x79u32]);
+    e.set_global::<u32>(INDEX_COUNT, 0x37);
+    let mut i = 0u32;
+    while i < e.global::<u32>(INDEX_COUNT) {
+        let offset = e.mem.u32(INDEX_OFFSETS.wrapping_add(i.wrapping_mul(4)));
+        e.mem.set_u8(offset.wrapping_add(INDEX_BYTES), i as u8);
+        i += 1;
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00853500, get_numeric_id(Ptr) -> u32),
         entry!(0x00853570, set_numeric_id(Ptr, u32)),
+        entry!(0x008535e0, fn_008535e0()),
     ]
 }
 
@@ -113,5 +140,38 @@ mod tests {
                 [0xaa, bytes[0], bytes[1], bytes[2], 0xaa]
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod index_table_tests {
+    use super::*;
+
+    #[test]
+    fn the_index_bytes_are_filled_through_the_offset_table() {
+        let mut e = Engine::new();
+        e.register(0x0040_3d30, |e, a| {
+            assert_eq!((a[0], a[1], a[2]), (INDEX_BYTES, 0xff, 0x79));
+            for i in 0..a[2] {
+                e.mem.set_u8(a[0] + i, a[1] as u8);
+            }
+            Ret::default()
+        });
+        e.map(INDEX_BYTES, 0x100);
+        e.map(INDEX_COUNT, 4);
+        e.map(INDEX_OFFSETS, 0x100);
+        // Offsets 0, 2, 4, ... (the first 0x37 entries); the rest stay 0xff.
+        for i in 0..0x37u32 {
+            e.mem.set_u32(INDEX_OFFSETS + 4 * i, 2 * i);
+        }
+        e.set_global::<u32>(INDEX_COUNT, 5);
+        e.call(0x008535e0, &args![]);
+        assert_eq!(e.global::<u32>(INDEX_COUNT), 0x37, "the count is reset");
+        assert_eq!(e.mem.u8(INDEX_BYTES), 0);
+        assert_eq!(e.mem.u8(INDEX_BYTES + 2), 1);
+        assert_eq!(e.mem.u8(INDEX_BYTES + 4), 2);
+        assert_eq!(e.mem.u8(INDEX_BYTES + 0x6c), 0x36);
+        assert_eq!(e.mem.u8(INDEX_BYTES + 1), 0xff, "unused bytes stay 0xff");
+        assert_eq!(e.mem.u8(INDEX_BYTES + 0x78), 0xff);
     }
 }
