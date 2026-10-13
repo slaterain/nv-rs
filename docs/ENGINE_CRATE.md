@@ -190,8 +190,29 @@ translated functions, allocator started.` The `Host` is a Bevy non-send
 resource (main thread only; the engine is not `Send`).
 
 Nothing runs through it yet (script track step S4): the game's scripts
-still run through `crates/script`. Next steps and their blockers are in
-the script track plan (S5 form and locals bridge, S6 quest scripts).
+still run through `crates/script`.
+
+`host::script_form` (step S5) makes a script record into a `Script` form
+in the game's memory and carries a script instance's variables between
+the world (`script::interp::Locals`, by name) and the game's
+`ScriptLocals` (by `SLSD` id, through `ScriptLocals::SetVariable` and
+`GetVariable`; references as form ids in the low word). `Script::Load`
+itself is bridged: its file reading (`TESFile`, `004726f0`, `00401660`,
+`ScriptVariable::Load` `005e2a20`) is not translated, so the record's
+bytes are put where it puts them; referenced forms stay unresolved.
+With the installation, an ignored test takes all 322 quest scripts of
+`FalloutNV.esm` (3,642 variables, 178 references) through the game's
+locals and back unchanged:
+
+```sh
+NV_DATA="<...>/Fallout New Vegas/Data" cargo test -p host --release --test real_quest_locals -- --ignored --nocapture
+```
+
+Open: the quest and global halves of the bridge (a quest's locals at
+`TESQuest` +0x5c, a global's value at `TESGlobal` +0x24) need those forms,
+whose constructors (`0060c4b0`, `005a6320`) are not translated yet; S6
+(quest scripts through the game's interpreter in the live game) needs
+them and the other referenced forms (see the script track plan).
 
 ## Lessons from the first sessions (2026-10-09)
 
