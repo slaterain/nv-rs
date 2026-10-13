@@ -625,6 +625,9 @@ pub fn fn_00ca0e60(e: &mut Engine, this: Ptr, target: Ptr) {
 /// `+0xC` object, and some item of the `+0xB4` array (count at `+0xB8`) must answer
 /// something else; then `node` is appended to `list` (`push_resize`). Recurses into the
 /// children (`IsNode` slot `0xC`, array `+0xA0`, count `u16` at `+0xA6`).
+// The exe passes ECX unchanged into each recursive call; keep it in the
+// signature so the registered ABI matches the original thiscall.
+#[allow(clippy::only_used_in_recursion)]
 pub fn fn_00ca0f00(e: &mut Engine, this: Ptr, node: u32, list: u32) {
     if node == 0 {
         return;
