@@ -228,6 +228,44 @@ translated in `fallout_misc/bgschangeflags.rs`.) S6 (quest scripts
 through the game's interpreter in the live game) needs the quest forms
 and the other referenced forms (see the script track plan).
 
+### Static initializers (not run yet)
+
+The game constructs many globals before `WinMain`: `__cinit` (`00eccd14`)
+runs `_initterm_e(010113c4, 010113e8)` (8 C initializers) and
+`_initterm(00fdf4a4, 010113c0)` (17,728 non-null C++ dynamic initializers,
+each usually followed by its `atexit` destructor; the engine map counts
+16,315 `init` and 5,020 `atexit` functions as "compiler: static
+init/exit"). `host::Host::start` does not run them, so those globals read
+as zero in the game's memory: a `Setting` such as `fGunShellLifetime`
+(`011ce7c0`) has neither its name nor its default. Measured on 2026-10-13
+(callees of every entry, Ghidra):
+
+| Entries | Shape | Data |
+| ---: | --- | --- |
+| 7,254 | `CALL <one-shot registration>; MOV [global], EAX`: 25 NiAnimation functions (`00a26e20`, `00a299f0`, ...) included by about 329 units each; the first call fills function-pointer tables, later calls return 0 | game (Gamebryo dispatch tables) |
+| 4,409 | no calls: constants computed with x87 (`FLD`/`FMUL`/`FSTP`) into globals | game |
+| 4,386 | a `Setting` constructor (`0040e0b0`, `0040c150`, `0044f440`, `0045cf30`, `0045cfe0`, `004a4a40`, `0045d060`, `0044fae0`) with the global, its name and default, which also adds it to its collection (`00404a70` and others), then `atexit` | game (settings) |
+| 1,066 | a math helper (`004019b0`) into a global constant | game |
+| 67 | `NiRTTI` constructors (`00a7b610`) | game (RTTI chain) |
+| 554 | 140 other shapes (`0044f570` model loader, sky `00633c90`/`00633000`, lists `0096a2d0`, strings, CRT `00ec6054`, ...) | mostly game |
+| 8 | the C initializers | CRT |
+
+One initializer is translated. Nearly all of them build game data, so they
+can't stay "library". Proposal: `Host::start` runs both tables in `__cinit`'s
+order by address (`_atexit` `00ec658f` is already `platform`). The four
+regular shapes (about 17,100 entries) are best translated by a generator
+that checks each body against its shape and refuses anything else; the
+callees (the Setting constructors and their bases `0040e130`/`00404920`/
+`0045cfb0`, the collections' `Add`, the 25 registration functions,
+`004019d0`) and the 554 others are translated by hand. Until every entry is
+translated, the run would skip the untranslated ones and print how many
+were skipped. Entries can depend on earlier ones (collections before
+settings), so the order is kept. `crates/host/tests/static_initializers.rs`
+measures the tables and holds the acceptance test: three sample settings
+(`fGunShellLifetime`, `fPlayerMaxResistance`, `fMaxArmorRating`) must have
+the name and default their initializers pass. It is ignored and fails
+today.
+
 ## Lessons from the first sessions (2026-10-09)
 
 - **Test doubles that keep state.** `e.register` takes a plain `fn`; a double that
