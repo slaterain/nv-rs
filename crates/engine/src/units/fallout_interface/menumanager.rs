@@ -18,28 +18,28 @@
 //!   `BSSimpleArray` constructors and destructors of this file through
 //!   their exe address (they run the translations registered here); the
 //!   factory calls every menu constructor through its address, as one
-//!   table. Functions of this file that the queue lists after the ones
-//!   translated so far (the per-instance `ListBox` methods from `007242c0`
-//!   on) are called through their address too.
+//!   table. The shared `ListBox` bodies call the instance's own methods
+//!   (`Synchronize`, `IsEnabled`, `UpdateHighlightBoxPos`,
+//!   `SetTotalListHeight`, `NumUnfiltered`) and the flag and tile checks
+//!   (`fn_007242c0`, `fn_007242f0`) through their exe address too (they run
+//!   the translations registered here), so tests can stand in for them.
 //! - The six `ListBox<T>` instances (`ActorValue::Index`, `PerkRankData *`,
 //!   `MiscStatManager::MiscStatID`, `StatsMenu::StatusEffect *`,
 //!   `TESReputation *`, `unsigned int`) have the same code apart from the
-//!   vtable and the instance's own methods they call; one body each
-//!   (`list_box_*`) serves all six, with a `ListBoxInstance` naming those
-//!   addresses.
+//!   vtable, the instance's own methods they call and the function-local
+//!   statics holding trait ids; one body each (`list_box_*`) serves all
+//!   six, with a `ListBoxInstance` naming those addresses.
 //! - The compiler's exception-unwinding frames (`FS:[0]`) and the security
 //!   cookie the prologues mix into them are not translated; the functions
 //!   that have them carry a `Translation incomplete` marker.
 //! - `float` stores of `FLDZ` are `0.0`.
-//!
-//! The functions from `00724140` (the `ListBox<StatsMenu::StatusEffect *>`
-//! deleting destructor) on are not translated yet.
 
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::units::fallout_interface::run_007e6320::TextEditMenu;
 use crate::units::fallout_interface::startmenu::ListBox;
 use crate::units::fallout_interface::tutorialmenu::TutorialMenu;
+use crate::units::fallout_shared::bgsdestructibleobjectform::x87_truncate_i64;
 
 /// The allocator, cdecl (size): the block or null.
 const ALLOCATE: u32 = 0x0040_1000;
@@ -285,9 +285,10 @@ const LIST_BOX_COLLECTION_REMOVE: u32 = 0x0090_5330;
 /// Thiscall (two words) the list box constructor calls with 0 and 1.
 const LIST_BOX_INIT_FLAGS: u32 = 0x007a_1950;
 /// Thiscall (bit number): whether that bit of `usFlags` (+0x2C) is set
-/// (this unit, later in the queue).
+/// (this unit, `fn_007242c0`).
 const LIST_BOX_HAS_FLAG: u32 = 0x0072_42c0;
-/// Thiscall (tile): `AL` (this unit, later in the queue).
+/// Thiscall (tile): `AL`, whether an item of the list has that tile (this
+/// unit, `fn_007242f0`).
 const LIST_BOX_BELONGS_TO: u32 = 0x0072_42f0;
 /// Thiscall (word) on the embedded list (+4).
 const LIST_SORT: u32 = 0x0083_fd60;
@@ -303,6 +304,55 @@ const KEEP_ITEM_TILES: u32 = 0x011d_8909;
 /// scroll step and `1.0`.
 const SCROLL_ROUND: u32 = 0x004b_d510;
 
+/// Thiscall on a tile (trait id, integer): stores the integer as a float
+/// (`FILD`, then `00a012d0` with the value and 1).
+const TILE_SET_INT: u32 = 0x0070_0320;
+/// `ListBox<StartMenu::Option *>::InitTilePosition` (engine map; Xbox PDB
+/// name, `fallout/interface/menus/startmenu.cpp`), thiscall on a list box
+/// (tile).
+const INIT_TILE_POSITION: u32 = 0x0072_69d0;
+/// Thiscall on a list box: the count of its embedded list (`005ae380` on
+/// +4).
+const LIST_COUNT: u32 = 0x0072_6c40;
+/// `Tile::GetValue` (engine map), thiscall on a tile (trait id): the
+/// trait's value object.
+const TILE_GET_VALUE: u32 = 0x00a0_0f30;
+/// `Tile::Value::AddAction_ov2` (engine map), thiscall on a value object
+/// (action, tile, trait id).
+const VALUE_ADD_ACTION: u32 = 0x00a0_9130;
+/// `Tile::Value::CalculateValue` (engine map), thiscall on a value object
+/// (word).
+const VALUE_CALCULATE: u32 = 0x00a0_9410;
+/// Thiscall on a tile: its byte at +0x35, in `AL`.
+const TILE_GET_BYTE_35: u32 = 0x0071_aa80;
+/// Thiscall on a tile (byte): stores the byte at +0x35.
+const TILE_SET_BYTE_35: u32 = 0x0071_aa60;
+/// Unnamed (`BSMenu/tile.cpp`), cdecl (tile, name): the tile the code
+/// takes as the highlight box, or null.
+const TILE_FIND_BY_NAME: u32 = 0x00a0_8b20;
+/// `Tile::GetChildByName` (engine map), thiscall on a tile (name).
+const TILE_GET_CHILD_BY_NAME: u32 = 0x00a0_3da0;
+/// `Tile::AddNeedsUpdate` (engine map), thiscall on a tile (flags).
+const TILE_ADD_NEEDS_UPDATE: u32 = 0x00a0_7530;
+/// Cdecl (float): a float in `ST0` (its body passes the float on to
+/// `004e4450`).
+const ROUND_FLOAT: u32 = 0x004e_4430;
+/// Cdecl (integer, integer): the larger one (signed).
+const MAX_INT: u32 = 0x0064_7b70;
+/// The `0.0` double `SetTotalListHeight` compares with.
+const ZERO_DOUBLE: u32 = 0x0101_2060;
+/// `"_highlight_y"`, `"_selected_height"`, `"_number_of_items"`.
+const HIGHLIGHT_Y_TEXT: u32 = 0x0106_f8c0;
+const SELECTED_HEIGHT_TEXT: u32 = 0x0106_f8ac;
+const NUMBER_OF_ITEMS_TEXT: u32 = 0x0106_f8f8;
+/// `"lb_highlight_box"` and the names of its edges `"top"`, `"bottom"`,
+/// `"left"`, `"right"`.
+const HIGHLIGHT_BOX_TEXT: u32 = 0x0106_f898;
+const TOP_TEXT: u32 = 0x0106_f894;
+const BOTTOM_TEXT: u32 = 0x0106_f88c;
+const LEFT_TEXT: u32 = 0x0106_f884;
+const RIGHT_TEXT: u32 = 0x0106_f87c;
+
 /// `BSSimpleArray` set-up and release, thiscall: `006b3eb0` (two words, 0
 /// and 0) and `008454f0` (one word, 1).
 const SIMPLE_ARRAY_INIT: u32 = 0x006b_3eb0;
@@ -316,10 +366,30 @@ const LOVE_TESTER_TEXT_ITEMS_VTABLE: u32 = 0x0107_03dc;
 const LOVE_TESTER_GLOWS_VTABLE: u32 = 0x0107_03f0;
 const LOVE_TESTER_BUTTONS_VTABLE: u32 = 0x0107_0404;
 
-/// One `ListBox<T>` instance: its vtable and the instance's own methods
-/// (this unit, later in the queue; the engine map names them for the
-/// `ListBox<ActorValue::Index>` copy) that the shared bodies call, all
-/// thiscall without arguments.
+/// A function-local static trait id: bit `bit` of the word at `guard`
+/// says whether the id at `cache` was looked up (`Tile::AddUserTrait(name,
+/// -1)`) yet.
+#[derive(Clone, Copy)]
+struct StaticTrait {
+    guard: u32,
+    bit: u32,
+    cache: u32,
+    name: u32,
+}
+
+const fn static_trait_of(guard: u32, bit: u32, cache: u32, name: u32) -> StaticTrait {
+    StaticTrait {
+        guard,
+        bit,
+        cache,
+        name,
+    }
+}
+
+/// One `ListBox<T>` instance: its vtable, the instance's own methods (this
+/// unit; the shared bodies call them through these addresses, all
+/// thiscall without arguments) and the function-local statics its
+/// methods keep trait ids in.
 #[derive(Clone, Copy)]
 struct ListBoxInstance {
     vtable: u32,
@@ -331,58 +401,132 @@ struct ListBoxInstance {
     update_highlight_box_pos: u32,
     /// `SetTotalListHeight`.
     set_total_list_height: u32,
+    /// `NumUnfiltered`: `EAX`.
+    num_unfiltered: u32,
+    /// `IsEnabled`'s `"_enabled"` trait id.
+    enabled_trait: StaticTrait,
+    /// `UpdateHighlightBoxPos`'s `"_highlight_y"` trait id.
+    highlight_y_trait: StaticTrait,
+    /// `UpdateHighlightBoxPos`'s `"_selected_height"` trait id.
+    selected_height_trait: StaticTrait,
+    /// `NumUnfiltered`'s `"_num_filtered"` trait id.
+    num_filtered_trait: StaticTrait,
+}
+
+/// An instance's table from its addresses: the vtable, the five methods in
+/// the order of the fields, the `IsEnabled` guard (its id just below), the
+/// `UpdateHighlightBoxPos` guard (bit 1 the `"_highlight_y"` id 4 bytes
+/// below, bit 2 the `"_selected_height"` id 8 below) and the
+/// `NumUnfiltered` guard (its id just below), as each method's disassembly
+/// uses them.
+const fn list_box_instance(
+    vtable: u32,
+    [synchronize, is_enabled, update_highlight_box_pos, set_total_list_height, num_unfiltered]: [u32; 5],
+    [enabled_guard, highlight_guard, num_filtered_guard]: [u32; 3],
+) -> ListBoxInstance {
+    ListBoxInstance {
+        vtable,
+        synchronize,
+        is_enabled,
+        update_highlight_box_pos,
+        set_total_list_height,
+        num_unfiltered,
+        enabled_trait: static_trait_of(enabled_guard, 1, enabled_guard - 4, ENABLED_TEXT),
+        highlight_y_trait: static_trait_of(
+            highlight_guard,
+            1,
+            highlight_guard - 4,
+            HIGHLIGHT_Y_TEXT,
+        ),
+        selected_height_trait: static_trait_of(
+            highlight_guard,
+            2,
+            highlight_guard - 8,
+            SELECTED_HEIGHT_TEXT,
+        ),
+        num_filtered_trait: static_trait_of(
+            num_filtered_guard,
+            1,
+            num_filtered_guard - 4,
+            NUM_FILTERED_TEXT,
+        ),
+    }
 }
 
 /// `ListBox<ActorValue::Index>` (RTTI `.?AV?$ListBox@W4Index@ActorValue@@@@`).
-const LIST_BOX_ACTOR_VALUE: ListBoxInstance = ListBoxInstance {
-    vtable: 0x0107_0220,
-    synchronize: 0x0072_4360,
-    is_enabled: 0x0072_4430,
-    update_highlight_box_pos: 0x0072_44e0,
-    set_total_list_height: 0x0072_4800,
-};
+const LIST_BOX_ACTOR_VALUE: ListBoxInstance = list_box_instance(
+    0x0107_0220,
+    [
+        0x0072_4360,
+        0x0072_4430,
+        0x0072_44e0,
+        0x0072_4800,
+        0x0072_6660,
+    ],
+    [0x011d_8dd0, 0x011d_8ddc, 0x011d_8e48],
+);
 /// `ListBox<PerkRankData *>` (RTTI `.?AV?$ListBox@PAUPerkRankData@@@@`).
-const LIST_BOX_PERK_RANK_DATA: ListBoxInstance = ListBoxInstance {
-    vtable: 0x0107_02ec,
-    synchronize: 0x0072_4930,
-    is_enabled: 0x0072_4a00,
-    update_highlight_box_pos: 0x0072_4ab0,
-    set_total_list_height: 0x0072_4dd0,
-};
+const LIST_BOX_PERK_RANK_DATA: ListBoxInstance = list_box_instance(
+    0x0107_02ec,
+    [
+        0x0072_4930,
+        0x0072_4a00,
+        0x0072_4ab0,
+        0x0072_4dd0,
+        0x0072_6710,
+    ],
+    [0x011d_8de4, 0x011d_8df0, 0x011d_8e50],
+);
 /// `ListBox<MiscStatManager::MiscStatID>` (RTTI
 /// `.?AV?$ListBox@W4MiscStatID@MiscStatManager@@@@`).
-const LIST_BOX_MISC_STAT_ID: ListBoxInstance = ListBoxInstance {
-    vtable: 0x0107_0314,
-    synchronize: 0x0072_4f00,
-    is_enabled: 0x0072_4fd0,
-    update_highlight_box_pos: 0x0072_5080,
-    set_total_list_height: 0x0072_53a0,
-};
+const LIST_BOX_MISC_STAT_ID: ListBoxInstance = list_box_instance(
+    0x0107_0314,
+    [
+        0x0072_4f00,
+        0x0072_4fd0,
+        0x0072_5080,
+        0x0072_53a0,
+        0x0072_67c0,
+    ],
+    [0x011d_8df8, 0x011d_8e04, 0x011d_8e58],
+);
 /// `ListBox<StatsMenu::StatusEffect *>` (RTTI
 /// `.?AV?$ListBox@PAUStatusEffect@StatsMenu@@@@`).
-const LIST_BOX_STATUS_EFFECT: ListBoxInstance = ListBoxInstance {
-    vtable: 0x0107_033c,
-    synchronize: 0x0072_54d0,
-    is_enabled: 0x0072_55a0,
-    update_highlight_box_pos: 0x0072_5650,
-    set_total_list_height: 0x0072_5970,
-};
+const LIST_BOX_STATUS_EFFECT: ListBoxInstance = list_box_instance(
+    0x0107_033c,
+    [
+        0x0072_54d0,
+        0x0072_55a0,
+        0x0072_5650,
+        0x0072_5970,
+        0x0072_6870,
+    ],
+    [0x011d_8e0c, 0x011d_8e18, 0x011d_8e60],
+);
 /// `ListBox<TESReputation *>` (RTTI `.?AV?$ListBox@PAVTESReputation@@@@`).
-const LIST_BOX_TES_REPUTATION: ListBoxInstance = ListBoxInstance {
-    vtable: 0x0107_0364,
-    synchronize: 0x0072_5aa0,
-    is_enabled: 0x0072_5b70,
-    update_highlight_box_pos: 0x0072_5c20,
-    set_total_list_height: 0x0072_5f40,
-};
+const LIST_BOX_TES_REPUTATION: ListBoxInstance = list_box_instance(
+    0x0107_0364,
+    [
+        0x0072_5aa0,
+        0x0072_5b70,
+        0x0072_5c20,
+        0x0072_5f40,
+        0x0072_6920,
+    ],
+    [0x011d_8e20, 0x011d_8e2c, 0x011d_8e68],
+);
 /// `ListBox<unsigned int>` (RTTI `.?AV?$ListBox@I@@`).
-const LIST_BOX_UNSIGNED_INT: ListBoxInstance = ListBoxInstance {
-    vtable: 0x0107_038c,
-    synchronize: 0x0072_6090,
-    is_enabled: 0x0072_6160,
-    update_highlight_box_pos: 0x0072_6210,
-    set_total_list_height: 0x0072_6530,
-};
+const LIST_BOX_UNSIGNED_INT: ListBoxInstance = list_box_instance(
+    0x0107_038c,
+    [
+        0x0072_6090,
+        0x0072_6160,
+        0x0072_6210,
+        0x0072_6530,
+        0x0072_6b40,
+    ],
+    [0x011d_8e34, 0x011d_8e40, 0x011d_8e70],
+);
 
 /// `CreateMenuByClass`'s table, in class order: (menu class, allocation
 /// size, constructor). Read from the jump tables at `0071f154` (targets)
@@ -761,6 +905,217 @@ fn simple_array_destruct(e: &mut Engine, this: Ptr, vtable: u32) {
     set_vtable(e, this, vtable);
     e.call(SIMPLE_ARRAY_RELEASE, &args![this, 1u32]);
 }
+
+/// Looks the static trait id up the first time (the guard bit is set
+/// before `Tile::AddUserTrait(name, -1)` runs, as the code does); the code
+/// then reads the id from the static where it uses it.
+fn init_static_trait(e: &mut Engine, which: StaticTrait) {
+    if e.mem.u32(which.guard) & which.bit == 0 {
+        let guard = e.mem.u32(which.guard);
+        e.mem.set_u32(which.guard, guard | which.bit);
+        let id = e
+            .call(ADD_USER_TRAIT, &args![which.name, 0xffff_ffffu32])
+            .u32();
+        e.mem.set_u32(which.cache, id);
+    }
+}
+
+/// The first node of the embedded list (`this + 4`; the code guards a null
+/// `this`).
+fn first_node(this: Ptr<ListBox>) -> u32 {
+    if this.is_null() {
+        0
+    } else {
+        this.addr() + 4
+    }
+}
+
+/// `ListBox<T>::Synchronize` (Xbox PDB): clears `usNextIndex` and
+/// `fTotalListHeight`, then for every node with an item whose filtered
+/// byte (+8) is clear gives the item's tile the next index (trait `0xfac`
+/// through `00700320`) and its position (`InitTilePosition`); then
+/// `SetTotalListHeight` and `UpdateHighlightBoxPos`.
+fn list_box_synchronize(e: &mut Engine, this: Ptr<ListBox>, instance: ListBoxInstance) {
+    e.set(this, ListBox::usNextIndex, 0);
+    e.set(this, ListBox::fTotalListHeight, 0.0);
+    let mut node = first_node(this);
+    while node != 0 && node_item(e, node) != 0 {
+        let item = node_item(e, node);
+        if e.mem.u8(item + 8) == 0 {
+            let index = e.get(this, ListBox::usNextIndex);
+            e.set(this, ListBox::usNextIndex, index.wrapping_add(1));
+            let item = node_item(e, node);
+            let tile = e.mem.u32(item);
+            e.call(TILE_SET_INT, &args![tile, 0xfacu32, u32::from(index)]);
+            let item = node_item(e, node);
+            let tile = e.mem.u32(item);
+            e.call(INIT_TILE_POSITION, &args![this, tile]);
+        }
+        node = word_at_four(e, Ptr::new(node));
+    }
+    e.call(instance.set_total_list_height, &args![this]);
+    e.call(instance.update_highlight_box_pos, &args![this]);
+}
+
+/// `ListBox<T>::IsEnabled` (Xbox PDB): the container exists and its
+/// `"_enabled"` trait (a function-local static) is true.
+fn list_box_is_enabled(e: &mut Engine, this: Ptr<ListBox>, instance: ListBoxInstance) -> bool {
+    init_static_trait(e, instance.enabled_trait);
+    let container = e.get(this, ListBox::pContainerRect);
+    if container.is_null() {
+        return false;
+    }
+    let enabled = e.mem.u32(instance.enabled_trait.cache);
+    e.call(TILE_IS_TRUE, &args![container, enabled]).bool()
+}
+
+/// The tile's byte at +0x35 set to `flag` (`0071aa60`) and the tile queued
+/// for an update with flags 8.
+fn mark_tile(e: &mut Engine, tile: u32, flag: u32) {
+    e.call(TILE_SET_BYTE_35, &args![tile, flag]);
+    e.call(TILE_ADD_NEEDS_UPDATE, &args![tile, 8u32]);
+}
+
+/// `ListBox<T>::UpdateHighlightBoxPos` (Xbox PDB): looks the
+/// `"_highlight_y"` and `"_selected_height"` trait ids up (statics); with
+/// a container, and no highlighted item, sets them to -1 and 0 on the
+/// container; with one, makes both values follow the highlighted tile's
+/// traits `0xfa2` and `0xfb0` (action `0x7d0`, then calculated) and gives
+/// the container's `"lb_highlight_box"` tile, and its `"top"`, `"bottom"`,
+/// `"left"` and `"right"` children when `"top"` exists (the other three
+/// are not checked for null), the highlighted tile's byte at +0x35 (as 1
+/// or 0) and an update.
+fn list_box_update_highlight_box_pos(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    instance: ListBoxInstance,
+) {
+    init_static_trait(e, instance.highlight_y_trait);
+    init_static_trait(e, instance.selected_height_trait);
+    let y_cache = instance.highlight_y_trait.cache;
+    let height_cache = instance.selected_height_trait.cache;
+    if e.get(this, ListBox::pContainerRect).is_null() {
+        return;
+    }
+    if e.get(this, ListBox::pHighlightedItem).is_null() {
+        let y_trait = e.mem.u32(y_cache);
+        let container = e.get(this, ListBox::pContainerRect);
+        e.call(TILE_SET_INT, &args![container, y_trait, 0xffff_ffffu32]);
+        let height_trait = e.mem.u32(height_cache);
+        let container = e.get(this, ListBox::pContainerRect);
+        e.call(TILE_SET_INT, &args![container, height_trait, 0u32]);
+        return;
+    }
+    let y_trait = e.mem.u32(y_cache);
+    let container = e.get(this, ListBox::pContainerRect);
+    let y_value = e.call(TILE_GET_VALUE, &args![container, y_trait]).u32();
+    let height_trait = e.mem.u32(height_cache);
+    let container = e.get(this, ListBox::pContainerRect);
+    let height_value = e
+        .call(TILE_GET_VALUE, &args![container, height_trait])
+        .u32();
+    let highlighted = e.get(this, ListBox::pHighlightedItem);
+    e.call(
+        VALUE_ADD_ACTION,
+        &args![y_value, 0x7d0u32, highlighted, 0xfa2u32],
+    );
+    e.call(VALUE_CALCULATE, &args![y_value, 0u32]);
+    let highlighted = e.get(this, ListBox::pHighlightedItem);
+    e.call(
+        VALUE_ADD_ACTION,
+        &args![height_value, 0x7d0u32, highlighted, 0xfb0u32],
+    );
+    e.call(VALUE_CALCULATE, &args![height_value, 0u32]);
+    let highlighted = e.get(this, ListBox::pHighlightedItem);
+    let flag = u32::from(e.call(TILE_GET_BYTE_35, &args![highlighted]).bool());
+    let container = e.get(this, ListBox::pContainerRect);
+    let box_tile = e
+        .call(TILE_FIND_BY_NAME, &args![container, HIGHLIGHT_BOX_TEXT])
+        .u32();
+    if box_tile == 0 {
+        return;
+    }
+    let top = e
+        .call(TILE_GET_CHILD_BY_NAME, &args![box_tile, TOP_TEXT])
+        .u32();
+    if top != 0 {
+        mark_tile(e, top, flag);
+        for name in [BOTTOM_TEXT, LEFT_TEXT, RIGHT_TEXT] {
+            let edge = e.call(TILE_GET_CHILD_BY_NAME, &args![box_tile, name]).u32();
+            mark_tile(e, edge, flag);
+        }
+    }
+    mark_tile(e, box_tile, flag);
+}
+
+/// `ListBox<T>::SetTotalListHeight` (Xbox PDB): with a container, its
+/// visible height (trait `0xfb0`, stored as a `float`) and the total list
+/// height decide the number of scroll steps: 1, unless both are above
+/// `0.0` and the visible height is below the total, then
+/// `max(_ftol2(004e4430(unfiltered * (total - visible) / total)) + 1, 2)`
+/// (the ratio stored as a `float`). With both above `0.0` and more than
+/// one step, the container's `"_scroll_delta"` becomes
+/// `(total - visible) / (steps - 1)`; with a scroll bar its
+/// `"_number_of_items"` becomes the number of steps.
+fn list_box_set_total_list_height(e: &mut Engine, this: Ptr<ListBox>, instance: ListBoxInstance) {
+    let container = e.get(this, ListBox::pContainerRect);
+    if container.is_null() {
+        return;
+    }
+    let visible = e.call(TILE_GET_FLOAT, &args![container, 0xfb0u32]).f64() as f32;
+    let mut steps = 1i32;
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    // `FCOMP; TEST AH,0x41; JNZ`: on only when strictly above (not NaN).
+    if f64::from(e.get(this, ListBox::fTotalListHeight)) > zero && f64::from(visible) > zero {
+        // `FCOMPP; TEST AH,5; JP`: on only when the visible height is
+        // below the total (ordered).
+        if f64::from(visible) < f64::from(e.get(this, ListBox::fTotalListHeight)) {
+            let count = e.call(instance.num_unfiltered, &args![this]).u32();
+            let total = f64::from(e.get(this, ListBox::fTotalListHeight));
+            let ratio = (f64::from(count) * (total - f64::from(visible)) / total) as f32;
+            let rounded = e
+                .call(ROUND_FLOAT, &args![x87_quiet_bits(ratio.to_bits())])
+                .f64();
+            let whole = e.call(FTOL2, &args![rounded]).i32();
+            steps = e.call(MAX_INT, &args![whole.wrapping_add(1), 2i32]).i32();
+        }
+        if steps > 1 {
+            let total = f64::from(e.get(this, ListBox::fTotalListHeight));
+            let delta = ((total - f64::from(visible)) / f64::from(steps - 1)) as f32;
+            let scroll_delta = e.call(TEXT_TO_TRAIT, &args![SCROLL_DELTA_TEXT]).u32();
+            let container = e.get(this, ListBox::pContainerRect);
+            e.call(
+                TILE_SET_FLOAT,
+                &args![
+                    container,
+                    scroll_delta,
+                    x87_quiet_bits(delta.to_bits()),
+                    1u32
+                ],
+            );
+        }
+    }
+    if !e.get(this, ListBox::pScrollBar).is_null() {
+        let items = e.call(TEXT_TO_TRAIT, &args![NUMBER_OF_ITEMS_TEXT]).u32();
+        let scroll_bar = e.get(this, ListBox::pScrollBar);
+        e.call(TILE_SET_INT, &args![scroll_bar, items, steps]);
+    }
+}
+
+/// `ListBox<T>::NumUnfiltered` (Xbox PDB): the list's count (`00726c40`)
+/// minus the container's `"_num_filtered"` trait (a function-local
+/// static), truncated by a 64-bit `FISTP` and taken to 32 bits.
+fn list_box_num_unfiltered(e: &mut Engine, this: Ptr<ListBox>, instance: ListBoxInstance) -> i32 {
+    init_static_trait(e, instance.num_filtered_trait);
+    let count = e.call(LIST_COUNT, &args![this]).i32();
+    let num_filtered = e.mem.u32(instance.num_filtered_trait.cache);
+    let container = e.get(this, ListBox::pContainerRect);
+    let filtered = e
+        .call(TILE_GET_FLOAT, &args![container, num_filtered])
+        .f64();
+    count.wrapping_sub(x87_truncate_i64(filtered) as i32)
+}
+
 // Translated from 0071e290 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `MenuManager::Instance` (Xbox PDB), cdecl: with `create` set and no
 /// instance yet, allocates one byte, constructs the manager in it
@@ -2193,11 +2548,356 @@ pub fn list_box_misc_stat_id_scalar_deleting_destructor(
     this
 }
 
+// Translated from 00724140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StatsMenu::StatusEffect *>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the destructor (`fn_00722880`) and frees `this` when
+/// bit 0 of `flags` is set.
+pub fn list_box_status_effect_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    flags: u32,
+) -> Ptr<ListBox> {
+    fn_00722880(e, this);
+    free_if_flagged(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00724170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<TESReputation *>::_scalar_deleting_destructor_` (Xbox PDB):
+/// runs the destructor (`fn_00723070`) and frees `this` when bit 0 of
+/// `flags` is set.
+pub fn list_box_tes_reputation_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    flags: u32,
+) -> Ptr<ListBox> {
+    fn_00723070(e, this);
+    free_if_flagged(e, this.cast(), flags);
+    this
+}
+
+// Translated from 007241a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<unsigned int>::_scalar_deleting_destructor_` (Xbox PDB): runs
+/// the destructor (`fn_00723820`) and frees `this` when bit 0 of `flags`
+/// is set.
+pub fn list_box_unsigned_int_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    flags: u32,
+) -> Ptr<ListBox> {
+    fn_00723820(e, this);
+    free_if_flagged(e, this.cast(), flags);
+    this
+}
+
+// Translated from 007241d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<SPECIALBookMenu::SpecialBookTextItem *, 1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the destructor (`fn_00723f30`) and frees `this` when bit 0
+/// of `flags` is set.
+pub fn simple_array_special_book_text_item_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00723f30(e, this);
+    free_if_flagged(e, this, flags);
+    this
+}
+
+// Translated from 00724200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<SPECIALBookMenu::SpecialBookButton *, 1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the destructor (`fn_00723f80`) and frees `this` when bit 0
+/// of `flags` is set.
+pub fn simple_array_special_book_button_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00723f80(e, this);
+    free_if_flagged(e, this, flags);
+    this
+}
+
+// Translated from 00724230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<LoveTesterMenu::LoveTesterTextItem *, 1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the destructor (`fn_00723fd0`) and frees `this` when bit 0
+/// of `flags` is set.
+pub fn simple_array_love_tester_text_item_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00723fd0(e, this);
+    free_if_flagged(e, this, flags);
+    this
+}
+
+// Translated from 00724260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<LoveTesterMenu::LoveTesterLightBulbGlows *, 1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the destructor (`fn_00724020`) and frees `this` when bit 0
+/// of `flags` is set.
+pub fn simple_array_love_tester_light_bulb_glows_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00724020(e, this);
+    free_if_flagged(e, this, flags);
+    this
+}
+
+// Translated from 00724290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<LoveTesterMenu::LoveTesterButton *, 1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the destructor (`fn_00724070`) and frees `this` when bit 0
+/// of `flags` is set.
+pub fn simple_array_love_tester_button_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00724070(e, this);
+    free_if_flagged(e, this, flags);
+    this
+}
+
+// Translated from 007242c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit `bit` (the shift count masked to 5 bits, as `SHL` does) of
+/// the list box's `usFlags` is set.
+pub fn fn_007242c0(e: &mut Engine, this: Ptr<ListBox>, bit: u32) -> bool {
+    let flags = u32::from(e.get(this, ListBox::usFlags));
+    flags & (1u32 << (bit & 0x1f)) != 0
+}
+
+// Translated from 007242f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether an item of the list box has `tile` as its tile: walks the
+/// nodes from the first while the node and its item are non-null.
+pub fn fn_007242f0(e: &mut Engine, this: Ptr<ListBox>, tile: u32) -> bool {
+    let mut node = first_node(this);
+    while node != 0 && node_item(e, node) != 0 {
+        let item = node_item(e, node);
+        if e.mem.u32(item) == tile {
+            return true;
+        }
+        node = word_at_four(e, Ptr::new(node));
+    }
+    false
+}
+
+// Translated from 00724360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum ActorValue::Index>::Synchronize` (Xbox PDB): `list_box_synchronize`.
+pub fn list_box_actor_value_synchronize(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_synchronize(e, this, LIST_BOX_ACTOR_VALUE);
+}
+
+// Translated from 00724430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum ActorValue::Index>::IsEnabled` (Xbox PDB): `list_box_is_enabled`.
+// Translation incomplete: 00724430 - the C++ exception-unwinding frame (FS:[0]) around the static trait id's initialization is not translated
+pub fn list_box_actor_value_is_enabled(e: &mut Engine, this: Ptr<ListBox>) -> bool {
+    list_box_is_enabled(e, this, LIST_BOX_ACTOR_VALUE)
+}
+
+// Translated from 007244e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum ActorValue::Index>::UpdateHighlightBoxPos` (Xbox PDB):
+/// `list_box_update_highlight_box_pos`.
+// Translation incomplete: 007244e0 - the C++ exception-unwinding frame (FS:[0]) around the static trait ids' initialization is not translated
+pub fn list_box_actor_value_update_highlight_box_pos(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_update_highlight_box_pos(e, this, LIST_BOX_ACTOR_VALUE);
+}
+
+// Translated from 00724800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum ActorValue::Index>::SetTotalListHeight` (Xbox PDB):
+/// `list_box_set_total_list_height`.
+pub fn list_box_actor_value_set_total_list_height(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_set_total_list_height(e, this, LIST_BOX_ACTOR_VALUE);
+}
+
+// Translated from 00724930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<PerkRankData *>::Synchronize` (Xbox PDB): `list_box_synchronize`.
+pub fn list_box_perk_rank_data_synchronize(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_synchronize(e, this, LIST_BOX_PERK_RANK_DATA);
+}
+
+// Translated from 00724a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<PerkRankData *>::IsEnabled` (Xbox PDB): `list_box_is_enabled`.
+// Translation incomplete: 00724a00 - the C++ exception-unwinding frame (FS:[0]) around the static trait id's initialization is not translated
+pub fn list_box_perk_rank_data_is_enabled(e: &mut Engine, this: Ptr<ListBox>) -> bool {
+    list_box_is_enabled(e, this, LIST_BOX_PERK_RANK_DATA)
+}
+
+// Translated from 00724ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<PerkRankData *>::UpdateHighlightBoxPos` (Xbox PDB):
+/// `list_box_update_highlight_box_pos`.
+// Translation incomplete: 00724ab0 - the C++ exception-unwinding frame (FS:[0]) around the static trait ids' initialization is not translated
+pub fn list_box_perk_rank_data_update_highlight_box_pos(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_update_highlight_box_pos(e, this, LIST_BOX_PERK_RANK_DATA);
+}
+
+// Translated from 00724dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<PerkRankData *>::SetTotalListHeight` (Xbox PDB):
+/// `list_box_set_total_list_height`.
+pub fn list_box_perk_rank_data_set_total_list_height(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_set_total_list_height(e, this, LIST_BOX_PERK_RANK_DATA);
+}
+
+// Translated from 00724f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum MiscStatManager::MiscStatID>::Synchronize` (Xbox PDB): `list_box_synchronize`.
+pub fn list_box_misc_stat_id_synchronize(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_synchronize(e, this, LIST_BOX_MISC_STAT_ID);
+}
+
+// Translated from 00724fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum MiscStatManager::MiscStatID>::IsEnabled` (Xbox PDB): `list_box_is_enabled`.
+// Translation incomplete: 00724fd0 - the C++ exception-unwinding frame (FS:[0]) around the static trait id's initialization is not translated
+pub fn list_box_misc_stat_id_is_enabled(e: &mut Engine, this: Ptr<ListBox>) -> bool {
+    list_box_is_enabled(e, this, LIST_BOX_MISC_STAT_ID)
+}
+
+// Translated from 00725080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum MiscStatManager::MiscStatID>::UpdateHighlightBoxPos` (Xbox PDB):
+/// `list_box_update_highlight_box_pos`.
+// Translation incomplete: 00725080 - the C++ exception-unwinding frame (FS:[0]) around the static trait ids' initialization is not translated
+pub fn list_box_misc_stat_id_update_highlight_box_pos(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_update_highlight_box_pos(e, this, LIST_BOX_MISC_STAT_ID);
+}
+
+// Translated from 007253a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum MiscStatManager::MiscStatID>::SetTotalListHeight` (Xbox PDB):
+/// `list_box_set_total_list_height`.
+pub fn list_box_misc_stat_id_set_total_list_height(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_set_total_list_height(e, this, LIST_BOX_MISC_STAT_ID);
+}
+
+// Translated from 007254d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StatsMenu::StatusEffect *>::Synchronize` (Xbox PDB): `list_box_synchronize`.
+pub fn list_box_status_effect_synchronize(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_synchronize(e, this, LIST_BOX_STATUS_EFFECT);
+}
+
+// Translated from 007255a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StatsMenu::StatusEffect *>::IsEnabled` (Xbox PDB): `list_box_is_enabled`.
+// Translation incomplete: 007255a0 - the C++ exception-unwinding frame (FS:[0]) around the static trait id's initialization is not translated
+pub fn list_box_status_effect_is_enabled(e: &mut Engine, this: Ptr<ListBox>) -> bool {
+    list_box_is_enabled(e, this, LIST_BOX_STATUS_EFFECT)
+}
+
+// Translated from 00725650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StatsMenu::StatusEffect *>::UpdateHighlightBoxPos` (Xbox PDB):
+/// `list_box_update_highlight_box_pos`.
+// Translation incomplete: 00725650 - the C++ exception-unwinding frame (FS:[0]) around the static trait ids' initialization is not translated
+pub fn list_box_status_effect_update_highlight_box_pos(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_update_highlight_box_pos(e, this, LIST_BOX_STATUS_EFFECT);
+}
+
+// Translated from 00725970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StatsMenu::StatusEffect *>::SetTotalListHeight` (Xbox PDB):
+/// `list_box_set_total_list_height`.
+pub fn list_box_status_effect_set_total_list_height(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_set_total_list_height(e, this, LIST_BOX_STATUS_EFFECT);
+}
+
+// Translated from 00725aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<TESReputation *>::Synchronize` (Xbox PDB): `list_box_synchronize`.
+pub fn list_box_tes_reputation_synchronize(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_synchronize(e, this, LIST_BOX_TES_REPUTATION);
+}
+
+// Translated from 00725b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<TESReputation *>::IsEnabled` (Xbox PDB): `list_box_is_enabled`.
+// Translation incomplete: 00725b70 - the C++ exception-unwinding frame (FS:[0]) around the static trait id's initialization is not translated
+pub fn list_box_tes_reputation_is_enabled(e: &mut Engine, this: Ptr<ListBox>) -> bool {
+    list_box_is_enabled(e, this, LIST_BOX_TES_REPUTATION)
+}
+
+// Translated from 00725c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<TESReputation *>::UpdateHighlightBoxPos` (Xbox PDB):
+/// `list_box_update_highlight_box_pos`.
+// Translation incomplete: 00725c20 - the C++ exception-unwinding frame (FS:[0]) around the static trait ids' initialization is not translated
+pub fn list_box_tes_reputation_update_highlight_box_pos(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_update_highlight_box_pos(e, this, LIST_BOX_TES_REPUTATION);
+}
+
+// Translated from 00725f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<TESReputation *>::SetTotalListHeight` (Xbox PDB):
+/// `list_box_set_total_list_height`.
+pub fn list_box_tes_reputation_set_total_list_height(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_set_total_list_height(e, this, LIST_BOX_TES_REPUTATION);
+}
+
 // Translated from 00726070 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Reads the word at +4. Folded callers include a list's next-node pointer
 /// and an inventory entry's signed count; the accessor preserves all bits.
 pub fn word_at_four(e: &mut Engine, this: Ptr) -> u32 {
     e.mem.u32(this.addr().wrapping_add(4))
+}
+
+// Translated from 00726090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<unsigned int>::Synchronize` (Xbox PDB): `list_box_synchronize`.
+pub fn list_box_unsigned_int_synchronize(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_synchronize(e, this, LIST_BOX_UNSIGNED_INT);
+}
+
+// Translated from 00726160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<unsigned int>::IsEnabled` (Xbox PDB): `list_box_is_enabled`.
+// Translation incomplete: 00726160 - the C++ exception-unwinding frame (FS:[0]) around the static trait id's initialization is not translated
+pub fn list_box_unsigned_int_is_enabled(e: &mut Engine, this: Ptr<ListBox>) -> bool {
+    list_box_is_enabled(e, this, LIST_BOX_UNSIGNED_INT)
+}
+
+// Translated from 00726210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<unsigned int>::UpdateHighlightBoxPos` (Xbox PDB):
+/// `list_box_update_highlight_box_pos`.
+// Translation incomplete: 00726210 - the C++ exception-unwinding frame (FS:[0]) around the static trait ids' initialization is not translated
+pub fn list_box_unsigned_int_update_highlight_box_pos(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_update_highlight_box_pos(e, this, LIST_BOX_UNSIGNED_INT);
+}
+
+// Translated from 00726530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<unsigned int>::SetTotalListHeight` (Xbox PDB):
+/// `list_box_set_total_list_height`.
+pub fn list_box_unsigned_int_set_total_list_height(e: &mut Engine, this: Ptr<ListBox>) {
+    list_box_set_total_list_height(e, this, LIST_BOX_UNSIGNED_INT);
+}
+
+// Translated from 00726660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum ActorValue::Index>::NumUnfiltered` (Xbox PDB): `list_box_num_unfiltered`.
+// Translation incomplete: 00726660 - the C++ exception-unwinding frame (FS:[0]) around the static trait id's initialization is not translated
+pub fn list_box_actor_value_num_unfiltered(e: &mut Engine, this: Ptr<ListBox>) -> i32 {
+    list_box_num_unfiltered(e, this, LIST_BOX_ACTOR_VALUE)
+}
+
+// Translated from 00726710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<PerkRankData *>::NumUnfiltered` (Xbox PDB): `list_box_num_unfiltered`.
+// Translation incomplete: 00726710 - the C++ exception-unwinding frame (FS:[0]) around the static trait id's initialization is not translated
+pub fn list_box_perk_rank_data_num_unfiltered(e: &mut Engine, this: Ptr<ListBox>) -> i32 {
+    list_box_num_unfiltered(e, this, LIST_BOX_PERK_RANK_DATA)
+}
+
+// Translated from 007267c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<enum MiscStatManager::MiscStatID>::NumUnfiltered` (Xbox PDB): `list_box_num_unfiltered`.
+// Translation incomplete: 007267c0 - the C++ exception-unwinding frame (FS:[0]) around the static trait id's initialization is not translated
+pub fn list_box_misc_stat_id_num_unfiltered(e: &mut Engine, this: Ptr<ListBox>) -> i32 {
+    list_box_num_unfiltered(e, this, LIST_BOX_MISC_STAT_ID)
+}
+
+// Translated from 00726870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<StatsMenu::StatusEffect *>::NumUnfiltered` (Xbox PDB): `list_box_num_unfiltered`.
+// Translation incomplete: 00726870 - the C++ exception-unwinding frame (FS:[0]) around the static trait id's initialization is not translated
+pub fn list_box_status_effect_num_unfiltered(e: &mut Engine, this: Ptr<ListBox>) -> i32 {
+    list_box_num_unfiltered(e, this, LIST_BOX_STATUS_EFFECT)
+}
+
+// Translated from 00726920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<TESReputation *>::NumUnfiltered` (Xbox PDB): `list_box_num_unfiltered`.
+// Translation incomplete: 00726920 - the C++ exception-unwinding frame (FS:[0]) around the static trait id's initialization is not translated
+pub fn list_box_tes_reputation_num_unfiltered(e: &mut Engine, this: Ptr<ListBox>) -> i32 {
+    list_box_num_unfiltered(e, this, LIST_BOX_TES_REPUTATION)
+}
+
+// Translated from 00726b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<unsigned int>::NumUnfiltered` (Xbox PDB): `list_box_num_unfiltered`.
+// Translation incomplete: 00726b40 - the C++ exception-unwinding frame (FS:[0]) around the static trait id's initialization is not translated
+pub fn list_box_unsigned_int_num_unfiltered(e: &mut Engine, this: Ptr<ListBox>) -> i32 {
+    list_box_num_unfiltered(e, this, LIST_BOX_UNSIGNED_INT)
 }
 
 /// This unit's translated functions, by exe address.
@@ -2407,7 +3107,134 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00724110,
             list_box_misc_stat_id_scalar_deleting_destructor(Ptr<ListBox>, u32) -> Ptr<ListBox>
         ),
+        entry!(
+            0x00724140,
+            list_box_status_effect_scalar_deleting_destructor(Ptr<ListBox>, u32) -> Ptr<ListBox>
+        ),
+        entry!(
+            0x00724170,
+            list_box_tes_reputation_scalar_deleting_destructor(Ptr<ListBox>, u32) -> Ptr<ListBox>
+        ),
+        entry!(
+            0x007241a0,
+            list_box_unsigned_int_scalar_deleting_destructor(Ptr<ListBox>, u32) -> Ptr<ListBox>
+        ),
+        entry!(0x007241d0, simple_array_special_book_text_item_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x00724200, simple_array_special_book_button_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x00724230, simple_array_love_tester_text_item_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x00724260, simple_array_love_tester_light_bulb_glows_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x00724290, simple_array_love_tester_button_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x007242c0, fn_007242c0(Ptr<ListBox>, u32) -> bool),
+        entry!(0x007242f0, fn_007242f0(Ptr<ListBox>, u32) -> bool),
+        entry!(0x00724360, list_box_actor_value_synchronize(Ptr<ListBox>)),
+        entry!(
+            0x00724430,
+            list_box_actor_value_is_enabled(Ptr<ListBox>) -> bool
+        ),
+        entry!(
+            0x007244e0,
+            list_box_actor_value_update_highlight_box_pos(Ptr<ListBox>)
+        ),
+        entry!(
+            0x00724800,
+            list_box_actor_value_set_total_list_height(Ptr<ListBox>)
+        ),
+        entry!(
+            0x00724930,
+            list_box_perk_rank_data_synchronize(Ptr<ListBox>)
+        ),
+        entry!(
+            0x00724a00,
+            list_box_perk_rank_data_is_enabled(Ptr<ListBox>) -> bool
+        ),
+        entry!(
+            0x00724ab0,
+            list_box_perk_rank_data_update_highlight_box_pos(Ptr<ListBox>)
+        ),
+        entry!(
+            0x00724dd0,
+            list_box_perk_rank_data_set_total_list_height(Ptr<ListBox>)
+        ),
+        entry!(0x00724f00, list_box_misc_stat_id_synchronize(Ptr<ListBox>)),
+        entry!(
+            0x00724fd0,
+            list_box_misc_stat_id_is_enabled(Ptr<ListBox>) -> bool
+        ),
+        entry!(
+            0x00725080,
+            list_box_misc_stat_id_update_highlight_box_pos(Ptr<ListBox>)
+        ),
+        entry!(
+            0x007253a0,
+            list_box_misc_stat_id_set_total_list_height(Ptr<ListBox>)
+        ),
+        entry!(0x007254d0, list_box_status_effect_synchronize(Ptr<ListBox>)),
+        entry!(
+            0x007255a0,
+            list_box_status_effect_is_enabled(Ptr<ListBox>) -> bool
+        ),
+        entry!(
+            0x00725650,
+            list_box_status_effect_update_highlight_box_pos(Ptr<ListBox>)
+        ),
+        entry!(
+            0x00725970,
+            list_box_status_effect_set_total_list_height(Ptr<ListBox>)
+        ),
+        entry!(
+            0x00725aa0,
+            list_box_tes_reputation_synchronize(Ptr<ListBox>)
+        ),
+        entry!(
+            0x00725b70,
+            list_box_tes_reputation_is_enabled(Ptr<ListBox>) -> bool
+        ),
+        entry!(
+            0x00725c20,
+            list_box_tes_reputation_update_highlight_box_pos(Ptr<ListBox>)
+        ),
+        entry!(
+            0x00725f40,
+            list_box_tes_reputation_set_total_list_height(Ptr<ListBox>)
+        ),
         entry!(0x00726070, word_at_four(Ptr) -> u32),
+        entry!(0x00726090, list_box_unsigned_int_synchronize(Ptr<ListBox>)),
+        entry!(
+            0x00726160,
+            list_box_unsigned_int_is_enabled(Ptr<ListBox>) -> bool
+        ),
+        entry!(
+            0x00726210,
+            list_box_unsigned_int_update_highlight_box_pos(Ptr<ListBox>)
+        ),
+        entry!(
+            0x00726530,
+            list_box_unsigned_int_set_total_list_height(Ptr<ListBox>)
+        ),
+        entry!(
+            0x00726660,
+            list_box_actor_value_num_unfiltered(Ptr<ListBox>) -> i32
+        ),
+        entry!(
+            0x00726710,
+            list_box_perk_rank_data_num_unfiltered(Ptr<ListBox>) -> i32
+        ),
+        entry!(
+            0x007267c0,
+            list_box_misc_stat_id_num_unfiltered(Ptr<ListBox>) -> i32
+        ),
+        entry!(
+            0x00726870,
+            list_box_status_effect_num_unfiltered(Ptr<ListBox>) -> i32
+        ),
+        entry!(
+            0x00726920,
+            list_box_tes_reputation_num_unfiltered(Ptr<ListBox>) -> i32
+        ),
+        entry!(
+            0x00726b40,
+            list_box_unsigned_int_num_unfiltered(Ptr<ListBox>) -> i32
+        ),
     ]
 }
 
@@ -3610,6 +4437,19 @@ mod tests {
             TEST_DELETE,
             TEST_TILE_AT,
             TEST_GET_CLASS,
+            TILE_SET_INT,
+            INIT_TILE_POSITION,
+            LIST_COUNT,
+            TILE_GET_VALUE,
+            VALUE_ADD_ACTION,
+            VALUE_CALCULATE,
+            TILE_GET_BYTE_35,
+            TILE_SET_BYTE_35,
+            TILE_FIND_BY_NAME,
+            TILE_GET_CHILD_BY_NAME,
+            TILE_ADD_NEEDS_UPDATE,
+            ROUND_FLOAT,
+            MAX_INT,
         ];
         for (instance, _) in LIST_BOXES {
             externals.extend([
@@ -3617,6 +4457,7 @@ mod tests {
                 instance.is_enabled,
                 instance.update_highlight_box_pos,
                 instance.set_total_list_height,
+                instance.num_unfiltered,
             ]);
         }
         for addr in externals {
@@ -3647,6 +4488,9 @@ mod tests {
         ] {
             e.map(global, 12);
         }
+        // The list boxes' function-local statics and the 0.0 double.
+        e.map(STATICS, 0xb0);
+        e.map(ZERO_DOUBLE, 8);
         e
     }
 
@@ -4009,6 +4853,9 @@ mod tests {
             (0x0072_4090, LIST_BOX_ACTOR_VALUE),
             (0x0072_40e0, LIST_BOX_PERK_RANK_DATA),
             (0x0072_4110, LIST_BOX_MISC_STAT_ID),
+            (0x0072_4140, LIST_BOX_STATUS_EFFECT),
+            (0x0072_4170, LIST_BOX_TES_REPUTATION),
+            (0x0072_41a0, LIST_BOX_UNSIGNED_INT),
         ] {
             let mut e = full_engine();
             let this = e.mem.alloc(0x30);
@@ -4301,5 +5148,406 @@ mod tests {
             calls(&e, LIST_BOX_INIT_FLAGS),
             vec![vec![this + 0xb0, 0, 1]]
         );
+    }
+
+    /// The first word of the list boxes' function-local statics
+    /// (`011d8dcc` to `011d8e70`).
+    const STATICS: u32 = 0x011d_8dc0;
+
+    /// Registers this file's translation at `addr` again (`full_engine`
+    /// doubles the list box methods).
+    fn real(e: &mut Engine, addr: u32) {
+        let (_, f) = funcs()
+            .into_iter()
+            .find(|(registered, _)| *registered == addr)
+            .unwrap();
+        e.register(addr, f);
+    }
+
+    /// The logged calls to `addr` as (`this`, first argument).
+    fn pairs(e: &Engine, addr: u32) -> Vec<(u32, u32)> {
+        calls(e, addr)
+            .iter()
+            .map(|words| (words[0], words[1]))
+            .collect()
+    }
+
+    /// A list box whose embedded list holds `items` in order (the first in
+    /// the list box, the others in nodes `[item, next]`; `Some(filtered)`
+    /// an item with that filtered byte, `None` a null item); returns the
+    /// list box and the item tiles (0 for a null item).
+    fn list_with_items(e: &mut Engine, items: &[Option<bool>]) -> (u32, Vec<u32>) {
+        let this = e.mem.alloc(0x30);
+        let mut tiles = Vec::new();
+        let mut previous = this + 4;
+        for (index, entry) in items.iter().enumerate() {
+            let (item, tile) = match entry {
+                Some(filtered) => {
+                    let (item, tile) = list_item(e, 0);
+                    e.mem.set_u8(item + 8, u8::from(*filtered));
+                    (item, tile)
+                }
+                None => (0, 0),
+            };
+            tiles.push(tile);
+            if index == 0 {
+                e.mem.set_u32(this + 4, item);
+            } else {
+                let node = e.mem.alloc(8);
+                e.mem.set_u32(node, item);
+                e.mem.set_u32(previous + 4, node);
+                previous = node;
+            }
+        }
+        (this, tiles)
+    }
+
+    #[test]
+    fn simple_array_deleting_destructors() {
+        for (addr, vtable) in [
+            (0x0072_41d0, BOOK_TEXT_ITEMS_VTABLE),
+            (0x0072_4200, BOOK_BUTTONS_VTABLE),
+            (0x0072_4230, LOVE_TESTER_TEXT_ITEMS_VTABLE),
+            (0x0072_4260, LOVE_TESTER_GLOWS_VTABLE),
+            (0x0072_4290, LOVE_TESTER_BUTTONS_VTABLE),
+        ] {
+            let mut e = full_engine();
+            let this = e.mem.alloc(0x10);
+            check_deleting_destructor(&mut e, addr, this);
+            assert_eq!(e.mem.u32(this), vtable);
+            assert_eq!(calls(&e, SIMPLE_ARRAY_RELEASE), vec![vec![this, 1]; 2]);
+        }
+    }
+
+    #[test]
+    fn list_box_flag_test_masks_the_shift_count() {
+        let mut e = full_engine();
+        real(&mut e, LIST_BOX_HAS_FLAG);
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u16(this + 0x2c, 0x8002);
+        e.mem.set_u16(this + 0x2e, 0xffff);
+        let has = |e: &mut Engine, bit: u32| e.call(LIST_BOX_HAS_FLAG, &args![this, bit]).bool();
+        assert!(has(&mut e, 1));
+        assert!(!has(&mut e, 0));
+        assert!(has(&mut e, 15));
+        // Bits above the 16-bit field are clear; the count wraps at 32.
+        assert!(!has(&mut e, 16));
+        assert!(has(&mut e, 33));
+        assert_eq!(e.call(LIST_BOX_HAS_FLAG, &args![this, 1u32]).u32(), 1);
+    }
+
+    #[test]
+    fn list_box_tile_check_walks_until_a_null_item() {
+        let mut e = full_engine();
+        real(&mut e, LIST_BOX_BELONGS_TO);
+        let (this, tiles) = list_with_items(&mut e, &[Some(false), Some(true), None, Some(false)]);
+        let has =
+            |e: &mut Engine, tile: u32| e.call(LIST_BOX_BELONGS_TO, &args![this, tile]).bool();
+        assert!(has(&mut e, tiles[0]));
+        assert!(has(&mut e, tiles[1]));
+        // Behind the null item.
+        assert!(!has(&mut e, tiles[3]));
+        assert!(!has(&mut e, 0x1234));
+        assert!(!e.call(LIST_BOX_BELONGS_TO, &args![0u32, tiles[0]]).bool());
+    }
+
+    #[test]
+    fn list_box_synchronize_numbers_the_unfiltered_items() {
+        for (instance, _) in LIST_BOXES {
+            let mut e = full_engine();
+            real(&mut e, instance.synchronize);
+            let (this, tiles) = list_with_items(
+                &mut e,
+                &[Some(false), Some(true), Some(false), None, Some(false)],
+            );
+            e.mem.set_u16(this + 0x1c, 7);
+            e.mem.set_f32(this + 0x20, 5.0);
+            e.call(instance.synchronize, &args![this]);
+            assert_eq!(e.mem.u16(this + 0x1c), 2);
+            assert_eq!(e.mem.f32(this + 0x20), 0.0);
+            assert_eq!(
+                sequence(
+                    &e,
+                    &[
+                        TILE_SET_INT,
+                        INIT_TILE_POSITION,
+                        instance.set_total_list_height,
+                        instance.update_highlight_box_pos
+                    ]
+                ),
+                vec![
+                    (TILE_SET_INT, vec![tiles[0], 0xfac, 0]),
+                    (INIT_TILE_POSITION, vec![this, tiles[0]]),
+                    (TILE_SET_INT, vec![tiles[2], 0xfac, 1]),
+                    (INIT_TILE_POSITION, vec![this, tiles[2]]),
+                    (instance.set_total_list_height, vec![this]),
+                    (instance.update_highlight_box_pos, vec![this]),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn list_box_is_enabled_looks_the_trait_up_once() {
+        for (instance, _) in LIST_BOXES {
+            let mut e = full_engine();
+            real(&mut e, instance.is_enabled);
+            e.register(ADD_USER_TRAIT, |_, _| word(0x77));
+            e.register(TILE_IS_TRUE, |e, a| word(e.mem.u32(a[0])));
+            let this = e.mem.alloc(0x30);
+            assert!(!e.call(instance.is_enabled, &args![this]).bool());
+            let which = instance.enabled_trait;
+            assert_eq!(e.mem.u32(which.guard), 1);
+            assert_eq!(e.mem.u32(which.cache), 0x77);
+            assert!(calls(&e, TILE_IS_TRUE).is_empty());
+            let container = e.mem.alloc(4);
+            e.mem.set_u32(this + 0xc, container);
+            e.mem.set_u32(container, 1);
+            assert!(e.call(instance.is_enabled, &args![this]).bool());
+            // Only `AL` counts.
+            e.mem.set_u32(container, 0x100);
+            assert!(!e.call(instance.is_enabled, &args![this]).bool());
+            assert_eq!(
+                calls(&e, ADD_USER_TRAIT),
+                vec![vec![ENABLED_TEXT, 0xffff_ffff]]
+            );
+            assert_eq!(calls(&e, TILE_IS_TRUE), vec![vec![container, 0x77]; 2]);
+        }
+    }
+
+    /// `full_engine` with the instance's `UpdateHighlightBoxPos`, trait ids
+    /// `0x71` (`"_highlight_y"`) and `0x72` (`"_selected_height"`), value
+    /// objects `0x900 + trait`, a tile's byte at +0x35 answered with the
+    /// tile's first word, the highlight box `0xb00` and its edges `0xb01`
+    /// to `0xb04` (top, bottom, left, right).
+    fn highlight_engine(instance: ListBoxInstance) -> Engine {
+        let mut e = full_engine();
+        real(&mut e, instance.update_highlight_box_pos);
+        e.register(ADD_USER_TRAIT, |_, a| {
+            word(if a[0] == HIGHLIGHT_Y_TEXT { 0x71 } else { 0x72 })
+        });
+        e.register(TILE_GET_VALUE, |_, a| word(0x900 + a[1]));
+        e.register(TILE_GET_BYTE_35, |e, a| word(e.mem.u32(a[0])));
+        e.register(TILE_FIND_BY_NAME, |_, _| word(0xb00));
+        e.register(TILE_GET_CHILD_BY_NAME, |_, a| {
+            let edge = [TOP_TEXT, BOTTOM_TEXT, LEFT_TEXT, RIGHT_TEXT]
+                .iter()
+                .position(|&name| name == a[1])
+                .unwrap() as u32;
+            word(0xb01 + edge)
+        });
+        e
+    }
+
+    #[test]
+    fn list_box_update_highlight_box_pos_without_a_highlight() {
+        for (instance, _) in LIST_BOXES {
+            let mut e = highlight_engine(instance);
+            let this = e.mem.alloc(0x30);
+            e.call(instance.update_highlight_box_pos, &args![this]);
+            assert_eq!(
+                calls(&e, ADD_USER_TRAIT),
+                vec![
+                    vec![HIGHLIGHT_Y_TEXT, 0xffff_ffff],
+                    vec![SELECTED_HEIGHT_TEXT, 0xffff_ffff]
+                ]
+            );
+            let guard = instance.highlight_y_trait.guard;
+            assert_eq!(instance.selected_height_trait.guard, guard);
+            assert_eq!(e.mem.u32(guard), 3);
+            assert_eq!(e.mem.u32(instance.highlight_y_trait.cache), 0x71);
+            assert_eq!(e.mem.u32(instance.selected_height_trait.cache), 0x72);
+            assert!(calls(&e, TILE_SET_INT).is_empty());
+            e.mem.set_u32(this + 0xc, 0x700);
+            e.call(instance.update_highlight_box_pos, &args![this]);
+            assert_eq!(calls(&e, ADD_USER_TRAIT).len(), 2);
+            assert_eq!(
+                calls(&e, TILE_SET_INT),
+                vec![vec![0x700, 0x71, 0xffff_ffff], vec![0x700, 0x72, 0]]
+            );
+            assert!(calls(&e, TILE_GET_VALUE).is_empty());
+        }
+    }
+
+    #[test]
+    fn list_box_update_highlight_box_pos_follows_the_highlight() {
+        for (instance, _) in LIST_BOXES {
+            let mut e = highlight_engine(instance);
+            let this = e.mem.alloc(0x30);
+            let highlighted = e.mem.alloc(4);
+            e.mem.set_u32(highlighted, 0x101);
+            e.mem.set_u32(this + 0xc, 0x700);
+            e.mem.set_u32(this + 0x10, highlighted);
+            e.call(instance.update_highlight_box_pos, &args![this]);
+            assert_eq!(
+                calls(&e, TILE_GET_VALUE),
+                vec![vec![0x700, 0x71], vec![0x700, 0x72]]
+            );
+            assert_eq!(
+                sequence(&e, &[VALUE_ADD_ACTION, VALUE_CALCULATE]),
+                vec![
+                    (VALUE_ADD_ACTION, vec![0x971, 0x7d0, highlighted, 0xfa2]),
+                    (VALUE_CALCULATE, vec![0x971, 0]),
+                    (VALUE_ADD_ACTION, vec![0x972, 0x7d0, highlighted, 0xfb0]),
+                    (VALUE_CALCULATE, vec![0x972, 0]),
+                ]
+            );
+            assert_eq!(
+                calls(&e, TILE_FIND_BY_NAME),
+                vec![vec![0x700, HIGHLIGHT_BOX_TEXT]]
+            );
+            let marked = [0xb01, 0xb02, 0xb03, 0xb04, 0xb00];
+            assert_eq!(
+                pairs(&e, TILE_SET_BYTE_35),
+                marked.iter().map(|&tile| (tile, 1)).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                pairs(&e, TILE_ADD_NEEDS_UPDATE),
+                marked.iter().map(|&tile| (tile, 8)).collect::<Vec<_>>()
+            );
+            // Without a top edge only the box; a clear byte (`AL` 0) gives 0.
+            e.call_log = Some(vec![]);
+            e.mem.set_u32(highlighted, 0x100);
+            e.register(TILE_GET_CHILD_BY_NAME, |_, _| Ret::default());
+            e.call(instance.update_highlight_box_pos, &args![this]);
+            assert_eq!(calls(&e, TILE_GET_CHILD_BY_NAME).len(), 1);
+            assert_eq!(pairs(&e, TILE_SET_BYTE_35), vec![(0xb00, 0)]);
+            // Without a highlight box nothing is marked.
+            e.call_log = Some(vec![]);
+            e.register(TILE_FIND_BY_NAME, |_, _| Ret::default());
+            e.call(instance.update_highlight_box_pos, &args![this]);
+            assert!(calls(&e, TILE_GET_CHILD_BY_NAME).is_empty());
+            assert!(calls(&e, TILE_SET_BYTE_35).is_empty());
+        }
+    }
+
+    /// Runs `SetTotalListHeight` on a list box with the container `0x700`
+    /// whose trait `0xfb0` is `visible`, the given total height,
+    /// unfiltered count and scroll bar; `004e4430` answers its argument,
+    /// `00647b70` the larger argument, `"_scroll_delta"` is trait `0x66`
+    /// and `"_number_of_items"` `0x67`. Returns the calls to
+    /// `ROUND_FLOAT`, `MAX_INT`, `TILE_SET_FLOAT`, `TILE_SET_INT` and
+    /// `NumUnfiltered`.
+    fn total_height(
+        instance: ListBoxInstance,
+        visible: f32,
+        total: f32,
+        unfiltered: u32,
+        scroll_bar: u32,
+    ) -> [Calls; 5] {
+        let mut e = full_engine();
+        real(&mut e, instance.set_total_list_height);
+        e.register_double(TILE_GET_FLOAT, move |_, _| st0(f64::from(visible)));
+        e.register_double(instance.num_unfiltered, move |_, _| word(unfiltered));
+        e.register(ROUND_FLOAT, |_, a| st0(f64::from(f32::from_bits(a[0]))));
+        e.register(MAX_INT, |_, a| word((a[0] as i32).max(a[1] as i32) as u32));
+        e.register(TEXT_TO_TRAIT, |_, a| {
+            word(if a[0] == SCROLL_DELTA_TEXT {
+                0x66
+            } else {
+                0x67
+            })
+        });
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u32(this + 0xc, 0x700);
+        e.mem.set_f32(this + 0x20, total);
+        e.mem.set_u32(this + 0x14, scroll_bar);
+        e.call(instance.set_total_list_height, &args![this]);
+        assert_eq!(calls(&e, TILE_GET_FLOAT), vec![vec![0x700, 0xfb0]]);
+        [
+            calls(&e, ROUND_FLOAT),
+            calls(&e, MAX_INT),
+            calls(&e, TILE_SET_FLOAT),
+            calls(&e, TILE_SET_INT),
+            calls(&e, instance.num_unfiltered),
+        ]
+    }
+
+    #[test]
+    fn list_box_set_total_list_height_scroll_steps() {
+        for (instance, _) in LIST_BOXES {
+            // 4 * 60 / 100 = 2.4: 2 + 1 = 3 steps, a delta of 60 / 2.
+            let [round, max, set_float, set_int, unfiltered] =
+                total_height(instance, 40.0, 100.0, 4, 0x800);
+            assert_eq!(round, vec![vec![2.4f32.to_bits()]]);
+            assert_eq!(max, vec![vec![3, 2]]);
+            assert_eq!(set_float, vec![vec![0x700, 0x66, 30.0f32.to_bits(), 1]]);
+            assert_eq!(set_int, vec![vec![0x800, 0x67, 3]]);
+            assert_eq!(unfiltered.len(), 1);
+            // No unfiltered items still gives two steps.
+            let [_, max, set_float, set_int, _] = total_height(instance, 40.0, 100.0, 0, 0x800);
+            assert_eq!(max, vec![vec![1, 2]]);
+            assert_eq!(set_float, vec![vec![0x700, 0x66, 60.0f32.to_bits(), 1]]);
+            assert_eq!(set_int, vec![vec![0x800, 0x67, 2]]);
+            // No scroll bar: the delta only.
+            let [_, _, set_float, set_int, _] = total_height(instance, 40.0, 100.0, 4, 0);
+            assert_eq!(set_float.len(), 1);
+            assert!(set_int.is_empty());
+        }
+    }
+
+    #[test]
+    fn list_box_set_total_list_height_single_step() {
+        for (instance, _) in LIST_BOXES {
+            // Everything visible, an empty list, a NaN height: one step.
+            for (visible, total) in [
+                (100.0, 50.0),
+                (50.0, 50.0),
+                (40.0, 0.0),
+                (0.0, 100.0),
+                (f32::NAN, 100.0),
+                (40.0, -1.0),
+            ] {
+                let [round, max, set_float, set_int, unfiltered] =
+                    total_height(instance, visible, total, 4, 0x800);
+                assert!(round.is_empty() && max.is_empty() && unfiltered.is_empty());
+                assert!(set_float.is_empty());
+                assert_eq!(set_int, vec![vec![0x800, 0x67, 1]]);
+            }
+        }
+    }
+
+    #[test]
+    fn list_box_set_total_list_height_without_a_container() {
+        let mut e = full_engine();
+        real(&mut e, 0x0072_4800);
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u32(this + 0x14, 0x800);
+        e.call(0x0072_4800, &args![this]);
+        assert!(calls(&e, TILE_GET_FLOAT).is_empty());
+        assert!(calls(&e, TILE_SET_INT).is_empty());
+    }
+
+    #[test]
+    fn list_box_num_unfiltered_subtracts_the_truncated_filter_count() {
+        for (instance, _) in LIST_BOXES {
+            for (filtered, expected) in [
+                (2.9, 5),
+                (-2.9, 9),
+                (f64::NAN, 7),
+                (5e9, 7i32.wrapping_sub(5_000_000_000i64 as i32)),
+            ] {
+                let mut e = full_engine();
+                real(&mut e, instance.num_unfiltered);
+                e.register(ADD_USER_TRAIT, |_, _| word(0x78));
+                e.register(LIST_COUNT, |_, _| word(7));
+                e.register_double(TILE_GET_FLOAT, move |_, _| st0(filtered));
+                let this = e.mem.alloc(0x30);
+                e.mem.set_u32(this + 0xc, 0x700);
+                for _ in 0..2 {
+                    assert_eq!(
+                        e.call(instance.num_unfiltered, &args![this]).i32(),
+                        expected
+                    );
+                }
+                assert_eq!(
+                    calls(&e, ADD_USER_TRAIT),
+                    vec![vec![NUM_FILTERED_TEXT, 0xffff_ffff]]
+                );
+                assert_eq!(e.mem.u32(instance.num_filtered_trait.guard), 1);
+                assert_eq!(calls(&e, LIST_COUNT), vec![vec![this]; 2]);
+                assert_eq!(calls(&e, TILE_GET_FLOAT), vec![vec![0x700, 0x78]; 2]);
+            }
+        }
     }
 }
