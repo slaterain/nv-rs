@@ -2328,7 +2328,7 @@ pub fn combat_controller_update_look_at_target(e: &mut Engine, this: Ptr<CombatC
         }
     }
     if best_index != u32::MAX
-        && best >= e.get(this, CombatController::cIgnoreLookAtTarget) as u32 + 1
+        && best > e.get(this, CombatController::cIgnoreLookAtTarget) as u32
     {
         let point = this
             .addr()
