@@ -74,7 +74,10 @@ mod tests {
         0x0043_8390,
     ];
 
-    fn build(id: u32, name: u32) -> (Vec<(u32, Vec<u32>)>, Vec<u8>, u32) {
+    /// Call log, object bytes and return value of one constructor run.
+    type CtorRun = (Vec<(u32, Vec<u32>)>, Vec<u8>, u32);
+
+    fn build(id: u32, name: u32) -> CtorRun {
         let mut e = Engine::new();
         let this = e.mem.alloc(0xc4);
         e.mem.write(this, &[0xcd; 0xc4]);

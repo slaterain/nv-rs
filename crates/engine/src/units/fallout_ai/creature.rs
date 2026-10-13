@@ -68,7 +68,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 mod tests {
     use crate::prelude::*;
 
-    fn run(addr: u32, args: &[u32]) -> (Vec<(u32, Vec<u32>)>, Vec<u8>, u32) {
+    /// Call log, object bytes and return value of one constructor run.
+    type CtorRun = (Vec<(u32, Vec<u32>)>, Vec<u8>, u32);
+
+    fn run(addr: u32, args: &[u32]) -> CtorRun {
         let mut e = Engine::new();
         let this = e.mem.alloc(0x1c0);
         e.mem.write(this, &[0xcd; 0x1c0]);
