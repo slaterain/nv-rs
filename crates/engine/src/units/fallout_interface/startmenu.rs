@@ -3144,6 +3144,1714 @@ const MENU_START_FADE_OUT: u32 = 0x00a1_d910;
 const MENU_REFRESH_C: u32 = 0x007d_6550;
 const MANAGER_ROW_COUNT: u32 = 0x0073_b020;
 
+/// Callees and data of the functions from `007d0bf0` on that no earlier
+/// function of this file needed (names by address and role; the ones the
+/// engine map or the Xbox PDB names say so).
+///
+/// `007d0bf0`: a setter `(byte)` on a model object (`00450f90`, `RET 4`), the
+/// interface manager's word at `+0x28` (`0045cd60`), the manager call
+/// `00713fb0(0, 0)` and the main object call `005b6cb0`.
+const FN_00450F90: u32 = 0x0045_0f90;
+const FN_00713FB0: u32 = 0x0071_3fb0;
+const FN_005B6CB0: u32 = 0x005b_6cb0;
+/// `007d6030` (the menu is `this`, returns a byte) and
+/// `StartMenu::PopulateOptionsListBox` (Ghidra name, `RET 4`; it belongs to a
+/// later range of this unit).
+const FN_007D6030: u32 = 0x007d_6030;
+const POPULATE_OPTIONS_LIST_BOX: u32 = 0x007d_42b0;
+/// `ShowMessage` call arguments: the setting strings `ChooseBack`,
+/// `ConfirmContinue` and `ConfirmNewGame` show (`Setting` objects whose
+/// `403df0` returns the text).
+const SETTING_011D2B14: u32 = 0x011d_2b14;
+const SETTING_011D1F14: u32 = 0x011d_1f14;
+const SETTING_011D48AC: u32 = 0x011d_48ac;
+const SETTING_011DAC00: u32 = 0x011d_ac00;
+const SETTING_011D4F78: u32 = 0x011d_4f78;
+const SETTING_011D25D4: u32 = 0x011d_25d4;
+const SETTING_011D2C4C: u32 = 0x011d_2c4c;
+/// The value slot of a setting object (`0043d4d0`: `this + 4`, or a static
+/// slot when `this` is null) and the two settings `007d11d0` and `007d1260`
+/// copy their option's value into.
+const SETTING_VALUE_SLOT: u32 = 0x0043_d4d0;
+const SETTING_011E0940: u32 = 0x011e_0940;
+const SETTING_011E087C: u32 = 0x011e_087c;
+/// The object at `011dea3c` (`GLOBAL_OBJECT_011DEA3C`): its word `+0x7b8`
+/// (`005be4d0` reads it, `007d1240` writes it), `+0x7c0` (`007d1340`,
+/// `007d1320`) and the float at `+0xe18` (`007d1360`), and the calls
+/// `0093e770(old, 1)`, `005d1530(0)`, `005d14d0(1)` and `007adcc0(0)`.
+const FN_005BE4D0: u32 = 0x005b_e4d0;
+const FN_0093E770: u32 = 0x0093_e770;
+const FN_005D1530: u32 = 0x005d_1530;
+const FN_005D14D0: u32 = 0x005d_14d0;
+const FN_007ADCC0: u32 = 0x007a_dcc0;
+/// `PlayerCharacter::SetHardcore` (Xbox PDB name, engine map): `(this, value,
+/// 0)`, `RET 8`; `004d1360` is the getter (`+0x7bc == 1`).
+const SET_HARDCORE: u32 = 0x0096_9e90;
+const FN_004D1360: u32 = 0x004d_1360;
+/// Boolean settings: setter `(this, byte)` `RET 4` (`004de2d0`, returns
+/// `this`) and getter (`00454af0`, returns the byte); `004503f0` returns the
+/// value word.
+const SETTING_SET_BOOL: u32 = 0x004d_e2d0;
+const SETTING_GET_BOOL: u32 = 0x0045_4af0;
+const SETTING_GET_VALUE: u32 = 0x0045_03f0;
+/// The object at `011d96c0` whose flag word `+0x1c0` `007d14c0` edits.
+const FLAGS_OBJECT_011D96C0: u32 = 0x011d_96c0;
+/// The boolean settings of `007d1440` .. `007d16f0`, `007d2e50` and
+/// `007d30e0`.
+const SETTING_011D8A38: u32 = 0x011d_8a38;
+const SETTING_011D89F0: u32 = 0x011d_89f0;
+const SETTING_011D8974: u32 = 0x011d_8974;
+const SETTING_011D8980: u32 = 0x011d_8980;
+const SETTING_011D8934: u32 = 0x011d_8934;
+const SETTING_011D8928: u32 = 0x011d_8928;
+const SETTING_011D898C: u32 = 0x011d_898c;
+const SETTING_011E0A5C: u32 = 0x011e_0a5c;
+const SETTING_011E0850: u32 = 0x011e_0850;
+const SETTING_011D8C4C: u32 = 0x011d_8c4c;
+/// Slider helpers: `Setting` float slot (`00403e20`: the address of the float
+/// at `this + 4`, or of a static zero), the float setter `(this, value)`
+/// (`004ed780`, `RET 4`, returns `this`), the float getter (`00450410`, ST0),
+/// the table store `(index, value)` (`004504f0`, cdecl) and its table
+/// (`011ad7b8`), and the float sink `004dc2d0(value)` (cdecl).
+const FLOAT_SLOT: u32 = 0x0040_3e20;
+const FLOAT_SET: u32 = 0x004e_d780;
+const FLOAT_TABLE_SET: u32 = 0x0045_04f0;
+const FLOAT_TABLE: u32 = 0x011a_d7b8;
+const FLOAT_SINK: u32 = 0x004d_c2d0;
+/// `SystemColorManager::GetInstance` (Xbox PDB, no arguments), its setter
+/// `(this, 1 or 4, colour)` (`00719120`, `RET 8`), its getter
+/// `(this, 1 or 4)` (`007190a0`, `RET 4`), the colour table (`011dac50`) and
+/// `00a0b350(this, 1 or 4, 0.0)` (`RET 8`) on the interface manager's menus
+/// root.
+const SYSTEM_COLOR_INSTANCE: u32 = 0x0071_8b60;
+const SYSTEM_COLOR_SET: u32 = 0x0071_9120;
+const SYSTEM_COLOR_GET: u32 = 0x0071_90a0;
+const COLOR_TABLE: u32 = 0x011d_ac50;
+const FN_00A0B350: u32 = 0x00a0_b350;
+/// The float object `007d1b30` reads, the integer at `0126efc4` and the
+/// setting `007d1b40` writes with `0045ce80`.
+const FLOAT_OBJECT_011C71AC: u32 = 0x011c_71ac;
+const GLOBAL_0126EFC4: u32 = 0x0126_efc4;
+const SETTING_SET_INT: u32 = 0x0045_ce80;
+const SETTING_011C779C: u32 = 0x011c_779c;
+/// Constants of `007d2eb0`: two doubles and a float in the exe's data.
+const DOUBLE_SLIDER_SCALE: u32 = 0x0107_6f70;
+const DOUBLE_SLIDER_OFFSET: u32 = 0x0107_6f68;
+const FLOAT_SLIDER_FULL: u32 = 0x0107_6f60;
+const SETTING_011E0A6C: u32 = 0x011e_0a6c;
+/// `0.0` and `1.0` as doubles in the exe's data (`007d1360`, `007d3620`).
+const DOUBLE_ZERO: u32 = 0x0101_2060;
+const DOUBLE_ONE: u32 = 0x0101_2070;
+/// `007d2fc0` and `007d30e0`: the interface manager's call
+/// `00719740(byte)` (`RET 4`), the object `007d30b0` writes (`011f35cc`, byte
+/// at `+0x1b88`), the main object's `00877720` result byte setter `005407b0`.
+const FN_00719740: u32 = 0x0071_9740;
+const OBJECT_011F35CC: u32 = 0x011f_35cc;
+const FN_005407B0: u32 = 0x0054_07b0;
+/// `00a24b70(this, index)` (`RET 4`) on the main object's `00877720` result.
+const FN_00A24B70: u32 = 0x00a2_4b70;
+/// `ConfirmContinue` and `007d3470`: save entry calls. `00851330(this)` on
+/// the save manager, `008467b0(entry)` (returns a byte),
+/// `ArchiveManager::CleanupArchiveStringsAfterStartup` (Xbox PDB name),
+/// `0075f8c0(entry)`, `00408da0` and `00408b20(a, b)` (cdecl).
+const FN_00851330: u32 = 0x0085_1330;
+const FN_008467B0: u32 = 0x0084_67b0;
+const ARCHIVE_CLEANUP: u32 = 0x00af_59e0;
+const FN_0075F8C0: u32 = 0x0075_f8c0;
+const FN_00408DA0: u32 = 0x0040_8da0;
+const FN_00408B20: u32 = 0x0040_8b20;
+/// `ConfirmNewGame`: the C `strtol` (`00ec8d08`, cdecl), the form type byte
+/// getter (`00401170`), the type descriptors it casts between (`TESForm`
+/// `01183028` to `TESQuest` `01186500`; `TESBoundObject` `01183108` to
+/// `TESNPC` `01183a1c`, names read from the descriptors), the form getter
+/// `BGSSaveFormBuffer::GetForm` (Xbox PDB name, `007af430`: the word at
+/// `+0x20`), and the other calls it makes.
+const STRTOL: u32 = 0x00ec_8d08;
+const FN_00401170: u32 = 0x0040_1170;
+const TYPE_DESCRIPTOR_QUEST: u32 = 0x0118_6500;
+const TYPE_DESCRIPTOR_BOUND_OBJECT: u32 = 0x0118_3108;
+const TYPE_DESCRIPTOR_NPC: u32 = 0x0118_3a1c;
+const GET_FORM: u32 = 0x007a_f430;
+const FN_0060C9C0: u32 = 0x0060_c9c0;
+const FN_004581C0: u32 = 0x0045_81c0;
+const ERROR_CALL: u32 = 0x0040_fbe0;
+const MEDIA_CLOSE: u32 = 0x0083_04a0;
+const FN_00788A90: u32 = 0x0078_8a90;
+const TUTORIAL_SHOW_MESSAGE: u32 = 0x0071_8630;
+const FLAG_011D8907: u32 = 0x011d_8907;
+const TEXT_QUEST_NOT_FOUND: u32 = 0x0107_6f78;
+/// `007d3620` and its friends: `BGSSaveLoadManager::RemoveSaveGame` (Xbox PDB
+/// name, `008467e0`), `BGSSaveLoadFileEntry::IsAutosave` (Xbox PDB name,
+/// `00846af0`) and its sibling `00846b10`, the list calls `007d8040(list,
+/// item)`, `007d8700(list)`, `007d87b0(list)`, `007d62e0(menu)`,
+/// `007d86c0(list, index, 0)`, `007d80f0(list, index, 0)`, `00825c00(list)`
+/// (the word at `+0x14`), `007d6e90(list)` (the list's item `(0, 0)`),
+/// `Tile::AddNeedsUpdate` (Xbox PDB name) and the callback
+/// `StartMenu::InitializeSaveLoadListItem` (Ghidra name, `007d67b0`).
+const REMOVE_SAVE_GAME: u32 = 0x0084_67e0;
+const IS_AUTOSAVE: u32 = 0x0084_6af0;
+const FN_00846B10: u32 = 0x0084_6b10;
+const FN_007D8040: u32 = 0x007d_8040;
+const FN_007D8700: u32 = 0x007d_8700;
+const FN_007D87B0: u32 = 0x007d_87b0;
+const FN_007D62E0: u32 = 0x007d_62e0;
+const FN_007D86C0: u32 = 0x007d_86c0;
+const FN_007D80F0: u32 = 0x007d_80f0;
+const FN_00825C00: u32 = 0x0082_5c00;
+const FN_007D6E90: u32 = 0x007d_6e90;
+const TILE_ADD_NEEDS_UPDATE: u32 = 0x00a0_7530;
+const INITIALIZE_SAVE_LOAD_LIST_ITEM: u32 = 0x007d_67b0;
+/// `"%s %u/%i %s"` (the save count line) in the exe's data.
+const FORMAT_SAVE_COUNT: u32 = 0x0107_6fb0;
+
+/// `if (pMe != 0 && pMe->TestFlags(bits))` as the exe tests it: the global
+/// is read again for the flag call.
+fn menu_exists_with_flag(e: &mut Engine, bits: u32) -> bool {
+    let menu = start_menu_global(e);
+    !menu.is_null() && menu_flag(e, menu, bits)
+}
+
+/// Stores an option's value (`UserOption::iVal`, Xbox PDB, `+0x14`) and then
+/// its second word (`iDefaultVal`, `+0x18`).
+fn set_option_words(e: &mut Engine, option: Ptr, value: u32, second: u32) {
+    e.mem.set_u32(option.addr() + 0x14, value);
+    e.mem.set_u32(option.addr() + 0x18, second);
+}
+
+/// `Setting` float value as the slider functions read it: `*00403e20(setting)`
+/// copied through the x87 stack into a `float`.
+fn setting_float(e: &mut Engine, setting: u32) -> f32 {
+    let slot = e.call(FLOAT_SLOT, &args![setting]).u32();
+    e.mem.f32(slot)
+}
+
+/// `float(count - 1)` for `FILD qword` of the unsigned `count - 1`
+/// (`UserOption::iNumSettings`, `+0x20`, minus one).
+fn last_step(e: &Engine, option: Ptr) -> f64 {
+    f64::from(e.mem.u32(option.addr() + 0x20).wrapping_sub(1))
+}
+
+/// `FILD dword [option + 0x14] / FILD qword (count - 1); FSTP float`: the
+/// slider position as a `float`.
+fn slider_ratio(e: &Engine, option: Ptr) -> f32 {
+    let value = f64::from(e.mem.u32(option.addr() + 0x14) as i32);
+    (value / last_step(e, option)) as f32
+}
+
+/// `004bd510(scaled, 1.0)` then `_ftol2`: the whole step the slider rounds
+/// to.
+fn slider_step_index(e: &mut Engine, scaled: f32) -> u32 {
+    let stepped = e.call(SLIDER_STEP, &args![scaled, 1.0f32]).f64();
+    e.call(FLOAT_TO_INT, &args![stepped]).u32()
+}
+
+/// Stores one of the slider's words (`offset` `0x14` or `0x18`) from a ratio:
+/// `step(last * ratio)` with `last = count - 1`.
+fn store_slider_step(e: &mut Engine, option: Ptr, offset: u32, ratio: f32) {
+    let last = last_step(e, option);
+    let step = slider_step_index(e, (last * f64::from(ratio)) as f32);
+    e.mem.set_u32(option.addr() + offset, step);
+}
+
+/// Both words of the slider from two ratios that need no call between them.
+fn store_slider_steps(e: &mut Engine, option: Ptr, first: f32, second: f32) {
+    store_slider_step(e, option, 0x14, first);
+    store_slider_step(e, option, 0x18, second);
+}
+
+/// `(value - min) / (max - min)` computed in extended precision and stored
+/// as a `float`.
+fn range_ratio(value: f64, min: f32, max: f32) -> f32 {
+    ((value - f64::from(min)) / (f64::from(max) - f64::from(min))) as f32
+}
+
+/// `(max - min) * ratio + min` stored as a `float`.
+fn range_value(min: f32, max: f32, ratio: f32) -> f32 {
+    ((f64::from(max) - f64::from(min)) * f64::from(ratio) + f64::from(min)) as f32
+}
+
+// Translated from 007d0bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unlabelled in Ghidra (the name is by role): sets the byte `1` on the
+/// model of the interface manager's menus root and on the model of the word
+/// at `+0x28` of the manager, calls `00713fb0(0, 0)` on the manager and
+/// `005b6cb0` on the main object.
+pub fn fn_007d0bf0(e: &mut Engine) {
+    let manager = e.call(INTERFACE_MANAGER_GETTER, &args![]).u32();
+    let root = e.call(MENUS_ROOT_GETTER, &args![manager]).u32();
+    let model = e.call(TILE_MODEL, &args![root]).u32();
+    e.call(FN_00450F90, &args![model, 1u32]);
+    let word = e.call(TILE_PARENT, &args![manager]).u32();
+    let model = e.call(TILE_MODEL, &args![word]).u32();
+    e.call(FN_00450F90, &args![model, 1u32]);
+    e.call(FN_00713FB0, &args![manager, 0u32, 0u32]);
+    let main = e.global::<u32>(MAIN_OBJECT);
+    e.call(FN_005B6CB0, &args![main]);
+}
+
+// Translated from 007d0c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Choose function: with a start menu, fades kind 2 in, sets menu flag
+/// `0x1000` and, unless `007d6030` says otherwise, refreshes the menu.
+pub fn fn_007d0c50(e: &mut Engine) {
+    let menu = start_menu_global(e);
+    if menu.is_null() {
+        return;
+    }
+    fade(e, menu, 2, 0);
+    let menu = start_menu_global(e);
+    e.call(MENU_FLAGS_SET, &args![menu, 0x1000u32, 1u32]);
+    let menu = start_menu_global(e);
+    if !e.call(FN_007D6030, &args![menu]).bool() {
+        let menu = start_menu_global(e);
+        e.call(MENU_REFRESH_A, &args![menu]);
+    }
+}
+
+// Translated from 007d0cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Choose function: when menu flag `0x1000` is set, sets the text of the
+/// tile at `+0x68` (`011d4b1c`'s setting string), makes it visible, and when
+/// the gamepad is active and the remap device is 3 hides the tile at `+0x3c`
+/// (trait `0xfaf`).
+pub fn fn_007d0cb0(e: &mut Engine) {
+    let menu = start_menu_global(e);
+    if menu.is_null() || !menu_flag(e, menu, 0x1000) {
+        return;
+    }
+    let text = e.call(SETTING_STRING, &args![SETTING_REMAP_TEXT]).u32();
+    let menu = start_menu_global(e);
+    let tile = e.mem.u32(menu.addr() + 0x68);
+    e.call(TILE_SET_STRING, &args![tile, TRAIT_STRING, text, 1u32]);
+    let menu = start_menu_global(e);
+    let tile = e.mem.u32(menu.addr() + 0x68);
+    e.call(TILE_SET_INT, &args![tile, TRAIT_VISIBLE, 1u32]);
+    if e.call(GAMEPAD_ACTIVE, &args![]).bool() {
+        let menu = start_menu_global(e);
+        if e.get(menu.cast::<StartMenu>(), StartMenu::iRemapDevice) == 3 {
+            let menu = start_menu_global(e);
+            let tile = e.mem.u32(menu.addr() + 0x3c);
+            e.call(TILE_SET_INT, &args![tile, TRAIT_TARGET, 0u32]);
+        }
+    }
+}
+/// The setting string `007d0cb0` puts on the remap tile.
+const SETTING_REMAP_TEXT: u32 = 0x011d_4b1c;
+
+/// A tile trait a choose function sets: the menu's tile at `offset`, trait
+/// `id`, integer `value`.
+type TileTrait = (u32, u32, u32);
+
+/// The four choose functions that show a list of options: with a start menu,
+/// set `before` (when given), disable the settings list (`+0xb4`), set `after`
+/// (when given) and populate the options list for `mode`.
+fn choose_options_list(
+    e: &mut Engine,
+    mode: u32,
+    before: Option<TileTrait>,
+    after: Option<TileTrait>,
+) {
+    let menu = start_menu_global(e);
+    if menu.is_null() {
+        return;
+    }
+    if let Some((offset, id, value)) = before {
+        let tile = e.mem.u32(menu.addr() + offset);
+        e.call(TILE_SET_INT, &args![tile, id, value]);
+    }
+    let menu = start_menu_global(e);
+    e.call(LIST_BOX_SET_ENABLED, &args![menu.byte_add(0xb4), 0u32]);
+    if let Some((offset, id, value)) = after {
+        let menu = start_menu_global(e);
+        let tile = e.mem.u32(menu.addr() + offset);
+        e.call(TILE_SET_INT, &args![tile, id, value]);
+    }
+    let menu = start_menu_global(e);
+    e.call(POPULATE_OPTIONS_LIST_BOX, &args![menu, mode]);
+}
+
+// Translated from 007d0d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Choose function: disables the settings list and populates the options
+/// list for mode 8.
+pub fn fn_007d0d40(e: &mut Engine) {
+    choose_options_list(e, 8, None, None);
+}
+
+// Translated from 007d0d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Choose function: makes the tile at `+0x50` visible, disables the settings
+/// list and populates the options list for mode `0x10`.
+pub fn fn_007d0d70(e: &mut Engine) {
+    choose_options_list(e, 0x10, Some((0x50, TRAIT_VISIBLE, 1)), None);
+}
+
+// Translated from 007d0dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Choose function: disables the settings list and populates the options
+/// list for mode `0x20`.
+pub fn fn_007d0dc0(e: &mut Engine) {
+    choose_options_list(e, 0x20, None, None);
+}
+
+// Translated from 007d0df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Choose function: disables the settings list, sets trait `0x1004` (user
+/// trait 0) of the tile at `+0x64` to 0 and populates the options list for
+/// mode `0x40`.
+pub fn fn_007d0df0(e: &mut Engine) {
+    choose_options_list(e, 0x40, None, Some((0x64, TRAIT_USER_0, 0)));
+}
+
+/// The list `ChooseBack` steps out of: the first enabled one in the order the
+/// exe tests them (confirm, settings, downloads, save-load, main).
+enum BackStage {
+    Confirm,
+    Settings,
+    Downloads,
+    SaveLoad,
+    Main,
+    Nothing,
+}
+
+fn back_stage(e: &mut Engine) -> BackStage {
+    let menu = start_menu_global(e);
+    if e.call(LIST_BOX_IS_ENABLED, &args![menu.byte_add(0xe4)])
+        .bool()
+    {
+        return BackStage::Confirm;
+    }
+    let menu = start_menu_global(e);
+    if e.call(LIST_BOX_IS_ENABLED, &args![menu.byte_add(0xb4)])
+        .bool()
+    {
+        return BackStage::Settings;
+    }
+    let menu = start_menu_global(e);
+    if e.call(INT_LIST_IS_ENABLED, &args![menu.byte_add(0x144)])
+        .bool()
+    {
+        return BackStage::Downloads;
+    }
+    let menu = start_menu_global(e);
+    if e.call(SAVE_LOAD_LIST_IS_ENABLED, &args![menu.byte_add(0x174)])
+        .bool()
+    {
+        return BackStage::SaveLoad;
+    }
+    let menu = start_menu_global(e);
+    if e.call(LIST_BOX_IS_ENABLED, &args![menu.byte_add(0x84)])
+        .bool()
+    {
+        return BackStage::Main;
+    }
+    BackStage::Nothing
+}
+
+// Translated from 007d0e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `StartMenu::ChooseBack` (Xbox PDB): steps back one level of the start
+/// menu. With the main list selectable: closes a pending message
+/// (`0x20000` shows the setting-string message), clears flags `0x20000` and
+/// `0x200000` and hides the tile at `+0x50`; then, for the first of the
+/// options, confirm, settings, downloads, save-load or main list that is
+/// enabled (or flag `0x1000`), hides it and fades to the previous one
+/// (kinds 7, 1, 0xe, 6, 5); it returns early where the exe does (main list
+/// with no flag `1`, flag `4`, or flag `0x40000`).
+pub fn start_menu_choose_back(e: &mut Engine) {
+    let menu = start_menu_global(e);
+    if menu.is_null() {
+        return;
+    }
+    if !e
+        .call(OPTIONS_LIST_HAS_SELECTION, &args![menu.byte_add(0x84)])
+        .bool()
+    {
+        return;
+    }
+    let menu = start_menu_global(e);
+    if menu_flag(e, menu, 0x20000) {
+        let text = e.call(SETTING_STRING, &args![SETTING_BINDING_TEXT]).u32();
+        let title = e.call(SETTING_STRING, &args![SETTING_011D2B14]).u32();
+        e.call(
+            SHOW_MESSAGE,
+            &args![title, 0u32, 0u32, 0u32, 0u32, 0x12u32, 0.0f32, 0.0f32, text, 0u32],
+        );
+    }
+    let menu = start_menu_global(e);
+    e.call(MENU_FLAGS_SET, &args![menu, 0x20000u32, 0u32]);
+    let menu = start_menu_global(e);
+    e.call(MENU_FLAGS_SET, &args![menu, 0x20_0000u32, 0u32]);
+    let menu = start_menu_global(e);
+    let tile = e.mem.u32(menu.addr() + 0x50);
+    e.call(TILE_SET_INT, &args![tile, TRAIT_VISIBLE, 0u32]);
+    let menu = start_menu_global(e);
+    let mut hide_options = e
+        .call(LIST_BOX_IS_ENABLED, &args![menu.byte_add(0x114)])
+        .bool();
+    if !hide_options {
+        let menu = start_menu_global(e);
+        hide_options = menu_flag(e, menu, 0x1000);
+    }
+    if hide_options {
+        let menu = start_menu_global(e);
+        e.call(HIDE_OPTIONS_CONTAINER, &args![menu]);
+        start_menu_choose_settings(e);
+        return;
+    }
+    match back_stage(e) {
+        BackStage::Confirm => {
+            let menu = start_menu_global(e);
+            e.call(LIST_BOX_SET_ENABLED, &args![menu.byte_add(0xe4), 0u32]);
+            let menu = start_menu_global(e);
+            fade(e, menu, 7, 0);
+            let menu = start_menu_global(e);
+            if e.call(OPTIONS_LIST_HAS_SELECTION, &args![menu.byte_add(0x174)])
+                .bool()
+            {
+                let menu = start_menu_global(e);
+                e.call(MENU_FLAGS_SET, &args![menu, 0x40000u32, 1u32]);
+                return;
+            }
+        }
+        BackStage::Settings => {
+            let menu = start_menu_global(e);
+            fade(e, menu, 1, 0);
+            let menu = start_menu_global(e);
+            e.call(LIST_BOX_SET_ENABLED, &args![menu.byte_add(0xb4), 0u32]);
+        }
+        BackStage::Downloads => {
+            let menu = start_menu_global(e);
+            fade(e, menu, 0xe, 0);
+            let menu = start_menu_global(e);
+            e.call(INT_LIST_SET_ENABLED, &args![menu.byte_add(0x144), 0u32]);
+        }
+        BackStage::SaveLoad => {
+            let menu = start_menu_global(e);
+            start_menu_update_can_load_status(e, menu.cast());
+            let menu = start_menu_global(e);
+            e.vcall(menu.addr() + 0x174, 0, &args![0u32]);
+            let menu = start_menu_global(e);
+            e.call(UPDATE_HIGHLIGHTED_SAVE_GAME_INFO, &args![menu]);
+            let menu = start_menu_global(e);
+            e.call(
+                SAVE_LOAD_LIST_SET_ENABLED,
+                &args![menu.byte_add(0x174), 0u32],
+            );
+            let menu = start_menu_global(e);
+            fade(e, menu, 6, 0);
+            let menu = start_menu_global(e);
+            e.vcall(menu.addr() + 0x174, 0x1c, &args![]);
+        }
+        BackStage::Main => {
+            if !e.call(START_MENU_FLAG_1, &args![]).bool() {
+                return;
+            }
+            let menu = start_menu_global(e);
+            if menu_flag(e, menu, 4) {
+                return;
+            }
+            start_menu_close(e, 1);
+            return;
+        }
+        BackStage::Nothing => {
+            let menu = start_menu_global(e);
+            if menu_flag(e, menu, 0x40000) {
+                return;
+            }
+        }
+    }
+    let menu = start_menu_global(e);
+    e.call(LIST_BOX_SET_ENABLED, &args![menu.byte_add(0x84), 1u32]);
+    let menu = start_menu_global(e);
+    e.call(LIST_BOX_DESELECT_ALL, &args![menu.byte_add(0x84), 1u32]);
+    let menu = start_menu_global(e);
+    fade(e, menu, 5, 0);
+    let menu = start_menu_global(e);
+    if menu_flag(e, menu, 2) {
+        e.call(MENU_REFRESH_D, &args![]);
+        let menu = start_menu_global(e);
+        e.call(MENU_FLAGS_SET, &args![menu, 2u32, 0u32]);
+    }
+}
+
+// Translated from 007d11d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Option change callback (`UserOption::pfChangeFn`, Xbox PDB): with the
+/// menu running and flag `0x20` set, copies the option's value (`+0x14`)
+/// into the value slot of the setting at `011e0940` and passes it to
+/// `007d1240` on the object at `011dea3c`; otherwise reads that object's
+/// `+0x7b8` (`005be4d0`) into the option and marks it kind 2.
+pub fn fn_007d11d0(e: &mut Engine, option: Ptr) {
+    if menu_exists_with_flag(e, 0x20) {
+        let slot = e.call(SETTING_VALUE_SLOT, &args![SETTING_011E0940]).u32();
+        let value = e.mem.u32(option.addr() + 0x14);
+        e.mem.set_u32(slot, value);
+        let value = e.mem.u32(slot);
+        let object = Ptr::new(e.global::<u32>(GLOBAL_OBJECT_011DEA3C));
+        fn_007d1240(e, object, value);
+    } else {
+        let object = e.global::<u32>(GLOBAL_OBJECT_011DEA3C);
+        let value = e.call(FN_005BE4D0, &args![object]).u32();
+        set_option_words(e, option, value, 2);
+    }
+}
+
+// Translated from 007d1240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the word at `+0x7b8` of the object.
+pub fn fn_007d1240(e: &mut Engine, this: Ptr, value: u32) {
+    e.mem.set_u32(this.addr() + 0x7b8, value);
+}
+
+// Translated from 007d1260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Option change callback like `007d11d0`, for the setting at `011e087c`
+/// and the word at `+0x7c0` (`007d12d0` writes it, `007d1340` reads it).
+pub fn fn_007d1260(e: &mut Engine, option: Ptr) {
+    if menu_exists_with_flag(e, 0x20) {
+        let slot = e.call(SETTING_VALUE_SLOT, &args![SETTING_011E087C]).u32();
+        let value = e.mem.u32(option.addr() + 0x14);
+        e.mem.set_u32(slot, value);
+        let value = e.mem.u32(slot);
+        let object = Ptr::new(e.global::<u32>(GLOBAL_OBJECT_011DEA3C));
+        fn_007d12d0(e, object, value);
+    } else {
+        let object = Ptr::new(e.global::<u32>(GLOBAL_OBJECT_011DEA3C));
+        let value = fn_007d1340(e, object);
+        set_option_words(e, option, value, 2);
+    }
+}
+
+// Translated from 007d12d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` at `+0x7c0` of the object (`007d1320`); when that changed
+/// the word and `007d1360` says the float at `+0xe18` is above zero, calls
+/// `0093e770(old, 1)`.
+pub fn fn_007d12d0(e: &mut Engine, this: Ptr, value: u32) {
+    let old = fn_007d1340(e, this);
+    fn_007d1320(e, this, value);
+    if old != fn_007d1340(e, this) && fn_007d1360(e, this) {
+        e.call(FN_0093E770, &args![this, old, 1u32]);
+    }
+}
+
+// Translated from 007d1320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the word at `+0x7c0` of the object.
+pub fn fn_007d1320(e: &mut Engine, this: Ptr, value: u32) {
+    e.mem.set_u32(this.addr() + 0x7c0, value);
+}
+
+// Translated from 007d1340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `+0x7c0` of the object.
+pub fn fn_007d1340(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x7c0)
+}
+
+// Translated from 007d1360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the float at `+0xe18` of the object is above zero (`FCOMP` against
+/// the double zero at `01012060`, flag test `0x41`: unordered is false).
+pub fn fn_007d1360(e: &mut Engine, this: Ptr) -> bool {
+    let value = f64::from(e.mem.f32(this.addr() + 0xe18));
+    !not_above(value, e.global::<f64>(DOUBLE_ZERO))
+}
+
+// Translated from 007d13a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Option change callback: with the menu running and flag `0x20` set, calls
+/// `007d1400` on the object at `011dea3c` with the option's value; otherwise
+/// stores whether `004d1360` (the object's `+0x7bc == 1`) holds as the value
+/// and kind 0.
+pub fn fn_007d13a0(e: &mut Engine, option: Ptr) {
+    if menu_exists_with_flag(e, 0x20) {
+        let value = e.mem.u32(option.addr() + 0x14);
+        let object = Ptr::new(e.global::<u32>(GLOBAL_OBJECT_011DEA3C));
+        fn_007d1400(e, object, value);
+    } else {
+        let object = e.global::<u32>(GLOBAL_OBJECT_011DEA3C);
+        let hardcore = e.call(FN_004D1360, &args![object]).bool();
+        set_option_words(e, option, u32::from(hardcore), 0);
+    }
+}
+
+// Translated from 007d1400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `PlayerCharacter::SetHardcore(this, value, 0)` (Xbox PDB name) when
+/// `value` is 0 or 1.
+pub fn fn_007d1400(e: &mut Engine, this: Ptr, value: u32) {
+    if value == 1 || value == 0 {
+        e.call(SET_HARDCORE, &args![this, value, 0u32]);
+    }
+}
+
+// Translated from 007d1440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Option change callback for the boolean setting at `011d8a38`: running,
+/// it sets the setting from the option (`value == 1`) and then edits bit
+/// `0x40` of the flag word of `011d96c0` (`007d14c0`) with the setting's
+/// value (`004503f0`); otherwise reads the setting into the option as kind 1.
+pub fn fn_007d1440(e: &mut Engine, option: Ptr) {
+    if menu_exists_with_flag(e, 0x20) {
+        let on = e.mem.u32(option.addr() + 0x14) == 1;
+        e.call(SETTING_SET_BOOL, &args![SETTING_011D8A38, u32::from(on)]);
+        let value = e.call(SETTING_GET_VALUE, &args![SETTING_011D8A38]).u32();
+        fn_007d14c0(e, 0x40, value);
+    } else {
+        let on = e.call(SETTING_GET_BOOL, &args![SETTING_011D8A38]).bool();
+        set_option_words(e, option, u32::from(on), 1);
+    }
+}
+
+// Translated from 007d14c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// With the object at `011d96c0`, sets the bits `flags` of its word `+0x1c0`
+/// when `value` is not 0 and clears them when it is 0.
+pub fn fn_007d14c0(e: &mut Engine, flags: u32, value: u32) {
+    let object = e.global::<u32>(FLAGS_OBJECT_011D96C0);
+    if object == 0 {
+        return;
+    }
+    let old = e.mem.u32(object + 0x1c0);
+    let object = e.global::<u32>(FLAGS_OBJECT_011D96C0);
+    let new = if value != 0 {
+        old | flags
+    } else {
+        !flags & old
+    };
+    e.mem.set_u32(object + 0x1c0, new);
+}
+
+/// The shared body of the boolean option callbacks `007d1510` .. `007d16f0`
+/// and `007d2e50`: with the menu running and flag `0x20` set, writes the
+/// option's `value == 1` to `setting`; otherwise reads the setting into the
+/// option with kind `second`.
+fn boolean_option_callback(e: &mut Engine, option: Ptr, setting: u32, second: u32) {
+    if menu_exists_with_flag(e, 0x20) {
+        let on = e.mem.u32(option.addr() + 0x14) == 1;
+        e.call(SETTING_SET_BOOL, &args![setting, u32::from(on)]);
+    } else {
+        let on = e.call(SETTING_GET_BOOL, &args![setting]).bool();
+        set_option_words(e, option, u32::from(on), second);
+    }
+}
+
+// Translated from 007d1510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Boolean option callback for the setting at `011d89f0` (kind 1).
+pub fn fn_007d1510(e: &mut Engine, option: Ptr) {
+    boolean_option_callback(e, option, SETTING_011D89F0, 1);
+}
+
+// Translated from 007d1570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Boolean option callback for the setting at `011d8974` (kind 1).
+pub fn fn_007d1570(e: &mut Engine, option: Ptr) {
+    boolean_option_callback(e, option, SETTING_011D8974, 1);
+}
+
+// Translated from 007d15d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Boolean option callback for the setting at `011d8980` (kind 1).
+pub fn fn_007d15d0(e: &mut Engine, option: Ptr) {
+    boolean_option_callback(e, option, SETTING_011D8980, 1);
+}
+
+// Translated from 007d1630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Boolean option callback for the setting at `011d8934` (kind 1).
+pub fn fn_007d1630(e: &mut Engine, option: Ptr) {
+    boolean_option_callback(e, option, SETTING_011D8934, 1);
+}
+
+// Translated from 007d1690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Boolean option callback for the setting at `011d8928` (kind 0).
+pub fn fn_007d1690(e: &mut Engine, option: Ptr) {
+    boolean_option_callback(e, option, SETTING_011D8928, 0);
+}
+
+// Translated from 007d16f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Boolean option callback for the setting at `011d898c` (kind 1).
+pub fn fn_007d16f0(e: &mut Engine, option: Ptr) {
+    boolean_option_callback(e, option, SETTING_011D898C, 1);
+}
+
+// Translated from 007d1750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Option change callback for the slider on the setting at `011d9774`
+/// (`VOLUME_OBJECT`): running, sets the setting to `iVal / (count - 1)` and
+/// sets menu flag `0x40`; otherwise works the option's two words out from
+/// the setting's value (kind words `step(last * value)` and
+/// `step(last * 1.0)`).
+pub fn fn_007d1750(e: &mut Engine, option: Ptr) {
+    if menu_exists_with_flag(e, 0x20) {
+        let ratio = slider_ratio(e, option);
+        e.call(FLOAT_SET, &args![VOLUME_OBJECT, ratio]);
+        let menu = start_menu_global(e);
+        e.call(MENU_FLAGS_SET, &args![menu, 0x40u32, 1u32]);
+    } else {
+        let value = setting_float(e, VOLUME_OBJECT);
+        store_slider_steps(e, option, value, 1.0);
+    }
+}
+
+/// `SystemColorManager` option callback: running, sets colour `id` of the
+/// instance to the table entry for the option's value and calls
+/// `00a0b350(1 or 4, 0.0)` on the menus root; otherwise looks for the
+/// table entry equal to the instance's colour `id` (default word 2, value
+/// 0, falling back to the default word when none matches).
+fn color_option_callback(e: &mut Engine, option: Ptr, id: u32) {
+    if menu_exists_with_flag(e, 0x20) {
+        let index = e.mem.u32(option.addr() + 0x14);
+        let color = e.mem.u32(COLOR_TABLE.wrapping_add(index.wrapping_mul(4)));
+        let instance = e.call(SYSTEM_COLOR_INSTANCE, &args![]).u32();
+        e.call(SYSTEM_COLOR_SET, &args![instance, id, color]);
+        let manager = e.call(INTERFACE_MANAGER_GETTER, &args![]).u32();
+        let root = e.call(MENUS_ROOT_GETTER, &args![manager]).u32();
+        e.call(FN_00A0B350, &args![root, id, 0.0f32]);
+    } else {
+        e.mem.set_u32(option.addr() + 0x18, 2);
+        e.mem.set_u32(option.addr() + 0x14, 0);
+        loop {
+            let index = e.mem.u32(option.addr() + 0x14);
+            let instance = e.call(SYSTEM_COLOR_INSTANCE, &args![]).u32();
+            let current = e.call(SYSTEM_COLOR_GET, &args![instance, id]).u32();
+            if e.mem.u32(COLOR_TABLE.wrapping_add(index.wrapping_mul(4))) == current {
+                return;
+            }
+            let next = e.mem.u32(option.addr() + 0x14).wrapping_add(1);
+            e.mem.set_u32(option.addr() + 0x14, next);
+            if next >= e.mem.u32(option.addr() + 0x20) {
+                let default = e.mem.u32(option.addr() + 0x18);
+                e.mem.set_u32(option.addr() + 0x14, default);
+                return;
+            }
+        }
+    }
+}
+
+// Translated from 007d1840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Colour option callback for system colour 1 (see `color_option_callback`).
+pub fn fn_007d1840(e: &mut Engine, option: Ptr) {
+    color_option_callback(e, option, 1);
+}
+
+// Translated from 007d1900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Colour option callback for system colour 4.
+pub fn fn_007d1900(e: &mut Engine, option: Ptr) {
+    color_option_callback(e, option, 4);
+}
+
+// Translated from 007d19c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Option change callback for a slider between the floats of the settings at
+/// `011dab98` (minimum) and `011dab60` (maximum): running, passes
+/// `min + (max - min) * iVal / (count - 1)` to `004dc2d0`; otherwise works
+/// the option's two words out from `007d1b30` (the float of `011c71ac`) and
+/// the value 1.0, both as fractions of the range.
+pub fn fn_007d19c0(e: &mut Engine, option: Ptr) {
+    if menu_exists_with_flag(e, 0x20) {
+        let min = setting_float(e, SETTING_MINIMUM_011DAB98);
+        let max = setting_float(e, SETTING_MAXIMUM_011DAB60);
+        let ratio = slider_ratio(e, option);
+        let value = range_value(min, max, ratio);
+        e.call(FLOAT_SINK, &args![value]);
+    } else {
+        let current = fn_007d1b30(e);
+        // The difference is stored as a double (FSTP qword), the divisor is
+        // formed on the x87 stack.
+        let diff = f64::from(current) - f64::from(setting_float(e, SETTING_MINIMUM_011DAB98));
+        let max = setting_float(e, SETTING_MAXIMUM_011DAB60);
+        let min = setting_float(e, SETTING_MINIMUM_011DAB98);
+        let first = (diff / (f64::from(max) - f64::from(min))) as f32;
+        let last = last_step(e, option);
+        let value = slider_step_index(e, (last * f64::from(first)) as f32);
+        e.mem.set_u32(option.addr() + 0x14, value);
+        let min = setting_float(e, SETTING_MINIMUM_011DAB98);
+        let diff = 1.0 - f64::from(min);
+        let max = setting_float(e, SETTING_MAXIMUM_011DAB60);
+        let min = setting_float(e, SETTING_MINIMUM_011DAB98);
+        let second = (diff / (f64::from(max) - f64::from(min))) as f32;
+        let last = last_step(e, option);
+        let default = slider_step_index(e, (last * f64::from(second)) as f32);
+        e.mem.set_u32(option.addr() + 0x18, default);
+    }
+}
+const SETTING_MINIMUM_011DAB98: u32 = 0x011d_ab98;
+const SETTING_MAXIMUM_011DAB60: u32 = 0x011d_ab60;
+
+// Translated from 007d1b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The float `00450410` returns for the object at `011c71ac` (ST0).
+pub fn fn_007d1b30(e: &mut Engine) -> f32 {
+    e.call(FLOAT_AT_OBJECT, &args![FLOAT_OBJECT_011C71AC]).f32()
+}
+
+// Translated from 007d1b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Option change callback for the integer at `0126efc4`: running, sets the
+/// setting at `011c779c` to the option's value (`0045ce80`) and sets menu
+/// flag `0x400000` to whether the integer differs from it; otherwise reads
+/// the integer into the option as kind 0.
+pub fn fn_007d1b40(e: &mut Engine, option: Ptr) {
+    if menu_exists_with_flag(e, 0x20) {
+        let value = e.mem.u32(option.addr() + 0x14);
+        e.call(SETTING_SET_INT, &args![SETTING_011C779C, value]);
+        let changed = e.global::<u32>(GLOBAL_0126EFC4) != e.mem.u32(option.addr() + 0x14);
+        let menu = start_menu_global(e);
+        e.call(
+            MENU_FLAGS_SET,
+            &args![menu, 0x40_0000u32, u32::from(changed)],
+        );
+    } else {
+        let value = e.global::<u32>(GLOBAL_0126EFC4);
+        set_option_words(e, option, value, 0);
+    }
+}
+
+/// The audio-level sliders `007d1bb0`, `007d1d10` and `007d1e60`: between the
+/// floats of the settings `min` and `max` (read first, as `float`s).
+/// Running: stores `min + (max - min) * iVal / (count - 1)` in the float
+/// table at index `index` (`004504f0`) and in the setting `target`
+/// (`004ed780`). Otherwise works the option's two words out from
+/// `table[index]` (`007d1d00`) and from the setting `default` as fractions
+/// of the range.
+fn audio_level_slider(
+    e: &mut Engine,
+    option: Ptr,
+    min_setting: u32,
+    max_setting: u32,
+    index: u32,
+    target: u32,
+    default_setting: u32,
+) {
+    let min = setting_float(e, min_setting);
+    let max = setting_float(e, max_setting);
+    if menu_exists_with_flag(e, 0x20) {
+        let ratio = slider_ratio(e, option);
+        let value = range_value(min, max, ratio);
+        e.call(FLOAT_TABLE_SET, &args![index, value]);
+        e.call(FLOAT_SET, &args![target, value]);
+    } else {
+        let current = fn_007d1d00(e, index as i32);
+        let first = range_ratio(f64::from(current), min, max);
+        store_slider_step(e, option, 0x14, first);
+        let default = setting_float(e, default_setting);
+        let second = range_ratio(f64::from(default), min, max);
+        store_slider_step(e, option, 0x18, second);
+    }
+}
+
+// Translated from 007d1bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Audio-level slider for float table index 3 (settings `011dab1c`,
+/// `011daaf4`, target `011c3ec0`, default `011dac38`).
+pub fn fn_007d1bb0(e: &mut Engine, option: Ptr) {
+    audio_level_slider(
+        e,
+        option,
+        0x011d_ab1c,
+        0x011d_aaf4,
+        3,
+        0x011c_3ec0,
+        0x011d_ac38,
+    );
+}
+
+// Translated from 007d1d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Entry `index` of the float table at `011ad7b8` (ST0).
+pub fn fn_007d1d00(e: &mut Engine, index: i32) -> f32 {
+    e.mem
+        .f32(FLOAT_TABLE.wrapping_add((index as u32).wrapping_mul(4)))
+}
+
+// Translated from 007d1d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Audio-level slider for float table index 2 (settings `011dabf0`,
+/// `011dac24`, target `011c3d0c`, default `011dabc0`).
+pub fn fn_007d1d10(e: &mut Engine, option: Ptr) {
+    audio_level_slider(
+        e,
+        option,
+        0x011d_abf0,
+        0x011d_ac24,
+        2,
+        0x011c_3d0c,
+        0x011d_abc0,
+    );
+}
+
+// Translated from 007d1e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Audio-level slider for float table index 1 (settings `011dab30`,
+/// `011dab78`, target `011c3d78`, default `011dab6c`).
+pub fn fn_007d1e60(e: &mut Engine, option: Ptr) {
+    audio_level_slider(
+        e,
+        option,
+        0x011d_ab30,
+        0x011d_ab78,
+        1,
+        0x011c_3d78,
+        0x011d_ab6c,
+    );
+}
+
+/// The sliders between two settings that store into a third (`007d1fb0`,
+/// `007d2510`, `007d2650`): running, `*setting = min + (max - min) * iVal /
+/// (count - 1)`; otherwise the option's two words come from the settings
+/// `setting` and `default` as fractions of the range.
+fn setting_range_slider(
+    e: &mut Engine,
+    option: Ptr,
+    min_setting: u32,
+    max_setting: u32,
+    setting: u32,
+    default_setting: u32,
+) {
+    let min = setting_float(e, min_setting);
+    let max = setting_float(e, max_setting);
+    if menu_exists_with_flag(e, 0x20) {
+        let ratio = slider_ratio(e, option);
+        let value = range_value(min, max, ratio);
+        let slot = e.call(FLOAT_SLOT, &args![setting]).u32();
+        e.mem.set_f32(slot, value);
+    } else {
+        let current = setting_float(e, setting);
+        let first = range_ratio(f64::from(current), min, max);
+        store_slider_step(e, option, 0x14, first);
+        let default = setting_float(e, default_setting);
+        let second = range_ratio(f64::from(default), min, max);
+        store_slider_step(e, option, 0x18, second);
+    }
+}
+
+// Translated from 007d1fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Range slider (settings `011ca4ac`, `011ca4d8`, stored in `011ca450`,
+/// default `011ca4cc`).
+pub fn fn_007d1fb0(e: &mut Engine, option: Ptr) {
+    setting_range_slider(
+        e,
+        option,
+        0x011c_a4ac,
+        0x011c_a4d8,
+        0x011c_a450,
+        0x011c_a4cc,
+    );
+}
+
+/// The sliders `007d20f0`, `007d2250` and `007d23b0`: like
+/// `setting_range_slider` for `setting`, and running they also store the value
+/// in the float at `copy` and its sum with the float of the setting `extra`
+/// in the float at `sum`.
+fn setting_range_slider_with_copies(
+    e: &mut Engine,
+    option: Ptr,
+    settings: (u32, u32, u32, u32),
+    copy: u32,
+    extra: u32,
+    sum: u32,
+) {
+    let (min_setting, max_setting, setting, default_setting) = settings;
+    let min = setting_float(e, min_setting);
+    let max = setting_float(e, max_setting);
+    if menu_exists_with_flag(e, 0x20) {
+        let ratio = slider_ratio(e, option);
+        let value = range_value(min, max, ratio);
+        let slot = e.call(FLOAT_SLOT, &args![setting]).u32();
+        e.mem.set_f32(slot, value);
+        e.mem.set_f32(copy, value);
+        let extra_slot = e.call(FLOAT_SLOT, &args![extra]).u32();
+        let added = f64::from(value) + f64::from(e.mem.f32(extra_slot));
+        e.mem.set_f32(sum, added as f32);
+    } else {
+        let current = setting_float(e, setting);
+        let first = range_ratio(f64::from(current), min, max);
+        store_slider_step(e, option, 0x14, first);
+        let default = setting_float(e, default_setting);
+        let second = range_ratio(f64::from(default), min, max);
+        store_slider_step(e, option, 0x18, second);
+    }
+}
+
+// Translated from 007d20f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Range slider (settings `011c7294`, `011c71b8`, stored in `011c7568`,
+/// default `011c7278`; copies in `011f944c` and, plus `011c7400`, `011f9450`).
+pub fn fn_007d20f0(e: &mut Engine, option: Ptr) {
+    setting_range_slider_with_copies(
+        e,
+        option,
+        (0x011c_7294, 0x011c_71b8, 0x011c_7568, 0x011c_7278),
+        0x011f_944c,
+        0x011c_7400,
+        0x011f_9450,
+    );
+}
+
+// Translated from 007d2250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Range slider (settings `011c72ac`, `011c74ec`, stored in `011c7740`,
+/// default `011c744c`; copies in `011f9444` and, plus `011c76b4`,
+/// `011f9448`).
+pub fn fn_007d2250(e: &mut Engine, option: Ptr) {
+    setting_range_slider_with_copies(
+        e,
+        option,
+        (0x011c_72ac, 0x011c_74ec, 0x011c_7740, 0x011c_744c),
+        0x011f_9444,
+        0x011c_76b4,
+        0x011f_9448,
+    );
+}
+
+// Translated from 007d23b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Range slider (settings `011c7440`, `011c71d0`, stored in `011c7598`,
+/// default `011c7494`; copies in `011f9454` and, plus `011c7634`,
+/// `011f9458`).
+pub fn fn_007d23b0(e: &mut Engine, option: Ptr) {
+    setting_range_slider_with_copies(
+        e,
+        option,
+        (0x011c_7440, 0x011c_71d0, 0x011c_7598, 0x011c_7494),
+        0x011f_9454,
+        0x011c_7634,
+        0x011f_9458,
+    );
+}
+
+// Translated from 007d2510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Range slider (settings `011d86c4`, `011d86ec`, stored in `011d8724`,
+/// default `011d870c`).
+pub fn fn_007d2510(e: &mut Engine, option: Ptr) {
+    setting_range_slider(
+        e,
+        option,
+        0x011d_86c4,
+        0x011d_86ec,
+        0x011d_8724,
+        0x011d_870c,
+    );
+}
+
+// Translated from 007d2650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Range slider (settings `011d8734`, `011d8718`, stored in `011d8788`,
+/// default `011d8770`).
+pub fn fn_007d2650(e: &mut Engine, option: Ptr) {
+    setting_range_slider(
+        e,
+        option,
+        0x011d_8734,
+        0x011d_8718,
+        0x011d_8788,
+        0x011d_8770,
+    );
+}
+
+/// The audio volume sliders `007d2790` .. `007d2d30`. `option` may be null:
+/// then the audio object's setter is called with the setting's value.
+/// Running: sets the setting to `iVal / (count - 1)` and passes the
+/// setting's value to the audio object's setter. Otherwise works the
+/// option's two words out from the audio object's getter and 1.0.
+fn audio_volume_slider(e: &mut Engine, option: Ptr, setting: u32, setter: u32, getter: u32) {
+    if option.is_null() {
+        let volume = e.call(FLOAT_AT_OBJECT, &args![setting]).f32();
+        let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+        e.call(setter, &args![audio, volume]);
+    } else if menu_exists_with_flag(e, 0x20) {
+        let ratio = slider_ratio(e, option);
+        let object = e.call(FLOAT_SET, &args![setting, ratio]).u32();
+        let volume = e.call(FLOAT_AT_OBJECT, &args![object]).f32();
+        let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+        e.call(setter, &args![audio, volume]);
+    } else {
+        let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+        let volume = e.call(getter, &args![audio]).f32();
+        store_slider_steps(e, option, volume, 1.0);
+    }
+}
+
+// Translated from 007d2790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Audio volume slider on the setting at `011f6e14` (audio setter
+/// `00ad7b10`, getter `00ad79f0`).
+pub fn fn_007d2790(e: &mut Engine, option: Ptr) {
+    audio_volume_slider(e, option, 0x011f_6e14, 0x00ad_7b10, 0x00ad_79f0);
+}
+
+// Translated from 007d28b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Audio volume slider on the setting at `011f6e20` (setter `00ad7b40`,
+/// getter `00ad7a20`).
+pub fn fn_007d28b0(e: &mut Engine, option: Ptr) {
+    audio_volume_slider(e, option, 0x011f_6e20, 0x00ad_7b40, 0x00ad_7a20);
+}
+
+// Translated from 007d29d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Audio volume slider on the setting at `011f6e44` (setter `00ad7bd0`,
+/// getter `00ad7ab0`).
+pub fn fn_007d29d0(e: &mut Engine, option: Ptr) {
+    audio_volume_slider(e, option, 0x011f_6e44, 0x00ad_7bd0, 0x00ad_7ab0);
+}
+
+// Translated from 007d2af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Audio volume slider on the setting at `011f6e2c` (setter `00ad7b70`,
+/// getter `00ad7a50`).
+pub fn fn_007d2af0(e: &mut Engine, option: Ptr) {
+    audio_volume_slider(e, option, 0x011f_6e2c, 0x00ad_7b70, 0x00ad_7a50);
+}
+
+// Translated from 007d2c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Audio volume slider on the setting at `011f6e38` (setter `00ad7ba0`,
+/// getter `00ad7a80`).
+pub fn fn_007d2c10(e: &mut Engine, option: Ptr) {
+    audio_volume_slider(e, option, 0x011f_6e38, 0x00ad_7ba0, 0x00ad_7a80);
+}
+
+// Translated from 007d2d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `StartMenu::SetRadioVol` (Xbox PDB): the audio volume slider on the
+/// setting at `011f6e50` (setter `00ad7c00`, getter `00ad7ae0`).
+pub fn start_menu_set_radio_vol(e: &mut Engine, option: Ptr) {
+    audio_volume_slider(e, option, 0x011f_6e50, 0x00ad_7c00, 0x00ad_7ae0);
+}
+
+// Translated from 007d2e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Boolean option callback for the setting at `011e0a5c` (kind 0).
+pub fn fn_007d2e50(e: &mut Engine, option: Ptr) {
+    boolean_option_callback(e, option, SETTING_011E0A5C, 0);
+}
+
+// Translated from 007d2eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Option change callback for the slider on the setting at `011e0a6c`
+/// between the doubles `0.0005` and `0.0005 + 0.0095` (exe data): running,
+/// stores `iVal / (count - 1) * 0.0095 + 0.0005` (rounded to a double, then
+/// a float) in the setting; otherwise works the option's two words out from
+/// the setting's value and from the float at `01076f60`.
+pub fn fn_007d2eb0(e: &mut Engine, option: Ptr) {
+    if menu_exists_with_flag(e, 0x20) {
+        let ratio = slider_ratio(e, option);
+        let scale = e.global::<f64>(DOUBLE_SLIDER_SCALE);
+        let offset = e.global::<f64>(DOUBLE_SLIDER_OFFSET);
+        let value = f64::from(ratio) * scale + offset;
+        let slot = e.call(FLOAT_SLOT, &args![SETTING_011E0A6C]).u32();
+        e.mem.set_f32(slot, value as f32);
+    } else {
+        let slot = e.call(FLOAT_SLOT, &args![SETTING_011E0A6C]).u32();
+        let current = f64::from(e.mem.f32(slot));
+        let scale = e.global::<f64>(DOUBLE_SLIDER_SCALE);
+        let offset = e.global::<f64>(DOUBLE_SLIDER_OFFSET);
+        let first = ((current - offset) / scale) as f32;
+        let full = e.global::<f32>(FLOAT_SLIDER_FULL);
+        store_slider_steps(e, option, first, full);
+    }
+}
+
+// Translated from 007d2fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Option change callback for the "boolean via the interface manager"
+/// option. Running: passes `value != 1` to `00719740` on the interface
+/// manager and, when the tile at `+0x1cc` of the menu exists, sets its
+/// enabled trait (`+0x1d0`) to `value == 1`. Otherwise reads the setting at
+/// `011d8c4c` (`007d30d0`) into the option (inverted), copies it into the
+/// main object's `00877720` result (`005407b0`), and sets the byte of
+/// `007d30b0` to its inverse; kind 1.
+pub fn fn_007d2fc0(e: &mut Engine, option: Ptr) {
+    if menu_exists_with_flag(e, 0x20) {
+        let on = e.mem.u32(option.addr() + 0x14) == 1;
+        let manager = e.call(INTERFACE_MANAGER_GETTER, &args![]).u32();
+        e.call(FN_00719740, &args![manager, u32::from(!on)]);
+        let menu = start_menu_global(e);
+        let tile = e.mem.u32(menu.addr() + 0x1cc);
+        if tile != 0 {
+            let menu = start_menu_global(e);
+            let enabled_trait = e.mem.u32(menu.addr() + 0x1d0);
+            e.call(TILE_SET_INT, &args![tile, enabled_trait, u32::from(on)]);
+        }
+    } else {
+        e.call(INTERFACE_MANAGER_GETTER, &args![]);
+        let value = fn_007d30d0(e);
+        e.mem.set_u32(option.addr() + 0x14, u32::from(value == 0));
+        e.call(INTERFACE_MANAGER_GETTER, &args![]);
+        let value = fn_007d30d0(e);
+        let main = e.global::<u32>(MAIN_OBJECT);
+        let target = e.call(INPUT_OBJECT_GETTER, &args![main]).u32();
+        e.call(FN_005407B0, &args![target, u32::from(value)]);
+        let main = e.global::<u32>(MAIN_OBJECT);
+        e.call(INPUT_OBJECT_GETTER, &args![main]);
+        e.call(INTERFACE_MANAGER_GETTER, &args![]);
+        let value = fn_007d30d0(e);
+        fn_007d30b0(e, u8::from(value == 0));
+        e.mem.set_u32(option.addr() + 0x18, 1);
+    }
+}
+
+// Translated from 007d30b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the byte at `+0x1b88` of the object at `011f35cc`, if
+/// there is one.
+pub fn fn_007d30b0(e: &mut Engine, value: u8) {
+    if e.global::<u32>(OBJECT_011F35CC) != 0 {
+        let object = e.global::<u32>(OBJECT_011F35CC);
+        e.mem.set_u8(object + 0x1b88, value);
+    }
+}
+
+// Translated from 007d30d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte `00454af0` returns for the setting at `011d8c4c`.
+pub fn fn_007d30d0(e: &mut Engine) -> u8 {
+    e.call(SETTING_GET_BOOL, &args![SETTING_011D8C4C]).u8()
+}
+
+// Translated from 007d30e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Option change callback for the setting at `011e0850`: running, sets the
+/// setting from the option and passes its byte to `007d30b0`; otherwise
+/// reads the setting into the option and its second word from the byte at
+/// `+0x85` of the object `00a25920` returns (`007d3170`).
+pub fn fn_007d30e0(e: &mut Engine, option: Ptr) {
+    if menu_exists_with_flag(e, 0x20) {
+        let on = e.mem.u32(option.addr() + 0x14) == 1;
+        let setting = e
+            .call(SETTING_SET_BOOL, &args![SETTING_011E0850, u32::from(on)])
+            .u32();
+        let value = e.call(SETTING_GET_BOOL, &args![setting]).u8();
+        fn_007d30b0(e, value);
+    } else {
+        let on = e.call(SETTING_GET_BOOL, &args![SETTING_011E0850]).bool();
+        e.mem.set_u32(option.addr() + 0x14, u32::from(on));
+        let object = e.call(DLC_GETTER, &args![]).u32();
+        let flag = fn_007d3170(e, Ptr::new(object));
+        e.mem.set_u32(option.addr() + 0x18, u32::from(flag != 0));
+    }
+}
+
+// Translated from 007d3170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `+0x85` of the object.
+pub fn fn_007d3170(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x85)
+}
+
+/// The two-line message `ConfirmContinue` and `ConfirmNewGame` show:
+/// `ShowMessage(title, 0, 0, 0, 0, 5, 0.0, 0.0, text, 0)` with the setting
+/// strings of `SETTING_BINDING_TEXT` (text) and `title_setting`.
+fn show_save_message(e: &mut Engine, title_setting: u32) {
+    let text = e.call(SETTING_STRING, &args![SETTING_BINDING_TEXT]).u32();
+    let title = e.call(SETTING_STRING, &args![title_setting]).u32();
+    e.call(
+        SHOW_MESSAGE,
+        &args![title, 0u32, 0u32, 0u32, 0u32, 5u32, 0.0f32, 0.0f32, text, 0u32],
+    );
+}
+
+/// The first list node's item word of the save manager at `011de134`:
+/// `FIRST_WORD(manager)` is the node, `NODE_ITEM(node)` the address of its
+/// item. Returns the node (0 when the list is empty).
+fn save_manager_first_node(e: &mut Engine) -> u32 {
+    let manager = e.global::<u32>(CALLBACK_OWNER);
+    e.call(FIRST_WORD, &args![manager]).u32()
+}
+
+/// The item of the manager's first node.
+fn save_manager_first_item(e: &mut Engine) -> u32 {
+    let node = save_manager_first_node(e);
+    let item = e.call(NODE_ITEM, &args![node]).u32();
+    e.mem.u32(item)
+}
+
+// Translated from 007d3190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `StartMenu::ConfirmContinue` (Xbox PDB): when the save manager (`011de134`)
+/// has no first node or that node's item is 0, calls `00851330` on it; then,
+/// with a first item that is not corrupt (`00846b30`), runs the archive
+/// clean-up and `008467b0` on it; with a corrupt one or none shows the
+/// message; always ends with `ChooseBack`.
+pub fn start_menu_confirm_continue(e: &mut Engine) {
+    let mut empty = save_manager_first_node(e) == 0;
+    if !empty {
+        empty = save_manager_first_item(e) == 0;
+    }
+    if empty {
+        let manager = e.global::<u32>(CALLBACK_OWNER);
+        e.call(FN_00851330, &args![manager]);
+    }
+    let mut shown = false;
+    if save_manager_first_node(e) != 0 {
+        let item = save_manager_first_item(e);
+        if item != 0 {
+            let entry = save_manager_first_item(e);
+            if e.call(SAVE_ENTRY_IS_CORRUPT, &args![entry]).bool() {
+                show_save_message(e, SETTING_011D1F14);
+            } else {
+                e.call(ARCHIVE_CLEANUP, &args![]);
+                let entry = save_manager_first_item(e);
+                e.call(FN_008467B0, &args![entry]);
+            }
+            shown = true;
+        }
+    }
+    if !shown {
+        show_save_message(e, SETTING_011D48AC);
+    }
+    start_menu_choose_back(e);
+}
+
+// Translated from 007d32b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `StartMenu::ConfirmNewGame` (Xbox PDB): looks up the form whose id is the
+/// hexadecimal text of the setting at `011dac00` (`strtol(text, &end, 16)`
+/// then `004839c0`); the object at `011dea3c` gets `005d1530(0)` and
+/// `005d14d0(1)`. A form of type byte `0x47` is cast from `TESForm` to
+/// `TESQuest`; with no quest it logs `QUESTS: Unable to find character
+/// generation quest` and calls `ChooseBack`. With a quest: closes the menu,
+/// runs the archive clean-up, sets `011d8907`, calls `007adcc0(0)` on the
+/// object at `011dea3c`, casts its `GetForm` result from `TESBoundObject`
+/// to `TESNPC`, stores the setting `011d4f78`'s text through `00489100` at
+/// `+0xd0`, starts the quest (`0060c9c0(1)`), shows the loading tile,
+/// resets the audio and the dialog flag and finishes the DLC flags and the
+/// two tutorial messages.
+pub fn start_menu_confirm_new_game(e: &mut Engine) {
+    let text = e.call(SETTING_STRING, &args![SETTING_011DAC00]).u32();
+    let value = e.with_stack(4, |e, end| e.call(STRTOL, &args![text, end, 0x10u32]).u32());
+    let form = e.call(LOOKUP_FORM, &args![value]).u32();
+    let mut quest = 0;
+    let player = e.global::<u32>(GLOBAL_OBJECT_011DEA3C);
+    if player != 0 {
+        e.call(FN_005D1530, &args![player, 0u32]);
+        let player = e.global::<u32>(GLOBAL_OBJECT_011DEA3C);
+        e.call(FN_005D14D0, &args![player, 1u32]);
+    }
+    if form != 0 && e.call(FN_00401170, &args![form]).u32() == 0x47 {
+        quest = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![
+                    form,
+                    0u32,
+                    TYPE_DESCRIPTOR_FORM,
+                    TYPE_DESCRIPTOR_QUEST,
+                    0u32
+                ],
+            )
+            .u32();
+    }
+    if quest == 0 {
+        let text = e.call(SETTING_STRING, &args![SETTING_011DAC00]).u32();
+        e.call(LOG_MESSAGE, &args![TEXT_QUEST_NOT_FOUND, text]);
+        start_menu_choose_back(e);
+        return;
+    }
+    start_menu_close(e, 0);
+    e.call(ARCHIVE_CLEANUP, &args![]);
+    e.mem.set_u8(FLAG_011D8907, 1);
+    let player = e.global::<u32>(GLOBAL_OBJECT_011DEA3C);
+    e.call(FN_007ADCC0, &args![player, 0u32]);
+    let player = e.global::<u32>(GLOBAL_OBJECT_011DEA3C);
+    let base = e.call(GET_FORM, &args![player]).u32();
+    let npc = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![
+                base,
+                0u32,
+                TYPE_DESCRIPTOR_BOUND_OBJECT,
+                TYPE_DESCRIPTOR_NPC,
+                0u32
+            ],
+        )
+        .u32();
+    let sound = e.call(OPTION_TEXT, &args![SETTING_011D4F78]).u32();
+    e.call(SET_STRING_FIELD, &args![npc.wrapping_add(0xd0), sound]);
+    e.call(FN_0060C9C0, &args![quest, 1u32]);
+    let loading = e.global::<u32>(LOADING_MENU);
+    let tile = e.mem.u32(loading + 0x54);
+    e.call(TILE_SET_INT, &args![tile, TRAIT_VISIBLE, 1u32]);
+    e.call(FN_004581C0, &args![1u32]);
+    e.call(ERROR_CALL, &args![]);
+    e.call(SET_DIALOG_FLAG, &args![0u32]);
+    e.call(MEDIA_CLOSE, &args![]);
+    if e.call(DLC_GETTER, &args![]).u32() != 0 {
+        let object = e.call(DLC_GETTER, &args![]).u32();
+        fn_007d0bd0(e, Ptr::new(object), 1);
+        let object = e.call(DLC_GETTER, &args![]).u32();
+        fn_007d0bb0(e, Ptr::new(object));
+    }
+    e.call(FN_00788A90, &args![1u32]);
+    let manager = e.call(INTERFACE_MANAGER_GETTER, &args![]).u32();
+    e.call(
+        TUTORIAL_SHOW_MESSAGE,
+        &args![
+            manager.wrapping_add(HELP_TABLE_OFFSET),
+            0x19u32,
+            0x3ebu32,
+            0x200u32
+        ],
+    );
+    let manager = e.call(INTERFACE_MANAGER_GETTER, &args![]).u32();
+    e.call(
+        TUTORIAL_SHOW_MESSAGE,
+        &args![
+            manager.wrapping_add(HELP_TABLE_OFFSET),
+            0x1au32,
+            0x3ffu32,
+            0x200u32
+        ],
+    );
+}
+/// `00489100(this, text)` (`RET 4`), called on the NPC's field at `+0xd0`
+/// (Ghidra name `TESSoundFile::SetSoundFile`, unconfirmed).
+const SET_STRING_FIELD: u32 = 0x0048_9100;
+
+// Translated from 007d3470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Continues with the save game the menu holds (`+0x1b0`): runs the archive
+/// clean-up and, with the player object running and flag 1 of the start
+/// menu, tells the texture owner (`011dea10`, `00457d70(1, 0, 0)`) when the
+/// location name of the NPC's `+0xd0` (`00408da0`) is found by `00408b20`
+/// in the save entry's `0075f8c0` word; then loads the entry (`008467b0`)
+/// and either closes the start menu (flag 1 set and loaded) or backs out.
+pub fn fn_007d3470(e: &mut Engine) {
+    let menu = start_menu_global(e);
+    if menu.is_null() {
+        return;
+    }
+    if e.mem.u32(menu.addr() + 0x1b0) == 0 {
+        return;
+    }
+    e.call(ARCHIVE_CLEANUP, &args![]);
+    let menu = start_menu_global(e);
+    let save = e.mem.u32(menu.addr() + 0x1b0);
+    let player = e.global::<u32>(GLOBAL_OBJECT_011DEA3C);
+    if player != 0 && e.call(START_MENU_FLAG_1, &args![]).bool() {
+        let player = e.global::<u32>(GLOBAL_OBJECT_011DEA3C);
+        let base = e.call(GET_FORM, &args![player]).u32();
+        let npc = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![
+                    base,
+                    0u32,
+                    TYPE_DESCRIPTOR_BOUND_OBJECT,
+                    TYPE_DESCRIPTOR_NPC,
+                    0u32
+                ],
+            )
+            .u32();
+        if npc != 0 && e.call(FN_00408DA0, &args![npc.wrapping_add(0xd0)]).u32() != 0 {
+            let place = e.call(FN_0075F8C0, &args![save]).u32();
+            if place != 0 {
+                let place = e.call(FN_0075F8C0, &args![save]).u32();
+                let name = e.call(FN_00408DA0, &args![npc.wrapping_add(0xd0)]).u32();
+                if e.call(FN_00408B20, &args![name, place]).u32() != 0 {
+                    let owner = e.global::<u32>(TEXTURE_OWNER);
+                    e.call(TEXTURE_OWNER_CALL, &args![owner, 1u32, 0u32, 0u32]);
+                }
+            }
+        }
+    }
+    let loaded = e.call(FN_008467B0, &args![save]).u8();
+    let menu = start_menu_global(e);
+    if !menu.is_null() && menu_flag(e, menu, 1) && loaded != 0 {
+        start_menu_close(e, 1);
+        return;
+    }
+    if loaded == 0 {
+        let menu = start_menu_global(e);
+        if !menu.is_null() {
+            // Both outcomes of this test lead to ChooseBack.
+            menu_flag(e, menu, 0x2000_0000);
+        }
+    }
+    start_menu_choose_back(e);
+}
+
+// Translated from 007d35c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Choose function: with a start menu, calls slot `0x1c` of the confirm
+/// list (`+0xe4`), sets the text of the tile at `+0x48` to the setting string
+/// of `011d4930` and sets menu flag `0x4000`.
+pub fn fn_007d35c0(e: &mut Engine) {
+    let menu = start_menu_global(e);
+    if menu.is_null() {
+        return;
+    }
+    e.vcall(menu.addr() + 0xe4, 0x1c, &args![]);
+    let text = e.call(SETTING_STRING, &args![SETTING_SAVE_SELECTED]).u32();
+    let menu = start_menu_global(e);
+    let tile = e.mem.u32(menu.addr() + 0x48);
+    e.call(TILE_SET_STRING, &args![tile, TRAIT_STRING, text, 1u32]);
+    let menu = start_menu_global(e);
+    e.call(MENU_FLAGS_SET, &args![menu, 0x4000u32, 1u32]);
+}
+
+/// The save entry and the entry object the save-load list holds at `index`
+/// (`vcall` slot `0x14` and `007d86c0`); both non-null means the index is
+/// usable.
+fn save_entry_pair(e: &mut Engine, index: u32) -> (u32, u32) {
+    let menu = start_menu_global(e);
+    let item = e
+        .vcall(menu.addr() + 0x174, 0x14, &args![index, 0u32])
+        .u32();
+    let menu = start_menu_global(e);
+    let entry = e
+        .call(FN_007D86C0, &args![menu.byte_add(0x174), index, 0u32])
+        .u32();
+    (item, entry)
+}
+
+// Translated from 007d3620 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007d3620 - the /GS stack cookie (security cookie xor and check call 00ec408c) is not translated
+/// Deletes the highlighted save game of the save-load list. With the list
+/// holding a highlighted item: removes the save (`008467e0` on the
+/// highlighted entry), removes the item from the list, backs out, and works
+/// out which entry the list shows next (`007d8700` / `007d87b0`): with
+/// none, refreshes the menu and clears flag `0x40000`; with the list at its
+/// limit and the saved threshold (`+0x1ac`) equal to the scrollbar's
+/// current value, redraws the item after the last one (the loop that drops
+/// autosaves from the count when flag 8 is set); otherwise lowers the
+/// threshold by one. Finally, with flag 8 set and entries left, writes the
+/// "n/1000" count line into the list's tile (`sprintf` of the settings
+/// `011d2c4c` and `011d25d4`).
+pub fn fn_007d3620(e: &mut Engine) {
+    let menu = start_menu_global(e);
+    if menu.is_null() {
+        return;
+    }
+    if e.vcall(menu.addr() + 0x174, 4, &args![]).u32() == 0 {
+        return;
+    }
+    let menu = start_menu_global(e);
+    let list = menu.addr() + 0x174;
+    let entry = e.call(LIST_BOX_HIGHLIGHTED_ITEM, &args![list]).u32();
+    e.call(REMOVE_SAVE_GAME, &args![entry]);
+    let item = e.vcall(list, 4, &args![]).u32();
+    e.call(FN_007D8040, &args![list, item]);
+    start_menu_choose_back(e);
+    let mut remaining: i32 = -1;
+    let count = e.call(FN_007D8700, &args![list]).u32();
+    let limit = e.call(FN_007D87B0, &args![list]).u32();
+    if count == 0 {
+        let menu = start_menu_global(e);
+        e.call(FN_007D62E0, &args![menu]);
+        let menu = start_menu_global(e);
+        e.call(MENU_FLAGS_SET, &args![menu, 0x40000u32, 0u32]);
+        start_menu_choose_back(e);
+    } else {
+        let mut redrawn = false;
+        if count >= limit {
+            let trait_id = e
+                .call(
+                    TILE_ADD_USER_TRAIT,
+                    &args![TEXT_CURRENT_VALUE, 0xffff_ffffu32],
+                )
+                .u32();
+            let scrollbar = e.call(FN_00825C00, &args![list]).u32();
+            let current = e.call(TILE_GET_VALUE, &args![scrollbar, trait_id]).f64();
+            let menu = start_menu_global(e);
+            let threshold = e.get(menu.cast::<StartMenu>(), StartMenu::fSaveLoadThreshold);
+            // FUCOMPP then `TEST AH,0x44; JP`: only an ordered equal result
+            // continues.
+            if f64::from(threshold) == current {
+                let menu = start_menu_global(e);
+                let threshold = e.get(menu.cast::<StartMenu>(), StartMenu::fSaveLoadThreshold);
+                let position =
+                    f64::from(limit) + f64::from(threshold) - e.global::<f64>(DOUBLE_ONE);
+                let index = e.call(FLOAT_TO_INT, &args![position]).i32();
+                e.call(
+                    LIST_BOX_FOR_EACH,
+                    &args![
+                        list,
+                        INITIALIZE_SAVE_LOAD_LIST_ITEM,
+                        index as u32,
+                        index.wrapping_add(1) as u32
+                    ],
+                );
+                let menu = start_menu_global(e);
+                remaining = e.call(LIST_BOX_COUNT, &args![menu.byte_add(0x174)]).u32() as i32;
+                if menu_exists_with_flag(e, 8) {
+                    let mut i = 0u32;
+                    loop {
+                        let menu = start_menu_global(e);
+                        if i >= e.call(LIST_BOX_COUNT, &args![menu.byte_add(0x174)]).u32() {
+                            break;
+                        }
+                        let (item, entry) = save_entry_pair(e, i);
+                        if item != 0 && entry != 0 {
+                            let drop_it = e.call(IS_AUTOSAVE, &args![entry]).bool()
+                                || e.call(FN_00846B10, &args![entry]).bool();
+                            if drop_it {
+                                let menu = start_menu_global(e);
+                                e.call(FN_007D80F0, &args![menu.byte_add(0x174), i, 0u32]);
+                                remaining = remaining.wrapping_sub(1);
+                            }
+                        }
+                        i += 1;
+                    }
+                }
+                redrawn = true;
+            }
+        }
+        if !redrawn {
+            let menu = start_menu_global(e);
+            let threshold = e.get(menu.cast::<StartMenu>(), StartMenu::fSaveLoadThreshold);
+            // FCOMP against zero, `TEST AH,0x44; JNP`: only an ordered
+            // equal result skips the decrement.
+            if f64::from(threshold) != e.global::<f64>(DOUBLE_ZERO) {
+                let menu = start_menu_global(e);
+                let threshold = e.get(menu.cast::<StartMenu>(), StartMenu::fSaveLoadThreshold);
+                let lowered = f64::from(threshold) - e.global::<f64>(DOUBLE_ONE);
+                let menu = start_menu_global(e);
+                e.set(
+                    menu.cast::<StartMenu>(),
+                    StartMenu::fSaveLoadThreshold,
+                    lowered as f32,
+                );
+            }
+        }
+    }
+    if !menu_exists_with_flag(e, 8) {
+        return;
+    }
+    let menu = start_menu_global(e);
+    if e.call(LIST_BOX_COUNT, &args![menu.byte_add(0x174)]).u32() == 0 {
+        return;
+    }
+    if remaining == -1 {
+        let menu = start_menu_global(e);
+        remaining = e.call(LIST_BOX_COUNT, &args![menu.byte_add(0x174)]).u32() as i32;
+        let mut i = 0u32;
+        loop {
+            let menu = start_menu_global(e);
+            if i >= e.call(LIST_BOX_COUNT, &args![menu.byte_add(0x174)]).u32() {
+                break;
+            }
+            let (item, entry) = save_entry_pair(e, i);
+            if item != 0 && entry != 0 {
+                let drop_it = e.call(IS_AUTOSAVE, &args![entry]).bool()
+                    || e.call(FN_00846B10, &args![entry]).bool();
+                if drop_it {
+                    remaining = remaining.wrapping_sub(1);
+                }
+            }
+            i += 1;
+        }
+    }
+    remaining = remaining.wrapping_sub(1);
+    let capacity_text = e.call(SETTING_STRING, &args![SETTING_011D25D4]).u32();
+    let label = e.call(SETTING_STRING, &args![SETTING_011D2C4C]).u32();
+    e.with_stack(0x40, |e, buffer| {
+        e.call(
+            STRING_COPY_NARROW,
+            &args![
+                buffer,
+                0x40u32,
+                FORMAT_SAVE_COUNT,
+                label,
+                remaining as u32,
+                1000u32,
+                capacity_text
+            ],
+        );
+        let menu = start_menu_global(e);
+        let tile = e.call(FN_007D6E90, &args![menu.byte_add(0x174)]).u32();
+        e.call(TILE_SET_STRING, &args![tile, TRAIT_STRING, buffer, 1u32]);
+    });
+    let menu = start_menu_global(e);
+    let tile = e.call(FN_007D6E90, &args![menu.byte_add(0x174)]).u32();
+    e.call(TILE_ADD_NEEDS_UPDATE, &args![tile, 8u32]);
+}
+
+// Translated from 007d3a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Message callback (`MESSAGE_CALLBACK`): when a start menu exists and the
+/// message menu's result byte is 1, clears the controller binding of the
+/// remap device (`00a24b70` on the main object's `00877720` result), sets
+/// menu flag 2 and applies `007cfe40` to every item of the options list.
+pub fn fn_007d3a30(e: &mut Engine) {
+    let menu = start_menu_global(e);
+    if menu.is_null() {
+        return;
+    }
+    let result = e.call(MESSAGE_MENU_RESULT, &args![]).u8() as i8;
+    if result != 1 {
+        return;
+    }
+    let menu = start_menu_global(e);
+    let device = e.get(menu.cast::<StartMenu>(), StartMenu::iRemapDevice);
+    let main = e.global::<u32>(MAIN_OBJECT);
+    let target = e.call(INPUT_OBJECT_GETTER, &args![main]).u32();
+    e.call(FN_00A24B70, &args![target, device]);
+    let menu = start_menu_global(e);
+    e.call(MENU_FLAGS_SET, &args![menu, 2u32, 1u32]);
+    let menu = start_menu_global(e);
+    e.call(
+        LIST_BOX_FOR_EACH,
+        &args![menu.byte_add(0x114), FN_007CFE40, 0u32, 0x7fff_ffffu32],
+    );
+}
+/// `Interface::GetMessageMenuResult` (Ghidra name, `00703fa0`, returns a
+/// signed byte).
+const MESSAGE_MENU_RESULT: u32 = 0x0070_3fa0;
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3237,6 +4945,66 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x007d0b90, fn_007d0b90(Ptr)),
         entry!(0x007d0bb0, fn_007d0bb0(Ptr)),
         entry!(0x007d0bd0, fn_007d0bd0(Ptr, u8)),
+        entry!(0x007d0bf0, fn_007d0bf0()),
+        entry!(0x007d0c50, fn_007d0c50()),
+        entry!(0x007d0cb0, fn_007d0cb0()),
+        entry!(0x007d0d40, fn_007d0d40()),
+        entry!(0x007d0d70, fn_007d0d70()),
+        entry!(0x007d0dc0, fn_007d0dc0()),
+        entry!(0x007d0df0, fn_007d0df0()),
+        entry!(0x007d0e40, start_menu_choose_back()),
+        entry!(0x007d11d0, fn_007d11d0(Ptr)),
+        entry!(0x007d1240, fn_007d1240(Ptr, u32)),
+        entry!(0x007d1260, fn_007d1260(Ptr)),
+        entry!(0x007d12d0, fn_007d12d0(Ptr, u32)),
+        entry!(0x007d1320, fn_007d1320(Ptr, u32)),
+        entry!(0x007d1340, fn_007d1340(Ptr) -> u32),
+        entry!(0x007d1360, fn_007d1360(Ptr) -> bool),
+        entry!(0x007d13a0, fn_007d13a0(Ptr)),
+        entry!(0x007d1400, fn_007d1400(Ptr, u32)),
+        entry!(0x007d1440, fn_007d1440(Ptr)),
+        entry!(0x007d14c0, fn_007d14c0(u32, u32)),
+        entry!(0x007d1510, fn_007d1510(Ptr)),
+        entry!(0x007d1570, fn_007d1570(Ptr)),
+        entry!(0x007d15d0, fn_007d15d0(Ptr)),
+        entry!(0x007d1630, fn_007d1630(Ptr)),
+        entry!(0x007d1690, fn_007d1690(Ptr)),
+        entry!(0x007d16f0, fn_007d16f0(Ptr)),
+        entry!(0x007d1750, fn_007d1750(Ptr)),
+        entry!(0x007d1840, fn_007d1840(Ptr)),
+        entry!(0x007d1900, fn_007d1900(Ptr)),
+        entry!(0x007d19c0, fn_007d19c0(Ptr)),
+        entry!(0x007d1b30, fn_007d1b30() -> f32),
+        entry!(0x007d1b40, fn_007d1b40(Ptr)),
+        entry!(0x007d1bb0, fn_007d1bb0(Ptr)),
+        entry!(0x007d1d00, fn_007d1d00(i32) -> f32),
+        entry!(0x007d1d10, fn_007d1d10(Ptr)),
+        entry!(0x007d1e60, fn_007d1e60(Ptr)),
+        entry!(0x007d1fb0, fn_007d1fb0(Ptr)),
+        entry!(0x007d20f0, fn_007d20f0(Ptr)),
+        entry!(0x007d2250, fn_007d2250(Ptr)),
+        entry!(0x007d23b0, fn_007d23b0(Ptr)),
+        entry!(0x007d2510, fn_007d2510(Ptr)),
+        entry!(0x007d2650, fn_007d2650(Ptr)),
+        entry!(0x007d2790, fn_007d2790(Ptr)),
+        entry!(0x007d28b0, fn_007d28b0(Ptr)),
+        entry!(0x007d29d0, fn_007d29d0(Ptr)),
+        entry!(0x007d2af0, fn_007d2af0(Ptr)),
+        entry!(0x007d2c10, fn_007d2c10(Ptr)),
+        entry!(0x007d2d30, start_menu_set_radio_vol(Ptr)),
+        entry!(0x007d2e50, fn_007d2e50(Ptr)),
+        entry!(0x007d2eb0, fn_007d2eb0(Ptr)),
+        entry!(0x007d2fc0, fn_007d2fc0(Ptr)),
+        entry!(0x007d30b0, fn_007d30b0(u8)),
+        entry!(0x007d30d0, fn_007d30d0() -> u8),
+        entry!(0x007d30e0, fn_007d30e0(Ptr)),
+        entry!(0x007d3170, fn_007d3170(Ptr) -> u8),
+        entry!(0x007d3190, start_menu_confirm_continue()),
+        entry!(0x007d32b0, start_menu_confirm_new_game()),
+        entry!(0x007d3470, fn_007d3470()),
+        entry!(0x007d35c0, fn_007d35c0()),
+        entry!(0x007d3620, fn_007d3620()),
+        entry!(0x007d3a30, fn_007d3a30()),
     ]
 }
 
@@ -3452,6 +5220,63 @@ mod tests {
         MENU_START_FADE_OUT,
         MENU_REFRESH_C,
         MANAGER_ROW_COUNT,
+        FN_00450F90,
+        FN_00713FB0,
+        FN_005B6CB0,
+        FN_007D6030,
+        POPULATE_OPTIONS_LIST_BOX,
+        SETTING_VALUE_SLOT,
+        FN_005BE4D0,
+        FN_0093E770,
+        FN_005D1530,
+        FN_005D14D0,
+        FN_007ADCC0,
+        SET_HARDCORE,
+        FN_004D1360,
+        SETTING_SET_BOOL,
+        SETTING_GET_BOOL,
+        SETTING_GET_VALUE,
+        FLOAT_SLOT,
+        FLOAT_SET,
+        FLOAT_TABLE_SET,
+        FLOAT_SINK,
+        SYSTEM_COLOR_INSTANCE,
+        SYSTEM_COLOR_SET,
+        SYSTEM_COLOR_GET,
+        FN_00A0B350,
+        SETTING_SET_INT,
+        FN_00719740,
+        FN_005407B0,
+        FN_00A24B70,
+        FN_00851330,
+        FN_008467B0,
+        ARCHIVE_CLEANUP,
+        FN_0075F8C0,
+        FN_00408DA0,
+        FN_00408B20,
+        STRTOL,
+        FN_00401170,
+        GET_FORM,
+        FN_0060C9C0,
+        FN_004581C0,
+        ERROR_CALL,
+        MEDIA_CLOSE,
+        FN_00788A90,
+        TUTORIAL_SHOW_MESSAGE,
+        SET_STRING_FIELD,
+        REMOVE_SAVE_GAME,
+        IS_AUTOSAVE,
+        FN_00846B10,
+        FN_007D8040,
+        FN_007D8700,
+        FN_007D87B0,
+        FN_007D62E0,
+        FN_007D86C0,
+        FN_007D80F0,
+        FN_00825C00,
+        FN_007D6E90,
+        TILE_ADD_NEEDS_UPDATE,
+        MESSAGE_MENU_RESULT,
     ];
 
     /// Pages of the exe's data the code reads or writes.
@@ -3632,7 +5457,7 @@ mod tests {
         for (addr, _) in funcs() {
             assert!(e.is_translated(addr), "{addr:08x}");
         }
-        assert_eq!(funcs().len(), 60);
+        assert_eq!(funcs().len(), 120);
     }
 
     // ----- 00723030 -----
@@ -6653,11 +8478,11 @@ mod tests {
         assert_eq!(accepted, expected);
     }
 
-    /// The controls list scene: a real `operator new`, the options list
-    /// with a vtable, and the label tables.
     /// Label calls recorded by the controls-list doubles.
     type LabelLog = Rc<RefCell<Vec<(u32, u32)>>>;
 
+    /// The controls list scene: a real `operator new`, the options list
+    /// with a vtable, and the label tables.
     fn controls_scene(r: &mut Rig, mode: u32) -> (Ptr<StartMenu>, LabelLog) {
         let menu = r.menu();
         r.e.mem.set_u32(menu.addr() + 0x1c8, mode);
@@ -7154,5 +8979,1583 @@ mod tests {
         assert_eq!(r.e.mem.u8(object + 0x88), 1);
         r.e.call(0x007d_0bd0, &args![Ptr::<()>::new(object), 0x100u32]);
         assert_eq!(r.e.mem.u8(object + 0x88), 0);
+    }
+
+    // ----- 007d0bf0 .. 007d3a30 -----
+
+    impl Rig {
+        /// Puts the real translation of `addr` back over its double.
+        fn real(&mut self, addr: u32) {
+            let (_, f) = funcs()
+                .into_iter()
+                .find(|(a, _)| *a == addr)
+                .expect("registered");
+            self.e.register(addr, f);
+        }
+        /// A zeroed user option with its value, second word and count.
+        fn option(&mut self, value: u32, second: u32, count: u32) -> u32 {
+            let option = self.alloc(0x30);
+            self.e.mem.set_u32(option + 0x14, value);
+            self.e.mem.set_u32(option + 0x18, second);
+            self.e.mem.set_u32(option + 0x20, count);
+            option
+        }
+        /// Menu flag tests answer true for the bits in `set`.
+        fn flags(&mut self, set: u32) {
+            self.with(MENU_FLAGS_TEST, move |_, a| eax(u32::from(a[1] & set != 0)));
+        }
+        /// A vtable whose slots (byte offsets) point at doubles returning
+        /// the given values; the double for slot `s` of vtable `v` sits at
+        /// `0x0eee_0000 + v + s`.
+        fn vtable_slots(&mut self, slots: &[(u32, u32)]) -> u32 {
+            let vtable = self.alloc(0x100);
+            for (slot, value) in slots {
+                let target = 0x0eee_0000 + vtable + slot;
+                self.e.mem.set_u32(vtable + slot, target);
+                self.stub(target, *value);
+            }
+            vtable
+        }
+        /// Backs the `Setting` float slots: each setting gets a slot holding
+        /// its value; returns the slot addresses.
+        fn float_settings(&mut self, values: &[(u32, f32)]) -> HashMap<u32, u32> {
+            let mut slots = HashMap::new();
+            for (setting, value) in values {
+                let slot = self.alloc(4);
+                self.e.mem.set_f32(slot, *value);
+                slots.insert(*setting, slot);
+            }
+            let table = slots.clone();
+            self.with(FLOAT_SLOT, move |_, a| {
+                eax(table.get(&a[0]).copied().unwrap_or(0))
+            });
+            slots
+        }
+        /// `004bd510` returns its first argument and `_ftol2` truncates.
+        fn slider_math(&mut self) {
+            self.with(SLIDER_STEP, |_, a| st0(f32::from_bits(a[0])));
+            self.with(FLOAT_TO_INT, |_, a| {
+                let value = f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32);
+                eax(value as i32 as u32)
+            });
+        }
+        /// The start menu is running with flag `0x20`.
+        fn running_menu(&mut self) -> u32 {
+            let menu = self.menu().addr();
+            self.flags(0x20);
+            menu
+        }
+    }
+
+    #[test]
+    fn hide_models_sets_the_byte_on_both_models_and_calls_the_manager() {
+        let mut r = rig();
+        r.stub(INTERFACE_MANAGER_GETTER, 0x100);
+        r.stub(MENUS_ROOT_GETTER, 0x200);
+        r.stub(TILE_PARENT, 0x300);
+        r.with(TILE_MODEL, |_, a| eax(a[0] + 1));
+        r.e.set_global(MAIN_OBJECT, 0x5000u32);
+        r.e.call(0x007d_0bf0, &args![]);
+        assert_eq!(
+            r.order(),
+            vec![
+                INTERFACE_MANAGER_GETTER,
+                MENUS_ROOT_GETTER,
+                TILE_MODEL,
+                FN_00450F90,
+                TILE_PARENT,
+                TILE_MODEL,
+                FN_00450F90,
+                FN_00713FB0,
+                FN_005B6CB0
+            ]
+        );
+        assert_eq!(r.calls_to(MENUS_ROOT_GETTER), vec![vec![0x100]]);
+        assert_eq!(
+            r.calls_to(FN_00450F90),
+            vec![vec![0x201, 1], vec![0x301, 1]]
+        );
+        assert_eq!(r.calls_to(FN_00713FB0), vec![vec![0x100, 0, 0]]);
+        assert_eq!(r.calls_to(FN_005B6CB0), vec![vec![0x5000]]);
+    }
+
+    #[test]
+    fn choose_fade_kind_two_sets_the_flag_and_refreshes_unless_told_not_to() {
+        let mut r = rig();
+        r.real(0x007d_0c50);
+        r.e.call(0x007d_0c50, &args![]);
+        assert!(r.order().is_empty());
+        let menu = r.menu().addr();
+        r.e.call(0x007d_0c50, &args![]);
+        let minus_one = (-1.0f32).to_bits();
+        assert_eq!(
+            r.calls_to(FADE),
+            vec![vec![menu, 2, 0, 0x8000_0000, minus_one]]
+        );
+        assert_eq!(r.calls_to(MENU_FLAGS_SET), vec![vec![menu, 0x1000, 1]]);
+        assert_eq!(r.calls_to(FN_007D6030), vec![vec![menu]]);
+        assert_eq!(r.calls_to(MENU_REFRESH_A), vec![vec![menu]]);
+        r.clear_calls();
+        r.stub(FN_007D6030, 1);
+        r.e.call(0x007d_0c50, &args![]);
+        assert!(r.calls_to(MENU_REFRESH_A).is_empty());
+    }
+
+    #[test]
+    fn remap_choose_labels_the_tile_and_hides_another_for_the_third_device() {
+        let mut r = rig();
+        r.real(0x007d_0cb0);
+        r.e.call(0x007d_0cb0, &args![]);
+        assert!(r.order().is_empty());
+        let menu = r.menu();
+        r.e.mem.set_u32(menu.addr() + 0x68, 0x6800);
+        r.e.mem.set_u32(menu.addr() + 0x3c, 0x3c00);
+        r.stub(SETTING_STRING, 0x9000);
+        r.e.call(0x007d_0cb0, &args![]);
+        assert!(r.calls_to(TILE_SET_STRING).is_empty());
+        r.flags(0x1000);
+        r.e.call(0x007d_0cb0, &args![]);
+        assert_eq!(r.calls_to(SETTING_STRING), vec![vec![SETTING_REMAP_TEXT]]);
+        assert_eq!(
+            r.calls_to(TILE_SET_STRING),
+            vec![vec![0x6800, TRAIT_STRING, 0x9000, 1]]
+        );
+        assert_eq!(
+            r.calls_to(TILE_SET_INT),
+            vec![vec![0x6800, TRAIT_VISIBLE, 1]]
+        );
+        r.stub(GAMEPAD_ACTIVE, 1);
+        r.clear_calls();
+        r.e.set(menu, StartMenu::iRemapDevice, 3);
+        r.e.call(0x007d_0cb0, &args![]);
+        assert_eq!(
+            r.calls_to(TILE_SET_INT),
+            vec![
+                vec![0x6800, TRAIT_VISIBLE, 1],
+                vec![0x3c00, TRAIT_TARGET, 0]
+            ]
+        );
+        r.clear_calls();
+        r.e.set(menu, StartMenu::iRemapDevice, 2);
+        r.e.call(0x007d_0cb0, &args![]);
+        assert_eq!(r.calls_to(TILE_SET_INT).len(), 1);
+    }
+
+    #[test]
+    fn the_four_options_choosers_populate_their_mode() {
+        // (address, mode, tile word offset, trait, value, set before the
+        // list is disabled)
+        type Case = (u32, u32, Option<(u32, u32, u32, bool)>);
+        let cases: [Case; 4] = [
+            (0x007d_0d40, 8, None),
+            (0x007d_0d70, 0x10, Some((0x50, TRAIT_VISIBLE, 1, true))),
+            (0x007d_0dc0, 0x20, None),
+            (0x007d_0df0, 0x40, Some((0x64, TRAIT_USER_0, 0, false))),
+        ];
+        for (addr, mode, tile_trait) in cases {
+            let mut r = rig();
+            r.e.call(addr, &args![]);
+            assert!(r.order().is_empty(), "{addr:08x} without a menu");
+            let menu = r.menu().addr();
+            r.e.mem.set_u32(menu + 0x50, 0x5000);
+            r.e.mem.set_u32(menu + 0x64, 0x6400);
+            r.e.call(addr, &args![]);
+            let expected = match tile_trait {
+                Some((_, _, _, true)) => {
+                    vec![
+                        TILE_SET_INT,
+                        LIST_BOX_SET_ENABLED,
+                        POPULATE_OPTIONS_LIST_BOX,
+                    ]
+                }
+                Some(_) => vec![
+                    LIST_BOX_SET_ENABLED,
+                    TILE_SET_INT,
+                    POPULATE_OPTIONS_LIST_BOX,
+                ],
+                None => vec![LIST_BOX_SET_ENABLED, POPULATE_OPTIONS_LIST_BOX],
+            };
+            assert_eq!(r.order(), expected, "{addr:08x}");
+            assert_eq!(r.calls_to(LIST_BOX_SET_ENABLED), vec![vec![menu + 0xb4, 0]]);
+            assert_eq!(
+                r.calls_to(POPULATE_OPTIONS_LIST_BOX),
+                vec![vec![menu, mode]]
+            );
+            if let Some((offset, id, value, _)) = tile_trait {
+                let tile = r.e.mem.u32(menu + offset);
+                assert_eq!(r.calls_to(TILE_SET_INT), vec![vec![tile, id, value]]);
+            }
+        }
+    }
+
+    /// A start menu for `ChooseBack`: the lists at the `enabled` offsets
+    /// answer "enabled", the main list has a selection (and the save-load
+    /// list one when `save_selected`), the flags `flags` are set.
+    fn back_scene(r: &mut Rig, enabled: &[u32], flags: u32, save_selected: bool) -> u32 {
+        let menu = r.menu().addr();
+        r.real(0x007d_0e40);
+        r.flags(flags);
+        let enabled: Vec<u32> = enabled.iter().map(|o| menu + o).collect();
+        for addr in [
+            LIST_BOX_IS_ENABLED,
+            INT_LIST_IS_ENABLED,
+            SAVE_LOAD_LIST_IS_ENABLED,
+        ] {
+            let enabled = enabled.clone();
+            r.with(addr, move |_, a| eax(u32::from(enabled.contains(&a[0]))));
+        }
+        r.with(OPTIONS_LIST_HAS_SELECTION, move |_, a| {
+            eax(u32::from(
+                a[0] == menu + 0x84 || (save_selected && a[0] == menu + 0x174),
+            ))
+        });
+        r.e.mem.set_u32(menu + 0x50, 0x5000);
+        menu
+    }
+
+    fn fade_kinds(r: &Rig) -> Vec<u32> {
+        r.calls_to(FADE).iter().map(|c| c[1]).collect()
+    }
+
+    #[test]
+    fn choose_back_does_nothing_without_a_menu_or_a_main_list_selection() {
+        let mut r = rig();
+        r.real(0x007d_0e40);
+        r.e.call(0x007d_0e40, &args![]);
+        assert!(r.order().is_empty());
+        let menu = r.menu().addr();
+        r.stub(OPTIONS_LIST_HAS_SELECTION, 0);
+        r.e.call(0x007d_0e40, &args![]);
+        assert_eq!(r.order(), vec![OPTIONS_LIST_HAS_SELECTION]);
+        assert_eq!(
+            r.calls_to(OPTIONS_LIST_HAS_SELECTION),
+            vec![vec![menu + 0x84]]
+        );
+    }
+
+    #[test]
+    fn choose_back_from_the_options_list_hides_it_and_chooses_settings() {
+        let mut r = rig();
+        let menu = back_scene(&mut r, &[0x114], 0x20000, false);
+        r.stub(SETTING_STRING, 0x9000);
+        r.e.call(0x007d_0e40, &args![]);
+        // The pending message is shown, the flags and the tile cleared.
+        assert_eq!(
+            r.calls_to(SHOW_MESSAGE),
+            vec![vec![0x9000, 0, 0, 0, 0, 0x12, 0, 0, 0x9000, 0]]
+        );
+        assert_eq!(
+            r.calls_to(SETTING_STRING),
+            vec![vec![SETTING_BINDING_TEXT], vec![SETTING_011D2B14]]
+        );
+        let flag_calls = r.calls_to(MENU_FLAGS_SET);
+        assert_eq!(
+            flag_calls[..2],
+            [vec![menu, 0x20000, 0], vec![menu, 0x20_0000, 0]]
+        );
+        assert_eq!(r.calls_to(TILE_SET_INT)[0], vec![0x5000, TRAIT_VISIBLE, 0]);
+        // Hidden, then ChooseSettings.
+        assert_eq!(r.calls_to(HIDE_OPTIONS_CONTAINER), vec![vec![menu]]);
+        assert_eq!(r.calls_to(LIST_BOX_SET_ENABLED), vec![vec![menu + 0xb4, 1]]);
+        assert_eq!(fade_kinds(&r), vec![1, 5]);
+        // Flag 0x1000 alone takes the same way out.
+        let mut r = rig();
+        let menu = back_scene(&mut r, &[], 0x1000, false);
+        r.e.call(0x007d_0e40, &args![]);
+        assert_eq!(r.calls_to(HIDE_OPTIONS_CONTAINER), vec![vec![menu]]);
+        assert!(r.calls_to(SHOW_MESSAGE).is_empty());
+    }
+
+    #[test]
+    fn choose_back_from_the_confirm_list() {
+        let mut r = rig();
+        let menu = back_scene(&mut r, &[0xe4], 0, false);
+        r.e.call(0x007d_0e40, &args![]);
+        assert_eq!(
+            r.calls_to(LIST_BOX_SET_ENABLED),
+            vec![vec![menu + 0xe4, 0], vec![menu + 0x84, 1]]
+        );
+        assert_eq!(fade_kinds(&r), vec![7, 5]);
+        assert_eq!(
+            r.calls_to(LIST_BOX_DESELECT_ALL),
+            vec![vec![menu + 0x84, 1]]
+        );
+        // With a selection in the save-load list the flag is set and that is
+        // all.
+        let mut r = rig();
+        let menu = back_scene(&mut r, &[0xe4], 0, true);
+        r.e.call(0x007d_0e40, &args![]);
+        assert_eq!(fade_kinds(&r), vec![7]);
+        assert_eq!(
+            r.calls_to(MENU_FLAGS_SET).last().unwrap(),
+            &vec![menu, 0x40000, 1]
+        );
+        assert!(r.calls_to(LIST_BOX_DESELECT_ALL).is_empty());
+    }
+
+    #[test]
+    fn choose_back_from_the_settings_downloads_and_save_load_lists() {
+        // Settings.
+        let mut r = rig();
+        let menu = back_scene(&mut r, &[0xb4], 0, false);
+        r.e.call(0x007d_0e40, &args![]);
+        assert_eq!(fade_kinds(&r), vec![1, 5]);
+        assert_eq!(
+            r.calls_to(LIST_BOX_SET_ENABLED),
+            vec![vec![menu + 0xb4, 0], vec![menu + 0x84, 1]]
+        );
+        let order = r.order();
+        let fade_at = order.iter().position(|a| *a == FADE).unwrap();
+        let enabled_at = order
+            .iter()
+            .position(|a| *a == LIST_BOX_SET_ENABLED)
+            .unwrap();
+        assert!(fade_at < enabled_at, "the fade comes first for settings");
+        // Downloads.
+        let mut r = rig();
+        let menu = back_scene(&mut r, &[0x144], 0, false);
+        r.e.call(0x007d_0e40, &args![]);
+        assert_eq!(fade_kinds(&r), vec![0xe, 5]);
+        assert_eq!(
+            r.calls_to(INT_LIST_SET_ENABLED),
+            vec![vec![menu + 0x144, 0]]
+        );
+        // Save-load: virtual calls 0 (argument 0) and 0x1c on the list.
+        let mut r = rig();
+        let menu = back_scene(&mut r, &[0x174], 0, false);
+        let vtable = r.vtable_slots(&[(0, 0), (0x1c, 0)]);
+        r.e.mem.set_u32(menu + 0x174, vtable);
+        r.e.call(0x007d_0e40, &args![]);
+        assert_eq!(fade_kinds(&r), vec![6, 5]);
+        assert_eq!(
+            r.calls_to(0x0eee_0000 + vtable),
+            vec![vec![menu + 0x174, 0]]
+        );
+        assert_eq!(
+            r.calls_to(0x0eee_0000 + vtable + 0x1c),
+            vec![vec![menu + 0x174]]
+        );
+        assert_eq!(
+            r.calls_to(UPDATE_HIGHLIGHTED_SAVE_GAME_INFO),
+            vec![vec![menu]]
+        );
+        assert_eq!(
+            r.calls_to(SAVE_LOAD_LIST_SET_ENABLED),
+            vec![vec![menu + 0x174, 0]]
+        );
+    }
+
+    #[test]
+    fn choose_back_from_the_main_list_closes_the_menu_unless_flag_one_is_missing() {
+        // Flag 1 of the start menu missing: nothing happens.
+        let mut r = rig();
+        let _ = back_scene(&mut r, &[0x84], 0, false);
+        r.e.call(0x007d_0e40, &args![]);
+        assert!(r.calls_to(MENU_START_FADE_OUT).is_empty());
+        assert!(r.calls_to(LIST_BOX_SET_ENABLED).is_empty());
+        // Flag 4 set: nothing happens either.
+        let mut r = rig();
+        let _ = back_scene(&mut r, &[0x84], 4, false);
+        r.stub(START_MENU_FLAG_1, 1);
+        r.e.call(0x007d_0e40, &args![]);
+        assert!(r.calls_to(MENU_START_FADE_OUT).is_empty());
+        // Otherwise `Close(1)` fades the menu out.
+        let mut r = rig();
+        let menu = back_scene(&mut r, &[0x84], 0, false);
+        r.stub(START_MENU_FLAG_1, 1);
+        r.e.call(0x007d_0e40, &args![]);
+        assert_eq!(r.calls_to(MENU_START_FADE_OUT), vec![vec![menu]]);
+        assert!(r.calls_to(LIST_BOX_SET_ENABLED).is_empty());
+    }
+
+    #[test]
+    fn choose_back_with_nothing_enabled_reselects_the_main_list_unless_flag_40000() {
+        let mut r = rig();
+        let _ = back_scene(&mut r, &[], 0x40000, false);
+        r.e.call(0x007d_0e40, &args![]);
+        assert!(r.calls_to(LIST_BOX_SET_ENABLED).is_empty());
+        assert!(r.calls_to(FADE).is_empty());
+        // Flag 2: the menu is refreshed (no arguments) and the flag cleared.
+        let mut r = rig();
+        let menu2 = back_scene(&mut r, &[], 2, false);
+        r.e.call(0x007d_0e40, &args![]);
+        assert_eq!(
+            r.calls_to(LIST_BOX_SET_ENABLED),
+            vec![vec![menu2 + 0x84, 1]]
+        );
+        assert_eq!(
+            r.calls_to(LIST_BOX_DESELECT_ALL),
+            vec![vec![menu2 + 0x84, 1]]
+        );
+        assert_eq!(fade_kinds(&r), vec![5]);
+        assert_eq!(r.calls_to(MENU_REFRESH_D), vec![Vec::<u32>::new()]);
+        assert_eq!(
+            r.calls_to(MENU_FLAGS_SET).last().unwrap(),
+            &vec![menu2, 2, 0]
+        );
+    }
+
+    // ----- option change callbacks -----
+
+    #[test]
+    fn option_callback_for_the_setting_at_011e0940() {
+        let mut r = rig();
+        r.stub(FN_005BE4D0, 7);
+        let player = r.alloc(0x1000);
+        r.e.set_global(GLOBAL_OBJECT_011DEA3C, player);
+        r.e.mem.set_u32(player + 0x7b8, 7);
+        let option = r.option(0, 0, 0);
+        r.e.call(0x007d_11d0, &args![Ptr::<()>::new(option)]);
+        assert_eq!(r.e.mem.u32(option + 0x14), 7);
+        assert_eq!(r.e.mem.u32(option + 0x18), 2);
+        // Running: the value goes to the setting's slot and the object.
+        let _ = r.running_menu();
+        let slot = r.alloc(4);
+        r.stub(SETTING_VALUE_SLOT, slot);
+        r.e.mem.set_u32(option + 0x14, 5);
+        r.e.call(0x007d_11d0, &args![Ptr::<()>::new(option)]);
+        assert_eq!(r.calls_to(SETTING_VALUE_SLOT), vec![vec![SETTING_011E0940]]);
+        assert_eq!(r.e.mem.u32(slot), 5);
+        assert_eq!(r.e.mem.u32(player + 0x7b8), 5);
+    }
+
+    #[test]
+    fn option_callback_for_the_setting_at_011e087c_and_its_helpers() {
+        let mut r = rig();
+        let player = r.alloc(0x1000);
+        r.e.set_global(GLOBAL_OBJECT_011DEA3C, player);
+        r.e.mem.set_u32(player + 0x7c0, 9);
+        let option = r.option(0, 0, 0);
+        r.e.call(0x007d_1260, &args![Ptr::<()>::new(option)]);
+        assert_eq!(r.e.mem.u32(option + 0x14), 9);
+        assert_eq!(r.e.mem.u32(option + 0x18), 2);
+        // Running: stored in the slot and in the object; the float at
+        // +0xe18 above zero and a changed value call 0093e770(old, 1).
+        let _ = r.running_menu();
+        let slot = r.alloc(4);
+        r.stub(SETTING_VALUE_SLOT, slot);
+        r.e.mem.set_u32(option + 0x14, 4);
+        r.e.mem.set_f32(player + 0xe18, 1.0);
+        r.e.call(0x007d_1260, &args![Ptr::<()>::new(option)]);
+        assert_eq!(r.e.mem.u32(slot), 4);
+        assert_eq!(r.e.mem.u32(player + 0x7c0), 4);
+        assert_eq!(r.calls_to(FN_0093E770), vec![vec![player, 9, 1]]);
+        // Unchanged value, zero float, NaN: no call.
+        r.clear_calls();
+        r.e.call(0x007d_1260, &args![Ptr::<()>::new(option)]);
+        assert!(r.calls_to(FN_0093E770).is_empty());
+        r.e.mem.set_u32(option + 0x14, 6);
+        r.e.mem.set_f32(player + 0xe18, 0.0);
+        r.e.call(0x007d_1260, &args![Ptr::<()>::new(option)]);
+        assert!(r.calls_to(FN_0093E770).is_empty());
+        r.e.mem.set_u32(option + 0x14, 8);
+        r.e.mem.set_f32(player + 0xe18, f32::NAN);
+        r.e.call(0x007d_1260, &args![Ptr::<()>::new(option)]);
+        assert!(r.calls_to(FN_0093E770).is_empty());
+        assert_eq!(r.e.mem.u32(player + 0x7c0), 8);
+    }
+
+    #[test]
+    fn the_object_word_accessors() {
+        let mut r = rig();
+        let object = r.alloc(0x1000);
+        r.e.call(0x007d_1240, &args![Ptr::<()>::new(object), 0x1234u32]);
+        assert_eq!(r.e.mem.u32(object + 0x7b8), 0x1234);
+        r.e.call(0x007d_1320, &args![Ptr::<()>::new(object), 0x4321u32]);
+        assert_eq!(r.e.mem.u32(object + 0x7c0), 0x4321);
+        assert_eq!(
+            r.e.call(0x007d_1340, &args![Ptr::<()>::new(object)]).u32(),
+            0x4321
+        );
+        // The float test is ordered greater-than-zero.
+        for (value, expected) in [
+            (1.0f32, true),
+            (0.0, false),
+            (-1.0, false),
+            (f32::NAN, false),
+            (f32::INFINITY, true),
+        ] {
+            r.e.mem.set_f32(object + 0xe18, value);
+            assert_eq!(
+                r.e.call(0x007d_1360, &args![Ptr::<()>::new(object)]).bool(),
+                expected,
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn hardcore_option_reads_and_sets_the_mode() {
+        let mut r = rig();
+        let player = r.alloc(0x1000);
+        r.e.set_global(GLOBAL_OBJECT_011DEA3C, player);
+        let option = r.option(0, 0, 0);
+        r.stub(FN_004D1360, 1);
+        r.e.call(0x007d_13a0, &args![Ptr::<()>::new(option)]);
+        assert_eq!(r.e.mem.u32(option + 0x14), 1);
+        assert_eq!(r.e.mem.u32(option + 0x18), 0);
+        assert_eq!(r.calls_to(FN_004D1360), vec![vec![player]]);
+        r.stub(FN_004D1360, 0x100);
+        r.e.call(0x007d_13a0, &args![Ptr::<()>::new(option)]);
+        assert_eq!(r.e.mem.u32(option + 0x14), 0, "only the low byte counts");
+        // Running: the value goes to 007d1400, which only passes 0 and 1.
+        let _ = r.running_menu();
+        for (value, calls) in [(1u32, 1usize), (0, 1), (2, 0)] {
+            r.clear_calls();
+            r.e.mem.set_u32(option + 0x14, value);
+            r.e.call(0x007d_13a0, &args![Ptr::<()>::new(option)]);
+            assert_eq!(r.calls_to(SET_HARDCORE).len(), calls, "{value}");
+            if calls == 1 {
+                assert_eq!(r.calls_to(SET_HARDCORE), vec![vec![player, value, 0]]);
+            }
+        }
+    }
+
+    #[test]
+    fn flag_word_editor_sets_and_clears_bits_of_the_object() {
+        let mut r = rig();
+        r.e.call(0x007d_14c0, &args![0x40u32, 1u32]);
+        let object = r.alloc(0x400);
+        r.e.set_global(FLAGS_OBJECT_011D96C0, object);
+        r.e.mem.set_u32(object + 0x1c0, 0x101);
+        r.e.call(0x007d_14c0, &args![0x40u32, 7u32]);
+        assert_eq!(r.e.mem.u32(object + 0x1c0), 0x141);
+        r.e.call(0x007d_14c0, &args![0x101u32, 0u32]);
+        assert_eq!(r.e.mem.u32(object + 0x1c0), 0x40);
+    }
+
+    #[test]
+    fn option_callback_for_the_setting_at_011d8a38_edits_the_flag_word() {
+        let mut r = rig();
+        let option = r.option(0, 0, 0);
+        r.stub(SETTING_GET_BOOL, 1);
+        r.e.call(0x007d_1440, &args![Ptr::<()>::new(option)]);
+        assert_eq!(r.calls_to(SETTING_GET_BOOL), vec![vec![SETTING_011D8A38]]);
+        assert_eq!(r.e.mem.u32(option + 0x14), 1);
+        assert_eq!(r.e.mem.u32(option + 0x18), 1);
+        // Running: set, then the flag word of 011d96c0 follows the value.
+        let _ = r.running_menu();
+        let object = r.alloc(0x400);
+        r.e.set_global(FLAGS_OBJECT_011D96C0, object);
+        r.stub(SETTING_GET_VALUE, 1);
+        r.e.mem.set_u32(option + 0x14, 1);
+        r.e.call(0x007d_1440, &args![Ptr::<()>::new(option)]);
+        assert_eq!(
+            r.calls_to(SETTING_SET_BOOL),
+            vec![vec![SETTING_011D8A38, 1]]
+        );
+        assert_eq!(r.e.mem.u32(object + 0x1c0), 0x40);
+        r.stub(SETTING_GET_VALUE, 0);
+        r.e.mem.set_u32(option + 0x14, 0);
+        r.e.call(0x007d_1440, &args![Ptr::<()>::new(option)]);
+        assert_eq!(r.calls_to(SETTING_SET_BOOL)[1], vec![SETTING_011D8A38, 0]);
+        assert_eq!(r.e.mem.u32(object + 0x1c0), 0);
+    }
+
+    #[test]
+    fn the_boolean_option_callbacks() {
+        let table = [
+            (0x007d_1510u32, SETTING_011D89F0, 1u32),
+            (0x007d_1570, SETTING_011D8974, 1),
+            (0x007d_15d0, SETTING_011D8980, 1),
+            (0x007d_1630, SETTING_011D8934, 1),
+            (0x007d_1690, SETTING_011D8928, 0),
+            (0x007d_16f0, SETTING_011D898C, 1),
+            (0x007d_2e50, SETTING_011E0A5C, 0),
+        ];
+        for (addr, setting, kind) in table {
+            let mut r = rig();
+            let option = r.option(0x55, 0x66, 0);
+            r.stub(SETTING_GET_BOOL, 1);
+            r.e.call(addr, &args![Ptr::<()>::new(option)]);
+            assert_eq!(r.calls_to(SETTING_GET_BOOL), vec![vec![setting]]);
+            assert_eq!(r.e.mem.u32(option + 0x14), 1, "{addr:08x}");
+            assert_eq!(r.e.mem.u32(option + 0x18), kind, "{addr:08x}");
+            r.stub(SETTING_GET_BOOL, 0);
+            r.e.call(addr, &args![Ptr::<()>::new(option)]);
+            assert_eq!(r.e.mem.u32(option + 0x14), 0);
+            // Running: the setting follows `value == 1`.
+            let _ = r.running_menu();
+            r.e.mem.set_u32(option + 0x14, 1);
+            r.e.call(addr, &args![Ptr::<()>::new(option)]);
+            r.e.mem.set_u32(option + 0x14, 2);
+            r.e.call(addr, &args![Ptr::<()>::new(option)]);
+            assert_eq!(
+                r.calls_to(SETTING_SET_BOOL),
+                vec![vec![setting, 1], vec![setting, 0]],
+                "{addr:08x}"
+            );
+        }
+    }
+
+    #[test]
+    fn volume_slider_on_the_setting_at_011d9774() {
+        let mut r = rig();
+        r.slider_math();
+        let option = r.option(3, 0, 5);
+        let menu = r.running_menu();
+        r.e.call(0x007d_1750, &args![Ptr::<()>::new(option)]);
+        assert_eq!(
+            r.calls_to(FLOAT_SET),
+            vec![vec![VOLUME_OBJECT, 0.75f32.to_bits()]]
+        );
+        assert_eq!(r.calls_to(MENU_FLAGS_SET), vec![vec![menu, 0x40, 1]]);
+        // Not running: the value 0.5 maps to step 2, 1.0 to step 4.
+        let mut r = rig();
+        r.slider_math();
+        let _ = r.float_settings(&[(VOLUME_OBJECT, 0.5)]);
+        let option = r.option(0, 0, 5);
+        r.e.call(0x007d_1750, &args![Ptr::<()>::new(option)]);
+        assert_eq!(r.e.mem.u32(option + 0x14), 2);
+        assert_eq!(r.e.mem.u32(option + 0x18), 4);
+        assert_eq!(
+            r.calls_to(SLIDER_STEP),
+            vec![
+                vec![2.0f32.to_bits(), 1.0f32.to_bits()],
+                vec![4.0f32.to_bits(), 1.0f32.to_bits()]
+            ]
+        );
+    }
+
+    #[test]
+    fn colour_option_callbacks() {
+        for (addr, id) in [(0x007d_1840u32, 1u32), (0x007d_1900, 4)] {
+            let mut r = rig();
+            for (i, color) in [0xa0u32, 0xb0, 0xc0].iter().enumerate() {
+                r.e.mem.set_u32(COLOR_TABLE + 4 * i as u32, *color);
+            }
+            r.stub(SYSTEM_COLOR_INSTANCE, 0x7000);
+            r.stub(INTERFACE_MANAGER_GETTER, 0x100);
+            r.stub(MENUS_ROOT_GETTER, 0x200);
+            // Not running: the matching table entry is the value.
+            r.stub(SYSTEM_COLOR_GET, 0xb0);
+            let option = r.option(9, 9, 3);
+            r.e.call(addr, &args![Ptr::<()>::new(option)]);
+            assert_eq!(r.e.mem.u32(option + 0x14), 1, "{addr:08x}");
+            assert_eq!(r.e.mem.u32(option + 0x18), 2);
+            assert_eq!(r.calls_to(SYSTEM_COLOR_GET)[0], vec![0x7000, id]);
+            // No match: the default word (2) becomes the value.
+            r.stub(SYSTEM_COLOR_GET, 0xff);
+            r.e.call(addr, &args![Ptr::<()>::new(option)]);
+            assert_eq!(r.e.mem.u32(option + 0x14), 2);
+            // A match on the first entry stops at 0.
+            r.stub(SYSTEM_COLOR_GET, 0xa0);
+            r.e.call(addr, &args![Ptr::<()>::new(option)]);
+            assert_eq!(r.e.mem.u32(option + 0x14), 0);
+            // Running: the colour is set and the root told.
+            let _ = r.running_menu();
+            r.e.mem.set_u32(option + 0x14, 2);
+            r.clear_calls();
+            r.e.call(addr, &args![Ptr::<()>::new(option)]);
+            assert_eq!(r.calls_to(SYSTEM_COLOR_SET), vec![vec![0x7000, id, 0xc0]]);
+            assert_eq!(
+                r.calls_to(FN_00A0B350),
+                vec![vec![0x200, id, 0.0f32.to_bits()]]
+            );
+        }
+    }
+
+    #[test]
+    fn range_slider_between_two_settings_and_a_float_sink() {
+        // Running: min 0, max 2, step 1 of 4 -> 0.5.
+        let mut r = rig();
+        let _ = r.float_settings(&[
+            (SETTING_MINIMUM_011DAB98, 0.0),
+            (SETTING_MAXIMUM_011DAB60, 2.0),
+        ]);
+        let option = r.option(1, 0, 5);
+        let _ = r.running_menu();
+        r.e.call(0x007d_19c0, &args![Ptr::<()>::new(option)]);
+        assert_eq!(r.calls_to(FLOAT_SINK), vec![vec![0.5f32.to_bits()]]);
+        // Not running: 007d1b30 is 0.5 (a quarter of the range: step 1) and
+        // 1.0 is half the range (step 2).
+        let mut r = rig();
+        r.slider_math();
+        let _ = r.float_settings(&[
+            (SETTING_MINIMUM_011DAB98, 0.0),
+            (SETTING_MAXIMUM_011DAB60, 2.0),
+        ]);
+        r.stub_float(FLOAT_AT_OBJECT, 0.5);
+        let option = r.option(0, 0, 5);
+        r.e.call(0x007d_19c0, &args![Ptr::<()>::new(option)]);
+        assert_eq!(
+            r.calls_to(FLOAT_AT_OBJECT),
+            vec![vec![FLOAT_OBJECT_011C71AC]]
+        );
+        assert_eq!(r.e.mem.u32(option + 0x14), 1);
+        assert_eq!(r.e.mem.u32(option + 0x18), 2);
+    }
+
+    #[test]
+    fn float_getters() {
+        let mut r = rig();
+        r.stub_float(FLOAT_AT_OBJECT, 3.5);
+        assert_eq!(r.e.call(0x007d_1b30, &args![]).f32(), 3.5);
+        assert_eq!(
+            r.calls_to(FLOAT_AT_OBJECT),
+            vec![vec![FLOAT_OBJECT_011C71AC]]
+        );
+        r.e.map(0x011a_d000, 0x1000);
+        r.e.mem.set_f32(FLOAT_TABLE + 8, -2.25);
+        assert_eq!(r.e.call(0x007d_1d00, &args![2i32]).f32(), -2.25);
+    }
+
+    #[test]
+    fn integer_setting_option_callback() {
+        let mut r = rig();
+        r.e.map(0x0126_e000, 0x1000);
+        r.e.set_global(GLOBAL_0126EFC4, 5u32);
+        let option = r.option(0, 0x77, 0);
+        r.e.call(0x007d_1b40, &args![Ptr::<()>::new(option)]);
+        assert_eq!(r.e.mem.u32(option + 0x14), 5);
+        assert_eq!(r.e.mem.u32(option + 0x18), 0);
+        let menu = r.running_menu();
+        r.e.mem.set_u32(option + 0x14, 5);
+        r.e.call(0x007d_1b40, &args![Ptr::<()>::new(option)]);
+        r.e.mem.set_u32(option + 0x14, 6);
+        r.e.call(0x007d_1b40, &args![Ptr::<()>::new(option)]);
+        assert_eq!(
+            r.calls_to(SETTING_SET_INT),
+            vec![vec![SETTING_011C779C, 5], vec![SETTING_011C779C, 6]]
+        );
+        assert_eq!(
+            r.calls_to(MENU_FLAGS_SET),
+            vec![vec![menu, 0x40_0000, 0], vec![menu, 0x40_0000, 1]]
+        );
+    }
+
+    #[test]
+    fn audio_level_sliders() {
+        // (address, minimum, maximum, table index, target, default)
+        let table = [
+            (
+                0x007d_1bb0u32,
+                0x011d_ab1cu32,
+                0x011d_aaf4u32,
+                3u32,
+                0x011c_3ec0u32,
+                0x011d_ac38u32,
+            ),
+            (
+                0x007d_1d10,
+                0x011d_abf0,
+                0x011d_ac24,
+                2,
+                0x011c_3d0c,
+                0x011d_abc0,
+            ),
+            (
+                0x007d_1e60,
+                0x011d_ab30,
+                0x011d_ab78,
+                1,
+                0x011c_3d78,
+                0x011d_ab6c,
+            ),
+        ];
+        for (addr, min, max, index, target, default) in table {
+            // Running: value 1 of 3 steps is halfway between 1.0 and 5.0.
+            let mut r = rig();
+            let _ = r.float_settings(&[(min, 1.0), (max, 5.0)]);
+            let option = r.option(1, 0, 3);
+            let _ = r.running_menu();
+            r.e.call(addr, &args![Ptr::<()>::new(option)]);
+            assert_eq!(
+                r.calls_to(FLOAT_TABLE_SET),
+                vec![vec![index, 3.0f32.to_bits()]],
+                "{addr:08x}"
+            );
+            assert_eq!(r.calls_to(FLOAT_SET), vec![vec![target, 3.0f32.to_bits()]]);
+            // Not running: table value 3.0 is step 1, the default 5.0 step 2.
+            let mut r = rig();
+            r.slider_math();
+            r.e.map(0x011a_d000, 0x1000);
+            r.e.mem.set_f32(FLOAT_TABLE + 4 * index, 3.0);
+            let _ = r.float_settings(&[(min, 1.0), (max, 5.0), (default, 5.0)]);
+            let option = r.option(0, 0, 3);
+            r.e.call(addr, &args![Ptr::<()>::new(option)]);
+            assert_eq!(r.e.mem.u32(option + 0x14), 1, "{addr:08x}");
+            assert_eq!(r.e.mem.u32(option + 0x18), 2);
+        }
+    }
+
+    #[test]
+    fn range_sliders_store_into_their_setting() {
+        // (address, minimum, maximum, setting, default)
+        let table = [
+            (
+                0x007d_1fb0u32,
+                0x011c_a4acu32,
+                0x011c_a4d8u32,
+                0x011c_a450u32,
+                0x011c_a4ccu32,
+            ),
+            (
+                0x007d_2510,
+                0x011d_86c4,
+                0x011d_86ec,
+                0x011d_8724,
+                0x011d_870c,
+            ),
+            (
+                0x007d_2650,
+                0x011d_8734,
+                0x011d_8718,
+                0x011d_8788,
+                0x011d_8770,
+            ),
+        ];
+        for (addr, min, max, setting, default) in table {
+            let mut r = rig();
+            let slots = r.float_settings(&[(min, 1.0), (max, 5.0), (setting, 0.0)]);
+            let option = r.option(1, 0, 3);
+            let _ = r.running_menu();
+            r.e.call(addr, &args![Ptr::<()>::new(option)]);
+            assert_eq!(r.e.mem.f32(slots[&setting]), 3.0, "{addr:08x}");
+            // Not running: setting 3.0 is step 1, default 5.0 step 2.
+            let mut r = rig();
+            r.slider_math();
+            let _ = r.float_settings(&[(min, 1.0), (max, 5.0), (setting, 3.0), (default, 5.0)]);
+            let option = r.option(0, 0, 3);
+            r.e.call(addr, &args![Ptr::<()>::new(option)]);
+            assert_eq!(r.e.mem.u32(option + 0x14), 1);
+            assert_eq!(r.e.mem.u32(option + 0x18), 2);
+        }
+    }
+
+    #[test]
+    fn range_sliders_with_copies() {
+        // (address, minimum, maximum, setting, default, copy, extra, sum)
+        type Case = (u32, u32, u32, u32, u32, u32, u32, u32);
+        let table: [Case; 3] = [
+            (
+                0x007d_20f0,
+                0x011c_7294,
+                0x011c_71b8,
+                0x011c_7568,
+                0x011c_7278,
+                0x011f_944c,
+                0x011c_7400,
+                0x011f_9450,
+            ),
+            (
+                0x007d_2250,
+                0x011c_72ac,
+                0x011c_74ec,
+                0x011c_7740,
+                0x011c_744c,
+                0x011f_9444,
+                0x011c_76b4,
+                0x011f_9448,
+            ),
+            (
+                0x007d_23b0,
+                0x011c_7440,
+                0x011c_71d0,
+                0x011c_7598,
+                0x011c_7494,
+                0x011f_9454,
+                0x011c_7634,
+                0x011f_9458,
+            ),
+        ];
+        for (addr, min, max, setting, default, copy, extra, sum) in table {
+            let mut r = rig();
+            r.e.map(0x011f_9000, 0x1000);
+            let slots = r.float_settings(&[(min, 1.0), (max, 5.0), (setting, 0.0), (extra, 1.5)]);
+            let option = r.option(1, 0, 3);
+            let _ = r.running_menu();
+            r.e.call(addr, &args![Ptr::<()>::new(option)]);
+            assert_eq!(r.e.mem.f32(slots[&setting]), 3.0, "{addr:08x}");
+            assert_eq!(r.e.mem.f32(copy), 3.0);
+            assert_eq!(r.e.mem.f32(sum), 4.5);
+            let mut r = rig();
+            r.slider_math();
+            let _ = r.float_settings(&[(min, 1.0), (max, 5.0), (setting, 3.0), (default, 5.0)]);
+            let option = r.option(0, 0, 3);
+            r.e.call(addr, &args![Ptr::<()>::new(option)]);
+            assert_eq!(r.e.mem.u32(option + 0x14), 1);
+            assert_eq!(r.e.mem.u32(option + 0x18), 2);
+        }
+    }
+
+    #[test]
+    fn audio_volume_sliders() {
+        // (address, setting, audio setter, audio getter)
+        let table = [
+            (
+                0x007d_2790u32,
+                0x011f_6e14u32,
+                0x00ad_7b10u32,
+                0x00ad_79f0u32,
+            ),
+            (0x007d_28b0, 0x011f_6e20, 0x00ad_7b40, 0x00ad_7a20),
+            (0x007d_29d0, 0x011f_6e44, 0x00ad_7bd0, 0x00ad_7ab0),
+            (0x007d_2af0, 0x011f_6e2c, 0x00ad_7b70, 0x00ad_7a50),
+            (0x007d_2c10, 0x011f_6e38, 0x00ad_7ba0, 0x00ad_7a80),
+            (0x007d_2d30, 0x011f_6e50, 0x00ad_7c00, 0x00ad_7ae0),
+        ];
+        for (addr, setting, setter, getter) in table {
+            // No option: the audio object gets the setting's value.
+            let mut r = rig();
+            r.stub(setter, 0);
+            r.stub(getter, 0);
+            r.stub(AUDIO_INSTANCE, 0xa0d10);
+            r.stub_float(FLOAT_AT_OBJECT, 0.75);
+            r.e.call(addr, &args![Ptr::<()>::new(0)]);
+            assert_eq!(r.calls_to(setter), vec![vec![0xa0d10, 0.75f32.to_bits()]]);
+            assert_eq!(r.calls_to(FLOAT_AT_OBJECT), vec![vec![setting]]);
+            // Running: the slider position is stored, then applied.
+            let mut r = rig();
+            r.stub(setter, 0);
+            r.stub(AUDIO_INSTANCE, 0xa0d10);
+            r.stub_float(FLOAT_AT_OBJECT, 0.75);
+            r.with(FLOAT_SET, |_, a| eax(a[0]));
+            let option = r.option(3, 0, 5);
+            let _ = r.running_menu();
+            r.e.call(addr, &args![Ptr::<()>::new(option)]);
+            assert_eq!(
+                r.calls_to(FLOAT_SET),
+                vec![vec![setting, 0.75f32.to_bits()]]
+            );
+            assert_eq!(r.calls_to(FLOAT_AT_OBJECT), vec![vec![setting]]);
+            assert_eq!(r.calls_to(setter), vec![vec![0xa0d10, 0.75f32.to_bits()]]);
+            // Not running: the getter's 0.5 is step 2, 1.0 is step 4.
+            let mut r = rig();
+            r.slider_math();
+            r.stub(AUDIO_INSTANCE, 0xa0d10);
+            r.with(getter, |_, _| st0(0.5));
+            let option = r.option(0, 0, 5);
+            r.e.call(addr, &args![Ptr::<()>::new(option)]);
+            assert_eq!(r.calls_to(getter), vec![vec![0xa0d10]]);
+            assert_eq!(r.e.mem.u32(option + 0x14), 2, "{addr:08x}");
+            assert_eq!(r.e.mem.u32(option + 0x18), 4);
+        }
+    }
+
+    #[test]
+    fn slider_with_double_constants() {
+        let constants = |r: &mut Rig| {
+            r.e.mem.set_f64(DOUBLE_SLIDER_SCALE, 0.0095);
+            r.e.mem.set_f64(DOUBLE_SLIDER_OFFSET, 0.0005);
+            r.e.mem.set_f32(FLOAT_SLIDER_FULL, 0.157_894_75);
+        };
+        let mut r = rig();
+        constants(&mut r);
+        let slots = r.float_settings(&[(SETTING_011E0A6C, 0.0)]);
+        let option = r.option(2, 0, 5);
+        let _ = r.running_menu();
+        r.e.call(0x007d_2eb0, &args![Ptr::<()>::new(option)]);
+        let expected = (0.5f64 * 0.0095 + 0.0005) as f32;
+        assert_eq!(r.e.mem.f32(slots[&SETTING_011E0A6C]), expected);
+        // Not running: that value maps back to step 2 of 4; the constant
+        // 0.157894 * 4 truncates to 0.
+        let mut r = rig();
+        constants(&mut r);
+        r.slider_math();
+        let _ = r.float_settings(&[(SETTING_011E0A6C, expected)]);
+        let option = r.option(0, 7, 5);
+        r.e.call(0x007d_2eb0, &args![Ptr::<()>::new(option)]);
+        let first = ((f64::from(expected) - 0.0005) / 0.0095) as f32;
+        let step = ((4.0 * f64::from(first)) as f32) as i32;
+        assert_eq!(r.e.mem.u32(option + 0x14), step as u32);
+        assert_eq!(r.e.mem.u32(option + 0x18), 0);
+    }
+
+    #[test]
+    fn interface_manager_option_callback() {
+        let mut r = rig();
+        r.stub(INTERFACE_MANAGER_GETTER, 0x100);
+        // Running, value 1, with the tile at +0x1cc.
+        let menu = r.running_menu();
+        r.e.mem.set_u32(menu + 0x1cc, 0x7000);
+        r.e.mem.set_u32(menu + 0x1d0, 0x55);
+        let option = r.option(1, 0, 0);
+        r.e.call(0x007d_2fc0, &args![Ptr::<()>::new(option)]);
+        assert_eq!(r.calls_to(FN_00719740), vec![vec![0x100, 0]]);
+        assert_eq!(r.calls_to(TILE_SET_INT), vec![vec![0x7000, 0x55, 1]]);
+        // Value 0: the call gets 1 and the trait 0; no tile: no trait.
+        r.clear_calls();
+        r.e.mem.set_u32(option + 0x14, 0);
+        r.e.call(0x007d_2fc0, &args![Ptr::<()>::new(option)]);
+        assert_eq!(r.calls_to(FN_00719740), vec![vec![0x100, 1]]);
+        assert_eq!(r.calls_to(TILE_SET_INT), vec![vec![0x7000, 0x55, 0]]);
+        r.clear_calls();
+        r.e.mem.set_u32(menu + 0x1cc, 0);
+        r.e.call(0x007d_2fc0, &args![Ptr::<()>::new(option)]);
+        assert!(r.calls_to(TILE_SET_INT).is_empty());
+        // Not running: the setting at 011d8c4c (byte 0) becomes value 1, the
+        // main object's target gets the byte and 007d30b0 its inverse.
+        let mut r = rig();
+        r.e.map(0x011f_3000, 0x1000);
+        let object = r.alloc(0x2000);
+        r.e.set_global(OBJECT_011F35CC, object);
+        r.e.set_global(MAIN_OBJECT, 0x4000u32);
+        r.stub(INPUT_OBJECT_GETTER, 0x8000);
+        let option = r.option(9, 9, 0);
+        r.stub(SETTING_GET_BOOL, 0);
+        r.e.call(0x007d_2fc0, &args![Ptr::<()>::new(option)]);
+        assert_eq!(r.e.mem.u32(option + 0x14), 1);
+        assert_eq!(r.e.mem.u32(option + 0x18), 1);
+        assert_eq!(r.calls_to(FN_005407B0), vec![vec![0x8000, 0]]);
+        assert_eq!(r.calls_to(INPUT_OBJECT_GETTER).len(), 2);
+        assert_eq!(r.e.mem.u8(object + 0x1b88), 1);
+        r.stub(SETTING_GET_BOOL, 1);
+        r.e.call(0x007d_2fc0, &args![Ptr::<()>::new(option)]);
+        assert_eq!(r.e.mem.u32(option + 0x14), 0);
+        assert_eq!(r.e.mem.u8(object + 0x1b88), 0);
+    }
+
+    #[test]
+    fn small_byte_accessors() {
+        let mut r = rig();
+        r.e.map(0x011f_3000, 0x1000);
+        // 007d30b0 needs the object.
+        r.e.call(0x007d_30b0, &args![5u32]);
+        let object = r.alloc(0x2000);
+        r.e.set_global(OBJECT_011F35CC, object);
+        r.e.call(0x007d_30b0, &args![0x105u32]);
+        assert_eq!(r.e.mem.u8(object + 0x1b88), 5);
+        // 007d30d0 returns the byte.
+        r.stub(SETTING_GET_BOOL, 0x1234);
+        assert_eq!(r.e.call(0x007d_30d0, &args![]).u8(), 0x34);
+        assert_eq!(r.calls_to(SETTING_GET_BOOL), vec![vec![SETTING_011D8C4C]]);
+        // 007d3170 reads +0x85.
+        r.e.mem.set_u8(object + 0x85, 9);
+        assert_eq!(
+            r.e.call(0x007d_3170, &args![Ptr::<()>::new(object)]).u8(),
+            9
+        );
+    }
+
+    #[test]
+    fn option_callback_for_the_setting_at_011e0850() {
+        let mut r = rig();
+        r.e.map(0x011f_3000, 0x1000);
+        let dlc = r.alloc(0x100);
+        r.stub(DLC_GETTER, dlc);
+        r.stub(SETTING_GET_BOOL, 1);
+        let option = r.option(0, 0, 0);
+        r.e.mem.set_u8(dlc + 0x85, 1);
+        r.e.call(0x007d_30e0, &args![Ptr::<()>::new(option)]);
+        assert_eq!(r.calls_to(SETTING_GET_BOOL), vec![vec![SETTING_011E0850]]);
+        assert_eq!(r.e.mem.u32(option + 0x14), 1);
+        assert_eq!(r.e.mem.u32(option + 0x18), 1);
+        r.e.mem.set_u8(dlc + 0x85, 0);
+        r.stub(SETTING_GET_BOOL, 0);
+        r.e.call(0x007d_30e0, &args![Ptr::<()>::new(option)]);
+        assert_eq!(r.e.mem.u32(option + 0x14), 0);
+        assert_eq!(r.e.mem.u32(option + 0x18), 0);
+        // Running: the setting is set from the option and read back into
+        // 007d30b0.
+        let object = r.alloc(0x2000);
+        r.e.set_global(OBJECT_011F35CC, object);
+        let _ = r.running_menu();
+        r.stub(SETTING_SET_BOOL, 0x6000);
+        r.with(SETTING_GET_BOOL, |_, a| eax(u32::from(a[0] == 0x6000)));
+        r.e.mem.set_u32(option + 0x14, 1);
+        r.clear_calls();
+        r.e.call(0x007d_30e0, &args![Ptr::<()>::new(option)]);
+        assert_eq!(
+            r.calls_to(SETTING_SET_BOOL),
+            vec![vec![SETTING_011E0850, 1]]
+        );
+        assert_eq!(r.e.mem.u8(object + 0x1b88), 1);
+    }
+
+    // ----- ConfirmContinue / ConfirmNewGame -----
+
+    #[test]
+    fn confirm_continue_loads_the_first_save_entry() {
+        let mut r = rig();
+        let _ = r.menu();
+        let manager = r.alloc(0x10);
+        r.e.set_global(CALLBACK_OWNER, manager);
+        let node = r.alloc(8);
+        r.e.mem.set_u32(node, 0xe0e0);
+        r.with(FIRST_WORD, move |_, _| eax(node));
+        r.with(SETTING_STRING, |_, a| eax(a[0]));
+        r.e.call(0x007d_3190, &args![]);
+        assert!(r.calls_to(FN_00851330).is_empty());
+        assert_eq!(r.calls_to(SAVE_ENTRY_IS_CORRUPT), vec![vec![0xe0e0]]);
+        assert_eq!(r.calls_to(ARCHIVE_CLEANUP).len(), 1);
+        assert_eq!(r.calls_to(FN_008467B0), vec![vec![0xe0e0]]);
+        assert!(r.calls_to(SHOW_MESSAGE).is_empty());
+        // ChooseBack ran (the main list has no selection, so it stops there).
+        assert_eq!(r.calls_to(OPTIONS_LIST_HAS_SELECTION).len(), 1);
+    }
+
+    #[test]
+    fn confirm_continue_shows_a_message_for_a_corrupt_or_missing_entry() {
+        // Corrupt first entry.
+        let mut r = rig();
+        let manager = r.alloc(0x10);
+        r.e.set_global(CALLBACK_OWNER, manager);
+        let node = r.alloc(8);
+        r.e.mem.set_u32(node, 0xe0e0);
+        r.with(FIRST_WORD, move |_, _| eax(node));
+        r.with(SETTING_STRING, |_, a| eax(a[0]));
+        r.stub(SAVE_ENTRY_IS_CORRUPT, 1);
+        r.e.call(0x007d_3190, &args![]);
+        assert_eq!(
+            r.calls_to(SHOW_MESSAGE),
+            vec![vec![
+                SETTING_011D1F14,
+                0,
+                0,
+                0,
+                0,
+                5,
+                0,
+                0,
+                SETTING_BINDING_TEXT,
+                0
+            ]]
+        );
+        assert!(r.calls_to(FN_008467B0).is_empty());
+        assert!(r.calls_to(ARCHIVE_CLEANUP).is_empty());
+        // No first node: the manager is asked to fill the list and the
+        // other message shows.
+        let mut r = rig();
+        let manager = r.alloc(0x10);
+        r.e.set_global(CALLBACK_OWNER, manager);
+        r.with(SETTING_STRING, |_, a| eax(a[0]));
+        r.e.call(0x007d_3190, &args![]);
+        assert_eq!(r.calls_to(FN_00851330), vec![vec![manager]]);
+        assert_eq!(
+            r.calls_to(SHOW_MESSAGE),
+            vec![vec![
+                SETTING_011D48AC,
+                0,
+                0,
+                0,
+                0,
+                5,
+                0,
+                0,
+                SETTING_BINDING_TEXT,
+                0
+            ]]
+        );
+        // A node whose item is 0 does the same.
+        let mut r = rig();
+        let manager = r.alloc(0x10);
+        r.e.set_global(CALLBACK_OWNER, manager);
+        let node = r.alloc(8);
+        r.with(FIRST_WORD, move |_, _| eax(node));
+        r.with(SETTING_STRING, |_, a| eax(a[0]));
+        r.e.call(0x007d_3190, &args![]);
+        assert_eq!(r.calls_to(FN_00851330), vec![vec![manager]]);
+        assert_eq!(r.calls_to(SHOW_MESSAGE).len(), 1);
+    }
+
+    #[test]
+    fn confirm_new_game_without_the_quest_logs_and_backs_out() {
+        for form_type in [None, Some(0x46u32)] {
+            let mut r = rig();
+            let _ = r.menu();
+            let text = r.alloc(0x10);
+            r.with(SETTING_STRING, move |_, _| eax(text));
+            r.stub(STRTOL, 0x1a2b);
+            match form_type {
+                None => r.stub(LOOKUP_FORM, 0),
+                Some(kind) => {
+                    r.stub(LOOKUP_FORM, 0x6000);
+                    r.stub(FN_00401170, kind);
+                }
+            }
+            r.e.call(0x007d_32b0, &args![]);
+            assert_eq!(r.calls_to(LOOKUP_FORM), vec![vec![0x1a2b]]);
+            let strtol = r.calls_to(STRTOL);
+            assert_eq!(strtol[0][0], text);
+            assert_eq!(strtol[0][2], 16);
+            assert_eq!(
+                r.calls_to(LOG_MESSAGE),
+                vec![vec![TEXT_QUEST_NOT_FOUND, text]]
+            );
+            assert!(r.calls_to(RT_DYNAMIC_CAST).is_empty());
+            assert!(r.calls_to(ARCHIVE_CLEANUP).is_empty());
+            // ChooseBack ran.
+            assert_eq!(r.calls_to(OPTIONS_LIST_HAS_SELECTION).len(), 1);
+        }
+    }
+
+    #[test]
+    fn confirm_new_game_starts_the_quest() {
+        let mut r = rig();
+        let text = r.alloc(0x10);
+        r.with(SETTING_STRING, move |_, _| eax(text));
+        r.stub(STRTOL, 0x1a2b);
+        r.stub(LOOKUP_FORM, 0x6000);
+        r.stub(FN_00401170, 0x47);
+        r.with(RT_DYNAMIC_CAST, |_, a| eax(a[0]));
+        r.stub(GET_FORM, 0x9000);
+        r.stub(OPTION_TEXT, 0xa000);
+        r.stub(INTERFACE_MANAGER_GETTER, 0x100);
+        let player = r.alloc(0x100);
+        r.e.set_global(GLOBAL_OBJECT_011DEA3C, player);
+        let loading = r.alloc(0x100);
+        r.e.mem.set_u32(loading + 0x54, 0x5400);
+        r.e.set_global(LOADING_MENU, loading);
+        let dlc = r.alloc(0x100);
+        r.stub(DLC_GETTER, dlc);
+        r.e.map(0x011d_8000, 0x1000);
+        r.e.call(0x007d_32b0, &args![]);
+        assert_eq!(
+            r.calls_to(RT_DYNAMIC_CAST),
+            vec![
+                vec![0x6000, 0, TYPE_DESCRIPTOR_FORM, TYPE_DESCRIPTOR_QUEST, 0],
+                vec![
+                    0x9000,
+                    0,
+                    TYPE_DESCRIPTOR_BOUND_OBJECT,
+                    TYPE_DESCRIPTOR_NPC,
+                    0
+                ]
+            ]
+        );
+        assert_eq!(r.calls_to(FN_005D1530), vec![vec![player, 0]]);
+        assert_eq!(r.calls_to(FN_005D14D0), vec![vec![player, 1]]);
+        assert_eq!(r.calls_to(ARCHIVE_CLEANUP).len(), 1);
+        assert_eq!(r.e.mem.u8(FLAG_011D8907), 1);
+        assert_eq!(r.calls_to(FN_007ADCC0), vec![vec![player, 0]]);
+        assert_eq!(r.calls_to(GET_FORM), vec![vec![player]]);
+        assert_eq!(r.calls_to(OPTION_TEXT), vec![vec![SETTING_011D4F78]]);
+        assert_eq!(
+            r.calls_to(SET_STRING_FIELD),
+            vec![vec![0x9000 + 0xd0, 0xa000]]
+        );
+        assert_eq!(r.calls_to(FN_0060C9C0), vec![vec![0x6000, 1]]);
+        assert_eq!(
+            r.calls_to(TILE_SET_INT),
+            vec![vec![0x5400, TRAIT_VISIBLE, 1]]
+        );
+        assert_eq!(r.calls_to(FN_004581C0), vec![vec![1]]);
+        assert_eq!(r.calls_to(ERROR_CALL).len(), 1);
+        assert_eq!(r.calls_to(SET_DIALOG_FLAG), vec![vec![0]]);
+        assert_eq!(r.calls_to(MEDIA_CLOSE).len(), 1);
+        assert_eq!(r.e.mem.u8(dlc + 0x88), 1);
+        assert_eq!(r.e.mem.u8(dlc + 0x87), 1);
+        assert_eq!(r.calls_to(FN_00788A90), vec![vec![1]]);
+        assert_eq!(
+            r.calls_to(TUTORIAL_SHOW_MESSAGE),
+            vec![
+                vec![0x100 + 0x4d4, 0x19, 0x3eb, 0x200],
+                vec![0x100 + 0x4d4, 0x1a, 0x3ff, 0x200]
+            ]
+        );
+        assert!(r.calls_to(LOG_MESSAGE).is_empty());
+    }
+
+    // ----- 007d3470, 007d35c0, 007d3a30 -----
+
+    fn load_scene(r: &mut Rig) -> u32 {
+        let menu = r.menu().addr();
+        r.e.mem.set_u32(menu + 0x1b0, 0x5a5a);
+        r.stub(OPTIONS_LIST_HAS_SELECTION, 0);
+        menu
+    }
+
+    #[test]
+    fn load_selected_save_needs_a_menu_with_a_save_game() {
+        let mut r = rig();
+        r.e.call(0x007d_3470, &args![]);
+        assert!(r.order().is_empty());
+        let _ = r.menu();
+        r.e.call(0x007d_3470, &args![]);
+        assert!(r.order().is_empty());
+    }
+
+    #[test]
+    fn load_selected_save_closes_the_menu_or_backs_out() {
+        // Loaded with flag 1: closes the start menu.
+        let mut r = rig();
+        let menu = load_scene(&mut r);
+        r.flags(1);
+        r.stub(FN_008467B0, 1);
+        r.stub(START_MENU_FLAG_1, 1);
+        r.e.call(0x007d_3470, &args![]);
+        assert_eq!(r.calls_to(ARCHIVE_CLEANUP).len(), 1);
+        assert_eq!(r.calls_to(FN_008467B0), vec![vec![0x5a5a]]);
+        assert_eq!(r.calls_to(MENU_START_FADE_OUT), vec![vec![menu]]);
+        assert!(r.calls_to(OPTIONS_LIST_HAS_SELECTION).is_empty());
+        // Loaded without the flag: ChooseBack.
+        let mut r = rig();
+        let _ = load_scene(&mut r);
+        r.stub(FN_008467B0, 1);
+        r.e.call(0x007d_3470, &args![]);
+        assert!(r.calls_to(MENU_START_FADE_OUT).is_empty());
+        assert_eq!(r.calls_to(OPTIONS_LIST_HAS_SELECTION).len(), 1);
+        // Not loaded: the flag 0x20000000 is looked at, then ChooseBack.
+        let mut r = rig();
+        let menu = load_scene(&mut r);
+        r.e.call(0x007d_3470, &args![]);
+        assert!(r
+            .calls_to(MENU_FLAGS_TEST)
+            .contains(&vec![menu, 0x2000_0000]));
+        assert_eq!(r.calls_to(OPTIONS_LIST_HAS_SELECTION).len(), 1);
+    }
+
+    #[test]
+    fn load_selected_save_tells_the_texture_owner_when_the_names_match() {
+        for (matched, calls) in [(1u32, 1usize), (0, 0)] {
+            let mut r = rig();
+            let _ = load_scene(&mut r);
+            r.e.set_global(GLOBAL_OBJECT_011DEA3C, 0x1234u32);
+            r.e.set_global(TEXTURE_OWNER, 0x7777u32);
+            r.stub(START_MENU_FLAG_1, 1);
+            r.stub(GET_FORM, 0x9000);
+            r.with(RT_DYNAMIC_CAST, |_, a| eax(a[0]));
+            r.stub(FN_00408DA0, 0x40);
+            r.stub(FN_0075F8C0, 0x50);
+            r.stub(FN_00408B20, matched);
+            r.e.call(0x007d_3470, &args![]);
+            assert_eq!(
+                r.calls_to(RT_DYNAMIC_CAST),
+                vec![vec![
+                    0x9000,
+                    0,
+                    TYPE_DESCRIPTOR_BOUND_OBJECT,
+                    TYPE_DESCRIPTOR_NPC,
+                    0
+                ]]
+            );
+            assert_eq!(r.calls_to(FN_00408B20), vec![vec![0x40, 0x50]]);
+            assert_eq!(r.calls_to(FN_00408DA0)[0], vec![0x9000 + 0xd0]);
+            assert_eq!(r.calls_to(FN_0075F8C0), vec![vec![0x5a5a], vec![0x5a5a]]);
+            assert_eq!(r.calls_to(TEXTURE_OWNER_CALL).len(), calls);
+            if calls == 1 {
+                assert_eq!(r.calls_to(TEXTURE_OWNER_CALL), vec![vec![0x7777, 1, 0, 0]]);
+            }
+        }
+        // No location name: nothing further is asked.
+        let mut r = rig();
+        let _ = load_scene(&mut r);
+        r.e.set_global(GLOBAL_OBJECT_011DEA3C, 0x1234u32);
+        r.stub(START_MENU_FLAG_1, 1);
+        r.stub(GET_FORM, 0x9000);
+        r.with(RT_DYNAMIC_CAST, |_, a| eax(a[0]));
+        r.e.call(0x007d_3470, &args![]);
+        assert!(r.calls_to(FN_0075F8C0).is_empty());
+    }
+
+    #[test]
+    fn save_selected_choose_function() {
+        let mut r = rig();
+        r.e.call(0x007d_35c0, &args![]);
+        assert!(r.order().is_empty());
+        let menu = r.menu().addr();
+        let vtable = r.vtable_slots(&[(0x1c, 0)]);
+        r.e.mem.set_u32(menu + 0xe4, vtable);
+        r.e.mem.set_u32(menu + 0x48, 0x4800);
+        r.stub(SETTING_STRING, 0x9000);
+        r.e.call(0x007d_35c0, &args![]);
+        assert_eq!(
+            r.calls_to(0x0eee_0000 + vtable + 0x1c),
+            vec![vec![menu + 0xe4]]
+        );
+        assert_eq!(
+            r.calls_to(SETTING_STRING),
+            vec![vec![SETTING_SAVE_SELECTED]]
+        );
+        assert_eq!(
+            r.calls_to(TILE_SET_STRING),
+            vec![vec![0x4800, TRAIT_STRING, 0x9000, 1]]
+        );
+        assert_eq!(r.calls_to(MENU_FLAGS_SET), vec![vec![menu, 0x4000, 1]]);
+    }
+
+    #[test]
+    fn message_callback_clears_the_binding_when_the_answer_is_yes() {
+        let mut r = rig();
+        r.real(0x007d_3a30);
+        r.e.call(0x007d_3a30, &args![]);
+        assert!(r.order().is_empty());
+        let menu = r.menu();
+        r.e.set(menu, StartMenu::iRemapDevice, 2);
+        r.e.set_global(MAIN_OBJECT, 0x4000u32);
+        r.stub(INPUT_OBJECT_GETTER, 0x8000);
+        for answer in [0u32, 0xff] {
+            r.stub(MESSAGE_MENU_RESULT, answer);
+            r.e.call(0x007d_3a30, &args![]);
+            assert!(r.calls_to(FN_00A24B70).is_empty(), "{answer}");
+        }
+        r.stub(MESSAGE_MENU_RESULT, 1);
+        r.e.call(0x007d_3a30, &args![]);
+        assert_eq!(r.calls_to(INPUT_OBJECT_GETTER), vec![vec![0x4000]]);
+        assert_eq!(r.calls_to(FN_00A24B70), vec![vec![0x8000, 2]]);
+        assert_eq!(r.calls_to(MENU_FLAGS_SET), vec![vec![menu.addr(), 2, 1]]);
+        assert_eq!(
+            r.calls_to(LIST_BOX_FOR_EACH),
+            vec![vec![menu.addr() + 0x114, FN_007CFE40, 0, 0x7fff_ffff]]
+        );
+    }
+
+    // ----- 007d3620 -----
+
+    /// A start menu whose save-load list answers the virtual calls
+    /// `DeleteSave` needs: slot 4 returns the highlighted item, slot 0x14
+    /// returns a non-null item.
+    fn delete_scene(r: &mut Rig) -> (u32, u32) {
+        let menu = r.menu().addr();
+        let vtable = r.vtable_slots(&[(4, 0x777), (0x14, 0x888)]);
+        r.e.mem.set_u32(menu + 0x174, vtable);
+        r.stub(LIST_BOX_HIGHLIGHTED_ITEM, 0x800);
+        r.stub(OPTIONS_LIST_HAS_SELECTION, 0);
+        r.with(SETTING_STRING, |_, a| eax(a[0]));
+        r.with(FN_007D86C0, |_, a| eax(0x900 + a[1]));
+        r.with(FN_007D6E90, |_, _| eax(0x6e90));
+        (menu, vtable)
+    }
+
+    #[test]
+    fn delete_save_needs_a_highlighted_item() {
+        let mut r = rig();
+        r.e.call(0x007d_3620, &args![]);
+        assert!(r.order().is_empty());
+        let menu = r.menu().addr();
+        let vtable = r.vtable_slots(&[(4, 0)]);
+        r.e.mem.set_u32(menu + 0x174, vtable);
+        r.e.call(0x007d_3620, &args![]);
+        assert!(r.calls_to(REMOVE_SAVE_GAME).is_empty());
+    }
+
+    #[test]
+    fn delete_save_with_nothing_left_refreshes_and_clears_the_flag() {
+        let mut r = rig();
+        let (menu, vtable) = delete_scene(&mut r);
+        r.stub(FN_007D8700, 0);
+        r.stub(FN_007D87B0, 4);
+        r.e.call(0x007d_3620, &args![]);
+        let list = menu + 0x174;
+        assert_eq!(r.calls_to(LIST_BOX_HIGHLIGHTED_ITEM), vec![vec![list]]);
+        assert_eq!(r.calls_to(REMOVE_SAVE_GAME), vec![vec![0x800]]);
+        assert_eq!(r.calls_to(0x0eee_0000 + vtable + 4).len(), 2);
+        assert_eq!(r.calls_to(FN_007D8040), vec![vec![list, 0x777]]);
+        assert_eq!(r.calls_to(FN_007D62E0), vec![vec![menu]]);
+        assert_eq!(r.calls_to(MENU_FLAGS_SET), vec![vec![menu, 0x40000, 0]]);
+        // ChooseBack twice (the main list has no selection here).
+        assert_eq!(r.calls_to(OPTIONS_LIST_HAS_SELECTION).len(), 2);
+    }
+
+    #[test]
+    fn delete_save_at_the_threshold_redraws_the_item_after_the_last() {
+        let mut r = rig();
+        let (menu, vtable) = delete_scene(&mut r);
+        r.e.mem.set_f64(DOUBLE_ONE, 1.0);
+        r.stub(FN_007D8700, 5);
+        r.stub(FN_007D87B0, 3);
+        r.stub(TILE_ADD_USER_TRAIT, 0x4242);
+        r.stub(FN_00825C00, 0x5000);
+        r.set_tile(0x5000, 0x4242, 2.0);
+        r.e.set(
+            Ptr::<StartMenu>::new(menu),
+            StartMenu::fSaveLoadThreshold,
+            2.0,
+        );
+        r.with(FLOAT_TO_INT, |_, a| {
+            eax(f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32) as i32 as u32)
+        });
+        r.stub(LIST_BOX_COUNT, 2);
+        // Flag 8: entries 0x900 (autosave) and 0x901 (other) are looked at.
+        r.flags(8);
+        r.with(IS_AUTOSAVE, |_, a| eax(u32::from(a[0] == 0x900)));
+        r.with(FN_00846B10, |_, a| eax(u32::from(a[0] == 0x901)));
+        r.e.call(0x007d_3620, &args![]);
+        let list = menu + 0x174;
+        assert_eq!(
+            r.calls_to(TILE_ADD_USER_TRAIT),
+            vec![vec![TEXT_CURRENT_VALUE, 0xffff_ffff]]
+        );
+        // 3 + 2.0 - 1.0 = 4: the item (4, 5) is initialised.
+        assert_eq!(
+            r.calls_to(LIST_BOX_FOR_EACH),
+            vec![vec![list, INITIALIZE_SAVE_LOAD_LIST_ITEM, 4, 5]]
+        );
+        // Both entries are dropped: 2 -> 0, then one more is subtracted
+        // for the count line: -1 is printed as the unsigned word.
+        assert_eq!(
+            r.calls_to(FN_007D80F0),
+            vec![vec![list, 0, 0], vec![list, 1, 0]]
+        );
+        let text = &r.calls_to(STRING_COPY_NARROW)[0];
+        assert_eq!(text[1], 0x40);
+        assert_eq!(
+            text[2..],
+            [
+                FORMAT_SAVE_COUNT,
+                SETTING_011D2C4C,
+                (-1i32) as u32,
+                1000,
+                SETTING_011D25D4
+            ]
+        );
+        assert_eq!(
+            r.calls_to(TILE_SET_STRING).last().unwrap(),
+            &vec![0x6e90, TRAIT_STRING, text[0], 1]
+        );
+        assert_eq!(r.calls_to(TILE_ADD_NEEDS_UPDATE), vec![vec![0x6e90, 8]]);
+        assert_eq!(r.calls_to(0x0eee_0000 + vtable + 0x14).len(), 2);
+        // The threshold is untouched.
+        assert_eq!(
+            r.e.get(Ptr::<StartMenu>::new(menu), StartMenu::fSaveLoadThreshold),
+            2.0
+        );
+    }
+
+    #[test]
+    fn delete_save_away_from_the_threshold_lowers_it() {
+        // A threshold that differs from the scrollbar's value is lowered by
+        // 1.0; 0.0 stays; with flag 8 and no count yet the entries are
+        // recounted.
+        for (start, expected) in [(3.0f32, 2.0f32), (0.0, 0.0), (f32::NAN, f32::NAN)] {
+            let mut r = rig();
+            let (menu, _) = delete_scene(&mut r);
+            r.e.mem.set_f64(DOUBLE_ZERO, 0.0);
+            r.e.mem.set_f64(DOUBLE_ONE, 1.0);
+            r.stub(FN_007D8700, 5);
+            r.stub(FN_007D87B0, 3);
+            r.stub(TILE_ADD_USER_TRAIT, 0x4242);
+            r.stub(FN_00825C00, 0x5000);
+            r.set_tile(0x5000, 0x4242, 2.0);
+            r.e.set(
+                Ptr::<StartMenu>::new(menu),
+                StartMenu::fSaveLoadThreshold,
+                start,
+            );
+            r.e.call(0x007d_3620, &args![]);
+            let now =
+                r.e.get(Ptr::<StartMenu>::new(menu), StartMenu::fSaveLoadThreshold);
+            if expected.is_nan() {
+                assert!(now.is_nan());
+            } else {
+                assert_eq!(now, expected, "{start}");
+            }
+            assert!(r.calls_to(LIST_BOX_FOR_EACH).is_empty());
+        }
+        // Count smaller than the limit: the same way out; with flag 8 the
+        // entries are counted afresh (3), the last is not an autosave.
+        let mut r = rig();
+        let (menu, _) = delete_scene(&mut r);
+        r.e.mem.set_f64(DOUBLE_ZERO, 0.0);
+        r.e.mem.set_f64(DOUBLE_ONE, 1.0);
+        r.stub(FN_007D8700, 2);
+        r.stub(FN_007D87B0, 3);
+        r.stub(LIST_BOX_COUNT, 3);
+        r.flags(8);
+        r.with(IS_AUTOSAVE, |_, a| eax(u32::from(a[0] == 0x901)));
+        r.e.set(
+            Ptr::<StartMenu>::new(menu),
+            StartMenu::fSaveLoadThreshold,
+            1.0,
+        );
+        r.e.call(0x007d_3620, &args![]);
+        assert_eq!(
+            r.e.get(Ptr::<StartMenu>::new(menu), StartMenu::fSaveLoadThreshold),
+            0.0
+        );
+        // 3 entries, one autosave: 2, minus one for the count line.
+        assert_eq!(r.calls_to(STRING_COPY_NARROW)[0][4], 1);
+        assert!(r.calls_to(FN_007D80F0).is_empty());
     }
 }
