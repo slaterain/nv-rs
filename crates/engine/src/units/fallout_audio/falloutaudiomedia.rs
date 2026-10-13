@@ -1346,11 +1346,7 @@ fn thread_proc_body(e: &mut Engine, info: Ptr, ebp: u32) -> u32 {
                 expected = 0;
                 e.call(LOG, &args![0x0107_ccc0u32, clock, view.synch_start]);
             }
-            let difference = if current > expected {
-                current - expected
-            } else {
-                expected - current
-            };
+            let difference = current.abs_diff(expected);
             if difference > tolerance && ((difference as i32) < 80000 || current == 0) {
                 e.call(LOG, &args![0x0107_cc8cu32, difference, expected, current]);
                 expected = expected.wrapping_add(50);
