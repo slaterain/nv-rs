@@ -1328,6 +1328,8 @@ pub fn tes_object_weap_get_attack_speed(e: &mut Engine, this: Ptr, with_mod: boo
 /// (`006b05d0`) and whether the weapon is a gun type. `ammo` is filled in from the holder
 /// when it is null. The role of the words at +0x14, +0x18 and +0x1c is inferred from where
 /// they go (ammunition, the inventory entry and an ammunition override of the figure).
+// The two ammunition-class branches divide alike but are separate tests in the exe.
+#[allow(clippy::if_same_then_else)]
 pub fn fn_00646060(
     e: &mut Engine,
     holder: Ptr,
@@ -2582,7 +2584,7 @@ mod tests {
 
     /// `rand()` hands out `rolls` in order.
     fn set_rolls(e: &mut Engine, rolls: &[u32]) {
-        let mut queue = rolls.to_vec().into_iter();
+        let mut queue = Vec::from(rolls).into_iter();
         e.register_double(RANDOM, move |_, _| {
             queue
                 .next()
