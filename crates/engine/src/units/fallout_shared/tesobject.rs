@@ -1347,7 +1347,7 @@ pub fn tes_object_get_scaled_model_file_name(e: &mut Engine, this: Ptr, referenc
     let scale = e.call(0x0056_7400, &args![reference]).f64();
     let percent = e.global::<f64>(ONE_HUNDRED);
     // FMUL, FSTP to a float, then FLD/FSTP again to push it on the stack.
-    let product = x87_float_copy((scale * percent) as f32 as u32);
+    let product = x87_float_copy(((scale * percent) as f32).to_bits());
     let rounded = e.call(0x0040_6d90, &args![product]).u32();
     e.call(
         0x0040_6d00,
