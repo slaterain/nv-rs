@@ -132,7 +132,13 @@ mod tests {
 
     #[test]
     fn fn_008453a0_reserves_the_larger_of_capacity_and_count() {
-        for (capacity, count, reserved) in [(0u32, 0u32, 0u32), (4, 0, 4), (2, 5, 5), (7, 3, 7), (0, 2, 2)] {
+        for (capacity, count, reserved) in [
+            (0u32, 0u32, 0u32),
+            (4, 0, 4),
+            (2, 5, 5),
+            (7, 3, 7),
+            (0, 2, 2),
+        ] {
             let mut e = Engine::new();
             let this = array_object(&mut e);
             e.call_log = Some(vec![]);

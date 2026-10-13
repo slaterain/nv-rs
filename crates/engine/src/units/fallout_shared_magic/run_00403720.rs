@@ -179,7 +179,10 @@ mod tests {
         assert_eq!(e.call(0x0040_3940, &args![3u32, 9u32]).u32(), 9);
         assert_eq!(e.call(0x0040_3940, &args![9u32, 3u32]).u32(), 9);
         assert_eq!(e.call(0x0040_3940, &args![5u32, 5u32]).u32(), 5);
-        assert_eq!(e.call(0x0040_3940, &args![0x8000_0000u32, 1u32]).u32(), 0x8000_0000);
+        assert_eq!(
+            e.call(0x0040_3940, &args![0x8000_0000u32, 1u32]).u32(),
+            0x8000_0000
+        );
         let string: Ptr<BSStringT> = e.new_object();
         e.set(string, BSStringT::sMaxLen, 0xfffe);
         assert_eq!(e.call(0x0040_39a0, &args![string]).u32(), 0xfffe);
