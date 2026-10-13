@@ -222,10 +222,8 @@ pub fn fn_00866a90(e: &mut Engine, this: Ptr, _unused_0: u32, mut level: u32, fl
                 level = unsynchronized_round(e, this, level, flag);
             }
         }
-        8 => {
-            if !same {
-                level = unsynchronized_round(e, this, level, flag);
-            }
+        8 if !same => {
+            level = unsynchronized_round(e, this, level, flag);
         }
         _ => {}
     }

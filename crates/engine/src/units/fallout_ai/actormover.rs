@@ -7307,7 +7307,8 @@ mod tests {
             r.e.set(r.mover, ActorMover::iLastFailureTimeStamp, 4000);
             clock(&mut r.e, 5000);
             r.e.mem.set_u16(r.mover.addr() + 0x40, 0x1122);
-            let writes: Rc<RefCell<Vec<(u32, Vec<u8>)>>> = Rc::default();
+            type Writes = Rc<RefCell<Vec<(u32, Vec<u8>)>>>;
+            let writes: Writes = Rc::default();
             let record = writes.clone();
             r.e.register_double(SAVE_BYTES, move |e, a| {
                 let bytes = (0..a[2]).map(|i| e.mem.u8(a[1] + i)).collect();

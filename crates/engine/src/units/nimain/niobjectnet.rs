@@ -567,11 +567,7 @@ pub fn ni_object_net_add_extra_data_ov2(
                     &args![buffer, 6u32, EXTRA_DATA_NAME_FORMAT, index],
                 );
                 let found = e.call(STRSTR, &args![class_name, EXTRA_DATA_TEXT]).u32();
-                let prefix = if found > class_name {
-                    found - class_name
-                } else {
-                    0
-                };
+                let prefix = found.saturating_sub(class_name);
                 let size = e.mem.cstr(buffer).len() as u32 + prefix + 1;
                 let text = allocate(e, size);
                 e.call(STRNCPY_S, &args![text, size, class_name, prefix]);

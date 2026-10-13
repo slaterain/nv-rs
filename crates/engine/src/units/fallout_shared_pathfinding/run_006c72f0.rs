@@ -77,7 +77,7 @@ pub fn fn_006c73b0(e: &mut Engine, this: Ptr, count: u32) -> Ptr {
         );
         e.mem.set_u32(base.wrapping_add(0xc), 0);
         e.mem.set_u32(base, count);
-        let bytes = count.checked_mul(8).unwrap_or(u32::MAX);
+        let bytes = count.saturating_mul(8);
         let block = e.call(NEW, &args![bytes]).u32();
         let elements = if block == 0 {
             0
