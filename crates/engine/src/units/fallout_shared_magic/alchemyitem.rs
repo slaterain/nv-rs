@@ -468,7 +468,7 @@ pub fn fn_00403600(e: &mut Engine, this: Ptr, other: Ptr) {
 // Translated from 00403660 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The override of slot 8 of the `EffectItemList` vtable (`GetCost` in the
 /// Xbox PDB; no map name). `this` is the `EffectItemList` subobject (object
-/// + 0x3c). When the data flag 1 is set (`004029d0` on the object) the cost
+/// plus 0x3c). When the data flag 1 is set (`004029d0` on the object) the cost
 /// is the data block's `iCostOverride` converted to a float, otherwise the
 /// effect list's own `GetCost` (`004063e0`, asked with 0). The result is in
 /// `ST0`. The one stack argument (`RET 4`) is never read.
