@@ -89,10 +89,7 @@ const BUCKET_STEP_NEXT: u32 = 0x0044_eb80;
 /// `size * count` as the code computes an allocation size: an overflow
 /// gives `0xffffffff` (`MUL`, `SETO`, `NEG`, `OR`).
 fn allocation_size(count: u32, size: u32) -> u32 {
-    match count.checked_mul(size) {
-        Some(bytes) => bytes,
-        None => u32::MAX,
-    }
+    count.saturating_mul(size)
 }
 
 // Translated from 0044c000 (decompiled, FalloutNV.exe 1.4.0.525)

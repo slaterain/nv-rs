@@ -46,7 +46,7 @@ const BASE_DESTROY: u32 = 0x0044_b4b0;
 /// product, or `0xFFFFFFFF` when the 32-bit multiply overflows (`MUL`,
 /// `SETO`, `NEG`, `OR`).
 fn array_size(count: u32, size: u32) -> u32 {
-    count.checked_mul(size).unwrap_or(u32::MAX)
+    count.saturating_mul(size)
 }
 
 // Translated from 0044c8e0 (PC disassembly, FalloutNV.exe 1.4.0.525)

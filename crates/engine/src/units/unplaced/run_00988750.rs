@@ -10,6 +10,9 @@
 //! compares the same values as `f64` (every operand is a `float` or an
 //! integer, exact in `f64`) with the exe's flag tests, NaN included.
 
+// `!(a < b)` mirrors the exe's x87 flag tests, which are true for NaN.
+#![allow(clippy::neg_cmp_op_on_partial_ord)]
+
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::units::fallout_ai::combatgroup::{CombatGroup, CombatTarget};
