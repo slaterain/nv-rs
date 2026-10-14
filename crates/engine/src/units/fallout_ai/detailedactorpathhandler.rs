@@ -33,7 +33,7 @@
 //! x87: the code computes in extended precision and stores `float`s; the
 //! translations compute in `f64` and round at each `float` store. A float
 //! that the code only moves through the FPU (`FLD`/`FSTP`) is passed through
-//! [`quiet`], which quiets a signalling NaN as the FPU load does.
+//! [`x87_quiet`], which quiets a signalling NaN as the FPU load does.
 //!
 //! Every function whose frame registers a C++ exception handler (`FS:[0]`)
 //! or calls the `/GS` cookie check (`00ec408c`) is marked incomplete: the
@@ -41,7 +41,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::types::{BSSimpleList, NiPoint3};
+use crate::types::{BSSimpleArray, BSSimpleList, NiPoint3, NiTArray};
 use crate::units::fallout_ai::actormover::ActorMover;
 
 layout! {
@@ -737,12 +737,108 @@ const AVOID_ARRAY_CONSTRUCT: u32 = 0x009e_9950;
 const AVOID_ARRAY_DESTRUCT: u32 = 0x009e_9980;
 const AVOID_ARRAY_ADD: u32 = 0x009e_99a0;
 
-// Functions of this unit that later sessions translate (called by address
-// until then).
+// Functions of this unit that the earlier functions call by address (now
+// translated below; the calls stay by address so that tests can double
+// them).
 /// `DetailedActorPathHandler::CheckGoalReached` (`009e8000`).
 const CHECK_GOAL_REACHED: u32 = 0x009e_8000;
 /// Resets `MoveMode`, `MoveDelta` and the last frame's delta (`009e8790`).
 const RESET_MOVE_DELTA: u32 = 0x009e_8790;
+
+// Callees of `CheckGoalReached`, `WarpToNextNode`, `PrintCurrentStatus`,
+// `SaveGame`, `LoadGame`, `InitLoadGame` and the avoidance array.
+/// The dword at +0x1C (`00441110`, the body of
+/// `PathingLocation::GetWorldspace`); `CheckGoalReached` reads it from a
+/// path and uses it as a node index.
+const DWORD_AT_1C: u32 = LOCATION_GET_WORLDSPACE;
+/// A node of a path by index (`006e78b0`: the path's array at +8,
+/// `006e8f40`).
+const PATH_NODE_BY_INDEX: u32 = 0x006e_78b0;
+/// A check in `pathfind.cpp` (`006d5340`, cdecl: request, path, node index,
+/// location; it has an exception frame of its own). `CheckGoalReached`
+/// treats 1 as the goal and 2 and 3 as "keep updating".
+const PATHFIND_006D5340: u32 = 0x006d_5340;
+/// The float at +0x70 of a `PathingRequest` (`0051b860`, ST0).
+const REQUEST_FLOAT_70: u32 = 0x0051_b860;
+/// `min(a, b)` of two floats (`0040ebd0`, cdecl, ST0).
+const FLOAT_MIN: u32 = 0x0040_ebd0;
+/// The reference's name source: `00474cb0` (0 while the guard byte
+/// `011c40c8` is set, else `0044a670` of what the actor's slot 0x130
+/// returns when that is not null), then the slot itself, or
+/// `TESObjectREFR`'s name (`0055d520`).
+const HAS_NAME: u32 = 0x0047_4cb0;
+const ACTOR_SLOT_NAME: u32 = 0x130;
+const REFERENCE_NAME: u32 = 0x0055_d520;
+/// The game's log line (`005b5e40`, cdecl, printf arguments).
+const LOG_MESSAGE: u32 = 0x005b_5e40;
+/// "PATHFINDING: Actor %s failed pathing due to goal Z difference %f,
+/// being too large" (`010924b0`).
+const GOAL_Z_MESSAGE: u32 = 0x0109_24b0;
+/// `double` 25600.0 (`01092508`): the squared distance to the last node
+/// within which `CheckGoalReached` keeps updating the path's end.
+const END_UPDATE_RANGE_SQUARED: u32 = 0x0109_2508;
+/// `float` 25.0 (`011a5d00`).
+const GOAL_MIN_DISTANCE: u32 = 0x011a_5d00;
+/// `float` 64.0 (`0101e6ec`) and 128.0 (`0101e704`): the distances
+/// `WarpToNextNode` uses.
+const WARP_MIN_DISTANCE: u32 = 0x0101_e6ec;
+const WARP_TETHER_DISTANCE: u32 = 0x0101_e704;
+/// `double` 0.6000000238418579 (`010290b8`).
+const WARP_END_FACTOR: u32 = 0x0102_90b8;
+/// A float of the actor (`008be350`, ST0; read through its process at
+/// +0x68 or a slot of the object at +0xA8).
+const ACTOR_MEASURE_008BE350: u32 = 0x008b_e350;
+/// `ActorMover::MoveActorToLocation` (`009df010`).
+const MOVER_MOVE_ACTOR_TO_LOCATION: u32 = 0x009d_f010;
+/// The `NiTArray` compaction (`00600bc0`): moves the non-null elements
+/// down, shrinks the buffer to them.
+const ARRAY_COMPACT: u32 = 0x0060_0bc0;
+/// Removes an item from a `BSSimpleList` (`00905330`, item address).
+const LIST_REMOVE: u32 = 0x0090_5330;
+/// Stores the item of a list node (`00726c60`, item address).
+const LIST_SET_ITEM: u32 = 0x0072_6c60;
+/// `this` itself (`006815c0`, the same body as the point's default
+/// constructor): a list node's item address.
+const LIST_NODE_ITEM: u32 = DEFAULT_CONSTRUCT;
+/// String copy, append and format with a size (`00406d30`, `00406d50`,
+/// `00406d00`; cdecl, buffer, size, then the source or the format).
+const STRING_COPY: u32 = 0x0040_6d30;
+const STRING_APPEND: u32 = 0x0040_6d50;
+const STRING_FORMAT: u32 = 0x0040_6d00;
+/// The status printer's slot 0x14 (cdecl virtual: printer, two words passed
+/// through, format, arguments).
+const PRINTER_SLOT_PRINT: u32 = 0x14;
+/// `BGSSaveGameBuffer`: save bytes (`00865e50`: address, size, 0), a form
+/// ID (`SaveFormID_ov2`, `00865df0`), `StartVariableSizedValue`
+/// (`00865f20`), `SaveVariableSizedValue_ov2` (`00865ff0`).
+const SAVE_BYTES: u32 = 0x0086_5e50;
+const SAVE_FORM_ID: u32 = 0x0086_5df0;
+const SAVE_START_VARIABLE_SIZED: u32 = 0x0086_5f20;
+const SAVE_VARIABLE_SIZED: u32 = 0x0086_5ff0;
+/// `BGSLoadGameBuffer`: load bytes (`00864980`: address, size),
+/// `LoadFormID_ov2` (`008648e0`), `LoadVariableSizedValue` (`00864a60`);
+/// its slot 0 gives the save's version byte.
+const LOAD_BYTES: u32 = 0x0086_4980;
+const LOAD_FORM_ID: u32 = 0x0086_48e0;
+const LOAD_VARIABLE_SIZED: u32 = 0x0086_4a60;
+const LOAD_SLOT_VERSION: u32 = 0x00;
+/// `__RTDynamicCast` (`00ec43fb`) and the type descriptors it is given:
+/// `TESForm` (`01183028`), `TESObjectREFR` (`011841cc`), `Actor`
+/// (`011846d4`), read from the exe.
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_TES_OBJECT_REFR: u32 = 0x0118_41cc;
+const TYPE_ACTOR: u32 = 0x0118_46d4;
+/// The `BSSimpleArray<ActorAvoidanceData,1024>` vtable (`01092640`, its
+/// RTTI type descriptor read from the exe), the base destructor
+/// (`008454f0`), the slot that allocates (+4), the grow step `Add` uses
+/// (`00845460`, returns the new element's index) and the element
+/// constructor over a range (`009e9a50`).
+const AVOID_ARRAY_VTABLE: u32 = 0x0109_2640;
+const SIMPLE_ARRAY_DESTRUCT: u32 = 0x0084_54f0;
+const SIMPLE_ARRAY_SLOT_ALLOCATE: u32 = 0x04;
+const SIMPLE_ARRAY_GROW: u32 = 0x0084_5460;
+const AVOID_DATA_CONSTRUCT_RANGE: u32 = 0x009e_9a50;
 
 // Actor virtual slots.
 const ACTOR_SLOT_LOCATION: u32 = 0x1f4;
@@ -769,22 +865,9 @@ const STATE_DONE: u32 = 5;
 const STATE_ROTATING: u32 = 6;
 const STATE_ROTATED: u32 = 7;
 
-/// The bit pattern an x87 `FLD dword` / `FSTP dword` pair leaves: a
-/// signalling NaN gets the quiet bit (bit 22), every other value is kept.
-/// The same as the shared `x87_quiet` of later engine commits, which this
-/// worktree's prelude does not have yet.
-pub(crate) fn quiet(value: f32) -> f32 {
-    let bits = value.to_bits();
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        f32::from_bits(bits | 0x0040_0000)
-    } else {
-        value
-    }
-}
-
 /// `float` from memory loaded and stored again through the FPU.
 fn fld(e: &Engine, addr: u32) -> f32 {
-    quiet(e.mem.f32(addr))
+    x87_quiet(e.mem.f32(addr))
 }
 
 /// Three words copied with `MOV`s.
@@ -1052,7 +1135,7 @@ pub fn detailed_actor_path_handler_init(
         let first = e.call(FLOAT_AT_74, &args![request]).f64();
         let request = request_of(e, this);
         let second = e.call(FLOAT_AT_74, &args![request]).f64();
-        let product = quiet((second * first) as f32);
+        let product = x87_quiet((second * first) as f32);
         let mut radius = e.call(FLOAT_MAX_OF, &args![product, minimum]).f64() as f32;
         let path = path_of(e, this);
         let source = e.call(PATH_END_NODE, &args![path]).u32();
@@ -1069,7 +1152,7 @@ pub fn detailed_actor_path_handler_init(
     }
     fn_009e27e0(e, this);
     let waiting = e.get(this, H::bWaitingForUpdate);
-    fn_009e77d0(e, this, quiet(start_distance));
+    fn_009e77d0(e, this, x87_quiet(start_distance));
     e.set(this, H::bIgnoreInitialRotation, false);
     e.set(this, H::bIgnoreInitialRotationKeepActorHeading, false);
     e.set(this, H::fIgnoreInitialRotationTetherParam, 0.0);
@@ -1117,18 +1200,18 @@ pub fn detailed_actor_path_handler_init(
                 detailed_actor_path_handler_init_rotation_mode(
                     e,
                     this,
-                    quiet(heading),
+                    x87_quiet(heading),
                     false,
                     waiting,
                 );
             } else {
-                set_actor_heading(e, this, quiet(heading));
+                set_actor_heading(e, this, x87_quiet(heading));
             }
         }
     }
     e.set(this, H::eState, STATE_MOVING);
     if update_seconds as f64 > double(e, ZERO_DOUBLE) {
-        e.vcall(this.addr(), SLOT_UPDATE, &args![quiet(update_seconds)])
+        e.vcall(this.addr(), SLOT_UPDATE, &args![x87_quiet(update_seconds)])
             .u32()
     } else {
         0
@@ -1161,7 +1244,7 @@ pub fn detailed_actor_path_handler_init_rotation_only(
     e.set(this, H::bIgnoreInitialRotation, false);
     e.set(this, H::bIgnoreInitialRotationKeepActorHeading, false);
     e.set(this, H::fIgnoreInitialRotationTetherParam, 0.0);
-    if detailed_actor_path_handler_init_rotation_mode(e, this, quiet(heading), flag, false) {
+    if detailed_actor_path_handler_init_rotation_mode(e, this, x87_quiet(heading), flag, false) {
         e.set(this, H::eState, STATE_ROTATING);
         true
     } else {
@@ -1204,7 +1287,7 @@ pub fn detailed_actor_path_handler_update(e: &mut Engine, this: Ptr<H>, seconds:
             .vcall(
                 this.addr(),
                 SLOT_UPDATE_WHILE_PLAYER_WAITS,
-                &args![quiet(seconds)],
+                &args![x87_quiet(seconds)],
             )
             .u32();
     }
@@ -1232,7 +1315,7 @@ pub fn detailed_actor_path_handler_update(e: &mut Engine, this: Ptr<H>, seconds:
         }
     }
     if !e.get(this, H::bWaitingForUpdate) {
-        fn_009e3d50(e, this, quiet(seconds).to_bits());
+        fn_009e3d50(e, this, x87_quiet(seconds).to_bits());
     }
     if e.get(this, H::bIgnoreInitialRotation)
         && e.get(this, H::fIgnoreInitialRotationTetherParam) <= e.get(this, H::fCurrentSplineT)
@@ -1243,8 +1326,8 @@ pub fn detailed_actor_path_handler_update(e: &mut Engine, this: Ptr<H>, seconds:
     }
 
     if e.get(this, H::bRotateMode) {
-        let heading = detailed_actor_path_handler_update_rotation(e, this, quiet(seconds));
-        set_actor_heading(e, this, quiet(heading));
+        let heading = detailed_actor_path_handler_update_rotation(e, this, x87_quiet(seconds));
+        set_actor_heading(e, this, x87_quiet(heading));
         let looking = e.with_stack(8, |e, out| {
             let heading_out = out;
             let looking_out = out.byte_add(4);
@@ -1256,7 +1339,7 @@ pub fn detailed_actor_path_handler_update(e: &mut Engine, this: Ptr<H>, seconds:
             );
             fld(e, looking_out.addr())
         });
-        detailed_actor_path_handler_update_looking(e, this, quiet(seconds), looking);
+        detailed_actor_path_handler_update_looking(e, this, x87_quiet(seconds), looking);
         clear_frame_delta(e, this);
         let mover = mover_of(e, this);
         e.call(EMPTY_FUNCTION, &args![mover]);
@@ -1270,7 +1353,7 @@ pub fn detailed_actor_path_handler_update(e: &mut Engine, this: Ptr<H>, seconds:
         let wait = (e.get(this, H::fWaitTime) as f64 - seconds as f64) as f32;
         e.set(this, H::fWaitTime, wait);
         if e.get(this, H::fWaitTime) as f64 > double(e, ZERO_DOUBLE) {
-            let avoid = fn_009e5ae0(e, this, quiet(seconds));
+            let avoid = fn_009e5ae0(e, this, x87_quiet(seconds));
             if avoid == 0 {
                 let timer = (e.get(this, H::fActorAvoidanceTimer) as f64 - seconds as f64) as f32;
                 e.set(this, H::fActorAvoidanceTimer, timer);
@@ -1303,8 +1386,8 @@ pub fn detailed_actor_path_handler_update(e: &mut Engine, this: Ptr<H>, seconds:
         }
         _ => {}
     }
-    fn_009e2aa0(e, this, quiet(seconds));
-    if !fn_009e4cf0(e, this, quiet(seconds)) {
+    fn_009e2aa0(e, this, x87_quiet(seconds));
+    if !fn_009e4cf0(e, this, x87_quiet(seconds)) {
         if e.get(this, H::eState) == STATE_PAST_END {
             reset_move_delta(e, this);
             return 0;
@@ -1312,13 +1395,13 @@ pub fn detailed_actor_path_handler_update(e: &mut Engine, this: Ptr<H>, seconds:
         e.set(this, H::eAvoidState, 5);
         return 1;
     }
-    fn_009e3520(e, this, quiet(seconds));
+    fn_009e3520(e, this, x87_quiet(seconds));
     let enabled = e
         .call(SETTING_BOOL, &args![SETTING_AVOIDANCE_ENABLED])
         .u32();
     if e.mem.u8(enabled) != 0 {
         if !e.get(this, H::bMovementBlocked) {
-            let avoid = fn_009e5ae0(e, this, quiet(seconds));
+            let avoid = fn_009e5ae0(e, this, x87_quiet(seconds));
             if avoid != 0 {
                 e.set(this, H::fAvoidanceDetectionValue, 0.0);
                 match avoid {
@@ -1351,19 +1434,19 @@ pub fn detailed_actor_path_handler_update(e: &mut Engine, this: Ptr<H>, seconds:
     }
 
     e.with_stack(4, |e, scale_out| {
-        let heading = fn_009e4800(e, this, quiet(seconds), scale_out);
-        set_actor_heading(e, this, quiet(heading));
+        let heading = fn_009e4800(e, this, x87_quiet(seconds), scale_out);
+        set_actor_heading(e, this, x87_quiet(heading));
         let mover = mover_of(e, this);
         e.call(EMPTY_FUNCTION, &args![mover]);
         let scale = e.mem.f32(scale_out.addr());
         if scale as f64 > double(e, ZERO_DOUBLE) {
             e.call(
                 POINT_SCALE,
-                &args![this.addr() + H::MoveDelta.off, quiet(scale)],
+                &args![this.addr() + H::MoveDelta.off, x87_quiet(scale)],
             );
         }
     });
-    fn_009e3560(e, this, quiet(seconds).to_bits());
+    fn_009e3560(e, this, x87_quiet(seconds).to_bits());
     let length = e
         .call(POINT_LENGTH_XY, &args![this.addr() + H::MoveDelta.off])
         .f64() as f32;
@@ -1520,7 +1603,7 @@ pub fn fn_009e1640(e: &mut Engine, matrix: Ptr, angle: f32) {
     e.with_stack(8, |e, out| {
         let sine = out;
         let cosine = out.byte_add(4);
-        e.call(SIN_COS, &args![quiet(angle), sine, cosine]);
+        e.call(SIN_COS, &args![x87_quiet(angle), sine, cosine]);
         let s = fld(e, sine.addr());
         let c = fld(e, cosine.addr());
         e.mem.set_f32(m, c);
@@ -1566,7 +1649,7 @@ pub fn detailed_actor_path_handler_no_path_update(
         // The compiler's jump table at 009e1d30.
         match e.get(this, H::eState) {
             STATE_AT_END => {
-                e.vcall(this.addr(), SLOT_UPDATE, &args![quiet(seconds)]);
+                e.vcall(this.addr(), SLOT_UPDATE, &args![x87_quiet(seconds)]);
                 result = 0;
             }
             STATE_ROTATED => {
@@ -1575,7 +1658,8 @@ pub fn detailed_actor_path_handler_no_path_update(
                 result = 5;
             }
             STATE_ROTATING => {
-                let heading = detailed_actor_path_handler_update_rotation(e, this, quiet(seconds));
+                let heading =
+                    detailed_actor_path_handler_update_rotation(e, this, x87_quiet(seconds));
                 set_actor_heading(e, this, heading);
                 clear_frame_delta(e, this);
                 e.set(this, H::bDeltaComputedThisFrame, true);
@@ -1621,7 +1705,7 @@ pub fn detailed_actor_path_handler_no_path_update(
         result = 0;
     }
     if !immobile {
-        detailed_actor_path_handler_update_looking(e, this, quiet(seconds), quiet(looking));
+        detailed_actor_path_handler_update_looking(e, this, x87_quiet(seconds), x87_quiet(looking));
     }
     result as u32
 }
@@ -1679,14 +1763,17 @@ fn no_path_turn(e: &mut Engine, this: Ptr<H>, seconds: f32, immobile: bool, bloc
         e.mem.set_f32(to_target.addr() + 8, 0.0);
         let angle = e.call(Z_ANGLE_FROM_VECTOR, &args![to_target]).f64() as f32;
         let turn = e
-            .call(ANGLE_DIFFERENCE, &args![quiet(heading), angle, direction])
+            .call(
+                ANGLE_DIFFERENCE,
+                &args![x87_quiet(heading), angle, direction],
+            )
             .f64() as f32;
         e.call(FLOAT_ABS, &args![turn]).f64() as f32
     } else {
         let turn = e
             .call(
                 ANGLE_DIFFERENCE,
-                &args![quiet(heading), quiet(yaw), direction],
+                &args![x87_quiet(heading), x87_quiet(yaw), direction],
             )
             .f64() as f32;
         e.call(FLOAT_ABS, &args![turn]).f64() as f32
@@ -1702,9 +1789,9 @@ fn no_path_turn(e: &mut Engine, this: Ptr<H>, seconds: f32, immobile: bool, bloc
         (true, false) => setting_float(e, SETTING_TURN_RATE_D),
     };
     step = (step as f64 * factor as f64) as f32;
-    let mut turn = quiet(difference_abs);
+    let mut turn = x87_quiet(difference_abs);
     if step < turn {
-        turn = quiet(step);
+        turn = x87_quiet(step);
     }
     let dir = e.mem.f32(direction.addr());
     let mut mode = e.get(this, H::MoveMode);
@@ -1737,10 +1824,10 @@ fn no_path_turn(e: &mut Engine, this: Ptr<H>, seconds: f32, immobile: bool, bloc
         pitch_abs <= double(e, STEEP_PITCH)
     };
     if set_heading {
-        set_actor_heading(e, this, quiet(heading));
+        set_actor_heading(e, this, x87_quiet(heading));
     }
     if immobile {
-        detailed_actor_path_handler_update_looking(e, this, quiet(seconds), pitch);
+        detailed_actor_path_handler_update_looking(e, this, x87_quiet(seconds), pitch);
     }
     e.call(EMPTY_FUNCTION, &args![mover]);
     pitch
@@ -1845,7 +1932,7 @@ pub fn detailed_actor_path_handler_update_while_player_waits(
             &args![
                 actor,
                 destination,
-                quiet(heading),
+                x87_quiet(heading),
                 cell,
                 worldspace,
                 1u32,
@@ -2029,9 +2116,9 @@ pub fn detailed_actor_path_handler_is_door_in_path(
             e.call(DEFAULT_CONSTRUCT, &args![start]);
             e.call(DEFAULT_CONSTRUCT, &args![end]);
             let path = path_of(e, this);
-            e.call(PATH_POINT_AT, &args![path, quiet(t), start]);
+            e.call(PATH_POINT_AT, &args![path, x87_quiet(t), start]);
             let path = path_of(e, this);
-            e.call(PATH_POINT_AT, &args![path, quiet(next), end]);
+            e.call(PATH_POINT_AT, &args![path, x87_quiet(next), end]);
             fn_009e2690(e, filter, door_id);
             e.call(LOCATION_FROM_POINT, &args![location, start, actor]);
             e.call(LOCATION_RESOLVE_NAVMESH, &args![location, 0u32]);
@@ -2160,7 +2247,7 @@ pub fn detailed_actor_path_handler_get_distance_traveled(e: &mut Engine, this: P
     if path_of(e, this) == 0 {
         0.0
     } else {
-        quiet(e.get(this, H::fDistanceTraveled))
+        x87_quiet(e.get(this, H::fDistanceTraveled))
     }
 }
 
@@ -2170,8 +2257,10 @@ pub fn detailed_actor_path_handler_get_distance_traveled(e: &mut Engine, this: P
 pub fn detailed_actor_path_handler_get_distance_remaining(e: &mut Engine, this: Ptr<H>) -> f32 {
     let traveled = e.vcall(this.addr(), SLOT_GET_DISTANCE_TRAVELED, &[]).f64();
     let remaining = (e.get(this, H::fPathLength) as f64 - traveled) as f32;
-    let at_least = e.call(FLOAT_MAX_OF, &args![quiet(remaining), 0.0f32]).f64() as f32;
-    quiet(at_least)
+    let at_least = e
+        .call(FLOAT_MAX_OF, &args![x87_quiet(remaining), 0.0f32])
+        .f64() as f32;
+    x87_quiet(at_least)
 }
 
 // Translated from 009e28a0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2231,7 +2320,7 @@ pub fn detailed_actor_path_handler_compute_approximate_location(
             let path = e.call(NIPOINTER_GET, &args![holder]).u32();
             e.call(
                 PATH_LOCATION_AFTER,
-                &args![path, result, spline, quiet(distance)],
+                &args![path, result, spline, x87_quiet(distance)],
             );
         } else {
             let location = actor_location(e, this);
@@ -2352,7 +2441,7 @@ pub fn fn_009e2aa0(e: &mut Engine, this: Ptr<H>, seconds: f32) -> bool {
                 off < double(e, FIFTEEN_DEGREES)
             };
             let angle = if near_vertical {
-                quiet(target_angle)
+                x87_quiet(target_angle)
             } else {
                 yaw
             };
@@ -2362,15 +2451,15 @@ pub fn fn_009e2aa0(e: &mut Engine, this: Ptr<H>, seconds: f32) -> bool {
             let turn = e
                 .call(
                     ANGLE_DIFFERENCE,
-                    &args![quiet(angle), quiet(target_angle), side],
+                    &args![x87_quiet(angle), x87_quiet(target_angle), side],
                 )
                 .f64() as f32;
             if e.get(this, H::fTimeInAnim) as f64 > double(e, QUARTER) {
-                let turn_abs = e.call(FLOAT_ABS, &args![quiet(turn)]).f64();
+                let turn_abs = e.call(FLOAT_ABS, &args![x87_quiet(turn)]).f64();
                 if turn_abs > double(e, DEGREES_TO_RADIANS) {
                     let degrees = (turn as f64 * double(e, RADIANS_TO_DEGREES)) as f32;
                     let mut chosen = None;
-                    let degrees_abs = e.call(FLOAT_ABS, &args![quiet(degrees)]).f64();
+                    let degrees_abs = e.call(FLOAT_ABS, &args![x87_quiet(degrees)]).f64();
                     if degrees_abs > double(e, LARGE_TURN) && actor_group_loaded(e, this, 4) {
                         let off = pitch_off_vertical(e, pitch);
                         let backwards = if off >= double(e, FIFTEEN_DEGREES) {
@@ -2385,7 +2474,7 @@ pub fn fn_009e2aa0(e: &mut Engine, this: Ptr<H>, seconds: f32) -> bool {
                     direction = match chosen {
                         Some(bits) => bits,
                         None => {
-                            let degrees_abs = e.call(FLOAT_ABS, &args![quiet(degrees)]).f64();
+                            let degrees_abs = e.call(FLOAT_ABS, &args![x87_quiet(degrees)]).f64();
                             if degrees_abs > double(e, SMALL_TURN) {
                                 let side_value = e.mem.f32(side.addr());
                                 let (group, bits) = if side_value as f64 > double(e, ZERO_DOUBLE) {
@@ -2749,7 +2838,7 @@ pub fn fn_009e3560(e: &mut Engine, this: Ptr<H>, _unused_1: u32) {
         let facing = (heading + offset as f64) as f32;
         let turn = (angle as f64 - facing as f64) as f32;
         e.call(DEFAULT_CONSTRUCT, &args![matrix]);
-        fn_009e1640(e, matrix, quiet(turn));
+        fn_009e1640(e, matrix, x87_quiet(turn));
         let result = e
             .call(
                 MATRIX_TIMES_POINT,
@@ -2907,9 +2996,9 @@ pub fn detailed_actor_path_handler_update_tether_position(
         e.call(DEFAULT_CONSTRUCT, &args![point]);
         let spline = fld(e, this.addr() + H::fCurrentSplineT.off);
         let (amount, forward) = if distance as f64 >= double(e, ZERO_DOUBLE) {
-            (quiet(distance), 1u32)
+            (x87_quiet(distance), 1u32)
         } else {
-            (-quiet(distance), 0u32)
+            (-x87_quiet(distance), 0u32)
         };
         let path = path_of(e, this);
         e.call(
@@ -3029,7 +3118,10 @@ pub fn fn_009e3d50(e: &mut Engine, this: Ptr<H>, _unused_1: u32) {
         let min_move = e.get(this, H::fTetherMinMove);
         let min_move_squared = (min_move as f64 * min_move as f64) as f32;
         let limit = e
-            .call(FLOAT_MAX_OF, &args![quiet(limit), quiet(min_move_squared)])
+            .call(
+                FLOAT_MAX_OF,
+                &args![x87_quiet(limit), x87_quiet(min_move_squared)],
+            )
             .f64() as f32;
         let advance = (along as f64) < zero || (ahead as f64) < zero || limit > distance;
         if !advance {
@@ -3054,14 +3146,18 @@ pub fn fn_009e3d50(e: &mut Engine, this: Ptr<H>, _unused_1: u32) {
             tether_to_path_end(e, this);
             return;
         }
-        let mut previous = quiet(along);
+        let mut previous = x87_quiet(along);
         loop {
             let spline = (e.get(this, H::fCurrentSplineT) as f64 + double(e, SPLINE_STEP)) as f32;
             e.set(this, H::fCurrentSplineT, spline);
             let path = path_of(e, this);
             e.call(
                 PATH_POINT_AT,
-                &args![path, quiet(spline), this.addr() + H::TetherTargetPoint.off],
+                &args![
+                    path,
+                    x87_quiet(spline),
+                    this.addr() + H::TetherTargetPoint.off
+                ],
             );
             (along, ahead, distance) = tether_measures(e, this, block, false);
             let last = last_node_parameter(e, this);
@@ -3078,7 +3174,7 @@ pub fn fn_009e3d50(e: &mut Engine, this: Ptr<H>, _unused_1: u32) {
             if stop {
                 break;
             }
-            previous = quiet(along);
+            previous = x87_quiet(along);
         }
         let spline = e.get(this, H::fCurrentSplineT);
         let index = e.call(FTOL, &args![spline as f64]).u32();
@@ -3207,8 +3303,8 @@ pub fn detailed_actor_path_handler_compute_heading_and_looking(
         e.call(ACTOR_BYTE_14D, &args![actor]);
         (heading, 0.0)
     };
-    e.mem.set_f32(heading_out.addr(), quiet(heading));
-    e.mem.set_f32(looking_out.addr(), quiet(looking));
+    e.mem.set_f32(heading_out.addr(), x87_quiet(heading));
+    e.mem.set_f32(looking_out.addr(), x87_quiet(looking));
 }
 
 /// `BSWrap(value, -pi, pi)` on a float the game keeps on its stack.
@@ -3270,7 +3366,7 @@ pub fn fn_009e4800(e: &mut Engine, this: Ptr<H>, seconds: f32, scale_out: Ptr) -
                 } else {
                     e.call(ACTOR_GET_WALK_SPEED, &args![actor]).f64() as f32
                 };
-                let speed = quiet(speed);
+                let speed = x87_quiet(speed);
                 copy_point(e, tether.addr(), this.addr() + H::TetherTargetPoint.off);
                 if speed > distance {
                     let rest = (speed as f64 - distance as f64) as f32;
@@ -3278,7 +3374,7 @@ pub fn fn_009e4800(e: &mut Engine, this: Ptr<H>, seconds: f32, scale_out: Ptr) -
                     let path = path_of(e, this);
                     e.call(
                         PATH_ADVANCE,
-                        &args![path, spline, quiet(rest), 1u32, spline_out, tether],
+                        &args![path, spline, x87_quiet(rest), 1u32, spline_out, tether],
                     );
                 }
                 let now = actor_heading(e, this) as f32;
@@ -3334,7 +3430,7 @@ pub fn fn_009e4800(e: &mut Engine, this: Ptr<H>, seconds: f32, scale_out: Ptr) -
                     }
                 }
             }
-            let step = quiet(step);
+            let step = x87_quiet(step);
             e.call(FLOAT_CLAMP, &args![turn, -step, step]);
             let new_heading =
                 (e.mem.f32(current.addr()) as f64 + e.mem.f32(turn.addr()) as f64) as f32;
@@ -3344,7 +3440,7 @@ pub fn fn_009e4800(e: &mut Engine, this: Ptr<H>, seconds: f32, scale_out: Ptr) -
         let applied = e.call(FLOAT_ABS, &args![turn_value]).f64() as f32;
         e.set(this, H::fLastRotationApplied, applied);
         let looking_value = fld(e, looking.addr());
-        detailed_actor_path_handler_update_looking(e, this, quiet(seconds), looking_value);
+        detailed_actor_path_handler_update_looking(e, this, x87_quiet(seconds), looking_value);
         fld(e, heading.addr())
     })
 }
@@ -3367,18 +3463,18 @@ pub fn detailed_actor_path_handler_update_looking(
         let turn = e
             .call(
                 ANGLE_DIFFERENCE,
-                &args![quiet(current), quiet(looking), direction],
+                &args![x87_quiet(current), x87_quiet(looking), direction],
             )
             .f64() as f32;
         let size = e.call(FLOAT_ABS, &args![turn]).f64() as f32;
-        let mut step = quiet(size);
+        let mut step = x87_quiet(size);
         if max_step < step {
-            step = quiet(max_step);
+            step = x87_quiet(max_step);
         }
         (step, e.mem.f32(direction.addr()))
     });
     let new_looking = (step.0 as f64 * step.1 as f64 + current as f64) as f32;
-    e.call(ACTOR_SET_LOOKING, &args![actor, quiet(new_looking)]);
+    e.call(ACTOR_SET_LOOKING, &args![actor, x87_quiet(new_looking)]);
 }
 
 /// Whether the character controller's support reference (`00c6fd60`,
@@ -3445,11 +3541,11 @@ fn mark_avoid_nodes(e: &mut Engine, this: Ptr<H>) {
                             if radius < double(e, RADIUS_LIMIT) {
                                 let radius = e.call(AVOID_NODE_RADIUS, &args![node]).f64();
                                 let doubled = (radius + radius) as f32;
-                                e.call(AVOID_NODE_SET_RADIUS, &args![node, quiet(doubled)]);
+                                e.call(AVOID_NODE_SET_RADIUS, &args![node, x87_quiet(doubled)]);
                             } else {
                                 let value = e.call(AVOID_NODE_FLOAT_1C, &args![node]).f64();
                                 let scaled = (value * double(e, TEN)) as f32;
-                                e.call(AVOID_NODE_SET_FLOAT_1C, &args![node, quiet(scaled)]);
+                                e.call(AVOID_NODE_SET_FLOAT_1C, &args![node, x87_quiet(scaled)]);
                             }
                             none_near = false;
                         }
@@ -3768,8 +3864,8 @@ pub fn fn_009e5690(
                 Ptr::new(other),
                 position,
                 relative,
-                quiet(distance),
-                quiet(factor),
+                x87_quiet(distance),
+                x87_quiet(factor),
                 value,
                 false,
             ) {
@@ -3786,8 +3882,8 @@ pub fn fn_009e5690(
             Ptr::new(player),
             position,
             rotated,
-            quiet(reach),
-            quiet(factor),
+            x87_quiet(reach),
+            x87_quiet(factor),
             value,
             false,
         ) {
@@ -3803,7 +3899,7 @@ pub fn fn_009e5690(
 /// An (actor, value) pair at `this`; returns `this`.
 pub fn fn_009e5ab0(e: &mut Engine, this: Ptr, actor: u32, value: f32) -> Ptr {
     e.mem.set_u32(this.addr(), actor);
-    e.mem.set_f32(this.addr() + 4, quiet(value));
+    e.mem.set_f32(this.addr() + 4, x87_quiet(value));
     this
 }
 
@@ -3851,7 +3947,7 @@ fn add_avoid_nodes(e: &mut Engine, this: Ptr<H>, nodes: u32, block: Ptr) {
     } else {
         fld(e, AVOID_RADIUS_WALK)
     };
-    let multiplier = quiet(multiplier);
+    let multiplier = x87_quiet(multiplier);
     let mut node = this.addr() + H::ActorAvoidList.off;
     let request = request_of(e, this);
     let own_radius = e.call(FLOAT_AT_68, &args![request]).f64() as f32;
@@ -4132,8 +4228,8 @@ pub fn fn_009e6870(
 ) -> Ptr {
     copy_point(e, this.addr(), point.addr());
     e.call(DEFAULT_CONSTRUCT, &args![this.addr() + 0x0c]);
-    e.mem.set_f32(this.addr() + 0x18, quiet(radius));
-    e.mem.set_f32(this.addr() + 0x1c, quiet(weight));
+    e.mem.set_f32(this.addr() + 0x18, x87_quiet(radius));
+    e.mem.set_f32(this.addr() + 0x1c, x87_quiet(weight));
     e.mem.set_u32(this.addr() + 0x20, node_type);
     this
 }
@@ -4238,7 +4334,9 @@ pub fn fn_009e6900(
         let near = e.call(SETTING_VALUE, &args![SETTING_AVOID_NEAR]).u32();
         let close = e.mem.f32(near) > length;
         let remaining = (length as f64 - forward as f64) as f32;
-        let remaining = e.call(FLOAT_MAX_OF, &args![quiet(remaining), 0.0f32]).f64() as f32;
+        let remaining = e
+            .call(FLOAT_MAX_OF, &args![x87_quiet(remaining), 0.0f32])
+            .f64() as f32;
         let dot = e.call(POINT_DOT, &args![offset, direction]).f64() as f32;
         let hit = threshold <= dot || close;
         if !hit {
@@ -4252,7 +4350,7 @@ pub fn fn_009e6900(
         e.call(FLOAT_CLAMP, &args![ratio, 0.0f32, 1.0f32]);
         let scaled = e.mem.f32(ratio.addr()) as f64 * double(e, FOUR);
         let quarters = e.call(FTOL, &args![scaled]).u32();
-        let mut value = quiet(dot);
+        let mut value = x87_quiet(dot);
         // The compiler's jump table at 009e6b90 (on quarters - 1).
         let squarings = match quarters.wrapping_sub(1) {
             0 => 1,
@@ -4263,7 +4361,7 @@ pub fn fn_009e6900(
         for _ in 0..squarings {
             value = (value as f64 * value as f64) as f32;
         }
-        e.mem.set_f32(value_out.addr(), quiet(value));
+        e.mem.set_f32(value_out.addr(), x87_quiet(value));
         true
     })
 }
@@ -4366,10 +4464,10 @@ pub fn detailed_actor_path_handler_set_wait_for_updated_path(
         let tether_distance = e.call(POINT_LENGTH_XY, &args![offset]).f64() as f32;
         if lead > tether_distance {
             let further = (lead as f64 - tether_distance as f64) as f32;
-            detailed_actor_path_handler_update_tether_position(e, this, quiet(further));
+            detailed_actor_path_handler_update_tether_position(e, this, x87_quiet(further));
         } else {
             let back = (tether_distance as f64 - lead as f64) as f32;
-            detailed_actor_path_handler_update_tether_position(e, this, -quiet(back));
+            detailed_actor_path_handler_update_tether_position(e, this, -x87_quiet(back));
         }
         let mut outside = true;
         let cell = e.call(REFERENCE_PARENT_CELL, &args![actor]).u32();
@@ -4430,7 +4528,10 @@ pub fn detailed_actor_path_handler_set_wait_for_updated_path(
         });
         let current = request_of(e, this);
         if use_heading {
-            e.call(REQUEST_SET_INITIAL_HEADING, &args![current, quiet(heading)]);
+            e.call(
+                REQUEST_SET_INITIAL_HEADING,
+                &args![current, x87_quiet(heading)],
+            );
         } else {
             fn_009e16c0(e, Ptr::new(current));
         }
@@ -4474,7 +4575,7 @@ fn avoid_nodes_for_actor(
             e,
             avoid_node,
             Ptr::new(point),
-            quiet(radius),
+            x87_quiet(radius),
             weight,
             node_type,
         );
@@ -4501,7 +4602,14 @@ fn avoid_nodes_for_actor(
         e.mem.set_f32(position.addr() + 4, y);
     }
     let weight = position_weight(e);
-    let built = fn_009e6870(e, avoid_node, position, quiet(radius), weight, node_type);
+    let built = fn_009e6870(
+        e,
+        avoid_node,
+        position,
+        x87_quiet(radius),
+        weight,
+        node_type,
+    );
     e.call(AVOID_NODE_ARRAY_ADD, &args![nodes, built]);
 }
 
@@ -4646,17 +4754,17 @@ pub fn detailed_actor_path_handler_init_rotation_mode(
     if (heading as f64) < double(e, ZERO_DOUBLE) {
         let full = fld(e, TWO_PI_FLOAT);
         let raised = (heading as f64 + double(e, TWO_PI_DOUBLE)) as f32;
-        heading = e.call(FLOAT_MODULO, &args![quiet(raised), full]).f64() as f32;
+        heading = e.call(FLOAT_MODULO, &args![x87_quiet(raised), full]).f64() as f32;
     } else if heading as f64 >= double(e, TWO_PI_DOUBLE) {
         let full = fld(e, TWO_PI_FLOAT);
-        heading = e.call(FLOAT_MODULO, &args![quiet(heading), full]).f64() as f32;
+        heading = e.call(FLOAT_MODULO, &args![x87_quiet(heading), full]).f64() as f32;
     }
     let (turn_abs, side) = e.with_stack(4, |e, direction| {
         let now = actor_heading(e, this) as f32;
         let turn = e
-            .call(ANGLE_DIFFERENCE, &args![now, quiet(heading), direction])
+            .call(ANGLE_DIFFERENCE, &args![now, x87_quiet(heading), direction])
             .f64() as f32;
-        let turn_abs = e.call(FLOAT_ABS, &args![quiet(turn)]).f64() as f32;
+        let turn_abs = e.call(FLOAT_ABS, &args![x87_quiet(turn)]).f64() as f32;
         (turn_abs, e.mem.f32(direction.addr()))
     });
     let mut minimum = fld(e, TURN_THRESHOLD);
@@ -4673,7 +4781,7 @@ pub fn detailed_actor_path_handler_init_rotation_mode(
     }
     e.set(this, H::bRotateCCW, side as f64 > double(e, ZERO_DOUBLE));
     e.set(this, H::bRotateMode, true);
-    e.set(this, H::fRotateGoal, quiet(heading));
+    e.set(this, H::fRotateGoal, x87_quiet(heading));
     let goal = this.addr() + H::fRotateGoal.off;
     wrap_pi(e, Ptr::new(goal));
     let actor = e.get(this, H::pActor);
@@ -4707,7 +4815,7 @@ pub fn fn_009e77d0(e: &mut Engine, this: Ptr<H>, start_distance: f32) {
     let spline = e
         .call(
             PATH_PARAMETER_AT,
-            &args![path, quiet(start_distance), length, index],
+            &args![path, x87_quiet(start_distance), length, index],
         )
         .f64() as f32;
     e.set(this, H::fCurrentSplineT, spline);
@@ -4731,7 +4839,15 @@ pub fn fn_009e77d0(e: &mut Engine, this: Ptr<H>, start_distance: f32) {
                 let cell = e.call(REFERENCE_PARENT_CELL, &args![actor]).u32();
                 e.call(
                     ACTOR_MOVE_TO_PATH_END,
-                    &args![actor, point, quiet(heading), cell, worldspace, 1u32, 1u32],
+                    &args![
+                        actor,
+                        point,
+                        x87_quiet(heading),
+                        cell,
+                        worldspace,
+                        1u32,
+                        1u32
+                    ],
                 );
                 e.call(LOCATION_DESTRUCT, &args![location]);
             });
@@ -4784,11 +4900,11 @@ pub fn fn_009e77d0(e: &mut Engine, this: Ptr<H>, start_distance: f32) {
             let parameter = e
                 .call(
                     PATH_PARAMETER_AT,
-                    &args![path, quiet(distance), length, node],
+                    &args![path, x87_quiet(distance), length, node],
                 )
                 .f64() as f32;
             let path = path_of(e, this);
-            e.call(PATH_POINT_AT, &args![path, quiet(parameter), point]);
+            e.call(PATH_POINT_AT, &args![path, x87_quiet(parameter), point]);
             let result = e
                 .call(POINT_SUBTRACT, &args![point, difference, here])
                 .u32();
@@ -4805,18 +4921,21 @@ pub fn fn_009e77d0(e: &mut Engine, this: Ptr<H>, start_distance: f32) {
             if crossing && !found {
                 found = true;
                 best_index = node_index;
-                best_parameter = quiet(parameter);
-                best_distance = quiet(distance_squared);
+                best_parameter = x87_quiet(parameter);
+                best_distance = x87_quiet(distance_squared);
             } else if best_distance > distance_squared {
                 best_index = node_index;
-                best_parameter = quiet(parameter);
-                best_distance = quiet(distance_squared);
+                best_parameter = x87_quiet(parameter);
+                best_distance = x87_quiet(distance_squared);
             }
         }
         let path = path_of(e, this);
-        e.call(PATH_POINT_AT, &args![path, quiet(best_parameter), tether]);
+        e.call(
+            PATH_POINT_AT,
+            &args![path, x87_quiet(best_parameter), tether],
+        );
         e.set(this, H::iCurrentNodeIndex, best_index);
-        e.set(this, H::fCurrentSplineT, quiet(best_parameter));
+        e.set(this, H::fCurrentSplineT, x87_quiet(best_parameter));
         copy_point(e, last_tether, here.addr());
     });
 }
@@ -4895,6 +5014,737 @@ pub fn detailed_actor_path_handler_update_rotation(
         e.set(this, H::fMinRotateTime, left);
         fld(e, heading.addr())
     })
+}
+
+// Translated from 009e8000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DetailedActorPathHandler::CheckGoalReached` (Xbox PDB): 5 when the
+/// actor has reached the goal, 2 when the path failed on the goal's height,
+/// otherwise 0.
+///
+/// While `bEndUpdatePath` is set the path's end is still being updated:
+/// near the end (the current node two before the last and within 160 units
+/// of the next one, or past it) the check `006d5340` decides (1: the goal;
+/// 2 or 3: `bEndUpdatePath` from the end node's flag 4 and the mover's
+/// `iNextNode` from the path's dword at +0x1C; else `bEndUpdatePath` ends).
+///
+/// Otherwise the goal is the end node's point (or, when the path's byte at
+/// +0x40 is clear and its dword at +0x1C names its last node, that node's
+/// point); it is reached within `fGoalRadiusSqr` (horizontal, squared).
+/// With the request's byte at +0x9C set and both the radius and the
+/// distance above 25, a tether point that has stopped moving towards the
+/// goal while there is no avoidance and no block does not count. Then the
+/// height difference decides: against the request's float at +0x70, or,
+/// with the actor's byte at +0x14D set, against the smaller of that and
+/// the actor's height. An actor two nodes or less from the end with too
+/// large a difference fails (and the reason is logged).
+pub fn detailed_actor_path_handler_check_goal_reached(e: &mut Engine, this: Ptr<H>) -> u32 {
+    if e.get(this, H::bEndUpdatePath) {
+        return check_goal_while_updating_end(e, this);
+    }
+    e.with_stack(0x54, |e, block| {
+        let goal = block;
+        let difference = block.byte_add(0x0c);
+        let copy = block.byte_add(0x18);
+        let result = block.byte_add(0x24);
+        let along = block.byte_add(0x30);
+        let to_actor = block.byte_add(0x3c);
+        e.call(DEFAULT_CONSTRUCT, &args![goal]);
+        e.call(DEFAULT_CONSTRUCT, &args![difference]);
+        let path = path_of(e, this);
+        let mut node = None;
+        if !e.call(PATH_BYTE_40, &args![path]).bool() {
+            let path = path_of(e, this);
+            let index = e.call(DWORD_AT_1C, &args![path]).u32();
+            let path = path_of(e, this);
+            let count = e.call(PATH_NODE_COUNT_2, &args![path]).u32();
+            if index == count.wrapping_sub(1) {
+                let path = path_of(e, this);
+                let index = e.call(DWORD_AT_1C, &args![path]).u32();
+                let path = path_of(e, this);
+                node = Some(e.call(PATH_NODE_BY_INDEX, &args![path, index]).u32());
+            }
+        }
+        let node = match node {
+            Some(node) => node,
+            None => {
+                let path = path_of(e, this);
+                e.call(PATH_END_NODE, &args![path]).u32()
+            }
+        };
+        let point = e.call(PLUS_4, &args![node]).u32();
+        let copied = e.call(COPY_POINT_AT_4, &args![point, copy]).u32();
+        copy_point(e, goal.addr(), copied);
+        let location = actor_location(e, this);
+        let offset = e.call(POINT_SUBTRACT, &args![goal, result, location]).u32();
+        copy_point(e, difference.addr(), offset);
+        let distance = e.call(POINT_LENGTH_SQUARED_XY, &args![difference]).f64() as f32;
+        let radius = e.get(this, H::fGoalRadiusSqr);
+        let within = distance <= radius;
+        if !within {
+            return 0;
+        }
+        let mut reached = true;
+        let request = request_of(e, this);
+        if fn_009e8670(e, Ptr::new(request)) != 0 {
+            let minimum = e.mem.f32(GOAL_MIN_DISTANCE);
+            if minimum < e.get(this, H::fGoalRadiusSqr) && minimum < distance {
+                let tether = this.addr() + H::TetherTargetPoint.off;
+                e.call(
+                    POINT_SUBTRACT,
+                    &args![tether, along, this.addr() + H::LastTetherPoint.off],
+                );
+                e.mem.set_f32(along.addr() + 8, 0.0);
+                let location = actor_location(e, this);
+                e.call(POINT_SUBTRACT, &args![tether, to_actor, location]);
+                e.mem.set_f32(to_actor.addr() + 8, 0.0);
+                let dot = e.call(POINT_DOT, &args![along, to_actor]).f64() as f32;
+                if dot as f64 >= double(e, ZERO_DOUBLE)
+                    && e.get(this, H::fAvoidanceDetectionValue) as f64 == double(e, ZERO_DOUBLE)
+                    && e.get(this, H::fBlockTime) as f64 == double(e, ZERO_DOUBLE)
+                {
+                    reached = false;
+                }
+            }
+        }
+        if !reached {
+            return 0;
+        }
+        let actor = e.get(this, H::pActor).addr();
+        let height_difference = |e: &mut Engine| {
+            let z = x87_quiet(e.mem.f32(difference.addr() + 8));
+            e.call(FLOAT_ABS, &args![z.to_bits()]).f64()
+        };
+        if !e.call(ACTOR_BYTE_14D, &args![actor]).bool() {
+            let z_abs = height_difference(e);
+            let request = request_of(e, this);
+            let allowed = e.call(REQUEST_FLOAT_70, &args![request]).f64();
+            if allowed >= z_abs {
+                return 5;
+            }
+            let index = e.get(this, H::iCurrentNodeIndex);
+            let path = path_of(e, this);
+            let count = e.call(PATH_NODE_COUNT, &args![path]).u32();
+            if index.wrapping_add(1) < count || e.call(ACTOR_BYTE_14D, &args![actor]).bool() {
+                return 0;
+            }
+            let name = if e.call(HAS_NAME, &args![actor]).u32() != 0 {
+                e.vcall(actor, ACTOR_SLOT_NAME, &[]).u32()
+            } else {
+                e.call(REFERENCE_NAME, &args![actor]).u32()
+            };
+            let z_abs = height_difference(e);
+            e.call(LOG_MESSAGE, &args![GOAL_Z_MESSAGE, name, z_abs]);
+            2
+        } else {
+            let height = e.call(ACTOR_GET_HEIGHT, &args![actor]).f64() as f32;
+            let request = request_of(e, this);
+            let allowed = e.call(REQUEST_FLOAT_70, &args![request]).f64() as f32;
+            let limit = e
+                .call(FLOAT_MIN, &args![allowed.to_bits(), height.to_bits()])
+                .f64() as f32;
+            let z_abs = height_difference(e);
+            if limit as f64 >= z_abs {
+                5
+            } else {
+                0
+            }
+        }
+    })
+}
+
+/// `CheckGoalReached` while `bEndUpdatePath` is set.
+fn check_goal_while_updating_end(e: &mut Engine, this: Ptr<H>) -> u32 {
+    let index = e.get(this, H::iCurrentNodeIndex);
+    let path = path_of(e, this);
+    if index.wrapping_add(2) < e.call(PATH_NODE_COUNT, &args![path]).u32() {
+        return 0;
+    }
+    e.with_stack(0x24, |e, block| {
+        let offset = block;
+        let copy = block.byte_add(0x0c);
+        let result = block.byte_add(0x18);
+        e.call(DEFAULT_CONSTRUCT, &args![offset]);
+        let index = e.get(this, H::iCurrentNodeIndex);
+        let path = path_of(e, this);
+        let count = e.call(PATH_NODE_COUNT, &args![path]).u32();
+        if index.wrapping_add(2) == count {
+            let location = actor_location(e, this);
+            let index = e.get(this, H::iCurrentNodeIndex);
+            let path = path_of(e, this);
+            let node = e.call(PATH_NODE, &args![path, index]).u32();
+            let point = e.call(PLUS_4, &args![node]).u32();
+            let copied = e.call(COPY_POINT_AT_4, &args![point, copy]).u32();
+            let difference = e
+                .call(POINT_SUBTRACT, &args![copied, result, location])
+                .u32();
+            copy_point(e, offset.addr(), difference);
+            let distance = e.call(POINT_LENGTH_SQUARED_XY, &args![offset]).f64();
+            let near = distance <= double(e, END_UPDATE_RANGE_SQUARED);
+            if !near {
+                return 0;
+            }
+        }
+        let path = path_of(e, this);
+        e.call(PATH_NODE_COUNT, &args![path]);
+        let mover = Ptr::<ActorMover>::new(mover_of(e, this));
+        let next = e.get(mover, ActorMover::iNextNode) as u32;
+        // One less unless it is 0.
+        let node_index = next.saturating_sub(1);
+        let location = actor_location(e, this);
+        let path = path_of(e, this);
+        let request = request_of(e, this);
+        let check = e
+            .call(
+                PATHFIND_006D5340,
+                &args![request, path, node_index, location],
+            )
+            .i32();
+        match check {
+            1 => 5,
+            2 | 3 => {
+                let path = path_of(e, this);
+                let end = e.call(PATH_END_NODE, &args![path]).u32();
+                let flag = e.call(FLAGS_BIT_2, &args![end]).u8();
+                e.mem.set_u8(this.addr() + H::bEndUpdatePath.off, flag);
+                let path = path_of(e, this);
+                let next = e.call(DWORD_AT_1C, &args![path]).u32();
+                e.set(mover, ActorMover::iNextNode, next as u16);
+                0
+            }
+            _ => {
+                e.set(this, H::bEndUpdatePath, false);
+                0
+            }
+        }
+    })
+}
+
+// Translated from 009e8670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at +0x9C of a `PathingRequest` (`CheckGoalReached` asks it).
+pub fn fn_009e8670(e: &mut Engine, request: Ptr) -> u8 {
+    e.mem.u8(request.addr() + 0x9c)
+}
+
+// Translated from 009e8690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DetailedActorPathHandler::HandleDeletedReference` (Xbox PDB): forgets
+/// the door when it is the reference; for a reference whose slot 0x100
+/// answers true, takes it out of the avoidance candidates (each match is
+/// removed with `009e98d0`, the array compacted and the candidate count
+/// lowered; the index still advances) and out of the avoid list, ending
+/// avoidance when the list is then empty.
+pub fn detailed_actor_path_handler_handle_deleted_reference(
+    e: &mut Engine,
+    this: Ptr<H>,
+    reference: Ptr,
+) {
+    if reference.addr() == e.get(this, H::pCurrentDoor).addr() {
+        e.set(this, H::eDoorState, 0);
+        e.set(this, H::pCurrentDoor, Ptr::NULL);
+    }
+    if !e.vcall(reference.addr(), REFERENCE_SLOT_100, &[]).bool() {
+        return;
+    }
+    let mut index = 0u32;
+    while index < e.global::<u32>(CANDIDATES_SIZE) {
+        let slot = e.call(ARRAY_ELEMENT, &args![CANDIDATES, index]).u32();
+        if e.mem.u32(slot) == reference.addr() {
+            fn_009e98d0(e, Ptr::new(CANDIDATES), index);
+            e.call(ARRAY_COMPACT, &args![CANDIDATES]);
+            let size = e.global::<u32>(CANDIDATES_SIZE);
+            e.set_global(CANDIDATES_SIZE, size.wrapping_sub(1));
+        }
+        index += 1;
+    }
+    let list = this.addr() + H::ActorAvoidList.off;
+    let listed = e.with_stack(4, |e, item| {
+        e.mem.set_u32(item.addr(), reference.addr());
+        e.call(LIST_CONTAINS, &args![list, item]).bool()
+    });
+    if !listed {
+        return;
+    }
+    e.with_stack(4, |e, item| {
+        e.mem.set_u32(item.addr(), reference.addr());
+        e.call(LIST_REMOVE, &args![list, item]);
+    });
+    if e.call(LIST_IS_EMPTY, &args![list]).bool() {
+        fn_009e68c0(e, this);
+    }
+}
+
+// Translated from 009e8790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resets the movement of this frame: `MoveMode` from the mover
+/// (`009dd130`), `MoveDelta` and `LastFrameMinMoveDelta` to the "no point"
+/// value, `fLastFrameMinMoveDelta` 0.
+pub fn fn_009e8790(e: &mut Engine, this: Ptr<H>) {
+    let mover = mover_of(e, this);
+    let mode = e.call(MOVER_MOVE_MODE_BASE, &args![mover]).u32();
+    e.set(this, H::MoveMode, mode);
+    clear_frame_delta(e, this);
+}
+
+// Translated from 009e8800 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009e8800 - C++ exception frame (FS:[0]) and its unwinding not translated
+/// `DetailedActorPathHandler::WarpToNextNode` (Xbox PDB): moves the actor
+/// straight to the tether point when that is safe. Not with a request whose
+/// float at +0x68 is above 100 or a path without nodes. A tether point less
+/// than 128 units away (horizontally) is pushed further first; then the
+/// tether point must be at least 64 away, and the path's end at least the
+/// actor's `008be350` float times 0.6 from it when the path's byte at +0x40
+/// is set (else 0). The line from the actor to the tether point is checked
+/// with a `DoorInPathFilter` for no door (`Pathing::CheckLineOfSight`);
+/// without a hit the mover moves the actor there
+/// (`ActorMover::MoveActorToLocation`) and the result is `true`.
+pub fn detailed_actor_path_handler_warp_to_next_node(e: &mut Engine, this: Ptr<H>) -> bool {
+    if request_of(e, this) != 0 {
+        let request = request_of(e, this);
+        let value = e.call(FLOAT_AT_68, &args![request]).f64();
+        if value > double(e, HUNDRED) {
+            return false;
+        }
+    }
+    // The code also stores the squares of both distances; nothing reads them.
+    let min_distance = fld(e, WARP_MIN_DISTANCE);
+    let tether_distance = fld(e, WARP_TETHER_DISTANCE);
+    let tether = this.addr() + H::TetherTargetPoint.off;
+    e.with_stack(0x6c, |e, block| {
+        let first = block;
+        let second = block.byte_add(0x0c);
+        let copy = block.byte_add(0x18);
+        let third = block.byte_add(0x24);
+        let filter = block.byte_add(0x30);
+        let location = block.byte_add(0x3c);
+        let navmesh_holder = block.byte_add(0x64);
+        let triangle = block.byte_add(0x68);
+        let actor_at = actor_location(e, this);
+        let offset = e
+            .call(POINT_SUBTRACT, &args![tether, first, actor_at])
+            .u32();
+        let distance = e.call(POINT_LENGTH_XY, &args![offset]).f64() as f32;
+        let mut end_limit = 0.0f32;
+        let path = path_of(e, this);
+        if e.call(PATH_BYTE_40, &args![path]).bool() {
+            let actor = e.get(this, H::pActor).addr();
+            let value = e.call(ACTOR_MEASURE_008BE350, &args![actor]).f64();
+            end_limit = (value * double(e, WARP_END_FACTOR)) as f32;
+        }
+        let path = path_of(e, this);
+        if e.call(PATH_NODE_COUNT, &args![path]).u32() == 0 {
+            return false;
+        }
+        if tether_distance > distance {
+            let further = (tether_distance as f64 - distance as f64) as f32;
+            detailed_actor_path_handler_update_tether_position(e, this, x87_quiet(further));
+        }
+        let actor_at = actor_location(e, this);
+        let offset = e
+            .call(POINT_SUBTRACT, &args![tether, second, actor_at])
+            .u32();
+        let distance = e.call(POINT_LENGTH_XY, &args![offset]).f64() as f32;
+        let path = path_of(e, this);
+        let end = e.call(PATH_END_NODE, &args![path]).u32();
+        let point = e.call(PLUS_4, &args![end]).u32();
+        let copied = e.call(COPY_POINT_AT_4, &args![point, copy]).u32();
+        let offset = e.call(POINT_SUBTRACT, &args![copied, third, tether]).u32();
+        let end_distance = e.call(POINT_LENGTH_XY, &args![offset]).f64() as f32;
+        if min_distance > distance || end_limit > end_distance {
+            return false;
+        }
+        let actor = e.get(this, H::pActor);
+        fn_009e2690(e, filter, 0);
+        e.call(LOCATION_FROM_REFERENCE, &args![location, actor]);
+        e.call(LOCATION_RESOLVE_NAVMESH, &args![location, 0u32]);
+        e.call(NIPOINTER_CONSTRUCT_NULL, &args![navmesh_holder]);
+        door_triangle_flag(e, location, navmesh_holder, triangle, filter);
+        e.call(CHECK_LINE_OF_SIGHT, &args![location, tether, 0u32, filter]);
+        let moved = if door_filter_hit(e, filter) {
+            false
+        } else {
+            let mover = mover_of(e, this);
+            e.call(MOVER_MOVE_ACTOR_TO_LOCATION, &args![mover, tether]);
+            true
+        };
+        e.call(NIPOINTER_DESTRUCT, &args![navmesh_holder]);
+        e.call(LOCATION_DESTRUCT, &args![location]);
+        moved
+    })
+}
+
+// Translated from 009e8b50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009e8b50 - /GS cookie check (00ec408c) not translated
+/// `DetailedActorPathHandler::PrintCurrentStatus` (Xbox PDB): prints three
+/// lines through the printer's slot 0x14 (with the two words passed
+/// through): the actor's position, "Pathing State: " with the state's name
+/// (state 2 reads "Rotating" in rotate mode and "Static Avoidance" when
+/// blocked), and "Actor Avoid State: " with the avoid state's name
+/// (states 1 and 4 add " :detect %f" with `fAvoidanceDetectionValue` when
+/// it is above 0). The texts are the exe's strings, by address.
+pub fn detailed_actor_path_handler_print_current_status(
+    e: &mut Engine,
+    this: Ptr<H>,
+    printer: Ptr,
+    first: u32,
+    second: u32,
+) {
+    const POSITION_FORMAT: u32 = 0x0109_2604;
+    const STATE_TITLE: u32 = 0x0109_25f4;
+    const STATE_INITIALIZING: u32 = 0x0109_25e4;
+    const STATE_ROTATING_TEXT: u32 = 0x0109_25d8;
+    const STATE_STATIC_AVOIDANCE: u32 = 0x0109_25c4;
+    const STATE_MOVING_TEXT: u32 = 0x0109_25bc;
+    const STATE_MOVING_WHILE_WAITING: u32 = 0x0109_25a4;
+    const STATE_WAITING_FOR_PATH: u32 = 0x0109_2588;
+    const STATE_GOAL_REACHED: u32 = 0x0109_2578;
+    const STATE_ROTATING_WITHOUT_PATH: u32 = 0x0109_2560;
+    const INVALID: u32 = 0x0104_8858;
+    const AVOID_TITLE: u32 = 0x0109_254c;
+    const AVOID_OK: u32 = 0x0103_934c;
+    const AVOID_DETECT_FORMAT: u32 = 0x0109_2540;
+    const AVOID_WAITING: u32 = 0x0107_1db4;
+    const AVOID_REPATHING: u32 = 0x0109_2528;
+    const AVOID_REPATH_IGNORE: u32 = 0x0109_2518;
+    const AVOID_FAILED: u32 = 0x0109_2510;
+    const SIZE: u32 = 0x104;
+
+    let location = actor_location(e, this);
+    let [x, y, z] = [0, 4, 8].map(|i| x87_quiet(e.mem.f32(location + i)) as f64);
+    e.vcall(
+        printer.addr(),
+        PRINTER_SLOT_PRINT,
+        &args![first, second, POSITION_FORMAT, x, y, z],
+    );
+    e.with_stack(0x210, |e, block| {
+        let text = block;
+        let detect = block.byte_add(0x108);
+        e.call(STRING_COPY, &args![text, SIZE, STATE_TITLE]);
+        let state = match e.get(this, H::eState) {
+            1 => STATE_INITIALIZING,
+            2 if e.get(this, H::bRotateMode) => STATE_ROTATING_TEXT,
+            2 if e.get(this, H::bMovementBlocked) => STATE_STATIC_AVOIDANCE,
+            2 => STATE_MOVING_TEXT,
+            3 => STATE_MOVING_WHILE_WAITING,
+            4 => STATE_WAITING_FOR_PATH,
+            5 => STATE_GOAL_REACHED,
+            6 | 7 => STATE_ROTATING_WITHOUT_PATH,
+            _ => INVALID,
+        };
+        e.call(STRING_APPEND, &args![text, SIZE, state]);
+        e.vcall(
+            printer.addr(),
+            PRINTER_SLOT_PRINT,
+            &args![first, second, text],
+        );
+        e.call(STRING_COPY, &args![text, SIZE, AVOID_TITLE]);
+        let avoid_state = e.get(this, H::eAvoidState);
+        let name = match avoid_state {
+            1 => AVOID_OK,
+            2 => AVOID_WAITING,
+            3 => AVOID_REPATHING,
+            4 => AVOID_REPATH_IGNORE,
+            5 => AVOID_FAILED,
+            _ => INVALID,
+        };
+        e.call(STRING_APPEND, &args![text, SIZE, name]);
+        if avoid_state == 1 || avoid_state == 4 {
+            let detection = e.get(this, H::fAvoidanceDetectionValue);
+            if detection as f64 > double(e, ZERO_DOUBLE) {
+                let value = x87_quiet(detection) as f64;
+                e.call(
+                    STRING_FORMAT,
+                    &args![detect, SIZE, AVOID_DETECT_FORMAT, value],
+                );
+                e.call(STRING_APPEND, &args![text, SIZE, detect]);
+            }
+        }
+        e.vcall(
+            printer.addr(),
+            PRINTER_SLOT_PRINT,
+            &args![first, second, text],
+        );
+    });
+}
+
+/// The fields `SaveGame` writes, in its order (address offset, size).
+const SAVED_FIELDS: [(u32, u32); 43] = [
+    (0x1c, 0xc),
+    (0x28, 0xc),
+    (0x34, 0xc),
+    (0x40, 0xc),
+    (0x4c, 0xc),
+    (0x60, 4),
+    (0x64, 4),
+    (0x68, 4),
+    (0x6c, 4),
+    (0x70, 4),
+    (0x74, 4),
+    (0x78, 4),
+    (0x7c, 4),
+    (0x80, 4),
+    (0x84, 4),
+    (0x88, 4),
+    (0x8c, 4),
+    (0x90, 4),
+    (0x94, 4),
+    (0x98, 4),
+    (0x9c, 4),
+    (0xac, 4),
+    (0xb0, 4),
+    (0xb4, 4),
+    (0xb8, 4),
+    (0x14, 4),
+    (0x18, 4),
+    (0xc8, 4),
+    (0xcc, 4),
+    (0xd0, 4),
+    (0xd4, 4),
+    (0xdc, 1),
+    (0xdd, 1),
+    (0xde, 1),
+    (0xdf, 1),
+    (0xe0, 1),
+    (0xe2, 1),
+    (0xe1, 1),
+    (0xc0, 1),
+    (0xc1, 1),
+    (0xc4, 4),
+    (0xa0, 0xc),
+    (0xbc, 4),
+];
+
+// Translated from 009e8f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DetailedActorPathHandler::SaveGame` (Xbox PDB): writes the fields of
+/// [`SAVED_FIELDS`] (`00865e50`), the door's form ID, then the avoid list's
+/// non-null actors as form IDs inside a variable-sized value holding their
+/// count.
+pub fn detailed_actor_path_handler_save_game(e: &mut Engine, this: Ptr<H>, buffer: Ptr) {
+    for (offset, size) in SAVED_FIELDS {
+        e.call(SAVE_BYTES, &args![buffer, this.addr() + offset, size, 0u32]);
+    }
+    let door = e.get(this, H::pCurrentDoor);
+    e.call(SAVE_FORM_ID, &args![buffer, door, 0u32]);
+    let mut count = 0u32;
+    let start = e.call(SAVE_START_VARIABLE_SIZED, &args![buffer]).u32();
+    let mut node = this.addr() + H::ActorAvoidList.off;
+    while node != 0 {
+        let item = e.call(LIST_NODE_ITEM, &args![node]).u32();
+        let actor = e.mem.u32(item);
+        if actor != 0 {
+            e.call(SAVE_FORM_ID, &args![buffer, actor, 0u32]);
+            count += 1;
+        }
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+    e.call(SAVE_VARIABLE_SIZED, &args![buffer, count, start]);
+}
+
+// Translated from 009e9390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DetailedActorPathHandler::LoadGame` (Xbox PDB): reads the fields
+/// `SaveGame` writes (`00864980`), the tether distances only from save
+/// version 4, the initial-rotation fields from 12 and
+/// `LastFrameMinMoveDelta` and `fLastRotationApplied` from 18 (the version
+/// byte from the buffer's slot 0); then the door's form ID and the avoid
+/// list's form IDs, each pushed to the front of the list.
+pub fn detailed_actor_path_handler_load_game(e: &mut Engine, this: Ptr<H>, buffer: Ptr) {
+    let load = |e: &mut Engine, fields: &[(u32, u32)]| {
+        for (offset, size) in fields {
+            e.call(LOAD_BYTES, &args![buffer, this.addr() + offset, *size]);
+        }
+    };
+    let version = |e: &mut Engine| e.vcall(buffer.addr(), LOAD_SLOT_VERSION, &[]).u8();
+    load(e, &SAVED_FIELDS[..25]);
+    if version(e) >= 4 {
+        load(e, &SAVED_FIELDS[25..27]);
+    }
+    load(e, &SAVED_FIELDS[27..38]);
+    if version(e) >= 12 {
+        load(e, &SAVED_FIELDS[38..41]);
+    }
+    if version(e) >= 18 {
+        load(e, &SAVED_FIELDS[41..]);
+    }
+    e.call(
+        LOAD_FORM_ID,
+        &args![buffer, this.addr() + H::pCurrentDoor.off],
+    );
+    let count = e.call(LOAD_VARIABLE_SIZED, &args![buffer]).u32();
+    let list = this.addr() + H::ActorAvoidList.off;
+    for _ in 0..count {
+        e.with_stack(4, |e, id| {
+            e.mem.set_u32(id.addr(), 0);
+            e.call(LOAD_FORM_ID, &args![buffer, id]);
+            e.call(LIST_PUSH_FRONT, &args![list, id]);
+        });
+    }
+}
+
+/// A loaded form ID turned into the form (`004839c0`) and cast with
+/// `__RTDynamicCast` from `TESForm` to `target`; 0 stays 0.
+fn resolve_form(e: &mut Engine, id: u32, target: u32) -> u32 {
+    if id == 0 {
+        return 0;
+    }
+    let form = e.call(LOOKUP_FORM, &args![id]).u32();
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, TYPE_TES_FORM, target, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 009e9760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DetailedActorPathHandler::InitLoadGame` (Xbox PDB): turns the loaded
+/// form IDs into pointers: the door as a `TESObjectREFR`, each avoid list
+/// item as an `Actor` (an item that is 0 or not an actor is removed: the
+/// first node by popping the front, a later one through the previous
+/// node), then marks the door targeted (`TESObjectREFR::SetTargeted`). The
+/// stack word is not read.
+pub fn detailed_actor_path_handler_init_load_game(e: &mut Engine, this: Ptr<H>, _unused_1: u32) {
+    let door = e.get(this, H::pCurrentDoor).addr();
+    let door = resolve_form(e, door, TYPE_TES_OBJECT_REFR);
+    e.set(this, H::pCurrentDoor, Ptr::new(door));
+    let mut node = this.addr() + H::ActorAvoidList.off;
+    let mut previous = 0u32;
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let item = e.call(LIST_NODE_ITEM, &args![node]).u32();
+        let id = e.mem.u32(item);
+        let remove = if id == 0 {
+            true
+        } else {
+            let actor = resolve_form(e, id, TYPE_ACTOR);
+            if actor == 0 {
+                true
+            } else {
+                e.with_stack(4, |e, value| {
+                    e.mem.set_u32(value.addr(), actor);
+                    e.call(LIST_SET_ITEM, &args![node, value]);
+                });
+                false
+            }
+        };
+        if !remove {
+            previous = node;
+            node = e.call(LIST_NEXT, &args![node]).u32();
+        } else if previous != 0 {
+            let item = e.call(LIST_NODE_ITEM, &args![node]).u32();
+            e.call(LIST_REMOVE, &args![previous, item]);
+            node = e.call(LIST_NEXT, &args![previous]).u32();
+        } else {
+            e.call(LIST_POP_FRONT, &args![node]);
+        }
+    }
+    let door = e.get(this, H::pCurrentDoor);
+    if !door.is_null() {
+        e.call(REFERENCE_SET_TARGETED, &args![door, 1u32]);
+    }
+}
+
+// Translated from 009e98d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Takes element `index` out of an `NiTArray` of pointers and returns it:
+/// the slot is cleared, `m_usESize` drops when it held one and `m_usSize`
+/// when it was the last; an index at or past `m_usSize` returns 0.
+pub fn fn_009e98d0(e: &mut Engine, array: Ptr<NiTArray>, index: u32) -> u32 {
+    if index >= e.get(array, NiTArray::m_usSize) as u32 {
+        return 0;
+    }
+    let slot = e
+        .get(array, NiTArray::m_pBase)
+        .wrapping_add(index.wrapping_mul(4));
+    let element = e.mem.u32(slot);
+    e.mem.set_u32(slot, 0);
+    if element != 0 {
+        let used = e.get(array, NiTArray::m_usESize);
+        e.set(array, NiTArray::m_usESize, used.wrapping_sub(1));
+    }
+    let size = e.get(array, NiTArray::m_usSize);
+    if index == size.wrapping_sub(1) as u32 {
+        e.set(array, NiTArray::m_usSize, size.wrapping_sub(1));
+    }
+    element
+}
+
+// Translated from 009e9950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<DetailedActorPathHandler::ActorAvoidanceData,1024>`
+/// constructor: its vtable (`01092640`) and an empty buffer (`009e9b20`
+/// with 0, 0).
+pub fn fn_009e9950(e: &mut Engine, array: Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray> {
+    e.mem.set_u32(array.addr(), AVOID_ARRAY_VTABLE);
+    fn_009e9b20(e, array, 0, 0);
+    array
+}
+
+// Translated from 009e9980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The same array's destructor: its vtable again, then the base's
+/// (`008454f0` with 1).
+pub fn fn_009e9980(e: &mut Engine, array: Ptr<BSSimpleArray>) {
+    e.mem.set_u32(array.addr(), AVOID_ARRAY_VTABLE);
+    e.call(SIMPLE_ARRAY_DESTRUCT, &args![array, 1u32]);
+}
+
+// Translated from 009e99a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The same array's `Add`: grows it by one (`00845460`, the new index),
+/// constructs that element (`009e9a50`) and copies `data` into it
+/// (`009e99f0`); returns the index.
+pub fn fn_009e99a0(e: &mut Engine, array: Ptr<BSSimpleArray>, data: Ptr) -> u32 {
+    let index = e.call(SIMPLE_ARRAY_GROW, &args![array]).u32();
+    let element = |e: &Engine| {
+        e.get(array, BSSimpleArray::pBuffer)
+            .wrapping_add(index.wrapping_mul(8))
+    };
+    let at = element(e);
+    e.call(AVOID_DATA_CONSTRUCT_RANGE, &args![array, at, 1u32]);
+    let at = element(e);
+    fn_009e99f0(e, Ptr::new(at), data);
+    index
+}
+
+// Translated from 009e99f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DetailedActorPathHandler::ActorAvoidanceData` assignment: `pActor`
+/// (+0) and `fDetection` (+4, through the FPU); returns `this`.
+pub fn fn_009e99f0(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
+    let actor = e.mem.u32(other.addr());
+    e.mem.set_u32(this.addr(), actor);
+    let detection = x87_quiet_bits(e.mem.u32(other.addr() + 4));
+    e.mem.set_u32(this.addr() + 4, detection);
+    this
+}
+
+// Translated from 009e9a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<DetailedActorPathHandler::ActorAvoidanceData,1024>::`
+/// `scalar deleting destructor'` (Xbox PDB): the destructor (`009e9980`),
+/// then `operator delete` with bit 0 of `flags`; returns the array.
+pub fn bs_simple_array_actor_avoidance_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    array: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    fn_009e9980(e, array);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![array]);
+    }
+    array
+}
+
+// Translated from 009e9b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The same array's buffer set-up: empty, then a buffer of
+/// `max(reserve, size)` elements from its slot +4 when that is not 0, and
+/// `size` elements constructed (`009e9a50`) when `size` is not 0.
+pub fn fn_009e9b20(e: &mut Engine, array: Ptr<BSSimpleArray>, reserve: u32, size: u32) {
+    e.set(array, BSSimpleArray::pBuffer, 0);
+    e.set(array, BSSimpleArray::iSize, 0);
+    e.set(array, BSSimpleArray::iReservedSize, 0);
+    let capacity = reserve.max(size);
+    if capacity != 0 {
+        let buffer = e
+            .vcall(array.addr(), SIMPLE_ARRAY_SLOT_ALLOCATE, &args![capacity])
+            .u32();
+        e.set(array, BSSimpleArray::pBuffer, buffer);
+        e.set(array, BSSimpleArray::iReservedSize, capacity);
+    }
+    if size != 0 {
+        let buffer = e.get(array, BSSimpleArray::pBuffer);
+        e.call(AVOID_DATA_CONSTRUCT_RANGE, &args![array, buffer, size]);
+        e.set(array, BSSimpleArray::iSize, size);
+    }
 }
 
 /// This unit's translated functions, by exe address.
@@ -5059,6 +5909,53 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x009e7d70,
             detailed_actor_path_handler_update_rotation(Ptr<H>, f32) -> f32
         ),
+        entry!(
+            0x009e8000,
+            detailed_actor_path_handler_check_goal_reached(Ptr<H>) -> u32
+        ),
+        entry!(0x009e8670, fn_009e8670(Ptr) -> u8),
+        entry!(
+            0x009e8690,
+            detailed_actor_path_handler_handle_deleted_reference(Ptr<H>, Ptr)
+        ),
+        entry!(0x009e8790, fn_009e8790(Ptr<H>)),
+        entry!(
+            0x009e8800,
+            detailed_actor_path_handler_warp_to_next_node(Ptr<H>) -> bool
+        ),
+        entry!(
+            0x009e8b50,
+            detailed_actor_path_handler_print_current_status(Ptr<H>, Ptr, u32, u32)
+        ),
+        entry!(
+            0x009e8f80,
+            detailed_actor_path_handler_save_game(Ptr<H>, Ptr)
+        ),
+        entry!(
+            0x009e9390,
+            detailed_actor_path_handler_load_game(Ptr<H>, Ptr)
+        ),
+        entry!(
+            0x009e9760,
+            detailed_actor_path_handler_init_load_game(Ptr<H>, u32)
+        ),
+        entry!(0x009e98d0, fn_009e98d0(Ptr<NiTArray>, u32) -> u32),
+        entry!(
+            0x009e9950,
+            fn_009e9950(Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray>
+        ),
+        entry!(0x009e9980, fn_009e9980(Ptr<BSSimpleArray>)),
+        entry!(0x009e99a0, fn_009e99a0(Ptr<BSSimpleArray>, Ptr) -> u32),
+        entry!(0x009e99f0, fn_009e99f0(Ptr, Ptr) -> Ptr),
+        entry!(
+            0x009e9a20,
+            bs_simple_array_actor_avoidance_data_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            )
+                -> Ptr<BSSimpleArray>
+        ),
+        entry!(0x009e9b20, fn_009e9b20(Ptr<BSSimpleArray>, u32, u32)),
     ]
 }
 
@@ -5326,6 +6223,32 @@ mod tests {
         AVOID_ARRAY_DESTRUCT,
         AVOID_ARRAY_ADD,
         LOCATION_GET_CELL,
+        PATH_NODE_BY_INDEX,
+        PATHFIND_006D5340,
+        REQUEST_FLOAT_70,
+        FLOAT_MIN,
+        HAS_NAME,
+        REFERENCE_NAME,
+        LOG_MESSAGE,
+        ACTOR_MEASURE_008BE350,
+        MOVER_MOVE_ACTOR_TO_LOCATION,
+        ARRAY_COMPACT,
+        LIST_REMOVE,
+        LIST_SET_ITEM,
+        STRING_COPY,
+        STRING_APPEND,
+        STRING_FORMAT,
+        SAVE_BYTES,
+        SAVE_FORM_ID,
+        SAVE_START_VARIABLE_SIZED,
+        SAVE_VARIABLE_SIZED,
+        LOAD_BYTES,
+        LOAD_FORM_ID,
+        LOAD_VARIABLE_SIZED,
+        RT_DYNAMIC_CAST,
+        SIMPLE_ARRAY_DESTRUCT,
+        SIMPLE_ARRAY_GROW,
+        AVOID_DATA_CONSTRUCT_RANGE,
     ];
 
     /// The data the code reads from the exe, with the exe's values.
@@ -5397,6 +6320,9 @@ mod tests {
             (AVOID_NODE_WEIGHT, 2.0),
             (AVOID_FACTOR_WALK, 0.707_106_8),
             (AVOID_FACTOR_RUN, 0.866),
+            (GOAL_MIN_DISTANCE, 25.0),
+            (WARP_MIN_DISTANCE, 64.0),
+            (WARP_TETHER_DISTANCE, 128.0),
         ];
         for (address, value) in floats {
             e.set_global(*address, *value);
@@ -5437,6 +6363,8 @@ mod tests {
             (TURN_SLOWEST, 2.700_000_047_683_716),
             (TURN_SLOW, 1.600_000_023_841_858),
             (SECONDS_PER_HOUR, 3600.0),
+            (END_UPDATE_RANGE_SQUARED, 25600.0),
+            (WARP_END_FACTOR, f64::from(0.6f32)),
         ];
         for (address, value) in doubles {
             e.set_global(*address, *value);
@@ -6954,5 +7882,576 @@ mod tests {
         w.e.mem.set_u8(w.actor + A_CAN_MOVE, 0);
         assert_eq!(w.e.call(0x009e_7d70, &args![w.this, 0.1f32]).f32(), 0.95);
         assert_eq!(w.e.get(w.this, H::MoveMode), 0x0100);
+    }
+
+    /// The doubles `CheckGoalReached` needs beyond the shared ones.
+    fn goal_doubles(e: &mut Engine) {
+        e.register(
+            REQUEST_FLOAT_70,
+            |e, a| ret_f(e.mem.f32(a[0] + 0x70) as f64),
+        );
+        e.register(FLOAT_MIN, |_, a| ret_f(f(a, 0).min(f(a, 1)) as f64));
+        e.register(PATH_NODE_BY_INDEX, |e, a| {
+            ret_u32(e.mem.u32(a[0] + P_NODES + 4 * a[1]))
+        });
+    }
+
+    #[test]
+    fn goal_reached_within_radius_and_height() {
+        let mut w = world();
+        goal_doubles(&mut w.e);
+        w.e.mem.set_u8(w.path + 0x40, 1);
+        let end = node(&mut w.e, [100.0, 0.0, 10.0]);
+        w.e.mem.set_u32(w.path + P_END_NODE, end);
+        set_point(&mut w.e, w.actor + A_LOCATION, [95.0, 0.0, 0.0]);
+        w.e.set(w.this, H::fGoalRadiusSqr, 100.0);
+        w.e.mem.set_f32(w.request + 0x70, 20.0);
+        assert_eq!(
+            detailed_actor_path_handler_check_goal_reached(&mut w.e, w.this),
+            5
+        );
+        // Too far.
+        w.e.set(w.this, H::fGoalRadiusSqr, 10.0);
+        assert_eq!(
+            detailed_actor_path_handler_check_goal_reached(&mut w.e, w.this),
+            0
+        );
+        // Too high, but not at the end yet.
+        w.e.set(w.this, H::fGoalRadiusSqr, 100.0);
+        w.e.mem.set_f32(w.request + 0x70, 5.0);
+        w.e.mem.set_u32(w.path + 8, 3);
+        assert_eq!(
+            detailed_actor_path_handler_check_goal_reached(&mut w.e, w.this),
+            0
+        );
+        // Too high at the end: failed, and logged.
+        w.e.set(w.this, H::iCurrentNodeIndex, 2);
+        w.e.call_log = Some(vec![]);
+        assert_eq!(
+            detailed_actor_path_handler_check_goal_reached(&mut w.e, w.this),
+            2
+        );
+        let logged = calls(&w.e, LOG_MESSAGE);
+        assert_eq!(logged.len(), 1);
+        assert_eq!(logged[0][..2], [GOAL_Z_MESSAGE, 0]);
+        assert_eq!(f64::take(&logged[0], &mut 2), 10.0);
+        assert_eq!(calls(&w.e, REFERENCE_NAME), vec![vec![w.actor]]);
+    }
+
+    #[test]
+    fn goal_height_against_actor_height_and_last_node_goal() {
+        let mut w = world();
+        goal_doubles(&mut w.e);
+        w.e.register(ACTOR_BYTE_14D, |_, _| ret_u32(1));
+        w.e.register(
+            ACTOR_GET_HEIGHT,
+            |e, a| ret_f(e.mem.f32(a[0] + 0xb0) as f64),
+        );
+        // The path's byte at +0x40 is clear and its dword at +0x1C (0 from
+        // the double) names the last node: that node is the goal.
+        w.e.mem.set_u32(w.path + 8, 1);
+        let last = node(&mut w.e, [0.0, 0.0, 10.0]);
+        w.e.mem.set_u32(w.path + P_NODES, last);
+        w.e.set(w.this, H::fGoalRadiusSqr, 100.0);
+        w.e.mem.set_f32(w.request + 0x70, 20.0);
+        w.e.mem.set_f32(w.actor + 0xb0, 8.0);
+        w.e.call_log = Some(vec![]);
+        assert_eq!(
+            detailed_actor_path_handler_check_goal_reached(&mut w.e, w.this),
+            0
+        );
+        assert_eq!(calls(&w.e, PATH_NODE_BY_INDEX), vec![vec![w.path, 0]]);
+        assert!(calls(&w.e, PATH_END_NODE).is_empty());
+        assert_eq!(
+            calls(&w.e, FLOAT_MIN)[0],
+            vec![20.0f32.to_bits(), 8.0f32.to_bits()]
+        );
+        w.e.mem.set_f32(w.actor + 0xb0, 12.0);
+        assert_eq!(
+            detailed_actor_path_handler_check_goal_reached(&mut w.e, w.this),
+            5
+        );
+    }
+
+    #[test]
+    fn goal_not_reached_while_tether_moves_away() {
+        let mut w = world();
+        goal_doubles(&mut w.e);
+        w.e.mem.set_u8(w.path + 0x40, 1);
+        let end = node(&mut w.e, [100.0, 0.0, 0.0]);
+        w.e.mem.set_u32(w.path + P_END_NODE, end);
+        set_point(&mut w.e, w.actor + A_LOCATION, [120.0, 0.0, 0.0]);
+        w.e.set(w.this, H::fGoalRadiusSqr, 1000.0);
+        w.e.mem.set_f32(w.request + 0x70, 20.0);
+        w.e.mem.set_u8(w.request + 0x9c, 1);
+        set_point(&mut w.e, w.this.addr() + 0x34, [150.0, 0.0, 0.0]);
+        set_point(&mut w.e, w.this.addr() + 0x4c, [140.0, 0.0, 0.0]);
+        assert_eq!(
+            detailed_actor_path_handler_check_goal_reached(&mut w.e, w.this),
+            0
+        );
+        // Blocked: reached after all.
+        w.e.set(w.this, H::fBlockTime, 1.0);
+        assert_eq!(
+            detailed_actor_path_handler_check_goal_reached(&mut w.e, w.this),
+            5
+        );
+        // Tether point moving back towards the actor: reached.
+        w.e.set(w.this, H::fBlockTime, 0.0);
+        set_point(&mut w.e, w.this.addr() + 0x4c, [160.0, 0.0, 0.0]);
+        assert_eq!(
+            detailed_actor_path_handler_check_goal_reached(&mut w.e, w.this),
+            5
+        );
+    }
+
+    #[test]
+    fn goal_while_updating_the_path_end() {
+        let mut w = world();
+        goal_doubles(&mut w.e);
+        let results = std::rc::Rc::new(std::cell::RefCell::new(vec![0i32, 2, 1]));
+        let pending = results.clone();
+        w.e.register_double(PATHFIND_006D5340, move |_, _| {
+            ret_u32(pending.borrow_mut().pop().unwrap() as u32)
+        });
+        w.e.register(LOCATION_GET_WORLDSPACE, |_, _| ret_u32(7));
+        w.e.register(FLAGS_BIT_2, |_, _| ret_u32(1));
+        w.e.set(w.this, H::bEndUpdatePath, true);
+        w.e.mem.set_u32(w.path + 8, 3);
+        // Two nodes or more before the end: nothing yet.
+        assert_eq!(
+            detailed_actor_path_handler_check_goal_reached(&mut w.e, w.this),
+            0
+        );
+        // The node two before the end, too far from the actor.
+        w.e.mem.set_u32(w.path + 8, 2);
+        let first = node(&mut w.e, [0.0, 0.0, 0.0]);
+        w.e.mem.set_u32(w.path + P_NODES, first);
+        set_point(&mut w.e, w.actor + A_LOCATION, [200.0, 0.0, 0.0]);
+        w.e.call_log = Some(vec![]);
+        assert_eq!(
+            detailed_actor_path_handler_check_goal_reached(&mut w.e, w.this),
+            0
+        );
+        assert!(calls(&w.e, PATHFIND_006D5340).is_empty());
+        // Close enough: the check answers 1 (the goal).
+        set_point(&mut w.e, w.actor + A_LOCATION, [100.0, 0.0, 0.0]);
+        w.e.mem.set_u16(w.mover + 0x42, 3);
+        assert_eq!(
+            detailed_actor_path_handler_check_goal_reached(&mut w.e, w.this),
+            5
+        );
+        assert_eq!(
+            calls(&w.e, PATHFIND_006D5340),
+            vec![vec![w.request, w.path, 2, w.actor + A_LOCATION]]
+        );
+        // 2: keep updating, with the end node's flag and the next node.
+        assert_eq!(
+            detailed_actor_path_handler_check_goal_reached(&mut w.e, w.this),
+            0
+        );
+        assert!(w.e.get(w.this, H::bEndUpdatePath));
+        assert_eq!(w.e.mem.u16(w.mover + 0x42), 7);
+        // 0: the end is final.
+        assert_eq!(
+            detailed_actor_path_handler_check_goal_reached(&mut w.e, w.this),
+            0
+        );
+        assert!(!w.e.get(w.this, H::bEndUpdatePath));
+        assert!(results.borrow().is_empty());
+    }
+
+    #[test]
+    fn request_byte_9c() {
+        let mut e = Engine::new();
+        let request = e.mem.alloc(0xb0);
+        e.mem.set_u8(request + 0x9c, 3);
+        assert_eq!(e.call(0x009e_8670, &args![request]).u8(), 3);
+    }
+
+    #[test]
+    fn deleted_reference_leaves_door_candidates_and_avoid_list() {
+        let mut w = world();
+        let reference = w.e.mem.alloc(0x10);
+        w.e.mem.set_u32(reference, ACTOR_VTABLE);
+        let other = w.e.mem.alloc(0x10);
+        w.e.set(w.this, H::pCurrentDoor, Ptr::new(reference));
+        w.e.set(w.this, H::eDoorState, 2);
+        w.e.set(w.this, H::eAvoidState, 3);
+        let buffer = w.e.mem.alloc(12);
+        for (i, v) in [reference, other, reference].into_iter().enumerate() {
+            w.e.mem.set_u32(buffer + 4 * i as u32, v);
+        }
+        let array: Ptr<NiTArray> = Ptr::new(CANDIDATES);
+        w.e.set(array, NiTArray::m_pBase, buffer);
+        w.e.set(array, NiTArray::m_usSize, 3);
+        w.e.set(array, NiTArray::m_usESize, 3);
+        w.e.set_global(CANDIDATES_SIZE, 3u32);
+        w.e.register(LIST_CONTAINS, |_, _| ret_u32(1));
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x009e_8690, &args![w.this, reference]);
+        assert_eq!(w.e.get(w.this, H::pCurrentDoor), Ptr::NULL);
+        assert_eq!(w.e.get(w.this, H::eDoorState), 0);
+        // The first match is removed; the index moves on past the shorter
+        // count, so the last one stays.
+        assert_eq!(w.e.mem.u32(buffer), 0);
+        assert_eq!(w.e.mem.u32(buffer + 8), reference);
+        assert_eq!(w.e.get(array, NiTArray::m_usESize), 2);
+        assert_eq!(w.e.global::<u32>(CANDIDATES_SIZE), 2);
+        assert_eq!(calls(&w.e, ARRAY_COMPACT), vec![vec![CANDIDATES]]);
+        let list = w.this.addr() + 0x58;
+        assert_eq!(calls(&w.e, LIST_REMOVE).len(), 1);
+        assert_eq!(calls(&w.e, LIST_REMOVE)[0][0], list);
+        assert_eq!(w.e.get(w.this, H::eAvoidState), 1);
+        assert_eq!(calls(&w.e, LIST_CLEAR), vec![vec![list]]);
+        // A reference whose slot 0x100 answers false only loses the door.
+        let vtable = w.e.mem.alloc(0x200);
+        w.e.mem.set_u32(vtable + REFERENCE_SLOT_100, FAKE + 7);
+        w.e.mem.set_u32(other, vtable);
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x009e_8690, &args![w.this, other]);
+        assert!(calls(&w.e, ARRAY_ELEMENT).is_empty());
+        assert!(calls(&w.e, LIST_CONTAINS).is_empty());
+    }
+
+    #[test]
+    fn reset_move_delta_takes_the_movers_mode() {
+        let mut w = world();
+        w.e.mem.set_u32(w.mover + 0x34, 0x0300);
+        set_point(&mut w.e, NO_POINT, [1.0, 2.0, 3.0]);
+        w.e.set(w.this, H::fLastFrameMinMoveDelta, 4.0);
+        // The shared doubles stand in for this address; call it directly.
+        fn_009e8790(&mut w.e, w.this);
+        assert_eq!(w.e.get(w.this, H::MoveMode), 0x0300);
+        assert_eq!(point(&w.e, w.this.addr() + 0x1c), [1.0, 2.0, 3.0]);
+        assert_eq!(point(&w.e, w.this.addr() + 0xa0), [1.0, 2.0, 3.0]);
+        assert_eq!(w.e.get(w.this, H::fLastFrameMinMoveDelta), 0.0);
+    }
+
+    #[test]
+    fn warp_to_next_node_checks_distances_and_doors() {
+        let mut w = world();
+        let end = node(&mut w.e, [0.0, 0.0, 0.0]);
+        w.e.mem.set_u32(w.path + P_END_NODE, end);
+        set_point(&mut w.e, w.this.addr() + 0x34, [200.0, 0.0, 0.0]);
+        // A request whose float at +0x68 is above 100.
+        w.e.mem.set_f32(w.request + 0x68, 150.0);
+        assert!(!detailed_actor_path_handler_warp_to_next_node(
+            &mut w.e, w.this
+        ));
+        // No nodes.
+        w.e.mem.set_f32(w.request + 0x68, 50.0);
+        assert!(!detailed_actor_path_handler_warp_to_next_node(
+            &mut w.e, w.this
+        ));
+        // The door filter's third flag stays set without a navmesh triangle.
+        w.e.mem.set_u32(w.path + 8, 1);
+        w.e.call_log = Some(vec![]);
+        assert!(!detailed_actor_path_handler_warp_to_next_node(
+            &mut w.e, w.this
+        ));
+        assert_eq!(calls(&w.e, CHECK_LINE_OF_SIGHT).len(), 1);
+        assert!(calls(&w.e, MOVER_MOVE_ACTOR_TO_LOCATION).is_empty());
+        assert_eq!(calls(&w.e, LOCATION_DESTRUCT).len(), 1);
+        // A triangle without the door flag: warped.
+        w.e.register(LOCATION_GET_NAVMESH_AND_TRIANGLE, |_, _| ret_u32(1));
+        w.e.register(NAVMESH_GET_TRIANGLE, |_, _| ret_u32(0x40));
+        w.e.call_log = Some(vec![]);
+        assert!(detailed_actor_path_handler_warp_to_next_node(
+            &mut w.e, w.this
+        ));
+        let tether = w.this.addr() + 0x34;
+        assert_eq!(
+            calls(&w.e, MOVER_MOVE_ACTOR_TO_LOCATION),
+            vec![vec![w.mover, tether]]
+        );
+        assert_eq!(calls(&w.e, CHECK_LINE_OF_SIGHT)[0][1..3], [tether, 0]);
+        // The path's end closer to the tether point than the actor's float
+        // times 0.6.
+        w.e.mem.set_u8(w.path + 0x40, 1);
+        w.e.register(ACTOR_MEASURE_008BE350, |_, _| ret_f(400.0));
+        assert!(!detailed_actor_path_handler_warp_to_next_node(
+            &mut w.e, w.this
+        ));
+        // A tether point nearer than 128 is pushed on by the difference.
+        w.e.mem.set_u8(w.path + 0x40, 0);
+        w.e.mem.set_u32(w.path + 8, 2);
+        set_point(&mut w.e, tether, [100.0, 0.0, 0.0]);
+        w.e.call_log = Some(vec![]);
+        detailed_actor_path_handler_warp_to_next_node(&mut w.e, w.this);
+        let advanced = calls(&w.e, PATH_ADVANCE);
+        assert_eq!(advanced.len(), 1);
+        assert_eq!(f(&advanced[0], 2), 28.0);
+    }
+
+    #[test]
+    fn print_current_status_names_the_states() {
+        let mut w = world();
+        let printer = w.e.mem.alloc(4);
+        let vtable = w.e.mem.alloc(0x20);
+        w.e.mem.set_u32(printer, vtable);
+        w.e.mem.set_u32(vtable + PRINTER_SLOT_PRINT, FAKE + 20);
+        w.e.register(FAKE + 20, |_, _| Ret::default());
+        set_point(&mut w.e, w.actor + A_LOCATION, [1.0, 2.0, 3.0]);
+        w.e.set(w.this, H::eState, STATE_MOVING);
+        w.e.set(w.this, H::bMovementBlocked, true);
+        w.e.set(w.this, H::eAvoidState, 4);
+        w.e.set(w.this, H::fAvoidanceDetectionValue, 0.5);
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x009e_8b50, &args![w.this, printer, 11u32, 12u32]);
+        let printed = calls(&w.e, FAKE + 20);
+        assert_eq!(printed.len(), 3);
+        assert_eq!(printed[0][..4], [printer, 11, 12, 0x0109_2604]);
+        assert_eq!(f64::take(&printed[0], &mut 4), 1.0);
+        assert_eq!(f64::take(&printed[0], &mut 8), 3.0);
+        let appended: Vec<u32> = calls(&w.e, STRING_APPEND).iter().map(|a| a[2]).collect();
+        assert_eq!(appended[0], 0x0109_25c4);
+        assert_eq!(appended[1], 0x0109_2518);
+        let formatted = calls(&w.e, STRING_FORMAT);
+        assert_eq!(formatted.len(), 1);
+        assert_eq!(formatted[0][2], 0x0109_2540);
+        assert_eq!(f64::take(&formatted[0], &mut 3), 0.5);
+        assert_eq!(appended[2], formatted[0][0]);
+        assert_eq!(printed[1][3], printed[2][3]);
+        // Unknown states and no detection value.
+        w.e.set(w.this, H::eState, 9);
+        w.e.set(w.this, H::eAvoidState, 1);
+        w.e.set(w.this, H::fAvoidanceDetectionValue, 0.0);
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x009e_8b50, &args![w.this, printer, 11u32, 12u32]);
+        let appended: Vec<u32> = calls(&w.e, STRING_APPEND).iter().map(|a| a[2]).collect();
+        assert_eq!(appended, vec![0x0104_8858, 0x0103_934c]);
+        assert!(calls(&w.e, STRING_FORMAT).is_empty());
+    }
+
+    /// A three-node avoid list at the handler's +0x58: `first`, a node
+    /// without an item, `third`. Returns the second and third nodes.
+    fn avoid_list(e: &mut Engine, this: Ptr<H>, first: u32, third: u32) -> (u32, u32) {
+        let second = e.mem.alloc(8);
+        let last = e.mem.alloc(8);
+        let head = this.addr() + 0x58;
+        e.mem.set_u32(head, first);
+        e.mem.set_u32(head + 4, second);
+        e.mem.set_u32(second + 4, last);
+        e.mem.set_u32(last, third);
+        (second, last)
+    }
+
+    #[test]
+    fn save_game_writes_fields_door_and_avoid_list() {
+        let mut w = world();
+        let buffer = w.e.mem.alloc(4);
+        w.e.set(w.this, H::pCurrentDoor, Ptr::new(0x5000));
+        avoid_list(&mut w.e, w.this, 0x6000, 0x7000);
+        w.e.register(SAVE_START_VARIABLE_SIZED, |_, _| ret_u32(77));
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x009e_8f80, &args![w.this, buffer]);
+        let saved = calls(&w.e, SAVE_BYTES);
+        assert_eq!(saved.len(), 43);
+        let base = w.this.addr();
+        assert_eq!(saved[0], vec![buffer, base + 0x1c, 0xc, 0]);
+        assert_eq!(saved[36], vec![buffer, base + 0xe2, 1, 0]);
+        assert_eq!(saved[42], vec![buffer, base + 0xbc, 4, 0]);
+        assert_eq!(
+            calls(&w.e, SAVE_FORM_ID),
+            vec![
+                vec![buffer, 0x5000, 0],
+                vec![buffer, 0x6000, 0],
+                vec![buffer, 0x7000, 0]
+            ]
+        );
+        assert_eq!(calls(&w.e, SAVE_VARIABLE_SIZED), vec![vec![buffer, 2, 77]]);
+    }
+
+    #[test]
+    fn load_game_reads_by_version() {
+        let mut w = world();
+        let buffer = w.e.mem.alloc(8);
+        let vtable = w.e.mem.alloc(4);
+        w.e.mem.set_u32(buffer, vtable);
+        w.e.mem.set_u32(vtable, FAKE + 21);
+        w.e.register(FAKE + 21, |e, a| ret_u32(e.mem.u32(a[0] + 4)));
+        w.e.register(LOAD_VARIABLE_SIZED, |_, _| ret_u32(2));
+        w.e.register(LOAD_FORM_ID, |e, a| {
+            let next = e.mem.u32(a[1]) + 0x100;
+            e.mem.set_u32(a[1], next);
+            Ret::default()
+        });
+        let pushed = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let record = pushed.clone();
+        w.e.register_double(LIST_PUSH_FRONT, move |e, a| {
+            record.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            Ret::default()
+        });
+        for (version, count) in [(3u32, 36usize), (4, 38), (12, 41), (18, 43)] {
+            w.e.mem.set_u32(buffer + 4, version);
+            w.e.call_log = Some(vec![]);
+            w.e.call(0x009e_9390, &args![w.this, buffer]);
+            assert_eq!(calls(&w.e, LOAD_BYTES).len(), count, "version {version}");
+        }
+        let loaded = calls(&w.e, LOAD_BYTES);
+        let base = w.this.addr();
+        assert_eq!(loaded[25], vec![buffer, base + 0x14, 4]);
+        assert_eq!(loaded[38], vec![buffer, base + 0xc0, 1]);
+        assert_eq!(loaded[42], vec![buffer, base + 0xbc, 4]);
+        assert_eq!(calls(&w.e, LOAD_FORM_ID)[0], vec![buffer, base + 0xd8]);
+        let list = base + 0x58;
+        assert_eq!(pushed.borrow()[6..], [(list, 0x100), (list, 0x100)]);
+    }
+
+    #[test]
+    fn init_load_game_resolves_door_and_actors() {
+        let mut w = world();
+        w.e.register(LOOKUP_FORM, |_, a| ret_u32(a[0] + 0x1000));
+        // Only form 7 is an actor; every door id is a reference.
+        w.e.register(RT_DYNAMIC_CAST, |_, a| {
+            let ok = a[3] == TYPE_TES_OBJECT_REFR || a[0] == 0x1007;
+            assert_eq!([a[1], a[2], a[4]], [0, TYPE_TES_FORM, 0]);
+            ret_u32(if ok { a[0] } else { 0 })
+        });
+        w.e.register(LIST_POP_FRONT, |e, a| {
+            let next = e.mem.u32(a[0] + 4);
+            let (item, after) = if next == 0 {
+                (0, 0)
+            } else {
+                (e.mem.u32(next), e.mem.u32(next + 4))
+            };
+            e.mem.set_u32(a[0], item);
+            e.mem.set_u32(a[0] + 4, after);
+            Ret::default()
+        });
+        w.e.register(LIST_SET_ITEM, |e, a| {
+            let v = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], v);
+            Ret::default()
+        });
+        w.e.register(LIST_REMOVE, |e, a| {
+            let next = e.mem.u32(a[0] + 4);
+            let after = e.mem.u32(next + 4);
+            e.mem.set_u32(a[0] + 4, after);
+            Ret::default()
+        });
+        w.e.set(w.this, H::pCurrentDoor, Ptr::new(5));
+        let head = w.this.addr() + 0x58;
+        let (second, last) = avoid_list(&mut w.e, w.this, 0, 9);
+        w.e.mem.set_u32(second, 7);
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x009e_9760, &args![w.this, 0u32]);
+        let door = 0x1005;
+        assert_eq!(w.e.get(w.this, H::pCurrentDoor), Ptr::new(door));
+        assert_eq!(calls(&w.e, LIST_POP_FRONT), vec![vec![head]]);
+        assert_eq!(w.e.mem.u32(head), 0x1007);
+        assert_eq!(calls(&w.e, LIST_REMOVE), vec![vec![head, last]]);
+        assert_eq!(w.e.mem.u32(head + 4), 0);
+        assert_eq!(calls(&w.e, REFERENCE_SET_TARGETED), vec![vec![door, 1]]);
+        // No door: nothing targeted.
+        w.e.set(w.this, H::pCurrentDoor, Ptr::NULL);
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x009e_9760, &args![w.this, 0u32]);
+        assert!(calls(&w.e, REFERENCE_SET_TARGETED).is_empty());
+        assert!(calls(&w.e, LOOKUP_FORM).iter().all(|a| a[0] != 0));
+    }
+
+    #[test]
+    fn array_element_taken_out() {
+        let mut e = Engine::new();
+        let array: Ptr<NiTArray> = e.new_object();
+        let buffer = e.mem.alloc(12);
+        e.mem.set_u32(buffer, 0x10);
+        e.mem.set_u32(buffer + 8, 0x30);
+        e.set(array, NiTArray::m_pBase, buffer);
+        e.set(array, NiTArray::m_usSize, 3);
+        e.set(array, NiTArray::m_usESize, 2);
+        assert_eq!(e.call(0x009e_98d0, &args![array, 3u32]).u32(), 0);
+        // An empty slot: the counts stay.
+        assert_eq!(e.call(0x009e_98d0, &args![array, 1u32]).u32(), 0);
+        assert_eq!(e.get(array, NiTArray::m_usESize), 2);
+        assert_eq!(e.get(array, NiTArray::m_usSize), 3);
+        // The last one: the size drops too.
+        assert_eq!(e.call(0x009e_98d0, &args![array, 2u32]).u32(), 0x30);
+        assert_eq!(e.mem.u32(buffer + 8), 0);
+        assert_eq!(e.get(array, NiTArray::m_usESize), 1);
+        assert_eq!(e.get(array, NiTArray::m_usSize), 2);
+        assert_eq!(e.call(0x009e_98d0, &args![array, 0u32]).u32(), 0x10);
+        assert_eq!(e.get(array, NiTArray::m_usSize), 2);
+    }
+
+    #[test]
+    fn avoidance_array_construct_destruct_and_delete() {
+        let mut w = world();
+        let array: Ptr<BSSimpleArray> = w.e.new_object();
+        w.e.set(array, BSSimpleArray::pBuffer, 9);
+        w.e.set(array, BSSimpleArray::iSize, 9);
+        w.e.call_log = Some(vec![]);
+        // The shared doubles stand in for 009e9950, 009e9980 and 009e99a0.
+        assert_eq!(fn_009e9950(&mut w.e, array), array);
+        assert_eq!(w.e.mem.u32(array.addr()), AVOID_ARRAY_VTABLE);
+        assert_eq!(w.e.get(array, BSSimpleArray::pBuffer), 0);
+        assert_eq!(w.e.get(array, BSSimpleArray::iSize), 0);
+        assert!(calls(&w.e, AVOID_DATA_CONSTRUCT_RANGE).is_empty());
+        w.e.mem.set_u32(array.addr(), 0);
+        w.e.call(0x009e_9a20, &args![array, 0u32]);
+        assert_eq!(w.e.mem.u32(array.addr()), AVOID_ARRAY_VTABLE);
+        assert_eq!(
+            calls(&w.e, SIMPLE_ARRAY_DESTRUCT),
+            vec![vec![array.addr(), 1]]
+        );
+        assert!(calls(&w.e, OPERATOR_DELETE).is_empty());
+        let back = w.e.call(0x009e_9a20, &args![array, 1u32]).u32();
+        assert_eq!(back, array.addr());
+        assert_eq!(calls(&w.e, OPERATOR_DELETE), vec![vec![array.addr()]]);
+    }
+
+    #[test]
+    fn avoidance_array_buffer_set_up() {
+        let mut w = world();
+        let array: Ptr<BSSimpleArray> = w.e.new_object();
+        let vtable = w.e.mem.alloc(8);
+        w.e.mem.set_u32(array.addr(), vtable);
+        w.e.mem
+            .set_u32(vtable + SIMPLE_ARRAY_SLOT_ALLOCATE, FAKE + 22);
+        w.e.register(FAKE + 22, |_, a| ret_u32(0x8000 + a[1]));
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x009e_9b20, &args![array, 2u32, 5u32]);
+        assert_eq!(calls(&w.e, FAKE + 22), vec![vec![array.addr(), 5]]);
+        assert_eq!(w.e.get(array, BSSimpleArray::pBuffer), 0x8005);
+        assert_eq!(w.e.get(array, BSSimpleArray::iReservedSize), 5);
+        assert_eq!(w.e.get(array, BSSimpleArray::iSize), 5);
+        assert_eq!(
+            calls(&w.e, AVOID_DATA_CONSTRUCT_RANGE),
+            vec![vec![array.addr(), 0x8005, 5]]
+        );
+        // Reserve only: a buffer, nothing constructed.
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x009e_9b20, &args![array, 6u32, 0u32]);
+        assert_eq!(w.e.get(array, BSSimpleArray::pBuffer), 0x8006);
+        assert_eq!(w.e.get(array, BSSimpleArray::iReservedSize), 6);
+        assert_eq!(w.e.get(array, BSSimpleArray::iSize), 0);
+        assert!(calls(&w.e, AVOID_DATA_CONSTRUCT_RANGE).is_empty());
+    }
+
+    #[test]
+    fn avoidance_array_add_copies_the_entry() {
+        let mut w = world();
+        let array: Ptr<BSSimpleArray> = w.e.new_object();
+        let buffer = w.e.mem.alloc(0x20);
+        w.e.set(array, BSSimpleArray::pBuffer, buffer);
+        w.e.register(SIMPLE_ARRAY_GROW, |_, _| ret_u32(1));
+        let data = w.e.mem.alloc(8);
+        w.e.mem.set_u32(data, 0x1234);
+        w.e.mem.set_u32(data + 4, 0x7f80_0001);
+        w.e.call_log = Some(vec![]);
+        assert_eq!(fn_009e99a0(&mut w.e, array, Ptr::new(data)), 1);
+        assert_eq!(
+            calls(&w.e, AVOID_DATA_CONSTRUCT_RANGE),
+            vec![vec![array.addr(), buffer + 8, 1]]
+        );
+        assert_eq!(w.e.mem.u32(buffer + 8), 0x1234);
+        // `fDetection` goes through the FPU: the signalling NaN is quieted.
+        assert_eq!(w.e.mem.u32(buffer + 12), 0x7fc0_0001);
+        let copy = w.e.mem.alloc(8);
+        let back = w.e.call(0x009e_99f0, &args![copy, data]).u32();
+        assert_eq!(back, copy);
+        assert_eq!(w.e.mem.u32(copy + 4), 0x7fc0_0001);
     }
 }
