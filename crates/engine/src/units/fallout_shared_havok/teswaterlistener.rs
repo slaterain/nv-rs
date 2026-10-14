@@ -1,6 +1,9 @@
 //! `fallout shared/havok/teswaterlistener.cpp` (Xbox PDB source unit), subsystem `fallout shared/havok`: its functions in
 //! FalloutNV.exe 1.4.0.525, translated (docs/ENGINE_CRATE.md).
 
+// `!(a < b)` mirrors the exe's x87 flag tests, which are true for NaN.
+#![allow(clippy::neg_cmp_op_on_partial_ord)]
+
 #[allow(unused_imports)]
 use crate::prelude::*;
 
@@ -3159,7 +3162,7 @@ mod tests {
         );
         let floats: Vec<u32> = calls(&e, VECTOR_FROM_FLOAT).iter().map(|w| w[1]).collect();
         let lift = (f64::from(0.3f32) * 2.0) as f32;
-        let rate = (0.5 * -1.0 * f64::from(0.1f32)) as f32;
+        let rate = (-0.5 * f64::from(0.1f32)) as f32;
         let angular = f64::from(rate).exp() as f32;
         assert_eq!(floats, vec![bits(lift), bits(-2.0), bits(angular)]);
         assert_eq!(calls(&e, 0x004a_3f10).len(), 1);
