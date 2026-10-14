@@ -17,11 +17,9 @@
 //! walks the virtual nodes point to point (`VirtualActorPathHandler`
 //! (Xbox PDB), `009ea8a0`).
 //!
-//! Not done (labelled where it matters): the search's door edges (third
-//! list, `006b8490`: used for an actor's requests, 409600 extra for a
-//! locked door; places are changed through `super::door_toward` instead),
-//! the "island" data of flag 0x20 entries, and what a failed search falls
-//! back to (`006c8f50` → `006c9b20`): here a failed search gives no path.
+//! Not done (labelled where it matters): the "island" data of flag 0x20
+//! entries and what a failed search falls back to (`006c8f50` → `006c9b20`):
+//! here a failed search gives no path.
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
@@ -59,7 +57,8 @@ pub struct NavInfo {
     /// `NVCI`'s second list (NVER > 10), +0x34: crossing costs the
     /// distance.
     pub cheap_links: Vec<FormId>,
-    /// `NVCI`'s third list, +0x44: its doors (not searched here).
+    /// `NVCI`'s third list, +0x44: doors connecting this info to the info
+    /// owning each paired door's `XTEL` reference.
     pub doors: Vec<FormId>,
 }
 
@@ -70,6 +69,9 @@ pub struct NavInfoMap {
     by_navmesh: HashMap<FormId, usize>,
     /// By interior cell (`None`) or worldspace and square.
     by_place: HashMap<Place, Vec<usize>>,
+    /// `NVCI`'s third list, resolved through each door's `XTEL` to the
+    /// navmesh info on the other side (`006b8490`).
+    door_edges: Vec<Vec<(FormId, usize)>>,
 }
 
 /// An interior cell (no square), or a worldspace and grid square.
@@ -189,7 +191,32 @@ impl NavInfoMap {
                 }
             }
         }
+        map.resolve_door_edges(order);
         map
+    }
+
+    fn resolve_door_edges(&mut self, order: &LoadOrder) {
+        let mut owner: HashMap<FormId, Vec<usize>> = HashMap::new();
+        for (i, info) in self.infos.iter().enumerate() {
+            for &door in &info.doors {
+                owner.entry(door).or_default().push(i);
+            }
+        }
+        self.door_edges = vec![Vec::new(); self.infos.len()];
+        for (from, info) in self.infos.iter().enumerate() {
+            for &door in &info.doors {
+                let Some(teleport) = order
+                    .get(door)
+                    .as_ref()
+                    .and_then(crate::placement::teleport_of)
+                else {
+                    continue;
+                };
+                if let Some(destinations) = owner.get(&teleport.door) {
+                    self.door_edges[from].extend(destinations.iter().map(|&to| (door, to)));
+                }
+            }
+        }
     }
 
     fn insert(&mut self, info: NavInfo) {
@@ -253,12 +280,41 @@ impl NavInfoMap {
         goal: usize,
         to: [f32; 3],
     ) -> (bool, Vec<usize>) {
+        let (found, route, _) = self.search_edges(start, from, goal, to, false, |_| false);
+        (found, route)
+    }
+
+    /// Search including `NVCI`'s third-list load-door edges. A locked door
+    /// adds 409600 to the crossing cost (`006b8490`). The returned edge
+    /// list is aligned with the route; the first entry is `None` at start.
+    // Translated from 006b8490 (decompiled, FalloutNV.exe 1.4.0.525).
+    pub fn search_with_doors(
+        &self,
+        start: usize,
+        from: [f32; 3],
+        goal: usize,
+        to: [f32; 3],
+        locked: impl Fn(FormId) -> bool,
+    ) -> (bool, Vec<usize>, Vec<Option<FormId>>) {
+        self.search_edges(start, from, goal, to, true, locked)
+    }
+
+    fn search_edges(
+        &self,
+        start: usize,
+        from: [f32; 3],
+        goal: usize,
+        to: [f32; 3],
+        include_doors: bool,
+        locked: impl Fn(FormId) -> bool,
+    ) -> (bool, Vec<usize>, Vec<Option<FormId>>) {
         #[derive(Clone, Copy)]
         struct Node {
             info: usize,
             g: f32,
             h: f32,
             parent: Option<usize>,
+            parent_door: Option<FormId>,
             /// Open-list entry version (stale heap entries are skipped).
             version: u32,
             open: bool,
@@ -326,6 +382,7 @@ impl NavInfoMap {
             g: 0.0,
             h: h0,
             parent: None,
+            parent_door: None,
             version: 0,
             open: false,
         });
@@ -339,31 +396,45 @@ impl NavInfoMap {
             }
         };
         let Some(mut current) = pop(&mut open, &mut nodes) else {
-            return (false, Vec::new());
+            return (false, Vec::new(), Vec::new());
         };
         let mut best = current;
-        let found = loop {
-            if nodes[current].info == goal {
-                best = current;
-                break true;
-            }
-            // The connections (`006b8490`): new nodes and cheaper ways.
-            let here = nodes[current].info;
-            let g = nodes[current].g;
-            let k = (1.0 - self.infos[here].preferred * 100.0).clamp(0.1, 1.0);
-            let a = place_of(here, true);
-            let mut improved = Vec::new();
-            let lists = [
-                (&self.infos[here].links, 3.0f32),
-                (&self.infos[here].cheap_links, 1.0),
-            ];
-            for (list, mult) in lists {
-                for &navmesh in list.iter() {
-                    let Some(m) = self.of_navmesh(navmesh) else {
-                        continue;
-                    };
+        let found =
+            loop {
+                if nodes[current].info == goal {
+                    best = current;
+                    break true;
+                }
+                // The connections (`006b8490`): new nodes and cheaper ways.
+                let here = nodes[current].info;
+                let g = nodes[current].g;
+                let k = (1.0 - self.infos[here].preferred * 100.0).clamp(0.1, 1.0);
+                let a = place_of(here, true);
+                let mut improved = Vec::new();
+                let mut neighbors: Vec<(usize, f32, Option<FormId>)> =
+                    self.infos[here]
+                        .links
+                        .iter()
+                        .filter_map(|&navmesh| self.of_navmesh(navmesh).map(|m| (m, 3.0, None)))
+                        .chain(self.infos[here].cheap_links.iter().filter_map(|&navmesh| {
+                            self.of_navmesh(navmesh).map(|m| (m, 1.0, None))
+                        }))
+                        .collect();
+                if include_doors {
+                    neighbors.extend(
+                        self.door_edges
+                            .get(here)
+                            .into_iter()
+                            .flatten()
+                            .map(|&(door, m)| (m, 1.0, Some(door))),
+                    );
+                }
+                for (m, mult, via_door) in neighbors {
                     let b = place_of(m, false);
-                    let cost = distance(a, b) * k * mult + g;
+                    let locked_cost = via_door
+                        .filter(|door| locked(*door))
+                        .map_or(0.0, |_| 409_600.0);
+                    let cost = distance(a, b) * k * mult + locked_cost + g;
                     match node_of.get(&m) {
                         None => {
                             let n = nodes.len();
@@ -371,7 +442,8 @@ impl NavInfoMap {
                                 info: m,
                                 g: cost,
                                 h: estimate(m),
-                                parent: None,
+                                parent: Some(current),
+                                parent_door: via_door,
                                 version: 0,
                                 open: false,
                             });
@@ -380,45 +452,48 @@ impl NavInfoMap {
                         }
                         Some(&n) if cost < nodes[n].g => {
                             nodes[n].g = cost;
+                            nodes[n].parent = Some(current);
+                            nodes[n].parent_door = via_door;
                             improved.push(n);
                         }
                         Some(_) => {}
                     }
                 }
-            }
-            let mut failed = false;
-            for n in improved {
-                nodes[n].open = false;
-                if nodes[current].parent == Some(n) {
-                    failed = true;
-                    break;
+                let mut failed = false;
+                for n in improved {
+                    nodes[n].open = false;
+                    if nodes[current].parent == Some(n) {
+                        failed = true;
+                        break;
+                    }
+                    push(&mut open, &mut nodes, n, &mut seq);
+                    if nodes[n].h < nodes[best].h {
+                        best = n;
+                    }
                 }
-                nodes[n].parent = Some(current);
-                push(&mut open, &mut nodes, n, &mut seq);
-                if nodes[n].h < nodes[best].h {
-                    best = n;
+                if failed {
+                    break false;
                 }
-            }
-            if failed {
-                break false;
-            }
-            match pop(&mut open, &mut nodes) {
-                Some(n) => current = n,
-                None => break false,
-            }
-        };
+                match pop(&mut open, &mut nodes) {
+                    Some(n) => current = n,
+                    None => break false,
+                }
+            };
         // The route back from the goal (or the nearest node) (`00996ae0`).
         let mut route = Vec::new();
+        let mut route_doors = Vec::new();
         let mut at = Some(best);
         while let Some(n) = at {
             route.push(nodes[n].info);
+            route_doors.push(nodes[n].parent_door);
             at = nodes[n].parent;
             if route.len() > nodes.len() {
                 break;
             }
         }
         route.reverse();
-        (found, route)
+        route_doors.reverse();
+        (found, route, route_doors)
     }
 }
 
@@ -518,6 +593,30 @@ impl NavInfos {
         }));
         nodes.push(end(to, goal));
         Some(nodes)
+    }
+
+    /// The first `NVCI` door on the game's navmesh-info route from a point
+    /// in one place to a point in another (`006b8c50`, `006b8490`).
+    pub fn first_door_toward(
+        &mut self,
+        order: &LoadOrder,
+        state: &crate::scripting::GameState,
+        from_space: FormId,
+        from: [f32; 3],
+        to_space: FormId,
+        to: [f32; 3],
+    ) -> Option<FormId> {
+        let start = self.info_at(order, from_space, from)?;
+        let goal = self.info_at(order, to_space, to)?;
+        let (found, route, doors) =
+            self.map(order)
+                .search_with_doors(start, from, goal, to, |door| {
+                    crate::locks::lock_now(order, state, door).is_some()
+                });
+        if !found || route.len() < 2 {
+            return None;
+        }
+        doors.into_iter().skip(1).flatten().next()
     }
 }
 
@@ -633,6 +732,34 @@ mod tests {
         ]);
         let (_, route) = m.search(0, [0.0; 3], 2, [1000.0, 0.0, 0.0]);
         assert_eq!(route, [0, 2]);
+    }
+
+    #[test]
+    fn a_locked_door_costs_409600_more_and_changes_the_route() {
+        let mut m = map(vec![
+            info(1, 0.0, &[], &[]),
+            info(2, 100.0, &[], &[]),
+            info(3, 200.0, &[], &[]),
+            info(4, 10.0, &[], &[]),
+        ]);
+        m.door_edges = vec![
+            vec![(FormId(12), 3), (FormId(10), 1)],
+            vec![(FormId(11), 3)],
+            vec![],
+            vec![],
+        ];
+
+        let (found, route, doors) =
+            m.search_with_doors(0, [0.0; 3], 3, [10.0, 0.0, 0.0], |_| false);
+        assert!(found);
+        assert_eq!(route, [0, 3]);
+        assert_eq!(doors, [None, Some(FormId(12))]);
+
+        let (found, route, doors) =
+            m.search_with_doors(0, [0.0; 3], 3, [10.0, 0.0, 0.0], |door| door == FormId(12));
+        assert!(found);
+        assert_eq!(route, [0, 1, 3]);
+        assert_eq!(doors, [None, Some(FormId(10)), Some(FormId(11))]);
     }
 
     #[test]
