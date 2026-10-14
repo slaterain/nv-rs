@@ -15,6 +15,9 @@
 //! except for the unwinding, which the engine does not model; each carries a
 //! `Translation incomplete` line saying so.
 
+// `!(a < b)` mirrors the exe's x87 flag tests, which are true for NaN.
+#![allow(clippy::neg_cmp_op_on_partial_ord)]
+
 #[allow(unused_imports)]
 use crate::prelude::*;
 
