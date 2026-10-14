@@ -273,6 +273,10 @@ const VTABLE_LINK_ARRAY: u32 = 0x0106_ba44;
 const VTABLE_EDGE_VERT_ARRAY: u32 = 0x0106_ba58;
 /// `BSSimpleArray<NavMesh*,1024>`.
 const VTABLE_NAVMESH_ARRAY: u32 = 0x0106_ba6c;
+/// `BSScrapArray<AStarNode<PathSmootherPOVNode,PathSmootherPOVLink>*,1024>`.
+const VTABLE_ASTAR_NODE_SCRAP_ARRAY: u32 = 0x0106_ba80;
+/// `BSSimpleArray<AStarNode<PathSmootherPOVNode,PathSmootherPOVLink>*,1024>`.
+const VTABLE_ASTAR_NODE_ARRAY: u32 = 0x0106_ba94;
 
 // --- Layouts -----------------------------------------------------------------
 
@@ -341,6 +345,26 @@ layout! {
         0x44 iAvoidNodeIndex: u32,
         /// `iVertexIndex` (Xbox PDB).
         0x48 iVertexIndex: u16,
+    }
+
+    /// `AStarNode<PathSmootherPOVNode,PathSmootherPOVLink>` (Xbox PDB), 0x68
+    /// bytes, the same offsets on PC: `NodeData` at +8 (12 bytes),
+    /// `ParentLink` at +0x14 (a `PathSmootherPOVLink`, 0x40 bytes).
+    pub struct PovAStarNode: 0x68 {
+        /// `fCost` (Xbox PDB).
+        0x00 fCost: f32,
+        /// `fHeuristic` (Xbox PDB).
+        0x04 fHeuristic: f32,
+        /// `pParentAStarNode` (Xbox PDB).
+        0x54 pParentAStarNode: u32,
+        /// `ppPrevNode` (Xbox PDB): the queue slot that points at the node.
+        0x58 ppPrevNode: u32,
+        /// `pNextNode` (Xbox PDB): the next node in the queue bucket.
+        0x5C pNextNode: u32,
+        /// `iKey` (Xbox PDB).
+        0x60 iKey: u32,
+        /// `pNextNodeInBucket` (Xbox PDB): the next node in the map bucket.
+        0x64 pNextNodeInBucket: u32,
     }
 
     /// `PathSmootherPOVSearch::PathEdgeVert` (Xbox PDB), 0x20 bytes.
@@ -461,6 +485,23 @@ fn zero_edges(e: &mut Engine, pov: u32) {
 /// prepared with `00726bf0` and +8 is set. The class is not confirmed from
 /// the exe, only the layout.
 pub fn fn_006b3eb0(e: &mut Engine, this: Ptr<BSSimpleArray>, reserved_hint: u32, size: u32) {
+    init_array(e, this, reserved_hint, size, |e, buffer| {
+        e.call(FILL_ELEMENTS, &args![this, buffer, size]);
+    });
+}
+
+/// The array initialiser shape `006b3eb0`, `006b3f40` and `006b4190` share:
+/// buffer, size and reserved size 0; the reserved size is the larger of
+/// `reserved_hint` and `size` (unsigned); when nonzero the buffer comes from
+/// virtual slot +4 (`_Allocate`, Xbox PDB) and +0xc is set; when `size` is
+/// nonzero `prepare(buffer)` runs on the buffer and +8 is set.
+fn init_array(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    reserved_hint: u32,
+    size: u32,
+    prepare: impl FnOnce(&mut Engine, u32),
+) {
     e.set(this, BSSimpleArray::pBuffer, 0);
     e.set(this, BSSimpleArray::iSize, 0);
     e.set(this, BSSimpleArray::iReservedSize, 0);
@@ -475,7 +516,7 @@ pub fn fn_006b3eb0(e: &mut Engine, this: Ptr<BSSimpleArray>, reserved_hint: u32,
     }
     if size > 0 {
         let buffer = e.get(this, BSSimpleArray::pBuffer);
-        e.call(FILL_ELEMENTS, &args![this, buffer, size]);
+        prepare(e, buffer);
         e.set(this, BSSimpleArray::iSize, size);
     }
 }
@@ -3696,6 +3737,568 @@ pub fn fn_006b3800(e: &mut Engine, this: Ptr) -> Ptr {
     construct_array(e, this, VTABLE_NAVMESH_ARRAY, None)
 }
 
+// Translated from 006b3830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `BSSimpleArray<NavMesh*,1024>` destructor
+/// body (vtable, `008454f0(1)`).
+pub fn fn_006b3830(e: &mut Engine, this: Ptr) {
+    destroy_array(e, this, VTABLE_NAVMESH_ARRAY);
+}
+
+/// The scalar deleting destructors' tail: frees `this` (`00401030`) when
+/// bit 0 of `flags` is set.
+fn free_if_flagged(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006b3850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `AStarSearch<PathSmootherPOVNode,PathSmootherPOVLink>::`scalar deleting
+/// destructor'` (Xbox PDB): the destructor `006b3270`, then frees the
+/// object when bit 0 of `flags` is set; returns `this`.
+pub fn astar_search_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<AStarSearch>,
+    flags: u32,
+) -> Ptr<AStarSearch> {
+    fn_006b3270(e, this);
+    free_if_flagged(e, this.cast(), flags).cast()
+}
+
+// Translated from 006b3880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<PathSmootherPOV*,1024>::`scalar deleting destructor'`
+/// (Xbox PDB): the destructor `006b35a0`, then frees the object when bit 0
+/// of `flags` is set; returns `this`.
+pub fn pov_array_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006b35a0(e, this);
+    free_if_flagged(e, this, flags)
+}
+
+// Translated from 006b38b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<PathSmootherPOVNode,1024>::`scalar deleting destructor'`
+/// (Xbox PDB): the destructor `006b35f0`, then frees the object when bit 0
+/// of `flags` is set; returns `this`.
+pub fn pov_node_array_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006b35f0(e, this);
+    free_if_flagged(e, this, flags)
+}
+
+// Translated from 006b38e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<PathSmootherPOVLink,1024>::`scalar deleting destructor'`
+/// (Xbox PDB): the destructor `006b3640`, then frees the object when bit 0
+/// of `flags` is set; returns `this`.
+pub fn pov_link_array_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006b3640(e, this);
+    free_if_flagged(e, this, flags)
+}
+
+// Translated from 006b3910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `PathSmootherPOVLink` copy: `006985f0`
+/// on the two 8-byte parts (+0, +8) and `006cf900` on the two locations
+/// (+0x10, +0x28), each from the same part of `other`. Returns `this`.
+pub fn fn_006b3910(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
+    let (p, o) = (this.addr(), other.addr());
+    e.call(0x0069_85f0, &args![p, o]);
+    e.call(0x0069_85f0, &args![p + 8, o + 8]);
+    e.call(0x006c_f900, &args![p + 0x10, o + 0x10]);
+    e.call(0x006c_f900, &args![p + 0x28, o + 0x28]);
+    this
+}
+
+// Translated from 006b3970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<PathSmootherPOVSearch::PathEdgeVert,1024>::`scalar
+/// deleting destructor'` (Xbox PDB): the destructor `006b3710`, then frees
+/// the object when bit 0 of `flags` is set; returns `this`.
+pub fn edge_vert_array_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006b3710(e, this);
+    free_if_flagged(e, this, flags)
+}
+
+// Translated from 006b39a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `PathEdgeVert` copy: the vertex handle
+/// (`0069a690`), the edge handle at +8 (`006bc870`), then the words
+/// `iOtherSideIndex`, `iThisSideIndex` and `iPOVIndex`. Returns `this`.
+pub fn fn_006b39a0(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
+    let (p, o) = (this.addr(), other.addr());
+    e.call(VERT_HANDLE_COPY, &args![p, o]);
+    e.call(EDGE_HANDLE_COPY, &args![p + 8, o + 8]);
+    for at in [0x14, 0x18, 0x1c] {
+        let w = e.mem.u32(o + at);
+        e.mem.set_u32(p + at, w);
+    }
+    this
+}
+
+// Translated from 006b3a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NavMesh*,1024>::`scalar deleting destructor'` (Xbox PDB):
+/// the destructor `006b3830`, then frees the object when bit 0 of `flags`
+/// is set; returns `this`.
+pub fn navmesh_array_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006b3830(e, this);
+    free_if_flagged(e, this, flags)
+}
+
+// Translated from 006b3a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the A* search loop. With a scrap array of
+/// node pointers on the stack (`006b4220`, destroyed with `006b42f0` on
+/// every way out), it takes the best node from the queue (`006b4350`) into
+/// `pLastSearchedNode` (none: returns null) and makes it `BestNodeSoFar`.
+/// Then, while there is a node: when virtual slot +8 (`IsGoalNode`, Xbox
+/// PDB) says it is the goal, it becomes `BestNodeSoFar` and is returned;
+/// otherwise the array is cleared (`008454f0(0)`), filled by virtual slot
+/// +4 (`GetNodeConnections`) and each child is taken out of the queue
+/// (`006a1fb0`), returns null when it is the node's own parent, else gets
+/// the node as parent, is queued (`006b3e10`) and becomes `BestNodeSoFar`
+/// when its value (`006b9130`) is below the best one's (NaN: not below).
+/// In a tasklet it sleeps (`0040fca0(0)`) every 50 nodes. When the queue
+/// runs out, `pLastSearchedNode` gets back the last node searched and the
+/// result is null.
+// Translation incomplete: 006b3a30 - C++ exception unwinding (FS:[0] frame) is not translated.
+pub fn fn_006b3a30(e: &mut Engine, this: Ptr<AStarSearch>) -> u32 {
+    let queue = Ptr::new(this.addr() + SEARCH_QUEUE);
+    e.with_stack(0x14, |e, scrap| {
+        fn_006b4220(e, scrap);
+        let result = search_loop(e, this, queue, scrap);
+        fn_006b42f0(e, scrap);
+        result
+    })
+}
+
+/// The body of `006b3a30` between the scrap array's constructor and
+/// destructor.
+fn search_loop(e: &mut Engine, this: Ptr<AStarSearch>, queue: Ptr, scrap: Ptr) -> u32 {
+    let p = this.addr();
+    let mut last = e.get(this, AStarSearch::pLastSearchedNode);
+    let first = fn_006b4350(e, queue);
+    e.set(this, AStarSearch::pLastSearchedNode, first);
+    if first == 0 {
+        return 0;
+    }
+    e.set(this, AStarSearch::BestNodeSoFar, first);
+    let mut steps = 0u32;
+    loop {
+        let node = e.get(this, AStarSearch::pLastSearchedNode);
+        if node == 0 {
+            break;
+        }
+        if e.vcall(p, 8, &args![node]).u8() != 0 {
+            e.set(this, AStarSearch::BestNodeSoFar, node);
+            return node;
+        }
+        e.call(ARRAY_CLEAR, &args![scrap, 0u32]);
+        e.vcall(p, 4, &args![node, scrap]);
+        let mut index = 0u32;
+        while index < size(e, scrap.addr()) {
+            let slot = e.call(ARRAY_WORD_AT, &args![scrap, index]).u32();
+            let child = e.mem.u32(slot);
+            e.call(0x006a_1fb0, &args![queue, child]);
+            let node = e.get(this, AStarSearch::pLastSearchedNode);
+            let parent = e.get(
+                Ptr::<PovAStarNode>::new(node),
+                PovAStarNode::pParentAStarNode,
+            );
+            if parent == child {
+                return 0;
+            }
+            let child_node = Ptr::<PovAStarNode>::new(child);
+            e.set(child_node, PovAStarNode::pParentAStarNode, node);
+            fn_006b3e10(e, queue, Ptr::new(child));
+            let child_value = e.call(0x006b_9130, &args![child]).f64();
+            let best = e.get(this, AStarSearch::BestNodeSoFar);
+            let best_value = e.call(0x006b_9130, &args![best]).f64();
+            if less(child_value, best_value) {
+                e.set(this, AStarSearch::BestNodeSoFar, child);
+            }
+            index += 1;
+        }
+        if e.get(this, AStarSearch::bIsRunningInTasklet) != 0 {
+            steps += 1;
+            if steps == 0x32 {
+                steps = 0;
+                e.call(0x0040_fca0, &args![0u32]);
+            }
+        }
+        last = e.get(this, AStarSearch::pLastSearchedNode);
+        let next = fn_006b4350(e, queue);
+        e.set(this, AStarSearch::pLastSearchedNode, next);
+    }
+    e.set(this, AStarSearch::pLastSearchedNode, last);
+    0
+}
+
+// Translated from 006b3cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: builds the path ending at `node`: counts the
+/// nodes up the parent chain, sizes `nodes` to that count (`006a8890(count,
+/// 1)`) and `links` to one less (`006b4450(count - 1, 1)`), then walks the
+/// chain again from the last index down: each node's 12-byte `NodeData` is
+/// copied into `nodes` (`006a1440`) and, above index 0, its `ParentLink`
+/// into `links[index - 1]` (`006b3910`). False for a null `node`, true
+/// otherwise.
+pub fn fn_006b3cb0(
+    e: &mut Engine,
+    _this: Ptr<AStarSearch>,
+    node: Ptr<PovAStarNode>,
+    nodes: Ptr,
+    links: Ptr,
+) -> bool {
+    if node.addr() == 0 {
+        return false;
+    }
+    let mut count = 0u32;
+    let mut at = node;
+    while at.addr() != 0 {
+        count = count.wrapping_add(1);
+        at = Ptr::new(e.get(at, PovAStarNode::pParentAStarNode));
+    }
+    e.call(0x006a_8890, &args![nodes, count, 1u32]);
+    fn_006b4450(e, links, count.wrapping_sub(1), 1);
+    let mut at = node;
+    let mut index = count.wrapping_sub(1);
+    while at.addr() != 0 {
+        let data = at.addr() + 8;
+        let slot = e.call(0x006a_1440, &args![nodes, index]).u32();
+        copy3(e, slot, data);
+        if (index as i32) > 0 {
+            let link = fn_006b30e0(e, links, index.wrapping_sub(1));
+            fn_006b3910(e, link, Ptr::new(at.addr() + 0x14));
+        }
+        at = Ptr::new(e.get(at, PovAStarNode::pParentAStarNode));
+        index = index.wrapping_sub(1);
+    }
+    true
+}
+
+// Translated from 006b3d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a new A* node from the node heap: 0x68 bytes
+/// from `006a1f90(0x68, heap)` (cdecl) and, when not null, the node
+/// constructor `006b43f0`; null otherwise.
+pub fn fn_006b3d90(e: &mut Engine, this: Ptr) -> u32 {
+    let block = e.call(0x006a_1f90, &args![0x68u32, this]).u32();
+    if block != 0 {
+        fn_006b43f0(e, Ptr::new(block)).addr()
+    } else {
+        0
+    }
+}
+
+// Translated from 006b3de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `AStarMap` constructor: `iCount` (+0x1fdc,
+/// Xbox PDB) 0, then the 0x1fdc bytes of buckets zeroed with `00403d30`
+/// (`memset`, cdecl). Returns `this`.
+pub fn fn_006b3de0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr() + 0x1fdc, 0);
+    e.call(0x0040_3d30, &args![this, 0u32, 0x1fdcu32]);
+    this
+}
+
+// Translated from 006b3e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: queues `node` in the `AStarQueue` (Xbox PDB):
+/// the bucket index comes from `006f4790(node)`; the node goes before the
+/// first node of the bucket's list whose value (`006b9710`) is not below
+/// its own (NaN included), linked through `pNextNode` / `ppPrevNode`.
+pub fn fn_006b3e10(e: &mut Engine, this: Ptr, node: Ptr<PovAStarNode>) {
+    let index = e.call(0x006f_4790, &args![this, node]).u32();
+    let mut slot = this
+        .addr()
+        .wrapping_add(index.wrapping_mul(4))
+        .wrapping_add(4);
+    loop {
+        let current = e.mem.u32(slot);
+        if current == 0 {
+            break;
+        }
+        let current_value = e.call(0x006b_9710, &args![current]).f64();
+        let node_value = e.call(0x006b_9710, &args![node]).f64();
+        // FCOMP; TEST AH,0x41: on only while the node's value is above.
+        if !less(current_value, node_value) {
+            break;
+        }
+        slot = current + 0x5c;
+    }
+    let current = e.mem.u32(slot);
+    if current != 0 {
+        e.set(
+            Ptr::<PovAStarNode>::new(current),
+            PovAStarNode::ppPrevNode,
+            node.addr() + 0x5c,
+        );
+    }
+    e.set(node, PovAStarNode::pNextNode, current);
+    e.set(node, PovAStarNode::ppPrevNode, slot);
+    e.mem.set_u32(slot, node.addr());
+}
+
+// Translated from 006b3f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `BSSimpleArray<PathSmootherPOVNode,1024>`
+/// initialiser: the `006b3eb0` shape, with `006d03d0(buffer, size)` preparing
+/// the elements.
+pub fn fn_006b3f40(e: &mut Engine, this: Ptr<BSSimpleArray>, reserved_hint: u32, size: u32) {
+    init_array(e, this, reserved_hint, size, |e, buffer| {
+        e.call(0x006d_03d0, &args![this, buffer, size]);
+    });
+}
+
+/// `006b3fd0` / `006b4060`: the index of a new last element. When the
+/// array is full (`00438b90`): without a reserve the buffer comes from
+/// virtual slot +4 with 4 and the reserve is 4; otherwise the new reserve
+/// from `009a3910` goes to `grow(capacity, size)` and to +0xc. Then the size
+/// grows by one; returns the old size.
+fn index_of_new(e: &mut Engine, this: Ptr, grow: impl FnOnce(&mut Engine, u32, u32)) -> u32 {
+    let p = this.addr();
+    if e.call(0x0043_8b90, &args![this]).u8() != 0 {
+        if e.mem.u32(p + 0xc) == 0 {
+            let buffer = e.vcall(p, 4, &args![4u32]).u32();
+            e.mem.set_u32(p + 4, buffer);
+            e.mem.set_u32(p + 0xc, 4);
+        } else {
+            let capacity = e.call(0x009a_3910, &args![this]).u32();
+            let size = e.mem.u32(p + 8);
+            grow(e, capacity, size);
+            e.mem.set_u32(p + 0xc, capacity);
+        }
+    }
+    let size = e.mem.u32(p + 8).wrapping_add(1);
+    e.mem.set_u32(p + 8, size);
+    size.wrapping_sub(1)
+}
+
+// Translated from 006b3fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the link array's new-element index (see
+/// [`index_of_new`]; grows with `006b4590`).
+pub fn fn_006b3fd0(e: &mut Engine, this: Ptr) -> u32 {
+    index_of_new(e, this, |e, capacity, size| {
+        fn_006b4590(e, this, capacity, size);
+    })
+}
+
+// Translated from 006b4060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `PathEdgeVert` array's new-element index
+/// (see [`index_of_new`]; grows with `006f9eb0`).
+pub fn fn_006b4060(e: &mut Engine, this: Ptr) -> u32 {
+    index_of_new(e, this, |e, capacity, size| {
+        e.call(0x006f_9eb0, &args![this, capacity, size]);
+    })
+}
+
+// Translated from 006b40f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: constructs `count` `PathEdgeVert`s in place
+/// from `buffer`: each 0x20-byte slot through `006e6da0(0x20, slot)`
+/// (cdecl, the placement step) and, when that is not null, the constructor
+/// `006aeb70`. `this` is not read.
+// Translation incomplete: 006b40f0 - C++ exception unwinding (FS:[0] frame) is not translated.
+pub fn fn_006b40f0(e: &mut Engine, _this: Ptr, buffer: u32, count: u32) {
+    let mut index = 0u32;
+    while index < count {
+        let slot = (index << 5).wrapping_add(buffer);
+        let placed = e.call(0x006e_6da0, &args![0x20u32, slot]).u32();
+        if placed != 0 {
+            fn_006aeb70(e, Ptr::new(placed));
+        }
+        index += 1;
+    }
+}
+
+// Translated from 006b4190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `PathEdgeVert` array initialiser: the
+/// `006b3eb0` shape, with `006b40f0(buffer, size)` constructing the
+/// elements.
+pub fn fn_006b4190(e: &mut Engine, this: Ptr<BSSimpleArray>, reserved_hint: u32, size: u32) {
+    init_array(e, this, reserved_hint, size, |e, buffer| {
+        fn_006b40f0(e, this.cast(), buffer, size);
+    });
+}
+
+// Translated from 006b4220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the
+/// `BSScrapArray<AStarNode<PathSmootherPOVNode,PathSmootherPOVLink>*,1024>`
+/// constructor: the base constructor `006b4670`, the class's vtable, the
+/// thread's scrap heap (`MemoryManager::GetThreadScrapHeap` `00aa42e0` on
+/// `00401020`'s manager) in `pScrapHeap` (+0x10, Xbox PDB), then
+/// `006b3eb0(0, 0)`. Returns `this`.
+// Translation incomplete: 006b4220 - C++ exception unwinding (FS:[0] frame) is not translated.
+pub fn fn_006b4220(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_006b4670(e, this);
+    e.mem.set_u32(this.addr(), VTABLE_ASTAR_NODE_SCRAP_ARRAY);
+    let manager = e.call(0x0040_1020, &[]).u32();
+    let heap = e.call(0x00aa_42e0, &args![manager]).u32();
+    e.mem.set_u32(this.addr() + 0x10, heap);
+    fn_006b3eb0(e, this.cast(), 0, 0);
+    this
+}
+
+// Translated from 006b42a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the
+/// `BSSimpleArray<AStarNode<PathSmootherPOVNode,PathSmootherPOVLink>*,1024>`
+/// destructor body (vtable, `008454f0(1)`).
+pub fn fn_006b42a0(e: &mut Engine, this: Ptr) {
+    destroy_array(e, this, VTABLE_ASTAR_NODE_ARRAY);
+}
+
+// Translated from 006b42c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<AStarNode<PathSmootherPOVNode,PathSmootherPOVLink>*,1024>
+/// ::`scalar deleting destructor'` (Xbox PDB): the destructor `006b42a0`,
+/// then frees the object when bit 0 of `flags` is set; returns `this`.
+pub fn astar_node_array_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006b42a0(e, this);
+    free_if_flagged(e, this, flags)
+}
+
+// Translated from 006b42f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `BSScrapArray` destructor body: its
+/// vtable, `008454f0(1)`, then the base destructor `006b42a0`.
+// Translation incomplete: 006b42f0 - C++ exception unwinding (FS:[0] frame) is not translated.
+pub fn fn_006b42f0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), VTABLE_ASTAR_NODE_SCRAP_ARRAY);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+    fn_006b42a0(e, this);
+}
+
+// Translated from 006b4350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: takes the head node of the first non-empty
+/// bucket of the `AStarQueue` (20 buckets from +4) out of the queue: its
+/// next node (with `ppPrevNode` set to the bucket) becomes the head, and
+/// the node's `ppPrevNode` / `pNextNode` are cleared. Null when every
+/// bucket is empty.
+pub fn fn_006b4350(e: &mut Engine, this: Ptr) -> u32 {
+    for index in 0..0x14u32 {
+        let slot = this.addr() + 4 + index * 4;
+        let head = e.mem.u32(slot);
+        if head == 0 {
+            continue;
+        }
+        let node = Ptr::<PovAStarNode>::new(head);
+        let next = e.get(node, PovAStarNode::pNextNode);
+        if next != 0 {
+            e.set(
+                Ptr::<PovAStarNode>::new(next),
+                PovAStarNode::ppPrevNode,
+                slot,
+            );
+            e.mem.set_u32(slot, next);
+        } else {
+            e.mem.set_u32(slot, 0);
+        }
+        e.set(node, PovAStarNode::ppPrevNode, 0);
+        e.set(node, PovAStarNode::pNextNode, 0);
+        return head;
+    }
+    0
+}
+
+// Translated from 006b43f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (Ghidra matches the shape to an MFC
+/// `CPreviewView::PAGE_INFO` constructor): the
+/// `AStarNode<PathSmootherPOVNode,PathSmootherPOVLink>` constructor: costs
+/// 0.0, the parent link constructed (`006b1d80`), parent, queue links, key
+/// and bucket link 0 (`NodeData` is left as it is). Returns `this`.
+pub fn fn_006b43f0(e: &mut Engine, this: Ptr<PovAStarNode>) -> Ptr<PovAStarNode> {
+    e.set(this, PovAStarNode::fCost, 0.0);
+    e.set(this, PovAStarNode::fHeuristic, 0.0);
+    fn_006b1d80(e, Ptr::new(this.addr() + 0x14));
+    e.set(this, PovAStarNode::pParentAStarNode, 0);
+    e.set(this, PovAStarNode::ppPrevNode, 0);
+    e.set(this, PovAStarNode::pNextNode, 0);
+    e.set(this, PovAStarNode::iKey, 0);
+    e.set(this, PovAStarNode::pNextNodeInBucket, 0);
+    this
+}
+
+// Translated from 006b4450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `SetSize` shape of the link array (0x40-byte
+/// elements). 0: `008454f0(shrink)`. Above the reserve: the buffer from
+/// virtual slot +4 (no reserve yet) or `006b4590(count, size)`, the reserve
+/// becomes `count`, the new elements are prepared (`006a2630`). Below the
+/// size: the dropped elements go through `0072ba80`, and with `shrink` and
+/// `count` at most a quarter of the reserve, `006b4590(count, count)` makes
+/// `count` the reserve. Otherwise the new elements are prepared
+/// (`006a2630`). The size becomes `count`.
+pub fn fn_006b4450(e: &mut Engine, this: Ptr, count: u32, shrink: u8) {
+    let p = this.addr();
+    let element = |e: &mut Engine, index: u32| (index << 6).wrapping_add(e.mem.u32(p + 4));
+    if count == 0 {
+        e.call(ARRAY_CLEAR, &args![this, u32::from(shrink)]);
+        return;
+    }
+    if count > e.mem.u32(p + 0xc) {
+        if e.mem.u32(p + 0xc) == 0 {
+            let buffer = e.vcall(p, 4, &args![count]).u32();
+            e.mem.set_u32(p + 4, buffer);
+        } else {
+            let size = e.mem.u32(p + 8);
+            fn_006b4590(e, this, count, size);
+        }
+        e.mem.set_u32(p + 0xc, count);
+        let size = e.mem.u32(p + 8);
+        let first = element(e, size);
+        e.call(0x006a_2630, &args![this, first, count.wrapping_sub(size)]);
+    } else if count < e.mem.u32(p + 8) {
+        let size = e.mem.u32(p + 8);
+        let first = element(e, count);
+        e.call(0x0072_ba80, &args![this, first, size.wrapping_sub(count)]);
+        e.mem.set_u32(p + 8, count);
+        if shrink != 0 && count <= e.mem.u32(p + 0xc) >> 2 {
+            fn_006b4590(e, this, count, count);
+            e.mem.set_u32(p + 0xc, count);
+        }
+        return;
+    } else {
+        let size = e.mem.u32(p + 8);
+        let first = element(e, size);
+        e.call(0x006a_2630, &args![this, first, count.wrapping_sub(size)]);
+    }
+    e.mem.set_u32(p + 8, count);
+}
+
+// Translated from 006b4590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the link array's buffer change to `capacity`
+/// elements. Without a buffer: virtual slot +4 (`_Allocate`, Xbox PDB) and
+/// the reserve becomes `capacity`. When `size` equals the reserve: virtual
+/// slot +0xc (`_Reallocate`) with the buffer and `capacity`. Otherwise a
+/// new buffer from slot +4, the `size` elements moved into it
+/// (`004a9b50(new, old, size)`), the old buffer released (`006a8500`), and
+/// the new one stored. The reserve is set by the callers in the last two
+/// cases.
+pub fn fn_006b4590(e: &mut Engine, this: Ptr, capacity: u32, size: u32) {
+    let p = this.addr();
+    let buffer = e.mem.u32(p + 4);
+    if buffer == 0 {
+        let buffer = e.vcall(p, 4, &args![capacity]).u32();
+        e.mem.set_u32(p + 4, buffer);
+        e.mem.set_u32(p + 0xc, capacity);
+    } else if size == e.mem.u32(p + 0xc) {
+        let buffer = e.vcall(p, 0xc, &args![buffer, capacity]).u32();
+        e.mem.set_u32(p + 4, buffer);
+    } else {
+        let fresh = e.vcall(p, 4, &args![capacity]).u32();
+        let old = e.mem.u32(p + 4);
+        e.call(0x004a_9b50, &args![this, fresh, old, size]);
+        e.call(0x006a_8500, &args![this]);
+        e.mem.set_u32(p + 4, fresh);
+    }
+}
+
+// Translated from 006b4640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<AStarNode<PathSmootherPOVNode,PathSmootherPOVLink>*,1024>
+/// ::`scalar deleting destructor'` (Xbox PDB): the destructor `006b42f0`,
+/// then frees the object when bit 0 of `flags` is set; returns `this`.
+pub fn astar_node_scrap_array_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_006b42f0(e, this);
+    free_if_flagged(e, this, flags)
+}
+
+// Translated from 006b4670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the
+/// `BSSimpleArray<AStarNode<PathSmootherPOVNode,PathSmootherPOVLink>*,1024>`
+/// constructor (vtable, `006b3eb0(0, 0)`). Returns `this`.
+pub fn fn_006b4670(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_array(e, this, VTABLE_ASTAR_NODE_ARRAY, None)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3841,7 +4444,66 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006b37b0, fn_006b37b0(Ptr, u32) -> Ptr),
         entry!(0x006b37e0, fn_006b37e0(Ptr)),
         entry!(0x006b3800, fn_006b3800(Ptr) -> Ptr),
+        entry!(0x006b3830, fn_006b3830(Ptr)),
+        entry!(
+            0x006b3850,
+            astar_search_scalar_deleting_destructor(Ptr<AStarSearch>, u32) -> Ptr<AStarSearch>
+        ),
+        entry!(
+            0x006b3880,
+            pov_array_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x006b38b0,
+            pov_node_array_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x006b38e0,
+            pov_link_array_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x006b3910, fn_006b3910(Ptr, Ptr) -> Ptr),
+        entry!(
+            0x006b3970,
+            edge_vert_array_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x006b39a0, fn_006b39a0(Ptr, Ptr) -> Ptr),
+        entry!(
+            0x006b3a00,
+            navmesh_array_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x006b3a30, fn_006b3a30(Ptr<AStarSearch>) -> u32),
+        entry!(
+            0x006b3cb0,
+            fn_006b3cb0(Ptr<AStarSearch>, Ptr<PovAStarNode>, Ptr, Ptr) -> bool
+        ),
+        entry!(0x006b3d90, fn_006b3d90(Ptr) -> u32),
+        entry!(0x006b3de0, fn_006b3de0(Ptr) -> Ptr),
+        entry!(0x006b3e10, fn_006b3e10(Ptr, Ptr<PovAStarNode>)),
         entry!(0x006b3eb0, fn_006b3eb0(Ptr<BSSimpleArray>, u32, u32)),
+        entry!(0x006b3f40, fn_006b3f40(Ptr<BSSimpleArray>, u32, u32)),
+        entry!(0x006b3fd0, fn_006b3fd0(Ptr) -> u32),
+        entry!(0x006b4060, fn_006b4060(Ptr) -> u32),
+        entry!(0x006b40f0, fn_006b40f0(Ptr, u32, u32)),
+        entry!(0x006b4190, fn_006b4190(Ptr<BSSimpleArray>, u32, u32)),
+        entry!(0x006b4220, fn_006b4220(Ptr) -> Ptr),
+        entry!(0x006b42a0, fn_006b42a0(Ptr)),
+        entry!(
+            0x006b42c0,
+            astar_node_array_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x006b42f0, fn_006b42f0(Ptr)),
+        entry!(0x006b4350, fn_006b4350(Ptr) -> u32),
+        entry!(
+            0x006b43f0,
+            fn_006b43f0(Ptr<PovAStarNode>) -> Ptr<PovAStarNode>
+        ),
+        entry!(0x006b4450, fn_006b4450(Ptr, u32, u8)),
+        entry!(0x006b4590, fn_006b4590(Ptr, u32, u32)),
+        entry!(
+            0x006b4640,
+            astar_node_scrap_array_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x006b4670, fn_006b4670(Ptr) -> Ptr),
     ]
 }
 
@@ -5663,5 +6325,546 @@ mod tests {
         e.mem.set_u32(h, 0x5000);
         e.call(0x006b_37e0, &args![h]);
         assert_eq!(calls(&e, 0x0040_1970), vec![vec![0x5010]]);
+    }
+
+    // --- 006b3830 .. 006b4670 ---------------------------------------------
+
+    /// An engine with only the translations and the doubles a test adds.
+    fn bare(doubled: &[u32]) -> Engine {
+        let mut e = Engine::new();
+        for &addr in doubled {
+            e.register(addr, noop);
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// The vtable of a test array: slot +4 allocates `count x 0x40` bytes,
+    /// slot +0xc answers with `REALLOCATED`.
+    const ARRAY_VTABLE: u32 = 0x4500_0000;
+    const ARRAY_ALLOCATE: u32 = 0x4500_1004;
+    const ARRAY_REALLOCATE: u32 = 0x4500_100c;
+    const REALLOCATED: u32 = 0x4500_2000;
+
+    fn test_array(e: &mut Engine, buffer: u32, size: u32, reserved: u32) -> Ptr {
+        e.put_vtable(ARRAY_VTABLE, &[0, ARRAY_ALLOCATE, 0, ARRAY_REALLOCATE]);
+        e.register(ARRAY_ALLOCATE, |e, a| ret(e.mem.alloc(a[1] * 0x40)));
+        e.register(ARRAY_REALLOCATE, |_, _| ret(REALLOCATED));
+        let a = e.mem.alloc(0x14);
+        e.mem.set_u32(a, ARRAY_VTABLE);
+        e.mem.set_u32(a + 4, buffer);
+        e.mem.set_u32(a + 8, size);
+        e.mem.set_u32(a + 0xc, reserved);
+        Ptr::new(a)
+    }
+
+    fn check_scalar_delete(e: &mut Engine, addr: u32, vtable: u32) {
+        let a = e.mem.alloc(0x2058);
+        assert_eq!(e.call(addr, &args![a, 0u32]).u32(), a);
+        assert_eq!(e.mem.u32(a), vtable);
+        assert!(calls(e, DEALLOCATE).is_empty(), "bit 0 clear: kept");
+        assert_eq!(e.call(addr, &args![a, 3u32]).u32(), a);
+        assert_eq!(calls(e, DEALLOCATE), vec![vec![a]]);
+    }
+
+    fn array_deleter(addr: u32, vtable: u32) {
+        let mut e = bare(&[DEALLOCATE, ARRAY_CLEAR]);
+        check_scalar_delete(&mut e, addr, vtable);
+        assert!(calls(&e, ARRAY_CLEAR).iter().all(|w| w[1] == 1));
+    }
+
+    #[test]
+    fn navmesh_array_destructor_body() {
+        let mut e = bare(&[ARRAY_CLEAR]);
+        check_destroyed(&mut e, 0x006b_3830, VTABLE_NAVMESH_ARRAY);
+    }
+
+    #[test]
+    fn astar_search_scalar_delete() {
+        let mut e = bare(&[DEALLOCATE, 0x0048_3710, 0x0098_2610]);
+        check_scalar_delete(&mut e, 0x006b_3850, VTABLE_ASTAR_SEARCH);
+        assert_eq!(calls(&e, 0x0098_2610).len(), 2, "006b3270 ran each time");
+    }
+
+    #[test]
+    fn pov_array_scalar_delete() {
+        array_deleter(0x006b_3880, VTABLE_POV_ARRAY);
+    }
+
+    #[test]
+    fn pov_node_array_scalar_delete() {
+        array_deleter(0x006b_38b0, VTABLE_NODE_ARRAY);
+    }
+
+    #[test]
+    fn pov_link_array_scalar_delete() {
+        array_deleter(0x006b_38e0, VTABLE_LINK_ARRAY);
+    }
+
+    #[test]
+    fn edge_vert_array_scalar_delete() {
+        array_deleter(0x006b_3970, VTABLE_EDGE_VERT_ARRAY);
+    }
+
+    #[test]
+    fn navmesh_array_scalar_delete() {
+        array_deleter(0x006b_3a00, VTABLE_NAVMESH_ARRAY);
+    }
+
+    #[test]
+    fn astar_node_array_scalar_delete() {
+        array_deleter(0x006b_42c0, VTABLE_ASTAR_NODE_ARRAY);
+    }
+
+    #[test]
+    fn astar_node_scrap_array_scalar_delete() {
+        let mut e = bare(&[DEALLOCATE, ARRAY_CLEAR]);
+        check_scalar_delete(&mut e, 0x006b_4640, VTABLE_ASTAR_NODE_ARRAY);
+        assert_eq!(calls(&e, ARRAY_CLEAR).len(), 4, "two per destruction");
+    }
+
+    #[test]
+    fn link_copy_copies_the_four_parts() {
+        let mut e = bare(&[0x0069_85f0, 0x006c_f900]);
+        let (a, b) = (e.mem.alloc(0x40), e.mem.alloc(0x40));
+        assert_eq!(e.call(0x006b_3910, &args![a, b]).u32(), a);
+        assert_eq!(calls(&e, 0x0069_85f0), vec![vec![a, b], vec![a + 8, b + 8]]);
+        assert_eq!(
+            calls(&e, 0x006c_f900),
+            vec![vec![a + 0x10, b + 0x10], vec![a + 0x28, b + 0x28]]
+        );
+    }
+
+    #[test]
+    fn edge_vert_copy_copies_handles_and_indexes() {
+        let mut e = bare(&[VERT_HANDLE_COPY, EDGE_HANDLE_COPY]);
+        let (a, b) = (e.mem.alloc(0x20), e.mem.alloc(0x20));
+        for (k, at) in [0x14u32, 0x18, 0x1c].into_iter().enumerate() {
+            e.mem.set_u32(b + at, 7 + k as u32);
+        }
+        assert_eq!(e.call(0x006b_39a0, &args![a, b]).u32(), a);
+        assert_eq!(calls(&e, VERT_HANDLE_COPY), vec![vec![a, b]]);
+        assert_eq!(calls(&e, EDGE_HANDLE_COPY), vec![vec![a + 8, b + 8]]);
+        assert_eq!(
+            [
+                e.mem.u32(a + 0x14),
+                e.mem.u32(a + 0x18),
+                e.mem.u32(a + 0x1c)
+            ],
+            [7, 8, 9]
+        );
+    }
+
+    const SEARCH_VTABLE: u32 = 0x4700_0000;
+    const CONNECTIONS: u32 = 0x4700_1004;
+    const IS_GOAL: u32 = 0x4700_1008;
+
+    /// A search engine: node values (`fHeuristic`, `006b9130`), queue
+    /// buckets all 0; returns the engine and the `AStarSearch`.
+    fn search_engine() -> (Engine, u32) {
+        let mut e = bare(&[0x006a_1fb0, 0x0040_fca0]);
+        e.register(ARRAY_CLEAR, |e, a| {
+            if a[1] == 0 {
+                e.mem.set_u32(a[0] + 8, 0);
+            }
+            Ret::default()
+        });
+        e.register(0x0040_1020, |_, _| ret(0x4800_0000));
+        e.register(0x00aa_42e0, |_, _| ret(0x4800_0100));
+        e.register(ARRAY_SIZE, |e, a| ret(e.mem.u32(a[0] + 8)));
+        e.register(ARRAY_WORD_AT, |e, a| ret(element(e, a[0], a[1], 4)));
+        e.register(0x006b_9130, |e, a| st0(f64::from(e.mem.f32(a[0] + 4))));
+        e.register(0x006f_4790, |_, _| ret(0));
+        e.register(0x006b_9710, |e, a| {
+            st0(f64::from(e.mem.f32(a[0])) + f64::from(e.mem.f32(a[0] + 4)))
+        });
+        e.put_vtable(SEARCH_VTABLE, &[0, CONNECTIONS, IS_GOAL]);
+        let s = e.mem.alloc(0x2058);
+        e.mem.set_u32(s, SEARCH_VTABLE);
+        (e, s)
+    }
+
+    /// `GetNodeConnections` gives each node's `children`; `IsGoalNode` is
+    /// true for `goal`.
+    fn connect(e: &mut Engine, children: Vec<(u32, Vec<u32>)>, goal: u32) {
+        e.register_double(CONNECTIONS, move |e, a| {
+            let list = children
+                .iter()
+                .find(|(n, _)| *n == a[1])
+                .map(|(_, c)| c.clone())
+                .unwrap_or_default();
+            let b = e.mem.alloc(4 * list.len() as u32 + 4);
+            for (k, c) in list.iter().enumerate() {
+                e.mem.set_u32(b + 4 * k as u32, *c);
+            }
+            e.mem.set_u32(a[2] + 4, b);
+            e.mem.set_u32(a[2] + 8, list.len() as u32);
+            Ret::default()
+        });
+        e.register_double(IS_GOAL, move |_, a| ret(u32::from(a[1] == goal)));
+    }
+
+    fn node(e: &mut Engine, value: f32) -> u32 {
+        let n = e.mem.alloc(0x68);
+        e.mem.set_f32(n + 4, value);
+        n
+    }
+
+    #[test]
+    fn search_returns_the_goal_and_queues_children() {
+        let (mut e, s) = search_engine();
+        let [a, b, c] = [10.0, 5.0, 3.0].map(|v| node(&mut e, v));
+        connect(&mut e, vec![(a, vec![b, c])], c);
+        e.mem.set_u32(s + SEARCH_QUEUE + 4, a);
+        assert_eq!(e.call(0x006b_3a30, &args![s]).u32(), c);
+        assert_eq!(e.mem.u32(s + 0x2048), c, "the goal is the best node");
+        assert_eq!(e.mem.u32(b + 0x54), a);
+        assert_eq!(e.mem.u32(c + 0x54), a);
+        assert_eq!(e.mem.u32(s + SEARCH_QUEUE + 4), b, "b is still queued");
+        let clears = calls(&e, ARRAY_CLEAR);
+        assert_eq!(clears.last().unwrap()[1], 1, "scrap array destroyed");
+        assert_eq!(calls(&e, 0x00aa_42e0), vec![vec![0x4800_0000]]);
+    }
+
+    #[test]
+    fn search_without_goal_keeps_the_last_node_searched() {
+        let (mut e, s) = search_engine();
+        let [a, b] = [10.0, f32::NAN].map(|v| node(&mut e, v));
+        connect(&mut e, vec![(a, vec![b])], 0);
+        e.mem.set_u32(s + SEARCH_QUEUE + 4, a);
+        assert_eq!(e.call(0x006b_3a30, &args![s]).u32(), 0);
+        assert_eq!(e.mem.u32(s + 0x204c), b);
+        assert_eq!(e.mem.u32(s + 0x2048), a, "a NaN value is not below");
+    }
+
+    #[test]
+    fn search_with_an_empty_queue_finds_nothing() {
+        let (mut e, s) = search_engine();
+        connect(&mut e, vec![], 0);
+        e.mem.set_u32(s + 0x204c, 0x1234);
+        assert_eq!(e.call(0x006b_3a30, &args![s]).u32(), 0);
+        assert_eq!(e.mem.u32(s + 0x204c), 0);
+        assert!(calls(&e, IS_GOAL).is_empty());
+    }
+
+    #[test]
+    fn search_stops_when_a_child_is_the_parent() {
+        let (mut e, s) = search_engine();
+        let [a, b] = [10.0, 5.0].map(|v| node(&mut e, v));
+        connect(&mut e, vec![(a, vec![b])], 0);
+        e.mem.set_u32(a + 0x54, b);
+        e.mem.set_u32(s + SEARCH_QUEUE + 4, a);
+        assert_eq!(e.call(0x006b_3a30, &args![s]).u32(), 0);
+        assert!(calls(&e, 0x006f_4790).is_empty(), "nothing queued");
+    }
+
+    #[test]
+    fn search_in_a_tasklet_sleeps_every_50_nodes() {
+        let (mut e, s) = search_engine();
+        let chain: Vec<u32> = (0..51).map(|_| node(&mut e, 1.0)).collect();
+        let links = chain.windows(2).map(|w| (w[0], vec![w[1]])).collect();
+        connect(&mut e, links, 0);
+        e.mem.set_u8(s + 0x2054, 1);
+        e.mem.set_u32(s + SEARCH_QUEUE + 4, chain[0]);
+        assert_eq!(e.call(0x006b_3a30, &args![s]).u32(), 0);
+        assert_eq!(calls(&e, 0x0040_fca0), vec![vec![0]]);
+        assert_eq!(e.mem.u32(s + 0x204c), chain[50]);
+    }
+
+    #[test]
+    fn path_is_built_from_the_parent_chain() {
+        let mut e = bare(&[0x006a_8890, 0x006a_2630, 0x0069_85f0, 0x006c_f900]);
+        e.register(0x006a_1440, |e, a| ret(element(e, a[0], a[1], 12)));
+        let nodes = e.mem.alloc(0x10);
+        buffer(&mut e, nodes, 0x40);
+        let link_buffer = e.mem.alloc(0x200);
+        let links = test_array(&mut e, link_buffer, 0, 8);
+        let chain: Vec<u32> = (0..3).map(|_| e.mem.alloc(0x68)).collect();
+        for (k, n) in chain.iter().enumerate() {
+            e.mem.set_u32(n + 8, 0x100 + k as u32);
+            if k > 0 {
+                e.mem.set_u32(n + 0x54, chain[k - 1]);
+            }
+        }
+        let goal = chain[2];
+        assert!(e.call(0x006b_3cb0, &args![0u32, goal, nodes, links]).bool());
+        assert_eq!(calls(&e, 0x006a_8890), vec![vec![nodes, 3, 1]]);
+        assert_eq!(e.mem.u32(links.addr() + 8), 2);
+        for k in 0..3 {
+            assert_eq!(e.mem.u32(element(&e, nodes, k, 12)), 0x100 + k);
+        }
+        let firsts: Vec<Vec<u32>> = calls(&e, 0x0069_85f0).into_iter().step_by(2).collect();
+        assert_eq!(
+            firsts,
+            vec![
+                vec![link_buffer + 0x40, chain[2] + 0x14],
+                vec![link_buffer, chain[1] + 0x14]
+            ]
+        );
+        assert!(!e.call(0x006b_3cb0, &args![0u32, 0u32, nodes, links]).bool());
+    }
+
+    #[test]
+    fn heap_node_is_constructed_or_null() {
+        let mut e = bare(&[SELF, LOCATION_RECORD_CONSTRUCT]);
+        let block = e.mem.alloc(0x68);
+        e.mem.set_u32(block + 0x60, 9);
+        e.register_double(0x006a_1f90, move |_, _| ret(block));
+        assert_eq!(e.call(0x006b_3d90, &args![0x5000u32]).u32(), block);
+        assert_eq!(calls(&e, 0x006a_1f90), vec![vec![0x68, 0x5000]]);
+        assert_eq!(e.mem.u32(block + 0x60), 0);
+        e.register(0x006a_1f90, |_, _| ret(0));
+        assert_eq!(e.call(0x006b_3d90, &args![0x5000u32]).u32(), 0);
+        assert_eq!(calls(&e, SELF).len(), 2, "constructed once");
+    }
+
+    #[test]
+    fn node_map_is_cleared() {
+        let mut e = bare(&[0x0040_3d30]);
+        let m = e.mem.alloc(0x1fe0);
+        e.mem.set_u32(m + 0x1fdc, 5);
+        assert_eq!(e.call(0x006b_3de0, &args![m]).u32(), m);
+        assert_eq!(e.mem.u32(m + 0x1fdc), 0);
+        assert_eq!(calls(&e, 0x0040_3d30), vec![vec![m, 0, 0x1fdc]]);
+    }
+
+    #[test]
+    fn queue_keeps_each_bucket_in_value_order() {
+        let mut e = bare(&[]);
+        e.register(0x006f_4790, |_, _| ret(1));
+        e.register(0x006b_9710, |e, a| {
+            st0(f64::from(e.mem.f32(a[0])) + f64::from(e.mem.f32(a[0] + 4)))
+        });
+        let q = e.mem.alloc(0x54);
+        let slot = q + 8;
+        let [a, b, c, d] = [5.0, 3.0, 7.0, f32::NAN].map(|v| node(&mut e, v));
+        e.call(0x006b_3e10, &args![q, a]);
+        assert_eq!(e.mem.u32(slot), a);
+        assert_eq!(e.mem.u32(a + 0x58), slot);
+        e.call(0x006b_3e10, &args![q, b]);
+        assert_eq!(e.mem.u32(slot), b, "lower value first");
+        assert_eq!(e.mem.u32(b + 0x5c), a);
+        assert_eq!(e.mem.u32(a + 0x58), b + 0x5c);
+        e.call(0x006b_3e10, &args![q, c]);
+        assert_eq!(e.mem.u32(a + 0x5c), c, "highest value last");
+        assert_eq!(e.mem.u32(c + 0x58), a + 0x5c);
+        assert_eq!(e.mem.u32(c + 0x5c), 0);
+        e.call(0x006b_3e10, &args![q, d]);
+        assert_eq!(e.mem.u32(slot), d, "NaN stops at the head");
+        assert_eq!(e.mem.u32(b + 0x58), d + 0x5c);
+    }
+
+    #[test]
+    fn node_array_initialiser_prepares_with_006d03d0() {
+        let mut e = bare(&[0x006d_03d0]);
+        let (this, buffer) = array(&mut e);
+        e.call(0x006b_3f40, &args![this, 2u32, 5u32]);
+        assert_eq!(e.get(this, BSSimpleArray::pBuffer), buffer);
+        assert_eq!(e.get(this, BSSimpleArray::iReservedSize), 5);
+        assert_eq!(e.get(this, BSSimpleArray::iSize), 5);
+        assert_eq!(calls(&e, 0x006d_03d0), vec![vec![this.addr(), buffer, 5]]);
+        e.call(0x006b_3f40, &args![this, 0u32, 0u32]);
+        assert_eq!(e.get(this, BSSimpleArray::pBuffer), 0);
+        assert_eq!(calls(&e, 0x006d_03d0).len(), 1);
+    }
+
+    fn full_check(e: &mut Engine) {
+        e.register(0x0043_8b90, |e, a| {
+            ret(u32::from(e.mem.u32(a[0] + 8) == e.mem.u32(a[0] + 0xc)))
+        });
+        e.register(0x009a_3910, |_, _| ret(16));
+    }
+
+    #[test]
+    fn link_index_grows_the_array_when_full() {
+        let mut e = bare(&[]);
+        full_check(&mut e);
+        let a = test_array(&mut e, 0, 0, 0);
+        assert_eq!(e.call(0x006b_3fd0, &args![a]).u32(), 0);
+        assert_eq!(calls(&e, ARRAY_ALLOCATE), vec![vec![a.addr(), 4]]);
+        assert_eq!(e.mem.u32(a.addr() + 0xc), 4);
+        assert_eq!(e.call(0x006b_3fd0, &args![a]).u32(), 1, "not full");
+        e.mem.set_u32(a.addr() + 8, 4);
+        let old = e.mem.u32(a.addr() + 4);
+        assert_eq!(e.call(0x006b_3fd0, &args![a]).u32(), 4);
+        assert_eq!(calls(&e, ARRAY_REALLOCATE), vec![vec![a.addr(), old, 16]]);
+        assert_eq!(e.mem.u32(a.addr() + 4), REALLOCATED);
+        assert_eq!(e.mem.u32(a.addr() + 0xc), 16);
+        assert_eq!(e.mem.u32(a.addr() + 8), 5);
+    }
+
+    #[test]
+    fn edge_vert_index_grows_with_006f9eb0() {
+        let mut e = bare(&[0x006f_9eb0]);
+        full_check(&mut e);
+        let a = test_array(&mut e, 0x100, 4, 4);
+        assert_eq!(e.call(0x006b_4060, &args![a]).u32(), 4);
+        assert_eq!(calls(&e, 0x006f_9eb0), vec![vec![a.addr(), 16, 4]]);
+        assert_eq!(e.mem.u32(a.addr() + 0xc), 16);
+        let b = test_array(&mut e, 0, 0, 0);
+        assert_eq!(e.call(0x006b_4060, &args![b]).u32(), 0);
+        assert_eq!(calls(&e, ARRAY_ALLOCATE), vec![vec![b.addr(), 4]]);
+    }
+
+    #[test]
+    fn edge_verts_are_constructed_in_place() {
+        let mut e = bare(&[SELF, EDGE_HANDLE_CONSTRUCT]);
+        e.register(0x006e_6da0, |_, a| ret(a[1]));
+        let b = e.mem.alloc(0x40);
+        e.call(0x006b_40f0, &args![0u32, b, 2u32]);
+        assert_eq!(
+            calls(&e, 0x006e_6da0),
+            vec![vec![0x20, b], vec![0x20, b + 0x20]]
+        );
+        assert_eq!(
+            calls(&e, EDGE_HANDLE_CONSTRUCT),
+            vec![vec![b + 8], vec![b + 0x28]]
+        );
+        e.register(0x006e_6da0, |_, _| ret(0));
+        e.call(0x006b_40f0, &args![0u32, b, 1u32]);
+        assert_eq!(calls(&e, SELF).len(), 2, "a null slot is not constructed");
+    }
+
+    #[test]
+    fn edge_vert_array_initialiser_constructs_the_elements() {
+        let mut e = bare(&[SELF, EDGE_HANDLE_CONSTRUCT]);
+        e.register(0x006e_6da0, |_, a| ret(a[1]));
+        let (this, buffer) = array(&mut e);
+        e.call(0x006b_4190, &args![this, 0u32, 2u32]);
+        assert_eq!(e.get(this, BSSimpleArray::iSize), 2);
+        assert_eq!(e.get(this, BSSimpleArray::iReservedSize), 2);
+        assert_eq!(
+            calls(&e, 0x006e_6da0),
+            vec![vec![0x20, buffer], vec![0x20, buffer + 0x20]]
+        );
+    }
+
+    #[test]
+    fn scrap_array_takes_the_thread_scrap_heap() {
+        let mut e = bare(&[]);
+        e.register(0x0040_1020, |_, _| ret(0x777));
+        e.register(0x00aa_42e0, |_, _| ret(0x888));
+        let a = e.mem.alloc(0x14);
+        e.mem.set_u32(a + 8, 3);
+        assert_eq!(e.call(0x006b_4220, &args![a]).u32(), a);
+        assert_eq!(e.mem.u32(a), VTABLE_ASTAR_NODE_SCRAP_ARRAY);
+        assert_eq!(e.mem.u32(a + 0x10), 0x888);
+        assert_eq!(e.mem.u32(a + 8), 0);
+        assert_eq!(calls(&e, 0x00aa_42e0), vec![vec![0x777]]);
+    }
+
+    #[test]
+    fn astar_node_array_destructor() {
+        let mut e = bare(&[ARRAY_CLEAR]);
+        check_destroyed(&mut e, 0x006b_42a0, VTABLE_ASTAR_NODE_ARRAY);
+    }
+
+    #[test]
+    fn scrap_array_destructor_runs_the_base_destructor() {
+        let mut e = bare(&[ARRAY_CLEAR]);
+        let a = e.mem.alloc(0x14);
+        e.call(0x006b_42f0, &args![a]);
+        assert_eq!(e.mem.u32(a), VTABLE_ASTAR_NODE_ARRAY);
+        assert_eq!(calls(&e, ARRAY_CLEAR), vec![vec![a, 1], vec![a, 1]]);
+    }
+
+    #[test]
+    fn queue_pops_the_first_non_empty_bucket() {
+        let mut e = bare(&[]);
+        let q = e.mem.alloc(0x54);
+        assert_eq!(e.call(0x006b_4350, &args![q]).u32(), 0);
+        let (a, b) = (e.mem.alloc(0x68), e.mem.alloc(0x68));
+        let slot = q + 4 + 3 * 4;
+        e.mem.set_u32(slot, a);
+        e.mem.set_u32(a + 0x58, slot);
+        e.mem.set_u32(a + 0x5c, b);
+        e.mem.set_u32(b + 0x58, a + 0x5c);
+        e.mem.set_u32(q + 4 + 19 * 4, 0x9999);
+        assert_eq!(e.call(0x006b_4350, &args![q]).u32(), a);
+        assert_eq!(e.mem.u32(slot), b);
+        assert_eq!(e.mem.u32(b + 0x58), slot);
+        assert_eq!([e.mem.u32(a + 0x58), e.mem.u32(a + 0x5c)], [0, 0]);
+        assert_eq!(e.call(0x006b_4350, &args![q]).u32(), b);
+        assert_eq!(e.mem.u32(slot), 0);
+    }
+
+    #[test]
+    fn astar_node_constructor_clears_the_node() {
+        let mut e = bare(&[SELF, LOCATION_RECORD_CONSTRUCT]);
+        let n = e.mem.alloc(0x68);
+        for at in (0..0x68).step_by(4) {
+            e.mem.set_u32(n + at, 0xffff_ffff);
+        }
+        assert_eq!(e.call(0x006b_43f0, &args![n]).u32(), n);
+        assert_eq!([e.mem.u32(n), e.mem.u32(n + 4)], [0, 0]);
+        assert_eq!(e.mem.u32(n + 8), 0xffff_ffff, "NodeData is left");
+        for at in [0x54, 0x58, 0x5c, 0x60, 0x64] {
+            assert_eq!(e.mem.u32(n + at), 0);
+        }
+        assert_eq!(
+            calls(&e, LOCATION_RECORD_CONSTRUCT),
+            vec![vec![n + 0x24], vec![n + 0x3c]]
+        );
+    }
+
+    #[test]
+    fn link_array_set_size_branches() {
+        let mut e = bare(&[ARRAY_CLEAR, 0x006a_2630, 0x0072_ba80, 0x004a_9b50]);
+        e.register(0x006a_8500, |e, a| {
+            e.mem.set_u32(a[0] + 4, 0);
+            Ret::default()
+        });
+        let a = test_array(&mut e, 0, 0, 0);
+        let p = a.addr();
+        e.call(0x006b_4450, &args![a, 0u32, 1u32]);
+        assert_eq!(calls(&e, ARRAY_CLEAR), vec![vec![p, 1]]);
+        e.call(0x006b_4450, &args![a, 8u32, 0u32]);
+        let buffer = e.mem.u32(p + 4);
+        assert_eq!(calls(&e, ARRAY_ALLOCATE), vec![vec![p, 8]]);
+        assert_eq!(calls(&e, 0x006a_2630), vec![vec![p, buffer, 8]]);
+        assert_eq!([e.mem.u32(p + 8), e.mem.u32(p + 0xc)], [8, 8]);
+        e.call(0x006b_4450, &args![a, 6u32, 0u32]);
+        assert_eq!(calls(&e, 0x0072_ba80), vec![vec![p, buffer + 0x180, 2]]);
+        assert_eq!([e.mem.u32(p + 8), e.mem.u32(p + 0xc)], [6, 8]);
+        e.call(0x006b_4450, &args![a, 7u32, 0u32]);
+        assert_eq!(calls(&e, 0x006a_2630)[1], vec![p, buffer + 0x180, 1]);
+        e.call(0x006b_4450, &args![a, 2u32, 1u32]);
+        assert_eq!([e.mem.u32(p + 8), e.mem.u32(p + 0xc)], [2, 2], "shrunk");
+        assert_eq!(calls(&e, 0x004a_9b50).len(), 1, "moved to a new buffer");
+        let moved = e.mem.u32(p + 4);
+        e.call(0x006b_4450, &args![a, 4u32, 0u32]);
+        assert_eq!(
+            calls(&e, ARRAY_REALLOCATE),
+            vec![vec![p, moved, 4]],
+            "size 2 = reserve 2: reallocated"
+        );
+        assert_eq!(e.mem.u32(p + 4), REALLOCATED);
+        assert_eq!([e.mem.u32(p + 8), e.mem.u32(p + 0xc)], [4, 4]);
+    }
+
+    #[test]
+    fn link_buffer_change_branches() {
+        let mut e = bare(&[0x004a_9b50, 0x006a_8500]);
+        let a = test_array(&mut e, 0, 0, 0);
+        let p = a.addr();
+        e.call(0x006b_4590, &args![a, 4u32, 0u32]);
+        assert_ne!(e.mem.u32(p + 4), 0);
+        assert_eq!(e.mem.u32(p + 0xc), 4);
+        let old = e.mem.u32(p + 4);
+        e.call(0x006b_4590, &args![a, 8u32, 4u32]);
+        assert_eq!(calls(&e, ARRAY_REALLOCATE), vec![vec![p, old, 8]]);
+        assert_eq!(e.mem.u32(p + 4), REALLOCATED);
+        assert_eq!(e.mem.u32(p + 0xc), 4, "the caller sets the reserve");
+        e.call(0x006b_4590, &args![a, 8u32, 2u32]);
+        let fresh = e.mem.u32(p + 4);
+        assert_eq!(calls(&e, 0x004a_9b50), vec![vec![p, fresh, REALLOCATED, 2]]);
+        assert_eq!(calls(&e, 0x006a_8500), vec![vec![p]]);
+    }
+
+    #[test]
+    fn astar_node_array_constructor() {
+        let mut e = bare(&[]);
+        let a = check_constructed(&mut e, 0x006b_4670, VTABLE_ASTAR_NODE_ARRAY);
+        assert_eq!(e.mem.u32(a + 8), 0);
     }
 }
