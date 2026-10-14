@@ -31,15 +31,15 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 15816 | 23.9% |
+| translated | 15843 | 23.9% |
 | static init (table) | 15762 | 23.8% |
-| traced | 3873 | 5.8% |
+| traced | 3874 | 5.8% |
 | platform | 3361 | 5.1% |
-| library | 6179 | 9.3% |
-| open | 21268 | 32.1% |
+| library | 6178 | 9.3% |
+| open | 21241 | 32.1% |
 | **all** | **66259** | |
 
-Translation totals count markers, not complete behavior. **1125** engine functions
+Translation totals count markers, not complete behavior. **1130** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
@@ -70,6 +70,11 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `004391c0` | `crates/engine/src/units/fallout_shared/multiboundmarkerdata.rs:188` |
 | `00439410` | `crates/engine/src/units/fallout_shared/multiboundmarkerdata.rs:312` |
 | `00439490` | `crates/engine/src/units/fallout_shared/multiboundmarkerdata.rs:332` |
+| `0044c040` | `crates/engine/src/units/unplaced/run_0044c000.rs:155` |
+| `0044c1e0` | `crates/engine/src/units/unplaced/run_0044c000.rs:191` |
+| `0044c270` | `crates/engine/src/units/unplaced/run_0044c000.rs:200` |
+| `0044c3f0` | `crates/engine/src/units/unplaced/run_0044c000.rs:221` |
+| `0044c480` | `crates/engine/src/units/unplaced/run_0044c000.rs:229` |
 | `0045cf30` | `crates/engine/src/units/unplaced/run_0045cb90.rs:323` |
 | `0045cfe0` | `crates/engine/src/units/unplaced/run_0045cb90.rs:348` |
 | `0045d060` | `crates/engine/src/units/unplaced/run_0045cb90.rs:362` |
@@ -1170,9 +1175,9 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00ec5ec0` | `crates/engine/src/units/fallout_shared_magic/effectsetting.rs:348, crates/engine/src/units/unplaced/run_00471400.rs:87` |
 | `00ec8660` | `crates/engine/src/units/fallout_misc/bgssaveloadstructs.rs:412` |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 19249 (47.5%) are translated, run from the static-initializer table, or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 19276 (47.6%) are translated, run from the static-initializer table, or traced.
 
-Rust cites 37450 distinct `.text` addresses; 1280 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 37478 distinct `.text` addresses; 1280 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -1203,11 +1208,11 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Subsystem | Functions | KB | Named | translated | static init (table) | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 15762 | 22 | 0 | 5550 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 7313 | 0 | 759 | 0 | 0 | 2398 | 77.1% |
+| fallout shared | 10470 | 2065 | 3149 | 7313 | 0 | 763 | 0 | 0 | 2394 | 77.1% |
 | Havok SDK | 6591 | 1555 | 3499 | 54 | 0 | 127 | 0 | 0 | 6410 | 2.7% |
 | fallout/ai | 4849 | 1475 | 1888 | 3017 | 0 | 471 | 0 | 0 | 1361 | 71.9% |
 | fallout/interface | 2645 | 991 | 1247 | 1307 | 0 | 589 | 0 | 0 | 749 | 71.7% |
-| (unplaced) | 2353 | 470 | 0 | 283 | 0 | 423 | 4 | 0 | 1643 | 30.0% |
+| (unplaced) | 2353 | 470 | 0 | 310 | 0 | 419 | 4 | 0 | 1620 | 31.0% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 1182 | 0 | 145 | 0 | 0 | 461 | 74.2% |
 | NiMain | 1619 | 261 | 1134 | 134 | 0 | 110 | 0 | 0 | 1375 | 15.1% |
 | BSHavok | 1615 | 316 | 1134 | 162 | 0 | 128 | 0 | 0 | 1325 | 18.0% |
@@ -1218,7 +1223,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | NiXenonRenderer | 965 | 172 | 298 | 1 | 0 | 17 | 947 | 0 | 0 | - |
 | SpeedTree | 732 | 234 | 151 | 0 | 0 | 122 | 610 | 0 | 0 | - |
 | fallout/magic | 705 | 162 | 378 | 42 | 0 | 77 | 0 | 0 | 586 | 16.9% |
-| LIBCMT | 682 | 124 | 503 | 0 | 0 | 33 | 36 | 613 | 0 | - |
+| LIBCMT | 682 | 124 | 503 | 0 | 0 | 34 | 36 | 612 | 0 | - |
 | NiParticle | 649 | 89 | 540 | 0 | 0 | 68 | 0 | 0 | 581 | 10.5% |
 | fallout shared/havok | 478 | 60 | 110 | 161 | 0 | 67 | 0 | 0 | 250 | 47.7% |
 | FaceGen | 474 | 164 | 51 | 0 | 0 | 11 | 0 | 0 | 463 | 2.3% |
@@ -1263,7 +1268,7 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | 1 | 143 | 117 | 128 | 0 | 9 | 3 | 0 | 3 |
 | 2 | 1575 | 583 | 1357 | 0 | 172 | 22 | 0 | 24 |
-| 3 | 4973 | 1303 | 4213 | 0 | 514 | 141 | 26 | 79 |
+| 3 | 4973 | 1303 | 4216 | 0 | 511 | 141 | 26 | 79 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
