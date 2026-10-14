@@ -33,8 +33,11 @@
 //!   request and node layouts are the ones in `pathfind.rs` and
 //!   `pathingsolution.rs`.
 //!
-//! Translated so far: `006c94c0` to `006cf1b0` (60 functions). The next
-//! session continues at `006cf200`.
+//! All 89 functions of the unit, `006c94c0` to `006d0310`, are translated
+//! (the array template instances at the end: constructors, destructors,
+//! allocators and scalar deleting destructors, each named by the RTTI of
+//! the vtable it stores). Earlier functions still reach the later ones by
+//! address (`EDGE_ARRAY_CONSTRUCT`, ...), which runs the same translation.
 
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -409,6 +412,76 @@ const PATH_SMOOTHER_DESTRUCT: u32 = 0x006e_d220;
 const POV_SMOOTHER_CONSTRUCT: u32 = 0x006a_d4c0;
 const POV_SMOOTHER_RUN: u32 = 0x006a_d770;
 const POV_SMOOTHER_DESTRUCT: u32 = 0x006a_d690;
+
+// Vtables of the array template instances this file constructs and
+// destroys (each named by its RTTI type descriptor, read through the
+// complete object locator before the vtable).
+/// `.?AV?$BSSimpleArray@UNavMeshEdgeLocation@@$0EAA@@@`.
+const EDGE_ARRAY_VTABLE: u32 = 0x0106_c954;
+/// `.?AV?$BSScrapArray@PBVNavMeshInfo@@$0EAA@@@`.
+const INFO_SCRAP_ARRAY_VTABLE: u32 = 0x0106_c968;
+/// `.?AV?$BSScrapArray@PAVTESObjectREFR@@$0EAA@@@`.
+const REFERENCE_SCRAP_ARRAY_VTABLE: u32 = 0x0106_c97c;
+/// `.?AV?$BSScrapArray@_N$0EAA@@@`.
+const BOOL_SCRAP_ARRAY_VTABLE: u32 = 0x0106_c990;
+/// `.?AV?$BSScrapArray@UVirtualNodeSegment@PathBuilder@@$0EAA@@@`.
+const SEGMENT_SCRAP_ARRAY_VTABLE: u32 = 0x0106_c9a4;
+/// `.?AV?$BSSimpleArray@UNavMeshSearchLink@@$0EAA@@@`.
+const SEARCH_LINK_ARRAY_VTABLE: u32 = 0x0106_b8c8;
+/// `.?AV?$BSSimpleArray@UNavMeshSearchNode@@$0EAA@@@`.
+const SEARCH_NODE_ARRAY_VTABLE: u32 = 0x0106_b8a0;
+/// `.?AV?$BSScrapArray@UFastNavMeshTriHandle@@$0EAA@@@`.
+const TRIANGLE_HANDLE_SCRAP_ARRAY_VTABLE: u32 = 0x0106_c9cc;
+/// `.?AV?$BSScrapArray@H$0EAA@@@`.
+const INTEGER_SCRAP_ARRAY_VTABLE: u32 = 0x0106_c9f4;
+/// Offset of a scrap array's `ScrapHeap*`, after the `BSSimpleArray` part.
+const SCRAP_ARRAY_HEAP: u32 = 0x10;
+/// The alignment word the scrap arrays pass to `ScrapHeap::Allocate` (read
+/// from the exe; 4 in 1.4.0.525).
+const SCRAP_ALIGNMENT_010A2720: u32 = 0x010a_2720;
+
+/// The memory manager wrappers, cdecl: allocate (bytes), free (block),
+/// reallocate (block, bytes); `00401020` returns the memory manager
+/// (`011f6238`), the `ECX` of `MemoryManager::GetThreadScrapHeap`.
+const MEMORY_ALLOCATE: u32 = 0x0040_1000;
+const MEMORY_FREE: u32 = 0x0040_1030;
+const MEMORY_REALLOCATE: u32 = 0x0042_f5d0;
+const MEMORY_MANAGER_GET: u32 = 0x0040_1020;
+const GET_THREAD_SCRAP_HEAP: u32 = 0x00aa_42e0;
+/// `ScrapHeap::Allocate` (bytes, alignment) and `ScrapHeap::Deallocate`
+/// (block), thiscall on the heap.
+const SCRAP_HEAP_ALLOCATE: u32 = 0x00aa_54a0;
+const SCRAP_HEAP_DEALLOCATE: u32 = 0x00aa_5610;
+/// cdecl (destination, source, bytes): `memcpy`.
+const MEMORY_COPY: u32 = 0x0040_1460;
+/// `BSSimpleArray<bool>`: makes room for one element and returns its index
+/// (`006d0450`); placement-constructs `count` elements at an address
+/// (`006e1280`).
+const BOOL_ARRAY_ADD_SLOT: u32 = 0x006d_0450;
+const BOOL_ARRAY_CONSTRUCT_ELEMENTS: u32 = 0x006e_1280;
+/// `BSSimpleArray<NavMeshEdgeLocation>`: placement-constructs `count`
+/// elements at a buffer (thiscall, buffer, count).
+const EDGE_ARRAY_CONSTRUCT_ELEMENTS: u32 = 0x006d_05e0;
+/// Base `BSSimpleArray` constructors the scrap array constructors run
+/// first, and the destructors their destructors end with.
+const INFO_ARRAY_BASE_CONSTRUCT: u32 = 0x005e_0510;
+const REFERENCE_ARRAY_BASE_CONSTRUCT: u32 = 0x005e_04c0;
+const REFERENCE_ARRAY_BASE_DESTRUCT: u32 = 0x005e_04f0;
+const BOOL_ARRAY_BASE_CONSTRUCT: u32 = 0x006d_0420;
+const SEGMENT_ARRAY_BASE_CONSTRUCT: u32 = 0x006d_03a0;
+const SEGMENT_ARRAY_BASE_DESTRUCT: u32 = 0x006c_f820;
+const TRIANGLE_HANDLE_ARRAY_BASE_CONSTRUCT: u32 = 0x006d_04e0;
+const TRIANGLE_HANDLE_ARRAY_BASE_DESTRUCT: u32 = 0x006c_faa0;
+const INTEGER_ARRAY_BASE_CONSTRUCT: u32 = 0x0069_4de0;
+const INTEGER_ARRAY_BASE_DESTRUCT: u32 = 0x0069_4e10;
+/// The array initialisers (thiscall: capacity, size): clear the three
+/// words, allocate `max(capacity, size)` through virtual slot 4, construct
+/// `size` elements (bodies read in Ghidra).
+const ARRAY_INIT_006B3EB0: u32 = 0x006b_3eb0;
+const ARRAY_INIT_006B3F40: u32 = 0x006b_3f40;
+const ARRAY_INIT_0069B940: u32 = 0x0069_b940;
+const ARRAY_INIT_009A3D00: u32 = 0x009a_3d00;
+const ARRAY_INIT_006DC440: u32 = 0x006d_c440;
 /// The tasklet manager (`BSTaskletManager::QInstance`) and its virtual
 /// slot 0xC (thread id), the import the game asks the thread id from
 /// (`0040fc90`), the path manager (`PathManager::QInstance`) and its
@@ -3581,6 +3654,447 @@ pub fn fn_006cf1b0(e: &mut Engine, this: u32, location: u32) -> u32 {
     index
 }
 
+// Translated from 006cf200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSSimpleArray<NavMeshEdgeLocation,1024>` constructor (vtable
+/// `0106c954`, RTTI): stores the vtable and initialises the array
+/// (`fn_006d0310` with 0, 0); returns `this`.
+pub fn fn_006cf200(e: &mut Engine, this: u32) -> u32 {
+    e.mem.set_u32(this, EDGE_ARRAY_VTABLE);
+    fn_006d0310(e, this, 0, 0);
+    this
+}
+
+// Translated from 006cf230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSSimpleArray<NavMeshEdgeLocation,1024>` destructor: stores the
+/// vtable and clears the array, freeing the buffer (`008454f0` with 1).
+pub fn fn_006cf230(e: &mut Engine, this: u32) {
+    e.mem.set_u32(this, EDGE_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR_008454F0, &[this, 1]);
+}
+
+// Translated from 006cf250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NavMeshEdgeLocation,1024>::_Allocate` (Xbox PDB): a block
+/// of `count` 0x18-byte elements from the memory manager (`00401000`).
+pub fn bs_simple_array_nav_mesh_edge_location_allocate(
+    e: &mut Engine,
+    _this: u32,
+    count: u32,
+) -> u32 {
+    call_u32(
+        e,
+        MEMORY_ALLOCATE,
+        &[count.wrapping_mul(EDGE_LOCATION_SIZE)],
+    )
+}
+
+// Translated from 006cf280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NavMeshEdgeLocation,1024>::_Reallocate` (Xbox PDB):
+/// resizes `block` to `count` elements through the memory manager
+/// (`0042f5d0`) and returns what it returns (the new block, left in `EAX`).
+pub fn bs_simple_array_nav_mesh_edge_location_reallocate(
+    e: &mut Engine,
+    _this: u32,
+    block: u32,
+    count: u32,
+) -> u32 {
+    call_u32(
+        e,
+        MEMORY_REALLOCATE,
+        &[block, count.wrapping_mul(EDGE_LOCATION_SIZE)],
+    )
+}
+
+/// The functions a scrap array constructor of this file runs: its base
+/// `BSSimpleArray` constructor, its vtable and its array initialiser.
+#[derive(Clone, Copy)]
+struct ScrapArrayKind {
+    base: u32,
+    vtable: u32,
+    init: u32,
+}
+
+/// The constructor shape shared by the scrap arrays of this file: the base
+/// constructor, the scrap array's vtable, the scrap heap (`heap`, or the
+/// thread's scrap heap from `MemoryManager::GetThreadScrapHeap` when it is
+/// 0) at +0x10, then the array initialiser with `capacity` and `size`.
+/// Returns `this`.
+fn construct_scrap_array(
+    e: &mut Engine,
+    this: u32,
+    kind: ScrapArrayKind,
+    capacity: u32,
+    size: u32,
+    heap: u32,
+) -> u32 {
+    e.call(kind.base, &[this]);
+    e.mem.set_u32(this, kind.vtable);
+    let heap = if heap == 0 {
+        let manager = call_u32(e, MEMORY_MANAGER_GET, &[]);
+        call_u32(e, GET_THREAD_SCRAP_HEAP, &[manager])
+    } else {
+        heap
+    };
+    e.mem.set_u32(this + SCRAP_ARRAY_HEAP, heap);
+    e.call(kind.init, &[this, capacity, size]);
+    this
+}
+
+/// The destructor shape shared by the scrap arrays of this file: the scrap
+/// array's vtable, the clear that frees the buffer (`008454f0` with 1),
+/// then the base `BSSimpleArray` destructor.
+fn destruct_scrap_array(e: &mut Engine, this: u32, vtable: u32, base: u32) {
+    e.mem.set_u32(this, vtable);
+    e.call(ARRAY_CLEAR_008454F0, &[this, 1]);
+    e.call(base, &[this]);
+}
+
+// Translated from 006cf2a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006cf2a0 - the C++ exception-unwinding frame (FS:[0]) that destroys the base array when a callee throws is not translated
+/// The `BSScrapArray<NavMeshInfo const *,1024>` constructor (vtable
+/// `0106c968`, RTTI): base `005e0510`, the scrap heap (`heap` or the
+/// thread's), then `006b3eb0` (capacity, size). Returns `this`.
+pub fn fn_006cf2a0(e: &mut Engine, this: u32, capacity: u32, size: u32, heap: u32) -> u32 {
+    let kind = ScrapArrayKind {
+        base: INFO_ARRAY_BASE_CONSTRUCT,
+        vtable: INFO_SCRAP_ARRAY_VTABLE,
+        init: ARRAY_INIT_006B3EB0,
+    };
+    construct_scrap_array(e, this, kind, capacity, size, heap)
+}
+
+// Translated from 006cf3a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006cf3a0 - the C++ exception-unwinding frame (FS:[0]) that destroys the base array when a callee throws is not translated
+/// The `BSScrapArray<TESObjectREFR *,1024>` constructor (vtable
+/// `0106c97c`, RTTI): base `005e04c0`, the scrap heap (`heap` or the
+/// thread's), then `006b3eb0` (capacity, size). Returns `this`.
+pub fn fn_006cf3a0(e: &mut Engine, this: u32, capacity: u32, size: u32, heap: u32) -> u32 {
+    let kind = ScrapArrayKind {
+        base: REFERENCE_ARRAY_BASE_CONSTRUCT,
+        vtable: REFERENCE_SCRAP_ARRAY_VTABLE,
+        init: ARRAY_INIT_006B3EB0,
+    };
+    construct_scrap_array(e, this, kind, capacity, size, heap)
+}
+
+// Translated from 006cf440 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006cf440 - the C++ exception-unwinding frame (FS:[0]) that still runs the base destructor when the clear throws is not translated
+/// The `BSScrapArray<TESObjectREFR *,1024>` destructor: vtable `0106c97c`,
+/// clear with free (`008454f0`), then the base destructor `005e04f0`.
+pub fn fn_006cf440(e: &mut Engine, this: u32) {
+    destruct_scrap_array(
+        e,
+        this,
+        REFERENCE_SCRAP_ARRAY_VTABLE,
+        REFERENCE_ARRAY_BASE_DESTRUCT,
+    );
+}
+
+// Translated from 006cf520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<bool>`: appends the byte `*value` (a slot from
+/// `006d0450`, constructed by `006e1280`, then written); returns its index.
+pub fn fn_006cf520(e: &mut Engine, this: u32, value: u32) -> u32 {
+    let index = call_u32(e, BOOL_ARRAY_ADD_SLOT, &[this]);
+    let array = Ptr::<BSSimpleArray>::new(this);
+    let buffer = e.get(array, BSSimpleArray::pBuffer);
+    e.call(
+        BOOL_ARRAY_CONSTRUCT_ELEMENTS,
+        &[this, buffer.wrapping_add(index), 1],
+    );
+    let buffer = e.get(array, BSSimpleArray::pBuffer);
+    let byte = e.mem.u8(value);
+    e.mem.set_u8(buffer.wrapping_add(index), byte);
+    index
+}
+
+// Translated from 006cf570 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006cf570 - the C++ exception-unwinding frame (FS:[0]) that destroys the base array when a callee throws is not translated
+/// The `BSScrapArray<bool,1024>` constructor (vtable `0106c990`, RTTI):
+/// base `006d0420`, the scrap heap (`heap` or the thread's), then
+/// `0069b940` (capacity, size). Returns `this`.
+pub fn fn_006cf570(e: &mut Engine, this: u32, capacity: u32, size: u32, heap: u32) -> u32 {
+    let kind = ScrapArrayKind {
+        base: BOOL_ARRAY_BASE_CONSTRUCT,
+        vtable: BOOL_SCRAP_ARRAY_VTABLE,
+        init: ARRAY_INIT_0069B940,
+    };
+    construct_scrap_array(e, this, kind, capacity, size, heap)
+}
+
+// Translated from 006cf670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<bool,1024>::_Allocate` (Xbox PDB): `count` bytes from the
+/// array's scrap heap (`ScrapHeap::Allocate` with the alignment word at
+/// `010a2720`).
+pub fn bs_scrap_array_bool_allocate(e: &mut Engine, this: u32, count: u32) -> u32 {
+    let alignment = e.global::<u32>(SCRAP_ALIGNMENT_010A2720);
+    let heap = e.mem.u32(this + SCRAP_ARRAY_HEAP);
+    call_u32(e, SCRAP_HEAP_ALLOCATE, &[heap, count, alignment])
+}
+
+// Translated from 006cf6a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<bool,1024>::_Reallocate` (Xbox PDB): a new block of
+/// `count` bytes from the scrap heap, the array's size (`0044ddc0`) in
+/// bytes copied from `block` (`memcpy`), `block` given back to the heap;
+/// returns the new block.
+pub fn bs_scrap_array_bool_reallocate(e: &mut Engine, this: u32, block: u32, count: u32) -> u32 {
+    let alignment = e.global::<u32>(SCRAP_ALIGNMENT_010A2720);
+    let heap = e.mem.u32(this + SCRAP_ARRAY_HEAP);
+    let fresh = call_u32(e, SCRAP_HEAP_ALLOCATE, &[heap, count, alignment]);
+    let size = array_size(e, this);
+    e.call(MEMORY_COPY, &[fresh, block, size]);
+    let heap = e.mem.u32(this + SCRAP_ARRAY_HEAP);
+    e.call(SCRAP_HEAP_DEALLOCATE, &[heap, block]);
+    fresh
+}
+
+// Translated from 006cf780 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006cf780 - the C++ exception-unwinding frame (FS:[0]) that destroys the base array when a callee throws is not translated
+/// The `BSScrapArray<PathBuilder::VirtualNodeSegment,1024>` constructor
+/// (vtable `0106c9a4`, RTTI): base `006d03a0`, the scrap heap (`heap` or
+/// the thread's), then `006b3f40` (capacity, size). Returns `this`.
+pub fn fn_006cf780(e: &mut Engine, this: u32, capacity: u32, size: u32, heap: u32) -> u32 {
+    let kind = ScrapArrayKind {
+        base: SEGMENT_ARRAY_BASE_CONSTRUCT,
+        vtable: SEGMENT_SCRAP_ARRAY_VTABLE,
+        init: ARRAY_INIT_006B3F40,
+    };
+    construct_scrap_array(e, this, kind, capacity, size, heap)
+}
+
+// Translated from 006cf840 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006cf840 - the C++ exception-unwinding frame (FS:[0]) that still runs the base destructor when the clear throws is not translated
+/// The `BSScrapArray<PathBuilder::VirtualNodeSegment,1024>` destructor:
+/// vtable `0106c9a4`, clear with free (`008454f0`), then the base
+/// destructor `006cf820`.
+pub fn fn_006cf840(e: &mut Engine, this: u32) {
+    destruct_scrap_array(
+        e,
+        this,
+        SEGMENT_SCRAP_ARRAY_VTABLE,
+        SEGMENT_ARRAY_BASE_DESTRUCT,
+    );
+}
+
+// Translated from 006cf9a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSSimpleArray<NavMeshSearchLink,1024>` constructor (vtable
+/// `0106b8c8`, RTTI): stores the vtable and runs `006b3f40` (capacity,
+/// size); returns `this`.
+pub fn fn_006cf9a0(e: &mut Engine, this: u32, capacity: u32, size: u32) -> u32 {
+    e.mem.set_u32(this, SEARCH_LINK_ARRAY_VTABLE);
+    e.call(ARRAY_INIT_006B3F40, &[this, capacity, size]);
+    this
+}
+
+// Translated from 006cf9d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSSimpleArray<NavMeshSearchNode,1024>` constructor (vtable
+/// `0106b8a0`, RTTI): stores the vtable and runs `009a3d00` (capacity,
+/// size); returns `this`.
+pub fn fn_006cf9d0(e: &mut Engine, this: u32, capacity: u32, size: u32) -> u32 {
+    e.mem.set_u32(this, SEARCH_NODE_ARRAY_VTABLE);
+    e.call(ARRAY_INIT_009A3D00, &[this, capacity, size]);
+    this
+}
+
+// Translated from 006cfa00 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006cfa00 - the C++ exception-unwinding frame (FS:[0]) that destroys the base array when a callee throws is not translated
+/// The `BSScrapArray<FastNavMeshTriHandle,1024>` constructor (vtable
+/// `0106c9cc`, RTTI): base `006d04e0`, the scrap heap (`heap` or the
+/// thread's), then `006dc440` (capacity, size). Returns `this`.
+pub fn fn_006cfa00(e: &mut Engine, this: u32, capacity: u32, size: u32, heap: u32) -> u32 {
+    let kind = ScrapArrayKind {
+        base: TRIANGLE_HANDLE_ARRAY_BASE_CONSTRUCT,
+        vtable: TRIANGLE_HANDLE_SCRAP_ARRAY_VTABLE,
+        init: ARRAY_INIT_006DC440,
+    };
+    construct_scrap_array(e, this, kind, capacity, size, heap)
+}
+
+// Translated from 006cfac0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006cfac0 - the C++ exception-unwinding frame (FS:[0]) that still runs the base destructor when the clear throws is not translated
+/// The `BSScrapArray<FastNavMeshTriHandle,1024>` destructor: vtable
+/// `0106c9cc`, clear with free (`008454f0`), then the base destructor
+/// `006cfaa0`.
+pub fn fn_006cfac0(e: &mut Engine, this: u32) {
+    destruct_scrap_array(
+        e,
+        this,
+        TRIANGLE_HANDLE_SCRAP_ARRAY_VTABLE,
+        TRIANGLE_HANDLE_ARRAY_BASE_DESTRUCT,
+    );
+}
+
+// Translated from 006cfb20 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006cfb20 - the C++ exception-unwinding frame (FS:[0]) that destroys the base array when a callee throws is not translated
+/// The `BSScrapArray<int,1024>` constructor (vtable `0106c9f4`, RTTI):
+/// base `00694de0`, the scrap heap (`heap` or the thread's), then
+/// `006b3eb0` (capacity, size). Returns `this`.
+pub fn fn_006cfb20(e: &mut Engine, this: u32, capacity: u32, size: u32, heap: u32) -> u32 {
+    let kind = ScrapArrayKind {
+        base: INTEGER_ARRAY_BASE_CONSTRUCT,
+        vtable: INTEGER_SCRAP_ARRAY_VTABLE,
+        init: ARRAY_INIT_006B3EB0,
+    };
+    construct_scrap_array(e, this, kind, capacity, size, heap)
+}
+
+// Translated from 006cfbc0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006cfbc0 - the C++ exception-unwinding frame (FS:[0]) that still runs the base destructor when the clear throws is not translated
+/// The `BSScrapArray<int,1024>` destructor: vtable `0106c9f4`, clear with
+/// free (`008454f0`), then the base destructor `00694e10`.
+pub fn fn_006cfbc0(e: &mut Engine, this: u32) {
+    destruct_scrap_array(
+        e,
+        this,
+        INTEGER_SCRAP_ARRAY_VTABLE,
+        INTEGER_ARRAY_BASE_DESTRUCT,
+    );
+}
+
+/// The tail of the scalar deleting destructors: when bit 0 of `flags` is
+/// set the object goes back to the memory manager (`00401030`). Returns
+/// `this`.
+fn free_when_flagged(e: &mut Engine, this: u32, flags: u32) -> u32 {
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &[this]);
+    }
+    this
+}
+
+// Translated from 006cfc80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NavMeshEdgeLocation,1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): `fn_006cf230`, then frees `this` when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn bs_simple_array_nav_mesh_edge_location_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: u32,
+    flags: u32,
+) -> u32 {
+    fn_006cf230(e, this);
+    free_when_flagged(e, this, flags)
+}
+
+// Translated from 006cfcb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<NavMeshInfo const *,1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): the destructor `006cf340` (vtable `0106c968`), then frees
+/// `this` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_scrap_array_nav_mesh_info_const_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: u32,
+    flags: u32,
+) -> u32 {
+    e.call(INFO_SCRAP_ARRAY_DESTRUCT, &[this]);
+    free_when_flagged(e, this, flags)
+}
+
+// Translated from 006cfce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<TESObjectREFR *,1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): `fn_006cf440`, then frees `this` when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn bs_scrap_array_tes_object_refr_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: u32,
+    flags: u32,
+) -> u32 {
+    fn_006cf440(e, this);
+    free_when_flagged(e, this, flags)
+}
+
+// Translated from 006cfd10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<PathBuilder::VirtualNodeSegment,1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): the destructor `006cf820` (vtable `0106c9b8`), then frees
+/// `this` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_simple_array_path_builder_virtual_node_segment_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: u32,
+    flags: u32,
+) -> u32 {
+    e.call(SEGMENT_ARRAY_BASE_DESTRUCT, &[this]);
+    free_when_flagged(e, this, flags)
+}
+
+// Translated from 006cfd40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<bool,1024>::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor `006cf610` (vtable `0106c990`), then frees `this` when bit 0
+/// of `flags` is set. Returns `this`.
+pub fn bs_scrap_array_bool_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: u32,
+    flags: u32,
+) -> u32 {
+    e.call(BOOL_SCRAP_ARRAY_DESTRUCT, &[this]);
+    free_when_flagged(e, this, flags)
+}
+
+// Translated from 006cfd70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<PathBuilder::VirtualNodeSegment,1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): `fn_006cf840`, then frees `this` when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn bs_scrap_array_path_builder_virtual_node_segment_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: u32,
+    flags: u32,
+) -> u32 {
+    fn_006cf840(e, this);
+    free_when_flagged(e, this, flags)
+}
+
+// Translated from 006cfda0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<FastNavMeshTriHandle,1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): the destructor `006cfaa0` (vtable `0106c9e0`), then frees
+/// `this` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_simple_array_fast_nav_mesh_tri_handle_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: u32,
+    flags: u32,
+) -> u32 {
+    e.call(TRIANGLE_HANDLE_ARRAY_BASE_DESTRUCT, &[this]);
+    free_when_flagged(e, this, flags)
+}
+
+// Translated from 006cfdd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<FastNavMeshTriHandle,1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): `fn_006cfac0`, then frees `this` when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn bs_scrap_array_fast_nav_mesh_tri_handle_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: u32,
+    flags: u32,
+) -> u32 {
+    fn_006cfac0(e, this);
+    free_when_flagged(e, this, flags)
+}
+
+// Translated from 006cfe00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<int,1024>::_scalar_deleting_destructor_` (Xbox PDB):
+/// `fn_006cfbc0`, then frees `this` when bit 0 of `flags` is set. Returns
+/// `this`.
+pub fn bs_scrap_array_int_scalar_deleting_destructor(e: &mut Engine, this: u32, flags: u32) -> u32 {
+    fn_006cfbc0(e, this);
+    free_when_flagged(e, this, flags)
+}
+
+// Translated from 006d0310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NavMeshEdgeLocation>` initialiser: clears buffer, size
+/// and capacity; allocates `max(capacity, size)` elements through virtual
+/// slot 4 when that is not 0; constructs `size` elements (`006d05e0`) when
+/// `size` is not 0.
+pub fn fn_006d0310(e: &mut Engine, this: u32, capacity: u32, size: u32) {
+    let array = Ptr::<BSSimpleArray>::new(this);
+    e.set(array, BSSimpleArray::pBuffer, 0);
+    e.set(array, BSSimpleArray::iSize, 0);
+    e.set(array, BSSimpleArray::iReservedSize, 0);
+    let capacity = capacity.max(size);
+    if capacity != 0 {
+        let buffer = e.vcall(this, 4, &[capacity]).u32();
+        e.set(array, BSSimpleArray::pBuffer, buffer);
+        e.set(array, BSSimpleArray::iReservedSize, capacity);
+    }
+    if size != 0 {
+        let buffer = e.get(array, BSSimpleArray::pBuffer);
+        e.call(EDGE_ARRAY_CONSTRUCT_ELEMENTS, &[this, buffer, size]);
+        e.set(array, BSSimpleArray::iSize, size);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3714,6 +4228,74 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006cf120, fn_006cf120(u32, bool)),
         entry!(0x006cf180, fn_006cf180(u32) -> u32),
         entry!(0x006cf1b0, fn_006cf1b0(u32, u32) -> u32),
+        entry!(0x006cf200, fn_006cf200(u32) -> u32),
+        entry!(0x006cf230, fn_006cf230(u32)),
+        entry!(
+            0x006cf250,
+            bs_simple_array_nav_mesh_edge_location_allocate(u32, u32) -> u32
+        ),
+        entry!(
+            0x006cf280,
+            bs_simple_array_nav_mesh_edge_location_reallocate(u32, u32, u32) -> u32
+        ),
+        entry!(0x006cf2a0, fn_006cf2a0(u32, u32, u32, u32) -> u32),
+        entry!(0x006cf3a0, fn_006cf3a0(u32, u32, u32, u32) -> u32),
+        entry!(0x006cf440, fn_006cf440(u32)),
+        entry!(0x006cf520, fn_006cf520(u32, u32) -> u32),
+        entry!(0x006cf570, fn_006cf570(u32, u32, u32, u32) -> u32),
+        entry!(0x006cf670, bs_scrap_array_bool_allocate(u32, u32) -> u32),
+        entry!(0x006cf6a0, bs_scrap_array_bool_reallocate(u32, u32, u32) -> u32),
+        entry!(0x006cf780, fn_006cf780(u32, u32, u32, u32) -> u32),
+        entry!(0x006cf840, fn_006cf840(u32)),
+        entry!(0x006cf9a0, fn_006cf9a0(u32, u32, u32) -> u32),
+        entry!(0x006cf9d0, fn_006cf9d0(u32, u32, u32) -> u32),
+        entry!(0x006cfa00, fn_006cfa00(u32, u32, u32, u32) -> u32),
+        entry!(0x006cfac0, fn_006cfac0(u32)),
+        entry!(0x006cfb20, fn_006cfb20(u32, u32, u32, u32) -> u32),
+        entry!(0x006cfbc0, fn_006cfbc0(u32)),
+        entry!(
+            0x006cfc80,
+            bs_simple_array_nav_mesh_edge_location_scalar_deleting_destructor(u32, u32) -> u32
+        ),
+        entry!(
+            0x006cfcb0,
+            bs_scrap_array_nav_mesh_info_const_p_scalar_deleting_destructor(u32, u32) -> u32
+        ),
+        entry!(
+            0x006cfce0,
+            bs_scrap_array_tes_object_refr_p_scalar_deleting_destructor(u32, u32) -> u32
+        ),
+        entry!(
+            0x006cfd10,
+            bs_simple_array_path_builder_virtual_node_segment_scalar_deleting_destructor(
+                u32,
+                u32,
+            ) -> u32
+        ),
+        entry!(
+            0x006cfd40,
+            bs_scrap_array_bool_scalar_deleting_destructor(u32, u32) -> u32
+        ),
+        entry!(
+            0x006cfd70,
+            bs_scrap_array_path_builder_virtual_node_segment_scalar_deleting_destructor(
+                u32,
+                u32,
+            ) -> u32
+        ),
+        entry!(
+            0x006cfda0,
+            bs_simple_array_fast_nav_mesh_tri_handle_scalar_deleting_destructor(u32, u32) -> u32
+        ),
+        entry!(
+            0x006cfdd0,
+            bs_scrap_array_fast_nav_mesh_tri_handle_scalar_deleting_destructor(u32, u32) -> u32
+        ),
+        entry!(
+            0x006cfe00,
+            bs_scrap_array_int_scalar_deleting_destructor(u32, u32) -> u32
+        ),
+        entry!(0x006d0310, fn_006d0310(u32, u32, u32)),
     ]
 }
 
@@ -3909,6 +4491,32 @@ mod tests {
         PATH_MANAGER_INSTANCE,
         PATH_MANAGER_GET_RAY_CAST_PATH,
         PATH_MANAGER_GET_RAY_CAST_PATH_TO_NAV_MESH,
+        MEMORY_ALLOCATE,
+        MEMORY_FREE,
+        MEMORY_REALLOCATE,
+        MEMORY_MANAGER_GET,
+        GET_THREAD_SCRAP_HEAP,
+        SCRAP_HEAP_ALLOCATE,
+        SCRAP_HEAP_DEALLOCATE,
+        MEMORY_COPY,
+        BOOL_ARRAY_ADD_SLOT,
+        BOOL_ARRAY_CONSTRUCT_ELEMENTS,
+        EDGE_ARRAY_CONSTRUCT_ELEMENTS,
+        INFO_ARRAY_BASE_CONSTRUCT,
+        REFERENCE_ARRAY_BASE_CONSTRUCT,
+        REFERENCE_ARRAY_BASE_DESTRUCT,
+        BOOL_ARRAY_BASE_CONSTRUCT,
+        SEGMENT_ARRAY_BASE_CONSTRUCT,
+        SEGMENT_ARRAY_BASE_DESTRUCT,
+        TRIANGLE_HANDLE_ARRAY_BASE_CONSTRUCT,
+        TRIANGLE_HANDLE_ARRAY_BASE_DESTRUCT,
+        INTEGER_ARRAY_BASE_CONSTRUCT,
+        INTEGER_ARRAY_BASE_DESTRUCT,
+        ARRAY_INIT_006B3EB0,
+        ARRAY_INIT_006B3F40,
+        ARRAY_INIT_0069B940,
+        ARRAY_INIT_009A3D00,
+        ARRAY_INIT_006DC440,
     ];
 
     /// Globals the code reads (mapped zeroed by the fixture), with sizes.
@@ -3932,6 +4540,7 @@ mod tests {
         (LARGE_RADIUS_0106C948, 8),
         (GROUND_OFFSET_0104F2F0, 8),
         (DOOR_REACH_0101E33C, 4),
+        (SCRAP_ALIGNMENT_010A2720, 4),
     ];
 
     /// The tasklet manager's thread check (vtable slot 0xC) in the tests.
@@ -5732,5 +6341,392 @@ mod tests {
             vec![vec![array, buffer + 0x50, 1]]
         );
         assert_eq!(calls(e, LOCATION_ASSIGN), vec![vec![buffer + 0x50, 0x500]]);
+    }
+
+    /// Gives `object` a vtable whose slot 4 is the double `slot4`, which
+    /// returns `buffer`.
+    fn vtable_slot4(e: &mut Engine, object: u32, slot4: u32, buffer: u32) {
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(object, vtable);
+        e.mem.set_u32(vtable + 4, slot4);
+        returns(e, slot4, buffer);
+    }
+
+    #[test]
+    fn fn_006cf200_constructs_an_edge_array() {
+        let mut w = world();
+        let e = &mut w.e;
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u32(array + 4, 0x77);
+        assert_eq!(fn_006cf200(e, array), array);
+        assert_eq!(e.mem.u32(array), EDGE_ARRAY_VTABLE);
+        assert_eq!(
+            (
+                e.mem.u32(array + 4),
+                e.mem.u32(array + 8),
+                e.mem.u32(array + 0xc)
+            ),
+            (0, 0, 0)
+        );
+        assert!(calls(e, EDGE_ARRAY_CONSTRUCT_ELEMENTS).is_empty());
+    }
+
+    #[test]
+    fn fn_006cf230_destroys_an_edge_array() {
+        let mut w = world();
+        let e = &mut w.e;
+        let array = e.mem.alloc(0x10);
+        fn_006cf230(e, array);
+        assert_eq!(e.mem.u32(array), EDGE_ARRAY_VTABLE);
+        assert_eq!(calls(e, ARRAY_CLEAR_008454F0), vec![vec![array, 1]]);
+    }
+
+    #[test]
+    fn edge_array_allocate_takes_0x18_bytes_per_element() {
+        let mut w = world();
+        let e = &mut w.e;
+        returns(e, MEMORY_ALLOCATE, 0x4400);
+        assert_eq!(
+            bs_simple_array_nav_mesh_edge_location_allocate(e, 0x100, 3),
+            0x4400
+        );
+        assert_eq!(calls(e, MEMORY_ALLOCATE), vec![vec![0x48]]);
+    }
+
+    #[test]
+    fn edge_array_reallocate_returns_the_new_block() {
+        let mut w = world();
+        let e = &mut w.e;
+        returns(e, MEMORY_REALLOCATE, 0x4800);
+        assert_eq!(
+            bs_simple_array_nav_mesh_edge_location_reallocate(e, 0x100, 0x4400, 5),
+            0x4800
+        );
+        assert_eq!(calls(e, MEMORY_REALLOCATE), vec![vec![0x4400, 0x78]]);
+    }
+
+    /// Checks a scrap array constructor: the base constructor first (its
+    /// vtable overwritten), the given heap kept, the thread's scrap heap
+    /// taken for 0, and the initialiser's arguments.
+    fn check_scrap_constructor(
+        construct: fn(&mut Engine, u32, u32, u32, u32) -> u32,
+        base: u32,
+        vtable: u32,
+        init: u32,
+    ) {
+        let mut w = world();
+        let e = &mut w.e;
+        e.register(base, |e, a| {
+            e.mem.set_u32(a[0], 0xdead);
+            ret(a[0])
+        });
+        let array = e.mem.alloc(0x14);
+        assert_eq!(construct(e, array, 0x14, 2, 0x5ca7), array);
+        assert_eq!(e.mem.u32(array), vtable);
+        assert_eq!(e.mem.u32(array + 0x10), 0x5ca7);
+        assert_eq!(calls(e, base), vec![vec![array]]);
+        assert_eq!(calls(e, init), vec![vec![array, 0x14, 2]]);
+        assert!(calls(e, GET_THREAD_SCRAP_HEAP).is_empty());
+        returns(e, MEMORY_MANAGER_GET, 0x011f_6238);
+        returns(e, GET_THREAD_SCRAP_HEAP, 0x6000);
+        construct(e, array, 0, 0, 0);
+        assert_eq!(e.mem.u32(array + 0x10), 0x6000);
+        assert_eq!(calls(e, GET_THREAD_SCRAP_HEAP), vec![vec![0x011f_6238]]);
+        assert_eq!(calls(e, init)[1], vec![array, 0, 0]);
+    }
+
+    /// Checks a scrap array destructor: vtable, clear with free, base.
+    fn check_scrap_destructor(destruct: fn(&mut Engine, u32), vtable: u32, base: u32) {
+        let mut w = world();
+        let e = &mut w.e;
+        let array = e.mem.alloc(0x14);
+        destruct(e, array);
+        assert_eq!(e.mem.u32(array), vtable);
+        assert_eq!(calls(e, ARRAY_CLEAR_008454F0), vec![vec![array, 1]]);
+        assert_eq!(calls(e, base), vec![vec![array]]);
+    }
+
+    #[test]
+    fn fn_006cf2a0_constructs_an_info_scrap_array() {
+        check_scrap_constructor(
+            fn_006cf2a0,
+            INFO_ARRAY_BASE_CONSTRUCT,
+            INFO_SCRAP_ARRAY_VTABLE,
+            ARRAY_INIT_006B3EB0,
+        );
+    }
+
+    #[test]
+    fn fn_006cf3a0_constructs_a_reference_scrap_array() {
+        check_scrap_constructor(
+            fn_006cf3a0,
+            REFERENCE_ARRAY_BASE_CONSTRUCT,
+            REFERENCE_SCRAP_ARRAY_VTABLE,
+            ARRAY_INIT_006B3EB0,
+        );
+    }
+
+    #[test]
+    fn fn_006cf440_destroys_a_reference_scrap_array() {
+        check_scrap_destructor(
+            fn_006cf440,
+            REFERENCE_SCRAP_ARRAY_VTABLE,
+            REFERENCE_ARRAY_BASE_DESTRUCT,
+        );
+    }
+
+    #[test]
+    fn fn_006cf520_appends_a_byte() {
+        let mut w = world();
+        let e = &mut w.e;
+        let array = e.mem.alloc(0x14);
+        let buffer = fill_array(e, array, 1, 8);
+        returns(e, BOOL_ARRAY_ADD_SLOT, 5);
+        let value = e.mem.alloc(4);
+        e.mem.set_u8(value, 1);
+        assert_eq!(fn_006cf520(e, array, value), 5);
+        assert_eq!(
+            calls(e, BOOL_ARRAY_CONSTRUCT_ELEMENTS),
+            vec![vec![array, buffer + 5, 1]]
+        );
+        assert_eq!(e.mem.u8(buffer + 5), 1);
+        assert_eq!(e.mem.u8(buffer + 4), 0);
+    }
+
+    #[test]
+    fn fn_006cf570_constructs_a_bool_scrap_array() {
+        check_scrap_constructor(
+            fn_006cf570,
+            BOOL_ARRAY_BASE_CONSTRUCT,
+            BOOL_SCRAP_ARRAY_VTABLE,
+            ARRAY_INIT_0069B940,
+        );
+    }
+
+    #[test]
+    fn bool_scrap_array_allocate_uses_the_scrap_heap() {
+        let mut w = world();
+        let e = &mut w.e;
+        e.set_global::<u32>(SCRAP_ALIGNMENT_010A2720, 4);
+        let array = e.mem.alloc(0x14);
+        e.mem.set_u32(array + 0x10, 0x6000);
+        returns(e, SCRAP_HEAP_ALLOCATE, 0x6100);
+        assert_eq!(bs_scrap_array_bool_allocate(e, array, 9), 0x6100);
+        assert_eq!(calls(e, SCRAP_HEAP_ALLOCATE), vec![vec![0x6000, 9, 4]]);
+    }
+
+    #[test]
+    fn bool_scrap_array_reallocate_copies_and_frees() {
+        let mut w = world();
+        let e = &mut w.e;
+        e.set_global::<u32>(SCRAP_ALIGNMENT_010A2720, 4);
+        let array = e.mem.alloc(0x14);
+        e.mem.set_u32(array + 8, 3);
+        e.mem.set_u32(array + 0x10, 0x6000);
+        returns(e, SCRAP_HEAP_ALLOCATE, 0x6200);
+        assert_eq!(bs_scrap_array_bool_reallocate(e, array, 0x6100, 8), 0x6200);
+        assert_eq!(calls(e, SCRAP_HEAP_ALLOCATE), vec![vec![0x6000, 8, 4]]);
+        assert_eq!(calls(e, MEMORY_COPY), vec![vec![0x6200, 0x6100, 3]]);
+        assert_eq!(calls(e, SCRAP_HEAP_DEALLOCATE), vec![vec![0x6000, 0x6100]]);
+    }
+
+    #[test]
+    fn fn_006cf780_constructs_a_segment_scrap_array() {
+        check_scrap_constructor(
+            fn_006cf780,
+            SEGMENT_ARRAY_BASE_CONSTRUCT,
+            SEGMENT_SCRAP_ARRAY_VTABLE,
+            ARRAY_INIT_006B3F40,
+        );
+    }
+
+    #[test]
+    fn fn_006cf840_destroys_a_segment_scrap_array() {
+        check_scrap_destructor(
+            fn_006cf840,
+            SEGMENT_SCRAP_ARRAY_VTABLE,
+            SEGMENT_ARRAY_BASE_DESTRUCT,
+        );
+    }
+
+    #[test]
+    fn fn_006cf9a0_constructs_a_search_link_array() {
+        let mut w = world();
+        let e = &mut w.e;
+        let array = e.mem.alloc(0x10);
+        assert_eq!(fn_006cf9a0(e, array, 4, 1), array);
+        assert_eq!(e.mem.u32(array), SEARCH_LINK_ARRAY_VTABLE);
+        assert_eq!(calls(e, ARRAY_INIT_006B3F40), vec![vec![array, 4, 1]]);
+    }
+
+    #[test]
+    fn fn_006cf9d0_constructs_a_search_node_array() {
+        let mut w = world();
+        let e = &mut w.e;
+        let array = e.mem.alloc(0x10);
+        assert_eq!(fn_006cf9d0(e, array, 6, 0), array);
+        assert_eq!(e.mem.u32(array), SEARCH_NODE_ARRAY_VTABLE);
+        assert_eq!(calls(e, ARRAY_INIT_009A3D00), vec![vec![array, 6, 0]]);
+    }
+
+    #[test]
+    fn fn_006cfa00_constructs_a_triangle_handle_scrap_array() {
+        check_scrap_constructor(
+            fn_006cfa00,
+            TRIANGLE_HANDLE_ARRAY_BASE_CONSTRUCT,
+            TRIANGLE_HANDLE_SCRAP_ARRAY_VTABLE,
+            ARRAY_INIT_006DC440,
+        );
+    }
+
+    #[test]
+    fn fn_006cfac0_destroys_a_triangle_handle_scrap_array() {
+        check_scrap_destructor(
+            fn_006cfac0,
+            TRIANGLE_HANDLE_SCRAP_ARRAY_VTABLE,
+            TRIANGLE_HANDLE_ARRAY_BASE_DESTRUCT,
+        );
+    }
+
+    #[test]
+    fn fn_006cfb20_constructs_an_integer_scrap_array() {
+        check_scrap_constructor(
+            fn_006cfb20,
+            INTEGER_ARRAY_BASE_CONSTRUCT,
+            INTEGER_SCRAP_ARRAY_VTABLE,
+            ARRAY_INIT_006B3EB0,
+        );
+    }
+
+    #[test]
+    fn fn_006cfbc0_destroys_an_integer_scrap_array() {
+        check_scrap_destructor(
+            fn_006cfbc0,
+            INTEGER_SCRAP_ARRAY_VTABLE,
+            INTEGER_ARRAY_BASE_DESTRUCT,
+        );
+    }
+
+    /// Checks a scalar deleting destructor: the destructor call `marker`
+    /// (an address its destructor calls with `this` first) always, the
+    /// object freed only with bit 0 of the flags.
+    fn check_scalar_deleting(deleting: fn(&mut Engine, u32, u32) -> u32, marker: u32) {
+        let mut w = world();
+        let e = &mut w.e;
+        let array = e.mem.alloc(0x14);
+        assert_eq!(deleting(e, array, 0), array);
+        assert_eq!(calls(e, marker).len(), 1);
+        assert_eq!(calls(e, marker)[0][0], array);
+        assert!(calls(e, MEMORY_FREE).is_empty());
+        assert_eq!(deleting(e, array, 3), array);
+        assert_eq!(calls(e, marker).len(), 2);
+        assert_eq!(calls(e, MEMORY_FREE), vec![vec![array]]);
+    }
+
+    #[test]
+    fn edge_array_scalar_deleting_destructor() {
+        check_scalar_deleting(
+            bs_simple_array_nav_mesh_edge_location_scalar_deleting_destructor,
+            ARRAY_CLEAR_008454F0,
+        );
+    }
+
+    #[test]
+    fn info_scrap_array_scalar_deleting_destructor() {
+        check_scalar_deleting(
+            bs_scrap_array_nav_mesh_info_const_p_scalar_deleting_destructor,
+            INFO_SCRAP_ARRAY_DESTRUCT,
+        );
+    }
+
+    #[test]
+    fn reference_scrap_array_scalar_deleting_destructor() {
+        check_scalar_deleting(
+            bs_scrap_array_tes_object_refr_p_scalar_deleting_destructor,
+            REFERENCE_ARRAY_BASE_DESTRUCT,
+        );
+    }
+
+    #[test]
+    fn segment_array_scalar_deleting_destructor() {
+        check_scalar_deleting(
+            bs_simple_array_path_builder_virtual_node_segment_scalar_deleting_destructor,
+            SEGMENT_ARRAY_BASE_DESTRUCT,
+        );
+    }
+
+    #[test]
+    fn bool_scrap_array_scalar_deleting_destructor() {
+        check_scalar_deleting(
+            bs_scrap_array_bool_scalar_deleting_destructor,
+            BOOL_SCRAP_ARRAY_DESTRUCT,
+        );
+    }
+
+    #[test]
+    fn segment_scrap_array_scalar_deleting_destructor() {
+        check_scalar_deleting(
+            bs_scrap_array_path_builder_virtual_node_segment_scalar_deleting_destructor,
+            SEGMENT_ARRAY_BASE_DESTRUCT,
+        );
+    }
+
+    #[test]
+    fn triangle_handle_array_scalar_deleting_destructor() {
+        check_scalar_deleting(
+            bs_simple_array_fast_nav_mesh_tri_handle_scalar_deleting_destructor,
+            TRIANGLE_HANDLE_ARRAY_BASE_DESTRUCT,
+        );
+    }
+
+    #[test]
+    fn triangle_handle_scrap_array_scalar_deleting_destructor() {
+        check_scalar_deleting(
+            bs_scrap_array_fast_nav_mesh_tri_handle_scalar_deleting_destructor,
+            TRIANGLE_HANDLE_ARRAY_BASE_DESTRUCT,
+        );
+    }
+
+    #[test]
+    fn integer_scrap_array_scalar_deleting_destructor() {
+        check_scalar_deleting(
+            bs_scrap_array_int_scalar_deleting_destructor,
+            INTEGER_ARRAY_BASE_DESTRUCT,
+        );
+    }
+
+    #[test]
+    fn fn_006d0310_allocates_and_constructs() {
+        let mut w = world();
+        let e = &mut w.e;
+        let array = e.mem.alloc(0x10);
+        vtable_slot4(e, array, 0x7ff0_0040, 0x9a00);
+        // Size above capacity: capacity becomes the size.
+        fn_006d0310(e, array, 2, 5);
+        assert_eq!(calls(e, 0x7ff0_0040), vec![vec![array, 5]]);
+        assert_eq!(
+            calls(e, EDGE_ARRAY_CONSTRUCT_ELEMENTS),
+            vec![vec![array, 0x9a00, 5]]
+        );
+        assert_eq!(
+            (
+                e.mem.u32(array + 4),
+                e.mem.u32(array + 8),
+                e.mem.u32(array + 0xc)
+            ),
+            (0x9a00, 5, 5)
+        );
+        // Capacity only: allocated, nothing constructed.
+        fn_006d0310(e, array, 8, 0);
+        assert_eq!(calls(e, 0x7ff0_0040)[1], vec![array, 8]);
+        assert_eq!(calls(e, EDGE_ARRAY_CONSTRUCT_ELEMENTS).len(), 1);
+        assert_eq!(
+            (
+                e.mem.u32(array + 4),
+                e.mem.u32(array + 8),
+                e.mem.u32(array + 0xc)
+            ),
+            (0x9a00, 0, 8)
+        );
     }
 }
