@@ -706,7 +706,8 @@ mod tests {
 
     #[test]
     fn load_failures() {
-        let cases: [(&[(&[u8; 4], u32)], u32, bool); 6] = [
+        type Case<'a> = (&'a [(&'a [u8; 4], u32)], u32, bool);
+        let cases: [Case; 6] = [
             (&[(b"BPNT", 1)], 3, false),
             (&[(b"BPNN", 1)], 3, false),
             (&[(b"BPNN", 1), (b"BPNT", 1), (b"XXXX", 1)], 3, false),
