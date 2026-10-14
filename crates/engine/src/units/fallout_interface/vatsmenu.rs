@@ -23,7 +23,8 @@
 //! - The compiler's exception-unwinding frames (`FS:[0]`) and the security
 //!   cookie are not translated; the functions that have them carry a
 //!   `Translation incomplete` marker.
-n// `!(a < b)` mirrors the exe's x87 flag tests, which are true for NaN.
+
+// `!(a < b)` mirrors the exe's x87 flag tests, which are true for NaN.
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
 
 #[allow(unused_imports)]
