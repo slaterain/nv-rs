@@ -171,7 +171,7 @@ fn list_item(e: &mut Engine, node: u32) -> u32 {
 /// `count * 12` as the compiler's `new[]` computes it: `0xffffffff` when the
 /// product overflows.
 fn array_bytes(count: u32) -> u32 {
-    count.checked_mul(0x0c).unwrap_or(u32::MAX)
+    count.saturating_mul(0x0c)
 }
 
 // Translated from 004f4330 (decompiled, FalloutNV.exe 1.4.0.525)
