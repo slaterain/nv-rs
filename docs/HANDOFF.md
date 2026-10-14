@@ -53,15 +53,13 @@ solver work (79 functions in `crates/physics`). Phase A (movement, physics,
 animation, faces, audio) is about 8,000-9,000 functions of new translation.
 
 **Next work, in order:**
-1. Everything finished this session is collected on the lead. One branch
-   may still hold work: `agent-01` was finishing bhkcharactercontroller from
-   00c6ffc0 (about 38 functions, on top of its 6f4fc6e1). If its branch has
-   a newer commit than 6f4fc6e1, collect it with
-   `git -C ../agents/a01 format-patch -1 <commit> --stdout | git am -3`,
-   then check for duplicate `entry!` addresses and gate. Continuation
-   points: combatstate 0099cb70 (`agent-03`), projectile 009c3d90
-   (`agent-07`, 24 left), middlehighprocess 0091db40 (`agent-10`), fonts
-   00a1c130 (3 left).
+1. Everything finished this session is collected, including the whole
+   bhkCharacterController (98 functions, the first finished movement unit).
+   Continuation points: combatstate 0099cb70, projectile 009c3d90 (24
+   left), middlehighprocess 0091db40, fonts 00a1c130 (3 left).
+   **Ghidra pitfall:** it prints both `FMUL ST(0),ST(1)` and
+   `FMUL ST(1),ST(0)` as `FMUL ST1`. Check the instruction bytes whenever
+   such an x87 operation matters (now in slot_rules.txt).
 2. Phase A translation: the rest of bhkcharactercontroller and
    middlehighprocess, then `Havok SDK` (largest), `BSHavok`, `NiCollision`,
    `fallout shared/havok`, `NiAnimation`, FaceGen, BSAudio/fallout audio.
