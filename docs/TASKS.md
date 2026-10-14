@@ -11,7 +11,8 @@ Every task follows [AGENTS.md](../AGENTS.md): trace the behaviour in the
 original FalloutNV.exe 1.4.0.525 (or record it from the original game), no
 stand-ins, provenance comments, tests, and pull requests that pass
 `scripts/acceptance.ps1` (Doc's walk, Back in the Saddle, Ghost Town
-Gunfight). Say what was verified by playing and what only by tests. Big
+Gunfight, ED-E My Love's completion). Say what was verified by playing and
+what only by tests. Big
 tasks are split into reviewable pull requests.
 
 ## Major systems (claim on GitHub)

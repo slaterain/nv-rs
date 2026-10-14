@@ -425,11 +425,15 @@ pub fn at_second_location(
     who: FormId,
     min_radius: f32,
 ) -> bool {
-    let Some((here, _, at, _)) = state.place(order, who) else {
+    let Some((here, here_cell, at, _)) = state.place(order, who) else {
         return false;
     };
     let reference = match location.kind {
         0 => location.form,
+        // `PLD2` kind 1 is a cell, not a placed reference. The package is
+        // satisfied when the actor's current cell is the specified cell
+        // (`0067f060`, `00676390`, FalloutNV.exe 1.4.0.525).
+        1 => return here_cell == location.form,
         _ => return false,
     };
     let Some((there, _, spot_at, _)) = state.place(order, reference) else {

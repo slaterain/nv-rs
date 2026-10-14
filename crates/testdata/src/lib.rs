@@ -1697,21 +1697,30 @@ End
     scripts.extend(script(
         QUEST_SCRIPT,
         "TestQuestScript",
-        "scn TestQuestScript\n\
-         short bRunTimer\n\
-         float fTimer\n\
-         Begin GameMode\n\
-         \tif GetStage TestQuest == 10 && bRunTimer == 0\n\
-         \t\tset bRunTimer to 1\n\
-         \t\tset fTimer to 3\n\
-         \telseif bRunTimer == 1\n\
-         \t\tset fTimer to fTimer - GetSecondsPassed\n\
-         \t\tif fTimer <= 0\n\
-         \t\t\tset bRunTimer to 2\n\
-         \t\t\tSetStage TestQuest 20\n\
-         \t\tendif\n\
-         \tendif\n\
-         End",
+        "scn TestQuestScript
+short bRunTimer
+float fTimer
+Begin GameMode
+	if GetStage TestQuest == 10 && bRunTimer == 0
+		set bRunTimer to 1
+		set fTimer to 3
+	elseif bRunTimer == 1
+		set fTimer to fTimer - GetSecondsPassed
+		if fTimer <= 0
+			set bRunTimer to 2
+			SetStage TestQuest 20
+		endif
+	endif
+End
+Begin MenuMode 0
+	set TestGlobal to TestGlobal + 1
+End
+Begin MenuMode 1
+	set TestGlobal to TestGlobal + 10
+End
+Begin MenuMode 1036
+	set TestGlobal to TestGlobal + 100
+End",
     ));
     scripts.extend(script(
         GECKO_SCRIPT,

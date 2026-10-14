@@ -590,12 +590,13 @@ impl<'a> IdleAsker<'a> {
                 "GetIsUsedItem" => Some(yes(a.used_item == Some(c.param_forms[0]))),
                 "IsChild" => Some(yes(a.child)),
                 "IsPC1stPerson" => Some(yes(a.first_person)),
-                // Translated from 0059c380 (decompiled, FalloutNV.exe
-                // 1.4.0.525): 0 any menu, else that menu open.
-                "MenuMode" => Some(yes(match c.params[0] {
-                    0 => a.menu.is_some(),
-                    n => a.menu.is_some_and(|m| u32::from(m) == n),
-                })),
+                // Translated from 0059c380, FalloutNV.exe 1.4.0.525:
+                // mode 0 is any menu, 1 is any Pip-Boy menu, otherwise
+                // the exact class.
+                "MenuMode" => Some(yes(crate::scripting::menu_mode_matches(
+                    i64::from(c.params[0]),
+                    a.menu,
+                ))),
                 // Translated from 005a4480 (decompiled, FalloutNV.exe
                 // 1.4.0.525): the speaking emotion, −1 when not used.
                 "GetDialogueEmotion" => Some(a.emotion.map_or(-1.0, f64::from)),
