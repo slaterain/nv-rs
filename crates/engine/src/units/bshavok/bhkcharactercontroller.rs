@@ -5349,9 +5349,9 @@ fn check_support(e: &mut Engine, this: Ptr<Ctl>, f: u32) {
             e.set(this, Ctl::iFlags, flags & 0xffff_dfff);
         };
         let vertical = e.mem.f32(me + Ctl::OutVelocity.off + 8);
-        if !supported && (flags >> 9) & 1 == 0 {
-            clear(e);
-        } else if vertical <= 0.0 {
+        // Two exe branches reach the same clear: unsupported without bit 9,
+        // or a vertical speed that is not above 0 (false for NaN).
+        if (!supported && (flags >> 9) & 1 == 0) || vertical <= 0.0 {
             clear(e);
         } else {
             let velocity = load4(e, me + Ctl::OutVelocity.off);
