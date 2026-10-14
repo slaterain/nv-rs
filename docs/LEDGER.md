@@ -31,15 +31,15 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 15745 | 23.8% |
+| translated | 15765 | 23.8% |
 | static init (table) | 15762 | 23.8% |
-| traced | 3908 | 5.9% |
-| platform | 3358 | 5.1% |
+| traced | 3897 | 5.9% |
+| platform | 3359 | 5.1% |
 | library | 6181 | 9.3% |
-| open | 21305 | 32.2% |
+| open | 21295 | 32.1% |
 | **all** | **66259** | |
 
-Translation totals count markers, not complete behavior. **1116** engine functions
+Translation totals count markers, not complete behavior. **1118** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
@@ -287,6 +287,7 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `0060ceb0` | `crates/engine/src/units/fallout_shared/tesquest.rs:417` |
 | `0060f260` | `crates/engine/src/units/fallout_shared/run_0060f240.rs:36` |
 | `0060f520` | `crates/engine/src/units/fallout_shared/tesquest.rs:758` |
+| `0060f5f0` | `crates/engine/src/units/fallout_shared/run_0060f5f0.rs:31` |
 | `0060f6a0` | `crates/engine/src/units/fallout_shared/tesqueststage.rs:192` |
 | `0060fb60` | `crates/engine/src/units/fallout_shared/tesqueststage.rs:350` |
 | `0060ff70` | `crates/engine/src/units/fallout_shared/run_0060ff70.rs:19` |
@@ -360,6 +361,7 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `0067c110` | `crates/engine/src/units/fallout_shared/packagedatafollow.rs:183` |
 | `0067c7d0` | `crates/engine/src/units/fallout_shared/packagedatauseitem.rs:138` |
 | `0067c860` | `crates/engine/src/units/fallout_shared/packagedatauseitem.rs:153` |
+| `006808b0` | `crates/engine/src/units/fallout_shared/run_00680890.rs:27` |
 | `00680960` | `crates/engine/src/units/fallout_shared/tescondition.rs:219` |
 | `006819e0` | `crates/engine/src/units/fallout_shared/tesconditionitem.rs:332` |
 | `0068ad20` | `crates/engine/src/units/fallout_shared_tempeffects/bstempeffectsimpledecal.rs:642` |
@@ -1161,9 +1163,9 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00ec5ec0` | `crates/engine/src/units/fallout_shared_magic/effectsetting.rs:348` |
 | `00ec8660` | `crates/engine/src/units/fallout_misc/bgssaveloadstructs.rs:412` |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 19213 (47.4%) are translated, run from the static-initializer table, or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 19222 (47.4%) are translated, run from the static-initializer table, or traced.
 
-Rust cites 37408 distinct `.text` addresses; 1278 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 37419 distinct `.text` addresses; 1278 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -1194,11 +1196,11 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Subsystem | Functions | KB | Named | translated | static init (table) | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 15762 | 22 | 0 | 5550 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 7263 | 0 | 778 | 0 | 0 | 2429 | 76.8% |
+| fallout shared | 10470 | 2065 | 3149 | 7277 | 0 | 772 | 0 | 0 | 2421 | 76.9% |
 | Havok SDK | 6591 | 1555 | 3499 | 54 | 0 | 127 | 0 | 0 | 6410 | 2.7% |
-| fallout/ai | 4849 | 1475 | 1888 | 3014 | 0 | 474 | 0 | 0 | 1361 | 71.9% |
+| fallout/ai | 4849 | 1475 | 1888 | 3016 | 0 | 472 | 0 | 0 | 1361 | 71.9% |
 | fallout/interface | 2645 | 991 | 1247 | 1306 | 0 | 590 | 0 | 0 | 749 | 71.7% |
-| (unplaced) | 2353 | 470 | 0 | 269 | 0 | 432 | 3 | 0 | 1649 | 29.8% |
+| (unplaced) | 2353 | 470 | 0 | 273 | 0 | 429 | 4 | 0 | 1647 | 29.8% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 1180 | 0 | 147 | 0 | 0 | 461 | 74.2% |
 | NiMain | 1619 | 261 | 1134 | 134 | 0 | 110 | 0 | 0 | 1375 | 15.1% |
 | BSHavok | 1615 | 316 | 1134 | 162 | 0 | 128 | 0 | 0 | 1325 | 18.0% |
@@ -1253,8 +1255,8 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | 1 | 143 | 117 | 128 | 0 | 9 | 3 | 0 | 3 |
-| 2 | 1575 | 583 | 1341 | 0 | 188 | 22 | 0 | 24 |
-| 3 | 4973 | 1303 | 4143 | 0 | 586 | 139 | 26 | 79 |
+| 2 | 1575 | 583 | 1354 | 0 | 175 | 22 | 0 | 24 |
+| 3 | 4973 | 1303 | 4200 | 0 | 529 | 139 | 26 | 79 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
