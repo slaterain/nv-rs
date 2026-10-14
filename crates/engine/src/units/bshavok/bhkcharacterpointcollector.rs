@@ -490,7 +490,9 @@ pub fn bhk_character_point_collector_add_cd_point(
     let v2 = lanes(e, shape + 0x40);
     let a = [0, 1, 2, 3].map(|i| v1[i] - v0[i]);
     let b = [0, 1, 2, 3].map(|i| v2[i] - v1[i]);
-    // `SHUFPS 0xC9` is (y, z, x, w), `0xD2` is (z, x, y, w).
+    // `SHUFPS 0xC9` is (y, z, x, w), `0xD2` is (z, x, y, w). The w lane is
+    // `w*w - w*w` as the SSE code computes it (NaN, not 0, for an infinite w).
+    #[allow(clippy::eq_op)]
     let normal = [
         b[2] * a[1] - b[1] * a[2],
         b[0] * a[2] - b[2] * a[0],
