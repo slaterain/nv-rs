@@ -6252,6 +6252,8 @@ mod tests {
     ];
 
     /// The data the code reads from the exe, with the exe's values.
+    // The values are the exe's float constants as written, not std approximations.
+    #[allow(clippy::approx_constant)]
     fn set_data(e: &mut Engine) {
         for page in [
             0x0101_1000,

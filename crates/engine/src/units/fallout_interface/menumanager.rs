@@ -4676,10 +4676,13 @@ mod tests {
         e
     }
 
+    /// One menu for [`add_menus`]: the five words it writes.
+    type MenuSpec = (u32, u32, u32, u32, u32);
+
     /// Links `menus` (menu tile traits `0xfad`, `0xfa7`, `0xfa3` as words,
     /// mode, class) into the list and returns the menus; a `None` adds a
     /// node whose tile has no menu.
-    fn add_menus(e: &mut Engine, menus: &[Option<(u32, u32, u32, u32, u32)>]) -> Vec<u32> {
+    fn add_menus(e: &mut Engine, menus: &[Option<MenuSpec>]) -> Vec<u32> {
         let mut nodes = Vec::new();
         let mut result = Vec::new();
         for entry in menus {
