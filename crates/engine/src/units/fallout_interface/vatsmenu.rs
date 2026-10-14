@@ -1194,6 +1194,64 @@ const TEXT_UI_VATS_READY: u32 = 0x0107_7d6c;
 /// the text `UIVATSSelectTargetPart`.
 const TEXT_UI_VATS_SELECT_TARGET_PART: u32 = 0x0107_7d94;
 
+/// `bhkCollisionFilter::SetMultiLayerCollision` (engine map), cdecl
+/// (layer, value, 0).
+const SET_MULTI_LAYER_COLLISION: u32 = 0x00c8_2870;
+/// thiscall on a camera: (first, second, origin, direction, 0), five words
+/// (`RET 0x14`), the two integers from `00792760`/`009a9350` (`00a71080`,
+/// unnamed in the engine map).
+const CAMERA_RAY_A71080: u32 = 0x00a7_1080;
+/// thiscall on `004b7210`'s object: the float at `+0x40` in ST0
+/// (`00792760`).
+const FLOAT_AT_40: u32 = 0x0079_2760;
+/// thiscall on `004b7210`'s object: the float at `+0x38` in ST0
+/// (`009a9350`).
+const FLOAT_AT_38: u32 = 0x009a_9350;
+/// the float the cast direction is scaled by (`011a0b74`).
+const FLOAT_CAST_LENGTH: u32 = 0x011a_0b74;
+/// `ListBox<unsigned_int>::NumUnfiltered` (engine map): (0).
+const LIST_BOX_NUM_UNFILTERED: u32 = 0x0072_6b40;
+/// `Tile::GetValue` (engine map): (trait).
+const TILE_GET_VALUE: u32 = 0x00a0_0f30;
+/// `Tile::GetValueQ` (engine map): (trait).
+const TILE_GET_VALUE_Q: u32 = 0x00a0_0e90;
+/// `Tile::Value::ClearActions` (engine map).
+const TILE_VALUE_CLEAR_ACTIONS: u32 = 0x00a0_9200;
+/// `Tile::Value::AddAction_ov2` (engine map): (action, tile, trait).
+const TILE_VALUE_ADD_ACTION_TILE: u32 = 0x00a0_9130;
+/// `Tile::Value::AddAction` (engine map): (action, float).
+const TILE_VALUE_ADD_ACTION_FLOAT: u32 = 0x00a0_9080;
+/// `Tile::Value::CalculateValue` (engine map): (0).
+const TILE_VALUE_CALCULATE: u32 = 0x00a0_9410;
+/// thiscall: constructs a list box item (tile, address of the data);
+/// returns it (`007a62e0`).
+const LIST_ITEM_CONSTRUCT: u32 = 0x007a_62e0;
+/// thiscall on the list box's list: (item, position): inserts the item
+/// (`007a7eb0`, named `BSSimpleList<ActiveEffect_P>::Insert` by the engine
+/// map on a folded body).
+const LIST_INSERT: u32 = 0x007a_7eb0;
+/// thiscall on the list box's list: (address of the item): adds it
+/// (`00905820`).
+const LIST_ADD_TAIL: u32 = 0x0090_5820;
+/// thiscall on the list box: (0): a flag test (`007242c0`).
+const LIST_BOX_FLAG_TEST: u32 = 0x0072_42c0;
+/// `ListBox<unsigned_int>::Synchronize` (engine map).
+const LIST_BOX_SYNCHRONIZE: u32 = 0x0072_6090;
+/// `ListBox<StartMenu::Option_P>::InitTilePosition` (engine map name on a
+/// shared body): (tile).
+const LIST_BOX_INIT_TILE_POSITION: u32 = 0x0072_69d0;
+/// `ListBox<unsigned_int>::SetTotalListHeight` (engine map).
+const LIST_BOX_SET_TOTAL_LIST_HEIGHT: u32 = 0x0072_6530;
+/// thiscall on the list box: (node, node before it): removes the item
+/// (`007f7380`, not in this unit's queue); answers a bool.
+const LIST_BOX_REMOVE_7F7380: u32 = 0x007f_7380;
+/// the text `_number_of_visible_items`.
+const TEXT_NUMBER_OF_VISIBLE_ITEMS: u32 = 0x0106_f860;
+/// the text `body_part_percent`.
+const TEXT_BODY_PART_PERCENT: u32 = 0x0107_7e98;
+/// the text `GlowBranch`.
+const TEXT_GLOW_BRANCH: u32 = 0x0107_7eac;
+
 // ---------------------------------------------------------------------------
 // Helpers
 
@@ -6768,6 +6826,350 @@ pub fn fn_007f6a00(e: &mut Engine, this: u32) {
     e.call(LIST_DESTRUCT_46FFB0, &args![this + 8]);
 }
 
+// Translated from 007f6a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// cdecl (reference): removes every target of the list at `011db150`
+/// whose `pTarget` is the reference (`00905330` on the list). When the
+/// reference is the target reference and the menu is open, the menu's
+/// slot `0x0C` runs with (2, 0) first; when the list is then empty and the
+/// menu is open, `VATSMenu::Close` runs. Nothing when the list is empty.
+pub fn fn_007f6a20(e: &mut Engine, reference: u32) {
+    if e.call(LIST_IS_EMPTY, &args![LIST_011DB150]).bool() {
+        return;
+    }
+    let mut node = LIST_011DB150;
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        if node_reference(e, node) == reference {
+            let menu = vats_menu(e);
+            if e.global::<u32>(TARGET_REFERENCE) == reference && menu != 0 {
+                e.vcall(menu, 0x0c, &args![2u32, 0u32]);
+            }
+            let item = e.call(IDENTITY, &args![node]).u32();
+            e.call(LIST_REMOVE_905330, &args![LIST_011DB150, item]);
+            if e.call(LIST_IS_EMPTY, &args![LIST_011DB150]).bool() && vats_menu(e) != 0 {
+                vats_menu_close(e);
+            }
+        }
+        node = e.call(NEXT_NODE, &args![node]).u32();
+    }
+    // 007f6ada: the head's item is read into a local nobody uses.
+    e.call(IDENTITY, &args![LIST_011DB150]);
+}
+
+/// The size of `007f6af0`'s frame: its locals sit at their `EBP - offset`
+/// addresses inside a block of this size (`pick_slot`).
+const PICK_FRAME: u32 = 0x4b0;
+
+/// The address of `007f6af0`'s local at `EBP - offset` in `frame`.
+fn pick_slot(frame: u32, offset: u32) -> u32 {
+    frame + PICK_FRAME - offset
+}
+
+// Translated from 007f6af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// thiscall on the menu: picks a target under the pointer. False when
+/// `bMouseOverButton` is set. Otherwise a ray is built from the camera
+/// (`00a71080` with the truncated floats of `009a9350` and `00792760` on
+/// `004b7210`'s object, into an origin and a direction), with the query of
+/// `004a3c20` filtered like `007f52c0`'s casts but with layer `0x27`
+/// (`bhkCollisionFilter::SetMultiLayerCollision(0x27, 0x140, 0)` first),
+/// its end the direction scaled by the float at `011a0b74` (`0045bb20`,
+/// `007f68a0`), and cast into an `hkpAllRayHitCollector`. The hits are
+/// walked in order: a hit whose reference (`FindReferenceFor3D` of its
+/// scene object) has a target node (`GetVatsTarget`) ends the walk: false
+/// when that target is the current target reference, else `007f3bd0(0)`,
+/// `UpdateChanceToHit`, the target reference becomes that target's and
+/// the answer is true. False when no hit has a target.
+// Translation incomplete: 007f6af0 - the C++ exception-unwinding frame (FS:[0]) that destroys the ray collector, and the security cookie (00ec408c), are not translated
+pub fn fn_007f6af0(e: &mut Engine, this: Ptr<VatsMenu>) -> bool {
+    if e.get(this, VatsMenu::bMouseOverButton) {
+        return false;
+    }
+    let length = load_f32(e, FLOAT_CAST_LENGTH);
+    e.with_stack(PICK_FRAME, |e, block| {
+        let frame = block.addr();
+        let ray = Ray {
+            input: pick_slot(frame, 0xf0),
+            from: pick_slot(frame, 0x28),
+            to: pick_slot(frame, 0x34),
+            filter: pick_slot(frame, 0xfc),
+            filter_out: pick_slot(frame, 0xf8),
+            collector: pick_slot(frame, 0x430),
+        };
+        let hit = pick_slot(frame, 0x4a0);
+        let scaled = pick_slot(frame, 0x108);
+        e.call(IDENTITY, &args![ray.from]);
+        e.call(IDENTITY, &args![ray.to]);
+        let object = e.call(OBJECT_004B7210, &[]).u32();
+        let value = e.call(FLOAT_AT_40, &args![object]).f64();
+        let second = ftol(e, value);
+        let object = e.call(OBJECT_004B7210, &[]).u32();
+        let value = e.call(FLOAT_AT_38, &args![object]).f64();
+        let first = ftol(e, value);
+        let holder = e.call(CAMERA_HOLDER, &[]).u32();
+        let camera = e.call(CAMERA_OF, &args![holder]).u32();
+        e.call(
+            CAMERA_RAY_A71080,
+            &args![camera, first, second, ray.from, ray.to, 0u32],
+        );
+        e.call(QUERY_CONSTRUCT_4A3C20, &args![ray.input]);
+        e.call(SET_MULTI_LAYER_COLLISION, &args![0x27u32, 0x140u32, 0u32]);
+        let player = e.global::<u32>(PLAYER);
+        e.call(COLLISION_OBJECT_931ED0, &args![player, ray.filter_out]);
+        e.call(STORE_8C71B0, &args![ray.filter, 0u32]);
+        e.call(FILTER_4A39F0, &args![ray.filter, 0x27u32]);
+        let group = e.call(GROUP_4A3A20, &args![ray.filter_out]).u32();
+        e.call(FILTER_59CE80, &args![ray.filter, group]);
+        let filter = e.mem.u32(ray.filter);
+        e.call(QUERY_4A3F70, &args![ray.input, filter]);
+        e.call(QUERY_4A3DA0, &args![ray.input, ray.from]);
+        let end = e
+            .call(POINT3_SCALE, &args![ray.to, scaled, length.to_bits()])
+            .u32();
+        fn_007f68a0(e, ray.input, end);
+        e.call(RAY_COLLECTOR_CONSTRUCT, &args![ray.collector]);
+        e.call(QUERY_4A3FB0, &args![ray.input, ray.collector]);
+        ray_cast(e, &ray);
+        let mut index = 0i32;
+        let picked = loop {
+            if index >= ray_hit_count(e, &ray) {
+                break false;
+            }
+            let object = ray_hit_object(e, &ray, index as u32, hit);
+            let reference = e.call(FIND_REFERENCE_FOR_3D, &args![object]).u32();
+            if object != 0 {
+                let target = vats_menu_get_vats_target(e, this, reference);
+                if target != 0 && node_reference(e, target) == e.global::<u32>(TARGET_REFERENCE) {
+                    break false;
+                }
+                if target != 0 {
+                    fn_007f3bd0(e, 0);
+                    vats_menu_update_chance_to_hit(e, this);
+                    let reference = node_reference(e, target);
+                    e.set_global::<u32>(TARGET_REFERENCE, reference);
+                    break true;
+                }
+            }
+            index += 1;
+        };
+        e.call(RAY_COLLECTOR_DESTRUCT, &args![ray.collector]);
+        picked
+    })
+}
+
+// Translated from 007f6e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `VATSMenu::BuildMetersForTarget` (Xbox PDB): (target node): renders a
+/// `body_part_percent` meter (`Menu::RenderTemplate` of the open menu
+/// under the `GlowBranch` tile of menu class `0x420`) into `pMeter` of
+/// each part of the node's target, and sets trait `0xfb7` of each meter
+/// that was made by the part's `eLimb` (the jump table at `007f6f90`): 5
+/// for -1, 1, 2 and 13; 6 for 0; 1 for 3, 4, 7, 8, 9 and 14; 4 for 5, 6,
+/// 10, 11 and 12; nothing for other values. `this` is not read.
+pub fn vats_menu_build_meters_for_target(e: &mut Engine, _this: Ptr<VatsMenu>, target: u32) {
+    let menu_tile = e.call(GET_MENU_BY_CLASS, &args![0x420u32]).u32();
+    let glow = e
+        .call(TILE_FROM_PATH, &args![menu_tile, TEXT_GLOW_BRANCH])
+        .u32();
+    let mut node = node_parts(e, target);
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let menu = vats_menu(e);
+        let meter = e
+            .call(
+                MENU_RENDER_TEMPLATE,
+                &args![menu, glow, TEXT_BODY_PART_PERCENT, 0u32],
+            )
+            .u32();
+        let part = node_part(e, node);
+        e.mem.set_u32(part + 0x30, meter);
+        let part = node_part(e, node);
+        if e.mem.u32(part + 0x30) != 0 {
+            let part = node_part(e, node);
+            let value = match e.mem.i32(part + 0x20) {
+                -1 | 1 | 2 | 13 => Some(5u32),
+                0 => Some(6),
+                3 | 4 | 7 | 8 | 9 | 14 => Some(1),
+                5 | 6 | 10..=12 => Some(4),
+                _ => None,
+            };
+            if let Some(value) = value {
+                let part = node_part(e, node);
+                let meter = e.mem.u32(part + 0x30);
+                e.call(TILE_SET_INT, &args![meter, 0xfb7u32, value]);
+            }
+        }
+        node = e.call(NEXT_NODE, &args![node]).u32();
+    }
+}
+
+// Translated from 007f6fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<unsigned_int>::GetLastItem` (Xbox PDB): the list box's slot
+/// `0x14` for `NumUnfiltered(0) - 1`; returns what the slot answers.
+pub fn list_box_unsigned_int_get_last_item(e: &mut Engine, this: Ptr<ListBox>) -> u32 {
+    let count = e.call(LIST_BOX_NUM_UNFILTERED, &args![this, 0u32]).u32();
+    e.vcall(this.addr(), 0x14, &args![count.wrapping_sub(1)])
+        .u32()
+}
+
+// Translated from 007f6fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<unsigned_int>::AddItem` (Xbox PDB): (item, text, position,
+/// template). Renders the template (`template`, else `pTemplateName`)
+/// under `pContainerRect` (`Menu::RenderTemplate` of the container's
+/// menu), gives the new tile trait `0xfaa` -1 when it has no such value,
+/// its text (trait `0xfc4`) when `text` is set, and links a new list box
+/// item (0x0C bytes, `007a62e0` with the address of `item`): after
+/// `position` when it is set (`007a7eb0`, then `Synchronize` when the flag
+/// test `007242c0(0)` answers true), else at the end (`00905820`, then
+/// `InitTilePosition` and `SetTotalListHeight` when the flag test answers
+/// true; trait `0xfac` gets `usNextIndex`, which goes up by one). When the
+/// list then has one item and the container's `_number_of_visible_items`
+/// is above 0.0, the container's value `0xfb0` gets the actions `0x7d0`
+/// (the new tile, `0xfb0`) and `0x7d3` (that count) and is recalculated.
+/// Returns the new tile; 0 when there is no container, or neither template.
+// Translation incomplete: 007f6fe0 - the C++ exception-unwinding frame (FS:[0]) that frees the new list box item when its constructor throws is not translated
+pub fn list_box_unsigned_int_add_item(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    item: u32,
+    text: u32,
+    position: u32,
+    template: u32,
+) -> u32 {
+    let container = e.get(this, ListBox::pContainerRect).addr();
+    if container == 0 {
+        return 0;
+    }
+    let own_template = e.get(this, ListBox::pTemplateName).addr();
+    if own_template == 0 && template == 0 {
+        return 0;
+    }
+    let template = if template != 0 {
+        template
+    } else {
+        own_template
+    };
+    let menu = e.call(TILE_GET_MENU, &args![container]).u32();
+    let tile = e
+        .call(
+            MENU_RENDER_TEMPLATE,
+            &args![menu, container, template, 0u32],
+        )
+        .u32();
+    if e.call(TILE_GET_VALUE, &args![tile, 0xfaau32]).u32() == 0 {
+        e.call(TILE_SET_INT, &args![tile, 0xfaau32, 0xffff_ffffu32]);
+    }
+    if text != 0 {
+        e.call(TILE_SET_STRING, &args![tile, 0xfc4u32, text, 1u32]);
+    }
+    let new_item = |e: &mut Engine| -> u32 {
+        let block = e.call(ALLOCATE, &args![0xcu32]).u32();
+        if block == 0 {
+            return 0;
+        }
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), item);
+            e.call(LIST_ITEM_CONSTRUCT, &args![block, tile, slot]).u32()
+        })
+    };
+    let list = this.addr() + 4;
+    if position != 0 {
+        let list_item = new_item(e);
+        e.call(LIST_INSERT, &args![list, list_item, position]);
+        if e.call(LIST_BOX_FLAG_TEST, &args![this, 0u32]).bool() {
+            e.call(LIST_BOX_SYNCHRONIZE, &args![this]);
+        }
+    } else {
+        let list_item = new_item(e);
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), list_item);
+            e.call(LIST_ADD_TAIL, &args![list, slot]);
+        });
+        if e.call(LIST_BOX_FLAG_TEST, &args![this, 0u32]).bool() {
+            e.call(LIST_BOX_INIT_TILE_POSITION, &args![this, tile]);
+            e.call(LIST_BOX_SET_TOTAL_LIST_HEIGHT, &args![this]);
+        }
+        let index = e.get(this, ListBox::usNextIndex);
+        e.set(this, ListBox::usNextIndex, index.wrapping_add(1));
+        e.call(TILE_SET_INT, &args![tile, 0xfacu32, u32::from(index)]);
+    }
+    if e.call(LIST_COUNT, &args![this]).u32() == 1 {
+        let id = e
+            .call(
+                ADD_USER_TRAIT,
+                &args![TEXT_NUMBER_OF_VISIBLE_ITEMS, 0xffff_ffffu32],
+            )
+            .u32();
+        let container = e.get(this, ListBox::pContainerRect).addr();
+        let visible = e.call(GET_FLOAT_TRAIT, &args![container, id]).f64();
+        // FCOMP double [01012060]; TEST AH,0x41; JNZ: on only when above.
+        if above(visible, double_zero(e)) {
+            let container = e.get(this, ListBox::pContainerRect).addr();
+            let value = e.call(TILE_GET_VALUE_Q, &args![container, 0xfb0u32]).u32();
+            e.call(TILE_VALUE_CLEAR_ACTIONS, &args![value]);
+            e.call(
+                TILE_VALUE_ADD_ACTION_TILE,
+                &args![value, 0x7d0u32, tile, 0xfb0u32],
+            );
+            let id = e
+                .call(
+                    ADD_USER_TRAIT,
+                    &args![TEXT_NUMBER_OF_VISIBLE_ITEMS, 0xffff_ffffu32],
+                )
+                .u32();
+            let container = e.get(this, ListBox::pContainerRect).addr();
+            let visible = e.call(GET_FLOAT_TRAIT, &args![container, id]).f64();
+            // FSTP float [ESP]: the count rounded to a float.
+            let visible = visible as f32;
+            e.call(
+                TILE_VALUE_ADD_ACTION_FLOAT,
+                &args![value, 0x7d3u32, visible.to_bits()],
+            );
+            e.call(TILE_VALUE_CALCULATE, &args![value, 0u32]);
+        }
+    }
+    tile
+}
+
+// Translated from 007f7280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// thiscall on a `ListBox<unsigned int>`: (value, by_index). Finds a node
+/// of the list at `+4`: with `by_index` set, the `value`th node (counting
+/// from 0); else the first whose item tile's trait `0xfac` equals `value`
+/// (`FILD` of the zero-extended value, `FUCOMPP`, `TEST AH,0x44; JNP`:
+/// only an ordered equal stops). Then `007f7380(node, node before it)`
+/// (the head is its own predecessor; the node is 0 when none matched) and
+/// answers its bool. False when the list is empty.
+pub fn fn_007f7280(e: &mut Engine, this: Ptr<ListBox>, value: u32, by_index: u8) -> bool {
+    let list = this.addr().wrapping_add(4);
+    if e.call(LIST_IS_EMPTY, &args![list]).bool() {
+        return false;
+    }
+    let head = if this.addr() == 0 { 0 } else { list };
+    let mut node = head;
+    let mut previous = head;
+    if by_index != 0 {
+        let mut counter = 0u32;
+        while node != 0 {
+            let current = counter;
+            counter = counter.wrapping_add(1);
+            if current == value {
+                break;
+            }
+            previous = node;
+            node = e.call(NEXT_NODE, &args![node]).u32();
+        }
+    } else {
+        while node != 0 {
+            let entry = e.call(IDENTITY, &args![node]).u32();
+            let tile = e.mem.u32(e.mem.u32(entry));
+            let id = e.call(GET_FLOAT_TRAIT, &args![tile, 0xfacu32]).f64();
+            if f64::from(value) == id {
+                break;
+            }
+            previous = node;
+            node = e.call(NEXT_NODE, &args![node]).u32();
+        }
+    }
+    e.call(LIST_BOX_REMOVE_7F7380, &args![this, node, previous])
+        .bool()
+}
+
 /// `pTiles` slot at `offset` of the open menu (re-read each time, as the
 /// code reads `pVatsMenu`).
 fn menu_tile(e: &Engine, offset: u32) -> u32 {
@@ -7764,6 +8166,21 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x007f6920, fn_007f6920()),
         entry!(0x007f69d0, fn_007f69d0(u32, u32) -> u32),
         entry!(0x007f6a00, fn_007f6a00(u32)),
+        entry!(0x007f6a20, fn_007f6a20(u32)),
+        entry!(0x007f6af0, fn_007f6af0(Ptr<VatsMenu>) -> bool),
+        entry!(
+            0x007f6e50,
+            vats_menu_build_meters_for_target(Ptr<VatsMenu>, u32)
+        ),
+        entry!(
+            0x007f6fb0,
+            list_box_unsigned_int_get_last_item(Ptr<ListBox>) -> u32
+        ),
+        entry!(
+            0x007f6fe0,
+            list_box_unsigned_int_add_item(Ptr<ListBox>, u32, u32, u32, u32) -> u32
+        ),
+        entry!(0x007f7280, fn_007f7280(Ptr<ListBox>, u32, u8) -> bool),
     ]
 }
 
@@ -7773,7 +8190,7 @@ mod tests {
 
     /// Every function outside the unit that the translations call; each
     /// gets a double answering 0 unless a test replaces it.
-    const CALLEES: [u32; 293] = [
+    const CALLEES: [u32; 312] = [
         ABS,
         ACTION_NAME,
         ACTION_POINTS_COST,
@@ -8067,6 +8484,25 @@ mod tests {
         WORLDSPACE_GATHER,
         WORLD_PT_TO_SCREEN_PT,
         WORLD_TO_CAMERA_MATRIX,
+        SET_MULTI_LAYER_COLLISION,
+        CAMERA_RAY_A71080,
+        FLOAT_AT_40,
+        FLOAT_AT_38,
+        LIST_BOX_NUM_UNFILTERED,
+        TILE_GET_VALUE,
+        TILE_GET_VALUE_Q,
+        TILE_VALUE_CLEAR_ACTIONS,
+        TILE_VALUE_ADD_ACTION_TILE,
+        TILE_VALUE_ADD_ACTION_FLOAT,
+        TILE_VALUE_CALCULATE,
+        LIST_ITEM_CONSTRUCT,
+        LIST_INSERT,
+        LIST_ADD_TAIL,
+        LIST_BOX_FLAG_TEST,
+        LIST_BOX_SYNCHRONIZE,
+        LIST_BOX_INIT_TILE_POSITION,
+        LIST_BOX_SET_TOTAL_LIST_HEIGHT,
+        LIST_BOX_REMOVE_7F7380,
     ];
 
     type Log = Vec<Vec<u32>>;
@@ -9005,5 +9441,238 @@ mod tests {
         e.call_log = Some(vec![]);
         assert!(!vats_menu_create(&mut e));
         assert_eq!(calls(&e, SET_FIRST_PERSON), vec![vec![player, 1]]);
+    }
+
+    #[test]
+    fn targets_of_a_reference_are_removed() {
+        let mut e = engine();
+        let s = scene(&mut e);
+        let table = e.mem.u32(s.menu);
+        e.mem.set_u32(table + 0x0c, 0x0150_0200);
+        e.register(0x0150_0200, |_, _| Ret::default());
+        e.register(LIST_REMOVE_905330, |e, _| {
+            e.mem.set_u32(LIST_011DB150, 0);
+            e.mem.set_u32(LIST_011DB150 + 4, 0);
+            Ret::default()
+        });
+        // Another reference: nothing is removed.
+        fn_007f6a20(&mut e, 0x4321);
+        assert!(calls(&e, LIST_REMOVE_905330).is_empty());
+        fn_007f6a20(&mut e, s.reference);
+        assert_eq!(calls(&e, 0x0150_0200), vec![vec![s.menu, 2, 0]]);
+        assert_eq!(
+            calls(&e, LIST_REMOVE_905330),
+            vec![vec![LIST_011DB150, LIST_011DB150]]
+        );
+        // The list is empty: the menu closes (Close reads its fade state).
+        assert_eq!(calls(&e, MENU_FADE_STATE).len(), 1);
+        // An empty list: nothing at all.
+        e.call_log = Some(vec![]);
+        fn_007f6a20(&mut e, s.reference);
+        assert!(calls(&e, IDENTITY).is_empty());
+    }
+
+    #[test]
+    fn pointer_picks_a_target() {
+        let mut e = engine();
+        let s = scene(&mut e);
+        e.mem.set_u8(s.menu + 0x10e, 1);
+        assert!(!fn_007f6af0(&mut e, Ptr::new(s.menu)));
+        assert!(calls(&e, RAY_COLLECTOR_CONSTRUCT).is_empty());
+        e.mem.set_u8(s.menu + 0x10e, 0);
+        e.set_global::<f32>(FLOAT_CAST_LENGTH, 2560.0);
+        e.register(FLOAT_AT_40, |_, _| float(3.7));
+        e.register(FLOAT_AT_38, |_, _| float(5.2));
+        let hits = e.mem.alloc(8);
+        e.mem.set_u32(hits + 4, 1);
+        e.register_double(ARRAY_460140, move |_, _| word(hits));
+        e.register(GET_AV_OBJECT_FOR_COLLIDABLE, |_, _| word(0x7000));
+        let reference = s.reference;
+        e.register_double(FIND_REFERENCE_FOR_3D, move |_, _| word(reference));
+        // The hit is the current target: false.
+        assert!(!fn_007f6af0(&mut e, Ptr::new(s.menu)));
+        let camera_rays = calls(&e, CAMERA_RAY_A71080);
+        assert_eq!((camera_rays[0][1], camera_rays[0][2]), (5, 3));
+        assert_eq!(
+            calls(&e, SET_MULTI_LAYER_COLLISION),
+            vec![vec![0x27, 0x140, 0]]
+        );
+        let scaled = calls(&e, POINT3_SCALE);
+        assert_eq!(scaled[0][0], camera_rays[0][4]);
+        assert_eq!(scaled[0][2], 2560.0f32.to_bits());
+        assert_eq!(calls(&e, RAY_COLLECTOR_DESTRUCT).len(), 1);
+        // Another target is hit: it becomes the target reference (after
+        // `UpdateChanceToHit`, which still sees the current one).
+        let other = object(&mut e, &[]);
+        let other_part = part(&mut e, 1);
+        let other_target = target(&mut e, other, 1, &[other_part]);
+        list_at(&mut e, LIST_011DB150, &[s.target, other_target]);
+        e.register_double(FIND_REFERENCE_FOR_3D, move |_, _| word(other));
+        e.mem.set_u32(VATS + 8, 1);
+        e.register(GET_FLOAT_TRAIT, |_, _| float(1.0));
+        assert!(fn_007f6af0(&mut e, Ptr::new(s.menu)));
+        assert_eq!(e.global::<u32>(TARGET_REFERENCE), other);
+        // No hit has a target: false.
+        e.register(FIND_REFERENCE_FOR_3D, |_, _| word(0x4321));
+        assert!(!fn_007f6af0(&mut e, Ptr::new(s.menu)));
+        assert_eq!(e.global::<u32>(TARGET_REFERENCE), other);
+    }
+
+    #[test]
+    fn meters_for_a_target() {
+        let mut e = engine();
+        let menu = open_menu(&mut e);
+        e.register(GET_MENU_BY_CLASS, |_, _| word(0x900));
+        e.register(TILE_FROM_PATH, |_, _| word(0x910));
+        e.register(MENU_RENDER_TEMPLATE, |_, _| word(0x920));
+        let parts = [part(&mut e, 0), part(&mut e, 5), part(&mut e, 15)];
+        let target = target(&mut e, 0x77, 1, &parts);
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, target);
+        vats_menu_build_meters_for_target(&mut e, Ptr::new(menu), node);
+        assert_eq!(
+            calls(&e, TILE_FROM_PATH),
+            vec![vec![0x900, TEXT_GLOW_BRANCH]]
+        );
+        assert_eq!(
+            calls(&e, MENU_RENDER_TEMPLATE)[0],
+            vec![menu, 0x910, TEXT_BODY_PART_PERCENT, 0]
+        );
+        assert_eq!(e.mem.u32(parts[2] + 0x30), 0x920);
+        assert_eq!(
+            calls(&e, TILE_SET_INT),
+            vec![vec![0x920, 0xfb7, 6], vec![0x920, 0xfb7, 4]]
+        );
+        // No meter rendered: no trait.
+        e.register(MENU_RENDER_TEMPLATE, |_, _| word(0));
+        e.call_log = Some(vec![]);
+        vats_menu_build_meters_for_target(&mut e, Ptr::new(menu), node);
+        assert!(calls(&e, TILE_SET_INT).is_empty());
+        assert_eq!(e.mem.u32(parts[0] + 0x30), 0);
+    }
+
+    #[test]
+    fn last_item_of_a_list_box() {
+        let mut e = engine();
+        let list_box = object(&mut e, &[(0x14, 0x0150_0300)]);
+        e.register(0x0150_0300, |_, a| word(a[1] * 10));
+        e.register(LIST_BOX_NUM_UNFILTERED, |_, _| word(3));
+        let item = list_box_unsigned_int_get_last_item(&mut e, Ptr::new(list_box));
+        assert_eq!(item, 20);
+        assert_eq!(calls(&e, LIST_BOX_NUM_UNFILTERED), vec![vec![list_box, 0]]);
+    }
+
+    /// The word the last `00905820` double was handed (by address).
+    const ADDED_ITEM: u32 = 0x0120_0000;
+
+    fn list_box_engine() -> (Engine, u32) {
+        let mut e = engine();
+        let list_box = e.mem.alloc(0x30);
+        e.register(TILE_GET_MENU, |_, _| word(0x3100));
+        e.register(MENU_RENDER_TEMPLATE, |_, _| word(0x3200));
+        e.register(ALLOCATE, |e, a| word(e.mem.alloc(a[0])));
+        e.register(LIST_ITEM_CONSTRUCT, |e, a| word(e.mem.u32(a[2]) + 1));
+        e.register(LIST_ADD_TAIL, |e, a| {
+            let added = e.mem.u32(a[1]);
+            e.mem.set_u32(ADDED_ITEM, added);
+            Ret::default()
+        });
+        e.register(LIST_BOX_FLAG_TEST, |_, _| word(1));
+        e.register(TILE_GET_VALUE_Q, |_, _| word(0x3300));
+        (e, list_box)
+    }
+
+    #[test]
+    fn list_box_add_item() {
+        let (mut e, list_box) = list_box_engine();
+        let this = Ptr::new(list_box);
+        assert_eq!(list_box_unsigned_int_add_item(&mut e, this, 1, 2, 0, 3), 0);
+        e.mem.set_u32(list_box + 0x0c, 0x3000);
+        assert_eq!(list_box_unsigned_int_add_item(&mut e, this, 1, 2, 0, 0), 0);
+        assert!(calls(&e, MENU_RENDER_TEMPLATE).is_empty());
+        // At the end, the first item: the visible count actions.
+        e.mem.set_u32(list_box + 0x18, 0x6000);
+        e.mem.set_u16(list_box + 0x1c, 7);
+        e.register(LIST_COUNT, |_, _| word(1));
+        e.register(GET_FLOAT_TRAIT, |_, _| float(2.5));
+        let tile = list_box_unsigned_int_add_item(&mut e, this, 0x41, 0x4444, 0, 0);
+        assert_eq!(tile, 0x3200);
+        assert_eq!(
+            calls(&e, MENU_RENDER_TEMPLATE),
+            vec![vec![0x3100, 0x3000, 0x6000, 0]]
+        );
+        assert_eq!(
+            calls(&e, TILE_SET_INT),
+            vec![vec![0x3200, 0xfaa, 0xffff_ffff], vec![0x3200, 0xfac, 7]]
+        );
+        assert_eq!(
+            calls(&e, TILE_SET_STRING),
+            vec![vec![0x3200, 0xfc4, 0x4444, 1]]
+        );
+        assert_eq!(e.mem.u32(ADDED_ITEM), 0x42);
+        assert_eq!(e.mem.u16(list_box + 0x1c), 8);
+        assert_eq!(
+            calls(&e, LIST_BOX_INIT_TILE_POSITION),
+            vec![vec![list_box, 0x3200]]
+        );
+        assert_eq!(calls(&e, LIST_BOX_SET_TOTAL_LIST_HEIGHT).len(), 1);
+        assert_eq!(
+            calls(&e, TILE_VALUE_ADD_ACTION_TILE),
+            vec![vec![0x3300, 0x7d0, 0x3200, 0xfb0]]
+        );
+        assert_eq!(
+            calls(&e, TILE_VALUE_ADD_ACTION_FLOAT),
+            vec![vec![0x3300, 0x7d3, 2.5f32.to_bits()]]
+        );
+        assert_eq!(calls(&e, TILE_VALUE_CALCULATE), vec![vec![0x3300, 0]]);
+        // After a position, with its own template and a value present; a NaN
+        // count adds no actions.
+        e.register(TILE_GET_VALUE, |_, _| word(0x10));
+        e.register(GET_FLOAT_TRAIT, |_, _| float(f64::NAN));
+        e.call_log = Some(vec![]);
+        list_box_unsigned_int_add_item(&mut e, this, 0x41, 0, 0x55, 0x66);
+        assert_eq!(calls(&e, MENU_RENDER_TEMPLATE)[0][2], 0x66);
+        let inserted = calls(&e, LIST_INSERT);
+        assert_eq!(inserted, vec![vec![list_box + 4, 0x42, 0x55]]);
+        assert_eq!(calls(&e, LIST_BOX_SYNCHRONIZE), vec![vec![list_box]]);
+        assert!(calls(&e, TILE_SET_INT).is_empty());
+        assert!(calls(&e, TILE_SET_STRING).is_empty());
+        assert!(calls(&e, TILE_VALUE_CLEAR_ACTIONS).is_empty());
+        assert_eq!(e.mem.u16(list_box + 0x1c), 8);
+    }
+
+    #[test]
+    fn list_box_remove_by_index_or_value() {
+        let mut e = engine();
+        let list_box = e.mem.alloc(0x30);
+        let this = Ptr::new(list_box);
+        e.register(LIST_BOX_REMOVE_7F7380, |_, _| word(1));
+        assert!(!fn_007f7280(&mut e, this, 0, 1));
+        assert!(calls(&e, LIST_BOX_REMOVE_7F7380).is_empty());
+        let mut items = vec![];
+        for value in [f32::NAN, 4.0, 9.0] {
+            let tile = e.mem.alloc(4);
+            e.mem.set_f32(tile, value);
+            let item = e.mem.alloc(0x0c);
+            e.mem.set_u32(item, tile);
+            items.push(item);
+        }
+        list_at(&mut e, list_box + 4, &items);
+        let second = e.mem.u32(list_box + 8);
+        let third = e.mem.u32(second + 4);
+        e.register(GET_FLOAT_TRAIT, |e, a| float(e.mem.f32(a[0]) as f64));
+        assert!(fn_007f7280(&mut e, this, 1, 1));
+        assert!(fn_007f7280(&mut e, this, 5, 1));
+        assert!(fn_007f7280(&mut e, this, 9, 0));
+        assert!(fn_007f7280(&mut e, this, 7, 0));
+        assert_eq!(
+            calls(&e, LIST_BOX_REMOVE_7F7380),
+            vec![
+                vec![list_box, second, list_box + 4],
+                vec![list_box, 0, third],
+                vec![list_box, third, second],
+                vec![list_box, 0, third],
+            ]
+        );
     }
 }
