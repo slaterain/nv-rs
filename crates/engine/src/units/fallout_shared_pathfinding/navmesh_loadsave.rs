@@ -1330,7 +1330,8 @@ pub fn fn_006942e0(e: &mut Engine, this: Ptr<NavMesh>, target: Ptr) {
     let target_mesh = other(e);
     let cell = word(e, mesh + MESH_PARENT_CELL);
     e.mem.set_u32(target_mesh + MESH_PARENT_CELL, cell);
-    let pairs: [(u32, fn(&mut Engine, Array, Array)); 3] = [
+    type ArrayCopy = fn(&mut Engine, Array, Array);
+    let pairs: [(u32, ArrayCopy); 3] = [
         (MESH_VERTICES, fn_00694e30),
         (MESH_TRIANGLES, fn_00694ea0),
         (MESH_EXTRA_EDGE_INFO, fn_00694f20),
