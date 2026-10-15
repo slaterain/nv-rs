@@ -22,9 +22,27 @@ pub fn deleting_destructor_00d61260(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+// Translated from 00d61220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0xc (`SUB ECX,0xc`) and jumps to `00d61260`. `00d61260` (`RET 4`) has the shape of a deleting destructor: it tests bit 0 of the flags word and returns the object pointer in `EAX`. The return type is `u32` from that `EAX`; the parameter count is from the `RET 4`. The stack word is passed on unchanged.
+pub fn fn_00d61220(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x00d6_1260, &args![this.addr().wrapping_sub(0xc), flags])
+        .u32()
+}
+
+// Translated from 00d61230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x8 (`SUB ECX,0x8`) and jumps to `00d61260`. `00d61260` (`RET 4`) has the shape of a deleting destructor: it tests bit 0 of the flags word and returns the object pointer in `EAX`. The return type is `u32` from that `EAX`; the parameter count is from the `RET 4`. The stack word is passed on unchanged.
+pub fn fn_00d61230(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x00d6_1260, &args![this.addr().wrapping_sub(0x8), flags])
+        .u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00d6_1260, deleting_destructor_00d61260(Ptr, u8) -> Ptr)]
+    vec![
+        entry!(0x00d6_1260, deleting_destructor_00d61260(Ptr, u8) -> Ptr),
+        entry!(0x00d6_1220, fn_00d61220(Ptr, u32) -> u32),
+        entry!(0x00d6_1230, fn_00d61230(Ptr, u32) -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -88,5 +106,48 @@ mod tests {
     #[test]
     fn deleting_destructor_00d61260_frees_only_when_bit_zero_is_set() {
         check(0x00d6_1260, 0x00d6_10e0);
+    }
+}
+
+#[cfg(test)]
+mod le81_thunk_tests {
+    use crate::prelude::*;
+
+    /// Calls `thunk` with `this = 0x2000` and `extra` stack words, with a
+    /// double over `target` that returns `0xdeadbeef`; checks that the
+    /// double ran once, with `this` moved back by `back` and `extra` passed on.
+    fn check(thunk: u32, target: u32, back: u32, extra: &[u32]) -> Ret {
+        let mut e = Engine::new();
+        e.register(target, |_, _| Ret {
+            eax: 0xdead_beef,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let mut words = vec![0x2000u32];
+        words.extend_from_slice(extra);
+        let result = e.call(thunk, &words);
+        let log = e.call_log.take().unwrap();
+        let mut expected = vec![0x2000 - back];
+        expected.extend_from_slice(extra);
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == target).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, expected);
+        result
+    }
+
+    #[test]
+    fn le81_thunk_00d61220() {
+        assert_eq!(
+            check(0x00d6_1220, 0x00d6_1260, 0xc, &[0x1]).u32(),
+            0xdead_beef
+        );
+    }
+
+    #[test]
+    fn le81_thunk_00d61230() {
+        assert_eq!(
+            check(0x00d6_1230, 0x00d6_1260, 0x8, &[0x1]).u32(),
+            0xdead_beef
+        );
     }
 }

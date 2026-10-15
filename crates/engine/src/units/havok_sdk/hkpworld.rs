@@ -3109,6 +3109,34 @@ pub fn hkp_world_remove_action(e: &mut Engine, this: Ptr<HkpWorld>, action: u32)
     hkp_world_remove_action_immediately(e, this, action);
 }
 
+// Translated from 00c98310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x14 (`SUB ECX,0x14`) and jumps to `00c982e0`. `00c982e0` (`RET 4`) has the shape of a deleting destructor: it tests bit 0 of the flags word and returns the object pointer in `EAX`. The return type is `u32` from that `EAX`; the parameter count is from the `RET 4`. The stack word is passed on unchanged.
+pub fn fn_00c98310(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x00c9_82e0, &args![this.addr().wrapping_sub(0x14), flags])
+        .u32()
+}
+
+// Translated from 00c98320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x8 (`SUB ECX,0x8`) and jumps to `00c982e0`. `00c982e0` (`RET 4`) has the shape of a deleting destructor: it tests bit 0 of the flags word and returns the object pointer in `EAX`. The return type is `u32` from that `EAX`; the parameter count is from the `RET 4`. The stack word is passed on unchanged.
+pub fn fn_00c98320(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x00c9_82e0, &args![this.addr().wrapping_sub(0x8), flags])
+        .u32()
+}
+
+// Translated from 00c98330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0xc (`SUB ECX,0xc`) and jumps to `00c982e0`. `00c982e0` (`RET 4`) has the shape of a deleting destructor: it tests bit 0 of the flags word and returns the object pointer in `EAX`. The return type is `u32` from that `EAX`; the parameter count is from the `RET 4`. The stack word is passed on unchanged.
+pub fn fn_00c98330(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x00c9_82e0, &args![this.addr().wrapping_sub(0xc), flags])
+        .u32()
+}
+
+// Translated from 00c98340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x10 (`SUB ECX,0x10`) and jumps to `00c982e0`. `00c982e0` (`RET 4`) has the shape of a deleting destructor: it tests bit 0 of the flags word and returns the object pointer in `EAX`. The return type is `u32` from that `EAX`; the parameter count is from the `RET 4`. The stack word is passed on unchanged.
+pub fn fn_00c98340(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x00c9_82e0, &args![this.addr().wrapping_sub(0x10), flags])
+        .u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3257,6 +3285,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             hkp_world_remove_constraint(Ptr<HkpWorld>, Ptr, u32)
         ),
         entry!(0x00c9_7f50, hkp_world_remove_action(Ptr<HkpWorld>, u32)),
+        entry!(0x00c9_8310, fn_00c98310(Ptr, u32) -> u32),
+        entry!(0x00c9_8320, fn_00c98320(Ptr, u32) -> u32),
+        entry!(0x00c9_8330, fn_00c98330(Ptr, u32) -> u32),
+        entry!(0x00c9_8340, fn_00c98340(Ptr, u32) -> u32),
     ]
 }
 
@@ -6895,5 +6927,64 @@ pub(crate) mod profiling_support {
             .step_by(12)
             .map(|record| e.mem.u32(record))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod le81_thunk_tests {
+    use crate::prelude::*;
+
+    /// Calls `thunk` with `this = 0x2000` and `extra` stack words, with a
+    /// double over `target` that returns `0xdeadbeef`; checks that the
+    /// double ran once, with `this` moved back by `back` and `extra` passed on.
+    fn check(thunk: u32, target: u32, back: u32, extra: &[u32]) -> Ret {
+        let mut e = Engine::new();
+        e.register(target, |_, _| Ret {
+            eax: 0xdead_beef,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let mut words = vec![0x2000u32];
+        words.extend_from_slice(extra);
+        let result = e.call(thunk, &words);
+        let log = e.call_log.take().unwrap();
+        let mut expected = vec![0x2000 - back];
+        expected.extend_from_slice(extra);
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == target).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, expected);
+        result
+    }
+
+    #[test]
+    fn le81_thunk_00c98310() {
+        assert_eq!(
+            check(0x00c9_8310, 0x00c9_82e0, 0x14, &[0x1]).u32(),
+            0xdead_beef
+        );
+    }
+
+    #[test]
+    fn le81_thunk_00c98320() {
+        assert_eq!(
+            check(0x00c9_8320, 0x00c9_82e0, 0x8, &[0x1]).u32(),
+            0xdead_beef
+        );
+    }
+
+    #[test]
+    fn le81_thunk_00c98330() {
+        assert_eq!(
+            check(0x00c9_8330, 0x00c9_82e0, 0xc, &[0x1]).u32(),
+            0xdead_beef
+        );
+    }
+
+    #[test]
+    fn le81_thunk_00c98340() {
+        assert_eq!(
+            check(0x00c9_8340, 0x00c9_82e0, 0x10, &[0x1]).u32(),
+            0xdead_beef
+        );
     }
 }
