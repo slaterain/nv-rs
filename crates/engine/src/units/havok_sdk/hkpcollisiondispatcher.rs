@@ -391,7 +391,9 @@ fn format_override_warning(e: &mut Engine, entry: u32, type_a: i32, type_b: i32)
 /// ORs `m_hasAlternateType[source]` into `m_hasAlternateType[target]` and
 /// repeats it for every `m_shapeInheritance` entry whose alternate type is
 /// `target` (target = the entry's primary type, source = `target`), with
-/// `depth` + 1 (no Xbox PDB name).
+/// `depth` + 1 (no Xbox PDB name). The exe passes `depth` + 1 down but never
+/// reads it otherwise.
+#[allow(clippy::only_used_in_recursion)]
 pub fn fn_00cfb510(
     e: &mut Engine,
     this: Ptr<HkpCollisionDispatcher>,
