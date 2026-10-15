@@ -22,9 +22,49 @@ pub fn deleting_destructor_00cf5890(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+// Translated from 00cf5830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A virtual method (slot of the vtable at `010cc3b8`, no map name): the number at +0xC
+/// minus the unsigned 16-bit number at +0x16.
+pub fn fn_00cf5830(e: &mut Engine, this: Ptr) -> i32 {
+    let count = e.mem.i32(this.addr() + 0xc);
+    count.wrapping_sub(i32::from(e.mem.u16(this.addr() + 0x16)))
+}
+
+// Translated from 00cf5840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A virtual method (no map name): the index of the next set bit after `index` in the
+/// 256-bit set at +0x40, or `-1` when none is below the count at +0xC. An index of 256 or
+/// more (or a negative one, compared as unsigned) that is still below the count is
+/// returned as it is.
+pub fn fn_00cf5840(e: &mut Engine, this: Ptr, index: i32) -> i32 {
+    let count = e.mem.i32(this.addr() + 0xc);
+    let mut next = index.wrapping_add(1);
+    while next < count {
+        if next as u32 >= 0x100 {
+            return next;
+        }
+        let word = e.mem.u32(this.addr() + 0x40 + (next as u32 >> 5) * 4);
+        if word & (1u32 << (next & 0x1f)) != 0 {
+            return next;
+        }
+        next += 1;
+    }
+    -1
+}
+
+// Translated from 00cf5880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A virtual method (no map name): `00cf5840(this, -1)`, the first set bit.
+pub fn fn_00cf5880(e: &mut Engine, this: Ptr) -> i32 {
+    fn_00cf5840(e, this, -1)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00cf_5890, deleting_destructor_00cf5890(Ptr, u8) -> Ptr)]
+    vec![
+        entry!(0x00cf_5830, fn_00cf5830(Ptr) -> i32),
+        entry!(0x00cf_5840, fn_00cf5840(Ptr, i32) -> i32),
+        entry!(0x00cf_5880, fn_00cf5880(Ptr) -> i32),
+        entry!(0x00cf_5890, deleting_destructor_00cf5890(Ptr, u8) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -83,6 +123,63 @@ mod tests {
         let got = e.call(address, &args![this, 1u32]).u32();
         assert_eq!(got, this);
         assert_eq!(*log.borrow(), vec![1, this, 2, this, 0x1234]);
+    }
+
+    fn bit_set(e: &mut Engine, count: i32, bits: &[u32]) -> u32 {
+        let this = e.mem.alloc(0x80);
+        e.mem.set_i32(this + 0xc, count);
+        for bit in bits {
+            let at = this + 0x40 + (bit >> 5) * 4;
+            let word = e.mem.u32(at);
+            e.mem.set_u32(at, word | (1 << (bit & 31)));
+        }
+        this
+    }
+
+    #[test]
+    fn count_minus_the_16_bit_number() {
+        let mut e = Engine::new();
+        let this = bit_set(&mut e, 10, &[]);
+        e.mem.set_u16(this + 0x16, 0xffff);
+        assert_eq!(e.call(0x00cf_5830, &args![this]).i32(), 10 - 0xffff);
+    }
+
+    #[test]
+    fn next_set_bit_walks_up_to_the_count() {
+        let mut e = Engine::new();
+        let this = bit_set(&mut e, 100, &[3, 40, 99]);
+        let next = |e: &mut Engine, from: i32| e.call(0x00cf_5840, &args![this, from]).i32();
+        assert_eq!(next(&mut e, -1), 3);
+        assert_eq!(next(&mut e, 3), 40);
+        assert_eq!(next(&mut e, 40), 99);
+        assert_eq!(next(&mut e, 99), -1);
+        assert_eq!(next(&mut e, 5000), -1);
+        // a bit at or past the count is not looked at
+        let this = bit_set(&mut e, 50, &[60]);
+        assert_eq!(e.call(0x00cf_5840, &args![this, 2i32]).i32(), -1);
+    }
+
+    #[test]
+    fn next_set_bit_returns_indices_from_256_up_unexamined() {
+        let mut e = Engine::new();
+        let this = bit_set(&mut e, 300, &[]);
+        assert_eq!(e.call(0x00cf_5840, &args![this, 253i32]).i32(), 256);
+        // 255 is below 256 and its bit is clear: the walk reaches 256 and returns it
+        let this = bit_set(&mut e, 300, &[]);
+        assert_eq!(e.call(0x00cf_5840, &args![this, 255i32]).i32(), 256);
+        // a negative start: -3 + 1 = -2 is below the count and compares as >= 256 unsigned
+        assert_eq!(e.call(0x00cf_5840, &args![this, -3i32]).i32(), -2);
+    }
+
+    #[test]
+    fn first_set_bit_starts_from_minus_one() {
+        let mut e = Engine::new();
+        let this = bit_set(&mut e, 64, &[0, 7]);
+        assert_eq!(e.call(0x00cf_5880, &args![this]).i32(), 0);
+        let this = bit_set(&mut e, 64, &[7]);
+        assert_eq!(e.call(0x00cf_5880, &args![this]).i32(), 7);
+        let this = bit_set(&mut e, 0, &[7]);
+        assert_eq!(e.call(0x00cf_5880, &args![this]).i32(), -1);
     }
 
     #[test]
