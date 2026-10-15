@@ -1690,6 +1690,15 @@ pub fn fn_004dd130(e: &mut Engine, base: f32, exponent: f32) -> f32 {
         .f32()
 }
 
+/// The function `fn_004dcce0` calls on the member (`00658930`).
+const CALLEE_00658930: u32 = 0x0065_8930;
+
+// Translated from 004dcce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thin wrapper: calls `00658930` with `ECX` = `this + 0x450` and passes on its 16-bit result.
+pub fn fn_004dcce0(e: &mut Engine, this: Ptr) -> u16 {
+    e.call(CALLEE_00658930, &args![this.byte_add(0x450)]).u16()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1736,6 +1745,49 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004dc560, fn_004dc560()),
         entry!(0x004dc590, fn_004dc590()),
         entry!(0x004dd130, fn_004dd130(f32, f32) -> f32),
+        entry!(0x004de2f0, fn_004de2f0(Ptr, u32, u8) -> Ptr),
+        entry!(0x004de370, fn_004de370(Ptr, u32, u32) -> Ptr),
+        entry!(0x004da4d0, renderer_kill(u8)),
+        entry!(0x004da570, fn_004da570() -> bool),
+        entry!(0x004da650, fn_004da650(Ptr) -> Ptr),
+        entry!(0x004da670, renderer_init(u32, u32) -> Ptr),
+        entry!(0x004dc010, fn_004dc010(u8)),
+        entry!(0x004dc020, fn_004dc020(Ptr) -> Ptr),
+        entry!(0x004dc040, fn_004dc040() -> u32),
+        entry!(0x004dc050, fn_004dc050(u8)),
+        entry!(0x004dc060, fn_004dc060(u8) -> i32),
+        entry!(0x004dc090, fn_004dc090(u8)),
+        entry!(0x004dc0a0, fn_004dc0a0() -> u8),
+        entry!(0x004dc0b0, fn_004dc0b0() -> i32),
+        entry!(0x004dc0c0, fn_004dc0c0(i32)),
+        entry!(0x004dc100, fn_004dc100(u32)),
+        entry!(0x004dc110, fn_004dc110() -> u32),
+        entry!(0x004dc120, fn_004dc120(Ptr, u32) -> Ptr),
+        entry!(0x004dc160, fn_004dc160(Ptr, u32) -> Ptr),
+        entry!(0x004dc1c0, fn_004dc1c0(Ptr) -> bool),
+        entry!(0x004dc1e0, fn_004dc1e0() -> u32),
+        entry!(0x004dc1f0, fn_004dc1f0() -> i32),
+        entry!(0x004dc200, fn_004dc200() -> i32),
+        entry!(0x004dc210, fn_004dc210() -> i32),
+        entry!(0x004dc220, fn_004dc220() -> u32),
+        entry!(0x004dc230, fn_004dc230() -> u32),
+        entry!(0x004dc240, fn_004dc240() -> u32),
+        entry!(0x004dc250, fn_004dc250() -> u32),
+        entry!(0x004dc260, fn_004dc260() -> u32),
+        entry!(0x004dc270, fn_004dc270() -> u32),
+        entry!(0x004dc280, fn_004dc280() -> u32),
+        entry!(0x004dc290, fn_004dc290() -> u32),
+        entry!(0x004dc2a0, fn_004dc2a0() -> u32),
+        entry!(0x004dc2b0, fn_004dc2b0() -> i32),
+        entry!(0x004dc2c0, fn_004dc2c0() -> u32),
+        entry!(0x004dc2d0, fn_004dc2d0(f32)),
+        entry!(0x004dc310, fn_004dc310() -> bool),
+        entry!(0x004dc330, fn_004dc330(u32)),
+        entry!(0x004dc360, fn_004dc360()),
+        entry!(0x004dc540, fn_004dc540(Ptr, Ptr)),
+        entry!(0x004dc560, fn_004dc560()),
+        entry!(0x004dc590, fn_004dc590()),
+        entry!(0x004d_cce0, fn_004dcce0(Ptr) -> u16),
     ]
 }
 
@@ -3333,5 +3385,1589 @@ mod tests {
         let log = e.call_log.take().unwrap();
         let forwarded = log.iter().find(|(addr, _)| *addr == POWF).unwrap();
         assert_eq!(forwarded.1, vec![0x7fc0_0001, 1.0f32.to_bits()]);
+    }
+
+    #[test]
+    fn interface_and_third_collection_settings_join_their_collections() {
+        let mut e = Engine::new();
+        let c = e.mem.alloc(8);
+        e.put_vtable(0x0090_0000, &[0, 0x0090_1000]);
+        e.mem.set_u32(c, 0x0090_0000);
+        e.register_double(PREF_SETTINGS, move |_, _| c.into_ret());
+        e.register_double(INTERFACE_SETTINGS, move |_, _| c.into_ret());
+        e.register(0x0090_1000, |_, _| Ret::default());
+        let b = e.mem.alloc(0xc);
+        e.call(0x004de2f0, &[b, 0x50, 1]);
+        assert_eq!(e.mem.u32(b), PREF_SETTING_VTABLE);
+        assert_eq!(e.mem.u8(b + 4), 1);
+        let f = e.mem.alloc(0xc);
+        e.call(0x004de370, &[f, 0x60, 0x7f80_0004]);
+        assert_eq!(e.mem.u32(f), INTERFACE_SETTING_VTABLE);
+        assert_eq!(e.mem.u32(f + 4), 0x7fc0_0004);
+    }
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// Pages holding the globals, settings and constants the code touches.
+    const PAGES: [u32; 17] = [
+        0x0101_1000,
+        0x0101_2000,
+        0x0101_d000,
+        0x0102_1000,
+        0x0118_9000,
+        0x011a_2000,
+        0x011a_9000,
+        0x011a_d000,
+        0x011c_3000,
+        0x011c_6000,
+        0x011c_7000,
+        0x011d_e000,
+        0x011f_4000,
+        0x011f_9000,
+        0x0120_2000,
+        0x0126_e000,
+        0x0126_f000,
+    ];
+
+    /// An engine with the globals mapped, the constants the code reads from
+    /// the exe set, and doubles for the setting getters and setters (a
+    /// setting keeps its value at `+4`) and the smart pointer.
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        for page in PAGES {
+            e.map(page, 0x1000);
+        }
+        e.set_global(TWO, 2.0f64);
+        e.set_global(ZERO, 0.0f64);
+        e.set_global(FOUR_BY_THREE, 0.75f64);
+        e.register(SETTING_INT_POINTER, |_, a| (a[0] + 4).into_ret());
+        e.register(SETTING_BOOL_POINTER, |_, a| (a[0] + 4).into_ret());
+        e.register(SETTING_FLOAT_POINTER, |_, a| (a[0] + 4).into_ret());
+        e.register(SETTING_INT_VALUE, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(SETTING_BOOL_VALUE, |e, a| {
+            (e.mem.u8(a[0] + 4) != 0).into_ret()
+        });
+        e.register(SETTING_INT_SET, |e, a| {
+            e.mem.set_u32(a[0] + 4, a[1]);
+            Ret::default()
+        });
+        e.register(SETTING_BOOL_SET, |e, a| {
+            e.mem.set_u8(a[0] + 4, a[1] as u8);
+            Ret::default()
+        });
+        e.register(SMART_POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(SMART_POINTER_SET, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(ADAPTER_SECOND_NAME, |_, a| (a[0] + 4).into_ret());
+        e
+    }
+
+    /// A double that returns `value` in `EAX`.
+    fn returning(e: &mut Engine, addr: u32, value: u32) {
+        e.register_double(addr, move |_, _| Ret {
+            eax: value,
+            ..Ret::default()
+        });
+    }
+
+    /// Doubles that do nothing and return 0.
+    fn ignoring(e: &mut Engine, addrs: &[u32]) {
+        for addr in addrs {
+            returning(e, *addr, 0);
+        }
+    }
+
+    /// The log entries for `addr`, in order.
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, args)| args.clone())
+            .collect()
+    }
+
+    fn set_setting_int(e: &mut Engine, setting: u32, value: i32) {
+        e.mem.set_i32(setting + 4, value);
+    }
+
+    fn set_setting_flag(e: &mut Engine, setting: u32, value: bool) {
+        e.mem.set_u8(setting + 4, value as u8);
+    }
+
+    fn set_setting_float(e: &mut Engine, setting: u32, value: f32) {
+        e.mem.set_f32(setting + 4, value);
+    }
+
+    macro_rules! global_getter_test {
+        ($name:ident, $addr:literal, $global:expr) => {
+            #[test]
+            fn $name() {
+                let mut e = rig();
+                e.set_global($global, 0x1234_5678u32);
+                assert_eq!(e.call($addr, &args![]).u32(), 0x1234_5678);
+            }
+        };
+    }
+
+    // ---- Renderer::Kill ------------------------------------------------
+
+    /// Doubles for `Renderer::Kill`: the reference count is `references`.
+    fn kill_rig(references: i32) -> Engine {
+        let mut e = rig();
+        ignoring(&mut e, &[RENDERER_SHUTDOWN, KILL_NOTE, LOG_MESSAGE]);
+        returning(&mut e, REFERENCE_COUNT, references as u32);
+        e.mem.set_u32(RENDERER_POINTER, 0x4000);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn kill_without_report_only_shuts_down_and_clears_the_pointer() {
+        let mut e = kill_rig(5);
+        e.call(0x004d_a4d0, &args![0u8]);
+        assert_eq!(calls_to(&e, RENDERER_SHUTDOWN), vec![vec![0]]);
+        assert!(calls_to(&e, LOG_MESSAGE).is_empty());
+        assert!(calls_to(&e, REFERENCE_COUNT).is_empty());
+        assert_eq!(e.mem.u32(RENDERER_POINTER), 0);
+    }
+
+    #[test]
+    fn kill_with_the_only_reference_logs_nothing() {
+        let mut e = kill_rig(1);
+        e.call(0x004d_a4d0, &args![1u8]);
+        assert_eq!(calls_to(&e, RENDERER_SHUTDOWN), vec![vec![1]]);
+        assert!(calls_to(&e, KILL_NOTE).is_empty());
+        assert!(calls_to(&e, LOG_MESSAGE).is_empty());
+        assert_eq!(e.mem.u32(RENDERER_POINTER), 0);
+    }
+
+    #[test]
+    fn kill_with_one_extra_reference_logs_the_singular_message() {
+        let mut e = kill_rig(2);
+        e.call(0x004d_a4d0, &args![1u8]);
+        assert_eq!(calls_to(&e, KILL_NOTE).len(), 1);
+        assert_eq!(calls_to(&e, LOG_MESSAGE), vec![vec![MESSAGE_ONE_REFERENCE]]);
+    }
+
+    #[test]
+    fn kill_with_many_references_logs_the_count_minus_one() {
+        let mut e = kill_rig(6);
+        e.call(0x004d_a4d0, &args![1u8]);
+        assert_eq!(
+            calls_to(&e, LOG_MESSAGE),
+            vec![vec![MESSAGE_MANY_REFERENCES, 5]]
+        );
+    }
+
+    #[test]
+    fn kill_without_a_renderer_skips_the_report() {
+        let mut e = kill_rig(6);
+        e.mem.set_u32(RENDERER_POINTER, 0);
+        e.call(0x004d_a4d0, &args![1u8]);
+        assert!(calls_to(&e, REFERENCE_COUNT).is_empty());
+        assert!(calls_to(&e, LOG_MESSAGE).is_empty());
+    }
+
+    // ---- 004da570 -----------------------------------------------------
+
+    /// Doubles for `004da570`: an adapter whose name is `adapter_name`
+    /// (when `with_adapter`), and a setting text `setting_text`.
+    fn device_rig(with_adapter: bool, adapter_name: &str, setting_text: &str) -> (Engine, u32) {
+        let mut e = rig();
+        let adapter = e.mem.alloc(0x500);
+        e.mem
+            .set_cstr(adapter + ADAPTER_NAME_OFFSET, adapter_name.as_bytes());
+        let text = e.mem.alloc(0x40);
+        e.mem.set_cstr(text, setting_text.as_bytes());
+        returning(&mut e, ADAPTER_LIST, 1);
+        returning(
+            &mut e,
+            ADAPTER_DESCRIPTION,
+            if with_adapter { adapter } else { 0 },
+        );
+        returning(&mut e, STRING_TEXT, text);
+        e.register(STRICMP, |e, a| {
+            let left = e.mem.cstr(a[0]).to_ascii_lowercase();
+            let right = e.mem.cstr(a[1]).to_ascii_lowercase();
+            (left.cmp(&right) as i32).into_ret()
+        });
+        ignoring(&mut e, &[STRING_COPY, STRCAT, STRING_SETTING_SET]);
+        e.call_log = Some(vec![]);
+        (e, adapter)
+    }
+
+    #[test]
+    fn device_check_reports_a_different_adapter_name() {
+        let (mut e, adapter) = device_rig(true, "NVIDIA GeForce", "AMD Radeon");
+        assert!(e.call(0x004d_a570, &args![]).bool());
+        assert_eq!(calls_to(&e, ADAPTER_SECOND_NAME), vec![vec![adapter]]);
+        assert!(calls_to(&e, STRING_SETTING_SET).is_empty());
+    }
+
+    #[test]
+    fn device_check_rewrites_the_setting_for_the_same_name() {
+        let (mut e, _) = device_rig(true, "NVIDIA GeForce", "nvidia geforce");
+        assert!(!e.call(0x004d_a570, &args![]).bool());
+        let copy = calls_to(&e, STRING_COPY);
+        assert_eq!(copy.len(), 1);
+        assert_eq!(copy[0][1], DEVICE_NAME_DELIMITER);
+        let appended = calls_to(&e, STRCAT);
+        assert_eq!(appended.len(), 2);
+        assert_eq!(appended[1][1], DEVICE_NAME_DELIMITER);
+        let set = calls_to(&e, STRING_SETTING_SET);
+        assert_eq!(set.len(), 1);
+        assert_eq!(set[0][0], S_D3D_DEVICE);
+        assert_eq!(set[0][1], copy[0][0]);
+    }
+
+    #[test]
+    fn device_check_rewrites_the_setting_without_an_adapter() {
+        let (mut e, _) = device_rig(false, "", "anything");
+        assert!(!e.call(0x004d_a570, &args![]).bool());
+        assert_eq!(calls_to(&e, STRING_SETTING_SET).len(), 1);
+        assert!(calls_to(&e, STRICMP).is_empty());
+    }
+
+    #[test]
+    fn device_check_rewrites_the_setting_without_an_adapter_list() {
+        let (mut e, _) = device_rig(true, "x", "y");
+        returning(&mut e, ADAPTER_LIST, 0);
+        assert!(!e.call(0x004d_a570, &args![]).bool());
+        assert!(calls_to(&e, ADAPTER_DESCRIPTION).is_empty());
+        assert_eq!(calls_to(&e, STRING_SETTING_SET).len(), 1);
+    }
+
+    #[test]
+    fn adapter_name_is_inside_the_description() {
+        let mut e = rig();
+        assert_eq!(e.call(0x004d_a650, &args![0x1000u32]).u32(), 0x1204);
+    }
+
+    // ---- Renderer::Init -----------------------------------------------
+
+    const FILE_HANDLE: u32 = 0x7777;
+    const VTABLE_RENDERER: u32 = 0x0300_0000;
+    const VTABLE_DIRECT3D: u32 = 0x0300_1000;
+    const RENDERER_SET_TABLE: u32 = 0x0400_00b0;
+    const RENDERER_OBJECT_METHOD: u32 = 0x0400_013c;
+    const CHECK_DEVICE_FORMAT: u32 = 0x0400_0028;
+    const INIT: u32 = 0x004d_a670;
+
+    /// What `init_rig` hands to the tests.
+    struct InitRig {
+        e: Engine,
+        renderer: u32,
+        adapter: u32,
+        caps: u32,
+        /// `(usage, resource type, format)` of every `CheckDeviceFormat`.
+        queries: Rc<RefCell<Vec<(u32, u32, u32)>>>,
+    }
+
+    /// Doubles for every function `Renderer::Init` calls outside this file
+    /// (and the later part of the unit), with a full-screen configuration
+    /// that succeeds: 640x480, no multisampling, a device that supports
+    /// every format.
+    fn init_rig() -> InitRig {
+        let mut e = rig();
+        ignoring(
+            &mut e,
+            &[
+                SCOPE_GUARD_CTOR,
+                SCOPE_GUARD_DTOR,
+                SPRINTF,
+                FCLOSE,
+                EYEFINITY_SETUP,
+                EYEFINITY_ACTIVE,
+                IMPORT_ADJUST_WINDOW_RECT,
+                IMPORT_SET_WINDOW_POS,
+                SHADER_LEVEL_STRING,
+                SET_PERF_OPTIONS,
+                IMAGE_CONVERTER_INSTALL,
+                SHADER_MANAGER_CONFIGURE,
+                SHADOW_FILTER_MAP,
+                SHADOW_FILTER_BUILD,
+                SHADER_TARGET_PIXEL,
+                SHADER_TARGET_VERTEX,
+                SHADER_PACKAGE,
+                IMPORT_GET_CLASS_LONG,
+                IMPORT_GET_WINDOW_LONG,
+                NEW_OBJECT,
+                MULTISAMPLE_SUPPORTED,
+                FPRINTF,
+                STRING_COPY,
+            ],
+        );
+        returning(&mut e, PREPARE_DISPLAY_MODE, 1);
+        returning(&mut e, FOPEN, FILE_HANDLE);
+        returning(&mut e, IMPORT_GET_SYSTEM_METRICS, 1);
+        returning(&mut e, ACTOR_SHADOW_COUNT_PAIR, 0x0201);
+        e.register(FLOAT4_CONSTRUCT, |e, a| {
+            for i in 0..4 {
+                e.mem.set_u32(a[0] + 4 * i, a[1 + i as usize]);
+            }
+            a[0].into_ret()
+        });
+
+        let renderer = e.mem.alloc(0x300);
+        e.put_vtable(VTABLE_RENDERER, &[0; 80]);
+        e.mem.set_u32(VTABLE_RENDERER + 0xb0, RENDERER_SET_TABLE);
+        e.mem
+            .set_u32(VTABLE_RENDERER + 0x13c, RENDERER_OBJECT_METHOD);
+        e.mem.set_u32(renderer, VTABLE_RENDERER);
+        ignoring(&mut e, &[RENDERER_SET_TABLE, RENDERER_OBJECT_METHOD]);
+        returning(&mut e, CREATE_RENDERER, renderer);
+
+        // The Direct3D object: every query succeeds and is recorded.
+        let direct3d = e.mem.alloc(8);
+        e.put_vtable(VTABLE_DIRECT3D, &[0; 20]);
+        e.mem.set_u32(VTABLE_DIRECT3D + 0x28, CHECK_DEVICE_FORMAT);
+        e.mem.set_u32(direct3d, VTABLE_DIRECT3D);
+        e.set_global(DIRECT3D_OBJECT, direct3d);
+        let queries = Rc::new(RefCell::new(Vec::new()));
+        let recorded = queries.clone();
+        e.register_double(CHECK_DEVICE_FORMAT, move |_, a| {
+            // this, adapter, device type, adapter format, usage, type, format
+            assert_eq!(&a[1..4], &[0, 1, FORMAT_DISPLAY]);
+            recorded.borrow_mut().push((a[4], a[5], a[6]));
+            Ret::default()
+        });
+
+        // The adapter description with a hardware device information object
+        // whose capabilities follow its handle word.
+        let adapter = e.mem.alloc(0x500);
+        let info = e.mem.alloc(0x140);
+        e.mem.set_u32(info + 4, 1);
+        e.mem.set_u32(adapter + ADAPTER_HAL_INFO_OFFSET, info);
+        returning(&mut e, ADAPTER_DESCRIPTION, adapter);
+        let caps = info + 4;
+        e.mem.set_u32(caps + CAPS_MAX_PS_INSTRUCTIONS, 0x200);
+        e.mem.set_u32(caps + CAPS_MAX_PS_INSTRUCTIONS_LIMIT, 0x100);
+        e.mem.set_u32(caps + CAPS_PIXEL_SHADER_VERSION, 0xffff_0300);
+        e.mem
+            .set_u32(caps + CAPS_VERTEX_SHADER_VERSION, 0xffff_0200);
+
+        set_setting_int(&mut e, I_SIZE_W, 640);
+        set_setting_int(&mut e, I_SIZE_H, 480);
+        set_setting_flag(&mut e, B_FULL_SCREEN, true);
+        e.call_log = Some(vec![]);
+        InitRig {
+            e,
+            renderer,
+            adapter,
+            caps,
+            queries,
+        }
+    }
+
+    /// Runs `Renderer::Init` with window `1` and instance `2`.
+    fn run_init(rig: &mut InitRig) -> u32 {
+        rig.e.call(INIT, &args![1u32, 2u32]).u32()
+    }
+
+    #[test]
+    fn init_returns_null_when_the_display_mode_cannot_be_prepared() {
+        let mut rig = init_rig();
+        returning(&mut rig.e, PREPARE_DISPLAY_MODE, 0);
+        let result = rig.e.call(INIT, &args![0x111u32, 0x222u32]).u32();
+        assert_eq!(result, 0);
+        assert_eq!(rig.e.global::<u32>(PARENT_WINDOW), 0x111);
+        assert_eq!(rig.e.global::<u32>(MODULE_INSTANCE), 0x222);
+        // The guard is built with tag 4, line 0x179, and destroyed again.
+        let ctor = calls_to(&rig.e, SCOPE_GUARD_CTOR);
+        assert_eq!(&ctor[0][1..], &[4, 1, SOURCE_FILE, 0x179]);
+        assert_eq!(calls_to(&rig.e, SCOPE_GUARD_DTOR), vec![vec![ctor[0][0]]]);
+        assert!(calls_to(&rig.e, CREATE_RENDERER).is_empty());
+        // RendererInfo.txt was created empty ("w") and closed.
+        assert_eq!(calls_to(&rig.e, FOPEN)[0][1], MODE_WRITE);
+        assert_eq!(calls_to(&rig.e, FCLOSE), vec![vec![FILE_HANDLE]]);
+    }
+
+    #[test]
+    fn init_uses_the_given_window_when_full_screen() {
+        let mut rig = init_rig();
+        set_setting_int(&mut rig.e, I_PRESENT_INTERVAL, 1);
+        let result = rig.e.call(INIT, &args![0x111u32, 0x222u32]).u32();
+        assert_eq!(result, rig.renderer);
+        assert_eq!(rig.e.mem.u32(RENDERER_POINTER), rig.renderer);
+        assert_eq!(rig.e.global::<u32>(RENDER_WIDTH), 640);
+        assert_eq!(rig.e.global::<u32>(RENDER_HEIGHT), 480);
+        assert_eq!(rig.e.global::<u32>(PRESENT_INTERVAL), 1);
+        assert_eq!(rig.e.global::<u32>(DISPLAY_FLAGS), 4);
+        assert_eq!(rig.e.global::<u32>(RENDER_WINDOW), 0x111);
+        assert_eq!(rig.e.global::<u8>(NOT_FOUR_BY_THREE), 0);
+        assert!(calls_to(&rig.e, IMPORT_CREATE_WINDOW_EX).is_empty());
+        // The renderer is created from the fifteen getter words, reversed.
+        let create = calls_to(&rig.e, CREATE_RENDERER);
+        assert_eq!(create[0].len(), 15);
+        assert_eq!(&create[0][..2], &[640, 480]);
+        assert_eq!(create[0][14], 0);
+        // The renderer's slot 0xb0 gets the table of `011c74b8`.
+        assert_eq!(
+            calls_to(&rig.e, RENDERER_SET_TABLE),
+            vec![vec![rig.renderer, TABLE_011C74B8]]
+        );
+    }
+
+    #[test]
+    fn init_creates_a_child_window_when_not_full_screen() {
+        let mut rig = init_rig();
+        set_setting_flag(&mut rig.e, B_FULL_SCREEN, false);
+        set_setting_int(&mut rig.e, I_LOCATION_X, 30);
+        set_setting_int(&mut rig.e, I_LOCATION_Y, 40);
+        rig.e.set_global(WINDOW_CLASS_NAME, 0x5555u32);
+        returning(&mut rig.e, IMPORT_CREATE_WINDOW_EX, 0x999);
+        returning(&mut rig.e, IMPORT_GET_CLASS_LONG, 1);
+        returning(&mut rig.e, IMPORT_GET_WINDOW_LONG, 0xcafe);
+        rig.e.register(IMPORT_ADJUST_WINDOW_RECT, |e, a| {
+            // The frame adds 16 x 39 pixels around the client area.
+            e.mem.set_i32(a[0] + 8, e.mem.i32(a[0] + 8) + 16);
+            e.mem.set_i32(a[0] + 12, e.mem.i32(a[0] + 12) + 39);
+            Ret::default()
+        });
+        rig.e.call(INIT, &args![0x111u32, 0x222u32]);
+        let create = calls_to(&rig.e, IMPORT_CREATE_WINDOW_EX);
+        assert_eq!(
+            create[0],
+            vec![
+                0,
+                0x5555,
+                0,
+                0x5000_0000,
+                0,
+                0,
+                640,
+                480,
+                0x111,
+                0,
+                0x222,
+                0
+            ]
+        );
+        assert_eq!(rig.e.global::<u32>(RENDER_WINDOW), 0x999);
+        assert_eq!(rig.e.global::<u32>(DISPLAY_FLAGS), 0);
+        assert_eq!(
+            calls_to(&rig.e, IMPORT_GET_CLASS_LONG)[0],
+            vec![0x999, -8i32 as u32]
+        );
+        assert_eq!(
+            calls_to(&rig.e, IMPORT_GET_WINDOW_LONG)[0],
+            vec![0x111, -16i32 as u32]
+        );
+        let adjust = calls_to(&rig.e, IMPORT_ADJUST_WINDOW_RECT);
+        assert_eq!(&adjust[0][1..], &[0xcafe, 1]);
+        let position = calls_to(&rig.e, IMPORT_SET_WINDOW_POS);
+        assert_eq!(position[0], vec![0x111, 0, 30, 40, 656, 519, 0x40]);
+    }
+
+    #[test]
+    fn init_reports_a_size_mismatch_on_a_multi_monitor_desktop() {
+        let mut rig = init_rig();
+        rig.e.register(IMPORT_GET_SYSTEM_METRICS, |_, a| {
+            // monitors, screen height, screen width
+            match a[0] {
+                0x50 => 2u32.into_ret(),
+                1 => 480u32.into_ret(),
+                _ => 800u32.into_ret(),
+            }
+        });
+        run_init(&mut rig);
+        let create = calls_to(&rig.e, CREATE_RENDERER);
+        assert_eq!(create[0][14], 1);
+    }
+
+    #[test]
+    fn init_takes_the_eyefinity_size_and_limits_multisampling() {
+        let mut rig = init_rig();
+        returning(&mut rig.e, EYEFINITY_ACTIVE, 1);
+        set_setting_flag(&mut rig.e, B_ENABLE_EYEFINITY, true);
+        rig.e.register(EYEFINITY_WIDTH, |_, _| Ret {
+            st0: 5760.9,
+            ..Ret::default()
+        });
+        rig.e.register(EYEFINITY_HEIGHT, |_, _| Ret {
+            st0: 1080.0,
+            ..Ret::default()
+        });
+        set_setting_int(&mut rig.e, I_MULTI_SAMPLE, 8);
+        run_init(&mut rig);
+        assert_eq!(calls_to(&rig.e, EYEFINITY_SETUP).len(), 1);
+        // FISTP truncates toward zero.
+        assert_eq!(rig.e.global::<u32>(RENDER_WIDTH), 5760);
+        assert_eq!(rig.e.global::<u32>(RENDER_HEIGHT), 1080);
+        assert_eq!(
+            calls_to(&rig.e, SETTING_INT_SET)[0],
+            vec![I_MULTI_SAMPLE, 2]
+        );
+    }
+
+    #[test]
+    fn init_keeps_a_low_multisample_setting_for_eyefinity() {
+        let mut rig = init_rig();
+        returning(&mut rig.e, EYEFINITY_ACTIVE, 1);
+        rig.e.register(EYEFINITY_WIDTH, |_, _| Ret::default());
+        rig.e.register(EYEFINITY_HEIGHT, |_, _| Ret::default());
+        set_setting_int(&mut rig.e, I_MULTI_SAMPLE, 1);
+        run_init(&mut rig);
+        assert_eq!(
+            calls_to(&rig.e, SETTING_INT_SET)[0],
+            vec![I_MULTI_SAMPLE, 1]
+        );
+    }
+
+    #[test]
+    fn init_maps_the_supported_multisample_setting_to_a_type() {
+        for (setting, expected) in [(2, 2), (3, 2), (4, 4), (5, 0), (8, 8), (16, 0)] {
+            let mut rig = init_rig();
+            set_setting_int(&mut rig.e, I_MULTI_SAMPLE, setting);
+            returning(&mut rig.e, MULTISAMPLE_SUPPORTED, 1);
+            run_init(&mut rig);
+            assert_eq!(
+                rig.e.global::<u32>(MULTISAMPLE_TYPE),
+                expected,
+                "setting {setting}"
+            );
+            assert_eq!(
+                calls_to(&rig.e, MULTISAMPLE_SUPPORTED)[0],
+                vec![setting as u32, 0x71]
+            );
+        }
+    }
+
+    #[test]
+    fn init_switches_unsupported_multisampling_off_and_says_so() {
+        let mut rig = init_rig();
+        set_setting_int(&mut rig.e, I_MULTI_SAMPLE, 4);
+        set_setting_flag(&mut rig.e, B_DO_HIGH_DYNAMIC_RANGE, true);
+        set_setting_flag(&mut rig.e, B_TRANSPARENCY_MULTISAMPLING, true);
+        returning(&mut rig.e, MULTISAMPLE_SUPPORTED, 0);
+        run_init(&mut rig);
+        assert_eq!(rig.e.global::<u32>(MULTISAMPLE_TYPE), 0);
+        let modes: Vec<u32> = calls_to(&rig.e, FOPEN).iter().map(|c| c[1]).collect();
+        assert_eq!(modes, vec![MODE_WRITE, MODE_APPEND, MODE_APPEND]);
+        let message = calls_to(&rig.e, FPRINTF)[0].clone();
+        assert_eq!(message, vec![FILE_HANDLE, MESSAGE_MULTISAMPLE, 4]);
+        assert_eq!(
+            calls_to(&rig.e, SETTING_BOOL_SET)[0],
+            vec![B_TRANSPARENCY_MULTISAMPLING, 0]
+        );
+    }
+
+    #[test]
+    fn init_fails_when_the_renderer_was_not_created() {
+        let mut rig = init_rig();
+        returning(&mut rig.e, CREATE_RENDERER, 0);
+        let result = run_init(&mut rig);
+        assert_eq!(result, 0);
+        assert_eq!(
+            calls_to(&rig.e, STRING_COPY),
+            vec![vec![ERROR_MESSAGE, MESSAGE_RENDERER_CREATE]]
+        );
+        assert_eq!(calls_to(&rig.e, SCOPE_GUARD_DTOR).len(), 1);
+    }
+
+    #[test]
+    fn init_adjusts_the_renderer_object_when_asked() {
+        let mut rig = init_rig();
+        rig.e.set_global(RENDER_TARGET_ADJUST_FLAG, 1u8);
+        set_setting_int(&mut rig.e, I_N_PATCHES, 7);
+        let object = rig.e.mem.alloc(8);
+        rig.e
+            .mem
+            .set_u32(rig.renderer + RENDERER_OBJECT_OFFSET, object);
+        rig.e.mem.set_u32(object, VTABLE_RENDERER);
+        run_init(&mut rig);
+        let calls = calls_to(&rig.e, RENDERER_OBJECT_METHOD);
+        assert_eq!(calls, vec![vec![object, 7.0f32.to_bits()]]);
+    }
+
+    #[test]
+    fn init_skips_the_renderer_object_without_one() {
+        let mut rig = init_rig();
+        rig.e.set_global(RENDER_TARGET_ADJUST_FLAG, 1u8);
+        run_init(&mut rig);
+        assert!(calls_to(&rig.e, RENDERER_OBJECT_METHOD).is_empty());
+    }
+
+    #[test]
+    fn init_installs_the_image_converter() {
+        let mut rig = init_rig();
+        returning(&mut rig.e, NEW_OBJECT, 0x6000);
+        returning(&mut rig.e, IMAGE_CONVERTER_CONSTRUCT, 0x6008);
+        run_init(&mut rig);
+        assert_eq!(calls_to(&rig.e, NEW_OBJECT), vec![vec![0xa00]]);
+        assert_eq!(
+            calls_to(&rig.e, IMAGE_CONVERTER_CONSTRUCT),
+            vec![vec![0x6000]]
+        );
+        assert_eq!(
+            calls_to(&rig.e, IMAGE_CONVERTER_INSTALL),
+            vec![vec![0x6008]]
+        );
+        assert_eq!(rig.e.global::<u8>(FLAG_011A9594), 1);
+        assert_eq!(rig.e.global::<u8>(FLAG_011F4508), 0);
+    }
+
+    #[test]
+    fn init_installs_a_null_converter_when_allocation_fails() {
+        let mut rig = init_rig();
+        run_init(&mut rig);
+        assert!(calls_to(&rig.e, IMAGE_CONVERTER_CONSTRUCT).is_empty());
+        assert_eq!(calls_to(&rig.e, IMAGE_CONVERTER_INSTALL), vec![vec![0]]);
+    }
+
+    #[test]
+    fn init_fails_without_an_adapter() {
+        let mut rig = init_rig();
+        returning(&mut rig.e, ADAPTER_DESCRIPTION, 0);
+        let result = run_init(&mut rig);
+        assert_eq!(result, 0);
+        assert_eq!(
+            calls_to(&rig.e, STRING_COPY),
+            vec![vec![ERROR_MESSAGE, MESSAGE_ADAPTER_DESC]]
+        );
+        assert!(calls_to(&rig.e, SET_PERF_OPTIONS).is_empty());
+    }
+
+    #[test]
+    fn init_fails_without_device_capabilities() {
+        let mut rig = init_rig();
+        rig.e.mem.set_u32(rig.adapter + ADAPTER_HAL_INFO_OFFSET, 0);
+        // A null info object has its handle read at address 4, which must
+        // exist in this test.
+        rig.e.map(0, 0x1000);
+        let result = run_init(&mut rig);
+        assert_eq!(result, 0);
+        assert_eq!(
+            calls_to(&rig.e, STRING_COPY),
+            vec![vec![ERROR_MESSAGE, MESSAGE_DEVICE_CAPS]]
+        );
+        assert_eq!(calls_to(&rig.e, SET_PERF_OPTIONS), vec![vec![1]]);
+    }
+
+    #[test]
+    fn init_reads_the_capabilities() {
+        let mut rig = init_rig();
+        let caps = rig.caps;
+        rig.e.mem.set_u32(caps + CAPS_DYNAMIC_TEXTURE_BITS, 0x20000);
+        rig.e.mem.set_u32(caps + CAPS_FILTER_BITS, 0x400);
+        // Power-of-two only (bit 2) without the conditional bit.
+        rig.e.mem.set_u32(caps + CAPS_TEXTURE_BITS, 2);
+        run_init(&mut rig);
+        assert_eq!(rig.e.global::<u8>(DYNAMIC_TEXTURES), 1);
+        assert_eq!(rig.e.global::<u8>(ANISOTROPIC_MIN_FILTER), 1);
+        assert_eq!(rig.e.global::<u8>(NON_POW2_TEXTURES), 0);
+        // 0x200 instructions with a limit of 0x100 stay as reported.
+        let configure = calls_to(&rig.e, SHADER_MANAGER_CONFIGURE);
+        assert_eq!(configure[0][5], 0x200);
+    }
+
+    #[test]
+    fn init_limits_the_pixel_shader_instructions_on_small_devices() {
+        let mut rig = init_rig();
+        let caps = rig.caps;
+        rig.e
+            .mem
+            .set_u32(caps + CAPS_MAX_PS_INSTRUCTIONS_LIMIT, 0x10);
+        run_init(&mut rig);
+        let configure = calls_to(&rig.e, SHADER_MANAGER_CONFIGURE);
+        assert_eq!(configure[0][5], 0x60);
+    }
+
+    #[test]
+    fn init_allows_non_power_of_two_textures_unless_forced_off() {
+        for (texture_bits, forced, expected) in [
+            (0u32, false, 1u8),
+            (2, false, 0),
+            (0x102, false, 1),
+            (0, true, 0),
+        ] {
+            let mut rig = init_rig();
+            let caps = rig.caps;
+            rig.e.mem.set_u32(caps + CAPS_TEXTURE_BITS, texture_bits);
+            set_setting_flag(&mut rig.e, B_FORCE_POW2_TEXTURES, forced);
+            run_init(&mut rig);
+            assert_eq!(rig.e.global::<u8>(NON_POW2_TEXTURES), expected);
+        }
+    }
+
+    #[test]
+    fn init_probes_the_device_formats_in_order() {
+        let mut rig = init_rig();
+        run_init(&mut rig);
+        let queries = rig.queries.borrow().clone();
+        // FP16 blending and filtering, 15 formats, X8R8G8B8 blending.
+        assert_eq!(queries.len(), 18);
+        assert_eq!(queries[0], (0x80000, 3, 0x71));
+        assert_eq!(queries[1], (0x20000, 3, 0x71));
+        let formats: Vec<u32> = queries[2..17].iter().map(|q| q.2).collect();
+        assert_eq!(
+            formats,
+            vec![
+                0x17, 0x18, 0x19, 0x1a, 0x51, 0x14, 0x15, 0x16, 0x72, 0x71, 0x24, 0x74, 0x32, 0x22,
+                0x70
+            ]
+        );
+        assert_eq!(queries[17], (0x80000, 3, 0x24));
+        // Every query succeeded (the double returns 0).
+        assert_eq!(rig.e.global::<u8>(FP16_BLENDING), 1);
+        assert_eq!(rig.e.global::<u8>(FP16_FILTERING), 1);
+        for i in 0..15 {
+            assert_eq!(rig.e.global::<u8>(FORMAT_SUPPORT_TABLE + i), 1);
+        }
+        assert_eq!(rig.e.global::<u8>(POST_PIXEL_BLEND_X8R8G8B8), 1);
+    }
+
+    #[test]
+    fn init_marks_unsupported_formats() {
+        let mut rig = init_rig();
+        rig.e.register_double(CHECK_DEVICE_FORMAT, |_, a| Ret {
+            // Fails for the format 0x18 and for the blending usage.
+            eax: if a[6] == 0x18 || a[4] == 0x80000 {
+                0x8876_0866
+            } else {
+                0
+            },
+            ..Ret::default()
+        });
+        run_init(&mut rig);
+        assert_eq!(rig.e.global::<u8>(FORMAT_SUPPORT_TABLE), 1);
+        assert_eq!(rig.e.global::<u8>(FORMAT_SUPPORT_TABLE + 1), 0);
+        assert_eq!(rig.e.global::<u8>(FP16_BLENDING), 0);
+        assert_eq!(rig.e.global::<u8>(FP16_FILTERING), 1);
+        assert_eq!(rig.e.global::<u8>(POST_PIXEL_BLEND_X8R8G8B8), 0);
+    }
+
+    #[test]
+    fn init_enables_hdr_and_bloom_from_the_settings() {
+        let mut rig = init_rig();
+        set_setting_flag(&mut rig.e, B_DO_HIGH_DYNAMIC_RANGE, true);
+        set_setting_flag(&mut rig.e, B_USE_BLUR_SHADER, true);
+        run_init(&mut rig);
+        assert_eq!(rig.e.global::<u8>(HIGH_DYNAMIC_RANGE), 1);
+        // Bloom only when HDR is off.
+        assert_eq!(rig.e.global::<u8>(BLOOM_LIGHTING), 0);
+        let mut rig = init_rig();
+        set_setting_flag(&mut rig.e, B_USE_BLUR_SHADER, true);
+        run_init(&mut rig);
+        assert_eq!(rig.e.global::<u8>(HIGH_DYNAMIC_RANGE), 0);
+        assert_eq!(rig.e.global::<u8>(BLOOM_LIGHTING), 1);
+    }
+
+    #[test]
+    fn init_computes_the_offscreen_rectangle() {
+        let mut rig = init_rig();
+        rig.e.set_global(OFFSCREEN_ENABLED, 1u8);
+        // `iSize H` read through its pointer is 360, while the value the
+        // start of `Renderer::Init` takes (through the value getter) is 480:
+        // fraction = (480 - 360) / 480 / 2.
+        let cell = rig.e.mem.alloc(4);
+        rig.e.mem.set_i32(cell, 360);
+        rig.e.register_double(SETTING_INT_POINTER, move |_, a| {
+            (if a[0] == I_SIZE_H { cell } else { a[0] + 4 }).into_ret()
+        });
+        run_init(&mut rig);
+        assert_eq!(rig.e.global::<u8>(OFFSCREEN_ENABLED_COPY), 1);
+        assert_eq!(rig.e.global::<f32>(OFFSCREEN_RECT), 0.0);
+        assert_eq!(rig.e.global::<f32>(OFFSCREEN_RECT + 4), 1.0);
+        assert_eq!(rig.e.global::<f32>(OFFSCREEN_RECT + 8), 0.875);
+        assert_eq!(rig.e.global::<f32>(OFFSCREEN_RECT + 12), 0.125);
+        assert_eq!(rig.e.global::<u32>(OFFSCREEN_WIDTH), 640);
+        assert_eq!(rig.e.global::<u32>(OFFSCREEN_HEIGHT), 360);
+    }
+
+    #[test]
+    fn init_leaves_the_offscreen_rectangle_when_disabled() {
+        let mut rig = init_rig();
+        rig.e.set_global(OFFSCREEN_RECT + 8, 5.0f32);
+        run_init(&mut rig);
+        assert_eq!(rig.e.global::<u8>(OFFSCREEN_ENABLED_COPY), 0);
+        assert_eq!(rig.e.global::<f32>(OFFSCREEN_RECT + 8), 5.0);
+        assert_eq!(rig.e.global::<u32>(OFFSCREEN_WIDTH), 0);
+    }
+
+    #[test]
+    fn init_decides_transparency_multisampling() {
+        for (vendor, hr_fails, flag, samples, expected) in [
+            (1i32, false, true, 4, 1u8),
+            (1, true, true, 4, 0),
+            (2, true, true, 4, 1),
+            (3, false, true, 4, 0),
+            (1, false, false, 4, 0),
+            (1, false, true, 1, 0),
+        ] {
+            let mut rig = init_rig();
+            rig.e.set_global(VENDOR, vendor);
+            set_setting_flag(&mut rig.e, B_TRANSPARENCY_MULTISAMPLING, flag);
+            set_setting_int(&mut rig.e, I_MULTI_SAMPLE, samples);
+            returning(&mut rig.e, MULTISAMPLE_SUPPORTED, 1);
+            rig.e.register_double(CHECK_DEVICE_FORMAT, move |_, a| Ret {
+                eax: if hr_fails && a[6] == FORMAT_ALPHA_TO_COVERAGE {
+                    0x8876_0866
+                } else {
+                    0
+                },
+                ..Ret::default()
+            });
+            // The vendor probes are not under test here.
+            ignoring(&mut rig.e, &[GPU_PROBE_INIT, GPU_PROBE_DEVICE_WORD, MEMSET]);
+            returning(&mut rig.e, GPU_PROBE_OPEN, 1);
+            returning(&mut rig.e, IMPORT_LOAD_LIBRARY, 0);
+            run_init(&mut rig);
+            assert_eq!(
+                rig.e.global::<u8>(TRANSPARENCY_MULTISAMPLING_ACTIVE),
+                expected,
+                "vendor {vendor} fails {hr_fails} flag {flag} samples {samples}"
+            );
+        }
+    }
+
+    #[test]
+    fn init_asks_for_alpha_to_coverage_only_for_the_first_vendor() {
+        let mut rig = init_rig();
+        rig.e.set_global(VENDOR, 1i32);
+        ignoring(&mut rig.e, &[GPU_PROBE_INIT, GPU_PROBE_DEVICE_WORD, MEMSET]);
+        returning(&mut rig.e, GPU_PROBE_OPEN, 1);
+        run_init(&mut rig);
+        let queries = rig.queries.borrow().clone();
+        assert!(queries.contains(&(0, 1, FORMAT_ALPHA_TO_COVERAGE)));
+        let mut rig = init_rig();
+        run_init(&mut rig);
+        assert!(!rig
+            .queries
+            .borrow()
+            .iter()
+            .any(|q| q.2 == FORMAT_ALPHA_TO_COVERAGE));
+    }
+
+    #[test]
+    fn init_passes_the_adapter_names_to_the_shader_manager() {
+        let mut rig = init_rig();
+        rig.e.set_global(SHADER_MANAGER_WORD_A, 11u32);
+        rig.e.set_global(SHADER_MANAGER_WORD_B, 22u32);
+        set_setting_flag(&mut rig.e, B_FORCE_1X_SHADERS, true);
+        run_init(&mut rig);
+        let configure = calls_to(&rig.e, SHADER_MANAGER_CONFIGURE);
+        assert_eq!(
+            configure[0],
+            vec![11, 22, 1, rig.adapter + 0x204, rig.adapter + 4, 0x200]
+        );
+    }
+
+    #[test]
+    fn init_turns_grass_shadows_off_on_low_shader_levels() {
+        let mut rig = init_rig();
+        rig.e.set_global(VALUE_WHEN_CLEAR, 4i32);
+        set_setting_flag(&mut rig.e, B_SHADOWS_ON_GRASS, true);
+        run_init(&mut rig);
+        assert_eq!(rig.e.mem.u8(B_SHADOWS_ON_GRASS + 4), 0);
+        let mut rig = init_rig();
+        rig.e.set_global(VALUE_WHEN_CLEAR, 5i32);
+        set_setting_flag(&mut rig.e, B_SHADOWS_ON_GRASS, true);
+        run_init(&mut rig);
+        assert_eq!(rig.e.mem.u8(B_SHADOWS_ON_GRASS + 4), 1);
+    }
+
+    #[test]
+    fn init_flags_a_window_that_is_not_four_by_three() {
+        let mut rig = init_rig();
+        set_setting_int(&mut rig.e, I_SIZE_W, 1920);
+        set_setting_int(&mut rig.e, I_SIZE_H, 1080);
+        run_init(&mut rig);
+        assert_eq!(rig.e.global::<u8>(NOT_FOUR_BY_THREE), 1);
+    }
+
+    #[test]
+    fn init_stores_the_shadow_settings() {
+        let mut rig = init_rig();
+        set_setting_int(&mut rig.e, I_SHADOW_MAP_RESOLUTION, 0x1234_0400);
+        set_setting_int(&mut rig.e, I_ACTOR_SHADOW_COUNT_EXT, 2);
+        set_setting_int(&mut rig.e, I_ACTOR_SHADOW_COUNT_INT, 4);
+        set_setting_int(&mut rig.e, I_SHADOW_FILTER, 3);
+        run_init(&mut rig);
+        // Only the low word of the setting is stored.
+        assert_eq!(rig.e.global::<u16>(SHADOW_MAP_RESOLUTION), 0x400);
+        // The exterior count is the pair's first argument.
+        assert_eq!(calls_to(&rig.e, ACTOR_SHADOW_COUNT_PAIR), vec![vec![2, 4]]);
+        assert_eq!(rig.e.global::<u32>(ACTOR_SHADOW_PAIR_RESULT), 0x0201);
+        assert_eq!(calls_to(&rig.e, SHADOW_FILTER_MAP), vec![vec![0, 3]]);
+    }
+
+    #[test]
+    fn init_clamps_the_shadow_mode() {
+        for (setting, expected) in [(-1, 3u32), (0, 0), (2, 2), (3, 3), (4, 3)] {
+            let mut rig = init_rig();
+            set_setting_int(&mut rig.e, I_SHADOW_MODE, setting);
+            run_init(&mut rig);
+            assert_eq!(
+                rig.e.global::<u32>(SHADOW_MODE),
+                expected,
+                "setting {setting}"
+            );
+        }
+    }
+
+    #[test]
+    fn init_copies_the_float_settings_and_adds_the_ranges() {
+        let mut rig = init_rig();
+        set_setting_float(&mut rig.e, F_LIGHT_LOD_START_FADE, 1000.0);
+        set_setting_float(&mut rig.e, F_LIGHT_LOD_RANGE, 500.5);
+        set_setting_float(&mut rig.e, F_SHADOW_LOD_START_FADE, 200.0);
+        set_setting_float(&mut rig.e, F_SHADOW_LOD_RANGE, 50.25);
+        set_setting_float(&mut rig.e, F_SPECULAR_LOD_START_FADE, 300.0);
+        set_setting_float(&mut rig.e, F_SPECULAR_LOD_RANGE, 75.0);
+        set_setting_float(&mut rig.e, F_TREE_DIMMER, 1.2);
+        set_setting_float(&mut rig.e, F_GRASS_DIMMER, 1.3);
+        set_setting_float(&mut rig.e, F_ENV_MAP_LOD1, 1500.0);
+        set_setting_float(&mut rig.e, F_SKINNED_DECAL_LOD2, 800.0);
+        set_setting_float(&mut rig.e, F_LAND_LO_FADE_SECONDS, 15.0);
+        run_init(&mut rig);
+        assert_eq!(rig.e.global::<f32>(LIGHT_LOD_START), 1000.0);
+        assert_eq!(rig.e.global::<f32>(LIGHT_LOD_END), 1500.5);
+        assert_eq!(rig.e.global::<f32>(SHADOW_LOD_START), 200.0);
+        assert_eq!(rig.e.global::<f32>(SHADOW_LOD_END), 250.25);
+        assert_eq!(rig.e.global::<f32>(SPECULAR_LOD_START), 300.0);
+        assert_eq!(rig.e.global::<f32>(SPECULAR_LOD_END), 375.0);
+        assert_eq!(rig.e.global::<f32>(TREE_DIMMER), 1.2);
+        assert_eq!(rig.e.global::<f32>(GRASS_DIMMER), 1.3);
+        assert_eq!(rig.e.global::<f32>(ENV_MAP_LOD1), 1500.0);
+        assert_eq!(rig.e.global::<f32>(SKINNED_DECAL_LOD2), 800.0);
+        assert_eq!(rig.e.global::<f32>(LAND_LO_FADE_SECONDS), 15.0);
+    }
+
+    #[test]
+    fn init_picks_the_sunlight_dimmer_by_hdr_setting() {
+        let mut rig = init_rig();
+        set_setting_float(&mut rig.e, F_SUNLIGHT_DIMMER, 1.0);
+        set_setting_float(&mut rig.e, F_SUNLIGHT_DIMMER_HDR, 1.3);
+        run_init(&mut rig);
+        assert_eq!(rig.e.global::<f32>(SUNLIGHT_DIMMER), 1.0);
+        let mut rig = init_rig();
+        set_setting_float(&mut rig.e, F_SUNLIGHT_DIMMER, 1.0);
+        set_setting_float(&mut rig.e, F_SUNLIGHT_DIMMER_HDR, 1.3);
+        set_setting_flag(&mut rig.e, B_DO_HIGH_DYNAMIC_RANGE, true);
+        run_init(&mut rig);
+        assert_eq!(rig.e.global::<f32>(SUNLIGHT_DIMMER), 1.3);
+    }
+
+    #[test]
+    fn init_builds_the_interface_tint() {
+        let mut rig = init_rig();
+        set_setting_float(&mut rig.e, F_INTERFACE_TINT_R, 0.25);
+        set_setting_float(&mut rig.e, F_INTERFACE_TINT_G, 0.5);
+        set_setting_float(&mut rig.e, F_INTERFACE_TINT_B, 0.75);
+        run_init(&mut rig);
+        assert_eq!(rig.e.global::<f32>(INTERFACE_TINT), 0.25);
+        assert_eq!(rig.e.global::<f32>(INTERFACE_TINT + 4), 0.5);
+        assert_eq!(rig.e.global::<f32>(INTERFACE_TINT + 8), 0.75);
+        assert_eq!(rig.e.global::<f32>(INTERFACE_TINT + 12), 1.0);
+    }
+
+    #[test]
+    fn init_copies_the_remaining_settings() {
+        let mut rig = init_rig();
+        set_setting_flag(&mut rig.e, B_CREATE_SHADER_PACKAGE, true);
+        set_setting_flag(&mut rig.e, B_MT_RENDERING, true);
+        set_setting_flag(&mut rig.e, B_LOD_NOISE_ANISO, true);
+        set_setting_flag(&mut rig.e, B_30_GRASS_VS, true);
+        set_setting_flag(&mut rig.e, B_USE_RESOLVABLE_DEPTH, true);
+        set_setting_flag(&mut rig.e, B_USE_FAKE_FULL_SCREEN_MOTION_BLUR, true);
+        set_setting_flag(&mut rig.e, B_ALLOW_20_HAIR_SHADER, true);
+        set_setting_flag(&mut rig.e, B_USE_REFRACTION_SHADER, true);
+        set_setting_int(&mut rig.e, I_TEX_MIP_MAP_SKIP, 2);
+        set_setting_int(&mut rig.e, I_TEX_MIP_MAP_MINIMUM, 1);
+        set_setting_int(&mut rig.e, I_WATER_MULTI_SAMPLES, 4);
+        set_setting_int(&mut rig.e, I_WATER_REFLECT_WIDTH, 512);
+        set_setting_int(&mut rig.e, I_WATER_REFLECT_HEIGHT, 256);
+        set_setting_float(&mut rig.e, F_GAMMA, 1.5);
+        rig.e.set_global(GAMMA, 1.0f32);
+        rig.e.set_global(CLEARED_FLAG_9489, 5u8);
+        run_init(&mut rig);
+        assert_eq!(rig.e.global::<u8>(CREATE_SHADER_PACKAGE), 1);
+        assert_eq!(rig.e.global::<u8>(MT_RENDERING), 1);
+        assert_eq!(rig.e.global::<u8>(LOD_NOISE_ANISO), 1);
+        assert_eq!(rig.e.global::<u8>(GRASS_VS_30), 1);
+        assert_eq!(rig.e.global::<u8>(RESOLVABLE_DEPTH), 1);
+        assert_eq!(rig.e.global::<u8>(FAKE_MOTION_BLUR), 1);
+        assert_eq!(rig.e.global::<u8>(HAIR_SHADER_20), 1);
+        assert_eq!(rig.e.global::<u8>(REFRACTION), 1);
+        assert_eq!(rig.e.global::<u32>(TEX_MIP_MAP_SKIP), 2);
+        assert_eq!(rig.e.global::<u32>(TEX_MIP_MAP_MINIMUM), 1);
+        assert_eq!(rig.e.global::<u32>(WATER_MULTI_SAMPLES), 4);
+        assert_eq!(rig.e.global::<u32>(WATER_REFLECT_WIDTH), 512);
+        assert_eq!(rig.e.global::<u32>(WATER_REFLECT_HEIGHT), 256);
+        assert_eq!(rig.e.global::<f32>(GAMMA), 1.5);
+        assert_eq!(rig.e.global::<u8>(CLEARED_FLAG_9489), 0);
+    }
+
+    #[test]
+    fn init_copies_the_multisample_type() {
+        let mut rig = init_rig();
+        set_setting_flag(&mut rig.e, B_ALLOW_SCREEN_SHOT, true);
+        run_init(&mut rig);
+        assert_eq!(rig.e.global::<u32>(MULTISAMPLE_TYPE), 1);
+        assert_eq!(rig.e.global::<u32>(MULTISAMPLE_COPY), 1);
+    }
+
+    #[test]
+    fn init_writes_the_device_report_in_order() {
+        let mut rig = init_rig();
+        set_setting_int(&mut rig.e, I_NUM_HW_THREADS, 6);
+        set_setting_flag(&mut rig.e, B_USE_WATER_SHADER, true);
+        rig.e.set_global(SHADER_30_SUPPORT, 1u8);
+        returning(&mut rig.e, SHADER_LEVEL_STRING, 0x5100);
+        returning(&mut rig.e, SHADER_TARGET_VERTEX, 0x5200);
+        returning(&mut rig.e, SHADER_PACKAGE, 3);
+        run_init(&mut rig);
+        let modes: Vec<u32> = calls_to(&rig.e, FOPEN).iter().map(|c| c[1]).collect();
+        assert_eq!(modes, vec![MODE_WRITE, MODE_APPEND]);
+        let lines = calls_to(&rig.e, FPRINTF);
+        assert_eq!(lines.len(), 26);
+        assert!(lines.iter().all(|line| line[0] == FILE_HANDLE));
+        // Device and driver names.
+        assert_eq!(lines[0][2..], [rig.adapter + 0x204, rig.adapter + 4]);
+        assert_eq!(lines[1], vec![FILE_HANDLE, 0x0102_1434, 0x5100]);
+        // The pixel and vertex shader versions are masked to 16 bits.
+        assert_eq!(lines[2][2], 0x0300);
+        assert_eq!(lines[3][2], 0x0200);
+        assert_eq!(lines[4][2], 0x5200);
+        assert_eq!(lines[7][2], 0x200);
+        assert_eq!(lines[8][2], YES);
+        assert_eq!(lines[9][2], NO);
+        // Water shader ("yes"), then the other three water lines ("no").
+        assert_eq!(lines[18][2], YES);
+        assert_eq!(lines[19][2], NO);
+        assert_eq!(lines[24][2], 3);
+        assert_eq!(lines[25][2], 6);
+        assert_eq!(calls_to(&rig.e, FCLOSE).len(), 2);
+    }
+
+    #[test]
+    fn init_skips_the_report_when_the_file_cannot_be_opened() {
+        let mut rig = init_rig();
+        returning(&mut rig.e, FOPEN, 0);
+        run_init(&mut rig);
+        assert!(calls_to(&rig.e, FPRINTF).is_empty());
+        assert!(calls_to(&rig.e, FCLOSE).is_empty());
+    }
+
+    // ---- The multi-GPU probes -----------------------------------------
+
+    #[test]
+    fn init_uses_the_ati_probe_for_vendor_two() {
+        let mut rig = init_rig();
+        rig.e.set_global(VENDOR, 2i32);
+        returning(&mut rig.e, IMPORT_LOAD_LIBRARY, 0x8000);
+        returning(&mut rig.e, IMPORT_GET_PROC_ADDRESS, 0x0500_0000);
+        returning(&mut rig.e, 0x0500_0000, 2);
+        ignoring(&mut rig.e, &[IMPORT_FREE_LIBRARY]);
+        rig.e.set_global(MULTI_GPU_CLEARED_FLAG, 1u8);
+        run_init(&mut rig);
+        assert_eq!(
+            calls_to(&rig.e, IMPORT_LOAD_LIBRARY),
+            vec![vec![ATI_LIBRARY]]
+        );
+        assert_eq!(
+            calls_to(&rig.e, IMPORT_GET_PROC_ADDRESS),
+            vec![vec![0x8000, ATI_QUERY_COUNT]]
+        );
+        assert_eq!(rig.e.global::<u8>(MULTI_GPU), 1);
+        assert_eq!(rig.e.global::<u8>(MULTI_GPU_CLEARED_FLAG), 0);
+        assert_eq!(calls_to(&rig.e, IMPORT_FREE_LIBRARY), vec![vec![0x8000]]);
+    }
+
+    #[test]
+    fn ati_probe_with_one_adapter_leaves_the_flag_alone() {
+        let mut e = rig();
+        returning(&mut e, IMPORT_LOAD_LIBRARY, 0x8000);
+        returning(&mut e, IMPORT_GET_PROC_ADDRESS, 0x0500_0000);
+        returning(&mut e, 0x0500_0000, 1);
+        ignoring(&mut e, &[IMPORT_FREE_LIBRARY]);
+        probe_multi_gpu_second_vendor(&mut e);
+        assert_eq!(e.global::<u8>(MULTI_GPU), 0);
+    }
+
+    #[test]
+    fn ati_probe_without_the_library_does_nothing() {
+        let mut e = rig();
+        returning(&mut e, IMPORT_LOAD_LIBRARY, 0);
+        e.call_log = Some(vec![]);
+        probe_multi_gpu_second_vendor(&mut e);
+        assert!(calls_to(&e, IMPORT_GET_PROC_ADDRESS).is_empty());
+        assert!(calls_to(&e, IMPORT_FREE_LIBRARY).is_empty());
+    }
+
+    #[test]
+    fn ati_probe_without_the_entry_point_still_frees_the_library() {
+        let mut e = rig();
+        returning(&mut e, IMPORT_LOAD_LIBRARY, 0x8000);
+        returning(&mut e, IMPORT_GET_PROC_ADDRESS, 0);
+        ignoring(&mut e, &[IMPORT_FREE_LIBRARY]);
+        e.call_log = Some(vec![]);
+        probe_multi_gpu_second_vendor(&mut e);
+        assert_eq!(calls_to(&e, IMPORT_FREE_LIBRARY), vec![vec![0x8000]]);
+        assert_eq!(e.global::<u8>(MULTI_GPU), 0);
+    }
+
+    /// Doubles for the first vendor's probe: `count_a`, `count_b` are the
+    /// numbers the two name queries report, `query_status` the device
+    /// query's status.
+    fn first_vendor_rig(count_a: u32, count_b: u32, query_status: u32) -> Engine {
+        let mut e = rig();
+        ignoring(&mut e, &[GPU_PROBE_INIT, GPU_PROBE_DEVICE_WORD]);
+        e.register(MEMSET, |e, a| {
+            e.mem.write(a[0], &vec![a[1] as u8; a[2] as usize]);
+            Ret::default()
+        });
+        returning(&mut e, GPU_PROBE_OPEN, 0);
+        e.register(GPU_PROBE_ENUMERATE, |e, a| {
+            // Four adapters answer, the fifth call fails.
+            e.mem.set_u32(a[1], 0x100 + a[0]);
+            (if a[0] < 4 { 0u32 } else { 1u32 }).into_ret()
+        });
+        e.register_double(GPU_PROBE_NAMES_A, move |e, a| {
+            e.mem.set_u32(a[1], count_a);
+            Ret::default()
+        });
+        e.register_double(GPU_PROBE_NAMES_B, move |e, a| {
+            e.mem.set_u32(a[1], count_b);
+            Ret::default()
+        });
+        returning(&mut e, GPU_PROBE_QUERY, query_status);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn first_vendor_probe_sets_the_flag_when_the_query_succeeds_with_a_count() {
+        let mut e = first_vendor_rig(1, 2, 0);
+        probe_multi_gpu_first_vendor(&mut e);
+        assert_eq!(e.global::<u8>(MULTI_GPU), 1);
+        // The size word is set and the enumeration stops at the failing
+        // adapter.
+        let open = calls_to(&e, GPU_PROBE_OPEN);
+        assert_eq!(open[0][0], 0);
+        assert_eq!(e.mem.u32(open[0][1]), 0x1008c);
+        assert_eq!(calls_to(&e, GPU_PROBE_ENUMERATE).len(), 5);
+    }
+
+    #[test]
+    fn first_vendor_probe_leaves_the_flag_when_the_query_succeeds_with_no_count() {
+        let mut e = first_vendor_rig(1, 0, 0);
+        probe_multi_gpu_first_vendor(&mut e);
+        assert_eq!(e.global::<u8>(MULTI_GPU), 0);
+    }
+
+    #[test]
+    fn first_vendor_probe_compares_the_counts_when_the_query_fails() {
+        let mut e = first_vendor_rig(1, 2, 5);
+        probe_multi_gpu_first_vendor(&mut e);
+        assert_eq!(e.global::<u8>(MULTI_GPU), 1);
+        let mut e = first_vendor_rig(2, 2, 5);
+        probe_multi_gpu_first_vendor(&mut e);
+        assert_eq!(e.global::<u8>(MULTI_GPU), 0);
+    }
+
+    #[test]
+    fn first_vendor_probe_stops_when_the_adapters_cannot_be_opened() {
+        let mut e = first_vendor_rig(1, 2, 0);
+        returning(&mut e, GPU_PROBE_OPEN, 3);
+        probe_multi_gpu_first_vendor(&mut e);
+        assert!(calls_to(&e, GPU_PROBE_ENUMERATE).is_empty());
+        assert_eq!(e.global::<u8>(MULTI_GPU), 0);
+    }
+
+    #[test]
+    fn first_vendor_probe_stops_when_a_name_query_fails() {
+        let mut e = first_vendor_rig(1, 2, 0);
+        returning(&mut e, GPU_PROBE_NAMES_A, 1);
+        probe_multi_gpu_first_vendor(&mut e);
+        assert!(calls_to(&e, GPU_PROBE_NAMES_B).is_empty());
+        assert_eq!(e.global::<u8>(MULTI_GPU), 0);
+        let mut e = first_vendor_rig(1, 2, 0);
+        returning(&mut e, GPU_PROBE_NAMES_B, 1);
+        probe_multi_gpu_first_vendor(&mut e);
+        assert!(calls_to(&e, GPU_PROBE_QUERY).is_empty());
+    }
+
+    #[test]
+    fn init_uses_the_first_vendor_probe_for_vendor_one() {
+        let mut rig = init_rig();
+        rig.e.set_global(VENDOR, 1i32);
+        ignoring(&mut rig.e, &[GPU_PROBE_INIT, GPU_PROBE_DEVICE_WORD, MEMSET]);
+        returning(&mut rig.e, GPU_PROBE_OPEN, 9);
+        run_init(&mut rig);
+        assert_eq!(calls_to(&rig.e, GPU_PROBE_OPEN).len(), 1);
+    }
+
+    // ---- The small functions --------------------------------------------
+
+    #[test]
+    fn flag_setters_store_the_byte() {
+        let mut e = rig();
+        e.call(0x004d_c010, &args![7u8]);
+        assert_eq!(e.global::<u8>(FLAG_011F4508), 7);
+    }
+
+    #[test]
+    fn second_flag_setter_stores_the_byte() {
+        let mut e = rig();
+        e.call(0x004d_c050, &args![9u8]);
+        assert_eq!(e.global::<u8>(FLAG_011A9594), 9);
+    }
+
+    #[test]
+    fn refraction_flag_round_trips() {
+        let mut e = rig();
+        e.call(0x004d_c090, &args![1u8]);
+        assert_eq!(e.global::<u8>(REFRACTION), 1);
+        assert_eq!(e.call(0x004d_c0a0, &args![]).u8(), 1);
+        e.call(0x004d_c090, &args![0u8]);
+        assert_eq!(e.call(0x004d_c0a0, &args![]).u8(), 0);
+    }
+
+    #[test]
+    fn renderer_object_is_read_at_0x288() {
+        let mut e = rig();
+        let renderer = e.mem.alloc(0x300);
+        e.mem.set_u32(renderer + 0x288, 0xbeef);
+        assert_eq!(e.call(0x004d_c020, &args![renderer]).u32(), 0xbeef);
+    }
+
+    global_getter_test!(direct3d_object_getter, 0x004d_c040, DIRECT3D_OBJECT);
+    global_getter_test!(vendor_getter, 0x004d_c0b0, VENDOR);
+    global_getter_test!(render_window_getter, 0x004d_c1e0, RENDER_WINDOW);
+    global_getter_test!(render_width_getter, 0x004d_c1f0, RENDER_WIDTH);
+    global_getter_test!(render_height_getter, 0x004d_c200, RENDER_HEIGHT);
+    global_getter_test!(display_flags_getter, 0x004d_c220, DISPLAY_FLAGS);
+    global_getter_test!(arg_011c70d4_getter, 0x004d_c230, RENDERER_ARG_011C70D4);
+    global_getter_test!(arg_011c70d8_getter, 0x004d_c240, RENDERER_ARG_011C70D8);
+    global_getter_test!(arg_01189464_getter, 0x004d_c250, RENDERER_ARG_01189464);
+    global_getter_test!(arg_011c70d0_getter, 0x004d_c260, RENDERER_ARG_011C70D0);
+    global_getter_test!(arg_01189470_getter, 0x004d_c270, RENDERER_ARG_01189470);
+    global_getter_test!(arg_01189474_getter, 0x004d_c280, RENDERER_ARG_01189474);
+    global_getter_test!(multisample_type_getter, 0x004d_c290, MULTISAMPLE_TYPE);
+    global_getter_test!(present_interval_getter, 0x004d_c2a0, PRESENT_INTERVAL);
+
+    #[test]
+    fn selector_picks_between_two_words() {
+        let mut e = rig();
+        e.set_global(VALUE_WHEN_SET, 11i32);
+        e.set_global(VALUE_WHEN_CLEAR, 22i32);
+        assert_eq!(e.call(0x004d_c060, &args![1u8]).i32(), 11);
+        assert_eq!(e.call(0x004d_c060, &args![0xffu8]).i32(), 11);
+        assert_eq!(e.call(0x004d_c060, &args![0u8]).i32(), 22);
+    }
+
+    #[test]
+    fn shadow_filter_uses_kind_zero_below_level_five() {
+        for (level, kind) in [(4i32, 0u32), (5, 2), (-3, 0), (9, 2)] {
+            let mut e = rig();
+            e.set_global(VALUE_WHEN_CLEAR, level);
+            returning(&mut e, SHADOW_FILTER_MAP, 0x55);
+            returning(&mut e, SHADOW_FILTER_BUILD, 0x66);
+            e.call_log = Some(vec![]);
+            e.call(0x004d_c0c0, &args![3i32]);
+            assert_eq!(calls_to(&e, SHADOW_FILTER_MAP), vec![vec![kind, 3]]);
+            assert_eq!(calls_to(&e, SHADOW_FILTER_BUILD), vec![vec![0, 0x55]]);
+            assert_eq!(e.global::<u32>(SHADOW_FILTER_RESULT), 0x66);
+        }
+    }
+
+    #[test]
+    fn actor_shadow_pair_is_stored() {
+        let mut e = rig();
+        e.call(0x004d_c100, &args![0x0402u32]);
+        assert_eq!(e.global::<u32>(ACTOR_SHADOW_PAIR_RESULT), 0x0402);
+    }
+
+    #[test]
+    fn info_directory_is_a_fixed_string_address() {
+        let mut e = rig();
+        assert_eq!(e.call(0x004d_c110, &args![]).u32(), 0x0120_2fa0);
+    }
+
+    /// An adapter description whose hardware / reference device information
+    /// objects have the given handles.
+    fn adapter_with_infos(e: &mut Engine, hal_handle: u32, ref_handle: u32) -> (u32, u32, u32) {
+        let adapter = e.mem.alloc(0x500);
+        let hal = e.mem.alloc(0x20);
+        let reference = e.mem.alloc(0x20);
+        e.mem.set_u32(hal + 4, hal_handle);
+        e.mem.set_u32(reference + 4, ref_handle);
+        e.mem.set_u32(adapter + 0x460, hal);
+        e.mem.set_u32(adapter + 0x464, reference);
+        (adapter, hal, reference)
+    }
+
+    #[test]
+    fn device_info_selects_the_hardware_or_reference_object() {
+        let mut e = rig();
+        let (adapter, hal, reference) = adapter_with_infos(&mut e, 1, 1);
+        assert_eq!(e.call(0x004d_c160, &args![adapter, 1u32]).u32(), hal);
+        assert_eq!(e.call(0x004d_c160, &args![adapter, 0u32]).u32(), reference);
+        assert_eq!(e.call(0x004d_c160, &args![adapter, 2u32]).u32(), reference);
+    }
+
+    #[test]
+    fn device_info_is_null_without_a_handle() {
+        let mut e = rig();
+        let (adapter, _, _) = adapter_with_infos(&mut e, 0, 0);
+        assert_eq!(e.call(0x004d_c160, &args![adapter, 1u32]).u32(), 0);
+        assert_eq!(e.call(0x004d_c160, &args![adapter, 0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn device_caps_are_the_info_object_plus_four() {
+        let mut e = rig();
+        let (adapter, hal, _) = adapter_with_infos(&mut e, 1, 0);
+        assert_eq!(e.call(0x004d_c120, &args![adapter, 1u32]).u32(), hal + 4);
+        assert_eq!(e.call(0x004d_c120, &args![adapter, 0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn device_info_validity_is_the_handle() {
+        let mut e = rig();
+        let info = e.mem.alloc(0x10);
+        assert!(!e.call(0x004d_c1c0, &args![info]).bool());
+        e.mem.set_u32(info + 4, 3);
+        assert!(e.call(0x004d_c1c0, &args![info]).bool());
+    }
+
+    #[test]
+    fn adapter_index_is_a_setting() {
+        let mut e = rig();
+        set_setting_int(&mut e, I_ADAPTER, 2);
+        assert_eq!(e.call(0x004d_c210, &args![]).i32(), 2);
+    }
+
+    #[test]
+    fn patch_count_is_a_setting() {
+        let mut e = rig();
+        set_setting_int(&mut e, I_N_PATCHES, 9);
+        assert_eq!(e.call(0x004d_c2b0, &args![]).i32(), 9);
+    }
+
+    #[test]
+    fn table_getter_returns_the_table_address() {
+        let mut e = rig();
+        assert_eq!(e.call(0x004d_c2c0, &args![]).u32(), 0x011c_74b8);
+    }
+
+    #[test]
+    fn gamma_is_stored_when_it_changes_and_is_positive() {
+        let mut e = rig();
+        e.set_global(GAMMA, 1.0f32);
+        e.call(0x004d_c2d0, &args![1.5f32]);
+        assert_eq!(e.global::<f32>(GAMMA), 1.5);
+        assert_eq!(e.global::<u8>(GAMMA_CHANGED), 1);
+        assert_eq!(e.global::<f32>(GAMMA_COPY), 1.5);
+    }
+
+    #[test]
+    fn gamma_is_ignored_when_unchanged_or_not_positive() {
+        let mut e = rig();
+        e.set_global(GAMMA, 1.0f32);
+        e.call(0x004d_c2d0, &args![1.0f32]);
+        e.call(0x004d_c2d0, &args![0.0f32]);
+        e.call(0x004d_c2d0, &args![-2.0f32]);
+        e.call(0x004d_c2d0, &args![f32::NAN]);
+        assert_eq!(e.global::<f32>(GAMMA), 1.0);
+        assert_eq!(e.global::<u8>(GAMMA_CHANGED), 0);
+        assert_eq!(e.global::<f32>(GAMMA_COPY), 0.0);
+    }
+
+    #[test]
+    fn multisample_check_is_signed_two_or_more() {
+        let mut e = rig();
+        for (value, expected) in [(0i32, false), (1, false), (2, true), (8, true), (-1, false)] {
+            e.set_global(MULTISAMPLE_TYPE, value);
+            assert_eq!(e.call(0x004d_c310, &args![]).bool(), expected, "{value}");
+        }
+    }
+
+    #[test]
+    fn error_text_is_cleared_then_copied() {
+        let mut e = rig();
+        ignoring(&mut e, &[STRING_COPY]);
+        e.set_global(ERROR_MESSAGE, 0x41u8);
+        e.call_log = Some(vec![]);
+        e.call(0x004d_c330, &args![0u32]);
+        assert_eq!(e.global::<u8>(ERROR_MESSAGE), 0);
+        assert!(calls_to(&e, STRING_COPY).is_empty());
+        e.call(0x004d_c330, &args![0x1234u32]);
+        assert_eq!(calls_to(&e, STRING_COPY), vec![vec![ERROR_MESSAGE, 0x1234]]);
+    }
+
+    // ---- Display mode change -------------------------------------------
+
+    /// Doubles for `004dc360` with a requested size of 800x600 and a
+    /// renderer (smart pointer content `0x4400`) present.
+    fn mode_rig(rebuilt: bool) -> Engine {
+        let mut e = rig();
+        e.map(0x4000, 0x1000);
+        ignoring(
+            &mut e,
+            &[
+                ACCUMULATOR_RESET,
+                MOVIE_STOP,
+                INTERFACE_SHUTDOWN,
+                NO_EFFECT,
+                AFTER_RESIZE_A,
+                AFTER_RESIZE_B,
+                SMART_POINTER_GLOBAL_GETTER,
+                AFTER_RESIZE_C,
+                AFTER_RESIZE_D,
+                AFTER_RESIZE_E,
+                INTERFACE_INIT,
+                AFTER_RESIZE_F,
+                AFTER_RESIZE_G,
+                IMPORT_GET_CLASS_LONG,
+                IMPORT_GET_WINDOW_LONG,
+                IMPORT_ADJUST_WINDOW_RECT,
+                IMPORT_SET_WINDOW_POS,
+                STRING_COPY,
+            ],
+        );
+        returning(&mut e, RENDERER_GETTER, 0x4400);
+        returning(&mut e, RESIZE_SWAP_CHAIN, rebuilt as u32);
+        returning(&mut e, WINDOW_HANDLE, 0x9900);
+        returning(&mut e, SHADER_ACCUMULATOR, 0x7700);
+        e.mem.set_u32(RENDERER_POINTER, 0x4400);
+        e.set_global(REQUESTED_WIDTH, 800i32);
+        e.set_global(REQUESTED_HEIGHT, 600i32);
+        e.set_global(WINDOW_OBJECT, 0x8800u32);
+        e.set_global(MOVIE_PLAYER, 0x6600u32);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn mode_change_resizes_the_renderer_and_moves_the_window() {
+        let mut e = mode_rig(true);
+        set_setting_int(&mut e, I_LOCATION_X, 5);
+        set_setting_int(&mut e, I_LOCATION_Y, 6);
+        e.mem.set_u32(SMART_POINTER_A, 0xaaaa);
+        e.call(0x004d_c360, &args![]);
+        assert_eq!(calls_to(&e, ACCUMULATOR_RESET), vec![vec![0x7700]]);
+        assert_eq!(
+            calls_to(&e, SETTING_INT_SET),
+            vec![vec![I_SIZE_W, 800], vec![I_SIZE_H, 600]]
+        );
+        assert_eq!(e.global::<u8>(NOT_FOUR_BY_THREE), 0);
+        assert_eq!(calls_to(&e, MOVIE_STOP), vec![vec![0x6600]]);
+        // The two smart pointers are cleared, the renderer's own pointer at
+        // +8 is reset, and after the resize set to the accumulator.
+        assert_eq!(e.mem.u32(SMART_POINTER_A), 0);
+        let assigned = calls_to(&e, SMART_POINTER_SET);
+        assert_eq!(assigned[2], vec![0x4408, 0]);
+        assert_eq!(assigned[3], vec![0x4408, 0x7700]);
+        assert_eq!(
+            calls_to(&e, RESIZE_SWAP_CHAIN),
+            vec![vec![0x4400, 800, 600]]
+        );
+        assert_eq!(calls_to(&e, IMPORT_GET_WINDOW_LONG)[0][0], 0x9900);
+        assert_eq!(
+            calls_to(&e, IMPORT_SET_WINDOW_POS),
+            vec![vec![0x9900, 0, 5, 6, 800, 600, 0x40]]
+        );
+        assert!(calls_to(&e, STRING_COPY).is_empty());
+        assert_eq!(calls_to(&e, INTERFACE_INIT), vec![vec![0]]);
+        assert_eq!(calls_to(&e, AFTER_RESIZE_G).len(), 1);
+    }
+
+    #[test]
+    fn mode_change_records_a_failed_rebuild() {
+        let mut e = mode_rig(false);
+        e.call(0x004d_c360, &args![]);
+        assert_eq!(
+            calls_to(&e, STRING_COPY),
+            vec![vec![ERROR_MESSAGE, MESSAGE_RECREATE]]
+        );
+        assert!(calls_to(&e, IMPORT_SET_WINDOW_POS).is_empty());
+        // The rest of the re-initialization still runs.
+        assert_eq!(calls_to(&e, AFTER_RESIZE_A).len(), 1);
+    }
+
+    #[test]
+    fn mode_change_flags_a_size_that_is_not_four_by_three() {
+        let mut e = mode_rig(true);
+        e.set_global(REQUESTED_WIDTH, 1280i32);
+        e.set_global(REQUESTED_HEIGHT, 720i32);
+        e.call(0x004d_c360, &args![]);
+        assert_eq!(e.global::<u8>(NOT_FOUR_BY_THREE), 1);
+    }
+
+    #[test]
+    fn mode_change_does_nothing_without_a_renderer_or_size() {
+        let mut e = mode_rig(true);
+        returning(&mut e, RENDERER_GETTER, 0);
+        e.call(0x004d_c360, &args![]);
+        assert_eq!(calls_to(&e, RENDERER_GETTER).len(), 1);
+        assert!(calls_to(&e, SHADER_ACCUMULATOR).is_empty());
+        let mut e = mode_rig(true);
+        e.set_global(REQUESTED_HEIGHT, 0i32);
+        e.call(0x004d_c360, &args![]);
+        assert!(calls_to(&e, SHADER_ACCUMULATOR).is_empty());
+        let mut e = mode_rig(true);
+        e.set_global(REQUESTED_WIDTH, 0i32);
+        e.call(0x004d_c360, &args![]);
+        assert!(calls_to(&e, SHADER_ACCUMULATOR).is_empty());
+    }
+
+    #[test]
+    fn smart_pointer_assignment_goes_through_this_plus_eight() {
+        let mut e = rig();
+        e.call_log = Some(vec![]);
+        e.call(0x004d_c540, &args![SMART_POINTER_A - 8, 0x2000u32]);
+        assert_eq!(
+            calls_to(&e, SMART_POINTER_SET),
+            vec![vec![SMART_POINTER_A, 0x2000]]
+        );
+        assert_eq!(e.mem.u32(SMART_POINTER_A), 0x2000);
+    }
+
+    #[test]
+    fn the_first_smart_pointer_is_cleared() {
+        let mut e = rig();
+        ignoring(&mut e, &[NO_EFFECT]);
+        e.mem.set_u32(SMART_POINTER_A, 0xaaaa);
+        e.mem.set_u32(SMART_POINTER_B, 0xbbbb);
+        e.call_log = Some(vec![]);
+        e.call(0x004d_c560, &args![]);
+        assert_eq!(calls_to(&e, NO_EFFECT), vec![vec![0xaaaa]]);
+        assert_eq!(e.mem.u32(SMART_POINTER_A), 0);
+        assert_eq!(e.mem.u32(SMART_POINTER_B), 0xbbbb);
+    }
+
+    #[test]
+    fn the_second_smart_pointer_is_cleared() {
+        let mut e = rig();
+        ignoring(&mut e, &[NO_EFFECT]);
+        e.mem.set_u32(SMART_POINTER_A, 0xaaaa);
+        e.mem.set_u32(SMART_POINTER_B, 0xbbbb);
+        e.call_log = Some(vec![]);
+        e.call(0x004d_c590, &args![]);
+        assert_eq!(calls_to(&e, NO_EFFECT), vec![vec![0xbbbb]]);
+        assert_eq!(e.mem.u32(SMART_POINTER_B), 0);
+        assert_eq!(e.mem.u32(SMART_POINTER_A), 0xaaaa);
+    }
+
+    #[test]
+    fn l68d_004dcce0_passes_this_plus_450_to_the_callee() {
+        let mut e = Engine::new();
+        e.register(CALLEE_00658930, |_, a| Ret {
+            eax: a[0] | 0x5_0000,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004d_cce0, &args![0x4100u32]).u16(), 0x4550);
+        let log = e.call_log.take().unwrap();
+        let inner: Vec<_> = log.iter().filter(|c| c.0 == CALLEE_00658930).collect();
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0].1, vec![0x4100 + 0x450]);
     }
 }
