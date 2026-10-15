@@ -57,15 +57,25 @@ pub fn fn_004f9cc0(e: &mut Engine, this: Ptr, first: u32, second: u32) {
     );
 }
 
+// Translated from 004f9d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the form component `BGSPreloadable` (the engine map
+/// gives it no name; the RTTI name of the vtable it stores, `01024970`, is
+/// `.?AVBGSPreloadable@@`): runs the base constructor (`00402d30`) and stores
+/// the vtable at `+0`. Returns `this`.
+pub fn fn_004f9d90(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0040_2d30, &args![this]);
+    e.mem.set_u32(this.addr(), 0x0102_4970);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![
-        entry!(0x004f_9cd0, fn_004f9cd0(Ptr) -> Ptr),
+    vec![entry!(0x004f_9cd0, fn_004f9cd0(Ptr) -> Ptr),
         entry!(0x004f_9c90, fn_004f9c90(Ptr, u32)),
         entry!(0x004f_9ca0, fn_004f9ca0(Ptr, u32) -> u16),
         entry!(0x004f_9cb0, fn_004f9cb0(Ptr, u32) -> u32),
-        entry!(0x004f_9cc0, fn_004f9cc0(Ptr, u32, u32)),
-    ]
+        entry!(0x004f_9cc0, fn_004f9cc0(Ptr, u32, u32)), entry!(0x004f_9cd0, fn_004f9cd0(Ptr) -> Ptr),
+        entry!(0x004f_9d90, fn_004f9d90(Ptr) -> Ptr)]
 }
 
 #[cfg(test)]
@@ -138,5 +148,41 @@ mod le81_thunk_tests {
     #[test]
     fn le81_thunk_004f9cc0() {
         check(0x004f_9cc0, 0x0051_b0a0, 0x74, &[0x77, 0x88]);
+    }
+
+
+    #[test]
+    fn fn_004f9cd0_builds_the_object() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x004f_9cd0,
+            size: 0x24,
+            globals: &[],
+            returns: &[],
+            calls: &[
+                (0x0048_3370, &[A::T(0x0)]),
+                (0x004f_9d90, &[A::T(0x18)]),
+                (0x0096_a2d0, &[A::T(0x1c)]),
+                (0x004f_15a0, &[A::T(0x0), A::V(0x52)]),
+                (0x0048_3710, &[A::T(0x0)]),
+            ],
+            stores: &[(0x0, 4, 0x0102_4834), (0x18, 4, 0x0102_4818)],
+        });
+    }
+}
+
+#[cfg(test)]
+mod component_tests {
+    use crate::units::crt::ctor_test::{self, A};
+
+    #[test]
+    fn fn_004f9d90_builds_the_component() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x004f_9d90,
+            size: 0x10,
+            globals: &[],
+            returns: &[],
+            calls: &[(0x0040_2d30, &[A::T(0x0)])],
+            stores: &[(0x0, 4, 0x0102_4970)],
+        });
     }
 }

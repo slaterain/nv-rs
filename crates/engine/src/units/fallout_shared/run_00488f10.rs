@@ -16,9 +16,30 @@ pub fn fn_00488ff0(e: &mut Engine, this: Ptr) -> bool {
     e.call(0x0048_9620, &args![this]).bool()
 }
 
+// Translated from 00488f50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00488f50 - the exception-unwinding frame (FS:[0]) is not translated.
+/// The constructor of the form component `TESModel` (the engine map gives it
+/// no name; the RTTI name of the vtable it stores, `0101cf44`, is
+/// `.?AVTESModel@@`): runs the base constructor (`00402d30`), stores the
+/// vtable at `+0`, constructs the string at `+4` (`004037b0`), runs `00488fd0`
+/// on the member at `+0xc`, then `TESModel::InitializeDataComponent` (Xbox PDB
+/// name of `00489040`). Returns `this`. The exception-unwinding frame is not
+/// translated.
+pub fn fn_00488f50(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0040_2d30, &args![this]);
+    e.mem.set_u32(this.addr(), 0x0101_cf44);
+    e.call(0x0040_37b0, &args![this.byte_add(4)]);
+    e.call(0x0048_8fd0, &args![this.byte_add(0xc)]);
+    e.call(0x0048_9040, &args![this]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0048_8ff0, fn_00488ff0(Ptr) -> bool)]
+    vec![
+        entry!(0x0048_8ff0, fn_00488ff0(Ptr) -> bool),
+        entry!(0x00488f50, fn_00488f50(Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -51,5 +72,27 @@ mod thunk_tests {
             ..Ret::default()
         });
         assert!(!e.call(0x0048_8ff0, &args![0x0000_5000u32]).bool());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::units::crt::ctor_test::{self, A};
+
+    #[test]
+    fn fn_00488f50_builds_the_component() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x0048_8f50,
+            size: 0x20,
+            globals: &[],
+            returns: &[],
+            calls: &[
+                (0x0040_2d30, &[A::T(0x0)]),
+                (0x0040_37b0, &[A::T(0x4)]),
+                (0x0048_8fd0, &[A::T(0xc)]),
+                (0x0048_9040, &[A::T(0x0)]),
+            ],
+            stores: &[(0x0, 4, 0x0101_cf44)],
+        });
     }
 }
