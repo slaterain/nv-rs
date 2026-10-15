@@ -22,9 +22,24 @@ pub fn deleting_destructor_00d9ee20(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+// Translated from 00d9ec10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name. Thiscall, one word (`RET 4`): swaps the three words at
+/// `this` with the three words at `other`.
+pub fn fn_00d9ec10(e: &mut Engine, this: Ptr, other: Ptr) {
+    for offset in [0u32, 4, 8] {
+        let mine = e.mem.u32(this.addr() + offset);
+        let theirs = e.mem.u32(other.addr() + offset);
+        e.mem.set_u32(this.addr() + offset, theirs);
+        e.mem.set_u32(other.addr() + offset, mine);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00d9_ee20, deleting_destructor_00d9ee20(Ptr, u8) -> Ptr)]
+    vec![
+        entry!(0x00d9ec10, fn_00d9ec10(Ptr, Ptr)),
+        entry!(0x00d9_ee20, deleting_destructor_00d9ee20(Ptr, u8) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -88,5 +103,19 @@ mod tests {
     #[test]
     fn deleting_destructor_00d9ee20_frees_only_when_bit_zero_is_set() {
         check(0x00d9_ee20, 0x00d0_b0d0);
+    }
+
+    #[test]
+    fn fn_00d9ec10_swaps_three_words() {
+        let mut e = Engine::new();
+        let a = e.mem.alloc(16);
+        let b = e.mem.alloc(16);
+        for i in 0..4 {
+            e.mem.set_u32(a + 4 * i, 10 + i);
+            e.mem.set_u32(b + 4 * i, 20 + i);
+        }
+        e.call(0x00d9_ec10, &args![Ptr::<()>::new(a), Ptr::<()>::new(b)]);
+        assert_eq!([0, 4, 8, 12].map(|o| e.mem.u32(a + o)), [20, 21, 22, 13]);
+        assert_eq!([0, 4, 8, 12].map(|o| e.mem.u32(b + o)), [10, 11, 12, 23]);
     }
 }

@@ -22,9 +22,46 @@ pub fn deleting_destructor_00cfa7a0(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+// Translated from 00cfa7d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name. Thiscall, one word (`RET 4`): copies a 0x74-byte record
+/// from `source` to `this` field by field. Words at `+0`, `+4`, `+8`, `+0xc`,
+/// `+0x10` and `+0x14`; 16-byte blocks at `+0x20`, `+0x30` and `+0x40`;
+/// words at `+0x50`, `+0x54`, `+0x58`, `+0x5c`, `+0x60` and `+0x68`; the
+/// bytes at `+0x6c` and `+0x6d`; the word at `+0x70`; and the word at `+4`
+/// once more. The bytes in between (`+0x18` to `+0x1f`, `+0x64`, `+0x6e`,
+/// `+0x6f`) are not copied.
+pub fn fn_00cfa7d0(e: &mut Engine, this: Ptr, source: Ptr) {
+    let (to, from) = (this.addr(), source.addr());
+    for offset in [0u32, 4, 8, 0xc, 0x10, 0x14] {
+        let word = e.mem.u32(from + offset);
+        e.mem.set_u32(to + offset, word);
+    }
+    for offset in [0x20u32, 0x30, 0x40] {
+        for lane in [0u32, 4, 8, 12] {
+            let word = e.mem.u32(from + offset + lane);
+            e.mem.set_u32(to + offset + lane, word);
+        }
+    }
+    for offset in [0x50u32, 0x54, 0x58, 0x5c, 0x60, 0x68] {
+        let word = e.mem.u32(from + offset);
+        e.mem.set_u32(to + offset, word);
+    }
+    for offset in [0x6cu32, 0x6d] {
+        let byte = e.mem.u8(from + offset);
+        e.mem.set_u8(to + offset, byte);
+    }
+    let word = e.mem.u32(from + 0x70);
+    e.mem.set_u32(to + 0x70, word);
+    let word = e.mem.u32(from + 4);
+    e.mem.set_u32(to + 4, word);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00cf_a7a0, deleting_destructor_00cfa7a0(Ptr, u8) -> Ptr)]
+    vec![
+        entry!(0x00cfa7d0, fn_00cfa7d0(Ptr, Ptr)),
+        entry!(0x00cf_a7a0, deleting_destructor_00cfa7a0(Ptr, u8) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -88,5 +125,38 @@ mod tests {
     #[test]
     fn deleting_destructor_00cfa7a0_frees_only_when_bit_zero_is_set() {
         check(0x00cf_a7a0, 0x00cf_86d0);
+    }
+
+    #[test]
+    fn fn_00cfa7d0_copies_the_listed_fields_and_nothing_else() {
+        let mut e = Engine::new();
+        let source = e.mem.alloc(0x74);
+        let target = e.mem.alloc(0x74);
+        for offset in (0..0x74).step_by(4) {
+            e.mem.set_u32(source + offset, 0x1000_0000 + offset);
+            e.mem.set_u32(target + offset, 0xdddd_dddd);
+        }
+        e.call(
+            0x00cf_a7d0,
+            &args![Ptr::<()>::new(target), Ptr::<()>::new(source)],
+        );
+        for offset in (0..0x74).step_by(4).filter(|offset| *offset != 0x6c) {
+            let copied = [
+                0, 4, 8, 0xc, 0x10, 0x14, 0x20, 0x24, 0x28, 0x2c, 0x30, 0x34, 0x38, 0x3c, 0x40,
+                0x44, 0x48, 0x4c, 0x50, 0x54, 0x58, 0x5c, 0x60, 0x68, 0x70,
+            ]
+            .contains(&offset);
+            let expected = if copied {
+                0x1000_0000 + offset
+            } else {
+                0xdddd_dddd
+            };
+            assert_eq!(e.mem.u32(target + offset), expected, "offset {offset:#x}");
+        }
+        // Only the bytes at 0x6c and 0x6d of that word are copied.
+        assert_eq!(e.mem.u8(target + 0x6c), e.mem.u8(source + 0x6c));
+        assert_eq!(e.mem.u8(target + 0x6d), e.mem.u8(source + 0x6d));
+        assert_eq!(e.mem.u8(target + 0x6e), 0xdd);
+        assert_eq!(e.mem.u8(target + 0x6f), 0xdd);
     }
 }

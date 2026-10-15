@@ -47,9 +47,24 @@ pub fn is_keys_equal(e: &mut Engine, _this: Ptr, a: u32, b: u32) -> bool {
     e.call(STRICMP_WRAPPER, &args![a, b]).u32() == 0
 }
 
+/// `006532c0`: thiscall (`this`, one word), returns a bool in AL.
+const CHECK_006532C0: u32 = 0x0065_32c0;
+
+// Translated from 00653290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (the map places it in `bsfacegenmanager.cpp`). Thiscall
+/// (`RET 4`): `this` when `006532c0(this, argument)` is true, otherwise null.
+pub fn fn_00653290(e: &mut Engine, this: Ptr, argument: u32) -> Ptr {
+    if e.call(CHECK_006532C0, &args![this, argument]).bool() {
+        this
+    } else {
+        Ptr::NULL
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00653290, fn_00653290(Ptr, u32) -> Ptr),
         entry!(0x00486b50, is_keys_equal(Ptr, u32, u32) -> bool),
         entry!(0x00600b20, key_to_hash_index(Ptr, u32) -> u32),
         entry!(0x00659210, fn_00659210(Ptr, u8, u32) -> u32),
@@ -88,6 +103,21 @@ mod tests {
         assert_eq!(
             e.call(0x00659210, &[0, 0xe9, 1]).u32(),
             33u32.wrapping_sub(0x17)
+        );
+    }
+
+    #[test]
+    fn fn_00653290_returns_this_only_when_the_check_passes() {
+        let mut e = Engine::new();
+        e.register(CHECK_006532C0, |_, a| Ret {
+            eax: a[1],
+            ..Ret::default()
+        });
+        let this = Ptr::<()>::new(0x5000);
+        assert_eq!(e.call(0x0065_3290, &args![this, 1u32]).ptr::<()>(), this);
+        assert_eq!(
+            e.call(0x0065_3290, &args![this, 0u32]).ptr::<()>(),
+            Ptr::<()>::NULL
         );
     }
 }

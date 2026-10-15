@@ -22,9 +22,28 @@ pub fn deleting_destructor_00cc9d80(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+// Translated from 00cc9d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMoppBvTreeShape::getContainer` (map name, taken from a vtable; the
+/// body is only this jump). `__fastcall` tail jump: loads the object at
+/// `this + 0x34` and jumps to its virtual slot `+0x10` with that object as
+/// `this`; the caller's own stack words (`forwarded`) reach it unchanged
+/// and its result is returned.
+pub fn fn_00cc9d70(e: &mut Engine, this: Ptr, forwarded: &[u32]) -> Ret {
+    let child = e.mem.u32(this.addr() + 0x34);
+    e.vcall(child, 0x10, forwarded)
+}
+
+/// Uniform form of [`fn_00cc9d70`]: `this`, then the forwarded words.
+fn fn_00cc9d70_entry(e: &mut Engine, words: &[u32]) -> Ret {
+    fn_00cc9d70(e, Ptr::new(words[0]), &words[1..])
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00cc_9d80, deleting_destructor_00cc9d80(Ptr, u8) -> Ptr)]
+    vec![
+        (0x00cc9d70, fn_00cc9d70_entry as AbiFn),
+        entry!(0x00cc_9d80, deleting_destructor_00cc9d80(Ptr, u8) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -88,5 +107,20 @@ mod tests {
     #[test]
     fn deleting_destructor_00cc9d80_frees_only_when_bit_zero_is_set() {
         check(0x00cc_9d80, 0x00d5_4960);
+    }
+
+    #[test]
+    fn fn_00cc9d70_jumps_to_slot_0x10_of_the_object_at_0x34() {
+        let mut e = Engine::new();
+        e.put_vtable(0x0090_2000, &[0, 0, 0, 0, 0x0090_5000]);
+        e.register(0x0090_5000, |_, a| Ret {
+            eax: a[0] + a.len() as u32,
+            ..Ret::default()
+        });
+        let child = e.mem.alloc(8);
+        e.mem.set_u32(child, 0x0090_2000);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x34, child);
+        assert_eq!(e.call(0x00cc_9d70, &args![this]).u32(), child + 1);
     }
 }
