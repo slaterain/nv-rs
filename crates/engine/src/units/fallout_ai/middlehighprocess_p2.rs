@@ -4512,6 +4512,367 @@ pub fn middle_high_process_defer_hide_dismembered_limb(
     });
 }
 
+// Translated from 0092c0c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0092c0c0 - the exception frame (FS:[0]) is not translated
+/// The constructor of a hide-dismembered-limb entry (no Xbox PDB name):
+/// initialises the pointers at +8 and +0xC to null through the pointer
+/// constructor (`00633c90`) and returns the entry. The float at +0, the
+/// word at +4 and the byte at +0x10 are not touched.
+pub fn fn_0092c0c0(e: &mut Engine, this: u32) -> u32 {
+    e.call(POINTER_INIT, &args![this + 8, 0u32]);
+    e.call(POINTER_INIT, &args![this + 0xc, 0u32]);
+    this
+}
+
+/// `(vats)`: the VATS object's word at +8, its mode (`0044ddc0`).
+const VATS_MODE: u32 = 0x0044_ddc0;
+/// The float game setting object `UpdateDeferredHideDismemberedLimbs`
+/// reads while the VATS mode is 4.
+const HIDE_DELAY_SETTING_VATS: u32 = 0x011c_f9e0;
+/// The float game setting object it reads otherwise.
+const HIDE_DELAY_SETTING: u32 = 0x011c_f338;
+/// `Actor::FillBoneArray` (Xbox PDB), `(actor, first word of the entry's
+/// +8 pointer, 0)`.
+const ACTOR_FILL_BONE_ARRAY: u32 = 0x008b_6ff0;
+/// `Actor::HideDismemberedLimb` (Xbox PDB), `(actor, entry word +4, the
+/// +8 pointer's first word, the +0xC pointer's first word, entry byte
+/// +0x10)`.
+const ACTOR_HIDE_DISMEMBERED_LIMB: u32 = 0x008b_6290;
+
+// Translated from 0092c120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::UpdateDeferredHideDismemberedLimbs` (Xbox PDB):
+/// `(process, actor, delta)`. Walks the list at +0x1B0 of entries made by
+/// `DeferHideDismemberedLimb`. An entry whose +8 pointer is null or points
+/// at something whose second word is at most 1 (or likewise for its +0xC
+/// pointer) is finished; otherwise, once its float at +0 (grown by `delta`)
+/// exceeds the game setting (the VATS-mode setting while the VATS object's
+/// mode is 4), the actor's bone array is filled and the limb hidden, and
+/// the entry is finished. A finished entry is deleted and removed from the
+/// list.
+pub fn middle_high_process_update_deferred_hide_dismembered_limbs(
+    e: &mut Engine,
+    this: Ptr<MiddleHighProcess>,
+    actor: u32,
+    delta: f32,
+) {
+    let mode = e.call(VATS_MODE, &args![VATS]).u32();
+    let setting = if mode == 4 {
+        HIDE_DELAY_SETTING_VATS
+    } else {
+        HIDE_DELAY_SETTING
+    };
+    let slot = e.call(FLOAT_SETTING_VALUE, &args![setting]).u32();
+    let threshold = x87_quiet(e.mem.f32(slot));
+    let mut list = this.addr() + 0x1b0;
+    let mut previous = 0u32;
+    loop {
+        if list == 0 || e.call(LIST_IS_EMPTY, &args![list]).bool() {
+            return;
+        }
+        let item = e.call(IDENTITY, &args![list]).u32();
+        let entry = e.mem.u32(item);
+        let mut finished = false;
+        if e.call(FIRST_WORD, &args![entry + 8]).u32() == 0 {
+            finished = true;
+        } else {
+            let first = e.call(FIRST_WORD, &args![entry + 8]).u32();
+            if e.call(WORD_4, &args![first]).u32() <= 1 {
+                finished = true;
+            } else if e.call(FIRST_WORD, &args![entry + 0xc]).u32() != 0 {
+                let second = e.call(FIRST_WORD, &args![entry + 0xc]).u32();
+                if e.call(WORD_4, &args![second]).u32() <= 1 {
+                    finished = true;
+                }
+            }
+        }
+        let grown = (f64::from(x87_quiet(e.mem.f32(entry))) + f64::from(x87_quiet(delta))) as f32;
+        e.mem.set_f32(entry, grown);
+        // `FCOMPP` of the setting against the entry's float, then the
+        // parity test: the body runs only when the setting is below it.
+        if !finished && f64::from(threshold) < f64::from(e.mem.f32(entry)) {
+            let bones = e.call(FIRST_WORD, &args![entry + 8]).u32();
+            e.call(ACTOR_FILL_BONE_ARRAY, &args![actor, bones, 0u32]);
+            let flag = u32::from(e.mem.u8(entry + 0x10));
+            let second = e.call(FIRST_WORD, &args![entry + 0xc]).u32();
+            let first = e.call(FIRST_WORD, &args![entry + 8]).u32();
+            let word = e.mem.u32(entry + 4);
+            e.call(
+                ACTOR_HIDE_DISMEMBERED_LIMB,
+                &args![actor, word, first, second, flag],
+            );
+            finished = true;
+        }
+        if !finished {
+            previous = list;
+            list = e.call(WORD_4, &args![list]).u32();
+        } else {
+            if entry != 0 {
+                e.call(DEFERRED_HIDE_LIMB_DELETE, &args![entry, 1u32]);
+            }
+            if previous == 0 {
+                e.call(LIST_REMOVE_HEAD, &args![list]);
+            } else {
+                e.with_stack(4, |e, cell| {
+                    e.mem.set_u32(cell.addr(), entry);
+                    e.call(LIST_REMOVE, &args![previous, cell.addr()]);
+                });
+                list = e.call(WORD_4, &args![previous]).u32();
+            }
+        }
+    }
+}
+
+// Translated from 0092c2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::SetCreatureLipSynchAnim` (Xbox PDB): deletes the
+/// current lip-synch animation at +0x1A0 (its scalar deleting destructor)
+/// and stores the new one.
+pub fn middle_high_process_set_creature_lip_synch_anim(
+    e: &mut Engine,
+    this: Ptr<MiddleHighProcess>,
+    anim: u32,
+) {
+    let p = this.addr();
+    let current = e.mem.u32(p + 0x1a0);
+    if current != 0 {
+        e.call(LIP_SYNCH_ANIM_DELETE, &args![current, 1u32]);
+    }
+    e.mem.set_u32(p + 0x1a0, anim);
+}
+
+/// `(object)`: true when `0082_56d0` (`LIST_IS_EMPTY`) of the object is
+/// false (`00493830`).
+const NOT_EMPTY: u32 = 0x0049_3830;
+
+// Translated from 0092c340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::HasMovementAnim` (Xbox PDB): `(process, group)`.
+/// Without the object at +0x1C0, or when `00493830` of it is true, or for
+/// a group outside the cached range, the answer is yes. Otherwise a
+/// two-bit cache at +0x22C per group (1 loaded, 2 not loaded) answers,
+/// and a miss asks `Animation::GroupLoaded` of that object and records it.
+pub fn middle_high_process_has_movement_anim(
+    e: &mut Engine,
+    this: Ptr<MiddleHighProcess>,
+    group: u32,
+) -> bool {
+    let p = this.addr();
+    let animation = e.mem.u32(p + 0x1c0);
+    if animation == 0 || e.call(NOT_EMPTY, &args![animation]).eax as u8 != 0 {
+        return true;
+    }
+    let shift = group.wrapping_mul(2).wrapping_sub(6);
+    if shift > 0x20 {
+        return true;
+    }
+    let cached = e.mem.u32(p + 0x22c) >> (shift & 31);
+    if cached & 1 != 0 {
+        return true;
+    }
+    if cached & 2 != 0 {
+        return false;
+    }
+    let loaded = e
+        .call(ANIMATION_GROUP_LOADED, &args![animation, group & 0xffff])
+        .eax as u8;
+    let state: u32 = if loaded != 0 { 1 } else { 2 };
+    let flags = (state << (shift & 31)) | e.mem.u32(p + 0x22c);
+    e.mem.set_u32(p + 0x22c, flags);
+    loaded != 0
+}
+
+/// `HitData::HitData` (Xbox PDB), `(hit data)`.
+const HIT_DATA_CONSTRUCT: u32 = 0x009b_4d90;
+/// `HitData::Copy` (Xbox PDB), `(hit data, source)`.
+const HIT_DATA_COPY: u32 = 0x009b_4ec0;
+/// `HitData::ClearData` (Xbox PDB), `(hit data)`.
+const HIT_DATA_CLEAR: u32 = 0x009b_4dc0;
+
+/// Makes the `HitData` (0x64 bytes) at `process + offset` when it does not
+/// exist yet; returns whether it was made.
+fn make_hit_data(e: &mut Engine, process: u32, offset: u32) -> bool {
+    if e.mem.u32(process + offset) != 0 {
+        return false;
+    }
+    let block = e.call(ALLOCATE, &args![0x64u32]).u32();
+    let hit = if block != 0 {
+        e.call(HIT_DATA_CONSTRUCT, &args![block]).u32()
+    } else {
+        0
+    };
+    e.mem.set_u32(process + offset, hit);
+    true
+}
+
+// Translated from 0092c400 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0092c400 - the exception frame (FS:[0]) is not translated
+/// `MiddleHighProcess::SetLastHitData` (Xbox PDB): `(process, hit)`. Makes
+/// the `HitData` at +0x240 when missing, then copies `hit` into it.
+pub fn middle_high_process_set_last_hit_data(
+    e: &mut Engine,
+    this: Ptr<MiddleHighProcess>,
+    hit: u32,
+) {
+    let p = this.addr();
+    make_hit_data(e, p, 0x240);
+    let data = e.mem.u32(p + 0x240);
+    e.call(HIT_DATA_COPY, &args![data, hit]);
+}
+
+// Translated from 0092c4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0092c4a0 - the exception frame (FS:[0]) is not translated
+/// `MiddleHighProcess::ClearLastHitData` (Xbox PDB): makes the `HitData` at
+/// +0x240 when missing (a fresh one is left as constructed), otherwise
+/// clears it.
+pub fn middle_high_process_clear_last_hit_data(e: &mut Engine, this: Ptr<MiddleHighProcess>) {
+    let p = this.addr();
+    if !make_hit_data(e, p, 0x240) {
+        let data = e.mem.u32(p + 0x240);
+        e.call(HIT_DATA_CLEAR, &args![data]);
+    }
+}
+
+// Translated from 0092c540 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0092c540 - the exception frame (FS:[0]) is not translated
+/// `MiddleHighProcess::SetLastAttackHitData` (Xbox PDB): as
+/// `SetLastHitData` for the `HitData` at +0x254.
+pub fn middle_high_process_set_last_attack_hit_data(
+    e: &mut Engine,
+    this: Ptr<MiddleHighProcess>,
+    hit: u32,
+) {
+    let p = this.addr();
+    make_hit_data(e, p, 0x254);
+    let data = e.mem.u32(p + 0x254);
+    e.call(HIT_DATA_COPY, &args![data, hit]);
+}
+
+// Translated from 0092c5e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0092c5e0 - the exception frame (FS:[0]) is not translated
+/// `MiddleHighProcess::ClearLastAttackHitData` (Xbox PDB): as
+/// `ClearLastHitData` for the `HitData` at +0x254.
+pub fn middle_high_process_clear_last_attack_hit_data(
+    e: &mut Engine,
+    this: Ptr<MiddleHighProcess>,
+) {
+    let p = this.addr();
+    if !make_hit_data(e, p, 0x254) {
+        let data = e.mem.u32(p + 0x254);
+        e.call(HIT_DATA_CLEAR, &args![data]);
+    }
+}
+
+// Translated from 0092c680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::ClearFurnitureMarker` (Xbox PDB): unless the
+/// save/load object's flag (`0042ce10`) or the data handler's byte
+/// (`004226e0`) is set, un-reserves the marker slot (byte +0x144) of the
+/// furniture reference at +0x140; then resets the slot to 0x7F, the
+/// furniture mark at +0x148 to heading 0.0, its byte +0xE to 0 and its
+/// origin point.
+pub fn middle_high_process_clear_furniture_marker(e: &mut Engine, this: Ptr<MiddleHighProcess>) {
+    let p = this.addr();
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME);
+    if e.call(SAVE_LOAD_FLAG_2, &args![save_load]).eax as u8 == 0 && e.mem.u32(p + 0x140) != 0 {
+        let handler = e.global::<u32>(DATA_HANDLER);
+        if e.call(DATA_HANDLER_BYTE_61D, &args![handler]).eax as u8 == 0 {
+            let reference = e.mem.u32(p + 0x140);
+            let slot = u32::from(e.mem.u8(p + 0x144));
+            e.call(SET_MARKER_RESERVED, &args![reference, slot, 0u32]);
+        }
+    }
+    e.mem.set_u8(p + 0x144, 0x7f);
+    e.call(FURNITURE_MARK_SET_HEADING, &args![p + 0x148, 0u32]);
+    e.call(SET_BYTE_E, &args![p + 0x148, 0u32]);
+    e.call(COPY_POINT, &args![p + 0x148, FURNITURE_MARK_ORIGIN]);
+}
+
+/// `(this, mask, value)` (actor.cpp): sets or clears the flag `mask`
+/// according to `value` when the word at +0x2C of `this` is non-null.
+const CACHED_FLAG_SET: u32 = 0x008a_cf70;
+/// `(extra data list)`: a byte (extradatalist.cpp).
+const EXTRA_LIST_BYTE: u32 = 0x0041_8a80;
+
+// Translated from 0092c720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiddleHighProcess::CheckCachedValueFlags` (Xbox PDB): `(this, actor)`.
+/// Sets flag 0x20000000 of `this` to whether the value 0x10 read through
+/// slot +0x20 of the object at the actor's +0xA4 exceeds the one read
+/// through slot +0xC (each a float in `ST0`), flag 0x40000000 the same for
+/// the value 0x16, and flag 0x10000000 from `00418a80` of the actor's
+/// extra data list (`005d43c0`), all through `008acf70`.
+pub fn middle_high_process_check_cached_value_flags(
+    e: &mut Engine,
+    this: Ptr<MiddleHighProcess>,
+    actor: u32,
+) {
+    let p = this.addr();
+    let part = actor + 0xa4;
+    let base_10 = e.vcall(part, 0xc, &args![0x10u32]).f64();
+    let current_10 = e.vcall(part, 0x20, &args![0x10u32]).f64();
+    let low = current_10 > base_10;
+    let base_16 = e.vcall(part, 0xc, &args![0x16u32]).f64();
+    let current_16 = e.vcall(part, 0x20, &args![0x16u32]).f64();
+    let high = current_16 > base_16;
+    e.call(CACHED_FLAG_SET, &args![p, 0x2000_0000u32, u32::from(low)]);
+    e.call(CACHED_FLAG_SET, &args![p, 0x4000_0000u32, u32::from(high)]);
+    let list = e.call(REFERENCE_EXTRA_LIST, &args![actor]).u32();
+    let flag = e.call(EXTRA_LIST_BYTE, &args![list]).eax as u8;
+    e.call(CACHED_FLAG_SET, &args![p, 0x1000_0000u32, u32::from(flag)]);
+}
+
+/// `(referent)`: releases the object a reference cell pointed at
+/// (`004b0ef0`).
+const CELL_RELEASE: u32 = 0x004b_0ef0;
+/// `(referent)`: takes a reference to the object (`0092c870`: passes
+/// `referent + 8` to `0040b460`).
+const CELL_ADD_REFERENCE: u32 = 0x0092_c870;
+
+// Translated from 0092c890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A reference cell's release (no Xbox PDB name): `(cell)`; releases what
+/// the cell holds, if anything.
+pub fn fn_0092c890(e: &mut Engine, this: u32) {
+    let held = e.mem.u32(this);
+    if held != 0 {
+        e.call(CELL_RELEASE, &args![held]);
+    }
+}
+
+// Translated from 0092c8b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A reference cell's assignment (no Xbox PDB name): `(cell, value)`.
+/// Releases the old referent, stores `value` and takes a reference to
+/// it; returns the cell.
+pub fn fn_0092c8b0(e: &mut Engine, this: u32, value: u32) -> u32 {
+    if e.mem.u32(this) != value {
+        let held = e.mem.u32(this);
+        if held != 0 {
+            e.call(CELL_RELEASE, &args![held]);
+        }
+        e.mem.set_u32(this, value);
+        let held = e.mem.u32(this);
+        if held != 0 {
+            e.call(CELL_ADD_REFERENCE, &args![held]);
+        }
+    }
+    this
+}
+
+// Translated from 0092c900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A reference cell's copy assignment (no Xbox PDB name): `(cell, source
+/// cell)`. As `fn_0092c8b0` with the source's referent, read again after
+/// the release as the exe does; returns the cell.
+pub fn fn_0092c900(e: &mut Engine, this: u32, source: u32) -> u32 {
+    if e.mem.u32(this) != e.mem.u32(source) {
+        let held = e.mem.u32(this);
+        if held != 0 {
+            e.call(CELL_RELEASE, &args![held]);
+        }
+        let value = e.mem.u32(source);
+        e.mem.set_u32(this, value);
+        let held = e.mem.u32(this);
+        if held != 0 {
+            e.call(CELL_ADD_REFERENCE, &args![held]);
+        }
+    }
+    this
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     type Process = Ptr<MiddleHighProcess>;
@@ -4669,6 +5030,40 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0092bff0,
             middle_high_process_defer_hide_dismembered_limb(Process, u32, u32, u32, u8)
         ),
+        entry!(0x0092c0c0, fn_0092c0c0(u32) -> u32),
+        entry!(
+            0x0092c120,
+            middle_high_process_update_deferred_hide_dismembered_limbs(Process, u32, f32)
+        ),
+        entry!(
+            0x0092c2e0,
+            middle_high_process_set_creature_lip_synch_anim(Process, u32)
+        ),
+        entry!(0x0092c340, middle_high_process_has_movement_anim(Process, u32) -> bool),
+        entry!(
+            0x0092c400,
+            middle_high_process_set_last_hit_data(Process, u32)
+        ),
+        entry!(0x0092c4a0, middle_high_process_clear_last_hit_data(Process)),
+        entry!(
+            0x0092c540,
+            middle_high_process_set_last_attack_hit_data(Process, u32)
+        ),
+        entry!(
+            0x0092c5e0,
+            middle_high_process_clear_last_attack_hit_data(Process)
+        ),
+        entry!(
+            0x0092c680,
+            middle_high_process_clear_furniture_marker(Process)
+        ),
+        entry!(
+            0x0092c720,
+            middle_high_process_check_cached_value_flags(Process, u32)
+        ),
+        entry!(0x0092c890, fn_0092c890(u32)),
+        entry!(0x0092c8b0, fn_0092c8b0(u32, u32) -> u32),
+        entry!(0x0092c900, fn_0092c900(u32, u32) -> u32),
     ]
 }
 
@@ -4685,6 +5080,31 @@ mod tests {
 
     /// Every exe function this file calls by address.
     const CALLEES: &[u32] = &[
+        ACTOR_FILL_BONE_ARRAY,
+        ACTOR_HIDE_DISMEMBERED_LIMB,
+        ANIMATION_GROUP_LOADED,
+        CACHED_FLAG_SET,
+        CELL_ADD_REFERENCE,
+        CELL_RELEASE,
+        COPY_POINT,
+        DATA_HANDLER_BYTE_61D,
+        DEFERRED_HIDE_LIMB_DELETE,
+        EXTRA_LIST_BYTE,
+        FLOAT_SETTING_VALUE,
+        FURNITURE_MARK_SET_HEADING,
+        HIT_DATA_CLEAR,
+        HIT_DATA_CONSTRUCT,
+        HIT_DATA_COPY,
+        LIP_SYNCH_ANIM_DELETE,
+        LIST_REMOVE,
+        LIST_REMOVE_HEAD,
+        NOT_EMPTY,
+        POINTER_INIT,
+        REFERENCE_EXTRA_LIST,
+        SAVE_LOAD_FLAG_2,
+        SET_BYTE_E,
+        SET_MARKER_RESERVED,
+        VATS_MODE,
         ACTIVE_EFFECTS_FINISH_LOAD,
         ACTIVE_EFFECTS_FINISH_LOAD_OV2,
         ACTIVE_EFFECTS_INIT_LOAD,
@@ -4985,6 +5405,7 @@ mod tests {
 
     /// Every exe global this file reads or writes.
     const GLOBALS: &[u32] = &[
+        DATA_HANDLER,
         ACTIVATE_FORM_A,
         AIM_SETTING_A,
         AIM_SETTING_B,
@@ -7647,5 +8068,412 @@ mod tests {
         let added = calls(&e, LIST_ADD);
         assert_eq!(added.len(), 1);
         assert_eq!(added[0][0], a + 0x1b0);
+    }
+
+    #[test]
+    fn fn_0092c0c0_nulls_the_two_pointers() {
+        let mut e = engine();
+        let entry = e.mem.alloc(0x14);
+        assert_eq!(fn_0092c0c0(&mut e, entry), entry);
+        assert_eq!(
+            calls(&e, POINTER_INIT),
+            vec![vec![entry + 8, 0], vec![entry + 0xc, 0]]
+        );
+    }
+
+    /// A list node at `at` holding `entry` and followed by `next`.
+    fn list_node(e: &mut Engine, at: u32, entry: u32, next: u32) {
+        e.mem.set_u32(at, entry);
+        e.mem.set_u32(at + 4, next);
+    }
+
+    /// A deferred entry: float `time`, the +8 pointer holding something
+    /// whose second word is `first_count`, the +0xC pointer likewise
+    /// (`None` leaves it null).
+    fn deferred_entry(e: &mut Engine, time: f32, first: Option<u32>, second: Option<u32>) -> u32 {
+        let entry = e.mem.alloc(0x14);
+        e.mem.set_f32(entry, time);
+        e.mem.set_u32(entry + 4, 0x44);
+        e.mem.set_u8(entry + 0x10, 7);
+        for (offset, count) in [(8, first), (0xc, second)] {
+            if let Some(count) = count {
+                let target = e.mem.alloc(8);
+                e.mem.set_u32(target + 4, count);
+                e.mem.set_u32(entry + offset, target);
+            }
+        }
+        entry
+    }
+
+    /// The setting is `1.0`; removing the head of a list empties it.
+    fn deferred_scene(e: &mut Engine, vats_mode: u32) {
+        let cell = e.mem.alloc(8);
+        e.mem.set_f32(cell, 1.0);
+        e.register_double(FLOAT_SETTING_VALUE, move |_, _| ret(cell));
+        e.register_double(VATS_MODE, move |_, _| ret(vats_mode));
+        e.register(LIST_REMOVE_HEAD, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, 0);
+            Ret::default()
+        });
+    }
+
+    #[test]
+    fn update_deferred_hide_keeps_a_young_entry() {
+        let mut e = engine();
+        let p = process(&mut e);
+        deferred_scene(&mut e, 0);
+        let entry = deferred_entry(&mut e, 0.5, Some(5), None);
+        list_node(&mut e, p.addr() + 0x1b0, entry, 0);
+        middle_high_process_update_deferred_hide_dismembered_limbs(&mut e, p, 0x900, 0.25);
+        assert_eq!(e.mem.f32(entry), 0.75);
+        assert!(calls(&e, ACTOR_HIDE_DISMEMBERED_LIMB).is_empty());
+        assert!(calls(&e, DEFERRED_HIDE_LIMB_DELETE).is_empty());
+        assert_eq!(
+            calls(&e, FLOAT_SETTING_VALUE),
+            vec![vec![HIDE_DELAY_SETTING]]
+        );
+    }
+
+    #[test]
+    fn update_deferred_hide_hides_the_limb_when_the_time_passes() {
+        let mut e = engine();
+        let p = process(&mut e);
+        deferred_scene(&mut e, 4);
+        let entry = deferred_entry(&mut e, 0.5, Some(5), Some(6));
+        let first = e.mem.u32(entry + 8);
+        let second = e.mem.u32(entry + 0xc);
+        list_node(&mut e, p.addr() + 0x1b0, entry, 0);
+        middle_high_process_update_deferred_hide_dismembered_limbs(&mut e, p, 0x900, 0.75);
+        assert_eq!(e.mem.f32(entry), 1.25);
+        assert_eq!(
+            calls(&e, FLOAT_SETTING_VALUE),
+            vec![vec![HIDE_DELAY_SETTING_VATS]]
+        );
+        assert_eq!(
+            calls(&e, ACTOR_FILL_BONE_ARRAY),
+            vec![vec![0x900, first, 0]]
+        );
+        assert_eq!(
+            calls(&e, ACTOR_HIDE_DISMEMBERED_LIMB),
+            vec![vec![0x900, 0x44, first, second, 7]]
+        );
+        assert_eq!(calls(&e, DEFERRED_HIDE_LIMB_DELETE), vec![vec![entry, 1]]);
+        assert_eq!(calls(&e, LIST_REMOVE_HEAD), vec![vec![p.addr() + 0x1b0]]);
+    }
+
+    #[test]
+    fn update_deferred_hide_finishes_entries_with_dead_targets() {
+        let mut e = engine();
+        let p = process(&mut e);
+        deferred_scene(&mut e, 0);
+        // The +8 pointer is null: finished without hiding.
+        let entry = deferred_entry(&mut e, 0.0, None, Some(9));
+        list_node(&mut e, p.addr() + 0x1b0, entry, 0);
+        middle_high_process_update_deferred_hide_dismembered_limbs(&mut e, p, 0x900, 0.1);
+        assert!(calls(&e, ACTOR_HIDE_DISMEMBERED_LIMB).is_empty());
+        assert_eq!(calls(&e, DEFERRED_HIDE_LIMB_DELETE), vec![vec![entry, 1]]);
+        // The +8 pointer's target has a count of 1: finished.
+        let mut e = engine();
+        let p = process(&mut e);
+        deferred_scene(&mut e, 0);
+        let entry = deferred_entry(&mut e, 0.0, Some(1), Some(9));
+        list_node(&mut e, p.addr() + 0x1b0, entry, 0);
+        middle_high_process_update_deferred_hide_dismembered_limbs(&mut e, p, 0x900, 0.1);
+        assert_eq!(calls(&e, DEFERRED_HIDE_LIMB_DELETE).len(), 1);
+        // The +0xC pointer's target has a count of 1: finished.
+        let mut e = engine();
+        let p = process(&mut e);
+        deferred_scene(&mut e, 0);
+        let entry = deferred_entry(&mut e, 0.0, Some(2), Some(1));
+        list_node(&mut e, p.addr() + 0x1b0, entry, 0);
+        middle_high_process_update_deferred_hide_dismembered_limbs(&mut e, p, 0x900, 0.1);
+        assert_eq!(calls(&e, DEFERRED_HIDE_LIMB_DELETE).len(), 1);
+    }
+
+    #[test]
+    fn update_deferred_hide_removes_a_later_entry_after_its_predecessor() {
+        let mut e = engine();
+        let p = process(&mut e);
+        deferred_scene(&mut e, 0);
+        let young = deferred_entry(&mut e, 0.0, Some(5), None);
+        let dead = deferred_entry(&mut e, 0.0, None, None);
+        let head = p.addr() + 0x1b0;
+        let node = e.mem.alloc(8);
+        list_node(&mut e, head, young, node);
+        list_node(&mut e, node, dead, 0);
+        e.register(LIST_REMOVE, |e, a| {
+            // Unlink the node after `a[0]`.
+            e.mem.set_u32(a[0] + 4, 0);
+            Ret::default()
+        });
+        middle_high_process_update_deferred_hide_dismembered_limbs(&mut e, p, 0x900, 0.1);
+        assert_eq!(calls(&e, DEFERRED_HIDE_LIMB_DELETE), vec![vec![dead, 1]]);
+        let removed = calls(&e, LIST_REMOVE);
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0][0], head);
+        assert!(calls(&e, LIST_REMOVE_HEAD).is_empty());
+    }
+
+    #[test]
+    fn set_creature_lip_synch_anim_deletes_the_old_one() {
+        let mut e = engine();
+        let p = process(&mut e);
+        middle_high_process_set_creature_lip_synch_anim(&mut e, p, 0x1111);
+        assert!(calls(&e, LIP_SYNCH_ANIM_DELETE).is_empty());
+        assert_eq!(e.mem.u32(p.addr() + 0x1a0), 0x1111);
+        middle_high_process_set_creature_lip_synch_anim(&mut e, p, 0x2222);
+        assert_eq!(calls(&e, LIP_SYNCH_ANIM_DELETE), vec![vec![0x1111, 1]]);
+        assert_eq!(e.mem.u32(p.addr() + 0x1a0), 0x2222);
+    }
+
+    #[test]
+    fn has_movement_anim_caches_the_answer_per_group() {
+        let mut e = engine();
+        let p = process(&mut e);
+        let a = p.addr();
+        // No animation object: yes.
+        assert!(middle_high_process_has_movement_anim(&mut e, p, 5));
+        e.mem.set_u32(a + 0x1c0, 0x7000);
+        // `00493830` true: yes.
+        e.register(NOT_EMPTY, |_, _| ret(1));
+        assert!(middle_high_process_has_movement_anim(&mut e, p, 5));
+        e.register(NOT_EMPTY, |_, _| ret(0));
+        // Outside the cached range (group 2 gives -2, group 0x20 gives 0x3A).
+        assert!(middle_high_process_has_movement_anim(&mut e, p, 2));
+        assert!(middle_high_process_has_movement_anim(&mut e, p, 0x20));
+        assert!(calls(&e, ANIMATION_GROUP_LOADED).is_empty());
+        // A miss asks the animation and records the answer (shift 4).
+        e.register(ANIMATION_GROUP_LOADED, |_, _| ret(0));
+        assert!(!middle_high_process_has_movement_anim(&mut e, p, 5));
+        assert_eq!(calls(&e, ANIMATION_GROUP_LOADED), vec![vec![0x7000, 5]]);
+        assert_eq!(e.mem.u32(a + 0x22c), 2 << 4);
+        // The cached "not loaded" answers without asking.
+        assert!(!middle_high_process_has_movement_anim(&mut e, p, 5));
+        assert_eq!(calls(&e, ANIMATION_GROUP_LOADED).len(), 1);
+        // Another group answers loaded and sets bit 0 of its pair (shift 6).
+        e.register(ANIMATION_GROUP_LOADED, |_, _| ret(1));
+        assert!(middle_high_process_has_movement_anim(&mut e, p, 6));
+        assert_eq!(e.mem.u32(a + 0x22c), (2 << 4) | (1 << 6));
+        assert!(middle_high_process_has_movement_anim(&mut e, p, 6));
+        assert_eq!(calls(&e, ANIMATION_GROUP_LOADED).len(), 2);
+    }
+
+    /// Allocation and the hit data constructor hand out a block.
+    fn hit_data_doubles(e: &mut Engine) {
+        e.register(ALLOCATE, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(HIT_DATA_CONSTRUCT, |_, a| ret(a[0]));
+    }
+
+    #[test]
+    fn set_last_hit_data_makes_the_data_once_and_copies() {
+        let mut e = engine();
+        let p = process(&mut e);
+        hit_data_doubles(&mut e);
+        middle_high_process_set_last_hit_data(&mut e, p, 0x5000);
+        let data = e.mem.u32(p.addr() + 0x240);
+        assert_ne!(data, 0);
+        assert_eq!(calls(&e, ALLOCATE), vec![vec![0x64]]);
+        assert_eq!(calls(&e, HIT_DATA_CONSTRUCT), vec![vec![data]]);
+        assert_eq!(calls(&e, HIT_DATA_COPY), vec![vec![data, 0x5000]]);
+        middle_high_process_set_last_hit_data(&mut e, p, 0x6000);
+        assert_eq!(calls(&e, ALLOCATE).len(), 1);
+        assert_eq!(calls(&e, HIT_DATA_COPY)[1], vec![data, 0x6000]);
+        assert_eq!(e.mem.u32(p.addr() + 0x254), 0);
+    }
+
+    #[test]
+    fn set_last_hit_data_stores_null_when_the_allocation_fails() {
+        let mut e = engine();
+        let p = process(&mut e);
+        e.register(ALLOCATE, |_, _| ret(0));
+        middle_high_process_set_last_hit_data(&mut e, p, 0x5000);
+        assert!(calls(&e, HIT_DATA_CONSTRUCT).is_empty());
+        assert_eq!(e.mem.u32(p.addr() + 0x240), 0);
+        assert_eq!(calls(&e, HIT_DATA_COPY), vec![vec![0, 0x5000]]);
+    }
+
+    #[test]
+    fn clear_last_hit_data_makes_or_clears() {
+        let mut e = engine();
+        let p = process(&mut e);
+        hit_data_doubles(&mut e);
+        middle_high_process_clear_last_hit_data(&mut e, p);
+        let data = e.mem.u32(p.addr() + 0x240);
+        assert_ne!(data, 0);
+        assert!(calls(&e, HIT_DATA_CLEAR).is_empty());
+        middle_high_process_clear_last_hit_data(&mut e, p);
+        assert_eq!(calls(&e, HIT_DATA_CLEAR), vec![vec![data]]);
+        assert_eq!(calls(&e, ALLOCATE).len(), 1);
+    }
+
+    #[test]
+    fn set_last_attack_hit_data_uses_the_second_slot() {
+        let mut e = engine();
+        let p = process(&mut e);
+        hit_data_doubles(&mut e);
+        middle_high_process_set_last_attack_hit_data(&mut e, p, 0x5000);
+        let data = e.mem.u32(p.addr() + 0x254);
+        assert_ne!(data, 0);
+        assert_eq!(calls(&e, HIT_DATA_COPY), vec![vec![data, 0x5000]]);
+        middle_high_process_set_last_attack_hit_data(&mut e, p, 0x6000);
+        assert_eq!(calls(&e, ALLOCATE).len(), 1);
+        assert_eq!(e.mem.u32(p.addr() + 0x240), 0);
+    }
+
+    #[test]
+    fn clear_last_attack_hit_data_makes_or_clears() {
+        let mut e = engine();
+        let p = process(&mut e);
+        hit_data_doubles(&mut e);
+        middle_high_process_clear_last_attack_hit_data(&mut e, p);
+        let data = e.mem.u32(p.addr() + 0x254);
+        assert_ne!(data, 0);
+        assert!(calls(&e, HIT_DATA_CLEAR).is_empty());
+        middle_high_process_clear_last_attack_hit_data(&mut e, p);
+        assert_eq!(calls(&e, HIT_DATA_CLEAR), vec![vec![data]]);
+    }
+
+    #[test]
+    fn clear_furniture_marker_unreserves_the_slot_unless_loading() {
+        let mut e = engine();
+        let p = process(&mut e);
+        let a = p.addr();
+        e.set_global(SAVE_LOAD_GAME, 0x8100);
+        e.set_global(DATA_HANDLER, 0x8200);
+        e.mem.set_u32(a + 0x140, 0x7700);
+        e.mem.set_u8(a + 0x144, 3);
+        middle_high_process_clear_furniture_marker(&mut e, p);
+        assert_eq!(calls(&e, SET_MARKER_RESERVED), vec![vec![0x7700, 3, 0]]);
+        assert_eq!(calls(&e, SAVE_LOAD_FLAG_2), vec![vec![0x8100]]);
+        assert_eq!(calls(&e, DATA_HANDLER_BYTE_61D), vec![vec![0x8200]]);
+        assert_eq!(e.mem.u8(a + 0x144), 0x7f);
+        assert_eq!(
+            calls(&e, FURNITURE_MARK_SET_HEADING),
+            vec![vec![a + 0x148, 0]]
+        );
+        assert_eq!(calls(&e, SET_BYTE_E), vec![vec![a + 0x148, 0]]);
+        assert_eq!(
+            calls(&e, COPY_POINT),
+            vec![vec![a + 0x148, FURNITURE_MARK_ORIGIN]]
+        );
+        // The save/load flag set: no un-reserving.
+        e.call_log = Some(vec![]);
+        e.register(SAVE_LOAD_FLAG_2, |_, _| ret(1));
+        middle_high_process_clear_furniture_marker(&mut e, p);
+        assert!(calls(&e, SET_MARKER_RESERVED).is_empty());
+        assert!(calls(&e, DATA_HANDLER_BYTE_61D).is_empty());
+        // The data handler's byte set: likewise.
+        e.call_log = Some(vec![]);
+        e.register(SAVE_LOAD_FLAG_2, |_, _| ret(0));
+        e.register(DATA_HANDLER_BYTE_61D, |_, _| ret(1));
+        middle_high_process_clear_furniture_marker(&mut e, p);
+        assert!(calls(&e, SET_MARKER_RESERVED).is_empty());
+        // No furniture: nothing is asked.
+        e.call_log = Some(vec![]);
+        e.mem.set_u32(a + 0x140, 0);
+        middle_high_process_clear_furniture_marker(&mut e, p);
+        assert!(calls(&e, DATA_HANDLER_BYTE_61D).is_empty());
+        assert_eq!(calls(&e, FURNITURE_MARK_SET_HEADING).len(), 1);
+    }
+
+    #[test]
+    fn check_cached_value_flags_compares_the_two_slots() {
+        let mut e = engine();
+        let p = process(&mut e);
+        let a = actor(&mut e);
+        let part_vtable = 0x0503_0000;
+        let slots: Vec<u32> = (0..VTABLE_SIZE)
+            .step_by(4)
+            .map(|s| OBJECT_SLOTS + s)
+            .collect();
+        e.put_vtable(part_vtable, &slots);
+        e.mem.set_u32(a + 0xa4, part_vtable);
+        // Value 0x10: slot 0xC says 5, slot 0x20 says 6 (higher). Value
+        // 0x16: 7 and 7 (not higher).
+        e.register(OBJECT_SLOTS + 0xc, |_, args| {
+            ret_f(if args[1] == 0x10 { 5.0 } else { 7.0 })
+        });
+        e.register(OBJECT_SLOTS + 0x20, |_, args| {
+            ret_f(if args[1] == 0x10 { 6.0 } else { 7.0 })
+        });
+        let list = 0x7100;
+        e.register_double(REFERENCE_EXTRA_LIST, move |_, _| ret(list));
+        e.register(EXTRA_LIST_BYTE, |_, _| ret(0x101));
+        middle_high_process_check_cached_value_flags(&mut e, p, a);
+        assert_eq!(
+            calls(&e, CACHED_FLAG_SET),
+            vec![
+                vec![p.addr(), 0x2000_0000, 1],
+                vec![p.addr(), 0x4000_0000, 0],
+                vec![p.addr(), 0x1000_0000, 1],
+            ]
+        );
+        assert_eq!(calls(&e, REFERENCE_EXTRA_LIST), vec![vec![a]]);
+        assert_eq!(calls(&e, EXTRA_LIST_BYTE), vec![vec![list]]);
+        // A NaN compares as not higher.
+        e.call_log = Some(vec![]);
+        e.register(OBJECT_SLOTS + 0x20, |_, args| {
+            ret_f(if args[1] == 0x10 { f64::NAN } else { 8.0 })
+        });
+        middle_high_process_check_cached_value_flags(&mut e, p, a);
+        let set = calls(&e, CACHED_FLAG_SET);
+        assert_eq!(set[0], vec![p.addr(), 0x2000_0000, 0]);
+        assert_eq!(set[1], vec![p.addr(), 0x4000_0000, 1]);
+    }
+
+    #[test]
+    fn fn_0092c890_releases_what_the_cell_holds() {
+        let mut e = engine();
+        let cell = e.mem.alloc(4);
+        fn_0092c890(&mut e, cell);
+        assert!(calls(&e, CELL_RELEASE).is_empty());
+        e.mem.set_u32(cell, 0x4400);
+        fn_0092c890(&mut e, cell);
+        assert_eq!(calls(&e, CELL_RELEASE), vec![vec![0x4400]]);
+    }
+
+    #[test]
+    fn fn_0092c8b0_replaces_the_referent() {
+        let mut e = engine();
+        let cell = e.mem.alloc(4);
+        // Empty cell: no release, the new referent is referenced.
+        assert_eq!(fn_0092c8b0(&mut e, cell, 0x4400), cell);
+        assert!(calls(&e, CELL_RELEASE).is_empty());
+        assert_eq!(calls(&e, CELL_ADD_REFERENCE), vec![vec![0x4400]]);
+        // The same value: nothing happens.
+        fn_0092c8b0(&mut e, cell, 0x4400);
+        assert_eq!(calls(&e, CELL_ADD_REFERENCE).len(), 1);
+        // Another value: the old one is released.
+        fn_0092c8b0(&mut e, cell, 0x5500);
+        assert_eq!(calls(&e, CELL_RELEASE), vec![vec![0x4400]]);
+        assert_eq!(calls(&e, CELL_ADD_REFERENCE)[1], vec![0x5500]);
+        assert_eq!(e.mem.u32(cell), 0x5500);
+        // Null: released, stored, not referenced.
+        fn_0092c8b0(&mut e, cell, 0);
+        assert_eq!(calls(&e, CELL_RELEASE)[1], vec![0x5500]);
+        assert_eq!(calls(&e, CELL_ADD_REFERENCE).len(), 2);
+        assert_eq!(e.mem.u32(cell), 0);
+    }
+
+    #[test]
+    fn fn_0092c900_copies_the_referent_of_another_cell() {
+        let mut e = engine();
+        let cell = e.mem.alloc(4);
+        let source = e.mem.alloc(4);
+        e.mem.set_u32(source, 0x4400);
+        assert_eq!(fn_0092c900(&mut e, cell, source), cell);
+        assert_eq!(e.mem.u32(cell), 0x4400);
+        assert!(calls(&e, CELL_RELEASE).is_empty());
+        assert_eq!(calls(&e, CELL_ADD_REFERENCE), vec![vec![0x4400]]);
+        // Equal: nothing happens.
+        fn_0092c900(&mut e, cell, source);
+        assert_eq!(calls(&e, CELL_ADD_REFERENCE).len(), 1);
+        // A null source releases and stores null.
+        e.mem.set_u32(source, 0);
+        fn_0092c900(&mut e, cell, source);
+        assert_eq!(calls(&e, CELL_RELEASE), vec![vec![0x4400]]);
+        assert_eq!(calls(&e, CELL_ADD_REFERENCE).len(), 1);
+        assert_eq!(e.mem.u32(cell), 0);
     }
 }
