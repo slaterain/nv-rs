@@ -4,7 +4,27 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// `NiLinesData::ms_RTTI` (the class's `NiRTTI` record).
+const NI_LINES_DATA_RTTI: u32 = 0x011f_5b88;
+
+// Translated from 00a8a7b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiLinesData::GetRTTI` (Xbox PDB): the address of the class's `NiRTTI` record.
+pub fn ni_lines_data_get_rtti(_e: &mut Engine) -> Ptr {
+    Ptr::new(NI_LINES_DATA_RTTI)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![entry!(0x00a8a7b0, ni_lines_data_get_rtti() -> Ptr)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ni_lines_data_get_rtti_returns_the_class_rtti() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00a8a7b0, &args![]).u32(), NI_LINES_DATA_RTTI);
+    }
 }

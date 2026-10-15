@@ -4,7 +4,30 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// `NiTextKeyExtraData::ms_RTTI` (the class's `NiRTTI` record).
+const NI_TEXT_KEY_EXTRA_DATA_RTTI: u32 = 0x011f_3f28;
+
+// Translated from 00a46b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTextKeyExtraData::GetRTTI` (Xbox PDB): the address of the class's `NiRTTI` record.
+pub fn ni_text_key_extra_data_get_rtti(_e: &mut Engine) -> Ptr {
+    Ptr::new(NI_TEXT_KEY_EXTRA_DATA_RTTI)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![entry!(0x00a46b60, ni_text_key_extra_data_get_rtti() -> Ptr)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ni_text_key_extra_data_get_rtti_returns_the_class_rtti() {
+        let mut e = Engine::new();
+        assert_eq!(
+            e.call(0x00a46b60, &args![]).u32(),
+            NI_TEXT_KEY_EXTRA_DATA_RTTI
+        );
+    }
 }

@@ -4,7 +4,27 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// `NiRenderer::ms_RTTI` (the class's `NiRTTI` record).
+const NI_RENDERER_RTTI: u32 = 0x011f_4758;
+
+// Translated from 00a62b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiRenderer::GetRTTI` (Xbox PDB): the address of the class's `NiRTTI` record.
+pub fn ni_renderer_get_rtti(_e: &mut Engine) -> Ptr {
+    Ptr::new(NI_RENDERER_RTTI)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![entry!(0x00a62b50, ni_renderer_get_rtti() -> Ptr)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ni_renderer_get_rtti_returns_the_class_rtti() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00a62b50, &args![]).u32(), NI_RENDERER_RTTI);
+    }
 }
