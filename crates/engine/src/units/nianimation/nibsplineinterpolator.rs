@@ -13,9 +13,30 @@ pub fn ni_b_spline_interpolator_get_rtti(_e: &mut Engine) -> Ptr {
     Ptr::new(NI_B_SPLINE_INTERPOLATOR_RTTI)
 }
 
+// Translated from 00a581e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineInterpolator::_scalar_deleting_destructor_` (Xbox PDB): runs the destructor body at `00a57f80`,
+/// then the sized delete (`00aa1460`, `(this, size)`) of 0x1c bytes when bit 0 of
+/// `flags` is set. Answers `this`.
+pub fn ni_b_spline_interpolator_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    const DESTRUCTOR_BODY: u32 = 0x00a5_7f80;
+    const SIZED_DELETE: u32 = 0x00aa_1460;
+    e.call(DESTRUCTOR_BODY, &args![this]);
+    if flags & 1 != 0 {
+        e.call(SIZED_DELETE, &args![this, 0x1cu32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00a57f70, ni_b_spline_interpolator_get_rtti() -> Ptr)]
+    vec![
+        entry!(0x00a57f70, ni_b_spline_interpolator_get_rtti() -> Ptr),
+        entry!(0x00a581e0, ni_b_spline_interpolator_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -29,5 +50,28 @@ mod tests {
             e.call(0x00a57f70, &args![]).u32(),
             NI_B_SPLINE_INTERPOLATOR_RTTI
         );
+    }
+
+    #[test]
+    fn ni_b_spline_interpolator_scalar_deleting_destructor_deletes_only_on_bit_0() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.register(0x00a5_7f80, |_, _| Ret::default());
+        e.register(0x00aa_1460, |_, _| Ret::default());
+        let this = 0x5000u32;
+        let calls_to = |e: &Engine, addr: u32| -> Vec<Vec<u32>> {
+            e.call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter(|c| c.0 == addr)
+                .map(|c| c.1.clone())
+                .collect()
+        };
+        assert_eq!(e.call(0x00a581e0, &args![this, 0xfffe_u32]).u32(), this);
+        assert!(calls_to(&e, 0x00aa_1460).is_empty());
+        assert_eq!(e.call(0x00a581e0, &args![this, 1u32]).u32(), this);
+        assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0x1c]]);
+        assert_eq!(calls_to(&e, 0x00a5_7f80), vec![vec![this]; 2]);
     }
 }
