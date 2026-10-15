@@ -6,6 +6,25 @@ use crate::prelude::*;
 
 /// The memory router (`0x00c8_5750`): its field `+0x10` is the allocator the block is freed through.
 const MEMORY_ROUTER: u32 = 0x00c8_5750;
+/// `EnterCriticalSection` and `LeaveCriticalSection` import slots.
+const ENTER_CRITICAL_SECTION: u32 = 0x00fd_f05c;
+const LEAVE_CRITICAL_SECTION: u32 = 0x00fd_f100;
+
+// Translated from 00d97050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpBroadPhase::lockImplementation` (Xbox PDB): enters the critical section whose pointer
+/// is at +0x10 of the broad phase (`EnterCriticalSection` import slot `00fdf05c`).
+pub fn hkp_broad_phase_lock_implementation(e: &mut Engine, this: Ptr) {
+    let section = e.mem.u32(this.addr() + 0x10);
+    e.call(ENTER_CRITICAL_SECTION, &args![section]);
+}
+
+// Translated from 00d97060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpBroadPhase::unlockImplementation` (Xbox PDB): leaves the critical section whose pointer
+/// is at +0x10 of the broad phase (`LeaveCriticalSection` import slot `00fdf100`).
+pub fn hkp_broad_phase_unlock_implementation(e: &mut Engine, this: Ptr) {
+    let section = e.mem.u32(this.addr() + 0x10);
+    e.call(LEAVE_CRITICAL_SECTION, &args![section]);
+}
 
 // Translated from 00d97100 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Deleting destructor: runs the base destructor (`0x00d9_70c0`) on `this` and, when bit 0 of
@@ -24,7 +43,11 @@ pub fn deleting_destructor_00d97100(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00d9_7100, deleting_destructor_00d97100(Ptr, u8) -> Ptr)]
+    vec![
+        entry!(0x00d9_7050, hkp_broad_phase_lock_implementation(Ptr)),
+        entry!(0x00d9_7060, hkp_broad_phase_unlock_implementation(Ptr)),
+        entry!(0x00d9_7100, deleting_destructor_00d97100(Ptr, u8) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -88,5 +111,28 @@ mod tests {
     #[test]
     fn deleting_destructor_00d97100_frees_only_when_bit_zero_is_set() {
         check(0x00d9_7100, 0x00d9_70c0);
+    }
+
+    #[test]
+    fn lock_and_unlock_enter_and_leave_the_critical_section_at_0x10() {
+        let mut e = engine();
+        e.call_log = Some(vec![]);
+        for slot in [ENTER_CRITICAL_SECTION, LEAVE_CRITICAL_SECTION] {
+            e.register(slot, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x20);
+        e.mem.set_u32(this + 0x10, 0x1234_0000);
+        e.call(0x00d9_7050, &args![this]);
+        e.call(0x00d9_7060, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log,
+            vec![
+                (0x00d9_7050, vec![this]),
+                (ENTER_CRITICAL_SECTION, vec![0x1234_0000]),
+                (0x00d9_7060, vec![this]),
+                (LEAVE_CRITICAL_SECTION, vec![0x1234_0000]),
+            ]
+        );
     }
 }
