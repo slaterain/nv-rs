@@ -8569,6 +8569,7 @@ fn start_knock(e: &mut Engine, p: u32, actor: u32, animation: u32) {
 /// does) are compared with the time-scale thresholds; past both (or the
 /// first and close to the ground, `Actor::IsCloseToGround(16.0)`) with a
 /// non-negative fatigue and slot 0x234 false the actor gets up.
+#[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN-faithful negated float compares, as the exe's flag tests
 fn knock_state_get_up_wait(e: &mut Engine, p: u32, actor: u32, animation: u32) {
     let before = e.call(FLOAT_20, &args![p]).f64() as f32;
     let hour = e.call(CALENDAR_GET_HOUR, &args![CALENDAR]).f64() as f32;
@@ -8635,6 +8636,7 @@ fn log_missing_get_up(e: &mut Engine, p: u32, actor: u32) {
 /// 0 or below, dialogue stops, the player lowers the iron sights, the
 /// state becomes 3 (from 4) or 1, the face animation is reset with
 /// `(1, 0)`, group 0x14 is cleared and the end of move runs (slot 0x294).
+#[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN-faithful negated float compares, as the exe's flag tests
 fn knock_state_recover(e: &mut Engine, p: u32, actor: u32, animation: u32) {
     let blend = e.call(WORD_C, &args![animation]).u32();
     if blend != 0 {
@@ -10135,6 +10137,7 @@ pub fn fn_00923000(_e: &mut Engine, this: u32) -> u32 {
 /// object (`00450b80(0)`) the actor's lighting property is initialised
 /// instead (`008b0bd0`) and the value is 0.
 // Translation incomplete: 00922b80 - the C++ exception-unwinding frame (FS:[0]) that releases the temporary at [EBP-0x24] when the body throws is not translated.
+#[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN-faithful negated float compares, as the exe's flag tests
 pub fn middle_high_process_calculate_light_value(
     e: &mut Engine,
     this: Ptr<MiddleHighProcess>,
@@ -10514,18 +10517,18 @@ fn play_drawn_or_sheathed(e: &mut Engine, p: u32, draw: u8, animation: u32, acto
                 e.vcall(p, 0x614, &args![0x100u32]);
             }
         }
-    } else if (draw == 0 || e.vcall(p, 0x148, &[]).u32() == 0) && animation != 0 {
-        if e.call(ANIMATION_CALL_00491040, &args![animation, 2u32])
+    } else if (draw == 0 || e.vcall(p, 0x148, &[]).u32() == 0)
+        && animation != 0
+        && e.call(ANIMATION_CALL_00491040, &args![animation, 2u32])
             .u32()
             != 0
-        {
-            let node = e
-                .call(ANIMATION_CALL_00491040, &args![animation, 2u32])
-                .u32();
-            let kind = node_group(e, node);
-            if (0xe6..=0xeb).contains(&kind) {
-                e.call(ANIMATION_BLEND_OUT, &args![animation, 2u32, 0u32]);
-            }
+    {
+        let node = e
+            .call(ANIMATION_CALL_00491040, &args![animation, 2u32])
+            .u32();
+        let kind = node_group(e, node);
+        if (0xe6..=0xeb).contains(&kind) {
+            e.call(ANIMATION_BLEND_OUT, &args![animation, 2u32, 0u32]);
         }
     }
 }

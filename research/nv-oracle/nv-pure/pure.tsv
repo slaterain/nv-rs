@@ -303,6 +303,9 @@ address	cc	params	ret	unit	callees	consts
 008d5750	cdecl	u32	i32	crates/engine/src/units/fallout_ai/followerbarks.rs		i13,i100,i90,i80,i70,i60,i50,i40,i30,i20,i15,i10,i5
 008e3e90	cdecl		bool	crates/engine/src/units/fallout_ai/highprocess_p3.rs		i0
 008f21c0	cdecl		u8	crates/engine/src/units/fallout_ai/highprocess_p3.rs		
+00920b60	cdecl		u32	crates/engine/src/units/fallout_ai/middlehighprocess.rs		
+00920b70	cdecl		u32	crates/engine/src/units/fallout_ai/middlehighprocess.rs		
+00923000	thiscall	u32	u32	crates/engine/src/units/fallout_ai/middlehighprocess.rs		i212
 00935ef0	cdecl		u32	crates/engine/src/units/fallout_ai/mobileobject.rs		
 0093ccd0	cdecl		u32	crates/engine/src/units/fallout_ai/playercharacter.rs		
 009443f0	cdecl		f32	crates/engine/src/units/fallout_ai/playercharacter.rs		f3f800000

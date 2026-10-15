@@ -211,6 +211,7 @@ pub fn hkp_gsk_cache_init_triangle(
     let first_edge = zip(p1, p0, |x, y| x - y);
     let second_edge = zip(p2, p1, |x, y| x - y);
     // Lane-wise `e1.zxy * e0.yzx - e1.yzx * e0.zxy` (the fourth lane cancels to 0 or NaN).
+    #[allow(clippy::eq_op)] // the exe computes the fourth lane too (0, or NaN for inf/NaN input)
     let normal = [
         second_edge[2] * first_edge[1] - second_edge[1] * first_edge[2],
         second_edge[0] * first_edge[2] - second_edge[2] * first_edge[0],
