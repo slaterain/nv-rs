@@ -55,13 +55,30 @@ pub fn tescreature_tescreature(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `009dace0` (named `CombatProcedureUseCombatItem::InitLoadGame` in the engine map): the
+/// base body the wrapper forwards to; `thiscall`, `this` plus one stack word (`RET 4`).
+const INIT_LOAD_GAME_TARGET_009DACE0: u32 = 0x009d_ace0;
+
+// Translated from 005fb430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable word 01048fcc): forwards `this` and one pointer to
+/// `009dace0` (named `CombatProcedureUseCombatItem::InitLoadGame`; Xbox PDB
+/// `?InitLoadGame@CombatProcedureUseCombatItem@@UAAXPAVBGSLoadFormBuffer@@@Z`, void), whose
+/// body only calls the empty stub `004534f0` on the same two words. Returns nothing.
+pub fn fn_005fb430(e: &mut Engine, this: Ptr, buffer: Ptr) {
+    e.call(INIT_LOAD_GAME_TARGET_009DACE0, &args![this, buffer]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x005f_7230, tescreature_tescreature(Ptr) -> Ptr)]
+    vec![
+        entry!(0x005f_7230, tescreature_tescreature(Ptr) -> Ptr),
+        entry!(0x005f_b430, fn_005fb430(Ptr, Ptr)),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::units::crt::ctor_test::{self, A};
 
     #[test]
@@ -143,5 +160,20 @@ mod tests {
                 (0x114, 4, 0x0104_8d88),
             ],
         });
+    }
+
+    #[test]
+    fn forwarder_fn_005fb430_forwards_this_and_the_argument() {
+        let mut e = Engine::new();
+        e.register(INIT_LOAD_GAME_TARGET_009DACE0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x005f_b430, &args![0x1000u32, 0x2000u32]);
+        let log = e.call_log.take().unwrap();
+        let hits: Vec<_> = log
+            .iter()
+            .filter(|call| call.0 == INIT_LOAD_GAME_TARGET_009DACE0)
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, vec![0x1000u32, 0x2000]);
     }
 }
