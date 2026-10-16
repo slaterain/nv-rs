@@ -11284,27 +11284,6 @@ fn save_counted_ids(e: &mut Engine, p: u32) {
     e.mem.set_u16(place, count);
 }
 
-// Translated from 0092c8b0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Assigns `target` to the pointer slot `this`; the engine map names it only by its unit. When
-/// the slot already holds `target` nothing happens. Otherwise a non-null old value is given to
-/// `004b0ef0` (`ECX` = the old value), the slot takes `target`, and a non-null new value is
-/// given to `0092c870` (`ECX` = the new value). Returns `this`.
-pub fn fn_0092c8b0(e: &mut Engine, this: Ptr, target: Ptr) -> Ptr {
-    let slot = this.addr();
-    let old = e.mem.u32(slot);
-    if old != target.addr() {
-        if old != 0 {
-            e.call(0x004b_0ef0, &args![old]);
-        }
-        e.mem.set_u32(slot, target.addr());
-        if e.mem.u32(slot) != 0 {
-            let stored = e.mem.u32(slot);
-            e.call(0x0092_c870, &args![stored]);
-        }
-    }
-    this
-}
-
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     type Process = Ptr<MiddleHighProcess>;
@@ -11570,7 +11549,6 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00924220, middle_high_process_get_save_size(Process, u32, u32) -> u16),
         entry!(0x00924560, middle_high_process_save_game(Process, u32, u32)),
-        entry!(0x0092_c8b0, fn_0092c8b0(Ptr, Ptr) -> Ptr),
     ]
 }
 
