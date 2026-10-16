@@ -207,9 +207,23 @@ pub fn tes_object_tree_load(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+// Translated from 0051d150 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 0120044c without reading the receiver. The map names this body `BSShaderTextureSet::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_0051d150(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0120_044c
+}
+
+// Translated from 0051d1b0 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 01200444 without reading the receiver. The map names this body `BSTextureSet::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_0051d1b0(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0120_0444
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0051_d150, fn_0051d150(Ptr) -> u32),
+        entry!(0x0051_d1b0, fn_0051d1b0(Ptr) -> u32),
         entry!(0x0051_cfe0, fn_0051cfe0(Ptr)),
         entry!(0x0051_bbc0, tes_object_tree_load(Ptr, Ptr) -> bool),
     ]
@@ -507,5 +521,24 @@ mod load_tests {
             calls_to(&log, SWAP_4_BYTES),
             vec![vec![block, 0], vec![block + 4, 0]]
         );
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_0051d150_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0051_d150, &args![0x1000u32]).u32(), 0x0120_044c);
+        assert_eq!(e.call(0x0051_d150, &args![0u32]).u32(), 0x0120_044c);
+    }
+
+    #[test]
+    fn fn_0051d1b0_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0051_d1b0, &args![0x1000u32]).u32(), 0x0120_0444);
+        assert_eq!(e.call(0x0051_d1b0, &args![0u32]).u32(), 0x0120_0444);
     }
 }

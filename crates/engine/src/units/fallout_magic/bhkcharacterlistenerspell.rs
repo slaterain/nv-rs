@@ -31,9 +31,18 @@ pub fn bhk_character_proxy_get_hk_linear_velocity(e: &mut Engine, this: Ptr) -> 
     velocity
 }
 
+// Translated from 00806f00 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 01268344 without reading the receiver. The map names this body `bhkCharacterProxy::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00806f00(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0126_8344
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0080_7080, bhk_character_proxy_get_hk_linear_velocity(Ptr) -> u32)]
+    vec![
+        entry!(0x0080_6f00, fn_00806f00(Ptr) -> u32),
+        entry!(0x0080_7080, bhk_character_proxy_get_hk_linear_velocity(Ptr) -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -96,5 +105,17 @@ mod movement_tests {
         let (mut e, log) = rig(0);
         assert_eq!(e.call(0x0080_7080, &args![0x1000u32]).u32(), 0x0126_7e30);
         assert!(log.borrow().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00806f00_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0080_6f00, &args![0x1000u32]).u32(), 0x0126_8344);
+        assert_eq!(e.call(0x0080_6f00, &args![0u32]).u32(), 0x0126_8344);
     }
 }
