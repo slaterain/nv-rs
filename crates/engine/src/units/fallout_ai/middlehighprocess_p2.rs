@@ -2353,7 +2353,7 @@ pub fn middle_high_process_refresh_magic_shader_effects(
                     let item = e.vcall(acquired, 0x148, &[]).u32();
                     let charge = e.call(ITEM_CHARGE, &args![item]).f64();
                     let value = e.vcall(enchanting + 0x24, 8, &args![actor]).f64();
-                    if value < charge || value == charge {
+                    if value <= charge {
                         let av_effect = e
                             .call(MAGIC_ITEM_GET_AV_EFFECT, &args![enchanting + 0x18, 0u32])
                             .u32();
@@ -2674,7 +2674,7 @@ const MINUS_EPSILON: f64 = -1.0e-6;
 const EPSILON: f64 = 1.0e-6;
 /// The double 0.017453292 (exe double at `0x01023128`), degrees to
 /// radians.
-const DEGREES_TO_RADIANS: f64 = f64::from_bits(0x3f91_df46_a000_0000);
+const DEGREES_TO_RADIANS: f64 = 0.017453292_f32 as f64;
 
 /// The float a setting object answers (`00403e20` then the load).
 fn setting_float(e: &mut Engine, setting: u32) -> f32 {
@@ -2707,6 +2707,9 @@ pub fn middle_high_process_update_aim_sequences(
     let second = f64::from(setting_float(e, AIM_SETTING_B)) * first;
     let next = (f64::from(e.mem.f32(p + 0x1d0)) - second) as f32;
     let angle = e.mem.f32(p + 0x1d0);
+    // The exe has three separate branches that each store 0.0 (00929650,
+    // 00929683, 009296c0); kept as written.
+    #[allow(clippy::if_same_then_else)]
     if angle > 0.0 && next < 0.0 {
         e.mem.set_f32(p + 0x1d0, 0.0);
     } else if angle < 0.0 && next > 0.0 {
@@ -3366,10 +3369,8 @@ pub fn middle_high_process_process_sand_box(
                 }
             }
             3 => e.mem.set_u32(data + 4, 3),
-            4 => {
-                if !e.call(ACTOR_IS_PATHING, &args![actor]).bool() && e.mem.u32(p + 0x194) != 0 {
-                    e.mem.set_u32(data + 4, 3);
-                }
+            4 if !e.call(ACTOR_IS_PATHING, &args![actor]).bool() && e.mem.u32(p + 0x194) != 0 => {
+                e.mem.set_u32(data + 4, 3);
             }
             _ => {}
         }
@@ -3524,7 +3525,7 @@ const PROCESS_TIME_VALUE: u32 = 0x0062_1b00;
 const FLOAT_ABS_WRAPPER: u32 = 0x0040_8840;
 const FLOAT_ABS: u32 = 0x0040_8860;
 /// The double 0.05 (exe double at `0x0103c7c8`, the float 0.05 widened).
-const MOVEMENT_BLOCKED_TIME: f64 = f64::from_bits(0x3fa9_9999_a000_0000);
+const MOVEMENT_BLOCKED_TIME: f64 = 0.05_f32 as f64;
 /// `TESPackage::SetIsCreated` (Xbox PDB), `(package, 1)`.
 const PACKAGE_SET_IS_CREATED: u32 = 0x0067_4d70;
 /// `Actor::ClearLookAtTarget` is the same getter as [`ACTOR_CLEAR_LOOK_AT_TARGET`].
@@ -4240,9 +4241,9 @@ const ITEM_CHANGE_GET_WORN: u32 = 0x004b_ddd0;
 /// name).
 const ACTOR_WORD_1B4: u32 = 0x005d_9f90;
 
-/// `Actor::GetInventoryChanges` (`004bf220`, `(actor)`): the actor's
-/// inventory change list holder; the engine map has no name.
-/// `(actor)`: a word of the actor (`008b70d0`, the engine map has no name).
+// `Actor::GetInventoryChanges` (`004bf220`, `(actor)`): the actor's
+// inventory change list holder; the engine map has no name.
+// `(actor)`: a word of the actor (`008b70d0`, the engine map has no name).
 
 // Translated from 0092baa0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `MiddleHighProcess::UpdateArmorWorn` (Xbox PDB): `(process, actor)`.

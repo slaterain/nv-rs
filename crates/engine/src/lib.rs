@@ -21,6 +21,14 @@
 // that markdown reads as list items; that only affects rendering, so the
 // lint is allowed for the crate rather than reflowing thousands of comments.
 #![allow(clippy::doc_lazy_continuation)]
+// Translations follow the exe, not Rust style, in three ways these lints flag:
+// float compares must match the exe's flag tests with NaN included, which
+// negated compares (`!(a < b)`) express directly; signatures take exactly the
+// words the exe's functions take; and recursive functions pass on arguments
+// the exe passes on even when nothing else reads them.
+#![allow(clippy::neg_cmp_op_on_partial_ord)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::only_used_in_recursion)]
 
 pub mod abi;
 mod engine;

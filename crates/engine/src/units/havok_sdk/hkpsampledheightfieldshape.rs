@@ -75,11 +75,11 @@ pub fn hk_aabb_util_calc_aabb_ov3(
         minimum[i as usize] = negated + middle;
         maximum[i as usize] = middle + extent;
     }
-    for i in 0..4usize {
-        e.mem.set_f32(out.addr() + 0x10 + 4 * i as u32, maximum[i]);
+    for (i, value) in maximum.iter().enumerate() {
+        e.mem.set_f32(out.addr() + 0x10 + 4 * i as u32, *value);
     }
-    for i in 0..4usize {
-        e.mem.set_f32(out.addr() + 4 * i as u32, minimum[i]);
+    for (i, value) in minimum.iter().enumerate() {
+        e.mem.set_f32(out.addr() + 4 * i as u32, *value);
     }
 }
 

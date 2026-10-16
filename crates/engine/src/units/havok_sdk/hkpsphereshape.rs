@@ -505,7 +505,7 @@ pub fn hkp_sphere_shape_cast_ray_bundle_impl(
     let mut accumulated = [0.0f32; 4];
     for coordinate in point {
         for lane in 0..4 {
-            accumulated[lane] = coordinate[lane] * coordinate[lane] + accumulated[lane];
+            accumulated[lane] += coordinate[lane] * coordinate[lane];
         }
     }
     let mut entry = [0.0f32; 4];

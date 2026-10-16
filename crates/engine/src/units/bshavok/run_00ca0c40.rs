@@ -25,6 +25,8 @@ pub fn fn_00ca0c40(e: &mut Engine, this: Ptr, point: Ptr, out: Ptr) {
         point[2] - origin[2],
         point[3] - origin[3],
     ];
+    // The exe computes the fourth lane as a3*d3 - a3*d3 (SSE): 0, or NaN.
+    #[allow(clippy::eq_op)]
     let cross = [
         axis[1] * d[2] - axis[2] * d[1],
         axis[2] * d[0] - axis[0] * d[2],

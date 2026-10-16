@@ -447,7 +447,16 @@ fn remove_swap_u16(e: &mut Engine, marker: u32, value: u16) {
 /// `CVTPS2DQ` / `FISTP` with the default rounding (nearest even); out of range gives
 /// `0x80000000`, the x86 "integer indefinite".
 fn round_to_even(value: f32) -> i32 {
-    let rounded = value.round_ties_even();
+    // `f32::round_ties_even` (Rust 1.77) spelled for the 1.75 MSRV: below
+    // 2^23, adding and removing 2^23 rounds to the nearest integer, ties to
+    // even; larger magnitudes, infinities and NaN are already integral.
+    let rounded = if value.is_nan() || value.abs() >= 8388608.0 {
+        value
+    } else if value >= 0.0 {
+        (value + 8388608.0) - 8388608.0
+    } else {
+        (value - 8388608.0) + 8388608.0
+    };
     if rounded.is_nan() || rounded >= 2147483648.0 || rounded < -2147483648.0 {
         i32::MIN
     } else {
@@ -1629,8 +1638,7 @@ pub fn collide_1_axis(
     let mut b = list_b;
     let mut count_b = count_b;
     loop {
-        let remaining;
-        if e.mem.u16(a + 8) > e.mem.u16(b + 8) {
+        let remaining = if e.mem.u16(a + 8) > e.mem.u16(b + 8) {
             let b_max = e.mem.u16(b + 0xa);
             if e.mem.u16(a + 8) < b_max {
                 let mut candidate = a;
@@ -1647,7 +1655,7 @@ pub fn collide_1_axis(
             }
             b = b.wrapping_add(0x10);
             count_b = count_b.wrapping_sub(1);
-            remaining = count_b;
+            count_b
         } else {
             let a_max = e.mem.u16(a + 0xa);
             if e.mem.u16(b + 8) < a_max {
@@ -1665,8 +1673,8 @@ pub fn collide_1_axis(
             }
             a = a.wrapping_add(0x10);
             count_a = count_a.wrapping_sub(1);
-            remaining = count_a;
-        }
+            count_a
+        };
         if remaining <= 0 {
             break;
         }
@@ -5600,7 +5608,7 @@ mod tests {
         for k in 1..4u16 {
             let node = node_at(&e, this, k as u32);
             assert_eq!(node_fields(&e, node), [0, 0, 1, 1, 2 * k - 1, 2 * k]);
-            assert_eq!(e.mem.u32(node + 0xc), 0x10 * (k as u32 - 1) | 1);
+            assert_eq!(e.mem.u32(node + 0xc), (0x10 * (k as u32 - 1)) | 1);
         }
         let offset = e.get(this, Hkp3AxisSweep::exponent_offset);
         // Quantising to the nearest 1 / 128 puts the threshold 1 / 256 below 11.
