@@ -27,12 +27,28 @@ pub fn fn_006f94a0(e: &mut Engine, this: Ptr) {
     e.call(0x00c3_cea0, &args![this]);
 }
 
+/// The constructor body `006fa180` (`this` plus two stack words, `RET 8`).
+const CONSTRUCTOR_BODY_006FA180: u32 = 0x006f_a180;
+/// The vtable stored at `+0` (RTTI class `BSSimpleArray<BGSDistantTreeBlock::TreeType,256>`).
+const VTABLE_006FA100: u32 = 0x0106_dfe0;
+
+// Translated from 006fa100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bgsdistanttreeblock.cpp`): stores the vtable `0106dfe0`
+/// (RTTI class `BSSimpleArray<BGSDistantTreeBlock::TreeType,...>`), then calls
+/// `006fa180(this, 0, 0)`. Returns `this`.
+pub fn fn_006fa100(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), VTABLE_006FA100);
+    e.call(CONSTRUCTOR_BODY_006FA180, &args![this, 0u32, 0u32]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x006f_94a0, fn_006f94a0(Ptr)),
         entry!(0x006f99e0, allocate_item(Ptr) -> Ptr),
         entry!(0x006f_9080, fn_006f9080(Ptr)),
+        entry!(0x006f_a100, fn_006fa100(Ptr) -> Ptr),
     ]
 }
 
@@ -79,5 +95,38 @@ mod tests {
             0x0106_ded0,
             "the vtable was stored before the call"
         );
+    }
+}
+
+#[cfg(test)]
+mod static_init_callee_tests {
+    use super::*;
+
+    fn calls_to(e: &mut Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words)
+            .collect()
+    }
+
+    #[test]
+    fn stores_the_vtable_before_calling_the_body() {
+        let mut e = Engine::new();
+        e.register(CONSTRUCTOR_BODY_006FA180, |e, a| {
+            let seen = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0] + 8, seen);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x006f_a100, &args![this]).u32(), this);
+        assert_eq!(
+            calls_to(&mut e, CONSTRUCTOR_BODY_006FA180),
+            vec![vec![this, 0, 0]]
+        );
+        assert_eq!(e.mem.u32(this + 8), VTABLE_006FA100);
     }
 }
