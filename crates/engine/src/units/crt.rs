@@ -372,7 +372,7 @@ pub fn ci_atan(_e: &mut Engine, v: f64) -> f64 {
 /// address is stored there); `EAX` on return holds the return address (the word at `esp`).
 pub fn alloca_probe(e: &mut Engine, size: u32, esp: u32) -> u32 {
     // `LEA ECX, [ESP + 4]` after the `PUSH ECX`, minus `EAX`; zero when that borrows.
-    let top = if esp < size { 0 } else { esp - size };
+    let top = esp.saturating_sub(size);
     let mut page = esp.wrapping_sub(4) & 0xffff_f000;
     while top < page {
         page = page.wrapping_sub(0x1000);

@@ -4451,7 +4451,7 @@ mod tests {
         assert_eq!(e.mem.u32(this + 0x70), 0);
         let planes = e.mem.u32(this + 0x40);
         let root = 0.57735027f32;
-        let half_root = 0.70710678f32;
+        let half_root = std::f32::consts::FRAC_1_SQRT_2;
         let expected = [
             (0x000, [1.0, 0.0, 0.0], 0u32),
             (0x060, [0.0, half_root, half_root], 0x3e4c_cccd),

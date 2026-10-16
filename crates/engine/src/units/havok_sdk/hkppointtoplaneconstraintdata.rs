@@ -55,6 +55,8 @@ fn reset_rotation(e: &mut Engine, data: u32) {
 /// quieted), then normalised with the refined `RSQRTSS`; the row `(index + 2) % 3` becomes the
 /// cross product of the normal and that row. Returns `(index + 2) / 3` (the quotient the last
 /// `IDIV` leaves in `EAX`).
+// `(index + 2) / 3` is the exe's own add-then-divide.
+#[allow(clippy::manual_div_ceil)]
 fn complete_basis(e: &mut Engine, data: u32, index: u32) -> u32 {
     let normal = data + BASIS + 0x10 * index;
     let quiet: [f32; 3] = [0, 1, 2].map(|lane| x87_quiet(e.mem.f32(normal + 4 * lane)));

@@ -3132,7 +3132,7 @@ mod havok_a03_tests {
     #[test]
     fn toi_final_moves_the_points_into_the_relative_frame_when_not_asked_for_a_feature() {
         let mut p = pair(false);
-        p.e.register(SET_MUL_INVERSE_MUL, |e, a| write_relative(e, a));
+        p.e.register(SET_MUL_INVERSE_MUL, write_relative);
         p.e.mem.set_u32(p.gsk + 4, 2);
         put(&mut p.e, p.gsk + 0xe0, [1.0, 2.0, 3.0, 5.0]);
         put(&mut p.e, p.gsk + 0xf0, [0.0, 1.0, 0.0, 0.0]);
@@ -3155,7 +3155,7 @@ mod havok_a03_tests {
     #[test]
     fn toi_final_with_no_points_still_moves_the_one_below_the_array() {
         let mut p = pair(false);
-        p.e.register(SET_MUL_INVERSE_MUL, |e, a| write_relative(e, a));
+        p.e.register(SET_MUL_INVERSE_MUL, write_relative);
         put(&mut p.e, p.gsk + 0xd0, [1.0, 0.0, 0.0, 0.0]);
         p.run_with(0, [0.0, 1.0], [9.0, 1.0]);
         assert_eq!(load_lanes(&p.e, p.gsk + 0x90), bits4([1.5, 3.0, 4.5, 6.0]));
@@ -3586,8 +3586,7 @@ mod havok_a03_tests {
     #[test]
     fn collide_toi_asks_for_a_recalculation_when_the_distance_is_close_to_the_target() {
         let mut s = sweep();
-        s.p.e
-            .register(SET_MUL_INVERSE_MUL, |e, a| write_relative(e, a));
+        s.p.e.register(SET_MUL_INVERSE_MUL, write_relative);
         s.p.e.mem.set_u8(s.keys + 9, 2);
         put(&mut s.p.e, s.p.direction, [1.0, 0.0, 0.0, 3.0005]);
         s.run();
@@ -3615,8 +3614,7 @@ mod havok_a03_tests {
     #[test]
     fn collide_toi_with_no_points_still_moves_the_one_below_the_array() {
         let mut s = sweep();
-        s.p.e
-            .register(SET_MUL_INVERSE_MUL, |e, a| write_relative(e, a));
+        s.p.e.register(SET_MUL_INVERSE_MUL, write_relative);
         put(&mut s.p.e, s.p.direction, [1.0, 0.0, 0.0, 3.0005]);
         s.run();
         let recalcs = s.p.recalcs.borrow();

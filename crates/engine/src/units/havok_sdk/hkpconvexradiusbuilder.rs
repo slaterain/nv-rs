@@ -1463,7 +1463,15 @@ mod tests {
         assert_close(planes[0], [0.0, 0.0, 1.0, -0.25]);
         assert_close(planes[1], [0.0, 0.0, -1.0, -0.25]);
         assert_close(planes[2], [0.0, -1.0, 0.0, -0.25]);
-        assert_close(planes[3], [0.7071, 0.7071, 0.0, -0.9571]);
+        assert_close(
+            planes[3],
+            [
+                std::f32::consts::FRAC_1_SQRT_2,
+                std::f32::consts::FRAC_1_SQRT_2,
+                0.0,
+                -0.9571,
+            ],
+        );
         assert_close(planes[4], [-1.0, 0.0, 0.0, -0.25]);
         let bisector = planes[5];
         let length = (bisector[0] * bisector[0] + bisector[1] * bisector[1]).sqrt();

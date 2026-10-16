@@ -72,6 +72,8 @@ fn copy_bits(e: &Engine, addr: u32) -> u32 {
 }
 
 /// `0` below zero, `1` above one, else the value itself (a NaN stays).
+// The exe tests below zero first, then above one; a NaN falls through both.
+#[allow(clippy::manual_clamp)]
 fn clamp_unit(value: f32) -> f32 {
     if value < 0.0 {
         0.0

@@ -987,6 +987,9 @@ mod a05_ragdoll_tests {
         assert_eq!(calls_to(&e, IS_ORTHONORMAL).len(), 1);
         bad.set(0);
 
+        // 3.14 is a test value just below pi, not pi itself.
+
+        #[allow(clippy::approx_constant)]
         let cases: [(u32, f32, u8); 21] = [
             (0x118, -100.0, 1),
             (0x118, -99.0, 0),
