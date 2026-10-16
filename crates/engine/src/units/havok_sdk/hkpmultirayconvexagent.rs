@@ -1276,7 +1276,9 @@ mod tests {
         r.e.mem.set_u32(owner, table);
         r.log_double(REMOVE, 0);
         let sink = Rc::clone(&r.log);
-        let mut answers = created.iter().copied();
+        // The double outlives `created`, so it owns a copy.
+        #[allow(clippy::unnecessary_to_owned)]
+        let mut answers = created.to_vec().into_iter();
         r.e.register_double(CREATE, move |_, a| {
             sink.borrow_mut().push((CREATE, a.to_vec()));
             Ret {
