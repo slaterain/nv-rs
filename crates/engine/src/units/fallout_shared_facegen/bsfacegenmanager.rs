@@ -144,23 +144,19 @@ pub fn bs_face_gen_manager_copy_face_gen_coord(
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00653290, fn_00653290(Ptr, u32) -> Ptr),
-        entry!(0x00486b50, is_keys_equal(Ptr, u32, u32) -> bool),
-        entry!(0x00600b20, key_to_hash_index(Ptr, u32) -> u32),
-        entry!(0x00659210, fn_00659210(Ptr, u8, u32) -> u32),
+    vec![
+        entry!(0x00653290, fn_00653290(Ptr, u32) -> Ptr),
         entry!(0x00486b50, is_keys_equal(Ptr, u32, u32) -> bool),
         entry!(0x00600b20, key_to_hash_index(Ptr, u32) -> u32),
         entry!(0x00659210, fn_00659210(Ptr, u8, u32) -> u32),
         entry!(0x0065_7fd0, fn_00657fd0(Ptr) -> u32),
-        entry!(0x0065_8040, fn_00658040(Ptr) -> u32), entry!(0x00653290, fn_00653290(Ptr, u32) -> Ptr),
-        entry!(0x00486b50, is_keys_equal(Ptr, u32, u32) -> bool),
-        entry!(0x00600b20, key_to_hash_index(Ptr, u32) -> u32),
-        entry!(0x00659210, fn_00659210(Ptr, u8, u32) -> u32),
+        entry!(0x0065_8040, fn_00658040(Ptr) -> u32),
         entry!(0x006521e0, bs_face_gen_manager_get_face_gen_coord() -> u32),
         entry!(
             0x006529a0,
             bs_face_gen_manager_copy_face_gen_coord(u32, u32, u8, u8)
-        )]
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -214,37 +210,6 @@ mod tests {
     }
 
     #[test]
-    fn keys_are_equal_when_the_compare_answers_zero() {
-        let mut e = Engine::new();
-        e.register(STRICMP_WRAPPER, |_, a| u32::from(a[0] != a[1]).into_ret());
-        assert_eq!(e.call(0x00486b50, &[0, 5, 5]).u32() & 0xff, 1);
-        assert_eq!(e.call(0x00486b50, &[0, 5, 6]).u32() & 0xff, 0);
-    }
-
-    #[test]
-    fn hashes_the_lowered_key_modulo_the_bucket_count() {
-        let mut e = Engine::new();
-        let map = e.mem.alloc(8);
-        e.mem.set_u32(map + 4, 37);
-        let key = e.mem.alloc(8);
-        e.mem.write(key, b"fAb\0");
-        let mut h = 0u32;
-        for c in b"fab" {
-            h = h.wrapping_mul(33).wrapping_add(u32::from(*c));
-        }
-        assert_eq!(e.call(0x00600b20, &[map, key]).u32(), h % 37);
-    }
-
-    #[test]
-    fn a_high_byte_is_sign_extended() {
-        let mut e = Engine::new();
-        assert_eq!(
-            e.call(0x00659210, &[0, 0xe9, 1]).u32(),
-            33u32.wrapping_sub(0x17)
-        );
-    }
-
-    #[test]
     fn l68d_00657fd0_passes_this_plus_8_to_the_callee() {
         let mut e = Engine::new();
         e.register(CALLEE_00658100, |_, a| Ret {
@@ -272,53 +237,6 @@ mod tests {
         let inner: Vec<_> = log.iter().filter(|c| c.0 == CALLEE_00658130).collect();
         assert_eq!(inner.len(), 1);
         assert_eq!(inner[0].1, vec![0x4200 + 0x8]);
-    }
-
-
-    #[test]
-    fn keys_are_equal_when_the_compare_answers_zero() {
-        let mut e = Engine::new();
-        e.register(STRICMP_WRAPPER, |_, a| u32::from(a[0] != a[1]).into_ret());
-        assert_eq!(e.call(0x00486b50, &[0, 5, 5]).u32() & 0xff, 1);
-        assert_eq!(e.call(0x00486b50, &[0, 5, 6]).u32() & 0xff, 0);
-    }
-
-    #[test]
-    fn hashes_the_lowered_key_modulo_the_bucket_count() {
-        let mut e = Engine::new();
-        let map = e.mem.alloc(8);
-        e.mem.set_u32(map + 4, 37);
-        let key = e.mem.alloc(8);
-        e.mem.write(key, b"fAb\0");
-        let mut h = 0u32;
-        for c in b"fab" {
-            h = h.wrapping_mul(33).wrapping_add(u32::from(*c));
-        }
-        assert_eq!(e.call(0x00600b20, &[map, key]).u32(), h % 37);
-    }
-
-    #[test]
-    fn a_high_byte_is_sign_extended() {
-        let mut e = Engine::new();
-        assert_eq!(
-            e.call(0x00659210, &[0, 0xe9, 1]).u32(),
-            33u32.wrapping_sub(0x17)
-        );
-    }
-
-    #[test]
-    fn fn_00653290_returns_this_only_when_the_check_passes() {
-        let mut e = Engine::new();
-        e.register(CHECK_006532C0, |_, a| Ret {
-            eax: a[1],
-            ..Ret::default()
-        });
-        let this = Ptr::<()>::new(0x5000);
-        assert_eq!(e.call(0x0065_3290, &args![this, 1u32]).ptr::<()>(), this);
-        assert_eq!(
-            e.call(0x0065_3290, &args![this, 0u32]).ptr::<()>(),
-            Ptr::<()>::NULL
-        );
     }
 }
 

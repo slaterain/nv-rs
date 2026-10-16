@@ -50,10 +50,12 @@ pub fn fn_00508f70(e: &mut Engine, this: Ptr) {
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0050_8e00, fn_00508e00(Ptr) -> Ptr),
+    vec![
+        entry!(0x0050_8e00, fn_00508e00(Ptr) -> Ptr),
         entry!(0x0050_8db0, fn_00508db0(Ptr, u32) -> u32),
-        entry!(0x0050_8df0, fn_00508df0(Ptr, u32) -> u32), entry!(0x0050_8e00, fn_00508e00(Ptr) -> Ptr),
-        entry!(0x0050_8f70, fn_00508f70(Ptr))]
+        entry!(0x0050_8df0, fn_00508df0(Ptr, u32) -> u32),
+        entry!(0x0050_8f70, fn_00508f70(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -125,31 +127,6 @@ mod le81_thunk_tests {
             check(0x0050_8df0, 0x0050_8dc0, 0xc, &[0x1]).u32(),
             0xdead_beef
         );
-    }
-
-
-    #[test]
-    fn fn_00508e00_builds_the_object() {
-        ctor_test::run(&ctor_test::Case {
-            addr: 0x0050_8e00,
-            size: 0x94,
-            globals: &[],
-            returns: &[],
-            calls: &[
-                (0x0051_04f0, &[A::T(0x0)]),
-                (0x004f_15a0, &[A::T(0x0), A::V(0x27)]),
-                (0x0050_8f70, &[A::T(0x0)]),
-                (0x0048_4ab0, &[A::T(0x0), A::V(0x1)]),
-            ],
-            stores: &[
-                (0x0, 4, 0x0102_6d0c),
-                (0x30, 4, 0x0102_6cf4),
-                (0x3c, 4, 0x0102_6cd0),
-                (0x5c, 4, 0x0102_6cbc),
-                (0x68, 4, 0x0102_6ca8),
-                (0x70, 4, 0x0102_6c98),
-            ],
-        });
     }
 }
 
