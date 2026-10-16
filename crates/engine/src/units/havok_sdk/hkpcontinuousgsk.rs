@@ -1037,7 +1037,7 @@ mod havok_a03_tests {
         let (answer, result) = refine(&mut e, &s, 0.0, -0.5, 10.0);
         assert_eq!(calls_to(&e, INTERPOLATE_TRANSFORM).len(), 20);
         // The distance is -f * f, so the plane at -0.5 is reached at f = 0.7071.
-        assert!((answer - 0.7071).abs() < 0.05, "{answer}");
+        assert!((answer - std::f32::consts::FRAC_1_SQRT_2).abs() < 0.05, "{answer}");
         assert_eq!(e.mem.f32(result), answer);
     }
 
@@ -1100,8 +1100,8 @@ mod havok_a03_tests {
     fn separating(first: u32, second: u32) -> (Lanes, Lanes) {
         let mut e = rig();
         e.call_log = Some(Vec::new());
-        e.register(SET_MUL_INVERSE_MUL, |e, a| write_relative(e, a));
-        e.register(GET_CLOSEST_FEATURE, |e, a| write_feature(e, a));
+        e.register(SET_MUL_INVERSE_MUL, write_relative);
+        e.register(GET_CLOSEST_FEATURE, write_feature);
         let gsk = e.mem.alloc(0x140);
         e.mem.set_u32(gsk, first);
         e.mem.set_u32(gsk + 4, second);

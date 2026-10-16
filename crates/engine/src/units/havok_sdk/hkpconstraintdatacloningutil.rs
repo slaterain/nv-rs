@@ -765,6 +765,7 @@ mod havok_a03_tests {
     }
 
     #[test]
+    #[allow(clippy::single_range_in_vec_init)]
     fn the_atom_assignments_copy_their_own_tails() {
         for (function, copied_ranges, untouched) in [
             (0x00d8_5a20, vec![0x90..0xcc], vec![0x8f, 0xcc, 0xcd]),
