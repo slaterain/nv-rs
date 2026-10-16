@@ -58,9 +58,59 @@ pub fn return_constant_00dfca30(_e: &mut Engine) -> u32 {
     0x010c_b71c
 }
 
+// Translated from 00dfc7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. Builds a temporary object in a 0x30-byte stack buffer by calling `00e3b060` on it (flag word 0; the callee pops it) and returns the first word of that buffer, which is what the code reads back after the call. The class is unconfirmed.
+pub fn fn_00dfc7a0(e: &mut Engine) -> u32 {
+    e.with_stack(0x30, |e, buffer| {
+        e.call(0x00e3_b060, &args![buffer, 0u32]);
+        e.mem.u32(buffer.addr())
+    })
+}
+
+// Translated from 00dfc830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. Builds a temporary object in a 0x170-byte stack buffer by calling `00dfc850` on it (flag word 0; the callee pops it) and returns the first word of that buffer, which is what the code reads back after the call. The class is unconfirmed.
+pub fn fn_00dfc830(e: &mut Engine) -> u32 {
+    e.with_stack(0x170, |e, buffer| {
+        e.call(0x00df_c850, &args![buffer, 0u32]);
+        e.mem.u32(buffer.addr())
+    })
+}
+
+// Translated from 00dfcb70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. Builds a temporary object in a 0x40-byte stack buffer by calling `00e3b960` on it (flag word 0; the callee pops it) and returns the first word of that buffer, which is what the code reads back after the call. The class is unconfirmed.
+pub fn fn_00dfcb70(e: &mut Engine) -> u32 {
+    e.with_stack(0x40, |e, buffer| {
+        e.call(0x00e3_b960, &args![buffer, 0u32]);
+        e.mem.u32(buffer.addr())
+    })
+}
+
+// Translated from 00dfce10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. Builds a temporary object in a 0x40-byte stack buffer by calling `00d53df0` on it (flag word 0; the callee pops it) and returns the first word of that buffer, which is what the code reads back after the call. The class is unconfirmed.
+pub fn fn_00dfce10(e: &mut Engine) -> u32 {
+    e.with_stack(0x40, |e, buffer| {
+        e.call(0x00d5_3df0, &args![buffer, 0u32]);
+        e.mem.u32(buffer.addr())
+    })
+}
+
+// Translated from 00dfcf40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. Builds a temporary object in a 0x50-byte stack buffer by calling `00dfcf60` on it (flag word 0; the callee pops it) and returns the first word of that buffer, which is what the code reads back after the call. The class is unconfirmed.
+pub fn fn_00dfcf40(e: &mut Engine) -> u32 {
+    e.with_stack(0x50, |e, buffer| {
+        e.call(0x00df_cf60, &args![buffer, 0u32]);
+        e.mem.u32(buffer.addr())
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00df_c7a0, fn_00dfc7a0() -> u32),
+        entry!(0x00df_c830, fn_00dfc830() -> u32),
+        entry!(0x00df_cb70, fn_00dfcb70() -> u32),
+        entry!(0x00df_ce10, fn_00dfce10() -> u32),
+        entry!(0x00df_cf40, fn_00dfcf40() -> u32),
         entry!(0x00dfc630, return_constant_00dfc630() -> u32),
         entry!(0x00dfc6d0, return_constant_00dfc6d0() -> u32),
         entry!(0x00dfc740, return_constant_00dfc740() -> u32),
@@ -169,4 +219,64 @@ mod tests {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00df_ca30, &args![]).u32(), 0x010c_b71c);
     }
+}
+
+#[cfg(test)]
+mod a07_first_word_tests {
+    use crate::prelude::*;
+
+    const BUILT_WORD: u32 = 0x0abc_def0;
+
+    /// A double over `callee` writes `BUILT_WORD` at the buffer it is given; `function`
+    /// must call it once with that buffer and a zero flag word, and return the word.
+    fn check(function: u32, callee: u32) {
+        let mut e = Engine::new();
+        e.register(callee, |e, a| {
+            e.mem.set_u32(a[0], BUILT_WORD);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let result = e.call(function, &args![]).u32();
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == callee).collect();
+        assert_eq!(calls.len(), 1);
+        assert_ne!(calls[0].1[0], 0);
+        assert_eq!(calls[0].1[1], 0);
+        assert_eq!(result, BUILT_WORD);
+    }
+
+    macro_rules! first_word_test {
+        ($name:ident, $function:expr, $callee:expr) => {
+            #[test]
+            fn $name() {
+                check($function, $callee);
+            }
+        };
+    }
+
+    first_word_test!(
+        fn_00dfc7a0_returns_first_word_of_built_object,
+        0x00df_c7a0,
+        0x00e3_b060
+    );
+    first_word_test!(
+        fn_00dfc830_returns_first_word_of_built_object,
+        0x00df_c830,
+        0x00df_c850
+    );
+    first_word_test!(
+        fn_00dfcb70_returns_first_word_of_built_object,
+        0x00df_cb70,
+        0x00e3_b960
+    );
+    first_word_test!(
+        fn_00dfce10_returns_first_word_of_built_object,
+        0x00df_ce10,
+        0x00d5_3df0
+    );
+    first_word_test!(
+        fn_00dfcf40_returns_first_word_of_built_object,
+        0x00df_cf40,
+        0x00df_cf60
+    );
 }
