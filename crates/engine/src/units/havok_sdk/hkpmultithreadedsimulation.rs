@@ -1000,9 +1000,10 @@ pub fn step_begin_st(e: &mut Engine, this: Ptr, queue: u32, delta_time: u32) -> 
 /// halfword and the type byte 2 and is added to the queue (`00d04b90`, with 1). All jobs are
 /// run (`00d051b0`) and, with `count` above 0, a post collide job (bytes `0xe`, 0, 2, halfwords
 /// `0x30` and `0xffff`, the owner, the job's words `+0x18`, `+0x1c`, `+0x20` and halfword
-/// `+0x10`) is run on the state `run_post_collide_job` builds. The exe's last step, giving the
-/// entries array back to the allocator, cannot run: its capacity word is made from `count |
-/// 0x80000000`, which always has bit 31 set.
+/// `+0x10`) is run on the state `run_post_collide_job` builds. The exe's last step gives the
+/// entries array back to the allocator (`release_block` with `count * 4` bytes) unless bit 31
+/// of its capacity word is set; the word is made from `count | 0x80000000`, so in the exe this
+/// release can never run (it is translated and tested through `release_block` alone).
 pub fn process_agent_nn_entries(
     e: &mut Engine,
     this: Ptr,
@@ -1078,8 +1079,7 @@ pub fn process_agent_nn_entries(
             e.mem.set_u8(post + 2, 2);
             run_post_collide_job(e, me, state, post);
         }
-        // The exe fetches the allocator here for a release that cannot happen (see above).
-        e.call(MEMORY_ROUTER, &args![]);
+        release_block(e, entries, count as u32 | DONT_DEALLOCATE_FLAG, 4);
     });
 }
 
@@ -1242,6 +1242,21 @@ const ADD_REFERENCE: u32 = 0x00c9_0510;
 const RELEASE_REFERENCE: u32 = 0x00c9_05b0;
 /// `hkString::memSet` (`00cb1280`, cdecl `(destination, value, size)`).
 const MEM_SET: u32 = 0x00cb_1280;
+/// Gives a block of `capacity & 0x3fffffff` elements of `element_size` bytes at `data` back to
+/// the heap allocator (slot `0x10`, `(data, bytes)`) unless bit 31 of the capacity word
+/// `capacity` is set. The allocator is fetched from the router first, as the exe does.
+fn release_block(e: &mut Engine, data: u32, capacity: u32, element_size: u32) {
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    if capacity & DONT_DEALLOCATE_FLAG == 0 {
+        e.vcall(
+            allocator,
+            0x10,
+            &args![data, (capacity & CAPACITY_MASK).wrapping_mul(element_size)],
+        );
+    }
+}
+
 /// Gives the storage of an `hkArray` (data, size, capacity word at `array`) back to the heap
 /// allocator (slot `0x10`, `(data, capacity * element size)`) unless bit 31 of its capacity word
 /// is set, and leaves it empty (size 0, data null, capacity word `0x80000000`).
@@ -1313,7 +1328,10 @@ fn island_group(e: &mut Engine, groups: u32, island: u32) -> u32 {
 /// (`00cb1930`) and, if it is not there, referenced (`00c90510`) and stored (`00cb1870` with
 /// the router's allocator). With entries in the list [`process_agent_nn_entries`] runs with
 /// `(list, count, input, island, 0)`; the arrays and the flag block are given back. The exe's
-/// last release, of the flag block, cannot run: its capacity word has bit 31 set.
+/// last release, of the flag block (`release_block` with one byte per element), is skipped when
+/// bit 31 of its capacity word is set; the word is made from the block size `| 0x80000000`, so
+/// in the exe this release can never run (it is translated and tested through `release_block`
+/// alone).
 pub fn collide_entities_of_one_island_narrow_phase_continuous_toi_only(
     e: &mut Engine,
     this: Ptr,
@@ -1418,6 +1436,7 @@ pub fn collide_entities_of_one_island_narrow_phase_continuous_toi_only(
         empty_array(e, list, 4);
         let router = e.call(MEMORY_ROUTER, &args![]).u32();
         e.mem.set_u32(router, flags);
+        release_block(e, flags, size | DONT_DEALLOCATE_FLAG, 1);
     });
 }
 
@@ -4514,5 +4533,43 @@ mod step_tests {
         assert_eq!(calls_to(&log, 0x00cb_4c60).len(), 1);
         assert_eq!(calls_to(&log, ADD_AGENT).len(), 1);
         assert_eq!(f.r.e.mem.u32(sim + SIM_ADD_PAIRS + 4), 0);
+    }
+
+    #[test]
+    fn the_entries_array_of_the_job_function_is_released_without_bit_31() {
+        // `00d03030` makes its capacity word from `count | 0x80000000`, so the exe never gets
+        // here; the release itself takes 4 bytes per element and skips a word with bit 31 set.
+        let mut r = rig();
+        let (allocator, entries) = (r.allocator, 0x1000_0000u32);
+        r.e.call_log = Some(vec![]);
+        release_block(&mut r.e, entries, 20, 4);
+        let log: Log = r.e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, FREE_ARRAY),
+            vec![args![allocator, entries, 80u32]]
+        );
+        r.e.call_log = Some(vec![]);
+        release_block(&mut r.e, entries, 20 | DONT_DEALLOCATE_FLAG, 4);
+        let log: Log = r.e.call_log.take().unwrap();
+        assert!(calls_to(&log, FREE_ARRAY).is_empty());
+    }
+
+    #[test]
+    fn the_flag_block_of_the_one_island_function_is_released_without_bit_31() {
+        // `00d03970` makes its capacity word from `size | 0x80000000`, so the exe never gets
+        // here; the release takes one byte per element and masks off the two flag bits.
+        let mut r = rig();
+        let (allocator, flags) = (r.allocator, 0x1000_0000u32);
+        r.e.call_log = Some(vec![]);
+        release_block(&mut r.e, flags, 0x4000_0010, 1);
+        let log: Log = r.e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, FREE_ARRAY),
+            vec![args![allocator, flags, 0x10u32]]
+        );
+        r.e.call_log = Some(vec![]);
+        release_block(&mut r.e, flags, 0x10 | DONT_DEALLOCATE_FLAG, 1);
+        let log: Log = r.e.call_log.take().unwrap();
+        assert!(calls_to(&log, FREE_ARRAY).is_empty());
     }
 }
