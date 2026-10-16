@@ -13,7 +13,6 @@ pub fn fn_00e020f0(e: &mut Engine) -> u32 {
     })
 }
 
-
 // Translated from 00e02180 (decompiled, FalloutNV.exe 1.4.0.525)
 /// No name in the engine map (class unconfirmed): in a 0x3c-byte frame stores the vtable word 0x010e_9ccc at
 /// +0xC, runs the constructor at `00cb0a70` (argument 0) on the members at frame+0x14, 0x1c, 0x20, 0x24 in that
@@ -32,7 +31,10 @@ pub fn fn_00e02180(e: &mut Engine) -> u32 {
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00e0_20f0, fn_00e020f0() -> u32), entry!(0x00e02180, fn_00e02180() -> u32)]
+    vec![
+        entry!(0x00e0_20f0, fn_00e020f0() -> u32),
+        entry!(0x00e02180, fn_00e02180() -> u32),
+    ]
 }
 
 #[cfg(test)]

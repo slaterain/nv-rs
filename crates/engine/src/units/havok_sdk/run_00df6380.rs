@@ -13,7 +13,6 @@ pub fn fn_00df6470(e: &mut Engine) -> u32 {
     })
 }
 
-
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![entry!(0x00df_6470, fn_00df6470() -> u32)]
