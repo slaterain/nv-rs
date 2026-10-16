@@ -50,12 +50,26 @@ pub fn fn_00cc01c0(e: &mut Engine, this: Ptr, text: Ptr) -> Ptr {
     this
 }
 
+// Translated from 00cc04c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkOstream::getClassType` (Xbox PDB): takes no arguments and returns the constant 0x0126_8560.
+pub fn hk_ostream_get_class_type(_e: &mut Engine) -> u32 {
+    0x0126_8560
+}
+
+// Translated from 00cc0770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkArrayStreamWriter::getClassType` (Xbox PDB): takes no arguments and returns the constant 0x0126_8ad8.
+pub fn hk_array_stream_writer_get_class_type(_e: &mut Engine) -> u32 {
+    0x0126_8ad8
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00cc_0080, fn_00cc0080(Ptr, Ptr) -> u32),
         entry!(0x00cc_01c0, fn_00cc01c0(Ptr, Ptr) -> Ptr),
         entry!(0x00cc_07f0, deleting_destructor_00cc07f0(Ptr, u8) -> Ptr),
+        entry!(0x00cc04c0, hk_ostream_get_class_type() -> u32),
+        entry!(0x00cc0770, hk_array_stream_writer_get_class_type() -> u32),
     ]
 }
 
@@ -170,5 +184,17 @@ mod tests {
     #[test]
     fn deleting_destructor_00cc07f0_frees_only_when_bit_zero_is_set() {
         check(0x00cc_07f0, 0x00cc_0780);
+    }
+
+    #[test]
+    fn hk_ostream_get_class_type_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cc_04c0, &args![]).u32(), 0x0126_8560);
+    }
+
+    #[test]
+    fn hk_array_stream_writer_get_class_type_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cc_0770, &args![]).u32(), 0x0126_8ad8);
     }
 }

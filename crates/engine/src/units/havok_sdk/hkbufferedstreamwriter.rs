@@ -59,11 +59,18 @@ pub fn hk_buffered_stream_writer_hk_buffered_stream_writer_ov2(
     this
 }
 
+// Translated from 00d27560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkBufferedStreamWriter::getClassType` (Xbox PDB): takes no arguments and returns the constant 0x0126_89e4.
+pub fn hk_buffered_stream_writer_get_class_type(_e: &mut Engine) -> u32 {
+    0x0126_89e4
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00d2_7570, deleting_destructor_00d27570(Ptr, u8) -> Ptr),
         entry!(0x00d2_74c0, hk_buffered_stream_writer_hk_buffered_stream_writer_ov2(Ptr, u32, u32, u8) -> Ptr),
+        entry!(0x00d27560, hk_buffered_stream_writer_get_class_type() -> u32),
     ]
 }
 
@@ -128,6 +135,12 @@ mod tests {
     #[test]
     fn deleting_destructor_00d27570_frees_only_when_bit_zero_is_set() {
         check(0x00d2_7570, 0x00d2_7520);
+    }
+
+    #[test]
+    fn hk_buffered_stream_writer_get_class_type_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00d2_7560, &args![]).u32(), 0x0126_89e4);
     }
 }
 
