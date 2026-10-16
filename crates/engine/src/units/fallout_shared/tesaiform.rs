@@ -91,6 +91,7 @@ mod movement_path_tests {
     use crate::prelude::*;
 
     /// Calls the setter at `addr` and returns the object's bytes and the logged calls.
+    #[allow(clippy::type_complexity)]
     fn run(addr: u32, value: u32, notify: u32) -> (Vec<u8>, Vec<(u32, Vec<u32>)>, u32) {
         let mut e = Engine::new();
         let this = e.mem.alloc(0x10);

@@ -384,7 +384,7 @@ mod tests {
     fn slot_bytes_is_a_power_of_two_slot_count() {
         let mut e = Engine::new();
         for (count, bytes) in [(0, 128), (4, 128), (5, 256), (100, 4096)] {
-            assert_eq!(e.call(0x00cb_1810, &args![count as i32]).u32(), bytes);
+            assert_eq!(e.call(0x00cb_1810, &args![count]).u32(), bytes);
         }
     }
 

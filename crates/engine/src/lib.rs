@@ -31,6 +31,8 @@
 #![allow(clippy::only_used_in_recursion)]
 // Lane loops index several parallel arrays the way the exe walks them.
 #![allow(clippy::needless_range_loop)]
+// x87 code multiplies by a -1.0 constant, which keeps a NaN's sign; negation flips it.
+#![allow(clippy::neg_multiply)]
 
 pub mod abi;
 mod engine;

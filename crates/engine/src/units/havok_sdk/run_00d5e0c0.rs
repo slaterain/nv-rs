@@ -362,9 +362,9 @@ mod tests {
         );
         assert_eq!(e.mem.f32(out), 7.0);
         // Child 1: the child's bits kept by 0xc0ffffff, plus 1 << 8, ORed with 0x3f000000.
-        let first = (0xffff_ffffu32 & 0xc0ff_ffff).wrapping_add(0x100) | 0x3f00_0000;
+        let first = 0xc0ff_ffffu32.wrapping_add(0x100) | 0x3f00_0000;
         assert_eq!(e.mem.u32(out + 0xc), first);
-        let second = (0xffff_ffffu32 & 0xc0ff_ffff) | 0x3f00_0000;
+        let second = 0xc0ff_ffffu32 | 0x3f00_0000;
         assert_eq!(e.mem.u32(out + 0x1c), second);
         // A count of 0 or less converts nothing.
         seen.borrow_mut().clear();
