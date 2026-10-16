@@ -455,6 +455,7 @@ pub fn fn_00dded60(e: &mut Engine, this: Ptr) -> f32 {
                         sum = ((high - low) + (sum as f64)) as f32;
                     }
                     let key = x87_quiet(e.mem.f32(data.wrapping_add(start_offset) + 8));
+                    #[allow(clippy::manual_clamp)] // the exe's compare order, NaN passes through
                     let clamped = if sum < 0.0 {
                         0.0
                     } else if sum > 1.0 {

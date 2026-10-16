@@ -69,7 +69,12 @@ fn short(e: &Engine, at: u32) -> i32 {
 /// `FISTP` of a single-precision value with the default rounding mode (nearest, ties to even);
 /// the integer indefinite `0x80000000` for NaN and out-of-range values.
 fn fistp(value: f32) -> i32 {
-    let rounded = f64::from(value).round_ties_even();
+    // Ties to even without `round_ties_even` (newer than the MSRV).
+    let wide = f64::from(value);
+    let mut rounded = wide.round();
+    if (wide - wide.trunc()).abs() == 0.5 && rounded % 2.0 != 0.0 {
+        rounded -= wide.signum();
+    }
     if rounded.is_nan() || rounded < f64::from(i32::MIN) || rounded > f64::from(i32::MAX) {
         i32::MIN
     } else {
@@ -179,7 +184,7 @@ pub fn fn_00e63f10(e: &mut Engine, this: Ptr, query: Ptr, code: Ptr) {
                 5 => pc = pc.wrapping_add(byte(e, pc + 1)).wrapping_add(2),
                 6 => pc = pc.wrapping_add(big_endian(e, pc + 1, 2)).wrapping_add(3),
                 7 => pc = pc.wrapping_add(big_endian(e, pc + 1, 3)).wrapping_add(4),
-                9 | 0xa | 0xb => {
+                9..=0xb => {
                     let (value, length) = match op {
                         9 => (byte(e, pc + 1), 2),
                         0xa => (big_endian(e, pc + 1, 2), 3),

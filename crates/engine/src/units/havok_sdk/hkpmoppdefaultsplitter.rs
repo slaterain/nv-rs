@@ -35,17 +35,17 @@ const VTABLE_BASE: u32 = 0x0102_e388;
 /// The double constants of the exe: 0.66 (`01090d68`), -0.03 (`010ea5f8`), 5.0 (`01020998`),
 /// 0.5 (`01011588`), 16.0 (`010240b8`), 0.05 (`0103c7c8`), 0.75 (`0101de30`), 6.0
 /// (`01034208`), 3.0 (`01021928`), 2.9 (`010ea600`) and 1500.0 (`010737c8`), by bit pattern.
-const WEIGHT: f64 = f64::from_bits(0x3fe5_1eb8_6000_0000);
-const NEGATIVE_DEPTH_FACTOR: f64 = f64::from_bits(0xbf9e_b851_e000_0000);
-const BALANCE_FACTOR: f64 = f64::from_bits(0x4014_0000_0000_0000);
-const HALF: f64 = f64::from_bits(0x3fe0_0000_0000_0000);
-const SIXTEEN: f64 = f64::from_bits(0x4030_0000_0000_0000);
-const FALLOFF: f64 = f64::from_bits(0x3fa9_9999_a000_0000);
-const THREE_QUARTERS: f64 = f64::from_bits(0x3fe8_0000_0000_0000);
-const SIX: f64 = f64::from_bits(0x4018_0000_0000_0000);
-const THREE: f64 = f64::from_bits(0x4008_0000_0000_0000);
-const TWO_NINE: f64 = f64::from_bits(0x4007_3333_4000_0000);
-const FIFTEEN_HUNDRED: f64 = f64::from_bits(0x4097_7000_0000_0000);
+const WEIGHT: f64 = 0.6600000262260437;
+const NEGATIVE_DEPTH_FACTOR: f64 = -0.029999999329447746;
+const BALANCE_FACTOR: f64 = 5.0;
+const HALF: f64 = 0.5;
+const SIXTEEN: f64 = 16.0;
+const FALLOFF: f64 = 0.05000000074505806;
+const THREE_QUARTERS: f64 = 0.75;
+const SIX: f64 = 6.0;
+const THREE: f64 = 3.0;
+const TWO_NINE: f64 = 2.9000000953674316;
+const FIFTEEN_HUNDRED: f64 = 1500.0;
 /// The float constants: 1e6 (`0108cb00`), 1e10 (`010ea628`), 1e7 (`010d51b0`) and 0.001
 /// (`01017d00`) and the huge cost (`010ea608`), by bit pattern.
 const NEW_NODE_COST: u32 = 0x4974_2400;

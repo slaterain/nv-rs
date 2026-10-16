@@ -32,7 +32,7 @@ const ERROR_REPORTER: u32 = 0x0126_8360;
 const CORRUPTED_TEXT: u32 = 0x010d_5100;
 const ERROR_FILE: u32 = 0x010d_50c0;
 /// The double constants of the exe: 2^-16 (`010d5198`) and 3.0 (`01021928`).
-const SCALE_SHIFT: f64 = f64::from_bits(0x3ef0_0000_0000_0000);
+const SCALE_SHIFT: f64 = 1.52587890625e-05;
 const THREE: f64 = 3.0;
 
 /// The four floats of a 16-byte vector.
