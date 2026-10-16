@@ -493,6 +493,7 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(run_004538e0::funcs());
     out.extend(run_004564f0::funcs());
     out.extend(run_00456540::funcs());
+    out.extend(run_00456a20::funcs());
     out.extend(run_00456a60::funcs());
     out.extend(run_0045cb90::funcs());
     out.extend(run_00460fb0::funcs());
@@ -751,6 +752,7 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(run_00a3da20::funcs());
     out.extend(run_00a3fa30::funcs());
     out.extend(run_00a411c0::funcs());
+    out.extend(run_00a471d0::funcs());
     out.extend(run_00a540d0::funcs());
     out.extend(run_00a54370::funcs());
     out.extend(run_00a54410::funcs());
@@ -765,6 +767,7 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(run_00a5f7b0::funcs());
     out.extend(run_00a5f860::funcs());
     out.extend(run_00a62030::funcs());
+    out.extend(run_00a642a0::funcs());
     out.extend(run_00a64470::funcs());
     out.extend(run_00a6e960::funcs());
     out.extend(run_00a6ea00::funcs());
@@ -793,7 +796,11 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(run_00aa0ff0::funcs());
     out.extend(run_00aa1010::funcs());
     out.extend(run_00aa1a70::funcs());
+    out.extend(run_00aa1d10::funcs());
+    out.extend(run_00aa1d30::funcs());
+    out.extend(run_00aa1d40::funcs());
     out.extend(run_00aa1d60::funcs());
+    out.extend(run_00aa2ea0::funcs());
     out.extend(run_00aa34b0::funcs());
     out.extend(run_00aa35a0::funcs());
     out.extend(run_00aa3880::funcs());
@@ -817,6 +824,8 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(run_00b45c00::funcs());
     out.extend(run_00b49e20::funcs());
     out.extend(run_00b4f510::funcs());
+    out.extend(run_00b57ea0::funcs());
+    out.extend(run_00b601a0::funcs());
     out.extend(run_00b631d0::funcs());
     out.extend(run_00b70820::funcs());
     out.extend(run_00b71360::funcs());
@@ -828,6 +837,7 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(run_00b9ef30::funcs());
     out.extend(run_00b9f0c0::funcs());
     out.extend(run_00b9fba0::funcs());
+    out.extend(run_00ba3aa0::funcs());
     out.extend(run_00ba8630::funcs());
     out.extend(run_00bc3080::funcs());
     out.extend(run_00bc5a80::funcs());
@@ -881,6 +891,7 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(run_00e80390::funcs());
     out.extend(run_00e80570::funcs());
     out.extend(run_00e91790::funcs());
+    out.extend(run_00e91fd0::funcs());
     out.extend(run_00e98aa0::funcs());
     out.extend(run_00e98cb0::funcs());
     out.extend(run_00e98e10::funcs());
@@ -902,15 +913,4 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(run_00eea520::funcs());
     out.extend(run_00eea550::funcs());
     out.extend(run_00eea650::funcs());
-    out.extend(run_00456a20::funcs());
-    out.extend(run_00aa1d10::funcs());
-    out.extend(run_00aa1d30::funcs());
-    out.extend(run_00aa1d40::funcs());
-    out.extend(run_00aa2ea0::funcs());
-    out.extend(run_00ba3aa0::funcs());
-    out.extend(run_00b57ea0::funcs());
-    out.extend(run_00b601a0::funcs());
-    out.extend(run_00e91fd0::funcs());
-    out.extend(run_00a642a0::funcs());
-    out.extend(run_00a471d0::funcs());
 }
