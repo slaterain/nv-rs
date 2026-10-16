@@ -569,12 +569,7 @@ impl X87 {
 /// `FISTP dword`: the value rounded to nearest (even); an out-of-range value or a NaN gives the
 /// integer indefinite `0x80000000`.
 fn round_to_int(value: f64) -> i32 {
-    let rounded = value.round_ties_even();
-    if rounded.is_nan() || rounded >= 2147483648.0 || rounded < -2147483648.0 {
-        i32::MIN
-    } else {
-        rounded as i32
-    }
+    crate::units::bsmenu::font::fistp(value)
 }
 
 /// The registers, the stack and the x87 stack of `castRayInternal`, and its arguments.
