@@ -13,18 +13,6 @@ pub fn fn_00dfe440(e: &mut Engine) -> u32 {
     })
 }
 
-// Translated from 00dfe440 (decompiled, FalloutNV.exe 1.4.0.525)
-/// No name in the engine map (class unconfirmed): builds a temporary object in a 0xa0-byte frame with
-/// the constructor at `00e40ca0` (`this` = the frame, one argument 0) and returns the word at the
-/// start of the object, the vtable pointer the constructor stored there. The temporary is not
-/// destroyed.
-pub fn fn_00dfe440(e: &mut Engine) -> u32 {
-    e.with_stack(0xa0, |e, record| {
-        e.call(0x00e4_0ca0, &args![record, 0u32]);
-        e.mem.u32(record.addr())
-    })
-}
-
 // Translated from 00dfe4a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// No name in the engine map: takes no arguments and returns the constant 0x010e_56d4.
 pub fn return_constant_00dfe4a0(_e: &mut Engine) -> u32 {
