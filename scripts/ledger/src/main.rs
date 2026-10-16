@@ -12,9 +12,10 @@
 //! - `translated`: an address in it is cited on a translation marker line
 //!   (ADR-0003: `Translated from <addr>` or `(decompiled, FalloutNV.exe ...)`;
 //!   when the marker line itself holds no address, the line above counts).
-//! - `static init (table)`: a static initializer run from the generated
-//!   table `crates/engine/data/static_initializers.tsv` (research/initgen):
-//!   engine coverage, but not a hand translation.
+//! - `static init (table)`: a static initializer, or an `atexit` destructor,
+//!   run from a generated table (`crates/engine/data/static_initializers.tsv`,
+//!   `crates/engine/data/atexit_destructors.tsv`; research/initgen): engine
+//!   coverage, but not a hand translation.
 //! - `traced`: an address in it is cited anywhere else in Rust.
 //! - `platform` / `library`: its subsystem is replaced by Rust/Bevy, or is
 //!   compiler or runtime-library code (`base_status`).
@@ -127,8 +128,9 @@ fn unit_status(subsystem: &str, unit: &str) -> &'static str {
     }
 }
 
-/// The status of an entry run from the generated static-initializer table
-/// ([`INITIALIZER_TABLE`]): covered by the engine, but not a hand translation.
+/// The status of a function run from a generated table ([`TABLES`]: static
+/// initializers, `atexit` destructors): covered by the engine, but not a hand
+/// translation.
 const TABLE: &str = "static init (table)";
 
 const STATUSES: [&str; 6] = ["translated", TABLE, "traced", "platform", "library", "open"];
@@ -274,6 +276,16 @@ fn scan(text: &str) -> Vec<(u32, Cite, usize)> {
 /// executors of `crates/engine/src/static_init.rs`. It counts toward
 /// coverage under its own status ([`TABLE`]), not as a hand translation.
 const INITIALIZER_TABLE: &str = "crates/engine/data/static_initializers.tsv";
+
+/// The generated table of the `atexit` destructors
+/// (`crates/engine/data/atexit_destructors.tsv`, research/initgen `--atexit`):
+/// each row is the translation of the function in its first column
+/// (`crates/engine/src/static_exit.rs`), counted exactly as the rows of
+/// [`INITIALIZER_TABLE`].
+const EXIT_TABLE: &str = "crates/engine/data/atexit_destructors.tsv";
+
+/// Every generated table whose rows count as [`TABLE`].
+const TABLES: [&str; 2] = [INITIALIZER_TABLE, EXIT_TABLE];
 
 /// (entry address, line) of every row of the initializer table.
 fn table_rows(text: &str) -> Vec<(u32, usize)> {
@@ -446,8 +458,9 @@ fn render(funcs: &[Func], header: &[String], unmapped: usize, cites: usize) -> S
         s,
         "| Status | Meaning |\n| --- | --- |\n\
          | translated | cited on a translation marker (ADR-0003) in Rust |\n\
-         | static init (table) | a static initializer run from the generated table \
-         `crates/engine/data/static_initializers.tsv` (research/initgen), not a hand \
+         | static init (table) | a static initializer or an `atexit` destructor run \
+         from a generated table (`crates/engine/data/static_initializers.tsv`, \
+         `crates/engine/data/atexit_destructors.tsv`; research/initgen), not a hand \
          translation |\n\
          | traced | cited elsewhere in Rust |\n\
          | platform | its subsystem is replaced by Rust/Bevy |\n\
@@ -731,13 +744,16 @@ fn main() {
             };
         }
     }
-    if let Ok(text) = fs::read_to_string(root.join(INITIALIZER_TABLE)) {
+    for table in TABLES {
+        let Ok(text) = fs::read_to_string(root.join(table)) else {
+            continue;
+        };
         for (a, line) in table_rows(&text) {
             cited.insert(a);
             let k = funcs.partition_point(|f| f.addr <= a);
             match k.checked_sub(1).map(|k| &mut funcs[k]) {
                 Some(f) if a < f.addr + f.size.max(1) => {
-                    f.table.insert(format!("{INITIALIZER_TABLE}:{line}"));
+                    f.table.insert(format!("{table}:{line}"));
                 }
                 _ => {
                     unmapped.insert(a);
@@ -924,6 +940,20 @@ mod tests {
                     xyz\tconst\n\
                     00f352d0\treg\t00a26e20 011c32f8\n";
         assert_eq!(table_rows(text), [(0x00f6_2250, 2), (0x00f3_52d0, 5)]);
+    }
+
+    #[test]
+    fn exit_table_rows_cite_their_functions_and_are_a_table_too() {
+        assert_eq!(TABLES, [INITIALIZER_TABLE, EXIT_TABLE]);
+        let text = "# generated\n\
+                    00fc7a70\tcall\t011c3264 00404a00\n\
+                    00fde581\ttail\t0126fc95 00ec3b35\n";
+        assert_eq!(table_rows(text), [(0x00fc_7a70, 2), (0x00fd_e581, 3)]);
+        let mut f = func(0x00fc_7a70, "compiler: static init/exit");
+        f.table.insert(format!("{EXIT_TABLE}:2"));
+        assert_eq!(f.status(), TABLE);
+        assert!(f.in_engine());
+        assert_eq!(f.queue_status(), "done");
     }
 
     #[test]
