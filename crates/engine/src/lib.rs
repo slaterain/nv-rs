@@ -29,6 +29,8 @@
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::only_used_in_recursion)]
+// Lane loops index several parallel arrays the way the exe walks them.
+#![allow(clippy::needless_range_loop)]
 
 pub mod abi;
 mod engine;

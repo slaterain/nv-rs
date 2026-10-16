@@ -191,6 +191,7 @@ mod ctor_tests {
 mod thunk_tests {
     use super::*;
 
+    #[allow(dead_code)]
     fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
         e.call_log
             .as_ref()

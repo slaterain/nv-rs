@@ -86,8 +86,8 @@ mod tests {
             ..Ret::default()
         });
         e.call_log = Some(vec![]);
-        assert_eq!(e.call(0x0044_df20, &args![0x4100u32]).bool(), false);
-        assert_eq!(e.call(0x0044_df20, &args![0x4100u32 + 1]).bool(), true);
+        assert!(!e.call(0x0044_df20, &args![0x4100u32]).bool());
+        assert!(e.call(0x0044_df20, &args![0x4100u32 + 1]).bool());
         let log = e.call_log.take().unwrap();
         let inner: Vec<_> = log.iter().filter(|c| c.0 == CALLEE_0044DFF0).collect();
         assert_eq!(inner.len(), 2);

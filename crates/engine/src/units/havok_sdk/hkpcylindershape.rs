@@ -140,12 +140,7 @@ fn minps(dst: f32, src: f32) -> f32 {
 /// `FISTP dword` of a `float` already on the x87 stack: nearest (even), `0x80000000` for a NaN or a
 /// value outside the `int` range.
 fn fistp(value: f32) -> i32 {
-    let rounded = f64::from(value).round_ties_even();
-    if rounded.is_nan() || !(-2147483648.0..2147483648.0).contains(&rounded) {
-        i32::MIN
-    } else {
-        rounded as i32
-    }
+    crate::units::bsmenu::font::fistp(f64::from(value))
 }
 
 /// The `RSQRTSS` estimate refined once, with the `CMPEQSS`/`ANDNPS` zero guard:
