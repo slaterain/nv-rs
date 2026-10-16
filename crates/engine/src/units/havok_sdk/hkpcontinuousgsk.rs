@@ -1037,7 +1037,10 @@ mod havok_a03_tests {
         let (answer, result) = refine(&mut e, &s, 0.0, -0.5, 10.0);
         assert_eq!(calls_to(&e, INTERPOLATE_TRANSFORM).len(), 20);
         // The distance is -f * f, so the plane at -0.5 is reached at f = 0.7071.
-        assert!((answer - std::f32::consts::FRAC_1_SQRT_2).abs() < 0.05, "{answer}");
+        assert!(
+            (answer - std::f32::consts::FRAC_1_SQRT_2).abs() < 0.05,
+            "{answer}"
+        );
         assert_eq!(e.mem.f32(result), answer);
     }
 
