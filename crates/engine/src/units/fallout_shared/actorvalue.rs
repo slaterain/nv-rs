@@ -222,16 +222,6 @@ mod table_tests {
 mod static_init_callee_tests {
     use super::*;
 
-    fn calls_to(e: &mut Engine, addr: u32) -> Vec<Vec<u32>> {
-        e.call_log
-            .clone()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|(a, _)| *a == addr)
-            .map(|(_, words)| words)
-            .collect()
-    }
-
     #[test]
     fn clears_the_first_4d_words_only() {
         let mut e = Engine::new();

@@ -24,16 +24,6 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 mod static_init_callee_tests {
     use super::*;
 
-    fn calls_to(e: &mut Engine, addr: u32) -> Vec<Vec<u32>> {
-        e.call_log
-            .clone()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|(a, _)| *a == addr)
-            .map(|(_, words)| words)
-            .collect()
-    }
-
     #[test]
     fn clears_the_three_words() {
         let mut e = Engine::new();
