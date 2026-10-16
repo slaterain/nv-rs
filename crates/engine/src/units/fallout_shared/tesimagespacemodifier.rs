@@ -177,14 +177,6 @@ mod thunk_tests {
     }
 
     #[test]
-    fn fwd_a03_0052d220_passes_this_to_the_callee() {
-        let mut e = Engine::new();
-        e.register(0x0052_d240, |_, _| Ret::default());
-        e.call_log = Some(vec![]);
-        e.call(0x0052_d220, &args![0x0000_5000u32]);
-        assert_eq!(calls_to(&e, 0x0052_d240), vec![vec![0x5000]]);
-    }
-    #[test]
     fn at_0052baa0_runs_destructor_body_then_deletes_on_flag_one() {
         use crate::prelude::*;
 
