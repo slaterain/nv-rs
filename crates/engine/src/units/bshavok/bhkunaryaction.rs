@@ -568,7 +568,7 @@ mod tests {
         e.mem.set_u32(bare + 0x50, 1);
         assert!(e.call(0x00c8_68f0, &args![bare, bare]).bool());
         e.mem.set_u32(bare + 8, 0);
-        assert!(e.call(0x00c8_68f0, &args![first, bare]).bool() == false);
+        assert!(!e.call(0x00c8_68f0, &args![first, bare]).bool());
         assert!(e.call(0x00c8_68f0, &args![bare, bare]).bool());
         assert_eq!(calls_to(&e, BASE_IS_EQUAL).len(), 6);
     }
