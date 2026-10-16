@@ -14,9 +14,20 @@ pub fn fn_008d4380(e: &mut Engine, this: Ptr) {
     e.call(0x008d_50a0, &args![this]);
 }
 
+// Translated from 008d4360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor that runs `008d5020` on the object (`ECX`) and answers it. The engine map gives it
+/// no name.
+pub fn fn_008d4360(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x008d_5020, &args![this]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x008d_4380, fn_008d4380(Ptr))]
+    vec![
+        entry!(0x008d_4380, fn_008d4380(Ptr)),
+        entry!(0x008d_4360, fn_008d4360(Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -40,5 +51,22 @@ mod thunk_tests {
         e.call_log = Some(vec![]);
         e.call(0x008d_4380, &args![0x0000_5000u32]);
         assert_eq!(calls_to(&e, 0x008d_50a0), vec![vec![0x5000]]);
+    }
+}
+
+#[cfg(test)]
+mod movement_path_tests {
+    use crate::units::crt::ctor_test::{self, A};
+
+    #[test]
+    fn fn_008d4360_runs_the_base_initialiser() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x008d_4360,
+            size: 0x10,
+            globals: &[],
+            returns: &[],
+            calls: &[(0x008d_5020, &[A::T(0)])],
+            stores: &[],
+        });
     }
 }

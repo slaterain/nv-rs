@@ -16,9 +16,21 @@ pub fn bs_tree_model_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags
     this
 }
 
+// Translated from 006694e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `00633c90` on `this` with a null argument and returns its answer unchanged (the code
+/// does not touch `EAX` afterwards; `00633c90` stores the argument in the pointer slot at
+/// `this` and, when it is not null, runs `0040f6e0` on it, and returns `this`). The engine map
+/// gives it no name, so the class is unconfirmed.
+pub fn fn_006694e0(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(0x0063_3c90, &args![this, 0u32]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0066_67d0, bs_tree_model_scalar_deleting_destructor(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x0066_67d0, bs_tree_model_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x0066_94e0, fn_006694e0(Ptr) -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -51,5 +63,24 @@ mod tests {
     #[test]
     fn bs_tree_model_scalar_deleting_destructor_frees_only_with_flag_bit_zero() {
         check_deleting_destructor(0x0066_67d0, 0x0066_6800, 0x50);
+    }
+}
+
+#[cfg(test)]
+mod movement_path_tests {
+    use crate::prelude::*;
+
+    #[test]
+    fn fn_006694e0_passes_a_null_target_and_returns_the_answer() {
+        let mut e = Engine::new();
+        e.register_double(0x0063_3c90, |_, _| Ret {
+            eax: 0x1234,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0066_94e0, &args![Ptr::<()>::new(0x5000)]);
+        assert_eq!(result.u32(), 0x1234);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1..], [(0x0063_3c90, vec![0x5000, 0])]);
     }
 }

@@ -11284,6 +11284,27 @@ fn save_counted_ids(e: &mut Engine, p: u32) {
     e.mem.set_u16(place, count);
 }
 
+// Translated from 0092c8b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Assigns `target` to the pointer slot `this`; the engine map names it only by its unit. When
+/// the slot already holds `target` nothing happens. Otherwise a non-null old value is given to
+/// `004b0ef0` (`ECX` = the old value), the slot takes `target`, and a non-null new value is
+/// given to `0092c870` (`ECX` = the new value). Returns `this`.
+pub fn fn_0092c8b0(e: &mut Engine, this: Ptr, target: Ptr) -> Ptr {
+    let slot = this.addr();
+    let old = e.mem.u32(slot);
+    if old != target.addr() {
+        if old != 0 {
+            e.call(0x004b_0ef0, &args![old]);
+        }
+        e.mem.set_u32(slot, target.addr());
+        if e.mem.u32(slot) != 0 {
+            let stored = e.mem.u32(slot);
+            e.call(0x0092_c870, &args![stored]);
+        }
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     type Process = Ptr<MiddleHighProcess>;
@@ -11549,6 +11570,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00924220, middle_high_process_get_save_size(Process, u32, u32) -> u16),
         entry!(0x00924560, middle_high_process_save_game(Process, u32, u32)),
+        entry!(0x0092_c8b0, fn_0092c8b0(Ptr, Ptr) -> Ptr),
     ]
 }
 
@@ -15696,5 +15718,56 @@ mod tests {
             calls(&e, ENGINE_ERROR_LOG),
             vec![vec![SAVE_SIZE_MESSAGES_SAVE.1, 0, 0x1c11, SOURCE_FILE]]
         );
+    }
+}
+
+#[cfg(test)]
+mod movement_path_tests {
+    use crate::prelude::*;
+
+    type Calls = Vec<(u32, Vec<u32>)>;
+
+    /// Assigns `target` to a slot holding `old`; returns the slot's new value, the answer and
+    /// the calls to the two helpers.
+    fn assign(old: u32, target: u32) -> (u32, u32, Calls) {
+        let mut e = Engine::new();
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, old);
+        e.register(0x004b_0ef0, |_, _| Ret::default());
+        e.register(0x0092_c870, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let answer = e.call(
+            0x0092_c8b0,
+            &args![Ptr::<()>::new(slot), Ptr::<()>::new(target)],
+        );
+        let log = e.call_log.take().unwrap();
+        assert_eq!(answer.u32(), slot);
+        (e.mem.u32(slot), slot, log[1..].to_vec())
+    }
+
+    #[test]
+    fn fn_0092c8b0_leaves_an_equal_value_alone() {
+        let (value, _, calls) = assign(0x1000, 0x1000);
+        assert_eq!(value, 0x1000);
+        assert!(calls.is_empty());
+        let (value, _, calls) = assign(0, 0);
+        assert_eq!(value, 0);
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn fn_0092c8b0_releases_the_old_value_and_takes_the_new_one() {
+        let (value, _, calls) = assign(0x1000, 0x2000);
+        assert_eq!(value, 0x2000);
+        assert_eq!(
+            calls,
+            [(0x004b_0ef0, vec![0x1000]), (0x0092_c870, vec![0x2000])]
+        );
+        let (value, _, calls) = assign(0, 0x2000);
+        assert_eq!(value, 0x2000);
+        assert_eq!(calls, [(0x0092_c870, vec![0x2000])]);
+        let (value, _, calls) = assign(0x1000, 0);
+        assert_eq!(value, 0);
+        assert_eq!(calls, [(0x004b_0ef0, vec![0x1000])]);
     }
 }

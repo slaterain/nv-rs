@@ -73,6 +73,12 @@ pub fn fn_0051a690(e: &mut Engine, this: Ptr, argument: u32) {
     );
 }
 
+// Translated from 0051a980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Start value of the form `0051a6a0` builds (form type 0x1f; class unconfirmed): clears the word at `+0xa8`.
+pub fn fn_0051a980(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr() + 0xa8, 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -81,6 +87,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0051_a670, fn_0051a670(Ptr, u32, u32)),
         entry!(0x0051_a680, fn_0051a680(Ptr, u32) -> u32),
         entry!(0x0051_a690, fn_0051a690(Ptr, u32)),
+        entry!(0x0051_a980, fn_0051a980(Ptr)),
     ]
 }
 
@@ -173,5 +180,21 @@ mod le81_thunk_tests {
     #[test]
     fn le81_thunk_0051a690() {
         check(0x0051_a690, 0x0051_a5a0, 0x7c, &[0x77]);
+    }
+}
+
+#[cfg(test)]
+mod movement_path_tests {
+    use crate::prelude::*;
+
+    #[test]
+    fn fn_0051a980_clears_the_word_at_0xa8() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xb0);
+        e.mem.write(this, &[0xcd; 0xb0]);
+        e.call(0x0051_a980, &args![Ptr::<()>::new(this)]);
+        let mut expected = vec![0xcd_u8; 0xb0];
+        expected[0xa8..0xac].fill(0);
+        assert_eq!(e.mem.bytes(this, 0xb0), expected);
     }
 }

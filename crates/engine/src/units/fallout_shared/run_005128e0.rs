@@ -32,12 +32,57 @@ pub fn fn_005129e0(e: &mut Engine, this: Ptr, argument: u32) -> u16 {
     .u16()
 }
 
+// Translated from 005129f0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005129f0 - the exception-unwinding frame (FS:[0]) and the security-cookie bookkeeping are not translated.
+/// Constructor of the form `CreateFormOfType` (`00465110`) makes for form type 0x18; `ECX` is the object.
+/// The engine map gives it no name, so the class is unconfirmed.
+/// It runs the base (`0050e820`) and component constructors by address, stores the vtable pointers and
+/// finishes with the form-type registration (`004f15a0`) and `00512e10`.
+/// The exception-unwinding frame is not translated.
+pub fn fn_005129f0(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(0x0050_e820, &args![this]);
+    e.call(0x0040_2d00, &args![base + 0x30]);
+    e.call(0x0048_cc50, &args![base + 0x3c]);
+    e.call(0x0048_30a0, &args![base + 0x48]);
+    e.call(0x0048_e7a0, &args![base + 0x58]);
+    e.call(0x0048_eac0, &args![base + 0x60]);
+    e.call(0x0048_71d0, &args![base + 0x68]);
+    e.call(0x0048_02f0, &args![base + 0x70]);
+    e.call(0x0047_5350, &args![base + 0x14c]);
+    e.call(0x0047_9320, &args![base + 0x154]);
+    e.call(0x0047_b850, &args![base + 0x15c]);
+    e.call(0x0047_4d10, &args![base + 0x164]);
+    e.call(0x0047_b4f0, &args![base + 0x16c]);
+    for (offset, vtable) in [
+        (0x00, 0x0102_a62c),
+        (0x30, 0x0102_a614),
+        (0x3c, 0x0102_a600),
+        (0x48, 0x0102_a5e8),
+        (0x58, 0x0102_a5c8),
+        (0x60, 0x0102_a5b4),
+        (0x68, 0x0102_a59c),
+        (0x70, 0x0102_a588),
+        (0x14c, 0x0102_a574),
+        (0x154, 0x0102_a560),
+        (0x15c, 0x0102_a54c),
+        (0x164, 0x0102_a538),
+        (0x16c, 0x0102_a524),
+    ] {
+        e.mem.set_u32(base + offset, vtable);
+    }
+    e.call(0x004f_15a0, &args![this, 0x18u32]);
+    e.call(0x0051_2e10, &args![this]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0051_29c0, fn_005129c0(Ptr, u32, u32)),
         entry!(0x0051_29d0, fn_005129d0(Ptr, u32)),
         entry!(0x0051_29e0, fn_005129e0(Ptr, u32) -> u16),
+        entry!(0x0051_29f0, fn_005129f0(Ptr) -> Ptr),
     ]
 }
 
@@ -80,5 +125,52 @@ mod le81_thunk_tests {
     #[test]
     fn le81_thunk_005129e0() {
         assert_eq!(check(0x0051_29e0, 0x005a_7770, 0x58, &[0x77]).u16(), 0xbeef);
+    }
+}
+
+#[cfg(test)]
+mod movement_path_tests {
+    use crate::units::crt::ctor_test::{self, A};
+
+    #[test]
+    fn fn_005129f0_builds_the_object() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x0051_29f0,
+            size: 0x180,
+            globals: &[],
+            returns: &[],
+            calls: &[
+                (0x0050_e820, &[A::T(0x0)]),
+                (0x0040_2d00, &[A::T(0x30)]),
+                (0x0048_cc50, &[A::T(0x3c)]),
+                (0x0048_30a0, &[A::T(0x48)]),
+                (0x0048_e7a0, &[A::T(0x58)]),
+                (0x0048_eac0, &[A::T(0x60)]),
+                (0x0048_71d0, &[A::T(0x68)]),
+                (0x0048_02f0, &[A::T(0x70)]),
+                (0x0047_5350, &[A::T(0x14c)]),
+                (0x0047_9320, &[A::T(0x154)]),
+                (0x0047_b850, &[A::T(0x15c)]),
+                (0x0047_4d10, &[A::T(0x164)]),
+                (0x0047_b4f0, &[A::T(0x16c)]),
+                (0x004f_15a0, &[A::T(0x0), A::V(0x18)]),
+                (0x0051_2e10, &[A::T(0x0)]),
+            ],
+            stores: &[
+                (0x0, 4, 0x0102_a62c),
+                (0x30, 4, 0x0102_a614),
+                (0x3c, 4, 0x0102_a600),
+                (0x48, 4, 0x0102_a5e8),
+                (0x58, 4, 0x0102_a5c8),
+                (0x60, 4, 0x0102_a5b4),
+                (0x68, 4, 0x0102_a59c),
+                (0x70, 4, 0x0102_a588),
+                (0x14c, 4, 0x0102_a574),
+                (0x154, 4, 0x0102_a560),
+                (0x15c, 4, 0x0102_a54c),
+                (0x164, 4, 0x0102_a538),
+                (0x16c, 4, 0x0102_a524),
+            ],
+        });
     }
 }
