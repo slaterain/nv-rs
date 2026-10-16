@@ -1351,6 +1351,8 @@ pub fn bhk_blend_controller_get_viewer_strings(
 /// with a body (`+0x10`), calls the body's virtual `+0xe4` with 4 and both refresh methods
 /// (`00561690`, `005617c0`) with `01267e30`; in every case then runs `00c9b470(object,
 /// key_time)`.
+// The nested tests follow the exe's branch order.
+#[allow(clippy::collapsible_if)]
 pub fn fn_00c9bdf0(e: &mut Engine, object: Ptr, key_time: f32) {
     if object.addr() != 0 && is_node(e, object.addr()) {
         let me = object.addr();

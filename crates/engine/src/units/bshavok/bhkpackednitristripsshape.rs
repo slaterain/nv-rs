@@ -761,7 +761,7 @@ fn build_subpart_geometry(
         e.call(TRI_SHAPE_DATA_CONSTRUCT, &args![memory]).u32()
     };
     let vertex_count = u32::from(e.mem.u16(record + 4));
-    let bytes = vertex_count.checked_mul(12).unwrap_or(u32::MAX);
+    let bytes = vertex_count.saturating_mul(12);
     let vertices = e
         .call(MEMORY_MANAGER_ALLOCATE, &args![MEMORY_MANAGER, bytes])
         .u32();
@@ -784,7 +784,7 @@ fn build_subpart_geometry(
         &args![data, vertex_count, vertices, 0u32, 0u32, 0u32, 0u32, 0u32],
     );
     let triangle_count = triangles & 0xffff;
-    let bytes = (triangle_count * 3).checked_mul(2).unwrap_or(u32::MAX);
+    let bytes = (triangle_count * 3).saturating_mul(2);
     let indices = e
         .call(MEMORY_MANAGER_ALLOCATE, &args![MEMORY_MANAGER, bytes])
         .u32();

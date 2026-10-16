@@ -30,7 +30,7 @@ const STRING_DESTRUCT: u32 = 0x0043_81b0;
 /// The byte size of an array of `count` 4-byte items, saturated to `0xFFFFFFFF` when the
 /// multiplication overflows (the code ORs in an all-ones word on carry).
 fn array_bytes(count: u32) -> u32 {
-    count.checked_mul(4).unwrap_or(u32::MAX)
+    count.saturating_mul(4)
 }
 
 // Translated from 00cc1730 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -54,7 +54,7 @@ pub fn bhk_pose_array_load_binary(e: &mut Engine, this: Ptr, stream: u32) {
     stream_transfer(e, reader, 8, this + 8, 4);
     let names = e.mem.u32(this + 8);
     if names != 0 {
-        let size = array_bytes(names).checked_add(4).unwrap_or(u32::MAX);
+        let size = array_bytes(names).saturating_add(4);
         let block = e.call(POOL_ALLOCATE, &args![POOL, size]).u32();
         let array = if block == 0 {
             0

@@ -1995,7 +1995,7 @@ mod tests {
 
     /// Hands out link objects in order for `GetObjectFromLinkID`.
     fn install_link_objects(e: &mut Engine, objects: &[u32]) {
-        let objects = RefCell::new(objects.to_vec().into_iter());
+        let objects = RefCell::new(Vec::from(objects).into_iter());
         e.register_double(STREAM_GET_OBJECT_FROM_LINK_ID, move |_, _| {
             ret(objects.borrow_mut().next().unwrap())
         });

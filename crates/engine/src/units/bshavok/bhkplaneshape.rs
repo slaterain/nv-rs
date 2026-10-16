@@ -31,7 +31,9 @@ const NAME_CONSTANT: u32 = 0x010c_a6a4;
 /// Helpers of the game heap.
 const OPERATOR_NEW: u32 = 0x00aa_13e0;
 const SIZED_DELETE: u32 = 0x00aa_1460;
+#[cfg(test)]
 const MEMORY_MANAGER: u32 = 0x011f_6238;
+#[cfg(test)]
 const MEMORY_MANAGER_ALLOCATE: u32 = 0x00aa_3e40;
 
 /// Base class methods: the `bhkRefObject` constructor (`00c87c30`), the destructor body of the

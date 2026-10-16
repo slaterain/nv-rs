@@ -686,6 +686,7 @@ fn index_array_push(e: &mut Engine, array: u32, value: u16) {
 /// Last, a pointer wrapper (`00ccbaa0`) holding the data, with the float at `source + 8`
 /// at `+8` and the 16 bytes at `source + 0x10` at `+0x10`, goes to this shape's virtual slot
 /// `0xB0` (`Init`), is destroyed (`00ca5620`) and the index array's data is freed.
+#[allow(clippy::needless_late_init)]
 pub fn fn_00ccc980(e: &mut Engine, this: Ptr, source: u32) {
     let (word, saved) = enter_scope(e);
     let mesh = e.mem.u32(source + 4);

@@ -674,6 +674,7 @@ fn update_holder(e: &mut Engine, this: Ptr<BhkLiquidAction>, holder: u32, step: 
             f32::from_bits(zero_bits),
         ];
         // ADDPS: gravity (the destination) plus the scaled velocity.
+        #[allow(clippy::assign_op_pattern)]
         for lane in 0..4 {
             lanes[lane] = gravity[lane] + lanes[lane];
         }
