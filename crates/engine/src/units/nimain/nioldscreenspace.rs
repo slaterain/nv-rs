@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::types::NiTArray;
 
 /// `NiScreenGeometry::ms_RTTI` (the class's `NiRTTI` record).
 const NI_SCREEN_GEOMETRY_RTTI: u32 = 0x011f_5e5c;
@@ -85,6 +86,80 @@ pub fn ni_screen_space_camera_is_equal(e: &mut Engine, this: Ptr, other: Ptr) ->
     e.call(JUMP_TARGET_00A90030, &args![this, other]).bool()
 }
 
+/// `00aa1070` and `00aa10f0`: the `cdecl` allocate (size) and free (block).
+const ALLOCATE: u32 = 0x00aa_1070;
+const FREE: u32 = 0x00aa_10f0;
+
+// Translated from 00a90180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `SetSize` of an `NiTArray`-shaped array of pointers
+/// (`thiscall`, one stack word; the layout is [`NiTArray`]: 16-bit capacity,
+/// used size and non-null count; the stream's group array is one). Does nothing when
+/// `new_max` is the current capacity. When it is below the used size, the
+/// elements from `new_max` on are cleared (the non-null count goes down for
+/// each non-null one) and the used size becomes `new_max`. Then new storage of
+/// `new_max & 0xffff` pointers (`00aa1070`) takes the used elements and its
+/// other slots are zeroed, the old storage is freed (`00aa10f0`), and the
+/// capacity is the low 16 bits of `new_max`; for `new_max` 0 the pointer is
+/// null. All counts are 16-bit and wrap as the exe's do.
+pub fn fn_00a90180(e: &mut Engine, this: Ptr<NiTArray>, new_max: u32) {
+    if new_max == e.get(this, NiTArray::m_usMaxSize) as u32 {
+        return;
+    }
+    let low = new_max as u16;
+    if new_max < e.get(this, NiTArray::m_usSize) as u32 {
+        let mut index = low;
+        if index < e.get(this, NiTArray::m_usSize) {
+            loop {
+                let base = e.get(this, NiTArray::m_pBase);
+                let slot = base.wrapping_add(index as u32 * 4);
+                if e.mem.u32(slot) != 0 {
+                    e.mem.set_u32(slot, 0);
+                    let present = e.get(this, NiTArray::m_usESize);
+                    e.set(this, NiTArray::m_usESize, present.wrapping_sub(1));
+                }
+                index = index.wrapping_add(1);
+                if index >= e.get(this, NiTArray::m_usSize) {
+                    break;
+                }
+            }
+        }
+        e.set(this, NiTArray::m_usSize, low);
+    }
+    let old = e.get(this, NiTArray::m_pBase);
+    e.set(this, NiTArray::m_usMaxSize, low);
+    if new_max != 0 {
+        let storage = e.call(ALLOCATE, &args![(low as u32) * 4]).u32();
+        e.set(this, NiTArray::m_pBase, storage);
+        let size = e.get(this, NiTArray::m_usSize);
+        if size != 0 {
+            let mut index = 0u16;
+            loop {
+                let base = e.get(this, NiTArray::m_pBase);
+                let value = e.mem.u32(old.wrapping_add(index as u32 * 4));
+                e.mem.set_u32(base.wrapping_add(index as u32 * 4), value);
+                index = index.wrapping_add(1);
+                if index >= e.get(this, NiTArray::m_usSize) {
+                    break;
+                }
+            }
+        }
+        let mut index = e.get(this, NiTArray::m_usSize);
+        if index < e.get(this, NiTArray::m_usMaxSize) {
+            loop {
+                let base = e.get(this, NiTArray::m_pBase);
+                e.mem.set_u32(base.wrapping_add(index as u32 * 4), 0);
+                index = index.wrapping_add(1);
+                if index >= e.get(this, NiTArray::m_usMaxSize) {
+                    break;
+                }
+            }
+        }
+    } else {
+        e.set(this, NiTArray::m_pBase, 0);
+    }
+    e.call(FREE, &args![old]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -97,6 +172,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a9_0000, ni_screen_space_camera_load_binary(Ptr, Ptr)),
         entry!(0x00a9_0020, ni_screen_space_camera_save_binary(Ptr, Ptr)),
         entry!(0x00a9_0030, ni_screen_space_camera_is_equal(Ptr, Ptr) -> bool),
+        entry!(0x00a9_0180, fn_00a90180(Ptr<NiTArray>, u32)),
     ]
 }
 
@@ -207,5 +283,81 @@ mod tests {
         assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
         e.register(TARGET, |_, _| Ret::default());
         assert_eq!(e.call(THUNK, &args![0x1000u32, 0x2000u32]).u32(), 0);
+    }
+
+    /// An array with room for `max` pointers holding `items`.
+    fn array_fixture(max: u16, items: &[u32]) -> (Engine, Ptr<NiTArray>, u32) {
+        let mut e = Engine::new();
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(FREE, |_, _| Ret::default());
+        let array = e.new_object::<NiTArray>();
+        let base = e.mem.alloc(max as u32 * 4 + 4);
+        for (i, item) in items.iter().enumerate() {
+            e.mem.set_u32(base + i as u32 * 4, *item);
+        }
+        e.set(array, NiTArray::m_pBase, base);
+        e.set(array, NiTArray::m_usMaxSize, max);
+        e.set(array, NiTArray::m_usSize, items.len() as u16);
+        let present = items.iter().filter(|item| **item != 0).count();
+        e.set(array, NiTArray::m_usESize, present as u16);
+        (e, array, base)
+    }
+
+    #[test]
+    fn fn_00a90180_does_nothing_for_the_current_capacity() {
+        let (mut e, array, base) = array_fixture(4, &[0x10]);
+        e.call_log = Some(vec![]);
+        e.call(0x00a9_0180, &args![array, 4u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log.len(), 1);
+        assert_eq!(e.get(array, NiTArray::m_pBase), base);
+    }
+
+    #[test]
+    fn fn_00a90180_grows_copies_and_zeroes_the_rest() {
+        let (mut e, array, base) = array_fixture(3, &[0x10, 0, 0x30]);
+        e.call_log = Some(vec![]);
+        e.call(0x00a9_0180, &args![array, 6u32]);
+        let log = e.call_log.take().unwrap();
+        let allocations: Vec<_> = log.iter().filter(|call| call.0 == ALLOCATE).collect();
+        assert_eq!(allocations.len(), 1);
+        assert_eq!(allocations[0].1, args![24u32]);
+        let frees: Vec<_> = log.iter().filter(|call| call.0 == FREE).collect();
+        assert_eq!(frees.len(), 1);
+        assert_eq!(frees[0].1, args![base]);
+        assert_eq!(e.get(array, NiTArray::m_usMaxSize), 6);
+        assert_eq!(e.get(array, NiTArray::m_usSize), 3);
+        assert_eq!(e.get(array, NiTArray::m_usESize), 2);
+        let new = e.get(array, NiTArray::m_pBase);
+        let words: Vec<u32> = (0..6).map(|i| e.mem.u32(new + i * 4)).collect();
+        assert_eq!(words, vec![0x10, 0, 0x30, 0, 0, 0]);
+    }
+
+    #[test]
+    fn fn_00a90180_below_the_used_size_clears_the_cut_elements() {
+        let (mut e, array, base) = array_fixture(4, &[0x10, 0x20, 0, 0x40]);
+        e.call(0x00a9_0180, &args![array, 2u32]);
+        assert_eq!(e.get(array, NiTArray::m_usMaxSize), 2);
+        assert_eq!(e.get(array, NiTArray::m_usSize), 2);
+        assert_eq!(e.get(array, NiTArray::m_usESize), 2);
+        // The cut slots of the old block were cleared before the copy.
+        assert_eq!(e.mem.u32(base + 12), 0);
+        let new = e.get(array, NiTArray::m_pBase);
+        assert_eq!([e.mem.u32(new), e.mem.u32(new + 4)], [0x10, 0x20]);
+    }
+
+    #[test]
+    fn fn_00a90180_to_zero_drops_the_storage() {
+        let (mut e, array, base) = array_fixture(2, &[0x10]);
+        e.call_log = Some(vec![]);
+        e.call(0x00a9_0180, &args![array, 0u32]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().all(|call| call.0 != ALLOCATE));
+        let frees: Vec<_> = log.iter().filter(|call| call.0 == FREE).collect();
+        assert_eq!(frees[0].1, args![base]);
+        assert_eq!(e.get(array, NiTArray::m_pBase), 0);
+        assert_eq!(e.get(array, NiTArray::m_usMaxSize), 0);
+        assert_eq!(e.get(array, NiTArray::m_usSize), 0);
+        assert_eq!(e.get(array, NiTArray::m_usESize), 0);
     }
 }
