@@ -546,7 +546,7 @@ mod movement_tests {
         // The runtime data after the removed record moved down by its 0x20 bytes.
         assert_eq!(
             calls(&log, MEM_MOVE),
-            vec![vec![block + 0x10, block + 0x30, 0x40 - 0x30 + 0x00]]
+            vec![vec![block + 0x10, block + 0x30, 0x40 - 0x30]]
         );
         assert_eq!(e.mem.u32(master + 0xc4), 0x20);
         // The record array: record 2 moved into place 1 and the count dropped.

@@ -29,7 +29,7 @@ const ELEMENT_CONSTRUCTOR: u32 = 0x00b5_4620;
 /// `00b54620`) over the elements and answers the address of the first element.
 pub fn fn_00c1d790(e: &mut Engine, count: u32) -> Ptr {
     let bytes: u32 = (u64::from(count) * 4).try_into().unwrap_or(u32::MAX);
-    let total = bytes.checked_add(4).unwrap_or(u32::MAX);
+    let total = bytes.saturating_add(4);
     let block = e.call(0x00aa_3e40, &args![MEMORY_MANAGER, total]).u32();
     if block == 0 {
         return Ptr::NULL;

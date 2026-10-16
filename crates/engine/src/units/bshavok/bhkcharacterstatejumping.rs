@@ -234,7 +234,7 @@ mod movement_tests {
         assert!((out[2] - speed).abs() < 1e-3);
         assert!((out[3] - 4.0).abs() < 1e-5);
         assert_eq!(e.mem.u32(c + 0x520), 2);
-        assert_eq!(e.mem.u32(c + 0x414), 0xffff_ffff & 0xfffd_feff);
+        assert_eq!(e.mem.u32(c + 0x414), 0xfffd_feff);
         let calls = log.borrow();
         assert!(calls.contains(&(UPDATE_STATE, vec![c])));
         assert!(calls.contains(&(GET_CURRENT_STATE, vec![manager, 5])));
