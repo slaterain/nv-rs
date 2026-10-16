@@ -104,3 +104,79 @@ mod a07_first_word_tests {
         0x00d5_6f10
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type ConstructorLog = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    /// Double for a constructor: logs its argument words and writes `vtable` at the start of `this`.
+    fn constructor_double(e: &mut Engine, address: u32, vtable: u32) -> ConstructorLog {
+        let log: ConstructorLog = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&log);
+        e.register_double(address, move |e, a| {
+            seen.borrow_mut().push(a.to_vec());
+            e.mem.set_u32(a[0], vtable);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        log
+    }
+
+    #[test]
+    fn fn_00d4b1a0_constructs_a_temporary_and_returns_its_vtable_word() {
+        let mut e = Engine::new();
+        let log = constructor_double(&mut e, 0x00d4_a170, 0x0a0b_0c0d);
+        let result = e.call(0x00d4_b1a0, &args![]).u32();
+        assert_eq!(result, 0x0a0b_0c0d);
+        let calls = log.borrow();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].len(), 2);
+        assert_ne!(calls[0][0], 0);
+        assert_eq!(calls[0][1], 0);
+    }
+
+    #[test]
+    fn fn_00d4b200_constructs_a_temporary_and_returns_its_vtable_word() {
+        let mut e = Engine::new();
+        let log = constructor_double(&mut e, 0x00d4_9c40, 0x0a0b_0c0d);
+        let result = e.call(0x00d4_b200, &args![]).u32();
+        assert_eq!(result, 0x0a0b_0c0d);
+        let calls = log.borrow();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].len(), 2);
+        assert_ne!(calls[0][0], 0);
+        assert_eq!(calls[0][1], 0);
+    }
+
+    #[test]
+    fn fn_00d4b260_constructs_a_temporary_and_returns_its_vtable_word() {
+        let mut e = Engine::new();
+        let log = constructor_double(&mut e, 0x00d4_a180, 0x0a0b_0c0d);
+        let result = e.call(0x00d4_b260, &args![]).u32();
+        assert_eq!(result, 0x0a0b_0c0d);
+        let calls = log.borrow();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].len(), 2);
+        assert_ne!(calls[0][0], 0);
+        assert_eq!(calls[0][1], 0);
+    }
+
+    #[test]
+    fn fn_00d4b330_constructs_a_temporary_and_returns_its_vtable_word() {
+        let mut e = Engine::new();
+        let log = constructor_double(&mut e, 0x00d5_6f10, 0x0a0b_0c0d);
+        let result = e.call(0x00d4_b330, &args![]).u32();
+        assert_eq!(result, 0x0a0b_0c0d);
+        let calls = log.borrow();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].len(), 2);
+        assert_ne!(calls[0][0], 0);
+        assert_eq!(calls[0][1], 0);
+    }
+}

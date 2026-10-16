@@ -201,29 +201,9 @@ pub fn fn_00e01040(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
-// Translated from 00e01230 (decompiled, FalloutNV.exe 1.4.0.525)
-/// No name in the engine map. Builds a temporary object in a 0x40-byte stack buffer by calling `00e01250` on it (flag word 0; the callee pops it) and returns the first word of that buffer, which is what the code reads back after the call. The class is unconfirmed.
-pub fn fn_00e01230(e: &mut Engine) -> u32 {
-    e.with_stack(0x40, |e, buffer| {
-        e.call(0x00e0_1250, &args![buffer, 0u32]);
-        e.mem.u32(buffer.addr())
-    })
-}
-
-// Translated from 00e02730 (decompiled, FalloutNV.exe 1.4.0.525)
-/// No name in the engine map. Builds a temporary object in a 0x20-byte stack buffer by calling `00e4af80` on it (flag word 0; the callee pops it) and returns the first word of that buffer, which is what the code reads back after the call. The class is unconfirmed.
-pub fn fn_00e02730(e: &mut Engine) -> u32 {
-    e.with_stack(0x20, |e, buffer| {
-        e.call(0x00e4_af80, &args![buffer, 0u32]);
-        e.mem.u32(buffer.addr())
-    })
-}
-
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x00e0_1230, fn_00e01230() -> u32),
-        entry!(0x00e0_2730, fn_00e02730() -> u32),
         entry!(0x00e0_0070, deleting_destructor_00e00070(Ptr, u8) -> Ptr),
         entry!(0x00e0_0990, deleting_destructor_00e00990(Ptr, u8) -> Ptr),
         entry!(0x00e0_1010, deleting_destructor_00e01010(Ptr, u8) -> Ptr),

@@ -13,9 +13,39 @@ pub fn fn_00e00f90(e: &mut Engine) -> u32 {
     })
 }
 
+// Translated from 00e00ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant 0x010d_0e5c.
+pub fn return_constant_00e00ed0(_e: &mut Engine) -> u32 {
+    0x010d_0e5c
+}
+
+// Translated from 00e00f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant 0x010d_102c.
+pub fn return_constant_00e00f40(_e: &mut Engine) -> u32 {
+    0x010d_102c
+}
+
+// Translated from 00e010b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant 0x010d_10c4.
+pub fn return_constant_00e010b0(_e: &mut Engine) -> u32 {
+    0x010d_10c4
+}
+
+// Translated from 00e01130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant 0x010e_901c.
+pub fn return_constant_00e01130(_e: &mut Engine) -> u32 {
+    0x010e_901c
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00e0_0f90, fn_00e00f90() -> u32)]
+    vec![
+        entry!(0x00e0_0f90, fn_00e00f90() -> u32),
+        entry!(0x00e00ed0, return_constant_00e00ed0() -> u32),
+        entry!(0x00e00f40, return_constant_00e00f40() -> u32),
+        entry!(0x00e010b0, return_constant_00e010b0() -> u32),
+        entry!(0x00e01130, return_constant_00e01130() -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -56,4 +86,65 @@ mod a07_first_word_tests {
         0x00e0_0f90,
         0x00e0_0fb0
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type ConstructorLog = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    /// Double for a constructor: logs its argument words and writes `vtable` at the start of `this`.
+    fn constructor_double(e: &mut Engine, address: u32, vtable: u32) -> ConstructorLog {
+        let log: ConstructorLog = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&log);
+        e.register_double(address, move |e, a| {
+            seen.borrow_mut().push(a.to_vec());
+            e.mem.set_u32(a[0], vtable);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        log
+    }
+
+    #[test]
+    fn return_constant_00e00ed0_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00e0_0ed0, &args![]).u32(), 0x010d_0e5c);
+    }
+
+    #[test]
+    fn return_constant_00e00f40_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00e0_0f40, &args![]).u32(), 0x010d_102c);
+    }
+
+    #[test]
+    fn fn_00e00f90_constructs_a_temporary_and_returns_its_vtable_word() {
+        let mut e = Engine::new();
+        let log = constructor_double(&mut e, 0x00e0_0fb0, 0x0a0b_0c0d);
+        let result = e.call(0x00e0_0f90, &args![]).u32();
+        assert_eq!(result, 0x0a0b_0c0d);
+        let calls = log.borrow();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].len(), 2);
+        assert_ne!(calls[0][0], 0);
+        assert_eq!(calls[0][1], 0);
+    }
+
+    #[test]
+    fn return_constant_00e010b0_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00e0_10b0, &args![]).u32(), 0x010d_10c4);
+    }
+
+    #[test]
+    fn return_constant_00e01130_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00e0_1130, &args![]).u32(), 0x010e_901c);
+    }
 }
