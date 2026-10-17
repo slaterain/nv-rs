@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::units::havok_sdk::hkgeometryprocessing::compare_flags;
 
 /// The memory router (`0x00c8_5750`): its field `+0x10` is the allocator the block is freed through.
 const MEMORY_ROUTER: u32 = 0x00c8_5750;
@@ -36,12 +37,46 @@ pub fn fn_00ddcd60(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+// Translated from 00ddcda0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl: `out` (a pointer to a byte), `a`, `b` (pointers to records
+/// whose `float` at `+8` is compared)). Writes 1 at `out` when `a.f8 < b.f8` (x87 compare; a NaN
+/// gives 0), else 0, and answers `out` (the hidden result pointer of a returned `hkBool`).
+pub fn fn_00ddcda0(e: &mut Engine, out: u32, a: u32, b: u32) -> u32 {
+    let first = x87_load32(e.mem.u32(a + 8));
+    let second = x87_load32(e.mem.u32(b + 8));
+    let flags = compare_flags(second, first);
+    e.mem.set_u8(out, u8::from(flags & 0x41 == 0));
+    out
+}
+
+// Translated from 00ddcdd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl: `word`, `index`, `value`). Replaces the 5-bit field number
+/// `index` of `word` by `value`: with `shift = (index * 5) & 0x1f` the answer is
+/// `(word & !(0x1f << shift)) | (value << shift)`.
+pub fn fn_00ddcdd0(_e: &mut Engine, word: u32, index: u32, value: u32) -> u32 {
+    let shift = index.wrapping_mul(5) & 0x1f;
+    (!(0x1fu32 << shift) & word) | (value << shift)
+}
+
+// Translated from 00ddcdf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl: `word` (its low 16 bits are used), `index` (a `char`: its low
+/// byte)). Answers the 5-bit field number `index` of the `u16`: `(word >> shift) & 0x1f` with
+/// `shift = (index as char * 5) & 0x1f` (the code multiplies the byte with `IMUL CL`; only the
+/// low five bits of the product are used).
+pub fn fn_00ddcdf0(_e: &mut Engine, word: u32, index: u32) -> u32 {
+    let shift = (i32::from(index as u8 as i8) * 5) as u32 & 0x1f;
+    (u32::from(word as u16) >> shift) & 0x1f
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00dd_cd70, deleting_destructor_00ddcd70(Ptr, u8) -> Ptr),
         entry!(0x00dd_cd50, fn_00ddcd50(Ptr, u32) -> u32),
         entry!(0x00dd_cd60, fn_00ddcd60(Ptr, u32) -> u32),
+        entry!(0x00ddcda0, fn_00ddcda0(u32, u32, u32) -> u32),
+        entry!(0x00ddcdd0, fn_00ddcdd0(u32, u32, u32) -> u32),
+        entry!(0x00ddcdf0, fn_00ddcdf0(u32, u32) -> u32),
     ]
 }
 
@@ -140,5 +175,56 @@ mod a07_thunk_tests {
     #[test]
     fn thunk_00ddcd60() {
         assert_eq!(check(0x00dd_cd60, 0x00dd_cd70, 0x8), 0xdead_beef);
+    }
+}
+
+#[cfg(test)]
+mod a07_bitfield_tests {
+    use super::*;
+
+    fn record(e: &mut Engine, bits: u32) -> u32 {
+        let at = e.mem.alloc(0x10);
+        e.mem.set_u32(at + 8, bits);
+        at
+    }
+
+    #[test]
+    fn the_comparison_writes_a_byte_and_answers_its_address() {
+        let mut e = Engine::new();
+        let out = e.mem.alloc(8);
+        let one = record(&mut e, 1.0f32.to_bits());
+        let two = record(&mut e, 2.0f32.to_bits());
+        let nan = record(&mut e, f32::NAN.to_bits());
+        for (a, b, expected) in [
+            (one, two, 1u8),
+            (two, one, 0),
+            (one, one, 0),
+            (one, nan, 0),
+            (nan, one, 0),
+        ] {
+            e.mem.set_u8(out, 9);
+            assert_eq!(e.call(0x00dd_cda0, &args![out, a, b]).u32(), out);
+            assert_eq!(e.mem.u8(out), expected);
+        }
+    }
+
+    #[test]
+    fn a_five_bit_field_is_replaced_and_read() {
+        let mut e = Engine::new();
+        // Field 1 occupies bits 5 to 9.
+        assert_eq!(
+            e.call(0x00dd_cdd0, &args![0xffffu32, 1u32, 3u32]).u32(),
+            0xfc7f
+        );
+        // The shift is (index * 5) mod 32: index 7 is shift 3.
+        assert_eq!(
+            e.call(0x00dd_cdd0, &args![0u32, 7u32, 0x1fu32]).u32(),
+            0x1f << 3
+        );
+        assert_eq!(e.call(0x00dd_cdf0, &args![0x1234u32, 2u32]).u32(), 4);
+        // Only the low word is used, and the index is a signed byte.
+        assert_eq!(e.call(0x00dd_cdf0, &args![0xabcd_1234u32, 2u32]).u32(), 4);
+        assert_eq!(e.call(0x00dd_cdf0, &args![0xffffu32, 0xffu32]).u32(), 0);
+        assert_eq!(e.call(0x00dd_cdf0, &args![0x8000u32, 3u32]).u32(), 1);
     }
 }

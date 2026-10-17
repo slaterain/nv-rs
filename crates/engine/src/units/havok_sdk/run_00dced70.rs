@@ -13,9 +13,40 @@ pub fn fn_00dced70(e: &mut Engine) -> u32 {
     })
 }
 
+/// The `double` the first word of a record has added to it (`010c9300`, 2^-23).
+const RECORD_TINY: u32 = 0x010c_9300;
+
+// Translated from 00dced90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl: `first`, `second`, `cursor`; the vectors are 16 bytes).
+/// Appends a 0x20-byte record at the address held in the word `cursor` points at: the vector
+/// `first` at `+0`, the vector `second` at `+0x10`; the first `float` of the record then has the
+/// `double` at `010c9300` added to it (x87, stored back as a `float`) and its low byte is
+/// replaced by 0x19. Finally the word at `cursor`
+/// advances by 0x20.
+pub fn fn_00dced90(e: &mut Engine, first: u32, second: u32, cursor: u32) {
+    let at = e.mem.u32(cursor);
+    let head = [0, 1, 2, 3].map(|i| e.mem.u32(first + 4 * i));
+    for (i, word) in head.into_iter().enumerate() {
+        e.mem.set_u32(at + 4 * i as u32, word);
+    }
+    let value = e.mem.u32(at);
+    let tail = [0, 1, 2, 3].map(|i| e.mem.u32(second + 4 * i));
+    let tiny = e.mem.f64(RECORD_TINY);
+    for (i, word) in tail.into_iter().enumerate() {
+        e.mem.set_u32(at + 0x10 + 4 * i as u32, word);
+    }
+    e.mem
+        .set_u32(at, x87_store32(x87_add(x87_load32(value), tiny)));
+    e.mem.set_u8(at, 0x19);
+    e.mem.set_u32(cursor, at.wrapping_add(0x20));
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00dc_ed70, fn_00dced70() -> u32)]
+    vec![
+        entry!(0x00dc_ed70, fn_00dced70() -> u32),
+        entry!(0x00dced90, fn_00dced90(u32, u32, u32)),
+    ]
 }
 
 #[cfg(test)]
@@ -92,5 +123,39 @@ mod tests {
         assert_eq!(calls[0].len(), 2);
         assert_ne!(calls[0][0], 0);
         assert_eq!(calls[0][1], 0);
+    }
+}
+
+#[cfg(test)]
+mod a07_vector_tests {
+    use super::*;
+
+    #[test]
+    fn a_record_of_two_vectors_is_appended_and_its_first_word_tagged() {
+        let mut e = Engine::new();
+        e.map(RECORD_TINY, 16);
+        e.mem.set_f64(RECORD_TINY, f64::from(f32::EPSILON));
+        let first = e.mem.alloc(16);
+        let second = e.mem.alloc(16);
+        for i in 0..4 {
+            e.mem.set_f32(first + 4 * i, 1.0 + i as f32);
+            e.mem.set_u32(second + 4 * i, 0x200 + i);
+        }
+        let area = e.mem.alloc(0x40);
+        let cursor = e.mem.alloc(4);
+        e.mem.set_u32(cursor, area);
+        e.call(0x00dc_ed90, &args![first, second, cursor]);
+        // 1.0 + 2^-23 is 0x3f800001; the low byte becomes 0x19.
+        assert_eq!(e.mem.u32(area), 0x3f80_0019);
+        assert_eq!(e.mem.f32(area + 4), 2.0);
+        assert_eq!(e.mem.f32(area + 8), 3.0);
+        assert_eq!(e.mem.f32(area + 0xc), 4.0);
+        let tail: Vec<u32> = (0..4).map(|i| e.mem.u32(area + 0x10 + 4 * i)).collect();
+        assert_eq!(tail, vec![0x200, 0x201, 0x202, 0x203]);
+        assert_eq!(e.mem.u32(cursor), area + 0x20);
+        // A second record goes after the first.
+        e.call(0x00dc_ed90, &args![first, second, cursor]);
+        assert_eq!(e.mem.u32(area + 0x20), 0x3f80_0019);
+        assert_eq!(e.mem.u32(cursor), area + 0x40);
     }
 }

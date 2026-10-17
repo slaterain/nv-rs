@@ -36,12 +36,22 @@ pub fn fn_00ddcc00(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+/// The word at `01269cdc` (a global the exe keeps; its role is not confirmed).
+const GLOBAL_WORD: u32 = 0x0126_9cdc;
+
+// Translated from 00ddcbe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): answers the word at `01269cdc`.
+pub fn fn_00ddcbe0(e: &mut Engine) -> u32 {
+    e.global(GLOBAL_WORD)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00dd_cc10, deleting_destructor_00ddcc10(Ptr, u8) -> Ptr),
         entry!(0x00dd_cbf0, fn_00ddcbf0(Ptr, u32) -> u32),
         entry!(0x00dd_cc00, fn_00ddcc00(Ptr, u32) -> u32),
+        entry!(0x00ddcbe0, fn_00ddcbe0() -> u32),
     ]
 }
 
@@ -140,5 +150,18 @@ mod a07_thunk_tests {
     #[test]
     fn thunk_00ddcc00() {
         assert_eq!(check(0x00dd_cc00, 0x00dd_cc10, 0x8), 0xdead_beef);
+    }
+}
+
+#[cfg(test)]
+mod a07_global_tests {
+    use super::*;
+
+    #[test]
+    fn the_global_word_is_answered() {
+        let mut e = Engine::new();
+        e.map(GLOBAL_WORD, 4);
+        e.set_global(GLOBAL_WORD, 0xbeef_u32);
+        assert_eq!(e.call(0x00dd_cbe0, &args![]).u32(), 0xbeef);
     }
 }
