@@ -50,6 +50,10 @@ batch is merged or listed below; the next account continues from here.
   switches the FPU to 24-bit unless the device is created with
   `D3DCREATE_FPU_PRESERVE`. Check the exe's CreateDevice flags and the game
   thread's control word: it changes x87 results everywhere.
+- **SSE flush-to-zero.** Havok's job worker thread (00d2cfb0) sets the
+  MXCSR flush-to-zero bit, so SSE results on Havok threads flush
+  denormals. The engine does not model MXCSR yet (00d2cfb0 is marked
+  incomplete for it); decide how the stepped threads carry it.
 
 **Machinery notes:**
 - Slot rules added today (private slot_rules.txt): avoid clippy's
