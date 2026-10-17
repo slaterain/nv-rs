@@ -482,7 +482,7 @@ pub fn fn_00b41110(e: &mut Engine, this: Ptr<CLeafLodEngine>, vector: [u32; 6]) 
                             let candidate = e.call(ITERATOR_ELEMENT, &args![it_b]).u32();
                             let matched = e.mem.u32(candidate);
                             e.mem.set_u32(pair + 4, matched);
-                            best_index = index as i32;
+                            best_index = index;
                         }
                     }
                     index = index.wrapping_add(1);

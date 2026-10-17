@@ -643,7 +643,7 @@ mod tests {
         // identity, so the top pole is straight above the centre rather than along the axis.
         let ends = ([0.0; 3], [0.01, 0.0, 4.0]);
         let (_, _, capsule) = build(ends, 1.0, 2, 8, [0.0; 3], true);
-        near(capsule.vertices[0], [0.005, 0.0, 5.0000062]);
+        near(capsule.vertices[0], [0.005, 0.0, 5.000_006]);
     }
 
     #[test]

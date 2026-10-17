@@ -4767,8 +4767,8 @@ mod tests {
         assert_eq!(e.mem.u16(lods + 0x0C), 2);
         // `+0x20`: block + (groups * 16 * texture + angle * 16) * 4.
         let slots = e.mem.u32(lods + 0x20);
-        assert_eq!(e.mem.u32(slots), block + (2 * 16 * 1 + 2 * 16) * 4);
-        assert_eq!(e.mem.u32(slots + 4), block + (0 + 16) * 4);
+        assert_eq!(e.mem.u32(slots), block + (2 * 16 + 2 * 16) * 4);
+        assert_eq!(e.mem.u32(slots + 4), block + 16 * 4);
         // Vertex weighting: positions, `1 - wind weight`, wind matrix bytes.
         assert_eq!(
             floats(&e, e.mem.u32(lods + 0x40), 6),

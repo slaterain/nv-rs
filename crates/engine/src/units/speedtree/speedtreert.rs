@@ -954,7 +954,6 @@ pub fn fn_00b061e0(e: &mut Engine, this: Ptr) {
 /// Hands two output addresses to the engine (unnamed in the engine map): `00b2bcf0` stores the
 /// engine's `+0x4C` and `+0x50` floats through them (`00b2bd20`, Ghidra's `CTreeEngine::SetSize`,
 /// sets the same pair).
-
 pub fn fn_00b06260(e: &mut Engine, this: Ptr<CSpeedTreeRT>, size: u32, variance: u32) {
     let engine = e.get(this, CSpeedTreeRT::m_pEngine);
     e.call(0x00b2_bcf0, &args![engine, size, variance]);
@@ -2884,7 +2883,8 @@ fn get_geometry_record(
         .wrapping_sub(e.mem.u32(coords + 0x0C)) as i32)
         >> 2;
     e.mem.set_u16(base + 0x10, ((floats as u32) / 3) as u16);
-    let getters: [(u32, fn(&mut Engine, Ptr) -> u32); 9] = [
+    type Getter = fn(&mut Engine, Ptr) -> u32;
+    let getters: [(u32, Getter); 9] = [
         (0x14, fn_00b0b4b0),
         (0x24, fn_00b0b530),
         (0x18, fn_00b0b5b0),
