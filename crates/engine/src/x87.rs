@@ -64,22 +64,22 @@ fn nan_result(a: f64, b: f64) -> Option<f64> {
 
 /// x87 `FADD`: `a + b` with the x87 choice of NaN ([`nan_result`]).
 pub fn x87_add(a: f64, b: f64) -> f64 {
-    nan_result(a, b).unwrap_or_else(|| a + b)
+    nan_result(a, b).unwrap_or(a + b)
 }
 
 /// x87 `FSUB`: `a - b` with the x87 choice of NaN.
 pub fn x87_sub(a: f64, b: f64) -> f64 {
-    nan_result(a, b).unwrap_or_else(|| a - b)
+    nan_result(a, b).unwrap_or(a - b)
 }
 
 /// x87 `FMUL`: `a * b` with the x87 choice of NaN.
 pub fn x87_mul(a: f64, b: f64) -> f64 {
-    nan_result(a, b).unwrap_or_else(|| a * b)
+    nan_result(a, b).unwrap_or(a * b)
 }
 
 /// x87 `FDIV`: `a / b` with the x87 choice of NaN.
 pub fn x87_div(a: f64, b: f64) -> f64 {
-    nan_result(a, b).unwrap_or_else(|| a / b)
+    nan_result(a, b).unwrap_or(a / b)
 }
 
 /// A `float` memory operand of an x87 arithmetic instruction (`FMUL dword
