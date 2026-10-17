@@ -13,9 +13,35 @@ pub fn fn_00dff8b0(e: &mut Engine) -> u32 {
     })
 }
 
+// Translated from 00dff8d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a constructor chain that the compiler collapsed (`this` in `ECX`;
+/// the one stack word is never read, `RET 4`). It writes the words at `+8`, `+0xc`, `+0x10`,
+/// `+0x14` and `+0x30` with the base-class values (`010c3b80`, `010c3b98`, `010c3bac`,
+/// `010c3b8c`, `0102f13c`), then the vtable word at `+0` (`010e7700`) and the five words again
+/// with the final values (`010e76f4`, `010e76e0`, `010e76d4`, `010e76c8`, `010e76ac`). Returns
+/// `this` (`EAX`). The class is unconfirmed.
+pub fn fn_00dff8d0(e: &mut Engine, this: Ptr, _unused_1: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base + 0x8, 0x010c_3b80);
+    e.mem.set_u32(base + 0xc, 0x010c_3b98);
+    e.mem.set_u32(base + 0x10, 0x010c_3bac);
+    e.mem.set_u32(base + 0x14, 0x010c_3b8c);
+    e.mem.set_u32(base + 0x30, 0x0102_f13c);
+    e.mem.set_u32(base, 0x010e_7700);
+    e.mem.set_u32(base + 0x8, 0x010e_76f4);
+    e.mem.set_u32(base + 0xc, 0x010e_76e0);
+    e.mem.set_u32(base + 0x10, 0x010e_76d4);
+    e.mem.set_u32(base + 0x14, 0x010e_76c8);
+    e.mem.set_u32(base + 0x30, 0x010e_76ac);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00df_f8b0, fn_00dff8b0() -> u32)]
+    vec![
+        entry!(0x00df_f8b0, fn_00dff8b0() -> u32),
+        entry!(0x00df_f8d0, fn_00dff8d0(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -92,5 +118,36 @@ mod tests {
         assert_eq!(calls[0].len(), 2);
         assert_ne!(calls[0][0], 0);
         assert_eq!(calls[0][1], 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_a05 {
+    use crate::prelude::*;
+
+    /// The final vtable words are in place and `this` comes back; neighbours are untouched.
+    #[test]
+    fn fn_00dff8d0_writes_the_final_vtable_words() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x40);
+        e.mem.write(this, &[0x33; 0x40]);
+        assert_eq!(e.call(0x00df_f8d0, &args![this, 0u32]).u32(), this);
+        let words: Vec<u32> = [0x0, 0x8, 0xc, 0x10, 0x14, 0x30]
+            .iter()
+            .map(|offset| e.mem.u32(this + offset))
+            .collect();
+        assert_eq!(
+            words,
+            [
+                0x010e_7700,
+                0x010e_76f4,
+                0x010e_76e0,
+                0x010e_76d4,
+                0x010e_76c8,
+                0x010e_76ac
+            ]
+        );
+        assert_eq!(e.mem.u32(this + 0x4), 0x3333_3333);
+        assert_eq!(e.mem.u32(this + 0x18), 0x3333_3333);
     }
 }

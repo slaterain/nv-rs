@@ -40,6 +40,49 @@ pub fn fn_00dff9f0(e: &mut Engine) -> u32 {
     })
 }
 
+// Translated from 00dff9b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: when `object` is not null, writes the vtable word `010cc2fc`, runs
+/// `00cb0a70` (an `hkStringPtr` function, `this` = `object + 0x14`, one stack word `extra`) and
+/// writes the vtable word `010d0994`. The function takes two stack words and pops none (`RET`),
+/// and returns nothing. The class is unconfirmed.
+pub fn fn_00dff9b0(e: &mut Engine, object: Ptr, extra: u32) {
+    if object.addr() != 0 {
+        e.mem.set_u32(object.addr(), 0x010c_c2fc);
+        e.call(0x00cb_0a70, &args![object.addr() + 0x14, extra]);
+        e.mem.set_u32(object.addr(), 0x010d_0994);
+    }
+}
+
+// Translated from 00dffa90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a constructor chain that the compiler collapsed (`this` in `ECX`;
+/// the one stack word is never read, `RET 4`). It writes the words at `+8`, `+0xc`, `+0x10`,
+/// `+0x14` and `+0x30` with the base-class values (`010c3b80`, `010c3b98`, `010c3bac`,
+/// `010c3b8c`, `010cb1e4`), then the vtable word at `+0` (`010e7874`) and the five words again
+/// with the final values (`010e7868`, `010e7854`, `010e7848`, `010e783c`, `010e781c`). Returns
+/// `this` (`EAX`). The class is unconfirmed.
+pub fn fn_00dffa90(e: &mut Engine, this: Ptr, _unused_1: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base + 0x8, 0x010c_3b80);
+    e.mem.set_u32(base + 0xc, 0x010c_3b98);
+    e.mem.set_u32(base + 0x10, 0x010c_3bac);
+    e.mem.set_u32(base + 0x14, 0x010c_3b8c);
+    e.mem.set_u32(base + 0x30, 0x010c_b1e4);
+    e.mem.set_u32(base, 0x010e_7874);
+    e.mem.set_u32(base + 0x8, 0x010e_7868);
+    e.mem.set_u32(base + 0xc, 0x010e_7854);
+    e.mem.set_u32(base + 0x10, 0x010e_7848);
+    e.mem.set_u32(base + 0x14, 0x010e_783c);
+    e.mem.set_u32(base + 0x30, 0x010e_781c);
+    this
+}
+
+// Translated from 00dffaf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant `0x0126_d658`, the
+/// address of a data object.
+pub fn return_constant_00dffaf0(_e: &mut Engine) -> u32 {
+    0x0126_d658
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -47,6 +90,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00df_f990, fn_00dff990(Ptr, u32) -> u32),
         entry!(0x00df_f9a0, fn_00dff9a0(Ptr, u32) -> u32),
         entry!(0x00dff9f0, fn_00dff9f0() -> u32),
+        entry!(0x00df_f9b0, fn_00dff9b0(Ptr, u32)),
+        entry!(0x00df_fa90, fn_00dffa90(Ptr, u32) -> Ptr),
+        entry!(0x00df_faf0, return_constant_00dffaf0() -> u32),
     ]
 }
 
@@ -204,5 +250,60 @@ mod record_tests {
         assert_eq!(calls[0].len(), 2);
         assert_ne!(calls[0][0], 0);
         assert_eq!(calls[0][1], 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_a05 {
+    use crate::prelude::*;
+
+    /// A null object does nothing; otherwise the vtable word ends at the second value and the
+    /// string function runs in between on `object + 0x14`, seeing the first value.
+    #[test]
+    fn fn_00dff9b0_runs_the_string_function_between_the_vtable_writes() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x20);
+        e.register_double(0x00cb_0a70, move |e, a| {
+            assert_eq!(a, [object + 0x14, 7]);
+            assert_eq!(e.mem.u32(object), 0x010c_c2fc);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00df_f9b0, &args![0u32, 7u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        e.call(0x00df_f9b0, &args![object, 7u32]);
+        assert_eq!(e.mem.u32(object), 0x010d_0994);
+    }
+
+    /// The final vtable words are in place and `this` comes back; neighbours are untouched.
+    #[test]
+    fn fn_00dffa90_writes_the_final_vtable_words() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x40);
+        e.mem.write(this, &[0x33; 0x40]);
+        assert_eq!(e.call(0x00df_fa90, &args![this, 0u32]).u32(), this);
+        let words: Vec<u32> = [0x0, 0x8, 0xc, 0x10, 0x14, 0x30]
+            .iter()
+            .map(|offset| e.mem.u32(this + offset))
+            .collect();
+        assert_eq!(
+            words,
+            [
+                0x010e_7874,
+                0x010e_7868,
+                0x010e_7854,
+                0x010e_7848,
+                0x010e_783c,
+                0x010e_781c
+            ]
+        );
+        assert_eq!(e.mem.u32(this + 0x4), 0x3333_3333);
+        assert_eq!(e.mem.u32(this + 0x18), 0x3333_3333);
+    }
+
+    #[test]
+    fn return_constant_00dffaf0_returns_the_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00df_faf0, &args![]).u32(), 0x0126_d658);
     }
 }

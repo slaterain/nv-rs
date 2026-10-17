@@ -132,6 +132,136 @@ pub fn return_constant_00e00820(_e: &mut Engine) -> u32 {
     0x010e_8824
 }
 
+// Translated from 00e001c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: when `object` is not null, writes the vtable word `010cc2fc`, runs
+/// `00cb0a70` (an `hkStringPtr` function, `this` = `object + 0x14`, one stack word `extra`) and
+/// writes the vtable word `010d79c4`. The function takes two stack words and pops none (`RET`),
+/// and returns nothing. The class is unconfirmed.
+pub fn fn_00e001c0(e: &mut Engine, object: Ptr, extra: u32) {
+    if object.addr() != 0 {
+        e.mem.set_u32(object.addr(), 0x010c_c2fc);
+        e.call(0x00cb_0a70, &args![object.addr() + 0x14, extra]);
+        e.mem.set_u32(object.addr(), 0x010d_79c4);
+    }
+}
+
+// Translated from 00e00240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: when `object` is not null, writes the vtable word `010cc040`, the
+/// 16-bit words `0x8000` at `+0x26` and 0 at `+0x24`, the word 0 at `+0x20`, runs `00cb0a70`
+/// (an `hkStringPtr` function, `this` = `object + 0x28`, one stack word `extra`), writes
+/// `0xfffffff0` at `+0x34` and the vtable word `010d79e8`. The function takes two stack words and
+/// pops none (`RET`), and returns nothing. The class is unconfirmed.
+pub fn fn_00e00240(e: &mut Engine, object: Ptr, extra: u32) {
+    if object.addr() != 0 {
+        let base = object.addr();
+        e.mem.set_u32(base, 0x010c_c040);
+        e.mem.set_u16(base + 0x26, 0x8000);
+        e.mem.set_u32(base + 0x20, 0);
+        e.mem.set_u16(base + 0x24, 0);
+        e.call(0x00cb_0a70, &args![base + 0x28, extra]);
+        e.mem.set_u32(base + 0x34, 0xffff_fff0);
+        e.mem.set_u32(base, 0x010d_79e8);
+    }
+}
+
+// Translated from 00e003d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a constructor (`this` in `ECX`, one stack word `extra` that the
+/// callee pops). It runs `00cd2c50` on `this` with `extra`, then empties three `hkArray`-shaped
+/// triples (data, size, capacity-and-flags = `0x80000000`) at `+0x8c`, `+0x98` and `+0x160`, with
+/// the vtable word at `+0` set to `010d087c` after the second one. Returns `this` (`EAX`). The
+/// class is unconfirmed (the same layout as `00dfc850`).
+pub fn fn_00e003d0(e: &mut Engine, this: Ptr, extra: u32) -> Ptr {
+    let base = this.addr();
+    e.call(0x00cd_2c50, &args![this, extra]);
+    e.mem.set_u32(base + 0x8c, 0);
+    e.mem.set_u32(base + 0x90, 0);
+    e.mem.set_u32(base + 0x94, 0x8000_0000);
+    e.mem.set_u32(base + 0x98, 0);
+    e.mem.set_u32(base + 0x9c, 0);
+    e.mem.set_u32(base + 0xa0, 0x8000_0000);
+    e.mem.set_u32(base, 0x010d_087c);
+    e.mem.set_u32(base + 0x160, 0);
+    e.mem.set_u32(base + 0x164, 0);
+    e.mem.set_u32(base + 0x168, 0x8000_0000);
+    this
+}
+
+// Translated from 00e004f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a constructor (`this` in `ECX`, one stack word `extra` that the
+/// callee pops). It runs `00cd2c50` on `this` with `extra`, then empties three `hkArray`-shaped
+/// triples (data, size, capacity-and-flags = `0x80000000`) at `+0x8c`, `+0x98` and `+0xd0`, with
+/// the vtable word at `+0` set to `010cc004` after the second one. Returns `this` (`EAX`). The
+/// class is unconfirmed.
+pub fn fn_00e004f0(e: &mut Engine, this: Ptr, extra: u32) -> Ptr {
+    let base = this.addr();
+    e.call(0x00cd_2c50, &args![this, extra]);
+    e.mem.set_u32(base + 0x8c, 0);
+    e.mem.set_u32(base + 0x90, 0);
+    e.mem.set_u32(base + 0x94, 0x8000_0000);
+    e.mem.set_u32(base + 0x98, 0);
+    e.mem.set_u32(base + 0x9c, 0);
+    e.mem.set_u32(base + 0xa0, 0x8000_0000);
+    e.mem.set_u32(base, 0x010c_c004);
+    e.mem.set_u32(base + 0xd0, 0);
+    e.mem.set_u32(base + 0xd4, 0);
+    e.mem.set_u32(base + 0xd8, 0x8000_0000);
+    this
+}
+
+// Translated from 00e00610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a constructor chain that the compiler collapsed (`this` in `ECX`,
+/// one stack word `mode`). The vtable word at `+0` takes three values in turn (`010305a8`,
+/// `010cc364`, `010ce390`) and the word at `+0x10` three (`010c6fb0`, `010cc344`, `010ce370`);
+/// when `mode` is not zero the stages also write `+0xc` (0, 7, 7) and the byte at `+0x15` (3,
+/// 2). Returns `this` (`EAX`). The class is unconfirmed.
+pub fn fn_00e00610(e: &mut Engine, this: Ptr, mode: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0103_05a8);
+    if mode != 0 {
+        e.mem.set_u32(base + 0xc, 0);
+    }
+    e.mem.set_u32(base + 0x10, 0x010c_6fb0);
+    e.mem.set_u32(base, 0x010c_c364);
+    e.mem.set_u32(base + 0x10, 0x010c_c344);
+    if mode != 0 {
+        e.mem.set_u32(base + 0xc, 7);
+        e.mem.set_u8(base + 0x15, 3);
+    }
+    e.mem.set_u32(base, 0x010c_e390);
+    e.mem.set_u32(base + 0x10, 0x010c_e370);
+    if mode != 0 {
+        e.mem.set_u32(base + 0xc, 7);
+        e.mem.set_u8(base + 0x15, 2);
+    }
+    this
+}
+
+// Translated from 00e006d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a constructor chain that the compiler collapsed (`this` in `ECX`,
+/// one stack word `mode`). The vtable word at `+0` takes three values in turn (`010305a8`,
+/// `010ce3c8`, `010ce404`) and the word at `+0x14` is set to `010c6fd0` at the end; when `mode`
+/// is not zero the stages also write `+0xc` (0, 8, 8) and the byte at `+0x10` (2, 1). Returns
+/// `this` (`EAX`). The class is unconfirmed.
+pub fn fn_00e006d0(e: &mut Engine, this: Ptr, mode: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0103_05a8);
+    if mode != 0 {
+        e.mem.set_u32(base + 0xc, 0);
+    }
+    e.mem.set_u32(base, 0x010c_e3c8);
+    if mode != 0 {
+        e.mem.set_u32(base + 0xc, 8);
+        e.mem.set_u8(base + 0x10, 2);
+    }
+    e.mem.set_u32(base, 0x010c_e404);
+    e.mem.set_u32(base + 0x14, 0x010c_6fd0);
+    if mode != 0 {
+        e.mem.set_u32(base + 0xc, 8);
+        e.mem.set_u8(base + 0x10, 1);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -151,6 +281,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e00780, return_constant_00e00780() -> u32),
         entry!(0x00e007e0, return_constant_00e007e0() -> u32),
         entry!(0x00e00820, return_constant_00e00820() -> u32),
+        entry!(0x00e0_01c0, fn_00e001c0(Ptr, u32)),
+        entry!(0x00e0_0240, fn_00e00240(Ptr, u32)),
+        entry!(0x00e0_03d0, fn_00e003d0(Ptr, u32) -> Ptr),
+        entry!(0x00e0_04f0, fn_00e004f0(Ptr, u32) -> Ptr),
+        entry!(0x00e0_0610, fn_00e00610(Ptr, u32) -> Ptr),
+        entry!(0x00e0_06d0, fn_00e006d0(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -420,5 +556,118 @@ mod tests {
     fn return_constant_00e00820_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00e0_0820, &args![]).u32(), 0x010e_8824);
+    }
+}
+
+#[cfg(test)]
+mod tests_a05 {
+    use crate::prelude::*;
+
+    /// A null object does nothing; otherwise the vtable word ends at the second value and the
+    /// string function runs in between on `object + 0x14`, seeing the first value.
+    #[test]
+    fn fn_00e001c0_runs_the_string_function_between_the_vtable_writes() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x20);
+        e.register_double(0x00cb_0a70, move |e, a| {
+            assert_eq!(a, [object + 0x14, 7]);
+            assert_eq!(e.mem.u32(object), 0x010c_c2fc);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00e0_01c0, &args![0u32, 7u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        e.call(0x00e0_01c0, &args![object, 7u32]);
+        assert_eq!(e.mem.u32(object), 0x010d_79c4);
+    }
+
+    /// The fields are written around the string function (which runs on `object + 0x28`).
+    #[test]
+    fn fn_00e00240_sets_its_fields_around_the_string_function() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x40);
+        e.mem.write(object, &[0x77; 0x40]);
+        e.register_double(0x00cb_0a70, move |e, a| {
+            assert_eq!(a, [object + 0x28, 3]);
+            assert_eq!(e.mem.u32(object), 0x010c_c040);
+            assert_eq!(e.mem.u16(object + 0x26), 0x8000);
+            assert_eq!(e.mem.u16(object + 0x24), 0);
+            assert_eq!(e.mem.u32(object + 0x20), 0);
+            assert_eq!(e.mem.u32(object + 0x34), 0x7777_7777);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00e0_0240, &args![0u32, 3u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        e.call(0x00e0_0240, &args![object, 3u32]);
+        assert_eq!(e.mem.u32(object), 0x010d_79e8);
+        assert_eq!(e.mem.u32(object + 0x34), 0xffff_fff0);
+        assert_eq!(e.mem.u16(object + 0x1e), 0x7777);
+    }
+
+    /// Runs a constructor of the `00cd2c50` family on a block filled with 0x55 bytes, with the
+    /// base constructor as a double that checks its words and that nothing is written yet.
+    fn construct(address: u32, vtable: u32, tail: u32) {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x170);
+        e.mem.write(this, &[0x55; 0x170]);
+        e.register_double(0x00cd_2c50, move |e, a| {
+            assert_eq!(a, [this, 9]);
+            assert_eq!(e.mem.u32(this + 0x8c), 0x5555_5555);
+            Ret::default()
+        });
+        assert_eq!(e.call(address, &args![this, 9u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), vtable);
+        for offset in [0x8c, 0x90, 0x98, 0x9c, tail, tail + 4] {
+            assert_eq!(e.mem.u32(this + offset), 0);
+        }
+        for offset in [0x94, 0xa0, tail + 8] {
+            assert_eq!(e.mem.u32(this + offset), 0x8000_0000);
+        }
+        assert_eq!(e.mem.u32(this + 0x88), 0x5555_5555);
+        assert_eq!(e.mem.u32(this + 0xa4), 0x5555_5555);
+        assert_eq!(e.mem.u32(this + tail + 0xc), 0x5555_5555);
+    }
+
+    #[test]
+    fn fn_00e003d0_constructs_over_the_base() {
+        construct(0x00e0_03d0, 0x010d_087c, 0x160);
+    }
+
+    #[test]
+    fn fn_00e004f0_constructs_over_the_base() {
+        construct(0x00e0_04f0, 0x010c_c004, 0xd0);
+    }
+
+    /// Mode 0 leaves +0xc and the byte at +0x15 alone; another mode ends with 7 and 2.
+    #[test]
+    fn fn_00e00610_stages_depend_on_the_mode() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x20);
+        e.mem.write(this, &[0x66; 0x20]);
+        assert_eq!(e.call(0x00e0_0610, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x010c_e390);
+        assert_eq!(e.mem.u32(this + 0x10), 0x010c_e370);
+        assert_eq!(e.mem.u32(this + 0xc), 0x6666_6666);
+        assert_eq!(e.mem.u8(this + 0x15), 0x66);
+        e.call(0x00e0_0610, &args![this, 5u32]);
+        assert_eq!(e.mem.u32(this + 0xc), 7);
+        assert_eq!(e.mem.u8(this + 0x15), 2);
+    }
+
+    /// Mode 0 leaves +0xc and the byte at +0x10 alone; another mode ends with 8 and 1.
+    #[test]
+    fn fn_00e006d0_stages_depend_on_the_mode() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x20);
+        e.mem.write(this, &[0x66; 0x20]);
+        assert_eq!(e.call(0x00e0_06d0, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x010c_e404);
+        assert_eq!(e.mem.u32(this + 0x14), 0x010c_6fd0);
+        assert_eq!(e.mem.u32(this + 0xc), 0x6666_6666);
+        assert_eq!(e.mem.u8(this + 0x10), 0x66);
+        e.call(0x00e0_06d0, &args![this, 5u32]);
+        assert_eq!(e.mem.u32(this + 0xc), 8);
+        assert_eq!(e.mem.u8(this + 0x10), 1);
     }
 }

@@ -37,6 +37,33 @@ pub fn return_constant_00e01130(_e: &mut Engine) -> u32 {
     0x010e_901c
 }
 
+// Translated from 00e00fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a constructor chain that the compiler collapsed (`this` in `ECX`,
+/// one stack word `mode`). The vtable word at `+0` takes three values in turn (`010305a8`,
+/// `010cc364`, `010e8e94`) and the word at `+0x10` three (`010c6fb0`, `010cc344`, `010e8e74`);
+/// when `mode` is not zero the stages also write `+0xc` (0, 7, 7) and the byte at `+0x15` (3,
+/// once). Returns `this` (`EAX`). The class is unconfirmed.
+pub fn fn_00e00fb0(e: &mut Engine, this: Ptr, mode: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0103_05a8);
+    if mode != 0 {
+        e.mem.set_u32(base + 0xc, 0);
+    }
+    e.mem.set_u32(base + 0x10, 0x010c_6fb0);
+    e.mem.set_u32(base, 0x010c_c364);
+    e.mem.set_u32(base + 0x10, 0x010c_c344);
+    if mode != 0 {
+        e.mem.set_u32(base + 0xc, 7);
+        e.mem.set_u8(base + 0x15, 3);
+    }
+    e.mem.set_u32(base, 0x010e_8e94);
+    e.mem.set_u32(base + 0x10, 0x010e_8e74);
+    if mode != 0 {
+        e.mem.set_u32(base + 0xc, 7);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -45,6 +72,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e00f40, return_constant_00e00f40() -> u32),
         entry!(0x00e010b0, return_constant_00e010b0() -> u32),
         entry!(0x00e01130, return_constant_00e01130() -> u32),
+        entry!(0x00e0_0fb0, fn_00e00fb0(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -146,5 +174,26 @@ mod tests {
     fn return_constant_00e01130_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00e0_1130, &args![]).u32(), 0x010e_901c);
+    }
+}
+
+#[cfg(test)]
+mod tests_a05 {
+    use crate::prelude::*;
+
+    /// Mode 0 leaves +0xc and the byte at +0x15 alone; another mode ends with 7 and 3.
+    #[test]
+    fn fn_00e00fb0_stages_depend_on_the_mode() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x20);
+        e.mem.write(this, &[0x66; 0x20]);
+        assert_eq!(e.call(0x00e0_0fb0, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x010e_8e94);
+        assert_eq!(e.mem.u32(this + 0x10), 0x010e_8e74);
+        assert_eq!(e.mem.u32(this + 0xc), 0x6666_6666);
+        assert_eq!(e.mem.u8(this + 0x15), 0x66);
+        e.call(0x00e0_0fb0, &args![this, 5u32]);
+        assert_eq!(e.mem.u32(this + 0xc), 7);
+        assert_eq!(e.mem.u8(this + 0x15), 3);
     }
 }

@@ -29,11 +29,27 @@ pub fn fn_00e02180(e: &mut Engine) -> u32 {
     })
 }
 
+// Translated from 00e02140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: when `object` is not null, writes the vtable word `010e9ccc` and
+/// runs `00cb0a70` (an `hkStringPtr` function, one stack word `extra`) on `object + 8`, then on
+/// `object + 0x10`, `object + 0x14` and `object + 0x18`. The function takes two stack words and
+/// pops none (`RET`), and returns nothing. The class is unconfirmed.
+pub fn fn_00e02140(e: &mut Engine, object: Ptr, extra: u32) {
+    if object.addr() != 0 {
+        e.mem.set_u32(object.addr(), 0x010e_9ccc);
+        e.call(0x00cb_0a70, &args![object.addr() + 0x8, extra]);
+        e.call(0x00cb_0a70, &args![object.addr() + 0x10, extra]);
+        e.call(0x00cb_0a70, &args![object.addr() + 0x14, extra]);
+        e.call(0x00cb_0a70, &args![object.addr() + 0x18, extra]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00e0_20f0, fn_00e020f0() -> u32),
         entry!(0x00e02180, fn_00e02180() -> u32),
+        entry!(0x00e0_2140, fn_00e02140(Ptr, u32)),
     ]
 }
 
@@ -160,5 +176,38 @@ mod tests {
         assert_eq!(calls[1].0 - calls[0].0, 0x8);
         assert_eq!(calls[2].0 - calls[0].0, 0xc);
         assert_eq!(calls[3].0 - calls[0].0, 0x10);
+    }
+}
+
+#[cfg(test)]
+mod tests_a05 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// A null object does nothing; otherwise the string function runs on the four members.
+    #[test]
+    fn fn_00e02140_runs_the_string_function_four_times() {
+        let mut e = Engine::new();
+        let log: Rc<RefCell<Vec<Vec<u32>>>> = Rc::new(RefCell::new(Vec::new()));
+        let string_log = Rc::clone(&log);
+        e.register_double(0x00cb_0a70, move |_, a| {
+            string_log.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        e.call(0x00e0_2140, &args![0u32, 4u32]);
+        assert!(log.borrow().is_empty());
+        let object = e.mem.alloc(0x30);
+        e.call(0x00e0_2140, &args![object, 4u32]);
+        assert_eq!(e.mem.u32(object), 0x010e_9ccc);
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                vec![object + 8, 4],
+                vec![object + 0x10, 4],
+                vec![object + 0x14, 4],
+                vec![object + 0x18, 4]
+            ]
+        );
     }
 }

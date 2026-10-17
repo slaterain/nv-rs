@@ -41,6 +41,19 @@ pub fn return_constant_00dff000(_e: &mut Engine) -> u32 {
     0x010e_66fc
 }
 
+// Translated from 00dfef50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: when `object` is not null, writes the vtable word `010cc2fc`, runs
+/// `00cb0a70` (an `hkStringPtr` function, `this` = `object + 0x14`, one stack word `extra`) and
+/// writes the vtable word `010d08f4`. The function takes two stack words and pops none (`RET`),
+/// and returns nothing. The class is unconfirmed.
+pub fn fn_00dfef50(e: &mut Engine, object: Ptr, extra: u32) {
+    if object.addr() != 0 {
+        e.mem.set_u32(object.addr(), 0x010c_c2fc);
+        e.call(0x00cb_0a70, &args![object.addr() + 0x14, extra]);
+        e.mem.set_u32(object.addr(), 0x010d_08f4);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -49,6 +62,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00dfef40, return_constant_00dfef40() -> u32),
         entry!(0x00dfef90, fn_00dfef90() -> u32),
         entry!(0x00dff000, return_constant_00dff000() -> u32),
+        entry!(0x00df_ef50, fn_00dfef50(Ptr, u32)),
     ]
 }
 
@@ -126,5 +140,28 @@ mod tests {
     fn return_constant_00dff000_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00df_f000, &args![]).u32(), 0x010e_66fc);
+    }
+}
+
+#[cfg(test)]
+mod tests_a05 {
+    use crate::prelude::*;
+
+    /// A null object does nothing; otherwise the vtable word ends at the second value and the
+    /// string function runs in between on `object + 0x14`, seeing the first value.
+    #[test]
+    fn fn_00dfef50_runs_the_string_function_between_the_vtable_writes() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x20);
+        e.register_double(0x00cb_0a70, move |e, a| {
+            assert_eq!(a, [object + 0x14, 7]);
+            assert_eq!(e.mem.u32(object), 0x010c_c2fc);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00df_ef50, &args![0u32, 7u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        e.call(0x00df_ef50, &args![object, 7u32]);
+        assert_eq!(e.mem.u32(object), 0x010d_08f4);
     }
 }

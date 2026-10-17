@@ -28,11 +28,19 @@ pub fn return_constant_00dfbd30(_e: &mut Engine) -> u32 {
     0x010d_ec3c
 }
 
+// Translated from 00dfbd70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by `8` (`SUB ECX,0x8`) and jumps to the deleting destructor
+/// `00dfbd40` (`RET 4`); the caller gets its `EAX`, `this - 8`. The class is unconfirmed.
+pub fn fn_00dfbd70(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    deleting_destructor_00dfbd40(e, Ptr::new(this.addr().wrapping_sub(0x8)), flags)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00dfbd30, return_constant_00dfbd30() -> u32),
         entry!(0x00df_bd40, deleting_destructor_00dfbd40(Ptr, u8) -> Ptr),
+        entry!(0x00df_bd70, fn_00dfbd70(Ptr, u8) -> Ptr),
     ]
 }
 
@@ -103,5 +111,27 @@ mod tests {
     fn return_constant_00dfbd30_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00df_bd30, &args![]).u32(), 0x010d_ec3c);
+    }
+}
+
+#[cfg(test)]
+mod tests_a05 {
+    use crate::prelude::*;
+
+    /// The thunk runs the deleting destructor on `this - 8` (the base destructor `00e360f0`
+    /// is a double) and returns that address; without bit 0 nothing is freed.
+    #[test]
+    fn fn_00dfbd70_runs_the_destructor_on_this_minus_eight() {
+        let mut e = Engine::new();
+        e.register(0x00e3_60f0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x20) + 8;
+        let got = e.call(0x00df_bd70, &args![this, 0u32]).u32();
+        assert_eq!(got, this - 8);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == 0x00e3_60f0).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec![this - 8]);
+        assert!(log.iter().all(|(a, _)| *a != 0x00c8_5750));
     }
 }

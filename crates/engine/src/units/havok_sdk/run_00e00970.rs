@@ -118,6 +118,71 @@ pub fn return_constant_00e00dc0(_e: &mut Engine) -> u32 {
     0x010e_8d8c
 }
 
+// Translated from 00e00a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a constructor chain that the compiler collapsed (`this` in `ECX`,
+/// one stack word `mode`). It writes the words at `+8`, `+0xc`, `+0x10` and `+0x14` with the
+/// base-class values (`010c3b80`, `010c3b98`, `010c3bac`, `010c3b8c`), then the vtable word at
+/// `+0` (`010c646c`) and the four words again with the final values (`010c6460`, `010c644c`,
+/// `010c6440`, `010c6434`); when `mode` is not zero it sets `+0x20` to 1. Returns `this`
+/// (`EAX`). The class is unconfirmed.
+pub fn fn_00e00a80(e: &mut Engine, this: Ptr, mode: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base + 0x8, 0x010c_3b80);
+    e.mem.set_u32(base + 0xc, 0x010c_3b98);
+    e.mem.set_u32(base + 0x10, 0x010c_3bac);
+    e.mem.set_u32(base + 0x14, 0x010c_3b8c);
+    e.mem.set_u32(base, 0x010c_646c);
+    e.mem.set_u32(base + 0x8, 0x010c_6460);
+    e.mem.set_u32(base + 0xc, 0x010c_644c);
+    e.mem.set_u32(base + 0x10, 0x010c_6440);
+    e.mem.set_u32(base + 0x14, 0x010c_6434);
+    if mode != 0 {
+        e.mem.set_u32(base + 0x20, 1);
+    }
+    this
+}
+
+// Translated from 00e00ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a constructor chain that the compiler collapsed (`this` in `ECX`,
+/// one stack word `mode`). It writes the words at `+8`, `+0xc`, `+0x10` and `+0x14` with the
+/// base-class values (`010c3b80`, `010c3b98`, `010c3bac`, `010c3b8c`), then the vtable word at
+/// `+0` (`010e8a6c`) and the four words again with the final values (`010e8a60`, `010e8a4c`,
+/// `010e8a40`, `010e8a34`); when `mode` is not zero it sets `+0x20` to 2. Returns `this`
+/// (`EAX`). The class is unconfirmed.
+pub fn fn_00e00ba0(e: &mut Engine, this: Ptr, mode: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base + 0x8, 0x010c_3b80);
+    e.mem.set_u32(base + 0xc, 0x010c_3b98);
+    e.mem.set_u32(base + 0x10, 0x010c_3bac);
+    e.mem.set_u32(base + 0x14, 0x010c_3b8c);
+    e.mem.set_u32(base, 0x010e_8a6c);
+    e.mem.set_u32(base + 0x8, 0x010e_8a60);
+    e.mem.set_u32(base + 0xc, 0x010e_8a4c);
+    e.mem.set_u32(base + 0x10, 0x010e_8a40);
+    e.mem.set_u32(base + 0x14, 0x010e_8a34);
+    if mode != 0 {
+        e.mem.set_u32(base + 0x20, 2);
+    }
+    this
+}
+
+// Translated from 00e00c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: when `object` is not null, runs `00dcd380` on it with the stack
+/// word `mode` (the callee pops it), writes the vtable words `010e8ab0` at `+0` and `010e8a90`
+/// at `+0x10`, and when `mode` is not zero sets `+0xc` to `0x17`. The function takes two stack
+/// words and pops none (`RET`), and returns nothing. The class is unconfirmed.
+pub fn fn_00e00c90(e: &mut Engine, object: Ptr, mode: u32) {
+    if object.addr() != 0 {
+        let base = object.addr();
+        e.call(0x00dc_d380, &args![object, mode]);
+        e.mem.set_u32(base, 0x010e_8ab0);
+        e.mem.set_u32(base + 0x10, 0x010e_8a90);
+        if mode != 0 {
+            e.mem.set_u32(base + 0xc, 0x17);
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -135,6 +200,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e00cd0, fn_00e00cd0() -> u32),
         entry!(0x00e00d20, return_constant_00e00d20() -> u32),
         entry!(0x00e00dc0, return_constant_00e00dc0() -> u32),
+        entry!(0x00e0_0a80, fn_00e00a80(Ptr, u32) -> Ptr),
+        entry!(0x00e0_0ba0, fn_00e00ba0(Ptr, u32) -> Ptr),
+        entry!(0x00e0_0c90, fn_00e00c90(Ptr, u32)),
     ]
 }
 
@@ -399,5 +467,83 @@ mod record_tests {
     fn return_constant_00e00dc0_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00e0_0dc0, &args![]).u32(), 0x010e_8d8c);
+    }
+}
+
+#[cfg(test)]
+mod tests_a05 {
+    use crate::prelude::*;
+
+    /// Runs the constructor with mode 0 and mode 5 on blocks of 0x55 bytes; the final words must
+    /// be `words` (at +0, +8, +0xc, +0x10, +0x14) and +0x20 is `tag` only with a mode.
+    fn check(address: u32, words: [u32; 5], tag: u32) {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x30);
+        e.mem.write(this, &[0x55; 0x30]);
+        assert_eq!(e.call(address, &args![this, 0u32]).u32(), this);
+        for (offset, word) in [0u32, 8, 0xc, 0x10, 0x14].into_iter().zip(words) {
+            assert_eq!(e.mem.u32(this + offset), word);
+        }
+        assert_eq!(e.mem.u32(this + 4), 0x5555_5555);
+        assert_eq!(e.mem.u32(this + 0x20), 0x5555_5555);
+        e.call(address, &args![this, 5u32]);
+        assert_eq!(e.mem.u32(this + 0x20), tag);
+        assert_eq!(e.mem.u32(this + 0x24), 0x5555_5555);
+    }
+
+    #[test]
+    fn fn_00e00a80_writes_the_final_vtable_words() {
+        check(
+            0x00e0_0a80,
+            [
+                0x010c_646c,
+                0x010c_6460,
+                0x010c_644c,
+                0x010c_6440,
+                0x010c_6434,
+            ],
+            1,
+        );
+    }
+
+    #[test]
+    fn fn_00e00ba0_writes_the_final_vtable_words() {
+        check(
+            0x00e0_0ba0,
+            [
+                0x010e_8a6c,
+                0x010e_8a60,
+                0x010e_8a4c,
+                0x010e_8a40,
+                0x010e_8a34,
+            ],
+            2,
+        );
+    }
+
+    /// A null object does nothing; otherwise the base function `00dcd380` runs first with the
+    /// mode word, then the vtable words are written, and +0xc only with a mode.
+    #[test]
+    fn fn_00e00c90_calls_the_base_then_writes_its_words() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x20);
+        e.mem.write(object, &[0x66; 0x20]);
+        e.register_double(0x00dc_d380, move |e, a| {
+            assert_eq!(a, [object, 0]);
+            assert_eq!(e.mem.u32(object), 0x6666_6666);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00e0_0c90, &args![0u32, 0u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        e.call(0x00e0_0c90, &args![object, 0u32]);
+        assert_eq!(e.mem.u32(object), 0x010e_8ab0);
+        assert_eq!(e.mem.u32(object + 0x10), 0x010e_8a90);
+        assert_eq!(e.mem.u32(object + 0xc), 0x6666_6666);
+        let mut e = Engine::new();
+        e.register(0x00dc_d380, |_, _| Ret::default());
+        let object = e.mem.alloc(0x20);
+        e.call(0x00e0_0c90, &args![object, 3u32]);
+        assert_eq!(e.mem.u32(object + 0xc), 0x17);
     }
 }

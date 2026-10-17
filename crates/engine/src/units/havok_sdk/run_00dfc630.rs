@@ -4,6 +4,8 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+use super::hkaabbtree::release_array;
+
 /// The memory router (`0x00c8_5750`): its field `+0x10` is the allocator the block is freed through.
 const MEMORY_ROUTER: u32 = 0x00c8_5750;
 
@@ -151,6 +153,77 @@ pub fn return_constant_00dfd120(_e: &mut Engine) -> u32 {
     0x010e_222c
 }
 
+// Translated from 00dfc850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a constructor (`this` in `ECX`, one stack word `extra` that the
+/// callee pops). It runs `00cd2c50` on `this` with `extra`, then empties three `hkArray`-shaped
+/// triples (data, size, capacity-and-flags = `0x80000000`, "not owned") at `+0x8c`, `+0x98` and
+/// `+0x160`, with the vtable word at `+0` set to `010ce15c` after the second one. Returns `this`
+/// (`EAX`). The class is unconfirmed; `00dfc830` builds one on the stack.
+pub fn fn_00dfc850(e: &mut Engine, this: Ptr, extra: u32) -> Ptr {
+    let base = this.addr();
+    e.call(0x00cd_2c50, &args![this, extra]);
+    e.mem.set_u32(base + 0x8c, 0);
+    e.mem.set_u32(base + 0x90, 0);
+    e.mem.set_u32(base + 0x94, 0x8000_0000);
+    e.mem.set_u32(base + 0x98, 0);
+    e.mem.set_u32(base + 0x9c, 0);
+    e.mem.set_u32(base + 0xa0, 0x8000_0000);
+    e.mem.set_u32(base, 0x010c_e15c);
+    e.mem.set_u32(base + 0x160, 0);
+    e.mem.set_u32(base + 0x164, 0);
+    e.mem.set_u32(base + 0x168, 0x8000_0000);
+    this
+}
+
+// Translated from 00dfcf60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a constructor chain that the compiler collapsed (`this` in `ECX`,
+/// one stack word `mode`). The vtable word at `+0` takes three values in turn (`010305a8`,
+/// `010cc364`, `010e2144`) and the word at `+0x10` three (`010c6fb0`, `010cc344`, `010e2124`);
+/// when `mode` is not zero the stages also write `+0xc` (0, 7, `0x17`) and the byte at `+0x15`
+/// (3, 4). Returns `this` (`EAX`). The class is unconfirmed.
+pub fn fn_00dfcf60(e: &mut Engine, this: Ptr, mode: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0103_05a8);
+    if mode != 0 {
+        e.mem.set_u32(base + 0xc, 0);
+    }
+    e.mem.set_u32(base + 0x10, 0x010c_6fb0);
+    e.mem.set_u32(base, 0x010c_c364);
+    e.mem.set_u32(base + 0x10, 0x010c_c344);
+    if mode != 0 {
+        e.mem.set_u32(base + 0xc, 7);
+        e.mem.set_u8(base + 0x15, 3);
+    }
+    e.mem.set_u32(base, 0x010e_2144);
+    e.mem.set_u32(base + 0x10, 0x010e_2124);
+    if mode != 0 {
+        e.mem.set_u32(base + 0xc, 0x17);
+        e.mem.set_u8(base + 0x15, 4);
+    }
+    this
+}
+
+// Translated from 00dfcfc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by `0x10` (`SUB ECX,0x10`) and jumps to the deleting destructor
+/// `00dfd080` (`RET 4`); the caller gets its `EAX`, `this - 0x10`. The class is unconfirmed.
+pub fn fn_00dfcfc0(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    deleting_destructor_00dfd080(e, Ptr::new(this.addr().wrapping_sub(0x10)), flags)
+}
+
+// Translated from 00dfcfd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a destructor (`this` in `ECX`) that releases three `hkArray`-shaped
+/// triples in turn, the one at `+0x30` (byte elements), then those at `+0x24` and `+0x18`
+/// (16-byte elements), and sets the vtable word at `+0x10` to `010c6fb0` and the one at `+0` to
+/// `0102e388`. The class is unconfirmed; `00dfd080` is its deleting form.
+pub fn fn_00dfcfd0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    release_array(e, base + 0x30, 1);
+    release_array(e, base + 0x24, 16);
+    release_array(e, base + 0x18, 16);
+    e.mem.set_u32(base + 0x10, 0x010c_6fb0);
+    e.mem.set_u32(base, 0x0102_e388);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -174,6 +247,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00dfcd50, return_constant_00dfcd50() -> u32),
         entry!(0x00dfcea0, return_constant_00dfcea0() -> u32),
         entry!(0x00dfd120, return_constant_00dfd120() -> u32),
+        entry!(0x00df_c850, fn_00dfc850(Ptr, u32) -> Ptr),
+        entry!(0x00df_cf60, fn_00dfcf60(Ptr, u32) -> Ptr),
+        entry!(0x00df_cfc0, fn_00dfcfc0(Ptr, u8) -> Ptr),
+        entry!(0x00df_cfd0, fn_00dfcfd0(Ptr)),
     ]
 }
 
@@ -471,5 +548,118 @@ mod record_tests {
     fn return_constant_00dfd120_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00df_d120, &args![]).u32(), 0x010e_222c);
+    }
+}
+
+#[cfg(test)]
+mod tests_a05 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    const FREE_SLOT_DOUBLE: u32 = 0x0900_0011;
+
+    /// `00dfc850` calls `00cd2c50(this, extra)` first, then writes its fields.
+    #[test]
+    fn fn_00dfc850_constructs_over_the_base() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x170);
+        e.mem.write(this, &[0x55; 0x170]);
+        e.register_double(0x00cd_2c50, move |e, a| {
+            assert_eq!(a, [this, 9]);
+            assert_eq!(e.mem.u32(this + 0x8c), 0x5555_5555);
+            Ret::default()
+        });
+        assert_eq!(e.call(0x00df_c850, &args![this, 9u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x010c_e15c);
+        for offset in [0x8c, 0x90, 0x98, 0x9c, 0x160, 0x164] {
+            assert_eq!(e.mem.u32(this + offset), 0);
+        }
+        for offset in [0x94, 0xa0, 0x168] {
+            assert_eq!(e.mem.u32(this + offset), 0x8000_0000);
+        }
+        assert_eq!(e.mem.u32(this + 0x88), 0x5555_5555);
+        assert_eq!(e.mem.u32(this + 0xa4), 0x5555_5555);
+    }
+
+    /// Mode 0 leaves +0xc and the byte at +0x15 alone; another mode ends with 0x17 and 4.
+    #[test]
+    fn fn_00dfcf60_stages_depend_on_the_mode() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x20);
+        e.mem.write(this, &[0x66; 0x20]);
+        assert_eq!(e.call(0x00df_cf60, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x010e_2144);
+        assert_eq!(e.mem.u32(this + 0x10), 0x010e_2124);
+        assert_eq!(e.mem.u32(this + 0xc), 0x6666_6666);
+        assert_eq!(e.mem.u8(this + 0x15), 0x66);
+        e.call(0x00df_cf60, &args![this, 5u32]);
+        assert_eq!(e.mem.u32(this + 0xc), 0x17);
+        assert_eq!(e.mem.u8(this + 0x15), 4);
+        assert_eq!(e.mem.u32(this), 0x010e_2144);
+    }
+
+    /// The thunk runs the deleting destructor on `this - 0x10`, whose base destructor
+    /// `00dfcfd0` is a double here.
+    #[test]
+    fn fn_00dfcfc0_runs_the_destructor_on_this_minus_0x10() {
+        let mut e = Engine::new();
+        e.register(0x00df_cfd0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x20) + 0x10;
+        let got = e.call(0x00df_cfc0, &args![this, 0u32]).u32();
+        assert_eq!(got, this - 0x10);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == 0x00df_cfd0).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec![this - 0x10]);
+    }
+
+    /// Three arrays: the first owned (capacity 5, bytes), the second not owned (negative
+    /// capacity word: nothing freed), the third owned (capacity 3 of 16-byte elements).
+    #[test]
+    fn fn_00dfcfd0_releases_the_owned_arrays() {
+        let mut e = Engine::new();
+        let log: Rc<RefCell<Vec<Vec<u32>>>> = Rc::new(RefCell::new(Vec::new()));
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0x10, FREE_SLOT_DOUBLE);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let free_log = Rc::clone(&log);
+        e.register_double(FREE_SLOT_DOUBLE, move |_, a| {
+            free_log.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x40);
+        // +0x30: data 0x1111, size 4, capacity 5 | flag bits 0x40000000.
+        e.mem.set_u32(this + 0x30, 0x1111);
+        e.mem.set_u32(this + 0x34, 4);
+        e.mem.set_u32(this + 0x38, 0x4000_0005);
+        // +0x24: not owned.
+        e.mem.set_u32(this + 0x24, 0x2222);
+        e.mem.set_u32(this + 0x28, 2);
+        e.mem.set_u32(this + 0x2c, 0x8000_0002);
+        // +0x18: data 0x3333, size 1, capacity 3.
+        e.mem.set_u32(this + 0x18, 0x3333);
+        e.mem.set_u32(this + 0x1c, 1);
+        e.mem.set_u32(this + 0x20, 3);
+        e.call(0x00df_cfd0, &args![this]);
+        assert_eq!(
+            *log.borrow(),
+            vec![vec![allocator, 0x1111, 5], vec![allocator, 0x3333, 0x30]]
+        );
+        for (data, size, capacity) in [(0x30, 0x34, 0x38), (0x24, 0x28, 0x2c), (0x18, 0x1c, 0x20)] {
+            assert_eq!(e.mem.u32(this + data), 0);
+            assert_eq!(e.mem.u32(this + size), 0);
+            assert_eq!(e.mem.u32(this + capacity), 0x8000_0000);
+        }
+        assert_eq!(e.mem.u32(this + 0x10), 0x010c_6fb0);
+        assert_eq!(e.mem.u32(this), 0x0102_e388);
     }
 }

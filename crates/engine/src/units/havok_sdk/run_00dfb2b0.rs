@@ -37,6 +37,47 @@ pub fn fn_00dfb460(e: &mut Engine) -> u32 {
     })
 }
 
+// Translated from 00dfb2d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a constructor chain that the compiler collapsed (`this` in `ECX`,
+/// one stack word `mode`; the class is unconfirmed). It writes the vtable word at `+0` with four
+/// values in turn (`010305a8`, `010ce3c8`, `010d0d70`, `010d0dac`) and the word at `+0x30`
+/// (`010c6fd0`); when `mode` is not zero the intermediate stages also write `+0xc` (0, then 8)
+/// and the byte at `+0x10` (2, then 0). When `mode` is 1 it sets `+0xc` to `0xa` and copies the
+/// 16 bytes at `[this + 0x14] + 0x10` to `this + 0x20` (`MOVAPS`, which faults on an address
+/// that is not 16-byte aligned; here a plain copy) and the words at `[this + 0x14] + 0x20` and
+/// `+ 0x24` to `this + 0x18` and `this + 0x1c`. Returns `this` (`EAX`).
+pub fn fn_00dfb2d0(e: &mut Engine, this: Ptr, mode: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0103_05a8);
+    if mode != 0 {
+        e.mem.set_u32(base + 0xc, 0);
+    }
+    e.mem.set_u32(base, 0x010c_e3c8);
+    if mode != 0 {
+        e.mem.set_u32(base + 0xc, 8);
+        e.mem.set_u8(base + 0x10, 2);
+    }
+    e.mem.set_u32(base, 0x010d_0d70);
+    if mode != 0 {
+        e.mem.set_u8(base + 0x10, 0);
+    }
+    e.mem.set_u32(base, 0x010d_0dac);
+    e.mem.set_u32(base + 0x30, 0x010c_6fd0);
+    if mode == 1 {
+        let source = e.mem.u32(base + 0x14);
+        e.mem.set_u32(base + 0xc, 0xa);
+        for lane in 0..4 {
+            let word = e.mem.u32(source + 0x10 + 4 * lane);
+            e.mem.set_u32(base + 0x20 + 4 * lane, word);
+        }
+        let low = e.mem.u32(source + 0x20);
+        e.mem.set_u32(base + 0x18, low);
+        let high = e.mem.u32(source + 0x24);
+        e.mem.set_u32(base + 0x1c, high);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -44,6 +85,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00df_b400, fn_00dfb400() -> u32),
         entry!(0x00df_b460, fn_00dfb460() -> u32),
         entry!(0x00dfb590, return_constant_00dfb590() -> u32),
+        entry!(0x00df_b2d0, fn_00dfb2d0(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -168,5 +210,58 @@ mod record_tests {
         assert_eq!(calls[0].len(), 2);
         assert_ne!(calls[0][0], 0);
         assert_eq!(calls[0][1], 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_a05 {
+    use crate::prelude::*;
+
+    /// Mode 0 writes only the vtable (final value) and the word at +0x30.
+    #[test]
+    fn fn_00dfb2d0_mode_zero_writes_the_vtable_only() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x40);
+        e.mem.write(this, &[0x77; 0x40]);
+        assert_eq!(e.call(0x00df_b2d0, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x010d_0dac);
+        assert_eq!(e.mem.u32(this + 0x30), 0x010c_6fd0);
+        assert_eq!(e.mem.u32(this + 0xc), 0x7777_7777);
+        assert_eq!(e.mem.u8(this + 0x10), 0x77);
+        assert_eq!(e.mem.u32(this + 0x20), 0x7777_7777);
+    }
+
+    /// Mode 2 (not 0, not 1): the stages clear +0xc... to 8 and the byte to 0, no copy.
+    #[test]
+    fn fn_00dfb2d0_other_modes_leave_the_staged_values() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x40);
+        e.mem.write(this, &[0x77; 0x40]);
+        e.call(0x00df_b2d0, &args![this, 2u32]);
+        assert_eq!(e.mem.u32(this), 0x010d_0dac);
+        assert_eq!(e.mem.u32(this + 0xc), 8);
+        assert_eq!(e.mem.u8(this + 0x10), 0);
+        assert_eq!(e.mem.u32(this + 0x20), 0x7777_7777);
+        assert_eq!(e.mem.u32(this + 0x18), 0x7777_7777);
+    }
+
+    /// Mode 1 also copies the source's vector and words and sets +0xc to 0xa.
+    #[test]
+    fn fn_00dfb2d0_mode_one_copies_from_the_source() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x40);
+        let source = e.mem.alloc(0x30);
+        e.mem.set_u32(this + 0x14, source);
+        for word in 0..12u32 {
+            e.mem.set_u32(source + 4 * word, 0x100 + word);
+        }
+        e.call(0x00df_b2d0, &args![this, 1u32]);
+        assert_eq!(e.mem.u32(this + 0xc), 0xa);
+        for lane in 0..4u32 {
+            assert_eq!(e.mem.u32(this + 0x20 + 4 * lane), 0x104 + lane);
+        }
+        assert_eq!(e.mem.u32(this + 0x18), 0x108);
+        assert_eq!(e.mem.u32(this + 0x1c), 0x109);
+        assert_eq!(e.mem.u8(this + 0x10), 0);
     }
 }

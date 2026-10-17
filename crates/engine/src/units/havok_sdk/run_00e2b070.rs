@@ -26,6 +26,21 @@ use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// Four lanes as raw bits.
+type Lanes = [u32; 4];
+
+/// `MOVAPS xmm, [at]`: the 16 bytes at `at` as four words.
+fn load_lanes(e: &Engine, at: u32) -> Lanes {
+    std::array::from_fn(|lane| e.mem.u32(at.wrapping_add(4 * lane as u32)))
+}
+
+/// `MOVAPS [at], xmm`.
+fn store_lanes(e: &mut Engine, at: u32, v: Lanes) {
+    for (lane, word) in v.into_iter().enumerate() {
+        e.mem.set_u32(at.wrapping_add(4 * lane as u32), word);
+    }
+}
+
 type Vec4 = [f32; 4];
 
 /// Float constants: 0.0, 3.0 and 0.5 (the `RSQRTSS` refinement), the largest
@@ -663,6 +678,729 @@ pub fn fn_00e2db70(
     });
 }
 
+// Translated from 00e2b9b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: keeps the `store`'s best entries by key. `store` (the third word)
+/// is a list of 0x60-byte entries: `+8` the array, `+0xc` the write pointer, `+0x10` the
+/// capacity, `+0x14` the number in use, `+0x18` an override pointer. `candidate` has the float
+/// key at `+0x10`. While the list has room the entry at the write pointer is used (the pointer
+/// advances by 0x60, the count by one). When it is full, the entry with the largest key (the
+/// first of equals; compares as `FCOMPP`: a NaN never wins) is the victim, and the function
+/// returns when its key is not strictly above the candidate's (a NaN also returns). The entry
+/// gets the candidate's key (through the x87 stack, `+0x10`), its first 16 bytes (`+0`), its
+/// word at `+0x14` and, at `+0x50`, the override pointer or, when it is zero, the last node of
+/// the chain that starts at `chain` (the nodes link through `+0xc`). Finally the chain's length
+/// `n` (the number of links after `chain`) is counted, the entry's word `n` at `+0x20` becomes
+/// `0xffffffff` and the words `n - 1` down to 0 get `[node + 4]` of the chain's first `n`
+/// nodes. The function takes three stack words and pops none (`RET`) and returns nothing.
+pub fn fn_00e2b9b0(e: &mut Engine, chain: Ptr, candidate: Ptr, store: Ptr) {
+    let (chain, candidate, store) = (chain.addr(), candidate.addr(), store.addr());
+    let count = e.mem.i32(store + 0x14);
+    let entry = if count < e.mem.i32(store + 0x10) {
+        let entry = e.mem.u32(store + 0xc);
+        e.mem.set_i32(store + 0x14, count.wrapping_add(1));
+        e.mem.set_u32(store + 0xc, entry.wrapping_add(0x60));
+        entry
+    } else {
+        let mut best = e.mem.u32(store + 8);
+        if count > 1 {
+            let mut other = best.wrapping_add(0x60);
+            let mut remaining = count - 1;
+            loop {
+                let other_key = x87_load32(e.mem.u32(other + 0x10));
+                let best_key = x87_load32(e.mem.u32(best + 0x10));
+                if best_key < other_key {
+                    best = other;
+                }
+                other = other.wrapping_add(0x60);
+                remaining -= 1;
+                if remaining == 0 {
+                    break;
+                }
+            }
+        }
+        let new_key = x87_load32(e.mem.u32(candidate + 0x10));
+        let best_key = x87_load32(e.mem.u32(best + 0x10));
+        if best_key.partial_cmp(&new_key) != Some(std::cmp::Ordering::Greater) {
+            return;
+        }
+        best
+    };
+    let key = x87_quiet_bits(e.mem.u32(candidate + 0x10));
+    e.mem.set_u32(entry + 0x10, key);
+    for lane in 0..4 {
+        let word = e.mem.u32(candidate + 4 * lane);
+        e.mem.set_u32(entry + 4 * lane, word);
+    }
+    let word = e.mem.u32(candidate + 0x14);
+    e.mem.set_u32(entry + 0x14, word);
+    let override_pointer = e.mem.u32(store + 0x18);
+    if override_pointer != 0 {
+        e.mem.set_u32(entry + 0x50, override_pointer);
+    } else {
+        let mut last = chain;
+        let mut link = e.mem.u32(chain + 0xc);
+        if link != 0 {
+            loop {
+                last = link;
+                link = e.mem.u32(last + 0xc);
+                if link == 0 {
+                    break;
+                }
+            }
+        }
+        e.mem.set_u32(entry + 0x50, last);
+    }
+    let mut length: u32 = 0;
+    let mut link = e.mem.u32(chain + 0xc);
+    if link != 0 {
+        loop {
+            link = e.mem.u32(link + 0xc);
+            length += 1;
+            if link == 0 {
+                break;
+            }
+        }
+    }
+    e.mem.set_u32(entry + length * 4 + 0x20, 0xffff_ffff);
+    let mut index = length as i32 - 1;
+    if index >= 0 {
+        let mut node = chain;
+        let mut slot = entry
+            .wrapping_add((index as u32).wrapping_mul(4))
+            .wrapping_add(0x20);
+        loop {
+            let word = e.mem.u32(node + 4);
+            e.mem.set_u32(slot, word);
+            node = e.mem.u32(node + 0xc);
+            index -= 1;
+            slot = slot.wrapping_sub(4);
+            if index < 0 {
+                break;
+            }
+        }
+    }
+}
+
+// Translated from 00e2baa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: initialises the record `object` from the record `source` and a
+/// word `extra`: `1.0f` (through the x87 stack) at `+0x14`, the byte 0 at `+0x18`, `source`
+/// itself at `+0x1c` and `+0x20`, `[source + 0x30]` at `+0x24` and `+0x28`, `[source + 0x24]` at
+/// `+0x50`, and at `+0x54` the word `extra + 0x10` when the byte at `source + 0x20` is not zero
+/// and `extra` is not zero, else 0. The function takes three stack words and pops none (`RET`)
+/// and returns nothing.
+pub fn fn_00e2baa0(e: &mut Engine, object: Ptr, source: Ptr, extra: u32) {
+    let (object, source) = (object.addr(), source.addr());
+    e.mem.set_u32(object + 0x14, 0x3f80_0000);
+    e.mem.set_u8(object + 0x18, 0);
+    let first = e.mem.u32(source + 0x30);
+    e.mem.set_u32(object + 0x24, first);
+    let second = e.mem.u32(source + 0x30);
+    e.mem.set_u32(object + 0x20, source);
+    e.mem.set_u32(object + 0x28, second);
+    let third = e.mem.u32(source + 0x24);
+    e.mem.set_u32(object + 0x1c, source);
+    e.mem.set_u32(object + 0x50, third);
+    let selected = if e.mem.i8(source + 0x20) != 0 {
+        extra
+    } else {
+        0
+    };
+    if selected != 0 {
+        e.mem.set_u32(object + 0x54, selected.wrapping_add(0x10));
+    } else {
+        e.mem.set_u32(object + 0x54, 0);
+    }
+}
+
+// Translated from 00e2baf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: transposes eight vectors into six (pure SSE shuffles, nothing is
+/// computed). `a` .. `h` are the vectors at the eight pointers (stack words 2 to 9) and `tail`
+/// the tenth word: `out[0]` = x of `a`, `c`, `e`, `g`; `out[1]` = their y; `out[2]` = their z;
+/// `out[3]` = x of `b`, `d`, `f`, `h`; `out[4]` = their y; `out[5]` = their z; and the word at
+/// `out + 0x60` is `tail`. All eight vectors are loaded before anything is stored. The function
+/// takes ten stack words and pops none (`RET`) and returns nothing.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00e2baf0(
+    e: &mut Engine,
+    out: Ptr,
+    a: Ptr,
+    b: Ptr,
+    c: Ptr,
+    d: Ptr,
+    e_vector: Ptr,
+    f: Ptr,
+    g: Ptr,
+    h: Ptr,
+    tail: u32,
+) {
+    let load = |e: &Engine, at: Ptr| -> [u32; 4] {
+        std::array::from_fn(|lane| e.mem.u32(at.addr() + 4 * lane as u32))
+    };
+    let (a, b, c, d) = (load(e, a), load(e, b), load(e, c), load(e, d));
+    let (e_lanes, f, g, h) = (load(e, e_vector), load(e, f), load(e, g), load(e, h));
+    let rows = [
+        [a[0], c[0], e_lanes[0], g[0]],
+        [a[1], c[1], e_lanes[1], g[1]],
+        [a[2], c[2], e_lanes[2], g[2]],
+        [b[0], d[0], f[0], h[0]],
+        [b[1], d[1], f[1], h[1]],
+        [b[2], d[2], f[2], h[2]],
+    ];
+    for (row, lanes) in rows.into_iter().enumerate() {
+        for (lane, word) in lanes.into_iter().enumerate() {
+            e.mem
+                .set_u32(out.addr() + 0x10 * row as u32 + 4 * lane as u32, word);
+        }
+    }
+    e.mem.set_u32(out.addr() + 0x60, tail);
+}
+
+// Translated from 00e2b070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (the same function as `00e2b510` with other frame offsets and the
+/// callee `00d1d530`). Arguments (cdecl, four stack words, nothing popped): `owner` (nothing
+/// happens when it is null), a `source` record, a word `value` and a four-float `vector`. It
+/// builds a `0x3a4`-byte stack frame: `00d1bb50` (ten stack words, the last `0xf`) converts eight
+/// vectors of `source` (at `+0x00`, `+0x10`, `+0x30`, `+0x40`, `+0x60`, `+0x70`, `+0x90` and
+/// `+0xa0`) into the frame; four 0x80-byte local objects get their vtable words (`010dbacc`,
+/// `010dbae4`, `010dbad8`, `010dbaf8`), `1.0f`, `value` and records copied from `source`
+/// (`+0xc0..+0xd4` and the words of the four sub-records); a four-pointer array refers to
+/// them; the vector is copied from `vector`. Then `00d1d530` (cdecl, six words: `owner`,
+/// `[owner + 0x10]`, 0, the converted block, the pointer array and the vector copy) runs, four
+/// words of the frame go to `source + 0xe0..+0xec` and the vector copy back to `vector`
+/// (interleaved by `UNPCKLPS`); the closing loop writes the vtable words of four destroyed
+/// locals into the frame that is about to be discarded.
+///
+/// A register-level translation of straight-line code: each statement ends with the address of
+/// the instruction it comes from; `frame` is the address of what the exe's `ESP` points at after
+/// its prologue (the saved registers) and the offsets are relative to it, taking the words
+/// still pushed for the unpopped cdecl calls into account.
+#[allow(unused_assignments)]
+pub fn fn_00e2b070(e: &mut Engine, owner: Ptr, source: Ptr, value: u32, vector: Ptr) {
+    let (arg0, arg1, arg2, arg3) = (owner.addr(), source.addr(), value, vector.addr());
+    if arg0 == 0 {
+        return;
+    }
+    e.with_stack(0x420, |e, buffer| {
+        let frame = buffer.addr() + 0x60;
+        let (mut eax, mut ecx, mut edx, mut esi, mut edi) = (0u32, 0u32, 0u32, 0u32, 0u32);
+        let ebx = 0u32;
+        let mut xmm = [[0u32; 4]; 8];
+        let mut st0 = 0u32;
+        esi = arg1; // 00e2b08a
+        let pushed0 = 0xf;
+        e.mem.set_u32(frame - 0x4, pushed0); // 00e2b08d
+        edx = esi.wrapping_add(0xa0); // 00e2b08f
+        let pushed1 = edx;
+        e.mem.set_u32(frame - 0x8, pushed1); // 00e2b095
+        edi = esi.wrapping_add(0x90); // 00e2b096
+        let pushed2 = edi;
+        e.mem.set_u32(frame - 0xc, pushed2); // 00e2b09c
+        edx = esi.wrapping_add(0x70); // 00e2b09d
+        let pushed3 = edx;
+        e.mem.set_u32(frame - 0x10, pushed3); // 00e2b0a0
+        eax = esi.wrapping_add(0x60); // 00e2b0a1
+        let pushed4 = eax;
+        e.mem.set_u32(frame - 0x14, pushed4); // 00e2b0a4
+        eax = esi.wrapping_add(0x40); // 00e2b0a5
+        let pushed5 = eax;
+        e.mem.set_u32(frame - 0x18, pushed5); // 00e2b0a8
+        ecx = esi.wrapping_add(0x30); // 00e2b0a9
+        let pushed6 = ecx;
+        e.mem.set_u32(frame - 0x1c, pushed6); // 00e2b0ac
+        eax = esi.wrapping_add(0x10); // 00e2b0ad
+        let pushed7 = eax;
+        e.mem.set_u32(frame - 0x20, pushed7); // 00e2b0b0
+        ecx = frame + 0x340; // 00e2b0b1
+        let pushed8 = esi;
+        e.mem.set_u32(frame - 0x24, pushed8); // 00e2b0b8
+        let pushed9 = ecx;
+        e.mem.set_u32(frame - 0x28, pushed9); // 00e2b0b9
+        e.call(
+            0x00d1bb50,
+            &args![
+                pushed9, pushed8, pushed7, pushed6, pushed5, pushed4, pushed3, pushed2, pushed1,
+                pushed0
+            ],
+        ); // 00e2b0ba
+        st0 = 0x3f80_0000; // 00e2b0bf
+        xmm[0] = load_lanes(e, esi); // 00e2b0c1
+        e.mem.set_u32(frame + 0x144, st0); // 00e2b0c4
+        eax = 0x10dbacc; // 00e2b0cb
+        e.mem.set_u32(frame + 0x1c4, st0); // 00e2b0d0
+        edx = 0x10dbae4; // 00e2b0d7
+        e.mem.set_u32(frame + 0x244, st0); // 00e2b0dc
+        e.mem.set_u32(frame + 0x13c, eax); // 00e2b0e3
+        e.mem.set_u32(frame + 0x2c4, st0); // 00e2b0ea
+        e.mem.set_u32(frame + 0x1bc, eax); // 00e2b0f1
+        e.mem.set_u32(frame + 0x23c, eax); // 00e2b0f8
+        e.mem.set_u32(frame + 0x2bc, eax); // 00e2b0ff
+        eax = e.mem.u32(esi.wrapping_add(0xc8)); // 00e2b106
+        ecx = 0x10dbad8; // 00e2b10c
+        e.mem.set_u32(frame + 0x60, eax); // 00e2b111
+        e.mem.set_u32(frame + 0x154, eax); // 00e2b118
+        e.mem.set_u32(frame + 0x158, eax); // 00e2b11f
+        eax = e.mem.u32(esi.wrapping_add(0x24)); // 00e2b126
+        e.mem.set_u32(frame + 0x134, edx); // 00e2b129
+        e.mem.set_u32(frame + 0x1b4, edx); // 00e2b130
+        e.mem.set_u32(frame + 0x234, edx); // 00e2b137
+        e.mem.set_u32(frame + 0x2b4, edx); // 00e2b13e
+        edx = u32::from(e.mem.u8(esi.wrapping_add(0x20))); // 00e2b145
+        e.mem.set_u32(frame + 0x54, eax); // 00e2b149
+        eax = (eax & 0xffff_ff00) | u32::from(e.mem.u8(esi.wrapping_add(0xc4))); // 00e2b14d
+        store_lanes(e, frame + 0x30, xmm[0]); // 00e2b153
+        xmm[0] = load_lanes(e, esi.wrapping_add(0x10)); // 00e2b158
+        e.mem.set_u32(frame + 0x138, ecx); // 00e2b15c
+        e.mem.set_u32(frame + 0x1b8, ecx); // 00e2b163
+        e.mem.set_u32(frame + 0x238, ecx); // 00e2b16a
+        e.mem.set_u32(frame + 0x2b8, ecx); // 00e2b171
+        ecx = arg2; // 00e2b178
+        e.mem.set_u8(frame + 0x6c, ebx as u8); // 00e2b17b
+        e.mem.set_u8(frame + 0xac, ebx as u8); // 00e2b182
+        e.mem.set_u8(frame + 0xec, ebx as u8); // 00e2b189
+        e.mem.set_u8(frame + 0x12c, ebx as u8); // 00e2b190
+        e.mem.set_u32(frame + 0x130, 0x10dbaf8); // 00e2b197
+        e.mem.set_u32(frame + 0x180, ebx); // 00e2b1a2
+        e.mem.set_u32(frame + 0x184, ebx); // 00e2b1a9
+        e.mem.set_u32(frame + 0x190, ebx); // 00e2b1b0
+        e.mem.set_u8(frame + 0x148, ebx as u8); // 00e2b1b7
+        e.mem.set_u32(frame + 0x1b0, 0x10dbaf8); // 00e2b1be
+        e.mem.set_u32(frame + 0x200, ebx); // 00e2b1c9
+        e.mem.set_u32(frame + 0x204, ebx); // 00e2b1d0
+        e.mem.set_u32(frame + 0x210, ebx); // 00e2b1d7
+        e.mem.set_u8(frame + 0x1c8, ebx as u8); // 00e2b1de
+        e.mem.set_u32(frame + 0x230, 0x10dbaf8); // 00e2b1e5
+        e.mem.set_u32(frame + 0x280, ebx); // 00e2b1f0
+        e.mem.set_u32(frame + 0x284, ebx); // 00e2b1f7
+        e.mem.set_u32(frame + 0x290, ebx); // 00e2b1fe
+        e.mem.set_u8(frame + 0x248, ebx as u8); // 00e2b205
+        e.mem.set_u32(frame + 0x2b0, 0x10dbaf8); // 00e2b20c
+        e.mem.set_u32(frame + 0x300, ebx); // 00e2b217
+        e.mem.set_u32(frame + 0x304, ebx); // 00e2b21e
+        e.mem.set_u32(frame + 0x310, ebx); // 00e2b225
+        e.mem.set_u8(frame + 0x2c8, ebx as u8); // 00e2b22c
+        store_lanes(e, frame + 0x40, xmm[0]); // 00e2b233
+        e.mem.set_u8(frame + 0x50, edx as u8); // 00e2b238
+        e.mem.set_u8(frame + 0x6d, eax as u8); // 00e2b23c
+        e.mem.set_u32(frame + 0x64, 0x1); // 00e2b243
+        e.mem.set_u32(frame + 0x68, ebx); // 00e2b24e
+        edx = frame + 0x30; // 00e2b255
+        e.mem.set_u32(frame + 0x150, edx); // 00e2b259
+        e.mem.set_u32(frame + 0x140, ecx); // 00e2b260
+        ecx = edx; // 00e2b267
+        edx = frame + 0x138; // 00e2b269
+        e.mem.set_u32(frame + 0x20, edx); // 00e2b270
+        edx = e.mem.u32(esi.wrapping_add(0xcc)); // 00e2b274
+        e.mem.set_u32(frame + 0xa0, edx); // 00e2b27a
+        e.mem.set_u32(frame + 0x1d4, edx); // 00e2b281
+        e.mem.set_u32(frame + 0x1d8, edx); // 00e2b288
+        edx = u32::from(e.mem.u8(esi.wrapping_add(0x50))); // 00e2b28f
+        e.mem.set_u8(frame + 0x90, edx as u8); // 00e2b293
+        edx = e.mem.u32(esi.wrapping_add(0x54)); // 00e2b29a
+        e.mem.set_u32(frame + 0x94, edx); // 00e2b29d
+        edx = arg2; // 00e2b2a4
+        e.mem.set_u32(frame + 0x1c0, edx); // 00e2b2a7
+        xmm[0] = load_lanes(e, esi.wrapping_add(0x30)); // 00e2b2ae
+        edx = frame + 0x70; // 00e2b2b2
+        e.mem.set_u32(frame + 0x1d0, edx); // 00e2b2b9
+        e.mem.set_u32(frame + 0x1cc, edx); // 00e2b2c0
+        edx = frame + 0x1b8; // 00e2b2c7
+        e.mem.set_u32(frame + 0x24, edx); // 00e2b2ce
+        edx = e.mem.u32(esi.wrapping_add(0xd0)); // 00e2b2d2
+        e.mem.set_u32(frame + 0xe0, edx); // 00e2b2d8
+        e.mem.set_u32(frame + 0x254, edx); // 00e2b2df
+        e.mem.set_u32(frame + 0x258, edx); // 00e2b2e6
+        edx = u32::from(e.mem.u8(esi.wrapping_add(0x80))); // 00e2b2ed
+        e.mem.set_u8(frame + 0xd0, edx as u8); // 00e2b2f4
+        edx = e.mem.u32(esi.wrapping_add(0x84)); // 00e2b2fb
+        e.mem.set_u32(frame + 0xd4, edx); // 00e2b301
+        edx = arg2; // 00e2b308
+        e.mem.set_u32(frame + 0x240, edx); // 00e2b30b
+        edx = frame + 0xb0; // 00e2b312
+        e.mem.set_u32(frame + 0x250, edx); // 00e2b319
+        e.mem.set_u32(frame + 0x24c, edx); // 00e2b320
+        edx = frame + 0x238; // 00e2b327
+        e.mem.set_u32(frame + 0x28, edx); // 00e2b32e
+        edx = e.mem.u32(esi.wrapping_add(0xd4)); // 00e2b332
+        e.mem.set_u32(frame + 0x120, edx); // 00e2b338
+        e.mem.set_u32(frame + 0x2d4, edx); // 00e2b33f
+        e.mem.set_u32(frame + 0x2d8, edx); // 00e2b346
+        edx = u32::from(e.mem.u8(edi.wrapping_add(0x20))); // 00e2b34d
+        e.mem.set_u32(frame + 0x14c, ecx); // 00e2b351
+        ecx = arg3; // 00e2b358
+        store_lanes(e, frame + 0x70, xmm[0]); // 00e2b35b
+        xmm[0] = load_lanes(e, esi.wrapping_add(0x40)); // 00e2b363
+        st0 = x87_quiet_bits(e.mem.u32(ecx)); // 00e2b367
+        store_lanes(e, frame + 0x80, xmm[0]); // 00e2b369
+        xmm[0] = load_lanes(e, esi.wrapping_add(0x60)); // 00e2b371
+        e.mem.set_u32(frame + 0x10, st0); // 00e2b375
+        st0 = x87_quiet_bits(e.mem.u32(ecx.wrapping_add(0x4))); // 00e2b379
+        e.mem.set_u8(frame + 0x110, edx as u8); // 00e2b37c
+        edx = e.mem.u32(edi.wrapping_add(0x24)); // 00e2b383
+        e.mem.set_u32(frame + 0x14, st0); // 00e2b386
+        st0 = x87_quiet_bits(e.mem.u32(ecx.wrapping_add(0x8))); // 00e2b38a
+        store_lanes(e, frame + 0xb0, xmm[0]); // 00e2b38d
+        xmm[0] = load_lanes(e, esi.wrapping_add(0x70)); // 00e2b395
+        e.mem.set_u32(frame + 0x18, st0); // 00e2b399
+        st0 = x87_quiet_bits(e.mem.u32(ecx.wrapping_add(0xc))); // 00e2b39d
+        e.mem.set_u8(frame + 0xad, eax as u8); // 00e2b3a0
+        e.mem.set_u8(frame + 0xed, eax as u8); // 00e2b3a7
+        e.mem.set_u32(frame + 0x1c, st0); // 00e2b3ae
+        e.mem.set_u8(frame + 0x12d, eax as u8); // 00e2b3b2
+        eax = arg2; // 00e2b3b9
+        store_lanes(e, frame + 0xc0, xmm[0]); // 00e2b3bc
+        xmm[0] = load_lanes(e, edi); // 00e2b3c4
+        e.mem.set_u32(frame + 0x114, edx); // 00e2b3c7
+        edx = frame + 0xf0; // 00e2b3ce
+        e.mem.set_u32(frame + 0x2c0, eax); // 00e2b3d5
+        store_lanes(e, frame + 0xf0, xmm[0]); // 00e2b3dc
+        xmm[0] = load_lanes(e, edi.wrapping_add(0x10)); // 00e2b3e4
+        eax = edx; // 00e2b3e8
+        e.mem.set_u32(frame + 0xa4, 0x1); // 00e2b3ea
+        e.mem.set_u32(frame + 0xa8, ebx); // 00e2b3f5
+        e.mem.set_u32(frame + 0xe4, 0x1); // 00e2b3fc
+        e.mem.set_u32(frame + 0xe8, ebx); // 00e2b407
+        store_lanes(e, frame + 0x100, xmm[0]); // 00e2b40e
+        e.mem.set_u32(frame + 0x124, 0x1); // 00e2b416
+        e.mem.set_u32(frame + 0x128, ebx); // 00e2b421
+        e.mem.set_u32(frame + 0x2d0, edx); // 00e2b428
+        e.mem.set_u32(frame + 0x2cc, eax); // 00e2b42f
+        edx = e.mem.u32(esi.wrapping_add(0xc0)); // 00e2b436
+        eax = e.mem.u32(edx.wrapping_mul(4).wrapping_add(0x11b3830)); // 00e2b43c
+        ecx = frame + 0x2b8; // 00e2b443
+        e.mem.set_u32(frame + 0x2c, ecx); // 00e2b44a
+        ecx = frame + 0x10; // 00e2b44e
+        let pushed10 = ecx;
+        e.mem.set_u32(frame - 0x2c, pushed10); // 00e2b452
+        e.mem.set_u32(frame + 0x3a0, eax); // 00e2b453
+        edx = frame + 0x20; // 00e2b45a
+        let pushed11 = edx;
+        e.mem.set_u32(frame - 0x30, pushed11); // 00e2b45e
+        eax = frame + 0x340; // 00e2b45f
+        let pushed12 = eax;
+        e.mem.set_u32(frame - 0x34, pushed12); // 00e2b466
+        eax = arg0; // 00e2b467
+        ecx = e.mem.u32(eax.wrapping_add(0x10)); // 00e2b46a
+        let pushed13 = ebx;
+        e.mem.set_u32(frame - 0x38, pushed13); // 00e2b46d
+        let pushed14 = ecx;
+        e.mem.set_u32(frame - 0x3c, pushed14); // 00e2b46e
+        let pushed15 = eax;
+        e.mem.set_u32(frame - 0x40, pushed15); // 00e2b46f
+        e.call(
+            0x00d1d530,
+            &args![pushed15, pushed14, pushed13, pushed12, pushed11, pushed10],
+        ); // 00e2b470
+        xmm[0] = [e.mem.u32(frame + 0x10), 0, 0, 0]; // 00e2b475
+        xmm[1] = [e.mem.u32(frame + 0x14), 0, 0, 0]; // 00e2b47b
+        xmm[2] = [e.mem.u32(frame + 0x18), 0, 0, 0]; // 00e2b481
+        xmm[3] = [e.mem.u32(frame + 0x1c), 0, 0, 0]; // 00e2b487
+        edx = e.mem.u32(frame + 0x68); // 00e2b48d
+        eax = e.mem.u32(frame + 0xa8); // 00e2b494
+        ecx = e.mem.u32(frame + 0xe8); // 00e2b49b
+        e.mem.set_u32(esi.wrapping_add(0xe0), edx); // 00e2b4a2
+        edx = e.mem.u32(frame + 0x128); // 00e2b4a8
+        e.mem.set_u32(esi.wrapping_add(0xe4), eax); // 00e2b4af
+        eax = arg3; // 00e2b4b5
+        e.mem.set_u32(esi.wrapping_add(0xe8), ecx); // 00e2b4b8
+        e.mem.set_u32(esi.wrapping_add(0xec), edx); // 00e2b4be
+        xmm[0] = [xmm[0][0], xmm[2][0], xmm[0][1], xmm[2][1]]; // 00e2b4c4
+        xmm[1] = [xmm[1][0], xmm[3][0], xmm[1][1], xmm[3][1]]; // 00e2b4c7
+        xmm[0] = [xmm[0][0], xmm[1][0], xmm[0][1], xmm[1][1]]; // 00e2b4ca
+        store_lanes(e, eax, xmm[0]); // 00e2b4cd
+                                     // ADD ESP,0x40 00e2b4d0
+                                     // The exe's closing loop: four stores of vtable words into the dead locals.
+        ecx = ebx.wrapping_add(3);
+        eax = frame + 0x338;
+        edi = 0x010c_cfac;
+        esi = 0x010c_cf8c;
+        edx = 0x010c_3bb8;
+        loop {
+            eax = eax.wrapping_sub(0x80);
+            ecx = ecx.wrapping_sub(1);
+            e.mem.set_u32(eax.wrapping_add(4), edi);
+            e.mem.set_u32(eax, 0x010c_cfa0);
+            e.mem.set_u32(eax.wrapping_sub(4), esi);
+            e.mem.set_u32(eax.wrapping_sub(8), edx);
+            if (ecx as i32) < 0 {
+                break;
+            }
+        }
+    });
+}
+
+// Translated from 00e2b510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (the same function as `00e2b070` with other frame offsets and the
+/// callee `00d1d490`). Arguments (cdecl, four stack words, nothing popped): `owner` (nothing
+/// happens when it is null), a `source` record, a word `value` and a four-float `vector`. It
+/// builds a `0x3a4`-byte stack frame: `00d1bb50` (ten stack words, the last `0xf`) converts eight
+/// vectors of `source` (at `+0x00`, `+0x10`, `+0x30`, `+0x40`, `+0x60`, `+0x70`, `+0x90` and
+/// `+0xa0`) into the frame; four 0x80-byte local objects get their vtable words (`010dbacc`,
+/// `010dbae4`, `010dbad8`, `010dbaf8`), `1.0f`, `value` and records copied from `source`
+/// (`+0xc0..+0xd4` and the words of the four sub-records); a four-pointer array refers to
+/// them; the vector is copied from `vector`. Then `00d1d490` (cdecl, six words: `owner`,
+/// `[owner + 0x10]`, 0, the converted block, the pointer array and the vector copy) runs, four
+/// words of the frame go to `source + 0xe0..+0xec` and the vector copy back to `vector`
+/// (interleaved by `UNPCKLPS`); the closing loop writes the vtable words of four destroyed
+/// locals into the frame that is about to be discarded.
+///
+/// A register-level translation of straight-line code: each statement ends with the address of
+/// the instruction it comes from; `frame` is the address of what the exe's `ESP` points at after
+/// its prologue (the saved registers) and the offsets are relative to it, taking the words
+/// still pushed for the unpopped cdecl calls into account.
+#[allow(unused_assignments)]
+pub fn fn_00e2b510(e: &mut Engine, owner: Ptr, source: Ptr, value: u32, vector: Ptr) {
+    let (arg0, arg1, arg2, arg3) = (owner.addr(), source.addr(), value, vector.addr());
+    if arg0 == 0 {
+        return;
+    }
+    e.with_stack(0x420, |e, buffer| {
+        let frame = buffer.addr() + 0x60;
+        let (mut eax, mut ecx, mut edx, mut esi, mut edi) = (0u32, 0u32, 0u32, 0u32, 0u32);
+        let ebx = 0u32;
+        let mut xmm = [[0u32; 4]; 8];
+        let mut st0 = 0u32;
+        esi = arg1; // 00e2b52a
+        let pushed0 = 0xf;
+        e.mem.set_u32(frame - 0x4, pushed0); // 00e2b52d
+        edx = esi.wrapping_add(0xa0); // 00e2b52f
+        let pushed1 = edx;
+        e.mem.set_u32(frame - 0x8, pushed1); // 00e2b535
+        edi = esi.wrapping_add(0x90); // 00e2b536
+        let pushed2 = edi;
+        e.mem.set_u32(frame - 0xc, pushed2); // 00e2b53c
+        edx = esi.wrapping_add(0x70); // 00e2b53d
+        let pushed3 = edx;
+        e.mem.set_u32(frame - 0x10, pushed3); // 00e2b540
+        eax = esi.wrapping_add(0x60); // 00e2b541
+        let pushed4 = eax;
+        e.mem.set_u32(frame - 0x14, pushed4); // 00e2b544
+        eax = esi.wrapping_add(0x40); // 00e2b545
+        let pushed5 = eax;
+        e.mem.set_u32(frame - 0x18, pushed5); // 00e2b548
+        ecx = esi.wrapping_add(0x30); // 00e2b549
+        let pushed6 = ecx;
+        e.mem.set_u32(frame - 0x1c, pushed6); // 00e2b54c
+        eax = esi.wrapping_add(0x10); // 00e2b54d
+        let pushed7 = eax;
+        e.mem.set_u32(frame - 0x20, pushed7); // 00e2b550
+        ecx = frame + 0x340; // 00e2b551
+        let pushed8 = esi;
+        e.mem.set_u32(frame - 0x24, pushed8); // 00e2b558
+        let pushed9 = ecx;
+        e.mem.set_u32(frame - 0x28, pushed9); // 00e2b559
+        e.call(
+            0x00d1bb50,
+            &args![
+                pushed9, pushed8, pushed7, pushed6, pushed5, pushed4, pushed3, pushed2, pushed1,
+                pushed0
+            ],
+        ); // 00e2b55a
+        st0 = 0x3f80_0000; // 00e2b55f
+        xmm[0] = load_lanes(e, esi); // 00e2b561
+        e.mem.set_u32(frame + 0x144, st0); // 00e2b564
+        eax = 0x10dbacc; // 00e2b56b
+        e.mem.set_u32(frame + 0x1c4, st0); // 00e2b570
+        edx = 0x10dbae4; // 00e2b577
+        e.mem.set_u32(frame + 0x244, st0); // 00e2b57c
+        e.mem.set_u32(frame + 0x13c, eax); // 00e2b583
+        e.mem.set_u32(frame + 0x2c4, st0); // 00e2b58a
+        e.mem.set_u32(frame + 0x1bc, eax); // 00e2b591
+        e.mem.set_u32(frame + 0x23c, eax); // 00e2b598
+        e.mem.set_u32(frame + 0x2bc, eax); // 00e2b59f
+        eax = e.mem.u32(esi.wrapping_add(0xc8)); // 00e2b5a6
+        ecx = 0x10dbad8; // 00e2b5ac
+        e.mem.set_u32(frame + 0x60, eax); // 00e2b5b1
+        e.mem.set_u32(frame + 0x154, eax); // 00e2b5b8
+        e.mem.set_u32(frame + 0x158, eax); // 00e2b5bf
+        eax = e.mem.u32(esi.wrapping_add(0x24)); // 00e2b5c6
+        e.mem.set_u32(frame + 0x134, edx); // 00e2b5c9
+        e.mem.set_u32(frame + 0x1b4, edx); // 00e2b5d0
+        e.mem.set_u32(frame + 0x234, edx); // 00e2b5d7
+        e.mem.set_u32(frame + 0x2b4, edx); // 00e2b5de
+        edx = u32::from(e.mem.u8(esi.wrapping_add(0x20))); // 00e2b5e5
+        e.mem.set_u32(frame + 0x54, eax); // 00e2b5e9
+        eax = (eax & 0xffff_ff00) | u32::from(e.mem.u8(esi.wrapping_add(0xc4))); // 00e2b5ed
+        store_lanes(e, frame + 0x30, xmm[0]); // 00e2b5f3
+        xmm[0] = load_lanes(e, esi.wrapping_add(0x10)); // 00e2b5f8
+        e.mem.set_u32(frame + 0x138, ecx); // 00e2b5fc
+        e.mem.set_u32(frame + 0x1b8, ecx); // 00e2b603
+        e.mem.set_u32(frame + 0x238, ecx); // 00e2b60a
+        e.mem.set_u32(frame + 0x2b8, ecx); // 00e2b611
+        ecx = arg2; // 00e2b618
+        e.mem.set_u8(frame + 0x6c, ebx as u8); // 00e2b61b
+        e.mem.set_u8(frame + 0xac, ebx as u8); // 00e2b622
+        e.mem.set_u8(frame + 0xec, ebx as u8); // 00e2b629
+        e.mem.set_u8(frame + 0x12c, ebx as u8); // 00e2b630
+        e.mem.set_u32(frame + 0x130, 0x10dbaf8); // 00e2b637
+        e.mem.set_u32(frame + 0x180, ebx); // 00e2b642
+        e.mem.set_u32(frame + 0x184, ebx); // 00e2b649
+        e.mem.set_u32(frame + 0x190, ebx); // 00e2b650
+        e.mem.set_u8(frame + 0x148, ebx as u8); // 00e2b657
+        e.mem.set_u32(frame + 0x1b0, 0x10dbaf8); // 00e2b65e
+        e.mem.set_u32(frame + 0x200, ebx); // 00e2b669
+        e.mem.set_u32(frame + 0x204, ebx); // 00e2b670
+        e.mem.set_u32(frame + 0x210, ebx); // 00e2b677
+        e.mem.set_u8(frame + 0x1c8, ebx as u8); // 00e2b67e
+        e.mem.set_u32(frame + 0x230, 0x10dbaf8); // 00e2b685
+        e.mem.set_u32(frame + 0x280, ebx); // 00e2b690
+        e.mem.set_u32(frame + 0x284, ebx); // 00e2b697
+        e.mem.set_u32(frame + 0x290, ebx); // 00e2b69e
+        e.mem.set_u8(frame + 0x248, ebx as u8); // 00e2b6a5
+        e.mem.set_u32(frame + 0x2b0, 0x10dbaf8); // 00e2b6ac
+        e.mem.set_u32(frame + 0x300, ebx); // 00e2b6b7
+        e.mem.set_u32(frame + 0x304, ebx); // 00e2b6be
+        e.mem.set_u32(frame + 0x310, ebx); // 00e2b6c5
+        e.mem.set_u8(frame + 0x2c8, ebx as u8); // 00e2b6cc
+        store_lanes(e, frame + 0x40, xmm[0]); // 00e2b6d3
+        e.mem.set_u8(frame + 0x50, edx as u8); // 00e2b6d8
+        e.mem.set_u8(frame + 0x6d, eax as u8); // 00e2b6dc
+        e.mem.set_u32(frame + 0x64, 0x1); // 00e2b6e3
+        e.mem.set_u32(frame + 0x68, ebx); // 00e2b6ee
+        edx = frame + 0x30; // 00e2b6f5
+        e.mem.set_u32(frame + 0x150, edx); // 00e2b6f9
+        e.mem.set_u32(frame + 0x140, ecx); // 00e2b700
+        ecx = edx; // 00e2b707
+        edx = frame + 0x13c; // 00e2b709
+        e.mem.set_u32(frame + 0x20, edx); // 00e2b710
+        edx = e.mem.u32(esi.wrapping_add(0xcc)); // 00e2b714
+        e.mem.set_u32(frame + 0xa0, edx); // 00e2b71a
+        e.mem.set_u32(frame + 0x1d4, edx); // 00e2b721
+        e.mem.set_u32(frame + 0x1d8, edx); // 00e2b728
+        edx = u32::from(e.mem.u8(esi.wrapping_add(0x50))); // 00e2b72f
+        e.mem.set_u8(frame + 0x90, edx as u8); // 00e2b733
+        edx = e.mem.u32(esi.wrapping_add(0x54)); // 00e2b73a
+        e.mem.set_u32(frame + 0x94, edx); // 00e2b73d
+        edx = arg2; // 00e2b744
+        e.mem.set_u32(frame + 0x1c0, edx); // 00e2b747
+        xmm[0] = load_lanes(e, esi.wrapping_add(0x30)); // 00e2b74e
+        edx = frame + 0x70; // 00e2b752
+        e.mem.set_u32(frame + 0x1d0, edx); // 00e2b759
+        e.mem.set_u32(frame + 0x1cc, edx); // 00e2b760
+        edx = frame + 0x1bc; // 00e2b767
+        e.mem.set_u32(frame + 0x24, edx); // 00e2b76e
+        edx = e.mem.u32(esi.wrapping_add(0xd0)); // 00e2b772
+        e.mem.set_u32(frame + 0xe0, edx); // 00e2b778
+        e.mem.set_u32(frame + 0x254, edx); // 00e2b77f
+        e.mem.set_u32(frame + 0x258, edx); // 00e2b786
+        edx = u32::from(e.mem.u8(esi.wrapping_add(0x80))); // 00e2b78d
+        e.mem.set_u8(frame + 0xd0, edx as u8); // 00e2b794
+        edx = e.mem.u32(esi.wrapping_add(0x84)); // 00e2b79b
+        e.mem.set_u32(frame + 0xd4, edx); // 00e2b7a1
+        edx = arg2; // 00e2b7a8
+        e.mem.set_u32(frame + 0x240, edx); // 00e2b7ab
+        edx = frame + 0xb0; // 00e2b7b2
+        e.mem.set_u32(frame + 0x250, edx); // 00e2b7b9
+        e.mem.set_u32(frame + 0x24c, edx); // 00e2b7c0
+        edx = frame + 0x23c; // 00e2b7c7
+        e.mem.set_u32(frame + 0x28, edx); // 00e2b7ce
+        edx = e.mem.u32(esi.wrapping_add(0xd4)); // 00e2b7d2
+        e.mem.set_u32(frame + 0x120, edx); // 00e2b7d8
+        e.mem.set_u32(frame + 0x2d4, edx); // 00e2b7df
+        e.mem.set_u32(frame + 0x2d8, edx); // 00e2b7e6
+        edx = u32::from(e.mem.u8(edi.wrapping_add(0x20))); // 00e2b7ed
+        e.mem.set_u32(frame + 0x14c, ecx); // 00e2b7f1
+        ecx = arg3; // 00e2b7f8
+        store_lanes(e, frame + 0x70, xmm[0]); // 00e2b7fb
+        xmm[0] = load_lanes(e, esi.wrapping_add(0x40)); // 00e2b803
+        st0 = x87_quiet_bits(e.mem.u32(ecx)); // 00e2b807
+        store_lanes(e, frame + 0x80, xmm[0]); // 00e2b809
+        xmm[0] = load_lanes(e, esi.wrapping_add(0x60)); // 00e2b811
+        e.mem.set_u32(frame + 0x10, st0); // 00e2b815
+        st0 = x87_quiet_bits(e.mem.u32(ecx.wrapping_add(0x4))); // 00e2b819
+        e.mem.set_u8(frame + 0x110, edx as u8); // 00e2b81c
+        edx = e.mem.u32(edi.wrapping_add(0x24)); // 00e2b823
+        e.mem.set_u32(frame + 0x14, st0); // 00e2b826
+        st0 = x87_quiet_bits(e.mem.u32(ecx.wrapping_add(0x8))); // 00e2b82a
+        store_lanes(e, frame + 0xb0, xmm[0]); // 00e2b82d
+        xmm[0] = load_lanes(e, esi.wrapping_add(0x70)); // 00e2b835
+        e.mem.set_u32(frame + 0x18, st0); // 00e2b839
+        st0 = x87_quiet_bits(e.mem.u32(ecx.wrapping_add(0xc))); // 00e2b83d
+        e.mem.set_u8(frame + 0xad, eax as u8); // 00e2b840
+        e.mem.set_u8(frame + 0xed, eax as u8); // 00e2b847
+        e.mem.set_u32(frame + 0x1c, st0); // 00e2b84e
+        e.mem.set_u8(frame + 0x12d, eax as u8); // 00e2b852
+        eax = arg2; // 00e2b859
+        store_lanes(e, frame + 0xc0, xmm[0]); // 00e2b85c
+        xmm[0] = load_lanes(e, edi); // 00e2b864
+        e.mem.set_u32(frame + 0x114, edx); // 00e2b867
+        edx = frame + 0xf0; // 00e2b86e
+        e.mem.set_u32(frame + 0x2c0, eax); // 00e2b875
+        store_lanes(e, frame + 0xf0, xmm[0]); // 00e2b87c
+        xmm[0] = load_lanes(e, edi.wrapping_add(0x10)); // 00e2b884
+        eax = edx; // 00e2b888
+        e.mem.set_u32(frame + 0xa4, 0x1); // 00e2b88a
+        e.mem.set_u32(frame + 0xa8, ebx); // 00e2b895
+        e.mem.set_u32(frame + 0xe4, 0x1); // 00e2b89c
+        e.mem.set_u32(frame + 0xe8, ebx); // 00e2b8a7
+        store_lanes(e, frame + 0x100, xmm[0]); // 00e2b8ae
+        e.mem.set_u32(frame + 0x124, 0x1); // 00e2b8b6
+        e.mem.set_u32(frame + 0x128, ebx); // 00e2b8c1
+        e.mem.set_u32(frame + 0x2d0, edx); // 00e2b8c8
+        e.mem.set_u32(frame + 0x2cc, eax); // 00e2b8cf
+        edx = e.mem.u32(esi.wrapping_add(0xc0)); // 00e2b8d6
+        eax = e.mem.u32(edx.wrapping_mul(4).wrapping_add(0x11b3830)); // 00e2b8dc
+        ecx = frame + 0x2bc; // 00e2b8e3
+        e.mem.set_u32(frame + 0x2c, ecx); // 00e2b8ea
+        ecx = frame + 0x10; // 00e2b8ee
+        let pushed10 = ecx;
+        e.mem.set_u32(frame - 0x2c, pushed10); // 00e2b8f2
+        e.mem.set_u32(frame + 0x3a0, eax); // 00e2b8f3
+        edx = frame + 0x20; // 00e2b8fa
+        let pushed11 = edx;
+        e.mem.set_u32(frame - 0x30, pushed11); // 00e2b8fe
+        eax = frame + 0x340; // 00e2b8ff
+        let pushed12 = eax;
+        e.mem.set_u32(frame - 0x34, pushed12); // 00e2b906
+        eax = arg0; // 00e2b907
+        ecx = e.mem.u32(eax.wrapping_add(0x10)); // 00e2b90a
+        let pushed13 = ebx;
+        e.mem.set_u32(frame - 0x38, pushed13); // 00e2b90d
+        let pushed14 = ecx;
+        e.mem.set_u32(frame - 0x3c, pushed14); // 00e2b90e
+        let pushed15 = eax;
+        e.mem.set_u32(frame - 0x40, pushed15); // 00e2b90f
+        e.call(
+            0x00d1d490,
+            &args![pushed15, pushed14, pushed13, pushed12, pushed11, pushed10],
+        ); // 00e2b910
+        xmm[0] = [e.mem.u32(frame + 0x10), 0, 0, 0]; // 00e2b915
+        xmm[1] = [e.mem.u32(frame + 0x14), 0, 0, 0]; // 00e2b91b
+        xmm[2] = [e.mem.u32(frame + 0x18), 0, 0, 0]; // 00e2b921
+        xmm[3] = [e.mem.u32(frame + 0x1c), 0, 0, 0]; // 00e2b927
+        edx = e.mem.u32(frame + 0x68); // 00e2b92d
+        eax = e.mem.u32(frame + 0xa8); // 00e2b934
+        ecx = e.mem.u32(frame + 0xe8); // 00e2b93b
+        e.mem.set_u32(esi.wrapping_add(0xe0), edx); // 00e2b942
+        edx = e.mem.u32(frame + 0x128); // 00e2b948
+        e.mem.set_u32(esi.wrapping_add(0xe4), eax); // 00e2b94f
+        eax = arg3; // 00e2b955
+        e.mem.set_u32(esi.wrapping_add(0xe8), ecx); // 00e2b958
+        e.mem.set_u32(esi.wrapping_add(0xec), edx); // 00e2b95e
+        xmm[0] = [xmm[0][0], xmm[2][0], xmm[0][1], xmm[2][1]]; // 00e2b964
+        xmm[1] = [xmm[1][0], xmm[3][0], xmm[1][1], xmm[3][1]]; // 00e2b967
+        xmm[0] = [xmm[0][0], xmm[1][0], xmm[0][1], xmm[1][1]]; // 00e2b96a
+        store_lanes(e, eax, xmm[0]); // 00e2b96d
+                                     // ADD ESP,0x40 00e2b970
+                                     // The exe's closing loop: four stores of vtable words into the dead locals.
+        ecx = ebx.wrapping_add(3);
+        eax = frame + 0x338;
+        edi = 0x010c_cfac;
+        esi = 0x010c_cf8c;
+        edx = 0x010c_3bb8;
+        loop {
+            eax = eax.wrapping_sub(0x80);
+            ecx = ecx.wrapping_sub(1);
+            e.mem.set_u32(eax.wrapping_add(4), edi);
+            e.mem.set_u32(eax, 0x010c_cfa0);
+            e.mem.set_u32(eax.wrapping_sub(4), esi);
+            e.mem.set_u32(eax.wrapping_sub(8), edx);
+            if (ecx as i32) < 0 {
+                break;
+            }
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -673,6 +1411,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e2d550, fn_00e2d550(Ptr, Ptr) -> Ptr),
         entry!(0x00e2da40, fn_00e2da40(Ptr, Ptr, Ptr, Ptr, Ptr)),
         entry!(0x00e2db70, fn_00e2db70(Ptr, Ptr, Ptr, Ptr, Ptr, Ptr)),
+        entry!(0x00e2_b070, fn_00e2b070(Ptr, Ptr, u32, Ptr)),
+        entry!(0x00e2_b510, fn_00e2b510(Ptr, Ptr, u32, Ptr)),
+        entry!(0x00e2_b9b0, fn_00e2b9b0(Ptr, Ptr, Ptr)),
+        entry!(0x00e2_baa0, fn_00e2baa0(Ptr, Ptr, u32)),
+        entry!(
+            0x00e2_baf0,
+            fn_00e2baf0(Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, u32)
+        ),
     ]
 }
 
@@ -1037,5 +1783,318 @@ mod tests {
         assert_eq!(e.mem.u32(this + 0x1020), e.mem.u32(this + 0x1020));
         assert_ne!(e.mem.u32(this + 0x1020), this + 0x60);
         assert_ne!(e.mem.u32(this + 0xfd0), this + 0x60);
+    }
+}
+
+#[cfg(test)]
+mod tests_a05 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Calls = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    /// A 0x60-byte-entry list: `count` entries in use with the given keys, capacity `capacity`.
+    /// Returns (store, entries).
+    fn store(e: &mut Engine, keys: &[f32], capacity: i32, count: i32) -> (u32, u32) {
+        let store = e.mem.alloc(0x20);
+        let entries = e.mem.alloc(0x60 * 4);
+        for (index, key) in keys.iter().enumerate() {
+            e.mem.set_f32(entries + 0x60 * index as u32 + 0x10, *key);
+        }
+        e.mem.set_u32(store + 8, entries);
+        e.mem.set_u32(store + 0xc, entries + 0x60 * count as u32);
+        e.mem.set_i32(store + 0x10, capacity);
+        e.mem.set_i32(store + 0x14, count);
+        (store, entries)
+    }
+
+    /// A chain of three nodes linked through +0xc whose +4 words are 0x111, 0x222, 0x333.
+    fn chain(e: &mut Engine) -> [u32; 3] {
+        let nodes = [e.mem.alloc(0x10), e.mem.alloc(0x10), e.mem.alloc(0x10)];
+        for (index, node) in nodes.iter().enumerate() {
+            e.mem.set_u32(node + 4, 0x111 * (index as u32 + 1));
+            e.mem
+                .set_u32(node + 0xc, nodes.get(index + 1).copied().unwrap_or(0));
+        }
+        nodes
+    }
+
+    fn candidate(e: &mut Engine, key: f32) -> u32 {
+        let candidate = e.mem.alloc(0x20);
+        for word in 0..4u32 {
+            e.mem.set_u32(candidate + 4 * word, 0xc0de_0000 + word);
+        }
+        e.mem.set_f32(candidate + 0x10, key);
+        e.mem.set_u32(candidate + 0x14, 0xfeed);
+        candidate
+    }
+
+    /// With room the entry at the write pointer is used; the candidate's words, the last chain
+    /// node and the two chain words (plus the terminator) end up in it.
+    #[test]
+    fn fn_00e2b9b0_fills_the_next_free_entry() {
+        let mut e = Engine::new();
+        let (store, entries) = store(&mut e, &[], 3, 0);
+        let nodes = chain(&mut e);
+        let candidate = candidate(&mut e, 2.5);
+        e.call(0x00e2_b9b0, &args![nodes[0], candidate, store]);
+        assert_eq!(e.mem.i32(store + 0x14), 1);
+        assert_eq!(e.mem.u32(store + 0xc), entries + 0x60);
+        assert_eq!(e.mem.f32(entries + 0x10), 2.5);
+        for word in 0..4u32 {
+            assert_eq!(e.mem.u32(entries + 4 * word), 0xc0de_0000 + word);
+        }
+        assert_eq!(e.mem.u32(entries + 0x14), 0xfeed);
+        assert_eq!(e.mem.u32(entries + 0x50), nodes[2]);
+        assert_eq!(e.mem.u32(entries + 0x20), 0x222);
+        assert_eq!(e.mem.u32(entries + 0x24), 0x111);
+        assert_eq!(e.mem.u32(entries + 0x28), 0xffff_ffff);
+    }
+
+    /// A non-zero override pointer replaces the last-node search; a chain without links gives
+    /// only the terminator at word 0.
+    #[test]
+    fn fn_00e2b9b0_uses_the_override_pointer() {
+        let mut e = Engine::new();
+        let (store, entries) = store(&mut e, &[], 3, 0);
+        e.mem.set_u32(store + 0x18, 0x4242);
+        let lone = e.mem.alloc(0x10);
+        let candidate = candidate(&mut e, 1.0);
+        e.call(0x00e2_b9b0, &args![lone, candidate, store]);
+        assert_eq!(e.mem.u32(entries + 0x50), 0x4242);
+        assert_eq!(e.mem.u32(entries + 0x20), 0xffff_ffff);
+    }
+
+    /// A chain without links and no override: the entry's last node is the chain's own node.
+    #[test]
+    fn fn_00e2b9b0_single_node_chain_is_its_own_last_node() {
+        let mut e = Engine::new();
+        let (store, entries) = store(&mut e, &[], 3, 0);
+        let lone = e.mem.alloc(0x10);
+        let candidate = candidate(&mut e, 1.0);
+        e.call(0x00e2_b9b0, &args![lone, candidate, store]);
+        assert_eq!(e.mem.u32(entries + 0x50), lone);
+    }
+
+    /// A full list replaces its largest key (here entry 1) when the candidate's key is smaller.
+    #[test]
+    fn fn_00e2b9b0_replaces_the_largest_key_when_full() {
+        let mut e = Engine::new();
+        let (store, entries) = store(&mut e, &[1.0, 5.0, 3.0], 3, 3);
+        let nodes = chain(&mut e);
+        let candidate = candidate(&mut e, 2.0);
+        e.call(0x00e2_b9b0, &args![nodes[0], candidate, store]);
+        assert_eq!(e.mem.f32(entries + 0x10), 1.0);
+        assert_eq!(e.mem.f32(entries + 0x60 + 0x10), 2.0);
+        assert_eq!(e.mem.f32(entries + 0xc0 + 0x10), 3.0);
+        assert_eq!(e.mem.i32(store + 0x14), 3);
+        assert_eq!(e.mem.u32(entries + 0x60 + 0x50), nodes[2]);
+    }
+
+    /// A full list is left alone when the candidate's key is not smaller than the largest
+    /// (greater, equal or a NaN).
+    #[test]
+    fn fn_00e2b9b0_keeps_a_full_list_when_the_candidate_is_not_smaller() {
+        for key in [9.0f32, 5.0, f32::NAN] {
+            let mut e = Engine::new();
+            let (store, entries) = store(&mut e, &[1.0, 5.0, 3.0], 3, 3);
+            let nodes = chain(&mut e);
+            let candidate = candidate(&mut e, key);
+            e.call(0x00e2_b9b0, &args![nodes[0], candidate, store]);
+            assert_eq!(e.mem.f32(entries + 0x60 + 0x10), 5.0, "key {key}");
+            assert_eq!(e.mem.u32(entries + 0x60 + 0x50), 0);
+        }
+    }
+
+    /// A NaN key in the list never counts as larger: the first entry stays the victim.
+    #[test]
+    fn fn_00e2b9b0_a_nan_in_the_list_is_not_a_victim() {
+        let mut e = Engine::new();
+        let (store, entries) = store(&mut e, &[4.0, f32::NAN, 3.0], 3, 3);
+        let nodes = chain(&mut e);
+        let candidate = candidate(&mut e, 1.0);
+        e.call(0x00e2_b9b0, &args![nodes[0], candidate, store]);
+        assert_eq!(e.mem.f32(entries + 0x10), 1.0);
+    }
+
+    /// The fields are copied, the pointer words depend on the byte at +0x20 and the extra word.
+    #[test]
+    fn fn_00e2baa0_initialises_the_record() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x60);
+        e.mem.write(object, &[0x55; 0x60]);
+        let source = e.mem.alloc(0x40);
+        e.mem.set_u32(source + 0x30, 0x3030);
+        e.mem.set_u32(source + 0x24, 0x2424);
+        e.mem.set_u8(source + 0x20, 1);
+        e.call(0x00e2_baa0, &args![object, source, 0x100u32]);
+        assert_eq!(e.mem.f32(object + 0x14), 1.0);
+        assert_eq!(e.mem.u8(object + 0x18), 0);
+        assert_eq!(e.mem.u32(object + 0x1c), source);
+        assert_eq!(e.mem.u32(object + 0x20), source);
+        assert_eq!(e.mem.u32(object + 0x24), 0x3030);
+        assert_eq!(e.mem.u32(object + 0x28), 0x3030);
+        assert_eq!(e.mem.u32(object + 0x50), 0x2424);
+        assert_eq!(e.mem.u32(object + 0x54), 0x110);
+        assert_eq!(e.mem.u32(object + 0x58), 0x5555_5555);
+        // A zero byte, or a zero extra word, gives 0.
+        e.mem.set_u8(source + 0x20, 0);
+        e.call(0x00e2_baa0, &args![object, source, 0x100u32]);
+        assert_eq!(e.mem.u32(object + 0x54), 0);
+        e.mem.set_u8(source + 0x20, 0x80);
+        e.call(0x00e2_baa0, &args![object, source, 0x100u32]);
+        assert_eq!(e.mem.u32(object + 0x54), 0x110);
+        e.call(0x00e2_baa0, &args![object, source, 0u32]);
+        assert_eq!(e.mem.u32(object + 0x54), 0);
+    }
+
+    /// Eight vectors with lane values 10 * index + lane become six rows.
+    #[test]
+    fn fn_00e2baf0_transposes_eight_vectors_into_six() {
+        let mut e = Engine::new();
+        let vectors: Vec<u32> = (0..8u32)
+            .map(|index| {
+                let at = e.mem.alloc(0x10);
+                for lane in 0..4u32 {
+                    e.mem.set_u32(at + 4 * lane, 10 * index + lane);
+                }
+                at
+            })
+            .collect();
+        let out = e.mem.alloc(0x80);
+        e.mem.write(out, &[0x77; 0x80]);
+        let mut words = vec![out];
+        words.extend(vectors.iter().copied());
+        words.push(0x1234);
+        e.call(0x00e2_baf0, &words);
+        let rows: Vec<Vec<u32>> = (0..6u32)
+            .map(|row| {
+                (0..4u32)
+                    .map(|lane| e.mem.u32(out + 0x10 * row + 4 * lane))
+                    .collect()
+            })
+            .collect();
+        // a, c, e, g are vectors 0, 2, 4, 6; b, d, f, h are 1, 3, 5, 7.
+        assert_eq!(rows[0], vec![0, 20, 40, 60]);
+        assert_eq!(rows[1], vec![1, 21, 41, 61]);
+        assert_eq!(rows[2], vec![2, 22, 42, 62]);
+        assert_eq!(rows[3], vec![10, 30, 50, 70]);
+        assert_eq!(rows[4], vec![11, 31, 51, 71]);
+        assert_eq!(rows[5], vec![12, 32, 52, 72]);
+        assert_eq!(e.mem.u32(out + 0x60), 0x1234);
+        assert_eq!(e.mem.u32(out + 0x64), 0x7777_7777);
+    }
+
+    /// The frame builders: the two big callees are doubles; `00d1d530` (or `00d1d490`) checks
+    /// what the frame holds when it is called and changes four frame words and the vector copy,
+    /// which the function then writes back.
+    fn check_frame_builder(address: u32, final_callee: u32, pointer_shift: u32) {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        let calls: Calls = Rc::new(RefCell::new(Vec::new()));
+        let first_calls = Rc::clone(&calls);
+        e.register_double(0x00d1_bb50, move |_, a| {
+            first_calls.borrow_mut().push((0x00d1_bb50, a.to_vec()));
+            Ret::default()
+        });
+        let owner = e.mem.alloc(0x20);
+        e.mem.set_u32(owner + 0x10, 0xabc0);
+        let source = e.mem.alloc(0x100);
+        for word in 0..0x3d {
+            e.mem.set_u32(source + 4 * word, 0x1000 + word);
+        }
+        // The byte flags and the table index the function reads.
+        e.mem.set_u8(source + 0x20, 7);
+        e.mem.set_u8(source + 0xc4, 9);
+        e.mem.set_u32(source + 0xc0, 2);
+        e.set_global(0x011b_3830 + 8, 0x7e57u32);
+        let vector = e.mem.alloc(0x10);
+        for (lane, value) in [1.0f32, 2.0, 3.0, 4.0].into_iter().enumerate() {
+            e.mem.set_f32(vector + 4 * lane as u32, value);
+        }
+        let last_calls = Rc::clone(&calls);
+        e.register_double(final_callee, move |e, a| {
+            last_calls.borrow_mut().push((final_callee, a.to_vec()));
+            let frame = a[3] - 0x340;
+            // The record vectors copied from the source, the vector copy and the sources of
+            // the written-back words.
+            for word in 0..4u32 {
+                assert_eq!(e.mem.u32(frame + 0x30 + 4 * word), 0x1000 + word);
+                assert_eq!(e.mem.u32(frame + 0x40 + 4 * word), 0x1004 + word);
+            }
+            for (lane, value) in [1.0f32, 2.0, 3.0, 4.0].into_iter().enumerate() {
+                assert_eq!(e.mem.f32(a[5] + 4 * lane as u32), value);
+            }
+            assert_eq!(a[4], frame + 0x20);
+            assert_eq!(a[5], frame + 0x10);
+            let objects: Vec<u32> = (0..4u32).map(|slot| e.mem.u32(a[4] + 4 * slot)).collect();
+            let expected: Vec<u32> = [0x138u32, 0x1b8, 0x238, 0x2b8]
+                .iter()
+                .map(|offset| frame + offset + pointer_shift)
+                .collect();
+            assert_eq!(objects, expected);
+            // The table word at the end of the frame (`011b3830 + 4 * [source + 0xc0]`).
+            assert_eq!(e.mem.u32(frame + 0x3a0), 0x7e57);
+            for (offset, word) in [
+                (0x68u32, 0xa1u32),
+                (0xa8, 0xa2),
+                (0xe8, 0xa3),
+                (0x128, 0xa4),
+            ] {
+                e.mem.set_u32(frame + offset, word);
+            }
+            for (lane, value) in [5.0f32, 6.0, 7.0, 8.0].into_iter().enumerate() {
+                e.mem.set_f32(a[5] + 4 * lane as u32, value);
+            }
+            Ret::default()
+        });
+        e.call(address, &args![owner, source, 0x7777u32, vector]);
+        let calls = calls.borrow();
+        assert_eq!(calls.len(), 2);
+        let (first_address, first) = &calls[0];
+        assert_eq!(*first_address, 0x00d1_bb50);
+        assert_eq!(
+            first[1..],
+            [
+                source,
+                source + 0x10,
+                source + 0x30,
+                source + 0x40,
+                source + 0x60,
+                source + 0x70,
+                source + 0x90,
+                source + 0xa0,
+                0xf
+            ]
+        );
+        let (_, last) = &calls[1];
+        assert_eq!(last[..3], [owner, 0xabc0, 0]);
+        assert_eq!(first[0], last[3]);
+        for (offset, word) in [(0xe0u32, 0xa1u32), (0xe4, 0xa2), (0xe8, 0xa3), (0xec, 0xa4)] {
+            assert_eq!(e.mem.u32(source + offset), word);
+        }
+        let result: Vec<f32> = (0..4u32).map(|lane| e.mem.f32(vector + 4 * lane)).collect();
+        assert_eq!(result, vec![5.0, 6.0, 7.0, 8.0]);
+    }
+
+    #[test]
+    fn fn_00e2b070_builds_the_frame_and_writes_the_results_back() {
+        check_frame_builder(0x00e2_b070, 0x00d1_d530, 0);
+    }
+
+    #[test]
+    fn fn_00e2b510_builds_the_frame_and_writes_the_results_back() {
+        check_frame_builder(0x00e2_b510, 0x00d1_d490, 4);
+    }
+
+    /// A null owner does nothing at all.
+    #[test]
+    fn frame_builders_do_nothing_for_a_null_owner() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.call(0x00e2_b070, &args![0u32, 0x1000u32, 0u32, 0x2000u32]);
+        e.call(0x00e2_b510, &args![0u32, 0x1000u32, 0u32, 0x2000u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 2);
     }
 }

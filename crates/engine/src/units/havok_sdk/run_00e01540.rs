@@ -4,6 +4,8 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+use super::hkaabbtree::{allocator, release_array};
+
 // Translated from 00e01540 (decompiled, FalloutNV.exe 1.4.0.525)
 /// No name in the engine map: takes no arguments and returns the constant 0x010e_9300.
 pub fn return_constant_00e01540(_e: &mut Engine) -> u32 {
@@ -48,6 +50,39 @@ pub fn fn_00e01710(e: &mut Engine) -> u32 {
     })
 }
 
+// Translated from 00e015d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a deleting destructor (`this` in `ECX`, one stack word `flags`)
+/// of an object with an `hkArray`-shaped triple of 4-byte elements at `+8` (data, size,
+/// capacity and flags): it releases the array's storage (size cleared, data returned through
+/// the allocator's slot `0x10` unless the capacity word is negative, data cleared, capacity
+/// word `0x80000000`), writes the vtable word `0102e388` and, when bit 0 of `flags` is set,
+/// returns the block to the memory router's allocator (slot `8`) with the 16-bit size kept at
+/// `+4`. Returns `this`. The class is unconfirmed.
+pub fn deleting_destructor_00e015d0(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    let base = this.addr();
+    release_array(e, base + 8, 4);
+    e.mem.set_u32(base, 0x0102_e388);
+    if flags & 1 != 0 {
+        let allocator = allocator(e);
+        let size = u32::from(e.mem.u16(base + 4));
+        e.vcall(allocator, 8, &args![this, size]);
+    }
+    this
+}
+
+// Translated from 00e016e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: when `object` is not null, writes the vtable word `010e9544` and
+/// runs `00cb0a70` (an `hkStringPtr` function, one stack word `extra`) on `object + 0x18` and
+/// then on `object + 0x1c`. The function takes two stack words and pops none (`RET`), and
+/// returns nothing. The class is unconfirmed.
+pub fn fn_00e016e0(e: &mut Engine, object: Ptr, extra: u32) {
+    if object.addr() != 0 {
+        e.mem.set_u32(object.addr(), 0x010e_9544);
+        e.call(0x00cb_0a70, &args![object.addr() + 0x18, extra]);
+        e.call(0x00cb_0a70, &args![object.addr() + 0x1c, extra]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -57,6 +92,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e01670, return_constant_00e01670() -> u32),
         entry!(0x00e016b0, return_constant_00e016b0() -> u32),
         entry!(0x00e01710, fn_00e01710() -> u32),
+        entry!(0x00e0_15d0, deleting_destructor_00e015d0(Ptr, u8) -> Ptr),
+        entry!(0x00e0_16e0, fn_00e016e0(Ptr, u32)),
     ]
 }
 
@@ -141,5 +178,82 @@ mod tests {
             assert_eq!(call.2, 0x010e_9544);
         }
         assert_eq!(calls[1].0 - calls[0].0, 0x4);
+    }
+}
+
+#[cfg(test)]
+mod tests_a05 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    const FREE_SLOT_DOUBLE: u32 = 0x0900_0011;
+    const BLOCK_SLOT_DOUBLE: u32 = 0x0900_0021;
+
+    type Log = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    /// An owned array: the storage is freed (capacity 5 times 4 bytes) before the vtable word is
+    /// written; the block itself only with bit 0 of the flags (size kept at +4).
+    #[test]
+    fn deleting_destructor_00e015d0_releases_the_array_then_frees_the_block() {
+        let mut e = Engine::new();
+        let log: Log = Rc::new(RefCell::new(Vec::new()));
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0x10, FREE_SLOT_DOUBLE);
+        e.mem.set_u32(vtable + 8, BLOCK_SLOT_DOUBLE);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        for (tag, slot) in [(1u32, FREE_SLOT_DOUBLE), (2, BLOCK_SLOT_DOUBLE)] {
+            let slot_log = Rc::clone(&log);
+            e.register_double(slot, move |_, a| {
+                let mut words = vec![tag];
+                words.extend_from_slice(a);
+                slot_log.borrow_mut().push(words);
+                Ret::default()
+            });
+        }
+        let this = e.mem.alloc(0x20);
+        e.mem.set_u16(this + 4, 0x2222);
+        e.mem.set_u32(this + 8, 0xd00d);
+        e.mem.set_u32(this + 0xc, 4);
+        e.mem.set_u32(this + 0x10, 5);
+        let got = e.call(0x00e0_15d0, &args![this, 0u32]).u32();
+        assert_eq!(got, this);
+        assert_eq!(*log.borrow(), vec![vec![1, allocator, 0xd00d, 20]]);
+        assert_eq!(e.mem.u32(this), 0x0102_e388);
+        assert_eq!(e.mem.u32(this + 8), 0);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        assert_eq!(e.mem.u32(this + 0x10), 0x8000_0000);
+        // The array is now empty and not owned: only the block is freed.
+        log.borrow_mut().clear();
+        e.call(0x00e0_15d0, &args![this, 1u32]);
+        assert_eq!(*log.borrow(), vec![vec![2, allocator, this, 0x2222]]);
+    }
+
+    /// A null object does nothing; otherwise the string function runs on both members.
+    #[test]
+    fn fn_00e016e0_runs_the_string_function_twice() {
+        let mut e = Engine::new();
+        let log: Log = Rc::new(RefCell::new(Vec::new()));
+        let string_log = Rc::clone(&log);
+        e.register_double(0x00cb_0a70, move |_, a| {
+            string_log.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        e.call(0x00e0_16e0, &args![0u32, 4u32]);
+        assert!(log.borrow().is_empty());
+        let object = e.mem.alloc(0x30);
+        e.call(0x00e0_16e0, &args![object, 4u32]);
+        assert_eq!(e.mem.u32(object), 0x010e_9544);
+        assert_eq!(
+            *log.borrow(),
+            vec![vec![object + 0x18, 4], vec![object + 0x1c, 4]]
+        );
     }
 }

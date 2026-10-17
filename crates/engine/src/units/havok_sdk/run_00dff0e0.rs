@@ -4,6 +4,9 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// The memory router (`00c85750`): its field `+0x10` is the allocator the block is freed through.
+const MEMORY_ROUTER: u32 = 0x00c8_5750;
+
 // Translated from 00dff440 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Thunk: moves `this` back by `0x8` (`SUB ECX,0x8`) and jumps to `00dff470`, which (`RET 4`) has the shape of a scalar deleting destructor: it reads bit 0 of the one stack word. The caller gets its `EAX`; the class is unconfirmed.
 pub fn fn_00dff440(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
@@ -136,6 +139,86 @@ pub fn return_constant_00dff630(_e: &mut Engine) -> u32 {
     0x010e_75ec
 }
 
+// Translated from 00dff0f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: when `object` is not null, writes the vtable word `010cc2fc`, runs
+/// `00cb0a70` (an `hkStringPtr` function, `this` = `object + 0x14`, one stack word `extra`) and
+/// writes the vtable word `010e6834`. The function takes two stack words and pops none (`RET`),
+/// and returns nothing. The class is unconfirmed.
+pub fn fn_00dff0f0(e: &mut Engine, object: Ptr, extra: u32) {
+    if object.addr() != 0 {
+        e.mem.set_u32(object.addr(), 0x010c_c2fc);
+        e.call(0x00cb_0a70, &args![object.addr() + 0x14, extra]);
+        e.mem.set_u32(object.addr(), 0x010e_6834);
+    }
+}
+
+// Translated from 00dff1f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: when `object` is not null, writes the vtable word `010cce28`, runs
+/// `00cb0a70` (an `hkStringPtr` function, `this` = `object + 0x38`, one stack word `extra`) and
+/// writes the vtable word `010d07f4`. The function takes two stack words and pops none (`RET`),
+/// and returns nothing. The class is unconfirmed.
+pub fn fn_00dff1f0(e: &mut Engine, object: Ptr, extra: u32) {
+    if object.addr() != 0 {
+        e.mem.set_u32(object.addr(), 0x010c_ce28);
+        e.call(0x00cb_0a70, &args![object.addr() + 0x38, extra]);
+        e.mem.set_u32(object.addr(), 0x010d_07f4);
+    }
+}
+
+// Translated from 00dff270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: when `object` is not null, writes the vtable word `010cc2fc`, runs
+/// `00cb0a70` (an `hkStringPtr` function, `this` = `object + 0x14`, one stack word `extra`),
+/// writes the vtable word `010c8e94` and empties the `hkArray`-shaped triple at `+0x54` (data 0,
+/// size 0, capacity and flags `0x80000000`). The function takes two stack words and pops none
+/// (`RET`), and returns nothing. The class is unconfirmed.
+pub fn fn_00dff270(e: &mut Engine, object: Ptr, extra: u32) {
+    if object.addr() != 0 {
+        let base = object.addr();
+        e.mem.set_u32(base, 0x010c_c2fc);
+        e.call(0x00cb_0a70, &args![base + 0x14, extra]);
+        e.mem.set_u32(base, 0x010c_8e94);
+        e.mem.set_u32(base + 0x54, 0);
+        e.mem.set_u32(base + 0x58, 0);
+        e.mem.set_u32(base + 0x5c, 0x8000_0000);
+    }
+}
+
+// Translated from 00dff340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: when `object` is not null, writes the vtable word `010cc2fc`, runs
+/// `00cb0a70` (an `hkStringPtr` function, `this` = `object + 0x14`, one stack word `extra`) and
+/// writes the vtable word `010d0944`. The function takes two stack words and pops none (`RET`),
+/// and returns nothing. The class is unconfirmed.
+pub fn fn_00dff340(e: &mut Engine, object: Ptr, extra: u32) {
+    if object.addr() != 0 {
+        e.mem.set_u32(object.addr(), 0x010c_c2fc);
+        e.call(0x00cb_0a70, &args![object.addr() + 0x14, extra]);
+        e.mem.set_u32(object.addr(), 0x010d_0944);
+    }
+}
+
+// Translated from 00dff460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk and deleting destructor in one function: moves `this` back by `0x14` (`SUB ECX,0x14`),
+/// then runs the body at `00dff470` (other thunks jump to that entry directly): the vtable
+/// words at `+0x14`, `+0x10`, `+0xc`, `+8` and `+0` become `010c3b8c`, `010c3bac`, `010c3b98`,
+/// `010c3b80` and `0102e388`, and when bit 0 of `flags` is set the block is returned to the
+/// memory router's allocator (slot `8`) with the 16-bit size kept at `+4`. Returns the moved
+/// `this`. The class is unconfirmed.
+pub fn deleting_destructor_00dff460(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    let base = this.addr().wrapping_sub(0x14);
+    e.mem.set_u32(base.wrapping_add(0x14), 0x010c_3b8c);
+    e.mem.set_u32(base.wrapping_add(0x10), 0x010c_3bac);
+    e.mem.set_u32(base.wrapping_add(0xc), 0x010c_3b98);
+    e.mem.set_u32(base.wrapping_add(0x8), 0x010c_3b80);
+    e.mem.set_u32(base, 0x0102_e388);
+    if flags & 1 != 0 {
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let size = u32::from(e.mem.u16(base.wrapping_add(4)));
+        let allocator = e.mem.u32(router + 0x10);
+        e.vcall(allocator, 8, &args![base, size]);
+    }
+    Ptr::new(base)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -154,6 +237,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00dff5f0, return_constant_00dff5f0() -> u32),
         entry!(0x00dff610, return_constant_00dff610() -> u32),
         entry!(0x00dff630, return_constant_00dff630() -> u32),
+        entry!(0x00df_f0f0, fn_00dff0f0(Ptr, u32)),
+        entry!(0x00df_f1f0, fn_00dff1f0(Ptr, u32)),
+        entry!(0x00df_f270, fn_00dff270(Ptr, u32)),
+        entry!(0x00df_f340, fn_00dff340(Ptr, u32)),
+        entry!(0x00df_f460, deleting_destructor_00dff460(Ptr, u8) -> Ptr),
     ]
 }
 
@@ -437,5 +525,101 @@ mod record_tests {
     fn return_constant_00dff630_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00df_f630, &args![]).u32(), 0x010e_75ec);
+    }
+}
+
+#[cfg(test)]
+mod tests_a05 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    const FREE_SLOT_DOUBLE: u32 = 0x0900_0011;
+
+    /// Runs `address` on a null object (nothing happens) and on a real one, with the string
+    /// function `00cb0a70` as a double that checks its words and that the first vtable word is
+    /// already in place; returns the object, whose vtable word must end as `last`.
+    fn check_string_member(address: u32, first: u32, member: u32, last: u32) -> (Engine, u32) {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x80);
+        e.mem.write(object, &[0x44; 0x80]);
+        let calls = Rc::new(RefCell::new(0));
+        let seen = Rc::clone(&calls);
+        e.register_double(0x00cb_0a70, move |e, a| {
+            assert_eq!(a, [object + member, 9]);
+            assert_eq!(e.mem.u32(object), first);
+            *seen.borrow_mut() += 1;
+            Ret::default()
+        });
+        e.call(address, &args![0u32, 9u32]);
+        assert_eq!(*calls.borrow(), 0);
+        e.call(address, &args![object, 9u32]);
+        assert_eq!(*calls.borrow(), 1);
+        assert_eq!(e.mem.u32(object), last);
+        (e, object)
+    }
+
+    #[test]
+    fn fn_00dff0f0_vtable_words_around_the_string_function() {
+        check_string_member(0x00df_f0f0, 0x010c_c2fc, 0x14, 0x010e_6834);
+    }
+
+    #[test]
+    fn fn_00dff1f0_vtable_words_around_the_string_function() {
+        check_string_member(0x00df_f1f0, 0x010c_ce28, 0x38, 0x010d_07f4);
+    }
+
+    #[test]
+    fn fn_00dff340_vtable_words_around_the_string_function() {
+        check_string_member(0x00df_f340, 0x010c_c2fc, 0x14, 0x010d_0944);
+    }
+
+    /// Also empties the array triple at +0x54.
+    #[test]
+    fn fn_00dff270_also_empties_the_array() {
+        let (e, object) = check_string_member(0x00df_f270, 0x010c_c2fc, 0x14, 0x010c_8e94);
+        assert_eq!(e.mem.u32(object + 0x54), 0);
+        assert_eq!(e.mem.u32(object + 0x58), 0);
+        assert_eq!(e.mem.u32(object + 0x5c), 0x8000_0000);
+        assert_eq!(e.mem.u32(object + 0x50), 0x4444_4444);
+        assert_eq!(e.mem.u32(object + 0x60), 0x4444_4444);
+    }
+
+    /// The vtable words are written for the object `this - 0x14`; the block (size kept at +4)
+    /// is freed only when bit 0 of the flags is set; `this - 0x14` is returned.
+    #[test]
+    fn deleting_destructor_00dff460_frees_only_when_bit_zero_is_set() {
+        let mut e = Engine::new();
+        let log: Rc<RefCell<Vec<Vec<u32>>>> = Rc::new(RefCell::new(Vec::new()));
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 8, FREE_SLOT_DOUBLE);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let free_log = Rc::clone(&log);
+        e.register_double(FREE_SLOT_DOUBLE, move |_, a| {
+            free_log.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        let block = e.mem.alloc(0x40);
+        e.mem.set_u16(block + 4, 0x1234);
+        let got = e
+            .call(0x00df_f460, &args![block + 0x14, 0xffff_fffeu32])
+            .u32();
+        assert_eq!(got, block);
+        assert!(log.borrow().is_empty());
+        assert_eq!(e.mem.u32(block + 0x14), 0x010c_3b8c);
+        assert_eq!(e.mem.u32(block + 0x10), 0x010c_3bac);
+        assert_eq!(e.mem.u32(block + 0xc), 0x010c_3b98);
+        assert_eq!(e.mem.u32(block + 8), 0x010c_3b80);
+        assert_eq!(e.mem.u32(block), 0x0102_e388);
+        let got = e.call(0x00df_f460, &args![block + 0x14, 1u32]).u32();
+        assert_eq!(got, block);
+        assert_eq!(*log.borrow(), vec![vec![allocator, block, 0x1234]]);
     }
 }
