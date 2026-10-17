@@ -22,9 +22,17 @@ pub fn deleting_destructor_00da2d70(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+// Translated from 00da2da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A function that only returns (a plain `RET`: no arguments, no result). The exe's name for it
+/// is unknown (it sits between the stack tracer's deleting destructor and the job tables).
+pub fn fn_00da2da0(_e: &mut Engine) {}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00da_2d70, deleting_destructor_00da2d70(Ptr, u8) -> Ptr)]
+    vec![
+        entry!(0x00da_2d70, deleting_destructor_00da2d70(Ptr, u8) -> Ptr),
+        entry!(0x00da_2da0, fn_00da2da0()),
+    ]
 }
 
 #[cfg(test)]
@@ -88,5 +96,19 @@ mod tests {
     #[test]
     fn deleting_destructor_00da2d70_frees_only_when_bit_zero_is_set() {
         check(0x00da_2d70, 0x00da_2930);
+    }
+}
+
+#[cfg(test)]
+mod a09_tests {
+    use super::*;
+
+    #[test]
+    fn the_function_only_returns() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        let result = e.call(0x00da_2da0, &args![]);
+        assert_eq!(result.eax, 0);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
     }
 }
