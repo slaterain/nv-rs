@@ -7,7 +7,66 @@ machinery runs.
 
 ## Resume here
 
-### Claude lead, 2026-10-16 (current; give this to the next account first)
+### Claude lead, 2026-10-16 evening (current; give this to the next account first)
+
+The session stopped at the weekly limit (95-96 % rule). Every finished
+batch is merged or listed below; the next account continues from here.
+
+**State:**
+- **Merged this session:** #209 to #214 and the PR that carries this note.
+  About 22,700 hand-translated functions (34 %), 15,762 start-up table
+  rows (24 %) and 4,790 shut-down table rows (7 %): about 65 % covered.
+  Engine tests: about 29,100.
+- **Havok:** about 3,600 of 6,902 translated; about 2,700 not started.
+  `bin/havoktask.sh NN 120` hands out the next whole units.
+- **Shut-down table (#213):** research/initgen `--atexit` matches the 5,020
+  atexit destructors against two shapes (`call`, `tail`) and writes
+  `crates/engine/data/atexit_destructors.tsv`; `static_exit.rs` runs a row
+  by shape and `Engine::call` falls back to the tables when nothing is
+  registered at an address. The `_atexit` stand-in records into the exe's
+  own table and `crt::doexit` (00eccd99) runs it in reverse, then the
+  pre-terminator and terminator tables. Not wired into the host shutdown.
+  229 irregular destructors are left for hand translation.
+- **Game code vs platform (#213):** SpeedTree (all of it: tree building,
+  splines, random numbers, wind) and the logic units of BSShader, BSSystem
+  and d3dx9 (`LOGIC_UNITS` in scripts/ledger) are game code to translate:
+  1,214 functions moved from platform to open. About 600 shader and file
+  functions the engine map placed in no unit are still `platform` until
+  someone sorts them by reading them. Unit files are scaffolded (#214).
+- **SpeedTree** is under way: batch 1 (random numbers, splines, leaf and
+  branch info, 114 functions) is in the PR with this note; branches,
+  fronds and indexed geometry are next.
+- **The two largest solver functions** (00d8aac0, 00d8fb70, about 2,600
+  instructions each) are translated as block state machines and were
+  checked bit-exact against the real exe through nv-call (185 scenarios).
+
+**Open questions for the maintainer:**
+- **Renderer design.** Either keep the Bevy renderer redrawing the game's
+  look from traced data, or translate the game's own renderer (about 2,100
+  platform functions) and implement the DirectX 9 calls on wgpu in our own
+  layer, which matches the original exactly. No decision yet; the renderer
+  comes after the game logic.
+- **x87 precision.** The engine models x87 in 53-bit precision. Direct3D 9
+  switches the FPU to 24-bit unless the device is created with
+  `D3DCREATE_FPU_PRESERVE`. Check the exe's CreateDevice flags and the game
+  thread's control word: it changes x87 results everywhere.
+
+**Machinery notes:**
+- Slot rules added today (private slot_rules.txt): avoid clippy's
+  approx_constant, redundant closures, unnecessary to_vec and manual
+  clamp/div_ceil/saturating_sub, or allow them with a one-line reason.
+- Base new batches on the branch that holds every collected commit
+  (havoktask.sh and listtask.sh reset slots to `claude/engine-crate`; move
+  the slot to the collection branch when that is ahead). A slot started
+  from a stale base once re-translated 31 functions main already had.
+- The private purity facts missed the register inputs of 00d49c20 (reads
+  EAX and ECX via SUB and LEA), so the oracle called it with stack words
+  and failed; that row was patched by hand. The facts generator should
+  count register reads by arithmetic and LEA, not only MOV.
+- The README progress bar shows hand translation, the start-up table and
+  the shut-down table as three segments (private bin/progress.sh).
+
+### Claude lead, 2026-10-16 morning (previous)
 
 **State:**
 - **Merged this session:** #203 (GPL-3.0-or-later as the single licence),
