@@ -1169,6 +1169,7 @@ mod tests {
     use super::*;
     use crate::units::havok_sdk::hkpsphereshape::store_bits;
     use std::cell::RefCell;
+    use std::f32::consts::FRAC_1_SQRT_2;
     use std::rc::Rc;
 
     const FREE_SLOT_DOUBLE: u32 = 0x0900_0011;
@@ -2393,7 +2394,7 @@ mod tests {
         assert_eq!(between.len(), 1);
         assert!(close(
             between[0].0,
-            [0.70710678, 0.70710678, 0.0, 0.0],
+            [FRAC_1_SQRT_2, FRAC_1_SQRT_2, 0.0, 0.0],
             1.0e-3
         ));
         assert!(close(between[0].1, [0.6, 0.8, 0.0, 0.0], 1.0e-3));

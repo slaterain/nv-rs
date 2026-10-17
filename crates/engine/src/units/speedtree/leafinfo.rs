@@ -179,10 +179,7 @@ impl Arg for LeafTextureArg {
 /// `count * element` for `operator new`: the product, or all ones when it
 /// overflows 32 bits (`MUL`, `SETO`, `NEG`, `OR`).
 fn array_size(count: u32, element: u32) -> u32 {
-    match count.checked_mul(element) {
-        Some(bytes) => bytes,
-        None => 0xffff_ffff,
-    }
+    count.checked_mul(element).unwrap_or(0xffff_ffff)
 }
 
 /// Copies `words` 32-bit words from `from` to `to`.

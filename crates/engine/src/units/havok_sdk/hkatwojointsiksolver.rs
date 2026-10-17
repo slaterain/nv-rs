@@ -45,7 +45,7 @@ pub fn fn_00cdb910(e: &mut Engine, this: Ptr, t: f32, vector_a: u32, vector_b: u
     let x = ((1.0 - t64) + t64 * f64::from(d)) as f32;
     let half = e.mem.f64(HALF_F64);
     let h = ((1.0 + f64::from(x)) * half) as f32;
-    if h < 0.0 || h == 0.0 {
+    if h <= 0.0 {
         e.call(OPPOSITE_DIRECTIONS, &args![this, vector_a]);
         return;
     }
@@ -79,6 +79,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f32::consts::FRAC_1_SQRT_2;
 
     fn engine() -> Engine {
         let mut e = Engine::new();
@@ -176,7 +177,7 @@ mod tests {
             ]]
         );
         let result = load_vec(&e, out);
-        let expected = [0.0, 0.0, 0.707_106_8, 0.707_106_8];
+        let expected = [0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2];
         for lane in 0..4 {
             assert!(
                 (result[lane] - expected[lane]).abs() < 1e-5,
