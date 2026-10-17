@@ -1704,6 +1704,8 @@ pub fn fn_00b15210(e: &mut Engine, this: Ptr<StlVector>) {
 }
 
 // Translated from 00b15280 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b15280 - the last two words passed to 00b16cd0 are uninitialised
+// stack bytes in the exe; zero stands in for them until 00b16cd0 is shown not to read them.
 /// `push_back` of the flare vector (a `std::vector` of 0x18-byte elements; the engine map gives
 /// it no name): with spare capacity the element at `value` is constructed at the end
 /// (`00b16cd0`; two of the words it takes are bytes left uninitialised on the exe's stack
