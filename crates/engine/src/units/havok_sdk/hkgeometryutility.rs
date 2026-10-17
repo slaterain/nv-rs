@@ -833,6 +833,7 @@ pub fn fn_00d5b640(
 }
 
 // Translated from 00d5b990 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00d5b990 - lane 3 of the three rows comes from a stack word the exe never stores; not reproduced.
 /// Unnamed in the engine map. Inputs are in registers, so the register values come first:
 /// `work` (`EAX`, the three rows the search leaves its answer in) and `stride` (`ECX`); the
 /// stack words are `vertices`, `count`, `source` (three 16-byte vectors) and `iterations`
@@ -2096,6 +2097,7 @@ fn release_obb_buffers(e: &mut Engine, s: u32) {
 }
 
 // Translated from 00d5d270 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00d5d270 - in mode 2, lane 3 of the half extents and transform vectors is an uninitialised stack word in the exe; not reproduced.
 /// `hkGeometryUtility::calcObb` (Xbox PDB), cdecl (`vertices`, `half_extents`, `transform`,
 /// `mode`). Builds the convex hull of the strided `vertices` into a local `hkGeometry`
 /// (`createConvexGeometry`) and flattens its triangles into a list of 3 vectors per triangle
