@@ -98,6 +98,18 @@ pub fn x87_m32(bits: u32) -> f64 {
     }
 }
 
+/// `FLD dword`: the value the x87 stack holds after loading the float with
+/// the bit pattern `bits` (a signalling NaN quieted, everything else exact).
+pub fn x87_load32(bits: u32) -> f64 {
+    f64::from(f32::from_bits(x87_quiet_bits(bits)))
+}
+
+/// `FSTP dword`: the stack value rounded to a float, as its bits (a NaN keeps
+/// its sign and the top of its payload).
+pub fn x87_store32(value: f64) -> u32 {
+    (value as f32).to_bits()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +179,19 @@ mod tests {
         assert_eq!(x87_div(1.0, 4.0), 0.25);
         assert_eq!(x87_m32(0x3fc0_0000), 1.5);
         assert_eq!(x87_m32(0x7f80_0000), f64::INFINITY);
+    }
+
+    #[test]
+    fn load32_quiets_and_store32_rounds_to_a_float() {
+        assert_eq!(x87_load32(0x3fc0_0000), 1.5);
+        assert_eq!(x87_store32(x87_load32(0x7f80_0001)), 0x7fc0_0001);
+        assert_eq!(x87_store32(x87_load32(0xffc0_1234)), 0xffc0_1234);
+        assert_eq!(x87_store32(x87_load32(0x0000_0001)), 0x0000_0001);
+        // 1 + 2^-30 rounds to 1.0 in a float.
+        assert_eq!(x87_store32(1.0 + 2f64.powi(-30)), 0x3f80_0000);
+        assert_eq!(
+            x87_store32(x87_add(x87_m32(0xffff_ffff), x87_m32(0x7fff_ffff))),
+            0x7fff_ffff
+        );
     }
 }
