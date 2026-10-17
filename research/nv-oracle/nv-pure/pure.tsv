@@ -528,7 +528,6 @@ address	cc	params	ret	unit	callees	consts
 00dba5c0	stdcall	u32	u32	crates/engine/src/units/havok_sdk/hkserializedeprecated.rs		
 00dc0eb0	cdecl		u32	crates/engine/src/units/havok_sdk/hknativepackfileutils.rs		
 00dc0fb0	cdecl		u32	crates/engine/src/units/havok_sdk/hkversionutil.rs		
-00dc73e0	cdecl	u32	u32	crates/engine/src/units/havok_sdk/hkdataobjectdict.rs		i2,i3
 00dc9bc0	cdecl		u32	crates/engine/src/units/havok_sdk/hkdataobjectdict.rs		i8
 00dcd4d0	cdecl	u32	u32	crates/engine/src/units/havok_sdk/hkpsavecontactpointsutil.rs		i1,i2,i3,i4,i5,i6,i7,i8,i9
 00dd73d0	cdecl	u32,u32	u32	crates/engine/src/units/havok_sdk/hkfreelist.rs		i16

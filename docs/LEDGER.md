@@ -31,12 +31,12 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 25866 | 39.0% |
+| translated | 25986 | 39.2% |
 | static init (table) | 20552 | 31.0% |
-| traced | 4308 | 6.5% |
+| traced | 4303 | 6.5% |
 | platform | 244 | 0.4% |
 | library | 625 | 0.9% |
-| open | 14664 | 22.1% |
+| open | 14549 | 22.0% |
 | **all** | **66259** | |
 
 Translation totals count markers, not complete behavior. **2309** engine functions
@@ -2354,9 +2354,9 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00fde450` | `crates/engine/src/units/unplaced/atexit_irregular.rs:1655` |
 | `00fde4d0` | `crates/engine/src/units/unplaced/atexit_irregular.rs:1662` |
 
-Game code (functions whose subsystem or unit is neither platform nor library): **43968** functions, of which 29298 (66.6%) are translated, run from the static-initializer table, or traced.
+Game code (functions whose subsystem or unit is neither platform nor library): **43968** functions, of which 29413 (66.9%) are translated, run from the static-initializer table, or traced.
 
-Rust cites 54450 distinct `.text` addresses; 1542 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 54567 distinct `.text` addresses; 1543 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -2389,7 +2389,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 735 | 20552 | 7 | 0 | 41 | 0 | - |
 | fallout shared | 10470 | 2065 | 3149 | 7800 | 0 | 856 | 0 | 0 | 1814 | 82.7% |
-| Havok SDK | 6591 | 1555 | 3499 | 5067 | 0 | 305 | 0 | 0 | 1219 | 81.5% |
+| Havok SDK | 6591 | 1555 | 3499 | 5187 | 0 | 300 | 0 | 0 | 1104 | 83.2% |
 | fallout/ai | 4849 | 1475 | 1888 | 3452 | 0 | 445 | 0 | 0 | 952 | 80.4% |
 | fallout/interface | 2645 | 991 | 1247 | 1330 | 0 | 598 | 0 | 0 | 717 | 72.9% |
 | (unplaced) | 2353 | 470 | 0 | 518 | 0 | 472 | 4 | 0 | 1359 | 42.1% |
