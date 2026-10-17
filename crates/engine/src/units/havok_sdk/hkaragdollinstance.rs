@@ -154,6 +154,27 @@ fn xor_bits(v: Vec4, mask: [u32; 4]) -> Vec4 {
     std::array::from_fn(|lane| f32::from_bits(v[lane].to_bits() ^ mask[lane]))
 }
 
+/// The three vectors that undo the transform at `transform` (translation, rotation, scale): the
+/// translation turned by the rotation, doubled and negated (all four sign bits flipped), the
+/// rotation with the sign bits of its three lowest lanes flipped, and the reciprocal of the scale
+/// (`RCPPS` of its lanes 0 to 2 and 1.0, one Newton step, then the three lowest lanes kept, so
+/// lane 3 is zero).
+pub(crate) fn inverse_transform(e: &Engine, transform: u32) -> [Vec4; 3] {
+    let rotation = load_vec(e, transform + 0x10);
+    let translation = load_vec(e, transform);
+    let half = rotate_half(e, rotation, translation);
+    let negated = xor_bits(add4(half, half), load_bits(e, SIGN_BITS));
+    let inverse_rotation = xor_bits(rotation, load_bits(e, SIGN_BITS_XYZ));
+    let scale = load_vec(e, transform + 0x20);
+    let ones = load_vec(e, ONE_LANES);
+    let lanes = shufps(scale, unpckhps(scale, ones), 0xc4);
+    let mask = load_bits(e, MASK_XYZ);
+    let inverse_scale: Vec4 = std::array::from_fn(|lane| {
+        f32::from_bits(refined_reciprocal(lanes[lane]).to_bits() & mask[lane])
+    });
+    [negated, inverse_rotation, inverse_scale]
+}
+
 /// The transform `pose` of a bone moved by `transform` into `frame` (translation, rotation, scale):
 /// the translation is the pose's turned by the rotation of `transform` and moved by its own, the
 /// rotation `setMul` of the two rotations (rescaled in the end by `005611c0`) and the scale the
@@ -331,18 +352,7 @@ pub fn hka_ragdoll_instance_get_pose_model_space(
     let (out, transform) = (out.addr(), transform.addr());
     e.call(POSE_FROM_CURRENT_BODIES, &args![this, out]);
     let count = bone_count(e, this.addr());
-    let rotation = load_vec(e, transform + 0x10);
-    let translation = load_vec(e, transform);
-    let half = rotate_half(e, rotation, translation);
-    let negated = xor_bits(add4(half, half), load_bits(e, SIGN_BITS));
-    let inverse_rotation = xor_bits(rotation, load_bits(e, SIGN_BITS_XYZ));
-    let scale = load_vec(e, transform + 0x20);
-    let ones = load_vec(e, ONE_LANES);
-    let lanes = shufps(scale, unpckhps(scale, ones), 0xc4);
-    let mask = load_bits(e, MASK_XYZ);
-    let inverse_scale: Vec4 = std::array::from_fn(|lane| {
-        f32::from_bits(refined_reciprocal(lanes[lane]).to_bits() & mask[lane])
-    });
+    let [negated, inverse_rotation, inverse_scale] = inverse_transform(e, transform);
     e.with_stack(0x30, |e, frame| {
         let frame = frame.addr();
         store_vec(e, frame, negated);
