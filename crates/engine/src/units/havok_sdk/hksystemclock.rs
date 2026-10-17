@@ -242,7 +242,7 @@ mod tests {
         assert_eq!(unsigned_as_double(5), 5.0);
         assert_eq!(
             unsigned_as_double(0x8000_0000_0000_0000),
-            9.223372036854775808e18
+            9.223_372_036_854_776e18
         );
         assert_eq!(unsigned_as_double(u64::MAX), 1.8446744073709552e19);
         // A zero top bit adds a negative zero: still zero.

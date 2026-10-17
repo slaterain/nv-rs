@@ -615,7 +615,7 @@ mod tests {
         insert(&mut e, map, two, 222);
         assert_eq!(e.mem.i32(map + 4), 2);
         let slot = find(&mut e, map, one);
-        assert!(slot >= 0 && slot <= 15);
+        assert!((0..=15).contains(&slot));
         assert_eq!(e.call(0x00d8_7440, &args![map, slot]).u32(), 111);
         assert_eq!(e.call(0x00d8_7430, &args![map, slot]).u32(), one);
         // The same key by another pointer: the value is replaced, the count unchanged, and

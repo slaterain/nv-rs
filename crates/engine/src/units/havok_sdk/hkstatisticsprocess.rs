@@ -991,7 +991,7 @@ mod statistics_process_tests {
     fn constructor_converts_the_tick_rate_as_an_unsigned_64_bit_number() {
         // The top bit set: the sum of the low part and 2^63, as the code's two `FILD`s make it.
         let (_, _, frame_info, _) = construct(0x8000_0000_0000_0001);
-        let expected = (1000.0f64 / 9.223372036854775808e18f64) as f32;
+        let expected = (1000.0f64 / 9.223_372_036_854_776e18_f64) as f32;
         assert_eq!(frame_info[4], expected.to_bits());
         // A zero rate divides by zero: infinity.
         let (_, _, frame_info, _) = construct(0);
