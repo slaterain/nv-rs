@@ -214,11 +214,22 @@ pub fn fn_00cf52c0(e: &mut Engine, this: Ptr, input: Ptr, body: Ptr, collector: 
     profile_record(e, LABEL_END);
 }
 
+// Translated from 00cf50a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` as the `m_collisionFilterInfo` (`+4`) of child entry `index` of the shape
+/// `this` (`this` is the list shape itself, whose `m_childInfo` data pointer is at `+0x18`; the
+/// entries are 16 bytes).
+pub fn fn_00cf50a0(e: &mut Engine, this: Ptr, index: u32, value: u32) {
+    let data = e.mem.u32(this.addr() + 0x18);
+    e.mem
+        .set_u32(data.wrapping_add(index << 4).wrapping_add(4), value);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00cf_5070, fn_00cf5070(Ptr, u32, u32) -> u32),
         entry!(0x00cf_5080, fn_00cf5080(Ptr, u32) -> u32),
+        entry!(0x00cf_50a0, fn_00cf50a0(Ptr, u32, u32)),
         entry!(0x00cf_50c0, fn_00cf50c0(Ptr, Ptr, u32) -> i32),
         entry!(0x00cf_5140, fn_00cf5140(Ptr, Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00cf_52c0, fn_00cf52c0(Ptr, Ptr, Ptr, u32)),
@@ -440,5 +451,27 @@ mod tests {
         assert_eq!(got[0].2, 0x5555);
         assert_eq!(got[0].3, vec![children[1], 1, 0x77, body]);
         assert_eq!(got[1].3, vec![children[2], 2, 0x77, body]);
+    }
+}
+
+#[cfg(test)]
+mod tests_00cf50a0 {
+    use super::*;
+
+    /// The filter word of the chosen 16-byte entry changes and nothing around it.
+    #[test]
+    fn stores_the_filter_info_of_one_child_entry() {
+        let mut e = Engine::new();
+        let data = e.mem.alloc(0x40);
+        let shape = e.mem.alloc(0x80);
+        e.mem.set_u32(shape + 0x18, data);
+        for i in 0..16 {
+            e.mem.set_u32(data + 4 * i, 0x100 + i);
+        }
+        e.call(0x00cf_50a0, &args![shape, 2u32, 0xabcd_u32]);
+        let words: Vec<u32> = (0..16).map(|i| e.mem.u32(data + 4 * i)).collect();
+        let mut expected: Vec<u32> = (0..16).map(|i| 0x100 + i).collect();
+        expected[9] = 0xabcd;
+        assert_eq!(words, expected);
     }
 }

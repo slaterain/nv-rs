@@ -791,14 +791,129 @@ fn activate_batch(e: &mut Engine, world: u32, record: u32) {
     e.vcall(alloc, 8, &args![array, count * 4]);
 }
 
+// Translated from 00cf7540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Queues a 16-byte `(a, b, c, d)` record in the queue's array at `+0x1c` (the `(object,
+/// listener)` pairs): under the reference-count lock (`00c90490`/`00c904e0`) the world's
+/// pending-body-operation counter (`[world + 0x90]`, `world` = the word at `this + 0xc`) is
+/// raised by one, the array grows by `00c90940` when it is full, the record is appended with
+/// its words in the order `a`, `b`, `c`, `d`, and a reference is added to `a` and then to `b`
+/// (`00c90510`).
+pub fn fn_00cf7540(e: &mut Engine, this: Ptr, a: u32, b: u32, c: u32, d: u32) {
+    let queue = this.addr();
+    e.call(LOCK_ENTER, &args![]);
+    let world = e.mem.u32(queue + 0xc);
+    let pending = e.mem.u32(world + 0x90);
+    e.mem.set_u32(world + 0x90, pending.wrapping_add(1));
+    let array = queue + 0x1c;
+    let alloc = allocator(e);
+    if e.mem.u32(array + 4) == e.mem.u32(array + 8) & CAPACITY_MASK {
+        e.call(ARRAY_RESERVE_MORE, &args![alloc, array, 0x10u32]);
+    }
+    let size = e.mem.u32(array + 4);
+    let record = size.wrapping_shl(4).wrapping_add(e.mem.u32(array));
+    e.mem.set_u32(array + 4, size.wrapping_add(1));
+    e.mem.set_u32(record + 8, c);
+    e.mem.set_u32(record, a);
+    e.mem.set_u32(record + 4, b);
+    e.mem.set_u32(record + 0xc, d);
+    e.call(ADD_REFERENCE, &args![a]);
+    e.call(ADD_REFERENCE, &args![b]);
+    e.call(LOCK_LEAVE, &args![]);
+}
+
+// Translated from 00cf75c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the queue: three empty arrays (data 0, size 0, capacity word `0x80000000`,
+/// not owned) at `+0`, `+0x10` and `+0x1c` (the words at `+0`/`+4`/`+8`, `+0x10`/`+0x14`/`+0x18`,
+/// `+0x1c`/`+0x20`/`+0x24`) and the world pointer `world` at `+0xc`. Returns `this`.
+pub fn fn_00cf75c0(e: &mut Engine, this: Ptr, world: u32) -> Ptr {
+    let base = this.addr();
+    for array in [0x0, 0x10, 0x1c] {
+        e.mem.set_u32(base + array, 0);
+        e.mem.set_u32(base + array + 4, 0);
+        e.mem.set_u32(base + array + 8, NO_OWNED_MEMORY);
+    }
+    e.mem.set_u32(base + 0xc, world);
+    this
+}
+
+/// Empties the `hkArray` at `array` (data `+0`, size `+4`, capacity word `+8`) of
+/// `element_size`-byte elements: the size becomes 0 and, unless bit 31 of the capacity word
+/// says the memory is not owned, the data is freed through the memory router's allocator
+/// (slot `0x10`, `(capacity & 0x3fffffff) * element_size` bytes); then the data pointer is
+/// cleared and the capacity word set to `0x80000000`.
+fn empty_array(e: &mut Engine, array: u32, element_size: u32) {
+    let alloc = allocator(e);
+    let capacity = e.mem.u32(array + 8);
+    e.mem.set_u32(array + 4, 0);
+    if capacity & NO_OWNED_MEMORY == 0 {
+        let data = e.mem.u32(array);
+        let bytes = (capacity & CAPACITY_MASK).wrapping_mul(element_size);
+        e.vcall(alloc, 0x10, &args![data, bytes]);
+    }
+    e.mem.set_u32(array, 0);
+    e.mem.set_u32(array + 8, NO_OWNED_MEMORY);
+}
+
+// Translated from 00cf75f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of the queue: empties the array of 16-byte pairs at `+0x1c`, then the arrays
+/// of 20-byte records at `+0x10` and at `+0` (see `empty_array`).
+pub fn fn_00cf75f0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    empty_array(e, base + 0x1c, 0x10);
+    empty_array(e, base + 0x10, 0x14);
+    empty_array(e, base, 0x14);
+}
+
+// Translated from 00cf8690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// cdecl `(destination, source)`: copies two 16-byte vectors (eight words, in order) from
+/// `source` to `destination`.
+pub fn fn_00cf8690(e: &mut Engine, destination: Ptr, source: Ptr) {
+    for word in 0..8 {
+        let value = e.mem.u32(source.addr() + 4 * word);
+        e.mem.set_u32(destination.addr() + 4 * word, value);
+    }
+}
+
+// Translated from 00cf86d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes the vtable word `0102e388` at `this`.
+pub fn fn_00cf86d0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0102_e388);
+}
+
+// Translated from 00cf86e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the float at `+0x14` plus `value` at `+0x20` (an x87 `FADD` of the float memory
+/// operand, the result stored as a float).
+pub fn fn_00cf86e0(e: &mut Engine, this: Ptr, value: f32) {
+    let base = this.addr();
+    let current = x87_load32(e.mem.u32(base + 0x14));
+    let sum = x87_add(current, x87_m32(value.to_bits()));
+    e.mem.set_u32(base + 0x20, x87_store32(sum));
+}
+
+// Translated from 00cf86f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the floats at `+0x14` and `+0x20` are equal (`FUCOMPP`; a NaN is never equal).
+pub fn fn_00cf86f0(e: &mut Engine, this: Ptr) -> bool {
+    let base = this.addr();
+    let first = x87_load32(e.mem.u32(base + 0x14));
+    let second = x87_load32(e.mem.u32(base + 0x20));
+    second == first
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00cf_7540, fn_00cf7540(Ptr, u32, u32, u32, u32)),
+        entry!(0x00cf_75c0, fn_00cf75c0(Ptr, u32) -> Ptr),
+        entry!(0x00cf_75f0, fn_00cf75f0(Ptr)),
         entry!(0x00cf_7690, fn_00cf7690(Ptr, Ptr)),
         entry!(0x00cf_7ae0, fn_00cf7ae0(Ptr)),
         entry!(0x00cf_7c10, fn_00cf7c10(Ptr)),
         entry!(0x00cf_83c0, fn_00cf83c0(u32, i32, i32, u32)),
         entry!(0x00cf_8510, fn_00cf8510(u32, i32, i32, u32)),
+        entry!(0x00cf_8690, fn_00cf8690(Ptr, Ptr)),
+        entry!(0x00cf_86d0, fn_00cf86d0(Ptr)),
+        entry!(0x00cf_86e0, fn_00cf86e0(Ptr, f32)),
+        entry!(0x00cf_86f0, fn_00cf86f0(Ptr) -> bool),
     ]
 }
 
@@ -1544,5 +1659,165 @@ mod tests {
         assert!(calls_to(&calls, REMOVE_REFERENCE).is_empty());
         assert_eq!(e.mem.u32(queue + 4), 0);
         assert_eq!(e.mem.u32(world + 0xa4), 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_00cf7540 {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    const FREE_ARRAY_DOUBLE: u32 = 0x0900_0201;
+
+    type Log = Rc<RefCell<Vec<(&'static str, Vec<u32>)>>>;
+
+    /// A router whose allocator frees array data through a double; doubles for the lock, the
+    /// reference and the growth functions. Returns the engine, the log and the allocator.
+    fn rig() -> (Engine, Log, u32) {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        let log: Log = Rc::new(RefCell::new(Vec::new()));
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0x10, FREE_ARRAY_DOUBLE);
+        let alloc = e.mem.alloc(0x10);
+        e.mem.set_u32(alloc, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, alloc);
+        e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        for (address, name) in [
+            (LOCK_ENTER, "lock"),
+            (LOCK_LEAVE, "unlock"),
+            (ADD_REFERENCE, "reference"),
+            (ARRAY_RESERVE_MORE, "grow"),
+            (FREE_ARRAY_DOUBLE, "free"),
+        ] {
+            let sink = Rc::clone(&log);
+            e.register_double(address, move |e, a| {
+                sink.borrow_mut().push((name, a.to_vec()));
+                if name == "grow" {
+                    // The growth makes room for four 16-byte records.
+                    let new = e.mem.alloc(0x40);
+                    let size = e.mem.u32(a[1] + 4);
+                    for i in 0..size * 4 {
+                        let word = e.mem.u32(e.mem.u32(a[1]) + 4 * i);
+                        e.mem.set_u32(new + 4 * i, word);
+                    }
+                    e.mem.set_u32(a[1], new);
+                    e.mem.set_u32(a[1] + 8, 4);
+                }
+                Ret::default()
+            });
+        }
+        (e, log, alloc)
+    }
+
+    /// The record is appended (growing when the array is full), the counter rises and both
+    /// objects get a reference, inside the lock.
+    #[test]
+    fn a_pair_is_queued_under_the_lock() {
+        let (mut e, log, _) = rig();
+        let world = e.mem.alloc(0x100);
+        e.mem.set_u32(world + 0x90, 5);
+        let queue = e.mem.alloc(0x40);
+        e.call(0x00cf_75c0, &args![queue, world]);
+        e.call(
+            0x00cf_7540,
+            &args![queue, 0x11u32, 0x22u32, 0x33u32, 0x44u32],
+        );
+        let calls = log.borrow().clone();
+        let names: Vec<&str> = calls.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            names,
+            vec!["lock", "grow", "reference", "reference", "unlock"]
+        );
+        assert_eq!(calls[2].1, vec![0x11]);
+        assert_eq!(calls[3].1, vec![0x22]);
+        assert_eq!(e.mem.u32(world + 0x90), 6);
+        let array = queue + 0x1c;
+        assert_eq!(e.mem.u32(array + 4), 1);
+        let data = e.mem.u32(array);
+        let record: Vec<u32> = (0..4).map(|i| e.mem.u32(data + 4 * i)).collect();
+        assert_eq!(record, vec![0x11, 0x22, 0x33, 0x44]);
+        // Room is left: the next record needs no growth.
+        log.borrow_mut().clear();
+        e.call(0x00cf_7540, &args![queue, 1u32, 2u32, 3u32, 4u32]);
+        let names: Vec<&str> = log.borrow().iter().map(|(name, _)| *name).collect();
+        assert_eq!(names, vec!["lock", "reference", "reference", "unlock"]);
+        assert_eq!(e.mem.u32(array + 4), 2);
+        assert_eq!(e.mem.u32(data + 16), 1);
+    }
+
+    /// The constructor writes three empty arrays and the world; the destructor frees owned
+    /// arrays with their element sizes (16, 20 and 20 bytes) and empties all three.
+    #[test]
+    fn constructor_and_destructor_of_the_queue() {
+        let (mut e, log, alloc) = rig();
+        let queue = e.mem.alloc(0x40);
+        e.mem.write(queue, &[0xaa; 0x40]);
+        assert_eq!(e.call(0x00cf_75c0, &args![queue, 0x777u32]).u32(), queue);
+        for array in [0u32, 0x10, 0x1c] {
+            assert_eq!(e.mem.u32(queue + array), 0);
+            assert_eq!(e.mem.u32(queue + array + 4), 0);
+            assert_eq!(e.mem.u32(queue + array + 8), 0x8000_0000);
+        }
+        assert_eq!(e.mem.u32(queue + 0xc), 0x777);
+        assert_eq!(e.mem.u32(queue + 0x28), 0xaaaa_aaaa);
+        for (array, data, capacity) in [
+            (0x1cu32, 0x5000u32, 2u32),
+            (0x10, 0x6000, 3),
+            (0, 0x7000, 0x8000_0004),
+        ] {
+            e.mem.set_u32(queue + array, data);
+            e.mem.set_u32(queue + array + 4, 1);
+            e.mem.set_u32(queue + array + 8, capacity);
+        }
+        log.borrow_mut().clear();
+        e.call(0x00cf_75f0, &args![queue]);
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                ("free", vec![alloc, 0x5000, 0x20]),
+                ("free", vec![alloc, 0x6000, 0x3c])
+            ]
+        );
+        for array in [0u32, 0x10, 0x1c] {
+            assert_eq!(e.mem.u32(queue + array), 0);
+            assert_eq!(e.mem.u32(queue + array + 4), 0);
+            assert_eq!(e.mem.u32(queue + array + 8), 0x8000_0000);
+        }
+    }
+
+    /// Eight words are copied in order; the vtable word and the float helpers.
+    #[test]
+    fn copies_and_float_helpers() {
+        let mut e = Engine::new();
+        let from = e.mem.alloc(0x20);
+        let to = e.mem.alloc(0x20);
+        for i in 0..8 {
+            e.mem.set_u32(from + 4 * i, 0x100 + i);
+        }
+        e.call(0x00cf_8690, &args![to, from]);
+        let words: Vec<u32> = (0..8).map(|i| e.mem.u32(to + 4 * i)).collect();
+        assert_eq!(words, (0..8).map(|i| 0x100 + i).collect::<Vec<_>>());
+        e.call(0x00cf_86d0, &args![to]);
+        assert_eq!(e.mem.u32(to), 0x0102_e388);
+        let object = e.mem.alloc(0x40);
+        e.mem.set_f32(object + 0x14, 1.5);
+        e.call(0x00cf_86e0, &args![object, 2.25f32]);
+        assert_eq!(e.mem.f32(object + 0x20), 3.75);
+        assert!(!e.call(0x00cf_86f0, &args![object]).bool());
+        e.mem.set_f32(object + 0x20, 1.5);
+        assert!(e.call(0x00cf_86f0, &args![object]).bool());
+        e.mem.set_u32(object + 0x20, 0x7fc0_0000);
+        e.mem.set_u32(object + 0x14, 0x7fc0_0000);
+        assert!(!e.call(0x00cf_86f0, &args![object]).bool());
+        // A signalling NaN float at +0x14 is quieted by the load.
+        e.mem.set_u32(object + 0x14, 0x7f80_0001);
+        e.call(0x00cf_86e0, &args![object, 1.0f32]);
+        assert_eq!(e.mem.u32(object + 0x20) & 0xffc0_0000, 0x7fc0_0000);
     }
 }

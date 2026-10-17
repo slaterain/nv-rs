@@ -64,6 +64,94 @@ pub fn fn_00cf5820(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+/// `00c905b0` (`this` only): run on the first word of every child entry by `00cf5750`.
+const RELEASE_REFERENCE: u32 = 0x00c9_05b0;
+
+// Translated from 00cf56f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor body of the list shape (vtable chain: `010305a8`, then `010cc364`/`010cc344`, then
+/// the final `010cc3d8`/`010cc3b8`; the word at `+0x10` first holds `010c6fb0`). The one stack
+/// word is a flag: when it is not 0 the number at `+0xc` is set to 0, then 7 (with the byte at
+/// `+0x15` set to 3), then 9 (the byte cleared). Returns `this`. The class is unconfirmed.
+pub fn fn_00cf56f0(e: &mut Engine, this: Ptr, flag: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0103_05a8);
+    if flag != 0 {
+        e.mem.set_u32(base + 0xc, 0);
+    }
+    e.mem.set_u32(base + 0x10, 0x010c_6fb0);
+    e.mem.set_u32(base, 0x010c_c364);
+    e.mem.set_u32(base + 0x10, 0x010c_c344);
+    if flag != 0 {
+        e.mem.set_u32(base + 0xc, 7);
+        e.mem.set_u8(base + 0x15, 3);
+    }
+    e.mem.set_u32(base, 0x010c_c3d8);
+    e.mem.set_u32(base + 0x10, 0x010c_c3b8);
+    if flag != 0 {
+        e.mem.set_u32(base + 0xc, 9);
+        e.mem.set_u8(base + 0x15, 0);
+    }
+    this
+}
+
+// Translated from 00cf5750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of the list shape: writes the final vtables (`010cc3d8` at `+0`, `010cc3b8`
+/// at `+0x10`), runs `00c905b0` on the first word of each of the `+0x1c` (signed) child entries of
+/// 16 bytes at `+0x18` (the count is read again for every entry; a null word is passed on too),
+/// then frees the child array (the memory router allocator, slot `0x10`, `(capacity &
+/// 0x3fffffff) * 16` bytes, unless the capacity word at `+0x20` says the memory is not owned),
+/// clears the data pointer, sets the capacity word to `0x80000000`, and writes the base tables
+/// (`010c6fb0` at `+0x10`, `0102e388` at `+0`).
+pub fn fn_00cf5750(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x010c_c3d8);
+    e.mem.set_u32(base + 0x10, 0x010c_c3b8);
+    let mut index = 0;
+    if e.mem.i32(base + 0x1c) > 0 {
+        let mut offset = 0u32;
+        loop {
+            let data = e.mem.u32(base + 0x18);
+            let shape = e.mem.u32(data.wrapping_add(offset));
+            e.call(RELEASE_REFERENCE, &args![shape]);
+            index += 1;
+            offset = offset.wrapping_add(0x10);
+            if index >= e.mem.i32(base + 0x1c) {
+                break;
+            }
+        }
+    }
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let capacity = e.mem.u32(base + 0x20);
+    e.mem.set_u32(base + 0x1c, 0);
+    if capacity as i32 >= 0 {
+        let data = e.mem.u32(base + 0x18);
+        e.vcall(allocator, 0x10, &args![data, (capacity & 0x3fff_ffff) << 4]);
+    }
+    e.mem.set_u32(base + 0x18, 0);
+    e.mem.set_u32(base + 0x20, 0x8000_0000);
+    e.mem.set_u32(base + 0x10, 0x010c_6fb0);
+    e.mem.set_u32(base, 0x0102_e388);
+}
+
+// Translated from 00cf57d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The deleting-destructor thunk of the container table (`this` is the container at `+0x10` of
+/// the shape): with `shape = this - 0x10` it writes the vtable words `010c6fb0` at `shape +
+/// 0x10` and `0102e388` at `shape`, and when bit 0 of `flags` is set frees the block through the
+/// memory router allocator (slot `8`) with the 16-bit size kept at `shape + 4`. Returns `shape`.
+pub fn fn_00cf57d0(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    let shape = Ptr::new(this.addr().wrapping_sub(0x10));
+    e.mem.set_u32(shape.addr() + 0x10, 0x010c_6fb0);
+    e.mem.set_u32(shape.addr(), 0x0102_e388);
+    if flags & 1 != 0 {
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let size = u32::from(e.mem.u16(shape.addr() + 4));
+        let allocator = e.mem.u32(router + 0x10);
+        e.vcall(allocator, 8, &args![shape, size]);
+    }
+    shape
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -72,6 +160,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00cf_5880, fn_00cf5880(Ptr) -> i32),
         entry!(0x00cf_5890, deleting_destructor_00cf5890(Ptr, u8) -> Ptr),
         entry!(0x00cf_5820, fn_00cf5820(Ptr, u32) -> u32),
+        entry!(0x00cf_56f0, fn_00cf56f0(Ptr, u32) -> Ptr),
+        entry!(0x00cf_5750, fn_00cf5750(Ptr)),
+        entry!(0x00cf_57d0, fn_00cf57d0(Ptr, u8) -> Ptr),
     ]
 }
 
@@ -222,5 +313,115 @@ mod a07_thunk_tests {
     #[test]
     fn thunk_00cf5820() {
         assert_eq!(check(0x00cf_5820, 0x00cf_5890, 0x10), 0xdead_beef);
+    }
+}
+
+#[cfg(test)]
+mod tests_00cf56f0 {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    const FREE_BLOCK_DOUBLE: u32 = 0x0900_0511;
+    const FREE_ARRAY_DOUBLE: u32 = 0x0900_0521;
+
+    /// A router whose allocator frees through two doubles (slot 8: a block, slot `0x10`: array
+    /// data), both logging tagged words (1: array data, 2: block).
+    fn rig() -> (Engine, Rc<RefCell<Vec<u32>>>) {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 8, FREE_BLOCK_DOUBLE);
+        e.mem.set_u32(vtable + 0x10, FREE_ARRAY_DOUBLE);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let sink = Rc::clone(&log);
+        e.register_double(FREE_ARRAY_DOUBLE, move |_, a| {
+            sink.borrow_mut().extend([1, a[1], a[2]]);
+            Ret::default()
+        });
+        let sink = Rc::clone(&log);
+        e.register_double(FREE_BLOCK_DOUBLE, move |_, a| {
+            sink.borrow_mut().extend([2, a[1], a[2]]);
+            Ret::default()
+        });
+        (e, log)
+    }
+
+    /// Without the flag only the vtables are written; with it the number and byte go through
+    /// 0, 7 (byte 3) and 9 (byte 0), and `this` is returned.
+    #[test]
+    fn constructor_writes_the_final_tables_and_numbers() {
+        let (mut e, _) = rig();
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0xc, 0x55);
+        e.mem.set_u8(this + 0x15, 0x66);
+        assert_eq!(e.call(0x00cf_56f0, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x010c_c3d8);
+        assert_eq!(e.mem.u32(this + 0x10), 0x010c_c3b8);
+        assert_eq!(e.mem.u32(this + 0xc), 0x55);
+        assert_eq!(e.mem.u8(this + 0x15), 0x66);
+        assert_eq!(e.call(0x00cf_56f0, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this + 0xc), 9);
+        assert_eq!(e.mem.u8(this + 0x15), 0);
+    }
+
+    /// Each child entry first word is released (also a null one), an owned array is freed with
+    /// 16 bytes per element of capacity, and the tables end as the base ones.
+    #[test]
+    fn destructor_releases_children_and_frees_the_array() {
+        let (mut e, log) = rig();
+        let released = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&released);
+        e.register_double(RELEASE_REFERENCE, move |_, a| {
+            sink.borrow_mut().push(a[0]);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x40);
+        let data = e.mem.alloc(0x30);
+        for (i, shape) in [0x111u32, 0, 0x333].into_iter().enumerate() {
+            e.mem.set_u32(data + 0x10 * i as u32, shape);
+        }
+        e.mem.set_u32(this + 0x18, data);
+        e.mem.set_u32(this + 0x1c, 3);
+        e.mem.set_u32(this + 0x20, 5);
+        e.call(0x00cf_5750, &args![this]);
+        assert_eq!(*released.borrow(), vec![0x111, 0, 0x333]);
+        assert_eq!(*log.borrow(), vec![1, data, 0x50]);
+        assert_eq!(e.mem.u32(this + 0x1c), 0);
+        assert_eq!(e.mem.u32(this + 0x18), 0);
+        assert_eq!(e.mem.u32(this + 0x20), 0x8000_0000);
+        assert_eq!(e.mem.u32(this + 0x10), 0x010c_6fb0);
+        assert_eq!(e.mem.u32(this), 0x0102_e388);
+        // A not-owned array is not freed and a count of zero releases nothing.
+        log.borrow_mut().clear();
+        released.borrow_mut().clear();
+        e.call(0x00cf_5750, &args![this]);
+        assert!(log.borrow().is_empty());
+        assert!(released.borrow().is_empty());
+    }
+
+    /// The thunk works on the shape 0x10 below the container and returns it.
+    #[test]
+    fn container_thunk_resets_the_tables_and_frees_the_shape_block() {
+        let (mut e, log) = rig();
+        let shape = e.mem.alloc(0x40);
+        e.mem.set_u16(shape + 4, 0x38);
+        let got = e
+            .call(0x00cf_57d0, &args![shape + 0x10, 0xffff_fffeu32])
+            .u32();
+        assert_eq!(got, shape);
+        assert_eq!(e.mem.u32(shape), 0x0102_e388);
+        assert_eq!(e.mem.u32(shape + 0x10), 0x010c_6fb0);
+        assert!(log.borrow().is_empty());
+        e.call(0x00cf_57d0, &args![shape + 0x10, 1u32]);
+        assert_eq!(*log.borrow(), vec![2, shape, 0x38]);
     }
 }

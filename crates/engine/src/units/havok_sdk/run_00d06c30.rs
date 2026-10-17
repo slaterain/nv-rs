@@ -56,11 +56,32 @@ pub fn fn_00d06cb0(e: &mut Engine, array: Ptr, element_size: u32) {
     move_small_array(e, array, capacity, element_size);
 }
 
+// Translated from 00d06d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Looks an object up through two virtual methods (the class is unconfirmed): with a null
+/// `object` the answer is 0. Otherwise virtual method `+4` of `object` is called; a non-zero
+/// answer is returned. Else, when the word at `this + 0xc` is not 0, virtual method `+0x10` of the
+/// object it points to is called with `object` and a non-zero answer is returned. Otherwise 0.
+pub fn fn_00d06d50(e: &mut Engine, this: Ptr, object: Ptr) -> u32 {
+    if object.is_null() {
+        return 0;
+    }
+    let answer = e.vcall(object.addr(), 4, &args![]).u32();
+    if answer != 0 {
+        return answer;
+    }
+    let next = e.mem.u32(this.addr() + 0xc);
+    if next == 0 {
+        return 0;
+    }
+    e.vcall(next, 0x10, &args![object]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00d0_6c30, fn_00d06c30(Ptr, u32, u32)),
         entry!(0x00d0_6cb0, fn_00d06cb0(Ptr, u32)),
+        entry!(0x00d0_6d50, fn_00d06d50(Ptr, Ptr) -> u32),
     ]
 }
 
@@ -166,5 +187,79 @@ mod movement_tests {
         e.call(0x00d0_6cb0, &args![empty, 8u32]);
         assert_eq!(allocations.borrow()[1], 8);
         assert_eq!(e.mem.u16(empty + 6), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests_00d06d50 {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    const FIRST_SLOT_DOUBLE: u32 = 0x0900_0501;
+    const SECOND_SLOT_DOUBLE: u32 = 0x0900_0511;
+
+    /// An object whose slot 4 answers `first` and a holder (`this`) whose `+0xc` object has a slot
+    /// `0x10` that answers `second`; returns the engine, `this`, the object and a call log.
+    fn rig(
+        first: u32,
+        second: u32,
+        has_next: bool,
+    ) -> (Engine, u32, u32, Rc<RefCell<Vec<(u32, Vec<u32>)>>>) {
+        let mut e = Engine::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&log);
+        e.register_double(FIRST_SLOT_DOUBLE, move |_, a| {
+            sink.borrow_mut().push((1, a.to_vec()));
+            Ret {
+                eax: first,
+                ..Ret::default()
+            }
+        });
+        let sink = Rc::clone(&log);
+        e.register_double(SECOND_SLOT_DOUBLE, move |_, a| {
+            sink.borrow_mut().push((2, a.to_vec()));
+            Ret {
+                eax: second,
+                ..Ret::default()
+            }
+        });
+        let object_vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(object_vtable + 4, FIRST_SLOT_DOUBLE);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, object_vtable);
+        let next_vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(next_vtable + 0x10, SECOND_SLOT_DOUBLE);
+        let next = e.mem.alloc(0x10);
+        e.mem.set_u32(next, next_vtable);
+        let this = e.mem.alloc(0x20);
+        if has_next {
+            e.mem.set_u32(this + 0xc, next);
+        }
+        (e, this, object, log)
+    }
+
+    /// A null object gives 0 with no calls; a first answer wins; otherwise the next holder is
+    /// asked with the object; no next holder gives 0.
+    #[test]
+    fn the_first_non_zero_answer_is_returned() {
+        let (mut e, this, _, log) = rig(5, 6, true);
+        assert_eq!(e.call(0x00d0_6d50, &args![this, 0u32]).u32(), 0);
+        assert!(log.borrow().is_empty());
+        let (mut e, this, object, log) = rig(5, 6, true);
+        assert_eq!(e.call(0x00d0_6d50, &args![this, object]).u32(), 5);
+        assert_eq!(*log.borrow(), vec![(1, vec![object])]);
+        let (mut e, this, object, log) = rig(0, 6, true);
+        assert_eq!(e.call(0x00d0_6d50, &args![this, object]).u32(), 6);
+        let next = e.mem.u32(this + 0xc);
+        assert_eq!(
+            *log.borrow(),
+            vec![(1, vec![object]), (2, vec![next, object])]
+        );
+        let (mut e, this, object, _) = rig(0, 6, false);
+        assert_eq!(e.call(0x00d0_6d50, &args![this, object]).u32(), 0);
+        let (mut e, this, object, log) = rig(0, 0, true);
+        assert_eq!(e.call(0x00d0_6d50, &args![this, object]).u32(), 0);
+        assert_eq!(log.borrow().len(), 2);
     }
 }

@@ -56,10 +56,24 @@ pub fn fn_00cfa7d0(e: &mut Engine, this: Ptr, source: Ptr) {
     e.mem.set_u32(to + 4, word);
 }
 
+// Translated from 00cfa860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of a class with several table pointers (the class is unconfirmed): writes the
+/// table words `010c3b8c` at `+0x14`, `010c3bac` at `+0x10`, `010c3b98` at `+0xc` and `010c3b80`
+/// at `+8`, then the base table `0102e388` at `+0`.
+pub fn fn_00cfa860(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base + 0x14, 0x010c_3b8c);
+    e.mem.set_u32(base + 0x10, 0x010c_3bac);
+    e.mem.set_u32(base + 0xc, 0x010c_3b98);
+    e.mem.set_u32(base + 8, 0x010c_3b80);
+    e.mem.set_u32(base, 0x0102_e388);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00cfa7d0, fn_00cfa7d0(Ptr, Ptr)),
+        entry!(0x00cf_a860, fn_00cfa860(Ptr)),
         entry!(0x00cf_a7a0, deleting_destructor_00cfa7a0(Ptr, u8) -> Ptr),
     ]
 }
@@ -158,5 +172,32 @@ mod tests {
         assert_eq!(e.mem.u8(target + 0x6d), e.mem.u8(source + 0x6d));
         assert_eq!(e.mem.u8(target + 0x6e), 0xdd);
         assert_eq!(e.mem.u8(target + 0x6f), 0xdd);
+    }
+}
+
+#[cfg(test)]
+mod tests_00cfa860 {
+    use super::*;
+
+    /// The five table words are written and nothing else.
+    #[test]
+    fn writes_the_table_words() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x20);
+        e.mem.write(this, &[0xaa; 0x20]);
+        e.call(0x00cf_a860, &args![this]);
+        let words: Vec<u32> = (0..6).map(|i| e.mem.u32(this + 4 * i)).collect();
+        assert_eq!(
+            words,
+            vec![
+                0x0102_e388,
+                0xaaaa_aaaa,
+                0x010c_3b80,
+                0x010c_3b98,
+                0x010c_3bac,
+                0x010c_3b8c
+            ]
+        );
+        assert_eq!(e.mem.u32(this + 0x18), 0xaaaa_aaaa);
     }
 }
