@@ -14,10 +14,11 @@ batch is merged or listed below; the next account continues from here.
 
 **State:**
 - **Merged this session:** #209 to #214 and the PR that carries this note.
-  About 22,700 hand-translated functions (34 %), 15,762 start-up table
-  rows (24 %) and 4,790 shut-down table rows (7 %): about 65 % covered.
-  Engine tests: about 29,100.
-- **Havok:** about 3,600 of 6,902 translated; about 2,700 not started.
+  23,502 hand-translated functions (35.5 %), 15,762 start-up table
+  rows (23.8 %) and 4,790 shut-down table rows (7.2 %): 66.5 % covered.
+  Engine tests: 30,188.
+- **Havok:** 3,981 of the 6,591 ledger rows translated, 392 traced and
+  2,218 open.
   `bin/havoktask.sh NN 120` hands out the next whole units.
 - **Shut-down table (#213):** research/initgen `--atexit` matches the 5,020
   atexit destructors against two shapes (`call`, `tail`) and writes
@@ -33,12 +34,29 @@ batch is merged or listed below; the next account continues from here.
   1,214 functions moved from platform to open. About 600 shader and file
   functions the engine map placed in no unit are still `platform` until
   someone sorts them by reading them. Unit files are scaffolded (#214).
-- **SpeedTree** is under way: batch 1 (random numbers, splines, leaf and
-  branch info, 114 functions) is in the PR with this note; branches,
-  fronds and indexed geometry are next.
+- **SpeedTree** is under way: 177 translated, 456 open. Batch 1 (random
+  numbers, splines, leaf and branch info) and batch 2 (branches, indexed
+  geometry) are in the PR with this note; `frondengine.rs` is next.
 - **The two largest solver functions** (00d8aac0, 00d8fb70, about 2,600
   instructions each) are translated as block state machines and were
   checked bit-exact against the real exe through nv-call (185 scenarios).
+
+**Where the last batches stopped** (start at the address given):
+- `hkdataobjectutil.rs`: none of its 37 functions done; start at 00dc1bf0.
+  In 00dc1d30, subtype 0x1d fills its array twice because it falls through
+  into the 0x21 body. 00dc3d40, 00dc4430 and 00dc4710 pass an `hkDataObject`
+  temporary by address (`with_stack`).
+- hkDataObjectDict: about 60 functions left after the 58 in this PR.
+- `hkbinarytagfilewriter.rs`: 25 left, from 00dbe790.
+- `hkaragdollutils.rs`: 10 left, from 00ce9880.
+- Animation: 17 of `hkawaveletcompressedanimation` (from 00e2f7c0), its
+  class (7), `hkbasesystem` (12), `hkclassenum` (5), and two large ones:
+  00cdbae0 (two-joint IK solve) and 00ce61c0 (skeleton-mapping creation).
+- SpeedTree: `frondengine.rs` (55, from 00b17fd0), then the remaining units.
+- CRT gaps found by tests: acos 00eca190 and pow 00ec9ac0 have no entry
+  (`crt.rs` registers 00eca1d0 and 00ec9b00), and `fabs` 00ec6cde calls
+  00ed5abb, which is also unregistered.
+- 229 irregular atexit destructors and 498 leftover start-up entries.
 
 **Open questions for the maintainer:**
 - **Renderer design.** Either keep the Bevy renderer redrawing the game's
