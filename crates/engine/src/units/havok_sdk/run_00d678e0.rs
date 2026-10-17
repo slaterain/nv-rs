@@ -142,6 +142,7 @@ pub fn fn_00d679c0(e: &mut Engine, vector: Ptr) -> i32 {
 }
 
 // Translated from 00d67a50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00d67a50 - for a face remainder of -2 the exe writes over its own saved EBX (stack frame), which the engine does not model.
 /// Draws an arrow for one face of an entity's bounding box (cdecl, eight stack words): asks the
 /// entity's shape (the object at `entity + 0x10`, virtual method at `+0x1c`: the transform at
 /// `entity + 0xf0`, tolerance 0.0, a local box of two vectors) for its box, takes the centre
