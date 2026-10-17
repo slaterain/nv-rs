@@ -38,9 +38,69 @@ pub fn fn_00d41f50(e: &mut Engine, a: u32, b: u32, _unused_2: u32, flag: u32) ->
         .ptr()
 }
 
+// Translated from 00d41ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (cdecl, one word `record`): fills a record of function words: `+0` = `0x00d418d0`,
+/// `+0x2c` = `0x00d41a30`, `+0x28` = `0x00d41930`, `+8` = `0x00d41860`, `+0xc` = `0x00d417b0`,
+/// `+0x10` = `0x00d417f0`, `+0x14` = `0x00d41830`, `+4` = `0x00d418b0`, and the byte at `+0x30` = 1.
+pub fn fn_00d41ec0(e: &mut Engine, record: Ptr) {
+    let r = record.addr();
+    e.mem.set_u32(r, 0x00d4_18d0);
+    e.mem.set_u32(r + 0x2c, 0x00d4_1a30);
+    e.mem.set_u32(r + 0x28, 0x00d4_1930);
+    e.mem.set_u32(r + 8, 0x00d4_1860);
+    e.mem.set_u32(r + 0xc, 0x00d4_17b0);
+    e.mem.set_u32(r + 0x10, 0x00d4_17f0);
+    e.mem.set_u32(r + 0x14, 0x00d4_1830);
+    e.mem.set_u32(r + 4, 0x00d4_18b0);
+    e.mem.set_u8(r + 0x30, 1);
+}
+
+// Translated from 00d41f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (cdecl, three words `queue`, `first`, `second`; descriptions, not confirmed): builds
+/// a 0x40-byte record on the stack (zero bytes at `+0x30` .. `+0x32` and zero words at `+0x18` ..
+/// `+0x28`, then `00d41ec0`; the rest uninitialised in the exe, zero here) and registers it with
+/// `00cfbd60` on `queue` with `(record, first, second)`.
+pub fn fn_00d41f00(e: &mut Engine, queue: Ptr, first: u32, second: u32) {
+    e.with_stack(0x40, |e, record| {
+        let r = record.addr();
+        e.mem.set_u8(r + 0x30, 0);
+        e.mem.set_u8(r + 0x31, 0);
+        e.mem.set_u8(r + 0x32, 0);
+        for offset in [0x18u32, 0x1c, 0x20, 0x24, 0x28] {
+            e.mem.set_u32(r + offset, 0);
+        }
+        fn_00d41ec0(e, record);
+        e.call(0x00cf_bd60, &args![queue, record, first, second]);
+    });
+}
+
+// Translated from 00d41fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (cdecl, one word `queue`; descriptions, not confirmed): registers a 0x14-byte record
+/// built on the stack (function words `+0` = `0x00d41f50`, `+4` = `0x00dac2b0`, `+8` =
+/// `0x00dac450`, `+0xc` = `0x00daf8e0`, the byte at `+0x10` = 0 and at `+0x11` = 1) with
+/// `00cfbbe0` on `queue` with `(record, 0x12, 0x12)`. The padding bytes at `+0x12` are
+/// uninitialised in the exe (zero here).
+pub fn fn_00d41fd0(e: &mut Engine, queue: Ptr) {
+    e.with_stack(0x14, |e, record| {
+        let r = record.addr();
+        e.mem.set_u32(r, 0x00d4_1f50);
+        e.mem.set_u32(r + 4, 0x00da_c2b0);
+        e.mem.set_u32(r + 8, 0x00da_c450);
+        e.mem.set_u32(r + 0xc, 0x00da_f8e0);
+        e.mem.set_u8(r + 0x10, 0);
+        e.mem.set_u8(r + 0x11, 1);
+        e.call(0x00cf_bbe0, &args![queue, record, 0x12u32, 0x12u32]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00d4_1f50, fn_00d41f50(u32, u32, u32, u32) -> Ptr)]
+    vec![
+        entry!(0x00d4_1f50, fn_00d41f50(u32, u32, u32, u32) -> Ptr),
+        entry!(0x00d4_1ec0, fn_00d41ec0(Ptr)),
+        entry!(0x00d4_1f00, fn_00d41f00(Ptr, u32, u32)),
+        entry!(0x00d4_1fd0, fn_00d41fd0(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -116,5 +176,85 @@ mod movement_tests {
         let calls = log.borrow();
         assert_eq!(calls[0].1[1], 0x30);
         assert_eq!(calls[1], (GSK_BASE_AGENT_CONSTRUCT, vec![block, 5, 6, 0]));
+    }
+}
+
+#[cfg(test)]
+mod havok_a04_tests {
+    use super::*;
+
+    const RECORD: [u32; 13] = [
+        0x00d4_18d0,
+        0x00d4_18b0,
+        0x00d4_1860,
+        0x00d4_17b0,
+        0x00d4_17f0,
+        0x00d4_1830,
+        0,
+        0,
+        0,
+        0,
+        0x00d4_1930,
+        0x00d4_1a30,
+        1,
+    ];
+
+    #[test]
+    fn fn_00d41ec0_fills_the_record() {
+        let mut e = Engine::new();
+        let record = e.mem.alloc(0x40);
+        e.call(0x00d4_1ec0, &args![record]);
+        let words: Vec<u32> = (0..13).map(|word| e.mem.u32(record + word * 4)).collect();
+        assert_eq!(words, RECORD.to_vec());
+    }
+
+    #[test]
+    fn fn_00d41f00_registers_the_record_with_the_two_numbers() {
+        let mut e = Engine::new();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::<u32>::new()));
+        let log = std::rc::Rc::clone(&seen);
+        e.register_double(0x00cf_bd60, move |e, a| {
+            let mut words = a.to_vec();
+            for word in 0..13 {
+                words.push(e.mem.u32(a[1] + word * 4));
+            }
+            *log.borrow_mut() = words;
+            Ret::default()
+        });
+        let queue = e.mem.alloc(0x10);
+        e.call(0x00d4_1f00, &args![queue, 6u32, 9u32]);
+        let seen = seen.borrow();
+        assert_eq!(seen[0], queue);
+        assert_eq!(seen[2..4], [6, 9]);
+        assert_eq!(seen[4..], RECORD);
+    }
+
+    #[test]
+    fn fn_00d41fd0_registers_the_record() {
+        let mut e = Engine::new();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::<u32>::new()));
+        let log = std::rc::Rc::clone(&seen);
+        e.register_double(0x00cf_bbe0, move |e, a| {
+            let mut words = a.to_vec();
+            for word in 0..5 {
+                words.push(e.mem.u32(a[1] + word * 4));
+            }
+            *log.borrow_mut() = words;
+            Ret::default()
+        });
+        let queue = e.mem.alloc(0x10);
+        e.call(0x00d4_1fd0, &args![queue]);
+        let seen = seen.borrow();
+        assert_eq!(seen[2..4], [0x12, 0x12]);
+        assert_eq!(
+            seen[4..],
+            [
+                0x00d4_1f50,
+                0x00da_c2b0,
+                0x00da_c450,
+                0x00da_f8e0,
+                0x0000_0100
+            ]
+        );
     }
 }

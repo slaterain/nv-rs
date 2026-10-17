@@ -20,9 +20,22 @@ pub fn fn_00d554a0(e: &mut Engine, this: Ptr) -> i32 {
     e.mem.i32(this.addr() + 0xd0)
 }
 
+// Translated from 00d554c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (thiscall, `RET 4`: one stack word `source`): copies the 16 bytes at `source` to
+/// `this + 0x80`.
+pub fn fn_00d554c0(e: &mut Engine, this: Ptr, source: Ptr) {
+    for lane in 0..4 {
+        let bits = e.mem.u32(source.addr() + lane * 4);
+        e.mem.set_u32(this.addr() + 0x80 + lane * 4, bits);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00d5_54a0, fn_00d554a0(Ptr) -> i32)]
+    vec![
+        entry!(0x00d5_54a0, fn_00d554a0(Ptr) -> i32),
+        entry!(0x00d5_54c0, fn_00d554c0(Ptr, Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -61,5 +74,25 @@ mod movement_tests {
         e.mem.set_i32(this + 0xd0, 0);
         assert_eq!(e.call(0x00d5_54a0, &args![this]).i32(), 0);
         assert_eq!(*calls.borrow(), 1);
+    }
+}
+
+#[cfg(test)]
+mod havok_a04_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00d554c0_copies_the_vector() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x100);
+        let source = e.mem.alloc(0x10);
+        for lane in 0..4 {
+            e.mem.set_u32(source + lane * 4, 0x7fc0_0000 + lane);
+        }
+        e.call(0x00d5_54c0, &args![this, source]);
+        for lane in 0..4 {
+            assert_eq!(e.mem.u32(this + 0x80 + lane * 4), 0x7fc0_0000 + lane);
+        }
+        assert_eq!(e.mem.u32(this + 0x90), 0);
     }
 }

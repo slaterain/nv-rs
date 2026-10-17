@@ -35,11 +35,39 @@ const MOTION_THIN_BOX_INERTIA: u8 = 6;
 /// The size of the child shape buffer (`hkpShapeBuffer`) the exe keeps on its stack.
 const SHAPE_BUFFER_SIZE: u32 = 0x200;
 
+// Translated from 00d21960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (cdecl, one word `object`; the names are descriptions, not confirmed): the depth of
+/// a hierarchy. Slot `0x10` of `object` answers an iterator (none: the result is 0). With an
+/// iterator, slot 8 gives the first index and slot `0xc` the next, until `0xffffffff`; slot `0x14`
+/// turns an index (with a 0x200-byte buffer on the stack) into a child object, whose depth is this
+/// function's result for it, compared as a byte. The result is the largest of those bytes
+/// (unsigned) plus one, as the whole register (so up to 256).
+pub fn fn_00d21960(e: &mut Engine, object: Ptr) -> u32 {
+    let iterator = e.vcall(object.addr(), 0x10, &args![]).u32();
+    if iterator == 0 {
+        return 0;
+    }
+    let mut deepest = 0u8;
+    let mut index = e.vcall(iterator, 8, &args![]).u32();
+    while index != 0xffff_ffff {
+        let child = e.with_stack(0x200, |e, buffer| {
+            e.vcall(iterator, 0x14, &args![index, buffer]).u32()
+        });
+        let depth = fn_00d21960(e, Ptr::new(child)) as u8;
+        if depth > deepest {
+            deepest = depth;
+        }
+        index = e.vcall(iterator, 0xc, &args![index]).u32();
+    }
+    u32::from(deepest) + 1
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00d217d0, fn_00d217d0(Ptr, Ptr, Ptr, Ptr)),
         entry!(0x00d21930, fn_00d21930(Ptr, u32, u32) -> Ptr),
+        entry!(0x00d2_1960, fn_00d21960(Ptr) -> u32),
     ]
 }
 
@@ -270,5 +298,85 @@ mod tests {
         );
         assert_eq!(e.mem.u32(motion), THIN_BOX_MOTION_VTABLE);
         assert_eq!(e.mem.u8(motion + 8), 6);
+    }
+}
+
+#[cfg(test)]
+mod havok_a04_tests {
+    use super::*;
+
+    /// An object whose slot `0x10` answers the iterator stored at `+4`; an iterator keeps its
+    /// children as a count at `+4` and pointers from `+8`.
+    fn build(e: &mut Engine) -> (u32, u32) {
+        let object_vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(object_vtable + 0x10, 0x0900_0031);
+        e.register(0x0900_0031, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 4),
+            ..Ret::default()
+        });
+        let iterator_vtable = e.mem.alloc(0x20);
+        for (slot, address) in [(8, 0x0900_0032), (0xc, 0x0900_0033), (0x14, 0x0900_0034)] {
+            e.mem.set_u32(iterator_vtable + slot, address);
+        }
+        e.register(0x0900_0032, |e, a| Ret {
+            eax: if e.mem.u32(a[0] + 4) > 0 {
+                0
+            } else {
+                0xffff_ffff
+            },
+            ..Ret::default()
+        });
+        e.register(0x0900_0033, |e, a| Ret {
+            eax: if a[1] + 1 < e.mem.u32(a[0] + 4) {
+                a[1] + 1
+            } else {
+                0xffff_ffff
+            },
+            ..Ret::default()
+        });
+        e.register(0x0900_0034, |e, a| {
+            assert_ne!(a[2], 0, "a buffer is given");
+            Ret {
+                eax: e.mem.u32(a[0] + 8 + a[1] * 4),
+                ..Ret::default()
+            }
+        });
+        (object_vtable, iterator_vtable)
+    }
+
+    fn object(e: &mut Engine, vtable: u32, iterator: u32) -> u32 {
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.mem.set_u32(object + 4, iterator);
+        object
+    }
+
+    fn iterator(e: &mut Engine, vtable: u32, children: &[u32]) -> u32 {
+        let iterator = e.mem.alloc(0x20);
+        e.mem.set_u32(iterator, vtable);
+        e.mem.set_u32(iterator + 4, children.len() as u32);
+        for (index, child) in children.iter().enumerate() {
+            e.mem.set_u32(iterator + 8 + index as u32 * 4, *child);
+        }
+        iterator
+    }
+
+    #[test]
+    fn fn_00d21960_is_the_depth_of_the_hierarchy() {
+        let mut e = Engine::new();
+        let (object_vtable, iterator_vtable) = build(&mut e);
+        // No iterator: 0. An iterator without children: 1.
+        let leaf = object(&mut e, object_vtable, 0);
+        assert_eq!(e.call(0x00d2_1960, &args![leaf]).u32(), 0);
+        let empty = iterator(&mut e, iterator_vtable, &[]);
+        let childless = object(&mut e, object_vtable, empty);
+        assert_eq!(e.call(0x00d2_1960, &args![childless]).u32(), 1);
+        // root -> (leaf, middle -> (leaf)): the middle is 1, the root 2.
+        let inner = iterator(&mut e, iterator_vtable, &[leaf]);
+        let middle = object(&mut e, object_vtable, inner);
+        let top = iterator(&mut e, iterator_vtable, &[leaf, middle, leaf]);
+        let root = object(&mut e, object_vtable, top);
+        assert_eq!(e.call(0x00d2_1960, &args![middle]).u32(), 1);
+        assert_eq!(e.call(0x00d2_1960, &args![root]).u32(), 2);
     }
 }

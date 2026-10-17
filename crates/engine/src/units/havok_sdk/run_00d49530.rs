@@ -21,11 +21,23 @@ pub fn fn_00d49550(e: &mut Engine) -> u32 {
     0x010c_7888
 }
 
+// Translated from 00d49530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (cdecl, two words `object` and `argument`): when `object` is not null calls
+/// `00c9ce00` on it with `argument` (thiscall) and then writes the vtable word `0x010c_7888` at
+/// `object + 0`. (The exe's wrapper around a base destructor; the class is unconfirmed.)
+pub fn fn_00d49530(e: &mut Engine, object: u32, argument: u32) {
+    if object != 0 {
+        e.call(0x00c9_ce00, &args![object, argument]);
+        e.mem.set_u32(object, 0x010c_7888);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00d495f0, return_constant_00d495f0() -> u32),
         entry!(0x00d49550, fn_00d49550() -> u32),
+        entry!(0x00d4_9530, fn_00d49530(u32, u32)),
     ]
 }
 
@@ -74,5 +86,25 @@ mod record_tests {
         assert_eq!(calls[0].len(), 2);
         assert_ne!(calls[0][0], 0);
         assert_eq!(calls[0][1], 0);
+    }
+}
+
+#[cfg(test)]
+mod havok_a04_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00d49530_runs_the_base_and_sets_the_vtable_for_a_non_null_object() {
+        let mut e = Engine::new();
+        e.register(0x00c9_ce00, |_, _| Ret::default());
+        let object = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x00d4_9530, &args![object, 0x33u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1..], [(0x00c9_ce00, vec![object, 0x33])]);
+        assert_eq!(e.mem.u32(object), 0x010c_7888);
+        e.call_log = Some(vec![]);
+        e.call(0x00d4_9530, &args![0u32, 0x33u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
     }
 }

@@ -43,6 +43,44 @@ pub fn fn_00d0bbe0(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+// Translated from 00d0bb20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor (`__fastcall`, class unconfirmed): writes the vtable words `+0`, `+8`, `+0xc`,
+/// `+0x10`; for each of the six words from `+0x18`, when it is not null calls `00c905b0` on it and
+/// clears it; then sets the size at `+0x3c` to 0 and, when the capacity word at `+0x40` has its
+/// sign bit clear, frees the array at `+0x38` through slot `0x10` of the memory router's allocator
+/// (`(capacity & 0x3fffffff) * 4` bytes); clears `+0x38`, sets `+0x40` to `0x80000000` and writes
+/// the base vtable words (`+0x10`, `+0xc`, `+8`, `+0`).
+pub fn fn_00d0bb20(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x010c_d3c4);
+    e.mem.set_u32(base + 8, 0x010c_d3b4);
+    e.mem.set_u32(base + 0xc, 0x010c_d3a4);
+    e.mem.set_u32(base + 0x10, 0x010c_d394);
+    for slot in 0..6u32 {
+        let at = base + 0x18 + slot * 4;
+        let item = e.mem.u32(at);
+        if item != 0 {
+            e.call(0x00c9_05b0, &args![item]);
+            e.mem.set_u32(at, 0);
+        }
+    }
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let capacity = e.mem.u32(base + 0x40);
+    e.mem.set_u32(base + 0x3c, 0);
+    if (capacity as i32) >= 0 {
+        let data = e.mem.u32(base + 0x38);
+        let bytes = (capacity & 0x3fff_ffff) * 4;
+        e.vcall(allocator, 0x10, &args![data, bytes]);
+    }
+    e.mem.set_u32(base + 0x38, 0);
+    e.mem.set_u32(base + 0x40, 0x8000_0000);
+    e.mem.set_u32(base + 0x10, 0x010c_cf7c);
+    e.mem.set_u32(base + 0xc, 0x010c_925c);
+    e.mem.set_u32(base + 8, 0x010c_b1c4);
+    e.mem.set_u32(base, 0x0102_e388);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -50,6 +88,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d0_bbc0, fn_00d0bbc0(Ptr, u32) -> u32),
         entry!(0x00d0_bbd0, fn_00d0bbd0(Ptr, u32) -> u32),
         entry!(0x00d0_bbe0, fn_00d0bbe0(Ptr, u32) -> u32),
+        entry!(0x00d0_bb20, fn_00d0bb20(Ptr)),
     ]
 }
 
@@ -165,5 +204,59 @@ mod le81_thunk_tests {
             check(0x00d0_bbe0, 0x00d0_bbf0, 0x10, &[0x1]).u32(),
             0xdead_beef
         );
+    }
+}
+
+#[cfg(test)]
+mod havok_a04_tests {
+    use crate::prelude::*;
+
+    #[test]
+    fn fn_00d0bb20_releases_the_items_and_the_array() {
+        for (capacity, freed) in [(0x4000_0005u32, true), (0x8000_0005, false)] {
+            let mut e = Engine::new();
+            let vtable = e.mem.alloc(0x20);
+            e.mem.set_u32(vtable + 0x10, 0x0900_0011);
+            let allocator = e.mem.alloc(0x10);
+            e.mem.set_u32(allocator, vtable);
+            let router = e.mem.alloc(0x20);
+            e.mem.set_u32(router + 0x10, allocator);
+            e.register_double(0x00c8_5750, move |_, _| Ret {
+                eax: router,
+                ..Ret::default()
+            });
+            e.register(0x00c9_05b0, |_, _| Ret::default());
+            e.register(0x0900_0011, |_, _| Ret::default());
+            let this = e.mem.alloc(0x50);
+            e.mem.set_u32(this + 0x18, 0x1111);
+            e.mem.set_u32(this + 0x24, 0x2222);
+            e.mem.set_u32(this + 0x28, 0x3333);
+            e.mem.set_u32(this + 0x38, 0x7000);
+            e.mem.set_u32(this + 0x3c, 9);
+            e.mem.set_u32(this + 0x40, capacity);
+            e.call_log = Some(vec![]);
+            e.call(0x00d0_bb20, &args![this]);
+            let log = e.call_log.take().unwrap();
+            let mut expected = vec![
+                (0x00c9_05b0, vec![0x1111]),
+                (0x00c9_05b0, vec![0x2222]),
+                (0x00c9_05b0, vec![0x3333]),
+                (0x00c8_5750, vec![]),
+            ];
+            if freed {
+                expected.push((0x0900_0011, vec![allocator, 0x7000, 20]));
+            }
+            assert_eq!(log[1..], expected[..]);
+            for slot in 0..6 {
+                assert_eq!(e.mem.u32(this + 0x18 + slot * 4), 0);
+            }
+            assert_eq!(e.mem.u32(this + 0x38), 0);
+            assert_eq!(e.mem.u32(this + 0x3c), 0);
+            assert_eq!(e.mem.u32(this + 0x40), 0x8000_0000);
+            assert_eq!(e.mem.u32(this), 0x0102_e388);
+            assert_eq!(e.mem.u32(this + 8), 0x010c_b1c4);
+            assert_eq!(e.mem.u32(this + 0xc), 0x010c_925c);
+            assert_eq!(e.mem.u32(this + 0x10), 0x010c_cf7c);
+        }
     }
 }

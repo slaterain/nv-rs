@@ -832,6 +832,203 @@ pub fn fn_00d24360(e: &mut Engine, input: Ptr, output: Ptr) {
     e.mem.free(solver);
 }
 
+/// The floats and doubles the three functions read: `1.0` as a float (`01012068`) and as a double
+/// (`01012070`), the float `-1.0` (`01012054`), the double `0.5` (`01011588`) and the float
+/// `0.0` (`01011d78`).
+const HEIGHT_ONE_SINGLE: u32 = 0x0101_2068;
+const HEIGHT_ONE_DOUBLE: u32 = 0x0101_2070;
+const HEIGHT_MINUS_ONE_SINGLE: u32 = 0x0101_2054;
+const HEIGHT_HALF_DOUBLE: u32 = 0x0101_1588;
+const HEIGHT_ZERO_SINGLE: u32 = 0x0101_1d78;
+
+/// The height at `(x, z)` as the float the code stores: slot `0x34` of the shape's vtable, a float
+/// in `ST0`, rounded by `FSTP dword`.
+fn height_bits_00d24670(e: &mut Engine, shape: u32, x: u32, z: u32) -> u32 {
+    x87_store32(e.vcall(shape, 0x34, &args![x, z]).f64())
+}
+
+// Translated from 00d24660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`__fastcall`, no stack words): writes the base vtable word `0x0102_e388` at `+0`
+/// (the body of the destructors that end with that word).
+pub fn fn_00d24660(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0102_e388);
+}
+
+// Translated from 00d24670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (thiscall on a height-field shape, `RET 0x1c`: seven stack words `x`, `z`, `fx`
+/// (float), `fz` (float), `normal`, `height_out`, `triangle_out`; descriptions, not confirmed):
+/// the height and normal of the point `(x + fx, z + fz)` inside the cell `(x, z)`. Heights come
+/// from slot `0x34` of `this` (`(x, z)`, a float in `ST0`); slot `0x38` (with the address of a
+/// byte) decides the diagonal. `normal` is first set to four times the float at `01012068`; then
+/// its lanes 0 and 2 are `-dx` and `-dz` and `*height_out` is the height, all rounded to floats
+/// with x87 arithmetic, and `*triangle_out` is 1 or 0 for the triangle used. With the byte set
+/// (`a`, `d` the heights at `(x, z)` and `(x + 1, z + 1)`): for `fz < fx` the heights at
+/// `(x + 1, z)` give `dx = h10 - a`, `dz = d - h10`, else those at `(x, z + 1)` give
+/// `dx = d - h01`, `dz = h01 - a`; the height is `(a + dz * fz) + dx * fx`, triangle 1 or 0. With
+/// the byte clear (`h10`, `h01` the heights at `(x + 1, z)` and `(x, z + 1)`): for `fx + fz > 1`
+/// (double compare) `h11` at `(x + 1, z + 1)` gives `dx = h11 - h01`, `dz = h11 - h10` and the
+/// height `(h10 + dz * fz) + (fx - 1) * dx`, triangle 1; otherwise `h00` at `(x, z)` gives
+/// `dx = h10 - h00`, `dz = h01 - h00` and `(h00 + dz * fz) + dx * fx`, triangle 0.
+pub fn fn_00d24670(
+    e: &mut Engine,
+    this: Ptr,
+    x: u32,
+    z: u32,
+    fx: f32,
+    fz: f32,
+    normal: Ptr,
+    height_out: Ptr,
+    triangle_out: Ptr,
+) {
+    let shape = this.addr();
+    let one = e.mem.u32(HEIGHT_ONE_SINGLE);
+    for lane in 0..4 {
+        e.mem.set_u32(normal.addr() + lane * 4, one);
+    }
+    let flag = e.with_stack(4, |e, byte| {
+        e.vcall(shape, 0x38, &args![byte]);
+        e.mem.u8(byte.addr())
+    });
+    let (fx_bits, fz_bits) = (fx.to_bits(), fz.to_bits());
+    let fx_loaded = x87_load32(fx_bits);
+    let fz_loaded = x87_load32(fz_bits);
+    let next_x = x.wrapping_add(1);
+    let next_z = z.wrapping_add(1);
+    // The deltas (as stored floats), the height and the triangle.
+    let (dx_bits, dz_bits, height, triangle);
+    if flag != 0 {
+        let base = height_bits_00d24670(e, shape, x, z);
+        let far = height_bits_00d24670(e, shape, next_x, next_z);
+        let (dx_value, dz_value, flag_value);
+        if fz_loaded < fx_loaded {
+            let h10 = height_bits_00d24670(e, shape, next_x, z);
+            dx_value = x87_sub(x87_load32(h10), x87_load32(base));
+            dz_value = x87_sub(x87_load32(far), x87_load32(h10));
+            flag_value = 1u32;
+        } else {
+            let h01 = height_bits_00d24670(e, shape, x, next_z);
+            dx_value = x87_sub(x87_load32(far), x87_load32(h01));
+            dz_value = x87_sub(x87_load32(h01), x87_load32(base));
+            flag_value = 0;
+        }
+        dx_bits = x87_store32(dx_value);
+        dz_bits = x87_store32(dz_value);
+        let dz_loaded = x87_load32(dz_bits);
+        let dx_loaded = x87_load32(dx_bits);
+        let along_z = x87_add(x87_load32(base), x87_mul(dz_loaded, x87_m32(fz_bits)));
+        height = x87_store32(x87_add(along_z, x87_mul(dx_loaded, x87_m32(fx_bits))));
+        triangle = flag_value;
+    } else {
+        let h10 = height_bits_00d24670(e, shape, next_x, z);
+        let h01 = height_bits_00d24670(e, shape, x, next_z);
+        let sum = x87_add(fx_loaded, x87_m32(fz_bits));
+        let one_double = e.mem.f64(HEIGHT_ONE_DOUBLE);
+        if sum > one_double {
+            let h11 = height_bits_00d24670(e, shape, next_x, next_z);
+            dx_bits = x87_store32(x87_sub(x87_load32(h11), x87_m32(h01)));
+            dz_bits = x87_store32(x87_sub(x87_load32(h11), x87_load32(h10)));
+            let dz_loaded = x87_load32(dz_bits);
+            let dx_loaded = x87_load32(dx_bits);
+            let along_z = x87_add(x87_load32(h10), x87_mul(dz_loaded, x87_m32(fz_bits)));
+            let fx_less_one = x87_sub(fx_loaded, one_double);
+            height = x87_store32(x87_add(along_z, x87_mul(fx_less_one, dx_loaded)));
+            triangle = 1;
+        } else {
+            let h00 = height_bits_00d24670(e, shape, x, z);
+            dx_bits = x87_store32(x87_sub(x87_load32(h10), x87_load32(h00)));
+            dz_bits = x87_store32(x87_sub(x87_load32(h01), x87_load32(h00)));
+            let dz_loaded = x87_load32(dz_bits);
+            let dx_loaded = x87_load32(dx_bits);
+            let along_z = x87_add(x87_load32(h00), x87_mul(dz_loaded, x87_m32(fz_bits)));
+            height = x87_store32(x87_add(along_z, x87_mul(dx_loaded, x87_m32(fx_bits))));
+            triangle = 0;
+        }
+    }
+    e.mem.set_u32(height_out.addr(), height);
+    e.mem
+        .set_u32(normal.addr(), x87_store32(-x87_load32(dx_bits)));
+    e.mem
+        .set_u32(normal.addr() + 8, x87_store32(-x87_load32(dz_bits)));
+    e.mem.set_u32(triangle_out.addr(), triangle);
+}
+
+// Translated from 00d248a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of a sampled height-field shape (class unconfirmed; thiscall, `RET 8`: `info` and a
+/// byte `flag`; no map name): writes the vtable word `0x010c_e31c`, the `u16` at `+6` = 1, `+8` =
+/// 0, `+0xc` = 0xd, `+0x1d` = `flag`, copies `info + 0x10`, `+0x14` to `+0x10`, `+0x14` and the byte
+/// `info + 0x20` to `+0x1c`. With `X`, `Z` the integers at `info + 0x10` and `+0x14`, `Q` and `P`
+/// the floats at `info + 0x18` and `+0x1c` and `s` the vector at `info + 0`: `+0x50` is
+/// `(X - 1, P - Q, Z - 1, 0)` (each rounded to a float, the last the float at `01011d78`) times
+/// `s`; `+0x18` is `-1.0` (and `+0x54`, replacing the second lane above, too) when `P < Q`, else
+/// `((P + Q) * 0.5) * s.y`; `+0x20` is `s`; `+0x30` is `(1/s.x, 1/s.y, 1/s.z, 0)`; and `+0x40` is
+/// `r * s` for `r` the answer of `00d97440` (no arguments, a float in `ST0`) with lane 1 set to
+/// 0.0. Returns `this`.
+pub fn fn_00d248a0(e: &mut Engine, this: Ptr, info: Ptr, flag: u8) -> Ptr {
+    let me = this.addr();
+    let at = info.addr();
+    e.mem.set_u32(me + 8, 0);
+    e.mem.set_u32(me + 0xc, 0xd);
+    e.mem.set_u32(me, 0x010c_e31c);
+    e.mem.set_u16(me + 6, 1);
+    e.mem.set_u8(me + 0x1d, flag);
+    let width = e.mem.u32(at + 0x10);
+    e.mem.set_u32(me + 0x10, width);
+    let depth = e.mem.u32(at + 0x14);
+    e.mem.set_u32(me + 0x14, depth);
+    let corner = e.mem.u8(at + 0x20);
+    e.mem.set_u8(me + 0x1c, corner);
+    let zero_bits = e.mem.u32(HEIGHT_ZERO_SINGLE);
+    let width_less_one = x87_store32(x87_sub(f64::from(e.mem.i32(at + 0x10)), 1.0));
+    let q_bits = e.mem.u32(at + 0x18);
+    let span = x87_store32(x87_sub(x87_load32(e.mem.u32(at + 0x1c)), x87_m32(q_bits)));
+    let depth_less_one = x87_store32(x87_sub(f64::from(e.mem.i32(at + 0x14)), 1.0));
+    let scale_lanes = [0u32, 1, 2, 3].map(|lane| e.mem.f32(at + lane * 4));
+    let extent = [width_less_one, span, depth_less_one, zero_bits].map(f32::from_bits);
+    for lane in 0..4 {
+        e.mem.set_f32(
+            me + 0x50 + lane * 4,
+            extent[lane as usize] * scale_lanes[lane as usize],
+        );
+    }
+    let p_loaded = x87_load32(e.mem.u32(at + 0x1c));
+    let q_loaded = x87_load32(q_bits);
+    if p_loaded < q_loaded {
+        let minus_one = x87_store32(x87_load32(e.mem.u32(HEIGHT_MINUS_ONE_SINGLE)));
+        e.mem.set_u32(me + 0x18, minus_one);
+        e.mem.set_u32(me + 0x54, minus_one);
+    } else {
+        let sum = x87_add(x87_load32(e.mem.u32(at + 0x1c)), x87_m32(q_bits));
+        let half = e.mem.f64(HEIGHT_HALF_DOUBLE);
+        let scaled = x87_mul(x87_mul(sum, half), x87_m32(e.mem.u32(at + 4)));
+        e.mem.set_u32(me + 0x18, x87_store32(scaled));
+    }
+    for lane in 0..4 {
+        let bits = e.mem.u32(at + lane * 4);
+        e.mem.set_u32(me + 0x20 + lane * 4, bits);
+    }
+    let one = 1.0f64;
+    let reciprocal_x = x87_store32(x87_div(one, x87_load32(e.mem.u32(at))));
+    let reciprocal_y = x87_store32(x87_div(one, x87_load32(e.mem.u32(at + 4))));
+    let reciprocal_z = x87_store32(x87_div(one, x87_m32(e.mem.u32(at + 8))));
+    for (lane, bits) in [reciprocal_x, reciprocal_y, reciprocal_z, zero_bits]
+        .into_iter()
+        .enumerate()
+    {
+        e.mem.set_u32(me + 0x30 + lane as u32 * 4, bits);
+    }
+    let factor = f32::from_bits(x87_store32(e.call(0x00d9_7440, &args![]).f64()));
+    let kept = [0u32, 1, 2, 3].map(|lane| e.mem.f32(me + 0x20 + lane * 4));
+    for lane in 0..4 {
+        let value = if lane == 1 {
+            0.0
+        } else {
+            factor * kept[lane as usize]
+        };
+        e.mem.set_f32(me + 0x40 + lane * 4, value);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -843,6 +1040,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d2_3ca0, fn_00d23ca0(Ptr, Ptr, Ptr, Ptr, u32, Ptr, Ptr)),
         entry!(0x00d2_3f50, fn_00d23f50(Ptr)),
         entry!(0x00d2_4360, fn_00d24360(Ptr, Ptr)),
+        entry!(0x00d2_4660, fn_00d24660(Ptr)),
+        entry!(
+            0x00d2_4670,
+            fn_00d24670(Ptr, u32, u32, f32, f32, Ptr, Ptr, Ptr)
+        ),
+        entry!(0x00d2_48a0, fn_00d248a0(Ptr, Ptr, u8) -> Ptr),
     ]
 }
 
@@ -1265,5 +1468,135 @@ mod tests {
             assert_eq!(e.mem.u32(record + 0xc), 0);
         }
         assert_eq!(e.mem.f32(output + 0x20), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod havok_a04_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00d24660_writes_the_base_vtable_word() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 4, 0x1234);
+        e.call(0x00d2_4660, &args![this]);
+        assert_eq!(e.mem.u32(this), 0x0102_e388);
+        assert_eq!(e.mem.u32(this + 4), 0x1234);
+    }
+
+    /// A shape whose height at `(x, z)` is `x * x + 3 * z` (slot `0x34`) and whose slot `0x38`
+    /// writes `flag` to the byte it is given.
+    fn shape(e: &mut Engine, flag: u8) -> u32 {
+        e.map(0x0100_0000, 0x0030_0000);
+        e.mem.set_u32(HEIGHT_ONE_SINGLE, 0x3f80_0000);
+        e.mem.set_f64(HEIGHT_ONE_DOUBLE, 1.0);
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable + 0x34, 0x0900_00b1);
+        e.mem.set_u32(vtable + 0x38, 0x0900_00b2);
+        e.register(0x0900_00b1, |_, a| Ret {
+            st0: f64::from(a[1] * a[1] + 3 * a[2]),
+            ..Ret::default()
+        });
+        e.register_double(0x0900_00b2, move |e, a| {
+            e.mem.set_u8(a[1], flag);
+            Ret::default()
+        });
+        let shape = e.mem.alloc(0x20);
+        e.mem.set_u32(shape, vtable);
+        shape
+    }
+
+    /// `(height, triangle, normal)` for the cell `(2, 3)` and the offsets `(fx, fz)`.
+    fn query(flag: u8, fx: f32, fz: f32) -> (f32, u32, [f32; 4]) {
+        let mut e = Engine::new();
+        let this = shape(&mut e, flag);
+        let normal = e.mem.alloc(0x10);
+        let outputs = e.mem.alloc(0x10);
+        e.call(
+            0x00d2_4670,
+            &args![this, 2u32, 3u32, fx, fz, normal, outputs, outputs + 4],
+        );
+        (
+            e.mem.f32(outputs),
+            e.mem.u32(outputs + 4),
+            [0u32, 1, 2, 3].map(|lane| e.mem.f32(normal + lane * 4)),
+        )
+    }
+
+    #[test]
+    fn fn_00d24670_with_the_flag_set_picks_the_triangle_by_the_offsets() {
+        // H(2,3) = 13, H(3,3) = 18, H(2,4) = 16, H(3,4) = 21.
+        // fz < fx: dx = 18 - 13 = 5, dz = 21 - 18 = 3: 13 + 3 * 0.25 + 5 * 0.75 = 17.5.
+        assert_eq!(query(1, 0.75, 0.25), (17.5, 1, [-5.0, 1.0, -3.0, 1.0]));
+        // fz >= fx: dx = 21 - 16 = 5, dz = 16 - 13 = 3: 13 + 3 * 0.75 + 5 * 0.25 = 16.5.
+        assert_eq!(query(1, 0.25, 0.75), (16.5, 0, [-5.0, 1.0, -3.0, 1.0]));
+        // Equal offsets are not `fz < fx`.
+        assert_eq!(query(1, 0.5, 0.5).1, 0);
+    }
+
+    #[test]
+    fn fn_00d24670_with_the_flag_clear_picks_the_triangle_by_the_sum() {
+        // fx + fz <= 1: dx = 18 - 13 = 5, dz = 16 - 13 = 3: 13 + 3 * 0.25 + 5 * 0.25 = 15.
+        assert_eq!(query(0, 0.25, 0.25), (15.0, 0, [-5.0, 1.0, -3.0, 1.0]));
+        // fx + fz > 1: dx = 21 - 16 = 5, dz = 21 - 18 = 3: 18 + 3 * 0.5 + (0.75 - 1) * 5 = 18.25.
+        assert_eq!(query(0, 0.75, 0.5), (18.25, 1, [-5.0, 1.0, -3.0, 1.0]));
+        // A sum of exactly 1 is not above 1.
+        assert_eq!(query(0, 0.5, 0.5).1, 0);
+    }
+
+    #[test]
+    fn fn_00d24670_a_nan_offset_takes_the_other_branches() {
+        // With a NaN `fz` neither `fz < fx` nor `fx + fz > 1` holds.
+        assert_eq!(query(1, 0.5, f32::NAN).1, 0);
+        assert_eq!(query(0, 0.5, f32::NAN).1, 0);
+    }
+
+    #[test]
+    fn fn_00d248a0_builds_the_height_field_constants() {
+        for (q, p, minus_one) in [(1.0f32, 3.0f32, false), (3.0, 1.0, true)] {
+            let mut e = Engine::new();
+            e.map(0x0100_0000, 0x0030_0000);
+            e.mem.set_u32(HEIGHT_ZERO_SINGLE, 0);
+            e.mem.set_u32(HEIGHT_MINUS_ONE_SINGLE, 0xbf80_0000);
+            e.mem.set_f64(HEIGHT_HALF_DOUBLE, 0.5);
+            e.register(0x00d9_7440, |_, _| Ret {
+                st0: 0.5,
+                ..Ret::default()
+            });
+            let info = e.mem.alloc(0x30);
+            for (lane, value) in [2.0f32, 4.0, 8.0, 16.0].into_iter().enumerate() {
+                e.mem.set_f32(info + lane as u32 * 4, value);
+            }
+            e.mem.set_i32(info + 0x10, 5);
+            e.mem.set_i32(info + 0x14, 4);
+            e.mem.set_f32(info + 0x18, q);
+            e.mem.set_f32(info + 0x1c, p);
+            e.mem.set_u8(info + 0x20, 0x9b);
+            let this = e.mem.alloc(0x60);
+            let result = e.call(0x00d2_48a0, &args![this, info, 0x5au32]).u32();
+            assert_eq!(result, this);
+            assert_eq!(e.mem.u32(this), 0x010c_e31c);
+            assert_eq!(e.mem.u16(this + 6), 1);
+            assert_eq!(e.mem.u32(this + 8), 0);
+            assert_eq!(e.mem.u32(this + 0xc), 0xd);
+            assert_eq!(e.mem.u32(this + 0x10), 5);
+            assert_eq!(e.mem.u32(this + 0x14), 4);
+            assert_eq!(e.mem.u8(this + 0x1c), 0x9b);
+            assert_eq!(e.mem.u8(this + 0x1d), 0x5a);
+            let lanes = |e: &Engine, at: u32| [0u32, 1, 2, 3].map(|lane| e.mem.f32(at + lane * 4));
+            // (X - 1, P - Q, Z - 1, 0) * (2, 4, 8, 16).
+            let span = (p - q) * 4.0;
+            let expected = if minus_one {
+                [8.0, -1.0, 24.0, 0.0]
+            } else {
+                [8.0, span, 24.0, 0.0]
+            };
+            assert_eq!(lanes(&e, this + 0x50), expected);
+            assert_eq!(e.mem.f32(this + 0x18), if minus_one { -1.0 } else { 8.0 });
+            assert_eq!(lanes(&e, this + 0x20), [2.0, 4.0, 8.0, 16.0]);
+            assert_eq!(lanes(&e, this + 0x30), [0.5, 0.25, 0.125, 0.0]);
+            assert_eq!(lanes(&e, this + 0x40), [1.0, 0.0, 4.0, 8.0]);
+        }
     }
 }

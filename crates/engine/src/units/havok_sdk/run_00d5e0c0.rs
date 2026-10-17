@@ -271,6 +271,128 @@ pub fn fn_00d5e3c0(
     }
 }
 
+/// The memory-free `getAabb` argument, an identity transform (`01268370`), and the floats the
+/// bounds start from: `+3.4e38` (`0104da48`) and `-3.4e38` (`0104e148`).
+const IDENTITY_TRANSFORM: u32 = 0x0126_8370;
+const LARGEST_FLOAT: u32 = 0x0104_da48;
+const SMALLEST_FLOAT: u32 = 0x0104_e148;
+/// The vector of four halves (`010c71d0`).
+const HALVES: u32 = 0x010c_71d0;
+
+// Translated from 00d5e0c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (thiscall, no stack words): answers the byte at `+0x40`.
+pub fn fn_00d5e0c0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x40)
+}
+
+// Translated from 00d5e0d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (thiscall, no stack words; a vtable slot): answers 0.
+pub fn fn_00d5e0d0(_e: &mut Engine, _this: Ptr) -> u32 {
+    0
+}
+
+// Translated from 00d5e0e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (thiscall, `RET 4`, the stack word is never read; a vtable slot): answers 0.
+pub fn fn_00d5e0e0(_e: &mut Engine, _this: Ptr, _unused_1: u32) -> u32 {
+    0
+}
+
+/// `MINPS dst, src` on one lane: `dst` when it is below `src`, else `src`.
+fn minps_00d5e210(dst: f32, src: f32) -> f32 {
+    if dst < src {
+        dst
+    } else {
+        src
+    }
+}
+
+/// `MAXPS dst, src` on one lane: `dst` when it is above `src`, else `src`.
+fn maxps_00d5e210(dst: f32, src: f32) -> f32 {
+    if dst > src {
+        dst
+    } else {
+        src
+    }
+}
+
+// Translated from 00d5e210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (thiscall, `RET 4`: one stack word of which the low byte `flag` is used): stores
+/// `flag` at `+0x40`; when it is not 0, the bounds of the children are collected. The pointers of
+/// the array at `+0x44` (count at `+0x48`) are asked, one by one, for their box through slot
+/// `0x1c` (arguments: the identity transform at `01268370`, the float `0.0`, the address of a
+/// 0x20-byte area in the frame whose first vector is the minimum and `+0x10` the maximum). The
+/// lane-wise minimum (starting from `+3.4e38`, `MINPS` with the accumulator first) and maximum
+/// (from `-3.4e38`, `MAXPS`) of all of them end as `+0x30` = `(max + min) * 0.5` and `+0x20` =
+/// `(max - min) * 0.5` (the vector `010c71d0`, four halves). With no children the extreme
+/// constants give `0` and `3.4e38` in the two vectors.
+pub fn fn_00d5e210(e: &mut Engine, this: Ptr, flag: u8) {
+    let me = this.addr();
+    e.mem.set_u8(me + 0x40, flag);
+    if flag == 0 {
+        return;
+    }
+    let mut minimum = [e.mem.f32(LARGEST_FLOAT); 4];
+    let mut maximum = [e.mem.f32(SMALLEST_FLOAT); 4];
+    if e.mem.i32(me + 0x48) > 0 {
+        let mut index = 0i32;
+        loop {
+            let child = e
+                .mem
+                .u32(e.mem.u32(me + 0x44).wrapping_add(index as u32 * 4));
+            e.with_stack(0x20, |e, area| {
+                e.vcall(child, 0x1c, &args![IDENTITY_TRANSFORM, 0.0f32, area]);
+                let low = [0u32, 1, 2, 3].map(|lane| e.mem.f32(area.addr() + lane * 4));
+                let high = [0u32, 1, 2, 3].map(|lane| e.mem.f32(area.addr() + 0x10 + lane * 4));
+                for lane in 0..4 {
+                    minimum[lane] = minps_00d5e210(minimum[lane], low[lane]);
+                    maximum[lane] = maxps_00d5e210(maximum[lane], high[lane]);
+                }
+            });
+            index += 1;
+            if index >= e.mem.i32(me + 0x48) {
+                break;
+            }
+        }
+    }
+    let halves = [0u32, 1, 2, 3].map(|lane| e.mem.f32(HALVES + lane * 4));
+    for lane in 0..4u32 {
+        let index = lane as usize;
+        let center = (maximum[index] + minimum[index]) * halves[index];
+        e.mem.set_f32(me + 0x30 + lane * 4, center);
+    }
+    for lane in 0..4u32 {
+        let index = lane as usize;
+        let extent = (maximum[index] - minimum[index]) * halves[index];
+        e.mem.set_f32(me + 0x20 + lane * 4, extent);
+    }
+}
+
+// Translated from 00d5e2d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (thiscall, no stack words; a vtable slot): answers the word at `+0x34`.
+pub fn fn_00d5e2d0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x34)
+}
+
+// Translated from 00d5e2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (thiscall, `RET 4`: one stack word `key`; a vtable slot): the next key,
+/// `key + 1`, or `0xffffffff` when that is not below (signed) the word at `+0x34`.
+pub fn fn_00d5e2e0(e: &mut Engine, this: Ptr, key: i32) -> i32 {
+    let next = key.wrapping_add(1);
+    if next < e.mem.i32(this.addr() + 0x34) {
+        next
+    } else {
+        -1
+    }
+}
+
+// Translated from 00d5e2f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (thiscall, `RET 8`: two stack words `index` and one never read; a vtable slot):
+/// answers the word `index` of the array whose data pointer is at `+0x30`.
+pub fn fn_00d5e2f0(e: &mut Engine, this: Ptr, index: u32, _unused_2: u32) -> u32 {
+    let data = e.mem.u32(this.addr() + 0x30);
+    e.mem.u32(data.wrapping_add(index.wrapping_mul(4)))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -281,6 +403,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d5e1c0, fn_00d5e1c0(Ptr<ConvexListShape>, Ptr) -> Ptr),
         entry!(0x00d5e300, fn_00d5e300(Ptr<ConvexListShape>, Ptr, Ptr)),
         entry!(0x00d5e3c0, fn_00d5e3c0(Ptr<ConvexListShape>, Ptr, f32, Ptr)),
+        entry!(0x00d5_e0c0, fn_00d5e0c0(Ptr) -> u8),
+        entry!(0x00d5_e0d0, fn_00d5e0d0(Ptr) -> u32),
+        entry!(0x00d5_e0e0, fn_00d5e0e0(Ptr, u32) -> u32),
+        entry!(0x00d5_e210, fn_00d5e210(Ptr, u8)),
+        entry!(0x00d5_e2d0, fn_00d5e2d0(Ptr) -> u32),
+        entry!(0x00d5_e2e0, fn_00d5e2e0(Ptr, i32) -> i32),
+        entry!(0x00d5_e2f0, fn_00d5e2f0(Ptr, u32, u32) -> u32),
     ]
 }
 
@@ -542,5 +671,101 @@ mod tests {
         e.call(0x00d5_e3c0, &args![this, 0x1000u32, 0.5f32, out]);
         assert_eq!(load_vec(&e, out), [1.0, 2.0, 3.0, 0.0]);
         assert_eq!(load_vec(&e, out + 0x10), [4.0, 5.0, 6.0, 0.0]);
+    }
+}
+
+#[cfg(test)]
+mod havok_a04_tests {
+    use super::*;
+
+    #[test]
+    fn the_small_functions_read_their_fields() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x80);
+        e.mem.set_u32(this + 0x40, 0x1234_5678);
+        e.mem.set_u32(this + 0x34, 3);
+        let data = e.mem.alloc(0x10);
+        e.mem.set_u32(data + 8, 0x77);
+        e.mem.set_u32(this + 0x30, data);
+        assert_eq!(e.call(0x00d5_e0c0, &args![this]).u8(), 0x78);
+        assert_eq!(e.call(0x00d5_e0d0, &args![this]).u32(), 0);
+        assert_eq!(e.call(0x00d5_e0e0, &args![this, 9u32]).u32(), 0);
+        assert_eq!(e.call(0x00d5_e2d0, &args![this]).u32(), 3);
+        assert_eq!(e.call(0x00d5_e2f0, &args![this, 2u32, 99u32]).u32(), 0x77);
+    }
+
+    #[test]
+    fn fn_00d5e2e0_answers_the_next_key_or_minus_one() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x80);
+        e.mem.set_u32(this + 0x34, 3);
+        assert_eq!(e.call(0x00d5_e2e0, &args![this, 0i32]).i32(), 1);
+        assert_eq!(e.call(0x00d5_e2e0, &args![this, 1i32]).i32(), 2);
+        assert_eq!(e.call(0x00d5_e2e0, &args![this, 2i32]).i32(), -1);
+        assert_eq!(e.call(0x00d5_e2e0, &args![this, -1i32]).i32(), 0);
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e.mem.set_u32(LARGEST_FLOAT, 0x7f7f_ffee);
+        e.mem.set_u32(SMALLEST_FLOAT, 0xff7f_ffee);
+        for lane in 0..4 {
+            e.mem.set_f32(HALVES + lane * 4, 0.5);
+        }
+        e
+    }
+
+    #[test]
+    fn fn_00d5e210_collects_the_bounds_of_the_children() {
+        let mut e = engine();
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable + 0x1c, 0x0900_0121);
+        // Children whose boxes are written by the double: the pointer picks the box.
+        e.register(0x0900_0121, |e, a| {
+            let boxes = [
+                ([0.0f32, 1.0, 2.0, 3.0], [4.0f32, 5.0, 6.0, 7.0]),
+                ([-2.0, 3.0, 1.0, 9.0], [1.0, 8.0, 3.0, 10.0]),
+            ];
+            assert_eq!(a[1], IDENTITY_TRANSFORM);
+            assert_eq!(a[2], 0.0f32.to_bits());
+            let index = e.mem.u32(a[0] + 4) as usize;
+            for lane in 0..4 {
+                e.mem.set_f32(a[3] + lane as u32 * 4, boxes[index].0[lane]);
+                e.mem
+                    .set_f32(a[3] + 0x10 + lane as u32 * 4, boxes[index].1[lane]);
+            }
+            Ret::default()
+        });
+        let children = e.mem.alloc(8);
+        for index in 0..2u32 {
+            let child = e.mem.alloc(0x10);
+            e.mem.set_u32(child, vtable);
+            e.mem.set_u32(child + 4, index);
+            e.mem.set_u32(children + index * 4, child);
+        }
+        let this = e.mem.alloc(0x80);
+        e.mem.set_u32(this + 0x44, children);
+        e.mem.set_u32(this + 0x48, 2);
+        e.call(0x00d5_e210, &args![this, 0x1_0001u32]);
+        assert_eq!(e.mem.u8(this + 0x40), 1);
+        // Minimum (-2, 1, 1, 3), maximum (4, 8, 6, 10).
+        let lanes = |e: &Engine, at: u32| [0u32, 1, 2, 3].map(|lane| e.mem.f32(at + lane * 4));
+        assert_eq!(lanes(&e, this + 0x30), [1.0, 4.5, 3.5, 6.5]);
+        assert_eq!(lanes(&e, this + 0x20), [3.0, 3.5, 2.5, 3.5]);
+    }
+
+    #[test]
+    fn fn_00d5e210_without_children_or_flag() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x80);
+        e.mem.set_f32(this + 0x30, 5.0);
+        e.call(0x00d5_e210, &args![this, 0u32]);
+        assert_eq!(e.mem.u8(this + 0x40), 0);
+        assert_eq!(e.mem.f32(this + 0x30), 5.0);
+        // No children: the extreme constants, (max + min) * 0.5 = 0 and (max - min) * 0.5 = inf.
+        e.call(0x00d5_e210, &args![this, 1u32]);
+        assert_eq!(e.mem.f32(this + 0x30), 0.0);
+        assert!(e.mem.f32(this + 0x20).is_infinite());
     }
 }
