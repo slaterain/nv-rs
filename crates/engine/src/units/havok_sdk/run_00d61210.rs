@@ -36,9 +36,47 @@ pub fn fn_00d61230(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+/// The process factory object (`01269cd0`, a pointer) and the two factory methods the
+/// virtual thunks `00d61240` and `00d61250` jump to: `00dd9270` (thiscall, `RET 4`: under the
+/// factory's lock, the index of the entry whose name equals the argument, or -1) and
+/// `00dd9240` (thiscall, `RET 4`: the name word of the entry at the index, bit 0 cleared).
+const PROCESS_FACTORY: u32 = 0x0126_9cd0;
+const FACTORY_FIND_PROCESS: u32 = 0x00dd_9270;
+const FACTORY_PROCESS_NAME: u32 = 0x00dd_9240;
+/// The process id the class of the vtables `010d1558` and `010d157c` answers (`01268fb8`).
+const VIEWER_PROCESS_ID: u32 = 0x0126_8fb8;
+
+// Translated from 00d61210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers the process id kept at `01268fb8`: slot 1 of the vtable `010d1558` (RTTI:
+/// `hkServerProcessHandler`); `ECX` unused.
+pub fn fn_00d61210(e: &mut Engine) -> u32 {
+    e.global(VIEWER_PROCESS_ID)
+}
+
+// Translated from 00d61240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Virtual thunk, slot 1 of the vtable `010d157c` (RTTI: `hkServerProcessHandler`; `ECX` is the
+/// object, ignored): loads `ECX` with the process factory (`01269cd0`) and jumps to `00dd9270`
+/// with the one stack word `name`; answers its `EAX`.
+pub fn fn_00d61240(e: &mut Engine, _this: Ptr, name: u32) -> u32 {
+    let factory: u32 = e.global(PROCESS_FACTORY);
+    e.call(FACTORY_FIND_PROCESS, &args![factory, name]).u32()
+}
+
+// Translated from 00d61250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Virtual thunk, slot 2 of the vtable `010d157c` (RTTI: `hkServerProcessHandler`; `ECX` is the
+/// object, ignored): loads `ECX` with the process factory (`01269cd0`) and jumps to `00dd9240`
+/// with the one stack word `index`; answers its `EAX`.
+pub fn fn_00d61250(e: &mut Engine, _this: Ptr, index: u32) -> u32 {
+    let factory: u32 = e.global(PROCESS_FACTORY);
+    e.call(FACTORY_PROCESS_NAME, &args![factory, index]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d6_1210, fn_00d61210() -> u32),
+        entry!(0x00d6_1240, fn_00d61240(Ptr, u32) -> u32),
+        entry!(0x00d6_1250, fn_00d61250(Ptr, u32) -> u32),
         entry!(0x00d6_1260, deleting_destructor_00d61260(Ptr, u8) -> Ptr),
         entry!(0x00d6_1220, fn_00d61220(Ptr, u32) -> u32),
         entry!(0x00d6_1230, fn_00d61230(Ptr, u32) -> u32),
@@ -149,5 +187,46 @@ mod le81_thunk_tests {
             check(0x00d6_1230, 0x00d6_1260, 0x8, &[0x1]).u32(),
             0xdead_beef
         );
+    }
+}
+
+#[cfg(test)]
+mod process_tests {
+    use crate::prelude::*;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0126_8000, 0x2000);
+        e.set_global(0x0126_9cd0, 0x1111u32);
+        e
+    }
+
+    #[test]
+    fn fn_00d61210_answers_the_registered_process_id() {
+        let mut e = engine();
+        e.set_global(0x0126_8fb8, 0xabcdu32);
+        assert_eq!(e.call(0x00d6_1210, &args![0x99u32]).u32(), 0xabcd);
+    }
+
+    #[test]
+    fn fn_00d61240_passes_the_name_to_the_factory() {
+        let mut e = engine();
+        e.register(0x00dd_9270, |_, a| Ret {
+            eax: a[0] ^ a[1],
+            ..Ret::default()
+        });
+        let got = e.call(0x00d6_1240, &args![0x99u32, 0x2222u32]).u32();
+        assert_eq!(got, 0x1111 ^ 0x2222);
+    }
+
+    #[test]
+    fn fn_00d61250_passes_the_index_to_the_factory() {
+        let mut e = engine();
+        e.register(0x00dd_9240, |_, a| Ret {
+            eax: a[0] + a[1],
+            ..Ret::default()
+        });
+        let got = e.call(0x00d6_1250, &args![0x99u32, 0x2222u32]).u32();
+        assert_eq!(got, 0x1111 + 0x2222);
     }
 }

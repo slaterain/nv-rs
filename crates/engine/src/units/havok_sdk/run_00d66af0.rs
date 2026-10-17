@@ -50,9 +50,83 @@ pub fn fn_00d66b50(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+/// The process factory object (`01269cd0`, a pointer), `hkProcessFactory::registerProcess` (Xbox
+/// PDB, `00dd9380`, thiscall: the name, the creation function; answers the id), the process name
+/// `"Phantoms"` (`010c41a4`) and the creation function `00d66770`.
+const PROCESS_FACTORY: u32 = 0x0126_9cd0;
+const REGISTER_PROCESS: u32 = 0x00dd_9380;
+const PHANTOMS_NAME: u32 = 0x010c_41a4;
+const PHANTOMS_CREATE: u32 = 0x00d6_6770;
+/// The id the registration got (`01268ff0`, answered by `00d66b10`).
+const PHANTOMS_PROCESS_ID: u32 = 0x0126_8ff0;
+/// `hkpWorldViewerBase`'s constructor (Xbox PDB, `00ddccb0`, thiscall, one argument: the process
+/// contexts) and the float the mouse picking viewer starts its `+0x30` field with (`01013974`,
+/// 1000.0 in the exe).
+const WORLD_VIEWER_CONSTRUCT: u32 = 0x00dd_ccb0;
+const MOUSE_PICKING_SPRING: u32 = 0x0101_3974;
+/// The vtable pointers of the mouse picking viewer (RTTI: `hkpMousePickingViewer`): `+0`, `+8`
+/// and `+0x20`.
+const VTABLE_VIEWER: u32 = 0x010d_1ce4;
+const VTABLE_PROCESS: u32 = 0x010d_1cc4;
+const VTABLE_FILTER: u32 = 0x010d_1cb4;
+
+// Translated from 00d66af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Registers the creation function `00d66770` as the process `"Phantoms"` with the process
+/// factory at `01269cd0` (`hkProcessFactory::registerProcess`) and keeps the answered id at
+/// `01268ff0`.
+pub fn fn_00d66af0(e: &mut Engine) {
+    let factory: u32 = e.global(PROCESS_FACTORY);
+    let id = e
+        .call(
+            REGISTER_PROCESS,
+            &args![factory, PHANTOMS_NAME, PHANTOMS_CREATE],
+        )
+        .u32();
+    e.set_global(PHANTOMS_PROCESS_ID, id);
+}
+
+// Translated from 00d66b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers the process id kept at `01268ff0`: slot 1 of the vtable `010d1bbc` (RTTI:
+/// `hkpPhantomDisplayViewer`); `ECX` unused.
+pub fn fn_00d66b10(e: &mut Engine) -> u32 {
+    e.global(PHANTOMS_PROCESS_ID)
+}
+
+// Translated from 00d66b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the mouse picking viewer (RTTI: `hkpMousePickingViewer`, vtables
+/// `010d1ce4`, `010d1cc4` and `010d1cb4`): runs the `hkpWorldViewerBase` constructor
+/// (`00ddccb0`, with the process `contexts`), loads the float at `01013974` and stores it at
+/// `+0x30` (`FLD` and `FSTP`: a signalling NaN comes out quiet), zeroes `+0x28` and `+0x2c` and
+/// stores the three vtable pointers (`+0`, `+8`, `+0x20`). Answers `this`.
+pub fn fn_00d66b90(e: &mut Engine, this: Ptr, contexts: Ptr) -> Ptr {
+    let at = this.addr();
+    e.call(WORLD_VIEWER_CONSTRUCT, &args![this, contexts]);
+    let spring = x87_quiet_bits(e.mem.u32(MOUSE_PICKING_SPRING));
+    e.mem.set_u32(at.wrapping_add(0x30), spring);
+    e.mem.set_u32(at.wrapping_add(0x28), 0);
+    e.mem.set_u32(at.wrapping_add(0x2c), 0);
+    e.mem.set_u32(at, VTABLE_VIEWER);
+    e.mem.set_u32(at.wrapping_add(8), VTABLE_PROCESS);
+    e.mem.set_u32(at.wrapping_add(0x20), VTABLE_FILTER);
+    this
+}
+
+// Translated from 00d66bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `0x011b5ff0` through `first` and 3 through `second` (stdcall-like, `RET 8`; `ECX` is
+/// the object, ignored; the class is the one of the vtable `010d1cc4`, RTTI:
+/// `hkpMousePickingViewer`, slot 2).
+pub fn fn_00d66bd0(e: &mut Engine, _this: Ptr, first: Ptr, second: Ptr) {
+    e.mem.set_u32(first.addr(), 0x011b_5ff0);
+    e.mem.set_u32(second.addr(), 3);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d6_6af0, fn_00d66af0()),
+        entry!(0x00d6_6b10, fn_00d66b10() -> u32),
+        entry!(0x00d6_6b90, fn_00d66b90(Ptr, Ptr) -> Ptr),
+        entry!(0x00d6_6bd0, fn_00d66bd0(Ptr, Ptr, Ptr)),
         entry!(0x00d6_6b60, deleting_destructor_00d66b60(Ptr, u8) -> Ptr),
         entry!(0x00d6_6b20, fn_00d66b20(Ptr, u32) -> u32),
         entry!(0x00d6_6b30, fn_00d66b30(Ptr, u32) -> u32),
@@ -181,5 +255,79 @@ mod le81_thunk_tests {
             check(0x00d6_6b50, 0x00d6_6b60, 0x2c, &[0x1]).u32(),
             0xdead_beef
         );
+    }
+}
+
+#[cfg(test)]
+mod mouse_picking_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Seen = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0126_8000, 0x2000);
+        e.map(0x0100_0000, 0x0030_0000);
+        e
+    }
+
+    #[test]
+    fn fn_00d66af0_registers_the_phantoms_process_and_keeps_its_id() {
+        let mut e = engine();
+        e.set_global(PROCESS_FACTORY, 0x1111u32);
+        let seen: Seen = Rc::default();
+        let log = Rc::clone(&seen);
+        e.register_double(REGISTER_PROCESS, move |_, a| {
+            log.borrow_mut().push(a.to_vec());
+            Ret {
+                eax: 7,
+                ..Ret::default()
+            }
+        });
+        e.call(0x00d6_6af0, &args![]);
+        assert_eq!(*seen.borrow(), vec![vec![0x1111, 0x010c_41a4, 0x00d6_6770]]);
+        assert_eq!(e.global::<u32>(PHANTOMS_PROCESS_ID), 7);
+        assert_eq!(e.call(0x00d6_6b10, &args![0x55u32]).u32(), 7);
+    }
+
+    #[test]
+    fn fn_00d66b90_sets_up_the_mouse_picking_viewer() {
+        let mut e = engine();
+        let seen: Seen = Rc::default();
+        let log = Rc::clone(&seen);
+        e.register_double(WORLD_VIEWER_CONSTRUCT, move |e, a| {
+            log.borrow_mut().push(a.to_vec());
+            // The base constructor leaves things in the fields the viewer then sets.
+            e.mem.set_u32(a[0] + 0x28, 0xdead);
+            e.mem.set_u32(a[0] + 0x2c, 0xbeef);
+            Ret::default()
+        });
+        e.mem.set_u32(MOUSE_PICKING_SPRING, 1000f32.to_bits());
+        let this = e.mem.alloc(0x40);
+        let got = e.call(0x00d6_6b90, &args![this, 0x1234u32]).ptr::<()>();
+        assert_eq!(got.addr(), this);
+        assert_eq!(*seen.borrow(), vec![vec![this, 0x1234]]);
+        assert_eq!(e.mem.u32(this + 0x30), 1000f32.to_bits());
+        assert_eq!(e.mem.u32(this + 0x28), 0);
+        assert_eq!(e.mem.u32(this + 0x2c), 0);
+        assert_eq!(e.mem.u32(this), VTABLE_VIEWER);
+        assert_eq!(e.mem.u32(this + 8), VTABLE_PROCESS);
+        assert_eq!(e.mem.u32(this + 0x20), VTABLE_FILTER);
+        // A signalling NaN in the constant comes out quiet (FLD / FSTP).
+        e.mem.set_u32(MOUSE_PICKING_SPRING, 0x7f80_0001);
+        e.call(0x00d6_6b90, &args![this, 0u32]);
+        assert_eq!(e.mem.u32(this + 0x30), 0x7fc0_0001);
+    }
+
+    #[test]
+    fn fn_00d66bd0_stores_the_two_constants() {
+        let mut e = Engine::new();
+        let first = e.mem.alloc(4);
+        let second = e.mem.alloc(4);
+        e.call(0x00d6_6bd0, &args![0x99u32, first, second]);
+        assert_eq!(e.mem.u32(first), 0x011b_5ff0);
+        assert_eq!(e.mem.u32(second), 3);
     }
 }

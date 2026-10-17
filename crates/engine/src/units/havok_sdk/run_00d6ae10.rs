@@ -29,9 +29,38 @@ pub fn fn_00d6ae50(e: &mut Engine) -> u32 {
     })
 }
 
+/// `00cb0a70` (thiscall on the string at `+0x28`, one argument: the text pointer; its body is
+/// `MOV EAX,ECX` and `RET 4`, so it is the constructor of a string pointer that keeps its
+/// argument unconstructed).
+const STRING_POINTER_CONSTRUCT: u32 = 0x00cb_0a70;
+/// The vtable pointer the object gets (`010cc040`).
+const OBJECT_VTABLE: u32 = 0x010c_c040;
+
+// Translated from 00d6ae10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Initialises an object in the memory at `object` (cdecl, two stack words; nothing happens when
+/// `object` is null): vtable pointer `010cc040`, the halfword `0x8000` at `+0x26`, zero at `+0x20`
+/// and the halfword zero at `+0x24`, then `00cb0a70` on `object + 0x28` with `text`, and
+/// `0xfffffff0` at `+0x34`.
+pub fn fn_00d6ae10(e: &mut Engine, object: Ptr, text: u32) {
+    if object.is_null() {
+        return;
+    }
+    let at = object.addr();
+    e.mem.set_u32(at, OBJECT_VTABLE);
+    e.mem.set_u16(at.wrapping_add(0x26), 0x8000);
+    e.mem.set_u32(at.wrapping_add(0x20), 0);
+    e.mem.set_u16(at.wrapping_add(0x24), 0);
+    e.call(
+        STRING_POINTER_CONSTRUCT,
+        &args![at.wrapping_add(0x28), text],
+    );
+    e.mem.set_u32(at.wrapping_add(0x34), 0xffff_fff0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d6_ae10, fn_00d6ae10(Ptr, u32)),
         entry!(0x00d6_aec0, fn_00d6aec0() -> u32),
         entry!(0x00d6ae50, fn_00d6ae50() -> u32),
     ]
@@ -163,5 +192,48 @@ mod tests {
         assert_eq!(calls[0].len(), 2);
         assert_ne!(calls[0][0], 0);
         assert_eq!(calls[0][1], 0);
+    }
+}
+
+#[cfg(test)]
+mod object_init_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Seen = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    #[test]
+    fn fn_00d6ae10_initialises_the_object() {
+        let mut e = Engine::new();
+        let seen: Seen = Rc::default();
+        let log = Rc::clone(&seen);
+        e.register_double(STRING_POINTER_CONSTRUCT, move |_, a| {
+            log.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        let object = e.mem.alloc(0x40);
+        e.mem.set_u32(object + 0x20, 0xffff_ffff);
+        e.mem.set_u16(object + 0x24, 0x1234);
+        e.call(0x00d6_ae10, &args![object, 0x7777u32]);
+        assert_eq!(e.mem.u32(object), OBJECT_VTABLE);
+        assert_eq!(e.mem.u16(object + 0x26), 0x8000);
+        assert_eq!(e.mem.u32(object + 0x20), 0);
+        assert_eq!(e.mem.u16(object + 0x24), 0);
+        assert_eq!(e.mem.u32(object + 0x34), 0xffff_fff0);
+        assert_eq!(*seen.borrow(), vec![vec![object + 0x28, 0x7777]]);
+    }
+
+    #[test]
+    fn fn_00d6ae10_does_nothing_for_a_null_object() {
+        let mut e = Engine::new();
+        let seen: Seen = Rc::default();
+        let log = Rc::clone(&seen);
+        e.register_double(STRING_POINTER_CONSTRUCT, move |_, a| {
+            log.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        e.call(0x00d6_ae10, &args![0u32, 0x7777u32]);
+        assert!(seen.borrow().is_empty());
     }
 }

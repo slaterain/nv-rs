@@ -36,9 +36,20 @@ pub fn fn_00d63440(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+/// The process id the world memory viewer answers (`01268fc8`).
+const MEMORY_VIEWER_PROCESS_ID: u32 = 0x0126_8fc8;
+
+// Translated from 00d63420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers the process id kept at `01268fc8`: slot 1 of the vtable `010d1774` (RTTI:
+/// `hkpWorldMemoryViewer`); `ECX` unused.
+pub fn fn_00d63420(e: &mut Engine) -> u32 {
+    e.global(MEMORY_VIEWER_PROCESS_ID)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d6_3420, fn_00d63420() -> u32),
         entry!(0x00d6_3450, deleting_destructor_00d63450(Ptr, u8) -> Ptr),
         entry!(0x00d6_3430, fn_00d63430(Ptr, u32) -> u32),
         entry!(0x00d6_3440, fn_00d63440(Ptr, u32) -> u32),
@@ -149,5 +160,18 @@ mod le81_thunk_tests {
             check(0x00d6_3440, 0x00d6_3450, 0x8, &[0x1]).u32(),
             0xdead_beef
         );
+    }
+}
+
+#[cfg(test)]
+mod memory_viewer_id_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00d63420_answers_the_registered_process_id() {
+        let mut e = Engine::new();
+        e.map(0x0126_8000, 0x1000);
+        e.set_global(MEMORY_VIEWER_PROCESS_ID, 0x4242u32);
+        assert_eq!(e.call(0x00d6_3420, &args![0x99u32]).u32(), 0x4242);
     }
 }

@@ -36,9 +36,28 @@ pub fn fn_00d63240(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+/// The two process ids the snapshot viewer answers (`01268fc0` when the flag byte is set,
+/// `01268fc4` when it is clear).
+const SNAPSHOT_PROCESS_ID_SET: u32 = 0x0126_8fc0;
+const SNAPSHOT_PROCESS_ID_CLEAR: u32 = 0x0126_8fc4;
+
+// Translated from 00d63210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers one of two process ids by the byte at `this + 0x20`: `01268fc0` when it is not
+/// zero, `01268fc4` when it is zero. Slot 1 of the vtable `010d1700` (RTTI:
+/// `hkpWorldSnapshotViewer`) with `this` the sub-object at `+8` of the viewer, so the byte is the
+/// flag the viewer's constructor keeps at `+0x28`.
+pub fn fn_00d63210(e: &mut Engine, this: Ptr) -> u32 {
+    if e.mem.u8(this.addr().wrapping_add(0x20)) != 0 {
+        e.global(SNAPSHOT_PROCESS_ID_SET)
+    } else {
+        e.global(SNAPSHOT_PROCESS_ID_CLEAR)
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d6_3210, fn_00d63210(Ptr) -> u32),
         entry!(0x00d6_3250, deleting_destructor_00d63250(Ptr, u8) -> Ptr),
         entry!(0x00d6_3230, fn_00d63230(Ptr, u32) -> u32),
         entry!(0x00d6_3240, fn_00d63240(Ptr, u32) -> u32),
@@ -149,5 +168,25 @@ mod le81_thunk_tests {
             check(0x00d6_3240, 0x00d6_3250, 0x20, &[0x1]).u32(),
             0xdead_beef
         );
+    }
+}
+
+#[cfg(test)]
+mod snapshot_id_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00d63210_answers_the_id_chosen_by_the_flag_byte() {
+        let mut e = Engine::new();
+        e.map(0x0126_8000, 0x1000);
+        e.set_global(SNAPSHOT_PROCESS_ID_SET, 0x11u32);
+        e.set_global(SNAPSHOT_PROCESS_ID_CLEAR, 0x22u32);
+        let this = e.mem.alloc(0x40);
+        assert_eq!(e.call(0x00d6_3210, &args![this]).u32(), 0x22);
+        e.mem.set_u8(this + 0x20, 1);
+        assert_eq!(e.call(0x00d6_3210, &args![this]).u32(), 0x11);
+        // Any non-zero byte counts.
+        e.mem.set_u8(this + 0x20, 0x80);
+        assert_eq!(e.call(0x00d6_3210, &args![this]).u32(), 0x11);
     }
 }

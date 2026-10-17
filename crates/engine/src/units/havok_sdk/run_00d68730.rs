@@ -29,9 +29,47 @@ pub fn fn_00d68730(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+/// The base constructor of the contact point viewers (`00de29b0`, thiscall, two arguments: the
+/// process contexts and a colour word).
+const CONTACT_POINT_VIEWER_CONSTRUCT: u32 = 0x00de_29b0;
+/// The vtable pointers of the inactive contact point viewer (RTTI:
+/// `hkpInactiveContactPointViewer`): `+0`, `+8`, `+0x20` and `+0x28`.
+const INACTIVE_VTABLE_VIEWER: u32 = 0x010d_1fb0;
+const INACTIVE_VTABLE_PROCESS: u32 = 0x010d_1f90;
+const INACTIVE_VTABLE_FILTER: u32 = 0x010d_1f80;
+const INACTIVE_VTABLE_LISTENER: u32 = 0x010d_1f70;
+
+// Translated from 00d68770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the inactive contact point viewer (RTTI:
+/// `hkpInactiveContactPointViewer`): runs the contact point viewers' base constructor
+/// (`00de29b0`) with the process `contexts` and the colour `0xff008000`, then stores the four
+/// vtable pointers (`+0`, `+8`, `+0x20`, `+0x28`). Answers `this`.
+pub fn fn_00d68770(e: &mut Engine, this: Ptr, contexts: Ptr) -> Ptr {
+    let at = this.addr();
+    e.call(
+        CONTACT_POINT_VIEWER_CONSTRUCT,
+        &args![this, contexts, 0xff00_8000u32],
+    );
+    e.mem.set_u32(at, INACTIVE_VTABLE_VIEWER);
+    e.mem.set_u32(at.wrapping_add(8), INACTIVE_VTABLE_PROCESS);
+    e.mem.set_u32(at.wrapping_add(0x20), INACTIVE_VTABLE_FILTER);
+    e.mem
+        .set_u32(at.wrapping_add(0x28), INACTIVE_VTABLE_LISTENER);
+    this
+}
+
+// Translated from 00d687b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers its one stack word plus `0x34` (`ECX` is the object, ignored; a virtual method of the
+/// inactive contact point viewer's vtable `010d1fb0` at `010d1fbc`).
+pub fn fn_00d687b0(_e: &mut Engine, _this: Ptr, base: u32) -> u32 {
+    base.wrapping_add(0x34)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d6_8770, fn_00d68770(Ptr, Ptr) -> Ptr),
+        entry!(0x00d6_87b0, fn_00d687b0(Ptr, u32) -> u32),
         entry!(0x00d6_8740, deleting_destructor_00d68740(Ptr, u8) -> Ptr),
         entry!(0x00d6_8730, fn_00d68730(Ptr, u32) -> u32),
     ]
@@ -127,5 +165,49 @@ mod a07_thunk_tests {
     #[test]
     fn thunk_00d68730() {
         assert_eq!(check(0x00d6_8730, 0x00d6_8740, 0x28), 0xdead_beef);
+    }
+}
+
+#[cfg(test)]
+mod inactive_viewer_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Seen = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    #[test]
+    fn fn_00d68770_runs_the_base_constructor_and_stores_the_vtables() {
+        let mut e = Engine::new();
+        let seen: Seen = Rc::default();
+        let log = Rc::clone(&seen);
+        e.register_double(CONTACT_POINT_VIEWER_CONSTRUCT, move |e, a| {
+            log.borrow_mut().push(a.to_vec());
+            // The base constructor stores its own vtables, which this one replaces.
+            e.mem.set_u32(a[0], 0xdead);
+            e.mem.set_u32(a[0] + 0x28, 0xbeef);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x40);
+        let got = e.call(0x00d6_8770, &args![this, 0x1234u32]).ptr::<()>();
+        assert_eq!(got.addr(), this);
+        assert_eq!(*seen.borrow(), vec![vec![this, 0x1234, 0xff00_8000]]);
+        assert_eq!(e.mem.u32(this), INACTIVE_VTABLE_VIEWER);
+        assert_eq!(e.mem.u32(this + 8), INACTIVE_VTABLE_PROCESS);
+        assert_eq!(e.mem.u32(this + 0x20), INACTIVE_VTABLE_FILTER);
+        assert_eq!(e.mem.u32(this + 0x28), INACTIVE_VTABLE_LISTENER);
+    }
+
+    #[test]
+    fn fn_00d687b0_adds_0x34_to_its_argument() {
+        let mut e = Engine::new();
+        assert_eq!(
+            e.call(0x00d6_87b0, &args![0x99u32, 0x1000u32]).u32(),
+            0x1034
+        );
+        assert_eq!(
+            e.call(0x00d6_87b0, &args![0x99u32, 0xffff_fff0u32]).u32(),
+            0x24
+        );
     }
 }

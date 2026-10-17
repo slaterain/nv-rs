@@ -50,9 +50,20 @@ pub fn fn_00d63e00(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+/// The process id the vehicle viewer answers (`01268fcc`).
+const VEHICLE_VIEWER_PROCESS_ID: u32 = 0x0126_8fcc;
+
+// Translated from 00d63dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers the process id kept at `01268fcc`: slot 1 of the vtable `010d1834` (RTTI:
+/// `hkpVehicleViewer`); `ECX` unused.
+pub fn fn_00d63dc0(e: &mut Engine) -> u32 {
+    e.global(VEHICLE_VIEWER_PROCESS_ID)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d6_3dc0, fn_00d63dc0() -> u32),
         entry!(0x00d6_3e10, deleting_destructor_00d63e10(Ptr, u8) -> Ptr),
         entry!(0x00d6_3dd0, fn_00d63dd0(Ptr, u32) -> u32),
         entry!(0x00d6_3de0, fn_00d63de0(Ptr, u32) -> u32),
@@ -181,5 +192,18 @@ mod le81_thunk_tests {
             check(0x00d6_3e00, 0x00d6_3e10, 0x2c, &[0x1]).u32(),
             0xdead_beef
         );
+    }
+}
+
+#[cfg(test)]
+mod vehicle_viewer_id_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00d63dc0_answers_the_registered_process_id() {
+        let mut e = Engine::new();
+        e.map(0x0126_8000, 0x1000);
+        e.set_global(VEHICLE_VIEWER_PROCESS_ID, 0x4242u32);
+        assert_eq!(e.call(0x00d6_3dc0, &args![0x99u32]).u32(), 0x4242);
     }
 }

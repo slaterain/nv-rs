@@ -29,9 +29,36 @@ pub fn fn_00d68900(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+/// The process id the active contact point viewer answers (`0126900c`) and the word
+/// `00d68940` hands to the display handler (`01269010`).
+const ACTIVE_PROCESS_ID: u32 = 0x0126_900c;
+const CONTACT_POINT_TAG: u32 = 0x0126_9010;
+
+// Translated from 00d688f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers the process id kept at `0126900c`: slot 1 of the vtable `010d201c` (RTTI:
+/// `hkpActiveContactPointViewer`); `ECX` unused.
+pub fn fn_00d688f0(e: &mut Engine) -> u32 {
+    e.global(ACTIVE_PROCESS_ID)
+}
+
+// Translated from 00d68940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls the method at vtable offset 0x10 of the object at `[this - 0x14]` with `(contact +
+/// 0xf0, contact + 0x13, the word at 01269010)`, where `contact` is the one stack word.
+pub fn fn_00d68940(e: &mut Engine, this: Ptr, contact: u32) {
+    let tag: u32 = e.global(CONTACT_POINT_TAG);
+    let handler = e.mem.u32(this.addr().wrapping_sub(0x14));
+    e.vcall(
+        handler,
+        0x10,
+        &args![contact.wrapping_add(0xf0), contact.wrapping_add(0x13), tag],
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d6_88f0, fn_00d688f0() -> u32),
+        entry!(0x00d6_8940, fn_00d68940(Ptr, u32)),
         entry!(0x00d6_8910, deleting_destructor_00d68910(Ptr, u8) -> Ptr),
         entry!(0x00d6_8900, fn_00d68900(Ptr, u32) -> u32),
     ]
@@ -127,5 +154,46 @@ mod a07_thunk_tests {
     #[test]
     fn thunk_00d68900() {
         assert_eq!(check(0x00d6_8900, 0x00d6_8910, 0x20), 0xdead_beef);
+    }
+}
+
+#[cfg(test)]
+mod active_viewer_id_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Seen = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    #[test]
+    fn fn_00d688f0_answers_the_registered_process_id() {
+        let mut e = Engine::new();
+        e.map(0x0126_8000, 0x2000);
+        e.set_global(ACTIVE_PROCESS_ID, 0x4242u32);
+        assert_eq!(e.call(0x00d6_88f0, &args![0x99u32]).u32(), 0x4242);
+    }
+
+    #[test]
+    fn fn_00d68940_hands_the_transform_the_id_and_the_tag_to_the_handler() {
+        let mut e = Engine::new();
+        e.map(0x0126_8000, 0x2000);
+        e.map(0x0900_0000, 0x100);
+        e.set_global(CONTACT_POINT_TAG, 0x55u32);
+        // The handler object at 0x09000040 has its vtable at 0x09000000 (slot 0x10 below).
+        e.mem.set_u32(0x0900_0040, 0x0900_0000);
+        e.mem.set_u32(0x0900_0010, 0x0900_0021);
+        let seen: Seen = Rc::default();
+        let log = Rc::clone(&seen);
+        e.register_double(0x0900_0021, move |_, a| {
+            log.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x40) + 0x20;
+        e.mem.set_u32(this - 0x14, 0x0900_0040);
+        e.call(0x00d6_8940, &args![this, 0x2000u32]);
+        assert_eq!(
+            *seen.borrow(),
+            vec![vec![0x0900_0040, 0x20f0, 0x2013, 0x55]]
+        );
     }
 }
