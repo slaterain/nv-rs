@@ -72,6 +72,15 @@ batch is merged or listed below; the next account continues from here.
   MXCSR flush-to-zero bit, so SSE results on Havok threads flush
   denormals. The engine does not model MXCSR yet (00d2cfb0 is marked
   incomplete for it); decide how the stepped threads carry it.
+- **Two NaNs meeting (#199).** When two NaNs meet in an x87 `FMUL` or
+  `FADD`, the exe keeps the one with the larger significand (the positive one
+  on a tie); f64 arithmetic keeps the first operand. The pointer-argument
+  check (#200) found it in 006e9000, 006b99e0, 00e0a750, 00e0a850, 00e436b0
+  and 00e44340. Fix it once, in the x87 NaN helpers, not per function.
+- **Multiply by -1.0 (#215).** LLVM folds `x * -1.0` into a negation in
+  release builds, which flips a NaN's sign that the exe's `FMUL` keeps. The
+  three known sites now multiply by `std::hint::black_box(-1.0)`; use the
+  same form for any new one.
 
 **Machinery notes:**
 - Slot rules added today (private slot_rules.txt): avoid clippy's
