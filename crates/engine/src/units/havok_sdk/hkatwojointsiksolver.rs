@@ -969,7 +969,7 @@ mod tests {
         let turns = calls(&e, SET_AXIS_ANGLE);
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0][..2], [frame + 0xb0, frame + 0xa0]);
-        assert!((f32::from_bits(turns[0][2]) + 1.047_197_6).abs() < 1e-3);
+        assert!((f32::from_bits(turns[0][2]) + std::f32::consts::FRAC_PI_3).abs() < 1e-3);
         assert_eq!(
             calls(&e, QUATERNION_SET_MUL),
             vec![
