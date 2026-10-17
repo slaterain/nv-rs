@@ -652,9 +652,9 @@ pub fn hk_free_list_walk_memory(
             let block_end = element_size.wrapping_mul(elements).wrapping_add(first);
             let mut element = first;
             while element < block_end {
-                // Past the last free element the exe compares with the word after the array
-                // (not part of it): taken as different.
-                let is_free = cursor < free_end && element == e.mem.u32(cursor);
+                // Past the last free element the exe still compares with the word after the
+                // array (whatever the heap holds there), as here.
+                let is_free = element == e.mem.u32(cursor);
                 let flag = candidate & 0xffff_ff00 | u32::from(!is_free);
                 call_for(e, element, flag);
                 if is_free {
