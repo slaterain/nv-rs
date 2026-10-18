@@ -707,6 +707,28 @@ pub fn fn_00df9fe0(e: &mut Engine, this: Ptr, out: Ptr, status: Ptr) -> bool {
     })
 }
 
+/// `InterlockedExchangeAdd` import slot (stdcall: the counter, the addend; answers the old value).
+const INTERLOCKED_EXCHANGE_ADD: u32 = 0x00fd_f1ec;
+/// Releases a semaphore (`00d043c0`, cdecl `(semaphore, count)`).
+const SEMAPHORE_RELEASE: u32 = 0x00d0_43c0;
+
+// Translated from 00df9840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (class unconfirmed). Thiscall, no stack words: adds 1 to the counter
+/// at `*(this + 0x18)` with `InterlockedExchangeAdd` when that pointer is set, then releases the
+/// semaphore at `*(this + 0x10)` once (`00d043c0`, `(semaphore, 1)`) when that pointer is set.
+/// Returns `EAX` as the exe leaves it: the last call's result, else the counter pointer (0).
+pub fn fn_00df9840(e: &mut Engine, this: Ptr) -> u32 {
+    let mut eax = e.mem.u32(this.addr().wrapping_add(0x18));
+    if eax != 0 {
+        eax = e.call(INTERLOCKED_EXCHANGE_ADD, &args![eax, 1u32]).u32();
+    }
+    let semaphore = e.mem.u32(this.addr().wrapping_add(0x10));
+    if semaphore != 0 {
+        eax = e.call(SEMAPHORE_RELEASE, &args![semaphore, 1u32]).u32();
+    }
+    eax
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -716,6 +738,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00df9c90, fn_00df9c90(Ptr, Ptr, Ptr, Ptr, Ptr) -> u32),
         entry!(0x00df9d90, fn_00df9d90(Ptr, Ptr, Ptr, Ptr)),
         entry!(0x00df9ef0, fn_00df9ef0(Ptr, Ptr, Ptr, Ptr, Ptr)),
+        entry!(0x00df9840, fn_00df9840(Ptr) -> u32),
         entry!(0x00df9fe0, fn_00df9fe0(Ptr, Ptr, Ptr) -> bool),
     ]
 }
@@ -1143,5 +1166,45 @@ mod tests {
         assert_eq!(e.mem.u32(status), 0);
         assert_eq!(e.mem.u32(this + 0x6c), 1);
         assert_eq!(e.mem.f32(out + 0x20), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod completion_tests {
+    use super::*;
+
+    type CallLog = std::rc::Rc<std::cell::RefCell<Vec<Vec<u32>>>>;
+
+    #[test]
+    fn the_completion_adds_one_and_releases_the_semaphore() {
+        let mut e = Engine::new();
+        let log = CallLog::default();
+        for (address, eax) in [(INTERLOCKED_EXCHANGE_ADD, 5u32), (SEMAPHORE_RELEASE, 8)] {
+            let log = log.clone();
+            e.register_double(address, move |_, a| {
+                let mut words = vec![address];
+                words.extend_from_slice(a);
+                log.borrow_mut().push(words);
+                Ret {
+                    eax,
+                    ..Ret::default()
+                }
+            });
+        }
+        let this = e.mem.alloc(0x30);
+        assert_eq!(e.call(0x00df_9840, &args![this]).u32(), 0);
+        assert!(log.borrow().is_empty());
+        e.mem.set_u32(this + 0x18, 0x7001);
+        assert_eq!(e.call(0x00df_9840, &args![this]).u32(), 5);
+        e.mem.set_u32(this + 0x10, 0x7002);
+        assert_eq!(e.call(0x00df_9840, &args![this]).u32(), 8);
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                vec![INTERLOCKED_EXCHANGE_ADD, 0x7001, 1],
+                vec![INTERLOCKED_EXCHANGE_ADD, 0x7001, 1],
+                vec![SEMAPHORE_RELEASE, 0x7002, 1],
+            ]
+        );
     }
 }
