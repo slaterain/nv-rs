@@ -2598,6 +2598,27 @@ mod tests {
     #[test]
     fn node_get_up_refreshes_the_body_under_the_first_grandchild() {
         let mut e = engine();
+        // Four small functions of `engine-fallout` this test passes through, which this
+        // crate's tests do not link since the engine split: doubles with the bodies of
+        // their translations for the case reached here. `0044ddc0`: the word at +8;
+        // `00620b80`: `0044ddc0(this)`; `008c71b0`: stores the word and answers the
+        // address; `0043b4f0`: stores into `out` the value of the holder `00620b80`
+        // finds, 0 without one (the only case here), and answers `out`.
+        e.register(0x0044_ddc0, |e, a| e.mem.u32(a[0] + 8).into_ret());
+        e.register(0x0062_0b80, |e, a| e.call(0x0044_ddc0, &[a[0]]));
+        e.register(0x008c_71b0, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            a[0].into_ret()
+        });
+        e.register(READ_OBJECT_FLAGS, |e, a| {
+            let holder = e.call(0x0062_0b80, &[a[0]]).u32();
+            assert_eq!(
+                holder, 0,
+                "the double covers only an object without a holder"
+            );
+            e.call(0x008c_71b0, &[a[1], 0]);
+            a[1].into_ret()
+        });
         e.register(SET_MOTION_FLAGS, |_, _| Ret::default());
         e.register(PHYSICS_REFRESH_A, |_, _| Ret::default());
         e.register(PHYSICS_REFRESH_B, |_, _| Ret::default());

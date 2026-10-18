@@ -1368,4 +1368,61 @@ mod tests {
         assert_eq!(buffers(&e, manager), vec![(0x6200_0000, 0x4_0000)]);
         assert_eq!(e.get(manager, ScrapHeapManager::iBufferTotalSize), 0x4_0000);
     }
+
+    /// An engine with the kernel-object and virtual-memory stand-ins
+    /// registered at their import slots, as `Engine::with_exe` does (the
+    /// helper of `units/platform.rs`'s tests, for the test moved from there).
+    fn kernel_engine() -> Engine {
+        let mut e = Engine::new();
+        // Import slots of FalloutNV.exe 1.4.0.525 (Ghidra `PTR_<name>_<slot>`).
+        let slots = [
+            (0x00fd_f07c, "CloseHandle"),
+            (0x00fd_f0b4, "CreateSemaphoreA"),
+            (0x00fd_f0cc, "CreateEventA"),
+            (0x00fd_f0d0, "SetEvent"),
+            (0x00fd_f10c, "VirtualFree"),
+            (0x00fd_f114, "VirtualAlloc"),
+            (0x00fd_f11c, "SetThreadPriority"),
+            (0x00fd_f120, "GetCurrentThread"),
+            (0x00fd_f124, "CreateThread"),
+            (0x00fd_f158, "ResumeThread"),
+            (0x00fd_f1b4, "ReleaseSemaphore"),
+            (0x00fd_f1c8, "WaitForSingleObject"),
+            (0x00fd_f1cc, "ResetEvent"),
+        ];
+        let imports: Vec<crate::exe::Import> = slots
+            .iter()
+            .map(|&(slot, name)| crate::exe::Import {
+                slot,
+                dll: "KERNEL32.dll".into(),
+                name: name.into(),
+            })
+            .collect();
+        assert_eq!(e.register_imports(&imports), slots.len());
+        e
+    }
+
+    // Moved from the platform's tests (`units/platform.rs`) with the engine split: it
+    // runs this unit's buffer functions, which the core's own tests no longer link.
+    #[test]
+    fn scrap_heap_buffers_reserve_commit_and_release_through_the_stand_ins() {
+        use crate::units::platform::ALLOCATION_GRANULARITY;
+        let mut e = kernel_engine();
+        // `00aa5ec0`: reserve 0x800000, commit the first 0x10000.
+        let base = e.call(0x00aa_5ec0, &args![0u32, 0x1_0000u32]).u32();
+        assert_eq!(base % ALLOCATION_GRANULARITY, 0);
+        e.mem.set_u32(base + 0xfffc, 1);
+        assert!(!e.mem.is_mapped(base + 0x1_0000));
+        // `ExpandBuffer` (`00aa5e30`): commit 0x10000 more after them.
+        e.call(0x00aa_5e30, &args![0u32, base, 0x1_0000u32, 0x1_0000u32]);
+        assert_eq!(e.mem.u32(base + 0x1_fffc), 0);
+        // `00aa5e90`: decommit the last 0x10000 again.
+        e.call(0x00aa_5e90, &args![0u32, base, 0x2_0000u32, 0x1_0000u32]);
+        assert!(!e.mem.is_mapped(base + 0x1_0000));
+        assert_eq!(e.mem.u32(base + 0xfffc), 1);
+        // `FreeBuffer` (`00aa5f30`): release.
+        e.call(0x00aa_5f30, &args![0u32, base, 0x1_0000u32]);
+        assert!(!e.mem.is_mapped(base));
+        assert!(e.kernel.regions.is_empty());
+    }
 }

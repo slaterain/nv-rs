@@ -342,7 +342,7 @@ const MEM_RELEASE: u32 = 0x8000;
 const PAGE_READWRITE: u32 = 4;
 const PAGE_BYTES: u32 = 0x1000;
 /// Reservations start on 64 KiB boundaries, as on Windows.
-const ALLOCATION_GRANULARITY: u32 = 0x1_0000;
+pub const ALLOCATION_GRANULARITY: u32 = 0x1_0000;
 /// End of FalloutNV.exe's image (`.reloc` ends at `014089ff`): a reserve
 /// at a fixed address inside the image fails, as on Windows.
 const IMAGE_END: u32 = 0x0140_9000;
@@ -372,7 +372,7 @@ pub enum KernelObject {
 /// `block` is the [`crate::Mem`] heap block behind a reservation the
 /// system placed (address 0), 0 for one at an address the caller chose.
 #[derive(Debug, Clone)]
-struct Region {
+pub struct Region {
     size: u32,
     block: u32,
     committed: Vec<bool>,
@@ -384,7 +384,9 @@ pub struct Kernel {
     objects: std::collections::BTreeMap<u32, KernelObject>,
     last_handle: u32,
     threads_created: u32,
-    regions: std::collections::BTreeMap<u32, Region>,
+    /// The reservations by base address (public for the scrap heap's tests in
+    /// `engine-bs`).
+    pub regions: std::collections::BTreeMap<u32, Region>,
     /// The in-memory files behind `BSFile`s ([`open_memory_file`]), by the
     /// `BSFile`'s address.
     files: std::collections::BTreeMap<u32, MemoryFile>,
@@ -1363,26 +1365,5 @@ mod tests {
             VIRTUAL_ALLOC,
             &[0, 0x1000, MEM_COMMIT | 0x10_0000, PAGE_READWRITE],
         );
-    }
-
-    #[test]
-    fn scrap_heap_buffers_reserve_commit_and_release_through_the_stand_ins() {
-        let mut e = kernel_engine();
-        // `00aa5ec0`: reserve 0x800000, commit the first 0x10000.
-        let base = e.call(0x00aa_5ec0, &args![0u32, 0x1_0000u32]).u32();
-        assert_eq!(base % ALLOCATION_GRANULARITY, 0);
-        e.mem.set_u32(base + 0xfffc, 1);
-        assert!(!e.mem.is_mapped(base + 0x1_0000));
-        // `ExpandBuffer` (`00aa5e30`): commit 0x10000 more after them.
-        e.call(0x00aa_5e30, &args![0u32, base, 0x1_0000u32, 0x1_0000u32]);
-        assert_eq!(e.mem.u32(base + 0x1_fffc), 0);
-        // `00aa5e90`: decommit the last 0x10000 again.
-        e.call(0x00aa_5e90, &args![0u32, base, 0x2_0000u32, 0x1_0000u32]);
-        assert!(!e.mem.is_mapped(base + 0x1_0000));
-        assert_eq!(e.mem.u32(base + 0xfffc), 1);
-        // `FreeBuffer` (`00aa5f30`): release.
-        e.call(0x00aa_5f30, &args![0u32, base, 0x1_0000u32]);
-        assert!(!e.mem.is_mapped(base));
-        assert!(e.kernel.regions.is_empty());
     }
 }

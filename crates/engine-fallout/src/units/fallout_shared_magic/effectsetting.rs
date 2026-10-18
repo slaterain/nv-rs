@@ -1676,4 +1676,15 @@ mod tests {
         assert_eq!((call[0], call[3]), (0x15, 0x027f));
         assert_eq!(calls(&e, CTRLFP).len(), 1);
     }
+
+    // Moved from the CRT's tests (`units/crt.rs`) with the engine split: it runs this
+    // unit's `fabs`, which the core's own tests no longer link.
+    #[test]
+    fn fabs_restores_the_control_word_through_ctrlfp() {
+        use crate::units::crt::{ctrlfp, x87_control_word};
+        let mut e = Engine::new();
+        ctrlfp(&mut e, 0x037f, 0xffff);
+        assert_eq!(e.call(0x00ec6cde, &args![-0.75f64]).f64(), 0.75);
+        assert_eq!(x87_control_word(&mut e), 0x037f);
+    }
 }

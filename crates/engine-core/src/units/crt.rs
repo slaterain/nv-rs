@@ -391,7 +391,7 @@ pub fn acos_cdecl(e: &mut Engine, x: f64) -> f64 {
 const X87_CONTROL_WORD: u32 = 0x0e04;
 
 /// The x87 control word as `FSTCW` reads it.
-fn x87_control_word(e: &mut Engine) -> u16 {
+pub fn x87_control_word(e: &mut Engine) -> u16 {
     let at = e.tls() + X87_CONTROL_WORD;
     let slot = e.mem.u32(at);
     if slot & 0x1_0000 == 0 {
@@ -3134,14 +3134,6 @@ mod exit_tests {
         );
         assert_eq!(ctrlfp(&mut e, 0x027f, 0xffff), -0x8000);
         assert_eq!(x87_control_word(&mut e), 0x027f);
-    }
-
-    #[test]
-    fn fabs_restores_the_control_word_through_ctrlfp() {
-        let mut e = Engine::new();
-        ctrlfp(&mut e, 0x037f, 0xffff);
-        assert_eq!(e.call(0x00ec6cde, &args![-0.75f64]).f64(), 0.75);
-        assert_eq!(x87_control_word(&mut e), 0x037f);
     }
 }
 

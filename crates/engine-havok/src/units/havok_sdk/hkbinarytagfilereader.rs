@@ -1039,6 +1039,17 @@ mod tests {
         e
     }
 
+    /// `__allshl` (`00ec7810`) is an unplaced unit of `engine-fallout`, which this
+    /// crate's tests do not link since the engine split: a double with its result
+    /// (the 64-bit value shifted left by the count; 0 from a count of 64 on).
+    fn allshl_double(e: &mut Engine) {
+        e.register(SHIFT_LEFT_64, |_, a| {
+            let value = u64::from(a[0]) | (u64::from(a[1]) << 32);
+            let count = a[2] as u8;
+            (if count >= 0x40 { 0 } else { value << count }).into_ret()
+        });
+    }
+
     fn calls_to(e: &Engine, address: u32) -> Vec<Vec<u32>> {
         e.call_log
             .as_ref()
@@ -1315,6 +1326,7 @@ mod tests {
     #[test]
     fn read_int_32_reads_a_variable_length_integer() {
         let mut e = engine();
+        allshl_double(&mut e);
         let this = e.mem.alloc(0x40);
         let values = [
             0i64,
@@ -1349,6 +1361,7 @@ mod tests {
     #[test]
     fn read_int_64_answers_the_whole_value() {
         let mut e = engine();
+        allshl_double(&mut e);
         let this = e.mem.alloc(0x40);
         let values = [
             0i64,

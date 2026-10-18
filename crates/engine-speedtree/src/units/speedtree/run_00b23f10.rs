@@ -3342,6 +3342,17 @@ mod tests {
     #[test]
     fn words_are_moved_with_memmove_s_and_the_end_returned() {
         let mut e = engine();
+        // `memmove_s` (`00ec7ce3`) is an unplaced unit of `engine-fallout`, which this
+        // crate's tests do not link since the engine split: a double with its body for
+        // the moves made here (a size of 0 succeeds; valid pointers with room move
+        // through `memmove`, `00ec7230`).
+        e.register(0x00ec_7ce3, |e, a| {
+            assert!(a[3] == 0 || (a[0] != 0 && a[2] != 0 && a[1] >= a[3]));
+            if a[3] != 0 {
+                e.call(0x00ec_7230, &[a[0], a[2], a[3]]);
+            }
+            0u32.into_ret()
+        });
         let source = e.mem.alloc(16);
         let target = e.mem.alloc(16);
         put_words(&mut e, source, &[10, 20, 30, 40]);

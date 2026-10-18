@@ -537,4 +537,40 @@ mod tests {
         assert_eq!(e.call(0x00aa_12f0, &[]).f32(), 5.0);
         assert_eq!(e.mem.u64(TIMER_START), 5_000);
     }
+
+    // Moved from the tests of `units/nisystem/allocator_support.rs` with the engine
+    // split: it runs the real NiSystem, BSCore and unplaced functions together, and this
+    // crate is the one whose tests link all three.
+    #[test]
+    fn initialization_uses_real_constructors_and_global_holder() {
+        let mut e = Engine::new();
+        e.map(0x011f6000, 0x1000);
+        e.put_vtable(0x010a2528, &[0, 0x00aa2240, 0, 0, 0, 0, 0, 0x00a29680]);
+        let allocator = e.mem.alloc(4);
+        let source = e.mem.alloc(8);
+        e.call(0x00aa2230, &[allocator]);
+        e.call(0x00aa21d0, &[source, allocator]);
+        e.mem.set_u32(0x011f6118, source);
+        e.call_log = Some(Vec::new());
+        e.call(0x00aa2020, &[]);
+        let holder = e.mem.u32(0x011f6080);
+        // The platform heap rounds requests to eight-byte blocks. Check
+        // the actual native request separately from the backing block size.
+        assert_eq!(e.mem.block_size(holder), Some(8));
+        assert_eq!(e.mem.u32(holder), allocator);
+        // Actual translated allocation wrapper, virtual method, memory
+        // manager and memset; no game-function doubles in this test.
+        let bytes = e.call(0x00aa1070, &[13]).u32();
+        assert_eq!(e.mem.block_size(bytes), Some(16));
+        assert_eq!(e.mem.bytes(bytes, 13), [0; 13]);
+        let requests: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x00aa3e40)
+            .map(|(_, args)| args.clone())
+            .collect();
+        assert_eq!(requests, [vec![0x011f6238, 4], vec![0x011f6238, 13]]);
+    }
 }
