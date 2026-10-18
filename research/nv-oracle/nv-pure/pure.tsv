@@ -507,7 +507,6 @@ address	cc	params	ret	unit	callees	consts
 00d48360	cdecl		u32	crates/engine-havok/src/units/havok_sdk/run_00d48360.rs		
 00d495f0	cdecl		u32	crates/engine-havok/src/units/havok_sdk/run_00d49530.rs		
 00d496b0	stdcall	u32,u32	u32	crates/engine-havok/src/units/havok_sdk/hkpstoragesampledheightfieldshape.rs		i128,i-129,i-128
-00d4b390	cdecl	u32,u32	u32	crates/engine-havok/src/units/havok_sdk/run_00d4b1a0.rs		i1
 00d571d0	cdecl		f32	crates/engine-havok/src/units/havok_sdk/hkpcylindershape.rs		i0,i65,d3f847ae140000000,f3f8ccccd
 00d60550	cdecl	u64,u64	f32	crates/engine-havok/src/units/havok_sdk/hkstopwatch.rs		
 00d61210	cdecl		u32	crates/engine-havok/src/units/havok_sdk/run_00d61210.rs		
@@ -701,4 +700,8 @@ address	cc	params	ret	unit	callees	consts
 00e30f70	cdecl	f32,f32,f32	u8	crates/engine-havok/src/units/havok_sdk/run_00e30f50.rs		i3072,d406fe00000000000
 00e30fb0	cdecl	f32,f32,f32	u16	crates/engine-havok/src/units/havok_sdk/run_00e30f50.rs		i3072,d40efffe000000000
 00e3b5b0	cdecl		u32	crates/engine-havok/src/units/havok_sdk/hkprotationalconstraintdata.rs		i16
+00e53090	cdecl	i32	i32	crates/engine-havok/src/units/havok_sdk/run_00e53090.rs		i3628800,i1,i2,i6,i24,i120,i720,i5040,i40320,i362880,i10,i11
+00e53130	cdecl	i32,i32	i32	crates/engine-havok/src/units/havok_sdk/run_00e53090.rs	00e53090	i3628800,i1,i2,i6,i24,i120,i720,i5040,i40320,i362880,i10,i11
+00e60670	cdecl		u32	crates/engine-havok/src/units/havok_sdk/run_00e5cee0.rs		
 00e60cb0	cdecl	u32,u32	u32	crates/engine-havok/src/units/havok_sdk/hkmeshprimitiveutil.rs		i3,i2
+00ecc590	stdcall	u32,u32,u32,u32	u64	crates/engine-core/src/units/crt.rs		i1
