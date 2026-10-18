@@ -240,9 +240,33 @@ pub fn fn_00ee6dce(e: &mut Engine, word_0: Ptr, word_1: Ptr) -> Ptr {
     e.call(IMPORT_SLOT_00EE6DCE, &args![word_0, word_1]).ptr()
 }
 
+/// The import slot of KERNEL32 `CreateFileA` (`00fdf088`, stdcall, seven words).
+const CREATE_FILE_A: u32 = 0x00fd_f088;
+/// `"CONOUT$"` in `.rdata`, the file name `___initconout` opens.
+const CONOUT_NAME: u32 = 0x0110_08b4;
+/// The CRT's console output handle, written by `___initconout`.
+const CONSOLE_OUTPUT_HANDLE: u32 = 0x011c_2f74;
+
+// Translated from 00ee626f (decompiled, FalloutNV.exe 1.4.0.525)
+/// `___initconout` (Ghidra label from its function ID; `__putwch_nolock` calls it,
+/// `00ee46d5`): opens the console output device and keeps the handle. It calls
+/// `CreateFileA("CONOUT$", GENERIC_WRITE (0x40000000), FILE_SHARE_READ | FILE_SHARE_WRITE (3),
+/// NULL, OPEN_EXISTING (3), 0, NULL)` and stores the result (`INVALID_HANDLE_VALUE` when
+/// there is no console) in `011c2f74`. No arguments, nothing returned.
+pub fn fn_00ee626f(e: &mut Engine) {
+    let handle = e
+        .call(
+            CREATE_FILE_A,
+            &args![CONOUT_NAME, 0x4000_0000u32, 3u32, 0u32, 3u32, 0u32, 0u32],
+        )
+        .u32();
+    e.set_global(CONSOLE_OUTPUT_HANDLE, handle);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ee_626f, fn_00ee626f()),
         entry!(0x00ee_6d44, fn_00ee6d44(u32) -> i32),
         entry!(0x00ee_6d4a, fn_00ee6d4a(u32, u32, u32) -> u32),
         entry!(0x00ee_6d50, fn_00ee6d50() -> i32),
@@ -484,5 +508,44 @@ mod tests {
             &[0x1001, 0x1002],
             0xdead_beef,
         );
+    }
+}
+
+#[cfg(test)]
+mod physics_step_tests {
+    use super::*;
+
+    #[test]
+    fn initconout_opens_conout_and_keeps_the_handle() {
+        let mut e = Engine::new();
+        e.map(CONSOLE_OUTPUT_HANDLE, 4);
+        e.register(CREATE_FILE_A, |_, _| Ret {
+            eax: 0x1234,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00ee_626f, &args![]);
+        let log = e.call_log.take().unwrap();
+        let opens: Vec<_> = log.iter().filter(|c| c.0 == CREATE_FILE_A).collect();
+        assert_eq!(opens.len(), 1);
+        assert_eq!(
+            opens[0].1,
+            vec![0x0110_08b4, 0x4000_0000, 3, 0, 3, 0, 0],
+            "name, GENERIC_WRITE, share read|write, no security, OPEN_EXISTING, no flags, no template"
+        );
+        assert_eq!(e.global::<u32>(CONSOLE_OUTPUT_HANDLE), 0x1234);
+    }
+
+    #[test]
+    fn initconout_keeps_an_invalid_handle_too() {
+        let mut e = Engine::new();
+        e.map(CONSOLE_OUTPUT_HANDLE, 4);
+        e.set_global(CONSOLE_OUTPUT_HANDLE, 0xfffe_fffeu32);
+        e.register(CREATE_FILE_A, |_, _| Ret {
+            eax: 0xffff_ffff,
+            ..Ret::default()
+        });
+        e.call(0x00ee_626f, &args![]);
+        assert_eq!(e.global::<u32>(CONSOLE_OUTPUT_HANDLE), 0xffff_ffff);
     }
 }

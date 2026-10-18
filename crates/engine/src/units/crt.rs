@@ -1366,6 +1366,877 @@ pub fn rt_dynamic_cast(
     Ptr::NULL
 }
 
+// ---- The physics step's remaining runtime functions ----------------------------------------
+//
+// The x87 helpers below take and give what the exe passes in registers and flags: the uniform
+// form lists register inputs first, in the order EAX, ECX, EDX, then `ST0` (two words), then the
+// stack words from the one at `[ESP]` on; a flag input (`ZF`) is a `bool` word before them. The
+// engine computes in `f64`, so `ST0` is an `f64`, and the control word is the one `ctrlfp` keeps.
+
+/// `__use_sse2_mathfcns` (`01270a64`): nonzero when the CRT's SSE2 math routines may be used.
+const USE_SSE2_MATHFCNS: u32 = 0x0127_0a64;
+/// The CRT's math-error switch (`0126fd90`): nonzero skips the error handling and returns the
+/// result as it is.
+const MATH_ERROR_SWITCH: u32 = 0x0126_fd90;
+/// `MXCSR` as the game runs with it (every exception masked, `0x1f80`). The SSE2 routines test
+/// `STMXCSR`; the engine does not track the register.
+const MXCSR: u32 = 0x1f80;
+
+/// `FLDCW`: loads the control word the engine keeps for `FSTCW`.
+fn set_x87_control_word(e: &mut Engine, word: u16) {
+    let at = e.tls() + X87_CONTROL_WORD;
+    e.mem.set_u32(at, 0x1_0000 | u32::from(word));
+}
+
+/// `FLD m64`: a double loaded onto the x87 stack. A signalling NaN becomes quiet (the quiet bit
+/// is set, the payload kept); every other value is exact. There is no shared helper for
+/// doubles (`x87_quiet` is for floats).
+fn fld64(bits: u64) -> f64 {
+    let exponent = 0x7ff0_0000_0000_0000u64;
+    if bits & exponent == exponent && bits & 0x000f_ffff_ffff_ffff != 0 {
+        f64::from_bits(bits | 0x0008_0000_0000_0000)
+    } else {
+        f64::from_bits(bits)
+    }
+}
+
+/// `FLD tbyte` then `FST double` of an extended NaN or infinity at `address` (the CRT's default
+/// "indefinite" NaN at `011c1d00` is one): the sign is kept, the fraction is the extended
+/// significand without its integer bit, shifted to 52 bits.
+fn fld_extended_special(e: &Engine, address: u32) -> f64 {
+    let significand = e.mem.u64(address);
+    let sign_exponent = e.mem.u16(address + 8);
+    assert!(
+        sign_exponent & 0x7fff == 0x7fff,
+        "{address:08x} is not an extended NaN or infinity"
+    );
+    let sign = u64::from(sign_exponent >> 15) << 63;
+    f64::from_bits(sign | 0x7ff0_0000_0000_0000 | ((significand << 1) >> 12))
+}
+
+/// Whether the SSE2 math routines run: `__use_sse2_mathfcns` is set and `MXCSR` and the x87
+/// control word have their exception masks set (`MXCSR & 0x1f80 == 0x1f80`, control word
+/// `& 0x7f == 0x7f`), the test every `_CIxxx` entry makes before it jumps to its SSE2 body.
+fn sse2_math_available(e: &mut Engine) -> bool {
+    e.global::<u32>(USE_SSE2_MATHFCNS) != 0
+        && MXCSR & 0x1f80 == 0x1f80
+        && x87_control_word(e) & 0x7f == 0x7f
+}
+
+/// `__sptype` (`00ed5981`, cdecl, the double on the stack) and its siblings `ceil`'s x87 body
+/// calls: `__handle_qnan1` (`00ed5837`: function code, the double, the control word),
+/// `__except1` (`00ed588c`: operation, function code, argument, result, control word),
+/// `__frnd` (`00ee23bc`: the double, result in `ST0`) and `___libm_error_support` (`00ed429f`:
+/// three pointers and a code).
+const SPTYPE: u32 = 0x00ed_5981;
+const HANDLE_QNAN1: u32 = 0x00ed_5837;
+const EXCEPT1: u32 = 0x00ed_588c;
+const FRND: u32 = 0x00ee_23bc;
+const LIBM_ERROR_SUPPORT: u32 = 0x00ed_429f;
+/// The control word `ceil`'s x87 body loads (`011c278c`, round up) and the constant it adds to
+/// an infinity or NaN for the error report (`01012070`, 1.0).
+const CEIL_CONTROL_WORD: u32 = 0x011c_278c;
+const ONE_DOUBLE: u32 = 0x0101_2070;
+/// The SSE2 constants of `ceil`: the shift base (`010f2000`, `0x433` per qword), the 1.0 mask
+/// (`010f1ff0`), zero (`010f2010`), the exponent mask (`010f2020`, `0x7ff`) and minus zero
+/// (`010f2030`).
+const CEIL_SHIFT_BASE: u32 = 0x010f_2000;
+const CEIL_ONE_MASK: u32 = 0x010f_1ff0;
+const CEIL_ZERO: u32 = 0x010f_2010;
+const CEIL_EXPONENT_MASK: u32 = 0x010f_2020;
+const CEIL_MINUS_ZERO: u32 = 0x010f_2030;
+
+// Translated from 00ec9e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ceil` (LIBCMT; no label in the map: named from the body, which rounds toward +infinity, and
+/// from `011c278c`, the round-up control word its x87 path loads), cdecl, the double on the stack,
+/// the result in `ST0`. With the SSE2 routines available (`sse2_math_available`) it computes the
+/// result with integer shifts on the bit pattern: the shift count is `0x433 - exponent`, a
+/// positive number below 1 gives 1.0 (zero stays +0), a negative one below 1 gives -0.0, up to
+/// the exponent `0x432` the fraction bits are cleared (and 1.0 is added when that lowered a
+/// positive value), and beyond that the value is returned as it is, a NaN after
+/// `___libm_error_support(&x, &x, &x, 0x3ec)` has had its say about the result slot. Without them
+/// it loads the round-up control word through `ctrlfp` (keeping the old one). A finite value is
+/// rounded by `__frnd`; the old control word is put back and the rounded value returned when it
+/// equals the argument or the old word has bit 5 (the precision-exception mask) set, otherwise
+/// the inexact result is reported through `__except1` (operation `0x10`). An infinity or NaN goes
+/// through `__sptype`: classes 1 and 2 put the old control word back and return the value,
+/// class 3 is `__handle_qnan1`, anything else `__except1` operation 8 with the value plus 1.0.
+pub fn ceil(e: &mut Engine, x: f64) -> f64 {
+    if sse2_math_available(e) {
+        ceil_sse2(e, x)
+    } else {
+        ceil_x87(e, x)
+    }
+}
+
+/// The SSE2 body of `ceil` (`00ec9e50`).
+fn ceil_sse2(e: &mut Engine, x: f64) -> f64 {
+    let bits = x.to_bits();
+    let shifted = bits >> 52; // PSRLQ XMM0, 0x34
+    let sign_and_exponent = shifted as u32; // MOVD EAX, XMM0
+    let exponent_mask = e.mem.u64(CEIL_EXPONENT_MASK);
+    let exponent = shifted & exponent_mask; // ANDPD XMM0, [010f2020]
+    let base = e.mem.u64(CEIL_SHIFT_BASE);
+    // PSUBD: the two dwords of the low qword subtract separately; the qword is the shift count.
+    let count_low = (base as u32).wrapping_sub(exponent as u32);
+    let count_high = ((base >> 32) as u32).wrapping_sub((exponent >> 32) as u32);
+    let count = u64::from(count_low) | (u64::from(count_high) << 32);
+    // PSRLQ / PSLLQ by a count above 63 give zero.
+    let shift_right = |value: u64| if count > 63 { 0 } else { value >> count };
+    let shift_left = |value: u64| if count > 63 { 0 } else { value << count };
+    let one_mask = e.mem.u64(CEIL_ONE_MASK);
+    if sign_and_exponent & 0x800 == 0 {
+        // 00ec9ed2: a positive value.
+        let truncated = f64::from_bits(shift_left(shift_right(bits)));
+        let not_le = !(x <= truncated); // CMPNLEPD XMM0, XMM1
+        if (sign_and_exponent as i32) < 0x3ff {
+            // 00ec9f11
+            let zero = f64::from_bits(e.mem.u64(CEIL_ZERO));
+            let mask = if !(x <= zero) { u64::MAX } else { 0 };
+            return fld64(mask & one_mask);
+        }
+        if (sign_and_exponent as i32) > 0x432 {
+            return ceil_out_of_range(e, x);
+        }
+        let addend = if not_le { one_mask } else { 0 };
+        return fld64((truncated + f64::from_bits(addend)).to_bits()); // ADDSD XMM1, XMM0
+    }
+    if (sign_and_exponent as i32) < 0xbff {
+        return fld64(e.mem.u64(CEIL_MINUS_ZERO)); // 00ec9f0a
+    }
+    let truncated = shift_left(shift_right(bits));
+    if (sign_and_exponent as i32) > 0xc32 {
+        return ceil_out_of_range(e, x);
+    }
+    fld64(truncated)
+}
+
+/// `ceil`'s exit for a value whose exponent is at least `0x433` (`00ec9ea3`): a number comes back
+/// as it is; a NaN is first given to `___libm_error_support`, which may rewrite the slot the
+/// value sits in (all three pointers are that slot), and the slot is the result.
+fn ceil_out_of_range(e: &mut Engine, x: f64) -> f64 {
+    if !x.is_nan() {
+        return fld64(x.to_bits());
+    }
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), x.to_bits());
+        e.call(LIBM_ERROR_SUPPORT, &args![slot, slot, slot, 0x3ecu32]);
+        fld64(e.mem.u64(slot.addr()))
+    })
+}
+
+/// The x87 body of `ceil` (`00ed969d`).
+fn ceil_x87(e: &mut Engine, x: f64) -> f64 {
+    let new_control = e.mem.u32(CEIL_CONTROL_WORD);
+    let old_control = ctrlfp(e, new_control, 0xffff) as u32; // EBX
+    let bits = x.to_bits();
+    let (low, high) = (bits as u32, (bits >> 32) as u32);
+    // The exponent word of the double, at `[EBP + 0xe]` (the bytes above it are masked away).
+    let exponent_word = ((bits >> 48) as u32) & 0x7ff0;
+    let quiet = fld64(bits).to_bits();
+    let (quiet_low, quiet_high) = (quiet as u32, (quiet >> 32) as u32);
+    if exponent_word == 0x7ff0 {
+        let class = e.call(SPTYPE, &args![low, high]).i32();
+        if class > 0 {
+            if class <= 2 {
+                // 00ed96fc
+                ctrlfp(e, old_control, 0xffff);
+                return fld64(bits);
+            }
+            if class == 3 {
+                return e
+                    .call(
+                        HANDLE_QNAN1,
+                        &args![0xcu32, quiet_low, quiet_high, old_control],
+                    )
+                    .f64();
+            }
+        }
+        // 00ed970a: the value plus 1.0, reported as an error of operation 8.
+        let one = f64::from_bits(e.mem.u64(ONE_DOUBLE));
+        let result = x87_add(fld64(bits), one).to_bits();
+        return e
+            .call(
+                EXCEPT1,
+                &args![
+                    8u32,
+                    0xcu32,
+                    quiet_low,
+                    quiet_high,
+                    result as u32,
+                    (result >> 32) as u32,
+                    old_control
+                ],
+            )
+            .f64();
+    }
+    // 00ed9727
+    let rounded = e.call(FRND, &args![low, high]).f64();
+    let (rounded_low, rounded_high) = (rounded.to_bits() as u32, (rounded.to_bits() >> 32) as u32);
+    // FCOMP and the `TEST AH, 0x44` / `JP`: equal only when ordered and equal.
+    if fld64(bits) == rounded || old_control & 0x20 != 0 {
+        ctrlfp(e, old_control, 0xffff);
+        return rounded;
+    }
+    e.call(
+        EXCEPT1,
+        &args![
+            0x10u32,
+            0xcu32,
+            quiet_low,
+            quiet_high,
+            rounded_low,
+            rounded_high,
+            old_control
+        ],
+    )
+    .f64()
+}
+
+/// `_CIasin`'s SSE2 body (`00ed7720`, `ST0`) and its x87 helpers: `00ed2808` (stack double in,
+/// `EAX` = the exponent bits, or the whole high word for an infinity or NaN; `ZF` set exactly in
+/// that case) and the x87 body `00ec96a8` (`ZF`, `EAX`, `ST0`, the stack double).
+const ASIN_SSE2: u32 = 0x00ed_7720;
+const LOAD_FLAGS_HELPER: u32 = 0x00ed_2808;
+const ASIN_X87: u32 = 0x00ec_96a8;
+
+// Translated from 00ec9650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_CIasin` (no label in the map: named from the body, the x87 arcsine at `00ec96a8` with
+/// `FPATAN` of `x / sqrt((1 + x)(1 - x))` and the error string `"asin"` at `011c1930`; called by
+/// the Euler-angle conversions): `ST0` in, `ST0` out. With the SSE2 routines available
+/// (`sse2_math_available`) it jumps to the SSE2 body `00ed7720`. Otherwise it stores the double
+/// on the stack, runs `00ed2808` (which leaves `ZF` set when the exponent is all ones), and runs
+/// the x87 body `00ec96a8` on it, returning its `ST0`.
+pub fn ci_asin(e: &mut Engine, st0: f64) -> f64 {
+    if sse2_math_available(e) {
+        return e.call(ASIN_SSE2, &args![st0]).f64();
+    }
+    let bits = st0.to_bits();
+    let (low, high) = (bits as u32, (bits >> 32) as u32);
+    let eax = e.call(LOAD_FLAGS_HELPER, &args![low, high]).u32();
+    // `ZF` is the result of `00ed2808`'s `CMP EAX, 0x7ff00000`.
+    let zf = high & 0x7ff0_0000 == 0x7ff0_0000;
+    e.call(ASIN_X87, &args![zf, eax, st0, low, high]).f64()
+}
+
+/// The name `sqrt`'s error report is given (`"sqrt"`, `011c1740`).
+const SQRT_NAME: u32 = 0x011c_1740;
+/// The x87 square root's helpers: `00ed2795` (loads the control word `(old & 0x300) | 0x7f`; the
+/// saved control word is its stack word), `00ed27ac` (`EAX` = high word, `ST0`: `EAX` 7 for a
+/// quiet NaN, else 1 with `ST0 + 1.0`), `00ed282b` (the exit: `EDX` = operation, `ECX` = name,
+/// `ST0`, the saved control word, the caller's return address, the double) and `00ed2737` (the
+/// error handler: `EAX` = type, `ECX` = name, `EDX` = operation, `ST0`, the saved control word,
+/// the caller's return address, the double).
+const SET_CONTROL_WORD_HELPER: u32 = 0x00ed_2795;
+const NAN_TYPE_HELPER: u32 = 0x00ed_27ac;
+const MATH_EXIT: u32 = 0x00ed_282b;
+const ONE_ARG_ERROR_HANDLING: u32 = 0x00ed_2737;
+/// The indefinite NaN the CRT returns for a domain error (`011c1d00`, extended).
+const INDEFINITE_NAN: u32 = 0x011c_1d00;
+
+/// `00ec607e`: the end of the square-root paths that have a result. With the error switch set the
+/// control word is restored (`00ed281e`: loaded back unless it is `0x027f`) and `ST0` returned;
+/// otherwise the exit `00ed282b` runs with operation 5 and the name `"sqrt"`.
+fn sqrt_exit(e: &mut Engine, saved_control: u16, st0: f64, low: u32, high: u32) -> f64 {
+    if e.global::<u32>(MATH_ERROR_SWITCH) != 0 {
+        if saved_control != 0x027f {
+            set_x87_control_word(e, saved_control);
+        }
+        return st0;
+    }
+    e.call(
+        MATH_EXIT,
+        &args![
+            5u32,
+            SQRT_NAME,
+            st0,
+            u32::from(saved_control),
+            0u32,
+            low,
+            high
+        ],
+    )
+    .f64()
+}
+
+/// `00ec60db`: the end of the error paths, with the error type in `EAX`. With the error switch
+/// set it restores the control word and returns `ST0`; otherwise `00ed2737` reports the error
+/// (operation 5, name `"sqrt"`) and returns the result `ST0`.
+fn sqrt_error(
+    e: &mut Engine,
+    saved_control: u16,
+    st0: f64,
+    error_type: u32,
+    low: u32,
+    high: u32,
+) -> f64 {
+    if e.global::<u32>(MATH_ERROR_SWITCH) != 0 {
+        if saved_control != 0x027f {
+            set_x87_control_word(e, saved_control);
+        }
+        return st0;
+    }
+    e.call(
+        ONE_ARG_ERROR_HANDLING,
+        &args![
+            error_type,
+            SQRT_NAME,
+            5u32,
+            st0,
+            u32::from(saved_control),
+            0u32,
+            low,
+            high
+        ],
+    )
+    .f64()
+}
+
+// Translated from 00ec605d (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec605d - FSQRT's x87 status flags (read later by the exit 00ed282b through FSTSW) are not modelled
+/// The shared x87 body of `_CIsqrt` (`00ec6040`, which stores `ST0` to the stack and calls
+/// `00ed2808` first) and `sqrt` (`00ec6054`, which loads the stack double with `__fload_withFB`
+/// and falls into this code); no label in the map, named from those two callers. Its inputs are
+/// `ZF` (set exactly when the double's exponent is all ones), `ST0` and the double on the stack
+/// (`low`, `high`), returning `ST0`. It saves the control word (`FSTCW`). A finite argument:
+/// with a control word other than `0x027f` it first loads `(cw & 0x300) | 0x7f` (`00ed2795`);
+/// a non-negative one takes `FSQRT` and ends in the exit (`sqrt_exit`); `-0.0` skips the `FSQRT`
+/// and ends there with `-0.0`; any other negative one (a negative denormal included) is a domain
+/// error: `ST0` becomes the indefinite NaN (`011c1d00`) with error type 1. An infinity or NaN
+/// (`ZF` set): a NaN goes to `00ed27ac` for the error type and the new `ST0`, a positive infinity
+/// ends in the exit unchanged, a negative one is the domain error. Error paths end in
+/// `sqrt_error`.| 0x7f`
+/// (`00ed2795`); a positive or zero-exponent-and-mantissa (`-0.0`) argument takes `FSQRT` (the
+/// -0.0 skips it, keeping -0.0) and ends in the exit (`sqrt_exit`); any other negative argument is
+/// a domain error: `ST0` becomes the indefinite NaN (`011c1d00`) with error type 1. An infinity
+/// or NaN: a NaN goes to `00ed27ac` for the error type (and `ST0`), a positive infinity ends in
+/// the exit unchanged, a negative one is the domain error. Error paths end in `sqrt_error`.
+pub fn fn_00ec605d(e: &mut Engine, zf: bool, st0: f64, low: u32, high: u32) -> f64 {
+    let saved_control = x87_control_word(e);
+    if zf {
+        // 00ec60b9
+        if high & 0xfffff != 0 || low != 0 {
+            let result = e.call(NAN_TYPE_HELPER, &args![high, st0]);
+            return sqrt_error(e, saved_control, result.st0, result.eax, low, high);
+        }
+        if high & 0x8000_0000 == 0 {
+            return sqrt_exit(e, saved_control, st0, low, high);
+        }
+    } else {
+        if saved_control != 0x027f {
+            e.call(SET_CONTROL_WORD_HELPER, &args![u32::from(saved_control)]);
+        }
+        if high & 0x8000_0000 == 0 {
+            // FSQRT
+            return sqrt_exit(e, saved_control, st0.sqrt(), low, high);
+        }
+        // 00ec609b: a negative argument; only -0.0 has no error.
+        if high & 0x7ff0_0000 == 0 && high & 0xfffff == 0 && low == 0 {
+            return sqrt_exit(e, saved_control, st0, low, high);
+        }
+    }
+    // 00ec60ce: FSTP ST0, FLD the indefinite NaN, EAX = 1
+    let indefinite = fld_extended_special(e, INDEFINITE_NAN);
+    sqrt_error(e, saved_control, indefinite, 1, low, high)
+}
+
+/// `__getptd_noexit` (`00ed1165`): the calling thread's CRT data block, or 0 when it has none.
+const GETPTD_NOEXIT: u32 = 0x00ed_1165;
+/// The errno slot the CRT uses when a thread has no data block (`011c18c0`).
+const ERRNO_FALLBACK: u32 = 0x011c_18c0;
+
+// Translated from 00ec85e3 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_errno` (LIBCMT/dosmap.c; Ghidra: `__errno`), cdecl: the address of the thread's `errno`:
+/// the `_terrno` field at `+8` of the thread's CRT data block (`__getptd_noexit`, `00ed1165`),
+/// or the static slot `011c18c0` when the thread has no block. The block is the platform
+/// layer's thread block, which nothing provides yet, so the call to `00ed1165` stays open until
+/// it is.
+pub fn errno(e: &mut Engine) -> Ptr {
+    let block = e.call(GETPTD_NOEXIT, &args![]).u32();
+    if block == 0 {
+        Ptr::new(ERRNO_FALLBACK)
+    } else {
+        Ptr::new(block.wrapping_add(8))
+    }
+}
+
+/// `__decode_pointer` (`00ed0f92`, cdecl, one word) and the encoded handler `_set_invalid_parameter_handler`
+/// stores (`0126fd9c`).
+const DECODE_POINTER: u32 = 0x00ed_0f92;
+const INVALID_PARAMETER_HANDLER: u32 = 0x0126_fd9c;
+/// `00ed5bae` (its body is `AND [01270a60], 0`, whatever argument it is given; the CRT pushes
+/// 1 or 2 here) and `__invoke_watson` (`00ec7b08`).
+const CLEAR_01270A60: u32 = 0x00ed_5bae;
+const INVOKE_WATSON: u32 = 0x00ec_7b08;
+
+// Translated from 00ec7c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ghidra labels the body `__invalid_parameter` (function ID); the engine map names it
+/// `_invalid_parameter_noinfo` (LIBCMT/invarg.c), but it takes the five arguments of
+/// `_invalid_parameter` and the no-argument form is the caller at `00ec7c56`, so it is named
+/// by address. Cdecl, five words that it only passes on: it decodes the handler stored by
+/// `_set_invalid_parameter_handler` (`__decode_pointer(0126fd9c)`) and, if there is one, jumps to
+/// it with the same arguments; without one it calls `00ed5bae(2)` and jumps to `__invoke_watson`
+/// (`00ec7b08`) with the same arguments, which ends the process.
+pub fn fn_00ec7c30(
+    e: &mut Engine,
+    expression: u32,
+    function: u32,
+    file: u32,
+    line: u32,
+    reserved: u32,
+) {
+    let encoded = e.global::<u32>(INVALID_PARAMETER_HANDLER);
+    let handler = e.call(DECODE_POINTER, &args![encoded]).u32();
+    if handler != 0 {
+        e.call(handler, &args![expression, function, file, line, reserved]);
+        return;
+    }
+    e.call(CLEAR_01270A60, &args![2u32]);
+    e.call(
+        INVOKE_WATSON,
+        &args![expression, function, file, line, reserved],
+    );
+}
+
+/// `__vsnprintf_l` (`00ecdd3e`, cdecl: destination, count, format, locale, argument list).
+const VSNPRINTF_L: u32 = 0x00ec_dd3e;
+
+// Translated from 00ecddf1 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_vsnprintf` (LIBCMT/vsnprint.c), cdecl: `_vsnprintf_l` with a null locale. The words go on in
+/// the order destination, count, format, locale (0), argument list, and the result comes back.
+pub fn vsnprintf(e: &mut Engine, dest: Ptr, count: u32, format: Ptr, va_list: u32) -> i32 {
+    e.call(VSNPRINTF_L, &args![dest, count, format, 0u32, va_list])
+        .i32()
+}
+
+// Translated from 00ecc590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__aulldiv` (Ghidra's function-ID label), stdcall (`RET 0x10`): the 64-bit unsigned quotient
+/// `dividend / divisor` in `EDX:EAX`, the dividend and the divisor each as a low and a high word.
+/// A divisor below 2^32 divides the high word first (`DIV`) and then the remainder with the low
+/// word. Otherwise both operands are shifted right until the divisor's high word is zero, the
+/// quotient estimate is `DIV` of the shifted values, and it is corrected by one: the divisor times
+/// the estimate is formed from two `MUL`s, and the estimate is decremented when that product
+/// carries or is greater than the dividend. A zero divisor stops with the `DIV` fault (#DE).
+pub fn aulldiv(
+    _e: &mut Engine,
+    dividend_low: u32,
+    dividend_high: u32,
+    divisor_low: u32,
+    divisor_high: u32,
+) -> u64 {
+    if divisor_high == 0 {
+        assert!(divisor_low != 0, "00ecc590 __aulldiv: divide by zero (#DE)");
+        // DIV ECX on 0:high, then on remainder:low.
+        let high_quotient = dividend_high / divisor_low;
+        let remainder = dividend_high % divisor_low;
+        let low_quotient =
+            ((u64::from(remainder) << 32) | u64::from(dividend_low)) / u64::from(divisor_low);
+        return (u64::from(high_quotient) << 32) | (low_quotient & 0xffff_ffff);
+    }
+    let (mut shifted_divisor_high, mut shifted_divisor_low) = (divisor_high, divisor_low);
+    let (mut shifted_high, mut shifted_low) = (dividend_high, dividend_low);
+    loop {
+        // SHR ECX, 1 / RCR EBX, 1 and SHR EDX, 1 / RCR EAX, 1
+        let carry = shifted_divisor_high & 1;
+        shifted_divisor_high >>= 1;
+        shifted_divisor_low = (shifted_divisor_low >> 1) | (carry << 31);
+        let carry = shifted_high & 1;
+        shifted_high >>= 1;
+        shifted_low = (shifted_low >> 1) | (carry << 31);
+        if shifted_divisor_high == 0 {
+            break;
+        }
+    }
+    let estimate =
+        ((u64::from(shifted_high) << 32) | u64::from(shifted_low)) / u64::from(shifted_divisor_low);
+    assert!(
+        estimate <= u64::from(u32::MAX),
+        "00ecc590 __aulldiv: DIV overflow (#DE)"
+    );
+    let mut quotient = estimate as u32; // ESI
+                                        // MUL [divisor high] (the low word of the product in ECX), then MUL ESI by the divisor low.
+    let high_product = (u64::from(divisor_high) * u64::from(quotient)) as u32;
+    let low_product = u64::from(divisor_low) * u64::from(quotient);
+    let (sum, carry) = ((low_product >> 32) as u32).overflowing_add(high_product);
+    let low_word = low_product as u32;
+    // JC, then JA / JC / JBE on the comparisons with the dividend's words.
+    let too_big = carry || sum > dividend_high || (sum == dividend_high && low_word > dividend_low);
+    if too_big {
+        quotient = quotient.wrapping_sub(1);
+    }
+    u64::from(quotient)
+}
+
+/// `___crtCorExitProcess` (`00eccc7e`, cdecl, the exit code) and the import slot of KERNEL32
+/// `ExitProcess` (`00fdf0ec`, stdcall).
+const CRT_COR_EXIT_PROCESS: u32 = 0x00ec_cc7e;
+const EXIT_PROCESS: u32 = 0x00fd_f0ec;
+
+// Translated from 00eccca9 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `___crtExitProcess` (Ghidra's function-ID label), cdecl, the exit code: gives it to
+/// `___crtCorExitProcess` (`00eccc7e`, which tells the .NET runtime if `mscoree.dll` is loaded)
+/// and then to `ExitProcess`. `ExitProcess` does not return, so the engine stops with a panic
+/// naming this address and the exit code.
+pub fn crt_exit_process(e: &mut Engine, code: i32) {
+    e.call(CRT_COR_EXIT_PROCESS, &args![code]);
+    e.call(EXIT_PROCESS, &args![code]);
+    panic!("00eccca9 ___crtExitProcess: ExitProcess({code}) ended the process");
+}
+
+// Translated from 00ecc7b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `strncpy` (LIBCMT/strncpy.c), cdecl: copies up to `count` bytes of the string at `source` to
+/// `dest`, padding with zero bytes up to `count` once the terminator is copied, and returns
+/// `dest`. It is the exe's word-at-a-time routine, run label by label: bytes until `source` is
+/// 4-aligned, then 4-byte words (a word holding a zero byte is detected with the
+/// `(w ^ 0xffffffff) ^ (w + 0x7efefeff)` mask `0x81010100` and stored cut at the zero, the rest
+/// zero-filled by words), then the last `count % 4` bytes. It reads whole aligned words, so it
+/// may read up to three bytes past the terminator, as the exe does.
+pub fn strncpy(e: &mut Engine, dest: Ptr, source: Ptr, count: u32) -> Ptr {
+    /// The labels of the routine, by address.
+    #[derive(Clone, Copy)]
+    enum At {
+        L7dc,
+        L7fe,
+        L803,
+        L81e,
+        L826,
+        L83c,
+        L843,
+        L848,
+        L855,
+        L85f,
+        L8ad,
+        L8b7,
+        L8b9,
+        L8c3,
+    }
+    if count == 0 {
+        return dest; // 00ecc7b7: JZ 00ecc84f
+    }
+    let mut ecx = count;
+    let mut ebx = count;
+    let mut esi = source.addr();
+    let mut edi = dest.addr();
+    let mut eax = 0u32;
+    let mut edx = 0u32;
+    let mut at = if esi & 3 != 0 {
+        At::L7dc
+    } else {
+        ecx >>= 2;
+        if ecx != 0 {
+            At::L85f
+        } else {
+            At::L803
+        }
+    };
+    loop {
+        match at {
+            At::L7dc => {
+                eax = (eax & !0xff) | u32::from(e.mem.u8(esi));
+                esi = esi.wrapping_add(1);
+                e.mem.set_u8(edi, eax as u8);
+                edi = edi.wrapping_add(1);
+                ecx = ecx.wrapping_sub(1);
+                if ecx == 0 {
+                    return dest;
+                }
+                if eax as u8 == 0 {
+                    at = At::L81e;
+                } else if esi & 3 != 0 {
+                    at = At::L7dc;
+                } else {
+                    ebx = ecx;
+                    ecx >>= 2;
+                    at = if ecx != 0 { At::L85f } else { At::L7fe };
+                }
+            }
+            At::L7fe => {
+                ebx &= 3;
+                if ebx == 0 {
+                    return dest;
+                }
+                at = At::L803;
+            }
+            At::L803 => {
+                eax = (eax & !0xff) | u32::from(e.mem.u8(esi));
+                esi = esi.wrapping_add(1);
+                e.mem.set_u8(edi, eax as u8);
+                edi = edi.wrapping_add(1);
+                if eax as u8 == 0 {
+                    at = At::L848;
+                } else {
+                    ebx = ebx.wrapping_sub(1);
+                    if ebx == 0 {
+                        return dest;
+                    }
+                }
+            }
+            At::L81e => {
+                at = if edi & 3 == 0 { At::L83c } else { At::L826 };
+            }
+            At::L826 => {
+                e.mem.set_u8(edi, eax as u8);
+                edi = edi.wrapping_add(1);
+                ecx = ecx.wrapping_sub(1);
+                if ecx == 0 {
+                    return dest;
+                }
+                at = if edi & 3 != 0 { At::L826 } else { At::L83c };
+            }
+            At::L83c => {
+                ebx = ecx;
+                ecx >>= 2;
+                at = if ecx != 0 { At::L8b7 } else { At::L843 };
+            }
+            At::L843 => {
+                e.mem.set_u8(edi, eax as u8);
+                edi = edi.wrapping_add(1);
+                at = At::L848;
+            }
+            At::L848 => {
+                ebx = ebx.wrapping_sub(1);
+                if ebx == 0 {
+                    return dest;
+                }
+                at = At::L843;
+            }
+            At::L855 => {
+                e.mem.set_u32(edi, edx);
+                edi = edi.wrapping_add(4);
+                ecx = ecx.wrapping_sub(1);
+                at = if ecx == 0 { At::L7fe } else { At::L85f };
+            }
+            At::L85f => {
+                edx = 0x7efe_feff;
+                eax = e.mem.u32(esi);
+                edx = edx.wrapping_add(eax);
+                eax ^= 0xffff_ffff;
+                eax ^= edx;
+                edx = e.mem.u32(esi);
+                esi = esi.wrapping_add(4);
+                if eax & 0x8101_0100 == 0 {
+                    at = At::L855;
+                } else if edx as u8 == 0 {
+                    // 00ecc8a9
+                    edx = 0;
+                    e.mem.set_u32(edi, edx);
+                    at = At::L8ad;
+                } else if (edx >> 8) as u8 == 0 {
+                    // 00ecc89f
+                    edx &= 0xff;
+                    e.mem.set_u32(edi, edx);
+                    at = At::L8ad;
+                } else if edx & 0x00ff_0000 == 0 {
+                    // 00ecc895
+                    edx &= 0xffff;
+                    e.mem.set_u32(edi, edx);
+                    at = At::L8ad;
+                } else if edx & 0xff00_0000 != 0 {
+                    at = At::L855;
+                } else {
+                    // 00ecc891
+                    e.mem.set_u32(edi, edx);
+                    at = At::L8ad;
+                }
+            }
+            At::L8ad => {
+                edi = edi.wrapping_add(4);
+                eax = 0;
+                ecx = ecx.wrapping_sub(1);
+                at = if ecx == 0 { At::L8c3 } else { At::L8b7 };
+            }
+            At::L8b7 => {
+                eax = 0;
+                at = At::L8b9;
+            }
+            At::L8b9 => {
+                e.mem.set_u32(edi, eax);
+                edi = edi.wrapping_add(4);
+                ecx = ecx.wrapping_sub(1);
+                at = if ecx != 0 { At::L8b9 } else { At::L8c3 };
+            }
+            At::L8c3 => {
+                ebx &= 3;
+                if ebx == 0 {
+                    return dest;
+                }
+                at = At::L843;
+            }
+        }
+    }
+}
+
+// Translated from 00ed2ec8 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `write_char` (LIBCMT/outputs.c), a register-argument helper of the `printf` core: `eax` holds the
+/// character in its low byte, `stream` is `ECX` (a `FILE`: `_ptr` +0, `_cnt` +4, `_base` +8,
+/// `_flag` +0xc) and `count` is `ESI` (the number of characters written, `-1` on error). Unless
+/// the stream is a string stream with no buffer (`_flag & 0x40` and `_base == 0`: nothing is
+/// stored), it counts the stream down (`_cnt - 1`) and stores the byte through `_ptr` (which then
+/// advances) while the count stays non-negative, otherwise `_flsbuf(char, stream)` (`00ed2d64`,
+/// cdecl, the byte sign-extended). A result of -1 sets `*count` to -1 (`OR [ESI], EAX`); any other
+/// adds 1 to `*count`. The result is `EAX`: the byte or the `_flsbuf` result, or the incoming
+/// `EAX` when nothing was stored.
+pub fn write_char(e: &mut Engine, eax: u32, stream: Ptr, count: Ptr) -> u32 {
+    let (ptr_at, cnt_at, base_at, flag_at) = (
+        stream.addr(),
+        stream.addr().wrapping_add(4),
+        stream.addr().wrapping_add(8),
+        stream.addr().wrapping_add(0xc),
+    );
+    // TEST byte [ECX + 0xc], 0x40 / JZ; CMP [ECX + 8], 0 / JZ 00ed2ef8
+    let skip = e.mem.u8(flag_at) & 0x40 != 0 && e.mem.u32(base_at) == 0;
+    if skip {
+        e.mem
+            .set_u32(count.addr(), e.mem.u32(count.addr()).wrapping_add(1));
+        return eax;
+    }
+    let remaining = e.mem.i32(cnt_at).wrapping_sub(1);
+    e.mem.set_i32(cnt_at, remaining);
+    let result = if remaining < 0 {
+        // MOVSX EAX, AL, then _flsbuf(EAX, ECX).
+        let character = i32::from(eax as u8 as i8) as u32;
+        e.call(FLSBUF, &args![character, stream]).u32()
+    } else {
+        let at = e.mem.u32(ptr_at);
+        e.mem.set_u8(at, eax as u8);
+        e.mem.set_u32(ptr_at, at.wrapping_add(1));
+        u32::from(eax as u8)
+    };
+    if result == 0xffff_ffff {
+        let written = e.mem.u32(count.addr());
+        e.mem.set_u32(count.addr(), written | result);
+    } else {
+        e.mem
+            .set_u32(count.addr(), e.mem.u32(count.addr()).wrapping_add(1));
+    }
+    result
+}
+
+/// `_flsbuf` (`00ed2d64`, cdecl: the character, the stream).
+const FLSBUF: u32 = 0x00ed_2d64;
+
+// Translated from 00ed4638 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `write_string` (LIBCMT/outputs.c), a helper of the `printf` core with register arguments:
+/// `count` is `EAX` (the characters-written counter, `ESI` inside), `string` `ECX`, `stream` `EDI`
+/// and `length` the one stack word. For a string stream with no buffer (`_flag & 0x40` set,
+/// `_base` zero) it just adds `length` to `*count`. Otherwise it writes the bytes through
+/// `write_char` while `length` is positive; when a write leaves `*count` at -1 and `errno` is
+/// `0x2a` (`EILSEQ`) it writes a `?` instead and goes on, with any other `errno` it stops.
+pub fn write_string(e: &mut Engine, count: Ptr, string: Ptr, stream: Ptr, length: i32) {
+    let mut eax = count.addr();
+    let mut remaining = length;
+    let mut at = string.addr();
+    let flag = e.mem.u8(stream.addr().wrapping_add(0xc));
+    if flag & 0x40 != 0 && e.mem.u32(stream.addr().wrapping_add(8)) == 0 {
+        let written = e.mem.u32(count.addr());
+        e.mem
+            .set_u32(count.addr(), written.wrapping_add(length as u32));
+        return;
+    }
+    while remaining > 0 {
+        eax = (eax & !0xff) | u32::from(e.mem.u8(at));
+        remaining -= 1;
+        eax = write_char(e, eax, stream, count);
+        at = at.wrapping_add(1);
+        if e.mem.i32(count.addr()) != -1 {
+            continue;
+        }
+        let slot = errno(e);
+        if e.mem.u32(slot.addr()) != 0x2a {
+            return;
+        }
+        eax = (eax & !0xff) | 0x3f;
+        eax = write_char(e, eax, stream, count);
+    }
+}
+
+// Translated from 00ecdf44 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__iob_func` (LIBCMT/_file.c), cdecl: the address of the CRT's table of the standard streams
+/// (`stdin` first), `011c1a08`; reads nothing.
+pub fn iob_func(_e: &mut Engine) -> Ptr {
+    Ptr::new(0x011c_1a08)
+}
+
+// Translated from 00ed27c5 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__fload_withFB` (Ghidra's function-ID label), a fastcall helper (`ECX` unused, `EDX` = the
+/// address of a double) that returns `ST0` and, in `EAX`, the double's exponent bits
+/// (`high & 0x7ff00000`, which is not `0x7ff00000`) after `FLD double [EDX]`. For an exponent of
+/// all ones (an infinity or NaN) it builds the extended-precision value by hand instead (exponent
+/// `0x7fff`, the significand shifted up by 11 with its integer bit set, the sign kept) and loads
+/// that, which does not quiet a signalling NaN; `EAX` is then the whole high word. It sets `ZF`
+/// exactly in that case (`TEST EAX, 0`), clear otherwise (the `CMP`'s result). In the engine's
+/// `f64` model both loads give the same bits.
+pub fn fload_with_fb(e: &mut Engine, _unused_ecx: u32, edx: Ptr) -> Ret {
+    let high = e.mem.u32(edx.addr().wrapping_add(4));
+    let exponent = high & 0x7ff0_0000;
+    let bits = e.mem.u64(edx.addr());
+    if exponent != 0x7ff0_0000 {
+        return Ret {
+            eax: exponent,
+            st0: f64::from_bits(bits),
+            ..Ret::default()
+        };
+    }
+    Ret {
+        eax: high,
+        st0: f64::from_bits(bits),
+        ..Ret::default()
+    }
+}
+
+/// The registered form of [`fload_with_fb`]: `(ECX, EDX)`, giving `EAX` and `ST0`.
+fn fload_with_fb_entry(e: &mut Engine, words: &[u32]) -> Ret {
+    fload_with_fb(e, words[0], Ptr::new(words[1]))
+}
+
+/// The CRT's exception record, context and debugger flag for `___report_gsfailure`:
+/// `ExceptionCode` `0126fe18`, `ExceptionFlags` `0126fe1c`, `ContextFlags` `0126fe70` and the
+/// `IsDebuggerPresent` result `0126fe68`. The pointer pair handed to the filter is the static
+/// `010f2a40`.
+const GS_EXCEPTION_CODE: u32 = 0x0126_fe18;
+const GS_EXCEPTION_FLAGS: u32 = 0x0126_fe1c;
+const GS_CONTEXT_FLAGS: u32 = 0x0126_fe70;
+const GS_DEBUGGER_PRESENT: u32 = 0x0126_fe68;
+const GS_EXCEPTION_POINTERS: u32 = 0x010f_2a40;
+const IS_DEBUGGER_PRESENT: u32 = 0x00fd_f0f0;
+const SET_UNHANDLED_EXCEPTION_FILTER: u32 = 0x00fd_f180;
+const UNHANDLED_EXCEPTION_FILTER: u32 = 0x00fd_f17c;
+const GET_CURRENT_PROCESS: u32 = 0x00fd_f110;
+const TERMINATE_PROCESS: u32 = 0x00fd_f178;
+/// `STATUS_STACK_BUFFER_OVERRUN`, the exception code and exit code of a failed cookie check.
+const STACK_BUFFER_OVERRUN: u32 = 0xc000_0409;
+
+// Translated from 00ed159c (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ed159c - the caller's registers (EAX, ECX, EDX, EBX, ESI, EDI, EBP), segment registers, EFLAGS, return address and stack pointer that it saves into the context at 0126fefc..0126ff38 are machine state the engine does not have and are not written
+/// `___report_gsfailure` (Ghidra's function-ID label), cdecl, no arguments: what the stack cookie
+/// check (`00ec408c`) calls on a mismatch. It fills the CRT's static exception record and context
+/// (`ExceptionCode` `0xc0000409`, `ExceptionFlags` 1, `ContextFlags` `0x10001`; the register
+/// fields come from machine state and are skipped), keeps `IsDebuggerPresent()` in `0126fe68`,
+/// calls `00ed5bae(1)`, `SetUnhandledExceptionFilter(NULL)` and
+/// `UnhandledExceptionFilter(010f2a40)` (the record and context pointers), calls `00ed5bae(1)`
+/// again when no debugger is present, and ends with `TerminateProcess(GetCurrentProcess(),
+/// 0xc0000409)`. Nothing returns from that, so the engine stops with a panic naming this address
+/// and the reason.
+pub fn report_gsfailure(e: &mut Engine) {
+    e.mem.set_u32(GS_CONTEXT_FLAGS, 0x0001_0001);
+    e.mem.set_u32(GS_EXCEPTION_CODE, STACK_BUFFER_OVERRUN);
+    e.mem.set_u32(GS_EXCEPTION_FLAGS, 1);
+    let debugger = e.call(IS_DEBUGGER_PRESENT, &args![]).u32();
+    e.mem.set_u32(GS_DEBUGGER_PRESENT, debugger);
+    e.call(CLEAR_01270A60, &args![1u32]);
+    e.call(SET_UNHANDLED_EXCEPTION_FILTER, &args![0u32]);
+    e.call(UNHANDLED_EXCEPTION_FILTER, &args![GS_EXCEPTION_POINTERS]);
+    if e.mem.u32(GS_DEBUGGER_PRESENT) == 0 {
+        e.call(CLEAR_01270A60, &args![1u32]);
+    }
+    let process = e.call(GET_CURRENT_PROCESS, &args![]).u32();
+    e.call(TERMINATE_PROCESS, &args![process, STACK_BUFFER_OVERRUN]);
+    panic!(
+        "00ed159c ___report_gsfailure: TerminateProcess(GetCurrentProcess(), 0xc0000409): \
+         a stack buffer overrun (cookie mismatch) ended the process"
+    );
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00401000, operator_new(u32) -> Ptr),
@@ -1422,6 +2293,20 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         (0x00eca38d, snprintf_entry as AbiFn),
         entry!(0x00ec7c56, invalid_parameter_noinfo()),
         entry!(0x00ec43fb, rt_dynamic_cast(Ptr, i32, Ptr, Ptr, i32) -> Ptr),
+        entry!(0x00ec9e10, ceil(f64) -> f64),
+        entry!(0x00ec605d, fn_00ec605d(bool, f64, u32, u32) -> f64),
+        entry!(0x00ec85e3, errno() -> Ptr),
+        entry!(0x00ec9650, ci_asin(f64) -> f64),
+        entry!(0x00ed159c, report_gsfailure()),
+        entry!(0x00ecddf1, vsnprintf(Ptr, u32, Ptr, u32) -> i32),
+        entry!(0x00ec7c30, fn_00ec7c30(u32, u32, u32, u32, u32)),
+        entry!(0x00ecc590, aulldiv(u32, u32, u32, u32) -> u64),
+        entry!(0x00eccca9, crt_exit_process(i32)),
+        entry!(0x00ecc7b0, strncpy(Ptr, Ptr, u32) -> Ptr),
+        entry!(0x00ed2ec8, write_char(u32, Ptr, Ptr) -> u32),
+        entry!(0x00ed4638, write_string(Ptr, Ptr, Ptr, i32)),
+        entry!(0x00ecdf44, iob_func() -> Ptr),
+        (0x00ed27c5, fload_with_fb_entry as AbiFn),
     ]
 }
 
@@ -2255,6 +3140,923 @@ mod exit_tests {
         let mut e = Engine::new();
         ctrlfp(&mut e, 0x037f, 0xffff);
         assert_eq!(e.call(0x00ec6cde, &args![-0.75f64]).f64(), 0.75);
+        assert_eq!(x87_control_word(&mut e), 0x037f);
+    }
+}
+
+#[cfg(test)]
+mod physics_step_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::rc::Rc;
+
+    type Log = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    /// A double at `addr` that records its call in `log` and answers `ret`.
+    fn recorder(e: &mut Engine, log: &Log, addr: u32, ret: Ret) {
+        let log = log.clone();
+        e.register_double(addr, move |_, a| {
+            log.borrow_mut().push((addr, a.to_vec()));
+            ret
+        });
+    }
+
+    fn eax(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    fn st0(value: f64) -> Ret {
+        Ret {
+            st0: value,
+            ..Ret::default()
+        }
+    }
+
+    fn calls_to(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.borrow()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn panic_text(result: std::thread::Result<Ret>) -> String {
+        let payload = result.expect_err("the engine stops with a panic");
+        match payload.downcast_ref::<String>() {
+            Some(text) => text.clone(),
+            None => (*payload.downcast_ref::<&str>().unwrap()).to_string(),
+        }
+    }
+
+    fn words(value: f64) -> [u32; 2] {
+        let bits = value.to_bits();
+        [bits as u32, (bits >> 32) as u32]
+    }
+
+    // ---- _errno, _vsnprintf, __iob_func ------------------------------------------------
+
+    #[test]
+    fn errno_is_the_thread_blocks_terrno_or_the_static_slot() {
+        let mut e = Engine::new();
+        e.register(GETPTD_NOEXIT, |_, _| eax(0x7000));
+        assert_eq!(e.call(0x00ec_85e3, &args![]).u32(), 0x7008);
+        e.register(GETPTD_NOEXIT, |_, _| eax(0));
+        assert_eq!(e.call(0x00ec_85e3, &args![]).u32(), 0x011c_18c0);
+    }
+
+    #[test]
+    fn vsnprintf_passes_a_null_locale_to_the_locale_version() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        recorder(&mut e, &log, VSNPRINTF_L, eax(17));
+        let result = e.call(0x00ec_ddf1, &args![0x100u32, 64u32, 0x200u32, 0x300u32]);
+        assert_eq!(result.i32(), 17);
+        assert_eq!(
+            calls_to(&log, VSNPRINTF_L),
+            vec![vec![0x100, 64, 0x200, 0, 0x300]]
+        );
+    }
+
+    #[test]
+    fn iob_func_is_the_address_of_the_stream_table() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00ec_df44, &args![]).u32(), 0x011c_1a08);
+    }
+
+    // ---- the invalid-parameter path ------------------------------------------------------
+
+    #[test]
+    fn a_registered_handler_gets_the_five_words() {
+        let mut e = Engine::new();
+        e.map(INVALID_PARAMETER_HANDLER, 4);
+        e.set_global(INVALID_PARAMETER_HANDLER, 0xaaaa_bbbbu32);
+        let log = Log::default();
+        recorder(&mut e, &log, DECODE_POINTER, eax(0x0050_0000));
+        recorder(&mut e, &log, 0x0050_0000, Ret::default());
+        recorder(&mut e, &log, INVOKE_WATSON, Ret::default());
+        e.call(0x00ec_7c30, &args![1u32, 2u32, 3u32, 4u32, 5u32]);
+        assert_eq!(calls_to(&log, DECODE_POINTER), vec![vec![0xaaaa_bbbb]]);
+        assert_eq!(calls_to(&log, 0x0050_0000), vec![vec![1, 2, 3, 4, 5]]);
+        assert!(calls_to(&log, INVOKE_WATSON).is_empty());
+        assert!(calls_to(&log, CLEAR_01270A60).is_empty());
+    }
+
+    #[test]
+    fn without_a_handler_it_clears_the_flag_and_invokes_watson() {
+        let mut e = Engine::new();
+        e.map(INVALID_PARAMETER_HANDLER, 4);
+        let log = Log::default();
+        recorder(&mut e, &log, DECODE_POINTER, eax(0));
+        recorder(&mut e, &log, CLEAR_01270A60, Ret::default());
+        recorder(&mut e, &log, INVOKE_WATSON, Ret::default());
+        e.call(0x00ec_7c30, &args![0u32, 0u32, 0u32, 0u32, 0u32]);
+        let order: Vec<u32> = log.borrow().iter().map(|c| c.0).collect();
+        assert_eq!(order, vec![DECODE_POINTER, CLEAR_01270A60, INVOKE_WATSON]);
+        assert_eq!(calls_to(&log, CLEAR_01270A60), vec![vec![2]]);
+        assert_eq!(calls_to(&log, INVOKE_WATSON), vec![vec![0, 0, 0, 0, 0]]);
+    }
+
+    // ---- the exits -------------------------------------------------------------------------
+
+    #[test]
+    fn crt_exit_process_tells_the_runtime_then_exits_and_stops_the_engine() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        recorder(&mut e, &log, CRT_COR_EXIT_PROCESS, Ret::default());
+        recorder(&mut e, &log, EXIT_PROCESS, Ret::default());
+        let text = panic_text(catch_unwind(AssertUnwindSafe(|| {
+            e.call(0x00ec_cca9, &args![3u32])
+        })));
+        assert!(text.contains("00eccca9"));
+        assert!(text.contains("ExitProcess(3)"));
+        let order: Vec<u32> = log.borrow().iter().map(|c| c.0).collect();
+        assert_eq!(order, vec![CRT_COR_EXIT_PROCESS, EXIT_PROCESS]);
+        assert_eq!(calls_to(&log, CRT_COR_EXIT_PROCESS), vec![vec![3]]);
+        assert_eq!(calls_to(&log, EXIT_PROCESS), vec![vec![3]]);
+    }
+
+    #[test]
+    fn report_gsfailure_fills_the_record_and_ends_the_process() {
+        let mut e = Engine::new();
+        e.map(0x0126_fe00, 0x200);
+        let log = Log::default();
+        recorder(&mut e, &log, IS_DEBUGGER_PRESENT, eax(0));
+        recorder(&mut e, &log, CLEAR_01270A60, Ret::default());
+        recorder(&mut e, &log, SET_UNHANDLED_EXCEPTION_FILTER, Ret::default());
+        recorder(&mut e, &log, UNHANDLED_EXCEPTION_FILTER, Ret::default());
+        recorder(&mut e, &log, GET_CURRENT_PROCESS, eax(0xffff_ffff));
+        recorder(&mut e, &log, TERMINATE_PROCESS, Ret::default());
+        let text = panic_text(catch_unwind(AssertUnwindSafe(|| {
+            e.call(0x00ed_159c, &args![])
+        })));
+        assert!(text.contains("00ed159c"));
+        assert!(text.contains("0xc0000409"));
+        assert_eq!(e.mem.u32(0x0126_fe18), 0xc000_0409);
+        assert_eq!(e.mem.u32(0x0126_fe1c), 1);
+        assert_eq!(e.mem.u32(0x0126_fe70), 0x0001_0001);
+        assert_eq!(e.mem.u32(0x0126_fe68), 0);
+        let order: Vec<u32> = log.borrow().iter().map(|c| c.0).collect();
+        assert_eq!(
+            order,
+            vec![
+                IS_DEBUGGER_PRESENT,
+                CLEAR_01270A60,
+                SET_UNHANDLED_EXCEPTION_FILTER,
+                UNHANDLED_EXCEPTION_FILTER,
+                CLEAR_01270A60,
+                GET_CURRENT_PROCESS,
+                TERMINATE_PROCESS,
+            ]
+        );
+        assert_eq!(calls_to(&log, CLEAR_01270A60), vec![vec![1], vec![1]]);
+        assert_eq!(
+            calls_to(&log, UNHANDLED_EXCEPTION_FILTER),
+            vec![vec![0x010f_2a40]]
+        );
+        assert_eq!(
+            calls_to(&log, TERMINATE_PROCESS),
+            vec![vec![0xffff_ffff, 0xc000_0409]]
+        );
+    }
+
+    #[test]
+    fn report_gsfailure_with_a_debugger_skips_the_second_hook_call() {
+        let mut e = Engine::new();
+        e.map(0x0126_fe00, 0x200);
+        let log = Log::default();
+        recorder(&mut e, &log, IS_DEBUGGER_PRESENT, eax(1));
+        recorder(&mut e, &log, CLEAR_01270A60, Ret::default());
+        recorder(&mut e, &log, SET_UNHANDLED_EXCEPTION_FILTER, Ret::default());
+        recorder(&mut e, &log, UNHANDLED_EXCEPTION_FILTER, Ret::default());
+        recorder(&mut e, &log, GET_CURRENT_PROCESS, eax(1));
+        recorder(&mut e, &log, TERMINATE_PROCESS, Ret::default());
+        let _ = catch_unwind(AssertUnwindSafe(|| e.call(0x00ed_159c, &args![])));
+        assert_eq!(e.mem.u32(0x0126_fe68), 1);
+        assert_eq!(calls_to(&log, CLEAR_01270A60), vec![vec![1]]);
+    }
+
+    // ---- __aulldiv -------------------------------------------------------------------------
+
+    fn divide(e: &mut Engine, n: u64, d: u64) -> u64 {
+        e.call(
+            0x00ec_c590,
+            &args![n as u32, (n >> 32) as u32, d as u32, (d >> 32) as u32],
+        )
+        .u64()
+    }
+
+    #[test]
+    fn aulldiv_agrees_with_64_bit_division() {
+        let mut e = Engine::new();
+        let mut state = 0x1234_5678_9abc_def1u64;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            state
+        };
+        let edge = [
+            0u64,
+            1,
+            2,
+            0xffff_ffff,
+            0x1_0000_0000,
+            0x1_0000_0001,
+            0x7fff_ffff_ffff_ffff,
+            0x8000_0000_0000_0000,
+            0xffff_ffff_ffff_ffff,
+            0xfedc_ba98_7654_3210,
+        ];
+        for &n in &edge {
+            for &d in edge.iter().filter(|d| **d != 0) {
+                assert_eq!(divide(&mut e, n, d), n / d, "{n:#x} / {d:#x}");
+            }
+        }
+        for round in 0..4000 {
+            let n = next();
+            // Divisors of every width: shift a random word down by 0..63 bits.
+            let d = (next() >> (round % 64)).max(1);
+            assert_eq!(divide(&mut e, n, d), n / d, "{n:#x} / {d:#x}");
+        }
+    }
+
+    #[test]
+    fn aulldiv_needs_its_correction_step_for_a_wide_divisor() {
+        let mut e = Engine::new();
+        // The shifted estimate is one too big here: the corrected quotient is 0.
+        let n = 0x1_ffff_ffffu64;
+        let d = 0x2_0000_0000u64;
+        assert_eq!(divide(&mut e, n, d), 0);
+        // And exactly on the boundary: the estimate stands.
+        assert_eq!(divide(&mut e, 0x2_0000_0000, d), 1);
+        assert_eq!(divide(&mut e, 0x3_ffff_ffff, d), 1);
+        assert_eq!(divide(&mut e, 0x4_0000_0000, d), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "divide by zero")]
+    fn aulldiv_by_zero_faults() {
+        let mut e = Engine::new();
+        divide(&mut e, 5, 0);
+    }
+
+    // ---- strncpy ---------------------------------------------------------------------------
+
+    /// The C `strncpy` the exe's routine must agree with: bytes of the string up to `count`,
+    /// zero-padded, nothing written past `count`.
+    fn reference(source: &[u8], count: usize) -> Vec<u8> {
+        let mut out = vec![0xaau8; count + 8];
+        let mut ended = false;
+        for i in 0..count {
+            let byte = if ended { 0 } else { source[i] };
+            if byte == 0 {
+                ended = true;
+            }
+            out[i] = byte;
+        }
+        out
+    }
+
+    #[test]
+    fn strncpy_matches_the_c_function_for_every_alignment_length_and_count() {
+        let mut e = Engine::new();
+        for source_align in 0..4u32 {
+            for dest_align in 0..4u32 {
+                for length in 0..14usize {
+                    for count in 0..20usize {
+                        let source_block = e.mem.alloc(64);
+                        let dest_block = e.mem.alloc(64);
+                        let mut text: Vec<u8> = (0..length).map(|i| b'A' + i as u8).collect();
+                        text.push(0);
+                        // Bytes after the terminator are not zero: the copy must not use them.
+                        text.extend_from_slice(&[0x55; 24]);
+                        let source = source_block + source_align;
+                        e.mem.write(source, &text);
+                        let dest = dest_block + dest_align;
+                        e.mem.write(dest, &[0xaa; 40]);
+                        let result = e
+                            .call(0x00ec_c7b0, &args![dest, source, count as u32])
+                            .u32();
+                        assert_eq!(result, dest);
+                        let expected = reference(&text, count);
+                        let got = e.mem.bytes(dest, count as u32 + 8);
+                        assert_eq!(
+                            got, expected,
+                            "source+{source_align} dest+{dest_align} length {length} count {count}"
+                        );
+                        e.mem.free(source_block);
+                        e.mem.free(dest_block);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn strncpy_stores_a_word_cut_at_each_zero_byte_position() {
+        let mut e = Engine::new();
+        // An aligned source of exactly 8 bytes copied: the zero is in byte 0, 1, 2 or 3 of the
+        // second word, and the first word is full (the (w ^ !0) ^ (w + 0x7efefeff) test fires
+        // only for the second).
+        for zero_at in 0..4usize {
+            let source = e.mem.alloc(16);
+            let dest = e.mem.alloc(16);
+            let mut text = *b"WXYZabcd";
+            text[4 + zero_at] = 0;
+            e.mem.write(source, &text);
+            e.mem.write(dest, &[0xaa; 16]);
+            e.call(0x00ec_c7b0, &args![dest, source, 8u32]);
+            let mut expected = text.to_vec();
+            for byte in expected[4 + zero_at..].iter_mut() {
+                *byte = 0;
+            }
+            assert_eq!(e.mem.bytes(dest, 8), expected, "zero at {zero_at}");
+            assert_eq!(e.mem.bytes(dest + 8, 8), vec![0xaa; 8]);
+        }
+    }
+
+    // ---- write_char / write_string ---------------------------------------------------------
+
+    /// A `FILE` at a fresh block: `_ptr`, `_cnt`, `_base`, `_flag`, and a 16-byte buffer.
+    fn stream(e: &mut Engine, cnt: i32, base: bool, flag: u32) -> (Ptr, u32) {
+        let file = e.mem.alloc(0x20);
+        let buffer = e.mem.alloc(16);
+        e.mem.set_u32(file, buffer);
+        e.mem.set_i32(file + 4, cnt);
+        e.mem.set_u32(file + 8, if base { buffer } else { 0 });
+        e.mem.set_u32(file + 0xc, flag);
+        (Ptr::new(file), buffer)
+    }
+
+    #[test]
+    fn write_char_stores_the_byte_and_counts_it() {
+        let mut e = Engine::new();
+        let (file, buffer) = stream(&mut e, 3, true, 0);
+        let count = e.mem.alloc(4);
+        e.mem.set_u32(count, 5);
+        let result = e.call(
+            0x00ed_2ec8,
+            &args![0x1234_5641u32, file, Ptr::<()>::new(count)],
+        );
+        assert_eq!(result.u32(), 0x41, "the byte, zero-extended");
+        assert_eq!(e.mem.u8(buffer), 0x41);
+        assert_eq!(e.mem.u32(file.addr()), buffer + 1);
+        assert_eq!(e.mem.i32(file.addr() + 4), 2);
+        assert_eq!(e.mem.u32(count), 6);
+    }
+
+    #[test]
+    fn write_char_calls_flsbuf_when_the_buffer_is_full() {
+        let mut e = Engine::new();
+        let (file, buffer) = stream(&mut e, 0, true, 0);
+        let count = e.mem.alloc(4);
+        let log = Log::default();
+        recorder(&mut e, &log, FLSBUF, eax(0x80));
+        let result = e.call(0x00ed_2ec8, &args![0xf0u32, file, Ptr::<()>::new(count)]);
+        assert_eq!(result.u32(), 0x80);
+        assert_eq!(e.mem.i32(file.addr() + 4), -1);
+        assert_eq!(e.mem.u8(buffer), 0, "nothing stored by write_char");
+        assert_eq!(
+            calls_to(&log, FLSBUF),
+            vec![vec![0xffff_fff0, file.addr()]],
+            "the byte sign-extended, then the stream"
+        );
+        assert_eq!(e.mem.u32(count), 1);
+    }
+
+    #[test]
+    fn write_char_with_a_failed_flsbuf_sets_the_count_to_minus_one() {
+        let mut e = Engine::new();
+        let (file, _) = stream(&mut e, 0, true, 0);
+        let count = e.mem.alloc(4);
+        e.mem.set_u32(count, 7);
+        e.register(FLSBUF, |_, _| eax(0xffff_ffff));
+        let result = e.call(0x00ed_2ec8, &args![0x41u32, file, Ptr::<()>::new(count)]);
+        assert_eq!(result.u32(), 0xffff_ffff);
+        assert_eq!(e.mem.i32(count), -1);
+    }
+
+    #[test]
+    fn write_char_to_a_string_stream_without_a_buffer_only_counts() {
+        let mut e = Engine::new();
+        let (file, buffer) = stream(&mut e, 5, false, 0x40);
+        let count = e.mem.alloc(4);
+        let result = e.call(
+            0x00ed_2ec8,
+            &args![0xabcd_ef41u32, file, Ptr::<()>::new(count)],
+        );
+        assert_eq!(result.u32(), 0xabcd_ef41, "EAX is untouched");
+        assert_eq!(e.mem.u32(count), 1);
+        assert_eq!(e.mem.u8(buffer), 0);
+        assert_eq!(e.mem.i32(file.addr() + 4), 5);
+        // The flag alone is not enough: with a buffer the byte is stored.
+        let (file, buffer) = stream(&mut e, 5, true, 0x40);
+        e.call(0x00ed_2ec8, &args![0x42u32, file, Ptr::<()>::new(count)]);
+        assert_eq!(e.mem.u8(buffer), 0x42);
+    }
+
+    #[test]
+    fn write_string_writes_every_byte() {
+        let mut e = Engine::new();
+        let (file, buffer) = stream(&mut e, 8, true, 0);
+        let count = e.mem.alloc(4);
+        let text = e.mem.alloc(8);
+        e.mem.write(text, b"hello");
+        e.call(
+            0x00ed_4638,
+            &args![Ptr::<()>::new(count), Ptr::<()>::new(text), file, 5i32],
+        );
+        assert_eq!(e.mem.bytes(buffer, 5), b"hello");
+        assert_eq!(e.mem.u32(count), 5);
+        assert_eq!(e.mem.i32(file.addr() + 4), 3);
+        // A length of zero or less writes nothing.
+        e.call(
+            0x00ed_4638,
+            &args![Ptr::<()>::new(count), Ptr::<()>::new(text), file, -2i32],
+        );
+        assert_eq!(e.mem.u32(count), 5);
+    }
+
+    #[test]
+    fn write_string_to_a_string_stream_without_a_buffer_adds_the_length() {
+        let mut e = Engine::new();
+        let (file, buffer) = stream(&mut e, 8, false, 0x40);
+        let count = e.mem.alloc(4);
+        e.mem.set_u32(count, 3);
+        let text = e.mem.alloc(8);
+        e.mem.write(text, b"hello");
+        e.call(
+            0x00ed_4638,
+            &args![Ptr::<()>::new(count), Ptr::<()>::new(text), file, 5i32],
+        );
+        assert_eq!(e.mem.u32(count), 8);
+        assert_eq!(e.mem.u8(buffer), 0);
+    }
+
+    #[test]
+    fn write_string_stops_on_an_error_but_writes_a_question_mark_for_eilseq() {
+        let mut e = Engine::new();
+        let count = e.mem.alloc(4);
+        let text = e.mem.alloc(8);
+        e.mem.write(text, b"abc");
+        let errno_slot = e.mem.alloc(4);
+        e.register_double(GETPTD_NOEXIT, move |_, _| eax(errno_slot - 8));
+        // Every flush fails; with errno EILSEQ (0x2a) the string goes on with a '?' each time.
+        let (file, _) = stream(&mut e, 0, true, 0);
+        let log = Log::default();
+        recorder(&mut e, &log, FLSBUF, eax(0xffff_ffff));
+        e.mem.set_u32(errno_slot, 0x2a);
+        e.call(
+            0x00ed_4638,
+            &args![Ptr::<()>::new(count), Ptr::<()>::new(text), file, 3i32],
+        );
+        // For each of the three bytes: the byte (fails), then '?' (fails again).
+        let flushed: Vec<u32> = calls_to(&log, FLSBUF).iter().map(|c| c[0]).collect();
+        assert_eq!(flushed, vec![0x61, 0x3f, 0x62, 0x3f, 0x63, 0x3f]);
+        // With any other errno it stops after the first failure.
+        let (file, _) = stream(&mut e, 0, true, 0);
+        e.mem.set_u32(errno_slot, 9);
+        log.borrow_mut().clear();
+        e.mem.set_u32(count, 0);
+        e.call(
+            0x00ed_4638,
+            &args![Ptr::<()>::new(count), Ptr::<()>::new(text), file, 3i32],
+        );
+        let flushed: Vec<u32> = calls_to(&log, FLSBUF).iter().map(|c| c[0]).collect();
+        assert_eq!(flushed, vec![0x61]);
+        assert_eq!(e.mem.i32(count), -1);
+    }
+
+    // ---- __fload_withFB --------------------------------------------------------------------
+
+    #[test]
+    fn fload_with_fb_loads_a_finite_double_and_returns_its_exponent_bits() {
+        let mut e = Engine::new();
+        let slot = e.mem.alloc(8);
+        e.mem.set_f64(slot, 6.5);
+        let result = e.call(0x00ed_27c5, &[0, slot]);
+        assert_eq!(result.st0, 6.5);
+        assert_eq!(result.eax, 0x4010_0000);
+        e.mem.set_f64(slot, -0.0);
+        let result = e.call(0x00ed_27c5, &[0, slot]);
+        assert_eq!(result.st0.to_bits(), (-0.0f64).to_bits());
+        assert_eq!(result.eax, 0);
+    }
+
+    #[test]
+    fn fload_with_fb_keeps_infinities_and_signalling_nans_as_they_are() {
+        let mut e = Engine::new();
+        let slot = e.mem.alloc(8);
+        for bits in [
+            0x7ff0_0000_0000_0000u64,
+            0xfff0_0000_0000_0000,
+            0x7ff0_0000_0000_0001, // signalling: not quieted by this load
+            0x7ff8_0000_0000_1234,
+            0xfff8_0000_0000_0000,
+        ] {
+            e.mem.set_u64(slot, bits);
+            let result = e.call(0x00ed_27c5, &[0xdead, slot]);
+            assert_eq!(result.st0.to_bits(), bits, "{bits:#x}");
+            assert_eq!(result.eax, (bits >> 32) as u32, "the whole high word");
+        }
+    }
+
+    // ---- ceil ------------------------------------------------------------------------------
+
+    /// The constants of `ceil`'s SSE2 body and the flags its dispatch reads.
+    fn ceil_setup(e: &mut Engine, sse2: bool) {
+        e.map(0x010f_1fe0, 0x60);
+        e.mem.set_u64(CEIL_SHIFT_BASE, 0x433);
+        e.mem.set_u64(CEIL_SHIFT_BASE + 8, 0x433);
+        e.mem.set_u64(CEIL_ONE_MASK, 1.0f64.to_bits());
+        e.mem.set_u64(CEIL_ONE_MASK + 8, 1.0f64.to_bits());
+        e.mem.set_u64(CEIL_ZERO, 0);
+        e.mem.set_u64(CEIL_EXPONENT_MASK, 0x7ff);
+        e.mem.set_u64(CEIL_MINUS_ZERO, (-0.0f64).to_bits());
+        e.map(USE_SSE2_MATHFCNS, 4);
+        e.set_global(USE_SSE2_MATHFCNS, u32::from(sse2));
+    }
+
+    fn ceil_via_registry(e: &mut Engine, x: f64) -> f64 {
+        e.call(0x00ec_9e10, &args![x]).f64()
+    }
+
+    #[test]
+    fn ceil_sse2_matches_the_host_ceil_bit_for_bit() {
+        let mut e = Engine::new();
+        ceil_setup(&mut e, true);
+        let values = [
+            0.0f64,
+            -0.0,
+            0.25,
+            0.5,
+            0.999_999_999_999,
+            1.0,
+            1.000_000_000_001,
+            1.5,
+            2.0,
+            2.000_000_1,
+            123.456,
+            4_503_599_627_370_495.5, // 2^52 - 0.5
+            4_503_599_627_370_496.0, // 2^52
+            9_007_199_254_740_991.0,
+            1.0e300,
+            f64::MAX,
+            f64::INFINITY,
+            f64::MIN_POSITIVE,
+            f64::from_bits(1),
+            -f64::from_bits(1),
+            -0.25,
+            -0.5,
+            -0.999_999_999_999,
+            -1.0,
+            -1.000_000_000_001,
+            -1.5,
+            -2.5,
+            -123.456,
+            -4_503_599_627_370_495.5,
+            -4_503_599_627_370_496.0,
+            -1.0e300,
+            f64::MIN,
+            f64::NEG_INFINITY,
+        ];
+        for x in values {
+            let got = ceil_via_registry(&mut e, x);
+            assert_eq!(
+                got.to_bits(),
+                x.ceil().to_bits(),
+                "ceil({x:e}) = {got:e}, host {:e}",
+                x.ceil()
+            );
+        }
+    }
+
+    #[test]
+    fn ceil_sse2_of_a_nan_lets_the_error_support_rewrite_the_result_slot() {
+        let mut e = Engine::new();
+        ceil_setup(&mut e, true);
+        let log = Log::default();
+        let seen = log.clone();
+        e.register_double(LIBM_ERROR_SUPPORT, move |e, a| {
+            seen.borrow_mut().push((LIBM_ERROR_SUPPORT, a.to_vec()));
+            assert_eq!(a[0], a[1]);
+            assert_eq!(a[1], a[2]);
+            // The slot holds the argument; the support routine replaces it.
+            assert_eq!(e.mem.u64(a[2]), 0x7ff0_0000_0000_0123);
+            e.mem.set_u64(a[2], 0x7ff8_0000_0000_0777);
+            Ret::default()
+        });
+        let nan = f64::from_bits(0x7ff0_0000_0000_0123); // signalling
+        let got = ceil_via_registry(&mut e, nan);
+        assert_eq!(got.to_bits(), 0x7ff8_0000_0000_0777);
+        let calls = calls_to(&log, LIBM_ERROR_SUPPORT);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0][3], 0x3ec);
+        // A support routine that leaves the slot alone: the NaN comes back quieted by FLD.
+        e.register(LIBM_ERROR_SUPPORT, |_, _| Ret::default());
+        let got = ceil_via_registry(&mut e, nan);
+        assert_eq!(got.to_bits(), 0x7ff8_0000_0000_0123);
+    }
+
+    #[test]
+    fn ceil_takes_the_x87_body_without_the_sse2_flag_or_with_unmasked_control_bits() {
+        let mut e = Engine::new();
+        ceil_setup(&mut e, false);
+        e.map(CEIL_CONTROL_WORD, 4);
+        e.set_global(CEIL_CONTROL_WORD, 0x1b3fu32);
+        let log = Log::default();
+        // __frnd rounds up here (the round-up control word is loaded).
+        let seen = log.clone();
+        e.register_double(FRND, move |e, a| {
+            seen.borrow_mut().push((FRND, a.to_vec()));
+            assert_eq!(x87_control_word(e), 0x1b3f, "round up while it runs");
+            st0(f64::from_bits(u64::from(a[0]) | (u64::from(a[1]) << 32)).ceil())
+        });
+        let got = ceil_via_registry(&mut e, 2.25);
+        assert_eq!(got, 3.0);
+        assert_eq!(
+            x87_control_word(&mut e),
+            0x027f,
+            "the old control word is back"
+        );
+        assert_eq!(calls_to(&log, FRND), vec![words(2.25).to_vec()]);
+        // SSE2 flag set but the control word's exception masks not all set: x87 body again.
+        e.set_global(USE_SSE2_MATHFCNS, 1u32);
+        ctrlfp(&mut e, 0x027e, 0xffff);
+        log.borrow_mut().clear();
+        assert_eq!(ceil_via_registry(&mut e, -2.25), -2.0);
+        assert_eq!(calls_to(&log, FRND).len(), 1);
+    }
+
+    #[test]
+    fn ceil_x87_reports_an_inexact_result_only_when_the_precision_mask_is_clear() {
+        let mut e = Engine::new();
+        ceil_setup(&mut e, false);
+        e.map(CEIL_CONTROL_WORD, 4);
+        e.set_global(CEIL_CONTROL_WORD, 0x1b3fu32);
+        e.register(FRND, |_, a| {
+            st0(f64::from_bits(u64::from(a[0]) | (u64::from(a[1]) << 32)).ceil())
+        });
+        let log = Log::default();
+        recorder(&mut e, &log, EXCEPT1, st0(42.0));
+        // Exact: no report, whatever the mask.
+        ctrlfp(&mut e, 0x025f, 0xffff); // precision exception unmasked (bit 5 clear)
+        assert_eq!(ceil_via_registry(&mut e, 3.0), 3.0);
+        assert!(calls_to(&log, EXCEPT1).is_empty());
+        // Inexact with the mask clear: __except1(0x10, 0xc, x, result, old control word).
+        let got = ceil_via_registry(&mut e, 2.5);
+        assert_eq!(got, 42.0, "the report's result is the result");
+        let x = words(2.5);
+        let r = words(3.0);
+        assert_eq!(
+            calls_to(&log, EXCEPT1),
+            vec![vec![0x10, 0xc, x[0], x[1], r[0], r[1], 0x025f]]
+        );
+        // Inexact with the mask set: the rounded value, no report.
+        ctrlfp(&mut e, 0x027f, 0xffff);
+        log.borrow_mut().clear();
+        assert_eq!(ceil_via_registry(&mut e, 2.5), 3.0);
+        assert!(calls_to(&log, EXCEPT1).is_empty());
+    }
+
+    #[test]
+    fn ceil_x87_sorts_infinities_and_nans_by_sptype() {
+        let mut e = Engine::new();
+        ceil_setup(&mut e, false);
+        e.map(CEIL_CONTROL_WORD, 4);
+        e.set_global(CEIL_CONTROL_WORD, 0x1b3fu32);
+        e.map(ONE_DOUBLE, 8);
+        e.mem.set_f64(ONE_DOUBLE, 1.0);
+        let log = Log::default();
+        let class = Rc::new(RefCell::new(0u32));
+        let c = class.clone();
+        e.register_double(SPTYPE, move |_, _| eax(*c.borrow()));
+        recorder(&mut e, &log, HANDLE_QNAN1, st0(7.0));
+        recorder(&mut e, &log, EXCEPT1, st0(9.0));
+        let x = f64::from_bits(0x7ff0_0000_0000_0042); // a signalling NaN
+                                                       // Classes 1 and 2: the value (quieted by FLD) and the control word restored.
+        for value in [1u32, 2] {
+            *class.borrow_mut() = value;
+            let got = ceil_via_registry(&mut e, x);
+            assert_eq!(got.to_bits(), 0x7ff8_0000_0000_0042);
+            assert_eq!(x87_control_word(&mut e), 0x027f);
+        }
+        // Class 3: __handle_qnan1(0xc, x quieted, old control word).
+        *class.borrow_mut() = 3;
+        ctrlfp(&mut e, 0x027f, 0xffff);
+        assert_eq!(ceil_via_registry(&mut e, x), 7.0);
+        let q = words(f64::from_bits(0x7ff8_0000_0000_0042));
+        assert_eq!(
+            calls_to(&log, HANDLE_QNAN1),
+            vec![vec![0xc, q[0], q[1], 0x027f]]
+        );
+        // Other classes: __except1(8, 0xc, x, x + 1.0 (NaN quieted), old control word).
+        for value in [0u32, 4, 0xffff_ffff] {
+            *class.borrow_mut() = value;
+            log.borrow_mut().clear();
+            ctrlfp(&mut e, 0x027f, 0xffff);
+            assert_eq!(ceil_via_registry(&mut e, x), 9.0);
+            assert_eq!(
+                calls_to(&log, EXCEPT1),
+                vec![vec![8, 0xc, q[0], q[1], q[0], q[1], 0x027f]],
+                "class {value:#x}"
+            );
+        }
+        // An infinity of another kind: x + 1.0 is the infinity.
+        *class.borrow_mut() = 0;
+        log.borrow_mut().clear();
+        ctrlfp(&mut e, 0x027f, 0xffff);
+        ceil_via_registry(&mut e, f64::NEG_INFINITY);
+        let inf = words(f64::NEG_INFINITY);
+        assert_eq!(
+            calls_to(&log, EXCEPT1),
+            vec![vec![8, 0xc, inf[0], inf[1], inf[0], inf[1], 0x027f]]
+        );
+    }
+
+    // ---- _CIasin ---------------------------------------------------------------------------
+
+    #[test]
+    fn ci_asin_jumps_to_the_sse2_body_when_available() {
+        let mut e = Engine::new();
+        e.map(USE_SSE2_MATHFCNS, 4);
+        e.set_global(USE_SSE2_MATHFCNS, 1u32);
+        let log = Log::default();
+        recorder(&mut e, &log, ASIN_SSE2, st0(0.5));
+        recorder(&mut e, &log, LOAD_FLAGS_HELPER, Ret::default());
+        recorder(&mut e, &log, ASIN_X87, st0(0.25));
+        assert_eq!(e.call(0x00ec_9650, &args![0.3f64]).f64(), 0.5);
+        assert_eq!(calls_to(&log, ASIN_SSE2), vec![words(0.3).to_vec()]);
+        assert!(calls_to(&log, ASIN_X87).is_empty());
+    }
+
+    #[test]
+    fn ci_asin_runs_the_x87_body_with_zf_from_the_exponent() {
+        let mut e = Engine::new();
+        e.map(USE_SSE2_MATHFCNS, 4);
+        let log = Log::default();
+        recorder(&mut e, &log, ASIN_SSE2, st0(0.5));
+        recorder(&mut e, &log, LOAD_FLAGS_HELPER, eax(0x3fd0_0000));
+        recorder(&mut e, &log, ASIN_X87, st0(0.25));
+        assert_eq!(e.call(0x00ec_9650, &args![0.3f64]).f64(), 0.25);
+        let w = words(0.3);
+        assert_eq!(calls_to(&log, LOAD_FLAGS_HELPER), vec![vec![w[0], w[1]]]);
+        assert_eq!(
+            calls_to(&log, ASIN_X87),
+            vec![vec![0, 0x3fd0_0000, w[0], w[1], w[0], w[1]]],
+            "ZF clear, EAX from the helper, ST0, the stack double"
+        );
+        assert!(calls_to(&log, ASIN_SSE2).is_empty());
+        // An infinity or NaN sets ZF.
+        log.borrow_mut().clear();
+        e.call(0x00ec_9650, &args![f64::NAN]);
+        let w = words(f64::NAN);
+        assert_eq!(
+            calls_to(&log, ASIN_X87),
+            vec![vec![1, 0x3fd0_0000, w[0], w[1], w[0], w[1]]]
+        );
+        // The SSE2 flag set but the control word's masks not: still the x87 body.
+        e.set_global(USE_SSE2_MATHFCNS, 1u32);
+        ctrlfp(&mut e, 0x0200, 0xffff);
+        log.borrow_mut().clear();
+        e.call(0x00ec_9650, &args![0.1f64]);
+        assert_eq!(calls_to(&log, ASIN_X87).len(), 1);
+        assert!(calls_to(&log, ASIN_SSE2).is_empty());
+    }
+
+    // ---- the shared square-root body -------------------------------------------------------
+
+    fn sqrt_setup(e: &mut Engine, error_switch: u32) {
+        e.map(MATH_ERROR_SWITCH, 4);
+        e.set_global(MATH_ERROR_SWITCH, error_switch);
+        e.map(INDEFINITE_NAN, 16);
+        e.mem.set_u64(INDEFINITE_NAN, 0xc000_0000_0000_0000);
+        e.mem.set_u16(INDEFINITE_NAN + 8, 0xffff);
+    }
+
+    fn sqrt_body(e: &mut Engine, zf: bool, x: f64) -> f64 {
+        let w = words(x);
+        e.call(0x00ec_605d, &args![zf, x, w[0], w[1]]).f64()
+    }
+
+    #[test]
+    fn the_sqrt_body_takes_the_square_root_of_a_positive_value() {
+        let mut e = Engine::new();
+        sqrt_setup(&mut e, 1);
+        assert_eq!(sqrt_body(&mut e, false, 6.25), 2.5);
+        assert_eq!(sqrt_body(&mut e, false, 0.0).to_bits(), 0.0f64.to_bits());
+        assert_eq!(
+            sqrt_body(&mut e, false, f64::from_bits(1)),
+            f64::from_bits(1).sqrt(),
+            "a denormal"
+        );
+        // A positive infinity (ZF set, no fraction, sign clear) is returned unchanged.
+        assert_eq!(sqrt_body(&mut e, true, f64::INFINITY), f64::INFINITY);
+    }
+
+    #[test]
+    fn the_sqrt_body_keeps_minus_zero_and_flags_other_negatives_as_domain_errors() {
+        let mut e = Engine::new();
+        sqrt_setup(&mut e, 1);
+        assert_eq!(
+            sqrt_body(&mut e, false, -0.0).to_bits(),
+            (-0.0f64).to_bits()
+        );
+        for x in [-1.0f64, -4.0e-320, -1.0e300] {
+            assert_eq!(
+                sqrt_body(&mut e, false, x).to_bits(),
+                0xfff8_0000_0000_0000,
+                "{x:e}: the indefinite NaN"
+            );
+        }
+        assert_eq!(
+            sqrt_body(&mut e, true, f64::NEG_INFINITY).to_bits(),
+            0xfff8_0000_0000_0000
+        );
+    }
+
+    #[test]
+    fn the_sqrt_body_asks_the_nan_helper_for_the_type_and_value_of_a_nan() {
+        let mut e = Engine::new();
+        sqrt_setup(&mut e, 1);
+        let log = Log::default();
+        let seen = log.clone();
+        e.register_double(NAN_TYPE_HELPER, move |_, a| {
+            seen.borrow_mut().push((NAN_TYPE_HELPER, a.to_vec()));
+            Ret {
+                eax: 1,
+                st0: 3.5,
+                ..Ret::default()
+            }
+        });
+        let nan = f64::from_bits(0x7ff0_0000_0000_0007);
+        // With the error switch set, the helper's ST0 is the result.
+        assert_eq!(sqrt_body(&mut e, true, nan), 3.5);
+        let w = words(nan);
+        let st0_words = words(nan);
+        assert_eq!(
+            calls_to(&log, NAN_TYPE_HELPER),
+            vec![vec![w[1], st0_words[0], st0_words[1]]],
+            "EAX is the high word, then ST0"
+        );
+    }
+
+    #[test]
+    fn the_sqrt_body_ends_in_the_exit_or_the_error_handler_without_the_error_switch() {
+        let mut e = Engine::new();
+        sqrt_setup(&mut e, 0);
+        let log = Log::default();
+        recorder(&mut e, &log, MATH_EXIT, st0(11.0));
+        recorder(&mut e, &log, ONE_ARG_ERROR_HANDLING, st0(13.0));
+        // A result: the exit (operation 5, the name "sqrt", ST0, the saved control word, the
+        // return address slot, the double).
+        assert_eq!(sqrt_body(&mut e, false, 9.0), 11.0);
+        let w = words(9.0);
+        let r = words(3.0);
+        assert_eq!(
+            calls_to(&log, MATH_EXIT),
+            vec![vec![5, SQRT_NAME, r[0], r[1], 0x027f, 0, w[0], w[1]]]
+        );
+        // A domain error: EAX = 1, the indefinite NaN in ST0.
+        assert_eq!(sqrt_body(&mut e, false, -9.0), 13.0);
+        let w = words(-9.0);
+        let nan = words(f64::from_bits(0xfff8_0000_0000_0000));
+        assert_eq!(
+            calls_to(&log, ONE_ARG_ERROR_HANDLING),
+            vec![vec![1, SQRT_NAME, 5, nan[0], nan[1], 0x027f, 0, w[0], w[1]]]
+        );
+    }
+
+    #[test]
+    fn the_sqrt_body_loads_a_masked_control_word_and_restores_the_old_one() {
+        let mut e = Engine::new();
+        sqrt_setup(&mut e, 1);
+        let log = Log::default();
+        let seen = log.clone();
+        e.register_double(SET_CONTROL_WORD_HELPER, move |e, a| {
+            seen.borrow_mut()
+                .push((SET_CONTROL_WORD_HELPER, a.to_vec()));
+            // The real helper loads (old & 0x300) | 0x7f.
+            set_x87_control_word(e, ((a[0] & 0x300) | 0x7f) as u16);
+            Ret::default()
+        });
+        ctrlfp(&mut e, 0x0b7f, 0xffff);
+        assert_eq!(sqrt_body(&mut e, false, 16.0), 4.0);
+        assert_eq!(calls_to(&log, SET_CONTROL_WORD_HELPER), vec![vec![0x0b7f]]);
+        assert_eq!(x87_control_word(&mut e), 0x0b7f, "restored on the way out");
+        // With the usual control word nothing is loaded.
+        ctrlfp(&mut e, 0x027f, 0xffff);
+        log.borrow_mut().clear();
+        assert_eq!(sqrt_body(&mut e, false, 16.0), 4.0);
+        assert!(calls_to(&log, SET_CONTROL_WORD_HELPER).is_empty());
+        // The special path (ZF set) does not load it either.
+        ctrlfp(&mut e, 0x037f, 0xffff);
+        assert_eq!(sqrt_body(&mut e, true, f64::INFINITY), f64::INFINITY);
+        assert!(calls_to(&log, SET_CONTROL_WORD_HELPER).is_empty());
         assert_eq!(x87_control_word(&mut e), 0x037f);
     }
 }
