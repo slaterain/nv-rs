@@ -21,15 +21,15 @@ pub fn fn_00df71a0(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
-// Translated from 00df71b0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Thunk and deleting destructor in one function: moves `this` back by `0xc` (`SUB ECX,0xc`),
-/// then runs the body at `00df71d0` that the other two thunks of this unit share (`00df7190`,
-/// `00df71a0`): the four vtable words at `+0xc`, `+8`, `+4` and `+0` become `010ccfac`,
-/// `010ccfa0`, `010ccf8c` and `010c3bb8`, and when bit 0 of `flags` is set the block (`0x90`
-/// bytes) is returned to the memory router's allocator (slot `8`). Returns the moved `this`. The
-/// class is unconfirmed.
-pub fn deleting_destructor_00df71b0(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
-    let base = this.addr().wrapping_sub(0xc);
+// Translated from 00df71d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Entry point inside `00df71b0` (the three thunks `00df7190`, `00df71a0` and `00df71b0` jump
+/// here after moving `this` back; entered with `this` in `ECX` already moved, one stack word
+/// `flags`, `RET 4`): the scalar deleting destructor's body. The four vtable words at `+0xc`,
+/// `+8`, `+4` and `+0` become `010ccfac`, `010ccfa0`, `010ccf8c` and `010c3bb8`, and when bit 0
+/// of `flags` is set the block (`0x90` bytes) is returned to the memory router's allocator (slot
+/// `8`). Returns `this` (`EAX`). The class is unconfirmed.
+pub fn deleting_destructor_00df71d0(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    let base = this.addr();
     e.mem.set_u32(base.wrapping_add(0xc), 0x010c_cfac);
     e.mem.set_u32(base.wrapping_add(0x8), 0x010c_cfa0);
     e.mem.set_u32(base.wrapping_add(0x4), 0x010c_cf8c);
@@ -39,7 +39,15 @@ pub fn deleting_destructor_00df71b0(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
         let allocator = e.mem.u32(router + 0x10);
         e.vcall(allocator, 8, &args![base, 0x90u32]);
     }
-    Ptr::new(base)
+    this
+}
+
+// Translated from 00df71b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by `0xc` (`SUB ECX,0xc`) and continues in the body at `00df71d0`
+/// (the same stack word `flags`); the caller gets its `EAX`, the moved `this`. The class is
+/// unconfirmed.
+pub fn deleting_destructor_00df71b0(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    deleting_destructor_00df71d0(e, Ptr::new(this.addr().wrapping_sub(0xc)), flags)
 }
 
 // Translated from 00df71c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -154,6 +162,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00df_7190, fn_00df7190(Ptr, u32) -> u32),
         entry!(0x00df_71a0, fn_00df71a0(Ptr, u32) -> u32),
         entry!(0x00df_71b0, deleting_destructor_00df71b0(Ptr, u8) -> Ptr),
+        entry!(0x00df_71d0, deleting_destructor_00df71d0(Ptr, u8) -> Ptr),
         entry!(0x00df_71c0, fn_00df71c0(Ptr) -> f32),
         entry!(0x00df_7210, fn_00df7210(Ptr, Ptr) -> Ptr),
         entry!(0x00df_7230, fn_00df7230(Ptr, Ptr) -> f32),
@@ -439,5 +448,45 @@ mod tests_a05 {
         assert_eq!(f.log.borrow().len(), 1);
         assert_eq!(f.log.borrow()[0][1], f.holder);
         assert_eq!(f.log.borrow()[0][5], object - 16);
+    }
+
+    /// The body at `00df71d0` is an entry of its own (`this` as given, not moved back), and the
+    /// unit's two older thunks reach it through the engine.
+    #[test]
+    fn deleting_destructor_00df71d0_is_an_entry_of_its_own() {
+        let mut e = Engine::new();
+        let log: Log = Rc::new(RefCell::new(Vec::new()));
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 8, FREE_SLOT_DOUBLE);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(ROUTER, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let free_log = Rc::clone(&log);
+        e.register_double(FREE_SLOT_DOUBLE, move |_, a| {
+            free_log.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        let block = e.mem.alloc(0x90);
+        let got = e.call(0x00df_71d0, &args![block, 0u32]).u32();
+        assert_eq!(got, block);
+        assert!(log.borrow().is_empty());
+        assert_eq!(e.mem.u32(block), 0x010c_3bb8);
+        assert_eq!(e.mem.u32(block + 0xc), 0x010c_cfac);
+        let got = e.call(0x00df_71d0, &args![block, 1u32]).u32();
+        assert_eq!(got, block);
+        assert_eq!(*log.borrow(), vec![vec![allocator, block, 0x90]]);
+        log.borrow_mut().clear();
+        // `00df7190` moves `this` back by 4 and `00df71a0` by 8, then run the same body.
+        assert_eq!(e.call(0x00df_7190, &args![block + 4, 1u32]).u32(), block);
+        assert_eq!(e.call(0x00df_71a0, &args![block + 8, 1u32]).u32(), block);
+        assert_eq!(
+            *log.borrow(),
+            vec![vec![allocator, block, 0x90], vec![allocator, block, 0x90]]
+        );
     }
 }
