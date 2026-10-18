@@ -11,7 +11,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// `double` `0.20..` (`010cd5a8`) and `double` `3.14159..` (`0101ff40`): the quantizer maps
 /// an angle to the first index `i` with `i * ANGLE_STEP - ANGLE_BASE >= angle`.

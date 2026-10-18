@@ -3,7 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 use std::cmp::Ordering;
 
 /// A four-lane single-precision vector (one SSE register).

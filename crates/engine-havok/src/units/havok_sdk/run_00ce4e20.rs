@@ -6,9 +6,9 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
 use crate::units::havok_sdk::hkpconvexradiusbuilder::{addps, mulps, shufps, splat, subps};
 use crate::units::havok_sdk::hkpsphereshape::{load_vec, store_vec, Vec4};
+use crate::x87::rsqrt_estimate;
 
 /// The vector constants `3.0` (`010c71c0`) and `0.5` (`010c71d0`) in all four lanes, and the
 /// scalars `1.0` (`01012068`), `0.0` (`01011d78`), `3.0` (`01017718`) and `0.5` (`01016248`).

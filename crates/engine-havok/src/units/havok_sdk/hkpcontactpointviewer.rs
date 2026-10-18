@@ -5,7 +5,7 @@
 //! (`TlsGetValue` of the index at `0126835c`); the `RDTSC` time stamp comes from the host clock.
 
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 type Lanes = [u32; 4];
 

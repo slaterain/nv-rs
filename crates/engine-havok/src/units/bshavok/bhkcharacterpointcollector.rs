@@ -32,7 +32,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 layout! {
     /// `bhkCharacterPointCollector` (Xbox PDB), 0x3C8 bytes.

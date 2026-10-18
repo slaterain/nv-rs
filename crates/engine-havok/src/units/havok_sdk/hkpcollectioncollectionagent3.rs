@@ -12,13 +12,13 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::bsmenu::font::fistp;
 use crate::units::havok_sdk::hkpbvagent::{profile_start_record, LABEL_END};
 use crate::units::havok_sdk::hkpcapsulecapsuleagent::{load_matrix, transform_point};
 use crate::units::havok_sdk::hkpsphereshape::{
     load_bits, load_vec, maxps, minps, profile_record, store_bits, store_vec, zip_with, Vec4,
     PROFILE_SLOT, TLS_GET_VALUE,
 };
+use crate::x87::fistp;
 
 /// `hkpCollisionDispatcher` agent3 registration (`00cfbd60`: `this` = the dispatcher, `RET 0xC`;
 /// the entry, type a, type b).

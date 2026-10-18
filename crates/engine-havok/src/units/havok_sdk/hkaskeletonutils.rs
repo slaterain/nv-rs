@@ -21,7 +21,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
 use crate::units::havok_sdk::hkaskeletonmapperutils::{
     inverse_compose, rotate_twice, IDENTITY_QUATERNION, QUATERNION_SET_MUL, ROTATION_BIAS,
 };
@@ -31,6 +30,7 @@ use crate::units::havok_sdk::hkpconvexradiusbuilder::normalising_scale;
 use crate::units::havok_sdk::hkpsphereshape::{
     load_bits, load_vec, store_bits, store_vec, Vec4, HALF_F32, ONES, THREE_F32, ZERO_F32,
 };
+use crate::x87::rsqrt_estimate;
 
 /// The skeleton: parent indices (`i16` array pointer), bones (pointer), bone count, reference
 /// pose (pointer).

@@ -5,7 +5,9 @@
 //! value type. A [`Ptr<T>`] is the game's 32-bit address of a `T`.
 //!
 //! ```
-//! use engine::{layout, Engine, Ptr};
+//! use engine_core::{layout, Engine, Ptr};
+//! # // A program linking the core alone assembles no part crates.
+//! # engine_core::assemble!();
 //! layout! {
 //!     /// TESForm (Xbox PDB), 0x18 bytes on PC.
 //!     pub struct TESForm: 0x18 {

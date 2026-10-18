@@ -29,7 +29,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// `hkMemoryRouter` lookup (`00c85750`, no arguments).
 const MEMORY_ROUTER: u32 = 0x00c8_5750;

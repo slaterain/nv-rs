@@ -762,7 +762,7 @@ mod tests {
         assert_eq!(lines[3].2[1], axpy(3.0, third, point));
         // the line from Q along 4.5 of the unit vector of (0, 3, 4)
         let squared = 25.0f32;
-        let estimate = crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate(squared);
+        let estimate = crate::x87::rsqrt_estimate(squared);
         let scale = (0.5 * estimate) * (3.0 - (squared * estimate) * estimate);
         let unit = [0.0, 3.0 * scale, 4.0 * scale, 0.0];
         assert_eq!(

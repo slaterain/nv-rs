@@ -21,7 +21,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// `hkpPrimitiveDrawer::setDisplayHandler` (`00e10a10`, `this` = the primitive drawer at
 /// `drawer + 0xc0`, one word).

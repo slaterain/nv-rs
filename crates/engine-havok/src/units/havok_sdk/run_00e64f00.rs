@@ -4,7 +4,7 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
-use crate::units::bsmenu::font::fistp;
+use crate::x87::fistp;
 
 /// `hkpMoppSphereVirtualMachine::querySphereOnTree` (Xbox PDB name, `00e64870`): thiscall on the
 /// query object, `(query block, code)`, `RET 8`.

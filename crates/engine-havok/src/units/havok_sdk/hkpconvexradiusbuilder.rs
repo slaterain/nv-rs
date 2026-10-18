@@ -20,8 +20,8 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
 use crate::units::havok_sdk::hkpsphereshape::{load_vec, store_vec, Vec4};
+use crate::x87::rsqrt_estimate;
 
 /// The memory router (`00c85750`, no arguments): its field `+0x10` is the allocator.
 const MEMORY_ROUTER: u32 = 0x00c8_5750;

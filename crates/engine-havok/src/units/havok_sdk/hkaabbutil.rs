@@ -4,7 +4,7 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// The four-lane `1.0` vector (`010ec7f0`).
 const ONES: u32 = 0x010e_c7f0;

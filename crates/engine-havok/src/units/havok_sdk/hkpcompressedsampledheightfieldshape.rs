@@ -3,8 +3,8 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
 use crate::units::havok_sdk::hkpsphereshape::{load_vec, store_vec, sum3, zip_with, Vec4};
+use crate::x87::rsqrt_estimate;
 
 // Translated from 00e49510 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpCompressedSampledHeightFieldShape::calcSizeForSpu` (Xbox PDB): a virtual method

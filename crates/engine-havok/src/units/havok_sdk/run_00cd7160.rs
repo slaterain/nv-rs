@@ -7,8 +7,8 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
 use crate::units::havok_sdk::hkpconvexradiusbuilder::{mulps, shufps, splat, subps, sum_of_three};
+use crate::x87::rsqrt_estimate;
 
 type Vec4 = [f32; 4];
 

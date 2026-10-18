@@ -707,7 +707,7 @@ pub fn fn_00e61d30(e: &mut Engine, triangle: Ptr, out: Ptr) {
     debug_assert!(x.is_empty());
 }
 
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// The four-lane sign mask `0x80000000` (`010c44d0`) that `XORPS` negates with.
 const SIGN_MASK: u32 = 0x010c_44d0;

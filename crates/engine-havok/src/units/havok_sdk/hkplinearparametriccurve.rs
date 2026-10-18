@@ -15,8 +15,8 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
 use crate::units::havok_sdk::hkarrayutil::HkArrayBase;
+use crate::x87::rsqrt_estimate;
 
 /// `hkMath::hkFloatToInt` (`00cbfef0`, cdecl, one `float` word): the integer part, in EAX.
 const FLOAT_TO_INT: u32 = 0x00cb_fef0;

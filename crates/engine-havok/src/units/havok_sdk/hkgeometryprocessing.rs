@@ -6,7 +6,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// Four `float` lanes of an `xmm` register.
 pub(crate) type Vec4 = [f32; 4];

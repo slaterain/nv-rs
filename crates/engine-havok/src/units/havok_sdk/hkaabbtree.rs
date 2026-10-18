@@ -1146,7 +1146,7 @@ pub fn fn_00d9c7d0(e: &mut Engine, this: Ptr, index: u32) {
 /// One lane of the quantisation `00d9c610` and `00d9ce50` apply to bounds: the clamped scaled
 /// value rounded with `FISTP` (nearest, ties to even) and shifted right by 15.
 fn quantise(lane: f32) -> u16 {
-    (crate::units::bsmenu::font::fistp(f64::from(lane)) as u32 >> 15) as u16
+    (crate::x87::fistp(f64::from(lane)) as u32 >> 15) as u16
 }
 
 /// The six bounds words of a bounds pair (min at `min`, max at `max`) in the tree's grid:

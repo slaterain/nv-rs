@@ -110,6 +110,41 @@ pub fn x87_store32(value: f64) -> u32 {
     (value as f32).to_bits()
 }
 
+// Helpers of several engine crates, kept here so each reaches them: `fistp`
+// (from `units/bsmenu/font.rs`) and `rsqrt_estimate` (from
+// `units/fallout_shared/tesobjectrefr.rs`, which the Havok units call too).
+
+/// `FISTP` with the default rounding mode: nearest, ties to even; the
+/// integer indefinite 0x80000000 for NaN and values out of range.
+pub fn fistp(value: f64) -> i32 {
+    // Round half to even (the FPU's default mode) without `round_ties_even`,
+    // which is newer than the crate's MSRV: `round` goes half away from zero,
+    // so an odd result of a tie steps back toward zero.
+    let mut r = value.round();
+    if (value - value.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
+        r -= value.signum();
+    }
+    if r.is_nan() || r < i32::MIN as f64 || r > i32::MAX as f64 {
+        i32::MIN
+    } else {
+        r as i32
+    }
+}
+
+/// The `CMPEQSS`/`RSQRTSS` pair of the Havok normalizer: the hardware
+/// estimate of `1 / sqrt(x)` on x86, exact elsewhere.
+#[cfg(target_arch = "x86_64")]
+pub fn rsqrt_estimate(x: f32) -> f32 {
+    use std::arch::x86_64::{_mm_cvtss_f32, _mm_rsqrt_ss, _mm_set_ss};
+    // SAFETY: SSE is part of the x86_64 baseline.
+    unsafe { _mm_cvtss_f32(_mm_rsqrt_ss(_mm_set_ss(x))) }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+pub fn rsqrt_estimate(x: f32) -> f32 {
+    1.0 / x.sqrt()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

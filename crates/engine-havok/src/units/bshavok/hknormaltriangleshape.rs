@@ -3,7 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// `0.0f`, `3.0f` and `0.5f` in `.rdata`: the constants the code loads.
 const ZERO_01011D78: u32 = 0x0101_1d78;

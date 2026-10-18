@@ -290,22 +290,8 @@ pub(crate) const PERCENT_S: u32 = 0x0101_9f08;
 /// `"glow_%s"` (`010950a8`).
 pub(crate) const GLOW_FORMAT: u32 = 0x0109_50a8;
 
-/// `FISTP` with the default rounding mode: nearest, ties to even; the
-/// integer indefinite 0x80000000 for NaN and values out of range.
-pub(crate) fn fistp(value: f64) -> i32 {
-    // Round half to even (the FPU's default mode) without `round_ties_even`,
-    // which is newer than the crate's MSRV: `round` goes half away from zero,
-    // so an odd result of a tie steps back toward zero.
-    let mut r = value.round();
-    if (value - value.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
-        r -= value.signum();
-    }
-    if r.is_nan() || r < i32::MIN as f64 || r > i32::MAX as f64 {
-        i32::MIN
-    } else {
-        r as i32
-    }
-}
+/// Moved to the core (the Havok crate calls it too); here under its old path.
+pub(crate) use engine_core::x87::fistp;
 
 /// `_ftol2` of a letter's `fWidth + fSpacing`.
 fn letter_advance(e: &mut Engine, letter: u32) -> i32 {

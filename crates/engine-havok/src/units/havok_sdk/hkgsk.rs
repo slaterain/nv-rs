@@ -3,11 +3,11 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
 use crate::units::havok_sdk::hkgeometryprocessing::{
     add4, compare_flags, float_to_x87, load_bits, load_vec4, movhlps, movlhps, mul4, rotate_c9,
     rotate_d2, shufps, store_vec4, sub4, sum3, test_parity_even, unpckhps, unpcklps, Vec4, X87,
 };
+use crate::x87::rsqrt_estimate;
 
 /// The `float` `1e-4` (`010141cc`) and the `float` at `010dbb58` that `handlePenetration` puts
 /// into the block it hands on, and the routines it calls: the object routine at `00e63770`

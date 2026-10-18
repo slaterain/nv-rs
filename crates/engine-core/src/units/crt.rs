@@ -2316,9 +2316,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 /// the object, doubles every callee, runs the constructor by its address
 /// and compares the calls (with the object's address substituted for
 /// [`A::T`]) and the stores; every other byte of the object must be left
-/// as it was.
-#[cfg(test)]
-pub(crate) mod ctor_test {
+/// as it was. Other engine crates' tests reach it through the core's
+/// `test-support` feature.
+#[cfg(any(test, feature = "test-support"))]
+pub mod ctor_test {
     use crate::prelude::*;
 
     /// An expected argument word: the object's address plus an offset, or

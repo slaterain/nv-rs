@@ -6,7 +6,7 @@
 //! (a byte) at +0x38. The entity it acts on is the word at +0x18, the user data at +0x10.
 
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// The vtable of `hkpMotorAction`.
 const MOTOR_ACTION_VTABLE: u32 = 0x010d_0944;

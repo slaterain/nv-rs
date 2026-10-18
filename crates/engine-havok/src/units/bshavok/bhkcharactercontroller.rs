@@ -18,7 +18,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// Offset of the `bhkCharacterListener` base in the controller: the listener callbacks
 /// get `controller + 0x410` as `this`.

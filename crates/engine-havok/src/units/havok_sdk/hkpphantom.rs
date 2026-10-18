@@ -71,7 +71,7 @@ fn maxps(dst: f32, src: f32) -> f32 {
 /// `FISTP dword` of a `float` already on the x87 stack: nearest (even), `0x80000000` for a NaN
 /// or a value outside the `int` range.
 fn fistp(value: f32) -> i32 {
-    crate::units::bsmenu::font::fistp(f64::from(value))
+    crate::x87::fistp(f64::from(value))
 }
 
 /// The memory router's allocator (`router + 0x10`).

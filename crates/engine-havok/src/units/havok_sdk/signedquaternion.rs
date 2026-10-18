@@ -15,7 +15,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// `_ftol2_sse` (`00ec62c0`): truncates the float in ST0 to an integer in EAX.
 const FTOL: u32 = 0x00ec_62c0;

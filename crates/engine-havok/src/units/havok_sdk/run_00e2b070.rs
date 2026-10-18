@@ -21,7 +21,7 @@
 //! the caller pops them); here those registers are the first three
 //! arguments, in that order.
 
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 #[allow(unused_imports)]
 use crate::prelude::*;

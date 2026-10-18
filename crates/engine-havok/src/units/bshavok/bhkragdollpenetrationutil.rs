@@ -21,7 +21,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// The game heap singleton and its `Deallocate` (`00aa4060`, thiscall `(block)`).
 const HEAP_SINGLETON: u32 = 0x011f_6238;

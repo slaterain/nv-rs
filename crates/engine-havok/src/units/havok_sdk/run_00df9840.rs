@@ -14,7 +14,7 @@
 //! points (the point of the first shape, of the second, and their difference)
 //! and +0x6c the number of points of the simplex.
 
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 #[allow(unused_imports)]
 use crate::prelude::*;

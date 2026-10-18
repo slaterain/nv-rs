@@ -4,7 +4,7 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// `0.0`, `3.0` and `0.5` (`float`) in the exe image: the `RSQRTSS` refinement constants.
 const ZERO: u32 = 0x0101_1d78;

@@ -9,8 +9,8 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
 use crate::units::havok_sdk::hkpsphereshape::{load_vec, store_vec, zip_with, Vec4};
+use crate::x87::rsqrt_estimate;
 
 /// The CRT square root (`00ec6040`, argument in ST0).
 const X87_SQRT: u32 = 0x00ec_6040;

@@ -5,7 +5,6 @@
 //! is stored. `RSQRTSS` and `RCPPS` are the host CPU's estimates.
 
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
 use crate::units::havok_sdk::hkakeyframehierarchyutility::{
     add4, mul4, rotate_and_move, rotate_half, sub4,
 };
@@ -16,6 +15,7 @@ use crate::units::havok_sdk::hkpsphereshape::{
     copy_vec, load_bits, load_vec, profile_record, refined_reciprocal, shufps, store_bits,
     store_vec, sum3, unpckhps, Vec4, HALF_F32, PROFILE_SLOT, THREE_F32, TLS_GET_VALUE, ZERO_F32,
 };
+use crate::x87::rsqrt_estimate;
 
 /// The CRT square root (`00ec6040`, argument in ST0, answers in ST0).
 const X87_SQRT: u32 = 0x00ec_6040;

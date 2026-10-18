@@ -18,7 +18,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// The memory router (`00c85750`): its `+0x10` is the allocator whose slot `+4` allocates `(bytes)`.
 const MEMORY_ROUTER: u32 = 0x00c8_5750;

@@ -2083,7 +2083,7 @@ fn refined_normal(e: &Engine, vector: Lanes) -> Lanes {
     let fill = e.mem.f32(VECTOR_FILL);
     let three = e.mem.f32(ROOT_THREE);
     let half = e.mem.f32(ROOT_HALF);
-    let estimate = crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate(sum);
+    let estimate = crate::x87::rsqrt_estimate(sum);
     let refined = (half * estimate) * (three - (sum * estimate) * estimate);
     let scale = if sum == fill { 0.0 } else { refined };
     mulps([scale; 4], vector)

@@ -701,7 +701,7 @@ pub(crate) mod tests {
         // the normals: x cross y is z, x cross z is -y (the rotation double copies them on)
         let unit = {
             let squared = 1.0f32;
-            let r = crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate(squared);
+            let r = crate::x87::rsqrt_estimate(squared);
             (0.5 * r) * (3.0 - (squared * r) * r)
         };
         let seen = calls(&r, SET_ROTATED_DIR);

@@ -9,7 +9,7 @@ use super::hkpsphereshape::{
     copy_vec, inverse_length, load_bits, load_vec, maxps, minps, shufps, store_bits, store_vec,
     sum3, zip_with, Vec4, HALF_F32, ZERO_F32,
 };
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// The memory router (`0x00c8_5750`): its field `+0x10` is the allocator the block is freed through.
 const MEMORY_ROUTER: u32 = 0x00c8_5750;

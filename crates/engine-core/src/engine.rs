@@ -6,6 +6,32 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
+extern "Rust" {
+    /// The registrations of the engine crates above this one, defined once
+    /// per program by [`crate::assemble!`] (docs/ENGINE_CRATE.md, "The engine
+    /// crates"). A program that links this crate without it does not link.
+    fn nv_engine_assembled_funcs(out: &mut Vec<(u32, AbiFn)>);
+}
+
+/// Defines which part crates' functions [`Engine::new`] registers besides
+/// this crate's own, as a list of `funcs(out)` functions (each part crate's
+/// `units::funcs`). Exactly one crate of a program invokes it: the `engine`
+/// crate, with every part crate (so the full engine has every translated
+/// function), or a part crate under `cfg(test)` for its own unit tests, with
+/// itself and the crates below it (generated into its `units/mod.rs` by
+/// `ledger units`).
+#[macro_export]
+macro_rules! assemble {
+    ($($funcs:path),* $(,)?) => {
+        #[doc(hidden)]
+        #[no_mangle]
+        pub fn nv_engine_assembled_funcs(out: &mut Vec<(u32, $crate::AbiFn)>) {
+            let _ = &out;
+            $( $funcs(out); )*
+        }
+    };
+}
+
 /// A test double that may keep state (see [`Engine::register_double`]).
 pub type Double = Rc<RefCell<dyn FnMut(&mut Engine, &[u32]) -> Ret>>;
 
@@ -39,10 +65,18 @@ impl Default for Engine {
 }
 
 impl Engine {
-    /// Empty memory, every translated unit registered.
+    /// Empty memory, every translated unit registered: this crate's
+    /// (`units::crt`, `units::platform`) and those of the engine crates the
+    /// program assembles ([`crate::assemble!`]): in the `engine` crate every
+    /// part crate's, so every translated function; in a part crate's own
+    /// unit tests that crate's and those of the crates below it.
     pub fn new() -> Self {
         let mut list = Vec::new();
         crate::units::funcs(&mut list);
+        // SAFETY: `nv_engine_assembled_funcs` is the plain Rust function that
+        // `assemble!` defines in the crate assembling the engine; it only
+        // appends to `list`.
+        unsafe { nv_engine_assembled_funcs(&mut list) };
         let mut funcs = HashMap::with_capacity(list.len());
         for (addr, f) in list {
             if funcs.insert(addr, Callable::Abi(f)).is_some() {

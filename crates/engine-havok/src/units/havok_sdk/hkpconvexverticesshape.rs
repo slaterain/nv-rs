@@ -14,7 +14,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// `m_radius` (+0x10, Xbox PDB), `m_aabbCenter` (+0x30), `m_rotatedVertices` (+0x40: data +0x40,
 /// size +0x44), `m_numVertices` (+0x4c), `m_convexPiece` (+0x50) and `m_planeEquations` (+0x54:

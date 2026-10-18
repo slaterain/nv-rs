@@ -21,7 +21,7 @@ use crate::units::bshavok::bhkconstraint::{
     add_viewer_string, allocate_havok, enter_scope, leave_scope,
 };
 use crate::units::bshavok::bhklimitedhingeconstraint::allocator;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// `operator new` (`00aa13e0`, cdecl, size).
 const OPERATOR_NEW: u32 = 0x00aa_13e0;

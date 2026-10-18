@@ -8,7 +8,7 @@ use super::run_00df06a0::{
     addps, addss, maxps, movaps, movss_bits, movss_mem, mulps, parity_even, rcpps, shufps, splat0,
     store_xmm, subps, sum3, unpckhps, Xmm, X87,
 };
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// Unnamed (cdecl, `(a, b)`): called first by `00df25d0`.
 const PREPARE_BODY: u32 = 0x00cb_3c80;

@@ -3468,7 +3468,7 @@ pub fn fn_00e25fb0(e: &mut Engine, this: Ptr, triangle: u32, index: u32, records
 // The rest of the unit (the larger functions and the triangulator's internals).
 // ---------------------------------------------------------------------------------------------
 
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// `hkVector4::isNormalized3` (`00c7f520`, thiscall on the vector, stack: a pointer to the result
 /// byte and the tolerance `float`; returns the pointer).

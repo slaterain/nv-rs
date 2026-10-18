@@ -14,7 +14,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// `bhkSerializable::Kill` (engine map name, `00c876a0`) and the base constructor of the
 /// 0x10-byte serializable part (`00c87c30`).

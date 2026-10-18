@@ -3023,19 +3023,8 @@ pub(crate) fn set_velocity_record(e: &mut Engine, obj3d: u32, value: f32, a: u32
     });
 }
 
-/// The `CMPEQSS`/`RSQRTSS` pair of the Havok normalizer: the hardware
-/// estimate of `1 / sqrt(x)` on x86, exact elsewhere.
-#[cfg(target_arch = "x86_64")]
-pub(crate) fn rsqrt_estimate(x: f32) -> f32 {
-    use std::arch::x86_64::{_mm_cvtss_f32, _mm_rsqrt_ss, _mm_set_ss};
-    // SAFETY: SSE is part of the x86_64 baseline.
-    unsafe { _mm_cvtss_f32(_mm_rsqrt_ss(_mm_set_ss(x))) }
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-pub(crate) fn rsqrt_estimate(x: f32) -> f32 {
-    1.0 / x.sqrt()
-}
+/// Moved to the core (the Havok crate calls it too); here under its old path.
+pub(crate) use engine_core::x87::rsqrt_estimate;
 
 /// Drops the weapon of an actor that has one drawn: the sequence both
 /// `LoadGame` and `fn_0055f240` run when the container changed.

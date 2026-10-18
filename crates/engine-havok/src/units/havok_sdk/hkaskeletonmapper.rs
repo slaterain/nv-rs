@@ -22,7 +22,6 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
 use crate::units::havok_sdk::hkakeyframehierarchyutility::{
     add4, mul4, rotate_and_move, rotate_half, splat, sub4,
 };
@@ -31,6 +30,7 @@ use crate::units::havok_sdk::hkpsphereshape::{
     copy_vec, dot3, load_vec, profile_record, store_vec, Vec4, PROFILE_SLOT, TLS_GET_VALUE,
     ZERO_F32,
 };
+use crate::x87::rsqrt_estimate;
 
 /// The memory router (`0x00c8_5750`): its field `+0` is the bump cursor of the stack-like arena
 /// and its field `+0x10` the allocator, whose virtual functions at `+0xc` (allocate through a size

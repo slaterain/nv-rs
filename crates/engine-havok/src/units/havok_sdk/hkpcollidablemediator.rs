@@ -95,7 +95,7 @@ pub fn hkp_collidable_mediator_get_primitive_id(e: &mut Engine, this: Ptr, index
 /// The x87 `FISTP` of a value already clamped into `0..=2147352576` to a 32-bit word, with
 /// the default round-to-nearest-even control word.
 fn float_to_word(value: f32) -> u32 {
-    crate::units::bsmenu::font::fistp(f64::from(value)) as u32
+    crate::x87::fistp(f64::from(value)) as u32
 }
 
 /// One bounding volume corner: `(offset + corner) * scale` per lane, clamped with `MINPS`

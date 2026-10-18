@@ -16,12 +16,12 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
 use crate::units::havok_sdk::hkaabbtree::rcp_estimate;
 use crate::units::havok_sdk::hkpconvexradiusbuilder::{
     addps, mulps, shufps, splat, subps, sum_of_three,
 };
 use crate::units::havok_sdk::hkpsphereshape::{load_vec, store_vec, Vec4};
+use crate::x87::rsqrt_estimate;
 
 type V = Vec4;
 

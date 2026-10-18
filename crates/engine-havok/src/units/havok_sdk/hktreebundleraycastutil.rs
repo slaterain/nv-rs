@@ -4,7 +4,7 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
-use crate::units::fallout_shared::tesobjectrefr::rsqrt_estimate;
+use crate::x87::rsqrt_estimate;
 
 /// The memory router (`00c85750`): `+0` is the address the temporary stack allocator hands out
 /// next, `+0x10` the allocator whose slot `+0xc` is `bufAlloc(size in and out)` and slot `+0x10`
