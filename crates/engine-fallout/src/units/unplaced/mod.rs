@@ -463,7 +463,6 @@ pub mod static_init_irregular_b;
 
 pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(atexit_irregular::funcs());
-    out.extend(static_init_irregular::funcs());
     out.extend(run_00401000::funcs());
     out.extend(run_004012a0::funcs());
     out.extend(run_004019b0::funcs());
@@ -920,5 +919,6 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(run_00eea550::funcs());
     out.extend(run_00eea650::funcs());
     out.extend(run_00fd9bf0::funcs());
+    out.extend(static_init_irregular::funcs());
     out.extend(static_init_irregular_b::funcs());
 }
