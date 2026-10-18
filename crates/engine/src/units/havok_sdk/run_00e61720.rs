@@ -2480,6 +2480,8 @@ pub fn fn_00e63770(e: &mut Engine, this: Ptr, output: Ptr) -> u32 {
                     let mut x = X87::new();
                     x.fldz();
                     let negative_a = x.fcom_m(x87_m32(e.mem.u32(f + 0x20))) & 0x41 == 0;
+                    // The exe tests each coordinate in turn and stops at the first that passes (no further FCOM).
+                    #[allow(clippy::if_same_then_else)]
                     let advance = if negative_a {
                         true
                     } else if x.fcom_m(x87_m32(e.mem.u32(f + 0x24))) & 0x41 == 0 {
@@ -3139,7 +3141,8 @@ mod tests {
             let origin = put_vec4(&mut e, [origin_x, 0.0, 0.0, 0.0]);
             let best = alloc_ptr(&mut e, 16);
             let vertex = alloc_ptr(&mut e, 0x40);
-            for offset in [0x30u32] {
+            {
+                let offset = 0x30u32;
                 e.mem.set_u32(vertex.addr() + offset, 0x7777);
             }
             // What the two calls make, by calling the first function directly.

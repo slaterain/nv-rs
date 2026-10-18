@@ -175,7 +175,7 @@ fn quantize_remaining(e: &mut Engine, bits: [u32; 4], largest: usize, scale: u32
 pub fn fn_00e52320(e: &mut Engine, quat: Ptr, out: Ptr) {
     let bits = read_quaternion(e, quat);
     let sign = |lane: usize| u32::from(is_negative(bits[lane]));
-    let sign_bits = ((((sign(3) * 2 | sign(2)) * 2) | sign(1)) * 2 | sign(0)) << 0x1c;
+    let sign_bits = ((((((sign(3) * 2) | sign(2)) * 2) | sign(1)) * 2) | sign(0)) << 0x1c;
     e.mem.set_u32(out.addr(), 0);
     e.mem.set_u32(out.addr(), sign_bits);
     let abs_bits = absolute_values(e, bits);

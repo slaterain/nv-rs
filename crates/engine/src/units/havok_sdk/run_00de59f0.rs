@@ -1152,7 +1152,8 @@ mod tests {
     fn the_fan_drawer_scales_the_rotated_directions() {
         let mut r = rig();
         // the rotation doubles write the direction they were given into their result
-        for address in [SET_ROTATED_DIR] {
+        {
+            let address = SET_ROTATED_DIR;
             r.e.register(address, |e, words| {
                 for lane in 0..4 {
                     let v = e.mem.u32(words[2] + 4 * lane);
