@@ -289,9 +289,9 @@ fn thiscall(e: &mut Engine, address: u32, this: u32, pushed: &mut Vec<u32>) -> R
     e.call(address, &words)
 }
 
-/// `Translated from 00cd9d10`'s sibling helper: the dot-and-cross rotation of a vector `v` by
-/// the quaternion `q` the exe expands inline many times is not shared here: `00cd8d90` keeps
-/// each expansion instruction by instruction.
+// `Translated from 00cd9d10`'s sibling helper: the dot-and-cross rotation of a vector `v` by
+// the quaternion `q` the exe expands inline many times is not shared here: `00cd8d90` keeps
+// each expansion instruction by instruction.
 
 // Translated from 00cd8a50 (decompiled, FalloutNV.exe 1.4.0.525)
 /// A two-cast probe along a segment (the classes are unconfirmed). `this` holds the segment's
@@ -777,15 +777,13 @@ pub fn fn_00cd8d90(e: &mut Engine, this: Ptr, input: Ptr, out: Ptr, pose: Ptr) {
                     x4 = addps(x4, x3); // 00cd9057
                     st(e, sp.wrapping_add(0xf0), x1); // 00cd905a
                     st(e, sp.wrapping_add(0x30), x4); // 00cd9062
-                    e.mem
-                        .set_u8(sp.wrapping_add(0x1a), ((eax & 0xff) as u32) as u8); // 00cd9067
-                    test = ((eax & 0xff) as u32) & ((eax & 0xff) as u32); // 00cd906b
+                    e.mem.set_u8(sp.wrapping_add(0x1a), (eax & 0xff) as u8); // 00cd9067
+                    test = (eax & 0xff) & (eax & 0xff); // 00cd906b
                     if test != 0 {
                         block = 0x00cd90d1;
                         continue;
                     } // 00cd906d
-                    e.mem
-                        .set_u8(ebx.wrapping_add(0x4), ((eax & 0xff) as u32) as u8); // 00cd906f
+                    e.mem.set_u8(ebx.wrapping_add(0x4), (eax & 0xff) as u8); // 00cd906f
                     x0 = ld(e, esi.wrapping_add(0xa0)); // 00cd9072
                     st(e, sp.wrapping_add(0x60), x0); // 00cd9079
                     x0 = movss_load(e.mem.u32(esi.wrapping_add(0xb0))); // 00cd907e
@@ -811,8 +809,7 @@ pub fn fn_00cd8d90(e: &mut Engine, this: Ptr, input: Ptr, out: Ptr, pose: Ptr) {
                     cmp = ((e.mem.u8(esi.wrapping_add(0xb4)) as u32), 0x0u32); // 00cd90d1
                     ecx = (ecx & !0xffu32) | u32::from(cmp.0 != cmp.1); // 00cd90d8
                     cmp = ((e.mem.u8(esi.wrapping_add(0x84)) as u32), 0x0u32); // 00cd90db
-                    e.mem
-                        .set_u8(sp.wrapping_add(0x1b), ((ecx & 0xff) as u32) as u8); // 00cd90e2
+                    e.mem.set_u8(sp.wrapping_add(0x1b), (ecx & 0xff) as u8); // 00cd90e2
                     if cmp.0 == cmp.1 {
                         block = 0x00cd92eb;
                         continue;
@@ -827,7 +824,7 @@ pub fn fn_00cd8d90(e: &mut Engine, this: Ptr, input: Ptr, out: Ptr, pose: Ptr) {
                         block = 0x00cd92eb;
                         continue;
                     } // 00cd9101
-                    test = ((ecx & 0xff) as u32) & ((ecx & 0xff) as u32); // 00cd9107
+                    test = (ecx & 0xff) & (ecx & 0xff); // 00cd9107
                     if test == 0 {
                         block = 0x00cd91a3;
                         continue;
@@ -1097,13 +1094,12 @@ pub fn fn_00cd8d90(e: &mut Engine, this: Ptr, input: Ptr, out: Ptr, pose: Ptr) {
                         eax = (eax & !0xffu32) | u32::from(hit);
                         sp = sp.wrapping_add(0x14);
                     } // 00cd945e
-                    test = ((eax & 0xff) as u32) & ((eax & 0xff) as u32); // 00cd9463
+                    test = (eax & 0xff) & (eax & 0xff); // 00cd9463
                     if test != 0 {
                         block = 0x00cd94de;
                         continue;
                     } // 00cd9465
-                    e.mem
-                        .set_u8(ebx.wrapping_add(0x4), ((eax & 0xff) as u32) as u8); // 00cd9467
+                    e.mem.set_u8(ebx.wrapping_add(0x4), (eax & 0xff) as u8); // 00cd9467
                     fpu.fld32(e.mem.u32(esi.wrapping_add(0xb0))); // 00cd946a
                     x0 = ld(e, esi.wrapping_add(0xa0)); // 00cd9470
                     st(e, sp.wrapping_add(0x60), x0); // 00cd9477
@@ -1590,7 +1586,7 @@ pub fn fn_00cd8d90(e: &mut Engine, this: Ptr, input: Ptr, out: Ptr, pose: Ptr) {
                     e.mem.set_u32(sp.wrapping_add(0x1c), x2[0].to_bits()); // 00cd9a71
                     fpu.fld32(e.mem.u32(sp.wrapping_add(0x1c))); // 00cd9a77
                     e.mem.set_u32(esi.wrapping_add(0xb0), fpu.fstp32()); // 00cd9a7b
-                    test = ((eax & 0xff) as u32) & ((eax & 0xff) as u32); // 00cd9a81
+                    test = (eax & 0xff) & (eax & 0xff); // 00cd9a81
                     if test == 0 {
                         block = 0x00cd9a8d;
                         continue;
@@ -1652,15 +1648,13 @@ pub fn fn_00cd8d90(e: &mut Engine, this: Ptr, input: Ptr, out: Ptr, pose: Ptr) {
                         (eax & !0xffffu32) | ((e.mem.u16(esi.wrapping_add(0x18)) as u32) & 0xffff); // 00cd9b0f
                     e.mem.set_u32(sp.wrapping_add(0x168), fpu.fstp32()); // 00cd9b13
                     fpu.fld32(e.mem.u32(esi.wrapping_add(0x90))); // 00cd9b1a
-                    e.mem
-                        .set_u16(sp.wrapping_add(0x140), ((ecx & 0xffff) as u32) as u16); // 00cd9b20
+                    e.mem.set_u16(sp.wrapping_add(0x140), (ecx & 0xffff) as u16); // 00cd9b20
                     pushed.push(ebx);
                     sp = sp.wrapping_sub(4); // 00cd9b28
                     e.mem.set_u32(sp.wrapping_add(0x170), fpu.fstp32()); // 00cd9b29
                     fpu.fld32(e.mem.u32(esi.wrapping_add(0x90))); // 00cd9b30
                     ecx = sp.wrapping_add(0x144); // 00cd9b36
-                    e.mem
-                        .set_u16(sp.wrapping_add(0x146), ((edx & 0xffff) as u32) as u16); // 00cd9b3d
+                    e.mem.set_u16(sp.wrapping_add(0x146), (edx & 0xffff) as u16); // 00cd9b3d
                     e.mem.set_u32(sp.wrapping_add(0x174), fpu.fstp32()); // 00cd9b45
                     pushed.push(ecx);
                     sp = sp.wrapping_sub(4); // 00cd9b4c
@@ -1669,8 +1663,7 @@ pub fn fn_00cd8d90(e: &mut Engine, this: Ptr, input: Ptr, out: Ptr, pose: Ptr) {
                     x0 = ld(e, sp.wrapping_add(0x28)); // 00cd9b59
                     pushed.push(edx);
                     sp = sp.wrapping_sub(4); // 00cd9b5e
-                    e.mem
-                        .set_u16(sp.wrapping_add(0x150), ((eax & 0xffff) as u32) as u16); // 00cd9b5f
+                    e.mem.set_u16(sp.wrapping_add(0x150), (eax & 0xffff) as u16); // 00cd9b5f
                     st(e, sp.wrapping_add(0x18c), x0); // 00cd9b67
                     {
                         let a = take_args(&mut pushed);

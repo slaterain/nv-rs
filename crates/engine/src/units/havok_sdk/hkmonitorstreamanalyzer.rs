@@ -4401,7 +4401,7 @@ mod tests {
         // each name's length + depth * width + 8
         assert_eq!(
             e.call(0x00e0_c860, &args![root, 0u32, 3u32, 0u32]).i32(),
-            (10 + 3 + 8).max(4 + 8).max(1 + 6 + 8)
+            10 + 3 + 8 // the longer of the two names (1 + 6 + 8 is shorter)
         );
         // with `only_open`, a node without bit 0 of its flags stops the search
         assert_eq!(

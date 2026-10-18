@@ -522,6 +522,7 @@ fn finish_bundles(
 /// (`place_ray`); the bundles are then written out by `00e29a10` with the five last words
 /// and the buffer is given back. The exe's store of zero to a stack slot nothing reads is
 /// left out.
+#[allow(clippy::explicit_counter_loop)] // the exe keeps the ray index in its own register beside the loop count
 pub fn fn_00e29cd0(
     e: &mut Engine,
     indices: Ptr,

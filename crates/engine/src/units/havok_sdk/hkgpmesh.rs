@@ -20929,7 +20929,7 @@ mod tests {
             (e.mem.u32(edge_vertex + 8), e.mem.u32(edge_vertex + 0xc)),
             (0x7fff, 5000)
         );
-        assert!(e.mem.u32(triangulator + 0x38) >= triangles_before + 1);
+        assert!(e.mem.u32(triangulator + 0x38) > triangles_before);
         assert_links_symmetric(&e, &triangulator_triangles(&e, triangulator));
         // Without the flip flag the result is the edge that was split.
         let (kind, _, _) = insert_grid_point(&mut e, triangulator, 0x7fff, 9000, 0, 0);
