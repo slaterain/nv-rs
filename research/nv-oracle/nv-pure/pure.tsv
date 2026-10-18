@@ -441,6 +441,7 @@ address	cc	params	ret	unit	callees	consts
 00cba1c0	cdecl		u32	crates/engine/src/units/bshavok/bhkragdolltemplate.rs		
 00cbaf80	cdecl		u32	crates/engine/src/units/bshavok/bhkragdolltemplate.rs		
 00cbb8a0	cdecl		u32	crates/engine/src/units/havok_sdk/hkpmousespringaction.rs		
+00cbbfc0	cdecl		u32	crates/engine/src/units/havok_sdk/hkmemorysystem.rs		
 00cbfd80	cdecl	f32	f32	crates/engine/src/units/havok_sdk/hkmathtypes.rs		i23,i255,i127,i31
 00cbfe20	cdecl	f32	i32	crates/engine/src/units/havok_sdk/hkmathtypes.rs		i23,i255,i127,i31
 00cbfef0	cdecl	f32	i32	crates/engine/src/units/havok_sdk/hkmathtypes.rs		i23,i255,i127,i31
@@ -484,11 +485,13 @@ address	cc	params	ret	unit	callees	consts
 00cd3c80	cdecl		u32	crates/engine/src/units/bshavok/bhkcharacterstateprojectile.rs		i6
 00cd4b50	cdecl		u32	crates/engine/src/units/havok_sdk/hkmatrix3.rs		
 00cd7f20	cdecl		u32	crates/engine/src/units/bshavok/bhkcharcontrollershape.rs		
+00ce00f0	cdecl	f32,f32	f32	crates/engine/src/units/havok_sdk/run_00ce00f0.rs	00cbff80	i1,i65,d3e80000000000000,d3fbeff0880000000,d3fb7f11c80000000,d3ff921fb60000000,d400921fb60000000
 00cf41b0	cdecl		u32	crates/engine/src/units/bshavok/bhkpositionconstraintmotor.rs		
 00cf43f0	cdecl		u32	crates/engine/src/units/bshavok/bhkvelocityconstraintmotor.rs		
 00cf4790	cdecl	u32	u32	crates/engine/src/units/bshavok/bhkconstraintmanager.rs		i13
 00cf4ef0	cdecl		u32	crates/engine/src/units/havok_sdk/hkpspringaction.rs		
 00cf69b0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00cf69b0.rs		
+00cfcb80	cdecl	u16,u16	u16	crates/engine/src/units/havok_sdk/run_00cfcb80.rs		
 00cfdad0	cdecl		u32	crates/engine/src/units/havok_sdk/hkpsimpleconstraintcontactmgr.rs		
 00d078d0	cdecl		u32	crates/engine/src/units/havok_sdk/hkpsimulationisland.rs		
 00d107a0	cdecl		u32	crates/engine/src/units/havok_sdk/hkpnullagent.rs		
@@ -504,17 +507,33 @@ address	cc	params	ret	unit	callees	consts
 00d48360	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d48360.rs		
 00d495f0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d49530.rs		
 00d496b0	stdcall	u32,u32	u32	crates/engine/src/units/havok_sdk/hkpstoragesampledheightfieldshape.rs		i128,i-129,i-128
+00d4b390	cdecl	u32,u32	u32	crates/engine/src/units/havok_sdk/run_00d4b1a0.rs		i1
 00d571d0	cdecl		f32	crates/engine/src/units/havok_sdk/hkpcylindershape.rs		i0,i65,d3f847ae140000000,f3f8ccccd
 00d60550	cdecl	u64,u64	f32	crates/engine/src/units/havok_sdk/hkstopwatch.rs		
+00d61210	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d61210.rs		
 00d62e80	cdecl		u32	crates/engine/src/units/havok_sdk/hkpweldingviewer.rs		
+00d63420	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d63420.rs		
+00d63dc0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d63dc0.rs		
+00d64970	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d64650.rs		
 00d651e0	cdecl		u32	crates/engine/src/units/havok_sdk/hkpsimulationislandviewer.rs		
+00d661d0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d661d0.rs		
+00d66b10	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d66af0.rs		
+00d66ed0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d66ed0.rs		
+00d678e0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d678e0.rs		
+00d67960	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d678e0.rs		
 00d68260	cdecl		u32	crates/engine/src/units/havok_sdk/hkptoicontactpointviewer.rs		
+00d68820	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d68820.rs		
+00d688f0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d688f0.rs		
+00d69180	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d68e60.rs		
 00d69ab0	cdecl		u32	crates/engine/src/units/havok_sdk/hkpconstraintviewer.rs		
+00d6a1a0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d6a1a0.rs		
 00d6a870	cdecl		u32	crates/engine/src/units/havok_sdk/hkpmidphaseviewer.rs		
 00d6ad60	cdecl		u32	crates/engine/src/units/havok_sdk/hkpbroadphaseviewer.rs		
 00d6ae50	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d6ae10.rs	00cb0a70	i32768
 00d868a0	cdecl	u32	u32	crates/engine/src/units/havok_sdk/hkclassmember.rs		
 00d92440	cdecl	i32	i32	crates/engine/src/units/havok_sdk/hkpconstraintatomutil.rs		i16,i32,i48,i64,i96,i128,i160,i192,i256,i320,i512,i640,i1024,i2048,i4096,i8192
+00d97440	cdecl		f32	crates/engine/src/units/havok_sdk/run_00d97440.rs		i0,i23,i6,i11,i1,f41200000,f3f800000,f41300000,d3fe0000000000000,d4026000000000000
+00d974f0	cdecl		f32	crates/engine/src/units/havok_sdk/run_00d97440.rs		i23,i0,i1,f41200000,f3f800000,f41300000,d3fe0000000000000,d4026000000000000
 00d9f6e0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d9f6e0.rs		
 00d9fc60	cdecl		u32	crates/engine/src/units/havok_sdk/hkpdefaulttoiresourcemgr.rs		
 00da0780	cdecl		u32	crates/engine/src/units/havok_sdk/run_00da0010.rs	00cb0a70	
@@ -524,17 +543,29 @@ address	cc	params	ret	unit	callees	consts
 00da0b20	cdecl		u32	crates/engine/src/units/havok_sdk/run_00da0910.rs		
 00db7790	cdecl	u32	u32	crates/engine/src/units/havok_sdk/hkcrc32streamwriter.rs		i1
 00db7c40	cdecl		u32	crates/engine/src/units/havok_sdk/run_00db7c40.rs	00cb0a70	
+00db7c70	stdcall	u32,u32	u32	crates/engine/src/units/havok_sdk/run_00db7c40.rs		
 00dba5b0	stdcall	u32,u32,u32,u32,u32	u32	crates/engine/src/units/havok_sdk/hkserializedeprecated.rs		i1
 00dba5c0	stdcall	u32	u32	crates/engine/src/units/havok_sdk/hkserializedeprecated.rs		
 00dc0eb0	cdecl		u32	crates/engine/src/units/havok_sdk/hknativepackfileutils.rs		
 00dc0fb0	cdecl		u32	crates/engine/src/units/havok_sdk/hkversionutil.rs		
 00dc9bc0	cdecl		u32	crates/engine/src/units/havok_sdk/hkdataobjectdict.rs		i8
+00dc9e60	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dc9e60.rs		i10
 00dcd4d0	cdecl	u32	u32	crates/engine/src/units/havok_sdk/hkpsavecontactpointsutil.rs		i1,i2,i3,i4,i5,i6,i7,i8,i9
+00dd13b0	cdecl	u32	u32	crates/engine/src/units/havok_sdk/run_00dd0ff0.rs		i16
+00dd13c0	cdecl	u32	u32	crates/engine/src/units/havok_sdk/run_00dd0ff0.rs		i16
+00dd13d0	cdecl	u32	u32	crates/engine/src/units/havok_sdk/run_00dd0ff0.rs		i32
+00dd13e0	cdecl	u32,u32	u32	crates/engine/src/units/havok_sdk/run_00dd0ff0.rs		i4
 00dd73d0	cdecl	u32,u32	u32	crates/engine/src/units/havok_sdk/hkfreelist.rs		i16
 00dd7e00	cdecl	u32	i32	crates/engine/src/units/havok_sdk/hklargeblockallocator.rs		i8,i65535,i31,i16,i4,i2,i15,i14,i1
 00dd7e70	cdecl	u32	u32	crates/engine/src/units/havok_sdk/hklargeblockallocator.rs		i12,i16,i5,i8,i2,i4,i1
+00ddbeb0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00ddbeb0.rs		
 00ddc820	cdecl		u32	crates/engine/src/units/havok_sdk/hkstatisticsprocess.rs		
+00ddcbe0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00ddcbe0.rs		
+00ddcdd0	cdecl	u32,u32,u32	u32	crates/engine/src/units/havok_sdk/run_00ddcd50.rs		i31
+00ddcdf0	cdecl	u32,u32	u32	crates/engine/src/units/havok_sdk/run_00ddcd50.rs		i5,i31
 00ddce10	cdecl	f32	u32	crates/engine/src/units/havok_sdk/hkpmeshweldingutility.rs		i1,i31,i5,i68,d3fcaceea00000000,d400921fb60000000
+00de1150	thiscall	u32	u32	crates/engine/src/units/havok_sdk/run_00de1150.rs		
+00de1160	thiscall	u32	u32	crates/engine/src/units/havok_sdk/run_00de1150.rs		
 00df3250	cdecl	u32	u32	crates/engine/src/units/havok_sdk/hkkdtreebuilder.rs		i256,i16,i8,i4096,i4,i16384,i2,i14,i1
 00dfb590	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfb2b0.rs		
 00dfb8d0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfb8d0.rs		
@@ -601,6 +632,7 @@ address	cc	params	ret	unit	callees	consts
 00dff610	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dff0e0.rs		
 00dff630	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dff0e0.rs		
 00dff9f0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dff990.rs	00cb0a70	
+00dffaf0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dff990.rs		
 00dffc20	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dffb60.rs	00cb0a70	
 00dffc90	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dffb60.rs		
 00dffdb0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dffdb0.rs		
@@ -666,5 +698,7 @@ address	cc	params	ret	unit	callees	consts
 00e04e50	cdecl		u32	crates/engine/src/units/havok_sdk/hkobjectresource.rs		
 00e30f20	cdecl	u32,u32,u32	u32	crates/engine/src/units/havok_sdk/hkasplinecompressedanimationctor.rs		i4
 00e30f40	cdecl	u8,u8	u32	crates/engine/src/units/havok_sdk/hkasplinecompressedanimationctor.rs		
+00e30f70	cdecl	f32,f32,f32	u8	crates/engine/src/units/havok_sdk/run_00e30f50.rs		i3072,d406fe00000000000
+00e30fb0	cdecl	f32,f32,f32	u16	crates/engine/src/units/havok_sdk/run_00e30f50.rs		i3072,d40efffe000000000
 00e3b5b0	cdecl		u32	crates/engine/src/units/havok_sdk/hkprotationalconstraintdata.rs		i16
 00e60cb0	cdecl	u32,u32	u32	crates/engine/src/units/havok_sdk/hkmeshprimitiveutil.rs		i3,i2

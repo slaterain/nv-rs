@@ -74,15 +74,16 @@ pub fn fn_00d97440(e: &mut Engine) -> f32 {
 /// No arguments, the result in `ST0`: as `00d97440` but without the `011b1bd0` addend and with an
 /// integer test: the four lanes of `(broadcast(mid) + [01267e30]) * broadcast(1.0)` are each
 /// rounded with `FISTP` (nearest, ties to even; the integer indefinite for NaN or out of range) and
-/// lane 0 is compared, unsigned, with the step count minus 12 (`0xb` down to `-0xb`): below it
+/// lane 0 is compared, unsigned, with `0xb` (the first step count minus 12, set once before the loop): below it
 /// the middle becomes the lower bound, otherwise the upper. The other three integers are only
 /// stored. The result is `((hi + lo) * 0.5) - 11.0`. The exe's name for it is unknown.
 pub fn fn_00d974f0(e: &mut Engine) -> f32 {
     let mut lo = x87_quiet_bits(e.mem.u32(LOWER_START));
     let mut hi = x87_quiet_bits(e.mem.u32(UPPER_START));
     let one = f32::from_bits(e.mem.u32(ONE));
-    for step in (1..=0x17u32).rev() {
-        let limit = step.wrapping_sub(0xc);
+    // `LEA ECX,[EAX - 0xc]` runs once, before the loop (00d9751e): the limit stays 0x17 - 0xc.
+    let limit = 0x17u32.wrapping_sub(0xc);
+    for _ in 0..0x17u32 {
         let first = load_vec(e, FIRST_ADDEND);
         let mid = middle(e, hi, lo);
         let lanes = [f32::from_bits(mid); 4];
@@ -173,10 +174,10 @@ mod a09_tests {
     fn the_second_bisection_compares_the_rounded_middle_with_the_step_limit() {
         let mut e = engine(0.0);
         let result = e.call(0x00d9_74f0, &args![]).f32();
-        // Round-to-nearest-even of the middle against `step - 12` (unsigned).
-        let want = expected(|mid, step| {
+        // Round-to-nearest-even of the middle against 0xb (unsigned), set once before the loop.
+        let want = expected(|mid, _step| {
             let rounded = fistp(f64::from(mid)) as u32;
-            rounded < step.wrapping_sub(0xc)
+            rounded < 0xb
         });
         assert_eq!(result.to_bits(), want.to_bits());
     }
@@ -188,9 +189,9 @@ mod a09_tests {
             e.set_global(FIRST_ADDEND + 4 * lane, 100.0f32);
         }
         let result = e.call(0x00d9_74f0, &args![]).f32();
-        let want = expected(|mid, step| {
+        let want = expected(|mid, _step| {
             let rounded = fistp(f64::from(mid + 100.0)) as u32;
-            rounded < step.wrapping_sub(0xc)
+            rounded < 0xb
         });
         assert_eq!(result.to_bits(), want.to_bits());
     }
