@@ -98,12 +98,86 @@ pub fn ni_node_attach_child(e: &mut Engine, this: Ptr, child: u32, first_availab
     }
 }
 
+/// `0060bef0`: the pointer array's set-capacity (`thiscall`, `RET 4`: the new
+/// capacity).
+const POINTER_ARRAY_SET_CAPACITY: u32 = 0x0060_bef0;
+/// `004b0310`: stores an element at an index (`thiscall`, `RET 8`: the index,
+/// the address of the `NiPointer` to store).
+const POINTER_ARRAY_SET_AT: u32 = 0x004b_0310;
+
+// Translated from 00a5eb20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. On an `NiTArray` of `NiPointer`s (layout
+/// [`crate::types::NiTArray`]) it adds the pointer `*element` in the first
+/// empty slot: `thiscall`, one word (`RET 4`), the address of the `NiPointer`.
+/// A null pointer answers `0xffffffff`. Otherwise it scans
+/// `0..m_usSize` for a null slot; there it releases the slot's old object
+/// (always null here, the branch is translated as the exe has it: when not the
+/// same pointer and non-null, `InterlockedDecrement` of its count and, at
+/// zero, vtable slot `+4`), stores the pointer with `InterlockedIncrement`
+/// of its count, adds 1 to `m_usESize` and answers the index. Without an
+/// empty slot it grows the array to `m_usSize + m_usGrowBy` (`0060bef0`) when
+/// `m_usSize` (read before the scan) has reached `m_usMaxSize`, stores the
+/// pointer at index `m_usSize` (`004b0310`) and answers that index.
+pub fn fn_00a5eb20(e: &mut Engine, this: Ptr<crate::types::NiTArray>, element: Ptr) -> u32 {
+    use crate::types::NiTArray;
+    let value = e.mem.u32(element.addr());
+    if value == 0 {
+        return 0xffff_ffff;
+    }
+    let size = e.get(this, NiTArray::m_usSize);
+    let mut index: u16 = 0;
+    if index < size {
+        let base = e.get(this, NiTArray::m_pBase);
+        loop {
+            let slot = base.wrapping_add(u32::from(index).wrapping_mul(4));
+            if e.mem.u32(slot) == 0 {
+                let old = e.mem.u32(slot);
+                if old != value {
+                    if old != 0
+                        && e.call(INTERLOCKED_DECREMENT, &args![old.wrapping_add(4)])
+                            .u32()
+                            == 0
+                    {
+                        e.vcall(old, 4, &args![]);
+                    }
+                    let new = e.mem.u32(element.addr());
+                    e.mem.set_u32(slot, new);
+                    if new != 0 {
+                        e.call(INTERLOCKED_INCREMENT, &args![new.wrapping_add(4)]);
+                    }
+                }
+                let filled = e.get(this, NiTArray::m_usESize);
+                e.set(this, NiTArray::m_usESize, filled.wrapping_add(1));
+                return u32::from(index);
+            }
+            index = index.wrapping_add(1);
+            if index >= e.get(this, NiTArray::m_usSize) {
+                break;
+            }
+        }
+    }
+    let size = u32::from(size);
+    if size >= u32::from(e.get(this, NiTArray::m_usMaxSize)) {
+        let grow_by = u32::from(e.get(this, NiTArray::m_usGrowBy));
+        e.call(
+            POINTER_ARRAY_SET_CAPACITY,
+            &args![this, grow_by.wrapping_add(size)],
+        );
+    }
+    e.call(POINTER_ARRAY_SET_AT, &args![this, size, element]);
+    size
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a5ece0, ni_node_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00a5_ecb0, ni_node_ni_node(Ptr, u32) -> Ptr),
         entry!(0x00a5_ed10, ni_node_attach_child(Ptr, u32, u32)),
+        entry!(
+            0x00a5_eb20,
+            fn_00a5eb20(Ptr<crate::types::NiTArray>, Ptr) -> u32
+        ),
     ]
 }
 
@@ -273,5 +347,77 @@ mod b000o_tests {
         e.call_log = Some(vec![]);
         e.call(0x00a5_ed10, &args![node, 0u32, 1u32]);
         assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod b025_tests {
+    use super::*;
+    use crate::types::NiTArray;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(INTERLOCKED_DECREMENT, |_, _| 0u32.into_ret());
+        e.register(INTERLOCKED_INCREMENT, |_, _| 1u32.into_ret());
+        e.register(POINTER_ARRAY_SET_CAPACITY, |_, _| Ret::default());
+        e.register(POINTER_ARRAY_SET_AT, |_, _| Ret::default());
+        e
+    }
+
+    #[test]
+    fn fn_00a5eb20_fills_the_first_empty_slot_or_appends() {
+        let mut e = engine();
+        let array = e.new_object::<NiTArray>();
+        let base = e.mem.alloc(16);
+        e.set(array, NiTArray::m_pBase, base);
+        e.set(array, NiTArray::m_usMaxSize, 4);
+        e.set(array, NiTArray::m_usSize, 3);
+        e.set(array, NiTArray::m_usESize, 2);
+        e.set(array, NiTArray::m_usGrowBy, 5);
+        e.mem.set_u32(base, 0x111);
+        e.mem.set_u32(base + 8, 0x333);
+        let object = e.mem.alloc(8);
+        let element = e.mem.alloc(4);
+        // A null pointer is refused.
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00a5_eb20, &args![array, element]).u32(),
+            0xffff_ffff
+        );
+        // The empty slot 1 takes it and counts it.
+        e.mem.set_u32(element, object);
+        assert_eq!(e.call(0x00a5_eb20, &args![array, element]).u32(), 1);
+        assert_eq!(e.mem.u32(base + 4), object);
+        assert_eq!(e.get(array, NiTArray::m_usESize), 3);
+        assert_eq!(calls_to(&e, INTERLOCKED_INCREMENT), vec![vec![object + 4]]);
+        assert!(calls_to(&e, INTERLOCKED_DECREMENT).is_empty());
+        // Full but below capacity: appended at index 3 without growing.
+        assert_eq!(e.call(0x00a5_eb20, &args![array, element]).u32(), 3);
+        assert!(calls_to(&e, POINTER_ARRAY_SET_CAPACITY).is_empty());
+        assert_eq!(
+            calls_to(&e, POINTER_ARRAY_SET_AT),
+            vec![vec![array.addr(), 3, element]]
+        );
+        // At capacity: grows by m_usGrowBy first.
+        e.set(array, NiTArray::m_usSize, 4);
+        e.mem.set_u32(base + 12, 0x444);
+        assert_eq!(e.call(0x00a5_eb20, &args![array, element]).u32(), 4);
+        assert_eq!(
+            calls_to(&e, POINTER_ARRAY_SET_CAPACITY),
+            vec![vec![array.addr(), 9]]
+        );
+        // An empty array appends at 0 (the scan does not run).
+        e.set(array, NiTArray::m_usSize, 0);
+        assert_eq!(e.call(0x00a5_eb20, &args![array, element]).u32(), 0);
     }
 }
