@@ -166,8 +166,8 @@ pub fn fn_0058e8f0(_e: &mut Engine, material: u32) -> u32 {
         3 | 24 => 3,
         4 => 2,
         6 | 7 => 6,
-        8 | 30 | 31 => 8,
-        9 | 12 => 5,
+        8 => 8,
+        9 | 12 | 30 | 31 => 5,
         16 | 17 | 22 | 23 | 25 | 28 | 29 => 9,
         _ => 4,
     }
@@ -493,7 +493,7 @@ mod impact_tests {
         let mut e = engine();
         let want = [
             0, 7, 1, 3, 2, 4, 6, 6, 8, 5, 0, 4, 5, 4, 4, 4, 9, 9, 1, 0, 4, 4, 9, 9, 3, 9, 4, 4, 9,
-            9, 8, 8,
+            9, 5, 5,
         ];
         for (material, slot) in want.iter().enumerate() {
             assert_eq!(

@@ -64,7 +64,7 @@ pub fn tes_attributes_copy_component(e: &mut Engine, this: Ptr, source: Ptr) {
     }
     for index in 0..7u32 {
         let code = e.call(TO_ACTOR_VALUE, &args![0u32, index & 0xff]).u32();
-        let value = fn_00480160(e, Ptr::new(attributes), code);
+        let value = fn_00480160(e, Ptr::new(attributes), code) as u8;
         e.mem.set_u8(this.addr() + index + 4, value);
     }
 }
@@ -72,9 +72,12 @@ pub fn tes_attributes_copy_component(e: &mut Engine, this: Ptr, source: Ptr) {
 // Translated from 00480160 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the map (in this unit's range), `ECX` and one stack word (`RET 4`): the byte
 /// at `this + code - 1` (the attribute an actor-value code names; codes start at 5, the first
-/// attribute byte at `+4`). The exe answers it in `AL`.
-pub fn fn_00480160(e: &mut Engine, this: Ptr, code: u32) -> u8 {
-    e.mem.u8(this.addr().wrapping_add(code).wrapping_sub(1))
+/// attribute byte at `+4`). The exe answers it in `AL` after `EAX = this + code`
+/// (`0048016a`), so `EAX`'s upper three bytes are that sum's (the oracle compares the whole
+/// register; the callers forward `EAX`).
+pub fn fn_00480160(e: &mut Engine, this: Ptr, code: u32) -> u32 {
+    let sum = this.addr().wrapping_add(code);
+    (sum & 0xffff_ff00) | u32::from(e.mem.u8(sum.wrapping_sub(1)))
 }
 
 // Translated from 00480180 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -111,7 +114,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00480130, fn_00480130(Ptr, Ptr) -> u32),
         entry!(0x0047_ffc0, tes_attributes_initialize_data_component(Ptr)),
         entry!(0x0048_0000, tes_attributes_copy_component(Ptr, Ptr)),
-        entry!(0x0048_0160, fn_00480160(Ptr, u32) -> u8),
+        entry!(0x0048_0160, fn_00480160(Ptr, u32) -> u32),
         entry!(
             0x0048_0180,
             tes_attributes_set_attribute_value(Ptr, u32, u8, u8)
@@ -150,6 +153,11 @@ mod component_tests {
         e.mem.set_u8(this + 0xa, 0x17);
         assert_eq!(e.call(0x0048_0160, &args![this, 5u32]).u32() & 0xff, 0x42);
         assert_eq!(e.call(0x0048_0160, &args![this, 0xbu32]).u32() & 0xff, 0x17);
+        // EAX keeps the upper bytes of `this + code` (0048016a).
+        assert_eq!(
+            e.call(0x0048_0160, &args![this, 5u32]).u32() & 0xffff_ff00,
+            (this + 5) & 0xffff_ff00
+        );
     }
 
     #[test]
