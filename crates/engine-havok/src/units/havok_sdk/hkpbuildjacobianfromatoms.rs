@@ -1675,13 +1675,9 @@ pub fn fn_00d6ced0(e: &mut Engine, atom: Ptr, info: Ptr, a: Ptr, b: Ptr, cursor:
 /// each, advancing byte-pointer counters stored in the schema (`+0x64`, `+0x6c`, `+0x70`,
 /// `+0x74`) as it goes.
 ///
-// Translation incomplete: 00d6f460 - atom types 6, 7, 8, 9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf, 0x10,
-// 0x11, 0x12, 0x13, 0x14, 0x17, 0x18, 0x19, 0x1a and 0x1c are not yet translated (the inline
-// motor/limit/angle records sharing the record tail at 00d70646, and the contact and
-// recursive-container atoms); they stop with `open: ...`. Done: the prologue, the dispatch loop,
-// the realign atom (type 0), the indirect modifier call (type 1), the SSE body transforms
-// (types 2, 3, 4), the three-linear-limit record (type 5), the container trailer (type 0x1b)
-// and the no-op types (0x15, 0x16, and anything above 0x1c).
+// Translation incomplete: 00d6f460 - atom types 0xe, 0xf, 0x10, 0x12, 0x13, 0x14, 0x17, 0x18,
+// 0x19, 0x1a and 0x1c are not yet translated (the inline angle records sharing the record tail
+// at 00d70646, and the contact and recursive-container atoms); they stop with `open: ...`.
 pub fn hk_solver_build_jacobian_from_atoms_not_contact(
     e: &mut Engine,
     atoms: Ptr,
@@ -1695,7 +1691,7 @@ pub fn hk_solver_build_jacobian_from_atoms_not_contact(
     // does.
     let end = atoms.addr().wrapping_add(size);
     let mut atom = atoms.addr();
-    e.with_stack(0x300, |e, frame| {
+    e.with_stack(0x880, |e, frame| {
         let schema = frame.addr() + 0x60;
         let rows_a = frame.addr() + 0x180;
         let rows_b = frame.addr() + 0x2b0;
@@ -1773,7 +1769,7 @@ fn dispatch_atom(
             let callee = e.mem.u32(*atom + 4);
             let argument = e.mem.u32(*atom + 8);
             e.call(callee, &args![argument, schema, cursor.addr()]);
-            advance(e, 0x70, 0xc_3500);
+            advance(e, 0x64, 0xc_3500);
             advance(e, 0x74, 0xc_3500);
             *atom += 0xc;
         }
@@ -1829,6 +1825,50 @@ fn dispatch_atom(
             advance(e, 0x74, 0x18);
             *atom += 8;
         }
+        6 => {
+            atom_distance(e, *atom, schema - 0x60, cursor);
+            advance(e, 0x64, 8);
+            advance(e, 0x74, 8);
+            *atom += 8;
+        }
+        7..=9 => {
+            atom_linear(e, *atom, kind, schema - 0x60, cursor);
+            advance(e, 0x64, 8);
+            advance(e, 0x74, 8);
+            *atom += if kind == 7 { 4 } else { 0xc };
+        }
+        0xa => {
+            atom_linear_friction(e, *atom, schema - 0x60, cursor);
+            advance(e, 0x64, 8);
+            advance(e, 0x74, 8);
+            *atom += 8;
+        }
+        0xb => {
+            atom_linear_motor(e, *atom, schema - 0x60, cursor);
+            advance(e, 0x64, 8);
+            advance(e, 0x74, 8);
+            *atom += 0x10;
+        }
+        0xc => {
+            atom_angular_pair(e, *atom, schema - 0x60, cursor);
+            advance(e, 0x64, 0x10);
+            advance(e, 0x74, 0x10);
+            *atom += 4;
+        }
+        0xd => {
+            atom_angular_run(e, *atom, schema - 0x60, cursor);
+            let count = u32::from(e.mem.u8(*atom + 3));
+            *atom += 4;
+            advance(e, 0x64, count * 8);
+            advance(e, 0x74, count * 8);
+        }
+        0x11 => {
+            atom_angular_friction(e, *atom, schema - 0x60, cursor);
+            let count = u32::from(e.mem.u8(*atom + 4));
+            *atom += 0xc;
+            advance(e, 0x64, count * 8);
+            advance(e, 0x74, count * 8);
+        }
         0x1b => {
             // A container trailer: back the cursor up by 0x10 and step over the atom.
             let record = e.mem.u32(cursor.addr());
@@ -1860,6 +1900,279 @@ fn transform_rows(e: &mut Engine, matrix: [Vec4; 3], source: u32, rows: u32) {
     for row in 0..4u32 {
         let turned = rotate_rows(load_vec(e, source + 0x10 * row), matrix);
         store_vec(e, rows + 0x10 * row, turned);
+    }
+}
+
+/// `fn_00dcf5b0` (cdecl: an input block, the info block, the cursor pointer, a float scale).
+const SCALED_LINEAR_RECORD: u32 = 0x00dc_f5b0;
+/// `hk1dLinearBilateralConstraintBuildJacobian` (cdecl: an input block, the info block, the
+/// cursor pointer).
+const LINEAR_BILATERAL: u32 = 0x00dc_f280;
+/// `fn_00dcee80`, the angular bilateral builder (cdecl: an input block, the info block, the
+/// cursor pointer).
+const ANGULAR_BILATERAL: u32 = 0x00dc_ee80;
+/// The byte tables of row offsets the angular atoms index by axis (`010d33c0`, then the next
+/// and third axes at `010d33c1` and `010d33c2`).
+const AXIS_OFFSET_TABLE: u32 = 0x010d_33c0;
+
+// Frame offsets of the dispatcher (from its stack pointer): the schema copy, the body block
+// copied from `info.word[0xf]` (`ROWS_A`, its fourth row `PIVOT_A`) and the one from
+// `info.word[0xe]` (`ROWS_B`, `PIVOT_B`).
+const SCHEMA: u32 = 0x60;
+const ROWS_A: u32 = 0x180;
+const PIVOT_A: u32 = 0x1b0;
+const ROWS_B: u32 = 0x2b0;
+const PIVOT_B: u32 = 0x2e0;
+
+/// `FLD dword` of the float at `address`.
+fn fld(e: &Engine, address: u32) -> f64 {
+    x87_load32(e.mem.u32(address))
+}
+
+/// A float memory operand of an x87 arithmetic instruction.
+fn m32(e: &Engine, address: u32) -> f64 {
+    x87_m32(e.mem.u32(address))
+}
+
+/// `FSTP dword` to `address`.
+fn fstp(e: &mut Engine, address: u32, value: f64) {
+    e.mem.set_u32(address, x87_store32(value));
+}
+
+/// The x87 `FLD qword` of `FLT_EPSILON` (the constant the dispatcher keeps on its stack).
+fn epsilon_on_stack(e: &Engine) -> f64 {
+    x87_load64(e.mem.u64(EPSILON))
+}
+
+/// The `AH` status bits of an x87 compare of `a` with `b`: `C0` (0x01) for less, `C3` (0x40)
+/// for equal, all of `C0`, `C2`, `C3` for unordered.
+fn compare_status(a: f64, b: f64) -> u8 {
+    if a.is_nan() || b.is_nan() {
+        0x45
+    } else if a < b {
+        0x01
+    } else if a == b {
+        0x40
+    } else {
+        0
+    }
+}
+
+/// `TEST AH, mask` then `JP`: whether the masked status bits have even parity.
+fn parity_even(status: u8, mask: u8) -> bool {
+    (status & mask).count_ones() % 2 == 0
+}
+
+/// The placeholder record of the dispatcher: `FLT_EPSILON` (from the x87 stack) plus the
+/// stream's first float, `marker` at `+4`, the tag 3; the cursor moves on by 0x10.
+fn placeholder_from_stack(e: &mut Engine, cursor: Ptr, marker: u8) {
+    let record = e.mem.u32(cursor.addr());
+    let sum = x87_add(epsilon_on_stack(e), m32(e, record));
+    e.mem.set_u8(record + 4, marker);
+    fstp(e, record, sum);
+    e.mem.set_u8(record, 3);
+    e.mem.set_u32(cursor.addr(), record + 0x10);
+}
+
+/// Atom type 6 (`00d6f9df`): the two pivots and their unit direction (the first axis of the
+/// table at `01268370` when the distance is not above the float at `0104da4c`, then the
+/// distance counts as 0), and `fn_00dcf5b0` with the scale `atom.float[1] - distance`.
+fn atom_distance(e: &mut Engine, atom: u32, fp: u32, cursor: Ptr) {
+    let pivot_b = load_vec(e, fp + PIVOT_B);
+    let pivot_a = load_vec(e, fp + PIVOT_A);
+    store_vec(e, fp + 0x300, pivot_b);
+    store_vec(e, fp + 0x310, pivot_a);
+    let difference = sub(pivot_b, pivot_a);
+    let squares = mul(difference, difference);
+    let length = (squares[2] + (squares[1] + squares[0])).sqrt();
+    let loaded = x87_load32(length.to_bits());
+    e.mem.set_u32(fp + 0x30, length.to_bits());
+    let small = fld(e, SMALL_FLOAT);
+    if parity_even(compare_status(loaded, small), 0x41) {
+        let inverse = f32::from_bits(x87_store32(x87_div(1.0, loaded)));
+        store_vec(e, fp + 0x320, mul([inverse; 4], difference));
+    } else {
+        copy_vec(e, AXIS_TABLE, fp + 0x320);
+        e.mem.set_u32(fp + 0x30, x87_store32(0.0));
+    }
+    let scale = x87_store32(x87_sub(fld(e, atom + 4), m32(e, fp + 0x30)));
+    e.call(
+        SCALED_LINEAR_RECORD,
+        &args![fp + 0x300, fp + SCHEMA, cursor.addr(), scale],
+    );
+}
+
+/// Atom types 7, 8 and 9 (`00d6fac2`, `00d6fb2d`, `00d6fbac`): the input block `{pivot B,
+/// pivot A, row atom.byte[2] of block A}` (types 8 and 9 add the atom's floats `+4` and `+8` at
+/// `+0x30` and `+0x34`) for the bilateral, user-tau bilateral and limit builders.
+fn atom_linear(e: &mut Engine, atom: u32, kind: u16, fp: u32, cursor: Ptr) {
+    let block = fp + 0x1c0;
+    let row = u32::from(e.mem.u8(atom + 2)) << 4;
+    copy_vec(e, fp + PIVOT_B, block);
+    if kind != 7 {
+        let tau = fld(e, atom + 4);
+        fstp(e, block + 0x30, tau);
+        let limit = fld(e, atom + 8);
+        fstp(e, block + 0x34, limit);
+    }
+    copy_vec(e, fp + PIVOT_A, block + 0x10);
+    copy_vec(e, fp + ROWS_A + row, block + 0x20);
+    let callee = match kind {
+        7 => LINEAR_BILATERAL,
+        8 => LINEAR_BILATERAL_USER_TAU,
+        _ => LINEAR_LIMIT,
+    };
+    e.call(callee, &args![block, fp + SCHEMA, cursor.addr()]);
+}
+
+/// Atom type 0xa (`00d6fc2b`): with `atom.byte[2]` set and `0 < atom.float[1]`, the friction
+/// block `{pivot B, row atom.byte[3] of block A, atom.float[1], schema.word[0x19]}` for
+/// `hk1dLinearFrictionBuildJacobian`; otherwise the placeholder record (marker 1).
+fn atom_linear_friction(e: &mut Engine, atom: u32, fp: u32, cursor: Ptr) {
+    let enabled = e.mem.u8(atom + 2) != 0;
+    if enabled && compare_status(0.0, m32(e, atom + 4)) & 0x05 == 0x01 {
+        let row = u32::from(e.mem.u8(atom + 3)) << 4;
+        let block = fp + 0x1c0;
+        let friction = fld(e, atom + 4);
+        let counter = e.mem.u32(fp + SCHEMA + 0x64);
+        fstp(e, block + 0x20, friction);
+        copy_vec(e, fp + PIVOT_B, block);
+        copy_vec(e, fp + ROWS_A + row, block + 0x10);
+        e.mem.set_u32(block + 0x24, counter);
+        e.call(LINEAR_FRICTION, &args![block, fp + SCHEMA, cursor.addr()]);
+    } else {
+        placeholder_from_stack(e, cursor, 1);
+    }
+}
+
+/// Atom type 0xb (`00d6fcd6`): a linear velocity motor. `flag` and `value` are the byte and the
+/// float at `counter + atom.short[2]` and `+ atom.short[3]` (`counter` the schema's `+0x64`).
+/// Without `atom.byte[2]` or a motor (`atom.word[3]`) it appends the placeholder record
+/// (marker 1). Otherwise `value` becomes `atom.float[2]` when `flag` is 0; the begin builder gets
+/// row `atom.byte[3]` of block A, pivot B, the schema, the record and the motor block at
+/// `+0x140` (`{.., schema, counter[0], counter[1], target - value, value - (B - A) . row}`);
+/// `hkCalcMotorData` and the commit builder follow, and `value`/`flag` are set to the target
+/// and 1 unless the two floats are equal and `flag` is set.
+fn atom_linear_motor(e: &mut Engine, atom: u32, fp: u32, cursor: Ptr) {
+    let counter = e.mem.u32(fp + SCHEMA + 0x64);
+    let flag = (e.mem.u16(atom + 4) as i16 as i32 as u32).wrapping_add(counter);
+    let value = (e.mem.u16(atom + 6) as i16 as i32 as u32).wrapping_add(counter);
+    e.mem.set_u32(fp + 0x30, flag);
+    let motor = e.mem.u32(atom + 0xc);
+    if e.mem.u8(atom + 2) == 0 || motor == 0 {
+        placeholder_from_stack(e, cursor, 1);
+        return;
+    }
+    e.mem.set_u32(fp + 0x10, motor);
+    if e.mem.u8(flag) == 0 {
+        let target = fld(e, atom + 8);
+        fstp(e, value, target);
+    }
+    let record = e.mem.u32(cursor.addr());
+    let block = fp + 0x140;
+    fstp(e, block + 8, 0.0);
+    fstp(e, block + 0xc, 0.0);
+    e.mem.set_u32(fp + 0x3c, record);
+    let row = u32::from(e.mem.u8(atom + 3)) << 4;
+    e.call(
+        LINEAR_VELOCITY_BEGIN,
+        &args![fp + ROWS_A + row, fp + PIVOT_B, fp + SCHEMA, record, block],
+    );
+    let pivot_a = load_vec(e, fp + PIVOT_A);
+    let remaining = x87_sub(fld(e, atom + 8), m32(e, value));
+    let pivot_b = load_vec(e, fp + PIVOT_B);
+    e.mem.set_u32(block + 4, fp + SCHEMA);
+    let counter = e.mem.u32(fp + SCHEMA + 0x64);
+    let first = e.mem.u32(counter);
+    e.mem.set_u32(block + 8, first);
+    let second = e.mem.u32(counter + 4);
+    fstp(e, block + 0x10, remaining);
+    let current = fld(e, value);
+    let row = u32::from(e.mem.u8(atom + 3)) << 4;
+    let products = mul(sub(pivot_b, pivot_a), load_vec(e, fp + ROWS_A + row));
+    let along = products[2] + (products[1] + products[0]);
+    e.mem.set_u32(block + 0xc, second);
+    e.mem.set_u32(fp + 0x264, along.to_bits());
+    let passed = x87_sub(current, m32(e, fp + 0x264));
+    fstp(e, block + 0x14, passed);
+    e.call(CALC_MOTOR_DATA, &args![motor, block, fp + 0x200]);
+    e.call(
+        LINEAR_VELOCITY_COMMIT,
+        &args![fp + 0x200, fp + SCHEMA, record, cursor.addr()],
+    );
+    let now = fld(e, value);
+    let target = fld(e, atom + 8);
+    let status = compare_status(target, now);
+    if parity_even(status, 0x44) || e.mem.u8(flag) == 0 {
+        let target = fld(e, atom + 8);
+        fstp(e, value, target);
+        e.mem.set_u8(flag, 1);
+    }
+}
+
+/// Atom type 0xc (`00d6fe69`): two angular bilateral records about row `axis = atom.byte[2]`
+/// of block B, the first with the other two rows of block A (`next`, `third` from the tables
+/// at `010d33c1` and `010d33c2`) as `{third, next}`, the second as `{-next, third}`.
+fn atom_angular_pair(e: &mut Engine, atom: u32, fp: u32, cursor: Ptr) {
+    let axis = u32::from(e.mem.u8(atom + 2));
+    let next = u32::from(e.mem.u8(NEXT_AXIS_TABLE + axis));
+    let third = u32::from(e.mem.u8(THIRD_AXIS_TABLE + axis));
+    let block = fp + 0x300;
+    copy_vec(e, fp + ROWS_B + (axis << 4), block);
+    let next_row = fp + ROWS_A + next;
+    let third_row = fp + ROWS_A + third;
+    copy_vec(e, next_row, block + 0x20);
+    e.mem.set_u32(fp + 0x10, third_row);
+    copy_vec(e, third_row, block + 0x10);
+    e.call(ANGULAR_BILATERAL, &args![block, fp + SCHEMA, cursor.addr()]);
+    copy_vec(e, third_row, block + 0x20);
+    let negated = negate(e, load_vec(e, next_row));
+    store_vec(e, block + 0x10, negated);
+    e.call(ANGULAR_BILATERAL, &args![block, fp + SCHEMA, cursor.addr()]);
+}
+
+/// Atom type 0xd (`00d6ff29`): for `i` from `atom.byte[2]` while `i < atom.byte[2] +
+/// atom.byte[3]` (re-read each step) an angular bilateral record from the block `{row c1 of
+/// block B, row c0 of block B, row c2 of block A}`, `c0`, `c1`, `c2` the bytes at
+/// `010d33c0 + i`, `+1`, `+2`.
+fn atom_angular_run(e: &mut Engine, atom: u32, fp: u32, cursor: Ptr) {
+    let block = fp + 0x1c0;
+    e.mem.set_u32(fp + 0x30, atom + 3);
+    let mut index = u32::from(e.mem.u8(atom + 2));
+    let mut limit = index + u32::from(e.mem.u8(atom + 3));
+    while (index as i32) < (limit as i32) {
+        let first = u32::from(e.mem.u8(AXIS_OFFSET_TABLE + index));
+        let second = u32::from(e.mem.u8(AXIS_OFFSET_TABLE + 1 + index));
+        copy_vec(e, fp + ROWS_B + first, block + 0x10);
+        let third = u32::from(e.mem.u8(AXIS_OFFSET_TABLE + 2 + index));
+        copy_vec(e, fp + ROWS_B + second, block);
+        copy_vec(e, fp + ROWS_A + third, block + 0x20);
+        e.call(ANGULAR_BILATERAL, &args![block, fp + SCHEMA, cursor.addr()]);
+        limit = u32::from(e.mem.u8(atom + 2)) + u32::from(e.mem.u8(atom + 3));
+        index += 1;
+    }
+}
+
+/// Atom type 0x11 (`00d70784`): with `atom.byte[2]` set and `atom.float[2]` not 0 (a NaN counts
+/// as not 0), the angular friction block `{&row atom.byte[3] of block B, schema.word[0x19],
+/// atom.float[2], atom.byte[4]}`; otherwise the placeholder record with the marker
+/// `atom.byte[4]`.
+fn atom_angular_friction(e: &mut Engine, atom: u32, fp: u32, cursor: Ptr) {
+    let enabled = e.mem.u8(atom + 2) != 0;
+    if enabled && parity_even(compare_status(0.0, m32(e, atom + 8)), 0x44) {
+        let row = u32::from(e.mem.u8(atom + 3)) << 4;
+        let marker = u32::from(e.mem.u8(atom + 4));
+        let block = fp + 0x360;
+        let friction = fld(e, atom + 8);
+        fstp(e, block + 8, friction);
+        let counter = e.mem.u32(fp + SCHEMA + 0x64);
+        e.mem.set_u32(block, fp + ROWS_B + row);
+        e.mem.set_u32(block + 0xc, marker);
+        e.mem.set_u32(block + 4, counter);
+        e.call(ANGULAR_FRICTION, &args![block, fp + SCHEMA, cursor.addr()]);
+    } else {
+        let marker = e.mem.u8(atom + 4);
+        placeholder_from_stack(e, cursor, marker);
     }
 }
 
@@ -3647,5 +3960,275 @@ mod atom_dispatch_tests {
         assert_eq!(calls[0].1[2], cursor);
         // The opening record advanced the cursor by 0x10; the modifier backs it up by 0x10.
         assert_eq!(e.mem.u32(cursor), records);
+    }
+}
+
+#[cfg(test)]
+mod atom_one_d_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// Calls seen by a double: the address, the argument words and the 0x40 bytes behind the
+    /// first argument (the input block, read while the dispatcher's frame is alive).
+    type Seen = Rc<RefCell<Vec<(u32, Vec<u32>, [u32; 0x10])>>>;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e.set_global(EPSILON, 1.1920929e-7f64);
+        e.set_global(SMALL_FLOAT, 1.1920929e-7f32);
+        for axis in 0..3u32 {
+            let mut vector = [0.0f32; 4];
+            vector[axis as usize] = 1.0;
+            store_vec(&mut e, AXIS_TABLE + 0x10 * axis, vector);
+        }
+        for lane in 0..4 {
+            e.mem.set_u32(SIGN_MASK + 4 * lane, 0x8000_0000);
+        }
+        for (index, offset) in [0u8, 0x10, 0x20, 0, 0x10, 0x20, 0, 0x10, 0x20]
+            .into_iter()
+            .enumerate()
+        {
+            e.mem.set_u8(AXIS_OFFSET_TABLE + index as u32, offset);
+        }
+        e
+    }
+
+    fn capture(e: &mut Engine, seen: &Seen, address: u32) {
+        let log = seen.clone();
+        e.register_double(address, move |e, a| {
+            // `hkCalcMotorData` takes the motor first and its input block second.
+            let at = if address == CALC_MOTOR_DATA {
+                a[1]
+            } else {
+                a[0]
+            };
+            let block = std::array::from_fn(|word| e.mem.u32(at + 4 * word as u32));
+            log.borrow_mut().push((address, a.to_vec(), block));
+            Ret::default()
+        });
+    }
+
+    fn calls(seen: &Seen, address: u32) -> Vec<(Vec<u32>, [u32; 0x10])> {
+        seen.borrow()
+            .iter()
+            .filter(|(at, _, _)| *at == address)
+            .map(|(_, words, block)| (words.clone(), *block))
+            .collect()
+    }
+
+    fn lanes(block: &[u32; 0x10], first: usize) -> Vec<f32> {
+        (first..first + 4)
+            .map(|w| f32::from_bits(block[w]))
+            .collect()
+    }
+
+    struct Scene {
+        info: u32,
+        atoms: u32,
+        records: u32,
+        cursor: u32,
+        counter: u32,
+    }
+
+    fn body(e: &mut Engine, pivot: Vec4) -> u32 {
+        let base = e.mem.alloc(0x40);
+        store_vec(e, base, [1.0, 0.0, 0.0, 0.0]);
+        store_vec(e, base + 0x10, [0.0, 1.0, 0.0, 0.0]);
+        store_vec(e, base + 0x20, [0.0, 0.0, 1.0, 0.0]);
+        store_vec(e, base + 0x30, pivot);
+        base
+    }
+
+    /// Two bodies with identity rotation rows, pivot A at `a` and pivot B at `b` (each body's
+    /// fourth row), the counter block at `info + 0x64`, and room for the atoms.
+    fn scene(e: &mut Engine, a: Vec4, b: Vec4) -> Scene {
+        let (body_a, body_b) = (body(e, a), body(e, b));
+        let info = e.mem.alloc(0x80);
+        e.mem.set_u32(info + 0x3c, body_a);
+        e.mem.set_u32(info + 0x38, body_b);
+        let counter = e.mem.alloc(0x100);
+        e.mem.set_u32(info + 0x64, counter);
+        let atoms = e.mem.alloc(0x100);
+        let records = e.mem.alloc(0x200);
+        let cursor = e.mem.alloc(8);
+        e.mem.set_u32(cursor, records);
+        Scene {
+            info,
+            atoms,
+            records,
+            cursor,
+            counter,
+        }
+    }
+
+    fn run(e: &mut Engine, s: &Scene, size: u32) {
+        e.call(0x00d6_f460, &args![s.atoms, size, s.info, s.cursor]);
+    }
+
+    #[test]
+    fn the_distance_atom_hands_the_pivots_their_direction_and_the_remaining_length() {
+        let mut e = engine();
+        let seen = Seen::default();
+        capture(&mut e, &seen, SCALED_LINEAR_RECORD);
+        let s = scene(&mut e, [0.0; 4], [3.0, 4.0, 0.0, 0.0]);
+        e.mem.set_u16(s.atoms, 6);
+        e.mem.set_f32(s.atoms + 4, 7.0);
+        run(&mut e, &s, 8);
+        let done = calls(&seen, SCALED_LINEAR_RECORD);
+        assert_eq!(done.len(), 1);
+        let (words, block) = &done[0];
+        assert_eq!(f32::from_bits(words[3]), 2.0);
+        assert_eq!(lanes(block, 0), [3.0, 4.0, 0.0, 0.0]);
+        let inverse = (1.0f64 / 5.0) as f32;
+        assert_eq!(lanes(block, 8), [inverse * 3.0, inverse * 4.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn coincident_pivots_take_the_first_axis_and_a_zero_distance() {
+        let mut e = engine();
+        let seen = Seen::default();
+        capture(&mut e, &seen, SCALED_LINEAR_RECORD);
+        let s = scene(&mut e, [1.0; 4], [1.0; 4]);
+        e.mem.set_u16(s.atoms, 6);
+        e.mem.set_f32(s.atoms + 4, 7.0);
+        run(&mut e, &s, 8);
+        let (words, block) = &calls(&seen, SCALED_LINEAR_RECORD)[0];
+        assert_eq!(f32::from_bits(words[3]), 7.0);
+        assert_eq!(lanes(block, 8), [1.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn linear_atoms_pass_the_pivots_and_a_row_and_advance_the_counter() {
+        let mut e = engine();
+        let seen = Seen::default();
+        capture(&mut e, &seen, LINEAR_BILATERAL);
+        capture(&mut e, &seen, LINEAR_LIMIT);
+        capture(&mut e, &seen, LINEAR_FRICTION);
+        let s = scene(&mut e, [1.0, 2.0, 3.0, 0.0], [5.0, 6.0, 7.0, 0.0]);
+        // A bilateral atom on row 1, a limit atom (tau 0.5, limit 9) on row 2, then a friction
+        // atom whose block carries the counter after both advanced it by 8.
+        e.mem.set_u16(s.atoms, 7);
+        e.mem.set_u8(s.atoms + 2, 1);
+        e.mem.set_u16(s.atoms + 4, 9);
+        e.mem.set_u8(s.atoms + 6, 2);
+        e.mem.set_f32(s.atoms + 8, 0.5);
+        e.mem.set_f32(s.atoms + 0xc, 9.0);
+        e.mem.set_u16(s.atoms + 0x10, 0xa);
+        e.mem.set_u8(s.atoms + 0x12, 1);
+        e.mem.set_f32(s.atoms + 0x14, 0.25);
+        run(&mut e, &s, 0x18);
+        let (_, block) = &calls(&seen, LINEAR_BILATERAL)[0];
+        assert_eq!(lanes(block, 0), [5.0, 6.0, 7.0, 0.0]);
+        assert_eq!(lanes(block, 4), [1.0, 2.0, 3.0, 0.0]);
+        assert_eq!(lanes(block, 8), [0.0, 1.0, 0.0, 0.0]);
+        let (_, block) = &calls(&seen, LINEAR_LIMIT)[0];
+        assert_eq!(lanes(block, 8), [0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(f32::from_bits(block[0xc]), 0.5);
+        assert_eq!(f32::from_bits(block[0xd]), 9.0);
+        let (_, block) = &calls(&seen, LINEAR_FRICTION)[0];
+        assert_eq!(f32::from_bits(block[8]), 0.25);
+        assert_eq!(block[9], s.counter + 0x10);
+    }
+
+    #[test]
+    fn a_friction_atom_without_friction_appends_the_placeholder() {
+        let mut e = engine();
+        let s = scene(&mut e, [0.0; 4], [0.0; 4]);
+        e.mem.set_u16(s.atoms, 0xa);
+        e.mem.set_u8(s.atoms + 2, 1);
+        e.mem.set_f32(s.atoms + 4, 0.0);
+        run(&mut e, &s, 8);
+        let record = s.records + 0x10;
+        assert_eq!(e.mem.u8(record), 3);
+        assert_eq!(e.mem.u8(record + 4), 1);
+        assert_eq!(e.mem.u32(s.cursor), s.records + 0x20);
+    }
+
+    #[test]
+    fn the_angular_pair_atom_builds_two_records_the_second_with_the_next_row_negated() {
+        let mut e = engine();
+        let seen = Seen::default();
+        capture(&mut e, &seen, ANGULAR_BILATERAL);
+        let s = scene(&mut e, [0.0; 4], [0.0; 4]);
+        e.mem.set_u16(s.atoms, 0xc);
+        e.mem.set_u8(s.atoms + 2, 0);
+        e.mem.set_u8(NEXT_AXIS_TABLE, 0x10);
+        e.mem.set_u8(THIRD_AXIS_TABLE, 0x20);
+        run(&mut e, &s, 4);
+        let done = calls(&seen, ANGULAR_BILATERAL);
+        assert_eq!(done.len(), 2);
+        assert_eq!(lanes(&done[0].1, 0), [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(lanes(&done[0].1, 4), [0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(lanes(&done[0].1, 8), [0.0, 1.0, 0.0, 0.0]);
+        let negated: Vec<u32> = (4..8).map(|w| done[1].1[w]).collect();
+        assert_eq!(
+            negated,
+            [0x8000_0000, 0xbf80_0000, 0x8000_0000, 0x8000_0000]
+        );
+        assert_eq!(lanes(&done[1].1, 8), [0.0, 0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn the_angular_run_atom_builds_one_record_per_count() {
+        let mut e = engine();
+        let seen = Seen::default();
+        capture(&mut e, &seen, ANGULAR_BILATERAL);
+        let s = scene(&mut e, [0.0; 4], [0.0; 4]);
+        e.mem.set_u16(s.atoms, 0xd);
+        e.mem.set_u8(s.atoms + 2, 1);
+        e.mem.set_u8(s.atoms + 3, 2);
+        run(&mut e, &s, 4);
+        let done = calls(&seen, ANGULAR_BILATERAL);
+        assert_eq!(done.len(), 2);
+        // i = 1: c0 = 0x10, c1 = 0x20, c2 = 0.
+        assert_eq!(lanes(&done[0].1, 0), [0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(lanes(&done[0].1, 4), [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(lanes(&done[0].1, 8), [1.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn an_angular_friction_atom_without_friction_keeps_its_marker() {
+        let mut e = engine();
+        let s = scene(&mut e, [0.0; 4], [0.0; 4]);
+        e.mem.set_u16(s.atoms, 0x11);
+        e.mem.set_u8(s.atoms + 2, 1);
+        e.mem.set_u8(s.atoms + 4, 3);
+        e.mem.set_f32(s.atoms + 8, 0.0);
+        run(&mut e, &s, 0xc);
+        let record = s.records + 0x10;
+        assert_eq!(e.mem.u8(record), 3);
+        assert_eq!(e.mem.u8(record + 4), 3);
+    }
+
+    #[test]
+    fn the_linear_motor_atom_seeds_the_value_and_commits_through_the_motor() {
+        let mut e = engine();
+        let seen = Seen::default();
+        capture(&mut e, &seen, LINEAR_VELOCITY_BEGIN);
+        capture(&mut e, &seen, CALC_MOTOR_DATA);
+        capture(&mut e, &seen, LINEAR_VELOCITY_COMMIT);
+        let s = scene(&mut e, [0.0; 4], [2.0, 0.0, 0.0, 0.0]);
+        e.mem.set_f32(s.counter, 10.0);
+        e.mem.set_f32(s.counter + 4, 20.0);
+        e.mem.set_u16(s.atoms, 0xb);
+        e.mem.set_u8(s.atoms + 2, 1);
+        e.mem.set_u8(s.atoms + 3, 0);
+        e.mem.set_u16(s.atoms + 4, 0x20);
+        e.mem.set_u16(s.atoms + 6, 0x24);
+        e.mem.set_f32(s.atoms + 8, 1.5);
+        e.mem.set_u32(s.atoms + 0xc, 0x0123_4560);
+        run(&mut e, &s, 0x10);
+        let (words, block) = &calls(&seen, CALC_MOTOR_DATA)[0];
+        assert_eq!(words[0], 0x0123_4560);
+        assert_eq!(f32::from_bits(block[2]), 10.0);
+        assert_eq!(f32::from_bits(block[3]), 20.0);
+        // target - value = 0; value - (B - A) . row 0 = 1.5 - 2.
+        assert_eq!(f32::from_bits(block[4]), 0.0);
+        assert_eq!(f32::from_bits(block[5]), -0.5);
+        assert_eq!(calls(&seen, LINEAR_VELOCITY_COMMIT).len(), 1);
+        assert_eq!(e.mem.f32(s.counter + 0x24), 1.5);
+        assert_eq!(e.mem.u8(s.counter + 0x20), 1);
     }
 }
