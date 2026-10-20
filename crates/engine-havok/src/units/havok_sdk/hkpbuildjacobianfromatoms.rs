@@ -1675,9 +1675,9 @@ pub fn fn_00d6ced0(e: &mut Engine, atom: Ptr, info: Ptr, a: Ptr, b: Ptr, cursor:
 /// each, advancing byte-pointer counters stored in the schema (`+0x64`, `+0x6c`, `+0x70`,
 /// `+0x74`) as it goes.
 ///
-// Translation incomplete: 00d6f460 - atom types 0xe, 0xf, 0x10, 0x12, 0x13, 0x14, 0x17, 0x18,
-// 0x19, 0x1a and 0x1c are not yet translated (the inline angle records sharing the record tail
-// at 00d70646, and the contact and recursive-container atoms); they stop with `open: ...`.
+// Translation incomplete: 00d6f460 - atom types 0x14, 0x17, 0x18, 0x19, 0x1a and 0x1c are not
+// yet translated (the length record and the contact and recursive-container atoms); they stop
+// with `open: ...`.
 pub fn hk_solver_build_jacobian_from_atoms_not_contact(
     e: &mut Engine,
     atoms: Ptr,
@@ -1861,6 +1861,47 @@ fn dispatch_atom(
             *atom += 4;
             advance(e, 0x64, count * 8);
             advance(e, 0x74, count * 8);
+        }
+        0xe => {
+            let written = atom_angle_limit(e, *atom, schema - 0x60);
+            advance(e, 0x64, 8);
+            advance(e, 0x74, 8);
+            *atom += 0x10;
+            if written {
+                angle_record(e, schema - 0x60, cursor);
+            } else {
+                placeholder_loaded(e, cursor);
+            }
+        }
+        0xf => {
+            atom_angle_cone(e, *atom, schema - 0x60);
+            advance(e, 0x64, 8);
+            advance(e, 0x74, 8);
+            *atom += 0x14;
+            angle_record(e, schema - 0x60, cursor);
+        }
+        0x10 => {
+            let written = atom_angle_twist(e, *atom, schema - 0x60);
+            advance(e, 0x64, 8);
+            advance(e, 0x74, 8);
+            *atom += 0x14;
+            if written {
+                angle_record(e, schema - 0x60, cursor);
+            } else {
+                placeholder_loaded(e, cursor);
+            }
+        }
+        0x12 => {
+            atom_angular_motor(e, *atom, schema - 0x60, cursor);
+            advance(e, 0x64, 8);
+            advance(e, 0x74, 8);
+            *atom += 0x14;
+        }
+        0x13 => {
+            atom_ragdoll_motor(e, *atom, schema - 0x60, cursor);
+            advance(e, 0x64, 0x18);
+            advance(e, 0x74, 0x18);
+            *atom += 0x50;
         }
         0x11 => {
             atom_angular_friction(e, *atom, schema - 0x60, cursor);
@@ -2173,6 +2214,555 @@ fn atom_angular_friction(e: &mut Engine, atom: u32, fp: u32, cursor: Ptr) {
     } else {
         let marker = e.mem.u8(atom + 4);
         placeholder_from_stack(e, cursor, marker);
+    }
+}
+
+/// The `double` at `address` as an x87 arithmetic memory operand.
+fn m64(e: &Engine, address: u32) -> f64 {
+    f64::from_bits(e.mem.u64(address))
+}
+
+/// `FSTP dword` then `FLD dword`: the value rounded through a float.
+fn through_float(value: f64) -> f64 {
+    x87_load32(x87_store32(value))
+}
+
+/// `hkMath_atan2fApproximation` on two floats (each copied through the x87 stack), the result
+/// in `ST0`.
+fn atan2_of(e: &mut Engine, first: f32, second: f32) -> f64 {
+    let words = [
+        x87_quiet_bits(first.to_bits()),
+        x87_quiet_bits(second.to_bits()),
+    ];
+    e.call(ATAN2_APPROXIMATION, &args![words[0], words[1]])
+        .f64()
+}
+
+/// The dispatcher's turn loops (`00d7010a` and `00d70955`): the float angle at `angle_at` is
+/// moved by whole turns of 2 pi (the doubles at `0101ff40`, `0101ff48`) until it lies within pi
+/// of `limit`, each step stored as a float and loaded again. Returns the angle as the x87 stack
+/// holds it at the end.
+fn wrap_turns(e: &mut Engine, angle_at: u32, limit: f64) -> f64 {
+    let pi = x87_load64(e.mem.u64(PI));
+    let two_pi = x87_load64(e.mem.u64(TWO_PI));
+    let mut angle = fld(e, angle_at);
+    if compare_status(pi, x87_sub(limit, angle)) & 0x05 == 0x01 {
+        loop {
+            fstp(e, angle_at, x87_add(angle, two_pi));
+            angle = fld(e, angle_at);
+            if compare_status(x87_sub(limit, angle), pi) != 0 {
+                break;
+            }
+        }
+    }
+    while compare_status(x87_sub(angle, limit), pi) & 0x41 == 0 {
+        fstp(e, angle_at, x87_sub(angle, two_pi));
+        angle = fld(e, angle_at);
+    }
+    angle
+}
+
+/// The placeholder record of the angle atoms (`00d7019e`): the stream's first float loaded,
+/// `FLT_EPSILON` (the double) added, the marker 1 at `+4` and the tag 3; the cursor moves on
+/// by 0x10.
+fn placeholder_loaded(e: &mut Engine, cursor: Ptr) {
+    let record = e.mem.u32(cursor.addr());
+    let first = fld(e, record);
+    e.mem.set_u8(record + 4, 1);
+    let sum = x87_add(first, m64(e, EPSILON));
+    fstp(e, record, sum);
+    e.mem.set_u8(record, 3);
+    e.mem.set_u32(cursor.addr(), record + 0x10);
+}
+
+/// The angle record shared by atom types 0xe, 0xf and 0x10 (`00d70646`), from the frame's
+/// input block: the axis `v` (`+0x120`), two floats `a1`, `a2` (`+0x130`, `+0x134`), the angle
+/// (`+0x138`) and the weight `k` (`+0x13c`). The record gets the angular pair of `v` (`+0`,
+/// `+0x10`), `k / (sum + FLT_EPSILON)` at `+0xc`, with `c = -schema.float[2]`: `angle * c` at
+/// `+0x1c`, `(a1 * c) * k` at `+0x20`, `(c * a2) * k` at `+0x24`, `k` at `+0x28`; the first
+/// float gets `FLT_EPSILON` added and the tag 0xd. The cursor moves on by 0x30.
+fn angle_record(e: &mut Engine, fp: u32, cursor: Ptr) {
+    let weight = fld(e, fp + 0x13c);
+    let record = e.mem.u32(cursor.addr());
+    let sum = angular_pair(e, fp + SCHEMA, fp + 0x120, record);
+    e.mem.set_u32(fp + 0x298, sum.to_bits());
+    let epsilon = epsilon_on_stack(e);
+    let mass = through_float(x87_add(x87_load32(sum.to_bits()), epsilon));
+    fstp(e, fp + 0x10, mass);
+    fstp(e, record + 0xc, x87_div(weight, mass));
+    let negated = -fld(e, fp + SCHEMA + 8);
+    fstp(e, fp + 0x10, negated);
+    let angle = fld(e, fp + 0x138);
+    let c = fld(e, fp + 0x10);
+    fstp(e, record + 0x1c, x87_mul(angle, c));
+    let record = e.mem.u32(cursor.addr());
+    e.mem.set_u32(cursor.addr(), record + 0x30);
+    let first = x87_mul(x87_mul(fld(e, fp + 0x130), c), weight);
+    fstp(e, record + 0x20, first);
+    let second = x87_mul(x87_mul(c, m32(e, fp + 0x134)), weight);
+    fstp(e, record + 0x24, second);
+    fstp(e, record + 0x28, weight);
+    let sum = x87_add(epsilon, m32(e, record));
+    fstp(e, record, sum);
+    e.mem.set_u8(record, 0xd);
+}
+
+/// Atom type 0xe (`00d6ffe2`): with `atom.byte[2]` set, the angle about row `axis =
+/// atom.byte[3]` of block B: `atan2(third_A . next_B, (third_A x row_A) . next_B)` (`next`,
+/// `third` from the tables at `010d33c1`, `010d33c2`), moved by whole turns to within pi of
+/// `-counter.float[1]`; the input block of the angle record gets row `axis` of block B, the
+/// atom's floats `+4`, `+8` and `atom.float[3] * schema.float[0x10]`. Returns false (the
+/// placeholder) without `atom.byte[2]`.
+fn atom_angle_limit(e: &mut Engine, atom: u32, fp: u32) -> bool {
+    if e.mem.u8(atom + 2) == 0 {
+        return false;
+    }
+    let axis = u32::from(e.mem.u8(atom + 3));
+    let weight = x87_mul(fld(e, atom + 0xc), m32(e, fp + SCHEMA + 0x40));
+    let next = u32::from(e.mem.u8(NEXT_AXIS_TABLE + axis));
+    let next_b = load_vec(e, fp + ROWS_B + next);
+    fstp(e, fp + 0x13c, weight);
+    let third = u32::from(e.mem.u8(THIRD_AXIS_TABLE + axis));
+    let first = fld(e, atom + 4);
+    fstp(e, fp + 0x130, first);
+    let second = fld(e, atom + 8);
+    let third_a = load_vec(e, fp + ROWS_A + third);
+    fstp(e, fp + 0x134, second);
+    let dot = sum3(mul(third_a, next_b));
+    copy_vec(e, fp + ROWS_B + (axis << 4), fp + 0x120);
+    let row_a = load_vec(e, fp + ROWS_A + (axis << 4));
+    let turned = sum3(mul(cross(third_a, row_a), next_b));
+    e.mem.set_u32(fp + 0x238, turned.to_bits());
+    e.mem.set_u32(fp + 0x260, dot.to_bits());
+    let angle = atan2_of(e, dot, turned);
+    let counter = e.mem.u32(fp + SCHEMA + 0x64);
+    fstp(e, fp + 0x138, angle);
+    let limit = x87_mul(fld(e, counter + 4), m64(e, MINUS_ONE));
+    fstp(e, fp + 0x10, limit);
+    let limit = fld(e, fp + 0x10);
+    wrap_turns(e, fp + 0x138, limit);
+    true
+}
+
+/// Atom type 0xf (`00d7048a`): the angle about `n`, row `axis = atom.byte[3]` of block B plus
+/// that of block A, normalised when its length is above the double `1e-16` (`010d33d0`; then
+/// `half` is half the length, else `n` is block A's row and `half` 0):
+/// `atan2(w . t, w . (t x n))` with `t = n x b`, `b` and `w` the rows `atom.byte[4]` of blocks A
+/// and B. The input block of the angle record gets `n`, the atom's floats `+8`, `+0xc` and the
+/// weight `(atom.float[4] * schema.float[0x10]) * half * half`.
+fn atom_angle_cone(e: &mut Engine, atom: u32, fp: u32) {
+    let other = u32::from(e.mem.u8(atom + 4)) << 4;
+    let first = fld(e, atom + 8);
+    fstp(e, fp + 0x130, first);
+    let axis = u32::from(e.mem.u8(atom + 3)) << 4;
+    let second = fld(e, atom + 0xc);
+    fstp(e, fp + 0x134, second);
+    let row_a = load_vec(e, fp + ROWS_A + axis);
+    let sum = add(load_vec(e, fp + ROWS_B + axis), row_a);
+    let length = sum3(mul(sum, sum)).sqrt();
+    e.mem.set_u32(fp + 0x278, length.to_bits());
+    let loaded = x87_load32(length.to_bits());
+    let normal = if compare_status(loaded, m64(e, TINY)) & 0x41 == 0 {
+        let half = x87_mul(loaded, m64(e, HALF));
+        fstp(e, fp + 0x178, half);
+        let inverse = x87_store32(x87_div(1.0, loaded));
+        e.mem.set_u32(fp + 0x10, inverse);
+        mul([f32::from_bits(inverse); 4], sum)
+    } else {
+        fstp(e, fp + 0x178, 0.0);
+        row_a
+    };
+    let b = load_vec(e, fp + ROWS_A + other);
+    let tangent = cross(normal, b);
+    let binormal = cross(tangent, normal);
+    store_vec(e, fp + 0x3a0, normal);
+    let w = load_vec(e, fp + ROWS_B + other);
+    let along = sum3(mul(w, tangent));
+    let across = sum3(mul(w, binormal));
+    e.mem.set_u32(fp + 0x288, across.to_bits());
+    e.mem.set_u32(fp + 0x290, along.to_bits());
+    let angle = atan2_of(e, along, across);
+    fstp(e, fp + 0x138, angle);
+    let weight = x87_mul(fld(e, atom + 0x10), m32(e, fp + SCHEMA + 0x40));
+    let half = fld(e, fp + 0x178);
+    let weight = x87_mul(x87_mul(weight, half), half);
+    store_vec(e, fp + 0x120, normal);
+    fstp(e, fp + 0x13c, weight);
+}
+
+/// Atom type 0x10 (`00d701c2`): `c = a x b` with `a` row `atom.byte[3]` of block B and `b` row
+/// `atom.byte[4]` of block A. Returns false (the placeholder) when `|c|^2` is below the float at
+/// `0104da4c`. Otherwise the angle `atan2(|c|, a . b)` (the CRT square root `00ec6040`) scaled
+/// and offset by the tables at `010d33e0`/`010d33d8` (index `atom.byte[5]`); the input block
+/// gets `(c / |c|) * sign` (`010d33e4` going down), the atom's floats `+8`, `+0xc`, the angle and
+/// `atom.float[4] * schema.float[0x10]`. With a limit slot `s = atom.byte[6] > 1`, the limit
+/// `a = counter.float[s]` and `c = -counter.float[1]`, `x = angle - a`, `y = c - x`, the bound
+/// `M = max(schema.float[3] * 0.5, a * K)` (`K` the double at `0103c7c8`; NaN picks the first),
+/// `counter.float[s]` becomes `a - M` and the angle `x + M`, both moved by `y` when
+/// `0.5 * (0.5 m + 2 M) < -y` and `c` is not 0; the slot keeps at least the small float.
+fn atom_angle_twist(e: &mut Engine, atom: u32, fp: u32) -> bool {
+    let axis = u32::from(e.mem.u8(atom + 3)) << 4;
+    let other = u32::from(e.mem.u8(atom + 4)) << 4;
+    let a = load_vec(e, fp + ROWS_B + axis);
+    let b = load_vec(e, fp + ROWS_A + other);
+    let turned = cross(a, b);
+    store_vec(e, fp + 0x490, turned);
+    let squared = sum3(mul(turned, turned));
+    e.mem.set_u32(fp + 0x268, squared.to_bits());
+    let loaded = x87_load32(squared.to_bits());
+    let small = fld(e, SMALL_FLOAT);
+    if !parity_even(compare_status(loaded, small), 0x05) {
+        return false;
+    }
+    let index = u32::from(e.mem.u8(atom + 5));
+    let dot = sum3(mul(a, b));
+    e.mem.set_u32(fp + 0x270, dot.to_bits());
+    let root = e.call(X87_SQRT, &args![loaded]).f64();
+    fstp(e, fp + 0x30, root);
+    let length = f32::from_bits(e.mem.u32(fp + 0x30));
+    let angle = atan2_of(e, length, dot);
+    let scaled = x87_mul(angle, m32(e, ANGLE_SCALE_TABLE + 4 * index));
+    let index = u32::from(e.mem.u8(atom + 5));
+    let value = x87_add(scaled, m32(e, ANGLE_OFFSET_TABLE + 4 * index));
+    let sign_at = AXIS_SIGN_TABLE.wrapping_sub(4 * index);
+    let slot = u32::from(e.mem.u8(atom + 6));
+    fstp(e, fp + 0x5c, value);
+    let sign = fld(e, sign_at);
+    fstp(e, fp + 0x3c, sign);
+    let sign = f32::from_bits(e.mem.u32(fp + 0x3c));
+    let weight = x87_mul(fld(e, atom + 0x10), m32(e, fp + SCHEMA + 0x40));
+    fstp(e, fp + 0x13c, weight);
+    let inverse = x87_div(1.0, fld(e, fp + 0x30));
+    fstp(e, fp + 0x10, inverse);
+    let value = fld(e, fp + 0x5c);
+    fstp(e, fp + 0x138, value);
+    let inverse = f32::from_bits(e.mem.u32(fp + 0x10));
+    let first = fld(e, atom + 8);
+    fstp(e, fp + 0x130, first);
+    let second = fld(e, atom + 0xc);
+    let axis_vector = mul(mul([inverse; 4], load_vec(e, fp + 0x490)), [sign; 4]);
+    fstp(e, fp + 0x134, second);
+    store_vec(e, fp + 0x120, axis_vector);
+    if slot > 1 {
+        twist_limit(e, fp, slot, value);
+    }
+    true
+}
+
+/// The limit update of atom type 0x10 (`00d7036d`); `value` is the angle on the x87 stack.
+fn twist_limit(e: &mut Engine, fp: u32, slot: u32, value: f64) {
+    let counter = e.mem.u32(fp + SCHEMA + 0x64);
+    let slot_at = counter.wrapping_add(slot);
+    let limit = fld(e, slot_at);
+    fstp(e, fp + 0x2c, limit);
+    let negated = -fld(e, counter + 4);
+    fstp(e, fp + 0x10, negated);
+    let a = fld(e, fp + 0x2c);
+    fstp(e, fp + 0x34, x87_sub(value, a));
+    let c = fld(e, fp + 0x10);
+    let x = fld(e, fp + 0x34);
+    fstp(e, fp + 0x3c, x87_sub(c, x));
+    let half = x87_load64(e.mem.u64(HALF));
+    let half_m = x87_mul(fld(e, fp + SCHEMA + 0xc), half);
+    fstp(e, fp + 0x30, half_m);
+    fstp(e, fp + 0x10, x87_mul(a, m64(e, LIMIT_SCALE)));
+    let scaled = fld(e, fp + 0x10);
+    let half_m = fld(e, fp + 0x30);
+    if parity_even(compare_status(half_m, scaled), 0x05) {
+        fstp(e, fp + 0x30, half_m);
+    } else {
+        fstp(e, fp + 0x30, scaled);
+    }
+    let bound = fld(e, fp + 0x30);
+    fstp(e, fp + 0x2c, x87_sub(a, bound));
+    fstp(e, fp + 0x34, x87_add(x, bound));
+    let y = fld(e, fp + 0x3c);
+    let blend = x87_mul(half, x87_add(half_m, x87_add(bound, bound)));
+    fstp(e, fp + 0x10, blend);
+    let blend = fld(e, fp + 0x10);
+    if !parity_even(compare_status(blend, -y), 0x05) && parity_even(compare_status(0.0, c), 0x44) {
+        let low = x87_sub(fld(e, fp + 0x2c), y);
+        fstp(e, fp + 0x2c, low);
+        let high = x87_add(y, m32(e, fp + 0x34));
+        fstp(e, fp + 0x34, high);
+    }
+    let small = fld(e, SMALL_FLOAT);
+    if compare_status(small, m32(e, fp + 0x2c)) & 0x05 != 0x01 {
+        fstp(e, fp + 0x2c, small);
+    }
+    let low = fld(e, fp + 0x2c);
+    fstp(e, slot_at, low);
+    let high = fld(e, fp + 0x34);
+    fstp(e, fp + 0x138, high);
+}
+
+/// The second record of the motor atoms (tag 0xf, 0x40 bytes) from the motor data at `+0x200`
+/// of the frame: the first float plus `FLT_EPSILON`, `out[2]` and `out[3]` times
+/// `schema.float[1]` at `+0x20`, `+0x24` (`tau_first`: the exe loads `schema.float[1]` first
+/// for `+0x20`), and `out[1]`, `out[4]`, `out[5]` at `+0x28`, `+0x2c`, `+0x30`.
+fn motor_commit_record(e: &mut Engine, fp: u32, cursor: Ptr, tau_first: bool) {
+    let second = e.mem.u32(cursor.addr());
+    let sum = x87_add(fld(e, second), m64(e, EPSILON));
+    fstp(e, second, sum);
+    e.mem.set_u8(second, 0xf);
+    let first = if tau_first {
+        let tau = fld(e, fp + SCHEMA + 4);
+        e.mem.set_u32(cursor.addr(), second + 0x40);
+        x87_mul(tau, m32(e, fp + 0x208))
+    } else {
+        let out = fld(e, fp + 0x208);
+        e.mem.set_u32(cursor.addr(), second + 0x40);
+        x87_mul(out, m32(e, fp + SCHEMA + 4))
+    };
+    fstp(e, second + 0x20, first);
+    let product = x87_mul(fld(e, fp + 0x20c), m32(e, fp + SCHEMA + 4));
+    fstp(e, second + 0x24, product);
+    for (to, from) in [(0x28, 0x204), (0x2c, 0x210), (0x30, 0x214)] {
+        let value = fld(e, fp + from);
+        fstp(e, second + to, value);
+    }
+}
+
+/// The begin part of the motor atoms: the angular pair of the axis at `axis_at` into the record
+/// at the cursor (the sum stored at `sum_at`) and `1 / (sum + FLT_EPSILON)` at `record + 0xc`
+/// and the frame's `+0x140`, each step rounded through the float at `scratch`. Returns the
+/// record.
+fn motor_begin(
+    e: &mut Engine,
+    fp: u32,
+    cursor: Ptr,
+    axis_at: u32,
+    sum_at: u32,
+    scratch: u32,
+) -> u32 {
+    let record = e.mem.u32(cursor.addr());
+    let sum = angular_pair(e, fp + SCHEMA, axis_at, record);
+    e.mem.set_u32(sum_at, sum.to_bits());
+    let mass = through_float(x87_add(x87_load32(sum.to_bits()), m64(e, EPSILON)));
+    fstp(e, scratch, mass);
+    let inverse = through_float(x87_div(1.0, mass));
+    fstp(e, scratch, inverse);
+    fstp(e, record + 0xc, inverse);
+    fstp(e, fp + 0x140, inverse);
+    record
+}
+
+/// Atom type 0x12 (`00d7081a`): an angular motor. `flag`, `value` are the byte and the float at
+/// `counter + atom.short[2]`, `+ atom.short[3]`. Without a motor (`atom.word[4]`) or
+/// `atom.byte[2]` the placeholder record (marker 1). Otherwise the angle about row `axis =
+/// atom.byte[3]`: `atan2(next_B . third_A, (third_A x row_A) . next_B)`, moved by whole turns to
+/// within pi of `-float at counter + atom.short[4] + 4` when that offset is not 0; `value` takes
+/// it when `flag` is 0. The angular pair of row `axis` of block A, `hkCalcMotorData` (`{1 /
+/// mass, schema, counter[0], counter[1], target - value, value - angle}`) and the two records
+/// follow; `value`/`flag` become the target and 1 unless they are equal and `flag` is set.
+fn atom_angular_motor(e: &mut Engine, atom: u32, fp: u32, cursor: Ptr) {
+    let counter = e.mem.u32(fp + SCHEMA + 0x64);
+    let value = (e.mem.u16(atom + 6) as i16 as i32 as u32).wrapping_add(counter);
+    e.mem.set_u32(fp + 0x34, value);
+    let motor = e.mem.u32(atom + 0x10);
+    let flag = (e.mem.u16(atom + 4) as i16 as i32 as u32).wrapping_add(counter);
+    e.mem.set_u32(fp + 0x30, flag);
+    e.mem.set_u32(fp + 0x5c, motor);
+    if motor == 0 || e.mem.u8(atom + 2) == 0 {
+        placeholder_from_stack(e, cursor, 1);
+        return;
+    }
+    let axis = u32::from(e.mem.u8(atom + 3));
+    let next = u32::from(e.mem.u8(NEXT_AXIS_TABLE + axis));
+    let third = u32::from(e.mem.u8(THIRD_AXIS_TABLE + axis));
+    let third_a = load_vec(e, fp + ROWS_A + third);
+    let next_b = load_vec(e, fp + ROWS_B + next);
+    let dot = sum3(mul(next_b, third_a));
+    let row_a = load_vec(e, fp + ROWS_A + (axis << 4));
+    e.mem.set_u32(fp + 0x2fc, dot.to_bits());
+    let turned = sum3(mul(cross(third_a, row_a), next_b));
+    e.mem.set_u32(fp + 0x2ac, turned.to_bits());
+    let angle = atan2_of(e, dot, turned);
+    fstp(e, fp + 0x2c, angle);
+    let offset = e.mem.u16(atom + 8);
+    let angle = if offset != 0 {
+        let at = (offset as i16 as i32 as u32)
+            .wrapping_add(e.mem.u32(fp + SCHEMA + 0x64))
+            .wrapping_add(4);
+        let limit = x87_mul(fld(e, at), m64(e, MINUS_ONE));
+        fstp(e, fp + 0x10, limit);
+        let limit = fld(e, fp + 0x10);
+        wrap_turns(e, fp + 0x2c, limit)
+    } else {
+        fld(e, fp + 0x2c)
+    };
+    if e.mem.u8(flag) == 0 {
+        fstp(e, value, angle);
+    }
+    fstp(e, fp + 0x148, 0.0);
+    fstp(e, fp + 0x14c, 0.0);
+    let axis_at = fp + ROWS_A + (axis << 4);
+    e.mem.set_u32(fp + 0x10, axis_at);
+    let record = motor_begin(e, fp, cursor, axis_at, fp + 0x23c, fp + 0x10);
+    let counter = e.mem.u32(fp + SCHEMA + 0x64);
+    let target = fld(e, atom + 0xc);
+    e.mem.set_u32(fp + 0x144, fp + SCHEMA);
+    let bound = e.mem.u32(counter);
+    e.mem.set_u32(fp + 0x148, bound);
+    let bound = e.mem.u32(counter + 4);
+    let remaining = x87_sub(target, m32(e, value));
+    e.mem.set_u32(fp + 0x14c, bound);
+    fstp(e, fp + 0x150, remaining);
+    let passed = x87_sub(m32(e, value), angle);
+    fstp(e, fp + 0x154, passed);
+    e.call(CALC_MOTOR_DATA, &args![motor, fp + 0x140, fp + 0x200]);
+    let weight = x87_mul(fld(e, fp + 0x200), m32(e, fp + SCHEMA + 8));
+    fstp(e, record + 0x1c, weight);
+    motor_commit_record(e, fp, cursor, true);
+    let now = fld(e, value);
+    let wanted = fld(e, atom + 0xc);
+    if parity_even(compare_status(wanted, now), 0x44) || e.mem.u8(flag) == 0 {
+        let wanted = fld(e, atom + 0xc);
+        fstp(e, value, wanted);
+        e.mem.set_u8(flag, 1);
+    }
+}
+
+/// Atom type 0x13 (`00d70bff`): a ragdoll motor. Without `atom.byte[2]` the placeholder record
+/// (marker 3). Otherwise the product of block A's matrix (`schema.word[0xf]`) and the atom's
+/// (`+0x10`, `hkMatrix3::setMulMat3Mat3`) at the frame's `+0x1c0`, then for the three motors at
+/// `atom + 0x40` (axes 0, 1, 2 with the other axes 1, 0, 0 from a frame table): a motor of 0
+/// appends the placeholder (marker 1); otherwise the first angle (about block B's row plus block
+/// A's, with block A's other row and block B's) and the second (about the product's row plus
+/// block A's, with block A's other row and the product's); `values[i]` and `flags[i]` take the
+/// first angle and 1 when the flag is 0; the angular pair of the second axis, `hkCalcMotorData`
+/// (`counter[2 i]`, `counter[2 i + 1]`, second - value, value - first) and the two records
+/// follow, and `values[i]` takes the second angle when they differ.
+fn atom_ragdoll_motor(e: &mut Engine, atom: u32, fp: u32, cursor: Ptr) {
+    let counter = e.mem.u32(fp + SCHEMA + 0x64);
+    let flags = (e.mem.u16(atom + 4) as i16 as i32 as u32).wrapping_add(counter);
+    let values = (e.mem.u16(atom + 6) as i16 as i32 as u32).wrapping_add(counter);
+    e.mem.set_u32(fp + 0x34, values);
+    if e.mem.u8(atom + 2) == 0 {
+        placeholder_from_stack(e, cursor, 3);
+        return;
+    }
+    let matrix = e.mem.u32(fp + SCHEMA + 0x3c);
+    e.call(SET_MUL_MAT3_MAT3, &args![fp + 0x1c0, matrix, atom + 0x10]);
+    fstp(e, fp + 0x148, 0.0);
+    fstp(e, fp + 0x14c, 0.0);
+    e.mem.set_u32(fp + 0x144, fp + SCHEMA);
+    for (index, (axis, other)) in [(0u32, 1u32), (1, 0), (2, 0)].into_iter().enumerate() {
+        e.mem.set_u32(fp + 0x100 + 4 * index as u32, axis);
+        e.mem.set_u32(fp + 0x110 + 4 * index as u32, other);
+    }
+    e.mem.set_u32(fp + 0x3c, 0);
+    e.mem.set_u32(fp + 0x5c, flags);
+    e.mem.set_u32(fp + 0x30, atom + 0x40);
+    e.mem.set_u32(fp + 0x2c, 0);
+    loop {
+        let motor = e.mem.u32(e.mem.u32(fp + 0x30));
+        e.mem.set_u32(fp + 0x38, motor);
+        if motor == 0 {
+            placeholder_loaded(e, cursor);
+        } else {
+            ragdoll_motor_axis(e, fp, cursor, motor);
+        }
+        let flag = e.mem.u32(fp + 0x5c).wrapping_add(1);
+        e.mem.set_u32(fp + 0x5c, flag);
+        let next = e.mem.u32(fp + 0x30).wrapping_add(4);
+        e.mem.set_u32(fp + 0x30, next);
+        let slot = e.mem.u32(fp + 0x2c).wrapping_add(4);
+        e.mem.set_u32(fp + 0x2c, slot);
+        let pair = e.mem.u32(fp + 0x3c).wrapping_add(8);
+        e.mem.set_u32(fp + 0x3c, pair);
+        if (pair as i32) >= 0x18 {
+            break;
+        }
+    }
+}
+
+/// The unit axis `sum / |sum|` of the ragdoll motor when `|sum|` is above the double `1e-16`
+/// (the length stored at `length_at`, the inverse at `inverse_at`), else `fallback`.
+fn ragdoll_axis(
+    e: &mut Engine,
+    sum: Vec4,
+    fallback: Vec4,
+    length_at: u32,
+    inverse_at: u32,
+) -> Vec4 {
+    let length = sum3(mul(sum, sum)).sqrt();
+    e.mem.set_u32(length_at, length.to_bits());
+    let loaded = x87_load32(length.to_bits());
+    if compare_status(loaded, m64(e, TINY)) & 0x41 == 0 {
+        let inverse = x87_store32(x87_div(1.0, loaded));
+        e.mem.set_u32(inverse_at, inverse);
+        mul([f32::from_bits(inverse); 4], sum)
+    } else {
+        fallback
+    }
+}
+
+/// One motor of atom type 0x13 (`00d70cc2`..`00d71124`); the frame holds the motor's slot
+/// (`+0x2c`), pair offset (`+0x3c`), flag pointer (`+0x5c`) and the values base (`+0x34`).
+fn ragdoll_motor_axis(e: &mut Engine, fp: u32, cursor: Ptr, motor: u32) {
+    let slot = e.mem.u32(fp + 0x2c);
+    let other = e.mem.u32(fp + 0x110 + slot) << 4;
+    let axis = e.mem.u32(fp + 0x100 + slot) << 4;
+    let row_a = load_vec(e, fp + ROWS_A + axis);
+    let sum = add(load_vec(e, fp + ROWS_B + axis), row_a);
+    e.mem.set_u32(fp + 0x40, axis);
+    let other_a = fp + ROWS_A + other;
+    e.mem.set_u32(fp + 0x10, other_a);
+    let normal = ragdoll_axis(e, sum, row_a, fp + 0x280, fp + 0x27c);
+    let b = load_vec(e, other_a);
+    let tangent = cross(normal, b);
+    let binormal = cross(tangent, normal);
+    let w = load_vec(e, fp + ROWS_B + other);
+    let along = sum3(mul(w, tangent));
+    let across = sum3(mul(w, binormal));
+    e.mem.set_u32(fp + 0x244, across.to_bits());
+    e.mem.set_u32(fp + 0x29c, along.to_bits());
+    let first_angle = atan2_of(e, along, across);
+    fstp(e, fp + 0x25c, first_angle);
+    let axis = e.mem.u32(fp + 0x40);
+    let row_a = load_vec(e, fp + ROWS_A + axis);
+    let sum = add(load_vec(e, fp + 0x1c0 + axis), row_a);
+    let normal = ragdoll_axis(e, sum, row_a, fp + 0x284, fp + 0x40);
+    let product_other = fp + 0x1c0 + other;
+    let b = load_vec(e, e.mem.u32(fp + 0x10));
+    store_vec(e, fp + 0x380, normal);
+    let tangent = cross(normal, b);
+    let binormal = cross(tangent, normal);
+    let w = load_vec(e, product_other);
+    let along = sum3(mul(w, tangent));
+    let across = sum3(mul(w, binormal));
+    e.mem.set_u32(fp + 0x254, across.to_bits());
+    e.mem.set_u32(fp + 0x2a0, along.to_bits());
+    let second_angle = atan2_of(e, along, across);
+    fstp(e, fp + 0x17c, second_angle);
+    let flag = e.mem.u32(fp + 0x5c);
+    let first = fld(e, fp + 0x25c);
+    if e.mem.u8(flag) == 0 {
+        let value_at = e.mem.u32(fp + 0x34).wrapping_add(e.mem.u32(fp + 0x2c));
+        fstp(e, value_at, first);
+        e.mem.set_u8(flag, 1);
+    }
+    let record = motor_begin(e, fp, cursor, fp + 0x380, fp + 0x28c, fp + 0x40);
+    let pair = e.mem.u32(fp + 0x3c);
+    let counter = e.mem.u32(fp + SCHEMA + 0x64);
+    let second = fld(e, fp + 0x17c);
+    let bound = e.mem.u32(pair.wrapping_add(counter));
+    e.mem.set_u32(fp + 0x148, bound);
+    let bound = e.mem.u32(pair.wrapping_add(counter).wrapping_add(4));
+    let value_at = e.mem.u32(fp + 0x2c).wrapping_add(e.mem.u32(fp + 0x34));
+    e.mem.set_u32(fp + 0x14c, bound);
+    fstp(e, fp + 0x150, x87_sub(second, m32(e, value_at)));
+    fstp(e, fp + 0x154, x87_sub(m32(e, value_at), first));
+    e.call(CALC_MOTOR_DATA, &args![motor, fp + 0x140, fp + 0x200]);
+    let weight = x87_mul(fld(e, fp + 0x200), m32(e, fp + SCHEMA + 8));
+    let value_at = e.mem.u32(fp + 0x2c).wrapping_add(e.mem.u32(fp + 0x34));
+    fstp(e, record + 0x1c, weight);
+    motor_commit_record(e, fp, cursor, false);
+    let now = fld(e, value_at);
+    let second = fld(e, fp + 0x17c);
+    if parity_even(compare_status(second, now), 0x44) {
+        fstp(e, value_at, second);
     }
 }
 
@@ -4230,5 +4820,299 @@ mod atom_one_d_tests {
         assert_eq!(calls(&seen, LINEAR_VELOCITY_COMMIT).len(), 1);
         assert_eq!(e.mem.f32(s.counter + 0x24), 1.5);
         assert_eq!(e.mem.u8(s.counter + 0x20), 1);
+    }
+}
+
+#[cfg(test)]
+mod atom_angle_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Seen = Rc<RefCell<Vec<(u32, Vec<u32>, [u32; 8])>>>;
+
+    /// The exe's pi and 2 pi (`0101ff40`, `0101ff48`: the float values widened).
+    const PI_VALUE: f64 = std::f32::consts::PI as f64;
+    const TWO_PI_VALUE: f64 = (2.0 * std::f32::consts::PI) as f64;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e.set_global(EPSILON, 1.1920929e-7f64);
+        e.set_global(SMALL_FLOAT, 1.1920929e-7f32);
+        e.set_global(MINUS_ONE, -1.0f64);
+        e.set_global(HALF, 0.5f64);
+        e.set_global(PI, PI_VALUE);
+        e.set_global(TWO_PI, TWO_PI_VALUE);
+        e.set_global(TINY, 1e-16f64);
+        e.set_global(LIMIT_SCALE, 0.05f64);
+        e.set_global(ANGLE_SCALE_TABLE, 1.0f32);
+        e.set_global(ANGLE_OFFSET_TABLE, 0.0f32);
+        e.set_global(AXIS_SIGN_TABLE, 1.0f32);
+        for lane in 0..4 {
+            e.mem.set_u32(SIGN_MASK + 4 * lane, 0x8000_0000);
+        }
+        for (index, offset) in [0u8, 0x10, 0x20, 0, 0x10, 0x20, 0, 0x10, 0x20]
+            .into_iter()
+            .enumerate()
+        {
+            e.mem.set_u8(AXIS_OFFSET_TABLE + index as u32, offset);
+        }
+        e.register(X87_SQRT, |_, a| Ret {
+            st0: f64::from_bits(u64::from(a[0]) | (u64::from(a[1]) << 32)).sqrt(),
+            ..Ret::default()
+        });
+        e
+    }
+
+    /// `hkMath_atan2fApproximation` answers `angle`; the calls are recorded.
+    fn atan2_double(e: &mut Engine, seen: &Seen, angle: f64) {
+        let log = seen.clone();
+        e.register_double(ATAN2_APPROXIMATION, move |_, a| {
+            log.borrow_mut()
+                .push((ATAN2_APPROXIMATION, a.to_vec(), [0; 8]));
+            Ret {
+                st0: angle,
+                ..Ret::default()
+            }
+        });
+    }
+
+    /// `hkCalcMotorData` records its input block and answers `out[k] = k + 1`.
+    fn motor_double(e: &mut Engine, seen: &Seen) {
+        let log = seen.clone();
+        e.register_double(CALC_MOTOR_DATA, move |e, a| {
+            let block = std::array::from_fn(|word| e.mem.u32(a[1] + 4 * word as u32));
+            log.borrow_mut().push((CALC_MOTOR_DATA, a.to_vec(), block));
+            for word in 0..6u32 {
+                e.mem.set_f32(a[2] + 4 * word, (word + 1) as f32);
+            }
+            Ret::default()
+        });
+    }
+
+    fn calls(seen: &Seen, address: u32) -> Vec<(Vec<u32>, [u32; 8])> {
+        seen.borrow()
+            .iter()
+            .filter(|(at, _, _)| *at == address)
+            .map(|(_, words, block)| (words.clone(), *block))
+            .collect()
+    }
+
+    struct Scene {
+        info: u32,
+        atoms: u32,
+        records: u32,
+        cursor: u32,
+        counter: u32,
+    }
+
+    fn rows(e: &mut Engine, base: u32) {
+        store_vec(e, base, [1.0, 0.0, 0.0, 0.0]);
+        store_vec(e, base + 0x10, [0.0, 1.0, 0.0, 0.0]);
+        store_vec(e, base + 0x20, [0.0, 0.0, 1.0, 0.0]);
+    }
+
+    /// Identity rotation blocks for both bodies (pivots at the origin), two solver bodies with
+    /// identity rows at `+0x50` and unit inverse inertia, `schema.float[1] = 0.5`,
+    /// `schema.float[2] = 2`, `schema.float[3] = 4` and `schema.float[0x10] = 2`.
+    fn scene(e: &mut Engine) -> Scene {
+        let info = e.mem.alloc(0x80);
+        for slot in [0x38u32, 0x3c] {
+            let block = e.mem.alloc(0x40);
+            rows(e, block);
+            e.mem.set_u32(info + slot, block);
+        }
+        for slot in [0x30u32, 0x34] {
+            let body = e.mem.alloc(0x80);
+            store_vec(e, body + 0x30, [1.0, 1.0, 1.0, 0.0]);
+            rows(e, body + 0x50);
+            e.mem.set_u32(info + slot, body);
+        }
+        e.mem.set_f32(info + 4, 0.5);
+        e.mem.set_f32(info + 8, 2.0);
+        e.mem.set_f32(info + 0xc, 4.0);
+        e.mem.set_f32(info + 0x40, 2.0);
+        let counter = e.mem.alloc(0x100);
+        e.mem.set_u32(info + 0x64, counter);
+        let atoms = e.mem.alloc(0x100);
+        let records = e.mem.alloc(0x200);
+        let cursor = e.mem.alloc(8);
+        e.mem.set_u32(cursor, records);
+        Scene {
+            info,
+            atoms,
+            records,
+            cursor,
+            counter,
+        }
+    }
+
+    fn run(e: &mut Engine, s: &Scene, size: u32) {
+        e.call(0x00d6_f460, &args![s.atoms, size, s.info, s.cursor]);
+    }
+
+    #[test]
+    fn the_angle_limit_atom_wraps_the_angle_and_writes_the_angle_record() {
+        let mut e = engine();
+        let seen = Seen::default();
+        atan2_double(&mut e, &seen, 4.0);
+        let s = scene(&mut e);
+        // Limit -counter.float[1] = -0.5: 4 - (-0.5) is above pi, so one turn comes off.
+        e.mem.set_f32(s.counter + 4, 0.5);
+        e.mem.set_u16(s.atoms, 0xe);
+        e.mem.set_u8(s.atoms + 2, 1);
+        e.mem.set_u8(s.atoms + 3, 0);
+        e.mem.set_f32(s.atoms + 4, 0.25);
+        e.mem.set_f32(s.atoms + 8, 0.75);
+        e.mem.set_f32(s.atoms + 0xc, 3.0);
+        run(&mut e, &s, 0x10);
+        let angle = (4.0f64 - TWO_PI_VALUE) as f32;
+        let record = s.records + 0x10;
+        assert_eq!(e.mem.u8(record), 0xd);
+        assert_eq!(e.mem.f32(record + 0x1c), (f64::from(angle) * -2.0) as f32);
+        // k = 3 * 2 = 6; the angular sum is 1 + 1 = 2.
+        assert_eq!(e.mem.f32(record + 0x28), 6.0);
+        let mass = (2.0f64 + 1.1920929e-7) as f32;
+        assert_eq!(e.mem.f32(record + 0xc), (6.0 / f64::from(mass)) as f32);
+        assert_eq!(e.mem.f32(record + 0x20), (0.25f64 * -2.0 * 6.0) as f32);
+        assert_eq!(e.mem.f32(record + 0x24), (-2.0f64 * 0.75 * 6.0) as f32);
+        assert_eq!(e.mem.u32(s.cursor), record + 0x30);
+    }
+
+    #[test]
+    fn a_disabled_angle_limit_atom_appends_the_placeholder() {
+        let mut e = engine();
+        let s = scene(&mut e);
+        e.mem.set_u16(s.atoms, 0xe);
+        run(&mut e, &s, 0x10);
+        let record = s.records + 0x10;
+        assert_eq!(e.mem.u8(record), 3);
+        assert_eq!(e.mem.u8(record + 4), 1);
+        assert_eq!(e.mem.u32(s.cursor), record + 0x10);
+    }
+
+    #[test]
+    fn the_cone_atom_weights_by_the_square_of_half_the_summed_axis() {
+        let mut e = engine();
+        let seen = Seen::default();
+        atan2_double(&mut e, &seen, 0.5);
+        let s = scene(&mut e);
+        e.mem.set_u16(s.atoms, 0xf);
+        e.mem.set_u8(s.atoms + 3, 0);
+        e.mem.set_u8(s.atoms + 4, 1);
+        e.mem.set_f32(s.atoms + 0x10, 3.0);
+        run(&mut e, &s, 0x14);
+        // The summed axis (2, 0, 0) has length 2, half 1: the weight is 3 * 2 * 1 * 1.
+        let record = s.records + 0x10;
+        assert_eq!(e.mem.f32(record + 0x28), 6.0);
+        assert_eq!(e.mem.f32(record + 0x1c), -1.0);
+        // t = n x b with n = x and b = y is z, so w = y gives atan2(0, y . (z x x)) = atan2(0, 1).
+        let (words, _) = &calls(&seen, ATAN2_APPROXIMATION)[0];
+        assert_eq!(f32::from_bits(words[0]), 0.0);
+        assert_eq!(f32::from_bits(words[1]).abs(), 1.0);
+    }
+
+    #[test]
+    fn parallel_twist_axes_append_the_placeholder() {
+        let mut e = engine();
+        let s = scene(&mut e);
+        e.mem.set_u16(s.atoms, 0x10);
+        e.mem.set_u8(s.atoms + 3, 0);
+        e.mem.set_u8(s.atoms + 4, 0);
+        run(&mut e, &s, 0x14);
+        let record = s.records + 0x10;
+        assert_eq!(e.mem.u8(record), 3);
+        assert_eq!(e.mem.u32(s.cursor), record + 0x10);
+    }
+
+    #[test]
+    fn the_twist_atom_with_a_limit_slot_moves_the_slot_and_the_angle() {
+        let mut e = engine();
+        let seen = Seen::default();
+        atan2_double(&mut e, &seen, 1.0);
+        let s = scene(&mut e);
+        // a = counter.float[2] = 0.25, c = -counter.float[1] = -0.5.
+        e.mem.set_f32(s.counter + 4, 0.5);
+        e.mem.set_f32(s.counter + 8, 0.25);
+        e.mem.set_u16(s.atoms, 0x10);
+        e.mem.set_u8(s.atoms + 3, 0);
+        e.mem.set_u8(s.atoms + 4, 1);
+        e.mem.set_u8(s.atoms + 6, 8);
+        e.mem.set_f32(s.atoms + 0x10, 1.0);
+        run(&mut e, &s, 0x14);
+        // value 1: x = 0.75, y = -1.25, M = max(4 * 0.5, 0.25 * 0.05) = 2;
+        // 0.5 * (2 + 4) = 3 is not below 1.25, so the slot is 0.25 - 2 (at least the small
+        // float) and the angle 0.75 + 2.
+        assert_eq!(e.mem.f32(s.counter + 8), 1.1920929e-7);
+        let record = s.records + 0x10;
+        assert_eq!(e.mem.f32(record + 0x1c), -5.5);
+    }
+
+    #[test]
+    fn the_angular_motor_atom_commits_two_records_and_updates_the_value() {
+        let mut e = engine();
+        let seen = Seen::default();
+        atan2_double(&mut e, &seen, 0.5);
+        motor_double(&mut e, &seen);
+        let s = scene(&mut e);
+        e.mem.set_f32(s.counter, 10.0);
+        e.mem.set_f32(s.counter + 4, 20.0);
+        e.mem.set_u16(s.atoms, 0x12);
+        e.mem.set_u8(s.atoms + 2, 1);
+        e.mem.set_u16(s.atoms + 4, 0x20);
+        e.mem.set_u16(s.atoms + 6, 0x24);
+        e.mem.set_f32(s.atoms + 0xc, 1.5);
+        e.mem.set_u32(s.atoms + 0x10, 0x0123_4560);
+        run(&mut e, &s, 0x14);
+        let (words, block) = &calls(&seen, CALC_MOTOR_DATA)[0];
+        assert_eq!(words[0], 0x0123_4560);
+        assert_eq!(f32::from_bits(block[2]), 10.0);
+        assert_eq!(f32::from_bits(block[3]), 20.0);
+        // The value starts as the angle 0.5: target - value = 1, value - angle = 0.
+        assert_eq!(f32::from_bits(block[4]), 1.0);
+        assert_eq!(f32::from_bits(block[5]), 0.0);
+        let first = s.records + 0x10;
+        assert_eq!(e.mem.f32(first + 0x1c), 2.0);
+        let second = first;
+        assert_eq!(e.mem.u8(second), 0xf);
+        assert_eq!(e.mem.f32(second + 0x20), 1.5);
+        assert_eq!(e.mem.f32(second + 0x24), 2.0);
+        assert_eq!(e.mem.f32(second + 0x28), 2.0);
+        assert_eq!(e.mem.u32(s.cursor), second + 0x40);
+        assert_eq!(e.mem.f32(s.counter + 0x24), 1.5);
+        assert_eq!(e.mem.u8(s.counter + 0x20), 1);
+    }
+
+    #[test]
+    fn the_ragdoll_motor_atom_builds_a_record_pair_per_motor() {
+        let mut e = engine();
+        let seen = Seen::default();
+        atan2_double(&mut e, &seen, 0.5);
+        motor_double(&mut e, &seen);
+        e.register(SET_MUL_MAT3_MAT3, |e, a| {
+            rows(e, a[0]);
+            Ret::default()
+        });
+        let s = scene(&mut e);
+        e.mem.set_u16(s.atoms, 0x13);
+        e.mem.set_u8(s.atoms + 2, 1);
+        e.mem.set_u16(s.atoms + 4, 0x40);
+        e.mem.set_u16(s.atoms + 6, 0x50);
+        // Motors for axes 0 and 2; axis 1 has none.
+        e.mem.set_u32(s.atoms + 0x40, 0x0123_4560);
+        e.mem.set_u32(s.atoms + 0x48, 0x0123_4570);
+        run(&mut e, &s, 0x50);
+        let motors = calls(&seen, CALC_MOTOR_DATA);
+        assert_eq!(motors.len(), 2);
+        assert_eq!(motors[1].0[0], 0x0123_4570);
+        // Records: one of 0x40 bytes, the placeholder, one of 0x40 bytes.
+        let placeholder = s.records + 0x10 + 0x40;
+        assert_eq!(e.mem.u8(placeholder), 3);
+        assert_eq!(e.mem.u32(s.cursor), placeholder + 0x10 + 0x40);
+        // The first and third flags are set, the second untouched.
+        assert_eq!(e.mem.u8(s.counter + 0x40), 1);
+        assert_eq!(e.mem.u8(s.counter + 0x41), 0);
+        assert_eq!(e.mem.u8(s.counter + 0x42), 1);
     }
 }
