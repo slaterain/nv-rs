@@ -143,32 +143,36 @@ pub fn fn_006186d0(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(base, 0x0104_d19c);
     e.mem.set_u32(base + 0x18, 0x0104_d188);
     let list = e.call(TOPIC_QUEST_LIST, &args![this]).u32();
-    while list != 0 {
-        let at = e.call(NODE_ITEM, &args![list]).u32();
-        if e.mem.u32(at) == 0 {
-            break;
-        }
-        let at = e.call(NODE_ITEM, &args![list]).u32();
-        let entry = e.mem.u32(at);
-        let array = e.call(PLUS_FOUR, &args![entry]).u32();
-        let count = e.call(WORD_AT_0XC, &args![array]).u32();
-        let mut index = 0u32;
-        while index < count {
-            let info = e.call(0x0061_9f20, &args![entry, index]).u32();
-            if info != 0 {
-                e.with_stack(4, |e, out| {
-                    let array = e.call(PLUS_FOUR, &args![entry]).u32();
-                    e.call(0x0061_bd20, &args![array, index, out]);
-                });
-                e.call(0x0061_f340, &args![info, 0xffffu32]);
-                e.vcall(info, 0x10, &args![1u32]);
+    // The exe tests `list` once and then loops on the node's item: the node
+    // stays the same while each pass removes its item.
+    if list != 0 {
+        loop {
+            let at = e.call(NODE_ITEM, &args![list]).u32();
+            if e.mem.u32(at) == 0 {
+                break;
             }
-            index += 1;
+            let at = e.call(NODE_ITEM, &args![list]).u32();
+            let entry = e.mem.u32(at);
+            let array = e.call(PLUS_FOUR, &args![entry]).u32();
+            let count = e.call(WORD_AT_0XC, &args![array]).u32();
+            let mut index = 0u32;
+            while index < count {
+                let info = e.call(0x0061_9f20, &args![entry, index]).u32();
+                if info != 0 {
+                    e.with_stack(4, |e, out| {
+                        let array = e.call(PLUS_FOUR, &args![entry]).u32();
+                        e.call(0x0061_bd20, &args![array, index, out]);
+                    });
+                    e.call(0x0061_f340, &args![info, 0xffffu32]);
+                    e.vcall(info, 0x10, &args![1u32]);
+                }
+                index += 1;
+            }
+            if entry != 0 {
+                fn_00618890(e, Ptr::new(entry), 1);
+            }
+            e.call(NODE_REMOVE, &args![list]);
         }
-        if entry != 0 {
-            fn_00618890(e, Ptr::new(entry), 1);
-        }
-        e.call(NODE_REMOVE, &args![list]);
     }
     e.call(0x0048_3710, &args![this]);
     e.call(0x0040_37d0, &args![base + 0x40]);
