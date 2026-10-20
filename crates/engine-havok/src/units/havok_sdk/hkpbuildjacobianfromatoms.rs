@@ -1672,12 +1672,11 @@ pub fn fn_00d6ced0(e: &mut Engine, atom: Ptr, info: Ptr, a: Ptr, b: Ptr, cursor:
 /// info block to the stack (the `schema` the 1D builders read), copies both bodies' rotation
 /// blocks (`info.word[0xe]`, `info.word[0xf]`), writes the stream's opening record (tag 1, flag
 /// 8), then walks the atoms (the type word at `atom + 0`) and appends the Jacobian records of
-/// each, advancing byte-pointer counters stored in the schema (`+0x64`, `+0x6c`, `+0x70`,
-/// `+0x74`) as it goes.
-///
-// Translation incomplete: 00d6f460 - atom types 0x14, 0x17, 0x18, 0x19, 0x1a and 0x1c are not
-// yet translated (the length record and the contact and recursive-container atoms); they stop
-// with `open: ...`.
+/// each, advancing the byte-pointer counters stored in the schema (`+0x64` and `+0x74`) as it
+/// goes. The modifier atoms (0x17 to 0x1c) build their child's Jacobian through this function
+/// or the contact builder by address. The exe keeps four constants on the x87 stack across the
+/// loop (1.0, 0.0, the float at `0104da4c` and the double `FLT_EPSILON`); the translation reads
+/// them where an atom uses them.
 pub fn hk_solver_build_jacobian_from_atoms_not_contact(
     e: &mut Engine,
     atoms: Ptr,
@@ -1745,8 +1744,8 @@ pub fn hk_solver_build_jacobian_from_atoms_not_contact(
 }
 
 /// Appends the records of one atom of type `kind` (1..=0x1c) and advances the atom pointer and
-/// the schema counters. The counters are byte pointers in the schema (`+0x64`, `+0x6c`, `+0x70`,
-/// `+0x74`).
+/// the schema counters. The counters are byte pointers in the schema (`+0x64` and `+0x74`;
+/// the opening record also reads `+0x60`, `+0x6c` and `+0x70`).
 fn dispatch_atom(
     e: &mut Engine,
     atom: &mut u32,
@@ -1916,11 +1915,35 @@ fn dispatch_atom(
             e.mem.set_u32(cursor.addr(), record.wrapping_sub(0x10));
             *atom += 0x20;
         }
-        // Types 0x15 and 0x16 are no-ops that do not advance the atom pointer (as in the exe).
-        0x15 | 0x16 => {}
-        other => panic!(
-            "open: hkSolverBuildJacobianFromAtomsNotContact atom type {other:#x} (00d6f460 not yet translated)"
-        ),
+        0x14 => {
+            atom_length(e, *atom, schema - 0x60, cursor);
+            advance(e, 0x64, 8);
+            advance(e, 0x74, 8);
+            *atom += 0x40;
+        }
+        0x17 => {
+            atom_contact_lowering(e, *atom, schema - 0x60, cursor);
+            *atom += 0x30;
+        }
+        0x18 => {
+            atom_body_scaling(e, *atom, schema - 0x60, cursor);
+            *atom += 0x40;
+        }
+        0x19 => {
+            atom_surface_viscosity(e, *atom, schema - 0x60, cursor);
+            *atom += 0x20;
+        }
+        0x1a => {
+            atom_moving_surface(e, *atom, schema - 0x60, cursor);
+            *atom += 0x30;
+        }
+        0x1c => {
+            atom_centre_of_mass(e, *atom, schema - 0x60, cursor);
+            *atom += 0x40;
+        }
+        // Types 0x15 and 0x16 (and those above 0x1c, which the loop already skips) are no-ops
+        // that do not advance the atom pointer, as in the exe.
+        _ => {}
     }
 }
 
@@ -2764,6 +2787,409 @@ fn ragdoll_motor_axis(e: &mut Engine, fp: u32, cursor: Ptr, motor: u32) {
     if parity_even(compare_status(second, now), 0x44) {
         fstp(e, value_at, second);
     }
+}
+
+/// The unit direction of a length atom: `difference * inverse_length(|difference|^2)` when the
+/// float at `0104da4c` is below the squared length, else `fallback` (the squared length is
+/// stored at `squared_at`).
+fn length_direction(e: &mut Engine, difference: Vec4, fallback: Vec4, squared_at: u32) -> Vec4 {
+    let squares = mul(difference, difference);
+    let squared = squares[2] + (squares[1] + squares[0]);
+    e.mem.set_u32(squared_at, squared.to_bits());
+    let small = fld(e, SMALL_FLOAT);
+    if parity_even(compare_status(small, m32(e, squared_at)), 0x05) {
+        fallback
+    } else {
+        mul([inverse_length(e, squared); 4], difference)
+    }
+}
+
+/// Atom type 0x14 (`00d711ab`): a length record between pivot B and the atom's point
+/// `atom.vector[1]` and between pivot A and `atom.vector[2]`, with the offset `atom.float[0xc]`
+/// and the scale `s = atom.float[0xd]`. `n1` is the unit direction of `p1 - pivot B` (the first
+/// axis of `01268370` when too short), `n2` that of `pivot A - p2` (the negated first axis);
+/// the record gets `n1`, `s * n2`, the arms' cross products turned by the bodies' rows
+/// (`(pivot B - centre A) x n1`, `(s n2) x (pivot A - centre B)` as `cross` forms them),
+/// `schema.float[9] / (s^2 mass_B + mass_A + FLT_EPSILON + inertia)` at `+0x2c` and
+/// `((s |pivot A - p2| + |p1 - pivot B|) - offset) * schema.float[2]` at `+0xc`; the first float
+/// gets `FLT_EPSILON` added and the tag 0xb. The cursor moves on by 0x40.
+fn atom_length(e: &mut Engine, atom: u32, fp: u32, cursor: Ptr) {
+    let far_b = load_vec(e, atom + 0x20);
+    let near = load_vec(e, atom + 0x10);
+    let pivot_a = load_vec(e, fp + PIVOT_A);
+    let offset = fld(e, atom + 0x30);
+    let record = e.mem.u32(cursor.addr());
+    fstp(e, fp + 0x570, offset);
+    let scale = fld(e, atom + 0x34);
+    store_vec(e, fp + 0x560, far_b);
+    fstp(e, fp + 0x574, scale);
+    let first_difference = sub(near, load_vec(e, fp + PIVOT_B));
+    let second_difference = sub(pivot_a, far_b);
+    let axis = load_vec(e, AXIS_TABLE);
+    let first = length_direction(e, first_difference, axis, fp + 0x2a4);
+    let negated_axis = negate(e, axis);
+    let second = length_direction(e, second_difference, negated_axis, fp + 0x26c);
+    let body_a = e.mem.u32(fp + SCHEMA + 0x30);
+    let scale = fld(e, fp + 0x574);
+    let body_b = e.mem.u32(fp + SCHEMA + 0x34);
+    fstp(e, fp + 0x5f4, scale);
+    let weight = fld(e, fp + SCHEMA + 8);
+    let scale_lanes = [f32::from_bits(e.mem.u32(fp + 0x5f4)); 4];
+    let pivot_b = load_vec(e, fp + PIVOT_B);
+    fstp(e, fp + 0x5f8, weight);
+    let pivot_a = load_vec(e, fp + PIVOT_A);
+    let numerator = fld(e, fp + SCHEMA + 0x24);
+    store_vec(e, record, first);
+    fstp(e, fp + 0x5fc, numerator);
+    let scaled = mul(scale_lanes, second);
+    store_vec(e, record + 0x10, scaled);
+    store_vec(e, fp + 0x590, pivot_b);
+    let arm_a = sub(pivot_b, load_vec(e, body_a + 0x40));
+    let arm_b = sub(pivot_a, load_vec(e, body_b + 0x40));
+    let turn_a = cross(arm_a, first);
+    let turn_b = cross(scaled, arm_b);
+    let angular_a = rotate_rows(turn_a, body_rows(e, body_a));
+    store_vec(e, record + 0x20, angular_a);
+    let angular_b = rotate_rows(turn_b, body_rows(e, body_b));
+    store_vec(e, record + 0x30, angular_b);
+    let terms = add(
+        mul(mul(angular_b, angular_b), load_vec(e, body_b + 0x30)),
+        mul(mul(angular_a, angular_a), load_vec(e, body_a + 0x30)),
+    );
+    let inertia = sum3(terms);
+    e.mem.set_u32(fp + 0x294, inertia.to_bits());
+    let epsilon = epsilon_on_stack(e);
+    let numerator = fld(e, fp + 0x5fc);
+    fstp(e, fp + 0x38, x87_mul(scale, scale));
+    let first_length = {
+        let d = sub(near, load_vec(e, fp + 0x590));
+        let s = mul(d, d);
+        (s[2] + (s[1] + s[0])).sqrt()
+    };
+    e.mem.set_u32(fp + 0x2a8, first_length.to_bits());
+    let mass = x87_mul(fld(e, fp + 0x38), m32(e, body_b + 0x3c));
+    let mass = x87_add(x87_add(mass, m32(e, body_a + 0x3c)), epsilon);
+    fstp(e, fp + 0x38, mass);
+    let denominator = x87_add(fld(e, fp + 0x38), m32(e, fp + 0x294));
+    fstp(e, fp + 0x38, denominator);
+    let quotient = x87_div(numerator, m32(e, fp + 0x38));
+    let second_length = {
+        let d = sub(pivot_a, load_vec(e, fp + 0x560));
+        let s = mul(d, d);
+        (s[2] + (s[1] + s[0])).sqrt()
+    };
+    e.mem.set_u32(fp + 0x274, second_length.to_bits());
+    fstp(e, record + 0x2c, quotient);
+    let reach = x87_add(x87_mul(scale, m32(e, fp + 0x274)), m32(e, fp + 0x2a8));
+    fstp(e, fp + 0x38, reach);
+    let excess = x87_sub(fld(e, fp + 0x38), m32(e, fp + 0x570));
+    fstp(e, fp + 0x38, excess);
+    let error = x87_mul(fld(e, fp + 0x38), m32(e, fp + 0x5f8));
+    fstp(e, record + 0xc, error);
+    let record = e.mem.u32(cursor.addr());
+    e.mem.set_u32(cursor.addr(), record + 0x40);
+    let sum = x87_add(epsilon, m32(e, record));
+    fstp(e, record, sum);
+    e.mem.set_u8(record, 0xb);
+}
+
+/// Copies the schema (`0x80` bytes) to the frame at `to`.
+fn copy_schema(e: &mut Engine, fp: u32, to: u32) {
+    for word in 0..0x20 {
+        let value = e.mem.u32(fp + SCHEMA + 4 * word);
+        e.mem.set_u32(to + 4 * word, value);
+    }
+}
+
+/// The first atom below a modifier: the chain through `+0x14` while the type is at least 0x17.
+fn modifier_target(e: &Engine, atom: u32) -> u32 {
+    let mut node = atom;
+    loop {
+        node = e.mem.u32(node + 0x14);
+        if e.mem.u16(node) < 0x17 {
+            return node;
+        }
+    }
+}
+
+/// The modifiers' child Jacobian: a contact atom (type 0x16) through
+/// `hkSimpleContactConstraintDataBuildJacobian` with the frame word at `flag_at` (its low byte
+/// set to `flag` first; the other bytes are whatever the frame holds), any other through
+/// `hkSolverBuildJacobianFromAtomsNotContact` with `id`.
+fn child_jacobian(
+    e: &mut Engine,
+    next: u32,
+    id: u32,
+    copy: u32,
+    flag_at: u32,
+    flag: u8,
+    cursor: Ptr,
+) {
+    if e.mem.u16(next) == 0x16 {
+        e.mem.set_u8(flag_at, flag);
+        let word = e.mem.u32(flag_at);
+        e.call(
+            BUILD_CONTACT_JACOBIAN,
+            &args![next, copy, word, cursor.addr()],
+        );
+    } else {
+        e.call(
+            BUILD_NOT_CONTACT_JACOBIAN,
+            &args![next, id, copy, cursor.addr()],
+        );
+    }
+}
+
+/// One entry of atom type 0x17: `u = atom.float[9] * schema.float[1] * schema.float[0] /
+/// atom.float[8] + entry` (each step through a float), stored at `target` when smaller.
+fn lower_target(e: &mut Engine, atom: u32, fp: u32, entry: u32, target: u32) {
+    let value = fld(e, entry);
+    fstp(e, fp + 0x2c, value);
+    let product = x87_mul(fld(e, atom + 0x24), m32(e, fp + SCHEMA + 4));
+    let product = x87_mul(product, m32(e, fp + SCHEMA));
+    let quotient = x87_div(product, m32(e, atom + 0x20));
+    fstp(e, fp + 0x34, quotient);
+    let lowered = x87_add(fld(e, fp + 0x34), m32(e, fp + 0x2c));
+    if compare_status(fld(e, target), lowered) & 0x41 == 0 {
+        fstp(e, target, lowered);
+    }
+}
+
+/// Atom type 0x17 (`00d7189d`): backs the cursor up by 0x10, copies the schema to the frame's
+/// `+0x600` with `float[9]`, `float[0x10]` and `float[0x11]` multiplied by `atom.float[8]`, lowers
+/// the contact values of the atom's target (see `lower_target`; `count = word[2]`, the targets
+/// `node + 0x30 + (word[3] << 5) + 0x10`, `stride = byte[0xa]`, four entries per pass, then the
+/// rest) and builds the child Jacobian of `atom.word[5]` from the copy.
+fn atom_contact_lowering(e: &mut Engine, atom: u32, fp: u32, cursor: Ptr) {
+    let position = e.mem.u32(cursor.addr());
+    e.mem.set_u32(cursor.addr(), position.wrapping_sub(0x10));
+    let scale = fld(e, atom + 0x20);
+    fstp(e, fp + 0x38, scale);
+    let copy = fp + 0x600;
+    copy_schema(e, fp, copy);
+    let scale = fld(e, fp + 0x38);
+    fstp(e, copy + 0x24, x87_mul(scale, m32(e, fp + SCHEMA + 0x24)));
+    fstp(e, copy + 0x40, x87_mul(scale, m32(e, fp + SCHEMA + 0x40)));
+    let id = u32::from(e.mem.u16(atom + 0x12));
+    e.mem.set_u32(fp + 0x38, id);
+    fstp(e, copy + 0x44, x87_mul(scale, m32(e, fp + SCHEMA + 0x44)));
+    let node = modifier_target(e, atom);
+    let count = u32::from(e.mem.u16(node + 4));
+    let skip = u32::from(e.mem.u16(node + 6));
+    let stride = u32::from(e.mem.u8(node + 0xa));
+    e.mem.set_u32(fp + 0x3c, count);
+    let mut target = (skip << 5).wrapping_add(node).wrapping_add(0x30);
+    let mut done = 0u32;
+    if (count as i32) >= 4 {
+        let groups = ((count - 4) >> 2) + 1;
+        done = groups * 4;
+        let mut entry = node + 0x6c;
+        for _ in 0..groups {
+            for step in 0..4u32 {
+                let at = entry.wrapping_sub(0x20).wrapping_add(0x20 * step);
+                lower_target(e, atom, fp, at, target.wrapping_add(0x10));
+                target = target.wrapping_add(stride);
+            }
+            entry = entry.wrapping_add(0x80);
+        }
+    }
+    e.mem.set_u32(fp + 0x30, done);
+    if (done as i32) < (count as i32) {
+        let mut entry = (done << 5).wrapping_add(node).wrapping_add(0x4c);
+        target = target.wrapping_add(0x10);
+        for _ in done..count {
+            lower_target(e, atom, fp, entry, target);
+            target = target.wrapping_add(stride);
+            entry = entry.wrapping_add(0x20);
+        }
+    }
+    let next = e.mem.u32(atom + 0x14);
+    child_jacobian(e, next, id, copy, fp + 0x240, 1, cursor);
+}
+
+/// Atom type 0x18 (`00d71b99`): copies the schema to `+0x700` and both bodies' solver data
+/// (`fn_00d71f90`, to `+0x4b0` and `+0x3b0`) with their vectors at `+0x30` multiplied by the
+/// atom's vectors at `+0x20` and `+0x30`; the copy's bodies point to them. The vector-pair
+/// record of the scaled vectors (`00dced90`), the child Jacobian of `atom.word[5]` and the
+/// vector-pair record of the schema bodies' own vectors at `+0x30` follow.
+fn atom_body_scaling(e: &mut Engine, atom: u32, fp: u32, cursor: Ptr) {
+    let copy = fp + 0x700;
+    copy_schema(e, fp, copy);
+    let next = e.mem.u32(atom + 0x14);
+    let id = u32::from(e.mem.u16(atom + 0x12));
+    copy_vec(e, atom + 0x20, fp + 0x340);
+    copy_vec(e, atom + 0x30, fp + 0x330);
+    let (copy_a, copy_b) = (fp + 0x4b0, fp + 0x3b0);
+    let body_a = e.mem.u32(fp + SCHEMA + 0x30);
+    fn_00d71f90(e, Ptr::new(copy_a), Ptr::new(body_a));
+    let body_b = e.mem.u32(fp + SCHEMA + 0x34);
+    fn_00d71f90(e, Ptr::new(copy_b), Ptr::new(body_b));
+    let scaled_a = mul(load_vec(e, copy_a + 0x30), load_vec(e, fp + 0x340));
+    e.mem.set_u32(copy + 0x30, copy_a);
+    store_vec(e, copy_a + 0x30, scaled_a);
+    let scaled_b = mul(load_vec(e, copy_b + 0x30), load_vec(e, fp + 0x330));
+    e.mem.set_u32(copy + 0x34, copy_b);
+    store_vec(e, copy_b + 0x30, scaled_b);
+    e.call(
+        PUSH_VECTOR_PAIR,
+        &args![copy_a + 0x30, copy_b + 0x30, cursor.addr()],
+    );
+    child_jacobian(e, next, id, copy, fp + 0x250, 1, cursor);
+    let body_b = e.mem.u32(fp + SCHEMA + 0x34);
+    let body_a = e.mem.u32(fp + SCHEMA + 0x30);
+    e.call(
+        PUSH_VECTOR_PAIR,
+        &args![body_a + 0x30, body_b + 0x30, cursor.addr()],
+    );
+}
+
+/// Atom type 0x19 (`00d71afa`): backs the cursor up by 0x10, copies the schema to `+0x780`, adds
+/// a little surface viscosity to the target's contact data (`node + 0x10`) and builds the child
+/// Jacobian of `atom.word[5]` from the copy.
+fn atom_surface_viscosity(e: &mut Engine, atom: u32, fp: u32, cursor: Ptr) {
+    let position = e.mem.u32(cursor.addr());
+    e.mem.set_u32(cursor.addr(), position.wrapping_sub(0x10));
+    let copy = fp + 0x780;
+    copy_schema(e, fp, copy);
+    let id = u32::from(e.mem.u16(atom + 0x12));
+    let node = modifier_target(e, atom);
+    e.call(ADD_SURFACE_VISCOSITY, &args![node + 0x10]);
+    let next = e.mem.u32(atom + 0x14);
+    child_jacobian(e, next, id, copy, fp + 0x248, 1, cursor);
+}
+
+/// Atom type 0x1a (`00d71d0e`): a moving surface. The atom's velocity `+0x20` goes to the
+/// frame's `+0xe0`; the schema is copied to `+0x800`; the cursor backs up by 0x10 and the header
+/// record of the schema (`fn_00d6ea30`, value `node + 0x30 + (word[3] << 5)`, flag
+/// `node.byte[0xa]`, `node = atom.word[5]`) replaces the last record. A copy (`00d72030`, at
+/// `+0x3b0`) of body B (when `schema.word[0x1b]` is 0; the velocity negated in its first three
+/// lanes) or else of body A replaces that body in the dispatcher's schema from here on. With
+/// the node's normal `+0x40`, `y = -(v - (n . v) n)`: the velocity record of `y`, the copy's
+/// vector `+0x10` plus `y`, the node's contact Jacobian (flag word low byte 0) and the velocity
+/// record of `-y` follow.
+fn atom_moving_surface(e: &mut Engine, atom: u32, fp: u32, cursor: Ptr) {
+    copy_vec(e, atom + 0x20, fp + 0xe0);
+    let copy = fp + 0x800;
+    copy_schema(e, fp, copy);
+    let node = e.mem.u32(atom + 0x14);
+    let position = e.mem.u32(cursor.addr());
+    e.mem.set_u32(cursor.addr(), position.wrapping_sub(0x10));
+    let skip = u32::from(e.mem.u16(node + 6));
+    let flag = e.mem.u8(node + 0xa);
+    let value = (skip << 5).wrapping_add(node).wrapping_add(0x30);
+    fn_00d6ea30(
+        e,
+        Ptr::new(fp + SCHEMA),
+        cursor,
+        f32::from_bits(value),
+        flag,
+    );
+    let second_body = e.mem.u32(fp + SCHEMA + 0x6c) == 0;
+    e.mem.set_u8(fp + 0x5b, u8::from(second_body));
+    let body_copy = fp + 0x3b0;
+    let velocity = if second_body {
+        let body = e.mem.u32(fp + SCHEMA + 0x34);
+        e.call(COPY_BODY_DATA, &args![body_copy, body]);
+        let mask = load_bits(e, SIGN_MASK_XYZ);
+        let velocity = load_vec(e, fp + 0xe0);
+        let flipped: Vec4 =
+            std::array::from_fn(|lane| f32::from_bits(velocity[lane].to_bits() ^ mask[lane]));
+        e.mem.set_u32(fp + SCHEMA + 0x34, body_copy);
+        store_vec(e, fp + 0xe0, flipped);
+        flipped
+    } else {
+        let body = e.mem.u32(fp + SCHEMA + 0x30);
+        e.call(COPY_BODY_DATA, &args![body_copy, body]);
+        let velocity = load_vec(e, fp + 0xe0);
+        e.mem.set_u32(fp + SCHEMA + 0x30, body_copy);
+        velocity
+    };
+    copy_vec(e, node + 0x40, fp + 0x350);
+    let normal = load_vec(e, fp + 0x350);
+    let flag_word = u32::from(second_body);
+    let along = sum3(mul(normal, velocity));
+    e.mem.set_u32(fp + 0x38, flag_word);
+    let rest = sub(velocity, mul([along; 4], normal));
+    let pushed = negate(e, rest);
+    store_vec(e, fp + 0xf0, pushed);
+    e.call(ADD_VELOCITY, &args![fp + 0xf0, flag_word, cursor.addr()]);
+    let moved = add(load_vec(e, fp + 0xf0), load_vec(e, body_copy + 0x10));
+    e.mem.set_u8(fp + 0x258, 0);
+    let contact_flag = e.mem.u32(fp + 0x258);
+    store_vec(e, body_copy + 0x10, moved);
+    e.call(
+        BUILD_CONTACT_JACOBIAN,
+        &args![node, copy, contact_flag, cursor.addr()],
+    );
+    let flag_word = e.mem.u32(fp + 0x38);
+    let opposite = negate(e, load_vec(e, fp + 0xf0));
+    store_vec(e, fp + 0xf0, opposite);
+    e.call(ADD_VELOCITY, &args![fp + 0xf0, flag_word, cursor.addr()]);
+}
+
+/// Atom type 0x1c (`00d71578`): a centre-of-mass changer. Copies the schema to `+0x680`; the
+/// atom's vectors `+0x20` and `+0x30` turned by the matrices `schema.word[0xe]` and
+/// `schema.word[0xf]` (`hkVector4::setRotatedDir`, to `+0x370` and `+0x390`); body copies
+/// (`fn_00d71f90`, A at `+0x4b0`, B at `+0x3b0`) with the turned vectors added to their
+/// `+0x40` vectors, the copy's bodies pointing to them; `m1`, `m2` (`+0x140`, `+0x200`) the
+/// skew-symmetric matrices of the turned vectors times the inverse of each copy's rows at
+/// `+0x50` (`hkMatrix3::setMulInverse`, from a scratch copy at `+0x300`); copies of `m1`, `m2`
+/// (`+0x1c0`, `+0x440`) with the rows scaled by `(-1, 0, 0, 0)` (the float at `01012054`) applied
+/// to each copy's `+0x20` vector (`hkVector4::setMul3`, to `+0x4a0` and `+0x430`) and added to its
+/// `+0x10` vector. The centre-of-mass record of the scaled copies, the child Jacobian of
+/// `atom.word[5]` and the centre-of-mass record of `m1`, `m2` follow.
+fn atom_centre_of_mass(e: &mut Engine, atom: u32, fp: u32, cursor: Ptr) {
+    let copy = fp + 0x680;
+    copy_schema(e, fp, copy);
+    let next = e.mem.u32(atom + 0x14);
+    let id = u32::from(e.mem.u16(atom + 0x12));
+    let (turned_a, turned_b) = (fp + 0x370, fp + 0x390);
+    let matrix_a = e.mem.u32(fp + SCHEMA + 0x38);
+    e.call(SET_ROTATED_DIR, &args![turned_a, matrix_a, atom + 0x20]);
+    let matrix_b = e.mem.u32(fp + SCHEMA + 0x3c);
+    e.call(SET_ROTATED_DIR, &args![turned_b, matrix_b, atom + 0x30]);
+    let (copy_a, copy_b) = (fp + 0x4b0, fp + 0x3b0);
+    let body_a = e.mem.u32(fp + SCHEMA + 0x30);
+    fn_00d71f90(e, Ptr::new(copy_a), Ptr::new(body_a));
+    let body_b = e.mem.u32(fp + SCHEMA + 0x34);
+    fn_00d71f90(e, Ptr::new(copy_b), Ptr::new(body_b));
+    let moved_a = add(load_vec(e, turned_a), load_vec(e, copy_a + 0x40));
+    store_vec(e, copy_a + 0x40, moved_a);
+    let moved_b = add(load_vec(e, turned_b), load_vec(e, copy_b + 0x40));
+    e.mem.set_u32(copy + 0x34, copy_b);
+    store_vec(e, copy_b + 0x40, moved_b);
+    e.mem.set_u32(copy + 0x30, copy_a);
+    let (m1, m2, scratch) = (fp + 0x140, fp + 0x200, fp + 0x300);
+    e.call(SET_CROSS_SKEW_SYMMETRIC, &args![m1, turned_a]);
+    e.call(SET_CROSS_SKEW_SYMMETRIC, &args![m2, turned_b]);
+    for (matrix, body_copy) in [(m1, copy_a), (m2, copy_b)] {
+        for row in 0..3 {
+            copy_vec(e, matrix + 0x10 * row, scratch + 0x10 * row);
+        }
+        e.call(SET_MUL_INVERSE, &args![matrix, scratch, body_copy + 0x50]);
+    }
+    let minus_one = e.mem.u32(MINUS_ONE_FLOAT);
+    let (scaled_1, scaled_2) = (fp + 0x1c0, fp + 0x440);
+    for (matrix, scaled, factor) in [(m1, scaled_1, fp + 0x480), (m2, scaled_2, fp + 0x470)] {
+        for row in 0..3 {
+            copy_vec(e, matrix + 0x10 * row, scaled + 0x10 * row);
+        }
+        store_bits(e, factor, [minus_one, 0, 0, 0]);
+        e.call(SCALE_ROWS, &args![scaled, factor]);
+    }
+    let (product_a, product_b) = (fp + 0x4a0, fp + 0x430);
+    e.call(SET_MUL3, &args![product_a, scaled_1, copy_a + 0x20]);
+    e.call(SET_MUL3, &args![product_b, scaled_2, copy_b + 0x20]);
+    let linear_a = add(load_vec(e, copy_a + 0x10), load_vec(e, product_a));
+    store_vec(e, copy_a + 0x10, linear_a);
+    let linear_b = add(load_vec(e, copy_b + 0x10), load_vec(e, product_b));
+    store_vec(e, copy_b + 0x10, linear_b);
+    e.call(
+        SET_CENTER_OF_MASS,
+        &args![scaled_1, scaled_2, cursor.addr()],
+    );
+    child_jacobian(e, next, id, copy, fp + 0x234, 1, cursor);
+    e.call(SET_CENTER_OF_MASS, &args![m1, m2, cursor.addr()]);
 }
 
 /// This unit's translated functions, by exe address.
@@ -5114,5 +5540,322 @@ mod atom_angle_tests {
         assert_eq!(e.mem.u8(s.counter + 0x40), 1);
         assert_eq!(e.mem.u8(s.counter + 0x41), 0);
         assert_eq!(e.mem.u8(s.counter + 0x42), 1);
+    }
+}
+
+#[cfg(test)]
+mod atom_container_tests {
+    use super::super::hkpsphereshape::{HALF_F32, THREE_F32, ZERO_F32};
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// Calls seen by the doubles: the address, the argument words and the first 0x20 words
+    /// behind the first two arguments (read while the dispatcher's frame is alive).
+    type Seen = Rc<RefCell<Vec<(u32, Vec<u32>, Vec<u32>)>>>;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e.set_global(EPSILON, 1.1920929e-7f64);
+        e.set_global(SMALL_FLOAT, 1.1920929e-7f32);
+        e.set_global(ZERO_F32, 0.0f32);
+        e.set_global(THREE_F32, 3.0f32);
+        e.set_global(HALF_F32, 0.5f32);
+        e.set_global(MINUS_ONE_FLOAT, -1.0f32);
+        for axis in 0..3u32 {
+            let mut vector = [0.0f32; 4];
+            vector[axis as usize] = 1.0;
+            store_vec(&mut e, AXIS_TABLE + 0x10 * axis, vector);
+        }
+        for lane in 0..4 {
+            e.mem.set_u32(SIGN_MASK + 4 * lane, 0x8000_0000);
+            let xyz = if lane < 3 { 0x8000_0000 } else { 0 };
+            e.mem.set_u32(SIGN_MASK_XYZ + 4 * lane, xyz);
+        }
+        e
+    }
+
+    fn capture(e: &mut Engine, seen: &Seen, address: u32) {
+        let log = seen.clone();
+        e.register_double(address, move |e, a| {
+            let mut words = Vec::new();
+            for argument in a.iter().take(2) {
+                for word in 0..0x20u32 {
+                    let at = argument.wrapping_add(4 * word);
+                    words.push(if e.mem.is_mapped(at) {
+                        e.mem.u32(at)
+                    } else {
+                        0
+                    });
+                }
+            }
+            log.borrow_mut().push((address, a.to_vec(), words));
+            Ret::default()
+        });
+    }
+
+    fn calls(seen: &Seen, address: u32) -> Vec<(Vec<u32>, Vec<u32>)> {
+        seen.borrow()
+            .iter()
+            .filter(|(at, _, _)| *at == address)
+            .map(|(_, words, block)| (words.clone(), block.clone()))
+            .collect()
+    }
+
+    fn order(seen: &Seen) -> Vec<u32> {
+        seen.borrow().iter().map(|(at, _, _)| *at).collect()
+    }
+
+    struct Scene {
+        info: u32,
+        atoms: u32,
+        records: u32,
+        cursor: u32,
+        body_a: u32,
+        body_b: u32,
+    }
+
+    fn rows(e: &mut Engine, base: u32) {
+        store_vec(e, base, [1.0, 0.0, 0.0, 0.0]);
+        store_vec(e, base + 0x10, [0.0, 1.0, 0.0, 0.0]);
+        store_vec(e, base + 0x20, [0.0, 0.0, 1.0, 0.0]);
+    }
+
+    /// Identity rotation blocks (pivots at the origin), solver bodies with identity rows at
+    /// `+0x50`, unit inverse inertia and mass 1 (`+0x3c`), `schema.float[2] = 2` and
+    /// `schema.float[9] = 3`.
+    fn scene(e: &mut Engine) -> Scene {
+        let info = e.mem.alloc(0x80);
+        for slot in [0x38u32, 0x3c] {
+            let block = e.mem.alloc(0x40);
+            rows(e, block);
+            e.mem.set_u32(info + slot, block);
+        }
+        let mut bodies = [0u32; 2];
+        for (index, slot) in [0x30u32, 0x34].into_iter().enumerate() {
+            let body = e.mem.alloc(0x80);
+            store_vec(e, body + 0x30, [1.0, 1.0, 1.0, 1.0]);
+            rows(e, body + 0x50);
+            e.mem.set_u32(info + slot, body);
+            bodies[index] = body;
+        }
+        e.mem.set_f32(info + 8, 2.0);
+        e.mem.set_f32(info + 0x24, 3.0);
+        let counter = e.mem.alloc(0x100);
+        e.mem.set_u32(info + 0x64, counter);
+        let atoms = e.mem.alloc(0x400);
+        let records = e.mem.alloc(0x400);
+        let cursor = e.mem.alloc(8);
+        e.mem.set_u32(cursor, records);
+        Scene {
+            info,
+            atoms,
+            records,
+            cursor,
+            body_a: bodies[0],
+            body_b: bodies[1],
+        }
+    }
+
+    fn run(e: &mut Engine, s: &Scene, size: u32) {
+        e.call(0x00d6_f460, &args![s.atoms, size, s.info, s.cursor]);
+    }
+
+    #[test]
+    fn the_length_atom_writes_a_tag_eleven_record() {
+        let mut e = engine();
+        let s = scene(&mut e);
+        e.mem.set_u16(s.atoms, 0x14);
+        store_vec(&mut e, s.atoms + 0x10, [3.0, 4.0, 0.0, 0.0]);
+        e.mem.set_f32(s.atoms + 0x30, 1.0);
+        e.mem.set_f32(s.atoms + 0x34, 2.0);
+        run(&mut e, &s, 0x40);
+        let record = s.records + 0x10;
+        assert_eq!(e.mem.u8(record), 0xb);
+        let inverse = inverse_length(&e, 25.0);
+        assert_eq!(e.mem.f32(record + 4), inverse * 4.0);
+        // The second direction is too short: the negated first axis, times the scale 2.
+        assert_eq!(e.mem.u32(record + 0x10), 0xc000_0000);
+        assert_eq!(e.mem.u32(record + 0x14), 0x8000_0000);
+        // ((2 * 0 + 5) - 1) * schema.float[2].
+        assert_eq!(e.mem.f32(record + 0xc), 8.0);
+        assert_eq!(e.mem.u32(s.cursor), record + 0x40);
+    }
+
+    /// A target node of type 0x16 with `count` entries (entry `j` is `j`), all targets at 100.
+    fn contact_node(e: &mut Engine, count: u16) -> u32 {
+        let node = e.mem.alloc(0x200);
+        e.mem.set_u16(node, 0x16);
+        e.mem.set_u16(node + 4, count);
+        e.mem.set_u8(node + 0xa, 0x20);
+        for entry in 0..u32::from(count) {
+            e.mem.set_f32(node + 0x4c + 0x20 * entry, entry as f32);
+            e.mem.set_f32(node + 0x40 + 0x20 * entry, 100.0);
+        }
+        node
+    }
+
+    #[test]
+    fn the_lowering_modifier_lowers_every_entry_and_builds_the_contact_jacobian() {
+        let mut e = engine();
+        let seen = Seen::default();
+        capture(&mut e, &seen, BUILD_CONTACT_JACOBIAN);
+        let s = scene(&mut e);
+        e.mem.set_f32(s.info, 1.0);
+        e.mem.set_f32(s.info + 4, 1.0);
+        let node = contact_node(&mut e, 5);
+        e.mem.set_u16(s.atoms, 0x17);
+        e.mem.set_u32(s.atoms + 0x14, node);
+        e.mem.set_f32(s.atoms + 0x20, 2.0);
+        e.mem.set_f32(s.atoms + 0x24, 4.0);
+        // Entry 1's target is already low.
+        e.mem.set_f32(node + 0x60, 0.5);
+        run(&mut e, &s, 0x30);
+        // u = 4 * 1 * 1 / 2 + j = 2 + j.
+        assert_eq!(e.mem.f32(node + 0x40), 2.0);
+        assert_eq!(e.mem.f32(node + 0x60), 0.5);
+        assert_eq!(e.mem.f32(node + 0xc0), 6.0);
+        let (words, block) = &calls(&seen, BUILD_CONTACT_JACOBIAN)[0];
+        assert_eq!(words[0], node);
+        assert_eq!(words[2] & 0xff, 1);
+        // The copy's float[9] is 3 * 2.
+        assert_eq!(f32::from_bits(block[0x20 + 9]), 6.0);
+        // The cursor backed up over the opening record.
+        assert_eq!(words[3], s.cursor);
+        assert_eq!(e.mem.u32(s.cursor), s.records);
+    }
+
+    #[test]
+    fn the_scaling_modifier_brackets_the_child_with_two_vector_pairs() {
+        let mut e = engine();
+        let seen = Seen::default();
+        capture(&mut e, &seen, PUSH_VECTOR_PAIR);
+        capture(&mut e, &seen, BUILD_CONTACT_JACOBIAN);
+        let s = scene(&mut e);
+        let node = contact_node(&mut e, 0);
+        e.mem.set_u16(s.atoms, 0x18);
+        e.mem.set_u32(s.atoms + 0x14, node);
+        store_vec(&mut e, s.atoms + 0x20, [2.0, 3.0, 4.0, 5.0]);
+        store_vec(&mut e, s.atoms + 0x30, [6.0, 7.0, 8.0, 9.0]);
+        run(&mut e, &s, 0x40);
+        assert_eq!(
+            order(&seen),
+            [PUSH_VECTOR_PAIR, BUILD_CONTACT_JACOBIAN, PUSH_VECTOR_PAIR]
+        );
+        let pairs = calls(&seen, PUSH_VECTOR_PAIR);
+        let scaled: Vec<f32> = pairs[0].1[..4].iter().map(|w| f32::from_bits(*w)).collect();
+        assert_eq!(scaled, [2.0, 3.0, 4.0, 5.0]);
+        let scaled: Vec<f32> = pairs[0].1[0x20..0x24]
+            .iter()
+            .map(|w| f32::from_bits(*w))
+            .collect();
+        assert_eq!(scaled, [6.0, 7.0, 8.0, 9.0]);
+        assert_eq!(pairs[1].0[..2], [s.body_a + 0x30, s.body_b + 0x30]);
+    }
+
+    #[test]
+    fn the_viscosity_modifier_recurses_into_a_non_contact_child() {
+        let mut e = engine();
+        let seen = Seen::default();
+        capture(&mut e, &seen, ADD_SURFACE_VISCOSITY);
+        let s = scene(&mut e);
+        // The child stream is one type-2 atom (0x90 bytes, the id word is its length).
+        let child = e.mem.alloc(0x90);
+        e.mem.set_u16(child, 2);
+        e.mem.set_u16(s.atoms, 0x19);
+        e.mem.set_u16(s.atoms + 0x12, 0x90);
+        e.mem.set_u32(s.atoms + 0x14, child);
+        run(&mut e, &s, 0x20);
+        let (words, _) = &calls(&seen, ADD_SURFACE_VISCOSITY)[0];
+        assert_eq!(words[0], child + 0x10);
+        // Backed up over the opening record, the child wrote its own opening record there.
+        assert_eq!(e.mem.u32(s.cursor), s.records + 0x10);
+        assert_eq!(e.mem.u8(s.records), 1);
+    }
+
+    #[test]
+    fn the_moving_surface_modifier_pushes_the_tangential_velocity_both_ways() {
+        let mut e = engine();
+        let seen = Seen::default();
+        capture(&mut e, &seen, ADD_VELOCITY);
+        capture(&mut e, &seen, BUILD_CONTACT_JACOBIAN);
+        e.register(COPY_BODY_DATA, |e, a| {
+            for word in 0..0x20 {
+                let value = e.mem.u32(a[1] + 4 * word);
+                e.mem.set_u32(a[0] + 4 * word, value);
+            }
+            Ret::default()
+        });
+        let s = scene(&mut e);
+        let node = contact_node(&mut e, 0);
+        store_vec(&mut e, node + 0x40, [0.0, 0.0, 1.0, 0.0]);
+        e.mem.set_u16(s.atoms, 0x1a);
+        e.mem.set_u32(s.atoms + 0x14, node);
+        store_vec(&mut e, s.atoms + 0x20, [1.0, 2.0, 3.0, 0.0]);
+        run(&mut e, &s, 0x30);
+        assert_eq!(
+            order(&seen),
+            [ADD_VELOCITY, BUILD_CONTACT_JACOBIAN, ADD_VELOCITY]
+        );
+        let pushes = calls(&seen, ADD_VELOCITY);
+        // schema.word[0x1b] is 0: body B is copied and the velocity flipped in x, y, z.
+        assert_eq!(pushes[0].0[1], 1);
+        let first: Vec<f32> = pushes[0].1[..3]
+            .iter()
+            .map(|w| f32::from_bits(*w))
+            .collect();
+        assert_eq!(first, [1.0, 2.0, 0.0]);
+        let second: Vec<f32> = pushes[1].1[..3]
+            .iter()
+            .map(|w| f32::from_bits(*w))
+            .collect();
+        assert_eq!(second, [-1.0, -2.0, -0.0]);
+        let (words, _) = &calls(&seen, BUILD_CONTACT_JACOBIAN)[0];
+        assert_eq!(words[2] & 0xff, 0);
+        // The header record replaced the opening one: value word `node + 0x30`, tag 1.
+        assert_eq!(e.mem.u32(s.records + 8), node + 0x30);
+    }
+
+    #[test]
+    fn the_centre_of_mass_changer_calls_its_helpers_in_the_exe_order() {
+        let mut e = engine();
+        let seen = Seen::default();
+        for address in [
+            SET_ROTATED_DIR,
+            SET_CROSS_SKEW_SYMMETRIC,
+            SET_MUL_INVERSE,
+            SCALE_ROWS,
+            SET_MUL3,
+            SET_CENTER_OF_MASS,
+            BUILD_CONTACT_JACOBIAN,
+        ] {
+            capture(&mut e, &seen, address);
+        }
+        let s = scene(&mut e);
+        let node = contact_node(&mut e, 0);
+        e.mem.set_u16(s.atoms, 0x1c);
+        e.mem.set_u32(s.atoms + 0x14, node);
+        run(&mut e, &s, 0x40);
+        assert_eq!(
+            order(&seen),
+            [
+                SET_ROTATED_DIR,
+                SET_ROTATED_DIR,
+                SET_CROSS_SKEW_SYMMETRIC,
+                SET_CROSS_SKEW_SYMMETRIC,
+                SET_MUL_INVERSE,
+                SET_MUL_INVERSE,
+                SCALE_ROWS,
+                SCALE_ROWS,
+                SET_MUL3,
+                SET_MUL3,
+                SET_CENTER_OF_MASS,
+                BUILD_CONTACT_JACOBIAN,
+                SET_CENTER_OF_MASS,
+            ]
+        );
+        let scales = calls(&seen, SCALE_ROWS);
+        assert_eq!(scales[0].1[0x20], (-1.0f32).to_bits());
     }
 }
