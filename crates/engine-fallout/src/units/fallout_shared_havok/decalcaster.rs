@@ -264,17 +264,15 @@ pub fn fn_00623150(e: &mut Engine, this: Ptr, target: u32) {
 /// `00c68e30` on `target`.
 pub fn decal_caster_add(e: &mut Engine, this: Ptr, target: u32) {
     let holder = this.addr().wrapping_add(PHANTOM_OFFSET);
-    if e.call(HOLDER_GET, &args![holder]).u32() != 0 {
-        if fn_00623230(e, this) != target {
+    if e.call(HOLDER_GET, &args![holder]).u32() != 0 && fn_00623230(e, this) != target {
+        let held = e.call(HOLDER_GET, &args![holder]).u32();
+        e.vcall(held, 0x9c, &args![target]);
+        if target != 0 {
+            let color = e
+                .call(COLOR_FROM_BYTES, &args![0xffu32, 0x10u32, 0x10u32, 0x19u32])
+                .u32();
             let held = e.call(HOLDER_GET, &args![holder]).u32();
-            e.vcall(held, 0x9c, &args![target]);
-            if target != 0 {
-                let color = e
-                    .call(COLOR_FROM_BYTES, &args![0xffu32, 0x10u32, 0x10u32, 0x19u32])
-                    .u32();
-                let held = e.call(HOLDER_GET, &args![holder]).u32();
-                e.call(SET_DEBUG_COLOR, &args![target, held, color]);
-            }
+            e.call(SET_DEBUG_COLOR, &args![target, held, color]);
         }
     }
 }
