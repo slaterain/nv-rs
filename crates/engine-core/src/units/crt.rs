@@ -4217,6 +4217,73 @@ pub fn fwrite(e: &mut Engine, buffer: Ptr, size: u32, count: u32, stream: Ptr) -
     written
 }
 
+/// `_stbuf` (`00ed7d48`, cdecl, the stream: answers a flag), the stream form of `_output_l`
+/// (`00ed2f21`, cdecl: stream, format, locale, argument list) and `_ftbuf` (`00ed7de4`, cdecl:
+/// the flag, the stream) (LIBCMT, engine map).
+const STBUF: u32 = 0x00ed_7d48;
+const OUTPUT_L: u32 = 0x00ed_2f21;
+const FTBUF: u32 = 0x00ed_7de4;
+
+// Translated from 00ec9774 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fprintf` (LIBCMT/fprintf.c, Ghidra's function ID), cdecl: stream, format, then the
+/// variable arguments. A null stream or format sets `errno` to `EINVAL` (0x16), calls the
+/// invalid-parameter handler (`00ec7c30` with five zeros) and answers -1 without locking.
+/// Otherwise, with the stream locked (`_lock_file`): a stream that is not a string stream
+/// (`_flag` +0xc without 0x40) whose handle's `ioinfo` entry (`_fileno`; `__badioinfo` for
+/// handles -1 and -2) has a text-mode bit (+0x24 & 0x7f) or the unicode bit (& 0x80) is
+/// refused the same way (`errno`, handler, -1). Otherwise `_stbuf`, `_output_l(stream, format,
+/// NULL, the arguments)`, whose answer is the result, and `_ftbuf(flag, stream)`. The stream
+/// is then unlocked (the `__finally` block at `00ec9886`, `_unlock_file`). The argument words
+/// are copied to game memory as the `va_list`.
+// Translation incomplete: 00ec9774 - the SEH frame (__SEH_prolog4/__SEH_epilog4, 00ed1714/00ed1759) is not translated; its __finally block runs inline.
+pub fn fprintf(e: &mut Engine, stream: Ptr, format: Ptr, args: &[u32]) -> i32 {
+    let stream = stream.addr();
+    if stream == 0 || format.addr() == 0 {
+        let error = errno(e);
+        e.mem.set_u32(error.addr(), 0x16);
+        fn_00ec7c30(e, 0, 0, 0, 0, 0);
+        return -1;
+    }
+    e.call(LOCK_FILE, &args![stream]);
+    let mut result = 0i32;
+    if e.mem.u8(stream + 0xc) & 0x40 == 0 {
+        let handle = e.call(FILENO, &args![stream]).u32();
+        let entry = |e: &Engine| {
+            if handle == 0xffff_ffff || handle == 0xffff_fffe {
+                BAD_IOINFO
+            } else {
+                ioinfo(e, handle)
+            }
+        };
+        let refused =
+            e.mem.u8(entry(e) + 0x24) & 0x7f != 0 || e.mem.u8(entry(e) + 0x24) & 0x80 != 0;
+        if refused {
+            let error = errno(e);
+            e.mem.set_u32(error.addr(), 0x16);
+            fn_00ec7c30(e, 0, 0, 0, 0, 0);
+            result = -1;
+        }
+    }
+    if result == 0 {
+        let flag = e.call(STBUF, &args![stream]).u32();
+        let size = 4 * (args.len() as u32).max(1);
+        result = e.with_stack(size, |e, list| {
+            for (i, word) in args.iter().enumerate() {
+                e.mem.set_u32(list.addr() + 4 * i as u32, *word);
+            }
+            e.call(OUTPUT_L, &args![stream, format, 0u32, list]).i32()
+        });
+        e.call(FTBUF, &args![flag, stream]);
+    }
+    e.call(UNLOCK_FILE, &args![stream]);
+    result
+}
+
+/// The registry entry of [`fprintf`]: stream, format, then the variable arguments.
+fn fprintf_entry(e: &mut Engine, words: &[u32]) -> Ret {
+    fprintf(e, Ptr::new(words[0]), Ptr::new(words[1]), &words[2..]).into_ret()
+}
+
 /// The CRT's static stream table `_iob` (`011c1a08` to `011c1c68`, 0x20 bytes a stream): its
 /// streams are locked through `_lock` number `0x10 + index`, other streams through the critical
 /// section at their +0x20.
@@ -6078,6 +6145,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec_d8e6, flush(Ptr) -> i32),
         entry!(0x00ed_ecf7, getbuf(Ptr)),
         entry!(0x00ed_2d64, flsbuf(u32, Ptr) -> i32),
+        (0x00ec_9774, fprintf_entry as AbiFn),
     ]
 }
 
@@ -9846,5 +9914,94 @@ mod file_layer_tests {
             calls(&e, IMPORT_LEAVE_CRITICAL_SECTION)[1],
             vec![stream + 0x20]
         );
+    }
+}
+
+#[cfg(test)]
+mod b000s_fprintf_tests {
+    use super::*;
+
+    /// The invalid-parameter handler the doubled `__decode_pointer` answers.
+    const HANDLER: u32 = 0x0e30_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// An engine with a thread block (`errno` at +8), a handler, the stream calls doubled,
+    /// `_fileno` answering `handle`, and handle 3's `ioinfo` entry with `mode` at +0x24.
+    /// Answers the engine and the `errno` address.
+    fn engine(handle: u32, mode: u8) -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x2000);
+        e.map(BAD_IOINFO, 0x40);
+        let block = e.mem.alloc(0x10);
+        e.register_double(GETPTD_NOEXIT, move |_, _| block.into_ret());
+        e.register(DECODE_POINTER, |_, _| HANDLER.into_ret());
+        for target in [HANDLER, LOCK_FILE, UNLOCK_FILE, FTBUF] {
+            e.register(target, |_, _| Ret::default());
+        }
+        e.register_double(FILENO, move |_, _| handle.into_ret());
+        e.register(STBUF, |_, _| 5u32.into_ret());
+        // `_output_l` double: answers the sum of the first two `va_list` words.
+        e.register(OUTPUT_L, |e, a| {
+            (e.mem.u32(a[3]) + e.mem.u32(a[3] + 4)).into_ret()
+        });
+        let entries = e.mem.alloc(0x40 * 4);
+        e.mem.set_u32(PIOINFO, entries);
+        e.mem.set_u8(entries + 3 * 0x40 + 0x24, mode);
+        e.call_log = Some(vec![]);
+        (e, block + 8)
+    }
+
+    #[test]
+    fn fprintf_formats_through_output_l() {
+        let (mut e, _) = engine(3, 0);
+        let stream = e.mem.alloc(0x20);
+        let result = e
+            .call(0x00ec_9774, &args![stream, 0x7777u32, 30u32, 12u32])
+            .i32();
+        assert_eq!(result, 42);
+        assert_eq!(calls(&e, LOCK_FILE), vec![vec![stream]]);
+        let output = calls(&e, OUTPUT_L);
+        assert_eq!(&output[0][..3], &[stream, 0x7777, 0]);
+        assert_eq!(calls(&e, FTBUF), vec![vec![5, stream]]);
+        assert_eq!(calls(&e, UNLOCK_FILE), vec![vec![stream]]);
+        // A string stream skips the handle check.
+        e.mem.set_u32(stream + 0xc, 0x40);
+        e.call(0x00ec_9774, &args![stream, 0x7777u32, 1u32, 1u32]);
+        assert_eq!(calls(&e, FILENO).len(), 1);
+    }
+
+    #[test]
+    fn fprintf_refuses_a_text_mode_handle() {
+        for (handle, mode) in [(3u32, 0x01u8), (3, 0x80), (u32::MAX, 0)] {
+            let (mut e, error) = engine(handle, mode);
+            if handle == u32::MAX {
+                e.mem.set_u8(BAD_IOINFO + 0x24, 0x80);
+            }
+            let stream = e.mem.alloc(0x20);
+            let result = e.call(0x00ec_9774, &args![stream, 0x7777u32]).i32();
+            assert_eq!(result, -1);
+            assert_eq!(e.mem.u32(error), 0x16);
+            assert_eq!(calls(&e, HANDLER), vec![vec![0, 0, 0, 0, 0]]);
+            assert!(calls(&e, OUTPUT_L).is_empty());
+            assert_eq!(calls(&e, UNLOCK_FILE), vec![vec![stream]]);
+        }
+    }
+
+    #[test]
+    fn fprintf_refuses_null_arguments_unlocked() {
+        let (mut e, error) = engine(3, 0);
+        assert_eq!(e.call(0x00ec_9774, &args![0u32, 0x7777u32]).i32(), -1);
+        assert_eq!(e.call(0x00ec_9774, &args![0x100u32, 0u32]).i32(), -1);
+        assert_eq!(e.mem.u32(error), 0x16);
+        assert_eq!(calls(&e, HANDLER).len(), 2);
+        assert!(calls(&e, LOCK_FILE).is_empty());
+        assert!(calls(&e, UNLOCK_FILE).is_empty());
     }
 }
