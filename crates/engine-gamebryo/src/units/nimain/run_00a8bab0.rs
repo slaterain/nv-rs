@@ -81,3 +81,31 @@ mod b000t_tests {
         assert_eq!(e.mem.u16(this + 0x10), 0);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fn_00a8bd20_fills_the_nibble_table() {
+        let mut e = Engine::new();
+        e.map(DIVISOR_01015A38, 8);
+        e.mem.set_u64(DIVISOR_01015A38, 15f64.to_bits());
+        e.map(FACTOR_0101E568, 8);
+        e.mem.set_u64(FACTOR_0101E568, 255f64.to_bits());
+        e.map(TWO_TO_32_01099378, 4);
+        e.mem.set_u32(TWO_TO_32_01099378, 0x4f80_0000);
+        let this = e.mem.alloc(0x210);
+        e.mem.set_u32(this, 9);
+        assert_eq!(e.call(0x00a8_bd20, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0);
+        assert_eq!(e.mem.u32(this + 4), FUNCTION_00A8B8C0);
+        for index in 0u32..0x100 {
+            assert_eq!(
+                e.mem.u8(this + 0x10 + 2 * index),
+                ((index & 0xf) * 17) as u8
+            );
+            assert_eq!(e.mem.u8(this + 0x11 + 2 * index), ((index >> 4) * 17) as u8);
+        }
+    }
+}
