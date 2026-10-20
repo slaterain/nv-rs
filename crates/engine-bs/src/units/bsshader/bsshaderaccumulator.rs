@@ -325,17 +325,79 @@ pub fn bs_shader_accumulator_bs_shader_accumulator(
     this
 }
 
+/// The vtable of a rendered-geometry cache element (`BSTPersistentList`,
+/// 0x14 bytes), set by its constructor `00b988c0` and its destructor.
+const PERSISTENT_LIST_VTABLE: u32 = 0x010b_7dc0;
+/// The element's clean-up `00b63e90` (this unit, not yet translated;
+/// thiscall), run before and after the words are reset.
+const PERSISTENT_LIST_CLEAR: u32 = 0x00b6_3e90;
+
+// Translated from 00b656b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of a rendered-geometry cache element (unnamed in the engine
+/// map; the `eh vector constructor iterator` of
+/// `BSShaderAccumulator::BSShaderAccumulator` names it): sets the vtable,
+/// runs `00b63e90`, copies the word at +0x04 to +0x0C, clears +0x04, +0x08
+/// and +0x10, and jumps to `00b63e90` again, passing its result on.
+pub fn fn_00b656b0(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    e.mem.set_u32(base, PERSISTENT_LIST_VTABLE);
+    e.call(PERSISTENT_LIST_CLEAR, &[base]);
+    let first = e.mem.u32(base + 4);
+    e.mem.set_u32(base + 0xc, first);
+    e.mem.set_u32(base + 4, 0);
+    e.mem.set_u32(base + 8, 0);
+    e.mem.set_u32(base + 0x10, 0);
+    e.call(PERSISTENT_LIST_CLEAR, &[base]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00b660d0,
-        bs_shader_accumulator_bs_shader_accumulator(
-            Ptr<BSShaderAccumulator>,
-            u32,
-            u32,
-            u32,
-        ) -> Ptr<BSShaderAccumulator>
-    )]
+    vec![
+        entry!(
+            0x00b660d0,
+            bs_shader_accumulator_bs_shader_accumulator(
+                Ptr<BSShaderAccumulator>,
+                u32,
+                u32,
+                u32,
+            ) -> Ptr<BSShaderAccumulator>
+        ),
+        entry!(0x00b6_56b0, fn_00b656b0(Ptr) -> u32),
+    ]
+}
+
+#[cfg(test)]
+mod element_destructor_tests {
+    use super::*;
+
+    #[test]
+    fn element_destructor_resets_the_words_between_two_clean_ups() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x14);
+        for (off, value) in [(0, 1u32), (4, 0x40), (8, 0x80), (0xc, 0xc0), (0x10, 0x100)] {
+            e.mem.set_u32(this + off, value);
+        }
+        // The clean-up sees the vtable set; its second run sees the words
+        // reset and its result is passed on.
+        e.register_double(PERSISTENT_LIST_CLEAR, |e, a| {
+            assert_eq!(e.mem.u32(a[0]), PERSISTENT_LIST_VTABLE);
+            (e.mem.u32(a[0] + 0xc) + e.mem.u32(a[0] + 4)).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b6_56b0, &[this]).u32(), 0x40);
+        let clears = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == PERSISTENT_LIST_CLEAR)
+            .count();
+        assert_eq!(clears, 2);
+        assert_eq!(e.mem.u32(this + 0xc), 0x40);
+        for off in [4, 8, 0x10] {
+            assert_eq!(e.mem.u32(this + off), 0);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -258,6 +258,86 @@ pub fn atol_body(e: &mut Engine, s: Ptr) -> i32 {
     parse_long(&e.mem.cstr(s.addr()))
 }
 
+/// The value of an ASCII digit or letter in bases up to 36.
+fn digit_value(c: u8) -> Option<u32> {
+    match c {
+        b'0'..=b'9' => Some(u32::from(c - b'0')),
+        b'a'..=b'z' => Some(u32::from(c - b'a') + 10),
+        b'A'..=b'Z' => Some(u32::from(c - b'A') + 10),
+        _ => None,
+    }
+}
+
+/// C `strtol` in the C locale, as MSVC's `strtoxl` does it: skips white
+/// space, takes a sign, with base 0 reads a `0x`/`0X` prefix as 16 and a
+/// leading `0` as 8 (else 10), with base 16 skips an optional `0x`; reads
+/// digits below the base. No digits: 0 and `*end = s`. Out of range:
+/// `LONG_MAX`, or `LONG_MIN` for a negative number (errno is not kept). A
+/// base outside 0 and 2..36 returns 0 with `*end = s` (MSVC also reports an
+/// invalid parameter). `end` may be null.
+// Platform: replaces 00ec8d08 (strtol, LIBCMT; calls strtoxl 00ec8ad9 with the current locale)
+pub fn strtol(e: &mut Engine, s: Ptr, end: Ptr, base: i32) -> i32 {
+    let text = e.mem.cstr(s.addr());
+    let set_end = |e: &mut Engine, at: u32| {
+        if !end.is_null() {
+            e.mem.set_u32(end.addr(), at);
+        }
+    };
+    if base != 0 && !(2..=36).contains(&base) {
+        set_end(e, s.addr());
+        return 0;
+    }
+    let mut i = 0;
+    while i < text.len() && (text[i] == b' ' || (9..=13).contains(&text[i])) {
+        i += 1;
+    }
+    let mut negative = false;
+    if i < text.len() && (text[i] == b'-' || text[i] == b'+') {
+        negative = text[i] == b'-';
+        i += 1;
+    }
+    let mut base = base as u32;
+    let has_hex_prefix = text.get(i) == Some(&b'0') && matches!(text.get(i + 1), Some(b'x' | b'X'));
+    if base == 0 {
+        base = if has_hex_prefix {
+            16
+        } else if text.get(i) == Some(&b'0') {
+            8
+        } else {
+            10
+        };
+    }
+    if base == 16 && has_hex_prefix {
+        i += 2;
+    }
+    let mut value: u64 = 0;
+    let mut digits = 0;
+    while let Some(d) = text.get(i).copied().and_then(digit_value) {
+        if d >= base {
+            break;
+        }
+        value = (value * u64::from(base) + u64::from(d)).min(1 << 33);
+        digits += 1;
+        i += 1;
+    }
+    if digits == 0 {
+        set_end(e, s.addr());
+        return 0;
+    }
+    set_end(e, s.addr() + i as u32);
+    if negative {
+        if value > 1 << 31 {
+            i32::MIN
+        } else {
+            (value as i64).wrapping_neg() as i32
+        }
+    } else if value > i32::MAX as u64 {
+        i32::MAX
+    } else {
+        value as i32
+    }
+}
+
 /// C `atof`: the longest prefix that is a decimal floating-point number.
 fn parse_double(s: &[u8]) -> f64 {
     let t: Vec<u8> = s
@@ -2269,6 +2349,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00eca7f4, toupper(i32) -> i32),
         entry!(0x00eca6d3, atol(Ptr) -> i32),
         entry!(0x00eca6bd, atol_body(Ptr) -> i32),
+        entry!(0x00ec8d08, strtol(Ptr, Ptr, i32) -> i32),
         entry!(0x00eca573, atof(Ptr) -> f64),
         entry!(0x00ec62c0, ftol2(f64) -> u64),
         entry!(0x00ec6040, ci_sqrt(f64) -> f64),
@@ -4056,5 +4137,53 @@ mod physics_step_tests {
         assert_eq!(sqrt_body(&mut e, true, f64::INFINITY), f64::INFINITY);
         assert!(calls_to(&log, SET_CONTROL_WORD_HELPER).is_empty());
         assert_eq!(x87_control_word(&mut e), 0x037f);
+    }
+}
+
+#[cfg(test)]
+mod strtol_tests {
+    use super::*;
+
+    /// `strtol(text, &end, base)`: the value and how many bytes it read.
+    fn parse(text: &[u8], base: i32) -> (i32, u32) {
+        let mut e = Engine::new();
+        let s = e.mem.alloc(64);
+        e.mem.write(s, text);
+        e.mem.set_u8(s + text.len() as u32, 0);
+        let end = e.mem.alloc(4);
+        e.mem.set_u32(end, 0xdead_beef);
+        let value = e.call(0x00ec_8d08, &[s, end, base as u32]).u32() as i32;
+        (value, e.mem.u32(end) - s)
+    }
+
+    #[test]
+    fn strtol_reads_bases_signs_prefixes_and_limits() {
+        assert_eq!(parse(b"1F", 16), (0x1f, 2));
+        assert_eq!(parse(b"0x1fz", 16), (0x1f, 4));
+        assert_eq!(parse(b"  -42abc", 10), (-42, 5));
+        assert_eq!(parse(b"+017", 0), (0o17, 4));
+        assert_eq!(parse(b"0X10", 0), (16, 4));
+        assert_eq!(parse(b"129", 0), (129, 3));
+        assert_eq!(parse(b"0", 0), (0, 1));
+        assert_eq!(parse(b"zz", 36), (35 * 36 + 35, 2));
+        assert_eq!(parse(b"102", 2), (2, 2));
+        assert_eq!(parse(b"FFFFFFFF", 16), (i32::MAX, 8));
+        assert_eq!(parse(b"-80000000", 16), (i32::MIN, 9));
+        assert_eq!(parse(b"-80000001", 16), (i32::MIN, 9));
+        assert_eq!(parse(b"7fffffff", 16), (i32::MAX, 8));
+        // No digits, or a bad base: 0 and the end at the start.
+        assert_eq!(parse(b"", 16), (0, 0));
+        assert_eq!(parse(b" -x", 10), (0, 0));
+        assert_eq!(parse(b"0x", 16), (0, 0));
+        assert_eq!(parse(b"12", 1), (0, 0));
+        assert_eq!(parse(b"12", 37), (0, 0));
+    }
+
+    #[test]
+    fn strtol_accepts_a_null_end() {
+        let mut e = Engine::new();
+        let s = e.mem.alloc(8);
+        e.mem.write(s, b"-9\0");
+        assert_eq!(e.call(0x00ec_8d08, &[s, 0, 10]).u32() as i32, -9);
     }
 }
