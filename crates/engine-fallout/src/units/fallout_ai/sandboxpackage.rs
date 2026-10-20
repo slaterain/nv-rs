@@ -1183,6 +1183,9 @@ fn may_use(e: &mut Engine, reference: u32, actor: u32) -> bool {
 /// can sleep on), else a sit choice (chair allowed, can sit on, or neither
 /// sit nor sleep); 0x1D and 0x2F (food allowed) an eat choice. Each choice
 /// sets the matching flag (bed, chair, food).
+// The exe tests sit-on and then neither-sit-nor-sleep as two branches that do the same thing;
+// merging them would change the order and number of its calls.
+#[allow(clippy::if_same_then_else)]
 pub fn fn_009f5070(e: &mut Engine, reference: Ptr, functor: Ptr) -> bool {
     let reference = reference.addr();
     let data = e.call(WORD_AT_4, &args![functor]).u32();
