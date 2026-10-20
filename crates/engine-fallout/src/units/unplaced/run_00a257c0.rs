@@ -169,7 +169,74 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a2_59b0, fn_00a259b0(u32) -> u32),
         entry!(0x00a2_62d0, fn_00a262d0(u32, u32) -> u32),
         entry!(0x00a2_6310, fn_00a26310(u32, u32, u32)),
+        entry!(0x00a2_69f0, fn_00a269f0(u32, i32)),
     ]
+}
+
+/// Method `00a26520` of the object at +0x1B80 (thiscall: channel, state,
+/// value).
+const OBJECT_1B80_CHANNEL: u32 = 0x00a2_6520;
+
+// Translated from 00a269f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Method of the 0x40-byte object (the one `00a257c0` calls): for a
+/// `value` of at least 1, fills a stack state of two zero 16-bit values
+/// through `00a26520(0, &state, value)` and `00a26520(1, &state, value)`
+/// and sends it to the user index in the object's first word
+/// (`XInputSetState`).
+pub fn fn_00a269f0(e: &mut Engine, this: u32, value: i32) {
+    if value < 1 {
+        return;
+    }
+    e.with_stack(4, |e, state| {
+        let state = state.addr();
+        e.mem.set_u16(state, 0);
+        e.mem.set_u16(state + 2, 0);
+        e.call(OBJECT_1B80_CHANNEL, &[this, 0, state, value as u32]);
+        e.call(OBJECT_1B80_CHANNEL, &[this, 1, state, value as u32]);
+        let user = e.mem.u32(this);
+        e.call(XINPUT_SET_STATE, &[user, state]);
+    });
+}
+
+#[cfg(test)]
+mod state_tests {
+    use super::*;
+
+    #[test]
+    fn positive_values_fill_both_channels_and_send_the_state() {
+        let mut e = Engine::new();
+        // The channel double writes its value into its half of the state.
+        e.register(OBJECT_1B80_CHANNEL, |e, a| {
+            e.mem.set_u16(a[2] + a[1] * 2, (a[3] + a[1]) as u16);
+            0u32.into_ret()
+        });
+        let sent = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let record = sent.clone();
+        e.register_double(XINPUT_SET_STATE, move |e, a| {
+            record.set(e.mem.u32(a[1]));
+            0u32.into_ret()
+        });
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x00a2_69f0, &[this, 500]);
+        let log = e.call_log.take().unwrap();
+        let channels: Vec<_> = log
+            .iter()
+            .filter(|(a, _)| *a == OBJECT_1B80_CHANNEL)
+            .map(|(_, w)| (w[0], w[1], w[3]))
+            .collect();
+        assert_eq!(channels, vec![(this, 0, 500), (this, 1, 500)]);
+        let send = log.iter().find(|(a, _)| *a == XINPUT_SET_STATE).unwrap();
+        assert_eq!(send.1[0], 2);
+        assert_eq!(sent.get(), (501 << 16) | 500);
+        // Zero and negative values do nothing.
+        for value in [0i32, -3] {
+            e.call_log = Some(vec![]);
+            e.call(0x00a2_69f0, &[this, value as u32]);
+            assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -350,6 +350,132 @@ pub fn fn_00b656b0(e: &mut Engine, this: Ptr) -> u32 {
     e.call(PERSISTENT_LIST_CLEAR, &[base]).u32()
 }
 
+/// The node pool's lock object (`this` of the lock enter `0040fbf0`); its
+/// owner word.
+const NODE_POOL_LOCK: u32 = 0x011c_5f80;
+/// The lock's entry count, which the inlined leave decrements.
+const NODE_POOL_LOCK_COUNT: u32 = 0x011c_5f84;
+/// The lock enter (`0040fbf0`; thiscall, one word).
+const LOCK_ENTER: u32 = 0x0040_fbf0;
+/// Head of the node pool's free list.
+const NODE_POOL_FREE_LIST: u32 = 0x011c_5f58;
+
+// Translated from 00b63e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clean-up of a rendered-geometry cache element (`BSTPersistentList`;
+/// unnamed in the engine map): when its node list (+0x0C) is not empty,
+/// enters the node pool's lock and, for each node, enters it again, clears
+/// the node's +0x04, pushes the node on the free list at `011c5f58` and
+/// leaves (the count at `011c5f84` drops by one; at zero the owner word
+/// `011c5f80` is cleared); then leaves the outer entry the same way. Clears
+/// +0x0C and the word the pointer at +0x08 points to (when set). Returns
+/// that pointer.
+pub fn fn_00b63e90(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    let mut next = e.mem.u32(base + 0xc);
+    if next != 0 {
+        e.call(LOCK_ENTER, &[NODE_POOL_LOCK, 0]);
+        loop {
+            let node = next;
+            next = e.mem.u32(node);
+            e.call(LOCK_ENTER, &[NODE_POOL_LOCK, 0]);
+            e.mem.set_u32(node + 4, 0);
+            let free = e.mem.u32(NODE_POOL_FREE_LIST);
+            e.mem.set_u32(node, free);
+            let count = e.mem.u32(NODE_POOL_LOCK_COUNT).wrapping_sub(1);
+            e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
+            e.mem.set_u32(NODE_POOL_FREE_LIST, node);
+            if count == 0 {
+                e.mem.set_u32(NODE_POOL_LOCK, 0);
+            }
+            if next == 0 {
+                break;
+            }
+        }
+        let count = e.mem.u32(NODE_POOL_LOCK_COUNT).wrapping_sub(1);
+        e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
+        if count == 0 {
+            e.mem.set_u32(NODE_POOL_LOCK, 0);
+        }
+    }
+    let tail = e.mem.u32(base + 8);
+    e.mem.set_u32(base + 0xc, 0);
+    if tail != 0 {
+        e.mem.set_u32(tail, 0);
+    }
+    tail
+}
+
+#[cfg(test)]
+mod element_clear_tests {
+    use super::*;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011c_5000, 0x1000);
+        // The lock enter double takes the lock: owner 1, count + 1.
+        e.register(LOCK_ENTER, |e, _| {
+            e.mem.set_u32(NODE_POOL_LOCK, 1);
+            let count = e.mem.u32(NODE_POOL_LOCK_COUNT);
+            e.mem.set_u32(NODE_POOL_LOCK_COUNT, count + 1);
+            0u32.into_ret()
+        });
+        e
+    }
+
+    #[test]
+    fn element_clear_returns_the_nodes_to_the_pool() {
+        let mut e = engine();
+        e.mem.set_u32(NODE_POOL_FREE_LIST, 0x0099_0000);
+        let this = e.mem.alloc(0x14);
+        let first = e.mem.alloc(0xc);
+        let second = e.mem.alloc(0xc);
+        let tail_slot = e.mem.alloc(4);
+        e.mem.set_u32(first, second);
+        e.mem.set_u32(first + 4, 0x11);
+        e.mem.set_u32(first + 8, 0x12);
+        e.mem.set_u32(second, 0);
+        e.mem.set_u32(second + 4, 0x21);
+        e.mem.set_u32(this + 0xc, first);
+        e.mem.set_u32(this + 8, tail_slot);
+        e.mem.set_u32(tail_slot, second);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b6_3e90, &[this]).u32(), tail_slot);
+        let locks = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == LOCK_ENTER)
+            .count();
+        assert_eq!(locks, 3);
+        assert_eq!(e.mem.u32(NODE_POOL_FREE_LIST), second);
+        assert_eq!(e.mem.u32(second), first);
+        assert_eq!(e.mem.u32(first), 0x0099_0000);
+        assert_eq!(e.mem.u32(first + 4), 0);
+        assert_eq!(e.mem.u32(second + 4), 0);
+        // The node's element (+0x08) is left as it is.
+        assert_eq!(e.mem.u32(first + 8), 0x12);
+        // Balanced: the lock is released.
+        assert_eq!(e.mem.u32(NODE_POOL_LOCK_COUNT), 0);
+        assert_eq!(e.mem.u32(NODE_POOL_LOCK), 0);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        assert_eq!(e.mem.u32(tail_slot), 0);
+    }
+
+    #[test]
+    fn element_clear_of_an_empty_list_takes_no_lock() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x14);
+        e.mem.set_u32(this + 8, 0);
+        e.mem.set_u32(this + 0xc, 0);
+        e.mem.set_u32(NODE_POOL_LOCK_COUNT, 5);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b6_3e90, &[this]).u32(), 0);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        assert_eq!(e.mem.u32(NODE_POOL_LOCK_COUNT), 5);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -363,6 +489,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             ) -> Ptr<BSShaderAccumulator>
         ),
         entry!(0x00b6_56b0, fn_00b656b0(Ptr) -> u32),
+        entry!(0x00b6_3e90, fn_00b63e90(Ptr) -> u32),
     ]
 }
 
