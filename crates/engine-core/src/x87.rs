@@ -429,6 +429,18 @@ pub fn fistp(value: f64) -> i32 {
     }
 }
 
+/// `FISTP dword` under rounding toward zero (the compiler's `FNSTCW`, `OR
+/// 0xC00`, `FLDCW`, `FISTP`, `FLDCW` sequence): the value truncated; the
+/// integer indefinite 0x80000000 for NaN and values out of range.
+pub fn fistp_chop(value: f64) -> i32 {
+    let r = value.trunc();
+    if r.is_nan() || r < i32::MIN as f64 || r > i32::MAX as f64 {
+        i32::MIN
+    } else {
+        r as i32
+    }
+}
+
 /// The `CMPEQSS`/`RSQRTSS` pair of the Havok normalizer: the hardware
 /// estimate of `1 / sqrt(x)` on x86, exact elsewhere.
 #[cfg(target_arch = "x86_64")]
@@ -1581,5 +1593,17 @@ mod tests {
             x87_fcos(ext(1.0));
             assert_eq!(control_word(), 0x007f);
         });
+    }
+
+    #[test]
+    fn fistp_chop_truncates_toward_zero() {
+        assert_eq!(fistp_chop(2.9), 2);
+        assert_eq!(fistp_chop(-2.9), -2);
+        assert_eq!(fistp_chop(-0.5), 0);
+        assert_eq!(fistp_chop(2147483647.9), i32::MAX);
+        assert_eq!(fistp_chop(2147483648.0), i32::MIN);
+        assert_eq!(fistp_chop(-2147483648.9), i32::MIN);
+        assert_eq!(fistp_chop(-2147483649.0), i32::MIN);
+        assert_eq!(fistp_chop(f64::NAN), i32::MIN);
     }
 }
