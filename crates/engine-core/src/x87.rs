@@ -608,6 +608,21 @@ pub fn x87_fprem1(x: X87Ext, y: X87Ext) -> (X87Ext, u16) {
     imp::fprem1(x, y)
 }
 
+/// `FISTP qword`: ST0 stored as a 64-bit integer, rounded with the control
+/// word's rounding mode ([`control_word`]); the integer indefinite
+/// 0x8000_0000_0000_0000 for a NaN or a value out of range.
+pub fn x87_fistp64(x: X87Ext) -> i64 {
+    imp::fistp64(x, control_word())
+}
+
+/// `FISTP qword` inside the compiler's truncating sequence (`FNSTCW`, `OR
+/// 0xC00`, `FLDCW`, `FISTP`, `FLDCW`, as `_ftol2`-style code sets it): the
+/// value rounded toward zero, the integer indefinite for a NaN or a value out
+/// of range. The thread's control word is left as it was.
+pub fn x87_fistp64_chop(x: X87Ext) -> i64 {
+    imp::fistp64(x, control_word() | ROUNDING_CONTROL)
+}
+
 #[cfg(target_arch = "x86_64")]
 use hw as imp;
 #[cfg(not(target_arch = "x86_64"))]
@@ -862,6 +877,14 @@ mod hw {
         );
         (X87Ext(f.r0), f.status)
     }
+
+    /// `FISTP qword` under the control word `word` (exceptions masked).
+    pub fn fistp64(x: X87Ext, word: u16) -> i64 {
+        let mut f = frame(x.0, [0; 10]);
+        f.word = word | 0x003f;
+        run!(f, "fld tbyte ptr [{f}]", "fistp qword ptr [{f} + 20]");
+        i64::from_le_bytes(word8(&f.r0))
+    }
 }
 
 /// Portable fallback (not x86_64): the extended format converted in software
@@ -1010,6 +1033,28 @@ mod soft {
             n -= q.signum();
         }
         (load64(a - n * b), 0)
+    }
+
+    pub fn fistp64(x: X87Ext, word: u16) -> i64 {
+        let v = store64(x);
+        let r = match word & super::ROUNDING_CONTROL {
+            super::ROUND_DOWN => v.floor(),
+            super::ROUND_UP => v.ceil(),
+            super::ROUND_NEAREST => {
+                let mut r = v.round();
+                if (v - v.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
+                    r -= v.signum();
+                }
+                r
+            }
+            _ => v.trunc(),
+        };
+        // -2^63 is the only value of 2^63's magnitude in range.
+        if r.is_nan() || r >= 2f64.powi(63) || r < -(2f64.powi(63)) {
+            i64::MIN
+        } else {
+            r as i64
+        }
     }
 }
 
@@ -1605,5 +1650,50 @@ mod tests {
         assert_eq!(fistp_chop(-2147483648.9), i32::MIN);
         assert_eq!(fistp_chop(-2147483649.0), i32::MIN);
         assert_eq!(fistp_chop(f64::NAN), i32::MIN);
+    }
+
+    #[test]
+    fn fistp64_rounds_with_the_control_word_and_chop_truncates() {
+        let at = |word: u16, v: f64| with_word(word, || x87_fistp64(ext(v)));
+        assert_eq!(at(0x027f, 2.5), 2);
+        assert_eq!(at(0x027f, 3.5), 4);
+        assert_eq!(at(0x067f, -2.5), -3);
+        assert_eq!(at(0x0a7f, 2.25), 3);
+        assert_eq!(at(0x0e7f, -2.75), -2);
+        assert_eq!(with_word(0x027f, || x87_fistp64_chop(ext(-2.75))), -2);
+        assert_eq!(
+            with_word(0x007f, || x87_fistp64_chop(ext(1e15 + 0.9))),
+            1_000_000_000_000_000
+        );
+        assert_eq!(x87_fistp64_chop(ext(-(2f64.powi(63)))), i64::MIN);
+        assert_eq!(x87_fistp64_chop(ext(2f64.powi(63))), i64::MIN);
+        assert_eq!(x87_fistp64(ext(f64::NAN)), i64::MIN);
+        assert_eq!(x87_fistp64(ext(f64::INFINITY)), i64::MIN);
+        // The thread's control word stays.
+        assert_eq!(
+            with_word(0x007f, || {
+                x87_fistp64_chop(ext(1.5));
+                control_word()
+            }),
+            0x007f
+        );
+        // The software fallback agrees on these.
+        for (word, v) in [
+            (0x027fu16, 2.5f64),
+            (0x0e7f, -2.75),
+            (0x067f, -2.5),
+            (0x027f, 1e19),
+            (0x027f, f64::NAN),
+        ] {
+            assert_eq!(
+                soft::fistp64(ext(v), word),
+                hw_fistp64(ext(v), word),
+                "{word:#x} {v}"
+            );
+        }
+    }
+
+    fn hw_fistp64(x: X87Ext, word: u16) -> i64 {
+        with_word(word, || x87_fistp64(x))
     }
 }
