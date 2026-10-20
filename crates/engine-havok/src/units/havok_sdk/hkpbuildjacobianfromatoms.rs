@@ -1666,9 +1666,210 @@ pub fn fn_00d6ced0(e: &mut Engine, atom: Ptr, info: Ptr, a: Ptr, b: Ptr, cursor:
     fn_00d6c630(e, info, a, b, cursor, limit, scale);
 }
 
+// Translated from 00d6f460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkSolverBuildJacobianFromAtomsNotContact` (Xbox PDB name per the engine map; cdecl: the atom
+/// stream, its byte length, the constraint info block and the cursor pointer). It copies the
+/// info block to the stack (the `schema` the 1D builders read), copies both bodies' rotation
+/// blocks (`info.word[0xe]`, `info.word[0xf]`), writes the stream's opening record (tag 1, flag
+/// 8), then walks the atoms (the type word at `atom + 0`) and appends the Jacobian records of
+/// each, advancing byte-pointer counters stored in the schema (`+0x64`, `+0x6c`, `+0x70`,
+/// `+0x74`) as it goes.
+///
+// Translation incomplete: 00d6f460 - atom types 6, 7, 8, 9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf, 0x10,
+// 0x11, 0x12, 0x13, 0x14, 0x17, 0x18, 0x19, 0x1a and 0x1c are not yet translated (the inline
+// motor/limit/angle records sharing the record tail at 00d70646, and the contact and
+// recursive-container atoms); they stop with `open: ...`. Done: the prologue, the dispatch loop,
+// the realign atom (type 0), the indirect modifier call (type 1), the SSE body transforms
+// (types 2, 3, 4), the three-linear-limit record (type 5), the container trailer (type 0x1b)
+// and the no-op types (0x15, 0x16, and anything above 0x1c).
+pub fn hk_solver_build_jacobian_from_atoms_not_contact(
+    e: &mut Engine,
+    atoms: Ptr,
+    size: u32,
+    info: Ptr,
+    cursor: Ptr,
+) {
+    // The 0x80-byte schema copy and the two bodies' 0x40-byte rotation blocks live in one frame
+    // at the exe's own offsets (schema `+0x60`, body from `info.word[0xf]` at `+0x180`, body from
+    // `info.word[0xe]` at `+0x2b0`), so the records' pointer arithmetic lands where the exe's
+    // does.
+    let end = atoms.addr().wrapping_add(size);
+    let mut atom = atoms.addr();
+    e.with_stack(0x300, |e, frame| {
+        let schema = frame.addr() + 0x60;
+        let rows_a = frame.addr() + 0x180;
+        let rows_b = frame.addr() + 0x2b0;
+        for word in 0..0x20 {
+            let value = e.mem.u32(info.addr() + 4 * word);
+            e.mem.set_u32(schema + 4 * word, value);
+        }
+        let body_b = e.mem.u32(schema + 0x38);
+        for word in 0..0x10 {
+            let value = e.mem.u32(body_b + 4 * word);
+            e.mem.set_u32(rows_b + 4 * word, value);
+        }
+        let body_a = e.mem.u32(schema + 0x3c);
+        for word in 0..0x10 {
+            let value = e.mem.u32(body_a + 4 * word);
+            e.mem.set_u32(rows_a + 4 * word, value);
+        }
+
+        // The opening record: three counters' current values, `FLT_EPSILON` added to the first
+        // float, the tag 1 and the flag 8.
+        let record = e.mem.u32(cursor.addr());
+        e.mem.set_u32(record + 8, e.mem.u32(schema + 0x64));
+        e.mem.set_u16(record + 4, e.mem.u32(schema + 0x6c) as u16);
+        e.mem.set_u16(record + 6, e.mem.u32(schema + 0x70) as u16);
+        add_epsilon(e, record);
+        e.mem.set_u8(record, 1);
+        e.mem.set_u32(record + 0xc, e.mem.u32(schema + 0x60));
+        e.mem.set_u8(record + 1, 8);
+        e.mem.set_u32(cursor.addr(), record + 0x10);
+
+        if end <= atom {
+            return;
+        }
+        loop {
+            let mut kind = e.mem.u16(atom);
+            // Type 0 realigns the atom pointer up to the next 16 bytes and re-reads.
+            while kind == 0 {
+                atom = (atom + 0xf) & !0xf;
+                kind = e.mem.u16(atom);
+            }
+            if kind <= 0x1c {
+                dispatch_atom(e, &mut atom, kind, schema, rows_a, rows_b, cursor);
+            }
+            // Types 0x15, 0x16 and anything above 0x1c are no-ops that do not advance the atom
+            // pointer (the exe loops on them; a well-formed stream never contains them).
+            if end <= atom {
+                return;
+            }
+        }
+    });
+}
+
+/// Appends the records of one atom of type `kind` (1..=0x1c) and advances the atom pointer and
+/// the schema counters. The counters are byte pointers in the schema (`+0x64`, `+0x6c`, `+0x70`,
+/// `+0x74`).
+fn dispatch_atom(
+    e: &mut Engine,
+    atom: &mut u32,
+    kind: u16,
+    schema: u32,
+    rows_a: u32,
+    rows_b: u32,
+    cursor: Ptr,
+) {
+    let advance = |e: &mut Engine, offset: u32, by: u32| {
+        let value = e.mem.u32(schema + offset).wrapping_add(by);
+        e.mem.set_u32(schema + offset, value);
+    };
+    match kind {
+        1 => {
+            // A modifier whose node holds a function pointer: back the cursor up by 0x10 and call
+            // `(atom.word[1])(atom.word[2], schema, cursor)`.
+            let record = e.mem.u32(cursor.addr());
+            e.mem.set_u32(cursor.addr(), record.wrapping_sub(0x10));
+            let callee = e.mem.u32(*atom + 4);
+            let argument = e.mem.u32(*atom + 8);
+            e.call(callee, &args![argument, schema, cursor.addr()]);
+            advance(e, 0x70, 0xc_3500);
+            advance(e, 0x74, 0xc_3500);
+            *atom += 0xc;
+        }
+        2 => {
+            // Each body's rotation turns four of the atom's rows; the fourth row also gains the
+            // body's translation (`body.row[3]`).
+            let matrix_b = body_matrix(e, schema + 0x38);
+            transform_rows(e, matrix_b, *atom + 0x10, rows_b);
+            let translation_b = load_vec(e, e.mem.u32(schema + 0x38) + 0x30);
+            let base_b = load_vec(e, rows_b + 0x30);
+            store_vec(e, rows_b + 0x30, add(base_b, translation_b));
+            let matrix_a = body_matrix(e, schema + 0x3c);
+            transform_rows(e, matrix_a, *atom + 0x50, rows_a);
+            let translation_a = load_vec(e, e.mem.u32(schema + 0x3c) + 0x30);
+            let base_a = load_vec(e, rows_a + 0x30);
+            store_vec(e, rows_a + 0x30, add(base_a, translation_a));
+            *atom += 0x90;
+        }
+        3 => {
+            // The atom's two points turned and translated by the two bodies, into each body
+            // block's fourth row.
+            let point_b = load_vec(e, *atom + 0x10);
+            let turned_b = rotate_rows(point_b, body_matrix(e, schema + 0x38));
+            let translation_b = load_vec(e, e.mem.u32(schema + 0x38) + 0x30);
+            store_vec(e, rows_b + 0x30, add(turned_b, translation_b));
+            let point_a = load_vec(e, *atom + 0x20);
+            let turned_a = rotate_rows(point_a, body_matrix(e, schema + 0x3c));
+            let translation_a = load_vec(e, e.mem.u32(schema + 0x3c) + 0x30);
+            store_vec(e, rows_a + 0x30, add(turned_a, translation_a));
+            *atom += 0x30;
+        }
+        4 => {
+            // Like type 2 but no translation, and the second body turns the atom's rows at
+            // `+0x40..+0x80` (the first turns `+0x10..+0x50`).
+            let base = *atom;
+            let matrix_b = body_matrix(e, schema + 0x38);
+            transform_rows(e, matrix_b, base + 0x10, rows_b);
+            let matrix_a = body_matrix(e, schema + 0x3c);
+            transform_rows(e, matrix_a, base + 0x40, rows_a);
+            *atom = base + 0x70;
+        }
+        5 => {
+            // Three linear-limit records for the atom's limits, shared with `fn_00d6ced0`.
+            fn_00d6ced0(
+                e,
+                Ptr::new(*atom),
+                Ptr::new(schema),
+                Ptr::new(rows_b),
+                Ptr::new(rows_a),
+                cursor,
+            );
+            advance(e, 0x64, 0x18);
+            advance(e, 0x74, 0x18);
+            *atom += 8;
+        }
+        0x1b => {
+            // A container trailer: back the cursor up by 0x10 and step over the atom.
+            let record = e.mem.u32(cursor.addr());
+            e.mem.set_u32(cursor.addr(), record.wrapping_sub(0x10));
+            *atom += 0x20;
+        }
+        // Types 0x15 and 0x16 are no-ops that do not advance the atom pointer (as in the exe).
+        0x15 | 0x16 => {}
+        other => panic!(
+            "open: hkSolverBuildJacobianFromAtomsNotContact atom type {other:#x} (00d6f460 not yet translated)"
+        ),
+    }
+}
+
+/// The three rotation rows of a body matrix (`+0`, `+0x10`, `+0x20` from the pointer at
+/// `pointer_slot` in the schema).
+fn body_matrix(e: &Engine, pointer_slot: u32) -> [Vec4; 3] {
+    let base = e.mem.u32(pointer_slot);
+    [
+        load_vec(e, base),
+        load_vec(e, base + 0x10),
+        load_vec(e, base + 0x20),
+    ]
+}
+
+/// Turns four consecutive atom rows (`source + 0`, `+0x10`, `+0x20`, `+0x30`) by `matrix` and
+/// stores them in the body block (`rows + 0`, `+0x10`, `+0x20`, `+0x30`).
+fn transform_rows(e: &mut Engine, matrix: [Vec4; 3], source: u32, rows: u32) {
+    for row in 0..4u32 {
+        let turned = rotate_rows(load_vec(e, source + 0x10 * row), matrix);
+        store_vec(e, rows + 0x10 * row, turned);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00d6_f460,
+            hk_solver_build_jacobian_from_atoms_not_contact(Ptr, u32, Ptr, Ptr)
+        ),
         entry!(0x00d6_ced0, fn_00d6ced0(Ptr, Ptr, Ptr, Ptr, Ptr)),
         entry!(
             0x00d6_c5a0,
@@ -3362,5 +3563,89 @@ mod atom_limit_tests {
             assert_eq!(e.mem.u8(s.records + 0x30 * record), 6);
             assert_eq!(e.mem.f32(s.records + 0x30 * record + 0x2c), 12.5);
         }
+    }
+}
+
+#[cfg(test)]
+mod atom_dispatch_tests {
+    use super::*;
+
+    /// A minimal engine: the exe's data page and `FLT_EPSILON` as a double (the opening record
+    /// adds it).
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e.set_global(EPSILON, 1.1920929e-7f64);
+        e
+    }
+
+    /// A body with identity rotation rows and no translation.
+    fn identity_body(e: &mut Engine) -> u32 {
+        let base = e.mem.alloc(0x40);
+        store_vec(e, base, [1.0, 0.0, 0.0, 0.0]);
+        store_vec(e, base + 0x10, [0.0, 1.0, 0.0, 0.0]);
+        store_vec(e, base + 0x20, [0.0, 0.0, 1.0, 0.0]);
+        store_vec(e, base + 0x30, [0.0, 0.0, 0.0, 0.0]);
+        base
+    }
+
+    #[test]
+    fn the_opening_record_carries_the_counters_the_tag_and_the_flag() {
+        let mut e = engine();
+        let info = e.mem.alloc(0x80);
+        e.mem.set_u32(info + 0x60, 0x1111_1111);
+        e.mem.set_u32(info + 0x64, 0x2222_2222);
+        e.mem.set_u32(info + 0x6c, 0x3333_3333);
+        e.mem.set_u32(info + 0x70, 0x4444_4444);
+        let (body_b, body_a) = (identity_body(&mut e), identity_body(&mut e));
+        e.mem.set_u32(info + 0x38, body_b);
+        e.mem.set_u32(info + 0x3c, body_a);
+        // One type-2 atom (0x90 bytes): it transforms the body blocks in the frame and writes
+        // nothing to the cursor, so only the opening record and the single step are observable.
+        let atom = e.mem.alloc(0x90);
+        e.mem.set_u16(atom, 2);
+        let records = e.mem.alloc(0x100);
+        let cursor = e.mem.alloc(8);
+        e.mem.set_u32(cursor, records);
+        e.call(0x00d6_f460, &args![atom, 0x90u32, info, cursor]);
+        assert_eq!(e.mem.u32(records + 8), 0x2222_2222);
+        assert_eq!(e.mem.u16(records + 4), 0x3333);
+        assert_eq!(e.mem.u16(records + 6), 0x4444);
+        assert_eq!(e.mem.u32(records + 0xc), 0x1111_1111);
+        assert_eq!(e.mem.u8(records), 1);
+        assert_eq!(e.mem.u8(records + 1), 8);
+        // Type 2 appends nothing: the cursor is one record past the start.
+        assert_eq!(e.mem.u32(cursor), records + 0x10);
+    }
+
+    #[test]
+    fn the_modifier_atom_backs_the_cursor_up_and_calls_the_node_function() {
+        let mut e = engine();
+        let info = e.mem.alloc(0x80);
+        let body = identity_body(&mut e);
+        e.mem.set_u32(info + 0x38, body);
+        e.mem.set_u32(info + 0x3c, body);
+        let atom = e.mem.alloc(0xc);
+        e.mem.set_u16(atom, 1);
+        e.mem.set_u32(atom + 4, 0x00b0_0000);
+        e.mem.set_u32(atom + 8, 0xdead_beef);
+        let records = e.mem.alloc(0x100);
+        let cursor = e.mem.alloc(8);
+        e.mem.set_u32(cursor, records);
+        e.register(0x00b0_0000, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00d6_f460, &args![atom, 0xcu32, info, cursor]);
+        let calls: Vec<&(u32, Vec<u32>)> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x00b0_0000)
+            .collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1[0], 0xdead_beef);
+        assert_eq!(calls[0].1[2], cursor);
+        // The opening record advanced the cursor by 0x10; the modifier backs it up by 0x10.
+        assert_eq!(e.mem.u32(cursor), records);
     }
 }
