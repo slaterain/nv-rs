@@ -1880,7 +1880,7 @@ mod b001_tests {
         assert_eq!(e.call(address, &args![0u32, 0u32]).u32(), 0x1_0000);
         assert_eq!(
             e.call(address, &args![5u32, 0u32]).u32(),
-            5 * element | 0x1_0000
+            (5 * element) | 0x1_0000
         );
         assert!(calls_to(&e, CXX_THROW_EXCEPTION).is_empty());
         let limit = 0xffff_ffff / element;
