@@ -52,9 +52,11 @@ pub fn fn_00bb9180(e: &mut Engine, this: Ptr) -> Ptr {
 }
 
 use crate::units::bsshader::geometrydecalshader::shader_inline::*;
+#[cfg(test)]
+use crate::units::bsshader::run_00bc0360::TEXTURE_DESTRUCT_00BA3A00;
 use crate::units::bsshader::run_00bc0360::{
     delete_parameter, destroy_texture, new_texture, texture_at, ARRAY_SET_00BA3AA0,
-    EFFECT_DESTRUCT_00BA3D30, TEXTURE_DESTRUCT_00BA3A00,
+    EFFECT_DESTRUCT_00BA3D30,
 };
 
 /// The vtable `00bb8250` stores (`010b9e38`; no RTTI locator before it), the base destructor it

@@ -53,6 +53,8 @@ pub(crate) mod constant_maps {
 }
 
 use constant_maps::*;
+// This unit's own helper, not the shared one of the same name in shader_inline.
+use constant_maps::make_constant_map;
 
 /// The particle shader's vtable (`010b80a8`; no RTTI locator before it).
 const PARTICLE_VTABLE_010B80A8: u32 = 0x010b_80a8;
