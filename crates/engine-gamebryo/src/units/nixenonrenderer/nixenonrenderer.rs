@@ -112,6 +112,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00e7_2aa0,
             fn_00e72aa0(Ptr<NiDX9Renderer>, u32, u32, u32, u32, u32, u32) -> bool
         ),
+        entry!(
+            0x00e6_9ea0,
+            fn_00e69ea0(Ptr<NiDX9Renderer>, u32, u32, u32, u32, u32, u32, u16)
+        ),
+        entry!(
+            0x00e6_ab40,
+            fn_00e6ab40(Ptr<NiDX9Renderer>, u32, u32, u32, u32, u32, u32, u32, u16)
+        ),
     ]
 }
 
@@ -6497,5 +6505,513 @@ mod b048_partial_draw_tests {
                 vec![CLEARED_BLOCK_0126EFD8, 0, 0x76]
             ]
         );
+    }
+}
+
+// ---- Large x87 functions (a07) ----
+
+/// The camera vectors the quad builders read. `Do_SetCameraData` (`00e6c780`) stores its
+/// right vector at +0x64C (and +0x634) and its up vector at +0x658 (and +0x640); the Xbox
+/// PDB's `m_kCamRight`, `m_kCamUp`, `m_kModelCamRight`, `m_kModelCamUp` are four `NiPoint3`
+/// in the same order.
+const QUAD_RIGHT: u32 = 0x64c;
+const QUAD_UP: u32 = 0x658;
+
+/// How a quad builder's instructions take the camera vectors and the positions (the two
+/// builders differ only here; it decides which NaN an instruction keeps): `true` where the
+/// component is the instruction's `float` memory operand (`x87_m32`, a signalling NaN
+/// still signalling), `false` where it was loaded with `FLD` (quiet). Values the code
+/// computed and stored are never signalling, so for them both are the same.
+struct QuadOperands {
+    /// The rotated corner offsets with colours: up·B, right·A, up·A, right·(−B) (x, y, z
+    /// each; A and B as in [`rotated_offsets`]).
+    rotated_colored: [bool; 12],
+    /// The same without colours.
+    rotated_plain: [bool; 12],
+    /// The normal's z subtracts `up.x·right.y` with `up.x` loaded (`true`) or with
+    /// `right.y` loaded (`false`).
+    normal_z_up_loaded: bool,
+    /// The fourth corner's x adds the position as the memory operand.
+    corner3_x_memory: bool,
+}
+
+/// A camera component (`index` 0..3 of the vector at `vector`).
+fn quad_camera(e: &Engine, this: u32, vector: u32, index: u32) -> u32 {
+    e.mem.u32(this + vector + 4 * index)
+}
+
+/// `FLD dword` (`false`) or a `float` memory operand (`true`).
+fn quad_operand(bits: u32, memory: bool) -> f64 {
+    if memory {
+        x87_m32(bits)
+    } else {
+        x87_load32(bits)
+    }
+}
+
+/// `value · component`, stored as a float.
+fn quad_times(value: f64, bits: u32, memory: bool) -> u32 {
+    x87_store32(x87_mul(value, quad_operand(bits, memory)))
+}
+
+/// The packed colour of an `NiColorA` (`r, g, b, a`): each channel times 255.0 (`double`
+/// at `0101e568`), stored as a float and converted with `FISTP` (round to nearest),
+/// packed `((a << 8 | r) << 8 | g) << 8 | b`.
+fn quad_color(e: &Engine, color: u32) -> u32 {
+    let scale = f64::from_bits(e.mem.u64(SCALE_TO_BYTE));
+    let channel = |at: u32| {
+        let product = x87_store32(x87_mul(x87_load32(e.mem.u32(at)), scale));
+        crate::x87::fistp(x87_load32(product)) as u32
+    };
+    let alpha = channel(color + 0xc);
+    let red = channel(color);
+    let green = channel(color + 4);
+    let blue = channel(color + 8);
+    (((alpha << 8 | red) << 8 | green) << 8) | blue
+}
+
+/// The face normal both builders give every vertex: `up × right` component by component
+/// (`up.z·right.y − up.y·right.z`, `right.z·up.x − up.z·right.x`, `up.y·right.x −
+/// up.x·right.y`).
+fn quad_normal(e: &Engine, this: u32, ops: &QuadOperands) -> [u32; 3] {
+    let r = |i| quad_camera(e, this, QUAD_RIGHT, i);
+    let u = |i| quad_camera(e, this, QUAD_UP, i);
+    let x = x87_sub(
+        x87_mul(x87_load32(u(2)), x87_m32(r(1))),
+        x87_mul(x87_load32(u(1)), x87_m32(r(2))),
+    );
+    let y = x87_sub(
+        x87_mul(x87_load32(r(2)), x87_m32(u(0))),
+        x87_mul(x87_load32(u(2)), x87_m32(r(0))),
+    );
+    let last = if ops.normal_z_up_loaded {
+        x87_mul(x87_load32(u(0)), x87_m32(r(1)))
+    } else {
+        x87_mul(x87_load32(r(1)), x87_m32(u(0)))
+    };
+    let z = x87_sub(x87_mul(x87_load32(u(1)), x87_m32(r(0))), last);
+    [x87_store32(x), x87_store32(y), x87_store32(z)]
+}
+
+/// The corner offsets of a rotated quad: `FSINCOS` of the angle (sine and cosine stored as
+/// floats), `A = (sin + cos)·size`, `B = (cos − sin)·size` (floats), then the first offset
+/// `right·A + up·B` and the second `right·(−B) + up·A`, every product and sum a float.
+fn rotated_offsets(
+    e: &Engine,
+    this: u32,
+    angle: u32,
+    size: u32,
+    kinds: &[bool; 12],
+) -> ([u32; 3], [u32; 3]) {
+    let (sin, cos) = x87_fsincos(X87Ext::load32(angle));
+    let sin = x87_load32(sin.store32());
+    let cos = x87_load32(cos.store32());
+    let size = x87_load32(size);
+    let a = x87_load32(x87_store32(x87_mul(x87_add(sin, cos), size)));
+    let b = x87_load32(x87_store32(x87_mul(x87_sub(cos, sin), size)));
+    let r = |i: usize| quad_camera(e, this, QUAD_RIGHT, i as u32);
+    let u = |i: usize| quad_camera(e, this, QUAD_UP, i as u32);
+    let mut up_b = [0u32; 3];
+    let mut right_a = [0u32; 3];
+    for i in 0..3 {
+        up_b[i] = quad_times(b, u(i), kinds[i]);
+    }
+    for i in 0..3 {
+        right_a[i] = quad_times(a, r(i), kinds[3 + i]);
+    }
+    let mut first = [0u32; 3];
+    for i in 0..3 {
+        first[i] = x87_store32(x87_add(x87_load32(right_a[i]), x87_load32(up_b[i])));
+    }
+    let mut up_a = [0u32; 3];
+    for i in 0..3 {
+        up_a[i] = quad_times(a, u(i), kinds[6 + i]);
+    }
+    // `FCHS` of B, stored as a float.
+    let minus_b = x87_load32(x87_store32(-b));
+    let mut right_minus_b = [0u32; 3];
+    for i in 0..3 {
+        right_minus_b[i] = quad_times(minus_b, r(i), kinds[9 + i]);
+    }
+    let mut second = [0u32; 3];
+    for i in 0..3 {
+        second[i] = x87_store32(x87_add(x87_load32(right_minus_b[i]), x87_load32(up_a[i])));
+    }
+    (first, second)
+}
+
+/// Writes one quad: four vertices `stride` bytes apart (position, the normal, the colour,
+/// two texture coordinates, then with `extra` its byte as a float). The corners are the
+/// position minus the first offset (u 0, v 1), minus the second (1, 1), plus the first
+/// (1, 0) and plus the second (0, 0). Each corner reads the position again, then writes the
+/// vertex, then reads the byte.
+#[allow(clippy::too_many_arguments)]
+fn write_quad(
+    e: &mut Engine,
+    dest: u32,
+    stride: u32,
+    position: u32,
+    color: u32,
+    offsets: &([u32; 3], [u32; 3]),
+    normal: &[u32; 3],
+    extra: Option<u32>,
+    corner3_x_memory: bool,
+) {
+    const ONE_BITS: u32 = 0x3f80_0000;
+    let uv = [(0, ONE_BITS), (ONE_BITS, ONE_BITS), (ONE_BITS, 0), (0, 0)];
+    for corner in 0..4u32 {
+        let vertex = dest.wrapping_add(corner * stride);
+        let offset = if corner % 2 == 0 {
+            &offsets.0
+        } else {
+            &offsets.1
+        };
+        let mut xyz = [0u32; 3];
+        for j in 0..3u32 {
+            let p = e.mem.u32(position.wrapping_add(4 * j));
+            let o = x87_load32(offset[j as usize]);
+            xyz[j as usize] = if corner < 2 {
+                x87_store32(x87_sub(x87_load32(p), o))
+            } else {
+                let memory = j == 1 || (corner == 3 && j == 0 && corner3_x_memory);
+                x87_store32(x87_add(quad_operand(p, memory), o))
+            };
+        }
+        e.mem.set_u32(vertex.wrapping_add(0x18), color);
+        for j in 0..3u32 {
+            e.mem.set_u32(vertex.wrapping_add(4 * j), xyz[j as usize]);
+            e.mem
+                .set_u32(vertex.wrapping_add(0xc + 4 * j), normal[j as usize]);
+        }
+        let (u, v) = uv[corner as usize];
+        e.mem.set_u32(vertex.wrapping_add(0x1c), u);
+        e.mem.set_u32(vertex.wrapping_add(0x20), v);
+        if let Some(bytes) = extra {
+            let value = e.mem.u8(bytes);
+            e.mem
+                .set_u32(vertex.wrapping_add(0x24), x87_store32(f64::from(value)));
+        }
+    }
+}
+
+/// The body both quad builders share (see [`fn_00e69ea0`]).
+#[allow(clippy::too_many_arguments)]
+fn build_quads(
+    e: &mut Engine,
+    this: Ptr<NiDX9Renderer>,
+    mut dest: u32,
+    mut positions: u32,
+    mut colors: u32,
+    mut sizes: u32,
+    mut scales: u32,
+    mut angles: u32,
+    mut extra: Option<u32>,
+    count: u16,
+    stride: u32,
+    ops: &QuadOperands,
+) {
+    let t = this.addr();
+    let normal = quad_normal(e, t, ops);
+    let rotated = angles != 0;
+    let with_colors = colors != 0;
+    let (sum, difference) = if rotated {
+        ([0u32; 3], [0u32; 3])
+    } else {
+        let r = |e: &Engine, i| quad_camera(e, t, QUAD_RIGHT, i);
+        let u = |e: &Engine, i| quad_camera(e, t, QUAD_UP, i);
+        let mut difference = [0u32; 3];
+        for i in 0..3u32 {
+            difference[i as usize] = x87_store32(x87_sub(x87_load32(u(e, i)), x87_m32(r(e, i))));
+        }
+        let sum = [
+            x87_store32(x87_add(x87_load32(u(e, 0)), x87_m32(r(e, 0)))),
+            x87_store32(x87_add(x87_load32(r(e, 1)), x87_m32(u(e, 1)))),
+            x87_store32(x87_add(x87_load32(r(e, 2)), x87_m32(u(e, 2)))),
+        ];
+        (sum, difference)
+    };
+    let mut left = u32::from(count);
+    while left != 0 {
+        let color = if with_colors {
+            quad_color(e, colors)
+        } else {
+            0xffff_ffff
+        };
+        let size = x87_store32(x87_mul(
+            x87_load32(e.mem.u32(sizes)),
+            x87_m32(e.mem.u32(scales)),
+        ));
+        let offsets = if rotated {
+            let kinds = if with_colors {
+                &ops.rotated_colored
+            } else {
+                &ops.rotated_plain
+            };
+            rotated_offsets(e, t, e.mem.u32(angles), size, kinds)
+        } else {
+            let s = x87_load32(size);
+            let mut first = [0u32; 3];
+            let mut second = [0u32; 3];
+            for i in 0..3 {
+                first[i] = x87_store32(x87_mul(x87_load32(sum[i]), s));
+                second[i] = x87_store32(x87_mul(x87_load32(difference[i]), s));
+            }
+            (first, second)
+        };
+        write_quad(
+            e,
+            dest,
+            stride,
+            positions,
+            color,
+            &offsets,
+            &normal,
+            extra,
+            ops.corner3_x_memory,
+        );
+        if with_colors {
+            colors = colors.wrapping_add(0x10);
+        }
+        sizes = sizes.wrapping_add(4);
+        scales = scales.wrapping_add(4);
+        if rotated {
+            angles = angles.wrapping_add(4);
+        }
+        positions = positions.wrapping_add(0xc);
+        extra = extra.map(|bytes| bytes.wrapping_add(1));
+        dest = dest.wrapping_add(4 * stride);
+        left -= 1;
+    }
+}
+
+// Translated from 00e69ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, seven words: the vertices, the positions, the
+/// colours or 0, two size arrays, the angles or 0, the count as a `u16`). Builds a camera
+/// facing quad per element: four vertices of 0x24 bytes (position, normal, `D3DCOLOR`, u, v)
+/// from its position (`NiPoint3`), its size (the two sizes multiplied), the camera's right
+/// (+0x64C) and up (+0x658) vectors and, with angles, its angle (`FSINCOS`). The normal is
+/// `up × right` for all; the colour is the packed `NiColorA` (`0xFFFFFFFF` without colours).
+/// Without angles the corner offsets are `(up + right)·size` and `(up − right)·size`.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00e69ea0(
+    e: &mut Engine,
+    this: Ptr<NiDX9Renderer>,
+    vertices: u32,
+    positions: u32,
+    colors: u32,
+    sizes: u32,
+    scales: u32,
+    angles: u32,
+    count: u16,
+) {
+    const OPS: QuadOperands = QuadOperands {
+        rotated_colored: [
+            true, false, false, false, false, false, false, false, true, false, false, true,
+        ],
+        rotated_plain: [
+            false, false, false, true, false, false, false, false, true, false, true, true,
+        ],
+        normal_z_up_loaded: false,
+        corner3_x_memory: false,
+    };
+    build_quads(
+        e, this, vertices, positions, colors, sizes, scales, angles, None, count, 0x24, &OPS,
+    );
+}
+
+// Translated from 00e6ab40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, eight words): [`fn_00e69ea0`] with one more
+/// array, of bytes (the seventh word, before the count), each vertex 0x28 bytes with its
+/// element's byte as a float at +0x24.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00e6ab40(
+    e: &mut Engine,
+    this: Ptr<NiDX9Renderer>,
+    vertices: u32,
+    positions: u32,
+    colors: u32,
+    sizes: u32,
+    scales: u32,
+    angles: u32,
+    bytes: u32,
+    count: u16,
+) {
+    const OPS: QuadOperands = QuadOperands {
+        rotated_colored: [
+            false, false, false, false, false, false, false, false, true, false, false, true,
+        ],
+        rotated_plain: [
+            false, false, false, false, false, false, false, true, true, true, false, true,
+        ],
+        normal_z_up_loaded: true,
+        corner3_x_memory: true,
+    };
+    build_quads(
+        e,
+        this,
+        vertices,
+        positions,
+        colors,
+        sizes,
+        scales,
+        angles,
+        Some(bytes),
+        count,
+        0x28,
+        &OPS,
+    );
+}
+
+#[cfg(test)]
+mod a07_quad_tests {
+    use super::*;
+
+    const RENDERER_VT: u32 = 0x6400;
+
+    fn renderer(e: &mut Engine) -> Ptr<NiDX9Renderer> {
+        let r = e.new_object::<NiDX9Renderer>();
+        let t = r.addr();
+        e.mem.set_u32(t, RENDERER_VT);
+        // right (1, 0, 0), up (0, 1, 0)
+        for (i, v) in [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0].iter().enumerate() {
+            e.mem.set_u32(t + QUAD_RIGHT + 4 * i as u32, v.to_bits());
+        }
+        r
+    }
+
+    fn floats(e: &mut Engine, values: &[f32]) -> u32 {
+        let p = e.mem.alloc(4 * values.len() as u32 + 4);
+        for (i, v) in values.iter().enumerate() {
+            e.mem.set_u32(p + 4 * i as u32, v.to_bits());
+        }
+        p
+    }
+
+    fn vertex(e: &Engine, v: u32, n: u32) -> Vec<f32> {
+        (0..n)
+            .map(|i| f32::from_bits(e.mem.u32(v + 4 * i)))
+            .collect()
+    }
+
+    fn scale_constant(e: &mut Engine) {
+        e.map(SCALE_TO_BYTE & !0xfff, 0x1000);
+        e.mem.set_u64(SCALE_TO_BYTE, 255.0f64.to_bits());
+    }
+
+    #[test]
+    fn quads_without_angles_take_up_plus_and_minus_right() {
+        let mut e = Engine::new();
+        scale_constant(&mut e);
+        let r = renderer(&mut e);
+        let positions = floats(&mut e, &[10.0, 20.0, 30.0]);
+        let sizes = floats(&mut e, &[2.0]);
+        let scales = floats(&mut e, &[0.5]);
+        let out = e.mem.alloc(0x90);
+        e.call(
+            0x00e6_9ea0,
+            &args![r, out, positions, 0u32, sizes, scales, 0u32, 1u32],
+        );
+        let expect = [
+            [9.0, 19.0, 30.0, 0.0, 1.0],
+            [11.0, 19.0, 30.0, 1.0, 1.0],
+            [11.0, 21.0, 30.0, 1.0, 0.0],
+            [9.0, 21.0, 30.0, 0.0, 0.0],
+        ];
+        for (k, x) in expect.iter().enumerate() {
+            let at = out + 0x24 * k as u32;
+            let v = vertex(&e, at, 9);
+            assert_eq!(&v[..3], &x[..3]);
+            assert_eq!(&v[3..6], &[0.0, 0.0, 1.0]);
+            assert_eq!(e.mem.u32(at + 0x18), 0xffff_ffff);
+            assert_eq!(&v[7..], &x[3..]);
+        }
+        // With colours: r 1, g 0.5, b 0, a 1 packs to 0xFFFF8000 (127.5 rounds to even).
+        let colors = floats(&mut e, &[1.0, 0.5, 0.0, 1.0]);
+        e.call(
+            0x00e6_9ea0,
+            &args![r, out, positions, colors, sizes, scales, 0u32, 1u32],
+        );
+        for k in 0..4 {
+            assert_eq!(e.mem.u32(out + 0x24 * k + 0x18), 0xffff_8000);
+        }
+        assert_eq!(vertex(&e, out + 0x24 * 3, 3), vec![9.0, 21.0, 30.0]);
+        // A count of 0 writes nothing.
+        let fresh = e.mem.alloc(0x90);
+        e.mem.set_u32(fresh, 0x1234);
+        e.call(
+            0x00e6_9ea0,
+            &args![r, fresh, positions, colors, sizes, scales, 0u32, 0u32],
+        );
+        assert_eq!(e.mem.u32(fresh), 0x1234);
+    }
+
+    #[test]
+    fn quads_with_angles_rotate_the_offsets() {
+        let mut e = Engine::new();
+        scale_constant(&mut e);
+        let r = renderer(&mut e);
+        let positions = floats(&mut e, &[10.0, 20.0, 30.0, 0.0, 0.0, 0.0]);
+        let sizes = floats(&mut e, &[1.0, 1.0]);
+        let scales = floats(&mut e, &[1.0, 2.0]);
+        // Angle 0: the offsets of the unrotated quad; angle pi: (nearly) their negation.
+        let angles = floats(&mut e, &[0.0, std::f32::consts::PI]);
+        let out = e.mem.alloc(0x120);
+        e.call(
+            0x00e6_9ea0,
+            &args![r, out, positions, 0u32, sizes, scales, angles, 2u32],
+        );
+        assert_eq!(vertex(&e, out, 3), vec![9.0, 19.0, 30.0]);
+        assert_eq!(vertex(&e, out + 0x24, 3), vec![11.0, 19.0, 30.0]);
+        assert_eq!(vertex(&e, out + 0x48, 3), vec![11.0, 21.0, 30.0]);
+        let second = vertex(&e, out + 0x90, 3);
+        assert!((second[0] - 2.0).abs() < 1e-5 && (second[1] - 2.0).abs() < 1e-5);
+        let third = vertex(&e, out + 0x90 + 0x24, 3);
+        assert!((third[0] + 2.0).abs() < 1e-5 && (third[1] - 2.0).abs() < 1e-5);
+        assert_eq!(e.mem.u32(out + 0x90 + 0x18), 0xffff_ffff);
+        // With colours the colour is packed per element.
+        let colors = floats(&mut e, &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+        e.call(
+            0x00e6_9ea0,
+            &args![r, out, positions, colors, sizes, scales, angles, 2u32],
+        );
+        assert_eq!(e.mem.u32(out + 0x18), 0xff00_0000);
+        assert_eq!(e.mem.u32(out + 0x90 + 0x18), 0);
+        assert_eq!(vertex(&e, out + 0x24, 3), vec![11.0, 19.0, 30.0]);
+    }
+
+    #[test]
+    fn byte_quads_add_the_byte_as_a_float() {
+        let mut e = Engine::new();
+        scale_constant(&mut e);
+        let r = renderer(&mut e);
+        let positions = floats(&mut e, &[10.0, 20.0, 30.0, 1.0, 2.0, 3.0]);
+        let sizes = floats(&mut e, &[2.0, 1.0]);
+        let scales = floats(&mut e, &[0.5, 1.0]);
+        let colors = floats(&mut e, &[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
+        let bytes = e.mem.alloc(4);
+        e.mem.set_u8(bytes, 7);
+        e.mem.set_u8(bytes + 1, 9);
+        let out = e.mem.alloc(0x140);
+        e.call(
+            0x00e6_ab40,
+            &args![r, out, positions, colors, sizes, scales, 0u32, bytes, 2u32],
+        );
+        let first = vertex(&e, out, 10);
+        assert_eq!(&first[..6], &[9.0, 19.0, 30.0, 0.0, 0.0, 1.0]);
+        assert_eq!(&first[7..], &[0.0, 1.0, 7.0]);
+        assert_eq!(e.mem.u32(out + 0x18), 0x0000_00ff);
+        assert_eq!(vertex(&e, out + 0x28 * 3, 3), vec![9.0, 21.0, 30.0]);
+        assert_eq!(f32::from_bits(e.mem.u32(out + 0x28 * 3 + 0x24)), 7.0);
+        assert_eq!(e.mem.u32(out + 0xa0 + 0x18), 0xffff_ffff);
+        assert_eq!(vertex(&e, out + 0xa0, 3), vec![0.0, 1.0, 3.0]);
+        assert_eq!(f32::from_bits(e.mem.u32(out + 0xa0 + 0x24)), 9.0);
+        // With angles (0) the corners are the same.
+        let angles = floats(&mut e, &[0.0, 0.0]);
+        e.call(
+            0x00e6_ab40,
+            &args![r, out, positions, 0u32, sizes, scales, angles, bytes, 1u32],
+        );
+        assert_eq!(vertex(&e, out + 0x28, 3), vec![11.0, 19.0, 30.0]);
+        assert_eq!(e.mem.u32(out + 0x18), 0xffff_ffff);
     }
 }
