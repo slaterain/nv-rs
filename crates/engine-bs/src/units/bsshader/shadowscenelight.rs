@@ -2226,9 +2226,385 @@ fn edge_crosses_inside(
     })
 }
 
+/// The light list walk of `00b9d150`: the lighting property's active non-shadow lights
+/// (`GetFirstActiveNonShadowLight` `00b70600` / `GetNextActiveNonShadowLight` `00b70700`,
+/// `thiscall`, `RET 4`, the iterator local) when there is a property, else the shadow scene
+/// node's light at an index (`00b5ac20`, `RET 4`).
+const GET_FIRST_ACTIVE_NON_SHADOW_LIGHT: u32 = 0x00b7_0600;
+const GET_NEXT_ACTIVE_NON_SHADOW_LIGHT: u32 = 0x00b7_0700;
+const SCENE_NODE_LIGHT_AT_00B5AC20: u32 = 0x00b5_ac20;
+/// The weights of the counted lights (`float[40]`, written twice; the second array is read).
+const LIGHT_WEIGHTS_011FFF40: u32 = 0x011f_ff40;
+const LIGHT_WEIGHTS_011FFEA0: u32 = 0x011f_fea0;
+/// The colour sum's start (three `float` words).
+const COLOUR_START_011F4998: u32 = 0x011f_4998;
+/// `double` 0.0625, 75.0, 1000.0, 0.75, 256.0, 1.4 (a widened `float`), 8.0, 0.4 and 0.8
+/// (widened `float`s) and 1.0; `float` 0.75 and 0.8.
+const RADIUS_SHARE_010B7E98: u32 = 0x010b_7e98;
+const RADIUS_DIVISOR_010731A8: u32 = 0x0107_31a8;
+const SUN_RANGE_01017B70: u32 = 0x0101_7b70;
+const LOWEST_HEIGHT_0101DE30: u32 = 0x0101_de30;
+const RADIUS_CAP_010231D8: u32 = 0x0102_31d8;
+const OFFSET_SCALE_010B7E90: u32 = 0x010b_7e90;
+const SPECULAR_SCALE_010240B0: u32 = 0x0102_40b0;
+const COLOUR_SHARE_010290C0: u32 = 0x0102_90c0;
+const LOWEST_GREY_010217D8: u32 = 0x0102_17d8;
+const ONE_01012070: u32 = 0x0101_2070;
+const LOWEST_HEIGHT_01016264: u32 = 0x0101_6264;
+const LOWEST_GREY_01030FF0: u32 = 0x0103_0ff0;
+
+/// The first light of `00b9d150`'s walk.
+fn first_light(e: &mut Engine, property: u32, iterator: u32) -> u32 {
+    if property != 0 {
+        e.call(
+            GET_FIRST_ACTIVE_NON_SHADOW_LIGHT,
+            &args![property, iterator],
+        )
+        .u32()
+    } else {
+        let node = e.global::<u32>(SCENE_NODE_011F91C8);
+        e.call(SCENE_NODE_LIGHT_AT_00B5AC20, &args![node, 0u32])
+            .u32()
+    }
+}
+
+/// The next light of `00b9d150`'s walk (`index` used without a property).
+fn next_light(e: &mut Engine, property: u32, iterator: u32, index: u32) -> u32 {
+    if property != 0 {
+        e.call(GET_NEXT_ACTIVE_NON_SHADOW_LIGHT, &args![property, iterator])
+            .u32()
+    } else {
+        let node = e.global::<u32>(SCENE_NODE_011F91C8);
+        e.call(SCENE_NODE_LIGHT_AT_00B5AC20, &args![node, index])
+            .u32()
+    }
+}
+
+/// `FLD a; FLD b; FLD ST0; FMULP ST2; FXCH; FSTP`, `FLD c; FMUL ST1; FSTP`, `FMUL d; FSTP`:
+/// the three words of a point times a loaded factor, each stored as a `float`.
+fn scaled_words(words: [u32; 3], factor: f64) -> [u32; 3] {
+    [
+        x87_store32(x87_mul(x87_load32(words[0]), factor)),
+        x87_store32(x87_mul(x87_load32(words[1]), factor)),
+        x87_store32(x87_mul(factor, x87_m32(words[2]))),
+    ]
+}
+
+fn read_words(e: &Engine, address: u32) -> [u32; 3] {
+    [0, 4, 8].map(|offset| e.mem.u32(address.wrapping_add(offset)))
+}
+
+fn write_words(e: &mut Engine, address: u32, words: [u32; 3]) {
+    for (i, word) in words.into_iter().enumerate() {
+        e.mem.set_u32(address.wrapping_add(4 * i as u32), word);
+    }
+}
+
+// Translated from 00b9d150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ShadowSceneLight::ComputeWeightedShadowLight` (Ghidra). `thiscall`, `RET 0x10`: the
+/// lighting property (0 for the shadow scene node's lights) and three words the function only
+/// uses as storage for the position. Translated from the disassembly (the decompiler drops x87
+/// work). The position is the shadow scene's world translation (+0x8c), moved by its scale
+/// (+0x98) times the extra data's offset (`GetExtraData` `00a5bdd0` with the name at
+/// `012031e4`, +0xc); the radius is the largest component of the scale times the extra data's
+/// extents (+0x18), or of the point at `011f426c` without extra data. Up to 40 usable lights
+/// (not +0xec, `NiLight` flag bit 0 clear, dimmer above 0) get the weight `1 - (distance -
+/// radius) / range` clamped to [0, 1] (`011fff40`, `011ffea0`), summed. The direction starts at
+/// `011f426c` and the colour at `011f4998`. Without weight the direction is the reversed sun
+/// direction (the scene node's +0xe0 light's `NiLight` +0xf0, z times 0.0625 * radius),
+/// normalized (`004a0c10`), its z raised to radius / 75, and the colour the sun's diffuse
+/// colour. Otherwise every light of the walk, up to the counted number, with a positive share
+/// `w = weight / sum` adds `w * (b * light direction + (1 - b) * sun direction)` and
+/// `w * (b * light colour + (1 - b) * sun colour)` (`b` its weight, by walk position), and
+/// `w * (b * range + (1 - b) * 1000)` to a range the function leaves unused; the direction's z
+/// is raised to 0.75. The direction is normalized (twice). The shadow light (`spLight`) is
+/// placed at the position plus `1.4 * min(radius, 256)` times the direction and updated
+/// (`00a59c60`); its diffuse colour becomes the grey `0.4 * (r + g + b)` clamped to [0.8, 1],
+/// its specular colour `(8 * min(radius, 256), 0, 0)`, and its revision (+0xa8) goes up by 2.
+pub fn shadow_scene_light_compute_weighted_shadow_light(
+    e: &mut Engine,
+    this: Ptr<ShadowSceneLight>,
+    property: u32,
+    _position_x: u32,
+    _position_y: u32,
+    _position_z: u32,
+) {
+    e.with_stack(0x30, |e, frame| {
+        // Locals: the light iterator (+0x00), the sun direction (+0x04), a light's direction
+        // (+0x10), the direction (+0x1c).
+        let iterator = frame.addr();
+        let sun_direction = iterator + 0x04;
+        let light_direction = iterator + 0x10;
+        let direction = iterator + 0x1c;
+        let scene = e.get(this, ShadowSceneLight::spShadowScene);
+        let name = e.global::<u32>(EXTRA_DATA_NAME_012031E4);
+        let extra = e.call(GET_EXTRA_DATA, &args![scene, name]).u32();
+        let scene = e.get(this, ShadowSceneLight::spShadowScene);
+        let mut position = read_words(e, scene.wrapping_add(WORLD_TRANSLATE));
+        let extents = if extra != 0 {
+            let scale = x87_load32(copy_float(e, scene.wrapping_add(0x98)));
+            let offset = scaled_words(read_words(e, extra.wrapping_add(0xc)), scale);
+            position = [
+                add32(offset[0], position[0]),
+                add32(position[1], offset[1]),
+                add32(position[2], offset[2]),
+            ];
+            let scale = x87_load32(copy_float(e, scene.wrapping_add(0x98)));
+            scaled_words(read_words(e, extra.wrapping_add(0x18)), scale)
+        } else {
+            read_words(e, POINT_POSITION_011F426C)
+        };
+        let larger = x87_keep_larger(x87_load32(extents[0]), x87_load32(extents[1]));
+        let larger = x87_load32(x87_store32(larger));
+        let radius = x87_store32(x87_keep_larger(larger, x87_load32(extents[2])));
+
+        // The weights of the usable lights.
+        let mut sum = x87_store32(0.0);
+        let mut count = 0u32;
+        let mut index = 0u32;
+        let mut light = first_light(e, property, iterator);
+        while light != 0 && count < 0x28 {
+            let usable = e.mem.u8(light.wrapping_add(0xec)) == 0 && {
+                let ni_light = e.mem.u32(light.wrapping_add(0xf8));
+                e.mem.u8(ni_light.wrapping_add(FLAGS)) & 1 == 0
+                    && 0.0 < x87_m32(e.mem.u32(ni_light.wrapping_add(0xc4)))
+            };
+            if usable {
+                let ni_light = e.mem.u32(light.wrapping_add(0xf8));
+                let mut delta = [0u32; 3];
+                for (i, d) in delta.iter_mut().enumerate() {
+                    let p = e
+                        .mem
+                        .u32(ni_light.wrapping_add(WORLD_TRANSLATE + 4 * i as u32));
+                    *d = sub32(p, position[i]);
+                }
+                let squared = x87_store32(squared_length(
+                    x87_load32(delta[1]),
+                    x87_load32(delta[0]),
+                    x87_load32(delta[2]),
+                ));
+                let distance = sqrt_stored(e, squared);
+                let range = e.mem.u32(ni_light.wrapping_add(0xe0));
+                let ratio = x87_div(
+                    x87_sub(x87_load32(distance), x87_m32(radius)),
+                    x87_m32(range),
+                );
+                let mut weight = x87_store32(x87_sub(1.0, ratio));
+                let zero: f64 = e.global(ZERO_01012060);
+                if x87_load32(weight) < zero {
+                    weight = x87_store32(0.0);
+                }
+                let w = x87_load32(weight);
+                let weight = x87_store32(if 1.0 < w { 1.0 } else { w });
+                e.mem.set_u32(LIGHT_WEIGHTS_011FFF40 + 4 * count, weight);
+                e.mem.set_u32(LIGHT_WEIGHTS_011FFEA0 + 4 * count, weight);
+                count += 1;
+                sum = x87_store32(x87_add(x87_load32(weight), x87_m32(sum)));
+            }
+            index += 1;
+            light = next_light(e, property, iterator, index & 0xffff);
+        }
+
+        let node = e.global::<u32>(SCENE_NODE_011F91C8);
+        let mut range_sum = x87_store32(0.0);
+        write_words(e, direction, read_words(e, POINT_POSITION_011F426C));
+        let mut colour = read_words(e, COLOUR_START_011F4998);
+        let sun = e
+            .mem
+            .u32(e.mem.u32(node.wrapping_add(0xe0)).wrapping_add(0xf8));
+        let sun_words = read_words(e, sun.wrapping_add(0xf0));
+        let share: f64 = e.global(RADIUS_SHARE_010B7E98);
+        let reach = x87_mul(x87_load32(radius), share);
+        write_words(
+            e,
+            sun_direction,
+            [
+                x87_store32(-x87_load32(sun_words[0])),
+                x87_store32(-x87_load32(sun_words[1])),
+                x87_store32(x87_mul(-x87_load32(sun_words[2]), reach)),
+            ],
+        );
+        e.call(POINT_NORMALIZE_004A0C10, &args![sun_direction]);
+        if x87_m32(sum) == 0.0 {
+            // No weight: the sun alone.
+            write_words(e, direction, read_words(e, sun_direction));
+            colour = read_words(e, sun.wrapping_add(0xd4));
+            e.call(POINT_NORMALIZE_004A0C10, &args![direction]);
+            let divisor: f64 = e.global(RADIUS_DIVISOR_010731A8);
+            let lowest = x87_store32(x87_div(x87_load32(radius), divisor));
+            if x87_load32(e.mem.u32(direction + 8)) < x87_load32(lowest) {
+                e.mem.set_u32(direction + 8, x87_quiet_bits(lowest));
+            }
+        } else {
+            // The node read before the sun direction is the one asked without a property.
+            let mut light = if property != 0 {
+                first_light(e, property, iterator)
+            } else {
+                e.call(SCENE_NODE_LIGHT_AT_00B5AC20, &args![node, 0u32])
+                    .u32()
+            };
+            let mut node_index = 0u32;
+            let mut walked = 0u32;
+            while walked < count {
+                if light != 0 && e.mem.u8(light.wrapping_add(0xec)) == 0 {
+                    let ni_light = e.mem.u32(light.wrapping_add(0xf8));
+                    if e.mem.u8(ni_light.wrapping_add(FLAGS)) & 1 == 0 {
+                        let slot = LIGHT_WEIGHTS_011FFEA0 + 4 * walked;
+                        let w = x87_store32(x87_div(x87_load32(e.mem.u32(slot)), x87_m32(sum)));
+                        let w = x87_load32(w);
+                        if 0.0 < w {
+                            let b = x87_load32(e.mem.u32(slot));
+                            let rest = x87_sub(1.0, b);
+                            let reach = x87_mul(
+                                x87_load32(e.mem.u32(ni_light.wrapping_add(0xe0))),
+                                x87_m32(e.mem.u32(slot)),
+                            );
+                            let sun_range: f64 = e.global(SUN_RANGE_01017B70);
+                            let blend = x87_add(reach, x87_mul(rest, sun_range));
+                            range_sum = x87_store32(x87_add(x87_mul(w, blend), x87_m32(range_sum)));
+                            let mut delta = [0u32; 3];
+                            for (i, d) in delta.iter_mut().enumerate() {
+                                let p = e
+                                    .mem
+                                    .u32(ni_light.wrapping_add(WORLD_TRANSLATE + 4 * i as u32));
+                                *d = sub32(p, position[i]);
+                            }
+                            write_words(e, light_direction, delta);
+                            e.call(POINT_NORMALIZE_004A0C10, &args![light_direction]);
+                            // `FST qword` then `FSTP dword` of 1 - b.
+                            let rest = x87_load32(x87_store32(x87_load64(rest.to_bits())));
+                            let sun_part = read_words(e, sun_direction);
+                            let sun_part = [
+                                x87_store32(x87_mul(rest, x87_m32(sun_part[0]))),
+                                x87_store32(x87_mul(x87_load32(sun_part[1]), rest)),
+                                x87_store32(x87_mul(rest, x87_m32(sun_part[2]))),
+                            ];
+                            let b = x87_load32(x87_quiet_bits(e.mem.u32(slot)));
+                            let light_part = scaled_words(read_words(e, light_direction), b);
+                            let mut part = [0u32; 3];
+                            for (i, p) in part.iter_mut().enumerate() {
+                                *p = add32(light_part[i], sun_part[i]);
+                            }
+                            // `FLD; FMUL ST1` for all three (no memory operand).
+                            let part = part.map(|p| x87_store32(x87_mul(x87_load32(p), w)));
+                            let sum_of = read_words(e, direction);
+                            write_words(
+                                e,
+                                direction,
+                                [
+                                    add32(part[0], sum_of[0]),
+                                    add32(sum_of[1], part[1]),
+                                    add32(part[2], sum_of[2]),
+                                ],
+                            );
+                            let sun_colour = read_words(e, sun.wrapping_add(0xd4));
+                            let sun_colour = scaled_words(sun_colour, rest);
+                            let b = x87_load32(x87_quiet_bits(e.mem.u32(slot)));
+                            let light_colour =
+                                scaled_words(read_words(e, ni_light.wrapping_add(0xd4)), b);
+                            let mut mixed = [0u32; 3];
+                            for (i, m) in mixed.iter_mut().enumerate() {
+                                *m = add32(light_colour[i], sun_colour[i]);
+                            }
+                            let mixed = scaled_words(mixed, w);
+                            for (i, c) in colour.iter_mut().enumerate() {
+                                *c = add32(mixed[i], *c);
+                            }
+                        }
+                    }
+                }
+                light = if property != 0 {
+                    next_light(e, property, iterator, 0)
+                } else {
+                    node_index += 1;
+                    next_light(e, 0, iterator, node_index)
+                };
+                walked += 1;
+            }
+            e.call(POINT_NORMALIZE_004A0C10, &args![direction]);
+            let lowest: f64 = e.global(LOWEST_HEIGHT_0101DE30);
+            if x87_load32(e.mem.u32(direction + 8)) < lowest {
+                let height = x87_quiet_bits(e.global::<u32>(LOWEST_HEIGHT_01016264));
+                e.mem.set_u32(direction + 8, height);
+            }
+        }
+        e.call(POINT_NORMALIZE_004A0C10, &args![direction]);
+        let _ = range_sum;
+
+        // The shadow light.
+        let cap: f64 = e.global(RADIUS_CAP_010231D8);
+        let r = x87_load32(radius);
+        let reach = x87_store32(if cap < r {
+            x87_load32(e.global::<u32>(EXTENT_CAP_01032ADC))
+        } else {
+            r
+        });
+        let ni_light = e.get(this, ShadowSceneLight::spLight);
+        let offset = scaled_words(read_words(e, direction), x87_load32(reach));
+        let scale: f64 = e.global(OFFSET_SCALE_010B7E90);
+        let offset = scaled_words(offset, scale);
+        write_words(
+            e,
+            ni_light.wrapping_add(0x58),
+            [
+                add32(offset[0], position[0]),
+                add32(offset[1], position[1]),
+                add32(offset[2], position[2]),
+            ],
+        );
+        let specular_scale: f64 = e.global(SPECULAR_SCALE_010240B0);
+        let specular = x87_store32(x87_mul(x87_load32(reach), specular_scale));
+        let ni_light = e.get(this, ShadowSceneLight::spLight);
+        update_object(e, ni_light);
+        let colour_share: f64 = e.global(COLOUR_SHARE_010290C0);
+        let grey = x87_add(
+            x87_add(
+                x87_mul(x87_load32(colour[1]), colour_share),
+                x87_mul(x87_load32(colour[0]), colour_share),
+            ),
+            x87_mul(colour_share, x87_m32(colour[2])),
+        );
+        let grey = x87_load32(x87_store32(grey));
+        let lowest: f64 = e.global(LOWEST_GREY_010217D8);
+        let grey = if grey < lowest {
+            x87_load32(e.global::<u32>(LOWEST_GREY_01030FF0))
+        } else {
+            grey
+        };
+        let grey = x87_load32(x87_store32(grey));
+        let one: f64 = e.global(ONE_01012070);
+        let grey = x87_store32(if one < grey { 1.0 } else { grey });
+        let ni_light = e.get(this, ShadowSceneLight::spLight);
+        write_words(e, ni_light.wrapping_add(0xd4), [grey; 3]);
+        let revision = e.mem.u32(ni_light.wrapping_add(0xa8));
+        e.mem
+            .set_u32(ni_light.wrapping_add(0xa8), revision.wrapping_add(1));
+        let ni_light = e.get(this, ShadowSceneLight::spLight);
+        let revision = e.mem.u32(ni_light.wrapping_add(0xa8));
+        e.mem
+            .set_u32(ni_light.wrapping_add(0xa8), revision.wrapping_add(1));
+        let zero = x87_store32(0.0);
+        write_words(
+            e,
+            ni_light.wrapping_add(0xe0),
+            [x87_quiet_bits(specular), zero, zero],
+        );
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00b9_d150,
+            shadow_scene_light_compute_weighted_shadow_light(
+                Ptr<ShadowSceneLight>,
+                u32,
+                u32,
+                u32,
+                u32,
+            )
+        ),
         entry!(
             0x00b9_c020,
             fn_00b9c020(Ptr<ShadowSceneLight>, Ptr, Ptr) -> bool
@@ -3604,5 +3980,189 @@ mod camera_test_tests {
         assert_eq!(side_of((-1.0f32).to_bits()), 2);
         assert_eq!(side_of(1.0f32.to_bits()), 1);
         assert_eq!(side_of(f32::NAN.to_bits()), 0);
+    }
+}
+
+#[cfg(test)]
+mod weighted_light_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn set3(e: &mut Engine, at: u32, values: [f32; 3]) {
+        for (i, value) in values.into_iter().enumerate() {
+            e.mem.set_f32(at + 4 * i as u32, value);
+        }
+    }
+
+    fn get3(e: &Engine, at: u32) -> [f32; 3] {
+        [0, 4, 8].map(|offset| e.mem.f32(at + offset))
+    }
+
+    /// The light, its shadow scene at (10, 20, 30) with scale 2, the scene node with its sun
+    /// (direction (0, 0, -0.1), colour (0.5, 0.25, 1.0)) and the constants.
+    fn rig() -> (Engine, Ptr<ShadowSceneLight>, u32) {
+        let mut e = Engine::new();
+        for page in [
+            0x0101_2000,
+            0x0101_6000,
+            0x0101_7000,
+            0x0101_d000,
+            0x0102_1000,
+            0x0102_3000,
+            0x0102_4000,
+            0x0102_9000,
+            0x0103_0000,
+            0x0103_2000,
+            0x0107_3000,
+            0x010b_7000,
+            0x011f_4000,
+            0x011f_9000,
+            0x011f_f000,
+            0x0120_3000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(ZERO_01012060, 0.0f64);
+        e.set_global(ONE_01012070, 1.0f64);
+        e.set_global(RADIUS_SHARE_010B7E98, 0.0625f64);
+        e.set_global(RADIUS_DIVISOR_010731A8, 75.0f64);
+        e.set_global(SUN_RANGE_01017B70, 1000.0f64);
+        e.set_global(LOWEST_HEIGHT_0101DE30, 0.75f64);
+        e.set_global(RADIUS_CAP_010231D8, 256.0f64);
+        e.set_global(OFFSET_SCALE_010B7E90, f64::from(1.4f32));
+        e.set_global(SPECULAR_SCALE_010240B0, 8.0f64);
+        e.set_global(COLOUR_SHARE_010290C0, f64::from(0.4f32));
+        e.set_global(LOWEST_GREY_010217D8, f64::from(0.8f32));
+        e.set_global(LOWEST_HEIGHT_01016264, 0.75f32);
+        e.set_global(EXTENT_CAP_01032ADC, 256.0f32);
+        e.set_global(LOWEST_GREY_01030FF0, 0.8f32);
+        e.set_global(EXTRA_DATA_NAME_012031E4, 0x5150u32);
+        e.register(CRT_SQRT, |_, a| Ret {
+            st0: f64::take(a, &mut 0).sqrt(),
+            ..Ret::default()
+        });
+        e.register(POINT_NORMALIZE_004A0C10, |_, _| Ret::default());
+        e.register(OBJECT_UPDATE_00A59C60, |_, _| Ret::default());
+        e.register(SCENE_NODE_LIGHT_AT_00B5AC20, |_, _| 0u32.into_ret());
+        e.register(GET_EXTRA_DATA, |_, _| 0u32.into_ret());
+        let this = Ptr::new(e.mem.alloc(0x300));
+        let scene = e.mem.alloc(0x100);
+        set3(&mut e, scene + 0x8c, [10.0, 20.0, 30.0]);
+        e.mem.set_f32(scene + 0x98, 2.0);
+        e.set(this, ShadowSceneLight::spShadowScene, scene);
+        let ni_light = e.mem.alloc(0x100);
+        e.mem.set_u32(ni_light + 0xa8, 5);
+        e.set(this, ShadowSceneLight::spLight, ni_light);
+        let node = e.mem.alloc(0x100);
+        let sun_light = e.mem.alloc(0x100);
+        let sun = e.mem.alloc(0x100);
+        e.mem.set_u32(node + 0xe0, sun_light);
+        e.mem.set_u32(sun_light + 0xf8, sun);
+        set3(&mut e, sun + 0xf0, [0.0, 0.0, -0.1]);
+        set3(&mut e, sun + 0xd4, [0.5, 0.25, 1.0]);
+        e.set_global(SCENE_NODE_011F91C8, node);
+        (e, this, ni_light)
+    }
+
+    #[test]
+    fn without_lights_the_sun_places_the_shadow_light() {
+        let (mut e, this, ni_light) = rig();
+        // No extra data: the radius is the largest word of 011f426c, 4.
+        set3(&mut e, POINT_POSITION_011F426C, [1.0, 4.0, 2.0]);
+        e.call_log = Some(vec![]);
+        e.call(0x00b9_d150, &args![this, 0u32, 7u32, 8u32, 9u32]);
+        assert_eq!(
+            calls_to(&e, GET_EXTRA_DATA),
+            vec![vec![e.get(this, ShadowSceneLight::spShadowScene), 0x5150]]
+        );
+        let node = e.global::<u32>(SCENE_NODE_011F91C8);
+        assert_eq!(
+            calls_to(&e, SCENE_NODE_LIGHT_AT_00B5AC20),
+            vec![vec![node, 0]]
+        );
+        assert_eq!(calls_to(&e, POINT_NORMALIZE_004A0C10).len(), 3);
+        assert_eq!(calls_to(&e, OBJECT_UPDATE_00A59C60).len(), 1);
+        assert_eq!(calls_to(&e, OBJECT_UPDATE_00A59C60)[0][0], ni_light);
+        // The sun's z, 0.1 * 4 * 0.0625 = 0.025, is raised to 4 / 75.
+        let z = (4.0f64 / 75.0) as f32;
+        let offset = (z * 4.0) * 1.4f32;
+        assert_eq!(get3(&e, ni_light + 0x58), [10.0, 20.0, 30.0 + offset]);
+        // Grey 0.4 * 1.75 = 0.7, raised to 0.8; specular 8 * 4.
+        assert_eq!(get3(&e, ni_light + 0xd4), [0.8; 3]);
+        assert_eq!(get3(&e, ni_light + 0xe0), [32.0, 0.0, 0.0]);
+        assert_eq!(e.mem.u32(ni_light + 0xa8), 7);
+    }
+
+    #[test]
+    fn weighted_lights_blend_with_the_sun() {
+        let (mut e, this, ni_light) = rig();
+        // Extra data: offset (1, 0, 0) and extents (0.5, 1, 0.25), scaled by 2: the position
+        // (12, 20, 30) and the radius 2.
+        let extra = e.mem.alloc(0x40);
+        set3(&mut e, extra + 0xc, [1.0, 0.0, 0.0]);
+        set3(&mut e, extra + 0x18, [0.5, 1.0, 0.25]);
+        e.register_double(GET_EXTRA_DATA, move |_, _| extra.into_ret());
+        set3(&mut e, POINT_POSITION_011F426C, [0.0; 3]);
+        set3(&mut e, COLOUR_START_011F4998, [0.0; 3]);
+        // Light a at distance 5, range 10; light b has flag bit 0 set.
+        let mut lights = vec![];
+        for (flags, at) in [(0u32, [15.0f32, 24.0, 30.0]), (1, [0.0, 0.0, 0.0])] {
+            let light = e.mem.alloc(0x100);
+            let ni = e.mem.alloc(0x100);
+            e.mem.set_u32(light + 0xf8, ni);
+            e.mem.set_u32(ni + 0x30, flags);
+            set3(&mut e, ni + 0x8c, at);
+            e.mem.set_f32(ni + 0xc4, 1.0);
+            set3(&mut e, ni + 0xd4, [1.0; 3]);
+            e.mem.set_f32(ni + 0xe0, 10.0);
+            lights.push(light);
+        }
+        let list = lights.clone();
+        e.register_double(GET_FIRST_ACTIVE_NON_SHADOW_LIGHT, move |e, a| {
+            e.mem.set_u32(a[1], 0);
+            list[0].into_ret()
+        });
+        let list = lights.clone();
+        e.register_double(GET_NEXT_ACTIVE_NON_SHADOW_LIGHT, move |e, a| {
+            let next = e.mem.u32(a[1]) + 1;
+            e.mem.set_u32(a[1], next);
+            list.get(next as usize).copied().unwrap_or(0).into_ret()
+        });
+        let sun = e
+            .mem
+            .u32(e.mem.u32(e.global::<u32>(SCENE_NODE_011F91C8) + 0xe0) + 0xf8);
+        set3(&mut e, sun + 0xf0, [0.0, 0.0, -1.0]);
+        set3(&mut e, sun + 0xd4, [0.5; 3]);
+        e.call_log = Some(vec![]);
+        e.call(0x00b9_d150, &args![this, 0x7700u32, 0u32, 0u32, 0u32]);
+        assert_eq!(calls_to(&e, GET_FIRST_ACTIVE_NON_SHADOW_LIGHT).len(), 2);
+        assert!(calls_to(&e, SCENE_NODE_LIGHT_AT_00B5AC20).is_empty());
+        let weight = (1.0f64 - 3.0 / 10.0) as f32;
+        assert_eq!(e.mem.f32(LIGHT_WEIGHTS_011FFF40), weight);
+        assert_eq!(e.mem.f32(LIGHT_WEIGHTS_011FFEA0), weight);
+        // The share is 1; the sun direction (-0, -0, 2 * 0.0625) and colour 0.5 take 1 - b.
+        let rest = 1.0 - weight;
+        let x = 3.0 * weight + rest * -0.0;
+        let y = 4.0 * weight + rest * -0.0;
+        // z (0 + 0.125 * rest) is raised to 0.75.
+        let reach = 2.0f32;
+        let place = |d: f32| (d * reach) * 1.4f32;
+        assert_eq!(
+            get3(&e, ni_light + 0x58),
+            [12.0 + place(x), 20.0 + place(y), 30.0 + place(0.75)]
+        );
+        // Colour b * 1 + (1 - b) * 0.5 per channel, grey 0.4 * 3 of it above 1.
+        assert_eq!(get3(&e, ni_light + 0xd4), [1.0; 3]);
+        assert_eq!(get3(&e, ni_light + 0xe0), [16.0, 0.0, 0.0]);
+        assert_eq!(e.mem.u32(ni_light + 0xa8), 7);
     }
 }

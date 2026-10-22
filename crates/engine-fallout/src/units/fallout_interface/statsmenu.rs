@@ -938,16 +938,15 @@ pub fn stats_menu_update_healing_options(e: &mut Engine, this: Ptr, which: u32) 
         let fourth_count = e
             .call(GET_ITEM_COUNT_IN_CONTAINER, &args![player(e), fourth])
             .u32();
-        let mut available = true;
-        if e.call(HARDCORE_004D1360, &args![player(e)]).bool() && fourth_count == 0 {
-            available = false;
-        } else if !e.call(HARDCORE_004D1360, &args![player(e)]).bool()
-            && fourth_count == 0
-            && first_count == 0
-        {
-            available = false;
-        }
-        if !available {
+        let unavailable =
+            if e.call(HARDCORE_004D1360, &args![player(e)]).bool() && fourth_count == 0 {
+                true
+            } else {
+                !e.call(HARDCORE_004D1360, &args![player(e)]).bool()
+                    && fourth_count == 0
+                    && first_count == 0
+            };
+        if unavailable {
             if e.mem.u8(this.addr() + 0x2a0) != 0 {
                 e.call(STATS_007E0230, &args![this]);
             }
@@ -1176,14 +1175,7 @@ pub fn fn_007dfe40(e: &mut Engine, _this: Ptr) -> i32 {
     let missing = x87_store32(x87_sub(x87_m32(base), value));
     let five: f64 = e.global(FIVE_DOUBLE);
     let ratio = x87_mul(x87_div(x87_load32(missing), x87_m32(base)), five);
-    let mut face = e.call(FTOL2, &args![ratio]).i32();
-    if face < 0 {
-        face = 0;
-    }
-    if face > 4 {
-        face = 4;
-    }
-    face
+    e.call(FTOL2, &args![ratio]).i32().clamp(0, 4)
 }
 
 // Translated from 007dff40 (decompiled, FalloutNV.exe 1.4.0.525)
