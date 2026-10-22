@@ -402,10 +402,7 @@ pub fn atmosphere_update(e: &mut Engine, this: Ptr<Atmosphere>, sky: u32, time: 
         }
         e.mem.set_u32(copy + 0x14, x87_quiet_bits(far));
         let ratio = x87_store32(x87_div(new_far, x87_m32(e.mem.u32(copy + 0x10))));
-        e.call(
-            CAMERA_SET_00507700,
-            &args![camera, x87_quiet_bits(ratio)],
-        );
+        e.call(CAMERA_SET_00507700, &args![camera, x87_quiet_bits(ratio)]);
         e.call(CAMERA_SET_VIEW_FRUSTUM, &args![camera, copy]);
     });
 }
