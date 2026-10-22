@@ -124,6 +124,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00e6_c780,
             ni_xenon_renderer_do_set_camera_data(Ptr<NiDX9Renderer>, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr)
         ),
+        entry!(0x00e6_cf40, fn_00e6cf40(Ptr<NiDX9Renderer>, Ptr)),
     ]
 }
 
@@ -7564,6 +7565,273 @@ mod a07_camera_tests {
         e.mem.set_u8(r.addr() + SKIP_END_SCENE, 1);
         e.call_log = Some(vec![]);
         e.call(0x00e6_c780, &args![r, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+}
+
+/// The `float` constants of the screen-space camera (`0102295c` -0.5, `01016248` 0.5,
+/// `010ed968` 9999.0 for the depth range, `010162c0` 2.0, `010ed964` and `010ed960` about
+/// ±1.0e-4 for the depth column, `01022958` 10000.0 for the far plane) and the `double`
+/// `0101a6b0` (-1.0) the x offset is divided from (values as the exe holds them).
+const SCREEN_VIEW_X_0102295C: u32 = 0x0102_295c;
+const SCREEN_VIEW_Y_01016248: u32 = 0x0101_6248;
+const SCREEN_RANGE_010ED968: u32 = 0x010e_d968;
+const SCREEN_SCALE_010162C0: u32 = 0x0101_62c0;
+const SCREEN_OFFSET_0101A6B0: u32 = 0x0101_a6b0;
+const SCREEN_DEPTH_010ED964: u32 = 0x010e_d964;
+const SCREEN_DEPTH_OFFSET_010ED960: u32 = 0x010e_d960;
+const SCREEN_FAR_01022958: u32 = 0x0102_2958;
+
+// Translated from 00e6cf40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (renderer vtable +0x190, `Do_SetScreenSpaceCameraData`'s slot
+/// on Xbox): `thiscall`, one word (an `NiRect<float>` viewport or 0). Nothing with the byte
+/// at +0x6FC set. Takes the render target group's size (+0x888, virtuals +0x8C, +0x90 with
+/// 0) as floats, sets a fixed view matrix (+0x980: x kept, y and z negated by the `float`
+/// -1.0 at `01012054`, translated by (-0.5, 0.5, 1)) and its inverse (+0xA40), the right
+/// (1, 0, 0) and up (0, -1, 0) vectors (+0x64C/+0x634, +0x658/+0x640), the near plane 1.0
+/// (+0x684) and depth range (+0x688), and a projection (+0x9C0) with the target's size
+/// (`-1.0 / width` and `1 / height` as the offsets). The viewport is the rectangle of the
+/// target (truncated as `00e6c780` does), or without one the whole target; depths 0 to 1.
+/// Ends with near 1.0 and far 10000.0 (`01022958`) to +0x8B8's virtual +0x48.
+pub fn fn_00e6cf40(e: &mut Engine, this: Ptr<NiDX9Renderer>, port: Ptr) {
+    let t = this.addr();
+    if e.mem.u8(t + SKIP_END_SCENE) != 0 {
+        return;
+    }
+    let group = e.get(this, NiDX9Renderer::target_group);
+    let target_width = e.vcall(group, 0x8c, &args![0u32]).u32();
+    let group = e.get(this, NiDX9Renderer::target_group);
+    let target_height = e.vcall(group, 0x90, &args![0u32]).u32();
+    let wf = unsigned_to_float(e, target_width);
+    let hf = unsigned_to_float(e, target_height);
+    const ONE_BITS: u32 = 0x3f80_0000;
+    let constant = |e: &Engine, a: u32| x87_quiet_bits(e.mem.u32(a));
+    let minus_one = constant(e, FRUSTUM_SIDE_01012054);
+    let half_x = constant(e, SCREEN_VIEW_X_0102295C);
+    let half_y = constant(e, SCREEN_VIEW_Y_01016248);
+    let view = t + VIEW_MATRIX;
+    let view_values = [
+        ONE_BITS, 0, 0, 0, 0, minus_one, 0, 0, 0, 0, ONE_BITS, 0, half_x, half_y, ONE_BITS,
+        ONE_BITS,
+    ];
+    for (i, v) in view_values.iter().enumerate() {
+        e.mem.set_u32(view + 4 * i as u32, *v);
+    }
+    let inverse = t + INVERSE_VIEW_MATRIX;
+    let inverse_values = [
+        ONE_BITS, 0, 0, 0, 0, minus_one, 0, 0, 0, 0, ONE_BITS, 0, half_y, half_y, minus_one,
+        ONE_BITS,
+    ];
+    for (i, v) in inverse_values.iter().enumerate() {
+        e.mem.set_u32(inverse + 4 * i as u32, *v);
+    }
+    let device = e.get(this, NiDX9Renderer::device);
+    e.vcall(device, DEVICE_SET_TRANSFORM, &args![2u32, view]);
+    for (i, v) in [ONE_BITS, 0, 0].iter().enumerate() {
+        e.mem.set_u32(t + QUAD_RIGHT + 4 * i as u32, *v);
+        e.mem.set_u32(t + 0x634 + 4 * i as u32, *v);
+    }
+    for (i, v) in [0, minus_one, 0].iter().enumerate() {
+        e.mem.set_u32(t + QUAD_UP + 4 * i as u32, *v);
+        e.mem.set_u32(t + 0x640 + 4 * i as u32, *v);
+    }
+    e.mem.set_u32(t + 0x684, ONE_BITS);
+    let range = constant(e, SCREEN_RANGE_010ED968);
+    e.mem.set_u32(t + 0x688, range);
+    let proj = t + PROJECTION_MATRIX;
+    let scale = constant(e, SCREEN_SCALE_010162C0);
+    let x_offset = x87_div(
+        f64::from_bits(e.mem.u64(SCREEN_OFFSET_0101A6B0)),
+        x87_load32(wf),
+    );
+    let y_offset = x87_div(1.0, x87_load32(hf));
+    let depth = constant(e, SCREEN_DEPTH_010ED964);
+    let depth_offset = constant(e, SCREEN_DEPTH_OFFSET_010ED960);
+    let proj_values = [
+        scale,
+        0,
+        0,
+        0,
+        0,
+        scale,
+        0,
+        0,
+        0,
+        0,
+        depth,
+        0,
+        x87_store32(x_offset),
+        x87_store32(y_offset),
+        depth_offset,
+        ONE_BITS,
+    ];
+    for (i, v) in proj_values.iter().enumerate() {
+        e.mem.set_u32(proj + 4 * i as u32, *v);
+    }
+    let device = e.get(this, NiDX9Renderer::device);
+    e.vcall(device, DEVICE_SET_TRANSFORM, &args![3u32, proj]);
+    let p = port.addr();
+    e.with_stack(0x18, |e, viewport| {
+        let v = viewport.addr();
+        let rectangle = if p != 0 {
+            let word = |e: &Engine, i: u32| e.mem.u32(p + 4 * i);
+            let w = x87_load32(wf);
+            let h = x87_load32(hf);
+            let x = chop_low_word(x87_mul(w, x87_load32(word(e, 0))));
+            let y = chop_low_word(x87_mul(x87_sub(1.0, x87_load32(word(e, 2))), h));
+            let span = x87_sub(x87_load32(word(e, 1)), x87_m32(word(e, 0)));
+            let width = chop_low_word(x87_mul(w, span));
+            let span = x87_sub(x87_load32(word(e, 2)), x87_m32(word(e, 3)));
+            let height = chop_low_word(x87_mul(h, span));
+            [x, y, width, height]
+        } else {
+            [0, 0, target_width, target_height]
+        };
+        for (i, value) in rectangle.iter().enumerate() {
+            e.mem.set_u32(v + 4 * i as u32, *value);
+        }
+        e.mem.set_u32(v + 0x10, 0);
+        e.mem.set_u32(v + 0x14, ONE_BITS);
+        let device = e.get(this, NiDX9Renderer::device);
+        e.vcall(device, DEVICE_SET_VIEWPORT, &args![v]);
+    });
+    let far = constant(e, SCREEN_FAR_01022958);
+    let object = e.mem.u32(t + 0x8b8);
+    e.vcall(object, 0x48, &args![ONE_BITS, far]);
+}
+
+#[cfg(test)]
+mod a07_screen_camera_tests {
+    use super::*;
+
+    const DEVICE_BASE: u32 = 0x6100_0000;
+    const GROUP_BASE: u32 = 0x6140_0000;
+    const OBJECT_BASE: u32 = 0x6180_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn nop(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    fn object(e: &mut Engine, table: u32, base: u32) -> u32 {
+        let targets: Vec<u32> = (0..0x80).map(|n| base + 4 * n).collect();
+        e.put_vtable(table, &targets);
+        let o = e.mem.alloc(0x10);
+        e.mem.set_u32(o, table);
+        o
+    }
+
+    type Seen = std::rc::Rc<std::cell::RefCell<Vec<u32>>>;
+
+    fn set_up(e: &mut Engine) -> (Ptr<NiDX9Renderer>, u32, Seen) {
+        e.map(0x0101_0000, 0x0002_0000);
+        e.map(0x010e_d000, 0x1000);
+        e.map(TWO_TO_32_01099378 & !0xfff, 0x1000);
+        for (a, v) in [
+            (FRUSTUM_SIDE_01012054, -1.0f32),
+            (SCREEN_VIEW_X_0102295C, -0.5),
+            (SCREEN_VIEW_Y_01016248, 0.5),
+            (SCREEN_RANGE_010ED968, 9999.0),
+            (SCREEN_SCALE_010162C0, 2.0),
+            (SCREEN_DEPTH_010ED964, 1.0e-4),
+            (SCREEN_DEPTH_OFFSET_010ED960, -1.0e-4),
+            (SCREEN_FAR_01022958, 10000.0),
+        ] {
+            e.mem.set_u32(a, v.to_bits());
+        }
+        e.mem.set_u64(SCREEN_OFFSET_0101A6B0, (-1.0f64).to_bits());
+        let r = e.new_object::<NiDX9Renderer>();
+        let device = object(e, 0x6000, DEVICE_BASE);
+        e.set(r, NiDX9Renderer::device, device);
+        let group = object(e, 0x6400, GROUP_BASE);
+        e.set(r, NiDX9Renderer::target_group, group);
+        e.register(GROUP_BASE + 0x8c, |_, _| 800u32.into_ret());
+        e.register(GROUP_BASE + 0x90, |_, _| 400u32.into_ret());
+        let other = object(e, 0x6800, OBJECT_BASE);
+        e.mem.set_u32(r.addr() + 0x8b8, other);
+        e.register(OBJECT_BASE + 0x48, nop);
+        e.register(DEVICE_BASE + DEVICE_SET_TRANSFORM, nop);
+        let seen: Seen = Default::default();
+        let log = seen.clone();
+        e.register_double(DEVICE_BASE + DEVICE_SET_VIEWPORT, move |e, a| {
+            log.borrow_mut()
+                .extend((0..6).map(|i| e.mem.u32(a[1] + 4 * i)));
+            Ret::default()
+        });
+        (r, device, seen)
+    }
+
+    fn f(e: &Engine, a: u32) -> f32 {
+        f32::from_bits(e.mem.u32(a))
+    }
+
+    #[test]
+    fn screen_camera_sets_the_fixed_view_and_the_target_projection() {
+        let mut e = Engine::new();
+        let (r, device, seen) = set_up(&mut e);
+        let t = r.addr();
+        e.call_log = Some(vec![]);
+        e.call(0x00e6_cf40, &args![r, 0u32]);
+        let view = t + VIEW_MATRIX;
+        assert_eq!(
+            (0..16).map(|i| f(&e, view + 4 * i)).collect::<Vec<_>>(),
+            vec![1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -0.5, 0.5, 1.0, 1.0]
+        );
+        let inverse = t + INVERSE_VIEW_MATRIX;
+        assert_eq!(
+            (12..16).map(|i| f(&e, inverse + 4 * i)).collect::<Vec<_>>(),
+            vec![0.5, 0.5, -1.0, 1.0]
+        );
+        assert_eq!(f(&e, t + QUAD_UP + 4), -1.0);
+        assert_eq!(f(&e, t + 0x634), 1.0);
+        assert_eq!(f(&e, t + 0x688), 9999.0);
+        let proj = t + PROJECTION_MATRIX;
+        assert_eq!(f(&e, proj), 2.0);
+        assert_eq!(f(&e, proj + 0x14), 2.0);
+        assert_eq!(f(&e, proj + 0x28), 1.0e-4);
+        assert_eq!(f(&e, proj + 0x30), -1.0 / 800.0);
+        assert_eq!(f(&e, proj + 0x34), 1.0 / 400.0);
+        assert_eq!(f(&e, proj + 0x38), -1.0e-4);
+        assert_eq!(f(&e, proj + 0x3c), 1.0);
+        assert_eq!(
+            calls(&e, DEVICE_BASE + DEVICE_SET_TRANSFORM),
+            vec![vec![device, 2, view], vec![device, 3, proj]]
+        );
+        // Without a rectangle the viewport is the whole target.
+        assert_eq!(*seen.borrow(), vec![0, 0, 800, 400, 0, 1.0f32.to_bits()]);
+        let other = e.mem.u32(t + 0x8b8);
+        assert_eq!(
+            calls(&e, OBJECT_BASE + 0x48),
+            vec![vec![other, 1.0f32.to_bits(), 10000.0f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn screen_camera_viewport_takes_the_rectangle() {
+        let mut e = Engine::new();
+        let (r, _, seen) = set_up(&mut e);
+        let port = e.mem.alloc(0x10);
+        for (i, v) in [0.25f32, 0.75, 0.5, 0.0].iter().enumerate() {
+            e.mem.set_u32(port + 4 * i as u32, v.to_bits());
+        }
+        e.call(0x00e6_cf40, &args![r, port]);
+        assert_eq!(
+            *seen.borrow(),
+            vec![200, 200, 400, 200, 0, 1.0f32.to_bits()]
+        );
+        // Skipped scene: nothing.
+        e.mem.set_u8(r.addr() + SKIP_END_SCENE, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00e6_cf40, &args![r, port]);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
     }
 }
