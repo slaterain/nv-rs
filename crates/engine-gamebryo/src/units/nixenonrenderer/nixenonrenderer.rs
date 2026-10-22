@@ -125,6 +125,17 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             ni_xenon_renderer_do_set_camera_data(Ptr<NiDX9Renderer>, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr)
         ),
         entry!(0x00e6_cf40, fn_00e6cf40(Ptr<NiDX9Renderer>, Ptr)),
+        entry!(
+            0x00e7_1fe0,
+            ni_xenon_renderer_pack_geometry_buffer(
+                Ptr<NiDX9Renderer>,
+                Ptr,
+                Ptr,
+                u32,
+                u32,
+                u8,
+            ) -> bool
+        ),
     ]
 }
 
@@ -7833,5 +7844,466 @@ mod a07_screen_camera_tests {
         e.call_log = Some(vec![]);
         e.call(0x00e6_cf40, &args![r, port]);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+}
+
+/// The two RTTI records `PackGeometryBuffer` tells the data's kind by: `011f4a88` (walked
+/// up the data's own RTTI chain; then the triangle list `00a7b850`, `GetTriList`) and
+/// `011f4a70` (`IsKindOf`; then the strip lists `00a75f10`, `GetStripLists`).
+const TRI_LIST_DATA_RTTI_011F4A88: u32 = 0x011f_4a88;
+const STRIP_DATA_RTTI_011F4A70: u32 = 0x011f_4a70;
+/// `NiD3DHLSLVertexShader::GetEntryPoint` (`00e8bf90`, engine map; `thiscall` on the object
+/// at +0x8BC), `NiXenonVertexBufferManager::PackUntransformedVB` (`00e8c1e0`, engine map;
+/// `thiscall` on it, five words), `00e8f200` (`thiscall` on the object at +0x8C0, seven
+/// words: makes or refills an index buffer) and `NiGeometryBufferData::RemoveIB`
+/// (`00e8eee0`, engine map; `thiscall`).
+const GET_ENTRY_POINT_00E8BF90: u32 = 0x00e8_bf90;
+const PACK_UNTRANSFORMED_VB_00E8C1E0: u32 = 0x00e8_c1e0;
+const INDEX_BUFFER_00E8F200: u32 = 0x00e8_f200;
+const REMOVE_IB_00E8EEE0: u32 = 0x00e8_eee0;
+
+// Translated from 00e71fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiXenonRenderer::PackGeometryBuffer` (Xbox PDB): `thiscall`, five words (the geometry
+/// buffer data, the geometry data, an object with a word at +0x18 or 0, a stream source or
+/// 0, a force byte); answers whether it packed. False without buffer data or data; true at
+/// once when not forced and the buffer data is already packed (`00e8eeb0`) with the data's
+/// word +0xE at `0x4000` in its bits `0x7000`. The buffer's word +4 gets the flags
+/// `00e6da60` builds. The vertex count (data virtual +0x90) and the word +8 are kept, and for
+/// triangle data (RTTI `011f4a88` in the data's RTTI chain) the triangle count (virtual
+/// +0xA8), the index count `3·[+0x40]` and the list (`00a7b850`), for strip data
+/// (`IsKindOf` `011f4a70`) the strip count +0x44, the lengths +0x48 and the index count
+/// `[+0x40] + 2·strips` (`00a75f10`). The streams (the source's word +0x20, else 1) are
+/// reset (each unpacked one through the buffer's +8 object, virtual +0x1C, then `00e8ef10`)
+/// unless the buffer is packed with that count, which keeps the data's dirty bits (+0xE,
+/// low 12 bits, with 3 when the object's +0x18 is not the entry point of +0x8BC's
+/// `00e8bf90`, which then replaces it); otherwise and when forced all bits count. With any
+/// bit but `0x10`, each stream is packed by the source's virtual +0xAC, or for a single
+/// stream by `PackUntransformedVB`; a failure answers false. With indices and the bits
+/// `0x30` the index buffer is made (`00e8f200`, false on failure) and a new one replaces the
+/// old (`RemoveIB`, +0x34, +0x2C, +0x30). Then the data's dirty bits are cleared (+0xE keeps
+/// `0xF000`).
+pub fn ni_xenon_renderer_pack_geometry_buffer(
+    e: &mut Engine,
+    this: Ptr<NiDX9Renderer>,
+    buffer: Ptr,
+    data: Ptr,
+    object: u32,
+    source: u32,
+    force: u8,
+) -> bool {
+    let b = buffer.addr();
+    let d = data.addr();
+    if b == 0 || d == 0 {
+        return false;
+    }
+    let packed = e.call(DATA_IS_PACKED_00E8EEB0, &args![buffer]).u8() != 0;
+    if force == 0 && packed && e.mem.u16(d + 0xe) & 0x7000 == 0x4000 {
+        return true;
+    }
+    let has_28 = e.mem.u32(d + 0x28) != 0;
+    let has_24 = e.mem.u32(d + 0x24) != 0;
+    let top_bits = has_24 && e.mem.u16(d + 0xc) & 0xf000 != 0;
+    let mut low = u32::from(e.mem.u16(d + 0xc)) & 1;
+    let limit = e.global::<u32>(STREAM_LIMIT_011BF558);
+    if low > limit {
+        low = limit;
+    }
+    let mut stream_flags = 0u32;
+    if has_28 {
+        stream_flags = 0x40_0000;
+    }
+    if has_24 {
+        stream_flags |= 0x80_0000;
+    }
+    if top_bits {
+        stream_flags |= 0x20_0000;
+    }
+    e.mem.set_u32(b + 4, (low << 24) | stream_flags);
+    let vertices = u32::from(e.vcall(d, 0x90, &args![]).u16());
+    let second = u32::from(e.mem.u16(d + 8));
+    let mut triangles = 0u32;
+    let mut base_count = 0u32;
+    let mut index_count = 0u32;
+    let mut list = 0u32;
+    let mut lengths = 0u32;
+    let mut strips = 0u32;
+    let mut rtti = e.vcall(d, 8, &args![]).u32();
+    let mut tri_list = false;
+    while rtti != 0 {
+        if rtti == TRI_LIST_DATA_RTTI_011F4A88 {
+            tri_list = true;
+            break;
+        }
+        rtti = e.mem.u32(rtti + 4);
+    }
+    if tri_list {
+        triangles = u32::from(e.vcall(d, 0xa8, &args![]).u16());
+        base_count = u32::from(e.mem.u16(d + 0x40));
+        list = e.call(TRI_SHAPE_DATA_GET_TRI_LIST, &args![data]).u32();
+        lengths = 0;
+        strips = 1;
+        index_count = base_count * 3;
+    } else if e
+        .call(IS_KIND_OF, &args![STRIP_DATA_RTTI_011F4A70, data])
+        .u8()
+        != 0
+    {
+        triangles = u32::from(e.vcall(d, 0xa8, &args![]).u16());
+        base_count = u32::from(e.mem.u16(d + 0x40));
+        list = e.call(TRI_STRIPS_DATA_GET_STRIP_LISTS, &args![data]).u32();
+        lengths = e.mem.u32(d + 0x48);
+        strips = u32::from(e.mem.u16(d + 0x44));
+        index_count = base_count + strips * 2;
+    }
+    let count = if source != 0 {
+        e.mem.u32(source.wrapping_add(0x20))
+    } else {
+        1
+    };
+    let mut dirty = u32::from(e.mem.u16(d + 0xe) & 0xfff);
+    if object != 0 {
+        let previous = e.mem.u32(object.wrapping_add(0x18));
+        let group = e.get(this, NiDX9Renderer::object_8bc);
+        if previous != e.call(GET_ENTRY_POINT_00E8BF90, &args![group]).u32() {
+            dirty |= 3;
+            let group = e.get(this, NiDX9Renderer::object_8bc);
+            let entry = e.call(GET_ENTRY_POINT_00E8BF90, &args![group]).u32();
+            e.mem.set_u32(object.wrapping_add(0x18), entry);
+        }
+    }
+    if force != 0 {
+        dirty = 0xfff;
+    }
+    if packed {
+        if count != e.mem.u32(b + 0x20) {
+            e.call(DATA_SET_COUNT_00E8EF10, &args![buffer, count]);
+            dirty = 0xfff;
+        }
+    } else {
+        let owner = e.mem.u32(b + 8);
+        let mut index = 0u32;
+        if count > 0 {
+            loop {
+                e.vcall(owner, 0x1c, &args![buffer, index]);
+                index += 1;
+                if index >= count {
+                    break;
+                }
+            }
+        }
+        e.call(DATA_SET_COUNT_00E8EF10, &args![buffer, count]);
+        e.mem.set_u32(b + 0x38, 0);
+        dirty = 0xfff;
+    }
+    e.mem.set_u32(b + 0x18, vertices);
+    e.mem.set_u32(b + 0x1c, second);
+    e.mem.set_u32(b + 0x4c, lengths);
+    e.mem.set_u32(b + 0x44, base_count);
+    e.mem.set_u32(b + 0x40, triangles);
+    e.mem.set_u32(b + 0x50, list);
+    e.mem.set_u32(b + 0x48, strips);
+    if dirty & 0xffff_ffef != 0 {
+        let mut index = 0u32;
+        while index < count {
+            let stream = if index < e.mem.u32(b + 0x20) {
+                let slots = e.mem.u32(b + 0x28);
+                e.mem.u32(slots.wrapping_add(index * 4))
+            } else {
+                0
+            };
+            let done = source != 0
+                && e.vcall(
+                    source,
+                    0xac,
+                    &args![data, object, 0u32, dirty, stream, index, 0u32, 0u32, 0u32],
+                )
+                .u32()
+                    != 0;
+            if !done {
+                if count != 1 {
+                    return false;
+                }
+                let group = e.get(this, NiDX9Renderer::object_8bc);
+                let vb = e
+                    .call(
+                        PACK_UNTRANSFORMED_VB_00E8C1E0,
+                        &args![group, data, object, dirty, stream, 0u32],
+                    )
+                    .u32();
+                if vb == 0 {
+                    return false;
+                }
+            }
+            index += 1;
+        }
+    }
+    if list != 0 && dirty & 0x30 != 0 {
+        let dynamic = if e.mem.u8(b + 0x14) != 0 { 0x10 } else { 0 };
+        let old = e.mem.u32(b + 0x34);
+        let not_ex = u32::from(e.mem.u8(DIRECT3D_IS_EX) == 0);
+        let made = e.with_stack(4, |e, slot| {
+            let s = slot.addr();
+            e.mem.set_u32(s, e.mem.u32(b + 0x30));
+            let manager = e.mem.u32(this.addr() + 0x8c0);
+            let made = e
+                .call(
+                    INDEX_BUFFER_00E8F200,
+                    &args![
+                        manager,
+                        list,
+                        index_count,
+                        index_count,
+                        old,
+                        s,
+                        not_ex,
+                        dynamic
+                    ],
+                )
+                .u32();
+            (made, e.mem.u32(s))
+        });
+        let (index_buffer, offset) = made;
+        if index_buffer == 0 {
+            return false;
+        }
+        if old != index_buffer {
+            e.call(REMOVE_IB_00E8EEE0, &args![buffer]);
+            e.mem.set_u32(b + 0x34, index_buffer);
+            e.mem.set_u32(b + 0x2c, index_count);
+            e.mem.set_u32(b + 0x30, offset);
+        }
+    }
+    let flags = e.mem.u16(d + 0xe);
+    e.mem.set_u16(d + 0xe, flags & 0xf000);
+    true
+}
+
+#[cfg(test)]
+mod a07_pack_tests {
+    use super::*;
+
+    const DATA_BASE: u32 = 0x6100_0000;
+    const OWNER_BASE: u32 = 0x6140_0000;
+    const SOURCE_BASE: u32 = 0x6180_0000;
+    const RTTI_CHAIN: u32 = 0x6000_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn nop(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    fn object(e: &mut Engine, table: u32, base: u32, size: u32) -> u32 {
+        let targets: Vec<u32> = (0..0x80).map(|n| base + 4 * n).collect();
+        e.put_vtable(table, &targets);
+        let o = e.mem.alloc(size);
+        e.mem.set_u32(o, table);
+        o
+    }
+
+    struct Scene {
+        renderer: Ptr<NiDX9Renderer>,
+        buffer: u32,
+        data: u32,
+        group: u32,
+        manager: u32,
+    }
+
+    /// Buffer data (one stream slot), geometry data of 9 vertices, the renderer's objects
+    /// at +0x8BC and +0x8C0, and every callee doubled.
+    fn set_up(e: &mut Engine, packed: bool, tri_list: bool) -> Scene {
+        e.map(STREAM_LIMIT_011BF558 & !0xfff, 0x1000);
+        e.mem.set_u32(STREAM_LIMIT_011BF558, 1);
+        e.map(DIRECT3D_IS_EX & !0xfff, 0x1000);
+        let renderer = e.new_object::<NiDX9Renderer>();
+        let group = e.mem.alloc(0x10);
+        e.set(renderer, NiDX9Renderer::object_8bc, group);
+        let manager = e.mem.alloc(0x10);
+        e.mem.set_u32(renderer.addr() + 0x8c0, manager);
+        let buffer = e.mem.alloc(0x60);
+        let owner = object(e, 0x6400, OWNER_BASE, 0x10);
+        e.mem.set_u32(buffer + 8, owner);
+        e.mem.set_u32(buffer + 0x20, 1);
+        let slots = e.mem.alloc(8);
+        e.mem.set_u32(slots, 0x5150);
+        e.mem.set_u32(buffer + 0x28, slots);
+        e.mem.set_u32(buffer + 0x30, 0x77);
+        e.mem.set_u32(buffer + 0x34, 0x88);
+        let data = object(e, 0x6800, DATA_BASE, 0x60);
+        e.mem.set_u16(data + 8, 0x21);
+        e.mem.set_u16(data + 0xc, 0xf001);
+        e.mem.set_u32(data + 0x24, 1);
+        e.mem.set_u16(data + 0x40, 4);
+        e.mem.set_u16(data + 0x44, 2);
+        e.mem.set_u32(data + 0x48, 0x4848);
+        e.register(DATA_BASE + 0x90, |_, _| 0x1_0009u32.into_ret());
+        e.register(DATA_BASE + 0xa8, |_, _| 0x2_0005u32.into_ret());
+        // An RTTI chain of two records: the data's own, then 011f4a88 or another.
+        let chain = RTTI_CHAIN;
+        e.map(chain, 0x1000);
+        e.mem.set_u32(chain + 4, chain + 0x10);
+        let parent = if tri_list {
+            TRI_LIST_DATA_RTTI_011F4A88
+        } else {
+            0
+        };
+        e.mem.set_u32(chain + 0x14, parent);
+        e.register(DATA_BASE + 8, |_, _| RTTI_CHAIN.into_ret());
+        e.register(IS_KIND_OF, |_, _| 1u32.into_ret());
+        e.register(TRI_SHAPE_DATA_GET_TRI_LIST, |_, _| 0x7100u32.into_ret());
+        e.register(TRI_STRIPS_DATA_GET_STRIP_LISTS, |_, _| 0x7200u32.into_ret());
+        if packed {
+            e.register(DATA_IS_PACKED_00E8EEB0, |_, _| 1u32.into_ret());
+        } else {
+            e.register(DATA_IS_PACKED_00E8EEB0, |_, _| 0u32.into_ret());
+        }
+        e.register(OWNER_BASE + 0x1c, nop);
+        e.register(DATA_SET_COUNT_00E8EF10, nop);
+        e.register(GET_ENTRY_POINT_00E8BF90, |_, _| 0xe1u32.into_ret());
+        e.register(PACK_UNTRANSFORMED_VB_00E8C1E0, |_, _| 1u32.into_ret());
+        e.register(INDEX_BUFFER_00E8F200, |e, a| {
+            e.mem.set_u32(a[5], 0x99);
+            0x1b00u32.into_ret()
+        });
+        e.register(REMOVE_IB_00E8EEE0, nop);
+        Scene {
+            renderer,
+            buffer,
+            data,
+            group,
+            manager,
+        }
+    }
+
+    #[test]
+    fn pack_needs_buffer_and_data_and_skips_packed_data() {
+        let mut e = Engine::new();
+        let s = set_up(&mut e, true, true);
+        let (r, b, d) = (s.renderer, s.buffer, s.data);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00e7_1fe0, &args![r, 0u32, d, 0u32, 0u32, 0u32])
+                .u8(),
+            0
+        );
+        assert_eq!(
+            e.call(0x00e7_1fe0, &args![r, b, 0u32, 0u32, 0u32, 0u32])
+                .u8(),
+            0
+        );
+        e.mem.set_u16(d + 0xe, 0x4123);
+        assert_eq!(
+            e.call(0x00e7_1fe0, &args![r, b, d, 0u32, 0u32, 0u32]).u8(),
+            1
+        );
+        assert!(calls(&e, DATA_BASE + 0x90).is_empty());
+        assert_eq!(e.mem.u16(d + 0xe), 0x4123);
+    }
+
+    #[test]
+    fn unpacked_triangles_are_packed_with_their_index_buffer() {
+        let mut e = Engine::new();
+        let s = set_up(&mut e, false, true);
+        let (r, b, d) = (s.renderer, s.buffer, s.data);
+        e.mem.set_u16(d + 0xe, 0x4000);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00e7_1fe0, &args![r, b, d, 0u32, 0u32, 0u32]).u8(),
+            1
+        );
+        // Bit 0 of +0xC (limit 1) on top, +0x24 set with the top bits of +0xC.
+        assert_eq!(e.mem.u32(b + 4), 0x01a0_0000);
+        assert_eq!(
+            calls(&e, OWNER_BASE + 0x1c),
+            vec![vec![e.mem.u32(b + 8), b, 0]]
+        );
+        assert_eq!(calls(&e, DATA_SET_COUNT_00E8EF10), vec![vec![b, 1]]);
+        assert!(calls(&e, IS_KIND_OF).is_empty());
+        let fields: Vec<u32> = [0x18, 0x1c, 0x40, 0x44, 0x48, 0x4c, 0x50]
+            .iter()
+            .map(|o| e.mem.u32(b + o))
+            .collect();
+        assert_eq!(fields, vec![9, 0x21, 5, 4, 1, 0, 0x7100]);
+        assert_eq!(
+            calls(&e, PACK_UNTRANSFORMED_VB_00E8C1E0),
+            vec![vec![s.group, d, 0, 0xfff, 0x5150, 0]]
+        );
+        assert_eq!(
+            calls(&e, INDEX_BUFFER_00E8F200)[0][..5],
+            [s.manager, 0x7100, 12, 12, 0x88]
+        );
+        assert_eq!(calls(&e, INDEX_BUFFER_00E8F200)[0][6..], [1, 0]);
+        assert_eq!(calls(&e, REMOVE_IB_00E8EEE0), vec![vec![b]]);
+        assert_eq!(e.mem.u32(b + 0x34), 0x1b00);
+        assert_eq!(e.mem.u32(b + 0x2c), 12);
+        assert_eq!(e.mem.u32(b + 0x30), 0x99);
+        assert_eq!(e.mem.u32(b + 0x38), 0);
+        assert_eq!(e.mem.u16(d + 0xe), 0x4000);
+    }
+
+    #[test]
+    fn packed_strips_keep_their_dirty_bits_and_pack_through_the_source() {
+        let mut e = Engine::new();
+        let s = set_up(&mut e, true, false);
+        let (r, b, d) = (s.renderer, s.buffer, s.data);
+        e.mem.set_u16(d + 0xe, 0x2010);
+        let source = object(&mut e, 0x6c00, SOURCE_BASE, 0x30);
+        e.mem.set_u32(source + 0x20, 1);
+        e.register(SOURCE_BASE + 0xac, |_, _| 1u32.into_ret());
+        // The object's entry point differs: bits 3 join, and it takes the new one.
+        let shader = e.mem.alloc(0x20);
+        e.mem.set_u32(shader + 0x18, 0xe0);
+        // The index buffer comes back the same: nothing replaced.
+        e.register(INDEX_BUFFER_00E8F200, |_, a| a[4].into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00e7_1fe0, &args![r, b, d, shader, source, 0u32])
+                .u8(),
+            1
+        );
+        assert_eq!(e.mem.u32(shader + 0x18), 0xe1);
+        assert!(calls(&e, DATA_SET_COUNT_00E8EF10).is_empty());
+        assert_eq!(
+            calls(&e, SOURCE_BASE + 0xac),
+            vec![vec![source, d, shader, 0, 0x13, 0x5150, 0, 0, 0, 0]]
+        );
+        assert!(calls(&e, PACK_UNTRANSFORMED_VB_00E8C1E0).is_empty());
+        let fields: Vec<u32> = [0x40, 0x44, 0x48, 0x4c, 0x50]
+            .iter()
+            .map(|o| e.mem.u32(b + o))
+            .collect();
+        assert_eq!(fields, vec![5, 4, 2, 0x4848, 0x7200]);
+        assert_eq!(calls(&e, INDEX_BUFFER_00E8F200)[0][2], 8);
+        assert!(calls(&e, REMOVE_IB_00E8EEE0).is_empty());
+        assert_eq!(e.mem.u16(d + 0xe), 0x2000);
+    }
+
+    #[test]
+    fn pack_fails_when_several_streams_cannot_be_packed() {
+        let mut e = Engine::new();
+        let s = set_up(&mut e, true, true);
+        let (r, b, d) = (s.renderer, s.buffer, s.data);
+        e.mem.set_u16(d + 0xe, 0x0001);
+        let source = object(&mut e, 0x6c00, SOURCE_BASE, 0x30);
+        e.mem.set_u32(source + 0x20, 2);
+        e.register(SOURCE_BASE + 0xac, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        // Forced: all bits; the count differs from the buffer's 1, so it is set.
+        assert_eq!(
+            e.call(0x00e7_1fe0, &args![r, b, d, 0u32, source, 1u32])
+                .u8(),
+            0
+        );
+        assert_eq!(calls(&e, DATA_SET_COUNT_00E8EF10), vec![vec![b, 2]]);
+        assert_eq!(calls(&e, SOURCE_BASE + 0xac).len(), 1);
+        assert_eq!(e.mem.u16(d + 0xe), 0x0001);
     }
 }
