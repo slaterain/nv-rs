@@ -6187,6 +6187,1147 @@ pub fn image_space_shader_hdr_down_sample16_lum_clamp_reload_shaders(e: &mut Eng
     });
 }
 
+use crate::units::bsshader::geometrydecalshader::shader_inline::stage_release;
+
+// Translated from 00b8aea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: resets
+/// the manager's blend values from the x87 stack (1.0 and 0.0, swapped between stores): for k
+/// from 0 to 14, 1.0 at +0xb4 + 4k and 0.0 at +0x14c + 4k; 1.0 at +0xf0, +0xf4, +0xf8; 0.0 at
+/// +0x188, +0x18c, +0x190; then for k from 0 to 11, 1.0 at +0x118 + 4k and 0.0 at +0x1b0 + 4k.
+pub fn fn_00b8aea0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let one = 1.0f32.to_bits();
+    for k in 0..15u32 {
+        e.mem.set_u32(base + 0xb4 + 4 * k, one);
+        e.mem.set_u32(base + 0x14c + 4 * k, 0);
+    }
+    for offset in [0xf0u32, 0xf4, 0xf8] {
+        e.mem.set_u32(base + offset, one);
+    }
+    for offset in [0x188u32, 0x18c, 0x190] {
+        e.mem.set_u32(base + offset, 0);
+    }
+    for k in 0..12u32 {
+        e.mem.set_u32(base + 0x118 + 4 * k, one);
+        e.mem.set_u32(base + 0x1b0 + 4 * k, 0);
+    }
+}
+
+/// `FLD dword` then `FCOMP` of the field at `field` with the value on the stack and the exe's
+/// `TEST AH,5` / `JP`: true when the field is below the value (neither is NaN).
+fn field_below(e: &Engine, field: u32, value: f32) -> bool {
+    let held = x87_load32(e.mem.u32(field));
+    let given = x87_load32(value.to_bits());
+    held < given
+}
+
+/// The value given to the keep-the-larger setters, stored by `FSTP` (a signalling NaN
+/// quieted; one never reaches the store, as a NaN fails the compare).
+fn keep_larger(e: &mut Engine, field: u32, value: f32) {
+    if field_below(e, field, value) {
+        e.mem.set_u32(field, x87_quiet_bits(value.to_bits()));
+    }
+}
+
+/// `FLD` of the stack `float`, `FADD` of the field, `FSTP` to the field.
+fn add_to_field(e: &mut Engine, field: u32, value: f32) {
+    let sum = x87_add(x87_load32(value.to_bits()), x87_m32(e.mem.u32(field)));
+    e.mem.set_u32(field, x87_store32(sum));
+}
+
+/// `FLD` of the field, `FADD` of the `float` at `operand`, `FSTP` to the field.
+fn field_plus(e: &mut Engine, field: u32, operand: u32) {
+    let sum = x87_add(x87_load32(e.mem.u32(field)), x87_m32(e.mem.u32(operand)));
+    e.mem.set_u32(field, x87_store32(sum));
+}
+
+/// `FLD` of the `float` at `operand`, `FADD` of the field, `FSTP` to the field.
+fn plus_field(e: &mut Engine, field: u32, operand: u32) {
+    let sum = x87_add(x87_load32(e.mem.u32(operand)), x87_m32(e.mem.u32(field)));
+    e.mem.set_u32(field, x87_store32(sum));
+}
+
+/// `FLD`/`FSTP` of a `float` from `from` to `to`: its bits, a signalling NaN quieted.
+fn copy_float(e: &mut Engine, from: u32, to: u32) {
+    let bits = x87_quiet_bits(e.mem.u32(from));
+    e.mem.set_u32(to, bits);
+}
+
+// Translated from 00b8af10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (a
+/// `float`): keeps the larger of the `float` at +0x25c and the value (stored when the field is
+/// below it).
+pub fn fn_00b8af10(e: &mut Engine, this: Ptr, value: f32) {
+    keep_larger(e, this.addr() + 0x25c, value);
+}
+
+// Translated from 00b8af40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (a
+/// `float`): adds the value to the `float` at +0x260 (`FLD` value, `FADD` field).
+pub fn fn_00b8af40(e: &mut Engine, this: Ptr, value: f32) {
+    add_to_field(e, this.addr() + 0x260, value);
+}
+
+// Translated from 00b8af60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (a
+/// `float`): keeps the larger of the `float` at +0x2f0 and the value.
+pub fn fn_00b8af60(e: &mut Engine, this: Ptr, value: f32) {
+    keep_larger(e, this.addr() + 0x2f0, value);
+}
+
+// Translated from 00b8af90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (a
+/// `float`): adds the value to the `float` at +0x2f4.
+pub fn fn_00b8af90(e: &mut Engine, this: Ptr, value: f32) {
+    add_to_field(e, this.addr() + 0x2f4, value);
+}
+
+// Translated from 00b8afb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (a
+/// `float`): keeps the larger of the `float` at +0x264 and the value.
+pub fn fn_00b8afb0(e: &mut Engine, this: Ptr, value: f32) {
+    keep_larger(e, this.addr() + 0x264, value);
+}
+
+// Translated from 00b8afe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (a
+/// `float`): adds the value to the `float` at +0x268.
+pub fn fn_00b8afe0(e: &mut Engine, this: Ptr, value: f32) {
+    add_to_field(e, this.addr() + 0x268, value);
+}
+
+// Translated from 00b8b000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, six stack words: a
+/// `float` weight, four `float`s and the address of two words. When the `float` at +0x26c is
+/// below the weight, stores the weight there, the four `float`s at +0x270 to +0x27c (through
+/// the FPU) and the two words at +0x294 and +0x298.
+pub fn fn_00b8b000(
+    e: &mut Engine,
+    this: Ptr,
+    weight: f32,
+    first: f32,
+    second: f32,
+    third: f32,
+    fourth: f32,
+    pair: Ptr,
+) {
+    let base = this.addr();
+    if field_below(e, base + 0x26c, weight) {
+        e.mem
+            .set_u32(base + 0x26c, x87_quiet_bits(weight.to_bits()));
+        for (offset, value) in [
+            (0x270u32, first),
+            (0x274, second),
+            (0x278, third),
+            (0x27c, fourth),
+        ] {
+            e.mem
+                .set_u32(base + offset, x87_quiet_bits(value.to_bits()));
+        }
+        let low = e.mem.u32(pair.addr());
+        e.mem.set_u32(base + 0x294, low);
+        let high = e.mem.u32(pair.addr() + 4);
+        e.mem.set_u32(base + 0x298, high);
+    }
+}
+
+// Translated from 00b8b0d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, five stack words: a
+/// `float` weight, a mode and three `float`s. When the `float` at +0x2a4 is below the weight,
+/// stores the weight there, clears the byte at +0x2cc (set instead when the mode is above 2,
+/// which then loses 3), stores the mode at +0x2c4, the second and third `float`s at +0x2a8 and
+/// +0x2ac and the first at +0x2b0.
+pub fn fn_00b8b0d0(
+    e: &mut Engine,
+    this: Ptr,
+    weight: f32,
+    mode: u32,
+    first: f32,
+    second: f32,
+    third: f32,
+) {
+    let base = this.addr();
+    if field_below(e, base + 0x2a4, weight) {
+        e.mem
+            .set_u32(base + 0x2a4, x87_quiet_bits(weight.to_bits()));
+        e.mem.set_u8(base + 0x2cc, 0);
+        let mut mode = mode;
+        if mode > 2 {
+            e.mem.set_u8(base + 0x2cc, 1);
+            mode = mode.wrapping_sub(3);
+        }
+        e.mem.set_u32(base + 0x2c4, mode);
+        e.mem
+            .set_u32(base + 0x2a8, x87_quiet_bits(second.to_bits()));
+        e.mem.set_u32(base + 0x2ac, x87_quiet_bits(third.to_bits()));
+        e.mem.set_u32(base + 0x2b0, x87_quiet_bits(first.to_bits()));
+    }
+}
+
+// Translated from 00b8b130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, five stack words: a
+/// `float`, a mode and three `float`s. Adds the first `float` to +0x2b4 (`FLD` field, `FADD`
+/// value), clears the byte at +0x2cd, stores the mode at +0x2c8, and adds the second and third
+/// `float`s to +0x2b8 and +0x2bc and the `float` after the mode to +0x2c0 (each as field + value).
+pub fn fn_00b8b130(
+    e: &mut Engine,
+    this: Ptr,
+    weight: f32,
+    mode: u32,
+    first: f32,
+    second: f32,
+    third: f32,
+) {
+    let base = this.addr();
+    let field = |e: &Engine, offset: u32| x87_load32(e.mem.u32(base + offset));
+    let sum = x87_add(field(e, 0x2b4), x87_m32(weight.to_bits()));
+    e.mem.set_u8(base + 0x2cd, 0);
+    e.mem.set_u32(base + 0x2c8, mode);
+    e.mem.set_u32(base + 0x2b4, x87_store32(sum));
+    for (offset, value) in [(0x2b8u32, second), (0x2bc, third), (0x2c0, first)] {
+        let sum = x87_add(field(e, offset), x87_m32(value.to_bits()));
+        e.mem.set_u32(base + offset, x87_store32(sum));
+    }
+}
+
+/// `ImageSpaceTexture::GetTexture` (`00ba3780`, `thiscall`), `::BorrowRenderedTexture`
+/// (`00ba3840`, `thiscall`, one word) and `::GetRenderedTexture` (`00ba3770`, `thiscall`)
+/// (engine map names).
+const TEXTURE_GET_00BA3780: u32 = 0x00ba_3780;
+const TEXTURE_BORROW_RENDERED_00BA3840: u32 = 0x00ba_3840;
+const TEXTURE_GET_RENDERED_00BA3770: u32 = 0x00ba_3770;
+
+// Translated from 00b8b190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceManager::GetDepthRenderedTexture` (Xbox PDB), `thiscall`, no stack words: on the
+/// `ImageSpaceTexture` at +0x204, when `GetTexture` (`00ba3780`) answers null borrows a
+/// rendered texture with 0x21 (`00ba3840`); answers what `GetRenderedTexture` (`00ba3770`,
+/// reached by a jump) answers.
+pub fn image_space_manager_get_depth_rendered_texture(e: &mut Engine, this: Ptr) -> u32 {
+    let texture = this.addr() + 0x204;
+    if e.call(TEXTURE_GET_00BA3780, &args![texture]).u32() == 0 {
+        e.call(TEXTURE_BORROW_RENDERED_00BA3840, &args![texture, 0x21u32]);
+    }
+    e.call(TEXTURE_GET_RENDERED_00BA3770, &args![texture]).u32()
+}
+
+/// The byte `00b8b200` stores (`012023f0`).
+const BYTE_SETTING_012023F0: u32 = 0x0120_23f0;
+
+// Translated from 00b8b200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall` (its caller in `InitSky`
+/// sets `ECX`; the body never reads it), one stack word: stores its low byte at `012023f0`.
+pub fn fn_00b8b200(e: &mut Engine, _this: Ptr, value: u32) {
+    e.set_global::<u8>(BYTE_SETTING_012023F0, value as u8);
+}
+
+// Translated from 00b8b210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (a
+/// mode), on an image-space effect: nothing when the mode is already the word at +0x58; else
+/// sets the byte at +5, keeps the mode at +0x58 and stores 1.0 at +0x70 when the mode is 0 or 1
+/// (else 0.0) and 1.0 at +0x74 when it is 0 or 2 (else 0.0), each through the FPU and the
+/// stack word.
+pub fn fn_00b8b210(e: &mut Engine, this: Ptr, mode: u32) {
+    let base = this.addr();
+    if mode == e.mem.u32(base + 0x58) {
+        return;
+    }
+    e.mem.set_u8(base + 5, 1);
+    e.mem.set_u32(base + 0x58, mode);
+    let one = 1.0f32.to_bits();
+    let first = if mode == 1 || mode == 0 { one } else { 0 };
+    e.mem.set_u32(base + 0x70, first);
+    let second = if mode == 2 || mode == 0 { one } else { 0 };
+    e.mem.set_u32(base + 0x74, second);
+}
+
+// Translated from 00b8b2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words:
+/// destroys the image-space effects. For the indices 0 to 0x73 of the effect array (element
+/// block +0x8, read again for each), a set element gets its vtable slot +0xc, then its slot 0
+/// (the deleting destructor) with 1, and null is stored at its index through `00ba3aa0` (on the
+/// array at +0x4, with the address of a cleared stack word). Then every element below the
+/// 16-bit size at +0xe (read again for each) is cleared, and the size and the count (+0x10)
+/// become 0.
+pub fn fn_00b8b2e0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.with_stack(4, |e, local| {
+        for index in 0..0x74u32 {
+            let block = e.mem.u32(base + EFFECTS);
+            let element = e.mem.u32(block + 4 * index);
+            if element != 0 {
+                e.vcall(element, 0xc, &args![]);
+                e.vcall(element, 0, &args![1u32]);
+                e.mem.set_u32(local.addr(), 0);
+                e.call(ARRAY_SET_00BA3AA0, &args![base + 4, index, local]);
+            }
+        }
+    });
+    let mut index = 0u16;
+    if index < e.mem.u16(base + EFFECTS_SIZE) {
+        loop {
+            let block = e.mem.u32(base + EFFECTS);
+            e.mem.set_u32(block + 4 * u32::from(index), 0);
+            index = index.wrapping_add(1);
+            if index >= e.mem.u16(base + EFFECTS_SIZE) {
+                break;
+            }
+        }
+    }
+    e.mem.set_u16(base + EFFECTS_SIZE, 0);
+    e.mem.set_u16(base + EFFECTS_COUNT, 0);
+}
+
+// Translated from 00b8b390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (an
+/// index): when the effect array holds an element at the index, answers its vtable slot +0x18
+/// (reached by a jump; `ImageSpaceEffect::IsActive` in the Xbox PDB's slot order), else 0
+/// (`XOR AL,AL`).
+pub fn fn_00b8b390(e: &mut Engine, this: Ptr, index: u32) -> u8 {
+    let block = e.mem.u32(this.addr() + EFFECTS);
+    let element = e.mem.u32(block.wrapping_add(index.wrapping_mul(4)));
+    if element != 0 {
+        e.vcall(element, 0x18, &args![]).u32() as u8
+    } else {
+        0
+    }
+}
+
+/// The byte `00b8b3f0` tests (`011ad884`).
+const COUNT_ACTIVE_011AD884: u32 = 0x011a_d884;
+
+// Translated from 00b8b3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: stores
+/// -1 at +0x1ec and 0 at +0x1e8; when the byte at `011ad884` is set, for the indices 0 to 0xc
+/// of the effect array a set element whose vtable slot +0x18 answers a set byte adds one to
+/// +0x1e8 and leaves its index at +0x1ec.
+pub fn fn_00b8b3f0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base + 0x1ec, u32::MAX);
+    e.mem.set_u32(base + 0x1e8, 0);
+    if e.global::<u8>(COUNT_ACTIVE_011AD884) != 0 {
+        for index in 0..0xdu32 {
+            let block = e.mem.u32(base + EFFECTS);
+            let element = e.mem.u32(block + 4 * index);
+            if element != 0 && e.vcall(element, 0x18, &args![]).u32() as u8 != 0 {
+                let count = e.mem.u32(base + 0x1e8);
+                e.mem.set_u32(base + 0x1e8, count.wrapping_add(1));
+                e.mem.set_u32(base + 0x1ec, index);
+            }
+        }
+    }
+}
+
+/// The globals `00b8b440` sets: `011ad87c`, `011ad880`, `011f9184` to `011f9190`.
+const VALUE_011AD87C: u32 = 0x011a_d87c;
+const VALUE_011AD880: u32 = 0x011a_d880;
+
+// Translated from 00b8b440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (a
+/// flag byte). Hands parameter blocks to the effects of the array (element block +0x8, read
+/// again for each): element 0 gets its vtable slot +0x20 with +0x50, element 1 slot +0x20 with
+/// +0x14, element 8 slot +0x20 with +0x5c, element 3 slot +0x24 with +0x78 and the word at
+/// +0xa8, then slot +0x28 with +0x68 (each when set). Then, with the flag clear, stores the
+/// `float` at +0x34 at `011ad87c` and 1.0 at `011ad880`, else the `float` at +0x34 at
+/// `011ad880`; and the `float`s at +0x40, +0x48, +0x44 and +0x1c at `011f9190`, `011f918c`,
+/// `011f9188` and `011f9184`.
+pub fn fn_00b8b440(e: &mut Engine, this: Ptr, flag: u32) {
+    let base = this.addr();
+    let element = |e: &Engine, index: u32| e.mem.u32(e.mem.u32(base + EFFECTS) + 4 * index);
+    for (index, block) in [(0u32, 0x50u32), (1, 0x14), (8, 0x5c)] {
+        if element(e, index) != 0 {
+            let effect = element(e, index);
+            e.vcall(effect, 0x20, &args![base + block]);
+        }
+    }
+    if element(e, 3) != 0 {
+        let effect = element(e, 3);
+        let word = e.mem.u32(base + 0xa8);
+        e.vcall(effect, 0x24, &args![base + 0x78, word]);
+        let effect = element(e, 3);
+        e.vcall(effect, 0x28, &args![base + 0x68]);
+    }
+    let value = x87_quiet_bits(e.mem.u32(base + 0x34));
+    if flag as u8 == 0 {
+        e.set_global::<u32>(VALUE_011AD87C, value);
+        e.set_global::<u32>(VALUE_011AD880, 1.0f32.to_bits());
+    } else {
+        e.set_global::<u32>(VALUE_011AD880, value);
+    }
+    for (offset, global) in [
+        (0x40u32, 0x011f_9190u32),
+        (0x48, 0x011f_918c),
+        (0x44, 0x011f_9188),
+        (0x1c, 0x011f_9184),
+    ] {
+        let value = x87_quiet_bits(e.mem.u32(base + offset));
+        e.set_global::<u32>(global, value);
+    }
+}
+
+/// `_memcpy` (`00ec44d0`, `cdecl`: destination, source, size) and the default block `00b8b500`
+/// copies (`011ff940`); the two `float`s it clears (`01202400`, `012003d0`).
+const MEMCPY_00EC44D0: u32 = 0x00ec_44d0;
+const DEFAULTS_011FF940: u32 = 0x011f_f940;
+const VALUE_01202400: u32 = 0x0120_2400;
+const VALUE_012003D0: u32 = 0x0120_03d0;
+
+// Translated from 00b8b500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: copies
+/// 0x98 bytes to +0x14 from the block the word at +0xb0 points at, else the one at +0xac, else
+/// the defaults at `011ff940` (`memcpy`), then stores 0.0 at `01202400` and `012003d0`.
+pub fn fn_00b8b500(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let mut source = e.mem.u32(base + 0xb0);
+    if source == 0 {
+        source = e.mem.u32(base + 0xac);
+        if source == 0 {
+            source = DEFAULTS_011FF940;
+        }
+    }
+    e.call(MEMCPY_00EC44D0, &args![base + 0x14, source, 0x98u32]);
+    e.set_global::<u32>(VALUE_01202400, 0);
+    e.set_global::<u32>(VALUE_012003D0, 0);
+}
+
+/// The body of `00b8b540` and `00b8b610`: a colour of four `float`s at `color` (red, green,
+/// blue, alpha) weighted by its alpha and added to the four `float`s at `sum`, the weight kept
+/// at `weight` when the alpha is above it; in the exe's x87 order (the red through the stack
+/// word, the colour's red, green and blue left multiplied).
+fn add_weighted_color(e: &mut Engine, weight: u32, sum: u32, color: u32) {
+    let alpha = |e: &Engine| e.mem.u32(color + 0xc);
+    if x87_load32(e.mem.u32(weight)) < x87_load32(alpha(e)) {
+        let bits = x87_quiet_bits(alpha(e));
+        e.mem.set_u32(weight, bits);
+    }
+    let red = x87_store32(x87_mul(x87_load32(e.mem.u32(color)), x87_m32(alpha(e))));
+    let red = x87_load32(red);
+    e.mem.set_u32(color, x87_store32(red));
+    let green = x87_mul(x87_load32(e.mem.u32(color + 4)), x87_m32(alpha(e)));
+    e.mem.set_u32(color + 4, x87_store32(green));
+    let blue = x87_mul(x87_load32(alpha(e)), x87_m32(e.mem.u32(color + 8)));
+    e.mem.set_u32(color + 8, x87_store32(blue));
+    let total = x87_add(red, x87_m32(e.mem.u32(sum)));
+    e.mem.set_u32(sum, x87_store32(total));
+    plus_field(e, sum + 4, color + 4);
+    field_plus(e, sum + 8, color + 8);
+    field_plus(e, sum + 0xc, color + 0xc);
+}
+
+// Translated from 00b8b540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// address of a colour of four `float`s): `add_weighted_color` with the weight at +0x234 and the
+/// sum at +0x214 (the colour itself left multiplied by its alpha).
+pub fn fn_00b8b540(e: &mut Engine, this: Ptr, color: Ptr) {
+    let base = this.addr();
+    add_weighted_color(e, base + 0x234, base + 0x214, color.addr());
+}
+
+// Translated from 00b8b5c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// address of four `float`s): adds them to the `float`s at +0x224 to +0x230 (the first as
+/// field + value, the others as value + field).
+pub fn fn_00b8b5c0(e: &mut Engine, this: Ptr, values: Ptr) {
+    let base = this.addr();
+    let values = values.addr();
+    field_plus(e, base + 0x224, values);
+    for k in 1..4u32 {
+        plus_field(e, base + 0x224 + 4 * k, values + 4 * k);
+    }
+}
+
+// Translated from 00b8b610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// address of a colour of four `float`s): `add_weighted_color` with the weight at +0x258 and the
+/// sum at +0x238.
+pub fn fn_00b8b610(e: &mut Engine, this: Ptr, color: Ptr) {
+    let base = this.addr();
+    add_weighted_color(e, base + 0x258, base + 0x238, color.addr());
+}
+
+// Translated from 00b8b690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// address of four `float`s): adds them to the `float`s at +0x248 to +0x254 (the first as
+/// field + value, the others as value + field).
+pub fn fn_00b8b690(e: &mut Engine, this: Ptr, values: Ptr) {
+    let base = this.addr();
+    let values = values.addr();
+    field_plus(e, base + 0x248, values);
+    for k in 1..4u32 {
+        plus_field(e, base + 0x248 + 4 * k, values + 4 * k);
+    }
+}
+
+// Translated from 00b8b6e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, six stack words: five
+/// `float`s and the address of two more. Adds the five to the `float`s at +0x280 to +0x290 (the
+/// first and fifth as value + field, the others as field + value) and the two to +0x29c and
+/// +0x2a0 (value + field).
+pub fn fn_00b8b6e0(
+    e: &mut Engine,
+    this: Ptr,
+    first: f32,
+    second: f32,
+    third: f32,
+    fourth: f32,
+    fifth: f32,
+    pair: Ptr,
+) {
+    let base = this.addr();
+    add_to_field(e, base + 0x280, first);
+    for (offset, value) in [(0x284u32, second), (0x288, third), (0x28c, fourth)] {
+        let sum = x87_add(
+            x87_load32(e.mem.u32(base + offset)),
+            x87_m32(value.to_bits()),
+        );
+        e.mem.set_u32(base + offset, x87_store32(sum));
+    }
+    add_to_field(e, base + 0x290, fifth);
+    plus_field(e, base + 0x29c, pair.addr());
+    plus_field(e, base + 0x2a0, pair.addr() + 4);
+}
+
+// Translated from 00b8b9a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: resets
+/// the frame's accumulated values. With the `float` at +0x94 (through a stack word): it at
+/// +0x234, the `float`s at +0x88 and +0x8c times it at +0x214 and +0x218, it times +0x90 at
+/// +0x21c, +0x94 copied to +0x220; 0.0 in the `float`s and words from +0x224 to +0x2c0 (but the
+/// modes) and at +0x2d0, +0x2f0, +0x2f4; 3 at +0x2c4 and +0x2c8, the bytes at +0x2cc and +0x2cd
+/// cleared; then 0x130 bytes from +0xb4 cleared (`memset`).
+pub fn fn_00b8b9a0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let weight = x87_load32(x87_quiet_bits(e.mem.u32(base + 0x94)));
+    e.mem.set_u32(base + 0x234, x87_store32(weight));
+    let red = x87_mul(x87_load32(e.mem.u32(base + 0x88)), weight);
+    e.mem.set_u32(base + 0x214, x87_store32(red));
+    let green = x87_mul(x87_load32(e.mem.u32(base + 0x8c)), weight);
+    e.mem.set_u32(base + 0x218, x87_store32(green));
+    let blue = x87_mul(weight, x87_m32(e.mem.u32(base + 0x90)));
+    e.mem.set_u32(base + 0x21c, x87_store32(blue));
+    copy_float(e, base + 0x94, base + 0x220);
+    for offset in [
+        0x224u32, 0x258, 0x238, 0x228, 0x23c, 0x240, 0x22c, 0x244, 0x230, 0x248, 0x24c, 0x250,
+        0x254, 0x25c, 0x264, 0x26c, 0x270, 0x274, 0x278, 0x27c, 0x2a4, 0x2a8, 0x294, 0x2ac, 0x298,
+        0x2b0, 0x2d0, 0x2f0,
+    ] {
+        e.mem.set_u32(base + offset, 0);
+    }
+    e.mem.set_u32(base + 0x2c4, 3);
+    e.mem.set_u32(base + 0x260, 0);
+    e.mem.set_u8(base + 0x2cc, 0);
+    e.mem.set_u32(base + 0x268, 0);
+    e.mem.set_u32(base + 0x2c8, 3);
+    e.mem.set_u32(base + 0x280, 0);
+    e.mem.set_u8(base + 0x2cd, 0);
+    for offset in [
+        0x284u32, 0x288, 0x28c, 0x290, 0x2b4, 0x29c, 0x2b8, 0x2bc, 0x2a0, 0x2c0, 0x2f4,
+    ] {
+        e.mem.set_u32(base + offset, 0);
+    }
+    e.call(MEMSET_00EC61C0, &args![base + 0xb4, 0u32, 0x130u32]);
+}
+
+/// Render states set one after the other on the pass the `NiPointer` at +0x5c holds, read
+/// again for each (`pass_render_state`).
+fn render_states_on_pass(e: &mut Engine, this: Ptr, states: &[(u32, u32)]) {
+    for &(state, value) in states {
+        let pass = e.mem.u32(this.addr() + 0x5c);
+        pass_render_state(e, pass, state, value);
+    }
+}
+
+// Translated from 00b8bfe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: slot
+/// +0x150 of the shader `00b8bea0` constructs (vtable `010b0198`): the render states 0x34 = 1,
+/// 0x38 = 7, 0x39 = 0x80 and 0x37 = 1 on the pass at +0x5c (`render_states_on_pass`).
+pub fn fn_00b8bfe0(e: &mut Engine, this: Ptr) {
+    render_states_on_pass(e, this, &[(0x34, 1), (0x38, 7), (0x39, 0x80), (0x37, 1)]);
+}
+
+/// `NiPointer` release inline: when the object is set, the imported `InterlockedDecrement`
+/// on its +4 and, at zero, its vtable slot +4.
+fn release_object(e: &mut Engine, object: u32) {
+    if object != 0 {
+        let left = e
+            .call(IMPORT_INTERLOCKED_DECREMENT, &args![object + 4])
+            .u32();
+        if left == 0 {
+            e.vcall(object, 4, &args![]);
+        }
+    }
+}
+
+// Translated from 00b8c690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words:
+/// releases the `NiPointer`s at +0x1f0, +0x1f8, +0x1f4 and +0x200 in that order, each cleared
+/// after its release when it was set.
+pub fn fn_00b8c690(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    for offset in [0x1f0u32, 0x1f8, 0x1f4, 0x200] {
+        let object = e.mem.u32(base + offset);
+        if object != 0 {
+            release_object(e, object);
+            e.mem.set_u32(base + offset, 0);
+        }
+    }
+}
+
+/// `ImageSpaceTexture::SetTexture` (`00ba37a0`, `thiscall`, one word) and
+/// `ImageSpaceEffect::SetTexture` (`00ba3cb0`, `thiscall`, three words) (engine map names).
+const TEXTURE_SET_00BA37A0: u32 = 0x00ba_37a0;
+const EFFECT_SET_TEXTURE_00BA3CB0: u32 = 0x00ba_3cb0;
+
+/// The thread block's allocation context guard the manager's entry points put around their
+/// body: the word at +0x2b4 kept, 0x27 set, `body`, the kept word put back.
+fn with_image_space_context<R>(e: &mut Engine, body: impl FnOnce(&mut Engine) -> R) -> R {
+    let tls = e.tls();
+    let saved = e.mem.u32(tls.wrapping_add(TLS_CONTEXT));
+    e.mem
+        .set_u32(tls.wrapping_add(TLS_CONTEXT), CONTEXT_IMAGE_SPACE);
+    let result = body(e);
+    e.mem.set_u32(tls.wrapping_add(TLS_CONTEXT), saved);
+    result
+}
+
+// Translated from 00b8c830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceManager::RenderEffect_ov2` (Xbox PDB), `thiscall`, six stack words: an effect,
+/// a word, two source textures, two more words. Within the allocation context guard: two
+/// `ImageSpaceTexture`s on the stack (three clear bytes and three clear words each) are set from
+/// the sources (`SetTexture`, `00ba37a0`: the first from the first source, the second from the
+/// second); with an effect, `ImageSpaceEffect::SetTexture` (`00ba3cb0`) gives it the second at 0
+/// and the first at 1, its vtable slot +4 runs with the `NiPointer` at +0x1f8 (when the byte at
+/// +0x1fc is set) or +0x1f0, the word and the last two words, and both textures are taken back
+/// (null at 0 and 1); then both stack textures are destroyed (`00ba3a00`), the second first.
+// Translation incomplete: 00b8c830 - the C++ exception frame (FS:[0] chain, unwind states 0 to 2 for the two stack textures) is not translated.
+pub fn image_space_manager_render_effect_ov2(
+    e: &mut Engine,
+    this: Ptr,
+    effect: u32,
+    word: u32,
+    first_source: u32,
+    second_source: u32,
+    fifth: u32,
+    sixth: u32,
+) {
+    let base = this.addr();
+    with_image_space_context(e, |e| {
+        e.with_stack(0x20, |e, locals| {
+            let second = locals.addr();
+            let first = second + 0x10;
+            for texture in [first, second] {
+                for offset in 0..3u32 {
+                    e.mem.set_u8(texture + offset, 0);
+                }
+                for offset in [4u32, 8, 0xc] {
+                    e.mem.set_u32(texture + offset, 0);
+                }
+            }
+            e.call(TEXTURE_SET_00BA37A0, &args![first, first_source]);
+            e.call(TEXTURE_SET_00BA37A0, &args![second, second_source]);
+            if effect != 0 {
+                e.call(
+                    EFFECT_SET_TEXTURE_00BA3CB0,
+                    &args![effect, 0u32, second, 0u32],
+                );
+                e.call(
+                    EFFECT_SET_TEXTURE_00BA3CB0,
+                    &args![effect, 1u32, first, 0u32],
+                );
+                let slot = if e.mem.u8(base + 0x1fc) != 0 {
+                    base + 0x1f8
+                } else {
+                    base + 0x1f0
+                };
+                let target = e.mem.u32(slot);
+                e.vcall(effect, 4, &args![target, word, fifth, sixth]);
+                e.call(
+                    EFFECT_SET_TEXTURE_00BA3CB0,
+                    &args![effect, 0u32, 0u32, 0u32],
+                );
+                e.call(
+                    EFFECT_SET_TEXTURE_00BA3CB0,
+                    &args![effect, 1u32, 0u32, 0u32],
+                );
+            }
+            e.call(IMAGE_SPACE_TEXTURE_DESTRUCT_00BA3A00, &args![second]);
+            e.call(IMAGE_SPACE_TEXTURE_DESTRUCT_00BA3A00, &args![first]);
+        });
+    });
+}
+
+// Translated from 00b8cad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word: stores
+/// it at +0xac, between a read of the thread's allocation context (+0x2b4) and a write of the
+/// same word back (the guard with nothing in it).
+pub fn fn_00b8cad0(e: &mut Engine, this: Ptr, value: u32) {
+    let tls = e.tls();
+    let saved = e.mem.u32(tls.wrapping_add(TLS_CONTEXT));
+    e.mem.set_u32(this.addr() + 0xac, value);
+    e.mem.set_u32(tls.wrapping_add(TLS_CONTEXT), saved);
+}
+
+/// The blend of one value with two parameters, the exe's loop of two steps through its stack
+/// words: the value (`running`, bits of a stored `float`) times the first, plus the second,
+/// each step's result stored as a `float` and read back. Answers the result as the x87 stack
+/// holds it.
+fn blend_steps(first: u32, second: u32, running: u32) -> f64 {
+    let product = x87_store32(x87_mul(x87_load32(first), x87_m32(running)));
+    let running = x87_quiet_bits(product);
+    let sum = x87_store32(x87_add(x87_load32(second), x87_m32(running)));
+    x87_load32(sum)
+}
+
+// Translated from 00b8cb30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, four stack words: a
+/// kind, an index, the address of two `float`s and a `float` factor. Within the allocation
+/// context guard, picks the `float` at +0x50 (kind 0), +0x14 (kind 1) or +0x78 (kind 3) plus 4
+/// times the index (any other kind reads and writes address 0, as the exe does), blends it with
+/// the two `float`s (`blend_steps`: times the first, plus the second) into r, then stores
+/// field - (field - r) * factor (the difference rounded to a `float` in the stack word first).
+pub fn fn_00b8cb30(e: &mut Engine, this: Ptr, kind: u32, index: u32, values: Ptr, factor: f32) {
+    let base = this.addr();
+    with_image_space_context(e, |e| {
+        let field = match kind {
+            0 => base.wrapping_add(0x50).wrapping_add(index.wrapping_mul(4)),
+            1 => base.wrapping_add(0x14).wrapping_add(index.wrapping_mul(4)),
+            3 => base.wrapping_add(0x78).wrapping_add(index.wrapping_mul(4)),
+            _ => 0,
+        };
+        let running = x87_quiet_bits(e.mem.u32(field));
+        let first = x87_quiet_bits(e.mem.u32(values.addr()));
+        let second = x87_quiet_bits(e.mem.u32(values.addr() + 4));
+        let result = blend_steps(first, second, running);
+        let held = x87_load32(e.mem.u32(field));
+        let difference = x87_store32(x87_sub(held, result));
+        let scaled = x87_mul(x87_load32(difference), x87_m32(factor.to_bits()));
+        e.mem.set_u32(field, x87_store32(x87_sub(held, scaled)));
+    });
+}
+
+// Translated from 00b8cc20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, four stack words: a
+/// kind, an index, the address of two `float`s and a `float` factor. Within the allocation
+/// context guard, for the two blocks at +0xb4 + 4 times the index and 0x98 bytes further, adds
+/// the n-th `float` times the factor to the block's `float` at +0x3c (kind 0), +0 (kind 1) or
+/// +0x64 (kind 3); any other kind changes nothing.
+pub fn fn_00b8cc20(e: &mut Engine, this: Ptr, kind: u32, index: u32, values: Ptr, factor: f32) {
+    let base = this.addr();
+    let factor = x87_load32(factor.to_bits());
+    with_image_space_context(e, |e| {
+        let mut block = base.wrapping_add(0xb4).wrapping_add(index.wrapping_mul(4));
+        for n in 0..2u32 {
+            let offset = match kind {
+                0 => Some(0x3c),
+                1 => Some(0),
+                3 => Some(0x64),
+                _ => None,
+            };
+            if let Some(offset) = offset {
+                let field = block.wrapping_add(offset);
+                let value = x87_load32(e.mem.u32(values.addr() + 4 * n));
+                let sum = x87_add(x87_mul(value, factor), x87_m32(e.mem.u32(field)));
+                e.mem.set_u32(field, x87_store32(sum));
+            }
+            block = block.wrapping_add(0x98);
+        }
+    });
+}
+
+// Translated from 00b8ccb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: settles
+/// the frame's values. For the 15 `float`s from +0x14, the 3 from +0x50 and the 12 from +0x78,
+/// each within its own allocation context guard: the blend of the field with its parameters at
+/// +0xa0 and +0x138 further (`blend_steps`) into r, stored as field - float(field - r). Then
+/// `00b8b540` with +0x224 and `00b8b610` with +0x248; then the `float`s at +0x25c, +0x264 and
+/// +0x26c take those at +0x260, +0x268 and +0x280 when below them (+0x26c also takes +0x284 to
+/// +0x290 into +0x270 to +0x27c and the words at +0x29c, +0x2a0 into +0x294, +0x298); +0x2a4
+/// takes +0x2b4 when below it, with the mode at +0x2c8 into +0x2c4 (above 2: the byte at +0x2cc
+/// set and the mode less 3; else the byte cleared), +0x2b8 and +0x2bc into +0x2a8 and +0x2ac and
+/// 0.0 into +0x2b0; and +0x2f0 takes +0x2f4 when below it.
+pub fn fn_00b8ccb0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    for (start, count) in [(0x14u32, 15u32), (0x50, 3), (0x78, 12)] {
+        for k in 0..count {
+            let field = base + start + 4 * k;
+            with_image_space_context(e, |e| {
+                let first = x87_quiet_bits(e.mem.u32(field + 0xa0));
+                let second = x87_quiet_bits(e.mem.u32(field + 0x138));
+                let running = x87_quiet_bits(e.mem.u32(field));
+                let result = blend_steps(first, second, running);
+                let held = x87_load32(e.mem.u32(field));
+                let difference = x87_store32(x87_sub(held, result));
+                let settled = x87_sub(held, x87_m32(difference));
+                e.mem.set_u32(field, x87_store32(settled));
+            });
+        }
+    }
+    fn_00b8b540(e, this, Ptr::new(base + 0x224));
+    fn_00b8b610(e, this, Ptr::new(base + 0x248));
+    for (field, source) in [(0x25cu32, 0x260u32), (0x264, 0x268)] {
+        let value = x87_quiet_bits(e.mem.u32(base + source));
+        if field_below(e, base + field, f32::from_bits(value)) {
+            e.mem.set_u32(base + field, value);
+        }
+    }
+    let value = x87_quiet_bits(e.mem.u32(base + 0x280));
+    if field_below(e, base + 0x26c, f32::from_bits(value)) {
+        let low = e.mem.u32(base + 0x29c);
+        e.mem.set_u32(base + 0x26c, value);
+        copy_float(e, base + 0x284, base + 0x270);
+        let high = e.mem.u32(base + 0x2a0);
+        e.mem.set_u32(base + 0x294, low);
+        e.mem.set_u32(base + 0x298, high);
+        copy_float(e, base + 0x288, base + 0x274);
+        copy_float(e, base + 0x28c, base + 0x278);
+        copy_float(e, base + 0x290, base + 0x27c);
+    }
+    let mut mode = e.mem.u32(base + 0x2c8);
+    let weight = x87_quiet_bits(e.mem.u32(base + 0x2b4));
+    let first = x87_quiet_bits(e.mem.u32(base + 0x2b8));
+    let second = x87_quiet_bits(e.mem.u32(base + 0x2bc));
+    if field_below(e, base + 0x2a4, f32::from_bits(weight)) {
+        e.mem.set_u32(base + 0x2a4, weight);
+        e.mem.set_u8(base + 0x2cc, 0);
+        if mode > 2 {
+            e.mem.set_u8(base + 0x2cc, 1);
+            mode = mode.wrapping_sub(3);
+        }
+        e.mem.set_u32(base + 0x2c4, mode);
+        e.mem.set_u32(base + 0x2a8, first);
+        e.mem.set_u32(base + 0x2ac, second);
+        e.mem.set_u32(base + 0x2b0, 0);
+    }
+    let value = x87_quiet_bits(e.mem.u32(base + 0x2f4));
+    if field_below(e, base + 0x2f0, f32::from_bits(value)) {
+        e.mem.set_u32(base + 0x2f0, value);
+    }
+}
+
+/// `00b8bc80` (same unit, unnamed; `thiscall`, no stack words), the alternative of `00b8bc20`
+/// that `00b8d020` runs on the effect at index 4 when the byte at +0x2cc is set.
+const SET_UP_00B8BC80: u32 = 0x00b8_bc80;
+
+/// The division of three `float`s by a fourth `00b8d020` makes twice: when the fourth (at
+/// `last`) is above 0.0, the three before it are divided by it and it by itself (`FDIVR`),
+/// each through the FPU with the divisor read through the stack word.
+fn divide_by_last(e: &mut Engine, last: u32) {
+    let bits = e.mem.u32(last);
+    if 0.0 < x87_load32(bits) {
+        let divisor = x87_load32(x87_quiet_bits(bits));
+        for offset in [0xcu32, 8, 4] {
+            let field = last - offset;
+            let quotient = x87_div(x87_load32(e.mem.u32(field)), divisor);
+            e.mem.set_u32(field, x87_store32(quotient));
+        }
+        let quotient = x87_div(x87_m32(e.mem.u32(last)), divisor);
+        e.mem.set_u32(last, x87_store32(quotient));
+    }
+}
+
+// Translated from 00b8d020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: hands
+/// the frame's settled values to the effects. The colour sums at +0x214 and +0x238 are divided
+/// by their weights at +0x220 and +0x244 when above 0.0 (`divide_by_last`), then +0x220 takes
+/// +0x234 and +0x244 takes +0x258, and the sums go to +0x88..+0x94 and +0x98..+0xa4. The
+/// `float`s at +0x264 and +0x25c go to `01202400` and `012003d0`. Effect 6 (the array's element
+/// block +0x8) gets +0x26c to +0x27c at +0x58 to +0x68 and the words at +0x294, +0x298 at +0x6c,
+/// +0x70. Effect 4 gets +0x2a4, +0x2a8, +0x2ac and +0x2b0 at +0x70, +0x68, +0x6c and +0x78 and
+/// the mode at +0x2c4 at +0x74 when it differs (its byte +5 set with each), then `00b8bc80`
+/// (byte +0x2cc set) or `00b8bc20` runs on it. Effect 5 gets +0x2d0 at +0x6c; with x its +0x9c
+/// and y the `float` at +0x2dc, +0x84 takes y, +0x7c takes y - m and +0x80 m + y, where m is y
+/// when y is above x, else x; then +0x9c takes the `float` z at +0x2e0, +0x7c takes y - z and
+/// +0x80 y + z; then `00b8b210` with the mode at +0x2ec, and +0x8c, +0x90, +0x94 take +0x2d0,
+/// +0x2d4, +0x2d8. Effect 12 gets +0x2f0 at +0x58. Each effect's byte +5 is set as the exe sets
+/// it.
+pub fn fn_00b8d020(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    divide_by_last(e, base + 0x220);
+    let weight = x87_quiet_bits(e.mem.u32(base + 0x234));
+    e.mem.set_u32(base + 0x220, weight);
+    copy_float(e, base + 0x214, base + 0x88);
+    copy_float(e, base + 0x218, base + 0x8c);
+    copy_float(e, base + 0x21c, base + 0x90);
+    e.mem.set_u32(base + 0x94, weight);
+    divide_by_last(e, base + 0x244);
+    let weight = x87_quiet_bits(e.mem.u32(base + 0x258));
+    e.mem.set_u32(base + 0x244, weight);
+    copy_float(e, base + 0x238, base + 0x98);
+    copy_float(e, base + 0x23c, base + 0x9c);
+    copy_float(e, base + 0x240, base + 0xa0);
+    e.mem.set_u32(base + 0xa4, weight);
+    let value = x87_quiet_bits(e.mem.u32(base + 0x264));
+    e.set_global::<u32>(VALUE_01202400, value);
+    let value = x87_quiet_bits(e.mem.u32(base + 0x25c));
+    e.set_global::<u32>(VALUE_012003D0, value);
+    let effect = |e: &Engine, index: u32| e.mem.u32(e.mem.u32(base + EFFECTS) + 4 * index);
+    let target = effect(e, 6);
+    copy_float(e, base + 0x26c, target + 0x58);
+    for (from, to) in [
+        (0x270u32, 0x5cu32),
+        (0x274, 0x60),
+        (0x278, 0x64),
+        (0x27c, 0x68),
+    ] {
+        copy_float(e, base + from, target + to);
+    }
+    let low = e.mem.u32(base + 0x294);
+    e.mem.set_u32(target + 0x6c, low);
+    let high = e.mem.u32(base + 0x298);
+    e.mem.set_u32(target + 0x70, high);
+    let target = effect(e, 4);
+    copy_float(e, base + 0x2a4, target + 0x70);
+    e.mem.set_u8(target + 5, 1);
+    e.mem.set_u8(target + 5, 1);
+    copy_float(e, base + 0x2a8, target + 0x68);
+    e.mem.set_u8(target + 5, 1);
+    copy_float(e, base + 0x2ac, target + 0x6c);
+    copy_float(e, base + 0x2b0, target + 0x78);
+    let mode = e.mem.u32(base + 0x2c4);
+    if mode != e.mem.u32(target + 0x74) {
+        e.mem.set_u8(target + 5, 1);
+        e.mem.set_u32(target + 0x74, mode);
+    }
+    if e.mem.u8(base + 0x2cc) != 0 {
+        e.call(SET_UP_00B8BC80, &args![target]);
+    } else {
+        fn_00b8bc20(e, Ptr::new(target));
+    }
+    let target = effect(e, 5);
+    e.mem.set_u8(target + 5, 1);
+    copy_float(e, base + 0x2d0, target + 0x6c);
+    let y = x87_load32(x87_quiet_bits(e.mem.u32(base + 0x2dc)));
+    let x_bits = x87_quiet_bits(e.mem.u32(target + 0x9c));
+    let x = x87_load32(e.mem.u32(target + 0x9c));
+    // `FCOM` of y with x, `TEST AH,0x41`: y kept only when it is above x.
+    let middle_bits = if y > x { x87_store32(y) } else { x_bits };
+    e.mem.set_u32(target + 0x84, x87_store32(y));
+    e.mem.set_u8(target + 5, 1);
+    let middle = x87_load32(middle_bits);
+    e.mem
+        .set_u32(target + 0x7c, x87_store32(x87_sub(y, middle)));
+    e.mem
+        .set_u32(target + 0x80, x87_store32(x87_add(middle, y)));
+    e.mem.set_u8(target + 5, 1);
+    let z = x87_load32(x87_quiet_bits(e.mem.u32(base + 0x2e0)));
+    e.mem.set_u32(target + 0x9c, x87_store32(z));
+    e.mem.set_u32(target + 0x7c, x87_store32(x87_sub(y, z)));
+    e.mem.set_u32(target + 0x80, x87_store32(x87_add(y, z)));
+    let mode = e.mem.u32(base + 0x2ec);
+    fn_00b8b210(e, Ptr::new(target), mode);
+    let first = x87_quiet_bits(e.mem.u32(base + 0x2d4));
+    let second = x87_quiet_bits(e.mem.u32(base + 0x2d8));
+    copy_float(e, base + 0x2d0, target + 0x8c);
+    e.mem.set_u32(target + 0x90, first);
+    e.mem.set_u32(target + 0x94, second);
+    let target = effect(e, 0xc);
+    let value = x87_quiet_bits(e.mem.u32(base + 0x2f0));
+    e.mem.set_u8(target + 5, 1);
+    e.mem.set_u32(target + 0x58, value);
+}
+
+// Translated from 00b8f160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: slot
+/// +0x150 of the shader `00b8f010` constructs (vtable `010b2308`): the render states 0xa8 = 0
+/// and 0xbe = 0xf on the pass at +0x5c (`render_states_on_pass`).
+pub fn fn_00b8f160(e: &mut Engine, this: Ptr) {
+    render_states_on_pass(e, this, &[(0xa8, 0), (0xbe, 0xf)]);
+}
+
+/// The word `00b8f2f0` sets as render state 0x39 (`011ae680`).
+const STATE_VALUE_011AE680: u32 = 0x011a_e680;
+
+// Translated from 00b8f2f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: slot
+/// +0x150 of the shader `00b8f1b0` constructs (vtable `010b2490`): the render states 0x34 = 1
+/// and 0x38 = 4, then 0x39 = the word at `011ae680` (read after the pass) on the pass at +0x5c.
+pub fn fn_00b8f2f0(e: &mut Engine, this: Ptr) {
+    render_states_on_pass(e, this, &[(0x34, 1), (0x38, 4)]);
+    let pass = e.mem.u32(this.addr() + 0x5c);
+    let value = e.global::<u32>(STATE_VALUE_011AE680);
+    pass_render_state(e, pass, 0x39, value);
+}
+
+// Translated from 00b8f4b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: slot
+/// +0x150 of the shader `00b8f360` constructs (vtable `010b2610`): the render states 0xe = 0,
+/// 0x34 = 1 and 0x38 = 3 on the pass at +0x5c (`render_states_on_pass`).
+pub fn fn_00b8f4b0(e: &mut Engine, this: Ptr) {
+    render_states_on_pass(e, this, &[(0xe, 0), (0x34, 1), (0x38, 3)]);
+}
+
+/// `NiD3DTextureStage::CreateNewStage` (`00e7edf0`, `cdecl`: the address of a stage pointer),
+/// `BSShader::SetupDefaultStage` (`00be0cf0`, `cdecl`: stage, index, three words),
+/// `NiD3DPass::SetStage` (`00e802b0`, `thiscall` on the pass: index, stage) and the pass maker
+/// `00e804d0` (`cdecl`: the address of the pass pointer) (engine map names).
+const CREATE_NEW_STAGE_00E7EDF0: u32 = 0x00e7_edf0;
+const SETUP_DEFAULT_STAGE_00BE0CF0: u32 = 0x00be_0cf0;
+const PASS_SET_STAGE_00E802B0: u32 = 0x00e8_02b0;
+const NEW_PASS_00E804D0: u32 = 0x00e8_04d0;
+/// Where `00b91f90` leaves its pass (`0126f74c`).
+const LAST_PASS_0126F74C: u32 = 0x0126_f74c;
+
+/// The pass loader `00b91f90`, `00b93420` and `00b93750` share, in the exe's order: a pass made
+/// into the `NiPointer` at +0x5c (`00e804d0`); for each index below the 16-bit word at +0x9c
+/// (read again after each), a stage made into one stack pointer (`CreateNewStage`, cleared once
+/// before the loop), set up with the index and (`first(index, count)`, 2, 1) and set on the pass
+/// at its word +0x14; the render states 7, 0xe, 0x1b and 0xf = 0 and 0xa8 = 0xf; the vtable slot
+/// +0x150; the pass's vertex (+0x5c) and pixel (+0x44) shader `NiPointer`s assigned from +0xc4
+/// and +0xc8; with `keep_pass`, the pass left at `0126f74c`; then the stage released. Answers 1.
+fn load_stages_and_passes(
+    e: &mut Engine,
+    this: Ptr,
+    first: fn(u32, u32) -> u32,
+    keep_pass: bool,
+) -> u8 {
+    let base = this.addr();
+    let pass_slot = base + 0x5c;
+    e.with_stack(4, |e, local| {
+        let local = local.addr();
+        e.mem.set_u32(local, 0);
+        e.call(NEW_PASS_00E804D0, &args![pass_slot]);
+        let mut index = 0u32;
+        if e.mem.u16(base + 0x9c) != 0 {
+            loop {
+                e.call(CREATE_NEW_STAGE_00E7EDF0, &args![local]);
+                let count = u32::from(e.mem.u16(base + 0x9c));
+                let stage = e.mem.u32(local);
+                let setup = first(index, count);
+                e.call(
+                    SETUP_DEFAULT_STAGE_00BE0CF0,
+                    &args![stage, index, setup, 2u32, 1u32],
+                );
+                let pass = e.mem.u32(pass_slot);
+                let stage = e.mem.u32(local);
+                let position = e.mem.u32(pass + 0x14);
+                e.call(PASS_SET_STAGE_00E802B0, &args![pass, position, stage]);
+                index += 1;
+                if index >= u32::from(e.mem.u16(base + 0x9c)) {
+                    break;
+                }
+            }
+        }
+        render_states_on_pass(
+            e,
+            this,
+            &[(7, 0), (0xe, 0), (0x1b, 0), (0xf, 0), (0xa8, 0xf)],
+        );
+        e.vcall(base, 0x150, &args![]);
+        let pass = e.mem.u32(pass_slot);
+        let shader = e.mem.u32(base + 0xc4);
+        assign_pointer(e, pass + 0x5c, shader);
+        let pass = e.mem.u32(pass_slot);
+        let shader = e.mem.u32(base + 0xc8);
+        assign_pointer(e, pass + 0x44, shader);
+        if keep_pass {
+            let pass = e.mem.u32(pass_slot);
+            e.set_global::<u32>(LAST_PASS_0126F74C, pass);
+        }
+        let stage = e.mem.u32(local);
+        stage_release(e, stage);
+    });
+    1
+}
+
+// Translated from 00b91f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: slot
+/// +0x14c of the shaders with the vtables `010b5480` and `010b5640`: `load_stages_and_passes`
+/// with each stage set up with 1, the pass kept at `0126f74c`. Answers 1.
+// Translation incomplete: 00b91f90 - the C++ exception frame (FS:[0] chain, unwind state 0 for the stage pointer) is not translated.
+pub fn fn_00b91f90(e: &mut Engine, this: Ptr) -> u8 {
+    load_stages_and_passes(e, this, |_, _| 1, true)
+}
+
+// Translated from 00b93420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: slot
+/// +0x14c of the shaders with the vtables `010b6bd8`, `010b7418` and `010b7598`:
+/// `load_stages_and_passes` with each stage set up with 1, the pass not kept. Answers 1.
+// Translation incomplete: 00b93420 - the C++ exception frame (FS:[0] chain, unwind state 0 for the stage pointer) is not translated.
+pub fn fn_00b93420(e: &mut Engine, this: Ptr) -> u8 {
+    load_stages_and_passes(e, this, |_, _| 1, false)
+}
+
+// Translated from 00b93750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: slot
+/// +0x14c of the shaders with the vtables `010b6d90`, `010b6f38`, `010b70d8` and `010b7278`:
+/// `load_stages_and_passes` with each stage but the last set up with 3 and the last with 1 (the
+/// index against the 16-bit count at +0x9c less one), the pass not kept. Answers 1.
+// Translation incomplete: 00b93750 - the C++ exception frame (FS:[0] chain, unwind state 0 for the stage pointer) is not translated.
+pub fn fn_00b93750(e: &mut Engine, this: Ptr) -> u8 {
+    load_stages_and_passes(
+        e,
+        this,
+        |index, count| if index < count.wrapping_sub(1) { 3 } else { 1 },
+        false,
+    )
+}
+
+// Translated from 00b97550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, six stack words: an
+/// effect index and five words. Within the allocation context guard, runs `RenderEffect_ov2`
+/// (`00b8c830`) with the effect array's element at the index and the five words.
+// Translation incomplete: 00b97550 - the C++ exception frame (FS:[0] chain, unwind state 0 for the allocation context) is not translated.
+pub fn fn_00b97550(
+    e: &mut Engine,
+    this: Ptr,
+    index: u32,
+    word: u32,
+    first_source: u32,
+    second_source: u32,
+    fifth: u32,
+    sixth: u32,
+) {
+    with_image_space_context(e, |e| {
+        let block = e.mem.u32(this.addr() + EFFECTS);
+        let effect = e.mem.u32(block.wrapping_add(index.wrapping_mul(4)));
+        image_space_manager_render_effect_ov2(
+            e,
+            this,
+            effect,
+            word,
+            first_source,
+            second_source,
+            fifth,
+            sixth,
+        );
+    });
+}
+
+/// `00b8a7e0` (unnamed, unit `imagespaceshaderparam.cpp`; `thiscall` on `01202410`, no stack
+/// words), `BSTextureManager::ReturnRenderedTexture` (`00b6da10`, `thiscall` on the object at
+/// `011f91a8`, one word) and the Ni free `00aa10f0` (`cdecl`, the block) (engine map).
+const SHADER_PARAM_00B8A7E0: u32 = 0x00b8_a7e0;
+const RETURN_RENDERED_TEXTURE_00B6DA10: u32 = 0x00b6_da10;
+const NI_FREE_00AA10F0: u32 = 0x00aa_10f0;
+
+// Translated from 00b97690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// manager's destructor (`ImageSpaceManager::Initialize`'s reverse). When the byte at +0x1e4
+/// is set: `00b8b2e0`, `00b8c690`, `00b8a7e0` on `01202410`, the byte cleared and the
+/// texture at +0x318 handed back (`00b6da10` on the object at `011f91a8`). Then
+/// `~ImageSpaceTexture` (`00ba3a00`) on +0x204, the `NiPointer`s at +0x200, +0x1f8, +0x1f4 and
+/// +0x1f0 released, the vtable `010b9d24` at +0x4 and the effect block (+0x8) freed through
+/// `00aa10f0`.
+// Translation incomplete: 00b97690 - the C++ exception frame (FS:[0] chain, unwind states 0 to 5 for the members) is not translated.
+pub fn fn_00b97690(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    if e.mem.u8(base + INITIALIZED) != 0 {
+        fn_00b8b2e0(e, this);
+        fn_00b8c690(e, this);
+        e.call(SHADER_PARAM_00B8A7E0, &args![CONSTANT_MAP_01202410]);
+        let texture = e.mem.u32(base + 0x318);
+        e.mem.set_u8(base + INITIALIZED, 0);
+        let manager = e.global::<u32>(OBJECT_011F91A8);
+        e.call(RETURN_RENDERED_TEXTURE_00B6DA10, &args![manager, texture]);
+    }
+    e.call(IMAGE_SPACE_TEXTURE_DESTRUCT_00BA3A00, &args![base + 0x204]);
+    for offset in [0x200u32, 0x1f8, 0x1f4, 0x1f0] {
+        let object = e.mem.u32(base + offset);
+        release_object(e, object);
+    }
+    let block = e.mem.u32(base + EFFECTS);
+    e.mem.set_u32(base + 4, 0x010b_9d24);
+    e.call(NI_FREE_00AA10F0, &args![block]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -6289,6 +7430,49 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b8_bda0, fn_00b8bda0(Ptr) -> u8),
         entry!(0x00b8_d460, fn_00b8d460(Ptr)),
         entry!(0x00b9_2d20, fn_00b92d20(Ptr)),
+        entry!(0x00b8_aea0, fn_00b8aea0(Ptr)),
+        entry!(0x00b8_af10, fn_00b8af10(Ptr, f32)),
+        entry!(0x00b8_af40, fn_00b8af40(Ptr, f32)),
+        entry!(0x00b8_af60, fn_00b8af60(Ptr, f32)),
+        entry!(0x00b8_af90, fn_00b8af90(Ptr, f32)),
+        entry!(0x00b8_afb0, fn_00b8afb0(Ptr, f32)),
+        entry!(0x00b8_afe0, fn_00b8afe0(Ptr, f32)),
+        entry!(0x00b8_b000, fn_00b8b000(Ptr, f32, f32, f32, f32, f32, Ptr)),
+        entry!(0x00b8_b0d0, fn_00b8b0d0(Ptr, f32, u32, f32, f32, f32)),
+        entry!(0x00b8_b130, fn_00b8b130(Ptr, f32, u32, f32, f32, f32)),
+        entry!(0x00b8_b190, image_space_manager_get_depth_rendered_texture(Ptr) -> u32),
+        entry!(0x00b8_b200, fn_00b8b200(Ptr, u32)),
+        entry!(0x00b8_b210, fn_00b8b210(Ptr, u32)),
+        entry!(0x00b8_b2e0, fn_00b8b2e0(Ptr)),
+        entry!(0x00b8_b390, fn_00b8b390(Ptr, u32) -> u8),
+        entry!(0x00b8_b3f0, fn_00b8b3f0(Ptr)),
+        entry!(0x00b8_b440, fn_00b8b440(Ptr, u32)),
+        entry!(0x00b8_b500, fn_00b8b500(Ptr)),
+        entry!(0x00b8_b540, fn_00b8b540(Ptr, Ptr)),
+        entry!(0x00b8_b5c0, fn_00b8b5c0(Ptr, Ptr)),
+        entry!(0x00b8_b610, fn_00b8b610(Ptr, Ptr)),
+        entry!(0x00b8_b690, fn_00b8b690(Ptr, Ptr)),
+        entry!(0x00b8_b6e0, fn_00b8b6e0(Ptr, f32, f32, f32, f32, f32, Ptr)),
+        entry!(0x00b8_b9a0, fn_00b8b9a0(Ptr)),
+        entry!(0x00b8_bfe0, fn_00b8bfe0(Ptr)),
+        entry!(0x00b8_c690, fn_00b8c690(Ptr)),
+        entry!(
+            0x00b8_c830,
+            image_space_manager_render_effect_ov2(Ptr, u32, u32, u32, u32, u32, u32)
+        ),
+        entry!(0x00b8_cad0, fn_00b8cad0(Ptr, u32)),
+        entry!(0x00b8_cb30, fn_00b8cb30(Ptr, u32, u32, Ptr, f32)),
+        entry!(0x00b8_cc20, fn_00b8cc20(Ptr, u32, u32, Ptr, f32)),
+        entry!(0x00b8_ccb0, fn_00b8ccb0(Ptr)),
+        entry!(0x00b8_d020, fn_00b8d020(Ptr)),
+        entry!(0x00b8_f160, fn_00b8f160(Ptr)),
+        entry!(0x00b8_f2f0, fn_00b8f2f0(Ptr)),
+        entry!(0x00b8_f4b0, fn_00b8f4b0(Ptr)),
+        entry!(0x00b9_1f90, fn_00b91f90(Ptr) -> u8),
+        entry!(0x00b9_3420, fn_00b93420(Ptr) -> u8),
+        entry!(0x00b9_3750, fn_00b93750(Ptr) -> u8),
+        entry!(0x00b9_7550, fn_00b97550(Ptr, u32, u32, u32, u32, u32, u32)),
+        entry!(0x00b9_7690, fn_00b97690(Ptr)),
         entry!(0x00b8_bdb0, fn_00b8bdb0(Ptr)),
         entry!(0x00b8_bf10, fn_00b8bf10(Ptr)),
         entry!(0x00b8_c0e0, fn_00b8c0e0(Ptr)),
@@ -10738,5 +11922,1033 @@ mod reload_tests {
                 },
             ],
         );
+    }
+}
+
+#[cfg(test)]
+mod manager_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_inline::{
+        NEW_RENDER_STATES_00E7F5D0, SET_RENDER_STATE_00E7F430,
+    };
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn bits(value: f32) -> u32 {
+        value.to_bits()
+    }
+
+    /// A manager-sized block (0x320 bytes) filled with a marker word.
+    fn manager(e: &mut Engine) -> u32 {
+        let this = e.mem.alloc(0x320);
+        for offset in (0..0x320).step_by(4) {
+            e.mem.set_u32(this + offset, 0xdead_beef);
+        }
+        this
+    }
+
+    fn set_f32(e: &mut Engine, at: u32, value: f32) {
+        e.mem.set_u32(at, value.to_bits());
+    }
+
+    #[test]
+    fn fn_00b8aea0_resets_the_blend_values() {
+        let mut e = Engine::new();
+        let this = manager(&mut e);
+        e.call(0x00b8_aea0, &args![this]);
+        for k in 0..15 {
+            assert_eq!(e.mem.f32(this + 0xb4 + 4 * k), 1.0);
+            assert_eq!(e.mem.u32(this + 0x14c + 4 * k), 0);
+        }
+        for k in 0..12 {
+            assert_eq!(e.mem.f32(this + 0x118 + 4 * k), 1.0);
+            assert_eq!(e.mem.u32(this + 0x1b0 + 4 * k), 0);
+        }
+        assert_eq!(e.mem.f32(this + 0xf8), 1.0);
+        assert_eq!(e.mem.u32(this + 0x190), 0);
+        assert_eq!(e.mem.u32(this + 0xb0), 0xdead_beef);
+        assert_eq!(e.mem.u32(this + 0x1e0), 0xdead_beef);
+    }
+
+    fn check_keep_larger(addr: u32, offset: u32) {
+        let mut e = Engine::new();
+        let this = manager(&mut e);
+        set_f32(&mut e, this + offset, 2.0);
+        e.call(addr, &args![this, bits(1.0)]);
+        assert_eq!(e.mem.f32(this + offset), 2.0);
+        e.call(addr, &args![this, bits(2.0)]);
+        assert_eq!(e.mem.f32(this + offset), 2.0);
+        e.call(addr, &args![this, bits(3.0)]);
+        assert_eq!(e.mem.f32(this + offset), 3.0);
+        // A NaN never compares above.
+        e.call(addr, &args![this, 0x7fc0_0000u32]);
+        assert_eq!(e.mem.f32(this + offset), 3.0);
+    }
+
+    fn check_add(addr: u32, offset: u32) {
+        let mut e = Engine::new();
+        let this = manager(&mut e);
+        set_f32(&mut e, this + offset, 2.5);
+        e.call(addr, &args![this, bits(1.25)]);
+        assert_eq!(e.mem.f32(this + offset), 3.75);
+    }
+
+    #[test]
+    fn fn_00b8af10_keeps_the_larger() {
+        check_keep_larger(0x00b8_af10, 0x25c);
+    }
+
+    #[test]
+    fn fn_00b8af40_adds() {
+        check_add(0x00b8_af40, 0x260);
+    }
+
+    #[test]
+    fn fn_00b8af60_keeps_the_larger() {
+        check_keep_larger(0x00b8_af60, 0x2f0);
+    }
+
+    #[test]
+    fn fn_00b8af90_adds() {
+        check_add(0x00b8_af90, 0x2f4);
+    }
+
+    #[test]
+    fn fn_00b8afb0_keeps_the_larger() {
+        check_keep_larger(0x00b8_afb0, 0x264);
+    }
+
+    #[test]
+    fn fn_00b8afe0_adds() {
+        check_add(0x00b8_afe0, 0x268);
+    }
+
+    #[test]
+    fn fn_00b8b000_takes_the_heavier_values() {
+        let mut e = Engine::new();
+        let this = manager(&mut e);
+        let pair = e.mem.alloc(8);
+        e.mem.set_u32(pair, 0x11);
+        e.mem.set_u32(pair + 4, 0x22);
+        set_f32(&mut e, this + 0x26c, 1.0);
+        let words = |w: f32| {
+            args![
+                this,
+                bits(w),
+                bits(5.0),
+                bits(6.0),
+                bits(7.0),
+                bits(8.0),
+                pair
+            ]
+        };
+        e.call(0x00b8_b000, &words(0.5));
+        assert_eq!(e.mem.f32(this + 0x26c), 1.0);
+        assert_eq!(e.mem.u32(this + 0x270), 0xdead_beef);
+        e.call(0x00b8_b000, &words(1.5));
+        assert_eq!(e.mem.f32(this + 0x26c), 1.5);
+        assert_eq!(e.mem.f32(this + 0x270), 5.0);
+        assert_eq!(e.mem.f32(this + 0x27c), 8.0);
+        assert_eq!(e.mem.u32(this + 0x294), 0x11);
+        assert_eq!(e.mem.u32(this + 0x298), 0x22);
+    }
+
+    #[test]
+    fn fn_00b8b0d0_takes_the_heavier_mode() {
+        let mut e = Engine::new();
+        let this = manager(&mut e);
+        set_f32(&mut e, this + 0x2a4, 1.0);
+        e.call(
+            0x00b8_b0d0,
+            &args![this, bits(0.5), 4u32, bits(5.0), bits(6.0), bits(7.0)],
+        );
+        assert_eq!(e.mem.u32(this + 0x2c4), 0xdead_beef);
+        e.call(
+            0x00b8_b0d0,
+            &args![this, bits(2.0), 4u32, bits(5.0), bits(6.0), bits(7.0)],
+        );
+        assert_eq!(e.mem.f32(this + 0x2a4), 2.0);
+        assert_eq!(e.mem.u8(this + 0x2cc), 1);
+        assert_eq!(e.mem.u32(this + 0x2c4), 1);
+        assert_eq!(e.mem.f32(this + 0x2a8), 6.0);
+        assert_eq!(e.mem.f32(this + 0x2ac), 7.0);
+        assert_eq!(e.mem.f32(this + 0x2b0), 5.0);
+        e.call(
+            0x00b8_b0d0,
+            &args![this, bits(3.0), 2u32, bits(5.0), bits(6.0), bits(7.0)],
+        );
+        assert_eq!(e.mem.u8(this + 0x2cc), 0);
+        assert_eq!(e.mem.u32(this + 0x2c4), 2);
+    }
+
+    #[test]
+    fn fn_00b8b130_adds_the_blur_values() {
+        let mut e = Engine::new();
+        let this = manager(&mut e);
+        for offset in [0x2b4u32, 0x2b8, 0x2bc, 0x2c0] {
+            set_f32(&mut e, this + offset, 1.0);
+        }
+        e.call(
+            0x00b8_b130,
+            &args![this, bits(0.5), 9u32, bits(2.0), bits(3.0), bits(4.0)],
+        );
+        assert_eq!(e.mem.f32(this + 0x2b4), 1.5);
+        assert_eq!(e.mem.u8(this + 0x2cd), 0);
+        assert_eq!(e.mem.u32(this + 0x2c8), 9);
+        assert_eq!(e.mem.f32(this + 0x2b8), 4.0);
+        assert_eq!(e.mem.f32(this + 0x2bc), 5.0);
+        assert_eq!(e.mem.f32(this + 0x2c0), 3.0);
+    }
+
+    #[test]
+    fn get_depth_rendered_texture_borrows_when_empty() {
+        for (held, borrows) in [(0u32, true), (0x77, false)] {
+            let mut e = Engine::new();
+            e.register_double(TEXTURE_GET_00BA3780, move |_, _| held.into_ret());
+            e.register(TEXTURE_BORROW_RENDERED_00BA3840, |_, _| Ret::default());
+            e.register(TEXTURE_GET_RENDERED_00BA3770, |_, _| 0x5150u32.into_ret());
+            e.call_log = Some(vec![]);
+            let this = manager(&mut e);
+            assert_eq!(e.call(0x00b8_b190, &args![this]).u32(), 0x5150);
+            let borrowed = calls(&e, TEXTURE_BORROW_RENDERED_00BA3840);
+            if borrows {
+                assert_eq!(borrowed, vec![vec![this + 0x204, 0x21]]);
+            } else {
+                assert!(borrowed.is_empty());
+            }
+            assert_eq!(
+                calls(&e, TEXTURE_GET_RENDERED_00BA3770),
+                vec![vec![this + 0x204]]
+            );
+        }
+    }
+
+    #[test]
+    fn fn_00b8b200_stores_the_byte() {
+        let mut e = Engine::new();
+        e.map(0x0120_2000, 0x1000);
+        e.call(0x00b8_b200, &args![0x4400u32, 0x1234_5601u32]);
+        assert_eq!(e.global::<u8>(BYTE_SETTING_012023F0), 1);
+    }
+
+    #[test]
+    fn fn_00b8b210_sets_the_mode_weights() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x80);
+        e.mem.set_u32(this + 0x58, 7);
+        for (mode, first, second) in [
+            (0u32, 1.0f32, 1.0f32),
+            (1, 1.0, 0.0),
+            (2, 0.0, 1.0),
+            (3, 0.0, 0.0),
+        ] {
+            e.mem.set_u8(this + 5, 0);
+            e.call(0x00b8_b210, &args![this, mode]);
+            assert_eq!(e.mem.u8(this + 5), 1);
+            assert_eq!(e.mem.u32(this + 0x58), mode);
+            assert_eq!(e.mem.f32(this + 0x70), first);
+            assert_eq!(e.mem.f32(this + 0x74), second);
+        }
+        // The same mode again: nothing.
+        e.mem.set_u8(this + 5, 0);
+        e.call(0x00b8_b210, &args![this, 3u32]);
+        assert_eq!(e.mem.u8(this + 5), 0);
+    }
+
+    /// A manager with an effect block of `size` slots (16-bit size and count words set).
+    fn with_effects(e: &mut Engine, size: u16) -> (u32, u32) {
+        let this = manager(e);
+        let block = e.mem.alloc(4 * 0x74);
+        e.mem.set_u32(this + EFFECTS, block);
+        e.mem.set_u16(this + EFFECTS_SIZE, size);
+        e.mem.set_u16(this + EFFECTS_COUNT, 2);
+        (this, block)
+    }
+
+    /// An effect object whose vtable slots +0, +0xc and +0x18 to +0x28 call the doubles
+    /// 0x0f00_xx00 + slot.
+    fn effect(e: &mut Engine) -> u32 {
+        let vtable = e.mem.alloc(0x40);
+        for slot in (0..0x40).step_by(4) {
+            e.mem.set_u32(vtable + slot, 0x0f00_1000 + slot);
+            e.register(0x0f00_1000 + slot, |_, _| Ret::default());
+        }
+        let object = e.mem.alloc(0xa0);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    #[test]
+    fn fn_00b8b2e0_destroys_every_effect() {
+        let mut e = Engine::new();
+        let (this, block) = with_effects(&mut e, 0x74);
+        let first = effect(&mut e);
+        let last = effect(&mut e);
+        e.mem.set_u32(block + 4 * 3, first);
+        e.mem.set_u32(block + 4 * 0x73, last);
+        e.register(ARRAY_SET_00BA3AA0, |e, a| {
+            assert_eq!(e.mem.u32(a[2]), 0);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00b8_b2e0, &args![this]);
+        assert_eq!(calls(&e, 0x0f00_100c), vec![vec![first], vec![last]]);
+        assert_eq!(calls(&e, 0x0f00_1000), vec![vec![first, 1], vec![last, 1]]);
+        let set: Vec<(u32, u32)> = calls(&e, ARRAY_SET_00BA3AA0)
+            .iter()
+            .map(|c| (c[0], c[1]))
+            .collect();
+        assert_eq!(set, vec![(this + 4, 3), (this + 4, 0x73)]);
+        assert_eq!(e.mem.u32(block + 4 * 3), 0);
+        assert_eq!(e.mem.u32(block + 4 * 0x73), 0);
+        assert_eq!(e.mem.u16(this + EFFECTS_SIZE), 0);
+        assert_eq!(e.mem.u16(this + EFFECTS_COUNT), 0);
+    }
+
+    #[test]
+    fn fn_00b8b390_asks_the_effect() {
+        let mut e = Engine::new();
+        let (this, block) = with_effects(&mut e, 0x74);
+        let object = effect(&mut e);
+        e.register(0x0f00_1018, |_, _| 0x0101u32.into_ret());
+        e.mem.set_u32(block + 8, object);
+        assert_eq!(e.call(0x00b8_b390, &args![this, 2u32]).u32() & 0xff, 1);
+        assert_eq!(e.call(0x00b8_b390, &args![this, 3u32]).u32() & 0xff, 0);
+    }
+
+    #[test]
+    fn fn_00b8b3f0_counts_the_active_effects() {
+        let mut e = Engine::new();
+        e.map(0x011a_d000, 0x1000);
+        let (this, block) = with_effects(&mut e, 0x74);
+        let active = effect(&mut e);
+        e.mem.set_u8(active + 0x70, 1);
+        let idle = effect(&mut e);
+        e.register(0x0f00_1018, |e, a| {
+            u32::from(e.mem.u8(a[0] + 0x70)).into_ret()
+        });
+        e.mem.set_u8(idle + 0x70, 0);
+        e.mem.set_u32(block + 4, active);
+        e.mem.set_u32(block + 4 * 5, active);
+        e.mem.set_u32(block + 4 * 9, idle);
+        // Beyond index 0xc: never asked.
+        e.mem.set_u32(block + 4 * 0xd, active);
+        e.set_global(COUNT_ACTIVE_011AD884, 0u8);
+        e.call(0x00b8_b3f0, &args![this]);
+        assert_eq!(e.mem.u32(this + 0x1ec), u32::MAX);
+        assert_eq!(e.mem.u32(this + 0x1e8), 0);
+        e.set_global(COUNT_ACTIVE_011AD884, 1u8);
+        e.call(0x00b8_b3f0, &args![this]);
+        assert_eq!(e.mem.u32(this + 0x1e8), 2);
+        assert_eq!(e.mem.u32(this + 0x1ec), 5);
+    }
+
+    #[test]
+    fn fn_00b8b440_hands_out_the_parameters() {
+        for flag in [0u32, 1] {
+            let mut e = Engine::new();
+            e.map(0x011a_d000, 0x1000);
+            e.map(0x011f_9000, 0x1000);
+            let (this, block) = with_effects(&mut e, 0x74);
+            let objects: Vec<u32> = (0..4).map(|_| effect(&mut e)).collect();
+            e.mem.set_u32(block, objects[0]);
+            e.mem.set_u32(block + 4, objects[1]);
+            e.mem.set_u32(block + 0x20, objects[2]);
+            e.mem.set_u32(block + 0xc, objects[3]);
+            e.mem.set_u32(this + 0xa8, 0x66);
+            set_f32(&mut e, this + 0x34, 0.25);
+            for (offset, value) in [(0x40u32, 1.0f32), (0x48, 2.0), (0x44, 3.0), (0x1c, 4.0)] {
+                set_f32(&mut e, this + offset, value);
+            }
+            e.set_global(VALUE_011AD87C, 9u32);
+            e.call_log = Some(vec![]);
+            e.call(0x00b8_b440, &args![this, flag]);
+            assert_eq!(
+                calls(&e, 0x0f00_1020),
+                vec![
+                    vec![objects[0], this + 0x50],
+                    vec![objects[1], this + 0x14],
+                    vec![objects[2], this + 0x5c]
+                ]
+            );
+            assert_eq!(
+                calls(&e, 0x0f00_1024),
+                vec![vec![objects[3], this + 0x78, 0x66]]
+            );
+            assert_eq!(calls(&e, 0x0f00_1028), vec![vec![objects[3], this + 0x68]]);
+            if flag == 0 {
+                assert_eq!(e.global::<f32>(VALUE_011AD87C), 0.25);
+                assert_eq!(e.global::<f32>(VALUE_011AD880), 1.0);
+            } else {
+                assert_eq!(e.global::<u32>(VALUE_011AD87C), 9);
+                assert_eq!(e.global::<f32>(VALUE_011AD880), 0.25);
+            }
+            assert_eq!(e.global::<f32>(0x011f_9190), 1.0);
+            assert_eq!(e.global::<f32>(0x011f_918c), 2.0);
+            assert_eq!(e.global::<f32>(0x011f_9188), 3.0);
+            assert_eq!(e.global::<f32>(0x011f_9184), 4.0);
+        }
+    }
+
+    #[test]
+    fn fn_00b8b500_copies_the_first_set_block() {
+        for (late, early, source) in [
+            (0x10u32, 0x20u32, 0x10u32),
+            (0, 0x20, 0x20),
+            (0, 0, DEFAULTS_011FF940),
+        ] {
+            let mut e = Engine::new();
+            e.map(0x0120_0000, 0x3000);
+            e.register(MEMCPY_00EC44D0, |_, _| Ret::default());
+            let this = manager(&mut e);
+            e.mem.set_u32(this + 0xb0, late);
+            e.mem.set_u32(this + 0xac, early);
+            e.set_global(VALUE_01202400, 5u32);
+            e.call_log = Some(vec![]);
+            e.call(0x00b8_b500, &args![this]);
+            assert_eq!(
+                calls(&e, MEMCPY_00EC44D0),
+                vec![vec![this + 0x14, source, 0x98]]
+            );
+            assert_eq!(e.global::<u32>(VALUE_01202400), 0);
+            assert_eq!(e.global::<u32>(VALUE_012003D0), 0);
+        }
+    }
+
+    fn check_weighted(addr: u32, weight: u32, sum: u32) {
+        let mut e = Engine::new();
+        let this = manager(&mut e);
+        set_f32(&mut e, this + weight, 0.25);
+        for k in 0..4 {
+            set_f32(&mut e, this + sum + 4 * k, 1.0);
+        }
+        let color = e.mem.alloc(0x10);
+        for (k, value) in [2.0f32, 4.0, 6.0, 0.5].into_iter().enumerate() {
+            set_f32(&mut e, color + 4 * k as u32, value);
+        }
+        e.call(addr, &args![this, color]);
+        assert_eq!(e.mem.f32(this + weight), 0.5);
+        assert_eq!(e.mem.f32(color), 1.0);
+        assert_eq!(e.mem.f32(color + 4), 2.0);
+        assert_eq!(e.mem.f32(color + 8), 3.0);
+        assert_eq!(e.mem.f32(this + sum), 2.0);
+        assert_eq!(e.mem.f32(this + sum + 4), 3.0);
+        assert_eq!(e.mem.f32(this + sum + 8), 4.0);
+        assert_eq!(e.mem.f32(this + sum + 0xc), 1.5);
+        // A lighter alpha leaves the weight.
+        set_f32(&mut e, color + 0xc, 0.125);
+        e.call(addr, &args![this, color]);
+        assert_eq!(e.mem.f32(this + weight), 0.5);
+    }
+
+    #[test]
+    fn fn_00b8b540_adds_the_weighted_colour() {
+        check_weighted(0x00b8_b540, 0x234, 0x214);
+    }
+
+    #[test]
+    fn fn_00b8b610_adds_the_weighted_colour() {
+        check_weighted(0x00b8_b610, 0x258, 0x238);
+    }
+
+    fn check_add_four(addr: u32, sum: u32) {
+        let mut e = Engine::new();
+        let this = manager(&mut e);
+        let values = e.mem.alloc(0x10);
+        for k in 0..4 {
+            set_f32(&mut e, this + sum + 4 * k, 1.0);
+            set_f32(&mut e, values + 4 * k, (k + 1) as f32);
+        }
+        e.call(addr, &args![this, values]);
+        for k in 0..4 {
+            assert_eq!(e.mem.f32(this + sum + 4 * k), (k + 2) as f32);
+        }
+    }
+
+    #[test]
+    fn fn_00b8b5c0_adds_four() {
+        check_add_four(0x00b8_b5c0, 0x224);
+    }
+
+    #[test]
+    fn fn_00b8b690_adds_four() {
+        check_add_four(0x00b8_b690, 0x248);
+    }
+
+    #[test]
+    fn fn_00b8b6e0_adds_seven() {
+        let mut e = Engine::new();
+        let this = manager(&mut e);
+        for offset in [0x280u32, 0x284, 0x288, 0x28c, 0x290, 0x29c, 0x2a0] {
+            set_f32(&mut e, this + offset, 1.0);
+        }
+        let pair = e.mem.alloc(8);
+        set_f32(&mut e, pair, 6.0);
+        set_f32(&mut e, pair + 4, 7.0);
+        e.call(
+            0x00b8_b6e0,
+            &args![
+                this,
+                bits(1.0),
+                bits(2.0),
+                bits(3.0),
+                bits(4.0),
+                bits(5.0),
+                pair
+            ],
+        );
+        for (offset, value) in [
+            (0x280u32, 2.0f32),
+            (0x284, 3.0),
+            (0x288, 4.0),
+            (0x28c, 5.0),
+            (0x290, 6.0),
+            (0x29c, 7.0),
+            (0x2a0, 8.0),
+        ] {
+            assert_eq!(e.mem.f32(this + offset), value, "+{offset:#x}");
+        }
+    }
+
+    #[test]
+    fn fn_00b8b9a0_resets_the_frame() {
+        let mut e = Engine::new();
+        e.register(MEMSET_00EC61C0, |_, _| Ret::default());
+        let this = manager(&mut e);
+        set_f32(&mut e, this + 0x94, 0.5);
+        set_f32(&mut e, this + 0x88, 2.0);
+        set_f32(&mut e, this + 0x8c, 4.0);
+        set_f32(&mut e, this + 0x90, 6.0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b8_b9a0, &args![this]);
+        assert_eq!(e.mem.f32(this + 0x234), 0.5);
+        assert_eq!(e.mem.f32(this + 0x214), 1.0);
+        assert_eq!(e.mem.f32(this + 0x218), 2.0);
+        assert_eq!(e.mem.f32(this + 0x21c), 3.0);
+        assert_eq!(e.mem.f32(this + 0x220), 0.5);
+        for offset in (0x224..0x2c4).step_by(4).filter(|o| *o != 0x234) {
+            assert_eq!(e.mem.u32(this + offset), 0, "+{offset:#x}");
+        }
+        assert_eq!(e.mem.u32(this + 0x2c4), 3);
+        assert_eq!(e.mem.u32(this + 0x2c8), 3);
+        assert_eq!(e.mem.u16(this + 0x2cc), 0);
+        for offset in [0x2d0u32, 0x2f0, 0x2f4] {
+            assert_eq!(e.mem.u32(this + offset), 0);
+        }
+        assert_eq!(
+            calls(&e, MEMSET_00EC61C0),
+            vec![vec![this + 0xb4, 0, 0x130]]
+        );
+    }
+
+    /// A shader with a pass whose render-state block is made on first use, and the doubles.
+    fn shader_with_pass(e: &mut Engine) -> u32 {
+        e.register(NEW_RENDER_STATES_00E7F5D0, |_, _| 0x4400u32.into_ret());
+        e.register(SET_RENDER_STATE_00E7F430, |_, _| Ret::default());
+        let this = e.mem.alloc(0xd0);
+        let pass = e.mem.alloc(0x60);
+        e.mem.set_u32(this + 0x5c, pass);
+        this
+    }
+
+    fn states(e: &Engine) -> Vec<(u32, u32)> {
+        calls(e, SET_RENDER_STATE_00E7F430)
+            .iter()
+            .map(|c| {
+                assert_eq!((c[0], c[3]), (0x4400, 1));
+                (c[1], c[2])
+            })
+            .collect()
+    }
+
+    fn check_states(addr: u32, expected: &[(u32, u32)]) {
+        let mut e = Engine::new();
+        let this = shader_with_pass(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(addr, &args![this]);
+        assert_eq!(states(&e), expected);
+        assert_eq!(calls(&e, NEW_RENDER_STATES_00E7F5D0).len(), 1);
+    }
+
+    #[test]
+    fn fn_00b8bfe0_sets_four_render_states() {
+        check_states(
+            0x00b8_bfe0,
+            &[(0x34, 1), (0x38, 7), (0x39, 0x80), (0x37, 1)],
+        );
+    }
+
+    #[test]
+    fn fn_00b8f160_sets_two_render_states() {
+        check_states(0x00b8_f160, &[(0xa8, 0), (0xbe, 0xf)]);
+    }
+
+    #[test]
+    fn fn_00b8f2f0_sets_three_render_states() {
+        let mut e = Engine::new();
+        e.map(0x011a_e000, 0x1000);
+        e.set_global(STATE_VALUE_011AE680, 0x55u32);
+        let this = shader_with_pass(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x00b8_f2f0, &args![this]);
+        assert_eq!(states(&e), vec![(0x34, 1), (0x38, 4), (0x39, 0x55)]);
+    }
+
+    #[test]
+    fn fn_00b8f4b0_sets_three_render_states() {
+        check_states(0x00b8_f4b0, &[(0xe, 0), (0x34, 1), (0x38, 3)]);
+    }
+
+    /// A reference-counted object whose vtable slot +4 is the double `0x0f00_2004`, with
+    /// `count` references.
+    fn counted(e: &mut Engine, count: u32) -> u32 {
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable + 4, 0x0f00_2004);
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, vtable);
+        e.mem.set_u32(object + 4, count);
+        object
+    }
+
+    fn reference_doubles(e: &mut Engine) {
+        e.register(0x0f00_2004, |_, _| Ret::default());
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let left = e.mem.u32(a[0]) - 1;
+            e.mem.set_u32(a[0], left);
+            left.into_ret()
+        });
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let count = e.mem.u32(a[0]) + 1;
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+    }
+
+    #[test]
+    fn fn_00b8c690_releases_the_four_pointers() {
+        let mut e = Engine::new();
+        reference_doubles(&mut e);
+        let this = manager(&mut e);
+        let last = counted(&mut e, 1);
+        let shared = counted(&mut e, 2);
+        e.mem.set_u32(this + 0x1f0, last);
+        e.mem.set_u32(this + 0x1f8, shared);
+        e.mem.set_u32(this + 0x1f4, 0);
+        e.mem.set_u32(this + 0x200, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b8_c690, &args![this]);
+        assert_eq!(calls(&e, 0x0f00_2004), vec![vec![last]]);
+        assert_eq!(e.mem.u32(shared + 4), 1);
+        for offset in [0x1f0u32, 0x1f8, 0x1f4, 0x200] {
+            assert_eq!(e.mem.u32(this + offset), 0);
+        }
+        assert_eq!(calls(&e, IMPORT_INTERLOCKED_DECREMENT).len(), 2);
+    }
+
+    #[test]
+    fn render_effect_ov2_runs_the_effect_on_two_textures() {
+        for (effect_set, flag) in [(true, 0u8), (true, 1), (false, 0)] {
+            let mut e = Engine::new();
+            let tls = e.tls();
+            e.mem.set_u32(tls + TLS_CONTEXT, 9);
+            e.register(TEXTURE_SET_00BA37A0, |e, a| {
+                let tls = e.tls();
+                assert_eq!(e.mem.u32(tls + TLS_CONTEXT), CONTEXT_IMAGE_SPACE);
+                e.mem.set_u32(a[0] + 4, a[1]);
+                Ret::default()
+            });
+            e.register(EFFECT_SET_TEXTURE_00BA3CB0, |_, _| Ret::default());
+            e.register(IMAGE_SPACE_TEXTURE_DESTRUCT_00BA3A00, |_, _| Ret::default());
+            let object = effect(&mut e);
+            let this = manager(&mut e);
+            e.mem.set_u8(this + 0x1fc, flag);
+            e.mem.set_u32(this + 0x1f0, 0x1f0);
+            e.mem.set_u32(this + 0x1f8, 0x1f8);
+            let given = if effect_set { object } else { 0 };
+            e.call_log = Some(vec![]);
+            e.call(
+                0x00b8_c830,
+                &args![this, given, 0x22u32, 0x33u32, 0x44u32, 0x55u32, 0x66u32],
+            );
+            assert_eq!(e.mem.u32(tls + TLS_CONTEXT), 9);
+            let set = calls(&e, TEXTURE_SET_00BA37A0);
+            assert_eq!(set.len(), 2);
+            let (first, second) = (set[0][0], set[1][0]);
+            assert_eq!((set[0][1], set[1][1]), (0x33, 0x44));
+            assert_eq!(
+                calls(&e, IMAGE_SPACE_TEXTURE_DESTRUCT_00BA3A00),
+                vec![vec![second], vec![first]]
+            );
+            if effect_set {
+                assert_eq!(
+                    calls(&e, EFFECT_SET_TEXTURE_00BA3CB0),
+                    vec![
+                        vec![object, 0, second, 0],
+                        vec![object, 1, first, 0],
+                        vec![object, 0, 0, 0],
+                        vec![object, 1, 0, 0]
+                    ]
+                );
+                let target = if flag != 0 { 0x1f8 } else { 0x1f0 };
+                assert_eq!(
+                    calls(&e, 0x0f00_1004),
+                    vec![vec![object, target, 0x22, 0x55, 0x66]]
+                );
+            } else {
+                assert!(calls(&e, EFFECT_SET_TEXTURE_00BA3CB0).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn fn_00b8cad0_stores_the_word() {
+        let mut e = Engine::new();
+        let tls = e.tls();
+        e.mem.set_u32(tls + TLS_CONTEXT, 9);
+        let this = manager(&mut e);
+        e.call(0x00b8_cad0, &args![this, 0x77u32]);
+        assert_eq!(e.mem.u32(this + 0xac), 0x77);
+        assert_eq!(e.mem.u32(tls + TLS_CONTEXT), 9);
+    }
+
+    #[test]
+    fn fn_00b8cb30_blends_the_picked_value() {
+        for (kind, offset) in [(0u32, 0x50u32), (1, 0x14), (3, 0x78)] {
+            let mut e = Engine::new();
+            let this = manager(&mut e);
+            let field = this + offset + 4 * 2;
+            set_f32(&mut e, field, 2.0);
+            let values = e.mem.alloc(8);
+            set_f32(&mut e, values, 3.0);
+            set_f32(&mut e, values + 4, 4.0);
+            let tls = e.tls();
+            let before = e.mem.u32(tls + TLS_CONTEXT);
+            e.call(0x00b8_cb30, &args![this, kind, 2u32, values, bits(0.5)]);
+            // r = 2 * 3 + 4 = 10; 2 - (2 - 10) * 0.5 = 6.
+            assert_eq!(e.mem.f32(field), 6.0, "kind {kind}");
+            assert_eq!(e.mem.u32(tls + TLS_CONTEXT), before);
+        }
+    }
+
+    #[test]
+    fn fn_00b8cc20_adds_scaled_values_to_both_blocks() {
+        for (kind, offset) in [
+            (0u32, Some(0x3cu32)),
+            (1, Some(0)),
+            (3, Some(0x64)),
+            (2, None),
+        ] {
+            let mut e = Engine::new();
+            let this = manager(&mut e);
+            let values = e.mem.alloc(8);
+            set_f32(&mut e, values, 2.0);
+            set_f32(&mut e, values + 4, 4.0);
+            let start = this + 0xb4 + 4;
+            for at in [0x3cu32, 0, 0x64] {
+                set_f32(&mut e, start + at, 1.0);
+                set_f32(&mut e, start + 0x98 + at, 1.0);
+            }
+            e.call(0x00b8_cc20, &args![this, kind, 1u32, values, bits(0.5)]);
+            for at in [0x3cu32, 0, 0x64] {
+                let (a, b) = if offset == Some(at) {
+                    (2.0, 3.0)
+                } else {
+                    (1.0, 1.0)
+                };
+                assert_eq!(e.mem.f32(start + at), a, "kind {kind}");
+                assert_eq!(e.mem.f32(start + 0x98 + at), b, "kind {kind}");
+            }
+        }
+    }
+
+    #[test]
+    fn fn_00b8ccb0_settles_the_frame() {
+        let mut e = Engine::new();
+        let this = manager(&mut e);
+        for offset in (0x14..0xa8).step_by(4) {
+            set_f32(&mut e, this + offset, 1.0);
+            set_f32(&mut e, this + offset + 0xa0, 2.0);
+            set_f32(&mut e, this + offset + 0x138, 3.0);
+        }
+        // The colour sums and weights 00b8b540/00b8b610 use.
+        for offset in [0x214u32, 0x218, 0x21c, 0x220, 0x238, 0x23c, 0x240, 0x244] {
+            set_f32(&mut e, this + offset, 0.0);
+        }
+        for offset in [0x224u32, 0x228, 0x22c, 0x248, 0x24c, 0x250] {
+            set_f32(&mut e, this + offset, 1.0);
+        }
+        set_f32(&mut e, this + 0x230, 0.5);
+        set_f32(&mut e, this + 0x254, 0.5);
+        set_f32(&mut e, this + 0x234, 0.0);
+        set_f32(&mut e, this + 0x258, 1.0);
+        for (field, source) in [
+            (0x25cu32, 0x260u32),
+            (0x264, 0x268),
+            (0x26c, 0x280),
+            (0x2a4, 0x2b4),
+            (0x2f0, 0x2f4),
+        ] {
+            set_f32(&mut e, this + field, 1.0);
+            set_f32(&mut e, this + source, 2.0);
+        }
+        set_f32(&mut e, this + 0x264, 3.0);
+        e.mem.set_u32(this + 0x2c8, 5);
+        e.mem.set_u32(this + 0x29c, 0x11);
+        e.mem.set_u32(this + 0x2a0, 0x22);
+        e.call(0x00b8_ccb0, &args![this]);
+        // 1 - (1 - (1 * 2 + 3)) = 5.
+        assert_eq!(e.mem.f32(this + 0x14), 5.0);
+        assert_eq!(e.mem.f32(this + 0xa4), 5.0);
+        assert_eq!(e.mem.f32(this + 0x234), 0.5);
+        assert_eq!(e.mem.f32(this + 0x214), 0.5);
+        assert_eq!(e.mem.f32(this + 0x258), 1.0);
+        assert_eq!(e.mem.f32(this + 0x25c), 2.0);
+        assert_eq!(e.mem.f32(this + 0x264), 3.0);
+        assert_eq!(e.mem.f32(this + 0x26c), 2.0);
+        assert_eq!(e.mem.u32(this + 0x294), 0x11);
+        assert_eq!(e.mem.u32(this + 0x298), 0x22);
+        assert_eq!(e.mem.f32(this + 0x2a4), 2.0);
+        assert_eq!(e.mem.u8(this + 0x2cc), 1);
+        assert_eq!(e.mem.u32(this + 0x2c4), 2);
+        assert_eq!(e.mem.u32(this + 0x2b0), 0);
+        assert_eq!(e.mem.f32(this + 0x2f0), 2.0);
+    }
+
+    #[test]
+    fn fn_00b8d020_hands_the_values_to_the_effects() {
+        for flag in [0u8, 1] {
+            let mut e = Engine::new();
+            e.map(0x0120_0000, 0x3000);
+            e.register(SET_UP_00B8BC80, |_, _| Ret::default());
+            e.register(SET_UP_00B8B270, |_, _| Ret::default());
+            let (this, block) = with_effects(&mut e, 0x74);
+            let effects: Vec<u32> = (0..13).map(|_| e.mem.alloc(0xa0)).collect();
+            for (index, object) in effects.iter().enumerate() {
+                e.mem.set_u32(block + 4 * index as u32, *object);
+            }
+            for offset in [0x214u32, 0x218, 0x21c, 0x238, 0x23c, 0x240] {
+                set_f32(&mut e, this + offset, 2.0);
+            }
+            set_f32(&mut e, this + 0x220, 2.0);
+            set_f32(&mut e, this + 0x244, 0.0);
+            set_f32(&mut e, this + 0x234, 0.75);
+            set_f32(&mut e, this + 0x258, 0.25);
+            for offset in (0x25cu32..0x2f8).step_by(4) {
+                set_f32(&mut e, this + offset, offset as f32);
+            }
+            e.mem.set_u32(this + 0x2c4, 3);
+            e.mem.set_u8(this + 0x2cc, flag);
+            e.mem.set_u32(this + 0x2ec, 7);
+            let five = effects[5];
+            set_f32(&mut e, five + 0x9c, 1000.0);
+            e.call_log = Some(vec![]);
+            e.call(0x00b8_d020, &args![this]);
+            // The sums divided by 2.0 at +0x220, the second weight 0.0 so no division.
+            assert_eq!(e.mem.f32(this + 0x214), 1.0);
+            assert_eq!(e.mem.f32(this + 0x238), 2.0);
+            assert_eq!(e.mem.f32(this + 0x88), 1.0);
+            assert_eq!(e.mem.f32(this + 0x94), 0.75);
+            assert_eq!(e.mem.f32(this + 0x220), 0.75);
+            assert_eq!(e.mem.f32(this + 0xa4), 0.25);
+            assert_eq!(e.global::<f32>(VALUE_01202400), 612.0);
+            assert_eq!(e.global::<f32>(VALUE_012003D0), 604.0);
+            let six = effects[6];
+            assert_eq!(e.mem.f32(six + 0x58), 620.0);
+            assert_eq!(e.mem.f32(six + 0x68), 636.0);
+            let four = effects[4];
+            assert_eq!(e.mem.f32(four + 0x70), 676.0);
+            assert_eq!(e.mem.f32(four + 0x78), 688.0);
+            assert_eq!(e.mem.u32(four + 0x74), 3);
+            assert_eq!(e.mem.u8(four + 5), 1);
+            let ran_alternative = !calls(&e, SET_UP_00B8BC80).is_empty();
+            assert_eq!(ran_alternative, flag != 0);
+            assert_eq!(
+                calls(&e, SET_UP_00B8B270).len(),
+                if flag != 0 { 0 } else { 4 }
+            );
+            // y = 0x2dc, x = 1000 (larger): m = x.
+            let y = 732.0;
+            let z = 736.0;
+            assert_eq!(e.mem.f32(five + 0x84), y);
+            assert_eq!(e.mem.f32(five + 0x9c), z);
+            assert_eq!(e.mem.f32(five + 0x7c), y - z);
+            assert_eq!(e.mem.f32(five + 0x80), y + z);
+            assert_eq!(e.mem.u32(five + 0x58), 7);
+            assert_eq!(e.mem.f32(five + 0x8c), 720.0);
+            assert_eq!(e.mem.f32(five + 0x94), 728.0);
+            assert_eq!(e.mem.f32(effects[12] + 0x58), 752.0);
+        }
+    }
+
+    /// The doubles of the pass loader's callees; the stage double makes stage objects with a
+    /// count of 1.
+    fn loader(e: &mut Engine, count: u16) -> u32 {
+        reference_doubles(e);
+        e.register(NEW_PASS_00E804D0, |e, a| {
+            let pass = e.mem.alloc(0x60);
+            e.mem.set_u32(pass + 0x14, 0x14);
+            e.mem.set_u32(a[0], pass);
+            Ret::default()
+        });
+        e.register(CREATE_NEW_STAGE_00E7EDF0, |e, a| {
+            let stage = e.mem.alloc(0x70);
+            e.mem.set_u32(stage + 0x60, 1);
+            e.mem.set_u32(a[0], stage);
+            Ret::default()
+        });
+        e.register(SETUP_DEFAULT_STAGE_00BE0CF0, |_, _| Ret::default());
+        e.register(PASS_SET_STAGE_00E802B0, |_, _| Ret::default());
+        e.register(0x00e7_ecd0, |_, _| Ret::default());
+        e.register(NEW_RENDER_STATES_00E7F5D0, |_, _| 0x4400u32.into_ret());
+        e.register(SET_RENDER_STATE_00E7F430, |_, _| Ret::default());
+        e.register(0x0f00_3150, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x160);
+        e.mem.set_u32(vtable + 0x150, 0x0f00_3150);
+        let this = e.mem.alloc(0xd0);
+        e.mem.set_u32(this, vtable);
+        e.mem.set_u16(this + 0x9c, count);
+        let vertex = counted(e, 1);
+        let pixel = counted(e, 1);
+        e.mem.set_u32(this + 0xc4, vertex);
+        e.mem.set_u32(this + 0xc8, pixel);
+        this
+    }
+
+    fn check_loader(addr: u32, setups: &[u32], keeps: bool) {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.set_global(LAST_PASS_0126F74C, 0x99u32);
+        let this = loader(&mut e, setups.len() as u16);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(addr, &args![this]).u32() & 0xff, 1);
+        let pass = e.mem.u32(this + 0x5c);
+        let setup: Vec<(u32, u32)> = calls(&e, SETUP_DEFAULT_STAGE_00BE0CF0)
+            .iter()
+            .map(|c| (c[1], c[2]))
+            .collect();
+        let expected: Vec<(u32, u32)> = setups
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i as u32, *s))
+            .collect();
+        assert_eq!(setup, expected);
+        assert_eq!(calls(&e, PASS_SET_STAGE_00E802B0).len(), setups.len());
+        assert_eq!(
+            states(&e),
+            vec![(7, 0), (0xe, 0), (0x1b, 0), (0xf, 0), (0xa8, 0xf)]
+        );
+        assert_eq!(calls(&e, 0x0f00_3150), vec![vec![this]]);
+        assert_eq!(e.mem.u32(pass + 0x5c), e.mem.u32(this + 0xc4));
+        assert_eq!(e.mem.u32(pass + 0x44), e.mem.u32(this + 0xc8));
+        assert_eq!(e.mem.u32(e.mem.u32(this + 0xc4) + 4), 2);
+        let kept = e.global::<u32>(LAST_PASS_0126F74C);
+        assert_eq!(kept, if keeps { pass } else { 0x99 });
+        // Only the last stage is released (made with one reference: deleted).
+        let released = calls(&e, 0x00e7_ecd0).len();
+        assert_eq!(released, usize::from(!setups.is_empty()));
+    }
+
+    #[test]
+    fn fn_00b91f90_loads_stages_and_keeps_the_pass() {
+        check_loader(0x00b9_1f90, &[1, 1, 1], true);
+        check_loader(0x00b9_1f90, &[], true);
+    }
+
+    #[test]
+    fn fn_00b93420_loads_stages() {
+        check_loader(0x00b9_3420, &[1, 1], false);
+    }
+
+    #[test]
+    fn fn_00b93750_sets_up_the_last_stage_apart() {
+        check_loader(0x00b9_3750, &[3, 3, 1], false);
+        check_loader(0x00b9_3750, &[1], false);
+    }
+
+    #[test]
+    fn fn_00b97550_renders_the_indexed_effect() {
+        let mut e = Engine::new();
+        let tls = e.tls();
+        e.mem.set_u32(tls + TLS_CONTEXT, 9);
+        e.register(TEXTURE_SET_00BA37A0, |_, _| Ret::default());
+        e.register(EFFECT_SET_TEXTURE_00BA3CB0, |_, _| Ret::default());
+        e.register(IMAGE_SPACE_TEXTURE_DESTRUCT_00BA3A00, |_, _| Ret::default());
+        let (this, block) = with_effects(&mut e, 0x74);
+        let object = effect(&mut e);
+        e.mem.set_u32(block + 4 * 7, object);
+        e.mem.set_u8(this + 0x1fc, 0);
+        e.mem.set_u32(this + 0x1f0, 0x1f0);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x00b9_7550,
+            &args![this, 7u32, 0x22u32, 0x33u32, 0x44u32, 0x55u32, 0x66u32],
+        );
+        assert_eq!(
+            calls(&e, 0x0f00_1004),
+            vec![vec![object, 0x1f0, 0x22, 0x55, 0x66]]
+        );
+        let set = calls(&e, TEXTURE_SET_00BA37A0);
+        assert_eq!((set[0][1], set[1][1]), (0x33, 0x44));
+        assert_eq!(e.mem.u32(tls + TLS_CONTEXT), 9);
+    }
+
+    #[test]
+    fn fn_00b97690_tears_the_manager_down() {
+        for initialized in [1u8, 0] {
+            let mut e = Engine::new();
+            e.map(0x011f_9000, 0x1000);
+            reference_doubles(&mut e);
+            e.set_global(OBJECT_011F91A8, 0x4100u32);
+            for addr in [
+                ARRAY_SET_00BA3AA0,
+                SHADER_PARAM_00B8A7E0,
+                RETURN_RENDERED_TEXTURE_00B6DA10,
+                IMAGE_SPACE_TEXTURE_DESTRUCT_00BA3A00,
+                NI_FREE_00AA10F0,
+            ] {
+                e.register(addr, |_, _| Ret::default());
+            }
+            let (this, block) = with_effects(&mut e, 0);
+            e.mem.set_u8(this + INITIALIZED, initialized);
+            e.mem.set_u32(this + 0x318, 0x318);
+            let held = counted(&mut e, 1);
+            for offset in [0x1f0u32, 0x1f4, 0x1f8, 0x200] {
+                e.mem.set_u32(this + offset, 0);
+            }
+            e.mem.set_u32(this + 0x1f4, held);
+            e.call_log = Some(vec![]);
+            e.call(0x00b9_7690, &args![this]);
+            if initialized != 0 {
+                assert_eq!(
+                    calls(&e, SHADER_PARAM_00B8A7E0),
+                    vec![vec![CONSTANT_MAP_01202410]]
+                );
+                assert_eq!(
+                    calls(&e, RETURN_RENDERED_TEXTURE_00B6DA10),
+                    vec![vec![0x4100, 0x318]]
+                );
+                assert_eq!(e.mem.u8(this + INITIALIZED), 0);
+                // 00b8c690 cleared the pointers before the destructor's own releases.
+                assert_eq!(calls(&e, 0x0f00_2004), vec![vec![held]]);
+            } else {
+                assert!(calls(&e, SHADER_PARAM_00B8A7E0).is_empty());
+                assert_eq!(calls(&e, 0x0f00_2004), vec![vec![held]]);
+                assert_eq!(e.mem.u32(this + 0x1f4), held);
+            }
+            assert_eq!(
+                calls(&e, IMAGE_SPACE_TEXTURE_DESTRUCT_00BA3A00),
+                vec![vec![this + 0x204]]
+            );
+            assert_eq!(e.mem.u32(this + 4), 0x010b_9d24);
+            assert_eq!(calls(&e, NI_FREE_00AA10F0), vec![vec![block]]);
+        }
     }
 }
