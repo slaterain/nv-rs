@@ -1924,9 +1924,315 @@ fn setup_frustum_main(e: &mut Engine, this: Ptr<ShadowSceneLight>, index: u32) {
     });
 }
 
+/// `00b9c020`'s callees: the `NiCullingProcess`-like local's constructor (`00a69400`, `RET
+/// 4`), its frustum set-up from a camera's frustum (`00a694a0`, `RET 4`; it fills the six
+/// planes and the active mask at +0x2c of the local from the camera at +0xc) and its
+/// destructor (`00a693e0`).
+const CULLER_CONSTRUCT_00A69400: u32 = 0x00a6_9400;
+const CULLER_SET_FRUSTUM_00A694A0: u32 = 0x00a6_94a0;
+const CULLER_DESTROY_00A693E0: u32 = 0x00a6_93e0;
+/// The frustum's edges as pairs of its five points (the camera position, then the four
+/// far corners), as the code's byte table builds them.
+const FRUSTUM_EDGES: [(usize, usize); 8] = [
+    (0, 1),
+    (0, 2),
+    (0, 3),
+    (0, 4),
+    (1, 2),
+    (1, 3),
+    (2, 4),
+    (3, 4),
+];
+
+/// A product stored as a `float` (`FMUL` then `FSTP dword`).
+fn mul32(a: f64, b: f64) -> u32 {
+    x87_store32(x87_mul(a, b))
+}
+
+/// A sum or difference of two `float`s stored as a `float`.
+fn add32(a: u32, b: u32) -> u32 {
+    x87_store32(x87_add(x87_load32(a), x87_m32(b)))
+}
+
+fn sub32(a: u32, b: u32) -> u32 {
+    x87_store32(x87_sub(x87_load32(a), x87_m32(b)))
+}
+
+/// The five points of a camera's view volume `00b9c020` builds, in the exe's order of
+/// operations (every product and sum stored as a `float`): the world translation (+0x8c,
+/// copied as words) and the four far corners `t + f*r0 +/- f*u*r1 +/- f*s*r2`, `r0..r2`
+/// being the rotation's columns (+0x68 ... +0x88, read as rows of three), `f` the far
+/// distance (+0xf0), `u` the frustum's +0xe4 and `s` its +0xe0.
+fn camera_points(e: &mut Engine, camera: u32) -> [[u32; 3]; 5] {
+    let m = |e: &Engine, offset: u32| x87_quiet_bits(e.mem.u32(camera.wrapping_add(offset)));
+    let p = [
+        e.mem.u32(camera.wrapping_add(0x8c)),
+        e.mem.u32(camera.wrapping_add(0x90)),
+        e.mem.u32(camera.wrapping_add(0x94)),
+    ];
+    let up = x87_load32(m(e, 0xe4));
+    let side = x87_load32(m(e, 0xe0));
+    let far = x87_load32(m(e, 0xf0));
+    let l = x87_load32;
+    // `FLD a; FLD u; FLD ST0; FMULP ST2` (a * u), `FMUL ST1` (b * u), `FMUL dword` (u * c).
+    let up_a = mul32(l(m(e, 0x6c)), up);
+    let up_b = mul32(l(m(e, 0x78)), up);
+    let up_c = mul32(up, x87_m32(m(e, 0x84)));
+    let side_a = mul32(l(m(e, 0x70)), side);
+    let side_b = mul32(l(m(e, 0x7c)), side);
+    let side_c = mul32(side, x87_m32(m(e, 0x88)));
+    // Each scaled by the far distance (`FMUL ST(i)` with it on the stack).
+    let c1 = mul32(l(side_a), far);
+    let c2 = mul32(l(side_b), far);
+    let c3 = mul32(l(side_c), far);
+    let c4 = mul32(l(up_a), far);
+    let c5 = mul32(l(up_b), far);
+    let c6 = mul32(l(up_c), far);
+    let c7 = mul32(l(m(e, 0x68)), far);
+    let c8 = mul32(l(m(e, 0x74)), far);
+    // `FMULP ST7`: far * value.
+    let c9 = mul32(far, x87_load32(m(e, 0x80)));
+    // The base of every corner: `c7 + x`, `y + c8`, `z + c9`.
+    let b = [
+        add32(c7, p[0]),
+        x87_store32(x87_add(x87_load32(p[1]), x87_m32(c8))),
+        x87_store32(x87_add(x87_load32(p[2]), x87_m32(c9))),
+    ];
+    let corner = |up_sign: bool, side_sign: bool| {
+        let step = |value: u32, delta: u32, plus: bool| {
+            if plus {
+                add32(value, delta)
+            } else {
+                sub32(value, delta)
+            }
+        };
+        let u = [
+            step(b[0], c4, up_sign),
+            step(b[1], c5, up_sign),
+            step(b[2], c6, up_sign),
+        ];
+        [
+            step(u[0], c1, side_sign),
+            step(u[1], c2, side_sign),
+            step(u[2], c3, side_sign),
+        ]
+    };
+    [
+        p,
+        corner(true, true),
+        corner(true, false),
+        corner(false, true),
+        corner(false, false),
+    ]
+}
+
+/// A plane of a `NiFrustumPlanes`-sized array in memory: its normal and constant words.
+fn plane_words(e: &Engine, planes: u32, index: u32) -> [u32; 4] {
+    let plane = planes + index * 0x10;
+    [
+        e.mem.u32(plane),
+        e.mem.u32(plane + 4),
+        e.mem.u32(plane + 8),
+        e.mem.u32(plane + 0xc),
+    ]
+}
+
+/// The signed distance of a point from a plane as `00b9c020` computes it for the inside
+/// test: `((n.x * p.x + n.y * p.y) + p.z * n.z) - d`, stored as a `float`.
+fn point_distance(plane: [u32; 4], point: [u32; 3]) -> u32 {
+    let x = x87_mul(x87_load32(plane[0]), x87_m32(point[0]));
+    let y = x87_mul(x87_load32(plane[1]), x87_m32(point[1]));
+    let z = x87_mul(x87_load32(point[2]), x87_m32(plane[2]));
+    x87_store32(x87_sub(x87_add(x87_add(x, y), z), x87_m32(plane[3])))
+}
+
+/// `00b9c020`'s side of a point for the edge test: 2 behind the plane, 1 in front, 0 on it
+/// or unordered (`FCOM` with 0.0: `TEST AH,5; JP` then `TEST AH,0x41; JNZ`).
+fn side_of(distance: u32) -> u32 {
+    let ah = x87_compare(x87_load32(distance), 0.0);
+    if !parity(ah, 0x05) {
+        2
+    } else if ah & 0x41 != 0 {
+        0
+    } else {
+        1
+    }
+}
+
+// Translated from 00b9c020 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b9c020 - the C++ exception frame (FS:[0] chain, unwind state 0 for the culling local) and the /GS cookie check (00ec408c) are not translated.
+/// Unnamed (`thiscall` on a `ShadowSceneLight`, which it does not read; `RET 8`: two
+/// cameras): whether the two cameras' view volumes intersect. Each camera's five points
+/// (position and far corners, `camera_points`) are built and each camera's six frustum
+/// planes taken from a local culler (`00a69400`, `00a694a0` on the camera's frustum +0xdc,
+/// the planes copied out of the culler's +0x2c; the local plane arrays built by the
+/// `NiPlane` constructor). True when a point of one camera lies strictly inside all planes
+/// of the other; or, for an edge of one camera's volume (`FRUSTUM_EDGES`), when both ends
+/// lie on a plane of the other; or when an edge crosses a plane at a parameter `t` in
+/// [0, 1] (`t = ((d n - P) . n) / ((Q - P) . n)`, every step as the exe stores it) and the
+/// crossing point is not behind any other plane. The culler is destroyed on every path.
+pub fn fn_00b9c020(e: &mut Engine, _this: Ptr<ShadowSceneLight>, first: Ptr, second: Ptr) -> bool {
+    e.with_stack(0x2c0, |e, frame| {
+        let frame = frame.addr();
+        let planes = frame + 0xdc;
+        let culler = frame + 0x144;
+        let first_planes = frame + 0x1d4;
+        let second_planes = frame + 0x23c;
+        for array in [first_planes, second_planes] {
+            for index in 0..6u32 {
+                e.call(NI_PLANE_CONSTRUCT, &args![array + index * 0x10]);
+            }
+            e.mem.set_u32(array + 0x60, 0x3f);
+        }
+        let first_points = camera_points(e, first.addr());
+        let second_points = camera_points(e, second.addr());
+        e.call(CULLER_CONSTRUCT_00A69400, &args![culler, 0u32]);
+        for (camera, array) in [(first.addr(), first_planes), (second.addr(), second_planes)] {
+            e.mem.set_u32(culler + 0xc, camera);
+            e.call(
+                CULLER_SET_FRUSTUM_00A694A0,
+                &args![culler, camera.wrapping_add(0xdc)],
+            );
+            for word in 0..0x19u32 {
+                let value = e.mem.u32(culler + 0x2c + 4 * word);
+                e.mem.set_u32(array + 4 * word, value);
+            }
+        }
+        for index in 0..6u32 {
+            e.call(NI_PLANE_CONSTRUCT, &args![planes + index * 0x10]);
+        }
+        e.mem.set_u32(planes + 0x60, 0x3f);
+        // Camera 0's points against camera 1's planes, then the other way round.
+        let select = |e: &mut Engine, camera: usize| {
+            let source = if camera == 0 {
+                second_planes
+            } else {
+                first_planes
+            };
+            for word in 0..0x19u32 {
+                let value = e.mem.u32(source + 4 * word);
+                e.mem.set_u32(planes + 4 * word, value);
+            }
+            if camera == 0 {
+                first_points
+            } else {
+                second_points
+            }
+        };
+        let result = 'test: {
+            for camera in 0..2 {
+                let points = select(e, camera);
+                for point in points {
+                    let inside = (0..6u32).all(|index| {
+                        let distance = point_distance(plane_words(e, planes, index), point);
+                        // `FCOM`/`TEST AH,5; JNP` (below 0: out), then `FCOMP`/`TEST
+                        // AH,0x41; JNZ` (0 or unordered: out).
+                        let ah = x87_compare(x87_load32(distance), 0.0);
+                        parity(ah, 0x05) && ah & 0x41 == 0
+                    });
+                    if inside {
+                        break 'test true;
+                    }
+                }
+            }
+            for camera in 0..2 {
+                let points = select(e, camera);
+                for (from, to) in FRUSTUM_EDGES {
+                    let start = points[from];
+                    let end = points[to];
+                    for index in 0..6u32 {
+                        let plane = plane_words(e, planes, index);
+                        let side_start = side_of(point_distance_edge(plane, start));
+                        let side_end = side_of(point_distance_edge(plane, end));
+                        if side_start == side_end {
+                            if side_start == 0 {
+                                break 'test true;
+                            }
+                            continue;
+                        }
+                        if edge_crosses_inside(e, planes, index, plane, start, end) {
+                            break 'test true;
+                        }
+                    }
+                }
+            }
+            false
+        };
+        e.call(CULLER_DESTROY_00A693E0, &args![culler]);
+        result
+    })
+}
+
+/// The edge test's distance of a point from a plane: `((p.x * n.x + n.y * p.y) + p.z *
+/// n.z) - d` (the point's coordinates on the x87 stack), stored as a `float`.
+fn point_distance_edge(plane: [u32; 4], point: [u32; 3]) -> u32 {
+    let x = x87_mul(x87_load32(point[0]), x87_m32(plane[0]));
+    let y = x87_mul(x87_load32(plane[1]), x87_load32(point[1]));
+    let z = x87_mul(x87_load32(point[2]), x87_m32(plane[2]));
+    x87_store32(x87_sub(x87_add(x87_add(x, y), z), x87_m32(plane[3])))
+}
+
+/// An edge from `start` to `end` crossing plane `index`: the crossing parameter and point
+/// as the exe computes them (each `FSTP dword` rounding), and whether the point, with `t` in
+/// [0, 1], is on or in front of every other plane (`FCOM dword`/`TEST AH,0x41; JZ`: only a
+/// negative distance rejects it).
+fn edge_crosses_inside(
+    e: &Engine,
+    planes: u32,
+    index: u32,
+    plane: [u32; 4],
+    start: [u32; 3],
+    end: [u32; 3],
+) -> bool {
+    let [nx, ny, nz, d] = plane;
+    let l = x87_load32;
+    let d_nx = mul32(l(nx), l(d));
+    let d_ny = mul32(l(d), l(ny));
+    let d_nz = mul32(l(d), l(nz));
+    let a = x87_store32(x87_sub(l(d_nx), l(start[0])));
+    let b = x87_store32(x87_sub(l(d_ny), l(start[1])));
+    let c = x87_store32(x87_sub(l(d_nz), l(start[2])));
+    // `FSUBRP ST6`: end - start.
+    let dx = x87_store32(x87_sub(l(end[0]), l(start[0])));
+    let dy = x87_store32(x87_sub(l(end[1]), l(start[1])));
+    let dz = x87_store32(x87_sub(l(end[2]), l(start[2])));
+    let numerator = x87_store32(x87_add(
+        x87_add(x87_mul(l(b), l(ny)), x87_mul(l(a), l(nx))),
+        x87_mul(l(c), l(nz)),
+    ));
+    let denominator = x87_store32(x87_add(
+        x87_add(x87_mul(l(nx), l(dx)), x87_mul(l(ny), l(dy))),
+        x87_mul(l(nz), x87_m32(dz)),
+    ));
+    let t = x87_store32(x87_div(l(numerator), l(denominator)));
+    let point_x = x87_store32(x87_add(l(mul32(l(dx), l(t))), l(start[0])));
+    let point_y = x87_store32(x87_add(l(mul32(l(dy), l(t))), l(start[1])));
+    let point_z = x87_store32(x87_add(l(mul32(l(dz), l(t))), l(start[2])));
+    // `FLDZ; FCOM ST2; TEST AH,0x41; JP`: on only for 0 below or equal to t.
+    if parity(x87_compare(0.0, l(t)), 0x41) {
+        return false;
+    }
+    // `FLD1; FCOMP ST3; TEST AH,1; JNZ`: off when 1 is below t or unordered.
+    if x87_compare(1.0, l(t)) & 0x01 != 0 {
+        return false;
+    }
+    (0..6u32).filter(|&other| other != index).all(|other| {
+        let [ox, oy, oz, od] = plane_words(e, planes, other);
+        let x = x87_mul(l(ox), x87_m32(point_x));
+        let y = x87_mul(l(oy), x87_m32(point_y));
+        let z = x87_mul(l(point_z), x87_m32(oz));
+        let distance = x87_store32(x87_sub(x87_add(x87_add(x, y), z), x87_m32(od)));
+        x87_compare(0.0, x87_m32(distance)) & 0x41 != 0
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00b9_c020,
+            fn_00b9c020(Ptr<ShadowSceneLight>, Ptr, Ptr) -> bool
+        ),
         entry!(0x00b9_e7c0, fn_00b9e7c0(Ptr<NiTPointerList>, Ptr) -> Ptr),
         entry!(
             0x00b9_dda0,
@@ -3090,5 +3396,213 @@ mod setup_frustum_tests {
         );
         // The accumulator holds the light (00b9cfd0).
         assert_eq!(e.mem.u32(accumulator + 0x1a0), this.addr());
+    }
+}
+
+#[cfg(test)]
+mod camera_test_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn set(e: &mut Engine, at: u32, value: f32) {
+        e.mem.set_u32(at, value.to_bits());
+    }
+
+    /// A camera with an identity rotation, its translation, far distance, `+0xe0` and
+    /// `+0xe4`, and the six planes (normal, constant) the culler double hands out for it
+    /// (kept at its +0x100).
+    fn camera(e: &mut Engine, position: [f32; 3], far: f32, planes: [[f32; 4]; 6]) -> u32 {
+        let camera = e.mem.alloc(0x200);
+        for (index, value) in [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+            .into_iter()
+            .enumerate()
+        {
+            set(e, camera + 0x68 + 4 * index as u32, value);
+        }
+        for (index, value) in position.into_iter().enumerate() {
+            set(e, camera + 0x8c + 4 * index as u32, value);
+        }
+        set(e, camera + 0xe0, 0.5);
+        set(e, camera + 0xe4, 0.25);
+        set(e, camera + 0xf0, far);
+        for (index, plane) in planes.into_iter().enumerate() {
+            for (word, value) in plane.into_iter().enumerate() {
+                set(
+                    e,
+                    camera + 0x100 + 0x10 * index as u32 + 4 * word as u32,
+                    value,
+                );
+            }
+        }
+        e.mem.set_u32(camera + 0x160, 0x3f);
+        camera
+    }
+
+    /// The inward planes of a box.
+    fn boxed(x: [f32; 2], y: [f32; 2], z: [f32; 2]) -> [[f32; 4]; 6] {
+        [
+            [1.0, 0.0, 0.0, x[0]],
+            [-1.0, 0.0, 0.0, -x[1]],
+            [0.0, 1.0, 0.0, y[0]],
+            [0.0, -1.0, 0.0, -y[1]],
+            [0.0, 0.0, 1.0, z[0]],
+            [0.0, 0.0, -1.0, -z[1]],
+        ]
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(NI_PLANE_CONSTRUCT, |_, _| Ret::default());
+        e.register(CULLER_CONSTRUCT_00A69400, |_, _| Ret::default());
+        e.register(CULLER_DESTROY_00A693E0, |_, _| Ret::default());
+        e.register(CULLER_SET_FRUSTUM_00A694A0, |e, a| {
+            let camera = e.mem.u32(a[0] + 0xc);
+            assert_eq!(a[1], camera + 0xdc);
+            for word in 0..0x19u32 {
+                let value = e.mem.u32(camera + 0x100 + 4 * word);
+                e.mem.set_u32(a[0] + 0x2c + 4 * word, value);
+            }
+            Ret::default()
+        });
+        e
+    }
+
+    fn test(e: &mut Engine, first: u32, second: u32) -> bool {
+        e.call(0x00b9_c020, &args![0x4000u32, first, second]).bool()
+    }
+
+    const FAR_AWAY: [[f32; 4]; 6] = [
+        [1.0, 0.0, 0.0, -1000.0],
+        [-1.0, 0.0, 0.0, 900.0],
+        [0.0, 1.0, 0.0, -10.0],
+        [0.0, -1.0, 0.0, -10.0],
+        [0.0, 0.0, 1.0, -10.0],
+        [0.0, 0.0, -1.0, -10.0],
+    ];
+
+    #[test]
+    fn camera_points_are_the_position_and_the_far_corners() {
+        let mut e = engine();
+        let cam = camera(&mut e, [1.0, 2.0, 3.0], 10.0, FAR_AWAY);
+        let points = camera_points(&mut e, cam);
+        let floats: Vec<[f32; 3]> = points.iter().map(|p| p.map(f32::from_bits)).collect();
+        assert_eq!(
+            floats,
+            [
+                [1.0, 2.0, 3.0],
+                [11.0, 4.5, 8.0],
+                [11.0, 4.5, -2.0],
+                [11.0, -0.5, 8.0],
+                [11.0, -0.5, -2.0]
+            ]
+        );
+    }
+
+    #[test]
+    fn a_point_strictly_inside_the_other_volume_intersects() {
+        let mut e = engine();
+        let first = camera(&mut e, [1.0, 2.0, 3.0], 10.0, FAR_AWAY);
+        let second = camera(
+            &mut e,
+            [500.0, 0.0, 0.0],
+            5.0,
+            boxed([0.0, 20.0], [-10.0, 10.0], [-10.0, 10.0]),
+        );
+        e.call_log = Some(vec![]);
+        assert!(test(&mut e, first, second));
+        assert_eq!(calls_to(&e, NI_PLANE_CONSTRUCT).len(), 18);
+        assert_eq!(calls_to(&e, CULLER_CONSTRUCT_00A69400).len(), 1);
+        assert_eq!(calls_to(&e, CULLER_SET_FRUSTUM_00A694A0).len(), 2);
+        assert_eq!(calls_to(&e, CULLER_DESTROY_00A693E0).len(), 1);
+    }
+
+    #[test]
+    fn separate_volumes_do_not_intersect() {
+        let mut e = engine();
+        let first = camera(&mut e, [1.0, 2.0, 3.0], 10.0, FAR_AWAY);
+        let second = camera(
+            &mut e,
+            [110.0, 0.0, 0.0],
+            5.0,
+            boxed([100.0, 120.0], [-10.0, 10.0], [-10.0, 10.0]),
+        );
+        e.call_log = Some(vec![]);
+        assert!(!test(&mut e, first, second));
+        assert_eq!(calls_to(&e, CULLER_DESTROY_00A693E0).len(), 1);
+    }
+
+    #[test]
+    fn an_edge_crossing_into_the_other_volume_intersects() {
+        let mut e = engine();
+        let first = camera(&mut e, [1.0, 2.0, 3.0], 10.0, FAR_AWAY);
+        // A thin slab x in [5, 6]: no point inside, the first edge crosses x = 5 at t 0.4.
+        let second = camera(
+            &mut e,
+            [500.0, 0.0, 0.0],
+            5.0,
+            boxed([5.0, 6.0], [-10.0, 10.0], [-10.0, 10.0]),
+        );
+        assert!(test(&mut e, first, second));
+        // Moving the slab's y range away rejects every crossing point.
+        let second = camera(
+            &mut e,
+            [500.0, 0.0, 0.0],
+            5.0,
+            boxed([5.0, 6.0], [50.0, 60.0], [-10.0, 10.0]),
+        );
+        assert!(!test(&mut e, first, second));
+    }
+
+    #[test]
+    fn an_edge_lying_on_a_plane_intersects() {
+        let mut e = engine();
+        let first = camera(&mut e, [1.0, 2.0, 3.0], 10.0, FAR_AWAY);
+        // The far corners lie on x = 11; every crossing point is outside y in [0, 4].
+        let second = camera(
+            &mut e,
+            [500.0, 0.0, 0.0],
+            5.0,
+            boxed([11.0, 20.0], [0.0, 4.0], [-10.0, 10.0]),
+        );
+        assert!(test(&mut e, first, second));
+    }
+
+    #[test]
+    fn the_crossing_parameter_must_lie_in_zero_to_one() {
+        // The crossing of plane x = 5 by an edge from x = 1 to x = 11 at t 0.4.
+        let plane = [1.0f32, 0.0, 0.0, 5.0].map(f32::to_bits);
+        let start = [1.0f32, 2.0, 3.0].map(f32::to_bits);
+        let end = [11.0f32, 4.5, 8.0].map(f32::to_bits);
+        let mut e = engine();
+        let planes = e.mem.alloc(0x64);
+        for (index, row) in boxed([5.0, 6.0], [-10.0, 10.0], [-10.0, 10.0])
+            .into_iter()
+            .enumerate()
+        {
+            for (word, value) in row.into_iter().enumerate() {
+                set(
+                    &mut e,
+                    planes + 0x10 * index as u32 + 4 * word as u32,
+                    value,
+                );
+            }
+        }
+        assert!(edge_crosses_inside(&e, planes, 0, plane, start, end));
+        // The same plane seen from beyond the end: t is above 1.
+        let short_end = [3.0f32, 2.5, 4.0].map(f32::to_bits);
+        assert!(!edge_crosses_inside(&e, planes, 0, plane, start, short_end));
+        assert_eq!(side_of(0.0f32.to_bits()), 0);
+        assert_eq!(side_of((-1.0f32).to_bits()), 2);
+        assert_eq!(side_of(1.0f32.to_bits()), 1);
+        assert_eq!(side_of(f32::NAN.to_bits()), 0);
     }
 }
