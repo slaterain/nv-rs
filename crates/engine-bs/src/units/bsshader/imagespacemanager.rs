@@ -1657,6 +1657,1660 @@ pub fn fn_00b8b270(e: &mut Engine, this: Ptr, index: u32, value: Ptr) {
     e.mem.set_u8(elements.wrapping_add(index), byte);
 }
 
+/// `ImageSpaceShader::~ImageSpaceShader` (engine map, `00c03a20`; `thiscall`, no stack words).
+const IMAGE_SPACE_SHADER_DESTRUCT_00C03A20: u32 = 0x00c0_3a20;
+/// The sized Ni free `00aa1460` (unnamed, `NiSystem`; `cdecl`: the block and its size).
+const NI_SIZED_FREE_00AA1460: u32 = 0x00aa_1460;
+
+/// The body of the image-space shaders' deleting destructors below, in the exe's order: the
+/// class's vtable at +0, its `ImageSpaceEffect` vtable at +0x6c, `~ImageSpaceShader`
+/// (`00c03a20`), then, when bit 0 of the flags is set, the 0xd0 bytes freed through `00aa1460`.
+/// Answers `this`.
+fn delete_image_space_shader(
+    e: &mut Engine,
+    this: Ptr,
+    vtable: u32,
+    effect_vtable: u32,
+    flags: u32,
+) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, vtable);
+    e.mem.set_u32(base + SHADER_EFFECT_BASE, effect_vtable);
+    e.call(IMAGE_SPACE_SHADER_DESTRUCT_00C03A20, &args![this]);
+    if flags & 1 != 0 {
+        e.call(NI_SIZED_FREE_00AA1460, &args![this, 0xd0u32]);
+    }
+    this
+}
+
+// Translated from 00b91b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): a deleting destructor that sets no vtable (slot 0 of the vtables `010b0338`, the one
+/// `00b8c070` constructs with, `010b5140` and `010bc8f8`): `~ImageSpaceShader` (`00c03a20`),
+/// then, when bit 0 of the flags is set, the 0xd0 bytes freed through `00aa1460`. Answers
+/// `this`.
+pub fn fn_00b91b50(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(IMAGE_SPACE_SHADER_DESTRUCT_00C03A20, &args![this]);
+    if flags & 1 != 0 {
+        e.call(NI_SIZED_FREE_00AA1460, &args![this, 0xd0u32]);
+    }
+    this
+}
+
+// Translated from 00b91b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// `00b91b50` (slot 0 of the vtables `010b0318` and `010b511c`): `SUB ECX,0x6c`, then a jump to
+/// it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b91b40(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b91b50(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b92450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// destructor of the shader `00b922d0` constructs. Sets its vtables `010b5978` (+0) and
+/// `010b5954` (+0x6c), gives up the reference of the `NiPointer` at +0xd0 when it is set (the
+/// imported `InterlockedDecrement` on its +4; at zero, its vtable slot +4), then runs
+/// `~ImageSpaceShader` (`00c03a20`).
+// Translation incomplete: 00b92450 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b92450(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x010b_5978);
+    e.mem.set_u32(base + SHADER_EFFECT_BASE, 0x010b_5954);
+    let object = e.mem.u32(base + 0xd0);
+    if object != 0 {
+        let left = e
+            .call(IMPORT_INTERLOCKED_DECREMENT, &args![object + 4])
+            .u32();
+        if left == 0 {
+            e.vcall(object, 4, &args![]);
+        }
+    }
+    e.call(IMAGE_SPACE_SHADER_DESTRUCT_00C03A20, &args![this]);
+}
+
+// Translated from 00b924d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b922d0` constructs (slot 0 of `010b5978`):
+/// `00b92450`, then, when bit 0 of the flags is set, the 0xd4 bytes freed through `00aa1460`.
+/// Answers `this`.
+pub fn fn_00b924d0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b92450(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_SIZED_FREE_00AA1460, &args![this, 0xd4u32]);
+    }
+    this
+}
+
+// Translated from 00b92440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// `00b924d0` (slot 0 of the vtable `010b5954`): `SUB ECX,0x6c`, then a jump to it with the same
+/// stack word (the flags). Answers what it answers.
+pub fn fn_00b92440(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b924d0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+/// `ImageSpaceShaderVolumetricFog::ReturnVolumetricFogTexture` (engine map, `00b63d10`;
+/// `thiscall`, no stack words), `ImageSpaceTexture::~ImageSpaceTexture` (engine map, `00ba3a00`;
+/// `thiscall`), the memory manager's free `00aa4060` (`thiscall` on `011f6238`, the block) and
+/// the effect array's set-at `00ba3aa0` (on the texture array +0x94: the index and the address
+/// of the word to store).
+const RETURN_VOLUMETRIC_FOG_TEXTURE_00B63D10: u32 = 0x00b6_3d10;
+const IMAGE_SPACE_TEXTURE_DESTRUCT_00BA3A00: u32 = 0x00ba_3a00;
+const MEMORY_FREE_00AA4060: u32 = 0x00aa_4060;
+
+// Translated from 00b8d4d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderVolumetricFog::~ImageSpaceShaderVolumetricFog` (Xbox PDB), `thiscall`, no
+/// stack words. Sets the vtables `010b0518` (+0) and `010b04f4` (+0x6c), runs
+/// `ReturnVolumetricFogTexture` (`00b63d10`); when the texture array's (+0x94) element block
+/// (+0x98) holds a texture at index 2, destroys it (`~ImageSpaceTexture`, `00ba3a00`) and frees
+/// it through the memory manager (`00aa4060` on `011f6238`) when it is not null, and stores null
+/// at index 2 through `00ba3aa0`; then runs `~ImageSpaceShader` (`00c03a20`).
+// Translation incomplete: 00b8d4d0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn image_space_shader_volumetric_fog_destructor(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x010b_0518);
+    e.mem.set_u32(base + SHADER_EFFECT_BASE, 0x010b_04f4);
+    e.call(RETURN_VOLUMETRIC_FOG_TEXTURE_00B63D10, &args![this]);
+    let block = e.mem.u32(base + 0x98);
+    if e.mem.u32(block + 8) != 0 {
+        let texture = e.mem.u32(block + 8);
+        if texture != 0 {
+            e.call(IMAGE_SPACE_TEXTURE_DESTRUCT_00BA3A00, &args![texture]);
+            e.call(MEMORY_FREE_00AA4060, &args![MEMORY_MANAGER, texture]);
+        }
+        e.with_stack(4, |e, local| {
+            e.mem.set_u32(local.addr(), 0);
+            e.call(
+                ARRAY_SET_00BA3AA0,
+                &args![base + SHADER_TEXTURES, 2u32, local],
+            );
+        });
+    }
+    e.call(IMAGE_SPACE_SHADER_DESTRUCT_00C03A20, &args![this]);
+}
+
+// Translated from 00b8d580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the volumetric fog shader (slot 0 of `010b0518`):
+/// `~ImageSpaceShaderVolumetricFog` (`00b8d4d0`), then, when bit 0 of the flags is set, the
+/// 0xd0 bytes freed through `00aa1460`. Answers `this`.
+pub fn fn_00b8d580(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    image_space_shader_volumetric_fog_destructor(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_SIZED_FREE_00AA1460, &args![this, 0xd0u32]);
+    }
+    this
+}
+
+// Translated from 00b8d430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// `00b8d580` (slot 0 of the vtable `010b04f4`): `SUB ECX,0x6c`, then a jump to it with the same
+/// stack word (the flags). Answers what it answers.
+pub fn fn_00b8d430(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8d580(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8bda0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes `8a 41 04 c3`), `thiscall`, no stack words:
+/// answers the byte at +4 (`MOV AL,[ECX+4]`). It is slot +0x18 of the `ImageSpaceEffect`
+/// vtables of the image-space shaders (`010affb8`, `010b018c`, ...), the slot of
+/// `ImageSpaceEffect::IsActive` in the Xbox PDB, whose `bIsActive` is +4 of the effect.
+pub fn fn_00b8bda0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 4)
+}
+
+// Translated from 00b8bd50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8bce0` constructs (vtables `010affc0` and
+/// `010affa0`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8bd50(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010a_ffc0, 0x010a_ffa0, flags)
+}
+
+// Translated from 00b8bfa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8bea0` constructs (vtables `010b0198` and
+/// `010b0174`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8bfa0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_0198, 0x010b_0174, flags)
+}
+
+// Translated from 00b8d6c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8d5b0` constructs (vtables `010b06c0` and
+/// `010b06a0`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8d6c0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_06c0, 0x010b_06a0, flags)
+}
+
+// Translated from 00b8d810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8d700` constructs (vtables `010b0860` and
+/// `010b083c`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8d810(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_0860, 0x010b_083c, flags)
+}
+
+// Translated from 00b8d950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8d850` constructs (vtables `010b0a00` and
+/// `010b09dc`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8d950(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_0a00, 0x010b_09dc, flags)
+}
+
+// Translated from 00b8daa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8d990` constructs (vtables `010b0b98` and
+/// `010b0b78`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8daa0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_0b98, 0x010b_0b78, flags)
+}
+
+// Translated from 00b8dbf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8dae0` constructs (vtables `010b0d40` and
+/// `010b0d1c`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8dbf0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_0d40, 0x010b_0d1c, flags)
+}
+
+// Translated from 00b8dd40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8dc30` constructs (vtables `010b0ec0` and
+/// `010b0e9c`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8dd40(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_0ec0, 0x010b_0e9c, flags)
+}
+
+// Translated from 00b8de90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8dd80` constructs (vtables `010b1040` and
+/// `010b101c`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8de90(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_1040, 0x010b_101c, flags)
+}
+
+// Translated from 00b8dfe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8ded0` constructs (vtables `010b11c0` and
+/// `010b119c`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8dfe0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_11c0, 0x010b_119c, flags)
+}
+
+// Translated from 00b8e130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8e020` constructs (vtables `010b1340` and
+/// `010b1320`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8e130(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_1340, 0x010b_1320, flags)
+}
+
+// Translated from 00b8e280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8e170` constructs (vtables `010b14c0` and
+/// `010b14a0`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8e280(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_14c0, 0x010b_14a0, flags)
+}
+
+// Translated from 00b8e420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8e2c0` constructs (vtables `010b1640` and
+/// `010b1620`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8e420(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_1640, 0x010b_1620, flags)
+}
+
+// Translated from 00b8e5c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8e460` constructs (vtables `010b17f8` and
+/// `010b17d8`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8e5c0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_17f8, 0x010b_17d8, flags)
+}
+
+// Translated from 00b8e760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8e600` constructs (vtables `010b1980` and
+/// `010b1960`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8e760(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_1980, 0x010b_1960, flags)
+}
+
+// Translated from 00b8e900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8e7a0` constructs (vtables `010b1b08` and
+/// `010b1ae8`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8e900(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_1b08, 0x010b_1ae8, flags)
+}
+
+// Translated from 00b8eaa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8e940` constructs (vtables `010b1c90` and
+/// `010b1c70`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8eaa0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_1c90, 0x010b_1c70, flags)
+}
+
+// Translated from 00b8ec40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8eae0` constructs (vtables `010b1e20` and
+/// `010b1dfc`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8ec40(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_1e20, 0x010b_1dfc, flags)
+}
+
+// Translated from 00b8ede0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8ec80` constructs (vtables `010b1fb0` and
+/// `010b1f8c`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8ede0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_1fb0, 0x010b_1f8c, flags)
+}
+
+// Translated from 00b8ef60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8ee20` constructs (vtables `010b2140` and
+/// `010b211c`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8ef60(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_2140, 0x010b_211c, flags)
+}
+
+// Translated from 00b8f120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8f010` constructs (vtables `010b2308` and
+/// `010b22e8`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8f120(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_2308, 0x010b_22e8, flags)
+}
+
+// Translated from 00b8f2b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8f1b0` constructs (vtables `010b2490` and
+/// `010b2470`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8f2b0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_2490, 0x010b_2470, flags)
+}
+
+// Translated from 00b8f470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8f360` constructs (vtables `010b2610` and
+/// `010b25f0`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8f470(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_2610, 0x010b_25f0, flags)
+}
+
+// Translated from 00b8f620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8f520` constructs (vtables `010b27a8` and
+/// `010b2784`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8f620(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_27a8, 0x010b_2784, flags)
+}
+
+// Translated from 00b8f6d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8f660` constructs (vtables `010b2920` and
+/// `010b28fc`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8f6d0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_2920, 0x010b_28fc, flags)
+}
+
+// Translated from 00b8f7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8efa0` constructs (vtables `010b2a98` and
+/// `010b2a74`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8f7a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_2a98, 0x010b_2a74, flags)
+}
+
+// Translated from 00b8f8f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8f7e0` constructs (vtables `010b2c10` and
+/// `010b2bec`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8f8f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_2c10, 0x010b_2bec, flags)
+}
+
+// Translated from 00b8fa40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8f930` constructs (vtables `010b2db0` and
+/// `010b2d8c`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8fa40(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_2db0, 0x010b_2d8c, flags)
+}
+
+// Translated from 00b8fba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8fa80` constructs (vtables `010b2f50` and
+/// `010b2f30`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8fba0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_2f50, 0x010b_2f30, flags)
+}
+
+// Translated from 00b8fd00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8fbe0` constructs (vtables `010b30e0` and
+/// `010b30c0`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8fd00(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_30e0, 0x010b_30c0, flags)
+}
+
+// Translated from 00b8fe60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8fd40` constructs (vtables `010b3268` and
+/// `010b3244`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8fe60(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_3268, 0x010b_3244, flags)
+}
+
+// Translated from 00b8ffb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8fea0` constructs (vtables `010b33f0` and
+/// `010b33cc`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b8ffb0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_33f0, 0x010b_33cc, flags)
+}
+
+// Translated from 00b90150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b8fff0` constructs (vtables `010b3598` and
+/// `010b3574`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b90150(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_3598, 0x010b_3574, flags)
+}
+
+// Translated from 00b902f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b90190` constructs (vtables `010b37a8` and
+/// `010b3788`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b902f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_37a8, 0x010b_3788, flags)
+}
+
+// Translated from 00b904e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b90330` constructs (vtables `010b3958` and
+/// `010b3934`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b904e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_3958, 0x010b_3934, flags)
+}
+
+// Translated from 00b90670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b90520` constructs (vtables `010b3af0` and
+/// `010b3ad0`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b90670(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_3af0, 0x010b_3ad0, flags)
+}
+
+// Translated from 00b907f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b906b0` constructs (vtables `010b3c78` and
+/// `010b3c58`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b907f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_3c78, 0x010b_3c58, flags)
+}
+
+// Translated from 00b90980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b90830` constructs (vtables `010b3e18` and
+/// `010b3df4`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b90980(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_3e18, 0x010b_3df4, flags)
+}
+
+// Translated from 00b90b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b909c0` constructs (vtables `010b3fa8` and
+/// `010b3f88`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b90b10(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_3fa8, 0x010b_3f88, flags)
+}
+
+// Translated from 00b90ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b90b50` constructs (vtables `010b4138` and
+/// `010b4114`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b90ca0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_4138, 0x010b_4114, flags)
+}
+
+// Translated from 00b90e30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b90ce0` constructs (vtables `010b42c8` and
+/// `010b42a4`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b90e30(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_42c8, 0x010b_42a4, flags)
+}
+
+// Translated from 00b90fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b90e70` constructs (vtables `010b4460` and
+/// `010b443c`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b90fc0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_4460, 0x010b_443c, flags)
+}
+
+// Translated from 00b91160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b91000` constructs (vtables `010b4600` and
+/// `010b45dc`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b91160(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_4600, 0x010b_45dc, flags)
+}
+
+// Translated from 00b91300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b911a0` constructs (vtables `010b47a0` and
+/// `010b477c`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b91300(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_47a0, 0x010b_477c, flags)
+}
+
+// Translated from 00b914a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b91340` constructs (vtables `010b4938` and
+/// `010b4914`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b914a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_4938, 0x010b_4914, flags)
+}
+
+// Translated from 00b91640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b914e0` constructs (vtables `010b4ad0` and
+/// `010b4aac`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b91640(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_4ad0, 0x010b_4aac, flags)
+}
+
+// Translated from 00b91780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b91680` constructs (vtables `010b4c68` and
+/// `010b4c48`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b91780(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_4c68, 0x010b_4c48, flags)
+}
+
+// Translated from 00b918c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b917c0` constructs (vtables `010b4de8` and
+/// `010b4dc8`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b918c0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_4de8, 0x010b_4dc8, flags)
+}
+
+// Translated from 00b91a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b91900` constructs (vtables `010b4f80` and
+/// `010b4f60`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b91a00(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_4f80, 0x010b_4f60, flags)
+}
+
+// Translated from 00b91cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b91b80` constructs (vtables `010b52c0` and
+/// `010b52a0`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b91cb0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_52c0, 0x010b_52a0, flags)
+}
+
+// Translated from 00b91e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b91cf0` constructs (vtables `010b5480` and
+/// `010b5460`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b91e00(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_5480, 0x010b_5460, flags)
+}
+
+// Translated from 00b91f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b91e40` constructs (vtables `010b5640` and
+/// `010b5620`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b91f50(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_5640, 0x010b_5620, flags)
+}
+
+// Translated from 00b92290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b92180` constructs (vtables `010b57d0` and
+/// `010b57b0`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b92290(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_57d0, 0x010b_57b0, flags)
+}
+
+// Translated from 00b92570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b92500` constructs (vtables `010b5b10` and
+/// `010b5af0`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b92570(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_5b10, 0x010b_5af0, flags)
+}
+
+// Translated from 00b927a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b92690` constructs (vtables `010b5cb8` and
+/// `010b5c94`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b927a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_5cb8, 0x010b_5c94, flags)
+}
+
+// Translated from 00b928f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b927e0` constructs (vtables `010b5ea8` and
+/// `010b5e84`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b928f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_5ea8, 0x010b_5e84, flags)
+}
+
+// Translated from 00b92a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b92930` constructs (vtables `010b6048` and
+/// `010b6028`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b92a40(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_6048, 0x010b_6028, flags)
+}
+
+// Translated from 00b92b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b92a80` constructs (vtables `010b61f0` and
+/// `010b61d0`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b92b90(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_61f0, 0x010b_61d0, flags)
+}
+
+// Translated from 00b92ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b92bd0` constructs (vtables `010b6398` and
+/// `010b6374`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b92ce0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_6398, 0x010b_6374, flags)
+}
+
+// Translated from 00b92ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b92d90` constructs (vtables `010b6548` and
+/// `010b6524`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b92ea0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_6548, 0x010b_6524, flags)
+}
+
+// Translated from 00b92ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b92ee0` constructs (vtables `010b66f0` and
+/// `010b66cc`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b92ff0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_66f0, 0x010b_66cc, flags)
+}
+
+// Translated from 00b93140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b93030` constructs (vtables `010b68a0` and
+/// `010b687c`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b93140(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_68a0, 0x010b_687c, flags)
+}
+
+// Translated from 00b93290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b93180` constructs (vtables `010b6a40` and
+/// `010b6a20`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b93290(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_6a40, 0x010b_6a20, flags)
+}
+
+// Translated from 00b933e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b932d0` constructs (vtables `010b6bd8` and
+/// `010b6bb8`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b933e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_6bd8, 0x010b_6bb8, flags)
+}
+
+// Translated from 00b93710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b93600` constructs (vtables `010b6d90` and
+/// `010b6d70`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b93710(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_6d90, 0x010b_6d70, flags)
+}
+
+// Translated from 00b93a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b93950` constructs (vtables `010b6f38` and
+/// `010b6f14`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b93a60(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_6f38, 0x010b_6f14, flags)
+}
+
+// Translated from 00b93bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b93aa0` constructs (vtables `010b70d8` and
+/// `010b70b8`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b93bb0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_70d8, 0x010b_70b8, flags)
+}
+
+// Translated from 00b93d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b93bf0` constructs (vtables `010b7278` and
+/// `010b7258`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b93d00(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_7278, 0x010b_7258, flags)
+}
+
+// Translated from 00b93e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b93d40` constructs (vtables `010b7418` and
+/// `010b73f4`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b93e50(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_7418, 0x010b_73f4, flags)
+}
+
+// Translated from 00b93fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b93e90` constructs (vtables `010b7598` and
+/// `010b7578`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b93fa0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_7598, 0x010b_7578, flags)
+}
+
+// Translated from 00b940f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b93fe0` constructs (vtables `010b7720` and
+/// `010b7700`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b940f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_7720, 0x010b_7700, flags)
+}
+
+// Translated from 00b94240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b94130` constructs (vtables `010b78b8` and
+/// `010b7898`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b94240(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_78b8, 0x010b_7898, flags)
+}
+
+// Translated from 00b94390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b94280` constructs (vtables `010b7a50` and
+/// `010b7a2c`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b94390(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_7a50, 0x010b_7a2c, flags)
+}
+
+// Translated from 00b944e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, one stack word (the
+/// flags): the deleting destructor of the shader `00b943d0` constructs (vtables `010b7bf0` and
+/// `010b7bcc`), see `delete_image_space_shader`. Answers `this`.
+pub fn fn_00b944e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_image_space_shader(e, this, 0x010b_7bf0, 0x010b_7bcc, flags)
+}
+
+// Translated from 00b8bd80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8bd50` (slot 0 of the vtable `010affa0`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8bd80(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8bd50(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8bfd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8bfa0` (slot 0 of the vtable `010b0174`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8bfd0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8bfa0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8d6f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8d6c0` (slot 0 of the vtable `010b06a0`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8d6f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8d6c0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8d840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8d810` (slot 0 of the vtable `010b083c`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8d840(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8d810(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8d980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8d950` (slot 0 of the vtable `010b09dc`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8d980(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8d950(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8dad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8daa0` (slot 0 of the vtable `010b0b78`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8dad0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8daa0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8dc20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8dbf0` (slot 0 of the vtable `010b0d1c`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8dc20(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8dbf0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8dd70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8dd40` (slot 0 of the vtable `010b0e9c`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8dd70(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8dd40(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8dec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8de90` (slot 0 of the vtable `010b101c`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8dec0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8de90(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8e010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8dfe0` (slot 0 of the vtable `010b119c`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8e010(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8dfe0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8e160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8e130` (slot 0 of the vtable `010b1320`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8e160(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8e130(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8e2b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8e280` (slot 0 of the vtable `010b14a0`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8e2b0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8e280(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8e450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8e420` (slot 0 of the vtable `010b1620`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8e450(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8e420(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8e5f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8e5c0` (slot 0 of the vtable `010b17d8`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8e5f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8e5c0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8e790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8e760` (slot 0 of the vtable `010b1960`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8e790(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8e760(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8e930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8e900` (slot 0 of the vtable `010b1ae8`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8e930(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8e900(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8ead0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8eaa0` (slot 0 of the vtable `010b1c70`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8ead0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8eaa0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8ec70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8ec40` (slot 0 of the vtable `010b1dfc`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8ec70(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8ec40(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8ee10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8ede0` (slot 0 of the vtable `010b1f8c`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8ee10(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8ede0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8ef90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8ef60` (slot 0 of the vtable `010b211c`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8ef90(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8ef60(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8f150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8f120` (slot 0 of the vtable `010b22e8`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8f150(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8f120(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8f2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8f2b0` (slot 0 of the vtable `010b2470`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8f2e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8f2b0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8f4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8f470` (slot 0 of the vtable `010b25f0`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8f4a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8f470(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8f650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8f620` (slot 0 of the vtable `010b2784`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8f650(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8f620(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8f700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8f6d0` (slot 0 of the vtable `010b28fc`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8f700(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8f6d0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8f7d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8f7a0` (slot 0 of the vtable `010b2a74`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8f7d0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8f7a0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8f920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8f8f0` (slot 0 of the vtable `010b2bec`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8f920(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8f8f0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8fa70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8fa40` (slot 0 of the vtable `010b2d8c`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8fa70(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8fa40(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8fbd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8fba0` (slot 0 of the vtable `010b2f30`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8fbd0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8fba0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8fd30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8fd00` (slot 0 of the vtable `010b30c0`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8fd30(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8fd00(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8fe90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8fe60` (slot 0 of the vtable `010b3244`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8fe90(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8fe60(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b8ffe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b8ffb0` (slot 0 of the vtable `010b33cc`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b8ffe0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b8ffb0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b90180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b90150` (slot 0 of the vtable `010b3574`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b90180(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b90150(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b90320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b902f0` (slot 0 of the vtable `010b3788`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b90320(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b902f0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b90510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b904e0` (slot 0 of the vtable `010b3934`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b90510(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b904e0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b906a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b90670` (slot 0 of the vtable `010b3ad0`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b906a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b90670(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b90820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b907f0` (slot 0 of the vtable `010b3c58`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b90820(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b907f0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b909b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b90980` (slot 0 of the vtable `010b3df4`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b909b0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b90980(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b90b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b90b10` (slot 0 of the vtable `010b3f88`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b90b40(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b90b10(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b90cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b90ca0` (slot 0 of the vtable `010b4114`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b90cd0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b90ca0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b90e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b90e30` (slot 0 of the vtable `010b42a4`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b90e60(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b90e30(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b90ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b90fc0` (slot 0 of the vtable `010b443c`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b90ff0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b90fc0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b91190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b91160` (slot 0 of the vtable `010b45dc`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b91190(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b91160(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b91330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b91300` (slot 0 of the vtable `010b477c`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b91330(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b91300(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b914d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b914a0` (slot 0 of the vtable `010b4914`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b914d0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b914a0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b91670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b91640` (slot 0 of the vtable `010b4aac`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b91670(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b91640(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b917b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b91780` (slot 0 of the vtable `010b4c48`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b917b0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b91780(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b918f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b918c0` (slot 0 of the vtable `010b4dc8`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b918f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b918c0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b91a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b91a00` (slot 0 of the vtable `010b4f60`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b91a30(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b91a00(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b91ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b91cb0` (slot 0 of the vtable `010b52a0`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b91ce0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b91cb0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b91e30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b91e00` (slot 0 of the vtable `010b5460`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b91e30(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b91e00(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b91f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b91f50` (slot 0 of the vtable `010b5620`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b91f80(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b91f50(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b922c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b92290` (slot 0 of the vtable `010b57b0`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b922c0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b92290(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b925a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b92570` (slot 0 of the vtable `010b5af0`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b925a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b92570(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b927d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b927a0` (slot 0 of the vtable `010b5c94`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b927d0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b927a0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b92920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b928f0` (slot 0 of the vtable `010b5e84`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b92920(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b928f0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b92a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b92a40` (slot 0 of the vtable `010b6028`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b92a70(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b92a40(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b92bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b92b90` (slot 0 of the vtable `010b61d0`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b92bc0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b92b90(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b92d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b92ce0` (slot 0 of the vtable `010b6374`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b92d10(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b92ce0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b92ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b92ea0` (slot 0 of the vtable `010b6524`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b92ed0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b92ea0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b93020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b92ff0` (slot 0 of the vtable `010b66cc`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b93020(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b92ff0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b93170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b93140` (slot 0 of the vtable `010b687c`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b93170(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b93140(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b932c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b93290` (slot 0 of the vtable `010b6a20`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b932c0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b93290(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b93410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b933e0` (slot 0 of the vtable `010b6bb8`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b93410(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b933e0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b93740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b93710` (slot 0 of the vtable `010b6d70`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b93740(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b93710(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b93a90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b93a60` (slot 0 of the vtable `010b6f14`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b93a90(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b93a60(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b93be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b93bb0` (slot 0 of the vtable `010b70b8`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b93be0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b93bb0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b93d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b93d00` (slot 0 of the vtable `010b7258`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b93d30(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b93d00(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b93e80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b93e50` (slot 0 of the vtable `010b73f4`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b93e80(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b93e50(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b93fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b93fa0` (slot 0 of the vtable `010b7578`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b93fd0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b93fa0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b94120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b940f0` (slot 0 of the vtable `010b7700`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b94120(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b940f0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b94270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b94240` (slot 0 of the vtable `010b7898`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b94270(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b94240(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b943c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b94390` (slot 0 of the vtable `010b7a2c`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b943c0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b94390(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
+// Translated from 00b94510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes): the `ImageSpaceEffect` (+0x6c) entry of
+/// the deleting destructor `00b944e0` (slot 0 of the vtable `010b7bcc`): `SUB ECX,0x6c`, then a
+/// jump to it with the same stack word (the flags). Answers what it answers.
+pub fn fn_00b94510(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b944e0(
+        e,
+        Ptr::new(this.addr().wrapping_sub(SHADER_EFFECT_BASE)),
+        flags,
+    )
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1745,6 +3399,166 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b9_43d0, fn_00b943d0(Ptr) -> Ptr),
         entry!(0x00b8_bc20, fn_00b8bc20(Ptr)),
         entry!(0x00b8_b270, fn_00b8b270(Ptr, u32, Ptr)),
+        entry!(0x00b9_1b50, fn_00b91b50(Ptr, u32) -> Ptr),
+        entry!(0x00b9_1b40, fn_00b91b40(Ptr, u32) -> Ptr),
+        entry!(0x00b9_2450, fn_00b92450(Ptr)),
+        entry!(0x00b9_24d0, fn_00b924d0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_2440, fn_00b92440(Ptr, u32) -> Ptr),
+        entry!(
+            0x00b8_d4d0,
+            image_space_shader_volumetric_fog_destructor(Ptr)
+        ),
+        entry!(0x00b8_d580, fn_00b8d580(Ptr, u32) -> Ptr),
+        entry!(0x00b8_d430, fn_00b8d430(Ptr, u32) -> Ptr),
+        entry!(0x00b8_bda0, fn_00b8bda0(Ptr) -> u8),
+        entry!(0x00b8_bd50, fn_00b8bd50(Ptr, u32) -> Ptr),
+        entry!(0x00b8_bfa0, fn_00b8bfa0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_d6c0, fn_00b8d6c0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_d810, fn_00b8d810(Ptr, u32) -> Ptr),
+        entry!(0x00b8_d950, fn_00b8d950(Ptr, u32) -> Ptr),
+        entry!(0x00b8_daa0, fn_00b8daa0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_dbf0, fn_00b8dbf0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_dd40, fn_00b8dd40(Ptr, u32) -> Ptr),
+        entry!(0x00b8_de90, fn_00b8de90(Ptr, u32) -> Ptr),
+        entry!(0x00b8_dfe0, fn_00b8dfe0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_e130, fn_00b8e130(Ptr, u32) -> Ptr),
+        entry!(0x00b8_e280, fn_00b8e280(Ptr, u32) -> Ptr),
+        entry!(0x00b8_e420, fn_00b8e420(Ptr, u32) -> Ptr),
+        entry!(0x00b8_e5c0, fn_00b8e5c0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_e760, fn_00b8e760(Ptr, u32) -> Ptr),
+        entry!(0x00b8_e900, fn_00b8e900(Ptr, u32) -> Ptr),
+        entry!(0x00b8_eaa0, fn_00b8eaa0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_ec40, fn_00b8ec40(Ptr, u32) -> Ptr),
+        entry!(0x00b8_ede0, fn_00b8ede0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_ef60, fn_00b8ef60(Ptr, u32) -> Ptr),
+        entry!(0x00b8_f120, fn_00b8f120(Ptr, u32) -> Ptr),
+        entry!(0x00b8_f2b0, fn_00b8f2b0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_f470, fn_00b8f470(Ptr, u32) -> Ptr),
+        entry!(0x00b8_f620, fn_00b8f620(Ptr, u32) -> Ptr),
+        entry!(0x00b8_f6d0, fn_00b8f6d0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_f7a0, fn_00b8f7a0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_f8f0, fn_00b8f8f0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_fa40, fn_00b8fa40(Ptr, u32) -> Ptr),
+        entry!(0x00b8_fba0, fn_00b8fba0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_fd00, fn_00b8fd00(Ptr, u32) -> Ptr),
+        entry!(0x00b8_fe60, fn_00b8fe60(Ptr, u32) -> Ptr),
+        entry!(0x00b8_ffb0, fn_00b8ffb0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_0150, fn_00b90150(Ptr, u32) -> Ptr),
+        entry!(0x00b9_02f0, fn_00b902f0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_04e0, fn_00b904e0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_0670, fn_00b90670(Ptr, u32) -> Ptr),
+        entry!(0x00b9_07f0, fn_00b907f0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_0980, fn_00b90980(Ptr, u32) -> Ptr),
+        entry!(0x00b9_0b10, fn_00b90b10(Ptr, u32) -> Ptr),
+        entry!(0x00b9_0ca0, fn_00b90ca0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_0e30, fn_00b90e30(Ptr, u32) -> Ptr),
+        entry!(0x00b9_0fc0, fn_00b90fc0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_1160, fn_00b91160(Ptr, u32) -> Ptr),
+        entry!(0x00b9_1300, fn_00b91300(Ptr, u32) -> Ptr),
+        entry!(0x00b9_14a0, fn_00b914a0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_1640, fn_00b91640(Ptr, u32) -> Ptr),
+        entry!(0x00b9_1780, fn_00b91780(Ptr, u32) -> Ptr),
+        entry!(0x00b9_18c0, fn_00b918c0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_1a00, fn_00b91a00(Ptr, u32) -> Ptr),
+        entry!(0x00b9_1cb0, fn_00b91cb0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_1e00, fn_00b91e00(Ptr, u32) -> Ptr),
+        entry!(0x00b9_1f50, fn_00b91f50(Ptr, u32) -> Ptr),
+        entry!(0x00b9_2290, fn_00b92290(Ptr, u32) -> Ptr),
+        entry!(0x00b9_2570, fn_00b92570(Ptr, u32) -> Ptr),
+        entry!(0x00b9_27a0, fn_00b927a0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_28f0, fn_00b928f0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_2a40, fn_00b92a40(Ptr, u32) -> Ptr),
+        entry!(0x00b9_2b90, fn_00b92b90(Ptr, u32) -> Ptr),
+        entry!(0x00b9_2ce0, fn_00b92ce0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_2ea0, fn_00b92ea0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_2ff0, fn_00b92ff0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_3140, fn_00b93140(Ptr, u32) -> Ptr),
+        entry!(0x00b9_3290, fn_00b93290(Ptr, u32) -> Ptr),
+        entry!(0x00b9_33e0, fn_00b933e0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_3710, fn_00b93710(Ptr, u32) -> Ptr),
+        entry!(0x00b9_3a60, fn_00b93a60(Ptr, u32) -> Ptr),
+        entry!(0x00b9_3bb0, fn_00b93bb0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_3d00, fn_00b93d00(Ptr, u32) -> Ptr),
+        entry!(0x00b9_3e50, fn_00b93e50(Ptr, u32) -> Ptr),
+        entry!(0x00b9_3fa0, fn_00b93fa0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_40f0, fn_00b940f0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_4240, fn_00b94240(Ptr, u32) -> Ptr),
+        entry!(0x00b9_4390, fn_00b94390(Ptr, u32) -> Ptr),
+        entry!(0x00b9_44e0, fn_00b944e0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_bd80, fn_00b8bd80(Ptr, u32) -> Ptr),
+        entry!(0x00b8_bfd0, fn_00b8bfd0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_d6f0, fn_00b8d6f0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_d840, fn_00b8d840(Ptr, u32) -> Ptr),
+        entry!(0x00b8_d980, fn_00b8d980(Ptr, u32) -> Ptr),
+        entry!(0x00b8_dad0, fn_00b8dad0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_dc20, fn_00b8dc20(Ptr, u32) -> Ptr),
+        entry!(0x00b8_dd70, fn_00b8dd70(Ptr, u32) -> Ptr),
+        entry!(0x00b8_dec0, fn_00b8dec0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_e010, fn_00b8e010(Ptr, u32) -> Ptr),
+        entry!(0x00b8_e160, fn_00b8e160(Ptr, u32) -> Ptr),
+        entry!(0x00b8_e2b0, fn_00b8e2b0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_e450, fn_00b8e450(Ptr, u32) -> Ptr),
+        entry!(0x00b8_e5f0, fn_00b8e5f0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_e790, fn_00b8e790(Ptr, u32) -> Ptr),
+        entry!(0x00b8_e930, fn_00b8e930(Ptr, u32) -> Ptr),
+        entry!(0x00b8_ead0, fn_00b8ead0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_ec70, fn_00b8ec70(Ptr, u32) -> Ptr),
+        entry!(0x00b8_ee10, fn_00b8ee10(Ptr, u32) -> Ptr),
+        entry!(0x00b8_ef90, fn_00b8ef90(Ptr, u32) -> Ptr),
+        entry!(0x00b8_f150, fn_00b8f150(Ptr, u32) -> Ptr),
+        entry!(0x00b8_f2e0, fn_00b8f2e0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_f4a0, fn_00b8f4a0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_f650, fn_00b8f650(Ptr, u32) -> Ptr),
+        entry!(0x00b8_f700, fn_00b8f700(Ptr, u32) -> Ptr),
+        entry!(0x00b8_f7d0, fn_00b8f7d0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_f920, fn_00b8f920(Ptr, u32) -> Ptr),
+        entry!(0x00b8_fa70, fn_00b8fa70(Ptr, u32) -> Ptr),
+        entry!(0x00b8_fbd0, fn_00b8fbd0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_fd30, fn_00b8fd30(Ptr, u32) -> Ptr),
+        entry!(0x00b8_fe90, fn_00b8fe90(Ptr, u32) -> Ptr),
+        entry!(0x00b8_ffe0, fn_00b8ffe0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_0180, fn_00b90180(Ptr, u32) -> Ptr),
+        entry!(0x00b9_0320, fn_00b90320(Ptr, u32) -> Ptr),
+        entry!(0x00b9_0510, fn_00b90510(Ptr, u32) -> Ptr),
+        entry!(0x00b9_06a0, fn_00b906a0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_0820, fn_00b90820(Ptr, u32) -> Ptr),
+        entry!(0x00b9_09b0, fn_00b909b0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_0b40, fn_00b90b40(Ptr, u32) -> Ptr),
+        entry!(0x00b9_0cd0, fn_00b90cd0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_0e60, fn_00b90e60(Ptr, u32) -> Ptr),
+        entry!(0x00b9_0ff0, fn_00b90ff0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_1190, fn_00b91190(Ptr, u32) -> Ptr),
+        entry!(0x00b9_1330, fn_00b91330(Ptr, u32) -> Ptr),
+        entry!(0x00b9_14d0, fn_00b914d0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_1670, fn_00b91670(Ptr, u32) -> Ptr),
+        entry!(0x00b9_17b0, fn_00b917b0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_18f0, fn_00b918f0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_1a30, fn_00b91a30(Ptr, u32) -> Ptr),
+        entry!(0x00b9_1ce0, fn_00b91ce0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_1e30, fn_00b91e30(Ptr, u32) -> Ptr),
+        entry!(0x00b9_1f80, fn_00b91f80(Ptr, u32) -> Ptr),
+        entry!(0x00b9_22c0, fn_00b922c0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_25a0, fn_00b925a0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_27d0, fn_00b927d0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_2920, fn_00b92920(Ptr, u32) -> Ptr),
+        entry!(0x00b9_2a70, fn_00b92a70(Ptr, u32) -> Ptr),
+        entry!(0x00b9_2bc0, fn_00b92bc0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_2d10, fn_00b92d10(Ptr, u32) -> Ptr),
+        entry!(0x00b9_2ed0, fn_00b92ed0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_3020, fn_00b93020(Ptr, u32) -> Ptr),
+        entry!(0x00b9_3170, fn_00b93170(Ptr, u32) -> Ptr),
+        entry!(0x00b9_32c0, fn_00b932c0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_3410, fn_00b93410(Ptr, u32) -> Ptr),
+        entry!(0x00b9_3740, fn_00b93740(Ptr, u32) -> Ptr),
+        entry!(0x00b9_3a90, fn_00b93a90(Ptr, u32) -> Ptr),
+        entry!(0x00b9_3be0, fn_00b93be0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_3d30, fn_00b93d30(Ptr, u32) -> Ptr),
+        entry!(0x00b9_3e80, fn_00b93e80(Ptr, u32) -> Ptr),
+        entry!(0x00b9_3fd0, fn_00b93fd0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_4120, fn_00b94120(Ptr, u32) -> Ptr),
+        entry!(0x00b9_4270, fn_00b94270(Ptr, u32) -> Ptr),
+        entry!(0x00b9_43c0, fn_00b943c0(Ptr, u32) -> Ptr),
+        entry!(0x00b9_4510, fn_00b94510(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -2799,5 +4613,984 @@ mod b000p_tests {
         e.call(0x00b8_b270, &args![array, 1u32, value]);
         assert_eq!(e.mem.u16(array + 0xc), 1);
         assert_eq!(e.mem.u16(array + 0xa), 5);
+    }
+}
+
+#[cfg(test)]
+mod delete_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// The doubles of `~ImageSpaceShader` and the free; the destructor double notes at +0xc8 the
+    /// vtable it finds, so the tests see it was set before it runs.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(IMAGE_SPACE_SHADER_DESTRUCT_00C03A20, |e, a| {
+            let vtable = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0] + 0xc8, vtable);
+            Ret::default()
+        });
+        e.register(NI_SIZED_FREE_00AA1460, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn check_delete(addr: u32, vtable: u32, effect_vtable: u32) {
+        for flags in [0u32, 1, 0xfe, 0x101] {
+            let mut e = engine();
+            let this = e.mem.alloc(0xd0);
+            assert_eq!(e.call(addr, &args![this, flags]).u32(), this);
+            assert_eq!(e.mem.u32(this), vtable);
+            assert_eq!(e.mem.u32(this + 0xc8), vtable);
+            assert_eq!(e.mem.u32(this + SHADER_EFFECT_BASE), effect_vtable);
+            assert_eq!(
+                calls(&e, IMAGE_SPACE_SHADER_DESTRUCT_00C03A20),
+                vec![vec![this]]
+            );
+            let freed = if flags & 1 != 0 {
+                vec![vec![this, 0xd0]]
+            } else {
+                vec![]
+            };
+            assert_eq!(calls(&e, NI_SIZED_FREE_00AA1460), freed);
+        }
+    }
+
+    fn check_effect_delete(addr: u32, vtable: u32, effect_vtable: u32) {
+        let mut e = engine();
+        let this = e.mem.alloc(0xd0);
+        let effect = this + SHADER_EFFECT_BASE;
+        assert_eq!(e.call(addr, &args![effect, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), vtable);
+        assert_eq!(e.mem.u32(effect), effect_vtable);
+        assert_eq!(
+            calls(&e, IMAGE_SPACE_SHADER_DESTRUCT_00C03A20),
+            vec![vec![this]]
+        );
+        assert_eq!(calls(&e, NI_SIZED_FREE_00AA1460), vec![vec![this, 0xd0]]);
+    }
+
+    #[test]
+    fn fn_00b91b50_destroys_without_vtables() {
+        for flags in [0u32, 3] {
+            let mut e = engine();
+            let this = e.mem.alloc(0xd0);
+            e.mem.set_u32(this, 0x77);
+            assert_eq!(e.call(0x00b9_1b50, &args![this, flags]).u32(), this);
+            assert_eq!(e.mem.u32(this), 0x77);
+            assert_eq!(
+                calls(&e, IMAGE_SPACE_SHADER_DESTRUCT_00C03A20),
+                vec![vec![this]]
+            );
+            assert_eq!(
+                calls(&e, NI_SIZED_FREE_00AA1460).len(),
+                (flags & 1) as usize
+            );
+        }
+    }
+
+    #[test]
+    fn fn_00b91b40_adjusts_to_the_shader() {
+        let mut e = engine();
+        let this = e.mem.alloc(0xd0);
+        assert_eq!(e.call(0x00b9_1b40, &args![this + 0x6c, 1u32]).u32(), this);
+        assert_eq!(
+            calls(&e, IMAGE_SPACE_SHADER_DESTRUCT_00C03A20),
+            vec![vec![this]]
+        );
+        assert_eq!(calls(&e, NI_SIZED_FREE_00AA1460), vec![vec![this, 0xd0]]);
+    }
+
+    #[test]
+    fn fn_00b92450_releases_the_pointer() {
+        let mut e = engine();
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let left = e.mem.u32(a[0]) - 1;
+            e.mem.set_u32(a[0], left);
+            left.into_ret()
+        });
+        e.register(0x0f00_0004, |_, _| Ret::default());
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable + 4, 0x0f00_0004);
+        let held = e.mem.alloc(8);
+        e.mem.set_u32(held, vtable);
+        // Two references: one given up, nothing deleted.
+        e.mem.set_u32(held + 4, 2);
+        let this = e.mem.alloc(0xd4);
+        e.mem.set_u32(this + 0xd0, held);
+        e.call(0x00b9_2450, &args![this]);
+        assert_eq!(e.mem.u32(this), 0x010b_5978);
+        assert_eq!(e.mem.u32(this + 0x6c), 0x010b_5954);
+        assert_eq!(e.mem.u32(held + 4), 1);
+        assert!(calls(&e, 0x0f00_0004).is_empty());
+        // The last reference: deleted through slot +4.
+        e.call(0x00b9_2450, &args![this]);
+        assert_eq!(calls(&e, 0x0f00_0004), vec![vec![held]]);
+        // No pointer: no decrement.
+        e.mem.set_u32(this + 0xd0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b9_2450, &args![this]);
+        assert!(calls(&e, IMPORT_INTERLOCKED_DECREMENT).is_empty());
+        assert_eq!(
+            calls(&e, IMAGE_SPACE_SHADER_DESTRUCT_00C03A20),
+            vec![vec![this]]
+        );
+    }
+
+    #[test]
+    fn fn_00b924d0_frees_0xd4_bytes() {
+        let mut e = engine();
+        let this = e.mem.alloc(0xd4);
+        assert_eq!(e.call(0x00b9_24d0, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x010b_5978);
+        assert_eq!(calls(&e, NI_SIZED_FREE_00AA1460), vec![vec![this, 0xd4]]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b9_24d0, &args![this, 0u32]).u32(), this);
+        assert!(calls(&e, NI_SIZED_FREE_00AA1460).is_empty());
+    }
+
+    #[test]
+    fn fn_00b92440_adjusts_to_the_shader() {
+        let mut e = engine();
+        let this = e.mem.alloc(0xd4);
+        assert_eq!(e.call(0x00b9_2440, &args![this + 0x6c, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x010b_5978);
+        assert_eq!(calls(&e, NI_SIZED_FREE_00AA1460), vec![vec![this, 0xd4]]);
+    }
+
+    /// The volumetric fog shader with a texture block whose index 2 holds `texture`.
+    fn fog(e: &mut Engine, texture: u32) -> u32 {
+        e.register(RETURN_VOLUMETRIC_FOG_TEXTURE_00B63D10, |_, _| {
+            Ret::default()
+        });
+        e.register(IMAGE_SPACE_TEXTURE_DESTRUCT_00BA3A00, |_, _| Ret::default());
+        e.register(MEMORY_FREE_00AA4060, |_, _| Ret::default());
+        e.register(ARRAY_SET_00BA3AA0, |e, a| {
+            assert_eq!(e.mem.u32(a[2]), 0);
+            let block = e.mem.u32(a[0] + 4);
+            e.mem.set_u32(block + 4 * a[1], 0);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0xd0);
+        let block = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0x98, block);
+        e.mem.set_u32(block + 8, texture);
+        this
+    }
+
+    #[test]
+    fn image_space_shader_volumetric_fog_destructor_drops_texture_two() {
+        let mut e = engine();
+        let this = fog(&mut e, 0x4400);
+        e.call(0x00b8_d4d0, &args![this]);
+        assert_eq!(e.mem.u32(this), 0x010b_0518);
+        assert_eq!(e.mem.u32(this + 0x6c), 0x010b_04f4);
+        assert_eq!(
+            calls(&e, RETURN_VOLUMETRIC_FOG_TEXTURE_00B63D10),
+            vec![vec![this]]
+        );
+        assert_eq!(
+            calls(&e, IMAGE_SPACE_TEXTURE_DESTRUCT_00BA3A00),
+            vec![vec![0x4400]]
+        );
+        assert_eq!(
+            calls(&e, MEMORY_FREE_00AA4060),
+            vec![vec![MEMORY_MANAGER, 0x4400]]
+        );
+        let set = calls(&e, ARRAY_SET_00BA3AA0);
+        assert_eq!(set.len(), 1);
+        assert_eq!(&set[0][..2], &[this + 0x94, 2]);
+        let order: Vec<u32> = e.call_log.as_ref().unwrap().iter().map(|c| c.0).collect();
+        assert_eq!(*order.last().unwrap(), IMAGE_SPACE_SHADER_DESTRUCT_00C03A20);
+        // No texture at index 2: only the two destructor steps.
+        let mut e = engine();
+        let this = fog(&mut e, 0);
+        e.call(0x00b8_d4d0, &args![this]);
+        assert!(calls(&e, ARRAY_SET_00BA3AA0).is_empty());
+        assert!(calls(&e, MEMORY_FREE_00AA4060).is_empty());
+        assert_eq!(
+            calls(&e, IMAGE_SPACE_SHADER_DESTRUCT_00C03A20),
+            vec![vec![this]]
+        );
+    }
+
+    #[test]
+    fn fn_00b8d580_frees_the_fog_shader() {
+        let mut e = engine();
+        let this = fog(&mut e, 0);
+        assert_eq!(e.call(0x00b8_d580, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x010b_0518);
+        assert_eq!(calls(&e, NI_SIZED_FREE_00AA1460), vec![vec![this, 0xd0]]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b8_d580, &args![this, 2u32]).u32(), this);
+        assert!(calls(&e, NI_SIZED_FREE_00AA1460).is_empty());
+    }
+
+    #[test]
+    fn fn_00b8d430_adjusts_to_the_fog_shader() {
+        let mut e = engine();
+        let this = fog(&mut e, 0);
+        assert_eq!(e.call(0x00b8_d430, &args![this + 0x6c, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x010b_0518);
+        assert_eq!(calls(&e, NI_SIZED_FREE_00AA1460), vec![vec![this, 0xd0]]);
+    }
+
+    #[test]
+    fn fn_00b8bda0_answers_the_byte_at_4() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 0x1234_5601);
+        assert_eq!(e.call(0x00b8_bda0, &args![this]).u32() & 0xff, 1);
+        e.mem.set_u8(this + 4, 0);
+        assert_eq!(e.call(0x00b8_bda0, &args![this]).u32() & 0xff, 0);
+    }
+
+    #[test]
+    fn fn_00b8bd50_destroys_the_shader() {
+        check_delete(0x00b8_bd50, 0x010a_ffc0, 0x010a_ffa0);
+    }
+
+    #[test]
+    fn fn_00b8bfa0_destroys_the_shader() {
+        check_delete(0x00b8_bfa0, 0x010b_0198, 0x010b_0174);
+    }
+
+    #[test]
+    fn fn_00b8d6c0_destroys_the_shader() {
+        check_delete(0x00b8_d6c0, 0x010b_06c0, 0x010b_06a0);
+    }
+
+    #[test]
+    fn fn_00b8d810_destroys_the_shader() {
+        check_delete(0x00b8_d810, 0x010b_0860, 0x010b_083c);
+    }
+
+    #[test]
+    fn fn_00b8d950_destroys_the_shader() {
+        check_delete(0x00b8_d950, 0x010b_0a00, 0x010b_09dc);
+    }
+
+    #[test]
+    fn fn_00b8daa0_destroys_the_shader() {
+        check_delete(0x00b8_daa0, 0x010b_0b98, 0x010b_0b78);
+    }
+
+    #[test]
+    fn fn_00b8dbf0_destroys_the_shader() {
+        check_delete(0x00b8_dbf0, 0x010b_0d40, 0x010b_0d1c);
+    }
+
+    #[test]
+    fn fn_00b8dd40_destroys_the_shader() {
+        check_delete(0x00b8_dd40, 0x010b_0ec0, 0x010b_0e9c);
+    }
+
+    #[test]
+    fn fn_00b8de90_destroys_the_shader() {
+        check_delete(0x00b8_de90, 0x010b_1040, 0x010b_101c);
+    }
+
+    #[test]
+    fn fn_00b8dfe0_destroys_the_shader() {
+        check_delete(0x00b8_dfe0, 0x010b_11c0, 0x010b_119c);
+    }
+
+    #[test]
+    fn fn_00b8e130_destroys_the_shader() {
+        check_delete(0x00b8_e130, 0x010b_1340, 0x010b_1320);
+    }
+
+    #[test]
+    fn fn_00b8e280_destroys_the_shader() {
+        check_delete(0x00b8_e280, 0x010b_14c0, 0x010b_14a0);
+    }
+
+    #[test]
+    fn fn_00b8e420_destroys_the_shader() {
+        check_delete(0x00b8_e420, 0x010b_1640, 0x010b_1620);
+    }
+
+    #[test]
+    fn fn_00b8e5c0_destroys_the_shader() {
+        check_delete(0x00b8_e5c0, 0x010b_17f8, 0x010b_17d8);
+    }
+
+    #[test]
+    fn fn_00b8e760_destroys_the_shader() {
+        check_delete(0x00b8_e760, 0x010b_1980, 0x010b_1960);
+    }
+
+    #[test]
+    fn fn_00b8e900_destroys_the_shader() {
+        check_delete(0x00b8_e900, 0x010b_1b08, 0x010b_1ae8);
+    }
+
+    #[test]
+    fn fn_00b8eaa0_destroys_the_shader() {
+        check_delete(0x00b8_eaa0, 0x010b_1c90, 0x010b_1c70);
+    }
+
+    #[test]
+    fn fn_00b8ec40_destroys_the_shader() {
+        check_delete(0x00b8_ec40, 0x010b_1e20, 0x010b_1dfc);
+    }
+
+    #[test]
+    fn fn_00b8ede0_destroys_the_shader() {
+        check_delete(0x00b8_ede0, 0x010b_1fb0, 0x010b_1f8c);
+    }
+
+    #[test]
+    fn fn_00b8ef60_destroys_the_shader() {
+        check_delete(0x00b8_ef60, 0x010b_2140, 0x010b_211c);
+    }
+
+    #[test]
+    fn fn_00b8f120_destroys_the_shader() {
+        check_delete(0x00b8_f120, 0x010b_2308, 0x010b_22e8);
+    }
+
+    #[test]
+    fn fn_00b8f2b0_destroys_the_shader() {
+        check_delete(0x00b8_f2b0, 0x010b_2490, 0x010b_2470);
+    }
+
+    #[test]
+    fn fn_00b8f470_destroys_the_shader() {
+        check_delete(0x00b8_f470, 0x010b_2610, 0x010b_25f0);
+    }
+
+    #[test]
+    fn fn_00b8f620_destroys_the_shader() {
+        check_delete(0x00b8_f620, 0x010b_27a8, 0x010b_2784);
+    }
+
+    #[test]
+    fn fn_00b8f6d0_destroys_the_shader() {
+        check_delete(0x00b8_f6d0, 0x010b_2920, 0x010b_28fc);
+    }
+
+    #[test]
+    fn fn_00b8f7a0_destroys_the_shader() {
+        check_delete(0x00b8_f7a0, 0x010b_2a98, 0x010b_2a74);
+    }
+
+    #[test]
+    fn fn_00b8f8f0_destroys_the_shader() {
+        check_delete(0x00b8_f8f0, 0x010b_2c10, 0x010b_2bec);
+    }
+
+    #[test]
+    fn fn_00b8fa40_destroys_the_shader() {
+        check_delete(0x00b8_fa40, 0x010b_2db0, 0x010b_2d8c);
+    }
+
+    #[test]
+    fn fn_00b8fba0_destroys_the_shader() {
+        check_delete(0x00b8_fba0, 0x010b_2f50, 0x010b_2f30);
+    }
+
+    #[test]
+    fn fn_00b8fd00_destroys_the_shader() {
+        check_delete(0x00b8_fd00, 0x010b_30e0, 0x010b_30c0);
+    }
+
+    #[test]
+    fn fn_00b8fe60_destroys_the_shader() {
+        check_delete(0x00b8_fe60, 0x010b_3268, 0x010b_3244);
+    }
+
+    #[test]
+    fn fn_00b8ffb0_destroys_the_shader() {
+        check_delete(0x00b8_ffb0, 0x010b_33f0, 0x010b_33cc);
+    }
+
+    #[test]
+    fn fn_00b90150_destroys_the_shader() {
+        check_delete(0x00b9_0150, 0x010b_3598, 0x010b_3574);
+    }
+
+    #[test]
+    fn fn_00b902f0_destroys_the_shader() {
+        check_delete(0x00b9_02f0, 0x010b_37a8, 0x010b_3788);
+    }
+
+    #[test]
+    fn fn_00b904e0_destroys_the_shader() {
+        check_delete(0x00b9_04e0, 0x010b_3958, 0x010b_3934);
+    }
+
+    #[test]
+    fn fn_00b90670_destroys_the_shader() {
+        check_delete(0x00b9_0670, 0x010b_3af0, 0x010b_3ad0);
+    }
+
+    #[test]
+    fn fn_00b907f0_destroys_the_shader() {
+        check_delete(0x00b9_07f0, 0x010b_3c78, 0x010b_3c58);
+    }
+
+    #[test]
+    fn fn_00b90980_destroys_the_shader() {
+        check_delete(0x00b9_0980, 0x010b_3e18, 0x010b_3df4);
+    }
+
+    #[test]
+    fn fn_00b90b10_destroys_the_shader() {
+        check_delete(0x00b9_0b10, 0x010b_3fa8, 0x010b_3f88);
+    }
+
+    #[test]
+    fn fn_00b90ca0_destroys_the_shader() {
+        check_delete(0x00b9_0ca0, 0x010b_4138, 0x010b_4114);
+    }
+
+    #[test]
+    fn fn_00b90e30_destroys_the_shader() {
+        check_delete(0x00b9_0e30, 0x010b_42c8, 0x010b_42a4);
+    }
+
+    #[test]
+    fn fn_00b90fc0_destroys_the_shader() {
+        check_delete(0x00b9_0fc0, 0x010b_4460, 0x010b_443c);
+    }
+
+    #[test]
+    fn fn_00b91160_destroys_the_shader() {
+        check_delete(0x00b9_1160, 0x010b_4600, 0x010b_45dc);
+    }
+
+    #[test]
+    fn fn_00b91300_destroys_the_shader() {
+        check_delete(0x00b9_1300, 0x010b_47a0, 0x010b_477c);
+    }
+
+    #[test]
+    fn fn_00b914a0_destroys_the_shader() {
+        check_delete(0x00b9_14a0, 0x010b_4938, 0x010b_4914);
+    }
+
+    #[test]
+    fn fn_00b91640_destroys_the_shader() {
+        check_delete(0x00b9_1640, 0x010b_4ad0, 0x010b_4aac);
+    }
+
+    #[test]
+    fn fn_00b91780_destroys_the_shader() {
+        check_delete(0x00b9_1780, 0x010b_4c68, 0x010b_4c48);
+    }
+
+    #[test]
+    fn fn_00b918c0_destroys_the_shader() {
+        check_delete(0x00b9_18c0, 0x010b_4de8, 0x010b_4dc8);
+    }
+
+    #[test]
+    fn fn_00b91a00_destroys_the_shader() {
+        check_delete(0x00b9_1a00, 0x010b_4f80, 0x010b_4f60);
+    }
+
+    #[test]
+    fn fn_00b91cb0_destroys_the_shader() {
+        check_delete(0x00b9_1cb0, 0x010b_52c0, 0x010b_52a0);
+    }
+
+    #[test]
+    fn fn_00b91e00_destroys_the_shader() {
+        check_delete(0x00b9_1e00, 0x010b_5480, 0x010b_5460);
+    }
+
+    #[test]
+    fn fn_00b91f50_destroys_the_shader() {
+        check_delete(0x00b9_1f50, 0x010b_5640, 0x010b_5620);
+    }
+
+    #[test]
+    fn fn_00b92290_destroys_the_shader() {
+        check_delete(0x00b9_2290, 0x010b_57d0, 0x010b_57b0);
+    }
+
+    #[test]
+    fn fn_00b92570_destroys_the_shader() {
+        check_delete(0x00b9_2570, 0x010b_5b10, 0x010b_5af0);
+    }
+
+    #[test]
+    fn fn_00b927a0_destroys_the_shader() {
+        check_delete(0x00b9_27a0, 0x010b_5cb8, 0x010b_5c94);
+    }
+
+    #[test]
+    fn fn_00b928f0_destroys_the_shader() {
+        check_delete(0x00b9_28f0, 0x010b_5ea8, 0x010b_5e84);
+    }
+
+    #[test]
+    fn fn_00b92a40_destroys_the_shader() {
+        check_delete(0x00b9_2a40, 0x010b_6048, 0x010b_6028);
+    }
+
+    #[test]
+    fn fn_00b92b90_destroys_the_shader() {
+        check_delete(0x00b9_2b90, 0x010b_61f0, 0x010b_61d0);
+    }
+
+    #[test]
+    fn fn_00b92ce0_destroys_the_shader() {
+        check_delete(0x00b9_2ce0, 0x010b_6398, 0x010b_6374);
+    }
+
+    #[test]
+    fn fn_00b92ea0_destroys_the_shader() {
+        check_delete(0x00b9_2ea0, 0x010b_6548, 0x010b_6524);
+    }
+
+    #[test]
+    fn fn_00b92ff0_destroys_the_shader() {
+        check_delete(0x00b9_2ff0, 0x010b_66f0, 0x010b_66cc);
+    }
+
+    #[test]
+    fn fn_00b93140_destroys_the_shader() {
+        check_delete(0x00b9_3140, 0x010b_68a0, 0x010b_687c);
+    }
+
+    #[test]
+    fn fn_00b93290_destroys_the_shader() {
+        check_delete(0x00b9_3290, 0x010b_6a40, 0x010b_6a20);
+    }
+
+    #[test]
+    fn fn_00b933e0_destroys_the_shader() {
+        check_delete(0x00b9_33e0, 0x010b_6bd8, 0x010b_6bb8);
+    }
+
+    #[test]
+    fn fn_00b93710_destroys_the_shader() {
+        check_delete(0x00b9_3710, 0x010b_6d90, 0x010b_6d70);
+    }
+
+    #[test]
+    fn fn_00b93a60_destroys_the_shader() {
+        check_delete(0x00b9_3a60, 0x010b_6f38, 0x010b_6f14);
+    }
+
+    #[test]
+    fn fn_00b93bb0_destroys_the_shader() {
+        check_delete(0x00b9_3bb0, 0x010b_70d8, 0x010b_70b8);
+    }
+
+    #[test]
+    fn fn_00b93d00_destroys_the_shader() {
+        check_delete(0x00b9_3d00, 0x010b_7278, 0x010b_7258);
+    }
+
+    #[test]
+    fn fn_00b93e50_destroys_the_shader() {
+        check_delete(0x00b9_3e50, 0x010b_7418, 0x010b_73f4);
+    }
+
+    #[test]
+    fn fn_00b93fa0_destroys_the_shader() {
+        check_delete(0x00b9_3fa0, 0x010b_7598, 0x010b_7578);
+    }
+
+    #[test]
+    fn fn_00b940f0_destroys_the_shader() {
+        check_delete(0x00b9_40f0, 0x010b_7720, 0x010b_7700);
+    }
+
+    #[test]
+    fn fn_00b94240_destroys_the_shader() {
+        check_delete(0x00b9_4240, 0x010b_78b8, 0x010b_7898);
+    }
+
+    #[test]
+    fn fn_00b94390_destroys_the_shader() {
+        check_delete(0x00b9_4390, 0x010b_7a50, 0x010b_7a2c);
+    }
+
+    #[test]
+    fn fn_00b944e0_destroys_the_shader() {
+        check_delete(0x00b9_44e0, 0x010b_7bf0, 0x010b_7bcc);
+    }
+
+    #[test]
+    fn fn_00b8bd80_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_bd80, 0x010a_ffc0, 0x010a_ffa0);
+    }
+
+    #[test]
+    fn fn_00b8bfd0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_bfd0, 0x010b_0198, 0x010b_0174);
+    }
+
+    #[test]
+    fn fn_00b8d6f0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_d6f0, 0x010b_06c0, 0x010b_06a0);
+    }
+
+    #[test]
+    fn fn_00b8d840_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_d840, 0x010b_0860, 0x010b_083c);
+    }
+
+    #[test]
+    fn fn_00b8d980_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_d980, 0x010b_0a00, 0x010b_09dc);
+    }
+
+    #[test]
+    fn fn_00b8dad0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_dad0, 0x010b_0b98, 0x010b_0b78);
+    }
+
+    #[test]
+    fn fn_00b8dc20_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_dc20, 0x010b_0d40, 0x010b_0d1c);
+    }
+
+    #[test]
+    fn fn_00b8dd70_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_dd70, 0x010b_0ec0, 0x010b_0e9c);
+    }
+
+    #[test]
+    fn fn_00b8dec0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_dec0, 0x010b_1040, 0x010b_101c);
+    }
+
+    #[test]
+    fn fn_00b8e010_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_e010, 0x010b_11c0, 0x010b_119c);
+    }
+
+    #[test]
+    fn fn_00b8e160_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_e160, 0x010b_1340, 0x010b_1320);
+    }
+
+    #[test]
+    fn fn_00b8e2b0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_e2b0, 0x010b_14c0, 0x010b_14a0);
+    }
+
+    #[test]
+    fn fn_00b8e450_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_e450, 0x010b_1640, 0x010b_1620);
+    }
+
+    #[test]
+    fn fn_00b8e5f0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_e5f0, 0x010b_17f8, 0x010b_17d8);
+    }
+
+    #[test]
+    fn fn_00b8e790_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_e790, 0x010b_1980, 0x010b_1960);
+    }
+
+    #[test]
+    fn fn_00b8e930_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_e930, 0x010b_1b08, 0x010b_1ae8);
+    }
+
+    #[test]
+    fn fn_00b8ead0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_ead0, 0x010b_1c90, 0x010b_1c70);
+    }
+
+    #[test]
+    fn fn_00b8ec70_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_ec70, 0x010b_1e20, 0x010b_1dfc);
+    }
+
+    #[test]
+    fn fn_00b8ee10_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_ee10, 0x010b_1fb0, 0x010b_1f8c);
+    }
+
+    #[test]
+    fn fn_00b8ef90_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_ef90, 0x010b_2140, 0x010b_211c);
+    }
+
+    #[test]
+    fn fn_00b8f150_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_f150, 0x010b_2308, 0x010b_22e8);
+    }
+
+    #[test]
+    fn fn_00b8f2e0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_f2e0, 0x010b_2490, 0x010b_2470);
+    }
+
+    #[test]
+    fn fn_00b8f4a0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_f4a0, 0x010b_2610, 0x010b_25f0);
+    }
+
+    #[test]
+    fn fn_00b8f650_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_f650, 0x010b_27a8, 0x010b_2784);
+    }
+
+    #[test]
+    fn fn_00b8f700_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_f700, 0x010b_2920, 0x010b_28fc);
+    }
+
+    #[test]
+    fn fn_00b8f7d0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_f7d0, 0x010b_2a98, 0x010b_2a74);
+    }
+
+    #[test]
+    fn fn_00b8f920_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_f920, 0x010b_2c10, 0x010b_2bec);
+    }
+
+    #[test]
+    fn fn_00b8fa70_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_fa70, 0x010b_2db0, 0x010b_2d8c);
+    }
+
+    #[test]
+    fn fn_00b8fbd0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_fbd0, 0x010b_2f50, 0x010b_2f30);
+    }
+
+    #[test]
+    fn fn_00b8fd30_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_fd30, 0x010b_30e0, 0x010b_30c0);
+    }
+
+    #[test]
+    fn fn_00b8fe90_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_fe90, 0x010b_3268, 0x010b_3244);
+    }
+
+    #[test]
+    fn fn_00b8ffe0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b8_ffe0, 0x010b_33f0, 0x010b_33cc);
+    }
+
+    #[test]
+    fn fn_00b90180_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_0180, 0x010b_3598, 0x010b_3574);
+    }
+
+    #[test]
+    fn fn_00b90320_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_0320, 0x010b_37a8, 0x010b_3788);
+    }
+
+    #[test]
+    fn fn_00b90510_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_0510, 0x010b_3958, 0x010b_3934);
+    }
+
+    #[test]
+    fn fn_00b906a0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_06a0, 0x010b_3af0, 0x010b_3ad0);
+    }
+
+    #[test]
+    fn fn_00b90820_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_0820, 0x010b_3c78, 0x010b_3c58);
+    }
+
+    #[test]
+    fn fn_00b909b0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_09b0, 0x010b_3e18, 0x010b_3df4);
+    }
+
+    #[test]
+    fn fn_00b90b40_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_0b40, 0x010b_3fa8, 0x010b_3f88);
+    }
+
+    #[test]
+    fn fn_00b90cd0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_0cd0, 0x010b_4138, 0x010b_4114);
+    }
+
+    #[test]
+    fn fn_00b90e60_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_0e60, 0x010b_42c8, 0x010b_42a4);
+    }
+
+    #[test]
+    fn fn_00b90ff0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_0ff0, 0x010b_4460, 0x010b_443c);
+    }
+
+    #[test]
+    fn fn_00b91190_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_1190, 0x010b_4600, 0x010b_45dc);
+    }
+
+    #[test]
+    fn fn_00b91330_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_1330, 0x010b_47a0, 0x010b_477c);
+    }
+
+    #[test]
+    fn fn_00b914d0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_14d0, 0x010b_4938, 0x010b_4914);
+    }
+
+    #[test]
+    fn fn_00b91670_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_1670, 0x010b_4ad0, 0x010b_4aac);
+    }
+
+    #[test]
+    fn fn_00b917b0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_17b0, 0x010b_4c68, 0x010b_4c48);
+    }
+
+    #[test]
+    fn fn_00b918f0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_18f0, 0x010b_4de8, 0x010b_4dc8);
+    }
+
+    #[test]
+    fn fn_00b91a30_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_1a30, 0x010b_4f80, 0x010b_4f60);
+    }
+
+    #[test]
+    fn fn_00b91ce0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_1ce0, 0x010b_52c0, 0x010b_52a0);
+    }
+
+    #[test]
+    fn fn_00b91e30_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_1e30, 0x010b_5480, 0x010b_5460);
+    }
+
+    #[test]
+    fn fn_00b91f80_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_1f80, 0x010b_5640, 0x010b_5620);
+    }
+
+    #[test]
+    fn fn_00b922c0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_22c0, 0x010b_57d0, 0x010b_57b0);
+    }
+
+    #[test]
+    fn fn_00b925a0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_25a0, 0x010b_5b10, 0x010b_5af0);
+    }
+
+    #[test]
+    fn fn_00b927d0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_27d0, 0x010b_5cb8, 0x010b_5c94);
+    }
+
+    #[test]
+    fn fn_00b92920_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_2920, 0x010b_5ea8, 0x010b_5e84);
+    }
+
+    #[test]
+    fn fn_00b92a70_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_2a70, 0x010b_6048, 0x010b_6028);
+    }
+
+    #[test]
+    fn fn_00b92bc0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_2bc0, 0x010b_61f0, 0x010b_61d0);
+    }
+
+    #[test]
+    fn fn_00b92d10_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_2d10, 0x010b_6398, 0x010b_6374);
+    }
+
+    #[test]
+    fn fn_00b92ed0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_2ed0, 0x010b_6548, 0x010b_6524);
+    }
+
+    #[test]
+    fn fn_00b93020_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_3020, 0x010b_66f0, 0x010b_66cc);
+    }
+
+    #[test]
+    fn fn_00b93170_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_3170, 0x010b_68a0, 0x010b_687c);
+    }
+
+    #[test]
+    fn fn_00b932c0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_32c0, 0x010b_6a40, 0x010b_6a20);
+    }
+
+    #[test]
+    fn fn_00b93410_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_3410, 0x010b_6bd8, 0x010b_6bb8);
+    }
+
+    #[test]
+    fn fn_00b93740_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_3740, 0x010b_6d90, 0x010b_6d70);
+    }
+
+    #[test]
+    fn fn_00b93a90_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_3a90, 0x010b_6f38, 0x010b_6f14);
+    }
+
+    #[test]
+    fn fn_00b93be0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_3be0, 0x010b_70d8, 0x010b_70b8);
+    }
+
+    #[test]
+    fn fn_00b93d30_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_3d30, 0x010b_7278, 0x010b_7258);
+    }
+
+    #[test]
+    fn fn_00b93e80_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_3e80, 0x010b_7418, 0x010b_73f4);
+    }
+
+    #[test]
+    fn fn_00b93fd0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_3fd0, 0x010b_7598, 0x010b_7578);
+    }
+
+    #[test]
+    fn fn_00b94120_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_4120, 0x010b_7720, 0x010b_7700);
+    }
+
+    #[test]
+    fn fn_00b94270_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_4270, 0x010b_78b8, 0x010b_7898);
+    }
+
+    #[test]
+    fn fn_00b943c0_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_43c0, 0x010b_7a50, 0x010b_7a2c);
+    }
+
+    #[test]
+    fn fn_00b94510_adjusts_to_the_shader() {
+        check_effect_delete(0x00b9_4510, 0x010b_7bf0, 0x010b_7bcc);
     }
 }
