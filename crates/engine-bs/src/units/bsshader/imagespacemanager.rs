@@ -3311,6 +3311,2882 @@ pub fn fn_00b94510(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     )
 }
 
+use crate::units::bsshader::geometrydecalshader::shader_inline::pass_render_state;
+
+/// `_memset` (`00ec61c0`, `cdecl`: block, byte, size).
+const MEMSET_00EC61C0: u32 = 0x00ec_61c0;
+/// The pixel shader profile `00b4f380` (unnamed, unit `bsshadermanager.cpp`; `cdecl`, one word)
+/// the reloads below pass as their pixel profile, given 1.
+const PIXEL_PROFILE_00B4F380: u32 = 0x00b4_f380;
+/// The byte the shader reloads test to pick their pixel shader file and name (`011f94fc`):
+/// while it is clear they take the plain file, else the `_TEST` one.
+const TEST_SHADERS_011F94FC: u32 = 0x011f_94fc;
+
+/// Stores of the stack frame `frame` the exe makes between two calls: each word at its offset.
+fn put(e: &mut Engine, frame: u32, words: &[(u32, u32)]) {
+    for &(offset, value) in words {
+        e.mem.set_u32(frame + offset, value);
+    }
+}
+
+/// `REP MOVSD` of `count` words from `from` to `to`, lowest first.
+fn copy_words(e: &mut Engine, from: u32, to: u32, count: u32) {
+    for index in 0..count {
+        let word = e.mem.u32(from + 4 * index);
+        e.mem.set_u32(to + 4 * index, word);
+    }
+}
+
+/// The render states two of the shader reloads (`00b8bdb0`, `00b925b0`) set after loading, on
+/// the pass the `NiPointer` at +0x5c holds (each through `pass_render_state`: the pass's state
+/// block at +0x30 made by `00e7f5d0` when null, then `00e7f430` with the state, the value and
+/// 1): 0x1b = 1 on the pass read first, then 0x13 = 5 and 0x14 = 6 on the pass read again
+/// (once for both).
+fn scanline_render_states(e: &mut Engine, this: Ptr) {
+    let pass = e.mem.u32(this.addr() + 0x5c);
+    pass_render_state(e, pass, 0x1b, 1);
+    let pass = e.mem.u32(this.addr() + 0x5c);
+    pass_render_state(e, pass, 0x13, 5);
+    pass_render_state(e, pass, 0x14, 6);
+}
+
+/// The three render states `00b8d460` and `00b92d20` set: 0x34 = 1, 0x38 = 3 and 0x39 = 1, each
+/// on the pass the `NiPointer` at +0x5c holds, read again for each (`pass_render_state`).
+fn blend_render_states(e: &mut Engine, this: Ptr) {
+    for (state, value) in [(0x34u32, 1u32), (0x38, 3), (0x39, 1)] {
+        let pass = e.mem.u32(this.addr() + 0x5c);
+        pass_render_state(e, pass, state, value);
+    }
+}
+
+// Translated from 00b8d460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: slot
+/// +0x150 of the shader `00b8d330` constructs (vtable `010b0518`; the slot of
+/// `ImageSpaceShader::SetState` in the Xbox PDB once the PC's eight-byte shift of the other
+/// slots is counted, unconfirmed): sets the render states 0x34 = 1, 0x38 = 3 and 0x39 = 1 on the
+/// pass at +0x5c (`blend_render_states`).
+pub fn fn_00b8d460(e: &mut Engine, this: Ptr) {
+    blend_render_states(e, this);
+}
+
+/// The byte `00b92d20` tests before setting its render states (`011ad832`).
+const FLAG_011AD832: u32 = 0x011a_d832;
+
+// Translated from 00b92d20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: slot +0x150
+/// of the shaders `00b92930` and `00b92bd0` construct (vtables `010b6048` and `010b6398`): when
+/// the byte at `011ad832` is set, sets the render states 0x34 = 1, 0x38 = 3 and 0x39 = 1 on the
+/// pass at +0x5c (`blend_render_states`); else nothing.
+pub fn fn_00b92d20(e: &mut Engine, this: Ptr) {
+    if e.global::<u8>(FLAG_011AD832) != 0 {
+        blend_render_states(e, this);
+    }
+}
+
+// Translated from 00b8bdb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8bce0` constructs (vtable `010affc0`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\2x\p\scanlines_blend.p.hlsl"` (defines `"BLURSRC1"` (null), `"VATS"`
+/// (null)) (each 0x4c bytes: a file and up to nine define pairs, the rest cleared through
+/// `memset` in the exe's order), calls its vtable slot +0x13c with them, the name
+/// `"IFVATSSCANBLEND"` and the profiles `"vs_1_1"` and `"ps_2_0"`, then slot +0x14c, then the
+/// render states of `scanline_render_states`.
+pub fn fn_00b8bdb0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_0130),
+                (0x4, 0x010b_0124),
+                (0x8, 0),
+                (0xc, 0x0106_3538),
+                (0x10, 0),
+                (0x14, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x18, 0u32, 0x34u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_0114u32, 0x010a_93ecu32, 0x010a_93ccu32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+        scanline_render_states(e, this);
+    });
+}
+
+// Translated from 00b8bf10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8bea0` constructs (vtable `010b0198`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\2x\p\sunbeams.p.hlsl"` (no defines) (each 0x4c bytes: a file and up
+/// to nine define pairs, the rest cleared through `memset` in the exe's order), calls its
+/// vtable slot +0x13c with them, the name `"Sunbeams"` and the profiles `"vs_1_1"` and
+/// `"ps_2_a"`, then slot +0x14c.
+pub fn fn_00b8bf10(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(e, f, &[(0x0, 0x010b_02f8), (0x4, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x8, 0u32, 0x44u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_02ecu32, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8c0e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8c070` constructs (vtable `010b0338`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\2x\p\tv.p.hlsl"` (no defines) (each 0x4c bytes: a file and up to nine
+/// define pairs, the rest cleared through `memset` in the exe's order), calls its vtable slot
+/// +0x13c with them, the name `"TV"` and the profiles `"vs_1_1"` and `"ps_2_0"`, then slot
+/// +0x14c.
+pub fn fn_00b8c0e0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(e, f, &[(0x0, 0x010b_0490), (0x4, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x8, 0u32, 0x44u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_048cu32, 0x010a_93ecu32, 0x010a_93ccu32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8d3a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8d330` constructs (vtable `010b0518`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\2x\p\VolumetricFogBlend.p.hlsl"` (no defines) (each 0x4c bytes: a
+/// file and up to nine define pairs, the rest cleared through `memset` in the exe's order),
+/// calls its vtable slot +0x13c with them, the name `"VFOG"` and the profiles `"vs_1_1"` and
+/// `"ps_2_0"`, then slot +0x14c.
+pub fn fn_00b8d3a0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        put(e, f, &[(0x0, 0x010b_0674), (0x4, 0), (0x8, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0xc, 0u32, 0x40u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_066cu32, 0x010a_93ecu32, 0x010a_93ccu32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8d620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8d5b0` constructs (vtable `010b06c0`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\1x\p\copy.p.hlsl"` (defines `"ALPHAMULT"` = `""`) (each 0x4c bytes: a
+/// file and up to nine define pairs, the rest cleared through `memset` in the exe's order),
+/// calls its vtable slot +0x13c with them, the name `"ALPHAMULT"` and the profiles `"vs_1_1"`
+/// and `"ps_2_0"`, then slot +0x14c.
+pub fn fn_00b8d620(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_0820),
+                (0x4, 0x010b_0814),
+                (0x8, 0x0101_1584),
+                (0xc, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_0814u32, 0x010a_93ecu32, 0x010a_93ccu32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8d770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8d700` constructs (vtable `010b0860`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (defines `"TEX2"` =
+/// `""`) and the pixel one `"imagespace\2x\p\blend.p.hlsl"` (no defines) (each 0x4c bytes: a
+/// file and up to nine define pairs, the rest cleared through `memset` in the exe's order),
+/// calls its vtable slot +0x13c with them, the name `"BLEND"` and the profiles `"vs_1_1"` and
+/// `"ps_2_0"`, then slot +0x14c.
+pub fn fn_00b8d770(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_0158),
+                (0x4, 0x010b_09d4),
+                (0x8, 0x0101_1584),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        put(e, f, &[(0x4c, 0x010b_09b4), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f, f + 0x4c, 0x0109_ab38u32, 0x010a_93ecu32, 0x010a_93ccu32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8d8c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8d850` constructs (vtable `010b0a00`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\2x\p\blur.p.hlsl"` (no defines) (each 0x4c bytes: a file and up to
+/// nine define pairs, the rest cleared through `memset` in the exe's order), calls its vtable
+/// slot +0x13c with them, the name `"BLUR"` and the profiles `"vs_1_1"` and `"ps_2_a"`, then
+/// slot +0x14c.
+pub fn fn_00b8d8c0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(e, f, &[(0x0, 0x010b_0b5c), (0x4, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x8, 0u32, 0x44u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_0b54u32, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8da00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8d990` constructs (vtable `010b0b98`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\2x\p\blur2.p.hlsl"` (defines `"TEXTAP"` = `"3"`) (each 0x4c bytes: a
+/// file and up to nine define pairs, the rest cleared through `memset` in the exe's order),
+/// calls its vtable slot +0x13c with them, the name `"BLUR3"` and the profiles `"vs_1_1"` and
+/// `"ps_2_a"`, then slot +0x14c.
+pub fn fn_00b8da00(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_0cfc),
+                (0x4, 0x010b_0cf4),
+                (0x8, 0x0106_3f30),
+                (0xc, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_0cecu32, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8db50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8dae0` constructs (vtable `010b0d40`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\2x\p\blur2.p.hlsl"` (defines `"TEXTAP"` = `"5"`) (each 0x4c bytes: a
+/// file and up to nine define pairs, the rest cleared through `memset` in the exe's order),
+/// calls its vtable slot +0x13c with them, the name `"BLUR5"` and the profiles `"vs_1_1"` and
+/// `"ps_2_a"`, then slot +0x14c.
+pub fn fn_00b8db50(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_0cfc),
+                (0x4, 0x010b_0cf4),
+                (0x8, 0x0106_3f18),
+                (0xc, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_0e94u32, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8dca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8dc30` constructs (vtable `010b0ec0`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\2x\p\blur2.p.hlsl"` (defines `"TEXTAP"` = `"7"`) (each 0x4c bytes: a
+/// file and up to nine define pairs, the rest cleared through `memset` in the exe's order),
+/// calls its vtable slot +0x13c with them, the name `"BLUR7"` and the profiles `"vs_1_1"` and
+/// `"ps_2_a"`, then slot +0x14c.
+pub fn fn_00b8dca0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_0cfc),
+                (0x4, 0x010b_0cf4),
+                (0x8, 0x0106_3f00),
+                (0xc, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_1014u32, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8ddf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8dd80` constructs (vtable `010b1040`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\2x\p\blur2.p.hlsl"` (defines `"TEXTAP"` = `"9"`) (each 0x4c bytes: a
+/// file and up to nine define pairs, the rest cleared through `memset` in the exe's order),
+/// calls its vtable slot +0x13c with them, the name `"BLUR9"` and the profiles `"vs_1_1"` and
+/// `"ps_2_a"`, then slot +0x14c.
+pub fn fn_00b8ddf0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_0cfc),
+                (0x4, 0x010b_0cf4),
+                (0x8, 0x0106_3ee8),
+                (0xc, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_1194u32, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8df40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8ded0` constructs (vtable `010b11c0`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\2x\p\blur2.p.hlsl"` (defines `"TEXTAP"` = `"11"`) (each 0x4c bytes: a
+/// file and up to nine define pairs, the rest cleared through `memset` in the exe's order),
+/// calls its vtable slot +0x13c with them, the name `"BLUR11"` and the profiles `"vs_1_1"` and
+/// `"ps_2_a"`, then slot +0x14c.
+pub fn fn_00b8df40(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_0cfc),
+                (0x4, 0x010b_0cf4),
+                (0x8, 0x010b_131c),
+                (0xc, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_1314u32, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8e090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8e020` constructs (vtable `010b1340`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\2x\p\blur2.p.hlsl"` (defines `"TEXTAP"` = `"13"`) (each 0x4c bytes: a
+/// file and up to nine define pairs, the rest cleared through `memset` in the exe's order),
+/// calls its vtable slot +0x13c with them, the name `"BLUR13"` and the profiles `"vs_1_1"` and
+/// `"ps_2_a"`, then slot +0x14c.
+pub fn fn_00b8e090(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_0cfc),
+                (0x4, 0x010b_0cf4),
+                (0x8, 0x010b_149c),
+                (0xc, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_1494u32, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8e1e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8e170` constructs (vtable `010b14c0`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\2x\p\blur2.p.hlsl"` (defines `"TEXTAP"` = `"15"`) (each 0x4c bytes: a
+/// file and up to nine define pairs, the rest cleared through `memset` in the exe's order),
+/// calls its vtable slot +0x13c with them, the name `"BLUR15"` and the profiles `"vs_1_1"` and
+/// `"ps_2_a"`, then slot +0x14c.
+pub fn fn_00b8e1e0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_0cfc),
+                (0x4, 0x010b_0cf4),
+                (0x8, 0x010b_161c),
+                (0xc, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_1614u32, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8ee90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8ee20` constructs (vtable `010b2140`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\2x\p\cinematic.p.hlsl"` (defines `"TINT"` = `""`, `"SATURATION"` =
+/// `""`, `"BRIGHT"` = `""`, `"CONTRAST"` = `""`) (each 0x4c bytes: a file and up to nine define
+/// pairs, the rest cleared through `memset` in the exe's order), calls its vtable slot +0x13c
+/// with them, the name `"Cinematic"` and the profiles `"vs_1_1"` and `"ps_2_a"`, then slot
+/// +0x14c.
+pub fn fn_00b8ee90(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x8, 0x0101_1584),
+                (0x10, 0x0101_1584),
+                (0x18, 0x0101_1584),
+                (0x20, 0x0101_1584),
+                (0x28, 0),
+                (0x2c, 0),
+                (0x30, 0),
+                (0x34, 0),
+                (0x38, 0),
+                (0x3c, 0),
+                (0x40, 0),
+                (0x44, 0),
+                (0x48, 0),
+                (0x0, 0x010b_22bc),
+                (0x4, 0x010b_22b4),
+                (0xc, 0x010b_22a8),
+                (0x14, 0x010b_22a0),
+                (0x1c, 0x010b_2294),
+                (0x24, 0),
+            ],
+        );
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x0105_ea48u32, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8f080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8f010` constructs (vtable `010b2308`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\1x\p\copy.p.hlsl"` (defines `"TWO_TARGETS"` = `""`) (each 0x4c bytes:
+/// a file and up to nine define pairs, the rest cleared through `memset` in the exe's order),
+/// calls its vtable slot +0x13c with them, the name `"COPYRT1"` and the profiles `"vs_1_1"` and
+/// `"ps_2_0"`, then slot +0x14c.
+pub fn fn_00b8f080(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_0820),
+                (0x4, 0x010b_2464),
+                (0x8, 0x0101_1584),
+                (0xc, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_245cu32, 0x010a_93ecu32, 0x010a_93ccu32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8f220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8f1b0` constructs (vtable `010b2490`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\1x\p\copy.p.hlsl"` (no defines) (each 0x4c bytes: a file and up to
+/// nine define pairs, the rest cleared through `memset` in the exe's order), calls its vtable
+/// slot +0x13c with them, the name `"STENCILCOPY"` and the profiles `"vs_1_1"` and the pixel
+/// profile `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b8f220(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(e, f, &[(0x0, 0x010b_0820), (0x4, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x8, 0u32, 0x44u32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_25e4u32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8f3d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8f360` constructs (vtable `010b2610`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\1x\p\copy.p.hlsl"` (defines `"NOTEX"` = `""`) (each 0x4c bytes: a
+/// file and up to nine define pairs, the rest cleared through `memset` in the exe's order),
+/// calls its vtable slot +0x13c with them, the name `"STENCILCOPYNOTEXNODEPTH"` and the
+/// profiles `"vs_1_1"` and the pixel profile `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b8f3d0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_0820),
+                (0x4, 0x010b_277c),
+                (0x8, 0x0101_1584),
+                (0xc, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_2764u32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8f590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8f520` constructs (vtable `010b27a8`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (defines `"NOTEX"` =
+/// `""`) and the pixel one null (no defines) (each 0x4c bytes: a file and up to nine define
+/// pairs, the rest cleared through `memset` in the exe's order), calls its vtable slot +0x13c
+/// with them, the name `"NULL"` and the profiles `"vs_1_1"` and null, then slot +0x14c.
+pub fn fn_00b8f590(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_0158),
+                (0x4, 0x010b_277c),
+                (0x8, 0x0101_1584),
+                (0xc, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        put(e, f, &[(0x4c, 0), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f, f + 0x4c, 0x0101_f7a8u32, 0x010a_93ecu32, 0x0000_0000u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8f710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8efa0` constructs (vtable `010b2a98`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\1x\p\copy.p.hlsl"` (no defines) (each 0x4c bytes: a file and up to
+/// nine define pairs, the rest cleared through `memset` in the exe's order), calls its vtable
+/// slot +0x13c with them, the name `"COPY"` and the profiles `"vs_1_1"` and the pixel profile
+/// `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b8f710(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(e, f, &[(0x0, 0x010b_0820), (0x4, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x8, 0u32, 0x44u32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_22e0u32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8f850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8f7e0` constructs (vtable `010b2c10`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (defines `"TEX2"` =
+/// `""`) and the pixel one `"imagespace\2x\p\DepthOfField.p.hlsl"` (no defines) (each 0x4c
+/// bytes: a file and up to nine define pairs, the rest cleared through `memset` in the exe's
+/// order), calls its vtable slot +0x13c with them, the name `"DOF"` and the profiles `"vs_1_1"`
+/// and `"ps_2_0"`, then slot +0x14c.
+pub fn fn_00b8f850(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_0158),
+                (0x4, 0x010b_09d4),
+                (0x8, 0x0101_1584),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        put(e, f, &[(0x4c, 0x010b_2d68), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f, f + 0x4c, 0x010b_2d64u32, 0x010a_93ecu32, 0x010a_93ccu32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8f9a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8f930` constructs (vtable `010b2db0`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (defines `"TEX2"` =
+/// `""`) and the pixel one `"imagespace\2x\p\RadialBlur.p.hlsl"` (no defines) (each 0x4c bytes:
+/// a file and up to nine define pairs, the rest cleared through `memset` in the exe's order),
+/// calls its vtable slot +0x13c with them, the name `"RBLUR"` and the profiles `"vs_1_1"` and
+/// `"ps_2_0"`, then slot +0x14c.
+pub fn fn_00b8f9a0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_0158),
+                (0x4, 0x010b_09d4),
+                (0x8, 0x0101_1584),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        put(e, f, &[(0x4c, 0x010b_2f0c), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f, f + 0x4c, 0x010b_2f04u32, 0x010a_93ecu32, 0x010a_93ccu32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8faf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8fa80` constructs (vtable `010b2f50`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (defines `"TEX2"` =
+/// `""`) and the pixel one `"imagespace\2x\p\RadialBlur.p.hlsl"` (defines `"NUM_STEPS"` =
+/// `"6.0f"`) (each 0x4c bytes: a file and up to nine define pairs, the rest cleared through
+/// `memset` in the exe's order), calls its vtable slot +0x13c with them, the name `"RBLURM"`
+/// and the profiles `"vs_1_1"` and `"ps_2_0"`, then slot +0x14c.
+pub fn fn_00b8faf0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(
+            e,
+            f,
+            &[
+                (0x4c, 0x010b_0158),
+                (0x50, 0x010b_09d4),
+                (0x54, 0x0101_1584),
+                (0x58, 0),
+                (0x5c, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x60, 0u32, 0x38u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_2f0c),
+                (0x4, 0x010b_30b4),
+                (0x8, 0x010b_30ac),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_30a4u32, 0x010a_93ecu32, 0x010a_93ccu32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8fc50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8fbe0` constructs (vtable `010b30e0`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (defines `"TEX2"` =
+/// `""`) and the pixel one `"imagespace\2x\p\RadialBlur.p.hlsl"` (defines `"NUM_STEPS"` =
+/// `"10.0f"`) (each 0x4c bytes: a file and up to nine define pairs, the rest cleared through
+/// `memset` in the exe's order), calls its vtable slot +0x13c with them, the name `"RBLURH"`
+/// and the profiles `"vs_1_1"` and `"ps_2_0"`, then slot +0x14c.
+pub fn fn_00b8fc50(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(
+            e,
+            f,
+            &[
+                (0x4c, 0x010b_0158),
+                (0x50, 0x010b_09d4),
+                (0x54, 0x0101_1584),
+                (0x58, 0),
+                (0x5c, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x60, 0u32, 0x38u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_2f0c),
+                (0x4, 0x010b_30b4),
+                (0x8, 0x010b_323c),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_3234u32, 0x010a_93ecu32, 0x010a_93ccu32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8fdb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8fd40` constructs (vtable `010b3268`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (defines `"TEX2"` =
+/// `""`) and the pixel one `"imagespace\2x\p\DepthOfField.p.hlsl"` (defines `"MASK"` = `""`)
+/// (each 0x4c bytes: a file and up to nine define pairs, the rest cleared through `memset` in
+/// the exe's order), calls its vtable slot +0x13c with them, the name `"DOFMASK"` and the
+/// profiles `"vs_1_1"` and `"ps_2_0"`, then slot +0x14c.
+pub fn fn_00b8fdb0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(
+            e,
+            f,
+            &[
+                (0x4c, 0x010b_0158),
+                (0x50, 0x010b_09d4),
+                (0x54, 0x0101_1584),
+                (0x58, 0),
+                (0x5c, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x60, 0u32, 0x38u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_2d68),
+                (0x4, 0x010b_33c4),
+                (0x8, 0x0101_1584),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_33bcu32, 0x010a_93ecu32, 0x010a_93ccu32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8ff10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b8fea0` constructs (vtable `010b33f0`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (defines `"TEX2"` =
+/// `""`) and the pixel one `"imagespace\2x\p\doublevision.p.hlsl"` (no defines) (each 0x4c
+/// bytes: a file and up to nine define pairs, the rest cleared through `memset` in the exe's
+/// order), calls its vtable slot +0x13c with them, the name `"DOUBLEVIS"` and the profiles
+/// `"vs_1_1"` and `"ps_2_0"`, then slot +0x14c.
+pub fn fn_00b8ff10(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_0158),
+                (0x4, 0x010b_09d4),
+                (0x8, 0x0101_1584),
+                (0xc, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        put(e, f, &[(0x4c, 0x010b_3550), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f, f + 0x4c, 0x010b_3544u32, 0x010a_93ecu32, 0x010a_93ccu32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b916f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b91680` constructs (vtable `010b4c68`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\2x\p\scanlines_blend.p.hlsl"` (defines `"BLURSRC1"` = `""`) (each
+/// 0x4c bytes: a file and up to nine define pairs, the rest cleared through `memset` in the
+/// exe's order), calls its vtable slot +0x13c with them, the name `"IFSCANBLEND"` and the
+/// profiles `"vs_1_1"` and `"ps_2_0"`, then slot +0x14c.
+pub fn fn_00b916f0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[(0x0, 0x010b_0130), (0x4, 0x010b_0124), (0x8, 0x0101_1584)],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0xc, 0u32, 0x40u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_4dbcu32, 0x010a_93ecu32, 0x010a_93ccu32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b91830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b917c0` constructs (vtable `010b4de8`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\2x\p\map_P20.p.hlsl"` (no defines) (each 0x4c bytes: a file and up to
+/// nine define pairs, the rest cleared through `memset` in the exe's order), calls its vtable
+/// slot +0x13c with them, the name `"MAP"` and the profiles `"vs_1_1"` and `"ps_2_0"`, then
+/// slot +0x14c.
+pub fn fn_00b91830(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        put(e, f, &[(0x0, 0x010b_4f40), (0x4, 0), (0x8, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0xc, 0u32, 0x40u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_4f3cu32, 0x010a_93ecu32, 0x010a_93ccu32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b91970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b91900` constructs (vtable `010b4f80`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\menuBG.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\1x\p\menuBG.p.hlsl"` (no defines) (each 0x4c bytes: a file and up to
+/// nine define pairs, the rest cleared through `memset` in the exe's order), calls its vtable
+/// slot +0x13c with them, the name `"MENUBG"` and the profiles `"vs_2_0"` and `"ps_2_0"`, then
+/// slot +0x14c.
+pub fn fn_00b91970(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_50fc), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        put(e, f, &[(0x0, 0x010b_50dc), (0x4, 0), (0x8, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0xc, 0u32, 0x40u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_50d4u32, 0x010a_93e4u32, 0x010a_93ccu32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b91ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b91a40` constructs (vtable `010b5140`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\1x\p\copy.p.hlsl"` (no defines) (each 0x4c bytes: a file and up to
+/// nine define pairs, the rest cleared through `memset` in the exe's order), calls its vtable
+/// slot +0x13c with them, the name `"COPYUNPACK"` and the profiles `"vs_1_1"` and the pixel
+/// profile `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b91ab0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(e, f, &[(0x0, 0x010b_0820), (0x4, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x8, 0u32, 0x44u32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_5294u32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b91bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b91b80` constructs (vtable `010b52c0`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (defines `"TEX2"` =
+/// `""`) and the pixel one `"imagespace\2x\p\MotionBlur.p.hlsl"` (defines `"NUM_SAMPLES"` =
+/// `"40.0f"`, `"NO_VELOCITY"` = `""`) (each 0x4c bytes: a file and up to nine define pairs, the
+/// rest cleared through `memset` in the exe's order), calls its vtable slot +0x13c with them,
+/// the name `"MOTBLUR"` and the profiles `"vs_1_1"` and `"ps_2_0"`, then slot +0x14c.
+pub fn fn_00b91bf0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(
+            e,
+            f,
+            &[
+                (0x4c, 0x010b_0158),
+                (0x50, 0x010b_09d4),
+                (0x54, 0x0101_1584),
+                (0x58, 0),
+                (0x5c, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x60, 0u32, 0x38u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_543c),
+                (0x4, 0x010b_5430),
+                (0x8, 0x010b_5428),
+                (0xc, 0x010b_541c),
+                (0x10, 0x0101_1584),
+                (0x14, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x18, 0u32, 0x34u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_5414u32, 0x010a_93ecu32, 0x010a_93ccu32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b91d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b91cf0` constructs (vtable `010b5480`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\2x\p\noise_P20.p.hlsl"` (defines `"SCROLL_AND_BLEND"` (null)) (each
+/// 0x4c bytes: a file and up to nine define pairs, the rest cleared through `memset` in the
+/// exe's order), calls its vtable slot +0x13c with them, the name `"NOISESCROLLANDBLEND"` and
+/// the profiles `"vs_1_1"` and the pixel profile `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b91d60(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_55fc),
+                (0x4, 0x010b_55e8),
+                (0x8, 0),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_55d4u32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b91eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b91e40` constructs (vtable `010b5640`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\2x\p\noise_P20.p.hlsl"` (defines `"NORMALMAP"` (null)) (each 0x4c
+/// bytes: a file and up to nine define pairs, the rest cleared through `memset` in the exe's
+/// order), calls its vtable slot +0x13c with them, the name `"NOISENORMALMAP"` and the profiles
+/// `"vs_1_1"` and the pixel profile `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b91eb0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_55fc),
+                (0x4, 0x010b_57a4),
+                (0x8, 0),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_5794u32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b921f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b92180` constructs (vtable `010b57d0`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (defines `"TEX2"` =
+/// `""`) and the pixel one `"imagespace\2x\p\refraction_P20.p.hlsl"` (no defines) (each 0x4c
+/// bytes: a file and up to nine define pairs, the rest cleared through `memset` in the exe's
+/// order), calls its vtable slot +0x13c with them, the name `"REFRACT"` and the profiles
+/// `"vs_1_1"` and `"ps_2_0"`, then slot +0x14c.
+pub fn fn_00b921f0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_0158),
+                (0x4, 0x010b_09d4),
+                (0x8, 0x0101_1584),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        put(e, f, &[(0x4c, 0x010b_592c), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f, f + 0x4c, 0x010b_5924u32, 0x010a_93ecu32, 0x010a_93ccu32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b92390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b922d0` constructs (vtable `010b5978`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\copy.v.hlsl"` (defines `"MASK"` =
+/// `""`) and the pixel one `"imagespace\1x\p\copy.p.hlsl"` (defines `"MASK"` = `""`) (each 0x4c
+/// bytes: a file and up to nine define pairs, the rest cleared through `memset` in the exe's
+/// order), calls its vtable slot +0x13c with them, the name `"TEXMASK"` and the profiles
+/// `"vs_1_1"` and the pixel profile `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b92390(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(
+            e,
+            f,
+            &[
+                (0x4c, 0x010b_5ad4),
+                (0x50, 0x010b_33c4),
+                (0x54, 0x0101_1584),
+                (0x58, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x3cu32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_0820),
+                (0x4, 0x010b_33c4),
+                (0x8, 0x0101_1584),
+                (0xc, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_5accu32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b925b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b92500` constructs (vtable `010b5b10`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"imagespace\2x\p\vats_scan.p.hlsl"` (no defines) (each 0x4c bytes: a file and up
+/// to nine define pairs, the rest cleared through `memset` in the exe's order), calls its
+/// vtable slot +0x13c with them, the name `"IFVATSSCAN"` and the profiles `"vs_1_1"` and
+/// `"ps_2_0"`, then slot +0x14c, then the render states of `scanline_render_states`.
+pub fn fn_00b925b0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(e, f, &[(0x0, 0x010b_5c70), (0x4, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x8, 0u32, 0x44u32]);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_5c64u32, 0x010a_93ecu32, 0x010a_93ccu32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+        scanline_render_states(e, this);
+    });
+}
+
+// Translated from 00b92700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b92690` constructs (vtable `010b5cb8`, slot +0x120). Builds on its
+/// stack the vertex shader description `"water\2_ab\v\displace.v.hlsl"` (no defines) and the
+/// pixel one `"water\2_ab\p\displace.p.hlsl"` (defines `"CLEAR_SIMULATION"` (null)) (each 0x4c
+/// bytes: a file and up to nine define pairs, the rest cleared through `memset` in the exe's
+/// order), calls its vtable slot +0x13c with them, the name
+/// `"WATERDISPLACEMENTCLEARSIMULATION"` and the profiles `"vs_1_1"` and the pixel profile
+/// `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b92700(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_5e64), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[(0x0, 0x010b_5e44), (0x4, 0x010b_5e30), (0x8, 0), (0xc, 0)],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_5e0cu32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b92850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b927e0` constructs (vtable `010b5ea8`, slot +0x120). Builds on its
+/// stack the vertex shader description `"water\2_ab\v\displace.v.hlsl"` (no defines) and the
+/// pixel one `"water\2_ab\p\displace.p.hlsl"` (defines `"TEXCOORD_OFFSET"` (null)) (each 0x4c
+/// bytes: a file and up to nine define pairs, the rest cleared through `memset` in the exe's
+/// order), calls its vtable slot +0x13c with them, the name `"WATERDISPLACEMENTTEXOFFSET"` and
+/// the profiles `"vs_1_1"` and the pixel profile `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b92850(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_5e64), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[(0x0, 0x010b_5e44), (0x4, 0x010b_6018), (0x8, 0), (0xc, 0)],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_5ffcu32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b929a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b92930` constructs (vtable `010b6048`, slot +0x120). Builds on its
+/// stack the vertex shader description `"water\2_ab\v\displace.v.hlsl"` (defines
+/// `"RIPPLE_MAKER_WADING"` (null)) and the pixel one `"water\2_ab\p\displace.p.hlsl"` (defines
+/// `"RIPPLE_MAKER_WADING"` (null)) (each 0x4c bytes: a file and up to nine define pairs, the
+/// rest cleared through `memset` in the exe's order), calls its vtable slot +0x13c with them,
+/// the name `"WATERDISPLACEMENTWADINGRIPPLE"` and the profiles `"vs_1_1"` and the pixel profile
+/// `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b929a0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(
+            e,
+            f,
+            &[
+                (0x4c, 0x010b_5e64),
+                (0x50, 0x010b_61bc),
+                (0x54, 0),
+                (0x58, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x3cu32]);
+        put(
+            e,
+            f,
+            &[(0x0, 0x010b_5e44), (0x4, 0x010b_61bc), (0x8, 0), (0xc, 0)],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_619cu32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b92af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b92a80` constructs (vtable `010b61f0`, slot +0x120). Builds on its
+/// stack the vertex shader description `"water\2_ab\v\displace.v.hlsl"` (defines
+/// `"RIPPLE_MAKER_RAIN"` (null)) and the pixel one `"water\2_ab\p\displace.p.hlsl"` (defines
+/// `"RIPPLE_MAKER_RAIN"` (null)) (each 0x4c bytes: a file and up to nine define pairs, the rest
+/// cleared through `memset` in the exe's order), calls its vtable slot +0x13c with them, the
+/// name `"WATERDISPLACEMENTRAINRIPPLE"` and the profiles `"vs_1_1"` and the pixel profile
+/// `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b92af0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(
+            e,
+            f,
+            &[
+                (0x4c, 0x010b_5e64),
+                (0x50, 0x010b_6360),
+                (0x54, 0),
+                (0x58, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x3cu32]);
+        put(
+            e,
+            f,
+            &[(0x0, 0x010b_5e44), (0x4, 0x010b_6360), (0x8, 0), (0xc, 0)],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_6344u32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b92c40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b92bd0` constructs (vtable `010b6398`, slot +0x120). Builds on its
+/// stack the vertex shader description `"water\2_ab\v\displace.v.hlsl"` (defines
+/// `"HEIGHTMAP_WADING"` (null)) and the pixel one `"water\2_ab\p\displace.p.hlsl"` (defines
+/// `"HEIGHTMAP_WADING"` (null)) (each 0x4c bytes: a file and up to nine define pairs, the rest
+/// cleared through `memset` in the exe's order), calls its vtable slot +0x13c with them, the
+/// name `"WATERDISPLACEMENTWADINGHEIGHTMAP"` and the profiles `"vs_1_1"` and the pixel profile
+/// `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b92c40(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(
+            e,
+            f,
+            &[
+                (0x4c, 0x010b_5e64),
+                (0x50, 0x010b_6510),
+                (0x54, 0),
+                (0x58, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x3cu32]);
+        put(
+            e,
+            f,
+            &[(0x0, 0x010b_5e44), (0x4, 0x010b_6510), (0x8, 0), (0xc, 0)],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_64ecu32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b92e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b92d90` constructs (vtable `010b6548`, slot +0x120). Builds on its
+/// stack the vertex shader description `"water\2_ab\v\displace.v.hlsl"` (no defines) and the
+/// pixel one `"water\2_ab\p\displace.p.hlsl"` (defines `"HEIGHTMAP_RAIN"` (null)) (each 0x4c
+/// bytes: a file and up to nine define pairs, the rest cleared through `memset` in the exe's
+/// order), calls its vtable slot +0x13c with them, the name `"WATERDISPLACEMENTRAINHEIGHTMAP"`
+/// and the profiles `"vs_1_1"` and the pixel profile `00b4f380` answers for 1, then slot
+/// +0x14c.
+pub fn fn_00b92e00(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_5e64), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[(0x0, 0x010b_5e44), (0x4, 0x010b_66bc), (0x8, 0), (0xc, 0)],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_669cu32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b92f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b92ee0` constructs (vtable `010b66f0`, slot +0x120). Builds on its
+/// stack the vertex shader description `"water\2_ab\v\displace.v.hlsl"` (no defines) and the
+/// pixel one `"water\2_ab\p\displace.p.hlsl"` (defines `"BLEND_HEIGHTMAPS"` (null)) (each 0x4c
+/// bytes: a file and up to nine define pairs, the rest cleared through `memset` in the exe's
+/// order), calls its vtable slot +0x13c with them, the name
+/// `"WATERDISPLACEMENTBLENDHEIGHTMAPS"` and the profiles `"vs_1_1"` and the pixel profile
+/// `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b92f50(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_5e64), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[(0x0, 0x010b_5e44), (0x4, 0x010b_6868), (0x8, 0), (0xc, 0)],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_6844u32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b930a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b93030` constructs (vtable `010b68a0`, slot +0x120). Builds on its
+/// stack the vertex shader description `"water\2_ab\v\displace.v.hlsl"` (defines
+/// `"HEIGHTMAP_SMOOTH"` (null)) and the pixel one `"water\2_ab\p\displace.p.hlsl"` (defines
+/// `"HEIGHTMAP_SMOOTH"` (null)) (each 0x4c bytes: a file and up to nine define pairs, the rest
+/// cleared through `memset` in the exe's order), calls its vtable slot +0x13c with them, the
+/// name `"WATERSMOOTHHEIGHTMAP"` and the profiles `"vs_1_1"` and the pixel profile `00b4f380`
+/// answers for 1, then slot +0x14c.
+pub fn fn_00b930a0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(
+            e,
+            f,
+            &[
+                (0x4c, 0x010b_5e64),
+                (0x50, 0x010b_6a0c),
+                (0x54, 0),
+                (0x58, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x3cu32]);
+        put(
+            e,
+            f,
+            &[(0x0, 0x010b_5e44), (0x4, 0x010b_6a0c), (0x8, 0), (0xc, 0)],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_69f4u32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b931f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b93180` constructs (vtable `010b6a40`, slot +0x120). Builds on its
+/// stack the vertex shader description `"water\2_ab\v\displace.v.hlsl"` (no defines) and the
+/// pixel one `"water\2_ab\p\displace.p.hlsl"` (defines `"NORMALS"` (null)) (each 0x4c bytes: a
+/// file and up to nine define pairs, the rest cleared through `memset` in the exe's order),
+/// calls its vtable slot +0x13c with them, the name `"WATERDISPLACEMENTNORMALS"` and the
+/// profiles `"vs_1_1"` and the pixel profile `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b931f0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_5e64), (0x50, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x54, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[(0x0, 0x010b_5e44), (0x4, 0x010b_6bb0), (0x8, 0), (0xc, 0)],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_6b94u32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b93340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b932d0` constructs (vtable `010b6bd8`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"water\2_ab\p\waterhmap.p.hlsl"` (defines `"WATER_SPECTRUM"` (null)) (each 0x4c
+/// bytes: a file and up to nine define pairs, the rest cleared through `memset` in the exe's
+/// order), calls its vtable slot +0x13c with them, the name `"FFTWATERSPECTRUM"` and the
+/// profiles `"vs_1_1"` and the pixel profile `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b93340(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_6d50),
+                (0x4, 0x010b_6d40),
+                (0x8, 0),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_6d2cu32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b93670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b93600` constructs (vtable `010b6d90`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"water\2_ab\p\waterhmap.p.hlsl"` (defines `"HORIZONTAL_BUTTERFLY"` (null)) (each
+/// 0x4c bytes: a file and up to nine define pairs, the rest cleared through `memset` in the
+/// exe's order), calls its vtable slot +0x13c with them, the name `"FFTHORIZONTALBUTTERFLY"`
+/// and the profiles `"vs_1_1"` and the pixel profile `00b4f380` answers for 1, then slot
+/// +0x14c.
+pub fn fn_00b93670(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_6d50),
+                (0x4, 0x010b_6efc),
+                (0x8, 0),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_6ee4u32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b939c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b93950` constructs (vtable `010b6f38`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"water\2_ab\p\waterhmap.p.hlsl"` (defines `"VERTICAL_BUTTERFLY"` (null)) (each
+/// 0x4c bytes: a file and up to nine define pairs, the rest cleared through `memset` in the
+/// exe's order), calls its vtable slot +0x13c with them, the name `"FFTVERTICALBUTTERFLY"` and
+/// the profiles `"vs_1_1"` and the pixel profile `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b939c0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_6d50),
+                (0x4, 0x010b_70a4),
+                (0x8, 0),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_708cu32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b93b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b93aa0` constructs (vtable `010b70d8`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"water\2_ab\p\waterhmap.p.hlsl"` (defines `"HORIZONTAL_SCRAMBLE"` (null)) (each
+/// 0x4c bytes: a file and up to nine define pairs, the rest cleared through `memset` in the
+/// exe's order), calls its vtable slot +0x13c with them, the name `"FFTHORIZONTALSCRAMBLE"` and
+/// the profiles `"vs_1_1"` and the pixel profile `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b93b10(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_6d50),
+                (0x4, 0x010b_7244),
+                (0x8, 0),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_722cu32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b93c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b93bf0` constructs (vtable `010b7278`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"water\2_ab\p\waterhmap.p.hlsl"` (defines `"VERTICAL_SCRAMBLE"` (null)) (each
+/// 0x4c bytes: a file and up to nine define pairs, the rest cleared through `memset` in the
+/// exe's order), calls its vtable slot +0x13c with them, the name `"FFTVERTICALSCRAMBLE"` and
+/// the profiles `"vs_1_1"` and the pixel profile `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b93c60(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_6d50),
+                (0x4, 0x010b_73e0),
+                (0x8, 0),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_73ccu32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b93db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b93d40` constructs (vtable `010b7418`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"water\2_ab\p\waterhmap.p.hlsl"` (defines `"NORMALS"` (null)) (each 0x4c bytes: a
+/// file and up to nine define pairs, the rest cleared through `memset` in the exe's order),
+/// calls its vtable slot +0x13c with them, the name `"FFTNORMALS"` and the profiles `"vs_1_1"`
+/// and the pixel profile `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b93db0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_6d50),
+                (0x4, 0x010b_6bb0),
+                (0x8, 0),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_756cu32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b93f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b93e90` constructs (vtable `010b7598`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"water\2_ab\p\waterhmap.p.hlsl"` (defines `"FILTER"` (null)) (each 0x4c bytes: a
+/// file and up to nine define pairs, the rest cleared through `memset` in the exe's order),
+/// calls its vtable slot +0x13c with them, the name `"FFTFILTER"` and the profiles `"vs_1_1"`
+/// and the pixel profile `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b93f00(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_6d50),
+                (0x4, 0x010b_76f8),
+                (0x8, 0),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_76ecu32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b94050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b93fe0` constructs (vtable `010b7720`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"water\2_ab\p\waterhmap.p.hlsl"` (defines `"DISPLAY_NORMALS"` (null)) (each 0x4c
+/// bytes: a file and up to nine define pairs, the rest cleared through `memset` in the exe's
+/// order), calls its vtable slot +0x13c with them, the name `"FFTDISPLAYNORMALS"` and the
+/// profiles `"vs_1_1"` and the pixel profile `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b94050(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_6d50),
+                (0x4, 0x010b_7888),
+                (0x8, 0),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_7874u32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b941a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b94130` constructs (vtable `010b78b8`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"water\2_ab\p\waterhmap.p.hlsl"` (defines `"DISPLAY_HIGHW"` (null)) (each 0x4c
+/// bytes: a file and up to nine define pairs, the rest cleared through `memset` in the exe's
+/// order), calls its vtable slot +0x13c with them, the name `"FFTDISPLAYHIGHW"` and the
+/// profiles `"vs_1_1"` and the pixel profile `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b941a0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_6d50),
+                (0x4, 0x010b_7a1c),
+                (0x8, 0),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_7a0cu32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b942f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b94280` constructs (vtable `010b7a50`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"water\2_ab\p\waterhmap.p.hlsl"` (defines `"DISPLAY_AMPLITUDE"` (null)) (each
+/// 0x4c bytes: a file and up to nine define pairs, the rest cleared through `memset` in the
+/// exe's order), calls its vtable slot +0x13c with them, the name `"FFTDISPLAYAMPLITUDE"` and
+/// the profiles `"vs_1_1"` and the pixel profile `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b942f0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_6d50),
+                (0x4, 0x010b_7bb8),
+                (0x8, 0),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_7ba4u32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b94440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; read from its bytes), `thiscall`, no stack words: the shader
+/// reload of the shader `00b943d0` constructs (vtable `010b7bf0`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and the
+/// pixel one `"water\2_ab\p\waterhmap.p.hlsl"` (defines `"DISPLAY_WATER_HEIGHT"` (null)) (each
+/// 0x4c bytes: a file and up to nine define pairs, the rest cleared through `memset` in the
+/// exe's order), calls its vtable slot +0x13c with them, the name `"FFTDISPLAYWATERHEIGHT"` and
+/// the profiles `"vs_1_1"` and the pixel profile `00b4f380` answers for 1, then slot +0x14c.
+pub fn fn_00b94440(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x98, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x4c, 0x010b_0158), (0x50, 0), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x40u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x0, 0x010b_6d50),
+                (0x4, 0x010b_7d5c),
+                (0x8, 0),
+                (0xc, 0),
+                (0x10, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x38u32]);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x4c, f, 0x010b_7d44u32, 0x010a_93ecu32, profile],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8e330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderBrightPassBlur3::ReloadShaders` (Xbox PDB), `thiscall`, no stack words: the
+/// shader reload of the shader `00b8e2c0` constructs (vtable `010b1640`, slot +0x120). Builds
+/// on its stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and
+/// the pixel one, which depends on the byte at `011f94fc`: while it is clear
+/// `"imagespace\2x\p\blur2.p.hlsl"` (defines `"BRIGHTPASS"` = `""`, `"TEXTAP"` = `"3"`) with
+/// the name `"BPBLUR3"`, else `"imagespace\2x\p\blur2_TEST.p.hlsl"` (defines `"BRIGHTPASS"` =
+/// `""`, `"TEXTAP"` = `"3"`) with the name `"BPBLUR3T"` (each 0x4c bytes: a file and up to nine
+/// define pairs, the rest cleared through `memset` in the exe's order). Copies the pixel
+/// description to another stack block, calls its vtable slot +0x13c with the two, the name and
+/// the profiles `"vs_1_1"` and `"ps_2_a"`, then slot +0x14c.
+pub fn image_space_shader_bright_pass_blur3_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf4, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x54, 0x010b_0158), (0x58, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x8, 0x010b_17cc),
+                (0xc, 0x0101_1584),
+                (0x10, 0x010b_0cf4),
+                (0x14, 0x0106_3f30),
+                (0x18, 0),
+            ],
+        );
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x4, 0x010b_0cfc)]);
+            0x010b_1794u32
+        } else {
+            put(e, f, &[(0x4, 0x010b_17a8)]);
+            0x010b_179cu32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x1c, 0u32, 0x34u32]);
+        copy_words(e, f + 0x4, f + 0xa4, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x54, f + 0xa4, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8e4d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderBrightPassBlur5::ReloadShaders` (Xbox PDB), `thiscall`, no stack words: the
+/// shader reload of the shader `00b8e460` constructs (vtable `010b17f8`, slot +0x120). Builds
+/// on its stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and
+/// the pixel one, which depends on the byte at `011f94fc`: while it is clear
+/// `"imagespace\2x\p\blur2.p.hlsl"` (defines `"BRIGHTPASS"` = `""`, `"TEXTAP"` = `"5"`) with
+/// the name `"BPBLUR5"`, else `"imagespace\2x\p\blur2_TEST.p.hlsl"` (defines `"BRIGHTPASS"` =
+/// `""`, `"TEXTAP"` = `"5"`) with the name `"BPBLUR5T"` (each 0x4c bytes: a file and up to nine
+/// define pairs, the rest cleared through `memset` in the exe's order). Copies the pixel
+/// description to another stack block, calls its vtable slot +0x13c with the two, the name and
+/// the profiles `"vs_1_1"` and `"ps_2_a"`, then slot +0x14c.
+pub fn image_space_shader_bright_pass_blur5_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf4, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x54, 0x010b_0158), (0x58, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x8, 0x010b_17cc),
+                (0xc, 0x0101_1584),
+                (0x10, 0x010b_0cf4),
+                (0x14, 0x0106_3f18),
+                (0x18, 0),
+            ],
+        );
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x4, 0x010b_0cfc)]);
+            0x010b_194cu32
+        } else {
+            put(e, f, &[(0x4, 0x010b_17a8)]);
+            0x010b_1954u32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x1c, 0u32, 0x34u32]);
+        copy_words(e, f + 0x4, f + 0xa4, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x54, f + 0xa4, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8e670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderBrightPassBlur7::ReloadShaders` (Xbox PDB), `thiscall`, no stack words: the
+/// shader reload of the shader `00b8e600` constructs (vtable `010b1980`, slot +0x120). Builds
+/// on its stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and
+/// the pixel one, which depends on the byte at `011f94fc`: while it is clear
+/// `"imagespace\2x\p\blur2.p.hlsl"` (defines `"BRIGHTPASS"` = `""`, `"TEXTAP"` = `"7"`) with
+/// the name `"BPBLUR7"`, else `"imagespace\2x\p\blur2_TEST.p.hlsl"` (defines `"BRIGHTPASS"` =
+/// `""`, `"TEXTAP"` = `"7"`) with the name `"BPBLUR7T"` (each 0x4c bytes: a file and up to nine
+/// define pairs, the rest cleared through `memset` in the exe's order). Copies the pixel
+/// description to another stack block, calls its vtable slot +0x13c with the two, the name and
+/// the profiles `"vs_1_1"` and `"ps_2_a"`, then slot +0x14c.
+pub fn image_space_shader_bright_pass_blur7_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf4, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x54, 0x010b_0158), (0x58, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x8, 0x010b_17cc),
+                (0xc, 0x0101_1584),
+                (0x10, 0x010b_0cf4),
+                (0x14, 0x0106_3f00),
+                (0x18, 0),
+            ],
+        );
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x4, 0x010b_0cfc)]);
+            0x010b_1ad4u32
+        } else {
+            put(e, f, &[(0x4, 0x010b_17a8)]);
+            0x010b_1adcu32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x1c, 0u32, 0x34u32]);
+        copy_words(e, f + 0x4, f + 0xa4, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x54, f + 0xa4, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8e810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderBrightPassBlur9::ReloadShaders` (Xbox PDB), `thiscall`, no stack words: the
+/// shader reload of the shader `00b8e7a0` constructs (vtable `010b1b08`, slot +0x120). Builds
+/// on its stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no defines) and
+/// the pixel one, which depends on the byte at `011f94fc`: while it is clear
+/// `"imagespace\2x\p\blur2.p.hlsl"` (defines `"BRIGHTPASS"` = `""`, `"TEXTAP"` = `"9"`) with
+/// the name `"BPBLUR9"`, else `"imagespace\2x\p\blur2_TEST.p.hlsl"` (defines `"BRIGHTPASS"` =
+/// `""`, `"TEXTAP"` = `"9"`) with the name `"BPBLUR9T"` (each 0x4c bytes: a file and up to nine
+/// define pairs, the rest cleared through `memset` in the exe's order). Copies the pixel
+/// description to another stack block, calls its vtable slot +0x13c with the two, the name and
+/// the profiles `"vs_1_1"` and `"ps_2_a"`, then slot +0x14c.
+pub fn image_space_shader_bright_pass_blur9_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf4, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x54, 0x010b_0158), (0x58, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x8, 0x010b_17cc),
+                (0xc, 0x0101_1584),
+                (0x10, 0x010b_0cf4),
+                (0x14, 0x0106_3ee8),
+                (0x18, 0),
+            ],
+        );
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x4, 0x010b_0cfc)]);
+            0x010b_1c5cu32
+        } else {
+            put(e, f, &[(0x4, 0x010b_17a8)]);
+            0x010b_1c64u32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x1c, 0u32, 0x34u32]);
+        copy_words(e, f + 0x4, f + 0xa4, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x54, f + 0xa4, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8e9b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderBrightPassBlur11::ReloadShaders` (Xbox PDB), `thiscall`, no stack words:
+/// the shader reload of the shader `00b8e940` constructs (vtable `010b1c90`, slot +0x120).
+/// Builds on its stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no
+/// defines) and the pixel one, which depends on the byte at `011f94fc`: while it is clear
+/// `"imagespace\2x\p\blur2.p.hlsl"` (defines `"BRIGHTPASS"` = `""`, `"TEXTAP"` = `"11"`) with
+/// the name `"BPBLUR11"`, else `"imagespace\2x\p\blur2_TEST.p.hlsl"` (defines `"BRIGHTPASS"` =
+/// `""`, `"TEXTAP"` = `"11"`) with the name `"BPBLUR11T"` (each 0x4c bytes: a file and up to
+/// nine define pairs, the rest cleared through `memset` in the exe's order). Copies the pixel
+/// description to another stack block, calls its vtable slot +0x13c with the two, the name and
+/// the profiles `"vs_1_1"` and `"ps_2_a"`, then slot +0x14c.
+pub fn image_space_shader_bright_pass_blur11_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf4, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x54, 0x010b_0158), (0x58, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x8, 0x010b_17cc),
+                (0xc, 0x0101_1584),
+                (0x10, 0x010b_0cf4),
+                (0x14, 0x010b_131c),
+                (0x18, 0),
+            ],
+        );
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x4, 0x010b_0cfc)]);
+            0x010b_1de4u32
+        } else {
+            put(e, f, &[(0x4, 0x010b_17a8)]);
+            0x010b_1df0u32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x1c, 0u32, 0x34u32]);
+        copy_words(e, f + 0x4, f + 0xa4, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x54, f + 0xa4, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8eb50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderBrightPassBlur13::ReloadShaders` (Xbox PDB), `thiscall`, no stack words:
+/// the shader reload of the shader `00b8eae0` constructs (vtable `010b1e20`, slot +0x120).
+/// Builds on its stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no
+/// defines) and the pixel one, which depends on the byte at `011f94fc`: while it is clear
+/// `"imagespace\2x\p\blur2.p.hlsl"` (defines `"BRIGHTPASS"` = `""`, `"TEXTAP"` = `"13"`) with
+/// the name `"BPBLUR13"`, else `"imagespace\2x\p\blur2_TEST.p.hlsl"` (defines `"BRIGHTPASS"` =
+/// `""`, `"TEXTAP"` = `"13"`) with the name `"BPBLUR13T"` (each 0x4c bytes: a file and up to
+/// nine define pairs, the rest cleared through `memset` in the exe's order). Copies the pixel
+/// description to another stack block, calls its vtable slot +0x13c with the two, the name and
+/// the profiles `"vs_1_1"` and `"ps_2_a"`, then slot +0x14c.
+pub fn image_space_shader_bright_pass_blur13_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf4, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x54, 0x010b_0158), (0x58, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x8, 0x010b_17cc),
+                (0xc, 0x0101_1584),
+                (0x10, 0x010b_0cf4),
+                (0x14, 0x010b_149c),
+                (0x18, 0),
+            ],
+        );
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x4, 0x010b_0cfc)]);
+            0x010b_1f74u32
+        } else {
+            put(e, f, &[(0x4, 0x010b_17a8)]);
+            0x010b_1f80u32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x1c, 0u32, 0x34u32]);
+        copy_words(e, f + 0x4, f + 0xa4, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x54, f + 0xa4, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b8ecf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderBrightPassBlur15::ReloadShaders` (Xbox PDB), `thiscall`, no stack words:
+/// the shader reload of the shader `00b8ec80` constructs (vtable `010b1fb0`, slot +0x120).
+/// Builds on its stack the vertex shader description `"imagespace\1x\v\base.v.hlsl"` (no
+/// defines) and the pixel one, which depends on the byte at `011f94fc`: while it is clear
+/// `"imagespace\2x\p\blur2.p.hlsl"` (defines `"BRIGHTPASS"` = `""`, `"TEXTAP"` = `"15"`) with
+/// the name `"BPBLUR15"`, else `"imagespace\2x\p\blur2_TEST.p.hlsl"` (defines `"BRIGHTPASS"` =
+/// `""`, `"TEXTAP"` = `"15"`) with the name `"BPBLUR15T"` (each 0x4c bytes: a file and up to
+/// nine define pairs, the rest cleared through `memset` in the exe's order). Copies the pixel
+/// description to another stack block, calls its vtable slot +0x13c with the two, the name and
+/// the profiles `"vs_1_1"` and `"ps_2_a"`, then slot +0x14c.
+pub fn image_space_shader_bright_pass_blur15_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf4, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x54, 0x010b_0158), (0x58, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x8, 0x010b_17cc),
+                (0xc, 0x0101_1584),
+                (0x10, 0x010b_0cf4),
+                (0x14, 0x010b_161c),
+                (0x18, 0),
+            ],
+        );
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x4, 0x010b_0cfc)]);
+            0x010b_2104u32
+        } else {
+            put(e, f, &[(0x4, 0x010b_17a8)]);
+            0x010b_2110u32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x1c, 0u32, 0x34u32]);
+        copy_words(e, f + 0x4, f + 0xa4, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x54, f + 0xa4, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b90060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderHDRBlendInShader::ReloadShaders` (Xbox PDB), `thiscall`, no stack words:
+/// the shader reload of the shader `00b8fff0` constructs (vtable `010b3598`, slot +0x120).
+/// Builds on its stack the vertex shader description `"imagespace\2x\v\HDRbase.v.hlsl"`
+/// (defines `"TEX2"` (null)) and the pixel one, which depends on the byte at `011f94fc`: while
+/// it is clear `"imagespace\2x\p\HDRBlur.p.hlsl"` (defines `"SHBLEND"` (null), `"TONEMAP"`
+/// (null)) with the name `"HDRBLENDINSHADER"`, else `"imagespace\2x\p\HDRBlur_TEST.p.hlsl"`
+/// (defines `"SHBLEND"` (null), `"TONEMAP"` (null)) with the name `"HDRBLENDINSHADERT"` (each
+/// 0x4c bytes: a file and up to nine define pairs, the rest cleared through `memset` in the
+/// exe's order). Copies the pixel description to another stack block, calls its vtable slot
+/// +0x13c with the two, the name and the profiles `"vs_1_1"` and `"ps_2_a"`, then slot +0x14c.
+pub fn image_space_shader_hdr_blend_in_shader_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf0, |e, frame| {
+        let f = frame.addr();
+        put(
+            e,
+            f,
+            &[
+                (0x50, 0x010b_3768),
+                (0x54, 0x010b_09d4),
+                (0x58, 0),
+                (0x5c, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x60, 0u32, 0x3cu32]);
+        put(
+            e,
+            f,
+            &[
+                (0x4, 0x010b_3760),
+                (0x8, 0),
+                (0xc, 0x010b_3758),
+                (0x10, 0),
+                (0x14, 0),
+            ],
+        );
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x0, 0x010b_3700)]);
+            0x010b_36ecu32
+        } else {
+            put(e, f, &[(0x0, 0x010b_3734)]);
+            0x010b_3720u32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x18, 0u32, 0x34u32]);
+        copy_words(e, f, f + 0xa0, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x50, f + 0xa0, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b90200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderHDRBlendInShaderCinematic::ReloadShaders` (Xbox PDB), `thiscall`, no stack
+/// words: the shader reload of the shader `00b90190` constructs (vtable `010b37a8`, slot
+/// +0x120). Builds on its stack the vertex shader description
+/// `"imagespace\2x\v\HDRbase.v.hlsl"` (defines `"TEX2"` (null)) and the pixel one, which
+/// depends on the byte at `011f94fc`: while it is clear `"imagespace\2x\p\HDRBlur.p.hlsl"`
+/// (defines `"CINEMATIC"` (null), `"SHBLEND"` (null), `"TONEMAP"` (null)) with the name
+/// `"HDRBLENDINSHADERCIN"`, else `"imagespace\2x\p\HDRBlur_TEST.p.hlsl"` (defines `"CINEMATIC"`
+/// (null), `"SHBLEND"` (null), `"TONEMAP"` (null)) with the name `"HDRBLENDINSHADERCINT"` (each
+/// 0x4c bytes: a file and up to nine define pairs, the rest cleared through `memset` in the
+/// exe's order). Copies the pixel description to another stack block, calls its vtable slot
+/// +0x13c with the two, the name and the profiles `"vs_1_1"` and `"ps_2_a"`, then slot +0x14c.
+pub fn image_space_shader_hdr_blend_in_shader_cinematic_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf0, |e, frame| {
+        let f = frame.addr();
+        put(
+            e,
+            f,
+            &[
+                (0x50, 0x010b_3768),
+                (0x54, 0x010b_09d4),
+                (0x58, 0),
+                (0x5c, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x60, 0u32, 0x3cu32]);
+        put(
+            e,
+            f,
+            &[
+                (0x4, 0x010b_3928),
+                (0x8, 0),
+                (0xc, 0x010b_3760),
+                (0x10, 0),
+                (0x14, 0x010b_3758),
+                (0x18, 0),
+                (0x1c, 0),
+            ],
+        );
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x0, 0x010b_3700)]);
+            0x010b_38fcu32
+        } else {
+            put(e, f, &[(0x0, 0x010b_3734)]);
+            0x010b_3910u32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x20, 0u32, 0x2cu32]);
+        copy_words(e, f, f + 0xa0, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x50, f + 0xa0, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b903a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderHDRBlendInShaderCinematicAlphamask::ReloadShaders` (Xbox PDB), `thiscall`,
+/// no stack words: the shader reload of the shader `00b90330` constructs (vtable `010b3958`,
+/// slot +0x120). Builds on its stack the vertex shader description
+/// `"imagespace\2x\v\HDRbase.v.hlsl"` (defines `"TEX2"` (null)) and the pixel one, which
+/// depends on the byte at `011f94fc`: while it is clear `"imagespace\2x\p\HDRBlur.p.hlsl"`
+/// (defines `"ALPHAMASK"` (null), `"CINEMATIC"` (null), `"SHBLEND"` (null), `"TONEMAP"` (null))
+/// with the name `"HDRBLENDINSHADERCINAM"`, else `"imagespace\2x\p\HDRBlur_TEST.p.hlsl"`
+/// (defines `"CINEMATIC"` (null), `"SHBLEND"` (null), `"TONEMAP"` (null)) with the name
+/// `"HDRBLENDINSHADERCINT"` (each 0x4c bytes: a file and up to nine define pairs, the rest
+/// cleared through `memset` in the exe's order). Copies the pixel description to another stack
+/// block, calls its vtable slot +0x13c with the two, the name and the profiles `"vs_1_1"` and
+/// `"ps_2_a"`, then slot +0x14c.
+pub fn image_space_shader_hdr_blend_in_shader_cinematic_alphamask_reload_shaders(
+    e: &mut Engine,
+    this: Ptr,
+) {
+    e.with_stack(0xf0, |e, frame| {
+        let f = frame.addr();
+        put(
+            e,
+            f,
+            &[
+                (0x50, 0x010b_3768),
+                (0x54, 0x010b_09d4),
+                (0x58, 0),
+                (0x5c, 0),
+            ],
+        );
+        e.call(MEMSET_00EC61C0, &args![f + 0x60, 0u32, 0x3cu32]);
+        put(e, f, &[(0x8, 0), (0x10, 0), (0x18, 0)]);
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(
+                e,
+                f,
+                &[
+                    (0x28, 0),
+                    (0x2c, 0),
+                    (0x30, 0),
+                    (0x34, 0),
+                    (0x38, 0),
+                    (0x3c, 0),
+                    (0x40, 0),
+                    (0x44, 0),
+                    (0x48, 0),
+                    (0x0, 0x010b_3700),
+                    (0x4, 0x010b_3ac4),
+                    (0xc, 0x010b_3928),
+                    (0x14, 0x010b_3760),
+                    (0x1c, 0x010b_3758),
+                    (0x20, 0),
+                    (0x24, 0),
+                ],
+            );
+            0x010b_3aacu32
+        } else {
+            put(
+                e,
+                f,
+                &[
+                    (0x0, 0x010b_3734),
+                    (0x4, 0x010b_3928),
+                    (0xc, 0x010b_3760),
+                    (0x14, 0x010b_3758),
+                    (0x1c, 0),
+                ],
+            );
+            e.call(MEMSET_00EC61C0, &args![f + 0x20, 0u32, 0x2cu32]);
+            0x010b_3910u32
+        };
+        copy_words(e, f, f + 0xa0, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x50, f + 0xa0, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b90590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderHDRBlur::ReloadShaders` (Xbox PDB), `thiscall`, no stack words: the shader
+/// reload of the shader `00b90520` constructs (vtable `010b3af0`, slot +0x120). Builds on its
+/// stack the vertex shader description `"imagespace\2x\v\HDRbase.v.hlsl"` (no defines) and the
+/// pixel one, which depends on the byte at `011f94fc`: while it is clear
+/// `"imagespace\2x\p\HDRBlur.p.hlsl"` (defines `"TEXTAP"` = `"15"`) with the name `"HDRBLUR"`,
+/// else `"imagespace\2x\p\HDRBlur_TEST.p.hlsl"` (defines `"TEXTAP"` = `"15"`) with the name
+/// `"HDRBLURT"` (each 0x4c bytes: a file and up to nine define pairs, the rest cleared through
+/// `memset` in the exe's order). Copies the pixel description to another stack block, calls its
+/// vtable slot +0x13c with the two, the name and the profiles `"vs_1_1"` and `"ps_2_a"`, then
+/// slot +0x14c.
+pub fn image_space_shader_hdr_blur_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf4, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x54, 0x010b_3768), (0x58, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x44u32]);
+        put(e, f, &[(0x8, 0x010b_0cf4), (0xc, 0x010b_161c), (0x10, 0)]);
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x4, 0x010b_3700)]);
+            0x010b_3c44u32
+        } else {
+            put(e, f, &[(0x4, 0x010b_3734)]);
+            0x010b_3c4cu32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x3cu32]);
+        copy_words(e, f + 0x4, f + 0xa4, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x54, f + 0xa4, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b90720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderHDRBrightPassFilter::ReloadShaders` (Xbox PDB), `thiscall`, no stack words:
+/// the shader reload of the shader `00b906b0` constructs (vtable `010b3c78`, slot +0x120).
+/// Builds on its stack the vertex shader description `"imagespace\2x\v\HDRbase.v.hlsl"` (no
+/// defines) and the pixel one, which depends on the byte at `011f94fc`: while it is clear
+/// `"imagespace\2x\p\HDRBlur.p.hlsl"` (defines `"BRIGHTFILTER"` (null)) with the name
+/// `"HDRBRIGHT"`, else `"imagespace\2x\p\HDRBlur_TEST.p.hlsl"` (defines `"BRIGHTFILTER"`
+/// (null)) with the name `"HDRBRIGHTT"` (each 0x4c bytes: a file and up to nine define pairs,
+/// the rest cleared through `memset` in the exe's order). Copies the pixel description to
+/// another stack block, calls its vtable slot +0x13c with the two, the name and the profiles
+/// `"vs_1_1"` and `"ps_2_a"`, then slot +0x14c.
+pub fn image_space_shader_hdr_bright_pass_filter_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf0, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x50, 0x010b_3768), (0x54, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x58, 0u32, 0x44u32]);
+        put(e, f, &[(0x4, 0x010b_3de4), (0x8, 0), (0xc, 0)]);
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x0, 0x010b_3700)]);
+            0x010b_3dccu32
+        } else {
+            put(e, f, &[(0x0, 0x010b_3734)]);
+            0x010b_3dd8u32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x10, 0u32, 0x3cu32]);
+        copy_words(e, f, f + 0xa0, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x50, f + 0xa0, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b908a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderHDRDownSample16::ReloadShaders` (Xbox PDB), `thiscall`, no stack words: the
+/// shader reload of the shader `00b90830` constructs (vtable `010b3e18`, slot +0x120). Builds
+/// on its stack the vertex shader description `"imagespace\2x\v\HDRbase.v.hlsl"` (no defines)
+/// and the pixel one, which depends on the byte at `011f94fc`: while it is clear
+/// `"imagespace\2x\p\HDRBlur.p.hlsl"` (defines `"TEXTAP"` = `"16"`) with the name
+/// `"HDRDOWN16"`, else `"imagespace\2x\p\HDRBlur_TEST.p.hlsl"` (defines `"TEXTAP"` = `"16"`)
+/// with the name `"HDRDOWN16T"` (each 0x4c bytes: a file and up to nine define pairs, the rest
+/// cleared through `memset` in the exe's order). Copies the pixel description to another stack
+/// block, calls its vtable slot +0x13c with the two, the name and the profiles `"vs_1_1"` and
+/// `"ps_2_a"`, then slot +0x14c.
+pub fn image_space_shader_hdr_down_sample16_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf4, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x54, 0x010b_3768), (0x58, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x44u32]);
+        put(e, f, &[(0x8, 0x010b_0cf4), (0xc, 0x010b_3f84), (0x10, 0)]);
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x4, 0x010b_3700)]);
+            0x010b_3f6cu32
+        } else {
+            put(e, f, &[(0x4, 0x010b_3734)]);
+            0x010b_3f78u32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x3cu32]);
+        copy_words(e, f + 0x4, f + 0xa4, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x54, f + 0xa4, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b90a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderHDRDownSample9::ReloadShaders` (Xbox PDB), `thiscall`, no stack words: the
+/// shader reload of the shader `00b909c0` constructs (vtable `010b3fa8`, slot +0x120). Builds
+/// on its stack the vertex shader description `"imagespace\2x\v\HDRbase.v.hlsl"` (no defines)
+/// and the pixel one, which depends on the byte at `011f94fc`: while it is clear
+/// `"imagespace\2x\p\HDRBlur.p.hlsl"` (defines `"TEXTAP"` = `"9"`) with the name `"HDRDOWN9"`,
+/// else `"imagespace\2x\p\HDRBlur_TEST.p.hlsl"` (defines `"TEXTAP"` = `"9"`) with the name
+/// `"HDRDOWN9T"` (each 0x4c bytes: a file and up to nine define pairs, the rest cleared through
+/// `memset` in the exe's order). Copies the pixel description to another stack block, calls its
+/// vtable slot +0x13c with the two, the name and the profiles `"vs_1_1"` and `"ps_2_a"`, then
+/// slot +0x14c.
+pub fn image_space_shader_hdr_down_sample9_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf4, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x54, 0x010b_3768), (0x58, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x44u32]);
+        put(e, f, &[(0x8, 0x010b_0cf4), (0xc, 0x0106_3ee8), (0x10, 0)]);
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x4, 0x010b_3700)]);
+            0x010b_40fcu32
+        } else {
+            put(e, f, &[(0x4, 0x010b_3734)]);
+            0x010b_4108u32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x3cu32]);
+        copy_words(e, f + 0x4, f + 0xa4, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x54, f + 0xa4, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b90bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderHDRDownSample4::ReloadShaders` (Xbox PDB), `thiscall`, no stack words: the
+/// shader reload of the shader `00b90b50` constructs (vtable `010b4138`, slot +0x120). Builds
+/// on its stack the vertex shader description `"imagespace\2x\v\HDRbase.v.hlsl"` (no defines)
+/// and the pixel one, which depends on the byte at `011f94fc`: while it is clear
+/// `"imagespace\2x\p\HDRBlur.p.hlsl"` (defines `"TEXTAP"` = `"4"`) with the name `"HDRDOWN4"`,
+/// else `"imagespace\2x\p\HDRBlur_TEST.p.hlsl"` (defines `"TEXTAP"` = `"4"`) with the name
+/// `"HDRDOWN4T"` (each 0x4c bytes: a file and up to nine define pairs, the rest cleared through
+/// `memset` in the exe's order). Copies the pixel description to another stack block, calls its
+/// vtable slot +0x13c with the two, the name and the profiles `"vs_1_1"` and `"ps_2_a"`, then
+/// slot +0x14c.
+pub fn image_space_shader_hdr_down_sample4_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf4, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x54, 0x010b_3768), (0x58, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x44u32]);
+        put(e, f, &[(0x8, 0x010b_0cf4), (0xc, 0x0106_3f24), (0x10, 0)]);
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x4, 0x010b_3700)]);
+            0x010b_428cu32
+        } else {
+            put(e, f, &[(0x4, 0x010b_3734)]);
+            0x010b_4298u32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x3cu32]);
+        copy_words(e, f + 0x4, f + 0xa4, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x54, f + 0xa4, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b90d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderHDRLightAdapt::ReloadShaders` (Xbox PDB), `thiscall`, no stack words: the
+/// shader reload of the shader `00b90ce0` constructs (vtable `010b42c8`, slot +0x120). Builds
+/// on its stack the vertex shader description `"imagespace\2x\v\HDRbase.v.hlsl"` (no defines)
+/// and the pixel one, which depends on the byte at `011f94fc`: while it is clear
+/// `"imagespace\2x\p\HDRBlur.p.hlsl"` (defines `"ADAPT"` = `""`) with the name `"HDRADAPT"`,
+/// else `"imagespace\2x\p\HDRBlur_TEST.p.hlsl"` (defines `"ADAPT"` = `""`) with the name
+/// `"HDRADAPTT"` (each 0x4c bytes: a file and up to nine define pairs, the rest cleared through
+/// `memset` in the exe's order). Copies the pixel description to another stack block, calls its
+/// vtable slot +0x13c with the two, the name and the profiles `"vs_1_1"` and `"ps_2_a"`, then
+/// slot +0x14c.
+pub fn image_space_shader_hdr_light_adapt_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf4, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x54, 0x010b_3768), (0x58, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x44u32]);
+        put(e, f, &[(0x8, 0x010b_4434), (0xc, 0x0101_1584), (0x10, 0)]);
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x4, 0x010b_3700)]);
+            0x010b_441cu32
+        } else {
+            put(e, f, &[(0x4, 0x010b_3734)]);
+            0x010b_4428u32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x3cu32]);
+        copy_words(e, f + 0x4, f + 0xa4, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x54, f + 0xa4, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b90ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderHDRLumClamp::ReloadShaders` (Xbox PDB), `thiscall`, no stack words: the
+/// shader reload of the shader `00b90e70` constructs (vtable `010b4460`, slot +0x120). Builds
+/// on its stack the vertex shader description `"imagespace\2x\v\HDRbase.v.hlsl"` (no defines)
+/// and the pixel one, which depends on the byte at `011f94fc`: while it is clear
+/// `"imagespace\2x\p\HDRBlur.p.hlsl"` (defines `"LUMCLAMP"` = `""`) with the name
+/// `"HDRLUMCLAMP"`, else `"imagespace\2x\p\HDRBlur_TEST.p.hlsl"` (defines `"LUMCLAMP"` = `""`)
+/// with the name `"HDRLUMCLAMPT"` (each 0x4c bytes: a file and up to nine define pairs, the
+/// rest cleared through `memset` in the exe's order). Copies the pixel description to another
+/// stack block, calls its vtable slot +0x13c with the two, the name and the profiles `"vs_1_1"`
+/// and `"ps_2_a"`, then slot +0x14c.
+pub fn image_space_shader_hdr_lum_clamp_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf4, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x54, 0x010b_3768), (0x58, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x44u32]);
+        put(e, f, &[(0x8, 0x010b_45d0), (0xc, 0x0101_1584), (0x10, 0)]);
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x4, 0x010b_3700)]);
+            0x010b_45b4u32
+        } else {
+            put(e, f, &[(0x4, 0x010b_3734)]);
+            0x010b_45c0u32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x14, 0u32, 0x3cu32]);
+        copy_words(e, f + 0x4, f + 0xa4, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x54, f + 0xa4, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b91070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderHDRDownSample4LightAdapt::ReloadShaders` (Xbox PDB), `thiscall`, no stack
+/// words: the shader reload of the shader `00b91000` constructs (vtable `010b4600`, slot
+/// +0x120). Builds on its stack the vertex shader description
+/// `"imagespace\2x\v\HDRbase.v.hlsl"` (no defines) and the pixel one, which depends on the byte
+/// at `011f94fc`: while it is clear `"imagespace\2x\p\HDRBlur.p.hlsl"` (defines `"TEXTAP"` =
+/// `"4"`, `"DOWNADAPT"` = `""`) with the name `"HDRDS4ADAPT"`, else
+/// `"imagespace\2x\p\HDRBlur_TEST.p.hlsl"` (defines `"TEXTAP"` = `"4"`, `"DOWNADAPT"` = `""`)
+/// with the name `"HDRDS4ADAPTT"` (each 0x4c bytes: a file and up to nine define pairs, the
+/// rest cleared through `memset` in the exe's order). Copies the pixel description to another
+/// stack block, calls its vtable slot +0x13c with the two, the name and the profiles `"vs_1_1"`
+/// and `"ps_2_a"`, then slot +0x14c.
+pub fn image_space_shader_hdr_down_sample4_light_adapt_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf4, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x54, 0x010b_3768), (0x58, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x8, 0x010b_0cf4),
+                (0xc, 0x0106_3f24),
+                (0x10, 0x010b_4770),
+                (0x14, 0x0101_1584),
+                (0x18, 0),
+            ],
+        );
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x4, 0x010b_3700)]);
+            0x010b_4754u32
+        } else {
+            put(e, f, &[(0x4, 0x010b_3734)]);
+            0x010b_4760u32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x1c, 0u32, 0x34u32]);
+        copy_words(e, f + 0x4, f + 0xa4, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x54, f + 0xa4, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b91210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderHDRDownSample4LumClamp::ReloadShaders` (Xbox PDB), `thiscall`, no stack
+/// words: the shader reload of the shader `00b911a0` constructs (vtable `010b47a0`, slot
+/// +0x120). Builds on its stack the vertex shader description
+/// `"imagespace\2x\v\HDRbase.v.hlsl"` (no defines) and the pixel one, which depends on the byte
+/// at `011f94fc`: while it is clear `"imagespace\2x\p\HDRBlur.p.hlsl"` (defines `"TEXTAP"` =
+/// `"4"`, `"LUMCLAMP"` = `""`) with the name `"HDRDS4LUMCLAMP"`, else
+/// `"imagespace\2x\p\HDRBlur_TEST.p.hlsl"` (defines `"TEXTAP"` = `"4"`, `"LUMCLAMP"` = `""`)
+/// with the name `"HDRDS4LUMCLAMPT"` (each 0x4c bytes: a file and up to nine define pairs, the
+/// rest cleared through `memset` in the exe's order). Copies the pixel description to another
+/// stack block, calls its vtable slot +0x13c with the two, the name and the profiles `"vs_1_1"`
+/// and `"ps_2_a"`, then slot +0x14c.
+pub fn image_space_shader_hdr_down_sample4_lum_clamp_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf4, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x54, 0x010b_3768), (0x58, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x8, 0x010b_0cf4),
+                (0xc, 0x0106_3f24),
+                (0x10, 0x010b_45d0),
+                (0x14, 0x0101_1584),
+                (0x18, 0),
+            ],
+        );
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x4, 0x010b_3700)]);
+            0x010b_48f4u32
+        } else {
+            put(e, f, &[(0x4, 0x010b_3734)]);
+            0x010b_4904u32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x1c, 0u32, 0x34u32]);
+        copy_words(e, f + 0x4, f + 0xa4, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x54, f + 0xa4, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b913b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderHDRDownSample16LightAdapt::ReloadShaders` (Xbox PDB), `thiscall`, no stack
+/// words: the shader reload of the shader `00b91340` constructs (vtable `010b4938`, slot
+/// +0x120). Builds on its stack the vertex shader description
+/// `"imagespace\2x\v\HDRbase.v.hlsl"` (no defines) and the pixel one, which depends on the byte
+/// at `011f94fc`: while it is clear `"imagespace\2x\p\HDRBlur.p.hlsl"` (defines `"TEXTAP"` =
+/// `"16"`, `"DOWNADAPT"` = `""`) with the name `"HDRDS16ADAPT"`, else
+/// `"imagespace\2x\p\HDRBlur_TEST.p.hlsl"` (defines `"TEXTAP"` = `"16"`, `"DOWNADAPT"` = `""`)
+/// with the name `"HDRDS16ADAPTT"` (each 0x4c bytes: a file and up to nine define pairs, the
+/// rest cleared through `memset` in the exe's order). Copies the pixel description to another
+/// stack block, calls its vtable slot +0x13c with the two, the name and the profiles `"vs_1_1"`
+/// and `"ps_2_a"`, then slot +0x14c.
+pub fn image_space_shader_hdr_down_sample16_light_adapt_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf4, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x54, 0x010b_3768), (0x58, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x8, 0x010b_0cf4),
+                (0xc, 0x010b_3f84),
+                (0x10, 0x010b_4770),
+                (0x14, 0x0101_1584),
+                (0x18, 0),
+            ],
+        );
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x4, 0x010b_3700)]);
+            0x010b_4a8cu32
+        } else {
+            put(e, f, &[(0x4, 0x010b_3734)]);
+            0x010b_4a9cu32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x1c, 0u32, 0x34u32]);
+        copy_words(e, f + 0x4, f + 0xa4, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x54, f + 0xa4, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
+// Translated from 00b91550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderHDRDownSample16LumClamp::ReloadShaders` (Xbox PDB), `thiscall`, no stack
+/// words: the shader reload of the shader `00b914e0` constructs (vtable `010b4ad0`, slot
+/// +0x120). Builds on its stack the vertex shader description
+/// `"imagespace\2x\v\HDRbase.v.hlsl"` (no defines) and the pixel one, which depends on the byte
+/// at `011f94fc`: while it is clear `"imagespace\2x\p\HDRBlur.p.hlsl"` (defines `"TEXTAP"` =
+/// `"16"`, `"LUMCLAMP"` = `""`) with the name `"HDRDS16LUMCLAMP"`, else
+/// `"imagespace\2x\p\HDRBlur_TEST.p.hlsl"` (defines `"TEXTAP"` = `"16"`, `"LUMCLAMP"` = `""`)
+/// with the name `"HDRDS16LUMCLAMPT"` (each 0x4c bytes: a file and up to nine define pairs, the
+/// rest cleared through `memset` in the exe's order). Copies the pixel description to another
+/// stack block, calls its vtable slot +0x13c with the two, the name and the profiles `"vs_1_1"`
+/// and `"ps_2_a"`, then slot +0x14c.
+pub fn image_space_shader_hdr_down_sample16_lum_clamp_reload_shaders(e: &mut Engine, this: Ptr) {
+    e.with_stack(0xf4, |e, frame| {
+        let f = frame.addr();
+        put(e, f, &[(0x54, 0x010b_3768), (0x58, 0)]);
+        e.call(MEMSET_00EC61C0, &args![f + 0x5c, 0u32, 0x44u32]);
+        put(
+            e,
+            f,
+            &[
+                (0x8, 0x010b_0cf4),
+                (0xc, 0x010b_3f84),
+                (0x10, 0x010b_45d0),
+                (0x14, 0x0101_1584),
+                (0x18, 0),
+            ],
+        );
+        let name = if e.global::<u8>(TEST_SHADERS_011F94FC) == 0 {
+            put(e, f, &[(0x4, 0x010b_3700)]);
+            0x010b_4c24u32
+        } else {
+            put(e, f, &[(0x4, 0x010b_3734)]);
+            0x010b_4c34u32
+        };
+        e.call(MEMSET_00EC61C0, &args![f + 0x1c, 0u32, 0x34u32]);
+        copy_words(e, f + 0x4, f + 0xa4, 0x13);
+        e.vcall(
+            this.addr(),
+            0x13c,
+            &args![f + 0x54, f + 0xa4, name, 0x010a_93ecu32, 0x010a_93c4u32],
+        );
+        e.vcall(this.addr(), 0x14c, &args![]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3411,6 +6287,145 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b8_d580, fn_00b8d580(Ptr, u32) -> Ptr),
         entry!(0x00b8_d430, fn_00b8d430(Ptr, u32) -> Ptr),
         entry!(0x00b8_bda0, fn_00b8bda0(Ptr) -> u8),
+        entry!(0x00b8_d460, fn_00b8d460(Ptr)),
+        entry!(0x00b9_2d20, fn_00b92d20(Ptr)),
+        entry!(0x00b8_bdb0, fn_00b8bdb0(Ptr)),
+        entry!(0x00b8_bf10, fn_00b8bf10(Ptr)),
+        entry!(0x00b8_c0e0, fn_00b8c0e0(Ptr)),
+        entry!(0x00b8_d3a0, fn_00b8d3a0(Ptr)),
+        entry!(0x00b8_d620, fn_00b8d620(Ptr)),
+        entry!(0x00b8_d770, fn_00b8d770(Ptr)),
+        entry!(0x00b8_d8c0, fn_00b8d8c0(Ptr)),
+        entry!(0x00b8_da00, fn_00b8da00(Ptr)),
+        entry!(0x00b8_db50, fn_00b8db50(Ptr)),
+        entry!(0x00b8_dca0, fn_00b8dca0(Ptr)),
+        entry!(0x00b8_ddf0, fn_00b8ddf0(Ptr)),
+        entry!(0x00b8_df40, fn_00b8df40(Ptr)),
+        entry!(0x00b8_e090, fn_00b8e090(Ptr)),
+        entry!(0x00b8_e1e0, fn_00b8e1e0(Ptr)),
+        entry!(0x00b8_ee90, fn_00b8ee90(Ptr)),
+        entry!(0x00b8_f080, fn_00b8f080(Ptr)),
+        entry!(0x00b8_f220, fn_00b8f220(Ptr)),
+        entry!(0x00b8_f3d0, fn_00b8f3d0(Ptr)),
+        entry!(0x00b8_f590, fn_00b8f590(Ptr)),
+        entry!(0x00b8_f710, fn_00b8f710(Ptr)),
+        entry!(0x00b8_f850, fn_00b8f850(Ptr)),
+        entry!(0x00b8_f9a0, fn_00b8f9a0(Ptr)),
+        entry!(0x00b8_faf0, fn_00b8faf0(Ptr)),
+        entry!(0x00b8_fc50, fn_00b8fc50(Ptr)),
+        entry!(0x00b8_fdb0, fn_00b8fdb0(Ptr)),
+        entry!(0x00b8_ff10, fn_00b8ff10(Ptr)),
+        entry!(0x00b9_16f0, fn_00b916f0(Ptr)),
+        entry!(0x00b9_1830, fn_00b91830(Ptr)),
+        entry!(0x00b9_1970, fn_00b91970(Ptr)),
+        entry!(0x00b9_1ab0, fn_00b91ab0(Ptr)),
+        entry!(0x00b9_1bf0, fn_00b91bf0(Ptr)),
+        entry!(0x00b9_1d60, fn_00b91d60(Ptr)),
+        entry!(0x00b9_1eb0, fn_00b91eb0(Ptr)),
+        entry!(0x00b9_21f0, fn_00b921f0(Ptr)),
+        entry!(0x00b9_2390, fn_00b92390(Ptr)),
+        entry!(0x00b9_25b0, fn_00b925b0(Ptr)),
+        entry!(0x00b9_2700, fn_00b92700(Ptr)),
+        entry!(0x00b9_2850, fn_00b92850(Ptr)),
+        entry!(0x00b9_29a0, fn_00b929a0(Ptr)),
+        entry!(0x00b9_2af0, fn_00b92af0(Ptr)),
+        entry!(0x00b9_2c40, fn_00b92c40(Ptr)),
+        entry!(0x00b9_2e00, fn_00b92e00(Ptr)),
+        entry!(0x00b9_2f50, fn_00b92f50(Ptr)),
+        entry!(0x00b9_30a0, fn_00b930a0(Ptr)),
+        entry!(0x00b9_31f0, fn_00b931f0(Ptr)),
+        entry!(0x00b9_3340, fn_00b93340(Ptr)),
+        entry!(0x00b9_3670, fn_00b93670(Ptr)),
+        entry!(0x00b9_39c0, fn_00b939c0(Ptr)),
+        entry!(0x00b9_3b10, fn_00b93b10(Ptr)),
+        entry!(0x00b9_3c60, fn_00b93c60(Ptr)),
+        entry!(0x00b9_3db0, fn_00b93db0(Ptr)),
+        entry!(0x00b9_3f00, fn_00b93f00(Ptr)),
+        entry!(0x00b9_4050, fn_00b94050(Ptr)),
+        entry!(0x00b9_41a0, fn_00b941a0(Ptr)),
+        entry!(0x00b9_42f0, fn_00b942f0(Ptr)),
+        entry!(0x00b9_4440, fn_00b94440(Ptr)),
+        entry!(
+            0x00b8_e330,
+            image_space_shader_bright_pass_blur3_reload_shaders(Ptr)
+        ),
+        entry!(
+            0x00b8_e4d0,
+            image_space_shader_bright_pass_blur5_reload_shaders(Ptr)
+        ),
+        entry!(
+            0x00b8_e670,
+            image_space_shader_bright_pass_blur7_reload_shaders(Ptr)
+        ),
+        entry!(
+            0x00b8_e810,
+            image_space_shader_bright_pass_blur9_reload_shaders(Ptr)
+        ),
+        entry!(
+            0x00b8_e9b0,
+            image_space_shader_bright_pass_blur11_reload_shaders(Ptr)
+        ),
+        entry!(
+            0x00b8_eb50,
+            image_space_shader_bright_pass_blur13_reload_shaders(Ptr)
+        ),
+        entry!(
+            0x00b8_ecf0,
+            image_space_shader_bright_pass_blur15_reload_shaders(Ptr)
+        ),
+        entry!(
+            0x00b9_0060,
+            image_space_shader_hdr_blend_in_shader_reload_shaders(Ptr)
+        ),
+        entry!(
+            0x00b9_0200,
+            image_space_shader_hdr_blend_in_shader_cinematic_reload_shaders(Ptr)
+        ),
+        entry!(
+            0x00b9_03a0,
+            image_space_shader_hdr_blend_in_shader_cinematic_alphamask_reload_shaders(Ptr)
+        ),
+        entry!(0x00b9_0590, image_space_shader_hdr_blur_reload_shaders(Ptr)),
+        entry!(
+            0x00b9_0720,
+            image_space_shader_hdr_bright_pass_filter_reload_shaders(Ptr)
+        ),
+        entry!(
+            0x00b9_08a0,
+            image_space_shader_hdr_down_sample16_reload_shaders(Ptr)
+        ),
+        entry!(
+            0x00b9_0a30,
+            image_space_shader_hdr_down_sample9_reload_shaders(Ptr)
+        ),
+        entry!(
+            0x00b9_0bc0,
+            image_space_shader_hdr_down_sample4_reload_shaders(Ptr)
+        ),
+        entry!(
+            0x00b9_0d50,
+            image_space_shader_hdr_light_adapt_reload_shaders(Ptr)
+        ),
+        entry!(
+            0x00b9_0ee0,
+            image_space_shader_hdr_lum_clamp_reload_shaders(Ptr)
+        ),
+        entry!(
+            0x00b9_1070,
+            image_space_shader_hdr_down_sample4_light_adapt_reload_shaders(Ptr)
+        ),
+        entry!(
+            0x00b9_1210,
+            image_space_shader_hdr_down_sample4_lum_clamp_reload_shaders(Ptr)
+        ),
+        entry!(
+            0x00b9_13b0,
+            image_space_shader_hdr_down_sample16_light_adapt_reload_shaders(Ptr)
+        ),
+        entry!(
+            0x00b9_1550,
+            image_space_shader_hdr_down_sample16_lum_clamp_reload_shaders(Ptr)
+        ),
         entry!(0x00b8_bd50, fn_00b8bd50(Ptr, u32) -> Ptr),
         entry!(0x00b8_bfa0, fn_00b8bfa0(Ptr, u32) -> Ptr),
         entry!(0x00b8_d6c0, fn_00b8d6c0(Ptr, u32) -> Ptr),
@@ -5592,5 +8607,2136 @@ mod delete_tests {
     #[test]
     fn fn_00b94510_adjusts_to_the_shader() {
         check_effect_delete(0x00b9_4510, 0x010b_7bf0, 0x010b_7bcc);
+    }
+}
+
+#[cfg(test)]
+mod reload_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_inline::{
+        NEW_RENDER_STATES_00E7F5D0, SET_RENDER_STATE_00E7F430,
+    };
+
+    /// What a shader reload passes to its vtable slot +0x13c for one value of the byte at
+    /// `011f94fc`: the two descriptions (read through their pointers), the name and the two
+    /// profiles; and the sizes it gives `memset`, in order.
+    struct Reload {
+        flag: u8,
+        vertex: &'static [u32],
+        pixel: &'static [u32],
+        words: [u32; 3],
+        memsets: &'static [u32],
+    }
+
+    /// What the pixel profile double answers.
+    const PROFILE: u32 = 0x0f00_0bad;
+    /// The doubles in the vtable slots +0x13c and +0x14c.
+    const LOAD_SHADERS: u32 = 0x0f00_013c;
+    const AFTER_LOAD: u32 = 0x0f00_014c;
+
+    type Seen = (Vec<u32>, Vec<u32>, Vec<u32>);
+
+    fn engine(flag: u8) -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.map(0x011f_9000, 0x1000);
+        e.set_global(TEST_SHADERS_011F94FC, flag);
+        e.register(MEMSET_00EC61C0, |e, a| {
+            for index in 0..a[2] {
+                e.mem.set_u8(a[0] + index, a[1] as u8);
+            }
+            a[0].into_ret()
+        });
+        e.register(PIXEL_PROFILE_00B4F380, |_, a| {
+            assert_eq!(a, [1]);
+            PROFILE.into_ret()
+        });
+        e.register(AFTER_LOAD, |_, _| Ret::default());
+        e.register(NEW_RENDER_STATES_00E7F5D0, |_, _| 0x4400u32.into_ret());
+        e.register(SET_RENDER_STATE_00E7F430, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x160);
+        e.mem.set_u32(vtable + 0x13c, LOAD_SHADERS);
+        e.mem.set_u32(vtable + 0x14c, AFTER_LOAD);
+        let this = e.mem.alloc(0xd0);
+        e.mem.set_u32(this, vtable);
+        let pass = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x5c, pass);
+        (e, this)
+    }
+
+    fn check_reload(addr: u32, cases: &[Reload]) {
+        let padded = |words: &[u32]| {
+            let mut all = words.to_vec();
+            all.resize(19, 0);
+            all
+        };
+        for case in cases {
+            let (mut e, this) = engine(case.flag);
+            let seen = std::rc::Rc::new(std::cell::RefCell::new(None::<Seen>));
+            let keep = seen.clone();
+            e.register_double(LOAD_SHADERS, move |e, a| {
+                let read = |e: &Engine, p: u32| (0..19).map(|i| e.mem.u32(p + 4 * i)).collect();
+                *keep.borrow_mut() = Some((read(e, a[1]), read(e, a[2]), a[3..6].to_vec()));
+                Ret::default()
+            });
+            e.call_log = Some(vec![]);
+            e.call(addr, &args![this]);
+            let (vertex, pixel, words) = seen.borrow_mut().take().expect("slot +0x13c called");
+            assert_eq!(
+                vertex,
+                padded(case.vertex),
+                "{addr:#x} vertex, flag {}",
+                case.flag
+            );
+            assert_eq!(
+                pixel,
+                padded(case.pixel),
+                "{addr:#x} pixel, flag {}",
+                case.flag
+            );
+            assert_eq!(words, case.words, "{addr:#x} words, flag {}", case.flag);
+            let log = e.call_log.take().unwrap();
+            let sizes: Vec<u32> = log
+                .iter()
+                .filter(|c| c.0 == MEMSET_00EC61C0)
+                .map(|c| c.1[2])
+                .collect();
+            assert_eq!(sizes, case.memsets, "{addr:#x} memsets");
+            let load = log.iter().position(|c| c.0 == LOAD_SHADERS).unwrap();
+            let after = log.iter().position(|c| c.0 == AFTER_LOAD).unwrap();
+            assert!(load < after);
+            assert_eq!(log[after].1, vec![this]);
+        }
+    }
+
+    fn render_states(e: &Engine) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == SET_RENDER_STATE_00E7F430)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn scanline_reloads_set_their_render_states() {
+        for addr in [0x00b8_bdb0u32, 0x00b9_25b0] {
+            let (mut e, this) = engine(0);
+            e.register(LOAD_SHADERS, |_, _| Ret::default());
+            let pass = e.mem.u32(this + 0x5c);
+            e.call_log = Some(vec![]);
+            e.call(addr, &args![this]);
+            // The block is made once, on the first state.
+            assert_eq!(e.mem.u32(pass + 0x30), 0x4400);
+            assert_eq!(
+                render_states(&e),
+                vec![
+                    vec![0x4400, 0x1b, 1, 1],
+                    vec![0x4400, 0x13, 5, 1],
+                    vec![0x4400, 0x14, 6, 1]
+                ]
+            );
+            let log = e.call_log.as_ref().unwrap();
+            let after = log.iter().position(|c| c.0 == AFTER_LOAD).unwrap();
+            let first = log
+                .iter()
+                .position(|c| c.0 == SET_RENDER_STATE_00E7F430)
+                .unwrap();
+            assert!(after < first);
+            assert_eq!(
+                log.iter()
+                    .filter(|c| c.0 == NEW_RENDER_STATES_00E7F5D0)
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn fn_00b8d460_sets_three_render_states() {
+        let (mut e, this) = engine(0);
+        let pass = e.mem.u32(this + 0x5c);
+        e.mem.set_u32(pass + 0x30, 0x5500);
+        e.call_log = Some(vec![]);
+        e.call(0x00b8_d460, &args![this]);
+        assert_eq!(
+            render_states(&e),
+            vec![
+                vec![0x5500, 0x34, 1, 1],
+                vec![0x5500, 0x38, 3, 1],
+                vec![0x5500, 0x39, 1, 1]
+            ]
+        );
+        assert!(!e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|c| c.0 == NEW_RENDER_STATES_00E7F5D0));
+    }
+
+    #[test]
+    fn fn_00b92d20_sets_them_only_with_its_flag() {
+        let (mut e, this) = engine(0);
+        e.map(0x011a_d000, 0x1000);
+        e.set_global(FLAG_011AD832, 0u8);
+        e.call_log = Some(vec![]);
+        e.call(0x00b9_2d20, &args![this]);
+        assert!(render_states(&e).is_empty());
+        e.set_global(FLAG_011AD832, 2u8);
+        e.call(0x00b9_2d20, &args![this]);
+        assert_eq!(
+            render_states(&e),
+            vec![
+                vec![0x4400, 0x34, 1, 1],
+                vec![0x4400, 0x38, 3, 1],
+                vec![0x4400, 0x39, 1, 1]
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_00b8bdb0_loads_its_shaders() {
+        check_reload(
+            0x00b8_bdb0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0130, 0x010b_0124, 0, 0x0106_3538],
+                    words: [0x010b_0114, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x44, 0x34],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0130, 0x010b_0124, 0, 0x0106_3538],
+                    words: [0x010b_0114, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x44, 0x34],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8bf10_loads_its_shaders() {
+        check_reload(
+            0x00b8_bf10,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_02f8],
+                    words: [0x010b_02ec, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x44],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_02f8],
+                    words: [0x010b_02ec, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x44],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8c0e0_loads_its_shaders() {
+        check_reload(
+            0x00b8_c0e0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0490],
+                    words: [0x010b_048c, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x44, 0x44],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0490],
+                    words: [0x010b_048c, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x44, 0x44],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8d3a0_loads_its_shaders() {
+        check_reload(
+            0x00b8_d3a0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0674],
+                    words: [0x010b_066c, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x40, 0x40],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0674],
+                    words: [0x010b_066c, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x40, 0x40],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8d620_loads_its_shaders() {
+        check_reload(
+            0x00b8_d620,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0820, 0x010b_0814, 0x0101_1584],
+                    words: [0x010b_0814, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0820, 0x010b_0814, 0x0101_1584],
+                    words: [0x010b_0814, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8d770_loads_its_shaders() {
+        check_reload(
+            0x00b8_d770,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158, 0x010b_09d4, 0x0101_1584],
+                    pixel: &[0x010b_09b4],
+                    words: [0x0109_ab38, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x38, 0x44],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158, 0x010b_09d4, 0x0101_1584],
+                    pixel: &[0x010b_09b4],
+                    words: [0x0109_ab38, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x38, 0x44],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8d8c0_loads_its_shaders() {
+        check_reload(
+            0x00b8_d8c0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0b5c],
+                    words: [0x010b_0b54, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x44],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0b5c],
+                    words: [0x010b_0b54, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x44],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8da00_loads_its_shaders() {
+        check_reload(
+            0x00b8_da00,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0cfc, 0x010b_0cf4, 0x0106_3f30],
+                    words: [0x010b_0cec, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0cfc, 0x010b_0cf4, 0x0106_3f30],
+                    words: [0x010b_0cec, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8db50_loads_its_shaders() {
+        check_reload(
+            0x00b8_db50,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0cfc, 0x010b_0cf4, 0x0106_3f18],
+                    words: [0x010b_0e94, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0cfc, 0x010b_0cf4, 0x0106_3f18],
+                    words: [0x010b_0e94, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8dca0_loads_its_shaders() {
+        check_reload(
+            0x00b8_dca0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0cfc, 0x010b_0cf4, 0x0106_3f00],
+                    words: [0x010b_1014, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0cfc, 0x010b_0cf4, 0x0106_3f00],
+                    words: [0x010b_1014, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8ddf0_loads_its_shaders() {
+        check_reload(
+            0x00b8_ddf0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0cfc, 0x010b_0cf4, 0x0106_3ee8],
+                    words: [0x010b_1194, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0cfc, 0x010b_0cf4, 0x0106_3ee8],
+                    words: [0x010b_1194, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8df40_loads_its_shaders() {
+        check_reload(
+            0x00b8_df40,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0cfc, 0x010b_0cf4, 0x010b_131c],
+                    words: [0x010b_1314, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0cfc, 0x010b_0cf4, 0x010b_131c],
+                    words: [0x010b_1314, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8e090_loads_its_shaders() {
+        check_reload(
+            0x00b8_e090,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0cfc, 0x010b_0cf4, 0x010b_149c],
+                    words: [0x010b_1494, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0cfc, 0x010b_0cf4, 0x010b_149c],
+                    words: [0x010b_1494, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8e1e0_loads_its_shaders() {
+        check_reload(
+            0x00b8_e1e0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0cfc, 0x010b_0cf4, 0x010b_161c],
+                    words: [0x010b_1614, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0cfc, 0x010b_0cf4, 0x010b_161c],
+                    words: [0x010b_1614, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8ee90_loads_its_shaders() {
+        check_reload(
+            0x00b8_ee90,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[
+                        0x010b_22bc,
+                        0x010b_22b4,
+                        0x0101_1584,
+                        0x010b_22a8,
+                        0x0101_1584,
+                        0x010b_22a0,
+                        0x0101_1584,
+                        0x010b_2294,
+                        0x0101_1584,
+                    ],
+                    words: [0x0105_ea48, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[
+                        0x010b_22bc,
+                        0x010b_22b4,
+                        0x0101_1584,
+                        0x010b_22a8,
+                        0x0101_1584,
+                        0x010b_22a0,
+                        0x0101_1584,
+                        0x010b_2294,
+                        0x0101_1584,
+                    ],
+                    words: [0x0105_ea48, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8f080_loads_its_shaders() {
+        check_reload(
+            0x00b8_f080,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0820, 0x010b_2464, 0x0101_1584],
+                    words: [0x010b_245c, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0820, 0x010b_2464, 0x0101_1584],
+                    words: [0x010b_245c, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8f220_loads_its_shaders() {
+        check_reload(
+            0x00b8_f220,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0820],
+                    words: [0x010b_25e4, 0x010a_93ec, PROFILE],
+                    memsets: &[0x44, 0x44],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0820],
+                    words: [0x010b_25e4, 0x010a_93ec, PROFILE],
+                    memsets: &[0x44, 0x44],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8f3d0_loads_its_shaders() {
+        check_reload(
+            0x00b8_f3d0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0820, 0x010b_277c, 0x0101_1584],
+                    words: [0x010b_2764, 0x010a_93ec, PROFILE],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0820, 0x010b_277c, 0x0101_1584],
+                    words: [0x010b_2764, 0x010a_93ec, PROFILE],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8f590_loads_its_shaders() {
+        check_reload(
+            0x00b8_f590,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158, 0x010b_277c, 0x0101_1584],
+                    pixel: &[],
+                    words: [0x0101_f7a8, 0x010a_93ec, 0],
+                    memsets: &[0x3c, 0x44],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158, 0x010b_277c, 0x0101_1584],
+                    pixel: &[],
+                    words: [0x0101_f7a8, 0x010a_93ec, 0],
+                    memsets: &[0x3c, 0x44],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8f710_loads_its_shaders() {
+        check_reload(
+            0x00b8_f710,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0820],
+                    words: [0x010b_22e0, 0x010a_93ec, PROFILE],
+                    memsets: &[0x44, 0x44],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0820],
+                    words: [0x010b_22e0, 0x010a_93ec, PROFILE],
+                    memsets: &[0x44, 0x44],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8f850_loads_its_shaders() {
+        check_reload(
+            0x00b8_f850,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158, 0x010b_09d4, 0x0101_1584],
+                    pixel: &[0x010b_2d68],
+                    words: [0x010b_2d64, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x38, 0x40],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158, 0x010b_09d4, 0x0101_1584],
+                    pixel: &[0x010b_2d68],
+                    words: [0x010b_2d64, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x38, 0x40],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8f9a0_loads_its_shaders() {
+        check_reload(
+            0x00b8_f9a0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158, 0x010b_09d4, 0x0101_1584],
+                    pixel: &[0x010b_2f0c],
+                    words: [0x010b_2f04, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x38, 0x40],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158, 0x010b_09d4, 0x0101_1584],
+                    pixel: &[0x010b_2f0c],
+                    words: [0x010b_2f04, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x38, 0x40],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8faf0_loads_its_shaders() {
+        check_reload(
+            0x00b8_faf0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158, 0x010b_09d4, 0x0101_1584],
+                    pixel: &[0x010b_2f0c, 0x010b_30b4, 0x010b_30ac],
+                    words: [0x010b_30a4, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x38, 0x38],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158, 0x010b_09d4, 0x0101_1584],
+                    pixel: &[0x010b_2f0c, 0x010b_30b4, 0x010b_30ac],
+                    words: [0x010b_30a4, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x38, 0x38],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8fc50_loads_its_shaders() {
+        check_reload(
+            0x00b8_fc50,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158, 0x010b_09d4, 0x0101_1584],
+                    pixel: &[0x010b_2f0c, 0x010b_30b4, 0x010b_323c],
+                    words: [0x010b_3234, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x38, 0x38],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158, 0x010b_09d4, 0x0101_1584],
+                    pixel: &[0x010b_2f0c, 0x010b_30b4, 0x010b_323c],
+                    words: [0x010b_3234, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x38, 0x38],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8fdb0_loads_its_shaders() {
+        check_reload(
+            0x00b8_fdb0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158, 0x010b_09d4, 0x0101_1584],
+                    pixel: &[0x010b_2d68, 0x010b_33c4, 0x0101_1584],
+                    words: [0x010b_33bc, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x38, 0x38],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158, 0x010b_09d4, 0x0101_1584],
+                    pixel: &[0x010b_2d68, 0x010b_33c4, 0x0101_1584],
+                    words: [0x010b_33bc, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x38, 0x38],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b8ff10_loads_its_shaders() {
+        check_reload(
+            0x00b8_ff10,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158, 0x010b_09d4, 0x0101_1584],
+                    pixel: &[0x010b_3550],
+                    words: [0x010b_3544, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x3c, 0x44],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158, 0x010b_09d4, 0x0101_1584],
+                    pixel: &[0x010b_3550],
+                    words: [0x010b_3544, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x3c, 0x44],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b916f0_loads_its_shaders() {
+        check_reload(
+            0x00b9_16f0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0130, 0x010b_0124, 0x0101_1584],
+                    words: [0x010b_4dbc, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x44, 0x40],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0130, 0x010b_0124, 0x0101_1584],
+                    words: [0x010b_4dbc, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x44, 0x40],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b91830_loads_its_shaders() {
+        check_reload(
+            0x00b9_1830,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_4f40],
+                    words: [0x010b_4f3c, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x40, 0x40],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_4f40],
+                    words: [0x010b_4f3c, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x40, 0x40],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b91970_loads_its_shaders() {
+        check_reload(
+            0x00b9_1970,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_50fc],
+                    pixel: &[0x010b_50dc],
+                    words: [0x010b_50d4, 0x010a_93e4, 0x010a_93cc],
+                    memsets: &[0x40, 0x40],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_50fc],
+                    pixel: &[0x010b_50dc],
+                    words: [0x010b_50d4, 0x010a_93e4, 0x010a_93cc],
+                    memsets: &[0x40, 0x40],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b91ab0_loads_its_shaders() {
+        check_reload(
+            0x00b9_1ab0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0820],
+                    words: [0x010b_5294, 0x010a_93ec, PROFILE],
+                    memsets: &[0x44, 0x44],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_0820],
+                    words: [0x010b_5294, 0x010a_93ec, PROFILE],
+                    memsets: &[0x44, 0x44],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b91bf0_loads_its_shaders() {
+        check_reload(
+            0x00b9_1bf0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158, 0x010b_09d4, 0x0101_1584],
+                    pixel: &[
+                        0x010b_543c,
+                        0x010b_5430,
+                        0x010b_5428,
+                        0x010b_541c,
+                        0x0101_1584,
+                    ],
+                    words: [0x010b_5414, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x38, 0x34],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158, 0x010b_09d4, 0x0101_1584],
+                    pixel: &[
+                        0x010b_543c,
+                        0x010b_5430,
+                        0x010b_5428,
+                        0x010b_541c,
+                        0x0101_1584,
+                    ],
+                    words: [0x010b_5414, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x38, 0x34],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b91d60_loads_its_shaders() {
+        check_reload(
+            0x00b9_1d60,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_55fc, 0x010b_55e8],
+                    words: [0x010b_55d4, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_55fc, 0x010b_55e8],
+                    words: [0x010b_55d4, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b91eb0_loads_its_shaders() {
+        check_reload(
+            0x00b9_1eb0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_55fc, 0x010b_57a4],
+                    words: [0x010b_5794, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_55fc, 0x010b_57a4],
+                    words: [0x010b_5794, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b921f0_loads_its_shaders() {
+        check_reload(
+            0x00b9_21f0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158, 0x010b_09d4, 0x0101_1584],
+                    pixel: &[0x010b_592c],
+                    words: [0x010b_5924, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x38, 0x40],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158, 0x010b_09d4, 0x0101_1584],
+                    pixel: &[0x010b_592c],
+                    words: [0x010b_5924, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x38, 0x40],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b92390_loads_its_shaders() {
+        check_reload(
+            0x00b9_2390,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_5ad4, 0x010b_33c4, 0x0101_1584],
+                    pixel: &[0x010b_0820, 0x010b_33c4, 0x0101_1584],
+                    words: [0x010b_5acc, 0x010a_93ec, PROFILE],
+                    memsets: &[0x3c, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_5ad4, 0x010b_33c4, 0x0101_1584],
+                    pixel: &[0x010b_0820, 0x010b_33c4, 0x0101_1584],
+                    words: [0x010b_5acc, 0x010a_93ec, PROFILE],
+                    memsets: &[0x3c, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b925b0_loads_its_shaders() {
+        check_reload(
+            0x00b9_25b0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_5c70],
+                    words: [0x010b_5c64, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x44, 0x44],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_5c70],
+                    words: [0x010b_5c64, 0x010a_93ec, 0x010a_93cc],
+                    memsets: &[0x44, 0x44],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b92700_loads_its_shaders() {
+        check_reload(
+            0x00b9_2700,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_5e64],
+                    pixel: &[0x010b_5e44, 0x010b_5e30],
+                    words: [0x010b_5e0c, 0x010a_93ec, PROFILE],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_5e64],
+                    pixel: &[0x010b_5e44, 0x010b_5e30],
+                    words: [0x010b_5e0c, 0x010a_93ec, PROFILE],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b92850_loads_its_shaders() {
+        check_reload(
+            0x00b9_2850,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_5e64],
+                    pixel: &[0x010b_5e44, 0x010b_6018],
+                    words: [0x010b_5ffc, 0x010a_93ec, PROFILE],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_5e64],
+                    pixel: &[0x010b_5e44, 0x010b_6018],
+                    words: [0x010b_5ffc, 0x010a_93ec, PROFILE],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b929a0_loads_its_shaders() {
+        check_reload(
+            0x00b9_29a0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_5e64, 0x010b_61bc],
+                    pixel: &[0x010b_5e44, 0x010b_61bc],
+                    words: [0x010b_619c, 0x010a_93ec, PROFILE],
+                    memsets: &[0x3c, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_5e64, 0x010b_61bc],
+                    pixel: &[0x010b_5e44, 0x010b_61bc],
+                    words: [0x010b_619c, 0x010a_93ec, PROFILE],
+                    memsets: &[0x3c, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b92af0_loads_its_shaders() {
+        check_reload(
+            0x00b9_2af0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_5e64, 0x010b_6360],
+                    pixel: &[0x010b_5e44, 0x010b_6360],
+                    words: [0x010b_6344, 0x010a_93ec, PROFILE],
+                    memsets: &[0x3c, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_5e64, 0x010b_6360],
+                    pixel: &[0x010b_5e44, 0x010b_6360],
+                    words: [0x010b_6344, 0x010a_93ec, PROFILE],
+                    memsets: &[0x3c, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b92c40_loads_its_shaders() {
+        check_reload(
+            0x00b9_2c40,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_5e64, 0x010b_6510],
+                    pixel: &[0x010b_5e44, 0x010b_6510],
+                    words: [0x010b_64ec, 0x010a_93ec, PROFILE],
+                    memsets: &[0x3c, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_5e64, 0x010b_6510],
+                    pixel: &[0x010b_5e44, 0x010b_6510],
+                    words: [0x010b_64ec, 0x010a_93ec, PROFILE],
+                    memsets: &[0x3c, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b92e00_loads_its_shaders() {
+        check_reload(
+            0x00b9_2e00,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_5e64],
+                    pixel: &[0x010b_5e44, 0x010b_66bc],
+                    words: [0x010b_669c, 0x010a_93ec, PROFILE],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_5e64],
+                    pixel: &[0x010b_5e44, 0x010b_66bc],
+                    words: [0x010b_669c, 0x010a_93ec, PROFILE],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b92f50_loads_its_shaders() {
+        check_reload(
+            0x00b9_2f50,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_5e64],
+                    pixel: &[0x010b_5e44, 0x010b_6868],
+                    words: [0x010b_6844, 0x010a_93ec, PROFILE],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_5e64],
+                    pixel: &[0x010b_5e44, 0x010b_6868],
+                    words: [0x010b_6844, 0x010a_93ec, PROFILE],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b930a0_loads_its_shaders() {
+        check_reload(
+            0x00b9_30a0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_5e64, 0x010b_6a0c],
+                    pixel: &[0x010b_5e44, 0x010b_6a0c],
+                    words: [0x010b_69f4, 0x010a_93ec, PROFILE],
+                    memsets: &[0x3c, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_5e64, 0x010b_6a0c],
+                    pixel: &[0x010b_5e44, 0x010b_6a0c],
+                    words: [0x010b_69f4, 0x010a_93ec, PROFILE],
+                    memsets: &[0x3c, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b931f0_loads_its_shaders() {
+        check_reload(
+            0x00b9_31f0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_5e64],
+                    pixel: &[0x010b_5e44, 0x010b_6bb0],
+                    words: [0x010b_6b94, 0x010a_93ec, PROFILE],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_5e64],
+                    pixel: &[0x010b_5e44, 0x010b_6bb0],
+                    words: [0x010b_6b94, 0x010a_93ec, PROFILE],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b93340_loads_its_shaders() {
+        check_reload(
+            0x00b9_3340,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_6d40],
+                    words: [0x010b_6d2c, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_6d40],
+                    words: [0x010b_6d2c, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b93670_loads_its_shaders() {
+        check_reload(
+            0x00b9_3670,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_6efc],
+                    words: [0x010b_6ee4, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_6efc],
+                    words: [0x010b_6ee4, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b939c0_loads_its_shaders() {
+        check_reload(
+            0x00b9_39c0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_70a4],
+                    words: [0x010b_708c, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_70a4],
+                    words: [0x010b_708c, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b93b10_loads_its_shaders() {
+        check_reload(
+            0x00b9_3b10,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_7244],
+                    words: [0x010b_722c, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_7244],
+                    words: [0x010b_722c, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b93c60_loads_its_shaders() {
+        check_reload(
+            0x00b9_3c60,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_73e0],
+                    words: [0x010b_73cc, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_73e0],
+                    words: [0x010b_73cc, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b93db0_loads_its_shaders() {
+        check_reload(
+            0x00b9_3db0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_6bb0],
+                    words: [0x010b_756c, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_6bb0],
+                    words: [0x010b_756c, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b93f00_loads_its_shaders() {
+        check_reload(
+            0x00b9_3f00,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_76f8],
+                    words: [0x010b_76ec, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_76f8],
+                    words: [0x010b_76ec, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b94050_loads_its_shaders() {
+        check_reload(
+            0x00b9_4050,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_7888],
+                    words: [0x010b_7874, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_7888],
+                    words: [0x010b_7874, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b941a0_loads_its_shaders() {
+        check_reload(
+            0x00b9_41a0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_7a1c],
+                    words: [0x010b_7a0c, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_7a1c],
+                    words: [0x010b_7a0c, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b942f0_loads_its_shaders() {
+        check_reload(
+            0x00b9_42f0,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_7bb8],
+                    words: [0x010b_7ba4, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_7bb8],
+                    words: [0x010b_7ba4, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00b94440_loads_its_shaders() {
+        check_reload(
+            0x00b9_4440,
+            &[
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_7d5c],
+                    words: [0x010b_7d44, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[0x010b_6d50, 0x010b_7d5c],
+                    words: [0x010b_7d44, 0x010a_93ec, PROFILE],
+                    memsets: &[0x40, 0x38],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_bright_pass_blur3_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b8_e330,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[
+                        0x010b_0cfc,
+                        0x010b_17cc,
+                        0x0101_1584,
+                        0x010b_0cf4,
+                        0x0106_3f30,
+                    ],
+                    words: [0x010b_1794, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[
+                        0x010b_17a8,
+                        0x010b_17cc,
+                        0x0101_1584,
+                        0x010b_0cf4,
+                        0x0106_3f30,
+                    ],
+                    words: [0x010b_179c, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_bright_pass_blur5_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b8_e4d0,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[
+                        0x010b_0cfc,
+                        0x010b_17cc,
+                        0x0101_1584,
+                        0x010b_0cf4,
+                        0x0106_3f18,
+                    ],
+                    words: [0x010b_194c, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[
+                        0x010b_17a8,
+                        0x010b_17cc,
+                        0x0101_1584,
+                        0x010b_0cf4,
+                        0x0106_3f18,
+                    ],
+                    words: [0x010b_1954, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_bright_pass_blur7_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b8_e670,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[
+                        0x010b_0cfc,
+                        0x010b_17cc,
+                        0x0101_1584,
+                        0x010b_0cf4,
+                        0x0106_3f00,
+                    ],
+                    words: [0x010b_1ad4, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[
+                        0x010b_17a8,
+                        0x010b_17cc,
+                        0x0101_1584,
+                        0x010b_0cf4,
+                        0x0106_3f00,
+                    ],
+                    words: [0x010b_1adc, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_bright_pass_blur9_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b8_e810,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[
+                        0x010b_0cfc,
+                        0x010b_17cc,
+                        0x0101_1584,
+                        0x010b_0cf4,
+                        0x0106_3ee8,
+                    ],
+                    words: [0x010b_1c5c, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[
+                        0x010b_17a8,
+                        0x010b_17cc,
+                        0x0101_1584,
+                        0x010b_0cf4,
+                        0x0106_3ee8,
+                    ],
+                    words: [0x010b_1c64, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_bright_pass_blur11_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b8_e9b0,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[
+                        0x010b_0cfc,
+                        0x010b_17cc,
+                        0x0101_1584,
+                        0x010b_0cf4,
+                        0x010b_131c,
+                    ],
+                    words: [0x010b_1de4, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[
+                        0x010b_17a8,
+                        0x010b_17cc,
+                        0x0101_1584,
+                        0x010b_0cf4,
+                        0x010b_131c,
+                    ],
+                    words: [0x010b_1df0, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_bright_pass_blur13_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b8_eb50,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[
+                        0x010b_0cfc,
+                        0x010b_17cc,
+                        0x0101_1584,
+                        0x010b_0cf4,
+                        0x010b_149c,
+                    ],
+                    words: [0x010b_1f74, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[
+                        0x010b_17a8,
+                        0x010b_17cc,
+                        0x0101_1584,
+                        0x010b_0cf4,
+                        0x010b_149c,
+                    ],
+                    words: [0x010b_1f80, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_bright_pass_blur15_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b8_ecf0,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_0158],
+                    pixel: &[
+                        0x010b_0cfc,
+                        0x010b_17cc,
+                        0x0101_1584,
+                        0x010b_0cf4,
+                        0x010b_161c,
+                    ],
+                    words: [0x010b_2104, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_0158],
+                    pixel: &[
+                        0x010b_17a8,
+                        0x010b_17cc,
+                        0x0101_1584,
+                        0x010b_0cf4,
+                        0x010b_161c,
+                    ],
+                    words: [0x010b_2110, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_hdr_blend_in_shader_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b9_0060,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_3768, 0x010b_09d4],
+                    pixel: &[0x010b_3700, 0x010b_3760, 0, 0x010b_3758],
+                    words: [0x010b_36ec, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x3c, 0x34],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_3768, 0x010b_09d4],
+                    pixel: &[0x010b_3734, 0x010b_3760, 0, 0x010b_3758],
+                    words: [0x010b_3720, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x3c, 0x34],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_hdr_blend_in_shader_cinematic_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b9_0200,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_3768, 0x010b_09d4],
+                    pixel: &[0x010b_3700, 0x010b_3928, 0, 0x010b_3760, 0, 0x010b_3758],
+                    words: [0x010b_38fc, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x3c, 0x2c],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_3768, 0x010b_09d4],
+                    pixel: &[0x010b_3734, 0x010b_3928, 0, 0x010b_3760, 0, 0x010b_3758],
+                    words: [0x010b_3910, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x3c, 0x2c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_hdr_blend_in_shader_cinematic_alphamask_reload_shaders_loads_its_shaders()
+    {
+        check_reload(
+            0x00b9_03a0,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_3768, 0x010b_09d4],
+                    pixel: &[
+                        0x010b_3700,
+                        0x010b_3ac4,
+                        0,
+                        0x010b_3928,
+                        0,
+                        0x010b_3760,
+                        0,
+                        0x010b_3758,
+                    ],
+                    words: [0x010b_3aac, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x3c],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_3768, 0x010b_09d4],
+                    pixel: &[0x010b_3734, 0x010b_3928, 0, 0x010b_3760, 0, 0x010b_3758],
+                    words: [0x010b_3910, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x3c, 0x2c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_hdr_blur_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b9_0590,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_3768],
+                    pixel: &[0x010b_3700, 0x010b_0cf4, 0x010b_161c],
+                    words: [0x010b_3c44, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_3768],
+                    pixel: &[0x010b_3734, 0x010b_0cf4, 0x010b_161c],
+                    words: [0x010b_3c4c, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_hdr_bright_pass_filter_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b9_0720,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_3768],
+                    pixel: &[0x010b_3700, 0x010b_3de4],
+                    words: [0x010b_3dcc, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_3768],
+                    pixel: &[0x010b_3734, 0x010b_3de4],
+                    words: [0x010b_3dd8, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_hdr_down_sample16_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b9_08a0,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_3768],
+                    pixel: &[0x010b_3700, 0x010b_0cf4, 0x010b_3f84],
+                    words: [0x010b_3f6c, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_3768],
+                    pixel: &[0x010b_3734, 0x010b_0cf4, 0x010b_3f84],
+                    words: [0x010b_3f78, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_hdr_down_sample9_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b9_0a30,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_3768],
+                    pixel: &[0x010b_3700, 0x010b_0cf4, 0x0106_3ee8],
+                    words: [0x010b_40fc, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_3768],
+                    pixel: &[0x010b_3734, 0x010b_0cf4, 0x0106_3ee8],
+                    words: [0x010b_4108, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_hdr_down_sample4_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b9_0bc0,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_3768],
+                    pixel: &[0x010b_3700, 0x010b_0cf4, 0x0106_3f24],
+                    words: [0x010b_428c, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_3768],
+                    pixel: &[0x010b_3734, 0x010b_0cf4, 0x0106_3f24],
+                    words: [0x010b_4298, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_hdr_light_adapt_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b9_0d50,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_3768],
+                    pixel: &[0x010b_3700, 0x010b_4434, 0x0101_1584],
+                    words: [0x010b_441c, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_3768],
+                    pixel: &[0x010b_3734, 0x010b_4434, 0x0101_1584],
+                    words: [0x010b_4428, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_hdr_lum_clamp_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b9_0ee0,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_3768],
+                    pixel: &[0x010b_3700, 0x010b_45d0, 0x0101_1584],
+                    words: [0x010b_45b4, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_3768],
+                    pixel: &[0x010b_3734, 0x010b_45d0, 0x0101_1584],
+                    words: [0x010b_45c0, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x3c],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_hdr_down_sample4_light_adapt_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b9_1070,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_3768],
+                    pixel: &[
+                        0x010b_3700,
+                        0x010b_0cf4,
+                        0x0106_3f24,
+                        0x010b_4770,
+                        0x0101_1584,
+                    ],
+                    words: [0x010b_4754, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_3768],
+                    pixel: &[
+                        0x010b_3734,
+                        0x010b_0cf4,
+                        0x0106_3f24,
+                        0x010b_4770,
+                        0x0101_1584,
+                    ],
+                    words: [0x010b_4760, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_hdr_down_sample4_lum_clamp_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b9_1210,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_3768],
+                    pixel: &[
+                        0x010b_3700,
+                        0x010b_0cf4,
+                        0x0106_3f24,
+                        0x010b_45d0,
+                        0x0101_1584,
+                    ],
+                    words: [0x010b_48f4, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_3768],
+                    pixel: &[
+                        0x010b_3734,
+                        0x010b_0cf4,
+                        0x0106_3f24,
+                        0x010b_45d0,
+                        0x0101_1584,
+                    ],
+                    words: [0x010b_4904, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_hdr_down_sample16_light_adapt_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b9_13b0,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_3768],
+                    pixel: &[
+                        0x010b_3700,
+                        0x010b_0cf4,
+                        0x010b_3f84,
+                        0x010b_4770,
+                        0x0101_1584,
+                    ],
+                    words: [0x010b_4a8c, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_3768],
+                    pixel: &[
+                        0x010b_3734,
+                        0x010b_0cf4,
+                        0x010b_3f84,
+                        0x010b_4770,
+                        0x0101_1584,
+                    ],
+                    words: [0x010b_4a9c, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn image_space_shader_hdr_down_sample16_lum_clamp_reload_shaders_loads_its_shaders() {
+        check_reload(
+            0x00b9_1550,
+            &[
+                Reload {
+                    flag: 0,
+                    vertex: &[0x010b_3768],
+                    pixel: &[
+                        0x010b_3700,
+                        0x010b_0cf4,
+                        0x010b_3f84,
+                        0x010b_45d0,
+                        0x0101_1584,
+                    ],
+                    words: [0x010b_4c24, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+                Reload {
+                    flag: 1,
+                    vertex: &[0x010b_3768],
+                    pixel: &[
+                        0x010b_3734,
+                        0x010b_0cf4,
+                        0x010b_3f84,
+                        0x010b_45d0,
+                        0x0101_1584,
+                    ],
+                    words: [0x010b_4c34, 0x010a_93ec, 0x010a_93c4],
+                    memsets: &[0x44, 0x34],
+                },
+            ],
+        );
     }
 }
