@@ -1462,6 +1462,515 @@ pub fn love_tester_menu_load_button_and_text_images(e: &mut Engine, this: Ptr) {
     });
 }
 
+/// Callees and data of [`love_tester_menu_init_machine`] (`thiscall` unless noted).
+/// `ModelLoader::LoadFile` (6 words) on the loader at `011c3b3c`.
+const LOAD_FILE: u32 = 0x0044_7080;
+/// `SwapPlatformLanguageTextures` (`cdecl`, the model).
+const SWAP_LANGUAGE_TEXTURES: u32 = 0x004b_7660;
+/// `NiMatrix3::MakeXRotation` (the angle).
+const MAKE_X_ROTATION: u32 = 0x0052_4ac0;
+/// Unnamed in the engine map: another one-angle matrix setup, on the second matrix.
+const ROTATION_004A0C90: u32 = 0x004a_0c90;
+/// `NiMatrix3::operator*` (the result's address, the other matrix; answers the result).
+const MATRIX_PRODUCT: u32 = 0x0043_f8d0;
+/// Unnamed (no words, no `this`): the screen height (`004dc1f0`) loaded into `ST0` (`FILD`).
+const SCREEN_HEIGHT_00706E50: u32 = 0x0070_6e50;
+/// Unnamed one-word setters of the models: `00440490` (a float), `0043fa80` (a matrix).
+const MODEL_SET_00440490: u32 = 0x0044_0490;
+const MODEL_SET_MATRIX_0043FA80: u32 = 0x0043_fa80;
+/// `NiTimeController::StartAnimations` (`cdecl`, the object).
+const START_ANIMATIONS: u32 = 0x00a6_d2d0;
+/// `NiAVObject::GetWorldBound` (no words).
+const GET_WORLD_BOUND: u32 = 0x0043_d450;
+/// The float at `this + 0xc` in `ST0` (`0084d030`, also the frame timer's elapsed time).
+const VALUE_AT_12_0084D030: u32 = FRAME_TIME_0084D030;
+/// `ShadowSceneNode::AddAllLightsFromNode_Recurse` (the node, a float).
+const ADD_ALL_LIGHTS_FROM_NODE: u32 = 0x00b5_ca70;
+/// `ShadowSceneNode::AddLight` (the light, a word).
+const ADD_LIGHT: u32 = 0x00b5_c940;
+/// The light's constructor (`00a7d670`, unnamed; on a 0xfc-byte block).
+const LIGHT_CONSTRUCTOR_00A7D670: u32 = 0x00a7_d670;
+/// Unnamed one-word setters of the light: two points (`00440460`, `004bc2e0`), a point
+/// (`0050dd50`) and a float (`0050dd20`).
+const LIGHT_SET_00440460: u32 = 0x0044_0460;
+const LIGHT_SET_004BC2E0: u32 = 0x004b_c2e0;
+const LIGHT_SET_0050DD50: u32 = 0x0050_dd50;
+const LIGHT_SET_0050DD20: u32 = 0x0050_dd20;
+/// The allocation `00401000` (`cdecl`, the size).
+const ALLOCATE_00401000: u32 = 0x0040_1000;
+/// The glow's setup (`004b0680`, unnamed; the card object and the value to glow at).
+const GLOW_SETUP_004B0680: u32 = 0x004b_0680;
+/// Float constants the code loads: π/2 (`0101ff38`), π (`0102b3c8`), the tilt
+/// (`01074b90`), the height limit (a double, 640.0, `01074b88`), the two placements
+/// (`01074b7c`, `01074b80`), the light radius scale (a double, `0102fc70`) and the light's
+/// grey level (`01019de0`).
+const HALF_PI_0101FF38: u32 = 0x0101_ff38;
+const PI_0102B3C8: u32 = 0x0102_b3c8;
+const TILT_01074B90: u32 = 0x0107_4b90;
+const HEIGHT_LIMIT_01074B88: u32 = 0x0107_4b88;
+const PLACE_01074B7C: u32 = 0x0107_4b7c;
+const PLACE_01074B80: u32 = 0x0107_4b80;
+const RADIUS_SCALE_0102FC70: u32 = 0x0102_fc70;
+const GREY_01019DE0: u32 = 0x0101_9de0;
+/// `"Forward"`.
+const FORWARD_SEQUENCE: u32 = 0x0104_8458;
+/// The glow name formats: `"P1_PointVal_0%i_GLOW:%i"`, `"P1_PointVal_0%i_GLOW"`,
+/// `"P1_PointVal_10_GLOW:%i"`, `"P1_PointVal_10_GLOW"`.
+const GLOW_NAME_DIGIT_PART: u32 = 0x0107_4b24;
+const GLOW_NAME_DIGIT: u32 = 0x0107_4b0c;
+const GLOW_NAME_TEN_PART: u32 = 0x0107_4af4;
+const GLOW_NAME_TEN: u32 = 0x0107_4ae0;
+/// The click and refresh functions the buttons and text items keep (`cdecl`, the item).
+const CLICK_VALUE_DOWN_007958E0: u32 = 0x0079_58e0;
+const CLICK_VALUE_UP: u32 = 0x0079_5b30;
+const CLICK_NEXT_PAGE: u32 = 0x0079_5c60;
+const CLICK_PREVIOUS_PAGE: u32 = 0x0079_5ca0;
+const CLICK_CLOSE: u32 = 0x0079_5ce0;
+const CLICK_SUMMARY_DOWN_007957C0: u32 = 0x0079_57c0;
+const CLICK_SUMMARY_UP_00795A00: u32 = 0x0079_5a00;
+const REFRESH_DOWN: u32 = 0x0079_5580;
+const REFRESH_UP: u32 = 0x0079_5630;
+const REFRESH_NEXT: u32 = 0x0079_5700;
+const REFRESH_PREVIOUS: u32 = 0x0079_5780;
+const REFRESH_VALUE_TEXT: u32 = 0x0079_5390;
+const REFRESH_POINTS_TEXT: u32 = 0x0079_53f0;
+/// The summary page's rows: actor value, then the names of its value text, down button and
+/// up button (`"Index_StrengthPointVal:0"`, `"Index_StrengthDecrease_Btn:0"`, ...).
+const SUMMARY_ROWS: [(u32, u32, u32, u32); 7] = [
+    (5, 0x0107_4a80, 0x0107_4a60, 0x0107_4a40),
+    (6, 0x0107_4a24, 0x0107_4a04, 0x0107_49e4),
+    (7, 0x0107_49c8, 0x0107_49a8, 0x0107_4988),
+    (8, 0x0107_496c, 0x0107_494c, 0x0107_492c),
+    (9, 0x0107_490c, 0x0107_48e8, 0x0107_48c4),
+    (10, 0x0107_48ac, 0x0107_4890, 0x0107_4874),
+    (11, 0x0107_485c, 0x0107_4840, 0x0107_4824),
+];
+
+/// The size of [`love_tester_menu_init_machine`]'s frame model: a local at `EBP - n` is at
+/// `top - n` (see [`Frame`]).
+const INIT_FRAME: u32 = 0x3f0;
+
+/// The locals of [`love_tester_menu_init_machine`], at the exe's own `EBP` offsets.
+#[derive(Clone, Copy)]
+struct Frame {
+    top: u32,
+}
+
+impl Frame {
+    /// The local at `EBP - offset`.
+    fn at(self, offset: u32) -> u32 {
+        self.top - offset
+    }
+}
+
+/// Stores `item` in the stack word `slot` and adds it (through the word's address) to the
+/// array (`BSSimpleArray::AddUninitialized`, `007cb2e0`).
+fn add_item(e: &mut Engine, array: u32, slot: u32, item: u32) {
+    e.mem.set_u32(slot, item);
+    e.call(ARRAY_ADD_007CB2E0, &args![array, slot]);
+}
+
+/// A love tester button ([`fn_00794e70`]) in a 0x14-byte block (`00401000`), or null when
+/// the allocation fails.
+fn new_button(e: &mut Engine, click: u32, refresh: u32, name: u32) -> u32 {
+    let block = e.call(ALLOCATE_00401000, &args![0x14u32]).u32();
+    if block == 0 {
+        return 0;
+    }
+    fn_00794e70(e, Ptr::new(block), click, refresh, name).addr()
+}
+
+/// An actor value button ([`love_tester_menu_actor_value_button`] with `words` after the
+/// button) in a 0x28-byte block, or null when the allocation fails.
+fn new_value_button(e: &mut Engine, words: &[u32]) -> u32 {
+    let block = e.call(ALLOCATE_00401000, &args![0x28u32]).u32();
+    if block == 0 {
+        return 0;
+    }
+    let mut all = vec![block];
+    all.extend_from_slice(words);
+    love_tester_menu_actor_value_button(e, &all)
+}
+
+/// A text item ([`fn_007950b0`]: the refresh function, the names, the actor value, the
+/// dynamic model, threshold 0) in a 0x1c-byte block, or null when the allocation fails.
+fn new_text_item(e: &mut Engine, refresh: u32, name: u32, second_name: u32, value: u32) -> u32 {
+    let block = e.call(ALLOCATE_00401000, &args![0x1cu32]).u32();
+    if block == 0 {
+        return 0;
+    }
+    fn_007950b0(e, Ptr::new(block), refresh, name, second_name, value, 1, 0).addr()
+}
+
+/// The cabinet's (+0x60 of the instance) object named by the text at `text`, through a
+/// string built at `string` (left for the caller to destroy).
+fn cabinet_object(e: &mut Engine, string: u32, text: u32) -> u32 {
+    let name = e.call(STRING_CONSTRUCTOR, &args![string, text]).u32();
+    let cabinet = e.mem.u32(menu(e) + 0x60);
+    e.vcall(cabinet, 0x9c, &args![name]).u32()
+}
+
+/// One light bulb glow: when the cabinet has an object named by the text at `text` (looked
+/// up through the string at `string`), an 8-byte glow (`00401000`) is set up with the object
+/// (looked up again through `second_string`) and `value` (`004b0680`) and added to
+/// `LightBulbGlows` (+0x74) through the stack word `slot` (null when the allocation failed).
+fn add_glow(e: &mut Engine, text: u32, string: u32, second_string: u32, slot: u32, value: u32) {
+    let found = cabinet_object(e, string, text);
+    e.call(STRING_DESTRUCTOR, &args![string]);
+    if found == 0 {
+        return;
+    }
+    let block = e.call(ALLOCATE_00401000, &args![8u32]).u32();
+    let glow = if block != 0 {
+        let object = cabinet_object(e, second_string, text);
+        e.call(GLOW_SETUP_004B0680, &args![block, object, value])
+            .u32()
+    } else {
+        0
+    };
+    if block != 0 {
+        e.call(STRING_DESTRUCTOR, &args![second_string]);
+    }
+    let glows = menu(e) + 0x74;
+    add_item(e, glows, slot, glow);
+}
+
+/// The models of [`love_tester_menu_init_machine`]: both are loaded (`ModelLoader::LoadFile`
+/// with 0, 1, 0, 0, 0) into the instance (+0x5c, +0x60) and get the platform's language
+/// textures. The rotation is `MakeXRotation(π/2)` times `004a0c90(π)`, then times
+/// `MakeXRotation` of the tilt (`NiMatrix3::operator*`, each product copied back). Each
+/// model gets `00440490(1.0)`, the translation (0, `01074b7c`, `01074b80`) when the screen
+/// height (`00706e50`) is at most 640.0, else (0, `01074b7c`, `01074b7c`), and the rotation
+/// (`0043fa80`); then each is updated at 0.0 (`0043d410`, `00a59c60`).
+fn init_models(e: &mut Engine, frame: Frame) {
+    for (field, model) in [(0x5cu32, DYNAMIC_MODEL), (0x60, CABINET_MODEL)] {
+        let loader = e.mem.u32(MODEL_LOADER);
+        let loaded = e
+            .call(
+                LOAD_FILE,
+                &args![loader, model, 0u32, 1u32, 0u32, 0u32, 0u32],
+            )
+            .u32();
+        e.mem.set_u32(menu(e) + field, loaded);
+        let loaded = e.mem.u32(menu(e) + field);
+        e.call(SWAP_LANGUAGE_TEXTURES, &args![loaded]);
+    }
+    let rotation = frame.at(0x4c);
+    let turn = frame.at(0x9c);
+    e.call(POINT_CONSTRUCTOR_006815C0, &args![rotation]);
+    e.call(POINT_CONSTRUCTOR_006815C0, &args![turn]);
+    let angle = x87_quiet_bits(e.mem.u32(HALF_PI_0101FF38));
+    e.call(MAKE_X_ROTATION, &args![rotation, angle]);
+    let angle = x87_quiet_bits(e.mem.u32(PI_0102B3C8));
+    e.call(ROTATION_004A0C90, &args![turn, angle]);
+    let product = e
+        .call(MATRIX_PRODUCT, &args![rotation, frame.at(0x148), turn])
+        .u32();
+    copy_matrix(e, product, rotation);
+    let angle = x87_quiet_bits(e.mem.u32(TILT_01074B90));
+    e.call(MAKE_X_ROTATION, &args![turn, angle]);
+    let product = e
+        .call(MATRIX_PRODUCT, &args![rotation, frame.at(0x16c), turn])
+        .u32();
+    copy_matrix(e, product, rotation);
+    let height = e.call(SCREEN_HEIGHT_00706E50, &args![]).f64();
+    // FCOMP double; TEST AH,0x41; JP: set when below or equal (not when unordered).
+    let small = height <= e.mem.f64(HEIGHT_LIMIT_01074B88);
+    let last = if small {
+        PLACE_01074B80
+    } else {
+        PLACE_01074B7C
+    };
+    for field in [0x5cu32, 0x60] {
+        let model = e.mem.u32(menu(e) + field);
+        e.call(MODEL_SET_00440490, &args![model, 1.0f32]);
+        let z = x87_quiet_bits(e.mem.u32(last));
+        let y = x87_quiet_bits(e.mem.u32(PLACE_01074B7C));
+        let model = e.mem.u32(menu(e) + field);
+        e.call(SET_TRANSLATE_004BC1F0, &args![model, 0.0f32, y, z]);
+        let model = e.mem.u32(menu(e) + field);
+        e.call(MODEL_SET_MATRIX_0043FA80, &args![model, rotation]);
+    }
+    let first = frame.at(0x28);
+    let second = frame.at(0x1c);
+    e.call(UPDATE_BLOCK_0043D410, &args![first, 0.0f32, 0u32, 0u32]);
+    e.call(UPDATE_BLOCK_0043D410, &args![second, 0.0f32, 0u32, 0u32]);
+    let model = e.mem.u32(menu(e) + 0x5c);
+    e.call(UPDATE_00A59C60, &args![model, first]);
+    let model = e.mem.u32(menu(e) + 0x60);
+    e.call(UPDATE_00A59C60, &args![model, second]);
+}
+
+/// `REP MOVSD` of a 3x3 matrix (9 words) from `source` to `destination`.
+fn copy_matrix(e: &mut Engine, source: u32, destination: u32) {
+    for i in 0..9 {
+        let word = e.mem.u32(source + 4 * i);
+        e.mem.set_u32(destination + 4 * i, word);
+    }
+}
+
+/// The animation of [`love_tester_menu_init_machine`]: the frame timer (+0x50) advances by
+/// the elapsed time (`0084d030` on `011f6394`); the dynamic model's controller manager
+/// (`NiObjectNET::GetController` with `011f36ac`) plays `"Forward"` (`0047a520`;
+/// `DeactivateAll(0.0)`, `0047aab0(sequence, 0, 1, 1.0, 0.0, 0)`, `0047aa40(1)`,
+/// `004954c0`); the animations start on `this`'s model (`NiTimeController::StartAnimations`).
+/// From the manager up (`004a8a90`), the first object with `00653270(011f36bc, ..)` gets an
+/// update at 0.0 (its slot +0x94 with a block from `0043d410`). Then `this`'s model is
+/// updated at 0.0.
+fn start_machine(e: &mut Engine, this: u32, frame: Frame) {
+    let elapsed = e.call(FRAME_TIME_0084D030, &args![TIMER_011F6394]).f64();
+    let timer = x87_store32(x87_add(elapsed, x87_m32(e.mem.u32(menu(e) + 0x50))));
+    e.mem.set_u32(menu(e) + 0x50, timer);
+    let model = e.mem.u32(menu(e) + 0x5c);
+    let manager = e
+        .call(GET_CONTROLLER, &args![model, MANAGER_ARGUMENT_011F36AC])
+        .u32();
+    if manager != 0 {
+        let string = frame.at(0x170);
+        let name = e
+            .call(STRING_CONSTRUCTOR, &args![string, FORWARD_SEQUENCE])
+            .u32();
+        let sequence = e.call(GET_SEQUENCE_0047A520, &args![manager, name]).u32();
+        e.call(STRING_DESTRUCTOR, &args![string]);
+        if sequence != 0 {
+            e.call(DEACTIVATE_ALL, &args![manager, 0.0f32]);
+            e.call(
+                ACTIVATE_SEQUENCE_0047AAB0,
+                &args![manager, sequence, 0u32, 1u32, 1.0f32, 0.0f32, 0u32],
+            );
+            e.call(SET_FLAG_0047AA40, &args![manager, 1u32]);
+            e.call(SEQUENCE_START_004954C0, &args![sequence]);
+        }
+    }
+    let model = e.mem.u32(this + 0x5c);
+    e.call(START_ANIMATIONS, &args![model]);
+    let mut node = manager;
+    while node != 0 {
+        let found = e
+            .call(
+                CONTROLLER_MANAGER_00653270,
+                &args![MANAGER_ARGUMENT_011F36BC, node],
+            )
+            .u32();
+        if found != 0 {
+            let block = frame.at(0xb4);
+            e.call(UPDATE_BLOCK_0043D410, &args![block, 0.0f32, 0u32, 0u32]);
+            e.vcall(node, 0x94, &args![block]);
+            break;
+        }
+        node = e.call(PARENT_004A8A90, &args![node]).u32();
+    }
+    let block = frame.at(0x70);
+    e.call(UPDATE_BLOCK_0043D410, &args![block, 0.0f32, 0u32, 0u32]);
+    let model = e.mem.u32(this + 0x5c);
+    e.call(UPDATE_00A59C60, &args![model, block]);
+}
+
+/// The light of [`love_tester_menu_init_machine`]: the radius is the dynamic model's world
+/// bound's float +0xc times 20.0 (`0102fc70`). The scene graph (`00450b80(1)`) takes the
+/// lights of the model's node (its slot +0xc; `AddAllLightsFromNode_Recurse` with the
+/// radius); when it finds none a light is made (0xfc bytes, `00aa13e0`, `00a7d670`; null when
+/// the allocation fails) with (0, 0, 0) (`00440460`), the grey level three times
+/// (`004bc2e0`), (radius, 0, 0) (`0050dd50`) and 1.0 (`0050dd20`), updated at 0.0, attached
+/// (slot +0xdc with 1) and added (`ShadowSceneNode::AddLight` with 0). Then both models are
+/// attached (slot +0xdc with 1).
+fn init_light(e: &mut Engine, frame: Frame) {
+    let model = e.mem.u32(menu(e) + 0x5c);
+    let bound = e.call(GET_WORLD_BOUND, &args![model]).u32();
+    let size = e.call(VALUE_AT_12_0084D030, &args![bound]).f64();
+    let radius = x87_store32(x87_mul(size, e.mem.f64(RADIUS_SCALE_0102FC70)));
+    let model = e.mem.u32(menu(e) + 0x5c);
+    let node = e.vcall(model, 0xc, &args![]).u32();
+    let graph = e.call(SCENE_GRAPH_00450B80, &args![1u32]).u32();
+    let found = e
+        .call(
+            ADD_ALL_LIGHTS_FROM_NODE,
+            &args![graph, node, x87_quiet_bits(radius)],
+        )
+        .u32();
+    if found == 0 {
+        let block = e.call(ALLOCATE_00AA13E0, &args![0xfcu32]).u32();
+        let light = if block != 0 {
+            e.call(LIGHT_CONSTRUCTOR_00A7D670, &args![block]).u32()
+        } else {
+            0
+        };
+        let point = e
+            .call(
+                POINT_00416870,
+                &args![frame.at(0x184), 0.0f32, 0.0f32, 0.0f32],
+            )
+            .u32();
+        e.call(LIGHT_SET_00440460, &args![light, point]);
+        let grey = x87_quiet_bits(e.mem.u32(GREY_01019DE0));
+        let point = e
+            .call(POINT_00416870, &args![frame.at(0x190), grey, grey, grey])
+            .u32();
+        e.call(LIGHT_SET_004BC2E0, &args![light, point]);
+        let point = e
+            .call(
+                POINT_00416870,
+                &args![frame.at(0x19c), x87_quiet_bits(radius), 0.0f32, 0.0f32],
+            )
+            .u32();
+        e.call(LIGHT_SET_0050DD50, &args![light, point]);
+        e.call(LIGHT_SET_0050DD20, &args![light, 1.0f32]);
+        let block = frame.at(0xc4);
+        e.call(UPDATE_BLOCK_0043D410, &args![block, 0.0f32, 0u32, 0u32]);
+        e.call(UPDATE_00A59C60, &args![light, block]);
+        let graph = e.call(SCENE_GRAPH_00450B80, &args![1u32]).u32();
+        e.vcall(graph, 0xdc, &args![light, 1u32]);
+        let graph = e.call(SCENE_GRAPH_00450B80, &args![1u32]).u32();
+        e.call(ADD_LIGHT, &args![graph, light, 0u32]);
+    }
+    for field in [0x5cu32, 0x60] {
+        let graph = e.call(SCENE_GRAPH_00450B80, &args![1u32]).u32();
+        let model = e.mem.u32(menu(e) + field);
+        e.vcall(graph, 0xdc, &args![model, 1u32]);
+    }
+}
+
+/// The glows of [`love_tester_menu_init_machine`] (see [`add_glow`]): for each value 1 to 9
+/// the parts `"P1_PointVal_0<v>_GLOW:<0..9>"` and then `"P1_PointVal_0<v>_GLOW"`, all glowing
+/// at the value; then `"P1_PointVal_10_GLOW:<0..9>"` and `"P1_PointVal_10_GLOW"`, glowing at
+/// 10. Each name is formatted into a 0x1e-byte buffer (`00406d00`).
+fn init_glows(e: &mut Engine, frame: Frame) {
+    let buffer = frame.at(0xec);
+    for value in 1..10u32 {
+        for part in 0..10u32 {
+            e.call(
+                FORMAT,
+                &args![buffer, 0x1eu32, GLOW_NAME_DIGIT_PART, value, part],
+            );
+            add_glow(
+                e,
+                buffer,
+                frame.at(0x1cc),
+                frame.at(0x1d8),
+                frame.at(0xf4),
+                value,
+            );
+        }
+        e.call(FORMAT, &args![buffer, 0x1eu32, GLOW_NAME_DIGIT, value]);
+        add_glow(
+            e,
+            buffer,
+            frame.at(0x1e0),
+            frame.at(0x1ec),
+            frame.at(0xf8),
+            value,
+        );
+    }
+    let buffer = frame.at(0x118);
+    for part in 0..10u32 {
+        e.call(FORMAT, &args![buffer, 0x1eu32, GLOW_NAME_TEN_PART, part]);
+        add_glow(
+            e,
+            buffer,
+            frame.at(0x1f4),
+            frame.at(0x200),
+            frame.at(0x120),
+            10,
+        );
+    }
+    e.call(FORMAT, &args![buffer, 0x1eu32, GLOW_NAME_TEN]);
+    add_glow(
+        e,
+        buffer,
+        frame.at(0x208),
+        frame.at(0x214),
+        frame.at(0x124),
+        10,
+    );
+}
+
+// Translated from 007928e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LoveTesterMenu::InitMachine` (Xbox PDB; `thiscall`): builds the machine. The models,
+/// their rotation and placement ([`init_models`]), the animation ([`start_machine`]) and the
+/// light ([`init_light`]). The global page (the instance's +0x1a4) gets the value down
+/// (`007958e0`, refresh `00795580`, `"P1_Decrease_Btn:0"`) and up (`00795b30`, `00795630`,
+/// `"P1_Increase_Btn:0"`) buttons without an actor value or text items, and the next
+/// (`LoveTesterMenu::NextPage`, `00795700`, `"P1_RT_Btn:0"`) and previous
+/// (`LoveTesterMenu::PreviousPage`, `00795780`, `"P1_LT_Btn:0"`) buttons; then the glows
+/// ([`init_glows`]). On `this`: the points text (`007953f0`, the two
+/// `"P1_PointsRemainDigit"` names, no actor value) on the global page's texts (+0x1b4), the
+/// look-inside button (`NextPage`, `00795700`, `"LookInside_Btn:0"`) on page 0 (+0x84), and
+/// on the summary page (page 8: texts +0x194, buttons +0x184), for each of the actor values
+/// 5 to 11, its value text (`00795390`), its down (`007957c0`, `00795580`) and up
+/// (`00795a00`, `00795630`) buttons, each with that text and the points text, and finally
+/// the all-done button (`LoveTesterMenu::CloseCallback`, `00795700`, `"AllDone_Btn:0"`).
+/// Every button and text item is allocated with `00401000` and added (null when the
+/// allocation fails) through a stack word (`007cb2e0`). Then `this`'s images are loaded
+/// ([`love_tester_menu_load_button_and_text_images`]), the instance's page refreshed
+/// ([`love_tester_menu_refresh_page`]) and the page turned on
+/// ([`love_tester_menu_next_page`], `cdecl`, pushed a 0 it does not read).
+///
+/// The locals passed by address sit at the exe's own frame offsets ([`Frame`]).
+/// The exception frame (`FS:[0]`) and the /GS stack cookie check (`00ec408c`) are not
+/// translated.
+// Translation incomplete: 007928e0 - the FS:[0] exception frame (unwinding on a throw) and the /GS stack cookie check (00ec408c) are not translated
+pub fn love_tester_menu_init_machine(e: &mut Engine, this: Ptr) {
+    let this = this.addr();
+    e.with_stack(INIT_FRAME, |e, locals| {
+        let frame = Frame {
+            top: locals.addr() + INIT_FRAME,
+        };
+        init_models(e, frame);
+        start_machine(e, this, frame);
+        init_light(e, frame);
+        let points_slot = frame.at(0x78);
+        e.mem.set_u32(points_slot, 0);
+        let down = new_value_button(
+            e,
+            &[
+                CLICK_VALUE_DOWN_007958E0,
+                REFRESH_DOWN,
+                0x0107_4b68,
+                u32::MAX,
+                0,
+            ],
+        );
+        let global_buttons = menu(e) + 0x1a4;
+        add_item(e, global_buttons, frame.at(0x1a8), down);
+        let up = new_value_button(e, &[CLICK_VALUE_UP, REFRESH_UP, 0x0107_4b54, u32::MAX, 0]);
+        let global_buttons = menu(e) + 0x1a4;
+        add_item(e, global_buttons, frame.at(0x1b4), up);
+        for (click, refresh, name) in [
+            (CLICK_NEXT_PAGE, REFRESH_NEXT, 0x0107_4b48u32),
+            (CLICK_PREVIOUS_PAGE, REFRESH_PREVIOUS, 0x0107_4b3c),
+        ] {
+            let button = new_button(e, click, refresh, name);
+            let global_buttons = menu(e) + 0x1a4;
+            add_item(e, global_buttons, frame.at(0x5c), button);
+        }
+        init_glows(e, frame);
+        let points = new_text_item(e, REFRESH_POINTS_TEXT, 0x0107_4ab0, 0x0107_4ac8, u32::MAX);
+        add_item(e, this + 0x1b4, points_slot, points);
+        let look_inside = new_button(e, CLICK_NEXT_PAGE, REFRESH_NEXT, 0x0107_4a9c);
+        add_item(e, this + 0x84, frame.at(0x5c), look_inside);
+        let text_slot = frame.at(0x10);
+        for (row, (value, text_name, down_name, up_name)) in (0u32..).zip(SUMMARY_ROWS) {
+            let text = new_text_item(e, REFRESH_VALUE_TEXT, text_name, 0, value);
+            add_item(e, this + 0x194, text_slot, text);
+            for (click, refresh, name, slot) in [
+                (CLICK_SUMMARY_DOWN_007957C0, REFRESH_DOWN, down_name, 0x238),
+                (CLICK_SUMMARY_UP_00795A00, REFRESH_UP, up_name, 0x244),
+            ] {
+                let text = e.mem.u32(text_slot);
+                let points = e.mem.u32(points_slot);
+                let button = new_value_button(e, &[click, refresh, name, value, 2, text, points]);
+                add_item(e, this + 0x184, frame.at(slot + row * 0x20), button);
+            }
+        }
+        let done = new_button(e, CLICK_CLOSE, REFRESH_NEXT, 0x0107_4814);
+        add_item(e, this + 0x184, frame.at(0x5c), done);
+        love_tester_menu_load_button_and_text_images(e, Ptr::new(this));
+        let instance = menu(e);
+        love_tester_menu_refresh_page(e, Ptr::new(instance));
+        love_tester_menu_next_page(e);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1474,6 +1983,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0079_1ab0, love_tester_menu_do_idle(Ptr)),
         entry!(0x0079_1e40, love_tester_menu_do_click(Ptr, u32, u32)),
         entry!(0x0079_2780, fn_00792780(Ptr, u8)),
+        entry!(0x0079_28e0, love_tester_menu_init_machine(Ptr)),
         entry!(0x0079_45f0, love_tester_menu_init_camera(Ptr) -> u32),
         entry!(0x0079_48d0, fn_007948d0()),
         entry!(0x0079_49f0, love_tester_menu_turn_page(Ptr, bool) -> bool),
@@ -2438,5 +2948,416 @@ mod menu_tests {
             formats[17][2..],
             [0x0107_4c2c, 0x0107_4c58, copy[0][0], 0x0107_4c38]
         );
+    }
+
+    type Added = std::rc::Rc<std::cell::RefCell<Vec<(u32, u32)>>>;
+
+    /// The key the format double writes into a name buffer: the format's low half, then the
+    /// two numbers (0xff when not given).
+    fn glow_key(format: u32, first: u32, second: u32) -> u32 {
+        (format & 0xffff) << 16 | (first & 0xff) << 8 | (second & 0xff)
+    }
+
+    /// The machine's objects and doubles: the models (dynamic, cabinet), the manager and its
+    /// parent, the scene graph and the light, and the items added to arrays (array, item).
+    struct Machine {
+        e: Engine,
+        this: u32,
+        dynamic: u32,
+        cabinet: u32,
+        manager: u32,
+        parent: u32,
+        graph: u32,
+        added: Added,
+        matrices: Added,
+    }
+
+    fn machine(height: f64, controller: bool, lights: u32, allocate: bool) -> Machine {
+        let (mut e, this) = engine([0; 12], 0);
+        for page in [
+            0x0101_9000,
+            0x0101_f000,
+            0x0102_b000,
+            0x0102_f000,
+            0x0107_4000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.mem.set_f32(HALF_PI_0101FF38, std::f32::consts::FRAC_PI_2);
+        e.mem.set_f32(PI_0102B3C8, std::f32::consts::PI);
+        e.mem.set_u32(TILT_01074B90, 0x3e00_adfd);
+        e.mem.set_f64(HEIGHT_LIMIT_01074B88, 640.0);
+        e.mem.set_f32(PLACE_01074B7C, -85.0);
+        e.mem.set_f32(PLACE_01074B80, -75.0);
+        e.mem.set_f64(RADIUS_SCALE_0102FC70, 20.0);
+        e.mem.set_f32(GREY_01019DE0, 0.85);
+        e.mem.set_u32(MODEL_LOADER, 0x3b3c);
+        e.mem.set_f32(this + 0x50, 0.5);
+        // The models: slot +0xc gives the node, slot +0x9c finds a name (a string's word is
+        // its text): the dynamic model every name, the cabinet the `0107xxxx` names and
+        // the formatted glow names whose key is listed.
+        let mut models = [0u32; 2];
+        for (i, (slot, find)) in [(0x7a9cu32, 0x4000_0000u32), (0x7b9c, 0x5000_0000)]
+            .into_iter()
+            .enumerate()
+        {
+            let vtable = e.mem.alloc(0xa0);
+            e.mem.set_u32(vtable + 0xc, 0x7a0c);
+            e.mem.set_u32(vtable + 0x9c, slot);
+            let model = e.mem.alloc(4);
+            e.mem.set_u32(model, vtable);
+            models[i] = model;
+            let glows = [
+                glow_key(GLOW_NAME_DIGIT_PART, 3, 2),
+                glow_key(GLOW_NAME_DIGIT, 3, 0xff),
+                glow_key(GLOW_NAME_TEN_PART, 7, 0xff),
+                glow_key(GLOW_NAME_TEN, 0xff, 0xff),
+            ];
+            e.register_double(slot, move |e, a| {
+                let text = e.mem.u32(a[1]);
+                if find == 0x4000_0000 || text >> 16 == 0x0107 {
+                    return (find | (text & 0x00ff_ffff)).into_ret();
+                }
+                let key = e.mem.u32(text);
+                if glows.contains(&key) {
+                    (0x6000_0000 | key).into_ret()
+                } else {
+                    0u32.into_ret()
+                }
+            });
+        }
+        let [dynamic, cabinet] = models;
+        e.register(0x7a0c, |_, _| 0x0dd0u32.into_ret());
+        e.register_double(LOAD_FILE, move |_, a| {
+            if a[1] == DYNAMIC_MODEL {
+                dynamic
+            } else {
+                cabinet
+            }
+            .into_ret()
+        });
+        e.register(STRING_CONSTRUCTOR, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            a[0].into_ret()
+        });
+        e.register(FORMAT, |e, a| {
+            let first = a.get(3).copied().unwrap_or(0xff);
+            let second = a.get(4).copied().unwrap_or(0xff);
+            e.mem.set_u32(a[0], glow_key(a[2], first, second));
+            Ret::default()
+        });
+        // Each product's result is its own address plus the word's index.
+        e.register(MATRIX_PRODUCT, |e, a| {
+            for i in 0..9 {
+                e.mem.set_u32(a[1] + 4 * i, a[1] + i);
+            }
+            a[1].into_ret()
+        });
+        let matrices = Added::default();
+        let seen = matrices.clone();
+        e.register_double(MODEL_SET_MATRIX_0043FA80, move |e, a| {
+            for i in 0..9 {
+                seen.borrow_mut().push((a[0], e.mem.u32(a[1] + 4 * i)));
+            }
+            Ret::default()
+        });
+        e.register_double(SCREEN_HEIGHT_00706E50, move |_, _| height.into_ret());
+        let bound = e.mem.alloc(0x10);
+        e.mem.set_f32(bound + 0xc, 3.0);
+        e.register_double(GET_WORLD_BOUND, move |_, _| bound.into_ret());
+        e.register(FRAME_TIME_0084D030, |e, a| {
+            if a[0] == TIMER_011F6394 {
+                0.25f64
+            } else {
+                f64::from(e.mem.f32(a[0] + 0xc))
+            }
+            .into_ret()
+        });
+        let manager = e.mem.alloc(4);
+        let parent = e.mem.alloc(4);
+        let parent_vtable = e.mem.alloc(0x98);
+        e.mem.set_u32(parent_vtable + 0x94, 0x7c94);
+        e.mem.set_u32(parent, parent_vtable);
+        e.register_double(GET_CONTROLLER, move |_, _| {
+            if controller { manager } else { 0 }.into_ret()
+        });
+        e.register(GET_SEQUENCE_0047A520, |_, _| 0x05e9u32.into_ret());
+        e.register_double(CONTROLLER_MANAGER_00653270, move |_, a| {
+            u32::from(a[1] == parent).into_ret()
+        });
+        e.register_double(PARENT_004A8A90, move |_, a| {
+            if a[0] == manager { parent } else { 0 }.into_ret()
+        });
+        let graph = e.mem.alloc(4);
+        let graph_vtable = e.mem.alloc(0xe0);
+        e.mem.set_u32(graph_vtable + 0xdc, 0x7ddc);
+        e.mem.set_u32(graph, graph_vtable);
+        e.register_double(SCENE_GRAPH_00450B80, move |_, _| graph.into_ret());
+        e.register_double(ADD_ALL_LIGHTS_FROM_NODE, move |_, _| lights.into_ret());
+        e.register_double(ALLOCATE_00AA13E0, move |e, a| {
+            if allocate { e.mem.alloc(a[0]) } else { 0 }.into_ret()
+        });
+        e.register_double(ALLOCATE_00401000, move |e, a| {
+            if allocate { e.mem.alloc(a[0]) } else { 0 }.into_ret()
+        });
+        e.register(LIGHT_CONSTRUCTOR_00A7D670, |_, a| a[0].into_ret());
+        e.register(POINT_00416870, |_, a| a[0].into_ret());
+        e.register(GLOW_SETUP_004B0680, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            e.mem.set_u32(a[0] + 4, a[2]);
+            a[0].into_ret()
+        });
+        let added = Added::default();
+        let items = added.clone();
+        e.register_double(ARRAY_ADD_007CB2E0, move |e, a| {
+            items.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            Ret::default()
+        });
+        e.register(POINTER_CONSTRUCTOR, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(GET_PROPERTY, |_, _| 0u32.into_ret());
+        e.register(LANGUAGE_00709D40, |_, _| 1u32.into_ret());
+        silence(
+            &mut e,
+            &[
+                SWAP_LANGUAGE_TEXTURES,
+                POINT_CONSTRUCTOR_006815C0,
+                MAKE_X_ROTATION,
+                ROTATION_004A0C90,
+                MODEL_SET_00440490,
+                SET_TRANSLATE_004BC1F0,
+                UPDATE_BLOCK_0043D410,
+                UPDATE_00A59C60,
+                STRING_DESTRUCTOR,
+                DEACTIVATE_ALL,
+                ACTIVATE_SEQUENCE_0047AAB0,
+                SET_FLAG_0047AA40,
+                SEQUENCE_START_004954C0,
+                START_ANIMATIONS,
+                0x7c94,
+                0x7ddc,
+                LIGHT_SET_00440460,
+                LIGHT_SET_004BC2E0,
+                LIGHT_SET_0050DD50,
+                LIGHT_SET_0050DD20,
+                ADD_LIGHT,
+                ARRAY_CONSTRUCTOR_00723FA0,
+                SWAP_LANGUAGE_TEXTURE_PATH,
+                CREATE_TEXTURE_IMAGE,
+                STRING_COPY_00406D30,
+            ],
+        );
+        Machine {
+            e,
+            this,
+            dynamic,
+            cabinet,
+            manager,
+            parent,
+            graph,
+            added,
+            matrices,
+        }
+    }
+
+    /// The items added to `array`.
+    fn added_to(m: &Machine, array: u32) -> Vec<u32> {
+        m.added
+            .borrow()
+            .iter()
+            .filter(|(a, _)| *a == array)
+            .map(|(_, item)| *item)
+            .collect()
+    }
+
+    #[test]
+    fn init_machine_builds_models_light_glows_and_pages() {
+        let mut m = machine(640.0, true, 0, true);
+        let this = m.this;
+        m.e.call(0x0079_28e0, &[this]);
+        let e = &m.e;
+        let (dynamic, cabinet) = (m.dynamic, m.cabinet);
+        assert_eq!(
+            called(e, LOAD_FILE),
+            vec![
+                vec![0x3b3c, DYNAMIC_MODEL, 0, 1, 0, 0, 0],
+                vec![0x3b3c, CABINET_MODEL, 0, 1, 0, 0, 0]
+            ]
+        );
+        assert_eq!(
+            (e.mem.u32(this + 0x5c), e.mem.u32(this + 0x60)),
+            (dynamic, cabinet)
+        );
+        assert_eq!(
+            called(e, SWAP_LANGUAGE_TEXTURES),
+            vec![vec![dynamic], vec![cabinet]]
+        );
+        // The rotation: X(π/2) * 004a0c90(π), then * X(tilt), each product copied back.
+        let products = called(e, MATRIX_PRODUCT);
+        let (rotation, turn) = (products[0][0], products[0][2]);
+        assert_eq!(turn, rotation - 0x50);
+        assert_eq!(products[0][1], rotation - 0xfc);
+        assert_eq!(products[1], vec![rotation, rotation - 0x120, turn]);
+        assert_eq!(
+            called(e, MAKE_X_ROTATION),
+            vec![
+                vec![rotation, std::f32::consts::FRAC_PI_2.to_bits()],
+                vec![turn, 0x3e00_adfd]
+            ]
+        );
+        assert_eq!(
+            called(e, ROTATION_004A0C90),
+            vec![vec![turn, std::f32::consts::PI.to_bits()]]
+        );
+        let second: Vec<(u32, u32)> = (0..9).map(|i| (dynamic, rotation - 0x120 + i)).collect();
+        assert_eq!(m.matrices.borrow()[..9], second[..]);
+        // A height of exactly 640 places both models at (0, -85, -75).
+        let place = [0, (-85.0f32).to_bits(), (-75.0f32).to_bits()];
+        let translations = called(e, SET_TRANSLATE_004BC1F0);
+        assert_eq!(translations[0][0], dynamic);
+        assert_eq!(translations[0][1..], place[..]);
+        assert_eq!(translations[1][0], cabinet);
+        assert_eq!(translations[1][1..], place[..]);
+        assert_eq!(
+            called(e, MODEL_SET_00440490),
+            vec![
+                vec![dynamic, 1.0f32.to_bits()],
+                vec![cabinet, 1.0f32.to_bits()]
+            ]
+        );
+        // The timer advanced, "Forward" played, the walk updated the manager's parent.
+        assert_eq!(e.mem.f32(this + 0x50), 0.75);
+        assert_eq!(
+            called(e, ACTIVATE_SEQUENCE_0047AAB0),
+            vec![vec![m.manager, 0x05e9, 0, 1, 1.0f32.to_bits(), 0, 0]]
+        );
+        let string = called(e, GET_SEQUENCE_0047A520)[0][1];
+        assert_eq!(e.mem.u32(string), FORWARD_SEQUENCE);
+        assert_eq!(called(e, START_ANIMATIONS), vec![vec![dynamic]]);
+        assert_eq!(
+            called(e, CONTROLLER_MANAGER_00653270),
+            vec![
+                vec![MANAGER_ARGUMENT_011F36BC, m.manager],
+                vec![MANAGER_ARGUMENT_011F36BC, m.parent]
+            ]
+        );
+        assert_eq!(called(e, 0x7c94).len(), 1);
+        assert_eq!(called(e, 0x7c94)[0][0], m.parent);
+        // No lights in the node: the machine's own light, radius 3 * 20.
+        let radius = 60.0f32.to_bits();
+        assert_eq!(
+            called(e, ADD_ALL_LIGHTS_FROM_NODE),
+            vec![vec![m.graph, 0x0dd0, radius]]
+        );
+        let light = called(e, ADD_LIGHT)[0][1];
+        assert_eq!(called(e, ADD_LIGHT), vec![vec![m.graph, light, 0]]);
+        let points = called(e, POINT_00416870);
+        assert_eq!(points[1][1..], [0.85f32.to_bits(); 3]);
+        assert_eq!(points[2][1..], [radius, 0, 0]);
+        assert_eq!(
+            called(e, LIGHT_SET_0050DD20),
+            vec![vec![light, 1.0f32.to_bits()]]
+        );
+        assert_eq!(
+            called(e, 0x7ddc),
+            vec![
+                vec![m.graph, light, 1],
+                vec![m.graph, dynamic, 1],
+                vec![m.graph, cabinet, 1]
+            ]
+        );
+        // The glows found in the cabinet, at their values.
+        let glows: Vec<(u32, u32)> = called(e, GLOW_SETUP_004B0680)
+            .iter()
+            .map(|w| (w[1], w[2]))
+            .collect();
+        assert_eq!(
+            glows,
+            vec![
+                (0x6000_0000 | glow_key(GLOW_NAME_DIGIT_PART, 3, 2), 3),
+                (0x6000_0000 | glow_key(GLOW_NAME_DIGIT, 3, 0xff), 3),
+                (0x6000_0000 | glow_key(GLOW_NAME_TEN_PART, 7, 0xff), 10),
+                (0x6000_0000 | glow_key(GLOW_NAME_TEN, 0xff, 0xff), 10)
+            ]
+        );
+        assert_eq!(added_to(&m, this + 0x74).len(), 4);
+        // The pages.
+        let global = added_to(&m, this + 0x1a4);
+        assert_eq!(global.len(), 4);
+        assert_eq!(
+            [
+                e.mem.u32(global[0]),
+                e.mem.u32(global[0] + 4),
+                e.mem.u32(global[0] + 0x24)
+            ],
+            [CLICK_VALUE_DOWN_007958E0, REFRESH_DOWN, u32::MAX]
+        );
+        assert_eq!(e.mem.u32(global[1]), CLICK_VALUE_UP);
+        assert_eq!(e.mem.u32(global[2]), CLICK_NEXT_PAGE);
+        assert_eq!(e.mem.u32(global[3] + 4), REFRESH_PREVIOUS);
+        assert_eq!(e.mem.u32(global[3] + 8), 0x4000_0000 | 0x0007_4b3c);
+        let points_text = added_to(&m, this + 0x1b4);
+        assert_eq!(points_text.len(), 1);
+        assert_eq!(e.mem.u32(points_text[0]), REFRESH_POINTS_TEXT);
+        assert_eq!(e.mem.u32(points_text[0] + 0x10), 0x4000_0000 | 0x0007_4ac8);
+        let look_inside = added_to(&m, this + 0x84);
+        assert_eq!(e.mem.u32(look_inside[0] + 8), 0x4000_0000 | 0x0007_4a9c);
+        let texts = added_to(&m, this + 0x194);
+        assert_eq!(texts.len(), 7);
+        assert_eq!(e.mem.u32(texts[0] + 0x14), 5);
+        assert_eq!(e.mem.u32(texts[6] + 0x14), 11);
+        let buttons = added_to(&m, this + 0x184);
+        assert_eq!(buttons.len(), 15);
+        let strength_down = buttons[0];
+        assert_eq!(e.mem.u32(strength_down), CLICK_SUMMARY_DOWN_007957C0);
+        assert_eq!(e.mem.u32(strength_down + 0x24), 5);
+        assert_eq!(
+            added_to(&m, strength_down + 0x14),
+            vec![texts[0], points_text[0]]
+        );
+        assert_eq!(e.mem.u32(buttons[13] + 0x24), 11);
+        assert_eq!(e.mem.u32(buttons[13]), CLICK_SUMMARY_UP_00795A00);
+        assert_eq!(e.mem.u32(buttons[14]), CLICK_CLOSE);
+        // The images, the refresh, and no page turn while the animation runs.
+        assert_eq!(called(e, CREATE_TEXTURE_IMAGE)[0][2], this + 0x228);
+        assert!(called(e, ARRAY_SIZE).contains(&vec![this + 0x64]));
+        assert_eq!(e.mem.u32(this + 0x48), 0);
+    }
+
+    #[test]
+    fn init_machine_without_controller_allocations_or_with_lights() {
+        // An unordered height places the models at (0, -85, -85).
+        let mut m = machine(f64::NAN, false, 1, false);
+        let this = m.this;
+        m.e.mem.set_u8(this + 0x54, 1);
+        m.e.call(0x0079_28e0, &[this]);
+        let e = &m.e;
+        let translations = called(e, SET_TRANSLATE_004BC1F0);
+        let place = [0, (-85.0f32).to_bits(), (-85.0f32).to_bits()];
+        assert_eq!(translations[0][1..], place);
+        assert_eq!(translations[1][1..], place);
+        assert!(called(e, GET_SEQUENCE_0047A520).is_empty());
+        assert!(called(e, CONTROLLER_MANAGER_00653270).is_empty());
+        assert_eq!(called(e, START_ANIMATIONS), vec![vec![m.dynamic]]);
+        // The node had lights: no light of its own.
+        assert!(called(e, ALLOCATE_00AA13E0).is_empty());
+        assert!(called(e, ADD_LIGHT).is_empty());
+        assert_eq!(
+            called(e, 0x7ddc),
+            vec![vec![m.graph, m.dynamic, 1], vec![m.graph, m.cabinet, 1]]
+        );
+        // Failed allocations: nulls added, nothing set up.
+        assert!(called(e, GLOW_SETUP_004B0680).is_empty());
+        assert_eq!(added_to(&m, this + 0x74), vec![0; 4]);
+        assert_eq!(added_to(&m, this + 0x1a4), vec![0; 4]);
+        assert_eq!(added_to(&m, this + 0x1b4), vec![0]);
+        assert_eq!(added_to(&m, this + 0x84), vec![0]);
+        assert_eq!(added_to(&m, this + 0x194), vec![0; 7]);
+        assert_eq!(added_to(&m, this + 0x184), vec![0; 15]);
+        assert!(called(e, 0x0079_4e70).is_empty());
+        // The animation is finished: the page turns forward.
+        assert_eq!(e.mem.u32(this + 0x48), 1);
     }
 }
