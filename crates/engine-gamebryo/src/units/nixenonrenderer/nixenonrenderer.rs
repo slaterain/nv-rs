@@ -136,6 +136,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
                 u8,
             ) -> bool
         ),
+        entry!(0x00e7_4120, fn_00e74120(Ptr<NiDX9Renderer>)),
     ]
 }
 
@@ -8305,5 +8306,455 @@ mod a07_pack_tests {
         assert_eq!(calls(&e, DATA_SET_COUNT_00E8EF10), vec![vec![b, 2]]);
         assert_eq!(calls(&e, SOURCE_BASE + 0xac).len(), 1);
         assert_eq!(e.mem.u16(d + 0xe), 0x0001);
+    }
+}
+
+/// The callees of `00e74120`: `00b601a0` (`thiscall` on the map: empties it), `00e8bff0`
+/// and `00e8c0d0` (`thiscall` on the object at +0x8BC: four words, a buffer, the start, the
+/// size and a word, answering the address the streams pack at; and one word, the buffer,
+/// after them), `00e8c820` (`thiscall` on +0x8BC, six words: packs a partition's stream),
+/// `00e6d780` (`thiscall` on the renderer, six words: packs a partition's buffer).
+const MAP_REMOVE_ALL_00B601A0: u32 = 0x00b6_01a0;
+const STREAMS_BEGIN_00E8BFF0: u32 = 0x00e8_bff0;
+const STREAMS_END_00E8C0D0: u32 = 0x00e8_c0d0;
+const PACK_PARTITION_STREAM_00E8C820: u32 = 0x00e8_c820;
+const PACK_PARTITION_00E6D780: u32 = 0x00e6_d780;
+
+/// The stream of a record's data (+0x18) at the record's index (+0x1C): the data's +0x28
+/// element, or 0 past its count (+0x20).
+fn record_stream(e: &Engine, record: u32) -> u32 {
+    let data = e.mem.u32(record.wrapping_add(0x18));
+    let index = e.mem.u32(record.wrapping_add(0x1c));
+    if index < e.mem.u32(data.wrapping_add(0x20)) {
+        e.mem
+            .u32(e.mem.u32(data.wrapping_add(0x28)).wrapping_add(index * 4))
+    } else {
+        0
+    }
+}
+
+// Translated from 00e74120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: packs every geometry recorded in the map at +0x610 (the
+/// records `00e72980` and `00e72aa0` chain per stream key), under the locks at +0x80 and
+/// +0x100 (`thiscall`, no words). It walks the map's items (hash size +0x614, buckets
+/// +0x618; the next bucket through the map's virtual +4). Records under key 0 are packed one
+/// by one when their stream index is 0: `PackGeometryBuffer` (no partition) or `00e6d780`
+/// (with one), forced. Under any other key the records' streams span from the smallest
+/// start (+0xC) to the largest end (start + size +0x14); when that span is not empty
+/// `00e8bff0` gives the base for the last record's stream buffer (+8, its word +0x10), and
+/// each record's stream is packed at its start plus the base, by the source's virtual +0xAC
+/// or else `PackUntransformedVB` / `00e8c820` (with a partition), all bits dirty; a first
+/// stream with indices remakes the data's index buffer (`00e8f200`: index counts from the
+/// strip lengths, or by the primitive type +0x3C, 4: `3·` the words +0x40 and +0x44, 5:
+/// each `+ 2`), then `00e8c0d0` ends the buffer. The records of key 0 and of a non-empty
+/// span go on a list; when the map is done it is emptied (`00b601a0`), and each listed record whose
+/// object's +0xE bits `0x7000` read `0x4000` at stream 0 has them cleared (keeping `0xF000`)
+/// and goes to `00e6fa90`; every listed record is freed (0x24 bytes).
+pub fn fn_00e74120(e: &mut Engine, this: Ptr<NiDX9Renderer>) {
+    let t = this.addr();
+    let first_lock = t + 0x80;
+    let second_lock = t + 0x100;
+    e.call(ENTER_CRITICAL_SECTION, &args![first_lock]);
+    e.call(ENTER_CRITICAL_SECTION, &args![second_lock]);
+    let map = t + 0x610;
+    let mut item = 0u32;
+    let size = e.mem.u32(map + 4);
+    let mut bucket = 0u32;
+    while bucket < size {
+        let head = e.mem.u32(e.mem.u32(map + 8).wrapping_add(4 * bucket));
+        if head != 0 {
+            item = head;
+            break;
+        }
+        bucket += 1;
+    }
+    let mut done = 0u32;
+    while item != 0 {
+        let key = e.mem.u32(item.wrapping_add(4));
+        let first = e.mem.u32(item.wrapping_add(8));
+        let mut next_item = e.mem.u32(item);
+        if next_item == 0 {
+            let hash = e.vcall(map, 4, &args![key]).u32();
+            let mut index = hash.wrapping_add(1);
+            let size = e.mem.u32(map + 4);
+            while index < size {
+                let head = e.mem.u32(e.mem.u32(map + 8).wrapping_add(4 * index));
+                if head != 0 {
+                    next_item = head;
+                    break;
+                }
+                index += 1;
+            }
+        }
+        if first != 0 {
+            if key == 0 {
+                let mut record = first;
+                while record != 0 {
+                    let next = e.mem.u32(record.wrapping_add(0x20));
+                    if e.mem.u32(record.wrapping_add(0x1c)) == 0 {
+                        let word = |e: &Engine, offset: u32| e.mem.u32(record.wrapping_add(offset));
+                        let partition = word(e, 8);
+                        let (data, object, skin, source) =
+                            (word(e, 0x18), word(e, 0), word(e, 4), word(e, 0xc));
+                        if partition != 0 {
+                            e.call(
+                                PACK_PARTITION_00E6D780,
+                                &args![this, data, object, skin, partition, source, 1u32],
+                            );
+                        } else {
+                            ni_xenon_renderer_pack_geometry_buffer(
+                                e,
+                                this,
+                                Ptr::new(data),
+                                Ptr::new(object),
+                                skin,
+                                source,
+                                1,
+                            );
+                        }
+                    }
+                    e.mem.set_u32(record.wrapping_add(0x20), done);
+                    done = record;
+                    record = next;
+                }
+            } else {
+                let mut start = u32::MAX;
+                let mut end = 0u32;
+                let mut stream = 0u32;
+                let mut record = first;
+                while record != 0 {
+                    let next = e.mem.u32(record.wrapping_add(0x20));
+                    stream = record_stream(e, record);
+                    let at = e.mem.u32(stream.wrapping_add(0xc));
+                    if at < start {
+                        start = at;
+                    }
+                    let stop = at.wrapping_add(e.mem.u32(stream.wrapping_add(0x14)));
+                    if stop > end {
+                        end = stop;
+                    }
+                    record = next;
+                }
+                if end > start {
+                    let group = e.get(this, NiDX9Renderer::object_8bc);
+                    let buffer = e.mem.u32(stream.wrapping_add(8));
+                    let word_10 = e.mem.u32(stream.wrapping_add(0x10));
+                    let base = e
+                        .call(
+                            STREAMS_BEGIN_00E8BFF0,
+                            &args![group, buffer, start, end - start, word_10],
+                        )
+                        .u32();
+                    let mut record = first;
+                    loop {
+                        let word = |e: &Engine, offset: u32| e.mem.u32(record.wrapping_add(offset));
+                        let data = word(e, 0x18);
+                        let index = word(e, 0x1c);
+                        let next = word(e, 0x20);
+                        stream = record_stream(e, record);
+                        let offset = e.mem.u32(stream.wrapping_add(0xc)).wrapping_add(base);
+                        let source = word(e, 0xc);
+                        let (object, skin, partition) = (word(e, 0), word(e, 4), word(e, 8));
+                        let packed = source != 0
+                            && e.vcall(
+                                source,
+                                0xac,
+                                &args![
+                                    object, skin, partition, 0xfffu32, stream, index, offset, 0u32,
+                                    0u32
+                                ],
+                            )
+                            .u32()
+                                != 0;
+                        if !packed {
+                            let partition = word(e, 8);
+                            let object = word(e, 0);
+                            let group = e.get(this, NiDX9Renderer::object_8bc);
+                            let skin = word(e, 4);
+                            if partition != 0 {
+                                e.call(
+                                    PACK_PARTITION_STREAM_00E8C820,
+                                    &args![
+                                        group, object, skin, partition, 0xfffu32, stream, offset
+                                    ],
+                                );
+                            } else {
+                                e.call(
+                                    PACK_UNTRANSFORMED_VB_00E8C1E0,
+                                    &args![group, object, skin, 0xfffu32, stream, offset],
+                                );
+                            }
+                        }
+                        if word(e, 0x1c) == 0 && e.mem.u32(data.wrapping_add(0x50)) != 0 {
+                            let list = e.mem.u32(data.wrapping_add(0x50));
+                            let at = |e: &Engine, offset: u32| e.mem.u32(data.wrapping_add(offset));
+                            let lengths = at(e, 0x4c);
+                            let (first_count, second_count) = if lengths != 0 {
+                                let mut sum = 0u32;
+                                let mut strip = at(e, 0x48);
+                                while strip != 0 {
+                                    let length =
+                                        e.mem.u16(lengths.wrapping_add(strip * 2).wrapping_sub(2));
+                                    sum = sum.wrapping_add(u32::from(length));
+                                    strip -= 1;
+                                }
+                                (sum, sum)
+                            } else {
+                                match at(e, 0x3c) {
+                                    4 => (at(e, 0x40).wrapping_mul(3), at(e, 0x44).wrapping_mul(3)),
+                                    5 => (at(e, 0x40).wrapping_add(2), at(e, 0x44).wrapping_add(2)),
+                                    _ => (0, 0),
+                                }
+                            };
+                            let dynamic = if e.mem.u8(data.wrapping_add(0x14)) != 0 {
+                                0x10
+                            } else {
+                                0
+                            };
+                            let old = at(e, 0x34);
+                            let not_ex = u32::from(e.mem.u8(DIRECT3D_IS_EX) == 0);
+                            let slot_value = at(e, 0x30);
+                            let (index_buffer, slot_value) = e.with_stack(4, |e, slot| {
+                                let s = slot.addr();
+                                e.mem.set_u32(s, slot_value);
+                                let manager = e.mem.u32(t + 0x8c0);
+                                let made = e
+                                    .call(
+                                        INDEX_BUFFER_00E8F200,
+                                        &args![
+                                            manager,
+                                            list,
+                                            first_count,
+                                            second_count,
+                                            old,
+                                            s,
+                                            not_ex,
+                                            dynamic
+                                        ],
+                                    )
+                                    .u32();
+                                (made, e.mem.u32(s))
+                            });
+                            e.mem.set_u32(data.wrapping_add(0x34), index_buffer);
+                            e.mem.set_u32(data.wrapping_add(0x2c), first_count);
+                            e.mem.set_u32(data.wrapping_add(0x30), slot_value);
+                        }
+                        e.mem.set_u32(record.wrapping_add(0x20), done);
+                        done = record;
+                        record = next;
+                        if record == 0 {
+                            break;
+                        }
+                    }
+                    let group = e.get(this, NiDX9Renderer::object_8bc);
+                    let buffer = e.mem.u32(stream.wrapping_add(8));
+                    e.call(STREAMS_END_00E8C0D0, &args![group, buffer]);
+                }
+            }
+        }
+        item = next_item;
+    }
+    e.call(MAP_REMOVE_ALL_00B601A0, &args![map]);
+    let mut record = done;
+    while record != 0 {
+        let object = e.mem.u32(record);
+        let next = e.mem.u32(record.wrapping_add(0x20));
+        let flags = e.mem.u16(object.wrapping_add(0xe));
+        if flags & 0x7000 == 0x4000 && e.mem.u32(record.wrapping_add(0x1c)) == 0 {
+            e.mem.set_u16(object.wrapping_add(0xe), flags & 0xf000);
+            let skin = e.mem.u32(record.wrapping_add(4));
+            let partition = e.mem.u32(record.wrapping_add(8));
+            fn_00e6fa90(e, Ptr::new(t), Ptr::new(object), Ptr::new(skin), partition);
+        }
+        e.call(SIZED_DELETE, &args![record, RECORD_SIZE]);
+        record = next;
+    }
+    e.call(LEAVE_CRITICAL_SECTION, &args![second_lock]);
+    e.call(LEAVE_CRITICAL_SECTION, &args![first_lock]);
+}
+
+#[cfg(test)]
+mod a07_flush_tests {
+    use super::*;
+
+    const MAP_BASE: u32 = 0x6100_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn nop(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    /// A record: object, skin, partition, source, data, stream index, next.
+    fn record(e: &mut Engine, words: [u32; 7]) -> u32 {
+        let r = e.mem.alloc(RECORD_SIZE);
+        for (offset, value) in [0, 4, 8, 0xc, 0x18, 0x1c, 0x20].iter().zip(words) {
+            e.mem.set_u32(r + offset, value);
+        }
+        r
+    }
+
+    fn renderer(e: &mut Engine) -> Ptr<NiDX9Renderer> {
+        e.map(DIRECT3D_IS_EX & !0xfff, 0x1000);
+        let r = e.new_object::<NiDX9Renderer>();
+        let targets: Vec<u32> = (0..8).map(|n| MAP_BASE + 4 * n).collect();
+        e.put_vtable(0x6000, &targets);
+        e.mem.set_u32(r.addr() + 0x610, 0x6000);
+        for addr in [
+            ENTER_CRITICAL_SECTION,
+            LEAVE_CRITICAL_SECTION,
+            MAP_REMOVE_ALL_00B601A0,
+            SIZED_DELETE,
+            TEXTURE_SET_00A670C0,
+            PACK_PARTITION_00E6D780,
+            PACK_UNTRANSFORMED_VB_00E8C1E0,
+            PACK_PARTITION_STREAM_00E8C820,
+            STREAMS_END_00E8C0D0,
+        ] {
+            e.register(addr, nop);
+        }
+        e.register(STREAMS_BEGIN_00E8BFF0, |_, _| 0x1000u32.into_ret());
+        e.register(INDEX_BUFFER_00E8F200, |e, a| {
+            e.mem.set_u32(a[5], 0x99);
+            0x1b00u32.into_ret()
+        });
+        e.register(MAP_BASE + 4, |_, a| u32::from(a[1] != 0).into_ret());
+        r
+    }
+
+    #[test]
+    fn flush_packs_every_recorded_geometry_and_frees_the_records() {
+        let mut e = Engine::new();
+        let r = renderer(&mut e);
+        let t = r.addr();
+        let group = e.mem.alloc(0x10);
+        e.set(r, NiDX9Renderer::object_8bc, group);
+        let manager = e.mem.alloc(0x10);
+        e.mem.set_u32(t + 0x8c0, manager);
+        // Key 0: a partition's record, one without data (PackGeometryBuffer answers false
+        // at once) and one of stream 1 (not packed).
+        let first_object = e.mem.alloc(0x40);
+        e.mem.set_u16(first_object + 0xe, 0x4123);
+        e.mem.set_u8(first_object + 0x38, 0x30);
+        let fourth = record(&mut e, [first_object, 0, 0, 0, 0x5d4, 1, 0]);
+        let second = record(&mut e, [first_object, 0, 0, 0, 0, 0, fourth]);
+        let first = record(&mut e, [first_object, 0x11, 0x3000, 0x13, 0x5d1, 0, second]);
+        // Key 0x55: one record whose stream packs at the base plus its start.
+        let stream = e.mem.alloc(0x18);
+        for (offset, value) in [(8, 0xb0f), (0xc, 0x40), (0x10, 7), (0x14, 0x20)] {
+            e.mem.set_u32(stream + offset, value);
+        }
+        let data = e.mem.alloc(0x60);
+        let slots = e.mem.alloc(4);
+        e.mem.set_u32(slots, stream);
+        for (offset, value) in [
+            (0x20, 1),
+            (0x28, slots),
+            (0x50, 0x9000),
+            (0x3c, 4),
+            (0x40, 5),
+            (0x44, 6),
+            (0x34, 0x88),
+            (0x30, 0x77),
+        ] {
+            e.mem.set_u32(data + offset, value);
+        }
+        e.mem.set_u8(data + 0x14, 1);
+        let third_object = e.mem.alloc(0x40);
+        e.mem.set_u16(third_object + 0xe, 0x4abc);
+        e.mem.set_u8(third_object + 0x38, 0x30);
+        let third = record(&mut e, [third_object, 0x31, 0, 0, data, 0, 0]);
+        // Two buckets: item (0, first) and item (0x55, third).
+        let items = e.mem.alloc(0x18);
+        e.mem.set_u32(items + 4, 0);
+        e.mem.set_u32(items + 8, first);
+        e.mem.set_u32(items + 0x10, 0x55);
+        e.mem.set_u32(items + 0x14, third);
+        let buckets = e.mem.alloc(8);
+        e.mem.set_u32(buckets, items);
+        e.mem.set_u32(buckets + 4, items + 0xc);
+        e.mem.set_u32(t + 0x614, 2);
+        e.mem.set_u32(t + 0x618, buckets);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_4120, &args![r]);
+        assert_eq!(
+            calls(&e, ENTER_CRITICAL_SECTION),
+            vec![vec![t + 0x80], vec![t + 0x100]]
+        );
+        assert_eq!(
+            calls(&e, MAP_BASE + 4),
+            vec![vec![t + 0x610, 0], vec![t + 0x610, 0x55]]
+        );
+        assert_eq!(
+            calls(&e, PACK_PARTITION_00E6D780),
+            vec![vec![t, 0x5d1, first_object, 0x11, 0x3000, 0x13, 1]]
+        );
+        assert_eq!(
+            calls(&e, STREAMS_BEGIN_00E8BFF0),
+            vec![vec![group, 0xb0f, 0x40, 0x20, 7]]
+        );
+        assert_eq!(
+            calls(&e, PACK_UNTRANSFORMED_VB_00E8C1E0),
+            vec![vec![group, third_object, 0x31, 0xfff, stream, 0x1040]]
+        );
+        let index = calls(&e, INDEX_BUFFER_00E8F200);
+        assert_eq!(index.len(), 1);
+        assert_eq!(index[0][..5], [manager, 0x9000, 15, 18, 0x88]);
+        assert_eq!(index[0][6..], [1, 0x10]);
+        assert_eq!(e.mem.u32(data + 0x34), 0x1b00);
+        assert_eq!(e.mem.u32(data + 0x2c), 15);
+        assert_eq!(e.mem.u32(data + 0x30), 0x99);
+        assert_eq!(calls(&e, STREAMS_END_00E8C0D0), vec![vec![group, 0xb0f]]);
+        assert_eq!(calls(&e, MAP_REMOVE_ALL_00B601A0), vec![vec![t + 0x610]]);
+        assert_eq!(
+            calls(&e, SIZED_DELETE),
+            vec![
+                vec![third, RECORD_SIZE],
+                vec![fourth, RECORD_SIZE],
+                vec![second, RECORD_SIZE],
+                vec![first, RECORD_SIZE]
+            ]
+        );
+        assert_eq!(e.mem.u16(third_object + 0xe), 0x4000);
+        assert_eq!(e.mem.u16(first_object + 0xe), 0x4000);
+        assert_eq!(calls(&e, TEXTURE_SET_00A670C0).len(), 3);
+        assert_eq!(
+            calls(&e, LEAVE_CRITICAL_SECTION),
+            vec![vec![t + 0x100], vec![t + 0x80]]
+        );
+    }
+
+    #[test]
+    fn flush_keeps_records_whose_streams_span_nothing() {
+        let mut e = Engine::new();
+        let r = renderer(&mut e);
+        let t = r.addr();
+        let stream = e.mem.alloc(0x18);
+        let data = e.mem.alloc(0x60);
+        let slots = e.mem.alloc(4);
+        e.mem.set_u32(slots, stream);
+        e.mem.set_u32(data + 0x20, 1);
+        e.mem.set_u32(data + 0x28, slots);
+        let only = record(&mut e, [0, 0, 0, 0, data, 0, 0]);
+        let items = e.mem.alloc(0xc);
+        e.mem.set_u32(items + 4, 0x55);
+        e.mem.set_u32(items + 8, only);
+        let buckets = e.mem.alloc(4);
+        e.mem.set_u32(buckets, items);
+        e.mem.set_u32(t + 0x614, 1);
+        e.mem.set_u32(t + 0x618, buckets);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_4120, &args![r]);
+        assert!(calls(&e, STREAMS_BEGIN_00E8BFF0).is_empty());
+        assert!(calls(&e, SIZED_DELETE).is_empty());
+        assert_eq!(calls(&e, MAP_REMOVE_ALL_00B601A0).len(), 1);
     }
 }
