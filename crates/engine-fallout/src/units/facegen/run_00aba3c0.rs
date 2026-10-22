@@ -1194,6 +1194,8 @@ pub fn fn_00ac16e0(e: &mut Engine, destination: u32, count: u32, value: u32, _un
 /// base constructor `00ec78f1` with the address of a null message, its vtable `010176f8`,
 /// `_CxxThrowException` with `01140ef8`; it does not return in the game, the code after it goes
 /// on).
+// The exe tests count == 0 before dividing; keep its order rather than checked_div.
+#[allow(clippy::manual_checked_ops)]
 pub fn fn_00ac1720(e: &mut Engine, count: u32, _unused_2: u32) -> u32 {
     let count = if count == 0 {
         0
