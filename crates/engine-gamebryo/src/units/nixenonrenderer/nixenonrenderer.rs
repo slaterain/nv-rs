@@ -120,6 +120,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00e6_ab40,
             fn_00e6ab40(Ptr<NiDX9Renderer>, u32, u32, u32, u32, u32, u32, u32, u16)
         ),
+        entry!(
+            0x00e6_c780,
+            ni_xenon_renderer_do_set_camera_data(Ptr<NiDX9Renderer>, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr)
+        ),
     ]
 }
 
@@ -7013,5 +7017,553 @@ mod a07_quad_tests {
         );
         assert_eq!(vertex(&e, out + 0x28, 3), vec![11.0, 19.0, 30.0]);
         assert_eq!(e.mem.u32(out + 0x18), 0xffff_ffff);
+    }
+}
+
+/// The globals `Do_SetCameraData` reads and writes: two point copies (`011f426c` and
+/// `011f474c`, three floats each) and a byte that, with the byte at `0126efd1`, selects which
+/// of the location and the copy at `011f426c` becomes the view's eye.
+const CAMERA_POINT_011F426C: u32 = 0x011f_426c;
+const CAMERA_POINT_011F474C: u32 = 0x011f_474c;
+const CAMERA_FLAG_011A9604: u32 = 0x011a_9604;
+/// The `double` constants of the projection's first column and row (`01011590`, `0106d4c8`;
+/// 2.0 and -2.0 by the decompiler).
+const PROJECTION_SCALE_01011590: u32 = 0x0101_1590;
+const PROJECTION_SCALE_0106D4C8: u32 = 0x0106_d4c8;
+/// `D3DXVec4Transform` (`00ee6e34`, by its import), `D3DXVec3Normalize`,
+/// `D3DXVec3TransformCoord`, `D3DXMatrixMultiply` (`stdcall`).
+const D3DX_VEC4_TRANSFORM: u32 = 0x00ee_6e34;
+const D3DX_VEC3_NORMALIZE: u32 = 0x00ee_6dec;
+const D3DX_VEC3_TRANSFORM_COORD: u32 = 0x00ee_6df8;
+const D3DX_MATRIX_MULTIPLY: u32 = 0x00ee_6de0;
+/// `IDirect3DDevice9::SetTransform` (slot 44).
+const DEVICE_SET_TRANSFORM: u32 = 0xb0;
+/// The renderer's view (+0x980), projection (+0x9C0), view·projection (+0xA00) and inverse
+/// view (+0xA40) matrices (`D3DMATRIX`, rows of four floats).
+const VIEW_MATRIX: u32 = 0x980;
+const PROJECTION_MATRIX: u32 = 0x9c0;
+const VIEW_PROJECTION_MATRIX: u32 = 0xa00;
+const INVERSE_VIEW_MATRIX: u32 = 0xa40;
+
+/// `FISTP qword` under the code's chop control word, keeping the low word.
+fn chop_low_word(value: f64) -> u32 {
+    x87_fistp64_chop(X87Ext::load64(value)) as u32
+}
+
+// Translated from 00e6c780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiXenonRenderer::Do_SetCameraData` (Xbox PDB; renderer vtable +0x18C): `thiscall`, six
+/// words (location, direction, up, right as `NiPoint3`, an `NiFrustum`, an `NiRect<float>`
+/// viewport). Nothing with the byte at +0x6FC set. The eye is the location, or with the
+/// bytes at `0126efd1` and `011a9604` both set the point at `011f426c` (the other one goes
+/// to `011f474c`). Builds the view matrix (+0x980: right, up, direction as columns, the
+/// eye's negated dot products as the last row) and the inverse view (+0xA40), sets the view
+/// transform (`SetTransform(2, ..)`), keeps right (+0x634, +0x64C) and up (+0x640, +0x658),
+/// the near plane (+0x684) and the depth range (+0x688), and builds the projection
+/// (+0x9C0) for an orthographic (`m_bOrtho`) or perspective frustum, its handedness by the
+/// object at +0x8B8 (virtual +0x4C). With the byte at `0126efd1` set the projection's third
+/// column becomes the clip plane through the point `(0, 0, [0126efd4])` facing the view's z
+/// axis (`D3DXVec4Transform`, `D3DXVec3Normalize`, `D3DXVec3TransformCoord`). Then
+/// `SetTransform(3, ..)`, the viewport from the render target group's size (+0x888, virtual
+/// +0x8C/+0x90) and the rectangle (`SetViewport`, depths 0 to 1), the view·projection
+/// (+0xA00, `D3DXMatrixMultiply`) and the near and far planes to +0x8B8's virtual +0x48.
+#[allow(clippy::too_many_arguments)]
+pub fn ni_xenon_renderer_do_set_camera_data(
+    e: &mut Engine,
+    this: Ptr<NiDX9Renderer>,
+    location: Ptr,
+    direction: Ptr,
+    up: Ptr,
+    right: Ptr,
+    frustum: Ptr,
+    port: Ptr,
+) {
+    let t = this.addr();
+    if e.mem.u8(t + SKIP_END_SCENE) != 0 {
+        return;
+    }
+    let (loc, dir, up, right, fr, port) = (
+        location.addr(),
+        direction.addr(),
+        up.addr(),
+        right.addr(),
+        frustum.addr(),
+        port.addr(),
+    );
+    let word = |e: &Engine, a: u32, i: u32| e.mem.u32(a.wrapping_add(4 * i));
+    let eye: [u32; 3] =
+        if e.mem.u8(ZEROED_FLAG_0126EFD1) != 0 && e.mem.u8(CAMERA_FLAG_011A9604) != 0 {
+            for i in 0..3 {
+                let v = word(e, CAMERA_POINT_011F426C, i);
+                e.mem.set_u32(CAMERA_POINT_011F474C + 4 * i, v);
+            }
+            [word(e, loc, 0), word(e, loc, 1), word(e, loc, 2)]
+        } else {
+            for i in 0..3 {
+                let v = word(e, loc, i);
+                e.mem.set_u32(CAMERA_POINT_011F474C + 4 * i, v);
+            }
+            [
+                word(e, CAMERA_POINT_011F426C, 0),
+                word(e, CAMERA_POINT_011F426C, 1),
+                word(e, CAMERA_POINT_011F426C, 2),
+            ]
+        };
+    let copy = |e: &Engine, a: u32, i: u32| x87_quiet_bits(word(e, a, i));
+    let view = t + VIEW_MATRIX;
+    for i in 0..3 {
+        let row = view + 0x10 * i;
+        let values = [copy(e, right, i), copy(e, up, i), copy(e, dir, i), 0];
+        for (k, v) in values.iter().enumerate() {
+            e.mem.set_u32(row + 4 * k as u32, *v);
+        }
+    }
+    let ld = |e: &Engine, a: u32, i: u32| x87_load32(word(e, a, i));
+    let (ex, ey, ez) = (x87_load32(eye[0]), x87_load32(eye[1]), x87_load32(eye[2]));
+    let along_right = x87_store32(x87_add(
+        x87_add(x87_mul(ld(e, right, 0), ex), x87_mul(ld(e, right, 1), ey)),
+        x87_mul(ld(e, right, 2), ez),
+    ));
+    e.mem
+        .set_u32(view + 0x30, x87_store32(-x87_load32(along_right)));
+    let along_up = x87_store32(x87_add(
+        x87_add(x87_mul(ld(e, up, 0), ex), x87_mul(ld(e, up, 1), ey)),
+        x87_mul(ld(e, up, 2), ez),
+    ));
+    e.mem
+        .set_u32(view + 0x34, x87_store32(-x87_load32(along_up)));
+    let along_dir = x87_store32(x87_add(
+        x87_add(x87_mul(ld(e, dir, 1), ey), x87_mul(ld(e, dir, 0), ex)),
+        x87_mul(ez, x87_m32(word(e, dir, 2))),
+    ));
+    e.mem
+        .set_u32(view + 0x38, x87_store32(-x87_load32(along_dir)));
+    const ONE_BITS: u32 = 0x3f80_0000;
+    e.mem.set_u32(view + 0x3c, ONE_BITS);
+    let inverse = t + INVERSE_VIEW_MATRIX;
+    for (row, source) in [right, up, dir].iter().enumerate() {
+        for i in 0..3 {
+            let v = copy(e, *source, i);
+            e.mem.set_u32(inverse + 0x10 * row as u32 + 4 * i, v);
+        }
+        e.mem.set_u32(inverse + 0x10 * row as u32 + 0xc, 0);
+    }
+    for (i, v) in eye.iter().enumerate() {
+        e.mem
+            .set_u32(inverse + 0x30 + 4 * i as u32, x87_quiet_bits(*v));
+    }
+    e.mem.set_u32(inverse + 0x3c, ONE_BITS);
+    let device = e.get(this, NiDX9Renderer::device);
+    e.vcall(device, DEVICE_SET_TRANSFORM, &args![2u32, view]);
+    for i in 0..3 {
+        let r = word(e, right, i);
+        e.mem.set_u32(t + QUAD_RIGHT + 4 * i, r);
+        let r = word(e, right, i);
+        e.mem.set_u32(t + 0x634 + 4 * i, r);
+    }
+    for i in 0..3 {
+        let u = word(e, up, i);
+        e.mem.set_u32(t + QUAD_UP + 4 * i, u);
+        let u = word(e, up, i);
+        e.mem.set_u32(t + 0x640 + 4 * i, u);
+    }
+    // NiFrustum: left, right, top, bottom, near, far, then the byte m_bOrtho (Xbox PDB).
+    e.mem.set_u32(t + 0x684, copy(e, fr, 4));
+    let object = e.mem.u32(t + 0x8b8);
+    let range = x87_store32(x87_sub(ld(e, fr, 5), x87_m32(word(e, fr, 4))));
+    e.mem.set_u32(t + 0x688, range);
+    let ortho = e.mem.u8(fr + 0x18) != 0;
+    let width = x87_store32(x87_sub(ld(e, fr, 1), x87_m32(word(e, fr, 0))));
+    let width_sum = x87_store32(x87_add(ld(e, fr, 0), x87_m32(word(e, fr, 1))));
+    let height = x87_store32(x87_sub(ld(e, fr, 2), x87_m32(word(e, fr, 3))));
+    let height_sum = x87_store32(x87_add(ld(e, fr, 3), x87_m32(word(e, fr, 2))));
+    let inverse_range = x87_store32(x87_div(1.0, x87_load32(range)));
+    let flipped = e.vcall(object, 0x4c, &args![]).u8() != 0;
+    let scale = x87_load64(e.mem.u64(PROJECTION_SCALE_01011590));
+    let w = x87_load32(width);
+    let proj = t + PROJECTION_MATRIX;
+    let first = if flipped {
+        x87_div(f64::from_bits(e.mem.u64(PROJECTION_SCALE_0106D4C8)), w)
+    } else {
+        x87_div(scale, w)
+    };
+    e.mem.set_u32(proj, x87_store32(first));
+    e.mem.set_u32(proj + 0x10, 0);
+    if ortho {
+        e.mem.set_u32(proj + 0x20, 0);
+    }
+    let sum = if flipped {
+        x87_load32(width_sum)
+    } else {
+        -x87_load32(width_sum)
+    };
+    let x_offset = x87_store32(x87_div(sum, w));
+    if ortho {
+        e.mem.set_u32(proj + 0x30, x_offset);
+    } else {
+        e.mem.set_u32(proj + 0x20, x_offset);
+        e.mem.set_u32(proj + 0x30, 0);
+    }
+    e.mem.set_u32(proj + 4, 0);
+    let h = x87_load32(height);
+    e.mem.set_u32(proj + 0x14, x87_store32(x87_div(scale, h)));
+    if ortho {
+        e.mem.set_u32(proj + 0x24, 0);
+    }
+    let y_offset = x87_store32(x87_div(-x87_load32(height_sum), h));
+    if ortho {
+        e.mem.set_u32(proj + 0x34, y_offset);
+    } else {
+        e.mem.set_u32(proj + 0x24, y_offset);
+        e.mem.set_u32(proj + 0x34, 0);
+    }
+    e.mem.set_u32(proj + 8, 0);
+    e.mem.set_u32(proj + 0x18, 0);
+    let inv = x87_load32(inverse_range);
+    if ortho {
+        e.mem.set_u32(proj + 0x28, inverse_range);
+        let near = x87_mul(inv, x87_m32(word(e, fr, 4)));
+        e.mem.set_u32(proj + 0x38, x87_store32(-near));
+        e.mem.set_u32(proj + 0xc, 0);
+        e.mem.set_u32(proj + 0x1c, 0);
+        e.mem.set_u32(proj + 0x2c, 0);
+        e.mem.set_u32(proj + 0x3c, ONE_BITS);
+    } else {
+        let far = x87_mul(inv, x87_m32(word(e, fr, 5)));
+        e.mem.set_u32(proj + 0x28, x87_store32(far));
+        let near_far = x87_mul(ld(e, fr, 4), x87_m32(word(e, fr, 5)));
+        e.mem
+            .set_u32(proj + 0x38, x87_store32(-x87_mul(inv, near_far)));
+        e.mem.set_u32(proj + 0xc, 0);
+        e.mem.set_u32(proj + 0x1c, 0);
+        e.mem.set_u32(proj + 0x2c, ONE_BITS);
+        e.mem.set_u32(proj + 0x3c, 0);
+    }
+    e.with_stack(0x80, |e, frame| {
+        let l = frame.addr();
+        if e.mem.u8(ZEROED_FLAG_0126EFD1) != 0 {
+            // The view's z axis (0, 0, 1, 0) and the point (0, 0, [0126efd4]).
+            for (offset, value) in [
+                (0x58, 0),
+                (0x5c, 0),
+                (0x64, 0),
+                (0x28, 0),
+                (0x2c, 0),
+                (0x60, ONE_BITS),
+            ] {
+                e.mem.set_u32(l + offset, value);
+            }
+            let height = x87_quiet_bits(e.mem.u32(ZEROED_VALUE_0126EFD4));
+            e.mem.set_u32(l + 0x30, height);
+            e.call(D3DX_VEC4_TRANSFORM, &args![l + 0x48, l + 0x58, view]);
+            e.call(D3DX_VEC3_NORMALIZE, &args![l + 0x48, l + 0x48]);
+            e.call(D3DX_VEC3_TRANSFORM_COORD, &args![l + 0x38, l + 0x28, view]);
+            let n = |e: &Engine, i: u32| x87_load32(e.mem.u32(l + 0x48 + 4 * i));
+            let p = |e: &Engine, i: u32| x87_load32(e.mem.u32(l + 0x38 + 4 * i));
+            let (nx, ny, nz) = (n(e, 0), n(e, 1), n(e, 2));
+            let distance = x87_store32(x87_add(
+                x87_add(x87_mul(p(e, 1), ny), x87_mul(p(e, 0), nx)),
+                x87_mul(p(e, 2), nz),
+            ));
+            let plane_w = x87_store32(-x87_load32(distance));
+            e.mem.set_u32(l + 0x64, plane_w);
+            let negative = x87_quiet_bits(e.mem.u32(FRUSTUM_SIDE_01012054));
+            let sign = |v: f64| {
+                if 0.0 < v {
+                    ONE_BITS
+                } else if v < 0.0 {
+                    negative
+                } else {
+                    0
+                }
+            };
+            let sign_x = sign(nx);
+            e.mem.set_u32(l + 0x1c, sign_x);
+            let qx = x87_store32(x87_div(x87_load32(sign_x), x87_m32(e.mem.u32(proj))));
+            e.mem.set_u32(l + 0x48, qx);
+            let sign_y = sign(ny);
+            e.mem.set_u32(l + 0x1c, sign_y);
+            let qy = x87_store32(x87_div(x87_load32(sign_y), x87_m32(e.mem.u32(proj + 0x14))));
+            e.mem.set_u32(l + 0x4c, qy);
+            let qw = x87_store32(x87_div(
+                x87_sub(1.0, x87_load32(e.mem.u32(proj + 0x28))),
+                x87_load32(e.mem.u32(proj + 0x38)),
+            ));
+            e.mem.set_u32(l + 0x54, qw);
+            let cw = x87_load32(plane_w);
+            let dot = x87_store32(x87_add(
+                x87_add(
+                    x87_add(x87_mul(x87_load32(qy), ny), x87_mul(x87_load32(qx), nx)),
+                    nz,
+                ),
+                x87_mul(x87_load32(qw), cw),
+            ));
+            let factor = x87_load32(x87_store32(x87_div(1.0, x87_load32(dot))));
+            let column = [
+                x87_store32(x87_mul(nx, factor)),
+                x87_store32(x87_mul(ny, factor)),
+                x87_store32(x87_mul(nz, factor)),
+                x87_store32(x87_mul(factor, cw)),
+            ];
+            for (i, v) in column.iter().enumerate() {
+                e.mem.set_u32(l + 0x38 + 4 * i as u32, *v);
+            }
+            for (i, v) in column.iter().enumerate() {
+                e.mem.set_u32(proj + 8 + 0x10 * i as u32, *v);
+            }
+        }
+        let device = e.get(this, NiDX9Renderer::device);
+        e.vcall(device, DEVICE_SET_TRANSFORM, &args![3u32, proj]);
+        let group = e.get(this, NiDX9Renderer::target_group);
+        let target_width = e.vcall(group, 0x8c, &args![0u32]).u32();
+        let wf = x87_load32(unsigned_to_float(e, target_width));
+        let group = e.get(this, NiDX9Renderer::target_group);
+        let target_height = e.vcall(group, 0x90, &args![0u32]).u32();
+        let hf = x87_load32(unsigned_to_float(e, target_height));
+        // NiRect<float>: left, right, top, bottom.
+        let x = chop_low_word(x87_mul(wf, x87_m32(word(e, port, 0))));
+        e.mem.set_u32(l + 0x68, x);
+        let y = chop_low_word(x87_mul(x87_sub(1.0, ld(e, port, 2)), hf));
+        e.mem.set_u32(l + 0x6c, y);
+        let span = x87_sub(ld(e, port, 1), x87_m32(word(e, port, 0)));
+        e.mem.set_u32(l + 0x70, chop_low_word(x87_mul(wf, span)));
+        let span = x87_sub(ld(e, port, 2), x87_m32(word(e, port, 3)));
+        e.mem.set_u32(l + 0x74, chop_low_word(x87_mul(hf, span)));
+        e.mem.set_u32(l + 0x78, 0);
+        e.mem.set_u32(l + 0x7c, ONE_BITS);
+        let device = e.get(this, NiDX9Renderer::device);
+        e.vcall(device, DEVICE_SET_VIEWPORT, &args![l + 0x68]);
+    });
+    e.call(
+        D3DX_MATRIX_MULTIPLY,
+        &args![t + VIEW_PROJECTION_MATRIX, view, proj],
+    );
+    let object = e.mem.u32(t + 0x8b8);
+    let far = copy(e, fr, 5);
+    let near = copy(e, fr, 4);
+    e.vcall(object, 0x48, &args![near, far]);
+}
+
+#[cfg(test)]
+mod a07_camera_tests {
+    use super::*;
+
+    const DEVICE_BASE: u32 = 0x6100_0000;
+    const GROUP_BASE: u32 = 0x6140_0000;
+    const OBJECT_BASE: u32 = 0x6180_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn nop(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    fn object(e: &mut Engine, table: u32, base: u32) -> u32 {
+        let targets: Vec<u32> = (0..0x80).map(|n| base + 4 * n).collect();
+        e.put_vtable(table, &targets);
+        let o = e.mem.alloc(0x10);
+        e.mem.set_u32(o, table);
+        o
+    }
+
+    fn floats(e: &mut Engine, values: &[f32]) -> u32 {
+        let p = e.mem.alloc(4 * values.len() as u32 + 4);
+        for (i, v) in values.iter().enumerate() {
+            e.mem.set_u32(p + 4 * i as u32, v.to_bits());
+        }
+        p
+    }
+
+    fn f(e: &Engine, a: u32) -> f32 {
+        f32::from_bits(e.mem.u32(a))
+    }
+
+    /// A renderer with a device, a 800×600 target group and the object at +0x8B8 (its
+    /// virtual +0x4C answers `flipped`), the globals mapped, and the inputs.
+    fn set_up(e: &mut Engine, flipped: bool) -> (Ptr<NiDX9Renderer>, u32, [u32; 4]) {
+        e.map(0x0126_e000, 0x2000);
+        e.map(0x011a_9000, 0x1000);
+        e.map(0x011f_4000, 0x1000);
+        e.map(0x0101_1000, 0x2000);
+        e.map(0x0106_d000, 0x1000);
+        e.map(TWO_TO_32_01099378 & !0xfff, 0x1000);
+        e.mem.set_u64(PROJECTION_SCALE_01011590, 2.0f64.to_bits());
+        e.mem
+            .set_u64(PROJECTION_SCALE_0106D4C8, (-2.0f64).to_bits());
+        e.mem.set_u32(FRUSTUM_SIDE_01012054, (-1.0f32).to_bits());
+        for (i, v) in [4.0f32, 5.0, 6.0].iter().enumerate() {
+            e.mem
+                .set_u32(CAMERA_POINT_011F426C + 4 * i as u32, v.to_bits());
+        }
+        let r = e.new_object::<NiDX9Renderer>();
+        let device = object(e, 0x6000, DEVICE_BASE);
+        e.set(r, NiDX9Renderer::device, device);
+        let group = object(e, 0x6400, GROUP_BASE);
+        e.set(r, NiDX9Renderer::target_group, group);
+        e.register(GROUP_BASE + 0x8c, |_, _| 800u32.into_ret());
+        e.register(GROUP_BASE + 0x90, |_, _| 600u32.into_ret());
+        let other = object(e, 0x6800, OBJECT_BASE);
+        e.mem.set_u32(r.addr() + 0x8b8, other);
+        if flipped {
+            e.register(OBJECT_BASE + 0x4c, |_, _| 1u32.into_ret());
+        } else {
+            e.register(OBJECT_BASE + 0x4c, |_, _| 0u32.into_ret());
+        }
+        e.register(OBJECT_BASE + 0x48, nop);
+        e.register(DEVICE_BASE + DEVICE_SET_TRANSFORM, nop);
+        e.register(DEVICE_BASE + DEVICE_SET_VIEWPORT, nop);
+        e.register(D3DX_MATRIX_MULTIPLY, nop);
+        let location = floats(e, &[1.0, 2.0, 3.0]);
+        let direction = floats(e, &[0.0, 0.0, 1.0]);
+        let up = floats(e, &[0.0, 1.0, 0.0]);
+        let right = floats(e, &[1.0, 0.0, 0.0]);
+        (r, device, [location, direction, up, right])
+    }
+
+    #[test]
+    fn perspective_camera_builds_the_view_projection_and_viewport() {
+        let mut e = Engine::new();
+        let (r, device, [location, direction, up, right]) = set_up(&mut e, false);
+        let t = r.addr();
+        let frustum = floats(&mut e, &[-1.0, 1.0, 1.0, -1.0, 1.0, 5.0, 0.0]);
+        let port = floats(&mut e, &[0.0, 1.0, 1.0, 0.0]);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x00e6_c780,
+            &args![r, location, direction, up, right, frustum, port],
+        );
+        // The flags are clear: the eye is the point at 011f426c, the location is kept.
+        assert_eq!(f(&e, CAMERA_POINT_011F474C + 8), 3.0);
+        let view = t + VIEW_MATRIX;
+        assert_eq!(
+            (0..16).map(|i| f(&e, view + 4 * i)).collect::<Vec<_>>(),
+            vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -4.0, -5.0, -6.0, 1.0]
+        );
+        assert_eq!(f(&e, t + INVERSE_VIEW_MATRIX + 0x34), 5.0);
+        assert_eq!(f(&e, t + INVERSE_VIEW_MATRIX + 0x3c), 1.0);
+        assert_eq!(f(&e, t + QUAD_RIGHT), 1.0);
+        assert_eq!(f(&e, t + QUAD_UP + 4), 1.0);
+        assert_eq!(f(&e, t + 0x640 + 4), 1.0);
+        assert_eq!(f(&e, t + 0x684), 1.0);
+        assert_eq!(f(&e, t + 0x688), 4.0);
+        let proj = t + PROJECTION_MATRIX;
+        assert_eq!(f(&e, proj), 1.0);
+        assert_eq!(e.mem.u32(proj + 0x20), 0x8000_0000);
+        assert_eq!(f(&e, proj + 0x14), 1.0);
+        assert_eq!(e.mem.u32(proj + 0x24), 0x8000_0000);
+        assert_eq!(f(&e, proj + 0x28), 1.25);
+        assert_eq!(f(&e, proj + 0x38), -1.25);
+        assert_eq!(f(&e, proj + 0x2c), 1.0);
+        assert_eq!(f(&e, proj + 0x3c), 0.0);
+        assert_eq!(
+            calls(&e, DEVICE_BASE + DEVICE_SET_TRANSFORM),
+            vec![vec![device, 2, view], vec![device, 3, proj]]
+        );
+        let viewport = calls(&e, DEVICE_BASE + DEVICE_SET_VIEWPORT);
+        assert_eq!(viewport.len(), 1);
+        // Its values: viewport_is_the_rectangle_of_the_target.
+        assert_eq!(
+            calls(&e, D3DX_MATRIX_MULTIPLY),
+            vec![vec![t + VIEW_PROJECTION_MATRIX, view, proj]]
+        );
+        let other = e.mem.u32(t + 0x8b8);
+        assert_eq!(
+            calls(&e, OBJECT_BASE + 0x48),
+            vec![vec![other, 1.0f32.to_bits(), 5.0f32.to_bits()]]
+        );
+        assert!(calls(&e, D3DX_VEC4_TRANSFORM).is_empty());
+    }
+
+    #[test]
+    fn viewport_is_the_rectangle_of_the_target() {
+        let mut e = Engine::new();
+        let (r, _, [location, direction, up, right]) = set_up(&mut e, false);
+        let frustum = floats(&mut e, &[-1.0, 1.0, 1.0, -1.0, 1.0, 5.0, 0.0]);
+        let port = floats(&mut e, &[0.25, 0.75, 0.5, 0.0]);
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let log = seen.clone();
+        e.register_double(DEVICE_BASE + DEVICE_SET_VIEWPORT, move |e, a| {
+            log.borrow_mut()
+                .extend((0..6).map(|i| e.mem.u32(a[1] + 4 * i)));
+            Ret::default()
+        });
+        e.call(
+            0x00e6_c780,
+            &args![r, location, direction, up, right, frustum, port],
+        );
+        assert_eq!(
+            *seen.borrow(),
+            vec![200, 300, 400, 300, 0, 1.0f32.to_bits()]
+        );
+    }
+
+    #[test]
+    fn oblique_orthographic_camera_replaces_the_third_column() {
+        let mut e = Engine::new();
+        let (r, _, [location, direction, up, right]) = set_up(&mut e, true);
+        let t = r.addr();
+        e.mem.set_u8(ZEROED_FLAG_0126EFD1, 1);
+        e.mem.set_u8(CAMERA_FLAG_011A9604, 1);
+        e.mem.set_u32(ZEROED_VALUE_0126EFD4, 7.0f32.to_bits());
+        let frustum = floats(&mut e, &[-1.0, 3.0, 1.0, -1.0, 1.0, 5.0, 0.0]);
+        e.mem.set_u8(frustum + 0x18, 1);
+        let port = floats(&mut e, &[0.0, 1.0, 1.0, 0.0]);
+        // The view's z axis transforms to (0, 0, 1); the point to (0, 0, 3).
+        e.register(D3DX_VEC4_TRANSFORM, |e, a| {
+            assert_eq!(e.mem.u32(a[1] + 8), 1.0f32.to_bits());
+            for (i, v) in [0.0f32, 0.0, 1.0, 0.0].iter().enumerate() {
+                e.mem.set_u32(a[0] + 4 * i as u32, v.to_bits());
+            }
+            a[0].into_ret()
+        });
+        e.register(D3DX_VEC3_NORMALIZE, |_, a| a[0].into_ret());
+        e.register(D3DX_VEC3_TRANSFORM_COORD, |e, a| {
+            assert_eq!(e.mem.u32(a[1] + 8), 7.0f32.to_bits());
+            for (i, v) in [0.0f32, 0.0, 3.0].iter().enumerate() {
+                e.mem.set_u32(a[0] + 4 * i as u32, v.to_bits());
+            }
+            a[0].into_ret()
+        });
+        e.call_log = Some(vec![]);
+        e.call(
+            0x00e6_c780,
+            &args![r, location, direction, up, right, frustum, port],
+        );
+        // Both flags set: the eye is the location, the point at 011f426c is copied.
+        assert_eq!(f(&e, CAMERA_POINT_011F474C), 4.0);
+        assert_eq!(f(&e, t + VIEW_MATRIX + 0x30), -1.0);
+        let proj = t + PROJECTION_MATRIX;
+        // Flipped orthographic: -2 / 4, (left + right) / 4, 2 / 2, -(top + bottom) / 2.
+        assert_eq!(f(&e, proj), -0.5);
+        assert_eq!(f(&e, proj + 0x30), 0.5);
+        assert_eq!(f(&e, proj + 0x14), 1.0);
+        assert_eq!(e.mem.u32(proj + 0x34), 0x8000_0000);
+        assert_eq!(f(&e, proj + 0x3c), 1.0);
+        assert_eq!(f(&e, proj + 0x2c), 0.0);
+        // The plane (0, 0, 1, -3); q.w = (1 - 0.25) / -0.25 = -3; dot = 1 + 9.
+        let factor = x87_store32(x87_div(1.0, 10.0));
+        let ff = f64::from(f32::from_bits(factor));
+        assert_eq!(e.mem.u32(proj + 8), x87_store32(0.0 * ff));
+        assert_eq!(e.mem.u32(proj + 0x18), x87_store32(0.0 * ff));
+        assert_eq!(e.mem.u32(proj + 0x28), factor);
+        assert_eq!(e.mem.u32(proj + 0x38), x87_store32(ff * -3.0));
+        assert_eq!(calls(&e, D3DX_VEC3_NORMALIZE).len(), 1);
+    }
+
+    #[test]
+    fn nothing_while_the_scene_is_skipped() {
+        let mut e = Engine::new();
+        let r = e.new_object::<NiDX9Renderer>();
+        e.mem.set_u8(r.addr() + SKIP_END_SCENE, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00e6_c780, &args![r, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
     }
 }
