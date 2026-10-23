@@ -3618,7 +3618,8 @@ mod n012_tests {
         assert_eq!(
             slots(&e, strings),
             vec![
-                0x1000_0000 | (0x0c1a_0000 & 0xffff),
+                // The label word 0x0c1a_0000 has no low 16 bits, so only the kind remains.
+                0x1000_0000,
                 0x2000_0000 | (LABEL_LANDSCAPE_TEXTURING & 0xffff),
                 0x5000_2000 | (LABEL_LANDSCAPE_TEXTURES & 0xfff),
                 0x6000_0000 | (LABEL_BASE_TEX & 0xfff) | 0x91 << 12,

@@ -1130,13 +1130,8 @@ pub fn bs_shader_pp_lighting_property_get_render_passes_1x(
             e.mem.set_u8(r.wrapping_add(6), 7);
         }
         let lights = e.call(ACTIVE_LIGHT_COUNT, &args![this]).u32() as u16;
-        let unlit_or_lit = if !f32 {
-            false
-        } else if !f35 && pass_flags != e.mem.u32(PASS_FLAGS_010A91D4) {
-            false
-        } else {
-            true
-        };
+        // Same order as the exe: the pass-flags word is read only when f32 is set and f35 is not.
+        let unlit_or_lit = f32 && (f35 || pass_flags == e.mem.u32(PASS_FLAGS_010A91D4));
         if unlit_or_lit && !f35 && f33 {
             // Straight to the landscape passes.
             landscape_and_rest(
@@ -1493,25 +1488,23 @@ pub fn bs_shader_pp_lighting_property_get_render_passes_1x(
                         b(f2c),
                     );
                     e.mem.set_u8(first.addr(), 0);
-                } else if light != 0 {
-                    if light_color_differs(e, light, 0xd4) {
-                        fn_00bd99c0(
-                            e,
-                            this,
-                            geometry,
-                            light,
-                            counter_ptr,
-                            count,
-                            first,
-                            alpha_flag,
-                            true,
-                            0,
-                            b(f20),
-                            0,
-                            b(f2c),
-                        );
-                        light = e.call(NEXT_LIGHT, &args![this, iterator]).u32();
-                    }
+                } else if light != 0 && light_color_differs(e, light, 0xd4) {
+                    fn_00bd99c0(
+                        e,
+                        this,
+                        geometry,
+                        light,
+                        counter_ptr,
+                        count,
+                        first,
+                        alpha_flag,
+                        true,
+                        0,
+                        b(f20),
+                        0,
+                        b(f2c),
+                    );
+                    light = e.call(NEXT_LIGHT, &args![this, iterator]).u32();
                 }
                 while light != 0 {
                     if light_color_differs(e, light, 0xd4) {
