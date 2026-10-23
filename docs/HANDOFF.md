@@ -9,7 +9,7 @@ machinery runs.
 
 ### Claude lead, 2026-10-22/23 (current; read this first, then 2026-10-20 evening below)
 
-**Merged:** PR #229 (005e0830's slot result), PR #230 (recorded batches b054-b075, n001-n003, the last nixenonrenderer functions: 37,226 translated, 84.9% covered) and PR #231 (the animation, renderer, scene graph and AI batches n004-n029; 40,291 translated, 89.3% covered).
+**Merged:** PR #229 (005e0830's slot result), PR #230 (recorded batches b054-b075, n001-n003, the last nixenonrenderer functions: 37,226 translated, 84.9% covered) and PR #239 (the animation, renderer, scene graph and AI batches n004-n029; 40,291 translated, 89.3% covered).
 
 **Recorded play queue:** b001-b075 are all done. What the recorded game ran and is still untranslated is CRT and platform start-up code, which the play build picks up as it reaches it.
 
@@ -28,7 +28,7 @@ machinery runs.
 
 **Machine:** the memory watchdog is `phase0/bin/watchdog3.ps1` (it spares the biggest rustc). Never read its log with `tail -F`: a reader holding the file open made its writes fail while builds were still stopped, which looked like silent rustc crashes (exit 0xffffffff) for most of 2026-10-22. Agents test engine-fallout files only in stand-in crates; the lead runs engine-fallout once per collection (its lib-test build needs about 15 GB).
 
-**Review notes for PR #231:** see the PR body. Open suspects (private `phase0/lists/fix/suspects.txt`): argument counts of 00a27ee0 and fn_00b984d0, fn_00a68d40's missing this, 00a291e0's guessed shape, the 01012060 constant written as a literal, the printf float stand-in in the play branch's crt.rs, and an unused computation left out of 00a58550.
+**Review notes for PR #239:** see the PR body. Open suspects (private `phase0/lists/fix/suspects.txt`): argument counts of 00a27ee0 and fn_00b984d0, fn_00a68d40's missing this, 00a291e0's guessed shape, the 01012060 constant written as a literal, the printf float stand-in in the play branch's crt.rs, and an unused computation left out of 00a58550.
 
 **Contributor PRs:** #29, #50, #87, #91 and #108 (abusager13) were updated on 2026-10-21. Reviews are drafted in the private `agents/scratch/lead/review-*.md` (not posted: the maintainer said to leave the PRs for now). Their CI runs wait for the maintainer's approval (fork PRs).
 
