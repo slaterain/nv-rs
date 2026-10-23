@@ -31,7 +31,11 @@ mod tests {
         let mut e = Engine::new();
         e.register(FREE_SIZED, |_, _| 0x7000u32.into_ret());
         e.call_log = Some(vec![]);
-        assert_eq!(e.call(0x0084_b630, &args![0x5000u32, 0x6000u32, 3u32]).u32(), 0x7000);
+        assert_eq!(
+            e.call(0x0084_b630, &args![0x5000u32, 0x6000u32, 3u32])
+                .u32(),
+            0x7000
+        );
         let calls: Vec<Vec<u32>> = e
             .call_log
             .as_ref()
