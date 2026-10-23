@@ -291,8 +291,8 @@ fn count_one_more_map(e: &mut Engine, this: u32) {
 // Translated from 00a69dd0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map; by its vtable (`0109c4c4`) the `NiTexturingProperty::Map`
 /// default constructor (`ECX` only): flags cleared then set to `(flags & 0xf100) | 0x3100`,
-/// no texture and no transform.
-pub fn fn_00a69dd0(e: &mut Engine, this: Ptr) {
+/// no texture and no transform. Answers `this` (`MOV EAX,ECX` first, 00a69dd0).
+pub fn fn_00a69dd0(e: &mut Engine, this: Ptr) -> Ptr {
     let map = this.addr();
     e.mem.set_u16(map + 4, 0);
     e.mem.set_u32(map, MAP_VTABLE);
@@ -300,6 +300,7 @@ pub fn fn_00a69dd0(e: &mut Engine, this: Ptr) {
     let flags = e.mem.u16(map + 4);
     e.mem.set_u32(map + 0xc, 0);
     e.mem.set_u16(map + 4, (flags & 0xf100) | 0x3100);
+    this
 }
 
 // Translated from 00a69e00 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1873,7 +1874,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a6ab90, ni_texturing_property_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00a6_b410, ni_texturing_property_sdm_init()),
         entry!(0x00a6_aa40, fn_00a6aa40(Ptr) -> Ptr),
-        entry!(0x00a6_9dd0, fn_00a69dd0(Ptr)),
+        entry!(0x00a6_9dd0, fn_00a69dd0(Ptr) -> Ptr),
         entry!(0x00a6_9e00, fn_00a69e00(Ptr, u32, u32, u32, u32, u32) -> Ptr),
         entry!(0x00a6_9b00, fn_00a69b00(Ptr) -> Ptr),
         entry!(0x00a6_a000, fn_00a6a000(Ptr) -> u32),
