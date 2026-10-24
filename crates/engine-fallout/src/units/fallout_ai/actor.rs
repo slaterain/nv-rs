@@ -1954,11 +1954,12 @@ pub fn fn_008803a0(e: &mut Engine, this: Ptr, index: u32) -> f32 {
     if flag && e.call(ACTOR_VALUE_IS_STAT, &args![index]).bool() {
         base_value = modifier;
     }
+    // 00880509..00880523: the owner handed on is `this` itself (the `ActorValueOwner` part),
+    // or 0 when the actor it belongs to is null.
+    let owner = if actor.addr() == 0 { 0 } else { this.addr() };
     let (accepted, result) = e.with_stack(4, |e, cell| {
         e.mem.set_f32(cell.addr(), 0.0);
-        let accepted = e
-            .call(0x0066_ed60, &args![actor.addr(), index, cell])
-            .bool();
+        let accepted = e.call(0x0066_ed60, &args![owner, index, cell]).bool();
         (accepted, e.mem.f32(cell.addr()))
     });
     if !accepted {
@@ -6514,6 +6515,14 @@ mod tests_block2 {
         // becomes the modifier 4.5 and the result is the sum.
         e.register(ACTOR_VALUE_HAS_FLAG, |_, a| ret((a[1] == 0x800) as u32));
         e.register(0x0066_ed60, |e, a| {
+            e.mem.set_f32(a[2], 2.0);
+            ret(1)
+        });
+        assert_eq!(e.call(0x0088_03a0, &args![owner, 3u32]).f32(), 6.5);
+        // The `ActorValueOwner` part (`this`) goes on to 0066ed60, not the actor.
+        let expected = owner;
+        e.register_double(0x0066_ed60, move |e, a| {
+            assert_eq!(a[0], expected, "the owner, not the actor");
             e.mem.set_f32(a[2], 2.0);
             ret(1)
         });
