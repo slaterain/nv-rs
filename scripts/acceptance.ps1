@@ -31,6 +31,9 @@ open, a prompt holds the AI and the input and the route never finishes.
 Each answer is logged as "--answer-boxes: ..."; a box with several
 buttons and no choice left is left open and logged as waiting. Outputs (logs, screenshots) go to
 -Out; they are private, never commit them.
+Acceptance runs pass --no-audio so the viewer stays silent without muting the
+computer's output device, and voiced dialogue advances on the game's normal
+delay for a response without a voice file.
 
 .EXAMPLE
 powershell -File scripts\acceptance.ps1 -Data "D:\Steam\steamapps\common\Fallout New Vegas\Data"
@@ -69,7 +72,12 @@ if ($Build) {
         if ($LASTEXITCODE -ne 0) { throw 'viewer release build failed' }
     } finally { Pop-Location }
 }
-$viewer = Join-Path $root 'viewer\target\release\nv-viewer.exe'
+$viewerFile = if ([System.IO.Path]::DirectorySeparatorChar -eq '\') {
+    'nv-viewer.exe'
+} else {
+    'nv-viewer'
+}
+$viewer = Join-Path $root (Join-Path 'viewer/target/release' $viewerFile)
 if (-not (Test-Path $viewer)) { throw "No release viewer at $viewer (run with -Build)." }
 
 function Run-Line([string[]]$lines) {
@@ -78,6 +86,7 @@ function Run-Line([string[]]$lines) {
     $a
 }
 function Run-At([int]$at, [string]$line) { @('--run-at', "$at", $line) }
+function Key-At([int]$at, [string]$key) { @('--key-at', "$at", $key) }
 
 $routeArgs = @{
     doc   = @{
@@ -98,7 +107,7 @@ $routeArgs = @{
             (Run-At 320 '0010A210.Kill') + (Run-At 321 '0010ABB0.Kill') + (Run-At 322 '0010A20F.Kill') +
             (Run-At 323 '0010A211.Kill') + (Run-At 324 '0010A212.Kill') + (Run-At 325 '0010A213.Kill') +
             (Run-At 340 'SunnyREF.StartConversation player') +
-            @('--say', "Okay, I'm in.", '--say', "Sure, I'll come with you.", '--say', "Couldn't hurt.", '--wait', '370')
+            @('--say', "Okay, I'm in.", '--say', "Sure, I'll come with you.", '--say', "Couldn't hurt.", '--wait', '410')
         Success = @('Completed: Talk to Sunny about your reward', 'XP +50')
     }
     vms16 = @{
@@ -112,11 +121,48 @@ $routeArgs = @{
             @('--wait', '330', '--walk', '--weapon', 'WeapNV9mmPistol')
         Success = @('XP +50')
     }
+    primm = @{
+        Args    = @('VikkiAndVance', '--talk') + (Key-At 0 'space') +
+            (Run-Line @('player.ModAV Health 5000', 'player.SetAV Science 30')) +
+            @('--say', 'I have some questions about Primm.',
+              '--say', 'What happened to Primm?',
+              '--say', 'Goodbye.') +
+            (Run-At 5 'player.MoveTo PrimmDeputyRef') +
+            (Run-At 12 'PrimmDeputyRef.StartConversation player') +
+            @('--say', 'You must be Deputy Beagle.',
+              '--say', "I'll set you free now.",
+              '--say', "I didn't cut you loose so you could run away. Stick with me!") +
+            (Run-At 140 'player.MoveTo PrimmDeputyExitMarker') +
+            (Run-At 190 'player.MoveTo PrimmDeputyRef') +
+            # The current viewer's WIP NPC navigation can leave Beagle stuck
+            # beside the player after his own leave package. Keep the route
+            # deterministic while still running his actual quest dialogue.
+            (Run-At 240 'PrimmDeputyRef.MoveTo player') +
+            (Run-At 240 'PrimmDeputyRef.StartConversation player') +
+            # Keep the match independent of punctuation/curly apostrophe
+            # differences in the installed dialogue text.
+            @('--say', 'sheriff now',
+              '--say', 'law and order back') +
+            # Let the destination cell load for one second before starting
+            # Nash's conversation, before he leaves for his idle marker.
+            (Run-At 370 'player.MoveTo PrimmJohnsonNashRef') +
+            (Run-At 371 'PrimmJohnsonNashRef.StartConversation player') +
+            @('--say', 'What about Primm Slim? Could he be sheriff?',
+              # Exit wording varies with Nash's greeting; select whichever
+              # equivalent exit topic the current dialogue offers.
+              '--say', 'See you later|Goodbye|Time for me to go|I need to get going') +
+            (Run-At 430 'player.MoveTo PrimmSlimREF') +
+            (Run-At 435 'PrimmSlimREF.StartConversation player') +
+            @('--say', 'Reprogram Primm Slim',
+              '--say', 'Goodbye', '--wait', '500')
+        Success = @('My Kind of Town: You reprogrammed Primm Slim to act as Sheriff of Primm.',
+            'XP +300', 'XP +30')
+    }
 }
 
 $chosen = @($Routes.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 foreach ($r in $chosen) {
-    if (-not $routeArgs.ContainsKey($r)) { throw "Unknown route '$r' (doc, vcg02, vms16)." }
+    if (-not $routeArgs.ContainsKey($r)) { throw "Unknown route '$r' (doc, vcg02, vms16, primm)." }
 }
 
 $results = @()
@@ -127,7 +173,7 @@ foreach ($r in $chosen) {
     # --answer-boxes: prompts answered as they appear, as a player would
     # (see the header); --box-answers 2: VCG01's "revise your character"
     # box answered "Finished - Travel Onward" (its third button).
-    $a = @($Data) + $spec.Args + @('--answer-boxes', '--box-answers', '2', '--screenshot', $shot)
+    $a = @($Data) + $spec.Args + @('--no-audio', '--answer-boxes', '--box-answers', '2', '--screenshot', $shot)
     if ($Background) { $a += '--background' }
     # Each route is its own viewer run: a new game, so the DLC start
     # messages show again in every route that starts outside Doc's house.

@@ -22,3 +22,15 @@ The verified route is a copied stage-55 opening save moved to the vigor tester i
 The opening still needs a full acceptance run. In particular, the reported brief camera turn still needs replay verification during the lying-to-sitting transition, Doc's seated head/eye gaze is unresolved, and the exact opening choreography needs comparison with the original. See [docs/OPENING.md](OPENING.md) and [docs/OPENING_LOOK_IK.md](OPENING_LOOK_IK.md) for evidence and handoff.
 
 A screenshot or a successful launch alone does not establish feature completion. Record the starting state, steps taken, observed result, logs or report, and comparison with the original game. Do not skip progression when checking an acceptance route.
+
+## Acceptance rerun (2026-10-20)
+
+Using the local game `Data` folder on macOS, the default acceptance set
+(`doc,vcg02,vms16`) passed on the PR #29 source with a temporary overlay of PR
+#108's Metal renderer changes. The recorded route times were 54 s, 455 s, and
+340 s respectively. This confirms the scripted quest routes under the Mac
+renderer fix; it does not validate a PR #29-only renderer build or a Windows
+run. The VCG02 route logged stale-entity `despawn` warnings while streaming
+exterior cells after scripted moves, but it reached its completion marker and
+awarded 50 XP without a panic. The exterior streaming sources are unchanged
+from upstream `main`.

@@ -528,6 +528,9 @@ impl TempData {
     }
 
     pub fn write(&self, relative: &str, bytes: &[u8]) {
+        // Fixtures use game paths, which are commonly written with Windows
+        // separators even when the test runs on Linux.
+        let relative = relative.replace('\\', "/");
         let path = self.0.join(relative);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, bytes).unwrap();
@@ -1284,6 +1287,8 @@ pub mod quest_ids {
     /// along x = 200.
     pub const CELL2: u32 = 0xA22;
     pub const NAVMESH2: u32 = 0xA23;
+    pub const NAVMESH3: u32 = 0xB29;
+    pub const NAVMESH4: u32 = 0xB2A;
     /// A region `TestCell` lists (`XCLR`).
     pub const REGION: u32 = 0xA24;
     /// Map markers in `TestCell`: one shown from the start, one not.
@@ -1395,6 +1400,13 @@ pub mod quest_ids {
     pub const LINK_DOOR2: u32 = 0xA57;
     pub const FAR_MARKER: u32 = 0xA58;
     pub const FAR_TRAVEL: u32 = 0xA59;
+    /// A pair of interiors connected through an intermediate place.
+    pub const CELL3: u32 = 0xB23;
+    pub const CELL4: u32 = 0xB24;
+    pub const LINK_DOOR3: u32 = 0xB25;
+    pub const LINK_DOOR4: u32 = 0xB26;
+    pub const LINK_DOOR5: u32 = 0xB27;
+    pub const LINK_DOOR6: u32 = 0xB28;
     /// A follow package: the player, within 200.
     pub const FOLLOW_PLAYER: u32 = 0xA5A;
     /// A strongbox (`StrongboxRef`, the chest's base) locked at level 50
@@ -2632,6 +2644,12 @@ End
         LINK_DOOR2,
         [400.0, 0.0, 0.0],
     ));
+    refs.extend(link_door(
+        LINK_DOOR3,
+        [20.0, 150.0, 0.0],
+        LINK_DOOR4,
+        [10.0, 0.0, 0.0],
+    ));
     let mut xloc = vec![50u8, 0, 0, 0];
     xloc.extend(KEY.to_le_bytes());
     xloc.extend([0; 12]);
@@ -2703,6 +2721,18 @@ End
     triangles2.extend(tri([0, 2, 3], [0, 0xFFFF, 0], 0x4));
     navmesh2.extend(sub(b"NVTR", &triangles2));
     navmesh2.extend(external(NAVMESH, 0));
+    let interior_navmesh = |id: u32, bounds: [f32; 4]| {
+        let [x0, y0, x1, y1] = bounds;
+        let mut data = sub(b"NVER", &11u32.to_le_bytes());
+        data.extend(sub(
+            b"NVVX",
+            &f32s(&[x0, y0, 0.0, x1, y0, 0.0, x1, y1, 0.0, x0, y1, 0.0]),
+        ));
+        let mut tris = tri([0, 1, 2], [0xFFFF, 0xFFFF, 1], 0);
+        tris.extend(tri([0, 2, 3], [0, 0xFFFF, 0xFFFF], 0));
+        data.extend(sub(b"NVTR", &tris));
+        record(b"NAVM", id, &data)
+    };
     // A map marker, shown from the start (FNAM 0x01), and one that isn't.
     for (id, name, y, flags) in [
         (MARKER, "MarkerRef", -100.0, 0x01),
@@ -2747,11 +2777,84 @@ End
         6,
         &group(CELL2.to_le_bytes(), 9, &refs2),
     ));
+    let mut cell3_data = edid("TestCell3");
+    cell3_data.extend(sub(b"DATA", &[1]));
+    let cell3 = record(b"CELL", CELL3, &cell3_data);
+    let mut refs3 = interior_navmesh(NAVMESH3, [-100.0, -100.0, 300.0, 100.0]);
+    refs3.extend(link_door(
+        LINK_DOOR4,
+        [10.0, 0.0, 0.0],
+        LINK_DOOR3,
+        [20.0, 150.0, 0.0],
+    ));
+    refs3.extend(link_door(
+        LINK_DOOR6,
+        [100.0, 0.0, 0.0],
+        LINK_DOOR5,
+        [200.0, 0.0, 0.0],
+    ));
+    contents.extend(cell3);
+    contents.extend(group(
+        CELL3.to_le_bytes(),
+        6,
+        &group(CELL3.to_le_bytes(), 9, &refs3),
+    ));
+    let mut refs4 = interior_navmesh(NAVMESH4, [0.0, -100.0, 300.0, 100.0]);
+    refs4.extend(link_door(
+        LINK_DOOR5,
+        [200.0, 0.0, 0.0],
+        LINK_DOOR6,
+        [100.0, 0.0, 0.0],
+    ));
+    let mut cell4_data = edid("TestCell4");
+    cell4_data.extend(sub(b"DATA", &[1]));
+    contents.extend(record(b"CELL", CELL4, &cell4_data));
+    contents.extend(group(
+        CELL4.to_le_bytes(),
+        6,
+        &group(CELL4.to_le_bytes(), 9, &refs4),
+    ));
     let cells = group(*b"CELL", 0, &group([0; 4], 2, &group([0; 4], 3, &contents)));
 
     let mut hedr = 1.34f32.to_le_bytes().to_vec();
     hedr.extend([0; 8]);
     let mut plugin = record(b"TES4", 0, &sub(b"HEDR", &hedr));
+    let nvmi = |mesh: u32, cell: u32, at: [f32; 3]| {
+        let mut data = 0u32.to_le_bytes().to_vec(); // flags
+        data.extend(mesh.to_le_bytes());
+        data.extend(cell.to_le_bytes());
+        data.extend(0i16.to_le_bytes()); // grid y
+        data.extend(0i16.to_le_bytes()); // grid x
+        data.extend(f32s(&at));
+        data.extend(0.0f32.to_le_bytes()); // preferred factor
+        sub(b"NVMI", &data)
+    };
+    let nvci = |mesh: u32, doors: &[u32]| {
+        let mut data = mesh.to_le_bytes().to_vec();
+        data.extend(0u32.to_le_bytes()); // joined list
+        data.extend(0u32.to_le_bytes()); // cheap list (NVER > 10)
+        data.extend((doors.len() as u32).to_le_bytes());
+        for door in doors {
+            data.extend(door.to_le_bytes());
+        }
+        sub(b"NVCI", &data)
+    };
+    let mut navinfo = sub(b"NVER", &11u32.to_le_bytes());
+    for (mesh, cell, at, doors) in [
+        (NAVMESH, CELL, [0.0, 0.0, 0.0], vec![LINK_DOOR, LINK_DOOR3]),
+        (NAVMESH2, CELL2, [400.0, 0.0, 0.0], vec![LINK_DOOR2]),
+        (
+            NAVMESH3,
+            CELL3,
+            [50.0, 0.0, 0.0],
+            vec![LINK_DOOR4, LINK_DOOR6],
+        ),
+        (NAVMESH4, CELL4, [200.0, 0.0, 0.0], vec![LINK_DOOR5]),
+    ] {
+        navinfo.extend(nvmi(mesh, cell, at));
+        navinfo.extend(nvci(mesh, &doors));
+    }
+    plugin.extend(group(*b"NAVI", 0, &record(b"NAVI", 0xB2B, &navinfo)));
     plugin.extend(group(*b"GMST", 0, &settings));
     // The game's clock: 10:00, at 30 game seconds a second.
     let mut globals = record(b"GLOB", GLOBAL, &glob);

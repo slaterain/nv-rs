@@ -233,6 +233,7 @@ around themselves, which fails the same way.
 | A path request (`PathingRequest` (Xbox PDB), types by `006e2f80`) is solved in `Pathfind.cpp`: type 0 → `006d0b10` → `006c8e10`: resolve start and goal to navmesh infos; same info → nodes start, goal; else the info search (`006c94c0`) | `006d0900`, `006c8e10`, `006c8f50` | implemented |
 | `NavMeshInfoSearch` (Xbox PDB, vtable `0106c22c`), an `AStarSearch<NavMeshInfo const*, TESObjectREFR*>`: start node cost 0; open list ordered by g + h (`006b9710`; buckets `006f4790` put every node with h ≥ 0 in one list, a new node before equal ones, `006b94a0`); goal test info == goal info (`006b8c20`) | `006b8c50`, `006b9180`, `006b8ec0`, `006b8fe0` | implemented, tested |
 | Edge costs (`GetNodeConnections`, `006b8490`): from the current info (at the start point for the start info) to each joined info (at the goal point for the goal info): distance × k × 3 for the first list, × k for the second, k = clamp(1 − 100 × the current info's factor, 0.1, 1); estimate 0.1 × distance from the info's rough position to the goal when start and goal are outdoors in one worldspace (`00690800`), else 1 | `006b8490`, constants `01021928` (3.0), `01017a40` (100), `0101e2bc` (0.1), `0101ffa0` (0.1) | implemented, tested |
+| Door edges from `NVCI`'s third list: pair each door through `XTEL` to the info on its far side; cost distance between info positions × k × 1, then +g, then +409600 for a locked door. The search returns the first door on its route | `006b8490`, `006b8c50` | implemented, tested (including a multi-door chain and locked-door route choice) |
 | A cheaper way to a node takes it up again; a neighbour improved through the node's own parent ends the search as failed; a failed search returns the route to the node with the least estimate (`006b8f40` with "closest" set) | `006b9180`, `006b8f40`, `00996ae0` | implemented, tested |
 | The route becomes virtual nodes (`VirtualPathingNode` (Xbox PDB), `006f4e40`: an info's node sits at its rough position): start, each info between, goal | `006c94c0`, `006c90d0`, `006c9920` | implemented, tested |
 | Only the run of nodes from the actor's whose cells are attached (cell state 6, `00450ff0`; a teleport-door node, flag 4, ends it) gets a detailed path (`006ca0e0` → `006ca850` → `006cb950`: one navmesh search over the run) | `006c9fc0`, `006ca0e0`, `006ca500` | implemented (detailed path from the walker to the last attached node), tested |
@@ -273,9 +274,6 @@ sight in game-time steps (`world::movement::offstage_seconds`).
 
 ### Not done or unresolved (labelled in code)
 
-- The search's door edges (`006b8490`'s third list, for an actor's
-  requests; 409600 more for a locked door): places are still changed
-  through `world::ai::door_toward`.
 - What a failed info search falls back to (`006c8f50` → `006c9b20`): no
   path here.
 - Which navmesh a point is on when its cell has several and the point is on

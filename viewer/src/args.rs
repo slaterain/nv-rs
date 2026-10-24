@@ -40,6 +40,7 @@ OPTIONS:
                             render threads (apart from waiting for the
                             display)
     --talk                  start talking to the nearest person once loaded
+    --no-audio              silence the viewer without muting the device
     --choose N,N,...        with --talk or a script's talking: pick these
                             replies in order (as the number keys would),
                             for playing a conversation through unattended
@@ -79,8 +80,8 @@ OPTIONS:
                             menu); can be given more than once
     --say TEXT              for testing: when the dialogue menu offers
                             topics, choose the first whose text contains
-                            TEXT (ignoring case); each --say is used once,
-                            in order
+                            TEXT (or one of its `|`-separated alternatives,
+                            ignoring case); each --say is used once, in order
     --no-hud                leave out the game's HUD (health, compass,
                             crosshair, messages); screenshots then show
                             the scene alone
@@ -237,6 +238,8 @@ pub struct Args {
     pub fps: bool,
     /// Talk to the nearest person once loaded.
     pub talk: bool,
+    /// Silence viewer output and advance voiced lines using the silent-line delay.
+    pub no_audio: bool,
     /// `--choose`: the replies to pick, in order, as number keys would.
     pub choose: Vec<usize>,
     /// A quest stage to set once loaded: the quest's editor ID and stage.
@@ -345,6 +348,7 @@ pub fn parse(args: &[String]) -> Result<Option<Args>, String> {
     let mut walk = false;
     let mut fps = false;
     let mut talk = false;
+    let mut no_audio = false;
     let mut choose = Vec::new();
     let mut stage = None;
     let mut new_game = false;
@@ -408,6 +412,7 @@ pub fn parse(args: &[String]) -> Result<Option<Args>, String> {
             "--walk" => walk = true,
             "--fps" => fps = true,
             "--talk" => talk = true,
+            "--no-audio" => no_audio = true,
             "--choose" => {
                 let v = value("--choose")?;
                 choose = v
@@ -586,6 +591,7 @@ pub fn parse(args: &[String]) -> Result<Option<Args>, String> {
             walk,
             fps,
             talk,
+            no_audio,
             choose,
             stage,
             character,
@@ -631,6 +637,16 @@ mod tests {
         assert!(!p(&["Data", "Cell", "--no-movies"]));
         assert!(!p(&["Data", "Cell", "--screenshot", "a.png"]));
         assert!(p(&["Data", "Cell", "--screenshot", "a.png", "--movies"]));
+    }
+
+    #[test]
+    fn no_audio_silences_only_the_viewer() {
+        let audible = parse(&strings(&["Data", "Cell"])).unwrap().unwrap();
+        let silent = parse(&strings(&["Data", "Cell", "--no-audio"]))
+            .unwrap()
+            .unwrap();
+        assert!(!audible.no_audio);
+        assert!(silent.no_audio);
     }
 
     fn strings(args: &[&str]) -> Vec<String> {
