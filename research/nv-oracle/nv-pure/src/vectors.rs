@@ -393,6 +393,7 @@ pub fn nv_call_ret(ty: Ty) -> &'static str {
         Ty::F32 => "f32_x87",
         Ty::F64 => "f64_x87",
         Ty::U64 => "i64",
+        Ty::Void => "void",
         _ => "u32",
     }
 }
