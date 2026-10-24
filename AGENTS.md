@@ -51,7 +51,7 @@ priorities.
 
 Project: current checkout, Windows/PowerShell is the tested platform.
 Game Data: the contributor's own installed Data folder; never commit it.
-Reference cell: GSDocMitchellHouse. GPU: RTX 5070 Ti Laptop, Vulkan.
+Reference cell: GSDocMitchellHouse. GPU: GTX 1650, Vulkan.
 Research/tools: `%USERPROFILE%\nv-re`, especially findings and decomp.
 Read the archive's Ghidra/recording sections when needed.
 

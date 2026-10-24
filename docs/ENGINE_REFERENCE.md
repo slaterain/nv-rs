@@ -29,7 +29,7 @@ what's been verified against the game.
 
 ## The user's machine
 
-- Windows 11, PowerShell. GPU: NVIDIA RTX 5070 Ti Laptop (Vulkan).
+- Windows 11, PowerShell. GPU: NVIDIA GTX 1650 (Vulkan); driver version not recorded.
 - Project: `%USERPROFILE%\OneDrive\Desktop\nv-rs` (OneDrive itself is
   disabled; the path is just where the Desktop lives).
 - Game Data folder: `C:\Games\Steam\steamapps\common\Fallout New Vegas\Data`
