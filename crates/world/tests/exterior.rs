@@ -65,6 +65,18 @@ fn map_markers_are_found_nearby_and_travelled_to() {
     let mut state = GameState::new(&order);
     assert!(!world::map::shown(&state, well));
     assert!(!world::map::can_travel(&state, well));
+    // A script can reveal a marker whose plugin flags have neither bit set,
+    // and separately make that revealed marker travelable.
+    let mut scripted_marker = well.clone();
+    scripted_marker.flags = 0;
+    let mut scripted_state = GameState::new(&order);
+    scripted_state.map_markers.insert(scripted_marker.reference);
+    assert!(!world::map::can_travel(&scripted_state, &scripted_marker));
+    scripted_state
+        .map_marker_travel
+        .insert(scripted_marker.reference);
+    assert!(world::map::shown(&scripted_state, &scripted_marker));
+    assert!(world::map::can_travel(&scripted_state, &scripted_marker));
     // 600 units away: not yet; 400 across but 900 up (measured in 3D, as
     // the game does): not yet; exactly on the radius (400 across, 300 up):
     // not yet (it must be inside); 400 across and 200 up: found.

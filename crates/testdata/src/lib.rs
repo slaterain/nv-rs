@@ -475,6 +475,16 @@ pub struct TempData(PathBuf);
 #[cfg(test)]
 mod temporary_tests {
     #[test]
+    fn fixture_paths_accept_windows_separators_on_every_platform() {
+        let data = super::TempData::empty("windows-separators");
+        data.write("meshes\\test\\model.nif", b"fixture");
+        assert_eq!(
+            std::fs::read(data.path().join("meshes/test/model.nif")).unwrap(),
+            b"fixture"
+        );
+    }
+
+    #[test]
     fn same_tag_fixtures_do_not_replace_or_remove_each_other() {
         let first = super::functions::functions("shared-tag");
         first.write("owner.txt", b"first fixture");
@@ -528,7 +538,8 @@ impl TempData {
     }
 
     pub fn write(&self, relative: &str, bytes: &[u8]) {
-        let path = self.0.join(relative);
+        // Game assets use Windows separators in their canonical paths.
+        let path = self.0.join(relative.replace('\\', "/"));
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, bytes).unwrap();
     }

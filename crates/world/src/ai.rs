@@ -86,10 +86,11 @@ pub mod kinds {
     pub const ALARM: u8 = 21;
 }
 
-/// A `PLDT`/`PLD2` as the loader keeps it (`0067f060`: kind i32, form u32,
-/// radius i32 on disk): "in a cell" (1) has no radius, "near the current
-/// location" (2) and "near the editor location" (3) no form.
-// Translated from 0067f060 (decompiled, FalloutNV.exe 1.4.0.525).
+/// A `PLDT`/`PLD2`: "in a cell" (1) identifies a cell, while "near the
+/// current location" (2) and "near the editor location" (3) do not identify
+/// a form. The game gets the cell with `PackageLocation::GetLocCell`
+/// (`0067f3e0`) and checks the actor's location in the package vfunc
+/// (`00676390`; FalloutNV.exe 1.4.0.525).
 pub(crate) fn read_location(data: &[u8], global: impl Fn(FormId) -> FormId) -> Location {
     let kind = le_u32(data, 0) as i32;
     let raw = le_u32(data, 4);
@@ -425,11 +426,15 @@ pub fn at_second_location(
     who: FormId,
     min_radius: f32,
 ) -> bool {
-    let Some((here, _, at, _)) = state.place(order, who) else {
+    let Some((here, here_cell, at, _)) = state.place(order, who) else {
         return false;
     };
     let reference = match location.kind {
         0 => location.form,
+        // `PLD2` kind 1 is a cell, not a placed reference. The package is
+        // satisfied when the actor's current cell is the specified cell
+        // (`0067f3e0`, `00676390`, FalloutNV.exe 1.4.0.525).
+        1 => return here_cell == location.form,
         _ => return false,
     };
     let Some((there, _, spot_at, _)) = state.place(order, reference) else {
