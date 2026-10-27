@@ -838,6 +838,17 @@ constants!(set_pixel_constant_f, get_pixel_constant_f, 3);
 constants!(set_pixel_constant_i, get_pixel_constant_i, 4);
 constants!(set_pixel_constant_b, get_pixel_constant_b, 5);
 
+/// Whether the device has a buffer of its own in `D3DPOOL_DEFAULT` alive (`Reset` refuses then).
+pub(super) fn default_pool_alive(e: &Engine, device: u32) -> bool {
+    e.kernel
+        .graphics
+        .device_objects
+        .resources
+        .objects
+        .values()
+        .any(|o| o.device == device && matches!(&o.kind, Kind::Buffer { desc, .. } if desc[3] == 0))
+}
+
 /// Releases what a device being destroyed binds.
 pub(super) fn release_bindings(e: &mut Engine, device: u32) {
     let Some(b) = resources(e).bindings.remove(&device) else {

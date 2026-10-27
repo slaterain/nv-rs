@@ -186,6 +186,10 @@ pub unsafe fn measure(o: &mut impl Write) {
         call(device, RELEASE, &[]);
         return;
     }
+    if std::env::args().nth(2).as_deref() == Some("reset") {
+        reset(o, device, &pp);
+        return;
+    }
     if std::env::args().nth(2).as_deref() == Some("extra") {
         extra(o, device);
         call(device, RELEASE, &[]);
@@ -657,4 +661,127 @@ unsafe fn extra(o: &mut impl Write, device: P) {
     line!("GetRenderTargetData\tsysmem source\t{:x}", call(device, GET_RENDER_TARGET_DATA, &[s as usize, s as usize]));
     call(s, RELEASE, &[]);
     call(back, RELEASE, &[]);
+}
+
+/// `device reset`: `Reset` on a windowed device: with a default-pool resource alive, with only
+/// managed ones, in a scene, with a back buffer reference held, at another size; the device's
+/// states and bindings before and after, and what `TestCooperativeLevel` answers around it.
+unsafe fn reset(o: &mut impl Write, device: P, pp: &PresentParameters) {
+    const RESET: usize = 16;
+    const GET_RENDER_TARGET: usize = 38;
+    const GET_DEPTH_STENCIL: usize = 40;
+    const SET_VIEWPORT: usize = 47;
+    const GET_VIEWPORT: usize = 48;
+    const GET_RENDER_STATE: usize = 58;
+    const GET_TEXTURE: usize = 64;
+    const SET_SAMPLER_STATE: usize = 69;
+    const GET_SAMPLER_STATE: usize = 68;
+    const SET_TRANSFORM: usize = 44;
+    const GET_TRANSFORM: usize = 45;
+    macro_rules! line {
+        ($($t:tt)*) => {{ writeln!(o, $($t)*).unwrap(); o.flush().unwrap(); }};
+    }
+    let state = |device: P, rs: usize| {
+        let mut v = 0xaaaa_aaaau32;
+        call(device, GET_RENDER_STATE, &[rs, &mut v as *mut u32 as usize]);
+        v
+    };
+    let object = |device: P, slot: usize, index: Option<usize>| {
+        let mut p: usize = 0;
+        let hr = match index {
+            Some(i) => call(device, slot, &[i, &mut p as *mut usize as usize]),
+            None => call(device, slot, &[&mut p as *mut usize as usize]),
+        };
+        if p != 0 {
+            call(p as P, RELEASE, &[]);
+        }
+        (hr, p)
+    };
+    let report = |o: &mut dyn Write, device: P, when: &str| {
+        let mut vp = [0u32; 6];
+        call(device, GET_VIEWPORT, &[vp.as_mut_ptr() as usize]);
+        let mut sampler = 0xaaaa_aaaau32;
+        call(device, GET_SAMPLER_STATE, &[0, 5, &mut sampler as *mut u32 as usize]);
+        let mut world = [0u32; 16];
+        call(device, GET_TRANSFORM, &[256, world.as_mut_ptr() as usize]);
+        let (_, rt) = object(device, GET_RENDER_TARGET, Some(0));
+        let (_, ds) = object(device, GET_DEPTH_STENCIL, None);
+        let (_, tex) = object(device, GET_TEXTURE, Some(0));
+        let (_, back) = {
+            let mut p: usize = 0;
+            let hr = call(device, GET_BACK_BUFFER, &[0, 0, 0, &mut p as *mut usize as usize]);
+            let mut desc = [0u32; 8];
+            call(p as P, 12, &[desc.as_mut_ptr() as usize]);
+            call(p as P, RELEASE, &[]);
+            writeln!(o, "GetBackBuffer\t{when}\t{hr:x}\t{}", words(&desc)).unwrap();
+            (hr, p)
+        };
+        writeln!(
+            o,
+            "State\t{when}\tzenable {:x} cullmode {:x} lighting {:x} magfilter {sampler:x} world[0] {:x} world[12] {:x} viewport {} rt=back {} depth {} texture0 {}",
+            state(device, 7),
+            state(device, 22),
+            state(device, 137),
+            world[0],
+            world[12],
+            words(&vp),
+            rt == back,
+            ds != 0,
+            tex != 0
+        )
+        .unwrap();
+        o.flush().unwrap();
+    };
+    report(o, device, "fresh");
+    // Change states and bindings.
+    call(device, SET_RENDER_STATE, &[7, 0]);
+    call(device, SET_RENDER_STATE, &[22, 1]);
+    call(device, SET_RENDER_STATE, &[137, 0]);
+    call(device, SET_SAMPLER_STATE, &[0, 5, 1]);
+    let mut m = [0u32; 16];
+    m[0] = 0x4000_0000;
+    m[12] = 0x4040_0000;
+    call(device, SET_TRANSFORM, &[256, m.as_ptr() as usize]);
+    let vp = [10u32, 10, 100, 100, 0, 0x3f80_0000];
+    call(device, SET_VIEWPORT, &[vp.as_ptr() as usize]);
+    let mut managed: P = std::ptr::null_mut();
+    line!("CreateTexture\tmanaged\t{:x}", call(device, CREATE_TEXTURE, &[64, 64, 1, 0, 21, 1, &mut managed as *mut P as usize, 0]));
+    call(device, SET_TEXTURE, &[0, managed as usize]);
+    report(o, device, "changed");
+    let mut default: P = std::ptr::null_mut();
+    line!("CreateTexture\tdefault pool\t{:x}", call(device, CREATE_TEXTURE, &[64, 64, 1, 1, 21, 0, &mut default as *mut P as usize, 0]));
+    let mut p = *pp;
+    line!("Reset\twith a default-pool texture alive\t{:x}", call(device, RESET, &[&mut p as *mut PresentParameters as usize]));
+    line!("TestCooperativeLevel\tafter the failed Reset\t{:x}", call(device, TEST_COOPERATIVE_LEVEL, &[]));
+    line!("BeginScene\tafter the failed Reset\t{:x}", call(device, BEGIN_SCENE, &[]));
+    line!("EndScene\tafter the failed Reset\t{:x}", call(device, END_SCENE, &[]));
+    line!("Present\tafter the failed Reset\t{:x}", call(device, PRESENT, &[0, 0, 0, 0]));
+    line!("Release\tthe default-pool texture\t{:x}", call(default, RELEASE, &[]));
+    line!("TestCooperativeLevel\tafter its release\t{:x}", call(device, TEST_COOPERATIVE_LEVEL, &[]));
+    // A back buffer reference held across Reset.
+    let mut held: usize = 0;
+    call(device, GET_BACK_BUFFER, &[0, 0, 0, &mut held as *mut usize as usize]);
+    let mut p = *pp;
+    line!("Reset\twith a back buffer reference held\t{:x}", call(device, RESET, &[&mut p as *mut PresentParameters as usize]));
+    // The reference held is not released: after this Reset it no longer points at a live
+    // object (releasing it faulted, 2026-10-27).
+    let _ = held;
+    let mut p = *pp;
+    line!("Reset\tonly managed resources\t{:x}\tcount {:x} format {:x}", call(device, RESET, &[&mut p as *mut PresentParameters as usize]), p.count, p.format);
+    line!("TestCooperativeLevel\tafter Reset\t{:x}", call(device, TEST_COOPERATIVE_LEVEL, &[]));
+    report(o, device, "after Reset");
+    call(device, BEGIN_SCENE, &[]);
+    let mut p = *pp;
+    line!("Reset\tin a scene\t{:x}", call(device, RESET, &[&mut p as *mut PresentParameters as usize]));
+    line!("EndScene\tafter Reset in a scene\t{:x}", call(device, END_SCENE, &[]));
+    let mut p = PresentParameters { width: 640, height: 480, ..*pp };
+    line!("Reset\t640x480\t{:x}", call(device, RESET, &[&mut p as *mut PresentParameters as usize]));
+    report(o, device, "after Reset 640x480");
+    let mut p = PresentParameters { width: 0, height: 0, ..*pp };
+    line!("Reset\t0x0 (the window's client area)\t{:x}\twidth {} height {}", call(device, RESET, &[&mut p as *mut PresentParameters as usize]), p.width, p.height);
+    let mut p = PresentParameters { count: 4, ..*pp };
+    line!("Reset\tfour back buffers\t{:x}\tcount {}", call(device, RESET, &[&mut p as *mut PresentParameters as usize]), p.count);
+    line!("TestCooperativeLevel\tafter that\t{:x}", call(device, TEST_COOPERATIVE_LEVEL, &[]));
+    call(managed, RELEASE, &[]);
+    line!("Release\tdevice\t{:x}", call(device, RELEASE, &[]));
 }

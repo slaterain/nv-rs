@@ -312,6 +312,9 @@ struct Device {
     lights: HashMap<u32, [u32; 26]>,
     enabled_lights: std::collections::BTreeSet<u32>,
     software_vertex_processing: bool,
+    /// After a `Reset` that failed: the device needs a successful `Reset` (`TestCooperativeLevel`
+    /// answers `D3DERR_DEVICENOTRESET`; scenes and `Present` are refused).
+    lost: bool,
 }
 
 /// A surface of this layer.
@@ -601,7 +604,8 @@ fn fwd_create_depth_stencil_surface(
 }
 
 fn register_code(e: &mut Engine) {
-    let device: [(u32, crate::AbiFn); 46] = [
+    let device: [(u32, crate::AbiFn); 47] = [
+        (16, crate::entry!(0, reset(Ptr, Ptr) -> u32).1),
         (
             32,
             crate::entry!(0, get_render_target_data(Ptr, u32, u32) -> u32).1,
@@ -1135,6 +1139,7 @@ pub fn create_device(
         lights: HashMap::new(),
         enabled_lights: std::collections::BTreeSet::new(),
         software_vertex_processing: false,
+        lost: false,
     };
     e.kernel
         .graphics
@@ -1637,7 +1642,7 @@ fn max_user_clip_planes(e: &mut Engine, this: Ptr) -> u32 {
 fn begin_scene(e: &mut Engine, this: Ptr) -> u32 {
     let model = {
         let d = device(e, this);
-        if d.in_scene {
+        if d.in_scene || d.lost {
             D3DERR_INVALIDCALL
         } else {
             d.in_scene = true;
@@ -1653,7 +1658,7 @@ fn begin_scene(e: &mut Engine, this: Ptr) -> u32 {
 fn end_scene(e: &mut Engine, this: Ptr) -> u32 {
     let model = {
         let d = device(e, this);
-        if !d.in_scene {
+        if !d.in_scene || d.lost {
             D3DERR_INVALIDCALL
         } else {
             d.in_scene = false;
@@ -1722,7 +1727,7 @@ fn clear_answer(e: &mut Engine, this: Ptr, count: u32, rects: Ptr, flags: u32) -
 /// (the viewer draws), so it answers `D3D_OK` outside a scene and `D3DERR_INVALIDCALL` inside
 /// one.
 fn present(e: &mut Engine, this: Ptr, source: u32, dest: u32, window: u32, dirty: u32) -> u32 {
-    let model = if device(e, this).in_scene {
+    let model = if device(e, this).in_scene || device(e, this).lost {
         D3DERR_INVALIDCALL
     } else {
         D3D_OK
@@ -1733,8 +1738,13 @@ fn present(e: &mut Engine, this: Ptr, source: u32, dest: u32, window: u32, dirty
     model
 }
 
-/// `TestCooperativeLevel()`: the device is never lost here: `D3D_OK`.
-fn test_cooperative_level(_e: &mut Engine, _this: Ptr) -> u32 {
+/// `TestCooperativeLevel()`: a windowed device is not lost here: `D3D_OK`, or
+/// `D3DERR_DEVICENOTRESET` after a `Reset` that failed until one succeeds (measured, 2026-10-27).
+const D3DERR_DEVICENOTRESET: u32 = 0x8876_0869;
+fn test_cooperative_level(e: &mut Engine, this: Ptr) -> u32 {
+    if device(e, this).lost {
+        return D3DERR_DEVICENOTRESET;
+    }
     D3D_OK
 }
 
@@ -2551,6 +2561,172 @@ fn get_render_target_data(e: &mut Engine, this: Ptr, source: u32, destination: u
         "IDirect3DDevice9::GetRenderTargetData without NV_D3D9=real (nothing is drawn, so no \
          pixels to read back) is not provided"
     )
+}
+
+
+/// Whether the device has a resource of its own in `D3DPOOL_DEFAULT` alive (a texture, a
+/// surface it did not make itself, a buffer).
+fn default_pool_alive(e: &Engine, device: u32) -> bool {
+    let o = &e.kernel.graphics.device_objects;
+    o.textures
+        .values()
+        .any(|t| t.device == device && t.pool == D3DPOOL_DEFAULT)
+        || o.surfaces.values().any(|s| {
+            s.device == device && !s.implicit && s.container == 0 && s.desc[3] == D3DPOOL_DEFAULT
+        })
+        || super::d3d9resource::default_pool_alive(e, device)
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::Reset (vtable +0x40)
+/// `Reset(present parameters)`, as the retail runtime answered on a windowed device
+/// (`d3d9-capture device reset`, 2026-10-27):
+/// - with a resource of the device's own in `D3DPOOL_DEFAULT` alive, or more than three back
+///   buffers (the count left as given), it answers `D3DERR_INVALIDCALL` and the device needs a
+///   successful `Reset`: `TestCooperativeLevel` answers `D3DERR_DEVICENOTRESET`, `BeginScene`,
+///   `EndScene` and `Present` are refused, also after the resource is released;
+/// - else, in a scene too (which it ends), it answers `D3D_OK` with a count of 0 made 1 and
+///   `D3DFMT_UNKNOWN` the display format (written back); the old back buffers and automatic
+///   depth surface go (a reference the program still holds no longer names a live surface) and
+///   new ones of the parameters are made, render target 0 the first back buffer, the depth
+///   surface the automatic one; every state the program set returns to its default (render,
+///   texture stage and sampler states, transforms, clip planes, material and lights, textures,
+///   streams, indices, declaration, FVF, shaders, constants), the viewport and scissor the whole
+///   back buffer.
+///
+/// Not provided (the run stops): a full-screen device, a size taken from the window (0),
+/// multisampling.
+fn reset(e: &mut Engine, this: Ptr, present: Ptr) -> u32 {
+    if present.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    let p = present.addr();
+    let field = |e: &Engine, offset: u32| e.mem.u32(p + offset);
+    if field(e, PP_WINDOWED) == 0 {
+        panic!("IDirect3DDevice9::Reset to a full-screen device is not provided");
+    }
+    if default_pool_alive(e, this.addr()) || field(e, PP_COUNT) > BACK_BUFFERS_MAX {
+        device(e, this).lost = true;
+        return D3DERR_INVALIDCALL;
+    }
+    if field(e, PP_WIDTH) == 0 || field(e, PP_HEIGHT) == 0 {
+        panic!("IDirect3DDevice9::Reset with a back buffer size taken from the window is not provided");
+    }
+    if field(e, PP_MULTISAMPLE) != 0 {
+        panic!("IDirect3DDevice9::Reset with multisampling is not provided");
+    }
+    let (direct3d, adapter) = {
+        let d = device(e, this);
+        (d.direct3d, d.creation[0])
+    };
+    let display_format = e.with_stack(0x10, |e, mode| {
+        let hr = e.vcall(direct3d, 4 * 8, &[adapter, mode.addr()]).u32();
+        assert_eq!(hr, D3D_OK, "GetAdapterDisplayMode for Reset");
+        e.mem.u32(mode.addr() + 0xc)
+    });
+    if field(e, PP_COUNT) == 0 {
+        e.mem.set_u32(p + PP_COUNT, 1);
+    }
+    if field(e, PP_FORMAT) == D3DFMT_UNKNOWN {
+        e.mem.set_u32(p + PP_FORMAT, display_format);
+    }
+    // The device's bindings and states go back to their defaults.
+    let old = {
+        let d = device(e, this);
+        let held: Vec<u32> = d
+            .render_targets
+            .iter()
+            .chain([&d.depth_stencil])
+            .copied()
+            .filter(|&s| s != 0)
+            .collect();
+        let textures: Vec<u32> = d.textures.values().copied().collect();
+        d.render_targets = [0; RENDER_TARGETS];
+        d.depth_stencil = 0;
+        d.textures.clear();
+        d.render_states.clear();
+        d.stage_states.clear();
+        d.sampler_states.clear();
+        d.transforms.clear();
+        d.clip_planes.clear();
+        d.material = None;
+        d.lights.clear();
+        d.enabled_lights.clear();
+        d.in_scene = false;
+        (held, textures)
+    };
+    for surface in old.0 {
+        surface_release(e, Ptr::new(surface));
+    }
+    for texture in old.1 {
+        texture_release(e, Ptr::new(texture));
+    }
+    super::d3d9resource::release_bindings(e, this.addr());
+    let implicit: Vec<u32> = e
+        .kernel
+        .graphics
+        .device_objects
+        .surfaces
+        .iter()
+        .filter(|(_, s)| s.device == this.addr() && s.implicit)
+        .map(|(a, _)| *a)
+        .collect();
+    for surface in implicit {
+        e.kernel.graphics.device_objects.surfaces.remove(&surface);
+        #[cfg(windows)]
+        super::d3d9real::forget(e, surface);
+        e.mem.free(surface);
+    }
+    // The new swap chain.
+    let format = field(e, PP_FORMAT);
+    let (width, height, quality) = (field(e, PP_WIDTH), field(e, PP_HEIGHT), field(e, PP_QUALITY));
+    let back_buffers: Vec<u32> = (0..field(e, PP_COUNT))
+        .map(|_| {
+            let desc = [
+                format,
+                D3DRTYPE_SURFACE,
+                D3DUSAGE_RENDERTARGET,
+                0,
+                0,
+                quality,
+                width,
+                height,
+            ];
+            new_surface(e, this.addr(), true, desc)
+        })
+        .collect();
+    let depth_stencil = if field(e, PP_AUTO_DEPTH) != 0 {
+        let desc = [
+            field(e, PP_DEPTH_FORMAT),
+            D3DRTYPE_SURFACE,
+            D3DUSAGE_DEPTHSTENCIL,
+            0,
+            0,
+            quality,
+            width,
+            height,
+        ];
+        new_surface(e, this.addr(), true, desc)
+    } else {
+        0
+    };
+    surface_add_ref(e, Ptr::new(back_buffers[0]));
+    if depth_stencil != 0 {
+        surface_add_ref(e, Ptr::new(depth_stencil));
+    }
+    let bytes = e.mem.bytes(p, PRESENT_SIZE);
+    {
+        let d = device(e, this);
+        d.present = bytes.clone();
+        d.back_buffers = back_buffers.clone();
+        d.render_targets[0] = back_buffers[0];
+        d.depth_stencil = depth_stencil;
+        d.viewport = [0, 0, width, height, 0f32.to_bits(), 1f32.to_bits()];
+        d.scissor = [0, 0, width, height];
+        d.lost = false;
+    }
+    #[cfg(windows)]
+    super::d3d9real::device_reset(e, this.addr(), &bytes, &back_buffers, depth_stencil);
+    D3D_OK
 }
 
 /// `QueryInterface(iid, out)`: `IUnknown`, `IDirect3DResource9`, `IDirect3DBaseTexture9` and
@@ -3931,5 +4107,59 @@ mod tests {
         assert_eq!([e.mem.u32(data), e.mem.u32(data + 4)], [1, 0]);
         assert_eq!(e.vcall(q, 0x1c, &[0, 0, 0]).u32(), D3D_OK);
         assert_eq!(e.vcall(q, 8, &[]).u32(), 0, "Release");
+    }
+
+    /// `Reset` (+0x40) as the retail runtime answered (`d3d9-capture device reset`, 2026-10-27).
+    #[test]
+    fn reset_answers_as_measured() {
+        let (mut e, device) = extra_device();
+        let pp = e.mem.alloc(PRESENT_SIZE);
+        let fill = |e: &mut Engine, count: u32, width: u32| {
+            for i in 0..PRESENT_SIZE / 4 {
+                e.mem.set_u32(pp + 4 * i, 0);
+            }
+            e.mem.set_u32(pp + PP_WIDTH, width);
+            e.mem.set_u32(pp + PP_HEIGHT, 480);
+            e.mem.set_u32(pp + PP_COUNT, count);
+            e.mem.set_u32(pp + PP_WINDOW, 0x11c);
+            e.mem.set_u32(pp + PP_WINDOWED, 1);
+        };
+        // States set before Reset.
+        assert_eq!(e.vcall(device, 0xe4, &[7, 0]).u32(), D3D_OK);
+        // A default-pool surface alive: refused, and the device needs a Reset.
+        let out = e.mem.alloc(4);
+        assert_eq!(e.vcall(device, 0x90, &[64, 64, 0x16, 0, out, 0]).u32(), D3D_OK);
+        let surface = e.mem.u32(out);
+        fill(&mut e, 0, 640);
+        assert_eq!(e.vcall(device, 0x40, &[pp]).u32(), D3DERR_INVALIDCALL);
+        assert_eq!(e.vcall(device, 0xc, &[]).u32(), D3DERR_DEVICENOTRESET);
+        assert_eq!(e.vcall(device, 0xa4, &[]).u32(), D3DERR_INVALIDCALL, "BeginScene");
+        assert_eq!(e.vcall(device, 0x44, &[0, 0, 0, 0]).u32(), D3DERR_INVALIDCALL, "Present");
+        assert_eq!(e.vcall(surface, 8, &[]).u32(), 0);
+        assert_eq!(e.vcall(device, 0xc, &[]).u32(), D3DERR_DEVICENOTRESET, "still");
+        // Four back buffers: refused, the count left as given.
+        fill(&mut e, 4, 640);
+        assert_eq!(e.vcall(device, 0x40, &[pp]).u32(), D3DERR_INVALIDCALL);
+        assert_eq!(e.mem.u32(pp + PP_COUNT), 4);
+        // A good Reset: defaults filled in, the device usable again, its states cleared, the
+        // render target the new back buffer of the new size.
+        fill(&mut e, 0, 800);
+        assert_eq!(e.vcall(device, 0x40, &[pp]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(pp + PP_COUNT), 1);
+        assert_eq!(e.mem.u32(pp + PP_FORMAT), 0x16);
+        assert_eq!(e.vcall(device, 0xc, &[]).u32(), D3D_OK);
+        let d = device_state(&e, device);
+        assert!(d.render_states.is_empty());
+        assert_eq!(d.viewport[2..4], [800, 480]);
+        let back = d.back_buffers[0];
+        assert_eq!(d.render_targets[0], back);
+        assert_eq!(
+            e.kernel.graphics.device_objects.surfaces[&back].desc[6..8],
+            [800, 480]
+        );
+        // In a scene too; the scene ends.
+        assert_eq!(e.vcall(device, 0xa4, &[]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 0x40, &[pp]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 0xa8, &[]).u32(), D3DERR_INVALIDCALL, "EndScene");
     }
 }

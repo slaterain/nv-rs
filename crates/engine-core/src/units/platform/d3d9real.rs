@@ -1394,6 +1394,56 @@ pub fn get_render_target_data(
     true
 }
 
+
+/// `Reset` succeeded on the modelled device: the real device is reset with the same present
+/// parameters (the real window), and its new back buffers and depth surface are the
+/// counterparts of the modelled ones.
+pub fn device_reset(
+    e: &mut Engine,
+    this: u32,
+    present: &[u8],
+    back_buffers: &[u32],
+    depth_stencil: u32,
+) {
+    let Some(d) = device(e, this) else { return };
+    let w = |o: usize| u32::from_le_bytes(present[o..o + 4].try_into().expect("a word"));
+    let window = match w(0x1c) {
+        0 => HWND::default(),
+        h => match real_window(e, h) {
+            Some(r) => HWND(r as *mut _),
+            None => return missing(e, "Reset with a window without a real one"),
+        },
+    };
+    let mut pp = D3DPRESENT_PARAMETERS {
+        BackBufferWidth: w(0x0),
+        BackBufferHeight: w(0x4),
+        BackBufferFormat: D3DFORMAT(w(0x8)),
+        BackBufferCount: w(0xc),
+        MultiSampleType: D3DMULTISAMPLE_TYPE(w(0x10) as i32),
+        MultiSampleQuality: w(0x14),
+        SwapEffect: D3DSWAPEFFECT(w(0x18) as i32),
+        hDeviceWindow: window,
+        Windowed: BOOL(w(0x20) as i32),
+        EnableAutoDepthStencil: BOOL(w(0x24) as i32),
+        AutoDepthStencilFormat: D3DFORMAT(w(0x28)),
+        Flags: w(0x2c),
+        FullScreen_RefreshRateInHz: w(0x30),
+        PresentationInterval: w(0x34),
+    };
+    let r = unsafe { d.Reset(&mut pp) };
+    answer(e, "Reset", 0, hr(r));
+    for (i, &surface) in back_buffers.iter().enumerate() {
+        if let Ok(s) = unsafe { d.GetBackBuffer(0, i as u32, D3DBACKBUFFER_TYPE_MONO) } {
+            real(e).objects.insert(surface, Object::Surface(s));
+        }
+    }
+    if depth_stencil != 0 {
+        if let Ok(s) = unsafe { d.GetDepthStencilSurface() } {
+            real(e).objects.insert(depth_stencil, Object::Surface(s));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
