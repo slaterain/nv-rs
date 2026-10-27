@@ -24,20 +24,24 @@
 //!   runs the other threads ([`run_until`]) until the object is signalled, or,
 //!   for a timed wait, after one pass, once the clock passes its timeout. When
 //!   a whole pass changes no object's state, main waits and every other thread
-//!   sleeps or waits: the clock then jumps to the earliest wake time (a
-//!   sleeping thread's, or the wait's own deadline) and the passes go on. With
-//!   no wake time ahead (or ten minutes of such jumps without a change) the
+//!   sleeps or waits: the host waits until the earliest wake time (a sleeping
+//!   thread's, or the wait's own deadline) and the passes go on. With
+//!   no wake time ahead (or ten minutes of such waits without a change) the
 //!   wait ends as one nothing can signal.
-//! - The main thread calls `Sleep(n)`: the clock moves on by `n` ms (nothing
-//!   is really waited) and the others get one pass.
+//! - The main thread calls `Sleep(n)`: the host waits `n` ms, then the others
+//!   get one pass.
 //! - A game thread waits on an object that is not signalled, or sleeps: it
 //!   yields back to the main thread, which goes on with the next thread of the
 //!   pass. A game thread's `Sleep(n)` does not move the clock: the thread is
 //!   runnable again once the clock reaches its wake time (the clock when it
-//!   slept, plus `n` ms). So the clock (`Engine::clock_now_us`) follows the
-//!   real time while the game runs, moved on beyond it only by main's own
-//!   sleeps and by the jumps above, when every thread sleeps.
+//!   slept, plus `n` ms).
 //! - The host's own frame points call [`run_threads`].
+//!
+//! **Waiting** (`Engine::wait_clock_until_us`): with the real clock on (the
+//! running game) the host really sleeps until the wake time, so the clock
+//! (`Engine::clock_now_us`) never runs ahead of the real time. With it off
+//! (the tests) the clock jumps to the wake time at once, so runs stay
+//! deterministic.
 //!
 //! A pass resumes, in creation order, every thread that is runnable: started
 //! for the first time (`CreateThread` without `CREATE_SUSPENDED`, or resumed
@@ -565,7 +569,7 @@ impl ThreadHost for Cooperative {
                     return false;
                 }
                 jumped += wake - now;
-                e.advance_clock_us(wake - now);
+                e.wait_clock_until_us(wake);
             }
         }
         let i = e.kernel.threads.current;
@@ -586,9 +590,10 @@ impl ThreadHost for Cooperative {
         ensure_main(e);
         let until = e.clock_now_us() + u64::from(ms) * 1000;
         if on_main(e) {
-            // The main thread's own sleep moves the clock on by its time (nothing is
-            // really waited), then gives the others a pass.
-            e.advance_clock_us(u64::from(ms) * 1000);
+            // The main thread's own sleep waits until its wake time (the host really
+            // sleeps with the real clock on; the tests' clock moves on), then gives the
+            // others a pass.
+            e.wait_clock_until_us(until);
             one_pass(e, signalled);
             return;
         }

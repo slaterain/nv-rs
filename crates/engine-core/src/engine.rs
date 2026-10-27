@@ -334,6 +334,22 @@ impl Engine {
         self.clock_us = (total % 1000) as u32;
     }
 
+    /// Waits until the clock reads `until` (microseconds): with the real clock on, the host
+    /// really sleeps until then, so the clock never runs ahead of the real time; with it off
+    /// (the tests) the clock moves on to `until` at once. A time already passed returns at once.
+    pub fn wait_clock_until_us(&mut self, until: u64) {
+        let now = self.clock_now_us();
+        if until <= now {
+            return;
+        }
+        if self.real_clock.is_some() {
+            std::thread::sleep(std::time::Duration::from_micros(until - now));
+            self.catch_up_clock();
+        } else {
+            self.advance_clock_us(until - now);
+        }
+    }
+
     /// The clock in milliseconds now (what `GetTickCount` and `timeGetTime` answer).
     pub fn clock_now_ms(&mut self) -> u32 {
         self.catch_up_clock();

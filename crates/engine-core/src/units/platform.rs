@@ -635,10 +635,9 @@ fn get_current_thread_id(e: &mut Engine) -> u32 {
 }
 
 // Platform: replaces KERNEL32.DLL Sleep (import)
-/// A switch point (`crate::thread_host`): on the main thread the clock
-/// (`Engine::clock_now_ms`) moves on by the time asked for (nothing is really waited) and the
-/// others get a pass; another thread sleeps until the clock reaches its wake time, without
-/// moving it.
+/// A switch point (`crate::thread_host`): on the main thread the host waits the time asked for
+/// (`Engine::wait_clock_until_us`: really, with the real clock on) and the others get a pass;
+/// another thread sleeps until the clock reaches its wake time, without moving it.
 fn sleep(e: &mut Engine, ms: u32) {
     crate::thread_host::host().sleep(e, ms, signalled);
 }
@@ -3644,6 +3643,24 @@ mod tests {
         assert_eq!(
             logged(&e).iter().map(|l| l.0).collect::<Vec<_>>(),
             [1000, 1050, 1110]
+        );
+    }
+
+    #[test]
+    fn with_the_real_clock_mains_sleep_really_waits_and_the_clock_keeps_to_real_time() {
+        let mut e = thread_engine();
+        e.start_real_clock();
+        let start = std::time::Instant::now();
+        let before = u64::from(tick_count(&mut e));
+        call(&mut e, SLEEP, &[30]);
+        let after = u64::from(tick_count(&mut e));
+        let real = start.elapsed().as_millis() as u64;
+        assert!(real >= 30, "the host waited: {real} ms");
+        assert!(after - before >= 30, "the clock moved on: {}", after - before);
+        assert!(
+            after - before <= real + 1,
+            "the clock is not ahead of the real time: {} > {real}",
+            after - before
         );
     }
 
