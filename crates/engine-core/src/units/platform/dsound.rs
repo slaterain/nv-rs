@@ -608,6 +608,7 @@ pub struct Sound {
     /// The host asked for the output when the game makes its device ([`want_output`]), and
     /// where to record what goes to the device.
     output_wanted: bool,
+    device_paced: bool,
     record: Option<std::path::PathBuf>,
     /// The kinds of approximate sound already named on stderr (once each).
     noted: BTreeSet<&'static str>,
@@ -799,9 +800,12 @@ impl super::sound_out::Source for Voices {
 /// (`DirectSoundCreate8`, from `BSWin32Audio::Init` `00aea230`), so what the game plays from then
 /// on is heard. With `record`, what the mixer sends to the device is also written there as a
 /// WAV file, with a log of what was started when beside it (`.log`). The host's switch
-/// (`NV_SOUND=out`); off by default and in the tests.
-pub fn want_output(e: &mut Engine, record: Option<std::path::PathBuf>) {
+/// (`NV_SOUND=out`); off by default and in the tests. With `device_paced` the output keeps the
+/// device's own pace instead of following the game's clock (`Pace`; `NV_SOUND=device`, for
+/// listening while the game's clock runs ahead of the real time).
+pub fn want_output(e: &mut Engine, record: Option<std::path::PathBuf>, device_paced: bool) {
     e.kernel.sound.output_wanted = true;
+    e.kernel.sound.device_paced = device_paced;
     e.kernel.sound.record = record;
 }
 
@@ -832,13 +836,15 @@ pub fn start_output(e: &mut Engine) -> bool {
             Err(err) => eprintln!("sound: cannot record to {}: {err}", path.display()),
         }
     }
-    let now = e.clock_now_us();
-    voices.lock().expect("the voices").pace = Some(Pace {
-        game_us: now,
-        at: std::time::Instant::now(),
-        start_us: now,
-        mixed: 0,
-    });
+    if !e.kernel.sound.device_paced {
+        let now = e.clock_now_us();
+        voices.lock().expect("the voices").pace = Some(Pace {
+            game_us: now,
+            at: std::time::Instant::now(),
+            start_us: now,
+            mixed: 0,
+        });
+    }
     eprintln!(
         "sound: output on the default device, {} Hz, {} channels",
         output.rate, output.channels

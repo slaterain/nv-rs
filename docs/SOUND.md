@@ -14,6 +14,38 @@ in `scripts/`.
 | Voices and sounds | `platform/vorbisfile.rs`, `crates/vorbis` | `libvorbisfile.dll`/`libvorbis.dll` (1.2.0) | `scripts/vorbis-record` | Bit-exact at 24-bit and 53-bit x87; 64-bit not provided |
 | Movie sound | `platform/bink.rs` | Bink's DirectSound sound system | `nv-bink --sound-system`, `--wait --sound` | `BinkSetSoundSystem` answers 1 as measured; the movie track plays as a mixer voice on the clock schedule (output off by default) |
 
+## Hearing the game (`NV_SOUND=out`)
+
+The output is off by default and in the tests. With `NV_SOUND=out` the host has `dsound` start
+it when the game makes its device (`DirectSoundCreate8` in `BSWin32Audio::Init`, `00aea230`).
+From then on these go through the mixer to the default device (WASAPI shared mode):
+- every secondary buffer the game plays (WAV through mmio, Vorbis voices);
+- the music graph's decoded MP3, one stream that follows `Run`, `Pause`, `Stop`, the
+  position and the volume;
+- the movie's Bink track.
+
+`NV_SOUND_RECORD=FILE.wav` records what goes to the device (32-bit float), and `FILE.log`
+lists what started when: real ms, frames recorded, game clock ms, then the event (`Play` of a
+buffer with its format, music `Render`/`Run`, the movie's track, sound file opens, `mmioOpen`
+names, Ogg opens, pace skips).
+
+**Pace.** The game reads its buffers' cursors and the music position from the platform clock,
+and the output follows that clock. Within 100 ms it keeps the device's pace. When the clock
+runs ahead it skips on: it mixes the frames and drops them. When the clock falls behind it
+gives silence. `NV_SOUND=device` keeps the device's pace instead, for listening.
+
+The platform clock moves on by every game thread's `Sleep`, so it runs ahead of real time while
+threads sleep. In the first play run (2026-10-27, `ng.sh`) it ran:
+
+| Phase | Game clock against real time |
+| --- | --- |
+| Start-up before the first main frame | x16 to x37 |
+| Main menu and the intro movie | x1.0 |
+| Loading Doc Mitchell's house | x19 |
+
+So during start-up the title music is heard only in pieces. The game finished its 125 s track
+three times in 18 s of real time, and each time it ran it again from the start.
+
 ## Mixer (DirectSound 8 to the device)
 
 These were measured on a device without audio enhancements (Virtual Desktop Audio, 48 kHz,
