@@ -60,10 +60,10 @@ Design (`units/platform/d3d9real.rs`):
 4. **State and draws.** Render, texture stage and sampler states, textures,
    streams, indices, declarations, FVF, shaders and their constants,
    transforms, viewport, scissor, clip planes, render targets, depth
-   surfaces, `Clear`, `BeginScene`/`EndScene`, the four draws and `Present`
-   are forwarded. `DrawPrimitiveUP` and `DrawIndexedPrimitiveUP` are added
-   to the model (documented semantics: stream 0, and for the indexed draw the
-   index buffer, are unset afterwards).
+   surfaces, materials and lights, `Clear`, `BeginScene`/`EndScene`,
+   `DrawPrimitive`, `DrawIndexedPrimitive`, `DrawPrimitiveUP` (the vertices
+   copied from engine memory), `UpdateTexture`, `StretchRect` and `Present`
+   are forwarded. A slot the model does not provide yet still stops the run.
 5. **Answers.** The game always gets the model's answer (measured against
    the same runtime). Where the real runtime answers differently the call is
    printed once (`NV_D3D9=real: <call>: the model answers .., the real
