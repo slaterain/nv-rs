@@ -65,11 +65,15 @@ fn unsigned_as_double(value: u64) -> f64 {
 /// stack) replaces the smallest so far, starting from 1000000.0, only when it is smaller (a
 /// NaN never is). The result is that smallest ratio times the performance frequency now in the
 /// cached word, converted to 64 bits by `00ec62f6` and stored there.
-pub fn hk_windows_system_clock_get_ticks_per_second(e: &mut Engine, this: Ptr) {
+///
+/// Answers the cached word in `EDX:EAX` on both paths: the exe loads it into `EAX`/`EDX` first
+/// and leaves them on the early return, and the measured rate is the `00ec62f6` result it stores
+/// (`getTicksPerSecond` answers an `hkUint64`).
+pub fn hk_windows_system_clock_get_ticks_per_second(e: &mut Engine, this: Ptr) -> u64 {
     let low = e.mem.u32(CACHED_TICKS_PER_SECOND);
     let high = e.mem.u32(CACHED_TICKS_PER_SECOND + 4);
     if low | high != 0 {
-        return;
+        return u64::from(high) << 32 | u64::from(low);
     }
     let mut smallest = e.mem.f64(INITIAL_RATIO);
     // The exe's frame (`AND ESP,0xfffffff8`, `SUB ESP,0x48`, four pushes): 0x58 bytes from an
@@ -105,6 +109,7 @@ pub fn hk_windows_system_clock_get_ticks_per_second(e: &mut Engine, this: Ptr) {
     let rate = e.call(FLOAT_TO_INT64, &args![product]);
     e.mem.set_u32(CACHED_TICKS_PER_SECOND, rate.eax);
     e.mem.set_u32(CACHED_TICKS_PER_SECOND + 4, rate.edx);
+    u64::from(rate.edx) << 32 | u64::from(rate.eax)
 }
 
 /// This unit's translated functions, by exe address.
@@ -113,7 +118,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00dd8e00, hk_windows_system_clock_get_tick_counter(Ptr) -> u64),
         entry!(
             0x00dd8e20,
-            hk_windows_system_clock_get_ticks_per_second(Ptr)
+            hk_windows_system_clock_get_ticks_per_second(Ptr) -> u64
         ),
     ]
 }
@@ -254,6 +259,23 @@ mod tests {
         let (mut e, clock, _) = world(counters, counts, 3);
         e.call(0x00dd_8e20, &args![clock]);
         assert_eq!(cached(&e), 3_000_000);
+    }
+
+    #[test]
+    fn the_rate_is_answered_measured_or_cached() {
+        let (counters, counts) = measurements(
+            [10_000_000, 0, 10_000_000, 0, 0, 0, 0, 0, 0, 0],
+            [1, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+        );
+        let (mut e, clock, _) = world(counters, counts, 3);
+        assert_eq!(e.call(0x00dd_8e20, &args![clock]).u64(), 3_000_000);
+        // The second call finds the cached word and answers it unchanged.
+        e.mem.set_u32(CACHED_TICKS_PER_SECOND, 0x89ab_cdef);
+        e.mem.set_u32(CACHED_TICKS_PER_SECOND + 4, 0x0123_4567);
+        assert_eq!(
+            e.call(0x00dd_8e20, &args![clock]).u64(),
+            0x0123_4567_89ab_cdef
+        );
     }
 
     #[test]
