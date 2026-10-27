@@ -343,7 +343,11 @@ pub fn fn_00dccf40(e: &mut Engine, this: u32, source: u32) {
 /// index) * 2`), the byte at `[this + 0x3c]` (`+0x16`), a zero byte (`+0x17`) and a zero vector
 /// (`+0x50`). When `result` is 0 the code still stores the three vertices (at addresses 0x20,
 /// 0x30, 0x40), which faults; that is translated as it is.
-pub fn fn_00dccf60(e: &mut Engine, this: u32, key: u32, result: u32) {
+/// Answers the shape (`hkpShapeContainer::getChildShape` returns `const hkpShape*` in the Xbox
+/// PDB): `EAX` is `result`, or 0 (`XOR EAX,EAX` at 00dcd123) when `result` is 0, at the RET
+/// 00dcd137. hkpShapeCollection::getAabbImpl reads the child through it (`MOV EDX,[EAX]` at
+/// 00d21657 after the container's slot +0x14 call at 00d21652).
+pub fn fn_00dccf60(e: &mut Engine, this: u32, key: u32, result: u32) -> u32 {
     let bits = e.mem.u32(this + 0x20);
     let triangle = triangle_in_subpart(key, bits);
     let subpart_index = subpart_of(key, bits);
@@ -434,6 +438,7 @@ pub fn fn_00dccf60(e: &mut Engine, this: u32, key: u32, result: u32) {
             );
         }
     }
+    target
 }
 
 // Translated from 00dccae0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -468,7 +473,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00dccd50, fn_00dccd50(u32, u32, u32, u32)),
         entry!(0x00dccdd0, fn_00dccdd0(u32, u32, f32, u32)),
         entry!(0x00dccf40, fn_00dccf40(u32, u32)),
-        entry!(0x00dccf60, fn_00dccf60(u32, u32, u32)),
+        entry!(0x00dccf60, fn_00dccf60(u32, u32, u32) -> u32),
         entry!(0x00dccae0, fn_00dccae0(Ptr, u32)),
         entry!(0x00dccb10, fn_00dccb10(Ptr) -> u32),
         entry!(0x00dccb20, fn_00dccb20(u32)),
@@ -791,6 +796,18 @@ mod tests {
         }
         e.call(0x00dc_cf60, &args![this, key, result]);
         (e, result)
+    }
+
+    #[test]
+    fn the_child_shape_answers_the_buffer() {
+        let mut e = engine();
+        let (this, _) = triangle_mesh(&mut e, true);
+        let result = e.mem.alloc(0x60);
+        // EAX is the buffer at the RET (00dcd137); 00d21657 reads the child through it.
+        assert_eq!(
+            e.call(0x00dc_cf60, &args![this, 1u32, result]).u32(),
+            result
+        );
     }
 
     #[test]
