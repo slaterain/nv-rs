@@ -8751,7 +8751,9 @@ fn offset_prism_points(e: &mut Engine, triangle: u32, points: u32) {
 pub fn mesh_create_offset(e: &mut Engine, this: Ptr, offset: f32, iterations: i32) -> Ptr {
     let clone = mesh_clone(e, this);
     let c = clone.addr();
-    e.with_stack(0x140, |e, frame| {
+    // The tree 00d9c110 builds at +0xd0 is 0x80 bytes (its last vector at +0x70), so the frame
+    // runs to +0x150 (the exe's tree at ESP+0xd0 reaches the top of its `SUB ESP,0x144` block).
+    e.with_stack(0x150, |e, frame| {
         let s = frame.addr();
         let triangles = s + 0x14;
         let boxes = s + 0x20;

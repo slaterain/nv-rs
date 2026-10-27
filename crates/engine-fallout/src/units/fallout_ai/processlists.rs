@@ -4524,7 +4524,8 @@ pub fn fn_009746c0(e: &mut Engine, this: Ptr<ProcessLists>, delta: f32) {
     if first_count.wrapping_add(second_count) == 0 {
         return;
     }
-    e.with_stack(0x10, |e, array| {
+    // The scrap array is 0x14 bytes (00978c50 sets its scrap heap at +0x10; EBP-0x24 in the exe).
+    e.with_stack(0x14, |e, array| {
         e.call(0x0097_8c50, &args![array.addr()]);
         for (list, in_first) in [(first_list, 1u8), (second_list, 0u8)] {
             let mut node = list;
