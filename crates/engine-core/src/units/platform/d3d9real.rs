@@ -128,7 +128,145 @@ extern "system" fn window_procedure(
     if message == WM_CLOSE {
         return LRESULT(0);
     }
+    match message {
+        WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP | WM_MOUSEMOVE | WM_LBUTTONDOWN
+        | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MBUTTONDOWN | WM_MBUTTONUP
+        | WM_XBUTTONDOWN | WM_XBUTTONUP | WM_MOUSEWHEEL => window_input(window, message, wparam, lparam),
+        // Losing the focus lets go of everything this window held.
+        WM_ACTIVATE if wparam.0 & 0xffff == 0 => release_input(),
+        WM_KILLFOCUS => release_input(),
+        _ => {}
+    }
+    // Alt and F10 are the game's keys: they do not open the window menu (Alt+F4 still closes
+    // nothing, as above).
+    if message == WM_SYSKEYDOWN || message == WM_SYSKEYUP {
+        return LRESULT(0);
+    }
     unsafe { DefWindowProcA(window, message, wparam, lparam) }
+}
+
+// The real window as an input source (ADR-0008): while it has the focus, its keyboard and mouse
+// (from the window's own messages) are held here; the host merges them into the
+// game's DirectInput devices at each frame ([`take_input`]).
+
+/// What the real window's keyboard and mouse did since the last frame.
+#[derive(Debug, Clone, Copy)]
+pub struct Input {
+    /// The keys held, by DirectInput key code (the scan code, 0x80 added for extended keys).
+    pub keys: [bool; 256],
+    /// The mouse's relative motion and wheel (120 a notch) since the last frame.
+    pub motion: [i32; 3],
+    /// The buttons held, in DirectInput's order (left, right, middle, X1, X2).
+    pub buttons: [bool; 8],
+}
+
+impl Default for Input {
+    fn default() -> Self {
+        Input {
+            keys: [false; 256],
+            motion: [0; 3],
+            buttons: [false; 8],
+        }
+    }
+}
+
+fn input() -> &'static std::sync::Mutex<Input> {
+    static INPUT: std::sync::OnceLock<std::sync::Mutex<Input>> = std::sync::OnceLock::new();
+    INPUT.get_or_init(|| std::sync::Mutex::new(Input::default()))
+}
+
+fn release_input() {
+    if let Ok(mut i) = input().lock() {
+        i.keys = [false; 256];
+        i.buttons = [false; 8];
+    }
+    if let Ok(mut last) = LAST_MOUSE.lock() {
+        *last = None;
+    }
+}
+
+/// The keys the real window holds, by DirectInput key code.
+pub fn held_keys() -> [bool; 256] {
+    input().lock().map(|i| i.keys).unwrap_or([false; 256])
+}
+
+/// The real window's input for this frame: the keys and buttons held, the motion since the last
+/// call (taken: it starts again from 0).
+pub fn take_input() -> Input {
+    match input().lock() {
+        Ok(mut i) => {
+            let now = *i;
+            i.motion = [0; 3];
+            now
+        }
+        Err(_) => Input::default(),
+    }
+}
+
+/// The DirectInput key code of a key message (`lParam`: scan code in bits 16..23, the extended
+/// bit 24); `None` for the fake shifts Windows sends around some extended keys.
+fn dik(lparam: isize) -> Option<u8> {
+    let scan = ((lparam >> 16) & 0xff) as u8;
+    let extended = lparam & (1 << 24) != 0;
+    if scan == 0 {
+        return None;
+    }
+    if extended {
+        if scan == 0x2a || scan == 0x36 {
+            return None;
+        }
+        // NumLock reports as extended 0x45 (DIK_NUMLOCK); others get 0x80 (DIK_RCONTROL,
+        // DIK_RMENU, the arrows, DIK_NUMPADENTER, DIK_DIVIDE, ...).
+        if scan == 0x45 {
+            return Some(0x45);
+        }
+        return Some((scan & 0x7f) | 0x80);
+    }
+    // Pause reports as 0x45 without the extended bit (DIK_PAUSE 0xC5).
+    if scan == 0x45 {
+        return Some(0xc5);
+    }
+    Some(scan & 0x7f)
+}
+
+/// The last mouse position (client coordinates of the window under it), for the motion.
+static LAST_MOUSE: std::sync::Mutex<Option<(i32, i32, isize)>> = std::sync::Mutex::new(None);
+
+/// A message of the real window that is input.
+fn window_input(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) {
+    let Ok(mut i) = input().lock() else { return };
+    let button = |i: &mut Input, b: usize, down: bool| i.buttons[b] = down;
+    match message {
+        WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP => {
+            if let Some(code) = dik(lparam.0) {
+                i.keys[code as usize] = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
+            }
+        }
+        WM_MOUSEMOVE => {
+            let (x, y) = (
+                (lparam.0 & 0xffff) as i16 as i32,
+                ((lparam.0 >> 16) & 0xffff) as i16 as i32,
+            );
+            if let Ok(mut last) = LAST_MOUSE.lock() {
+                if let Some((lx, ly, w)) = *last {
+                    if w == window.0 as isize {
+                        i.motion[0] += x - lx;
+                        i.motion[1] += y - ly;
+                    }
+                }
+                *last = Some((x, y, window.0 as isize));
+            }
+        }
+        WM_LBUTTONDOWN | WM_LBUTTONUP => button(&mut i, 0, message == WM_LBUTTONDOWN),
+        WM_RBUTTONDOWN | WM_RBUTTONUP => button(&mut i, 1, message == WM_RBUTTONDOWN),
+        WM_MBUTTONDOWN | WM_MBUTTONUP => button(&mut i, 2, message == WM_MBUTTONDOWN),
+        WM_XBUTTONDOWN | WM_XBUTTONUP => {
+            let b = if (wparam.0 >> 16) & 0xffff == 2 { 4 } else { 3 };
+            button(&mut i, b, message == WM_XBUTTONDOWN);
+        }
+        WM_MOUSEWHEEL => i.motion[2] += ((wparam.0 >> 16) & 0xffff) as i16 as i32,
+        _ => {}
+    }
 }
 
 /// A window to make on the window thread: title, style, extended style, rectangle, the real
@@ -1122,4 +1260,37 @@ pub fn set_software_vertex_processing(e: &mut Engine, this: u32, software: u32, 
     let Some(d) = device(e, this) else { return };
     let r = unsafe { d.SetSoftwareVertexProcessing(BOOL(software as i32)) };
     answer(e, "SetSoftwareVertexProcessing", model, hr(r));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A key message's `lParam` with this scan code (extended or not).
+    fn key(scan: isize, extended: bool) -> isize {
+        (scan << 16) | if extended { 1 << 24 } else { 0 }
+    }
+
+    #[test]
+    fn key_messages_give_directinput_key_codes() {
+        // W, Escape, left Ctrl and Alt: the scan code.
+        assert_eq!(dik(key(0x11, false)), Some(0x11));
+        assert_eq!(dik(key(0x01, false)), Some(0x01));
+        assert_eq!(dik(key(0x1d, false)), Some(0x1d));
+        assert_eq!(dik(key(0x38, false)), Some(0x38));
+        // Right Ctrl and Alt, the arrows, numpad Enter: extended, 0x80 added.
+        assert_eq!(dik(key(0x1d, true)), Some(0x9d));
+        assert_eq!(dik(key(0x38, true)), Some(0xb8));
+        assert_eq!(dik(key(0x48, true)), Some(0xc8));
+        assert_eq!(dik(key(0x50, true)), Some(0xd0));
+        assert_eq!(dik(key(0x1c, true)), Some(0x9c));
+        // The numpad's own keys are not extended (DIK_NUMPAD8 0x48).
+        assert_eq!(dik(key(0x48, false)), Some(0x48));
+        // NumLock (extended 0x45) and Pause (plain 0x45).
+        assert_eq!(dik(key(0x45, true)), Some(0x45));
+        assert_eq!(dik(key(0x45, false)), Some(0xc5));
+        // The fake shifts around extended keys are dropped.
+        assert_eq!(dik(key(0x2a, true)), None);
+        assert_eq!(dik(key(0, false)), None);
+    }
 }

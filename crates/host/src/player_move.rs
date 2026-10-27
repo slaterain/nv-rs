@@ -1260,11 +1260,16 @@ impl crate::Host {
                 .collect()
         });
         let frame = self.movement.main_frames;
+        // The real game window's keyboard (`NV_D3D9=real`, Windows) holds keys too.
+        #[cfg(windows)]
+        let window_keys = engine::units::platform::d3d9real::held_keys();
+        #[cfg(not(windows))]
+        let window_keys = [false; 256];
         for code in 0..=255u8 {
             let scripted = script
                 .iter()
                 .any(|&(at, c, hold)| c == code && frame >= at && frame < at + hold);
-            let held = down.contains(&code) || scripted;
+            let held = down.contains(&code) || scripted || window_keys[code as usize];
             engine::units::platform::dinput::key(&mut self.engine, code, held);
         }
     }
@@ -1272,6 +1277,19 @@ impl crate::Host {
     /// The viewer's mouse for the game's DirectInput mouse: motion since the last frame
     /// (`dinput::mouse_move`) and the buttons down (`dinput::mouse_button`).
     pub fn mouse(&mut self, motion: [i32; 3], buttons: [bool; 8]) {
+        // The real game window's mouse (`NV_D3D9=real`, Windows) moves and clicks too.
+        #[cfg(windows)]
+        let (motion, buttons) = {
+            let w = engine::units::platform::d3d9real::take_input();
+            let mut b = buttons;
+            for (held, window) in b.iter_mut().zip(w.buttons) {
+                *held |= window;
+            }
+            (
+                [motion[0] + w.motion[0], motion[1] + w.motion[1], motion[2] + w.motion[2]],
+                b,
+            )
+        };
         // A scripted run (`NV_MOVE_KEYS`) drives the menus with keys; the real mouse moving over
         // the window would switch the game's interface to its mouse path and the keys would miss.
         let (motion, buttons) = if std::env::var_os("NV_MOVE_KEYS").is_some() {

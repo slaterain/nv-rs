@@ -35,8 +35,12 @@ Design (`units/platform/d3d9real.rs`):
    (not pumped from the frame driver, as first planned: the game's threads
    are OS threads of the thread host, so a window owned by one of them would
    only get messages while that thread runs). It is shown without taking the
-   focus, so the viewer's window keeps the keyboard and mouse the game reads
-   through DirectInput. Closing it does not end the run. The modelled window
+   focus; a click gives it the focus like any window. While it has the
+   focus its keyboard (scan codes as DirectInput key codes, extended keys
+   with 0x80) and mouse (motion between its mouse messages, buttons, wheel)
+   are an input source of the game's DirectInput devices, merged at each
+   frame with the viewer's window and the scripted keys (a key is down when
+   any source holds it). Closing it does not end the run. The modelled window
    records are unchanged.
 2. **The device.** `Direct3DCreate9` makes the real `IDirect3D9`;
    `CreateDevice` makes the real device on the real window with the present
