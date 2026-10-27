@@ -356,6 +356,248 @@ fn vtable(e: &mut Engine, base: u32, slots: usize) -> u32 {
     table
 }
 
+/// A word of a call's arguments, as the real side (`super::d3d9real`) takes it.
+pub(super) trait Word: Copy {
+    fn word(self) -> u32;
+}
+impl Word for u32 {
+    fn word(self) -> u32 {
+        self
+    }
+}
+impl Word for Ptr {
+    fn word(self) -> u32 {
+        self.addr()
+    }
+}
+
+/// The slots that change what is drawn: the model's answer, and with `NV_D3D9=real` the same
+/// call made on the real device (ADR-0008, `super::d3d9real`), which gets the model's answer
+/// to compare.
+macro_rules! forwarded {
+    ($($vis:vis fn $name:ident = $model:ident($($a:ident: $t:ty),*) => $real:ident;)*) => {$(
+        $vis fn $name(e: &mut Engine, this: Ptr, $($a: $t),*) -> u32 {
+            let model = $model(e, this, $($a),*);
+            #[cfg(windows)]
+            super::d3d9real::$real(e, this.addr(), $(Word::word($a),)* model);
+            model
+        }
+    )*};
+}
+pub(super) use forwarded;
+
+forwarded! {
+    fn fwd_set_render_target = set_render_target(index: u32, surface: u32) => set_render_target;
+    fn fwd_set_depth_stencil_surface = set_depth_stencil_surface(surface: u32)
+        => set_depth_stencil_surface;
+    fn fwd_set_viewport = set_viewport(viewport: Ptr) => set_viewport;
+    fn fwd_set_transform = set_transform(state: u32, matrix: Ptr) => set_transform;
+    fn fwd_set_scissor_rect = set_scissor_rect(rect: Ptr) => set_scissor_rect;
+    fn fwd_set_clip_plane = set_clip_plane(index: u32, plane: Ptr) => set_clip_plane;
+    fn fwd_set_render_state = set_render_state(state: u32, value: u32) => set_render_state;
+    fn fwd_set_texture_stage_state = set_texture_stage_state(stage: u32, kind: u32, value: u32)
+        => set_texture_stage_state;
+    fn fwd_set_sampler_state = set_sampler_state(sampler: u32, kind: u32, value: u32)
+        => set_sampler_state;
+    fn fwd_set_texture = set_texture(sampler: u32, texture: u32) => set_texture;
+    fn fwd_set_material = set_material(material: Ptr) => set_material;
+    fn fwd_set_light = set_light(index: u32, light: Ptr) => set_light;
+    fn fwd_light_enable = light_enable(index: u32, enable: u32) => light_enable;
+    fn fwd_set_software_vertex_processing = set_software_vertex_processing(software: u32)
+        => set_software_vertex_processing;
+    fn fwd_update_texture = update_texture(source: u32, destination: u32) => update_texture;
+    fn fwd_stretch_rect = stretch_rect(
+        source: u32, source_rect: u32, destination: u32, destination_rect: u32, filter: u32
+    ) => stretch_rect;
+}
+
+/// `CreateTexture`, then (`NV_D3D9=real`) the real texture of the same arguments.
+#[allow(clippy::too_many_arguments)]
+fn fwd_create_texture(
+    e: &mut Engine,
+    this: Ptr,
+    width: u32,
+    height: u32,
+    levels: u32,
+    usage: u32,
+    format: u32,
+    pool: u32,
+    out: Ptr,
+    shared: u32,
+) -> u32 {
+    let model = create_texture(e, this, width, height, levels, usage, format, pool, out, shared);
+    #[cfg(windows)]
+    if model == D3D_OK {
+        let texture = e.mem.u32(out.addr());
+        let surfaces = e.kernel.graphics.device_objects.textures[&texture]
+            .levels
+            .clone();
+        super::d3d9real::texture_created(
+            e,
+            this.addr(),
+            texture,
+            &surfaces,
+            width,
+            height,
+            usage,
+            format,
+            pool,
+        );
+    }
+    model
+}
+
+/// `CreateCubeTexture`, then (`NV_D3D9=real`) the real cube texture of the same arguments.
+#[allow(clippy::too_many_arguments)]
+fn fwd_create_cube_texture(
+    e: &mut Engine,
+    this: Ptr,
+    edge: u32,
+    levels: u32,
+    usage: u32,
+    format: u32,
+    pool: u32,
+    out: Ptr,
+    shared: u32,
+) -> u32 {
+    let model = create_cube_texture(e, this, edge, levels, usage, format, pool, out, shared);
+    #[cfg(windows)]
+    if model == D3D_OK {
+        let texture = e.mem.u32(out.addr());
+        let surfaces = e.kernel.graphics.device_objects.textures[&texture]
+            .levels
+            .clone();
+        super::d3d9real::cube_created(
+            e,
+            this.addr(),
+            texture,
+            &surfaces,
+            edge,
+            usage,
+            format,
+            pool,
+        );
+    }
+    model
+}
+
+/// `CreateRenderTarget` / `CreateDepthStencilSurface`, then (`NV_D3D9=real`) the real surface.
+#[allow(clippy::too_many_arguments)]
+fn fwd_create_surface(
+    e: &mut Engine,
+    this: Ptr,
+    depth: bool,
+    width: u32,
+    height: u32,
+    format: u32,
+    multisample: u32,
+    quality: u32,
+    flag: u32,
+    out: Ptr,
+    shared: u32,
+) -> u32 {
+    let model = if depth {
+        create_depth_stencil_surface(
+            e,
+            this,
+            width,
+            height,
+            format,
+            multisample,
+            quality,
+            flag,
+            out,
+            shared,
+        )
+    } else {
+        create_render_target(
+            e,
+            this,
+            width,
+            height,
+            format,
+            multisample,
+            quality,
+            flag,
+            out,
+            shared,
+        )
+    };
+    #[cfg(windows)]
+    if model == D3D_OK {
+        let surface = e.mem.u32(out.addr());
+        super::d3d9real::surface_created(
+            e,
+            this.addr(),
+            surface,
+            depth,
+            width,
+            height,
+            format,
+            multisample,
+            quality,
+            flag,
+        );
+    }
+    model
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fwd_create_render_target(
+    e: &mut Engine,
+    this: Ptr,
+    width: u32,
+    height: u32,
+    format: u32,
+    multisample: u32,
+    quality: u32,
+    lockable: u32,
+    out: Ptr,
+    shared: u32,
+) -> u32 {
+    fwd_create_surface(
+        e,
+        this,
+        false,
+        width,
+        height,
+        format,
+        multisample,
+        quality,
+        lockable,
+        out,
+        shared,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fwd_create_depth_stencil_surface(
+    e: &mut Engine,
+    this: Ptr,
+    width: u32,
+    height: u32,
+    format: u32,
+    multisample: u32,
+    quality: u32,
+    discard: u32,
+    out: Ptr,
+    shared: u32,
+) -> u32 {
+    fwd_create_surface(
+        e,
+        this,
+        true,
+        width,
+        height,
+        format,
+        multisample,
+        quality,
+        discard,
+        out,
+        shared,
+    )
+}
+
 fn register_code(e: &mut Engine) {
     let device: [(u32, crate::AbiFn); 42] = [
         (
@@ -380,23 +622,23 @@ fn register_code(e: &mut Engine) {
         ),
         (
             23,
-            crate::entry!(0, create_texture(Ptr, u32, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, fwd_create_texture(Ptr, u32, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
         ),
         (
             25,
-            crate::entry!(0, create_cube_texture(Ptr, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, fwd_create_cube_texture(Ptr, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
         ),
         (
             28,
-            crate::entry!(0, create_render_target(Ptr, u32, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, fwd_create_render_target(Ptr, u32, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
         ),
         (
             29,
-            crate::entry!(0, create_depth_stencil_surface(Ptr, u32, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, fwd_create_depth_stencil_surface(Ptr, u32, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
         ),
         (
             37,
-            crate::entry!(0, set_render_target(Ptr, u32, u32) -> u32).1,
+            crate::entry!(0, fwd_set_render_target(Ptr, u32, u32) -> u32).1,
         ),
         (
             38,
@@ -404,13 +646,13 @@ fn register_code(e: &mut Engine) {
         ),
         (
             39,
-            crate::entry!(0, set_depth_stencil_surface(Ptr, u32) -> u32).1,
+            crate::entry!(0, fwd_set_depth_stencil_surface(Ptr, u32) -> u32).1,
         ),
         (
             40,
             crate::entry!(0, get_depth_stencil_surface(Ptr, Ptr) -> u32).1,
         ),
-        (47, crate::entry!(0, set_viewport(Ptr, Ptr) -> u32).1),
+        (47, crate::entry!(0, fwd_set_viewport(Ptr, Ptr) -> u32).1),
         (3, crate::entry!(0, test_cooperative_level(Ptr) -> u32).1),
         (
             17,
@@ -422,28 +664,28 @@ fn register_code(e: &mut Engine) {
             43,
             crate::entry!(0, clear(Ptr, u32, Ptr, u32, u32, u32, u32) -> u32).1,
         ),
-        (44, crate::entry!(0, set_transform(Ptr, u32, Ptr) -> u32).1),
+        (44, crate::entry!(0, fwd_set_transform(Ptr, u32, Ptr) -> u32).1),
         (45, crate::entry!(0, get_transform(Ptr, u32, Ptr) -> u32).1),
-        (55, crate::entry!(0, set_clip_plane(Ptr, u32, Ptr) -> u32).1),
-        (75, crate::entry!(0, set_scissor_rect(Ptr, Ptr) -> u32).1),
+        (55, crate::entry!(0, fwd_set_clip_plane(Ptr, u32, Ptr) -> u32).1),
+        (75, crate::entry!(0, fwd_set_scissor_rect(Ptr, Ptr) -> u32).1),
         (76, crate::entry!(0, get_scissor_rect(Ptr, Ptr) -> u32).1),
         (
             57,
-            crate::entry!(0, set_render_state(Ptr, u32, u32) -> u32).1,
+            crate::entry!(0, fwd_set_render_state(Ptr, u32, u32) -> u32).1,
         ),
         (
             58,
             crate::entry!(0, get_render_state(Ptr, u32, Ptr) -> u32).1,
         ),
         (64, crate::entry!(0, get_texture(Ptr, u32, Ptr) -> u32).1),
-        (65, crate::entry!(0, set_texture(Ptr, u32, u32) -> u32).1),
+        (65, crate::entry!(0, fwd_set_texture(Ptr, u32, u32) -> u32).1),
         (
             66,
             crate::entry!(0, get_texture_stage_state(Ptr, u32, u32, Ptr) -> u32).1,
         ),
         (
             67,
-            crate::entry!(0, set_texture_stage_state(Ptr, u32, u32, u32) -> u32).1,
+            crate::entry!(0, fwd_set_texture_stage_state(Ptr, u32, u32, u32) -> u32).1,
         ),
         (
             68,
@@ -451,23 +693,23 @@ fn register_code(e: &mut Engine) {
         ),
         (
             69,
-            crate::entry!(0, set_sampler_state(Ptr, u32, u32, u32) -> u32).1,
+            crate::entry!(0, fwd_set_sampler_state(Ptr, u32, u32, u32) -> u32).1,
         ),
         (48, crate::entry!(0, get_viewport(Ptr, Ptr) -> u32).1),
-        (49, crate::entry!(0, set_material(Ptr, Ptr) -> u32).1),
-        (51, crate::entry!(0, set_light(Ptr, u32, Ptr) -> u32).1),
-        (53, crate::entry!(0, light_enable(Ptr, u32, u32) -> u32).1),
+        (49, crate::entry!(0, fwd_set_material(Ptr, Ptr) -> u32).1),
+        (51, crate::entry!(0, fwd_set_light(Ptr, u32, Ptr) -> u32).1),
+        (53, crate::entry!(0, fwd_light_enable(Ptr, u32, u32) -> u32).1),
         (
             77,
-            crate::entry!(0, set_software_vertex_processing(Ptr, u32) -> u32).1,
+            crate::entry!(0, fwd_set_software_vertex_processing(Ptr, u32) -> u32).1,
         ),
         (
             31,
-            crate::entry!(0, update_texture(Ptr, u32, u32) -> u32).1,
+            crate::entry!(0, fwd_update_texture(Ptr, u32, u32) -> u32).1,
         ),
         (
             34,
-            crate::entry!(0, stretch_rect(Ptr, u32, u32, u32, u32, u32) -> u32).1,
+            crate::entry!(0, fwd_stretch_rect(Ptr, u32, u32, u32, u32, u32) -> u32).1,
         ),
     ];
     for (slot, f) in device {
@@ -489,9 +731,9 @@ fn register_code(e: &mut Engine) {
         ),
         (
             87,
-            crate::entry!(0, r::set_vertex_declaration(Ptr, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_vertex_declaration(Ptr, u32) -> u32).1,
         ),
-        (89, crate::entry!(0, r::set_fvf(Ptr, u32) -> u32).1),
+        (89, crate::entry!(0, r::fwd_set_fvf(Ptr, u32) -> u32).1),
         (90, crate::entry!(0, r::get_fvf(Ptr, Ptr) -> u32).1),
         (
             91,
@@ -499,7 +741,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             92,
-            crate::entry!(0, r::set_vertex_shader(Ptr, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_vertex_shader(Ptr, u32) -> u32).1,
         ),
         (
             93,
@@ -507,7 +749,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             94,
-            crate::entry!(0, r::set_vertex_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_vertex_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
         ),
         (
             95,
@@ -515,7 +757,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             96,
-            crate::entry!(0, r::set_vertex_constant_i(Ptr, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_vertex_constant_i(Ptr, u32, Ptr, u32) -> u32).1,
         ),
         (
             97,
@@ -523,7 +765,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             98,
-            crate::entry!(0, r::set_vertex_constant_b(Ptr, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_vertex_constant_b(Ptr, u32, Ptr, u32) -> u32).1,
         ),
         (
             99,
@@ -531,7 +773,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             100,
-            crate::entry!(0, r::set_stream_source(Ptr, u32, u32, u32, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_stream_source(Ptr, u32, u32, u32, u32) -> u32).1,
         ),
         (
             101,
@@ -539,21 +781,21 @@ fn register_code(e: &mut Engine) {
         ),
         (
             81,
-            crate::entry!(0, r::draw_primitive(Ptr, u32, u32, u32) -> u32).1,
+            crate::entry!(0, r::fwd_draw_primitive(Ptr, u32, u32, u32) -> u32).1,
         ),
         (
             82,
-            crate::entry!(0, r::draw_indexed_primitive(Ptr, u32, u32, u32, u32, u32, u32) -> u32).1,
+            crate::entry!(0, r::fwd_draw_indexed_primitive(Ptr, u32, u32, u32, u32, u32, u32) -> u32).1,
         ),
         (
             83,
-            crate::entry!(0, r::draw_primitive_up(Ptr, u32, u32, u32, u32) -> u32).1,
+            crate::entry!(0, r::fwd_draw_primitive_up(Ptr, u32, u32, u32, u32) -> u32).1,
         ),
         (
             88,
             crate::entry!(0, r::get_vertex_declaration(Ptr, Ptr) -> u32).1,
         ),
-        (104, crate::entry!(0, r::set_indices(Ptr, u32) -> u32).1),
+        (104, crate::entry!(0, r::fwd_set_indices(Ptr, u32) -> u32).1),
         (105, crate::entry!(0, r::get_indices(Ptr, Ptr) -> u32).1),
         (
             106,
@@ -561,7 +803,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             107,
-            crate::entry!(0, r::set_pixel_shader(Ptr, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_pixel_shader(Ptr, u32) -> u32).1,
         ),
         (
             108,
@@ -569,7 +811,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             109,
-            crate::entry!(0, r::set_pixel_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_pixel_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
         ),
         (
             110,
@@ -577,7 +819,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             111,
-            crate::entry!(0, r::set_pixel_constant_i(Ptr, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_pixel_constant_i(Ptr, u32, Ptr, u32) -> u32).1,
         ),
         (
             112,
@@ -585,7 +827,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             113,
-            crate::entry!(0, r::set_pixel_constant_b(Ptr, u32, Ptr, u32) -> u32).1,
+            crate::entry!(0, r::fwd_set_pixel_constant_b(Ptr, u32, Ptr, u32) -> u32).1,
         ),
         (
             114,
@@ -885,6 +1127,13 @@ pub fn create_device(
         .devices
         .insert(object, device);
     crate::units::platform::direct3d_device_created(e, behavior);
+    #[cfg(windows)]
+    {
+        let d = &e.kernel.graphics.device_objects.devices[&object];
+        let (present, back_buffers, depth) =
+            (d.present.clone(), d.back_buffers.clone(), d.depth_stencil);
+        super::d3d9real::device_created(e, object, focus, behavior, &present, &back_buffers, depth);
+    }
     e.mem.set_u32(out.addr(), object);
     D3D_OK
 }
@@ -965,8 +1214,12 @@ pub(super) fn device_release(e: &mut Engine, this: Ptr) -> u32 {
             .collect();
         for surface in implicit {
             e.kernel.graphics.device_objects.surfaces.remove(&surface);
+            #[cfg(windows)]
+            super::d3d9real::forget(e, surface);
             e.mem.free(surface);
         }
+        #[cfg(windows)]
+        super::d3d9real::forget(e, this.addr());
         e.vcall(d.direct3d, 4 * 2, &[]);
         e.mem.free(this.addr());
     }
@@ -1230,6 +1483,8 @@ fn surface_release(e: &mut Engine, this: Ptr) -> u32 {
                 e.mem.free(s.bits);
             }
         }
+        #[cfg(windows)]
+        super::d3d9real::forget(e, this.addr());
         e.mem.free(this.addr());
         // A surface the program made (CreateRenderTarget, CreateDepthStencilSurface) held its
         // device.
@@ -1365,22 +1620,34 @@ fn max_user_clip_planes(e: &mut Engine, this: Ptr) -> u32 {
 
 /// `BeginScene()`: starts a scene; inside one already, `D3DERR_INVALIDCALL`.
 fn begin_scene(e: &mut Engine, this: Ptr) -> u32 {
-    let d = device(e, this);
-    if d.in_scene {
-        return D3DERR_INVALIDCALL;
-    }
-    d.in_scene = true;
-    D3D_OK
+    let model = {
+        let d = device(e, this);
+        if d.in_scene {
+            D3DERR_INVALIDCALL
+        } else {
+            d.in_scene = true;
+            D3D_OK
+        }
+    };
+    #[cfg(windows)]
+    super::d3d9real::begin_scene(e, this.addr(), model);
+    model
 }
 
 /// `EndScene()`: ends the scene; outside one, `D3DERR_INVALIDCALL`.
 fn end_scene(e: &mut Engine, this: Ptr) -> u32 {
-    let d = device(e, this);
-    if !d.in_scene {
-        return D3DERR_INVALIDCALL;
-    }
-    d.in_scene = false;
-    D3D_OK
+    let model = {
+        let d = device(e, this);
+        if !d.in_scene {
+            D3DERR_INVALIDCALL
+        } else {
+            d.in_scene = false;
+            D3D_OK
+        }
+    };
+    #[cfg(windows)]
+    super::d3d9real::end_scene(e, this.addr(), model);
+    model
 }
 
 /// `D3DCLEAR_TARGET`, `D3DCLEAR_ZBUFFER`, `D3DCLEAR_STENCIL`.
@@ -1400,10 +1667,28 @@ fn clear(
     count: u32,
     rects: Ptr,
     flags: u32,
-    _colour: u32,
-    _z: u32,
-    _stencil: u32,
+    colour: u32,
+    z: u32,
+    stencil: u32,
 ) -> u32 {
+    let model = clear_answer(e, this, count, rects, flags);
+    #[cfg(windows)]
+    super::d3d9real::clear(
+        e,
+        this.addr(),
+        count,
+        rects.addr(),
+        flags,
+        colour,
+        z,
+        stencil,
+        model,
+    );
+    let _ = (colour, z, stencil);
+    model
+}
+
+fn clear_answer(e: &mut Engine, this: Ptr, count: u32, rects: Ptr, flags: u32) -> u32 {
     if (count == 0) != rects.is_null() {
         return D3DERR_INVALIDCALL;
     }
@@ -1421,11 +1706,16 @@ fn clear(
 /// `Present(source, dest, window, dirty region)`: shows the back buffer; nothing is shown yet
 /// (the viewer draws), so it answers `D3D_OK` outside a scene and `D3DERR_INVALIDCALL` inside
 /// one.
-fn present(e: &mut Engine, this: Ptr, _source: u32, _dest: u32, _window: u32, _dirty: u32) -> u32 {
-    if device(e, this).in_scene {
-        return D3DERR_INVALIDCALL;
-    }
-    D3D_OK
+fn present(e: &mut Engine, this: Ptr, source: u32, dest: u32, window: u32, dirty: u32) -> u32 {
+    let model = if device(e, this).in_scene {
+        D3DERR_INVALIDCALL
+    } else {
+        D3D_OK
+    };
+    #[cfg(windows)]
+    super::d3d9real::present(e, this.addr(), source, dest, window, dirty, model);
+    let _ = (source, dest, window, dirty);
+    model
 }
 
 /// `TestCooperativeLevel()`: the device is never lost here: `D3D_OK`.
@@ -2148,8 +2438,12 @@ fn texture_release(e: &mut Engine, this: Ptr) -> u32 {
                 .remove(&level)
                 .expect("the level");
             e.mem.free(s.bits);
+            #[cfg(windows)]
+            super::d3d9real::forget(e, level);
             e.mem.free(level);
         }
+        #[cfg(windows)]
+        super::d3d9real::forget(e, this.addr());
         e.mem.free(this.addr());
         device_release(e, Ptr::new(t.device));
     }
@@ -2382,6 +2676,12 @@ fn surface_unlock_rect(e: &mut Engine, this: Ptr) -> u32 {
         return D3DERR_INVALIDCALL;
     }
     s.locked = false;
+    #[cfg(windows)]
+    {
+        let (bits, pitch, desc) = (s.bits, s.pitch, s.desc);
+        let (_, size) = level_layout(desc[0], desc[6], desc[7]);
+        super::d3d9real::surface_unlocked(e, this.addr(), bits, pitch, pitch, size / pitch.max(1));
+    }
     D3D_OK
 }
 

@@ -8,6 +8,8 @@ pub mod bink;
 pub mod d3d9;
 pub mod d3d9device;
 pub mod d3d9resource;
+#[cfg(windows)]
+pub mod d3d9real;
 pub mod d3dx;
 pub mod dinput;
 pub mod dshow;

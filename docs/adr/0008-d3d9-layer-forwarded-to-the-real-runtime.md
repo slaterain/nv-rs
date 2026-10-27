@@ -1,0 +1,90 @@
+# ADR-0008: On Windows, the Direct3D 9 layer is forwarded to the real d3d9.dll
+
+- **Status:** Accepted by the maintainer, 2026-10-27.
+- **Date:** 2026-10-27
+- **Extends:** [ADR-0007](0007-renderer-translated-on-own-d3d9-layer.md) (the wgpu layer
+  stays the plan for every platform; this is how the game's own rendering is seen now).
+
+## Context
+
+The game's renderer runs translated on the platform's own Direct3D 9 layer
+(`crates/engine-core/src/units/platform/d3d9*.rs`). That layer is a model: it
+answers every call as Direct3D 9 does on the player's machine (the machine
+table of `scripts/d3d9-capture`), keeps the resources in engine memory, and
+draws nothing. The game's main menu, intro movie and world were only visible
+through the Bevy viewer's own redraw.
+
+The wgpu layer of ADR-0007 and its shader converter are a large piece of
+work. Until it exists, nothing shows whether the translated renderer draws
+the right thing.
+
+## Decision
+
+On Windows, with `NV_D3D9=real`, the platform layer also makes every call
+that changes what is drawn on the real `d3d9.dll` of the player's system, in
+a real window. The game's code keeps calling the modelled objects; the model
+keeps answering. Forwarding to the real DLL is the platform itself: it is
+what `FalloutNV.exe` calls. Nothing about the game is invented.
+
+Design (`units/platform/d3d9real.rs`):
+
+1. **The window.** When the game creates its top-level window
+   (`CreateWindowExA`), a real Win32 window of the same title, styles and
+   rectangle is made, and `SetWindowPos` moves it with the modelled one. It
+   runs on a thread of its own that only creates it and pumps its messages
+   (not pumped from the frame driver, as first planned: the game's threads
+   are OS threads of the thread host, so a window owned by one of them would
+   only get messages while that thread runs). It is shown without taking the
+   focus, so the viewer's window keeps the keyboard and mouse the game reads
+   through DirectInput. Closing it does not end the run. The modelled window
+   records are unchanged.
+2. **The device.** `Direct3DCreate9` makes the real `IDirect3D9`;
+   `CreateDevice` makes the real device on the real window with the present
+   parameters as the model filled them in and the game's behaviour flags
+   plus `D3DCREATE_FPU_PRESERVE`. The game's x87 precision switch is already
+   modelled from the game's own flags
+   (`units::platform::direct3d_device_created`); the real runtime must not
+   change the host thread's floating-point state, which is not the game's.
+   `D3DCREATE_MULTITHREADED` is passed only when the game asks for it: the
+   thread host runs one game thread at a time, so the real device is never
+   used by two threads at once.
+3. **Resources.** Each modelled object holds its real counterpart (a map
+   from the modelled address to the real object; destroying the modelled
+   object releases the real one). Textures, cube textures, render targets,
+   depth surfaces, vertex and index buffers, shaders (the bytecode from
+   engine memory) and vertex declarations are made with the same arguments.
+   Contents are copied from engine memory when the game unlocks: a surface's
+   rows (texture levels included; the D3DX texture loader fills textures
+   through the same `LockRect`/`UnlockRect`), a buffer's locked range (with
+   `D3DLOCK_DISCARD`/`NOOVERWRITE` passed on for dynamic buffers).
+4. **State and draws.** Render, texture stage and sampler states, textures,
+   streams, indices, declarations, FVF, shaders and their constants,
+   transforms, viewport, scissor, clip planes, render targets, depth
+   surfaces, `Clear`, `BeginScene`/`EndScene`, the four draws and `Present`
+   are forwarded. `DrawPrimitiveUP` and `DrawIndexedPrimitiveUP` are added
+   to the model (documented semantics: stream 0, and for the indexed draw the
+   index buffer, are unset afterwards).
+5. **Answers.** The game always gets the model's answer (measured against
+   the same runtime). Where the real runtime answers differently the call is
+   printed once (`NV_D3D9=real: <call>: the model answers .., the real
+   runtime ..`), a list of what to measure next.
+6. **D3DX.** `D3DXCompileShader` and `D3DXGetShaderConstantTable` call the
+   player's own `d3dx9_38.dll` (loaded from the system, never copied into the
+   repository) with the source from engine memory, the results handed back
+   as modelled `ID3DXBuffer` / `ID3DXConstantTable` objects in engine memory.
+   Done when the runs reach them.
+7. **The switch.** `NV_D3D9=real` turns the forwarding on; unset (tests,
+   other platforms) the layer is exactly the model. The viewer's Bevy window
+   stays for now.
+
+## Consequences
+
+- The game's own main menu, movies and world can be seen drawn by the game's
+  own renderer through the real driver, and compared with the original
+  game's screenshots, before the wgpu layer exists.
+- Windows only. The wgpu layer (ADR-0007) remains the way to every other
+  platform, and the forwarding becomes the reference it is checked against.
+- A real-runtime answer that differs from the model's is a measurement gap
+  in the machine table, found by running, not a change of behaviour.
+- Calls the model does not provide yet still stop the run as before; each is
+  added to the model and forwarded together.
