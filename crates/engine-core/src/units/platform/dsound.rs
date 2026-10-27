@@ -25,9 +25,11 @@
 //! effects and settings the game asks for. Where an answer follows a rule (which buffer sizes
 //! and formats are refused, the ranges of volume, pan, frequency and the distortion's
 //! parameters), the layer answers by the rule and checks the rule against every captured line
-//! when it loads the table: a table that disagrees stops the run. A secondary buffer of a kind
-//! the capture didn't ask (flags, 3D algorithm, format) is not provided. The state of buffers,
-//! the listener and the effects is this layer's own.
+//! when it loads the table: a table that disagrees stops the run. Which secondary buffers are
+//! made follows that rule for every description measured (`MEASURED_FLAGS`, PCM mono or stereo,
+//! 8 or 16 bits, 100 to 200000 Hz, any size), whether the capture asked for it or not; another
+//! description is not provided. The state of buffers, the listener and the effects is this
+//! layer's own.
 //!
 //! Measured on this machine (2026-10-23, Windows 11, `dsound-capture`, 3,500 lines):
 //! - `CreateSoundBuffer` for the game's four flag sets, 7 rates, mono and stereo, 8 and 16 bit
@@ -226,6 +228,11 @@ const DSBCAPS_CTRLFREQUENCY: u32 = 0x20;
 const DSBCAPS_CTRLPAN: u32 = 0x40;
 const DSBCAPS_CTRLVOLUME: u32 = 0x80;
 const DSBCAPS_CTRLFX: u32 = 0x200;
+const DSBCAPS_MUTE3DATMAXDISTANCE: u32 = 0x2_0000;
+/// The secondary-buffer flag sets measured (`refmeasure sweep`, 2026-10-27): the game's four
+/// (2D and 3D, with and without `DSBCAPS_CTRLFX`) and `0x80e0` (`DSBCAPS_GLOBALFOCUS` 2D), with
+/// rates 100 to 200000 Hz, mono and stereo, 8 and 16 bits, and sizes around every limit.
+const MEASURED_FLAGS: [u32; 5] = [0x2e0, 0xe0, 0x302b0, 0x300b0, 0x80e0];
 /// `DSBPLAY_LOOPING`, `DSBLOCK_ENTIREBUFFER`, `DSBSTATUS_PLAYING`, `DSBSTATUS_LOOPING`.
 const DSBPLAY_LOOPING: u32 = 1;
 const DSBLOCK_ENTIREBUFFER: u32 = 2;
@@ -260,8 +267,6 @@ pub struct Table {
     caps: (u32, Vec<u8>),
     primary: u32,
     listener: (u32, Vec<u8>),
-    /// The kinds of secondary buffer the capture made.
-    kinds: BTreeSet<Kind>,
     /// `SetFX` / `GetObjectInPath` by (effect, buffer has `DSBCAPS_CTRLFX`): `SetFX`'s result,
     /// its result code, `GetObjectInPath`'s result.
     effects: BTreeMap<(String, bool), (u32, u32, u32)>,
@@ -366,7 +371,6 @@ impl Table {
         if result != want {
             disagree(line, format!("CreateSoundBuffer answers {want:x}"));
         }
-        self.kinds.insert(kind);
         if (result as i32) < 0 {
             return;
         }
@@ -1341,13 +1345,23 @@ fn create_sound_buffer(e: &mut Engine, this: Ptr, desc: Ptr, out: Ptr, outer: u3
         let hrtf = alg == ALG_HRTF_LIGHT;
         let kind: Kind = (flags, hrtf, tag, channels, rate, bits);
         let align = u32::from(channels) * u32::from(bits) / 8;
+        // The rule (`create_result`) is general DirectSound behaviour, measured over every
+        // description below (`refmeasure sweep`, 2026-10-27: 6,256 descriptions, all as the
+        // rule); the capture's own lines are checked against it when the table loads.
+        if flags == DSBCAPS_MUTE3DATMAXDISTANCE | 0xe0 {
+            // Measured: muting at the maximum distance without 3D is refused.
+            return DSERR_INVALIDPARAM;
+        }
         assert!(
             (hrtf || alg == [0; 4])
-                && table(e).kinds.contains(&kind)
-                && f == format_bytes(tag, channels, rate, bits)
-                && (size < MIN_BUFFER_BYTES || size % align == 0),
-            "CreateSoundBuffer of a buffer the capture didn't make (flags {flags:#x}, algorithm \
-             {alg:x?}, format {}, {size} bytes) is not provided",
+                && MEASURED_FLAGS.contains(&flags)
+                && tag == 1
+                && matches!(channels, 1 | 2)
+                && matches!(bits, 8 | 16)
+                && (100..=200_000).contains(&rate)
+                && f == format_bytes(tag, channels, rate, bits),
+            "CreateSoundBuffer of a buffer description not measured (flags {flags:#x}, \
+             algorithm {alg:x?}, format {}, {size} bytes) is not provided",
             hex_string(&f)
         );
         let result = create_result(kind, size);
@@ -1355,6 +1369,9 @@ fn create_sound_buffer(e: &mut Engine, this: Ptr, desc: Ptr, out: Ptr, outer: u3
             return result;
         }
         let mut b = new_buffer(flags);
+        // Measured: a size that is not a whole number of blocks is rounded up to one (what
+        // `GetCaps` reports).
+        let size = size.div_ceil(align) * align;
         b.bytes = size;
         b.format = f;
         b.data = e.mem.alloc(size);
@@ -2533,11 +2550,43 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "the capture didn't make")]
-    fn a_buffer_the_capture_did_not_make_stops() {
+    #[should_panic(expected = "not measured")]
+    fn a_buffer_description_not_measured_stops() {
         let mut e = engine();
         let ds = start_up(&mut e);
         create(&mut e, ds, 0x2a0, false, 1, 44100);
+    }
+
+    /// Measured (`refmeasure sweep`): any rate, channel count and width of the measured flag
+    /// sets is made by the rule, the capture or not; a size that is not whole blocks is
+    /// rounded up; muting at the maximum distance without 3D is refused. The loading menu's
+    /// sound asked for 212275 bytes of 32000 Hz 16-bit mono 3D (`00aec530`).
+    #[test]
+    fn buffers_follow_the_measured_rule_without_a_capture_line() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let make = |e: &mut Engine, flags: u32, channels: u16, rate: u32, bits: u16, size: u32| {
+            e.mem.write(0x1600, &format_bytes(1, channels, rate, bits));
+            for (i, w) in [0x24, flags, size, 0, 0x1600, 0, 0, 0, 0].into_iter().enumerate() {
+                e.mem.set_u32(0x1700 + 4 * i as u32, w);
+            }
+            e.mem.set_u32(0x1004, 0);
+            let r = e.vcall(ds, 0xc, &[0x1700, 0x1004, 0]).u32();
+            (r, e.mem.u32(0x1004))
+        };
+        let (r, b) = make(&mut e, 0x302b0, 1, 32000, 16, 212_275);
+        assert_eq!(r, DS_OK);
+        e.mem.set_u32(0x1800, 0x14);
+        assert_eq!(e.vcall(b, 0xc, &[0x1800]).u32(), DS_OK);
+        assert_eq!([4, 8].map(|o| e.mem.u32(0x1800 + o)), [0x302b8, 212_276]);
+        let (r, b) = make(&mut e, 0xe0, 2, 96000, 8, 1001);
+        assert_eq!(r, DS_OK);
+        assert_eq!(e.vcall(b, 0xc, &[0x1800]).u32(), DS_OK);
+        assert_eq!(e.mem.u32(0x1808), 1002);
+        assert_eq!(make(&mut e, 0x2e0, 2, 48000, 16, 28796).0, DSERR_BUFFERTOOSMALL);
+        assert_eq!(make(&mut e, 0x2e0, 2, 48000, 16, 28800).0, DS_OK);
+        assert_eq!(make(&mut e, 0x300b0, 2, 44100, 16, 4000).0, DSERR_INVALIDPARAM);
+        assert_eq!(make(&mut e, 0x200e0, 1, 22050, 16, 4000).0, DSERR_INVALIDPARAM);
     }
 
     #[test]
