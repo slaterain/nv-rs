@@ -775,12 +775,13 @@ pub fn hkp_world_add_entity(
 /// is released (`00d01a80` on +0x30); an entity whose `m_memSizeAndFlags` is 0 is deleted
 /// through its vtable slot +0x14; its reference is removed. When the outermost critical
 /// section ends the pending operations are flushed. `*result` is 1.
+/// Answers `result` (`EAX` on both paths; callers read the flag through it, 00c68c93).
 pub fn hkp_world_remove_entity(
     e: &mut Engine,
     this: Ptr<HkpWorld>,
     result: Ptr,
     entity: Ptr<HkpEntity>,
-) {
+) -> Ptr {
     if e.get(this, HkpWorld::m_criticalOperationsLockCount) != 0 {
         e.with_stack(0x10, |e, operation| {
             e.mem.set_u8(operation.addr(), 2);
@@ -788,7 +789,7 @@ pub fn hkp_world_remove_entity(
             fn_00c91160(e, this, operation);
         });
         e.mem.set_u8(result.addr(), 0);
-        return;
+        return result;
     }
     e.set(this, HkpWorld::m_criticalOperationsLockCount, 1);
     e.call(REMOVE_ENTITY_SI, &args![this, entity]);
@@ -818,6 +819,7 @@ pub fn hkp_world_remove_entity(
         leave_critical_section(e, this);
     }
     e.mem.set_u8(result.addr(), 1);
+    result
 }
 
 /// Nulls the first entry equal to `listener` in the `hkArray` (data pointer at `data_offset`,
@@ -5569,7 +5571,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00c9_1620,
-            hkp_world_remove_entity(Ptr<HkpWorld>, Ptr, Ptr<HkpEntity>)
+            hkp_world_remove_entity(Ptr<HkpWorld>, Ptr, Ptr<HkpEntity>) -> Ptr
         ),
         entry!(0x00c9_1700, fn_00c91700(Ptr<HkpWorld>, u32)),
         entry!(0x00c9_1750, fn_00c91750(Ptr<HkpWorld>, u32)),
@@ -6489,6 +6491,25 @@ mod tests {
         );
         assert_eq!(calls_to(&e, FAKE_2), vec![vec![entity.addr()]]);
         assert_eq!(calls_to(&e, REMOVE_REFERENCE), vec![vec![entity.addr()]]);
+    }
+
+    #[test]
+    fn remove_entity_answers_its_result_pointer() {
+        let mut e = remove_entity_engine();
+        let world = world(&mut e);
+        let entity = entity(&mut e);
+        let result = e.mem.alloc(8);
+        e.set(world, HkpWorld::m_pendingOperationsCount, 1);
+        e.set(
+            entity,
+            HkpEntity::m_boundingVolumeChildData,
+            Ptr::new(0x9000),
+        );
+        // EAX is `result` on both paths; the callers test the flag through it (00c68c93).
+        assert_eq!(
+            e.call(0x00c9_1620, &args![world, result, entity]).u32(),
+            result
+        );
     }
 
     #[test]
