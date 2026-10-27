@@ -7262,6 +7262,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fn_00c04f50_answers_the_block_at_0x88() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xd0);
+        let data = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x5c, data);
+        e.mem.set_u32(this + 0x60, data);
+        // `LEA EAX,[ECX+0x88]` at 00c04fef; 00bae560 copies the constants from it (00bae5dd).
+        assert_eq!(e.call(0x00c0_4f50, &args![this]).u32(), this + 0x88);
+        e.mem.set_u8(this + 0x58, 1);
+        assert_eq!(e.call(0x00c0_4f50, &args![this]).u32(), this + 0x88);
+    }
+
+    #[test]
     fn fn_00c1a450_deletes_only_on_bit_0() {
         let mut e = Engine::new();
         e.call_log = Some(vec![]);
