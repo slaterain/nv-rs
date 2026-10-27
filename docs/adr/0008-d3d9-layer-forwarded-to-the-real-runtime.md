@@ -85,6 +85,29 @@ Design (`units/platform/d3d9real.rs`):
 7. **The switch.** `NV_D3D9=real` turns the forwarding on; unset (tests,
    other platforms) the layer is exactly the model. The viewer's Bevy window
    stays for now.
+8. **Lifetimes and bindings (found 2026-10-27, play run p169).** The game
+   creates a pure device (behaviour flags `0x54`: hardware vertex
+   processing, `D3DCREATE_PUREDEVICE`, `D3DCREATE_MULTITHREADED`). A pure
+   device's runtime takes the fast paths (`CD3DBase::SetStreamSource_FP`) and
+   keeps no reference of its own to what is bound, and it does not check what
+   it draws with. Three rules follow, all in `d3d9real.rs` and the model:
+   - **The model's references are the program's.** Binding a buffer, shader,
+     declaration or texture does not change what `AddRef`/`Release` answer; a
+     `Release` to 0 while bound answers 0 and the object lives on until it is
+     unbound (`d3d9-capture device refs`, measured on a hardware device). The
+     model keeps the bindings in a count of their own (`bound`) and destroys an
+     object when neither the program nor the device holds it.
+   - **A real object outlives the call that unbinds it.** The model lets go of
+     the old object inside the call that replaces the binding, before the same
+     call reaches the real device. Released then, the real object was freed
+     while the pure device still had it bound, and the real `SetStreamSource`
+     read freed memory (p169's access violation). A forgotten real object is
+     now kept until the frame's `Present`.
+   - **The real device never draws with a binding the model does not have.** A
+     call the model refuses is not forwarded (the model's state does not
+     change, so the real device's must not either). A binding the model takes
+     whose object has no real counterpart sets the real binding to null, and
+     the real draws are skipped (printed) until it is set again.
 
 ## Consequences
 
