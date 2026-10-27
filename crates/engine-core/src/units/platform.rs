@@ -10,6 +10,8 @@ pub mod d3d9device;
 pub mod d3d9resource;
 #[cfg(windows)]
 pub mod d3d9real;
+#[cfg(windows)]
+pub mod d3dxreal;
 pub mod d3dx;
 pub mod dinput;
 pub mod dshow;
@@ -2052,7 +2054,8 @@ fn set_thread_priority(e: &mut Engine, handle: u32, _priority: i32) -> i32 {
 /// (DLL, name, platform version) of the imports with a Rust stand-in.
 pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
     let k = "KERNEL32.dll";
-    vec![
+    #[allow(unused_mut)]
+    let mut imports = vec![
         (
             k,
             "InterlockedIncrement",
@@ -2852,7 +2855,42 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, dsound::co_create_instance(Ptr, u32, u32, Ptr, Ptr) -> u32).1,
         ),
         // The sound imports: end.
-    ]
+    ];
+    // The shader compiler through the player's own d3dx9_38.dll (ADR-0008, Windows only).
+    #[cfg(windows)]
+    imports.extend([
+        (
+            "d3dx9_38.dll",
+            "D3DXCompileShader",
+            entry!(0, d3dxreal::compile_shader(Ptr, u32, Ptr, Ptr, Ptr, Ptr, u32, Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXGetShaderConstantTable",
+            entry!(0, d3dxreal::get_shader_constant_table(Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXGetVertexShaderProfile",
+            entry!(0, d3dxreal::get_vertex_shader_profile(Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXGetPixelShaderProfile",
+            entry!(0, d3dxreal::get_pixel_shader_profile(Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXCreateBuffer",
+            entry!(0, d3dxreal::create_buffer(u32, Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXAssembleShader",
+            entry!(0, d3dxreal::assemble_shader(Ptr, u32, Ptr, Ptr, u32, Ptr, Ptr) -> u32).1,
+        ),
+    ]);
+    imports
 }
 
 #[cfg(test)]

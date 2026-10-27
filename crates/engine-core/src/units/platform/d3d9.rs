@@ -271,6 +271,9 @@ pub struct Graphics {
     /// The real `d3d9.dll` objects behind the modelled ones (`NV_D3D9=real`, ADR-0008).
     #[cfg(windows)]
     pub(crate) real: super::d3d9real::Real,
+    /// The shader compiler's buffers and constant tables (`super::d3dxreal`).
+    #[cfg(windows)]
+    pub(crate) d3dx: super::d3dxreal::Objects,
 }
 
 /// Gives the layer the player's adapter table (`scripts/d3d9-capture`'s output).

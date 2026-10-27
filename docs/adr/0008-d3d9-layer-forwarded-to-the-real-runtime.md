@@ -75,8 +75,13 @@ Design (`units/platform/d3d9real.rs`):
 6. **D3DX.** `D3DXCompileShader` and `D3DXGetShaderConstantTable` call the
    player's own `d3dx9_38.dll` (loaded from the system, never copied into the
    repository) with the source from engine memory, the results handed back
-   as modelled `ID3DXBuffer` / `ID3DXConstantTable` objects in engine memory.
-   Done when the runs reach them.
+   as modelled `ID3DXBuffer` / `ID3DXConstantTable` objects in engine memory
+   (the table's reading slots ask the real table and copy names, defaults and
+   descriptions into engine memory; the game's `ID3DXInclude` is called back
+   for each `#include`). `D3DXAssembleShader` likewise; the shader profile
+   functions give the DLL a stand-in device whose `GetDeviceCaps` asks the
+   game's device. These are Windows only and do not depend on
+   `NV_D3D9=real`.
 7. **The switch.** `NV_D3D9=real` turns the forwarding on; unset (tests,
    other platforms) the layer is exactly the model. The viewer's Bevy window
    stays for now.
