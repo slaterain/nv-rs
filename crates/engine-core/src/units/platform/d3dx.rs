@@ -22,6 +22,9 @@
 //!   the DLL's SSE2 quaternion (its own packed sine and cosine) and x87 matrix, followed
 //!   instruction by instruction from a private analysis of the player's DLL (no bytes copied);
 //!   52,000 measured calls match.
+//! - `D3DXVec3Normalize` (slot `00fdf41c`, thunk `00ee6dec`, called from `00b7dab0` <
+//!   `00b9a120`): the DLL's SSE2 version (the processor's `RSQRTSS` estimate and one Newton
+//!   step), from the same private analysis; all 4000 measured calls match.
 
 use crate::{Engine, Ptr};
 
@@ -59,6 +62,30 @@ mod single {
 
     pub fn sub(x: u32, y: u32) -> u32 {
         op(x, y, |a, b| a - b)
+    }
+
+    /// `RSQRTSS`: the processor's own reciprocal square root estimate (12 bits, its table is
+    /// the processor maker's: the host's answer is the player's on the player's machine).
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    pub fn rsqrt(x: u32) -> u32 {
+        #[cfg(target_arch = "x86")]
+        use std::arch::x86::{_mm_cvtss_f32, _mm_rsqrt_ss, _mm_set_ss};
+        #[cfg(target_arch = "x86_64")]
+        use std::arch::x86_64::{_mm_cvtss_f32, _mm_rsqrt_ss, _mm_set_ss};
+        // SSE is part of every x86-64 processor and of the targets this builds for.
+        unsafe { _mm_cvtss_f32(_mm_rsqrt_ss(_mm_set_ss(f32::from_bits(x)))).to_bits() }
+    }
+
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    pub fn rsqrt(_x: u32) -> u32 {
+        panic!("RSQRTSS (the processor's reciprocal square root estimate) is not provided on this processor")
+    }
+
+    /// `COMISS x, y` then `JNC`: `x >= y` as the flags say it (an unordered compare, a NaN on
+    /// either side, sets the carry: false).
+    pub fn not_below(x: u32, y: u32) -> bool {
+        let (a, b) = (f32::from_bits(x), f32::from_bits(y));
+        !(is_nan(x) || is_nan(y)) && a >= b
     }
 }
 
@@ -159,6 +186,65 @@ pub fn vec4_transform(v: &[u32], m: &[u32; 16]) -> [u32; 4] {
         let p: [u32; 4] = std::array::from_fn(|k| single::mul(m[4 * k + j], v[k]));
         single::add(single::add(p[3], p[2]), single::add(p[1], p[0]))
     })
+}
+
+/// `D3DXVec3Normalize`'s SSE2 version in the DLL (the one its start-up picks on a processor with
+/// SSE2 and without 3DNow!, read from the player's d3dx9_38.dll in a private analysis): the
+/// squared length `(x*x + y*y) + z*z`; below `2^-46` (`28800000`), or NaN (the compare is
+/// unordered), the answer is the zero vector; else one Newton step on the processor's
+/// reciprocal square root estimate `r`: `f = (3 - (r*s)*r) * (r * 0.5)` and each component
+/// times `f`.
+pub fn vec3_normalize_sse2(v: [u32; 3]) -> [u32; 3] {
+    use single::{add, mul, sub};
+    let s = add(add(mul(v[0], v[0]), mul(v[1], v[1])), mul(v[2], v[2]));
+    if !single::not_below(s, 0x2880_0000) {
+        return [0; 3];
+    }
+    let r = single::rsqrt(s);
+    let t = mul(mul(r, s), r);
+    let f = mul(sub(0x4040_0000, t), mul(r, 0x3f00_0000));
+    v.map(|c| mul(c, f))
+}
+
+// Platform: replaces d3dx9_38.dll D3DXVec3Normalize (import, thunk 00ee6dec)
+/// `D3DXVec3Normalize(out, v)` (stdcall): [`vec3_normalize_sse2`]; the input read before the
+/// output is written (out and v may be the same); answers `out`.
+pub fn vec3_normalize(e: &mut Engine, out: Ptr, v: Ptr) -> u32 {
+    let input: [u32; 3] = std::array::from_fn(|i| e.mem.u32(v.addr() + 4 * i as u32));
+    for (i, w) in vec3_normalize_sse2(input).iter().enumerate() {
+        e.mem.set_u32(out.addr() + 4 * i as u32, *w);
+    }
+    out.addr()
+}
+
+/// Checks a function against a whole measurement file of `scripts/d3dx-measure functions`
+/// (the path in `NV_D3DX_FUNCTIONS`; the machine-local file is not committed): the rows of
+/// `name`, inputs (one argument's words each, `|` between arguments) and result words. Used by
+/// the ignored tests that run on the measuring machine.
+#[cfg(test)]
+pub(crate) fn measured_rows(name: &str) -> Vec<(String, u16, Vec<Vec<u32>>, String)> {
+    let Some(path) = std::env::var_os("NV_D3DX_FUNCTIONS") else {
+        return Vec::new();
+    };
+    let text = std::fs::read_to_string(path).expect("the measurement file");
+    let words = |t: &str| -> Vec<u32> {
+        t.split(' ')
+            .filter(|w| !w.is_empty())
+            .map(|w| u32::from_str_radix(w, 16).unwrap())
+            .collect()
+    };
+    text.lines()
+        .filter(|l| l.starts_with(name) && l.as_bytes().get(name.len()) == Some(&b'\t'))
+        .map(|l| {
+            let f: Vec<&str> = l.split('\t').collect();
+            (
+                f[1].to_string(),
+                u16::from_str_radix(f[2], 16).unwrap(),
+                f[3].split('|').map(words).collect(),
+                f[4].to_string(),
+            )
+        })
+        .collect()
 }
 
 // Platform: replaces d3dx9_38.dll D3DXVec3TransformNormal (import)
@@ -1332,5 +1418,69 @@ mod tests_yaw_pitch_roll {
             .iter()
             .any(|(dll, name, _)| *dll == "d3dx9_38.dll"
                 && *name == "D3DXMatrixRotationYawPitchRoll"));
+    }
+}
+
+#[cfg(test)]
+mod tests_vec3_normalize {
+    use super::*;
+
+    /// Every measured call (`NV_D3DX_FUNCTIONS` names the machine-local file; without it the
+    /// test has nothing to check).
+    #[test]
+    fn vec3_normalize_matches_the_whole_measurement() {
+        let rows = measured_rows("D3DXVec3Normalize");
+        for (alias, cw, inputs, want) in &rows {
+            let v: [u32; 3] = inputs[0].clone().try_into().unwrap();
+            let got: Vec<String> = vec3_normalize_sse2(v)
+                .iter()
+                .map(|w| format!("{w:08x}"))
+                .collect();
+            assert_eq!(&got.join(" "), want, "{alias} {cw:04x} {v:08x?}");
+        }
+        eprintln!("D3DXVec3Normalize: {} measured calls match", rows.len());
+    }
+
+    /// Calls of the player's d3dx9_38.dll (TEST DATA from `scripts/d3dx-measure functions`,
+    /// 2026-10-22, AMD Ryzen AI 9 HX 370; all 4000 measured calls match): control word, input,
+    /// output. The SSE2 version does not read the x87 control word.
+    const MEASURED: &[(u16, &str, &str)] = &[
+        // A NaN anywhere: the length compare is unordered, the zero vector.
+        (0x027f, "7fc12345 bd8a73f1 e67b2ff7", "00000000 00000000 00000000"),
+        (0x027f, "7f800001 2569bcb6 bd1eb497", "00000000 00000000 00000000"),
+        // Below 2^-46 squared (denormals, tiny normals): the zero vector.
+        (0x027f, "1e3ce508 00800000 20000000", "00000000 00000000 00000000"),
+        (0x027f, "00800000 8d0cfe4e 81a2d0d6", "00000000 00000000 00000000"),
+        // An infinity: the estimate of 1/sqrt(inf) is 0, 0 * inf the default NaN.
+        (0x027f, "4b30935a 00000000 ff800000", "ffc00000 ffc00000 ffc00000"),
+        // An overflowing square: the same.
+        (0x007f, "80000001 6ac06de4 5d8ff60e", "ffc00000 ffc00000 ffc00000"),
+        // Ordinary vectors: one Newton step on the estimate.
+        (0x027f, "40490fdb 34000000 00800000", "3f800000 3322f983 0028be61"),
+        (0x027f, "c0c9ff54 c024191f 40f2b5d2", "bf1e7fc1 be80c2d5 3f3e71db"),
+        (0x007f, "c0000000 bbb19cfb bf800000", "bf64f901 bb1edc92 bee4f901"),
+    ];
+
+    #[test]
+    fn vec3_normalize_matches_the_dll() {
+        let words = |t: &str| -> Vec<u32> {
+            t.split(' ')
+                .map(|w| u32::from_str_radix(w, 16).unwrap())
+                .collect()
+        };
+        for (cw, input, want) in MEASURED {
+            let mut e = Engine::new();
+            crate::units::crt::set_x87_control_word(&mut e, *cw);
+            let v = e.mem.alloc(12);
+            for (i, w) in words(input).iter().enumerate() {
+                e.mem.set_u32(v + 4 * i as u32, *w);
+            }
+            // Out and v the same: the input is read first.
+            assert_eq!(vec3_normalize(&mut e, Ptr::new(v), Ptr::new(v)), v);
+            let got: Vec<String> = (0..3)
+                .map(|i| format!("{:08x}", e.mem.u32(v + 4 * i)))
+                .collect();
+            assert_eq!(got.join(" "), *want, "{input} at {cw:04x}");
+        }
     }
 }

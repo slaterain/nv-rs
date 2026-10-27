@@ -2189,6 +2189,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         ),
         (
             "d3dx9_38.dll",
+            "D3DXVec3Normalize",
+            entry!(0, d3dx::vec3_normalize(Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
             "D3DXVec4Transform",
             entry!(0, d3dx::vec4_transform_import(Ptr, Ptr, Ptr) -> u32).1,
         ),
