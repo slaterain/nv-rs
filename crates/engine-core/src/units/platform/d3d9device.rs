@@ -894,7 +894,7 @@ fn register_code(e: &mut Engine) {
         (8, crate::entry!(0, texture_get_priority(Ptr) -> u32).1),
         (9, crate::entry!(0, texture_pre_load(Ptr)).1),
         (10, crate::entry!(0, texture_get_type(Ptr) -> u32).1),
-        (11, crate::entry!(0, texture_set_lod(Ptr, u32) -> u32).1),
+        (11, crate::entry!(0, fwd_texture_set_lod(Ptr, u32) -> u32).1),
         (12, crate::entry!(0, texture_get_lod(Ptr) -> u32).1),
         (13, crate::entry!(0, texture_get_level_count(Ptr) -> u32).1),
         (
@@ -928,7 +928,7 @@ fn register_code(e: &mut Engine) {
         (8, crate::entry!(0, texture_get_priority(Ptr) -> u32).1),
         (9, crate::entry!(0, texture_pre_load(Ptr)).1),
         (10, crate::entry!(0, cube_get_type(Ptr) -> u32).1),
-        (11, crate::entry!(0, texture_set_lod(Ptr, u32) -> u32).1),
+        (11, crate::entry!(0, fwd_texture_set_lod(Ptr, u32) -> u32).1),
         (12, crate::entry!(0, texture_get_lod(Ptr) -> u32).1),
         (13, crate::entry!(0, texture_get_level_count(Ptr) -> u32).1),
         (
@@ -2855,6 +2855,17 @@ fn texture_set_lod(e: &mut Engine, this: Ptr, lod: u32) -> u32 {
     }
     let last = t.levels.len() as u32 / t.faces - 1;
     std::mem::replace(&mut t.lod, lod.min(last))
+}
+
+/// `SetLOD`, then (`NV_D3D9=real`) the same on the real texture, whose sampling starts at that
+/// level too (a managed texture; the model's answer stands).
+fn fwd_texture_set_lod(e: &mut Engine, this: Ptr, lod: u32) -> u32 {
+    let previous = texture_set_lod(e, this, lod);
+    #[cfg(windows)]
+    if texture(e, this).pool == D3DPOOL_MANAGED {
+        super::d3d9real::texture_set_lod(e, this.addr(), lod, previous);
+    }
+    previous
 }
 
 /// `GetLOD()`.

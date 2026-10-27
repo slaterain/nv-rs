@@ -1517,6 +1517,17 @@ pub fn device_reset(
     }
 }
 
+
+/// `SetLOD` on a managed modelled texture: the real texture's `SetLOD` with the same level; a
+/// different previous level than the model's is printed once.
+pub fn texture_set_lod(e: &mut Engine, texture: u32, lod: u32, model: u32) {
+    let Some(t) = base_texture(e, texture) else {
+        return missing(e, "SetLOD of a texture without a real one");
+    };
+    let previous = unsafe { t.SetLOD(lod) };
+    answer(e, "SetLOD (the previous level)", model, previous);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1615,5 +1626,72 @@ mod tests {
         set_stream_source(&mut e, device, 0, 0, 0, 0, 0);
         present(&mut e, device, 0, 0, 0, 0, 0);
         assert!(e.kernel.graphics.real.graveyard.is_empty());
+    }
+
+    /// A real device on a hidden window of the window thread, as an engine object at 0x1000
+    /// (`behavior`: the creation flags); `None` where Direct3D 9 has no device.
+    fn test_device(e: &mut Engine, behavior: u32) -> Option<u32> {
+        let (reply, answer) = std::sync::mpsc::channel();
+        let sent = window_thread()
+            .lock()
+            .map(|tx| {
+                tx.send(Request {
+                    title: b"nv-rs test".to_vec(),
+                    style: 0,
+                    ex_style: 0,
+                    rect: [0, 0, 64, 64],
+                    parent: 0,
+                    reply,
+                })
+                .is_ok()
+            })
+            .unwrap_or(false);
+        let window = answer.recv().ok().filter(|&w| sent && w != 0)?;
+        let d3d = unsafe { Direct3DCreate9(32) }?;
+        let mut pp = D3DPRESENT_PARAMETERS {
+            BackBufferWidth: 64,
+            BackBufferHeight: 64,
+            BackBufferCount: 1,
+            SwapEffect: D3DSWAPEFFECT_DISCARD,
+            hDeviceWindow: HWND(window as *mut _),
+            Windowed: BOOL(1),
+            ..Default::default()
+        };
+        let mut out = None;
+        let made = unsafe {
+            d3d.CreateDevice(
+                0,
+                D3DDEVTYPE_HAL,
+                HWND(window as *mut _),
+                behavior | FPU_PRESERVE,
+                &mut pp,
+                &mut out,
+            )
+        };
+        let device = out.filter(|_| made.is_ok())?;
+        real(e).objects.insert(0x1000, Object::Device(device));
+        Some(0x1000)
+    }
+
+    /// `SetLOD` on a managed texture reaches the real texture, and the real one answers the
+    /// previous level as the model does.
+    #[test]
+    fn set_lod_reaches_the_real_texture() {
+        let mut e = Engine::new();
+        let Some(device) = test_device(&mut e, 0x54) else {
+            return;
+        };
+        let (texture, levels) = (0x3000, [0x3008, 0x3010, 0x3018]);
+        // 64x64, three levels, A8R8G8B8, managed.
+        texture_created(&mut e, device, texture, &levels, 64, 64, 0, 21, 1);
+        texture_set_lod(&mut e, texture, 2, 0);
+        texture_set_lod(&mut e, texture, 1, 2);
+        let t = base_texture(&e, texture).expect("the real texture");
+        assert_eq!(unsafe { t.GetLOD() }, 1);
+        assert!(
+            e.kernel.graphics.real.logged.is_empty(),
+            "no answer differed: {:?}",
+            e.kernel.graphics.real.logged
+        );
     }
 }
