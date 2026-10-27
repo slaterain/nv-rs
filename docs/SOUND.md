@@ -10,7 +10,7 @@ in `scripts/`.
 | Music | `platform/dshow.rs`, `crates/mp3` | DirectShow's filter graph and MP3 decoder | `scripts/dshow-measure` | Graph answers as measured. All 199 tracks are the same length, and 99.9748% of samples are identical |
 | Wave files | `platform/mmio.rs` | `mmio*` | `scripts/mmio-measure` | Edge cases as measured |
 | DirectSound | `platform/dsound.rs` | DirectSound 8 objects, cursors | `scripts/dsound-capture` | Answers and cursors as measured |
-| Mixer | `platform/mixer.rs`, `platform/sound_out.rs` | DirectSound's mixer, the device | `scripts/dsmix-measure` (WASAPI loopback) | 2D path bit-exact; resampler, 3D, distortion not provided |
+| Mixer | `platform/mixer.rs`, `platform/sound_out.rs` | DirectSound's mixer, the device | `scripts/dsmix-measure` (WASAPI loopback) | 2D path bit-exact; resampler and 3D approximate, distortion heard dry (open) |
 | Voices and sounds | `platform/vorbisfile.rs`, `crates/vorbis` | `libvorbisfile.dll`/`libvorbis.dll` (1.2.0) | `scripts/vorbis-record` | Bit-exact at 24-bit and 53-bit x87; 64-bit not provided |
 | Movie sound | `platform/bink.rs` | Bink's DirectSound sound system | `nv-bink --sound-system`, `--wait --sound` | `BinkSetSoundSystem` answers 1 as measured; the movie track plays as a mixer voice on the clock schedule (output off by default) |
 
@@ -28,12 +28,36 @@ These were measured on a device without audio enhancements (Virtual Desktop Audi
   48,000 samples. The other 4 are the tail of a voice started 2 frames into a device
   period.
 
-**Not exact, so the platform stops with "not provided":**
-- **Resampling.** It is a long polyphase filter, not linear; least-squares fits only
-  reach -34 dB.
-- **3D.** Gains come in 0.1 dB steps, but the rule from position to gain is not derived
-  yet.
-- **Distortion.** Not analysed.
+**Not exact: heard by an approximate path, open for the maintainer** (exact or approximate
+is still the maintainer's question). Each kind is named once on stderr when it is first
+heard ("sound: approximate ..."):
+- **Resampling.** Windows uses a long polyphase filter, not linear interpolation; free
+  least-squares fits only reach -34 dB. The platform uses a Blackman-windowed sinc, 64
+  taps, cut off at 0.95 of the lower Nyquist rate (`mixer::resample_kernel`). It was chosen
+  against the `dsmix-vd` captures (residual after the best alignment, below the signal):
+
+  | Case | Linear | Cubic | Sinc 32 taps | Sinc 64, cut 0.95 |
+  | --- | --- | --- | --- | --- |
+  | 44100 on 48000 | -9.9 dB | -11.6 dB | -20.5 dB | -25.8 dB |
+  | 22050, 32000, 11025 on 48000 | about -10 dB | about -12 dB | about -20 dB | (similar to 44100) |
+  | 48000 played at 47000 or 60000 | -19 dB | -25 dB | -12 dB | -11 dB |
+
+  So for a frequency changed by `SetFrequency` near the format's rate, Windows looks more
+  like a short filter. The rate a sound plays at is right in every case. Only the filter's
+  shape differs.
+- **3D** (`mixer::spatial_millibels`). These parts are measured (the `dsmix-3d` grid, minimum
+  distance 1, within 0.1 dB at the measured points):
+  - the two channels' power adds up to a third, so straight ahead each side is at -7.8 dB;
+  - the near channel's share of that power by angle is a table, linear between the measured
+    angles;
+  - closer than 2.5 units, the share moves toward a half in proportion to the distance;
+  - past the minimum distance, the level falls by `min / (min + rolloff * (d - min))`, with `d`
+    held at the maximum distance.
+
+  Not measured, so these are open: whether the 2.5 units scale with the minimum distance,
+  height (it counts only in the distance), Doppler (not applied), and deferred settings (they
+  apply at once).
+- **Distortion.** Not analysed. A buffer with it is heard without it.
 
 ## Vorbis
 

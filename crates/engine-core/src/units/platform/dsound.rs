@@ -7,14 +7,16 @@
 //! Sound reaches the player's device only when the host asks for it ([`start_output`]): each
 //! secondary buffer is then also a [`super::mixer::Voice`] (its samples copied at every
 //! `Unlock`, its volume, pan and looping kept with the buffer's), mixed newest first by the
-//! measured exact path on the output thread ([`super::sound_out`]) at the device's own pace. The
-//! cursors the game reads stay on the platform clock (above), so what is heard and what the game
-//! reads are two clocks that agree only as far as the platform clock follows real time. Where
-//! the exact path ends, the buffer stops the run at `Play` (and `SetFrequency` while playing)
-//! with "not provided" until the maintainer decides: a buffer whose frequency is not the
-//! device's rate (Windows resamples it; not yet pinned down), a 3D buffer (Windows' 3D gains not
-//! yet pinned down), a buffer with the distortion effect (not analysed), and a device that does
-//! not mix two channels.
+//! measured exact path on the output thread ([`super::sound_out`]). The cursors the game reads
+//! stay on the platform clock (above), and the output follows that clock (`Pace`): within
+//! 100 ms at the device's own pace, beyond that skipping on or holding. The host turns it on with
+//! [`want_output`] (`NV_SOUND=out`), and it starts when the game makes its device. Where the
+//! exact path ends, the buffer is heard by an approximate path until the maintainer decides
+//! (each kind named once on stderr, open in docs/SOUND.md): a buffer whose frequency is not the
+//! device's rate (Windows' resampler is not pinned down: `super::mixer::resample_kernel`), a 3D
+//! buffer (Windows' 3D law is measured only in part: `super::mixer::spatial_millibels`), and a
+//! buffer with the distortion effect (not analysed: heard without it). A device that does not
+//! mix two channels is not provided.
 //!
 //! The answers that depend on the player's sound device and Windows come from the sound table,
 //! captured on the player's machine by `scripts/dsound-capture` (git-ignored: `NV_DSOUND_TABLE`,
@@ -603,6 +605,12 @@ pub struct Sound {
     pub(crate) vorbis: super::vorbisfile::Files,
     /// The voices heard on the device, once the host started the output ([`start_output`]).
     mix: Option<Mix>,
+    /// The host asked for the output when the game makes its device ([`want_output`]), and
+    /// where to record what goes to the device.
+    output_wanted: bool,
+    record: Option<std::path::PathBuf>,
+    /// The kinds of approximate sound already named on stderr (once each).
+    noted: BTreeSet<&'static str>,
 }
 
 /// The output thread and the voices it plays (the buffers' engine addresses, newest `Play`
@@ -626,15 +634,92 @@ struct Voices {
     all: BTreeMap<u32, Voice>,
     /// The playing ones, newest `Play` first.
     playing: Vec<u32>,
+    /// What goes to the device, recorded ([`want_output`]).
+    record: Option<Record>,
+    /// The game's clock the output follows (none in the tests, which render by hand).
+    pace: Option<Pace>,
 }
 
-impl super::sound_out::Source for Voices {
-    fn render(&mut self, _rate: u32, channels: u16, out: &mut [f32]) {
-        assert!(
-            channels == 2,
-            "a sound device mixing {channels} channels is not provided"
-        );
-        let Voices { all, playing } = self;
+/// A recording of what the mixer sends to the device: a WAV file (32-bit float, the device's
+/// rate and channels) whose sizes are written again every second, so a run that is killed
+/// leaves a readable file; and a log of what was started when, beside it (`.log`).
+pub struct Record {
+    wav: std::fs::File,
+    log: std::fs::File,
+    frames: u64,
+    rate: u32,
+    channels: u16,
+    since_header: u64,
+    started: std::time::Instant,
+}
+
+impl Record {
+    fn create(path: &std::path::Path, rate: u32, channels: u16) -> std::io::Result<Record> {
+        let wav = std::fs::File::create(path)?;
+        let log = std::fs::File::create(path.with_extension("log"))?;
+        let mut r = Record {
+            wav,
+            log,
+            frames: 0,
+            rate,
+            channels,
+            since_header: 0,
+            started: std::time::Instant::now(),
+        };
+        r.header()?;
+        Ok(r)
+    }
+
+    fn header(&mut self) -> std::io::Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+        let block = 4 * u32::from(self.channels);
+        let data = (self.frames * u64::from(block)).min(u64::from(u32::MAX - 64)) as u32;
+        let mut h = Vec::with_capacity(44);
+        h.extend_from_slice(b"RIFF");
+        h.extend_from_slice(&(36 + data).to_le_bytes());
+        h.extend_from_slice(b"WAVEfmt ");
+        h.extend_from_slice(&16u32.to_le_bytes());
+        h.extend_from_slice(&3u16.to_le_bytes());
+        h.extend_from_slice(&self.channels.to_le_bytes());
+        h.extend_from_slice(&self.rate.to_le_bytes());
+        h.extend_from_slice(&(self.rate * block).to_le_bytes());
+        h.extend_from_slice(&(block as u16).to_le_bytes());
+        h.extend_from_slice(&32u16.to_le_bytes());
+        h.extend_from_slice(b"data");
+        h.extend_from_slice(&data.to_le_bytes());
+        let end = self.wav.stream_position()?.max(44);
+        self.wav.seek(SeekFrom::Start(0))?;
+        self.wav.write_all(&h)?;
+        self.wav.seek(SeekFrom::Start(end))?;
+        Ok(())
+    }
+
+    fn write(&mut self, out: &[f32]) {
+        use std::io::Write;
+        let bytes: Vec<u8> = out.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let _ = self.wav.write_all(&bytes);
+        let n = (out.len() / usize::from(self.channels)) as u64;
+        self.frames += n;
+        self.since_header += n;
+        if self.since_header >= u64::from(self.rate) {
+            self.since_header = 0;
+            let _ = self.header();
+        }
+    }
+
+    /// One line of the log: the time since the output started (ms), the frames recorded so
+    /// far, and `what`.
+    fn note(&mut self, what: &str) {
+        use std::io::Write;
+        let ms = self.started.elapsed().as_millis();
+        let _ = writeln!(self.log, "{ms}\t{}\t{what}", self.frames);
+    }
+}
+
+impl Voices {
+    /// Mixes the playing voices into `out` (newest first) and drops the ones that ended.
+    fn mix(&mut self, out: &mut [f32]) {
+        let Voices { all, playing, .. } = self;
         let mut voices: Vec<&mut Voice> = Vec::with_capacity(playing.len());
         // `playing` holds distinct addresses; take each voice once, in its order.
         let mut by: BTreeMap<u32, &mut Voice> = all.iter_mut().map(|(k, v)| (*k, v)).collect();
@@ -646,6 +731,78 @@ impl super::sound_out::Source for Voices {
         super::mixer::render(&mut voices, out);
         playing.retain(|at| all.get(at).is_some_and(|v| v.position.is_some()));
     }
+}
+
+/// How the output follows the game's clock (`Engine::clock_now_us`, which `Sleep` moves on
+/// beyond the real time): the clock as the engine last read it and when, and how far the
+/// mixer is. The game reads its buffers' cursors and the music's position from that clock, so
+/// the voices are kept where that clock puts them: when it runs more than 100 ms ahead of what
+/// was mixed, the mixer skips on (mixing the frames and dropping them); when it falls more than
+/// 100 ms behind, the device gets silence until it catches up. Within 100 ms the device's own
+/// pace is kept.
+struct Pace {
+    game_us: u64,
+    at: std::time::Instant,
+    start_us: u64,
+    mixed: u64,
+}
+
+impl super::sound_out::Source for Voices {
+    fn render(&mut self, rate: u32, channels: u16, out: &mut [f32]) {
+        assert!(
+            channels == 2,
+            "a sound device mixing {channels} channels is not provided"
+        );
+        let frames = (out.len() / 2) as u64;
+        let mut hold = false;
+        if let Some(p) = &mut self.pace {
+            let game = p.game_us + p.at.elapsed().as_micros() as u64;
+            let target = (u128::from(game.saturating_sub(p.start_us)) * u128::from(rate)
+                / 1_000_000) as i64;
+            let lag = target - (p.mixed + frames) as i64;
+            let cap = i64::from(rate / 10);
+            if lag > cap {
+                let skip = (lag - cap / 2) as u64;
+                p.mixed += skip;
+                let mut scratch = vec![0f32; 2 * 4800];
+                let mut left = skip as usize;
+                while left > 0 {
+                    let n = left.min(4800);
+                    scratch[..2 * n].fill(0.0);
+                    self.mix(&mut scratch[..2 * n]);
+                    left -= n;
+                }
+                if let Some(r) = &mut self.record {
+                    r.note(&format!("pace: skipped {skip} frames (the game's clock ran ahead)"));
+                }
+            } else if lag < -cap {
+                hold = true;
+            }
+        }
+        if hold {
+            if let Some(r) = &mut self.record {
+                r.note(&format!("pace: {frames} frames of silence (the game's clock is behind)"));
+            }
+        } else {
+            if let Some(p) = &mut self.pace {
+                p.mixed += frames;
+            }
+            self.mix(out);
+        }
+        if let Some(r) = &mut self.record {
+            r.write(out);
+        }
+    }
+}
+
+/// Has the output started ([`start_output`]) when the game makes its DirectSound device
+/// (`DirectSoundCreate8`, from `BSWin32Audio::Init` `00aea230`), so what the game plays from then
+/// on is heard. With `record`, what the mixer sends to the device is also written there as a
+/// WAV file, with a log of what was started when beside it (`.log`). The host's switch
+/// (`NV_SOUND=out`); off by default and in the tests.
+pub fn want_output(e: &mut Engine, record: Option<std::path::PathBuf>) {
+    e.kernel.sound.output_wanted = true;
+    e.kernel.sound.record = record;
 }
 
 /// Starts playing the game's sound on the player's default device; false when there is no
@@ -666,8 +823,26 @@ pub fn start_output(e: &mut Engine) -> bool {
     }
     let source: Arc<Mutex<dyn super::sound_out::Source>> = voices.clone();
     let Some(output) = super::sound_out::start(source) else {
+        eprintln!("sound: no output device; the game's sound is not heard");
         return false;
     };
+    if let Some(path) = e.kernel.sound.record.clone() {
+        match Record::create(&path, output.rate, output.channels) {
+            Ok(r) => voices.lock().expect("the voices").record = Some(r),
+            Err(err) => eprintln!("sound: cannot record to {}: {err}", path.display()),
+        }
+    }
+    let now = e.clock_now_us();
+    voices.lock().expect("the voices").pace = Some(Pace {
+        game_us: now,
+        at: std::time::Instant::now(),
+        start_us: now,
+        mixed: 0,
+    });
+    eprintln!(
+        "sound: output on the default device, {} Hz, {} channels",
+        output.rate, output.channels
+    );
     e.kernel.sound.mix = Some(Mix {
         voices,
         rate: output.rate,
@@ -676,24 +851,60 @@ pub fn start_output(e: &mut Engine) -> bool {
     true
 }
 
+/// Writes `what` to the recording's log, when the output is recorded, with the game's clock
+/// (ms) beside the real time.
+pub fn note(e: &mut Engine, what: &str) {
+    if e.kernel.sound.mix.is_none() {
+        return;
+    }
+    let game = e.clock_now_ms();
+    if let Some(m) = &e.kernel.sound.mix {
+        if let Some(r) = &mut m.voices.lock().expect("the voices").record {
+            r.note(&format!("game {game}\t{what}"));
+        }
+    }
+}
+
+/// Names on stderr, once, a kind of sound that is heard by an approximate path.
+fn approximate(e: &mut Engine, kind: &'static str, example: &str) {
+    if e.kernel.sound.noted.insert(kind) {
+        eprintln!("sound: approximate {kind} (first: {example}); see docs/SOUND.md");
+    }
+}
+
 /// A buffer's voice: its samples as they are in engine memory now, its settings, not playing.
 fn voice_of(e: &Engine, b: &Buffer) -> Voice {
-    Voice {
-        data: e.mem.bytes(b.data, b.bytes),
-        channels: u16::from_le_bytes([b.format[2], b.format[3]]),
-        bits: u16::from_le_bytes([b.format[14], b.format[15]]),
-        volume: b.volume,
-        pan: b.pan,
-        looping: false,
-        position: None,
-    }
+    let mut v = Voice::new(
+        e.mem.bytes(b.data, b.bytes),
+        u16::from_le_bytes([b.format[2], b.format[3]]),
+        u16::from_le_bytes([b.format[14], b.format[15]]),
+    );
+    v.volume = b.volume;
+    v.pan = b.pan;
+    v
 }
 
 /// Runs `f` on the voice of the buffer at `at`, when the output is on.
 fn with_voice(e: &mut Engine, at: u32, f: impl FnOnce(&mut Voices, u32)) {
+    tick(e);
     if let Some(m) = &e.kernel.sound.mix {
         let mut v = m.voices.lock().expect("the voices");
         f(&mut v, at);
+    }
+}
+
+/// Tells the output where the game's clock is now (`Pace`); called at every sound call that
+/// reads the clock or changes a voice.
+pub fn tick(e: &mut Engine) {
+    if e.kernel.sound.mix.is_none() {
+        return;
+    }
+    let now = e.clock_now_us();
+    if let Some(m) = &e.kernel.sound.mix {
+        if let Some(p) = &mut m.voices.lock().expect("the voices").pace {
+            p.game_us = now;
+            p.at = std::time::Instant::now();
+        }
     }
 }
 
@@ -701,32 +912,65 @@ fn with_voice(e: &mut Engine, at: u32, f: impl FnOnce(&mut Voices, u32)) {
 /// sound system, `super::bink`): starts `pcm` (`channels`, `bits`, `rate`) as a voice under
 /// `key` (an engine address of the caller's, distinct from every buffer's), heard when the
 /// output is on, with volume, pan and frequency at their defaults. A rate other than the
-/// device's is not provided (the mixer's exact path, `super::mixer`).
+/// device's goes through the approximate resampler (`super::mixer::resample_kernel`).
 pub fn play_stream(e: &mut Engine, key: u32, pcm: Vec<u8>, channels: u16, bits: u16, rate: u32) {
+    play_stream_from(e, key, pcm, channels, bits, rate, 0);
+}
+
+/// [`play_stream`] from the stream's frame `from`.
+pub fn play_stream_from(
+    e: &mut Engine,
+    key: u32,
+    pcm: Vec<u8>,
+    channels: u16,
+    bits: u16,
+    rate: u32,
+    from: usize,
+) {
+    let Some(device) = e.kernel.sound.mix.as_ref().map(|m| m.rate) else {
+        return;
+    };
+    if rate != device {
+        approximate(e, "resampling", &format!("a stream at {rate} Hz on {device} Hz"));
+    }
     let Some(m) = &e.kernel.sound.mix else {
         return;
     };
-    assert!(
-        rate == m.rate,
-        "a stream heard at {rate} Hz on a {} Hz device is not provided (Windows' resampler is \
-         not pinned down; the maintainer decides)",
-        m.rate
-    );
     let mut v = m.voices.lock().expect("the voices");
-    v.all.insert(
-        key,
-        Voice {
-            data: pcm,
-            channels,
-            bits,
-            volume: 0,
-            pan: 0,
-            looping: false,
-            position: Some(0),
-        },
-    );
+    let mut voice = Voice::new(pcm, channels, bits);
+    voice.position = Some(from);
+    voice.step = f64::from(rate) / f64::from(device);
+    v.all.insert(key, voice);
     v.playing.retain(|&p| p != key);
     v.playing.insert(0, key);
+}
+
+/// Sets the volume (hundredths of a decibel, -10000..0) of a stream from [`play_stream`].
+pub fn stream_volume(e: &mut Engine, key: u32, volume: i32) {
+    with_voice(e, key, |m, at| {
+        if let Some(v) = m.all.get_mut(&at) {
+            v.volume = volume;
+        }
+    });
+}
+
+/// Whether a stream from [`play_stream`] exists (playing or held).
+pub fn has_stream(e: &Engine, key: u32) -> bool {
+    e.kernel
+        .sound
+        .mix
+        .as_ref()
+        .is_some_and(|m| m.voices.lock().expect("the voices").all.contains_key(&key))
+}
+
+/// Moves a stream from [`play_stream`] to its frame `at` (it keeps playing or held).
+pub fn seek_stream(e: &mut Engine, key: u32, at: usize) {
+    with_voice(e, key, |m, k| {
+        if let Some(v) = m.all.get_mut(&k) {
+            v.position = Some(at);
+            v.frac = 0.0;
+        }
+    });
 }
 
 /// Holds (`paused`) or goes on with a stream from [`play_stream`] where it is.
@@ -937,6 +1181,11 @@ pub fn direct_sound_create8(e: &mut Engine, device: u32, out: Ptr, outer: u32) -
     let device = object(e, table);
     e.kernel.sound.devices.insert(device, (1, 0));
     e.mem.set_u32(out.addr(), device);
+    // The host's switch (`want_output`): the game's device is made, so its sound is heard
+    // from here on.
+    if e.kernel.sound.output_wanted {
+        start_output(e);
+    }
     DS_OK
 }
 
@@ -1363,35 +1612,125 @@ fn set_frequency(e: &mut Engine, this: Ptr, v: u32) -> u32 {
     }
     b.frequency = v;
     if matches!(b.play, Play::Playing { .. }) {
-        heard_exactly(e, this, "SetFrequency");
+        heard(e, this, "SetFrequency");
     }
     DS_OK
 }
 
 /// Where the mixer's exact path ends (module documentation): with the output on, a buffer
-/// that would be heard at another rate than the device's, in 3D or through the distortion
-/// stops the run.
-fn heard_exactly(e: &mut Engine, this: Ptr, call: &str) {
+/// heard at another rate than the device's goes through the approximate resampler, a 3D
+/// buffer through the approximate 3D law (`super::mixer`), and a buffer with the distortion
+/// is heard without it (not analysed). Each kind is named once on stderr; docs/SOUND.md keeps
+/// them open for the maintainer.
+fn heard(e: &mut Engine, this: Ptr, call: &str) {
     let Some(rate) = e.kernel.sound.mix.as_ref().map(|m| m.rate) else {
         return;
     };
-    let b = buffer(e, this);
+    let b = buffer(e, this).clone();
     let f = b.frequency();
-    assert!(
-        f == rate,
-        "{call}: a buffer heard at {f} Hz on a {rate} Hz device is not provided (Windows' \
-         resampler is not pinned down; the maintainer decides)"
+    let what = format!(
+        "{call} {:08x}: {} ch {} bit {} Hz, {} bytes{}{}",
+        this.addr(),
+        u16::from_le_bytes([b.format[2], b.format[3]]),
+        u16::from_le_bytes([b.format[14], b.format[15]]),
+        f,
+        b.bytes,
+        if b.flags & DSBCAPS_CTRL3D != 0 { ", 3D" } else { "" },
+        b.effect.map_or(String::new(), |fx| format!(", {fx}")),
     );
-    assert!(
-        b.flags & DSBCAPS_CTRL3D == 0,
-        "{call}: a 3D buffer heard on the device is not provided (Windows' 3D gains are not \
-         pinned down; the maintainer decides)"
-    );
-    assert!(
-        b.effect.is_none(),
-        "{call}: a buffer heard through the {:?} effect is not provided (not analysed)",
-        b.effect
-    );
+    if f != rate {
+        approximate(e, "resampling", &what);
+    }
+    if b.flags & DSBCAPS_CTRL3D != 0 {
+        approximate(e, "3D", &what);
+    }
+    if b.effect.is_some() {
+        approximate(e, "distortion (heard dry)", &what);
+    }
+    if call == "Play" {
+        note(e, &what);
+    }
+    refresh_voice(e, this.addr());
+}
+
+/// Brings a buffer's voice up to date with its frequency and, for a 3D buffer, its position
+/// against the listener (`super::mixer::spatial_millibels`).
+fn refresh_voice(e: &mut Engine, at: u32) {
+    let Some(rate) = e.kernel.sound.mix.as_ref().map(|m| m.rate) else {
+        return;
+    };
+    let Some(b) = e.kernel.sound.buffers.get(&at) else {
+        return;
+    };
+    let step = f64::from(b.frequency()) / f64::from(rate);
+    let spatial = (b.flags & DSBCAPS_CTRL3D != 0).then(|| spatial_of(e, b));
+    with_voice(e, at, |m, at| {
+        if let Some(v) = m.all.get_mut(&at) {
+            v.step = step;
+            v.spatial = spatial;
+        }
+    });
+}
+
+/// The 3D buffers' voices brought up to date (after the listener moved).
+fn refresh_3d(e: &mut Engine) {
+    if e.kernel.sound.mix.is_none() {
+        return;
+    }
+    let all: Vec<u32> = e
+        .kernel
+        .sound
+        .buffers
+        .iter()
+        .filter(|(_, b)| b.flags & DSBCAPS_CTRL3D != 0 && b.flags & DSBCAPS_PRIMARYBUFFER == 0)
+        .map(|(&at, _)| at)
+        .collect();
+    for at in all {
+        refresh_voice(e, at);
+    }
+}
+
+/// A 3D buffer's left and right attenuation from its position in the listener's frame.
+fn spatial_of(e: &Engine, b: &Buffer) -> (f64, f64) {
+    let l = e
+        .kernel
+        .sound
+        .listeners
+        .values()
+        .next()
+        .map(|(_, l)| *l)
+        .unwrap_or(Listener {
+            position: [0.0; 3],
+            velocity: [0.0; 3],
+            front: [0.0, 0.0, 1.0],
+            top: [0.0, 1.0, 0.0],
+            distance_factor: 1.0,
+            rolloff: 1.0,
+            doppler: 1.0,
+        });
+    let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    let cross = |a: [f32; 3], b: [f32; 3]| {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let unit = |a: [f32; 3]| {
+        let n = dot(a, a).sqrt();
+        if n > 0.0 {
+            a.map(|c| c / n)
+        } else {
+            a
+        }
+    };
+    let rel = sub(b.position, l.position);
+    let front = unit(l.front);
+    let right = unit(cross(l.top, front));
+    let up = cross(front, right);
+    let local = [dot(rel, right), dot(rel, up), dot(rel, front)];
+    super::mixer::spatial_millibels(local, b.min_distance, b.max_distance, l.rolloff)
 }
 
 /// Device periods from `start` to `now` (the platform clock's 10 ms steps).
@@ -1407,6 +1746,7 @@ fn frames(n: u64, frequency: u32) -> u64 {
 /// Brings a playing non-looping buffer that reached its end to `Ended`; answers the play and
 /// write cursors in bytes.
 fn cursors(e: &mut Engine, this: Ptr) -> (u32, u32) {
+    tick(e);
     let now = e.clock_now_us();
     let b = buffer(e, this);
     match b.play {
@@ -1569,7 +1909,7 @@ fn play(e: &mut Engine, this: Ptr, reserved: u32, priority: u32, flags: u32) -> 
     };
     let was_playing = matches!(buffer(e, this).play, Play::Playing { .. });
     buffer(e, this).play = play;
-    heard_exactly(e, this, "Play");
+    heard(e, this, "Play");
     let Play::Playing { base, .. } = play else {
         unreachable!()
     };
@@ -1783,6 +2123,7 @@ fn set_min_distance(e: &mut Engine, this: Ptr, v: f32, apply: u32) -> u32 {
     }
     let at = owner(e, this);
     buffer(e, Ptr::new(at)).min_distance = v;
+    refresh_voice(e, at);
     DS_OK
 }
 
@@ -1795,6 +2136,7 @@ fn set_max_distance(e: &mut Engine, this: Ptr, v: f32, apply: u32) -> u32 {
     }
     let at = owner(e, this);
     buffer(e, Ptr::new(at)).max_distance = v;
+    refresh_voice(e, at);
     DS_OK
 }
 
@@ -1806,6 +2148,7 @@ fn buffer3d_set_position(e: &mut Engine, this: Ptr, x: f32, y: f32, z: f32, appl
     );
     let at = owner(e, this);
     buffer(e, Ptr::new(at)).position = [x, y, z];
+    refresh_voice(e, at);
     DS_OK
 }
 
@@ -1902,6 +2245,7 @@ fn listener_set_all_parameters(e: &mut Engine, this: Ptr, params: Ptr, _apply: u
         doppler: e.mem.f32(p + 0x3c),
     };
     listener(e, this).1 = new;
+    refresh_3d(e);
     DS_OK
 }
 
@@ -1917,6 +2261,7 @@ fn listener_set_doppler_factor(e: &mut Engine, this: Ptr, value: f32, _apply: u3
 
 fn listener_set_rolloff_factor(e: &mut Engine, this: Ptr, value: f32, _apply: u32) -> u32 {
     listener(e, this).1.rolloff = value;
+    refresh_3d(e);
     DS_OK
 }
 
@@ -1935,11 +2280,13 @@ fn listener_set_orientation(
     let l = &mut listener(e, this).1;
     l.front = [fx, fy, fz];
     l.top = [tx, ty, tz];
+    refresh_3d(e);
     DS_OK
 }
 
 fn listener_set_position(e: &mut Engine, this: Ptr, x: f32, y: f32, z: f32, _apply: u32) -> u32 {
     listener(e, this).1.position = [x, y, z];
+    refresh_3d(e);
     DS_OK
 }
 
@@ -2397,14 +2744,17 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a buffer heard at 11025 Hz on a 22050 Hz device is not provided")]
-    fn a_heard_buffer_at_another_rate_stops() {
+    fn a_heard_buffer_at_another_rate_is_resampled() {
         let mut e = engine();
         let ds = start_up(&mut e);
-        let _ = hear(&mut e);
+        let voices = hear(&mut e);
         let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
         e.vcall(b, 0x30, &[0, 0, 0]);
+        assert!(voices.lock().unwrap().all[&b].exact());
         e.vcall(b, 0x44, &[11025]);
+        let v = voices.lock().unwrap();
+        assert_eq!(v.all[&b].step, 0.5);
+        assert!(!v.all[&b].exact());
     }
 
     #[test]
@@ -2430,21 +2780,41 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a stream heard at 48000 Hz on a 22050 Hz device is not provided")]
-    fn a_stream_at_another_rate_stops() {
+    fn a_stream_at_another_rate_is_resampled() {
         let mut e = engine();
-        let _ = hear(&mut e);
-        play_stream(&mut e, 0x9000, vec![0; 4], 2, 16, 48000);
+        let voices = hear(&mut e);
+        play_stream(&mut e, 0x9000, vec![0; 4], 2, 16, 44100);
+        assert_eq!(voices.lock().unwrap().all[&0x9000].step, 2.0);
+        seek_stream(&mut e, 0x9000, 1);
+        stream_volume(&mut e, 0x9000, -100);
+        let v = voices.lock().unwrap();
+        assert_eq!((v.all[&0x9000].position, v.all[&0x9000].volume), (Some(1), -100));
     }
 
     #[test]
-    #[should_panic(expected = "a 3D buffer heard on the device is not provided")]
-    fn a_heard_3d_buffer_stops() {
+    fn a_heard_3d_buffer_follows_its_position() {
         let mut e = engine();
         let ds = start_up(&mut e);
-        let _ = hear(&mut e);
+        let voices = hear(&mut e);
         let (_, b) = create(&mut e, ds, 0x302b0, false, 1, 44100);
         e.vcall(b, 0x30, &[0, 0, 0]);
+        // Ahead at the minimum distance: -7.8 dB on both sides.
+        let (l, r) = voices.lock().unwrap().all[&b].spatial.unwrap();
+        assert_eq!(l, r);
+        let three_d = e.kernel.sound.buffers[&b].three_d;
+        let three_d = if three_d != 0 {
+            three_d
+        } else {
+            let out = 0x1900;
+            let iid = 0x1910;
+            e.mem.write(iid, &IID_BUFFER3D);
+            e.vcall(b, 0, &[iid, out]);
+            e.mem.u32(out)
+        };
+        // Far to the left: the right side is silent.
+        e.vcall(three_d, 0x4c, &[(-4.0f32).to_bits(), 0, 0, 0]);
+        let (l, r) = voices.lock().unwrap().all[&b].spatial.unwrap();
+        assert!(l > -2000.0 && r <= -10000.0, "{l} {r}");
     }
 
     #[test]

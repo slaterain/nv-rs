@@ -76,6 +76,13 @@ impl Host {
         // The game's clock (`GetTickCount`, `timeGetTime`, `QueryPerformanceCounter`) runs with
         // the real time from here on, `Sleep` moving it on too (`Engine::clock_now_ms`).
         engine.start_real_clock();
+        // `NV_SOUND=out`: the game's sound on the player's default device, from when the game
+        // makes its DirectSound device on; `NV_SOUND_RECORD=FILE.wav` also records what goes
+        // to the device, with a log of what started when (`FILE.log`). Off by default.
+        if std::env::var("NV_SOUND").is_ok_and(|v| v == "out") {
+            let record = std::env::var_os("NV_SOUND_RECORD").map(std::path::PathBuf::from);
+            engine::units::platform::dsound::want_output(&mut engine, record);
+        }
         let mut movement = player_move::PlayerMovement::default();
         // Diagnostics: with `NV_MOVE_PROBE` set, start-up's `__mtinit` and `NiInit` are probe
         // runs too (they go on past misses with zero results and record them all).
