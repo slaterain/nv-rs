@@ -1820,18 +1820,32 @@ mod tests_measured_files {
     #[test]
     fn the_sse2_functions_match_the_whole_measurement() {
         let mut n = 0;
+        for (alias, cw, i, want) in measured_rows("D3DXVec3Normalize") {
+            let got = hex(&vec3_normalize_sse2(i[0].clone().try_into().unwrap()));
+            assert_eq!(got, want, "Vec3Normalize {alias} {cw:04x} {:08x?}", i[0]);
+            n += 1;
+        }
         for (alias, cw, i, want) in measured_rows("D3DXPlaneNormalize") {
             let got = hex(&plane_normalize_sse2(i[0].clone().try_into().unwrap()));
             assert_eq!(got, want, "PlaneNormalize {alias} {cw:04x} {:08x?}", i[0]);
             n += 1;
         }
-        for name in ["D3DXPlaneTransform", "D3DXVec3TransformCoord"] {
+        for name in ["D3DXPlaneTransform", "D3DXVec3TransformCoord", "D3DXVec4Transform"] {
             for (alias, cw, i, want) in measured_rows(name) {
                 let m: [u32; 16] = i[1].clone().try_into().unwrap();
-                let paths: Vec<String> = [false, true]
+                // `/m16`, `/m4`: the matrix on or off a 16-byte boundary (the edge measurement);
+                // no tag: not recorded, either path.
+                let which: &[bool] = if alias.ends_with("/m16") {
+                    &[true]
+                } else if alias.ends_with("/m4") {
+                    &[false]
+                } else {
+                    &[false, true]
+                };
+                let paths: Vec<String> = which
                     .iter()
                     .map(|&a| {
-                        if name == "D3DXPlaneTransform" {
+                        if name != "D3DXVec3TransformCoord" {
                             hex(&vec4_transform_sse2(&i[0], &m, a))
                         } else {
                             hex(&vec3_transform_coord_sse2(&i[0], &m, a))
