@@ -34,8 +34,8 @@ and the output follows that clock. Within 100 ms it keeps the device's pace. Whe
 runs ahead it skips on: it mixes the frames and drops them. When the clock falls behind it
 gives silence. `NV_SOUND=device` keeps the device's pace instead, for listening.
 
-The platform clock moves on by every game thread's `Sleep`, so it runs ahead of real time while
-threads sleep. In the first play run (2026-10-27, `ng.sh`) it ran:
+In the first play run (2026-10-27, `ng.sh`), every game thread's `Sleep` moved the platform
+clock on, so it ran ahead of real time while threads slept:
 
 | Phase | Game clock against real time |
 | --- | --- |
@@ -43,8 +43,24 @@ threads sleep. In the first play run (2026-10-27, `ng.sh`) it ran:
 | Main menu and the intro movie | x1.0 |
 | Loading Doc Mitchell's house | x19 |
 
-So during start-up the title music is heard only in pieces. The game finished its 125 s track
-three times in 18 s of real time, and each time it ran it again from the start.
+During start-up the title music was heard only in pieces: the game finished its 125 s track
+three times in 18 s of real time and started it again each time.
+
+The thread host now keeps the clock at real time (`thread_host.rs`). A game thread's `Sleep`
+waits for its wake time without moving the clock, and main's `Sleep`, or a wait while every
+thread sleeps, really waits. Later runs (s11, s13) show no pace skips: the title music plays
+whole, UI sounds play when the keys are pressed, and Doc Mitchell's voices start as the house
+loads.
+
+What a run plays (s11, `NV_D3D9=real`, the intro skipped with E):
+
+| Real time | What |
+| --- | --- |
+| 0.4 s | output on (48000 Hz stereo, the default device) |
+| 4.3 s | `Music\Special\MainTitle.mp3` (48 kHz stereo, 125.4 s, exact path) |
+| 51.3-51.5 s | `ui_menu_focus.wav`, `ui_menu_ok.wav` (32 kHz mono, resampled) |
+| 55.3 s | `FNVIntro.bik` track (48 kHz stereo, exact path) until the skip |
+| 60.6 s | 16 Vorbis voices (32 kHz mono, 3D, resampled), 5 WAV effects (32 and 44.1 kHz) |
 
 ## Mixer (DirectSound 8 to the device)
 
