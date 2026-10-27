@@ -1220,6 +1220,26 @@ impl PlayerMovement {
     }
 }
 
+/// `NV_MOVE_KEYS=FRAME:DIK:HOLD,..` (hex DIK key codes): keys held down from main's frame FRAME
+/// for HOLD frames, on top of the viewer's (a diagnostic: drives the game's menus with exact
+/// frame timing).
+fn key_script() -> &'static [(u64, u8, u64)] {
+    static SCRIPT: std::sync::OnceLock<Vec<(u64, u8, u64)>> = std::sync::OnceLock::new();
+    SCRIPT.get_or_init(|| {
+        std::env::var("NV_MOVE_KEYS")
+            .unwrap_or_default()
+            .split(',')
+            .filter_map(|item| {
+                let mut part = item.trim().split(':');
+                let frame = part.next()?.parse().ok()?;
+                let code = u8::from_str_radix(part.next()?, 16).ok()?;
+                let hold = part.next().map_or(Some(1), |h| h.parse().ok())?;
+                Some((frame, code, hold))
+            })
+            .collect()
+    })
+}
+
 impl crate::Host {
     /// One frame of the game's own main loop when its `main` runs as the main thread
     /// ([`PlayerMovement::main_frame`]); false when it doesn't run or stopped.
@@ -1242,23 +1262,7 @@ impl crate::Host {
     /// (`engine::units::platform::dinput::key`): `down` holds every DirectInput key code (the
     /// scan code) down this frame; each change becomes a key event.
     pub fn set_keys_down(&mut self, down: &[u8]) {
-        // `NV_MOVE_KEYS=FRAME:DIK:HOLD,..` (hex DIK key codes): keys held down from main's frame
-        // FRAME for HOLD frames, on top of the viewer's (a diagnostic: drives the game's menus
-        // with exact frame timing).
-        static SCRIPT: std::sync::OnceLock<Vec<(u64, u8, u64)>> = std::sync::OnceLock::new();
-        let script = SCRIPT.get_or_init(|| {
-            std::env::var("NV_MOVE_KEYS")
-                .unwrap_or_default()
-                .split(',')
-                .filter_map(|item| {
-                    let mut part = item.trim().split(':');
-                    let frame = part.next()?.parse().ok()?;
-                    let code = u8::from_str_radix(part.next()?, 16).ok()?;
-                    let hold = part.next().map_or(Some(1), |h| h.parse().ok())?;
-                    Some((frame, code, hold))
-                })
-                .collect()
-        });
+        let script = key_script();
         let frame = self.movement.main_frames;
         // The real game window's keyboard (`NV_D3D9=real`, Windows) holds keys too.
         #[cfg(windows)]
@@ -1292,7 +1296,13 @@ impl crate::Host {
         };
         // A scripted run (`NV_MOVE_KEYS`) drives the menus with keys; the real mouse moving over
         // the window would switch the game's interface to its mouse path and the keys would miss.
-        let (motion, buttons) = if std::env::var_os("NV_MOVE_KEYS").is_some() {
+        // Once the last scripted key is released the mouse is the player's again.
+        let scripted_until = key_script()
+            .iter()
+            .map(|&(at, _, hold)| at + hold)
+            .max()
+            .unwrap_or(0);
+        let (motion, buttons) = if self.movement.main_frames < scripted_until {
             ([0; 3], [false; 8])
         } else {
             (motion, buttons)
