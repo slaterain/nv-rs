@@ -1864,8 +1864,10 @@ pub fn player_character_load_3d(e: &mut Engine, this: Ptr<PlayerCharacter>, flag
     e.call(0x0048_ffd0, &args![animation, list, model, player, 1u32]);
     let first = e.call(0x008d_8520, &args![player]).u32();
     let second = e.call(0x008d_8520, &args![player]).u32();
-    let result = e.vcall(first, 0x148, &args![0u32, 0u32]).u32();
-    e.vcall(second, 0x160, &args![result]);
+    // 0094e8ee..0094e91d: the two 0s are pushed before GetCurrentWeapon (slot 0x148, no
+    // stack words); they are SetCurrentWeapon's (slot 0x160) group and force.
+    let result = e.vcall(first, 0x148, &args![]).u32();
+    e.vcall(second, 0x160, &args![result, 0u32, 0u32]);
     fn_0094eaf0(e, this.cast(), Ptr::new(node), true);
     if e.global::<u32>(NODE_CAMERA_3RD_SLOT) == 0 {
         let name = e.call(0x0057_15d0, &args![player]).u32();
@@ -10118,6 +10120,7 @@ mod tests {
         // The process: slot 0x148 (0, 0) feeds slot 0x160.
         assert_eq!(world.entry_calls.borrow().len(), 1);
         assert_eq!(world.entry_calls.borrow()[0][1], 0x77);
+        assert_eq!(world.entry_calls.borrow()[0][2..], [0, 0], "group and force");
         assert_eq!(world.process_calls.borrow().len(), 1);
 
         // The lighting and the character controller proxy.
