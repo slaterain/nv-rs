@@ -565,6 +565,7 @@ const QUERY_00719AE0: u32 = 0x0071_9ae0;
 const ACTION_00718930: u32 = 0x0071_8930;
 const IS_TOP_MENU_ID: u32 = 0x0070_2450;
 const IS_TOP_MENU_FADED_IN: u32 = 0x0070_24e0;
+/// Takes no `this`: none of its 8 exe callers (0070c72c ...) sets ECX for it.
 const IS_PIPBOY_MENU_TOPMOST: u32 = 0x0071_7920;
 const OBJECT_FLAG_0070ED80: u32 = 0x0070_ed80;
 const PIPBOY_MENU_CLASS: u32 = 0x0070_ede0;
@@ -2247,8 +2248,8 @@ fn set_cursor_hidden(e: &mut Engine, this: Ptr<InterfaceManager>, hidden: bool) 
 
 /// Part of `Idle`: `menu_blocks_pointer`, true when the pipboy (or the menu the code
 /// names) keeps the pointer from acting.
-fn idle_pointer_blocked(e: &mut Engine, this: Ptr<InterfaceManager>) -> bool {
-    if !e.call(IS_PIPBOY_MENU_TOPMOST, &args![this]).bool() {
+fn idle_pointer_blocked(e: &mut Engine, _this: Ptr<InterfaceManager>) -> bool {
+    if !e.call(IS_PIPBOY_MENU_TOPMOST, &args![]).bool() {
         return true;
     }
     if e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
@@ -2550,11 +2551,11 @@ fn pointer_scaled(e: &mut Engine, this: Ptr<InterfaceManager>) -> (f32, f32) {
 /// `value / menu height - 195`.
 fn pointer_to_pipboy_space(
     e: &mut Engine,
-    this: Ptr<InterfaceManager>,
+    _this: Ptr<InterfaceManager>,
     point: (f32, f32),
 ) -> (f32, f32) {
     let (mut x, mut y) = point;
-    if e.call(IS_PIPBOY_MENU_TOPMOST, &args![this]).bool() {
+    if e.call(IS_PIPBOY_MENU_TOPMOST, &args![]).bool() {
         let margin: f64 = e.global(PIPBOY_MARGIN);
         let height = e.call(GET_MENU_HEIGHT, &args![]).f64();
         x = (x as f64 / height - margin) as f32;
@@ -3076,7 +3077,7 @@ fn idle_dispatch_key(
     let frontmost = e.call(GET_FRONTMOST_MENU, &args![menu_manager]).u32();
     let mut taken = false;
     let mut pipboy_key = false;
-    if e.call(IS_PIPBOY_MENU_TOPMOST, &args![this]).bool() {
+    if e.call(IS_PIPBOY_MENU_TOPMOST, &args![]).bool() {
         let controls_owner = e.global::<u32>(CONTROLS_OWNER);
         let controls = e.call(CONTROLS_GET, &args![controls_owner]).u32();
         let page_key = e
@@ -3279,7 +3280,7 @@ fn idle_console_and_hot_keys(e: &mut Engine, this: Ptr<InterfaceManager>, state:
     }
     idle_pipboy_hot_keys(e, this, state);
     let top = e.call(GET_ENTER_STACK_TOP, &args![this]).u32();
-    if top == 0 || e.call(IS_PIPBOY_MENU_TOPMOST, &args![this]).bool() {
+    if top == 0 || e.call(IS_PIPBOY_MENU_TOPMOST, &args![]).bool() {
         interface_manager_update_pipboy(e, this);
     }
     e.call(TUTORIAL_MANAGER_UPDATE, &args![this.addr() + 0x4d4]);

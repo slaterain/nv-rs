@@ -6897,7 +6897,7 @@ pub fn fn_009443a0(e: &mut Engine, this: Ptr<PlayerCharacter>) -> f32 {
 // Translated from 009443c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Whether either of the two global flag bytes `011dea2b` and `011dea29` is
 /// set. (The method's `this` is saved but never read.)
-pub fn fn_009443c0(e: &mut Engine) -> bool {
+pub fn fn_009443c0(e: &mut Engine, _this: Ptr) -> bool {
     e.mem.u8(0x011d_ea2b) != 0 || e.mem.u8(0x011d_ea29) != 0
 }
 
@@ -11340,7 +11340,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00944360, fn_00944360(Ptr<PlayerCharacter>) -> bool),
         entry!(0x00944380, fn_00944380(Ptr<PlayerCharacter>, f32)),
         entry!(0x009443a0, fn_009443a0(Ptr<PlayerCharacter>) -> f32),
-        entry!(0x009443c0, fn_009443c0() -> bool),
+        entry!(0x009443c0, fn_009443c0(Ptr) -> bool),
         entry!(0x009443f0, fn_009443f0() -> f32),
         entry!(0x00944400, fn_00944400(Ptr) -> bool),
         entry!(0x00944430, fn_00944430(Ptr) -> bool),
@@ -16314,12 +16314,12 @@ mod tests {
     fn fn_009443c0_is_true_when_either_global_flag_is_set() {
         let mut e = engine();
         map_exe_data(&mut e);
-        assert!(!e.call(0x0094_43c0, &args![]).bool());
+        assert!(!e.call(0x0094_43c0, &args![0u32]).bool());
         e.mem.set_u8(0x011d_ea2b, 1);
-        assert!(e.call(0x0094_43c0, &args![]).bool());
+        assert!(e.call(0x0094_43c0, &args![0u32]).bool());
         e.mem.set_u8(0x011d_ea2b, 0);
         e.mem.set_u8(0x011d_ea29, 1);
-        assert!(e.call(0x0094_43c0, &args![]).bool());
+        assert!(e.call(0x0094_43c0, &args![0u32]).bool());
     }
 
     #[test]

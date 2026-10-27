@@ -1578,6 +1578,7 @@ const LIST_BOX_SELECT: u32 = 0x007d_7a80;
 /// and `007d6160`/`007d6d70` (on the menu): follow-up refreshes.
 const OPTIONS_LIST_HAS_SELECTION: u32 = 0x007d_7630;
 const MENU_REFRESH_A: u32 = 0x007d_6160;
+/// Takes no `this`: none of its 4 exe callers (007cec93, 007cfbab ...) sets ECX.
 const MENU_REFRESH_B: u32 = 0x007d_6d70;
 /// `Interface::ShowMessageBox`-like call made when defaults are reset in the
 /// controls list (`00703e80`, cdecl, 11 words): text, then `0, 0,
@@ -1801,7 +1802,7 @@ pub fn start_menu_do_click(e: &mut Engine, this: Ptr<StartMenu>, code: i32, tile
         e.call(LIST_BOX_DESELECT_ALL, &args![this.byte_add(0x84), 1u32]);
         fade(e, this.cast(), 5, 0);
         if menu_flag(e, this.cast(), 2) {
-            e.call(MENU_REFRESH_B, &args![this]);
+            e.call(MENU_REFRESH_B, &args![]);
             e.call(MENU_FLAGS_SET, &args![this, 2u32, 0u32]);
         }
     }
@@ -2518,12 +2519,12 @@ pub fn start_menu_do_idle(e: &mut Engine, this: Ptr<StartMenu>) {
                     e.call(MENU_FLAGS_SET, &args![this, 0x8000u32, 1u32]);
                     let now = e.call(TICK_COUNT, &args![]).u32();
                     e.set_global(FADE_DEADLINE, now.wrapping_add(3000));
-                    e.call(MENU_REFRESH_D, &args![this]);
+                    e.call(MENU_REFRESH_D, &args![]);
                     shown = true;
                 }
             }
             if !shown && e.call(MESSAGE_MENU_ACTIVE, &args![]).u32() == 0 {
-                e.call(MENU_REFRESH_D, &args![this]);
+                e.call(MENU_REFRESH_D, &args![]);
                 e.call(MENU_FLAGS_SET, &args![this, 0x4000u32, 0u32]);
                 e.call(MENU_FLAGS_SET, &args![this, 2u32, 0u32]);
             }
