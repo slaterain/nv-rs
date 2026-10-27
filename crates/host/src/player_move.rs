@@ -333,6 +333,8 @@ pub struct PlayerMovement {
     main_thread: Option<engine::thread_host::MainThread>,
     pub main_frames: u64,
     main_stage: Stage<()>,
+    /// When the status line ([`PlayerMovement::summary`]) was last printed from [`PlayerMovement::main_frame`].
+    main_reported: Option<std::time::Instant>,
     /// Frames the AI threads (and the world step on thread 2) ran, and
     /// frames they didn't ([`PlayerMovement::run_ai_threads`]).
     pub world_frames: u64,
@@ -365,6 +367,7 @@ impl Default for PlayerMovement {
             main_thread: None,
             main_frames: 0,
             main_stage: Stage::NotTried,
+            main_reported: None,
             world_frames: 0,
             world_fallback_frames: 0,
             world_failed: None,
@@ -1058,6 +1061,12 @@ impl PlayerMovement {
             Ok(()) => {
                 self.main_frames += 1;
                 self.main_stage = Stage::Done(());
+                // The status line every 5 s of the run while main's frames go on (the viewer's own
+                // print stops when its walking stops).
+                if self.main_reported.is_none_or(|t| t.elapsed().as_secs() >= 5) {
+                    self.main_reported = Some(std::time::Instant::now());
+                    println!("{}", self.summary());
+                }
                 true
             }
             Err(why) => {
