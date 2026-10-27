@@ -2194,6 +2194,26 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         ),
         (
             "d3dx9_38.dll",
+            "D3DXVec3TransformCoord",
+            entry!(0, d3dx::vec3_transform_coord(Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXMatrixInverse",
+            entry!(0, d3dx::matrix_inverse(Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXPlaneNormalize",
+            entry!(0, d3dx::plane_normalize(Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXPlaneTransform",
+            entry!(0, d3dx::plane_transform(Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
             "D3DXVec4Transform",
             entry!(0, d3dx::vec4_transform_import(Ptr, Ptr, Ptr) -> u32).1,
         ),
