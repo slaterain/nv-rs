@@ -863,6 +863,7 @@ address	size	unit	subsystem	evidence
 00cfb050	12		Havok SDK	imm 00cfb137
 00cfb060	1		Havok SDK	imm 00cfb141
 00cfb070	5		Havok SDK	imm 00cfb181
+00d01e50	295		Havok SDK	imm 00d2cca0
 00d02220	40	Havok SDK/hkpmultithreadedsimulation.cpp	Havok SDK	push 00d0332e
 00d043d0	3		Havok SDK	imm 00d05569
 00d043e0	6		Havok SDK	imm 00d0555f
