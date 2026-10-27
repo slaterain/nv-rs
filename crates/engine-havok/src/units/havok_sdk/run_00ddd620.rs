@@ -157,13 +157,11 @@ pub fn fn_00ddd7e0(e: &mut Engine, points: u32, out_a: u32, out_b: u32) -> f64 {
         let dot = sum3(mul4(n2, n1));
         e.mem.set_u32(out_b, x87_quiet(dot).to_bits());
         let stored = x87_quiet_bits(e.mem.u32(out_a));
-        let result = e
-            .call(
-                ATAN2_APPROXIMATION,
-                &args![stored, x87_quiet_bits(dot.to_bits())],
-            )
-            .f64();
-        result
+        e.call(
+            ATAN2_APPROXIMATION,
+            &args![stored, x87_quiet_bits(dot.to_bits())],
+        )
+        .f64()
     })
 }
 

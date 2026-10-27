@@ -157,7 +157,7 @@ pub fn fn_00dccc30(e: &mut Engine, this: u32, key: u32) -> u32 {
         let mut subpart = subpart_of(key, bits);
         let mut triangle = triangle_in_subpart(key, bits);
         let mut offset = subpart.wrapping_mul(SUBPART_SIZE);
-        let found = loop {
+        loop {
             let subparts = e.mem.u32(this + 0x24);
             triangle = triangle.wrapping_add(1);
             let count = e.mem.i32(offset.wrapping_add(subparts).wrapping_add(0x1c));
@@ -177,8 +177,7 @@ pub fn fn_00dccc30(e: &mut Engine, this: u32, key: u32) -> u32 {
             if !triangle_is_degenerate(e, shape, frame + 0x1b) {
                 break candidate;
             }
-        };
-        found
+        }
     })
 }
 
