@@ -3622,7 +3622,11 @@ mod tests {
         call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0500, 0, 0, 0]);
         // Main's Sleep(0): the thread runs and sleeps; the clock stays.
         call(&mut e, SLEEP, &[0]);
-        assert_eq!(tick_count(&mut e), 1000, "a game thread's Sleep keeps the clock");
+        assert_eq!(
+            tick_count(&mut e),
+            1000,
+            "a game thread's Sleep keeps the clock"
+        );
         // Passes before its wake time leave it asleep.
         e.clock_ms = 1049;
         call(&mut e, SLEEP, &[0]);
@@ -3630,7 +3634,10 @@ mod tests {
         // From its wake time it runs again.
         e.clock_ms = 1050;
         call(&mut e, SLEEP, &[0]);
-        assert_eq!(logged(&e).iter().map(|l| l.0).collect::<Vec<_>>(), [1000, 1050]);
+        assert_eq!(
+            logged(&e).iter().map(|l| l.0).collect::<Vec<_>>(),
+            [1000, 1050]
+        );
         // Main's own Sleep moves the clock as before, and the thread runs when due.
         call(&mut e, SLEEP, &[60]);
         assert_eq!(tick_count(&mut e), 1110);

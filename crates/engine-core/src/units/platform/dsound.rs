@@ -758,8 +758,8 @@ impl super::sound_out::Source for Voices {
         let mut hold = false;
         if let Some(p) = &mut self.pace {
             let game = p.game_us + p.at.elapsed().as_micros() as u64;
-            let target = (u128::from(game.saturating_sub(p.start_us)) * u128::from(rate)
-                / 1_000_000) as i64;
+            let target =
+                (u128::from(game.saturating_sub(p.start_us)) * u128::from(rate) / 1_000_000) as i64;
             let lag = target - (p.mixed + frames) as i64;
             let cap = i64::from(rate / 10);
             if lag > cap {
@@ -774,7 +774,9 @@ impl super::sound_out::Source for Voices {
                     left -= n;
                 }
                 if let Some(r) = &mut self.record {
-                    r.note(&format!("pace: skipped {skip} frames (the game's clock ran ahead)"));
+                    r.note(&format!(
+                        "pace: skipped {skip} frames (the game's clock ran ahead)"
+                    ));
                 }
             } else if lag < -cap {
                 hold = true;
@@ -782,7 +784,9 @@ impl super::sound_out::Source for Voices {
         }
         if hold {
             if let Some(r) = &mut self.record {
-                r.note(&format!("pace: {frames} frames of silence (the game's clock is behind)"));
+                r.note(&format!(
+                    "pace: {frames} frames of silence (the game's clock is behind)"
+                ));
             }
         } else {
             if let Some(p) = &mut self.pace {
@@ -937,7 +941,11 @@ pub fn play_stream_from(
         return;
     };
     if rate != device {
-        approximate(e, "resampling", &format!("a stream at {rate} Hz on {device} Hz"));
+        approximate(
+            e,
+            "resampling",
+            &format!("a stream at {rate} Hz on {device} Hz"),
+        );
     }
     let Some(m) = &e.kernel.sound.mix else {
         return;
@@ -1641,7 +1649,11 @@ fn heard(e: &mut Engine, this: Ptr, call: &str) {
         u16::from_le_bytes([b.format[14], b.format[15]]),
         f,
         b.bytes,
-        if b.flags & DSBCAPS_CTRL3D != 0 { ", 3D" } else { "" },
+        if b.flags & DSBCAPS_CTRL3D != 0 {
+            ", 3D"
+        } else {
+            ""
+        },
         b.effect.map_or(String::new(), |fx| format!(", {fx}")),
     );
     if f != rate {
@@ -2794,7 +2806,10 @@ mod tests {
         seek_stream(&mut e, 0x9000, 1);
         stream_volume(&mut e, 0x9000, -100);
         let v = voices.lock().unwrap();
-        assert_eq!((v.all[&0x9000].position, v.all[&0x9000].volume), (Some(1), -100));
+        assert_eq!(
+            (v.all[&0x9000].position, v.all[&0x9000].volume),
+            (Some(1), -100)
+        );
     }
 
     #[test]

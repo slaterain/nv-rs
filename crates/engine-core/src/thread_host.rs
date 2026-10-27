@@ -355,6 +355,8 @@ pub fn run_threads(e: &mut Engine, signalled: Signalled) {
 
 /// Swaps the running thread's TLS block and call stack for thread `to`'s.
 fn swap_context(e: &mut Engine, from: usize, to: usize) {
+    // A thread switched to starts a whole time slice.
+    e.slice_left = e.slice_len;
     let mut to_tls = e.kernel.threads.list[to].tls;
     if to_tls == 0 {
         to_tls = e.new_tls_block();
@@ -423,6 +425,7 @@ fn load_fpu(e: &mut Engine) {
 
 /// [`swap_context`] from thread `from` back to the main thread.
 fn swap_context_back(e: &mut Engine, from: usize) {
+    e.slice_left = e.slice_len;
     let main_tls = e.kernel.threads.list[0].tls;
     let from_tls = e.swap_tls(main_tls);
     let main_stack = std::mem::take(&mut e.kernel.threads.list[0].call_stack);
@@ -735,6 +738,35 @@ pub fn end_main_frame(e: &mut Engine) -> bool {
     });
     load_fpu(e);
     true
+}
+
+/// The time slice's end (`Engine::slice_hook`; turned on by [`start_slicing`]): another switch
+/// point. On Windows the game's threads run beside each other, so a thread that never waits or
+/// sleeps (a worker updating the scene, the main thread polling a task queue for the workers'
+/// results) does not keep the others from running. Here, after `Engine::slice_len` calls of one
+/// turn: a game thread other than main gives its turn back, runnable at the next pass as after
+/// `Sleep(0)`; the main thread gives the others one pass. Counted in calls, so runs stay
+/// deterministic.
+pub fn preempt(e: &mut Engine) {
+    if e.kernel.threads.list.is_empty() {
+        return;
+    }
+    if on_main(e) {
+        one_pass(e, crate::units::platform::signalled);
+        return;
+    }
+    let until = e.clock_now_us();
+    let i = e.kernel.threads.current;
+    e.kernel.threads.list[i].state = RunState::Sleeping { until };
+    yield_to_main(Yield::Paused);
+    load_fpu(e);
+}
+
+/// Turns the time slice on: [`preempt`] after every `calls` calls of a turn.
+pub fn start_slicing(e: &mut Engine, calls: u64) {
+    e.slice_len = calls;
+    e.slice_left = calls;
+    e.slice_hook = Some(preempt);
 }
 
 #[cfg(test)]

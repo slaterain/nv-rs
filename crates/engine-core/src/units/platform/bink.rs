@@ -329,7 +329,10 @@ pub fn do_frame(e: &mut Engine, bink: u32) -> i32 {
         movie.start = Some(e.clock_now_ms());
         movie.base = index;
         if let Some((pcm, channels, rate)) = movie.track.take() {
-            super::dsound::note(e, &format!("movie {bink:08x}: sound track, {rate} Hz, {channels} ch"));
+            super::dsound::note(
+                e,
+                &format!("movie {bink:08x}: sound track, {rate} Hz, {channels} ch"),
+            );
             super::dsound::play_stream(e, bink, pcm, channels, 16, rate);
         }
     }

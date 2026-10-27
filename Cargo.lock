@@ -125,6 +125,7 @@ version = "0.1.0"
 dependencies = [
  "engine",
  "esm",
+ "play-patch",
  "script",
  "world",
 ]
@@ -166,6 +167,14 @@ dependencies = [
 [[package]]
 name = "physics"
 version = "0.1.0"
+
+[[package]]
+name = "play-patch"
+version = "0.1.0"
+dependencies = [
+ "engine",
+ "engine-core",
+]
 
 [[package]]
 name = "preview"

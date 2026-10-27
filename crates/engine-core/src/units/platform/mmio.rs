@@ -161,7 +161,10 @@ pub fn mmio_open_a(e: &mut Engine, name: Ptr, info: Ptr, flags: u32) -> u32 {
          procedure with MMIO_ALLOCBUF)"
     );
     if !name.is_null() {
-        let what = format!("mmioOpen {}", String::from_utf8_lossy(&e.mem.cstr(name.addr())));
+        let what = format!(
+            "mmioOpen {}",
+            String::from_utf8_lossy(&e.mem.cstr(name.addr()))
+        );
         super::dsound::note(e, &what);
     }
     let h = e.mem.alloc(MMIOINFO_SIZE);

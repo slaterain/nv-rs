@@ -824,7 +824,10 @@ pub fn create_file_a(
     let path = key(&name);
     // A sound file (music among them) opened: named in the sound recording's log, when
     // there is one (`super::dsound::note`).
-    if [".mp3", ".wav", ".ogg", ".bik"].iter().any(|x| path.ends_with(x.as_bytes())) {
+    if [".mp3", ".wav", ".ogg", ".bik"]
+        .iter()
+        .any(|x| path.ends_with(x.as_bytes()))
+    {
         let what = format!("open {}", String::from_utf8_lossy(&name));
         super::dsound::note(e, &what);
     }

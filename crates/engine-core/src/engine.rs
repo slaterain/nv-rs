@@ -148,6 +148,13 @@ pub struct Engine {
     /// the call stack, 0 at a stage's top): where a long run spends its calls (the host's
     /// `NV_MOVE_CALL_PROFILE`).
     pub call_counts: Option<AddrMap<u64, u64>>,
+    /// The thread host's time slice: calls left in the running thread's turn, the length a
+    /// turn starts with, and what runs when a turn is used up (`thread_host::preempt`: game
+    /// threads run beside each other on Windows, so a thread that never waits must not keep
+    /// the others from running). `None`: no slicing (tests, start-up without the host).
+    pub slice_left: u64,
+    pub slice_len: u64,
+    pub slice_hook: Option<fn(&mut Engine)>,
 }
 
 /// How many returned calls [`Engine::trace`] keeps.
@@ -214,6 +221,9 @@ impl Engine {
             trace_keep: TRACE_KEEP,
             call_budget: None,
             call_counts: None,
+            slice_left: 0,
+            slice_len: 0,
+            slice_hook: None,
         }
     }
 
@@ -414,6 +424,14 @@ impl Engine {
     /// call stack, the call itself and the trace.
     #[inline(always)]
     fn run(&mut self, addr: u32, args: &[u32], f: Callable) -> Ret {
+        if let Some(hook) = self.slice_hook {
+            if self.slice_left == 0 {
+                self.slice_left = self.slice_len;
+                hook(self);
+            } else {
+                self.slice_left -= 1;
+            }
+        }
         if let Some(budget) = &mut self.call_budget {
             if *budget == 0 {
                 panic!("call budget spent (at {addr:08x})");

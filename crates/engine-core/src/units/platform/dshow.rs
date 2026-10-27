@@ -524,7 +524,10 @@ fn sound_from(e: &mut Engine, at: u32, position: i64) {
         super::dsound::play_stream_from(e, at, pcm, channels, 16, rate, frame);
     }
     super::dsound::stream_volume(e, at, volume);
-    super::dsound::note(e, &format!("music {at:08x}: Run from {:.3} s", position as f64 / 1e7));
+    super::dsound::note(
+        e,
+        &format!("music {at:08x}: Run from {:.3} s", position as f64 / 1e7),
+    );
 }
 
 /// The samples Windows' graph gives for a stream (measured against the MP3 Decoder DMO's

@@ -76,6 +76,16 @@ impl Host {
         // The game's clock (`GetTickCount`, `timeGetTime`, `QueryPerformanceCounter`) runs with
         // the real time from here on, `Sleep` moving it on too (`Engine::clock_now_ms`).
         engine.start_real_clock();
+        // The game's threads take turns every `NV_SLICE` calls (200000 unless set; 0: only at
+        // waits and sleeps), as they would run side by side on Windows
+        // (`engine::thread_host::preempt`).
+        let slice = std::env::var("NV_SLICE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(200_000u64);
+        if slice != 0 {
+            engine::thread_host::start_slicing(&mut engine, slice);
+        }
         // `NV_SOUND=out`: the game's sound on the player's default device, from when the game
         // makes its DirectSound device on; `NV_SOUND_RECORD=FILE.wav` also records what goes
         // to the device, with a log of what started when (`FILE.log`). Off by default.
