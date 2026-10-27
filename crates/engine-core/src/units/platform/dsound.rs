@@ -1706,10 +1706,22 @@ fn heard(e: &mut Engine, this: Ptr, call: &str) {
     if b.effect.is_some() {
         approximate(e, "distortion (heard dry)", &what);
     }
+    refresh_voice(e, this.addr());
     if call == "Play" {
+        // The log also names the level it is heard at: the volume, and for a 3D buffer its
+        // position from the listener and the 3D stage's left and right attenuation.
+        let b = buffer(e, this).clone();
+        let mut what = format!("{what}, volume {}", b.volume);
+        if b.flags & DSBCAPS_CTRL3D != 0 {
+            let l = e.kernel.sound.listeners.values().next().map(|(_, l)| l.position);
+            let (gl, gr) = spatial_of(e, &b);
+            what += &format!(
+                ", at {:?} (listener {:?}, min {} max {}), 3D {:.0}/{:.0} mB",
+                b.position, l, b.min_distance, b.max_distance, gl, gr
+            );
+        }
         note(e, &what);
     }
-    refresh_voice(e, this.addr());
 }
 
 /// Brings a buffer's voice up to date with its frequency and, for a 3D buffer, its position
@@ -1989,6 +2001,9 @@ fn play(e: &mut Engine, this: Ptr, reserved: u32, priority: u32, flags: u32) -> 
 /// end), measured.
 fn stop(e: &mut Engine, this: Ptr) -> u32 {
     let b = secondary(e, this, "Stop");
+    if matches!(b.play, Play::Playing { .. }) {
+        note(e, &format!("Stop {:08x}", this.addr()));
+    }
     let ended = buffer(e, this).play == Play::Ended;
     let (_, write) = cursors(e, this);
     let ended = ended || buffer(e, this).play == Play::Ended;
