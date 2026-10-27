@@ -479,7 +479,7 @@ fn load_new_packfile_in_frame(
     let contents_type = e.vcall(resource, 0x1c, &args![]).u32();
     let lookup = e.mem.u32(registry_vtable + 0x10);
     let class = e.call(lookup, &args![class_registry, contents_type]).u32();
-    let result = if class == 0 {
+    if class == 0 {
         e.call(WORLD_DESTRUCTOR, &args![world]);
         e.call(REMOVE_REFERENCE, &args![resource]);
         e.call(STRING_MAP_DESTRUCTOR, &args![local_registry + 8]);
@@ -504,8 +504,7 @@ fn load_new_packfile_in_frame(
         e.call(REMOVE_REFERENCE, &args![resource]);
         e.call(STRING_MAP_DESTRUCTOR, &args![local_registry + 8]);
         converted
-    };
-    result
+    }
 }
 
 // Translated from 00d48950 (decompiled, FalloutNV.exe 1.4.0.525)

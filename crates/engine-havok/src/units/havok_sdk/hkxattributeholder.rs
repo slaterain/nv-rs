@@ -231,7 +231,7 @@ pub fn hkx_attribute_holder_find_attribute_object_by_name(
         e.mem.set_u32(variant + 4, class_record);
         hkx_attribute_holder_find_attribute_variant_by_name(e, this, Ptr::new(variant), name);
         let object = e.mem.u32(variant);
-        let answer = if object == 0 {
+        if object == 0 {
             0
         } else {
             let mut matches = true;
@@ -253,8 +253,7 @@ pub fn hkx_attribute_holder_find_attribute_object_by_name(
             } else {
                 0
             }
-        };
-        answer
+        }
     })
 }
 
