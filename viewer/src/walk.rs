@@ -1,4 +1,4 @@
-//! Walking through the cell as the player, and going through load doors.
+//! Waling through the cell as the player, and going through load doors.
 //!
 //! The rules (speeds, when running and jumping are allowed, the jump) are
 //! `world::locomotion`'s; the collision is the models' Havok shapes
@@ -530,15 +530,6 @@ pub fn walk(
                 seconds: dt,
                 jump: jump.is_some(),
             };
-            // The keys down for the game's own DirectInput keyboard (`Controls::Poll`).
-            let down: Vec<u8> = keys.get_pressed().filter_map(|k| dinput_code(*k)).collect();
-            host.set_keys_down(&down);
-            // The mouse for the game's DirectInput mouse: the frame's motion and wheel
-            // (120 a notch, `WHEEL_DELTA`) and the buttons in DirectInput's order.
-            host.mouse(mouse_motion(&motion, &scroll), mouse_buttons(&mouse));
-            // A frame of the game's own main loop, when its `main` runs (it reads the keys
-            // and the mouse fed above).
-            host.main_frame();
             host.move_player(order, state.0.player_cell, &input)
         }
     };
@@ -917,6 +908,27 @@ fn mouse_buttons(mouse: &ButtonInput<MouseButton>) -> [bool; 8] {
         false,
     ]
 }
+
+/// A frame of the game's own main loop (`host::Host::main_frame`), every viewer frame once the
+/// game's `main` runs, whatever the viewer's own frame model is doing: its menus, dialogue and
+/// walking state must not hold the game's loop back (the start-up message boxes stopped it after
+/// two frames when this ran inside [`walk`]). The keyboard and the mouse go first, which the
+/// game's DirectInput devices read (`Controls::Poll`): the keys down by DirectInput key code, the
+/// frame's motion and wheel (120 a notch, `WHEEL_DELTA`) and the buttons in DirectInput's order.
+pub fn game_main_frame(
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    motion: Res<bevy::input::mouse::AccumulatedMouseMotion>,
+    scroll: Res<bevy::input::mouse::AccumulatedMouseScroll>,
+    host: Option<NonSendMut<host::Host>>,
+) {
+    let Some(mut host) = host else {
+        return;
+    };
+    let down: Vec<u8> = keys.get_pressed().filter_map(|k| dinput_code(*k)).collect();
+    host.set_keys_down(&down);
+    host.mouse(mouse_motion(&motion, &scroll), mouse_buttons(&mouse));
+    host.main_frame();
 
 #[cfg(test)]
 mod tests {

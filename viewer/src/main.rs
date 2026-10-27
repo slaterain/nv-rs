@@ -590,6 +590,8 @@ fn main() {
                 .in_set(FrameSet::Stage(Stage::Player))
                 .before(FrameSet::step(frame_order::UPDATE_PLAYER_STEP)),
         )
+        // The game's own main loop, every frame (`walk::game_main_frame`), before the walk.
+        .add_systems(Update, walk::game_main_frame.before(walk::walk))
         .add_systems(
             Update,
             (
