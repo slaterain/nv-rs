@@ -1076,7 +1076,10 @@ impl PlayerMovement {
                 self.main_stage = Stage::Done(());
                 // The status line every 5 s of the run while main's frames go on (the viewer's own
                 // print stops when its walking stops).
-                if self.main_reported.is_none_or(|t| t.elapsed().as_secs() >= 5) {
+                if self
+                    .main_reported
+                    .is_none_or(|t| t.elapsed().as_secs() >= 5)
+                {
                     self.main_reported = Some(std::time::Instant::now());
                     println!("{}", self.summary());
                     // `NV_MOVE_WATCH=addr,addr..`: the words at those exe addresses with it (a
@@ -1084,8 +1087,20 @@ impl PlayerMovement {
                     if let Ok(list) = std::env::var("NV_MOVE_WATCH") {
                         let words: Vec<String> = list
                             .split(',')
-                            .filter_map(|a| u32::from_str_radix(a.trim(), 16).ok())
-                            .map(|a| format!("{a:08x}={:08x}", e.mem.u32(a)))
+                            // `A>O>O..`: the word at A, then the word at that plus O, and on.
+                            .filter_map(|item| {
+                                let mut parts = item.trim().split('>');
+                                let mut word =
+                                    e.mem.u32(u32::from_str_radix(parts.next()?, 16).ok()?);
+                                for offset in parts {
+                                    let offset = u32::from_str_radix(offset, 16).ok()?;
+                                    if word == 0 {
+                                        break;
+                                    }
+                                    word = e.mem.u32(word.wrapping_add(offset));
+                                }
+                                Some(format!("{}={word:08x}", item.trim()))
+                            })
                             .collect();
                         println!("watch: {}", words.join(" "));
                     }
