@@ -881,12 +881,14 @@ pub fn fn_00dd7090(e: &mut Engine, this: u32, other: u32) {
 /// start, and its first word is the next element. `out` receives 1 when the chain ends (a
 /// null word) and 0 when a test fails. A zero element size faults in the code's `DIV`; it
 /// panics here.
-pub fn fn_00dd7140(e: &mut Engine, this: u32, out: u32) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
+pub fn fn_00dd7140(e: &mut Engine, this: u32, out: u32) -> u32 {
     let mut element = e.mem.u32(this);
     loop {
         if element == 0 {
             e.mem.set_u8(out, 1);
-            return;
+            return out;
         }
         let alignment = e.mem.u32(this + 0x18).wrapping_sub(1);
         if element & alignment != 0 {
@@ -896,7 +898,7 @@ pub fn fn_00dd7140(e: &mut Engine, this: u32, out: u32) {
         let start = loop {
             if block == 0 {
                 e.mem.set_u8(out, 0);
-                return;
+                return out;
             }
             let checker = e.mem.u32(this + 0x30);
             // The exe's frame (`PUSH ECX` and three pushes): 0x10 bytes, the answer byte at +0xf,
@@ -909,7 +911,7 @@ pub fn fn_00dd7140(e: &mut Engine, this: u32, out: u32) {
             });
             if !valid {
                 e.mem.set_u8(out, 0);
-                return;
+                return out;
             }
             let start = e.mem.u32(block + 8);
             if element >= start {
@@ -932,6 +934,7 @@ pub fn fn_00dd7140(e: &mut Engine, this: u32, out: u32) {
         element = e.mem.u32(element);
     }
     e.mem.set_u8(out, 0);
+    out
 }
 
 // Translated from 00dd6ea0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -971,7 +974,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00dd6ec0, fn_00dd6ec0(u32)),
         entry!(0x00dd6f20, fn_00dd6f20(u32)),
         entry!(0x00dd7090, fn_00dd7090(u32, u32)),
-        entry!(0x00dd7140, fn_00dd7140(u32, u32)),
+        entry!(0x00dd7140, fn_00dd7140(u32, u32) -> u32),
     ]
 }
 
@@ -1676,6 +1679,21 @@ mod tests {
         e.mem.set_u32(this, 0);
         e.call(0x00dd_7140, &args![this, out]);
         assert_eq!(e.mem.u8(out), 1);
+    }
+
+    #[test]
+    fn fn_00dd7140_answers_its_result_pointer() {
+        let (mut e, _) = env();
+        let (this, start) = free_list(&mut e, true);
+        // Elements 3, 1 and 5 chained, the last ends the chain.
+        e.mem.set_u32(this, start + 0x30);
+        e.mem.set_u32(start + 0x30, start + 0x10);
+        e.mem.set_u32(start + 0x10, start + 0x50);
+        e.mem.set_u32(start + 0x50, 0);
+        let out = e.mem.alloc(4);
+        e.mem.set_u8(out, 7);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(e.call(0x00dd_7140, &args![this, out]).u32(), args![out][0]);
     }
 
     #[test]

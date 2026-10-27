@@ -3905,18 +3905,20 @@ pub fn hkp_world_add_constraint(e: &mut Engine, this: Ptr<HkpWorld>, constraint:
 /// removed immediately; the constraint gets a reference, leaves the simulation islands
 /// (`00cb3dd0`), is detached (`00cf3040`) and loses the reference; when the critical
 /// section ends the pending operations are flushed. `*result` is 1.
+/// Answers `result`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 pub fn hkp_world_remove_constraint(
     e: &mut Engine,
     this: Ptr<HkpWorld>,
     result: Ptr,
     constraint: u32,
-) {
+) -> Ptr {
     if operations_locked(e, this) {
         queue_operation(e, this, 9, |e, operation| {
             e.mem.set_u32(operation + 4, constraint);
         });
         e.mem.set_u8(result.addr(), 0);
-        return;
+        return result;
     }
     e.set(this, HkpWorld::m_criticalOperationsLockCount, 1);
     if e.vcall(constraint, 0x18, &args![]).u32() == 1 {
@@ -3931,6 +3933,7 @@ pub fn hkp_world_remove_constraint(
     e.call(REMOVE_REFERENCE, &args![constraint]);
     end_critical_section(e, this);
     e.mem.set_u8(result.addr(), 1);
+    result
 }
 
 // Translated from 00c97f50 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5415,6 +5418,8 @@ pub fn hkp_null_contact_mgr_factory_scalar_deleting_destructor(
 // Translated from 00c982a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed. Five further stack words after `out` (`RET 0x18`; `ECX` is not read): stores the
 /// byte 1 at `out` (the null collision filter accepts every pair).
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool result returned
+/// through a pointer), and virtual call sites test the flag through `EAX` (e.g. 00cfae7e).
 #[allow(clippy::too_many_arguments)]
 pub fn fn_00c982a0(
     e: &mut Engine,
@@ -5425,13 +5430,16 @@ pub fn fn_00c982a0(
     _unused_5: u32,
     _unused_6: u32,
     _unused_7: u32,
-) {
+) -> u32 {
     e.mem.set_u8(out, 1);
+    out
 }
 
 // Translated from 00c982b0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed. Seven further stack words after `out` (`RET 0x20`; `ECX` is not read): stores the
 /// byte 1 at `out`.
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 #[allow(clippy::too_many_arguments)]
 pub fn fn_00c982b0(
     e: &mut Engine,
@@ -5444,13 +5452,16 @@ pub fn fn_00c982b0(
     _unused_7: u32,
     _unused_8: u32,
     _unused_9: u32,
-) {
+) -> u32 {
     e.mem.set_u8(out, 1);
+    out
 }
 
 // Translated from 00c982c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed. Four further stack words after `out` (`RET 0x14`; `ECX` is not read): stores the
 /// byte 1 at `out`.
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
 pub fn fn_00c982c0(
     e: &mut Engine,
     _this: Ptr,
@@ -5459,15 +5470,19 @@ pub fn fn_00c982c0(
     _unused_4: u32,
     _unused_5: u32,
     _unused_6: u32,
-) {
+) -> u32 {
     e.mem.set_u8(out, 1);
+    out
 }
 
 // Translated from 00c982d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed. Two further stack words after `out` (`RET 0xC`; `ECX` is not read): stores the
 /// byte 1 at `out`.
-pub fn fn_00c982d0(e: &mut Engine, _this: Ptr, out: u32, _unused_3: u32, _unused_4: u32) {
+/// Answers `out`: the exe leaves it in `EAX` at every `RET` (the hkBool result returned
+/// through a pointer), and virtual call sites test the flag through `EAX` (e.g. 00c90f6a).
+pub fn fn_00c982d0(e: &mut Engine, _this: Ptr, out: u32, _unused_3: u32, _unused_4: u32) -> u32 {
     e.mem.set_u8(out, 1);
+    out
 }
 
 // Translated from 00c982e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5665,7 +5680,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00c9_7e80,
-            hkp_world_remove_constraint(Ptr<HkpWorld>, Ptr, u32)
+            hkp_world_remove_constraint(Ptr<HkpWorld>, Ptr, u32) -> Ptr
         ),
         entry!(0x00c9_7f50, hkp_world_remove_action(Ptr<HkpWorld>, u32)),
         entry!(0x00c9_8310, fn_00c98310(Ptr, u32) -> u32),
@@ -5740,13 +5755,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00c9_8260,
             hkp_null_contact_mgr_factory_scalar_deleting_destructor(Ptr, u32) -> Ptr
         ),
-        entry!(0x00c9_82a0, fn_00c982a0(Ptr, u32, u32, u32, u32, u32, u32)),
+        entry!(0x00c9_82a0, fn_00c982a0(Ptr, u32, u32, u32, u32, u32, u32) -> u32),
         entry!(
             0x00c9_82b0,
-            fn_00c982b0(Ptr, u32, u32, u32, u32, u32, u32, u32, u32)
+            fn_00c982b0(Ptr, u32, u32, u32, u32, u32, u32, u32, u32) -> u32
         ),
-        entry!(0x00c9_82c0, fn_00c982c0(Ptr, u32, u32, u32, u32, u32)),
-        entry!(0x00c9_82d0, fn_00c982d0(Ptr, u32, u32, u32)),
+        entry!(0x00c9_82c0, fn_00c982c0(Ptr, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00c9_82d0, fn_00c982d0(Ptr, u32, u32, u32) -> u32),
         entry!(0x00c9_82e0, fn_00c982e0(Ptr, u32) -> Ptr),
         entry!(
             0x00c9_8350,
@@ -11344,6 +11359,52 @@ mod tests {
     #[test]
     fn fn_00c982d0_accepts_every_pair() {
         check_out_byte(0x00c9_82d0, 2);
+    }
+
+    #[test]
+    fn remove_constraint_answers_its_result_pointer() {
+        let mut rig = rig();
+        silent(
+            &mut rig.e,
+            &[
+                ADD_REFERENCE,
+                REMOVE_REFERENCE,
+                REMOVE_CONSTRAINT_SI,
+                CONSTRAINT_DETACH,
+                QUEUE_FLUSH_PENDING,
+            ],
+        );
+        let log = Rc::new(RefCell::new(vec![]));
+        // Kind 1, but its action belongs to another world: it stays.
+        let constraint = constraint_object(&mut rig.e, &log, 1, 0, 0x1000);
+        let result = rig.e.mem.alloc(4);
+        rig.e.mem.set_u8(result, 0x55);
+        rig.e.mem.set_u32(rig.world.addr() + 0x8c, 1);
+        rig.e
+            .set(rig.world, HkpWorld::m_pendingOperations, Ptr::new(0x5000));
+        // EAX is `result` at both RETs (the hkBool result pointer the callers read through).
+        let answered = rig
+            .e
+            .call(0x00c9_7e80, &args![rig.world, result, constraint])
+            .u32();
+        assert_eq!(answered, result);
+    }
+
+    #[test]
+    fn the_accepting_filters_answer_their_out_pointer() {
+        for (address, words) in [
+            (0x00c9_82a0, 5usize),
+            (0x00c9_82b0, 7),
+            (0x00c9_82c0, 4),
+            (0x00c9_82d0, 2),
+        ] {
+            let mut e = Engine::new();
+            let out = e.mem.alloc(4);
+            let mut arguments = vec![0u32, out];
+            arguments.extend(vec![0u32; words]);
+            // EAX is `out` at the RET; virtual call sites test the flag through it (00c90f6a).
+            assert_eq!(e.call(address, &arguments).u32(), out);
+        }
     }
 
     #[test]
