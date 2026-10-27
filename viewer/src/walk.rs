@@ -929,6 +929,7 @@ pub fn game_main_frame(
     host.set_keys_down(&down);
     host.mouse(mouse_motion(&motion, &scroll), mouse_buttons(&mouse));
     host.main_frame();
+}
 
 #[cfg(test)]
 mod tests {
