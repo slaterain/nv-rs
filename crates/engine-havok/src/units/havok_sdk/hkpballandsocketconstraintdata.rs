@@ -140,16 +140,19 @@ pub fn hkp_ball_and_socket_constraint_data_get_type(_e: &mut Engine, _this: Ptr)
 /// Returns `this`.
 pub fn hkp_ball_and_socket_constraint_data_construct(e: &mut Engine, this: Ptr) -> Ptr {
     let base = this.addr();
-    let one = e.mem.alloc(4);
-    e.mem.set_f32(one, 1.0);
-    e.mem.set_u16(base + 6, 1);
-    e.mem.set_u32(base + 8, 0);
-    e.mem.set_u32(base, BALL_AND_SOCKET_VTABLE);
-    e.mem.set_u16(base + 0x10, 3);
-    e.mem.set_u8(base + 0x42, 0);
-    e.mem.set_u16(base + 0x40, 5);
-    e.call(UFLOAT8_ASSIGN, &args![base + 0x43, one]);
-    e.mem.free(one);
+    // The exe's frame (`AND ESP,0xfffffff0`, `SUB ESP,0xc`, one push): 0x10 bytes from a
+    // 16-byte boundary, the 1.0 at +0xc (00d5429e).
+    e.with_stack(0x10 + 0x10, |e, raw| {
+        let one = ((raw.addr() + 0xf) & !0xf) + 0xc;
+        e.mem.set_f32(one, 1.0);
+        e.mem.set_u16(base + 6, 1);
+        e.mem.set_u32(base + 8, 0);
+        e.mem.set_u32(base, BALL_AND_SOCKET_VTABLE);
+        e.mem.set_u16(base + 0x10, 3);
+        e.mem.set_u8(base + 0x42, 0);
+        e.mem.set_u16(base + 0x40, 5);
+        e.call(UFLOAT8_ASSIGN, &args![base + 0x43, one]);
+    });
     let impulse = x87_quiet(e.mem.f32(DEFAULT_MAX_LINEAR_IMPULSE));
     e.mem.set_f32(base + 0x44, impulse);
     for offset in [0x20, 0x30] {
@@ -340,7 +343,11 @@ mod tests {
         for offset in (0..0x50).step_by(4) {
             e.mem.set_u32(data + offset, 0xffff_ffff);
         }
+        // The 1.0 sits at +0xc of the exe's aligned 0x10-byte frame.
+        let block = e.mem.alloc(0x20);
+        e.mem.free(block);
         let result = e.call(0x00d5_4290, &args![data]);
+        assert_eq!(e.mem.f32(((block + 0xf) & !0xf) + 0xc), 1.0);
         assert_eq!(result.u32(), data);
         assert_eq!(e.mem.u16(data + 6), 1);
         assert_eq!(e.mem.u32(data + 8), 0);
