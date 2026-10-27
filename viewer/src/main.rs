@@ -512,6 +512,13 @@ fn main() {
         .add_plugins(rendered_terminal::RenderedTerminalPlugin)
         .add_plugins(companions::CompanionsPlugin)
         .add_audio_source::<sounds::PcmSound>()
+        // With the game's own sound on (`NV_SOUND`), the game plays its music, ambience and
+        // effects itself: the viewer's own sound would double them.
+        .insert_resource(if std::env::var_os("NV_SOUND").is_some() {
+            bevy::audio::GlobalVolume::new(bevy::audio::Volume::SILENT)
+        } else {
+            bevy::audio::GlobalVolume::default()
+        })
         // The first-person camera runs the image space passes with the
         // main camera's grade, once everything has set it.
         .add_systems(

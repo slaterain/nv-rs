@@ -139,9 +139,11 @@ extern "system" fn window_procedure(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // The run is the viewer's: closing this window does not end it.
+    // Closing the game's window ends the run (the player's way out, also when the game has
+    // stopped); the window itself is not destroyed first.
     if message == WM_CLOSE {
-        return LRESULT(0);
+        eprintln!("NV_D3D9=real: the game's window was closed: the run ends");
+        std::process::exit(0);
     }
     match message {
         WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP | WM_MOUSEMOVE | WM_LBUTTONDOWN
