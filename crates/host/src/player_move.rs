@@ -419,10 +419,17 @@ impl PlayerMovement {
         let trace_file = std::env::var_os("NV_MOVE_TRACE");
         if trace_file.is_some() {
             e.trace = Some(Default::default());
-            // `NV_MOVE_CALL_BUDGET=N`: stop after N more calls (finds where a run loops).
+            // `NV_MOVE_CALL_BUDGET=N`: stop after N more calls (finds where a run loops); with
+            // `NV_MOVE_BUDGET_FROM=F`, only in main's frames from F on (start-up is frame 0).
+            let from: u64 = std::env::var("NV_MOVE_BUDGET_FROM")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let budgeted = from == 0 || (stage == "main" && self.main_frames >= from);
             if let Some(n) = std::env::var("NV_MOVE_CALL_BUDGET")
                 .ok()
                 .and_then(|v| v.parse().ok())
+                .filter(|_| budgeted)
             {
                 e.call_budget = Some(n);
             }
