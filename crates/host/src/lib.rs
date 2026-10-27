@@ -68,6 +68,11 @@ impl Host {
             ));
         }
         let mut engine = Box::new(Engine::with_exe(&exe)?);
+        // The play loop's patches (`crates/play-patch`, empty on main) replace the entries with
+        // the same addresses.
+        for (address, function) in play_patch::funcs() {
+            engine.register(address, function);
+        }
         // The game's clock (`GetTickCount`, `timeGetTime`, `QueryPerformanceCounter`) runs with
         // the real time from here on, `Sleep` moving it on too (`Engine::clock_now_ms`).
         engine.start_real_clock();

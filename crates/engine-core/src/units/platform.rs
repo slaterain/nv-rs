@@ -2128,6 +2128,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         ),
         (
             "USER32.dll",
+            "GetAsyncKeyState",
+            entry!(0, dinput::get_async_key_state(u32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
             "GetActiveWindow",
             entry!(0, get_active_window() -> u32).1,
         ),
