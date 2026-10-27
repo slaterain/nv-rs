@@ -1202,8 +1202,30 @@ impl crate::Host {
     /// (`engine::units::platform::dinput::key`): `down` holds every DirectInput key code (the
     /// scan code) down this frame; each change becomes a key event.
     pub fn set_keys_down(&mut self, down: &[u8]) {
+        // `NV_MOVE_KEYS=FRAME:DIK:HOLD,..` (hex DIK key codes): keys held down from main's frame
+        // FRAME for HOLD frames, on top of the viewer's (a diagnostic: drives the game's menus
+        // with exact frame timing).
+        static SCRIPT: std::sync::OnceLock<Vec<(u64, u8, u64)>> = std::sync::OnceLock::new();
+        let script = SCRIPT.get_or_init(|| {
+            std::env::var("NV_MOVE_KEYS")
+                .unwrap_or_default()
+                .split(',')
+                .filter_map(|item| {
+                    let mut part = item.trim().split(':');
+                    let frame = part.next()?.parse().ok()?;
+                    let code = u8::from_str_radix(part.next()?, 16).ok()?;
+                    let hold = part.next().map_or(Some(1), |h| h.parse().ok())?;
+                    Some((frame, code, hold))
+                })
+                .collect()
+        });
+        let frame = self.movement.main_frames;
         for code in 0..=255u8 {
-            engine::units::platform::dinput::key(&mut self.engine, code, down.contains(&code));
+            let scripted = script
+                .iter()
+                .any(|&(at, c, hold)| c == code && frame >= at && frame < at + hold);
+            let held = down.contains(&code) || scripted;
+            engine::units::platform::dinput::key(&mut self.engine, code, held);
         }
     }
 
