@@ -145,6 +145,9 @@ pub struct Threads {
     /// (an event set, a semaphore released, a wait satisfied, a thread
     /// ended): a pass that leaves it unchanged made no progress.
     pub signals: u64,
+    /// Counts the turns a thread gave back at the end of its time slice ([`preempt`]): it was
+    /// running, not stuck, so a pass with one made progress even when no object changed.
+    pub preempted: u64,
 }
 
 thread_local! {
@@ -299,6 +302,7 @@ pub fn run_until(
             return true;
         }
         let before = e.kernel.threads.signals;
+        let before_preempted = e.kernel.threads.preempted;
         let mut ran = false;
         let mut i = 1;
         while i < e.kernel.threads.list.len() {
@@ -311,7 +315,10 @@ pub fn run_until(
             }
             i += 1;
         }
-        if !ran || e.kernel.threads.signals == before {
+        if !ran
+            || (e.kernel.threads.signals == before
+                && e.kernel.threads.preempted == before_preempted)
+        {
             return until(e);
         }
     }
@@ -533,10 +540,15 @@ impl ThreadHost for Cooperative {
             let past = |e: &mut Engine| deadline.is_some_and(|d| e.clock_now_us() >= d);
             let mut jumped = 0u64;
             loop {
+                let preempted = e.kernel.threads.preempted;
                 let signals = e.kernel.threads.signals;
                 run_until(e, signalled, &mut |e| ready(e) || past(e));
                 if ready(e) || past(e) {
                     return ready(e);
+                }
+                // A thread that used up its time slice was working: give it more turns.
+                if e.kernel.threads.preempted != preempted {
+                    continue;
                 }
                 if e.kernel.threads.signals != signals {
                     jumped = 0;
@@ -755,6 +767,7 @@ pub fn preempt(e: &mut Engine) {
         one_pass(e, crate::units::platform::signalled);
         return;
     }
+    e.kernel.threads.preempted = e.kernel.threads.preempted.wrapping_add(1);
     let until = e.clock_now_us();
     let i = e.kernel.threads.current;
     e.kernel.threads.list[i].state = RunState::Sleeping { until };
