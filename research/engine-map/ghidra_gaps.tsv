@@ -1161,11 +1161,14 @@ address	size	unit	subsystem	evidence
 00df6f80	137		Havok SDK	imm 00da3447
 00df71d0	64		Havok SDK	jmp 00df7193 +1; vtable 010db9e4 (hkCpuWorldLinearCastCollector slot 0); Ghidra holds it in the body of 00df71b0
 00df79d0	137		Havok SDK	imm 00da3429
+00df7a90	38		Havok SDK	imm 00da3422
+00df7ad0	270		Havok SDK	imm 00da340e
 00df7c00	248		Havok SDK	imm 00da34ef
 00df7d60	190		Havok SDK	imm 00da34bd
 00df8800	263		Havok SDK	imm 00da34db
 00df9470	64		Havok SDK	jmp 00df8933 +2; vtable 010dbaf8 (hkCpuWorldRayCastCollector slot 0); Ghidra holds it in the body of 00df8950
 00df9880	159		Havok SDK	imm 00da348e
+00df9920	386		Havok SDK	imm 00da34a2
 00dfb250	1		Havok SDK	data 011b98e4
 00dfb270	13		Havok SDK	imm 00fc10d9
 00dfb290	19		Havok SDK	imm 00fc10cf
