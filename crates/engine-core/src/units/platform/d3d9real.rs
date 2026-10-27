@@ -42,6 +42,7 @@ enum Object {
     VertexShader(IDirect3DVertexShader9),
     PixelShader(IDirect3DPixelShader9),
     Declaration(IDirect3DVertexDeclaration9),
+    Query(IDirect3DQuery9),
 }
 
 /// The real side (`Graphics::real`): real windows by modelled handle, the real `IDirect3D9`,
@@ -1260,6 +1261,137 @@ pub fn set_software_vertex_processing(e: &mut Engine, this: u32, software: u32, 
     let Some(d) = device(e, this) else { return };
     let r = unsafe { d.SetSoftwareVertexProcessing(BOOL(software as i32)) };
     answer(e, "SetSoftwareVertexProcessing", model, hr(r));
+}
+
+
+// Queries, offscreen surfaces, fills and read-backs.
+
+/// `CreateQuery` made the modelled query `query` of type `kind`: the real query.
+pub fn query_created(e: &mut Engine, this: u32, query: u32, kind: u32) {
+    let Some(d) = device(e, this) else { return };
+    match unsafe { d.CreateQuery(D3DQUERYTYPE(kind as i32)) } {
+        Ok(q) => {
+            real(e).objects.insert(query, Object::Query(q));
+        }
+        Err(err) => answer(e, "CreateQuery", 0, err.code().0 as u32),
+    }
+}
+
+fn query_of(e: &Engine, query: u32) -> Option<IDirect3DQuery9> {
+    match e.kernel.graphics.real.objects.get(&query) {
+        Some(Object::Query(q)) => Some(q.clone()),
+        _ => None,
+    }
+}
+
+pub fn query_issue(e: &mut Engine, query: u32, flags: u32) {
+    let Some(q) = query_of(e, query) else { return };
+    let r = unsafe { q.Issue(flags) };
+    answer(e, "Query::Issue", 0, hr(r));
+}
+
+/// `GetData` of the real query after the game's `END`: its answer and its 4-byte result; `None`
+/// without a real query.
+pub fn query_get_data(e: &mut Engine, query: u32, flags: u32) -> Option<(u32, u32)> {
+    let q = query_of(e, query)?;
+    let mut value = 0u32;
+    // The raw slot: `S_FALSE` (not done yet) is a success code the wrapper would fold into Ok.
+    let hr = unsafe {
+        use windows::core::Interface;
+        (Interface::vtable(&q).GetData)(
+            Interface::as_raw(&q),
+            &mut value as *mut u32 as *mut core::ffi::c_void,
+            4,
+            flags,
+        )
+    };
+    Some((hr.0 as u32, value))
+}
+
+/// `CreateOffscreenPlainSurface` made the modelled surface `surface`.
+pub fn offscreen_created(
+    e: &mut Engine,
+    this: u32,
+    surface: u32,
+    width: u32,
+    height: u32,
+    format: u32,
+    pool: u32,
+) {
+    let Some(d) = device(e, this) else { return };
+    let mut out = None;
+    let r = unsafe {
+        d.CreateOffscreenPlainSurface(
+            width,
+            height,
+            D3DFORMAT(format),
+            D3DPOOL(pool as i32),
+            &mut out,
+            std::ptr::null_mut(),
+        )
+    };
+    match out.filter(|_| r.is_ok()) {
+        Some(s) => {
+            real(e).objects.insert(surface, Object::Surface(s));
+        }
+        None => answer(e, "CreateOffscreenPlainSurface", 0, hr(r)),
+    }
+}
+
+pub fn color_fill(e: &mut Engine, this: u32, surface: u32, at: u32, colour: u32, model: u32) {
+    let Some(d) = device(e, this) else { return };
+    let Some(s) = surface_of(e, surface) else {
+        return missing(e, "ColorFill of a surface without a real one");
+    };
+    let area = rect(e, at);
+    let r = unsafe {
+        d.ColorFill(
+            &s,
+            area.as_ref().map_or(std::ptr::null(), |r| r as *const RECT),
+            colour,
+        )
+    };
+    answer(e, "ColorFill", model, hr(r));
+}
+
+/// `GetRenderTargetData` from the real render target into the real destination, whose rows are
+/// then copied into the destination's memory at `bits` (`pitch` apart); false without real
+/// surfaces (the caller stops).
+pub fn get_render_target_data(
+    e: &mut Engine,
+    this: u32,
+    source: u32,
+    destination: u32,
+    bits: u32,
+    pitch: u32,
+) -> bool {
+    let Some(d) = device(e, this) else {
+        return false;
+    };
+    let (Some(from), Some(to)) = (surface_of(e, source), surface_of(e, destination)) else {
+        return false;
+    };
+    let r = unsafe { d.GetRenderTargetData(&from, &to) };
+    answer(e, "GetRenderTargetData", 0, hr(r));
+    let mut desc = D3DSURFACE_DESC::default();
+    let mut locked = D3DLOCKED_RECT::default();
+    unsafe {
+        if to.GetDesc(&mut desc).is_err()
+            || to.LockRect(&mut locked, std::ptr::null(), 0x10).is_err()
+        {
+            return true;
+        }
+        let row = pitch.min(locked.Pitch as u32) as usize;
+        for y in 0..desc.Height {
+            let from_row = std::slice::from_raw_parts(
+                (locked.pBits as *const u8).add(y as usize * locked.Pitch as usize),
+                row,
+            );
+            e.mem.write(bits + y * pitch, from_row);
+        }
+        let _ = to.UnlockRect();
+    }
+    true
 }
 
 #[cfg(test)]

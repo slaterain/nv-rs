@@ -176,6 +176,21 @@ pub unsafe fn measure(o: &mut impl Write) {
         o.flush().unwrap();
         return;
     }
+    // `device queries`: the machine table's lines of which query types the device takes
+    // (`CreateQuery` with a null out), `CreateQuery<TAB>type<TAB>hr`, to add to the table.
+    if std::env::args().nth(2).as_deref() == Some("queries") {
+        for kind in 0..=20usize {
+            let hr = call(device, CREATE_QUERY, &[kind, 0]);
+            writeln!(o, "CreateQuery\t{kind:x}\t{hr:x}").unwrap();
+        }
+        call(device, RELEASE, &[]);
+        return;
+    }
+    if std::env::args().nth(2).as_deref() == Some("extra") {
+        extra(o, device);
+        call(device, RELEASE, &[]);
+        return;
+    }
     if std::env::args().nth(2).as_deref() == Some("fixed") {
         fixed_function(o, device);
         if let Some(case) = std::env::args().nth(3).filter(|a| a.starts_with("texture:")) {
@@ -504,4 +519,142 @@ unsafe fn textures(o: &mut impl Write, device: P, only: &str) {
     let hr = call(device, UPDATE_TEXTURE, &[sys1 as usize, def1 as usize]);
     writeln!(o, "UpdateTexture\tin a scene, sysmem 1 level to default 1 level\t{hr:x}").unwrap(); o.flush().unwrap();
     call(device, END_SCENE, &[]);
+}
+
+/// `IDirect3DDevice9` slots of `device extra`, and `IDirect3DQuery9`'s / `IDirect3DSurface9`'s.
+const TEST_COOPERATIVE_LEVEL: usize = 3;
+const GET_BACK_BUFFER: usize = 18;
+const GET_RENDER_TARGET_DATA: usize = 32;
+const COLOR_FILL: usize = 35;
+const CREATE_QUERY: usize = 118;
+const QUERY_GET_TYPE: usize = 4;
+const QUERY_GET_DATA_SIZE: usize = 5;
+const QUERY_ISSUE: usize = 6;
+const QUERY_GET_DATA: usize = 7;
+const SURFACE_LOCK_RECT: usize = 13;
+const SURFACE_UNLOCK_RECT: usize = 14;
+
+/// `device extra`: queries (support by type, event and occlusion life cycle), offscreen plain
+/// surfaces, `GetRenderTargetData`, `ColorFill`, `TestCooperativeLevel`.
+unsafe fn extra(o: &mut impl Write, device: P) {
+    macro_rules! line {
+        ($($t:tt)*) => {{ writeln!(o, $($t)*).unwrap(); o.flush().unwrap(); }};
+    }
+    line!("TestCooperativeLevel\twindowed, fresh\t{:x}", call(device, TEST_COOPERATIVE_LEVEL, &[]));
+    for kind in 0..=20usize {
+        line!("CreateQuery\ttype {kind:x}, null out\t{:x}", call(device, CREATE_QUERY, &[kind, 0]));
+    }
+    // An event query (8) and an occlusion query (9) through their life cycle.
+    for kind in [8usize, 9] {
+        let mut q: P = std::ptr::null_mut();
+        let hr = call(device, CREATE_QUERY, &[kind, &mut q as *mut P as usize]);
+        line!("CreateQuery\ttype {kind:x}\t{hr:x}");
+        if q.is_null() {
+            continue;
+        }
+        line!("Query::GetType\ttype {kind:x}\t{:x}", call(q, QUERY_GET_TYPE, &[]));
+        line!("Query::GetDataSize\ttype {kind:x}\t{:x}", call(q, QUERY_GET_DATA_SIZE, &[]));
+        let mut value = 0xaaaa_aaaau32;
+        let hr = call(q, QUERY_GET_DATA, &[&mut value as *mut u32 as usize, 4, 1]);
+        line!("Query::GetData\ttype {kind:x}, never issued, flush\t{hr:x}\t{value:x}");
+        line!("Query::Issue\ttype {kind:x}, END first\t{:x}", call(q, QUERY_ISSUE, &[1]));
+        line!("Query::Issue\ttype {kind:x}, BEGIN\t{:x}", call(q, QUERY_ISSUE, &[2]));
+        line!("Query::Issue\ttype {kind:x}, BEGIN twice\t{:x}", call(q, QUERY_ISSUE, &[2]));
+        let mut value = 0xaaaa_aaaau32;
+        let hr = call(q, QUERY_GET_DATA, &[&mut value as *mut u32 as usize, 4, 1]);
+        line!("Query::GetData\ttype {kind:x}, after BEGIN, flush\t{hr:x}\t{value:x}");
+        line!("Query::Issue\ttype {kind:x}, END\t{:x}", call(q, QUERY_ISSUE, &[1]));
+        let (mut first, mut polls) = (u32::MAX, 0u32);
+        let mut value = 0xaaaa_aaaau32;
+        let hr = loop {
+            let hr = call(q, QUERY_GET_DATA, &[&mut value as *mut u32 as usize, 4, 1]);
+            if first == u32::MAX {
+                first = hr;
+            }
+            polls += 1;
+            if hr != 1 || polls > 1_000_000 {
+                break hr;
+            }
+        };
+        line!("Query::GetData\ttype {kind:x}, after END, flush, polled\t{hr:x}\t{value:x}\tfirst {first:x} polls {polls}");
+        line!("Query::GetData\ttype {kind:x}, done, null data size 0\t{:x}", call(q, QUERY_GET_DATA, &[0, 0, 0]));
+        let mut big = [0xaaaa_aaaau32; 2];
+        let hr = call(q, QUERY_GET_DATA, &[big.as_mut_ptr() as usize, 8, 0]);
+        line!("Query::GetData\ttype {kind:x}, done, size 8\t{hr:x}\t{:x} {:x}", big[0], big[1]);
+        let mut small = 0xaaaa_aaaau32;
+        let hr = call(q, QUERY_GET_DATA, &[&mut small as *mut u32 as usize, 2, 0]);
+        line!("Query::GetData\ttype {kind:x}, done, size 2\t{hr:x}\t{small:x}");
+        line!("Query::Release\ttype {kind:x}\t{:x}", call(q, RELEASE, &[]));
+    }
+    // Offscreen plain surfaces, X8R8G8B8 (22), by pool.
+    for pool in 0..=3usize {
+        let mut s: P = std::ptr::null_mut();
+        let hr = call(device, CREATE_OFFSCREEN_PLAIN_SURFACE, &[64, 64, 22, pool, &mut s as *mut P as usize, 0]);
+        line!("CreateOffscreenPlainSurface\t64x64 X8R8G8B8 pool {pool}\t{hr:x}");
+        if !s.is_null() {
+            let hr = call(device, COLOR_FILL, &[s as usize, 0, 0xff11_2233]);
+            let mut locked = [0usize; 2];
+            let lr = call(s, SURFACE_LOCK_RECT, &[locked.as_mut_ptr() as usize, 0, 0]);
+            let first = if lr == 0 { *(locked[1] as *const u32) } else { 0 };
+            if lr == 0 {
+                call(s, SURFACE_UNLOCK_RECT, &[]);
+            }
+            line!("ColorFill\toffscreen pool {pool}, whole, ff112233\t{hr:x}\tlock {lr:x} first {first:x}");
+            let rect = [8i32, 8, 16, 16];
+            let hr = call(device, COLOR_FILL, &[s as usize, rect.as_ptr() as usize, 0x0044_5566]);
+            line!("ColorFill\toffscreen pool {pool}, 8,8-16,16\t{hr:x}");
+            let bad = [8i32, 8, 100, 16];
+            let hr = call(device, COLOR_FILL, &[s as usize, bad.as_ptr() as usize, 0]);
+            line!("ColorFill\toffscreen pool {pool}, rect past the edge\t{hr:x}");
+            call(s, RELEASE, &[]);
+        }
+    }
+    let mut zero: P = std::ptr::null_mut();
+    let hr = call(device, CREATE_OFFSCREEN_PLAIN_SURFACE, &[0, 64, 22, 2, &mut zero as *mut P as usize, 0]);
+    line!("CreateOffscreenPlainSurface\t0x64 sysmem\t{hr:x}");
+    // GetRenderTargetData from the back buffer (320x240, the display format).
+    let mut back: P = std::ptr::null_mut();
+    call(device, GET_BACK_BUFFER, &[0, 0, 0, &mut back as *mut P as usize]);
+    let mut desc = [0u32; 8];
+    call(back, 12, &[desc.as_mut_ptr() as usize]);
+    line!("GetBackBuffer\tdesc\t{}", words(&desc));
+    let format = desc[0] as usize;
+    let surface = |w: usize, h: usize, f: usize, pool: usize| {
+        let mut s: P = std::ptr::null_mut();
+        call(device, CREATE_OFFSCREEN_PLAIN_SURFACE, &[w, h, f, pool, &mut s as *mut P as usize, 0]);
+        s
+    };
+    let cases: [(&str, usize, usize, usize, usize); 5] = [
+        ("same size and format, sysmem", 320, 240, format, 2),
+        ("same size and format, default pool", 320, 240, format, 0),
+        ("smaller, sysmem", 160, 120, format, 2),
+        ("another format (A8R8G8B8 21 / X8R8G8B8 22), sysmem", 320, 240, if format == 22 { 21 } else { 22 }, 2),
+        ("same size and format, scratch", 320, 240, format, 3),
+    ];
+    call(device, 43, &[0, 0, 1, 0xff12_3456, 0x3f80_0000, 0]);
+    for (case, w, h, f, pool) in cases {
+        let s = surface(w, h, f, pool);
+        if s.is_null() {
+            line!("GetRenderTargetData\t{case}\tno surface");
+            continue;
+        }
+        let hr = call(device, GET_RENDER_TARGET_DATA, &[back as usize, s as usize]);
+        let mut locked = [0usize; 2];
+        let lr = call(s, SURFACE_LOCK_RECT, &[locked.as_mut_ptr() as usize, 0, 0x10]);
+        let first = if lr == 0 { *(locked[1] as *const u32) } else { 0 };
+        if lr == 0 {
+            call(s, SURFACE_UNLOCK_RECT, &[]);
+        }
+        line!("GetRenderTargetData\t{case}\t{hr:x}\tlock {lr:x} first {first:x}");
+        call(s, RELEASE, &[]);
+    }
+    let s = surface(320, 240, format, 2);
+    call(device, BEGIN_SCENE, &[]);
+    line!("GetRenderTargetData\tin a scene\t{:x}", call(device, GET_RENDER_TARGET_DATA, &[back as usize, s as usize]));
+    line!("ColorFill\tback buffer, in a scene\t{:x}", call(device, COLOR_FILL, &[back as usize, 0, 0]));
+    call(device, END_SCENE, &[]);
+    line!("ColorFill\tback buffer\t{:x}", call(device, COLOR_FILL, &[back as usize, 0, 0]));
+    line!("GetRenderTargetData\tsysmem source\t{:x}", call(device, GET_RENDER_TARGET_DATA, &[s as usize, s as usize]));
+    call(s, RELEASE, &[]);
+    call(back, RELEASE, &[]);
 }

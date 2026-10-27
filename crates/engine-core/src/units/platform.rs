@@ -7,6 +7,7 @@ use crate::prelude::*;
 pub mod bink;
 pub mod d3d9;
 pub mod d3d9device;
+pub mod d3d9query;
 pub mod d3d9resource;
 #[cfg(windows)]
 pub mod d3d9real;

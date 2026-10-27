@@ -346,6 +346,8 @@ pub struct Objects {
     textures: HashMap<u32, Texture>,
     /// The buffers, shaders and declarations (`super::d3d9resource`).
     pub(super) resources: super::d3d9resource::Resources,
+    /// The queries (`super::d3d9query`).
+    pub(super) queries: super::d3d9query::Queries,
 }
 
 fn vtable(e: &mut Engine, base: u32, slots: usize) -> u32 {
@@ -599,7 +601,20 @@ fn fwd_create_depth_stencil_surface(
 }
 
 fn register_code(e: &mut Engine) {
-    let device: [(u32, crate::AbiFn); 42] = [
+    let device: [(u32, crate::AbiFn); 46] = [
+        (
+            32,
+            crate::entry!(0, get_render_target_data(Ptr, u32, u32) -> u32).1,
+        ),
+        (35, crate::entry!(0, color_fill(Ptr, u32, Ptr, u32) -> u32).1),
+        (
+            36,
+            crate::entry!(0, create_offscreen_plain_surface(Ptr, u32, u32, u32, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            118,
+            crate::entry!(0, super::d3d9query::create_query(Ptr, u32, Ptr) -> u32).1,
+        ),
         (
             0,
             crate::entry!(0, device_query_interface(Ptr, Ptr, Ptr) -> u32).1,
@@ -2390,6 +2405,154 @@ fn create_depth_stencil_surface(
     D3D_OK
 }
 
+// Platform: replaces D3D9.DLL IDirect3DDevice9::CreateOffscreenPlainSurface (vtable +0x90)
+/// `CreateOffscreenPlainSurface(width, height, format, pool, out, shared handle)`, as the retail
+/// runtime answered (`d3d9-capture device extra`, 2026-10-27): a zero side, a null out, a shared
+/// handle, `D3DPOOL_MANAGED` or a format the table's `CheckDeviceFormat` (usage 0,
+/// `D3DRTYPE_SURFACE`) refuses answer `D3DERR_INVALIDCALL`; in the other pools (default, system
+/// memory, scratch) the surface has memory the program can lock (rows packed tightly), and holds
+/// the device.
+#[allow(clippy::too_many_arguments)]
+fn create_offscreen_plain_surface(
+    e: &mut Engine,
+    this: Ptr,
+    width: u32,
+    height: u32,
+    format: u32,
+    pool: u32,
+    out: Ptr,
+    shared: u32,
+) -> u32 {
+    if width == 0 || height == 0 || out.is_null() || shared != 0 || pool == D3DPOOL_MANAGED {
+        return D3DERR_INVALIDCALL;
+    }
+    let d = device(e, this);
+    let (direct3d, [adapter, device_type, ..]) = (d.direct3d, d.creation);
+    let display_format = e.with_stack(0x10, |e, mode| {
+        let hr = e.vcall(direct3d, 4 * 8, &[adapter, mode.addr()]).u32();
+        assert_eq!(hr, D3D_OK, "GetAdapterDisplayMode for CreateOffscreenPlainSurface");
+        e.mem.u32(mode.addr() + 0xc)
+    });
+    let check = e
+        .vcall(
+            direct3d,
+            4 * 10,
+            &[adapter, device_type, display_format, 0, D3DRTYPE_SURFACE, format],
+        )
+        .u32();
+    if check != D3D_OK {
+        return D3DERR_INVALIDCALL;
+    }
+    let desc = [format, D3DRTYPE_SURFACE, 0, pool, 0, 0, width, height];
+    let surface = new_surface(e, this.addr(), false, desc);
+    let (pitch, size) = level_layout(format, width, height);
+    let bits = e.mem.alloc(size);
+    let s = e
+        .kernel
+        .graphics
+        .device_objects
+        .surfaces
+        .get_mut(&surface)
+        .expect("the surface");
+    s.bits = bits;
+    s.pitch = pitch;
+    device_add_ref(e, this);
+    #[cfg(windows)]
+    super::d3d9real::offscreen_created(e, this.addr(), surface, width, height, format, pool);
+    e.mem.set_u32(out.addr(), surface);
+    D3D_OK
+}
+
+/// A rectangle (`RECT`) inside a `width` by `height` surface, or the whole surface for null.
+fn rect_inside(e: &Engine, rect: Ptr, width: u32, height: u32) -> Option<[u32; 4]> {
+    if rect.is_null() {
+        return Some([0, 0, width, height]);
+    }
+    let r: [i32; 4] = std::array::from_fn(|i| e.mem.i32(rect.addr() + 4 * i as u32));
+    let inside = r[0] >= 0
+        && r[1] >= 0
+        && r[0] <= r[2]
+        && r[1] <= r[3]
+        && r[2] as u32 <= width
+        && r[3] as u32 <= height;
+    inside.then(|| r.map(|v| v as u32))
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::ColorFill (vtable +0x8C)
+/// `ColorFill(surface, rect, colour)`, as the retail runtime answered (2026-10-27): a surface
+/// outside `D3DPOOL_DEFAULT` or a rectangle past its edges answers `D3DERR_INVALIDCALL`; in a
+/// scene too it answers `D3D_OK`. The surface's memory, when it has some here, takes the colour
+/// as the runtime wrote it: `X8R8G8B8` with the unused byte 0, `A8R8G8B8` the colour; other
+/// formats with memory are not provided. A render target's pixels are the real device's
+/// (`NV_D3D9=real`).
+fn color_fill(e: &mut Engine, this: Ptr, surface: u32, rect: Ptr, colour: u32) -> u32 {
+    let Some(s) = e.kernel.graphics.device_objects.surfaces.get(&surface).cloned() else {
+        return D3DERR_INVALIDCALL;
+    };
+    if s.desc[3] != D3DPOOL_DEFAULT {
+        return D3DERR_INVALIDCALL;
+    }
+    let Some([left, top, right, bottom]) = rect_inside(e, rect, s.desc[6], s.desc[7]) else {
+        return D3DERR_INVALIDCALL;
+    };
+    if s.bits != 0 {
+        let word = match s.desc[0] {
+            22 => colour & 0x00ff_ffff,
+            21 => colour,
+            f => panic!("IDirect3DDevice9::ColorFill of a surface of format {f} is not provided"),
+        };
+        for y in top..bottom {
+            for x in left..right {
+                e.mem.set_u32(s.bits + y * s.pitch + 4 * x, word);
+            }
+        }
+    }
+    #[cfg(windows)]
+    super::d3d9real::color_fill(e, this.addr(), surface, rect.addr(), colour, D3D_OK);
+    let _ = this;
+    D3D_OK
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::GetRenderTargetData (vtable +0x80)
+/// `GetRenderTargetData(render target, destination)`, as the retail runtime answered
+/// (2026-10-27): the source must be a render target in `D3DPOOL_DEFAULT`, the destination a
+/// `D3DPOOL_SYSTEMMEM` surface of the same size and format, else `D3DERR_INVALIDCALL`; in a
+/// scene too it answers `D3D_OK`. The pixels are the real device's: with `NV_D3D9=real` they are
+/// read back into the destination's memory; without it nothing is drawn and the copy is not
+/// provided (the run stops).
+fn get_render_target_data(e: &mut Engine, this: Ptr, source: u32, destination: u32) -> u32 {
+    let surfaces = &e.kernel.graphics.device_objects.surfaces;
+    let (Some(from), Some(to)) = (
+        surfaces.get(&source).cloned(),
+        surfaces.get(&destination).cloned(),
+    ) else {
+        return D3DERR_INVALIDCALL;
+    };
+    let ok = from.desc[2] & D3DUSAGE_RENDERTARGET != 0
+        && from.desc[3] == D3DPOOL_DEFAULT
+        && to.desc[3] == D3DPOOL_SYSTEMMEM
+        && (from.desc[0], from.desc[6], from.desc[7]) == (to.desc[0], to.desc[6], to.desc[7]);
+    if !ok {
+        return D3DERR_INVALIDCALL;
+    }
+    #[cfg(windows)]
+    if super::d3d9real::get_render_target_data(
+        e,
+        this.addr(),
+        source,
+        destination,
+        to.bits,
+        to.pitch,
+    ) {
+        return D3D_OK;
+    }
+    let _ = this;
+    panic!(
+        "IDirect3DDevice9::GetRenderTargetData without NV_D3D9=real (nothing is drawn, so no \
+         pixels to read back) is not provided"
+    )
+}
+
 /// `QueryInterface(iid, out)`: `IUnknown`, `IDirect3DResource9`, `IDirect3DBaseTexture9` and
 /// `IDirect3DTexture9` answer the texture (counted); others `E_NOINTERFACE` with a null out.
 fn texture_query_interface(e: &mut Engine, this: Ptr, iid: Ptr, out: Ptr) -> u32 {
@@ -3649,5 +3812,124 @@ mod tests {
 
     fn device_state(e: &Engine, device: u32) -> &Device {
         &e.kernel.graphics.device_objects.devices[&device]
+    }
+
+    /// The test table with what the offscreen, fill and query calls ask: `CheckDeviceFormat` of
+    /// an X8R8G8B8 plain surface (usage 0, `D3DRTYPE_SURFACE`) and the query types this machine's
+    /// device took (`d3d9-capture device queries`, 2026-10-27: event, occlusion and a few more).
+    fn extra_device() -> (Engine, u32) {
+        let mut e = Engine::new();
+        let table = test_table()
+            + "\nDomain\td1\t15,16\nCheckDeviceFormat\t0 1 16 0 1\t0\t\td1"
+            + "\nCreateQuery\t1\t8876086a\nCreateQuery\t8\t0\nCreateQuery\t9\t0\nCreateQuery\ta\t0";
+        d3d9::load_adapter_table(&mut e, &table);
+        let create = d3d9::proc_address(&mut e, b"Direct3DCreate9").unwrap();
+        let d3d = e.call(create, &[d3d9::D3D_SDK_VERSION]).u32();
+        let present = e.mem.alloc(PRESENT_SIZE);
+        e.mem.set_u32(present + PP_WIDTH, 640);
+        e.mem.set_u32(present + PP_HEIGHT, 480);
+        e.mem.set_u32(present + PP_WINDOW, 0x11c);
+        e.mem.set_u32(present + PP_WINDOWED, 1);
+        let out = e.mem.alloc(4);
+        let hr = e
+            .vcall(d3d, CREATE_DEVICE, &[0, 1, 0x11c, 0x40, present, out])
+            .u32();
+        assert_eq!(hr, D3D_OK);
+        let device = e.mem.u32(out);
+        (e, device)
+    }
+
+    /// `CreateOffscreenPlainSurface` (+0x90) and `ColorFill` (+0x8C) as the retail runtime
+    /// answered (`d3d9-capture device extra`, 2026-10-27).
+    #[test]
+    fn offscreen_surfaces_and_fills_answer_as_measured() {
+        let (mut e, device) = extra_device();
+        let out = e.mem.alloc(4);
+        let make = |e: &mut Engine, w: u32, pool: u32| {
+            let hr = e.vcall(device, 0x90, &[w, 64, 0x16, pool, out, 0]).u32();
+            (hr, e.mem.u32(out))
+        };
+        assert_eq!(make(&mut e, 64, 1).0, D3DERR_INVALIDCALL, "managed");
+        assert_eq!(make(&mut e, 0, 2).0, D3DERR_INVALIDCALL, "a zero side");
+        let (hr, system) = make(&mut e, 64, 2);
+        assert_eq!(hr, D3D_OK);
+        let (hr, default) = make(&mut e, 64, 0);
+        assert_eq!(hr, D3D_OK);
+        // Outside the default pool a fill is refused; X8R8G8B8 takes the colour with byte 3 zero.
+        assert_eq!(
+            e.vcall(device, 0x8c, &[system, 0, 0xff11_2233]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(
+            e.vcall(device, 0x8c, &[default, 0, 0xff11_2233]).u32(),
+            D3D_OK
+        );
+        let locked = e.mem.alloc(8);
+        assert_eq!(e.vcall(default, 4 * 13, &[locked, 0, 0]).u32(), D3D_OK);
+        let bits = e.mem.u32(locked + 4);
+        assert_eq!(e.mem.u32(bits), 0x0011_2233);
+        assert_eq!(e.vcall(default, 4 * 14, &[]).u32(), D3D_OK);
+        // A rectangle inside fills; past the edge is refused.
+        let rect = e.mem.alloc(16);
+        for (i, v) in [8u32, 8, 16, 16].iter().enumerate() {
+            e.mem.set_u32(rect + 4 * i as u32, *v);
+        }
+        assert_eq!(e.vcall(device, 0x8c, &[default, rect, 0x0044_5566]).u32(), D3D_OK);
+        e.mem.set_u32(rect + 8, 100);
+        assert_eq!(
+            e.vcall(device, 0x8c, &[default, rect, 0]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        // GetRenderTargetData (+0x80): a system-memory destination of the back buffer's size and
+        // format is taken (the pixels are the real device's); another size or pool is refused.
+        let back = device_state(&e, device).render_targets[0];
+        let (_, small) = make(&mut e, 32, 2);
+        assert_eq!(
+            e.vcall(device, 0x80, &[back, small]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(
+            e.vcall(device, 0x80, &[back, default]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(
+            e.vcall(device, 0x80, &[system, system]).u32(),
+            D3DERR_INVALIDCALL
+        );
+    }
+
+    /// `CreateQuery` (+0x1D8) and the event query's life as the retail runtime answered
+    /// (2026-10-27); without `NV_D3D9=real` an ended event query is done at once.
+    #[test]
+    fn queries_answer_as_measured() {
+        let (mut e, device) = extra_device();
+        assert_eq!(e.vcall(device, 0x1d8, &[1, 0]).u32(), 0x8876_086a);
+        assert_eq!(e.vcall(device, 0x1d8, &[8, 0]).u32(), D3D_OK);
+        let out = e.mem.alloc(4);
+        assert_eq!(e.vcall(device, 0x1d8, &[8, out]).u32(), D3D_OK);
+        let q = e.mem.u32(out);
+        assert_eq!(e.vcall(q, 0x10, &[]).u32(), 8, "GetType");
+        assert_eq!(e.vcall(q, 0x14, &[]).u32(), 4, "GetDataSize");
+        let data = e.mem.alloc(8);
+        e.mem.set_u32(data, 0xaaaa_aaaa);
+        // Never issued: S_OK and dddddddd.
+        assert_eq!(e.vcall(q, 0x1c, &[data, 4, 1]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(data), 0xdddd_dddd);
+        assert_eq!(e.vcall(q, 0x18, &[2]).u32(), D3D_OK, "BEGIN");
+        e.mem.set_u32(data, 0xaaaa_aaaa);
+        assert_eq!(e.vcall(q, 0x1c, &[data, 4, 1]).u32(), 1, "S_FALSE after BEGIN");
+        assert_eq!(e.mem.u32(data), 0xaaaa_aaaa);
+        assert_eq!(e.vcall(q, 0x18, &[1]).u32(), D3D_OK, "END");
+        assert_eq!(e.vcall(q, 0x1c, &[data, 4, 1]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(data), 1);
+        // Size 2 writes two bytes; size 8 zero-extends.
+        e.mem.set_u32(data, 0xaaaa_aaaa);
+        assert_eq!(e.vcall(q, 0x1c, &[data, 2, 0]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(data), 0xaaaa_0001);
+        e.mem.set_u32(data + 4, 0xaaaa_aaaa);
+        assert_eq!(e.vcall(q, 0x1c, &[data, 8, 0]).u32(), D3D_OK);
+        assert_eq!([e.mem.u32(data), e.mem.u32(data + 4)], [1, 0]);
+        assert_eq!(e.vcall(q, 0x1c, &[0, 0, 0]).u32(), D3D_OK);
+        assert_eq!(e.vcall(q, 8, &[]).u32(), 0, "Release");
     }
 }
