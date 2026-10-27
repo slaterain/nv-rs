@@ -1870,9 +1870,11 @@ pub fn start_menu_do_click(e: &mut Engine, this: Ptr<StartMenu>, code: i32, tile
     {
         let getter = e.call(DLC_GETTER, &args![]).u32();
         let step = e.call(DLC_STEP_A, &args![getter]).u32();
-        let instance = e.call(DLC_INSTANCE, &args![step]).u32();
+        // 007ceedd pushes `step` before the no-argument getter 00af2640; the
+        // word is popped by 00af28f0 (RET 4, which never reads it).
+        let instance = e.call(DLC_INSTANCE, &args![]).u32();
         let next = e.call(DLC_STEP_B, &args![instance]).u32();
-        e.call(DLC_OPEN, &args![next]);
+        e.call(DLC_OPEN, &args![next, step]);
     }
     let parent = e.call(TILE_PARENT, &args![tile]).u32();
     let item = e
@@ -7404,10 +7406,13 @@ mod tests {
         items(&mut r, &[(downloads, 0x9000, 0xffff_ffff)]);
         r.stub(DLC_GETTER, 1);
         r.with(DLC_STEP_A, |_, a| eax(a[0] + 1));
-        r.with(DLC_INSTANCE, |_, a| eax(a[0] + 1));
+        r.with(DLC_INSTANCE, |_, a| {
+            assert!(a.is_empty());
+            eax(3)
+        });
         r.with(DLC_STEP_B, |_, a| eax(a[0] + 1));
         r.e.call(0x007c_e9b0, &args![menu, 9i32, 0x9000u32]);
-        assert_eq!(r.calls_to(DLC_OPEN), vec![vec![4]]);
+        assert_eq!(r.calls_to(DLC_OPEN), vec![vec![4, 2]]);
     }
 
     /// A user option: value, default, count, type, change function.

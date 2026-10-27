@@ -995,10 +995,13 @@ pub fn fn_0093aa10(e: &mut Engine, this: Ptr<PlayerCharacter>, actor_value: u32,
 /// `00525430` reads from the object at `011f2250`) and passes it to the
 /// virtual at `+0x33C` (which spends the action points).
 pub fn fn_0093ab30(e: &mut Engine, this: Ptr<PlayerCharacter>, actor_value: u32) {
-    let flag = e
-        .call(0x0052_5430, &args![0x011f_2250u32, 0.0f32, 0u32])
-        .bool();
-    let cost = e.call(0x0066_dca0, &args![actor_value, flag]).f32();
+    // 0093ab39 pushes 0 and 0.0 before the thiscall 00525430 (plain RET); they
+    // are the last two of the four words the cdecl 0066dca0 is given (ADD
+    // ESP,0x10 after it).
+    let flag = e.call(0x0052_5430, &args![0x011f_2250u32]).bool();
+    let cost = e
+        .call(0x0066_dca0, &args![actor_value, flag, 0.0f32, 0u32])
+        .f32();
     e.vcall(this.addr(), 0x33c, &args![cost]);
 }
 
@@ -12093,8 +12096,8 @@ mod tests {
         e.register(0x0052_5430, |_, _| int(1));
         e.register(0x0066_dca0, |_, a| float(a[0] as f64 + a[1] as f64 * 0.5));
         e.call(0x0093_ab30, &args![this, 10u32]);
-        assert_eq!(called(&e, 0x0052_5430), vec![vec![0x011f_2250, 0, 0]]);
-        assert_eq!(called(&e, 0x0066_dca0), vec![vec![10, 1]]);
+        assert_eq!(called(&e, 0x0052_5430), vec![vec![0x011f_2250]]);
+        assert_eq!(called(&e, 0x0066_dca0), vec![vec![10, 1, 0, 0]]);
         let call = &called(&e, 0x00b0_033c)[0];
         assert_eq!((call[0], f(call, 1)), (this.addr(), 10.5));
     }
