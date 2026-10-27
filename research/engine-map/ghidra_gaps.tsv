@@ -303,6 +303,7 @@ address	size	unit	subsystem	evidence
 00b60fc0	70		BSShader	vtable 010adef4 (010adea8 slot 19, no RTTI)
 00b63bd0	21	BSShader/bsshaderaccumulator.cpp	BSShader	vtable 010adfc8 +1 (010adfbc slot 3, no RTTI)
 00b63f10	123	BSShader/bsshaderaccumulator.cpp	BSShader	vtable 010ae090 (010adff8 slot 38, no RTTI)
+00b64020	985	BSShader/bsshaderaccumulator.cpp	BSShader	imm 00b5761b
 00b64440	69	BSShader/bsshaderaccumulator.cpp	BSShader	imm 00b576f4
 00b64490	22	BSShader/bsshaderaccumulator.cpp	BSShader	imm 00b57708
 00b644b0	128	BSShader/bsshaderaccumulator.cpp	BSShader	imm 00b576fe
