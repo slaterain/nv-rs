@@ -532,6 +532,8 @@ enum Play {
 #[derive(Debug, Clone)]
 struct Buffer {
     references: u32,
+    /// The `IDirectSound3DBuffer` interface's own count (measured: separate from the buffer's).
+    references3d: u32,
     flags: u32,
     /// The listener this primary buffer gave out (0: none yet).
     listener: u32,
@@ -591,8 +593,12 @@ pub struct Sound {
     devices: BTreeMap<u32, (u32, u32)>,
     buffers: BTreeMap<u32, Buffer>,
     listeners: BTreeMap<u32, (u32, Listener)>,
-    /// The 3D interfaces: the buffer each belongs to (they share its reference count).
+    /// The 3D interfaces: the buffer each belongs to (each counts its own references,
+    /// `Buffer::references3d`).
     buffers3d: BTreeMap<u32, u32>,
+    /// 3D interfaces whose buffer is gone, with their reference count (released past 0 it wraps,
+    /// as measured).
+    dead3d: BTreeMap<u32, u32>,
     /// The distortion objects: reference count and `DSFXDistortion`.
     distortions: BTreeMap<u32, (u32, [f32; 5])>,
     /// `CoInitialize` calls on the main thread (the first answers `S_OK`, later ones `S_FALSE`).
@@ -1269,6 +1275,7 @@ fn get_caps(e: &mut Engine, this: Ptr, caps: Ptr) -> u32 {
 fn new_buffer(flags: u32) -> Buffer {
     Buffer {
         references: 1,
+        references3d: 0,
         flags,
         listener: 0,
         bytes: 0,
@@ -1417,7 +1424,7 @@ fn buffer_query_interface(e: &mut Engine, this: Ptr, iid: Ptr, out: Ptr) -> u32 
             } else {
                 b.three_d
             };
-            buffer(e, this).references += 1;
+            buffer(e, this).references3d += 1;
             e.mem.set_u32(out.addr(), three_d);
             return DS_OK;
         }
@@ -1474,7 +1481,14 @@ fn buffer_add_ref(e: &mut Engine, this: Ptr) -> u32 {
     b.references
 }
 
-/// Drops one reference of the buffer at `at`; frees it (its memory, its 3D interface) at 0.
+/// Drops one reference of the buffer at `at` (its `IDirectSoundBuffer`/`IDirectSoundBuffer8`
+/// count). Measured (`refmeasure`, 2026-10-27): the buffer interfaces and the
+/// `IDirectSound3DBuffer` count their references apart (create 1, `QueryInterface` of the 8
+/// interface +1 on the buffer's; of the 3D interface 1 on its own); a `Release` of the buffer at
+/// 0 answers 0 and takes one from the 3D interface's count instead, so a later `Release` of the
+/// 3D interface answers `0xffffffff` (the game's loading-menu sound, `00af1cc0`, releases the
+/// buffer three times and then the 3D interface). The buffer goes (its memory, its voice) once
+/// both counts are 0.
 fn release_buffer(e: &mut Engine, at: u32) -> u32 {
     let b = e
         .kernel
@@ -1482,24 +1496,34 @@ fn release_buffer(e: &mut Engine, at: u32) -> u32 {
         .buffers
         .get_mut(&at)
         .expect("a buffer of this layer");
-    b.references -= 1;
+    if b.references > 0 {
+        b.references -= 1;
+    } else {
+        b.references3d = b.references3d.wrapping_sub(1);
+    }
     let left = b.references;
-    if left == 0 {
-        let b = e.kernel.sound.buffers.remove(&at).expect("the buffer");
-        with_voice(e, at, |m, at| {
-            m.all.remove(&at);
-            m.playing.retain(|&p| p != at);
-        });
-        if b.data != 0 {
-            e.mem.free(b.data);
-        }
-        if b.three_d != 0 {
-            e.kernel.sound.buffers3d.remove(&b.three_d);
-            e.mem.free(b.three_d);
-        }
-        e.mem.free(at);
+    if b.references == 0 && b.references3d == 0 {
+        free_buffer(e, at);
     }
     left
+}
+
+/// Frees the buffer at `at`: its memory, its voice; its 3D interface stays as a gone one
+/// (`Sound::dead3d`).
+fn free_buffer(e: &mut Engine, at: u32) {
+    let b = e.kernel.sound.buffers.remove(&at).expect("the buffer");
+    with_voice(e, at, |m, at| {
+        m.all.remove(&at);
+        m.playing.retain(|&p| p != at);
+    });
+    if b.data != 0 {
+        e.mem.free(b.data);
+    }
+    if b.three_d != 0 {
+        e.kernel.sound.buffers3d.remove(&b.three_d);
+        e.kernel.sound.dead3d.insert(b.three_d, 0);
+    }
+    e.mem.free(at);
 }
 
 fn buffer_release(e: &mut Engine, this: Ptr) -> u32 {
@@ -2114,14 +2138,33 @@ fn owner(e: &Engine, this: Ptr) -> u32 {
         .expect("an IDirectSound3DBuffer of this layer")
 }
 
+/// `AddRef()` on the 3D interface: its own count (measured, [`release_buffer`]).
 fn buffer3d_add_ref(e: &mut Engine, this: Ptr) -> u32 {
+    if let Some(n) = e.kernel.sound.dead3d.get_mut(&this.addr()) {
+        *n = n.wrapping_add(1);
+        return *n;
+    }
     let at = owner(e, this);
-    buffer_add_ref(e, Ptr::new(at))
+    let b = buffer(e, Ptr::new(at));
+    b.references3d = b.references3d.wrapping_add(1);
+    b.references3d
 }
 
+/// `Release()` on the 3D interface: its own count, which wraps below 0 (measured,
+/// [`release_buffer`]); the buffer goes once both counts are 0.
 fn buffer3d_release(e: &mut Engine, this: Ptr) -> u32 {
+    if let Some(n) = e.kernel.sound.dead3d.get_mut(&this.addr()) {
+        *n = n.wrapping_sub(1);
+        return *n;
+    }
     let at = owner(e, this);
-    release_buffer(e, at)
+    let b = buffer(e, Ptr::new(at));
+    b.references3d = b.references3d.wrapping_sub(1);
+    let left = b.references3d;
+    if b.references == 0 && left == 0 {
+        free_buffer(e, at);
+    }
+    left
 }
 
 fn apply_ok(apply: u32) {
@@ -2498,7 +2541,7 @@ mod tests {
     }
 
     #[test]
-    fn a_3d_buffer_shares_its_reference_count_and_keeps_its_settings() {
+    fn a_3d_buffer_keeps_its_settings() {
         let mut e = engine();
         let ds = start_up(&mut e);
         let (_, b) = create(&mut e, ds, 0x302b0, false, 1, 44100);
@@ -2520,8 +2563,53 @@ mod tests {
         assert_eq!(e.vcall(b, 0x40, &[0]).u32(), DSERR_CONTROLUNAVAIL);
         assert_eq!(e.vcall(b, 0x40, &[10001]).u32(), DSERR_INVALIDPARAM);
         assert_eq!(e.vcall(b, 0x3c, &[(-10000i32) as u32]).u32(), DS_OK);
-        assert_eq!(e.vcall(three_d, 8, &[]).u32(), 1);
+        // The 3D interface counts its own references (measured).
+        assert_eq!(e.vcall(three_d, 8, &[]).u32(), 0);
         assert_eq!(e.vcall(b, 8, &[]).u32(), 0);
+        assert!(e.kernel.sound.buffers.is_empty());
+    }
+
+    /// Measured (`refmeasure`, 2026-10-27): the buffer and its 3D interface count apart; the
+    /// game's order (the buffer released three times, then the 3D interface) answers 1, 0, 0,
+    /// then `0xffffffff`.
+    #[test]
+    fn a_3d_buffer_and_its_3d_interface_count_their_references_apart() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let three_d_of = |e: &mut Engine, b: u32| {
+            e.mem.write(0x1300, &IID_BUFFER3D);
+            assert_eq!(e.vcall(b, 0, &[0x1300, 0x1928]).u32(), DS_OK);
+            e.mem.u32(0x1928)
+        };
+        let buffer8_of = |e: &mut Engine, b: u32| {
+            e.mem.write(0x1300, &IID_BUFFER8);
+            assert_eq!(e.vcall(b, 0, &[0x1300, 0x192c]).u32(), DS_OK);
+        };
+        // The game's order.
+        let (_, b) = create(&mut e, ds, 0x302b0, false, 1, 44100);
+        buffer8_of(&mut e, b);
+        let t = three_d_of(&mut e, b);
+        let answers: Vec<u32> = (0..3).map(|_| e.vcall(b, 8, &[]).u32()).collect();
+        assert_eq!(answers, [1, 0, 0]);
+        assert_eq!(e.vcall(t, 8, &[]).u32(), 0xffff_ffff);
+        // AddRef on each, then the 3D interface first.
+        let (_, b) = create(&mut e, ds, 0x302b0, false, 1, 44100);
+        buffer8_of(&mut e, b);
+        let t = three_d_of(&mut e, b);
+        assert_eq!(e.vcall(t, 4, &[]).u32(), 2);
+        assert_eq!(e.vcall(b, 4, &[]).u32(), 3);
+        let answers: Vec<u32> = [t, t, b, b, b].iter().map(|&o| e.vcall(o, 8, &[]).u32()).collect();
+        assert_eq!(answers, [1, 0, 2, 1, 0]);
+        assert!(e.kernel.sound.buffers.is_empty());
+        // The buffer first: it stays until the 3D interface goes.
+        let (_, b) = create(&mut e, ds, 0x302b0, false, 1, 44100);
+        buffer8_of(&mut e, b);
+        let t = three_d_of(&mut e, b);
+        assert_eq!(e.vcall(b, 8, &[]).u32(), 1);
+        assert_eq!(e.vcall(b, 8, &[]).u32(), 0);
+        assert!(e.kernel.sound.buffers.contains_key(&b));
+        assert_eq!(e.vcall(t, 8, &[]).u32(), 0);
+        assert!(e.kernel.sound.buffers.is_empty());
     }
 
     #[test]
