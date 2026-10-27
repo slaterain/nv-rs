@@ -1267,6 +1267,13 @@ impl crate::Host {
     /// The viewer's mouse for the game's DirectInput mouse: motion since the last frame
     /// (`dinput::mouse_move`) and the buttons down (`dinput::mouse_button`).
     pub fn mouse(&mut self, motion: [i32; 3], buttons: [bool; 8]) {
+        // A scripted run (`NV_MOVE_KEYS`) drives the menus with keys; the real mouse moving over
+        // the window would switch the game's interface to its mouse path and the keys would miss.
+        let (motion, buttons) = if std::env::var_os("NV_MOVE_KEYS").is_some() {
+            ([0; 3], [false; 8])
+        } else {
+            (motion, buttons)
+        };
         let e = &mut self.engine;
         engine::units::platform::dinput::mouse_move(e, motion[0], motion[1], motion[2]);
         for (button, down) in buttons.into_iter().enumerate() {
