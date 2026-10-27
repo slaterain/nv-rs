@@ -121,8 +121,11 @@ pub fn hkp_ball_and_socket_constraint_data_get_runtime_info(
 // Translated from 00d54270 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpBallAndSocketConstraintData::isValid` (named in the engine map): stores 1 in the byte
 /// at `valid`.
-pub fn hkp_ball_and_socket_constraint_data_is_valid(e: &mut Engine, _this: Ptr, valid: Ptr) {
+/// Answers `valid`: the exe leaves it in `EAX` at every `RET` (the hkBool/hkResult result
+/// returned through a pointer, which callers read through `EAX`).
+pub fn hkp_ball_and_socket_constraint_data_is_valid(e: &mut Engine, _this: Ptr, valid: Ptr) -> Ptr {
     e.mem.set_u8(valid.addr(), 1);
+    valid
 }
 
 // Translated from 00d54280 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -196,7 +199,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d5_4270,
-            hkp_ball_and_socket_constraint_data_is_valid(Ptr, Ptr)
+            hkp_ball_and_socket_constraint_data_is_valid(Ptr, Ptr) -> Ptr
         ),
         entry!(
             0x00d5_4280,
@@ -320,6 +323,16 @@ mod tests {
         e.mem.set_u32(out, 0xaabb_ccdd);
         e.call(0x00d5_4270, &args![data, out]);
         assert_eq!(e.mem.u32(out), 0xaabb_cc01);
+    }
+
+    #[test]
+    fn fn_00d54270_answers_its_result_pointer() {
+        let mut e = engine();
+        let data = e.mem.alloc(0x50);
+        let out = e.mem.alloc(4);
+        e.mem.set_u32(out, 0xaabb_ccdd);
+        // The exe leaves the result pointer in EAX at every RET; callers read through it.
+        assert_eq!(e.call(0x00d5_4270, &args![data, out]).u32(), args![out][0]);
     }
 
     #[test]
