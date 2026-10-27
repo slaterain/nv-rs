@@ -186,6 +186,10 @@ pub unsafe fn measure(o: &mut impl Write) {
         call(device, RELEASE, &[]);
         return;
     }
+    if std::env::args().nth(2).as_deref() == Some("refs") {
+        refs(o, device);
+        return;
+    }
     if std::env::args().nth(2).as_deref() == Some("reset") {
         reset(o, device, &pp);
         return;
@@ -783,5 +787,60 @@ unsafe fn reset(o: &mut impl Write, device: P, pp: &PresentParameters) {
     line!("Reset\tfour back buffers\t{:x}\tcount {}", call(device, RESET, &[&mut p as *mut PresentParameters as usize]), p.count);
     line!("TestCooperativeLevel\tafter that\t{:x}", call(device, TEST_COOPERATIVE_LEVEL, &[]));
     call(managed, RELEASE, &[]);
+    line!("Release\tdevice\t{:x}", call(device, RELEASE, &[]));
+}
+
+/// `device refs`: the reference counts `AddRef`/`Release` answer for buffers and textures bound
+/// to the device (`SetIndices`, `SetStreamSource`, `SetTexture`) and read back (`GetIndices`,
+/// `GetStreamSource`, `GetTexture`), and whether a buffer released to 0 while bound can still be
+/// read back.
+unsafe fn refs(o: &mut impl Write, device: P) {
+    const ADD_REF: usize = 1;
+    const GET_INDICES: usize = 105;
+    const GET_TEXTURE: usize = 64;
+    macro_rules! line {
+        ($($t:tt)*) => {{ writeln!(o, $($t)*).unwrap(); o.flush().unwrap(); }};
+    }
+    let count = |object: P| {
+        let up = call(object, ADD_REF, &[]);
+        let down = call(object, RELEASE, &[]);
+        (up, down)
+    };
+    let mut ib: P = std::ptr::null_mut();
+    line!("CreateIndexBuffer\t12 bytes\t{:x}", call(device, CREATE_INDEX_BUFFER, &[12, 8, 101, 0, &mut ib as *mut P as usize, 0]));
+    line!("IndexBuffer\tfresh: AddRef, Release\t{:x?}", count(ib));
+    line!("SetIndices\t\t{:x}", call(device, SET_INDICES, &[ib as usize]));
+    line!("IndexBuffer\tbound: AddRef, Release\t{:x?}", count(ib));
+    let mut back: usize = 0;
+    line!("GetIndices\t\t{:x}\tsame {}", call(device, GET_INDICES, &[&mut back as *mut usize as usize]), back == ib as usize);
+    line!("IndexBuffer\tafter GetIndices: AddRef, Release\t{:x?}", count(ib));
+    line!("Release\tthe GetIndices reference\t{:x}", call(back as P, RELEASE, &[]));
+    line!("Release\tthe creation reference, still bound\t{:x}", call(ib, RELEASE, &[]));
+    let mut again: usize = 0;
+    line!("GetIndices\tafter the last Release, still bound\t{:x}\tsame {}", call(device, GET_INDICES, &[&mut again as *mut usize as usize]), again == ib as usize);
+    if again != 0 {
+        line!("Release\tthat reference\t{:x}", call(again as P, RELEASE, &[]));
+    }
+    line!("SetIndices\tnull (unbinds)\t{:x}", call(device, SET_INDICES, &[0]));
+
+    let mut vb: P = std::ptr::null_mut();
+    line!("CreateVertexBuffer\t96 bytes\t{:x}", call(device, CREATE_VERTEX_BUFFER, &[96, 8, 0, 0, &mut vb as *mut P as usize, 0]));
+    line!("SetStreamSource\t0\t{:x}", call(device, SET_STREAM_SOURCE, &[0, vb as usize, 0, 24]));
+    line!("VertexBuffer\tbound: AddRef, Release\t{:x?}", count(vb));
+    line!("Release\tthe creation reference, still bound\t{:x}", call(vb, RELEASE, &[]));
+    line!("SetStreamSource\tnull\t{:x}", call(device, SET_STREAM_SOURCE, &[0, 0, 0, 0]));
+
+    let mut tex: P = std::ptr::null_mut();
+    line!("CreateTexture\t64x64 managed\t{:x}", call(device, CREATE_TEXTURE, &[64, 64, 1, 0, 21, 1, &mut tex as *mut P as usize, 0]));
+    line!("SetTexture\t0\t{:x}", call(device, SET_TEXTURE, &[0, tex as usize]));
+    line!("Texture\tbound: AddRef, Release\t{:x?}", count(tex));
+    let mut t: usize = 0;
+    line!("GetTexture\t0\t{:x}\tsame {}", call(device, GET_TEXTURE, &[0, &mut t as *mut usize as usize]), t == tex as usize);
+    line!("Texture\tafter GetTexture: AddRef, Release\t{:x?}", count(tex));
+    if t != 0 {
+        call(t as P, RELEASE, &[]);
+    }
+    line!("Release\tthe creation reference, still bound\t{:x}", call(tex, RELEASE, &[]));
+    line!("SetTexture\tnull\t{:x}", call(device, SET_TEXTURE, &[0, 0]));
     line!("Release\tdevice\t{:x}", call(device, RELEASE, &[]));
 }

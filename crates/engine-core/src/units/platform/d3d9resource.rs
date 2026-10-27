@@ -130,7 +130,13 @@ enum Kind {
 
 #[derive(Debug, Clone)]
 struct Object {
+    /// The program's references (what `AddRef` and `Release` answer).
     references: u32,
+    /// The device's bindings of it (stream sources, indices, declaration, shaders): kept apart
+    /// from the program's count, as the retail runtime keeps them (`d3d9-capture device refs`,
+    /// 2026-10-27: binding leaves `AddRef`/`Release` unchanged, a `Release` to 0 while bound
+    /// answers 0 and the object lives on until unbound).
+    bound: u32,
     device: u32,
     code: u32,
     kind: Kind,
@@ -237,6 +243,7 @@ fn make(e: &mut Engine, device: Ptr, code: u32, kind: Kind) -> u32 {
         object,
         Object {
             references: 1,
+            bound: 0,
             device: device.addr(),
             code,
             kind,
@@ -449,8 +456,25 @@ fn add_ref(e: &mut Engine, this: Ptr) -> u32 {
 fn release(e: &mut Engine, this: Ptr) -> u32 {
     let o = object(e, this);
     o.references -= 1;
-    let left = o.references;
-    if left == 0 {
+    let (left, bound) = (o.references, o.bound);
+    if left == 0 && bound == 0 {
+        destroy(e, this);
+    }
+    left
+}
+
+/// The device lets go of a binding of `this`; the object goes once neither the program nor the
+/// device holds it.
+fn unbind(e: &mut Engine, this: Ptr) {
+    let o = object(e, this);
+    o.bound -= 1;
+    if o.bound == 0 && o.references == 0 {
+        destroy(e, this);
+    }
+}
+
+fn destroy(e: &mut Engine, this: Ptr) {
+    {
         let o = resources(e)
             .objects
             .remove(&this.addr())
@@ -463,7 +487,6 @@ fn release(e: &mut Engine, this: Ptr) -> u32 {
         e.mem.free(this.addr());
         device_release(e, Ptr::new(o.device));
     }
-    left
 }
 
 /// `GetDevice(out)`: the object's device, counted.
@@ -579,10 +602,10 @@ fn is_kind(e: &mut Engine, object: u32, code: u32) -> bool {
 /// Replaces a held object word: the new one counted, the old one released.
 fn hold(e: &mut Engine, old: u32, new: u32) {
     if new != 0 {
-        add_ref(e, Ptr::new(new));
+        object(e, Ptr::new(new)).bound += 1;
     }
     if old != 0 {
-        release(e, Ptr::new(old));
+        unbind(e, Ptr::new(old));
     }
 }
 
@@ -862,7 +885,7 @@ pub(super) fn release_bindings(e: &mut Engine, device: u32) {
     ]);
     for object in held.collect::<Vec<_>>() {
         if object != 0 {
-            release(e, Ptr::new(object));
+            unbind(e, Ptr::new(object));
         }
     }
 }
@@ -1029,14 +1052,18 @@ forwarded! {
 pub(super) fn fwd_set_vertex_shader(e: &mut Engine, this: Ptr, shader: u32) -> u32 {
     let model = set_vertex_shader(e, this, shader);
     #[cfg(windows)]
-    super::d3d9real::set_shader(e, this.addr(), shader, false, model);
+    if model == D3D_OK {
+        super::d3d9real::set_shader(e, this.addr(), shader, false, model);
+    }
     model
 }
 
 pub(super) fn fwd_set_pixel_shader(e: &mut Engine, this: Ptr, shader: u32) -> u32 {
     let model = set_pixel_shader(e, this, shader);
     #[cfg(windows)]
-    super::d3d9real::set_shader(e, this.addr(), shader, true, model);
+    if model == D3D_OK {
+        super::d3d9real::set_shader(e, this.addr(), shader, true, model);
+    }
     model
 }
 
@@ -1045,7 +1072,9 @@ macro_rules! forwarded_constants {
         pub(super) fn $name(e: &mut Engine, this: Ptr, start: u32, data: Ptr, count: u32) -> u32 {
             let model = $set(e, this, start, data, count);
             #[cfg(windows)]
-            super::d3d9real::set_constants(e, this.addr(), $kind, start, data.addr(), count, model);
+            if model == D3D_OK {
+                super::d3d9real::set_constants(e, this.addr(), $kind, start, data.addr(), count, model);
+            }
             model
         }
     )*};

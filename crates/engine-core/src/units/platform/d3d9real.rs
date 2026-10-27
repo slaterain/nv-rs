@@ -58,6 +58,13 @@ pub struct Real {
     dynamic: HashSet<u32>,
     /// The differences already printed: (call, model's answer, real answer).
     logged: HashSet<(&'static str, u32, u32)>,
+    /// Bindings the model took whose object has no real counterpart, by (device, binding: a
+    /// stream number, or [`INDICES`], [`DECLARATION`], [`VERTEX_SHADER`], [`PIXEL_SHADER`]).
+    /// The real binding is set to null instead, and the real draws are skipped while any is
+    /// left: a pure device does not check what it draws with.
+    broken: HashSet<(u32, u32)>,
+    /// Real objects whose modelled ones are destroyed, released at the next `Present` ([`forget`]).
+    graveyard: Vec<Object>,
 }
 
 impl std::fmt::Debug for Real {
@@ -107,10 +114,17 @@ fn device(e: &Engine, this: u32) -> Option<IDirect3DDevice9> {
 }
 
 /// Forgets the real counterpart of a modelled object that is destroyed (its address can be
-/// reused), releasing it.
+/// reused). It is not released yet but kept until the frame's `Present`: the model lets go of an
+/// object when the program unbinds it, before the same call reaches the real device, and the
+/// game's device is a pure one (`D3DCREATE_PUREDEVICE`), which keeps no reference of its own to
+/// what is bound: released at once, the real object would be freed while still bound, and the
+/// real call that replaces the binding would read it (an access violation in
+/// `SetStreamSource`, p169).
 pub fn forget(e: &mut Engine, object: u32) {
     let r = real(e);
-    r.objects.remove(&object);
+    if let Some(o) = r.objects.remove(&object) {
+        r.graveyard.push(o);
+    }
     r.locks.remove(&object);
     r.dynamic.remove(&object);
 }
@@ -333,7 +347,7 @@ unsafe fn run_window_thread(rx: std::sync::mpsc::Receiver<Request>) {
             );
             let handle = match window {
                 Ok(w) => {
-                    if !child {
+                    if !child && request.style & WS_VISIBLE.0 != 0 {
                         let _ = ShowWindow(w, SW_SHOWNOACTIVATE);
                     }
                     w.0 as isize
@@ -596,6 +610,8 @@ pub fn present(
         )
     };
     answer(e, "Present", model, hr(r));
+    // The frame is over: what the model let go of is bound nowhere on the real device now.
+    real(e).graveyard.clear();
 }
 
 // The device's state.
@@ -1038,8 +1054,12 @@ pub fn set_vertex_declaration(e: &mut Engine, this: u32, declaration: u32, model
             d.SetVertexDeclaration(None::<&IDirect3DVertexDeclaration9>)
         },
         Some(Object::Declaration(v)) => unsafe { d.SetVertexDeclaration(v) },
-        _ => return missing(e, "SetVertexDeclaration without a real one"),
+        _ => {
+            let _ = unsafe { d.SetVertexDeclaration(None::<&IDirect3DVertexDeclaration9>) };
+            return broken(e, this, DECLARATION, "SetVertexDeclaration without a real one", model);
+        }
     };
+    mended(e, this, DECLARATION);
     answer(e, "SetVertexDeclaration", model, hr(r));
 }
 
@@ -1058,8 +1078,19 @@ pub fn set_shader(e: &mut Engine, this: u32, shader: u32, pixel: bool, model: u3
         (true, _) if shader == 0 => unsafe { d.SetPixelShader(None::<&IDirect3DPixelShader9>) },
         (false, Some(Object::VertexShader(s))) => unsafe { d.SetVertexShader(s) },
         (true, Some(Object::PixelShader(s))) => unsafe { d.SetPixelShader(s) },
-        _ => return missing(e, "Set*Shader without a real one"),
+        _ => {
+            let _ = unsafe {
+                if pixel {
+                    d.SetPixelShader(None::<&IDirect3DPixelShader9>)
+                } else {
+                    d.SetVertexShader(None::<&IDirect3DVertexShader9>)
+                }
+            };
+            let which = if pixel { PIXEL_SHADER } else { VERTEX_SHADER };
+            return broken(e, this, which, "Set*Shader without a real one", model);
+        }
     };
+    mended(e, this, if pixel { PIXEL_SHADER } else { VERTEX_SHADER });
     answer(e, "Set*Shader", model, hr(r));
 }
 
@@ -1108,8 +1139,12 @@ pub fn set_stream_source(
             d.SetStreamSource(stream, None::<&IDirect3DVertexBuffer9>, offset, stride)
         },
         Some(Object::VertexBuffer(b)) => unsafe { d.SetStreamSource(stream, b, offset, stride) },
-        _ => return missing(e, "SetStreamSource without a real buffer"),
+        _ => {
+            let _ = unsafe { d.SetStreamSource(stream, None::<&IDirect3DVertexBuffer9>, 0, 0) };
+            return broken(e, this, stream, "SetStreamSource without a real buffer", model);
+        }
     };
+    mended(e, this, stream);
     answer(e, "SetStreamSource", model, hr(r));
 }
 
@@ -1118,15 +1153,47 @@ pub fn set_indices(e: &mut Engine, this: u32, buffer: u32, model: u32) {
     let r = match e.kernel.graphics.real.objects.get(&buffer) {
         _ if buffer == 0 => unsafe { d.SetIndices(None::<&IDirect3DIndexBuffer9>) },
         Some(Object::IndexBuffer(b)) => unsafe { d.SetIndices(b) },
-        _ => return missing(e, "SetIndices without a real buffer"),
+        _ => {
+            let _ = unsafe { d.SetIndices(None::<&IDirect3DIndexBuffer9>) };
+            return broken(e, this, INDICES, "SetIndices without a real buffer", model);
+        }
     };
+    mended(e, this, INDICES);
     answer(e, "SetIndices", model, hr(r));
+}
+
+/// The bindings [`Real::broken`] names besides the streams (0..16).
+const INDICES: u32 = 0x100;
+const DECLARATION: u32 = 0x101;
+const VERTEX_SHADER: u32 = 0x102;
+const PIXEL_SHADER: u32 = 0x103;
+
+/// A binding the model took has no real counterpart (printed once by call).
+fn broken(e: &mut Engine, device: u32, binding: u32, call: &'static str, model: u32) {
+    real(e).broken.insert((device, binding));
+    answer(e, call, model, 0xffff_ffff);
+}
+
+fn mended(e: &mut Engine, device: u32, binding: u32) {
+    real(e).broken.remove(&(device, binding));
+}
+
+/// Whether the real draws of `device` are skipped (a binding without a real counterpart).
+fn skipped(e: &mut Engine, device: u32) -> bool {
+    let any = e.kernel.graphics.real.broken.iter().any(|&(d, _)| d == device);
+    if any {
+        missing(e, "a draw skipped: a binding has no real counterpart");
+    }
+    any
 }
 
 // Draws.
 
 pub fn draw_primitive(e: &mut Engine, this: u32, kind: u32, start: u32, count: u32, model: u32) {
     let Some(d) = device(e, this) else { return };
+    if skipped(e, this) {
+        return;
+    }
     let r = unsafe { d.DrawPrimitive(D3DPRIMITIVETYPE(kind as i32), start, count) };
     answer(e, "DrawPrimitive", model, hr(r));
 }
@@ -1144,6 +1211,9 @@ pub fn draw_indexed_primitive(
     model: u32,
 ) {
     let Some(d) = device(e, this) else { return };
+    if skipped(e, this) {
+        return;
+    }
     let r = unsafe {
         d.DrawIndexedPrimitive(
             D3DPRIMITIVETYPE(kind as i32),
@@ -1170,6 +1240,9 @@ pub fn draw_primitive_up(
     model: u32,
 ) {
     let Some(d) = device(e, this) else { return };
+    if skipped(e, this) {
+        return;
+    }
     let bytes = as_words(&e.mem.bytes(data, vertices * stride));
     let r = unsafe {
         d.DrawPrimitiveUP(
@@ -1474,5 +1547,73 @@ mod tests {
         // The fake shifts around extended keys are dropped.
         assert_eq!(dik(key(0x2a, true)), None);
         assert_eq!(dik(key(0, false)), None);
+    }
+
+    /// p169's crash: on a pure device (the game's behaviour flags 0x54) the runtime keeps no
+    /// reference of its own to a bound vertex buffer. The model lets go of a buffer when the
+    /// program rebinds the stream, before the same call reaches the real device; the real buffer
+    /// must outlive that call (it is released at the next `Present`), or the real
+    /// `SetStreamSource` reads freed memory. Skipped where there is no Direct3D 9 device.
+    #[test]
+    fn a_buffer_the_model_lets_go_of_stays_alive_until_present() {
+        let (reply, answer) = std::sync::mpsc::channel();
+        let sent = window_thread().lock().map(|tx| {
+            tx.send(Request {
+                title: b"nv-rs test".to_vec(),
+                style: 0,
+                ex_style: 0,
+                rect: [0, 0, 64, 64],
+                parent: 0,
+                reply,
+            })
+            .is_ok()
+        }).unwrap_or(false);
+        let Some(window) = answer.recv().ok().filter(|&w| sent && w != 0) else {
+            return;
+        };
+        let Some(d3d) = (unsafe { Direct3DCreate9(32) }) else {
+            return;
+        };
+        let mut pp = D3DPRESENT_PARAMETERS {
+            BackBufferWidth: 64,
+            BackBufferHeight: 64,
+            BackBufferCount: 1,
+            SwapEffect: D3DSWAPEFFECT_DISCARD,
+            hDeviceWindow: HWND(window as *mut _),
+            Windowed: BOOL(1),
+            ..Default::default()
+        };
+        let mut out = None;
+        // Hardware vertex processing, pure, multithreaded: the game's 0x54.
+        let made = unsafe {
+            d3d.CreateDevice(
+                0,
+                D3DDEVTYPE_HAL,
+                HWND(window as *mut _),
+                0x54 | FPU_PRESERVE,
+                &mut pp,
+                &mut out,
+            )
+        };
+        let Some(real_device) = out.filter(|_| made.is_ok()) else {
+            return;
+        };
+        let mut e = Engine::new();
+        let device = 0x1000;
+        real(&mut e)
+            .objects
+            .insert(device, Object::Device(real_device));
+        let (first, second) = (0x2000, 0x2008);
+        // D3DUSAGE_WRITEONLY, default pool, 96 bytes.
+        buffer_created(&mut e, device, first, false, 96, 8, 0, 0);
+        set_stream_source(&mut e, device, 0, first, 0, 24, 0);
+        // The model rebinds stream 0: the first buffer goes before the real call.
+        buffer_created(&mut e, device, second, false, 96, 8, 0, 0);
+        forget(&mut e, first);
+        assert_eq!(e.kernel.graphics.real.graveyard.len(), 1);
+        set_stream_source(&mut e, device, 0, second, 0, 24, 0);
+        set_stream_source(&mut e, device, 0, 0, 0, 0, 0);
+        present(&mut e, device, 0, 0, 0, 0, 0);
+        assert!(e.kernel.graphics.real.graveyard.is_empty());
     }
 }

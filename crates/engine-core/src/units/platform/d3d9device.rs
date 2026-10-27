@@ -383,8 +383,11 @@ macro_rules! forwarded {
     ($($vis:vis fn $name:ident = $model:ident($($a:ident: $t:ty),*) => $real:ident;)*) => {$(
         $vis fn $name(e: &mut Engine, this: Ptr, $($a: $t),*) -> u32 {
             let model = $model(e, this, $($a),*);
+            // A call the model refuses changes nothing, so the real device does not get it.
             #[cfg(windows)]
-            super::d3d9real::$real(e, this.addr(), $(Word::word($a),)* model);
+            if model == D3D_OK {
+                super::d3d9real::$real(e, this.addr(), $(Word::word($a),)* model);
+            }
             model
         }
     )*};
@@ -1220,7 +1223,7 @@ pub(super) fn device_release(e: &mut Engine, this: Ptr) -> u32 {
             }
         }
         for texture in d.textures.values() {
-            texture_release(e, Ptr::new(*texture));
+            texture_unbind(e, Ptr::new(*texture));
         }
         super::d3d9resource::release_bindings(e, this.addr());
         let implicit: Vec<u32> = e
@@ -1854,7 +1857,7 @@ fn set_texture(e: &mut Engine, this: Ptr, sampler: u32, texture: u32) -> u32 {
                 .contains_key(&texture),
             "IDirect3DDevice9::SetTexture({sampler}, {texture:#x}): not a texture of this layer"
         );
-        texture_add_ref(e, Ptr::new(texture));
+        self::texture(e, Ptr::new(texture)).bound += 1;
     }
     let d = device(e, this);
     let old = if texture != 0 {
@@ -1863,7 +1866,7 @@ fn set_texture(e: &mut Engine, this: Ptr, sampler: u32, texture: u32) -> u32 {
         d.textures.remove(&sampler)
     };
     if let Some(old) = old {
-        texture_release(e, Ptr::new(old));
+        texture_unbind(e, Ptr::new(old));
     }
     D3D_OK
 }
@@ -1950,7 +1953,11 @@ fn level_layout(format: u32, width: u32, height: u32) -> (u32, u32) {
 /// A texture of this layer.
 #[derive(Debug, Clone)]
 struct Texture {
+    /// The program's references (what `AddRef` and `Release` answer).
     references: u32,
+    /// The device's samplers holding it: apart from the program's count, as the retail
+    /// runtime keeps them (`d3d9-capture device refs`, 2026-10-27).
+    bound: u32,
     device: u32,
     pool: u32,
     /// 1, or 6 for a cube texture.
@@ -2092,6 +2099,7 @@ fn create_texture(
         object,
         Texture {
             references: 1,
+            bound: 0,
             device: device_addr,
             pool,
             faces: 1,
@@ -2208,6 +2216,7 @@ fn create_cube_texture(
         object,
         Texture {
             references: 1,
+            bound: 0,
             device: device_addr,
             pool,
             faces: 6,
@@ -2658,7 +2667,7 @@ fn reset(e: &mut Engine, this: Ptr, present: Ptr) -> u32 {
         surface_release(e, Ptr::new(surface));
     }
     for texture in old.1 {
-        texture_release(e, Ptr::new(texture));
+        texture_unbind(e, Ptr::new(texture));
     }
     super::d3d9resource::release_bindings(e, this.addr());
     let implicit: Vec<u32> = e
@@ -2759,8 +2768,24 @@ fn texture_add_ref(e: &mut Engine, this: Ptr) -> u32 {
 fn texture_release(e: &mut Engine, this: Ptr) -> u32 {
     let t = texture(e, this);
     t.references -= 1;
-    let left = t.references;
-    if left == 0 {
+    let (left, bound) = (t.references, t.bound);
+    if left == 0 && bound == 0 {
+        texture_destroy(e, this);
+    }
+    left
+}
+
+/// A sampler lets go of `this`; the texture goes once neither the program nor a sampler holds it.
+fn texture_unbind(e: &mut Engine, this: Ptr) {
+    let t = texture(e, this);
+    t.bound -= 1;
+    if t.bound == 0 && t.references == 0 {
+        texture_destroy(e, this);
+    }
+}
+
+fn texture_destroy(e: &mut Engine, this: Ptr) {
+    {
         let t = e
             .kernel
             .graphics
@@ -2786,7 +2811,6 @@ fn texture_release(e: &mut Engine, this: Ptr) -> u32 {
         e.mem.free(this.addr());
         device_release(e, Ptr::new(t.device));
     }
-    left
 }
 
 /// `GetDevice(out)`: the texture's device, counted.
@@ -3628,9 +3652,12 @@ mod tests {
         assert_eq!(e.vcall(device, 4 * 65, &[0, texture]).u32(), D3D_OK);
         assert_eq!(e.vcall(device, 4 * 64, &[0, value]).u32(), D3D_OK);
         assert_eq!(e.mem.u32(value), texture);
-        // The program's reference, the sampler's and GetTexture's.
-        assert_eq!(e.vcall(texture, 8, &[]).u32(), 2);
+        // The program's reference and GetTexture's: the sampler's binding is not counted (the
+        // retail runtime, `d3d9-capture device refs`, 2026-10-27); released to 0 while bound,
+        // the texture lives on until the sampler lets go.
         assert_eq!(e.vcall(texture, 8, &[]).u32(), 1);
+        assert_eq!(e.vcall(texture, 8, &[]).u32(), 0);
+        assert!(!e.kernel.graphics.device_objects.textures.is_empty());
         assert_eq!(e.vcall(device, 4 * 65, &[0, 0]).u32(), D3D_OK);
         assert!(e.kernel.graphics.device_objects.textures.is_empty());
         assert_eq!(e.vcall(device, 4 * 64, &[0, value]).u32(), D3D_OK);
@@ -3718,12 +3745,10 @@ mod tests {
             D3D_OK
         );
         assert_eq!((e.mem.u32(got), e.mem.u32(got + 8)), (vb, 32));
-        assert_eq!(
-            e.vcall(vb, 8, &[]).u32(),
-            2,
-            "the stream's and the program's"
-        );
-        assert_eq!(e.vcall(vb, 8, &[]).u32(), 1, "the stream's");
+        // GetStreamSource's reference and the program's; the stream's binding is not counted.
+        assert_eq!(e.vcall(vb, 8, &[]).u32(), 1, "the program's");
+        assert_eq!(e.vcall(vb, 8, &[]).u32(), 0, "none: still bound");
+        assert!(e.kernel.graphics.device_objects.resources_hold(vb));
         // Constants.
         let four = e.mem.alloc(32);
         e.mem.set_u32(four + 16, 7);
