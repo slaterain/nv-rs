@@ -635,12 +635,12 @@ fn get_current_thread_id(e: &mut Engine) -> u32 {
 }
 
 // Platform: replaces KERNEL32.DLL Sleep (import)
-/// A switch point: the running thread gives the others a turn, and the clock
-/// (`Engine::clock_now_ms`) moves on by the time asked for (nothing is really waited).
+/// A switch point (`crate::thread_host`): on the main thread the clock
+/// (`Engine::clock_now_ms`) moves on by the time asked for (nothing is really waited) and the
+/// others get a pass; another thread sleeps until the clock reaches its wake time, without
+/// moving it.
 fn sleep(e: &mut Engine, ms: u32) {
-    e.clock_now_us();
-    e.advance_clock_us(u64::from(ms) * 1000);
-    crate::thread_host::host().sleep(e, signalled);
+    crate::thread_host::host().sleep(e, ms, signalled);
 }
 
 /// The exception code of the debugger thread-naming convention (`SetThreadName`, `00aa2740`).
@@ -3602,6 +3602,68 @@ mod tests {
         assert!(later >= 1030, "real time passed: {later}");
         query_performance_counter(&mut e, Ptr::new(out));
         assert!(e.mem.u64(out) >= u64::from(later) * 1000);
+    }
+
+    /// A thread that logs the clock, sleeps 50 ms, and does so three times.
+    fn sleeping_thread(e: &mut Engine, _: &[u32]) -> Ret {
+        for _ in 0..3 {
+            let now = tick_count(e);
+            log(e, now);
+            sleep(e, 50);
+        }
+        Ret::default()
+    }
+
+    #[test]
+    fn a_game_threads_sleep_leaves_the_clock_and_waits_for_its_wake_time() {
+        let mut e = thread_engine();
+        e.register(0x00ab_0500, sleeping_thread);
+        e.clock_ms = 1000;
+        call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0500, 0, 0, 0]);
+        // Main's Sleep(0): the thread runs and sleeps; the clock stays.
+        call(&mut e, SLEEP, &[0]);
+        assert_eq!(tick_count(&mut e), 1000, "a game thread's Sleep keeps the clock");
+        // Passes before its wake time leave it asleep.
+        e.clock_ms = 1049;
+        call(&mut e, SLEEP, &[0]);
+        assert_eq!(logged(&e).len(), 1);
+        // From its wake time it runs again.
+        e.clock_ms = 1050;
+        call(&mut e, SLEEP, &[0]);
+        assert_eq!(logged(&e).iter().map(|l| l.0).collect::<Vec<_>>(), [1000, 1050]);
+        // Main's own Sleep moves the clock as before, and the thread runs when due.
+        call(&mut e, SLEEP, &[60]);
+        assert_eq!(tick_count(&mut e), 1110);
+        assert_eq!(
+            logged(&e).iter().map(|l| l.0).collect::<Vec<_>>(),
+            [1000, 1050, 1110]
+        );
+    }
+
+    #[test]
+    fn main_waiting_while_every_thread_sleeps_jumps_the_clock_to_the_earliest_wake() {
+        let mut e = thread_engine();
+        e.register(0x00ab_0500, sleeping_thread);
+        e.clock_ms = 1000;
+        let t = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0500, 0, 0, 0]);
+        // Main waits for the thread's end: the clock jumps to each wake time in turn.
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, INFINITE]),
+            WAIT_OBJECT_0
+        );
+        assert_eq!(
+            logged(&e).iter().map(|l| l.0).collect::<Vec<_>>(),
+            [1000, 1050, 1100]
+        );
+        assert_eq!(tick_count(&mut e), 1150);
+        // A timed wait on an event nobody sets, with nobody sleeping: the clock jumps to
+        // its deadline and it times out.
+        let ev = call(&mut e, CREATE_EVENT_A, &[0, 1, 0, 0]);
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[ev, 30]),
+            WAIT_TIMEOUT
+        );
+        assert_eq!(tick_count(&mut e), 1180);
     }
 
     #[test]

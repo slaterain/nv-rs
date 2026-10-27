@@ -20,21 +20,33 @@
 //!
 //! **When threads run (the switch points), in a fixed order:**
 //! - The main thread waits on an object that is not signalled
-//!   (`WaitForSingleObject`, `WaitForMultipleObjects`, any timeout) or calls
-//!   `Sleep`: the host runs the other threads ([`run_until`]) until the object
-//!   is signalled, until a whole pass changes no object's state, or, for a
-//!   timed wait, after one pass, once the clock passes its timeout.
+//!   (`WaitForSingleObject`, `WaitForMultipleObjects`, any timeout): the host
+//!   runs the other threads ([`run_until`]) until the object is signalled, or,
+//!   for a timed wait, after one pass, once the clock passes its timeout. When
+//!   a whole pass changes no object's state, main waits and every other thread
+//!   sleeps or waits: the clock then jumps to the earliest wake time (a
+//!   sleeping thread's, or the wait's own deadline) and the passes go on. With
+//!   no wake time ahead (or ten minutes of such jumps without a change) the
+//!   wait ends as one nothing can signal.
+//! - The main thread calls `Sleep(n)`: the clock moves on by `n` ms (nothing
+//!   is really waited) and the others get one pass.
 //! - A game thread waits on an object that is not signalled, or sleeps: it
 //!   yields back to the main thread, which goes on with the next thread of the
-//!   pass.
+//!   pass. A game thread's `Sleep(n)` does not move the clock: the thread is
+//!   runnable again once the clock reaches its wake time (the clock when it
+//!   slept, plus `n` ms). So the clock (`Engine::clock_now_us`) follows the
+//!   real time while the game runs, moved on beyond it only by main's own
+//!   sleeps and by the jumps above, when every thread sleeps.
 //! - The host's own frame points call [`run_threads`].
 //!
 //! A pass resumes, in creation order, every thread that is runnable: started
 //! for the first time (`CreateThread` without `CREATE_SUSPENDED`, or resumed
-//! to a suspend count of 0), sleeping, or waiting on objects that are now
-//! signalled. `CreateThread`, `ResumeThread`, `SetEvent` and
-//! `ReleaseSemaphore` never switch by themselves: what they make runnable runs
-//! at the next switch point. So runs are deterministic.
+//! to a suspend count of 0), sleeping past its wake time, or waiting on
+//! objects that are now signalled. `CreateThread`, `ResumeThread`, `SetEvent`
+//! and `ReleaseSemaphore` never switch by themselves: what they make runnable
+//! runs at the next switch point. So runs are deterministic on the platform's
+//! own clock (the tests'); with the real clock on, when a sleeping thread
+//! wakes depends on the real time that passed.
 //!
 //! **Per thread** ([`GameThread`]): its id, handle, start and parameter, its
 //! suspend count, its run state, its TLS block (`Engine::tls`) and the call
@@ -66,8 +78,9 @@ pub enum RunState {
     Running,
     /// Waiting on these handles (all of them, or any).
     Waiting { handles: Vec<u32>, all: bool },
-    /// Gave up its turn (`Sleep`): runnable at the next pass.
-    Sleeping,
+    /// Gave up its turn (`Sleep`): runnable at the first pass once the clock
+    /// ([`Engine::clock_now_us`]) reaches `until`.
+    Sleeping { until: u64 },
     /// Its start function returned or it called `ExitThread`.
     Finished { code: u32 },
     /// It stopped (an untranslated function, a fault): the first line.
@@ -157,8 +170,8 @@ pub trait ThreadHost {
         deadline: Option<u64>,
         signalled: Signalled,
     ) -> bool;
-    /// The current thread gives up its turn (`Sleep`).
-    fn sleep(&self, e: &mut Engine, signalled: Signalled);
+    /// The current thread gives up its turn for `ms` milliseconds (`Sleep`).
+    fn sleep(&self, e: &mut Engine, ms: u32, signalled: Signalled);
     /// The current game thread ends (`ExitThread`).
     fn exit(&self, e: &mut Engine, code: u32);
 }
@@ -244,13 +257,19 @@ pub fn signal(e: &mut Engine) {
     e.kernel.threads.signals = e.kernel.threads.signals.wrapping_add(1);
 }
 
-fn runnable(e: &Engine, i: usize, signalled: Signalled) -> bool {
+fn runnable(e: &mut Engine, i: usize, signalled: Signalled) -> bool {
+    if let RunState::Sleeping { until } = e.kernel.threads.list[i].state {
+        if e.kernel.threads.list[i].suspend_count != 0 {
+            return false;
+        }
+        return e.clock_now_us() >= until;
+    }
     let t = &e.kernel.threads.list[i];
     if t.suspend_count != 0 {
         return false;
     }
     match &t.state {
-        RunState::NotStarted | RunState::Sleeping => true,
+        RunState::NotStarted => true,
         RunState::Waiting { handles, all } => {
             if *all {
                 handles.iter().all(|&h| signalled(e, h))
@@ -296,6 +315,26 @@ pub fn run_until(
             return until(e);
         }
     }
+}
+
+/// How far (microseconds of clock) the main thread's wait jumps the clock to sleepers' wake
+/// times without any object changing state before it gives up (the wait then times out or
+/// stops as one nothing can signal): ten minutes of game time.
+const JUMP_LIMIT_US: u64 = 600_000_000;
+
+/// The earliest time a thread wakes: a sleeping thread that is not suspended, or `deadline`.
+fn earliest_wake(e: &Engine, deadline: Option<u64>) -> Option<u64> {
+    e.kernel
+        .threads
+        .list
+        .iter()
+        .filter(|t| t.suspend_count == 0)
+        .filter_map(|t| match t.state {
+            RunState::Sleeping { until } => Some(until),
+            _ => None,
+        })
+        .chain(deadline)
+        .min()
 }
 
 /// One pass from the main thread: each runnable thread, in creation order, runs until it yields.
@@ -489,8 +528,30 @@ impl ThreadHost for Cooperative {
             // thread sleeps in a loop (the loading menu's, Sleep(50) a round).
             one_pass(e, signalled);
             let past = |e: &mut Engine| deadline.is_some_and(|d| e.clock_now_us() >= d);
-            run_until(e, signalled, &mut |e| ready(e) || past(e));
-            return ready(e);
+            let mut jumped = 0u64;
+            loop {
+                let signals = e.kernel.threads.signals;
+                run_until(e, signalled, &mut |e| ready(e) || past(e));
+                if ready(e) || past(e) {
+                    return ready(e);
+                }
+                if e.kernel.threads.signals != signals {
+                    jumped = 0;
+                }
+                // No thread can go on now: main waits and every other thread sleeps or
+                // waits. The clock jumps to the earliest wake time (a sleeper's, or this
+                // wait's deadline). A thread due now that made no progress, or
+                // `JUMP_LIMIT` of jumps without a signal, ends the wait as before.
+                let now = e.clock_now_us();
+                let Some(wake) = earliest_wake(e, deadline) else {
+                    return false;
+                };
+                if wake <= now || jumped >= JUMP_LIMIT_US {
+                    return false;
+                }
+                jumped += wake - now;
+                e.advance_clock_us(wake - now);
+            }
         }
         let i = e.kernel.threads.current;
         loop {
@@ -506,14 +567,20 @@ impl ThreadHost for Cooperative {
         }
     }
 
-    fn sleep(&self, e: &mut Engine, signalled: Signalled) {
+    fn sleep(&self, e: &mut Engine, ms: u32, signalled: Signalled) {
         ensure_main(e);
+        let until = e.clock_now_us() + u64::from(ms) * 1000;
         if on_main(e) {
+            // The main thread's own sleep moves the clock on by its time (nothing is
+            // really waited), then gives the others a pass.
+            e.advance_clock_us(u64::from(ms) * 1000);
             one_pass(e, signalled);
             return;
         }
+        // Another thread's sleep leaves the clock alone: it runs again at the first pass
+        // once the clock reaches its wake time.
         let i = e.kernel.threads.current;
-        e.kernel.threads.list[i].state = RunState::Sleeping;
+        e.kernel.threads.list[i].state = RunState::Sleeping { until };
         yield_to_main(Yield::Paused);
         load_fpu(e);
     }
