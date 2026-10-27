@@ -323,6 +323,11 @@ pub const STAND_INS: [engine::static_init::StandIn; 1] = [(0x00fb_66a0, start_al
 /// calls its `Initialize` (slot +0x1c). (`00866690` ends with a call to a
 /// library singleton's slot +4 that is not reproduced.)
 pub fn start_allocator(e: &mut Engine) {
+    // `00aa3880` on the memory manager (`011f6238`), the parts that are game objects and not the
+    // heaps: `kThreadScrapHeapMap` (+0x114: `00aa47e0(map, 0x25)`, then its vtable `010a25f8`),
+    // which `MemoryManager::GetThreadScrapHeap` (`00aa42e0`) looks the threads up in.
+    e.call(0x00aa_47e0, &[0x011f_6238 + 0x114, 0x25]);
+    e.mem.set_u32(0x011f_6238 + 0x114, 0x010a_25f8);
     // `00866690`: `operator new(8)` for the holder, `operator new(4)` for the
     // allocator and its constructor `00aa2230`, the holder's constructor
     // `00aa21d0`, the store at `011f6118`, then `00aa2020`. (Its null checks
@@ -334,8 +339,10 @@ pub fn start_allocator(e: &mut Engine) {
     e.mem.set_u32(0x011f_6118, holder);
     e.call(0x00aa_2020, &[]);
     // Not reproduced: `00866690`'s last call, slot +4 of the singleton
-    // `00af2640` answers with (0, 0, 0), and the rest of `00aa3880` (the
-    // memory manager itself is platform).
+    // `00af2640` answers with (0, 0, 0), and the heap set-up of `00aa3880` (the
+    // memory manager's heaps are platform).
+    // `00aa3880`'s last step: the scrap-heap manager (`00aa58d0`).
+    e.call(0x00aa_58d0, &[]);
 }
 
 #[cfg(test)]
