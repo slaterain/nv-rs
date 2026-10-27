@@ -548,9 +548,15 @@ pub fn create_window_ex_a(
     let handle = e.kernel.insert(KernelObject::Window);
     let rect = [x, y, x.wrapping_add(width), y.wrapping_add(height)];
     #[cfg(windows)]
-    if !child {
-        super::d3d9real::window_created(e, handle, &title, style, ex_style, rect);
-    }
+    super::d3d9real::window_created(
+        e,
+        handle,
+        &title,
+        style,
+        ex_style,
+        rect,
+        if child { parent } else { 0 },
+    );
     e.kernel.windows.windows.insert(
         handle,
         Window {

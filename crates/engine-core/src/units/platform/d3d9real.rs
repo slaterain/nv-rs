@@ -131,59 +131,91 @@ extern "system" fn window_procedure(
     unsafe { DefWindowProcA(window, message, wparam, lparam) }
 }
 
-/// Makes a real window on its own thread, which pumps its messages; its handle.
-fn spawn_window(title: Vec<u8>, style: u32, ex_style: u32, rect: [i32; 4]) -> Option<isize> {
-    let (tx, rx) = std::sync::mpsc::channel::<isize>();
-    std::thread::Builder::new()
-        .name("nv-d3d9-window".into())
-        .spawn(move || unsafe {
-            let Ok(module) = GetModuleHandleA(None) else {
-                let _ = tx.send(0);
-                return;
-            };
-            let class = WNDCLASSA {
-                lpfnWndProc: Some(window_procedure),
-                hInstance: module.into(),
-                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-                lpszClassName: CLASS_NAME,
-                ..Default::default()
-            };
-            RegisterClassA(&class);
-            let mut title = title;
+/// A window to make on the window thread: title, style, extended style, rectangle, the real
+/// parent (0 for a top-level window), and where the handle goes (0 when it failed).
+struct Request {
+    title: Vec<u8>,
+    style: u32,
+    ex_style: u32,
+    rect: [i32; 4],
+    parent: isize,
+    reply: std::sync::mpsc::Sender<isize>,
+}
+
+/// The window thread: it makes every real window (a child window's messages go to the thread
+/// that made it, so parent and children share it) and pumps their messages.
+fn window_thread() -> &'static std::sync::Mutex<std::sync::mpsc::Sender<Request>> {
+    static THREAD: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Sender<Request>>> =
+        std::sync::OnceLock::new();
+    THREAD.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<Request>();
+        let _ = std::thread::Builder::new()
+            .name("nv-d3d9-window".into())
+            .spawn(move || unsafe { run_window_thread(rx) });
+        std::sync::Mutex::new(tx)
+    })
+}
+
+unsafe fn run_window_thread(rx: std::sync::mpsc::Receiver<Request>) {
+    let module = GetModuleHandleA(None).unwrap_or_default();
+    let class = WNDCLASSA {
+        lpfnWndProc: Some(window_procedure),
+        hInstance: module.into(),
+        hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+        lpszClassName: CLASS_NAME,
+        ..Default::default()
+    };
+    RegisterClassA(&class);
+    loop {
+        while let Ok(request) = rx.try_recv() {
+            let mut title = request.title;
             title.push(0);
-            let [left, top, right, bottom] = rect;
+            let [left, top, right, bottom] = request.rect;
+            let child = request.parent != 0;
+            // A top-level window is shown afterwards without taking the focus.
+            let style = if child {
+                request.style
+            } else {
+                request.style & !WS_VISIBLE.0
+            };
             let window = CreateWindowExA(
-                WINDOW_EX_STYLE(ex_style),
+                WINDOW_EX_STYLE(request.ex_style),
                 CLASS_NAME,
                 PCSTR(title.as_ptr()),
-                WINDOW_STYLE(style & !WS_VISIBLE.0),
+                WINDOW_STYLE(style),
                 left,
                 top,
                 right.wrapping_sub(left),
                 bottom.wrapping_sub(top),
-                None,
+                HWND(request.parent as *mut _),
                 None,
                 module,
                 None,
             );
-            let Ok(window) = window else {
-                let _ = tx.send(0);
-                return;
+            let handle = match window {
+                Ok(w) => {
+                    if !child {
+                        let _ = ShowWindow(w, SW_SHOWNOACTIVATE);
+                    }
+                    w.0 as isize
+                }
+                Err(_) => 0,
             };
-            let _ = ShowWindow(window, SW_SHOWNOACTIVATE);
-            let _ = tx.send(window.0 as isize);
-            let mut msg = MSG::default();
-            while GetMessageA(&mut msg, None, 0, 0).as_bool() {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageA(&msg);
-            }
-        })
-        .ok()?;
-    rx.recv().ok().filter(|&w| w != 0)
+            let _ = request.reply.send(handle);
+        }
+        MsgWaitForMultipleObjects(None, false, 10, QS_ALLINPUT);
+        let mut msg = MSG::default();
+        while PeekMessageA(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
+    }
 }
 
-/// `CreateWindowExA` made the modelled top-level window `handle`: a real window of the same
-/// title, styles and rectangle.
+/// `CreateWindowExA` made the modelled window `handle` (a child of `parent` when that is not
+/// 0): a real window of the same title, styles and rectangle (a child of the parent's real
+/// window).
+#[allow(clippy::too_many_arguments)]
 pub fn window_created(
     e: &mut Engine,
     handle: u32,
@@ -191,12 +223,40 @@ pub fn window_created(
     style: u32,
     ex_style: u32,
     rect: [i32; 4],
+    parent: u32,
 ) {
     if !wanted() {
         return;
     }
-    match spawn_window(title.to_vec(), style, ex_style, rect) {
+    let real_parent = if parent != 0 {
+        match real_window(e, parent) {
+            Some(p) => p,
+            None => {
+                eprintln!("NV_D3D9=real: a child window of a window without a real one");
+                return;
+            }
+        }
+    } else {
+        0
+    };
+    let (reply, answer) = std::sync::mpsc::channel();
+    let request = Request {
+        title: title.to_vec(),
+        style,
+        ex_style,
+        rect,
+        parent: real_parent,
+        reply,
+    };
+    let sent = window_thread()
+        .lock()
+        .map(|tx| tx.send(request).is_ok())
+        .unwrap_or(false);
+    match answer.recv().ok().filter(|&w| sent && w != 0) {
         Some(window) => {
+            eprintln!(
+                "NV_D3D9=real: window {handle:#x} (style {style:#x}, parent {parent:#x}, {rect:?}) is real window {window:#x}"
+            );
             real(e).windows.insert(handle, window);
         }
         None => eprintln!("NV_D3D9=real: the real window could not be made"),
