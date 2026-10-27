@@ -1066,6 +1066,16 @@ impl PlayerMovement {
                 if self.main_reported.is_none_or(|t| t.elapsed().as_secs() >= 5) {
                     self.main_reported = Some(std::time::Instant::now());
                     println!("{}", self.summary());
+                    // `NV_MOVE_WATCH=addr,addr..`: the words at those exe addresses with it (a
+                    // diagnostic of the game's state: which menus exist, flags).
+                    if let Ok(list) = std::env::var("NV_MOVE_WATCH") {
+                        let words: Vec<String> = list
+                            .split(',')
+                            .filter_map(|a| u32::from_str_radix(a.trim(), 16).ok())
+                            .map(|a| format!("{a:08x}={:08x}", e.mem.u32(a)))
+                            .collect();
+                        println!("watch: {}", words.join(" "));
+                    }
                 }
                 true
             }
