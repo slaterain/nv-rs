@@ -489,8 +489,21 @@ impl PlayerMovement {
             }
         }
         let trace = e.trace.take();
-        if let (Some(path), Some(trace), Err(why)) = (trace_file, trace, &out) {
-            let mut text = format!("== {stage}: {why}\n");
+        // `NV_MOVE_TRACE_FRAMES=A-B`: main's frames A to B (counted from 0) have their traces
+        // written too, not only a stop's (what the game did on those frames).
+        let traced_frame = stage == "main"
+            && std::env::var("NV_MOVE_TRACE_FRAMES").ok().is_some_and(|v| {
+                let mut ends = v.split('-').filter_map(|n| n.trim().parse::<u64>().ok());
+                let from = ends.next().unwrap_or(u64::MAX);
+                let to = ends.next().unwrap_or(from);
+                (from..=to).contains(&self.main_frames)
+            });
+        let header = match &out {
+            Err(why) => Some(format!("== {stage}: {why}\n")),
+            Ok(_) if traced_frame => Some(format!("== main frame {}\n", self.main_frames)),
+            Ok(_) => None,
+        };
+        if let (Some(path), Some(trace), Some(mut text)) = (trace_file, trace, header) {
             for (addr, args, eax) in trace {
                 let words: Vec<String> = args.iter().map(|w| format!("{w:08x}")).collect();
                 let _ = writeln!(text, "{addr:08x}({}) -> {eax:08x}", words.join(","));
