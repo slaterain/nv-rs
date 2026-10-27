@@ -2921,14 +2921,13 @@ pub fn player_character_resurrect(
             e.call(0x0070_c440, &args![controller, out]);
             let value = e.call(0x004a_3a20, &args![out]).u32();
             let block = e.call(OPERATOR_NEW, &args![8u32]).u32();
-            let caster = if block != 0 {
+            if block != 0 {
                 let at = e.call(SETTING_FLOAT_POINTER, &args![0x011e_0934u32]).u32();
                 let seconds = e.mem.f32(at);
                 e.call(0x0062_0850, &args![block, seconds, value]).u32()
             } else {
                 0
-            };
-            caster
+            }
         });
         e.mem.set_u32(player + 0x21c, caster);
     } else {
@@ -10187,7 +10186,11 @@ mod tests {
         // The process: slot 0x148 (0, 0) feeds slot 0x160.
         assert_eq!(world.entry_calls.borrow().len(), 1);
         assert_eq!(world.entry_calls.borrow()[0][1], 0x77);
-        assert_eq!(world.entry_calls.borrow()[0][2..], [0, 0], "group and force");
+        assert_eq!(
+            world.entry_calls.borrow()[0][2..],
+            [0, 0],
+            "group and force"
+        );
         assert_eq!(world.process_calls.borrow().len(), 1);
 
         // The lighting and the character controller proxy.
