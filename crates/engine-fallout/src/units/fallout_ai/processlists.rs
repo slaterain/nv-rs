@@ -482,11 +482,11 @@ pub fn processlists_parallel_update_animation_scenegraph(e: &mut Engine, this: P
     if count == 0 {
         return;
     }
-    // The scrap array (0x10 bytes) at +0, the local holding the animation
-    // pointer at +0x10, the task (0x10 bytes) at +0x20.
+    // The scrap array (0x14 bytes, its scrap heap at +0x10) at +0, the local holding the animation
+    // pointer at +0x14 (the exe keeps them apart), the task (0x10 bytes) at +0x20.
     e.with_stack(0x30, |e, frame| {
         let scrap = frame.addr();
-        let slot = scrap + 0x10;
+        let slot = scrap + 0x14;
         let task = scrap + 0x20;
         e.call(0x0097_89e0, &args![scrap]);
         let mut index = first;
@@ -626,10 +626,11 @@ pub fn fn_0096cda0(e: &mut Engine, this: Ptr<ProcessLists>) {
     if count == 0 {
         return;
     }
-    // Scrap array at +0, the local holding the actor at +0x10, task at +0x20.
+    // Scrap array at +0 (0x14 bytes, its scrap heap at +0x10; EBP-0x34 in the exe), the
+    // local holding the actor at +0x14 (EBP-0x40), task at +0x20.
     e.with_stack(0x30, |e, frame| {
         let scrap = frame.addr();
-        let slot = scrap + 0x10;
+        let slot = scrap + 0x14;
         let task = scrap + 0x20;
         e.call(0x0097_8ae0, &args![scrap]);
         let mut index = first;
