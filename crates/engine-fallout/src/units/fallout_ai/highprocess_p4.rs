@@ -14022,7 +14022,13 @@ mod tests {
         // the pathfinding goal from the package coordinates at EBP-0x64 (+0x50).
         stub(&mut e, 0x00aa_b220, 0);
         stub(&mut e, 0x008b_3bb0, 1);
-        for addr in [0x0067_8670u32, 0x0067_5a50, 0x0067_5c20, 0x0067_5de0, 0x008b_3690] {
+        for addr in [
+            0x0067_8670u32,
+            0x0067_5a50,
+            0x0067_5c20,
+            0x0067_5de0,
+            0x008b_3690,
+        ] {
             stub(&mut e, addr, 0);
         }
         // A saved acquire object ends the travel after the goal.
