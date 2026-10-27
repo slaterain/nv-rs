@@ -108,6 +108,8 @@ pub struct GameThread {
     call_stack: Vec<u32>,
     /// The coroutine (made when it first runs).
     link: Option<Link>,
+    /// How many times it was switched to (a diagnostic, [`describe`]).
+    pub turns: u64,
 }
 
 /// The engine, handed to the coroutine that runs next.
@@ -203,8 +205,40 @@ fn ensure_main(e: &mut Engine) {
             tls: 0,
             call_stack: Vec::new(),
             link: None,
+            turns: 0,
         });
     }
+}
+
+/// The game threads as one line (a diagnostic): each thread's id, start, run state (a sleeper's
+/// wake time from now, in ms), suspend count when not 0, and how many turns it has had.
+pub fn describe(e: &mut Engine) -> String {
+    let now = e.clock_now_us();
+    e.kernel
+        .threads
+        .list
+        .iter()
+        .map(|t| {
+            let state = match &t.state {
+                RunState::Sleeping { until } => {
+                    format!("sleeping {:+} ms", (*until as i64 - now as i64) / 1000)
+                }
+                RunState::Waiting { handles, all } => format!(
+                    "waiting {} {:x?}",
+                    if *all { "all" } else { "any" },
+                    handles
+                ),
+                other => format!("{other:?}"),
+            };
+            let suspended = if t.suspend_count != 0 {
+                format!(" suspended {}", t.suspend_count)
+            } else {
+                String::new()
+            };
+            format!("{}@{:08x} {state}{suspended} turns {}", t.id, t.start, t.turns)
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// The running thread's id.
@@ -236,6 +270,7 @@ pub fn create(e: &mut Engine, handle: u32, start: u32, parameter: u32, suspended
         tls: 0,
         call_stack: Vec::new(),
         link: None,
+        turns: 0,
     });
     id
 }
@@ -392,6 +427,7 @@ fn switch_to(e: &mut Engine, i: usize) {
     };
     swap_context(e, 0, i);
     e.kernel.threads.current = i;
+    e.kernel.threads.list[i].turns += 1;
     e.kernel.threads.list[i].state = RunState::Running;
     let baton = Baton(e as *mut Engine);
     let reply = match link.resume.send(baton) {

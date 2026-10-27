@@ -1111,6 +1111,11 @@ impl PlayerMovement {
                             .collect();
                         println!("watch: {}", words.join(" "));
                     }
+                    // `NV_MOVE_THREADS`: the game threads' states with it (a diagnostic: which
+                    // thread sleeps, waits or has turns, `thread_host::describe`).
+                    if std::env::var_os("NV_MOVE_THREADS").is_some() {
+                        println!("threads: {}", engine::thread_host::describe(e));
+                    }
                 }
                 true
             }
