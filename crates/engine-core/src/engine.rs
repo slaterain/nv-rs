@@ -492,8 +492,18 @@ impl Engine {
     pub fn vcall(&mut self, this: u32, slot: u32, args: &[u32]) -> Ret {
         let vtable = self.mem.u32(this);
         let target = self.mem.u32(vtable.wrapping_add(slot));
-        // `this` and the arguments on the stack when they fit (no allocation per call).
+        // `this` and the arguments on the stack when they fit (no allocation per call). The
+        // short lists, most virtual calls, are fixed-size arrays: a variable-length copy is a
+        // call to `memcpy`, which cost more than the rest of the call (a15's benchmark).
         const INLINE: usize = 15;
+        match *args {
+            [] => return self.call(target, &[this]),
+            [a] => return self.call(target, &[this, a]),
+            [a, b] => return self.call(target, &[this, a, b]),
+            [a, b, c] => return self.call(target, &[this, a, b, c]),
+            [a, b, c, d] => return self.call(target, &[this, a, b, c, d]),
+            _ => {}
+        }
         if args.len() <= INLINE {
             let mut words = [0u32; INLINE + 1];
             words[0] = this;
@@ -680,6 +690,29 @@ mod tests {
                 n as f64 / secs / 1e6,
                 secs * 1e9 / n as f64
             );
+        }
+    }
+
+    /// A virtual call passes `this` and then the arguments, for every list length (the short
+    /// ones are built as fixed arrays, the longer ones on the stack or the heap).
+    #[test]
+    fn virtual_calls_pass_this_and_every_argument() {
+        let mut e = Engine::new();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let record = seen.clone();
+        e.register_double(0x0040_4000, move |_, a| {
+            record.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        e.put_vtable(0x0100_0000, &[0, 0, 0x0040_4000]);
+        let this = e.mem.alloc(4);
+        e.mem.set_u32(this, 0x0100_0000);
+        for n in 0..20u32 {
+            let args: Vec<u32> = (1..=n).collect();
+            e.vcall(this, 8, &args);
+            let mut want = vec![this];
+            want.extend_from_slice(&args);
+            assert_eq!(seen.borrow().last(), Some(&want));
         }
     }
 
