@@ -160,6 +160,12 @@ pub struct Engine {
     pub slice_left: u64,
     pub slice_len: u64,
     pub slice_hook: Option<fn(&mut Engine, u32)>,
+    /// Diagnostic only (not exe behaviour): runs at every call through [`Engine::call`] that
+    /// reaches a translated function, given the called address, once as it is entered (`false`,
+    /// before it goes on the call stack) and once as it returns (`true`, after it came off).
+    /// Lets a check look at memory between any two calls (`NV_HKMEM_CHECK=calls`, engine-havok's
+    /// `hkthreadmemory.rs`). `None` in normal runs.
+    pub call_hook: Option<fn(&mut Engine, u32, bool)>,
     /// The import slots [`Engine::register_imports`] gave a platform function: the calls at
     /// which the thread host's default scheme may end a used-up turn
     /// (`thread_host::Scheme::Wake`).
@@ -233,6 +239,7 @@ impl Engine {
             slice_left: 0,
             slice_len: 0,
             slice_hook: None,
+            call_hook: None,
             platform_calls: AddrSet::default(),
         }
     }
@@ -470,12 +477,18 @@ impl Engine {
                 .entry(u64::from(caller) << 32 | u64::from(addr))
                 .or_default() += 1;
         }
+        if let Some(hook) = self.call_hook {
+            hook(self, addr, false);
+        }
         self.call_stack.push(addr);
         let ret = match f {
             Callable::Abi(f) => f(self, args),
             Callable::Double(d) => (d.borrow_mut())(self, args),
         };
         self.call_stack.pop();
+        if let Some(hook) = self.call_hook {
+            hook(self, addr, true);
+        }
         if let Some(trace) = &mut self.trace {
             // A full ring hands its oldest entry's word buffer to the newest: no allocation
             // per call once full.
