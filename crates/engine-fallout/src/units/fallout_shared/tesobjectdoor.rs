@@ -345,7 +345,7 @@ pub fn tes_object_door_can_actor_ignore_lock(
 // Translation incomplete: 00518f00 - the exception-unwinding frame (FS:[0] chain, handler 00ef4848, state variable) is not translated.
 /// `TESObjectDOOR::CanActorIgnoreLock` (overload 2, Xbox PDB; cdecl, four words: the
 /// reference, the actor, two flag bytes): builds a `DoorLock` for the reference on the stack
-/// (`00501d20`, 0x14 bytes), asks [`tes_object_door_can_actor_ignore_lock`] with it, the
+/// (`00501d20`, 0x18 bytes: the constructor writes +0x14; the exe's local is EBP-0x24..-0xc), asks [`tes_object_door_can_actor_ignore_lock`] with it, the
 /// actor, the reference and the flags, destroys the lock (`00501e50`) and returns the
 /// answer.
 pub fn tes_object_door_can_actor_ignore_lock_ov2(
@@ -355,7 +355,7 @@ pub fn tes_object_door_can_actor_ignore_lock_ov2(
     first_flag: u8,
     second_flag: u8,
 ) -> bool {
-    e.with_stack(0x14, |e, lock| {
+    e.with_stack(0x18, |e, lock| {
         e.call(0x0050_1d20, &args![lock, reference]);
         let answer = tes_object_door_can_actor_ignore_lock(
             e,
