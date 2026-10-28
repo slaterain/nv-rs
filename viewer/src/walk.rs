@@ -332,10 +332,6 @@ type MoveParts<'w> = (
     Option<Res<'w, crate::controls::Controls>>,
     ResMut<'w, Movement>,
     Option<NonSendMut<'w, host::Host>>,
-    (
-        Res<'w, bevy::input::mouse::AccumulatedMouseMotion>,
-        Res<'w, bevy::input::mouse::AccumulatedMouseScroll>,
-    ),
 );
 
 /// Walking: the keys set the wanted speed, the character moves through the
@@ -355,7 +351,7 @@ pub fn walk(
     walkers: Query<&crate::ai::Walker>,
     mut settings: Local<Option<SpeedSettings>>,
     (mut attack, mut sounds, anim, mut heights, nav): SneakParts,
-    (mouse, controls, mut movement, mut host, (motion, scroll)): MoveParts,
+    (mouse, controls, mut movement, mut host): MoveParts,
 ) {
     if !player.walking || !player.ready {
         return;
