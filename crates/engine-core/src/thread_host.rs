@@ -46,11 +46,11 @@
 //! A pass resumes, in creation order, every thread that is runnable: started
 //! for the first time (`CreateThread` without `CREATE_SUSPENDED`, or resumed
 //! to a suspend count of 0), sleeping past its wake time, waiting on
-//! objects that are now signalled, or (scheme [`Scheme::Wake`]) waiting with a
-//! timeout whose deadline the clock has reached. `CreateThread` and
+//! objects that are now signalled, or (with [`Scheme::timed_waits`]) waiting
+//! with a timeout whose deadline the clock has reached. `CreateThread` and
 //! `ResumeThread` never switch by themselves: what they make runnable runs at
 //! the next switch point. `SetEvent` and `ReleaseSemaphore` do the same under
-//! [`Scheme::Slice`]; under [`Scheme::Wake`] see below. So runs are
+//! [`Scheme::SLICE`]; under [`Scheme::WAKE`] see below. So runs are
 //! deterministic on the platform's own clock (the tests'); with the real clock
 //! on, when a sleeping thread wakes depends on the real time that passed.
 //!
@@ -80,21 +80,40 @@
 //! `Speak` (`008a20d0`, `009344d0`), which both main's scripts and worker 1's
 //! package step (`0096bcd0`) call.
 //!
-//! - [`Scheme::Wake`] (the default): a `SetEvent` or `ReleaseSemaphore` on
-//!   the main thread runs the threads it lets go on, and those they let go on
-//!   in turn, before main goes on ([`wake_waiters`]): kicked workers run first,
-//!   as on a free core. A used-up time slice ends only at the next call of a
-//!   platform import (`Engine::platform_calls`: the interlocked operations,
-//!   critical sections, waits, `Sleep`, the clocks, `GetCurrentThreadId`):
-//!   where the game's code meets the operating system, around its locks, not
-//!   inside a short stretch of plain code such as a list insert. Polling loops
-//!   all call imports, so a thread that never waits still gives up its turn.
-//!   A game thread's timed wait times out at its deadline (the clock jumps to
-//!   it when nothing else can run, as for a sleep).
-//! - [`Scheme::Slice`] (`NV_THREADS=slice`, the scheme before): signals switch
-//!   nothing, a used-up slice switches at whatever call comes next, and a game
-//!   thread's timed wait goes on only when its object is signalled (once
-//!   resumed it then answers at once).
+//! [`Scheme::WAKE`] (the default) has three parts, each of which the host's
+//! `NV_THREADS` can turn off (`nowake`, `anycall`, `notimeout`, comma-separated;
+//! `slice` turns off all three: [`Scheme::SLICE`], the scheme before):
+//! - [`Scheme::wake`]: a `SetEvent` or `ReleaseSemaphore` on the main thread
+//!   that lets a waiting thread go on runs it, and those it lets go on in turn,
+//!   soon after ([`request_wake`], [`wake_waiters`]): once main has made
+//!   [`Threads::wake_delay`] more calls (the host's `NV_WAKE_DELAY`, default
+//!   [`WAKE_DELAY_CALLS`]), at its next platform call. Kicked workers so run
+//!   early in main's frame, as on a free core. The delay is the wake-up latency
+//!   of Windows: the signalling thread's next steps come first there, and the
+//!   game relies on that too. `00b00df0` (a tasklet group done) releases the
+//!   group's semaphore, then counts it (`InterlockedIncrement`), sets its byte
+//!   +5 and calls its slot +0x24; a waiter run inside the `ReleaseSemaphore`
+//!   (delay 0, the first version of this scheme, p178/p179) sees the group
+//!   before those steps. A delay of 0 runs them inside the signalling call.
+//! - [`Scheme::platform_switch`]: a used-up time slice ends only at the next
+//!   call of a platform import (`Engine::platform_calls`: the interlocked
+//!   operations, critical sections, waits, `Sleep`, the clocks,
+//!   `GetCurrentThreadId`): where the game's code meets the operating system,
+//!   around its locks, not inside a short stretch of plain code such as a list
+//!   insert. Polling loops all call imports, so a thread that never waits still
+//!   gives up its turn.
+//! - [`Scheme::timed_waits`]: a game thread's timed wait times out at its
+//!   deadline (the clock jumps to it when nothing else can run, as for a
+//!   sleep).
+//!
+//! Without them ([`Scheme::SLICE`]): signals switch nothing, a used-up slice
+//! switches at whatever call comes next, and a game thread's timed wait goes
+//! on only when its object is signalled (once resumed it then answers at
+//! once).
+//!
+//! The switch itself is the same however a thread comes to run ([`switch_to`]
+//! from the main thread: its TLS block, call stack, thread id and x87 control
+//! word swapped in, the slice started again).
 //!
 //! **Per thread** ([`GameThread`]): its id, handle, start and parameter, its
 //! suspend count, its run state, its TLS block (`Engine::tls`) and the call
@@ -190,7 +209,7 @@ impl std::fmt::Debug for Link {
 }
 
 /// The game threads (`Kernel::threads`).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Threads {
     /// Every thread, in creation order; the main thread first.
     pub list: Vec<GameThread>,
@@ -205,28 +224,84 @@ pub struct Threads {
     pub preempted: u64,
     /// Which orders the host lets threads run in (module documentation).
     pub scheme: Scheme,
+    /// [`Scheme::wake`]: how many calls the main thread makes after a signal that woke a
+    /// thread before that thread runs (at main's next platform call); 0: inside the signalling
+    /// call itself. The host's `NV_WAKE_DELAY`.
+    pub wake_delay: u64,
+    /// A signal from the main thread woke a thread that has not run yet ([`request_wake`]).
+    pub wake_pending: bool,
 }
 
-/// How the cooperative host orders the game's threads (module documentation).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Scheme {
-    /// Signals from the main thread run the threads they wake first; a used-up slice ends at
-    /// the next platform call; timed waits of game threads time out at their deadline.
-    #[default]
-    Wake,
-    /// The scheme before: signals switch nothing, a used-up slice ends at any call, a game
-    /// thread's timed wait goes on only when signalled.
-    Slice,
+impl Default for Threads {
+    fn default() -> Self {
+        Threads {
+            list: Vec::new(),
+            current: 0,
+            signals: 0,
+            preempted: 0,
+            scheme: Scheme::default(),
+            wake_delay: WAKE_DELAY_CALLS,
+            wake_pending: false,
+        }
+    }
+}
+
+/// [`Threads::wake_delay`]'s default: a few microseconds of the game's code, about the time
+/// Windows takes to start a woken thread on another core (a host setting, not the game's).
+pub const WAKE_DELAY_CALLS: u64 = 1000;
+
+/// How the cooperative host orders the game's threads (module documentation): which parts of
+/// [`Scheme::WAKE`] are on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Scheme {
+    /// A signal from the main thread runs the threads it woke soon after ([`request_wake`]).
+    pub wake: bool,
+    /// A used-up slice ends at the next platform call, not at any call.
+    pub platform_switch: bool,
+    /// A game thread's timed wait times out at its deadline.
+    pub timed_waits: bool,
+}
+
+impl Default for Scheme {
+    fn default() -> Self {
+        Scheme::WAKE
+    }
 }
 
 impl Scheme {
-    /// The scheme the host's `NV_THREADS` names: `slice` for [`Scheme::Slice`], anything else
-    /// (or unset) [`Scheme::Wake`].
-    pub fn from_name(name: Option<&str>) -> Scheme {
-        match name.map(str::trim) {
-            Some(n) if n.eq_ignore_ascii_case("slice") => Scheme::Slice,
-            _ => Scheme::Wake,
+    /// The default: every part on.
+    pub const WAKE: Scheme = Scheme {
+        wake: true,
+        platform_switch: true,
+        timed_waits: true,
+    };
+    /// The scheme before: every part off.
+    pub const SLICE: Scheme = Scheme {
+        wake: false,
+        platform_switch: false,
+        timed_waits: false,
+    };
+
+    /// The scheme the host's `NV_THREADS` names: unset or empty [`Scheme::WAKE`]; `slice`
+    /// [`Scheme::SLICE`]; otherwise [`Scheme::WAKE`] with the parts named in a
+    /// comma-separated list turned off (`nowake`, `anycall`, `notimeout`; `wake` changes
+    /// nothing). Case and spaces are ignored; an unknown word is an error.
+    pub fn from_name(name: Option<&str>) -> Result<Scheme, String> {
+        let mut scheme = Scheme::WAKE;
+        for word in name.unwrap_or("").split(',').map(str::trim) {
+            match word.to_ascii_lowercase().as_str() {
+                "" | "wake" => {}
+                "slice" => scheme = Scheme::SLICE,
+                "nowake" => scheme.wake = false,
+                "anycall" => scheme.platform_switch = false,
+                "notimeout" => scheme.timed_waits = false,
+                other => {
+                    let known = "slice, wake, nowake, anycall, notimeout";
+                    return Err(format!("NV_THREADS: unknown part {other:?} ({known})"));
+                }
+            }
         }
+        Ok(scheme)
     }
 }
 
@@ -399,8 +474,7 @@ fn runnable(e: &mut Engine, i: usize, signalled: Signalled) -> bool {
                 return true;
             }
             let deadline = *deadline;
-            e.kernel.threads.scheme == Scheme::Wake
-                && deadline.is_some_and(|d| e.clock_now_us() >= d)
+            e.kernel.threads.scheme.timed_waits && deadline.is_some_and(|d| e.clock_now_us() >= d)
         }
         _ => false,
     }
@@ -428,15 +502,41 @@ fn waiting_signalled(e: &Engine, i: usize, signalled: Signalled) -> bool {
 /// behaviour) against threads that wake each other for ever, so main still goes on.
 const WAKE_ROUNDS: usize = 64;
 
-/// [`Scheme::Wake`]: after the main thread signalled an object (`SetEvent`,
-/// `ReleaseSemaphore`), runs at once, round after round in creation order, every thread
-/// waiting on objects that are now signalled, until a round finds none: the threads the
-/// signal woke, then those they woke in turn. A thread that sleeps or uses up its slice
-/// waits for the next switch point. Nothing on a game thread (it cannot switch to another
-/// thread itself) or under [`Scheme::Slice`].
-pub fn wake_waiters(e: &mut Engine, signalled: Signalled) {
+/// [`Scheme::wake`]: the main thread signalled an object (`SetEvent`, `ReleaseSemaphore`).
+/// When that lets a waiting thread go on, it runs ([`wake_waiters`]) once main has made
+/// [`Threads::wake_delay`] more calls, at its next platform call ([`preempt`]); with a delay
+/// of 0 at once, inside the signalling call. Nothing on a game thread (it cannot switch to
+/// another thread itself; what it wakes runs at the next switch point) or without
+/// [`Scheme::wake`].
+pub fn request_wake(e: &mut Engine, signalled: Signalled) {
     let threads = &e.kernel.threads;
-    if threads.scheme != Scheme::Wake || threads.list.is_empty() || !on_main(e) {
+    if !threads.scheme.wake || threads.list.is_empty() || !on_main(e) {
+        return;
+    }
+    if !(1..e.kernel.threads.list.len()).any(|i| waiting_signalled(e, i, signalled)) {
+        return;
+    }
+    let delay = e.kernel.threads.wake_delay;
+    if delay == 0 {
+        wake_waiters(e, signalled);
+        return;
+    }
+    e.kernel.threads.wake_pending = true;
+    if e.slice_hook.is_none() {
+        // No time slice (`NV_SLICE=0`, the tests): the hook only for the wake.
+        e.slice_hook = Some(preempt);
+        e.slice_left = u64::MAX;
+    }
+    e.slice_left = e.slice_left.min(delay);
+}
+
+/// Runs, round after round in creation order, every thread waiting on objects that are now
+/// signalled, until a round finds none: the threads a signal woke, then those they woke in
+/// turn ([`request_wake`]). A thread that sleeps or uses up its slice waits for the next
+/// switch point. Main thread only.
+pub fn wake_waiters(e: &mut Engine, signalled: Signalled) {
+    e.kernel.threads.wake_pending = false;
+    if e.kernel.threads.list.is_empty() || !on_main(e) {
         return;
     }
     for _ in 0..WAKE_ROUNDS {
@@ -501,9 +601,9 @@ pub fn run_until(
 const JUMP_LIMIT_US: u64 = 600_000_000;
 
 /// The earliest time a thread wakes: a sleeping thread that is not suspended, under
-/// [`Scheme::Wake`] the deadline of a timed wait, or `deadline`.
+/// [`Scheme::timed_waits`] the deadline of a timed wait, or `deadline`.
 fn earliest_wake(e: &Engine, deadline: Option<u64>) -> Option<u64> {
-    let timed = e.kernel.threads.scheme == Scheme::Wake;
+    let timed = e.kernel.threads.scheme.timed_waits;
     e.kernel
         .threads
         .list
@@ -539,7 +639,7 @@ pub fn run_threads(e: &mut Engine, signalled: Signalled) {
 /// Swaps the running thread's TLS block and call stack for thread `to`'s.
 fn swap_context(e: &mut Engine, from: usize, to: usize) {
     // A thread switched to starts a whole time slice.
-    e.slice_left = e.slice_len;
+    e.slice_left = turn_len(e);
     let mut to_tls = e.kernel.threads.list[to].tls;
     if to_tls == 0 {
         to_tls = e.new_tls_block();
@@ -609,7 +709,12 @@ fn load_fpu(e: &mut Engine) {
 
 /// [`swap_context`] from thread `from` back to the main thread.
 fn swap_context_back(e: &mut Engine, from: usize) {
-    e.slice_left = e.slice_len;
+    // Main starts a whole slice again, or what is left of a pending wake's delay at most.
+    e.slice_left = if e.kernel.threads.wake_pending {
+        turn_len(e).min(e.kernel.threads.wake_delay)
+    } else {
+        turn_len(e)
+    };
     let main_tls = e.kernel.threads.list[0].tls;
     let from_tls = e.swap_tls(main_tls);
     let main_stack = std::mem::take(&mut e.kernel.threads.list[0].call_stack);
@@ -761,7 +866,7 @@ impl ThreadHost for Cooperative {
             // A timed wait resumed without its objects: under `Wake` it was resumed at its
             // deadline (or before it, the objects taken by another thread first: it waits on);
             // under `Slice` it times out at once.
-            if e.kernel.threads.scheme == Scheme::Slice || e.clock_now_us() >= d {
+            if !e.kernel.threads.scheme.timed_waits || e.clock_now_us() >= d {
                 return false;
             }
         }
@@ -944,14 +1049,26 @@ pub fn end_main_frame(e: &mut Engine) -> bool {
 /// results) does not keep the others from running. Here, after `Engine::slice_len` calls of one
 /// turn: a game thread other than main gives its turn back, runnable at the next pass as after
 /// `Sleep(0)`; the main thread gives the others one pass. Counted in calls, so runs stay
-/// deterministic. Under [`Scheme::Wake`] the turn ends only at a call of a platform import
-/// (`addr` in `Engine::platform_calls`): until then each call asks again.
+/// deterministic. With [`Scheme::platform_switch`] the turn ends only at a call of a platform
+/// import (`addr` in `Engine::platform_calls`): until then each call asks again. On the main
+/// thread with a wake pending ([`request_wake`]) the end of the delay runs the woken threads
+/// instead, also at a platform call.
 pub fn preempt(e: &mut Engine, addr: u32) {
-    if e.kernel.threads.scheme == Scheme::Wake && !e.platform_calls.contains(&addr) {
+    let wake_due = e.kernel.threads.wake_pending && on_main(e);
+    if (e.kernel.threads.scheme.platform_switch || wake_due) && !e.platform_calls.contains(&addr) {
         return;
     }
-    e.slice_left = e.slice_len;
+    e.slice_left = turn_len(e);
     if e.kernel.threads.list.is_empty() {
+        return;
+    }
+    if wake_due {
+        // The main thread's wake delay is over ([`request_wake`]): the woken threads run.
+        wake_waiters(e, crate::units::platform::signalled);
+        return;
+    }
+    if e.slice_len == 0 {
+        // No time slice: the hook was there only for a wake.
         return;
     }
     if on_main(e) {
@@ -964,6 +1081,15 @@ pub fn preempt(e: &mut Engine, addr: u32) {
     e.kernel.threads.list[i].state = RunState::Sleeping { until };
     yield_to_main(Yield::Paused);
     load_fpu(e);
+}
+
+/// The calls a turn starts with: the slice, or no end without one (`slice_len` 0).
+fn turn_len(e: &Engine) -> u64 {
+    if e.slice_len == 0 {
+        u64::MAX
+    } else {
+        e.slice_len
+    }
 }
 
 /// Turns the time slice on: [`preempt`] after every `calls` calls of a turn.

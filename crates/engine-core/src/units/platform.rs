@@ -1507,11 +1507,11 @@ fn set_event_state(e: &mut Engine, handle: u32, state: bool) -> i32 {
 
 // Platform: replaces KERNEL32.DLL SetEvent (import)
 /// On the main thread, the threads it lets go on run before it goes on
-/// (`thread_host::Scheme::Wake`; `thread_host::wake_waiters`).
+/// (`thread_host::Scheme::wake`; `thread_host::request_wake`).
 fn set_event(e: &mut Engine, handle: u32) -> i32 {
     let done = set_event_state(e, handle, true);
     if done != 0 {
-        crate::thread_host::wake_waiters(e, signalled);
+        crate::thread_host::request_wake(e, signalled);
     }
     done
 }
@@ -1563,8 +1563,8 @@ fn release_semaphore(e: &mut Engine, handle: u32, release: i32, previous: Ptr) -
     if !previous.is_null() {
         e.mem.set_i32(previous.addr(), old);
     }
-    // On the main thread, the threads it lets go on run now (`thread_host::Scheme::Wake`).
-    crate::thread_host::wake_waiters(e, signalled);
+    // On the main thread, the threads it lets go on run now (`thread_host::Scheme::WAKE`).
+    crate::thread_host::request_wake(e, signalled);
     1
 }
 
@@ -3496,7 +3496,7 @@ mod tests {
     fn a_created_thread_runs_at_the_next_switch_point_and_waits_its_turn() {
         let mut e = thread_engine();
         // The scheme before: a signal switches nothing.
-        e.kernel.threads.scheme = crate::thread_host::Scheme::Slice;
+        e.kernel.threads.scheme = crate::thread_host::Scheme::SLICE;
         let ev = call(&mut e, CREATE_EVENT_A, &[0, 0, 0, 0]);
         e.mem.set_u32(0x2f00, ev);
         let done = call(&mut e, CREATE_EVENT_A, &[0, 1, 0, 0]);
@@ -3549,8 +3549,9 @@ mod tests {
     /// Two workers waiting (the chained one made first), the kick from the main thread, then
     /// the main thread logs 50: what was logged. The engine stays where it is (the
     /// coroutines hold its address).
-    fn kick(e: &mut Engine, scheme: crate::thread_host::Scheme) -> Vec<(u32, u32)> {
+    fn kick(e: &mut Engine, scheme: crate::thread_host::Scheme, delay: u64) -> Vec<(u32, u32)> {
         e.kernel.threads.scheme = scheme;
+        e.kernel.threads.wake_delay = delay;
         e.register(0x00ab_0700, kicked_thread);
         e.register(0x00ab_0710, chained_thread);
         let start = call(e, CREATE_SEMAPHORE_A, &[0, 0, 1, 0]);
@@ -3570,14 +3571,25 @@ mod tests {
     #[test]
     fn a_signal_from_the_main_thread_runs_the_threads_it_wakes_first() {
         use crate::thread_host::Scheme;
-        // `Wake`: the kicked worker runs before main goes on, and the worker it woke in the
-        // next round (made earlier, so not in the first).
+        // `WAKE` with no delay: the kicked worker runs inside the signalling call, and the
+        // worker it woke in the next round (made earlier, so not in the first).
         let mut e = thread_engine();
-        let seen = kick(&mut e, Scheme::Wake);
+        let seen = kick(&mut e, Scheme::WAKE, 0);
         assert_eq!(seen, [(30, 3), (40, 2), (50, MAIN_THREAD_ID)]);
-        // `Slice`: main goes on first; the workers run at its next switch point.
+        // With a delay of 2 calls: main's next steps come first; the workers run at its first
+        // platform call after the delay (the third `GetCurrentThread`).
         let mut e = thread_engine();
-        let seen = kick(&mut e, Scheme::Slice);
+        let seen = kick(&mut e, Scheme::WAKE, 2);
+        assert_eq!(seen, [(50, MAIN_THREAD_ID)]);
+        call(&mut e, GET_CURRENT_THREAD, &[]);
+        call(&mut e, GET_CURRENT_THREAD, &[]);
+        assert_eq!(logged(&e), [(50, MAIN_THREAD_ID)]);
+        call(&mut e, GET_CURRENT_THREAD, &[]);
+        assert_eq!(logged(&e), [(50, MAIN_THREAD_ID), (30, 3), (40, 2)]);
+        assert!(!e.kernel.threads.wake_pending);
+        // `SLICE`: main goes on first; the workers run at its next switch point.
+        let mut e = thread_engine();
+        let seen = kick(&mut e, Scheme::SLICE, 0);
         assert_eq!(seen, [(50, MAIN_THREAD_ID)]);
         // One pass in creation order: the chained worker comes before the one that wakes it,
         // so it waits for the pass after.
@@ -3634,9 +3646,9 @@ mod tests {
         // Calls of the turn: 1 the start function, 2-11 plain, 12 the platform call, 13-22
         // plain, 23 platform, 24.. plain. The 26th call finds the slice used up.
         // `Wake`: the turn ends before the next platform call (the 34th), after 30 plain calls.
-        assert_eq!(first_slice_end(Scheme::Wake), 30);
+        assert_eq!(first_slice_end(Scheme::WAKE), 30);
         // `Slice`: it ends at the 26th call itself, in the middle of a round.
-        assert_eq!(first_slice_end(Scheme::Slice), 22);
+        assert_eq!(first_slice_end(Scheme::SLICE), 22);
     }
 
     /// A thread that waits 100 ms on the event in 0x2f00, then logs the answer and the clock.
@@ -3678,7 +3690,7 @@ mod tests {
     #[test]
     fn under_the_slice_scheme_a_game_threads_timed_wait_goes_on_only_when_signalled() {
         let mut e = thread_engine();
-        e.kernel.threads.scheme = crate::thread_host::Scheme::Slice;
+        e.kernel.threads.scheme = crate::thread_host::Scheme::SLICE;
         e.register(0x00ab_0900, timed_thread);
         let ev = call(&mut e, CREATE_EVENT_A, &[0, 1, 0, 0]);
         e.mem.set_u32(0x2f00, ev);
@@ -3697,11 +3709,92 @@ mod tests {
     #[test]
     fn nv_threads_names_the_scheme() {
         use crate::thread_host::Scheme;
-        assert_eq!(Scheme::from_name(None), Scheme::Wake);
-        assert_eq!(Scheme::from_name(Some("slice")), Scheme::Slice);
-        assert_eq!(Scheme::from_name(Some(" SLICE ")), Scheme::Slice);
-        assert_eq!(Scheme::from_name(Some("wake")), Scheme::Wake);
-        assert_eq!(Scheme::default(), Scheme::Wake);
+        assert_eq!(Scheme::from_name(None), Ok(Scheme::WAKE));
+        assert_eq!(Scheme::from_name(Some("")), Ok(Scheme::WAKE));
+        assert_eq!(Scheme::from_name(Some("slice")), Ok(Scheme::SLICE));
+        assert_eq!(Scheme::from_name(Some(" SLICE ")), Ok(Scheme::SLICE));
+        assert_eq!(Scheme::from_name(Some("wake")), Ok(Scheme::WAKE));
+        assert_eq!(
+            Scheme::from_name(Some("nowake, notimeout")),
+            Ok(Scheme {
+                wake: false,
+                platform_switch: true,
+                timed_waits: false,
+            })
+        );
+        assert_eq!(
+            Scheme::from_name(Some("anycall")),
+            Ok(Scheme {
+                platform_switch: false,
+                ..Scheme::WAKE
+            })
+        );
+        assert!(Scheme::from_name(Some("fast")).is_err());
+        assert_eq!(Scheme::default(), Scheme::WAKE);
+    }
+
+    /// A thread that stores its id + 0x100 in TLS slot 0 and its TLS block at 0x2f20 + 4 *
+    /// `parameter`, waits on the event at 0x2f00 + 4 * `parameter`, then logs its TLS slot 0,
+    /// whether its TLS block is still its own, and whether the x87 control register holds its
+    /// own word (each with its thread id).
+    fn tls_thread(e: &mut Engine, a: &[u32]) -> Ret {
+        let id = get_current_thread_id(e);
+        tls_set_value(e, 0, id + 0x100);
+        let block = e.tls();
+        e.mem.set_u32(0x2f20 + 4 * a[0], block);
+        let ev = e.mem.u32(0x2f00 + 4 * a[0]);
+        assert_eq!(wait_for_single_object(e, ev, INFINITE), WAIT_OBJECT_0);
+        let value = tls_get_value(e, 0);
+        log(e, value);
+        let own = e.tls() == e.mem.u32(0x2f20 + 4 * a[0]);
+        log(e, u32::from(own));
+        let word = crate::x87::control_word() == crate::units::crt::x87_control_word(e);
+        log(e, u32::from(word));
+        Ret::default()
+    }
+
+    /// A thread run because the main thread woke it ([`crate::thread_host::request_wake`]),
+    /// inside the signalling call or after the delay, sees its own TLS slot values, TLS block,
+    /// thread id and control word, as at any switch; the main thread keeps its own.
+    #[test]
+    fn a_thread_run_on_wake_sees_its_own_tls_id_and_control_word() {
+        for delay in [0u64, 3] {
+            let mut e = thread_engine();
+            e.kernel.threads.wake_delay = delay;
+            e.register(0x00ab_0a00, tls_thread);
+            assert_eq!(tls_alloc(&mut e), 0);
+            tls_set_value(&mut e, 0, 0x1111);
+            let main_block = e.tls();
+            direct3d_device_created(&mut e, 0);
+            for slot in 0..2 {
+                let ev = call(&mut e, CREATE_EVENT_A, &[0, 1, 0, 0]);
+                e.mem.set_u32(0x2f00 + 4 * slot, ev);
+                call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0a00, slot, 0, 0]);
+            }
+            call(&mut e, SLEEP, &[0]);
+            assert!(logged(&e).is_empty());
+            // Wake the second thread (id 3) only.
+            let ev = e.mem.u32(0x2f04);
+            call(&mut e, SET_EVENT, &[ev]);
+            if delay != 0 {
+                for _ in 0..delay {
+                    call(&mut e, GET_CURRENT_THREAD, &[]);
+                }
+                assert!(logged(&e).is_empty(), "not before the delay is over");
+                call(&mut e, GET_CURRENT_THREAD, &[]);
+            }
+            assert_eq!(logged(&e), [(0x103, 3), (1, 3), (1, 3)], "delay {delay}");
+            // The main thread is itself again.
+            assert_eq!(get_current_thread_id(&mut e), MAIN_THREAD_ID);
+            assert_eq!(tls_get_value(&mut e, 0), 0x1111);
+            assert_eq!(e.tls(), main_block);
+            assert_eq!(crate::x87::control_word(), 0x007f);
+            // The other thread still waits.
+            let other = e.mem.u32(0x2f00);
+            call(&mut e, SET_EVENT, &[other]);
+            call(&mut e, SLEEP, &[0]);
+            assert_eq!(logged(&e)[3..], [(0x102, 2), (1, 2), (1, 2)]);
+        }
     }
 
     /// A game thread's start function that records its control word (0x2100)

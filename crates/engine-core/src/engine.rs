@@ -168,7 +168,7 @@ pub struct Engine {
     pub call_hook: Option<fn(&mut Engine, u32, bool)>,
     /// The import slots [`Engine::register_imports`] gave a platform function: the calls at
     /// which the thread host's default scheme may end a used-up turn
-    /// (`thread_host::Scheme::Wake`).
+    /// (`thread_host::Scheme::platform_switch`, `thread_host::request_wake`).
     pub platform_calls: AddrSet<u32>,
 }
 
