@@ -8,12 +8,12 @@ pub mod bink;
 pub mod d3d9;
 pub mod d3d9device;
 pub mod d3d9query;
-pub mod d3d9resource;
 #[cfg(windows)]
 pub mod d3d9real;
+pub mod d3d9resource;
+pub mod d3dx;
 #[cfg(windows)]
 pub mod d3dxreal;
-pub mod d3dx;
 pub mod dinput;
 pub mod dshow;
 pub mod dsound;
@@ -2658,6 +2658,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         (k, "FindClose", entry!(0, files::find_close(u32) -> u32).1),
         (
             k,
+            "GetFullPathNameA",
+            entry!(0, files::get_full_path_name_a(Ptr, u32, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            k,
             "GetCurrentThread",
             entry!(0, get_current_thread() -> u32).1,
         ),
@@ -4004,7 +4009,11 @@ mod tests {
         let after = u64::from(tick_count(&mut e));
         let real = start.elapsed().as_millis() as u64;
         assert!(real >= 30, "the host waited: {real} ms");
-        assert!(after - before >= 30, "the clock moved on: {}", after - before);
+        assert!(
+            after - before >= 30,
+            "the clock moved on: {}",
+            after - before
+        );
         assert!(
             after - before <= real + 1,
             "the clock is not ahead of the real time: {} > {real}",
