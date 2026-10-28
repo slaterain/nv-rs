@@ -86,6 +86,9 @@ impl Hasher for AddrHasher {
 /// A map keyed by exe address (or a caller/address pair) with [`AddrHasher`].
 pub type AddrMap<K, V> = HashMap<K, V, BuildHasherDefault<AddrHasher>>;
 
+/// A set of exe addresses with [`AddrHasher`].
+pub type AddrSet<K> = std::collections::HashSet<K, BuildHasherDefault<AddrHasher>>;
+
 /// How many entries [`Engine::call`]'s direct-mapped cache of plain functions has (a power of
 /// two).
 const CALL_CACHE_LEN: usize = 1 << 14;
@@ -149,12 +152,18 @@ pub struct Engine {
     /// `NV_MOVE_CALL_PROFILE`).
     pub call_counts: Option<AddrMap<u64, u64>>,
     /// The thread host's time slice: calls left in the running thread's turn, the length a
-    /// turn starts with, and what runs when a turn is used up (`thread_host::preempt`: game
-    /// threads run beside each other on Windows, so a thread that never waits must not keep
-    /// the others from running). `None`: no slicing (tests, start-up without the host).
+    /// turn starts with, and what runs at each call once a turn is used up, given the called
+    /// address (`thread_host::preempt`: game threads run beside each other on Windows, so a
+    /// thread that never waits must not keep the others from running). The hook starts the
+    /// next turn itself (sets `slice_left` again) when it switches; until then it is asked
+    /// again at every call. `None`: no slicing (tests, start-up without the host).
     pub slice_left: u64,
     pub slice_len: u64,
-    pub slice_hook: Option<fn(&mut Engine)>,
+    pub slice_hook: Option<fn(&mut Engine, u32)>,
+    /// The import slots [`Engine::register_imports`] gave a platform function: the calls at
+    /// which the thread host's default scheme may end a used-up turn
+    /// (`thread_host::Scheme::Wake`).
+    pub platform_calls: AddrSet<u32>,
 }
 
 /// How many returned calls [`Engine::trace`] keeps.
@@ -224,6 +233,7 @@ impl Engine {
             slice_left: 0,
             slice_len: 0,
             slice_hook: None,
+            platform_calls: AddrSet::default(),
         }
     }
 
@@ -264,6 +274,7 @@ impl Engine {
                 .find(|(d, name, _)| d.eq_ignore_ascii_case(&i.dll) && *name == i.name)
             {
                 self.register(i.slot, *f);
+                self.platform_calls.insert(i.slot);
                 n += 1;
             }
         }
@@ -442,8 +453,7 @@ impl Engine {
     fn run(&mut self, addr: u32, args: &[u32], f: Callable) -> Ret {
         if let Some(hook) = self.slice_hook {
             if self.slice_left == 0 {
-                self.slice_left = self.slice_len;
-                hook(self);
+                hook(self, addr);
             } else {
                 self.slice_left -= 1;
             }

@@ -76,6 +76,12 @@ impl Host {
         // The game's clock (`GetTickCount`, `timeGetTime`, `QueryPerformanceCounter`) runs with
         // the real time from here on, `Sleep` moving it on too (`Engine::clock_now_ms`).
         engine.start_real_clock();
+        // How the game's threads are ordered (`engine::thread_host::Scheme`): by default a
+        // signal from the main thread runs the threads it wakes first and a used-up slice ends
+        // at the next platform call; `NV_THREADS=slice` keeps the scheme before (signals
+        // switch nothing, a slice ends at any call).
+        engine.kernel.threads.scheme =
+            engine::thread_host::Scheme::from_name(std::env::var("NV_THREADS").ok().as_deref());
         // The game's threads take turns every `NV_SLICE` calls (200000 unless set; 0: only at
         // waits and sleeps), as they would run side by side on Windows
         // (`engine::thread_host::preempt`).
