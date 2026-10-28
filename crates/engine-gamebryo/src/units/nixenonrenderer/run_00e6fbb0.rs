@@ -248,6 +248,9 @@ pub fn fn_00e6fe30(
                 let result = e.call(TRANSFORM_MULTIPLY, &[root, scratch, product]).u32();
                 copy_transform(e, product, result);
             }
+            if skin_check_enabled() {
+                skin_check(e, skin, bone, node, product);
+            }
             if registers == 4 {
                 let scale = x87_quiet_bits(e.mem.u32(product + 0x30));
                 let builder = if layout != 0 {
@@ -267,6 +270,71 @@ pub fn fn_00e6fe30(
         let state = e.mem.u32(renderer + RENDERER_STATE_OBJECT);
         e.vcall(state, 0xf8, &[u32::from(outside)]);
     });
+}
+
+/// Whether the bone-matrix check below runs (`NV_SKIN_CHECK` set; read once).
+fn skin_check_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("NV_SKIN_CHECK").is_some())
+}
+
+/// Lines the check has printed (it stops at [`SKIN_CHECK_LIMIT`]).
+static SKIN_CHECK_LINES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+const SKIN_CHECK_LIMIT: u32 = 400;
+
+/// What the check finds wrong with one bone's skinning transform (`bone.world * bind`, or
+/// with the world as well): `None` when the rotation's columns are unit length and
+/// perpendicular (within 2%) and the scale is between 0.5 and 2.
+fn skin_matrix_fault(rotation: [f32; 9], scale: f32) -> Option<String> {
+    let column = |c: usize| [rotation[c], rotation[3 + c], rotation[6 + c]];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let (c0, c1, c2) = (column(0), column(1), column(2));
+    let norms = [dot(c0, c0).sqrt(), dot(c1, c1).sqrt(), dot(c2, c2).sqrt()];
+    let skews = [dot(c0, c1), dot(c1, c2), dot(c0, c2)];
+    let stretched = norms.iter().any(|n| !((n - 1.0).abs() <= 0.02));
+    let sheared = skews.iter().any(|s| !(s.abs() <= 0.02));
+    let scaled = !(0.5..=2.0).contains(&scale);
+    if stretched || sheared || scaled {
+        Some(format!(
+            "norms {:.3} {:.3} {:.3} skews {:.3} {:.3} {:.3} scale {scale:.3}",
+            norms[0], norms[1], norms[2], skews[0], skews[1], skews[2]
+        ))
+    } else {
+        None
+    }
+}
+
+/// Diagnostic only (not exe behaviour; `NV_SKIN_CHECK`): reports a bone whose skinning
+/// transform at `product` is not a rotation times a sane scale, with the skin instance, the
+/// bone index, the bone node and its name, so a run can tell a bad bone palette (look IK,
+/// animation) from bad vertex data. With `NV_SKIN_CHECK=head` it also prints every
+/// `Bip01 Head` bone it sees (until the line limit).
+fn skin_check(e: &Engine, skin: u32, bone: u32, node: u32, product: u32) {
+    let rotation: [f32; 9] = std::array::from_fn(|i| e.mem.f32(product + 4 * i as u32));
+    let scale = e.mem.f32(product + 0x30);
+    let name_pointer = e.mem.u32(node.wrapping_add(8));
+    let name = if name_pointer == 0 {
+        String::new()
+    } else {
+        String::from_utf8_lossy(&e.mem.cstr(name_pointer)).into_owned()
+    };
+    let fault = skin_matrix_fault(rotation, scale);
+    let head = name == "Bip01 Head"
+        && std::env::var("NV_SKIN_CHECK").is_ok_and(|v| v.eq_ignore_ascii_case("head"));
+    if fault.is_none() && !head {
+        return;
+    }
+    let line = SKIN_CHECK_LINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if line >= SKIN_CHECK_LIMIT {
+        return;
+    }
+    let translation = [0x24, 0x28, 0x2c].map(|o| e.mem.f32(product + o));
+    println!(
+        "skin check: skin {skin:08x} bone {bone} node {node:08x} '{name}' {} rot {:?} t {:?}",
+        fault.as_deref().unwrap_or("ok"),
+        rotation,
+        translation
+    );
 }
 
 /// The inline 3x4 rows of `00e6fe30` (`rows` is the row block + 0x20, as
@@ -612,5 +680,23 @@ mod tests {
         assert!(bone_scale_outside(&e, 0.75f32.to_bits()));
         assert!(!bone_scale_outside(&e, 0.4f32.to_bits()));
         assert!(!bone_scale_outside(&e, f32::NAN.to_bits()));
+    }
+
+    #[test]
+    fn skin_matrix_fault_passes_rotations_and_reports_stretch() {
+        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        assert!(skin_matrix_fault(identity, 1.0).is_none());
+        // A quarter turn about Z is still a rotation.
+        let turn = [0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+        assert!(skin_matrix_fault(turn, 1.0).is_none());
+        // One column stretched by 1.5 (as a non-unit quaternion turned into a matrix gives).
+        let stretched = [1.5, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        assert!(skin_matrix_fault(stretched, 1.0).is_some());
+        // Sheared columns.
+        let sheared = [1.0, 0.3, 0.0, 0.0, 0.954, 0.0, 0.0, 0.0, 1.0];
+        assert!(skin_matrix_fault(sheared, 1.0).is_some());
+        // A wild scale or a NaN.
+        assert!(skin_matrix_fault(identity, 3.0).is_some());
+        assert!(skin_matrix_fault([f32::NAN; 9], 1.0).is_some());
     }
 }
