@@ -1230,7 +1230,8 @@ pub fn fn_00553bb0(e: &mut Engine, this: Ptr) -> bool {
     if holder == 0 {
         return false;
     }
-    e.with_stack(0x20, |e, out| {
+    // The exe's local is 0x24 bytes (EBP-0x24, 00553bc2): 004e75d0 copies nine words into it.
+    e.with_stack(0x24, |e, out| {
         let record = e.call(SOUND_LOOKUP, &args![holder, out]).u32();
         e.mem.u32(record + 4) & 2 != 0
     })
