@@ -629,6 +629,101 @@ pub mod hkmem_check {
         });
     }
 
+    thread_local! {
+        /// The last contact points freed (`removeContactPointImpl`, 00cfd320): manager, id and
+        /// the call stack then, newest last.
+        static REMOVED: RefCell<std::collections::VecDeque<(u32, u32, Vec<u32>)>> =
+            const { RefCell::new(std::collections::VecDeque::new()) };
+    }
+    /// How many removals [`note_contact_removed`] keeps.
+    const REMOVED_KEEP: usize = 512;
+
+    /// Notes that the contact manager `mgr` freed its contact point `id` (called as
+    /// `removeContactPointImpl` starts).
+    pub fn note_contact_removed(e: &Engine, mgr: u32, id: u32) {
+        if mode() == Mode::Off {
+            return;
+        }
+        REMOVED.with(|removed| {
+            let mut removed = removed.borrow_mut();
+            if removed.len() >= REMOVED_KEEP {
+                removed.pop_front();
+            }
+            removed.push_back((mgr, id, e.call_stack.clone()));
+        });
+    }
+
+    /// Checks the id of a process-output entry before `processContactImpl` (00cfd470) copies
+    /// the entry's contact point into the atom at `atom + 0x30 + 0x20 * table[id]`: the id must
+    /// be inside the manager's id table (data `+0x20`, size `+0x24`) and its slot must be a
+    /// point in use (not `0xff`, below the atom's point count). Otherwise the copy lands outside
+    /// the points (with `0xff`, 0x2010 bytes past the atom), so the run stops here instead.
+    pub fn check_contact_id(e: &mut Engine, mgr: u32, id: u32, entry: u32) {
+        if mode() == Mode::Off {
+            return;
+        }
+        let table = e.mem.u32(mgr + 0x20);
+        let size = e.mem.u32(mgr + 0x24);
+        let atom = e.mem.u32(mgr + 0x3c);
+        let count = u32::from(e.mem.u16(atom + 4));
+        let reserved = u32::from(e.mem.u16(atom + 6));
+        let slot = if id < size {
+            Some(u32::from(e.mem.u8(table.wrapping_add(id))))
+        } else {
+            None
+        };
+        let why = match slot {
+            None => format!("id {id:#x} is past the id table (size {size:#x})"),
+            Some(0xff) => format!("id {id:#x} was freed (its slot is 0xff)"),
+            Some(slot) if slot >= count => {
+                format!("id {id:#x} maps to point {slot:#x}, past the atom's {count:#x} points")
+            }
+            Some(_) => return,
+        };
+        e.call_hook = None;
+        let target = (slot.unwrap_or(0xff) << 5)
+            .wrapping_add(atom)
+            .wrapping_add(0x30);
+        let mut out = String::new();
+        let _ = writeln!(
+            out,
+            "hkmem: contact manager {mgr:08x}: output entry {entry:08x}: {why}; atom {atom:08x} \
+             ({count:#x} points, {reserved:#x} reserved), the copy would write {target:08x}"
+        );
+        let _ = writeln!(
+            out,
+            "hkmem: call stack (innermost first): {}",
+            stack_text(&e.call_stack)
+        );
+        let words: Vec<String> = (0..0xc)
+            .map(|w| format!("{:08x}", e.mem.u32(entry + 4 * w)))
+            .collect();
+        let _ = writeln!(out, "hkmem: the entry's words: {}", words.join(" "));
+        REMOVED.with(|removed| {
+            let removed = removed.borrow();
+            let mut any = false;
+            for (m, i, stack) in removed.iter().filter(|r| r.0 == mgr && r.1 == id) {
+                any = true;
+                let _ = writeln!(
+                    out,
+                    "hkmem: {m:08x} freed id {i:#x} from: {}",
+                    stack_text(stack)
+                );
+            }
+            if !any {
+                let _ = writeln!(
+                    out,
+                    "hkmem: no removal of id {id:#x} by {mgr:08x} in the last {REMOVED_KEEP}"
+                );
+            }
+        });
+        print!("{out}");
+        panic!(
+            "hkmem check: contact manager {mgr:08x}: {why}; the copy would write {target:08x} \
+             (NV_HKMEM_CHECK; more on the hkmem: lines)"
+        );
+    }
+
     /// Checks at the start or end (`end`) of the allocator function `name` on `this`.
     pub(super) fn at_op(e: &mut Engine, name: &'static str, end: bool, this: u32, a: u32, b: u32) {
         let mode = mode();
@@ -1510,6 +1605,42 @@ mod tests {
         );
         assert!(
             message.contains("which is not 16-byte aligned"),
+            "{message}"
+        );
+    }
+
+    /// The p180w write: an output entry whose id was freed (slot 0xff) would be copied 0x2010
+    /// bytes past the atom; the check stops first and names the remover.
+    #[test]
+    fn the_hkmem_check_stops_at_a_freed_contact_id() {
+        let mut e = Engine::new();
+        hkmem_check::force(hkmem_check::Mode::Allocs);
+        let mgr = e.mem.alloc(0x60);
+        let table = e.mem.alloc(8);
+        let atom = e.mem.alloc(0x100);
+        e.mem.write(table, &[1, 0xff, 0, 0, 0, 0, 0, 0]);
+        e.mem.set_u32(mgr + 0x20, table);
+        e.mem.set_u32(mgr + 0x24, 3);
+        e.mem.set_u32(mgr + 0x3c, atom);
+        e.mem.set_u16(atom + 4, 2);
+        e.mem.set_u16(atom + 6, 4);
+        let entry = e.mem.alloc(0x30);
+        // Ids in use pass.
+        hkmem_check::check_contact_id(&mut e, mgr, 0, entry);
+        hkmem_check::check_contact_id(&mut e, mgr, 2, entry);
+        hkmem_check::note_contact_removed(&e, mgr, 1);
+        let message = stop_message(|| hkmem_check::check_contact_id(&mut e, mgr, 1, entry));
+        assert!(
+            message.contains("id 0x1 was freed (its slot is 0xff)"),
+            "{message}"
+        );
+        assert!(
+            message.contains(&format!("would write {:08x}", atom + 0x2010)),
+            "{message}"
+        );
+        let message = stop_message(|| hkmem_check::check_contact_id(&mut e, mgr, 3, entry));
+        assert!(
+            message.contains("past the id table (size 0x3)"),
             "{message}"
         );
     }
