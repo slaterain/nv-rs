@@ -270,7 +270,6 @@ pub(crate) fn measured_rows(name: &str) -> Vec<(String, u16, Vec<Vec<u32>>, Stri
         .collect()
 }
 
-
 /// `SHUFPS d, s, imm`: lanes 0 and 1 from `d`, 2 and 3 from `s`, by the immediate's 2-bit fields.
 fn shufps(d: [u32; 4], s: [u32; 4], imm: u32) -> [u32; 4] {
     let f = |k: u32| ((imm >> (2 * k)) & 3) as usize;
@@ -294,14 +293,22 @@ pub fn matrix_inverse_sse2(m: &[u32; 16]) -> Option<(u32, [u32; 16])> {
     use single::{add, mul, sub};
     let mut x = [[0u32; 4]; 8];
     x[0] = [0; 4];
-    x[2][0] = m[2]; x[2][1] = m[3];
-    x[4][0] = m[10]; x[4][1] = m[11];
-    x[2][2] = m[6]; x[2][3] = m[7];
-    x[4][2] = m[14]; x[4][3] = m[15];
-    x[3][0] = m[8]; x[3][1] = m[9];
-    x[1][0] = m[0]; x[1][1] = m[1];
-    x[3][2] = m[12]; x[3][3] = m[13];
-    x[1][2] = m[4]; x[1][3] = m[5];
+    x[2][0] = m[2];
+    x[2][1] = m[3];
+    x[4][0] = m[10];
+    x[4][1] = m[11];
+    x[2][2] = m[6];
+    x[2][3] = m[7];
+    x[4][2] = m[14];
+    x[4][3] = m[15];
+    x[3][0] = m[8];
+    x[3][1] = m[9];
+    x[1][0] = m[0];
+    x[1][1] = m[1];
+    x[3][2] = m[12];
+    x[3][3] = m[13];
+    x[1][2] = m[4];
+    x[1][3] = m[5];
     x[5] = x[2];
     x[5] = shufps(x[5], x[4], 0x88);
     x[4] = shufps(x[4], x[2], 0xdd);
@@ -562,8 +569,7 @@ pub fn vec3_transform_coord_sse2(v: &[u32], m: &[u32; 16], aligned: bool) -> [u3
             mul(m[4 * k + j], v[k])
         }
     };
-    let s: [u32; 4] =
-        std::array::from_fn(|j| add(add(p(1, j), p(0, j)), add(p(2, j), m[12 + j])));
+    let s: [u32; 4] = std::array::from_fn(|j| add(add(p(1, j), p(0, j)), add(p(2, j), m[12 + j])));
     let r = single::rcp(s[3]);
     let q = sub(add(r, r), mul(mul(r, s[3]), r));
     [mul(q, s[0]), mul(q, s[1]), mul(q, s[2])]
@@ -1763,19 +1769,55 @@ mod tests_vec3_normalize {
     /// output. The SSE2 version does not read the x87 control word.
     const MEASURED: &[(u16, &str, &str)] = &[
         // A NaN anywhere: the length compare is unordered, the zero vector.
-        (0x027f, "7fc12345 bd8a73f1 e67b2ff7", "00000000 00000000 00000000"),
-        (0x027f, "7f800001 2569bcb6 bd1eb497", "00000000 00000000 00000000"),
+        (
+            0x027f,
+            "7fc12345 bd8a73f1 e67b2ff7",
+            "00000000 00000000 00000000",
+        ),
+        (
+            0x027f,
+            "7f800001 2569bcb6 bd1eb497",
+            "00000000 00000000 00000000",
+        ),
         // Below 2^-46 squared (denormals, tiny normals): the zero vector.
-        (0x027f, "1e3ce508 00800000 20000000", "00000000 00000000 00000000"),
-        (0x027f, "00800000 8d0cfe4e 81a2d0d6", "00000000 00000000 00000000"),
+        (
+            0x027f,
+            "1e3ce508 00800000 20000000",
+            "00000000 00000000 00000000",
+        ),
+        (
+            0x027f,
+            "00800000 8d0cfe4e 81a2d0d6",
+            "00000000 00000000 00000000",
+        ),
         // An infinity: the estimate of 1/sqrt(inf) is 0, 0 * inf the default NaN.
-        (0x027f, "4b30935a 00000000 ff800000", "ffc00000 ffc00000 ffc00000"),
+        (
+            0x027f,
+            "4b30935a 00000000 ff800000",
+            "ffc00000 ffc00000 ffc00000",
+        ),
         // An overflowing square: the same.
-        (0x007f, "80000001 6ac06de4 5d8ff60e", "ffc00000 ffc00000 ffc00000"),
+        (
+            0x007f,
+            "80000001 6ac06de4 5d8ff60e",
+            "ffc00000 ffc00000 ffc00000",
+        ),
         // Ordinary vectors: one Newton step on the estimate.
-        (0x027f, "40490fdb 34000000 00800000", "3f800000 3322f983 0028be61"),
-        (0x027f, "c0c9ff54 c024191f 40f2b5d2", "bf1e7fc1 be80c2d5 3f3e71db"),
-        (0x007f, "c0000000 bbb19cfb bf800000", "bf64f901 bb1edc92 bee4f901"),
+        (
+            0x027f,
+            "40490fdb 34000000 00800000",
+            "3f800000 3322f983 0028be61",
+        ),
+        (
+            0x027f,
+            "c0c9ff54 c024191f 40f2b5d2",
+            "bf1e7fc1 be80c2d5 3f3e71db",
+        ),
+        (
+            0x007f,
+            "c0000000 bbb19cfb bf800000",
+            "bf64f901 bb1edc92 bee4f901",
+        ),
     ];
 
     #[test]
@@ -1830,7 +1872,11 @@ mod tests_measured_files {
             assert_eq!(got, want, "PlaneNormalize {alias} {cw:04x} {:08x?}", i[0]);
             n += 1;
         }
-        for name in ["D3DXPlaneTransform", "D3DXVec3TransformCoord", "D3DXVec4Transform"] {
+        for name in [
+            "D3DXPlaneTransform",
+            "D3DXVec3TransformCoord",
+            "D3DXVec4Transform",
+        ] {
             for (alias, cw, i, want) in measured_rows(name) {
                 let m: [u32; 16] = i[1].clone().try_into().unwrap();
                 // `/m16`, `/m4`: the matrix on or off a 16-byte boundary (the edge measurement);
@@ -1865,7 +1911,11 @@ mod tests_measured_files {
             let (result, det) = want.split_once('|').unwrap();
             match matrix_inverse_sse2(&m) {
                 Some((d, inv)) => {
-                    let base = if alias == "out=in" { m } else { [0x5555_5555; 16] };
+                    let base = if alias == "out=in" {
+                        m
+                    } else {
+                        [0x5555_5555; 16]
+                    };
                     let _ = base;
                     assert_eq!(hex(&inv), result, "Inverse {alias} {cw:04x} {m:08x?}");
                     if det != "-" {
@@ -1916,10 +1966,19 @@ mod tests_sse2_functions {
     fn plane_normalize_matches_the_dll() {
         for (input, want) in [
             // A NaN in the normal: all four zero.
-            ("d3feed54 5b1dadf9 7f800001 eb2d318b", "00000000 00000000 00000000 00000000"),
-            ("1e3ce508 7fc12345 1e3ce508 ffc00000", "00000000 00000000 00000000 00000000"),
+            (
+                "d3feed54 5b1dadf9 7f800001 eb2d318b",
+                "00000000 00000000 00000000 00000000",
+            ),
+            (
+                "1e3ce508 7fc12345 1e3ce508 ffc00000",
+                "00000000 00000000 00000000 00000000",
+            ),
             // An overflowing square: the default NaN everywhere.
-            ("5b0ad945 bd4dc548 7a33da59 dadf75b2", "ffc00000 ffc00000 ffc00000 ffc00000"),
+            (
+                "5b0ad945 bd4dc548 7a33da59 dadf75b2",
+                "ffc00000 ffc00000 ffc00000 ffc00000",
+            ),
         ] {
             let p: [u32; 4] = words(input).try_into().unwrap();
             assert_eq!(hex(&plane_normalize_sse2(p)), want, "{input}");
@@ -1964,7 +2023,10 @@ mod tests_sse2_functions {
         for (i, w) in m.iter().enumerate() {
             e.mem.set_u32(at + 4 * i as u32, *w);
         }
-        assert_eq!(matrix_inverse(&mut e, Ptr::new(out), Ptr::new(det), Ptr::new(at)), 0);
+        assert_eq!(
+            matrix_inverse(&mut e, Ptr::new(out), Ptr::new(det), Ptr::new(at)),
+            0
+        );
         assert_eq!(e.mem.u32(det), 0x5555_5555);
     }
 }

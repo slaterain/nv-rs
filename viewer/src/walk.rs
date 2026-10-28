@@ -1,4 +1,4 @@
-//! Waling through the cell as the player, and going through load doors.
+//! Walking through the cell as the player, and going through load doors.
 //!
 //! The rules (speeds, when running and jumping are allowed, the jump) are
 //! `world::locomotion`'s; the collision is the models' Havok shapes

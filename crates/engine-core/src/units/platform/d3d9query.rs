@@ -168,10 +168,7 @@ fn release(e: &mut Engine, this: Ptr) -> u32 {
     q.references -= 1;
     let left = q.references;
     if left == 0 {
-        let q = queries(e)
-            .queries
-            .remove(&this.addr())
-            .expect("the query");
+        let q = queries(e).queries.remove(&this.addr()).expect("the query");
         #[cfg(windows)]
         super::d3d9real::forget(e, this.addr());
         e.mem.free(this.addr());

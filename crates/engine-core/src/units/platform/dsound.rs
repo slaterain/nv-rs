@@ -1713,7 +1713,13 @@ fn heard(e: &mut Engine, this: Ptr, call: &str) {
         let b = buffer(e, this).clone();
         let mut what = format!("{what}, volume {}", b.volume);
         if b.flags & DSBCAPS_CTRL3D != 0 {
-            let l = e.kernel.sound.listeners.values().next().map(|(_, l)| l.position);
+            let l = e
+                .kernel
+                .sound
+                .listeners
+                .values()
+                .next()
+                .map(|(_, l)| l.position);
             let (gl, gr) = spatial_of(e, &b);
             what += &format!(
                 ", at {:?} (listener {:?}, min {} max {}), 3D {:.0}/{:.0} mB",
@@ -2582,7 +2588,10 @@ mod tests {
         let ds = start_up(&mut e);
         let make = |e: &mut Engine, flags: u32, channels: u16, rate: u32, bits: u16, size: u32| {
             e.mem.write(0x1600, &format_bytes(1, channels, rate, bits));
-            for (i, w) in [0x24, flags, size, 0, 0x1600, 0, 0, 0, 0].into_iter().enumerate() {
+            for (i, w) in [0x24, flags, size, 0, 0x1600, 0, 0, 0, 0]
+                .into_iter()
+                .enumerate()
+            {
                 e.mem.set_u32(0x1700 + 4 * i as u32, w);
             }
             e.mem.set_u32(0x1004, 0);
@@ -2598,10 +2607,19 @@ mod tests {
         assert_eq!(r, DS_OK);
         assert_eq!(e.vcall(b, 0xc, &[0x1800]).u32(), DS_OK);
         assert_eq!(e.mem.u32(0x1808), 1002);
-        assert_eq!(make(&mut e, 0x2e0, 2, 48000, 16, 28796).0, DSERR_BUFFERTOOSMALL);
+        assert_eq!(
+            make(&mut e, 0x2e0, 2, 48000, 16, 28796).0,
+            DSERR_BUFFERTOOSMALL
+        );
         assert_eq!(make(&mut e, 0x2e0, 2, 48000, 16, 28800).0, DS_OK);
-        assert_eq!(make(&mut e, 0x300b0, 2, 44100, 16, 4000).0, DSERR_INVALIDPARAM);
-        assert_eq!(make(&mut e, 0x200e0, 1, 22050, 16, 4000).0, DSERR_INVALIDPARAM);
+        assert_eq!(
+            make(&mut e, 0x300b0, 2, 44100, 16, 4000).0,
+            DSERR_INVALIDPARAM
+        );
+        assert_eq!(
+            make(&mut e, 0x200e0, 1, 22050, 16, 4000).0,
+            DSERR_INVALIDPARAM
+        );
     }
 
     #[test]
@@ -2662,7 +2680,10 @@ mod tests {
         let t = three_d_of(&mut e, b);
         assert_eq!(e.vcall(t, 4, &[]).u32(), 2);
         assert_eq!(e.vcall(b, 4, &[]).u32(), 3);
-        let answers: Vec<u32> = [t, t, b, b, b].iter().map(|&o| e.vcall(o, 8, &[]).u32()).collect();
+        let answers: Vec<u32> = [t, t, b, b, b]
+            .iter()
+            .map(|&o| e.vcall(o, 8, &[]).u32())
+            .collect();
         assert_eq!(answers, [1, 0, 2, 1, 0]);
         assert!(e.kernel.sound.buffers.is_empty());
         // The buffer first: it stays until the 3D interface goes.

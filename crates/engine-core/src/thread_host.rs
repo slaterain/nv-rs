@@ -392,7 +392,10 @@ pub fn describe(e: &mut Engine) -> String {
             } else {
                 String::new()
             };
-            format!("{}@{:08x} {state}{suspended} turns {}", t.id, t.start, t.turns)
+            format!(
+                "{}@{:08x} {state}{suspended} turns {}",
+                t.id, t.start, t.turns
+            )
         })
         .collect::<Vec<_>>()
         .join("; ")

@@ -433,7 +433,9 @@ fn fwd_create_texture(
     out: Ptr,
     shared: u32,
 ) -> u32 {
-    let model = create_texture(e, this, width, height, levels, usage, format, pool, out, shared);
+    let model = create_texture(
+        e, this, width, height, levels, usage, format, pool, out, shared,
+    );
     #[cfg(windows)]
     if model == D3D_OK {
         let texture = e.mem.u32(out.addr());
@@ -2449,14 +2451,24 @@ fn create_offscreen_plain_surface(
     let (direct3d, [adapter, device_type, ..]) = (d.direct3d, d.creation);
     let display_format = e.with_stack(0x10, |e, mode| {
         let hr = e.vcall(direct3d, 4 * 8, &[adapter, mode.addr()]).u32();
-        assert_eq!(hr, D3D_OK, "GetAdapterDisplayMode for CreateOffscreenPlainSurface");
+        assert_eq!(
+            hr, D3D_OK,
+            "GetAdapterDisplayMode for CreateOffscreenPlainSurface"
+        );
         e.mem.u32(mode.addr() + 0xc)
     });
     let check = e
         .vcall(
             direct3d,
             4 * 10,
-            &[adapter, device_type, display_format, 0, D3DRTYPE_SURFACE, format],
+            &[
+                adapter,
+                device_type,
+                display_format,
+                0,
+                D3DRTYPE_SURFACE,
+                format,
+            ],
         )
         .u32();
     if check != D3D_OK {
@@ -2505,7 +2517,14 @@ fn rect_inside(e: &Engine, rect: Ptr, width: u32, height: u32) -> Option<[u32; 4
 /// formats with memory are not provided. A render target's pixels are the real device's
 /// (`NV_D3D9=real`).
 fn color_fill(e: &mut Engine, this: Ptr, surface: u32, rect: Ptr, colour: u32) -> u32 {
-    let Some(s) = e.kernel.graphics.device_objects.surfaces.get(&surface).cloned() else {
+    let Some(s) = e
+        .kernel
+        .graphics
+        .device_objects
+        .surfaces
+        .get(&surface)
+        .cloned()
+    else {
         return D3DERR_INVALIDCALL;
     };
     if s.desc[3] != D3DPOOL_DEFAULT {
@@ -2572,7 +2591,6 @@ fn get_render_target_data(e: &mut Engine, this: Ptr, source: u32, destination: u
     )
 }
 
-
 /// Whether the device has a resource of its own in `D3DPOOL_DEFAULT` alive (a texture, a
 /// surface it did not make itself, a buffer).
 fn default_pool_alive(e: &Engine, device: u32) -> bool {
@@ -2618,7 +2636,9 @@ fn reset(e: &mut Engine, this: Ptr, present: Ptr) -> u32 {
         return D3DERR_INVALIDCALL;
     }
     if field(e, PP_WIDTH) == 0 || field(e, PP_HEIGHT) == 0 {
-        panic!("IDirect3DDevice9::Reset with a back buffer size taken from the window is not provided");
+        panic!(
+            "IDirect3DDevice9::Reset with a back buffer size taken from the window is not provided"
+        );
     }
     if field(e, PP_MULTISAMPLE) != 0 {
         panic!("IDirect3DDevice9::Reset with multisampling is not provided");
@@ -2687,7 +2707,11 @@ fn reset(e: &mut Engine, this: Ptr, present: Ptr) -> u32 {
     }
     // The new swap chain.
     let format = field(e, PP_FORMAT);
-    let (width, height, quality) = (field(e, PP_WIDTH), field(e, PP_HEIGHT), field(e, PP_QUALITY));
+    let (width, height, quality) = (
+        field(e, PP_WIDTH),
+        field(e, PP_HEIGHT),
+        field(e, PP_QUALITY),
+    );
     let back_buffers: Vec<u32> = (0..field(e, PP_COUNT))
         .map(|_| {
             let desc = [
@@ -4086,7 +4110,10 @@ mod tests {
         for (i, v) in [8u32, 8, 16, 16].iter().enumerate() {
             e.mem.set_u32(rect + 4 * i as u32, *v);
         }
-        assert_eq!(e.vcall(device, 0x8c, &[default, rect, 0x0044_5566]).u32(), D3D_OK);
+        assert_eq!(
+            e.vcall(device, 0x8c, &[default, rect, 0x0044_5566]).u32(),
+            D3D_OK
+        );
         e.mem.set_u32(rect + 8, 100);
         assert_eq!(
             e.vcall(device, 0x8c, &[default, rect, 0]).u32(),
@@ -4129,7 +4156,11 @@ mod tests {
         assert_eq!(e.mem.u32(data), 0xdddd_dddd);
         assert_eq!(e.vcall(q, 0x18, &[2]).u32(), D3D_OK, "BEGIN");
         e.mem.set_u32(data, 0xaaaa_aaaa);
-        assert_eq!(e.vcall(q, 0x1c, &[data, 4, 1]).u32(), 1, "S_FALSE after BEGIN");
+        assert_eq!(
+            e.vcall(q, 0x1c, &[data, 4, 1]).u32(),
+            1,
+            "S_FALSE after BEGIN"
+        );
         assert_eq!(e.mem.u32(data), 0xaaaa_aaaa);
         assert_eq!(e.vcall(q, 0x18, &[1]).u32(), D3D_OK, "END");
         assert_eq!(e.vcall(q, 0x1c, &[data, 4, 1]).u32(), D3D_OK);
@@ -4164,15 +4195,30 @@ mod tests {
         assert_eq!(e.vcall(device, 0xe4, &[7, 0]).u32(), D3D_OK);
         // A default-pool surface alive: refused, and the device needs a Reset.
         let out = e.mem.alloc(4);
-        assert_eq!(e.vcall(device, 0x90, &[64, 64, 0x16, 0, out, 0]).u32(), D3D_OK);
+        assert_eq!(
+            e.vcall(device, 0x90, &[64, 64, 0x16, 0, out, 0]).u32(),
+            D3D_OK
+        );
         let surface = e.mem.u32(out);
         fill(&mut e, 0, 640);
         assert_eq!(e.vcall(device, 0x40, &[pp]).u32(), D3DERR_INVALIDCALL);
         assert_eq!(e.vcall(device, 0xc, &[]).u32(), D3DERR_DEVICENOTRESET);
-        assert_eq!(e.vcall(device, 0xa4, &[]).u32(), D3DERR_INVALIDCALL, "BeginScene");
-        assert_eq!(e.vcall(device, 0x44, &[0, 0, 0, 0]).u32(), D3DERR_INVALIDCALL, "Present");
+        assert_eq!(
+            e.vcall(device, 0xa4, &[]).u32(),
+            D3DERR_INVALIDCALL,
+            "BeginScene"
+        );
+        assert_eq!(
+            e.vcall(device, 0x44, &[0, 0, 0, 0]).u32(),
+            D3DERR_INVALIDCALL,
+            "Present"
+        );
         assert_eq!(e.vcall(surface, 8, &[]).u32(), 0);
-        assert_eq!(e.vcall(device, 0xc, &[]).u32(), D3DERR_DEVICENOTRESET, "still");
+        assert_eq!(
+            e.vcall(device, 0xc, &[]).u32(),
+            D3DERR_DEVICENOTRESET,
+            "still"
+        );
         // Four back buffers: refused, the count left as given.
         fill(&mut e, 4, 640);
         assert_eq!(e.vcall(device, 0x40, &[pp]).u32(), D3DERR_INVALIDCALL);
@@ -4196,6 +4242,10 @@ mod tests {
         // In a scene too; the scene ends.
         assert_eq!(e.vcall(device, 0xa4, &[]).u32(), D3D_OK);
         assert_eq!(e.vcall(device, 0x40, &[pp]).u32(), D3D_OK);
-        assert_eq!(e.vcall(device, 0xa8, &[]).u32(), D3DERR_INVALIDCALL, "EndScene");
+        assert_eq!(
+            e.vcall(device, 0xa8, &[]).u32(),
+            D3DERR_INVALIDCALL,
+            "EndScene"
+        );
     }
 }

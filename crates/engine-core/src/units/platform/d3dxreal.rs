@@ -111,7 +111,8 @@ unsafe fn release(object: *mut c_void) {
 unsafe fn buffer_bytes(object: *mut c_void) -> Vec<u8> {
     let pointer: unsafe extern "system" fn(*mut c_void) -> *const u8 =
         std::mem::transmute(slot(object, 3));
-    let size: unsafe extern "system" fn(*mut c_void) -> usize = std::mem::transmute(slot(object, 4));
+    let size: unsafe extern "system" fn(*mut c_void) -> usize =
+        std::mem::transmute(slot(object, 4));
     let (p, n) = (pointer(object), size(object));
     if p.is_null() {
         return Vec::new();
@@ -181,11 +182,26 @@ fn register(e: &mut Engine) {
         (3, crate::entry!(0, table_pointer(Ptr) -> u32).1),
         (4, crate::entry!(0, table_size(Ptr) -> u32).1),
         (5, crate::entry!(0, table_get_desc(Ptr, Ptr) -> u32).1),
-        (6, crate::entry!(0, table_get_constant_desc(Ptr, u32, Ptr, Ptr) -> u32).1),
-        (7, crate::entry!(0, table_get_sampler_index(Ptr, u32) -> u32).1),
-        (8, crate::entry!(0, table_get_constant(Ptr, u32, u32) -> u32).1),
-        (9, crate::entry!(0, table_get_constant_by_name(Ptr, u32, Ptr) -> u32).1),
-        (10, crate::entry!(0, table_get_constant_element(Ptr, u32, u32) -> u32).1),
+        (
+            6,
+            crate::entry!(0, table_get_constant_desc(Ptr, u32, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            7,
+            crate::entry!(0, table_get_sampler_index(Ptr, u32) -> u32).1,
+        ),
+        (
+            8,
+            crate::entry!(0, table_get_constant(Ptr, u32, u32) -> u32).1,
+        ),
+        (
+            9,
+            crate::entry!(0, table_get_constant_by_name(Ptr, u32, Ptr) -> u32).1,
+        ),
+        (
+            10,
+            crate::entry!(0, table_get_constant_element(Ptr, u32, u32) -> u32).1,
+        ),
     ];
     for (i, f) in table {
         e.register(TABLE_CODE + 4 * i, f);
@@ -425,8 +441,12 @@ fn table_get_constant_desc(e: &mut Engine, this: Ptr, handle: u32, out: Ptr, cou
     let mut n = e.mem.u32(count.addr());
     let mut descs = vec![ConstantDesc::default(); n.max(1) as usize];
     let hr = unsafe {
-        let f: unsafe extern "system" fn(*mut c_void, usize, *mut ConstantDesc, *mut u32) -> Hresult =
-            std::mem::transmute(slot(real, 6));
+        let f: unsafe extern "system" fn(
+            *mut c_void,
+            usize,
+            *mut ConstantDesc,
+            *mut u32,
+        ) -> Hresult = std::mem::transmute(slot(real, 6));
         f(
             real,
             h,
@@ -648,8 +668,12 @@ pub fn compile_shader(
             } else {
                 &mut host_include as *mut Include as *mut c_void
             },
-            function_name.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
-            profile_name.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
+            function_name
+                .as_ref()
+                .map_or(std::ptr::null(), |s| s.as_ptr()),
+            profile_name
+                .as_ref()
+                .map_or(std::ptr::null(), |s| s.as_ptr()),
             flags,
             if shader.is_null() {
                 std::ptr::null_mut()
@@ -809,8 +833,8 @@ fn export(name: &[u8]) -> unsafe extern "system" fn() -> isize {
     use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
     dll();
     unsafe {
-        let module = GetModuleHandleA(PCSTR(b"d3dx9_38.dll\0".as_ptr()))
-            .expect("d3dx9_38.dll is loaded");
+        let module =
+            GetModuleHandleA(PCSTR(b"d3dx9_38.dll\0".as_ptr())).expect("d3dx9_38.dll is loaded");
         GetProcAddress(module, PCSTR(name.as_ptr()))
     }
     .unwrap_or_else(|| panic!("{} is not in d3dx9_38.dll", String::from_utf8_lossy(name)))
@@ -976,14 +1000,19 @@ mod tests {
         use windows::core::PCSTR;
         use windows::Win32::System::LibraryLoader::{LoadLibraryExA, LOAD_LIBRARY_SEARCH_SYSTEM32};
         if unsafe {
-            LoadLibraryExA(PCSTR(b"d3dx9_38.dll\0".as_ptr()), None, LOAD_LIBRARY_SEARCH_SYSTEM32)
+            LoadLibraryExA(
+                PCSTR(b"d3dx9_38.dll\0".as_ptr()),
+                None,
+                LOAD_LIBRARY_SEARCH_SYSTEM32,
+            )
         }
         .is_err()
         {
             return;
         }
         let mut e = Engine::new();
-        let source = b"float4 tint; float4 main(float4 p : POSITION) : POSITION { return p * tint; }";
+        let source =
+            b"float4 tint; float4 main(float4 p : POSITION) : POSITION { return p * tint; }";
         let at = e.mem.alloc(source.len() as u32);
         e.mem.write(at, source);
         let main = e.mem.alloc(8);
@@ -1026,15 +1055,27 @@ mod tests {
         let (d, count) = (e.mem.alloc(0x30), e.mem.alloc(4));
         e.mem.set_u32(count, 1);
         assert_eq!(
-            table_get_constant_desc(&mut e, Ptr::new(table), handle, Ptr::new(d), Ptr::new(count)),
+            table_get_constant_desc(
+                &mut e,
+                Ptr::new(table),
+                handle,
+                Ptr::new(d),
+                Ptr::new(count)
+            ),
             0
         );
         assert_eq!(e.mem.cstr(e.mem.u32(d)), b"tint");
         // RegisterSet D3DXRS_FLOAT4 (2), index 0, count 1.
-        assert_eq!([e.mem.u32(d + 4), e.mem.u32(d + 8), e.mem.u32(d + 12)], [2, 0, 1]);
+        assert_eq!(
+            [e.mem.u32(d + 4), e.mem.u32(d + 8), e.mem.u32(d + 12)],
+            [2, 0, 1]
+        );
         // The table read back from the bytecode answers the same.
         let out = e.mem.alloc(4);
-        assert_eq!(get_shader_constant_table(&mut e, Ptr::new(code), Ptr::new(out)), 0);
+        assert_eq!(
+            get_shader_constant_table(&mut e, Ptr::new(code), Ptr::new(out)),
+            0
+        );
         assert_ne!(e.mem.u32(out), 0);
         let read_back = e.mem.u32(out);
         assert_eq!(table_release(&mut e, Ptr::new(read_back)), 0);

@@ -148,7 +148,9 @@ extern "system" fn window_procedure(
     match message {
         WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP | WM_MOUSEMOVE | WM_LBUTTONDOWN
         | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MBUTTONDOWN | WM_MBUTTONUP
-        | WM_XBUTTONDOWN | WM_XBUTTONUP | WM_MOUSEWHEEL => window_input(window, message, wparam, lparam),
+        | WM_XBUTTONDOWN | WM_XBUTTONUP | WM_MOUSEWHEEL => {
+            window_input(window, message, wparam, lparam)
+        }
         // Losing the focus lets go of everything this window held.
         WM_ACTIVATE if wparam.0 & 0xffff == 0 => release_input(),
         WM_KILLFOCUS => release_input(),
@@ -605,7 +607,9 @@ pub fn present(
     };
     let r = unsafe {
         d.Present(
-            source.as_ref().map_or(std::ptr::null(), |r| r as *const RECT),
+            source
+                .as_ref()
+                .map_or(std::ptr::null(), |r| r as *const RECT),
             dest.as_ref().map_or(std::ptr::null(), |r| r as *const RECT),
             window,
             std::ptr::null(),
@@ -718,8 +722,7 @@ pub fn set_texture_stage_state(
     model: u32,
 ) {
     let Some(d) = device(e, this) else { return };
-    let r =
-        unsafe { d.SetTextureStageState(stage, D3DTEXTURESTAGESTATETYPE(kind as i32), value) };
+    let r = unsafe { d.SetTextureStageState(stage, D3DTEXTURESTAGESTATETYPE(kind as i32), value) };
     answer(e, "SetTextureStageState", model, hr(r));
 }
 
@@ -863,7 +866,16 @@ pub fn surface_created(
                 null,
             )
         } else {
-            d.CreateRenderTarget(width, height, format, multisample, quality, flag, &mut out, null)
+            d.CreateRenderTarget(
+                width,
+                height,
+                format,
+                multisample,
+                quality,
+                flag,
+                &mut out,
+                null,
+            )
         }
     };
     match out.filter(|_| r.is_ok()) {
@@ -1041,9 +1053,7 @@ pub fn declaration_created(e: &mut Engine, this: u32, declaration: u32, elements
     let elements = as_words(elements);
     match unsafe { d.CreateVertexDeclaration(elements.as_ptr() as *const D3DVERTEXELEMENT9) } {
         Ok(v) => {
-            real(e)
-                .objects
-                .insert(declaration, Object::Declaration(v));
+            real(e).objects.insert(declaration, Object::Declaration(v));
         }
         Err(err) => answer(e, "CreateVertexDeclaration", 0, err.code().0 as u32),
     }
@@ -1058,7 +1068,13 @@ pub fn set_vertex_declaration(e: &mut Engine, this: u32, declaration: u32, model
         Some(Object::Declaration(v)) => unsafe { d.SetVertexDeclaration(v) },
         _ => {
             let _ = unsafe { d.SetVertexDeclaration(None::<&IDirect3DVertexDeclaration9>) };
-            return broken(e, this, DECLARATION, "SetVertexDeclaration without a real one", model);
+            return broken(
+                e,
+                this,
+                DECLARATION,
+                "SetVertexDeclaration without a real one",
+                model,
+            );
         }
     };
     mended(e, this, DECLARATION);
@@ -1074,9 +1090,7 @@ pub fn set_fvf(e: &mut Engine, this: u32, fvf: u32, model: u32) {
 pub fn set_shader(e: &mut Engine, this: u32, shader: u32, pixel: bool, model: u32) {
     let Some(d) = device(e, this) else { return };
     let r = match (pixel, e.kernel.graphics.real.objects.get(&shader)) {
-        (false, _) if shader == 0 => unsafe {
-            d.SetVertexShader(None::<&IDirect3DVertexShader9>)
-        },
+        (false, _) if shader == 0 => unsafe { d.SetVertexShader(None::<&IDirect3DVertexShader9>) },
         (true, _) if shader == 0 => unsafe { d.SetPixelShader(None::<&IDirect3DPixelShader9>) },
         (false, Some(Object::VertexShader(s))) => unsafe { d.SetVertexShader(s) },
         (true, Some(Object::PixelShader(s))) => unsafe { d.SetPixelShader(s) },
@@ -1143,7 +1157,13 @@ pub fn set_stream_source(
         Some(Object::VertexBuffer(b)) => unsafe { d.SetStreamSource(stream, b, offset, stride) },
         _ => {
             let _ = unsafe { d.SetStreamSource(stream, None::<&IDirect3DVertexBuffer9>, 0, 0) };
-            return broken(e, this, stream, "SetStreamSource without a real buffer", model);
+            return broken(
+                e,
+                this,
+                stream,
+                "SetStreamSource without a real buffer",
+                model,
+            );
         }
     };
     mended(e, this, stream);
@@ -1182,7 +1202,13 @@ fn mended(e: &mut Engine, device: u32, binding: u32) {
 
 /// Whether the real draws of `device` are skipped (a binding without a real counterpart).
 fn skipped(e: &mut Engine, device: u32) -> bool {
-    let any = e.kernel.graphics.real.broken.iter().any(|&(d, _)| d == device);
+    let any = e
+        .kernel
+        .graphics
+        .real
+        .broken
+        .iter()
+        .any(|&(d, _)| d == device);
     if any {
         missing(e, "a draw skipped: a binding has no real counterpart");
     }
@@ -1256,7 +1282,6 @@ pub fn draw_primitive_up(
     };
     answer(e, "DrawPrimitiveUP", model, hr(r));
 }
-
 
 // Copies between resources, fixed-function lighting.
 
@@ -1337,7 +1362,6 @@ pub fn set_software_vertex_processing(e: &mut Engine, this: u32, software: u32, 
     let r = unsafe { d.SetSoftwareVertexProcessing(BOOL(software as i32)) };
     answer(e, "SetSoftwareVertexProcessing", model, hr(r));
 }
-
 
 // Queries, offscreen surfaces, fills and read-backs.
 
@@ -1469,7 +1493,6 @@ pub fn get_render_target_data(
     true
 }
 
-
 /// `Reset` succeeded on the modelled device: the real device is reset with the same present
 /// parameters (the real window), and its new back buffers and depth surface are the
 /// counterparts of the modelled ones.
@@ -1518,7 +1541,6 @@ pub fn device_reset(
         }
     }
 }
-
 
 /// `SetLOD` on a managed modelled texture: the real texture's `SetLOD` with the same level; a
 /// different previous level than the model's is printed once.
@@ -1570,17 +1592,20 @@ mod tests {
     #[test]
     fn a_buffer_the_model_lets_go_of_stays_alive_until_present() {
         let (reply, answer) = std::sync::mpsc::channel();
-        let sent = window_thread().lock().map(|tx| {
-            tx.send(Request {
-                title: b"nv-rs test".to_vec(),
-                style: 0,
-                ex_style: 0,
-                rect: [0, 0, 64, 64],
-                parent: 0,
-                reply,
+        let sent = window_thread()
+            .lock()
+            .map(|tx| {
+                tx.send(Request {
+                    title: b"nv-rs test".to_vec(),
+                    style: 0,
+                    ex_style: 0,
+                    rect: [0, 0, 64, 64],
+                    parent: 0,
+                    reply,
+                })
+                .is_ok()
             })
-            .is_ok()
-        }).unwrap_or(false);
+            .unwrap_or(false);
         let Some(window) = answer.recv().ok().filter(|&w| sent && w != 0) else {
             return;
         };

@@ -1085,7 +1085,7 @@ impl PlayerMovement {
                 // print stops when its walking stops).
                 if self
                     .main_reported
-                    .is_none_or(|t| t.elapsed().as_secs() >= 5)
+                    .map_or(true, |t| t.elapsed().as_secs() >= 5)
                 {
                     self.main_reported = Some(std::time::Instant::now());
                     println!("{}", self.summary());
@@ -1290,7 +1290,11 @@ impl crate::Host {
                 *held |= window;
             }
             (
-                [motion[0] + w.motion[0], motion[1] + w.motion[1], motion[2] + w.motion[2]],
+                [
+                    motion[0] + w.motion[0],
+                    motion[1] + w.motion[1],
+                    motion[2] + w.motion[2],
+                ],
                 b,
             )
         };
