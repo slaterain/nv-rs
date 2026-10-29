@@ -23,12 +23,10 @@ machinery runs.
 1. **Race menu: matches the real game by eye now (p207).** The face lights sat 80 units off in x: `008761e0` (the rendered-menu pass) set the main scene node's offset (`[011f91c8]+0x1e4`, which the shaders subtract from light positions) to -(the menu screen's position) every frame. In the exe that call (00876371) is inside the Pip-Boy test (00876295 jumps to 00876376); the port had moved it out. Found with a27's console-closed D3D diff (private `build43-scratch/measure/rec/rm-closed-2/diff-vs-p206.txt`), a27's real-game recording of the offset (0 on every race-menu frame; `rm-offset-*`) and a22's write watch (`NV_WATCH=*011f91c8+1e4,c`). The head gets the same 6 passes as the real game, with the same light radius and colours. Left from the diff (recheck on p207):
    - the port draws every head mesh once more into a 1024x1024 target first (vs 2f07 / ps 2754, maybe a shadow pass);
    - the interface plate's 4 quads miss three passes each (vs 2387/ps e52f, vs 3514/ps c331, vs 5558/ps 65ad);
-   - SetIndices and SetStreamSource still get the device pushed twice once per frame in p206 (after the 00876924/0086b3a6 fix): another call site.
+   - SetIndices/SetStreamSource with the device pushed twice: probably gone since e1d1de05. a22 found no such call in the p206c recording (13,478 calls of each, the right word counts) and no other call site in the exe or the port; a fresh diff should confirm it.
    - the maintainer's earlier reports (see-through skin, shininess) were made before this fix: check them with the maintainer on p207.
 
-   With the full d3d trace list (texture-from-file lines included) p206 stops at about frame 4000 in 00af1cc0 < 00addc00 < 00ada1d0: the same place as the intermittent post-load sound stop (item 2), so the trace's slowdown is a way to reproduce it.
-
-2. Post-load sound stop (intermittent; 00af1cc0/00aee580): run with `NV_AUDIO_CHECK=1` until it happens.
+2. **Post-load sound stop** (intermittent): "read of unmapped memory at 0000000b in 00af1cc0 < 00addc00 < 00ada1d0 < 00ad7740 < 0086f640 < 008705d0". `00af1cc0` deletes a BSWin32GameSound; its body `00aeafb0` releases the buffers at +0x19c, +0x1d4, +0x1a0 and +0x1d8 (slot +8, until 0). A read at 0xb means one of those fields points at a freed, reused object (its vtable word was 3). **Reproduce:** run the race-menu route with nv-trace's `lists/d3d-racemenu.txt` as `NV_TRACE_LIST` (the slowdown triggers it: p206 stopped at frame 4168, p207 at 4001; a third run did not). Next: a build from main with `NV_AUDIO_CHECK=1` and then `NV_WATCH` on the failing sound's buffer field, to find who released it first (a22, private `agents/scratch/a22/status.md` Round 12).
 3. The `SStartingCell` INI route stops at frame 0 (00a0cb90).
 4. 004b0680 writes past a 0xc block (`NV_BLOCK_CHECK`; probably harmless, unconfirmed).
 
