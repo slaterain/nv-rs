@@ -20,7 +20,20 @@ machinery runs.
 **research/nv-trace (new):** records the real FalloutNV.exe (a recorder DLL, DirectInput key scripts, the folder guard, PrintWindow shots checked by PID) and the port, then diffs the calls (`nv-trace diff`) or the Direct3D 9 calls draw by draw (`nv-trace d3d REAL PORT`). Never write into the player's folders; the launcher uses scratch INI copies.
 
 **Next, in order:**
-1. **Race menu: compare with the real game draw by draw.** In p205 (an `NV_SHOT` frame of the game's own back buffer, console closed) the face is drawn and lit in the Reflectron. The earlier black face came from the test route leaving the console open: `IsCurrentRenderedMenuTopmost` (00717990) answers false while the console is open (007179be..007179d6), so `Main::UpdateOffscreenInterface` (00871a50) never calls the menu's Draw (007fe1f0) and the 1280x720 multisampled target (kind 0x30, 00b6cebb) is never made; the real game does the same. Earlier D3D diff (private `agents/wt-a27/rec/d3d-racemenu-1/diff-vs-p204e.txt`, made with the console open, so recheck): the port's three menu lights had radius 40.99 against the real 81.99 and a light vector twice as long (the menu model's world scale looked halved). Record the real game's race menu again with the console closed (or through Doc's dialogue) and diff it against a new port recording. The maintainer's earlier reports (too dark, see-through skin, shininess) were all made with the console route; check them on the new frames.
+1. **Race menu: the face lights sit 80 units off in x.** The console-closed D3D diff (a27, real game against p206; private `build43-scratch/measure/rec/rm-closed-2/diff-vs-p206.txt`) finds:
+   - the head and body get the same 6 passes with the same shaders and states in the 1280x720 MSAA target;
+   - the light radius matches (210.32 real, 210.45 port);
+   - the light colours match;
+   - **the three point-light positions (vs c25..c27 of the point-light pass) are exactly -80 off in x** (real (-19.41, 62.89, 64.31), port (-99.41, ...)); y and z are equal. Next: dump the three lights' local and world translates at `RaceSexMenu::Create` and in the first frames on both sides, to find the node that gains the offset.
+
+   Also differing:
+   - the port draws every head mesh once more into a 1024x1024 target first (vs 2f07 / ps 2754, maybe a shadow pass);
+   - the interface plate's 4 quads miss three passes each (vs 2387/ps e52f, vs 3514/ps c331, vs 5558/ps 65ad);
+   - SetIndices and SetStreamSource still get the device pushed twice once per frame in p206 (after the 00876924/0086b3a6 fix): another call site.
+
+   With the full d3d trace list (texture-from-file lines included) p206 stops at about frame 4000 in 00af1cc0 < 00addc00 < 00ada1d0: the same place as the intermittent post-load sound stop (item 2), so the trace's slowdown is a way to reproduce it.
+
+   Earlier notes, from before the console finding: In p205 (an `NV_SHOT` frame of the game's own back buffer, console closed) the face is drawn and lit in the Reflectron. The earlier black face came from the test route leaving the console open: `IsCurrentRenderedMenuTopmost` (00717990) answers false while the console is open (007179be..007179d6), so `Main::UpdateOffscreenInterface` (00871a50) never calls the menu's Draw (007fe1f0) and the 1280x720 multisampled target (kind 0x30, 00b6cebb) is never made; the real game does the same. Earlier D3D diff (private `agents/wt-a27/rec/d3d-racemenu-1/diff-vs-p204e.txt`, made with the console open, so recheck): the port's three menu lights had radius 40.99 against the real 81.99 and a light vector twice as long (the menu model's world scale looked halved). Record the real game's race menu again with the console closed (or through Doc's dialogue) and diff it against a new port recording. The maintainer's earlier reports (too dark, see-through skin, shininess) were all made with the console route; check them on the new frames.
 2. Post-load sound stop (intermittent; 00af1cc0/00aee580): run with `NV_AUDIO_CHECK=1` until it happens.
 3. The `SStartingCell` INI route stops at frame 0 (00a0cb90).
 4. 004b0680 writes past a 0xc block (`NV_BLOCK_CHECK`; probably harmless, unconfirmed).
