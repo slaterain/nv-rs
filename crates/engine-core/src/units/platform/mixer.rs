@@ -832,6 +832,9 @@ mod tests {
     /// A resampled voice keeps a steady level, moves on by its step and ends at its end.
     #[test]
     fn resampled_voices_keep_their_level_and_end() {
+        if super::super::resampler::tables().is_none() {
+            return; // no RESAMPLEDMO.DLL on this machine
+        }
         let data: Vec<u8> = std::iter::repeat_n(8192i16, 441)
             .flat_map(|v| v.to_le_bytes())
             .collect();

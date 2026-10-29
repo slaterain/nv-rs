@@ -94,6 +94,27 @@ mod single {
         unsafe { _mm_cvtss_f32(_mm_rcp_ss(_mm_set_ss(f32::from_bits(x)))).to_bits() }
     }
 
+    /// Whether this processor's `RSQRTSS` and `RCPSS` estimates are the reference machine's
+    /// (AMD Ryzen AI 9 HX 370, where the tests' DLL answers were measured; other makers'
+    /// tables differ in the last bits): the tests that compare with those answers hold only
+    /// on such a processor.
+    #[cfg(all(test, any(target_arch = "x86", target_arch = "x86_64")))]
+    pub fn reference_estimates() -> bool {
+        [
+            (0x4000_0000, 0x3f35_0000, 0x3eff_f000),
+            (0x4040_0000, 0x3f13_c800, 0x3eaa_a800),
+            (0x3f33_3333, 0x3f99_0000, 0x3fb6_e000),
+            (0x4640_e6b6, 0x3c13_7800, 0x38a9_e800),
+        ]
+        .iter()
+        .all(|&(x, r, c)| rsqrt(x) == r && rcp(x) == c)
+    }
+
+    #[cfg(all(test, not(any(target_arch = "x86", target_arch = "x86_64"))))]
+    pub fn reference_estimates() -> bool {
+        false
+    }
+
     #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
     pub fn rcp(_x: u32) -> u32 {
         panic!("RCPSS (the processor's reciprocal estimate) is not provided on this processor")
@@ -1822,6 +1843,9 @@ mod tests_vec3_normalize {
 
     #[test]
     fn vec3_normalize_matches_the_dll() {
+        if !single::reference_estimates() {
+            return; // RSQRTSS answers differ from the reference processor's
+        }
         let words = |t: &str| -> Vec<u32> {
             t.split(' ')
                 .map(|w| u32::from_str_radix(w, 16).unwrap())
@@ -1987,6 +2011,9 @@ mod tests_sse2_functions {
 
     #[test]
     fn transforms_match_the_dll() {
+        if !single::reference_estimates() {
+            return; // RSQRTSS answers differ from the reference processor's
+        }
         for (v, m, want) in [
             ("bf800000 7fc12345 bf800000", "3f080b70 bd666117 c107882d c20e7268 bf20fa26 39ae03dc c01c34ca bb686714 3f5111c0 3a337df8 3969a8ad 3b34abb8 4111a064 3f1b25e2 bec49d84 c2b9f7ba", "7fc12345 7fc12345 7fc12345"),
             ("6616aafd 2b2a6c45 3540d4a7", "398932ea 3b475c33 c11bc793 bdb4d888 c035b89b 422fc87a c4585b66 bd2ad4bd 395218a4 42983d67 bd5e4ee0 39e0b303 3d9731e3 bf744566 bd9b0072 3f24d23c", "bb4236f5 bd0d1aaa 42dc8458"),
