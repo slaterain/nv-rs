@@ -1076,7 +1076,10 @@ fn is_valid_edge_edge_frame(e: &mut Engine, f: u32, t: u32, info: u32) -> bool {
     }
     x.fld_st(0);
     x.fld64(e, NEARLY_ONE);
-    x.fmul_st0(1);
+    // 00db172f is `DC C9`, `FMUL ST(1),ST(0)` (Ghidra lists it as `FMUL ST1`, like the `D8`
+    // form): the product goes to ST1, 0.99999988 stays on top for the `FMULP` at 00db1777, and
+    // the `FCOMP ST3` after the `FXCH` compares the product, not the bare value.
+    x.fmul_into(1);
     x.fxch(1);
     let result = x.fcomp(3);
     if result.c0 != result.c3 {
@@ -3006,6 +3009,33 @@ mod tests {
         let info = edge_info(&mut e);
         is_valid_edge_edge(&mut e, Ptr::new(far), Ptr::new(valid), Ptr::new(info));
         assert_eq!(e.mem.u8(valid), 0);
+    }
+
+    /// 00db172f is `DC C9` (`FMUL ST(1),ST(0)`): the numerator of the parameter along the first
+    /// edge is compared with `0.99999988 * determinant`, not with the determinant. Derived from
+    /// the exe: the scene's edges cross at `x = -1 + dx` (`dx` the second box's x translation),
+    /// so the parameter along the first edge (from the corner (1, 1, 1), length 2) is
+    /// `(2 - dx) / 2 = 1 - dx / 2`, its numerator `16 (1 - dx / 2)` against the determinant 16;
+    /// the edge is valid only when `numerator < 0.99999988 * 16`, that is `dx / 2 > 2^-23`.
+    #[test]
+    fn is_valid_edge_edge_compares_the_parameter_with_nearly_one() {
+        let verdict = |dx: f32| {
+            let mut e = engine();
+            let t = scene(&mut e);
+            store_vec(&mut e, t + 0x50, [dx, 0.3, 3.0, 0.0]);
+            let info = edge_info(&mut e);
+            let valid = e.mem.alloc(4);
+            e.mem.set_u8(valid, 0xaa);
+            is_valid_edge_edge(&mut e, Ptr::new(t), Ptr::new(valid), Ptr::new(info));
+            e.mem.u8(valid)
+        };
+        // dx = 2^-21: the parameter is 1 - 2^-22, below 0.99999988 (1 - 2^-23).
+        assert_eq!(verdict(f32::EPSILON * 4.0), 1);
+        // dx = 2^-22: the parameter is exactly 1 - 2^-23: not below it.
+        assert_eq!(verdict(f32::EPSILON * 2.0), 0);
+        // dx = 2^-23: the parameter 1 - 2^-24 is above it but below 1 (the value the bare
+        // determinant would have accepted).
+        assert_eq!(verdict(f32::EPSILON), 0);
     }
 
     #[test]
