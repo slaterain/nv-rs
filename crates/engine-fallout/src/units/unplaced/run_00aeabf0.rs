@@ -1290,6 +1290,7 @@ pub fn fn_00af1d80(e: &mut Engine, this: Ptr) {
     if field(e, this, 0x2d0) != 0 {
         let file = field(e, this, 0x2d0);
         if file != 0 {
+            audio_check::file_delete(e, this.addr(), file);
             e.vcall(file, 0, &args![1u32]);
         }
         set_field(e, this, 0x2d0, 0);
@@ -2754,7 +2755,10 @@ fn copy_stream(e: &mut Engine, this: Ptr, source: Ptr) {
 ///   while the check ran, or destroyed already);
 /// - a sound given a second reader while it still has one (`00aebff0`);
 /// - a sound destroyed with a reader that is not its own (another sound's, or one already
-///   destroyed), or whose reader's file word (`+0x2d0`) is not the file it opened.
+///   destroyed), or whose reader's file word (`+0x2d0`) is not the file it opened;
+/// - between the open (`00af1e00`) and the reader's destruction (`00af1d80`), a change to the
+///   reader's file word or to the file's vtable word, or a free or re-allocation of either's
+///   block (the write watch, `Mem::watch`; at the next call or return).
 ///
 /// Any value but `0` turns it on. It writes no game memory; off, it reads none either.
 pub mod audio_check {
@@ -2865,9 +2869,31 @@ pub mod audio_check {
             }
         }
 
-        pub fn reader_destroyed(&mut self, reader: u32, now: Event) {
-            self.readers.remove(&reader);
+        /// Answers the file the reader opened (0: none).
+        pub fn reader_destroyed(&mut self, reader: u32, now: Event) -> u32 {
+            let file = self.readers.remove(&reader).map_or(0, |r| r.1);
             self.dead_readers.insert(reader, now);
+            file
+        }
+
+        /// The text naming a watched word (`reader_opened`) that changed: the reader and sound
+        /// it belongs to and the reader's making.
+        pub fn watched(&self, at: u32) -> String {
+            for (reader, (sound, file, made)) in &self.readers {
+                if at.wrapping_sub(reader.wrapping_add(0x2d0)) < 4 {
+                    return format!(
+                        "the file word (+0x2d0) of reader {reader:08x} (sound {sound:08x}, file \
+                         {file:08x}; {made})"
+                    );
+                }
+                if *file != 0 && at.wrapping_sub(*file) < 4 {
+                    return format!(
+                        "the vtable word of file {file:08x} (reader {reader:08x}, sound \
+                         {sound:08x}; {made})"
+                    );
+                }
+            }
+            format!("{at:08x} (no live reader's word)")
         }
 
         pub fn destroying(
@@ -2929,9 +2955,108 @@ pub mod audio_check {
         }
     }
 
+    /// `NV_AUDIO_CHECK=fault`: only the report at a file delete that would fault (`00af1d80`),
+    /// with the frees seen before it: nothing is followed or watched, so the run's timing stays
+    /// close to one without the check. Any other value but `0`: everything.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Mode {
+        Off,
+        Fault,
+        Full,
+    }
+
+    fn mode() -> Mode {
+        static MODE: OnceLock<Mode> = OnceLock::new();
+        *MODE.get_or_init(|| match std::env::var("NV_AUDIO_CHECK").as_deref() {
+            Err(_) | Ok("") | Ok("0") => Mode::Off,
+            Ok("fault") => Mode::Fault,
+            Ok(_) => Mode::Full,
+        })
+    }
+
     fn on() -> bool {
-        static ON: OnceLock<bool> = OnceLock::new();
-        *ON.get_or_init(|| std::env::var("NV_AUDIO_CHECK").is_ok_and(|v| v != "0" && !v.is_empty()))
+        mode() == Mode::Full
+    }
+
+    /// The latest free of each block (`Engine::free_hook`): its number, thread and exe frames.
+    fn frees() -> std::sync::MutexGuard<'static, (u64, HashMap<u32, (u64, u32, Vec<u32>)>)> {
+        static FREES: OnceLock<Mutex<(u64, HashMap<u32, (u64, u32, Vec<u32>)>)>> = OnceLock::new();
+        FREES
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// `Engine::free_hook`: remembers who freed `block`.
+    fn on_free(e: &mut Engine, block: u32) {
+        let thread = engine_core::thread_host::current_id(e);
+        let frames: Vec<u32> = e.call_stack.iter().rev().take(12).copied().collect();
+        let mut f = frees();
+        f.0 += 1;
+        let n = f.0;
+        f.1.insert(block, (n, thread, frames));
+    }
+
+    /// `00af1d80` is about to delete `file` through its vtable (`reader`'s `+0x2d0`): when the
+    /// file or its vtable is not mapped (the delete would fault), stops the run with what is
+    /// known: the words, whether the reader and the file are live heap blocks, and who freed
+    /// each last.
+    pub fn file_delete(e: &mut Engine, reader: u32, file: u32) {
+        if mode() == Mode::Off {
+            return;
+        }
+        let word = |at: u32| {
+            let mut b = [0u8; 4];
+            e.mem.try_read(at, &mut b).ok().map(|_| u32::from_le_bytes(b))
+        };
+        let vtable = word(file);
+        if vtable.is_some_and(|v| word(v).is_some()) {
+            return;
+        }
+        let words = |at: u32, n: u32| -> String {
+            (0..n)
+                .map(|k| word(at.wrapping_add(4 * k)).map_or("--------".into(), |w| format!("{w:08x}")))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let live = |block: u32| e.kernel.crt_block_sizes.get(&block).copied();
+        let f = frees();
+        let freed = |block: u32| match f.1.get(&block) {
+            None => "never freed while the check ran".to_string(),
+            Some((n, thread, frames)) => {
+                let path: Vec<String> = frames.iter().map(|a| format!("{a:08x}")).collect();
+                format!("last freed as free #{n} of {} (thread {thread}, in {})", f.0, path.join(" < "))
+            }
+        };
+        let path: Vec<String> = e.call_stack.iter().rev().map(|a| format!("{a:08x}")).collect();
+        let text = format!(
+            "NV_AUDIO_CHECK: reader {reader:08x} deletes its file {file:08x}, whose vtable word is \
+             {} (thread {}, in {}) | reader: live block {:?}; {} | reader +0: {} | reader \
+             +0x2c0: {} | file: live block {:?}; {} | file +0: {}",
+            vtable.map_or("unmapped".into(), |v| format!("{v:08x}")),
+            engine_core::thread_host::current_id(e),
+            path.join(" < "),
+            live(reader),
+            freed(reader),
+            words(reader, 8),
+            words(reader.wrapping_add(0x2c0), 8),
+            live(file),
+            freed(file),
+            words(file, 8),
+        );
+        drop(f);
+        // One line: the run's stop record keeps only the first.
+        println!("{text}");
+        panic!("{text}");
+    }
+
+    /// The process's state.
+    fn state() -> std::sync::MutexGuard<'static, State> {
+        static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+        STATE
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Runs `body` on the process's state with the event `what` when the check is on; stops the
@@ -2944,11 +3069,7 @@ pub mod audio_check {
         if !on() {
             return;
         }
-        static STATE: OnceLock<Mutex<State>> = OnceLock::new();
-        let mut st = STATE
-            .get_or_init(Default::default)
-            .lock()
-            .expect("the audio check");
+        let mut st = state();
         let now = st.event(
             what(),
             engine_core::thread_host::current_id(e),
@@ -2961,7 +3082,10 @@ pub mod audio_check {
     }
 
     /// `00aeac20` / `00aeae10` made `sound`.
-    pub fn constructed(e: &Engine, sound: u32) {
+    pub fn constructed(e: &mut Engine, sound: u32) {
+        if mode() != Mode::Off && e.free_hook.is_none() {
+            e.free_hook = Some(on_free);
+        }
         with_state(
             e,
             || format!("sound {sound:08x} constructed"),
@@ -2994,7 +3118,14 @@ pub mod audio_check {
     }
 
     /// `00af1e00` opened `file` for `reader`.
-    pub fn reader_opened(e: &Engine, reader: u32, file: u32) {
+    /// From here until `00af1d80` the reader's file word (`+0x2d0`) and the file's vtable word
+    /// are watched ([`Mem::watch`](engine_core::mem::Mem::watch)): a store that changes either,
+    /// or a free or re-allocation of its block, stops the run at the next call or return,
+    /// naming the calls it happened in (`NV_WATCH` takes the same events: use one at a time).
+    pub fn reader_opened(e: &mut Engine, reader: u32, file: u32) {
+        if !on() {
+            return;
+        }
         with_state(
             e,
             || format!("reader {reader:08x} opened file {file:08x}"),
@@ -3003,18 +3134,99 @@ pub mod audio_check {
                 Ok(())
             },
         );
+        install(e);
+        e.mem.watch(reader.wrapping_add(0x2d0), 4, false);
+        if file != 0 && e.mem.is_mapped(file) {
+            e.mem.watch(file, 4, false);
+        }
     }
 
-    /// `00af1d80` destroys `reader`.
-    pub fn reader_destroyed(e: &Engine, reader: u32) {
+    /// `00af1d80` destroys `reader` (its words are no longer watched).
+    pub fn reader_destroyed(e: &mut Engine, reader: u32) {
+        if !on() {
+            return;
+        }
+        let mut file = 0;
         with_state(
             e,
             || format!("reader {reader:08x} destroyed"),
             |st, now| {
-                st.reader_destroyed(reader, now);
+                file = st.reader_destroyed(reader, now);
                 Ok(())
             },
         );
+        e.mem.unwatch(reader.wrapping_add(0x2d0));
+        if file != 0 {
+            e.mem.unwatch(file);
+        }
+    }
+
+    /// `Engine::call_hook`'s type.
+    type CallHook = fn(&mut Engine, u32, bool);
+    static PREVIOUS: Mutex<Option<CallHook>> = Mutex::new(None);
+
+    /// Puts [`on_call`] in front of the engine's call hook (once).
+    fn install(e: &mut Engine) {
+        if e.call_hook.is_some_and(|h| h as usize == on_call as CallHook as usize) {
+            return;
+        }
+        *PREVIOUS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = e.call_hook;
+        e.call_hook = Some(on_call);
+    }
+
+    /// `Engine::call_hook`: a watched word changed (`reader_opened`): stops the run naming it,
+    /// the calls it happened in and the reader's making.
+    fn on_call(e: &mut Engine, addr: u32, exit: bool) {
+        // The previous call event (address, return or not, thread): the write happened between
+        // it and this one.
+        static LAST: Mutex<(u32, bool, u32)> = Mutex::new((0, false, 0));
+        let thread = engine_core::thread_host::current_id(e);
+        let last = std::mem::replace(
+            &mut *LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+            (addr, exit, thread),
+        );
+        if e.mem.has_watch_hits() {
+            let hits = e.mem.take_watch_hits();
+            let mut frames: Vec<u32> = Vec::new();
+            if exit {
+                frames.push(addr);
+            }
+            frames.extend(e.call_stack.iter().rev().take(16));
+            let path: Vec<String> = frames.iter().map(|a| format!("{a:08x}")).collect();
+            let event = |(addr, exit, thread): (u32, bool, u32)| {
+                format!(
+                    "{} {addr:08x} on thread {thread}",
+                    if exit { "the return of" } else { "the call of" }
+                )
+            };
+            let path = format!(
+                "{} (between {} and {})",
+                path.join(" < "),
+                event(last),
+                event((addr, exit, thread))
+            );
+            let st = state();
+            let mut text = String::from("NV_AUDIO_CHECK: a watched word changed");
+            for hit in &hits {
+                text += &format!(
+                    " | {}: {}",
+                    st.watched(hit.addr),
+                    engine_core::watch_check::report_text(hit, &path)
+                );
+            }
+            drop(st);
+            // One line: the run's stop record keeps only the first.
+            println!("{text}");
+            panic!("{text}");
+        }
+        let previous = *PREVIOUS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(hook) = previous {
+            hook(e, addr, exit);
+        }
     }
 
     /// `00aeafb0` begins on `sound` (its reader at `+0x22c`, the reader's file at `+0x2d0`,
@@ -3069,6 +3281,23 @@ pub mod audio_check {
                 text.contains("not live") && text.contains("#4 destroy"),
                 "{text}"
             );
+        }
+
+        #[test]
+        fn a_watched_word_is_named_by_its_reader() {
+            let mut st = State::default();
+            let now = ev(&mut st, "make");
+            st.constructed(0x100, now);
+            let now = ev(&mut st, "reader");
+            st.reader_made(0x100, 0x500, 0, now).unwrap();
+            st.reader_opened(0x500, 0x900);
+            let text = st.watched(0x500 + 0x2d0 + 1);
+            assert!(text.starts_with("the file word (+0x2d0) of reader 00000500"), "{text}");
+            let text = st.watched(0x900);
+            assert!(text.starts_with("the vtable word of file 00000900"), "{text}");
+            let now = ev(&mut st, "reader gone");
+            assert_eq!(st.reader_destroyed(0x500, now), 0x900);
+            assert!(st.watched(0x900).contains("no live reader"));
         }
 
         #[test]
