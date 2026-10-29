@@ -6664,18 +6664,22 @@ const LOOK_AT_ANGLE_LIMIT: u32 = 0x0126_7d3c;
 /// angle below the limit `01267d3c` (degrees) the quaternion is reset to (0, 0, 0, 1), and the bytes
 /// `+0xb2` and `+0xb3` cleared, or with `index` 1 and the byte `+0x190` set the byte `+0x131` of
 /// the record numbered by the dword `+0x194` cleared and the dword decremented. Answers whether
-/// the solver found nothing to do (the decompiler drops the value, a `SETZ AL`). The value
-/// `[entry + 0xf8]` is loaded into a stack slot nothing reads, and so is the rotated, normalised
-/// `[entry + 0x110]`; both are left out.
+/// the solver found nothing to do (the decompiler drops the value, a `SETZ AL`). The solver's
+/// setup is four vectors: the record's `+0x100`, the second pose's vector (or zero), the record's
+/// `+0x110` rotated by the model rotation of the bone `+0xf6` and normalised (the reference
+/// direction), and the record's float `+0xf8` (the largest angle); the solver reads all four
+/// (00ce0290). Leaving the last two out let the kept bone transform fill them, and the head
+/// turned to the floor.
 pub fn fn_00c78610(e: &mut Engine, this: Ptr, index: u32, transform: u32) -> bool {
     e.with_stack(0x100, |e, frame| {
         look_at_update(e, this.addr(), index, transform, frame.addr())
     })
 }
 
-/// The body of `fn_00c78610` over the stack frame `frame`: the target at `+0`, the solver input
-/// (two vectors) at `+0x10`, the kept bone transform at `+0x30`, its copy after the solver at
-/// `+0x60`, the solver's result byte at `+0x90` and the quaternion check's at `+0x94`.
+/// The body of `fn_00c78610` over the stack frame `frame`: the target at `+0`, the solver's
+/// setup (0x40 bytes, the exe's `ESP+0x104` block after the prologue) at `+0x10`, the kept bone
+/// transform at `+0x50`, its copy after the solver at `+0x80`, the solver's result byte at `+0xb0`
+/// and the quaternion check's at `+0xb4`.
 fn look_at_update(e: &mut Engine, base: u32, index: u32, transform: u32, frame: u32) -> bool {
     let entry = index.wrapping_mul(0x50).wrapping_add(base);
     let block = index
@@ -6683,14 +6687,28 @@ fn look_at_update(e: &mut Engine, base: u32, index: u32, transform: u32, frame: 
         .wrapping_add(0xf)
         .wrapping_shl(4)
         .wrapping_add(base);
-    let (target, input, kept, copy) = (frame, frame + 0x10, frame + 0x30, frame + 0x60);
-    let (solved_byte, check_byte) = (frame + 0x90, frame + 0x94);
+    let (target, input, kept, copy) = (frame, frame + 0x10, frame + 0x50, frame + 0x80);
+    let (solved_byte, check_byte) = (frame + 0xb0, frame + 0xb4);
     let constants = load_pose_constants(e);
+    // 00c7863b..00c78649: the setup's largest angle (`+0x30`) is the record's float `+0xf8`
+    // through the x87 (`FLD`/`FSTP`).
+    let angle = x87_store32(x87_load32(e.mem.u32(entry + 0xf8)));
+    e.mem.set_u32(input + 0x30, angle);
     store4(e, input + 0x10, [0.0; 4]);
     copy16(e, entry + 0x100, input);
     let pose = e.mem.u32(block);
     let parent = i32::from(e.mem.u16(entry + 0xf6) as i16) as u32;
-    pose_bone_model_transform(e, pose, parent);
+    let parent_model = pose_bone_model_transform(e, pose, parent);
+    // 00c786a3..00c787bd: the setup's reference direction (`+0x20`) is the record's vector
+    // `+0x110` rotated by that bone's model rotation and scaled to unit length.
+    let rotated = rotate_lanes(
+        load4(e, entry + 0x110),
+        load4(e, parent_model + 0x10),
+        constants.half,
+        true,
+    );
+    let reference_direction = refined_normal(e, rotated);
+    store4(e, input + 0x20, reference_direction);
     e.call(
         TRANSFORM_POINT_INVERSE,
         &args![target, transform, base + 0xd0],
@@ -14255,7 +14273,7 @@ mod look_at_update_tests {
         let (answer, damage) = (Rc::clone(&solved), Rc::clone(&scribble));
         e.register_double(LOOK_AT_SOLVE, move |e, a| {
             let mut words = a.to_vec();
-            words.extend((0..8).map(|word| e.mem.u32(a[1] + 4 * word)));
+            words.extend((0..13).map(|word| e.mem.u32(a[1] + 4 * word)));
             words.extend((0..4).map(|word| e.mem.u32(a[2] + 4 * word)));
             log.borrow_mut().push((LOOK_AT_SOLVE, words));
             e.mem.set_u8(a[0], answer.get());
@@ -14335,12 +14353,39 @@ mod look_at_update_tests {
             vec![vec![s.pose, 1, 1]]
         );
         let solve = &calls(&s.seen, LOOK_AT_SOLVE)[0];
-        assert_eq!(solve[1..].len(), 5 + 12);
+        assert_eq!(solve[1..].len(), 5 + 13 + 4);
         assert_eq!(solve[3..6], [1.0f32.to_bits(), BONE_INFO, 0]);
         // The input: the axis from the record, and the zero vector.
         assert_eq!(solve[6..10], bits([0.0, 1.0, 0.0, 0.0])[..]);
         assert_eq!(solve[10..14], [0; 4]);
-        assert_eq!(solve[14..18], bits([1.0, 2.0, 3.0, 0.0])[..]);
+        assert_eq!(solve[19..23], bits([1.0, 2.0, 3.0, 0.0])[..]);
+    }
+
+    /// The setup's third vector is the record's `+0x110` turned by the model rotation of the bone
+    /// `+0xf6` and normalised, its fourth the record's float `+0xf8` (00c786a3..00c787bd,
+    /// 00c7863b): the real game's first look of Doc's opening has (0.047, 0.951, -0.306) and
+    /// 1.047 there; the port had left both to the kept bone transform and Doc looked at the floor.
+    #[test]
+    fn the_solver_gets_the_reference_direction_and_the_largest_angle() {
+        let mut s = scene(0, [1.0, 2.0, 3.0, 0.0]);
+        let entry = s.this;
+        s.e.mem.set_f32(entry + 0xf8, 1.0472);
+        store4(&mut s.e, entry + 0x110, [2.0, 0.0, 0.0, 0.0]);
+        // Bone 0 (the record's `+0xf6`) turned a quarter about z: x goes to y.
+        let half_root = std::f32::consts::FRAC_1_SQRT_2;
+        store4(&mut s.e, s.locals + 0x10, [0.0, 0.0, half_root, half_root]);
+        let transform = s.e.mem.alloc(0x30);
+        s.e.call(0x00c7_8610, &args![s.this, 0u32, transform]);
+        let solve = &calls(&s.seen, LOOK_AT_SOLVE)[0];
+        let direction = [solve[14], solve[15], solve[16], solve[17]].map(f32::from_bits);
+        close(direction, [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(solve[18], 1.0472f32.to_bits());
+    }
+
+    #[test]
+    fn the_solver_answer_is_kept() {
+        let mut s = scene(0, [1.0, 2.0, 3.0, 0.0]);
+        let transform = s.e.mem.alloc(0x30);
         s.solved.set(0);
         let answer = s.e.call(0x00c7_8610, &args![s.this, 0u32, transform]).u32();
         assert_eq!(answer & 0xff, 1);
@@ -14470,7 +14515,7 @@ mod look_at_update_tests {
         s.e.call(0x00c7_8610, &args![s.this, 1u32, 0u32]);
         // u = (0, 0, 1), reach 1: the unit direction times 1 is added to the target.
         let solve = &calls(&s.seen, LOOK_AT_SOLVE)[0];
-        let target: Vec<f32> = solve[14..18].iter().map(|w| f32::from_bits(*w)).collect();
+        let target: Vec<f32> = solve[19..23].iter().map(|w| f32::from_bits(*w)).collect();
         close(
             [target[0], target[1], target[2], target[3]],
             [0.0, 0.0, 1.5, 0.0],
@@ -14488,7 +14533,7 @@ mod look_at_update_tests {
         let mut s = pulled([0.0, 0.0, 5.0, 0.0]);
         s.e.call(0x00c7_8610, &args![s.this, 1u32, 0u32]);
         let solve = &calls(&s.seen, LOOK_AT_SOLVE)[0];
-        assert_eq!(solve[14..18], bits([0.0, 0.0, 5.0, 0.0])[..]);
+        assert_eq!(solve[19..23], bits([0.0, 0.0, 5.0, 0.0])[..]);
         assert_eq!(solve[10..14], bits([0.0, 0.0, 1.0, 0.0])[..]);
     }
 
