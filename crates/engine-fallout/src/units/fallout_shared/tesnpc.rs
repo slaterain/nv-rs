@@ -5071,10 +5071,12 @@ impl Activation {
                     e.vcall(t, 0x418, &args![]);
                     return true;
                 }
+                // 0060840b / 00608420: the word pushed is the topic (`[EBP-0x160]`, from
+                // 0061a2d0), not the dialogue item (`[EBP-0x15c]`).
                 if t == player {
-                    e.call(0x0057_b7c0, &args![a, dialogue, 0u32, 0u32]);
+                    e.call(0x0057_b7c0, &args![a, topic, 0u32, 0u32]);
                 } else {
-                    e.call(0x0057_b7c0, &args![t, dialogue, 0u32, 0u32]);
+                    e.call(0x0057_b7c0, &args![t, topic, 0u32, 0u32]);
                 }
                 return self.finish_dialogue(e, dialogue);
             }
@@ -11696,9 +11698,12 @@ mod tests {
             vec![vec![0x8001, w.target, w.activator, 0, 0, 0]]
         );
         assert_eq!(calls(&mut w.e, 0x0061_9df0), vec![vec![0x8002]]);
+        // The say call gets the topic (0x8001), not the dialogue item: with the item the next
+        // conversation walked it as a topic and faulted (0060840b, the maintainer's crash when
+        // talking to Doc a second time).
         assert_eq!(
             calls(&mut w.e, 0x0057_b7c0),
-            vec![vec![w.target, dialogue, 0, 0]]
+            vec![vec![w.target, 0x8001, 0, 0]]
         );
         assert_eq!(calls(&mut w.e, 0x005c_90d0), vec![vec![dialogue, 1]]);
         // A target in package kind 9 answers through its process instead.
