@@ -122,8 +122,73 @@ pub fn full_path(e: &Engine, name: &[u8]) -> Vec<u8> {
     path
 }
 
+#[cfg(windows)]
 fn real_path(path: &[u8]) -> std::path::PathBuf {
     std::path::PathBuf::from(String::from_utf8_lossy(path).into_owned())
+}
+
+/// The player's real path for the game's full path `path`, elsewhere than on Windows: drive `Z:`
+/// is the whole file system, as Wine and Proton show it to Windows programs ([`game_path`]),
+/// `\` and `/` both separate, and each part names the entry whose name matches it without
+/// case, as a Windows file system finds it (the exact name first; a part nothing matches is
+/// kept as it is, so the path names nothing).
+///
+/// Host plumbing only, as are [`game_path`] and the file times in [`write_find_data`]: they let
+/// the same game code find the player's files on another system and change nothing the game
+/// does. Not as on Windows: only ASCII letters match without case (of two names that differ
+/// only in case, which Windows cannot hold, the first in byte order is taken); only drive `Z:`
+/// is mapped (a path on another drive, such as a folder from the adapter table captured on
+/// Windows, names nothing); dots and spaces at the end of a name are kept, where Windows drops
+/// them; there are no 8.3 short names ([`search_finds`]); the attributes are only `DIRECTORY`
+/// or `ARCHIVE` ([`attributes`]); a file system without creation times gives the last write's,
+/// and access times are as the mount keeps them.
+#[cfg(not(windows))]
+fn real_path(path: &[u8]) -> std::path::PathBuf {
+    let text = String::from_utf8_lossy(path).replace('\\', "/");
+    let (root, rest) = match text.as_bytes() {
+        [d, b':', ..] if d.eq_ignore_ascii_case(&b'z') => ("/", &text[2..]),
+        [b'/', ..] => ("/", text.as_str()),
+        _ => ("", text.as_str()),
+    };
+    let mut real = std::path::PathBuf::from(root);
+    for part in rest.split('/').filter(|p| !p.is_empty()) {
+        let exact = real.join(part);
+        if matches!(part, "." | "..") || std::fs::symlink_metadata(&exact).is_ok() {
+            real = exact;
+            continue;
+        }
+        let directory = if real.as_os_str().is_empty() {
+            std::path::Path::new(".")
+        } else {
+            real.as_path()
+        };
+        let stored = std::fs::read_dir(directory).ok().and_then(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.file_name())
+                .filter(|name| name.to_string_lossy().eq_ignore_ascii_case(part))
+                .min()
+        });
+        real = stored.map_or(exact, |name| real.join(name));
+    }
+    real
+}
+
+/// The game's full path for the player's real path `real` (the folder the game starts in): on
+/// Windows the path with `\` separators; elsewhere the absolute path on drive `Z:`, as Wine and
+/// Proton show it (`/games/FNV` is `Z:\games\FNV`), which [`real_path`] maps back.
+pub fn game_path(real: &std::path::Path) -> Vec<u8> {
+    #[cfg(not(windows))]
+    let real = &match std::env::current_dir() {
+        Ok(current) if real.is_relative() => current.join(real),
+        _ => real.to_path_buf(),
+    };
+    let text = real.to_string_lossy().replace('/', "\\");
+    if cfg!(windows) {
+        text.into_bytes()
+    } else {
+        format!("Z:{text}").into_bytes()
+    }
 }
 
 /// The bytes of the file at the full path `path`: as the game made it in this run, else the
@@ -457,9 +522,7 @@ pub fn find_first_file_a(e: &mut Engine, name: Ptr, data: Ptr) -> u32 {
 /// last-write times, the size (high word, then low), the two reserved words 0, `cFileName` (the
 /// name as stored, then one zero byte) and an empty `cAlternateFileName` (one zero byte at
 /// +0x130); the rest of the buffer is left as it was.
-#[cfg_attr(not(windows), allow(unused_variables, unreachable_code))] // stops before writing there
 fn write_find_data(e: &mut Engine, data: Ptr, meta: &std::fs::Metadata, stored: &str, shown: &str) {
-    #[cfg(windows)]
     let _ = shown;
     #[cfg(windows)]
     let (attributes, created, accessed, written) = {
@@ -471,10 +534,21 @@ fn write_find_data(e: &mut Engine, data: Ptr, meta: &std::fs::Metadata, stored: 
             meta.last_write_time(),
         )
     };
+    // Elsewhere: the attributes as [`attributes`] gives them, and the times as the file system
+    // keeps them; one without a creation time gives the last write's.
     #[cfg(not(windows))]
-    let (attributes, created, accessed, written): (u32, u64, u64, u64) = {
-        let _ = &meta;
-        panic!("FindFirstFileA(\"{shown}\"): file times are only provided on Windows");
+    let (attributes, created, accessed, written) = {
+        let written = meta.modified().map_or(0, file_time);
+        (
+            if meta.is_dir() {
+                FILE_ATTRIBUTE_DIRECTORY
+            } else {
+                FILE_ATTRIBUTE_ARCHIVE
+            },
+            meta.created().map_or(written, file_time),
+            meta.accessed().map_or(written, file_time),
+            written,
+        )
     };
     let d = data.addr();
     e.mem.set_u32(d, attributes);
@@ -490,6 +564,17 @@ fn write_find_data(e: &mut Engine, data: Ptr, meta: &std::fs::Metadata, stored: 
     e.mem.write(d + 0x2c, stored.as_bytes());
     e.mem.set_u8(d + 0x2c + stored.len() as u32, 0);
     e.mem.set_u8(d + 0x130, 0);
+}
+
+/// `time` as a `FILETIME`: 100-nanosecond intervals since 1601-01-01 UTC (11,644,473,600
+/// seconds before 1970); 0 for an earlier time.
+#[cfg_attr(windows, allow(dead_code))] // Windows gives the file times as FILETIMEs
+fn file_time(time: std::time::SystemTime) -> u64 {
+    let since_1970 = match time.duration_since(std::time::UNIX_EPOCH) {
+        Ok(after) => after.as_nanos() as i128,
+        Err(before) => -(before.duration().as_nanos() as i128),
+    };
+    (since_1970 / 100 + 116_444_736_000_000_000).max(0) as u64
 }
 
 /// `ERROR_NO_MORE_FILES`.
@@ -1904,5 +1989,107 @@ mod tests_player_files {
         );
         assert_ne!(w, INVALID_HANDLE_VALUE);
         assert_eq!(e.kernel.disk.files.len(), 1);
+    }
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests_paths_off_windows {
+    use super::*;
+
+    /// A scratch game folder with `Data/Meshes/Rock.NIF` in it, removed when dropped.
+    struct Scratch(std::path::PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scratch(name: &str) -> Scratch {
+        let root = std::env::temp_dir().join(format!("nv-rs-files-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let meshes = root.join("Data").join("Meshes");
+        std::fs::create_dir_all(&meshes).unwrap();
+        std::fs::write(meshes.join("Rock.NIF"), b"rock").unwrap();
+        Scratch(root)
+    }
+
+    #[test]
+    fn the_game_folder_is_on_drive_z_and_maps_back() {
+        let game = game_path(std::path::Path::new("/games/Fallout New Vegas"));
+        assert_eq!(game, br"Z:\games\Fallout New Vegas".to_vec());
+        assert_eq!(
+            real_path(&game),
+            std::path::PathBuf::from("/games/Fallout New Vegas")
+        );
+        assert_eq!(real_path(b"Z:"), std::path::PathBuf::from("/"));
+        assert_eq!(real_path(br"z:\games"), std::path::PathBuf::from("/games"));
+    }
+
+    #[test]
+    fn names_are_found_without_case_as_on_windows() {
+        let s = scratch("case");
+        let mut game = game_path(&s.0);
+        game.extend_from_slice(br"\data\MESHES\rock.nif");
+        assert_eq!(
+            real_path(&game),
+            s.0.join("Data").join("Meshes").join("Rock.NIF")
+        );
+        // A part nothing matches is kept, so the path names nothing.
+        let mut missing = game_path(&s.0);
+        missing.extend_from_slice(br"\Data\Textures\rock.dds");
+        assert!(!real_path(&missing).exists());
+    }
+
+    #[test]
+    fn the_game_opens_and_reads_its_files_by_their_game_paths() {
+        let s = scratch("open");
+        let mut e = Engine::new();
+        e.kernel.current_directory = game_path(&s.0);
+        let name = e.mem.alloc(0x200);
+        e.mem.set_cstr(name, br"DATA\meshes\ROCK.nif");
+        // GetFullPathNameA joins it to the folder on drive Z:.
+        let full = e.mem.alloc(0x400);
+        let n = get_full_path_name_a(&mut e, Ptr::new(name), 0x400, Ptr::new(full), Ptr::new(0));
+        let mut want = game_path(&s.0);
+        want.extend_from_slice(br"\DATA\meshes\ROCK.nif");
+        assert_eq!(e.mem.cstr(full), want);
+        assert_eq!(n as usize, want.len());
+        assert_eq!(
+            get_file_attributes_a(&mut e, Ptr::new(name)),
+            FILE_ATTRIBUTE_ARCHIVE
+        );
+        let h = create_file_a(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_READ,
+            1,
+            0,
+            OPEN_EXISTING,
+            0x80,
+            0,
+        );
+        assert_ne!(h, INVALID_HANDLE_VALUE);
+        let buffer = e.mem.alloc(0x10);
+        let count = e.mem.alloc(4);
+        assert_eq!(
+            read_file(&mut e, h, Ptr::new(buffer), 4, Ptr::new(count), 0),
+            1
+        );
+        assert_eq!(e.mem.bytes(buffer, 4), b"rock".to_vec());
+    }
+
+    #[test]
+    fn file_times_are_filetimes() {
+        let epoch = std::time::UNIX_EPOCH;
+        assert_eq!(file_time(epoch), 116_444_736_000_000_000);
+        assert_eq!(
+            file_time(epoch + std::time::Duration::from_micros(1)),
+            116_444_736_000_000_010
+        );
+        assert_eq!(
+            file_time(epoch - std::time::Duration::from_secs(11_644_473_600)),
+            0
+        );
     }
 }
