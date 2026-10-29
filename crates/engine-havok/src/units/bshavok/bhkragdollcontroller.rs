@@ -14364,12 +14364,12 @@ mod look_at_update_tests {
     /// The setup's third vector is the record's `+0x110` turned by the model rotation of the bone
     /// `+0xf6` and normalised, its fourth the record's float `+0xf8` (00c786a3..00c787bd,
     /// 00c7863b): the real game's first look of Doc's opening has (0.047, 0.951, -0.306) and
-    /// 1.047 there; the port had left both to the kept bone transform and Doc looked at the floor.
+    /// 1.047 there (the test uses 1.25); the port had left both to the kept bone transform and Doc looked at the floor.
     #[test]
     fn the_solver_gets_the_reference_direction_and_the_largest_angle() {
         let mut s = scene(0, [1.0, 2.0, 3.0, 0.0]);
         let entry = s.this;
-        s.e.mem.set_f32(entry + 0xf8, 1.0472);
+        s.e.mem.set_f32(entry + 0xf8, 1.25);
         store4(&mut s.e, entry + 0x110, [2.0, 0.0, 0.0, 0.0]);
         // Bone 0 (the record's `+0xf6`) turned a quarter about z: x goes to y.
         let half_root = std::f32::consts::FRAC_1_SQRT_2;
@@ -14379,7 +14379,7 @@ mod look_at_update_tests {
         let solve = &calls(&s.seen, LOOK_AT_SOLVE)[0];
         let direction = [solve[14], solve[15], solve[16], solve[17]].map(f32::from_bits);
         close(direction, [0.0, 1.0, 0.0, 0.0]);
-        assert_eq!(solve[18], 1.0472f32.to_bits());
+        assert_eq!(solve[18], 1.25f32.to_bits());
     }
 
     #[test]

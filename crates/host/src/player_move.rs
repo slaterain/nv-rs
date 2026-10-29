@@ -1361,12 +1361,15 @@ fn key_script() -> &'static [(u64, u8, u64)] {
     })
 }
 
+/// One `NV_MOVE_MOUSE` item: the first frame, the motion per frame, how many frames, the buttons.
+type MouseStep = (u64, i32, i32, u64, u8);
+
 /// `NV_MOVE_MOUSE=FRAME:DX:DY:HOLD[:BUTTONS],..` (decimal): the mouse moves by (DX, DY) on each
 /// of main's frames FRAME..FRAME+HOLD, with the buttons of the BUTTONS bit mask (bit 0 the left
 /// button) held, on top of the viewer's (a diagnostic, like `NV_MOVE_KEYS`: turns the player in
 /// a scripted run).
-fn mouse_script() -> &'static [(u64, i32, i32, u64, u8)] {
-    static SCRIPT: std::sync::OnceLock<Vec<(u64, i32, i32, u64, u8)>> = std::sync::OnceLock::new();
+fn mouse_script() -> &'static [MouseStep] {
+    static SCRIPT: std::sync::OnceLock<Vec<MouseStep>> = std::sync::OnceLock::new();
     SCRIPT.get_or_init(|| {
         std::env::var("NV_MOVE_MOUSE")
             .unwrap_or_default()
