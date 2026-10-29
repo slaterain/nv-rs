@@ -69,6 +69,9 @@ pub trait Arg: Sized {
     }
 }
 
+/// Inlined everywhere (also into the opt-level 1 engine crates): every argument of every call
+/// through a function table entry is read through it (a29).
+#[inline(always)]
 fn word(words: &[u32], i: &mut usize) -> u32 {
     let w = *words
         .get(*i)
@@ -94,6 +97,7 @@ macro_rules! word_arg {
         }
         impl Arg for $t {
             const WORDS: usize = 1;
+            #[inline(always)]
             fn take(words: &[u32], i: &mut usize) -> Self {
                 let $w = word(words, i);
                 $from
@@ -102,7 +106,7 @@ macro_rules! word_arg {
                 let $v = self;
                 out.push($to);
             }
-            #[inline]
+            #[inline(always)]
             fn put_words(self, out: &mut Words) {
                 out.push(self.one_word());
             }
@@ -122,13 +126,14 @@ word_arg! {
 
 impl<T> Arg for Ptr<T> {
     const WORDS: usize = 1;
+    #[inline(always)]
     fn take(words: &[u32], i: &mut usize) -> Self {
         Ptr::new(word(words, i))
     }
     fn put(self, out: &mut Vec<u32>) {
         out.push(self.0)
     }
-    #[inline]
+    #[inline(always)]
     fn put_words(self, out: &mut Words) {
         out.push(self.0)
     }
@@ -255,7 +260,7 @@ pub struct Words {
 
 impl Words {
     /// No words.
-    #[inline]
+    #[inline(always)]
     pub const fn new() -> Self {
         Words {
             len: 0,
@@ -265,7 +270,7 @@ impl Words {
     }
 
     /// Appends one word.
-    #[inline]
+    #[inline(always)]
     pub fn push(&mut self, w: u32) {
         if self.len < WORDS_INLINE {
             self.inline[self.len] = w;
@@ -286,7 +291,7 @@ impl Words {
     }
 
     /// The words.
-    #[inline]
+    #[inline(always)]
     pub fn as_slice(&self) -> &[u32] {
         if self.len <= WORDS_INLINE {
             &self.inline[..self.len]
@@ -314,7 +319,7 @@ impl Default for Words {
 
 impl std::ops::Deref for Words {
     type Target = [u32];
-    #[inline]
+    #[inline(always)]
     fn deref(&self) -> &[u32] {
         self.as_slice()
     }

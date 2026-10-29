@@ -315,6 +315,8 @@ impl world::scripting::QuestVm for crate::Host {
         locals: &mut Locals,
         seconds_passed: f32,
     ) -> bool {
+        // The engine is main's while a frame of it is in flight.
+        self.join();
         self.quests.run_quest(
             &mut self.engine,
             order,

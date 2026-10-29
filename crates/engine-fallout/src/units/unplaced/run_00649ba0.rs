@@ -4,6 +4,7 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::types::NiTPointerList;
+use crate::units::fallout_shared_facegen::bsfacegenkeyframe::speech_check;
 
 // Translated from 00649ca0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Scalar deleting destructor (no Xbox name in the engine map): runs the
@@ -331,6 +332,8 @@ fn delete_list_keyframes(e: &mut Engine, list: u32) {
     if e.call(LIST_COUNT, &args![list]).u32() == 0 {
         return;
     }
+    // `NV_SPEECH_CHECK` (diagnostic only, reads memory): this thread is inside the list.
+    speech_check::enter(e, list, CLEAR_NAME);
     let element = e.call(LIST_HEAD_ELEMENT, &args![list]).u32();
     let mut keyframe = e.mem.u32(element);
     while keyframe != 0 {
@@ -338,7 +341,12 @@ fn delete_list_keyframes(e: &mut Engine, list: u32) {
         e.call(LIST_REMOVE_HEAD, &args![list]);
         keyframe = list_head(e, list);
     }
+    speech_check::leave(e, list, CLEAR_NAME);
 }
+
+/// The names `NV_SPEECH_CHECK` gives the functions that use a speech list.
+const CLEAR_NAME: &str = "ClearSpeechKeyframeLists 0064aec0";
+const UPDATE_LIST_NAME: &str = "UpdateKeyframeList 0064ca60";
 
 // Translated from 00649ba0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `BSFaceGenAnimationData::SetMustUpdate` (Xbox PDB, vtable +0xD0): stores
@@ -363,6 +371,8 @@ pub fn bs_face_gen_animation_data_get_dead(e: &mut Engine, this: FaceData) -> u8
 pub fn bs_face_gen_animation_data_destructor(e: &mut Engine, this: FaceData) {
     e.mem.set_u32(this.addr(), FACE_GEN_ANIMATION_DATA_VTABLE);
     bs_face_gen_animation_data_clear_keyframe_lists(e, this, 1, 1, 1, 1);
+    // `NV_SPEECH_CHECK` (diagnostic only): the lists are no longer watched.
+    speech_check::forget_face(e, this.addr());
     for (offset, destructor) in [
         (0x110, KEYFRAME_DESTRUCT),
         (0xfc, KEYFRAME_DESTRUCT),
@@ -905,6 +915,8 @@ pub fn bs_face_gen_animation_data_add_phoneme_keyframe(
     values: Ptr,
     time: f32,
 ) {
+    // `NV_SPEECH_CHECK` (diagnostic only): the face's speech lists are watched.
+    speech_check::track_face(e, this.addr());
     with_stack_keyframe(e, 0, 0x10, |e, keyframe| {
         if e.get(this, BSFaceGenAnimationData::bDead) != 0
             || values.is_null()
@@ -943,6 +955,8 @@ pub fn bs_face_gen_animation_data_add_modifiers_keyframe(
     values: Ptr,
     time: f32,
 ) {
+    // `NV_SPEECH_CHECK` (diagnostic only): the face's speech lists are watched.
+    speech_check::track_face(e, this.addr());
     with_stack_keyframe(e, 2, 0x11, |e, keyframe| {
         if e.get(this, BSFaceGenAnimationData::bDead) != 0
             || values.is_null()
@@ -978,6 +992,8 @@ pub fn bs_face_gen_animation_data_add_speech_empty_keyframe(
     time: f32,
     _unused_3: u32,
 ) {
+    // `NV_SPEECH_CHECK` (diagnostic only): the face's speech lists are watched.
+    speech_check::track_face(e, this.addr());
     if e.get(this, BSFaceGenAnimationData::bDead) != 0 {
         return;
     }
@@ -1236,6 +1252,8 @@ fn combine_morphs(
 /// returns `bChangedLastUpdate`.
 pub fn bs_face_gen_animation_data_update(e: &mut Engine, this: FaceData, seconds: f32) -> u8 {
     lock(e, this);
+    // `NV_SPEECH_CHECK` (diagnostic only, reads memory): the speech lists as Update finds them.
+    speech_check::at(e, this.addr(), "Update 0064b630");
     e.with_stack(0xc, |e, local| {
         // A local `006815c0` constructs (it returns its `this`).
         e.call(0x0068_15c0, &args![local]);
@@ -1306,6 +1324,8 @@ pub fn bs_face_gen_animation_data_update(e: &mut Engine, this: FaceData, seconds
             (0xbc, 0xc8, 0x4c, 0xdc),
             (0xf0, 0xfc, 0x60, 0x110),
         ] {
+            // `NV_SPEECH_CHECK` (diagnostic only): this thread is inside the list.
+            speech_check::enter(e, field(this, list), UPDATE_LIST_NAME);
             let moved = fn_0064ca60(
                 e,
                 elapsed,
@@ -1313,6 +1333,7 @@ pub fn bs_face_gen_animation_data_update(e: &mut Engine, this: FaceData, seconds
                 Ptr::new(field(this, speech)),
                 0,
             ) != 0;
+            speech_check::leave(e, field(this, list), UPDATE_LIST_NAME);
             let type_changed = combine_morphs(
                 e,
                 this,
@@ -1905,6 +1926,8 @@ pub fn bs_face_gen_animation_data_add_custom_morph_keyframe(
     values: Ptr,
     time: f32,
 ) {
+    // `NV_SPEECH_CHECK` (diagnostic only): the face's speech lists are watched.
+    speech_check::track_face(e, this.addr());
     with_stack_keyframe(e, 3, 1, |e, keyframe| {
         if e.get(this, BSFaceGenAnimationData::bDead) != 0
             || values.is_null()
@@ -2101,6 +2124,9 @@ pub fn fn_0064c5a0(e: &mut Engine, this: FaceData) -> FaceData {
         e.call(FACE_GEN_ANIMATION_DATA_CONSTRUCT, &args![block])
             .u32()
     };
+    // `NV_SPEECH_CHECK` (diagnostic only): both faces' speech lists are watched.
+    speech_check::track_face(e, this.addr());
+    speech_check::track_face(e, copy);
     for offset in [
         0x10u32, 0x24, 0x74, 0x94, 0x38, 0xa8, 0xc8, 0x4c, 0xdc, 0xfc, 0x60, 0x110,
     ] {

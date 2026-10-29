@@ -964,6 +964,32 @@ fn dds_drop_levels(
     size
 }
 
+/// `NV_FACE_CHECK` (diagnostic only, not exe behaviour): notes the file name of the source
+/// texture `texture` under the Direct3D texture its renderer data `data` holds (+0x64), for the
+/// real-device side's draw lines; textures made from pixel data are named by that.
+fn face_check_name(e: &Engine, texture: u32, data: u32) {
+    use crate::units::fallout_shared_facegen::bsfacegenmodel::face_check;
+    if !face_check::enabled() || data == 0 {
+        return;
+    }
+    let d3d = e.mem.u32(data.wrapping_add(0x64));
+    if d3d == 0 {
+        return;
+    }
+    let file = e.mem.u32(texture.wrapping_add(SOURCE_PLATFORM_FILENAME));
+    let name = if file != 0 {
+        String::from_utf8_lossy(&e.mem.cstr(file)).into_owned()
+    } else if e.mem.u32(texture.wrapping_add(SOURCE_PIXEL_DATA)) != 0 {
+        format!("(pixel data of {texture:#x})")
+    } else {
+        format!("(texture {texture:#x})")
+    };
+    engine_core::units::platform::FACE_CHECK_NAMES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(d3d, name);
+}
+
 // Translated from 00e68ef0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `NiDX9SourceTextureData::Create`'s shape (unnamed in the map; cdecl, two words: source
 /// texture, renderer): makes a source texture's renderer data. A cube map (its RTTI chain
@@ -1047,6 +1073,7 @@ pub fn fn_00e68ef0(e: &mut Engine, texture: Ptr, renderer: Ptr) -> Ptr {
                     if loaded {
                         let owner = e.get(this, NiDX9SourceTextureData::m_pkTexture);
                         e.mem.set_u32(owner + TEXTURE_RENDERER_DATA, data);
+                        face_check_name(e, texture, data);
                         return this.cast();
                     }
                 }
@@ -1286,6 +1313,7 @@ pub fn fn_00e68ef0(e: &mut Engine, texture: Ptr, renderer: Ptr) -> Ptr {
         }
         let owner = e.get(this, NiDX9SourceTextureData::m_pkTexture);
         e.mem.set_u32(owner + TEXTURE_RENDERER_DATA, data);
+        face_check_name(e, texture, data);
         if e.mem.u8(CALL_AFTER_CREATE) != 0 {
             e.vcall(texture, SOURCE_AFTER_CREATE_SLOT, &args![]);
         }

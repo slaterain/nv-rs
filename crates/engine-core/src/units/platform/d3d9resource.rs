@@ -907,8 +907,11 @@ const D3DPT_TRIANGLEFAN: u32 = 6;
 /// answers; a draw the documented semantics leave open here (outside a scene, without a
 /// declaration or FVF or stream 0, an unknown primitive type) stops the run as not provided.
 fn draw_checks(e: &mut Engine, this: Ptr, what: &str, kind: u32) {
-    let b = bindings(e, this).clone();
-    let open = if !in_scene(e, this) {
+    // Read in place: a copy of the bindings (their stream and constant maps) per draw cost more
+    // than the rest of the draw (a29).
+    let scene = in_scene(e, this);
+    let b = bindings(e, this);
+    let open = if !scene {
         Some("outside a scene")
     } else if !(D3DPT_POINTLIST..=D3DPT_TRIANGLEFAN).contains(&kind) {
         Some("an unknown primitive type")
@@ -1007,13 +1010,14 @@ pub(super) fn draw_primitive_up(
     _vertices: u32,
     stride: u32,
 ) -> u32 {
-    let b = bindings(e, this).clone();
+    let b = bindings(e, this);
     if b.declaration == 0 && b.fvf == 0 {
         panic!(
             "IDirect3DDevice9::DrawPrimitiveUP without a vertex declaration or FVF is not provided"
         );
     }
     let held = b.streams.get(&0).map_or(0, |s| s.0);
+    let drawn_from_memory = b.drawn_from_memory;
     if in_scene(e, this) {
         if stride == 0 {
             leave_stream_zero(e, this, held, 0, 0);
@@ -1026,7 +1030,7 @@ pub(super) fn draw_primitive_up(
     if stride == 0 {
         panic!("IDirect3DDevice9::DrawPrimitiveUP with stride 0 outside a scene is not provided");
     }
-    if b.drawn_from_memory {
+    if drawn_from_memory {
         leave_stream_zero(e, this, 0, 0, 0);
         D3D_OK
     } else {

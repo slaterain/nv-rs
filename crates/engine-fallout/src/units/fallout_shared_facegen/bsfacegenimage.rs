@@ -183,6 +183,7 @@ pub fn bs_face_gen_image_get_compressed_image(
                 .u32()
             };
             let mut bytes = e.call(PIXEL_BYTES, &args![pixel_data, 0u32, 0u32]).u32();
+            let first_byte = bytes;
             let mut pixel = 0u32;
             while pixel < pixels_count {
                 for channel in 0..channels {
@@ -192,6 +193,14 @@ pub fn bs_face_gen_image_get_compressed_image(
                 bytes = bytes.wrapping_add(channels);
                 fn_0064dbf0(e, Ptr::new(iterator), scratch, 0);
                 pixel = pixel.wrapping_add(1);
+            }
+            if super::bsfacegenmodel::face_check::enabled() {
+                // Diagnostic only (`NV_FACE_CHECK`, not exe behaviour).
+                let width = e.mem.u32(image + 0x24);
+                let height = e.mem.u32(image + 0x28);
+                super::bsfacegenmodel::face_check::image(
+                    e, first_byte, width, height, channels, pixel_data,
+                );
             }
             let source = if e.call(MIPMAP_SETTING, &args![MIPMAP_SETTING_OBJECT]).u8() != 0 {
                 let mipmaps = e
@@ -214,6 +223,13 @@ pub fn bs_face_gen_image_get_compressed_image(
                 )
                 .u32();
             e.call(TEXTURE_SET, &args![made, created]);
+            if super::bsfacegenmodel::face_check::enabled() {
+                // Diagnostic only (`NV_FACE_CHECK`, not exe behaviour).
+                super::bsfacegenmodel::face_check::line(format_args!(
+                    "image texture {created:#x} from pixel data {source:#x} (mipmapped {})",
+                    source != pixel_data
+                ));
+            }
             let query = e.call(SIZE_QUERY, &args![size]).u32();
             if query == 1 || e.call(SIZE_QUERY, &args![size]).u32() == 0 {
                 e.call(TEXTURE_ASSIGN, &args![texture, made]);

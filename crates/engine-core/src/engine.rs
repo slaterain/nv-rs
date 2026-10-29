@@ -90,8 +90,10 @@ pub type AddrMap<K, V> = HashMap<K, V, BuildHasherDefault<AddrHasher>>;
 pub type AddrSet<K> = std::collections::HashSet<K, BuildHasherDefault<AddrHasher>>;
 
 /// How many entries [`Engine::call`]'s direct-mapped cache of plain functions has (a power of
-/// two).
-const CALL_CACHE_LEN: usize = 1 << 14;
+/// two). 65536 (1 MB): a frame of the game calls thousands of functions, which collided in
+/// 16384 slots (a29's `spread_dispatch_speed`: 9.2 to 8.4 ns a call over 8000 functions, 11.8
+/// to 9.6 over 20000).
+const CALL_CACHE_LEN: usize = 1 << 16;
 
 /// The cache slot of `addr` (Fibonacci hashing: the top bits of the product).
 #[inline(always)]
@@ -166,10 +168,21 @@ pub struct Engine {
     /// Lets a check look at memory between any two calls (`NV_HKMEM_CHECK=calls`, engine-havok's
     /// `hkthreadmemory.rs`). `None` in normal runs.
     pub call_hook: Option<fn(&mut Engine, u32, bool)>,
+    /// Diagnostic only (not exe behaviour): runs as a heap block is freed through the game's
+    /// `MemoryManager::Deallocate` (`00aa4060`) or the CRT's `free`, given the block (not 0),
+    /// before it is freed. Lets a check see who frees what (`NV_SPEECH_CHECK`, engine-fallout's
+    /// `bsfacegenkeyframe.rs`). `None` in normal runs.
+    pub free_hook: Option<fn(&mut Engine, u32)>,
     /// The import slots [`Engine::register_imports`] gave a platform function: the calls at
     /// which the thread host's default scheme may end a used-up turn
-    /// (`thread_host::Scheme::platform_switch`, `thread_host::request_wake`).
+    /// (`thread_host::SwitchAt::Platform`, `thread_host::request_wake`).
     pub platform_calls: AddrSet<u32>,
+    /// The nv-trace record of the listed functions' calls (`NV_TRACE_OUT`, `NV_TRACE_LIST`;
+    /// [`crate::call_trace`]); `None` in normal runs.
+    pub call_trace: Option<Box<crate::call_trace::CallTrace>>,
+    /// The live `with_stack` blocks, innermost last, kept while [`Engine::call_trace`] is on (its
+    /// stack records say which words point into them).
+    pub stack_frames: Vec<(u32, u32)>,
 }
 
 /// How many returned calls [`Engine::trace`] keeps.
@@ -205,7 +218,15 @@ impl Engine {
         // too (a test that ran earlier on this host thread may have left
         // another word in it).
         crate::x87::set_control_word(crate::x87::DEFAULT_CONTROL_WORD);
+        // `NV_PROFILE` (a diagnostic): read once, before any call.
+        crate::profile::init_from_env();
         let mut mem = Mem::new();
+        // `NV_BLOCK_CHECK=free|store[,log]` (a diagnostic): guards after every heap block and
+        // stack local, checked when the block is freed or at every store ([`Mem::enable_block_check`]);
+        // a finding stops the run unless `,log`.
+        if let Some((store, stop)) = block_check_from_env() {
+            mem.enable_block_check(store, stop);
+        }
         // The C runtime words its string and memory routines read first, as the image
         // holds them before the CRT start-up: `__sse2_available` (`01270a6c`) and
         // `__locale_changed` (`0126fdf4`) lie in `.data` past its file contents, so they
@@ -240,7 +261,10 @@ impl Engine {
             slice_len: 0,
             slice_hook: None,
             call_hook: None,
+            free_hook: None,
             platform_calls: AddrSet::default(),
+            call_trace: crate::call_trace::for_new_engine(),
+            stack_frames: Vec::new(),
         }
     }
 
@@ -282,6 +306,7 @@ impl Engine {
             {
                 self.register(i.slot, *f);
                 self.platform_calls.insert(i.slot);
+                crate::profile::name_import(i.slot, &i.dll, &i.name);
                 n += 1;
             }
         }
@@ -361,7 +386,9 @@ impl Engine {
             return;
         }
         if self.real_clock.is_some() {
+            let phase = crate::profile::set_phase(crate::profile::Phase::Sleep);
             std::thread::sleep(std::time::Duration::from_micros(until - now));
+            crate::profile::set_phase(phase);
             self.catch_up_clock();
         } else {
             self.advance_clock_us(until - now);
@@ -425,6 +452,46 @@ impl Engine {
     /// registered function runs its row of the atexit-destructor table
     /// ([`crate::static_exit`]) if it has one.
     pub fn call(&mut self, addr: u32, args: &[u32]) -> Ret {
+        // The fast path: a plain function in the cache and no diagnostic on. It does what the
+        // full path does then (the time slice, the call stack, the call), in a small body the
+        // compiler keeps lean; every diagnostic and the table lookup are out of line
+        // ([`Engine::call_full`]). Same order and effects either way.
+        if let (cached, Some(f)) = self.call_cache[cache_slot(addr)] {
+            if cached == addr && !self.diagnosing() {
+                if let Some(hook) = self.slice_hook {
+                    if self.slice_left == 0 {
+                        hook(self, addr);
+                    } else {
+                        self.slice_left -= 1;
+                    }
+                }
+                self.call_stack.push(addr);
+                let ret = f(self, args);
+                self.call_stack.pop();
+                return ret;
+            }
+        }
+        self.call_full(addr, args)
+    }
+
+    /// Whether any per-call diagnostic is on (the call log, budget, profile, hook, nv-trace
+    /// record, return trace, block check, `NV_PROFILE`): [`Engine::call`] then takes its full
+    /// path.
+    #[inline(always)]
+    fn diagnosing(&self) -> bool {
+        self.call_log.is_some()
+            || self.call_budget.is_some()
+            || self.call_counts.is_some()
+            || self.call_hook.is_some()
+            || self.call_trace.is_some()
+            || self.trace.is_some()
+            || self.mem.block_check_on()
+            || crate::profile::on()
+    }
+
+    /// [`Engine::call`] with every diagnostic and the function table.
+    #[inline(never)]
+    fn call_full(&mut self, addr: u32, args: &[u32]) -> Ret {
         if let Some(log) = &mut self.call_log {
             log.push((addr, args.to_vec()));
         }
@@ -433,6 +500,9 @@ impl Engine {
             if cached == addr {
                 return self.run(addr, args, Callable::Abi(f));
             }
+        }
+        if crate::profile::on() {
+            crate::profile::cache_miss();
         }
         let Some(f) = self.funcs.get(&addr).cloned() else {
             if let Some(row) = crate::static_exit::row(addr) {
@@ -480,12 +550,46 @@ impl Engine {
         if let Some(hook) = self.call_hook {
             hook(self, addr, false);
         }
+        let traced = match &self.call_trace {
+            Some(t) if t.wants(addr) && t.admit(addr, args, &self.mem) => {
+                let thread = crate::call_trace::thread_of(self);
+                let seq = t.enter(thread, addr, args);
+                let stack = crate::call_trace::stack_words(&self.stack_frames, args);
+                if !stack.is_empty() {
+                    t.stack(thread, seq, &stack);
+                }
+                t.dump(thread, seq, addr, args, &self.mem);
+                Some(seq)
+            }
+            _ => None,
+        };
+        // The block check (`NV_BLOCK_CHECK`) names the function running at a finding.
+        let checked = self
+            .mem
+            .block_check_on()
+            .then(|| self.mem.set_check_fn(addr));
+        // `NV_PROFILE` (a diagnostic): the sampler's shadow of the call stack.
+        let profiled = crate::profile::on();
+        if profiled {
+            crate::profile::push(addr);
+        }
         self.call_stack.push(addr);
         let ret = match f {
             Callable::Abi(f) => f(self, args),
             Callable::Double(d) => (d.borrow_mut())(self, args),
         };
         self.call_stack.pop();
+        if profiled {
+            crate::profile::pop();
+        }
+        if let Some(caller) = checked {
+            self.mem.set_check_fn(caller);
+        }
+        if let (Some(seq), Some(t)) = (traced, &self.call_trace) {
+            let thread = crate::call_trace::thread_of(self);
+            t.leave(thread, addr, seq, &ret);
+            t.rdump(thread, seq, addr, args, &self.mem);
+        }
         if let Some(hook) = self.call_hook {
             hook(self, addr, true);
         }
@@ -595,16 +699,63 @@ impl Engine {
     /// `NiPointer` temporary, an out parameter). Freed when `f` returns.
     pub fn with_stack<R>(&mut self, size: u32, f: impl FnOnce(&mut Engine, Ptr) -> R) -> R {
         let block = self.mem.alloc(size);
+        let traced = self.call_trace.is_some();
+        if traced {
+            self.stack_frames.push((block, size));
+        }
         let r = f(self, Ptr::new(block));
+        if traced {
+            self.stack_frames.pop();
+        }
         self.mem.free(block);
         r
     }
+}
+
+/// `NV_BLOCK_CHECK`, read once: `free` or `store` (whether every store is checked), with
+/// `,log` to report without stopping. `None` when unset.
+fn block_check_from_env() -> Option<(bool, bool)> {
+    static CHECK: std::sync::OnceLock<Option<(bool, bool)>> = std::sync::OnceLock::new();
+    *CHECK.get_or_init(|| {
+        let v = std::env::var("NV_BLOCK_CHECK").ok()?;
+        let store = v.split(',').any(|p| p.trim() == "store");
+        let stop = !v.split(',').any(|p| p.trim() == "log");
+        Some((store, stop))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::args;
+
+    /// The block check names the translated function that writes past a `with_stack` local
+    /// (the 00553bb0 / 004e75d0 case: a 0x20-byte local, nine words written).
+    #[test]
+    fn the_block_check_names_who_overruns_a_stack_local() {
+        let mut e = Engine::new();
+        e.mem.enable_block_check(true, false);
+        e.register(0x004e_75d0, |e, a| {
+            for i in 0..9 {
+                e.mem.set_u32(a[0] + 4 * i, i);
+            }
+            Ret::default()
+        });
+        e.register(0x0055_3bb0, |e, _| {
+            e.with_stack(0x20, |e, out| e.call(0x004e_75d0, &[out.addr()]));
+            Ret::default()
+        });
+        e.call(0x0055_3bb0, &[]);
+        let r = e.mem.take_block_reports();
+        assert_eq!(r.len(), 2, "{r:?}");
+        assert!(r[0].starts_with("004e75d0 wrote 4 byte(s)"), "{}", r[0]);
+        assert!(r[0].contains("allocated while 00553bb0 ran"), "{}", r[0]);
+        assert!(
+            r[1].contains("found when it was freed, while 00553bb0 ran"),
+            "{}",
+            r[1]
+        );
+    }
 
     #[test]
     fn doubles_keep_state() {
@@ -651,6 +802,42 @@ mod tests {
             ..Ret::default()
         });
         assert_eq!(e.call(0x0040_2000, &[]).u32(), 4);
+    }
+
+    /// The fast path (no diagnostic on) and the full path (a diagnostic on) count the time slice
+    /// down, run the hook at its end and keep the call stack alike.
+    #[test]
+    fn the_fast_and_the_full_path_slice_and_stack_alike() {
+        fn hook(e: &mut Engine, addr: u32) {
+            let n = e.mem.u32(0x2000);
+            e.mem.set_u32(0x2000 + 4 + 4 * n, addr);
+            e.mem.set_u32(0x2000, n + 1);
+            e.slice_left = e.slice_len;
+        }
+        let run = |full: bool| {
+            let mut e = Engine::new();
+            e.mem.map(0x2000, 0x100);
+            e.register(0x0040_5000, |e, a| Ret {
+                eax: e.call_stack.len() as u32 * 100 + a[0],
+                ..Ret::default()
+            });
+            e.register(0x0040_5010, |e, a| e.call(0x0040_5000, &[a[0] + 1]));
+            if full {
+                e.call_budget = Some(u64::MAX);
+            }
+            e.slice_len = 3;
+            e.slice_left = 3;
+            e.slice_hook = Some(hook);
+            let rets: Vec<u32> = (0..5).map(|i| e.call(0x0040_5010, &[i]).eax).collect();
+            let hooks: Vec<u32> = (0..e.mem.u32(0x2000))
+                .map(|i| e.mem.u32(0x2004 + 4 * i))
+                .collect();
+            assert!(e.call_stack.is_empty());
+            (rets, hooks, e.slice_left)
+        };
+        let fast = run(false);
+        assert_eq!(fast.0, [201, 202, 203, 204, 205]);
+        assert_eq!(fast, run(true));
     }
 
     /// The trace keeps the last `trace_keep` returned calls with their words, oldest first.
@@ -714,6 +901,61 @@ mod tests {
                 secs * 1e9 / n as f64
             );
         }
+    }
+
+    /// Times calls spread over a working set of registered functions, as a frame of the game
+    /// makes them (the cache and the table, not one hot getter), with the thread host's time slice
+    /// on: `cargo test --release -p engine-core --lib -- --ignored --nocapture spread_dispatch`;
+    /// `NV_BENCH_FUNCS` registered (default 48000), `NV_BENCH_HOT` called (default 8000).
+    #[test]
+    #[ignore]
+    fn spread_dispatch_speed() {
+        let env = |k: &str, d: usize| {
+            std::env::var(k)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d)
+        };
+        let (funcs, hot) = (env("NV_BENCH_FUNCS", 48_000), env("NV_BENCH_HOT", 8_000));
+        let mut e = Engine::new();
+        let (_, f) = crate::entry!(0x0055_9450, field_getter(Ptr) -> u32);
+        let mut x = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let mut addrs = Vec::with_capacity(funcs);
+        while addrs.len() < funcs {
+            let a = (0x0040_1000 + (next() as u32) % 0x00c0_0000) & !0xf;
+            if !e.is_registered(a) {
+                e.register(a, f);
+                addrs.push(a);
+            }
+        }
+        let order: Vec<u32> = (0..2_000_000)
+            .map(|_| addrs[(next() as usize) % hot])
+            .collect();
+        fn slice(e: &mut Engine, _: u32) {
+            e.slice_left = e.slice_len;
+        }
+        e.slice_len = 200_000;
+        e.slice_left = 200_000;
+        e.slice_hook = Some(slice);
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 1);
+        let mut best = f64::MAX;
+        for _ in 0..5 {
+            let start = std::time::Instant::now();
+            let mut sum = 0u32;
+            for &a in &order {
+                sum = sum.wrapping_add(e.call(a, &[std::hint::black_box(this)]).eax);
+            }
+            assert_eq!(sum, order.len() as u32);
+            best = best.min(start.elapsed().as_secs_f64() * 1e9 / order.len() as f64);
+        }
+        println!("{funcs} functions, {hot} called: {best:.2} ns a call");
     }
 
     /// A virtual call passes `this` and then the arguments, for every list length (the short

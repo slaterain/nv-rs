@@ -2450,6 +2450,10 @@ pub fn fn_00449090(e: &mut Engine, this: Ptr) -> Ptr {
         e.mem.set_u32(this.addr() + offset, 0);
     }
     e.call(SYNC_OBJECT_INIT, &args![SYNC_OBJECT]);
+    if engine_core::queue_check::enabled() {
+        // Diagnostic only (`NV_QUEUE_CHECK`, not exe behaviour).
+        engine_core::queue_check::created(e, this.addr());
+    }
     this
 }
 
@@ -2457,6 +2461,10 @@ pub fn fn_00449090(e: &mut Engine, this: Ptr) -> Ptr {
 /// Destructor of that object: sets the virtual table `01017138` and calls
 /// `004019a0` on the object at `011c3b38`.
 pub fn fn_004490e0(e: &mut Engine, this: Ptr) {
+    if engine_core::queue_check::enabled() {
+        // Diagnostic only (`NV_QUEUE_CHECK`, not exe behaviour).
+        engine_core::queue_check::destroyed(e, this.addr());
+    }
     e.mem.set_u32(this.addr(), SYNC_VTABLE);
     e.call(SYNC_OBJECT_RELEASE, &args![SYNC_OBJECT]);
 }

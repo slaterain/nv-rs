@@ -820,6 +820,469 @@ pub fn fn_00ba9520(e: &mut Engine, this: Ptr<RenderPassArray>) {
     e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, base]);
 }
 
+/// Diagnostic only, not exe behaviour (a22, the p185/p191 race-menu stops:
+/// `RenderPassArray::Add` reached a null pass in a slot below `m_usESize`, a hole the exe's
+/// own pass-array code never leaves). Without `NV_PASS_CHECK` nothing is checked or watched.
+///
+/// With it, every render-pass array `Add` uses and every one `CheckCreateRenderPassArray`
+/// keeps is checked ([`fault`]: a live 0x18 block with the vtable `010b8480`, a live element
+/// buffer of at least `m_usMaxSize` words, `m_usESize <= m_usSize <= m_usMaxSize`, exactly
+/// `m_usESize` slots holding a pass, none of them below `m_usESize` empty, each pass a live
+/// 0x10 block) and from then on watched through the memory write watch: the array's 0x14
+/// bytes (all but `iSize`), its element buffer, and the freeing of each listed pass. Every
+/// change is kept with the calls it happened in (the last 32 per array), and at the next
+/// call or return after a change the array is checked again, so a run stops right after
+/// the call that broke it, naming it. Frees inside `FreeRenderPasses` (`00baa000`) and the
+/// array destructor (`00ba9520`) are the arrays' own teardown and are not stops.
+pub(crate) mod pass_check {
+    use super::RENDER_PASS_ARRAY_VTABLE;
+    use crate::mem::{WatchHit, WatchKind};
+    use crate::prelude::*;
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+
+    /// `Engine::call_hook`'s type.
+    type CallHook = fn(&mut Engine, u32, bool);
+
+    /// The arrays' own teardown: `RenderPassArray`'s destructor and `FreeRenderPasses`.
+    const ARRAY_DESTRUCTOR_00BA9520: u32 = 0x00ba_9520;
+    const FREE_RENDER_PASSES_00BAA000: u32 = 0x00ba_a000;
+    /// Events kept per array, and calls named per event.
+    const KEEP: usize = 32;
+    /// The array functions whose inside may pass through half-done states (`Add`, `SetSize`,
+    /// `SetAt`, the constructors, the `CheckCreate` family): an array they change is
+    /// checked once none of them is running.
+    const ARRAY_FUNCTIONS: [u32; 11] = [
+        0x00ba_9ee0,
+        0x00ba_8d30,
+        0x00ba_3aa0,
+        0x00ba_94b0,
+        0x00ba_8b80,
+        0x00ba_95e0,
+        0x00ba_9660,
+        0x00ba_9740,
+        0x00ba_96d0,
+        0x00ba_97b0,
+        0x00ba_9820,
+    ];
+    const PATH_DEPTH: usize = 8;
+
+    fn on() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("NV_PASS_CHECK").is_some())
+    }
+
+    /// What a watched range is to its array.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum Role {
+        Header,
+        Buffer,
+        /// A listed pass (frees only), with the slot it was in.
+        Pass(u32),
+    }
+
+    /// What is watched for one array.
+    #[derive(Default)]
+    struct Tracked {
+        base: u32,
+        buffer_len: u32,
+        passes: Vec<u32>,
+    }
+
+    #[derive(Default)]
+    struct State {
+        arrays: HashMap<u32, Tracked>,
+        /// Watched range start -> (array, role).
+        owner: HashMap<u32, (u32, Role)>,
+        events: HashMap<u32, VecDeque<String>>,
+        seq: u64,
+        /// Arrays changed since they were last checked.
+        pending: Vec<u32>,
+    }
+
+    fn state() -> MutexGuard<'static, State> {
+        static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+        STATE
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    static PREVIOUS: Mutex<Option<CallHook>> = Mutex::new(None);
+    static HAS_PREVIOUS: AtomicBool = AtomicBool::new(false);
+    static IN_HOOK: AtomicBool = AtomicBool::new(false);
+    /// Whether arrays wait for their check (`State::pending`).
+    static PENDING: AtomicBool = AtomicBool::new(false);
+
+    /// What is wrong with the array at `array`, or `None` when it is sound.
+    pub(crate) fn fault(e: &Engine, array: u32) -> Option<String> {
+        match e.mem.block_size(array) {
+            Some(0x18) => {}
+            Some(size) => {
+                return Some(format!(
+                    "the array is a live block of {size:#x} bytes, not 0x18"
+                ))
+            }
+            None => {
+                return Some("the array is not a live heap block (freed or never allocated)".into())
+            }
+        }
+        let vtable = e.mem.u32(array);
+        if vtable != RENDER_PASS_ARRAY_VTABLE {
+            return Some(format!("the array's vtable is {vtable:08x}, not 010b8480"));
+        }
+        let base = e.mem.u32(array + 4);
+        let max = u32::from(e.mem.u16(array + 8));
+        let size = u32::from(e.mem.u16(array + 0xa));
+        let used = u32::from(e.mem.u16(array + 0xc));
+        if base != 0 || max != 0 {
+            match e.mem.block_size(base) {
+                Some(bytes) if bytes >= max * 4 => {}
+                Some(bytes) => {
+                    return Some(format!(
+                        "the element buffer {base:08x} is {bytes:#x} bytes for {max} slots"
+                    ));
+                }
+                None => {
+                    return Some(format!(
+                        "the element buffer {base:08x} is not a live heap block"
+                    ));
+                }
+            }
+        }
+        if used > size || size > max {
+            return Some(format!(
+                "the counts are out of order (ESize {used}, Size {size}, MaxSize {max})"
+            ));
+        }
+        let slot = |i: u32| e.mem.u32(base.wrapping_add(i * 4));
+        let held = (0..size).filter(|i| slot(*i) != 0).count() as u32;
+        if held != used {
+            return Some(format!(
+                "{held} of the {size} slots hold a pass but m_usESize is {used}"
+            ));
+        }
+        // `Add` reuses slots below `m_usESize` in order, so they must all hold a pass.
+        if let Some(hole) = (0..used).find(|i| slot(*i) == 0) {
+            return Some(format!("slot {hole} below m_usESize {used} is null"));
+        }
+        if let Some(i) =
+            (0..size).find(|i| slot(*i) != 0 && e.mem.block_size(slot(*i)) != Some(0x10))
+        {
+            return Some(format!(
+                "slot {i}'s pass {:08x} is not a live 0x10 block",
+                slot(i)
+            ));
+        }
+        None
+    }
+
+    /// The array's five words, its block sizes and its first slots, then (with the check
+    /// on) the changes kept for it, for a stop message.
+    pub(crate) fn describe(e: &Engine, array: u32) -> String {
+        let mut text = describe_words(e, array);
+        if on() {
+            text += &events_text(&state(), array);
+        }
+        text
+    }
+
+    fn events_text(st: &State, array: u32) -> String {
+        match st.events.get(&array) {
+            Some(list) if !list.is_empty() => {
+                let lines: Vec<&str> = list.iter().map(String::as_str).collect();
+                format!("; changes seen (oldest first): {}", lines.join(" | "))
+            }
+            _ => "; no changes seen since it was first checked".into(),
+        }
+    }
+
+    /// With `NV_PASS_CHECK`: stops at an unsound array (`owner`: its property, or 0), else
+    /// watches it from now on.
+    pub(crate) fn check(e: &mut Engine, array: u32, at: &str, owner: u32) {
+        if on() && array != 0 {
+            check_now(e, array, at, owner);
+        }
+    }
+
+    /// [`check`] whether or not the variable is set (tests).
+    pub(crate) fn check_now(e: &mut Engine, array: u32, at: &str, owner: u32) {
+        let mut st = state();
+        install(e);
+        if let Some(why) = fault(e, array) {
+            let events = events_text(&st, array);
+            drop(st);
+            let mut text = describe_words(e, array);
+            text += &events;
+            panic!(
+                "pass check: render-pass array {at} (property {owner:08x}): {why}; {text} (NV_PASS_CHECK)"
+            );
+        }
+        track(e, &mut st, array);
+    }
+
+    /// [`describe`] without the changes (for callers that hold the state).
+    fn describe_words(e: &Engine, array: u32) -> String {
+        let live = |a: u32| match e.mem.block_size(a) {
+            Some(size) => format!("live {size:#x}"),
+            None => "not live".to_string(),
+        };
+        let mut text = format!("array {array:08x} ({})", live(array));
+        if !e.mem.is_mapped(array) || !e.mem.is_mapped(array.wrapping_add(0x13)) {
+            return text + " unmapped";
+        }
+        let words: Vec<String> = (0..5)
+            .map(|i| format!("{:08x}", e.mem.u32(array + i * 4)))
+            .collect();
+        text += &format!(" words [{}]", words.join(" "));
+        let base = e.mem.u32(array + 4);
+        let size = u32::from(e.mem.u16(array + 0xa)).min(8);
+        text += &format!(" buffer {base:08x} ({})", live(base));
+        if base != 0 && e.mem.is_mapped(base) {
+            let slots: Vec<String> = (0..size)
+                .filter(|i| e.mem.is_mapped(base.wrapping_add(i * 4)))
+                .map(|i| format!("{:08x}", e.mem.u32(base + i * 4)))
+                .collect();
+            text += &format!(" slots [{}]", slots.join(" "));
+        }
+        text
+    }
+
+    /// Takes the call hook (calling on to one that was there first) the first time.
+    fn install(e: &mut Engine) {
+        if e.call_hook
+            .is_some_and(|h| h as usize == on_call as CallHook as usize)
+        {
+            return;
+        }
+        let previous = e
+            .call_hook
+            .filter(|h| *h as usize != on_call as CallHook as usize);
+        *PREVIOUS.lock().unwrap_or_else(PoisonError::into_inner) = previous;
+        HAS_PREVIOUS.store(previous.is_some(), Ordering::Relaxed);
+        e.call_hook = Some(on_call);
+    }
+
+    /// Watches the array's header, its current element buffer and the freeing of its passes
+    /// (dropping what it no longer uses).
+    fn track(e: &mut Engine, st: &mut State, array: u32) {
+        let base = e.mem.u32(array + 4);
+        let max = u32::from(e.mem.u16(array + 8));
+        let size = u32::from(e.mem.u16(array + 0xa));
+        let mut t = st.arrays.remove(&array).unwrap_or_default();
+        if st.owner.get(&array) != Some(&(array, Role::Header)) {
+            e.mem.watch(array, 0x14, false);
+            st.owner.insert(array, (array, Role::Header));
+        }
+        if t.base != base || t.buffer_len != max * 4 {
+            if t.base != 0 && st.owner.get(&t.base) == Some(&(array, Role::Buffer)) {
+                e.mem.unwatch(t.base);
+                st.owner.remove(&t.base);
+            }
+            if base != 0 && max != 0 {
+                e.mem.watch(base, max * 4, false);
+                st.owner.insert(base, (array, Role::Buffer));
+            }
+            t.base = base;
+            t.buffer_len = max * 4;
+        }
+        let passes: Vec<u32> = if base != 0 && e.mem.block_size(base).is_some() {
+            (0..size).map(|i| e.mem.u32(base + i * 4)).collect()
+        } else {
+            Vec::new()
+        };
+        if passes != t.passes {
+            for &p in &t.passes {
+                if p != 0
+                    && !passes.contains(&p)
+                    && matches!(st.owner.get(&p), Some((a, Role::Pass(_))) if *a == array)
+                {
+                    e.mem.unwatch(p);
+                    st.owner.remove(&p);
+                }
+            }
+            for (i, &p) in passes.iter().enumerate() {
+                if p != 0 {
+                    e.mem.watch(p, 0x10, true);
+                    st.owner.insert(p, (array, Role::Pass(i as u32)));
+                }
+            }
+            t.passes = passes;
+        }
+        st.arrays.insert(array, t);
+    }
+
+    /// Stops watching an array (its header was freed).
+    fn untrack(e: &mut Engine, st: &mut State, array: u32) {
+        let Some(t) = st.arrays.remove(&array) else {
+            return;
+        };
+        let mut starts = vec![array, t.base];
+        starts.extend(t.passes.iter().copied());
+        for start in starts {
+            if start != 0 && st.owner.get(&start).is_some_and(|(a, _)| *a == array) {
+                e.mem.unwatch(start);
+                st.owner.remove(&start);
+            }
+        }
+    }
+
+    /// The header field at byte `offset`.
+    fn field(offset: u32) -> &'static str {
+        match offset {
+            0..=3 => "vtable",
+            4..=7 => "m_pBase",
+            8 | 9 => "m_usMaxSize",
+            0xa | 0xb => "m_usSize",
+            0xc | 0xd => "m_usESize",
+            0xe | 0xf => "m_usGrowBy",
+            _ => "iSize",
+        }
+    }
+
+    /// Files the events and answers a stop message when one broke an array.
+    fn process(
+        e: &mut Engine,
+        st: &mut State,
+        hits: &[WatchHit],
+        path: &str,
+        teardown: bool,
+        busy: bool,
+    ) -> Option<String> {
+        let mut touched = std::mem::take(&mut st.pending);
+        let mut stop: Option<(u32, String)> = None;
+        for hit in hits {
+            let Some(&(array, role)) = st.owner.get(&hit.start) else {
+                continue;
+            };
+            let offset = hit.addr - hit.start;
+            if role == Role::Header
+                && matches!(hit.kind, WatchKind::Write | WatchKind::Zero)
+                && offset >= 0x10
+            {
+                continue; // `iSize`, rewritten every frame.
+            }
+            let what = match role {
+                Role::Header => format!("{} (+{offset:x})", field(offset)),
+                Role::Buffer => format!("buffer {:08x} slot {}", hit.start, offset / 4),
+                Role::Pass(slot) => format!("pass {:08x} (slot {slot})", hit.start),
+            };
+            let width = (hit.len.min(8) * 2) as usize;
+            st.seq += 1;
+            let text = format!(
+                "#{} {:?} {what}: {:0width$x} -> {:0width$x} in {path}",
+                st.seq, hit.kind, hit.old, hit.new
+            );
+            let list = st.events.entry(array).or_default();
+            if list.len() >= KEEP {
+                list.pop_front();
+            }
+            list.push_back(text);
+            match (role, hit.kind) {
+                (Role::Header, WatchKind::Free) => {
+                    untrack(e, st, array);
+                    continue;
+                }
+                (Role::Pass(_), WatchKind::Free) if !teardown => {
+                    let base = e.mem.u32(array + 4);
+                    let size = u32::from(e.mem.u16(array + 0xa));
+                    let listed = st.arrays.contains_key(&array)
+                        && e.mem.block_size(base).is_some()
+                        && (0..size).any(|i| e.mem.u32(base + i * 4) == hit.start);
+                    if listed && stop.is_none() {
+                        stop = Some((
+                            array,
+                            format!(
+                                "pass {:08x} was freed while array {array:08x} still lists it",
+                                hit.start
+                            ),
+                        ));
+                    }
+                }
+                (Role::Buffer, WatchKind::Free) if !teardown => {
+                    if st.arrays.contains_key(&array)
+                        && e.mem.u32(array + 4) == hit.start
+                        && stop.is_none()
+                    {
+                        stop = Some((
+                            array,
+                            format!("element buffer {:08x} was freed while array {array:08x} still uses it", hit.start),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+            if !touched.contains(&array) {
+                touched.push(array);
+            }
+        }
+        if stop.is_none() && (teardown || busy) {
+            st.pending = touched;
+            return None;
+        }
+        if stop.is_none() {
+            for &array in &touched {
+                if !st.arrays.contains_key(&array) {
+                    continue;
+                }
+                if let Some(why) = fault(e, array) {
+                    stop = Some((array, format!("array {array:08x} broke: {why}")));
+                    break;
+                }
+                track(e, st, array);
+            }
+        }
+        stop.map(|(array, why)| {
+            format!(
+                "pass check: {why}, right after the change in {path}; {}{} (NV_PASS_CHECK)",
+                describe_words(e, array),
+                events_text(st, array)
+            )
+        })
+    }
+
+    /// `Engine::call_hook`: files the watched ranges' changes with the calls they happened in
+    /// (the function returning, or the one calling, and its callers) and stops at a broken
+    /// array; then calls on to the hook that was there first.
+    fn on_call(e: &mut Engine, addr: u32, exit: bool) {
+        if (e.mem.has_watch_hits() || PENDING.load(Ordering::Relaxed))
+            && !IN_HOOK.swap(true, Ordering::Acquire)
+        {
+            let hits = e.mem.take_watch_hits();
+            let mut frames: Vec<u32> = Vec::with_capacity(PATH_DEPTH);
+            if exit {
+                frames.push(addr);
+            }
+            frames.extend(e.call_stack.iter().rev().take(PATH_DEPTH));
+            let teardown = frames
+                .iter()
+                .chain(e.call_stack.iter())
+                .any(|a| *a == ARRAY_DESTRUCTOR_00BA9520 || *a == FREE_RENDER_PASSES_00BAA000);
+            let busy = e.call_stack.iter().any(|a| ARRAY_FUNCTIONS.contains(a));
+            frames.truncate(PATH_DEPTH);
+            let path: Vec<String> = frames.iter().map(|a| format!("{a:08x}")).collect();
+            let path = path.join(" < ");
+            let stop = {
+                let mut st = state();
+                let stop = process(e, &mut st, &hits, &path, teardown, busy);
+                PENDING.store(!st.pending.is_empty(), Ordering::Relaxed);
+                stop
+            };
+            IN_HOOK.store(false, Ordering::Release);
+            if let Some(text) = stop {
+                panic!("{text}");
+            }
+        }
+        if HAS_PREVIOUS.load(Ordering::Relaxed) {
+            let previous = *PREVIOUS.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(hook) = previous {
+                hook(e, addr, exit);
+            }
+        }
+    }
+}
+
 /// Allocates a 0x14-byte render-pass array and constructs it with `size` (null when the
 /// allocation fails).
 fn new_render_pass_array(e: &mut Engine, size: u32) -> u32 {
@@ -841,7 +1304,14 @@ pub fn bs_shader_property_check_create_render_pass_array(
     this: Ptr<BSShaderProperty>,
     size: i32,
 ) {
-    if e.get(this, BSShaderProperty::pRenderPassList) != 0 {
+    let existing = e.get(this, BSShaderProperty::pRenderPassList);
+    if existing != 0 {
+        pass_check::check(
+            e,
+            existing,
+            "kept by CheckCreateRenderPassArray",
+            this.addr(),
+        );
         return;
     }
     let size = if size == -1 { 5 } else { size };
@@ -899,10 +1369,21 @@ pub fn bs_shader_property_render_pass_array_add(
 ) {
     let array = this.cast::<NiTArray>();
     let lights = [light0, light1, light2, light3];
+    pass_check::check(e, this.addr(), "at RenderPassArray::Add", 0);
     let in_use = e.get(this, RenderPassArray::iSize);
     if in_use < u32::from(e.get(array, NiTArray::m_usESize)) {
         let base = e.get(array, NiTArray::m_pBase);
         let pass = Ptr::<RenderPass>::new(e.mem.u32(base.wrapping_add(in_use.wrapping_mul(4))));
+        if pass.addr() == 0 {
+            // Not exe behaviour: the exe faults on the next read (the null pass's +0xa); the
+            // stop says why (the p185 race-menu stop).
+            panic!(
+                "pass check: RenderPassArray::Add reuses slot {in_use} (below m_usESize) of \
+                 {:08x} but the slot is null; {}",
+                this.addr(),
+                pass_check::describe(e, this.addr())
+            );
+        }
         bs_shader_property_render_pass_set_lights(e, pass, light_count as u8, &lights);
         e.set(pass, RenderPass::usPassEnum, pass_enum as u16);
         e.set(pass, RenderPass::bFirstPass, first_pass as u8);
@@ -2295,6 +2776,79 @@ mod shader_property_tests {
         let lights = e.mem.u32(added + 0xc);
         assert_eq!((e.mem.u32(lights), e.mem.u32(lights + 4)), (0xb, 0xc));
         assert_eq!(e.mem.u32(this + 0x10), 2);
+    }
+
+    /// The p185 stop: a slot below `m_usESize` that is null (a hole the exe's own code never
+    /// leaves) stops `Add` with the array described, where the exe would fault on the null
+    /// pass's `+0xa`.
+    #[test]
+    #[should_panic(expected = "pass check: RenderPassArray::Add reuses slot 0")]
+    fn add_stops_on_a_null_slot_below_the_used_count() {
+        let mut e = rig();
+        let pass = e.mem.alloc(0x10);
+        let this = array_with(&mut e, 2, &[0, pass]);
+        e.mem.set_u32(this, RENDER_PASS_ARRAY_VTABLE);
+        assert_eq!(e.mem.u16(this + 0xc), 1);
+        e.call(
+            0x00ba_9ee0,
+            &args![this, 0x1234u32, 7u32, 1u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+        );
+    }
+
+    /// The pass check's reading of an array: sound, a hole below `m_usESize`, a wrong vtable,
+    /// and a freed (dangling) array.
+    #[test]
+    fn pass_check_tells_sound_holed_and_dangling_arrays_apart() {
+        let mut e = rig();
+        let pass = e.mem.alloc(0x10);
+        let sound = array_with(&mut e, 5, &[pass, pass]);
+        e.mem.set_u32(sound, RENDER_PASS_ARRAY_VTABLE);
+        assert_eq!(pass_check::fault(&e, sound), None);
+
+        let holed = array_with(&mut e, 5, &[0, pass]);
+        e.mem.set_u32(holed, RENDER_PASS_ARRAY_VTABLE);
+        let why = pass_check::fault(&e, holed).unwrap();
+        assert!(why.contains("slot 0 below m_usESize 1 is null"), "{why}");
+
+        let other = array_with(&mut e, 5, &[pass]);
+        e.mem.set_u32(other, 0x0102_0304);
+        let why = pass_check::fault(&e, other).unwrap();
+        assert!(why.contains("vtable is 01020304"), "{why}");
+
+        let freed = array_with(&mut e, 5, &[pass]);
+        e.mem.set_u32(freed, RENDER_PASS_ARRAY_VTABLE);
+        e.mem.free(freed);
+        let why = pass_check::fault(&e, freed).unwrap();
+        assert!(why.contains("not a live heap block"), "{why}");
+        let text = pass_check::describe(&e, sound);
+        assert!(
+            text.contains("010b8480") && text.contains("live 0x18"),
+            "{text}"
+        );
+    }
+
+    /// Once checked, an array is watched: a call that empties slot 0 of its element buffer
+    /// (as the p191 stop found: m_usESize 6, five passes, slot 0 null) stops the run as that
+    /// call returns, naming it, with the change in the kept events.
+    #[test]
+    #[should_panic(
+        expected = "broke: 1 of the 2 slots hold a pass but m_usESize is 2, right after the change in 0f000100"
+    )]
+    fn pass_check_names_the_call_that_empties_a_slot() {
+        let mut e = rig();
+        let first = e.mem.alloc(0x10);
+        let second = e.mem.alloc(0x10);
+        let this = array_with(&mut e, 5, &[first, second]);
+        e.mem.set_u32(this, RENDER_PASS_ARRAY_VTABLE);
+        pass_check::check_now(&mut e, this, "in the test", 0);
+        e.register(0x0f00_0100, |e, a| {
+            let base = e.mem.u32(a[0] + 4);
+            e.mem.set_u32(base, 0);
+            Ret::default()
+        });
+        // `iSize` changes are not events; a sound array calls on quietly.
+        e.mem.set_u32(this + 0x10, 3);
+        e.call(0x0f00_0100, &[this]);
     }
 
     #[test]

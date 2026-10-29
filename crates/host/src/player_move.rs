@@ -341,6 +341,9 @@ pub struct PlayerMovement {
     pub world_fallback_frames: u64,
     /// The world step stopped once; it isn't tried again in this cell.
     world_failed: Option<String>,
+    /// The miss recorder of a frame of main's handed over and not finished yet
+    /// ([`PlayerMovement::begin_main_frame`]).
+    frame_guard: Option<Guard>,
 }
 
 impl Default for PlayerMovement {
@@ -371,6 +374,7 @@ impl Default for PlayerMovement {
             world_frames: 0,
             world_fallback_frames: 0,
             world_failed: None,
+            frame_guard: None,
         }
     }
 }
@@ -378,6 +382,45 @@ impl Default for PlayerMovement {
 /// What a guarded run reached: untranslated addresses with their nearest
 /// caller, in order.
 type Reached = Rc<RefCell<Vec<(u32, u32)>>>;
+
+/// What [`PlayerMovement::guard_open`] set up for one guarded run, for
+/// [`PlayerMovement::guard_close`].
+pub(crate) struct Guard {
+    stage: &'static str,
+    reached: Reached,
+    trace_file: Option<std::ffi::OsString>,
+    profile_file: Option<std::ffi::OsString>,
+}
+
+impl std::fmt::Debug for Guard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Guard").field("stage", &self.stage).finish()
+    }
+}
+
+/// Whether a panic on a game thread's OS thread (`game main thread`, `game thread N`) goes
+/// unprinted: while a frame of main's runs beside the host ([`PlayerMovement::begin_main_frame`]),
+/// as a guarded run on the host keeps every panic quiet (its stop is reported instead).
+static QUIET_GAME_PANICS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Installs (once) the panic hook that keeps game threads' panics quiet while
+/// [`QUIET_GAME_PANICS`] is set, and passes every other panic to the hook before it.
+fn quiet_game_panics(on: bool) {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        let before = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let game = std::thread::current()
+                .name()
+                .is_some_and(|n| n.starts_with("game "));
+            if game && QUIET_GAME_PANICS.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
+            before(info)
+        }));
+    });
+    QUIET_GAME_PANICS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
 
 impl PlayerMovement {
     /// Runs `f` on the engine with the miss recorder in place; a stop comes
@@ -388,6 +431,17 @@ impl PlayerMovement {
         stage: &'static str,
         f: impl FnOnce(&mut Engine) -> Result<R, String>,
     ) -> Result<R, String> {
+        let guard = self.guard_open(e, stage);
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(e)));
+        std::panic::set_hook(hook);
+        self.guard_close(e, guard, out)
+    }
+
+    /// The first half of [`PlayerMovement::guarded`]: the miss recorder and the diagnostics in
+    /// place for a run of `stage`.
+    pub(crate) fn guard_open(&mut self, e: &mut Engine, stage: &'static str) -> Guard {
         let reached: Reached = Rc::new(RefCell::new(Vec::new()));
         let record = reached.clone();
         let probe = self.probe;
@@ -453,10 +507,28 @@ impl PlayerMovement {
                 e.call_budget = Some(n);
             }
         }
-        let hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {}));
-        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(e)));
-        std::panic::set_hook(hook);
+        Guard {
+            stage,
+            reached,
+            trace_file,
+            profile_file,
+        }
+    }
+
+    /// The second half of [`PlayerMovement::guarded`]: the run's outcome `out` (a stop as its
+    /// panic) recorded with what it reached, the traces written.
+    pub(crate) fn guard_close<R>(
+        &mut self,
+        e: &mut Engine,
+        guard: Guard,
+        out: std::thread::Result<Result<R, String>>,
+    ) -> Result<R, String> {
+        let Guard {
+            stage,
+            reached,
+            trace_file,
+            profile_file,
+        } = guard;
         e.on_open = None;
         // After a panic the stack still holds the functions it unwound
         // through (`Engine::call` pops only on return): the innermost few go
@@ -1057,25 +1129,69 @@ impl PlayerMovement {
         self.main_thread.is_some()
     }
 
+    /// Whether the movement's own stages can touch the engine ([`PlayerMovement::step`],
+    /// [`PlayerMovement::run_ai_threads`]): only once the `tes` stage made Havok's world. With
+    /// the game's `main` running they never are made.
+    pub fn stages_touch_engine(&self) -> bool {
+        self.havok.done().is_some()
+    }
+
     /// One frame of the game's main loop (a pass of `main`'s message loop, `Main::OnIdle`
     /// among it), until its message queue is empty again; true when it ended a frame. Once it
     /// stopped it isn't resumed.
     pub fn main_frame(&mut self, e: &mut Engine) -> bool {
+        self.begin_main_frame(e) && self.finish_main_frame(e)
+    }
+
+    /// The first half of [`PlayerMovement::main_frame`]: hands the engine to the game's main
+    /// thread for its next frame and returns at once (`engine::thread_host::begin_main_frame`),
+    /// the miss recorder in place as for a guarded run. Until
+    /// [`PlayerMovement::finish_main_frame`] the caller must not touch the engine. False when
+    /// main doesn't run or stopped; true too when a frame is already in flight.
+    pub fn begin_main_frame(&mut self, e: &mut Engine) -> bool {
+        if self.frame_guard.is_some() {
+            return true;
+        }
         if matches!(self.main_stage, Stage::Failed(_)) {
             return false;
         }
         let Some(mut main) = self.main_thread.take() else {
             return false;
         };
-        let turn = self.guarded(e, "main", |e| {
-            match engine::thread_host::run_main_frame(e, &mut main) {
+        let guard = self.guard_open(e, "main");
+        quiet_game_panics(true);
+        // Nothing handed over (main finished or stopped): the finish answers how it ended.
+        engine::thread_host::begin_main_frame(e, &mut main);
+        self.main_thread = Some(main);
+        self.frame_guard = Some(guard);
+        true
+    }
+
+    /// Whether a frame of main's is in flight ([`PlayerMovement::begin_main_frame`]).
+    pub fn frame_in_flight(&self) -> bool {
+        self.frame_guard.is_some()
+    }
+
+    /// The second half of [`PlayerMovement::main_frame`]: waits for the frame in flight, takes
+    /// the engine back and records how it went; true when it ended a frame. False without one.
+    pub fn finish_main_frame(&mut self, e: &mut Engine) -> bool {
+        let Some(guard) = self.frame_guard.take() else {
+            return false;
+        };
+        let Some(mut main) = self.main_thread.take() else {
+            return false;
+        };
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            match engine::thread_host::finish_main_frame(e, &mut main) {
                 engine::thread_host::MainTurn::Frame => Ok(()),
                 engine::thread_host::MainTurn::Finished(code) => {
                     Err(format!("main returned {code}"))
                 }
                 engine::thread_host::MainTurn::Stopped(why) => Err(why),
             }
-        });
+        }));
+        quiet_game_panics(false);
+        let turn = self.guard_close(e, guard, out);
         self.main_thread = Some(main);
         match turn {
             Ok(()) => {
@@ -1115,6 +1231,11 @@ impl PlayerMovement {
                     // thread sleeps, waits or has turns, `thread_host::describe`).
                     if std::env::var_os("NV_MOVE_THREADS").is_some() {
                         println!("threads: {}", engine::thread_host::describe(e));
+                    }
+                    // `NV_SAVE_OUT=DIR` (a test aid): the saves the game wrote, copied out
+                    // ([`crate::save_out`]).
+                    for name in crate::save_out::copy_saves(e) {
+                        println!("NV_SAVE_OUT: copied {name}");
                     }
                 }
                 true
@@ -1244,7 +1365,31 @@ impl crate::Host {
     /// One frame of the game's own main loop when its `main` runs as the main thread
     /// ([`PlayerMovement::main_frame`]); false when it doesn't run or stopped.
     pub fn main_frame(&mut self) -> bool {
+        self.join();
         self.movement.main_frame(&mut self.engine)
+    }
+
+    /// Hands the engine to the game's `main` for its next frame and returns at once (the
+    /// frame runs on main's OS thread beside the caller, [`PlayerMovement::begin_main_frame`]).
+    /// Every use of the engine through the host waits for it first ([`crate::Host::join`]);
+    /// [`crate::Host::finish_main_frame`] takes it back. The engine itself (`Host::engine`)
+    /// must not be touched in between.
+    pub fn begin_main_frame(&mut self) -> bool {
+        self.movement.begin_main_frame(&mut self.engine)
+    }
+
+    /// Waits for the frame [`crate::Host::begin_main_frame`] handed over; true when it ended a
+    /// frame, false without one in flight.
+    pub fn finish_main_frame(&mut self) -> bool {
+        self.movement.finish_main_frame(&mut self.engine)
+    }
+
+    /// Waits for a frame of main's in flight, if there is one: every use of the engine
+    /// through the host does this first.
+    pub fn join(&mut self) {
+        if self.movement.frame_in_flight() {
+            self.finish_main_frame();
+        }
     }
 
     /// The frame's move of the player through the game's code
@@ -1255,6 +1400,11 @@ impl crate::Host {
         cell: Option<FormId>,
         input: &MoveInput,
     ) -> Option<MoveOutput> {
+        // Before the movement's stages exist (never, while the game's `main` runs) the step
+        // doesn't touch the engine: a frame in flight goes on.
+        if self.movement.stages_touch_engine() {
+            self.join();
+        }
         self.movement.step(&mut self.engine, order, cell, input)
     }
 
@@ -1262,6 +1412,7 @@ impl crate::Host {
     /// (`engine::units::platform::dinput::key`): `down` holds every DirectInput key code (the
     /// scan code) down this frame; each change becomes a key event.
     pub fn set_keys_down(&mut self, down: &[u8]) {
+        self.join();
         let script = key_script();
         let frame = self.movement.main_frames;
         // The real game window's keyboard (`NV_D3D9=real`, Windows) holds keys too.
@@ -1281,6 +1432,7 @@ impl crate::Host {
     /// The viewer's mouse for the game's DirectInput mouse: motion since the last frame
     /// (`dinput::mouse_move`) and the buttons down (`dinput::mouse_button`).
     pub fn mouse(&mut self, motion: [i32; 3], buttons: [bool; 8]) {
+        self.join();
         // The real game window's mouse (`NV_D3D9=real`, Windows) moves and clicks too.
         #[cfg(windows)]
         let (motion, buttons) = {
@@ -1322,6 +1474,9 @@ impl crate::Host {
     /// thread 2, through the game's code ([`PlayerMovement::run_ai_threads`]);
     /// `None`: the caller steps its own bodies.
     pub fn run_ai_threads(&mut self, seconds: f32) -> Option<Vec<BodyPose>> {
+        if self.movement.stages_touch_engine() {
+            self.join();
+        }
         self.movement.run_ai_threads(&mut self.engine, seconds)
     }
 

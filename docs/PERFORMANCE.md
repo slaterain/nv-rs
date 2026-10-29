@@ -35,6 +35,37 @@ quoting them as frame rates.
   decals flip between two looks from run to run (overlapping decals sort
   in an unstable order).
 
+## The game's own frame rate (a29, 2026-10-28)
+
+With the game's code running (`NV_D3D9=real`), the frame rate is the game's: `BSTimer`'s step
+(`00aa4ee0`) sleeps when less than 10 ms (by `GetTickCount`) passed since the timer's last step
+and reports at least 10 ms. With k timers stepped a frame and W the frame's other work, a frame
+takes (W + 10k) / (k + 1) ms with a 1 ms tick count: the main menu has one timer, a game in
+progress three (Main::OnIdle's, `HUDMainMenu::DoIdle`'s, `MessageMenu::DoIdle`'s), at most
+133 frames/s however small W is. `GetTickCount` moves in 15.625 ms ticks as on Windows
+(measured), which changes the pacing again. The original game is held the same way.
+
+- `NV_PROFILE=1` (`engine-core` `profile.rs`): where a frame's time goes, a table every 10 s
+  (the phases game / viewer / switch / sleep, the game threads, the exe functions by self and
+  inclusive time, native functions; `NV_PROFILE_THREADS=1` adds every other thread).
+- `NV_D3D9_PRESENT=immediate`: the real device presents without waiting for the display, to
+  measure the work (the INI's `iPresentInterval=1` holds a 60 Hz panel to 60).
+- `NV_GAME_FRAME_SYNC=1`: the game's frame runs inside the viewer's `Update` again instead of
+  beside the rest of the viewer's frame (to compare).
+
+### Opt-in fixes (not 1:1)
+
+Off by default; each changes what the original game does, for the player who asks for it.
+Nothing of them runs on the default path.
+
+- `NV_UNCAP=1` (`crates/host/src/uncap.rs`): `BSTimer`'s step without its sleep, the step
+  measured on the microsecond clock instead of rounded up to 10 ms, so the frame rate is the
+  work's and the game's time keeps pace with the real time.
+
+A settings file will switch the same fixes when there is one (proposal: `nv-rs.ini` next to the
+viewer, section `[Fixes]`, `bUncappedFrameRate=1` for `NV_UNCAP`); until then the environment
+variables above are the place.
+
 ## PR #12 review points (2026-10-07)
 
 ### Shared textures and tinted faces

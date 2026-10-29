@@ -86,6 +86,30 @@ pub fn real_window(e: &Engine, handle: u32) -> Option<isize> {
     e.kernel.graphics.real.windows.get(&handle).copied()
 }
 
+/// `D3DPRESENT_INTERVAL_IMMEDIATE`.
+const INTERVAL_IMMEDIATE: u32 = 0x8000_0000;
+
+/// The real device's presentation interval for the game's `interval` (its `iPresentInterval`):
+/// the game's, unless `NV_D3D9_PRESENT=immediate` (a measurement setting of the host, not the
+/// game's) asks for `D3DPRESENT_INTERVAL_IMMEDIATE`, so a frame rate measures the work and not
+/// the display's refresh (the original game measured likewise with `iPresentInterval=0`). The
+/// model keeps the game's parameters and answers.
+fn presentation_interval(interval: u32) -> u32 {
+    static IMMEDIATE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let immediate = *IMMEDIATE.get_or_init(|| {
+        std::env::var("NV_D3D9_PRESENT").is_ok_and(|v| v.eq_ignore_ascii_case("immediate"))
+    });
+    choose_interval(interval, immediate)
+}
+
+fn choose_interval(interval: u32, immediate: bool) -> u32 {
+    if immediate {
+        INTERVAL_IMMEDIATE
+    } else {
+        interval
+    }
+}
+
 fn hr(r: windows::core::Result<()>) -> u32 {
     match r {
         Ok(()) => 0,
@@ -496,7 +520,7 @@ pub fn device_created(
         AutoDepthStencilFormat: D3DFORMAT(w(0x28)),
         Flags: w(0x2c),
         FullScreen_RefreshRateInHz: w(0x30),
-        PresentationInterval: w(0x34),
+        PresentationInterval: presentation_interval(w(0x34)),
     };
     let mut out = None;
     let r = unsafe {
@@ -592,10 +616,18 @@ pub fn present(
     dirty: u32,
     model: u32,
 ) {
+    if face_check::enabled() {
+        // Diagnostic only (`NV_FACE_CHECK`, not exe behaviour).
+        face_check_present();
+    }
     let Some(d) = device(e, this) else { return };
     if dirty != 0 {
         answer(e, "Present with a dirty region (not forwarded)", model, 1);
         return;
+    }
+    if let Some(shots) = shot::wanted() {
+        // Diagnostic only (`NV_SHOT`, not exe behaviour): the frame the game just drew.
+        shot::at_present(&d, shots);
     }
     let (source, dest) = (rect(e, source), rect(e, dest));
     let window = match window {
@@ -686,6 +718,10 @@ pub fn set_transform(e: &mut Engine, this: u32, state: u32, matrix: u32, model: 
         return;
     }
     let m = words(e, matrix, 16);
+    if face_check::enabled() {
+        // Diagnostic only (`NV_FACE_CHECK`, not exe behaviour).
+        face_check::state().transforms.insert(state, m.clone());
+    }
     let r = unsafe { d.SetTransform(D3DTRANSFORMSTATETYPE(state as i32), m.as_ptr() as *const _) };
     answer(e, "SetTransform", model, hr(r));
 }
@@ -708,6 +744,10 @@ pub fn set_clip_plane(e: &mut Engine, this: u32, index: u32, plane: u32, model: 
 }
 
 pub fn set_render_state(e: &mut Engine, this: u32, state: u32, value: u32, model: u32) {
+    if face_check::enabled() {
+        // Diagnostic only (`NV_FACE_CHECK`, not exe behaviour).
+        face_check_render_state(state, value);
+    }
     let Some(d) = device(e, this) else { return };
     let r = unsafe { d.SetRenderState(D3DRENDERSTATETYPE(state as i32), value) };
     answer(e, "SetRenderState", model, hr(r));
@@ -740,6 +780,10 @@ pub fn set_sampler_state(
 }
 
 pub fn set_texture(e: &mut Engine, this: u32, sampler: u32, texture: u32, model: u32) {
+    if face_check::enabled() {
+        // Diagnostic only (`NV_FACE_CHECK`, not exe behaviour).
+        face_check_bind(sampler, texture);
+    }
     let Some(d) = device(e, this) else { return };
     let r = match e.kernel.graphics.real.objects.get(&texture) {
         _ if texture == 0 => unsafe { d.SetTexture(sampler, None::<&IDirect3DBaseTexture9>) },
@@ -789,6 +833,10 @@ pub fn texture_created(
         }
     }
     real(e).objects.insert(texture, Object::Texture(t));
+    if face_check::enabled() {
+        // Diagnostic only (`NV_FACE_CHECK`, not exe behaviour).
+        face_check_texture(texture, levels, (width, height), format, usage, pool);
+    }
 }
 
 /// `CreateCubeTexture` made the modelled cube texture `texture` with these surfaces, face by
@@ -907,6 +955,10 @@ pub fn surface_unlocked(e: &mut Engine, surface: u32, bits: u32, pitch: u32, row
         e.mem.read(bits + y * pitch, to);
     }
     let _ = unsafe { s.UnlockRect() };
+    if face_check::enabled() {
+        // Diagnostic only (`NV_FACE_CHECK`, not exe behaviour).
+        face_check_upload(e, surface, &s, bits, row, rows);
+    }
 }
 
 // Buffers, shaders, declarations.
@@ -1088,6 +1140,10 @@ pub fn set_fvf(e: &mut Engine, this: u32, fvf: u32, model: u32) {
 }
 
 pub fn set_shader(e: &mut Engine, this: u32, shader: u32, pixel: bool, model: u32) {
+    if face_check::enabled() {
+        // Diagnostic only (`NV_FACE_CHECK`, not exe behaviour).
+        face_check_shader(shader, pixel);
+    }
     let Some(d) = device(e, this) else { return };
     let r = match (pixel, e.kernel.graphics.real.objects.get(&shader)) {
         (false, _) if shader == 0 => unsafe { d.SetVertexShader(None::<&IDirect3DVertexShader9>) },
@@ -1123,6 +1179,10 @@ pub fn set_constants(
     let Some(d) = device(e, this) else { return };
     if data == 0 {
         return;
+    }
+    if face_check::enabled() && (kind == 0 || kind == 3) {
+        // Diagnostic only (`NV_FACE_CHECK`, not exe behaviour).
+        face_check_constants(e, kind == 3, start, data, count);
     }
     let per = if kind % 3 == 2 { 1 } else { 4 };
     let v = words(e, data, per * count);
@@ -1239,7 +1299,20 @@ pub fn draw_indexed_primitive(
     model: u32,
 ) {
     let Some(d) = device(e, this) else { return };
-    if skipped(e, this) {
+    let skip = skipped(e, this);
+    if face_check::enabled() {
+        // Diagnostic only (`NV_FACE_CHECK`, not exe behaviour).
+        face_check_draw(
+            kind,
+            base_vertex,
+            min_index,
+            vertices,
+            start_index,
+            count,
+            skip,
+        );
+    }
+    if skip {
         return;
     }
     let r = unsafe {
@@ -1526,7 +1599,7 @@ pub fn device_reset(
         AutoDepthStencilFormat: D3DFORMAT(w(0x28)),
         Flags: w(0x2c),
         FullScreen_RefreshRateInHz: w(0x30),
-        PresentationInterval: w(0x34),
+        PresentationInterval: presentation_interval(w(0x34)),
     };
     let r = unsafe { d.Reset(&mut pp) };
     answer(e, "Reset", 0, hr(r));
@@ -1552,9 +1625,769 @@ pub fn texture_set_lod(e: &mut Engine, texture: u32, lod: u32, model: u32) {
     answer(e, "SetLOD (the previous level)", model, previous);
 }
 
+// ---------------------------------------------------------------------------------------------
+// `NV_SHOT=DIR[,every_ms]`: diagnostic only, not exe behaviour. Screenshots of the game's own
+// frames on the real device: at a `Present`, at most every `every_ms` (default 5000) of wall
+// time, the back buffer is copied to a system-memory surface (`GetRenderTargetData`; a
+// multisampled back buffer is first resolved into a plain render target with `StretchRect`)
+// and written to `DIR` as a 32-bit BMP named `frame-NNNNNN-<unix ms>.bmp`. Nothing is read or
+// made when `NV_SHOT` is unset; the game's state and the model are not touched.
+// ---------------------------------------------------------------------------------------------
+mod shot {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    /// The directory and the interval (`NV_SHOT=DIR[,every_ms]`), read once.
+    pub(super) struct Shots {
+        pub dir: PathBuf,
+        pub every: Duration,
+    }
+
+    /// `NV_SHOT=DIR[,every_ms]`: the directory and interval (5000 ms when not given).
+    pub(super) fn parse(value: &str) -> Option<Shots> {
+        let value = value.trim();
+        if value.is_empty() {
+            return None;
+        }
+        let (dir, every) = match value.rsplit_once(',') {
+            Some((dir, ms)) => match ms.trim().parse::<u64>() {
+                Ok(ms) => (dir, ms),
+                Err(_) => (value, 5000),
+            },
+            None => (value, 5000),
+        };
+        Some(Shots {
+            dir: PathBuf::from(dir),
+            every: Duration::from_millis(every.max(1)),
+        })
+    }
+
+    pub(super) fn wanted() -> Option<&'static Shots> {
+        static SHOTS: OnceLock<Option<Shots>> = OnceLock::new();
+        SHOTS
+            .get_or_init(|| {
+                let shots = std::env::var("NV_SHOT").ok().and_then(|v| parse(&v))?;
+                let _ = std::fs::create_dir_all(&shots.dir);
+                Some(shots)
+            })
+            .as_ref()
+    }
+
+    /// The presents counted and when the last shot was taken.
+    fn timing() -> std::sync::MutexGuard<'static, (u64, Option<Instant>)> {
+        static T: OnceLock<Mutex<(u64, Option<Instant>)>> = OnceLock::new();
+        T.get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// A top-down 32-bit BMP of `width` x `height` B, G, R, X pixels.
+    pub(super) fn bmp(width: u32, height: u32, bgrx: &[u8]) -> Vec<u8> {
+        let image = width * height * 4;
+        let mut out = Vec::with_capacity(54 + image as usize);
+        out.extend_from_slice(b"BM");
+        out.extend_from_slice(&(54 + image).to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&54u32.to_le_bytes());
+        out.extend_from_slice(&40u32.to_le_bytes());
+        out.extend_from_slice(&(width as i32).to_le_bytes());
+        // A negative height: rows top first.
+        out.extend_from_slice(&(-(height as i32)).to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&32u16.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&image.to_le_bytes());
+        out.extend_from_slice(&[0u8; 16]);
+        out.extend_from_slice(bgrx);
+        out
+    }
+
+    /// At a `Present`: one shot when the interval has passed since the last.
+    pub(super) fn at_present(d: &IDirect3DDevice9, shots: &Shots) {
+        let frame = {
+            let mut t = timing();
+            t.0 += 1;
+            if t.1.is_some_and(|last| last.elapsed() < shots.every) {
+                return;
+            }
+            t.1 = Some(Instant::now());
+            t.0
+        };
+        let wall = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis());
+        let path = shots.dir.join(format!("frame-{frame:06}-{wall}.bmp"));
+        match capture(d) {
+            Ok((width, height, pixels)) => {
+                if let Err(error) = std::fs::write(&path, bmp(width, height, &pixels)) {
+                    eprintln!("NV_SHOT: {} not written: {error}", path.display());
+                }
+            }
+            Err(error) => eprintln!("NV_SHOT: frame {frame}: {error}"),
+        }
+    }
+
+    /// The back buffer's pixels (rows top first, B, G, R, X) through a system-memory copy.
+    fn capture(d: &IDirect3DDevice9) -> Result<(u32, u32, Vec<u8>), String> {
+        let back = unsafe { d.GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO) }
+            .map_err(|e| format!("GetBackBuffer: {e}"))?;
+        let mut desc = D3DSURFACE_DESC::default();
+        unsafe { back.GetDesc(&mut desc) }.map_err(|e| format!("GetDesc: {e}"))?;
+        if desc.Format != D3DFMT_X8R8G8B8 && desc.Format != D3DFMT_A8R8G8B8 {
+            return Err(format!("back buffer format {} not provided", desc.Format.0));
+        }
+        let (width, height) = (desc.Width, desc.Height);
+        // A multisampled back buffer is resolved into a plain render target first.
+        let source = if desc.MultiSampleType != D3DMULTISAMPLE_NONE {
+            let mut plain = None;
+            unsafe {
+                d.CreateRenderTarget(
+                    width,
+                    height,
+                    desc.Format,
+                    D3DMULTISAMPLE_NONE,
+                    0,
+                    BOOL(0),
+                    &mut plain,
+                    std::ptr::null_mut(),
+                )
+            }
+            .map_err(|e| format!("CreateRenderTarget: {e}"))?;
+            let plain = plain.ok_or("CreateRenderTarget: no surface")?;
+            unsafe {
+                d.StretchRect(
+                    &back,
+                    std::ptr::null(),
+                    &plain,
+                    std::ptr::null(),
+                    D3DTEXF_NONE,
+                )
+            }
+            .map_err(|e| format!("StretchRect: {e}"))?;
+            plain
+        } else {
+            back
+        };
+        let mut copy = None;
+        unsafe {
+            d.CreateOffscreenPlainSurface(
+                width,
+                height,
+                desc.Format,
+                D3DPOOL_SYSTEMMEM,
+                &mut copy,
+                std::ptr::null_mut(),
+            )
+        }
+        .map_err(|e| format!("CreateOffscreenPlainSurface: {e}"))?;
+        let copy = copy.ok_or("CreateOffscreenPlainSurface: no surface")?;
+        unsafe { d.GetRenderTargetData(&source, &copy) }
+            .map_err(|e| format!("GetRenderTargetData: {e}"))?;
+        let mut locked = D3DLOCKED_RECT::default();
+        unsafe { copy.LockRect(&mut locked, std::ptr::null(), D3DLOCK_READONLY as u32) }
+            .map_err(|e| format!("LockRect: {e}"))?;
+        let row = width as usize * 4;
+        let mut pixels = Vec::with_capacity(row * height as usize);
+        for y in 0..height as usize {
+            let line = unsafe {
+                std::slice::from_raw_parts(
+                    (locked.pBits as *const u8).add(y * locked.Pitch as usize),
+                    row,
+                )
+            };
+            pixels.extend_from_slice(line);
+        }
+        let _ = unsafe { copy.UnlockRect() };
+        Ok((width, height, pixels))
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// `NV_FACE_CHECK`: diagnostic only, not exe behaviour. Reads, never writes, game memory or the
+// real device's state (the read-back locks the real surface read-only).
+//
+// Follows the player's FaceGen face texture on the real device. Nothing is printed until the
+// FaceGen side has built a face image (`0064ceb0`, which stores its size in
+// `platform::FACE_CHECK_IMAGES`); the first uncompressed texture of that size created after it is
+// the face texture (NiDX9SourceTextureData's CreateSurf), and only it is followed, with its own
+// line budget:
+// - `d3d face texture` line: its size, format, levels, usage, pool.
+// - `d3d face upload` lines: each level copied to the real surface (rows, the model's row bytes,
+//   the real pitch, the byte means of the copied data and of the real surface read back; with
+//   `NV_FACE_CHECK_DIR` levels 0 and 3 are written there as TGA files read back from the real
+//   surface).
+// - `d3d face bind` lines: it bound to a sampler; then `d3d face draw` for every indexed draw while
+//   it is bound and for the next 16 draws after it leaves a sampler (the hair and eyes follow the
+//   face): every sampler's texture (size, format, levels, and after `|` the file each was made
+//   from, `platform::FACE_CHECK_NAMES`), the pixel and vertex shaders and the draw's counts;
+//   each distinct draw at most twice.
+//   Each such draw line also gives the primitive type, base vertex, min index and start index, and
+//   whether the real draw was skipped (a binding without a real object); it is followed by
+//   `d3d face states` (z, alpha test and blend, cull, stencil, colour write states as forwarded),
+//   `d3d face pixel constants` (c0..c31) and `d3d face vertex constants` (c0..c95), every
+//   register set so far, as floats.
+//   Meshes once drawn with the face texture are followed in their other passes too (`face mesh,
+//   another pass`: the head's first, depth-writing pass binds no face texture). For the first 12
+//   frames after the face texture exists, `d3d face frame N` counts the indexed draws, those with
+//   ZWRITEENABLE on and those skipped; once, `d3d face projection transform` prints D3DTS_PROJECTION.
+//   Each reported draw also gets `d3d face states set since the previous draw` (the
+//   SetRenderState calls between the previous indexed draw and this one: a state missing there was
+//   left from an earlier draw), and other meshes drawn with a pixel shader a face mesh used are
+//   reported too (`another mesh, same pixel shader as a face pass`: an NPC head to compare with).
+// ---------------------------------------------------------------------------------------------
+mod face_check {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Mutex, OnceLock};
+
+    pub(super) fn enabled() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("NV_FACE_CHECK").is_some())
+    }
+
+    static LINES: AtomicU32 = AtomicU32::new(0);
+    const LIMIT: u32 = 3000;
+
+    pub(super) fn line(text: std::fmt::Arguments) {
+        if LINES.fetch_add(1, Ordering::Relaxed) < LIMIT {
+            println!("face check: {text}");
+        }
+    }
+
+    #[derive(Default)]
+    pub(super) struct State {
+        /// Every texture created: (width, height, format, levels).
+        pub textures: HashMap<u32, (u32, u32, u32, u32)>,
+        /// The followed face textures and their level surfaces: surface -> (texture, level).
+        pub faces: Vec<u32>,
+        pub levels: HashMap<u32, (u32, u32)>,
+        /// The modelled texture each sampler holds (as forwarded).
+        pub samplers: HashMap<u32, u32>,
+        pub pixel_shader: u32,
+        pub vertex_shader: u32,
+        /// Draws still to report after the face texture left the samplers.
+        pub after: u32,
+        pub dumps: u32,
+        /// How often each draw (counts, shaders, samplers) was reported: each at most twice.
+        pub seen: HashMap<String, u32>,
+        /// The render states and the float shader constants as forwarded (register -> 4 words).
+        pub render_states: HashMap<u32, u32>,
+        pub pixel_constants: HashMap<u32, [u32; 4]>,
+        pub vertex_constants: HashMap<u32, [u32; 4]>,
+        /// The transforms set (`D3DTRANSFORMSTATETYPE` -> 16 words).
+        pub transforms: HashMap<u32, Vec<u32>>,
+        /// The render states set since the last indexed draw (in order), and the pixel shaders the
+        /// face meshes were drawn with (other meshes drawn with them are reported for comparison).
+        pub states_since_draw: Vec<(u32, u32)>,
+        pub face_shaders: std::collections::HashSet<u32>,
+        /// The meshes drawn with the face texture, by (vertices, primitives): their other passes are
+        /// reported too.
+        pub face_meshes: std::collections::HashSet<(u32, u32)>,
+        /// This frame's indexed draws: all, with ZWRITEENABLE on, skipped; frames summed so far.
+        pub frame_draws: [u32; 3],
+        pub frames: u32,
+        pub projection_shown: bool,
+    }
+
+    pub(super) fn state() -> std::sync::MutexGuard<'static, State> {
+        static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+        STATE
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Whether a `D3DFORMAT` is a four-character DXT code.
+    pub(super) fn compressed(format: u32) -> bool {
+        (u32::from_le_bytes(*b"DXT1")..=u32::from_le_bytes(*b"DXT5")).contains(&format)
+            && format.to_le_bytes()[..3] == *b"DXT"
+    }
+
+    /// Whether a texture of this size and format is the face texture of the face image `image`
+    /// (`width << 32 | height`, 0 for none yet).
+    pub(super) fn is_face(image: u64, width: u32, height: u32, format: u32) -> bool {
+        image != 0 && !compressed(format) && (u64::from(width) << 32 | u64::from(height)) == image
+    }
+
+    /// The mean of each of the four bytes of 32-bit pixels.
+    pub(super) fn means(bytes: &[u8]) -> [u64; 4] {
+        let mut sum = [0u64; 4];
+        let mut n = 0u64;
+        for pixel in bytes.chunks_exact(4) {
+            for c in 0..4 {
+                sum[c] += u64::from(pixel[c]);
+            }
+            n += 1;
+        }
+        sum.map(|s| s / n.max(1))
+    }
+
+    /// A 32-bit B, G, R, A image as an uncompressed TGA (rows top first).
+    pub(super) fn tga(width: u32, height: u32, bgra: &[u8]) -> Vec<u8> {
+        let mut file = vec![0u8; 18];
+        file[2] = 2;
+        file[12..14].copy_from_slice(&(width as u16).to_le_bytes());
+        file[14..16].copy_from_slice(&(height as u16).to_le_bytes());
+        file[16] = 32;
+        file[17] = 0x28;
+        file.extend_from_slice(bgra);
+        file
+    }
+}
+
+/// `NV_FACE_CHECK`: a texture was created (diagnostic only); the face texture is followed.
+fn face_check_texture(
+    texture: u32,
+    levels: &[u32],
+    size: (u32, u32),
+    format: u32,
+    usage: u32,
+    pool: u32,
+) {
+    let mut s = face_check::state();
+    s.textures
+        .insert(texture, (size.0, size.1, format, levels.len() as u32));
+    // One texture per face image: the first one of its size made after it.
+    let matched = {
+        let mut pending = super::FACE_CHECK_IMAGES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let found = pending
+            .iter()
+            .position(|&image| face_check::is_face(image, size.0, size.1, format));
+        found.map(|at| pending.remove(at))
+    };
+    if matched.is_none() {
+        return;
+    }
+    s.faces.push(texture);
+    for (i, &level) in levels.iter().enumerate() {
+        s.levels.insert(level, (texture, i as u32));
+    }
+    drop(s);
+    face_check::line(format_args!(
+        "d3d face texture {texture:#x} {}x{} format {format} levels {} usage {usage:#x} pool {pool}",
+        size.0,
+        size.1,
+        levels.len()
+    ));
+}
+
+/// `NV_FACE_CHECK`: a level of the face texture went to the real surface.
+fn face_check_upload(
+    e: &Engine,
+    surface: u32,
+    real_surface: &IDirect3DSurface9,
+    bits: u32,
+    row: u32,
+    rows: u32,
+) {
+    let Some(&(texture, level)) = face_check::state().levels.get(&surface) else {
+        return;
+    };
+    let (width, height, format, _) = face_check::state()
+        .textures
+        .get(&texture)
+        .copied()
+        .unwrap_or_default();
+    let model = e.mem.bytes(bits, row.saturating_mul(rows));
+    let mut desc = D3DSURFACE_DESC::default();
+    let _ = unsafe { real_surface.GetDesc(&mut desc) };
+    let mut locked = D3DLOCKED_RECT::default();
+    let read =
+        unsafe { real_surface.LockRect(&mut locked, std::ptr::null(), D3DLOCK_READONLY as u32) };
+    let mut back = Vec::new();
+    let mut pitch = 0;
+    if read.is_ok() {
+        pitch = locked.Pitch;
+        for y in 0..rows {
+            let from = unsafe {
+                std::slice::from_raw_parts(
+                    (locked.pBits as *const u8).add(y as usize * locked.Pitch as usize),
+                    row as usize,
+                )
+            };
+            back.extend_from_slice(from);
+        }
+        let _ = unsafe { real_surface.UnlockRect() };
+    }
+    face_check::line(format_args!(
+        "d3d face upload texture {texture:#x} level {level} ({}x{} of {width}x{height}, format {format}): {rows} rows of {row} bytes, real pitch {pitch} format {}, model bytes mean {:?}, real read back {} mean {:?}, same {}",
+        desc.Width,
+        desc.Height,
+        desc.Format.0,
+        face_check::means(&model),
+        if read.is_ok() { "ok" } else { "failed" },
+        face_check::means(&back),
+        back == model,
+    ));
+    let bytes_per_pixel = row.checked_div(desc.Width).unwrap_or(0);
+    if (level == 0 || level == 3) && bytes_per_pixel == 4 && back.len() == model.len() {
+        if let Some(dir) = std::env::var_os("NV_FACE_CHECK_DIR") {
+            let n = {
+                let mut s = face_check::state();
+                s.dumps += 1;
+                s.dumps
+            };
+            if n <= 40 {
+                let path = std::path::Path::new(&dir).join(format!(
+                    "d3d-face-{n}-{texture:x}-level{level}-{}x{}.tga",
+                    desc.Width, desc.Height
+                ));
+                let _ = std::fs::write(&path, face_check::tga(desc.Width, desc.Height, &back));
+                face_check::line(format_args!(
+                    "d3d face upload written to {}",
+                    path.display()
+                ));
+            }
+        }
+    }
+}
+
+/// `NV_FACE_CHECK`: a sampler took a texture.
+fn face_check_bind(sampler: u32, texture: u32) {
+    let mut s = face_check::state();
+    let old = s.samplers.insert(sampler, texture).unwrap_or(0);
+    if s.faces.is_empty() {
+        return;
+    }
+    let is_face = s.faces.contains(&texture);
+    if !is_face && s.faces.contains(&old) {
+        // The face texture leaves this sampler: the next draws (the hair, the eyes) are reported.
+        s.after = 16;
+    }
+    drop(s);
+    if is_face {
+        face_check::line(format_args!(
+            "d3d face bind texture {texture:#x} to sampler {sampler}"
+        ));
+    }
+}
+
+/// `NV_FACE_CHECK`: a shader was set.
+fn face_check_shader(shader: u32, pixel: bool) {
+    let mut s = face_check::state();
+    if pixel {
+        s.pixel_shader = shader;
+    } else {
+        s.vertex_shader = shader;
+    }
+}
+
+/// `NV_FACE_CHECK`: a frame ends: its indexed draw counts (the first 12 frames once the face texture
+/// exists) and, once, the projection transform as set.
+fn face_check_present() {
+    let mut s = face_check::state();
+    if s.faces.is_empty() {
+        return;
+    }
+    let counts = std::mem::take(&mut s.frame_draws);
+    s.frames += 1;
+    let frame = s.frames;
+    let projection = if s.projection_shown {
+        None
+    } else {
+        s.projection_shown = true;
+        Some(s.transforms.get(&3).cloned())
+    };
+    drop(s);
+    if frame <= 12 {
+        face_check::line(format_args!(
+            "d3d face frame {frame}: {} indexed draws, {} with ZWRITEENABLE on, {} skipped",
+            counts[0], counts[1], counts[2]
+        ));
+    }
+    if let Some(projection) = projection {
+        let text = match projection {
+            Some(m) => m
+                .iter()
+                .map(|w| format!("{:.4}", f32::from_bits(*w)))
+                .collect::<Vec<_>>()
+                .join(","),
+            None => "never set".into(),
+        };
+        face_check::line(format_args!("d3d face projection transform (rows): {text}"));
+    }
+}
+
+/// `NV_FACE_CHECK`: an indexed draw with the face texture bound, or one of the few after it.
+/// `NV_FACE_CHECK`: a render state was set.
+fn face_check_render_state(state: u32, value: u32) {
+    let mut s = face_check::state();
+    s.render_states.insert(state, value);
+    s.states_since_draw.push((state, value));
+}
+
+/// `NV_FACE_CHECK`: float shader constants were set (`pixel` for the pixel shader's).
+fn face_check_constants(e: &Engine, pixel: bool, start: u32, data: u32, count: u32) {
+    let mut s = face_check::state();
+    for i in 0..count.min(256) {
+        let at = data.wrapping_add(16 * i);
+        let value = [
+            e.mem.u32(at),
+            e.mem.u32(at + 4),
+            e.mem.u32(at + 8),
+            e.mem.u32(at + 12),
+        ];
+        let map = if pixel {
+            &mut s.pixel_constants
+        } else {
+            &mut s.vertex_constants
+        };
+        map.insert(start + i, value);
+    }
+}
+
+/// The render states the face check prints, with their `D3DRENDERSTATETYPE` numbers.
+const FACE_CHECK_STATES: [(&str, u32); 14] = [
+    ("ZENABLE", 7),
+    ("FILLMODE", 8),
+    ("ZWRITEENABLE", 14),
+    ("ALPHATESTENABLE", 15),
+    ("SRCBLEND", 19),
+    ("DESTBLEND", 20),
+    ("CULLMODE", 22),
+    ("ZFUNC", 23),
+    ("ALPHAREF", 24),
+    ("ALPHAFUNC", 25),
+    ("ALPHABLENDENABLE", 27),
+    ("STENCILENABLE", 52),
+    ("COLORWRITEENABLE", 168),
+    ("BLENDOP", 171),
+];
+
+/// The determinant of the upper-left 3x3 of three rows of four float words (a negative one
+/// mirrors, flipping the triangles' winding).
+fn face_check_det3(rows: [&[u32]; 3]) -> f32 {
+    let m = |r: usize, c: usize| f32::from_bits(rows[r][c]);
+    m(0, 0) * (m(1, 1) * m(2, 2) - m(1, 2) * m(2, 1))
+        - m(0, 1) * (m(1, 0) * m(2, 2) - m(1, 2) * m(2, 0))
+        + m(0, 2) * (m(1, 0) * m(2, 1) - m(1, 1) * m(2, 0))
+}
+
+/// The determinants the face check prints: view (2), projection (3), world (256) when set, and
+/// of vertex constants c0..c2 (rows) when set.
+fn face_check_determinants(s: &face_check::State) -> String {
+    let mut parts = Vec::new();
+    for (name, state) in [("view", 2u32), ("projection", 3), ("world", 256)] {
+        if let Some(m) = s.transforms.get(&state) {
+            parts.push(format!(
+                "{name} {:.4}",
+                face_check_det3([&m[0..4], &m[4..8], &m[8..12]])
+            ));
+        }
+    }
+    if let (Some(a), Some(b), Some(c)) = (
+        s.vertex_constants.get(&0),
+        s.vertex_constants.get(&1),
+        s.vertex_constants.get(&2),
+    ) {
+        parts.push(format!("vertex c0..c2 {:.4}", face_check_det3([a, b, c])));
+    }
+    parts.join(", ")
+}
+
+/// One line of float constants: `cN=(x,y,z,w)` for each register set so far, in order.
+fn face_check_constant_list(map: &HashMap<u32, [u32; 4]>, below: u32) -> String {
+    let mut registers: Vec<u32> = map.keys().copied().filter(|&r| r < below).collect();
+    registers.sort();
+    registers
+        .iter()
+        .map(|r| {
+            let v = map[r].map(f32::from_bits);
+            format!("c{r}=({:.3},{:.3},{:.3},{:.3})", v[0], v[1], v[2], v[3])
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `NV_FACE_CHECK`: an indexed draw with the face texture bound, or one of the few after it.
+#[allow(clippy::too_many_arguments)]
+fn face_check_draw(
+    kind: u32,
+    base_vertex: u32,
+    min_index: u32,
+    vertices: u32,
+    start_index: u32,
+    count: u32,
+    skipped: bool,
+) {
+    let mut s = face_check::state();
+    let since = std::mem::take(&mut s.states_since_draw);
+    if s.faces.is_empty() {
+        return;
+    }
+    let zwrite = s.render_states.get(&14).copied().unwrap_or(1) != 0;
+    s.frame_draws[0] += 1;
+    s.frame_draws[1] += u32::from(zwrite);
+    s.frame_draws[2] += u32::from(skipped);
+    let bound = s.samplers.values().any(|t| s.faces.contains(t));
+    if bound {
+        s.face_meshes.insert((vertices, count));
+    }
+    let face_mesh = s.face_meshes.contains(&(vertices, count));
+    if face_mesh {
+        let shader = s.pixel_shader;
+        s.face_shaders.insert(shader);
+    }
+    let label = if bound {
+        "with the face texture"
+    } else if face_mesh {
+        "face mesh, another pass"
+    } else if s.after > 0 {
+        s.after -= 1;
+        "after the face"
+    } else if s.face_shaders.contains(&s.pixel_shader) {
+        "another mesh, same pixel shader as a face pass"
+    } else {
+        return;
+    };
+    let mut samplers: Vec<(u32, u32)> = s.samplers.iter().map(|(&k, &v)| (k, v)).collect();
+    samplers.sort();
+    let list: Vec<String> = samplers
+        .iter()
+        .filter(|&&(_, t)| t != 0)
+        .map(|&(sampler, t)| {
+            let face = if s.faces.contains(&t) { " FACE" } else { "" };
+            match s.textures.get(&t) {
+                Some(&(w, h, f, l)) => format!("s{sampler}={t:#x} {w}x{h} f{f} l{l}{face}"),
+                None => format!("s{sampler}={t:#x} ?{face}"),
+            }
+        })
+        .collect();
+    let (pixel, vertex) = (s.pixel_shader, s.vertex_shader);
+    let key = format!(
+        "{vertices} {count} {start_index} {pixel:#x} {vertex:#x} {}",
+        list.join(", ")
+    );
+    let times = {
+        let n = s.seen.entry(key).or_insert(0);
+        *n += 1;
+        *n
+    };
+    if times > 2 {
+        return;
+    }
+    let states: Vec<String> = FACE_CHECK_STATES
+        .iter()
+        .map(|&(name, number)| match s.render_states.get(&number) {
+            Some(value) => format!("{name}={value:#x}"),
+            None => format!("{name}=unset"),
+        })
+        .collect();
+    let determinants = face_check_determinants(&s);
+    let pixel_constants = face_check_constant_list(&s.pixel_constants, 32);
+    let vertex_constants = face_check_constant_list(&s.vertex_constants, 96);
+    drop(s);
+    // The file names the textures were made from (`00e68ef0`).
+    let names: Vec<String> = {
+        let known = super::FACE_CHECK_NAMES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        samplers
+            .iter()
+            .filter(|&&(_, t)| t != 0)
+            .map(|&(sampler, t)| {
+                format!("s{sampler} {}", known.get(&t).map_or("?", String::as_str))
+            })
+            .collect()
+    };
+    face_check::line(format_args!(
+        "d3d face draw ({label}) {vertices} vertices {count} triangles, primitive {kind} base vertex {base_vertex} min index {min_index} start index {start_index}{}, pixel shader {pixel:#x} vertex shader {vertex:#x}: {} | {}",
+        if skipped { " SKIPPED on the real device" } else { "" },
+        list.join(", "),
+        names.join("; ")
+    ));
+    face_check::line(format_args!(
+        "d3d face states: {} | determinants: {determinants}",
+        states.join(" ")
+    ));
+    let since: Vec<String> = since
+        .iter()
+        .map(|(state, value)| format!("{state}={value:#x}"))
+        .collect();
+    face_check::line(format_args!(
+        "d3d face states set since the previous draw: {}",
+        since.join(" ")
+    ));
+    face_check::line(format_args!("d3d face pixel constants: {pixel_constants}"));
+    face_check::line(format_args!(
+        "d3d face vertex constants: {vertex_constants}"
+    ));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The real device keeps the game's interval unless `NV_D3D9_PRESENT=immediate`.
+    #[test]
+    fn the_presentation_interval_is_the_games_unless_immediate_is_asked() {
+        assert_eq!(choose_interval(1, false), 1);
+        assert_eq!(choose_interval(0, false), 0);
+        assert_eq!(choose_interval(1, true), INTERVAL_IMMEDIATE);
+    }
+
+    #[test]
+    fn shot_settings_and_bmp() {
+        let s = shot::parse("C:\\shots,2500").unwrap();
+        assert_eq!(s.dir, std::path::PathBuf::from("C:\\shots"));
+        assert_eq!(s.every, std::time::Duration::from_millis(2500));
+        let s = shot::parse("C:\\shots").unwrap();
+        assert_eq!(s.every, std::time::Duration::from_millis(5000));
+        let s = shot::parse("D:\\a,b").unwrap();
+        assert_eq!(s.dir, std::path::PathBuf::from("D:\\a,b"));
+        assert!(shot::parse(" ").is_none());
+        let file = shot::bmp(2, 1, &[1, 2, 3, 0, 4, 5, 6, 0]);
+        assert_eq!(&file[0..2], b"BM");
+        assert_eq!(file.len(), 54 + 8);
+        assert_eq!(i32::from_le_bytes(file[22..26].try_into().unwrap()), -1);
+        assert_eq!(u16::from_le_bytes(file[28..30].try_into().unwrap()), 32);
+        assert_eq!(&file[54..], &[1, 2, 3, 0, 4, 5, 6, 0]);
+    }
+
+    #[test]
+    fn face_check_helpers() {
+        assert!(face_check::compressed(u32::from_le_bytes(*b"DXT1")));
+        assert!(face_check::compressed(u32::from_le_bytes(*b"DXT5")));
+        assert!(!face_check::compressed(21));
+        // Only an uncompressed texture of the face image's size, once an image was made.
+        let image = (256u64 << 32) | 256;
+        assert!(face_check::is_face(image, 256, 256, 21));
+        assert!(!face_check::is_face(0, 256, 256, 21));
+        assert!(!face_check::is_face(image, 512, 512, 21));
+        assert!(!face_check::is_face(
+            image,
+            256,
+            256,
+            u32::from_le_bytes(*b"DXT5")
+        ));
+        assert_eq!(face_check::means(&[1, 2, 3, 4, 3, 4, 5, 6]), [2, 3, 4, 5]);
+        let file = face_check::tga(1, 1, &[9, 8, 7, 6]);
+        assert_eq!(file.len(), 22);
+        assert_eq!((file[2], file[12], file[14], file[16]), (2, 1, 1, 32));
+        assert_eq!(&file[18..], &[9, 8, 7, 6]);
+        let mut map = HashMap::new();
+        map.insert(3u32, [1f32.to_bits(), 0, 0, 0]);
+        map.insert(1u32, [0, 2f32.to_bits(), 0, 0]);
+        map.insert(40u32, [0; 4]);
+        let one = 1f32.to_bits();
+        let minus = (-1f32).to_bits();
+        assert_eq!(
+            face_check_det3([&[one, 0, 0], &[0, one, 0], &[0, 0, one]]),
+            1.0
+        );
+        assert_eq!(
+            face_check_det3([&[minus, 0, 0], &[0, one, 0], &[0, 0, one]]),
+            -1.0
+        );
+        assert_eq!(
+            face_check_constant_list(&map, 32),
+            "c1=(0.000,2.000,0.000,0.000) c3=(1.000,0.000,0.000,0.000)"
+        );
+    }
 
     /// A key message's `lParam` with this scan code (extended or not).
     fn key(scan: isize, extended: bool) -> isize {

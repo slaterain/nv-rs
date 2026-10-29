@@ -1210,6 +1210,12 @@ fn update_head(e: &mut Engine, frame: &Frame, node: u32, data: u32, kind: &mut u
         let cleared = e.call(POINTER_ASSIGN, &args![normal, 0u32]).u32();
         e.call(POINTER_ASSIGN_FROM, &args![tint, cleared]);
         e.call(POINTER_ASSIGN, &args![image, 0u32]);
+        if crate::units::fallout_shared_facegen::bsfacegenmodel::face_check::enabled() {
+            // Diagnostic only (`NV_FACE_CHECK`, not exe behaviour).
+            crate::units::fallout_shared_facegen::bsfacegenmodel::face_check::shader_textures(
+                e, part, geometry, shader,
+            );
+        }
         e.call(PRECACHE_FACE_GEOMETRY, &args![geometry, *kind, 1u32]);
         e.vcall(shader, SLOT_SHADER_UPDATE, &args![]);
     }

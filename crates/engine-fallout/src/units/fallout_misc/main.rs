@@ -828,7 +828,8 @@ fn run_main(e: &mut Engine, ebp: u32, instance: u32) -> u32 {
         if foreground {
             let renderer = e.call(GET_RENDERER, &args![]).u32();
             let device = e.call(0x004d_c020, &args![renderer]).u32();
-            let frame_result = e.vcall(device, 0xc, &args![device]).i32();
+            // `TestCooperativeLevel` (0086b3a6: only the device, as the COM `this`).
+            let frame_result = e.vcall(device, 0xc, &args![]).i32();
             if frame_result < 0 {
                 let renderer = e.call(GET_RENDERER, &args![]).u32();
                 fn_0086ba10(e, Ptr::new(renderer));
@@ -5216,7 +5217,8 @@ mod tests {
         // The device's vtable slot 0xC answers -1.
         let device = object_with_vtable(&mut e, &[(0xc, 0x0000_3100)]);
         e.register_double(0x0000_3100, |_, a| {
-            assert_eq!(a[0], a[1], "the device is also passed as a stack argument");
+            // TestCooperativeLevel (0086b3a6): only the device, as the COM `this`.
+            assert_eq!(a.len(), 1, "the device is passed once");
             u32::MAX.into_ret()
         });
         e.register_double(0x004d_c020, move |_, _| device.into_ret());

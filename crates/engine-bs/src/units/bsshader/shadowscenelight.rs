@@ -1,6 +1,7 @@
 //! `BSShader/shadowscenelight.cpp` (Xbox PDB source unit), subsystem `BSShader`: its functions in
 //! FalloutNV.exe 1.4.0.525, translated (docs/ENGINE_CRATE.md).
 
+use super::shadowscenenode::light_check;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::types::{NiTListItem, NiTPointerList};
@@ -1324,6 +1325,8 @@ pub fn shadow_scene_light_test_frustum_cull(
     let cast = e.get(this, ShadowSceneLight::bCastShadow);
     let mut result = 0u32;
     let mut inside = true;
+    // `NV_LIGHT_CHECK` (diagnostic only): why the light was culled.
+    let mut reason = String::new();
     let camera = e.get(this, ShadowSceneLight::spShadowCamera);
     if cast != 0 && camera != 0 {
         let culler_camera = e.mem.u32(culler.wrapping_add(0xc));
@@ -1334,6 +1337,9 @@ pub fn shadow_scene_light_test_frustum_cull(
             )
             .u8();
         result = if passed != 0 { 0 } else { 0xff };
+        if passed == 0 && light_check::on() {
+            reason = "the shadow camera test 00b9c020 failed".into();
+        }
     } else {
         let planes: Vec<u32> = (0..0x19u32)
             .map(|i| e.mem.u32(culler.wrapping_add(0x2c + 4 * i)))
@@ -1361,6 +1367,16 @@ pub fn shadow_scene_light_test_frustum_cull(
             let distance = x87_store32(x87_sub(x87_load32(stored), x87_load32(d)));
             // `FCHS; FCOMPP; TEST AH,1; JZ`: outside unless `-radius < distance`.
             if x87_compare(-radius, x87_load32(distance)) & 1 == 0 {
+                if light_check::on() {
+                    reason = format!(
+                        "outside plane {plane} (n ({}, {}, {}) d {}): distance {} <= -radius",
+                        f32::from_bits(nx),
+                        f32::from_bits(ny),
+                        f32::from_bits(nz),
+                        f32::from_bits(d),
+                        f32::from_bits(distance)
+                    );
+                }
                 outside = true;
                 break;
             }
@@ -1432,6 +1448,9 @@ pub fn shadow_scene_light_test_frustum_cull(
                 dimmer = one;
             } else if !parity(x87_compare(far, d), 5) {
                 // Beyond the far distance: culled.
+                if light_check::on() {
+                    reason = format!("beyond the fade distance: {d} > far {far} (near {near})");
+                }
                 result = 0xff;
                 dimmer = zero;
                 shadow = zero;
@@ -1544,6 +1563,9 @@ pub fn shadow_scene_light_test_frustum_cull(
                 }
             }
         }
+    }
+    if result as u16 == 0xff && light_check::on() {
+        light_check::culled(e, this.addr(), culler, &reason);
     }
     e.set(this, ShadowSceneLight::usFrustumCull, result as u16);
     e.set(

@@ -10,13 +10,15 @@
 //! measured exact path on the output thread ([`super::sound_out`]). The cursors the game reads
 //! stay on the platform clock (above), and the output follows that clock (`Pace`): within
 //! 100 ms at the device's own pace, beyond that skipping on or holding. The host turns it on with
-//! [`want_output`] (`NV_SOUND=out`), and it starts when the game makes its device. Where the
-//! exact path ends, the buffer is heard by an approximate path until the maintainer decides
-//! (each kind named once on stderr, open in docs/SOUND.md): a buffer whose frequency is not the
-//! device's rate (Windows' resampler is not pinned down: `super::mixer::resample_kernel`), a 3D
-//! buffer (Windows' 3D law is measured only in part: `super::mixer::spatial_millibels`), and a
-//! buffer with the distortion effect (not analysed: heard without it). A device that does not
-//! mix two channels is not provided.
+//! [`want_output`] (`NV_SOUND=out`), and it starts when the game makes its device. A 3D buffer
+//! goes through DirectSound's 3D stage (`super::ds3d`, translated from the player's
+//! `dsound.dll`), with `DS3D_DEFERRED` settings held until `CommitDeferredSettings`; a buffer
+//! with the distortion through the effect (`super::dsfx`, from the player's `dsdmo.dll`). A buffer
+//! at another rate goes through DirectSound's converter (`super::resampler`, translated from
+//! the player's `dsound.dll` and `RESAMPLEDMO.DLL`): the first one, until a frequency moves by
+//! more than 1/500 of a buffer's rate ([`refresh_voice`]), then the second one for every buffer.
+//! Without the player's `RESAMPLEDMO.DLL` (another build) a buffer that needs it is not heard
+//! (named once on stderr). A device that does not mix two channels is not provided.
 //!
 //! The answers that depend on the player's sound device and Windows come from the sound table,
 //! captured on the player's machine by `scripts/dsound-capture` (git-ignored: `NV_DSOUND_TABLE`,
@@ -506,7 +508,9 @@ fn table(e: &mut Engine) -> &Table {
     e.kernel.sound.table.as_ref().expect("loaded")
 }
 
-/// The DirectSound 8 `DS3DLISTENER` state.
+/// The DirectSound 8 `DS3DLISTENER` state: the settings in effect, and those set with
+/// `DS3D_DEFERRED` that wait for `CommitDeferredSettings` (each setting on its own, as the
+/// DLL's deferred copy with its dirty flags).
 #[derive(Debug, Clone, Copy)]
 struct Listener {
     position: [f32; 3],
@@ -516,7 +520,35 @@ struct Listener {
     distance_factor: f32,
     rolloff: f32,
     doppler: f32,
+    pending: ListenerPending,
 }
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ListenerPending {
+    position: Option<[f32; 3]>,
+    velocity: Option<[f32; 3]>,
+    orientation: Option<([f32; 3], [f32; 3])>,
+    distance_factor: Option<f32>,
+    rolloff: Option<f32>,
+    doppler: Option<f32>,
+}
+
+/// A 3D buffer's settings set with `DS3D_DEFERRED`, waiting for the listener's
+/// `CommitDeferredSettings`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct BufferPending {
+    position: Option<[f32; 3]>,
+    velocity: Option<[f32; 3]>,
+    min_distance: Option<f32>,
+    max_distance: Option<f32>,
+}
+
+/// `DS3D_DEFERRED`.
+const DS3D_DEFERRED: u32 = 1;
+
+/// `DSFXDistortion`'s defaults (dsound.h: gain -18 dB, edge 15 %, post-EQ centre and bandwidth
+/// 2400 Hz, pre-lowpass cutoff 8000 Hz): the effect's parameters until the game sets them.
+const DISTORTION_DEFAULTS: [f32; 5] = [-18.0, 15.0, 2400.0, 2400.0, 8000.0];
 
 /// Whether a buffer plays.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -557,6 +589,9 @@ struct Buffer {
     max_distance: f32,
     position: [f32; 3],
     velocity: [f32; 3],
+    pending3d: BufferPending,
+    /// The distortion's parameters (`DSFXDistortion`), when it is set.
+    fx_params: [f32; 5],
 }
 
 impl Buffer {
@@ -603,8 +638,8 @@ pub struct Sound {
     /// 3D interfaces whose buffer is gone, with their reference count (released past 0 it wraps,
     /// as measured).
     dead3d: BTreeMap<u32, u32>,
-    /// The distortion objects: reference count and `DSFXDistortion`.
-    distortions: BTreeMap<u32, (u32, [f32; 5])>,
+    /// The distortion objects: reference count and the buffer whose effect each one is.
+    distortions: BTreeMap<u32, (u32, u32)>,
     /// `CoInitialize` calls on the main thread (the first answers `S_OK`, later ones `S_FALSE`).
     com_initialized: u32,
     /// The sound table ([`load_table`]).
@@ -620,7 +655,7 @@ pub struct Sound {
     output_wanted: bool,
     device_paced: bool,
     record: Option<std::path::PathBuf>,
-    /// The kinds of approximate sound already named on stderr (once each).
+    /// What was already named on stderr (once each).
     noted: BTreeSet<&'static str>,
 }
 
@@ -649,6 +684,9 @@ struct Voices {
     record: Option<Record>,
     /// The game's clock the output follows (none in the tests, which render by hand).
     pace: Option<Pace>,
+    /// The device has turned on DirectSound's second converter (`super::resampler`): a buffer's
+    /// frequency moved by more than 1/500 of its rate.
+    apl: bool,
 }
 
 /// A recording of what the mixer sends to the device: a WAV file (32-bit float, the device's
@@ -830,6 +868,8 @@ pub fn start_output(e: &mut Engine) -> bool {
     if e.kernel.sound.mix.is_some() {
         return true;
     }
+    // The first converter's tables, read now rather than on the output thread.
+    let _ = super::resampler::tables();
     let voices = Arc::new(Mutex::new(Voices::default()));
     {
         let mut v = voices.lock().expect("the voices");
@@ -885,10 +925,11 @@ pub fn note(e: &mut Engine, what: &str) {
     }
 }
 
-/// Names on stderr, once, a kind of sound that is heard by an approximate path.
-fn approximate(e: &mut Engine, kind: &'static str, example: &str) {
-    if e.kernel.sound.noted.insert(kind) {
-        eprintln!("sound: approximate {kind} (first: {example}); see docs/SOUND.md");
+/// Names on stderr, once, that a buffer at another rate is not heard: the player's
+/// `RESAMPLEDMO.DLL` is another build than the one `super::resampler` reads.
+fn unheard(e: &mut Engine, example: &str) {
+    if e.kernel.sound.noted.insert("resampling") {
+        eprintln!("sound: not heard: another rate without this build of RESAMPLEDMO.DLL (first: {example}); see docs/SOUND.md");
     }
 }
 
@@ -901,7 +942,42 @@ fn voice_of(e: &Engine, b: &Buffer) -> Voice {
     );
     v.volume = b.volume;
     v.pan = b.pan;
+    v.rate = b.frequency();
+    v.device = e.kernel.sound.mix.as_ref().map_or(0, |m| m.rate);
+    if b.effect == Some("distortion") {
+        v.fx = Some(Box::new(fx_chain(b, v.data.clone())));
+    }
     v
+}
+
+/// The distortion's chain for buffer `b` on `source` (the buffer's samples): the effect at the
+/// format's rate (the rate `dsound.dll` gives the effect, whatever the frequency) with the
+/// buffer's parameters and the player's edge table (`super::dsfx::edge_table`). Without that
+/// table the distortion is not provided.
+fn fx_chain(b: &Buffer, source: Vec<u8>) -> super::dsfx::Chain {
+    let c = super::dsfx::Coefficients::new(b.rate(), b.fx_params, edge_table());
+    super::dsfx::Chain::new(
+        source,
+        super::dsfx::Distortion::new(c),
+        u16::from_le_bytes([b.format[2], b.format[3]]),
+        u16::from_le_bytes([b.format[14], b.format[15]]),
+    )
+}
+
+/// The player's edge table for the distortion (`super::dsfx::edge_table`); the tests' own
+/// made-up one under `cfg(test)`.
+fn edge_table() -> &'static [f64; 32] {
+    #[cfg(test)]
+    {
+        &tests::EDGE_TABLE
+    }
+    #[cfg(not(test))]
+    {
+        super::dsfx::edge_table().expect(
+            "the distortion's edge table could not be measured from the player's dsdmo.dll: \
+             the distortion is not provided",
+        )
+    }
 }
 
 /// Runs `f` on the voice of the buffer at `at`, when the output is on.
@@ -932,7 +1008,7 @@ pub fn tick(e: &mut Engine) {
 /// sound system, `super::bink`): starts `pcm` (`channels`, `bits`, `rate`) as a voice under
 /// `key` (an engine address of the caller's, distinct from every buffer's), heard when the
 /// output is on, with volume, pan and frequency at their defaults. A rate other than the
-/// device's goes through the approximate resampler (`super::mixer::resample_kernel`).
+/// device's goes through the first converter (the stream is its own DirectSound device).
 pub fn play_stream(e: &mut Engine, key: u32, pcm: Vec<u8>, channels: u16, bits: u16, rate: u32) {
     play_stream_from(e, key, pcm, channels, bits, rate, 0);
 }
@@ -950,20 +1026,18 @@ pub fn play_stream_from(
     let Some(device) = e.kernel.sound.mix.as_ref().map(|m| m.rate) else {
         return;
     };
-    if rate != device {
-        approximate(
-            e,
-            "resampling",
-            &format!("a stream at {rate} Hz on {device} Hz"),
-        );
+    // A stream is its own DirectSound device (Bink's, DirectShow's): the first converter.
+    if rate != device && super::resampler::tables().is_none() {
+        unheard(e, &format!("a stream at {rate} Hz on {device} Hz"));
     }
     let Some(m) = &e.kernel.sound.mix else {
         return;
     };
     let mut v = m.voices.lock().expect("the voices");
     let mut voice = Voice::new(pcm, channels, bits);
-    voice.position = Some(from);
-    voice.step = f64::from(rate) / f64::from(device);
+    voice.start(from);
+    voice.rate = rate;
+    voice.device = device;
     v.all.insert(key, voice);
     v.playing.retain(|&p| p != key);
     v.playing.insert(0, key);
@@ -991,8 +1065,7 @@ pub fn has_stream(e: &Engine, key: u32) -> bool {
 pub fn seek_stream(e: &mut Engine, key: u32, at: usize) {
     with_voice(e, key, |m, k| {
         if let Some(v) = m.all.get_mut(&k) {
-            v.position = Some(at);
-            v.frac = 0.0;
+            v.start(at);
         }
     });
 }
@@ -1297,6 +1370,8 @@ fn new_buffer(flags: u32) -> Buffer {
         max_distance: 1.0e9,
         position: [0.0; 3],
         velocity: [0.0; 3],
+        pending3d: BufferPending::default(),
+        fx_params: DISTORTION_DEFAULTS,
     }
 }
 
@@ -1489,6 +1564,7 @@ fn listener_defaults(e: &mut Engine) -> Listener {
         distance_factor: f(0x34),
         rolloff: f(0x38),
         doppler: f(0x3c),
+        pending: ListenerPending::default(),
     }
 }
 
@@ -1615,6 +1691,8 @@ fn set_volume(e: &mut Engine, this: Ptr, v: i32) -> u32 {
             voice.volume = v;
         }
     });
+    // A 3D buffer's volume goes through the 3D stage (`1002a7d0`).
+    refresh_voice(e, this.addr());
     DS_OK
 }
 
@@ -1668,15 +1746,15 @@ fn set_frequency(e: &mut Engine, this: Ptr, v: u32) -> u32 {
     b.frequency = v;
     if matches!(b.play, Play::Playing { .. }) {
         heard(e, this, "SetFrequency");
+    } else {
+        refresh_voice(e, this.addr());
     }
     DS_OK
 }
 
-/// Where the mixer's exact path ends (module documentation): with the output on, a buffer
-/// heard at another rate than the device's goes through the approximate resampler, a 3D
-/// buffer through the approximate 3D law (`super::mixer`), and a buffer with the distortion
-/// is heard without it (not analysed). Each kind is named once on stderr; docs/SOUND.md keeps
-/// them open for the maintainer.
+/// A buffer about to be heard, or heard with new settings: with the output on, its voice is
+/// brought up to date ([`refresh_voice`]), and a rate the converter path does not translate is
+/// named once on stderr (docs/SOUND.md keeps it open for the maintainer).
 fn heard(e: &mut Engine, this: Ptr, call: &str) {
     let Some(rate) = e.kernel.sound.mix.as_ref().map(|m| m.rate) else {
         return;
@@ -1697,41 +1775,43 @@ fn heard(e: &mut Engine, this: Ptr, call: &str) {
         },
         b.effect.map_or(String::new(), |fx| format!(", {fx}")),
     );
-    if f != rate {
-        approximate(e, "resampling", &what);
-    }
-    if b.flags & DSBCAPS_CTRL3D != 0 {
-        approximate(e, "3D", &what);
-    }
-    if b.effect.is_some() {
-        approximate(e, "distortion (heard dry)", &what);
+    let apl = e
+        .kernel
+        .sound
+        .mix
+        .as_ref()
+        .is_some_and(|m| m.voices.lock().expect("the voices").apl);
+    if f != rate && !apl && super::resampler::tables().is_none() {
+        unheard(e, &what);
     }
     refresh_voice(e, this.addr());
     if call == "Play" {
         // The log also names the level it is heard at: the volume, and for a 3D buffer its
-        // position from the listener and the 3D stage's left and right attenuation.
+        // position from the listener and the 3D stage's channel multipliers.
         let b = buffer(e, this).clone();
         let mut what = format!("{what}, volume {}", b.volume);
         if b.flags & DSBCAPS_CTRL3D != 0 {
-            let l = e
-                .kernel
-                .sound
-                .listeners
-                .values()
-                .next()
-                .map(|(_, l)| l.position);
-            let (gl, gr) = spatial_of(e, &b);
+            let l = listener_now(e);
+            let h = super::ds3d::hear(&source3d(&b), &l);
             what += &format!(
-                ", at {:?} (listener {:?}, min {} max {}), 3D {:.0}/{:.0} mB",
-                b.position, l, b.min_distance, b.max_distance, gl, gr
+                ", at {:?} (listener {:?}, min {} max {}), 3D gains {}/{}, {} Hz",
+                b.position,
+                l.position,
+                b.min_distance,
+                b.max_distance,
+                h.gains.0,
+                h.gains.1,
+                h.frequency
             );
         }
         note(e, &what);
     }
 }
 
-/// Brings a buffer's voice up to date with its frequency and, for a 3D buffer, its position
-/// against the listener (`super::mixer::spatial_millibels`).
+/// Brings a buffer's voice up to date with its frequency and, for a 3D buffer, the 3D stage's
+/// channel multipliers and Doppler frequency (`super::ds3d::hear`), and the device's choice of
+/// converter: a frequency that moves by more than 1/500 of the rate turns on the second one
+/// for every buffer (`super::resampler`).
 fn refresh_voice(e: &mut Engine, at: u32) {
     let Some(rate) = e.kernel.sound.mix.as_ref().map(|m| m.rate) else {
         return;
@@ -1739,17 +1819,49 @@ fn refresh_voice(e: &mut Engine, at: u32) {
     let Some(b) = e.kernel.sound.buffers.get(&at) else {
         return;
     };
-    let step = f64::from(b.frequency()) / f64::from(rate);
-    let spatial = (b.flags & DSBCAPS_CTRL3D != 0).then(|| spatial_of(e, b));
+    if b.flags & DSBCAPS_PRIMARYBUFFER != 0 {
+        return;
+    }
+    let (frequency, spatial) = if b.flags & DSBCAPS_CTRL3D != 0 {
+        let h = super::ds3d::hear(&source3d(b), &listener_now(e));
+        (h.frequency, Some(h.gains))
+    } else {
+        (b.frequency(), None)
+    };
+    // DirectSound's rule for its converters (`dsound` `100581e0`): a move of more than 1/500 of
+    // the rate turns on the device's second converter for every buffer; a smaller one is the
+    // playing converter's `SetRate` (`super::resampler`, at its next period).
+    let buffers: Vec<u32> = e
+        .kernel
+        .sound
+        .buffers
+        .iter()
+        .filter(|(_, b)| b.flags & DSBCAPS_PRIMARYBUFFER == 0)
+        .map(|(&at, _)| at)
+        .collect();
     with_voice(e, at, |m, at| {
-        if let Some(v) = m.all.get_mut(&at) {
-            v.step = step;
-            v.spatial = spatial;
+        let Some(v) = m.all.get_mut(&at) else {
+            return;
+        };
+        let old = v.rate;
+        v.device = rate;
+        v.spatial = spatial;
+        v.rate = frequency;
+        if old == 0 || old == frequency {
+            return;
+        }
+        if old.abs_diff(frequency) > old / 500 && !m.apl {
+            m.apl = true;
+            for b in &buffers {
+                if let Some(v) = m.all.get_mut(b) {
+                    v.apl = true;
+                }
+            }
         }
     });
 }
 
-/// The 3D buffers' voices brought up to date (after the listener moved).
+/// The 3D buffers' voices brought up to date (after the listener changed).
 fn refresh_3d(e: &mut Engine) {
     if e.kernel.sound.mix.is_none() {
         return;
@@ -1767,16 +1879,21 @@ fn refresh_3d(e: &mut Engine) {
     }
 }
 
-/// A 3D buffer's left and right attenuation from its position in the listener's frame.
-fn spatial_of(e: &Engine, b: &Buffer) -> (f64, f64) {
-    let l = e
-        .kernel
-        .sound
-        .listeners
-        .values()
-        .next()
-        .map(|(_, l)| *l)
-        .unwrap_or(Listener {
+/// The listener's settings in effect, as the 3D stage reads them; without a listener the DLL's
+/// defaults (at the origin, facing +z with +y up, factors 1), which leave positions as they are.
+fn listener_now(e: &Engine) -> super::ds3d::Listener {
+    let l = e.kernel.sound.listeners.values().next().map(|(_, l)| *l);
+    match l {
+        Some(l) => super::ds3d::Listener {
+            position: l.position,
+            velocity: l.velocity,
+            front: l.front,
+            top: l.top,
+            distance_factor: l.distance_factor,
+            rolloff: l.rolloff,
+            doppler: l.doppler,
+        },
+        None => super::ds3d::Listener {
             position: [0.0; 3],
             velocity: [0.0; 3],
             front: [0.0, 0.0, 1.0],
@@ -1784,30 +1901,21 @@ fn spatial_of(e: &Engine, b: &Buffer) -> (f64, f64) {
             distance_factor: 1.0,
             rolloff: 1.0,
             doppler: 1.0,
-        });
-    let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-    let cross = |a: [f32; 3], b: [f32; 3]| {
-        [
-            a[1] * b[2] - a[2] * b[1],
-            a[2] * b[0] - a[0] * b[2],
-            a[0] * b[1] - a[1] * b[0],
-        ]
-    };
-    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-    let unit = |a: [f32; 3]| {
-        let n = dot(a, a).sqrt();
-        if n > 0.0 {
-            a.map(|c| c / n)
-        } else {
-            a
-        }
-    };
-    let rel = sub(b.position, l.position);
-    let front = unit(l.front);
-    let right = unit(cross(l.top, front));
-    let up = cross(front, right);
-    let local = [dot(rel, right), dot(rel, up), dot(rel, front)];
-    super::mixer::spatial_millibels(local, b.min_distance, b.max_distance, l.rolloff)
+        },
+    }
+}
+
+/// A 3D buffer's settings in effect, as the 3D stage reads them.
+fn source3d(b: &Buffer) -> super::ds3d::Source {
+    super::ds3d::Source {
+        position: b.position,
+        velocity: b.velocity,
+        min: b.min_distance,
+        max: b.max_distance,
+        mute_at_max: b.flags & DSBCAPS_MUTE3DATMAXDISTANCE != 0,
+        volume: b.volume,
+        frequency: b.frequency(),
+    }
 }
 
 /// Device periods from `start` to `now` (the platform clock's 10 ms steps).
@@ -1946,7 +2054,12 @@ fn unlock(e: &mut Engine, this: Ptr, _p1: u32, _n1: u32, _p2: u32, _n2: u32) -> 
         let samples = e.mem.bytes(data, bytes);
         with_voice(e, this.addr(), |m, at| {
             if let Some(voice) = m.all.get_mut(&at) {
-                voice.data = samples;
+                // With the distortion the samples are the effect's input; the voice plays its
+                // processed copy.
+                match voice.fx.as_mut() {
+                    Some(fx) => fx.source = samples,
+                    None => voice.data = samples,
+                }
             }
         });
     }
@@ -1994,7 +2107,12 @@ fn play(e: &mut Engine, this: Ptr, reserved: u32, priority: u32, flags: u32) -> 
         if let Some(voice) = m.all.get_mut(&at) {
             voice.looping = looping;
             if !was_playing {
-                voice.position = Some(base as usize);
+                // The effect starts over 32 frames before the play position (`10046fb8`).
+                if let Some(fx) = voice.fx.as_mut() {
+                    fx.start(&mut voice.data, base as usize);
+                }
+                voice.apl = m.apl;
+                voice.start(base as usize);
                 m.playing.retain(|&p| p != at);
                 m.playing.insert(0, at);
             }
@@ -2082,14 +2200,26 @@ fn set_fx(e: &mut Engine, this: Ptr, count: u32, descriptions: Ptr, results: Ptr
         e.mem.set_u32(results.addr(), code);
     }
     if result == DS_OK {
-        buffer(e, this).effect = Some(name);
+        let b = buffer(e, this);
+        b.effect = Some(name);
+        b.fx_params = DISTORTION_DEFAULTS;
+        // The voice now plays the effect's output (`super::dsfx`).
+        if name == "distortion" && e.kernel.sound.mix.is_some() {
+            let b = buffer(e, this).clone();
+            with_voice(e, this.addr(), |m, at| {
+                if let Some(v) = m.all.get_mut(&at) {
+                    let source = std::mem::take(&mut v.data);
+                    v.data = source.clone();
+                    v.fx = Some(Box::new(fx_chain(&b, source)));
+                }
+            });
+        }
     }
     result
 }
 
 /// `GetObjectInPath(class, 0, iid, out)` for the effect `SetFX` set: the captured answer, and for
-/// the distortion a new `IDirectSoundFXDistortion8` (its parameters `DSFXDistortion` as the
-/// capture's defaults are not kept: the game sets them all at once).
+/// the distortion a new `IDirectSoundFXDistortion8` on the buffer's effect.
 fn get_object_in_path(
     e: &mut Engine,
     this: Ptr,
@@ -2122,12 +2252,12 @@ fn get_object_in_path(
     );
     let table = e.kernel.sound.distortion_vtable;
     let at = object(e, table);
-    e.kernel.sound.distortions.insert(at, (1, [0.0; 5]));
+    e.kernel.sound.distortions.insert(at, (1, this.addr()));
     e.mem.set_u32(out.addr(), at);
     DS_OK
 }
 
-fn distortion(e: &mut Engine, this: Ptr) -> &mut (u32, [f32; 5]) {
+fn distortion(e: &mut Engine, this: Ptr) -> &mut (u32, u32) {
     e.kernel
         .sound
         .distortions
@@ -2153,7 +2283,8 @@ fn distortion_release(e: &mut Engine, this: Ptr) -> u32 {
 }
 
 /// `SetAllParameters(params)`: `DSFXDistortion` within its ranges (module documentation), else
-/// `DSERR_INVALIDPARAM`. A NaN is not provided.
+/// `DSERR_INVALIDPARAM`. A NaN is not provided. The effect takes the new coefficients and keeps
+/// its state (`1000dea0`).
 fn distortion_set_all_parameters(e: &mut Engine, this: Ptr, params: Ptr) -> u32 {
     let p: [f32; 5] = std::array::from_fn(|i| e.mem.f32(params.addr() + 4 * i as u32));
     assert!(
@@ -2163,7 +2294,19 @@ fn distortion_set_all_parameters(e: &mut Engine, this: Ptr, params: Ptr) -> u32 
     if !distortion_ok(p) {
         return DSERR_INVALIDPARAM;
     }
-    distortion(e, this).1 = p;
+    let owner = distortion(e, this).1;
+    if let Some(b) = e.kernel.sound.buffers.get_mut(&owner) {
+        b.fx_params = p;
+        let b = b.clone();
+        if e.kernel.sound.mix.is_some() {
+            let c = super::dsfx::Coefficients::new(b.rate(), p, edge_table());
+            with_voice(e, owner, |m, at| {
+                if let Some(fx) = m.all.get_mut(&at).and_then(|v| v.fx.as_mut()) {
+                    fx.fx.c = c;
+                }
+            });
+        }
+    }
     DS_OK
 }
 
@@ -2205,60 +2348,88 @@ fn buffer3d_release(e: &mut Engine, this: Ptr) -> u32 {
     left
 }
 
-fn apply_ok(apply: u32) {
+/// Whether a 3D setting waits for `CommitDeferredSettings` (`DS3D_DEFERRED`) or applies at once
+/// (`DS3D_IMMEDIATE`); other flags are not provided.
+fn deferred(apply: u32) -> bool {
     assert!(
-        apply <= 1,
+        apply <= DS3D_DEFERRED,
         "a 3D setting with apply {apply:#x} is not provided"
     );
+    apply == DS3D_DEFERRED
+}
+
+/// Sets one of a 3D buffer's settings: at once (and heard), or kept for the commit.
+fn set_3d(
+    e: &mut Engine,
+    this: Ptr,
+    apply: u32,
+    now: impl FnOnce(&mut Buffer),
+    later: impl FnOnce(&mut BufferPending),
+) {
+    let at = owner(e, this);
+    if deferred(apply) {
+        later(&mut buffer(e, Ptr::new(at)).pending3d);
+    } else {
+        now(buffer(e, Ptr::new(at)));
+        refresh_voice(e, at);
+    }
 }
 
 /// `SetMinDistance(v, apply)`: above 0, else `DSERR_INVALIDPARAM` (measured: 0 refused). NaN is
 /// not provided.
 fn set_min_distance(e: &mut Engine, this: Ptr, v: f32, apply: u32) -> u32 {
-    apply_ok(apply);
     assert!(!v.is_nan(), "a NaN distance is not provided");
     if v <= 0.0 {
+        let _ = deferred(apply);
         return DSERR_INVALIDPARAM;
     }
-    let at = owner(e, this);
-    buffer(e, Ptr::new(at)).min_distance = v;
-    refresh_voice(e, at);
+    set_3d(
+        e,
+        this,
+        apply,
+        |b| b.min_distance = v,
+        |p| p.min_distance = Some(v),
+    );
     DS_OK
 }
 
 /// `SetMaxDistance(v, apply)`: above 0, else `DSERR_INVALIDPARAM` (measured: -1 refused).
 fn set_max_distance(e: &mut Engine, this: Ptr, v: f32, apply: u32) -> u32 {
-    apply_ok(apply);
     assert!(!v.is_nan(), "a NaN distance is not provided");
     if v <= 0.0 {
+        let _ = deferred(apply);
         return DSERR_INVALIDPARAM;
     }
-    let at = owner(e, this);
-    buffer(e, Ptr::new(at)).max_distance = v;
-    refresh_voice(e, at);
+    set_3d(
+        e,
+        this,
+        apply,
+        |b| b.max_distance = v,
+        |p| p.max_distance = Some(v),
+    );
     DS_OK
 }
 
+/// `SetPosition(x, y, z, apply)`: the position (a vector longer than `f32::MAX` shortened,
+/// `super::ds3d::clamp_length`).
 fn buffer3d_set_position(e: &mut Engine, this: Ptr, x: f32, y: f32, z: f32, apply: u32) -> u32 {
-    apply_ok(apply);
     assert!(
         ![x, y, z].iter().any(|f| f.is_nan()),
         "a NaN position is not provided"
     );
-    let at = owner(e, this);
-    buffer(e, Ptr::new(at)).position = [x, y, z];
-    refresh_voice(e, at);
+    let v = super::ds3d::clamp_length([x, y, z]);
+    set_3d(e, this, apply, |b| b.position = v, |p| p.position = Some(v));
     DS_OK
 }
 
+/// `SetVelocity(x, y, z, apply)`: the velocity, for Doppler (`super::ds3d::doppler_frequency`).
 fn buffer3d_set_velocity(e: &mut Engine, this: Ptr, x: f32, y: f32, z: f32, apply: u32) -> u32 {
-    apply_ok(apply);
     assert!(
         ![x, y, z].iter().any(|f| f.is_nan()),
         "a NaN velocity is not provided"
     );
-    let at = owner(e, this);
-    buffer(e, Ptr::new(at)).velocity = [x, y, z];
+    let v = super::ds3d::clamp_length([x, y, z]);
+    set_3d(e, this, apply, |b| b.velocity = v, |p| p.velocity = Some(v));
     DS_OK
 }
 
@@ -2326,44 +2497,151 @@ fn listener_get_position(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
     DS_OK
 }
 
-/// `SetAllParameters(params, apply)`: `params->dwSize` must be 0x40. Every change takes effect
-/// at once here (`DS3D_IMMEDIATE` or `DS3D_DEFERRED`: nothing is mixed, so a deferred setting is
-/// the same state as an applied one).
-fn listener_set_all_parameters(e: &mut Engine, this: Ptr, params: Ptr, _apply: u32) -> u32 {
+/// Sets one of the listener's settings: at once (and every 3D buffer heard again), or kept for
+/// the commit.
+fn set_listener(
+    e: &mut Engine,
+    this: Ptr,
+    apply: u32,
+    now: impl FnOnce(&mut Listener),
+    later: impl FnOnce(&mut ListenerPending),
+) {
+    if deferred(apply) {
+        later(&mut listener(e, this).1.pending);
+    } else {
+        now(&mut listener(e, this).1);
+        refresh_3d(e);
+    }
+}
+
+/// The factors' ranges (the DLL's checks, the limits dsound.h names): distance factor
+/// `FLT_MIN..=FLT_MAX`, rolloff and Doppler factors 0..=10.
+fn distance_factor_ok(v: f32) -> bool {
+    (f32::MIN_POSITIVE..=f32::MAX).contains(&v)
+}
+
+fn factor_ok(v: f32) -> bool {
+    (0.0..=10.0).contains(&v)
+}
+
+/// `SetAllParameters(params, apply)`: `params->dwSize` must be 0x40 and the factors and the
+/// orientation valid (`10034620`), else `DSERR_INVALIDPARAM`; the vectors are stored as
+/// `SetPosition`, `SetVelocity` and `SetOrientation` store them.
+fn listener_set_all_parameters(e: &mut Engine, this: Ptr, params: Ptr, apply: u32) -> u32 {
     let p = params.addr();
+    let deferred = deferred(apply);
     if e.mem.u32(p) != LISTENER_SIZE {
         return DSERR_INVALIDPARAM;
     }
-    let new = Listener {
-        position: get3(e, p + 4),
-        velocity: get3(e, p + 0x10),
-        front: get3(e, p + 0x1c),
-        top: get3(e, p + 0x28),
-        distance_factor: e.mem.f32(p + 0x34),
-        rolloff: e.mem.f32(p + 0x38),
-        doppler: e.mem.f32(p + 0x3c),
+    let (distance_factor, rolloff, doppler) = (
+        e.mem.f32(p + 0x34),
+        e.mem.f32(p + 0x38),
+        e.mem.f32(p + 0x3c),
+    );
+    let (front, top) = (get3(e, p + 0x1c), get3(e, p + 0x28));
+    if !distance_factor_ok(distance_factor) || !factor_ok(doppler) {
+        return DSERR_INVALIDPARAM;
+    }
+    if front.iter().chain(&top).any(|f| f.is_nan()) {
+        return DSERR_INVALIDPARAM;
+    }
+    let Some(orientation) = super::ds3d::orientation(front, top) else {
+        return DSERR_INVALIDPARAM;
     };
-    listener(e, this).1 = new;
-    refresh_3d(e);
+    if !factor_ok(rolloff) {
+        return DSERR_INVALIDPARAM;
+    }
+    let position = super::ds3d::clamp_length(get3(e, p + 4));
+    let velocity = super::ds3d::clamp_length(get3(e, p + 0x10));
+    let pending = ListenerPending {
+        position: Some(position),
+        velocity: Some(velocity),
+        orientation: Some(orientation),
+        distance_factor: Some(distance_factor),
+        rolloff: Some(rolloff),
+        doppler: Some(doppler),
+    };
+    let l = &mut listener(e, this).1;
+    if deferred {
+        l.pending = pending;
+    } else {
+        apply_listener(l, pending);
+        refresh_3d(e);
+    }
     DS_OK
 }
 
-fn listener_set_distance_factor(e: &mut Engine, this: Ptr, value: f32, _apply: u32) -> u32 {
-    listener(e, this).1.distance_factor = value;
+/// The settings in `p` made the listener's.
+fn apply_listener(l: &mut Listener, p: ListenerPending) {
+    if let Some(v) = p.position {
+        l.position = v;
+    }
+    if let Some(v) = p.velocity {
+        l.velocity = v;
+    }
+    if let Some((front, top)) = p.orientation {
+        l.front = front;
+        l.top = top;
+    }
+    if let Some(v) = p.distance_factor {
+        l.distance_factor = v;
+    }
+    if let Some(v) = p.rolloff {
+        l.rolloff = v;
+    }
+    if let Some(v) = p.doppler {
+        l.doppler = v;
+    }
+}
+
+fn listener_set_distance_factor(e: &mut Engine, this: Ptr, value: f32, apply: u32) -> u32 {
+    if !distance_factor_ok(value) {
+        let _ = deferred(apply);
+        return DSERR_INVALIDPARAM;
+    }
+    set_listener(
+        e,
+        this,
+        apply,
+        |l| l.distance_factor = value,
+        |p| p.distance_factor = Some(value),
+    );
     DS_OK
 }
 
-fn listener_set_doppler_factor(e: &mut Engine, this: Ptr, value: f32, _apply: u32) -> u32 {
-    listener(e, this).1.doppler = value;
+fn listener_set_doppler_factor(e: &mut Engine, this: Ptr, value: f32, apply: u32) -> u32 {
+    if !factor_ok(value) {
+        let _ = deferred(apply);
+        return DSERR_INVALIDPARAM;
+    }
+    set_listener(
+        e,
+        this,
+        apply,
+        |l| l.doppler = value,
+        |p| p.doppler = Some(value),
+    );
     DS_OK
 }
 
-fn listener_set_rolloff_factor(e: &mut Engine, this: Ptr, value: f32, _apply: u32) -> u32 {
-    listener(e, this).1.rolloff = value;
-    refresh_3d(e);
+fn listener_set_rolloff_factor(e: &mut Engine, this: Ptr, value: f32, apply: u32) -> u32 {
+    if !factor_ok(value) {
+        let _ = deferred(apply);
+        return DSERR_INVALIDPARAM;
+    }
+    set_listener(
+        e,
+        this,
+        apply,
+        |l| l.rolloff = value,
+        |p| p.rolloff = Some(value),
+    );
     DS_OK
 }
 
+/// `SetOrientation(front, top, apply)`: both made unit length and the top made square to the
+/// front (`super::ds3d::orientation`, the DLL's `SetOrientation` checks); a zero, parallel or
+/// NaN pair `DSERR_INVALIDPARAM`.
 #[allow(clippy::too_many_arguments)] // The interface's receiver, six floats and the apply word.
 fn listener_set_orientation(
     e: &mut Engine,
@@ -2374,29 +2652,62 @@ fn listener_set_orientation(
     tx: f32,
     ty: f32,
     tz: f32,
-    _apply: u32,
+    apply: u32,
 ) -> u32 {
-    let l = &mut listener(e, this).1;
-    l.front = [fx, fy, fz];
-    l.top = [tx, ty, tz];
-    refresh_3d(e);
+    let _ = deferred(apply);
+    if [fx, fy, fz, tx, ty, tz].iter().any(|f| f.is_nan()) {
+        return DSERR_INVALIDPARAM;
+    }
+    let Some(o) = super::ds3d::orientation([fx, fy, fz], [tx, ty, tz]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    set_listener(
+        e,
+        this,
+        apply,
+        |l| (l.front, l.top) = o,
+        |p| p.orientation = Some(o),
+    );
     DS_OK
 }
 
-fn listener_set_position(e: &mut Engine, this: Ptr, x: f32, y: f32, z: f32, _apply: u32) -> u32 {
-    listener(e, this).1.position = [x, y, z];
-    refresh_3d(e);
+/// `SetPosition(x, y, z, apply)` (a vector longer than `f32::MAX` shortened).
+fn listener_set_position(e: &mut Engine, this: Ptr, x: f32, y: f32, z: f32, apply: u32) -> u32 {
+    let v = super::ds3d::clamp_length([x, y, z]);
+    set_listener(e, this, apply, |l| l.position = v, |p| p.position = Some(v));
     DS_OK
 }
 
-fn listener_set_velocity(e: &mut Engine, this: Ptr, x: f32, y: f32, z: f32, _apply: u32) -> u32 {
-    listener(e, this).1.velocity = [x, y, z];
+/// `SetVelocity(x, y, z, apply)` (for Doppler).
+fn listener_set_velocity(e: &mut Engine, this: Ptr, x: f32, y: f32, z: f32, apply: u32) -> u32 {
+    let v = super::ds3d::clamp_length([x, y, z]);
+    set_listener(e, this, apply, |l| l.velocity = v, |p| p.velocity = Some(v));
     DS_OK
 }
 
-/// `CommitDeferredSettings()`: settings already apply (see `SetAllParameters`); `DS_OK`.
+/// `CommitDeferredSettings()`: the listener's and every 3D buffer's settings kept with
+/// `DS3D_DEFERRED` take effect (each one that was set; the others stay), then every 3D buffer is
+/// heard again. `DS_OK`.
 fn listener_commit(e: &mut Engine, this: Ptr) -> u32 {
-    let _ = listener(e, this);
+    let l = &mut listener(e, this).1;
+    let pending = std::mem::take(&mut l.pending);
+    apply_listener(l, pending);
+    for b in e.kernel.sound.buffers.values_mut() {
+        let p = std::mem::take(&mut b.pending3d);
+        if let Some(v) = p.position {
+            b.position = v;
+        }
+        if let Some(v) = p.velocity {
+            b.velocity = v;
+        }
+        if let Some(v) = p.min_distance {
+            b.min_distance = v;
+        }
+        if let Some(v) = p.max_distance {
+            b.max_distance = v;
+        }
+    }
+    refresh_3d(e);
     DS_OK
 }
 
@@ -2522,6 +2833,11 @@ mod tests {
             .u32(),
             DS_OK
         );
+        // Set with DS3D_DEFERRED: the position in effect changes at the commit (the DLL's
+        // `GetPosition` reads the settings in effect, `100167f0`).
+        assert_eq!(e.vcall(listener, 0x1c, &[0x1400]).u32(), DS_OK);
+        assert_eq!([0, 4, 8].map(|o| e.mem.f32(0x1400 + o)), [0.0; 3]);
+        assert_eq!(e.vcall(listener, 0x44, &[]).u32(), DS_OK);
         assert_eq!(e.vcall(listener, 0x1c, &[0x1400]).u32(), DS_OK);
         assert_eq!([0, 4, 8].map(|o| e.mem.f32(0x1400 + o)), [1.0, 2.0, 3.0]);
         e.mem.set_u32(0x1500, LISTENER_SIZE);
@@ -2941,11 +3257,33 @@ mod tests {
         let voices = hear(&mut e);
         let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
         e.vcall(b, 0x30, &[0, 0, 0]);
-        assert!(voices.lock().unwrap().all[&b].exact());
         e.vcall(b, 0x44, &[11025]);
         let v = voices.lock().unwrap();
-        assert_eq!(v.all[&b].step, 0.5);
+        assert_eq!((v.all[&b].rate, v.all[&b].device), (11025, 22050));
         assert!(!v.all[&b].exact());
+    }
+
+    /// DirectSound's converters (`dsound` `100581e0`): a move of more than 1/500 of the rate turns
+    /// on the second converter for every buffer of the device; a smaller one keeps the first.
+    #[test]
+    fn a_large_frequency_change_turns_on_the_second_converter() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let voices = hear(&mut e);
+        let (_, a) = create(&mut e, ds, 0x2e0, false, 1, 22050);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 22050);
+        e.vcall(a, 0x30, &[0, 0, 0]);
+        // 44 Hz is 1/500 of 22050 (in whole numbers): the first converter stays.
+        e.vcall(a, 0x44, &[22094]);
+        {
+            let v = voices.lock().unwrap();
+            assert!(!v.apl && !v.all[&a].apl && !v.all[&b].apl);
+            assert_eq!(v.all[&a].rate, 22094);
+        }
+        e.vcall(b, 0x44, &[22140]);
+        let v = voices.lock().unwrap();
+        assert!(v.apl && v.all[&a].apl && v.all[&b].apl);
+        assert_eq!((v.all[&a].rate, v.all[&b].rate), (22094, 22140));
     }
 
     #[test]
@@ -2975,7 +3313,7 @@ mod tests {
         let mut e = engine();
         let voices = hear(&mut e);
         play_stream(&mut e, 0x9000, vec![0; 4], 2, 16, 44100);
-        assert_eq!(voices.lock().unwrap().all[&0x9000].step, 2.0);
+        assert_eq!(voices.lock().unwrap().all[&0x9000].rate, 44100);
         seek_stream(&mut e, 0x9000, 1);
         stream_volume(&mut e, 0x9000, -100);
         let v = voices.lock().unwrap();
@@ -2992,23 +3330,101 @@ mod tests {
         let voices = hear(&mut e);
         let (_, b) = create(&mut e, ds, 0x302b0, false, 1, 44100);
         e.vcall(b, 0x30, &[0, 0, 0]);
-        // Ahead at the minimum distance: -7.8 dB on both sides.
-        let (l, r) = voices.lock().unwrap().all[&b].spatial.unwrap();
-        assert_eq!(l, r);
-        let three_d = e.kernel.sound.buffers[&b].three_d;
-        let three_d = if three_d != 0 {
-            three_d
-        } else {
-            let out = 0x1900;
-            let iid = 0x1910;
-            e.mem.write(iid, &IID_BUFFER3D);
-            e.vcall(b, 0, &[iid, out]);
-            e.mem.u32(out)
+        // At the listener: an even split, 5 dB down (`gain(-500) * gain(-301)`), as measured
+        // straight ahead at the minimum distance.
+        let gains = |voices: &Arc<Mutex<Voices>>| {
+            let (l, r) = voices.lock().unwrap().all[&b].spatial.unwrap();
+            (l.to_bits(), r.to_bits())
         };
-        // Far to the left: the right side is silent.
+        assert_eq!(gains(&voices), (0x3ed0_9516, 0x3ed0_9516));
+        let three_d = buffer3d_of(&mut e, b);
+        // Far to the left, at once: the right side is silent (measured).
         e.vcall(three_d, 0x4c, &[(-4.0f32).to_bits(), 0, 0, 0]);
-        let (l, r) = voices.lock().unwrap().all[&b].spatial.unwrap();
-        assert!(l > -2000.0 && r <= -10000.0, "{l} {r}");
+        assert_eq!(gains(&voices), (0x3e12_5092, 0));
+        // Deferred to the right: nothing changes until the listener commits.
+        e.vcall(three_d, 0x4c, &[4.0f32.to_bits(), 0, 0, DS3D_DEFERRED]);
+        assert_eq!(gains(&voices), (0x3e12_5092, 0));
+        let listener = listener_of(&mut e, ds);
+        assert_eq!(e.vcall(listener, 0x44, &[]).u32(), DS_OK);
+        assert_eq!(gains(&voices), (0, 0x3e12_5092));
+        // The listener turned to face +x (at once): the source at +x is now straight ahead.
+        let (one, zero) = (1.0f32.to_bits(), 0u32);
+        let r = e.vcall(listener, 0x34, &[one, zero, zero, zero, one, zero, 0]);
+        assert_eq!(r.u32(), DS_OK);
+        // (The rotation reads whole degrees from the table, so "ahead" is within a degree.)
+        let (l, r) = gains(&voices);
+        let (l, r) = (f32::from_bits(l), f32::from_bits(r));
+        assert!((l - r).abs() < 0.03 * l, "{l} {r}");
+        // A parallel front and top are refused.
+        let r = e.vcall(listener, 0x34, &[one, zero, zero, one, zero, zero, 0]);
+        assert_eq!(r.u32(), DSERR_INVALIDPARAM);
+    }
+
+    /// The buffer's `IDirectSound3DBuffer`.
+    fn buffer3d_of(e: &mut Engine, b: u32) -> u32 {
+        let three_d = e.kernel.sound.buffers[&b].three_d;
+        if three_d != 0 {
+            return three_d;
+        }
+        let (out, iid) = (0x1900, 0x1910);
+        e.mem.write(iid, &IID_BUFFER3D);
+        e.vcall(b, 0, &[iid, out]);
+        e.mem.u32(out)
+    }
+
+    /// The device's listener (a 3D primary buffer's).
+    fn listener_of(e: &mut Engine, ds: u32) -> u32 {
+        e.mem.set_u32(0x1200, 0x24);
+        e.mem.set_u32(0x1204, 0x91);
+        assert_eq!(e.vcall(ds, 0xc, &[0x1200, 0x1004, 0]).u32(), DS_OK);
+        let primary = e.mem.u32(0x1004);
+        e.mem.write(0x1300, &IID_LISTENER);
+        assert_eq!(e.vcall(primary, 0, &[0x1300, 0x1008]).u32(), DS_OK);
+        e.mem.u32(0x1008)
+    }
+
+    /// A made-up edge table for the distortion (not the player's: the tests check the chain).
+    pub(super) const EDGE_TABLE: [f64; 32] = [1.25; 32];
+
+    #[test]
+    fn a_heard_buffer_with_the_distortion_plays_the_effect() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let voices = hear(&mut e);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        // Samples: a ramp, written through Lock/Unlock.
+        let data = e.kernel.sound.buffers[&b].data;
+        let samples: Vec<u8> = (0..22050i32)
+            .flat_map(|i| (((i * 7) % 2000 - 1000) as i16).to_le_bytes())
+            .collect();
+        e.mem.write(data, &samples);
+        e.vcall(b, 0x2c, &[0, 44100, 0x1a00, 0x1a04, 0, 0, 0]);
+        e.vcall(b, 0x4c, &[e.mem.u32(0x1a00), 44100, 0, 0]);
+        let d = effect_desc(&mut e, &GUID_DISTORTION);
+        assert_eq!(e.vcall(b, 0x54, &[1, d, 0x1c00]).u32(), DS_OK);
+        e.mem.write(0x1c10, &GUID_DISTORTION);
+        e.mem.write(0x1c20, &IID_DISTORTION8);
+        assert_eq!(e.vcall(b, 0x5c, &[0x1c10, 0, 0x1c20, 0x1c30]).u32(), DS_OK);
+        let fx = e.mem.u32(0x1c30);
+        let p = [-18.2f32, 0.0, 5000.0, 1135.0, 5000.0];
+        for (i, v) in p.into_iter().enumerate() {
+            e.mem.set_f32(0x1c40 + 4 * i as u32, v);
+        }
+        assert_eq!(e.vcall(fx, 0xc, &[0x1c40]).u32(), DS_OK);
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        let mut out = vec![0f32; 2 * 64];
+        super::super::sound_out::Source::render(&mut *voices.lock().unwrap(), 22050, 2, &mut out);
+        // By hand: the effect from 32 frames before the start (the end of the buffer).
+        let c = super::super::dsfx::Coefficients::new(22050, p, &EDGE_TABLE);
+        let mut d = super::super::dsfx::Distortion::new(c);
+        let mut expect = samples.clone();
+        for f in (22050 - 32..22050).chain(0..64) {
+            d.frame(&mut expect[2 * f..2 * f + 2], 1, 16);
+        }
+        for f in 0..64 {
+            let s = i16::from_le_bytes([expect[2 * f], expect[2 * f + 1]]);
+            assert_eq!(out[2 * f], f32::from(s) / 32768.0, "frame {f}");
+        }
     }
 
     #[test]

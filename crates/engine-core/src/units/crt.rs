@@ -98,6 +98,9 @@ pub fn malloc(e: &mut Engine, n: u32) -> Ptr {
 
 // Platform: replaces 00ecd291 (free, LIBCMT)
 pub fn free(e: &mut Engine, p: Ptr) {
+    if let (Some(hook), true) = (e.free_hook, p.addr() != 0) {
+        hook(e, p.addr());
+    }
     e.kernel.crt_block_sizes.remove(&p.addr());
     e.mem.free(p.addr())
 }

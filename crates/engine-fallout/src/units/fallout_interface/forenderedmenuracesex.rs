@@ -190,13 +190,21 @@ fn copy_words(e: &mut Engine, from: u32, to: u32, words: u32) {
     }
 }
 
-/// The renderer's aspect-like ratio: the value of the virtual getter at
-/// +0x100 of the renderer, divided by the `Setting` at 0x01203144.
-fn renderer_ratio(e: &mut Engine) -> f32 {
+/// The camera ratio `Initialize` (`007fd173`..`007fd1cb`) and `OnMenuOpen` (`007fdd7a`..`007fddd6`)
+/// compute: the value of the renderer's virtual getter at +0x100 (`FSTP float`) divided by the
+/// `Setting` at 0x01203144 (`FSTP float`), the quotient stored as a `float`. Both functions keep
+/// the two `float`s in the stack words that are their `NiFrustum` local's `m_fNear` (+0x10, the
+/// setting) and `m_fFar` (+0x14, the getter's value), which `NiFrustum::NiFrustum` (`00a71b70`)
+/// leaves alone; so the frustum they hand to `NiCamera::SetViewFrustum` (`00a6faf0`) has that
+/// near and far. Writes them into `frustum` and answers the ratio.
+fn renderer_ratio(e: &mut Engine, frustum: u32) -> f32 {
     let renderer = e.call(0x0045_c670, &args![]).u32();
-    let value = e.vcall(renderer, 0x100, &args![]).f32();
-    let divisor = setting_float(e, 0x0120_3144);
-    (value as f64 / divisor as f64) as f32
+    let far = x87_store32(e.vcall(renderer, 0x100, &args![]).f64());
+    e.mem.set_u32(frustum + 0x14, far);
+    let near = x87_quiet_bits(setting_float(e, 0x0120_3144).to_bits());
+    e.mem.set_u32(frustum + 0x10, near);
+    let ratio = x87_store32(x87_div(x87_load32(far), x87_m32(near)));
+    f32::from_bits(x87_quiet_bits(ratio))
 }
 
 // Translated from 007fc970 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -342,7 +350,7 @@ pub fn forendered_menu_race_sex_initialize(e: &mut Engine, this: Ptr<FORenderedM
         e.call(0x0073_3fd0, &args![camera, 1.0f32]);
         let frustum = local(0x164);
         e.call(0x00a7_1b70, &args![frustum, 0u32]);
-        let ratio = renderer_ratio(e);
+        let ratio = renderer_ratio(e, frustum);
         e.call(0x0050_7700, &args![camera, ratio]);
         let wide = e.mem.u8(0x011f_9426) != 0;
         let width = if wide {
@@ -568,7 +576,8 @@ pub fn forendered_menu_race_sex_on_menu_open(e: &mut Engine, this: Ptr<FORendere
         let lights = pointer_value(e, me + 0x108);
         let light_node = e.vcall(lights, 0xc, &args![]).u32();
         let graph = e.call(SCENE_NODE_GETTER, &args![3u32]).u32();
-        e.call(0x00b5_ca70, &args![graph, light_node, radius]);
+        let found = e.call(0x00b5_ca70, &args![graph, light_node, radius]).u32();
+        race_menu_light_check(e, me, lights, light_node, graph, found, radius);
         let parent = pointer_value(e, me + 0x100);
         let angle: f32 = e.global(0x0102_b3c8);
         e.call(0x0064_04b0, &args![parent, angle, 0.0f32, 0.0f32, 1.0f32]);
@@ -609,7 +618,7 @@ pub fn forendered_menu_race_sex_on_menu_open(e: &mut Engine, this: Ptr<FORendere
         e.call(0x00a7_01b0, &args![camera, up, forward]);
         let frustum = local(0x84);
         e.call(0x00a7_1b70, &args![frustum, 0u32]);
-        let ratio = renderer_ratio(e);
+        let ratio = renderer_ratio(e, frustum);
         let camera = pointer_value(e, me + 0x104);
         e.call(0x0050_7700, &args![camera, ratio]);
         let fov = fov_value(e);
@@ -635,6 +644,63 @@ pub fn forendered_menu_race_sex_on_menu_open(e: &mut Engine, this: Ptr<FORendere
         let value = e.call(0x007d_cc00, &args![menu_node]).u32();
         forendered_menu_race_sex_light_button(e, this, value);
     });
+}
+
+/// Diagnostic only, not exe behaviour (`NV_LIGHT_CHECK`, see
+/// `engine_bs::units::bsshader::shadowscenenode::light_check`): after `OnMenuOpen` added the
+/// face lights to scene node 3, prints the loaded model and its node, how many lights
+/// `AddAllLightsFromNode_Recurse` found, the radius it gave them (3 x the player's bound
+/// radius), the player's bound, and each light in node 3's light list (+0xb4) and add queue (+0xe4).
+fn race_menu_light_check(
+    e: &Engine,
+    me: u32,
+    model: u32,
+    light_node: u32,
+    graph: u32,
+    found: u32,
+    radius: f32,
+) {
+    use crate::units::bsshader::shadowscenenode::light_check;
+    if !light_check::on() {
+        return;
+    }
+    let player = e.mem.u32(me + 0xfc);
+    let bound = if player != 0 {
+        e.mem.u32(player + 0x20)
+    } else {
+        0
+    };
+    let bound_text = if bound != 0 && e.mem.is_mapped(bound) {
+        format!(
+            "({}, {}, {}) r {}",
+            e.mem.f32(bound),
+            e.mem.f32(bound + 4),
+            e.mem.f32(bound + 8),
+            e.mem.f32(bound + 0xc)
+        )
+    } else {
+        format!("{bound:08x}")
+    };
+    light_check::say(&format!(
+        "race menu open: face-light model {model:08x} node {light_node:08x}, scene node 3 \
+         {graph:08x}: {found} lights found, radius {radius}; player {player:08x} bound {bound_text}"
+    ));
+    if graph == 0 {
+        return;
+    }
+    for (list, label) in [(0xb4u32, "light list"), (0xe4, "queued to add")] {
+        let mut item = e.mem.u32(graph + list);
+        while item != 0 && e.mem.is_mapped(item) {
+            let light = e.mem.u32(item + 8);
+            item = e.mem.u32(item);
+            if light != 0 {
+                light_check::say(&format!(
+                    "  node 3 {label}: {}",
+                    light_check::light_text(e, light)
+                ));
+            }
+        }
+    }
 }
 
 // Translated from 007fdf10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1658,8 +1724,10 @@ mod tests {
         // The body found by name reports its node (0x5555) to 007f9010.
         assert_eq!(first_call(&log, 0x007f_9010), [menu.addr(), 0x5555]);
         // The frustum: tan(fov) = 3.0 * (2.0 * 0.5) + 10 = 13, scale 0.25,
-        // aspect 1600 / 800.
-        assert_eq!(*frustum.borrow(), [-3.25, 3.25, 6.5, -6.5, 0.0, 0.0, 0.0]);
+        // aspect 1600 / 800; near and far are the setting at 01203144 (0.5) and
+        // the renderer getter's value (1.5), which the exe keeps in the frustum's
+        // own stack words (007fd194 / 007fd1a6).
+        assert_eq!(*frustum.borrow(), [-3.25, 3.25, 6.5, -6.5, 0.5, 1.5, 0.0]);
         // The camera's ratio is 1.5 / 0.5.
         assert_eq!(calls_to(&log, 0x0050_7700)[0][1], 3.0f32.to_bits());
         // A light was attached and InitLight asked 007fc400; the last call
@@ -1798,6 +1866,26 @@ mod tests {
         e.register(0x007d_cc00, |_, _| ret(2));
         let menu = new_menu(&mut e);
         (e, menu, player)
+    }
+
+    /// The p202 race-menu stop: the cloned scene's camera frustum takes its near and far from
+    /// the stack words `OnMenuOpen` stores the ratio's two `float`s in (007fdd9b: the renderer
+    /// getter's value at the frustum's +0x14; 007fddaa: the setting at 01203144 at +0x10). Left
+    /// at 0 the culler's far plane went through the camera and culled every menu light.
+    #[test]
+    fn on_menu_open_gives_the_camera_frustum_the_ratio_near_and_far() {
+        let (mut e, menu, _) = menu_open_engine();
+        let frustum = Rc::new(RefCell::new(Vec::<f32>::new()));
+        let seen = frustum.clone();
+        e.register_double(0x00a6_faf0, move |e, a| {
+            *seen.borrow_mut() = (0..6).map(|i| e.mem.f32(a[1] + 4 * i)).collect();
+            Ret::default()
+        });
+        e.mem.set_u8(0x011a_d884, 1);
+        e.call(0x007f_d6c0, &args![menu]);
+        let frustum = frustum.borrow();
+        assert_eq!(frustum.len(), 6);
+        assert_eq!((frustum[4], frustum[5]), (0.5, 1.5));
     }
 
     #[test]

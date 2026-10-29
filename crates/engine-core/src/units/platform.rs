@@ -15,6 +15,8 @@ pub mod d3dx;
 #[cfg(windows)]
 pub mod d3dxreal;
 pub mod dinput;
+pub mod ds3d;
+pub mod dsfx;
 pub mod dshow;
 pub mod dsound;
 pub mod files;
@@ -24,11 +26,21 @@ pub mod mmio;
 pub mod nls;
 pub mod nvapi;
 pub mod process;
+pub mod resampler;
 pub mod sound_out;
 pub mod time;
 pub mod vorbisfile;
 pub mod window;
 pub mod zone;
+
+/// `NV_FACE_CHECK` (diagnostic only, not exe behaviour): the sizes of the FaceGen face images
+/// (`0064ceb0`) not yet matched, each `width << 32 | height`. The real-device side (`d3d9real`)
+/// follows the first uncompressed texture of such a size created after it (and drops the entry).
+pub static FACE_CHECK_IMAGES: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+/// `NV_FACE_CHECK` (diagnostic only): the file name of each Direct3D texture an `NiSourceTexture`
+/// got (by the modelled texture's address), filled where the renderer data is made (`00e68ef0`).
+pub static FACE_CHECK_NAMES: std::sync::Mutex<std::collections::BTreeMap<u32, String>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
 
 /// The `MemoryManager` singleton (`011f6238`); [`get_memory_manager`]
 /// returns its address.
@@ -62,6 +74,9 @@ pub fn memory_manager_allocate(e: &mut Engine, _this: Ptr, size: u32) -> Ptr {
 // Platform: replaces 00aa4060 (MemoryManager::Deallocate (Xbox PDB), FalloutNV.exe 1.4.0.525)
 /// Frees a block from [`memory_manager_allocate`]; null does nothing.
 pub fn memory_manager_deallocate(e: &mut Engine, _this: Ptr, block: Ptr) {
+    if let (Some(hook), true) = (e.free_hook, block.addr() != 0) {
+        hook(e, block.addr());
+    }
     e.kernel.crt_block_sizes.remove(&block.addr());
     e.mem.free(block.addr());
 }
@@ -505,6 +520,10 @@ fn interlocked_compare_exchange(e: &mut Engine, target: Ptr, exchange: i32, comp
     if old == comparand {
         e.mem.set_i32(target.addr(), exchange);
     }
+    if crate::queue_check::enabled() {
+        // Diagnostic only (`NV_QUEUE_CHECK`, not exe behaviour).
+        crate::queue_check::exchange(e, target.addr(), exchange, comparand, old);
+    }
     old
 }
 
@@ -542,7 +561,7 @@ fn critical_section_reset(e: &mut Engine, section: Ptr) {
 /// Takes the section for the running thread, waiting (a switch point) while another holds it.
 fn enter_critical_section(e: &mut Engine, section: Ptr) {
     let handle = critical_section_mutex(e, section);
-    wait_for_single_object(e, handle, INFINITE);
+    wait_one(e, handle, INFINITE);
 }
 
 // Platform: replaces KERNEL32.DLL LeaveCriticalSection (import)
@@ -1019,9 +1038,35 @@ fn lstrcat_a(e: &mut Engine, destination: Ptr, source: Ptr) -> u32 {
     destination.addr()
 }
 
-// Platform: replaces KERNEL32.DLL GetTickCount and WINMM.DLL timeGetTime (imports)
+// Platform: replaces WINMM.DLL timeGetTime (import): the platform clock in milliseconds. It moved
+// in 1 ms steps on the reference machine (its timer resolution was 1 ms; a29, see
+// [`TICK_INTERVAL_US`]). The platform's own time stamps (DirectInput's) read it too.
 fn tick_count(e: &mut Engine) -> u32 {
     e.clock_now_ms()
+}
+
+/// How far Windows' `GetTickCount` moves at once: one period of the clock interrupt at its
+/// longest, 15.625 ms, whatever timer resolution a program asks for. Measured on the reference
+/// machine (Windows 11 26200, a29 `ticks.ps1`, 2026-10-28): over 2 s, steps of 15 ms (48) and
+/// 16 ms (79), the same after `timeBeginPeriod(1)`; `timeGetTime` moved in 1 ms steps.
+pub const TICK_INTERVAL_US: u64 = 15_625;
+
+// Platform: replaces KERNEL32.DLL GetTickCount (import): the platform clock in whole ticks of
+// [`TICK_INTERVAL_US`], in milliseconds rounded down, as the real one counts
+// (`TickCount * 15.625`). The game's frame timer (`BSTimer`, `00aa4ee0`) paces frames by it.
+fn get_tick_count(e: &mut Engine) -> u32 {
+    // `NV_TICK_COUNT=1ms` (a measurement setting of the host, not Windows' behaviour): the
+    // millisecond clock as before, to compare the frame pacing with it.
+    static MILLISECONDS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *MILLISECONDS.get_or_init(|| std::env::var("NV_TICK_COUNT").is_ok_and(|v| v == "1ms")) {
+        return tick_count(e);
+    }
+    whole_ticks_ms(e.clock_now_us())
+}
+
+/// The milliseconds `GetTickCount` reads at `us` microseconds of the clock.
+fn whole_ticks_ms(us: u64) -> u32 {
+    (us / TICK_INTERVAL_US * TICK_INTERVAL_US / 1000) as u32
 }
 
 // Platform: replaces KERNEL32.DLL QueryPerformanceFrequency (import): 1 MHz.
@@ -1577,8 +1622,16 @@ fn release_semaphore(e: &mut Engine, handle: u32, release: i32, previous: Ptr) -
 /// passes the timeout (after one pass, so a timeout of 0 gives each one
 /// turn). Still not signalled, a finite wait times out (`WAIT_TIMEOUT`; the
 /// clock is not advanced) and an `INFINITE` one would block forever and
-/// stops the engine. An unknown handle gives `WAIT_FAILED`.
+/// stops the engine. An unknown handle gives `WAIT_FAILED`. A blocking call: a turn that used
+/// up its time slice ends first (`thread_host::blocking_call`).
 fn wait_for_single_object(e: &mut Engine, handle: u32, timeout: u32) -> u32 {
+    crate::thread_host::blocking_call(e);
+    wait_one(e, handle, timeout)
+}
+
+/// [`wait_for_single_object`] without the blocking call's turn end: `EnterCriticalSection`'s
+/// wait, which switches only when the section is held (contended).
+fn wait_one(e: &mut Engine, handle: u32, timeout: u32) -> u32 {
     let finite = timeout != INFINITE;
     let deadline = finite.then(|| e.clock_now_us() + u64::from(timeout) * 1000);
     loop {
@@ -1617,6 +1670,8 @@ fn wait_for_multiple_objects(
     if count == 0 || count > 64 {
         return WAIT_FAILED;
     }
+    // A blocking call: a turn that used up its time slice ends first.
+    crate::thread_host::blocking_call(e);
     let list: Vec<u32> = (0..count)
         .map(|i| e.mem.u32(handles.addr() + 4 * i))
         .collect();
@@ -2128,7 +2183,7 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         (k, "Sleep", entry!(0, sleep(u32)).1),
         (k, "GetLastError", entry!(0, get_last_error() -> u32).1),
         (k, "SetLastError", entry!(0, set_last_error(u32)).1),
-        (k, "GetTickCount", entry!(0, tick_count() -> u32).1),
+        (k, "GetTickCount", entry!(0, get_tick_count() -> u32).1),
         (
             k,
             "GetPrivateProfileStringA",
@@ -3607,29 +3662,52 @@ mod tests {
     /// A plain (non-platform) function: counts its calls in 0x2f10.
     const PLAIN: u32 = 0x00ab_0800;
 
-    /// Ten rounds of ten plain calls and one platform call (`GetCurrentThread`).
+    /// Ten rounds of ten plain calls and one platform call (`GetCurrentThread`), with a wait
+    /// on the (signalled) event in 0x2f14 after the fourth round: a blocking call that does
+    /// not block.
     fn counting_thread(e: &mut Engine, _: &[u32]) -> Ret {
-        for _ in 0..10 {
+        for round in 0..10 {
             for _ in 0..10 {
                 e.call(PLAIN, &[]);
             }
             e.call(GET_CURRENT_THREAD, &[]);
+            if round == 3 {
+                let ev = e.mem.u32(0x2f14);
+                e.call(WAIT_FOR_SINGLE_OBJECT, &[ev, INFINITE]);
+            }
         }
         Ret::default()
     }
 
-    /// The plain calls `counting_thread` had made when its first slice of 25 calls ended.
-    fn first_slice_end(scheme: crate::thread_host::Scheme) -> u32 {
+    /// Only plain calls, 300 of them.
+    fn plain_thread(e: &mut Engine, _: &[u32]) -> Ret {
+        for _ in 0..300 {
+            e.call(PLAIN, &[]);
+        }
+        Ret::default()
+    }
+
+    /// The plain calls the thread at `start` had made when its first turn (slices of `slice`
+    /// calls) ended; it then runs to its end with `total` plain calls.
+    fn first_turn_end(
+        switch_at: crate::thread_host::SwitchAt,
+        slice: u64,
+        start: u32,
+        total: u32,
+    ) -> u32 {
         let mut e = thread_engine();
-        e.kernel.threads.scheme = scheme;
+        e.kernel.threads.scheme.switch_at = switch_at;
         e.register(PLAIN, |e, _| {
             let n = e.mem.u32(0x2f10);
             e.mem.set_u32(0x2f10, n + 1);
             Ret::default()
         });
         e.register(0x00ab_0810, counting_thread);
-        crate::thread_host::start_slicing(&mut e, 25);
-        let t = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0810, 0, 0, 0]);
+        e.register(0x00ab_0820, plain_thread);
+        let ev = call(&mut e, CREATE_EVENT_A, &[0, 1, 1, 0]);
+        e.mem.set_u32(0x2f14, ev);
+        crate::thread_host::start_slicing(&mut e, slice);
+        let t = call(&mut e, CREATE_THREAD, &[0, 0, start, 0, 0, 0]);
         call(&mut e, SLEEP, &[0]);
         let at = e.mem.u32(0x2f10);
         assert!(matches!(
@@ -3641,19 +3719,33 @@ mod tests {
             call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, INFINITE]),
             WAIT_OBJECT_0
         );
-        assert_eq!(e.mem.u32(0x2f10), 100);
+        assert_eq!(e.mem.u32(0x2f10), total);
         at
     }
 
     #[test]
-    fn after_its_slice_a_thread_gives_up_its_turn_only_at_a_platform_call() {
-        use crate::thread_host::Scheme;
+    fn after_its_slice_a_thread_gives_up_its_turn_where_the_scheme_says() {
+        use crate::thread_host::SwitchAt;
         // Calls of the turn: 1 the start function, 2-11 plain, 12 the platform call, 13-22
-        // plain, 23 platform, 24.. plain. The 26th call finds the slice used up.
-        // `Wake`: the turn ends before the next platform call (the 34th), after 30 plain calls.
-        assert_eq!(first_slice_end(Scheme::WAKE), 30);
-        // `Slice`: it ends at the 26th call itself, in the middle of a round.
-        assert_eq!(first_slice_end(Scheme::SLICE), 22);
+        // plain, 23 platform, 24-33 plain, 34 platform, 35-44 plain, 45 platform, 46 the wait.
+        // The 26th call finds the slice of 25 used up.
+        // `Blocking` (the default): the turn ends before the wait, after 40 plain calls.
+        assert_eq!(first_turn_end(SwitchAt::Blocking, 25, 0x00ab_0810, 100), 40);
+        // `Platform`: before the next platform call (the 34th), after 30 plain calls.
+        assert_eq!(first_turn_end(SwitchAt::Platform, 25, 0x00ab_0810, 100), 30);
+        // `Any`: at the 26th call itself, in the middle of a round.
+        assert_eq!(first_turn_end(SwitchAt::Any, 25, 0x00ab_0810, 100), 22);
+    }
+
+    #[test]
+    fn a_turn_without_a_blocking_call_ends_at_the_hard_cap() {
+        use crate::thread_host::{SwitchAt, HARD_CAP_SLICES};
+        // Slices of 2: the start function and one plain call use the first; the turn goes on
+        // to 50 slices in all, so it ends after 100 plain calls.
+        assert_eq!(
+            first_turn_end(SwitchAt::Blocking, 2, 0x00ab_0820, 300),
+            (2 * HARD_CAP_SLICES) as u32
+        );
     }
 
     /// A thread that waits 100 ms on the event in 0x2f00, then logs the answer and the clock.
@@ -3713,8 +3805,9 @@ mod tests {
 
     #[test]
     fn nv_threads_names_the_scheme() {
-        use crate::thread_host::Scheme;
+        use crate::thread_host::{Scheme, SwitchAt};
         assert_eq!(Scheme::from_name(None), Ok(Scheme::WAKE));
+        assert_eq!(Scheme::WAKE.switch_at, SwitchAt::Blocking);
         assert_eq!(Scheme::from_name(Some("")), Ok(Scheme::WAKE));
         assert_eq!(Scheme::from_name(Some("slice")), Ok(Scheme::SLICE));
         assert_eq!(Scheme::from_name(Some(" SLICE ")), Ok(Scheme::SLICE));
@@ -3723,14 +3816,21 @@ mod tests {
             Scheme::from_name(Some("nowake, notimeout")),
             Ok(Scheme {
                 wake: false,
-                platform_switch: true,
+                switch_at: SwitchAt::Blocking,
                 timed_waits: false,
+            })
+        );
+        assert_eq!(
+            Scheme::from_name(Some("platformcall")),
+            Ok(Scheme {
+                switch_at: SwitchAt::Platform,
+                ..Scheme::WAKE
             })
         );
         assert_eq!(
             Scheme::from_name(Some("anycall")),
             Ok(Scheme {
-                platform_switch: false,
+                switch_at: SwitchAt::Any,
                 ..Scheme::WAKE
             })
         );
@@ -3800,6 +3900,78 @@ mod tests {
             call(&mut e, SLEEP, &[0]);
             assert_eq!(logged(&e)[3..], [(0x102, 2), (1, 2), (1, 2)]);
         }
+    }
+
+    /// A thread that logs `parameter`, gives up its turn (`Sleep(0)`, as a spin lock's backoff
+    /// does), then logs `parameter + 1`.
+    fn yielding_thread(e: &mut Engine, a: &[u32]) -> Ret {
+        log(e, a[0]);
+        sleep(e, 0);
+        log(e, a[0] + 1);
+        Ret::default()
+    }
+
+    /// Main gives the thread a turn (it logs 60 and `Sleep(0)`s), then makes `GetCurrentThread`
+    /// calls; answers what was logged after 2 and after 3 of them.
+    fn parked(scheme: crate::thread_host::Scheme) -> (Vec<(u32, u32)>, Vec<(u32, u32)>) {
+        let mut e = thread_engine();
+        e.kernel.threads.scheme = scheme;
+        e.kernel.threads.wake_delay = 2;
+        e.register(0x00ab_0b00, yielding_thread);
+        let t = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0b00, 60, 0, 0]);
+        call(&mut e, SLEEP, &[0]);
+        assert_eq!(logged(&e), [(60, 2)]);
+        call(&mut e, GET_CURRENT_THREAD, &[]);
+        call(&mut e, GET_CURRENT_THREAD, &[]);
+        let after_two = logged(&e);
+        call(&mut e, GET_CURRENT_THREAD, &[]);
+        let after_three = logged(&e);
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, INFINITE]),
+            WAIT_OBJECT_0
+        );
+        (after_two, after_three)
+    }
+
+    /// A thread left runnable while main runs on (here after its `Sleep(0)`) gets its turn
+    /// after main's wake delay, at main's next platform call, not only at main's next
+    /// blocking call (p187).
+    #[test]
+    fn a_thread_parked_runnable_runs_after_the_wake_delay() {
+        use crate::thread_host::Scheme;
+        let (two, three) = parked(Scheme::WAKE);
+        assert_eq!(two, [(60, 2)]);
+        assert_eq!(three, [(60, 2), (61, 2)]);
+        // `SLICE`: it waits for main's next switch point.
+        let (two, three) = parked(Scheme::SLICE);
+        assert_eq!(two, [(60, 2)]);
+        assert_eq!(three, [(60, 2)]);
+    }
+
+    /// Each switch is in the trace: main to the thread and back, with both ids.
+    #[test]
+    fn the_trace_marks_thread_switches() {
+        use crate::thread_host::TRACE_SWITCH;
+        let mut e = thread_engine();
+        e.register(0x00ab_0b00, yielding_thread);
+        e.trace = Some(Default::default());
+        call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0b00, 60, 0, 0]);
+        call(&mut e, SLEEP, &[0]);
+        let switches: Vec<(Vec<u32>, u32)> = e
+            .trace
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(addr, _, _)| *addr == TRACE_SWITCH)
+            .map(|(_, words, eax)| (words.clone(), *eax))
+            .collect();
+        assert_eq!(
+            switches,
+            [
+                (vec![MAIN_THREAD_ID, 2], 2),
+                (vec![2, MAIN_THREAD_ID], MAIN_THREAD_ID)
+            ]
+        );
     }
 
     /// A game thread's start function that records its control word (0x2100)
@@ -3928,6 +4100,37 @@ mod tests {
         assert_eq!(e.mem.u8(d + 4), b'z', "only the string and its zero");
         assert_eq!(lstrcat_a(&mut e, Ptr::new(d), Ptr::new(s)), d);
         assert_eq!(e.mem.cstr(d), b"abcabc".to_vec());
+    }
+
+    /// `GetTickCount` moves in whole ticks of 15.625 ms (steps of 15 and 16 ms, as measured)
+    /// while the clock and `timeGetTime` move by the millisecond; it never reads ahead of them.
+    #[test]
+    fn get_tick_count_moves_in_whole_ticks_of_the_clock_interrupt() {
+        let mut e = thread_engine();
+        e.clock_ms = 1000;
+        let mut steps = std::collections::BTreeMap::new();
+        let mut last = get_tick_count(&mut e);
+        assert_eq!(last, 1000, "64 ticks");
+        for _ in 0..1000 {
+            e.advance_clock_us(1000);
+            let now = get_tick_count(&mut e);
+            assert!(now <= tick_count(&mut e));
+            assert!(tick_count(&mut e) - now <= 16, "under a tick behind");
+            if now != last {
+                *steps.entry(now - last).or_insert(0) += 1;
+                last = now;
+            }
+        }
+        assert_eq!(steps.keys().copied().collect::<Vec<_>>(), [15, 16]);
+        assert_eq!(steps.values().sum::<u32>(), 64, "1000 ms is 64 ticks");
+        // A step of under a tick reads the same value.
+        e.clock_ms = 1015;
+        e.clock_us = 600;
+        assert_eq!(get_tick_count(&mut e), 1000, "1015.6 ms is still 64 ticks");
+        e.clock_us = 700;
+        assert_eq!(get_tick_count(&mut e), 1015, "65 ticks: 1015.625 ms");
+        assert_eq!(whole_ticks_ms(15_624), 0);
+        assert_eq!(whole_ticks_ms(31_250), 31);
     }
 
     #[test]

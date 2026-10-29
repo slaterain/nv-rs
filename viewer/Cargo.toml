@@ -109,3 +109,15 @@ opt-level = 3
 
 [profile.play-fast.package.host]
 opt-level = 3
+
+# A fully optimised play build (`--profile play-opt`, exe in target/play-opt/; 2026-10-28): every
+# crate at opt-level 3 as in release, without the play profiles' incremental builds (their 256
+# code-generation units a crate cost run time), and engine-core, where every call and memory
+# access goes through, as one code-generation unit (a small crate: a minute to build).
+[profile.play-opt]
+inherits = "release"
+debug = 0
+incremental = false
+
+[profile.play-opt.package.engine-core]
+codegen-units = 1

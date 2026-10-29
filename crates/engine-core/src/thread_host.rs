@@ -81,8 +81,9 @@
 //! package step (`0096bcd0`) call.
 //!
 //! [`Scheme::WAKE`] (the default) has three parts, each of which the host's
-//! `NV_THREADS` can turn off (`nowake`, `anycall`, `notimeout`, comma-separated;
-//! `slice` turns off all three: [`Scheme::SLICE`], the scheme before):
+//! `NV_THREADS` can change (`nowake`, `platformcall` or `anycall`, `notimeout`,
+//! comma-separated; `slice` turns off all three: [`Scheme::SLICE`], the scheme
+//! before):
 //! - [`Scheme::wake`]: a `SetEvent` or `ReleaseSemaphore` on the main thread
 //!   that lets a waiting thread go on runs it, and those it lets go on in turn,
 //!   soon after ([`request_wake`], [`wake_waiters`]): once main has made
@@ -95,13 +96,32 @@
 //!   +5 and calls its slot +0x24; a waiter run inside the `ReleaseSemaphore`
 //!   (delay 0, the first version of this scheme, p178/p179) sees the group
 //!   before those steps. A delay of 0 runs them inside the signalling call.
-//! - [`Scheme::platform_switch`]: a used-up time slice ends only at the next
-//!   call of a platform import (`Engine::platform_calls`: the interlocked
-//!   operations, critical sections, waits, `Sleep`, the clocks,
-//!   `GetCurrentThreadId`): where the game's code meets the operating system,
-//!   around its locks, not inside a short stretch of plain code such as a list
-//!   insert. Polling loops all call imports, so a thread that never waits still
-//!   gives up its turn.
+//! - [`Scheme::switch_at`] ([`SwitchAt`]): where a used-up time slice ends.
+//!   [`SwitchAt::Blocking`] (the default): only at a blocking platform call
+//!   ([`blocking_call`]: `WaitForSingleObject`, `WaitForMultipleObjects`, with
+//!   any timeout, even an object already signalled; `Sleep`, also `Sleep(0)`,
+//!   and a contended `EnterCriticalSection` switch by themselves), where
+//!   Windows would most plausibly run another thread; never inside a stretch of
+//!   the game's code between them, such as `004d5930`'s keyframe adds, which
+//!   allocate (and so call interlocked operations) without the face data's
+//!   lock (p183: `0064b630` reading a keyframe freed under it). A turn that
+//!   reaches no blocking call within [`HARD_CAP_SLICES`] slices ends at its next
+//!   call, so nothing starves. [`SwitchAt::Platform`] (`NV_THREADS=platformcall`,
+//!   the version before): at the next call of any platform import
+//!   (`Engine::platform_calls`). [`SwitchAt::Any`] (`anycall`): at whatever call
+//!   comes next.
+//!
+//!   The game's own spin waits all reach a blocking call: `BSSpinLock`
+//!   (`0040fbf0`) retries its `InterlockedCompareExchange` (`0043b460`) with
+//!   `Sleep(0)` (`0040fca0` -> `[00fdf104]`), `Sleep(1)` after 10000 tries;
+//!   `BSReadWriteLock` sleeps likewise; Havok's critical sections are
+//!   `EnterCriticalSection`; task and tasklet waits are semaphore waits
+//!   (`00b020a0` polls with a timeout of 0, still a wait). One exception found:
+//!   the free-list lock of `006ecd60` (pathing messages) spins on `0043b460`
+//!   alone. Its holder keeps the lock only over a few plain steps, so a spinner
+//!   meets a held lock only when the holder's turn was ended there by the hard
+//!   cap; it then spins out its own cap before the holder runs again (slow, not
+//!   stuck).
 //! - [`Scheme::timed_waits`]: a game thread's timed wait times out at its
 //!   deadline (the clock jumps to it when nothing else can run, as for a
 //!   sleep).
@@ -230,6 +250,9 @@ pub struct Threads {
     pub wake_delay: u64,
     /// A signal from the main thread woke a thread that has not run yet ([`request_wake`]).
     pub wake_pending: bool,
+    /// [`SwitchAt::Blocking`]: the running turn used up its slice and goes on until its next
+    /// blocking call ([`blocking_call`]) or the hard cap ([`preempt`]).
+    pub overrun: bool,
 }
 
 impl Default for Threads {
@@ -242,8 +265,25 @@ impl Default for Threads {
             scheme: Scheme::default(),
             wake_delay: WAKE_DELAY_CALLS,
             wake_pending: false,
+            overrun: false,
         }
     }
+}
+
+/// [`SwitchAt::Blocking`]'s fallback: a turn that has used up this many slices without a
+/// blocking call ends at its next call, so a thread that never blocks does not starve the
+/// others (a host setting, not the game's).
+pub const HARD_CAP_SLICES: u64 = 50;
+
+/// Where a turn that used up its time slice ends ([`Scheme::switch_at`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwitchAt {
+    /// At its next blocking platform call ([`blocking_call`]), or at the hard cap.
+    Blocking,
+    /// At its next call of a platform import (`Engine::platform_calls`).
+    Platform,
+    /// At its next call.
+    Any,
 }
 
 /// [`Threads::wake_delay`]'s default: a few microseconds of the game's code, about the time
@@ -256,8 +296,8 @@ pub const WAKE_DELAY_CALLS: u64 = 1000;
 pub struct Scheme {
     /// A signal from the main thread runs the threads it woke soon after ([`request_wake`]).
     pub wake: bool,
-    /// A used-up slice ends at the next platform call, not at any call.
-    pub platform_switch: bool,
+    /// Where a used-up slice ends.
+    pub switch_at: SwitchAt,
     /// A game thread's timed wait times out at its deadline.
     pub timed_waits: bool,
 }
@@ -272,20 +312,21 @@ impl Scheme {
     /// The default: every part on.
     pub const WAKE: Scheme = Scheme {
         wake: true,
-        platform_switch: true,
+        switch_at: SwitchAt::Blocking,
         timed_waits: true,
     };
     /// The scheme before: every part off.
     pub const SLICE: Scheme = Scheme {
         wake: false,
-        platform_switch: false,
+        switch_at: SwitchAt::Any,
         timed_waits: false,
     };
 
     /// The scheme the host's `NV_THREADS` names: unset or empty [`Scheme::WAKE`]; `slice`
-    /// [`Scheme::SLICE`]; otherwise [`Scheme::WAKE`] with the parts named in a
-    /// comma-separated list turned off (`nowake`, `anycall`, `notimeout`; `wake` changes
-    /// nothing). Case and spaces are ignored; an unknown word is an error.
+    /// [`Scheme::SLICE`]; otherwise [`Scheme::WAKE`] changed by the words of a
+    /// comma-separated list (`nowake`; `platformcall` or `anycall` for [`Scheme::switch_at`];
+    /// `notimeout`; `wake` changes nothing). Case and spaces are ignored; an unknown word is
+    /// an error.
     pub fn from_name(name: Option<&str>) -> Result<Scheme, String> {
         let mut scheme = Scheme::WAKE;
         for word in name.unwrap_or("").split(',').map(str::trim) {
@@ -293,10 +334,11 @@ impl Scheme {
                 "" | "wake" => {}
                 "slice" => scheme = Scheme::SLICE,
                 "nowake" => scheme.wake = false,
-                "anycall" => scheme.platform_switch = false,
+                "platformcall" => scheme.switch_at = SwitchAt::Platform,
+                "anycall" => scheme.switch_at = SwitchAt::Any,
                 "notimeout" => scheme.timed_waits = false,
                 other => {
-                    let known = "slice, wake, nowake, anycall, notimeout";
+                    let known = "slice, wake, nowake, platformcall, anycall, notimeout";
                     return Err(format!("NV_THREADS: unknown part {other:?} ({known})"));
                 }
             }
@@ -519,34 +561,73 @@ pub fn request_wake(e: &mut Engine, signalled: Signalled) {
     if !(1..e.kernel.threads.list.len()).any(|i| waiting_signalled(e, i, signalled)) {
         return;
     }
-    let delay = e.kernel.threads.wake_delay;
-    if delay == 0 {
+    if e.kernel.threads.wake_delay == 0 {
         wake_waiters(e, signalled);
         return;
     }
+    mark_wake(e);
+}
+
+/// Sets a wake pending ([`Threads::wake_pending`]): the main thread runs the others once it
+/// has made [`Threads::wake_delay`] more calls, at its next platform call ([`preempt`]).
+fn mark_wake(e: &mut Engine) {
     e.kernel.threads.wake_pending = true;
     if e.slice_hook.is_none() {
         // No time slice (`NV_SLICE=0`, the tests): the hook only for the wake.
         e.slice_hook = Some(preempt);
         e.slice_left = u64::MAX;
     }
-    e.slice_left = e.slice_left.min(delay);
+    e.slice_left = e.slice_left.min(e.kernel.threads.wake_delay);
 }
 
-/// Runs, round after round in creation order, every thread waiting on objects that are now
-/// signalled, until a round finds none: the threads a signal woke, then those they woke in
-/// turn ([`request_wake`]). A thread that sleeps or uses up its slice waits for the next
-/// switch point. Main thread only.
+/// Whether a thread other than main could run now ([`runnable`]): started, waiting on objects
+/// now signalled or past its deadline, or asleep past its wake time (a `Sleep(0)`, a turn
+/// ended at its slice).
+fn others_runnable(e: &mut Engine) -> bool {
+    for i in 1..e.kernel.threads.list.len() {
+        if runnable(e, i, crate::units::platform::signalled) {
+            return true;
+        }
+    }
+    false
+}
+
+/// [`Scheme::wake`]: the main thread has the engine back (or used up its slice) while another
+/// thread could run. On Windows that thread would go on at once on its own core; here it gets a
+/// turn soon ([`mark_wake`]), not only at main's next blocking call, which may be a whole phase
+/// of main's frame later: a worker parked in a spin lock's `Sleep(0)` (`0040fca0`) or at its
+/// hard cap must not sit through main's scripts (`00455490`) in the middle of its own work
+/// (p187).
+fn wake_parked(e: &mut Engine) {
+    if e.kernel.threads.scheme.wake
+        && !e.kernel.threads.wake_pending
+        && on_main(e)
+        && others_runnable(e)
+    {
+        mark_wake(e);
+    }
+}
+
+/// Runs the threads that can go on, from the main thread ([`request_wake`], [`wake_parked`]):
+/// first every runnable thread once ([`runnable`]: woken, started, past a sleep or a deadline),
+/// in creation order; then, round after round, every thread waiting on objects that are now
+/// signalled, until a round finds none (those the first ones woke, in turn). A thread that
+/// sleeps again or uses up its slice waits for the next switch point. Main thread only.
 pub fn wake_waiters(e: &mut Engine, signalled: Signalled) {
     e.kernel.threads.wake_pending = false;
     if e.kernel.threads.list.is_empty() || !on_main(e) {
         return;
     }
-    for _ in 0..WAKE_ROUNDS {
+    for round in 0..WAKE_ROUNDS {
         let mut ran = false;
         let mut i = 1;
         while i < e.kernel.threads.list.len() {
-            if waiting_signalled(e, i, signalled) {
+            let go = if round == 0 {
+                runnable(e, i, signalled)
+            } else {
+                waiting_signalled(e, i, signalled)
+            };
+            if go {
                 switch_to(e, i);
                 ran = true;
             }
@@ -643,6 +724,7 @@ pub fn run_threads(e: &mut Engine, signalled: Signalled) {
 fn swap_context(e: &mut Engine, from: usize, to: usize) {
     // A thread switched to starts a whole time slice.
     e.slice_left = turn_len(e);
+    e.kernel.threads.overrun = false;
     let mut to_tls = e.kernel.threads.list[to].tls;
     if to_tls == 0 {
         to_tls = e.new_tls_block();
@@ -656,6 +738,26 @@ fn swap_context(e: &mut Engine, from: usize, to: usize) {
     from_thread.call_stack = from_stack;
 }
 
+/// The address [`Engine::trace`] records a thread switch under (no exe address): the words are
+/// the thread that gave up the engine and the one that takes it, `EAX` the latter, so a stopped
+/// run's trace (`NV_MOVE_TRACE`) reads `fffffff0(00000001,00000011) -> 00000011` where main
+/// handed over to thread 17.
+pub const TRACE_SWITCH: u32 = 0xffff_fff0;
+
+/// Records a switch from thread `from` to thread `to` in the trace, when one is kept.
+fn trace_switch(e: &mut Engine, from: u32, to: u32) {
+    let keep = e.trace_keep;
+    if let Some(trace) = &mut e.trace {
+        if keep == 0 {
+            return;
+        }
+        if trace.len() >= keep {
+            trace.pop_front();
+        }
+        trace.push_back((TRACE_SWITCH, vec![from, to], to));
+    }
+}
+
 /// Hands the engine to thread `i` until it yields (main thread only).
 fn switch_to(e: &mut Engine, i: usize) {
     let link = match e.kernel.threads.list[i].link.take() {
@@ -666,17 +768,25 @@ fn switch_to(e: &mut Engine, i: usize) {
         }
     };
     swap_context(e, 0, i);
+    let id = e.kernel.threads.list[i].id;
+    trace_switch(e, MAIN_THREAD_ID, id);
     e.kernel.threads.current = i;
     e.kernel.threads.list[i].turns += 1;
     e.kernel.threads.list[i].state = RunState::Running;
     let baton = Baton(e as *mut Engine);
+    // `NV_PROFILE`: the hand-off, with the thread's own call stack.
+    crate::profile::resync(&e.call_stack);
+    crate::profile::set_phase(crate::profile::Phase::Switch);
     let reply = match link.resume.send(baton) {
         Ok(()) => link.yielded.recv().ok(),
         Err(_) => None,
     };
     // Back on the main thread.
     e.kernel.threads.current = 0;
+    trace_switch(e, id, MAIN_THREAD_ID);
     swap_context_back(e, i);
+    crate::profile::resync(&e.call_stack);
+    crate::profile::holding(MAIN_THREAD_ID);
     load_fpu(e);
     e.kernel.threads.list[i].link = Some(link);
     match reply {
@@ -712,12 +822,7 @@ fn load_fpu(e: &mut Engine) {
 
 /// [`swap_context`] from thread `from` back to the main thread.
 fn swap_context_back(e: &mut Engine, from: usize) {
-    // Main starts a whole slice again, or what is left of a pending wake's delay at most.
-    e.slice_left = if e.kernel.threads.wake_pending {
-        turn_len(e).min(e.kernel.threads.wake_delay)
-    } else {
-        turn_len(e)
-    };
+    start_main_turn(e);
     let main_tls = e.kernel.threads.list[0].tls;
     let from_tls = e.swap_tls(main_tls);
     let main_stack = std::mem::take(&mut e.kernel.threads.list[0].call_stack);
@@ -742,6 +847,7 @@ fn spawn(id: u32, start: u32, parameter: u32) -> Link {
             COROUTINE.with(|c| *c.borrow_mut() = Some((resumed, yields.clone())));
             // SAFETY: see `Baton`.
             let e = unsafe { &mut *engine };
+            crate::profile::holding(id);
             load_fpu(e);
             let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 e.call(start, &[parameter]).eax
@@ -786,6 +892,8 @@ fn panic_line(payload: Box<dyn std::any::Any + Send>) -> String {
 /// coroutine parks for good: its stack still holds frames of the dropped
 /// engine's calls, so it must never run them.
 fn yield_to_main(reply: Yield) {
+    let me = crate::profile::on().then(crate::profile::game_thread);
+    crate::profile::set_phase(crate::profile::Phase::Switch);
     COROUTINE.with(|c| {
         let c = c.borrow();
         let (resumed, yields) = c
@@ -797,6 +905,9 @@ fn yield_to_main(reply: Yield) {
             }
         }
     });
+    if let Some(id) = me {
+        crate::profile::holding(id);
+    }
 }
 
 impl ThreadHost for Cooperative {
@@ -884,6 +995,8 @@ impl ThreadHost for Cooperative {
             // others a pass.
             e.wait_clock_until_us(until);
             one_pass(e, signalled);
+            // A switch point: main starts a new turn.
+            start_main_turn(e);
             return;
         }
         // Another thread's sleep leaves the clock alone: it runs again at the first pass
@@ -932,6 +1045,18 @@ pub struct MainThread {
     call_stack: Vec<u32>,
     /// How its last turn ended (`None` before the first).
     pub last: Option<MainTurn>,
+    /// The host's own call stack while a frame of main's runs ([`begin_main_frame`]).
+    host_stack: Vec<u32>,
+    /// A frame was handed to main and not finished yet.
+    in_flight: bool,
+}
+
+impl MainThread {
+    /// Whether a frame was handed to main ([`begin_main_frame`]) and not finished yet
+    /// ([`finish_main_frame`]): until then the engine is main's.
+    pub fn in_flight(&self) -> bool {
+        self.in_flight
+    }
 }
 
 impl std::fmt::Debug for MainThread {
@@ -962,6 +1087,7 @@ pub fn start_main_thread(start: u32, words: Vec<u32>) -> MainThread {
             MAIN_COROUTINE.with(|c| *c.borrow_mut() = Some((resumed, yields.clone())));
             // SAFETY: see `Baton`.
             let e = unsafe { &mut *engine };
+            crate::profile::holding(MAIN_THREAD_ID);
             load_fpu(e);
             let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 e.call(start, &words).eax
@@ -993,6 +1119,8 @@ pub fn start_main_thread(start: u32, words: Vec<u32>) -> MainThread {
         link: Link { resume, yielded },
         call_stack: Vec::new(),
         last: None,
+        host_stack: Vec::new(),
+        in_flight: false,
     }
 }
 
@@ -1003,15 +1131,52 @@ pub fn run_main_frame(e: &mut Engine, main: &mut MainThread) -> MainTurn {
     if let Some(last @ (MainTurn::Finished(_) | MainTurn::Stopped(_))) = &main.last {
         return last.clone();
     }
+    begin_main_frame(e, main);
+    finish_main_frame(e, main)
+}
+
+/// The first half of [`run_main_frame`]: hands the engine to the game's main thread for its next
+/// frame and returns at once, the frame running on main's own OS thread meanwhile. The caller
+/// must not touch the engine (nor anything the game's code reaches) until
+/// [`finish_main_frame`]: the engine is main's until then, as it is while the host waits in
+/// [`run_main_frame`]. False (nothing handed over) when main finished or stopped; true too when
+/// a frame is already in flight.
+pub fn begin_main_frame(e: &mut Engine, main: &mut MainThread) -> bool {
+    if main.in_flight {
+        return true;
+    }
+    if let Some(MainTurn::Finished(_) | MainTurn::Stopped(_)) = &main.last {
+        return false;
+    }
     ensure_main(e);
     e.kernel.threads.current = 0;
-    let host_stack = std::mem::replace(&mut e.call_stack, std::mem::take(&mut main.call_stack));
+    main.host_stack = std::mem::replace(&mut e.call_stack, std::mem::take(&mut main.call_stack));
+    // `NV_PROFILE`: the sampler starts with the first frame; the hand-off to main.
+    crate::profile::start();
+    crate::profile::resync(&e.call_stack);
+    crate::profile::set_phase(crate::profile::Phase::Switch);
     let baton = Baton(e as *mut Engine);
-    let reply = match main.link.resume.send(baton) {
-        Ok(()) => main.link.yielded.recv().ok(),
-        Err(_) => None,
-    };
-    main.call_stack = std::mem::replace(&mut e.call_stack, host_stack);
+    // A coroutine that is gone answers its end at the finish (its channel is closed).
+    let _ = main.link.resume.send(baton);
+    main.in_flight = true;
+    true
+}
+
+/// The second half of [`run_main_frame`]: waits until the frame [`begin_main_frame`] handed
+/// over ends (main's message loop found its queue empty), returns or stops, and takes the engine
+/// back. Without a frame in flight it answers the last turn again.
+pub fn finish_main_frame(e: &mut Engine, main: &mut MainThread) -> MainTurn {
+    if !main.in_flight {
+        return main
+            .last
+            .clone()
+            .unwrap_or_else(|| MainTurn::Stopped("no frame was handed to main".into()));
+    }
+    main.in_flight = false;
+    let reply = main.link.yielded.recv().ok();
+    main.call_stack = std::mem::replace(&mut e.call_stack, std::mem::take(&mut main.host_stack));
+    crate::profile::resync(&e.call_stack);
+    crate::profile::back_to_host();
     load_fpu(e);
     let turn = match reply {
         Some(Yield::Paused) => MainTurn::Frame,
@@ -1032,6 +1197,7 @@ pub fn end_main_frame(e: &mut Engine) -> bool {
     if !on_coroutine || !on_main(e) {
         return false;
     }
+    crate::profile::set_phase(crate::profile::Phase::Switch);
     MAIN_COROUTINE.with(|c| {
         let c = c.borrow();
         let (resumed, yields) = c.as_ref().expect("the main coroutine's link");
@@ -1042,6 +1208,7 @@ pub fn end_main_frame(e: &mut Engine) -> bool {
             }
         }
     });
+    crate::profile::holding(MAIN_THREAD_ID);
     load_fpu(e);
     true
 }
@@ -1052,26 +1219,69 @@ pub fn end_main_frame(e: &mut Engine) -> bool {
 /// results) does not keep the others from running. Here, after `Engine::slice_len` calls of one
 /// turn: a game thread other than main gives its turn back, runnable at the next pass as after
 /// `Sleep(0)`; the main thread gives the others one pass. Counted in calls, so runs stay
-/// deterministic. With [`Scheme::platform_switch`] the turn ends only at a call of a platform
-/// import (`addr` in `Engine::platform_calls`): until then each call asks again. On the main
-/// thread with a wake pending ([`request_wake`]) the end of the delay runs the woken threads
-/// instead, also at a platform call.
+/// deterministic. Where the turn ends follows [`Scheme::switch_at`]: with
+/// [`SwitchAt::Platform`] only at a call of a platform import (`addr` in
+/// `Engine::platform_calls`; until then each call asks again); with [`SwitchAt::Blocking`]
+/// the turn goes on ([`Threads::overrun`]) until its next blocking call ([`blocking_call`])
+/// or, [`HARD_CAP_SLICES`] slices in all, its next call. On the main thread with a wake
+/// pending ([`request_wake`]) the end of the delay runs the woken threads instead, at a
+/// platform call.
 pub fn preempt(e: &mut Engine, addr: u32) {
-    let wake_due = e.kernel.threads.wake_pending && on_main(e);
-    if (e.kernel.threads.scheme.platform_switch || wake_due) && !e.platform_calls.contains(&addr) {
-        return;
-    }
-    e.slice_left = turn_len(e);
-    if e.kernel.threads.list.is_empty() {
-        return;
-    }
-    if wake_due {
-        // The main thread's wake delay is over ([`request_wake`]): the woken threads run.
+    if e.kernel.threads.wake_pending && on_main(e) {
+        if !e.platform_calls.contains(&addr) {
+            return;
+        }
+        // The main thread's wake delay is over ([`request_wake`]): the woken threads run, and
+        // main starts a new turn.
+        e.slice_left = turn_len(e);
+        e.kernel.threads.overrun = false;
         wake_waiters(e, crate::units::platform::signalled);
         return;
     }
     if e.slice_len == 0 {
         // No time slice: the hook was there only for a wake.
+        e.slice_left = u64::MAX;
+        return;
+    }
+    match e.kernel.threads.scheme.switch_at {
+        SwitchAt::Any => {}
+        SwitchAt::Platform => {
+            if !e.platform_calls.contains(&addr) {
+                return;
+            }
+        }
+        SwitchAt::Blocking => {
+            if !e.kernel.threads.overrun {
+                // The slice is used up: on to the next blocking call, or to the hard cap.
+                e.kernel.threads.overrun = true;
+                e.slice_left = e.slice_len.saturating_mul(HARD_CAP_SLICES - 1);
+                // A sleeper whose time came while main ran gets its turn soon.
+                wake_parked(e);
+                return;
+            }
+            // The hard cap: the turn ends here.
+        }
+    }
+    end_turn(e);
+}
+
+/// [`SwitchAt::Blocking`]: the running thread is about to make a blocking platform call
+/// (`WaitForSingleObject`, `WaitForMultipleObjects`; `Sleep` and a contended
+/// `EnterCriticalSection` switch by themselves). A turn that has used up its slice
+/// ([`Threads::overrun`]) ends here, before the call.
+pub fn blocking_call(e: &mut Engine) {
+    if e.kernel.threads.overrun && e.kernel.threads.scheme.switch_at == SwitchAt::Blocking {
+        end_turn(e);
+    }
+}
+
+/// Ends the running turn (the slice's end, [`preempt`], [`blocking_call`]): a game thread
+/// other than main gives its turn back, runnable at the next pass as after `Sleep(0)`; the
+/// main thread gives the others one pass.
+fn end_turn(e: &mut Engine) {
+    e.slice_left = turn_len(e);
+    e.kernel.threads.overrun = false;
+    if e.kernel.threads.list.is_empty() {
         return;
     }
     if on_main(e) {
@@ -1084,6 +1294,16 @@ pub fn preempt(e: &mut Engine, addr: u32) {
     e.kernel.threads.list[i].state = RunState::Sleeping { until };
     yield_to_main(Yield::Paused);
     load_fpu(e);
+}
+
+/// The main thread starts a new turn: a whole slice, or a pending wake's delay at most.
+fn start_main_turn(e: &mut Engine) {
+    e.slice_left = turn_len(e);
+    e.kernel.threads.overrun = false;
+    // A wake still pending is decided again: only while another thread can run now (the
+    // switch may have run the ones it was for).
+    e.kernel.threads.wake_pending = false;
+    wake_parked(e);
 }
 
 /// The calls a turn starts with: the slice, or no end without one (`slice_len` 0).
@@ -1133,6 +1353,32 @@ mod main_thread_tests {
         assert_eq!(run_main_frame(&mut e, &mut main), MainTurn::Finished(7));
         // Outside the coroutine a frame's end doesn't wait.
         assert!(!end_main_frame(&mut e));
+    }
+
+    /// A frame handed over with `begin_main_frame` runs while the host goes on; the finish waits
+    /// for it and takes the engine back, as `run_main_frame` does in one.
+    #[test]
+    fn a_frame_runs_between_its_begin_and_its_finish() {
+        let mut e = Engine::new();
+        e.mem.map(0x2000, 0x1000);
+        e.register(0x0040_0000, frames);
+        let mut main = start_main_thread(0x0040_0000, vec![]);
+        e.call_stack.push(0x0012_3450);
+        for frame in 1..=3 {
+            assert!(begin_main_frame(&mut e, &mut main));
+            assert!(main.in_flight());
+            // Begun twice: still the one frame.
+            assert!(begin_main_frame(&mut e, &mut main));
+            assert_eq!(finish_main_frame(&mut e, &mut main), MainTurn::Frame);
+            assert!(!main.in_flight());
+            assert_eq!(e.mem.u32(0x2000), frame);
+            assert_eq!(e.call_stack, [0x0012_3450], "the host's own stack is back");
+        }
+        assert!(begin_main_frame(&mut e, &mut main));
+        assert_eq!(finish_main_frame(&mut e, &mut main), MainTurn::Finished(7));
+        // Finished: nothing more is handed over, and the finish answers the end again.
+        assert!(!begin_main_frame(&mut e, &mut main));
+        assert_eq!(finish_main_frame(&mut e, &mut main), MainTurn::Finished(7));
     }
 
     #[test]

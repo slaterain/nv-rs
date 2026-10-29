@@ -59,10 +59,13 @@
 #![cfg_attr(test, allow(clippy::useless_vec))]
 
 pub mod abi;
+pub mod call_trace;
 mod engine;
 pub mod exe;
 pub mod mem;
+pub mod profile;
 pub mod ptr;
+pub mod queue_check;
 pub mod sse;
 pub mod static_exit;
 pub mod static_init;

@@ -13,7 +13,9 @@
 //! audio enhancements is needed for bit-exact captures (the default one here smeared the
 //! signal). Modes, by environment variable: none (the base cases), `DSMIX_SWEEP` (volumes, pans,
 //! 3D angles and distances), `DSMIX_DENSE` (every 7th volume), `DSMIX_3D` (a 3D position grid),
-//! `DSMIX_MULTI` (several voices at once: the order of the sum).
+//! `DSMIX_MULTI` (several voices at once: the order of the sum), `DSMIX_EXACT` (the exact 3D stage
+//! and distortion: turned listeners, the game's distances, the effect's formats and edges),
+//! `DSMIX_SRC` (the sample-rate converter: see `src_cases`).
 use std::ffi::c_void;
 use std::io::Write;
 
@@ -104,6 +106,17 @@ struct Case {
     /// 3D: position, velocity, min distance, max distance; listener rolloff, Doppler.
     three_d: Option<([f32; 3], [f32; 3], f32, f32, f32, f32)>,
     distortion: Option<[f32; 5]>,
+    /// 3D: the listener's front and top (else +z and +y).
+    orientation: Option<([f32; 3], [f32; 3])>,
+    /// 3D: the position set with `DS3D_DEFERRED` and never committed.
+    uncommitted: bool,
+    /// Frames in the buffer (else half a second).
+    frames: Option<usize>,
+    /// A frequency set while it plays: after this many 10 ms steps, this frequency.
+    later: Option<(u32, u32)>,
+    /// A frequency set on another buffer of the same kind (made, never played) while this one
+    /// plays: after this many 10 ms steps, this frequency.
+    other: Option<(u32, u32)>,
 }
 
 fn cases() -> Vec<Case> {
@@ -118,6 +131,11 @@ fn cases() -> Vec<Case> {
         frequency: 0,
         three_d: None,
         distortion: None,
+        orientation: None,
+        uncommitted: false,
+        frames: None,
+        later: None,
+        other: None,
     };
     let mut v = Vec::new();
     let mut add = |name: &'static str, f: &dyn Fn(&mut Case)| {
@@ -182,6 +200,9 @@ fn cases() -> Vec<Case> {
         c.flags = 0x2e0 | 0x8000;
         c.distortion = Some([-18.0, 50.0, 2400.0, 2400.0, 8000.0]);
     });
+    if std::env::var_os("DSMIX_SRC").is_some() {
+        src_cases(&mut add);
+    }
     if std::env::var_os("DSMIX_SWEEP").is_some() {
         let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
         for vol in [-1, -5, -9, -10, -11, -49, -50, -51, -99, -101, -150, -199, -200, -555, -1000, -1234, -3000, -5000, -8000, -9000, -9999, -10000] {
@@ -236,10 +257,104 @@ fn cases() -> Vec<Case> {
             add(leak(format!("sweep_dense_vol_{vol}")), &move |c| c.volume = vol);
         }
     }
+    if std::env::var_os("DSMIX_EXACT").is_some() {
+        exact_cases(&mut add);
+    }
+    if std::env::var_os("DSMIX_SRC").is_some() {
+        v.retain(|c| c.name.starts_with("src_"));
+    }
     if std::env::var_os("DSMIX_SWEEP").is_some() {
         v.retain(|c| c.name.starts_with("sweep_"));
     }
+    if std::env::var_os("DSMIX_EXACT").is_some() {
+        v.retain(|c| c.name.starts_with("x_"));
+    }
     v
+}
+
+/// `DSMIX_EXACT`: the cases for the exact 3D stage and distortion (`platform::ds3d`,
+/// `platform::dsfx`): turned listeners, the game's distances (both 1e9), height, the near zone,
+/// an uncommitted deferred position; the distortion with the game's parameters on mono and
+/// stereo, 16 and 8 bits, every edge band, and buffers at 11025 and 32000 Hz played at
+/// 48000 Hz (the effect runs at the format's rate, so its limits at a third of the rate show
+/// without resampling).
+fn exact_cases(add: &mut dyn FnMut(&'static str, &dyn Fn(&mut Case))) {
+    let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
+    let three = 0x300b0 | 0x8000;
+    // Turned listeners (front, top), a source at a few places.
+    let turns: [(&str, [f32; 3], [f32; 3]); 7] = [
+        ("yaw30", [0.5, 0.0, 0.8660254], [0.0, 1.0, 0.0]),
+        ("yaw100", [0.98480775, 0.0, -0.17364818], [0.0, 1.0, 0.0]),
+        ("yaw33_7", [0.55484474, 0.0, 0.8319391], [0.0, 1.0, 0.0]),
+        ("yawm71_2", [-0.9466330, 0.0, 0.32227355], [0.0, 1.0, 0.0]),
+        ("pitch20", [0.0, 0.34202015, 0.9396926], [0.0, 0.9396926, -0.34202015]),
+        ("roll25", [0.0, 0.0, 1.0], [-0.42261827, 0.90630779, 0.0]),
+        ("mixed", [0.3, 0.2, 0.9], [0.1, 1.0, -0.2]),
+    ];
+    for (tn, front, top) in turns {
+        for (pn, pos) in [
+            ("far", [3.0f32, 0.0, 4.0]),
+            ("left", [-4.0, 1.0, 0.5]),
+            ("near", [0.7, 0.3, -1.1]),
+        ] {
+            add(leak(format!("x_turn_{tn}_{pn}")), &move |c| {
+                c.flags = three;
+                c.three_d = Some((pos, [0.0; 3], 1.0, 1.0e9, 1.0, 1.0));
+                c.orientation = Some((front, top));
+            });
+        }
+    }
+    // The game's distances, a source near and far, with height.
+    for (n, pos) in [
+        ("g_ahead", [0.0f32, 0.0, 3.0]),
+        ("g_near", [0.6, 0.0, 0.8]),
+        ("g_close", [1.2, 0.0, -0.4]),
+        ("g_above", [0.0, 5.0, 0.0]),
+        ("g_far", [-30.0, 2.0, 40.0]),
+        ("g_box", [2.4, 0.0, 2.4]),
+        ("g_edge", [2.49, 0.0, 0.1]),
+    ] {
+        add(leak(format!("x_3d_{n}")), &move |c| {
+            c.flags = three;
+            c.three_d = Some((pos, [0.0; 3], 1.0e9, 1.0e9, 1.0, 1.0));
+        });
+    }
+    add("x_3d_uncommitted", &|c| {
+        c.flags = three;
+        c.three_d = Some(([-3.0, 0.0, 1.0], [0.0; 3], 1.0, 1.0e9, 1.0, 1.0));
+        c.uncommitted = true;
+    });
+    add("x_3d_vol_m1234_min3", &|c| {
+        c.flags = three;
+        c.volume = -1234;
+        c.three_d = Some(([1.0, 0.0, 6.0], [0.0; 3], 3.0, 1.0e9, 1.0, 1.0));
+    });
+    // The distortion.
+    let game = [-18.2f32, 0.0, 5000.0, 1135.0, 5000.0];
+    for (n, channels, bits) in [("mono16", 1u16, 16u16), ("stereo16", 2, 16), ("mono8", 1, 8), ("stereo8", 2, 8)] {
+        add(leak(format!("x_fx_game_{n}")), &move |c| {
+            c.flags = 0x2e0 | 0x8000;
+            c.channels = channels;
+            c.bits = bits;
+            c.distortion = Some(game);
+        });
+    }
+    for k in 0..30 {
+        // An edge in each of the 30 bands (shifts 2 to 31).
+        let edge = ((k as f32 + 0.5) / 29.0 * 100.0).min(100.0);
+        add(leak(format!("x_fx_edge_{k}")), &move |c| {
+            c.flags = 0x2e0 | 0x8000;
+            c.distortion = Some([-30.0, edge, 3000.0, 2000.0, 7000.0]);
+        });
+    }
+    for rate in [11025u32, 32000] {
+        add(leak(format!("x_fx_rate{rate}")), &move |c| {
+            c.flags = 0x2e0 | 0x8000;
+            c.rate = rate;
+            c.frequency = 48000;
+            c.distortion = Some(game);
+        });
+    }
 }
 
 /// The default output device's loopback capture client: (audio client, capture client, the
@@ -267,7 +382,8 @@ unsafe fn loopback(endpoint: Option<&str>) -> (*mut Obj, *mut Obj, Vec<u8>) {
     }
     let mut client: *mut Obj = std::ptr::null_mut();
     let iid_client = guid("1cb9ad4c-dbfa-4c32-b178-c2f568a703b2");
-    slot::<Fn4>(dev, 0xc)(dev, iid_client.as_ptr() as usize, 0x17, 0, &mut client as *mut _ as usize);
+    let r = slot::<Fn4>(dev, 0xc)(dev, iid_client.as_ptr() as usize, 0x17, 0, &mut client as *mut _ as usize);
+    assert_eq!(r, 0, "IMMDevice::Activate");
     let mut fmt: *const u8 = std::ptr::null();
     slot::<Fn1>(client, 0x20)(client, &mut fmt as *mut _ as usize);
     let size = 18 + u16::from_le_bytes([*fmt.add(16), *fmt.add(17)]) as usize;
@@ -277,11 +393,23 @@ unsafe fn loopback(endpoint: Option<&str>) -> (*mut Obj, *mut Obj, Vec<u8>) {
     let mut cap: *mut Obj = std::ptr::null_mut();
     let iid_cap = guid("c8adbd64-e71e-48a0-a4de-185c395cd317");
     slot::<Fn2>(client, 0x38)(client, iid_cap.as_ptr() as usize, &mut cap as *mut _ as usize);
+    if std::env::var_os("DSMIX_HOOK").is_some() {
+        let frame_bytes = u16::from_le_bytes([fmt_bytes[12], fmt_bytes[13]]) as usize;
+        hook::install(dev, fmt, frame_bytes);
+    }
     (client, cap, fmt_bytes)
 }
 
 /// Drains the capture client into `out` (bytes); silent packets add zeros.
 unsafe fn drain(cap: *mut Obj, frame_bytes: usize, out: &mut Vec<u8>) {
+    if hook::ON.load(std::sync::atomic::Ordering::SeqCst) {
+        let mut discard = Vec::new();
+        hook::ON.store(false, std::sync::atomic::Ordering::SeqCst);
+        drain(cap, frame_bytes, &mut discard);
+        hook::ON.store(true, std::sync::atomic::Ordering::SeqCst);
+        hook::take(out);
+        return;
+    }
     loop {
         let mut n = 0u32;
         slot::<Fn1>(cap, 0x14)(cap, &mut n as *mut _ as usize);
@@ -335,7 +463,7 @@ fn main() {
         }
         for c in cases() {
             let dense = c.name.starts_with("sweep_dense");
-            let frames = if dense { 2400 } else { (c.rate / 2) as usize }; // half a second
+            let frames = c.frames.unwrap_or(if dense { 2400 } else { (c.rate / 2) as usize }); // half a second
             let align = c.channels * c.bits / 8;
             let wf: [u8; 18] = {
                 let mut b = [0u8; 18];
@@ -355,6 +483,10 @@ fn main() {
                 writeln!(tsv, "{}\tcreate {r:x}", c.name).unwrap();
                 continue;
             }
+            let mut b2: *mut Obj = std::ptr::null_mut();
+            if c.other.is_some() {
+                slot::<Fn3>(ds, 0xc)(ds, d.as_ptr() as usize, &mut b2 as *mut _ as usize, 0);
+            }
             let data = signal(frames, c.channels as usize, c.bits);
             let (mut p, mut n) = (std::ptr::null_mut::<u8>(), 0u32);
             slot::<Fn7>(b, 0x2c)(b, 0, bytes as usize, &mut p as *mut _ as usize, &mut n as *mut _ as usize, 0, 0, 0);
@@ -371,7 +503,10 @@ fn main() {
             let mut three_d: *mut Obj = std::ptr::null_mut();
             if let Some((pos, vel, min, max, rolloff, doppler)) = c.three_d {
                 three_d = qi(b, &guid("279afa86-4981-11ce-a521-0020af0be560"));
-                results.push(slot::<FnF3>(three_d, 0x4c)(three_d, pos[0], pos[1], pos[2], 0));
+                let (front, top) = c.orientation.unwrap_or(([0.0, 0.0, 1.0], [0.0, 1.0, 0.0]));
+                let w = |v: f32| v.to_bits() as usize;
+                results.push(slot::<Fn7>(listener, 0x34)(listener, w(front[0]), w(front[1]), w(front[2]), w(top[0]), w(top[1]), w(top[2]), 0));
+                results.push(slot::<FnF3>(three_d, 0x4c)(three_d, pos[0], pos[1], pos[2], u32::from(c.uncommitted)));
                 results.push(slot::<FnF3>(three_d, 0x50)(three_d, vel[0], vel[1], vel[2], 0));
                 results.push(slot::<FnF1>(three_d, 0x44)(three_d, min, 0));
                 results.push(slot::<FnF1>(three_d, 0x40)(three_d, max, 0));
@@ -394,13 +529,26 @@ fn main() {
                 }
                 slot::<Fn0>(b8, 8)(b8);
             }
-            // Commit any deferred 3D settings, then capture: what is there, then the play.
-            slot::<Fn0>(listener, 0x44)(listener);
+            // Commit any deferred 3D settings (not for an uncommitted case), then capture: what is
+            // there, then the play.
+            if !c.uncommitted {
+                slot::<Fn0>(listener, 0x44)(listener);
+            }
             let mut before = Vec::new();
             drain(cap, frame_bytes, &mut before);
             let mut out = Vec::new();
             slot::<Fn3>(b, 0x30)(b, 0, 0, 0);
-            for _ in 0..if dense { 30 } else { 90 } {
+            for step in 0..if dense { 30 } else { 90 } {
+                if let Some((at, f)) = c.later {
+                    if step == at {
+                        results.push(slot::<Fn1>(b, 0x44)(b, f as usize));
+                    }
+                }
+                if let Some((at, f)) = c.other {
+                    if step == at && !b2.is_null() {
+                        results.push(slot::<Fn1>(b2, 0x44)(b2, f as usize));
+                    }
+                }
                 Sleep(10);
                 drain(cap, frame_bytes, &mut out);
             }
@@ -408,7 +556,7 @@ fn main() {
             std::fs::write(dir.join(format!("{}.f32", c.name)), &out).unwrap();
             writeln!(
                 tsv,
-                "{}\t{} {} {} {:x} vol {} pan {} freq {} 3d {:?} fx {:?}\tresults {:x?}\tframes {} of {channels} channels",
+                "{}\t{} {} {} {:x} vol {} pan {} freq {} 3d {:?} fx {:?} orientation {:?} uncommitted {} length {:?} later {:?}\tresults {:x?}\tframes {} of {channels} channels",
                 c.name,
                 c.channels,
                 c.rate,
@@ -419,10 +567,17 @@ fn main() {
                 c.frequency,
                 c.three_d,
                 c.distortion,
+                c.orientation,
+                c.uncommitted,
+                c.frames,
+                c.later,
                 results,
                 out.len() / frame_bytes
             )
             .unwrap();
+            if !b2.is_null() {
+                slot::<Fn0>(b2, 8)(b2);
+            }
             for o in [fx, three_d, b] {
                 if !o.is_null() {
                     slot::<Fn0>(o, 8)(o);
@@ -512,4 +667,165 @@ fn direct_sound_guid(_id: &str) -> [u8; 16] {
     let mut found = (text, None);
     unsafe { DirectSoundEnumerateA(find_device, &mut found as *mut _ as *mut c_void) };
     found.1.unwrap_or_else(|| panic!("no DirectSound device {}", found.0))
+}
+
+/// `DSMIX_SRC`: the sample-rate converter (`mixer::Resampler`): where a voice that is not at the
+/// device's rate ends, volume and pan with it, stereo, 8-bit, and `SetFrequency` before and
+/// while it plays (rates whose ratio needs the converter's table and the ones that do not).
+fn src_cases(add: &mut dyn FnMut(&'static str, &dyn Fn(&mut Case))) {
+    // The device check: at the device's rate, every sample as written (the exact path).
+    add("src_check_48000", &|_| {});
+    // Lengths around where the converter has read the last frame (44100 on 48000: 32 frames ahead).
+    for (n, f) in [("src_end_22059", 22059usize), ("src_end_22081", 22081), ("src_end_22082", 22082), ("src_end_22100", 22100), ("src_end_22083", 22083)] {
+        add(n, &move |c| {
+            c.rate = 44100;
+            c.frames = Some(f)
+        });
+    }
+    add("src_vol_44100", &|c| {
+        c.rate = 44100;
+        c.volume = -600
+    });
+    add("src_pan_32000", &|c| {
+        c.rate = 32000;
+        c.volume = -1234;
+        c.pan = -3000
+    });
+    add("src_stereo_44100", &|c| {
+        c.rate = 44100;
+        c.channels = 2
+    });
+    add("src_8bit_22050", &|c| {
+        c.rate = 22050;
+        c.bits = 8
+    });
+    // Changes of 0.2% or less keep the device on its first converter.
+    for (n, rate, f) in [("src_small_44100_44150", 44100, 44150), ("src_small_22050_22071", 22050, 22071)] {
+        add(n, &move |c| {
+            c.rate = rate;
+            c.frequency = f
+        });
+    }
+    add("src_small_later_44100_44130", &|c| {
+        c.rate = 44100;
+        c.later = Some((15, 44130))
+    });
+    add("src_small_later_48000_48050", &|c| c.later = Some((15, 48050)));
+    add("src_small_later_22071_22090", &|c| {
+        c.rate = 22071;
+        c.later = Some((15, 22090))
+    });
+    // Another buffer's large change turns on the second converter while this one plays.
+    add("src_swap_44100", &|c| {
+        c.rate = 44100;
+        c.other = Some((15, 30000))
+    });
+    for (n, rate, f) in [("src_freq_22050_23456", 22050, 23456), ("src_freq_44100_44101", 44100, 44101), ("src_freq_32000_36000", 32000, 36000), ("src_freq_22050_19000", 22050, 19000)] {
+        add(n, &move |c| {
+            c.rate = rate;
+            c.frequency = f
+        });
+    }
+    // The frequency changes above made DirectSound turn on its other converter for the device
+    // (docs/SOUND.md): the same kinds of buffers again.
+    add("src_apl_48000", &|_| {});
+    add("src_apl_44100", &|c| c.rate = 44100);
+    add("src_apl_stereo_44100", &|c| {
+        c.rate = 44100;
+        c.channels = 2
+    });
+    add("src_apl_pan_32000", &|c| {
+        c.rate = 32000;
+        c.volume = -1234;
+        c.pan = -3000
+    });
+    add("src_apl_end_22059", &|c| {
+        c.rate = 44100;
+        c.frames = Some(22059)
+    });
+    add("src_apl_end_22052", &|c| {
+        c.rate = 44100;
+        c.frames = Some(22052)
+    });
+    add("src_apl_8bit_22050", &|c| {
+        c.rate = 22050;
+        c.bits = 8
+    });
+    for (n, rate, at, f) in [("src_later_48000_44100", 48000, 15, 44100), ("src_later_22050_30000", 22050, 15, 30000), ("src_later_44100_23456", 44100, 15, 23456)] {
+        add(n, &move |c| {
+            c.rate = rate;
+            c.later = Some((at, f))
+        });
+    }
+}
+
+/// `DSMIX_HOOK`: instead of the device's loopback, what DirectSound itself hands the Windows
+/// audio engine, taken in this process: `IAudioRenderClient::GetBuffer` and `ReleaseBuffer` are
+/// wrapped (the class's vtable is shared by every render client of the process) and each
+/// released packet is kept. This is DirectSound's mix before any processing of the device's, so
+/// any device serves.
+mod hook {
+    use super::{guid, slot, Fn2, Fn4, FnInit, Obj};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    pub static ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static TAKEN: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+    static LAST: AtomicUsize = AtomicUsize::new(0);
+    static FRAME: AtomicUsize = AtomicUsize::new(8);
+    static GET: AtomicUsize = AtomicUsize::new(0);
+    static RELEASE: AtomicUsize = AtomicUsize::new(0);
+    type Get = unsafe extern "system" fn(*mut Obj, u32, *mut *mut u8) -> u32;
+    type Release = unsafe extern "system" fn(*mut Obj, u32, u32) -> u32;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn VirtualProtect(at: *mut u8, size: usize, protect: u32, old: *mut u32) -> i32;
+    }
+    unsafe extern "system" fn get(this: *mut Obj, frames: u32, data: *mut *mut u8) -> u32 {
+        let f: Get = std::mem::transmute(GET.load(Ordering::SeqCst));
+        let r = f(this, frames, data);
+        if r == 0 && !data.is_null() {
+            LAST.store(*data as usize, Ordering::SeqCst);
+        }
+        r
+    }
+    unsafe extern "system" fn release(this: *mut Obj, frames: u32, flags: u32) -> u32 {
+        let at = LAST.load(Ordering::SeqCst);
+        if at != 0 {
+            let n = frames as usize * FRAME.load(Ordering::SeqCst);
+            let mut t = TAKEN.lock().unwrap();
+            if flags & 2 != 0 {
+                t.extend(std::iter::repeat(0u8).take(n));
+            } else {
+                t.extend_from_slice(std::slice::from_raw_parts(at as *const u8, n));
+            }
+        }
+        let f: Release = std::mem::transmute(RELEASE.load(Ordering::SeqCst));
+        f(this, frames, flags)
+    }
+    /// Wraps the render client's slots, using a client of `dev` with the mix format `fmt`.
+    pub unsafe fn install(dev: *mut Obj, fmt: *const u8, frame_bytes: usize) {
+        FRAME.store(frame_bytes, Ordering::SeqCst);
+        let mut client: *mut Obj = std::ptr::null_mut();
+        let iid_client = guid("1cb9ad4c-dbfa-4c32-b178-c2f568a703b2");
+        let r = slot::<Fn4>(dev, 0xc)(dev, iid_client.as_ptr() as usize, 0x17, 0, &mut client as *mut _ as usize);
+        assert_eq!(r, 0, "Activate (render)");
+        let r = slot::<FnInit>(client, 0xc)(client, 0, 0, 10_000_000, 0, fmt, std::ptr::null());
+        assert_eq!(r, 0, "IAudioClient::Initialize render");
+        let mut render: *mut Obj = std::ptr::null_mut();
+        let iid = guid("f294acfc-3146-4483-a7bf-addca7c260e2");
+        let r = slot::<Fn2>(client, 0x38)(client, iid.as_ptr() as usize, &mut render as *mut _ as usize);
+        assert_eq!(r, 0, "IAudioRenderClient");
+        let vt = (*render).vtable as *mut usize;
+        let mut old = 0u32;
+        assert!(VirtualProtect(vt.add(3) as *mut u8, 8, 0x04, &mut old) != 0);
+        GET.store(*vt.add(3), Ordering::SeqCst);
+        RELEASE.store(*vt.add(4), Ordering::SeqCst);
+        *vt.add(3) = get as *const () as usize;
+        *vt.add(4) = release as *const () as usize;
+        ON.store(true, Ordering::SeqCst);
+    }
+    /// What DirectSound released since the last call.
+    pub fn take(out: &mut Vec<u8>) {
+        out.append(&mut TAKEN.lock().unwrap());
+    }
 }

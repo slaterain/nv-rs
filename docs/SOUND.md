@@ -10,7 +10,7 @@ in `scripts/`.
 | Music | `platform/dshow.rs`, `crates/mp3` | DirectShow's filter graph and MP3 decoder | `scripts/dshow-measure` | Graph answers as measured. All 199 tracks are the same length, and 99.9748% of samples are identical |
 | Wave files | `platform/mmio.rs` | `mmio*` | `scripts/mmio-measure` | Edge cases as measured |
 | DirectSound | `platform/dsound.rs` | DirectSound 8 objects, cursors | `scripts/dsound-capture` | Answers and cursors as measured |
-| Mixer | `platform/mixer.rs`, `platform/sound_out.rs` | DirectSound's mixer, the device | `scripts/dsmix-measure` (WASAPI loopback) | 2D path bit-exact; resampler and 3D approximate, distortion heard dry (open) |
+| Mixer | `platform/mixer.rs`, `platform/resampler.rs`, `platform/sound_out.rs` | DirectSound's mixer, the device | `scripts/dsmix-measure` (WASAPI loopback, `DSMIX_HOOK`), `scripts/dsound-oracle` (the DLLs in a test program) | 2D path, 3D stage, distortion and both resamplers bit-exact (translated from the player's DLLs) |
 | Voices and sounds | `platform/vorbisfile.rs`, `crates/vorbis` | `libvorbisfile.dll`/`libvorbis.dll` (1.2.0) | `scripts/vorbis-record` | Bit-exact at 24-bit and 53-bit x87; 64-bit not provided |
 | Movie sound | `platform/bink.rs` | Bink's DirectSound sound system | `nv-bink --sound-system`, `--wait --sound` | `BinkSetSoundSystem` answers 1 as measured; the movie track plays as a mixer voice on the clock schedule (output off by default) |
 
@@ -76,36 +76,190 @@ These were measured on a device without audio enhancements (Virtual Desktop Audi
   48,000 samples. The other 4 are the tail of a voice started 2 frames into a device
   period.
 
-**Not exact: heard by an approximate path, open for the maintainer** (exact or approximate
-is still the maintainer's question). Each kind is named once on stderr when it is first
-heard ("sound: approximate ..."):
-- **Resampling.** Windows uses a long polyphase filter, not linear interpolation; free
-  least-squares fits only reach -34 dB. The platform uses a Blackman-windowed sinc, 64
-  taps, cut off at 0.95 of the lower Nyquist rate (`mixer::resample_kernel`). It was chosen
-  against the `dsmix-vd` captures (residual after the best alignment, below the signal):
+- A 3D buffer and a buffer with the distortion: see below (translated from the DLLs).
 
-  | Case | Linear | Cubic | Sinc 32 taps | Sinc 64, cut 0.95 |
-  | --- | --- | --- | --- | --- |
-  | 44100 on 48000 | -9.9 dB | -11.6 dB | -20.5 dB | -25.8 dB |
-  | 22050, 32000, 11025 on 48000 | about -10 dB | about -12 dB | about -20 dB | (similar to 44100) |
-  | 48000 played at 47000 or 60000 | -19 dB | -25 dB | -12 dB | -11 dB |
+**Resampling: DirectSound's two converters** (`platform/resampler.rs`, translated from the
+player's `dsound.dll` and `RESAMPLEDMO.DLL`, 2026-10-28). Every game buffer has
+`DSBCAPS_CTRLFREQUENCY`, so every one gets a source-rate converter, and which one is the
+device's state:
 
-  So for a frequency changed by `SetFrequency` near the format's rate, Windows looks more
-  like a short filter. The rate a sound plays at is right in every case. Only the filter's
-  shape differs.
-- **3D** (`mixer::spatial_millibels`). These parts are measured (the `dsmix-3d` grid, minimum
-  distance 1, within 0.1 dB at the measured points):
-  - the two channels' power adds up to a third, so straight ahead each side is at -7.8 dB;
-  - the near channel's share of that power by angle is a table, linear between the measured
-    angles;
-  - closer than 2.5 units, the share moves toward a half in proportion to the distance;
-  - past the minimum distance, the level falls by `min / (min + rolloff * (d - min))`, with `d`
-    held at the maximum distance.
+- **First: the Windows resampler** (`RESAMPLEDMO.DLL` ordinal 1, made by `dsound`'s APO,
+  half filter length 30, default cut-off), driven as the APO drives it: each period it is handed
+  what `GetRequiredInputFrames` asks for (it drops what it does not use) and makes the period's
+  frames; at the device's rate it passes the samples through. Its filter is a Kaiser-windowed
+  sinc (beta 10.06) cut at 0.966 of the lower rate's Nyquist frequency, in one of two forms:
+  - a polyphase table, `L` rows of 68 taps at 44.1 kHz (`L`/`M` the rates over their gcd), for
+    whole rates with at most 1280 phases; it is made once per converter;
+  - otherwise (22071 on 48000, a rate that is not a whole number after a change) a curve of the
+    filter sampled 16384 times, interpolated for every output frame at a position kept in `f64`
+    (added up frame by frame, worked out again every 200 frames and at each period). The curve
+    comes from `sin` (Rust's and the DLL's CRT agree on all 16385 points: the curve is the
+    DLL's, compared in memory) and the window table.
 
-  Not measured, so these are open: whether the 2.5 units scale with the minimum distance,
-  height (it counts only in the distance), Doppler (not applied), and deferred settings (they
-  apply at once).
-- **Distortion.** Not analysed. A buffer with it is heard without it.
+  Both sum in the DLL's SSE order, which depends on where the input sits in its ring (638
+  frames at 44.1 kHz). A change of 1/500 of the rate or less while it plays is its `SetRate` at
+  the next period: the output and input positions are carried over in time and the filter is
+  designed again (as the curve if a table was made before); after a pass-through its history is
+  silence, as in the DLL. Its sinc and window are two piecewise-linear tables that are constant
+  data in the DLL: the platform reads them from the player's `SysWOW64\RESAMPLEDMO.DLL` (no
+  byte of them is in the repository). With another build of the DLL a buffer that needs them
+  is not heard (named once on stderr).
+- **Second: "APL high-performance SRC"**, a 4-point Lagrange interpolator in `dsound.dll`.
+  `SetFrequency` (or Doppler) moving a buffer's rate by more than 1/500 of it turns it on
+  for the whole device, for good, playing buffers included (each gets a new converter from
+  where it is). From then on every buffer goes through it, also those at 48 kHz, whose
+  samples it changes in the last bits. 16-bit mono uses a four-lane kernel whose factors
+  drift between periods; stereo and 8-bit the plain formula.
+
+Both work in 10 ms periods from the buffer's start. A non-looping buffer ends after the period
+in which the frames handed to its converter reach its length (the first converter is handed
+what its `GetRequiredInputFrames` asks, 32 or so frames beyond what it has used;
+the second what its `CalcInputFrames` asks). A frequency change reaches the second converter at
+the next period. The volume, pan and 3D multipliers apply to what the converter gives.
+
+Measured with `scripts/dsmix-measure` (`DSMIX_SRC`, captured with `DSMIX_HOOK`: the tool wraps
+`IAudioRenderClient` in its own process and keeps what `dsound.dll` hands the audio engine,
+so any device serves; the earlier Virtual Desktop Audio captures agree), every sample up to the
+voice's end and the end itself:
+
+| Converter | Cases | Result |
+| --- | --- | --- |
+| First | 44100, 32000, 22050, 11025 on 48000; stereo; 8-bit; volume and pan; 44150 and 22071 set before `Play` (table, curve); changes while playing (44100 to 44130, 48000 to 48050, 22071 to 22090); lengths 22059, 22081, 22082, 22083, 22100 | bit-exact |
+| Swap | 44100 playing on the first while another buffer's large change turns on the second | bit-exact |
+| Second | 24000, 47000, 60000, 23456, 44101, 36000, 19000 set before `Play`; 48000 and 44100 mono, stereo, 8-bit; pan; changes while playing (44100, 30000, 23456); lengths 22052, 22059 | bit-exact |
+
+Checked further against the DLL itself, driven by a test program as `dsound.dll` drives it
+(`scratch`, private): 44100, 22071, 11025, 8000, 60000 and stereo 22050/22071, `SetRate` to
+44130, 44150, 48050, 47990, 22080, 32030, 60050, 11040 and back again, and 144000 frames (the
+counters' rebasing), all bit-exact.
+
+Nothing in the resampling is approximate now.
+
+## 3D and the distortion: translated from the player's DLLs
+
+With the maintainer's leave (2026-10-28, "sound must match exactly"), the 32-bit `dsound.dll`
+and `dsdmo.dll` the game loads (`SysWOW64`, Windows 11 10.0.26200) were read as instructions in
+a private Ghidra project (not the shared servers). The platform follows their order of
+operations. No bytes of either DLL are in the repository: the 3D stage's trigonometric tables
+are computed from the formulas they were made with, and the distortion's one table that is not
+a formula is measured from the player's own `dsdmo.dll` when the game first plays the effect.
+
+### What the game asks for (exe)
+
+- **Listener** (`00aea8b0`, every frame): position and orientation with `DS3D_DEFERRED`, then
+  `CommitDeferredSettings`; rolloff 1 (deferred, at start-up). The listener's velocity slot
+  (`00aeaa10`) is never called (all 192 callers of `BSAudio::QInstance` and the 30 users of the
+  audio singleton checked), and no buffer velocity is set, so Doppler never engages.
+- **3D buffers**: minimum and maximum distance both 1e9 (`00aec530`, `00af0630`, `00aefda0`),
+  so DirectSound's distance factor is always 1 and the game sets the volume itself; position
+  with `DS3D_DEFERRED` (`00aef090`, `00aed990`). No cones, no `SetMode`.
+- **Distortion** on the sounds flagged `0x80000` (`00aec530`): gain
+  `fFilterDistortionGain:Audio` (default -18.2 dB), edge 0, post-EQ centre 5000 Hz, bandwidth
+  1135 Hz, pre-lowpass cutoff 5000 Hz. The I3DL2 reverb (`00af1430`) is not registered on
+  Windows 11 (captured `REGDB_E_CLASSNOTREG`), so it is never heard.
+
+### The 3D stage (`platform/ds3d.rs`)
+
+For a stereo device (`CMultiPan3dObject`):
+1. **Listener frame.** The offset from the listener is turned by three angles taken from the
+   listener's top and front vectors. The angles come from an arcsine table (steps of 0.01, 0.001
+   above 0.9); the turns use a sine table in **whole degrees, truncated** (no interpolation). So a
+   listener turned by 33.7 degrees hears the world turned by 33. `SetOrientation` stores both
+   vectors made unit length and the top made square to the front.
+2. **Distance.** `f = min / ((d - min) * rolloff + min)` past the minimum distance (`d` held at
+   the maximum), as `trunc(602.059991328 * log2(f)) - 500` millibels: a 3D sound is always at
+   least **5 dB** down. With the game's distances `f` is 1, so -500.
+3. **Pan.** Speakers at -90 and +90 degrees; the share between the two nearest by the tangent
+   law from the azimuth `atan2(x, z)`; each share as `trunc(301.03 * log2(share))` millibels.
+   **Near zone:** when `|x|`, `|z|` and `sqrt(x^2 + z^2)` are all under **2.5 units**, a part
+   `0.5 + r / 5` is panned from the azimuth and the rest from the opposite direction. The 2.5
+   units are absolute: they do not scale with the minimum distance (so they apply with the
+   game's 1e9 too, about 175 game units). Height counts only in the distance (step 2).
+4. **Device.** Each channel is multiplied by `gain(volume + distance) * gain(pan)`, two lookups
+   of the measured volume law (`mixer::gain`), multiplied as `f32` (`10057be0`).
+5. **Doppler.** `f * 359660 / (v + 359660)` for the radial speed `v` (units/s times the distance
+   factor, times 1000, times the Doppler factor, held to +-179830), clamped to 100..200000 Hz.
+   Implemented, but the game never sets a velocity.
+6. **Deferred settings.** Each setting made with `DS3D_DEFERRED` waits on its own (the DLL keeps
+   a deferred copy with a flag per setting) until `CommitDeferredSettings`; `Get*` answer the
+   settings in effect.
+
+**Measured** (the captures made on the transparent device, every sample of both channels
+compared after the alignment, with `ds3d.rs` and `dsfx.rs` as they are in the engine):
+
+| Captures | What | Samples exact |
+| --- | --- | --- |
+| `dsmix-3d-2026-10-24` | 305 grid positions (x -4..4, z -4..4, heights 0 and 1), 13 azimuths, 10 distances 0.5 to 100 with minimum distances 1 and 3 and rolloffs 0 to 1.5, volume -500 with 3D, and the 2D volume and pan sweeps | 4,536,000 of 4,536,000 |
+| `dsmix-sweep-2026-10-24` | the volume, pan, azimuth and distance sweeps (an earlier run) | 3,072,000 of 3,072,000 |
+| `dsmix-vd-2026-10-24` | 11 3D cases (front, sides, behind, above, distance 10 with minimum 5, rolloff 2, maximum 4), the 4 distortion cases, the 2D cases | 1,391,946 of 1,392,000 |
+
+The 54 others are the device-period tails every capture loses (Mixer above), at most 4 a case.
+The old approximate law (`NEAR_SHARE`, "the power sums to a third") is gone: the third was the
+-5 dB of the distance stage and the -3 dB of an even split.
+
+### The distortion (`platform/dsfx.rs`)
+
+Per sample, in `f32`: a one-pole lowpass; a waveshaper on the integer part of the value (an
+integer "float" with an exponent of 2 to 5 bits chosen by the edge); the gain; a two-state
+lattice band-pass; back to the buffer's format, **rounded to nearest for mono and truncated for
+stereo** (the DLL's mono and stereo loops differ), 8-bit buffers divided by 256 toward zero. The
+coefficients follow `1000d8d0` with its `f64` and `f32` roundings, frequencies held to a third
+of the rate. The effect runs at the buffer's format rate, before the volume, 3D and resampling.
+
+`dsound.dll`'s chain: when a buffer starts, the effect's state is cleared and it runs from
+**32 frames before the play position** (wrapping to the end of the buffer), so the start of a
+sound hears its own tail.
+
+The one table that is not a formula, the band-pass's gain correction for each edge setting
+(32 values with two decimals), is measured once from the player's `dsdmo.dll` through COM (an
+impulse on a float stream, `dsfx::edge_table`). The values measured in a 64-bit process match
+the 32-bit DLL's table entry for entry (checked privately). The game's edge 0 uses entry 2.
+
+**Measured:** the four `dsmix-vd-2026-10-24` distortion captures (gain 0, -18 and -40 dB, edge 0
+and 50, 48 kHz mono 16-bit) are bit-exact for 23,998 of 24,000 samples each; the last two are
+the device-period tail every capture loses (Mixer above). Without the 32-frame start, the first
+100 or so samples differ.
+
+### Still open
+
+- The x87 `FYL2X` and `atan2` of the DLL are `f64` here: a truncated millibel can differ only
+  when its product lies within about 1e-13 of a whole number.
+- The DLL's effect runs about 100 ms ahead of the play cursor (its write-ahead, 10 ms ticks);
+  here it runs just ahead of what the mixer reads. Data the game writes into a playing buffer
+  with the effect inside those 100 ms is processed here and unprocessed in Windows.
+- Not provided (the game does not use them): cones, `SetMode`, other effects, a device with
+  other than two channels.
+- No loopback capture yet of turned listeners, the game's 1e9 distances, or the effect on
+  stereo, 8-bit and other rates (no transparent device here: the others process the signal).
+  They are covered without a device instead (next section); `DSMIX_EXACT=1` in
+  `scripts/dsmix-measure` plays them (cases `x_*`) when a transparent device is available.
+
+### Without a device: the DLLs run in a test program (`scripts/dsound-oracle`)
+
+`dsound-oracle` (32-bit, like the game) loads the player's `dsound.dll` and `dsdmo.dll` and
+compares them with `ds3d.rs` and `dsfx.rs`, compiled into it as they are in the engine. Nothing
+is heard: the 3D buffer plays silence, and the effect runs on test signals in memory.
+
+- **3D:** random listeners and sources are set through the 3D interfaces (immediate), and the
+  `f32` channel multipliers the DLL hands its mixer, its listener-frame position and its Doppler
+  frequency are read from its software 3D object (through the analysed DLL's offsets, checked
+  against its vtables first). A third of the cases use the game's settings (1e9 distances,
+  camera orientations, positions to 300 units). Deferred moves are checked before and after
+  `CommitDeferredSettings`.
+- **Distortion:** the effect object itself (`IMediaObjectInPlace::Process`) on noise at three
+  levels, PCM 8 and 16 bit, mono and stereo, 11025 to 48000 Hz, with the game's parameters, the
+  extremes, every edge band and 20 random sets.
+
+| Run (2026-10-28) | Cases | Exact |
+| --- | --- | --- |
+| 3D channel multipliers | 20,000 (17,772 heard, 16,830 with the channels apart, 12,560 within 2.5 units, 17,142 turned by the listener, 4,000 Doppler-shifted) | 20,000 |
+| 3D listener-frame positions | 20,000 | 20,000 |
+| 3D Doppler frequency | 20,000 | 20,000 |
+| Deferred position (unchanged before the commit, right after) | 1,819 | 1,819 |
+| Distortion | 1,060 format, rate and parameter cases, 9,540,000 samples | all |
+
+The captures (above) show that these multipliers are what reaches the device; the oracle shows
+that ours are the DLL's for settings no capture covers.
 
 ## Vorbis
 

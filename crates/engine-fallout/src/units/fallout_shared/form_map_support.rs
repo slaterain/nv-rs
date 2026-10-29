@@ -20,6 +20,8 @@ pub fn allocate_node(e: &mut Engine, _this: Ptr) -> Ptr {
         e.call(0x0043_a080, &args![]);
     }
     let node = e.mem.u32(FREE_HEAD);
+    // `NV_SPEECH_CHECK` (diagnostic only, reads memory): a node still in a watched list.
+    crate::units::fallout_shared_facegen::bsfacegenkeyframe::speech_check::node_allocated(e, node);
     let next = e.mem.u32(node);
     e.mem.set_u32(FREE_HEAD, next);
     e.mem.set_u32(node.wrapping_add(8), 0);

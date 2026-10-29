@@ -2579,6 +2579,7 @@ fn add_child_node(e: &mut Engine, light: u32, child: u32) {
 /// at `011f91c8`) and, with a graph, its always-rendered objects without a parent. Both paths
 /// end with `00ba02b0`.
 pub fn fn_00b5d300(e: &mut Engine, this: Ptr<ShadowSceneNode>, light: u32) {
+    light_check::before(e, this.addr(), light);
     let ni_light = e.mem.u32(light.wrapping_add(LIGHT_SP_LIGHT));
     if e.mem.u32(ni_light.wrapping_add(AV_FLAGS)) & 1 != 0 {
         e.call(LIGHT_00B9EF30, &args![light]);
@@ -2622,6 +2623,7 @@ pub fn fn_00b5d300(e: &mut Engine, this: Ptr<ShadowSceneNode>, light: u32) {
             add_always_rendered(e, this, light, true);
         }
         e.call(LIGHT_00BA02B0, &args![light]);
+        light_check::after(e, this.addr(), light);
         return;
     }
     for array in [0x210u32, 0x220, 0x230] {
@@ -4559,6 +4561,193 @@ pub fn shadow_scene_node_find_and_cull_light(
 ) {
     if node != 0 {
         shadow_scene_node_find_and_cull_light_recurse(e, this, node, remove);
+    }
+}
+
+/// Diagnostic only, not exe behaviour (a22: in the race menu the port's
+/// `GetRenderPasses_2x` sees no active non-shadow light on the head properties, where the exe
+/// sees three, the lights of `Meshes\Terminals\PlayerFaceLights01.NIF` that
+/// `FORenderedMenuRaceSex::OnMenuOpen` (`007fd6c0`) adds to scene node 3 with
+/// `AddAllLightsFromNode_Recurse` (`00b5ca70`, radius = 3 x the player's bound radius)).
+/// With `NV_LIGHT_CHECK` set, each light update `00b5d300` makes for a scene node other than
+/// the main one (`011f91c8`) prints the light (its `NiLight`: the culled bit of +0x30, the
+/// dimmer +0xc4, the radius +0xe0, the world position +0x8c) and, once the node's children
+/// are parsed, the geometry list the light got (+0xe0: the count and the first geometries
+/// with their bound centre and radius and their lighting property's light count +0x68).
+/// Lines start "light check:" (at most 400). Read-only.
+pub mod light_check {
+    use super::{item_element, item_next, FALLBACK_SCENE_NODE_011F91C8, LIGHT_SP_LIGHT};
+    use crate::prelude::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::OnceLock;
+
+    pub fn on() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("NV_LIGHT_CHECK").is_some())
+    }
+
+    /// Prints one line while under the cap.
+    pub fn say(text: &str) {
+        static LINES: AtomicU32 = AtomicU32::new(0);
+        if LINES.fetch_add(1, Ordering::Relaxed) < 400 {
+            println!("light check: {text}");
+        }
+    }
+
+    fn word(e: &Engine, a: u32) -> Option<u32> {
+        e.mem.is_mapped(a).then(|| e.mem.u32(a))
+    }
+
+    fn float(e: &Engine, a: u32) -> String {
+        word(e, a).map_or("?".into(), |w| format!("{}", f32::from_bits(w)))
+    }
+
+    /// A light's `NiLight` in words.
+    pub fn light_text(e: &Engine, light: u32) -> String {
+        let Some(ni) = word(e, light.wrapping_add(LIGHT_SP_LIGHT)) else {
+            return format!("light {light:08x} (unmapped)");
+        };
+        if ni == 0 || !e.mem.is_mapped(ni) {
+            return format!("light {light:08x} NiLight {ni:08x}");
+        }
+        format!(
+            "light {light:08x} NiLight {ni:08x} culled {} dimmer {} radius {} at ({}, {}, {}) shadow {}",
+            e.mem.u32(ni + 0x30) & 1,
+            float(e, ni + 0xc4),
+            float(e, ni + 0xe0),
+            float(e, ni + 0x8c),
+            float(e, ni + 0x90),
+            float(e, ni + 0x94),
+            e.mem.u8(light.wrapping_add(0xec)),
+        )
+    }
+
+    fn is_main(e: &Engine, node: u32) -> bool {
+        node == e.global::<u32>(FALLBACK_SCENE_NODE_011F91C8)
+    }
+
+    /// At the start of `00b5d300`.
+    pub fn before(e: &Engine, node: u32, light: u32) {
+        if !on() || is_main(e, node) {
+            return;
+        }
+        let children = u32::from(e.mem.u16(node.wrapping_add(0xa6)));
+        say(&format!(
+            "update on node {node:08x} ({children} children): {}",
+            light_text(e, light)
+        ));
+    }
+
+    /// After the node's children were parsed (the path without a usable portal graph).
+    pub fn after(e: &Engine, node: u32, light: u32) {
+        if !on() || is_main(e, node) {
+            return;
+        }
+        let mut count = 0u32;
+        let mut shown = Vec::new();
+        let mut item = word(e, light.wrapping_add(0xe0)).unwrap_or(0);
+        while item != 0 && e.mem.is_mapped(item) {
+            let geometry = item_element(e, item);
+            item = item_next(e, item);
+            count += 1;
+            if shown.len() < 8 && geometry != 0 && e.mem.is_mapped(geometry) {
+                let bound = e.mem.u32(geometry + 0x20);
+                let bound_text = if bound != 0 && e.mem.is_mapped(bound) {
+                    format!(
+                        "({}, {}, {}) r {}",
+                        float(e, bound),
+                        float(e, bound + 4),
+                        float(e, bound + 8),
+                        float(e, bound + 0xc)
+                    )
+                } else {
+                    format!("{bound:08x}")
+                };
+                let property = e.mem.u32(geometry + 0xa8);
+                let lights = if property != 0 && e.mem.is_mapped(property) {
+                    e.mem.u32(property + 0x68)
+                } else {
+                    0
+                };
+                shown.push(format!(
+                    "{geometry:08x} bound {bound_text} property {property:08x} lights {lights}"
+                ));
+            }
+        }
+        say(&format!(
+            "node {node:08x} light {light:08x} has {count} geometries: {}",
+            shown.join("; ")
+        ));
+    }
+
+    /// `ShadowSceneLight::TestFrustumCull` (`00b9e970`) culled `light` (0xff): the first time
+    /// for each light, prints why, the light, the culler's camera (+0xc: its world position
+    /// +0x8c and `m_fLODAdjust` +0x110), the scale the distance took (the shader manager's
+    /// accumulator's +8 object's +0x110) and the fade distances `011f9444` / `011f9448`.
+    pub fn culled(e: &mut Engine, light: u32, culler: u32, reason: &str) {
+        use std::collections::HashSet;
+        use std::sync::Mutex;
+        static SEEN: Mutex<Option<HashSet<u32>>> = Mutex::new(None);
+        {
+            let mut seen = SEEN
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !seen.get_or_insert_with(HashSet::new).insert(light) {
+                return;
+            }
+        }
+        let camera = word(e, culler.wrapping_add(0xc)).unwrap_or(0);
+        let camera_text = if camera != 0 && e.mem.is_mapped(camera) {
+            format!(
+                "camera {camera:08x} at ({}, {}, {}) lod {}",
+                float(e, camera + 0x8c),
+                float(e, camera + 0x90),
+                float(e, camera + 0x94),
+                float(e, camera + 0x110)
+            )
+        } else {
+            format!("camera {camera:08x}")
+        };
+        let accumulator = e.call(0x00b4_f5c0, &[]).u32();
+        let object = word(e, accumulator.wrapping_add(8)).unwrap_or(0);
+        let scale = if object != 0 && e.mem.is_mapped(object) {
+            float(e, object + 0x110)
+        } else {
+            "none".into()
+        };
+        say(&format!(
+            "culled {}: {reason}; culler {culler:08x} {camera_text}; accumulator {accumulator:08x} \
+             scale {scale}; fade near {} far {}",
+            light_text(e, light),
+            float(e, 0x011f_9444),
+            float(e, 0x011f_9448)
+        ));
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// The light line reads the `NiLight`'s culled bit, dimmer, radius and position and
+        /// the shadow byte.
+        #[test]
+        fn light_text_reads_the_ni_light() {
+            let mut e = Engine::new();
+            let light = e.mem.alloc(0x100);
+            let ni = e.mem.alloc(0x100);
+            e.mem.set_u32(light + LIGHT_SP_LIGHT, ni);
+            e.mem.set_u32(ni + 0x30, 1);
+            e.mem.set_f32(ni + 0xc4, 0.5);
+            e.mem.set_f32(ni + 0xe0, 96.0);
+            e.mem.set_f32(ni + 0x8c, 1.0);
+            e.mem.set_f32(ni + 0x90, 2.0);
+            e.mem.set_f32(ni + 0x94, 3.0);
+            let text = light_text(&e, light);
+            assert!(
+                text.ends_with("culled 1 dimmer 0.5 radius 96 at (1, 2, 3) shadow 0"),
+                "{text}"
+            );
+        }
     }
 }
 

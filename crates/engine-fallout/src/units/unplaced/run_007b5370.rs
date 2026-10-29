@@ -7,6 +7,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::units::fallout_shared_facegen::bsfacegenkeyframe::speech_check;
 
 /// `004a49e0` (`thiscall`, `RET 4`, no unit in the engine map): frees a node of the list.
 const FREE_NODE: u32 = 0x004a_49e0;
@@ -23,6 +24,8 @@ pub fn fn_007b5370(e: &mut Engine, this: Ptr) -> u32 {
 /// there is none; the old head is freed (`004a49e0`) and the count goes down by one.
 pub fn fn_007b5390(e: &mut Engine, this: Ptr) -> u32 {
     let list = this.addr();
+    // `NV_SPEECH_CHECK` (diagnostic only, reads memory): a watched list's head removed.
+    speech_check::removing(e, list);
     let node = e.mem.u32(list);
     let next = e.mem.u32(e.mem.u32(list));
     e.mem.set_u32(list, next);
@@ -36,6 +39,7 @@ pub fn fn_007b5390(e: &mut Engine, this: Ptr) -> u32 {
     e.call(FREE_NODE, &args![this, node]);
     let count = e.mem.u32(list + 8).wrapping_sub(1);
     e.mem.set_u32(list + 8, count);
+    speech_check::removed(e, list);
     item
 }
 

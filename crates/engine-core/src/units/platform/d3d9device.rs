@@ -1732,6 +1732,10 @@ fn clear_answer(e: &mut Engine, this: Ptr, count: u32, rects: Ptr, flags: u32) -
 /// (the viewer draws), so it answers `D3D_OK` outside a scene and `D3DERR_INVALIDCALL` inside
 /// one.
 fn present(e: &mut Engine, this: Ptr, source: u32, dest: u32, window: u32, dirty: u32) -> u32 {
+    if crate::queue_check::enabled() {
+        // Diagnostic only (`NV_QUEUE_CHECK`, not exe behaviour): the frame ends here.
+        crate::queue_check::frame(e);
+    }
     let model = if device(e, this).in_scene || device(e, this).lost {
         D3DERR_INVALIDCALL
     } else {

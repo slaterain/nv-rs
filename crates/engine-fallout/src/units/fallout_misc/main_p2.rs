@@ -3762,8 +3762,10 @@ pub fn fn_00876850(
     }
     let decal = e.call(GET_GLOBAL_011F9508, &args![]).u32();
     let device = e.call(0x004d_c020, &args![decal]).u32();
-    e.vcall(device, 0x1a0, &args![device, 0u32]);
-    e.vcall(device, 0x190, &args![device, 0u32, 0u32, 0u32, 0u32]);
+    // `SetIndices(NULL)` and `SetStreamSource(0, NULL, 0, 0)` (008768f6..: the exe pushes the
+    // arguments, then the device once as the COM `this`; `vcall` supplies that word).
+    e.vcall(device, 0x1a0, &args![0u32]);
+    e.vcall(device, 0x190, &args![0u32, 0u32, 0u32, 0u32]);
     if e.call(0x0068_3a60, &args![]).u32() != 0 {
         e.call(0x0071_4900, &args![]);
     }
@@ -9524,11 +9526,11 @@ mod tests_second {
         assert_eq!(calls_to(&log, 0x004d_c020), vec![vec![decal]]);
         assert_eq!(
             calls_to(&log, slot_target(&r, device, 0x1a0)),
-            vec![vec![device, device, 0]]
+            vec![vec![device, 0]]
         );
         assert_eq!(
             calls_to(&log, slot_target(&r, device, 0x190)),
-            vec![vec![device, device, 0, 0, 0, 0]]
+            vec![vec![device, 0, 0, 0, 0]]
         );
         assert_eq!(calls_to(&log, 0x0071_4900).len(), 1);
         assert_eq!(calls_to(&log, 0x00b9_88e0).len(), 1);

@@ -1285,6 +1285,22 @@ pub fn fn_0065a970(
             }
         }
     }
+    let checking = face_check::enabled();
+    if checking {
+        // Diagnostic only (`NV_FACE_CHECK`, not exe behaviour).
+        let data = e.call(GEOMETRY_DATA, &args![geometry]).u32();
+        face_check::morph_start(
+            e,
+            this.addr(),
+            coords,
+            geometry,
+            data,
+            apply_all,
+            count,
+            iterator,
+            extra,
+        );
+    }
     let zero = e.global::<f64>(ZERO);
     for set in 0..2u32 {
         let address = egm_set(e, set);
@@ -1300,6 +1316,9 @@ pub fn fn_0065a970(
                 e, this, set, index, weight, iterator, extra, extra_data, count,
             );
         }
+    }
+    if checking {
+        face_check::morph_end(e, geometry, iterator);
     }
     if e.call(GEOMETRY_0049EC60, &args![geometry]).u32() != 0 {
         let data = e.call(GEOMETRY_DATA, &args![geometry]).u32();
@@ -1578,6 +1597,12 @@ pub fn bs_face_gen_model_apply_coordinate_texturing_to_mesh(
         }
     }
     let scale = e.global::<f64>(COEFFICIENT_SCALE);
+    let checking = face_check::enabled();
+    if checking {
+        // Diagnostic only (`NV_FACE_CHECK`, not exe behaviour).
+        face_check::texturing(e, this.addr(), coords, width, height, morphs, limit);
+    }
+    let mut weighted = 0u32;
     for index in 0..morphs {
         let address = egt_set(e, set);
         let morph = e.call(EGT_SET_MORPH, &args![address, index]).u32();
@@ -1603,6 +1628,7 @@ pub fn bs_face_gen_model_apply_coordinate_texturing_to_mesh(
         if weight == 0 {
             continue;
         }
+        weighted += 1;
         let address = egt_set(e, set);
         let first = e.call(EGT_SET_MORPH, &args![address, index]).u32();
         let address = egt_set(e, set);
@@ -1636,6 +1662,10 @@ pub fn bs_face_gen_model_apply_coordinate_texturing_to_mesh(
                 row = row.wrapping_add(row_step);
             }
         }
+    }
+    if checking {
+        let factor = f32::from_bits(x87_quiet_bits(e.global::<u32>(COLOR_SCALE_01065B9C)));
+        face_check::texturing_sums(e, sums, texels, weighted, factor);
     }
     for channel in 0..3u32 {
         let factor = x87_quiet_bits(e.global::<u32>(COLOR_SCALE_01065B9C));
@@ -1792,6 +1822,323 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0065_cf90, fn_0065cf90(u32) -> u32),
         entry!(0x0065_f240, std_vector_unsigned_long_tidy(u32)),
     ]
+}
+
+// ---------------------------------------------------------------------------------------------
+// `NV_FACE_CHECK`: diagnostic only, not exe behaviour. Reads, never writes, game memory (the
+// optional image files go to `NV_FACE_CHECK_DIR`, outside the game).
+//
+// Splits the player's broken race-menu face between geometry and texture in one run:
+// - `morph` lines (0065a970, every FaceGen morph of a mesh): the geometry's name, its data and
+//   additional-vertex array, how often that data / array has been morphed so far, the largest
+//   coefficient of the symmetric and asymmetric geometry sets, and how far the vertices really
+//   moved in this call (largest and mean distance). The same data or array morphed again with
+//   whole coordinates (not a race-menu difference) means the morph accumulates; a player
+//   coefficient far above an NPC's means the coordinates are wrong.
+// - `texturing` lines (0065b410, the face texture built from the EGT for the player only): the
+//   EGT size, its morph count, the texture coefficients, the weights used and the summed range.
+// - `image` lines (0064ceb0): the compressed image's size, channels, byte ranges per channel
+//   and the texture made; with `NV_FACE_CHECK_DIR` the image is also written there as a TGA.
+// ---------------------------------------------------------------------------------------------
+pub(crate) mod face_check {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Mutex, OnceLock};
+
+    /// Whether `NV_FACE_CHECK` is set (read once).
+    pub(crate) fn enabled() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("NV_FACE_CHECK").is_some())
+    }
+
+    static LINES: AtomicU32 = AtomicU32::new(0);
+    const LIMIT: u32 = 2000;
+
+    pub(crate) fn line(text: std::fmt::Arguments) {
+        if LINES.fetch_add(1, Ordering::Relaxed) < LIMIT {
+            println!("face check: {text}");
+        }
+    }
+
+    #[derive(Default)]
+    struct State {
+        /// Morph calls seen per geometry data and per additional-vertex array.
+        morphed: HashMap<u32, u32>,
+        /// The vertex positions of the morph in progress (before it).
+        before: Vec<[f32; 3]>,
+        images: u32,
+    }
+
+    fn state() -> std::sync::MutexGuard<'static, State> {
+        static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+        STATE
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The name of an `NiObjectNET` (its `NiFixedString` at +8), at most 48 characters.
+    pub(crate) fn name(e: &Engine, object: u32) -> String {
+        if object == 0 {
+            return "-".into();
+        }
+        let text = e.mem.u32(object.wrapping_add(8));
+        if text == 0 {
+            return "-".into();
+        }
+        let mut bytes = e.mem.cstr(text);
+        bytes.truncate(48);
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    /// An `FR2MatrixVTC<float>`'s values (rows at +0x18, columns at +0x1c, the floats at +0xc).
+    pub(crate) fn matrix_values(e: &Engine, matrix: u32) -> Vec<f32> {
+        let rows = e.mem.u32(matrix.wrapping_add(0x18));
+        let columns = e.mem.u32(matrix.wrapping_add(0x1c));
+        let first = e.mem.u32(matrix.wrapping_add(0xc));
+        let count = rows.saturating_mul(columns).min(256);
+        if first == 0 {
+            return Vec::new();
+        }
+        (0..count)
+            .map(|i| e.mem.f32(first.wrapping_add(4 * i)))
+            .collect()
+    }
+
+    fn largest(values: &[f32]) -> f32 {
+        values.iter().fold(0.0f32, |m, v| m.max(v.abs()))
+    }
+
+    fn short(values: &[f32], n: usize) -> String {
+        let parts: Vec<String> = values.iter().take(n).map(|v| format!("{v:.3}")).collect();
+        parts.join(",")
+    }
+
+    fn vertex(e: &Engine, base: u32, stride: u32, index: u32) -> [f32; 3] {
+        let at = base.wrapping_add(index.wrapping_mul(stride));
+        [e.mem.f32(at), e.mem.f32(at + 4), e.mem.f32(at + 8)]
+    }
+
+    /// The start of a morph (0065a970): reports what is morphed and keeps the positions.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn morph_start(
+        e: &Engine,
+        model: u32,
+        coords: u32,
+        geometry: u32,
+        data: u32,
+        apply_all: u8,
+        count: u32,
+        iterator: u32,
+        extra: u32,
+    ) {
+        let base = e.mem.u32(iterator);
+        let stride = e.mem.u32(iterator.wrapping_add(4));
+        let mut s = state();
+        let data_seen = {
+            let n = s.morphed.entry(data).or_insert(0);
+            *n += 1;
+            *n
+        };
+        let extra_seen = if extra != 0 {
+            let n = s.morphed.entry(extra).or_insert(0);
+            *n += 1;
+            *n
+        } else {
+            0
+        };
+        s.before = (0..count.min(20000))
+            .map(|i| vertex(e, base, stride, i))
+            .collect();
+        drop(s);
+        let symmetric = matrix_values(e, coords);
+        let asymmetric = matrix_values(e, coords.wrapping_add(0x20));
+        let extra_first = if extra != 0 {
+            format!("{:?}", vertex(e, extra, 0xc, 0))
+        } else {
+            "-".into()
+        };
+        line(format_args!(
+            "morph model {model:#x} geometry {geometry:#x} '{}' data {data:#x} (morph #{data_seen}) extra {extra:#x} (#{extra_seen}, first {extra_first}) all {apply_all} vertices {count} coords {coords:#x}: sym {} max {:.3} [{}] asym {} max {:.3} [{}]",
+            name(e, geometry),
+            symmetric.len(),
+            largest(&symmetric),
+            short(&symmetric, 8),
+            asymmetric.len(),
+            largest(&asymmetric),
+            short(&asymmetric, 6),
+        ));
+    }
+
+    /// The end of a morph: how far the vertices moved.
+    pub(crate) fn morph_end(e: &Engine, geometry: u32, iterator: u32) {
+        let base = e.mem.u32(iterator);
+        let stride = e.mem.u32(iterator.wrapping_add(4));
+        let before = std::mem::take(&mut state().before);
+        let (mut most, mut total, mut at) = (0.0f32, 0.0f64, 0usize);
+        for (i, old) in before.iter().enumerate() {
+            let new = vertex(e, base, stride, i as u32);
+            let d =
+                ((new[0] - old[0]).powi(2) + (new[1] - old[1]).powi(2) + (new[2] - old[2]).powi(2))
+                    .sqrt();
+            total += f64::from(d);
+            if d > most {
+                most = d;
+                at = i;
+            }
+        }
+        let mean = if before.is_empty() {
+            0.0
+        } else {
+            total / before.len() as f64
+        };
+        line(format_args!(
+            "morph done '{}': moved max {most:.3} (vertex {at}) mean {mean:.3}",
+            name(e, geometry)
+        ));
+    }
+
+    /// The texture coordinates and EGT of a face texture build (0065b410).
+    pub(crate) fn texturing(
+        e: &Engine,
+        model: u32,
+        coords: u32,
+        width: u32,
+        height: u32,
+        morphs: u32,
+        limit: u32,
+    ) {
+        let symmetric = matrix_values(e, coords.wrapping_add(0x40));
+        let asymmetric = matrix_values(e, coords.wrapping_add(0x60));
+        line(format_args!(
+            "texturing model {model:#x} coords {coords:#x} egt {width}x{height} morphs {morphs} limit {limit}: texture sym {} max {:.3} [{}] asym {} max {:.3}",
+            symmetric.len(),
+            largest(&symmetric),
+            short(&symmetric, 10),
+            asymmetric.len(),
+            largest(&asymmetric),
+        ));
+    }
+
+    /// The summed texel deltas of a face texture build.
+    pub(crate) fn texturing_sums(e: &Engine, sums: u32, texels: u32, used: u32, scale: f32) {
+        let mut low = [i32::MAX; 3];
+        let mut high = [i32::MIN; 3];
+        for texel in 0..texels {
+            for channel in 0..3u32 {
+                let v = e.mem.i32(sums.wrapping_add((texel * 3 + channel) * 4));
+                low[channel as usize] = low[channel as usize].min(v);
+                high[channel as usize] = high[channel as usize].max(v);
+            }
+        }
+        line(format_args!(
+            "texturing sums: {used} weighted morphs; per channel {:?}..{:?}, as colours {:.1}..{:.1}",
+            low,
+            high,
+            low.iter().copied().min().unwrap_or(0) as f32 * scale,
+            high.iter().copied().max().unwrap_or(0) as f32 * scale,
+        ));
+    }
+
+    /// A shader property's texture arrays (`BSShaderPPLightingProperty`: the count at +0xA8, the
+    /// six arrays at +0xAC, each of the count): every entry with its `NiSourceTexture` file name
+    /// (+0x34), for a head part as 00655fa0 left it.
+    pub(crate) fn shader_textures(e: &Engine, part: u32, geometry: u32, shader: u32) {
+        let count = u32::from(e.mem.u16(shader.wrapping_add(0xa8))).min(8);
+        let mut kinds = Vec::new();
+        for kind in 0..6u32 {
+            let array = e.mem.u32(shader.wrapping_add(0xac + 4 * kind));
+            if array == 0 {
+                kinds.push(format!("k{kind}: none"));
+                continue;
+            }
+            let entries: Vec<String> = (0..count)
+                .map(|i| {
+                    let texture = e.mem.u32(array.wrapping_add(4 * i));
+                    if texture == 0 {
+                        return "0".to_string();
+                    }
+                    let file = e.mem.u32(texture.wrapping_add(0x34));
+                    let name = if file != 0 {
+                        String::from_utf8_lossy(&e.mem.cstr(file)).into_owned()
+                    } else {
+                        "(no file)".into()
+                    };
+                    format!("{texture:#x} {name}")
+                })
+                .collect();
+            kinds.push(format!("k{kind}: [{}]", entries.join(", ")));
+        }
+        line(format_args!(
+            "part {part} '{}' shader {shader:#x} type {} textures: {}",
+            name(e, geometry),
+            e.mem.u32(shader.wrapping_add(0x1c)),
+            kinds.join("; ")
+        ));
+    }
+
+    /// The compressed image (0064ceb0): byte ranges and an optional TGA copy.
+    pub(crate) fn image(
+        e: &Engine,
+        pixels: u32,
+        width: u32,
+        height: u32,
+        channels: u32,
+        made: u32,
+    ) {
+        let count = width.saturating_mul(height);
+        let mut low = [255u8; 4];
+        let mut high = [0u8; 4];
+        let mut sum = [0u64; 4];
+        let mut bytes = Vec::with_capacity((count * channels) as usize);
+        for i in 0..count.saturating_mul(channels) {
+            let b = e.mem.u8(pixels.wrapping_add(i));
+            let c = (i % channels) as usize;
+            low[c] = low[c].min(b);
+            high[c] = high[c].max(b);
+            sum[c] += u64::from(b);
+            bytes.push(b);
+        }
+        let mean: Vec<u64> = sum.iter().map(|s| s / u64::from(count.max(1))).collect();
+        let n = {
+            let mut s = state();
+            s.images += 1;
+            s.images
+        };
+        // The real-device side follows the next uncompressed texture of this size.
+        engine_core::units::platform::FACE_CHECK_IMAGES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push((u64::from(width) << 32) | u64::from(height));
+        line(format_args!(
+            "image #{n} {width}x{height} {channels} channels, pixel data {pixels:#x}, texture {made:#x}: min {:?} max {:?} mean {:?}",
+            &low[..channels as usize],
+            &high[..channels as usize],
+            &mean[..channels as usize],
+        ));
+        if let Some(dir) = std::env::var_os("NV_FACE_CHECK_DIR") {
+            let path = std::path::Path::new(&dir).join(format!("facegen-{n}-{width}x{height}.tga"));
+            let mut file = vec![0u8; 18];
+            file[2] = 2;
+            file[12..14].copy_from_slice(&(width as u16).to_le_bytes());
+            file[14..16].copy_from_slice(&(height as u16).to_le_bytes());
+            file[16] = (channels * 8) as u8;
+            // Rows top first (descriptor bit 5); alpha bits for four channels.
+            file[17] = 0x20 | if channels == 4 { 8 } else { 0 };
+            for pixel in bytes.chunks(channels as usize) {
+                // The pixel data is R, G, B(, A); TGA stores B, G, R(, A).
+                file.extend([pixel[2], pixel[1], pixel[0]]);
+                if channels == 4 {
+                    file.push(pixel[3]);
+                }
+            }
+            match std::fs::write(&path, &file) {
+                Ok(()) => line(format_args!("image #{n} written to {}", path.display())),
+                Err(error) => line(format_args!("image #{n} not written: {error}")),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2768,5 +3115,29 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x0065_a840, &args![model]);
         assert!(calls(&e, MESH_NAME_006505D0).is_empty());
+    }
+
+    #[test]
+    fn face_check_reads_matrix_values_and_names_without_writing() {
+        let mut e = Engine::new();
+        let matrix = e.mem.alloc(0x20);
+        let floats = e.mem.alloc(12);
+        for (i, v) in [0.5f32, -2.0, 1.25].iter().enumerate() {
+            e.mem.set_f32(floats + 4 * i as u32, *v);
+        }
+        e.mem.set_u32(matrix + 0xc, floats);
+        e.mem.set_u32(matrix + 0x18, 3);
+        e.mem.set_u32(matrix + 0x1c, 1);
+        assert_eq!(face_check::matrix_values(&e, matrix), vec![0.5, -2.0, 1.25]);
+        e.mem.set_u32(matrix + 0xc, 0);
+        assert!(face_check::matrix_values(&e, matrix).is_empty());
+        let object = e.mem.alloc(0x10);
+        let text = e.mem.alloc(16);
+        for (i, b) in b"FaceGenFace\0".iter().enumerate() {
+            e.mem.set_u8(text + i as u32, *b);
+        }
+        e.mem.set_u32(object + 8, text);
+        assert_eq!(face_check::name(&e, object), "FaceGenFace");
+        assert_eq!(face_check::name(&e, 0), "-");
     }
 }

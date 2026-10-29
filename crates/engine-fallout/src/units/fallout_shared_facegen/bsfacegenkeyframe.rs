@@ -173,6 +173,8 @@ pub fn bs_face_gen_keyframe_multiple_scalar_deleting_destructor(
     this: Ptr<BSFaceGenKeyframeMultiple>,
     flags: u32,
 ) -> Ptr<BSFaceGenKeyframeMultiple> {
+    // `NV_SPEECH_CHECK` (diagnostic only, reads memory): a keyframe deleted while listed.
+    speech_check::deleting(e, this.addr(), flags);
     fn_0064ed00(e, this);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
@@ -234,6 +236,17 @@ pub fn bs_face_gen_keyframe_multiple_add_to_list(
     this: Ptr<BSFaceGenKeyframeMultiple>,
     list: u32,
 ) -> bool {
+    // `NV_SPEECH_CHECK` (diagnostic only, reads memory): the list is watched, and this
+    // thread is inside it while the translation below runs.
+    speech_check::track_list(e, list);
+    speech_check::enter(e, list, "AddToList 0064ed60");
+    let added = add_to_list(e, this, list);
+    speech_check::leave(e, list, "AddToList 0064ed60");
+    added
+}
+
+/// [`bs_face_gen_keyframe_multiple_add_to_list`]'s translation.
+fn add_to_list(e: &mut Engine, this: Ptr<BSFaceGenKeyframeMultiple>, list: u32) -> bool {
     let base = this.addr();
     if list == 0 {
         return false;
@@ -937,6 +950,1575 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             )
         ),
     ]
+}
+
+/// `NV_SPEECH_CHECK`: diagnostic only, not exe behaviour. Reads, never writes, game memory.
+///
+/// Watches the keyframe lists of each `BSFaceGenAnimationData` it meets (the speech lists:
+/// modifiers `+0x88`, phonemes `+0xbc`, custom morphs `+0xf0`) and any other list
+/// `AddToList` (`0064ed60`) is handed, and stops the run (a panic whose message starts
+/// `speech check:`, after `speech:` lines with the details) at the first of:
+///
+/// - the same keyframe in two list slots, or one node in two lists;
+/// - a keyframe deleted (`0064ebe0` with bit 0) or its block freed (`00aa4060`, `free`)
+///   while still in a list. `ClearSpeechKeyframeLists` (`0064aec0`) deletes the head's
+///   keyframe before it removes the head (as the exe does), so a deleted head is let be
+///   until its deleter removes it (`007b5390`), on the same thread, before it returns;
+/// - a listed item that is not a live `BSFaceGenKeyframeMultiple` (vtable `0106544c`);
+/// - a list node freed (`0045cee0`), handed out (`0043a010`) or found on the node pool's
+///   free list (`011c5f58`, looked at every call) while still linked;
+/// - a list whose links do not match its count, tail or previous links;
+/// - two game threads in one list at once (inside `AddToList`, `UpdateKeyframeList`
+///   (`0064ca60`), `ClearSpeechKeyframeLists`' loops or `RemoveHead`).
+///
+/// Every event is numbered and keeps its list, node, keyframe, game thread, the face's lock
+/// words (`+0x1a0`) and call stack; the stop names the earlier event the violation conflicts
+/// with and the event that found it.
+///
+/// - Any value but `0`: checks at the list functions, deletes, frees and node-pool calls,
+///   and the pool's free-list head at every call.
+/// - With `calls` (comma-separated): also walks every list at every call (slow), naming the
+///   call where a list changed outside the list functions.
+/// - With `nooverlap`: two threads in one list at once is not a stop.
+///
+/// It takes `Engine::call_hook` (calling on to a hook that was there first) and
+/// `Engine::free_hook`.
+pub mod speech_check {
+    use super::MULTIPLE_VTABLE;
+    use crate::prelude::*;
+    use std::cell::Cell;
+    use std::collections::{HashMap, HashSet, VecDeque};
+    use std::fmt::Write as _;
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::Mutex;
+
+    /// `Engine::call_hook`'s type.
+    type CallHook = fn(&mut Engine, u32, bool);
+
+    /// What the check does (`NV_SPEECH_CHECK`).
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub struct Settings {
+        pub on: bool,
+        pub calls: bool,
+        pub overlap: bool,
+    }
+
+    impl Settings {
+        pub const OFF: Settings = Settings {
+            on: false,
+            calls: false,
+            overlap: false,
+        };
+
+        /// The settings for a value of `NV_SPEECH_CHECK` (`None`: not set).
+        pub fn parse(value: Option<&str>) -> Settings {
+            match value {
+                None => Self::OFF,
+                Some(v) if v.trim().is_empty() || v.trim() == "0" => Self::OFF,
+                Some(v) => {
+                    let has =
+                        |word: &str| v.split(',').any(|w| w.trim().eq_ignore_ascii_case(word));
+                    Settings {
+                        on: true,
+                        calls: has("calls"),
+                        overlap: !has("nooverlap"),
+                    }
+                }
+            }
+        }
+    }
+
+    /// The node pool's free-list head (`0043a010` pops, `0045cee0` pushes).
+    const POOL_FREE_HEAD: u32 = 0x011c_5f58;
+    /// The speech lists of a `BSFaceGenAnimationData`.
+    const FACE_LISTS: [u32; 3] = [0x88, 0xbc, 0xf0];
+    /// The face's `AnimLock` (PC `+0x1a0`).
+    const ANIM_LOCK: u32 = 0x1a0;
+    /// `BSFaceGenKeyframeMultiple`'s scalar deleting destructor.
+    const DELETING_DESTRUCTOR: u32 = 0x0064_ebe0;
+    /// Where a walk gives up (a cycle) when the count is no guide.
+    const MAX_WALK: usize = 1 << 16;
+    /// How many free nodes past a new pool head are looked at.
+    const POOL_LOOK: usize = 16;
+    const STACK_KEEP: usize = 16;
+    const RECENT_KEEP: usize = 48;
+    const HISTORY_KEEP: usize = 1 << 17;
+    /// How many slots a stop prints of the list.
+    const DUMP_SLOTS: usize = 48;
+
+    /// What an event was.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum What {
+        Track,
+        Add,
+        Remove,
+        Delete,
+        Free,
+        NodeFree,
+        NodeAlloc,
+        /// The pool's head moved; at entry to (`false`) or return from (`true`) a call.
+        Pool(u32, bool),
+        Enter(&'static str),
+        Leave(&'static str),
+        /// A check at a call (`calls`) or at a named point.
+        Call(u32, bool),
+        At(&'static str),
+    }
+
+    impl std::fmt::Display for What {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match *self {
+                What::Track => write!(f, "list first seen"),
+                What::Add => write!(f, "added (00559a70)"),
+                What::Remove => write!(f, "head removed (RemoveHead 007b5390)"),
+                What::Delete => write!(f, "keyframe deleted (0064ebe0)"),
+                What::Free => write!(f, "block freed (00aa4060 / free)"),
+                What::NodeFree => write!(f, "node freed (0045cee0)"),
+                What::NodeAlloc => write!(f, "node handed out (0043a010)"),
+                What::Pool(addr, true) => write!(f, "pool head moved, return from {addr:08x}"),
+                What::Pool(addr, false) => write!(f, "pool head moved, entry to {addr:08x}"),
+                What::Enter(name) => write!(f, "entered {name}"),
+                What::Leave(name) => write!(f, "left {name}"),
+                What::Call(addr, true) => write!(f, "check at return from {addr:08x}"),
+                What::Call(addr, false) => write!(f, "check at entry to {addr:08x}"),
+                What::At(name) => write!(f, "check at {name}"),
+            }
+        }
+    }
+
+    /// One numbered event.
+    #[derive(Clone, Debug)]
+    struct Event {
+        seq: u64,
+        what: What,
+        list: u32,
+        node: u32,
+        keyframe: u32,
+        thread: u32,
+        /// The face's lock words (`+0x1a0`, `+0x1a4`) when the list's face is known.
+        lock: Option<(u32, u32)>,
+        /// The call stack, innermost first.
+        stack: Vec<u32>,
+    }
+
+    impl std::fmt::Display for Event {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                f,
+                "#{} {}: list {:08x} node {:08x} keyframe {:08x}, thread {}",
+                self.seq, self.what, self.list, self.node, self.keyframe, self.thread
+            )?;
+            if let Some((a, b)) = self.lock {
+                write!(f, ", face lock [{a:08x} {b:08x}]")?;
+            }
+            write!(f, ", stack {}", stack_text(&self.stack))
+        }
+    }
+
+    impl Event {
+        /// The event in a few words (the panic message).
+        fn short(&self) -> String {
+            let frames: Vec<String> = self
+                .stack
+                .iter()
+                .take(4)
+                .map(|a| format!("{a:08x}"))
+                .collect();
+            format!(
+                "#{} {} on thread {} in {}",
+                self.seq,
+                self.what,
+                self.thread,
+                frames.join(" < ")
+            )
+        }
+    }
+
+    /// A watched list as the last clean walk left it.
+    #[derive(Default)]
+    struct List {
+        /// Its face, 0 when not known.
+        face: u32,
+        /// (node, item) from the head.
+        slots: Vec<(u32, u32)>,
+        /// A `RemoveHead` under way (the list is half changed).
+        busy: Option<Event>,
+        /// The threads inside a function that uses the list, with the function.
+        users: Vec<(u32, &'static str, Event)>,
+        /// The last event that left it clean.
+        last: Option<Event>,
+    }
+
+    /// A head keyframe deleted before its node is removed (`0064aec0`'s order).
+    #[derive(Clone)]
+    struct Pending {
+        keyframe: u32,
+        list: u32,
+        node: u32,
+        thread: u32,
+        /// The deleter must stay at `call_stack[frame - 1]` (0: any frame).
+        frame: usize,
+        deleter: u32,
+        event: Event,
+    }
+
+    #[derive(Default)]
+    struct State {
+        seq: u64,
+        lists: HashMap<u32, List>,
+        /// Each linked node's list.
+        node_of: HashMap<u32, u32>,
+        /// Each listed keyframe's list and node.
+        slot_of: HashMap<u32, (u32, u32)>,
+        /// The event that linked each node.
+        added: HashMap<u32, Event>,
+        /// The last event that named each keyframe.
+        history: HashMap<u32, Event>,
+        /// Keyframes deleted since they were last added.
+        deleted: HashMap<u32, Event>,
+        pending: Option<Pending>,
+        recent: VecDeque<Event>,
+        pool_head: u32,
+        installed: bool,
+        stopped: bool,
+    }
+
+    /// A violation: what, the earlier event it conflicts with, the event that found it.
+    struct Violation {
+        summary: String,
+        earlier: Option<Event>,
+        now: Event,
+        list: u32,
+        extra: Vec<String>,
+    }
+
+    // The state is one for the process, not per OS thread: the thread host runs each game
+    // thread on its own OS thread (one at a time), and a per-thread state let the second
+    // thread take the call hook again, with the check itself as the hook it calls on: an
+    // endless recursion at start-up (p190).
+    static STATE: Mutex<Option<State>> = Mutex::new(None);
+    /// A call hook that was there before the check took it (called on; never the check's own).
+    static PREVIOUS_HOOK: Mutex<Option<CallHook>> = Mutex::new(None);
+    static HAS_PREVIOUS_HOOK: AtomicBool = AtomicBool::new(false);
+    /// The pool head at the last call (`on_call`'s quick test).
+    static POOL_SEEN: AtomicU32 = AtomicU32::new(0);
+    /// Set while a hook of the check runs: a hook reached again from inside one returns at
+    /// once (the hooks call nothing of the engine's, so this is a safeguard).
+    static IN_HOOK: AtomicBool = AtomicBool::new(false);
+
+    thread_local! {
+        static FORCED: Cell<Option<Settings>> = const { Cell::new(None) };
+        static FORCED_THREAD: Cell<Option<u32>> = const { Cell::new(None) };
+    }
+
+    /// The settings from `NV_SPEECH_CHECK` (read once), unless a test forced some.
+    pub fn settings() -> Settings {
+        if let Some(settings) = FORCED.with(Cell::get) {
+            return settings;
+        }
+        static SETTINGS: std::sync::OnceLock<Settings> = std::sync::OnceLock::new();
+        *SETTINGS.get_or_init(|| Settings::parse(std::env::var("NV_SPEECH_CHECK").ok().as_deref()))
+    }
+
+    #[inline]
+    fn on() -> bool {
+        settings().on
+    }
+
+    /// Sets the settings for this thread and forgets what was seen (tests; the state is the
+    /// process's, so tests that turn the check on must not run beside each other).
+    pub fn force(settings: Settings) {
+        FORCED.with(|forced| forced.set(Some(settings)));
+        FORCED_THREAD.with(|t| t.set(None));
+        set_previous_hook(None);
+        POOL_SEEN.store(0, Ordering::Relaxed);
+        IN_HOOK.store(false, Ordering::Relaxed);
+        *lock_state() = None;
+    }
+
+    fn lock_state() -> std::sync::MutexGuard<'static, Option<State>> {
+        STATE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn previous_hook() -> Option<CallHook> {
+        if !HAS_PREVIOUS_HOOK.load(Ordering::Relaxed) {
+            return None;
+        }
+        *PREVIOUS_HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn set_previous_hook(hook: Option<CallHook>) {
+        // Never the check's own hook: calling on to it would recurse for ever.
+        let hook = hook.filter(|h| *h as usize != on_call as CallHook as usize);
+        *PREVIOUS_HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = hook;
+        HAS_PREVIOUS_HOOK.store(hook.is_some(), Ordering::Relaxed);
+    }
+
+    /// Makes the check see `thread` as the running game thread (tests).
+    pub fn force_thread(thread: Option<u32>) {
+        FORCED_THREAD.with(|t| t.set(thread));
+    }
+
+    fn thread(e: &Engine) -> u32 {
+        FORCED_THREAD
+            .with(Cell::get)
+            .unwrap_or_else(|| engine_core::thread_host::current_id(e))
+    }
+
+    fn read(e: &Engine, addr: u32) -> Option<u32> {
+        (addr != 0 && e.mem.is_mapped(addr) && e.mem.is_mapped(addr.wrapping_add(3)))
+            .then(|| e.mem.u32(addr))
+    }
+
+    fn word(e: &Engine, addr: u32) -> u32 {
+        read(e, addr).unwrap_or(0)
+    }
+
+    fn stack_text(stack: &[u32]) -> String {
+        if stack.is_empty() {
+            return "(top)".into();
+        }
+        stack
+            .iter()
+            .map(|a| format!("{a:08x}"))
+            .collect::<Vec<_>>()
+            .join(" < ")
+    }
+
+    /// A new event (also kept in the recent ring).
+    fn event(e: &Engine, st: &mut State, what: What, list: u32, node: u32, keyframe: u32) -> Event {
+        st.seq += 1;
+        let face = st.lists.get(&list).map_or(0, |l| l.face);
+        let lock = (face != 0)
+            .then(|| Some((read(e, face + ANIM_LOCK)?, read(e, face + ANIM_LOCK + 4)?)))
+            .flatten();
+        let event = Event {
+            seq: st.seq,
+            what,
+            list,
+            node,
+            keyframe,
+            thread: thread(e),
+            lock,
+            stack: e
+                .call_stack
+                .iter()
+                .rev()
+                .take(STACK_KEEP)
+                .copied()
+                .collect(),
+        };
+        if !matches!(what, What::Call(..) | What::Pool(..)) {
+            if st.recent.len() >= RECENT_KEEP {
+                st.recent.pop_front();
+            }
+            st.recent.push_back(event.clone());
+        }
+        event
+    }
+
+    /// Takes the call and free hooks the first time the check runs.
+    fn install(e: &mut Engine, st: &mut State) {
+        if st.installed {
+            return;
+        }
+        st.installed = true;
+        st.pool_head = word(e, POOL_FREE_HEAD);
+        POOL_SEEN.store(st.pool_head, Ordering::Relaxed);
+        set_previous_hook(e.call_hook);
+        e.call_hook = Some(on_call);
+        e.free_hook = Some(on_free);
+    }
+
+    /// Runs `body` on the state when the check is on and has not stopped; stops the run at
+    /// the violation it answers. Not again from inside itself (`IN_HOOK`).
+    fn with_state(e: &mut Engine, body: impl FnOnce(&mut Engine, &mut State) -> Option<Violation>) {
+        if !on() || IN_HOOK.swap(true, Ordering::Acquire) {
+            return;
+        }
+        let violation = {
+            let mut guard = match STATE.try_lock() {
+                Ok(guard) => guard,
+                Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    IN_HOOK.store(false, Ordering::Release);
+                    return;
+                }
+            };
+            let st = guard.get_or_insert_with(State::default);
+            if st.stopped {
+                None
+            } else {
+                install(e, st);
+                let violation = body(e, st);
+                if st.history.len() > HISTORY_KEEP {
+                    let State {
+                        history,
+                        slot_of,
+                        deleted,
+                        ..
+                    } = &mut *st;
+                    history.retain(|k, _| slot_of.contains_key(k) || deleted.contains_key(k));
+                }
+                if st.deleted.len() > HISTORY_KEEP {
+                    st.deleted.clear();
+                }
+                if violation.is_some() {
+                    st.stopped = true;
+                }
+                violation
+            }
+        };
+        IN_HOOK.store(false, Ordering::Release);
+        if let Some(violation) = violation {
+            stop(e, violation);
+        }
+    }
+
+    /// Whether the pending deleted head may still be listed now: the same thread, with its
+    /// deleter still running.
+    fn pending_allowed(e: &Engine, p: &Pending) -> bool {
+        thread(e) == p.thread
+            && (p.frame == 0
+                || (e.call_stack.len() >= p.frame && e.call_stack[p.frame - 1] == p.deleter))
+    }
+
+    /// The pending deleted head: resolved once its node is gone, a violation when it is
+    /// still listed and its deleter no longer runs.
+    fn check_pending(e: &Engine, st: &mut State, now: &Event) -> Option<Violation> {
+        let p = st.pending.clone()?;
+        if st.node_of.get(&p.node) != Some(&p.list) {
+            st.pending = None;
+            return None;
+        }
+        if pending_allowed(e, &p) {
+            return None;
+        }
+        Some(Violation {
+            summary: format!(
+                "keyframe {:08x} was deleted while still the head of list {:08x} (node {:08x}) \
+                 and is still listed after its deleter {:08x} on thread {} stopped running it",
+                p.keyframe, p.list, p.node, p.deleter, p.thread
+            ),
+            earlier: Some(p.event.clone()),
+            now: now.clone(),
+            list: p.list,
+            extra: added_line(st, p.node),
+        })
+    }
+
+    fn added_line(st: &State, node: u32) -> Vec<String> {
+        st.added
+            .get(&node)
+            .map(|a| vec![format!("node {node:08x} was linked at {a}")])
+            .unwrap_or_default()
+    }
+
+    /// Another thread inside a function that uses `list`.
+    fn check_overlap(st: &State, list: u32, now: &Event) -> Option<Violation> {
+        if !settings().overlap {
+            return None;
+        }
+        let l = st.lists.get(&list)?;
+        let (thread, inside, earlier) =
+            if let Some(user) = l.users.iter().find(|u| u.0 != now.thread) {
+                (user.0, user.1, user.2.clone())
+            } else {
+                let busy = l.busy.as_ref().filter(|b| b.thread != now.thread)?;
+                (busy.thread, "RemoveHead 007b5390", busy.clone())
+            };
+        Some(Violation {
+            summary: format!(
+                "list {list:08x} used by two game threads at once: thread {thread} is inside \
+                 {inside} while thread {} {}",
+                now.thread, now.what
+            ),
+            earlier: Some(earlier),
+            now: now.clone(),
+            list,
+            extra: Vec::new(),
+        })
+    }
+
+    /// Walks `list` as memory has it now: its (node, item) slots, or what is wrong and the
+    /// earlier event that names it.
+    #[allow(clippy::type_complexity, clippy::result_large_err)]
+    fn walk(
+        e: &Engine,
+        st: &State,
+        list: u32,
+    ) -> Result<Vec<(u32, u32)>, (String, Option<Event>, Vec<String>)> {
+        let last = st.lists.get(&list).and_then(|l| l.last.clone());
+        let head = word(e, list);
+        let tail = word(e, list + 4);
+        let count = word(e, list + 8);
+        let mut slots: Vec<(u32, u32)> = Vec::new();
+        let mut seen: HashMap<u32, u32> = HashMap::new();
+        let mut nodes: HashSet<u32> = HashSet::new();
+        let mut prev = 0u32;
+        let mut node = head;
+        while node != 0 {
+            let index = slots.len();
+            if read(e, node).is_none() || read(e, node + 8).is_none() {
+                let from = if index == 0 {
+                    "the head".to_string()
+                } else {
+                    format!("node {prev:08x}'s next")
+                };
+                return Err((
+                    format!("list {list:08x}: {from} (link {index} of {count}) is {node:08x}, which is not mapped"),
+                    last,
+                    Vec::new(),
+                ));
+            }
+            if index >= MAX_WALK || index as u64 >= u64::from(count) || !nodes.insert(node) {
+                return Err((
+                    format!(
+                        "list {list:08x} is longer than its count {count} (link {index} is \
+                         node {node:08x}; a cycle or a lost count)"
+                    ),
+                    last,
+                    Vec::new(),
+                ));
+            }
+            let back = word(e, node + 4);
+            if back != prev {
+                return Err((
+                    format!(
+                        "list {list:08x}: node {node:08x} (slot {index}) links back to \
+                         {back:08x}, not {prev:08x}"
+                    ),
+                    st.added.get(&node).cloned().or(last),
+                    Vec::new(),
+                ));
+            }
+            if let Some(&other) = st.node_of.get(&node) {
+                if other != list {
+                    return Err((
+                        format!(
+                            "node {node:08x} is in two lists: {other:08x} and {list:08x} \
+                             (slot {index})"
+                        ),
+                        st.added.get(&node).cloned(),
+                        Vec::new(),
+                    ));
+                }
+            }
+            let item = word(e, node + 8);
+            if item != 0 {
+                if let Some(&first) = seen.get(&item) {
+                    return Err((
+                        format!(
+                            "keyframe {item:08x} is in two slots of list {list:08x}: nodes \
+                             {first:08x} and {node:08x} (slot {index})"
+                        ),
+                        st.added.get(&first).cloned(),
+                        added_line(st, node),
+                    ));
+                }
+                seen.insert(item, node);
+                if let Some(&(other, other_node)) = st.slot_of.get(&item) {
+                    if other != list {
+                        return Err((
+                            format!(
+                                "keyframe {item:08x} is in two lists: {other:08x} (node \
+                                 {other_node:08x}) and {list:08x} (node {node:08x}, slot {index})"
+                            ),
+                            st.added.get(&other_node).cloned(),
+                            added_line(st, node),
+                        ));
+                    }
+                }
+                let pending = st.pending.as_ref().is_some_and(|p| p.keyframe == item);
+                if !pending {
+                    if let Some(deleted) = st.deleted.get(&item) {
+                        return Err((
+                            format!(
+                                "keyframe {item:08x} in slot {index} of list {list:08x} (node \
+                                 {node:08x}) was deleted while still listed"
+                            ),
+                            Some(deleted.clone()),
+                            added_line(st, node),
+                        ));
+                    }
+                    let vtable = read(e, item);
+                    if vtable != Some(MULTIPLE_VTABLE) {
+                        let vtable = vtable
+                            .map(|v| format!("{v:08x}"))
+                            .unwrap_or_else(|| "unmapped".into());
+                        return Err((
+                            format!(
+                                "list {list:08x} slot {index} (node {node:08x}) holds {item:08x}, \
+                                 which is not a live keyframe (vtable {vtable})"
+                            ),
+                            st.history
+                                .get(&item)
+                                .cloned()
+                                .or_else(|| st.added.get(&node).cloned()),
+                            added_line(st, node),
+                        ));
+                    }
+                }
+            }
+            slots.push((node, item));
+            prev = node;
+            node = word(e, node);
+        }
+        if slots.len() as u64 != u64::from(count) {
+            return Err((
+                format!(
+                    "list {list:08x} has {} nodes but its count is {count}",
+                    slots.len()
+                ),
+                last,
+                Vec::new(),
+            ));
+        }
+        if tail != prev {
+            return Err((
+                format!("list {list:08x}: tail is {tail:08x} but the last node is {prev:08x}"),
+                last,
+                Vec::new(),
+            ));
+        }
+        Ok(slots)
+    }
+
+    /// Keeps `slots` as `list`'s picture, `now` as its last clean event.
+    fn commit(st: &mut State, list: u32, slots: Vec<(u32, u32)>, now: &Event) {
+        let Some(l) = st.lists.get_mut(&list) else {
+            return;
+        };
+        let old = std::mem::replace(&mut l.slots, slots);
+        l.last = Some(now.clone());
+        for (node, item) in old {
+            if st.node_of.get(&node) == Some(&list) {
+                st.node_of.remove(&node);
+            }
+            if st.slot_of.get(&item).is_some_and(|s| s.0 == list) {
+                st.slot_of.remove(&item);
+            }
+        }
+        let l = &st.lists[&list];
+        for &(node, item) in &l.slots {
+            st.node_of.insert(node, list);
+            if item != 0 {
+                st.slot_of.insert(item, (list, node));
+            }
+        }
+    }
+
+    /// Walks `list` and keeps it, or the violation.
+    fn walk_and_commit(e: &Engine, st: &mut State, list: u32, now: &Event) -> Option<Violation> {
+        if !matches!(st.lists.get(&list), Some(l) if l.busy.is_none()) {
+            return None;
+        }
+        match walk(e, st, list) {
+            Ok(slots) => {
+                commit(st, list, slots, now);
+                None
+            }
+            Err((summary, earlier, extra)) => Some(Violation {
+                summary,
+                earlier,
+                now: now.clone(),
+                list,
+                extra,
+            }),
+        }
+    }
+
+    fn track(e: &Engine, st: &mut State, list: u32, face: u32) -> Option<Violation> {
+        if list == 0 {
+            return None;
+        }
+        if let Some(l) = st.lists.get_mut(&list) {
+            if l.face == 0 {
+                l.face = face;
+            }
+            return None;
+        }
+        st.lists.insert(
+            list,
+            List {
+                face,
+                ..List::default()
+            },
+        );
+        let now = event(e, st, What::Track, list, 0, 0);
+        walk_and_commit(e, st, list, &now)
+    }
+
+    /// Watches the face's three speech lists (from `Update`, the adders and the copy).
+    pub fn track_face(e: &mut Engine, face: u32) {
+        if face == 0 {
+            return;
+        }
+        with_state(e, |e, st| {
+            FACE_LISTS
+                .iter()
+                .find_map(|offset| track(e, st, face + offset, face))
+        });
+    }
+
+    /// Watches `list` (from `AddToList`).
+    pub fn track_list(e: &mut Engine, list: u32) {
+        with_state(e, |e, st| track(e, st, list, 0));
+    }
+
+    /// The face's lists checked at a named point (`Update`'s start).
+    pub fn at(e: &mut Engine, face: u32, name: &'static str) {
+        with_state(e, |e, st| {
+            for offset in FACE_LISTS {
+                let list = face + offset;
+                if let Some(v) = track(e, st, list, face) {
+                    return Some(v);
+                }
+                let now = event(e, st, What::At(name), list, 0, 0);
+                if let Some(v) = check_pending(e, st, &now) {
+                    return Some(v);
+                }
+                if let Some(v) = walk_and_commit(e, st, list, &now) {
+                    return Some(v);
+                }
+            }
+            None
+        });
+    }
+
+    /// The running thread enters `name`, which uses `list`.
+    pub fn enter(e: &mut Engine, list: u32, name: &'static str) {
+        with_state(e, |e, st| {
+            if !st.lists.contains_key(&list) {
+                return None;
+            }
+            let now = event(e, st, What::Enter(name), list, 0, 0);
+            if let Some(v) = check_overlap(st, list, &now) {
+                return Some(v);
+            }
+            if let Some(l) = st.lists.get_mut(&list) {
+                l.users.push((now.thread, name, now.clone()));
+            }
+            None
+        });
+    }
+
+    /// The running thread leaves `name`.
+    pub fn leave(e: &mut Engine, list: u32, name: &'static str) {
+        with_state(e, |e, st| {
+            if !st.lists.contains_key(&list) {
+                return None;
+            }
+            let now = event(e, st, What::Leave(name), list, 0, 0);
+            if let Some(l) = st.lists.get_mut(&list) {
+                if let Some(i) = l
+                    .users
+                    .iter()
+                    .rposition(|(t, n, _)| *t == now.thread && *n == name)
+                {
+                    l.users.remove(i);
+                }
+            }
+            check_pending(e, st, &now).or_else(|| walk_and_commit(e, st, list, &now))
+        });
+    }
+
+    /// `node` was linked at the tail of `list` (`00559a70`'s end).
+    pub fn linked(e: &mut Engine, list: u32, node: u32) {
+        with_state(e, |e, st| {
+            if !st.lists.contains_key(&list) {
+                return None;
+            }
+            let item = word(e, node + 8);
+            let now = event(e, st, What::Add, list, node, item);
+            if let Some(v) = check_overlap(st, list, &now) {
+                return Some(v);
+            }
+            if let Some(v) = check_pending(e, st, &now) {
+                return Some(v);
+            }
+            if let Some(&other) = st.node_of.get(&node) {
+                return Some(Violation {
+                    summary: format!(
+                        "node {node:08x} linked into list {list:08x} while still linked in \
+                         list {other:08x}"
+                    ),
+                    earlier: st.added.get(&node).cloned(),
+                    now,
+                    list,
+                    extra: Vec::new(),
+                });
+            }
+            if item != 0 {
+                if let Some(&(other, other_node)) = st.slot_of.get(&item) {
+                    // A stale slot whose keyframe's block came back from the heap as this one.
+                    let extra = st
+                        .deleted
+                        .get(&item)
+                        .map(|d| vec![format!("the block {item:08x} was deleted at {d}")])
+                        .unwrap_or_default();
+                    return Some(Violation {
+                        summary: format!(
+                            "keyframe {item:08x} added to list {list:08x} (node {node:08x}) while \
+                             already in list {other:08x} (node {other_node:08x})"
+                        ),
+                        earlier: st.added.get(&other_node).cloned(),
+                        now,
+                        list,
+                        extra,
+                    });
+                }
+                // A new keyframe in a block a deleted one had (the heap reuses blocks).
+                st.deleted.remove(&item);
+            }
+            let result = walk_and_commit(e, st, list, &now);
+            st.added.insert(node, now.clone());
+            if item != 0 {
+                st.history.insert(item, now);
+            }
+            result
+        });
+    }
+
+    /// `RemoveHead` (`007b5390`) starts on `list`.
+    pub fn removing(e: &mut Engine, list: u32) {
+        with_state(e, |e, st| {
+            if !st.lists.contains_key(&list) {
+                return None;
+            }
+            let node = word(e, list);
+            let item = word(e, node + 8);
+            let now = event(e, st, What::Remove, list, node, item);
+            if let Some(v) = check_overlap(st, list, &now) {
+                return Some(v);
+            }
+            if let Some(v) = walk_and_commit(e, st, list, &now) {
+                return Some(v);
+            }
+            if let Some(l) = st.lists.get_mut(&list) {
+                l.busy = Some(now.clone());
+                if l.slots.first().is_some_and(|s| s.0 == node) {
+                    l.slots.remove(0);
+                }
+            }
+            if st.node_of.get(&node) == Some(&list) {
+                st.node_of.remove(&node);
+            }
+            if st.slot_of.get(&item) == Some(&(list, node)) {
+                st.slot_of.remove(&item);
+            }
+            if st.pending.as_ref().is_some_and(|p| p.node == node) {
+                st.pending = None;
+            }
+            if item != 0 {
+                st.history.insert(item, now);
+            }
+            None
+        });
+    }
+
+    /// `RemoveHead` (`007b5390`) ends on `list`.
+    pub fn removed(e: &mut Engine, list: u32) {
+        with_state(e, |e, st| {
+            let l = st.lists.get_mut(&list)?;
+            let start = l.busy.take()?;
+            let now = event(
+                e,
+                st,
+                What::At("RemoveHead's end"),
+                list,
+                start.node,
+                start.keyframe,
+            );
+            walk_and_commit(e, st, list, &now)
+        });
+    }
+
+    /// `0064ebe0` starts on `keyframe` with `flags` (bit 0: the block is freed).
+    pub fn deleting(e: &mut Engine, keyframe: u32, flags: u32) {
+        if flags & 1 == 0 {
+            return;
+        }
+        with_state(e, |e, st| {
+            let slot = st.slot_of.get(&keyframe).copied();
+            let (list, node) = slot.unwrap_or((0, 0));
+            let now = event(e, st, What::Delete, list, node, keyframe);
+            let violation = slot.and_then(|slot| deleted_while_listed(e, st, keyframe, slot, &now));
+            st.deleted.insert(keyframe, now.clone());
+            st.history.insert(keyframe, now);
+            violation
+        });
+    }
+
+    /// A listed keyframe being deleted: its list's head becomes the pending deleted head;
+    /// any other slot is a violation.
+    fn deleted_while_listed(
+        e: &Engine,
+        st: &mut State,
+        keyframe: u32,
+        (list, node): (u32, u32),
+        now: &Event,
+    ) -> Option<Violation> {
+        if let Some(v) = check_overlap(st, list, now) {
+            return Some(v);
+        }
+        let index = st.lists[&list].slots.iter().position(|s| s.0 == node);
+        if index != Some(0) {
+            return Some(Violation {
+                summary: format!(
+                    "keyframe {keyframe:08x} deleted while still in list {list:08x} at \
+                             slot {} (node {node:08x}), not its head",
+                    index.map_or("?".into(), |i| i.to_string())
+                ),
+                earlier: st.added.get(&node).cloned(),
+                now: now.clone(),
+                list,
+                extra: Vec::new(),
+            });
+        }
+        if let Some(p) = st.pending.clone() {
+            if p.keyframe != keyframe && st.node_of.get(&p.node) == Some(&p.list) {
+                return Some(Violation {
+                    summary: format!(
+                        "keyframe {keyframe:08x} (head of list {list:08x}) deleted while \
+                                 the deleted head {:08x} of list {:08x} is still listed",
+                        p.keyframe, p.list
+                    ),
+                    earlier: Some(p.event),
+                    now: now.clone(),
+                    list,
+                    extra: Vec::new(),
+                });
+            }
+        }
+        let stack = &e.call_stack;
+        let (frame, deleter) = match stack.split_last() {
+            Some((&DELETING_DESTRUCTOR, rest)) => (rest.len(), rest.last().copied().unwrap_or(0)),
+            Some((&last, _)) => (stack.len(), last),
+            None => (0, 0),
+        };
+        st.pending = Some(Pending {
+            keyframe,
+            list,
+            node,
+            thread: now.thread,
+            frame,
+            deleter,
+            event: now.clone(),
+        });
+        None
+    }
+
+    /// `Engine::free_hook`: a heap block is being freed.
+    fn on_free(e: &mut Engine, block: u32) {
+        with_state(e, |e, st| {
+            let known = st.history.contains_key(&block);
+            let slot = st.slot_of.get(&block).copied();
+            // Lists inside the block are gone with it.
+            if !st.lists.is_empty() {
+                let size = e.mem.block_size(block).unwrap_or(0);
+                let inside: Vec<u32> = st
+                    .lists
+                    .keys()
+                    .copied()
+                    .filter(|l| l.wrapping_sub(block) < size)
+                    .collect();
+                for list in inside {
+                    forget(st, list);
+                }
+            }
+            if !known && slot.is_none() {
+                return None;
+            }
+            let (list, node) = slot.unwrap_or((0, 0));
+            let now = event(e, st, What::Free, list, node, block);
+            let violation = slot.and_then(|(list, node)| {
+                let allowed = st
+                    .pending
+                    .as_ref()
+                    .is_some_and(|p| p.keyframe == block && pending_allowed(e, p));
+                (!allowed).then(|| Violation {
+                    summary: format!(
+                        "keyframe {block:08x} freed while still in list {list:08x} (node \
+                         {node:08x})"
+                    ),
+                    earlier: st.added.get(&node).cloned(),
+                    now: now.clone(),
+                    list,
+                    extra: st
+                        .deleted
+                        .get(&block)
+                        .map(|d| vec![format!("it was deleted at {d}")])
+                        .unwrap_or_default(),
+                })
+            });
+            if slot.is_none() {
+                st.deleted.entry(block).or_insert_with(|| now.clone());
+            }
+            st.history.insert(block, now);
+            violation
+        });
+    }
+
+    fn forget(st: &mut State, list: u32) {
+        if let Some(l) = st.lists.remove(&list) {
+            for (node, item) in l.slots {
+                if st.node_of.get(&node) == Some(&list) {
+                    st.node_of.remove(&node);
+                }
+                if st.slot_of.get(&item).is_some_and(|s| s.0 == list) {
+                    st.slot_of.remove(&item);
+                }
+            }
+        }
+        if st.pending.as_ref().is_some_and(|p| p.list == list) {
+            st.pending = None;
+        }
+    }
+
+    /// The face is being destroyed (after its lists were cleared): its lists are no longer
+    /// watched.
+    pub fn forget_face(e: &mut Engine, face: u32) {
+        with_state(e, |_, st| {
+            for offset in FACE_LISTS {
+                forget(st, face + offset);
+            }
+            None
+        });
+    }
+
+    fn linked_node_violation(st: &State, node: u32, now: Event, how: &str) -> Option<Violation> {
+        let list = *st.node_of.get(&node)?;
+        Some(Violation {
+            summary: format!("node {node:08x} {how} while still linked in list {list:08x}"),
+            earlier: st.added.get(&node).cloned(),
+            now,
+            list,
+            extra: Vec::new(),
+        })
+    }
+
+    /// `0045cee0` starts: `node` goes back to the pool.
+    pub fn node_freeing(e: &mut Engine, node: u32) {
+        with_state(e, |e, st| {
+            if !st.node_of.contains_key(&node) {
+                return None;
+            }
+            let list = st.node_of[&node];
+            let item = word(e, node + 8);
+            let now = event(e, st, What::NodeFree, list, node, item);
+            linked_node_violation(st, node, now, "freed to the node pool (0045cee0)")
+        });
+    }
+
+    /// `0043a010` ends: `node` came from the pool.
+    pub fn node_allocated(e: &mut Engine, node: u32) {
+        with_state(e, |e, st| {
+            if !st.node_of.contains_key(&node) {
+                return None;
+            }
+            let list = st.node_of[&node];
+            let now = event(e, st, What::NodeAlloc, list, node, 0);
+            linked_node_violation(st, node, now, "handed out by the node pool (0043a010)")
+        });
+    }
+
+    /// `Engine::call_hook`: the pool's free list (every call) and, with `calls`, every list.
+    fn on_call(e: &mut Engine, addr: u32, returning: bool) {
+        if let Some(previous) = previous_hook() {
+            previous(e, addr, returning);
+        }
+        // The usual call: nothing to do unless the pool's head moved (kept cheap, it runs at
+        // every call).
+        if !settings().calls {
+            let head = word(e, POOL_FREE_HEAD);
+            if POOL_SEEN.swap(head, Ordering::Relaxed) == head {
+                return;
+            }
+        }
+        with_state(e, |e, st| {
+            let head = word(e, POOL_FREE_HEAD);
+            if head != st.pool_head {
+                let old = st.pool_head;
+                st.pool_head = head;
+                if !st.node_of.is_empty() {
+                    let mut node = head;
+                    for _ in 0..POOL_LOOK {
+                        if node == 0 || node == old {
+                            break;
+                        }
+                        if st.node_of.contains_key(&node) {
+                            let list = st.node_of[&node];
+                            let now = event(e, st, What::Pool(addr, returning), list, node, 0);
+                            return linked_node_violation(
+                                st,
+                                node,
+                                now,
+                                "is on the node pool's free list (011c5f58)",
+                            );
+                        }
+                        let Some(next) = read(e, node) else {
+                            break;
+                        };
+                        node = next;
+                    }
+                }
+            }
+            if settings().calls && !st.lists.is_empty() {
+                let lists: Vec<u32> = st.lists.keys().copied().collect();
+                let now = event(e, st, What::Call(addr, returning), 0, 0, 0);
+                if let Some(v) = check_pending(e, st, &now) {
+                    return Some(v);
+                }
+                for list in lists {
+                    let mut now = now.clone();
+                    now.list = list;
+                    if let Some(v) = walk_and_commit(e, st, list, &now) {
+                        return Some(v);
+                    }
+                }
+            }
+            None
+        });
+    }
+
+    /// Prints what was found and stops the run.
+    fn stop(e: &mut Engine, v: Violation) -> ! {
+        // The check must not run again while the run unwinds.
+        e.call_hook = previous_hook();
+        e.free_hook = None;
+        let mut out = String::new();
+        let _ = writeln!(out, "speech: {}", v.summary);
+        match &v.earlier {
+            Some(earlier) => {
+                let _ = writeln!(out, "speech: earlier: {earlier}");
+            }
+            None => {
+                let _ = writeln!(out, "speech: earlier: (no event recorded for it)");
+            }
+        }
+        let _ = writeln!(out, "speech: now: {}", v.now);
+        for line in &v.extra {
+            let _ = writeln!(out, "speech: {line}");
+        }
+        if v.list != 0 && read(e, v.list).is_some() {
+            let (head, tail, count) = (word(e, v.list), word(e, v.list + 4), word(e, v.list + 8));
+            let _ = writeln!(
+                out,
+                "speech: list {:08x} in memory: head {head:08x} tail {tail:08x} count {count}",
+                v.list
+            );
+            let mut node = head;
+            for index in 0..DUMP_SLOTS {
+                if node == 0 {
+                    break;
+                }
+                let Some(next) = read(e, node) else {
+                    let _ = writeln!(out, "speech:   [{index}] node {node:08x} unmapped");
+                    break;
+                };
+                let item = word(e, node + 8);
+                let vtable = read(e, item)
+                    .map(|w| format!("{w:08x}"))
+                    .unwrap_or_else(|| "unmapped".into());
+                let _ = writeln!(
+                    out,
+                    "speech:   [{index}] node {node:08x} next {next:08x} prev {:08x} item \
+                     {item:08x} (vtable {vtable})",
+                    word(e, node + 4)
+                );
+                node = next;
+            }
+        }
+        {
+            let guard = lock_state();
+            if let Some(st) = guard.as_ref() {
+                if let Some(l) = st.lists.get(&v.list) {
+                    let _ = writeln!(
+                        out,
+                        "speech: list {:08x} at its last clean event ({}): {}",
+                        v.list,
+                        l.last
+                            .as_ref()
+                            .map_or("none".into(), |e| format!("#{}", e.seq)),
+                        l.slots
+                            .iter()
+                            .take(DUMP_SLOTS)
+                            .map(|(n, i)| format!("{n:08x}:{i:08x}"))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    );
+                }
+                let _ = writeln!(out, "speech: recent events, oldest first:");
+                for event in &st.recent {
+                    let _ = writeln!(out, "speech:   {event}");
+                }
+            }
+        }
+        print!("{out}");
+        let earlier = v
+            .earlier
+            .as_ref()
+            .map_or("none recorded".into(), Event::short);
+        panic!(
+            "speech check: {}; earlier: {earlier}; now: {} (NV_SPEECH_CHECK; more on the \
+             speech: lines)",
+            v.summary,
+            v.now.short()
+        );
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        const VTABLE_PAGE: u32 = 0x0106_5000;
+        const LIST_COUNT: u32 = 0x0044_ddc0;
+        const ADD_TAIL: u32 = 0x004e_d8c0;
+        const REMOVE_HEAD: u32 = 0x007b_5390;
+        const FREE_NODE: u32 = 0x0045_cee0;
+        const CLEAR_SPEECH_KEYFRAME_LISTS: u32 = 0x0064_aec0;
+        const EVENTS: Settings = Settings {
+            on: true,
+            calls: false,
+            overlap: true,
+        };
+        const CALLS: Settings = Settings {
+            on: true,
+            calls: true,
+            overlap: true,
+        };
+
+        /// The check's state is the process's: its tests run one at a time.
+        fn serial() -> std::sync::MutexGuard<'static, ()> {
+            static SERIAL: Mutex<()> = Mutex::new(());
+            SERIAL
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        }
+
+        fn stop_message(run: impl FnOnce()) -> String {
+            let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run))
+                .expect_err("the check should have stopped the run");
+            stop.downcast_ref::<String>().cloned().unwrap_or_default()
+        }
+
+        /// Every translated function, spin locks that do nothing, `operator delete` through
+        /// the platform's `Deallocate`, the keyframe vtable (slot 0: the scalar deleting
+        /// destructor), a pool of 64 free nodes and a face (0x1c0 zeroed bytes: empty lists),
+        /// watched.
+        fn engine(settings: Settings) -> (Engine, u32) {
+            force(settings);
+            let mut e = Engine::new();
+            let mut funcs = Vec::new();
+            engine_core::units::funcs(&mut funcs);
+            crate::units::funcs(&mut funcs);
+            for (addr, f) in funcs {
+                e.register(addr, f);
+            }
+            e.register(0x0040_fbf0, |_, _| Ret::default());
+            e.register(0x0040_fba0, |_, _| Ret::default());
+            e.register(0x0040_1030, |e, a| {
+                engine_core::units::platform::memory_manager_deallocate(
+                    e,
+                    Ptr::new(0),
+                    Ptr::new(a[0]),
+                );
+                Ret::default()
+            });
+            e.map(0x011c_5000, 0x1000);
+            e.map(VTABLE_PAGE, 0x1000);
+            e.mem.set_u32(MULTIPLE_VTABLE, DELETING_DESTRUCTOR);
+            let pool = e.mem.alloc(12 * 64);
+            for i in 0..64u32 {
+                let next = if i == 63 { 0 } else { pool + 12 * (i + 1) };
+                e.mem.set_u32(pool + 12 * i, next);
+            }
+            e.mem.set_u32(POOL_FREE_HEAD, pool);
+            let face = e.mem.alloc(0x1c0);
+            track_face(&mut e, face);
+            (e, face)
+        }
+
+        fn keyframe(e: &mut Engine) -> u32 {
+            let keyframe = e.mem.alloc(0x14);
+            e.mem.set_u32(keyframe, MULTIPLE_VTABLE);
+            keyframe
+        }
+
+        /// `keyframe` added at the tail of `list` (`004ed8c0`, as `AddToList` does).
+        fn add(e: &mut Engine, list: u32, keyframe: u32) {
+            e.with_stack(4, |e, slot| {
+                e.mem.set_u32(slot.addr(), keyframe);
+                e.call(ADD_TAIL, &args![list, slot]);
+            });
+        }
+
+        fn filled(e: &mut Engine, list: u32, n: usize) -> Vec<u32> {
+            let keyframes: Vec<u32> = (0..n).map(|_| keyframe(e)).collect();
+            for &k in &keyframes {
+                add(e, list, k);
+            }
+            keyframes
+        }
+
+        #[test]
+        fn nv_speech_check_reads_its_flags() {
+            assert_eq!(Settings::parse(None), Settings::OFF);
+            assert_eq!(Settings::parse(Some("0")), Settings::OFF);
+            assert_eq!(Settings::parse(Some("1")), EVENTS);
+            assert_eq!(Settings::parse(Some("calls")), CALLS);
+            let quiet = Settings::parse(Some("calls,nooverlap"));
+            assert!(quiet.on && quiet.calls && !quiet.overlap);
+        }
+
+        #[test]
+        fn removing_then_deleting_and_the_clears_order_pass_the_check() {
+            let _serial = serial();
+            for settings in [EVENTS, CALLS] {
+                let (mut e, face) = engine(settings);
+                let (modifiers, phonemes) = (face + 0x88, face + 0xbc);
+                let keyframes = filled(&mut e, modifiers, 4);
+                filled(&mut e, phonemes, 2);
+                // `UpdateKeyframeList`'s order: the head removed, then its keyframe deleted.
+                assert_eq!(e.call(REMOVE_HEAD, &args![modifiers]).u32(), keyframes[0]);
+                e.call(DELETING_DESTRUCTOR, &args![keyframes[0], 1u32]);
+                // `ClearSpeechKeyframeLists`' order: the head's keyframe deleted, then the head
+                // removed, while it runs.
+                e.call(
+                    CLEAR_SPEECH_KEYFRAME_LISTS,
+                    &args![face, 0u32, 1u32, 1u32, 0u32],
+                );
+                assert_eq!(e.mem.u32(modifiers + 8), 0);
+                assert_eq!(e.mem.u32(phonemes + 8), 0);
+                at(&mut e, face, "the test's end");
+                // The nodes are back on the pool and can be used again.
+                filled(&mut e, modifiers, 3);
+                e.call(LIST_COUNT, &args![modifiers]);
+            }
+        }
+
+        #[test]
+        fn a_keyframe_deleted_while_listed_but_not_the_head_stops_the_run() {
+            let _serial = serial();
+            let (mut e, face) = engine(EVENTS);
+            let keyframes = filled(&mut e, face + 0x88, 2);
+            let message = stop_message(|| {
+                e.call(DELETING_DESTRUCTOR, &args![keyframes[1], 1u32]);
+            });
+            assert!(
+                message.contains(&format!(
+                    "keyframe {:08x} deleted while still in list",
+                    keyframes[1]
+                )),
+                "{message}"
+            );
+            assert!(message.contains("earlier: #"), "{message}");
+            assert!(message.contains("added (00559a70)"), "{message}");
+            assert!(message.contains("now: #"), "{message}");
+            assert!(message.contains("keyframe deleted (0064ebe0)"), "{message}");
+        }
+
+        #[test]
+        fn a_listed_keyframe_freed_another_way_stops_the_run() {
+            let _serial = serial();
+            let (mut e, face) = engine(EVENTS);
+            let keyframes = filled(&mut e, face + 0xbc, 2);
+            let message = stop_message(|| {
+                engine_core::units::platform::memory_manager_deallocate(
+                    &mut e,
+                    Ptr::new(0),
+                    Ptr::new(keyframes[0]),
+                );
+            });
+            assert!(
+                message.contains(&format!(
+                    "keyframe {:08x} freed while still in list",
+                    keyframes[0]
+                )),
+                "{message}"
+            );
+            assert!(message.contains("block freed"), "{message}");
+        }
+
+        #[test]
+        fn a_linked_node_freed_to_the_pool_stops_the_run() {
+            let _serial = serial();
+            let (mut e, face) = engine(EVENTS);
+            let list = face + 0x88;
+            filled(&mut e, list, 1);
+            let node = e.mem.u32(list);
+            let message = stop_message(|| {
+                e.call(FREE_NODE, &args![0u32, node]);
+            });
+            assert!(
+                message.contains(&format!("node {node:08x} freed to the node pool")),
+                "{message}"
+            );
+            assert!(message.contains("added (00559a70)"), "{message}");
+        }
+
+        #[test]
+        fn a_linked_node_pushed_on_the_pool_elsewhere_stops_at_the_next_call() {
+            let _serial = serial();
+            let (mut e, face) = engine(EVENTS);
+            let list = face + 0xf0;
+            filled(&mut e, list, 2);
+            // A push of the second node written in place, as inlined pool code does.
+            let node = e.mem.u32(e.mem.u32(list));
+            let head = e.mem.u32(POOL_FREE_HEAD);
+            e.mem.set_u32(node, head);
+            e.mem.set_u32(POOL_FREE_HEAD, node);
+            let message = stop_message(|| {
+                e.call(LIST_COUNT, &args![list]);
+            });
+            assert!(
+                message.contains(&format!("node {node:08x} is on the node pool's free list")),
+                "{message}"
+            );
+            assert!(message.contains("entry to 0044ddc0"), "{message}");
+        }
+
+        #[test]
+        fn the_same_keyframe_added_twice_stops_the_run() {
+            let _serial = serial();
+            let (mut e, face) = engine(EVENTS);
+            let keyframes = filled(&mut e, face + 0x88, 1);
+            let message = stop_message(|| add(&mut e, face + 0xbc, keyframes[0]));
+            assert!(message.contains("while already in list"), "{message}");
+        }
+
+        #[test]
+        fn a_count_that_does_not_match_the_links_stops_the_run() {
+            let _serial = serial();
+            let (mut e, face) = engine(EVENTS);
+            let list = face + 0x88;
+            filled(&mut e, list, 1);
+            e.mem.set_u32(list + 8, 2);
+            let message = stop_message(|| {
+                filled(&mut e, list, 1);
+            });
+            assert!(
+                message.contains("has 2 nodes but its count is 3"),
+                "{message}"
+            );
+        }
+
+        #[test]
+        fn a_deleted_head_still_listed_when_another_thread_runs_stops_the_run() {
+            let _serial = serial();
+            let (mut e, face) = engine(EVENTS);
+            let list = face + 0x88;
+            force_thread(Some(1));
+            let keyframes = filled(&mut e, list, 2);
+            // Deleted as `ClearSpeechKeyframeLists` does, without its RemoveHead yet.
+            e.call(DELETING_DESTRUCTOR, &args![keyframes[0], 1u32]);
+            force_thread(Some(7));
+            let message = stop_message(|| {
+                filled(&mut e, list, 1);
+            });
+            assert!(
+                message.contains(&format!(
+                    "keyframe {:08x} was deleted while still the head",
+                    keyframes[0]
+                )),
+                "{message}"
+            );
+            assert!(message.contains("on thread 1"), "{message}");
+            assert!(message.contains("on thread 7"), "{message}");
+        }
+
+        #[test]
+        fn two_game_threads_in_one_list_stop_the_run() {
+            let _serial = serial();
+            let (mut e, face) = engine(EVENTS);
+            let list = face + 0x88;
+            force_thread(Some(1));
+            filled(&mut e, list, 1);
+            enter(&mut e, list, "UpdateKeyframeList 0064ca60");
+            force_thread(Some(2));
+            let message = stop_message(|| {
+                filled(&mut e, list, 1);
+            });
+            assert!(
+                message.contains("used by two game threads at once"),
+                "{message}"
+            );
+            assert!(message.contains("UpdateKeyframeList 0064ca60"), "{message}");
+        }
+
+        /// p190: a second game thread (its own OS thread) found the check's own hook in
+        /// `Engine::call_hook` and took it as the hook to call on, so each call recursed for
+        /// ever. The check now never calls on to itself.
+        #[test]
+        fn a_second_install_never_calls_the_check_on_from_itself() {
+            let _serial = serial();
+            let (mut e, face) = engine(EVENTS);
+            assert!(e.call_hook.is_some());
+            // As a fresh state (another thread's, before the fix) would install again.
+            *lock_state() = None;
+            track_face(&mut e, face);
+            assert!(previous_hook().is_none());
+            filled(&mut e, face + 0x88, 2);
+            assert_eq!(e.call(LIST_COUNT, &args![face + 0x88]).u32(), 2);
+        }
+
+        static FREED_BY_HOOK: AtomicU32 = AtomicU32::new(0);
+
+        /// A call hook that was there before the check: at the entry to `0044ddc0` it frees a
+        /// block (the free hook runs inside the call hook) and makes a call of its own (the
+        /// call hook runs inside itself).
+        fn earlier_hook(e: &mut Engine, addr: u32, returning: bool) {
+            if addr == LIST_COUNT && !returning {
+                let block = FREED_BY_HOOK.swap(0, Ordering::Relaxed);
+                if block != 0 {
+                    engine_core::units::platform::memory_manager_deallocate(
+                        e,
+                        Ptr::new(0),
+                        Ptr::new(block),
+                    );
+                    e.call(0x0073_ac90, &args![block]);
+                }
+            }
+        }
+
+        #[test]
+        fn a_free_and_a_call_inside_the_hooks_come_back() {
+            let _serial = serial();
+            force(EVENTS);
+            let (mut e, face) = {
+                let mut e = Engine::new();
+                e.call_hook = Some(earlier_hook);
+                let (mut checked, face) = engine(EVENTS);
+                checked.call_hook = e.call_hook.take();
+                checked.free_hook = None;
+                // Installed afresh over the earlier hook.
+                *lock_state() = None;
+                track_face(&mut checked, face);
+                (checked, face)
+            };
+            assert!(previous_hook().is_some());
+            let block = e.mem.alloc(0x20);
+            FREED_BY_HOOK.store(block, Ordering::Relaxed);
+            filled(&mut e, face + 0xbc, 1);
+            assert_eq!(e.call(LIST_COUNT, &args![face + 0xbc]).u32(), 1);
+            assert_eq!(FREED_BY_HOOK.load(Ordering::Relaxed), 0);
+            // A hook reached from inside the check returns at once.
+            with_state(&mut e, |e, _| {
+                on_free(e, block);
+                on_call(e, LIST_COUNT, false);
+                deleting(e, 0x1234_5678, 1);
+                None
+            });
+            assert!(!IN_HOOK.load(Ordering::Relaxed));
+        }
+    }
 }
 
 #[cfg(test)]

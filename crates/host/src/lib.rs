@@ -21,7 +21,9 @@ pub mod global_form;
 pub mod player_move;
 pub mod quest_form;
 pub mod quest_vm;
+pub mod save_out;
 pub mod script_form;
+pub mod uncap;
 
 use engine::Engine;
 use std::path::{Path, PathBuf};
@@ -46,6 +48,14 @@ pub struct Host {
     /// not (not translated yet, or where it stopped; its misses are in
     /// [`Host::movement`] under the stage `niinit`).
     pub ni_init: Option<String>,
+}
+
+/// A frame of main's still in flight ([`Host::begin_main_frame`]) ends before the engine goes:
+/// main's OS thread holds its address until then.
+impl Drop for Host {
+    fn drop(&mut self) {
+        self.join();
+    }
 }
 
 impl Host {
@@ -73,14 +83,22 @@ impl Host {
         for (address, function) in play_patch::funcs() {
             engine.register(address, function);
         }
+        // `NV_UNCAP=1`: an opt-in fix, NOT 1:1 with the exe (off by default): `BSTimer`'s step
+        // without its sleep, so the frame rate isn't held to the game's own limit ([`uncap`]).
+        if uncap::wanted() {
+            uncap::install(&mut engine);
+            eprintln!("NV_UNCAP=1: BSTimer's step (00aa4ee0) runs without its sleep (not 1:1)");
+        }
         // The game's clock (`GetTickCount`, `timeGetTime`, `QueryPerformanceCounter`) runs with
         // the real time from here on, `Sleep` moving it on too (`Engine::clock_now_ms`).
         engine.start_real_clock();
         // How the game's threads are ordered (`engine::thread_host::Scheme`): by default a
         // signal from the main thread runs the threads it wakes soon after (`NV_WAKE_DELAY`
         // calls later, at main's next platform call), a used-up slice ends at the next
-        // platform call and game threads' timed waits time out. `NV_THREADS=slice` keeps the
-        // scheme before; `NV_THREADS=nowake,anycall,notimeout` (any of them) turns parts off.
+        // blocking call (a wait or sleep; 50 slices at most) and game threads' timed waits
+        // time out. `NV_THREADS=slice` keeps the scheme before; `NV_THREADS=` with any of
+        // `nowake`, `platformcall` (slices end at any platform call) or `anycall`, `notimeout`
+        // changes parts.
         engine.kernel.threads.scheme =
             engine::thread_host::Scheme::from_name(std::env::var("NV_THREADS").ok().as_deref())?;
         if let Some(delay) = std::env::var("NV_WAKE_DELAY")

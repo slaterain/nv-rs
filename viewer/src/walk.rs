@@ -924,7 +924,29 @@ pub fn game_main_frame(
     let down: Vec<u8> = keys.get_pressed().filter_map(|k| dinput_code(*k)).collect();
     host.set_keys_down(&down);
     host.mouse(mouse_motion(&motion, &scroll), mouse_buttons(&mouse));
-    host.main_frame();
+    if game_frame_in_step() {
+        host.main_frame();
+    } else {
+        // The game's frame runs on its own OS thread beside the rest of the viewer's frame
+        // (a29): every use of the game's code through the host waits for it, and
+        // [`finish_game_main_frame`] at the end of the viewer's frame does at the latest.
+        host.begin_main_frame();
+    }
+}
+
+/// The end of the viewer's frame (`Last`): waits for the game's frame [`game_main_frame`]
+/// began, so a frame of the game never outlives the viewer's.
+pub fn finish_game_main_frame(host: Option<NonSendMut<host::Host>>) {
+    if let Some(mut host) = host {
+        host.finish_main_frame();
+    }
+}
+
+/// `NV_GAME_FRAME_SYNC=1`: the game's frame runs inside [`game_main_frame`], the viewer waiting
+/// for it there, as before the overlap (to compare).
+fn game_frame_in_step() -> bool {
+    static SYNC: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SYNC.get_or_init(|| std::env::var("NV_GAME_FRAME_SYNC").is_ok_and(|v| v == "1"))
 }
 
 #[cfg(test)]

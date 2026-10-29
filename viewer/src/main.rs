@@ -272,6 +272,15 @@ fn main() {
         on: true,
     };
     let mut window = Window { title, ..default() };
+    // With the game's real window (`NV_D3D9=real`) the viewer's own window and scene are not shown
+    // (the maintainer, 2026-10-28): the window stays hidden and no camera draws
+    // ([`ViewerHidden`]); the game's frame, its input from the real window, the sound and the
+    // host go on. `NV_VIEWER_WINDOW=1` keeps the viewer's window and drawing as before.
+    let hidden = viewer_hidden();
+    if hidden {
+        window.visible = false;
+        println!("NV_D3D9=real: the viewer's own window is hidden and draws nothing (NV_VIEWER_WINDOW=1 shows it).");
+    }
     if args.screenshot.is_some() {
         // The game's own resolution here, so pictures line up pixel for pixel.
         let (w, h) = args.screen_size.unwrap_or((1920, 1080));
@@ -323,6 +332,15 @@ fn main() {
     }
     App::new()
         .insert_resource(ClearColor(Color::BLACK))
+        // Every frame runs whether or not the window has the focus. The game's own frame runs in
+        // `Update` (`walk::game_main_frame`), and Bevy's default for an unfocused window (reactive,
+        // at most 60 updates a second) held the game to 60 frames/s whenever its real window
+        // (`NV_D3D9=real`), a `--background` run or any other window had the focus (a29's
+        // profile: 9 of 17 ms a frame waiting in winit).
+        .insert_resource(bevy::winit::WinitSettings {
+            focused_mode: bevy::winit::UpdateMode::Continuous,
+            unfocused_mode: bevy::winit::UpdateMode::Continuous,
+        })
         // Lit surfaces do their own lighting (see `lighting`); nothing else
         // should add Bevy's ambient light.
         .insert_resource(AmbientLight::NONE)
@@ -599,6 +617,8 @@ fn main() {
         )
         // The game's own main loop, every frame (`walk::game_main_frame`), before the walk.
         .add_systems(Update, walk::game_main_frame.before(walk::walk))
+        // ... and its end, at the latest at the end of the viewer's frame.
+        .add_systems(Last, walk::finish_game_main_frame)
         .add_systems(
             Update,
             (
@@ -981,7 +1001,62 @@ fn main() {
             )
                 .in_set(ViewerSet::AfterFrame),
         )
+        .add_plugins(ExecutorChoice)
+        .add_plugins(ViewerHidden(hidden))
         .run();
+}
+
+/// `NV_BEVY_EXECUTOR=single` (a measurement setting of the viewer): the main world's frame
+/// schedules run their systems one after another on the main thread (Bevy's
+/// `ExecutorKind::SingleThreaded`) instead of handing them to the task pool, to compare the
+/// multi-threaded executor's per-frame cost (a29: about 3 ms a frame of Bevy's own with an empty
+/// cell, most of it the main thread waiting). Same systems, same order constraints.
+/// Whether the viewer runs without its own window and scene: with the game's real window
+/// (`NV_D3D9=real`) unless `NV_VIEWER_WINDOW=1`.
+fn viewer_hidden() -> bool {
+    let real = std::env::var("NV_D3D9").is_ok_and(|v| v.eq_ignore_ascii_case("real"));
+    let keep = std::env::var("NV_VIEWER_WINDOW").is_ok_and(|v| v == "1");
+    real && !keep
+}
+
+/// The viewer without its own view ([`viewer_hidden`]): every camera inactive, so the render
+/// world draws nothing for the hidden window.
+struct ViewerHidden(bool);
+
+impl Plugin for ViewerHidden {
+    fn build(&self, app: &mut App) {
+        if self.0 {
+            app.add_systems(Last, no_cameras);
+        }
+    }
+}
+
+/// Turns off every camera that is on (new ones each frame too).
+fn no_cameras(mut cameras: Query<&mut Camera>) {
+    for mut camera in &mut cameras {
+        if camera.is_active {
+            camera.is_active = false;
+        }
+    }
+}
+
+struct ExecutorChoice;
+
+impl Plugin for ExecutorChoice {
+    fn build(&self, app: &mut App) {
+        if !std::env::var("NV_BEVY_EXECUTOR").is_ok_and(|v| v == "single") {
+            return;
+        }
+        fn single(s: &mut Schedule) {
+            s.set_executor_kind(bevy::ecs::schedule::ExecutorKind::SingleThreaded);
+        }
+        app.edit_schedule(First, single)
+            .edit_schedule(PreUpdate, single)
+            .edit_schedule(Update, single)
+            .edit_schedule(PostUpdate, single)
+            .edit_schedule(Last, single);
+        println!("NV_BEVY_EXECUTOR=single: First to Last run on the main thread.");
+    }
 }
 
 /// A piece its model's own animation moves or changes

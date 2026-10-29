@@ -656,6 +656,12 @@ pub fn fn_00559a70(e: &mut Engine, this: Ptr<NiTPointerList>, node: Ptr<NiTListI
     e.set(this, NiTPointerList::m_pkTail, node.addr());
     let count = e.get(this, NiTPointerList::m_uiCount);
     e.set(this, NiTPointerList::m_uiCount, count.wrapping_add(1));
+    // `NV_SPEECH_CHECK` (diagnostic only, reads memory): an add to a watched list.
+    crate::units::fallout_shared_facegen::bsfacegenkeyframe::speech_check::linked(
+        e,
+        this.addr(),
+        node.addr(),
+    );
 }
 
 // Translated from 00559ad0 (decompiled, FalloutNV.exe 1.4.0.525)

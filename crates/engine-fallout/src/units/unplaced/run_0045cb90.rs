@@ -311,6 +311,11 @@ pub fn fn_0045cec0(e: &mut Engine, this: Ptr) {
 /// `011c5f58` (the old head goes to `+0`). `this` (callers pass their
 /// list's allocator) is not read.
 pub fn fn_0045cee0(e: &mut Engine, _this: Ptr, node: Ptr) {
+    // `NV_SPEECH_CHECK` (diagnostic only, reads memory): a node still in a watched list.
+    crate::units::fallout_shared_facegen::bsfacegenkeyframe::speech_check::node_freeing(
+        e,
+        node.addr(),
+    );
     e.call(LOCK_ACQUIRE, &args![FREE_LIST_LOCK, 0u32]);
     e.mem.set_u32(node.addr() + 4, 0);
     let head = e.global::<u32>(FREE_LIST_HEAD);

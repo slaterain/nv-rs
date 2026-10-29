@@ -212,6 +212,7 @@ pub fn fn_00aeac20(e: &mut Engine, this: Ptr, name: u32) -> Ptr {
     }
     set_field(e, this, STREAM, 0);
     set_field(e, this, OGG_READER, 0);
+    audio_check::constructed(e, this.addr());
     this
 }
 
@@ -230,6 +231,7 @@ fn release_all(e: &mut Engine, this: Ptr, offset: u32) {
 /// the streaming state (its three blocks at `+0x18`, `+0x20`, `+0x1c` first), destroys and frees
 /// the Ogg reader (`00af1d80`), then runs the `BSGameSound` destructor (`00ae93f0`).
 pub fn fn_00aeafb0(e: &mut Engine, this: Ptr) {
+    audio_check::destroying(e, this.addr());
     set_field(e, this, 0, WIN32_GAME_SOUND_VTABLE);
     if field(e, this, BUFFER) != 0 {
         release_all(e, this, BUFFER);
@@ -852,6 +854,7 @@ fn reopen_as(e: &mut Engine, this: Ptr, replacement: u32, info: u32) -> u32 {
 /// reported and failed). The answer is `00ae9c50`'s, or 0 (in `AL`, the rest of `EAX` from
 /// `mmioClose`) for a bad chunk.
 pub fn fn_00aeb270(e: &mut Engine, this: Ptr) -> u32 {
+    audio_check::opening(e, this.addr());
     update_state(e, this, |flags| flags | 0x1000);
     if fn_00af1ba0(e, this) == 0 {
         return set_opened(e, this, 0);
@@ -1090,6 +1093,7 @@ pub fn fn_00aebff0(e: &mut Engine, this: Ptr) -> u32 {
     } else {
         0
     };
+    audio_check::reader_made(e, this.addr(), reader, field(e, this, OGG_READER));
     set_field(e, this, OGG_READER, reader);
     let reader = Ptr::new(field(e, this, OGG_READER));
     if fn_00af1e00(e, reader, this.addr().wrapping_add(FILENAME)) == 0 {
@@ -1279,6 +1283,7 @@ pub fn fn_00af1d20(e: &mut Engine, this: Ptr) -> Ptr {
 /// cleared (`ov_clear`, the import thunk `00ee81e6`); the file (`+0x2d0`) is deleted through
 /// its vtable slot 0 with 1 and cleared.
 pub fn fn_00af1d80(e: &mut Engine, this: Ptr) {
+    audio_check::reader_destroyed(e, this.addr());
     if e.mem.u8(this.addr().wrapping_add(0x2dc)) != 0 {
         e.call(0x00ee_81e6, &args![this]);
     }
@@ -1365,6 +1370,7 @@ pub fn fn_00af1e00(e: &mut Engine, this: Ptr, name: u32) -> u8 {
             set_field(e, this, 0x2d0, 0);
             return 0;
         }
+        audio_check::reader_opened(e, this.addr(), field(e, this, 0x2d0));
         e.mem.set_u8(this.addr().wrapping_add(0x2dc), 1);
         let info = e.call(0x00ee_81f8, &args![this, u32::MAX]).u32();
         set_field(e, this, 0x2d8, info);
@@ -2739,6 +2745,363 @@ fn copy_stream(e: &mut Engine, this: Ptr, source: Ptr) {
     }
 }
 
+/// `NV_AUDIO_CHECK` (diagnostic only, not exe behaviour): follows every `BSWin32GameSound` and
+/// its Ogg Vorbis reader (`+0x22c`), and stops the run at the first use that does not fit what
+/// came before, naming both events (game thread, the exe frames of [`Engine::call_stack`]) and
+/// the sequence number of each:
+///
+/// - a sound opened (`00aeb270`) or destroyed (`00aeafb0`) that is not live (never constructed
+///   while the check ran, or destroyed already);
+/// - a sound given a second reader while it still has one (`00aebff0`);
+/// - a sound destroyed with a reader that is not its own (another sound's, or one already
+///   destroyed), or whose reader's file word (`+0x2d0`) is not the file it opened.
+///
+/// Any value but `0` turns it on. It writes no game memory; off, it reads none either.
+pub mod audio_check {
+    use crate::prelude::*;
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    /// One event: what, its number, the game thread and the exe frames.
+    #[derive(Clone, Debug)]
+    pub struct Event {
+        pub what: String,
+        pub seq: u64,
+        pub thread: u32,
+        pub frames: Vec<u32>,
+    }
+
+    impl std::fmt::Display for Event {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let frames: Vec<String> = self
+                .frames
+                .iter()
+                .rev()
+                .map(|a| format!("{a:08x}"))
+                .collect();
+            write!(
+                f,
+                "#{} {} (thread {}, in {})",
+                self.seq,
+                self.what,
+                self.thread,
+                frames.join(" < ")
+            )
+        }
+    }
+
+    /// What the check knows; each method answers the stop's text when the event does not fit.
+    #[derive(Default)]
+    pub struct State {
+        seq: u64,
+        /// Live sounds: their construction.
+        sounds: HashMap<u32, Event>,
+        /// Destroyed sounds (the latest destruction at each address).
+        dead_sounds: HashMap<u32, Event>,
+        /// Live readers: the sound that made it, the file it opened (0 until open), the making.
+        readers: HashMap<u32, (u32, u32, Event)>,
+        /// Destroyed readers: the destruction.
+        dead_readers: HashMap<u32, Event>,
+    }
+
+    fn report(now: &Event, why: String, earlier: &[Option<&Event>]) -> String {
+        let mut text = format!("NV_AUDIO_CHECK: {why}\n  now: {now}");
+        for event in earlier.iter().flatten() {
+            text += &format!("\n  earlier: {event}");
+        }
+        text
+    }
+
+    impl State {
+        pub fn event(&mut self, what: String, thread: u32, frames: Vec<u32>) -> Event {
+            self.seq += 1;
+            Event {
+                what,
+                seq: self.seq,
+                thread,
+                frames,
+            }
+        }
+
+        pub fn constructed(&mut self, sound: u32, now: Event) {
+            self.dead_sounds.remove(&sound);
+            self.sounds.insert(sound, now);
+        }
+
+        pub fn opening(&mut self, sound: u32, now: Event) -> Result<(), String> {
+            if self.sounds.contains_key(&sound) {
+                return Ok(());
+            }
+            Err(report(
+                &now,
+                format!("sound {sound:08x} opened while it is not live"),
+                &[self.dead_sounds.get(&sound)],
+            ))
+        }
+
+        pub fn reader_made(
+            &mut self,
+            sound: u32,
+            reader: u32,
+            previous: u32,
+            now: Event,
+        ) -> Result<(), String> {
+            if previous != 0 {
+                let made = self.readers.get(&previous).map(|r| &r.2);
+                return Err(report(
+                    &now,
+                    format!("sound {sound:08x} already has the reader {previous:08x}"),
+                    &[made, self.sounds.get(&sound)],
+                ));
+            }
+            self.dead_readers.remove(&reader);
+            self.readers.insert(reader, (sound, 0, now));
+            Ok(())
+        }
+
+        pub fn reader_opened(&mut self, reader: u32, file: u32) {
+            if let Some(r) = self.readers.get_mut(&reader) {
+                r.1 = file;
+            }
+        }
+
+        pub fn reader_destroyed(&mut self, reader: u32, now: Event) {
+            self.readers.remove(&reader);
+            self.dead_readers.insert(reader, now);
+        }
+
+        pub fn destroying(
+            &mut self,
+            sound: u32,
+            reader: u32,
+            file: u32,
+            now: Event,
+        ) -> Result<(), String> {
+            if !self.sounds.contains_key(&sound) {
+                return Err(report(
+                    &now,
+                    format!("sound {sound:08x} destroyed while it is not live"),
+                    &[self.dead_sounds.get(&sound)],
+                ));
+            }
+            if reader != 0 {
+                match self.readers.get(&reader) {
+                    None => {
+                        return Err(report(
+                            &now,
+                            format!(
+                                "sound {sound:08x} holds the reader {reader:08x}, which is not \
+                                 live"
+                            ),
+                            &[self.dead_readers.get(&reader), self.sounds.get(&sound)],
+                        ))
+                    }
+                    Some((owner, _, made)) if *owner != sound => {
+                        return Err(report(
+                            &now,
+                            format!(
+                                "sound {sound:08x} holds the reader {reader:08x} of sound \
+                                 {owner:08x}"
+                            ),
+                            &[
+                                Some(made),
+                                self.sounds.get(owner),
+                                self.dead_sounds.get(owner),
+                            ],
+                        ))
+                    }
+                    Some((_, opened, made)) if *opened != file => {
+                        return Err(report(
+                            &now,
+                            format!(
+                                "the reader {reader:08x} of sound {sound:08x} holds the file \
+                                 word {file:08x}, not the file {opened:08x} it opened"
+                            ),
+                            &[Some(made)],
+                        ))
+                    }
+                    Some(_) => {}
+                }
+            }
+            self.sounds.remove(&sound);
+            self.dead_sounds.insert(sound, now);
+            Ok(())
+        }
+    }
+
+    fn on() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| std::env::var("NV_AUDIO_CHECK").is_ok_and(|v| v != "0" && !v.is_empty()))
+    }
+
+    /// Runs `body` on the process's state with the event `what` when the check is on; stops the
+    /// run with the text it answers.
+    fn with_state(
+        e: &Engine,
+        what: impl FnOnce() -> String,
+        body: impl FnOnce(&mut State, Event) -> Result<(), String>,
+    ) {
+        if !on() {
+            return;
+        }
+        static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+        let mut st = STATE
+            .get_or_init(Default::default)
+            .lock()
+            .expect("the audio check");
+        let now = st.event(
+            what(),
+            engine_core::thread_host::current_id(e),
+            e.call_stack.clone(),
+        );
+        if let Err(text) = body(&mut st, now) {
+            drop(st);
+            panic!("{text}");
+        }
+    }
+
+    /// `00aeac20` / `00aeae10` made `sound`.
+    pub fn constructed(e: &Engine, sound: u32) {
+        with_state(
+            e,
+            || format!("sound {sound:08x} constructed"),
+            |st, now| {
+                st.constructed(sound, now);
+                Ok(())
+            },
+        );
+    }
+
+    /// `00aeb270` opens `sound`.
+    pub fn opening(e: &Engine, sound: u32) {
+        with_state(
+            e,
+            || format!("sound {sound:08x} opened"),
+            |st, now| st.opening(sound, now),
+        );
+    }
+
+    /// `00aebff0` gives `sound` the reader `reader` (`previous`: its `+0x22c` before).
+    pub fn reader_made(e: &Engine, sound: u32, reader: u32, previous: u32) {
+        if reader == 0 {
+            return;
+        }
+        with_state(
+            e,
+            || format!("reader {reader:08x} made for sound {sound:08x}"),
+            |st, now| st.reader_made(sound, reader, previous, now),
+        );
+    }
+
+    /// `00af1e00` opened `file` for `reader`.
+    pub fn reader_opened(e: &Engine, reader: u32, file: u32) {
+        with_state(
+            e,
+            || format!("reader {reader:08x} opened file {file:08x}"),
+            |st, _| {
+                st.reader_opened(reader, file);
+                Ok(())
+            },
+        );
+    }
+
+    /// `00af1d80` destroys `reader`.
+    pub fn reader_destroyed(e: &Engine, reader: u32) {
+        with_state(
+            e,
+            || format!("reader {reader:08x} destroyed"),
+            |st, now| {
+                st.reader_destroyed(reader, now);
+                Ok(())
+            },
+        );
+    }
+
+    /// `00aeafb0` begins on `sound` (its reader at `+0x22c`, the reader's file at `+0x2d0`,
+    /// read without faulting).
+    pub fn destroying(e: &Engine, sound: u32) {
+        if !on() {
+            return;
+        }
+        let word = |at: u32| {
+            let mut b = [0u8; 4];
+            e.mem
+                .try_read(at, &mut b)
+                .map_or(0xdead_dead, |_| u32::from_le_bytes(b))
+        };
+        let reader = word(sound.wrapping_add(0x22c));
+        let file = if reader == 0 {
+            0
+        } else {
+            word(reader.wrapping_add(0x2d0))
+        };
+        with_state(
+            e,
+            || format!("sound {sound:08x} destroyed (reader {reader:08x}, file {file:08x})"),
+            |st, now| st.destroying(sound, reader, file, now),
+        );
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn ev(st: &mut State, what: &str) -> Event {
+            st.event(what.into(), 1, vec![0x00ad_dc00, 0x00af_1cc0])
+        }
+
+        #[test]
+        fn a_sound_with_its_own_reader_passes() {
+            let mut st = State::default();
+            let now = ev(&mut st, "make");
+            st.constructed(0x100, now);
+            let now = ev(&mut st, "open");
+            assert!(st.opening(0x100, now).is_ok());
+            let now = ev(&mut st, "reader");
+            assert!(st.reader_made(0x100, 0x500, 0, now).is_ok());
+            st.reader_opened(0x500, 0x900);
+            let now = ev(&mut st, "destroy");
+            assert!(st.destroying(0x100, 0x500, 0x900, now).is_ok());
+            // Opened again after its destruction: a stop naming the destruction.
+            let now = ev(&mut st, "open again");
+            let text = st.opening(0x100, now).unwrap_err();
+            assert!(
+                text.contains("not live") && text.contains("#4 destroy"),
+                "{text}"
+            );
+        }
+
+        #[test]
+        fn a_foreign_dead_or_changed_reader_stops() {
+            let mut st = State::default();
+            for sound in [0x100, 0x200] {
+                let now = ev(&mut st, "make");
+                st.constructed(sound, now);
+            }
+            let now = ev(&mut st, "reader of 100");
+            st.reader_made(0x100, 0x500, 0, now).unwrap();
+            st.reader_opened(0x500, 0x900);
+            // Sound 200 holds sound 100's reader.
+            let now = ev(&mut st, "destroy 200");
+            let text = st.destroying(0x200, 0x500, 0x900, now).unwrap_err();
+            assert!(text.contains("of sound 00000100"), "{text}");
+            // The file word changed under the reader.
+            let now = ev(&mut st, "destroy 100");
+            let text = st.destroying(0x100, 0x500, 0xb, now).unwrap_err();
+            assert!(text.contains("file word 0000000b"), "{text}");
+            // A destroyed reader still held.
+            let now = ev(&mut st, "reader gone");
+            st.reader_destroyed(0x500, now);
+            let now = ev(&mut st, "destroy 100");
+            let text = st.destroying(0x100, 0x500, 0x900, now).unwrap_err();
+            assert!(
+                text.contains("not live") && text.contains("reader gone"),
+                "{text}"
+            );
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -4025,6 +4388,7 @@ pub fn fn_00aeae10(e: &mut Engine, this: Ptr) -> Ptr {
     }
     set_field(e, this, STREAM, 0);
     set_field(e, this, OGG_READER, 0);
+    audio_check::constructed(e, this.addr());
     this
 }
 
