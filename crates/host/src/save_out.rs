@@ -109,21 +109,21 @@ mod tests {
 
     #[test]
     fn the_players_folders_are_refused_and_scratch_folders_taken() {
-        let profile = Path::new(r"C:\Users\someone");
+        let profile = Path::new(r"C:\Users\<name>");
         for dir in [
-            r"C:\Users\someone\Documents\My Games\FalloutNV\Saves",
-            r"c:/users/someone/onedrive/documents/x",
-            r"C:\Users\someone\AppData\Local\FalloutNV",
-            r"C:\Users\someone\Documents",
+            r"C:\Users\<name>\Documents\My Games\FalloutNV\Saves",
+            r"c:/users/<name>/onedrive/documents/x",
+            r"C:\Users\<name>\AppData\Local\FalloutNV",
+            r"C:\Users\<name>\Documents",
             "relative\\saves",
-            r"C:\Users\someone\nv-re\..\Documents\My Games",
+            r"C:\Users\<name>\nv-re\..\Documents\My Games",
         ] {
             assert!(refused(Path::new(dir), Some(profile)).is_some(), "{dir}");
         }
         assert!(refused(Path::new(r"D:\scratch"), None).is_some());
         for dir in [
-            r"C:\Users\someone\nv-re\work\build43-scratch\docs-port\My Games\FalloutNV\Saves",
-            r"C:\Users\someone\DocumentsScratch",
+            r"C:\Users\<name>\nv-re\work\build43-scratch\docs-port\My Games\FalloutNV\Saves",
+            r"C:\Users\<name>\DocumentsScratch",
             r"D:\scratch",
         ] {
             assert_eq!(refused(Path::new(dir), Some(profile)), None, "{dir}");

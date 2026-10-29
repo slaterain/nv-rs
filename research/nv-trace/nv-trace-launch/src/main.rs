@@ -183,9 +183,10 @@ fn run() -> Result<i32, String> {
     let mut shot_every_s: u32 = 30;
     let mut always_active = true;
     let mut seconds: u32 = 300;
-    let mut exe = PathBuf::from(r"C:\Users\alexa\nv-re\FalloutNV_unpacked.exe");
+    let profile = PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default());
+    let mut exe = profile.join(r"nv-re\FalloutNV_unpacked.exe");
     let mut game = PathBuf::from(STEAM_GAME);
-    let mut scratch = PathBuf::from(r"C:\Users\alexa\nv-re\work\build43-scratch\measure\rec");
+    let mut scratch = profile.join(r"nv-re\work\build43-scratch\measure\rec");
     let mut name: Option<String> = None;
     let mut saves = true;
     let mut prepare_only = false;

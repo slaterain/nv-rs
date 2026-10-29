@@ -155,7 +155,7 @@ mod tests {
 
     #[test]
     fn inside_and_beside_a_protected_folder() {
-        let p = Protected::new([GAME, "C:\\Users\\alexa\\AppData\\Local\\FalloutNV"]);
+        let p = Protected::new([GAME, "C:\\Users\\<name>\\AppData\\Local\\FalloutNV"]);
         assert!(p.contains(&normalize(GAME)));
         assert!(p.contains(&normalize(&format!("{GAME}\\Data\\x.esp"))));
         assert!(p.contains(&join(GAME, "..\\Fallout New Vegas\\FalloutNV.log")));
@@ -163,7 +163,7 @@ mod tests {
         assert!(!p.contains(&normalize(
             "C:\\Games\\Steam\\steamapps\\common\\Fallout New Vegas2\\a"
         )));
-        assert!(!p.contains(&normalize("C:\\Users\\alexa\\nv-re\\work\\x")));
+        assert!(!p.contains(&normalize("C:\\Users\\<name>\\nv-re\\work\\x")));
         // Renaming or deleting a parent would take the folder with it.
         assert!(p.refuses(&normalize("C:\\Games\\Steam\\steamapps\\common")));
         assert!(!p.refuses(&normalize("C:\\Games\\Steam\\steamapps\\commo")));

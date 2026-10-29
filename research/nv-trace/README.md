@@ -114,8 +114,8 @@ port calls than real ones without being wrong.
 Build (PowerShell or bash; on this machine through the compile queue):
 
 ```sh
-bash /c/Users/alexa/nv-re/work/phase0/bin/heavy2.sh cargo build --release --target i686-pc-windows-msvc --manifest-path C:/Users/alexa/nv-re/work/agents/wt-a27/research/nv-trace/Cargo.toml
-bash /c/Users/alexa/nv-re/work/phase0/bin/heavy2.sh cargo test --manifest-path C:/Users/alexa/nv-re/work/agents/wt-a27/research/nv-trace/Cargo.toml -p nv-trace-core -p nv-trace
+cargo build --release --target i686-pc-windows-msvc --manifest-path research/nv-trace/Cargo.toml
+cargo test --manifest-path research/nv-trace/Cargo.toml -p nv-trace-core -p nv-trace
 ```
 
 `target/i686-pc-windows-msvc/release/` then holds `nv-trace-launch.exe`, `nv_trace_rec.dll`
@@ -124,7 +124,7 @@ bash /c/Users/alexa/nv-re/work/phase0/bin/heavy2.sh cargo test --manifest-path C
 Record the real game (new game from the main menu, the port's `ng.sh` keys):
 
 ```sh
-T=C:/Users/alexa/nv-re/work/agents/wt-a27/research/nv-trace
+T=research/nv-trace
 $T/target/i686-pc-windows-msvc/release/nv-trace-launch.exe --list $T/lists/speech.txt \
   --keys "1500:d0:1,1504:d0:1,1510:1c:1,1700:1c:1,2000:12:1,2300:12:1,2600:12:1,3000:12:1,3600:12:1" \
   --keys-fps 58 --keys-delay-ms 25000 --seconds 900 --name speech-1
@@ -154,7 +154,7 @@ front before each key.
 Record the port (a play build with `call_trace`, the `ng.sh` environment plus):
 
 ```sh
-NV_TRACE_LIST=$T/lists/speech.txt NV_TRACE_OUT=C:/Users/alexa/nv-re/work/build43-scratch/measure/rec/port-speech.nvtrace bash build43-scratch/ng.sh TAG
+NV_TRACE_LIST=$T/lists/speech.txt NV_TRACE_OUT=%USERPROFILE%/nv-re/work/build43-scratch/measure/rec/port-speech.nvtrace bash build43-scratch/ng.sh TAG
 ```
 
 Compare:
