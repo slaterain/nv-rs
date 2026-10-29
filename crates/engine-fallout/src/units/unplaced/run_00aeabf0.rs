@@ -3007,7 +3007,10 @@ pub mod audio_check {
         }
         let word = |at: u32| {
             let mut b = [0u8; 4];
-            e.mem.try_read(at, &mut b).ok().map(|_| u32::from_le_bytes(b))
+            e.mem
+                .try_read(at, &mut b)
+                .ok()
+                .map(|_| u32::from_le_bytes(b))
         };
         let vtable = word(file);
         if vtable.is_some_and(|v| word(v).is_some()) {
@@ -3015,7 +3018,9 @@ pub mod audio_check {
         }
         let words = |at: u32, n: u32| -> String {
             (0..n)
-                .map(|k| word(at.wrapping_add(4 * k)).map_or("--------".into(), |w| format!("{w:08x}")))
+                .map(|k| {
+                    word(at.wrapping_add(4 * k)).map_or("--------".into(), |w| format!("{w:08x}"))
+                })
                 .collect::<Vec<_>>()
                 .join(" ")
         };
@@ -3025,10 +3030,19 @@ pub mod audio_check {
             None => "never freed while the check ran".to_string(),
             Some((n, thread, frames)) => {
                 let path: Vec<String> = frames.iter().map(|a| format!("{a:08x}")).collect();
-                format!("last freed as free #{n} of {} (thread {thread}, in {})", f.0, path.join(" < "))
+                format!(
+                    "last freed as free #{n} of {} (thread {thread}, in {})",
+                    f.0,
+                    path.join(" < ")
+                )
             }
         };
-        let path: Vec<String> = e.call_stack.iter().rev().map(|a| format!("{a:08x}")).collect();
+        let path: Vec<String> = e
+            .call_stack
+            .iter()
+            .rev()
+            .map(|a| format!("{a:08x}"))
+            .collect();
         let text = format!(
             "NV_AUDIO_CHECK: reader {reader:08x} deletes its file {file:08x}, whose vtable word is \
              {} (thread {}, in {}) | reader: live block {:?}; {} | reader +0: {} | reader \
@@ -3167,7 +3181,9 @@ pub mod audio_check {
 
     /// Puts [`on_call`] in front of the engine's call hook (once).
     fn install(e: &mut Engine) {
-        if e.call_hook.is_some_and(|h| h as usize == on_call as CallHook as usize) {
+        if e.call_hook
+            .is_some_and(|h| h as usize == on_call as CallHook as usize)
+        {
             return;
         }
         *PREVIOUS
@@ -3184,7 +3200,9 @@ pub mod audio_check {
         static LAST: Mutex<(u32, bool, u32)> = Mutex::new((0, false, 0));
         let thread = engine_core::thread_host::current_id(e);
         let last = std::mem::replace(
-            &mut *LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+            &mut *LAST
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
             (addr, exit, thread),
         );
         if e.mem.has_watch_hits() {
@@ -3292,9 +3310,15 @@ pub mod audio_check {
             st.reader_made(0x100, 0x500, 0, now).unwrap();
             st.reader_opened(0x500, 0x900);
             let text = st.watched(0x500 + 0x2d0 + 1);
-            assert!(text.starts_with("the file word (+0x2d0) of reader 00000500"), "{text}");
+            assert!(
+                text.starts_with("the file word (+0x2d0) of reader 00000500"),
+                "{text}"
+            );
             let text = st.watched(0x900);
-            assert!(text.starts_with("the vtable word of file 00000900"), "{text}");
+            assert!(
+                text.starts_with("the vtable word of file 00000900"),
+                "{text}"
+            );
             let now = ev(&mut st, "reader gone");
             assert_eq!(st.reader_destroyed(0x500, now), 0x900);
             assert!(st.watched(0x900).contains("no live reader"));
