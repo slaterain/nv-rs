@@ -20,6 +20,16 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install native viewer dependencies
         run: sudo apt-get update && sudo apt-get install --yes libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      # One compiler process for engine-fallout's tests needs more than the runner's 16 GB of
+      # memory (more than 18 GB measured on Linux); Windows runners page to their page file.
+      - name: Add swap for the engine's test build
+        run: |
+          sudo swapoff -a
+          sudo fallocate -l 16G /mnt/ci.swap
+          sudo chmod 600 /mnt/ci.swap
+          sudo mkswap /mnt/ci.swap
+          sudo swapon /mnt/ci.swap
+          free -h
       - name: Install stable Rust tools
         run: |
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
