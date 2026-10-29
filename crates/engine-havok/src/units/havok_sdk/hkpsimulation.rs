@@ -1203,6 +1203,8 @@ const GET_MEM_USAGE_FOR_INTEGRATION: u32 = 0x00c9_2b50;
 const CHECK_MEMORY_FOR_INTEGRATION: u32 = 0x00d0_1bc0;
 const APPLY_FORCES_AND_STEP: u32 = 0x00d2_8a30;
 const SOLVER_SETUP_SOLVE: u32 = 0x00d8_8b50;
+/// `integrateInternal`'s stack frame (`00cf8da0`): three saved registers and `SUB ESP,0xa4`.
+const INTEGRATE_FRAME: u32 = 0xb0;
 const MARK_ISLAND_INACTIVE: u32 = 0x00cb_5420;
 const FIRE_ISLAND_POST_INTEGRATE: u32 = 0x00d0_15a0;
 const FIRE_WORLD_POST_INTEGRATE: u32 = 0x00d0_1440;
@@ -1277,7 +1279,11 @@ pub fn hkp_simulation_integrate_internal(e: &mut Engine, this: Ptr, step_info: P
     store_vec(e, solver_info + 0x20, mul(splat(delta), gravity));
     e.call(SOLVE_UPLOAD, &args![]);
     e.call(CLEANUP_DIRTY_ISLANDS, &args![world_of(e)]);
-    e.with_stack(0xa0, |e, frame| {
+    // The exe's frame from its lowest local: the three saved registers and `SUB ESP,0xa4`
+    // (00cf8dab..00cf8db3), 0xb0 bytes. The query at +0x30 (`LEA EAX,[ESP+0x44]` under five
+    // pushes, 00cf913a) is an `hkpConstraintQueryIn` of 0x80 bytes, whose words +0x6c..+0x77
+    // the solver writes for each constraint (00d88f94..00d88fa9, 00d89114..00d89128).
+    e.with_stack(INTEGRATE_FRAME, |e, frame| {
         let usage = frame.addr() + 0x18;
         let query = frame.addr() + 0x30;
         e.call(GET_MEM_USAGE_FOR_INTEGRATION, &args![world_of(e), usage]);
@@ -3246,6 +3252,25 @@ mod last_functions_tests {
     fn integrate(r: &mut IntegrateRig) -> u32 {
         let (this, step) = (r.this, r.step);
         r.e.call(0x00cf_8da0, &args![this, step]).u32()
+    }
+
+    /// The solver writes the query's words up to +0x77 (00d88fa9, 00d89128); they lie inside
+    /// the exe-sized frame. (With 0x70 bytes after the query, the stores past the frame landed
+    /// in the next heap block: a race-menu run's sound file got its vtable word set to an
+    /// entity index, 0xb, and the sound's destruction read 0000000b.)
+    #[test]
+    fn hkp_simulation_integrate_internal_query_holds_the_solver_words() {
+        let mut r = integrate_rig(1, 0);
+        r.e.mem.enable_block_check(true, false);
+        r.e.register_double(SOLVER_SETUP_SOLVE, |e, args| {
+            let query = args[2];
+            for offset in [0x6c, 0x70, 0x74, 0x7c] {
+                e.mem.set_u32(query + offset, 0xb);
+            }
+            6u32.into_ret()
+        });
+        assert_eq!(integrate(&mut r), 0);
+        assert_eq!(r.e.mem.take_block_reports(), Vec::<String>::new());
     }
 
     #[test]
