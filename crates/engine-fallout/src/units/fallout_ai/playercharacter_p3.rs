@@ -1928,6 +1928,11 @@ fn create_mouse_spring_in_frame(
         e.call(FUNCTION_00963EB0, &args![this, 5u32, value, object]);
     }
 
+    // The found body is the spring's `+4` word ([EBP-0x6c] beside the block at [EBP-0x70]): the
+    // exe stores it there where it finds it (0095fd78, 0095fe45, 0095ff5e) and reads it back here
+    // (0095ff85); bhkMouseSpringAction::Init (00c87260) hands it to the Havok action as its
+    // entity. Without it the action was built on a null entity and the grab stopped the game.
+    e.mem.set_u32(f.at(neg(0x6c)), hit_object);
     let hit = hit_object;
     if e.call(READ_FIELD_8, &args![hit]).u32() == 0
         || e.call(FUNCTION_00517670, &args![hit]).u32() == 5
@@ -10373,6 +10378,8 @@ mod tests {
             for offset in [0x30, 0x34, 0x38, 0x3c] {
                 seen.borrow_mut().push(e.mem.f32(a[1] + offset));
             }
+            // The block's +4 is the found body (0095ff5e), the action's entity.
+            seen.borrow_mut().push(f32::from_bits(e.mem.u32(a[1] + 4)));
             int(a[0])
         });
         answer_float(e, FUNCTION_0062C300, 12.5);
@@ -10399,8 +10406,12 @@ mod tests {
                 &args![player, Ptr::<()>::new(object), 3u32, 7.5f32],
             );
         });
-        // [EBP-0x40], -0x3c, -0x38, -0x34 of the block are +0x30 to +0x3c.
-        assert_eq!(*captured.borrow(), vec![1.0, 2.0, 4.0, 3.0]);
+        // [EBP-0x40], -0x3c, -0x38, -0x34 of the block are +0x30 to +0x3c; [EBP-0x6c] is its +4,
+        // the body the lookup found (0095ff5e).
+        assert!(!calls_to(&log, BODY_LOOKUP_004AE750).is_empty());
+        let captured = captured.borrow();
+        assert_eq!(captured[..4], [1.0, 2.0, 4.0, 3.0]);
+        assert_ne!(captured[4].to_bits(), 0);
         assert_eq!(
             e.get(player, PlayerCharacter::pGrabbedObject).addr(),
             object
@@ -10439,7 +10450,7 @@ mod tests {
             0x0095_f930,
             &args![player, Ptr::<()>::new(object), 2u32, 7.5f32],
         );
-        assert_eq!(*captured.borrow(), vec![2.0, 5.0, 2.0, 3.0]);
+        assert_eq!(captured.borrow()[..4], [2.0, 5.0, 2.0, 3.0]);
 
         // Any other kind keeps the scales at 1.
         captured.borrow_mut().clear();
@@ -10448,7 +10459,7 @@ mod tests {
             0x0095_f930,
             &args![player, Ptr::<()>::new(object), 2u32, 7.5f32],
         );
-        assert_eq!(*captured.borrow(), vec![2.0, 10.0, 8.0, 3.0]);
+        assert_eq!(captured.borrow()[..4], [2.0, 10.0, 8.0, 3.0]);
     }
 
     #[test]
