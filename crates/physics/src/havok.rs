@@ -253,7 +253,13 @@ impl SolverInfo {
         let n = ((4.0 * r) as i32).max(2);
         self.num_steps = n;
         self.inv_num_steps = 1.0 / n as f32;
-        let tau = (1.0 - tau_ratio) * 0.6 + 0.6 * tau_ratio * r;
+        // 00c66a97..00c66aaf: `(1 - k) * 0.6` goes to ST2 (`DC CA`, `FMUL ST(2),ST(0)`, with 0.6 left
+        // on top), `FMULP ST3` makes `r * k` and `FMULP ST2` multiplies it by 0.6: the sum is
+        // `(1 - k) * 0.6 + (r * k) * 0.6` in extended precision (0.6 is the double `010290b8`,
+        // the float widened), rounded to a float once.
+        let blend = f64::from(0.6f32);
+        let tau = ((1.0 - f64::from(tau_ratio)) * blend
+            + (f64::from(r) * f64::from(tau_ratio)) * blend) as f32;
         self.tau = tau;
         self.damp_div_tau = self.damping / tau;
         self.tau_div_damp = tau / self.damping;
@@ -1243,6 +1249,19 @@ mod tests {
         assert_eq!(s.num_steps, 2);
         // Friction tau isn't refreshed.
         assert_eq!(s.friction_tau, 0.3);
+    }
+
+    /// 00c66aa7 is `DC CA`: the blend is `(1 - k) * 0.6 + (r * k) * 0.6` (0.6 the double
+    /// `010290b8`) summed in extended precision and rounded to a float once. With k = 0.05f
+    /// and r = 0.15f (the step is `0.15 * MAX_TIME`): `(1 - 0.05f) * 0.6f + (0.15f * 0.05f)
+    /// * 0.6f` = 0.574500024..., the float 0x3f13126f; float arithmetic step by step with
+    /// `0.6 * k * r` (the decompiler's reading) gives 0x3f13126e.
+    #[test]
+    fn tau_blend_follows_the_exe_operation_order() {
+        let mut s = SolverInfo::new();
+        s.scale(0.15f32 * MAX_TIME, 0.05);
+        assert_eq!(s.num_steps, 2);
+        assert_eq!(s.tau.to_bits(), 0x3f13_126f);
     }
 
     #[test]
