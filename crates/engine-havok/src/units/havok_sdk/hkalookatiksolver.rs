@@ -407,15 +407,19 @@ fn solve_in_frame(
         let root_bits = x87_store32(gap_root);
         let squared_root = x87_store32(x87_mul(x87_load32(root_bits), x87_load32(root_bits)));
         // The x87 expression over the squared distance `l`, the squared root `s` and the
-        // squared ratio `t`: `((((l*l + (k*l*s*t - s*l)) + l*t) + s*s) + t*t)`.
+        // squared ratio `t` (00ce0a3d..00ce0a7d): `((((l*l + (k*s*t - s*(k*l))) + (k*l)*t) + s*s)
+        // + t*t)`. 00ce0a49 is `DC C9`, `FMUL ST(1),ST(0)`: `k*l` goes to ST1 and `k` stays on
+        // top for `k*s` (00ce0a59); Ghidra lists it as `FMUL ST1` like the `D8` form, and reading
+        // it as `ST0 *= ST1` once gave the head a roll of 78 degrees where the exe has 13.
         let factor: f64 = e.global(ROLL_FIRST_FACTOR);
         let l = x87_load32(squared_distance);
         let s = x87_load32(squared_root);
         let t = x87_load32(squared_ratio);
-        let product = x87_mul(x87_mul(x87_mul(factor, l), s), t);
-        let difference = x87_sub(product, x87_mul(s, l));
+        let scaled_distance = x87_mul(l, factor);
+        let product = x87_mul(x87_mul(factor, s), t);
+        let difference = x87_sub(product, x87_mul(s, scaled_distance));
         let sum = x87_add(x87_mul(l, l), difference);
-        let sum = x87_add(x87_mul(l, t), sum);
+        let sum = x87_add(x87_mul(scaled_distance, t), sum);
         let sum = x87_add(sum, x87_mul(s, s));
         let total = x87_add(x87_mul(t, t), sum);
         let total_bits = x87_store32(total);
@@ -963,11 +967,12 @@ mod solve_tests {
         // The swing is nothing (the direction is the forward axis). Near nothing: the
         // `RSQRTSS` estimate differs between CPU makers, so the cosine can land an ulp below 1.
         assert!(f32::from_bits(turns[0][2]).abs() < 1e-3);
-        // The roll: distance 3 (squared 9), ratio 1 (squared 1), s = sqrt(8), the polynomial
-        // with a zero first factor gives 83 and `acos(ratio / (sqrt(83) / s))` is the angle.
+        // The roll: distance 3 (squared 9), ratio 1 (squared 1), root sqrt(8) (squared 8), the
+        // polynomial with a zero first factor gives 81 + 64 + 1 = 146 and
+        // `acos(ratio / (sqrt(146) / root))` is the angle.
         let roots = calls(&r.seen, CRT_SQUARE_ROOT);
         assert_eq!(roots.len(), 2);
-        let expected = (1.0f64 / (83.0f64.sqrt() / 8.0f64.sqrt())).acos();
+        let expected = (1.0f64 / (146.0f64.sqrt() / 8.0f64.sqrt())).acos();
         let angle = f64::from(f32::from_bits(turns[1][2]));
         assert!(
             (angle + expected).abs() < 1e-3,
@@ -995,5 +1000,63 @@ mod solve_tests {
         assert_eq!(turns.len(), 2);
         assert!(calls(&r.seen, HK_ARC_COSINE).is_empty());
         assert_eq!(f32::from_bits(turns[1][2]), -0.0);
+    }
+}
+
+/// The solver on a call the real game made, with the exe's own constants (`NV_EXE`).
+#[cfg(test)]
+mod recorded {
+    /// Little-endian words from a recording's hex dump.
+    fn words(hex: &str) -> Vec<u32> {
+        (0..hex.len() / 8)
+            .map(|i| {
+                u32::from_be_bytes(
+                    u32::from_str_radix(&hex[i * 8..i * 8 + 8], 16)
+                        .unwrap()
+                        .to_le_bytes(),
+                )
+            })
+            .collect()
+    }
+
+    /// Doc's first head look in the opening (real game, nv-trace `opening-1`, the first call of
+    /// 00ce0290 from 00c78d0e): setup, target, gain 1, the head bone's model transform, no limits.
+    /// The real game answered 1 and turned the bone's rotation a little; the port is expected to
+    /// give the same rotation.
+    #[test]
+    fn doc_s_first_look_turns_the_head_as_in_the_real_game() {
+        let Ok(path) = std::env::var("NV_EXE") else {
+            return;
+        };
+        let mut e = engine_core::Engine::with_exe(std::path::Path::new(&path)).unwrap();
+        let setup = e.mem.alloc(0x40);
+        let target = e.mem.alloc(0x10);
+        let bone = e.mem.alloc(0x20);
+        let result = e.mem.alloc(4);
+        for (at, hex) in [
+            (setup, "1f8b3a3bbcff7f3f031cc335e0ff7fbf8c97a43fbb745b3f00000000000000006d8a413d0b5e733f3aff9cbef3c562bf920a863fe07ccd1a80fe9812d0fd9812"),
+            (target, "44a20e3f25a0cb40804434410d961fc0"),
+            (bone, "4ff51c3eb02f0a3f3ae23641304d5e3e90182bbd547736bf94465b3daeb7323f"),
+        ] {
+            for (i, w) in words(hex).into_iter().enumerate() {
+                e.mem.set_u32(at + 4 * i as u32, w);
+            }
+        }
+        e.call(
+            0x00ce_0290,
+            &engine_core::args![result, setup, target, 1.0f32, bone, 0u32],
+        );
+        assert_eq!(e.mem.u8(result), 1);
+        let got: Vec<f32> = (0..4).map(|i| e.mem.f32(bone + 0x10 + 4 * i)).collect();
+        let want: Vec<f32> = words("846feabd600b35bfd539833df2d9313f")
+            .into_iter()
+            .map(f32::from_bits)
+            .collect();
+        for lane in 0..4 {
+            assert!(
+                (got[lane] - want[lane]).abs() < 1e-5,
+                "{got:?} against {want:?}"
+            );
+        }
     }
 }
