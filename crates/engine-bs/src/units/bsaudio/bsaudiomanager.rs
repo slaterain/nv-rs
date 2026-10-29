@@ -7289,7 +7289,7 @@ mod tests {
     #[test]
     fn constructor_sets_the_vtables_and_initial_state() {
         let mut e = engine();
-        e.clock_ms = 4321;
+        e.clock_ms = 4250;
         e.register(VECTOR_CONSTRUCTOR_ITERATOR, |_, _| ret(0));
         e.register(MESSAGE_STACK_CONSTRUCTOR, |_, _| ret(0));
         e.register(MAP_CONSTRUCTOR_SOUND_LIST, |_, _| ret(0));
@@ -7328,7 +7328,7 @@ mod tests {
         assert_eq!(e.get(this, BSAudioManager::iMessageListIndex), 0);
         assert_eq!(e.get(this, BSAudioManager::iMessageProcessingListIndex), 1);
         assert_eq!(e.get(this, BSAudioManager::iNextID), 1);
-        assert_eq!(e.get(this, BSAudioManager::iDelayTimerDelta), 4321);
+        assert_eq!(e.get(this, BSAudioManager::iDelayTimerDelta), 4250);
         assert_eq!(e.get(this, BSAudioManager::fMasterVolume), 0.0);
         assert_eq!(e.get(this, BSAudioManager::fRadioSecondaryVolume), 0.0);
         assert_eq!(e.get(this, BSAudioManager::pUpdateThread), 0);
@@ -9917,11 +9917,11 @@ mod tests {
         assert_eq!(w.f.e.mem.u32(sound + SOUND_STATE_FLAGS) & 0x200, 0);
         assert_eq!(w.f.messages()[1], plain(15, 4, 0, 0));
         // A start time of 0 means "now" and the end is a duration.
-        w.f.e.clock_ms = 100;
+        w.f.e.clock_ms = 125;
         let message = fake_message(&mut w.f.e, [9, 4, 0, 300], [0.0; 3]);
         w.f.call(0x00adf080, &[message.addr()]);
-        assert_eq!(w.f.e.mem.u32(message.addr() + 8), 100);
-        assert_eq!(w.f.e.mem.u32(message.addr() + 0xc), 400);
+        assert_eq!(w.f.e.mem.u32(message.addr() + 8), 125);
+        assert_eq!(w.f.e.mem.u32(message.addr() + 0xc), 425);
     }
 
     #[test]
@@ -10068,7 +10068,7 @@ mod tests {
     #[test]
     fn mute_all_of_type_fades_or_mutes_matching_sounds() {
         let mut w = world();
-        w.f.e.clock_ms = 100;
+        w.f.e.clock_ms = 125;
         let steps = Rc::new(RefCell::new(Vec::new()));
         let log = steps.clone();
         w.f.e.register_double(SOUND_ENVIRONMENT_STEP, move |_, a| {
@@ -10085,7 +10085,7 @@ mod tests {
         assert_eq!(w.sounds.calls(SOUND_SLOT_SET_VOLUME).len(), 1);
         // With a duration and a gate over 5000 the sound is faded out.
         send(&mut w, [24, 6000, 0x4, 200], [0.0; 3]);
-        assert_eq!(w.f.messages(), vec![plain(9, 4, 100, 300)]);
+        assert_eq!(w.f.messages(), vec![plain(9, 4, 125, 325)]);
         // With a duration and a gate of 5000 or less nothing happens.
         send(&mut w, [24, 5000, 0x4, 200], [0.0; 3]);
         assert_eq!(w.f.messages().len(), 1);
@@ -10094,7 +10094,7 @@ mod tests {
     #[test]
     fn unmute_all_of_type_fades_in_or_unmutes() {
         let mut w = world();
-        w.f.e.clock_ms = 100;
+        w.f.e.clock_ms = 125;
         let steps = Rc::new(RefCell::new(Vec::new()));
         let log = steps.clone();
         w.f.e.register_double(SOUND_ENVIRONMENT_STEP, move |_, a| {
@@ -10107,7 +10107,7 @@ mod tests {
         assert_eq!(w.f.e.get(w.f.this, BSAudioManager::iMuteMask), 0x2);
         assert_eq!(*steps.borrow(), vec![vec![matching, 0]]);
         send(&mut w, [25, 0, 0x4, 200], [0.0; 3]);
-        assert_eq!(w.f.messages(), vec![plain(11, 4, 100, 300)]);
+        assert_eq!(w.f.messages(), vec![plain(11, 4, 125, 325)]);
     }
 
     #[test]
@@ -11378,7 +11378,7 @@ mod tests {
         e.call(0x00ae75f0, &args![stack, spare]);
         assert!(deleted.borrow().is_empty());
         assert_eq!(e.get(stack, AudioMessageStack::iCount), 0x202);
-        e.clock_ms = 1101;
+        e.clock_ms = 1125;
         let doomed = e.mem.alloc(0x20);
         e.call(0x00ae75f0, &args![stack, doomed]);
         assert_eq!(*deleted.borrow(), vec![doomed]);
@@ -11392,10 +11392,10 @@ mod tests {
         let stack: Ptr<AudioMessageStack> = e.new_object();
         e.set(stack, AudioMessageStack::bBottomless, true);
         e.register(MESSAGE_CONSTRUCTOR, |_, a| ret(a[0]));
-        e.clock_ms = 4242;
+        e.clock_ms = 4250;
         let made = e.call(0x00ae76b0, &args![stack]).u32();
         assert_ne!(made, 0);
-        assert_eq!(e.get(stack, AudioMessageStack::iTimeLastAllocated), 4242);
+        assert_eq!(e.get(stack, AudioMessageStack::iTimeLastAllocated), 4250);
         // Not bottomless and empty: nothing.
         e.set(stack, AudioMessageStack::bBottomless, false);
         assert_eq!(e.call(0x00ae76b0, &args![stack]).u32(), 0);
