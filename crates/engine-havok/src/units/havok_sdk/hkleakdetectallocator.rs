@@ -118,10 +118,15 @@ pub fn hk_leak_detect_allocator_danger(
 
 // Translated from 00d5ee60 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkLeakDetectAllocator::getMemoryStatistics` (Xbox PDB, virtual slot `0x28`): jumps to slot
-/// `0x28` of the wrapped allocator (`+0x30`) with no stack words. Answers that call's `EAX`.
-pub fn hk_leak_detect_allocator_get_memory_statistics(e: &mut Engine, this: Ptr) -> u32 {
+/// `0x28` of the wrapped allocator (`+0x30`), passing its one stack word (the statistics) on:
+/// the slot ends in `RET 4` (`00a89af0`). Answers that call's `EAX`.
+pub fn hk_leak_detect_allocator_get_memory_statistics(
+    e: &mut Engine,
+    this: Ptr,
+    stats: u32,
+) -> u32 {
     let child = e.mem.u32(this.addr() + 0x30);
-    e.vcall(child, 0x28, &args![]).u32()
+    e.vcall(child, 0x28, &args![stats]).u32()
 }
 
 // Translated from 00d5ee70 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -484,7 +489,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d5ee60,
-            hk_leak_detect_allocator_get_memory_statistics(Ptr) -> u32
+            hk_leak_detect_allocator_get_memory_statistics(Ptr, u32) -> u32
         ),
         entry!(
             0x00d5ee70,
@@ -852,7 +857,7 @@ mod tests {
     fn the_wrapped_allocator_questions_are_passed_on() {
         let (mut e, _) = engine();
         let (object, _) = allocator(&mut e, false);
-        assert_eq!(e.call(0x00d5_ee60, &args![object]).u32(), 0x5151);
+        assert_eq!(e.call(0x00d5_ee60, &args![object, 0x44u32]).u32(), 0x5151);
         assert_eq!(
             e.call(0x00d5_ee70, &args![object, 0x9000u32, 0x20u32])
                 .u32(),

@@ -137,10 +137,10 @@ pub fn hkp_transform_agent_calc_content_statistics(
 
 // Translated from 00d42a00 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpTransformAgent::invalidateTim` (Xbox PDB): jumps to slot `0x24` of the child agent held
-/// at `+0xC` (no arguments).
-pub fn hkp_transform_agent_invalidate_tim(e: &mut Engine, this: Ptr) {
+/// at `+0xC`, passing its one stack word on (the slot ends in `RET 4`: the base `00d9fca0`).
+pub fn hkp_transform_agent_invalidate_tim(e: &mut Engine, this: Ptr, word: u32) {
     let child = e.mem.u32(this.addr() + 0xc);
-    e.vcall(child, 0x24, &args![]);
+    e.vcall(child, 0x24, &args![word]);
 }
 
 // Translated from 00d42a10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -164,26 +164,26 @@ pub fn hkp_transform_agent_warp_time(
 
 // Translated from 00d42a40 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpTransformAgent::removePoint` (Xbox PDB): jumps to slot `0x2C` of the child agent held
-/// at `+0xC` (no arguments).
-pub fn hkp_transform_agent_remove_point(e: &mut Engine, this: Ptr) {
+/// at `+0xC`, passing its one stack word on (the slot ends in `RET 4`: the base `00d9fcc0`).
+pub fn hkp_transform_agent_remove_point(e: &mut Engine, this: Ptr, word: u32) {
     let child = e.mem.u32(this.addr() + 0xc);
-    e.vcall(child, 0x2c, &args![]);
+    e.vcall(child, 0x2c, &args![word]);
 }
 
 // Translated from 00d42a50 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpTransformAgent::commitPotential` (Xbox PDB): jumps to slot `0x30` of the child agent
-/// held at `+0xC` (no arguments).
-pub fn hkp_transform_agent_commit_potential(e: &mut Engine, this: Ptr) {
+/// held at `+0xC`, passing its one stack word on (the slot ends in `RET 4`: the base `00d9fcd0`).
+pub fn hkp_transform_agent_commit_potential(e: &mut Engine, this: Ptr, word: u32) {
     let child = e.mem.u32(this.addr() + 0xc);
-    e.vcall(child, 0x30, &args![]);
+    e.vcall(child, 0x30, &args![word]);
 }
 
 // Translated from 00d42a60 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpTransformAgent::createZombie` (Xbox PDB): jumps to slot `0x34` of the child agent held
-/// at `+0xC` (no arguments).
-pub fn hkp_transform_agent_create_zombie(e: &mut Engine, this: Ptr) {
+/// at `+0xC`, passing its one stack word on (the slot ends in `RET 4`: the base `00d9fce0`).
+pub fn hkp_transform_agent_create_zombie(e: &mut Engine, this: Ptr, word: u32) {
     let child = e.mem.u32(this.addr() + 0xc);
-    e.vcall(child, 0x34, &args![]);
+    e.vcall(child, 0x34, &args![word]);
 }
 
 /// The body of the two creation functions (`00d42a70`, `00d43030`): allocates the 16-byte
@@ -628,14 +628,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00d429e0,
             hkp_transform_agent_calc_content_statistics(Ptr, Ptr, u32)
         ),
-        entry!(0x00d42a00, hkp_transform_agent_invalidate_tim(Ptr)),
+        entry!(0x00d42a00, hkp_transform_agent_invalidate_tim(Ptr, u32)),
         entry!(
             0x00d42a10,
             hkp_transform_agent_warp_time(Ptr, f32, f32, u32)
         ),
-        entry!(0x00d42a40, hkp_transform_agent_remove_point(Ptr)),
-        entry!(0x00d42a50, hkp_transform_agent_commit_potential(Ptr)),
-        entry!(0x00d42a60, hkp_transform_agent_create_zombie(Ptr)),
+        entry!(0x00d42a40, hkp_transform_agent_remove_point(Ptr, u32)),
+        entry!(0x00d42a50, hkp_transform_agent_commit_potential(Ptr, u32)),
+        entry!(0x00d42a60, hkp_transform_agent_create_zombie(Ptr, u32)),
         entry!(0x00d42a70, fn_00d42a70(Ptr, Ptr, Ptr, u32) -> Ptr),
         entry!(
             0x00d42b50,
@@ -923,7 +923,9 @@ mod tests {
     }
 
     #[test]
-    fn forwarders_jump_to_the_child_slot_without_arguments() {
+    fn forwarders_jump_to_the_child_slot_with_their_word() {
+        // Each jump hands its one stack word on: the slots end in RET 4 (00d9fca0, 00d9fcc0,
+        // 00d9fcd0, 00d9fce0).
         for (address, slot) in [
             (0x00d4_2a00, 0x24),
             (0x00d4_2a40, 0x2c),
@@ -931,8 +933,8 @@ mod tests {
             (0x00d4_2a60, 0x34),
         ] {
             let mut r = rig();
-            r.e.call(address, &args![r.this]);
-            assert_eq!(calls(&r.log, CHILD + slot), vec![vec![r.child]]);
+            r.e.call(address, &args![r.this, 0x77u32]);
+            assert_eq!(calls(&r.log, CHILD + slot), vec![vec![r.child, 0x77]]);
         }
     }
 
