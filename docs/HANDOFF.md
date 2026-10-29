@@ -1,4 +1,4 @@
-# Handoff: engine port push (updated 2026-10-27)
+# Handoff: engine port push (updated 2026-10-29)
 
 For the next Claude session leading the nv-rs engine port. Read AGENTS.md,
 docs/MILESTONES.md, docs/ENGINE_PORT_PLAN.md, docs/FRAME_SKELETON.md and
@@ -7,7 +7,27 @@ machinery runs.
 
 ## Resume here
 
-### Claude lead, 2026-10-26/27 (current; read this first, then 2026-10-23/24 below)
+### Claude lead, 2026-10-28/29 (current; read this first, then 2026-10-26/27 below)
+
+**This PR brings the play branch's work since #251 to main** (play commits after 3d9900fd, replayed on main; the race-menu file was merged by hand onto #248's exe-shaped frames). After it, reset the play branch (`claude/build43-movement`, private `wt-build43`) onto main: the play builds up to p205 did **not** have #248's changes to the files it and the play branch both touched (they were merged only on main), nor `GetFullPathNameA` in the platform layer.
+
+**What the play build does now (Windows, `NV_D3D9=real NV_SOUND=out`):** new game, Doc Mitchell's house, the opening speech, the name box, getting up from the bed, the race menu; the port's own saves load back (`NV_SAVE_OUT` copies them to a scratch folder). Sound matches the player's DirectSound bit for bit (both resamplers, the 3D stage, distortion; docs/SOUND.md); the maintainer wants sound exact, never approximate. Frame rate: 1:1 is the game's own limiter (about 133 fps here); `NV_UNCAP=1` (opt-in, not 1:1, `crates/host/src/uncap.rs`) removes it, and the maintainer's goal is 200+ fps in the same scenes. With `NV_D3D9=real` the viewer's own window is hidden and the game frame runs beside Bevy's (`NV_VIEWER_WINDOW=1`, `NV_GAME_FRAME_SYNC=1` give the old behaviour). `GetTickCount` moves in 15.625 ms steps, as measured here.
+
+**Fixes this round (each against the exe):** the lip-sync and render-pass freezes (00553bb0's 0x24 local, 00518f00's 0x18 DoorLock), the Havok GSK manifold (00dae3a0) and capsule-triangle agent frame, the bed freeze (006f9850 returns its EAX), the save load (004c77d3's slot word), stretched heads (hkaPose local-from-model), speech pacing (00935f00 callback), BSAudio message 56's vector address, process-list slots, GetLocalTime, the race-menu frustum near/far (007fd194, 007fdd9b: left at 0 the far plane culled every face light), and the device passed once as the COM `this` (00876924, 0086b3a6).
+
+**Diagnostics (all env-gated, not exe behaviour):** `NV_HKMEM_CHECK`, `NV_SPEECH_CHECK`, `NV_PASS_CHECK`, `NV_LIGHT_CHECK`, `NV_QUEUE_CHECK`, `NV_FACE_CHECK`, `NV_HEAD_CHECK`, `NV_BLOCK_CHECK` (guard bytes after heap blocks and `with_stack` locals: the fastest way to find an undersized local), `NV_AUDIO_CHECK`, `NV_PROFILE` (+`_THREADS`), `NV_SHOT=DIR[,ms]` (BMPs of the real back buffer: use these, not screen copies, for screenshots; a screen copy once caught the old viewer window), `NV_TRACE_OUT`/`NV_TRACE_LIST` (the port's call trace).
+
+**research/nv-trace (new):** records the real FalloutNV.exe (a recorder DLL, DirectInput key scripts, the folder guard, PrintWindow shots checked by PID) and the port, then diffs the calls (`nv-trace diff`) or the Direct3D 9 calls draw by draw (`nv-trace d3d REAL PORT`). Never write into the player's folders; the launcher uses scratch INI copies.
+
+**Next, in order:**
+1. **Race menu too dark** (the maintainer's open report). The D3D diff (private `agents/wt-a27/rec/d3d-racemenu-1/diff-vs-p204e.txt`) shows: the reflectron and plate draw with 0-point-light shader permutations where the real game has 3 point lights (c4..c6, radius 81.99) and emittance; the port's three lights have radius 40.99 and the light vector in vs c25 is twice as long, so the menu model's world scale looks halved (fRaceSexMenuScale and Initialize's radius are ruled out; next: dump the menu node's local and world scale and its parent chain in both runs). The head and body are never lit: the real game draws them into a 1280x720 multisampled render target in 6 passes plus a distortion pass; the port never creates that target and draws the head once, unlit, into 1024x1024. The see-through skin and shininess the maintainer saw may be the same cause.
+2. Post-load sound stop (intermittent; 00af1cc0/00aee580): run with `NV_AUDIO_CHECK=1` until it happens.
+3. The `SStartingCell` INI route stops at frame 0 (00a0cb90).
+4. 004b0680 writes past a 0xc block (`NV_BLOCK_CHECK`; probably harmless, unconfirmed).
+
+**Machinery (private):** `build43-scratch/brf2.sh TAG` builds the play viewer (`VB_LLD=1` links with rust-lld), `rm.sh TAG [secs]` runs the save-138 route into the race menu in about 75 s (scratch Documents in `docs-save138`), `ngdbg2.sh` runs under cdb without the debug heap. `crates/play-patch` is the fast loop for a single fix (host + link only). Every compile goes through `phase0/bin/heavy2.sh`.
+
+### Claude lead, 2026-10-26/27 (read this after 2026-10-28/29, then 2026-10-23/24 below)
 
 **Update, 2026-10-27 afternoon (read first):** this PR collects the fixes found by running the game's own code through the new game into Doc Mitchell's house: words pushed for the wrong call (SetCurrentWeapon in 0094e1d0, the obstacle walks, MoveTo, NavMesh::GetCenter's argument order, a vcall sweep), 65 Havok functions that return the out pointer or `this` their callers read through EAX (hkpEntity::isActive crashed the cell load), stack locals moved from heap blocks into exe-shaped frames (about 400 functions, with `_alloca16` tables), dropped return values, and clippy cleanups. On the play branch (not in this PR yet): the game's own renderer draws through the real Direct3D 9 in its own window (ADR-0008, `NV_D3D9=real`; loading screen, intro, main menu, new-game loading screen), sound to the real device (`NV_SOUND=out`), the thread host's time slice and real-time sleeps, input from the game window, D3DX maths bit-exact and the shader compiler through the player's DLL, and the functions Ghidra never created that the render path reaches. The next play-to-main merge brings those.
 
