@@ -2978,9 +2978,13 @@ pub mod audio_check {
         mode() == Mode::Full
     }
 
+    /// The frees counted so far, and the latest free of each block: its number, thread and exe
+    /// frames.
+    type Frees = (u64, HashMap<u32, (u64, u32, Vec<u32>)>);
+
     /// The latest free of each block (`Engine::free_hook`): its number, thread and exe frames.
-    fn frees() -> std::sync::MutexGuard<'static, (u64, HashMap<u32, (u64, u32, Vec<u32>)>)> {
-        static FREES: OnceLock<Mutex<(u64, HashMap<u32, (u64, u32, Vec<u32>)>)>> = OnceLock::new();
+    fn frees() -> std::sync::MutexGuard<'static, Frees> {
+        static FREES: OnceLock<Mutex<Frees>> = OnceLock::new();
         FREES
             .get_or_init(Default::default)
             .lock()
