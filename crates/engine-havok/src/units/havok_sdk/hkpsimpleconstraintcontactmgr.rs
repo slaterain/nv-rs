@@ -149,12 +149,24 @@ pub fn hkp_simple_constraint_contact_mgr_reserve_contact_points_impl(
 
 // Translated from 00cfccb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpSimpleConstraintContactMgr::toiCollisionResponseBeginCallback` (Xbox PDB): a jump to
-/// slot `0x40` of the object embedded at `this + 0x14`, with that object as `this`.
+/// slot `0x40` of the object embedded at `this + 0x14`, with that object as `this`
+/// (`00cfccb9: JMP EAX`). The jump hands the slot its own five stack words: the slot
+/// (`hkpSimpleContactConstraintData::collisionResponseBeginCallback`, `00d92830`) ends in
+/// `RET 0x14`.
 pub fn hkp_simple_constraint_contact_mgr_toi_collision_response_begin_callback(
     e: &mut Engine,
     this: Ptr,
+    word_1: u32,
+    word_2: u32,
+    word_3: u32,
+    word_4: u32,
+    word_5: u32,
 ) {
-    e.vcall(this.addr() + 0x14, 0x40, &args![]);
+    e.vcall(
+        this.addr() + 0x14,
+        0x40,
+        &args![word_1, word_2, word_3, word_4, word_5],
+    );
 }
 
 // Translated from 00cfccc0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1180,7 +1192,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00cf_cc70, hkp_simple_constraint_contact_mgr_reserve_contact_points_impl(Ptr, u32) -> u32),
         entry!(
             0x00cf_ccb0,
-            hkp_simple_constraint_contact_mgr_toi_collision_response_begin_callback(Ptr)
+            hkp_simple_constraint_contact_mgr_toi_collision_response_begin_callback(
+                Ptr, u32, u32, u32, u32, u32
+            )
         ),
         entry!(
             0x00cf_ccc0,
@@ -1424,7 +1438,8 @@ mod tests {
         let log = new_log();
         log_calls(&mut e, 0x0900_0040, &log);
         log_calls(&mut e, 0x0900_0044, &log);
-        e.call(0x00cf_ccb0, &args![this]);
+        // The begin callback's jump passes its five stack words on (00d92830: RET 0x14).
+        e.call(0x00cf_ccb0, &args![this, 11u32, 12u32, 13u32, 14u32, 15u32]);
         e.call(
             0x00cf_ccc0,
             &args![this, 1u32, 1.5f32, 3u32, 4u32, 5u32, 6u32],
@@ -1444,7 +1459,7 @@ mod tests {
         assert_eq!(
             *log.borrow(),
             vec![
-                vec![0x0900_0040, this + 0x14],
+                vec![0x0900_0040, this + 0x14, 11, 12, 13, 14, 15],
                 vec![0x0900_0044, this + 0x14, 1, 1.5f32.to_bits(), 3, 4, 5, 6],
                 vec![0x0900_0044, this + 0x14, 1, 0x7fc0_0001, 3, 4, 5, 6],
             ]
