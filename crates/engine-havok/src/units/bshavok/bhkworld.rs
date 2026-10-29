@@ -593,20 +593,54 @@ pub fn bhk_world_scale_solver_info(e: &mut Engine, this: Ptr) {
         e.vcall(this.addr(), 0x94, &[]).u32()
     };
     if e.global::<u32>(MODE) != 2 {
-        let quotient = e.global::<f32>(STEP_SIZE) as f64 / e.global::<f32>(FREQUENCY) as f64;
-        let scaled = ((quotient * e.global::<f64>(0x0101_db80)) as f32)
-            .max(e.global::<f64>(0x0101_1590) as f32);
-        let step_count = e.call(0x00ec_62c0, &args![scaled as f64]).i32();
+        // 00c66a28..00c66a38: `FLD step; FDIV frequency; FSTP [ratio]`, then `FLD [ratio]` stays
+        // on the x87 stack to the end of the branch (`ftol` pops only its own argument): it is
+        // the `t` of the tau blend below. The decompiler shows it as the value left in ST0 by
+        // the `ftol` call, which is the step over the frequency, not the clamped step count's
+        // float.
+        let ratio_bits = x87_store32(x87_div(
+            x87_load32(e.global::<u32>(STEP_SIZE)),
+            x87_m32(e.global::<u32>(FREQUENCY)),
+        ));
+        let ratio = x87_load32(ratio_bits);
+        // 00c66a3c..00c66a5b: `FLD 4.0; FMUL ST1` (D8), the product stored and reloaded, kept
+        // unless it is below the double 2.0 (`FCOM`, `TEST AH,5; JP`), which the float 2.0 at
+        // `010162c0` then replaces.
+        let fourfold = x87_load32(x87_store32(x87_mul(ratio, e.global::<f64>(0x0101_db80))));
+        let wanted = if fourfold < e.global::<f64>(0x0101_1590) {
+            x87_load32(e.global::<u32>(0x0101_62c0))
+        } else {
+            fourfold
+        };
+        let wanted = x87_load32(x87_store32(wanted));
+        let step_count = e.call(0x00ec_62c0, &args![wanted]).i32();
         e.mem.set_i32(world + 0x2f4, step_count);
-        e.mem.set_f32(world + 0x300, 1.0 / step_count as f32);
-        let original_tau = e.global::<f32>(ORIGINAL_TAU);
+        e.mem.set_u32(
+            world + 0x300,
+            x87_store32(x87_div(1.0, f64::from(step_count))),
+        );
+        let original_tau = x87_store32(x87_load32(e.global::<u32>(ORIGINAL_TAU)));
         e.set_global(TAU, original_tau);
-        let blend = scaled as f64;
-        let tau = ((1.0 - original_tau as f64) * 0.6 + 0.6 * original_tau as f64 * blend) as f32;
-        e.mem.set_f32(world + 0x1e4, tau);
-        let damping = e.mem.f32(world + 0x1e8);
-        e.mem.set_f32(world + 0x230, damping / tau);
-        e.mem.set_f32(world + 0x234, tau / damping);
+        // 00c66a97..00c66aaf: `FLD [tau]; FLD ST0; FSUBP` leaves `1 - g`; `FLD 0.6; FMUL ST2` is
+        // `DC CA`: `(1 - g) * 0.6` goes to ST2 and 0.6 stays on top; `FMULP ST3` makes `t * g` and
+        // `FMULP ST2` multiplies it by 0.6; `FADDP` sums: `(1 - g) * 0.6 + (t * g) * 0.6`.
+        let g = x87_load32(e.global::<u32>(TAU));
+        let k = e.global::<f64>(0x0102_90b8);
+        let blended = x87_add(x87_mul(x87_sub(1.0, g), k), x87_mul(x87_mul(ratio, g), k));
+        let tau_bits = x87_store32(blended);
+        e.mem.set_u32(world + 0x1e4, tau_bits);
+        // `FLD [tau]` and `FDIV ST0,ST1` with the damping: `damping / tau`; then
+        // `FDIV float [damping]`: `tau / damping`.
+        let tau = x87_load32(tau_bits);
+        let damping_bits = e.mem.u32(world + 0x1e8);
+        e.mem.set_u32(
+            world + 0x230,
+            x87_store32(x87_div(x87_load32(damping_bits), tau)),
+        );
+        e.mem.set_u32(
+            world + 0x234,
+            x87_store32(x87_div(tau, x87_m32(damping_bits))),
+        );
         return;
     }
 
@@ -4898,13 +4932,30 @@ mod tests {
         e.set_global(0x011a_fe60, 0.5f32);
         e.set_global(0x0101_db80, 4.0f64);
         e.set_global(0x0101_1590, 2.0f64);
-        e.register_double(0x00ec_62c0, move |_, _| ret(2));
+        e.set_global(0x0101_62c0, 2.0f32);
+        // The double 0.6 the blend multiplies by (`010290b8`): the float 0.6 widened.
+        e.set_global(0x0102_90b8, f64::from(0.6f32));
+        // `ftol` is handed the clamped `4 * step / frequency`: 2.0 here.
+        e.register_double(0x00ec_62c0, move |_, a| {
+            assert_eq!(f64::from_bits(u64::from(a[1]) << 32 | u64::from(a[0])), 2.0);
+            ret(2)
+        });
         e.mem.set_f32(world + 0x1e8, 0.75);
         e.call(0x00c6_6a00, &args![bhk]);
         assert_eq!(e.mem.i32(world + 0x2f4), 2);
         assert_eq!(e.mem.f32(world + 0x300), 0.5);
         assert_eq!(e.global::<f32>(0x0126_7b50), 0.5);
-        assert_eq!(e.mem.f32(world + 0x1e4), 0.9);
+        // The exe (00c66a97..00c66aaf, `DC CA` at 00c66aa7) blends `(1 - g) * 0.6 + (t * g) * 0.6`
+        // with `g` = 0.5 and `t` = the step over the frequency = 0.5, left on the x87 stack by
+        // the first half of the function: 0.75 * 0.6f, which is exactly the float
+        // 0.4500000179. (Reading `t` as the clamped step count's float 2.0, as the decompiler's
+        // `ftol` result suggests, gave 0.9.)
+        let expected = (0.75 * f64::from(0.6f32)) as f32;
+        assert_eq!(expected, 0.450_000_02f32);
+        assert_eq!(e.mem.f32(world + 0x1e4), expected);
+        // Damping over tau and tau over damping (`FDIV ST0,ST1`, `FDIV float [damping]`).
+        assert!((e.mem.f32(world + 0x230) - 0.75 / expected).abs() < 1e-6);
+        assert!((e.mem.f32(world + 0x234) - expected / 0.75).abs() < 1e-6);
     }
 
     #[test]
