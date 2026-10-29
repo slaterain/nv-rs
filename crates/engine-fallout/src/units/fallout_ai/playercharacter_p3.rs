@@ -1732,13 +1732,14 @@ fn create_mouse_spring_in_frame(
 ) {
     let obj = object.addr();
     let option = e.call(SETTING_BOOL_POINTER, &args![SETTING_011E0B1C]).u32();
-    if e.mem.u8(option) == 0 {
-        if !e.vcall(obj, 0x100, &args![]).bool() {
-            return;
-        }
-        if !e.vcall(obj, 0x22c, &args![0u32]).bool() {
-            return;
-        }
+    // 0095f981..0095f9b3: with the setting off, only an object whose virtual 0x100 answers true
+    // and whose 0x22c(0) answers false is refused; 0x100 false goes on (`JZ 0x0095f9b8`), so
+    // clutter such as a paperweight is grabbed.
+    if e.mem.u8(option) == 0
+        && e.vcall(obj, 0x100, &args![]).bool()
+        && !e.vcall(obj, 0x22c, &args![0u32]).bool()
+    {
+        return;
     }
     if obj != 0
         && e.vcall(obj, 0x224, &args![]).bool()
@@ -10158,7 +10159,18 @@ mod tests {
         let option = e.mem.alloc(4);
         answer(&mut e, SETTING_BOOL_POINTER, option);
         answer(&mut e, SLOT_D, 0);
-        let target = object_with_slots(&mut e, &[(0x1d0, SLOT_A), (0x48, SLOT_B), (0x100, SLOT_D)]);
+        let target = object_with_slots(
+            &mut e,
+            &[
+                (0x1d0, SLOT_A),
+                (0x48, SLOT_B),
+                (0x100, SLOT_D),
+                (0x224, SLOT_B),
+            ],
+        );
+        e.mem.set_u32(target + 0x40, 0x8200_0000);
+        e.register_double(READ_DWORD_AT_40, |e, a| int(e.mem.u32(a[0] + 0x40)));
+        answer(&mut e, FUNCTION_004B52F0, 0);
         let body = object_with_slots(&mut e, &[(0x94, SLOT_C)]);
         answer(&mut e, SLOT_A, 0x8000_0000);
         answer(&mut e, SLOT_B, 0);
@@ -10173,8 +10185,9 @@ mod tests {
         let log = logged(&mut e, |e| {
             e.call(0x0095_f6c0, &args![player, 0.016f32]);
         });
-        // The creation call is the real one; the object is not an actor and
-        // the option is off, so it stops there.
+        // The creation call is the real one; the object is not an actor, so it goes on
+        // (0095f998), and with no rigid body under its 3D (004b52f0 null) and grab type 1 it
+        // records nothing.
         assert!(e.get(player, PlayerCharacter::pGrabbedObject).is_null());
         assert_eq!(e.mem.u8(FLAG_011E0D5C), 1);
         assert_eq!(
@@ -10224,23 +10237,41 @@ mod tests {
         (player, object, body)
     }
 
+    /// 0095f981..0095f9b3: with the setting off, an object whose virtual +0x100 answers false
+    /// (clutter: the maintainer's paperweight) goes on to the grab; one that answers +0x100 but
+    /// not +0x22c(0) is refused; one that answers both goes on.
     #[test]
-    fn mouse_spring_is_refused_without_the_option_for_a_non_actor() {
+    fn mouse_spring_without_the_option_refuses_only_what_answers_0x100_and_not_0x22c() {
         let mut e = engine(CALLEES_0095F930);
         let (player, object, _) = spring_world(&mut e);
         let option = e.mem.alloc(4);
         answer(&mut e, SETTING_BOOL_POINTER, option);
+        answer(&mut e, FUNCTION_004B52F0, 0);
         let log = logged(&mut e, |e| {
             e.call(
                 0x0095_f930,
                 &args![player, Ptr::<()>::new(object), 1u32, 5.0f32],
             );
         });
-        assert_eq!(log.len(), 3);
         assert_eq!(
             calls_to(&log, SETTING_BOOL_POINTER),
             vec![vec![SETTING_011E0B1C]]
         );
+        // The +0x100 answer is false: no +0x22c question, and the grab goes on (the object
+        // here has no body to continue with).
+        assert!(calls_to(&log, SLOT_C).iter().all(|c| c.len() == 1));
+        assert_eq!(calls_to(&log, READ_DWORD_AT_40), vec![vec![object]]);
+        // +0x100 true and +0x22c(0) false: refused before anything else.
+        let refusing = object_with_slots(&mut e, &[(0x100, SLOT_F), (0x22c, SLOT_C)]);
+        answer(&mut e, SLOT_F, 1);
+        let log = logged(&mut e, |e| {
+            e.call(
+                0x0095_f930,
+                &args![player, Ptr::<()>::new(refusing), 1u32, 5.0f32],
+            );
+        });
+        assert_eq!(calls_to(&log, SLOT_C), vec![vec![refusing, 0]]);
+        assert!(calls_to(&log, READ_DWORD_AT_40).is_empty());
         // An actor that answers the virtual +0x22c continues (and the
         // object here has no body to continue with).
         let actor = object_with_slots(
