@@ -1361,6 +1361,29 @@ fn key_script() -> &'static [(u64, u8, u64)] {
     })
 }
 
+/// `NV_MOVE_MOUSE=FRAME:DX:DY:HOLD[:BUTTONS],..` (decimal): the mouse moves by (DX, DY) on each
+/// of main's frames FRAME..FRAME+HOLD, with the buttons of the BUTTONS bit mask (bit 0 the left
+/// button) held, on top of the viewer's (a diagnostic, like `NV_MOVE_KEYS`: turns the player in
+/// a scripted run).
+fn mouse_script() -> &'static [(u64, i32, i32, u64, u8)] {
+    static SCRIPT: std::sync::OnceLock<Vec<(u64, i32, i32, u64, u8)>> = std::sync::OnceLock::new();
+    SCRIPT.get_or_init(|| {
+        std::env::var("NV_MOVE_MOUSE")
+            .unwrap_or_default()
+            .split(',')
+            .filter_map(|item| {
+                let mut part = item.trim().split(':');
+                let frame = part.next()?.parse().ok()?;
+                let dx = part.next()?.parse().ok()?;
+                let dy = part.next()?.parse().ok()?;
+                let hold = part.next().map_or(Some(1), |h| h.parse().ok())?;
+                let buttons = part.next().map_or(Some(0), |b| b.parse().ok())?;
+                Some((frame, dx, dy, hold, buttons))
+            })
+            .collect()
+    })
+}
+
 impl crate::Host {
     /// One frame of the game's own main loop when its `main` runs as the main thread
     /// ([`PlayerMovement::main_frame`]); false when it doesn't run or stopped.
@@ -1458,11 +1481,21 @@ impl crate::Host {
             .map(|&(at, _, hold)| at + hold)
             .max()
             .unwrap_or(0);
-        let (motion, buttons) = if self.movement.main_frames < scripted_until {
+        let (mut motion, mut buttons) = if self.movement.main_frames < scripted_until {
             ([0; 3], [false; 8])
         } else {
             (motion, buttons)
         };
+        let frame = self.movement.main_frames;
+        for &(at, dx, dy, hold, mask) in mouse_script() {
+            if frame >= at && frame < at + hold {
+                motion[0] += dx;
+                motion[1] += dy;
+                for (bit, held) in buttons.iter_mut().enumerate() {
+                    *held |= mask & (1 << bit) != 0;
+                }
+            }
+        }
         let e = &mut self.engine;
         engine::units::platform::dinput::mouse_move(e, motion[0], motion[1], motion[2]);
         for (button, down) in buttons.into_iter().enumerate() {
