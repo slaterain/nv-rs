@@ -395,9 +395,13 @@ fn face_mood_from_dialogue(e: &mut Engine, this: Ptr<Actor>, face: u32) {
     if busy || !e.call(INTERFACE_IN_DIALOG, &args![]).bool() {
         return;
     }
+    // 008a5acf..008a5af9: the 0 is pushed first and stays for the face call; GetActorValue
+    // (Actor's ActorValueOwner slot +8, 00880580, RET 4) takes only the 4. The face call gets
+    // (mood, 0): with one word the face data's 0064b400 (RET 8) stopped the game in Doc's
+    // dialogue (the maintainer's couch report).
     let owner = this.addr() + 0xa4;
-    let value = e.vcall(owner, 8, &args![4u32, 0u32]).u32();
-    e.vcall(face, 0x11c, &args![value]);
+    let value = e.vcall(owner, 8, &args![4u32]).u32();
+    e.vcall(face, 0x11c, &args![value, 0u32]);
 }
 
 /// The face animation data's reset call `+0xb4` with `(0.0, 1, 0, 0, 0, 0)`.
@@ -8491,7 +8495,8 @@ mod tests {
             vec![vec![w.face.addr(), 0, 1, 0, 0, 0, 0]]
         );
         // With the flag set, the interface in a dialogue and a free process:
-        // the actor value (slot +8 of the sub-object at +0xa4, with 4 and 0).
+        // the actor value (slot +8 of the sub-object at +0xa4, 00880580, RET 4: with 4), and
+        // the face gets it with the 0 pushed first (008a5acf).
         let mut w = update_world();
         w.e.set(w.actor, Actor::ePersuasionEmotion, 8);
         w.e.set_global(KNOB + 8, 1u32);
@@ -8502,11 +8507,11 @@ mod tests {
         let log = calls(&mut w.e);
         assert_eq!(
             called(&log, target(OBJECT_VT, 0x8)),
-            vec![vec![w.actor.addr() + 0xa4, 4, 0]]
+            vec![vec![w.actor.addr() + 0xa4, 4]]
         );
         assert_eq!(
             called(&log, target(OBJECT_VT, 0x11c)),
-            vec![vec![w.face.addr(), 0x55]]
+            vec![vec![w.face.addr(), 0x55, 0]]
         );
         // A busy process, or no dialogue, does nothing.
         for busy in [true, false] {
