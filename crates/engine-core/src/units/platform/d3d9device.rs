@@ -364,6 +364,7 @@ fn vtable(e: &mut Engine, base: u32, slots: usize) -> u32 {
 }
 
 /// A word of a call's arguments, as the real side (`super::d3d9real`) takes it.
+#[cfg_attr(not(windows), allow(dead_code))] // the real side is Windows only
 pub(super) trait Word: Copy {
     fn word(self) -> u32;
 }
