@@ -470,6 +470,36 @@ impl<'a> IntoIterator for &'a Words {
     }
 }
 
+/// `NV_WORD_CHECK=FILE` (a diagnostic, not exe behaviour): a call that hands a translation more
+/// words than it takes is appended to FILE once per (caller, callee, given, taken), tab-separated:
+/// the sign of words given to the wrong call (the exe's caller pushed a word for a later call),
+/// unless the callee's own `RET n` pops the extra words (a trailing word it never reads).
+#[cold]
+#[inline(never)]
+pub fn extra_words(e: &crate::Engine, callee: u32, given: usize, taken: usize) {
+    use std::io::Write;
+    type Seen = std::collections::HashSet<(u32, u32, usize, usize)>;
+    type Sink = Option<std::sync::Mutex<(std::fs::File, Seen)>>;
+    static SINK: std::sync::OnceLock<Sink> = std::sync::OnceLock::new();
+    let sink = SINK.get_or_init(|| {
+        let path = std::env::var_os("NV_WORD_CHECK")?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .ok()?;
+        Some(std::sync::Mutex::new((file, Seen::new())))
+    });
+    let Some(sink) = sink else { return };
+    let stack = &e.call_stack;
+    let caller = stack.len().checked_sub(2).map_or(0, |k| stack[k]);
+    if let Ok(mut s) = sink.lock() {
+        if s.1.insert((caller, callee, given, taken)) {
+            let _ = writeln!(s.0, "{caller:08x}\t{callee:08x}\t{given}\t{taken}");
+        }
+    }
+}
+
 /// Builds argument words: `args![this, 1.5f32, true]`.
 #[macro_export]
 macro_rules! args {
@@ -497,6 +527,9 @@ macro_rules! entry {
             #[allow(unused_mut, unused_variables)]
             let mut i = 0usize;
             let r = $($f)::+(e, $( <$t as $crate::abi::Arg>::take(a, &mut i) ),*);
+            if a.len() > i {
+                $crate::abi::extra_words(e, $addr, a.len(), i);
+            }
             $crate::abi::RetVal::into_ret(r)
         }) as $crate::abi::AbiFn)
     };
