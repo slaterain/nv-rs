@@ -2388,6 +2388,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         ),
         (
             "USER32.dll",
+            "SetWindowTextA",
+            entry!(0, window::set_window_text_a(u32, Ptr) -> u32).1,
+        ),
+        (
+            "USER32.dll",
             "SetWindowPos",
             entry!(0, window::set_window_pos(u32, u32, i32, i32, i32, i32, u32) -> u32).1,
         ),

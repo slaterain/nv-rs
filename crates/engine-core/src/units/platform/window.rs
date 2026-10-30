@@ -616,6 +616,30 @@ pub fn get_class_long_a(e: &mut Engine, handle: u32, index: i32) -> u32 {
     }
 }
 
+// Platform: replaces USER32.DLL SetWindowTextA (import)
+/// `SetWindowTextA(window, text)`: the record's title becomes the zero-terminated ANSI `text`;
+/// true (documented: nonzero on success). A handle that is no window answers `FALSE` with
+/// `ERROR_INVALID_WINDOW_HANDLE`. With the real window (`NV_D3D9=real`) its title changes too.
+/// The `WM_SETTEXT` it would send is not sent (module documentation); a null `text` (not
+/// documented) is not provided. The model loader's status (`00446cb0`) titles the window with it.
+pub fn set_window_text_a(e: &mut Engine, handle: u32, text: Ptr) -> u32 {
+    assert!(
+        !text.is_null(),
+        "SetWindowTextA with a null text is not provided"
+    );
+    let title = e.mem.cstr(text.addr());
+    let Some(w) = window(e, handle) else {
+        last_error(e, ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    };
+    w.title = title.clone();
+    #[cfg(windows)]
+    super::d3d9real::window_titled(e, handle, &title);
+    #[cfg(not(windows))]
+    let _ = title;
+    1
+}
+
 // Platform: replaces USER32.DLL SetWindowPos (import)
 /// `SetWindowPos(window, after, x, y, width, height, flags)`: moves and sizes the record
 /// (`SWP_NOSIZE` 1 and `SWP_NOMOVE` 2 honoured; the z order is not kept); true. The messages it
@@ -754,6 +778,30 @@ mod tests {
             ["a.exe", "b c", "d\\e", "f\"g", "h\"i"]
         );
         assert_eq!(strings(split_command_line(&wide_of("a.exe"))), ["a.exe"]);
+    }
+
+    /// `SetWindowTextA` titles the record and answers true; a handle that is no window answers
+    /// `FALSE` with `ERROR_INVALID_WINDOW_HANDLE` and titles nothing.
+    #[test]
+    fn set_window_text_titles_the_record() {
+        let mut e = Engine::new();
+        e.kernel.windows.windows.insert(
+            0x10,
+            Window {
+                class: 1,
+                title: b"Fallout: New Vegas".to_vec(),
+                style: 0,
+                ex_style: 0,
+                parent: 0,
+                rect: [0, 0, 640, 480],
+            },
+        );
+        let text = e.mem.alloc(32);
+        e.mem.write(text, b"Loading 12/40\0");
+        assert_eq!(set_window_text_a(&mut e, 0x10, Ptr::new(text)), 1);
+        assert_eq!(e.kernel.windows.windows[&0x10].title, b"Loading 12/40");
+        assert_eq!(set_window_text_a(&mut e, 0x99, Ptr::new(text)), 0);
+        assert_eq!(e.kernel.last_error, ERROR_INVALID_WINDOW_HANDLE);
     }
 
     #[test]

@@ -528,6 +528,18 @@ pub fn window_created(
     }
 }
 
+/// The real window takes the title the game gave its record (`SetWindowTextA`).
+pub fn window_titled(e: &mut Engine, handle: u32, title: &[u8]) {
+    let Some(window) = real_window(e, handle) else {
+        return;
+    };
+    let mut text = title.to_vec();
+    text.push(0);
+    unsafe {
+        let _ = SetWindowTextA(HWND(window as *mut _), PCSTR(text.as_ptr()));
+    }
+}
+
 /// `SetWindowPos` moved or sized the modelled window `handle` (`SWP_NOSIZE`, `SWP_NOMOVE` in
 /// `flags`): the real window follows.
 pub fn window_moved(e: &mut Engine, handle: u32, rect: [i32; 4], flags: u32) {
