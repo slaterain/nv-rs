@@ -356,7 +356,10 @@ mod tests {
         e.mem.free(raw);
         e.call(0x00dd_d7e0, &args![points, out, out + 4]);
         let frame = aligned_frame_at(raw, 0x30);
-        assert_eq!(load_vec4(&e, frame + 0x10)[2], 1.0);
-        assert_eq!(load_vec4(&e, frame + 0x20)[1], 1.0);
+        // Unit normals, to the processor's `RSQRTSS` estimate (one ULP, see the module docs).
+        let first = load_vec4(&e, frame + 0x10)[2];
+        let second = load_vec4(&e, frame + 0x20)[1];
+        assert!(within_one_ulp(first, 1.0), "{first}");
+        assert!(within_one_ulp(second, 1.0), "{second}");
     }
 }
