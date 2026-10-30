@@ -635,11 +635,11 @@ pub fn ni_switch_node_create_clone(
     clone
 }
 
-/// Reads or writes `size` bytes at `field` through a stream object's
-/// virtual slot `slot` (the call the loader and saver make: the stream, the
-/// buffer, the byte count, the address of a one-element component-size list
-/// holding the same count, and the element count 1) and adds the returned
-/// byte count to the stream's running total (+4).
+/// Reads or writes `size` bytes at `field` through the binary stream object's
+/// function word at `slot` (+8 read, +0xC write; the call the loader and saver
+/// make: the stream, the buffer, the byte count, the address of a one-element
+/// component-size list holding the same count, and the element count 1) and
+/// adds the returned byte count to the stream's running total (+4).
 fn stream_transfer(e: &mut Engine, stream: u32, slot: u32, field: u32, size: u32) {
     let component_size = e.mem.alloc(4);
     e.mem.set_u32(component_size, size);
@@ -828,7 +828,6 @@ mod tests {
     use std::rc::Rc;
 
     const NODE_VTABLE: u32 = 0x0310_0000;
-    const STREAM_VTABLE: u32 = 0x0320_0000;
     const DOUBLE_STREAM: u32 = 0x0700_0102;
 
     type Log = Vec<(u32, Vec<u32>)>;
@@ -949,9 +948,8 @@ mod tests {
             e.register(VIEWER_STRING_RTTI, |_, _| 0x1111u32.into_ret());
             e.register(VIEWER_STRING_INT, |_, _| 0x2222u32.into_ret());
             e.register(VIEWER_STRING_BOOL, |_, _| 0x3333u32.into_ret());
-            // Streams: the reader/writer object's slot 2 (read) and 3
-            // (write) copy a fixed value for the requested size.
-            e.put_vtable(STREAM_VTABLE, &[0, 0, DOUBLE_STREAM, DOUBLE_STREAM]);
+            // Streams: the reader/writer object's read (+8) and write (+0xc) words copy a
+            // fixed value for the requested size.
             let stream_requests = Rc::new(RefCell::new(Vec::new()));
             let requests = stream_requests.clone();
             e.register_double(DOUBLE_STREAM, move |e, a| {
@@ -1597,7 +1595,9 @@ mod tests {
     fn stream(f: &mut Fixture, version: u32) -> (u32, u32) {
         let stream = f.e.mem.alloc(0x300);
         let reader = f.e.mem.alloc(0x10);
-        f.e.mem.set_u32(reader, STREAM_VTABLE);
+        // The binary stream object's own words: read at +8, write at +0xc (00a945b0).
+        f.e.mem.set_u32(reader + 8, DOUBLE_STREAM);
+        f.e.mem.set_u32(reader + 0xc, DOUBLE_STREAM);
         f.e.mem.set_u32(stream + 0xd8, version);
         f.e.mem.set_u32(stream + 0x24c, reader);
         f.e.mem.set_u32(stream + 0x250, reader);
