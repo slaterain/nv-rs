@@ -69,8 +69,13 @@ is to run faster than the original without changing how it plays.
 ## Progress
 
 <p align="center">
-  <img src="docs/media/progress.svg" alt="Engine port progress: 99.95% of the original program's functions covered" width="100%">
+  <img src="docs/media/progress.svg" alt="Engine port progress: 100% of the game's code translated" width="100%">
 </p>
+
+Every function of the game's own code is translated. Not counted: 29 pieces of
+Microsoft and Windows code that our own layer replaces, and a few fragments
+that can never run. Some translated functions still have small marked gaps,
+mostly error handling; the systems below are where the real work is now.
 
 | | System | Status |
 | :---: | --- | --- |
