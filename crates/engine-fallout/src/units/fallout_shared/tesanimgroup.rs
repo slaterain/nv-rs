@@ -1129,7 +1129,12 @@ pub fn fn_005f3a20(e: &mut Engine, sequence: Ptr, filename: Ptr) -> Ptr {
                     bad = true;
                 } else {
                     let compare_source = e.call(0x0043_b1b0, &args![note_string]).u32();
-                    if anim_prefix(e, compare_source, 0x0104_87bc) {
+                    // 005f3c8c-005f3c9f: the parent prefix (010487bc) is compared with the
+                    // constant length 4 (PUSH 0x4); no strlen call is made for it.
+                    if e.call(STRNICMP, &args![compare_source, 0x0104_87bcu32, 4u32])
+                        .i32()
+                        == 0
+                    {
                         anim_parent_note(e, group, note_string);
                     } else {
                         let source = e.call(0x0043_b1b0, &args![note_string]).u32();
@@ -1139,7 +1144,11 @@ pub fn fn_005f3a20(e: &mut Engine, sequence: Ptr, filename: Ptr) -> Ptr {
                         while note != 0 && e.call(STRLEN, &args![note]).u32() != 0 {
                             // 005f3d59-005f3d6d: a leading CR skips to the next
                             // line, and the result reaches the _strnicmp at
-                            // 005f3d90 unchecked, a null pointer included.
+                            // 005f3d90 unchecked, a null pointer included. A null
+                            // there (a CR with no line feed after it) ends the
+                            // process: 00ec7ec0 reports it through 00ec7c30, and
+                            // with no handler installed that goes to
+                            // __invoke_watson (00ec7b08).
                             if e.mem.u8(note) == 13 {
                                 note = fn_005f3870(e, Ptr::new(note)).addr();
                             }
@@ -1418,7 +1427,6 @@ mod tests {
         });
         e.register_double(STRLEN, |e, arguments| {
             let length = match arguments[0] {
-                0x0104_87bc => 4,
                 0x9000 => 3,
                 0x0104_878c => 6,
                 0x0104_8784 => 5,
@@ -1479,7 +1487,7 @@ mod tests {
     }
 
     #[test]
-    fn lone_cr_note_reaches_the_special_compare_as_null_and_is_not_advanced() {
+    fn lone_cr_note_passes_null_to_the_special_compare_which_ends_the_process() {
         let mut e = Engine::new();
         e.map(0x2000, 0x100);
         e.map(0x3000, 0x20);
@@ -1593,7 +1601,6 @@ mod tests {
         });
         e.register_double(STRLEN, |e, arguments| {
             let length = match arguments[0] {
-                0x0104_87bc => 4,
                 0x9000 => 3,
                 address => {
                     let mut size = 0;
@@ -1608,12 +1615,22 @@ mod tests {
                 ..Ret::default()
             }
         });
-        // Only the special prefix compares equal, so the null note takes the
-        // blend branch, where the 00974d90 double skips the byte read.
         e.register_double(STRNICMP, |_, arguments| {
             assert_eq!(arguments.len(), 3);
+            // 00ec7ed0: a null string sets errno to EINVAL (00ec7edf) and calls
+            // 00ec7c30. No handler is ever installed (the only store to 0126fd9c,
+            // 00ec7b01, is the encoded null __init_pointers passes at 00eccf26), so
+            // 00ec7c30 goes on to __invoke_watson (00ec7b08), which ends the process;
+            // 00ec7eed (0x7fffffff) is not reached.
+            if arguments[0] == 0 {
+                panic!("_strnicmp(NULL): __invoke_watson ends the process");
+            }
+            // 005f3c8c-005f3c9f: the empty line at 0x6200 against the parent prefix
+            // (010487bc) with length 4; __ascii_strnicmp (00ed5bc0) stops at the
+            // terminator and answers -1 (00ed5c11).
+            assert_eq!(arguments, [0x6200, 0x0104_87bc, 4]);
             Ret {
-                eax: u32::from(arguments[1] != 0x9000),
+                eax: u32::MAX,
                 ..Ret::default()
             }
         });
@@ -1622,49 +1639,44 @@ mod tests {
             assert_eq!(arguments[1], 10);
             Ret::default()
         });
-        e.register_double(0x0097_4d90, |_, arguments| {
-            assert_eq!(arguments, [0]);
-            Ret {
-                eax: 1,
-                ..Ret::default()
-            }
-        });
-        e.register_double(0x0043_81b0, |_, arguments| {
-            assert_eq!(arguments.len(), 1);
-            Ret::default()
-        });
         e.call_log = Some(vec![]);
-        assert_eq!(e.call(0x005f_3a20, &[0x2000, 0x3000]).u32(), 0);
+        let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.call(0x005f_3a20, &[0x2000, 0x3000])
+        }));
+        assert!(ended.is_err());
         let calls = e.call_log.take().unwrap();
-        // 005f3d6d -> 005f3d90: the null note goes to _strnicmp unchecked.
-        let special: Vec<_> = calls
+        let note_string = calls
             .iter()
-            .filter(|(address, arguments)| *address == STRNICMP && arguments[1] == 0x9000)
-            .map(|(_, arguments)| arguments.clone())
-            .collect();
-        assert_eq!(special, [vec![0, 0x9000, 3]]);
-        // 005f4881: a null note is not advanced, so 005f3870 ran only for the CR.
-        assert_eq!(
-            calls
-                .iter()
-                .filter(|(address, _)| *address == STRCHR)
-                .count(),
-            1
-        );
-        assert_eq!(
-            calls
-                .iter()
-                .filter(|(address, _)| *address == 0x0092_9260)
-                .count(),
-            0
-        );
-        assert_eq!(
-            calls
-                .iter()
-                .filter(|(address, _)| *address == 0x0043_81b0)
-                .count(),
-            1
-        );
+            .find(|(address, _)| *address == 0x0048_af40)
+            .unwrap()
+            .1[0];
+        let copied = calls
+            .iter()
+            .find(|(address, _)| *address == 0x0040_6d30)
+            .unwrap()
+            .1[0];
+        let start = calls
+            .iter()
+            .position(|(address, _)| *address == 0x0048_af70)
+            .unwrap();
+        let expected: [(u32, Vec<u32>); 9] = [
+            (0x0048_af70, vec![note_string]),
+            // 005f3c8c-005f3c9f: the parent prefix compare, no strlen before it.
+            (0x0043_b1b0, vec![note_string]),
+            (STRNICMP, vec![0x6200, 0x0104_87bc, 4]),
+            (0x0043_b1b0, vec![note_string]),
+            (0x0040_6d30, vec![copied, 0x104, 0x6100]),
+            // 005f3d40: the copied line is not empty.
+            (STRLEN, vec![copied]),
+            // 005f3d65: 005f3870 finds no line feed after the CR and returns null.
+            (STRCHR, vec![copied, 10]),
+            // 005f3d7a-005f3d90: the null note goes to _strnicmp unchecked, and the
+            // process ends there: the blend branch (005f3d9c), the number-tag
+            // compares (005f3dc3) and the string's destructor (004381b0) never run.
+            (STRLEN, vec![0x9000]),
+            (STRNICMP, vec![0, 0x9000, 3]),
+        ];
+        assert_eq!(calls[start..], expected);
     }
 
     #[test]

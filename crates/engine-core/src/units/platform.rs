@@ -709,6 +709,14 @@ fn xinput_get_state(_e: &mut Engine, _user: u32, _state: Ptr) -> u32 {
     ERROR_DEVICE_NOT_CONNECTED
 }
 
+// Platform: replaces XINPUT1_3.DLL XInputSetState (import by ordinal 3, slot `00fdf398`; the
+// controller rumble `00a255b0` calls it through the thunk `00ee820a`, e.g. when the player fires)
+/// No controller is connected, as for [`xinput_get_state`]: `ERROR_DEVICE_NOT_CONNECTED` for every
+/// user index (documented for a controller that is not connected), the vibration not read.
+fn xinput_set_state(_e: &mut Engine, _user: u32, _vibration: Ptr) -> u32 {
+    ERROR_DEVICE_NOT_CONNECTED
+}
+
 // Platform: replaces USER32.DLL GetActiveWindow (import)
 /// The game's main window ([`create_window`]), 0 before there is one.
 fn get_active_window(e: &mut Engine) -> u32 {
@@ -2631,6 +2639,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, xinput_get_state(u32, Ptr) -> u32).1,
         ),
         (
+            "XINPUT1_3.dll",
+            "#3",
+            entry!(0, xinput_set_state(u32, Ptr) -> u32).1,
+        ),
+        (
             k,
             "RaiseException",
             entry!(0, raise_exception(u32, u32, u32, Ptr)).1,
@@ -2971,6 +2984,23 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// No XInput controller: reading and rumbling (the shot's vibration, `00a255b0`) both answer
+    /// `ERROR_DEVICE_NOT_CONNECTED` for every user index, without touching the game's memory.
+    #[test]
+    fn xinput_answers_no_controller_for_reads_and_rumble() {
+        let mut e = Engine::new();
+        for user in 0..4 {
+            assert_eq!(
+                xinput_get_state(&mut e, user, Ptr::new(0)),
+                ERROR_DEVICE_NOT_CONNECTED
+            );
+            assert_eq!(
+                xinput_set_state(&mut e, user, Ptr::new(0)),
+                ERROR_DEVICE_NOT_CONNECTED
+            );
+        }
+    }
 
     #[test]
     fn a_memory_file_reads_and_seeks_what_was_supplied() {

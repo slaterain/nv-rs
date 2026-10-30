@@ -1707,7 +1707,7 @@ fn greet_set_sound_callback(e: &mut Engine, g: &Greet, callback: u32) {
 /// The calls the first greeting, the next response and the running greeting
 /// make to say the response: the actor's virtual `+0x284` with thirteen words;
 /// returns the delay it gives (an `f32`). `word_11` is the eleventh word: 1 for
-/// the first greeting and the next response (`008dc3be` / `008dd385` push 1),
+/// the first greeting and the next response (`008dc3bc` / `008dd383` push 1),
 /// 0 for the running greeting (`008dca31` pushes 0).
 fn greet_speak(e: &mut Engine, g: &Greet, response: u32, word_11: u32) -> f32 {
     let idle = e.call(0x0044_1110, &args![response]).u32();
@@ -1735,7 +1735,7 @@ fn greet_speak(e: &mut Engine, g: &Greet, response: u32, word_11: u32) -> f32 {
             g.dialog,
             1u32,
             0u32,
-            // 008dc3be / 008dd385 push 1 here, 008dca31 pushes 0.
+            // 008dc3bc / 008dd383 push 1 here, 008dca31 pushes 0.
             word_11,
             1u32,
             g.can_greet as u32
@@ -1832,7 +1832,7 @@ fn greet_respond(e: &mut Engine, g: &Greet, response: u32, counter_mark: bool) {
     }
     if waiting && e.mem.u8(a + 0x7f) != 0 {
         greet_mark_response(e, g, response);
-        // 008dc3be / 008dd385: the eleventh word is 1.
+        // 008dc3bc / 008dd383: the eleventh word is 1.
         let delay = greet_speak(e, g, response, 1);
         e.mem.set_f32(t + 0x310, delay);
         e.mem.set_u8(t + 0x32c, 1);
@@ -20040,7 +20040,7 @@ mod tests {
         );
         assert_eq!(e.mem.u8(w.actor + 0x80), 0);
         assert_eq!(e.mem.f32(a + 0x310), 1.5);
-        // 008dd385: the eleventh word of the say call is 1.
+        // 008dd383: the eleventh word of the say call is 1.
         assert_eq!(calls_to(&e, slot_target(ACTOR_TABLE, 0x284))[0][11], 1);
         assert_eq!(calls_to(&e, 0x0083_c850), vec![vec![item, 0]]);
         assert_eq!(calls_to(&e, 0x0057_bd60), vec![vec![w.actor, 0]]);

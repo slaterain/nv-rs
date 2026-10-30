@@ -3275,6 +3275,11 @@ const SETTING_011E0A6C: u32 = 0x011e_0a6c;
 /// `0.0` and `1.0` as doubles in the exe's data (`007d1360`, `007d3620`).
 const DOUBLE_ZERO: u32 = 0x0101_2060;
 const DOUBLE_ONE: u32 = 0x0101_2070;
+/// The doubles the audio volume sliders multiply `count - 1` by for `+0x18`
+/// (`FMUL double ptr [...]`): `0.5` at `01011588` (`007d29a9`, `007d2e29`)
+/// and `0x3FE3333340000000` at `010290b8` (`007d2ac9`, `007d2be9`).
+const DOUBLE_HALF: u32 = 0x0101_1588;
+const DOUBLE_010290B8: u32 = 0x0102_90b8;
 /// `007d2fc0` and `007d30e0`: the interface manager's call
 /// `00719740(byte)` (`RET 4`), the object `007d30b0` writes (`011f35cc`, byte
 /// at `+0x1b88`), the main object's `00877720` result byte setter `005407b0`.
@@ -3381,8 +3386,15 @@ fn slider_step_index(e: &mut Engine, scaled: f32) -> u32 {
 /// Stores one of the slider's words (`offset` `0x14` or `0x18`) from a ratio:
 /// `step(last * ratio)` with `last = count - 1`.
 fn store_slider_step(e: &mut Engine, option: Ptr, offset: u32, ratio: f32) {
+    store_slider_step_f64(e, option, offset, f64::from(ratio));
+}
+
+/// `store_slider_step` for a ratio the exe multiplies by as a `double`
+/// (`FMUL double ptr [...]` or `FLD1; FMULP`), not narrowed to a `float`
+/// first: `step(float(last * ratio))`.
+fn store_slider_step_f64(e: &mut Engine, option: Ptr, offset: u32, ratio: f64) {
     let last = last_step(e, option);
-    let step = slider_step_index(e, (last * f64::from(ratio)) as f32);
+    let step = slider_step_index(e, (last * ratio) as f32);
     e.mem.set_u32(option.addr() + offset, step);
 }
 
@@ -4255,18 +4267,18 @@ pub fn fn_007d2650(e: &mut Engine, option: Ptr) {
 /// then the audio object's setter is called with the setting's value.
 /// Running: sets the setting to `iVal / (count - 1)` and passes the
 /// setting's value to the audio object's setter. Otherwise works the
-/// option's two words out from the audio object's getter (`+0x14`) and
-/// `second_ratio` (`+0x18`): the constant each slider multiplies `count - 1`
-/// by, `FLD1` (1.0) or a `double` in the exe's data (0.5 at `01011588`, or
-/// `0x3FE3333340000000` at `010290b8`, which is `0.6f32` widened, so the
-/// `f32` here widens back to the exe's `double` exactly).
+/// option's two words out from the audio object's getter (`+0x14`) and the
+/// constant each slider multiplies `count - 1` by for `+0x18`: `second` is
+/// `None` for `FLD1` (the instruction's 1.0), or the address of the
+/// `double` in the exe's data that `FMUL double ptr [second]` reads
+/// (`01011588` or `010290b8`), read from memory after the `+0x14` step.
 fn audio_volume_slider(
     e: &mut Engine,
     option: Ptr,
     setting: u32,
     setter: u32,
     getter: u32,
-    second_ratio: f32,
+    second: Option<u32>,
 ) {
     if option.is_null() {
         let volume = e.call(FLOAT_AT_OBJECT, &args![setting]).f32();
@@ -4281,7 +4293,12 @@ fn audio_volume_slider(
     } else {
         let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
         let volume = e.call(getter, &args![audio]).f32();
-        store_slider_steps(e, option, volume, second_ratio);
+        store_slider_step(e, option, 0x14, volume);
+        let ratio = match second {
+            None => 1.0,
+            Some(address) => e.global::<f64>(address),
+        };
+        store_slider_step_f64(e, option, 0x18, ratio);
     }
 }
 
@@ -4290,31 +4307,55 @@ fn audio_volume_slider(
 /// `00ad7b10`, getter `00ad79f0`); `+0x18` from `count - 1` times 1.0.
 pub fn fn_007d2790(e: &mut Engine, option: Ptr) {
     // 007d2889: FLD1; FMULP on (count - 1).
-    audio_volume_slider(e, option, 0x011f_6e14, 0x00ad_7b10, 0x00ad_79f0, 1.0);
+    audio_volume_slider(e, option, 0x011f_6e14, 0x00ad_7b10, 0x00ad_79f0, None);
 }
 
 // Translated from 007d28b0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Audio volume slider on the setting at `011f6e20` (setter `00ad7b40`,
-/// getter `00ad7a20`); `+0x18` from `count - 1` times 0.5.
+/// getter `00ad7a20`); `+0x18` from `count - 1` times the double at
+/// `01011588`.
 pub fn fn_007d28b0(e: &mut Engine, option: Ptr) {
-    // 007d29a9: FMUL double [01011588] (0.5) on (count - 1).
-    audio_volume_slider(e, option, 0x011f_6e20, 0x00ad_7b40, 0x00ad_7a20, 0.5);
+    // 007d29a9: FMUL double ptr [01011588] on (count - 1).
+    audio_volume_slider(
+        e,
+        option,
+        0x011f_6e20,
+        0x00ad_7b40,
+        0x00ad_7a20,
+        Some(DOUBLE_HALF),
+    );
 }
 
 // Translated from 007d29d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Audio volume slider on the setting at `011f6e44` (setter `00ad7bd0`,
-/// getter `00ad7ab0`); `+0x18` from `count - 1` times `0.6f32`.
+/// getter `00ad7ab0`); `+0x18` from `count - 1` times the double at
+/// `010290b8`.
 pub fn fn_007d29d0(e: &mut Engine, option: Ptr) {
-    // 007d2ac9: FMUL double [010290b8] (0x3FE3333340000000, 0.6f32 widened).
-    audio_volume_slider(e, option, 0x011f_6e44, 0x00ad_7bd0, 0x00ad_7ab0, 0.6);
+    // 007d2ac9: FMUL double ptr [010290b8] on (count - 1).
+    audio_volume_slider(
+        e,
+        option,
+        0x011f_6e44,
+        0x00ad_7bd0,
+        0x00ad_7ab0,
+        Some(DOUBLE_010290B8),
+    );
 }
 
 // Translated from 007d2af0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Audio volume slider on the setting at `011f6e2c` (setter `00ad7b70`,
-/// getter `00ad7a50`); `+0x18` from `count - 1` times `0.6f32`.
+/// getter `00ad7a50`); `+0x18` from `count - 1` times the double at
+/// `010290b8`.
 pub fn fn_007d2af0(e: &mut Engine, option: Ptr) {
-    // 007d2be9: FMUL double [010290b8] (0x3FE3333340000000, 0.6f32 widened).
-    audio_volume_slider(e, option, 0x011f_6e2c, 0x00ad_7b70, 0x00ad_7a50, 0.6);
+    // 007d2be9: FMUL double ptr [010290b8] on (count - 1).
+    audio_volume_slider(
+        e,
+        option,
+        0x011f_6e2c,
+        0x00ad_7b70,
+        0x00ad_7a50,
+        Some(DOUBLE_010290B8),
+    );
 }
 
 // Translated from 007d2c10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4322,16 +4363,23 @@ pub fn fn_007d2af0(e: &mut Engine, option: Ptr) {
 /// getter `00ad7a80`); `+0x18` from `count - 1` times 1.0.
 pub fn fn_007d2c10(e: &mut Engine, option: Ptr) {
     // 007d2d09: FLD1; FMULP on (count - 1).
-    audio_volume_slider(e, option, 0x011f_6e38, 0x00ad_7ba0, 0x00ad_7a80, 1.0);
+    audio_volume_slider(e, option, 0x011f_6e38, 0x00ad_7ba0, 0x00ad_7a80, None);
 }
 
 // Translated from 007d2d30 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `StartMenu::SetRadioVol` (Xbox PDB): the audio volume slider on the
 /// setting at `011f6e50` (setter `00ad7c00`, getter `00ad7ae0`); `+0x18`
-/// from `count - 1` times 0.5.
+/// from `count - 1` times the double at `01011588`.
 pub fn start_menu_set_radio_vol(e: &mut Engine, option: Ptr) {
-    // 007d2e29: FMUL double [01011588] (0.5) on (count - 1).
-    audio_volume_slider(e, option, 0x011f_6e50, 0x00ad_7c00, 0x00ad_7ae0, 0.5);
+    // 007d2e29: FMUL double ptr [01011588] on (count - 1).
+    audio_volume_slider(
+        e,
+        option,
+        0x011f_6e50,
+        0x00ad_7c00,
+        0x00ad_7ae0,
+        Some(DOUBLE_HALF),
+    );
 }
 
 // Translated from 007d2e50 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5345,9 +5393,11 @@ mod tests {
         0x011d_c000,
         0x011d_d000,
         0x011d_e000,
+        0x0101_1000,
         0x0101_2000,
         0x0101_6000,
         0x0102_3000,
+        0x0102_9000,
         0x0104_f000,
         0x0107_0000,
         0x0107_3000,
@@ -5376,9 +5426,6 @@ mod tests {
         values: Values,
     }
 
-    /// An engine whose every external callee is a recording double
-    /// returning 0, with the tile trait getters and setters backed by a
-    /// table and `Tile::TextToTrait` returning the address of its name.
     /// The block the next `with_stack(size)` takes (the last freed block of that size).
     fn next_frame(e: &mut Engine, size: u32) -> u32 {
         let frame = e.mem.alloc(size);
@@ -5386,6 +5433,9 @@ mod tests {
         frame
     }
 
+    /// An engine whose every external callee is a recording double
+    /// returning 0, with the tile trait getters and setters backed by a
+    /// table and `Tile::TextToTrait` returning the address of its name.
     fn rig() -> Rig {
         let mut r = Rig {
             e: Engine::new(),
@@ -9960,8 +10010,10 @@ mod tests {
     fn audio_volume_sliders() {
         // (address, setting, audio setter, audio getter, the float 004bd510
         // gets for +0x18 with count 5, the step stored there): 4 times 1.0
-        // (FLD1), the double 0.5 at 01011588, or the double at 010290b8
-        // (0.6f32 widened; 4 times it is exactly 2.4f32).
+        // (FLD1), the double 0.5 at 01011588, or the double
+        // 0x3FE3333340000000 at 010290b8 (4 times it is exactly 2.4f32).
+        // The doubles are read from memory, so the rig holds the exe's
+        // values at their addresses.
         let table = [
             (
                 0x007d_2790u32,
@@ -10006,6 +10058,9 @@ mod tests {
             // slider's own constant.
             let mut r = rig();
             r.slider_math();
+            r.e.mem.set_f64(DOUBLE_HALF, 0.5);
+            r.e.mem
+                .set_f64(DOUBLE_010290B8, f64::from_bits(0x3FE3_3333_4000_0000));
             r.stub(AUDIO_INSTANCE, 0xa0d10);
             r.with(getter, |_, _| st0(0.5));
             let option = r.option(0, 0, 5);

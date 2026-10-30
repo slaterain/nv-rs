@@ -149,8 +149,8 @@ const MINUS_ONE: u32 = 0x0101_2054;
 /// `0.5` (`float`): the smallest squared length `LookAtWorldPoint` accepts
 /// for a cross product.
 const MIN_AXIS_LENGTH_SQUARED: u32 = 0x0101_6248;
-/// `1e-10` (`double`): the smallest squared distance `LookAtWorldPoint`
-/// accepts.
+/// The float `1e-10` widened to a `double` (bytes `00 00 00 e0 df 7c db
+/// 3d`): the smallest squared distance `LookAtWorldPoint` accepts.
 const MIN_DISTANCE_SQUARED: u32 = 0x0109_cc78;
 /// `2.0` (`double`).
 const TWO: u32 = 0x0101_1590;
@@ -1655,6 +1655,11 @@ mod tests {
         }
     }
 
+    /// The double at `01017cf8` that `Unitize` (`004a0c27`) and `UnitCross`
+    /// (`0053d227`) compare a length with: the float `1e-6` widened (bytes
+    /// `00 00 00 a0 f7 c6 b0 3e`). The test doubles of those two read it.
+    const MIN_UNIT_LENGTH: u32 = 0x0101_7cf8;
+
     /// An engine with the exe constants the code reads mapped and set.
     fn engine() -> Engine {
         let mut e = Engine::new();
@@ -1662,6 +1667,7 @@ mod tests {
             0x0101_1000u32,
             0x0101_2000,
             0x0101_6000,
+            0x0101_7000,
             0x0101_e000,
             0x0102_2000,
             0x0109_9000,
@@ -1674,7 +1680,10 @@ mod tests {
         e.set_global(TWO, 2.0f64);
         e.set_global(MINUS_ONE, -1.0f32);
         e.set_global(MIN_AXIS_LENGTH_SQUARED, 0.5f32);
-        e.set_global(MIN_DISTANCE_SQUARED, 1e-10f64);
+        // The exe's bytes at 0109cc78 are 00 00 00 e0 df 7c db 3d: the float
+        // 1e-10 widened, not the double 1e-10.
+        e.set_global(MIN_DISTANCE_SQUARED, f64::from(1e-10f32));
+        e.set_global(MIN_UNIT_LENGTH, f64::from(1e-6f32));
         e.set_global(UNSIGNED_BIAS, 4294967296.0f32);
         e.set_global(DEFAULT_FAR, 2.0f32);
         e.set_global(DEFAULT_NEGATIVE_HALF_EXTENT, -0.5f32);
@@ -2268,31 +2277,78 @@ mod tests {
         [e.mem.f32(addr), e.mem.f32(addr + 4), e.mem.f32(addr + 8)]
     }
 
-    fn normalise3(vector: [f32; 3]) -> [f32; 3] {
-        let length = vector.iter().map(|v| v * v).sum::<f32>().sqrt();
-        if length == 0.0 {
-            vector
-        } else {
-            vector.map(|v| v / length)
-        }
+    /// The length as `00457990` computes it: `FLD` each float, `FMUL` the
+    /// same float in memory, `(x * x + y * y) + z * z` stored to a float, and
+    /// the CRT `sqrt` (`00ec6054`, reached through `004579e0` and
+    /// `004019d0`) of that, stored to a float.
+    fn length3(vector: [f32; 3]) -> f32 {
+        let square = |v: f32| x87_mul(x87_load32(v.to_bits()), x87_m32(v.to_bits()));
+        let sum = x87_add(
+            x87_add(square(vector[0]), square(vector[1])),
+            square(vector[2]),
+        );
+        f64::from(f32::from_bits(x87_store32(sum))).sqrt() as f32
     }
 
-    /// Doubles for `Unitize` and `UnitCross` (a x b, then unitized; the zero
-    /// vector stays zero).
+    /// `Unitize` (`004a0c10`): when the length is ordered above `minimum`
+    /// (`004a0c27` FCOMP, `004a0c2f` TEST AH,0x41, `004a0c32` JNZ to the
+    /// zero path), each float times `1 / length` (`FLD1`, `FDIVRP`, stored to
+    /// a float; then `FLD` the float, `FMUL` that); otherwise, a NaN length
+    /// included, the zero vector (`004a0c6b`).
+    fn unitize3(vector: [f32; 3], minimum: f64) -> [f32; 3] {
+        let length = length3(vector);
+        if !(length as f64 > minimum) {
+            return [0.0; 3];
+        }
+        let inverse = x87_store32(x87_div(1.0, x87_load32(length.to_bits())));
+        vector.map(|v| {
+            f32::from_bits(x87_store32(x87_mul(
+                x87_load32(v.to_bits()),
+                x87_m32(inverse),
+            )))
+        })
+    }
+
+    /// `UnitCross` (`0053d1a0`): the cross product `a x b` (each component
+    /// `FLD`, `FMUL`, `FLD`, `FMUL`, `FSUBP`, stored to a float); when its
+    /// length is ordered above `minimum` (`0053d227` FCOMP, `0053d22f` TEST
+    /// AH,0x41, `0053d232` JNZ to the zero path), `0053d280` scales it by
+    /// `1 / length` (the reciprocal stored to a float, then `FLD` it, `FMUL`
+    /// the component); otherwise, a NaN length included, the zero vector
+    /// (`0053d24e`).
+    fn unit_cross3(a: [f32; 3], b: [f32; 3], minimum: f64) -> [f32; 3] {
+        let product =
+            |i: usize, j: usize| x87_mul(x87_load32(a[i].to_bits()), x87_m32(b[j].to_bits()));
+        let term = |i: usize, j: usize, k: usize, l: usize| {
+            f32::from_bits(x87_store32(x87_sub(product(i, j), product(k, l))))
+        };
+        let cross = [term(1, 2, 2, 1), term(2, 0, 0, 2), term(0, 1, 1, 0)];
+        let length = length3(cross);
+        if !(length as f64 > minimum) {
+            return [0.0; 3];
+        }
+        let inverse = x87_store32(x87_div(1.0, x87_load32(length.to_bits())));
+        cross.map(|v| {
+            f32::from_bits(x87_store32(x87_mul(
+                x87_load32(inverse),
+                x87_m32(v.to_bits()),
+            )))
+        })
+    }
+
+    /// Doubles for `Unitize` and `UnitCross` that do what the exe's do
+    /// (`unitize3`, `unit_cross3`), with the minimum length read from
+    /// `01017cf8`.
     fn vector_doubles(e: &mut Engine) {
         e.register(POINT_NORMALIZE, |e, a| {
-            let unit = normalise3(read3(e, a[0]));
+            let unit = unitize3(read3(e, a[0]), e.global::<f64>(MIN_UNIT_LENGTH));
             put_f32s(e, a[0], &unit);
             Ret::default()
         });
         e.register(UNIT_CROSS, |e, a| {
-            let (x, y) = (read3(e, a[0]), read3(e, a[2]));
-            let cross = [
-                x[1] * y[2] - x[2] * y[1],
-                x[2] * y[0] - x[0] * y[2],
-                x[0] * y[1] - x[1] * y[0],
-            ];
-            put_f32s(e, a[1], &normalise3(cross));
+            let minimum = e.global::<f64>(MIN_UNIT_LENGTH);
+            let unit = unit_cross3(read3(e, a[0]), read3(e, a[2]), minimum);
+            put_f32s(e, a[1], &unit);
             eax(a[1])
         });
     }
@@ -2401,7 +2457,7 @@ mod tests {
     }
 
     #[test]
-    fn a_nan_target_passes_every_length_test() {
+    fn a_nan_target_passes_the_distance_test_then_fails_the_first_cross() {
         let mut e = engine();
         vector_doubles(&mut e);
         let cam = camera_with_vtable(&mut e);
@@ -2410,9 +2466,39 @@ mod tests {
         let target = world_point(&mut e, [f32::NAN, 0.0, 0.0]);
         let up = world_point(&mut e, [0.0, 1.0, 0.0]);
         e.call_log = Some(vec![]);
-        // 00a7020f, 00a70263, 00a702b1: an unordered FCOMP (0x5, even
-        // parity) does not fail, so the NaN vectors go all the way through.
-        assert!(e.call(0x00a7_01b0, &args![cam, target, up]).bool());
+        // d = (NaN, 0, 10): its squared length is NaN, an unordered FCOMP
+        // (0x5, even parity) that 00a7020f does not fail on. Unitize's NaN
+        // length is not above 1e-6 (004a0c32), so d becomes zero; up x 0 is
+        // zero (0053d232), and its squared length 0 is an ordered less-than
+        // 0.5 (0x1, odd parity) that fails at 00a70263.
+        assert!(!e.call(0x00a7_01b0, &args![cam, target, up]).bool());
+        let calls: Vec<u32> = e
+            .call_log
+            .take()
+            .unwrap()
+            .iter()
+            .map(|(address, _)| *address)
+            .collect();
+        assert_eq!(calls, vec![0x00a7_01b0, POINT_NORMALIZE, UNIT_CROSS]);
+        assert_eq!(rotation_of(&e, cam), vec![5.0; 9]);
+    }
+
+    #[test]
+    fn a_nan_first_cross_passes_its_test_then_the_second_cross_fails() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let cam = camera_with_vtable(&mut e);
+        set_translation(&mut e, cam, [1.0, 1.0, 1.0]);
+        put_f32s(&mut e, cam.addr() + LOCAL_ROTATE, &[5.0; 9]);
+        let target = world_point(&mut e, [0.0, 0.0, 0.0]);
+        let up = world_point(&mut e, [f32::INFINITY, 0.0, 0.0]);
+        e.call_log = Some(vec![]);
+        // d = (1, 1, 1) unitizes to (a, a, a). up x d = (0, -inf, inf) has
+        // the length inf, ordered above 1e-6, so UnitCross scales it by
+        // 1 / inf = 0: (0, NaN, NaN). That NaN squared length passes
+        // 00a70263; d x (0, NaN, NaN) is all NaN, which UnitCross makes zero
+        // (0053d232), and its squared length 0 fails at 00a702b1.
+        assert!(!e.call(0x00a7_01b0, &args![cam, target, up]).bool());
         let calls: Vec<u32> = e
             .call_log
             .take()
@@ -2422,16 +2508,9 @@ mod tests {
             .collect();
         assert_eq!(
             calls,
-            vec![
-                0x00a7_01b0,
-                POINT_NORMALIZE,
-                UNIT_CROSS,
-                UNIT_CROSS,
-                UPDATE_DATA_DOUBLE,
-                UPDATE_BOUND_DOUBLE
-            ]
+            vec![0x00a7_01b0, POINT_NORMALIZE, UNIT_CROSS, UNIT_CROSS]
         );
-        assert!(rotation_of(&e, cam).iter().all(|value| value.is_nan()));
+        assert_eq!(rotation_of(&e, cam), vec![5.0; 9]);
     }
 
     // ---- fn_00a703a0

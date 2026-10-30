@@ -3572,9 +3572,9 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
         );
         let root = e.call(0x0045_c670, &args![]).u32(); // -0x54
         let process = e.get(this.cast::<Actor>(), Actor::pCurrentProcess).addr();
-        let combat_target = e.vcall(process, 0x148, &args![]).u32();
-        let combat_target_state = if combat_target != 0 {
-            e.call(0x0044_ddc0, &args![combat_target]).u32()
+        let weapon = e.vcall(process, 0x148, &args![]).u32();
+        let weapon_form = if weapon != 0 {
+            e.call(0x0044_ddc0, &args![weapon]).u32()
         } else {
             0
         }; // -0x5c
@@ -4387,18 +4387,14 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                         let held: f32 = e.global(HELD_TIMER_011E07E0);
                         let mut run = (limit as f64) < held as f64;
                         if !run {
-                            run = if combat_target_state == 0 {
+                            run = if weapon_form == 0 {
                                 true
                             } else {
                                 let player = e.global::<u32>(PLAYER_SINGLETON);
-                                if e.call(0x0052_5980, &args![combat_target_state, player])
-                                    .u32()
-                                    != 0
-                                {
+                                if e.call(0x0052_5980, &args![weapon_form, player]).u32() != 0 {
                                     false
                                 } else {
-                                    !e.call(0x0047_4a80, &args![combat_target_state + 0xa4])
-                                        .bool()
+                                    !e.call(0x0047_4a80, &args![weapon_form + 0xa4]).bool()
                                 }
                             };
                         }
@@ -4874,16 +4870,19 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                             e.vcall(process, 0x3f8, &args![]).bool()
                         }
                     {
-                        let aiming = if combat_target_state != 0 {
-                            e.call(0x0064_50c0, &args![combat_target_state]).bool()
+                        // 00941fea: a weapon raises the iron sights unless it
+                        // is a melee one (`006450c0`) that is drawn, which
+                        // blocks; without a weapon, a drawn actor blocks.
+                        let block = if weapon_form != 0 {
+                            e.call(0x0064_50c0, &args![weapon_form]).bool()
                                 && e.call(0x008a_16d0, &args![this]).bool()
                         } else {
-                            !e.call(0x008a_16d0, &args![this]).bool()
+                            e.call(0x008a_16d0, &args![this]).bool()
                         };
-                        if aiming {
-                            e.call(0x008b_b650, &args![this, 1u32, 0u32, 0u32]);
-                        } else {
+                        if block {
                             e.call(0x0089_4cc0, &args![this, 1u32]);
+                        } else {
+                            e.call(0x008b_b650, &args![this, 1u32, 0u32, 0u32]);
                         }
                         if e.global::<u8>(STATE_FLAG_011E07B8) == 0
                             || e.global::<u8>(STATE_FLAG_011E07B9) != 0
@@ -5705,16 +5704,12 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                         e.with_stack(24, |e, object| {
                             e.call(0x0048_1610, &args![object]);
                             let player = e.global::<u32>(PLAYER_SINGLETON);
-                            let first = e
-                                .call(0x0052_5980, &args![combat_target_state, player])
-                                .u32();
+                            let first = e.call(0x0052_5980, &args![weapon_form, player]).u32();
                             e.call(0x0048_18e0, &args![object, first, 1u32, 0u32]);
                             let player = e.global::<u32>(PLAYER_SINGLETON);
                             e.call(0x0048_21a0, &args![object, player, 1u32]);
                             let player = e.global::<u32>(PLAYER_SINGLETON);
-                            let second = e
-                                .call(0x0052_5980, &args![combat_target_state, player])
-                                .u32();
+                            let second = e.call(0x0052_5980, &args![weapon_form, player]).u32();
                             let player = e.global::<u32>(PLAYER_SINGLETON);
                             e.call(
                                 0x0088_c830,
@@ -5813,7 +5808,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                 keep_beam = false;
             } else {
                 let count = e.call(0x0072_6070, &args![list]).i32();
-                let limit = e.call(0x0052_4b60, &args![combat_target_state]).u8() as i32;
+                let limit = e.call(0x0052_4b60, &args![weapon_form]).u8() as i32;
                 if count < limit {
                     keep_beam = false;
                 }
@@ -16172,6 +16167,38 @@ mod tests {
             vec![vec![this.addr(), 0.25f32.to_bits()]]
         );
         assert_eq!(called(&e, 0x0055_5c20).len(), 1);
+    }
+
+    #[test]
+    fn update_aims_a_drawn_gun_and_blocks_with_a_drawn_melee_weapon() {
+        // 00941fea: the aim button raises the iron sights of a gun, blocks
+        // with a melee weapon (`006450c0`) and, without a weapon, blocks.
+        for (weapon, melee, iron_sights) in
+            [(0x5100u32, 0u32, true), (0x5100, 1, false), (0, 0, false)]
+        {
+            let mut e = engine();
+            let this = update_world(&mut e);
+            let process = e.mem.u32(this.addr() + 0x68);
+            let vtable = e.mem.u32(process);
+            e.mem.set_u32(vtable + 0x148, 0x00b1_0000);
+            e.register_double(0x00b1_0000, move |_, _| int(weapon));
+            e.mem.set_u32(vtable + 0x3f8, 0x00b1_0010);
+            e.register(0x00b1_0010, |_, _| int(1));
+            e.register(0x0044_ddc0, |_, a| {
+                int(if a[0] == 0x5100 { 0x6000 } else { 0 })
+            });
+            e.register_double(0x0064_50c0, move |_, _| int(melee));
+            e.register(0x008a_16d0, |_, _| int(1));
+            e.register(0x00a2_4660, |_, a| int(u32::from(a[1] == 6 && a[2] == 1)));
+            player_character_update(&mut e, this, 0.5);
+            let raised = called(&e, 0x008b_b650).contains(&vec![this.addr(), 1, 0, 0]);
+            let blocked = called(&e, 0x0089_4cc0).contains(&vec![this.addr(), 1]);
+            assert_eq!(
+                (raised, blocked),
+                (iron_sights, !iron_sights),
+                "weapon {weapon:x} melee {melee}"
+            );
+        }
     }
 
     // ---- tests of 00944300 .. 0094c460 (the third batch of this file) ----

@@ -18,11 +18,11 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::units::havok_sdk::hkakeyframehierarchyutility::{
-    add4, mul4, rotate_and_move, rotate_half,
+    add4, mul4, rotate_and_move, rotate_half, sub4,
 };
 use crate::units::havok_sdk::hkpsphereshape::{
-    copy_vec, load_bits, load_vec, maxps, minps, refined_reciprocal, shufps, store_vec, unpckhps,
-    Vec4,
+    copy_vec, dot3, load_bits, load_vec, maxps, minps, refined_reciprocal, shufps, store_vec,
+    unpckhps, Vec4,
 };
 
 /// The memory router (`00c85750`): its field `+0x10` is the allocator, which
@@ -45,10 +45,11 @@ const GET_LOCAL_TRANSFORMS: u32 = 0x00cd_9fb0;
 const CALCULATE_BONE_MODEL_SPACE: u32 = 0x00cd_a180;
 const SYNC_MODEL_SPACE: u32 = 0x00cd_a340;
 const SYNC_LOCAL_SPACE: u32 = 0x00cd_a690;
-/// The SSE constants: four times 1.0 (`010c7170`), the four sign
+/// The SSE constants: four times -0.5 (`010c71e0`), four times 1.0 (`010c7170`), the four sign
 /// bits (`010c44d0`), the sign bits of the three lowest lanes (`010c4c00`) and the all-ones mask
 /// of the three lowest lanes (`010c4c10`); and the floats the bounding box starts from
 /// (`0104da48` for the minimum, `0104e148` for the maximum).
+const NEG_HALF_LANES: u32 = 0x010c_71e0;
 const ONE_LANES: u32 = 0x010c_7170;
 const SIGN_BITS: u32 = 0x010c_44d0;
 const SIGN_BITS_XYZ: u32 = 0x010c_4c00;
@@ -134,11 +135,12 @@ fn xor_bits(v: Vec4, mask: [u32; 4]) -> Vec4 {
 /// transform comes from `calculateBoneModelSpace` when its flag has bit 2 and straight from the
 /// array otherwise: the translation is the model translation turned by the inverse of the
 /// parent's rotation (the rotation with the three lowest sign bits flipped, `010c4c00`) plus the
-/// negated double of the parent's own translation turned by that inverse too (cross term
-/// `translation x rotation` in the exe; in lane 3 its dot term is `+dot * q.w` of the raw
-/// rotation, `00cda77c`); the rotation is `setMul` of that inverse and the model rotation; the
-/// scale is the model scale times the reciprocal of the parent's scale (`RCPPS` and one Newton
-/// step, lanes 0 to 2, lane 3 zero). Ends by clearing bit 1 of the flag word.
+/// negated double (sign bits `010c44d0`) of a first half the exe computes from the parent's own
+/// translation `t` and its RAW rotation `q` (`w` its lane 3) in all four lanes:
+/// `(t x q) * w + ((w * w - 0.5) * t + dot(t, q) * q)`; the rotation is `setMul` of that inverse
+/// and the model rotation; the scale is the model scale times the reciprocal of the parent's
+/// scale (`RCPPS` and one Newton step, lanes 0 to 2, lane 3 zero). Ends by clearing bit 1 of the
+/// flag word.
 fn update_local(e: &mut Engine, pose: u32, index: i32, parent: u16) {
     let model = e.mem.u32(pose + 0x10);
     if parent == 0xffff {
@@ -154,21 +156,42 @@ fn update_local(e: &mut Engine, pose: u32, index: i32, parent: u16) {
         };
         let parent_translation = load_vec(e, parent_block);
         let raw_rotation = load_vec(e, parent_block + 0x10);
-        let inverse_rotation = xor_bits(raw_rotation, load_bits(e, SIGN_BITS_XYZ));
-        // The parent's translation is turned by the INVERSE rotation: the exe's cross term is
-        // `(t.y * q.z - t.z * q.y) * w` (translation x rotation; 00cda690, 00cda8e0, 00cdad80,
-        // and inlined in 00c7aa60), which is `rotate_half` of the conjugate (`q* x t`, the dot
-        // term unchanged in lanes 0 to 2). Turning it by `q` instead moved a child bone by about
+        // The first half (00cda70c-00cda79c here; 00cda977-00cdaa0b and 00cdabaf-00cdac3f in
+        // accessBoneLocalSpace, 00cdae77-00cdaf0b in 00cdad80, and the same code inlined in
+        // 00c7aa60 at 00c7ab81-00c7ac15) works on the parent's RAW rotation `q`
+        // (`MOVAPS XMM0,[EAX+0x10]`) in all four lanes, and the cross term is `t x q`
+        // (`t.c9 * q.d2 - t.d2 * q.c9`, 00cda72f-00cda751). That turns the parent's
+        // translation by the INVERSE rotation; turning it by `q` moved a child bone by about
         // twice its parent's model position (Doc's Bip01 Head ~150 units off Neck1 under look
-        // IK).
-        // The exe's first half (00cda70c-00cda79c, 00cda977-00cda9eb, 00cdae77-00cdaeeb) works
-        // on the parent's raw rotation: lanes 0 to 2 come out as `rotate_half` of the inverse
-        // (`t x q`, and `(-dot) * -q.i == dot * q.i`), but lane 3 is `+dot(t, q) * q.w`
-        // (00cda778 `SHUFPS XMM2,XMM4,0` / 00cda77c `MULPS XMM2,XMM0` with the raw `q`; it only
-        // becomes the inverse at 00cda79f / 00cda7a3), not `-dot * q.w`.
-        let mut half = rotate_half(e, inverse_rotation, parent_translation);
-        half[3] = rotate_half(e, raw_rotation, parent_translation)[3];
+        // IK). It is not `rotate_half` of the inverse bit for bit: the dot (`z + (y + x)` of
+        // `t * q`, 00cda716-00cda72b) and the along term (`splat(dot) * q`, 00cda778 /
+        // 00cda77c) take the raw `q`, so lane 3 is `+dot * q.w`, and a dot that sums to +0
+        // gives zeros whose sign follows `q`, not the inverse. `q` only becomes the inverse at
+        // 00cda79f / 00cda7a3.
+        let w = [raw_rotation[3]; 4];
+        let cross = sub4(
+            mul4(
+                shufps(parent_translation, parent_translation, 0xc9),
+                shufps(raw_rotation, raw_rotation, 0xd2),
+            ),
+            mul4(
+                shufps(parent_translation, parent_translation, 0xd2),
+                shufps(raw_rotation, raw_rotation, 0xc9),
+            ),
+        );
+        let dot = dot3(parent_translation, raw_rotation);
+        let half = add4(
+            mul4(cross, w),
+            add4(
+                mul4(
+                    add4(mul4(w, w), load_vec(e, NEG_HALF_LANES)),
+                    parent_translation,
+                ),
+                mul4([dot; 4], raw_rotation),
+            ),
+        );
         let negated = xor_bits(add4(half, half), load_bits(e, SIGN_BITS));
+        let inverse_rotation = xor_bits(raw_rotation, load_bits(e, SIGN_BITS_XYZ));
         let scale = load_vec(e, parent_block + 0x20);
         let ones = load_vec(e, ONE_LANES);
         let lanes = shufps(scale, unpckhps(scale, ones), 0xc4);
@@ -653,7 +676,6 @@ mod tests {
 
     const ALLOCATOR: u32 = 0x00a1_10c0;
     const CHANGED_ANSWER: u32 = 0x5555_0000;
-    const NEG_HALF_LANES: u32 = 0x010c_71e0;
     const NO_PARENT: u16 = 0xffff;
 
     fn entry(address: u32, words: &[u32]) -> (u32, Vec<u32>) {
@@ -1234,8 +1256,9 @@ mod tests {
     /// by (0.5, 0.5, 0.5, 0.5) gives a first half of (1, 1.5, 0.5, 0.5) (negated double
     /// (-2, -3, -1, -1)); a child at the parent's translation gives a second half doubled to
     /// (2, 3, 1, -5), so its local translation is (0, 0, 0, -6), exactly. With `-dot * q.w` lane
-    /// 3 came out 0. The same through `syncLocalSpace`, `accessBoneLocalSpace` (00cda977-00cda9eb)
-    /// and `00cdad80` with its children kept (00cdae77-00cdaeeb).
+    /// 3 came out 0. The same through `syncLocalSpace`, `accessBoneLocalSpace` on the bone itself
+    /// (00cdabaf-00cdac3f) and on its parent, which reaches it as a later bone
+    /// (00cda977-00cdaa0b), and `00cdad80` with its children kept (00cdae77-00cdaf0b).
     #[test]
     fn the_parent_translation_w_lane_takes_the_raw_rotation_dot_term() {
         let rig_of = |e: &mut Engine, flags: [u32; 2]| {
@@ -1269,8 +1292,53 @@ mod tests {
         assert_eq!(load_vec(&e, rig.local + 0x30), want);
         let (mut e, _) = engine();
         let rig = rig_of(&mut e, [0, 1]);
+        e.call(0x00cd_a8e0, &args![rig.pose, 0u32]);
+        assert_eq!(load_vec(&e, rig.local + 0x30), want);
+        let (mut e, _) = engine();
+        let rig = rig_of(&mut e, [0, 1]);
         e.call(0x00cd_ad80, &args![rig.pose, 0u32, 1u32]);
         assert_eq!(load_vec(&e, rig.local + 0x30), want);
+    }
+
+    /// The first half's dot and along term take the parent's RAW rotation in lanes 0 to 2 as
+    /// well (00cda716-00cda72b `z + (y + x)` of `t * q`, 00cda778 / 00cda77c `splat(dot) * q`),
+    /// so a dot that sums to +0 leaves zeros signed by `q`. A parent at (0, 0, 0, 0) turned by
+    /// (0.5, -0.5, 0.5, -0.5): `t * q` is (+0, -0, +0, -0), the dot +0, the first half
+    /// (+0, -0, +0, -0) and its negated double (-0, +0, -0, +0). A child at (0, 0, 0, 0) under
+    /// it: the inverse (-0.5, 0.5, -0.5, -0.5) gives a second half doubled to (-0, +0, +0, -0),
+    /// so the local translation is (-0, +0, +0, +0) (bits 0x80000000, 0, 0, 0). `rotate_half` of
+    /// the inverse made lane 0 of the first half -0 and stored +0 there. Checked by bits, as
+    /// `assert_eq!` on f32 takes -0.0 for +0.0, through every inlined copy: `syncLocalSpace`
+    /// (00cda70c), `accessBoneLocalSpace` on the parent (00cda977) and on the child itself
+    /// (00cdabaf), and `00cdad80` with its children kept (00cdae77).
+    #[test]
+    fn a_first_half_that_sums_to_zero_keeps_the_raw_rotation_signs() {
+        let rig_of = |e: &mut Engine, flags: [u32; 2]| {
+            let rig = make_rig(e, &[NO_PARENT, 0], &[0; 2], 0, [1, 0]);
+            let rotation: Vec4 = [0.5, -0.5, 0.5, -0.5];
+            put_transform(e, rig.model, [0.0; 4], rotation, [1.0; 4]);
+            put_transform(e, rig.model + 0x30, [0.0; 4], rotation, [1.0; 4]);
+            put_transform(e, rig.local + 0x30, [-9.0; 4], [-9.0; 4], [-9.0; 4]);
+            set_flags_of(e, &rig, &flags);
+            rig
+        };
+        let want: [u32; 4] = [0x8000_0000, 0, 0, 0];
+        let (mut e, _) = engine();
+        let rig = rig_of(&mut e, [1, 1]);
+        e.call(0x00cd_a690, &args![rig.pose]);
+        assert_eq!(load_bits(&e, rig.local + 0x30), want);
+        let (mut e, _) = engine();
+        let rig = rig_of(&mut e, [0, 1]);
+        e.call(0x00cd_a8e0, &args![rig.pose, 0u32]);
+        assert_eq!(load_bits(&e, rig.local + 0x30), want);
+        let (mut e, _) = engine();
+        let rig = rig_of(&mut e, [0, 1]);
+        e.call(0x00cd_a8e0, &args![rig.pose, 1u32]);
+        assert_eq!(load_bits(&e, rig.local + 0x30), want);
+        let (mut e, _) = engine();
+        let rig = rig_of(&mut e, [0, 1]);
+        e.call(0x00cd_ad80, &args![rig.pose, 0u32, 1u32]);
+        assert_eq!(load_bits(&e, rig.local + 0x30), want);
     }
 
     #[test]
