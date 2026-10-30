@@ -1237,7 +1237,8 @@ pub fn fn_0063b630(
             blend = (1.0 - (hour as f64 - middle as f64) / half as f64) as f32;
             e.mem.set_u32(second, 1);
         }
-    } else if b < hour && hour <= high_noon {
+    } else if b <= hour && hour <= high_noon {
+        // 0063b72f FCOMPP; TEST AH,0x41; JP: an hour equal to the sunrise end comes here.
         e.mem.set_u32(second, 1);
         e.mem.set_u32(first, 4);
         let span = (high_noon as f64 - b as f64) as f32;

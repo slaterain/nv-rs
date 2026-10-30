@@ -1966,10 +1966,9 @@ fn dead_body_step(e: &mut Engine, this: Ptr<Actor>, player: u32, step: f32) {
         && e.call(ACTOR_FLAG_TEST_0087F4A0, &args![this]).bool()
     {
         let cell = e.call(GET_PARENT_CELL, &args![this]).u32();
-        if !e
-            .call(TES_IS_CELL_LOADED, &args![TES_POINTER, cell, 0u32])
-            .bool()
-        {
+        // 00886968 MOV ECX,[0x011dea10]: the TES object the pointer holds.
+        let tes = e.mem.u32(TES_POINTER);
+        if !e.call(TES_IS_CELL_LOADED, &args![tes, cell, 0u32]).bool() {
             let process = e.call(GET_PROCESS, &args![this]).u32();
             if process != 0 {
                 let wait = e.vcall(process, PROCESS_VSLOT_WAIT_TIME, &args![]).f32();

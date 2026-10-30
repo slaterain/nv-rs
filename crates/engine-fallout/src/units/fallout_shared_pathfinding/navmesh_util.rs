@@ -122,6 +122,9 @@ const ARRAY_ADD_DWORD: u32 = 0x007c_b2e0;
 /// (`this`, index, count) of a `BSSimpleArray<unsigned short>`.
 const ARRAY_FIND_WORD: u32 = 0x0069_b240;
 const WORD_COMPARATOR: u32 = 0x0069_b2a0;
+/// `0069b1b0(a, b)`: whether the 16-bit words at `a` and `b` are equal (the comparator
+/// `006987d0` passes for its triangle indices, 00698aa6).
+const WORD_EQUALS_COMPARATOR: u32 = 0x0069_b1b0;
 const WORD_ARRAY_REMOVE: u32 = 0x0069_add0;
 /// `NiPointer` helpers: default constructor, constructor from a pointer
 /// (cdecl: out, pointer; returns out), assignment, destructor, the held
@@ -3469,7 +3472,7 @@ pub fn fn_006987d0(
                             .ptr::<()>();
                         if e.call(
                             ARRAY_FIND_WORD,
-                            &args![triangles, item, 0u32, WORD_COMPARATOR],
+                            &args![triangles, item, 0u32, WORD_EQUALS_COMPARATOR],
                         )
                         .i32()
                             == -1

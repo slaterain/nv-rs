@@ -206,6 +206,8 @@ const ACTOR_VALUE_OWNER_OFFSET: u32 = 0xa4;
 /// `Actor` virtual `+0x360`: a test the condition callbacks use on the actor
 /// (meaning not confirmed).
 const VSLOT_ACTOR_TEST_360: u32 = 0x360;
+/// `Actor` virtual `+0x364`: the last test of the ragdoll update's enabled byte (008bd287).
+const VSLOT_ACTOR_0X364: u32 = 0x364;
 /// `Actor` virtual `+0x394`: two words (`0` and a `float`).
 const VSLOT_ACTOR_0X394: u32 = 0x394;
 /// `Actor` virtual `+0x428`: `GetCombatController` (Xbox PDB `+0x424`).
@@ -3281,7 +3283,7 @@ pub fn fn_008bcdf0(e: &mut Engine, this: Ptr<Actor>, update: u8, _unused_1: u32)
     let enabled = e.vcall(actor, VSLOT_ACTOR_0X214, &args![]).u32() == 0
         && !animating
         && !e.call(RAGDOLL_TEST_00C78090, &args![ragdoll]).bool()
-        && !e.vcall(actor, VSLOT_ACTOR_TEST_360, &args![]).bool();
+        && !e.vcall(actor, VSLOT_ACTOR_0X364, &args![]).bool();
     let masked = flags & 0xf != 0;
     let forced = flags & flag_mask != 0 || {
         let player = player_pointer(e);
@@ -8235,7 +8237,7 @@ mod tests {
         slot(&mut e, ACTOR_TABLE, 0x22c, eax(0));
         slot(&mut e, ACTOR_TABLE, 0x1e4, eax(0));
         slot(&mut e, ACTOR_TABLE, 0x214, eax(0));
-        slot(&mut e, ACTOR_TABLE, 0x360, eax(0));
+        slot(&mut e, ACTOR_TABLE, 0x364, eax(0));
         e.register(ACTOR_FLAGS_008846E0, |_, _| eax(0));
         e.register(ENTRY_OBJECT, |_, _| eax(0));
         e.register(ACTOR_FACE_ANIMATION_DATA, |_, _| eax(0));
@@ -8453,8 +8455,8 @@ mod tests {
             ("virtual 0x214", |rig| {
                 slot(&mut rig.e, ACTOR_TABLE, 0x214, eax(5))
             }),
-            ("virtual 0x360", |rig| {
-                slot(&mut rig.e, ACTOR_TABLE, 0x360, eax(1))
+            ("virtual 0x364 (008bd287)", |rig| {
+                slot(&mut rig.e, ACTOR_TABLE, 0x364, eax(1))
             }),
             ("test c78090", |rig| {
                 rig.e.register(RAGDOLL_TEST_00C78090, |_, _| eax(1))

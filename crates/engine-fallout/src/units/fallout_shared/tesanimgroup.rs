@@ -989,7 +989,8 @@ fn anim_validate(e: &mut Engine, group: Ptr, sequence: Ptr, filename: Ptr) -> bo
             }
             let two = fn_005f3780(e, group, 2);
             let one = fn_005f3780(e, group, 1);
-            if two < one {
+            // 005f4a1f TEST AH,0x1: the time at 2 moves when it is not above the time at 1.
+            if two <= one {
                 let three = fn_005f3780(e, group, 3);
                 fn_005f3740(e, group, 2, three as f32);
             }

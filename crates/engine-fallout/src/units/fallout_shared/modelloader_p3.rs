@@ -1112,11 +1112,10 @@ pub fn fn_00446de0(e: &mut Engine, this: Ptr) -> u32 {
 }
 
 // Translated from 00446e10 (decompiled, FalloutNV.exe 1.4.0.525)
-/// The byte value of the setting object at `011c77b4` (0 when there is no
-/// object, from the scratch byte `00408d60` returns).
+/// The byte value of the setting object at `011c77b4`: the object is the static itself
+/// (00446e13 `MOV ECX,0x11c77b4`), and `00408d60` answers where its value is.
 pub fn fn_00446e10(e: &mut Engine) -> u8 {
-    let setting = e.global::<u32>(LOADING_SETTING);
-    let value = e.call(SETTING_VALUE_POINTER, &args![setting]).u32();
+    let value = e.call(SETTING_VALUE_POINTER, &args![LOADING_SETTING]).u32();
     e.mem.u8(value)
 }
 
@@ -4046,7 +4045,7 @@ mod tests {
         let mut e = engine();
         let scratch = e.mem.alloc(8);
         e.register_double(SETTING_VALUE_POINTER, move |e, a| {
-            assert_eq!(a[0], 0x6666);
+            assert_eq!(a[0], LOADING_SETTING);
             e.mem.set_u8(scratch, setting);
             scratch.into_ret()
         });
@@ -4145,7 +4144,8 @@ mod tests {
         let scratch = e.mem.alloc(8);
         e.mem.set_u8(scratch, 3);
         e.register_double(SETTING_VALUE_POINTER, move |_, a| {
-            assert_eq!(a[0], 0x6666);
+            // 00446e13: the setting object is the static itself, not the word stored there.
+            assert_eq!(a[0], LOADING_SETTING);
             scratch.into_ret()
         });
         assert_eq!(e.call(0x0044_6e10, &args![]).u8(), 3);

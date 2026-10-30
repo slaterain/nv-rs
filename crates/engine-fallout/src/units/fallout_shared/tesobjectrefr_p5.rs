@@ -2500,12 +2500,11 @@ pub fn fn_0057ab50(e: &mut Engine, key: u32) -> bool {
 /// found object), then `00569ae0(reference, value)` runs.
 pub fn fn_0057ab70(e: &mut Engine) {
     let cursor = e.mem.alloc(12);
-    loop {
-        let first = e.call(0x004b_9ba0, &args![OBJECT_REFERENCE_MAP]).u32();
-        e.mem.set_u32(cursor, first);
-        if first == 0 {
-            break;
-        }
+    // The first position once (0057ab7c); `006b7f20` then reads the entry at the cursor and
+    // moves the cursor on, and the loop tests only the cursor (0057ab84).
+    let first = e.call(0x004b_9ba0, &args![OBJECT_REFERENCE_MAP]).u32();
+    e.mem.set_u32(cursor, first);
+    while e.mem.u32(cursor) != 0 {
         e.call(
             0x006b_7f20,
             &args![OBJECT_REFERENCE_MAP, cursor, cursor + 4, cursor + 8],
@@ -7473,14 +7472,11 @@ mod tests {
         let target = object_with(&mut e, 0x40, &[(0xdc, slot_dc)]);
         let reference = refr(&mut e, 0x30, &[(0x1d0, SPARE_SLOT)]);
         returns(&mut e, SPARE_SLOT, 0x9000);
-        // the map yields one entry, then ends
-        let entries = std::rc::Rc::new(std::cell::RefCell::new(vec![1u32, 0]));
-        e.register_double(0x004b_9ba0, move |_, _| Ret {
-            eax: entries.borrow_mut().remove(0),
-            ..Ret::default()
-        });
+        // the first position once; reading the entry there moves the cursor past the end
+        returns(&mut e, 0x004b_9ba0, 1);
         e.register_double(0x006b_7f20, move |e, a| {
             // key = the reference, value = 0x4444
+            e.mem.set_u32(a[1], 0);
             e.mem.set_u32(a[2], reference);
             e.mem.set_u32(a[3], 0x4444);
             Ret::default()
@@ -7508,14 +7504,22 @@ mod tests {
         let mut e = engine2();
         let reference = refr(&mut e, 0x30, &[(0x1d0, SPARE_SLOT)]);
         returns(&mut e, SPARE_SLOT, 0x9000);
-        let entries = std::rc::Rc::new(std::cell::RefCell::new(vec![1u32, 1, 1, 0]));
-        e.register_double(0x004b_9ba0, move |_, _| Ret {
-            eax: entries.borrow_mut().remove(0),
-            ..Ret::default()
+        // the first position once (counted); three entries, the cursor moving 1 -> 2 -> 3 -> end
+        let firsts = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let counted = firsts.clone();
+        e.register_double(0x004b_9ba0, move |_, _| {
+            counted.set(counted.get() + 1);
+            Ret {
+                eax: 1,
+                ..Ret::default()
+            }
         });
         // first entry has no value, the others have one
         let values = std::rc::Rc::new(std::cell::RefCell::new(vec![0u32, 0x4444, 0x5555]));
         e.register_double(0x006b_7f20, move |e, a| {
+            let position = e.mem.u32(a[1]);
+            e.mem
+                .set_u32(a[1], if position < 3 { position + 1 } else { 0 });
             e.mem.set_u32(a[2], reference);
             e.mem.set_u32(a[3], values.borrow_mut().remove(0));
             Ret::default()
@@ -7539,6 +7543,8 @@ mod tests {
         assert_eq!(calls_to(&log, 0x0054_5960).len(), 1);
         assert!(calls_to(&log, 0x0056_9ae0).is_empty());
         assert_eq!(calls_to(&log, 0x0043_8af0).len(), 1);
+        // 0057ab7c: the first position is asked for once; skipped entries never restart the walk.
+        assert_eq!(firsts.get(), 1);
     }
 
     #[test]

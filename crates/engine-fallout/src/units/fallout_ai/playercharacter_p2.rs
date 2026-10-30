@@ -7817,7 +7817,8 @@ pub fn fn_0095c730(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
         e.set_global(INVENTORY_ALPHA, 1.0f32);
         e.call(0x008c_4640, &args![this]);
     }
-    player_character_update_first_person_zoom(e, this);
+    // 0095c7ee: the first-person zoom factor and model orientation (00952290).
+    e.call(0x0095_2290, &args![this]);
     let animation = player_character_get_animation(e, this, 1);
     e.call(0x0049_3bd0, &args![animation]);
     e.call(0x0094_ae40, &args![this, 1u32, 0u32]);
@@ -13607,11 +13608,15 @@ mod tests {
         double(&mut e, 0x0082_2b90, eax(1));
         double(&mut e, 0x0070_5990, eax(0x600));
         start_log(&mut e);
+        double(&mut e, 0x0095_2290, eax(0));
         fn_0095c730(&mut e, player, buffer);
         assert_eq!(calls_to(&e, 0x0056_7490), vec![vec![p, 75.0f32.to_bits()]]);
         assert_eq!(e.mem.u8(p + 0x64c), 1);
         assert_eq!(e.global::<f32>(INVENTORY_ALPHA), 1.0);
         assert_eq!(calls_to(&e, 0x008c_4640), vec![vec![p]]);
+        // 0095c7ee: the zoom factor and model orientation (00952290), not UpdateFirstPersonZoom.
+        assert_eq!(calls_to(&e, 0x0095_2290), vec![vec![p]]);
+        assert!(calls_to(&e, 0x0095_0290).is_empty());
         assert_eq!(calls_to(&e, 0x0094_66d0).len(), 1);
         assert_eq!(calls_to(&e, 0x0095_f930).len(), 1);
         assert_eq!(
@@ -14164,6 +14169,7 @@ mod tests {
         slot(&mut e, holder, 0x400, eax(0));
         slot(&mut e, player.addr(), 0x3f4, eax(0));
         let frame = next_frame(&mut e, 0x14);
+        double(&mut e, 0x0095_2290, eax(0));
         fn_0095c730(&mut e, player, buffer);
         assert_eq!(calls_to(&e, 0x0042_8110), vec![vec![buffer, frame + 0x10]]);
     }

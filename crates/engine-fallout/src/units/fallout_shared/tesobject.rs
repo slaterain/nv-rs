@@ -748,7 +748,7 @@ pub fn fn_0050ee20(e: &mut Engine, this: Ptr<TESBoundObject>, reference: Ptr) ->
 /// the scale equal to the model's `009cdae0` scale). Otherwise the model is
 /// cloned (`a5d2c0`, or a deep copy through the helper object when `flag` is
 /// set), with the scale `1.0` unless the reference has another; a scale of 0
-/// prints a message and becomes 1.0. When the scale is not 1.0 and the clone
+/// prints a message and becomes 1.0. When the scale is not 1.0 and the source model
 /// reports 1.0, the model is looked up by its scaled file name
 /// (`0050fdf0`) in the model loader, added when missing, and cloned again
 /// at scale 1.0 (a found model of a matching scale is cloned through the
@@ -877,7 +877,7 @@ pub fn tes_bound_object_clone_3d(
             clone = e.call(0x00a5_d2c0, &args![source, process]).u32();
         }
         let one: f64 = e.global(ONE);
-        if f64::from(scale) != one && e.call(0x009c_dae0, &args![clone]).f64() == one {
+        if f64::from(scale) != one && e.call(0x009c_dae0, &args![source]).f64() == one {
             e.call(0x0044_0490, &args![clone, pushed_float(scale)]);
             let name = e.mem.alloc(0x108);
             e.call(0x0050_fdf0, &args![this, reference, name]);
@@ -2550,7 +2550,8 @@ mod tests {
         e.register_double(0x00a5_d2c0, move |_, _| ret(clone));
         e.register(0x0055_9450, |_, _| ret(0x6000));
         e.register(0x0043_b230, |_, _| ret(0x7000));
-        // The model's scale, the clone's, then the found model's.
+        // The model's scale, the source model's again (0050f25c: not the clone), then the found
+        // model's.
         e.register_double(0x009c_dae0, {
             let mut results = vec![2.0, 1.0, 1.0];
             move |_, _| float_ret(results.pop().unwrap())
@@ -2561,6 +2562,13 @@ mod tests {
         assert_eq!(e.call(0x0050ee50, &[object, 0x4000, 0]).u32(), 0x9999);
         let log = calls(&mut e);
         assert!(log.contains(&(0x7000_014c, vec![object, 0x4000, 0])));
+        // The scale test after cloning reads the source model (0x3000), not the clone.
+        let scaled: Vec<u32> = log
+            .iter()
+            .filter(|call| call.0 == 0x009c_dae0)
+            .map(|call| call.1[0])
+            .collect();
+        assert_eq!(scaled.get(1), Some(&0x3000));
         assert_eq!(log[log.len() - 2].0, 0x0040_c110);
         assert_eq!(log[log.len() - 1].0, 0x004a_d270);
         assert!(!log.iter().any(|call| call.0 == 0x0044_0460));

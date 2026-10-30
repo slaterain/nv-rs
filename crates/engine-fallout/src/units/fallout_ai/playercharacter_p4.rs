@@ -987,10 +987,10 @@ pub fn fn_00968690(e: &mut Engine, this: Ptr, result: Ptr, time: f32) -> Ptr {
 }
 
 // Translated from 00968730 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Shows the radiation level on the HUD: the process's `GetRadiationDelta`
-/// (slot 0x76c) plus its `GetRadiationWaterDelta` (slot 0x764) as the first
-/// float, its `GetRadiationMagicDelta` (slot 0x75c) as the second, passed to
-/// `HUDMainMenu::SetRadiationLevel`.
+/// Shows the radiation level on the HUD: `HUDMainMenu::SetRadiationLevel` gets the process's
+/// `GetRadiationMagicDelta` (slot 0x75c) as the first float and its `GetRadiationDelta` (slot
+/// 0x76c) plus `GetRadiationWaterDelta` (slot 0x764) as the second: the sum is pushed first
+/// (00968786), the magic delta last (0096879a).
 pub fn fn_00968730(e: &mut Engine, this: Ptr) {
     let first = e.call(ACTOR_PROCESS, &args![this]).u32();
     let second = e.call(ACTOR_PROCESS, &args![this]).u32();
@@ -999,7 +999,7 @@ pub fn fn_00968730(e: &mut Engine, this: Ptr) {
     let delta = e.vcall(first, 0x76c, &args![]).f64();
     let total = (delta + water) as f32;
     let magic = e.vcall(third, 0x75c, &args![]).f32();
-    e.call(SET_RADIATION_LEVEL, &args![total, magic]);
+    e.call(SET_RADIATION_LEVEL, &args![magic, total]);
 }
 
 // Translated from 009687b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3004,7 +3004,7 @@ mod tests {
         e.call(0x00968730, &args![actor]);
         assert_eq!(
             calls(&e, SET_RADIATION_LEVEL),
-            vec![vec![3.5f32.to_bits(), 0.5f32.to_bits()]]
+            vec![vec![0.5f32.to_bits(), 3.5f32.to_bits()]]
         );
     }
 
