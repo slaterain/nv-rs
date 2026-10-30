@@ -643,8 +643,11 @@ pub fn ni_switch_node_create_clone(
 fn stream_transfer(e: &mut Engine, stream: u32, slot: u32, field: u32, size: u32) {
     let component_size = e.mem.alloc(4);
     e.mem.set_u32(component_size, size);
+    // The function is a word of the stream object itself (00a945b0: `MOV EAX,[ESI+0x8]`, then
+    // `CALL EAX` with the object first, cdecl), not a virtual slot.
+    let function = e.mem.u32(stream + slot);
     let transferred = e
-        .vcall(stream, slot, &args![field, size, component_size, 1u32])
+        .call(function, &args![stream, field, size, component_size, 1u32])
         .u32();
     let total = e.mem.u32(stream + 4);
     e.mem.set_u32(stream + 4, total.wrapping_add(transferred));

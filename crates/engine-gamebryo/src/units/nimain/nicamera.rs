@@ -1377,13 +1377,16 @@ fn stream_write(e: &mut Engine, stream: Ptr, source: u32, size: u32) {
     stream_transfer(e, writer, IO_SLOT_WRITE, source, size);
 }
 
+/// The transfer function is a word of the binary stream object itself (00a71482: `MOV EAX,
+/// [EBX+0x8]`, then `CALL EAX` with the object first, cdecl: `ADD ESP,0x14`), not a virtual slot:
+/// a virtual call at +8 reached the stream's Seek (00aa1a90) with five words.
 fn stream_transfer(e: &mut Engine, object: u32, slot: u32, buffer: u32, size: u32) {
+    let transfer = e.mem.u32(object + slot);
     let transferred = e.with_stack(4, |e, size_variable| {
         e.mem.set_u32(size_variable.addr(), size);
-        e.vcall(
-            object,
-            slot,
-            &args![buffer, size, size_variable.addr(), 1u32],
+        e.call(
+            transfer,
+            &args![object, buffer, size, size_variable.addr(), 1u32],
         )
         .u32()
     });
