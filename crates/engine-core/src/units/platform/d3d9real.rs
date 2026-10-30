@@ -21,9 +21,14 @@
 use crate::Engine;
 use std::collections::{HashMap, HashSet};
 use windows::core::PCSTR;
-use windows::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct3D9::*;
+use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
+use windows::Win32::UI::Input::{
+    GetRawInputData, RegisterRawInputDevices, HRAWINPUT, MOUSE_MOVE_ABSOLUTE, RAWINPUT,
+    RAWINPUTDEVICE, RAWINPUTDEVICE_FLAGS, RAWINPUTHEADER, RID_INPUT, RIM_TYPEMOUSE,
+};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// Whether the forwarding is asked for (`NV_D3D9=real`).
@@ -170,10 +175,22 @@ extern "system" fn window_procedure(
         std::process::exit(0);
     }
     match message {
-        WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP | WM_MOUSEMOVE | WM_LBUTTONDOWN
-        | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MBUTTONDOWN | WM_MBUTTONUP
-        | WM_XBUTTONDOWN | WM_XBUTTONUP | WM_MOUSEWHEEL => {
+        WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP | WM_LBUTTONDOWN | WM_LBUTTONUP
+        | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MBUTTONDOWN | WM_MBUTTONUP | WM_XBUTTONDOWN
+        | WM_XBUTTONUP | WM_MOUSEWHEEL => {
+            if matches!(message, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN) {
+                hold_cursor(window);
+            }
             window_input(window, message, wparam, lparam)
+        }
+        WM_INPUT => raw_mouse(lparam),
+        // While the window is active the cursor stays in it, hidden (the game's DirectInput
+        // mouse is exclusive and foreground: Windows hides and holds the cursor for it).
+        WM_ACTIVATE if wparam.0 & 0xffff != 0 => hold_cursor(window),
+        WM_SIZE | WM_MOVE if cursor_held() => hold_cursor(window),
+        WM_SETCURSOR if cursor_held() && lparam.0 as u32 & 0xffff == HTCLIENT => {
+            unsafe { SetCursor(None) };
+            return LRESULT(1);
         }
         // Losing the focus lets go of everything this window held.
         WM_ACTIVATE if wparam.0 & 0xffff == 0 => release_input(),
@@ -223,8 +240,89 @@ fn release_input() {
         i.keys = [false; 256];
         i.buttons = [false; 8];
     }
-    if let Ok(mut last) = LAST_MOUSE.lock() {
-        *last = None;
+    if CURSOR_HELD.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        let _ = unsafe { ClipCursor(None) };
+    }
+}
+
+/// Whether the window holds the cursor (clipped to its client area, hidden over it).
+static CURSOR_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn cursor_held() -> bool {
+    CURSOR_HELD.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Holds the cursor in the window's client area and hides it there, as Windows does for a
+/// program whose DirectInput mouse is exclusive and in the foreground (the game's:
+/// `SetCooperativeLevel` with `DISCL_EXCLUSIVE | DISCL_FOREGROUND`).
+fn hold_cursor(window: HWND) {
+    unsafe {
+        let mut rect = RECT::default();
+        if GetClientRect(window, &mut rect).is_err() {
+            return;
+        }
+        let mut corners = [
+            POINT {
+                x: rect.left,
+                y: rect.top,
+            },
+            POINT {
+                x: rect.right,
+                y: rect.bottom,
+            },
+        ];
+        for corner in &mut corners {
+            let _ = ClientToScreen(window, corner);
+        }
+        let screen = RECT {
+            left: corners[0].x,
+            top: corners[0].y,
+            right: corners[1].x,
+            bottom: corners[1].y,
+        };
+        if ClipCursor(Some(&screen)).is_ok() {
+            CURSOR_HELD.store(true, std::sync::atomic::Ordering::Relaxed);
+            SetCursor(None);
+        }
+    }
+}
+
+/// Registers the window for the mouse's raw input: its relative counts are what DirectInput
+/// hands an exclusive mouse (no pointer acceleration, not stopped at the screen's edge).
+fn register_raw_mouse(window: HWND) {
+    let device = RAWINPUTDEVICE {
+        usUsagePage: 1,
+        usUsage: 2,
+        dwFlags: RAWINPUTDEVICE_FLAGS(0),
+        hwndTarget: window,
+    };
+    let _ =
+        unsafe { RegisterRawInputDevices(&[device], std::mem::size_of::<RAWINPUTDEVICE>() as u32) };
+}
+
+/// A raw input message: a mouse's relative motion is added to the frame's.
+fn raw_mouse(lparam: LPARAM) {
+    let mut raw = RAWINPUT::default();
+    let mut size = std::mem::size_of::<RAWINPUT>() as u32;
+    let read = unsafe {
+        GetRawInputData(
+            HRAWINPUT(lparam.0 as *mut _),
+            RID_INPUT,
+            Some(&mut raw as *mut RAWINPUT as *mut core::ffi::c_void),
+            &mut size,
+            std::mem::size_of::<RAWINPUTHEADER>() as u32,
+        )
+    };
+    if read == u32::MAX || raw.header.dwType != RIM_TYPEMOUSE.0 {
+        return;
+    }
+    let mouse = unsafe { raw.data.mouse };
+    if mouse.usFlags.0 & MOUSE_MOVE_ABSOLUTE.0 != 0 {
+        return;
+    }
+    if let Ok(mut i) = input().lock() {
+        i.motion[0] += mouse.lLastX;
+        i.motion[1] += mouse.lLastY;
     }
 }
 
@@ -272,32 +370,15 @@ fn dik(lparam: isize) -> Option<u8> {
     Some(scan & 0x7f)
 }
 
-/// The last mouse position (client coordinates of the window under it), for the motion.
-static LAST_MOUSE: std::sync::Mutex<Option<(i32, i32, isize)>> = std::sync::Mutex::new(None);
-
-/// A message of the real window that is input.
-fn window_input(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) {
+/// A message of the real window that is input (the mouse's motion comes from its raw input,
+/// [`raw_mouse`]).
+fn window_input(_window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) {
     let Ok(mut i) = input().lock() else { return };
     let button = |i: &mut Input, b: usize, down: bool| i.buttons[b] = down;
     match message {
         WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP => {
             if let Some(code) = dik(lparam.0) {
                 i.keys[code as usize] = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
-            }
-        }
-        WM_MOUSEMOVE => {
-            let (x, y) = (
-                (lparam.0 & 0xffff) as i16 as i32,
-                ((lparam.0 >> 16) & 0xffff) as i16 as i32,
-            );
-            if let Ok(mut last) = LAST_MOUSE.lock() {
-                if let Some((lx, ly, w)) = *last {
-                    if w == window.0 as isize {
-                        i.motion[0] += x - lx;
-                        i.motion[1] += y - ly;
-                    }
-                }
-                *last = Some((x, y, window.0 as isize));
             }
         }
         WM_LBUTTONDOWN | WM_LBUTTONUP => button(&mut i, 0, message == WM_LBUTTONDOWN),
@@ -375,6 +456,9 @@ unsafe fn run_window_thread(rx: std::sync::mpsc::Receiver<Request>) {
             );
             let handle = match window {
                 Ok(w) => {
+                    if !child {
+                        register_raw_mouse(w);
+                    }
                     if !child && request.style & WS_VISIBLE.0 != 0 {
                         let _ = ShowWindow(w, SW_SHOWNOACTIVATE);
                     }
