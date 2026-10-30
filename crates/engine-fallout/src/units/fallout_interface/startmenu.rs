@@ -3277,9 +3277,10 @@ const DOUBLE_ZERO: u32 = 0x0101_2060;
 const DOUBLE_ONE: u32 = 0x0101_2070;
 /// The doubles the audio volume sliders multiply `count - 1` by for `+0x18`
 /// (`FMUL double ptr [...]`): `0.5` at `01011588` (`007d29a9`, `007d2e29`)
-/// and `0x3FE3333340000000` at `010290b8` (`007d2ac9`, `007d2be9`).
+/// and `0x3FE3333340000000` (0.6 as a float, widened) at `010290b8` (`007d2ac9`,
+/// `007d2be9`).
 const DOUBLE_HALF: u32 = 0x0101_1588;
-const DOUBLE_010290B8: u32 = 0x0102_90b8;
+const DOUBLE_SIX_TENTHS: u32 = 0x0102_90b8;
 /// `007d2fc0` and `007d30e0`: the interface manager's call
 /// `00719740(byte)` (`RET 4`), the object `007d30b0` writes (`011f35cc`, byte
 /// at `+0x1b88`), the main object's `00877720` result byte setter `005407b0`.
@@ -4338,7 +4339,7 @@ pub fn fn_007d29d0(e: &mut Engine, option: Ptr) {
         0x011f_6e44,
         0x00ad_7bd0,
         0x00ad_7ab0,
-        Some(DOUBLE_010290B8),
+        Some(DOUBLE_SIX_TENTHS),
     );
 }
 
@@ -4354,7 +4355,7 @@ pub fn fn_007d2af0(e: &mut Engine, option: Ptr) {
         0x011f_6e2c,
         0x00ad_7b70,
         0x00ad_7a50,
-        Some(DOUBLE_010290B8),
+        Some(DOUBLE_SIX_TENTHS),
     );
 }
 
@@ -10060,7 +10061,7 @@ mod tests {
             r.slider_math();
             r.e.mem.set_f64(DOUBLE_HALF, 0.5);
             r.e.mem
-                .set_f64(DOUBLE_010290B8, f64::from_bits(0x3FE3_3333_4000_0000));
+                .set_f64(DOUBLE_SIX_TENTHS, f64::from_bits(0x3FE3_3333_4000_0000));
             r.stub(AUDIO_INSTANCE, 0xa0d10);
             r.with(getter, |_, _| st0(0.5));
             let option = r.option(0, 0, 5);
