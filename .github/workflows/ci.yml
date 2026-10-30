@@ -61,9 +61,14 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo clippy --locked --workspace --all-targets -- -D warnings
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+  # On pushes to main only (2026-10-30): on pull requests the hosted macOS runners often never
+  # picked the job up, and GitHub cancelled it after 15 minutes without a single step, which
+  # marked the pull request failed. The Windows and Linux checks gate pull requests.
   check-macos-viewer:
     name: check viewer (macOS)
+    if: github.event_name == 'push'
     runs-on: macos-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install stable Rust

@@ -197,8 +197,15 @@ player/camera, aim/head, action-input and per-view boundaries in
 
 ## How pull requests are merged
 
-`main` only changes through pull requests. Each needs the two CI checks
-and a review from the maintainer (CODEOWNERS), and is squash-merged. Keep
+`main` only changes through pull requests. Each needs the CI checks
+and a review from the maintainer (CODEOWNERS), and is squash-merged.
+
+Every pull request, from a person, an agent or the project's own lead, is
+also checked independently before it is merged: reviewers compare its
+translations with the original game's code and against these rules, try to
+prove each finding wrong, and only what holds up is sent back to be fixed.
+Changes to CI, build scripts or tooling get the same check: they must not
+weaken what the checks catch. Keep
 your branch rebased on `main` (at least daily while it's open, and right
 before asking for review). When two traced versions of the same thing
 disagree, say so in the pull request; the maintainer decides.
