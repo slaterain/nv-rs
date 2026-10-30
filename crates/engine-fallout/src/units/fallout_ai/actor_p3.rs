@@ -8894,7 +8894,9 @@ pub fn actor_stop_combat(e: &mut Engine, this: Ptr<Actor>, other: Ptr<Actor>) {
         let fleeing = e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool();
         if !fleeing && stopped != 0 {
             e.call(ACTOR_WORKER_884F80, &args![this]);
-            if e.call(DEBUG_MESSAGES_ENABLED, &args![this]).bool() {
+            // 008a07f7: `005b6f70` is called with nothing pushed (it only
+            // reads the byte at `011f158c` and returns).
+            if e.call(DEBUG_MESSAGES_ENABLED, &args![]).bool() {
                 let name = e.call(REFR_GET_NAME, &args![this]).u32();
                 e.call(PRINT_DEBUG_LINE, &args![STOPS_COMBAT_FORMAT, name]);
             }
@@ -19869,6 +19871,11 @@ mod tests {
         assert_eq!(
             calls_to(&e, COMBAT_CONTROLLER_STOP_COMBAT),
             vec![vec![0x9300, player.addr()]]
+        );
+        // 008a07f7: the debug-messages test takes no argument word.
+        assert_eq!(
+            calls_to(&e, DEBUG_MESSAGES_ENABLED),
+            vec![Vec::<u32>::new()]
         );
         assert_eq!(
             calls_to(&e, PRINT_DEBUG_LINE),

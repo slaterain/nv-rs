@@ -687,7 +687,7 @@ pub fn fn_00706830(e: &mut Engine) -> u8 {
 /// (`00718890`); otherwise reads a string (`LoadString`) that nobody uses.
 pub fn interface_load_game(e: &mut Engine, stream: u32) {
     // The game's frame, from its lowest local: the LoadString buffer at +0,
-    // the length word at +0xc, the 100-byte buffer at +0x10, the saved
+    // the length word at +0x10c, the 100-byte buffer at +0x110, the saved
     // word and bytes at +0x184, +0x183, +0x18b and +0x193, the floats at
     // +0x194 and +0x18c.
     e.with_stack(0x198, |e, frame| {
@@ -723,7 +723,10 @@ pub fn interface_load_game(e: &mut Engine, stream: u32) {
         e.call(MAP_FLOAT_SET_B, &args![float]);
         let version = e.vcall(stream, 0, &[]).u8();
         if version >= 12 {
-            let (length, text) = (base + 0xc, base + 0x10);
+            // Under `SUB ESP,0x198` (00706863): the length word is EBP-0x8c
+            // (00706968/00706974), the buffer EBP-0x88 (00706959, 0070698a,
+            // 00706999).
+            let (length, text) = (base + 0x10c, base + 0x110);
             e.call(MEMSET, &args![text, 0u32, STATE_STRING_SIZE]);
             e.mem.set_u32(length, 0);
             e.call(LOAD_BUFFER_READ, &args![stream, length, 4u32]);
@@ -3901,6 +3904,32 @@ mod tests {
         assert_eq!(logged(&e, MAP_FLOAT_SET_B), vec![vec![2.5f32.to_bits()]]);
         assert_eq!(*seen.borrow(), vec![(manager + 0x4d4, b"world".to_vec())]);
         assert!(logged(&e, LOAD_BUFFER_LOAD_STRING).is_empty());
+    }
+
+    #[test]
+    fn load_game_keeps_its_locals_at_the_games_frame_offsets() {
+        // The saved word is the first read, at +0x184 of the frame
+        // (EBP-0x14 under SUB ESP,0x198); the length word is at +0x10c
+        // (EBP-0x8c) and the 100-byte buffer at +0x110 (EBP-0x88).
+        let data = load_data(vec![5u32.to_le_bytes().to_vec(), b"world".to_vec()]);
+        let (mut e, _, stream) = load_engine(12, data);
+        e.call(0x0070_6860, &args![stream]);
+        let reads = logged(&e, LOAD_BUFFER_READ);
+        let base = reads[0][1] - 0x184;
+        assert_eq!(reads[6][1..], [base + 0x10c, 4]);
+        assert_eq!(reads[7][1..], [base + 0x110, 5]);
+        assert_eq!(logged(&e, MEMSET), vec![vec![base + 0x110, 0, 100]]);
+        assert_eq!(logged(&e, SUBOBJECT_SET_STRING)[0][1], base + 0x110);
+
+        // Before version 12 the LoadString buffer is the lowest local
+        // (EBP-0x198, 007069b3).
+        let (mut e, _, stream) = load_engine(11, load_data(vec![]));
+        e.call(0x0070_6860, &args![stream]);
+        let base = logged(&e, LOAD_BUFFER_READ)[0][1] - 0x184;
+        assert_eq!(
+            logged(&e, LOAD_BUFFER_LOAD_STRING),
+            vec![vec![stream, base]]
+        );
     }
 
     #[test]

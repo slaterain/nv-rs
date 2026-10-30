@@ -709,17 +709,23 @@ pub fn mobile_object_move(
                             0
                         };
                         e.call(0x0088_b0a0, &args![controller, kind]);
-                        height = e.mem.f32(at(0x170));
-                    } else if height <= water_height {
+                        // `FLD float` / `FSTP float` (`0092fa6e`) quiets a signalling NaN.
+                        height = quiet_f32(e.mem.f32(at(0x170)));
+                    } else if water_height < height {
+                        // `0092fa7c..0092fa8f`: FCOMPP of water against height, then
+                        // `TEST AH,0x5; JP`. Only water below height (C0 alone) takes the
+                        // water height; equal, above and unordered go to the navmesh
+                        // clamp at `0092fa9f`, which leaves a NaN height alone.
+                        height = water_height;
+                    } else {
                         let navmesh_height = e.mem.f32(at(0x170));
                         if height < navmesh_height && navmesh_height < water_height {
                             height = navmesh_height;
                         }
-                    } else {
-                        height = water_height;
                     }
                 } else if movement_mode == 0 && !can_move {
-                    height = e.mem.f32(at(0x170));
+                    // `FLD float` / `FSTP float` (`0092faeb`) quiets a signalling NaN.
+                    height = quiet_f32(e.mem.f32(at(0x170)));
                 }
                 e.mem.set_f32(at(0x128) + 8, height);
                 if !controller.is_null()
@@ -1291,7 +1297,9 @@ pub fn mobile_object_init_havok(e: &mut Engine, this: Ptr<MobileObject>) {
             e.with_stack(4, |e, name_slot| {
                 e.call(0x0043_8170, &args![name_slot, name]);
                 let matched = if object != 0 {
-                    let candidate = e.call(0x0041_3f40, &args![object, name_slot]).u32();
+                    // `00930eb3..00930ec5`: the name slot is pushed early for the cdecl
+                    // 009a3830; the 00413f40 getter in between takes only ECX.
+                    let candidate = e.call(0x0041_3f40, &args![object]).u32();
                     e.call(0x009a_3830, &args![candidate, name_slot]).bool()
                 } else {
                     false
@@ -3650,13 +3658,19 @@ pub fn fn_00935ae0(e: &mut Engine, this: Ptr<MobileObject>) {
         let third = e.global::<u32>(0x011e_035c) as i32;
         let current_fraction = quiet_f32(e.global::<f32>(0x011e_0358));
         let older = second > packed_first || first > packed_second || third > packed_third;
+        // Each FCOMPP below is followed by `TEST AH,0x41; JP` (skip when above or
+        // unordered) or `TEST AH,0x1; JNZ` (skip when below or unordered), so a NaN
+        // on either side never expires the record.
         let expired = if fraction > 23.0 {
             let reduced = ((fraction as f64) - 23.0) as f32;
-            (reduced > current_fraction || reduced.is_nan()) && older
+            // `00935c1b..00935c40`: reduced <= current, then the older tests again.
+            reduced <= current_fraction && older
         } else if older {
-            fraction >= current_fraction && !fraction.is_nan()
+            // `00935c48..00935c55`: fraction >= current.
+            fraction >= current_fraction
         } else {
-            fraction > current_fraction || fraction.is_nan()
+            // `00935c5d..00935c6a`: fraction <= current.
+            fraction <= current_fraction
         };
         if expired {
             e.with_stack(4, |e, slot| {
@@ -4997,6 +5011,84 @@ mod tests {
     }
 
     #[test]
+    fn move_far_water_height_wins_only_when_ordered_and_below() {
+        // `0092fa7c..0092fa8f`: `TEST AH,0x5; JP` takes the water height only when it
+        // is below the moved z (33 here, or NaN); equal, above and unordered go to
+        // the navmesh clamp at `0092fa9f` (navmesh 40), which leaves a NaN alone.
+        let nan = f32::NAN;
+        for (water, input_z, expected) in [
+            (30.0f32, 3.0f32, 30.0f32),
+            (33.0, 3.0, 33.0),
+            (100.0, 3.0, 40.0),
+            (nan, 3.0, 33.0),
+            (100.0, nan, nan),
+        ] {
+            let mut e = Engine::new();
+            let (this, input) = move_fixture(&mut e);
+            e.map(0x0102_4000, 0x1000);
+            e.mem.set_f64(0x0102_41b0, -(f32::MAX as f64));
+            e.mem.set_u32(0x1064, 0x5200);
+            e.mem.set_f32(0x5208, 0.0);
+            e.mem.set_f32(input.addr() + 8, input_z);
+            e.mem.set_u32(0x1068, 0x2000);
+            virtual_slot(&mut e, 0x2000, 0x9000, 0x28c, 0x8100);
+            stub(&mut e, 0x8100, 0x5000);
+            e.register_double(0x004a_7290, |_, _| 200.0f32.into_ret());
+            stub(&mut e, 0x0057_5d70, 0x5000);
+            stub(&mut e, 0x008d_6f30, 0x5100);
+            e.register_double(0x006d_97b0, |e, args| {
+                e.mem.set_f32(args[3], 40.0);
+                1u32.into_ret()
+            });
+            stub(&mut e, 0x005c_0880, 5);
+            e.register_double(0x0057_b0a0, move |_, _| water.into_ret());
+            stub(&mut e, 0x0062_1ad0, 0);
+            virtual_slot(&mut e, 0x1000, 0x7000, 0x2a8, 0x8050);
+            e.register_double(0x8050, |e, args| {
+                for component in 0..3 {
+                    let word = e.mem.u32(args[1] + 4 * component);
+                    e.mem.set_u32(0x3000 + 4 * component, word);
+                }
+                0u32.into_ret()
+            });
+            assert_eq!(
+                mobile_object_move(&mut e, this, 1.0, input, 0).addr(),
+                0x5000
+            );
+            let height = e.mem.f32(0x3008);
+            if expected.is_nan() {
+                assert!(height.is_nan(), "water {water} z {input_z}: {height}");
+            } else {
+                assert_eq!(height, expected, "water {water} z {input_z}");
+            }
+        }
+    }
+
+    #[test]
+    fn move_far_navmesh_height_copy_quiets_a_signalling_nan() {
+        // `0092faeb..0092faf1`: `FLD float` / `FSTP float` of the navmesh height.
+        let mut e = Engine::new();
+        let (this, input) = move_fixture(&mut e);
+        e.register_double(0x004a_7290, |_, _| 200.0f32.into_ret());
+        stub(&mut e, 0x0057_5d70, 0x5000);
+        stub(&mut e, 0x008d_6f30, 0x5100);
+        e.register_double(0x006d_97b0, |e, args| {
+            e.mem.set_u32(args[3], 0x7f80_0001);
+            1u32.into_ret()
+        });
+        virtual_slot(&mut e, 0x1000, 0x7000, 0x2a8, 0x8050);
+        e.register_double(0x8050, |e, args| {
+            for component in 0..3 {
+                let word = e.mem.u32(args[1] + 4 * component);
+                e.mem.set_u32(0x3000 + 4 * component, word);
+            }
+            0u32.into_ret()
+        });
+        assert!(mobile_object_move(&mut e, this, 1.0, input, 0).is_null());
+        assert_eq!(e.mem.u32(0x3008), 0x7fc0_0001);
+    }
+
+    #[test]
     fn controller_world_sync_moves_between_worlds_and_attaches_new_world() {
         let mut e = Engine::new();
         let (this, _) = move_fixture(&mut e);
@@ -5314,6 +5406,57 @@ mod tests {
             .iter()
             .any(|call| call.0 == 0x00c6_a200 && call.1 == [0x4500, 1, 1, 1]));
         assert_eq!(log.iter().filter(|call| call.0 == 0x0043_81b0).count(), 1);
+    }
+
+    #[test]
+    fn init_havok_limb_name_getter_takes_only_the_receiver() {
+        let mut e = Engine::new();
+        let (this, _) = move_fixture(&mut e);
+        e.map(0x0119_6000, 0x1000);
+        e.mem.set_u32(0x0119_6d74, 0x4300);
+        e.mem.set_u8(0x4200, 2);
+        e.mem.set_u32(0x1068, 0x2000);
+        virtual_slot(&mut e, 0x2000, 0x9000, 0x28c, 0x8100);
+        e.mem.set_u32(0x9000 + 0x6d0, 0x8110);
+        stub(&mut e, 0x8100, 0x5000);
+        stub(&mut e, 0x8110, 0x4400);
+        e.mem.set_u32(0x7000 + 0x1d0, 0x8120);
+        e.mem.set_u32(0x7000 + 0x1fc, 0x8130);
+        stub(&mut e, 0x8120, 1);
+        stub(&mut e, 0x8130, 0);
+        stub(&mut e, 0x0057_b520, 0);
+        stub(&mut e, 0x0045_cd60, 0);
+        stub(&mut e, 0x008d_6f30, 0);
+        stub(&mut e, 0x005d_43c0, 0x4000);
+        stub(&mut e, 0x0042_e8c0, 0x4100);
+        stub(&mut e, 0x008b_6800, 1);
+        stub(&mut e, 0x0044_1420, 0x4200);
+        stub(&mut e, 0x0096_11e0, 0x4600);
+        stub(&mut e, 0x0043_8170, 0);
+        stub(&mut e, 0x0043_81b0, 0);
+        stub(&mut e, 0x0041_3f40, 0x4608);
+        stub(&mut e, 0x009a_3830, 1);
+        stub(&mut e, 0x0043_b480, 1);
+        stub(&mut e, 0x0043_b4a0, 0x4500);
+        stub(&mut e, 0x00c6_a200, 0);
+        stub(&mut e, 0x0081_0660, 0x6100);
+        stub(&mut e, 0x0043_fcd0, 0x6100);
+        e.call_log = Some(vec![]);
+        mobile_object_init_havok(&mut e, this);
+        let log = e.call_log.unwrap();
+        let calls = |address: u32| -> Vec<Vec<u32>> {
+            log.iter()
+                .filter(|(a, _)| *a == address)
+                .map(|(_, w)| w.clone())
+                .collect()
+        };
+        let name_slot = calls(0x0043_8170)[0][0];
+        // `00930eb3..00930ec5`: the early-pushed name slot belongs to the cdecl
+        // 009a3830; the 00413f40 getter in between reads only ECX.
+        assert_eq!(calls(0x0041_3f40), vec![vec![0x4600]]);
+        assert_eq!(calls(0x009a_3830), vec![vec![0x4608, name_slot]]);
+        assert!(calls(0x00c6_a200).is_empty());
+        assert_eq!(calls(0x0043_81b0), vec![vec![name_slot]]);
     }
 
     #[test]
@@ -7723,7 +7866,9 @@ mod tests {
 
     #[test]
     fn extra_record_expiry_removes_and_frees_only_expired_payloads() {
-        for (fraction, expect_remove) in [(0.8f32, true), (0.1f32, false)] {
+        // Not older and below 23 (`00935c5d..00935c6a`): the record expires once its
+        // fraction (stored + 0.2) is at or below the current 0.5.
+        for (fraction, expect_remove) in [(0.8f32, false), (0.1f32, true)] {
             let mut e = Engine::new();
             let this = mapped(&mut e);
             e.map(0x3000, 0x3000);
@@ -7762,6 +7907,67 @@ mod tests {
             let log = e.call_log.unwrap();
             assert_eq!(log.iter().any(|call| call.0 == 0x0090_5330), expect_remove);
             assert_eq!(log.iter().any(|call| call.0 == 0x0040_1030), expect_remove);
+        }
+    }
+
+    #[test]
+    fn extra_record_expiry_follows_each_exe_compare_and_never_expires_on_nan() {
+        // `00935c1b..00935c40`: above 23, (fraction - 23) <= current and older.
+        // `00935c48..00935c55`: older, fraction >= current.
+        // `00935c5d..00935c6a`: otherwise, fraction <= current.
+        // Every unordered compare skips the expiry byte.
+        let nan = f32::NAN;
+        for (fraction, older, current, expect_remove) in [
+            (0.3f32, false, 0.5f32, true),
+            (0.5, false, 0.5, true),
+            (1.0, false, 0.5, false),
+            (nan, false, 0.5, false),
+            (0.3, false, nan, false),
+            (1.0, true, 0.5, true),
+            (0.5, true, 0.5, true),
+            (0.3, true, 0.5, false),
+            (nan, true, 0.5, false),
+            (1.0, true, nan, false),
+            (23.25, true, 0.5, true),
+            (23.5, true, 0.5, true),
+            (23.75, true, 0.5, false),
+            (23.25, false, 0.5, false),
+            (23.25, true, nan, false),
+        ] {
+            let mut e = Engine::new();
+            let this = mapped(&mut e);
+            e.map(0x3000, 0x3000);
+            e.map(0x011a_3000, 0x1000);
+            e.map(0x011e_0000, 0x1000);
+            e.mem.set_u32(0x300c, 0x4000);
+            e.mem.set_u32(0x5000, 0x5100);
+            e.mem.set_u32(0x5104, 1 | (1 << 9) | (1 << 13));
+            e.mem.set_f32(0x5108, fraction);
+            e.mem.set_f32(0x5200, 0.0);
+            e.mem.set_u32(0x011a_39c4, 1);
+            // `00935bea`: the byte at 011e0360 above the packed low field makes it older.
+            e.mem.set_u8(0x011e_0360, if older { 2 } else { 1 });
+            e.mem.set_u32(0x011e_035c, 1);
+            e.mem.set_f32(0x011e_0358, current);
+            stub(&mut e, 0x0057_4900, 0);
+            stub(&mut e, 0x005d_43c0, 0x3200);
+            stub(&mut e, 0x0042_efe0, 0x3000);
+            stub(&mut e, 0x0068_15c0, 0x5000);
+            stub(&mut e, 0x0040_3e20, 0x5200);
+            e.register_double(0x0090_5330, |e, _| {
+                e.mem.set_u32(0x300c, 0);
+                0u32.into_ret()
+            });
+            stub(&mut e, 0x0040_1030, 0);
+            stub(&mut e, 0x0072_6070, 0);
+            e.call_log = Some(vec![]);
+            fn_00935ae0(&mut e, this);
+            let log = e.call_log.unwrap();
+            assert_eq!(
+                log.iter().any(|call| call.0 == 0x0090_5330),
+                expect_remove,
+                "fraction {fraction} older {older} current {current}"
+            );
         }
     }
 

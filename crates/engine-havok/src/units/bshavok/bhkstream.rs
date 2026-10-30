@@ -289,10 +289,10 @@ pub fn bhk_stream_load_binary_ov2(e: &mut Engine, stream: u32, array: u32) -> u3
 /// `+0x20` empty with capacity word `0x80000000`, the byte at `+0x2C` = 2); the object
 /// goes to `*out`. Reads a count (four bytes) and the 16 bytes at `+0x10` (count slot 0,
 /// flag 0). For a stream version below 6 and a nonzero count, the count loses 0x30 and
-/// 0x20 bytes are read and dropped. For a nonzero count the data array is reserved
-/// (`00c908c0`, element size 1) and set to that size, and that many bytes are read to its
-/// data pointer. A stream not in PC byte order (`stream + 0x1E5` not 1) swaps the four
-/// words at `+0x10`. Answers the count.
+/// 0x20 bytes are read and dropped (count slot 4, flag 1: eight 4-byte words). For a
+/// nonzero count the data array is reserved (`00c908c0`, element size 1) and set to that
+/// size, and that many bytes are read to its data pointer. A stream not in PC byte order
+/// (`stream + 0x1E5` not 1) swaps the four words at `+0x10`. Answers the count.
 pub fn bhk_stream_load_binary_ov3(e: &mut Engine, stream: u32, out: Ptr) -> u32 {
     let (word, saved) = enter_scope(e);
     let heap = allocator(e);
@@ -316,8 +316,18 @@ pub fn bhk_stream_load_binary_ov3(e: &mut Engine, stream: u32, out: Ptr) -> u32 
         if e.mem.u32(stream + 4) < 6 && e.mem.u32(cell) != 0 {
             let reduced = e.mem.u32(cell).wrapping_sub(0x30);
             e.mem.set_u32(cell, reduced);
+            // exe 00cf136a-00cf1396: the count slot holds 4, not the size (00cf1389), so the
+            // reader takes the 0x20 bytes as eight 4-byte words; flag 1.
             e.with_stack(0x20, |e, dropped| {
-                read_from_stream(e, stream, dropped.addr(), 0x20, true);
+                let io = e.mem.u32(stream + 0x24c);
+                let function = e.mem.u32(io + 8);
+                let done = e.with_stack(4, |e, slot| {
+                    e.mem.set_u32(slot.addr(), 4);
+                    e.call(function, &args![io, dropped.addr(), 0x20u32, slot, 1u32])
+                        .u32()
+                });
+                let position = e.mem.u32(io + 4);
+                e.mem.set_u32(io + 4, position.wrapping_add(done));
             });
         }
         let count = e.mem.u32(cell);
@@ -725,6 +735,43 @@ mod tests {
         assert_eq!(reads[1][1..], [block + 0x10, 0x10, 0, 0]);
         assert_eq!(reads[2][1..], [data_block, 4, 0, 0]);
         assert_eq!(e.mem.u32(io + 4), 4 + 16 + 4);
+        assert_eq!(e.mem.u32(word), 0x77);
+    }
+
+    #[test]
+    fn load_binary_ov3_below_version_6_drops_0x20_bytes_as_four_byte_words() {
+        let (mut e, word, block) = engine_with_allocator();
+        let log: Calls = Rc::default();
+        let data_block = reserve_double(&mut e, &log);
+        let mut reads = vec![0x34u32.to_le_bytes().to_vec()];
+        reads.push((0x40..0x50).collect());
+        reads.push(vec![0xee; 0x20]);
+        reads.push(vec![0xa1, 0xa2, 0xa3, 0xa4]);
+        let (stream, io, _) = scripted_stream(&mut e, reads, &log);
+        e.mem.set_u32(stream + 4, 5);
+        // The word each read finds in its count slot (0 when it has none).
+        const SLOT_READER: u32 = 0x0900_0020;
+        let slots: Rc<RefCell<Vec<u32>>> = Rc::default();
+        let seen = Rc::clone(&slots);
+        e.register_double(SLOT_READER, move |e, a| {
+            let slot = if a[3] == 0 { 0 } else { e.mem.u32(a[3]) };
+            seen.borrow_mut().push(slot);
+            e.call(READER, a)
+        });
+        e.mem.set_u32(io + 8, SLOT_READER);
+        let out = e.mem.alloc(4);
+        // The count loses 0x30 and is what the function answers.
+        assert_eq!(e.call(0x00cf_1270, &args![stream, out]).u32(), 4);
+        let reads = calls_to(&log, READER);
+        assert_eq!(reads.len(), 4);
+        // exe 00cf1389: the dropped 0x20 bytes go with the slot holding 4 and the flag 1.
+        assert_eq!((reads[2][0], reads[2][2], reads[2][4]), (io, 0x20, 1));
+        assert_eq!(*slots.borrow(), [4, 0, 4, 0]);
+        assert_eq!(calls_to(&log, ARRAY_RESERVE)[0][1..], [block + 0x20, 4, 1]);
+        assert_eq!(e.mem.u32(block + 0x24), 4);
+        assert_eq!(reads[3][1..], [data_block, 4, 0, 0]);
+        assert_eq!(e.mem.u32(data_block), 0xa4a3_a2a1);
+        assert_eq!(e.mem.u32(io + 4), 4 + 16 + 0x20 + 4);
         assert_eq!(e.mem.u32(word), 0x77);
     }
 }

@@ -924,19 +924,22 @@ pub fn fn_005533c0(e: &mut Engine, this: Ptr) {
 
 // Translated from 005533f0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Havok world wrapper: with the world's object (`00541c80`), if there is
-/// one: takes the lock around `00c93820(world, value)`, and adds the address
-/// of `value` to the holder's list at `+0x70` (`006299c0`).
+/// one: takes the lock around `00c93820(world, value)`. Then, whether or not
+/// there is a world, adds the address of `value` to the holder's list at
+/// `+0x70` (`006299c0`).
 pub fn fn_005533f0(e: &mut Engine, this: Ptr, value: u32) {
     let world = e.call(HOLDER_GET_WORLD, &args![this]).u32();
     if world != 0 {
         fn_005533c0(e, this);
         e.call(WORLD_SET_GRAVITY_VECTOR, &args![world, value]);
         fn_005533c0(e, this);
-        e.with_stack(4, |e, slot| {
-            e.mem.set_u32(slot.addr(), value);
-            e.call(HOLDER_FIELD_70_ADD, &args![this.byte_add(0x70), slot]);
-        });
     }
+    // A null world jumps straight to the `006299c0` call (00553408 JZ
+    // 0x00553426), so the address is queued either way.
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), value);
+        e.call(HOLDER_FIELD_70_ADD, &args![this.byte_add(0x70), slot]);
+    });
 }
 
 // Translated from 00553440 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5171,7 +5174,13 @@ mod tests {
         });
         start_log(&mut e);
         e.call(0x0055_33f0, &args![holder, 0x1234u32]);
-        assert_eq!(addresses(&calls(&e)), vec![HOLDER_GET_WORLD]);
+        // Without a world object the value is not set but its address is
+        // still queued (00553408 jumps to the 006299c0 call).
+        let log = calls(&e);
+        assert_eq!(addresses(&log), vec![HOLDER_GET_WORLD, HOLDER_FIELD_70_ADD]);
+        assert_eq!(calls_to(&log, HOLDER_FIELD_70_ADD)[0][0], holder + 0x70);
+        assert_eq!(*seen.borrow(), 0x1234);
+        *seen.borrow_mut() = 0;
         e.mem.set_u32(holder + 0x90, 0x7700);
         start_log(&mut e);
         e.call(0x0055_33f0, &args![holder, 0x1234u32]);

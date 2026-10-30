@@ -124,31 +124,32 @@ pub fn fn_00582780(e: &mut Engine, this: Ptr) {
 /// Unnamed in the map (in this unit's range; `TESWeatherList::GetRandomWeather` `004f10b0`
 /// calls it on its list), `ECX` = a `BSSimpleList` of `WeatherEntry` pointers: picks a weather
 /// by chance. The total adds each entry's chance (a global's truncated value, or the chance
-/// word) while the nodes have entries; a total of 0 answers null. A random number
-/// (`00487f50`) modulo the total is then looked up over all nodes: each nonzero chance spans
-/// `[low, low + chance - 1]` (the running high bound starts at -1), and the first span holding
-/// the number stops the walk. The answer is the weather of the last entry read (the found one,
-/// or the last node's), null when that node had none.
+/// word) over all nodes, skipping nodes without an entry; a total of 0 answers null. A random
+/// number (`00487f50`) modulo the total is then looked up over all nodes: each nonzero chance
+/// spans `[low, low + chance - 1]` (the running high bound starts at -1), and the first span
+/// holding the number stops the walk. The answer is the weather of the last entry read (the
+/// found one, or the last node's), null when that node had none.
 pub fn fn_005827d0(e: &mut Engine, this: Ptr) -> u32 {
     let mut total = 0u32;
     let mut node = this.addr();
     while node != 0 {
         let item_at = e.call(LIST_ITEM_006815C0, &args![node]).u32();
-        if e.mem.u32(item_at) == 0 {
-            break;
+        // 005827f7: a node without an entry adds nothing and the walk goes on to the next
+        // node (00582851); it ends only at a zero node (005827ea).
+        if e.mem.u32(item_at) != 0 {
+            let item_at = e.call(LIST_ITEM_006815C0, &args![node]).u32();
+            let entry = e.mem.u32(item_at);
+            let chance = if e.mem.u32(entry + 8) != 0 {
+                let item_at = e.call(LIST_ITEM_006815C0, &args![node]).u32();
+                let entry = e.mem.u32(item_at);
+                entry_chance(e, entry)
+            } else {
+                let item_at = e.call(LIST_ITEM_006815C0, &args![node]).u32();
+                let entry = e.mem.u32(item_at);
+                e.mem.u32(entry + 4)
+            };
+            total = total.wrapping_add(chance);
         }
-        let item_at = e.call(LIST_ITEM_006815C0, &args![node]).u32();
-        let entry = e.mem.u32(item_at);
-        let chance = if e.mem.u32(entry + 8) != 0 {
-            let item_at = e.call(LIST_ITEM_006815C0, &args![node]).u32();
-            let entry = e.mem.u32(item_at);
-            entry_chance(e, entry)
-        } else {
-            let item_at = e.call(LIST_ITEM_006815C0, &args![node]).u32();
-            let entry = e.mem.u32(item_at);
-            e.mem.u32(entry + 4)
-        };
-        total = total.wrapping_add(chance);
         node = e.call(NODE_FOLLOWING_00726070, &args![node]).u32();
     }
     if total == 0 {
@@ -604,20 +605,63 @@ mod list_tests {
     }
 
     #[test]
-    fn fn_005827d0_answers_null_for_no_chance_and_stops_summing_at_an_empty_node() {
+    fn fn_005827d0_answers_null_for_no_chance_and_skips_an_empty_node_in_the_sum() {
         let mut e = pick_rig(0);
         let entries = [weather_entry(&mut e, 0xa1, 0, 0)];
         let list = make_list(&mut e, &entries);
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x0058_27d0, &args![list]).u32(), 0);
         assert!(calls(&e, RANDOM_00487F50).is_empty());
-        // The sum stops at the empty second node (total 3, so the third entry chance 5 is
-        // not counted); pick 2 is in the first span.
-        let mut e = pick_rig(2);
+        // The sum skips the empty second node and goes on to the third (005827f7 jumps to
+        // 00582851): total 3 + 5 = 8, so the spans are [0, 2] and [3, 7]. Pick 2 is in the
+        // first span, pick 5 in the third entry's.
+        for (random, want) in [(2u32, 0xa1u32), (5, 0xa5), (13, 0xa5)] {
+            let mut e = pick_rig(random);
+            let first = weather_entry(&mut e, 0xa1, 3, 0);
+            let third = weather_entry(&mut e, 0xa5, 5, 0);
+            let list = make_list(&mut e, &[first, 0, third]);
+            assert_eq!(
+                e.call(0x0058_27d0, &args![list]).u32(),
+                want,
+                "random {random}"
+            );
+        }
+        // The calls: in the sum, an entry's node is read three times and the empty node once,
+        // each followed by its next (00726070); the lookup reads each node once and stops at
+        // the third node's span.
+        let mut e = pick_rig(5);
         let first = weather_entry(&mut e, 0xa1, 3, 0);
         let third = weather_entry(&mut e, 0xa5, 5, 0);
         let list = make_list(&mut e, &[first, 0, third]);
-        assert_eq!(e.call(0x0058_27d0, &args![list]).u32(), 0xa1);
+        let second_node = e.mem.u32(list + 4);
+        let third_node = e.mem.u32(second_node + 4);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0058_27d0, &args![list]).u32(), 0xa5);
+        assert_eq!(
+            calls(&e, LIST_ITEM_006815C0),
+            vec![
+                vec![list],
+                vec![list],
+                vec![list],
+                vec![second_node],
+                vec![third_node],
+                vec![third_node],
+                vec![third_node],
+                vec![list],
+                vec![second_node],
+                vec![third_node],
+            ]
+        );
+        assert_eq!(
+            calls(&e, NODE_FOLLOWING_00726070),
+            vec![
+                vec![list],
+                vec![second_node],
+                vec![third_node],
+                vec![list],
+                vec![second_node],
+            ]
+        );
         // A global whose value changes between the two walks leaves the number outside
         // every span: the last entry read comes back.
         let mut e = pick_rig(5);

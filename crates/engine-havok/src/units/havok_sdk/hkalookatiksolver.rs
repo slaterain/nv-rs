@@ -227,10 +227,11 @@ fn absolute_quiet(e: &Engine, address: u32) -> f32 {
 /// and `MAXPS` against the limits, and it is converted back (`fn_00ce0110`) and transformed by
 /// the matrix; the byte is cleared when that moved a lane by more than the tolerance
 /// `01017d00`. The forward axis rotated by the bone's quaternion `R2` is then turned towards `d`
-/// by the angle between them times `gain` (the arc cosine is 0 for a cosine of 1 or more and pi
-/// for one of 0 or less) as a quaternion `swing`. When the roll axis is not zero, a roll angle is
-/// estimated from the distance to the target and the roll axis' components with the x87
-/// polynomial and `hkMath::acos`, and a roll quaternion about the cross product of `R2` and the
+/// by the angle between them times `gain` (the CRT arc cosine of a cosine whose absolute value is
+/// below 1 or that is NaN; otherwise 0 for a cosine of 1 or more and pi for one of -1 or less)
+/// as a quaternion `swing`. When the roll axis is not zero, a roll angle is estimated from the
+/// distance to the target and the roll axis' components with the x87 polynomial and
+/// `hkMath::acos`, and a roll quaternion about the cross product of `R2` and the
 /// roll axis rotated by the bone is combined into `swing` (`00ce0ca0`). The bone's quaternion
 /// becomes `swing * quaternion` (`setMul`).
 ///
@@ -358,8 +359,9 @@ fn solve_in_frame(
     let swing_axis = unit_length(e, cross_product(current, direction));
     store_lanes(e, frame + 0x60, swing_axis);
     let cosine = sum_xyz(lanes_mul(current, direction));
-    // `|cosine| < 1.0` takes the arc cosine, otherwise 0 for a positive cosine and pi.
-    let angle = if cosine.abs() < e.mem.f32(UNIT_FLOAT) {
+    // `FCOMP` / `TEST AH,1` (00ce0818..00ce0825): |cosine| below 1.0 or unordered (NaN) takes
+    // the arc cosine; only an ordered |cosine| >= 1.0 picks 0 (positive cosine) or pi.
+    let angle = if !(cosine.abs() >= e.mem.f32(UNIT_FLOAT)) {
         e.call(CRT_ARC_COSINE, &args![f64::from(x87_quiet(cosine))])
             .f32()
     } else if 0.0 < cosine {
@@ -908,6 +910,22 @@ mod solve_tests {
         solve(&mut r, 1.0, 0);
         let swings = calls(&r.seen, SET_AXIS_ANGLE);
         assert_eq!(f32::from_bits(swings[0][2]), std::f32::consts::PI);
+    }
+
+    #[test]
+    fn a_nan_cosine_takes_the_arc_cosine_not_pi() {
+        // 00ce0818 `FCOMP` of |cosine| with 1.0 is unordered for NaN, which sets C0, so
+        // `TEST AH,1` / `JNZ` goes to the CRT arc cosine (00ce0846) rather than to 0 or pi.
+        let mut r = plain();
+        // A NaN forward axis makes the rotated axis, and so the swing's cosine, NaN.
+        put(&mut r.e, r.setup, [f32::NAN, 0.0, 0.0, 0.0]);
+        solve(&mut r, 1.0, 0);
+        let arc_cosines = calls(&r.seen, CRT_ARC_COSINE);
+        assert_eq!(arc_cosines.len(), 1);
+        assert!(wide(&arc_cosines[0]).is_nan());
+        let swings = calls(&r.seen, SET_AXIS_ANGLE);
+        assert_eq!(swings.len(), 1);
+        assert!(f32::from_bits(swings[0][2]).is_nan());
     }
 
     #[test]

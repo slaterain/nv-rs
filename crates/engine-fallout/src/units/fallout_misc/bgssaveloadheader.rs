@@ -338,9 +338,10 @@ pub fn fn_0084da90(e: &mut Engine, this: Ptr<BGSLoadGameBuffer>) -> u32 {
 /// string is checked and nothing happens if it differs), each field handed
 /// to one of the entry's setters (`0040e500` the header size, `0084dd70` the
 /// 0x40-byte block's text, `00403550`, `0041fd00`, `00437730`, and, for a
-/// header larger than 0x2f, `0050f9a0`, then `00600ab0`, `00984f60`,
-/// `0050f9c0` the width, `007037c0` the height, `0061cc40` the position of
-/// the file after the header). The names of those setters are not known.
+/// header size above 0x2f as a signed number, `0050f9a0`, then `00600ab0`,
+/// `00984f60`, `0050f9c0` the width, `007037c0` the height, `0061cc40` the
+/// position of the file after the header). The names of those setters are
+/// not known.
 // Translation incomplete: 0084dab0 - the compiler's exception-unwind frame (FS:[0]) and the /GS cookie check (00ec408c) are not translated.
 pub fn fn_0084dab0(e: &mut Engine, file: Ptr<BGSSaveLoadFile>, entry: Ptr) {
     e.call(FILE_SEEK_SET, &args![file, 0u32]);
@@ -387,7 +388,9 @@ pub fn fn_0084dab0(e: &mut Engine, file: Ptr<BGSSaveLoadFile>, entry: Ptr) {
                 e.call(0x0041_fd00, &args![entry, text]);
                 let text = e.call(READER_LOAD_STRING, &args![reader, 0u32]).u32();
                 e.call(0x0043_7730, &args![entry, text]);
-                if size > 0x2f {
+                // 0084dca8: CMP [size],0x2f / JLE, a signed test of the word
+                // as it is in memory.
+                if e.mem.i32(header_size) > 0x2f {
                     e.mem.set_u32(fourth_word, 0);
                     e.call(READER_LOAD_RAW, &args![reader, fourth_word, 4u32]);
                     let fourth = e.mem.u32(fourth_word);
@@ -765,6 +768,39 @@ mod tests {
         let entry = e.mem.alloc(0x80);
         e.call(0x0084_dab0, &[file, entry]);
         assert!(!log.borrow().iter().any(|c| c.0 == 0x0050_f9a0));
+    }
+
+    #[test]
+    fn entry_fill_tests_the_header_size_as_signed_for_the_fourth_word() {
+        // 0084dca8: CMP/JLE is signed, so a size with the top bit set is
+        // not above 0x2f: no fourth word is read and 0050f9a0 is not called.
+        let (mut e, log, _) = reader_engine(0x8000_0030, b'x');
+        for addr in [
+            0x0040_e500,
+            0x0040_3550,
+            0x0041_fd00,
+            0x0043_7730,
+            0x0050_f9a0,
+            0x0060_0ab0,
+            0x0098_4f60,
+            0x0050_f9c0,
+            0x0070_37c0,
+            0x0061_cc40,
+            STRING_COPY,
+        ] {
+            recording(&mut e, &log, addr, 0);
+        }
+        recording(&mut e, &log, READER_LOAD_STRING, 0);
+        recording(&mut e, &log, FILE_POSITION, 0);
+        let file = e.mem.alloc(8);
+        let entry = e.mem.alloc(0x80);
+        e.call(0x0084_dab0, &[file, entry]);
+        let calls = log.borrow();
+        assert!(calls.contains(&(0x0040_e500, vec![entry, 0x8000_0030])));
+        assert!(!calls.iter().any(|c| c.0 == 0x0050_f9a0));
+        // Raw reads: the size, the 0x40 block, the width, the height and
+        // the third word; no fourth word.
+        assert_eq!(calls.iter().filter(|c| c.0 == READER_LOAD_RAW).count(), 5);
     }
 
     #[test]

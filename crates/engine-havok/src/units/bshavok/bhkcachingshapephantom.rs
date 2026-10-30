@@ -340,11 +340,12 @@ pub fn bhk_caching_shape_phantom_init(
 /// the collidable's transform space (the SSE code of [`into_local_space`]) and cast at the
 /// shape (virtual `+0x20`, with a result byte, the shape ray cast input and its output; the
 /// input's filter info and shape-collection filter, `world->m_collisionFilter + 0x10` when the
-/// input enables it and the filter exists, stay the same for every shape). A hit replaces the
-/// output's normal, hit fraction and root collidable when it is the first hit or its fraction
-/// is below the output's (the exe's `FCOMP` skips ties and NaN). The root collidable's
-/// transform finally rotates the output normal (`00c7f700`), and a second profiling record is
-/// written.
+/// input enables it and the filter exists, stay the same for every shape, while the output's
+/// hit fraction, extra info, first shape key and shape key index are reset to 1, -1, -1 and 0
+/// before each cast). A hit replaces the output's normal, hit fraction and root collidable
+/// when it is the first hit or its fraction is below the output's (the exe's `FCOMP` skips
+/// ties and NaN). The root collidable's transform finally rotates the output normal
+/// (`00c7f700`), and a second profiling record is written.
 pub fn hkp_caching_shape_phantom_ray_cast_ray(
     e: &mut Engine,
     this: Ptr<HkpCachingShapePhantom>,
@@ -355,7 +356,7 @@ pub fn hkp_caching_shape_phantom_ray_cast_ray(
     // The stack frame of the exe from the result byte (`+7`) to the end of the shape ray cast
     // output: the shape ray cast input at `+0x10` (from, to, filter info, shape-collection
     // filter) and its output at `+0x40` (normal, hit fraction at `+0x50`, extra info at
-    // `+0x54`).
+    // `+0x54`, first shape key at `+0x60`, shape key index at `+0x80`).
     const RESULT: u32 = 7;
     const SHAPE_INPUT: u32 = 0x10;
     const SHAPE_OUTPUT: u32 = 0x40;
@@ -409,9 +410,12 @@ pub fn hkp_caching_shape_phantom_ray_cast_ray(
                 let to = into_local_space(e, input.addr() + 0x10, transform);
                 store_vector(e, frame + SHAPE_INPUT + 0x10, to);
                 e.mem.set_u32(frame + HIT_FRACTION, 1.0f32.to_bits());
-                e.mem.set_u32(frame + 0x5c, 0xffff_ffff);
-                e.mem.set_u32(frame + 0x88, 0);
-                e.mem.set_u32(frame + 0x68, 0xffff_ffff);
+                // After the two pushes (00cc2866, 00cc287f) ESP is 8 bytes lower: 00cc2885
+                // [ESP+0x6c], 00cc2889 [ESP+0x98] and 00cc2894 [ESP+0x78] are the same extra info,
+                // shape key index and first shape key the reset before the loop writes.
+                e.mem.set_u32(frame + 0x54, 0xffff_ffff);
+                e.mem.set_u32(frame + 0x80, 0);
+                e.mem.set_u32(frame + 0x60, 0xffff_ffff);
                 e.vcall(
                     shape,
                     0x20,
@@ -832,6 +836,44 @@ mod tests {
             assert_eq!(cast[3], cast[1] + 0x39);
             assert_eq!(cast[1], casts[0][1]);
         }
+    }
+
+    #[test]
+    fn hkp_caching_shape_phantom_ray_cast_ray_resets_the_shape_output_before_each_cast() {
+        let mut e = logged_engine();
+        let scene = scene(&mut e, 2);
+        // The double records, for shape k, the shape ray cast output's extra info (+0x14), first
+        // shape key (+0x20), shape key index (+0x40) and the words +0x1c, +0x28, +0x48 as it is
+        // given them, then overwrites all six and reports no hit.
+        e.register(SHAPE_SLOT, |e, a| {
+            let (shape, result, output) = (a[0], a[1], a[3]);
+            let record = INSPECTED + 0x18 * e.mem.u32(shape + 4);
+            for (slot, offset) in [0x14u32, 0x20, 0x40, 0x1c, 0x28, 0x48]
+                .into_iter()
+                .enumerate()
+            {
+                let word = e.mem.u32(output + offset);
+                e.mem.set_u32(record + 4 * slot as u32, word);
+                e.mem.set_u32(output + offset, 0x5000 + offset);
+            }
+            e.mem.set_u8(result, 0);
+            Ret::default()
+        });
+        e.call(0x00cc_26c0, &args![scene.this, scene.input, scene.output]);
+        assert_eq!(calls_to(&e, SHAPE_SLOT).len(), 2);
+        let seen = |e: &Engine, k: u32| -> Vec<u32> {
+            (0..6)
+                .map(|slot| e.mem.u32(INSPECTED + 0x18 * k + 4 * slot))
+                .collect()
+        };
+        // The first cast (detail 1) gets the reset before the loop.
+        assert_eq!(seen(&e, 1)[..3].to_vec(), vec![0xffff_ffff, 0xffff_ffff, 0]);
+        // The second (detail 0) gets -1, -1 and 0 again (00cc2885, 00cc2894, 00cc2889 after the
+        // two pushes), while the words the first cast left at +0x1c, +0x28, +0x48 are kept.
+        assert_eq!(
+            seen(&e, 0),
+            vec![0xffff_ffff, 0xffff_ffff, 0, 0x501c, 0x5028, 0x5048]
+        );
     }
 
     #[test]

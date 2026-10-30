@@ -135,10 +135,10 @@ fn xor_bits(v: Vec4, mask: [u32; 4]) -> Vec4 {
 /// array otherwise: the translation is the model translation turned by the inverse of the
 /// parent's rotation (the rotation with the three lowest sign bits flipped, `010c4c00`) plus the
 /// negated double of the parent's own translation turned by that inverse too (cross term
-/// `translation x rotation` in the exe); the rotation is `setMul`
-/// of that inverse and the model rotation; the scale is the model scale times the reciprocal of
-/// the parent's scale (`RCPPS` and one Newton step, lanes 0 to 2, lane 3 zero). Ends by clearing
-/// bit 1 of the flag word.
+/// `translation x rotation` in the exe; in lane 3 its dot term is `+dot * q.w` of the raw
+/// rotation, `00cda77c`); the rotation is `setMul` of that inverse and the model rotation; the
+/// scale is the model scale times the reciprocal of the parent's scale (`RCPPS` and one Newton
+/// step, lanes 0 to 2, lane 3 zero). Ends by clearing bit 1 of the flag word.
 fn update_local(e: &mut Engine, pose: u32, index: i32, parent: u16) {
     let model = e.mem.u32(pose + 0x10);
     if parent == 0xffff {
@@ -153,16 +153,21 @@ fn update_local(e: &mut Engine, pose: u32, index: i32, parent: u16) {
                 .u32()
         };
         let parent_translation = load_vec(e, parent_block);
-        let inverse_rotation = xor_bits(
-            load_vec(e, parent_block + 0x10),
-            load_bits(e, SIGN_BITS_XYZ),
-        );
+        let raw_rotation = load_vec(e, parent_block + 0x10);
+        let inverse_rotation = xor_bits(raw_rotation, load_bits(e, SIGN_BITS_XYZ));
         // The parent's translation is turned by the INVERSE rotation: the exe's cross term is
         // `(t.y * q.z - t.z * q.y) * w` (translation x rotation; 00cda690, 00cda8e0, 00cdad80,
         // and inlined in 00c7aa60), which is `rotate_half` of the conjugate (`q* x t`, the dot
-        // term unchanged). Turning it by `q` instead moved a child bone by about twice its
-        // parent's model position (Doc's Bip01 Head ~150 units off Neck1 under look IK).
-        let half = rotate_half(e, inverse_rotation, parent_translation);
+        // term unchanged in lanes 0 to 2). Turning it by `q` instead moved a child bone by about
+        // twice its parent's model position (Doc's Bip01 Head ~150 units off Neck1 under look
+        // IK).
+        // The exe's first half (00cda70c-00cda79c, 00cda977-00cda9eb, 00cdae77-00cdaeeb) works
+        // on the parent's raw rotation: lanes 0 to 2 come out as `rotate_half` of the inverse
+        // (`t x q`, and `(-dot) * -q.i == dot * q.i`), but lane 3 is `+dot(t, q) * q.w`
+        // (00cda778 `SHUFPS XMM2,XMM4,0` / 00cda77c `MULPS XMM2,XMM0` with the raw `q`; it only
+        // becomes the inverse at 00cda79f / 00cda7a3), not `-dot * q.w`.
+        let mut half = rotate_half(e, inverse_rotation, parent_translation);
+        half[3] = rotate_half(e, raw_rotation, parent_translation)[3];
         let negated = xor_bits(add4(half, half), load_bits(e, SIGN_BITS));
         let scale = load_vec(e, parent_block + 0x20);
         let ones = load_vec(e, ONE_LANES);
@@ -1221,6 +1226,51 @@ mod tests {
         for (got, want) in t[..3].iter().zip([5.0, 0.0, 0.0]) {
             assert!((got - want).abs() < 1e-3, "local translation {t:?}");
         }
+    }
+
+    /// The first half of the local-from-model step (the parent's own translation) works on the
+    /// parent's raw rotation (00cda70c-00cda79c): lane 3 of it is `+dot(t, q) * q.w`, where the
+    /// inverse rotation's sign flips would make it `-dot * q.w`. A parent at (1, 2, 3, 4) turned
+    /// by (0.5, 0.5, 0.5, 0.5) gives a first half of (1, 1.5, 0.5, 0.5) (negated double
+    /// (-2, -3, -1, -1)); a child at the parent's translation gives a second half doubled to
+    /// (2, 3, 1, -5), so its local translation is (0, 0, 0, -6), exactly. With `-dot * q.w` lane
+    /// 3 came out 0. The same through `syncLocalSpace`, `accessBoneLocalSpace` (00cda977-00cda9eb)
+    /// and `00cdad80` with its children kept (00cdae77-00cdaeeb).
+    #[test]
+    fn the_parent_translation_w_lane_takes_the_raw_rotation_dot_term() {
+        let rig_of = |e: &mut Engine, flags: [u32; 2]| {
+            let rig = make_rig(e, &[NO_PARENT, 0], &[0; 2], 0, [1, 0]);
+            put_transform(
+                e,
+                rig.model,
+                [1.0, 2.0, 3.0, 4.0],
+                [0.5, 0.5, 0.5, 0.5],
+                [1.0, 1.0, 1.0, 1.0],
+            );
+            put_transform(
+                e,
+                rig.model + 0x30,
+                [1.0, 2.0, 3.0, 4.0],
+                [0.5, 0.5, 0.5, 0.5],
+                [1.0, 1.0, 1.0, 1.0],
+            );
+            put_transform(e, rig.local + 0x30, [-9.0; 4], [-9.0; 4], [-9.0; 4]);
+            set_flags_of(e, &rig, &flags);
+            rig
+        };
+        let want: Vec4 = [0.0, 0.0, 0.0, -6.0];
+        let (mut e, _) = engine();
+        let rig = rig_of(&mut e, [1, 1]);
+        e.call(0x00cd_a690, &args![rig.pose]);
+        assert_eq!(load_vec(&e, rig.local + 0x30), want);
+        let (mut e, _) = engine();
+        let rig = rig_of(&mut e, [0, 1]);
+        e.call(0x00cd_a8e0, &args![rig.pose, 1u32]);
+        assert_eq!(load_vec(&e, rig.local + 0x30), want);
+        let (mut e, _) = engine();
+        let rig = rig_of(&mut e, [0, 1]);
+        e.call(0x00cd_ad80, &args![rig.pose, 0u32, 1u32]);
+        assert_eq!(load_vec(&e, rig.local + 0x30), want);
     }
 
     #[test]

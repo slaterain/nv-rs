@@ -1800,15 +1800,24 @@ pub fn fn_004370f0(e: &mut Engine, this: Ptr<ExtraFactionChanges>, other: Ptr) {
 /// A function of this unit that the engine map has no name for: copies a
 /// `RADIO_DATA` (0x10 bytes: radius, range type, static percentage, position
 /// reference) from `source` into `this`, nothing when `source` is null. The
-/// floats pass through x87 registers in the game; the copy here is bitwise.
+/// two floats pass through x87 registers, which quiets a signalling NaN; the
+/// two integers are copied as they are.
 pub fn fn_00437240(e: &mut Engine, this: Ptr<RADIO_DATA>, source: Ptr<RADIO_DATA>) {
     if source.is_null() {
         return;
     }
-    for offset in [0u32, 4, 8, 0xc] {
-        let value = e.mem.u32(source.addr() + offset);
-        e.mem.set_u32(this.addr() + offset, value);
-    }
+    // 00437253: +0 radius, FLD float / FSTP float (quiets a signalling NaN).
+    let radius = e.mem.u32(source.addr());
+    e.mem.set_u32(this.addr(), x87_quiet_bits(radius));
+    // 0043725d: +4 range type, MOV.
+    let range = e.mem.u32(source.addr() + 4);
+    e.mem.set_u32(this.addr() + 4, range);
+    // 00437269: +8 static percentage, FLD float / FSTP float.
+    let percentage = e.mem.u32(source.addr() + 8);
+    e.mem.set_u32(this.addr() + 8, x87_quiet_bits(percentage));
+    // 00437275: +0xc position reference, MOV.
+    let reference = e.mem.u32(source.addr() + 0xc);
+    e.mem.set_u32(this.addr() + 0xc, reference);
 }
 
 // Translated from 00437290 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4540,6 +4549,25 @@ mod tests {
         e.mem.set_u32(to, 1);
         e.call(0x0043_7240, &args![to, 0u32]);
         assert_eq!(e.mem.u32(to), 1);
+    }
+
+    #[test]
+    fn radio_data_copy_quiets_signalling_nans_only_in_the_floats() {
+        // 00437253/00437269: the radius and static percentage go through
+        // FLD/FSTP float, which sets the quiet bit of a signalling NaN; the
+        // range type and position reference (0043725d/00437275) are MOVs.
+        let mut e = Engine::new();
+        let from = e.mem.alloc(0x10);
+        let to = e.mem.alloc(0x10);
+        let words = [0x7f80_0001u32, 0x7f80_0001, 0xff80_0002, 0xff80_0002];
+        for (i, word) in words.iter().enumerate() {
+            e.mem.set_u32(from + 4 * i as u32, *word);
+        }
+        e.call(0x0043_7240, &args![to, from]);
+        assert_eq!(e.mem.u32(to), 0x7fc0_0001);
+        assert_eq!(e.mem.u32(to + 4), 0x7f80_0001);
+        assert_eq!(e.mem.u32(to + 8), 0xffc0_0002);
+        assert_eq!(e.mem.u32(to + 0xc), 0xff80_0002);
     }
 
     #[test]

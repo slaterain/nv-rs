@@ -653,8 +653,9 @@ fn fill_forced_time_of_impact_entry(e: &mut Engine, slot: u32, info: u32) {
 }
 
 /// (offset in `m_collisionQualityTable`, value) pairs `fn_00cfb570` sets
-/// after filling the 100 bytes with 1; its code stores them in this order.
-const COLLISION_QUALITY_PAIRS: [(u32, u8); 78] = [
+/// after filling the 100 bytes with 1; its code stores them in this order
+/// (81 byte stores, 00cfb947..00cfbb2d).
+const COLLISION_QUALITY_PAIRS: [(u32, u8); 81] = [
     (0, 0),
     (1, 0),
     (9, 3),
@@ -673,12 +674,16 @@ const COLLISION_QUALITY_PAIRS: [(u32, u8); 78] = [
     (15, 3),
     (16, 3),
     (18, 3),
+    // Row 9, 00cfb9b5..00cfb9e5: 99, 96 and 98 are 3 too.
     (90, 3),
     (91, 3),
+    (99, 3),
     (92, 1),
     (93, 1),
     (94, 3),
     (95, 3),
+    (96, 3),
+    (98, 3),
     (20, 1),
     (21, 1),
     (29, 1),
@@ -1781,7 +1786,27 @@ mod tests {
         assert_eq!(table(30), 2);
         assert_eq!(table(50), 5);
         assert_eq!(table(80), 6);
-        assert_eq!(table(99), 1);
+        // 00cfb9c1: [9][9] is 3; 00cfb9df / 00cfb9e5: [9][6] and [9][8] too.
+        assert_eq!(table(99), 3);
+        assert_eq!(table(96), 3);
+        assert_eq!(table(98), 3);
+        assert_eq!(table(97), 1);
+    }
+
+    #[test]
+    fn quality_table_row_nine_matches_column_nine() {
+        let mut e = engine();
+        quality_constants(&mut e);
+        install_memset(&mut e);
+        let this = dispatcher(&mut e);
+        let info = quality_input(&mut e, true);
+        e.call(0x00cfb570, &args![this, info]);
+        let table = |index: u32| byte(&e, this, COLLISION_QUALITY_TABLE + index);
+        // Row 9 as stored at 00cfb9b5..00cfb9e5 (97 keeps the memset 1).
+        let row: Vec<u8> = (90..100).map(&table).collect();
+        assert_eq!(row, vec![3, 3, 1, 1, 3, 3, 3, 1, 3, 3]);
+        let column: Vec<u8> = (0..10).map(|r| table(r * 10 + 9)).collect();
+        assert_eq!(column, row);
     }
 
     #[test]

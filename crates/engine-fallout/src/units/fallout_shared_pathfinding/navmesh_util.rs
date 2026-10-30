@@ -322,13 +322,16 @@ fn mesh_triangles(mesh: Ptr<NavMesh>) -> Ptr {
 }
 
 /// Adds one triangle-edge handle to the temporary record keyed by a vertex.
-/// The map owns its nodes; the record pointer is destroyed after the repair
-/// scan, before the map itself is destroyed.
+/// A new record gets the 6-byte (mesh, vertex) `key` copied into its first
+/// six bytes before it is inserted. The map owns its nodes; the record
+/// pointer is destroyed after the repair scan, before the map itself is
+/// destroyed.
 fn append_vertex_edge(
     e: &mut Engine,
     map: Ptr,
     mesh: Ptr<NavMesh>,
     vertex: u16,
+    key: Ptr,
     edge_handle: Ptr,
     portal: bool,
 ) {
@@ -341,6 +344,10 @@ fn append_vertex_edge(
             if allocated != 0 {
                 record = fn_0069a730(e, Ptr::new(allocated));
             }
+            // 00699cea-00699cf1 (and 00699dc9, 00699ed1, 00699fb0): ECX = the
+            // record, push &key, CALL 0069a690 copies the key into record+0.
+            // The exe makes this call without a null test.
+            e.call(0x0069_a690, &args![record, key]);
             fn_0069b3d0(e, map, mesh.addr(), vertex as u32, record.addr());
         }
         let offset = if portal {
@@ -2666,10 +2673,12 @@ pub fn fn_00699450(e: &mut Engine, this: Ptr) -> Ptr {
 }
 
 // Translated from 006994b0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Destroys the two embedded map members at offsets zero and 0x10.
+/// Destroys the two embedded map members in reverse declaration order: the
+/// one at 0x10 first, then the one at offset zero.
 pub fn fn_006994b0(e: &mut Engine, this: Ptr) {
-    e.call(0x0069_af60, &args![this]);
+    // 006994dd-006994e3: ECX = this + 0x10, then 006994ef-006994f2: ECX = this.
     e.call(0x0069_af60, &args![this.byte_add(0x10)]);
+    e.call(0x0069_af60, &args![this]);
 }
 
 // Translated from 00699510 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3564,7 +3573,9 @@ pub fn fn_006987d0(
                                             let first_local = scratch.byte_add(0xd0);
                                             let matrix_object =
                                                 e.call(POINTER_GET, &args![reference]).ptr::<()>();
-                                            let transform = matrix_object.byte_add(0x1c + 0x10);
+                                            // 00698d81: ADD EAX,0x1c; the rotation matrix
+                                            // 004b3ae0 reads is the object's +0x1c.
+                                            let transform = matrix_object.byte_add(0x1c);
                                             let translation_object =
                                                 e.call(POINTER_GET, &args![reference]).ptr::<()>();
                                             let translation = translation_object.byte_add(0x10);
@@ -3584,7 +3595,8 @@ pub fn fn_006987d0(
                                             let second_local = scratch.byte_add(0xdc);
                                             let matrix_object =
                                                 e.call(POINTER_GET, &args![reference]).ptr::<()>();
-                                            let transform = matrix_object.byte_add(0x1c + 0x10);
+                                            // 00698dd5: ADD EAX,0x1c, as for the first vertex.
+                                            let transform = matrix_object.byte_add(0x1c);
                                             let translation_object =
                                                 e.call(POINTER_GET, &args![reference]).ptr::<()>();
                                             let translation = translation_object.byte_add(0x10);
@@ -3671,7 +3683,15 @@ pub fn fn_00699b60(e: &mut Engine, this: Ptr<NavMesh>) {
                     for corner in [edge, (edge + 1) % 3] {
                         let vertex = corner_vertex_index(e, triangle, corner);
                         fn_0069a660(e, vertex_handle, this.addr(), vertex);
-                        append_vertex_edge(e, vertex_map, this, vertex, edge_handle, portal);
+                        append_vertex_edge(
+                            e,
+                            vertex_map,
+                            this,
+                            vertex,
+                            vertex_handle,
+                            edge_handle,
+                            portal,
+                        );
                     }
                 });
             }
@@ -4305,6 +4325,18 @@ mod tests {
         assert_ne!(e.mem.u32(pair_buckets + 4), 0);
         assert_ne!(e.mem.u32(pair_buckets + 8), 0);
         assert_eq!(deleted.borrow().len(), 3);
+        // 00699cf1 / 00699dd0 / 00699ed8 / 00699fb7: each new record holds
+        // its (mesh, vertex) key in its first six bytes.
+        let mut keys: Vec<(u32, u16)> = deleted
+            .borrow()
+            .iter()
+            .map(|&record| (e.mem.u32(record), e.mem.u16(record + 4)))
+            .collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![(mesh.addr(), 0), (mesh.addr(), 1), (mesh.addr(), 2)]
+        );
     }
 
     #[test]
@@ -4640,7 +4672,10 @@ mod tests {
             }
             ret(a[1])
         });
-        e.register_double(0x004b_3ae0, |e, a| {
+        let matrices = Rc::new(RefCell::new(Vec::new()));
+        let captured_matrices = matrices.clone();
+        e.register_double(0x004b_3ae0, move |e, a| {
+            captured_matrices.borrow_mut().push(a[2]);
             for axis in 0..3 {
                 let value = e.mem.f32(a[1] + axis * 4);
                 e.mem.set_f32(a[0] + axis * 4, value);
@@ -4710,6 +4745,9 @@ mod tests {
         assert_eq!(*center_calls.borrow(), 1);
         assert_eq!(*center_hits.borrow(), 1);
         assert_eq!(*segment_calls.borrow(), 1);
+        // 00698d81 / 00698dd5: both edge vertices are rotated by the matrix
+        // at the reference object's +0x1c.
+        assert_eq!(*matrices.borrow(), vec![object + 0x1c, object + 0x1c]);
         assert_eq!(
             corners_built.borrow()[0],
             [-2.0, -2.0, 5.0],
@@ -5221,9 +5259,10 @@ mod tests {
         );
         let destroyed = recorder(&mut e, 0x0069_af60, 0);
         fn_006994b0(&mut e, this);
+        // 006994e0: the member at +0x10 is destroyed before the one at +0.
         assert_eq!(
             &*destroyed.borrow(),
-            &[vec![this.addr()], vec![this.addr() + 0x10]]
+            &[vec![this.addr() + 0x10], vec![this.addr()]]
         );
     }
 

@@ -2390,8 +2390,9 @@ fn check_initial_data_body(
                     fn_00848d90(e, Ptr::new(buffer.addr()), true);
                 }
             } else if kind == 6 && form == 0 {
-                e.mem.set_u32(cell_slot, 0);
-                e.mem.set_u32(world_slot, 0);
+                // 00849f21: the slots are not cleared again, so `0084e6a0`
+                // starts from the cell and world `0084e610` left in them (it
+                // writes nothing for a form that is not a cell or worldspace).
                 e.call(GET_ORIGINAL_LOCATION, &args![init, cell_slot, world_slot]);
                 let original_cell = e.mem.u32(cell_slot);
                 if original_cell != 0 {
@@ -6376,6 +6377,44 @@ mod tests {
         assert_eq!(
             calls(&s.e, RECONSTRUCT_ADD_REFERENCE_AT),
             vec![vec![0x4000_0020, 0x5151, 0x11, 0x22, 0x300, 0]]
+        );
+    }
+
+    #[test]
+    fn check_initial_data_keeps_the_current_place_when_the_original_writes_nothing() {
+        // 00849f21: the slots `0084e610` filled are not cleared before
+        // `0084e6a0`; when it writes nothing the current cell is used.
+        let mut s = check_setup(6, 0, 0);
+        s.e.register(LOCATION_CELL_AND_WORLD, |e, a| {
+            e.mem.set_u32(a[1], 0xce11);
+            Ret::default()
+        });
+        s.e.register(WORLD_IS_CELL_LOADED, |_, _| rv(1));
+        run_check(&mut s);
+        assert_eq!(calls(&s.e, GET_ORIGINAL_LOCATION).len(), 1);
+        assert_eq!(
+            calls(&s.e, RECONSTRUCT_ADD_REFERENCE),
+            vec![vec![0x4000_0020, 0xce11, 0x300, 0]]
+        );
+        assert!(calls(&s.e, RECONSTRUCT_ADD_REFERENCE_AT).is_empty());
+        // No current cell, only a world (flag 2 forces the branch): the world
+        // `0084e610` wrote is the one the coordinates are placed in.
+        let mut s = check_setup(6, 0, 0);
+        s.e.register_double(LOAD_INITIAL_DATA_FROM_FILE, |e, a| {
+            e.mem.set_u32(a[2] + 0xc, 0x11);
+            e.mem.set_u32(a[2] + 0x10, 0x22);
+            e.mem.set_u8(a[2] + 0x2c, 2);
+            rv(1)
+        });
+        s.e.register(LOCATION_CELL_AND_WORLD, |e, a| {
+            e.mem.set_u32(a[2], 0x5252);
+            Ret::default()
+        });
+        run_check(&mut s);
+        assert!(calls(&s.e, RECONSTRUCT_ADD_REFERENCE).is_empty());
+        assert_eq!(
+            calls(&s.e, RECONSTRUCT_ADD_REFERENCE_AT),
+            vec![vec![0x4000_0020, 0x5252, 0x11, 0x22, 0x300, 0]]
         );
     }
 

@@ -663,10 +663,11 @@ pub fn debug_text_delete_all_debug_text(e: &mut Engine, this: Ptr<DebugText>) {
 
 // Translated from 00a0df80 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The per-frame update (called from `Idle`): outside menu mode, counts down
-/// `fDie` of every table entry that has one (when it passes zero the entry's
-/// node is released, under the lock) and of every floating text (a floating
-/// text whose node is no longer shared, fewer than two references, is
-/// dropped; one whose time ran out is taken out of its parent and dropped).
+/// `fDie` of every table entry that has one (when it reaches zero or goes
+/// below, the entry's node is released, under the lock) and of every floating
+/// text (a floating text whose node is no longer shared, fewer than two
+/// references, is dropped; one whose time went below zero is taken out of its
+/// parent and dropped).
 pub fn fn_00a0df80(e: &mut Engine) {
     if e.call(IS_IN_MENU_MODE, &[]).bool() {
         return;
@@ -679,7 +680,10 @@ pub fn fn_00a0df80(e: &mut Engine) {
             let frame: f32 = e.global(FRAME_TIME);
             let left = (e.get(entry, DebugTextData::fDie) as f64 - frame as f64) as f32;
             e.set(entry, DebugTextData::fDie, left);
-            if (left as f64) < zero && !e.get(entry, DebugTextData::spNode).is_null() {
+            // `TEST AH,0x41` / `JP` at 00a0e01f: released at exactly zero
+            // too (NaN skips). The floating texts below use `TEST AH,0x5`
+            // (00a0e1dd), a strict `<`.
+            if (left as f64) <= zero && !e.get(entry, DebugTextData::spNode).is_null() {
                 debug_text_lock(e);
                 release_entry(e, entry);
                 debug_text_unlock(e);
@@ -2878,6 +2882,68 @@ mod tests {
         assert_eq!(e.mem.block_size(elements[1].0.addr()), None);
         assert_eq!(e.get(elements[2].0, DebugTextData::fDie), 3.0);
         assert!(calls_to(&log, REMOVE).contains(&vec![ROOT, elements[1].1]));
+    }
+
+    /// One floating text with a shared node (two references) and `die`.
+    fn one_floating_text(e: &mut Engine, this: Ptr<DebugText>, die: f32) -> Ptr<DebugTextData> {
+        let element = Ptr::<DebugTextData>::new(e.mem.alloc(0x2c));
+        let billboard = e.mem.alloc(0xb4);
+        e.mem.set_u32(billboard, NODE_VTABLE);
+        e.mem.set_u32(billboard + 4, 2);
+        e.mem.set_u32(billboard + 0x18, ROOT);
+        e.set(element, DebugTextData::spNode, Ptr::new(billboard));
+        e.set(element, DebugTextData::fDie, die);
+        let node = e.mem.alloc(12);
+        e.mem.set_u32(node + 8, element.addr());
+        e.set(
+            this.at(DebugText::xFloatingTextList),
+            NiTPointerList::m_pkHead,
+            node,
+        );
+        element
+    }
+
+    #[test]
+    fn frame_update_releases_an_entry_at_exactly_zero_but_not_a_floating_text() {
+        let mut e = world();
+        e.map(INSTANCE & !0xfff, 0x1000);
+        let this = debug_text_instance(&mut e, 1);
+        // 1.0 - 1.0 = 0.0: the table entry is released (`TEST AH,0x41` /
+        // `JP` at 00a0e01f), the floating text is not (`TEST AH,0x5` at
+        // 00a0e1dd).
+        let node = show(&mut e, this, 0, "a", 1.0, 1.0, 1);
+        e.set(entry_at(this, 0), DebugTextData::fDie, 1.0);
+        let element = one_floating_text(&mut e, this, 1.0);
+        e.call_log = Some(vec![]);
+        fn_00a0df80(&mut e);
+        let log = take_log(&mut e);
+        let entry = entry_at(this, 0);
+        assert!(e.get(entry, DebugTextData::spNode).is_null());
+        assert_eq!(e.get(entry, DebugTextData::fDie), -1.0);
+        assert_eq!(calls_to(&log, REMOVE), vec![vec![ROOT, node]]);
+        assert_eq!(e.get(element, DebugTextData::fDie), 0.0);
+        assert!(calls_to(&log, LIST_REMOVE_NODE).is_empty());
+    }
+
+    #[test]
+    fn frame_update_releases_nothing_when_the_countdown_is_nan() {
+        let mut e = world();
+        e.map(INSTANCE & !0xfff, 0x1000);
+        e.set_global(FRAME_TIME, f32::NAN);
+        let this = debug_text_instance(&mut e, 1);
+        // 0.5 - NaN is unordered: both release compares skip.
+        let node = show(&mut e, this, 0, "a", 1.0, 1.0, 1);
+        e.set(entry_at(this, 0), DebugTextData::fDie, 0.5);
+        let element = one_floating_text(&mut e, this, 0.5);
+        e.call_log = Some(vec![]);
+        fn_00a0df80(&mut e);
+        let log = take_log(&mut e);
+        let entry = entry_at(this, 0);
+        assert_eq!(e.get(entry, DebugTextData::spNode).addr(), node);
+        assert!(e.get(entry, DebugTextData::fDie).is_nan());
+        assert!(e.get(element, DebugTextData::fDie).is_nan());
+        assert!(calls_to(&log, REMOVE).is_empty());
+        assert!(calls_to(&log, LIST_REMOVE_NODE).is_empty());
     }
 
     #[test]

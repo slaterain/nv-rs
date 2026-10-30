@@ -4255,8 +4255,19 @@ pub fn fn_007d2650(e: &mut Engine, option: Ptr) {
 /// then the audio object's setter is called with the setting's value.
 /// Running: sets the setting to `iVal / (count - 1)` and passes the
 /// setting's value to the audio object's setter. Otherwise works the
-/// option's two words out from the audio object's getter and 1.0.
-fn audio_volume_slider(e: &mut Engine, option: Ptr, setting: u32, setter: u32, getter: u32) {
+/// option's two words out from the audio object's getter (`+0x14`) and
+/// `second_ratio` (`+0x18`): the constant each slider multiplies `count - 1`
+/// by, `FLD1` (1.0) or a `double` in the exe's data (0.5 at `01011588`, or
+/// `0x3FE3333340000000` at `010290b8`, which is `0.6f32` widened, so the
+/// `f32` here widens back to the exe's `double` exactly).
+fn audio_volume_slider(
+    e: &mut Engine,
+    option: Ptr,
+    setting: u32,
+    setter: u32,
+    getter: u32,
+    second_ratio: f32,
+) {
     if option.is_null() {
         let volume = e.call(FLOAT_AT_OBJECT, &args![setting]).f32();
         let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
@@ -4270,50 +4281,57 @@ fn audio_volume_slider(e: &mut Engine, option: Ptr, setting: u32, setter: u32, g
     } else {
         let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
         let volume = e.call(getter, &args![audio]).f32();
-        store_slider_steps(e, option, volume, 1.0);
+        store_slider_steps(e, option, volume, second_ratio);
     }
 }
 
 // Translated from 007d2790 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Audio volume slider on the setting at `011f6e14` (audio setter
-/// `00ad7b10`, getter `00ad79f0`).
+/// `00ad7b10`, getter `00ad79f0`); `+0x18` from `count - 1` times 1.0.
 pub fn fn_007d2790(e: &mut Engine, option: Ptr) {
-    audio_volume_slider(e, option, 0x011f_6e14, 0x00ad_7b10, 0x00ad_79f0);
+    // 007d2889: FLD1; FMULP on (count - 1).
+    audio_volume_slider(e, option, 0x011f_6e14, 0x00ad_7b10, 0x00ad_79f0, 1.0);
 }
 
 // Translated from 007d28b0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Audio volume slider on the setting at `011f6e20` (setter `00ad7b40`,
-/// getter `00ad7a20`).
+/// getter `00ad7a20`); `+0x18` from `count - 1` times 0.5.
 pub fn fn_007d28b0(e: &mut Engine, option: Ptr) {
-    audio_volume_slider(e, option, 0x011f_6e20, 0x00ad_7b40, 0x00ad_7a20);
+    // 007d29a9: FMUL double [01011588] (0.5) on (count - 1).
+    audio_volume_slider(e, option, 0x011f_6e20, 0x00ad_7b40, 0x00ad_7a20, 0.5);
 }
 
 // Translated from 007d29d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Audio volume slider on the setting at `011f6e44` (setter `00ad7bd0`,
-/// getter `00ad7ab0`).
+/// getter `00ad7ab0`); `+0x18` from `count - 1` times `0.6f32`.
 pub fn fn_007d29d0(e: &mut Engine, option: Ptr) {
-    audio_volume_slider(e, option, 0x011f_6e44, 0x00ad_7bd0, 0x00ad_7ab0);
+    // 007d2ac9: FMUL double [010290b8] (0x3FE3333340000000, 0.6f32 widened).
+    audio_volume_slider(e, option, 0x011f_6e44, 0x00ad_7bd0, 0x00ad_7ab0, 0.6);
 }
 
 // Translated from 007d2af0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Audio volume slider on the setting at `011f6e2c` (setter `00ad7b70`,
-/// getter `00ad7a50`).
+/// getter `00ad7a50`); `+0x18` from `count - 1` times `0.6f32`.
 pub fn fn_007d2af0(e: &mut Engine, option: Ptr) {
-    audio_volume_slider(e, option, 0x011f_6e2c, 0x00ad_7b70, 0x00ad_7a50);
+    // 007d2be9: FMUL double [010290b8] (0x3FE3333340000000, 0.6f32 widened).
+    audio_volume_slider(e, option, 0x011f_6e2c, 0x00ad_7b70, 0x00ad_7a50, 0.6);
 }
 
 // Translated from 007d2c10 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Audio volume slider on the setting at `011f6e38` (setter `00ad7ba0`,
-/// getter `00ad7a80`).
+/// getter `00ad7a80`); `+0x18` from `count - 1` times 1.0.
 pub fn fn_007d2c10(e: &mut Engine, option: Ptr) {
-    audio_volume_slider(e, option, 0x011f_6e38, 0x00ad_7ba0, 0x00ad_7a80);
+    // 007d2d09: FLD1; FMULP on (count - 1).
+    audio_volume_slider(e, option, 0x011f_6e38, 0x00ad_7ba0, 0x00ad_7a80, 1.0);
 }
 
 // Translated from 007d2d30 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `StartMenu::SetRadioVol` (Xbox PDB): the audio volume slider on the
-/// setting at `011f6e50` (setter `00ad7c00`, getter `00ad7ae0`).
+/// setting at `011f6e50` (setter `00ad7c00`, getter `00ad7ae0`); `+0x18`
+/// from `count - 1` times 0.5.
 pub fn start_menu_set_radio_vol(e: &mut Engine, option: Ptr) {
-    audio_volume_slider(e, option, 0x011f_6e50, 0x00ad_7c00, 0x00ad_7ae0);
+    // 007d2e29: FMUL double [01011588] (0.5) on (count - 1).
+    audio_volume_slider(e, option, 0x011f_6e50, 0x00ad_7c00, 0x00ad_7ae0, 0.5);
 }
 
 // Translated from 007d2e50 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -9940,21 +9958,26 @@ mod tests {
 
     #[test]
     fn audio_volume_sliders() {
-        // (address, setting, audio setter, audio getter)
+        // (address, setting, audio setter, audio getter, the float 004bd510
+        // gets for +0x18 with count 5, the step stored there): 4 times 1.0
+        // (FLD1), the double 0.5 at 01011588, or the double at 010290b8
+        // (0.6f32 widened; 4 times it is exactly 2.4f32).
         let table = [
             (
                 0x007d_2790u32,
                 0x011f_6e14u32,
                 0x00ad_7b10u32,
                 0x00ad_79f0u32,
+                4.0f32,
+                4u32,
             ),
-            (0x007d_28b0, 0x011f_6e20, 0x00ad_7b40, 0x00ad_7a20),
-            (0x007d_29d0, 0x011f_6e44, 0x00ad_7bd0, 0x00ad_7ab0),
-            (0x007d_2af0, 0x011f_6e2c, 0x00ad_7b70, 0x00ad_7a50),
-            (0x007d_2c10, 0x011f_6e38, 0x00ad_7ba0, 0x00ad_7a80),
-            (0x007d_2d30, 0x011f_6e50, 0x00ad_7c00, 0x00ad_7ae0),
+            (0x007d_28b0, 0x011f_6e20, 0x00ad_7b40, 0x00ad_7a20, 2.0, 2),
+            (0x007d_29d0, 0x011f_6e44, 0x00ad_7bd0, 0x00ad_7ab0, 2.4, 2),
+            (0x007d_2af0, 0x011f_6e2c, 0x00ad_7b70, 0x00ad_7a50, 2.4, 2),
+            (0x007d_2c10, 0x011f_6e38, 0x00ad_7ba0, 0x00ad_7a80, 4.0, 4),
+            (0x007d_2d30, 0x011f_6e50, 0x00ad_7c00, 0x00ad_7ae0, 2.0, 2),
         ];
-        for (addr, setting, setter, getter) in table {
+        for (addr, setting, setter, getter, scaled, step) in table {
             // No option: the audio object gets the setting's value.
             let mut r = rig();
             r.stub(setter, 0);
@@ -9979,7 +10002,8 @@ mod tests {
             );
             assert_eq!(r.calls_to(FLOAT_AT_OBJECT), vec![vec![setting]]);
             assert_eq!(r.calls_to(setter), vec![vec![0xa0d10, 0.75f32.to_bits()]]);
-            // Not running: the getter's 0.5 is step 2, 1.0 is step 4.
+            // Not running: the getter's 0.5 is step 2; +0x18 is 4 times the
+            // slider's own constant.
             let mut r = rig();
             r.slider_math();
             r.stub(AUDIO_INSTANCE, 0xa0d10);
@@ -9987,8 +10011,16 @@ mod tests {
             let option = r.option(0, 0, 5);
             r.e.call(addr, &args![Ptr::<()>::new(option)]);
             assert_eq!(r.calls_to(getter), vec![vec![0xa0d10]]);
+            assert_eq!(
+                r.calls_to(SLIDER_STEP),
+                vec![
+                    vec![2.0f32.to_bits(), 1.0f32.to_bits()],
+                    vec![scaled.to_bits(), 1.0f32.to_bits()]
+                ],
+                "{addr:08x}"
+            );
             assert_eq!(r.e.mem.u32(option + 0x14), 2, "{addr:08x}");
-            assert_eq!(r.e.mem.u32(option + 0x18), 4);
+            assert_eq!(r.e.mem.u32(option + 0x18), step, "{addr:08x}");
         }
     }
 

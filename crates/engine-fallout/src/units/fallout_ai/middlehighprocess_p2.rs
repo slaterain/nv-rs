@@ -2670,10 +2670,12 @@ const MOBILE_GET_LOOKING: u32 = 0x0093_1d70;
 const MIN_OF_FLOATS: u32 = 0x0040_ebd0;
 /// cdecl `(a, b)` answering in ST0 (`00404010`, the engine map has no name).
 const MAX_OF_FLOATS: u32 = 0x0040_4010;
-/// The double -1e-6 (exe double at `0x01089b18`).
-const MINUS_EPSILON: f64 = -1.0e-6;
-/// The double 1e-6 (exe double at `0x01017cf8`).
-const EPSILON: f64 = 1.0e-6;
+/// The float -1e-6 widened to double (exe double at `0x01089b18`, bytes
+/// 0xbeb0c6f7a0000000, not the exact double -1e-6).
+const MINUS_EPSILON: f64 = -1.0e-6_f32 as f64;
+/// The float 1e-6 widened to double (exe double at `0x01017cf8`, bytes
+/// 0x3eb0c6f7a0000000, not the exact double 1e-6).
+const EPSILON: f64 = 1.0e-6_f32 as f64;
 /// The double 0.017453292 (exe double at `0x01023128`), degrees to
 /// radians.
 const DEGREES_TO_RADIANS: f64 = 0.017453292_f32 as f64;
@@ -2687,9 +2689,10 @@ fn setting_float(e: &mut Engine, setting: u32) -> f32 {
 // Translated from 009295c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `MiddleHighProcess::UpdateAimSequences` (Xbox PDB): `(process, actor)`.
 /// Moves the aim angle (+0x1D0) towards zero by the frame time times the two
-/// speed settings, snapping it to 0 when it crosses zero or ends within
-/// 1e-6 of it. The blend of the left (+0x1C8) and right (+0x1CC) aim
-/// sequences is derived from the actor's looking angle plus the aim angle
+/// speed settings, snapping it to 0 when it crosses zero or ends strictly
+/// within the float 1e-6 (widened to double) of it. The blend of the left
+/// (+0x1C8) and right (+0x1CC) aim sequences is derived from the actor's
+/// looking angle plus the aim angle
 /// (divided by the side's setting times a degree in radians, limited with
 /// `0040ebd0` to 1.0) and the base sequence (+0x1C4) gets `1 -` the
 /// combined weight (`00404010`); each existing sequence's value is set with
@@ -2717,6 +2720,8 @@ pub fn middle_high_process_update_aim_sequences(
     } else if angle < 0.0 && next > 0.0 {
         e.mem.set_f32(p + 0x1d0, 0.0);
     } else if next != 0.0 && f64::from(next) > MINUS_EPSILON && f64::from(next) < EPSILON {
+        // 009296a3/009296b3: both compares are strict against the widened
+        // float, so a `next` of exactly 0x358637bd (or 0xb58637bd) is kept.
         e.mem.set_f32(p + 0x1d0, 0.0);
     } else {
         e.mem.set_f32(p + 0x1d0, x87_quiet(next));
@@ -6825,6 +6830,38 @@ mod tests {
         assert!((right - 0.125).abs() < 1e-4, "right weight {right}");
         let base = f32::from_bits(sets[0][1]);
         assert!((base - (1.0 - right)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn update_aim_sequences_snaps_strictly_inside_the_widened_float_epsilon() {
+        // 009296a3/009296b3 compare against the float 1e-6 widened to
+        // double (0x3eb0c6f7a0000000), strictly: the float 1e-6 itself
+        // (0x358637bd) and its negative are kept, the next float towards
+        // zero snaps to 0. No frame time, so `next` is the angle itself.
+        for (bits, expected) in [
+            (0x3586_37bd_u32, 0x3586_37bd_u32),
+            (0xb586_37bd, 0xb586_37bd),
+            (0x3586_37bc, 0),
+            (0xb586_37bc, 0),
+        ] {
+            let mut e = engine();
+            e.register(FLOAT_C, |_, _| ret_f(0.0));
+            let cell = float_cell(&mut e, 2.0);
+            e.register_double(FLOAT_SETTING_VALUE, move |_, _| ret(cell));
+            e.register(MOBILE_GET_LOOKING, |_, _| ret_f(0.0));
+            e.register(MIN_OF_FLOATS, |_, a| {
+                ret_f(f64::from(f32::from_bits(a[0]).min(f32::from_bits(a[1]))))
+            });
+            e.register(MAX_OF_FLOATS, |_, a| {
+                ret_f(f64::from(f32::from_bits(a[0]).max(f32::from_bits(a[1]))))
+            });
+            let p = process(&mut e);
+            let a = p.addr();
+            let target = actor(&mut e);
+            e.mem.set_f32(a + 0x1d0, f32::from_bits(bits));
+            middle_high_process_update_aim_sequences(&mut e, p, target);
+            assert_eq!(e.mem.u32(a + 0x1d0), expected, "angle {bits:#010x}");
+        }
     }
 
     /// A procedure table for package type `kind` whose entry `index` is

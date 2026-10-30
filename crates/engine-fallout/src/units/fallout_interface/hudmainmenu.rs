@@ -482,7 +482,9 @@ fn create_info_subtitles(e: &mut Engine, menu: u32, d: HudDimensions) {
         0xfa1,
         (f64::from(d.screen_width / 2) - width / half) as f32,
     );
-    let top = create_get_float(e, 0x13c, 0xfa2);
+    // 0076dfad: the y read is the info box's (hud+0x138); the height and the
+    // write are the subtitle tile's (hud+0x13c).
+    let top = create_get_float(e, 0x138, 0xfa2);
     let height = create_get_float(e, 0x13c, 0xfb0);
     create_float(e, 0x13c, 0xfa2, (top - height - 50.0) as f32);
     create_trait(e, 0x13c, 0xfa8, 1);
@@ -918,16 +920,7 @@ pub fn hud_main_menu_create(e: &mut Engine) -> Ptr {
         e.call(0x0040_fbe0, &args![0x0107_2e70_u32]);
         e.call(0x0070_37e0, &args![]);
     }
-    let kind = create_get_float(e, 0x40, 0xfa7);
-    let first: f64 = e.global(0x0107_04f0);
-    let second_match = if kind == first {
-        false
-    } else {
-        create_get_float(e, 0x40, 0xfa7) == e.global::<f64>(0x0107_04e8)
-    };
-    if kind == first || second_match {
-        create_float(e, 0x40, 0xfad, quiet_f32(maximum_depth));
-    }
+    create_maximum_depth(e, xml, maximum_depth);
     for (tile_offset, setting) in [
         (0x58, 0x011d_4918),
         (0x48, 0x011d_3e8c),
@@ -947,6 +940,23 @@ pub fn hud_main_menu_create(e: &mut Engine) -> Ptr {
     e.call(0x0072_6070, &args![current_menu]);
     create_scene(e, menu);
     Ptr::new(xml)
+}
+
+/// PC 0076fabb–0076fb00: the root XML tile gets the maximum depth (0xfad) when
+/// its 0xfa7 value equals either constant. Each getter and the setter take
+/// ECX = [EBP-0x14], the tile `Tile::ReadFile` (00a01b00) returned, not the
+/// HUD's 0x40 tile.
+fn create_maximum_depth(e: &mut Engine, xml: u32, maximum_depth: f32) {
+    let kind = e.call(0x00a0_11b0, &args![xml, 0xfa7_u32]).f64();
+    let first: f64 = e.global(0x0107_04f0);
+    let second_match = if kind == first {
+        false
+    } else {
+        e.call(0x00a0_11b0, &args![xml, 0xfa7_u32]).f64() == e.global::<f64>(0x0107_04e8)
+    };
+    if kind == first || second_match {
+        hud_set_float(e, xml, 0xfad, quiet_f32(maximum_depth));
+    }
 }
 
 fn hud_tile(e: &Engine, id: u32) -> u32 {
@@ -1019,7 +1029,9 @@ fn set_info_locked_owner_action(e: &mut Engine, reference: Ptr, lock: u32) {
 }
 
 fn set_info_lock_text_alpha(e: &mut Engine, setting: u32) {
-    let text = e.call(0x0040_3df0, &args![setting, 1_u32]).u32();
+    // 007769bc / 00776a2c: `00403df0` takes no stack word (plain RET); the pushed 1 is
+    // the last word of `00a01350` (RET 0xc), which `hud_set_text` passes.
+    let text = e.call(0x0040_3df0, &args![setting]).u32();
     let lock_tile = hud_field(e, 0xac);
     hud_set_text(e, lock_tile, text);
     set_info_lock_alpha(e);
@@ -1030,7 +1042,10 @@ fn set_info_lock_alpha(e: &mut Engine) {
 }
 
 fn set_info_tile_alpha(e: &mut Engine, offset: u32) {
-    let opacity_setting = e.call(0x0040_3e20, &args![0x011d_9774_u32, 1_u32]).u32();
+    // 007769de / 00776a4e / 00776be5 / 00776d04: `00403e20` takes no stack word (plain
+    // RET); the pushed 1 is the last word of `00a012d0` (RET 0xc), which `hud_set_float`
+    // passes.
+    let opacity_setting = e.call(0x0040_3e20, &args![0x011d_9774_u32]).u32();
     let opacity = quiet_f32(e.mem.f32(opacity_setting));
     let alpha = (f64::from(opacity) * e.global::<f64>(0x0101_e568)) as f32;
     let target_tile = hud_field(e, offset);
@@ -1113,7 +1128,9 @@ fn set_info_inventory_action(
             *display_mask |= 2;
         } else if target_type == 1 && e.call(0x0057_9690, &args![reference]).bool() {
             let setting = if actor && e.call(0x0056_6950, &args![reference]).bool() {
-                0x011d_517c
+                // 0077754f: MOV ECX,[0x011d517c] loads the Setting stored in table slot
+                // 011d5160[7]; the other two settings are immediates (B9 imm32).
+                e.mem.u32(0x011d_517c)
             } else if form_type == 0x2a {
                 0x011d_3708
             } else if form_type == 0x2b {
@@ -5089,6 +5106,10 @@ pub fn hud_main_menu_update_compass(
     let sneaking = e.vcall(player, 0x22c, &args![0_u32]).bool();
     let landmark_limit = blink_setting(e, 0x011d_12cc);
     let landmark_limit_squared = landmark_limit.wrapping_mul(landmark_limit);
+    // byte [EBP-0x8f] (state+5): written only on the not-sneaking path (00779591 = 1
+    // when changed, 007795d6 = 0 for an unchanged travel marker) and otherwise kept
+    // from the previous marker. Uninitialized in the exe before its first write.
+    let mut location_changed: u8 = 0;
     let mut marker = marker;
     while marker != 0 {
         let slot = e.call(0x0068_15c0, &args![marker]).u32();
@@ -5134,13 +5155,10 @@ pub fn hud_main_menu_update_compass(
         if !sneaking {
             if changed {
                 let map_data = e.mem.u32(record);
-                let location = e
-                    .call(
-                        0x0043_8eb0,
-                        &args![map_data, 1_u32, 0_u32, -1_i32, -1_i32, 0x0106_f370_u32],
-                    )
-                    .u32();
-                let title = e.call(0x0040_3df0, &args![0x011d_2208_u32, location]).u32();
+                // 00779509: the five pushed words and `location` are 0076b960's;
+                // 00438eb0 and 00403df0 take only `this` (plain RET).
+                let location = e.call(0x0043_8eb0, &args![map_data]).u32();
+                let title = e.call(0x0040_3df0, &args![0x011d_2208_u32]).u32();
                 fn_0076b960(
                     e,
                     Ptr::new(title),
@@ -5168,6 +5186,9 @@ pub fn hud_main_menu_update_compass(
                 let level = blink_setting(e, 0x011d_0364);
                 let player = current_player(e);
                 e.vcall(player, 0x488, &args![level]);
+                location_changed = 1;
+            } else if travel {
+                location_changed = 0;
             }
             let active = !changed && travel && distance < radius_squared;
             if !active {
@@ -5175,7 +5196,7 @@ pub fn hud_main_menu_update_compass(
                     let reference = e.mem.u32(record + 4);
                     e.mem.set_u32(state.addr(), reference);
                     e.mem.set_u8(state.addr() + 4, 0);
-                    e.mem.set_u8(state.addr() + 5, u8::from(changed));
+                    e.mem.set_u8(state.addr() + 5, location_changed);
                     fn_00772aa0(e, Ptr::new(reference), state);
                 });
             }
@@ -5269,7 +5290,9 @@ pub fn hud_main_menu_update_compass(
         }
         let position = compass_position(e, target);
         let distance = compass_distance_squared(e, position, player_position);
-        let mut alpha = max_alpha;
+        // 007799b9 / 00779a36: the faded alpha goes to [EBP-0xb4], which the
+        // function never reads; the calls still run.
+        let mut _alpha = max_alpha;
         if distance != 0.0 {
             let scaled = e
                 .call(0x0040_ebd0, &args![distance, objective_limit_squared])
@@ -5277,7 +5300,7 @@ pub fn hud_main_menu_update_compass(
             let ratio = (scaled / f64::from(objective_limit_squared)) as f32;
             let half: f64 = e.global(0x0101_1590);
             let half_alpha = (f64::from(max_alpha) / half) as f32;
-            alpha = compass_interpolate(e, half_alpha, max_alpha, ratio, 0.0, distance);
+            _alpha = compass_interpolate(e, half_alpha, max_alpha, ratio, 0.0, distance);
         }
         if objective_tiles == 0 {
             continue;
@@ -5327,7 +5350,8 @@ pub fn hud_main_menu_update_compass(
         let menu = e.call(0x00a0_3c90, &args![compass]).u32();
         if e.call(0x0059_bb30, &args![menu]).u32() == 1 {
             if actor_marker {
-                hud_set_float(e, tile, 0xfa9, alpha);
+                // 00779c4c: FLD [EBP-0x20], the max alpha, not the faded [EBP-0xb4].
+                hud_set_float(e, tile, 0xfa9, max_alpha);
             } else {
                 let blink_alpha = e.mem.f32(0x011d_979c);
                 blink_tile(e, Ptr::new(tile), distance, blink_alpha);
@@ -5772,7 +5796,9 @@ fn quest_popup_start(e: &mut Engine, this: Ptr<HUDMainMenu>) {
                 }
                 (available_width, justification_factor, text_width)
             });
-        hud_trait(e, tile, 0x1004, now);
+        // 0077ac19: the show time goes through 00715c60 (FILD qword of the
+        // zero-extended tick, so unsigned), not the signed 00700320.
+        e.call(0x0071_5c60, &args![tile, 0x1004_u32, now]);
         let timing_setting = e.call(0x0040_3e20, &args![0x011d_4d14_u32]).u32();
         let duration = (f64::from(e.mem.f32(timing_setting)) * e.global::<f64>(0x0101_7b70)
             + f64::from(now)) as f32;
@@ -6739,10 +6765,11 @@ pub fn hud_main_menu_update_xp_meter(e: &mut Engine, this: Ptr<HUDMainMenu>) {
         if defer_level_up {
             if e.mem.u32(0x011a_010c) & 4 != 0 {
                 let hidden = e.mem.u32(0x011a_010c) & 8 != 0;
-                let meter = e.mem.u32(this.addr() + 0xd8);
-                let finished = e.call(0x00a0_7fc0, &args![meter, 0xfa9_u32]).bool();
-                let meter = e.mem.u32(this.addr() + 0xd8);
-                let zero_alpha = e.call(0x00a0_11b0, &args![meter, 0xfa9_u32]).f64()
+                // 0077d933 / 0077d94f: both reads take ECX = [this+0xf0], the popup tile.
+                let popup = e.mem.u32(this.addr() + 0xf0);
+                let finished = e.call(0x00a0_7fc0, &args![popup, 0xfa9_u32]).bool();
+                let popup = e.mem.u32(this.addr() + 0xf0);
+                let zero_alpha = e.call(0x00a0_11b0, &args![popup, 0xfa9_u32]).f64()
                     == e.global::<f64>(0x0101_2060);
                 if !hidden {
                     if !in_combat {
@@ -8189,6 +8216,44 @@ mod tests {
             &mut mask,
         );
         assert_eq!(mask, 2);
+
+        // 0077754f: MOV ECX,[0x011d517c] gives 00403df0 the Setting stored in table
+        // slot 011d5160[7] for an actor 00566950 accepts, not the slot's address.
+        e.mem.set_u32(0x011d_517c, 0x011d_3a00);
+        e.register_double(0x0057_9690, |_, words| {
+            assert_eq!(words, [0x6000]);
+            Ret {
+                eax: 1,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0056_6950, |_, words| {
+            assert_eq!(words, [0x6000]);
+            Ret {
+                eax: 1,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0040_3df0, |_, words| {
+            assert_eq!(words, [0x011d_3a00]);
+            Ret {
+                eax: 0x7400,
+                ..Ret::default()
+            }
+        });
+        mask = 0;
+        set_info_inventory_action(
+            &mut e,
+            Ptr::new(0x6000),
+            0,
+            1,
+            0x2a,
+            true,
+            0,
+            true,
+            &mut mask,
+        );
+        assert_eq!(mask, 2);
     }
 
     #[test]
@@ -8629,15 +8694,16 @@ mod tests {
                 ..Ret::default()
             }
         });
+        // 00776a2c / 00776a4e: the getters take only `this`; the pushed 1 is the setter's.
         e.register_double(0x0040_3df0, |_, words| {
-            assert_eq!(words, [0x011d_44d4, 1]);
+            assert_eq!(words, [0x011d_44d4]);
             Ret {
                 eax: 0xabcd,
                 ..Ret::default()
             }
         });
         e.register_double(0x0040_3e20, |_, words| {
-            assert_eq!(words, [0x011d_9774, 1]);
+            assert_eq!(words, [0x011d_9774]);
             Ret {
                 eax: 0x011d_9774,
                 ..Ret::default()
@@ -8654,7 +8720,7 @@ mod tests {
         assert!(unfinished.is_err());
         let calls = e.call_log.take().unwrap();
         assert!(calls.iter().any(|(address, words)| {
-            *address == 0x0040_3df0 && words == &args![0x011d_44d4_u32, 1_u32]
+            *address == 0x0040_3df0 && words == &args![0x011d_44d4_u32]
         }));
 
         e.map(0x0118_4000, 0x1000);
@@ -8975,8 +9041,9 @@ mod tests {
             ..Ret::default()
         });
         e.register_double(0x0057_5590, |_, _| Ret::default());
+        // 00776d04: `00403e20` takes only `this`; the pushed 1 is `00a012d0`'s.
         e.register_double(0x0040_3e20, |_, words| {
-            assert_eq!(words, [0x011d_9774, 1]);
+            assert_eq!(words, [0x011d_9774]);
             Ret {
                 eax: 0x011d_9774,
                 ..Ret::default()
@@ -10870,6 +10937,126 @@ mod tests {
     }
 
     #[test]
+    fn create_maximum_depth_reads_and_sets_the_xml_tile() {
+        // 0076fac0 / 0076fada / 0076fafd: ECX = [EBP-0x14], the tile 00a01b00 read.
+        // JNP sets on the first match; JP skips unless the second compare is equal.
+        let mut e = Engine::new();
+        e.map(0x0107_0000, 0x1000);
+        e.mem.set_f64(0x0107_04f0, 1.0);
+        e.mem.set_f64(0x0107_04e8, 2.0);
+        for (kind, gets, sets) in [
+            (1.0, 1, true),
+            (2.0, 2, true),
+            (3.0, 2, false),
+            (f64::NAN, 2, false),
+        ] {
+            e.register_double(0x00a0_11b0, move |_, words| {
+                assert_eq!(words, &[0x4040, 0xfa7]);
+                Ret {
+                    st0: kind,
+                    ..Ret::default()
+                }
+            });
+            e.register_double(0x00a0_12d0, |_, _| Ret::default());
+            e.call_log = Some(vec![]);
+            create_maximum_depth(&mut e, 0x4040, 4.0);
+            let calls = e.call_log.take().unwrap();
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|(address, _)| *address == 0x00a0_11b0)
+                    .count(),
+                gets
+            );
+            let set = calls.iter().find(|(address, _)| *address == 0x00a0_12d0);
+            if sets {
+                assert_eq!(
+                    set.unwrap().1,
+                    args![0x4040_u32, 0xfad_u32, 4.0_f32, 1_u32].to_vec()
+                );
+            } else {
+                assert!(set.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn create_subtitles_sit_above_the_info_box() {
+        // 0076dfa0-0076e000: the subtitle tile (hud+0x13c) gets y = info box (hud+0x138)
+        // y - subtitle height - 50.
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0080_0000);
+        e.map(0x011d_9000, 0x1000);
+        e.mem.set_f64(0x0101_1590, 2.0);
+        let menu = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        e.register_double(0x00a0_9030, |_, _| Ret {
+            eax: 0x3ec,
+            ..Ret::default()
+        });
+        e.register_double(0x00a0_8b20, |_, words| Ret {
+            eax: words[1],
+            ..Ret::default()
+        });
+        e.register_double(0x00a1_ddb0, |_, words| Ret {
+            eax: words[2],
+            ..Ret::default()
+        });
+        e.register_double(0x00a0_11b0, |_, words| Ret {
+            st0: match (words[0], words[1]) {
+                (0x0107_3110, 0xfa2) => 300.0,
+                (0x0107_30d4, 0xfa2) => 999.0,
+                (0x0107_30d4, 0xfb0) => 20.0,
+                _ => 1.0,
+            },
+            ..Ret::default()
+        });
+        for address in [
+            0x00a0_12d0,
+            0x0070_0320,
+            0x00a0_1860,
+            0x0040_3df0,
+            0x00a0_1350,
+            0x00ec_62c0,
+            0x005b_d5b0,
+        ] {
+            e.register_double(address, |_, _| Ret::default());
+        }
+        e.register_double(0x00a1_b020, |_, words| Ret {
+            eax: words[1],
+            ..Ret::default()
+        });
+        let dimensions = HudDimensions {
+            screen_width: 1280,
+            screen_height: 720,
+            bracket_width: 0,
+            bracket_height: 0,
+            original_x: 0,
+            total_width: 0,
+            image_width: 0,
+        };
+        e.call_log = Some(vec![]);
+        create_info_subtitles(&mut e, menu.addr(), dimensions);
+        let calls = e.call_log.take().unwrap();
+        let y = calls
+            .iter()
+            .find(|(address, words)| {
+                *address == 0x00a0_12d0 && words[0] == 0x0107_30d4 && words[1] == 0xfa2
+            })
+            .unwrap();
+        assert_eq!(
+            y.1,
+            args![0x0107_30d4_u32, 0xfa2_u32, 230.0_f32, 1_u32].to_vec()
+        );
+        assert!(calls.iter().any(|(address, words)| {
+            *address == 0x00a0_11b0 && words == &args![0x0107_3110_u32, 0xfa2_u32]
+        }));
+        assert!(!calls.iter().any(|(address, words)| {
+            *address == 0x00a0_11b0 && words == &args![0x0107_30d4_u32, 0xfa2_u32]
+        }));
+    }
+
+    #[test]
     fn damage_threshold_uses_exact_clamp_arity_and_clears_second_perk_output_late() {
         let mut e = Engine::new();
         e.map(0x011c_a000, 0x1000);
@@ -11716,6 +11903,345 @@ mod tests {
         assert_eq!(e.mem.u32(world_record + 4), replacement_marker);
     }
 
+    /// `hud_main_menu_update_compass` with no landmarks, targets, objective
+    /// tiles or VATS actors; every squared distance is 25. Returns the engine
+    /// and the compass, landmark, objective and actor-tick pools.
+    fn compass_engine() -> (Engine, [u32; 4]) {
+        let mut e = Engine::new();
+        for (base, size) in [
+            (0x011d_0000, 0x6000),
+            (0x011d_9000, 0x6000),
+            (0x011c_d000, 0x1000),
+            (0x0101_1000, 0x1000),
+            (0x0101_e000, 0x1000),
+            (0x0101_f000, 0x1000),
+            (0x0102_1000, 0x1000),
+            (0x0102_f000, 0x1000),
+            (0x0103_c000, 0x1000),
+            (0x0107_0000, 0x1000),
+            (0x0107_3000, 0x1000),
+        ] {
+            e.map(base, size);
+        }
+        e.mem.set_f64(0x0102_f248, 57.295_776);
+        e.mem.set_f64(0x0103_c348, 360.0);
+        e.mem.set_f32(0x0107_3608, 180.0);
+        e.mem.set_f64(0x0107_0c80, 0.15);
+        e.mem.set_f64(0x0101_1590, 2.0);
+        e.mem.set_f64(0x0101_ff58, -std::f64::consts::PI);
+        e.mem.set_f64(0x0101_ff48, 2.0 * std::f64::consts::PI);
+        e.mem.set_f64(0x0101_ff40, std::f64::consts::PI);
+        e.mem.set_f64(0x0107_34f8, 1.0);
+        e.mem.set_f64(0x0102_17d8, 0.8);
+        e.mem.set_f64(0x0101_e568, 255.0);
+        e.mem.set_f32(0x011d_9774, 0.75);
+        e.mem.set_i32(0x011d_12cc, 10);
+        e.mem.set_i32(0x011d_0bd8, 5);
+        let player = e.mem.alloc(0x710);
+        let position = e.mem.alloc(12);
+        let compass = e.mem.alloc(4);
+        let landmarks = e.mem.alloc(8);
+        let objectives = e.mem.alloc(8);
+        let actor_ticks = e.mem.alloc(8);
+        let hud = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(0x011d_ea3c, player);
+        e.mem.set_u32(0x011d_96c0, hud.addr());
+        e.mem.set_i32(hud.addr() + 0x214, 100);
+        e.mem.set_i32(hud.addr() + 0x218, 180);
+        let mut player_slots = [0_u32; 0x130];
+        player_slots[0x2bc / 4] = 0x0300_1010;
+        player_slots[0x1f4 / 4] = 0x0300_1020;
+        player_slots[0x22c / 4] = 0x0300_1030;
+        player_slots[0x488 / 4] = 0x0300_1040;
+        e.put_vtable(0x0300_0000, &player_slots);
+        e.mem.set_u32(player, 0x0300_0000);
+        let mut compass_slots = [0_u32; 9];
+        compass_slots[0x20 / 4] = 0x0300_2010;
+        e.put_vtable(0x0300_2000, &compass_slots);
+        e.mem.set_u32(compass, 0x0300_2000);
+        e.register_double(0x0300_1010, |_, _| Ret::default());
+        e.register_double(0x0300_1020, move |_, _| Ret {
+            eax: position,
+            ..Ret::default()
+        });
+        e.register_double(0x0300_1030, |_, _| Ret::default());
+        e.register_double(0x0300_1040, |_, _| Ret::default());
+        e.register_double(0x0300_2010, |_, _| Ret::default());
+        e.register_double(0x00a0_0940, |_, words| Ret {
+            eax: words[0],
+            ..Ret::default()
+        });
+        e.register_double(0x008d_6f30, |_, _| Ret {
+            eax: 0x4000,
+            ..Ret::default()
+        });
+        e.register_double(0x0040_8840, |_, words| Ret {
+            st0: f64::from(f32::from_bits(words[0]).abs()),
+            ..Ret::default()
+        });
+        e.register_double(0x004b_3ab0, |_, words| {
+            assert_eq!(words.len(), 5);
+            Ret {
+                st0: 0.2,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0043_9ef0, |_, words| Ret {
+            eax: words[1],
+            ..Ret::default()
+        });
+        e.register_double(0x004a_7290, |_, _| Ret {
+            st0: 25.0,
+            ..Ret::default()
+        });
+        e.register_double(0x0040_3e20, |_, words| Ret {
+            eax: words[0],
+            ..Ret::default()
+        });
+        e.register_double(0x0043_d4d0, |_, words| Ret {
+            eax: words[0],
+            ..Ret::default()
+        });
+        for address in [
+            0x0055_5ad0,
+            0x00ec_62c0,
+            0x0094_8030,
+            0x0044_ddc0,
+            0x0055_9450,
+            0x0095_2ba0,
+            0x0072_6070,
+            0x004b_1550,
+            0x0059_5d10,
+            0x0042_5fd0,
+            0x005a_e380,
+        ] {
+            e.register_double(address, |_, _| Ret::default());
+        }
+        (e, [compass, landmarks, objectives, actor_ticks])
+    }
+
+    fn run_compass(e: &mut Engine, pools: [u32; 4]) {
+        hud_main_menu_update_compass(
+            e,
+            Ptr::new(pools[0]),
+            Ptr::new(pools[1]),
+            Ptr::new(pools[2]),
+            Ptr::new(pools[3]),
+        );
+    }
+
+    #[test]
+    fn compass_landmark_keeps_location_byte_until_an_unchanged_travel_marker() {
+        // State+5 ([EBP-0x8f]) is written only at 00779591 (1, changed) and 007795d6
+        // (0, unchanged travel marker); an unchanged non-travel marker hands 00772aa0
+        // the previous marker's byte.
+        let (mut e, pools) = compass_engine();
+        let marker_position = e.mem.alloc(12);
+        let update = e.mem.alloc(0x324);
+        let mut reference_slots = [0_u32; 0x7e];
+        reference_slots[0x48 / 4] = 0x0300_3048;
+        reference_slots[0x1f4 / 4] = 0x0300_31f4;
+        e.put_vtable(0x0300_3000, &reference_slots);
+        // Marker k: node (record, next, 011d9af0 seen at its turn), record (map data
+        // 0x100 + k, reference).
+        let mut nodes = Vec::new();
+        let mut references = Vec::new();
+        for index in 0..4_u32 {
+            let reference = e.mem.alloc(8);
+            e.mem.set_u32(reference, 0x0300_3000);
+            let record = e.mem.alloc(8);
+            e.mem.set_u32(record, 0x100 + index);
+            e.mem.set_u32(record + 4, reference);
+            let node = e.mem.alloc(12);
+            e.mem.set_u32(node, record);
+            nodes.push(node);
+            references.push(reference);
+        }
+        for pair in nodes.windows(2) {
+            e.mem.set_u32(pair[0] + 4, pair[1]);
+        }
+        let first = nodes[0];
+        e.register_double(0x0094_8030, move |_, _| Ret {
+            eax: first,
+            ..Ret::default()
+        });
+        e.register_double(0x0068_15c0, |_, words| Ret {
+            eax: words[0],
+            ..Ret::default()
+        });
+        let objective_pool = pools[2] + 4;
+        e.register_double(0x0072_6070, move |e, words| {
+            if words[0] == objective_pool {
+                return Ret::default();
+            }
+            // Keep 011d9af0 as the previous marker left it.
+            let current = e.mem.u32(0x011d_9af0);
+            e.mem.set_u32(words[0] + 8, current);
+            Ret {
+                eax: e.mem.u32(words[0] + 4),
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0044_0da0, |_, _| Ret::default());
+        e.register_double(0x0300_31f4, move |_, _| Ret {
+            eax: marker_position,
+            ..Ret::default()
+        });
+        e.register_double(0x0300_3048, |_, _| Ret::default());
+        // Only the third marker is a travel marker; only the first is in its radius.
+        e.register_double(0x0043_8ef0, |_, words| Ret {
+            eax: u32::from(words[0] == 0x102),
+            ..Ret::default()
+        });
+        let inside = references[0];
+        e.register_double(0x0056_8cb0, move |_, words| Ret {
+            st0: if words[0] == inside { 10.0 } else { 1.0 },
+            ..Ret::default()
+        });
+        e.register_double(0x0043_8ed0, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register_double(0x0043_8eb0, |_, _| Ret {
+            eax: 0x7100,
+            ..Ret::default()
+        });
+        e.register_double(0x0040_3df0, |_, _| Ret {
+            eax: 0x7200,
+            ..Ret::default()
+        });
+        e.register_double(0x0040_1000, move |_, _| Ret {
+            eax: update,
+            ..Ret::default()
+        });
+        for address in [
+            0x0044_de80,
+            0x0040_6d30,
+            0x0076_bad0,
+            0x005f_5950,
+            0x004d_5c60,
+        ] {
+            e.register_double(address, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        run_compass(&mut e, pools);
+        let calls = e.call_log.take().unwrap();
+        // 00779509: 00438eb0 and 00403df0 take only `this`; the five pushed words
+        // and `location` are 0076b960's.
+        let location = calls
+            .iter()
+            .position(|(address, _)| *address == 0x0043_8eb0)
+            .unwrap();
+        assert_eq!(calls[location].1, args![0x100_u32].to_vec());
+        assert_eq!(
+            calls[location + 1],
+            (0x0040_3df0, args![0x011d_2208_u32].to_vec())
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x0043_8eb0)
+                .count(),
+            1
+        );
+        // 011d9af0 after each marker.
+        assert_eq!(e.mem.u32(nodes[1] + 8), references[0]);
+        assert_eq!(e.mem.u32(nodes[2] + 8), references[1]);
+        assert_eq!(e.mem.u32(nodes[3] + 8), references[1]);
+        assert_eq!(e.mem.u32(0x011d_9af0), references[1]);
+    }
+
+    #[test]
+    fn compass_actor_objective_marker_uses_max_alpha() {
+        // 00779c4c: the actor branch sets 0xfa9 from [EBP-0x20] (max alpha); the
+        // 004b3ab0 fade stored at [EBP-0xb4] is never read.
+        let (mut e, pools) = compass_engine();
+        let target = e.mem.alloc(8);
+        let target_position = e.mem.alloc(12);
+        let mut target_slots = [0_u32; 0x7e];
+        target_slots[0x1f4 / 4] = 0x0300_41f4;
+        e.put_vtable(0x0300_4000, &target_slots);
+        e.mem.set_u32(target, 0x0300_4000);
+        let target_record = e.mem.alloc(4);
+        let target_node = e.mem.alloc(8);
+        e.mem.set_u32(target_node, target_record);
+        let enabled = e.mem.alloc(4);
+        e.mem.set_u8(enabled, 1);
+        let tile = e.mem.alloc(0x20);
+        let tile_entry = e.mem.alloc(4);
+        e.mem.set_u32(tile_entry, tile);
+        e.register_double(0x0095_2ba0, move |_, _| Ret {
+            eax: target_node,
+            ..Ret::default()
+        });
+        let objective_pool = pools[2] + 4;
+        e.register_double(0x0072_6070, move |_, words| Ret {
+            eax: if words[0] == objective_pool {
+                0x3456
+            } else {
+                0
+            },
+            ..Ret::default()
+        });
+        e.register_double(0x0068_15c0, |_, words| Ret {
+            eax: words[0],
+            ..Ret::default()
+        });
+        e.register_double(0x005c_bb70, move |_, words| {
+            assert_eq!(words, &[target_record]);
+            Ret {
+                eax: target,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0040_1170, |_, _| Ret {
+            eax: 0x1c,
+            ..Ret::default()
+        });
+        e.register_double(0x0040_8d60, move |_, _| Ret {
+            eax: enabled,
+            ..Ret::default()
+        });
+        e.register_double(0x0300_41f4, move |_, _| Ret {
+            eax: target_position,
+            ..Ret::default()
+        });
+        e.register_double(0x0040_ebd0, |_, _| Ret {
+            st0: 5.0,
+            ..Ret::default()
+        });
+        e.register_double(0x0068_3520, move |e, words| {
+            e.mem.set_u32(words[1], 0);
+            Ret {
+                eax: tile_entry,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00a0_3c90, |_, _| Ret {
+            eax: 0x5000,
+            ..Ret::default()
+        });
+        e.register_double(0x0059_bb30, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        for address in [0x00a0_1350, 0x00a0_12d0, 0x0070_0320] {
+            e.register_double(address, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        run_compass(&mut e, pools);
+        let calls = e.call_log.take().unwrap();
+        // The fade calls still run (007799f3 / 00779a2e).
+        assert!(calls.iter().any(|(address, _)| *address == 0x0040_ebd0));
+        let alphas: Vec<_> = calls
+            .iter()
+            .filter(|(address, words)| *address == 0x00a0_12d0 && words[1] == 0xfa9)
+            .map(|(_, words)| words.clone())
+            .collect();
+        // 0.75 opacity * 255.
+        assert_eq!(alphas, [args![tile, 0xfa9_u32, 191.25_f32, 1_u32].to_vec()]);
+    }
+
     #[test]
     fn square_helper_wraps_at_32_bits() {
         let mut e = Engine::new();
@@ -11927,6 +12453,82 @@ mod tests {
                 Some(&"stop after sound lookup")
             );
         }
+    }
+
+    #[test]
+    fn quest_popup_show_time_uses_unsigned_trait_setter() {
+        // 0077ac19: the popup's show time (trait 0x1004) goes through 00715c60 (FILD
+        // qword of the zero-extended tick), not the signed 00700320.
+        let mut e = Engine::new();
+        e.map(0x011d_9000, 0x1000);
+        e.map(0x0101_5000, 0x1000);
+        let menu = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        let tile_list = e.mem.alloc(8);
+        e.mem.set_u32(menu.addr() + 0x60, tile_list);
+        let tile_slot = e.mem.alloc(4);
+        e.mem.set_u32(tile_slot, 0x4000);
+        let head = e.mem.alloc(0x224);
+        let head_slot = e.mem.alloc(4);
+        e.mem.set_u32(head_slot, head);
+        for address in [
+            0x0041_a250,
+            0x0045_3a70,
+            0x00ad_7550,
+            0x0041_8900,
+            0x0048_3710,
+            0x00ad_8830,
+            0x0040_3df0,
+            0x00a0_1350,
+            0x0070_0320,
+            0x00a0_11b0,
+            0x00ec_62c0,
+            0x00a0_11f0,
+            0x005b_d5b0,
+            0x00a1_b020,
+            0x00a0_12d0,
+            0x0071_5d40,
+            0x0071_77c0,
+        ] {
+            e.register_double(address, |_, _| Ret::default());
+        }
+        e.register_double(0x0068_15c0, move |_, _| Ret {
+            eax: head_slot,
+            ..Ret::default()
+        });
+        e.register_double(0x0082_5c00, |_, _| Ret {
+            eax: 0x8000_0010,
+            ..Ret::default()
+        });
+        e.register_double(0x0073_ac90, move |_, words| {
+            assert_eq!(words, &[tile_list + 4]);
+            Ret {
+                eax: tile_slot,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0071_5c60, |_, _| {
+            std::panic::panic_any("stop at show time")
+        });
+        e.call_log = Some(vec![]);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            quest_popup_start(&mut e, menu);
+        }));
+        assert_eq!(
+            stopped.unwrap_err().downcast_ref::<&str>(),
+            Some(&"stop at show time")
+        );
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(
+            calls.last().unwrap(),
+            &(
+                0x0071_5c60,
+                args![0x4000_u32, 0x1004_u32, 0x8000_0010_u32].to_vec()
+            )
+        );
+        assert!(calls
+            .iter()
+            .all(|(address, words)| *address != 0x0070_0320 || words[1] != 0x1004));
     }
 
     #[test]
@@ -12865,6 +13467,38 @@ mod tests {
             Ret::default()
         });
         hud_main_menu_update_xp_meter(&mut e, menu);
+
+        // 0077d928 / 0077d944: with the level-up deferred and hidden (flags 4 | 8), the
+        // finished and zero-alpha reads take the popup tile at this+0xf0, not the meter.
+        e.mem.set_u32(0x011a_010c, 0xc);
+        e.mem.set_u8(menu.addr() + 0x204, 0);
+        e.register_double(0x00a0_11b0, move |_, words| {
+            assert!(words == [meter, 0xfa9] || words == [popup, 0xfa9]);
+            Ret {
+                st0: if words[0] == meter { 1.0 } else { 0.0 },
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00a0_7fc0, move |_, words| {
+            assert!(words == [meter, 0xfa9] || words == [popup, 0xfa9]);
+            Ret {
+                eax: u32::from(words[0] == popup),
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0070_0320, move |_, words| {
+            assert_eq!(words, &[popup, 0x100e, 0]);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        hud_main_menu_update_xp_meter(&mut e, menu);
+        assert_eq!(e.mem.u8(menu.addr() + 0x204), 1);
+        assert_eq!(e.mem.u32(0x011a_010c), 8);
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(
+            calls.last().unwrap(),
+            &(0x0070_0320, args![popup, 0x100e_u32, 0_u32].to_vec())
+        );
     }
 
     #[test]

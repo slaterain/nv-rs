@@ -2581,8 +2581,9 @@ const CEIL_MINUS_ZERO: u32 = 0x010f_2030;
 /// rounded by `__frnd`; the old control word is put back and the rounded value returned when it
 /// equals the argument or the old word has bit 5 (the precision-exception mask) set, otherwise
 /// the inexact result is reported through `__except1` (operation `0x10`). An infinity or NaN goes
-/// through `__sptype`: classes 1 and 2 put the old control word back and return the value,
-/// class 3 is `__handle_qnan1`, anything else `__except1` operation 8 with the value plus 1.0.
+/// through `__sptype` of the argument as `FLD`/`FSTP` copy it (a signalling NaN quiet, so class
+/// 3): classes 1 and 2 put the old control word back and return the value, class 3 is
+/// `__handle_qnan1`, anything else `__except1` operation 8 with the value plus 1.0.
 pub fn ceil(e: &mut Engine, x: f64) -> f64 {
     if sse2_math_available(e) {
         ceil_sse2(e, x)
@@ -2652,13 +2653,15 @@ fn ceil_x87(e: &mut Engine, x: f64) -> f64 {
     let new_control = e.mem.u32(CEIL_CONTROL_WORD);
     let old_control = ctrlfp(e, new_control, 0xffff) as u32; // EBX
     let bits = x.to_bits();
-    let (low, high) = (bits as u32, (bits >> 32) as u32);
     // The exponent word of the double, at `[EBP + 0xe]` (the bytes above it are masked away).
     let exponent_word = ((bits >> 48) as u32) & 0x7ff0;
+    // FLD double ptr [EBP+8] (00ed96b7); FSTP double ptr [ESP] (00ed96ca): the pushed copy
+    // `__sptype` and `__frnd` take, a signalling NaN quiet.
     let quiet = fld64(bits).to_bits();
     let (quiet_low, quiet_high) = (quiet as u32, (quiet >> 32) as u32);
     if exponent_word == 0x7ff0 {
-        let class = e.call(SPTYPE, &args![low, high]).i32();
+        // 00ed96d2: __sptype of the pushed copy, so a signalling NaN is class 3.
+        let class = e.call(SPTYPE, &args![quiet_low, quiet_high]).i32();
         if class > 0 {
             if class <= 2 {
                 // 00ed96fc
@@ -2692,8 +2695,8 @@ fn ceil_x87(e: &mut Engine, x: f64) -> f64 {
             )
             .f64();
     }
-    // 00ed9727
-    let rounded = e.call(FRND, &args![low, high]).f64();
+    // 00ed9727: __frnd of the same pushed copy (a finite value here, so the argument's bits).
+    let rounded = e.call(FRND, &args![quiet_low, quiet_high]).f64();
     let (rounded_low, rounded_high) = (rounded.to_bits() as u32, (rounded.to_bits() >> 32) as u32);
     // FCOMP and the `TEST AH, 0x44` / `JP`: equal only when ordered and equal.
     if fld64(bits) == rounded || old_control & 0x20 != 0 {
@@ -7456,11 +7459,17 @@ mod physics_step_tests {
         let log = Log::default();
         let class = Rc::new(RefCell::new(0u32));
         let c = class.clone();
-        e.register_double(SPTYPE, move |_, _| eax(*c.borrow()));
+        let seen = log.clone();
+        e.register_double(SPTYPE, move |_, a| {
+            seen.borrow_mut().push((SPTYPE, a.to_vec()));
+            eax(*c.borrow())
+        });
         recorder(&mut e, &log, HANDLE_QNAN1, st0(7.0));
         recorder(&mut e, &log, EXCEPT1, st0(9.0));
-        let x = f64::from_bits(0x7ff0_0000_0000_0042); // a signalling NaN
-                                                       // Classes 1 and 2: the value (quieted by FLD) and the control word restored.
+        // A signalling NaN; `q` is it quieted, as FLD/FSTP copy it.
+        let x = f64::from_bits(0x7ff0_0000_0000_0042);
+        let q = words(f64::from_bits(0x7ff8_0000_0000_0042));
+        // Classes 1 and 2: the value (quieted by FLD) and the control word restored.
         for value in [1u32, 2] {
             *class.borrow_mut() = value;
             let got = ceil_via_registry(&mut e, x);
@@ -7471,11 +7480,12 @@ mod physics_step_tests {
         *class.borrow_mut() = 3;
         ctrlfp(&mut e, 0x027f, 0xffff);
         assert_eq!(ceil_via_registry(&mut e, x), 7.0);
-        let q = words(f64::from_bits(0x7ff8_0000_0000_0042));
         assert_eq!(
             calls_to(&log, HANDLE_QNAN1),
             vec![vec![0xc, q[0], q[1], 0x027f]]
         );
+        // __sptype got the FLD/FSTP copy each time (00ed96ca), not the argument's own bits.
+        assert_eq!(calls_to(&log, SPTYPE), vec![q.to_vec(); 3]);
         // Other classes: __except1(8, 0xc, x, x + 1.0 (NaN quieted), old control word).
         for value in [0u32, 4, 0xffff_ffff] {
             *class.borrow_mut() = value;
@@ -7487,6 +7497,7 @@ mod physics_step_tests {
                 vec![vec![8, 0xc, q[0], q[1], q[0], q[1], 0x027f]],
                 "class {value:#x}"
             );
+            assert_eq!(calls_to(&log, SPTYPE), vec![q.to_vec()], "class {value:#x}");
         }
         // An infinity of another kind: x + 1.0 is the infinity.
         *class.borrow_mut() = 0;
@@ -7498,6 +7509,32 @@ mod physics_step_tests {
             calls_to(&log, EXCEPT1),
             vec![vec![8, 0xc, inf[0], inf[1], inf[0], inf[1], 0x027f]]
         );
+        assert_eq!(calls_to(&log, SPTYPE), vec![inf.to_vec()]);
+    }
+
+    #[test]
+    fn ceil_x87_hands_a_signalling_nan_to_handle_qnan1_as_sptype_sees_it_quiet() {
+        // The translated __sptype (00ed5981) runs: 00ed96ca stores the FLD'd argument for it, so
+        // 0x7ff0_0000_0000_0042 arrives as 0x7ff8_0000_0000_0042, class 3 (not 4), and goes to
+        // __handle_qnan1 rather than __except1.
+        let mut e = Engine::new();
+        ceil_setup(&mut e, false);
+        e.map(CEIL_CONTROL_WORD, 4);
+        e.set_global(CEIL_CONTROL_WORD, 0x1b3fu32);
+        e.map(ONE_DOUBLE, 8);
+        e.mem.set_f64(ONE_DOUBLE, 1.0);
+        let log = Log::default();
+        recorder(&mut e, &log, HANDLE_QNAN1, st0(7.0));
+        recorder(&mut e, &log, EXCEPT1, st0(9.0));
+        ctrlfp(&mut e, 0x027f, 0xffff);
+        let got = ceil_via_registry(&mut e, f64::from_bits(0x7ff0_0000_0000_0042));
+        assert_eq!(got, 7.0);
+        let q = words(f64::from_bits(0x7ff8_0000_0000_0042));
+        assert_eq!(
+            calls_to(&log, HANDLE_QNAN1),
+            vec![vec![0xc, q[0], q[1], 0x027f]]
+        );
+        assert!(calls_to(&log, EXCEPT1).is_empty());
     }
 
     // ---- _CIasin ---------------------------------------------------------------------------

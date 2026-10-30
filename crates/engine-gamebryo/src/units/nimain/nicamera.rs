@@ -640,7 +640,8 @@ pub fn ni_camera_scalar_deleting_destructor(
 /// Fits the near and far plane to a bounding sphere (the engine map has no
 /// name for it). `sphere` holds the centre and the radius. The sphere's
 /// distance along the camera's world x axis (`m_kWorld` rotation column 0)
-/// is `d`; if `d + radius <= 0` (the sphere is behind) it returns false.
+/// is `d`; if `d + radius <= 0` (the sphere is behind) it returns false (a
+/// NaN `d + radius` does not fail and goes on as below).
 /// Otherwise the far plane becomes `d + radius`, the near plane becomes
 /// `d - radius`, raised to `(d + radius) / m_fMaxFarNearRatio` and then to
 /// `m_fMinNearPlaneDist` when those are larger, then the camera's virtual
@@ -661,7 +662,9 @@ pub fn fn_00a70080(e: &mut Engine, this: Ptr<NiCamera>, sphere: Ptr) -> bool {
         + axis[2] as f64 * dz as f64) as f32;
     let mut near = (distance as f64 - radius) as f32;
     let far = (distance as f64 + radius) as f32;
-    if !(far > 0.0) {
+    // 00a70102 FCOM far with 0, TEST AH,0x41, JP 00a70118: only an ordered
+    // far <= 0 fails; a NaN far (0x41, even parity) goes on.
+    if far <= 0.0 {
         return false;
     }
     let ratio = e.get(this, NiCamera::m_fMaxFarNearRatio);
@@ -692,7 +695,8 @@ pub fn fn_00a70080(e: &mut Engine, this: Ptr<NiCamera>, sphere: Ptr) -> bool {
 /// `target` with `up` as the up hint. With `d` = camera world translation -
 /// `target`, normalised (false if its squared length is below `1e-10`),
 /// `first = up x d` and `second = d x first` (each `UnitCross`; false if a
-/// squared length is below 0.5), the new local rotation is the matrix with
+/// squared length is below 0.5; a NaN squared length passes each test),
+/// the new local rotation is the matrix with
 /// columns `-d`, `second` and `first`, premultiplied by the transpose of the
 /// parent's world rotation when there is a parent. It then runs the
 /// camera's virtual `UpdateWorldData` (`+0xB8`, cleared `NiUpdateData`) and
@@ -719,16 +723,19 @@ pub fn ni_camera_look_at_world_point(
                 world_translation(e, this, axis) - e.mem.f32(target.addr() + 4 * axis) as f64;
             e.mem.set_f32(direction + 4 * axis, value as f32);
         }
-        if !(squared_length(e, direction) as f64 >= minimum_distance) {
+        // Each test is FCOMP, TEST AH,0x5 and a parity jump (00a7020f JNP
+        // fail, 00a70263 JNP fail, 00a702b1 JP on): only an ordered
+        // less-than fails; a NaN squared length (0x5, even parity) goes on.
+        if (squared_length(e, direction) as f64) < minimum_distance {
             return false;
         }
         e.call(POINT_NORMALIZE, &args![direction]);
         e.call(UNIT_CROSS, &args![up, first, direction]);
-        if !(squared_length(e, first) >= minimum_axis) {
+        if squared_length(e, first) < minimum_axis {
             return false;
         }
         e.call(UNIT_CROSS, &args![direction, second, first]);
-        if !(squared_length(e, second) >= minimum_axis) {
+        if squared_length(e, second) < minimum_axis {
             return false;
         }
         for row in 0..3u32 {
@@ -1165,7 +1172,8 @@ pub fn ni_rect_float_get_viewer_string(e: &mut Engine, this: Ptr, name: Ptr) -> 
 /// A pick ray for a pixel (the engine map has no name). With the object at
 /// `011f4748` (returns false when it is null) it turns the pixel into
 /// normalised target coordinates ([`fn_00a6fa30`] with `target_group`), and
-/// returns false unless they lie inside the port (`m_kPort`). Inside, it maps
+/// returns false unless they lie inside the port (`m_kPort`; a NaN
+/// coordinate or edge counts as inside). Inside, it maps
 /// them linearly onto the view frustum's left/right and bottom/top
 /// extents and calls [`fn_00a703a0`] with them and the two output pointers.
 pub fn fn_00a71080(
@@ -1201,9 +1209,11 @@ pub fn fn_00a71080(
         let right = e.get(this, NiCamera::m_kPort_m_right);
         let top = e.get(this, NiCamera::m_kPort_m_top);
         let bottom = e.get(this, NiCamera::m_kPort_m_bottom);
-        // Each test fails on a NaN against the port's right and top; the
-        // left and bottom tests only fail when the port edge is larger.
-        if !(x <= right) || left > x || !(y <= top) || bottom > y {
+        // Each test fails only on an ordered compare, so a NaN coordinate or
+        // port edge passes: right and top (00a710c8 / 00a710f2, TEST AH,0x5,
+        // JNP fail) fail only when the edge is smaller, left and bottom
+        // (00a710db / 00a71105, TEST AH,0x41, JZ fail) only when it is larger.
+        if right < x || left > x || top < y || bottom > y {
             return false;
         }
         let frustum_top = e.get(this, NiCamera::m_kViewFrustum_m_fTop) as f64;
@@ -2236,6 +2246,22 @@ mod tests {
         assert_eq!(e.get(cam, NiCamera::m_kViewFrustum_m_fNear), 0.5);
     }
 
+    #[test]
+    fn a_nan_radius_still_fits_the_planes() {
+        let mut e = engine();
+        let cam = fitting_camera(&mut e);
+        let ball = sphere(&mut e, [11.0, 2.0, 3.0, f32::NAN]);
+        e.call_log = Some(vec![]);
+        // 00a70109: an unordered FCOM against 0 takes the JP and goes on.
+        assert!(e.call(0x00a7_0080, &args![cam, ball]).bool());
+        assert!(e.get(cam, NiCamera::m_kViewFrustum_m_fNear).is_nan());
+        assert!(e.get(cam, NiCamera::m_kViewFrustum_m_fFar).is_nan());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log.len(), 3);
+        assert_eq!(log[1].0, UPDATE_DATA_DOUBLE);
+        assert_eq!(log[2], (UPDATE_BOUND_DOUBLE, vec![cam.addr()]));
+    }
+
     // ---- LookAtWorldPoint
 
     fn read3(e: &Engine, addr: u32) -> [f32; 3] {
@@ -2372,6 +2398,40 @@ mod tests {
             .collect();
         assert_eq!(calls, vec![0x00a7_01b0, POINT_NORMALIZE, UNIT_CROSS]);
         assert_eq!(rotation_of(&e, cam), vec![5.0; 9]);
+    }
+
+    #[test]
+    fn a_nan_target_passes_every_length_test() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let cam = camera_with_vtable(&mut e);
+        set_translation(&mut e, cam, [0.0, 0.0, 10.0]);
+        put_f32s(&mut e, cam.addr() + LOCAL_ROTATE, &[5.0; 9]);
+        let target = world_point(&mut e, [f32::NAN, 0.0, 0.0]);
+        let up = world_point(&mut e, [0.0, 1.0, 0.0]);
+        e.call_log = Some(vec![]);
+        // 00a7020f, 00a70263, 00a702b1: an unordered FCOMP (0x5, even
+        // parity) does not fail, so the NaN vectors go all the way through.
+        assert!(e.call(0x00a7_01b0, &args![cam, target, up]).bool());
+        let calls: Vec<u32> = e
+            .call_log
+            .take()
+            .unwrap()
+            .iter()
+            .map(|(address, _)| *address)
+            .collect();
+        assert_eq!(
+            calls,
+            vec![
+                0x00a7_01b0,
+                POINT_NORMALIZE,
+                UNIT_CROSS,
+                UNIT_CROSS,
+                UPDATE_DATA_DOUBLE,
+                UPDATE_BOUND_DOUBLE
+            ]
+        );
+        assert!(rotation_of(&e, cam).iter().all(|value| value.is_nan()));
     }
 
     // ---- fn_00a703a0
@@ -2936,6 +2996,35 @@ mod tests {
             )
             .bool());
         assert_eq!(read3(&e, origin), [0.0; 3]);
+    }
+
+    #[test]
+    fn a_nan_port_edge_still_gives_a_ray() {
+        let mut e = engine();
+        let cam = pick_setup(&mut e);
+        // 00a710c8: right against x unordered (0x5, even parity) passes.
+        e.set(cam, NiCamera::m_kPort_m_right, f32::NAN);
+        let (origin, direction) = (e.mem.alloc(0xc), e.mem.alloc(0xc));
+        assert!(e
+            .call(
+                0x00a7_1080,
+                &args![cam, 400u32, 150u32, origin, direction, 0u32]
+            )
+            .bool());
+        assert_eq!(read3(&e, origin), [1.0, 2.0, 3.0]);
+        assert!(read3(&e, direction)[0].is_nan());
+        // 00a710f2: top against y unordered passes the same way.
+        e.set(cam, NiCamera::m_kPort_m_right, 1.0);
+        e.set(cam, NiCamera::m_kPort_m_top, f32::NAN);
+        let (origin, direction) = (e.mem.alloc(0xc), e.mem.alloc(0xc));
+        assert!(e
+            .call(
+                0x00a7_1080,
+                &args![cam, 400u32, 150u32, origin, direction, 0u32]
+            )
+            .bool());
+        assert_eq!(read3(&e, origin), [1.0, 2.0, 3.0]);
+        assert!(read3(&e, direction)[1].is_nan());
     }
 
     #[test]

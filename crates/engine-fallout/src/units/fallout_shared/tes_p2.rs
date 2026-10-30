@@ -704,12 +704,18 @@ pub fn fn_004586d0(e: &mut Engine, this: Ptr) -> f32 {
 /// Stores into the 16-byte vector at `out` (through the vector copy
 /// `004a3c90`) lane `index` of the vector at `this` repeated in all four
 /// lanes (`SHUFPS`); for `index` 0 the vector at `this` is copied as it is.
-/// Any `index` above 2 gives lane 3. Returns `out`.
+/// Any other `index` (negative ones included) gives lane 3. Returns `out`.
 pub fn fn_00458700(e: &mut Engine, this: Ptr, out: Ptr, index: i32) -> Ptr {
     if index == 0 {
         e.call(VECTOR_COPY, &args![out, this]);
     } else {
-        let lane = if index > 2 { 3 } else { index as u32 };
+        // Only exact 1 and 2 are tested (0045872d, 00458733); everything else
+        // jumps to the `SHUFPS 0xff` block (00458735 -> 00458792).
+        let lane: u32 = match index {
+            1 => 1,
+            2 => 2,
+            _ => 3,
+        };
         let value = e.mem.u32(this.addr() + 4 * lane);
         e.with_stack(16, |e, shuffled| {
             for word in 0..4 {
@@ -4596,6 +4602,20 @@ mod tests {
         assert_eq!(lanes(&e, out), [4.0; 4]);
         e.call(0x0045_8700, &args![v, out, 9u32]);
         assert_eq!(lanes(&e, out), [4.0; 4]);
+    }
+
+    #[test]
+    fn lane_broadcast_of_a_negative_index_gives_lane_3() {
+        // 00458723..00458735 test only for exact 0, 1 and 2; a negative index
+        // falls through to `SHUFPS 0xff` (00458792) like any other value.
+        let mut e = vector_engine();
+        let v = vector(&mut e, [1.0, 2.0, 3.0, 4.0]);
+        for index in [0xffff_ffffu32, 0xffff_fffe, 0x8000_0000] {
+            let out = Ptr::<()>::new(e.mem.alloc(16));
+            let back = e.call(0x0045_8700, &args![v, out, index]).ptr::<()>();
+            assert_eq!(back, out);
+            assert_eq!(lanes(&e, out), [4.0; 4]);
+        }
     }
 
     #[test]

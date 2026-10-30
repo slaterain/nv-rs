@@ -210,16 +210,20 @@ pub fn hk_quaternion_set_mul(
 // Translated from 00c663d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Assigns a referenced-object pointer: decrements the old object's count,
 /// deletes it at zero, then copies and increments the new object's count.
+/// The source word is read once for the compare and again after the release,
+/// so the stored and retained pointer is the one the source holds by then.
 pub fn hk_ref_counted_pointer_assign(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
     let old = e.mem.u32(this.addr());
-    let new = e.mem.u32(source.addr());
-    if old != new {
+    // 00c663db: `CMP EDI,[EBX]`, the source word is only compared here.
+    if old != e.mem.u32(source.addr()) {
         if old != 0 {
             let count = e.call(0x00fd_f1c4, &args![old + 4]).i32();
             if count == 0 {
                 e.vcall(old, 4, &[]);
             }
         }
+        // 00c663fa: `MOV EAX,[EBX]` reads the source word again, after the release.
+        let new = e.mem.u32(source.addr());
         e.mem.set_u32(this.addr(), new);
         if new != 0 {
             e.call(0x00fd_f1c0, &args![new + 4]);
@@ -4521,6 +4525,46 @@ mod tests {
             .unwrap()
             .iter()
             .any(|(a, _)| *a == 0x0400_0100));
+    }
+
+    #[test]
+    fn shared_pointer_assignment_rereads_the_source_after_the_release() {
+        // 00c663fa: the source word is read again after the delete, so a
+        // delete that rewrites it changes what is stored and retained.
+        let mut e = engine();
+        let this = e.mem.alloc(4);
+        let source = e.mem.alloc(4);
+        let old = e.mem.alloc(8);
+        let new = e.mem.alloc(8);
+        let replacement = e.mem.alloc(8);
+        e.map(0x0400_0000, 0x1000);
+        e.mem.set_u32(this, old);
+        e.mem.set_u32(source, new);
+        e.mem.set_u32(old, 0x0400_0000);
+        e.mem.set_i32(old + 4, 1);
+        e.mem.set_i32(new + 4, 4);
+        e.mem.set_i32(replacement + 4, 2);
+        e.put_vtable(0x0400_0000, &[0, 0x0400_0100]);
+        e.register_double(0x00fd_f1c4, move |e, a| {
+            let n = e.mem.i32(a[0]) - 1;
+            e.mem.set_i32(a[0], n);
+            ret(n as u32)
+        });
+        e.register_double(0x00fd_f1c0, move |e, a| {
+            let n = e.mem.i32(a[0]) + 1;
+            e.mem.set_i32(a[0], n);
+            ret(n as u32)
+        });
+        e.register_double(0x0400_0100, move |e, a| {
+            assert_eq!(a[0], old);
+            e.mem.set_u32(source, replacement);
+            Ret::default()
+        });
+        assert_eq!(e.call(0x00c6_63d0, &args![this, source]).u32(), this);
+        assert_eq!(e.mem.u32(this), replacement);
+        assert_eq!(e.mem.i32(old + 4), 0);
+        assert_eq!(e.mem.i32(replacement + 4), 3);
+        assert_eq!(e.mem.i32(new + 4), 4);
     }
 
     fn assert_filter_destructor(address: u32, expected_vtable: u32) {

@@ -2691,9 +2691,11 @@ fn dead_ragdoll(e: &mut Engine, this: Ptr<Actor>, collision: u32) {
 /// One pass of the collision re-sync of [`fn_00886cb0`]: finds the
 /// collision object of `skeleton` for `key` (`004ade00`), adds its rigid
 /// body to the world when it is not there, rotates a matching entry of
-/// the body's list (`second` selects the variant that clamps and hands a
-/// float to the entry) and synchronises. Returns true when the rigid body
-/// was added.
+/// the body's list (`second` selects the variant that clamps the float at
+/// `this + 0x24` to the limits of the object `00887a10` finds for the
+/// node's `+0x44` handle, then hands the flag (`00887a80`) and the clamped
+/// float (`00887ac0`) to that handle) and synchronises. Returns true when
+/// the rigid body was added.
 fn resync_collision(
     e: &mut Engine,
     this: Ptr<Actor>,
@@ -2773,8 +2775,11 @@ fn resync_collision(
                     e.call(CLAMP_FLOAT, &args![slot, lower, upper]);
                     e.mem.f32(slot.addr())
                 });
-                fn_00887a80(e, Ptr::new(target), true);
-                fn_00887ac0(e, Ptr::new(target), clamped);
+                // 0088791d / 00887932 MOV ECX,[EBP-0x1a4]: both callees get
+                // the handle (they run `00887a10` on it themselves), not the
+                // `00887a10` result kept at [EBP-0x1a8].
+                fn_00887a80(e, Ptr::new(handle), true);
+                fn_00887ac0(e, Ptr::new(handle), clamped);
                 break;
             }
         }
@@ -11471,6 +11476,60 @@ mod tests {
         e.call_log = Some(vec![]);
         fn_00886cb0(&mut e, actor, 0.1, 0);
         assert_eq!(args_of(&e, SET_MOTION), vec![0x9100, 1, 1, 1, 1]);
+        assert_eq!(args_of(&e, COLLISION_SYNCHRONIZE), vec![0x9100, 2]);
+    }
+
+    #[test]
+    fn second_collision_pass_hands_the_handle_to_the_motor_and_float_setters() {
+        let mut e = engine2();
+        let actor = actor2(&mut e);
+        e.mem.set_f32(actor.addr() + 0x24, 2.0);
+        double(&mut e, FIND_COLLISION_OBJECT, eax(0x9100));
+        double(&mut e, FIND_ENTRY, eax(0x9200));
+        double(&mut e, COLLISION_RIGID_BODY, eax(0x9300));
+        double(&mut e, BODY_LIST_0X7D6BB0, eax(0x9500));
+        double(&mut e, WORLD_TEST_0XC8CCE0, eax(1));
+        // The list's node answers a handle whose `00887a10` object (no
+        // proxy: the word the +0xc link points to) is `target`.
+        let target = 0x5566;
+        let link = e.mem.alloc(8);
+        e.mem.set_u32(link, target);
+        let handle = e.mem.alloc(0x20);
+        e.mem.set_u32(handle + 0xc, link);
+        let node = e.mem.alloc(0x10);
+        e.mem.set_u32(node, OTHER_TABLE);
+        slot(&mut e, OTHER_TABLE, NODE_VSLOT_0X44, eax(handle));
+        double(&mut e, WORD_AT_START, eax(node));
+        double(&mut e, HANDLE_FLOAT_0X9A1260, st0(3.0));
+        double(&mut e, HANDLE_FLOAT_0X644A50, st0(1.0));
+        e.register(CLAMP_FLOAT, |e, a| {
+            e.mem.set_f32(a[0], 1.5);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        resync_collision(&mut e, actor, 0x1000, 7, true);
+        // The limits come from the `00887a10` object (ECX = [EBP-0x1a8]).
+        assert_eq!(args_of(&e, HANDLE_FLOAT_0X9A1260), vec![target]);
+        assert_eq!(args_of(&e, HANDLE_FLOAT_0X644A50), vec![target]);
+        let clamp = args_of(&e, CLAMP_FLOAT);
+        assert_eq!(clamp[1], 1.0f32.to_bits());
+        assert_eq!(clamp[2], 3.0f32.to_bits());
+        // 0088791d / 00887932: `00887a80` and `00887ac0` get the handle
+        // ([EBP-0x1a4]) and resolve it themselves, so every `004ae750`
+        // lookup is of the handle.
+        let proxies: Vec<Vec<u32>> = logged(&e)
+            .into_iter()
+            .filter(|entry| entry.0 == PROXY_OF)
+            .map(|entry| entry.1)
+            .collect();
+        assert_eq!(proxies, vec![vec![handle]; 4]);
+        let motor = args_of(&e, SET_MOTOR_ACTIVE);
+        assert_eq!(motor[0], target);
+        assert_eq!(motor[1], 0);
+        assert_eq!(
+            args_of(&e, SET_FLOAT_ON_TARGET),
+            vec![target, 1.5f32.to_bits()]
+        );
         assert_eq!(args_of(&e, COLLISION_SYNCHRONIZE), vec![0x9100, 2]);
     }
 

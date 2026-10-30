@@ -2144,7 +2144,7 @@ pub fn hkp_world_update_collision_filter_on_phantom(
 ///   those out of the first;
 /// - every agent entry of the entity is asked of the collision filter and the group table;
 ///   a refused one has its agent removed (`00cc1160`) and the entity's island marked
-///   (byte +0x25), an accepted one is updated (`00cfeba0`) when `mode` is 1;
+///   (byte +0x25), an accepted one is updated (`00cfeba0`) when `flag` is 1;
 /// - the pairs left in the first list are added to the broad phase dispatcher (`00cf7080`).
 pub fn hkp_world_update_collision_filter_on_entity(
     e: &mut Engine,
@@ -2257,7 +2257,9 @@ pub fn hkp_world_update_collision_filter_on_entity(
                 let marks = e.mem.u8(island + 0x25);
                 e.mem.set_u8(island + 0x25, (marks & 0xfd) | 1);
                 index -= 1;
-            } else if mode == 1 {
+            } else if flag == 1 {
+                // 00c94a73: CMP dword [ESP+0x84c],1 tests the third argument (`flag`), not
+                // `mode`.
                 let island = if e.mem.u8(entity + 0xe8) == 5 {
                     let body = offset_by_byte(e, partner, partner + 0x10);
                     e.mem.u32(body + 0xcc)
@@ -3573,7 +3575,7 @@ pub fn hkp_world_hkp_world(
 ///   entry's length is its byte +3). An entry whose collidables (+0x10, +0x14) are refused
 ///   by the collision filter or whose group pair is disabled is collected, the island is
 ///   marked (byte +0x25), and its agents removed after the island's walk (`00cc1160`); with
-///   mode 1 an accepted entry is updated instead (`00cfeba0`).
+///   flag 1 an accepted entry is updated instead (`00cfeba0`).
 /// Then lifts the block, flushes the pending operations when allowed and the lock is 0.
 pub fn hkp_world_update_collision_filter_on_world(
     e: &mut Engine,
@@ -3634,7 +3636,7 @@ pub fn hkp_world_update_collision_filter_on_world(
                         .mem
                         .u32(islands.wrapping_add((island_index as u32).wrapping_mul(4)));
                     e.mem.set_u32(collected + 4, 0);
-                    update_filter_on_island(e, this, island, collected, mode);
+                    update_filter_on_island(e, this, island, collected, flag);
                     island_index += 1;
                 }
                 array_release(e, collected, 4, 0x10);
@@ -3654,12 +3656,13 @@ pub fn hkp_world_update_collision_filter_on_world(
 
 /// The agent entry walk of `updateCollisionFilterOnWorld` for one island: `collected`
 /// receives the entries to remove, which are removed once the island's blocks are done.
+/// `flag` is the world call's second argument: when it is 1 an accepted entry is updated.
 fn update_filter_on_island(
     e: &mut Engine,
     this: Ptr<HkpWorld>,
     island: u32,
     collected: u32,
-    mode: i32,
+    flag: u32,
 ) {
     let world = this.addr();
     if e.mem.i32(island + 0x60) <= 0 {
@@ -3690,7 +3693,9 @@ fn update_filter_on_island(
                 array_push_word(e, collected, entry);
                 let marks = e.mem.u8(island + 0x25);
                 e.mem.set_u8(island + 0x25, (marks & 0xfd) | 1);
-            } else if mode == 1 {
+            } else if flag == 1 {
+                // 00c972b6: CMP dword [ESP+0xc0],1 tests the second argument (`flag`), not
+                // `mode`.
                 let input = e.mem.u32(world + 0x78);
                 e.call(UPDATE_SHAPE_COLLECTION_FILTER, &args![entry, input, island]);
             }
@@ -8144,7 +8149,7 @@ mod tests {
         rig.e
             .set(rig.world, HkpWorld::m_collisionInput, Ptr::new(0x7000));
         rig.e
-            .call(0x00c9_46e0, &args![rig.world, entity, 1i32, 0u32]);
+            .call(0x00c9_46e0, &args![rig.world, entity, 1i32, 1u32]);
         assert_eq!(calls_to(&rig.e, REMOVE_AGENT), vec![vec![0x601]]);
         assert_eq!(
             calls_to(&rig.e, UPDATE_SHAPE_COLLECTION_FILTER),
@@ -8208,11 +8213,41 @@ mod tests {
         rig.e
             .set(rig.world, HkpWorld::m_collisionInput, Ptr::new(0x7000));
         rig.e
-            .call(0x00c9_46e0, &args![rig.world, entity, 1i32, 0u32]);
+            .call(0x00c9_46e0, &args![rig.world, entity, 1i32, 1u32]);
         assert_eq!(
             calls_to(&rig.e, UPDATE_SHAPE_COLLECTION_FILTER),
             vec![vec![0x601, 0x7000, partner_island]]
         );
+    }
+
+    /// 00c94a73 tests the third argument (`flag`) against 1, not `mode`: an accepted agent
+    /// is left alone with mode 1 and flag 0, and updated with mode 2 and flag 1.
+    #[test]
+    fn update_filter_on_entity_updates_by_the_flag_not_the_mode() {
+        let mut rig = rig();
+        silent(&mut rig.e, &ENTITY_FILTER_CALLEES);
+        let entity = filtered_entity(&mut rig.e, 1, 2);
+        let island = rig.e.mem.alloc(0x40);
+        rig.e.mem.set_u32(entity + 0xcc, island);
+        let partner = rig.e.mem.alloc(0x40);
+        rig.e.mem.set_i8(partner + 0x1a, 3);
+        agent_entries(&mut rig.e, &[(0x601, partner)]);
+        group_table(&mut rig, &[23]);
+        let filter = filter_answering(&mut rig.e, 1);
+        rig.e
+            .set(rig.world, HkpWorld::m_collisionFilter, Ptr::new(filter));
+        rig.e
+            .set(rig.world, HkpWorld::m_collisionInput, Ptr::new(0x7000));
+        rig.e
+            .call(0x00c9_46e0, &args![rig.world, entity, 1i32, 0u32]);
+        assert!(calls_to(&rig.e, UPDATE_SHAPE_COLLECTION_FILTER).is_empty());
+        rig.e
+            .call(0x00c9_46e0, &args![rig.world, entity, 2i32, 1u32]);
+        assert_eq!(
+            calls_to(&rig.e, UPDATE_SHAPE_COLLECTION_FILTER),
+            vec![vec![0x601, 0x7000, island]]
+        );
+        assert!(calls_to(&rig.e, REMOVE_AGENT).is_empty());
     }
 
     #[test]
@@ -8272,6 +8307,8 @@ mod tests {
                 Ret::default()
             });
         rig.e
+            .set(rig.world, HkpWorld::m_collisionInput, Ptr::new(0x7000));
+        rig.e
             .call(0x00c9_46e0, &args![rig.world, entity, 0i32, 1u32]);
         // The overlapping phantom was asked about the entity's collidable and told to
         // update (flag set); the rigid body stays in the list and gets pairs added.
@@ -8285,6 +8322,11 @@ mod tests {
         assert_eq!(added[0][0], 0x6000);
         assert_eq!(added[0][2], 1);
         assert_eq!(added[0][3], filter + 8);
+        // With flag 1 the accepted agent is updated in mode 0 too (00c94a73 tests `flag`).
+        assert_eq!(
+            calls_to(&rig.e, UPDATE_SHAPE_COLLECTION_FILTER),
+            vec![vec![entry, 0x7000, island]]
+        );
         assert_eq!(
             record_labels(&rig, &[PROFILE_UPDATE_FILTER_ON_ENTITY]),
             vec![
@@ -8816,7 +8858,7 @@ mod tests {
         rig.e.mem.set_u32(rig.world.addr() + 0x8c, 1);
         rig.e
             .set(rig.world, HkpWorld::m_pendingOperations, Ptr::new(0x5000));
-        rig.e.call(0x00c9_6ff0, &args![rig.world, 1i32, 0u32]);
+        rig.e.call(0x00c9_6ff0, &args![rig.world, 1i32, 1u32]);
         assert_eq!(removed.borrow().clone(), vec![vec![second]]);
         assert_eq!(
             calls_to(&rig.e, UPDATE_SHAPE_COLLECTION_FILTER),
@@ -8832,10 +8874,17 @@ mod tests {
             record_labels(&rig, &[]),
             vec![PROFILE_UPDATE_FILTER_ON_WORLD, PROFILE_END]
         );
-        // Any other mode only removes: a mode 2 run updates nothing.
-        rig.e.call(0x00c9_6ff0, &args![rig.world, 2i32, 0u32]);
-        assert_eq!(calls_to(&rig.e, UPDATE_SHAPE_COLLECTION_FILTER).len(), 1);
+        // The update follows the flag, not the mode (00c972b6 tests the second argument):
+        // mode 2 with flag 1 updates again, mode 1 with flag 0 only removes.
+        rig.e.call(0x00c9_6ff0, &args![rig.world, 2i32, 1u32]);
+        assert_eq!(
+            calls_to(&rig.e, UPDATE_SHAPE_COLLECTION_FILTER),
+            vec![vec![first, 0x7000, island], vec![first, 0x7000, island]]
+        );
         assert_eq!(removed.borrow().len(), 2);
+        rig.e.call(0x00c9_6ff0, &args![rig.world, 1i32, 0u32]);
+        assert_eq!(calls_to(&rig.e, UPDATE_SHAPE_COLLECTION_FILTER).len(), 2);
+        assert_eq!(removed.borrow().len(), 3);
     }
 
     #[test]

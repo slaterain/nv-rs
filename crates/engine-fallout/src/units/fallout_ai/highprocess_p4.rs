@@ -5952,14 +5952,15 @@ fn base_is_in_evil_factions_only(e: &mut Engine, actor: u32) -> bool {
 /// slot `0x504`) does not exceed the threshold (setting `011cd45c`, 0 when
 /// the actor's current package fails `0067a770`) or was evaluated already
 /// (the state's byte +0x1f, set here), when `other` fails slot `0x22c(0)` or
-/// `00437bd0`. Otherwise: an observer that sees and likes the other
-/// (the sight distance from the base form and slot `0x274`/`0x42c`) can
-/// queue the other's group in `GroupsToHelpList` (+0x27c); a combat
-/// reaction value is worked out (`GetShouldAttackActor` both ways: 100 when
-/// the actor would attack, the other going into `AvoidActorList` (+0x394)
-/// when the trigger roll `0047eeb0(trigger)` beats `strength` divided by
-/// the other's combat strength; a close, hostile-enough other goes into
-/// `AggroRadiusList` (+0x38c)); then the other is queued in `AggroList`
+/// `00437bd0`. Otherwise: with a detection level above 0, an other that
+/// answers slot `0x274` and detects its slot-`0x42c` target can queue its
+/// group in `GroupsToHelpList` (+0x27c); a combat reaction value is worked
+/// out (`GetShouldAttackActor` both ways: 100 when the actor would attack,
+/// the other going into `AvoidActorList` (+0x394) when the trigger roll
+/// `0047eeb0(trigger)` beats `strength` divided by the other's combat
+/// strength; a hostile-enough other within the sight distance from the
+/// base form is close, and goes into `AggroRadiusList` (+0x38c) when the
+/// detection level is above 0); then the other is queued in `AggroList`
 /// (+0x274) with `plastDetected` (+0x2a4) set, or just recorded, and
 /// `ReactToCombatSituation` runs. `_unused_*` are stack words the function
 /// never reads. C++ exception unwinding is not translated.
@@ -6029,7 +6030,9 @@ pub fn fn_008ff350(
     let mut scheduler = 0;
     let mut reaction: i32 = 0;
     let mut wants_help = false;
-    if sight > 0
+    // The detection level gates this, not the sight distance (008ff545:
+    // `CMP [EBP-0x18],0` / `JLE`).
+    if level > 0
         && e.vcall(other, 0x274, &args![u32::from(!player_like)])
             .bool()
     {
@@ -6184,7 +6187,9 @@ pub fn fn_008ff350(
             e.mem.set_u32(base + 0x2a4, other);
         }
     } else if close
-        && sight > 0
+        // The detection level, not the sight distance (008ffbd7:
+        // `CMP [EBP-0x18],0` / `JLE`).
+        && level > 0
         && !e
             .call(ACTOR_SHOULD_SKIP_FALLOUT_BEHAVIOR, &args![actor, 6u32])
             .bool()
@@ -11808,17 +11813,17 @@ mod tests {
     fn test_fn_008ff350_queues_the_group_to_help() {
         let mut e = Engine::new();
         let scene = pair_scene(&mut e);
-        // Sight 5; the other (slot 0x274, with a desired target in slot 0x42c)
-        // has a level above the help setting; group, 0005a4320 and the
-        // manager's GetWanttoHelpGroup all agree.
-        stub(&mut e, 0x0070_5cf0, 1);
-        stub(&mut e, 0x0082_5c00, 5);
+        // No sight distance (the detection level of 20 gates this, 008ff545);
+        // the other (slot 0x274, with a desired target in slot 0x42c) has a
+        // level above the help setting; group, 0005a4320 and the manager's
+        // GetWanttoHelpGroup all agree.
         stub(&mut e, 0x00aa_d030, 1);
         stub(&mut e, 0x00aa_d040, 0x9300);
         stub(&mut e, 0x005a_4320, 1);
         stub(&mut e, 0x0099_2530, 1);
         e.call_log = Some(vec![]);
         run_pair(&mut e, &scene);
+        assert_eq!(calls_to(&e, 0x00aa_d030), vec![vec![scene.other, 1]]);
         assert_eq!(
             calls_to(&e, 0x0099_2530),
             vec![vec![0x5500, scene.actor, scene.other]]
@@ -11830,8 +11835,6 @@ mod tests {
         // player while the actor's group does not: not queued.
         let mut e = Engine::new();
         let scene = pair_scene(&mut e);
-        stub(&mut e, 0x0070_5cf0, 1);
-        stub(&mut e, 0x0082_5c00, 5);
         stub(&mut e, 0x00aa_d030, 1);
         stub(&mut e, 0x00aa_d040, 0x9300);
         stub(&mut e, 0x005a_4320, 1);
@@ -11843,8 +11846,6 @@ mod tests {
         // The group is queued already: not queued again.
         let mut e = Engine::new();
         let scene = pair_scene(&mut e);
-        stub(&mut e, 0x0070_5cf0, 1);
-        stub(&mut e, 0x0082_5c00, 5);
         stub(&mut e, 0x00aa_d030, 1);
         stub(&mut e, 0x00aa_d040, 0x9300);
         stub(&mut e, 0x005a_4320, 1);
@@ -11854,6 +11855,42 @@ mod tests {
         e.mem.set_u32(scene.process + 0x27c, existing);
         run_pair(&mut e, &scene);
         assert_eq!(list_items(&e, scene.process + 0x27c), vec![existing]);
+    }
+
+    #[test]
+    fn test_fn_008ff350_level_not_sight_gates_help_and_aggro_radius() {
+        // A threshold of -10 lets a detection level of 0 through. A sight
+        // distance of 5 and the squared distance 20 make the other close, and
+        // it answers slot 0x274, but the level of 0 skips the wants-help
+        // check (008ff545) and the AggroRadiusList entry (008ffbd7).
+        let mut e = Engine::new();
+        let scene = pair_scene(&mut e);
+        float_settings(&mut e, &[(0x011c_d45c, -10.0)]);
+        e.mem.set_i32(scene.state + 8, 0);
+        stub(&mut e, 0x0070_5cf0, 1);
+        stub(&mut e, 0x0082_5c00, 5);
+        stub_float(&mut e, 0x004a_7290, 20.0);
+        stub(&mut e, 0x00aa_d030, 1);
+        e.call_log = Some(vec![]);
+        run_pair(&mut e, &scene);
+        assert_eq!(e.mem.u8(scene.state + 0x1f), 1);
+        assert!(calls_to(&e, 0x00aa_d030).is_empty());
+        assert!(calls_to(&e, 0x008a_78f0).is_empty());
+        assert!(list_items(&e, scene.process + 0x38c).is_empty());
+        // A level of 1 under the same threshold: both run.
+        let mut e = Engine::new();
+        let scene = pair_scene(&mut e);
+        float_settings(&mut e, &[(0x011c_d45c, -10.0)]);
+        e.mem.set_i32(scene.state + 8, 1);
+        stub(&mut e, 0x0070_5cf0, 1);
+        stub(&mut e, 0x0082_5c00, 5);
+        stub_float(&mut e, 0x004a_7290, 20.0);
+        stub(&mut e, 0x00aa_d030, 1);
+        e.call_log = Some(vec![]);
+        run_pair(&mut e, &scene);
+        assert_eq!(calls_to(&e, 0x00aa_d030), vec![vec![scene.other, 1]]);
+        assert_eq!(calls_to(&e, 0x008a_78f0), vec![vec![scene.actor, 6]]);
+        assert_eq!(list_items(&e, scene.process + 0x38c), vec![scene.other]);
     }
 
     /// A process for `EnterCombat`: slot `0x20c` gives `run_once`, slot

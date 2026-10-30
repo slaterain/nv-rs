@@ -113,9 +113,9 @@ const MEDIA_SET_TIME: u32 = 0x011c_a9fc;
 /// `TESForm::LoadForm`, `00484ab0(0)` and each chunk: `EDID`, `OBND`,
 /// `FULL` (+0x18), `NAM1`..`NAM7` (words at +0x6C, +0x70, +0x74, +0x7C,
 /// +0x80, +0x84, +0x78), `FNAM`/`RNAM` (words at +0x64/+0x60) and
-/// `HNAM`/`YNAM`/`WNAM`/`XNAM`/`LNAM`/`GNAM` (a form id added to the list
-/// at +0x88/+0x90/+0x98/+0xA0/+0xA8/+0xB0). The form id local starts at 0
-/// and keeps the last value read. Returns true.
+/// `HNAM`/`ZNAM`/`XNAM`/`YNAM`/`LNAM`/`GNAM` (a form id added to the list
+/// at +0x88/+0x90/+0x98/+0xA0/+0xA8/+0xB0; `WNAM` is skipped). The form
+/// id local starts at 0 and keeps the last value read. Returns true.
 pub fn fn_005963d0(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     let base = this.addr();
     let id = e.mem.alloc(4);
@@ -128,12 +128,16 @@ pub fn fn_005963d0(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
         if chunk == 0 {
             break;
         }
-        // The `xNAM` chunks from `FNAM` on go through the exe's byte map.
+        // The `xNAM` chunks from `FNAM` on go through the exe's byte map
+        // (005964d1: type - `FNAM`, map at 00596778, table at 00596754):
+        // `ZNAM` adds to +0x90 (00596651), `XNAM` to +0x98 (0059667a),
+        // `YNAM` to +0xA0 (005966a3); `WNAM` maps to the default
+        // (00596728) and is skipped.
         let list = match chunk {
             0x4d41_4e48 => Some(0x88u32), // HNAM
-            0x4d41_4e59 => Some(0x90),    // YNAM
-            0x4d41_4e57 => Some(0x98),    // WNAM
-            0x4d41_4e58 => Some(0xa0),    // XNAM
+            0x4d41_4e5a => Some(0x90),    // ZNAM
+            0x4d41_4e58 => Some(0x98),    // XNAM
+            0x4d41_4e59 => Some(0xa0),    // YNAM
             0x4d41_4e4c => Some(0xa8),    // LNAM
             0x4d41_4e47 => Some(0xb0),    // GNAM
             _ => None,
@@ -572,8 +576,7 @@ fn millis_of(e: &mut Engine, base: u32, offset: u32) -> f64 {
 /// +0x18, then the chunks through `00485910`: `NAM1`..`NAM7` (+0x6C word,
 /// +0x70, +0x74, +0x7C floats, +0x80, +0x84 words, +0x78 float), each
 /// non-empty form list's form ids (+0x88 `HNAM`, +0x90 `ZNAM`, +0x98
-/// `XNAM`, +0xA0 `YNAM`, +0xA8 `LNAM`, +0xB0 `GNAM`; the loader reads
-/// +0x90 from `YNAM` and +0xA0 from `XNAM`, the exe writes these), `RNAM`
+/// `XNAM`, +0xA0 `YNAM`, +0xA8 `LNAM`, +0xB0 `GNAM`), `RNAM`
 /// (the form id of +0x60 when set), `FNAM` (+0x64), then
 /// `TESForm::CloseForm`.
 pub fn fn_00596790(e: &mut Engine, this: Ptr) {
@@ -1190,11 +1193,11 @@ mod media_tests {
                 (0x4d41_4e52, 0x52), // RNAM
                 (0x4d41_4e48, 0x48), // HNAM
                 (0x4d41_4e59, 0x59), // YNAM
-                (0x4d41_4e57, 0x57), // WNAM
+                (0x4d41_4e57, 0x57), // WNAM: nothing
                 (0x4d41_4e58, 0x58), // XNAM
                 (0x4d41_4e4c, 0x4c), // LNAM
                 (0x4d41_4e47, 0x47), // GNAM
-                (0x4d41_4e5a, 0x5a), // ZNAM: nothing
+                (0x4d41_4e5a, 0x5a), // ZNAM
             ],
             0usize,
         )));
@@ -1251,11 +1254,11 @@ mod media_tests {
             *added.borrow(),
             vec![
                 (this + 0x88, 0x48),
-                (this + 0x90, 0x59),
-                (this + 0x98, 0x57),
-                (this + 0xa0, 0x58),
+                (this + 0xa0, 0x59),
+                (this + 0x98, 0x58),
                 (this + 0xa8, 0x4c),
-                (this + 0xb0, 0x47)
+                (this + 0xb0, 0x47),
+                (this + 0x90, 0x5a)
             ]
         );
     }

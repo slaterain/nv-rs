@@ -1704,10 +1704,12 @@ fn greet_set_sound_callback(e: &mut Engine, g: &Greet, callback: u32) {
     e.call(0x00ad_8e60, &args![g.process + 0x314, callback, name]);
 }
 
-/// The calls the first and the continued greeting make to say the response:
-/// the actor's virtual `+0x284` with thirteen words; returns the delay it gives
-/// (an `f32`).
-fn greet_speak(e: &mut Engine, g: &Greet, response: u32) -> f32 {
+/// The calls the first greeting, the next response and the running greeting
+/// make to say the response: the actor's virtual `+0x284` with thirteen words;
+/// returns the delay it gives (an `f32`). `word_11` is the eleventh word: 1 for
+/// the first greeting and the next response (`008dc3be` / `008dd385` push 1),
+/// 0 for the running greeting (`008dca31` pushes 0).
+fn greet_speak(e: &mut Engine, g: &Greet, response: u32, word_11: u32) -> f32 {
     let idle = e.call(0x0044_1110, &args![response]).u32();
     let kind = e.call(0x0096_11e0, &args![response]).u32();
     let node = e.call(NODE_ITEM_ADDRESS, &args![response]).u32();
@@ -1733,7 +1735,8 @@ fn greet_speak(e: &mut Engine, g: &Greet, response: u32) -> f32 {
             g.dialog,
             1u32,
             0u32,
-            1u32,
+            // 008dc3be / 008dd385 push 1 here, 008dca31 pushes 0.
+            word_11,
             1u32,
             g.can_greet as u32
         ],
@@ -1829,7 +1832,8 @@ fn greet_respond(e: &mut Engine, g: &Greet, response: u32, counter_mark: bool) {
     }
     if waiting && e.mem.u8(a + 0x7f) != 0 {
         greet_mark_response(e, g, response);
-        let delay = greet_speak(e, g, response);
+        // 008dc3be / 008dd385: the eleventh word is 1.
+        let delay = greet_speak(e, g, response, 1);
         e.mem.set_f32(t + 0x310, delay);
         e.mem.set_u8(t + 0x32c, 1);
         if e.mem.u8(t + 0x29d) != 0 && e.mem.u8(t + 0x3d0) == 0 {
@@ -1960,7 +1964,8 @@ fn greet_continue_running(e: &mut Engine, g: &Greet, done: &mut bool) {
     }
     greet_mark_response(e, g, response);
     if waiting && e.mem.u8(a + 0x7f) != 0 {
-        let delay = greet_speak(e, g, response);
+        // 008dca31: the running greeting pushes 0 as the eleventh word.
+        let delay = greet_speak(e, g, response, 0);
         e.mem.set_f32(t + 0x310, delay);
         if e.mem.u8(t + 0x29d) != 0 {
             // A `NiPointer` read whose result the code does not use.
@@ -15605,7 +15610,9 @@ fn update_case_script_package(
             return false;
         }
     } else {
-        if !package_find_location(e, package, false, 0, mobile, 1) && mobile != player {
+        // 008f19ab..008f19cb: the package's slot 0x13c with (mobile, 0, no
+        // limit, 1).
+        if !update_find_location(e, package, mobile, 1) && mobile != player {
             e.vcall(
                 process,
                 SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
@@ -19938,6 +19945,48 @@ mod tests {
     }
 
     #[test]
+    fn test_high_process_process_greet_running_greeting_says_with_word_11_zero() {
+        let mut e = Engine::new();
+        let w = greet_world(&mut e);
+        let a = w.process.addr();
+        let (target, _) = dialog_target(&mut e, &w);
+        let (item, response) = (0x0c10_0000u32, 0x0c20_0000u32);
+        returning(&mut e, 0x0061_b320, item);
+        returning(&mut e, 0x0083_c820, response);
+        returning(&mut e, 0x0096_11e0, 9);
+        returning(&mut e, 0x0044_1110, 0x31);
+        // A held greeting topic and `reuse` 0: the running-greeting branch
+        // (008dc642..). The response has no form and a voice file waits.
+        e.mem.set_u32(a + 0x368, 0x6000);
+        e.mem.set_u8(w.actor + 0x7f, 1);
+        e.call_log = Some(vec![]);
+        greet(&mut e, &w, 0x7000, [0, 0, 0]);
+        assert_eq!(calls_to(&e, 0x0093_4250), vec![vec![w.actor]]);
+        // 008dca2a..008dca99: the eleventh word is 0 (008dca31), not the 1 of
+        // the first greeting and the next response.
+        assert_eq!(
+            calls_to(&e, slot_target(ACTOR_TABLE, 0x284)),
+            vec![vec![
+                w.actor,
+                0xabcd,
+                a + 0x314,
+                3,
+                0x1234,
+                0x4048,
+                9,
+                0x31,
+                target,
+                1,
+                0,
+                0,
+                1,
+                1
+            ]],
+            "held pointer, process + 0x314, count, name, 004048e0, type, idle, dialog target, 1, 0, 0, 1, can-greet"
+        );
+    }
+
+    #[test]
     fn test_high_process_process_greet_held_topic_without_an_item_ends_the_say_to() {
         let mut e = Engine::new();
         let w = greet_world(&mut e);
@@ -19991,6 +20040,8 @@ mod tests {
         );
         assert_eq!(e.mem.u8(w.actor + 0x80), 0);
         assert_eq!(e.mem.f32(a + 0x310), 1.5);
+        // 008dd385: the eleventh word of the say call is 1.
+        assert_eq!(calls_to(&e, slot_target(ACTOR_TABLE, 0x284))[0][11], 1);
         assert_eq!(calls_to(&e, 0x0083_c850), vec![vec![item, 0]]);
         assert_eq!(calls_to(&e, 0x0057_bd60), vec![vec![w.actor, 0]]);
         // No further response ends the greeting (the H3 branch).
@@ -28376,6 +28427,32 @@ mod tests {
             vec![vec![p.addr(), actor, u32::MAX]]
         );
         // The return skips the common end.
+        assert!(calls_to(
+            &e,
+            slot_target(0x7700_0000, SLOT_COMPUTE_LAST_TIME_PROCESSED)
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn test_update_script_package_of_procedure_type_0_searches_its_location() {
+        let mut e = Engine::new();
+        let (p, actor, _player, package, _cell) = update_world(&mut e);
+        update_set_action(&mut e, 0x36);
+        // Procedure type 0 (the world's default): 008f19ab..008f19cb call the
+        // package's slot 0x13c with (mobile, 0, -1.0, 1).
+        e.call_log = Some(vec![]);
+        e.call(0x008e_eec0, &args![p, actor]);
+        assert_eq!(
+            calls_to(&e, slot_target(PACKAGE_TABLE, PACKAGE_SLOT_FIND_LOCATION)),
+            vec![vec![package, actor, 0, (-1.0f32).to_bits(), 1]]
+        );
+        // The search fails for an actor that is not the player: the procedure
+        // is ended and the common end is skipped.
+        assert_eq!(
+            calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
+            vec![vec![p.addr(), actor, u32::MAX]]
+        );
         assert!(calls_to(
             &e,
             slot_target(0x7700_0000, SLOT_COMPUTE_LAST_TIME_PROCESSED)
