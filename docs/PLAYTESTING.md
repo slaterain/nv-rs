@@ -19,7 +19,7 @@ Download the experimental ZIP from GitHub Releases and extract the entire folder
 
 The source viewer builds for Apple Silicon and selects Metal. Launch it with
 the `Data` folder from your own PC installation, as described in the
-[macOS build instructions](../README.md#build-and-run-on-macos). On
+[macOS build instructions](#build-and-run-on-macos) below. On
 2026-10-07, the release viewer rendered the `WastelandNV` exterior using a
 PC `Data` folder on Apple Silicon. On 2026-10-10, Doc Mitchell's scripted
 acceptance route reached the dialogue marker on macOS. Back in the Saddle
@@ -30,6 +30,42 @@ macOS.
 
 The macOS distant-land material has no prepass or shadow pass, so it may
 look different from other platforms.
+
+### Build and run on macOS
+
+Install stable Rust and the Xcode Command Line Tools, then pass the Data folder
+from your own PC installation:
+
+```sh
+cd viewer
+cargo run --release -- "/path/to/Fallout New Vegas/Data" GSDocMitchellHouse
+```
+
+Apple Silicon builds a native arm64 viewer by default. The game executable
+and Windows release packages remain Windows-specific.
+
+### Build and run on Linux (Vulkan and Wayland)
+
+The viewer builds from source on Linux and supports native Wayland and X11
+windows. On Fedora, install `alsa-lib-devel`, `libudev-devel`,
+`wayland-devel`, and `libxkbcommon-devel`. Debian and Ubuntu need
+`libasound2-dev`, `libudev-dev`, `libwayland-dev`, and `libxkbcommon-dev`.
+Install a Vulkan loader and a working GPU driver for your system.
+
+From a Wayland session, pass your own game data folder. When
+`WAYLAND_DISPLAY` is set, winit prefers Wayland. Unsetting `DISPLAY` is
+optional and forces the native Wayland path; `WGPU_BACKEND=vulkan` selects
+Vulkan rendering:
+
+```sh
+cd viewer
+env -u DISPLAY WGPU_BACKEND=vulkan cargo run --release -- \
+  "/path/to/Fallout New Vegas/Data" GSDocMitchellHouse
+```
+
+For Steam/Proton installations, pass the active plugin list and INI when
+needed with `--plugins` and `--ini`. Linux builds currently run from source;
+Windows remains the packaged playtest platform.
 
 ## Current live route
 
