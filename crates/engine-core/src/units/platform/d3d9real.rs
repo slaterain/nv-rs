@@ -733,6 +733,27 @@ pub fn set_scissor_rect(e: &mut Engine, this: u32, at: u32, model: u32) {
     answer(e, "SetScissorRect", model, hr(result));
 }
 
+/// `SetGammaRamp` on the real device with the game's ramp (`void` in the SDK: nothing to
+/// compare with the model's answer).
+pub fn set_gamma_ramp(
+    e: &mut Engine,
+    this: u32,
+    swap_chain: u32,
+    flags: u32,
+    ramp: u32,
+    model: u32,
+) {
+    let _ = model;
+    let Some(d) = device(e, this) else { return };
+    let mut table = D3DGAMMARAMP::default();
+    for i in 0..0x100u32 {
+        table.red[i as usize] = e.mem.u16(ramp + 2 * i);
+        table.green[i as usize] = e.mem.u16(ramp + 0x200 + 2 * i);
+        table.blue[i as usize] = e.mem.u16(ramp + 0x400 + 2 * i);
+    }
+    unsafe { d.SetGammaRamp(swap_chain, flags, &table) };
+}
+
 pub fn set_clip_plane(e: &mut Engine, this: u32, index: u32, plane: u32, model: u32) {
     let Some(d) = device(e, this) else { return };
     if plane == 0 {

@@ -296,6 +296,8 @@ struct Device {
     viewport: [u32; 6],
     /// The states the program set: render states by type, texture stage states and sampler
     /// states by (stage or sampler, type), the textures by sampler (held, counted).
+    /// The last gamma ramp `SetGammaRamp` was given (three 256-entry WORD tables, 0x600 bytes).
+    gamma_ramp: Option<Vec<u16>>,
     render_states: HashMap<u32, u32>,
     stage_states: HashMap<(u32, u32), u32>,
     sampler_states: HashMap<(u32, u32), u32>,
@@ -403,6 +405,8 @@ forwarded! {
     fn fwd_set_scissor_rect = set_scissor_rect(rect: Ptr) => set_scissor_rect;
     fn fwd_set_clip_plane = set_clip_plane(index: u32, plane: Ptr) => set_clip_plane;
     fn fwd_set_render_state = set_render_state(state: u32, value: u32) => set_render_state;
+    fn fwd_set_gamma_ramp = set_gamma_ramp(swap_chain: u32, flags: u32, ramp: Ptr)
+        => set_gamma_ramp;
     fn fwd_set_texture_stage_state = set_texture_stage_state(stage: u32, kind: u32, value: u32)
         => set_texture_stage_state;
     fn fwd_set_sampler_state = set_sampler_state(sampler: u32, kind: u32, value: u32)
@@ -609,7 +613,7 @@ fn fwd_create_depth_stencil_surface(
 }
 
 fn register_code(e: &mut Engine) {
-    let device: [(u32, crate::AbiFn); 47] = [
+    let device: [(u32, crate::AbiFn); 48] = [
         (16, crate::entry!(0, reset(Ptr, Ptr) -> u32).1),
         (
             32,
@@ -677,6 +681,10 @@ fn register_code(e: &mut Engine) {
             crate::entry!(0, get_depth_stencil_surface(Ptr, Ptr) -> u32).1,
         ),
         (47, crate::entry!(0, fwd_set_viewport(Ptr, Ptr) -> u32).1),
+        (
+            21,
+            crate::entry!(0, fwd_set_gamma_ramp(Ptr, u32, u32, Ptr) -> u32).1,
+        ),
         (3, crate::entry!(0, test_cooperative_level(Ptr) -> u32).1),
         (
             17,
@@ -1132,6 +1140,7 @@ pub fn create_device(
         render_targets,
         depth_stencil,
         viewport: [0, 0, width, height, 0f32.to_bits(), 1f32.to_bits()],
+        gamma_ramp: None,
         render_states: HashMap::new(),
         stage_states: HashMap::new(),
         sampler_states: HashMap::new(),
@@ -1761,6 +1770,23 @@ fn test_cooperative_level(e: &mut Engine, this: Ptr) -> u32 {
 /// `D3DVERTEXTEXTURESAMPLER0..3` (257 to 260).
 fn is_sampler(sampler: u32) -> bool {
     sampler < 16 || (256..=260).contains(&sampler)
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::SetGammaRamp (vtable +0x54)
+/// `SetGammaRamp(swap_chain, flags, ramp)`: the ramp (`D3DGAMMARAMP`, three tables of 256
+/// WORDs) is kept for the swap chain 0, the only one the game makes. The method is `void` in
+/// the SDK, so the word in `EAX` is not part of its contract; the game ignores it (004dcef0, the
+/// Display menu's brightness). Swap chains other than 0 and a null ramp are not provided.
+fn set_gamma_ramp(e: &mut Engine, this: Ptr, swap_chain: u32, flags: u32, ramp: Ptr) -> u32 {
+    let _ = flags;
+    assert!(
+        swap_chain == 0 && !ramp.is_null(),
+        "IDirect3DDevice9::SetGammaRamp({swap_chain}, .., {:08x}) is not provided",
+        ramp.addr()
+    );
+    let table = (0..0x300).map(|i| e.mem.u16(ramp.addr() + 2 * i)).collect();
+    device(e, this).gamma_ramp = Some(table);
+    D3D_OK
 }
 
 // Platform: replaces D3D9.DLL IDirect3DDevice9::SetRenderState (vtable +0xE4)
@@ -3656,6 +3682,27 @@ mod tests {
         assert_eq!(e.vcall(compressed, 8, &[]).u32(), 0);
         assert!(e.kernel.graphics.device_objects.textures.is_empty());
         assert_eq!(e.vcall(device, 8, &[]).u32(), 0);
+    }
+
+    /// The Display menu's brightness (004dcef0) sets the gamma ramp through slot 21 (+0x54);
+    /// without it the game's main loop stopped on the open slot (the maintainer's freeze).
+    #[test]
+    fn the_gamma_ramp_is_kept() {
+        let (mut e, d3d, present) = d3d();
+        let out = e.mem.alloc(4);
+        e.vcall(d3d, CREATE_DEVICE, &[0, 1, 0x11c, 0x40, present, out]);
+        let device = e.mem.u32(out);
+        let ramp = e.mem.alloc(0x600);
+        for i in 0..0x300 {
+            e.mem.set_u16(ramp + 2 * i, (i * 85) as u16);
+        }
+        assert_eq!(e.vcall(device, 4 * 21, &[0, 1, ramp]).u32(), D3D_OK);
+        let kept = super::device(&mut e, Ptr::new(device))
+            .gamma_ramp
+            .clone()
+            .unwrap();
+        assert_eq!(kept.len(), 0x300);
+        assert_eq!(kept[0x201], (0x201u32 * 85) as u16);
     }
 
     #[test]
