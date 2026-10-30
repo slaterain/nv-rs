@@ -600,7 +600,9 @@ impl One {
             let collision_input = e.mem.u32(ctx + 0xc);
             if e.mem.f32(collision_input + 8) <= remaining {
                 e.mem.set_f32(entry + 0x1c, remaining);
-                self.pass_entry(e, ctx + 0x10);
+                // The contact manager word of the input (00da5670 `MOV ECX,[ESP+0x84]`).
+                let fourth = e.mem.u32(ctx + 0x10);
+                self.pass_entry(e, fourth);
                 return;
             }
             pending = Some(remaining);
@@ -1146,7 +1148,9 @@ impl Many {
             let collision_input = e.mem.u32(ctx + 0xc);
             if e.mem.f32(collision_input + 8) <= remaining {
                 e.mem.set_f32(entry + 0x1c, remaining);
-                self.pass_entry(e, ctx + 0x10);
+                // The contact manager word of the input (00da5670 `MOV ECX,[ESP+0x84]`).
+                let fourth = e.mem.u32(ctx + 0x10);
+                self.pass_entry(e, fourth);
                 return;
             }
             pending = Some(remaining);
@@ -2333,7 +2337,7 @@ mod tests {
         assert_eq!(passed.len(), 1);
         assert_eq!(passed[0][0], kept);
         assert_eq!(passed[0][1], kept + 0x20);
-        assert_ne!(passed[0][2], 0x4444);
+        assert_eq!(passed[0][2], 0x4444);
         assert_eq!(passed[0][3], 0x5757);
         assert!(seen.borrow().is_empty());
         assert_eq!(minimum_times(&e, w.stream), vec![(MINIMUM_TIME_LABEL, 2.0)]);
@@ -2732,7 +2736,7 @@ mod tests {
         let passed = calls(&e, PASS_FUNCTION);
         assert_eq!(passed.len(), 2);
         assert_eq!(passed[0][0], kept);
-        assert_ne!(passed[0][2], 0x4444);
+        assert_eq!(passed[0][2], 0x4444);
         assert_eq!(passed[1], vec![kept + 0x30, kept + 0x50, 0x4444, 0x5757]);
         assert_eq!(minimum_times(&e, w.stream), vec![(MINIMUM_TIME_LABEL, 2.0)]);
     }

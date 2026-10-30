@@ -137,7 +137,7 @@ const FLOAT_TO_INT: u32 = 0x00ec_62c0;
 const MANAGER_PIPBOY: u32 = 0x0070_4370;
 const PIPBOY_REFRESH: u32 = 0x007f_8a80;
 /// Takes the object and a tab number.
-const PIPBOY_SELECT_TAB: u32 = 0x007f_fa010 & 0x00ff_ffff;
+const PIPBOY_SELECT_TAB: u32 = 0x007f_a010;
 /// `00974d90` on that object: true when the word at its start is set.
 const PIPBOY_QUERY: u32 = 0x0097_4d90;
 /// `MenuConsole::Instance` (Xbox PDB), `cdecl`: `0` answers the instance

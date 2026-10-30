@@ -4129,10 +4129,10 @@ pub fn hud_main_menu_update_status_mode_ui(
         let ptr = e.call(0x0040_3e20, &args![setting]).u32();
         (f64::from(e.mem.f32(ptr)) + 1.0) as f32
     };
-    let body_part_value = |e: &mut Engine, id: u32, argument: u32| {
-        e.vcall(values, 8, &args![id, argument]).i32() as f32
-    };
-    let radiation = body_part_value(e, 0x36, 0);
+    // GetActorValue takes only the id; the word the exe pushes before it
+    // (00773cf2, 00773dc0, 00773dff, 00773e3e) is 00773e90's blink flag.
+    let actor_value = |e: &mut Engine, id: u32| e.vcall(values, 8, &args![id]).i32() as f32;
+    let radiation = actor_value(e, 0x36);
     let radiation_tile = e.mem.u32(menu + 0x178);
     fn_00773e90(e, this, Ptr::new(radiation_tile), radiation, false);
     let damaged_limb_tile = e.mem.u32(menu + 0x17c);
@@ -4149,14 +4149,14 @@ pub fn hud_main_menu_update_status_mode_ui(
             hud_set_float(e, target, 0xfa9, 0.0);
         }
     } else {
-        for (offset, id, argument) in [
-            (0x164_u32, 0x49_u32, 0_u32),
-            (0x168, 0x4b, 0),
-            (0x16c, 0x4a, 1),
+        for (offset, id, advance_blink) in [
+            (0x164_u32, 0x49_u32, false),
+            (0x168, 0x4b, false),
+            (0x16c, 0x4a, true),
         ] {
-            let value = body_part_value(e, id, argument);
+            let value = actor_value(e, id);
             let item = e.mem.u32(menu + offset);
-            fn_00773e90(e, this, Ptr::new(item), value, false);
+            fn_00773e90(e, this, Ptr::new(item), value, advance_blink);
         }
     }
 }
@@ -9757,6 +9757,11 @@ mod tests {
         });
         e.register_double(0x0070_0320, |_, _| Ret::default());
         e.register_double(0x00a0_12d0, |_, _| Ret::default());
+        // The blink of the last limb icon (00773e3e pushes 1): its clock, settings and clamp.
+        e.map(0x0101_0000, 0x2_0000);
+        e.map(0x011f_6000, 0x1000);
+        e.register_double(0x0082_5c00, |_, _| Ret::default());
+        e.register_double(0x0053_30e0, |_, _| Ret::default());
         e.call_log = Some(vec![]);
         hud_main_menu_update_status_mode_ui(&mut e, menu, true);
         let calls = e.call_log.as_ref().unwrap();
@@ -9780,6 +9785,21 @@ mod tests {
                 .filter(|(address, _)| *address == 0x0f00_0010)
                 .count(),
             4
+        );
+        // 00773cf2..00773e40: GetActorValue gets only the id after `this`.
+        let ids: Vec<&[u32]> = calls
+            .iter()
+            .filter(|(address, _)| *address == 0x0f00_0010)
+            .map(|(_, words)| &words[1..])
+            .collect();
+        assert_eq!(ids, [&[0x36][..], &[0x49], &[0x4b], &[0x4a]]);
+        // Status mode: only the 0x4a icon advances the shared blink.
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x0082_5c00)
+                .count(),
+            1
         );
     }
 

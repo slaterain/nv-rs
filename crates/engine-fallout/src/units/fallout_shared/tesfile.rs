@@ -1834,7 +1834,7 @@ pub fn tes_file_load_form(e: &mut Engine, this: Ptr<TESFile>, form: Ptr) {
     } else {
         e.call(FORM_SET_LOAD_FLAGS, &args![form, flags]);
     }
-    let id = e.call(RECORD_FORM_ID, &args![this, 1u32]).u32();
+    let id = e.call(RECORD_FORM_ID, &args![this]).u32();
     e.vcall(form.addr(), 0x128, &args![id, 1u32]);
     e.call(FORM_SET_FILE, &args![form, this]);
 }
@@ -5052,7 +5052,7 @@ mod tests {
             calls_to(&log, FORM_SET_LOAD_FLAGS),
             vec![vec![form.addr(), 0x4010]]
         );
-        assert_eq!(calls_to(&log, RECORD_FORM_ID), vec![vec![file.addr(), 1]]);
+        assert_eq!(calls_to(&log, RECORD_FORM_ID), vec![vec![file.addr()]]);
         assert_eq!(
             calls_to(&log, FAKE_SLOT_A),
             vec![vec![form.addr(), 0x77, 1]]
