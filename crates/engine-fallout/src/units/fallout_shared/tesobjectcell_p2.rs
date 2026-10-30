@@ -786,6 +786,8 @@ const VECTOR_LENGTH_SQUARED: u32 = 0x004a_7290;
 /// Appends the word at `*item` to an array `(array, &item)` (the map names it
 /// `BSSimpleArray<BGSBodyPart_P_1024>::AddUninitialized`, a folded name).
 const ARRAY_APPEND: u32 = 0x007c_b2e0;
+/// The linked list's front insert `(list, &item)` (`005ae3d0`, `ret 4`).
+const LIST_INSERT_FRONT: u32 = 0x005a_e3d0;
 /// The time object and its reader, the cell's detach time and its setter
 /// (`TESObjectCELL::GetDetachTime`, Xbox PDB).
 const GAME_TIME_OBJECT: u32 = 0x011d_e7b8;
@@ -4858,10 +4860,11 @@ pub fn fn_0054dc00(
 }
 
 // Translated from 0054dcf0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Appends to the array `list` (`ret 4`) every door reference of the cell
-/// (no form flag `0x800` or `0x20`, base form of type `0x1C` other than the
-/// form in `011ca258`) that has teleport data or whose base form passes the
-/// object filter `005194d0`. Does nothing for a null list.
+/// Puts every door reference of the cell (no form flag `0x800` or `0x20`, base form of type
+/// `0x1C` other than the form in `011ca258`) that has teleport data or whose base form passes the
+/// object filter `005194d0` into the linked list `list` (`ret 4`), through its front insert
+/// `005ae3d0` with the reference's address (0054dda1; the cell's other door lists use the array
+/// append `007cb2e0`). Does nothing for a null list.
 pub fn fn_0054dcf0(e: &mut Engine, this: Ptr<TESObjectCELL>, list: Ptr) {
     if list.is_null() {
         return;
@@ -4875,7 +4878,10 @@ pub fn fn_0054dcf0(e: &mut Engine, this: Ptr<TESObjectCELL>, list: Ptr) {
             if e.call(REFERENCE_GET_TELEPORT_DATA, &args![item]).u32() != 0
                 || e.call(FILTER_OBJECT_USABLE, &args![base]).bool()
             {
-                push_front_item(e, list, item);
+                e.with_stack(4, |e, slot| {
+                    e.mem.set_u32(slot.addr(), item.addr());
+                    e.call(LIST_INSERT_FRONT, &args![list, slot]);
+                });
             }
         }
         cursor = node_next(e, cursor);
@@ -12880,10 +12886,23 @@ mod tests {
         assert_eq!(*appended.borrow(), vec![(list, with_data)]);
     }
 
+    /// Logs `(list, *item)` of each front insert `005ae3d0` (0054dcf0's list).
+    fn insert_log(e: &mut Engine) -> Rc<RefCell<Vec<(u32, u32)>>> {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let seen = log.clone();
+        e.register_double(LIST_INSERT_FRONT, move |e, a| {
+            seen.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            Ret::default()
+        });
+        log
+    }
+
     #[test]
     fn door_or_filtered_list() {
         let mut e = engine();
-        let appended = append_log(&mut e);
+        let appended = insert_log(&mut e);
+        // 0054dda1: the list's front insert, never the array append of the other door lists.
+        e.register_double(ARRAY_APPEND, |_, _| panic!("0054dcf0 appends to an array"));
         e.register(FILTER_OBJECT_USABLE, |e, a| {
             e.mem.u32(a[0] + 0x30).into_ret()
         });
