@@ -185,8 +185,14 @@ extern "system" fn window_procedure(
         }
         WM_INPUT => raw_mouse(lparam),
         // While the window is active the cursor stays in it, hidden (the game's DirectInput
-        // mouse is exclusive and foreground: Windows hides and holds the cursor for it).
-        WM_ACTIVATE if wparam.0 & 0xffff != 0 => hold_cursor(window),
+        // mouse is exclusive and foreground: Windows hides and holds the cursor for it). It is
+        // taken on a keyboard activation (Alt+Tab, WA_ACTIVE) or a click in the client area
+        // (above); a click that activates the window elsewhere (WA_CLICKACTIVE, e.g. on the
+        // title bar) leaves it free, and so does moving or sizing the window: holding it in the
+        // client area there pulled the cursor below the title bar, the move loop followed it,
+        // and the window slid down the screen (playtest, 2026-10-30).
+        WM_ACTIVATE if wparam.0 & 0xffff == WA_ACTIVE as usize => hold_cursor(window),
+        WM_ENTERSIZEMOVE => let_go_of_cursor(),
         WM_SIZE | WM_MOVE if cursor_held() => hold_cursor(window),
         WM_SETCURSOR if cursor_held() && lparam.0 as u32 & 0xffff == HTCLIENT => {
             unsafe { SetCursor(None) };
@@ -240,6 +246,11 @@ fn release_input() {
         i.keys = [false; 256];
         i.buttons = [false; 8];
     }
+    let_go_of_cursor();
+}
+
+/// Frees the cursor [`hold_cursor`] held (no clip; Windows shows it again).
+fn let_go_of_cursor() {
     if CURSOR_HELD.swap(false, std::sync::atomic::Ordering::Relaxed) {
         let _ = unsafe { ClipCursor(None) };
     }
