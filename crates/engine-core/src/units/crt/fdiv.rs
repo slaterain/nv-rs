@@ -17,6 +17,10 @@
 //! words; the result `ST0` rounded to a double with the control word left, and for `00ed6cfc`
 //! the status word's condition codes in `EAX`).
 //!
+//! The 16 fragments that only give the frame back and raise `INT 6` (the invalid-opcode
+//! exception, which the engine cannot dispatch) are panic-only: they stop the run through an
+//! unmarked helper and carry no translation marker (docs/ENGINE_CRATE.md).
+//!
 //! Not modelled: the x87 status word, which the engine does not keep. The stack-top field the
 //! memory-operand entries test is taken from the register count of the model, and the
 //! condition codes `00ed6cfc` leaves are the ones its `FPREM` sets (each function says so).
@@ -372,8 +376,6 @@ fn fdiv_r_6414(_e: &mut Engine, fpu: &mut Fpu, _frame: u32) {
     fpu.set(0, x87_fdiv(fpu.st(0), fpu.st(0)));
 }
 
-// Translated from 00ed641a (disassembled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00ed641a - INT 6 raises an invalid-opcode exception, which the engine cannot dispatch (structured exceptions are not provided): the engine stops
 /// Selector 0x01 (`ADD ESP, 0x2c; INT 6`): no division for this selector; the frame is given
 /// back and the invalid-opcode exception raised ([`invalid_selector`]).
 fn fdiv_r_641a(_e: &mut Engine, _fpu: &mut Fpu, _frame: u32) {
@@ -386,8 +388,6 @@ fn fdiv_r_641f(_e: &mut Engine, fpu: &mut Fpu, _frame: u32) {
     fpu.set(0, x87_fdiv(fpu.st(0), fpu.st(0)));
 }
 
-// Translated from 00ed6425 (disassembled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00ed6425 - INT 6 raises an invalid-opcode exception, which the engine cannot dispatch (structured exceptions are not provided): the engine stops
 /// Selector 0x03 (`ADD ESP, 0x2c; INT 6`): no division for this selector; the frame is given
 /// back and the invalid-opcode exception raised ([`invalid_selector`]).
 fn fdiv_r_6425(_e: &mut Engine, _fpu: &mut Fpu, _frame: u32) {
@@ -426,8 +426,6 @@ fn fdiv_r_6442(e: &mut Engine, fpu: &mut Fpu, frame: u32) {
     divide_st0_by(e, fpu, frame, 1);
 }
 
-// Translated from 00ed645e (disassembled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00ed645e - INT 6 raises an invalid-opcode exception, which the engine cannot dispatch (structured exceptions are not provided): the engine stops
 /// Selector 0x09 (`ADD ESP, 0x2c; INT 6`): no division for this selector; the frame is given
 /// back and the invalid-opcode exception raised ([`invalid_selector`]).
 fn fdiv_r_645e(_e: &mut Engine, _fpu: &mut Fpu, _frame: u32) {
@@ -440,8 +438,6 @@ fn fdiv_r_6463(e: &mut Engine, fpu: &mut Fpu, frame: u32) {
     divide_into_st0(e, fpu, frame, 1);
 }
 
-// Translated from 00ed6479 (disassembled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00ed6479 - INT 6 raises an invalid-opcode exception, which the engine cannot dispatch (structured exceptions are not provided): the engine stops
 /// Selector 0x0b (`ADD ESP, 0x2c; INT 6`): no division for this selector; the frame is given
 /// back and the invalid-opcode exception raised ([`invalid_selector`]).
 fn fdiv_r_6479(_e: &mut Engine, _fpu: &mut Fpu, _frame: u32) {
@@ -478,8 +474,6 @@ fn fdiv_r_64ce(e: &mut Engine, fpu: &mut Fpu, frame: u32) {
     divide_st0_by(e, fpu, frame, 2);
 }
 
-// Translated from 00ed64ee (disassembled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00ed64ee - INT 6 raises an invalid-opcode exception, which the engine cannot dispatch (structured exceptions are not provided): the engine stops
 /// Selector 0x11 (`ADD ESP, 0x2c; INT 6`): no division for this selector; the frame is given
 /// back and the invalid-opcode exception raised ([`invalid_selector`]).
 fn fdiv_r_64ee(_e: &mut Engine, _fpu: &mut Fpu, _frame: u32) {
@@ -492,8 +486,6 @@ fn fdiv_r_64f3(e: &mut Engine, fpu: &mut Fpu, frame: u32) {
     divide_into_st0(e, fpu, frame, 2);
 }
 
-// Translated from 00ed650d (disassembled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00ed650d - INT 6 raises an invalid-opcode exception, which the engine cannot dispatch (structured exceptions are not provided): the engine stops
 /// Selector 0x13 (`ADD ESP, 0x2c; INT 6`): no division for this selector; the frame is given
 /// back and the invalid-opcode exception raised ([`invalid_selector`]).
 fn fdiv_r_650d(_e: &mut Engine, _fpu: &mut Fpu, _frame: u32) {
@@ -530,8 +522,6 @@ fn fdiv_r_6572(e: &mut Engine, fpu: &mut Fpu, frame: u32) {
     divide_st0_by(e, fpu, frame, 3);
 }
 
-// Translated from 00ed6592 (disassembled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00ed6592 - INT 6 raises an invalid-opcode exception, which the engine cannot dispatch (structured exceptions are not provided): the engine stops
 /// Selector 0x19 (`ADD ESP, 0x2c; INT 6`): no division for this selector; the frame is given
 /// back and the invalid-opcode exception raised ([`invalid_selector`]).
 fn fdiv_r_6592(_e: &mut Engine, _fpu: &mut Fpu, _frame: u32) {
@@ -544,8 +534,6 @@ fn fdiv_r_6597(e: &mut Engine, fpu: &mut Fpu, frame: u32) {
     divide_into_st0(e, fpu, frame, 3);
 }
 
-// Translated from 00ed65b1 (disassembled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00ed65b1 - INT 6 raises an invalid-opcode exception, which the engine cannot dispatch (structured exceptions are not provided): the engine stops
 /// Selector 0x1b (`ADD ESP, 0x2c; INT 6`): no division for this selector; the frame is given
 /// back and the invalid-opcode exception raised ([`invalid_selector`]).
 fn fdiv_r_65b1(_e: &mut Engine, _fpu: &mut Fpu, _frame: u32) {
@@ -582,8 +570,6 @@ fn fdiv_r_6616(e: &mut Engine, fpu: &mut Fpu, frame: u32) {
     divide_st0_by(e, fpu, frame, 4);
 }
 
-// Translated from 00ed6636 (disassembled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00ed6636 - INT 6 raises an invalid-opcode exception, which the engine cannot dispatch (structured exceptions are not provided): the engine stops
 /// Selector 0x21 (`ADD ESP, 0x2c; INT 6`): no division for this selector; the frame is given
 /// back and the invalid-opcode exception raised ([`invalid_selector`]).
 fn fdiv_r_6636(_e: &mut Engine, _fpu: &mut Fpu, _frame: u32) {
@@ -596,8 +582,6 @@ fn fdiv_r_663b(e: &mut Engine, fpu: &mut Fpu, frame: u32) {
     divide_into_st0(e, fpu, frame, 4);
 }
 
-// Translated from 00ed6655 (disassembled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00ed6655 - INT 6 raises an invalid-opcode exception, which the engine cannot dispatch (structured exceptions are not provided): the engine stops
 /// Selector 0x23 (`ADD ESP, 0x2c; INT 6`): no division for this selector; the frame is given
 /// back and the invalid-opcode exception raised ([`invalid_selector`]).
 fn fdiv_r_6655(_e: &mut Engine, _fpu: &mut Fpu, _frame: u32) {
@@ -634,8 +618,6 @@ fn fdiv_r_66ba(e: &mut Engine, fpu: &mut Fpu, frame: u32) {
     divide_st0_by(e, fpu, frame, 5);
 }
 
-// Translated from 00ed66da (disassembled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00ed66da - INT 6 raises an invalid-opcode exception, which the engine cannot dispatch (structured exceptions are not provided): the engine stops
 /// Selector 0x29 (`ADD ESP, 0x2c; INT 6`): no division for this selector; the frame is given
 /// back and the invalid-opcode exception raised ([`invalid_selector`]).
 fn fdiv_r_66da(_e: &mut Engine, _fpu: &mut Fpu, _frame: u32) {
@@ -648,8 +630,6 @@ fn fdiv_r_66df(e: &mut Engine, fpu: &mut Fpu, frame: u32) {
     divide_into_st0(e, fpu, frame, 5);
 }
 
-// Translated from 00ed66f9 (disassembled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00ed66f9 - INT 6 raises an invalid-opcode exception, which the engine cannot dispatch (structured exceptions are not provided): the engine stops
 /// Selector 0x2b (`ADD ESP, 0x2c; INT 6`): no division for this selector; the frame is given
 /// back and the invalid-opcode exception raised ([`invalid_selector`]).
 fn fdiv_r_66f9(_e: &mut Engine, _fpu: &mut Fpu, _frame: u32) {
@@ -686,8 +666,6 @@ fn fdiv_r_675e(e: &mut Engine, fpu: &mut Fpu, frame: u32) {
     divide_st0_by(e, fpu, frame, 6);
 }
 
-// Translated from 00ed677e (disassembled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00ed677e - INT 6 raises an invalid-opcode exception, which the engine cannot dispatch (structured exceptions are not provided): the engine stops
 /// Selector 0x31 (`ADD ESP, 0x2c; INT 6`): no division for this selector; the frame is given
 /// back and the invalid-opcode exception raised ([`invalid_selector`]).
 fn fdiv_r_677e(_e: &mut Engine, _fpu: &mut Fpu, _frame: u32) {
@@ -700,8 +678,6 @@ fn fdiv_r_6783(e: &mut Engine, fpu: &mut Fpu, frame: u32) {
     divide_into_st0(e, fpu, frame, 6);
 }
 
-// Translated from 00ed679d (disassembled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00ed679d - INT 6 raises an invalid-opcode exception, which the engine cannot dispatch (structured exceptions are not provided): the engine stops
 /// Selector 0x33 (`ADD ESP, 0x2c; INT 6`): no division for this selector; the frame is given
 /// back and the invalid-opcode exception raised ([`invalid_selector`]).
 fn fdiv_r_679d(_e: &mut Engine, _fpu: &mut Fpu, _frame: u32) {
@@ -738,8 +714,6 @@ fn fdiv_r_6802(e: &mut Engine, fpu: &mut Fpu, frame: u32) {
     divide_st0_by(e, fpu, frame, 7);
 }
 
-// Translated from 00ed6822 (disassembled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00ed6822 - INT 6 raises an invalid-opcode exception, which the engine cannot dispatch (structured exceptions are not provided): the engine stops
 /// Selector 0x39 (`ADD ESP, 0x2c; INT 6`): no division for this selector; the frame is given
 /// back and the invalid-opcode exception raised ([`invalid_selector`]).
 fn fdiv_r_6822(_e: &mut Engine, _fpu: &mut Fpu, _frame: u32) {
@@ -752,8 +726,6 @@ fn fdiv_r_6827(e: &mut Engine, fpu: &mut Fpu, frame: u32) {
     divide_into_st0(e, fpu, frame, 7);
 }
 
-// Translated from 00ed6841 (disassembled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00ed6841 - INT 6 raises an invalid-opcode exception, which the engine cannot dispatch (structured exceptions are not provided): the engine stops
 /// Selector 0x3b (`ADD ESP, 0x2c; INT 6`): no division for this selector; the frame is given
 /// back and the invalid-opcode exception raised ([`invalid_selector`]).
 fn fdiv_r_6841(_e: &mut Engine, _fpu: &mut Fpu, _frame: u32) {
@@ -1506,7 +1478,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "00ed6655: INT 6")]
+    #[should_panic(expected = "INT 6 (invalid opcode)")]
     fn an_invalid_register_form_stops_the_engine() {
         let mut e = engine();
         with_table(&mut e);

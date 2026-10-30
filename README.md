@@ -79,7 +79,7 @@ plugins, packaged Linux and macOS builds, and VR.
 ## Progress
 
 <p align="center">
-  <img src="docs/media/progress.svg" alt="Engine port progress: 100.0% of the original program's functions covered" width="100%">
+  <img src="docs/media/progress.svg" alt="Engine port progress: 99.95% of the original program's functions covered" width="100%">
 </p>
 
 The original game's systems switch over one at a time, each in its own

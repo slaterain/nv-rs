@@ -31,15 +31,15 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 47749 | 68.7% |
+| translated | 47733 | 68.7% |
 | static init (table) | 21726 | 31.3% |
 | traced | 0 | 0.0% |
 | platform | 13 | 0.0% |
-| library | 0 | 0.0% |
+| library | 16 | 0.0% |
 | open | 0 | 0.0% |
 | **all** | **69488** | |
 
-Translation totals count engine-crate markers, not complete behavior; a marker outside the engine crates counts as `traced`. **5995** engine functions
+Translation totals count engine-crate markers, not complete behavior; a marker outside the engine crates counts as `traced`. **5979** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
@@ -5647,7 +5647,7 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00ec3648` | `crates/engine-core/src/units/crt/misc5.rs:200` |
 | `00ec36a6` | `crates/engine-fallout/src/units/unplaced/run_00ec36a6.rs:94` |
 | `00ec3a75` | `crates/engine-fallout/src/units/unplaced/run_00ec36a6.rs:48` |
-| `00ec3ca6` | `crates/engine-core/src/units/crt/cxxframe.rs:512, crates/engine-fallout/src/units/unplaced/run_00ec36a6.rs:598` |
+| `00ec3ca6` | `crates/engine-core/src/units/crt/cxxframe.rs:551, crates/engine-fallout/src/units/unplaced/run_00ec36a6.rs:598` |
 | `00ec3cdf` | `crates/engine-fallout/src/units/unplaced/run_00ec36a6.rs:626` |
 | `00ec3d69` | `crates/engine-fallout/src/units/unplaced/run_00ec36a6.rs:666` |
 | `00ec3d9c` | `crates/engine-fallout/src/units/unplaced/run_00ec36a6.rs:375, crates/engine-fallout/src/units/unplaced/run_00ec36a6.rs:692` |
@@ -5718,22 +5718,22 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00ecdbf6` | `crates/engine-core/src/units/crt/cvt.rs:100` |
 | `00ece104` | `crates/engine-core/src/units/crt/seh.rs:715, crates/engine-fallout/src/units/unplaced/run_00d87940.rs:17` |
 | `00ece255` | `crates/engine-core/src/units/crt/misc5.rs:200, crates/engine-fallout/src/units/unplaced/run_00ec3020.rs:327, crates/engine-fallout/src/units/unplaced/run_00ec3020.rs:419, crates/engine-fallout/src/units/unplaced/run_00ec3020.rs:467, crates/engine-fallout/src/units/unplaced/run_00ec3020.rs:481, crates/engine-fallout/src/units/unplaced/run_00ec36a6.rs:94` |
-| `00ece288` | `crates/engine-core/src/units/crt/cxxframe.rs:233` |
+| `00ece288` | `crates/engine-core/src/units/crt/cxxframe.rs:238` |
 | `00ece2be` | `crates/engine-core/src/units/crt/misc5.rs:200, crates/engine-fallout/src/units/unplaced/run_00ec3020.rs:327, crates/engine-fallout/src/units/unplaced/run_00ec3020.rs:419, crates/engine-fallout/src/units/unplaced/run_00ec36a6.rs:94` |
-| `00ece3ca` | `crates/engine-core/src/units/crt/cxxframe.rs:196` |
-| `00ece490` | `crates/engine-core/src/units/crt/cxxframe.rs:196` |
-| `00ece4ab` | `crates/engine-core/src/units/crt/cxxframe.rs:260` |
+| `00ece3ca` | `crates/engine-core/src/units/crt/cxxframe.rs:201` |
+| `00ece490` | `crates/engine-core/src/units/crt/cxxframe.rs:201` |
+| `00ece4ab` | `crates/engine-core/src/units/crt/cxxframe.rs:267` |
 | `00ece4f0` | `crates/engine-core/src/units/crt/misc6.rs:294` |
 | `00ece533` | `crates/engine-core/src/units/crt/misc6.rs:294` |
 | `00ece53c` | `crates/engine-core/src/units/crt/misc6.rs:294` |
-| `00ece5fc` | `crates/engine-core/src/units/crt/cxxframe.rs:233` |
-| `00ece645` | `crates/engine-core/src/units/crt/cxxframe.rs:260` |
-| `00ece76b` | `crates/engine-core/src/units/crt/cxxframe.rs:260` |
-| `00ece7e1` | `crates/engine-core/src/units/crt/cxxframe.rs:390` |
-| `00ece960` | `crates/engine-core/src/units/crt/cxxframe.rs:475` |
-| `00ece9e5` | `crates/engine-core/src/units/crt/cxxframe.rs:475` |
-| `00ece9e9` | `crates/engine-core/src/units/crt/cxxframe.rs:475` |
-| `00ece9f2` | `crates/engine-core/src/units/crt/cxxframe.rs:512` |
+| `00ece5fc` | `crates/engine-core/src/units/crt/cxxframe.rs:238` |
+| `00ece645` | `crates/engine-core/src/units/crt/cxxframe.rs:267` |
+| `00ece76b` | `crates/engine-core/src/units/crt/cxxframe.rs:267` |
+| `00ece7e1` | `crates/engine-core/src/units/crt/cxxframe.rs:429` |
+| `00ece960` | `crates/engine-core/src/units/crt/cxxframe.rs:514` |
+| `00ece9e5` | `crates/engine-core/src/units/crt/cxxframe.rs:514` |
+| `00ece9e9` | `crates/engine-core/src/units/crt/cxxframe.rs:514` |
+| `00ece9f2` | `crates/engine-core/src/units/crt/cxxframe.rs:551` |
 | `00ecef9e` | `crates/engine-core/src/units/crt/sbh.rs:569` |
 | `00ecf05a` | `crates/engine-core/src/units/crt/sbh.rs:569` |
 | `00ecf335` | `crates/engine-core/src/units/crt/misc3.rs:172` |
@@ -5757,8 +5757,8 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00ed159c` | `crates/engine-core/src/units/crt.rs:3335` |
 | `00ed16a2` | `crates/engine-core/src/units/crt/misc5.rs:165` |
 | `00ed1709` | `crates/engine-core/src/units/crt/misc5.rs:165` |
-| `00ed1714` | `crates/engine-core/src/units/crt.rs:3387, crates/engine-core/src/units/crt.rs:3412, crates/engine-core/src/units/crt.rs:3449, crates/engine-core/src/units/crt.rs:4383, crates/engine-core/src/units/crt.rs:518, crates/engine-core/src/units/crt.rs:549, crates/engine-core/src/units/crt/cxxframe.rs:140, crates/engine-core/src/units/crt/cxxframe.rs:196, crates/engine-core/src/units/crt/cxxframe.rs:260, crates/engine-core/src/units/crt/cxxframe.rs:390, crates/engine-core/src/units/crt/cxxframe.rs:475, crates/engine-core/src/units/crt/files.rs:60, crates/engine-core/src/units/crt/glue.rs:213, crates/engine-core/src/units/crt/glue.rs:689, crates/engine-core/src/units/crt/locale2.rs:141, crates/engine-core/src/units/crt/locale3.rs:344, crates/engine-core/src/units/crt/math.rs:910, crates/engine-core/src/units/crt/misc2.rs:131, crates/engine-core/src/units/crt/misc2.rs:191, crates/engine-core/src/units/crt/misc2.rs:288, crates/engine-core/src/units/crt/misc3.rs:113, crates/engine-core/src/units/crt/misc3.rs:209, crates/engine-core/src/units/crt/misc4.rs:262, crates/engine-core/src/units/crt/misc4.rs:292, crates/engine-core/src/units/crt/misc4.rs:309, crates/engine-core/src/units/crt/misc4.rs:387, crates/engine-core/src/units/crt/misc4.rs:412, crates/engine-core/src/units/crt/misc5.rs:165, crates/engine-core/src/units/crt/misc5.rs:308, crates/engine-core/src/units/crt/misc5.rs:339, crates/engine-core/src/units/crt/misc5.rs:354, crates/engine-core/src/units/crt/misc5.rs:417, crates/engine-core/src/units/crt/misc6.rs:294, crates/engine-core/src/units/crt/misc6.rs:363, crates/engine-core/src/units/crt/misc7.rs:147, crates/engine-core/src/units/crt/rtti.rs:345, crates/engine-core/src/units/crt/runtime.rs:59, crates/engine-core/src/units/crt/runtime.rs:77, crates/engine-core/src/units/crt/sbh.rs:569, crates/engine-core/src/units/crt/startup.rs:85, crates/engine-core/src/units/crt/stdio.rs:1055, crates/engine-core/src/units/crt/stdio.rs:1094, crates/engine-core/src/units/crt/stdio.rs:203, crates/engine-core/src/units/crt/stdio.rs:727, crates/engine-core/src/units/crt/stdio.rs:77, crates/engine-core/src/units/crt/stdio.rs:851, crates/engine-core/src/units/crt/stdio.rs:902, crates/engine-core/src/units/crt/time.rs:192, crates/engine-core/src/units/crt/time.rs:380, crates/engine-core/src/units/crt/time.rs:542` |
-| `00ed1759` | `crates/engine-core/src/units/crt.rs:3387, crates/engine-core/src/units/crt.rs:3412, crates/engine-core/src/units/crt.rs:3449, crates/engine-core/src/units/crt.rs:4383, crates/engine-core/src/units/crt.rs:518, crates/engine-core/src/units/crt.rs:549, crates/engine-core/src/units/crt/cxxframe.rs:140, crates/engine-core/src/units/crt/cxxframe.rs:196, crates/engine-core/src/units/crt/cxxframe.rs:260, crates/engine-core/src/units/crt/cxxframe.rs:390, crates/engine-core/src/units/crt/cxxframe.rs:475, crates/engine-core/src/units/crt/files.rs:60, crates/engine-core/src/units/crt/glue.rs:213, crates/engine-core/src/units/crt/glue.rs:689, crates/engine-core/src/units/crt/locale2.rs:141, crates/engine-core/src/units/crt/locale3.rs:344, crates/engine-core/src/units/crt/math.rs:910, crates/engine-core/src/units/crt/misc2.rs:131, crates/engine-core/src/units/crt/misc2.rs:191, crates/engine-core/src/units/crt/misc2.rs:288, crates/engine-core/src/units/crt/misc3.rs:113, crates/engine-core/src/units/crt/misc3.rs:209, crates/engine-core/src/units/crt/misc4.rs:262, crates/engine-core/src/units/crt/misc4.rs:292, crates/engine-core/src/units/crt/misc4.rs:309, crates/engine-core/src/units/crt/misc4.rs:387, crates/engine-core/src/units/crt/misc4.rs:412, crates/engine-core/src/units/crt/misc5.rs:165, crates/engine-core/src/units/crt/misc5.rs:308, crates/engine-core/src/units/crt/misc5.rs:339, crates/engine-core/src/units/crt/misc5.rs:354, crates/engine-core/src/units/crt/misc5.rs:417, crates/engine-core/src/units/crt/misc6.rs:294, crates/engine-core/src/units/crt/misc6.rs:363, crates/engine-core/src/units/crt/misc7.rs:147, crates/engine-core/src/units/crt/rtti.rs:345, crates/engine-core/src/units/crt/runtime.rs:59, crates/engine-core/src/units/crt/runtime.rs:77, crates/engine-core/src/units/crt/sbh.rs:569, crates/engine-core/src/units/crt/startup.rs:85, crates/engine-core/src/units/crt/stdio.rs:1055, crates/engine-core/src/units/crt/stdio.rs:1094, crates/engine-core/src/units/crt/stdio.rs:203, crates/engine-core/src/units/crt/stdio.rs:727, crates/engine-core/src/units/crt/stdio.rs:77, crates/engine-core/src/units/crt/stdio.rs:851, crates/engine-core/src/units/crt/stdio.rs:902, crates/engine-core/src/units/crt/time.rs:192, crates/engine-core/src/units/crt/time.rs:380, crates/engine-core/src/units/crt/time.rs:542` |
+| `00ed1714` | `crates/engine-core/src/units/crt.rs:3387, crates/engine-core/src/units/crt.rs:3412, crates/engine-core/src/units/crt.rs:3449, crates/engine-core/src/units/crt.rs:4383, crates/engine-core/src/units/crt.rs:518, crates/engine-core/src/units/crt.rs:549, crates/engine-core/src/units/crt/cxxframe.rs:140, crates/engine-core/src/units/crt/cxxframe.rs:201, crates/engine-core/src/units/crt/cxxframe.rs:267, crates/engine-core/src/units/crt/cxxframe.rs:429, crates/engine-core/src/units/crt/cxxframe.rs:514, crates/engine-core/src/units/crt/files.rs:60, crates/engine-core/src/units/crt/glue.rs:213, crates/engine-core/src/units/crt/glue.rs:689, crates/engine-core/src/units/crt/locale2.rs:141, crates/engine-core/src/units/crt/locale3.rs:344, crates/engine-core/src/units/crt/math.rs:910, crates/engine-core/src/units/crt/misc2.rs:131, crates/engine-core/src/units/crt/misc2.rs:191, crates/engine-core/src/units/crt/misc2.rs:288, crates/engine-core/src/units/crt/misc3.rs:113, crates/engine-core/src/units/crt/misc3.rs:209, crates/engine-core/src/units/crt/misc4.rs:262, crates/engine-core/src/units/crt/misc4.rs:292, crates/engine-core/src/units/crt/misc4.rs:309, crates/engine-core/src/units/crt/misc4.rs:387, crates/engine-core/src/units/crt/misc4.rs:412, crates/engine-core/src/units/crt/misc5.rs:165, crates/engine-core/src/units/crt/misc5.rs:308, crates/engine-core/src/units/crt/misc5.rs:339, crates/engine-core/src/units/crt/misc5.rs:354, crates/engine-core/src/units/crt/misc5.rs:417, crates/engine-core/src/units/crt/misc6.rs:294, crates/engine-core/src/units/crt/misc6.rs:363, crates/engine-core/src/units/crt/misc7.rs:147, crates/engine-core/src/units/crt/rtti.rs:345, crates/engine-core/src/units/crt/runtime.rs:59, crates/engine-core/src/units/crt/runtime.rs:77, crates/engine-core/src/units/crt/sbh.rs:569, crates/engine-core/src/units/crt/startup.rs:85, crates/engine-core/src/units/crt/stdio.rs:1055, crates/engine-core/src/units/crt/stdio.rs:1094, crates/engine-core/src/units/crt/stdio.rs:203, crates/engine-core/src/units/crt/stdio.rs:727, crates/engine-core/src/units/crt/stdio.rs:77, crates/engine-core/src/units/crt/stdio.rs:851, crates/engine-core/src/units/crt/stdio.rs:902, crates/engine-core/src/units/crt/time.rs:192, crates/engine-core/src/units/crt/time.rs:380, crates/engine-core/src/units/crt/time.rs:542` |
+| `00ed1759` | `crates/engine-core/src/units/crt.rs:3387, crates/engine-core/src/units/crt.rs:3412, crates/engine-core/src/units/crt.rs:3449, crates/engine-core/src/units/crt.rs:4383, crates/engine-core/src/units/crt.rs:518, crates/engine-core/src/units/crt.rs:549, crates/engine-core/src/units/crt/cxxframe.rs:140, crates/engine-core/src/units/crt/cxxframe.rs:201, crates/engine-core/src/units/crt/cxxframe.rs:267, crates/engine-core/src/units/crt/cxxframe.rs:429, crates/engine-core/src/units/crt/cxxframe.rs:514, crates/engine-core/src/units/crt/files.rs:60, crates/engine-core/src/units/crt/glue.rs:213, crates/engine-core/src/units/crt/glue.rs:689, crates/engine-core/src/units/crt/locale2.rs:141, crates/engine-core/src/units/crt/locale3.rs:344, crates/engine-core/src/units/crt/math.rs:910, crates/engine-core/src/units/crt/misc2.rs:131, crates/engine-core/src/units/crt/misc2.rs:191, crates/engine-core/src/units/crt/misc2.rs:288, crates/engine-core/src/units/crt/misc3.rs:113, crates/engine-core/src/units/crt/misc3.rs:209, crates/engine-core/src/units/crt/misc4.rs:262, crates/engine-core/src/units/crt/misc4.rs:292, crates/engine-core/src/units/crt/misc4.rs:309, crates/engine-core/src/units/crt/misc4.rs:387, crates/engine-core/src/units/crt/misc4.rs:412, crates/engine-core/src/units/crt/misc5.rs:165, crates/engine-core/src/units/crt/misc5.rs:308, crates/engine-core/src/units/crt/misc5.rs:339, crates/engine-core/src/units/crt/misc5.rs:354, crates/engine-core/src/units/crt/misc5.rs:417, crates/engine-core/src/units/crt/misc6.rs:294, crates/engine-core/src/units/crt/misc6.rs:363, crates/engine-core/src/units/crt/misc7.rs:147, crates/engine-core/src/units/crt/rtti.rs:345, crates/engine-core/src/units/crt/runtime.rs:59, crates/engine-core/src/units/crt/runtime.rs:77, crates/engine-core/src/units/crt/sbh.rs:569, crates/engine-core/src/units/crt/startup.rs:85, crates/engine-core/src/units/crt/stdio.rs:1055, crates/engine-core/src/units/crt/stdio.rs:1094, crates/engine-core/src/units/crt/stdio.rs:203, crates/engine-core/src/units/crt/stdio.rs:727, crates/engine-core/src/units/crt/stdio.rs:77, crates/engine-core/src/units/crt/stdio.rs:851, crates/engine-core/src/units/crt/stdio.rs:902, crates/engine-core/src/units/crt/time.rs:192, crates/engine-core/src/units/crt/time.rs:380, crates/engine-core/src/units/crt/time.rs:542` |
 | `00ed18d7` | `crates/engine-core/src/units/crt/math.rs:910` |
 | `00ed1910` | `crates/engine-core/src/units/crt/math.rs:910` |
 | `00ed1cb7` | `crates/engine-core/src/units/crt/cvt.rs:975` |
@@ -5778,25 +5778,9 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00ed5aaa` | `crates/engine-core/src/units/crt/misc2.rs:362` |
 | `00ed5ae4` | `crates/engine-core/src/units/crt/math.rs:595` |
 | `00ed5b3c` | `crates/engine-core/src/units/crt/fpinit.rs:320` |
-| `00ed5b85` | `crates/engine-core/src/units/crt/seh.rs:1180` |
-| `00ed641a` | `crates/engine-core/src/units/crt/fdiv.rs:376` |
-| `00ed6425` | `crates/engine-core/src/units/crt/fdiv.rs:390` |
-| `00ed645e` | `crates/engine-core/src/units/crt/fdiv.rs:430` |
-| `00ed6479` | `crates/engine-core/src/units/crt/fdiv.rs:444` |
-| `00ed64ee` | `crates/engine-core/src/units/crt/fdiv.rs:482` |
-| `00ed650d` | `crates/engine-core/src/units/crt/fdiv.rs:496` |
-| `00ed6592` | `crates/engine-core/src/units/crt/fdiv.rs:534` |
-| `00ed65b1` | `crates/engine-core/src/units/crt/fdiv.rs:548` |
-| `00ed6636` | `crates/engine-core/src/units/crt/fdiv.rs:586` |
-| `00ed6655` | `crates/engine-core/src/units/crt/fdiv.rs:600` |
-| `00ed66da` | `crates/engine-core/src/units/crt/fdiv.rs:638` |
-| `00ed66f9` | `crates/engine-core/src/units/crt/fdiv.rs:652` |
-| `00ed677e` | `crates/engine-core/src/units/crt/fdiv.rs:690` |
-| `00ed679d` | `crates/engine-core/src/units/crt/fdiv.rs:704` |
-| `00ed6822` | `crates/engine-core/src/units/crt/fdiv.rs:742` |
-| `00ed6841` | `crates/engine-core/src/units/crt/fdiv.rs:756` |
-| `00ed6af6` | `crates/engine-core/src/units/crt/fdiv.rs:1079, crates/engine-core/src/units/crt/fdiv.rs:1144` |
-| `00ed6cfc` | `crates/engine-core/src/units/crt/fdiv.rs:1079` |
+| `00ed5b85` | `crates/engine-core/src/units/crt/seh.rs:1198` |
+| `00ed6af6` | `crates/engine-core/src/units/crt/fdiv.rs:1051, crates/engine-core/src/units/crt/fdiv.rs:1116` |
+| `00ed6cfc` | `crates/engine-core/src/units/crt/fdiv.rs:1051` |
 | `00ed74ad` | `crates/engine-core/src/units/crt/stat.rs:439` |
 | `00ed7e18` | `crates/engine-core/src/units/crt/startup.rs:85` |
 | `00ed813a` | `crates/engine-core/src/units/crt.rs:4965` |
@@ -5834,7 +5818,7 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00edf4f8` | `crates/engine-core/src/units/crt/seh.rs:647` |
 | `00edf53d` | `crates/engine-core/src/units/crt/seh.rs:647` |
 | `00edf60c` | `crates/engine-core/src/units/crt/seh.rs:378` |
-| `00edf6d0` | `crates/engine-core/src/units/crt/seh.rs:789` |
+| `00edf6d0` | `crates/engine-core/src/units/crt/seh.rs:792` |
 | `00ee0a9f` | `crates/engine-core/src/units/crt/qualified.rs:200` |
 | `00ee0bb6` | `crates/engine-core/src/units/crt/qualified.rs:299` |
 | `00ee0c4e` | `crates/engine-core/src/units/crt/qualified.rs:328` |
@@ -6042,7 +6026,7 @@ have explicit incomplete markers and remain `partial` in the task queue.
 
 Game code (functions whose subsystem or unit is neither platform nor library): **45663** functions, of which 45659 (100.0%) are translated, run from the static-initializer table, or traced.
 
-Rust cites 100843 distinct `.text` addresses; 1012 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 100828 distinct `.text` addresses; 1012 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -6088,7 +6072,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | fallout/misc | 1045 | 171 | 353 | 1045 | 0 | 0 | 0 | 0 | 0 | 100.0% |
 | BSMain | 991 | 192 | 478 | 991 | 0 | 0 | 0 | 0 | 0 | 100.0% |
 | NiXenonRenderer | 980 | 175 | 298 | 980 | 0 | 0 | 0 | 0 | 0 | 100.0% |
-| LIBCMT | 797 | 128 | 503 | 792 | 0 | 0 | 5 | 0 | 0 | - |
+| LIBCMT | 797 | 128 | 503 | 776 | 0 | 0 | 5 | 16 | 0 | - |
 | SpeedTree | 732 | 234 | 151 | 732 | 0 | 0 | 0 | 0 | 0 | 100.0% |
 | fallout/magic | 705 | 162 | 378 | 705 | 0 | 0 | 0 | 0 | 0 | 100.0% |
 | NiParticle | 704 | 92 | 540 | 704 | 0 | 0 | 0 | 0 | 0 | 100.0% |

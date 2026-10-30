@@ -156,17 +156,22 @@ pub fn array_unwind(e: &mut Engine, array: u32, size: u32, count: i32, destructo
 }
 
 // Translated from 00ec5f93 (disassembled, FalloutNV.exe 1.4.0.525)
-/// The `__except` filter of `__ArrayUnwind` (`00ec5f70`; the frame word `[EBP-0x14]`, the
-/// exception pointers): a C++ exception (the record's code 0xE06D7363) calls `terminate`, which
-/// does not return (the run stops if it does); any other answers 0
-/// (`EXCEPTION_CONTINUE_SEARCH`).
-pub fn array_unwind_filter(e: &mut Engine, pointers: u32) -> u32 {
+/// The `__except` filter of `__ArrayUnwind` (`00ec5f70`; entered with `EBP` = its frame, its
+/// one word, as `seh.rs`'s dispatchers enter funclets): the exception pointers (`[EBP-0x14]`)
+/// are kept in `[EBP-0x1C]` and their record in `[EBP-0x20]`; a C++ exception (the record's
+/// code 0xE06D7363) calls `terminate`, which does not return (the run stops if it does); any
+/// other stores 0 (`EXCEPTION_CONTINUE_SEARCH`) in `[EBP-0x24]` and answers it.
+pub fn array_unwind_filter(e: &mut Engine, ebp: u32) -> u32 {
+    let pointers = e.mem.u32(ebp.wrapping_sub(0x14));
+    e.mem.set_u32(ebp.wrapping_sub(0x1c), pointers);
     let record = e.mem.u32(pointers);
+    e.mem.set_u32(ebp.wrapping_sub(0x20), record);
     if e.mem.u32(record) == CXX_EXCEPTION {
         e.call(TERMINATE, &args![]);
         panic!("00ec5f93: terminate returned");
     }
-    0
+    e.mem.set_u32(ebp.wrapping_sub(0x24), 0);
+    e.mem.u32(ebp.wrapping_sub(0x24))
 }
 
 // Translated from 00ece381 (disassembled, FalloutNV.exe 1.4.0.525)
@@ -246,11 +251,13 @@ pub fn call_unexpected(e: &mut Engine, _spec: u32) {
 }
 
 // Translated from 00ece62d (disassembled, FalloutNV.exe 1.4.0.525)
-/// The `catch(...)` block of `00ece5fc` (its frame word `[EBP+8]`, the specification): the
-/// specification becomes the thread's current one (+0x94) and the exception is thrown again
-/// (`_CxxThrowException(0, 0)`), which does not return (the run stops if it does).
-pub fn call_unexpected_catch(e: &mut Engine, spec: u32) {
+/// The `catch(...)` block of `00ece5fc` (entered with `EBP` = its frame, its one word): the
+/// specification (`[EBP+8]`, the function's argument) becomes the thread's current one (+0x94)
+/// and the exception is thrown again (`_CxxThrowException(0, 0)`), which does not return (an
+/// `INT3` follows; the run stops if it does).
+pub fn call_unexpected_catch(e: &mut Engine, ebp: u32) {
     let data = ptd(e);
+    let spec = e.mem.u32(ebp.wrapping_add(8));
     e.mem.set_u32(data.wrapping_add(PTD_CUR_EXC_SPEC), spec);
     e.call(CXX_THROW_EXCEPTION, &args![0u32, 0u32]);
     panic!("00ece62d: _CxxThrowException returned");
@@ -313,21 +320,33 @@ pub fn call_catch_block(
 }
 
 // Translated from 00ece6de (disassembled, FalloutNV.exe 1.4.0.525)
-/// The `__except` handler of `CallCatchBlock` (`00ece645`; its frame words `[EBP+0x14]`, the
-/// function information, and `[EBP+0xC]`, the registration node), run when the catch block
-/// rethrew: the thread's rethrow flag (+0x20C) is cleared, and the node is unwound
-/// (`___FrameUnwindToState(node, 0, info, to)`) from its state ([`node_state`]) to `to`: for
-/// the first try block (in the try map's order) whose catch range holds the state
-/// (`try high < state <= catch high`, signed), the `to state` of the unwind map's entry after
-/// `try high`; else the state itself. The continuation (`[EBP-0x1C]`) becomes 0 and the
-/// `__finally` body follows in the exe.
-pub fn call_catch_block_rethrown(e: &mut Engine, info: u32, node: u32) {
+/// The `__except` block of `CallCatchBlock` (`00ece645`; entered with `EBP` = its frame, its
+/// one word, as `_EH4_TransferToHandler` enters it), run when the catch block rethrew. It takes
+/// back the stack the frame kept (`[EBP-0x18]`), clears the thread's rethrow flag (+0x20C) and
+/// unwinds the registration node (`[EBP+0xC]`) with the function information (`[EBP+0x14]`):
+/// `___FrameUnwindToState(node, 0, info, to)` from the node's state ([`node_state`]) to `to`:
+/// for the first try block (in the try map's order, the index kept in `[EBP-0x20]`) whose
+/// catch range holds the state (`try high < state <= catch high`, signed), the `to state` of
+/// the unwind map's entry after `try high`; else the state itself. Then the continuation
+/// (`[EBP-0x1C]`) becomes 0, the try level goes to 0 and then -2, the abnormal-termination flag
+/// (`[EBP+0x10]`) to 0, and the `__finally` body (`00ece76b`) runs with the node (`EDI`), the
+/// record (`ESI`, `[EBP+8]`) and its frame words; it leaves with the continuation (0) through
+/// `__SEH_epilog4`, returning from `CallCatchBlock`.
+pub fn call_catch_block_rethrown(e: &mut Engine, ebp: u32) -> u32 {
+    let mut r = super::seh::block_regs(e, ebp);
     let data = ptd(e);
     e.mem.set_u32(data.wrapping_add(PTD_RETHROW), 0);
+    let info = e.mem.u32(ebp.wrapping_add(0x14));
+    let node = e.mem.u32(ebp.wrapping_add(0xc));
     let mut to = node_state(e, node, info);
     let map = e.mem.u32(info.wrapping_add(0x10));
-    let mut index = 0u32;
-    while index < e.mem.u32(info.wrapping_add(0xc)) {
+    let index_slot = ebp.wrapping_sub(0x20);
+    e.mem.set_u32(index_slot, 0);
+    loop {
+        let index = e.mem.u32(index_slot);
+        if index >= e.mem.u32(info.wrapping_add(0xc)) {
+            break;
+        }
         let entry = index.wrapping_mul(0x14).wrapping_add(map);
         let high = e.mem.i32(entry.wrapping_add(4));
         if to > high && to <= e.mem.i32(entry.wrapping_add(8)) {
@@ -338,9 +357,29 @@ pub fn call_catch_block_rethrown(e: &mut Engine, info: u32, node: u32) {
             to = e.mem.i32(next);
             break;
         }
-        index += 1;
+        e.mem.set_u32(index_slot, index.wrapping_add(1));
     }
     e.call(FRAME_UNWIND_TO_STATE, &args![node, 0u32, info, to]);
+    e.mem.set_u32(ebp.wrapping_sub(0x1c), 0);
+    e.mem.set_u32(ebp.wrapping_sub(4), 0);
+    let record = e.mem.u32(ebp.wrapping_add(8));
+    e.mem.set_u32(ebp.wrapping_sub(4), 0xffff_fffe);
+    e.mem.set_u32(ebp.wrapping_add(0x10), 0);
+    let frame_word = |e: &Engine, offset: u32| e.mem.u32(ebp.wrapping_sub(offset));
+    let words = [
+        node,
+        record,
+        frame_word(e, 0x24),
+        frame_word(e, 0x28),
+        frame_word(e, 0x2c),
+        frame_word(e, 0x30),
+        frame_word(e, 0x34),
+        frame_word(e, 0x1c),
+        e.mem.u32(ebp.wrapping_add(0x10)),
+    ];
+    e.call(CALL_CATCH_BLOCK_FINALLY, &words);
+    r.eax = e.mem.u32(ebp.wrapping_sub(0x1c));
+    super::seh::leave_block(e, &mut r, 0x00ec_e75f, 0)
 }
 
 // Translated from 00ece76b (disassembled, FalloutNV.exe 1.4.0.525)
@@ -960,7 +999,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00ec_e645,
             call_catch_block(u32, u32, u32, u32, u32, u32, u32) -> u32
         ),
-        entry!(0x00ec_e6de, call_catch_block_rethrown(u32, u32)),
+        entry!(0x00ec_e6de, call_catch_block_rethrown(u32) -> u32),
         entry!(
             0x00ec_e76b,
             call_catch_block_finally(u32, u32, u32, u32, u32, u32, u32, u32, u32)
@@ -1050,7 +1089,13 @@ mod tests {
         e.mem.set_u32(record, 0xc000_0005);
         let pointers = e.mem.alloc(8);
         e.mem.set_u32(pointers, record);
-        assert_eq!(array_unwind_filter(&mut e, pointers), 0);
+        let frame = e.mem.alloc(0x40) + 0x30;
+        e.mem.set_u32(frame - 0x14, pointers);
+        e.mem.set_u32(frame - 0x24, 7);
+        assert_eq!(e.call(0x00ec_5f93, &[frame]).u32(), 0);
+        assert_eq!(e.mem.u32(frame - 0x1c), pointers);
+        assert_eq!(e.mem.u32(frame - 0x20), record);
+        assert_eq!(e.mem.u32(frame - 0x24), 0);
     }
 
     #[test]
@@ -1061,7 +1106,9 @@ mod tests {
         let record = cxx_record(&mut e, 0, 0);
         let pointers = e.mem.alloc(8);
         e.mem.set_u32(pointers, record);
-        array_unwind_filter(&mut e, pointers);
+        let frame = e.mem.alloc(0x40) + 0x30;
+        e.mem.set_u32(frame - 0x14, pointers);
+        array_unwind_filter(&mut e, frame);
     }
 
     #[test]
@@ -1339,19 +1386,56 @@ mod tests {
         e.mem.set_u32(info + 0xc, 2);
         e.mem.set_u32(info + 0x10, map);
         e.mem.set_u32(data + PTD_RETHROW, 1);
+        nothing(&mut e, &[CALL_CATCH_BLOCK_FINALLY]);
         let node = e.mem.alloc(0xc);
         e.mem.set_u32(node + 8, 3);
-        e.call(0x00ec_e6de, &[info, node]);
+        // CallCatchBlock's frame: its arguments above EBP, its locals below, and the stack the
+        // frame kept (`[EBP-0x18]`) holding the /GS word and the saved EDI, ESI, EBX.
+        let block = e.mem.alloc(0x100);
+        let ebp = block + 0x80;
+        let frame = |e: &mut Engine, ebp: u32| {
+            e.mem.set_u32(ebp, 0xe0);
+            e.mem.set_u32(ebp + 8, 0x5000);
+            e.mem.set_u32(ebp + 0xc, node);
+            e.mem.set_u32(ebp + 0x10, 1);
+            e.mem.set_u32(ebp + 0x14, info);
+            for (offset, word) in [(0x24u32, 0x24u32), (0x28, 0x28), (0x2c, 0x2c), (0x30, 0x30)] {
+                e.mem.set_u32(ebp - offset, word);
+            }
+            e.mem.set_u32(ebp - 0x34, 0);
+            e.mem.set_u32(ebp - 0x1c, 0x0040_7777);
+            let esp = ebp - 0x60;
+            e.mem.set_u32(esp + 4, 0xd1);
+            e.mem.set_u32(esp + 8, 0x51);
+            e.mem.set_u32(esp + 0xc, 0xb0);
+            e.mem.set_u32(ebp - 0x18, esp);
+        };
+        frame(&mut e, ebp);
+        assert_eq!(e.call(0x00ec_e6de, &[ebp]).u32(), 0);
         assert_eq!(e.mem.u32(data + PTD_RETHROW), 0);
-        // The unwind entry after try high (1) is state 2: to state 7.
+        // The unwind entry after try high (1) is state 2: to state 7; the loop stopped at try 0.
         assert_eq!(
             calls(&e, FRAME_UNWIND_TO_STATE),
             vec![vec![node, 0, info, 7]]
         );
-        // A state outside every catch range unwinds to itself.
+        assert_eq!(e.mem.u32(ebp - 0x20), 0);
+        // The continuation cleared, out of the try block, no abnormal termination, and the
+        // __finally body run with the node, the record and the frame words.
+        assert_eq!(e.mem.u32(ebp - 0x1c), 0);
+        assert_eq!(e.mem.u32(ebp - 4), 0xffff_fffe);
+        assert_eq!(e.mem.u32(ebp + 0x10), 0);
+        assert_eq!(
+            calls(&e, CALL_CATCH_BLOCK_FINALLY),
+            vec![vec![node, 0x5000, 0x24, 0x28, 0x2c, 0x30, 0, 0, 0]]
+        );
+        // __SEH_epilog4's return address lands over the saved EBP's slot.
+        assert_eq!(e.mem.u32(ebp), 0x00ec_e75f);
+        // A state outside every catch range unwinds to itself, after both tries were looked at.
+        frame(&mut e, ebp);
         e.mem.set_u32(node + 8, 1);
-        call_catch_block_rethrown(&mut e, info, node);
+        call_catch_block_rethrown(&mut e, ebp);
         assert_eq!(calls(&e, FRAME_UNWIND_TO_STATE)[1], vec![node, 0, info, 1]);
+        assert_eq!(e.mem.u32(ebp - 0x20), 2);
     }
 
     /// A C++ throw of an object with two catchable types, and a function with one try block
@@ -1624,6 +1708,8 @@ mod tests {
             assert_eq!(e.mem.u32(data + PTD_CUR_EXC_SPEC), 0x40);
             Ret::default()
         });
-        e.call(0x00ec_e62d, &[0x40]);
+        let frame = e.mem.alloc(0x10);
+        e.mem.set_u32(frame + 8, 0x40);
+        e.call(0x00ec_e62d, &[frame]);
     }
 }

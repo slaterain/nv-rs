@@ -778,15 +778,18 @@ pub fn except_handler3(
 }
 
 /// The running thread's stack range as its thread environment block holds it (`FS:[0x18]`,
-/// then `+8` the limit and `+4` the base). The engine's threads keep no stack in game memory
-/// (a translation's locals are `with_stack` blocks), so no address lies on one: the range is
-/// empty.
+/// then `+8` the limit and `+4` the base). The engine keeps no thread environment block and its
+/// threads keep no stack in game memory, so there is no range to answer: the run stops here
+/// rather than guess one. [`validate_eh3rn_with_stack`] takes the range as an input instead.
 fn thread_stack_range() -> (u32, u32) {
-    (0, 0)
+    panic!(
+        "00edf6d0: the thread's stack range (the TEB's StackLimit and StackBase, FS:[0x18] +8 \
+         and +4) is not modelled"
+    );
 }
 
 // Translated from 00edf6d0 (disassembled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00edf6d0 - its own SEH frame (scope table 011804e8, __except_handler4) is not built and its __except path (filter 00edf8aa, block 00edf8be) is not reached; the TEB's stack range is the engine's empty one (thread_stack_range).
+// Translation incomplete: 00edf6d0 - its own SEH frame (scope table 011804e8, __except_handler4) is not built and its __except path (filter 00edf8aa, block 00edf8be) is not reached; the TEB's stack range is not modelled: the registered form stops where the exe reads it (thread_stack_range), validate_eh3rn_with_stack takes it as an input.
 /// `__ValidateEH3RN` (LIBCMT/eh3valid.c; cdecl: the registration node). Answers 0 for a node
 /// that must not be used: a scope table (`+8`) not 4-byte aligned or on the thread's stack, an
 /// entry whose enclosing level is not -1 and not below its own index, or (when any entry has a
@@ -806,6 +809,21 @@ pub fn validate_eh3rn(e: &mut Engine, node: u32) -> u32 {
         return 0;
     }
     let (limit, base) = thread_stack_range();
+    validate_eh3rn_rest(e, node, table, limit, base)
+}
+
+/// [`validate_eh3rn`] with the thread's stack range given (`limit`, `base`: the TEB's
+/// `StackLimit` and `StackBase`), as [`Regs`] gives the frame helpers `FS:[0]`.
+pub fn validate_eh3rn_with_stack(e: &mut Engine, node: u32, limit: u32, base: u32) -> u32 {
+    let table = e.mem.u32(node.wrapping_add(8));
+    if table & 3 != 0 {
+        return 0;
+    }
+    validate_eh3rn_rest(e, node, table, limit, base)
+}
+
+/// `__ValidateEH3RN` from the stack-range test on (`00edf727`).
+fn validate_eh3rn_rest(e: &mut Engine, node: u32, table: u32, limit: u32, base: u32) -> u32 {
     if table >= limit && table < base {
         return 0;
     }
@@ -1075,7 +1093,7 @@ pub fn validate_scope_table_handlers(e: &mut Engine, highest: u32, image: u32, t
 // answer is `EAX` at that point.
 
 /// The registers a handler block starts with: `ESP` from `[EBP-0x18]`, `EBP` the frame.
-fn block_regs(e: &Engine, ebp: u32) -> Regs {
+pub(super) fn block_regs(e: &Engine, ebp: u32) -> Regs {
     Regs {
         esp: e.mem.u32(ebp.wrapping_sub(0x18)),
         ebp,
@@ -1085,7 +1103,7 @@ fn block_regs(e: &Engine, ebp: u32) -> Regs {
 
 /// `CALL __SEH_epilog4` (pushing `next`, the address after the call), then the block's `RET`
 /// (`pop` bytes more for `RET n`). Answers `EAX`.
-fn leave_block(e: &mut Engine, r: &mut Regs, next: u32, pop: u32) -> u32 {
+pub(super) fn leave_block(e: &mut Engine, r: &mut Regs, next: u32, pop: u32) -> u32 {
     r.push(e, next);
     seh_epilog4(e, r);
     r.pop(e);
@@ -1893,23 +1911,52 @@ mod tests {
         (e, node)
     }
 
+    /// A thread stack from `0x0d00_0000` up to `0x0e00_0100` (limit, base): the test's nodes
+    /// at `0x0e00_0100` sit just above it, their scope tables outside it.
+    const STACK_LIMIT: u32 = 0x0d00_0000;
+    const STACK_BASE: u32 = 0x0e00_0100;
+
+    fn validate(e: &mut Engine, node: u32) -> u32 {
+        validate_eh3rn_with_stack(e, node, STACK_LIMIT, STACK_BASE)
+    }
+
+    #[test]
+    #[should_panic(expected = "the thread's stack range")]
+    fn validate_eh3rn_stops_where_it_needs_the_thread_s_stack() {
+        let (mut e, node) = eh3_engine();
+        e.call(0x00ed_f6d0, &args![node]);
+    }
+
     #[test]
     fn validate_eh3rn_rejects_bad_tables() {
         let (mut e, node) = eh3_engine();
         e.mem.set_u32(node + 8, 0x0e00_0202);
         assert_eq!(e.call(0x00ed_f6d0, &args![node]).u32(), 0);
+        // A scope table on the thread's stack.
+        let (mut e, node) = eh3_engine();
+        assert_eq!(
+            validate_eh3rn_with_stack(&mut e, node, 0x0e00_0000, 0x0e00_1000),
+            0
+        );
+        assert!(calls(&e, VALIDATE_IMAGE_BASE).is_empty());
+        // A filter and a saved stack pointer below the stack's limit.
+        let (mut e, node) = eh3_engine();
+        assert_eq!(
+            validate_eh3rn_with_stack(&mut e, node, 0x0e00_0090, 0x0e00_0100),
+            0
+        );
         // An enclosing level not below its own.
         let (mut e, node) = eh3_engine();
         e.mem.set_u32(0x0e00_0200 + 12, 1);
-        assert_eq!(validate_eh3rn(&mut e, node), 0);
+        assert_eq!(validate(&mut e, node), 0);
         // A filter and a saved stack pointer at or above the node.
         let (mut e, node) = eh3_engine();
         e.mem.set_u32(node - 8, node);
-        assert_eq!(validate_eh3rn(&mut e, node), 0);
+        assert_eq!(validate(&mut e, node), 0);
         // No try level: valid without looking further.
         let (mut e, node) = eh3_engine();
         e.mem.set_u32(node + 0xc, 0xffff_ffff);
-        assert_eq!(validate_eh3rn(&mut e, node), 1);
+        assert_eq!(validate(&mut e, node), 1);
         assert!(calls(&e, VALIDATE_IMAGE_BASE).is_empty());
     }
 
@@ -1925,7 +1972,7 @@ mod tests {
         e.mem.set_u32(EH3_CACHE_COUNT, 1);
         e.mem.set_u32(EH3_CACHE, 0x0e00_5000);
         e.mem.set_u32(EH3_CACHE + 4, 0x0050_0000);
-        assert_eq!(validate_eh3rn(&mut e, node), 1);
+        assert_eq!(validate(&mut e, node), 1);
         assert_eq!(
             calls(&e, VALIDATE_SCOPE_TABLE_HANDLERS),
             vec![vec![1, 0x0040_0000, 0x0e00_0200]]
@@ -1942,14 +1989,14 @@ mod tests {
         assert_eq!(e.mem.u32(EH3_CACHE_LOCK), 0);
         // Now cached at slot 0: no query, nothing moves.
         e.call_log = Some(vec![]);
-        assert_eq!(validate_eh3rn(&mut e, node), 1);
+        assert_eq!(validate(&mut e, node), 1);
         assert!(calls(&e, IMPORT_VIRTUAL_QUERY).is_empty());
         // Cached at slot 1: moves to the front.
         e.mem.set_u32(EH3_CACHE, 0x0e00_5000);
         e.mem.set_u32(EH3_CACHE + 4, 0x0050_0000);
         e.mem.set_u32(EH3_CACHE + 8, 0x0e00_0000);
         e.mem.set_u32(EH3_CACHE + 12, 0x0040_0000);
-        assert_eq!(validate_eh3rn(&mut e, node), 1);
+        assert_eq!(validate(&mut e, node), 1);
         assert_eq!(e.mem.u32(EH3_CACHE), 0x0e00_0000);
         assert_eq!(e.mem.u32(EH3_CACHE + 8), 0x0e00_5000);
         assert_eq!(e.mem.u32(EH3_CACHE_LOCK), 0);
@@ -1959,9 +2006,9 @@ mod tests {
             e.mem.set_u32(a[1] + 0x18, 0x20000);
             0x1cu32.into_ret()
         });
-        assert_eq!(validate_eh3rn(&mut e, node), 0xffff_ffff);
+        assert_eq!(validate(&mut e, node), 0xffff_ffff);
         answer(&mut e, IMPORT_VIRTUAL_QUERY, 0);
-        assert_eq!(validate_eh3rn(&mut e, node), 1);
+        assert_eq!(validate(&mut e, node), 1);
         // The filter: an access violation is handled.
         let frame = 0x0e00_0700;
         e.mem.set_u32(frame - 0x14, 0x0e00_0600);
