@@ -361,25 +361,31 @@ fn take_fed(
 /// not decoded yet, lasts while the decoder decodes that place and the few frames before it.
 pub fn render(voices: &mut [&mut Voice], out: &mut [f32]) {
     for v in voices.iter_mut() {
-        let Some(at) = v.position else {
-            continue;
-        };
-        if v.fx.is_some() {
-            // What this call reads: its frames at the voice's step, a converter's period ahead,
-            // and the filter's span.
-            let period = (v.device / 100) as usize;
-            let ahead = ((out.len() / 2 + 2 * period) as f64 * v.step()).ceil() as usize + 160;
-            if let Some(fx) = v.fx.as_mut() {
-                fx.keep_ahead(&mut v.data, at, ahead, v.looping);
-            }
+        render_voice(v, out);
+    }
+}
+
+/// One voice of [`render`] added into `out` (each voice's sum is its own: rendering the voices
+/// one after another in the same order is the same mix).
+pub fn render_voice(v: &mut Voice, out: &mut [f32]) {
+    let Some(at) = v.position else {
+        return;
+    };
+    if v.fx.is_some() {
+        // What this call reads: its frames at the voice's step, a converter's period ahead,
+        // and the filter's span.
+        let period = (v.device / 100) as usize;
+        let ahead = ((out.len() / 2 + 2 * period) as f64 * v.step()).ceil() as usize + 160;
+        if let Some(fx) = v.fx.as_mut() {
+            fx.keep_ahead(&mut v.data, at, ahead, v.looping);
         }
-        if v.exact() {
-            render_exact(v, out);
-        } else if converted(v) {
-            render_converted(v, out);
-        } else {
-            v.position = None;
-        }
+    }
+    if v.exact() {
+        render_exact(v, out);
+    } else if converted(v) {
+        render_converted(v, out);
+    } else {
+        v.position = None;
     }
 }
 
@@ -396,6 +402,9 @@ pub struct Converted {
     held: std::collections::VecDeque<(f32, f32)>,
     /// The buffer's end was reached: no period after the held frames.
     ending: bool,
+    /// A period's output by channel, kept from one period to the next (emptied before each,
+    /// so a period allocates nothing once it has grown).
+    got: Vec<Vec<f32>>,
 }
 
 /// Makes the voice's converter if it has none: the second one when the device has turned it on,
@@ -428,6 +437,7 @@ fn converted(v: &mut Voice) -> bool {
         rate,
         held: Default::default(),
         ending: false,
+        got: Vec::new(),
     }));
     true
 }
@@ -474,13 +484,18 @@ fn render_converted(v: &mut Voice, out: &mut [f32]) {
                     *x = at.map_or(0.0, |at| sample(data, bits, at * channels + ch));
                 }
             };
-            let mut got = vec![Vec::with_capacity(period); channels];
+            let mut got = std::mem::take(&mut c.got);
+            got.resize_with(channels, Vec::new);
+            for g in &mut got {
+                g.clear();
+            }
             c.converter.period(period, &mut input, &mut got);
             for i in 0..period {
                 let l = got[0][i];
                 c.held
                     .push_back((l, if channels == 2 { got[1][i] } else { l }));
             }
+            c.got = got;
             let fed = c.base + c.converter.fed();
             let next = origin as u64 + fed;
             if !looping && next >= frames as u64 {
@@ -1174,6 +1189,123 @@ mod tests {
         // Its 22050 frames were all handed over in the period that ends at 24000.
         assert_eq!(v.position, None);
         assert!(out[2 * 24000..].iter().all(|&s| s == 0.0));
+    }
+
+    /// FNV-1a of `f32` bits.
+    fn bits_hash(hash: &mut u64, samples: &[f32]) {
+        for s in samples {
+            for b in s.to_bits().to_le_bytes() {
+                *hash = (*hash ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+            }
+        }
+    }
+
+    /// Voices on every converter path (the first converter's table and curve kernels and its
+    /// pass-through, the second converter's lanes and plain kernel), mono and stereo, 8 and
+    /// 16 bits, looping and ending, retuned while playing, mixed newest first in pieces that
+    /// are not periods.
+    fn every_path() -> Vec<Voice> {
+        let stereo = |frames: usize| -> Vec<u8> {
+            let s = signal(2 * frames);
+            s.chunks(4).flat_map(|c| [c[0], c[1], c[3], c[2]]).collect()
+        };
+        let mut voices = Vec::new();
+        for (data, channels, bits, rate, apl, looping, volume, pan) in [
+            (signal(22050), 1u16, 16u16, 44100u32, false, true, -600, 0),
+            (stereo(11000), 2, 16, 22071, false, true, 0, 2500),
+            (
+                signal(4800)[..4800].to_vec(),
+                1,
+                8,
+                48000,
+                false,
+                true,
+                -100,
+                -900,
+            ),
+            (signal(30000), 1, 16, 32000, false, false, 0, 0),
+            (signal(22050), 1, 16, 22050, true, true, -300, 0),
+            (stereo(20000), 2, 16, 44100, true, true, 0, -4000),
+            (signal(9000), 1, 16, 11025, true, false, 0, 0),
+        ] {
+            let mut v = Voice::new(data, channels, bits);
+            (v.rate, v.device, v.apl, v.looping) = (rate, 48000, apl, looping);
+            (v.volume, v.pan) = (volume, pan);
+            v.start(0);
+            voices.push(v);
+        }
+        voices
+    }
+
+    /// The bits of 3 s of [`every_path`] mixed in pieces of 700 frames, retuning two voices
+    /// halfway (one of each converter): one hash.
+    fn mix_hash() -> u64 {
+        let mut voices = every_path();
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        let mut out = vec![0f32; 2 * 700];
+        for piece in 0..206 {
+            if piece == 103 {
+                voices[1].rate = 22100;
+                voices[4].rate = 23000;
+            }
+            out.fill(0.0);
+            let mut refs: Vec<&mut Voice> = voices.iter_mut().collect();
+            render(&mut refs, &mut out);
+            bits_hash(&mut hash, &out);
+        }
+        for v in &voices {
+            hash = hash
+                .wrapping_mul(31)
+                .wrapping_add(v.position.map_or(1, |p| p as u64 + 2));
+        }
+        hash
+    }
+
+    /// The mix's bits are those of the build before the allocation work (captured there with this
+    /// machine's `RESAMPLEDMO.DLL`): `cargo test --release -p engine-core --lib mix_bits --
+    /// --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn mix_bits_are_unchanged() {
+        if super::super::resampler::tables().is_none() {
+            return; // no RESAMPLEDMO.DLL on this machine
+        }
+        let hash = mix_hash();
+        println!("mix hash {hash:016x}");
+        assert_eq!(hash, 0xf434_97bb_b7ed_dc91);
+    }
+
+    /// Not a check: the mixer's host heap allocations per 10 ms period of [`every_path`] (the
+    /// output's thread), for the frame-rate work (`cargo test --release -p engine-core --lib
+    /// allocations_per -- --ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn allocations_per_operation_of_the_mixer() {
+        use crate::alloc_count::{per_run, row};
+        if super::super::resampler::tables().is_none() {
+            return; // no RESAMPLEDMO.DLL on this machine
+        }
+        let mut voices = every_path();
+        for v in &mut voices {
+            v.looping = true;
+        }
+        let mut out = vec![0f32; 2 * 480];
+        for (what, keep) in [
+            ("first converter, table kernel (44100 on 48000)", 0),
+            ("first converter, curve kernel (22071 stereo on 48000)", 1),
+            ("first converter, pass-through (48000 on 48000)", 2),
+            ("second converter, lanes (22050 mono on 48000)", 4),
+            ("second converter, plain (44100 stereo on 48000)", 5),
+        ] {
+            let v = &mut voices[keep];
+            row(
+                &format!("mixer: 10 ms of one voice, {what}"),
+                per_run(100, || {
+                    out.fill(0.0);
+                    render(&mut [&mut *v], &mut out);
+                }),
+            );
+        }
     }
 
     #[test]

@@ -97,8 +97,35 @@ const CALL_CACHE_LEN: usize = 1 << 16;
 
 /// The cache slot of `addr` (Fibonacci hashing: the top bits of the product).
 #[inline(always)]
-fn cache_slot(addr: u32) -> usize {
+const fn cache_slot(addr: u32) -> usize {
     (addr.wrapping_mul(0x9e37_79b1) >> (32 - CALL_CACHE_LEN.trailing_zeros())) as usize
+}
+
+/// One entry of [`Engine::call`]'s cache: a plain function and its address.
+#[derive(Clone, Copy)]
+struct Cached {
+    addr: u32,
+    f: AbiFn,
+}
+
+// The empty entries' addresses ([`Cached::empty`]) map to other slots: 0 to slot 0, 1 elsewhere.
+const _: () = assert!(cache_slot(0) == 0 && cache_slot(1) != 0);
+
+impl Cached {
+    /// The empty entry of `slot`: an address that maps to another slot, so no call's address
+    /// matches it (the call's own address maps to `slot`), and a function that never runs. The
+    /// lookup is then one compare, without a separate test for an empty entry.
+    #[inline]
+    fn empty(slot: usize) -> Cached {
+        Cached {
+            addr: u32::from(slot == 0),
+            f: Cached::never_called,
+        }
+    }
+
+    fn never_called(_: &mut Engine, _: &[u32]) -> Ret {
+        unreachable!("an empty entry of the call cache was called")
+    }
 }
 
 /// The game's memory plus every translated function, by exe address.
@@ -106,10 +133,11 @@ pub struct Engine {
     pub mem: Mem,
     funcs: AddrMap<u32, Callable>,
     /// A direct-mapped cache in front of `funcs` for plain functions (doubles never enter it):
-    /// (address, function) at [`cache_slot`] of the address, `None` when empty.
+    /// (address, function) at [`cache_slot`] of the address, [`Cached::empty`] when empty.
     /// [`Engine::register`] and [`Engine::register_double`] empty the slot of the address they
-    /// change, so it always answers as `funcs` does.
-    call_cache: Box<[(u32, Option<AbiFn>)]>,
+    /// change, so it always answers as `funcs` does. A fixed-size array: the slot needs no
+    /// bounds check.
+    call_cache: Box<[Cached; CALL_CACHE_LEN]>,
     /// When `Some`, every call made through [`Engine::call`] is recorded
     /// as (address, argument words). Tests use it to check what a
     /// translation called.
@@ -264,7 +292,11 @@ impl Engine {
         let mut engine = Engine {
             mem,
             funcs,
-            call_cache: vec![(0, None); CALL_CACHE_LEN].into_boxed_slice(),
+            call_cache: (0..CALL_CACHE_LEN)
+                .map(Cached::empty)
+                .collect::<Box<[Cached]>>()
+                .try_into()
+                .unwrap_or_else(|_| unreachable!("the call cache has CALL_CACHE_LEN entries")),
             call_log: None,
             tls: 0,
             clock_ms: 0,
@@ -458,7 +490,7 @@ impl Engine {
 
     pub fn register(&mut self, addr: u32, f: AbiFn) {
         self.funcs.insert(addr, Callable::Abi(f));
-        self.call_cache[cache_slot(addr)] = (0, None);
+        self.call_cache[cache_slot(addr)] = Cached::empty(cache_slot(addr));
     }
 
     /// Registers a test double that keeps state (counts calls, returns a
@@ -471,7 +503,7 @@ impl Engine {
     ) {
         self.funcs
             .insert(addr, Callable::Double(Rc::new(RefCell::new(f))));
-        self.call_cache[cache_slot(addr)] = (0, None);
+        self.call_cache[cache_slot(addr)] = Cached::empty(cache_slot(addr));
     }
 
     /// Calls the function at exe address `addr` with argument words in
@@ -481,26 +513,54 @@ impl Engine {
     /// registered function runs its row of the atexit-destructor table
     /// ([`crate::static_exit`]) if it has one.
     pub fn call(&mut self, addr: u32, args: &[u32]) -> Ret {
-        // The fast path: a plain function in the cache and no diagnostic on. It does what the
-        // full path does then (the time slice, the call stack, the call), in a small body the
-        // compiler keeps lean; every diagnostic and the table lookup are out of line
-        // ([`Engine::call_full`]). Same order and effects either way.
-        if let (cached, Some(f)) = self.call_cache[cache_slot(addr)] {
-            if cached == addr && !self.diagnosing() {
-                if let Some(hook) = self.slice_hook {
-                    if self.slice_left == 0 {
-                        hook(self, addr);
-                    } else {
-                        self.slice_left -= 1;
-                    }
+        self.dispatch(addr, args)
+    }
+
+    /// [`Engine::call`]'s body, also inlined into [`Engine::vcall`].
+    ///
+    /// The fast path: a plain function in the cache, no diagnostic on, the time slice not used
+    /// up and room on the call stack. It counts the slice down, pushes the call stack, calls
+    /// and pops, with the one call to the function in its body. The rest is out of line and
+    /// does the same in the same order: a used-up slice in [`Engine::call_at_slice_end`] (the
+    /// hook, then the call), a full call stack, a diagnostic or a cache miss in
+    /// [`Engine::call_full`]. So the fast path keeps few registers across the call (on Windows
+    /// every register a function uses anywhere is saved on entry).
+    #[inline(always)]
+    fn dispatch(&mut self, addr: u32, args: &[u32]) -> Ret {
+        let entry = self.call_cache[cache_slot(addr)];
+        if entry.addr == addr && !self.diagnosing() {
+            // With the thread host's hook the slice counts down by one (`None`: used up, 0);
+            // without it the slice stays as it is.
+            let left = self
+                .slice_left
+                .checked_sub(u64::from(self.slice_hook.is_some()));
+            match left {
+                Some(left) if self.call_stack.len() < self.call_stack.capacity() => {
+                    self.slice_left = left;
+                    self.call_stack.push(addr);
+                    let ret = (entry.f)(self, args);
+                    self.call_stack.pop();
+                    return ret;
                 }
-                self.call_stack.push(addr);
-                let ret = f(self, args);
-                self.call_stack.pop();
-                return ret;
+                None => return self.call_at_slice_end(addr, args, entry.f),
+                Some(_) => {}
             }
         }
         self.call_full(addr, args)
+    }
+
+    /// [`Engine::dispatch`]'s fast path when the slice is used up: the hook (which starts the
+    /// next turn, or asks again at the next call), then the call.
+    #[cold]
+    #[inline(never)]
+    fn call_at_slice_end(&mut self, addr: u32, args: &[u32], f: AbiFn) -> Ret {
+        if let Some(hook) = self.slice_hook {
+            hook(self, addr);
+        }
+        self.call_stack.push(addr);
+        let ret = f(self, args);
+        self.call_stack.pop();
+        ret
     }
 
     /// Whether any per-call diagnostic is on (the call log, budget, profile, hook, nv-trace
@@ -508,27 +568,39 @@ impl Engine {
     /// path.
     #[inline(always)]
     fn diagnosing(&self) -> bool {
+        // The hook and the nv-trace record are read as their pointer words, volatile: the
+        // compiler otherwise tests four of these fields with a dozen vector instructions where
+        // four compares do.
+        // SAFETY: `Option<fn>` and `Option<Box<_>>` are one pointer word, 0 for `None` (the
+        // guaranteed null-pointer optimisation); each is read in place as that word.
+        let (hook, traced) = unsafe {
+            (
+                std::ptr::read_volatile(std::ptr::addr_of!(self.call_hook).cast::<usize>()),
+                std::ptr::read_volatile(std::ptr::addr_of!(self.call_trace).cast::<usize>()),
+            )
+        };
         self.call_log.is_some()
             || self.call_budget.is_some()
             || self.call_counts.is_some()
-            || self.call_hook.is_some()
-            || self.call_trace.is_some()
+            || hook != 0
+            || traced != 0
             || self.trace.is_some()
             || self.mem.block_check_on()
             || crate::profile::on()
     }
 
-    /// [`Engine::call`] with every diagnostic and the function table.
+    /// [`Engine::call`] with every diagnostic, the slice's hook, the call stack's growth and
+    /// the function table: what the fast path ([`Engine::dispatch`]) leaves out.
+    #[cold]
     #[inline(never)]
     fn call_full(&mut self, addr: u32, args: &[u32]) -> Ret {
         if let Some(log) = &mut self.call_log {
             log.push((addr, args.to_vec()));
         }
         let slot = cache_slot(addr);
-        if let (cached, Some(f)) = self.call_cache[slot] {
-            if cached == addr {
-                return self.run(addr, args, Callable::Abi(f));
-            }
+        let entry = self.call_cache[slot];
+        if entry.addr == addr {
+            return self.run(addr, args, Callable::Abi(entry.f));
         }
         if crate::profile::on() {
             crate::profile::cache_miss();
@@ -548,7 +620,7 @@ impl Engine {
             panic!("open function {addr:08x}: not translated yet (FalloutNV.exe 1.4.0.525, docs/LEDGER.md)")
         };
         if let Callable::Abi(plain) = f {
-            self.call_cache[slot] = (addr, Some(plain));
+            self.call_cache[slot] = Cached { addr, f: plain };
         }
         self.run(addr, args, f)
     }
@@ -646,22 +718,69 @@ impl Engine {
     /// function at byte offset `slot` in that table (as the game's
     /// `call dword ptr [eax + slot]`), then calls it with `this` first.
     pub fn vcall(&mut self, this: u32, slot: u32, args: &[u32]) -> Ret {
+        // The vtable and its slot as `Mem::u32` reads them. A read that needs its slow path
+        // (across a page, or unmapped: a stop) is made out of line, both reads again (the fast
+        // reads have no effect), so this body keeps few registers across its calls.
+        let target = match self.mem.u32_in_page(this) {
+            Some(vtable) => self.mem.u32_in_page(vtable.wrapping_add(slot)),
+            None => None,
+        };
+        let Some(target) = target else {
+            return self.vcall_slow(this, slot, args);
+        };
+        self.vcall_to(target, this, args)
+    }
+
+    /// [`Engine::vcall`] when a read of the vtable or its slot needs [`Mem::u32`]'s slow path.
+    #[cold]
+    #[inline(never)]
+    fn vcall_slow(&mut self, this: u32, slot: u32, args: &[u32]) -> Ret {
         let vtable = self.mem.u32(this);
         let target = self.mem.u32(vtable.wrapping_add(slot));
-        // `this` and the arguments on the stack when they fit (no allocation per call). The
-        // short lists, most virtual calls, are fixed-size arrays: a variable-length copy is a
-        // call to `memcpy`, which cost more than the rest of the call (a15's benchmark).
+        self.vcall_to(target, this, args)
+    }
+
+    /// [`Engine::vcall`] once the target is read.
+    #[inline(always)]
+    fn vcall_to(&mut self, target: u32, this: u32, args: &[u32]) -> Ret {
+        // `this` and the arguments on the stack (no allocation per call). The short lists, most
+        // virtual calls, are a fixed-size array (a variable-length copy is a call to `memcpy`,
+        // which cost more than the rest of the call: a15's benchmark) passed to the one inlined
+        // [`Engine::dispatch`]; longer ones are out of line.
+        let (words, n) = match *args {
+            [] => ([this, 0, 0, 0, 0], 1),
+            [a] => ([this, a, 0, 0, 0], 2),
+            [a, b] => ([this, a, b, 0, 0], 3),
+            [a, b, c] => ([this, a, b, c, 0], 4),
+            [a, b, c, d] => ([this, a, b, c, d], 5),
+            _ => return self.vcall_long(target, this, args),
+        };
+        self.dispatch(target, &words[..n])
+    }
+
+    /// [`Engine::vcall`] with more than four arguments, once the target is read.
+    #[inline(never)]
+    fn vcall_long(&mut self, target: u32, this: u32, args: &[u32]) -> Ret {
         const INLINE: usize = 15;
-        match *args {
-            [] => return self.call(target, &[this]),
-            [a] => return self.call(target, &[this, a]),
-            [a, b] => return self.call(target, &[this, a, b]),
-            [a, b, c] => return self.call(target, &[this, a, b, c]),
-            [a, b, c, d] => return self.call(target, &[this, a, b, c, d]),
-            _ => {}
-        }
         if args.len() <= INLINE {
             let mut words = [0u32; INLINE + 1];
+            words[0] = this;
+            words[1..=args.len()].copy_from_slice(args);
+            self.call(target, &words[..=args.len()])
+        } else {
+            self.vcall_longer(target, this, args)
+        }
+    }
+
+    /// [`Engine::vcall`] of more than 15 words after `this` (rare), out of
+    /// [`Engine::vcall_long`]'s body: on the stack too up to 63 of them (no allocation per
+    /// call), else on the heap.
+    #[cold]
+    #[inline(never)]
+    fn vcall_longer(&mut self, target: u32, this: u32, args: &[u32]) -> Ret {
+        const LONG: usize = 63;
+        if args.len() <= LONG {
+            let mut words = [0u32; LONG + 1];
             words[0] = this;
             words[1..=args.len()].copy_from_slice(args);
             self.call(target, &words[..=args.len()])
@@ -1063,6 +1182,358 @@ mod tests {
         );
     }
 
+    /// Not a check: the call path's cost as the translated crates use it (`cargo test --release
+    /// -p engine-core --lib cost_of_call_shapes -- --ignored --nocapture`), ns per call, the
+    /// best of five runs. [`Engine::call`] and [`Engine::vcall`] are reached through function
+    /// pointers the optimiser cannot see through, as from another crate (no inlining into the
+    /// loop), and the callees are `entry!` functions with the thread host's time slice on, as in
+    /// the running game. `NV_BENCH_CALL_COUNTS=FILE` (lines `address<TAB>count[<TAB>..]`, as
+    /// `executed-withcalls.tsv`) adds a run over those addresses, each called as often as listed.
+    #[test]
+    #[ignore]
+    fn cost_of_call_shapes() {
+        type CallFn = fn(&mut Engine, u32, &[u32]) -> Ret;
+        type VcallFn = fn(&mut Engine, u32, u32, &[u32]) -> Ret;
+        const GETTER: u32 = 0x0055_9450;
+        const THREE: u32 = 0x0044_de40;
+        const NESTED: u32 = 0x0044_ddc0;
+        fn call() -> CallFn {
+            std::hint::black_box(Engine::call as CallFn)
+        }
+        fn vcall() -> VcallFn {
+            std::hint::black_box(Engine::vcall as VcallFn)
+        }
+        fn three(e: &mut Engine, this: Ptr, n: u32, x: f32) -> u32 {
+            e.mem.u32(this.addr() + 4).wrapping_add(n) ^ x.to_bits()
+        }
+        fn nested(e: &mut Engine, this: Ptr) -> u32 {
+            call()(e, GETTER, &args![this]).u32().wrapping_add(1)
+        }
+        fn slice(e: &mut Engine, _: u32) {
+            e.slice_left = e.slice_len;
+        }
+        fn best(n: u32, mut run: impl FnMut() -> u32) -> f64 {
+            let mut best = f64::MAX;
+            let mut sum = 0u32;
+            for _ in 0..5 {
+                let start = std::time::Instant::now();
+                sum = sum.wrapping_add(run());
+                best = best.min(start.elapsed().as_secs_f64() * 1e9 / f64::from(n));
+            }
+            std::hint::black_box(sum);
+            best
+        }
+        let mut e = Engine::new();
+        e.register(
+            GETTER,
+            crate::entry!(0x0055_9450, field_getter(Ptr) -> u32).1,
+        );
+        e.register(
+            THREE,
+            crate::entry!(0x0044_de40, three(Ptr, u32, f32) -> u32).1,
+        );
+        e.register(NESTED, crate::entry!(0x0044_ddc0, nested(Ptr) -> u32).1);
+        e.slice_len = 200_000;
+        e.slice_left = 200_000;
+        e.slice_hook = Some(slice);
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 1);
+        let vtable = e.mem.alloc(16);
+        e.mem.set_u32(vtable + 8, GETTER);
+        e.mem.set_u32(vtable + 12, THREE);
+        e.mem.set_u32(this, vtable);
+        let n = 20_000_000u32;
+        let words = best(n, || {
+            let (mut s, p) = (0u32, std::hint::black_box(this));
+            for _ in 0..n {
+                s = s.wrapping_add(call()(&mut e, GETTER, &[p]).eax);
+            }
+            s
+        });
+        let built = best(n, || {
+            let (mut s, p) = (0u32, std::hint::black_box(this));
+            for _ in 0..n {
+                s = s.wrapping_add(call()(&mut e, GETTER, &args![p]).eax);
+            }
+            s
+        });
+        let three_words = best(n, || {
+            let (mut s, p) = (0u32, Ptr::<()>::new(std::hint::black_box(this)));
+            for i in 0..n {
+                s = s.wrapping_add(call()(&mut e, THREE, &args![p, i, 1.5f32]).eax);
+            }
+            s
+        });
+        let virtual0 = best(n, || {
+            let (mut s, p) = (0u32, std::hint::black_box(this));
+            for _ in 0..n {
+                s = s.wrapping_add(vcall()(&mut e, p, 8, &[]).eax);
+            }
+            s
+        });
+        let virtual2 = best(n, || {
+            let (mut s, p) = (0u32, std::hint::black_box(this));
+            for i in 0..n {
+                s = s.wrapping_add(vcall()(&mut e, p, 12, &args![i, 1.5f32]).eax);
+            }
+            s
+        });
+        let two_deep = best(n, || {
+            let (mut s, p) = (0u32, std::hint::black_box(this));
+            for _ in 0..n {
+                s = s.wrapping_add(call()(&mut e, NESTED, &args![p]).eax);
+            }
+            s
+        });
+        eprintln!(
+            "call shapes: &[w] {words:.2} ns, args![w] {built:.2} ns, args![p, u, f] {three_words:.2} ns, \
+             vcall() {virtual0:.2} ns, vcall(u, f) {virtual2:.2} ns, nested (2 calls) {two_deep:.2} ns"
+        );
+        let Ok(path) = std::env::var("NV_BENCH_CALL_COUNTS") else {
+            return;
+        };
+        let text = std::fs::read_to_string(&path).expect("NV_BENCH_CALL_COUNTS");
+        let mut funcs = Vec::new();
+        let mut total = 0u64;
+        for line in text.lines() {
+            let mut cols = line.split('\t');
+            let (Some(a), Some(c)) = (cols.next(), cols.next()) else {
+                continue;
+            };
+            let (Ok(a), Ok(c)) = (u32::from_str_radix(a, 16), c.parse::<u64>()) else {
+                continue;
+            };
+            if c > 0 && !e.is_registered(a) {
+                e.register(a, crate::entry!(0x0055_9450, field_getter(Ptr) -> u32).1);
+                total += c;
+                funcs.push((a, total));
+            }
+        }
+        let mut x = 0x2545_f491_4f6c_dd1du64;
+        let order: Vec<u32> = (0..4_000_000)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                let pick = x % total;
+                funcs[funcs.partition_point(|&(_, end)| end <= pick)].0
+            })
+            .collect();
+        let spread = best(order.len() as u32, || {
+            let (mut s, p) = (0u32, std::hint::black_box(this));
+            for &a in &order {
+                s = s.wrapping_add(call()(&mut e, a, &args![p]).eax);
+            }
+            s
+        });
+        eprintln!(
+            "call shapes: {} functions by their counts: {spread:.2} ns a call",
+            funcs.len()
+        );
+    }
+
+    /// No address matches an empty entry of the call cache: each holds an address that maps to
+    /// another slot.
+    #[test]
+    fn empty_cache_entries_match_no_address() {
+        for slot in 0..CALL_CACHE_LEN {
+            assert_ne!(cache_slot(Cached::empty(slot).addr), slot, "slot {slot}");
+        }
+        let e = Engine::new();
+        assert!(e
+            .call_cache
+            .iter()
+            .enumerate()
+            .all(|(slot, c)| cache_slot(c.addr) != slot));
+    }
+
+    /// The fast path hands slow cases to the full path: a used-up slice (the hook runs, then the
+    /// call), a full call stack (it grows), a cache miss (the table answers and fills the
+    /// cache). Each call returns the same and leaves the stack as it found it.
+    #[test]
+    fn the_fast_path_hands_slow_cases_to_the_full_path() {
+        fn hook(e: &mut Engine, addr: u32) {
+            e.mem.set_u32(0x2000, addr);
+            e.slice_left = e.slice_len;
+        }
+        let mut e = Engine::new();
+        e.mem.map(0x2000, 4);
+        e.register(0x0040_6000, |e, a| Ret {
+            eax: a[0] + e.call_stack.len() as u32,
+            ..Ret::default()
+        });
+        // A miss, then a hit.
+        assert_eq!(e.call(0x0040_6000, &[10]).eax, 11);
+        assert_eq!(e.call(0x0040_6000, &[10]).eax, 11);
+        // A full stack: the call grows it.
+        e.call_stack.shrink_to_fit();
+        assert_eq!(e.call_stack.capacity(), 0);
+        assert_eq!(e.call(0x0040_6000, &[20]).eax, 21);
+        assert!(e.call_stack.is_empty());
+        // A used-up slice: the hook runs first and starts the next turn.
+        e.slice_hook = Some(hook);
+        e.slice_len = 2;
+        e.slice_left = 0;
+        assert_eq!(e.call(0x0040_6000, &[30]).eax, 31);
+        assert_eq!((e.mem.u32(0x2000), e.slice_left), (0x0040_6000, 2));
+        assert_eq!(e.call(0x0040_6000, &[40]).eax, 41);
+        assert_eq!(e.slice_left, 1);
+        // A stop inside leaves the callee on the stack (the catcher truncates it), on the full
+        // path (the first call, a miss) and on the fast one.
+        e.register(0x0040_6010, |_, _| panic!("stop"));
+        for _ in 0..2 {
+            let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x0040_6010, &[]);
+            }));
+            assert!(stopped.is_err());
+            assert_eq!(e.call_stack, [0x0040_6010]);
+            e.call_stack.clear();
+        }
+    }
+
+    /// Not a check: the cost of virtual calls by the length of their word lists, and of a call
+    /// with 13 words built by `args!`, for the frame-rate work (`cargo test --release -p
+    /// engine-core --lib cost_of -- --ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn cost_of_virtual_calls() {
+        fn leaf(e: &mut Engine, a: &[u32]) -> Ret {
+            Ret {
+                eax: e.mem.u32(a[0]).wrapping_add(a.len() as u32),
+                ..Ret::default()
+            }
+        }
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x10);
+        e.register(0x0040_1000, leaf);
+        e.put_vtable(0x0100_0000, &[0x0040_1000]);
+        e.mem.set_u32(this, 0x0100_0000);
+        let n = 10_000_000u32;
+        let mut sum = 0u32;
+        let mut line = String::from("cost: vcall");
+        for words in [0usize, 2, 4, 6, 16] {
+            let args: Vec<u32> = (0..words as u32).collect();
+            e.vcall(this, 0, &args);
+            let t = std::time::Instant::now();
+            for i in 0..n {
+                let a = std::hint::black_box(&args[..]);
+                sum = sum.wrapping_add(e.vcall(std::hint::black_box(this), 0, a).eax ^ i);
+            }
+            let ns = t.elapsed().as_nanos() as f64 / f64::from(n);
+            line += &format!(" {words} words {ns:.1} ns,");
+        }
+        let t = std::time::Instant::now();
+        for i in 0..n / 10 {
+            let x = std::hint::black_box(i);
+            sum = sum.wrapping_add(
+                e.call(
+                    0x0040_1000,
+                    &args![this, x, x, x, x, x, x, x, x, x, x, x, x],
+                )
+                .eax,
+            );
+        }
+        let ns = t.elapsed().as_nanos() as f64 / f64::from(n / 10);
+        eprintln!("{line} call with args! of 13 words {ns:.1} ns ({sum})");
+    }
+
+    /// Not a check: the host heap allocations of the call machinery, memory and locals per
+    /// operation, for the frame-rate work (`cargo test --release -p engine-core --lib
+    /// allocations_per -- --ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn allocations_per_operation_of_the_core() {
+        use crate::alloc_count::{per_run, row};
+        fn leaf(e: &mut Engine, a: &[u32]) -> Ret {
+            Ret {
+                eax: e.mem.u32(a[0]).wrapping_add(a.len() as u32),
+                ..Ret::default()
+            }
+        }
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x100);
+        e.register(0x0040_1000, leaf);
+        e.put_vtable(0x0100_0000, &[0x0040_1000]);
+        e.mem.set_u32(block, 0x0100_0000);
+        row(
+            "Engine::call, 2 words",
+            per_run(1000, || {
+                e.call(0x0040_1000, &[block, 1]);
+            }),
+        );
+        for n in [0usize, 4, 5, 15, 16, 20] {
+            let args = vec![block; n];
+            row(
+                &format!("Engine::vcall, {n} words after this"),
+                per_run(1000, || {
+                    e.vcall(block, 0, &args);
+                }),
+            );
+        }
+        row(
+            "Engine::call with args! of 13 words",
+            per_run(1000, || {
+                e.call(
+                    0x0040_1000,
+                    &args![
+                        block, 1u32, 2u32, 3u32, 4u32, 5u32, 6u32, 7u32, 8u32, 9u32, 10u32, 11u32,
+                        12u32
+                    ],
+                );
+            }),
+        );
+        row(
+            "Engine::call1",
+            per_run(1000, || {
+                e.call1::<u32, u32>(0x0040_1000, block);
+            }),
+        );
+        row(
+            "Engine::with_stack 0x20, a call inside",
+            per_run(1000, || {
+                e.with_stack(0x20, |e, p| {
+                    e.mem.set_u32(p.addr(), block);
+                    e.call(0x0040_1000, &[p.addr()]);
+                });
+            }),
+        );
+        row(
+            "Mem::alloc + Mem::free, 0x40 bytes",
+            per_run(1000, || {
+                let a = e.mem.alloc(0x40);
+                e.mem.free(a);
+            }),
+        );
+        row(
+            "Mem::alloc + Mem::free, 0x10000 bytes",
+            per_run(1000, || {
+                let a = e.mem.alloc(0x10000);
+                e.mem.free(a);
+            }),
+        );
+        let mut f = 1.0f64;
+        row(
+            "x87_mul, x87_add, x87_div, x87_sqrt, x87_round",
+            per_run(1000, || {
+                f = crate::x87::x87_mul(f, 1.000_001);
+                f = crate::x87::x87_add(f, 0.5);
+                f = crate::x87::x87_div(f, 1.5);
+                f = crate::x87::x87_sqrt(f + 2.0);
+                f = crate::x87::x87_round(f);
+            }),
+        );
+        // The diagnostics cost what they cost; listed for reference.
+        e.trace = Some(Default::default());
+        row(
+            "Engine::call with the return trace on (NV_MOVE_TRACE)",
+            per_run(1000, || {
+                e.call(0x0040_1000, &[block, 1]);
+            }),
+        );
+        e.trace = None;
+        std::hint::black_box(f);
+    }
+
     #[test]
     fn doubles_keep_state() {
         let mut e = Engine::new();
@@ -1285,6 +1756,39 @@ mod tests {
             want.extend_from_slice(&args);
             assert_eq!(seen.borrow().last(), Some(&want));
         }
+    }
+
+    /// A virtual call whose vtable or slot read needs the memory's slow path (a word across a
+    /// page boundary) reads and calls as [`Mem::u32`] does; one through unmapped memory stops
+    /// with the read's own message.
+    #[test]
+    fn virtual_calls_read_across_pages_and_stop_on_unmapped_memory() {
+        let mut e = Engine::new();
+        e.register(0x0040_4100, |_, a| Ret {
+            eax: a.iter().sum(),
+            ..Ret::default()
+        });
+        e.map(0x0100_0000, 0x3000);
+        // The slot word straddles the first page's end, `this`'s word the second's.
+        let vtable = 0x0100_0ff6;
+        e.mem.set_u32(vtable + 8, 0x0040_4100);
+        let this = 0x0100_1ffe;
+        e.mem.set_u32(this, vtable);
+        let aligned = 0x0100_1100;
+        e.mem.set_u32(aligned, vtable);
+        for n in 0..7u32 {
+            let args: Vec<u32> = (1..=n).collect();
+            let sum = n * (n + 1) / 2;
+            assert_eq!(e.vcall(this, 8, &args).eax, this + sum, "{n} arguments");
+            assert_eq!(e.vcall(aligned, 8, &args).eax, aligned + sum);
+        }
+        let message = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.vcall(0x0300_0000, 0, &[]);
+        }))
+        .err()
+        .and_then(|p| p.downcast_ref::<String>().cloned())
+        .unwrap_or_default();
+        assert_eq!(message, "read of unmapped memory at 03000000");
     }
 
     #[test]

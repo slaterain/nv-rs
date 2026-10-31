@@ -2083,10 +2083,13 @@ pub fn tes_world_space_load_cell(e: &mut Engine, this: Ptr<TESWorldSpace>, x: i3
             }
             if cell != 0 {
                 e.call(CELL_SET_HAS_TEMP_DATA, &args![cell, 1u32]);
+                // 00585d4b/00585d66/00585d86: the global is read for each call.
                 let save_load = e.global::<u32>(SAVE_LOAD_GAME);
                 let state = e.call(SAVE_LOAD_GET_STATE, &args![save_load]).u8();
+                let save_load = e.global::<u32>(SAVE_LOAD_GAME);
                 e.call(SAVE_LOAD_SET_STATE, &args![save_load, (state == 0) as u32]);
                 e.vcall(cell, 0x88, &args![]);
+                let save_load = e.global::<u32>(SAVE_LOAD_GAME);
                 e.call(SAVE_LOAD_SET_STATE, &args![save_load, state as u32]);
                 e.call(ASSIGN_PERSISTENT_REFS, &args![this, cell]);
             }
@@ -2149,10 +2152,16 @@ pub fn tes_world_space_find_land_data_in_file(
 ) -> bool {
     e.mem.set_u32(out_file.addr(), 0);
     e.mem.set_u32(out_offset.addr(), 0);
-    let parent = e
+    // 00585f04 tests `00586390(0)`; 00585fbe calls it again for the parent
+    // it recurses into.
+    if !e
         .call(PARENT_FOR, &args![this, 0u32])
-        .ptr::<TESWorldSpace>();
-    if !parent.is_null() {
+        .ptr::<TESWorldSpace>()
+        .is_null()
+    {
+        let parent = e
+            .call(PARENT_FOR, &args![this, 0u32])
+            .ptr::<TESWorldSpace>();
         return tes_world_space_find_land_data_in_file(e, parent, x, y, out_file, out_offset);
     }
     let count = e.call(FORM_FILE_COUNT, &args![this]).u32();
@@ -5959,6 +5968,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn load_cell_reads_the_save_load_game_global_for_each_call() {
+        // 00585d86: the state goes back to the object the global holds after InitItem.
+        let (mut e, w) = load_cell_engine();
+        e.register(CELL_INIT_ITEM, |e, _| {
+            e.set_global(SAVE_LOAD_GAME, SAVE_LOAD + 1);
+            Ret::default()
+        });
+        logged(&mut e);
+        e.call(0x0058_5b30, &args![w, 0i32, 0i32]);
+        assert_eq!(
+            calls_to(&e, SAVE_LOAD_SET_STATE),
+            vec![vec![SAVE_LOAD, 1], vec![SAVE_LOAD + 1, 0]]
+        );
+    }
+
     /// An existing cell with the vtable `LoadCell` needs.
     fn existing_cell(e: &mut Engine) -> u32 {
         let cell = e.mem.alloc(CELL_SIZE);
@@ -6226,6 +6251,29 @@ mod tests {
         assert_eq!(e.mem.u32(out), 0);
         // Only the parent's files were asked for.
         assert_eq!(calls_to(&e, FORM_FILE_COUNT), vec![vec![parent.addr()]]);
+    }
+
+    #[test]
+    fn find_land_data_asks_for_the_parent_twice_before_recursing() {
+        let mut e = engine();
+        let child = world(&mut e);
+        let parent = world(&mut e);
+        install_parents(&mut e, vec![(child.addr(), 0, parent.addr())]);
+        e.register_double(FORM_FILE_COUNT, |_, _| ret(0));
+        let out = e.mem.alloc(8);
+        logged(&mut e);
+        assert!(!e
+            .call(0x0058_5ee0, &args![child, 1i32, 2i32, out, out + 4])
+            .bool());
+        // 00585f04 and 00585fbe on the child, then 00585f04 on the parent.
+        assert_eq!(
+            calls_to(&e, PARENT_FOR),
+            vec![
+                vec![child.addr(), 0],
+                vec![child.addr(), 0],
+                vec![parent.addr(), 0]
+            ]
+        );
     }
 
     // ---- InitItem ------------------------------------------------------------------

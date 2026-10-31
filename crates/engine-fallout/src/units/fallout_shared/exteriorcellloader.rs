@@ -43,9 +43,11 @@ pub fn exterior_cell_loader_task_run(e: &mut Engine, this: Ptr) {
     let loader = e.mem.u32(this.addr() + 0x18);
     let data = e.mem.u32(this.addr() + 0x1c);
     fn_00528620(e, Ptr::new(loader), Ptr::new(data));
+    // 00527ccb-00527cd4: `ECX = [[this+0x1c]+0xc]`, the cell itself, is the `this` of
+    // `TESObjectCELL::QueueReferences` (not the word at the cell's +0xc, its form id).
+    let data = e.mem.u32(this.addr() + 0x1c);
     let cell = e.mem.u32(data + 0x0c);
-    let references = e.mem.u32(cell + 0x0c);
-    e.call(0x0055_71a0, &args![references, 1u32]);
+    e.call(0x0055_71a0, &args![cell, 1u32]);
 }
 
 // Translated from 00527ce0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -186,14 +188,12 @@ pub fn fn_005285c0(e: &mut Engine, _loader: Ptr, worldspace: u32, x: u32, y: u32
         return Ptr::NULL;
     }
     let data = e.call(0x0040_1000, &args![0x14u32]).u32();
-    if data == 0 {
-        return Ptr::NULL;
-    }
+    // 005285e0-0052860d: no test of the allocation; the fields go in this order.
+    e.mem.set_u32(data.wrapping_add(8), worldspace);
     e.mem.set_u32(data, x);
-    e.mem.set_u32(data + 4, y);
-    e.mem.set_u32(data + 8, worldspace);
-    e.mem.set_u32(data + 0x0c, 0);
-    e.mem.set_u8(data + 0x10, 0);
+    e.mem.set_u32(data.wrapping_add(4), y);
+    e.mem.set_u8(data.wrapping_add(0x10), 0);
+    e.mem.set_u32(data.wrapping_add(0x0c), 0);
     Ptr::new(data)
 }
 
@@ -242,8 +242,8 @@ pub fn fn_00528620(e: &mut Engine, _loader: Ptr, data: Ptr) {
         });
         // The address is the game setting object read by this function.
         let setting = e.call(0x0040_8d60, &args![0x011c_7adcu32]).u32();
-        if setting != 0
-            && e.mem.u8(setting) != 0
+        // 00528731: the byte is read through 00408d60's answer with no null test.
+        if e.mem.u8(setting) != 0
             && e.call(0x0045_18e0, &args![cell]).bool()
             && !e.call(0x0045_1cd0, &args![cell]).bool()
         {
@@ -303,8 +303,9 @@ pub fn fn_00528080(e: &mut Engine, this: Ptr, x: u16, y: u16) -> bool {
     let key = e.call(0x0058_7410, &args![x, y]).u32();
     e.with_stack(16, |e, iter| {
         e.call(0x0052_8cb0, &args![iter, 0u32]);
-        let map = e.mem.u32(this.addr());
-        let found = e.vcall(map, 8, &args![key, iter]).bool();
+        // 005280d6..005280e1: the loader itself is the map (`MOV ECX,[EBP-0x1c]`, its `this`;
+        // `MOV EDX,[ECX]` its vtable), not a pointer stored at its +0.
+        let found = e.vcall(this.addr(), 8, &args![key, iter]).bool();
         e.call(0x0044_cbf0, &args![iter]);
         found
     })
@@ -328,6 +329,8 @@ pub fn fn_00528110(e: &mut Engine, this: Ptr) {
                 if removed {
                     let task = e.call(0x0055_9450, &args![item]).u32();
                     if e.call(0x0052_87e0, &args![task]).bool() {
+                        // 0052819e-005281b4: the task is read again from the pointer.
+                        let task = e.call(0x0055_9450, &args![item]).u32();
                         e.vcall(task, 0x14, &args![]);
                     }
                 }
@@ -388,7 +391,10 @@ pub fn fn_005282d0(e: &mut Engine, this: Ptr) {
                     let task = e.call(0x0055_9450, &args![item]).u32();
                     let manager = e.global::<u32>(0x0120_2d98);
                     fn_005289b0(e, Ptr::new(manager), Ptr::new(task));
+                    // 00528360-0052838c: the task is read from the pointer for each use.
+                    let task = e.call(0x0055_9450, &args![item]).u32();
                     if e.call(0x0052_87e0, &args![task]).bool() {
+                        let task = e.call(0x0055_9450, &args![item]).u32();
                         e.vcall(task, 0x14, &args![]);
                     }
                 }
@@ -426,18 +432,26 @@ pub fn exterior_cell_loader_queue_cell_load(
         return;
     }
     let allocation = e.call(0x0040_1000, &args![0x20u32]).u32();
-    if allocation == 0 {
-        return;
-    }
-    let task = fn_00527c00(e, Ptr::new(allocation), this, data);
-    e.with_stack(4, |e, key_out| {
+    // 00528487-005284a9: a failed allocation gives a null task, which goes on below like
+    // any other (the exe does not return here).
+    let task = if allocation == 0 {
+        Ptr::NULL
+    } else {
+        fn_00527c00(e, Ptr::new(allocation), this, data)
+    };
+    // 005284b6..0052851e: the task is held by a smart pointer at [EBP-0x18] (`00528cb0`); the
+    // map (the loader itself: `MOV ECX,[EBP-0x2c]`, its `this`) is given the key, the pointer's
+    // address and 1 (slot 0x10); the manager (0x48) is given the raw task back from it
+    // (`00559450`), and the pointer is let go (`0044cbf0`).
+    e.with_stack(4, |e, holder| {
+        e.call(0x0052_8cb0, &args![holder, task]);
         let key = e.call(0x0058_7410, &args![x as u16, y as u16]).u32();
-        e.mem.set_u32(key_out.addr(), key);
-        let map = e.mem.u32(this.addr());
-        e.vcall(map, 0x10, &args![key, task.addr(), 1u32]);
+        e.vcall(this.addr(), 0x10, &args![key, holder, 1u32]);
+        let held = e.call(0x0055_9450, &args![holder]).u32();
+        let manager = e.global::<u32>(0x0120_2d98);
+        e.vcall(manager, 0x48, &args![held]);
+        e.call(0x0044_cbf0, &args![holder]);
     });
-    let manager = e.global::<u32>(0x0120_2d98);
-    e.vcall(manager, 0x48, &args![task]);
 }
 
 // Translated from 005287e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -858,6 +872,37 @@ mod tests {
     }
 
     #[test]
+    fn coordinate_data_fields_are_stored_in_the_exe_order() {
+        // 005285e9-0052860d: world space (+8), x (+0), y (+4), the done byte
+        // (+0x10), the cell (+0xc).
+        let mut e = engine();
+        e.map(0x0601_0000, 0x1000);
+        for offset in 0..0x14 {
+            e.mem.set_u8(0x0601_0000 + offset, 0xff);
+        }
+        returning(&mut e, 0x0040_1000, 0x0601_0000);
+        e.mem.watch(0x0601_0000, 0x14, false);
+        let data = fn_005285c0(&mut e, Ptr::NULL, 0x0600_0100, 7, 8);
+        let stores: Vec<u32> = e
+            .mem
+            .take_watch_hits()
+            .iter()
+            .map(|hit| hit.addr - data.addr())
+            .collect();
+        assert_eq!(stores, vec![8, 0, 4, 0x10, 0x0c]);
+        assert_eq!(e.mem.u32(data.addr() + 0x0c), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "write to unmapped memory at 00000008")]
+    fn coordinate_data_allocation_is_not_tested() {
+        // 005285dd-005285ef: the block goes straight to the stores.
+        let mut e = engine();
+        returning(&mut e, 0x0040_1000, 0);
+        fn_005285c0(&mut e, Ptr::NULL, 0x0600_0100, 7, 8);
+    }
+
+    #[test]
     fn cell_data_load_returns_for_a_null_argument() {
         let mut e = engine();
         fn_00528620(&mut e, Ptr::NULL, Ptr::NULL);
@@ -976,6 +1021,100 @@ mod tests {
         let log = e.call_log.take().unwrap();
         assert_eq!(log.len(), 1);
         assert_eq!(log[0].0, 0x006e_bde0);
+    }
+
+    /// One task in the map for the walks: the iterator's end test answers
+    /// false once, the removal (`00906570`) puts `task` in the walk's pointer
+    /// local, `00559450` reads that local, the state test says 5 and the
+    /// task's slot `0x14` is the double at `0x0600_0400`.
+    fn one_task_walk(e: &mut Engine, task: u32) {
+        e.register_double(0x006e_bde0, {
+            let mut calls = 0;
+            move |_, _| {
+                calls += 1;
+                Ret {
+                    eax: u32::from(calls > 1),
+                    ..Ret::default()
+                }
+            }
+        });
+        stub(e, 0x0052_8cb0);
+        e.register_double(0x0090_6570, move |e, a| {
+            e.mem.set_u32(a[3], task);
+            Ret {
+                eax: 1,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0055_9450, |e, a| Ret {
+            eax: e.mem.u32(a[0]),
+            ..Ret::default()
+        });
+        returning(e, 0x0052_87e0, 1);
+        stub(e, 0x0044_cbf0);
+        let vtable = 0x0600_0300;
+        e.put_vtable(vtable, &[0, 0, 0, 0, 0, 0x0600_0400]);
+        e.mem.set_u32(task, vtable);
+        stub(e, 0x0600_0400);
+    }
+
+    #[test]
+    fn update_task_walk_reads_the_task_again_before_its_update() {
+        // 00528188-005281b4: `00559450` for the state test, again for the call.
+        let mut e = engine();
+        let task = 0x0600_0100;
+        one_task_walk(&mut e, task);
+        e.call_log = Some(vec![]);
+        fn_00528110(&mut e, Ptr::new(0x0600_0800));
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log.iter().map(|(address, _)| *address).collect::<Vec<_>>(),
+            [
+                0x006e_bde0,
+                0x0052_8cb0,
+                0x0090_6570,
+                0x0055_9450,
+                0x0052_87e0,
+                0x0055_9450,
+                0x0600_0400,
+                0x0044_cbf0,
+                0x006e_bde0,
+            ]
+        );
+        assert_eq!(log[2].1[0], 0x0600_0800);
+        assert_eq!(log[4].1, vec![task]);
+        assert_eq!(log[6].1, vec![task]);
+    }
+
+    #[test]
+    fn wait_task_walk_reads_the_task_for_each_use() {
+        // 0052834c-0052838c: `00559450` for the wait, the state test and the call.
+        let mut e = engine();
+        let task = 0x0600_0100;
+        one_task_walk(&mut e, task);
+        e.mem.set_u32(task + 0x0c, 4);
+        let manager = 0x0600_0200;
+        e.mem.set_u32(0x0120_2d98, manager);
+        e.call_log = Some(vec![]);
+        fn_005282d0(&mut e, Ptr::new(0x0600_0800));
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log.iter().map(|(address, _)| *address).collect::<Vec<_>>(),
+            [
+                0x006e_bde0,
+                0x0052_8cb0,
+                0x0090_6570,
+                0x0055_9450,
+                0x0055_9450,
+                0x0052_87e0,
+                0x0055_9450,
+                0x0600_0400,
+                0x0044_cbf0,
+                0x006e_bde0,
+            ]
+        );
+        assert_eq!(log[5].1, vec![task]);
+        assert_eq!(log[7].1, vec![task]);
     }
 
     #[test]
@@ -1357,17 +1496,16 @@ mod tests {
     }
 
     #[test]
+    /// The loader is the map itself (005280d6: slot 8 is called on its `this`).
     fn coordinate_task_lookup_calls_the_map_lookup_slot() {
         let mut e = engine();
         returning(&mut e, 0x0058_7410, 0x1234);
         let loader = Ptr::<()>::new(e.mem.alloc(4));
-        let map = Ptr::<()>::new(e.mem.alloc(4));
         let vtable = 0x0600_0300;
         let mut slots = vec![0; 3];
         slots[2] = 0x0600_0400;
         e.put_vtable(vtable, &slots);
-        e.mem.set_u32(loader.addr(), map.addr());
-        e.mem.set_u32(map.addr(), vtable);
+        e.mem.set_u32(loader.addr(), vtable);
         returning(&mut e, 0x0600_0400, 1);
         stub(&mut e, 0x0052_8cb0);
         stub(&mut e, 0x0044_cbf0);
@@ -1377,8 +1515,79 @@ mod tests {
         assert_eq!(log[0].0, 0x0058_7410);
         assert_eq!(log[0].1, vec![17, 19]);
         let lookup = log.iter().find(|(a, _)| *a == 0x0600_0400).unwrap();
-        assert_eq!(lookup.1[0], map.addr());
+        assert_eq!(lookup.1[0], loader.addr());
         assert_eq!(lookup.1[1], 0x1234);
+    }
+
+    /// 005284b6..0052851e: the queued task goes through a smart pointer: the map (the loader
+    /// itself, slot 0x10) gets the key, the pointer's address and 1; the manager (slot 0x48)
+    /// gets the task the pointer holds; then the pointer is let go.
+    #[test]
+    fn queue_cell_load_hands_the_task_through_a_smart_pointer() {
+        let mut e = engine();
+        returning(&mut e, 0x0058_75a0, 0);
+        returning(&mut e, 0x0058_7410, 0x1234);
+        // operator new: the coordinate data (0x14 bytes, 005285c0), then the task (0x20).
+        e.register_double(0x0040_1000, |e, a| Ret {
+            eax: e.mem.alloc(a[0]),
+            ..Ret::default()
+        });
+        stub(&mut e, 0x0044_0540);
+        let loader = Ptr::<()>::new(e.mem.alloc(0x10));
+        let vtable = 0x0600_0300;
+        let mut slots = vec![0; 5];
+        slots[2] = 0x0600_0400;
+        slots[4] = 0x0600_0500;
+        e.put_vtable(vtable, &slots);
+        e.mem.set_u32(loader.addr(), vtable);
+        returning(&mut e, 0x0600_0400, 0);
+        returning(&mut e, 0x0600_0500, 1);
+        let manager = e.mem.alloc(4);
+        let manager_vtable = 0x0600_0600;
+        let mut manager_slots = vec![0; 0x13];
+        manager_slots[0x12] = 0x0600_0700;
+        e.put_vtable(manager_vtable, &manager_slots);
+        e.mem.set_u32(manager, manager_vtable);
+        e.mem.set_u32(0x0120_2d98, manager);
+        stub(&mut e, 0x0600_0700);
+        e.register_double(0x0052_8cb0, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0055_9450, |e, a| Ret {
+            eax: e.mem.u32(a[0]),
+            ..Ret::default()
+        });
+        stub(&mut e, 0x0044_cbf0);
+        e.call_log = Some(vec![]);
+        exterior_cell_loader_queue_cell_load(&mut e, loader, 0x0600_0100, 7, 8);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().map(|(a, w)| (*a, w.clone())).collect();
+        // The coordinate data, then the task.
+        let sizes: Vec<_> = calls
+            .iter()
+            .filter(|(a, _)| *a == 0x0040_1000)
+            .map(|(_, w)| w[0])
+            .collect();
+        assert_eq!(sizes, vec![0x14, 0x20]);
+        // The pointer holds the task (00527c00 stored the task vtable in it).
+        let hold = calls
+            .iter()
+            .rfind(|(a, _)| *a == 0x0052_8cb0)
+            .unwrap()
+            .1
+            .clone();
+        let (holder, task_block) = (hold[0], hold[1]);
+        assert_eq!(e.mem.u32(task_block), TASK_VTABLE);
+        let set = calls.iter().find(|(a, _)| *a == 0x0600_0500).unwrap();
+        assert_eq!(set.1, vec![loader.addr(), 0x1234, holder, 1]);
+        let queued = calls.iter().find(|(a, _)| *a == 0x0600_0700).unwrap();
+        assert_eq!(queued.1, vec![manager, task_block]);
+        let released = calls.iter().rfind(|(a, _)| *a == 0x0044_cbf0).unwrap();
+        assert_eq!(released.1, vec![holder]);
     }
 
     #[test]
@@ -1403,7 +1612,84 @@ mod tests {
             log.iter().map(|(a, _)| *a).collect::<Vec<_>>(),
             [0x0054_5cf0, 0x0054_6fb0, 0x0045_1cd0, 0x0055_71a0]
         );
-        assert_eq!(log[3].1, vec![0x0600_0500, 1]);
+        // 00527ccb-00527cd4: QueueReferences is called on the cell, not on its +0xc word.
+        assert_eq!(log[3].1, vec![cell.addr(), 1]);
+    }
+
+    /// 00528731: the water setting's byte is read through 00408d60's answer with no null
+    /// test, so a null answer faults on the read as in the exe.
+    #[test]
+    #[should_panic(expected = "read of unmapped memory at 00000000")]
+    fn cell_data_load_reads_the_water_setting_byte_unchecked() {
+        let mut e = engine();
+        returning(&mut e, 0x0054_5cf0, 0);
+        returning(&mut e, 0x0054_6fb0, 0);
+        returning(&mut e, 0x0045_1cd0, 0);
+        stub(&mut e, 0x0053_f440);
+        stub(&mut e, 0x0054_71e0);
+        stub(&mut e, 0x0045_1250);
+        returning(&mut e, 0x0040_8d60, 0);
+        let data = Ptr::<()>::new(e.mem.alloc(0x14));
+        e.mem.set_u32(data.addr() + 0x0c, 0x0600_0500);
+        fn_00528620(&mut e, Ptr::NULL, data);
+    }
+
+    /// 00528487-0052851e: a failed task allocation gives a null task, which still goes
+    /// through the smart pointer, the map (slot 0x10) and the manager (slot 0x48).
+    #[test]
+    fn queue_cell_load_hands_on_a_null_task_when_its_allocation_fails() {
+        let mut e = engine();
+        returning(&mut e, 0x0058_75a0, 0);
+        returning(&mut e, 0x0058_7410, 0x1234);
+        // operator new: the coordinate data (0x14 bytes) is given, the task (0x20) is not.
+        e.register_double(0x0040_1000, |e, a| Ret {
+            eax: if a[0] == 0x20 { 0 } else { e.mem.alloc(a[0]) },
+            ..Ret::default()
+        });
+        stub(&mut e, 0x0044_0540);
+        let loader = Ptr::<()>::new(e.mem.alloc(0x10));
+        let vtable = 0x0600_0300;
+        let mut slots = vec![0; 5];
+        slots[2] = 0x0600_0400;
+        slots[4] = 0x0600_0500;
+        e.put_vtable(vtable, &slots);
+        e.mem.set_u32(loader.addr(), vtable);
+        returning(&mut e, 0x0600_0400, 0);
+        returning(&mut e, 0x0600_0500, 1);
+        let manager = e.mem.alloc(4);
+        let manager_vtable = 0x0600_0600;
+        let mut manager_slots = vec![0; 0x13];
+        manager_slots[0x12] = 0x0600_0700;
+        e.put_vtable(manager_vtable, &manager_slots);
+        e.mem.set_u32(manager, manager_vtable);
+        e.mem.set_u32(0x0120_2d98, manager);
+        stub(&mut e, 0x0600_0700);
+        e.register_double(0x0052_8cb0, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0055_9450, |e, a| Ret {
+            eax: e.mem.u32(a[0]),
+            ..Ret::default()
+        });
+        stub(&mut e, 0x0044_cbf0);
+        e.call_log = Some(vec![]);
+        exterior_cell_loader_queue_cell_load(&mut e, loader, 0x0600_0100, 7, 8);
+        let log = e.call_log.take().unwrap();
+        // No task was constructed.
+        assert!(!log.iter().any(|(a, _)| *a == 0x0044_0540));
+        let hold = log.iter().rfind(|(a, _)| *a == 0x0052_8cb0).unwrap();
+        let holder = hold.1[0];
+        assert_eq!(hold.1[1], 0);
+        let set = log.iter().find(|(a, _)| *a == 0x0600_0500).unwrap();
+        assert_eq!(set.1, vec![loader.addr(), 0x1234, holder, 1]);
+        let queued = log.iter().find(|(a, _)| *a == 0x0600_0700).unwrap();
+        assert_eq!(queued.1, vec![manager, 0]);
+        let released = log.iter().rfind(|(a, _)| *a == 0x0044_cbf0).unwrap();
+        assert_eq!(released.1, vec![holder]);
     }
 
     #[test]

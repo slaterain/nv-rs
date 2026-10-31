@@ -699,6 +699,22 @@ impl Mem {
         self.load_slow(a)
     }
 
+    /// The word at `a` when [`Mem::u32`] reads it without its slow path (it lies in one mapped
+    /// page), else `None`: for a caller that keeps the slow path out of its own body
+    /// (`Engine::vcall`). Reads as [`Mem::load`]'s fast path does, with no other effect.
+    #[inline(always)]
+    pub(crate) fn u32_in_page(&self, a: u32) -> Option<u32> {
+        let off = (a as usize) & (PAGE - 1);
+        if off <= PAGE - 4 {
+            if let Some(p) = self.pages[(a >> PAGE_BITS) as usize].as_deref() {
+                let mut b = [0; 4];
+                b.copy_from_slice(&p[off..off + 4]);
+                return Some(u32::from_le_bytes(b));
+            }
+        }
+        None
+    }
+
     #[cold]
     #[inline(never)]
     fn load_slow<const N: usize>(&self, a: u32) -> [u8; N] {

@@ -473,12 +473,26 @@ pub fn fn_00a619b0(
 ) -> bool {
     let current = e.get(iterator, BSTexMapIterator::pItem);
     if current != 0 {
-        let texture = e.mem.u32(current);
-        assign_texture(e, out, texture);
-        let next = e.mem.u32(current + 8);
+        // 00a619cb: the inlined `NiPointer` = `NiPointer` takes the item's texture from
+        // the item again after the old texture's release (00a619ed), which can run its
+        // destructor, and counts up the value it stored.
+        let old = e.mem.u32(out);
+        if old != e.mem.u32(current) {
+            if old != 0 {
+                release(e, old);
+            }
+            let texture = e.mem.u32(current);
+            e.mem.set_u32(out, texture);
+            if texture != 0 {
+                add_reference(e, texture);
+            }
+        }
+        // 00a61a00: the iterator's item is read again for its next link.
+        let current = e.get(iterator, BSTexMapIterator::pItem);
+        let next = e.mem.u32(current.wrapping_add(8));
         e.set(iterator, BSTexMapIterator::pItem, next);
         if next == 0 {
-            let mut index = e.get(iterator, BSTexMapIterator::iIndex) + 1;
+            let mut index = e.get(iterator, BSTexMapIterator::iIndex).wrapping_add(1);
             e.set(iterator, BSTexMapIterator::iIndex, index);
             if index < MAP_BUCKETS {
                 loop {
@@ -1225,6 +1239,40 @@ mod tests {
         // At the end it only reports.
         let more = fn_00a619b0(&mut f.e, Ptr::new(map), Ptr::new(iterator), out);
         assert!(!more);
+    }
+
+    #[test]
+    fn iterator_next_reads_the_item_and_the_iterator_again_after_the_release() {
+        // 00a619ed and 00a61a00: the item's texture and the iterator's item are loaded
+        // again after the old texture's release, whose destructor here changes both.
+        let mut f = Fixture::new();
+        f.init();
+        let map = f.map(0);
+        let (first, second) = (f.texture("aa.dds", 64, 64), f.texture("bb.dds", 64, 64));
+        let old = f.texture("old.dds", 64, 64);
+        let item = f.e.mem.alloc(0x10);
+        f.e.mem.set_u32(item, first);
+        let moved = f.e.mem.alloc(0x10);
+        f.e.mem.set_u32(moved + 8, 0x0600_0010);
+        let iterator = f.e.mem.alloc(0xc);
+        f.e.mem.set_u32(iterator, item);
+        let out = f.e.mem.alloc(4);
+        f.e.mem.set_u32(out, old);
+        f.e.register_double(DOUBLE_DELETE, move |e, a| {
+            assert_eq!(a[0], old);
+            e.mem.set_u32(item, second);
+            e.mem.set_u32(iterator, moved);
+            Ret::default()
+        });
+        assert!(fn_00a619b0(
+            &mut f.e,
+            Ptr::new(map),
+            Ptr::new(iterator),
+            out
+        ));
+        assert_eq!(f.e.mem.u32(out), second);
+        assert_eq!((f.refs(old), f.refs(first), f.refs(second)), (0, 1, 2));
+        assert_eq!(f.e.mem.u32(iterator), 0x0600_0010);
     }
 
     #[test]
