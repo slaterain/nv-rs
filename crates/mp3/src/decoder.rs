@@ -11,6 +11,10 @@ use crate::stream::{
 /// filterbanks at the start: 528 samples, plus one (LAME's own count).
 pub const DECODER_DELAY: u32 = 529;
 
+/// How far back in earlier frames' data a frame's own data can start: `main_data_begin`'s 9
+/// bits (MPEG-1; 8 bits in MPEG-2 and 2.5).
+const MAX_MAIN_DATA_BEGIN: usize = 511;
+
 /// Something wrong with a frame. Its damaged parts play as silence; the
 /// decoder carries on with the next frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -234,6 +238,80 @@ impl<B: AsRef<[u8]>> Decoder<B> {
         self.walker.skipped - self.start_walker.skipped
     }
 
+    /// The audio frames [`Decoder::next_frame`] gives from the start (a Xing/VBRI frame is not
+    /// one), counted by stepping through their headers without decoding them.
+    pub fn frame_count(&self) -> usize {
+        let bytes = self.data.as_ref();
+        let mut walker = self.start_walker.clone();
+        std::iter::from_fn(|| walker.next(bytes)).count()
+    }
+
+    /// Goes to audio frame `frame` (counted as [`Decoder::frame_count`] counts them; past the
+    /// last one, to the end) so that it and every frame after it decode exactly as they do from
+    /// the start: the same samples bit for bit, the same problems, the same gapless trimming.
+    ///
+    /// What a frame decodes to depends on earlier frames in three ways, each of them bounded:
+    /// its data can start up to 511 bytes back in the data of the frames before it (the bit
+    /// reservoir: `main_data_begin` has 9 bits, 8 in MPEG-2 and 2.5), and each channel's IMDCT
+    /// overlap and synthesis filterbank carry what that channel's last granule gave (the overlap
+    /// is that granule's second half, a function of its own data alone; the filterbank's 1,024
+    /// values are its last 16 time slots, all from that granule, which has 18). So the decoder
+    /// starts afresh (as [`Decoder::rewind`]) a few frames back and decodes, without giving
+    /// them, the frames from there: from the frame holding each channel's second-to-last
+    /// granule before `frame` (the last granule's time slots add that one's overlap), and
+    /// before that, frames holding at least 511 bytes of data of their own, so that every frame
+    /// from there on finds in the reservoir all the data it finds there from the start.
+    pub fn seek(&mut self, frame: usize) {
+        self.rewind();
+        let bytes = self.data.as_ref();
+        // The frames before `frame`: where each starts, its samples per channel and how many
+        // bytes of its own data it adds to the reservoir; and by channel, the frames that hold
+        // its last two granules.
+        let mut walker = self.start_walker.clone();
+        let mut before: Vec<(usize, u64, usize)> = Vec::new();
+        let mut granules: [[Option<usize>; 2]; 2] = [[None; 2]; 2];
+        while before.len() < frame {
+            let Some((pos, header, len)) = walker.next(bytes) else {
+                // Past the last frame: at the end.
+                self.walker = walker;
+                return;
+            };
+            let side_end = header.side_info_start() + header.side_info_length();
+            let j = before.len();
+            for _ in 0..if header.is_lsf() { 1 } else { 2 } {
+                for last in granules.iter_mut().take(header.channels()) {
+                    *last = [last[1], Some(j)];
+                }
+            }
+            let samples = header.samples_per_frame() as u64;
+            before.push((pos, samples, len.saturating_sub(side_end)));
+        }
+        for &(_, samples, _) in &before {
+            trim(&mut self.skip, &mut self.remaining, samples);
+        }
+        let needed = granules
+            .iter()
+            .filter_map(|last| last[0].or(last[1]))
+            .min()
+            .unwrap_or(frame);
+        let mut from = needed;
+        let mut reach = 0;
+        while from > 0 && reach < MAX_MAIN_DATA_BEGIN {
+            from -= 1;
+            reach += before[from].2;
+        }
+        if from == frame {
+            return;
+        }
+        self.walker.pos = before[from].0;
+        for _ in from..frame {
+            let (pos, header, len) = self.walker.next(bytes).expect("a frame walked above");
+            let _ = self
+                .layer3
+                .decode(&header, &bytes[pos..pos + len], &mut self.pcm);
+        }
+    }
+
     /// Decodes the next frame; `None` at the end.
     pub fn next_frame(&mut self) -> Option<Frame> {
         let bytes = self.data.as_ref();
@@ -244,14 +322,7 @@ impl<B: AsRef<[u8]>> Decoder<B> {
 
         // Gapless trimming.
         let n = header.samples_per_frame() as u64;
-        let dropped = self.skip.min(n);
-        self.skip -= dropped;
-        let mut keep = n - dropped;
-        if let Some(remaining) = &mut self.remaining {
-            keep = keep.min(*remaining);
-            *remaining -= keep;
-        }
-        let (from, to) = (dropped as usize, (dropped + keep) as usize);
+        let (from, to) = trim(&mut self.skip, &mut self.remaining, n);
 
         let channels = usize::from(self.info.channels);
         let mut samples = Vec::with_capacity((to - from) * channels);
@@ -323,6 +394,19 @@ impl<B: AsRef<[u8]>> Decoder<B> {
         }
         written
     }
+}
+
+/// Gapless trimming of a frame of `n` samples per channel ([`Decoder`]'s `skip` and
+/// `remaining`): the part of them given.
+fn trim(skip: &mut u64, remaining: &mut Option<u64>, n: u64) -> (usize, usize) {
+    let dropped = (*skip).min(n);
+    *skip -= dropped;
+    let mut keep = n - dropped;
+    if let Some(remaining) = remaining {
+        keep = keep.min(*remaining);
+        *remaining -= keep;
+    }
+    (dropped as usize, (dropped + keep) as usize)
 }
 
 impl<B: AsRef<[u8]>> Iterator for Decoder<B> {

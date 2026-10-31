@@ -451,8 +451,9 @@ pub fn hk_matrix3_sub(e: &mut Engine, this: Ptr, other: Ptr) {
 /// vector `out`, with `(p0, p1, p2)` the lane-wise product of the first matrix row
 /// (`m00, m10, m20`) with the cofactor row built from the second and third rows (`SHUFPS` `0xd2`,
 /// `0xc9`), and `d = p2 + (p1 + p0)`. The rows are gathered with `MOVSS` and `UNPCKLPS` from the
-/// float elements (lane 3 of each row is the float at `01011d78`).
-pub fn hk_matrix3_get_determinant(e: &mut Engine, this: Ptr, out: Ptr) {
+/// float elements (lane 3 of each row is the float at `01011d78`). Answers `out` (its callers
+/// read the determinant through `EAX`).
+pub fn hk_matrix3_get_determinant(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
     let base = this.addr();
     let zero = e.mem.f32(ZERO_F32);
     let element = |e: &Engine, offset: u32| e.mem.f32(base + offset);
@@ -467,6 +468,8 @@ pub fn hk_matrix3_get_determinant(e: &mut Engine, this: Ptr, out: Ptr) {
     let products = mulps(subps(right, left), row_x);
     let sum = sum_of_products(products);
     store_lanes(e, out.addr(), [sum, products[2], products[2], products[2]]);
+    // 00cd51e1 MOV EAX,[EBP+8] (out), 00cd5258 MOVAPS [EAX],XMM2: EAX is still out at the RET 4.
+    out
 }
 
 // Translated from 00cd5270 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -786,7 +789,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00cd5050, hk_matrix3_invert_symmetric(Ptr)),
         entry!(0x00cd5140, hk_matrix3_add(Ptr, Ptr)),
         entry!(0x00cd5180, hk_matrix3_sub(Ptr, Ptr)),
-        entry!(0x00cd51c0, hk_matrix3_get_determinant(Ptr, Ptr)),
+        // 00cd525e RET 4 with EAX = out (loaded at 00cd51e1).
+        entry!(0x00cd51c0, hk_matrix3_get_determinant(Ptr, Ptr) -> Ptr),
         entry!(0x00cd5270, fn_00cd5270(u32, u32, Ptr, Ptr)),
         entry!(0x00cd5340, fn_00cd5340(Ptr) -> f64),
         entry!(0x00cd53a0, fn_00cd53a0(Ptr) -> f64),
@@ -1204,6 +1208,19 @@ mod tests {
         let out = e.mem.alloc(16);
         e.call(0x00cd_51c0, &args![m, out]);
         assert_eq!(load_lanes(&e, out), [1.0, 25.0, 25.0, 25.0]);
+    }
+
+    #[test]
+    fn get_determinant_answers_the_out_vector() {
+        // 00cd51e1 / 00cd525e: EAX holds `out` at the RET; the callers (00d7b807, 00e13714 ...)
+        // read the determinant through it.
+        let mut e = Engine::new();
+        setup_constants(&mut e);
+        let m = matrix(&mut e, [[2.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 4.0]]);
+        let out = e.mem.alloc(16);
+        let answer = e.call(0x00cd_51c0, &args![m, out]).u32();
+        assert_eq!(answer, out);
+        assert_eq!(e.mem.f32(answer), 24.0);
     }
 
     #[test]

@@ -8,16 +8,17 @@ use super::branch::{
     checked_iterator, copy_float, copy_words, ftol, ld, std_vector_int_clear, vector_at,
     vector_len, CVec3, StlVector, INVALID_PARAMETER, MEMCPY, OPERATOR_NEW,
 };
+use super::run_00b32410::{fn_00b32880, fn_00b32de0};
 
 /// The helpers of the `std::vector` instantiations that live in other units, as this unit calls
 /// them: the clear and the (count, fill value) growth of the strip vectors, the pushes of a
-/// float and of a byte, the colour push's slow path and the fill of `00ac3450`.
+/// float and of a byte, the colour push's slow path and the fill of `00ac3450`. (The growths of
+/// the strip-length and strip vectors, `00b32880` and `00b32de0`, take their row vector in
+/// place: [`fn_00b32880`], [`fn_00b32de0`].)
 const CLEAR_STRIP_LENGTHS: u32 = 0x00b3_19e0;
 const CLEAR_STRIPS: u32 = 0x00b3_2120;
 const CONSTRUCT_SHORT_VECTOR: u32 = 0x00b3_36a0;
 const CONSTRUCT_POINTER_VECTOR: u32 = 0x00b1_7db0;
-const GROW_STRIP_LENGTHS: u32 = 0x00b3_2880;
-const GROW_STRIPS: u32 = 0x00b3_2de0;
 const GROW_INT_VECTOR: u32 = 0x00b3_33e0;
 const GROW_SHORT_VECTOR: u32 = 0x00b3_37f0;
 const GROW_FLOAT_VECTOR: u32 = 0x0060_b410;
@@ -143,7 +144,8 @@ fn vertex_counter(e: &Engine, this: Ptr<CIndexedGeometry>) -> u32 {
 /// `CIndexedGeometry::SetNumLodLevels` (Xbox PDB): empties the strip-length, strip and
 /// triangle-count vectors, stores the level count, then grows the strip-length and strip
 /// vectors to `count` empty rows (each filled with a fresh, default-constructed row vector
-/// passed by value) and the triangle counts to `count` zeros, and zeroes every triangle count.
+/// passed by value; each row is built in place in the argument area of its growth, `00b32880`
+/// and `00b32de0`) and the triangle counts to `count` zeros, and zeroes every triangle count.
 pub fn c_indexed_geometry_set_num_lod_levels(
     e: &mut Engine,
     this: Ptr<CIndexedGeometry>,
@@ -154,41 +156,22 @@ pub fn c_indexed_geometry_set_num_lod_levels(
     e.call(CLEAR_STRIPS, &args![base + 0x58]);
     std_vector_int_clear(e, Ptr::new(base + 0x28));
     e.set(this, CIndexedGeometry::m_nNumLodLevels, count);
-    // The row vectors are built on the stack as the by-value argument (six words).
-    let row = e.with_stack(0x18, |e, temp| {
-        e.call(CONSTRUCT_SHORT_VECTOR, &args![temp]);
-        std::array::from_fn::<u32, 6, _>(|i| e.mem.u32(temp.addr() + 4 * i as u32))
+    // 00b2fb77: `SUB ESP,0x18; MOV ECX,ESP`: the row vector is built in the outgoing argument
+    // area, which stays in place as `00b32880`'s own `[EBP+0xC]` (its proxy names that area;
+    // `00b32880` tidies it and deletes the proxy there, and its `RET 0x1C` frees it).
+    e.with_stack(0x18, |e, outgoing| {
+        e.call(CONSTRUCT_SHORT_VECTOR, &args![outgoing]); // 00b2fb82
+        let lengths = Ptr::new(base + 0x40);
+        fn_00b32880(e, lengths, u32::from(count), outgoing.cast()); // 00b2fb9b: the area itself
     });
-    e.call(
-        GROW_STRIP_LENGTHS,
-        &args![
-            base + 0x40,
-            count,
-            row[0],
-            row[1],
-            row[2],
-            row[3],
-            row[4],
-            row[5]
-        ],
-    );
-    let row = e.with_stack(0x18, |e, temp| {
-        e.call(CONSTRUCT_POINTER_VECTOR, &args![temp]);
-        std::array::from_fn::<u32, 6, _>(|i| e.mem.u32(temp.addr() + 4 * i as u32))
+    // 00b2fba0: `SUB ESP,0x18; MOV ECX,ESP`: the pointer row is built in the outgoing argument
+    // area, which stays in place as `00b32de0`'s own `[EBP+0xC]` (its proxy names that area;
+    // `00b32de0` tears it down there and its `RET 0x1C` frees it).
+    e.with_stack(0x18, |e, outgoing| {
+        e.call(CONSTRUCT_POINTER_VECTOR, &args![outgoing]); // 00b2fbab
+        let strips = Ptr::new(base + 0x58);
+        fn_00b32de0(e, strips, u32::from(count), outgoing.cast()); // 00b2fbc4: the area itself
     });
-    e.call(
-        GROW_STRIPS,
-        &args![
-            base + 0x58,
-            count,
-            row[0],
-            row[1],
-            row[2],
-            row[3],
-            row[4],
-            row[5]
-        ],
-    );
     e.call(GROW_INT_VECTOR, &args![base + 0x28, count, 0u32]);
     let mut level = 0u32;
     while (level as i32) < i32::from(count) {
@@ -644,6 +627,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::branch::OPERATOR_DELETE;
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -704,12 +688,35 @@ mod tests {
             .collect()
     }
 
+    /// What the strip rows' growth (`00b32de0`, run directly on the row built in its argument
+    /// area) calls on the way: the insertion of the row's copies (`00b34450`: the vector, the
+    /// end iterator's proxy and position, the count, the row's address) and the tidy of the row
+    /// (`00b17f50`), whose proxy then goes to `operator delete`.
+    const STRIPS_INSERT: u32 = 0x00b3_4450;
+    const STRIPS_ROW_TIDY: u32 = 0x00b1_7f50;
+
+    /// `00b32880`'s helpers for the strip-length rows (run directly on the row built in its
+    /// argument area): the insert of `count` copies (`00b33bd0`) and the row's tidy
+    /// (`00b34d90`), whose proxy then goes to `operator delete`.
+    const STRIP_LENGTHS_INSERT: u32 = 0x00b3_3bd0;
+    const STRIP_LENGTHS_ROW_TIDY: u32 = 0x00b3_4d90;
+
     #[test]
     fn set_num_lod_levels_resets_the_vectors() {
         let mut e = Engine::new();
         let g = geometry(&mut e);
         let base = g.addr();
         for addr in [CLEAR_STRIP_LENGTHS, CLEAR_STRIPS, 0x00b3_35c0] {
+            e.register_double(addr, |_, _| Ret::default());
+        }
+        // Both growths (00b32880, 00b32de0) run: their inserts, the rows' tidies and the
+        // deletes of the rows' proxies are doubled.
+        for addr in [
+            STRIP_LENGTHS_INSERT,
+            STRIP_LENGTHS_ROW_TIDY,
+            STRIPS_ROW_TIDY,
+            OPERATOR_DELETE,
+        ] {
             e.register_double(addr, |_, _| Ret::default());
         }
         e.register_double(CONSTRUCT_SHORT_VECTOR, |e, a| {
@@ -724,8 +731,14 @@ mod tests {
             }
             Ret::default()
         });
-        e.register_double(GROW_STRIP_LENGTHS, |_, _| Ret::default());
-        e.register_double(GROW_STRIPS, |_, _| Ret::default());
+        // The row's six words as the insertion of its copies finds them.
+        let rows = Rc::new(RefCell::new(Vec::new()));
+        let sink = rows.clone();
+        e.register_double(STRIPS_INSERT, move |e, a| {
+            let row: Vec<u32> = (0..6).map(|i| e.mem.u32(a[4] + 4 * i)).collect();
+            sink.borrow_mut().push(row);
+            Ret::default()
+        });
         e.register_double(GROW_INT_VECTOR, |e, a| {
             let data = fill(e, a[0], 4, a[1]);
             for i in 0..a[1] {
@@ -737,33 +750,26 @@ mod tests {
         e.call(0x00b2_fb30, &args![g, 3u16]);
         let log = e.call_log.take().unwrap();
         assert_eq!(e.get(g, CIndexedGeometry::m_nNumLodLevels), 3);
-        let lengths = calls_to(&log, GROW_STRIP_LENGTHS);
+        // The three length rows are inserted from the row built in place (its words
+        // 0x100..0x105), which is then tidied.
+        let row = calls_to(&log, CONSTRUCT_SHORT_VECTOR)[0][0];
         assert_eq!(
-            lengths,
-            vec![vec![
-                base + 0x40,
-                3,
-                0x100,
-                0x101,
-                0x102,
-                0x103,
-                0x104,
-                0x105
-            ]]
+            calls_to(&log, STRIP_LENGTHS_INSERT),
+            vec![vec![base + 0x40, 0, 0, 3, row]]
         );
-        let strips = calls_to(&log, GROW_STRIPS);
+        assert_eq!(calls_to(&log, STRIP_LENGTHS_ROW_TIDY), vec![vec![row]]);
+        // The empty strip vector gets three copies of the row at its end (proxy 0, position 0).
+        let strips = calls_to(&log, STRIPS_INSERT);
+        assert_eq!(strips.len(), 1);
+        assert_eq!(strips[0][..4], [base + 0x58, 0, 0, 3]);
         assert_eq!(
-            strips,
-            vec![vec![
-                base + 0x58,
-                3,
-                0x200,
-                0x201,
-                0x202,
-                0x203,
-                0x204,
-                0x205
-            ]]
+            *rows.borrow(),
+            vec![vec![0x200, 0x201, 0x202, 0x203, 0x204, 0x205]]
+        );
+        // Each row's proxy (its first word) is deleted: the length row's, then the strip row's.
+        assert_eq!(
+            calls_to(&log, OPERATOR_DELETE),
+            vec![vec![0x100], vec![0x200]]
         );
         assert_eq!(calls_to(&log, CLEAR_STRIP_LENGTHS), vec![vec![base + 0x40]]);
         assert_eq!(calls_to(&log, CLEAR_STRIPS), vec![vec![base + 0x58]]);
@@ -771,6 +777,117 @@ mod tests {
         for i in 0..3 {
             assert_eq!(e.mem.u32(counts + 4 * i), 0);
         }
+    }
+
+    #[test]
+    fn set_num_lod_levels_grows_the_strips_from_the_row_in_its_argument_area() {
+        // 00b2fba0..00b2fbc4: the pointer row is built (00b17db0) in 00b32de0's argument area,
+        // so its proxy names the vector 00b32de0 copies from (00b32e92) and tears down
+        // (00b32ff3, 00b33012). With freed blocks held back (the freed-block check), a row
+        // built in an area freed before 00b32de0 ran left its proxy naming that freed area, not
+        // the vector the copies were made from.
+        let mut e = Engine::new();
+        e.mem.enable_freed_check(false);
+        let g = geometry(&mut e);
+        let base = g.addr();
+        for addr in [
+            CLEAR_STRIP_LENGTHS,
+            CLEAR_STRIPS,
+            0x00b3_35c0,
+            CONSTRUCT_SHORT_VECTOR,
+            STRIP_LENGTHS_INSERT,
+            STRIP_LENGTHS_ROW_TIDY,
+            STRIPS_ROW_TIDY,
+            OPERATOR_DELETE,
+        ] {
+            e.register_double(addr, |_, _| Ret::default());
+        }
+        grow(&mut e, GROW_INT_VECTOR, 4);
+        // 00b17db0: the row gets a proxy whose first word names the row.
+        let built = Rc::new(RefCell::new(Vec::new()));
+        let sink = built.clone();
+        e.register_double(CONSTRUCT_POINTER_VECTOR, move |e, a| {
+            let proxy = e.mem.alloc(4);
+            e.mem.set_u32(proxy, a[0]);
+            e.mem.set_u32(a[0], proxy);
+            sink.borrow_mut().push((a[0], proxy));
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        // 00b34450: the copies are made from the row, whose checked iterators find their
+        // container through its proxy: the row's address and the vector its proxy names.
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        e.register_double(STRIPS_INSERT, move |e, a| {
+            let proxy = e.mem.u32(a[4]);
+            sink.borrow_mut().push((a[4], e.mem.u32(proxy)));
+            Ret::default()
+        });
+        e.call_log = Some(Vec::new());
+        e.call(0x00b2_fb30, &args![g, 3u16]);
+        let log = e.call_log.take().unwrap();
+        let (row, proxy) = built.borrow()[0];
+        assert_eq!(*seen.borrow(), vec![(row, row)]);
+        assert_eq!(
+            calls_to(&log, STRIPS_INSERT)[0][..4],
+            [base + 0x58, 0, 0, 3]
+        );
+        // 00b32ff3..00b33012: the same row is tidied and its proxy deleted (after the length
+        // row's proxy, which 00b32880 deletes first).
+        assert_eq!(calls_to(&log, STRIPS_ROW_TIDY), vec![vec![row]]);
+        let deletes = calls_to(&log, OPERATOR_DELETE);
+        assert_eq!(deletes.len(), 2);
+        assert_eq!(deletes[1], vec![proxy]);
+    }
+
+    /// 00b2fb77..00b2fb9b: the row vector is built (00b336a0) in 00b32880's argument area, so
+    /// the proxy it allocates names the vector the resize hands its insert and then tidies,
+    /// deleting that proxy. Built in a local and passed as words, the row the resize worked on
+    /// was a copy elsewhere and its proxy named the caller's ended local. The freed check is on
+    /// because under it stack locals are separate blocks: without it the copy's area reuses the
+    /// ended local's address, so the stale proxy would name the copy by chance.
+    #[test]
+    fn set_num_lod_levels_grows_the_lengths_from_the_row_its_proxy_names() {
+        let mut e = Engine::new();
+        e.mem.enable_freed_check(false);
+        let g = geometry(&mut e);
+        let base = g.addr();
+        for addr in [CLEAR_STRIP_LENGTHS, CLEAR_STRIPS, 0x00b3_35c0] {
+            e.register_double(addr, |_, _| Ret::default());
+        }
+        for addr in [
+            CONSTRUCT_POINTER_VECTOR,
+            STRIPS_INSERT,
+            STRIPS_ROW_TIDY,
+            STRIP_LENGTHS_ROW_TIDY,
+            OPERATOR_DELETE,
+        ] {
+            e.register_double(addr, |_, _| Ret::default());
+        }
+        e.register(0x0044_d670, |e, a| e.mem.alloc(4 * a[0]).into_ret());
+        grow(&mut e, GROW_INT_VECTOR, 4);
+        // The insert sees the value it is handed and the vector its proxy names.
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        e.register_double(STRIP_LENGTHS_INSERT, move |e, a| {
+            let proxy = e.mem.u32(a[4]);
+            sink.borrow_mut().push((a[4], proxy, e.mem.u32(proxy)));
+            Ret::default()
+        });
+        e.call_log = Some(Vec::new());
+        e.call(0x00b2_fb30, &args![g, 2u16]);
+        let log = e.call_log.take().unwrap();
+        let row = calls_to(&log, CONSTRUCT_SHORT_VECTOR)[0][0];
+        let (value, proxy, named) = seen.borrow()[0];
+        assert_eq!((value, named), (row, row));
+        assert_eq!(
+            calls_to(&log, STRIP_LENGTHS_INSERT)[0][..4],
+            [base + 0x40, 0, 0, 2]
+        );
+        assert_eq!(calls_to(&log, STRIP_LENGTHS_ROW_TIDY), vec![vec![row]]);
+        assert_eq!(calls_to(&log, OPERATOR_DELETE)[0], vec![proxy]);
     }
 
     #[test]

@@ -68,6 +68,9 @@ const BIT_FILL: u32 = 0x00b4_2ed0;
 const ITERATOR_ELEMENT: u32 = 0x00b2_ab50;
 const ITERATOR_INCREMENT: u32 = 0x00b2_abc0;
 const ITERATORS_EQUAL: u32 = 0x00b2_ac30;
+/// The pair vector's own checked increment (`00b41d40`, below; `00b40c80` calls it at
+/// `00b40d2c`): one 8-byte `SLodEntry` on, where `00b2abc0` steps 4 bytes.
+const PAIR_ITERATOR_INCREMENT: u32 = 0x00b4_1d40;
 /// The leaf pointer vector's constructor (`00b17db0`), copy constructor (`00b355d0`, `RET 4`),
 /// `operator=` (`00b36330`, `RET 4`) and `push_back` (`00b15390`, in `branch.rs`).
 const LEAF_VECTOR_CONSTRUCT: u32 = 0x00b1_7db0;
@@ -184,7 +187,8 @@ pub fn fn_00b40ad0(
 /// `CLeafLodEngine::Compute` (the engine map gives it no name; `thiscall`, `RET 0x1C`: the
 /// pointer to the returned `std::vector<CBillboardLeaf *>` and the vector of the leaves passed
 /// by value, six words): makes a local leaf vector (`00b17db0`), copy constructs the argument
-/// (`00b355d0`) for `00b41110` (which consumes it) to pair up close leaves, runs `00b40c80`
+/// (`00b355d0`) in place in the argument area of `00b41110` (`00b40b78`..`00b40b84`: its proxy
+/// names that area) for `00b41110` (which consumes it) to pair up close leaves, runs `00b40c80`
 /// to merge the pairs into new leaves and assigns its result to the local vector
 /// (`00b36330`); the temporary result is tidied (`00b17f50`) and its proxy deleted; the local
 /// vector is copied into the returned vector (`00b355d0`) and tidied and deleted too, as is
@@ -203,15 +207,12 @@ pub fn fn_00b40b30(
         e.with_stack(0x18, |e, local| {
             let local = local.addr();
             e.call(LEAF_VECTOR_CONSTRUCT, &args![local]);
-            let copy = e.with_stack(0x18, |e, slot| {
-                e.call(LEAF_VECTOR_COPY_CONSTRUCT, &args![slot, arg]);
-                let mut words = [0u32; 6];
-                for (i, word) in words.iter_mut().enumerate() {
-                    *word = e.mem.u32(slot.addr() + 4 * i as u32);
-                }
-                words
+            // 00b40b78: `SUB ESP,0x18; MOV ECX,ESP`: the copy is built in the outgoing argument
+            // area, which stays in place as `00b41110`'s own `[EBP+8]` (its `RET 0x18` frees it).
+            e.with_stack(0x18, |e, outgoing| {
+                e.call(LEAF_VECTOR_COPY_CONSTRUCT, &args![outgoing, arg]); // 00b40b84
+                fn_00b41110(e, this, outgoing.cast()); // 00b40b95: the area itself, not a copy
             });
-            fn_00b41110(e, this, copy);
             e.with_stack(0x18, |e, result| {
                 let result = result.addr();
                 let produced = fn_00b40c80(e, this, Ptr::new(result)).addr();
@@ -280,7 +281,7 @@ pub fn fn_00b40c80(
             if x87_load32(e.mem.u32(t + 0x1C)) < random {
                 merge_pair(e, this, it_a, new_leaf_slot, local);
             }
-            e.call(ITERATOR_INCREMENT, &args![it_a]);
+            e.call(PAIR_ITERATOR_INCREMENT, &args![it_a]); // 00b40d2c: one 8-byte pair on
         }
         e.call(LEAF_VECTOR_COPY_CONSTRUCT, &args![returned, local]);
         e.call(VECTOR_TIDY, &args![local]);
@@ -382,13 +383,15 @@ fn merge_pair(e: &mut Engine, this: Ptr<CLeafLodEngine>, it: u32, leaf_slot: u32
 /// reference made with `00b42a60` and `00b42be0`) and the pair is appended to `m_vPairs`
 /// (`00b417b0`). The bit vector is destroyed (`00b419c0`) and the argument vector tidied
 /// (`00b17f50`) and its proxy deleted.
-pub fn fn_00b41110(e: &mut Engine, this: Ptr<CLeafLodEngine>, vector: [u32; 6]) {
+///
+/// `vector` is the address of the argument area that holds the by-value vector (the exe's
+/// `[EBP+8]`): the caller built the copy there (`00b40b78`..`00b40b84`), so its proxy names
+/// that area, and the checked iterators made on it (`00b42980` with `LEA ECX,[EBP+8]`) find
+/// their container through that proxy (`00b2ab50`, `00b2e330`).
+pub fn fn_00b41110(e: &mut Engine, this: Ptr<CLeafLodEngine>, vector: Ptr<StlVector>) {
     let t = this.addr();
-    e.with_stack(0x18, |e, vector_slot| {
-        let v = vector_slot.addr();
-        for (i, word) in vector.iter().enumerate() {
-            e.mem.set_u32(v + 4 * i as u32, *word);
-        }
+    {
+        let v = vector.addr(); // 00b41145: the vector is `[EBP+8]` itself, worked on in place
         let count = (e.mem.u32(v + 0x10).wrapping_sub(e.mem.u32(v + 0x0C)) as i32 >> 2) as u32;
         e.with_stack(0x24 + 0x60, |e, frame| {
             let bits = frame.addr();
@@ -499,7 +502,7 @@ pub fn fn_00b41110(e: &mut Engine, this: Ptr<CLeafLodEngine>, vector: [u32; 6]) 
         e.call(VECTOR_TIDY, &args![v]);
         let proxy = e.mem.u32(v);
         e.call(OPERATOR_DELETE, &args![proxy]);
-    });
+    } // 00b416c9: `RET 0x18`, the argument area goes with the caller's frame
 }
 
 /// Makes the bit reference of bit `index` of the bit vector at `bits` the way `00b41110` does:
@@ -1056,10 +1059,16 @@ fn entry_00b40b30(e: &mut Engine, a: &[u32]) -> Ret {
     RetVal::into_ret(result)
 }
 
+/// Through the uniform ABI the six words of `00b41110`'s by-value vector arrive as values: they
+/// are laid out in an area that stands for its argument area (`[EBP+8]`). The exe's one caller,
+/// `00b40b30` (`00b40b95`), calls `fn_00b41110` with the area it built the copy in.
 fn entry_00b41110(e: &mut Engine, a: &[u32]) -> Ret {
-    let mut vector = [0u32; 6];
-    vector.copy_from_slice(&a[1..7]);
-    fn_00b41110(e, Ptr::new(a[0]), vector);
+    e.with_stack(0x18, |e, area| {
+        for (i, word) in a[1..7].iter().enumerate() {
+            e.mem.set_u32(area.addr() + 4 * i as u32, *word); // 00b41110's [EBP+8]..[EBP+0x1C]
+        }
+        fn_00b41110(e, Ptr::new(a[0]), area.cast());
+    });
     Ret::default()
 }
 
@@ -1336,6 +1345,49 @@ mod tests {
                 ..Ret::default()
             }
         });
+        // The pair vector's increment (00b41d40): one 8-byte pair on.
+        e.register_double(PAIR_ITERATOR_INCREMENT, |e, a| {
+            let position = e.mem.u32(a[0] + 4).wrapping_add(8);
+            e.mem.set_u32(a[0] + 4, position);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+    }
+
+    /// Puts the real translations at `addrs` back over the doubles (from their units' lists).
+    fn restore(e: &mut Engine, addrs: &[u32]) {
+        let units = [
+            funcs(),
+            super::super::frondengine::funcs(),
+            super::super::run_00b2ab50::funcs(),
+            super::super::run_00b2e250::funcs(),
+        ];
+        for (addr, f) in units.into_iter().flatten() {
+            if addrs.contains(&addr) {
+                e.register(addr, f);
+            }
+        }
+    }
+
+    /// The checked iterators of the leaf and pair vectors (00b42980, 00b2ac30, 00b2ab50,
+    /// 00b2abc0, 00b2e330, 00b41d40), which find their container through the proxy.
+    const CHECKED_ITERATORS: [u32; 6] = [
+        ITERATOR_CONSTRUCT,
+        ITERATORS_EQUAL,
+        ITERATOR_ELEMENT,
+        ITERATOR_INCREMENT,
+        WORDS_ITERATOR_ADVANCE,
+        PAIR_ITERATOR_INCREMENT,
+    ];
+
+    /// Gives the vector at `at` a proxy (8 bytes) that names it, as its constructors do.
+    fn own_proxy(e: &mut Engine, at: u32) -> u32 {
+        let proxy = e.mem.alloc(8);
+        e.mem.set_u32(proxy, at);
+        e.mem.set_u32(at, proxy);
+        proxy
     }
 
     #[test]
@@ -1615,6 +1667,31 @@ mod tests {
         assert!(clones.borrow().is_empty());
     }
 
+    #[test]
+    fn the_merge_moves_on_one_pair_at_a_time() {
+        // 00b40d29..00b40d2c: the merge loop steps with the pair vector's increment (00b41d40,
+        // 8 bytes), not the 4-byte one of the leaf vectors (00b2abc0), so each pair draws once
+        // and a merge copies the pair's leaf, never its match.
+        let mut e = engine();
+        let merge = merge_setup(&mut e, vec![0.9, 0.9]);
+        restore(&mut e, &CHECKED_ITERATORS);
+        e.register_double(INVALID_PARAMETER, |_, _| -> Ret {
+            panic!("invalid parameter")
+        });
+        own_proxy(&mut e, merge.this.addr());
+        e.call_log = Some(vec![]);
+        let returned = e.mem.alloc(0x18);
+        e.call(0x00b4_0c80, &args![merge.this, returned]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, GET_UNIFORM).len(), 2);
+        assert_eq!(
+            calls(&log, LEAF_CLONE),
+            vec![vec![merge.leaves[0]], vec![merge.leaves[2]]]
+        );
+        assert_eq!(calls(&log, PAIR_ITERATOR_INCREMENT).len(), 2);
+        assert!(calls(&log, ITERATOR_INCREMENT).is_empty());
+    }
+
     /// The leaves of the pairing test (positions along `x`), the vector of pointers to them and
     /// the leaf engine with its tolerance.
     struct Pairing {
@@ -1768,6 +1845,67 @@ mod tests {
         run_pairing(&mut e, &setup);
         assert!(setup.pushed.borrow().is_empty());
         assert_eq!(*setup.bit_words.borrow(), vec![0]);
+    }
+
+    #[test]
+    fn compute_pairs_the_leaves_in_the_area_it_built_their_copy_in() {
+        // 00b40b78..00b40b95: 00b40b30 builds the copy of the leaves in 00b41110's argument
+        // area, so the copy's proxy names the vector the pairing's checked iterators walk. With
+        // freed blocks held back and filled (the battery's NV_BLOCK_CHECK=store,freed,log), a
+        // copy built in an area freed before the pairing ran left 00b2e330 no container behind
+        // the proxy: the invalid-parameter path (Goodsprings, thread 14).
+        let mut e = engine();
+        e.mem.enable_freed_check(false);
+        let setup = pairing_setup(&mut e, &[0.0, 1.0, 5.0], 2.0);
+        restore(&mut e, &CHECKED_ITERATORS);
+        e.register_double(INVALID_PARAMETER, |_, _| -> Ret {
+            panic!("invalid parameter")
+        });
+        let deleted = spy(&mut e, OPERATOR_DELETE);
+        // 00b355d0: the copy gets a proxy of its own that names it.
+        let built: Rc<RefCell<Vec<(u32, u32)>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = built.clone();
+        e.register_double(LEAF_VECTOR_COPY_CONSTRUCT, move |e, a| {
+            let proxy = own_proxy(e, a[0]);
+            for offset in [0x0Cu32, 0x10, 0x14] {
+                let word = e.mem.u32(a[1] + offset);
+                e.mem.set_u32(a[0] + offset, word);
+            }
+            sink.borrow_mut().push((a[0], proxy));
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        own_proxy(&mut e, setup.this.addr());
+        // The leaves as the caller (00b2c890) hands them: a vector whose proxy names it.
+        let caller = e.mem.alloc(0x18);
+        let block = e.mem.alloc(4 * 3);
+        for (i, leaf) in setup.leaves.iter().enumerate() {
+            e.mem.set_u32(block + 4 * i as u32, *leaf);
+        }
+        header(&mut e, caller, block, block + 12, block + 12);
+        own_proxy(&mut e, caller);
+        let w = words(&e, caller, 6);
+        let returned = e.mem.alloc(0x18);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x00b4_0b30,
+            &args![setup.this, returned, w[0], w[1], w[2], w[3], w[4], w[5]],
+        );
+        let log = e.call_log.take().unwrap();
+        // Leaf 0 pairs with leaf 1 (distance 1); leaf 1 and leaf 2 are 4 apart.
+        assert_eq!(
+            *setup.pushed.borrow(),
+            vec![(setup.leaves[0], setup.leaves[1])]
+        );
+        // The pairing's first iterator is made on the area the copy was built in, which the
+        // pairing tidies at the end and whose proxy it deletes.
+        let (area, area_proxy) = built.borrow()[0];
+        let made = calls(&log, ITERATOR_CONSTRUCT);
+        assert_eq!(made[0][1..], [block, area]);
+        assert!(calls(&log, VECTOR_TIDY).contains(&vec![area]));
+        assert!(deleted.borrow().contains(&vec![area_proxy]));
     }
 
     #[test]

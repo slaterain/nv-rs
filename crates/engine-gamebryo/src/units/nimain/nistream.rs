@@ -1593,13 +1593,16 @@ pub fn ni_stream_resolve_link_id(e: &mut Engine, this: Ptr<NiStream>) -> u32 {
 
 // Translated from 00a64670 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `NiStream::ReadMultipleLinkIDs` (Xbox PDB): reads a count, records it
-/// in the set of block sizes, and reads that many link ids.
-pub fn ni_stream_read_multiple_link_ids(e: &mut Engine, this: Ptr<NiStream>) {
+/// in the set of block sizes, and reads that many link ids. Answers the
+/// count (`NiFlipController::LoadBinary`, `00a4f6b3`, keeps it).
+// 00a646f5 RET: EAX is the count local on both paths (00a646d4, 00a646e7).
+pub fn ni_stream_read_multiple_link_ids(e: &mut Engine, this: Ptr<NiStream>) -> u32 {
     let count = read_u32(e, this);
     set_add(e, this.at(NiStream::m_kLinkIDBlocks), count);
     for _ in 0..count {
         ni_stream_read_link_id(e, this);
     }
+    count // 00a646d4/00a646e7: MOV EAX,[ESP+8] (the count), left in EAX at 00a646f5.
 }
 
 // Translated from 00a64700 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3128,7 +3131,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a64550, ni_stream_change_object(Ptr<NiStream>, u32)),
         entry!(0x00a645b0, ni_stream_read_link_id(Ptr<NiStream>)),
         entry!(0x00a64620, ni_stream_resolve_link_id(Ptr<NiStream>) -> u32),
-        entry!(0x00a64670, ni_stream_read_multiple_link_ids(Ptr<NiStream>)),
+        // 00a646f5 RET: EAX holds the count read (00a646d4/00a646e7).
+        entry!(
+            0x00a64670,
+            ni_stream_read_multiple_link_ids(Ptr<NiStream>) -> u32
+        ),
         entry!(
             0x00a64700,
             ni_stream_set_number_of_link_ids(Ptr<NiStream>, u32)
@@ -4699,6 +4706,18 @@ mod tests {
         assert_eq!((fx.get(0x26c), fx.word(blocks, 0)), (1, 2));
         assert_eq!(fx.get(0x25c), 2);
         assert_eq!((fx.word(ids, 0), fx.word(ids, 1)), (10, 20));
+    }
+
+    /// `00a646f5`: the count read is left in `EAX` (`00a646d4`/`00a646e7`), which
+    /// `NiFlipController::LoadBinary` keeps (`00a4f6b3`); an empty block answers 0.
+    #[test]
+    fn read_multiple_link_ids_answers_the_count() {
+        let mut fx = Fx::new();
+        install_set_realloc(&mut fx);
+        fx.feed(&[2, 10, 20, 0]);
+        assert_eq!(fx.e.call(0x00a6_4670, &args![fx.ns]).u32(), 2);
+        assert_eq!(fx.e.call(0x00a6_4670, &args![fx.ns]).u32(), 0);
+        assert_eq!(fx.get(0x25c), 2);
     }
 
     #[test]

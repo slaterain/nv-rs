@@ -46,6 +46,10 @@ fn squared_length_00ceb8d0(v: [f32; 3]) -> f32 {
 ///   `f32(|u|^2 * |g|^2) - f32(dot(g, u)^2)` equals 0.0, where the product
 ///   and the square are each rounded to `float` and the subtraction is
 ///   rounded once more (all three are `FSTP float` in the code).
+///
+/// Answers `result` (`EAX` at both `RET`s, 00ceba4f and 00ceba5b: `MOV EAX,[EBP+8]` at 00ceba44
+/// and 00ceba52); its callers read the answer through it (`CMP byte ptr [EAX],0` at 00d55bb9,
+/// 00d561d2, 00dde8d4).
 pub fn hkp_triangle_util_is_degenerate(
     e: &mut Engine,
     result: Ptr,
@@ -53,7 +57,7 @@ pub fn hkp_triangle_util_is_degenerate(
     b: Ptr,
     c: Ptr,
     tolerance: f32,
-) {
+) -> Ptr {
     let a = read_vector_00ceb8d0(e, a.addr());
     let b = read_vector_00ceb8d0(e, b.addr());
     let c = read_vector_00ceb8d0(e, c.addr());
@@ -83,6 +87,7 @@ pub fn hkp_triangle_util_is_degenerate(
         }
     };
     e.mem.set_u8(result.addr(), degenerate as u8);
+    result // 00ceba44 / 00ceba52: MOV EAX,[EBP+8], the byte written through it, then RET
 }
 
 /// The dot product as the `ADDSS` chain adds it: `p2 + (p1 + p0)`.
@@ -95,7 +100,7 @@ fn dot_00ceb8d0(g: [f32; 3], u: [f32; 3]) -> f32 {
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![entry!(
         0x00ceb8d0,
-        hkp_triangle_util_is_degenerate(Ptr, Ptr, Ptr, Ptr, f32)
+        hkp_triangle_util_is_degenerate(Ptr, Ptr, Ptr, Ptr, f32) -> Ptr
     )]
 }
 
@@ -143,6 +148,39 @@ mod tests {
         // A tolerance above the squared area (1 here) also rejects it.
         let triangle = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
         assert_eq!(is_degenerate_00ceb8d0(triangle, 2.0), 1);
+    }
+
+    #[test]
+    fn hkp_triangle_util_is_degenerate_answers_its_result_pointer() {
+        // EAX is `result` at both RETs (00ceba44 and 00ceba52 load it); the callers read the
+        // answer through it (00d55bb9 CMP byte ptr [EAX],0). One exit through each load.
+        let cases = [
+            ([[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]], 1u8),
+            ([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], 0),
+        ];
+        for (points, expected) in cases {
+            let mut e = Engine::new();
+            e.map(0x0101_1000, 0x1000);
+            e.set_global(ZERO_01011D78, 0.0f32);
+            let mut words = [0u32; 3];
+            for (word, point) in words.iter_mut().zip(points) {
+                let block = e.mem.alloc(16);
+                for (i, value) in point.iter().enumerate() {
+                    e.mem.set_f32(block + 4 * i as u32, *value);
+                }
+                *word = block;
+            }
+            let result = e.mem.alloc(4);
+            e.mem.set_u8(result, 0xee);
+            let answered = e
+                .call(
+                    0x00ce_b8d0,
+                    &args![result, words[0], words[1], words[2], 1.0e-6f32],
+                )
+                .u32();
+            assert_eq!(answered, result);
+            assert_eq!(e.mem.u8(answered), expected);
+        }
     }
 
     #[test]

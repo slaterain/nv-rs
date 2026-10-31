@@ -1072,8 +1072,13 @@ fn info_frame(frames: u32, delay: u32, padding: u32) -> Vec<u8> {
         bitrate_index: 9,
         ..header(Version::Mpeg1, 0, ChannelMode::Mono, 0)
     };
+    info_frame_for(h, frames, delay, padding)
+}
+
+/// [`info_frame`] for a stream of frames like `h`.
+fn info_frame_for(h: FrameHeader, frames: u32, delay: u32, padding: u32) -> Vec<u8> {
     let mut f = h.to_bytes().to_vec();
-    f.resize(4 + 17, 0);
+    f.resize(4 + h.side_info_length(), 0);
     f.extend(b"Info");
     f.extend(0x0Fu32.to_be_bytes());
     f.extend(frames.to_be_bytes());
@@ -1304,4 +1309,215 @@ fn refuses_what_it_cannot_decode() {
         Decoder::new(&b"not an mp3 at all"[..]),
         Err(Error::NoFrames)
     ));
+}
+
+// ---- Seeking ----
+
+/// The block type after `last` as an encoder switches them: long, start, short, stop, long.
+fn next_block(rng: &mut Rng, last: u8) -> u8 {
+    match last {
+        0 | 3 => {
+            if rng.below(3) == 0 {
+                1
+            } else {
+                0
+            }
+        }
+        1 => 2,
+        _ => {
+            if rng.below(2) == 0 {
+                2
+            } else {
+                3
+            }
+        }
+    }
+}
+
+/// One granule's channel of block type `block_type` (`mixed`: a short block whose lowest
+/// subbands are long), with random scale factors and values, more or fewer of them.
+fn switching_channel(rng: &mut Rng, h: &FrameHeader, block_type: u8, mixed: bool) -> Channel {
+    let lsf = h.is_lsf();
+    let bands = tables::bands_for(h);
+    let mut c = Channel::silent();
+    c.block_type = block_type;
+    c.mixed = mixed;
+    c.global_gain = 160 + rng.below(20) as i32;
+    c.scalefac_compress = rng.below(if lsf { 512 } else { 16 }) as usize;
+    c.subblock_gain = [0, 1, 2].map(|_| rng.below(4) as i32);
+    c.tables = if block_type == 0 {
+        [15, 24, 13]
+    } else {
+        [15, 24, 0]
+    };
+    c.region0_count = 7;
+    c.region1_count = 3;
+    c.count1_b = rng.below(2) == 1;
+    random_long_sf(rng, &mut c, lsf, false);
+    let big = 2 * rng.below(60) as usize;
+    let top = big + 4 * rng.below(60) as usize;
+    fill(rng, bands, &mut c, big, top, 15);
+    c
+}
+
+/// `frames` frames like `h` whose granules switch blocks, each channel on its own (both the
+/// same in joint stereo, as mid/side wants), the frames `mono` mono.
+fn switching_specs(
+    rng: &mut Rng,
+    h: FrameHeader,
+    frames: usize,
+    mono: std::ops::Range<usize>,
+) -> Vec<Spec> {
+    let mut last = [(0u8, false); 2];
+    let mut specs = Vec::new();
+    for i in 0..frames {
+        let h = if mono.contains(&i) {
+            FrameHeader {
+                mode: ChannelMode::Mono,
+                mode_extension: 0,
+                ..h
+            }
+        } else {
+            h
+        };
+        let mut granules = Vec::new();
+        for _ in 0..if h.is_lsf() { 1 } else { 2 } {
+            let mut channels = Vec::new();
+            for ch in 0..h.channels() {
+                if ch == 0 || h.mode != ChannelMode::JointStereo {
+                    let block_type = next_block(rng, last[ch].0);
+                    last[ch] = (block_type, block_type == 2 && rng.below(3) == 0);
+                } else {
+                    last[1] = last[0];
+                }
+                let (block_type, mixed) = last[ch];
+                channels.push(switching_channel(rng, &h, block_type, mixed));
+            }
+            granules.push(channels);
+        }
+        specs.push(Spec {
+            header: h,
+            scfsi: [[false; 4]; 2],
+            granules,
+        });
+    }
+    specs
+}
+
+/// Frames whose data run on from one to the next (the bit reservoir): each frame's data starts
+/// as far back in the room earlier frames left as `main_data_begin` reaches (511 bytes, 255 in
+/// MPEG-2), in a frame of the smallest bitrate that holds the rest; every fifth frame takes the
+/// largest, which leaves room for those after it. Answers the stream and each frame's
+/// `main_data_begin`.
+fn reservoir_stream(specs: &[Spec]) -> (Vec<u8>, Vec<usize>) {
+    // The frames' own data areas one after another, and where the data so far ends in them.
+    let mut run: Vec<u8> = Vec::new();
+    let mut end = 0;
+    let mut frames = Vec::new();
+    for (i, s) in specs.iter().enumerate() {
+        let (main, fields) = encode_main(s);
+        let area = run.len();
+        let most = if s.header.is_lsf() { 255 } else { 511 };
+        let start = end.max(area.saturating_sub(most));
+        let with = |index: u8| FrameHeader {
+            bitrate_index: index,
+            ..s.header
+        };
+        let room = |index: u8| {
+            let h = with(index);
+            h.frame_length().unwrap() - h.side_info_start() - h.side_info_length()
+        };
+        let fits = |index: u8| start + main.bytes.len() <= area + room(index);
+        let index = if i % 5 == 2 && fits(14) {
+            14
+        } else {
+            (1..15)
+                .find(|&x| fits(x))
+                .expect("a bitrate that holds the frame's data")
+        };
+        run.resize(area + room(index), 0);
+        run[start..start + main.bytes.len()].copy_from_slice(&main.bytes);
+        end = start + main.bytes.len();
+        let begin = area - start;
+        frames.push((with(index), side_info(s, &fields, begin), area, begin));
+    }
+    let mut bytes = Vec::new();
+    for (h, side, area, _) in &frames {
+        let room = h.frame_length().unwrap() - h.side_info_start() - h.side_info_length();
+        let f = assemble(*h, side, &run[*area..*area + room], None);
+        assert_eq!(f.len(), h.frame_length().unwrap());
+        bytes.extend(f);
+    }
+    (bytes, frames.iter().map(|f| f.3).collect())
+}
+
+/// Every frame decodes the same after [`Decoder::seek`] to it as from the start, bit for bit,
+/// gapless trimming and all: through block switching (long, start, short, mixed and stop
+/// blocks), data reaching back into earlier frames (511 bytes; 255 in MPEG-2, one granule a
+/// frame), mono frames among stereo ones, and an Info frame with LAME's delay and padding. A
+/// decoder started at the frame itself, with nothing before it, gives other samples.
+#[test]
+fn seeking_decodes_every_frame_as_from_the_start() {
+    let mut rng = Rng(1031);
+    let stereo = header(Version::Mpeg1, 1, ChannelMode::Stereo, 0);
+    let specs = switching_specs(&mut rng, stereo, 30, 13..16);
+    let (audio, begins) = reservoir_stream(&specs);
+    let info = info_frame_for(
+        FrameHeader {
+            bitrate_index: 9,
+            ..stereo
+        },
+        30,
+        576,
+        1000,
+    );
+    let joint = header(Version::Mpeg1, 0, ChannelMode::JointStereo, 2);
+    let joint_specs = switching_specs(&mut rng, joint, 24, 0..0);
+    let (joint_audio, joint_begins) = reservoir_stream(&joint_specs);
+    let lsf = header(Version::Mpeg2, 0, ChannelMode::Stereo, 0);
+    let lsf_specs = switching_specs(&mut rng, lsf, 30, 0..0);
+    let (lsf_audio, lsf_begins) = reservoir_stream(&lsf_specs);
+    // What the streams hold: every block type and mixed blocks, and data far back.
+    let kinds: std::collections::BTreeSet<(u8, bool)> = [&specs, &joint_specs, &lsf_specs]
+        .into_iter()
+        .flat_map(|s| s.iter())
+        .flat_map(|s| s.granules.iter().flatten())
+        .map(|c| (c.block_type, c.mixed))
+        .collect();
+    assert_eq!(
+        kinds.into_iter().collect::<Vec<_>>(),
+        [(0, false), (1, false), (2, false), (2, true), (3, false)]
+    );
+    assert!(begins.iter().chain(&joint_begins).any(|&b| b > 400));
+    assert!(lsf_begins.iter().any(|&b| b > 200));
+    let bits = |f: &crate::Frame| f.samples.iter().map(|s| s.to_bits()).collect::<Vec<_>>();
+    let mut fresh_differs = 0;
+    for bytes in [[info, audio].concat(), joint_audio, lsf_audio] {
+        for gapless in [true, false] {
+            let mut decoder = Decoder::new(&bytes[..]).unwrap();
+            decoder.set_gapless(gapless);
+            let all: Vec<_> = decoder.by_ref().collect();
+            assert!(all.iter().all(|f| f.problem.is_none()));
+            assert_eq!(decoder.frame_count(), all.len());
+            for k in 0..=all.len() + 1 {
+                decoder.seek(k);
+                let rest: Vec<_> = decoder.by_ref().collect();
+                assert_eq!(rest.len(), all.len().saturating_sub(k), "from frame {k}");
+                for (i, (got, want)) in rest.iter().zip(&all[k.min(all.len())..]).enumerate() {
+                    let at = k + i;
+                    assert_eq!((got.offset, got.problem), (want.offset, want.problem));
+                    assert_eq!(bits(got), bits(want), "frame {at} after seeking to {k}");
+                }
+                if !gapless && k > 0 && k < all.len() {
+                    let mut fresh = Decoder::new(&bytes[all[k].offset..]).unwrap();
+                    let first = fresh.next_frame().unwrap();
+                    if bits(&first) != bits(&all[k]) {
+                        fresh_differs += 1;
+                    }
+                }
+            }
+        }
+    }
+    // Nearly every frame of the 84 depends on the frames before it.
+    assert!(fresh_differs > 70, "{fresh_differs}");
 }

@@ -8580,7 +8580,7 @@ const EXTERIOR_DIRECTORY_FORMAT: u32 = 0x0107_5490;
 const EXTERIOR_FILE_FORMAT: u32 = 0x0107_5468;
 /// `D3DTexture_LockRect` (engine map; the word at +0x24), cdecl
 /// `00653270(object, word)`, its object (`011f4418`), and the thunk of the
-/// texture saving import (`00ee6dc2`, stdcall (file, format, texture)).
+/// texture saving import (`00ee6dc2`, stdcall (file, format, texture, palette)).
 const D3D_TEXTURE_LOCK_RECT: u32 = 0x0059_bb30;
 const TEXTURE_LOOKUP_00653270: u32 = 0x0065_3270;
 const TEXTURE_TABLE_011F4418: u32 = 0x011f_4418;
@@ -9106,9 +9106,9 @@ fn local_map_step(e: &mut Engine, save: u8, locals: [u32; 6]) {
 /// `Exteriors` directories and the directory of the current cell (an
 /// interior's, `005f36f0` on `011dea10`, else the world space's,
 /// `TES::GetWorldSpace`; names through vtable +0x130), then saves the
-/// texture (`00653270` of its `D3DTexture_LockRect`, vtable +0x9C with 0)
-/// as `...\%s\%s.%i.%i.png` with the grid offsets (an interior) or the
-/// player's cell plus the offsets (an exterior), format 3.
+/// texture (`00653270` of its `D3DTexture_LockRect`, vtable +0x9C, no stack
+/// word) as `...\%s\%s.%i.%i.png` with the grid offsets (an interior) or the
+/// player's cell plus the offsets (an exterior), format 3, palette 0.
 fn save_local_map_texture(
     e: &mut Engine,
     position: u32,
@@ -9204,8 +9204,11 @@ fn save_local_map_texture(
                 &args![TEXTURE_TABLE_011F4418, surface],
             )
             .u32();
-        let target = e.vcall(object, 0x9c, &args![0u32]).u32();
-        e.call(SAVE_TEXTURE_JUMP_00EE6DC2, &args![file, 3u32, target]);
+        // 007a0775: PUSH 0 is the import's fourth word (the palette); the slot (+0x9c,
+        // 00e68800: MOV EAX,[ECX+0x64]; RET) reads no stack word (007a077d..007a078b).
+        let target = e.vcall(object, 0x9c, &args![]).u32();
+        // 007a078d..007a0797: PUSH EAX; PUSH 3; PUSH the file; CALL 00ee6dc2 (four words).
+        e.call(SAVE_TEXTURE_JUMP_00EE6DC2, &args![file, 3u32, target, 0u32]);
     });
 }
 
@@ -9674,6 +9677,33 @@ mod map_menu_tests {
         let object = e.mem.alloc(0x40);
         e.mem.set_u32(object, addr);
         object
+    }
+
+    #[test]
+    fn save_local_map_texture_hands_the_save_import_four_words() {
+        // 007a0775: PUSH 0 is the import's fourth word (the palette); the texture data's
+        // vtable +0x9c (00e68800: MOV EAX,[ECX+0x64]; RET) takes no stack word; 007a078d..
+        // 007a0796 push the texture, 3 and the file; 00ee6dc2 jumps to the import with all four.
+        let mut e = engine();
+        let cell = object_with_vtable(&mut e, 0x0107_9000, &[0x0050_0000; 0x4d]);
+        e.mem.set_u32(0x0107_9130, 0x0050_0130);
+        returns(&mut e, 0x0050_0130, 0x6000);
+        let data = object_with_vtable(&mut e, 0x0107_a000, &[0x0050_0000; 0x28]);
+        e.mem.set_u32(0x0107_a09c, 0x0050_009c);
+        returns(&mut e, 0x0050_009c, 0x6300);
+        returns(&mut e, OBJECT_CELL_005F36F0, cell);
+        returns(&mut e, STRING_TEXT, 0x6100);
+        returns(&mut e, D3D_TEXTURE_LOCK_RECT, 0x6200);
+        returns(&mut e, TEXTURE_LOOKUP_00653270, data);
+        quiet(
+            &mut e,
+            &[CREATE_DIRECTORY_IMPORT, BUFFER_FORMAT, 0x00fd_f3d4],
+        );
+        e.call_log = Some(vec![]);
+        save_local_map_texture(&mut e, 0, 0x6400, 1, 2);
+        let file = calls_to(&e, BUFFER_FORMAT)[1][0];
+        assert_eq!(calls_to(&e, 0x0050_009c), vec![vec![data]]);
+        assert_eq!(calls_to(&e, 0x00fd_f3d4), vec![vec![file, 3, 0x6300, 0]]);
     }
 
     #[test]
