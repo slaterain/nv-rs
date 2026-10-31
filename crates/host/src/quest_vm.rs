@@ -246,9 +246,16 @@ impl QuestVm {
     ) -> bool {
         if !self.quests.contains_key(&quest) {
             let made = if (self.accept)(parsed) {
+                let mark = e.guest_stack_mark();
                 match guarded(|| make_quest(e, &mut self.files, order, quest, script)) {
                     Ok(Ok((script, quest))) => Some(Made { script, quest }),
-                    Ok(Err(why)) | Err(why) => {
+                    Ok(Err(why)) => {
+                        self.stopped.push((quest, why));
+                        None
+                    }
+                    Err(why) => {
+                        // The engine goes on with other quests: the stop's locals go back.
+                        e.guest_stack_restore(mark);
                         self.stopped.push((quest, why));
                         None
                     }
@@ -262,6 +269,7 @@ impl QuestVm {
             return false;
         };
         let (script_form, quest_form) = (made.script.clone(), made.quest);
+        let mark = e.guest_stack_mark();
         let run = guarded(|| {
             let game_locals = quest_form.locals(e);
             write_locals(e, &script_form, game_locals, locals);
@@ -280,6 +288,7 @@ impl QuestVm {
                 true
             }
             Err(why) => {
+                e.guest_stack_restore(mark);
                 self.stopped.push((quest, why));
                 self.quests.insert(quest, None);
                 false

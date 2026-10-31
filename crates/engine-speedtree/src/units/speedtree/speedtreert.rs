@@ -725,9 +725,9 @@ fn last_error_text(e: &mut Engine) -> u32 {
 // buffer when an error is thrown) is not translated.
 /// `CSpeedTreeRT::LoadTree` (Xbox PDB), the file form: opens `filename` through the file finder
 /// (`00afdf20`), asks the file object for its size (virtual `+0x28`), reads the whole file into
-/// a buffer through the file's virtual `+8` (`cdecl`: the file, the buffer, the size, the
-/// address of a word holding 1, and 1; the file's position at `+4` then moves on by the bytes
-/// read), loads the tree from the buffer (`00b059e0`), frees the buffer and deletes the file
+/// a buffer through the stream's own read word at `+8` of the object, not a virtual slot
+/// (`cdecl`, `00b0551f`..`00b05527`: the file, the buffer, the size, the address of a word
+/// holding 1, and 1; the file's position at `+4` then moves on by the bytes read), loads the tree from the buffer (`00b059e0`), frees the buffer and deletes the file
 /// (virtual `+0`, flag 1). A file that does not open, is empty or reads short throws a
 /// `std::exception` with a formatted message. A null name loads nothing. Returns whether the
 /// tree loaded.
