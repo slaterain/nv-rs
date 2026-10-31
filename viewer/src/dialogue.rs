@@ -61,7 +61,8 @@ pub struct DialogueState(pub GameState);
 pub struct AutoTalk(pub bool, pub std::collections::VecDeque<usize>);
 
 /// `--say`: for testing, topics to choose when the menu offers some, in
-/// order: each the first offered whose text contains it (ignoring case).
+/// order: each the first offered whose text contains one of its `|`-separated
+/// alternatives (ignoring case).
 #[derive(Resource, Default)]
 pub struct AutoSay(pub std::collections::VecDeque<String>);
 
@@ -70,9 +71,17 @@ impl AutoSay {
     /// then used up; none if it names none of them.
     pub fn pick(&mut self, offered: &[&str]) -> Option<usize> {
         let wanted = self.0.front()?.to_lowercase();
-        let i = offered
-            .iter()
-            .position(|t| t.to_lowercase().contains(&wanted))?;
+        let alternatives: Vec<_> = wanted
+            .split('|')
+            .map(str::trim)
+            .filter(|alternative| !alternative.is_empty())
+            .collect();
+        let i = offered.iter().position(|t| {
+            let text = t.to_lowercase();
+            alternatives
+                .iter()
+                .any(|alternative| text.contains(*alternative))
+        })?;
         self.0.pop_front();
         Some(i)
     }
@@ -1187,6 +1196,15 @@ mod tests {
         assert_eq!(say.pick(&offered), None);
         assert_eq!(say.pick(&["No.", "Sure, I'll come with you."]), Some(1));
         assert!(say.0.is_empty());
+    }
+
+    #[test]
+    fn say_picks_a_topic_matching_any_alternative() {
+        for offered in [["Goodbye."], ["See you later."]] {
+            let mut say = AutoSay(["see you later | goodbye".to_string()].into());
+            assert_eq!(say.pick(&offered), Some(0));
+            assert!(say.0.is_empty());
+        }
     }
 
     /// `00762950`: a clicked-away voice plays on for 500 ms; `008a20d0`: a

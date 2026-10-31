@@ -6,7 +6,7 @@ them (CONTRIBUTING.md).
 
 .DESCRIPTION
 Routes (commands and success lines documented in docs/GOODSPRINGS_ROUTE.md,
-docs/PATHING.md and docs/VANCE_GUN_ROUTE.md):
+docs/PATHING.md, docs/VANCE_GUN_ROUTE.md and docs/PRIMM_ROUTE.md):
   doc    Doc Mitchell walks the west rooms to his chair spot and talks
          (GSDocMitchellHouse, VCG01 stage 110).
   vcg02  Back in the Saddle: Sunny's walks, wells, reward (the quest's own
@@ -16,6 +16,7 @@ docs/PATHING.md and docs/VANCE_GUN_ROUTE.md):
          die, stage 100.
   vance  Vance's Gun: investigate the missing museum gun and get the Wins'
          safe unlocked through the quest's own activation/dialogue scripts.
+  primm  My Kind of Town: rescue Beagle and make Primm Slim sheriff.
 A route passes when every one of its success lines appears in the
 viewer's output and no panic does.
 Every route runs with the viewer's --answer-boxes test aid, which answers
@@ -33,7 +34,6 @@ open, a prompt holds the AI and the input and the route never finishes.
 Each answer is logged as "--answer-boxes: ..."; a box with several
 buttons and no choice left is left open and logged as waiting. Outputs (logs, screenshots) go to
 -Out; they are private, never commit them.
-
 .EXAMPLE
 powershell -File scripts\acceptance.ps1 -Data "D:\Steam\steamapps\common\Fallout New Vegas\Data"
 powershell -File scripts\acceptance.ps1 -Routes vms16 -Build
@@ -42,7 +42,7 @@ powershell -File scripts\acceptance.ps1 -Background
 param(
     # The game's Data folder (or set NV_DATA).
     [string]$Data = $env:NV_DATA,
-    # Which routes to run, comma-separated (doc, vcg02, vms16, vance).
+    # Which routes to run, comma-separated (doc, vcg02, vms16, vance, primm).
     [string]$Routes = 'doc,vcg02,vms16',
     # Where logs and screenshots go (default: %USERPROFILE%\nv-re\acceptance\<time>).
     [string]$Out,
@@ -71,7 +71,12 @@ if ($Build) {
         if ($LASTEXITCODE -ne 0) { throw 'viewer release build failed' }
     } finally { Pop-Location }
 }
-$viewer = Join-Path $root 'viewer\target\release\nv-viewer.exe'
+$viewerFile = if ([System.IO.Path]::DirectorySeparatorChar -eq '\') {
+    'nv-viewer.exe'
+} else {
+    'nv-viewer'
+}
+$viewer = Join-Path $root (Join-Path 'viewer/target/release' $viewerFile)
 if (-not (Test-Path $viewer)) { throw "No release viewer at $viewer (run with -Build)." }
 
 function Run-Line([string[]]$lines) {
@@ -80,6 +85,7 @@ function Run-Line([string[]]$lines) {
     $a
 }
 function Run-At([int]$at, [string]$line) { @('--run-at', "$at", $line) }
+function Key-At([int]$at, [string]$key) { @('--key-at', "$at", $key) }
 
 $routeArgs = @{
     doc   = @{
@@ -147,11 +153,50 @@ $routeArgs = @{
             "The gun's in the safe. The combination's 05-23-34.",
             'result script: SammySafeREF.setownership / SammySafeREF.unlock / set nVPrimmVanceGun.VanceGunCase to 3 / set nVPrimmVanceGun.SammyPauline to 2')
     }
+    primm = @{
+        Args    = @('VikkiAndVance', '--talk') + (Key-At 0 'space') +
+            (Run-Line @('player.ModAV Health 5000', 'player.SetAV Science 30')) +
+            @('--say', 'I have some questions about Primm.',
+              '--say', 'What happened to Primm?',
+              '--say', 'Goodbye.') +
+            (Run-At 5 'player.MoveTo PrimmDeputyRef') +
+            (Run-At 12 'PrimmDeputyRef.StartConversation player') +
+            @('--say', 'You must be Deputy Beagle.',
+              '--say', "I'll set you free now.",
+              '--say', "I didn't cut you loose so you could run away. Stick with me!") +
+            (Run-At 140 'player.MoveTo PrimmDeputyExitMarker') +
+            (Run-At 190 'player.MoveTo PrimmDeputyRef') +
+            # The current viewer's WIP NPC navigation can leave Beagle stuck
+            # beside the player after his own leave package. Keep the route
+            # deterministic while still running his actual quest dialogue.
+            (Run-At 240 'PrimmDeputyRef.MoveTo player') +
+            (Run-At 240 'PrimmDeputyRef.StartConversation player') +
+            # Keep the match independent of punctuation/curly apostrophe
+            # differences in the installed dialogue text.
+            @('--say', 'sheriff now',
+              '--say', 'law and order back') +
+            # Let the destination cell load for one second before starting
+            # Nash's conversation, before he leaves for his idle marker.
+            (Run-At 370 'player.MoveTo PrimmJohnsonNashRef') +
+            (Run-At 371 'PrimmJohnsonNashRef.StartConversation player') +
+            @('--say', 'What about Primm Slim? Could he be sheriff?',
+              # Exit wording varies with Nash's greeting; select whichever
+              # equivalent exit topic the current dialogue offers.
+              '--say', 'See you later|Goodbye|Time for me to go|I need to get going') +
+            (Run-At 430 'player.MoveTo PrimmSlimREF') +
+            (Run-At 435 'PrimmSlimREF.StartConversation player') +
+            # Allow Slim's spoken reprogramming response to finish before
+            # ending the route; the result script runs after the response.
+            @('--say', 'Reprogram Primm Slim',
+              '--say', 'Goodbye', '--wait', '650')
+        Success = @('My Kind of Town: You reprogrammed Primm Slim to act as Sheriff of Primm.',
+            'XP +300', 'XP +30')
+    }
 }
 
 $chosen = @($Routes.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 foreach ($r in $chosen) {
-    if (-not $routeArgs.ContainsKey($r)) { throw "Unknown route '$r' (doc, vcg02, vms16, vance)." }
+    if (-not $routeArgs.ContainsKey($r)) { throw "Unknown route '$r' (doc, vcg02, vms16, vance, primm)." }
 }
 
 $results = @()
