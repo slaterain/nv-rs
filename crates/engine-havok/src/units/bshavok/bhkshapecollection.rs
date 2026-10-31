@@ -94,7 +94,7 @@ pub fn bhk_shape_collection_build_display_geometry(
 ) {
     let container = container_of(e, this.addr());
     let mut key = e.vcall(container, VSLOT_FIRST_KEY, &args![]).u32();
-    // The 0x200-byte buffer is a local of the whole frame (`auStack_220`, used for every key):
+    // The 0x200-byte buffer is a local of the whole frame (stack offset -0x220, used for every key):
     // the child slot 0x14 answers can be built in it and its `+8` is read after the call, so
     // the buffer lives for the whole walk. (Scoped to the slot call alone, the `+8` was read
     // from a freed block.)
@@ -400,7 +400,7 @@ mod tests {
 
     /// A child the interface builds in the 0x200-byte buffer (virtual `+0x14` answers the
     /// buffer itself, its `+8` the child shape) is read while the buffer is still there: the
-    /// buffer is the frame's (`auStack_220`), not the slot call's. With the freed-block check a
+    /// buffer is the frame's (stack offset -0x220), not the slot call's. With the freed-block check a
     /// buffer freed early reads back as the fill word, and the virtual call through it faults.
     #[test]
     fn bhk_shape_collection_reads_a_child_built_in_its_buffer() {

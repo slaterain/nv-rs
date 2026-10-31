@@ -1083,7 +1083,7 @@ fn search_centre(
         .call(MOBILE_OBJECT_GET_CURRENT_PACKAGE, &args![actor])
         .u32();
     if package != 0 {
-        // The point is the frame's `local_38`: `00675de0` fills it and answers its address, and
+        // The point is the frame's local at stack offset -0x38: `00675de0` fills it and answers its address, and
         // the centre is copied from it, so the copy is made while it is there. (Scoped to
         // `00675de0` alone, the copy read a freed block.)
         e.with_stack(12, |e, result| {
@@ -2918,7 +2918,7 @@ mod sandbox_tests {
         assert_eq!(e.mem.u32(buffer + 0x14), 2);
     }
 
-    /// The scan's centre is copied from the package's point in the frame's `local_38` while it
+    /// The scan's centre is copied from the package's point in the frame's local at stack offset -0x38 while it
     /// is still there (`00675de0` answers its address). With the freed-block check a point freed
     /// before the copy would give the fill word as the centre.
     #[test]

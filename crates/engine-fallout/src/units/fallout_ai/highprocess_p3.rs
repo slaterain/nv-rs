@@ -9249,7 +9249,7 @@ pub fn high_process_process_travel(
                         let cell = e
                             .call(PACKAGE_SECOND_LOCATION_CELL, &args![package, actor])
                             .u32();
-                        // The point is the frame's `local_514`: `00675360` fills it and answers
+                        // The point is the frame's local at stack offset -0x514: `00675360` fills it and answers
                         // its address, and `BuildRequest` reads it, so it lives through that
                         // call. (Scoped to `00675360` alone, a freed block was read.)
                         e.with_stack(12, |e, coord| {
@@ -9261,7 +9261,7 @@ pub fn high_process_process_travel(
                     } else {
                         let world = e.call(PACKAGE_LOCATION_WORLD, &args![package, actor]).u32();
                         let cell = e.call(PACKAGE_LOCATION_CELL, &args![package, actor]).u32();
-                        // The same for `local_520`, which `00675de0` fills.
+                        // The same for the point at stack offset -0x520, which `00675de0` fills.
                         e.with_stack(12, |e, coord| {
                             let position = e
                                 .call(PACKAGE_LOCATION_COORD, &args![package, coord, actor])
@@ -13078,7 +13078,7 @@ pub fn fn_008f31d0(
             }
             let world = e.call(PACKAGE_LOCATION_WORLD, &args![package, actor]).u32();
             let cell = e.call(PACKAGE_LOCATION_CELL, &args![package, actor]).u32();
-            // The point is the frame's `local_20`: `00675de0` fills it and answers its address,
+            // The point is the frame's local at stack offset -0x20: `00675de0` fills it and answers its address,
             // and `SetPathfindingGoal` reads the goal from it, so it lives through that call.
             // (Scoped to `00675de0` alone, the goal was read from a freed block.)
             e.with_stack(12, |e, buffer| {
@@ -13818,7 +13818,7 @@ pub fn fn_008f2610(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr, _unused: 
     }
     let world = e.call(PACKAGE_LOCATION_WORLD, &args![package, actor]).u32();
     let cell = e.call(PACKAGE_LOCATION_CELL, &args![package, actor]).u32();
-    // The point is the frame's `local_bc`: `00675de0` fills it and answers its address, and
+    // The point is the frame's local at stack offset -0xbc: `00675de0` fills it and answers its address, and
     // `SetPathfindingGoal` reads the goal from it, so it lives through that call. (Scoped to
     // `00675de0` alone, the goal was read from a freed block.)
     e.with_stack(12, |e, buffer| {
@@ -24430,7 +24430,7 @@ mod tests {
         seen
     }
 
-    /// The package's point (`local_520` / `local_514`) is still there when `BuildRequest` reads
+    /// The package's point (at stack offsets -0x520 and -0x514) is still there when `BuildRequest` reads
     /// it: the getter fills the frame's point and answers its address. With the freed-block
     /// check a point freed before the request was built would read as the fill word.
     #[test]
@@ -27396,7 +27396,7 @@ mod tests {
         assert_eq!(calls_to(&e, PACKAGE_SET_FLAG_10000), vec![vec![package, 0]]);
     }
 
-    /// The goal `SetPathfindingGoal` reads is the package's point in the frame's `local_20`,
+    /// The goal `SetPathfindingGoal` reads is the package's point in the frame's local at stack offset -0x20,
     /// still there when it runs. With the freed-block check a point freed right after
     /// `00675de0` would read as the fill word.
     #[test]
@@ -27637,7 +27637,7 @@ mod tests {
     }
 
     /// Without a location the actor is sent to the package's point, which `SetPathfindingGoal`
-    /// reads from the frame's `local_bc` while it is still there. With the freed-block check a
+    /// reads from the frame's local at stack offset -0xbc while it is still there. With the freed-block check a
     /// point freed right after `00675de0` would read as the fill word.
     #[test]
     fn test_fn_008f2610_sets_the_goal_from_a_live_point() {

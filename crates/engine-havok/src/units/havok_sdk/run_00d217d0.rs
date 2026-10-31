@@ -47,7 +47,7 @@ pub fn fn_00d21960(e: &mut Engine, object: Ptr) -> u32 {
     if iterator == 0 {
         return 0;
     }
-    // The 0x200-byte buffer is a local of the whole frame (`auStack_210`): the child slot 0x14
+    // The 0x200-byte buffer is a local of the whole frame (stack offset -0x210): the child slot 0x14
     // answers can be built in it, and the recursion below reads that child, so the buffer lives
     // until the function returns. (Scoped to the slot call alone, it was freed before the
     // recursion, whose own buffer then took and cleared the same block under the child.)
