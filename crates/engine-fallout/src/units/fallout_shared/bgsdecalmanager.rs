@@ -2155,9 +2155,11 @@ fn projected_decals(e: &mut Engine, p: u32, target: u32, second: u32) -> Option<
                 }
             }
             let held = e.call(FIRST_WORD, &args![effect_slot]).u32();
-            let flag = e.vcall(held, 0x98, &args![1u32]).u32();
+            // 004a2636-004a2663: the 1 pushed first is AttachChild's second word (slot 0xdc,
+            // `00a5ed10`, `RET 8`); the effect's slot 0x98 (its decal geometry) takes none.
+            let geometry = e.vcall(held, 0x98, &args![]).u32();
             let skin_node = e.mem.u32(p + 0x50);
-            e.vcall(skin_node, 0xdc, &args![flag]);
+            e.vcall(skin_node, 0xdc, &args![geometry, 1u32]);
             let skin_node = e.mem.u32(p + 0x50);
             let held = e.call(FIRST_WORD, &args![effect_slot]).u32();
             fn_004a2c00(e, Ptr::new(held), skin_node);
@@ -5315,16 +5317,16 @@ mod tests {
             vec![vec![scene.skin_node, SKIN_VALUE]]
         );
         // The decal node takes the skin node; the skin node takes the
-        // effect's flag.
+        // effect's decal geometry (slot 0x98), at its first free place.
         assert_eq!(
             calls(&e, ATTACH_SKIN),
             vec![
                 vec![scene.decal_node, scene.skin_node, 1],
-                vec![scene.skin_node, 0x55]
+                vec![scene.skin_node, 0x55, 1]
             ]
         );
         assert_eq!(calls(&e, EFFECT_INITIALIZE), vec![vec![scene.effect]]);
-        assert_eq!(calls(&e, EFFECT_FLAG), vec![vec![scene.effect, 1]]);
+        assert_eq!(calls(&e, EFFECT_FLAG), vec![vec![scene.effect]]);
         // `fn_004a2c00` hangs the skin node on the effect.
         let assigns = calls(&e, NI_POINTER_ASSIGN);
         assert!(assigns.contains(&vec![scene.effect + 0x34, scene.skin_node]));
@@ -5374,9 +5376,9 @@ mod tests {
         assert_eq!(calls(&e, DECAL_NODE_COUNT), vec![vec![scene.decal_node]]);
         assert_eq!(calls(&e, ALLOCATE_OBJECT), vec![vec![0x64]]);
         // The existing decal node is the child: it takes no new skin node
-        // (that is only done on creation), but the effect's flag goes to
-        // the skin node.
-        assert_eq!(calls(&e, ATTACH_SKIN), vec![vec![scene.skin_node, 0x55]]);
+        // (that is only done on creation), but the effect's decal geometry
+        // (slot 0x98) goes to the skin node, at its first free place.
+        assert_eq!(calls(&e, ATTACH_SKIN), vec![vec![scene.skin_node, 0x55, 1]]);
         assert_eq!(calls(&e, ADD_TEMP_EFFECT).len(), 1);
 
         // A full decal node ends the call with true and builds nothing.

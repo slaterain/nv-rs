@@ -213,6 +213,15 @@ pub fn steam_user(_e: &mut Engine) -> u32 {
 /// left as set, and `SteamUserStats` still null afterwards.
 pub fn steam_api_run_callbacks(_e: &mut Engine) {}
 
+// Platform: replaces STEAM_API.DLL SteamAPI_Shutdown (import)
+/// `SteamAPI_Shutdown()` (`cdecl`, no arguments, no answer the game reads; called once at exit,
+/// `006ff7b0`): does nothing in the state this layer keeps (no successful `SteamAPI_Init`).
+/// Measured (2026-10-30, `build43-scratch/measure/platform5`, `shutdown`): the player's
+/// `steam_api.dll` in a 32-bit process without `SteamAPI_Init` returned from two calls with
+/// `EAX` 0 and the last error left as set; `SteamAPI_RunCallbacks` and `SteamUserStats` answered
+/// as before afterwards.
+pub fn steam_api_shutdown(_e: &mut Engine) {}
+
 // Platform: replaces STEAM_API.DLL SteamApps (import)
 /// `SteamApps()`: null, as measured ([`steam_user_stats`]).
 pub fn steam_apps(_e: &mut Engine) -> u32 {
@@ -902,6 +911,22 @@ mod tests_steam {
             assert_eq!(f(&mut e, &[]).eax, 0);
         }
         assert_eq!(e.kernel.last_error, 0x1234);
+        assert_eq!(steam_user_stats(&mut e), 0);
+    }
+
+    /// `SteamAPI_Shutdown` is registered and, without `SteamAPI_Init`, leaves the state as it is.
+    #[test]
+    fn shutdown_without_init_does_nothing() {
+        let mut e = Engine::new();
+        let (_, _, f) = super::super::imports()
+            .into_iter()
+            .find(|(dll, n, _)| *dll == "steam_api.dll" && *n == "SteamAPI_Shutdown")
+            .expect("SteamAPI_Shutdown is registered");
+        e.kernel.last_error = 0x4321;
+        for _ in 0..2 {
+            assert_eq!(f(&mut e, &[]).eax, 0);
+        }
+        assert_eq!(e.kernel.last_error, 0x4321);
         assert_eq!(steam_user_stats(&mut e), 0);
     }
 }

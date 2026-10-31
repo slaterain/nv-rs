@@ -3558,9 +3558,13 @@ fn start_weapon_attack_sound(e: &mut Engine, f: &UpdateFrame) {
     if follow == 0 {
         follow = e.vcall(this.addr(), VSLOT_GET_3D, &args![]).u32();
     }
-    e.with_stack(0x20, |e, scratch| {
+    // The item is the frame's 0x24-byte local at `EBP-0x184` (`004e75d0` copies nine words into
+    // it) and the handle a separate 0xc-byte one at `EBP-0x190`, so the frame holds both, the
+    // handle after the whole item. (With the handle at +0x10 of a 0x20-byte block, the item's
+    // copy ran over the handle and 4 bytes past the end.)
+    e.with_stack(0x30, |e, scratch| {
         let item_scratch = scratch.addr();
-        let handle_scratch = scratch.addr() + 0x10;
+        let handle_scratch = scratch.addr() + 0x24;
         let sound_object = e.call(WEAPON_OBJECT_OF, &args![weapon]).u32();
         let item = e
             .call(WEAPON_SOUND_ITEM, &args![sound_object, item_scratch])
@@ -3861,10 +3865,15 @@ fn creature_sound_step(e: &mut Engine, f: &UpdateFrame) -> bool {
         e.call(EXTRA_GET_CREATURE_AWAKE_SOUND, &args![lists, handle]);
         if awake && !e.call(SOUND_HANDLE_IS_PLAYING, &args![handle]).bool() {
             if !e.call(SOUND_HANDLE_IS_VALID, &args![handle]).bool() {
-                let item = e.with_stack(0x10, |e, scratch| {
-                    e.call(WEAPON_SOUND_ITEM, &args![sounds, scratch]).u32()
+                // The item is the frame's 0x24-byte local at `EBP-0x1c0`: `004e75d0` copies
+                // nine words into it and answers its address, and the word at +4 is read
+                // through that address, so the read is made while it is there. (A 0x10-byte
+                // block scoped to `004e75d0` alone was written 0x14 bytes past its end and read
+                // after it was freed.)
+                let word = e.with_stack(0x24, |e, scratch| {
+                    let item = e.call(WEAPON_SOUND_ITEM, &args![sounds, scratch]).u32();
+                    e.mem.u32(item + 4)
                 });
-                let word = e.mem.u32(item + 4);
                 let flags = e.call(SOUND_FLAGS_OF, &args![word]).u32() | 2;
                 let name = e.call(WEAPON_SOUND_NAME, &args![sounds]).u32();
                 let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
@@ -11398,6 +11407,91 @@ mod tests {
         actor_update(&mut e, actor, 0.1);
         follows(model, &swimmer, &callees(&e), &ignore).expect("a swimmer");
         assert!(was_called(&e, CONTROLLER_SET_TARGET));
+    }
+
+    /// `004e75d0` as the exe has it: copies the nine words at `this + 0x44` to `out` and
+    /// answers `out`.
+    fn sound_item_copies_nine_words(e: &mut Engine) {
+        e.register(WEAPON_SOUND_ITEM, |e, a| {
+            for i in 0..9 {
+                let word = e.mem.u32(a[0] + 0x44 + 4 * i);
+                e.mem.set_u32(a[1] + 4 * i, word);
+            }
+            eax(a[1])
+        });
+    }
+
+    /// A sound whose nine item words are `0x100`, `0x101`, ...
+    fn sound_with_item(e: &mut Engine) -> u32 {
+        let sound = e.mem.alloc(0x68);
+        for i in 0..9 {
+            e.mem.set_u32(sound + 0x44 + 4 * i, 0x100 + i);
+        }
+        sound
+    }
+
+    /// The frame `Actor::Update` sections see, for `this`.
+    fn update_frame(this: Ptr<Actor>, player: u32, weapon: u32, sound: u32) -> UpdateFrame {
+        UpdateFrame {
+            this,
+            delta: 0.1,
+            player,
+            skeleton: 0x1000,
+            face: 0,
+            animation: 0,
+            in_combat: false,
+            weapon,
+            process: 0,
+            sound,
+            controller: 0,
+            player_flag: false,
+            cell: 0,
+        }
+    }
+
+    /// The creature "awake" sound's item is the frame's 0x24-byte local: `004e75d0` copies all
+    /// nine words into it and the word at +4 is read while it is there. With the freed-block
+    /// check a 0x10-byte block faults on the copy, and one freed before the read gives the
+    /// fill word.
+    #[test]
+    fn creature_sound_reads_the_flags_word_from_the_whole_item() {
+        let mut e = engine2();
+        e.mem.enable_freed_check(true);
+        let actor = actor2(&mut e);
+        slot(&mut e, ACTOR_TABLE, VSLOT_ANIMATION_FLAG_0X21C, eax(1));
+        slot(&mut e, ACTOR_TABLE, VSLOT_GET_3D, eax(0x1000));
+        double(&mut e, SAVE_FORM_BUFFER_GET_FORM, eax(0x4400));
+        let sounds = sound_with_item(&mut e);
+        double(&mut e, PICK_CREATURE_SOUND, eax(sounds));
+        sound_item_copies_nine_words(&mut e);
+        e.call_log = Some(vec![]);
+        creature_sound_step(&mut e, &update_frame(actor, 0, 0, 0));
+        assert_eq!(args_of(&e, SOUND_FLAGS_OF), vec![0x101]);
+        assert!(was_called(&e, AUDIO_GET_SOUND_HANDLE_BY_FILENAME));
+    }
+
+    /// The weapon attack sound's item (0x24 bytes) and handle (0xc bytes) are separate locals:
+    /// `004e75d0` copies the whole item without reaching the handle or past the frame. With
+    /// the freed-block check a frame too small for both faults on the copy.
+    #[test]
+    fn weapon_attack_sound_keeps_the_handle_past_the_item() {
+        let mut e = engine2();
+        e.mem.enable_freed_check(true);
+        let actor = actor2(&mut e);
+        let player = actor2(&mut e);
+        let sound_object = sound_with_item(&mut e);
+        double(&mut e, WEAPON_OBJECT_OF, eax(sound_object));
+        sound_item_copies_nine_words(&mut e);
+        let handle = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        start_weapon_attack_sound(&mut e, &update_frame(actor, player.addr(), 0x7700, handle));
+        assert_eq!(args_of(&e, SOUND_FLAGS_OF), vec![0x101]);
+        let item = args_of(&e, WEAPON_SOUND_ITEM)[1];
+        let handle_scratch = args_of(&e, AUDIO_GET_SOUND_HANDLE_BY_FILENAME)[1];
+        assert!(
+            handle_scratch >= item + 0x24,
+            "{handle_scratch:08x} {item:08x}"
+        );
     }
 
     #[test]

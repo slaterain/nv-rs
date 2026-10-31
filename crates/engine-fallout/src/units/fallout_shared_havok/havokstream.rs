@@ -2423,8 +2423,7 @@ mod tests_b {
         let this = error_with_slots(&mut e);
         let file = put(&mut e, "C:\\src\\foo.cpp");
         // No label, no text, no root directory: only the empty buffer at +0x118 of 0x520 bytes.
-        let frame = e.mem.alloc(0x520);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x520);
         havok_error_assert_message(&mut e, this, 0, 9, 0, file, 13);
         assert_eq!(*buffers.borrow(), vec![frame + 0x118]);
     }

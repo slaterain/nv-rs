@@ -1099,8 +1099,7 @@ mod allocate_tests {
     fn the_moved_flag_and_info_sit_in_the_exe_frame() {
         let (mut e, seen, data, _atom) = scene(0);
         let outputs = e.mem.alloc(8);
-        let frame = e.mem.alloc(0x28);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x28);
         e.call(0x00d9_2df0, &args![data, 0x5000u32, outputs, outputs + 4]);
         assert_eq!(calls(&seen, EXPAND_ONE)[0][1], frame + 0x13);
         assert_eq!(calls(&seen, OWNER_ADD_CONSTRAINT_INFO)[0][2], frame + 0x18);

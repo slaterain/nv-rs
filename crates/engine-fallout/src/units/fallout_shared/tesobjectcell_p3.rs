@@ -1352,10 +1352,15 @@ pub fn tes_object_cell_pick(e: &mut Engine, this: Ptr<TESObjectCELL>, query: Ptr
     let shape = e.call(PICK_WORLD_SHAPE, &args![query]).u32();
     let entry = e.call(PICK_FIND_ENTRY, &args![shape]).u32();
     if entry != 0 {
-        let source = e.with_stack(4, |e, out| {
-            e.call(PICK_ENTRY_SOURCE, &args![entry, out]).u32()
+        // The source is the frame's word at `EBP-0x10`: `0043b4f0` stores it there and answers
+        // its address, and `0043b4d0` reads the type through that address, so the word lives
+        // through the type test. (Scoped to `0043b4f0` alone, the type was read from a freed
+        // block.)
+        let own_node = e.with_stack(4, |e, out| {
+            let source = e.call(PICK_ENTRY_SOURCE, &args![entry, out]).u32();
+            e.call(PICK_ENTRY_TYPE, &args![source]).u32() == PICK_OWN_NODE_TYPE
         });
-        if e.call(PICK_ENTRY_TYPE, &args![source]).u32() == PICK_OWN_NODE_TYPE {
+        if own_node {
             return e.call(CELL_NODE_OF_CELL, &args![this]).u32();
         }
     }
@@ -6140,6 +6145,35 @@ mod tests {
         e.mem.set_u32(0x7f00_0800, 0);
         e.mem.set_u32(0x7f00_0804, 0x11);
         assert_eq!(e.call(0x0055_3ee0, &args![cell, 0x9999u32]).u32(), 0xfa11);
+    }
+
+    /// The entry's source is the frame's word (`EBP-0x10`): `0043b4f0` stores it there and
+    /// answers its address, and `0043b4d0` reads the type through that address while the word
+    /// is still there. With the freed-block check a word freed before the type test would read
+    /// as the fill word.
+    #[test]
+    fn pick_reads_the_type_from_a_live_source_word() {
+        let mut e = engine();
+        e.mem.enable_freed_check(true);
+        let cell = e.new_object::<TESObjectCELL>();
+        let world = object(&mut e, 0x40);
+        e.register(fake(0xc8), |_, _| 1u32.into_ret());
+        returns(&mut e, CELL_HAVOK_WORLD, world);
+        returns(&mut e, PICK_WORLD_SHAPE, 0x51);
+        returns(&mut e, CELL_NODE_OF_CELL, 0xc311);
+        returns(&mut e, PICK_FALLBACK_NODE, 0xfa11);
+        let entry = e.mem.alloc(8);
+        returns(&mut e, PICK_FIND_ENTRY, entry);
+        e.register(PICK_ENTRY_SOURCE, |e, a| {
+            let word = e.mem.u32(a[0]);
+            e.mem.set_u32(a[1], word);
+            a[1].into_ret()
+        });
+        e.register(PICK_ENTRY_TYPE, |e, a| (e.mem.u32(a[0]) & 0x7f).into_ret());
+        for (word, node) in [(0x91u32, 0xc311u32), (0x12, 0xfa11)] {
+            e.mem.set_u32(entry, word);
+            assert_eq!(e.call(0x0055_3ee0, &args![cell, 0x9999u32]).u32(), node);
+        }
     }
 
     // -----------------------------------------------------------------------

@@ -784,8 +784,10 @@ pub fn fn_007fdf40(e: &mut Engine, this: Ptr<FORenderedMenuRaceSex>) {
 /// into the menu: builds a render target for the scene, clears it with the
 /// background colour (fixed to `(0105559c, 01078a60, 01078a64, 1)` because
 /// the flag byte the original tests was set to 1 on the previous line),
-/// draws `spPlayerParent` with the accumulator, hands the result to
-/// `007fba00` and releases it again.
+/// accumulates scene node 3 (which holds `spPlayerParent`) through
+/// `spClonedPlayerCamera` with a culling process on the interface's
+/// accumulator (`BSShaderUtil::AccumulateScene`, then `00b6c0d0`), hands the
+/// result to `007fba00` and releases it again.
 ///
 /// Only `argument` is used; the other two words of the 12-byte argument list
 /// are never read.
@@ -799,7 +801,7 @@ pub fn forendered_menu_race_sex_draw(
     let me = this.addr();
     // The exe's frame (`SUB ESP,0x110` under the exception record, then the record link): the
     // render target at `EBP-0xe0`, the colours at `EBP-0x108`, `EBP-0xf8` and `EBP-0x118`, the
-    // accumulator at `EBP-0xdc`, the shader pointer at `EBP-0xe8`.
+    // culling process at `EBP-0xdc`, the accumulator pointer at `EBP-0xe8`.
     e.with_stack(0x120, |e, frame| {
         let local = |offset: u32| frame.addr() + offset;
         let root = e.call(0x0043_c4b0, &args![]).u32();
@@ -843,24 +845,30 @@ pub fn forendered_menu_race_sex_draw(
         let target = pointer_value(e, render_target);
         let texture = e.call(0x00b6_b260, &args![target]).u32();
         e.call(0x00b6_b8d0, &args![7u32, texture]);
-        let accumulator = local(0x44);
-        e.call(0x004a_0eb0, &args![accumulator, 0u32]);
+        // The culling process (`004a0eb0`; destroyed by `004a0f60`) on the interface's
+        // accumulator (`Interface` +0x90, `007fd640`).
+        let culler = local(0x44);
+        e.call(0x004a_0eb0, &args![culler, 0u32]);
         let interface = e.call(INTERFACE_GETTER, &args![]).u32();
-        let shader = e.call(0x007f_d640, &args![interface]).u32();
-        let shader_pointer = local(0x38);
-        e.call(0x0063_3c90, &args![shader_pointer, shader]);
-        let shader = pointer_value(e, shader_pointer);
-        e.call(0x004a_0fd0, &args![accumulator, shader]);
-        e.call(0x00c4_f270, &args![accumulator, 1u32]);
-        let nodes = e.call(SCENE_NODE_GETTER, &args![3u32]).u32();
-        let parent = pointer_value(e, me + 0x104);
-        e.call(0x00b6_bee0, &args![parent, nodes, accumulator]);
-        let shader = pointer_value(e, shader_pointer);
-        let parent = pointer_value(e, me + 0x104);
-        e.call(0x00b6_c0d0, &args![parent, shader, 0u32]);
-        e.call(0x00c4_f2d0, &args![accumulator]);
-        e.call(0x004a_0fd0, &args![accumulator, 0u32]);
-        assign_pointer(e, shader_pointer, 0);
+        let accumulator = e.call(0x007f_d640, &args![interface]).u32();
+        let accumulator_pointer = local(0x38);
+        e.call(0x0063_3c90, &args![accumulator_pointer, accumulator]);
+        let accumulator = pointer_value(e, accumulator_pointer);
+        e.call(0x004a_0fd0, &args![culler, accumulator]);
+        e.call(0x00c4_f270, &args![culler, 1u32]);
+        // 007fe3d6-007fe3fa: the culler is pushed before `00450b80(3)`, whose result follows:
+        // `BSShaderUtil::AccumulateScene(spClonedPlayerCamera, scene node 3, culler)`.
+        let scene = e.call(SCENE_NODE_GETTER, &args![3u32]).u32();
+        let camera = pointer_value(e, me + 0x104);
+        e.call(0x00b6_bee0, &args![camera, scene, culler]);
+        // 007fe402-007fe427: `00b6c0d0(camera, accumulator, 0)`, `cdecl`; it reads only the
+        // first two words and the caller's `ADD ESP,0xc` drops all three.
+        let accumulator = pointer_value(e, accumulator_pointer);
+        let camera = pointer_value(e, me + 0x104);
+        e.call(0x00b6_c0d0, &args![camera, accumulator, 0u32]);
+        e.call(0x00c4_f2d0, &args![culler]);
+        e.call(0x004a_0fd0, &args![culler, 0u32]);
+        assign_pointer(e, accumulator_pointer, 0);
         e.call(0x00b6_b790, &args![]);
         let target = pointer_value(e, render_target);
         e.call(0x007f_ba00, &args![me, argument, 0u32, target]);
@@ -868,8 +876,8 @@ pub fn forendered_menu_race_sex_draw(
         let object = e.call(0x004a_0ea0, &args![]).u32();
         e.call(0x00b6_da10, &args![object, target]);
         assign_pointer(e, render_target, 0);
-        e.call(NI_POINTER_DESTRUCT, &args![shader_pointer]);
-        e.call(0x004a_0f60, &args![accumulator]);
+        e.call(NI_POINTER_DESTRUCT, &args![accumulator_pointer]);
+        e.call(0x004a_0f60, &args![culler]);
         e.call(NI_POINTER_DESTRUCT, &args![render_target]);
     });
 }
@@ -2090,13 +2098,11 @@ mod tests {
 
     // ---- the exe's stack frames ----
 
-    /// The block the next `with_stack(size)` takes (the last freed block of that size), with
+    /// The local the next `with_stack(size)` on this thread takes (asked of the engine), with
     /// the call log switched on.
     fn next_frame(e: &mut Engine, size: u32) -> u32 {
-        let frame = e.mem.alloc(size);
-        e.mem.free(frame);
         e.call_log = Some(vec![]);
-        frame
+        e.next_stack_local(size)
     }
 
     fn firsts(log: &[(u32, Vec<u32>)], address: u32) -> Vec<u32> {

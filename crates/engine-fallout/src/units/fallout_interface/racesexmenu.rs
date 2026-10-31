@@ -5730,11 +5730,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 mod tests {
     use super::*;
 
-    /// The block the next `with_stack(size)` takes (the last freed block of that size).
+    /// The local the next `with_stack(size)` on the running thread takes (the called function's
+    /// own frame, taken at the stack's current top).
     fn next_frame(e: &mut Engine, size: u32) -> u32 {
-        let frame = e.mem.alloc(size);
-        e.mem.free(frame);
-        frame
+        e.next_stack_local(size)
     }
 
     fn word(value: u32) -> Ret {

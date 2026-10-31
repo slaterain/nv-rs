@@ -975,11 +975,9 @@ mod tests {
     #[test]
     fn locals_sit_at_the_exe_frame_offsets() {
         let (mut e, _, collector) = world();
-        let next_frame = |e: &mut Engine, size: u32| {
-            let block = e.mem.alloc(size);
-            e.mem.free(block);
-            block
-        };
+        // Where the called function's own (outermost) `size`-byte frame lands on the stack; its
+        // bytes stay as the call left them until another local takes their place.
+        let next_frame = |e: &mut Engine, size: u32| e.next_stack_local(size);
         let seen: Rc<RefCell<Vec<u32>>> = Rc::default();
         let s = Rc::clone(&seen);
         e.register_double(CLASS_HAS_VTABLE, move |e, a| {

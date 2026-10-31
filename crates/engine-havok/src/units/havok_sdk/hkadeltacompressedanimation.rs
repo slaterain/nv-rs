@@ -2077,8 +2077,7 @@ mod tests {
         let first = e.mem.alloc(8);
         let second = e.mem.alloc(8);
         let dest = e.mem.alloc(0x100);
-        let frame = e.mem.alloc(0x1c);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x1c);
         e.call(
             0x00e3_49c0,
             &args![
@@ -2101,8 +2100,9 @@ mod tests {
         let mut e = engine();
         let this = chunked(&mut e);
         e.mem.set_u32(this + NUM_FRAMES, 3);
-        let frame = e.mem.alloc(0x24);
-        e.mem.free(frame);
+        // The frame is the next stack local; its bytes stay on the thread's stack after the call
+        // (nothing takes that place again before they are read).
+        let frame = e.next_stack_local(0x24);
         e.call(0x00e3_4c90, &args![this]);
         // One block: its chunk record (data, size, flag byte) is what `00e34bb0` fills there.
         let expected = e.mem.alloc(0x10);
@@ -2126,8 +2126,7 @@ mod tests {
             sink.borrow_mut().push(a[4]);
             Ret::default()
         });
-        let frame = e.mem.alloc(0x58);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x58);
         e.call(0x00e3_5050, &args![this]);
         assert_eq!(*seen.borrow(), vec![frame + 0x20]);
     }

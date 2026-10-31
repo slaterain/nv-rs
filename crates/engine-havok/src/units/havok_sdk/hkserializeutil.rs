@@ -1960,13 +1960,16 @@ mod tests {
         let source = stream(&mut e, &[9; 64], true, true);
         e.call_log = Some(vec![]);
         // The buffer array sits at +0xc of the 0x18-byte frame; the seekable read flag at +0x7
-        // of the stream reader's 8-byte frame.
+        // of the stream reader's 8-byte frame, nested below it.
         let frame = next_frame(&mut e, 0x18);
+        let flag_frame = e.with_stack(0x18, |e, outer| {
+            assert_eq!(outer.addr(), frame);
+            e.next_stack_local(8)
+        });
         let got = e
             .call(0x00d4_8760, &args![0xe000u32, record, source, 0x7001u32])
             .u32();
         assert_eq!(calls_to(&mut e, ARRAY_RESERVE)[0][1], frame + 0xc);
-        let flag_frame = next_frame(&mut e, 8);
         assert_eq!(calls_to(&mut e, STREAM_SLOTS + 0x24)[0][1], flag_frame + 7);
         let loads = calls_to(&mut e, NATIVE_PACKFILE_LOAD);
         assert_eq!(loads.len(), 1);
@@ -2626,11 +2629,10 @@ mod tests {
         assert_eq!(string_of(&e, e.mem.u32(err + 4)), b"Stream is not ok");
     }
 
-    /// The next block of `size` bytes (the one a frame of that size takes).
+    /// The stack local the next frame of `size` bytes takes (an outermost one: the called
+    /// function's own frame).
     fn next_frame(e: &mut Engine, size: u32) -> u32 {
-        let block = e.mem.alloc(size);
-        e.mem.free(block);
-        block
+        e.next_stack_local(size)
     }
 
     #[test]

@@ -356,9 +356,9 @@ mod tests {
         for offset in (0..0x50).step_by(4) {
             e.mem.set_u32(data + offset, 0xffff_ffff);
         }
-        // The 1.0 sits at +0xc of the exe's aligned 0x10-byte frame.
-        let block = e.mem.alloc(0x20);
-        e.mem.free(block);
+        // The 1.0 sits at +0xc of the exe's aligned 0x10-byte frame (read after the call: the
+        // ended frame's bytes stay on the thread's stack).
+        let block = e.next_stack_local(0x20);
         let result = e.call(0x00d5_4290, &args![data]);
         assert_eq!(e.mem.f32(((block + 0xf) & !0xf) + 0xc), 1.0);
         assert_eq!(result.u32(), data);

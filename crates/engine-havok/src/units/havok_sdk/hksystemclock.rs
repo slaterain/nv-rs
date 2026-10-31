@@ -227,8 +227,7 @@ mod tests {
         );
         let (mut e, clock, calls) = world(counters, counts, 2_000_000);
         // The start counter at +0x30, the end counter at +0x28 of the exe's 8-aligned frame.
-        let block = e.mem.alloc(0x60);
-        e.mem.free(block);
+        let block = e.next_stack_local(0x58 + 8);
         let frame = (block + 7) & !7;
         e.call_log = Some(vec![]);
         e.call(0x00dd_8e20, &args![clock]);

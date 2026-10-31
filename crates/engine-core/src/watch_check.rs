@@ -8,7 +8,7 @@
 //! block) is reported at the next call or return: its address, the bytes before and after (as
 //! words and floats), and the calls it happened in (the function returning, or the one calling,
 //! then its callers from [`crate::Engine::call_stack`]). Lines start `watch check:`; after 20
-//! changes it stays quiet. The run goes on.
+//! changes (`NV_WATCH_REPORTS=N`: N) it stays quiet. The run goes on.
 //!
 //! Off by default: without the variable no hook is installed and nothing is watched.
 
@@ -22,6 +22,18 @@ type CallHook = fn(&mut Engine, u32, bool);
 
 /// The changes reported before it stays quiet.
 const REPORTS: u32 = 20;
+
+/// The changes reported before it stays quiet: [`REPORTS`], or `NV_WATCH_REPORTS` (decimal).
+fn reports() -> u32 {
+    static N: OnceLock<u32> = OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("NV_WATCH_REPORTS")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(REPORTS)
+    })
+}
+
 /// Callers named per report.
 const PATH_DEPTH: usize = 12;
 
@@ -181,7 +193,7 @@ fn on_call(e: &mut Engine, addr: u32, exit: bool) {
                     }
                 );
                 for hit in &hits {
-                    if REPORTED.fetch_add(1, Ordering::Relaxed) < REPORTS {
+                    if REPORTED.fetch_add(1, Ordering::Relaxed) < reports() {
                         println!("watch check: {}", report_text(hit, &path));
                     }
                 }

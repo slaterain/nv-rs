@@ -3088,13 +3088,15 @@ pub fn fn_00d0f2e0(e: &mut Engine, this: u32, first: u32, second: u32, third: u3
 /// `+0x10`, contact manager at `+0x14`); `manager` is the resource manager;
 /// `world` the world; `bodies` an `hkArray` of bodies that receives the
 /// solved set; `flags` points at the table of per-body state bytes (indexed
-/// by the `u16` at body `+0xa8`); `time` is handed to the manager.
+/// by the `u16` at body `+0xa8`); `time` is handed to the event's contact
+/// manager.
 ///
 /// The bodies of the event that are not fixed (motion type 5) go into a
 /// local body array (sized by the event's island, from the stack allocator)
 /// with their swept transform interpolated to the event time (`00cf1510`)
-/// and state 2. The manager's virtual slot `0x48` (event, `time`, a local
-/// body array) is asked what to do. With nothing returned each non-fixed
+/// and state 2. The event's contact manager (`+0x14`, not the resource
+/// manager) is asked through its virtual slot `0x48` (event, `time`, a local
+/// body array) what to do. With nothing returned each non-fixed
 /// body's motion state gets its rotation set (`00cb2d90`) and its
 /// translation (`+0x30`) becomes `ms[0x50] - (ms[0x80].y * ms[0x10] +
 /// ms[0x80].x * ms[0] + ms[0x80].z * ms[0x20])` (four `float` lanes), the
@@ -3202,8 +3204,13 @@ pub fn hk_ls_localized_solve_toi(
         e.mem.set_u32(manager_bodies, b + 0x4c);
         e.mem.set_u32(manager_bodies + 4, 0);
         e.mem.set_u32(manager_bodies + 8, 0x8000_0040);
+        // 00d0f41e-00d0f447: `MOV ECX,[EBX+0x14]` (EBX the event) then `CALL [[ECX]+0x48]`:
+        // the event's contact manager is asked, not the resource manager at `[EBP+0x14]`
+        // (whose vtable `010d4310` holds 0 at +0x48: the call stopped on "open function
+        // 00000000" in 00d100a0 when a time-of-impact had to be solved).
+        let contact_manager = e.mem.u32(event + EVENT_CONTACT_MANAGER);
         e.vcall(
-            manager,
+            contact_manager,
             0x48,
             &args![event, x87_quiet(time), manager_bodies],
         );
@@ -5070,8 +5077,7 @@ mod tests {
         let list = e.mem.u32(entities);
         log(&mut e);
         // The map sits at +0x10 of the exe's 0x1c-byte frame.
-        let frame = e.mem.alloc(0x1c);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x1c);
         e.call(0x00d0_c290, &args![this, list, 2i32]);
         let calls = take_log(&mut e);
         assert_eq!(*keys.borrow(), [a, b]);
@@ -6039,8 +6045,7 @@ mod tests {
         );
         log(&mut e);
         // The stream at +0x14 and its text at +0x20 of the exe's aligned 0x220-byte frame.
-        let block = e.mem.alloc(0x230);
-        e.mem.free(block);
+        let block = e.next_stack_local(0x230);
         let frame = (block + 0xf) & !0xf;
         e.call(0x00d0_d150, &args![this, 0x1000u32, 0x2000u32]);
         let calls = take_log(&mut e);
@@ -6134,8 +6139,7 @@ mod tests {
         let output = word_array(&mut e, &[], 2);
         log(&mut e);
         // The sorted entries sit at +0x10 of the exe's 0x1c-byte frame.
-        let frame = e.mem.alloc(0x1c);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x1c);
         e.call(0x00d0_d2c0, &args![entity, 2i32, 1.5f32, flags, output]);
         let calls = take_log(&mut e);
         assert_eq!(
@@ -6218,8 +6222,7 @@ mod tests {
         e.mem.set_u8(export, 2);
         log(&mut e);
         // The added pairs at +0x38 and the removed at +0x28 of the exe's 0x48-byte frame.
-        let frame = e.mem.alloc(0x48);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x48);
         e.call(0x00d0_d3f0, &args![list, 1i32, world, export]);
         let calls = take_log(&mut e);
         assert_eq!(
@@ -6842,9 +6845,9 @@ mod tests {
         let constraints = word_array(&mut e, &[], 8);
         log(&mut e);
         // The collected entries sit at +0x30 of the exe's aligned 0x50-byte frame (their
-        // capacity word, 0x3e8 not owned, at +0x38).
-        let block = e.mem.alloc(0x60);
-        e.mem.free(block);
+        // capacity word, 0x3e8 not owned, at +0x38; read after the call: the ended frame's bytes
+        // stay on the thread's stack).
+        let block = e.next_stack_local(0x60);
         let frame = (block + 0xf) & !0xf;
         e.call(
             0x00d0_e4b0,
@@ -7247,6 +7250,7 @@ mod tests {
         b: u32,
         event: u32,
         manager: u32,
+        contact_manager: u32,
         limits: u32,
         solver: u32,
         flags: u32,
@@ -7275,16 +7279,12 @@ mod tests {
         e.mem
             .set_u32(island + ISLAND_ENTITY_DATA, e.mem.u32(entity_array));
         e.mem.set_u32(island + ISLAND_ENTITY_COUNT, 2);
-        let manager = virtual_object(
-            e,
-            &[
-                (0x48, 0x0600_0248),
-                (0x14, 0x0600_0214),
-                (0x10, 0x0600_0210),
-            ],
-        );
+        // The resource manager has no slot 0x48 (its vtable `010d4310` holds 0 there); the
+        // event's contact manager answers it.
+        let manager = virtual_object(e, &[(0x14, 0x0600_0214), (0x10, 0x0600_0210)]);
+        let contact_manager = virtual_object(e, &[(0x48, 0x0600_0248)]);
         let event = e.mem.alloc(TOI_EVENT_SIZE);
-        set_event(e, event, 1.0, a, b, 0);
+        set_event(e, event, 1.0, a, b, contact_manager);
         let limits = e.mem.alloc(0x20);
         for (k, word) in [1u32, 100, 100, 100, rounds as u32, 1].iter().enumerate() {
             e.mem.set_u32(limits + 4 * k as u32, *word);
@@ -7332,6 +7332,7 @@ mod tests {
             b,
             event,
             manager,
+            contact_manager,
             limits,
             solver,
             flags,
@@ -7359,10 +7360,14 @@ mod tests {
             .u32();
         assert_eq!(r, 1);
         let calls = take_log(&mut e);
-        // The manager was asked with the event, the time and an array.
+        // The event's contact manager (event + 0x14, 00d0f41e) was asked with the event, the
+        // time and an array.
         let asked = asked.borrow();
         assert_eq!(asked.len(), 1);
-        assert_eq!(asked[0][..3], [s.manager, s.event, 2.5f32.to_bits()]);
+        assert_eq!(
+            asked[0][..3],
+            [s.contact_manager, s.event, 2.5f32.to_bits()]
+        );
         // Both bodies were interpolated to the event time and set to state 2.
         assert_eq!(
             calls_to(&calls, INTERPOLATE_MOTION_STATE),
@@ -7776,7 +7781,7 @@ mod tests {
         let a = body(&mut e, 1, 1, 0, island);
         let b = body(&mut e, 5, 2, 1, island);
         e.mem.set_u32(a + ENTITY_WORLD, world);
-        let event_manager = virtual_object(&mut e, &[(0x20, 0x0600_0020)]);
+        let event_manager = virtual_object(&mut e, &[(0x20, 0x0600_0020), (0x48, 0x0600_0348)]);
         let event = e.mem.alloc(TOI_EVENT_SIZE);
         set_event(&mut e, event, 1.0, a, b, event_manager);
         // The resource manager: answers 0, wants nothing solved.
@@ -7792,10 +7797,8 @@ mod tests {
                 ret(0)
             });
         }
-        let manager = virtual_object(
-            &mut e,
-            &[(0xc, 0x0600_030c), (0x18, 0x0600_0318), (0x48, 0x0600_0348)],
-        );
+        // The resource manager's vtable has no slot 0x48 (0 there, as in `010d4310`).
+        let manager = virtual_object(&mut e, &[(0xc, 0x0600_030c), (0x18, 0x0600_0318)]);
         e.set(
             this,
             HkpContinuousSimulation::toi_resource_manager,
@@ -7903,6 +7906,11 @@ mod tests {
         let memset = calls_to(&calls, MEM_SET);
         assert_eq!(memset.len(), 1);
         assert_eq!(memset[0][1..], [0, 1]);
+        // The localized solve asked the event's contact manager (slot 0x48), not the resource
+        // manager.
+        let confirmed = calls_to(&calls, 0x0600_0348);
+        assert_eq!(confirmed.len(), 1);
+        assert_eq!(confirmed[0][..3], [event_manager, event, 0.5f32.to_bits()]);
         // The event's manager was told, the solver shut down.
         assert_eq!(
             *notified.borrow(),

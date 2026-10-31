@@ -664,8 +664,7 @@ mod tests {
         e.mem.set_u32(entity + ENTITY_SHAPE, shape);
         let entities = e.mem.alloc(4);
         e.mem.set_u32(entities, entity);
-        let raw = e.mem.alloc(FRAME_SIZE + 0x10);
-        e.mem.free(raw);
+        let raw = e.next_stack_local(FRAME_SIZE + 0x10);
         e.call_log = Some(vec![]);
         e.call(0x00d1a330, &args![input, entities, 1u32]);
         let log = e.call_log.take().unwrap();

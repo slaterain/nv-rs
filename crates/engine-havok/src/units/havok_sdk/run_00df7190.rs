@@ -92,11 +92,16 @@ pub fn fn_00df7230(e: &mut Engine, this: Ptr, node: Ptr) -> f32 {
         let previous = e.mem.u32(this_addr + 0x18);
         if previous != node.addr() {
             let holder = e.mem.u32(this_addr + 0x10) + 8;
-            let flag = e.with_stack(4, |e, slot| {
+            // The flag is the frame's `node` argument slot (`ESP+0x18` at the call): slot 4
+            // writes it there and answers its address, and the byte is tested through that
+            // address, so the test is made while the slot is there. (Scoped to the slot call
+            // alone, the byte was read from a freed block.)
+            let set = e.with_stack(4, |e, slot| {
                 e.mem.set_u32(slot.addr(), node.addr());
-                e.vcall(holder, 4, &args![slot, previous, node]).u32()
+                let flag = e.vcall(holder, 4, &args![slot, previous, node]).u32();
+                e.mem.u8(flag) != 0
             });
-            if e.mem.u8(flag) == 0 {
+            if !set {
                 return float_at_target(e, this_addr);
             }
             let table = e.mem.u32(this_addr + 0x20);
@@ -111,9 +116,11 @@ pub fn fn_00df7230(e: &mut Engine, this: Ptr, node: Ptr) -> f32 {
                 .wrapping_add(0x9ac);
             let function = e.mem.u32(entry);
             let target = e.mem.u32(this_addr + 0x14);
+            // 00df727c: `this + 0x18` read again after the slot-4 call, not the word passed to it.
+            let current = e.mem.u32(this_addr + 0x18);
             e.call(
                 function,
-                &args![previous, node, this_addr + 0x20, target, 0u32],
+                &args![current, node, this_addr + 0x20, target, 0u32],
             );
         }
     }
@@ -407,6 +414,50 @@ mod tests_a05 {
             calls[0][1..],
             [f.previous, f.node, f.this + 0x20, f.target, 0]
         );
+    }
+
+    /// The table entry gets the word at `this + 0x18` as it is after the slot-4 call (read again
+    /// at 00df727c), not the one the call was given.
+    #[test]
+    fn fn_00df7230_passes_the_word_read_after_the_slot_call() {
+        let mut f = fixture();
+        f.e.mem.set_u8(f.flag, 1);
+        let (this, flag) = (f.this, f.flag);
+        f.e.register_double(FLAG_SLOT_DOUBLE, move |e, _| {
+            e.mem.set_u32(this + 0x18, 0x0123_4560);
+            Ret {
+                eax: flag,
+                ..Ret::default()
+            }
+        });
+        f.e.call(0x00df_7230, &args![f.this, f.node]);
+        let log = f.log.borrow();
+        let calls: Vec<_> = log.iter().filter(|w| w[0] == 0x7ab1).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0][1..3], [0x0123_4560, f.node]);
+    }
+
+    /// The flag is written into the slot that holds `node` and tested through the address the
+    /// slot answers while the slot is still there. With the freed-block check a slot freed
+    /// before the test would read as the fill word's low byte, calling the table by chance.
+    #[test]
+    fn fn_00df7230_tests_the_flag_in_a_live_slot() {
+        for (byte, table_calls) in [(0u8, 0usize), (1, 1)] {
+            let mut f = fixture();
+            f.e.mem.enable_freed_check(true);
+            f.e.register_double(FLAG_SLOT_DOUBLE, move |e, a| {
+                e.mem.set_u8(a[1], byte);
+                Ret {
+                    eax: a[1],
+                    ..Ret::default()
+                }
+            });
+            let got = f.e.call(0x00df_7230, &args![f.this, f.node]).f32();
+            assert_eq!(got, 1.5);
+            let log = f.log.borrow();
+            let calls = log.iter().filter(|w| w[0] == 0x7ab1).count();
+            assert_eq!(calls, table_calls, "flag {byte}");
+        }
     }
 
     /// The thunks pass the adjusted `this` and node on to `00df7230`.

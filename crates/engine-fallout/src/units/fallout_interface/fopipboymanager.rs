@@ -1574,13 +1574,19 @@ const LIGHT_EFFECT_END: u32 = 0x168;
 const THIRD_KNOB_TARGET: u32 = KNOB_TARGETS + 8;
 const THIRD_KNOB_RATE: u32 = KNOB_RATES + 8;
 
+/// The size of a sound handle (`BSSoundHandle`): `0041a250` sets +0, +4 (a byte) and +8.
+const SOUND_HANDLE_SIZE: u32 = 0xc;
+
 /// A sound named `name` played once through a stack handle: constructed
 /// (`0041a250`), given the audio's handle for the name (a temporary,
-/// assigned and destroyed), played (`Play` with 0) and destroyed.
+/// assigned and destroyed), played (`Play` with 0) and destroyed. A sound
+/// handle is 0xC bytes (the id, a byte at +4, a word at +8: `0041a250`); the
+/// exe keeps the handle at `[EBP-0x18]` and the temporary at `[EBP-0x24]`
+/// (`007fa179`, `007fa192`).
 fn play_named_sound(e: &mut Engine, name: u32) {
-    e.with_stack(8, |e, handles| {
+    e.with_stack(2 * SOUND_HANDLE_SIZE, |e, handles| {
         let handle = handles.addr();
-        let temporary = handles.addr() + 4;
+        let temporary = handles.addr() + SOUND_HANDLE_SIZE;
         e.call(SOUND_CONSTRUCT, &args![handle]);
         let audio = e.call(AUDIO_INSTANCE, &[]).u32();
         let found = e
@@ -1629,7 +1635,7 @@ pub fn fo_pipboy_manager_on_menu_open(e: &mut Engine, this: Ptr<FOPipboyManager>
     let hum = this.addr() + HUM_SOUND;
     e.call(SOUND_STOP, &args![hum]);
     e.call(SOUND_RELEASE, &args![hum]);
-    e.with_stack(4, |e, temporary| {
+    e.with_stack(SOUND_HANDLE_SIZE, |e, temporary| {
         let audio = e.call(AUDIO_INSTANCE, &[]).u32();
         let found = e
             .call(
@@ -1706,7 +1712,7 @@ pub fn fo_pipboy_manager_on_menu_close(e: &mut Engine, this: Ptr<FOPipboyManager
     if e.call(PIPBOY_STATE, &args![this]).u32() & 0xff == 0 {
         return;
     }
-    e.with_stack(4, |e, temporary| {
+    e.with_stack(SOUND_HANDLE_SIZE, |e, temporary| {
         let audio = e.call(AUDIO_INSTANCE, &[]).u32();
         let found = e
             .call(

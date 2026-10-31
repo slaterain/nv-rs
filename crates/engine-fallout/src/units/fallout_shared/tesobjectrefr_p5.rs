@@ -3401,8 +3401,10 @@ pub fn fn_0057b790(e: &mut Engine, this: Ptr) -> bool {
 /// `005790f0` as the completion callback of the sound handle. The
 /// reference's virtual `0xd0` is called with 1 and
 /// `ProcessLists::SortActorsCloseToPlayer` runs at the end. The C++
-/// exception frame and the stack-cookie check are not translated.
-pub fn fn_0057b7c0(e: &mut Engine, this: Ptr, topic: u32, flag: u8) {
+/// exception frame and the stack-cookie check are not translated. The third
+/// stack word (0 at every caller: 005faa7c, 00608407, 0060841c, 00756e4c,
+/// 00756e5e) is never read; `RET 0xc` (0057bd02) pops it.
+pub fn fn_0057b7c0(e: &mut Engine, this: Ptr, topic: u32, flag: u8, _unused_3: u32) {
     let me = this.addr();
     let lock = e.call(0x0043_d4d0, &args![OBJECT_LOCK_STATE]).u32();
     let saved = e.mem.u32(lock);
@@ -4215,7 +4217,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0057b730, fn_0057b730(Ptr, u32) -> u32),
         entry!(0x0057b750, fn_0057b750(Ptr, u32) -> u32),
         entry!(0x0057b790, fn_0057b790(Ptr) -> bool),
-        entry!(0x0057b7c0, fn_0057b7c0(Ptr, u32, u8)),
+        entry!(0x0057b7c0, fn_0057b7c0(Ptr, u32, u8, u32)),
         entry!(0x0057bd10, fn_0057bd10(Ptr, u32) -> Ptr),
         entry!(0x0057bd40, fn_0057bd40(Ptr) -> u32),
         entry!(0x0057bd60, fn_0057bd60(Ptr, u32)),
@@ -8584,7 +8586,7 @@ mod tests {
         returns(&mut e, 0x008d_8520, 0);
         let this = refr(&mut e, 0x30, &[(0x100, RETURNS_TRUE), (0xd0, SAY_SLOT_D0)]);
         start_log(&mut e);
-        e.call(0x0057_b7c0, &args![this, 0x77u32, 1u8]);
+        e.call(0x0057_b7c0, &args![this, 0x77u32, 1u8, 0u32]);
         let log = take_log(&mut e);
         assert_eq!(
             calls_to(&log, 0x0045_ce80),
@@ -8641,7 +8643,7 @@ mod tests {
             ],
         );
         start_log(&mut e);
-        e.call(0x0057_b7c0, &args![this, 0x77u32, 1u8]);
+        e.call(0x0057_b7c0, &args![this, 0x77u32, 1u8, 0u32]);
         let log = take_log(&mut e);
         assert_eq!(
             calls_to(&log, 0x0061_b320),
@@ -8681,7 +8683,7 @@ mod tests {
         // the full-help form formats the name and the text into a buffer
         returns(&mut e, 0x0070_3150, 1);
         start_log(&mut e);
-        e.call(0x0057_b7c0, &args![this, 0x77u32, 1u8]);
+        e.call(0x0057_b7c0, &args![this, 0x77u32, 1u8, 0u32]);
         let log = take_log(&mut e);
         let sprintf = calls_to(&log, SPRINTF);
         assert_eq!(sprintf.len(), 1);
@@ -8711,7 +8713,7 @@ mod tests {
         );
         e.mem.set_u32(this + 0x0c, 0xf0f0);
         start_log(&mut e);
-        e.call(0x0057_b7c0, &args![this, 0x77u32, 0u8]);
+        e.call(0x0057_b7c0, &args![this, 0x77u32, 0u8, 0u32]);
         let log = take_log(&mut e);
         assert_eq!(
             calls_to(&log, EXTRA_SET_SAY_TO),
@@ -8756,7 +8758,7 @@ mod tests {
         returns(&mut e, SAY_SLOT_OWNER_MODEL, 0);
         returns(&mut e, 0x005e_3fa0, owner);
         start_log(&mut e);
-        e.call(0x0057_b7c0, &args![this, 0x77u32, 0u8]);
+        e.call(0x0057_b7c0, &args![this, 0x77u32, 0u8, 0u32]);
         let log = take_log(&mut e);
         assert_eq!(calls_to(&log, SAY_SLOT_OWNER_MODEL), vec![vec![owner]]);
         assert!(calls_to(&log, 0x0061_b320).is_empty());
@@ -8772,7 +8774,7 @@ mod tests {
         );
         returns(&mut e, SAY_SLOT_PREDICATE, 0);
         start_log(&mut e);
-        e.call(0x0057_b7c0, &args![this, 0x77u32, 0u8]);
+        e.call(0x0057_b7c0, &args![this, 0x77u32, 0u8, 0u32]);
         let log = take_log(&mut e);
         assert!(calls_to(&log, 0x005e_3fa0).is_empty());
         assert_eq!(calls_to(&log, SAY_SLOT_D0), vec![vec![this, 1]]);

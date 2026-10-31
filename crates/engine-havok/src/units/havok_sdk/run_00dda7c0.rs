@@ -592,8 +592,9 @@ mod a07_geometry_writer_tests {
             ),
         ] {
             let s = shape(&mut e, kind);
-            let raw = e.mem.alloc(0x80);
-            e.mem.free(raw);
+            // The 0x80-byte local `with_aligned_frame` takes; its words stay on the thread's stack
+            // after the call returns (only the next local there zeroes them).
+            let raw = e.next_stack_local(0x80);
             e.call(0x00dd_a8c0, &args![archive, s]);
             let frame = aligned_frame_at(raw, 0x70);
             for (offset, expected) in slots {

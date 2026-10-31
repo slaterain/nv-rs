@@ -937,8 +937,7 @@ mod tests {
             }
         });
         let file = tree_file(&mut e, &[], 0);
-        let frame = e.mem.alloc(0x1a8);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x1a8);
         e.call(0x00b4_05c0, &args![file]);
         // Tag 0x1b62 parses into +0x180, tag 0x1b67 into +0x174.
         let vectors: Vec<u32> = seen.borrow().iter().map(|c| c.1[1]).collect();
@@ -947,8 +946,7 @@ mod tests {
         let (mut e, calls_throw) = parse_engine(vec![0]);
         e.register(CXX_THROW_EXCEPTION, |_, _| panic!("thrown"));
         let file = tree_file(&mut e, &[], 0);
-        let frame = e.mem.alloc(0x1a8);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x1a8);
         let thrown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             e.call(0x00b4_05c0, &args![file]);
         }));
@@ -985,8 +983,7 @@ mod tests {
         let this = leaf(&mut e);
         let a = vec3(&mut e, 1.0, 2.0, 3.0);
         let b = vec3(&mut e, 4.0, 5.0, 6.0);
-        let frame = e.mem.alloc(0x80);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x80);
         e.call(0x00b4_0210, &args![this, a, b, 0.0f32]);
         let log = calls.borrow();
         // The two directions at +0x68 and +0x74; the colour at +0x54, scaled into +0x48.
@@ -996,8 +993,7 @@ mod tests {
         drop(log);
         // SetColor alone: its colour copy at +0x14 of its 0x20-byte frame.
         let color = vec3(&mut e, 0.5, 0.5, 0.5);
-        let frame = e.mem.alloc(0x20);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x20);
         e.call(0x00b4_04c0, &args![this, color, 1u32]);
         let log = calls.borrow();
         let last = log.last().unwrap();

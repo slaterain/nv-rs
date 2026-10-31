@@ -1472,8 +1472,7 @@ mod tests {
         e.mem.set_u32(info + 0x18, 0x8000_0000);
         record(&mut e, 0x0900_03a4, info, &log);
         let this = vobject(&mut e, 0x14, &[(0xb4, 0x0900_03a4)]);
-        let frame = e.mem.alloc(0x50);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x50);
         e.call(0x00c8_baa0, &args![this, stream]);
         // The created byte at +0x17, the count at +0x1c with its size word at +0x24, the
         // local word array at +0x2c.

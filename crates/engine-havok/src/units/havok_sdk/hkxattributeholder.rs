@@ -429,8 +429,7 @@ mod tests {
         let out = e.mem.alloc(4);
         e.mem.set_u32(out, 0x5555);
         let name = put_text(&mut e, b"zz");
-        let frame = e.mem.alloc(0x1c);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x1c);
         assert_eq!(e.call(0x00e5_c4d0, &args![this, out, name]).u32(), out);
         assert_eq!(e.mem.u32(out), 0);
         let events = events.borrow();
@@ -479,9 +478,9 @@ mod tests {
         let wanted_name = put_text(&mut e, b"HKQUATERNION");
         let wanted = e.mem.alloc(8);
         e.mem.set_u32(wanted, wanted_name);
-        // The variant is the `name` argument's own slot, +0x8 of the exe's 0x10 bytes.
-        let frame = e.mem.alloc(0x10);
-        e.mem.free(frame);
+        // The variant is the `name` argument's own slot, +0x8 of the exe's 0x10 bytes (the next
+        // stack local; its bytes stay on the stack after the call).
+        let frame = e.next_stack_local(0x10);
         assert_eq!(
             e.call(0x00e5_c540, &args![this, name, wanted]).u32(),
             object

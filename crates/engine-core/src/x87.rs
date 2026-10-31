@@ -43,6 +43,7 @@
 //! (round to nearest, as before); at 24-bit precision all four modes are.
 
 /// The bit pattern an `FLD dword` / `FSTP dword` pair leaves for `bits`.
+#[inline]
 pub fn x87_quiet_bits(bits: u32) -> u32 {
     if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
         bits | 0x0040_0000
@@ -52,6 +53,7 @@ pub fn x87_quiet_bits(bits: u32) -> u32 {
 }
 
 /// [`x87_quiet_bits`] on an `f32`.
+#[inline]
 pub fn x87_quiet(value: f32) -> f32 {
     f32::from_bits(x87_quiet_bits(value.to_bits()))
 }
@@ -72,7 +74,18 @@ fn is_nan_bits(bits: u64) -> bool {
 /// positive one. The operand order does not matter. f64 arithmetic does not
 /// follow this: SSE keeps the first operand's NaN, and LLVM may swap the
 /// operands of a commutative operation (#199).
+#[inline]
 fn nan_result(a: f64, b: f64) -> Option<f64> {
+    if !(a.is_nan() | b.is_nan()) {
+        return None;
+    }
+    nan_result_slow(a, b)
+}
+
+/// [`nan_result`] once an operand is a NaN.
+#[cold]
+#[inline(never)]
+fn nan_result_slow(a: f64, b: f64) -> Option<f64> {
     let (a, b) = (a.to_bits(), b.to_bits());
     let chosen = match (is_nan_bits(a), is_nan_bits(b)) {
         (false, false) => return None,
@@ -123,6 +136,7 @@ thread_local! {
 
 /// The x87 control word the arithmetic helpers round with: the running game
 /// thread's (`FSTCW`).
+#[inline]
 pub fn control_word() -> u16 {
     CONTROL_WORD.with(|c| c.get())
 }
@@ -138,6 +152,7 @@ pub fn set_control_word(word: u16) {
 /// The rounding mode when the control word selects 24-bit precision, `None`
 /// for 53-bit (and for 64-bit and the reserved value, which the model treats
 /// as 53-bit).
+#[inline]
 fn single_precision() -> Option<u16> {
     let word = control_word();
     if word & PRECISION_CONTROL == 0 {
@@ -183,7 +198,36 @@ fn scale(q: u64, exponent: i32) -> f64 {
 /// most half a unit, toward `sign`). It also has the exact magnitude's binade:
 /// a power of two minus a little has one bit less, so the 24 bits are counted
 /// from the right place.
+#[inline]
 fn round_to_single(s: f64, error_sign: i32, rounding: u16) -> f64 {
+    if rounding == ROUND_NEAREST {
+        if let Some(r) = round_to_single_nearest_fast(s, error_sign) {
+            return r;
+        }
+    }
+    round_to_single_exact(s, error_sign, rounding)
+}
+
+/// [`round_to_single_exact`] to nearest, for the common case, with the same answer: when `s`
+/// is not exactly halfway between two 24-bit values, the exact value (within half of `s`'s
+/// last place of it) rounds the way `s` does, so the hardware conversion to `f32` (round to
+/// nearest, ties to even) gives the result; on a midpoint it does too when the error is zero.
+/// Only for a result inside `f32`'s normal range (biased `f64` exponents 897..=1149): there the
+/// unbounded exponent changes nothing and nothing overflows. `None` otherwise.
+#[inline]
+fn round_to_single_nearest_fast(s: f64, error_sign: i32) -> Option<f64> {
+    let bits = s.to_bits();
+    let exponent = (bits >> 52) & 0x7ff;
+    if !(897..=1149).contains(&exponent) {
+        return None;
+    }
+    if error_sign != 0 && bits & 0x1fff_ffff == 0x1000_0000 {
+        return None;
+    }
+    Some(f64::from(s as f32))
+}
+
+fn round_to_single_exact(s: f64, error_sign: i32, rounding: u16) -> f64 {
     let bits = s.to_bits();
     let negative = bits >> 63 != 0;
     let exponent = ((bits >> 52) & 0x7ff) as i32;
@@ -229,8 +273,35 @@ fn scale_up() -> f64 {
     f64::from_bits((1023 + 200) << 52)
 }
 
+/// The 24-bit result of an operation whose `f64` result is `s`, when it can be had without the
+/// exact error: to nearest, `s` inside `f32`'s normal range and not exactly halfway between two
+/// 24-bit values ([`round_to_single_nearest_fast`], which then never reads the error's sign).
+/// `None` otherwise (zero, infinity and NaN included): the caller computes the error.
+#[inline]
+fn single_fast(s: f64, rounding: u16) -> Option<f64> {
+    if rounding != ROUND_NEAREST {
+        return None;
+    }
+    let bits = s.to_bits();
+    if !(897..=1149).contains(&((bits >> 52) & 0x7ff)) || bits & 0x1fff_ffff == 0x1000_0000 {
+        return None;
+    }
+    Some(f64::from(s as f32))
+}
+
 /// [`x87_add`]'s rounding of `s = a + b` under 24-bit precision.
+#[inline]
 fn single_sum(a: f64, b: f64, s: f64, rounding: u16) -> f64 {
+    if let Some(r) = single_fast(s, rounding) {
+        return r;
+    }
+    single_sum_exact(a, b, s, rounding)
+}
+
+/// [`single_sum`] with the exact error.
+#[cold]
+#[inline(never)]
+fn single_sum_exact(a: f64, b: f64, s: f64, rounding: u16) -> f64 {
     if s == 0.0 {
         // An exact zero (an f64 sum that underflows is exact). Its sign is
         // `+` in every mode but rounding down, which gives `-0` unless both
@@ -252,6 +323,7 @@ fn single_sum(a: f64, b: f64, s: f64, rounding: u16) -> f64 {
 
 /// x87 `FADD`: `a + b` with the x87 choice of NaN ([`nan_result`]), rounded to
 /// the precision of the control word ([`control_word`]).
+#[inline]
 pub fn x87_add(a: f64, b: f64) -> f64 {
     if let Some(nan) = nan_result(a, b) {
         return nan;
@@ -265,6 +337,7 @@ pub fn x87_add(a: f64, b: f64) -> f64 {
 
 /// x87 `FSUB`: `a - b` with the x87 choice of NaN, rounded to the precision of
 /// the control word.
+#[inline]
 pub fn x87_sub(a: f64, b: f64) -> f64 {
     if let Some(nan) = nan_result(a, b) {
         return nan;
@@ -278,6 +351,7 @@ pub fn x87_sub(a: f64, b: f64) -> f64 {
 
 /// x87 `FMUL`: `a * b` with the x87 choice of NaN, rounded to the precision of
 /// the control word.
+#[inline]
 pub fn x87_mul(a: f64, b: f64) -> f64 {
     if let Some(nan) = nan_result(a, b) {
         return nan;
@@ -287,6 +361,9 @@ pub fn x87_mul(a: f64, b: f64) -> f64 {
         // A zero product of nonzero operands underflowed the f64 (outside
         // the model); every other zero is exact.
         Some(rounding) if s != 0.0 && s.is_finite() => {
+            if let Some(r) = single_fast(s, rounding) {
+                return r;
+            }
             // `a * b - s`, exactly. Near the bottom of the f64 range the
             // residual would underflow and lose its sign: then the smaller
             // operand and `s` are scaled up by 2^200 first (exactly).
@@ -304,6 +381,7 @@ pub fn x87_mul(a: f64, b: f64) -> f64 {
 
 /// x87 `FDIV`: `a / b` with the x87 choice of NaN, rounded to the precision of
 /// the control word.
+#[inline]
 pub fn x87_div(a: f64, b: f64) -> f64 {
     if let Some(nan) = nan_result(a, b) {
         return nan;
@@ -311,6 +389,9 @@ pub fn x87_div(a: f64, b: f64) -> f64 {
     let s = a / b;
     match single_precision() {
         Some(rounding) if s != 0.0 && s.is_finite() => {
+            if let Some(r) = single_fast(s, rounding) {
+                return r;
+            }
             // The remainder `a - s * b`, exactly; the error of the quotient
             // has its sign times the divisor's.
             // (`a` and `s` scaled up near the bottom of the range, as in
@@ -329,6 +410,7 @@ pub fn x87_div(a: f64, b: f64) -> f64 {
 /// x87 `FSQRT`: the square root, rounded to the precision of the control word.
 /// A NaN comes back quieted (its payload kept); a negative number other than
 /// `-0` gives the default NaN, as `f64::sqrt` does.
+#[inline]
 pub fn x87_sqrt(value: f64) -> f64 {
     if value.is_nan() {
         return f64::from_bits(value.to_bits() | F64_QUIET);
@@ -336,6 +418,9 @@ pub fn x87_sqrt(value: f64) -> f64 {
     let s = value.sqrt();
     match single_precision() {
         Some(rounding) if s != 0.0 && s.is_finite() => {
+            if let Some(r) = single_fast(s, rounding) {
+                return r;
+            }
             // `value - s * s`, exactly: the root's error has its sign (both
             // scaled up near the bottom of the range, as in `x87_mul`).
             let error = if value < TINY {
@@ -361,6 +446,7 @@ pub fn x87_sqrt(value: f64) -> f64 {
 /// rounding to `f64` first never changes the 24-bit result (53 >= 2 * 24 + 2).
 /// With `double` operands, or a directed rounding mode, use the instruction's
 /// helper. NaNs and infinities come back unchanged.
+#[inline]
 pub fn x87_round(value: f64) -> f64 {
     match single_precision() {
         Some(rounding) if value != 0.0 && value.is_finite() => round_to_single(value, 0, rounding),
@@ -373,6 +459,7 @@ pub fn x87_round(value: f64) -> f64 {
 /// signalling NaN still signalling, so the helpers above can tell it from a
 /// quiet one. A value loaded by `FLD dword` is quiet: use
 /// `f64::from(x87_quiet(..))` for that one.
+#[inline]
 pub fn x87_m32(bits: u32) -> f64 {
     let sign = u64::from(bits >> 31) << 63;
     let exponent = (bits >> 23) & 0xff;
@@ -386,6 +473,7 @@ pub fn x87_m32(bits: u32) -> f64 {
 
 /// `FLD dword`: the value the x87 stack holds after loading the float with
 /// the bit pattern `bits` (a signalling NaN quieted, everything else exact).
+#[inline]
 pub fn x87_load32(bits: u32) -> f64 {
     f64::from(f32::from_bits(x87_quiet_bits(bits)))
 }
@@ -394,6 +482,7 @@ pub fn x87_load32(bits: u32) -> f64 {
 /// bit pattern `bits` (a signalling NaN quieted, everything else exact). A
 /// `double` memory operand of an arithmetic instruction is the plain
 /// `f64::from_bits(bits)` instead (still signalling).
+#[inline]
 pub fn x87_load64(bits: u64) -> f64 {
     if is_nan_bits(bits) {
         f64::from_bits(bits | F64_QUIET)
@@ -404,6 +493,7 @@ pub fn x87_load64(bits: u64) -> f64 {
 
 /// `FSTP dword`: the stack value rounded to a float, as its bits (a NaN keeps
 /// its sign and the top of its payload).
+#[inline]
 pub fn x87_store32(value: f64) -> u32 {
     (value as f32).to_bits()
 }
@@ -539,11 +629,13 @@ pub const X87_STATUS_C2: u16 = 0x0400;
 
 /// `FSIN`: the sine of ST0. An operand out of range (|x| >= 2^63) comes back
 /// unchanged, as the FPU leaves it (C2 set).
+#[inline]
 pub fn x87_fsin(x: X87Ext) -> X87Ext {
     imp::fsin(x)
 }
 
 /// `FCOS`: the cosine of ST0 (out of range: unchanged, as [`x87_fsin`]).
+#[inline]
 pub fn x87_fcos(x: X87Ext) -> X87Ext {
     imp::fcos(x)
 }
@@ -551,6 +643,7 @@ pub fn x87_fcos(x: X87Ext) -> X87Ext {
 /// `FSINCOS`: `(sine, cosine)` of ST0 (afterwards ST1 holds the sine and ST0
 /// the cosine). An operand out of range (|x| >= 2^63) pushes nothing on the
 /// FPU, which the code after it does not expect: that stops with a panic.
+#[inline]
 pub fn x87_fsincos(x: X87Ext) -> (X87Ext, X87Ext) {
     imp::fsincos(x)
 }
@@ -558,38 +651,45 @@ pub fn x87_fsincos(x: X87Ext) -> (X87Ext, X87Ext) {
 /// `FPTAN`: the tangent of ST0 (the 1.0 the instruction then pushes is not
 /// returned: the exe pops it). An operand out of range stops as
 /// [`x87_fsincos`] does.
+#[inline]
 pub fn x87_fptan(x: X87Ext) -> X87Ext {
     imp::fptan(x)
 }
 
 /// `FPATAN` with ST1 = `y` and ST0 = `x`: the arctangent of `y / x` with the
 /// quadrant of the signs (`atan2(y, x)`), left in ST0 after the pop.
+#[inline]
 pub fn x87_fpatan(y: X87Ext, x: X87Ext) -> X87Ext {
     imp::fpatan(y, x)
 }
 
 /// `F2XM1`: `2^x - 1` (defined for -1 <= x <= 1).
+#[inline]
 pub fn x87_f2xm1(x: X87Ext) -> X87Ext {
     imp::f2xm1(x)
 }
 
 /// `FYL2X` with ST1 = `y` and ST0 = `x`: `y * log2(x)` after the pop.
+#[inline]
 pub fn x87_fyl2x(y: X87Ext, x: X87Ext) -> X87Ext {
     imp::fyl2x(y, x)
 }
 
 /// `FYL2XP1` with ST1 = `y` and ST0 = `x`: `y * log2(x + 1)` after the pop.
+#[inline]
 pub fn x87_fyl2xp1(y: X87Ext, x: X87Ext) -> X87Ext {
     imp::fyl2xp1(y, x)
 }
 
 /// `FSCALE` with ST0 = `x` and ST1 = `scale`: `x * 2^trunc(scale)` (the new
 /// ST0; ST1 is left as it was).
+#[inline]
 pub fn x87_fscale(x: X87Ext, scale: X87Ext) -> X87Ext {
     imp::fscale(x, scale)
 }
 
 /// `FRNDINT`: ST0 rounded to an integer with the control word's rounding mode.
+#[inline]
 pub fn x87_frndint(x: X87Ext) -> X87Ext {
     imp::frndint(x)
 }
@@ -598,12 +698,14 @@ pub fn x87_frndint(x: X87Ext) -> X87Ext {
 /// the quotient truncated (`fmod`), and the status word right after the
 /// instruction (C2 [`X87_STATUS_C2`] set: incomplete, run it again; C0, C3, C1
 /// the low three quotient bits).
+#[inline]
 pub fn x87_fprem(x: X87Ext, y: X87Ext) -> (X87Ext, u16) {
     imp::fprem(x, y)
 }
 
 /// `FPREM1`: as [`x87_fprem`] with the quotient rounded to nearest (the IEEE
 /// remainder).
+#[inline]
 pub fn x87_fprem1(x: X87Ext, y: X87Ext) -> (X87Ext, u16) {
     imp::fprem1(x, y)
 }
@@ -611,6 +713,7 @@ pub fn x87_fprem1(x: X87Ext, y: X87Ext) -> (X87Ext, u16) {
 /// `FISTP qword`: ST0 stored as a 64-bit integer, rounded with the control
 /// word's rounding mode ([`control_word`]); the integer indefinite
 /// 0x8000_0000_0000_0000 for a NaN or a value out of range.
+#[inline]
 pub fn x87_fistp64(x: X87Ext) -> i64 {
     imp::fistp64(x, control_word())
 }
@@ -619,6 +722,7 @@ pub fn x87_fistp64(x: X87Ext) -> i64 {
 /// 0xC00`, `FLDCW`, `FISTP`, `FLDCW`, as `_ftol2`-style code sets it): the
 /// value rounded toward zero, the integer indefinite for a NaN or a value out
 /// of range. The thread's control word is left as it was.
+#[inline]
 pub fn x87_fistp64_chop(x: X87Ext) -> i64 {
     imp::fistp64(x, control_word() | ROUNDING_CONTROL)
 }
@@ -636,26 +740,31 @@ pub fn x87_fistp64_chop(x: X87Ext) -> i64 {
 // computes in `f64` (not bit-exact).
 
 /// `FADD`: `a + b`.
+#[inline]
 pub fn x87_fadd(a: X87Ext, b: X87Ext) -> X87Ext {
     imp::fadd(a, b)
 }
 
 /// `FSUB` with ST0 = `a`: `a - b` (the reversed forms are `x87_fsub(b, a)`).
+#[inline]
 pub fn x87_fsub(a: X87Ext, b: X87Ext) -> X87Ext {
     imp::fsub(a, b)
 }
 
 /// `FMUL`: `a * b`.
+#[inline]
 pub fn x87_fmul(a: X87Ext, b: X87Ext) -> X87Ext {
     imp::fmul(a, b)
 }
 
 /// `FDIV` with ST0 = `a`: `a / b` (the reversed forms are `x87_fdiv(b, a)`).
+#[inline]
 pub fn x87_fdiv(a: X87Ext, b: X87Ext) -> X87Ext {
     imp::fdiv(a, b)
 }
 
 /// `FSQRT` of ST0.
+#[inline]
 pub fn x87_fsqrt(a: X87Ext) -> X87Ext {
     imp::fsqrt(a)
 }
@@ -669,6 +778,7 @@ pub const X87_STATUS_C3: u16 = 0x4000;
 /// `FCOM` of ST0 = `a` with `b` (and `FCOMP`/`FCOMPP`/`FUCOM`, which set the
 /// same condition codes): the status word's C3, C2 and C0 (`a > b`: none;
 /// `a < b`: C0; equal: C3; unordered: all three).
+#[inline]
 pub fn x87_fcom(a: X87Ext, b: X87Ext) -> u16 {
     imp::fcom(a, b) & (X87_STATUS_C0 | X87_STATUS_C2 | X87_STATUS_C3)
 }
@@ -679,6 +789,7 @@ pub fn x87_fcom(a: X87Ext, b: X87Ext) -> u16 {
 /// infinity (fraction zero) or a NaN, without it unsupported; a zero exponent is a zero
 /// (significand zero) or a denormal; any other exponent is normal with the integer bit set and
 /// unsupported (an unnormal) without it.
+#[inline]
 pub fn x87_fxam(x: X87Ext) -> u16 {
     const C1: u16 = 0x0200;
     let sign = if x.sign_exponent() & 0x8000 != 0 {
@@ -702,6 +813,7 @@ pub fn x87_fxam(x: X87Ext) -> u16 {
 }
 
 /// `FCHS`: the sign bit flipped (NaNs included).
+#[inline]
 pub fn x87_fchs(a: X87Ext) -> X87Ext {
     let mut bytes = a.0;
     bytes[9] ^= 0x80;
@@ -709,6 +821,7 @@ pub fn x87_fchs(a: X87Ext) -> X87Ext {
 }
 
 /// `FABS`: the sign bit cleared (NaNs included).
+#[inline]
 pub fn x87_fabs(a: X87Ext) -> X87Ext {
     let mut bytes = a.0;
     bytes[9] &= 0x7f;
@@ -734,6 +847,7 @@ pub enum X87Constant {
 
 /// `FLDL2E` and the like: the constant as the running thread's control word
 /// rounds it.
+#[inline]
 pub fn x87_fld_constant(constant: X87Constant) -> X87Ext {
     imp::fld_constant(constant)
 }
@@ -1306,6 +1420,111 @@ mod soft {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fast path to nearest answers exactly what the exact rounding does wherever it
+    /// answers: random values over the whole `f64` range, values on and next to the 24-bit
+    /// midpoints and at the edges of `f32`'s normal range, each with the three error signs.
+    #[test]
+    fn the_fast_rounding_to_nearest_matches_the_exact_one() {
+        let mut values = Vec::new();
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        for _ in 0..200_000 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            values.push(f64::from_bits(state));
+        }
+        for exponent in [896u64, 897, 898, 1000, 1023, 1100, 1148, 1149, 1150] {
+            for low in [0u64, 1, 0x0fff_ffff, 0x1000_0000, 0x1000_0001, 0x1fff_ffff] {
+                for high in [0u64, 1 << 29, 0x000f_ffff_e000_0000] {
+                    for sign in [0u64, 1 << 63] {
+                        values.push(f64::from_bits(sign | exponent << 52 | high | low));
+                    }
+                }
+            }
+        }
+        let mut fast = 0;
+        for s in values {
+            if s == 0.0 || !s.is_finite() {
+                continue;
+            }
+            for error_sign in [-1, 0, 1] {
+                if let Some(r) = round_to_single_nearest_fast(s, error_sign) {
+                    let exact = round_to_single_exact(s, error_sign, ROUND_NEAREST);
+                    assert_eq!(
+                        r.to_bits(),
+                        exact.to_bits(),
+                        "{s:e} ({:016x}) {error_sign}",
+                        s.to_bits()
+                    );
+                    fast += 1;
+                }
+            }
+        }
+        assert!(fast > 10_000, "the fast path ran {fast} times");
+    }
+
+    /// Under 24-bit precision to nearest (the game's control word after the renderer starts),
+    /// `x87_add`/`sub`/`mul`/`div` with their fast path give exactly what rounding the exact
+    /// result does (the error from TwoSum or a fused multiply-add, then the exact rounding), on
+    /// random float and double operands, products and quotients near midpoints included.
+    #[test]
+    fn the_operations_fast_path_matches_the_exact_rounding() {
+        set_control_word(0x007f);
+        let exact = |s: f64, error: f64| {
+            if s == 0.0 || !s.is_finite() {
+                s
+            } else {
+                round_to_single_exact(s, sign_of(error), ROUND_NEAREST)
+            }
+        };
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for i in 0..400_000 {
+            let (a, b) = if i % 2 == 0 {
+                (
+                    f64::from(f32::from_bits(next() as u32 & 0x7fff_ffff | 0x3000_0000)),
+                    f64::from(f32::from_bits(next() as u32 & 0x4fff_ffff)),
+                )
+            } else {
+                let x = f64::from_bits(next() & 0x3fff_ffff_ffff_ffff | 0x3800_0000_0000_0000);
+                let y = f64::from_bits(next() & 0x3fff_ffff_ffff_ffff | 0x3800_0000_0000_0000);
+                (x, if next() & 1 == 0 { y } else { -y })
+            };
+            if a.is_nan() || b.is_nan() {
+                continue;
+            }
+            let s = a + b;
+            let bb = s - a;
+            assert_eq!(
+                x87_add(a, b).to_bits(),
+                exact(s, (a - (s - bb)) + (b - bb)).to_bits(),
+                "{a:e} + {b:e}"
+            );
+            let p = a * b;
+            assert_eq!(
+                x87_mul(a, b).to_bits(),
+                exact(p, a.mul_add(b, -p)).to_bits(),
+                "{a:e} * {b:e}"
+            );
+            if b != 0.0 {
+                let q = a / b;
+                let r = (-q).mul_add(b, a);
+                let expected = if q == 0.0 || !q.is_finite() {
+                    q
+                } else {
+                    round_to_single_exact(q, sign_of(r) * sign_of(b), ROUND_NEAREST)
+                };
+                assert_eq!(x87_div(a, b).to_bits(), expected.to_bits(), "{a:e} / {b:e}");
+            }
+        }
+        set_control_word(DEFAULT_CONTROL_WORD);
+    }
 
     #[test]
     fn signalling_nan_gets_the_quiet_bit_and_keeps_its_payload() {

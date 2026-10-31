@@ -94,9 +94,11 @@ macro_rules! scalar {
     ($t:ty, $n:expr, $get:ident, $set:ident) => {
         impl Scalar for $t {
             const SIZE: u32 = $n;
+            #[inline]
             fn load(m: &Mem, a: u32) -> Self {
                 m.$get(a)
             }
+            #[inline]
             fn store(self, m: &mut Mem, a: u32) {
                 m.$set(a, self)
             }
@@ -115,9 +117,11 @@ scalar!(f64, 8, f64, set_f64);
 
 impl Scalar for bool {
     const SIZE: u32 = 1;
+    #[inline]
     fn load(m: &Mem, a: u32) -> Self {
         m.u8(a) != 0
     }
+    #[inline]
     fn store(self, m: &mut Mem, a: u32) {
         m.set_u8(a, self as u8)
     }
@@ -125,9 +129,11 @@ impl Scalar for bool {
 
 impl<T> Scalar for Ptr<T> {
     const SIZE: u32 = 4;
+    #[inline]
     fn load(m: &Mem, a: u32) -> Self {
         Ptr::new(m.u32(a))
     }
+    #[inline]
     fn store(self, m: &mut Mem, a: u32) {
         m.set_u32(a, self.0)
     }

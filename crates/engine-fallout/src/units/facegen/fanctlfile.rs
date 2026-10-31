@@ -225,7 +225,9 @@ fn checked_control(e: &mut Engine, vector: u32, index: u32) -> u32 {
 // `_invalid_parameter_noinfo` call is never reached.
 #[allow(unused_comparisons, clippy::absurd_extreme_comparisons)]
 pub fn fn_00aaac10(e: &mut Engine, this: Ptr, file: Ptr<BSFaceGenBinaryFile>, table: u32) -> bool {
-    e.with_stack(0xc, |e, locals| {
+    // The out local `0060b370` fills is its 8-byte element iterator (`[EBP-0x1C]`, two words
+    // stored by `004b0680`), so the frame holds 0x10 bytes.
+    e.with_stack(0x10, |e, locals| {
         let count_slot = locals.addr();
         let length_slot = locals.addr() + 4;
         let out_slot = locals.addr() + 8;

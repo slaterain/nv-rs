@@ -290,10 +290,13 @@ pub fn tes_image_space_modifier_initialize_data(e: &mut Engine, this: Ptr) {
     e.mem.set_f32(at + 0x24, 1.0);
     e.mem.set_u8(at + 0xe8, 0);
     let half = x87_quiet_bits(e.mem.u32(HALF_F));
-    let pair = e.with_stack(8, |e, point| {
-        e.call(POINT2_CONSTRUCT, &args![point, half, half]).u32()
+    // The pair is the frame's `NiPoint2` at `EBP-0x20`: `00452dc0` builds it there and answers
+    // its address, and both words are copied through that address, so they are read while it is
+    // there. (Scoped to `00452dc0` alone, the copy read a freed block.)
+    let (x, y) = e.with_stack(8, |e, point| {
+        let pair = e.call(POINT2_CONSTRUCT, &args![point, half, half]).u32();
+        (e.mem.u32(pair), e.mem.u32(pair + 4))
     });
-    let (x, y) = (e.mem.u32(pair), e.mem.u32(pair + 4));
     e.mem.set_u32(at + 0xec, x);
     e.mem.set_u32(at + 0xf0, y);
     e.mem.set_u8(at + 0x100, 0);
@@ -1475,6 +1478,19 @@ mod image_space_modifier_tests {
             built[0x2a][1..],
             [0x14, 2, COLOR_KEY_CONSTRUCT, KEY_DESTRUCT]
         );
+    }
+
+    /// The pair at +0xec is copied from the frame's `NiPoint2` (`EBP-0x20`) while it is still
+    /// there: `00452dc0` builds it there and answers its address. With the freed-block check a
+    /// point freed before the copy would give the fill word.
+    #[test]
+    fn initialize_data_copies_the_pair_from_a_live_point() {
+        let mut e = engine();
+        e.mem.enable_freed_check(true);
+        let this = modifier(&mut e);
+        e.call(0x0052_bd40, &args![this]);
+        assert_eq!(e.mem.f32(this + 0xec), 0.5);
+        assert_eq!(e.mem.f32(this + 0xf0), 0.5);
     }
 
     #[test]

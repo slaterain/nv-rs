@@ -47,19 +47,23 @@ pub fn fn_00d21960(e: &mut Engine, object: Ptr) -> u32 {
     if iterator == 0 {
         return 0;
     }
-    let mut deepest = 0u8;
-    let mut index = e.vcall(iterator, 8, &args![]).u32();
-    while index != 0xffff_ffff {
-        let child = e.with_stack(0x200, |e, buffer| {
-            e.vcall(iterator, 0x14, &args![index, buffer]).u32()
-        });
-        let depth = fn_00d21960(e, Ptr::new(child)) as u8;
-        if depth > deepest {
-            deepest = depth;
+    // The 0x200-byte buffer is a local of the whole frame (`auStack_210`): the child slot 0x14
+    // answers can be built in it, and the recursion below reads that child, so the buffer lives
+    // until the function returns. (Scoped to the slot call alone, it was freed before the
+    // recursion, whose own buffer then took and cleared the same block under the child.)
+    e.with_stack(0x200, |e, buffer| {
+        let mut deepest = 0u8;
+        let mut index = e.vcall(iterator, 8, &args![]).u32();
+        while index != 0xffff_ffff {
+            let child = e.vcall(iterator, 0x14, &args![index, buffer]).u32();
+            let depth = fn_00d21960(e, Ptr::new(child)) as u8;
+            if depth > deepest {
+                deepest = depth;
+            }
+            index = e.vcall(iterator, 0xc, &args![index]).u32();
         }
-        index = e.vcall(iterator, 0xc, &args![index]).u32();
-    }
-    u32::from(deepest) + 1
+        u32::from(deepest) + 1
+    })
 }
 
 /// This unit's translated functions, by exe address.
@@ -378,5 +382,30 @@ mod havok_a04_tests {
         let root = object(&mut e, object_vtable, top);
         assert_eq!(e.call(0x00d2_1960, &args![middle]).u32(), 1);
         assert_eq!(e.call(0x00d2_1960, &args![root]).u32(), 2);
+    }
+
+    /// A child built in the 0x200-byte buffer (slot 0x14 answers a pointer into it) is still
+    /// there when the recursion reads it: the buffer is the frame's, not the slot call's. With
+    /// the freed-block check a buffer freed early would fault on the child's vtable.
+    #[test]
+    fn fn_00d21960_reads_a_child_built_in_its_buffer() {
+        let mut e = Engine::new();
+        e.mem.enable_freed_check(true);
+        let (object_vtable, iterator_vtable) = build(&mut e);
+        let in_buffer = e.mem.alloc(0x20);
+        for slot in (0..0x20).step_by(4) {
+            let word = e.mem.u32(iterator_vtable + slot);
+            e.mem.set_u32(in_buffer + slot, word);
+        }
+        e.mem.set_u32(in_buffer + 0x14, 0x0900_0035);
+        e.register_double(0x0900_0035, move |e, a| {
+            // A leaf made in place: the object table, no iterator.
+            e.mem.set_u32(a[2], object_vtable);
+            e.mem.set_u32(a[2] + 4, 0);
+            a[2].into_ret()
+        });
+        let one = iterator(&mut e, in_buffer, &[0]);
+        let root = object(&mut e, object_vtable, one);
+        assert_eq!(e.call(0x00d2_1960, &args![root]).u32(), 1);
     }
 }

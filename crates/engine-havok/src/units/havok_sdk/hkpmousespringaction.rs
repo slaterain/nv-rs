@@ -1380,8 +1380,7 @@ mod apply_action_tests {
             sink.borrow_mut().push(a[2]);
             Ret::default()
         });
-        let raw = s.e.mem.alloc(0x184);
-        s.e.mem.free(raw);
+        let raw = s.e.next_stack_local(0x184);
         s.e.call(0x00cb_b1e0, &args![s.action, s.step]);
         // The impulse is at +0x14 of the base 0x174 bytes under the boundary.
         assert_eq!(

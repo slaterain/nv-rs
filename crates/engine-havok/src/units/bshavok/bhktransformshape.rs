@@ -924,9 +924,14 @@ mod movement_tests {
         assert_eq!(e.mem.f32(cinfo + 0x44), 4.0);
     }
 
-    /// A stream whose slot `0x30` records the object handed to it.
+    /// A stream whose slot `0x30` records the object handed to it; 0x300 bytes, so its swap flag
+    /// at `+0x1E4` is inside it (a store there must not land in the next block, such as the
+    /// thread stack the first `with_stack` local makes, which zeroes it).
     fn stream(e: &mut Engine) -> u32 {
-        let stream = object(e, &[(0x30, 0x0900_0150)]);
+        let vtable = e.mem.alloc(0x200);
+        e.mem.set_u32(vtable + 0x30, 0x0900_0150);
+        let stream = e.mem.alloc(0x300);
+        e.mem.set_u32(stream, vtable);
         quiet(e, &[0x0900_0150]);
         stream
     }

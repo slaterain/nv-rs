@@ -60,7 +60,12 @@
 //!   after `Play`, varying from run to run; here the periods are the platform clock's 10 ms
 //!   steps (`Engine::clock_now_us`), so runs repeat. A non-looping buffer stops when the write
 //!   cursor reaches its end (both cursors then read 0, status 0); `Stop` leaves both cursors at
-//!   the write cursor (at the end, for a buffer that stopped by itself).
+//!   the write cursor (at 0, for a buffer that stopped by itself, which `Play` then plays again
+//!   from its start). A later `Play` of the same buffer (after its end, a `Stop`, a
+//!   `SetCurrentPosition`) puts the write cursor `ceil(n * frequency / 100)` frames on, and the
+//!   buffer stops when that reaches its end (`dsound-capture replays`, 2026-10-30: all ten
+//!   cases at 22050 Hz mono and 44100 Hz stereo). A buffer's first `Play` that day led by 33
+//!   frames, not the one frame of the earlier capture, so that lead varies; the layer keeps one.
 //!
 //! As in the DirectInput layer (`super::dinput`), the objects live in engine memory with a vtable
 //! pointer at `+0`, each provided slot a platform function (code addresses from [`CODE_BASE`]);
@@ -555,11 +560,13 @@ const DISTORTION_DEFAULTS: [f32; 5] = [-18.0, 15.0, 2400.0, 2400.0, 8000.0];
 enum Play {
     /// Stopped with both cursors at this byte.
     Stopped(u32),
-    /// Playing since the clock read `start` (microseconds), from frame `base`.
+    /// Playing since the clock read `start` (microseconds), from frame `base`; `first` for the
+    /// buffer's first `Play` since it was made (the cursors lead differently, [`cursors`]).
     Playing {
         looping: bool,
         start: u64,
         base: u64,
+        first: bool,
     },
     /// A non-looping buffer that played to its end.
     Ended,
@@ -583,6 +590,8 @@ struct Buffer {
     pan: i32,
     frequency: u32,
     play: Play,
+    /// `Play` was called on it before (its next `Play` is not its first).
+    played: bool,
     locks: u32,
     effect: Option<&'static str>,
     min_distance: f32,
@@ -1363,6 +1372,7 @@ fn new_buffer(flags: u32) -> Buffer {
         pan: 0,
         frequency: 0,
         play: Play::Stopped(0),
+        played: false,
         locks: 0,
         effect: None,
         // DS3D_DEFAULTMINDISTANCE and DS3D_DEFAULTMAXDISTANCE (the capture's defaults).
@@ -1733,6 +1743,7 @@ fn set_frequency(e: &mut Engine, this: Ptr, v: u32) -> u32 {
         looping,
         start,
         base,
+        first,
     } = b.play
     {
         let n = periods(start, now);
@@ -1741,6 +1752,7 @@ fn set_frequency(e: &mut Engine, this: Ptr, v: u32) -> u32 {
             looping,
             start: now,
             base: consumed,
+            first,
         };
     }
     b.frequency = v;
@@ -1941,14 +1953,24 @@ fn cursors(e: &mut Engine, this: Ptr) -> (u32, u32) {
             looping,
             start,
             base,
+            first,
         } => {
             let (n, f, len, align) = (periods(start, now), b.frequency(), b.frames(), b.align());
             let consumed = base + frames(n, f);
-            if !looping && consumed >= len {
+            // A buffer's first Play: the write cursor one frame past the frames played after the
+            // first period. A later Play of the same buffer (after it ended, after Stop, after
+            // SetCurrentPosition, measured 2026-10-30 with `dsound-capture replays`): the
+            // frames played rounded up, and it ends once that reaches the end.
+            let write = if first {
+                consumed + u64::from(n >= 1)
+            } else {
+                base + (n * u64::from(f)).div_ceil(100)
+            };
+            let ended = if first { consumed >= len } else { write >= len };
+            if !looping && ended {
                 b.play = Play::Ended;
                 return (0, 0);
             }
-            let write = consumed + u64::from(n >= 1);
             // The play cursor trails the write cursor by three periods at the format's rate.
             let lag = 3 * u64::from(b.rate()) / 100;
             let play = if write - base > lag {
@@ -2067,8 +2089,9 @@ fn unlock(e: &mut Engine, this: Ptr, _p1: u32, _n1: u32, _p2: u32, _n2: u32) -> 
 }
 
 /// `Play(0, 0, flags)` with flags 0 or `DSBPLAY_LOOPING`: plays from where the buffer stopped
-/// (on the platform clock); a playing buffer only takes the looping flag. Playing a buffer that
-/// played to its end, or from its end, is not provided.
+/// (on the platform clock); a playing buffer only takes the looping flag; a buffer that played to
+/// its end plays from its start, measured. Playing from the end (set there by
+/// `SetCurrentPosition`) is not provided.
 fn play(e: &mut Engine, this: Ptr, reserved: u32, priority: u32, flags: u32) -> u32 {
     let b = secondary(e, this, "Play");
     assert!(
@@ -2078,6 +2101,7 @@ fn play(e: &mut Engine, this: Ptr, reserved: u32, priority: u32, flags: u32) -> 
     let looping = flags & DSBPLAY_LOOPING != 0;
     let _ = cursors(e, this);
     let now = e.clock_now_us();
+    let first = !buffer(e, this).played;
     let play = match buffer(e, this).play {
         Play::Stopped(at) => {
             assert!(
@@ -2088,15 +2112,27 @@ fn play(e: &mut Engine, this: Ptr, reserved: u32, priority: u32, flags: u32) -> 
                 looping,
                 start: now,
                 base: u64::from(at / b.align()),
+                first,
             }
         }
-        Play::Playing { start, base, .. } => Play::Playing {
+        Play::Playing {
+            start, base, first, ..
+        } => Play::Playing {
             looping,
             start,
             base,
+            first,
         },
-        Play::Ended => panic!("Play on a buffer that played to its end is not provided"),
+        // Measured (2026-10-30, `dsound-capture replays`): a buffer that played to its end
+        // plays again from its start.
+        Play::Ended => Play::Playing {
+            looping,
+            start: now,
+            base: 0,
+            first,
+        },
     };
+    buffer(e, this).played = true;
     let was_playing = matches!(buffer(e, this).play, Play::Playing { .. });
     buffer(e, this).play = play;
     heard(e, this, "Play");
@@ -2121,8 +2157,8 @@ fn play(e: &mut Engine, this: Ptr, reserved: u32, priority: u32, flags: u32) -> 
     DS_OK
 }
 
-/// `Stop()`: both cursors stay at the write cursor (at the end for a buffer that played to its
-/// end), measured.
+/// `Stop()`: both cursors stay at the write cursor (at 0 for a buffer that played to its end),
+/// measured.
 fn stop(e: &mut Engine, this: Ptr) -> u32 {
     let b = secondary(e, this, "Stop");
     if matches!(b.play, Play::Playing { .. }) {
@@ -2133,7 +2169,8 @@ fn stop(e: &mut Engine, this: Ptr) -> u32 {
     let ended = ended || buffer(e, this).play == Play::Ended;
     buffer(e, this).play = match b.play {
         Play::Stopped(at) => Play::Stopped(at),
-        _ if ended => Play::Stopped(b.bytes),
+        // Measured: a buffer that played to its end keeps both cursors at 0.
+        _ if ended => Play::Stopped(0),
         _ => Play::Stopped(write),
     };
     with_voice(e, this.addr(), |m, at| {
@@ -3158,6 +3195,26 @@ mod tests {
         );
     }
 
+    /// Measured (`dsound-capture replays`): a later Play of a buffer puts the write cursor at the
+    /// frames played rounded up, its first Play one frame past them.
+    #[test]
+    fn a_buffer_played_again_leads_by_the_frames_rounded_up() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, 0]).u32(), DS_OK);
+        e.clock_ms = 20; // two periods: 441 frames played
+        assert_eq!(position(&mut e, b).1, 2 * 442, "first Play");
+        assert_eq!(e.vcall(b, 0x48, &[]).u32(), DS_OK);
+        assert_eq!(e.vcall(b, 0x34, &[0]).u32(), DS_OK);
+        e.clock_ms = 100;
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, 0]).u32(), DS_OK);
+        e.clock_ms = 120;
+        assert_eq!(position(&mut e, b).1, 2 * 441, "a later Play");
+        e.clock_ms = 130; // 661.5 frames: rounded up either way
+        assert_eq!(position(&mut e, b).1, 2 * 662);
+    }
+
     #[test]
     fn a_buffer_played_once_stops_at_its_end() {
         let mut e = engine();
@@ -3168,12 +3225,24 @@ mod tests {
         assert_eq!(position(&mut e, b).2, 1);
         e.clock_ms = 1000; // 100 periods: 22050 frames, the whole buffer
         assert_eq!(position(&mut e, b), (0, 0, 0));
-        e.vcall(b, 0x48, &[]);
-        assert_eq!(
-            position(&mut e, b),
-            (44100, 44100, 0),
-            "at the end after Stop"
+        // Measured (`dsound-capture replays`): Stop keeps both cursors at 0, and Play plays the
+        // buffer again from its start.
+        assert_eq!(e.vcall(b, 0x48, &[]).u32(), DS_OK);
+        assert_eq!(position(&mut e, b), (0, 0, 0), "at 0 after Stop");
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, 0]).u32(), DS_OK);
+        assert_eq!(position(&mut e, b).2, 1, "playing again");
+        e.clock_ms = 1500;
+        let (play, write, status) = position(&mut e, b);
+        assert!(
+            status == 1 && play < write && write < 44100,
+            "{play} {write} {status}"
         );
+        e.clock_ms = 2010;
+        assert_eq!(position(&mut e, b), (0, 0, 0), "ended again");
+        // Straight after the end, without a Stop: from the start too.
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, 0]).u32(), DS_OK);
+        assert_eq!(position(&mut e, b).2, 1);
+        assert_eq!(e.vcall(b, 0x48, &[]).u32(), DS_OK);
         assert_eq!(e.vcall(b, 0x34, &[0]).u32(), DS_OK);
         assert_eq!(position(&mut e, b), (0, 0, 0));
     }

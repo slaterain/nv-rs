@@ -2024,8 +2024,7 @@ mod tests {
         let log = new_log();
         let c = collision(&mut e, &log, 0, 2, 0);
         // The exe's 0x14-byte frame: the kind at +0x8, the size at +0xc, the track at +0x10.
-        let frame = e.mem.alloc(0x14);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x14);
         assert_eq!(serialize_collision(&mut e, &c), 0);
         let serialize = calls(&log, SERIALIZE_ENTRY);
         assert_eq!(serialize.len(), 1);
@@ -2250,8 +2249,7 @@ mod tests {
         let converter = e.mem.alloc(8);
         let container = e.mem.alloc(8);
         // The sorted array sits at +0x14 of the exe's 0x30-byte frame (with the arguments).
-        let frame = e.mem.alloc(0x30);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x30);
         e.call(0x00dc_da40, &args![converter, group, container]);
         let list = e.mem.u32(group + 0x28);
         // The sort sees: this, allocator, count, the two words, the array header and the items.
@@ -2396,8 +2394,7 @@ mod tests {
         let container = e.mem.alloc(8);
         let converter = e.mem.alloc(8);
         // The body map sits at +0x20 of the exe's 0x2c-byte frame.
-        let frame = e.mem.alloc(0x2c);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x2c);
         e.call(0x00dc_dc00, &args![converter, bodies, 2i32, container]);
         let reserved = calls(&log, MAP_RESERVE);
         assert_eq!(reserved.len(), 1);
@@ -2653,8 +2650,7 @@ mod tests {
         entry_double(&mut e, &log, item + 0x10, 0);
         let track = e.mem.alloc(0x20);
         // The exe's 0x28-byte frame: the track word +0x14, the size +0x18, the kind +0x24.
-        let frame = e.mem.alloc(0x28);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x28);
         let got = e.call(0x00dc_df70, &args![source, 0x99u32, track]).u32();
         assert_eq!(got, 0);
         let serialized = calls(&log, SERIALIZE_ENTRY);
@@ -2960,8 +2956,7 @@ mod tests {
         set_options(&mut e, &s, [1, 1, 1, 1]);
         e.mem.set_u16(s.body_a + 0x204, 1);
         // The constraint info at +0x28 of the exe's aligned frame.
-        let block = e.mem.alloc(COLLISION_FRAME + 0x10);
-        e.mem.free(block);
+        let block = e.next_stack_local(COLLISION_FRAME + 0x10);
         let frame = (block + 0xf) & !0xf;
         assert_eq!(deserialize_collision(&mut e, &s), 0);
         assert_eq!(calls(&log, ADD_CONSTRAINT_INFO)[0][2], frame + 0x28);
@@ -3246,8 +3241,7 @@ mod tests {
             Ret::default()
         });
         // The selector is the exe's whole 4-byte frame.
-        let frame = e.mem.alloc(4);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(4);
         e.call(0x00dc_e7b0, &args![0x11u32, 0x22u32, 0x33u32]);
         let loaded = calls(&log, LOAD_CONTACT_POINTS_INTERNAL);
         assert_eq!(loaded.len(), 1);

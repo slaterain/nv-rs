@@ -2767,7 +2767,8 @@ pub fn model_loader_output_model_map_contents(
                 };
                 let model: Ptr = Ptr::new(model);
                 if fn_004431b0(e, model.cast()) > 0 {
-                    e.with_stack(4, |e, text| {
+                    // A `BSString` local (8 bytes: the text, its length and capacity, `004037b0`).
+                    e.with_stack(8, |e, text| {
                         e.call(STRING_CONSTRUCT, &args![text]);
                         let manual = e.call(OWNER_THREAD_ID, &args![model]).u32();
                         let count = e.call(TASK_GET_STATE, &args![model]).u32();

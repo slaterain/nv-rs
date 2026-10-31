@@ -878,8 +878,7 @@ mod pair_tests {
     #[test]
     fn at_00620340_keeps_the_local_member_below_an_aligned_ebp() {
         let mut r = rig();
-        let raw = r.e.mem.alloc(0x70 + 0x10);
-        r.e.mem.free(raw);
+        let raw = r.e.next_stack_local(0x70 + 0x10);
         run(&mut r, 0xa1, 0xa2, false);
         // The word 0x24 at EBP-0x54, the member at EBP-0x50.
         let ebp = (raw + 0x70 + 0xf) & !0xf;

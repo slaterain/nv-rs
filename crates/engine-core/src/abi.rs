@@ -22,31 +22,40 @@ pub struct Ret {
 }
 
 impl Ret {
+    #[inline]
     pub fn u32(self) -> u32 {
         self.eax
     }
+    #[inline]
     pub fn i32(self) -> i32 {
         self.eax as i32
     }
     /// The low byte, as MSVC returns `bool` (`AL`).
+    #[inline]
     pub fn bool(self) -> bool {
         self.eax as u8 != 0
     }
+    #[inline]
     pub fn u8(self) -> u8 {
         self.eax as u8
     }
+    #[inline]
     pub fn u16(self) -> u16 {
         self.eax as u16
     }
+    #[inline]
     pub fn u64(self) -> u64 {
         self.eax as u64 | (self.edx as u64) << 32
     }
+    #[inline]
     pub fn f32(self) -> f32 {
         self.st0 as f32
     }
+    #[inline]
     pub fn f64(self) -> f64 {
         self.st0
     }
+    #[inline]
     pub fn ptr<T>(self) -> Ptr<T> {
         Ptr::new(self.eax)
     }
@@ -180,9 +189,11 @@ pub trait RetVal: Sized {
 macro_rules! int_ret {
     ($($t:ty),*) => {$(
         impl RetVal for $t {
+            #[inline]
             fn into_ret(self) -> Ret {
                 Ret { eax: self.one_word(), ..Ret::default() }
             }
+            #[inline]
             fn from_ret(r: Ret) -> Self {
                 <$t as Arg>::take(&[r.eax], &mut 0)
             }
@@ -192,23 +203,28 @@ macro_rules! int_ret {
 int_ret!(u32, i32, u16, i16, u8, i8, bool);
 
 impl<T> RetVal for Ptr<T> {
+    #[inline]
     fn into_ret(self) -> Ret {
         Ret {
             eax: self.0,
             ..Ret::default()
         }
     }
+    #[inline]
     fn from_ret(r: Ret) -> Self {
         Ptr::new(r.eax)
     }
 }
 impl RetVal for () {
+    #[inline]
     fn into_ret(self) -> Ret {
         Ret::default()
     }
+    #[inline]
     fn from_ret(_: Ret) -> Self {}
 }
 impl RetVal for u64 {
+    #[inline]
     fn into_ret(self) -> Ret {
         Ret {
             eax: self as u32,
@@ -216,28 +232,33 @@ impl RetVal for u64 {
             st0: 0.0,
         }
     }
+    #[inline]
     fn from_ret(r: Ret) -> Self {
         r.u64()
     }
 }
 impl RetVal for f32 {
+    #[inline]
     fn into_ret(self) -> Ret {
         Ret {
             st0: self as f64,
             ..Ret::default()
         }
     }
+    #[inline]
     fn from_ret(r: Ret) -> Self {
         r.st0 as f32
     }
 }
 impl RetVal for f64 {
+    #[inline]
     fn into_ret(self) -> Ret {
         Ret {
             st0: self,
             ..Ret::default()
         }
     }
+    #[inline]
     fn from_ret(r: Ret) -> Self {
         r.st0
     }

@@ -803,8 +803,7 @@ mod tests {
         e.call_log = Some(vec![]);
         // The exe's 0x14-byte frame: the word at +0x8; the `isOk` byte at +0x7 for `0xc2` and
         // in the command's argument slot (+0x10) for `0xc3`.
-        let frame = e.mem.alloc(0x14);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x14);
         e.call(0x00d6_0c10, &args![this, 0xc2u32]);
         e.call(0x00d6_0c10, &args![this, 0xc3u32]);
         let checks = calls_to(&e, IARCHIVE_IS_OK);
@@ -1009,8 +1008,7 @@ mod tests {
         let step = 0.25f32;
         e.call_log = Some(vec![]);
         // The router gets `step`'s own argument slot, +0xc of the exe's 0x10 bytes.
-        let frame = e.mem.alloc(0x10);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x10);
         e.call(0x00d6_0dd0, &args![this, step]);
         assert_eq!(calls_to(&e, ROUTER_CONSUME_COMMANDS)[0][1], frame + 0xc);
         let stepped: Vec<(u32, Vec<u32>)> = log.borrow().clone();
@@ -1171,8 +1169,7 @@ mod tests {
         e.mem.set_u32(commands + 4, 3);
         e.call_log = Some(vec![]);
         // The byte count goes through `commands`' own argument slot, +0x14 of the exe's 0x20.
-        let frame = e.mem.alloc(0x20);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x20);
         let got = e
             .call(0x00d6_0f30, &args![this, commands, 0x1111u32, 0x2222u32])
             .u32();
@@ -1336,8 +1333,7 @@ mod tests {
                 answer(a[1])
             });
             // The flag byte at +0x3 of the exe's 4-byte frame.
-            let frame = e.mem.alloc(4);
-            e.mem.free(frame);
+            let frame = e.next_stack_local(4);
             e.call_log = Some(vec![]);
             assert_eq!(e.call(0x00d6_11e0, &args![this]).bool(), ok);
             assert_eq!(calls_to(&e, OARCHIVE_IS_OK)[0][1], frame + 3);

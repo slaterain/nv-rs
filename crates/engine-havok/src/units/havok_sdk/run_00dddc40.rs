@@ -133,8 +133,7 @@ mod tests {
             Ret::default()
         });
         // The two out words are the exe's whole 8-byte frame.
-        let frame = e.mem.alloc(8);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(8);
         e.call(0x00dd_dc40, &args![0x1234u32]);
         let log = log.borrow();
         assert_eq!(log.len(), 1);

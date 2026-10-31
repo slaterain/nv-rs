@@ -434,8 +434,13 @@ impl PlayerMovement {
         let guard = self.guard_open(e, stage);
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
+        let mark = e.guest_stack_mark();
         let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(e)));
         std::panic::set_hook(hook);
+        if out.is_err() {
+            // The stage runs again on later frames: the stop's locals go back.
+            e.guest_stack_restore(mark);
+        }
         self.guard_close(e, guard, out)
     }
 
@@ -604,17 +609,22 @@ impl PlayerMovement {
             let mut rows: Vec<(u32, u64)> = by_addr.into_iter().collect();
             rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
             let total: u64 = rows.iter().map(|r| r.1).sum();
+            // `NV_MOVE_CALL_PROFILE_TOP=N`: list N rows of each table instead of 200 (0: all).
+            let top = std::env::var("NV_MOVE_CALL_PROFILE_TOP")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .map_or(200, |n| if n == 0 { usize::MAX } else { n });
             let mut text = format!(
                 "== {stage}: {total} calls
 "
             );
-            for (addr, n) in rows.iter().take(200) {
+            for (addr, n) in rows.iter().take(top) {
                 let _ = writeln!(text, "{addr:08x}	{n}");
             }
             let mut pairs: Vec<(u64, u64)> = counts.into_iter().collect();
             pairs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
             let _ = writeln!(text, "-- {stage}: caller -> address");
-            for (key, n) in pairs.iter().take(200) {
+            for (key, n) in pairs.iter().take(top) {
                 let _ = writeln!(text, "{:08x} -> {:08x}	{n}", key >> 32, *key as u32);
             }
             use std::io::Write as _;
@@ -1361,6 +1371,19 @@ fn key_script() -> &'static [(u64, u8, u64)] {
     })
 }
 
+/// Whether the real game window's keyboard and mouse reach the game: always in a run without a
+/// script; in a scripted run (`NV_MOVE_KEYS` or `NV_MOVE_MOUSE`) only with `NV_MOVE_REAL_INPUT=1`.
+/// A key or click on a test window had mixed into scripted runs (whole clips fired, the Pip-Boy
+/// opened) and read as port bugs.
+fn real_input_reaches_game() -> bool {
+    static REACHES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *REACHES.get_or_init(|| {
+        let set = |name| std::env::var(name).is_ok_and(|v| !v.trim().is_empty());
+        !(set("NV_MOVE_KEYS") || set("NV_MOVE_MOUSE"))
+            || std::env::var("NV_MOVE_REAL_INPUT").as_deref() == Ok("1")
+    })
+}
+
 /// One `NV_MOVE_MOUSE` item: the first frame, the motion per frame, how many frames, the buttons.
 type MouseStep = (u64, i32, i32, u64, u8);
 
@@ -1441,9 +1464,14 @@ impl crate::Host {
         self.join();
         let script = key_script();
         let frame = self.movement.main_frames;
-        // The real game window's keyboard (`NV_D3D9=real`, Windows) holds keys too.
+        // The real game window's keyboard (`NV_D3D9=real`, Windows) holds keys too, unless a
+        // script drives the run ([`real_input_reaches_game`]).
         #[cfg(windows)]
-        let window_keys = engine::units::platform::d3d9real::held_keys();
+        let window_keys = if real_input_reaches_game() {
+            engine::units::platform::d3d9real::held_keys()
+        } else {
+            [false; 256]
+        };
         #[cfg(not(windows))]
         let window_keys = [false; 256];
         for code in 0..=255u8 {
@@ -1478,17 +1506,19 @@ impl crate::Host {
         };
         // A scripted run (`NV_MOVE_KEYS`) drives the menus with keys; the real mouse moving over
         // the window would switch the game's interface to its mouse path and the keys would miss.
-        // Once the last scripted key is released the mouse is the player's again.
+        // With `NV_MOVE_REAL_INPUT=1` the mouse is the player's again once the last scripted key
+        // is released; otherwise a scripted run never takes it ([`real_input_reaches_game`]).
         let scripted_until = key_script()
             .iter()
             .map(|&(at, _, hold)| at + hold)
             .max()
             .unwrap_or(0);
-        let (mut motion, mut buttons) = if self.movement.main_frames < scripted_until {
-            ([0; 3], [false; 8])
-        } else {
-            (motion, buttons)
-        };
+        let (mut motion, mut buttons) =
+            if !real_input_reaches_game() || self.movement.main_frames < scripted_until {
+                ([0; 3], [false; 8])
+            } else {
+                (motion, buttons)
+            };
         let frame = self.movement.main_frames;
         for &(at, dx, dy, hold, mask) in mouse_script() {
             if frame >= at && frame < at + hold {

@@ -4291,8 +4291,10 @@ pub fn fn_0056a470(e: &mut Engine, this: Ptr<TESObjectREFR>, first: u32, second:
 /// form, and the flags and karma from the holder; without one the size is
 /// the quotient of the base form's virtuals `+0x98` and `+0x94` (an
 /// unsigned division, as the exe does), times 128.0 and the decal
-/// reference's scale. The unwinding frames are not translated.
-pub fn fn_0056a4a0(e: &mut Engine, this: Ptr<TESObjectREFR>) {
+/// reference's scale. The unwinding frames are not translated. The exe
+/// pops one stack word it never reads (`RET 4`; its one caller, Load3D at
+/// 0056bf95, pushes 0).
+pub fn fn_0056a4a0(e: &mut Engine, this: Ptr<TESObjectREFR>, _unused: u32) {
     let me = this.addr();
     e.call(DECAL_REFRESH, &args![me]);
     let list = extra_list(e, me);
@@ -4673,7 +4675,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             tes_object_refr_update_child_activates(Ptr<TESObjectREFR>) -> bool
         ),
         entry!(0x0056a470, fn_0056a470(Ptr<TESObjectREFR>, u32, u32, u32)),
-        entry!(0x0056a4a0, fn_0056a4a0(Ptr<TESObjectREFR>)),
+        entry!(0x0056a4a0, fn_0056a4a0(Ptr<TESObjectREFR>, u32)),
     ]
 }
 
@@ -10366,7 +10368,7 @@ mod tests {
         let node = e.mem.u32(refr.addr() + OWN_NODE);
         let cell = e.mem.u32(refr.addr() + REFR_CELL);
         let log = logged(&mut e, |e| {
-            e.call(0x0056_a4a0, &args![refr]);
+            e.call(0x0056_a4a0, &args![refr, 0u32]);
         });
         assert_eq!(calls_to(&log, DECAL_REFRESH).len(), 1);
         assert_eq!(
@@ -10423,7 +10425,7 @@ mod tests {
             }
             a[0].into_ret()
         });
-        e.call(0x0056_a4a0, &args![refr]);
+        e.call(0x0056_a4a0, &args![refr, 0u32]);
         // the random floats take (second getter, first getter) and (the
         // fourth, the third)
         assert_eq!(e.mem.f32(kept + DECAL_FLOAT_38), 301.0);
@@ -10448,7 +10450,7 @@ mod tests {
         assert_eq!(e.mem.f32(kept + DECAL_FLOAT_58), 90.0);
         // without the distance flag the distance and its flags stay
         returns(&mut e, HOLDER_FLAG_C, 0);
-        e.call(0x0056_a4a0, &args![refr]);
+        e.call(0x0056_a4a0, &args![refr, 0u32]);
         assert_eq!(e.mem.u8(kept + DECAL_BYTE_73), 0);
     }
 

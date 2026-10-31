@@ -5843,8 +5843,12 @@ pub fn fn_00967700(e: &mut Engine, this: Ptr) -> bool {
 /// otherwise `conversation` replaces it when there is no current one and the
 /// distance is at most 1200.0, or when it is no farther than the current
 /// one.
+///
+/// thiscall, `RET 0xc` (`00967894`): `this` (ECX, stored at `00967736` and
+/// never read again; the body reads the global player) and three words.
 pub fn player_character_check_for_closes_conversation(
     e: &mut Engine,
+    _this: Ptr<PlayerCharacter>,
     first: u32,
     second: u32,
     conversation: u32,
@@ -7767,7 +7771,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00967700, fn_00967700(Ptr) -> bool),
         entry!(
             0x00967730,
-            player_character_check_for_closes_conversation(u32, u32, u32)
+            player_character_check_for_closes_conversation(Ptr<PlayerCharacter>, u32, u32, u32)
         ),
         entry!(
             0x009678a0,
@@ -8048,27 +8052,23 @@ mod tests {
         answer(&mut e, ITEM_GET_STACK_LIMIT, 2);
 
         // Frame blocks whose top (EBP) sits at both 8-byte residues mod 16, so the
-        // alignment pads differ.
-        let mut blocks = Vec::new();
-        while blocks.len() < 2 {
-            let block = e.mem.alloc(EAT_DRINK_FRAME_SIZE);
-            let ebp = block + EAT_DRINK_FRAME_SIZE;
-            if blocks
-                .iter()
-                .all(|&b: &u32| (b + EAT_DRINK_FRAME_SIZE) & 0xf != ebp & 0xf)
-            {
-                blocks.push(block);
-            }
-        }
-        for block in blocks {
-            // The block just freed is the frame.
-            e.mem.free(block);
-            let ebp = block + EAT_DRINK_FRAME_SIZE;
-            let log = logged(&mut e, |e| {
-                // One queued item, then a slot opened (+1) and filled to the limit; the
-                // third record opens a second slot (+1).
-                assert_eq!(e.call(0x0095_d160, &args![player]).i32(), 3);
+        // alignment pads differ: the call runs under a local of 8 or of 16 bytes, which moves
+        // its frame on the thread's stack by 8.
+        let mut residues = Vec::new();
+        for under in [8, 16] {
+            let (block, log) = e.with_stack(under, |e, _| {
+                // The frame is the next local on the thread's stack; its bytes stay there after
+                // the call returns.
+                let block = e.next_stack_local(EAT_DRINK_FRAME_SIZE);
+                let log = logged(e, |e| {
+                    // One queued item, then a slot opened (+1) and filled to the limit; the
+                    // third record opens a second slot (+1).
+                    assert_eq!(e.call(0x0095_d160, &args![player]).i32(), 3);
+                });
+                (block, log)
             });
+            let ebp = block + EAT_DRINK_FRAME_SIZE;
+            residues.push(ebp & 0xf);
             // `_alloca16` from ESP = EBP-0x44, then from the first table: (esp - 0x190) & ~0xf.
             let items = (ebp - 0x44 - 0x190) & !0xf;
             let counts = (items - 0x190) & !0xf;
@@ -8085,6 +8085,7 @@ mod tests {
                 .all(|c| c[1] == ebp - 0x20));
             assert!(!calls_to(&log, LIST_CONTAINS).is_empty());
         }
+        assert_ne!(residues[0], residues[1]);
     }
 
     #[test]
@@ -13572,21 +13573,21 @@ mod tests {
         let (mut e, player) = conversation_world(0, [500.0, 900.0, 0.0]);
         e.call(
             0x0096_7730,
-            &args![0x6000_0001u32, 0x6000_0002u32, 0x6200_0000u32],
+            &args![player, 0x6000_0001u32, 0x6000_0002u32, 0x6200_0000u32],
         );
         assert_eq!(e.mem.u32(player.addr() + 0x208), 0x6200_0000);
         // Beyond 1200: not taken.
         let (mut e, player) = conversation_world(0, [1500.0, 1300.0, 0.0]);
         e.call(
             0x0096_7730,
-            &args![0x6000_0001u32, 0x6000_0002u32, 0x6200_0000u32],
+            &args![player, 0x6000_0001u32, 0x6000_0002u32, 0x6200_0000u32],
         );
         assert_eq!(e.mem.u32(player.addr() + 0x208), 0);
         // The smaller of the two distances counts.
         let (mut e, player) = conversation_world(0, [1500.0, 1100.0, 0.0]);
         e.call(
             0x0096_7730,
-            &args![0x6000_0001u32, 0x6000_0002u32, 0x6200_0000u32],
+            &args![player, 0x6000_0001u32, 0x6000_0002u32, 0x6200_0000u32],
         );
         assert_eq!(e.mem.u32(player.addr() + 0x208), 0x6200_0000);
     }
@@ -13597,20 +13598,20 @@ mod tests {
         let (mut e, player) = conversation_world(0x6100_0000, [250.0, 900.0, 600.0]);
         e.call(
             0x0096_7730,
-            &args![0x6000_0001u32, 0x6000_0002u32, 0x6200_0000u32],
+            &args![player, 0x6000_0001u32, 0x6000_0002u32, 0x6200_0000u32],
         );
         assert_eq!(e.mem.u32(player.addr() + 0x208), 0x6200_0000);
         let (mut e, player) = conversation_world(0x6100_0000, [650.0, 900.0, 600.0]);
         e.call(
             0x0096_7730,
-            &args![0x6000_0001u32, 0x6000_0002u32, 0x6200_0000u32],
+            &args![player, 0x6000_0001u32, 0x6000_0002u32, 0x6200_0000u32],
         );
         assert_eq!(e.mem.u32(player.addr() + 0x208), 0x6100_0000);
         // Equal distances count as closer.
         let (mut e, player) = conversation_world(0x6100_0000, [600.0, 900.0, 600.0]);
         e.call(
             0x0096_7730,
-            &args![0x6000_0001u32, 0x6000_0002u32, 0x6200_0000u32],
+            &args![player, 0x6000_0001u32, 0x6000_0002u32, 0x6200_0000u32],
         );
         assert_eq!(e.mem.u32(player.addr() + 0x208), 0x6200_0000);
     }
@@ -13620,10 +13621,10 @@ mod tests {
         let (mut e, player) = conversation_world(0x6100_0000, [250.0, 900.0, 600.0]);
         let me = player.addr();
         e.register_double(REFERENCE_GET_DISTANCE, |_, _| float(10.0));
-        e.call(0x0096_7730, &args![me, 0x6000_0002u32, 0x6200_0000u32]);
+        e.call(0x0096_7730, &args![me, me, 0x6000_0002u32, 0x6200_0000u32]);
         assert_eq!(e.mem.u32(me + 0x208), 0);
         e.mem.set_u32(me + 0x208, 0x6100_0000);
-        e.call(0x0096_7730, &args![0x6000_0002u32, me, 0x6200_0000u32]);
+        e.call(0x0096_7730, &args![me, 0x6000_0002u32, me, 0x6200_0000u32]);
         assert_eq!(e.mem.u32(me + 0x208), 0);
     }
 
@@ -14968,11 +14969,10 @@ mod tests {
 
     // ---- the exe's stack frames ----
 
-    /// The block the next `with_stack(size)` takes (the last freed block of that size).
+    /// The local the next `with_stack(size)` on this thread takes (the frame of a function the
+    /// test calls directly, outside any other local).
     fn next_frame(e: &mut Engine, size: u32) -> u32 {
-        let frame = e.mem.alloc(size);
-        e.mem.free(frame);
-        frame
+        e.next_stack_local(size)
     }
 
     /// Where `EBP` lands in a frame block whose exe frame aligns `EBP` to 16 bytes.

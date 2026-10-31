@@ -76,6 +76,32 @@ mod wasapi {
         ) -> *mut c_void;
         fn WaitForSingleObject(handle: *mut c_void, ms: u32) -> u32;
         fn CloseHandle(handle: *mut c_void) -> i32;
+        fn GetCurrentThread() -> *mut c_void;
+        fn SetThreadPriority(thread: *mut c_void, priority: i32) -> i32;
+    }
+    #[link(name = "avrt")]
+    extern "system" {
+        fn AvSetMmThreadCharacteristicsW(task: *const u16, index: *mut u32) -> *mut c_void;
+        fn AvSetMmThreadPriority(task: *mut c_void, priority: i32) -> i32;
+        fn AvRevertMmThreadCharacteristics(task: *mut c_void) -> i32;
+    }
+
+    /// Runs the calling thread as the player's 32-bit dsound.dll runs its mixing thread (read
+    /// from the DLL: `1005cbd8`..`1005cbff`, `1005ceb3`..`1005cee0`): time-critical priority (15),
+    /// registered with the multimedia class scheduler as an "Audio" task at high priority
+    /// (`AVRT_PRIORITY_HIGH`), so busy processors do not hold up the device's refills. Answers
+    /// the task to give back when the thread ends (null when it was refused; nothing changes
+    /// then).
+    unsafe fn audio_priority() -> *mut c_void {
+        SetThreadPriority(GetCurrentThread(), 15);
+        let task: Vec<u16> = "Audio\0".encode_utf16().collect();
+        let mut index = 0u32;
+        let handle = AvSetMmThreadCharacteristicsW(task.as_ptr(), &mut index);
+        if handle.is_null() || handle as isize == -1 {
+            return std::ptr::null_mut();
+        }
+        AvSetMmThreadPriority(handle, 1);
+        handle
     }
 
     #[repr(C)]
@@ -221,12 +247,20 @@ mod wasapi {
         let thread = std::thread::Builder::new()
             .name("nv sound out".into())
             .spawn(move || unsafe {
-                let Some(d) = open() else {
-                    let _ = tx.send(None);
-                    return;
-                };
-                let _ = tx.send(Some((d.rate, d.channels)));
-                run(&d, &source, &flag);
+                let task = audio_priority();
+                match open() {
+                    Some(d) => {
+                        let _ = tx.send(Some((d.rate, d.channels)));
+                        run(&d, &source, &flag);
+                    }
+                    None => {
+                        let _ = tx.send(None);
+                    }
+                }
+                // As dsound.dll does before its thread ends (`AvRevertMmThreadCharacteristics`).
+                if !task.is_null() {
+                    AvRevertMmThreadCharacteristics(task);
+                }
             })
             .ok()?;
         let (rate, channels) = rx.recv().ok().flatten()?;

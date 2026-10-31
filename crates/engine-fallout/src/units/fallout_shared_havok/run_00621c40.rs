@@ -240,8 +240,7 @@ mod tests {
         e.register(ARRAY_CLEAR, |_, _| Ret::default());
         e.register(ARRAY_RESERVED, |_, _| 1u32.into_ret());
         let this = e.mem.alloc(0x10);
-        let frame = e.mem.alloc(8);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(8);
         e.call(0x0062_1c60, &args![this]);
         assert_eq!(calls(&e, BYTE_HOLDER_OF), vec![vec![frame + 7, this]]);
     }

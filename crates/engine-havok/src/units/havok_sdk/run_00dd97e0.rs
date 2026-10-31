@@ -1474,9 +1474,8 @@ mod a07_handler_tests {
         let a = vector(&mut env.e, [1, 1, 1, 1]);
         let b = vector(&mut env.e, [2, 2, 2, 2]);
         let cc = vector(&mut env.e, [3, 3, 3, 3]);
-        // The frame block is the one just freed: a, b, c and a again from +0x20.
-        let raw = env.e.mem.alloc(TRIANGLE_FRAME_BELOW + 0x10);
-        env.e.mem.free(raw);
+        // The frame is the next stack local of its size: a, b, c and a again from +0x20.
+        let raw = env.e.next_stack_local(TRIANGLE_FRAME_BELOW + 0x10);
         let frame = aligned_frame_at(raw, TRIANGLE_FRAME_BELOW);
         hk_server_debug_display_handler_display_triangle(
             &mut env.e, env.this, a, b, cc, 0x30, 6, 7,
@@ -1763,10 +1762,9 @@ mod a07_handler_tests {
         let h = env.e.mem.alloc(16);
         env.e.mem.set_u32(h, record);
         env.e.mem.set_u32(h + 4, 1);
-        // The frame block is the one just freed: the lengths array at +0x24 (its storage
-        // holding the length 2), the converted transform at +0x30.
-        let raw = env.e.mem.alloc(UPDATE_BEHAVIOR_FRAME_BELOW + 0x10);
-        env.e.mem.free(raw);
+        // The frame is the next stack local of its size: the lengths array at +0x24 (its
+        // storage holding the length 2), the converted transform at +0x30.
+        let raw = env.e.next_stack_local(UPDATE_BEHAVIOR_FRAME_BELOW + 0x10);
         let frame = aligned_frame_at(raw, UPDATE_BEHAVIOR_FRAME_BELOW);
         hk_server_debug_display_handler_update_behavior(
             &mut env.e, env.this, a, a, a, d, texts, a, a, h,

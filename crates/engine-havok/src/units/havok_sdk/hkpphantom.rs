@@ -922,8 +922,7 @@ mod tests {
             Ret::default()
         });
         e.mem.set_u32(scene.world + 0x98, 1);
-        let frame = e.mem.alloc(0x3c);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x3c);
         e.call(0x00d0_7ec0, &args![scene.phantom, scene.aabb]);
         assert_eq!(*queued.borrow(), vec![frame + 0x10]);
         e.mem.set_u32(scene.world + 0x98, 0);
@@ -934,6 +933,7 @@ mod tests {
                 .push((BROAD_PHASE_UPDATE, a.to_vec()));
             Ret::default()
         });
+        let frame = e.next_stack_local(0x3c);
         e.call(0x00d0_7ec0, &args![scene.phantom, scene.aabb]);
         let update = calls_to(&log, BROAD_PHASE_UPDATE);
         // The handle slot at +0xc, the added pairs at +0x2c, the removed ones at +0x1c.

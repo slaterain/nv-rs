@@ -9593,8 +9593,9 @@ mod tests {
         list_sound(&mut f, 6, sound);
         let object = fake_object(&mut f.e, 5, [0.0; 3]);
         f.e.call(0x00ae7cc0, &args![map, 6u32, object]);
-        let frame = f.e.mem.alloc(0x104);
-        f.e.mem.free(frame);
+        // The frame's place on the stack (its words stay there after the call: nothing takes
+        // that place again before they are read).
+        let frame = f.e.next_stack_local(0x104);
         f.call(0x00adea90, &[]);
         // The position (+0xf0, ended at 0), the key (+0xdc) and the object slot (+0xc0)
         // the walk filled.
@@ -9622,8 +9623,7 @@ mod tests {
             e.mem.set_u32(a[0], a[1]);
             ret(a[0])
         });
-        let frame = f.e.mem.alloc(0x184);
-        f.e.mem.free(frame);
+        let frame = f.e.next_stack_local(0x184);
         f.call(0x00adddd0, &[]);
         // The finished sound's followed object is fetched into the slot and cleared there.
         assert_eq!(cleared.borrow()[0], vec![frame + 0x160, 0]);
@@ -10623,8 +10623,7 @@ mod tests {
             ret(0)
         });
         let name = text(&mut f.e, b"z.wav");
-        let frame = f.e.mem.alloc(0xc4);
-        f.e.mem.free(frame);
+        let frame = f.e.next_stack_local(0xc4);
         f.call(0x00ae5a50, &[result, name, 2, 5]);
         // The handle at +0x94, the settings word at +0xac, the loop points at +0xa0 / +0xb0.
         assert_eq!(calls.borrow()[0], vec![frame + 0x94, 5, frame + 0xac]);
@@ -10919,8 +10918,7 @@ mod tests {
         let (mut f, _audio) = audio_fixture();
         let blocks = debug_doubles(&mut f);
         debug_record(&mut f, &blocks, 3, 2, 1, b"p\\a.wav", 1.0);
-        let frame = f.e.mem.alloc(0xa90);
-        f.e.mem.free(frame);
+        let frame = f.e.next_stack_local(0xa90);
         f.e.call_log = Some(vec![]);
         f.call(0x00ae5ff0, &[0]);
         let log = f.e.call_log.take().unwrap();

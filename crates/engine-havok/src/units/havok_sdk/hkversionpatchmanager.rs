@@ -2007,10 +2007,12 @@ pub fn hk_version_patch_manager_prepare_patches(
 /// word `0xffffffff`) and `00cb2030` runs on it (`thiscall`, `(allocator, 0)`, the memory
 /// router's allocator and 0). Then a 0x2c-byte member comes from the same allocator (virtual
 /// slot 4, no size word set): when it is not null the constructor `00d87790` runs on it and on
-/// its sub-object at `+0x1c` (`thiscall`, one stack word the callee never reads: the exe passes
-/// the low byte 0 of a stack slot, here 0), the words at `+0x10` and `+0x14` are cleared and the
-/// one at `+0x18` set to `0x80000000` (between the two constructor runs); the member is stored
-/// at `+8` (0 when the allocator gave none). Answers `this`.
+/// its sub-object at `+0x1c` (`thiscall`, one stack word the callee never reads, `RET 4`: at
+/// `00db859b`/`00db85ab` the exe clears the low byte of its `PUSH ECX` scratch slot, which
+/// still holds `this`, and pushes that slot, so the word is `this & 0xffffff00`), the words at
+/// `+0x10` and `+0x14` are cleared and the one at `+0x18` set to `0x80000000` (between the two
+/// constructor runs); the member is stored at `+8` (0 when the allocator gave none). Answers
+/// `this`.
 pub fn fn_00db8540(e: &mut Engine, this: Ptr) -> Ptr {
     let me = this.addr();
     e.mem.set_u32(me, 0x010d_6138);
@@ -2032,11 +2034,13 @@ pub fn fn_00db8540(e: &mut Engine, this: Ptr) -> Ptr {
         e.mem.set_u32(me.wrapping_add(8), 0);
         return this;
     }
-    e.call(0x00d8_7790, &args![member, 0u32]);
+    // 00db859b-00db85c4: the ignored word is the scratch slot (`this`) with its low byte 0.
+    let ignored = me & 0xffff_ff00;
+    e.call(0x00d8_7790, &args![member, ignored]);
     e.mem.set_u32(member.wrapping_add(0x10), 0);
     e.mem.set_u32(member.wrapping_add(0x14), 0);
     e.mem.set_u32(member.wrapping_add(0x18), 0x8000_0000);
-    e.call(0x00d8_7790, &args![member.wrapping_add(0x1c), 0u32]);
+    e.call(0x00d8_7790, &args![member.wrapping_add(0x1c), ignored]);
     e.mem.set_u32(me.wrapping_add(8), member);
     this
 }
@@ -2183,9 +2187,11 @@ mod tests {
             calls_of_00db8540(&e, 0x00cb_2030),
             vec![vec![this + 0x18, allocator, 0]]
         );
+        // The ignored stack word is the exe's scratch slot: `this` with its low byte 0.
+        let ignored = this & 0xffff_ff00;
         assert_eq!(
             calls_of_00db8540(&e, 0x00d8_7790),
-            vec![vec![0x0801_0000, 0], vec![0x0801_001c, 0]]
+            vec![vec![0x0801_0000, ignored], vec![0x0801_001c, ignored]]
         );
         assert_eq!(e.mem.u32(0x0801_0010), 0);
         assert_eq!(e.mem.u32(0x0801_0014), 0);

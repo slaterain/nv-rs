@@ -1515,6 +1515,8 @@ mod tests {
     fn error_report_formats_routes_and_marks_the_runner() {
         for echo in [false, true] {
             let mut e = Engine::new();
+            // The block check tracks `with_stack` frames, so the buffer's size can be read.
+            e.mem.enable_block_check(false, false);
             let runner = e.new_object::<ScriptRunner>();
             let header = e.mem.alloc(0x14);
             e.mem.set_u32(header + 8, 40);
@@ -1529,6 +1531,7 @@ mod tests {
             e.register_double(0x00407000, move |e, a| {
                 assert_eq!(a[1], 0x0103d538);
                 assert_eq!((e.mem.u32(a[2]), e.mem.u32(a[2] + 4)), (7, 8));
+                // The message buffer is the 0x108-byte stack local.
                 assert_eq!(e.mem.block_size(a[0]), Some(0x108));
                 seen.set(a[0]);
                 Ret::default()

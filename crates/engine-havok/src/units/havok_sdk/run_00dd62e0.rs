@@ -1723,11 +1723,9 @@ mod tests {
         assert_eq!(e.mem.u8(out), 0);
     }
 
-    /// A freed block of `size` bytes (the next frame of that size reuses it).
+    /// Where the next stack local of `size` bytes goes (the next frame of that size takes it).
     fn marked_frame(e: &mut Engine, size: u32) -> u32 {
-        let raw = e.mem.alloc(size);
-        e.mem.free(raw);
-        raw
+        e.next_stack_local(size)
     }
 
     #[test]
@@ -1815,8 +1813,7 @@ mod tests {
         e.mem.set_u32(this, start + 0x10);
         e.mem.set_u32(start + 0x10, 0);
         let out = e.mem.alloc(4);
-        let raw = e.mem.alloc(0x10);
-        e.mem.free(raw);
+        let raw = e.next_stack_local(0x10);
         e.call(0x00dd_7140, &args![this, out]);
         assert_eq!(*seen.borrow(), vec![raw + 0xf]);
         assert_eq!(e.mem.u8(out), 1);

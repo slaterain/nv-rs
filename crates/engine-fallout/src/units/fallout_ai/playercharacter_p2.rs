@@ -13701,11 +13701,18 @@ mod tests {
 
     // ---- the exe's stack frames ----
 
-    /// The block the next `with_stack(size)` takes (the last freed block of that size), with
-    /// the call log switched on.
+    /// The local the next `with_stack(size)` on this thread takes (the frame of a function the
+    /// test calls directly, outside any other local), with the call log switched on. With the
+    /// block check on (the tests that read a frame after its call ended) locals are heap blocks
+    /// again, and the next one of that size is the block just freed.
     fn next_frame(e: &mut Engine, size: u32) -> u32 {
-        let frame = e.mem.alloc(size);
-        e.mem.free(frame);
+        let frame = if e.mem.block_check_on() {
+            let block = e.mem.alloc(size);
+            e.mem.free(block);
+            block
+        } else {
+            e.next_stack_local(size)
+        };
         start_log(e);
         frame
     }
@@ -13760,6 +13767,10 @@ mod tests {
     #[test]
     fn returning_keeps_the_stored_position_and_the_zero_vectors_in_the_frame() {
         let mut e = engine();
+        // The stored position is read after the call ended, and the position functions it calls
+        // next take their own locals where the frame was on the thread's stack: locals are heap
+        // blocks with the block check on.
+        e.mem.enable_block_check(false, false);
         let player = new_player(&mut e);
         e.mem.set_f32(player.addr() + 0x7a0, 10.0);
         e.mem.set_u32(player.addr() + 0x7ac, 0x6000);
@@ -13995,6 +14006,9 @@ mod tests {
     fn dropping_keeps_its_locals_in_the_0x40_byte_frame() {
         // With a body: the zero point at +0x10, the position at +0x1c, the difference at +4.
         let mut e = engine();
+        // The reference word is read after the call ended (on the thread's stack the calls after
+        // the frame take its place): locals are heap blocks with the block check on.
+        e.mem.enable_block_check(false, false);
         let player = new_player(&mut e);
         e.set_global(PLAYER_POINTER, 0x0600_5000u32);
         let item = e.mem.alloc(8);
@@ -14070,6 +14084,9 @@ mod tests {
     #[test]
     fn the_second_load_pass_keeps_its_list_words_in_the_frame() {
         let mut e = engine();
+        // The removed id is read after the call ended (on the thread's stack the calls after the
+        // frame take its place): locals are heap blocks with the block check on.
+        e.mem.enable_block_check(false, false);
         list_helpers(&mut e);
         let player = new_player(&mut e);
         let process = e.mem.alloc(8);

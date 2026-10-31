@@ -271,7 +271,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00935cc0, fn_00935cc0(u32)),
         entry!(0x00935d90, fn_00935d90(u32, u8)),
         entry!(0x00935ef0, fn_00935ef0() -> u32),
-        entry!(0x00935f00, fn_00935f00(u32)),
+        entry!(0x00935f00, fn_00935f00(u32, u32)),
         entry!(0x00935f60, fn_00935f60(Ptr<MobileObject>)),
         entry!(0x009369a0, fn_009369a0(Ptr) -> u32),
         entry!(0x009369d0, fn_009369d0(Ptr) -> u32),
@@ -3099,6 +3099,7 @@ pub fn fn_009344d0(
                         }
                         let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
                         if e.vcall(process.addr(), 0x378, &args![]).bool() {
+                            // 0093487b-0093488e: `PUSH 0`, the form id, `ADD ESP,8`.
                             let actor_id = e.call(0x0084_e3a0, &args![this]).u32();
                             e.call(0x0093_5f00, &args![actor_id, 0u32]);
                             let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
@@ -3757,7 +3758,12 @@ pub fn fn_00935ef0(e: &mut Engine) -> u32 {
 // Translated from 00935f00 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Resolves a mobile object and invokes its three-mode callback when the
 /// actor-style virtual check succeeds.
-pub fn fn_00935f00(e: &mut Engine, value: u32) {
+///
+/// cdecl with two words, the second never read: every direct caller pushes
+/// two and pops 8 (`00934889`, `008a24b6`, `008a256f`: `PUSH 0`, the form id,
+/// `ADD ESP,8`), and as a sound's played callback `00ae9af0` passes the
+/// context and the duration.
+pub fn fn_00935f00(e: &mut Engine, value: u32, _unused: u32) {
     let actor = e.call(0x0048_39c0, &args![value]).ptr::<MobileObject>();
     if !actor.is_null() && e.vcall(actor.addr(), 0xfc, &args![]).bool() {
         e.call(0x004b_c4a0, &args![actor, 3u32]);
@@ -3985,6 +3991,8 @@ pub fn fn_00935f60(e: &mut Engine, this: Ptr<MobileObject>) {
             if package != 0 {
                 let first = e.call(0x008d_80e0, &args![package]).u32();
                 let second = e.call(0x009e_e040, &args![package]).u32();
+                // 009367b4-009367d9: thiscall on the player with
+                // (009ee040(package), 008d80e0(package), package).
                 let player = e.global::<u32>(0x011d_ea3c);
                 e.call(0x0096_7730, &args![player, second, first, package]);
                 let player = e.global::<u32>(0x011d_ea3c);
@@ -8043,7 +8051,7 @@ mod tests {
             0u32.into_ret()
         });
         e.call_log = Some(vec![]);
-        fn_00935f00(&mut e, 0x1234);
+        fn_00935f00(&mut e, 0x1234, 0);
         assert!(!e
             .call_log
             .as_ref()
@@ -8051,7 +8059,7 @@ mod tests {
             .iter()
             .any(|call| call.0 == 0x004b_c4a0));
         stub(&mut e, 0x7000, 1);
-        fn_00935f00(&mut e, 0x1234);
+        fn_00935f00(&mut e, 0x1234, 0);
         assert!(e
             .call_log
             .as_ref()

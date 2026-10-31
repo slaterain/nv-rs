@@ -3029,8 +3029,8 @@ mod tests {
         e.register(0x7a30_0030, no_op);
         let interface_addr = interface.addr();
         e.register_double(0x00fd_f044, move |_, _| interface_addr.into_ret());
-        let scratch = e.mem.alloc(0x30);
-        e.mem.free(scratch);
+        // The update's 0x30-byte local (the iterator, the key at +0x20, the task slot at +0x28).
+        let scratch = e.next_stack_local(0x30);
         let second_addr = second_task.addr();
         e.register_double(0x7a30_004c, move |e, a| {
             assert_eq!(a[1], first_task.addr());

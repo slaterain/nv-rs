@@ -1836,8 +1836,7 @@ mod tests {
     fn the_pivot_frame_sits_0x124_bytes_under_a_16_byte_boundary() {
         let mut e = engine();
         let pivot = pivot_setup(&mut e, 1, 0);
-        let raw = e.mem.alloc(0x134);
-        e.mem.free(raw);
+        let raw = e.next_stack_local(0x134);
         e.call(0x00ce_9880, &args![pivot.transform, pivot.body]);
         let p = frame_of(&pivot);
         assert_eq!(p, aligned_frame_at(raw, 0x124));
@@ -2021,8 +2020,7 @@ mod tests {
             store_vec(&mut e, at, [1.0, 2.0, 3.0, 0.0]);
         }
         let constraints = list(&mut e, &[big]);
-        let raw = e.mem.alloc(0x70);
-        e.mem.free(raw);
+        let raw = e.next_stack_local(0x70);
         e.call(0x00ce_9db0, &args![constraints]);
         let compares = calls(&e, IS_APPROXIMATELY_EQUAL);
         assert_eq!(compares[0][0], aligned_frame_at(raw, 0x60) + 0x30);
@@ -2074,8 +2072,7 @@ mod tests {
         e.mem.set_u32(c + 0x14, body_a);
         e.mem.set_u32(c + 0x18, body_b);
         let constraints = list(&mut e, &[c]);
-        let raw = e.mem.alloc(0x240);
-        e.mem.free(raw);
+        let raw = e.next_stack_local(0x240);
         e.call(0x00ce_9e90, &args![constraints]);
         assert_eq!(log.borrow()[0].0[2], aligned_frame_at(raw, 0x230) + 0x10);
     }
@@ -2661,8 +2658,7 @@ mod tests {
         let block = e.mem.alloc(0x40);
         answer(&mut e, ALLOCATE_SLOT, block);
         let outputs = e.mem.alloc(8);
-        let frame = e.mem.alloc(0x4c);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x4c);
         e.call(0x00ce_af60, &args![pieces.this, 0u32, outputs, outputs + 4]);
         // Both passes build their arrays at +0x28 (x), +0x34 (y) and +0x40 (z).
         let arrays = vec![frame + 0x34, frame + 0x40, frame + 0x28];
@@ -2852,8 +2848,7 @@ mod tests {
         let link_to_root = link(&mut e, child, root);
         let bodies = list(&mut e, &[root, child]);
         let constraints = list(&mut e, &[link_to_root]);
-        let raw = e.mem.alloc(0x2d0);
-        e.mem.free(raw);
+        let raw = e.next_stack_local(0x2d0);
         e.call(0x00ce_b2c0, &args![bodies, constraints]);
         let frame = aligned_frame_at(raw, 0x2c0);
         let sources = calls(&e, SET_FROM_TRANSFORM_NO_SCALE);

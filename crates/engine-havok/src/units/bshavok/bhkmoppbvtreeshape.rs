@@ -1180,8 +1180,7 @@ mod shape_tests {
         let info = e.mem.alloc(0x10);
         e.mem.set_u32(info + 4, child);
         e.mem.set_f32(info + 0xc, 1.0);
-        let raw = e.mem.alloc(0x94);
-        e.mem.free(raw);
+        let raw = e.next_stack_local(0x94);
         e.call(0x00cc_a6f0, &args![this, info]);
         // Frame +0x34, with the frame's top (+0x84) on a 16-byte boundary.
         let frame = ((raw + 4 + 0xf) & !0xf) - 4;

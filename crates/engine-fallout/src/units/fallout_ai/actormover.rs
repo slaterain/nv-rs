@@ -7793,11 +7793,10 @@ mod tests {
 
     // ---- the exe's stack frames ----
 
-    /// The block the next `with_stack(size)` takes (the last freed block of that size), with
-    /// the call log switched on.
+    /// The local the next `with_stack(size)` on this thread takes (the frame of the function the
+    /// test calls next, taken outside any other local of it), with the call log switched on.
     fn next_frame(e: &mut Engine, size: u32) -> u32 {
-        let frame = e.mem.alloc(size);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(size);
         e.call_log = Some(vec![]);
         frame
     }
@@ -7865,8 +7864,9 @@ mod tests {
         for wrapper in [0x009d_ba50u32, 0x009d_bb60] {
             let mut r = rig();
             goal_world(&mut r);
-            let fill = next_frame(&mut r.e, 0x3c);
             let frame = next_frame(&mut r.e, 0xc8);
+            // `009dbc90`'s 0x3c-byte frame, taken while the request's frame is held.
+            let fill = r.e.with_stack(0xc8, |e, _| e.next_stack_local(0x3c));
             if wrapper == 0x009d_ba50 {
                 r.e.call(
                     wrapper,

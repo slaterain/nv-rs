@@ -1855,7 +1855,9 @@ pub fn fn_00477d10(e: &mut Engine, reference: Ptr) {
             }
         }
     } else if e.vcall(reference.addr(), 0x1d0, &args![]).u32() != 0 {
-        let node = e.call(0x0043_fcd0, &args![reference, 0u32]).u32();
+        // 00477ec2-00477ecd: the 0 pushed first is `00476ec0`'s stage; the
+        // getter `0043fcd0` is thiscall with no arguments (plain RET).
+        let node = e.call(0x0043_fcd0, &args![reference]).u32();
         bgs_destructible_object_form_update_damage_stage_nodes(e, Ptr::new(node), 0);
     }
     if e.call(REFERENCE_TEST_A, &args![reference]).u8() != 0 {
@@ -5036,7 +5038,7 @@ mod tests {
         let log = log_of(&mut e);
         assert!(log.contains(&(0x0041_b7c0, vec![reference + 0x180])));
         assert!(log.contains(&(0x0048_4650, vec![reference, 0])));
-        assert!(log.contains(&(0x0043_fcd0, vec![reference, 0])));
+        assert!(log.contains(&(0x0043_fcd0, vec![reference])));
         assert!(log.contains(&(CHECKED_CAST, vec![0x0120_2e8c, node])));
         assert!(log.contains(&(0x0057_3f40, vec![reference])));
         assert!(log.contains(&(MAP_REMOVE_AT, vec![DESTRUCTIBLE_OBJECTS, reference])));

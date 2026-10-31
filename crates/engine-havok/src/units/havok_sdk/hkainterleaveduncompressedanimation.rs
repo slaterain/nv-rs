@@ -1061,8 +1061,9 @@ mod tests {
         let anim = partial_scene(&mut e);
         let transforms_out = output(&mut e, 24);
         let floats_out = output(&mut e, 4);
-        let raw = e.mem.alloc(0x50);
-        e.mem.free(raw);
+        // The frame block is the next stack local; its bytes stay on the thread's stack after
+        // the call (nothing takes that place again before they are read).
+        let raw = e.next_stack_local(0x50);
         e.call(
             0x00e3_ffc0,
             &args![anim, 1.0f32, 2u32, transforms_out, 3u32, floats_out, 0u32],

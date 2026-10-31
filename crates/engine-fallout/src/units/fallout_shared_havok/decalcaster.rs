@@ -709,11 +709,10 @@ mod tests {
 
     // ---- the exe's stack frames ----
 
-    /// The block the next `with_stack(size)` takes (the last freed block of that size), with
-    /// the call log switched on.
+    /// The local the next `with_stack(size)` on the running thread takes, with the call log
+    /// switched on.
     fn next_frame(e: &mut Engine, size: u32) -> u32 {
-        let frame = e.mem.alloc(size);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(size);
         e.call_log = Some(vec![]);
         frame
     }

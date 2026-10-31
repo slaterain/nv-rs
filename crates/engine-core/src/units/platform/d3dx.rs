@@ -204,11 +204,9 @@ fn transpose(m: &[u32; 16]) -> [u32; 16] {
     std::array::from_fn(|n| m[4 * (n % 4) + n / 4])
 }
 
-/// The words of a vector of `n` floats at `at`.
-fn vector(e: &Engine, at: u32, n: usize) -> Vec<u32> {
-    (0..n)
-        .map(|i| e.mem.u32(at.wrapping_add(4 * i as u32)))
-        .collect()
+/// The words of a vector of `N` floats at `at` (on the stack: no allocation per call).
+fn vector<const N: usize>(e: &Engine, at: u32) -> [u32; N] {
+    std::array::from_fn(|i| e.mem.u32(at.wrapping_add(4 * i as u32)))
 }
 
 /// `D3DXVec3TransformNormal`'s words for `v` and `m`: column `j` is
@@ -507,7 +505,7 @@ pub fn matrix_inverse(e: &mut Engine, out: Ptr, determinant: Ptr, m: Ptr) -> u32
 /// `D3DXVec3TransformNormal(out, v, m)` (stdcall): [`transform_normal`], the inputs read before
 /// `out` is written (measured with `out` = `v`); answers `out`.
 pub fn vec3_transform_normal(e: &mut Engine, out: Ptr, v: Ptr, m: Ptr) -> u32 {
-    let r = transform_normal(&vector(e, v.addr(), 3), &matrix(e, m.addr()));
+    let r = transform_normal(&vector::<3>(e, v.addr()), &matrix(e, m.addr()));
     for (i, w) in r.iter().enumerate() {
         e.mem.set_u32(out.addr().wrapping_add(4 * i as u32), *w);
     }
@@ -519,7 +517,7 @@ pub fn vec3_transform_normal(e: &mut Engine, out: Ptr, v: Ptr, m: Ptr) -> u32 {
 /// is written (measured with `out` = `v`); answers `out`.
 pub fn vec4_transform_import(e: &mut Engine, out: Ptr, v: Ptr, m: Ptr) -> u32 {
     let r = vec4_transform_sse2(
-        &vector(e, v.addr(), 4),
+        &vector::<4>(e, v.addr()),
         &matrix(e, m.addr()),
         m.addr() & 0xf == 0,
     );
@@ -601,7 +599,7 @@ pub fn vec3_transform_coord_sse2(v: &[u32], m: &[u32; 16], aligned: bool) -> [u3
 /// matrix's address; the inputs read before `out` is written; answers `out`.
 pub fn vec3_transform_coord(e: &mut Engine, out: Ptr, v: Ptr, m: Ptr) -> u32 {
     let r = vec3_transform_coord_sse2(
-        &vector(e, v.addr(), 3),
+        &vector::<3>(e, v.addr()),
         &matrix(e, m.addr()),
         m.addr() & 0xf == 0,
     );
@@ -1361,7 +1359,10 @@ mod tests {
                 vec4_transform_import(&mut e, o, v, m)
             };
             assert_eq!(r, out);
-            assert_eq!(vector(&e, out, want.len()), want, "{line}");
+            let got: Vec<u32> = (0..want.len())
+                .map(|i| e.mem.u32(out + 4 * i as u32))
+                .collect();
+            assert_eq!(got, want, "{line}");
         }
         assert_eq!(n, [250, 250]);
     }

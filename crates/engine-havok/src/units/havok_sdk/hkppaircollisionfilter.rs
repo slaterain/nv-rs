@@ -110,10 +110,15 @@ pub fn hkp_pair_collision_filter_is_collision_enabled(
 ) -> u32 {
     let object = e.mem.u32(this.addr() + FILTER_OBJECT);
     if object != 0 {
-        let result = e.with_stack(4, |e, scratch| {
-            e.vcall(object + 0x14, 4, &args![scratch, a, b]).u32()
+        // The scratch hkBool is the frame's argument slot (`ESP+0x14` at the call): the slot
+        // writes its answer there and answers its address, and the byte is tested through that
+        // address, so the test is made while it is there. (Scoped to the slot call alone, the
+        // byte was read from a freed block.)
+        let enabled = e.with_stack(4, |e, scratch| {
+            let result = e.vcall(object + 0x14, 4, &args![scratch, a, b]).u32();
+            e.mem.u8(result) != 0
         });
-        if e.mem.u8(result) == 0 {
+        if !enabled {
             e.mem.set_u8(out, 0);
             return out;
         }
@@ -248,10 +253,13 @@ pub fn hkp_pair_collision_filter_is_collision_enabled_ov2(
     let me = this.addr();
     let object = e.mem.u32(me + 0x34);
     if object != 0 {
-        let result = e.with_stack(4, |e, scratch| {
-            e.vcall(object + 8, 4, &args![scratch, a, b]).u32()
+        // The scratch hkBool is the frame's argument slot (`ESP+0x20` at the call), tested
+        // through the address the slot answers while it is there, as in `00def120`.
+        let enabled = e.with_stack(4, |e, scratch| {
+            let result = e.vcall(object + 8, 4, &args![scratch, a, b]).u32();
+            e.mem.u8(result) != 0
         });
-        if e.mem.u8(result) == 0 {
+        if !enabled {
             e.mem.set_u8(out, 0);
             return out;
         }
@@ -301,6 +309,7 @@ mod tests {
     const ROUTER: u32 = 0x0030_1000;
     const ALLOCATOR: u32 = 0x0030_2000;
     const FAKE_ENABLED: u32 = 0x7000_0010;
+    const FAKE_WRITES_ITS_SCRATCH: u32 = 0x7000_0020;
 
     fn engine() -> Engine {
         let mut e = Engine::new();
@@ -574,6 +583,52 @@ mod tests {
         e.call(0x00de_f450, &args![sub, out, first, second]);
         let log: Log = e.call_log.take().unwrap();
         assert_eq!(calls_to(&log, MAP_FIND_KEY).len(), 1);
+    }
+
+    /// A filter object whose interface (at `object + offset`) writes `answer` into the scratch
+    /// hkBool it is given and answers that scratch, as the exe's `isCollisionEnabled`s do.
+    fn writing_object(e: &mut Engine, offset: u32, answer: u8) -> u32 {
+        let object = e.mem.alloc(0x40);
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable + 4, FAKE_WRITES_ITS_SCRATCH);
+        e.mem.set_u32(object + offset, vtable);
+        e.register_double(FAKE_WRITES_ITS_SCRATCH, move |e, a| {
+            e.mem.set_u8(a[1], answer);
+            Ret {
+                eax: a[1],
+                ..Ret::default()
+            }
+        });
+        object
+    }
+
+    /// Both overloads test the hkBool the second filter writes while the scratch is still
+    /// there (the exe's is an argument slot of the frame). With the freed-block check a scratch
+    /// freed before the test would read as the fill word's low byte.
+    #[test]
+    fn the_second_filter_s_answer_is_read_from_a_live_scratch() {
+        for answer in [0u8, 1] {
+            let mut e = engine();
+            e.mem.enable_freed_check(true);
+            let out = e.mem.alloc(4);
+            // 00def120: the answer is the result.
+            let filter = e.mem.alloc(0x60);
+            let object = writing_object(&mut e, 0x14, answer);
+            e.mem.set_u32(filter + FILTER_OBJECT, object);
+            e.mem.set_u8(out, 9);
+            e.call(0x00de_f120, &args![filter, out, 1u32, 2u32]);
+            assert_eq!(e.mem.u8(out), answer, "00def120, answer {answer}");
+            // 00def450: an accepting second filter goes on to the lookup, which handles that
+            // stand for no entity answer 1.
+            let base = e.mem.alloc(0x60);
+            let sub = base + 8;
+            let object = writing_object(&mut e, 8, answer);
+            e.mem.set_u32(sub + 0x34, object);
+            let (first, second) = (handle(&mut e, 0), handle(&mut e, 0));
+            e.mem.set_u8(out, 9);
+            e.call(0x00de_f450, &args![sub, out, first, second]);
+            assert_eq!(e.mem.u8(out), answer, "00def450, answer {answer}");
+        }
     }
 
     #[test]

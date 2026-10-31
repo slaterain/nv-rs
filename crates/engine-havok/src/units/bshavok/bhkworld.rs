@@ -4034,11 +4034,16 @@ pub fn fn_00c67260(e: &mut Engine, collision_object: Ptr<BhkNiCollisionObject>, 
     }
     let havok_object = e.mem.u32(body.wrapping_add(8));
     if havok_object != 0 {
-        let found = e.with_stack(4, |e, slot| {
+        // The out byte is the frame's argument slot (`ESP+8`): `00c9bff0` writes the state
+        // there and answers its address, and the byte is tested through that address, so the
+        // test is made while the slot is there. (Scoped to `00c9bff0` alone, the byte was read
+        // from a freed block.)
+        let active = e.with_stack(4, |e, slot| {
             e.mem.set_u32(slot.addr(), collision_object.addr());
-            e.call(0x00c9_bff0, &args![havok_object, slot]).u32()
+            let found = e.call(0x00c9_bff0, &args![havok_object, slot]).u32();
+            e.mem.u8(found) != 0
         });
-        if e.mem.u8(found) != 0 {
+        if active {
             let count = e.mem.u32(request.addr().wrapping_add(0xc));
             e.mem
                 .set_u32(request.addr().wrapping_add(0xc), count.wrapping_add(1));
@@ -9245,6 +9250,29 @@ mod a05_tests {
             assert_eq!(e.mem.u8(request + 4), 0);
             // The byte next to it is not touched.
             assert_eq!(e.mem.u8(request + 5), 1);
+        }
+    }
+
+    /// `00c9bff0` writes the state into the argument slot and answers the slot, as the exe's
+    /// does: the byte is tested while the slot is still there. With the freed-block check a slot
+    /// freed before the test would read as the fill word's low byte, counting by chance.
+    #[test]
+    fn fn_00c67260_tests_the_byte_in_a_live_slot() {
+        for (byte, counted) in [(1u8, 1u32), (0, 0)] {
+            let mut e = Engine::new();
+            e.mem.enable_freed_check(true);
+            let (collision_object, _, _) = body_in_world(&mut e);
+            e.register_double(0x00c9_bff0, move |e, a| {
+                e.mem.set_u8(a[1], byte);
+                Ret {
+                    eax: a[1],
+                    ..Ret::default()
+                }
+            });
+            let request = new_request(&mut e, [0, 0x0101, 0, 5, 0]);
+            e.call(0x00c6_7260, &args![collision_object, request]);
+            assert_eq!(e.mem.u32(request + 0xc), 5 + counted, "byte {byte}");
+            assert_eq!(e.mem.u8(request + 4), 0);
         }
     }
 

@@ -183,7 +183,23 @@ pub struct Engine {
     /// The live `with_stack` blocks, innermost last, kept while [`Engine::call_trace`] is on (its
     /// stack records say which words point into them).
     pub stack_frames: Vec<(u32, u32)>,
+    /// Each game thread's stack for its `with_stack` locals, by its index in the thread host's
+    /// list: the region's lowest address and the current top (frames go down from the region's
+    /// end); made at the thread's first local ([`Engine::with_stack`]).
+    guest_stacks: Vec<Option<(u32, u32)>>,
 }
+
+/// The bytes of each game thread's stack for `with_stack` locals.
+pub const GUEST_STACK_SIZE: u32 = 1 << 20;
+/// The bytes kept free at the top of each game thread's stack, below its end: they stand for the
+/// frames the exe has above a thread's first translated local (its start routine's, the C
+/// runtime's), so a store past the outermost local stays on the stack instead of reaching the
+/// heap block allocated after it.
+pub const STACK_TOP_RESERVE: u32 = 0x1000;
+/// The bytes left free above every `with_stack` local on a game thread's stack, so a store a little
+/// past a local (a local translated smaller than the exe's, which in the exe lands among the
+/// frame's other locals) stays on the stack instead of reaching the caller's locals.
+pub const FRAME_GAP: u32 = 0x40;
 
 /// How many returned calls [`Engine::trace`] keeps.
 pub const TRACE_KEEP: usize = 4000;
@@ -221,11 +237,15 @@ impl Engine {
         // `NV_PROFILE` (a diagnostic): read once, before any call.
         crate::profile::init_from_env();
         let mut mem = Mem::new();
-        // `NV_BLOCK_CHECK=free|store[,log]` (a diagnostic): guards after every heap block and
-        // stack local, checked when the block is freed or at every store ([`Mem::enable_block_check`]);
-        // a finding stops the run unless `,log`.
-        if let Some((store, stop)) = block_check_from_env() {
+        // `NV_BLOCK_CHECK=free|store[,freed][,log]` (a diagnostic): guards after every heap block
+        // and stack local, checked when the block is freed or at every store
+        // ([`Mem::enable_block_check`]); `freed` also holds freed blocks back and reports stores
+        // into them ([`Mem::enable_freed_check`]). A finding stops the run unless `,log`.
+        if let Some((store, stop, freed)) = block_check_from_env() {
             mem.enable_block_check(store, stop);
+            if freed {
+                mem.enable_freed_check(stop);
+            }
         }
         // The C runtime words its string and memory routines read first, as the image
         // holds them before the CRT start-up: `__sse2_available` (`01270a6c`) and
@@ -265,6 +285,7 @@ impl Engine {
             platform_calls: AddrSet::default(),
             call_trace: crate::call_trace::for_new_engine(),
             stack_frames: Vec::new(),
+            guest_stacks: Vec::new(),
         };
         // `NV_WATCH` (a diagnostic, not exe behaviour): reports the writers of a range of memory.
         crate::watch_check::install(&mut engine);
@@ -363,12 +384,17 @@ impl Engine {
         self.real_clock = Some(std::time::Instant::now());
     }
 
-    /// Brings the clock up to date with the real time that passed (real clock on only).
+    /// Brings the clock up to date with the real time that passed (real clock on only). Only
+    /// whole microseconds are counted, and the real-time mark moves on by exactly what was
+    /// counted, so the part of a microsecond left over is counted at a later reading: moving the
+    /// mark to `now` instead lost about half a microsecond at every reading, and with thousands
+    /// of readings a second the game's clock fell behind the real time by a few percent (the
+    /// sound, which follows that clock, then got gaps of silence to wait for it).
     fn catch_up_clock(&mut self) {
         if let Some(last) = self.real_clock {
             let now = std::time::Instant::now();
             let passed = now.duration_since(last).as_micros() as u64;
-            self.real_clock = Some(now);
+            self.real_clock = Some(last + std::time::Duration::from_micros(passed));
             self.advance_clock_us(passed);
         }
     }
@@ -699,9 +725,27 @@ impl Engine {
 impl Engine {
     /// A block of `size` zeroed bytes for the duration of `f`: a local the
     /// game keeps on its stack and passes by address (a scope guard, a
-    /// `NiPointer` temporary, an out parameter). Freed when `f` returns.
+    /// `NiPointer` temporary, an out parameter). Given back when `f` returns.
+    ///
+    /// It is taken from the running game thread's own stack ([`GUEST_STACK_SIZE`] bytes, frames
+    /// going down, [`FRAME_GAP`] bytes left free above each), as the exe keeps its locals on the
+    /// thread's stack: a store a little past a local (up to [`FRAME_GAP`] bytes, or
+    /// [`STACK_TOP_RESERVE`] past the outermost one) or through a pointer kept to an ended one
+    /// stays on that stack, as in the exe, instead of reaching a heap object. With the block
+    /// check on the local is a guarded heap block instead, so the check can name those stores.
+    ///
+    /// A stop (a panic) unwinding through `f` leaves the stack's top where it was; a caller that
+    /// catches stops and goes on with the engine puts it back with [`Engine::guest_stack_mark`]
+    /// and [`Engine::guest_stack_restore`].
     pub fn with_stack<R>(&mut self, size: u32, f: impl FnOnce(&mut Engine, Ptr) -> R) -> R {
-        let block = self.mem.alloc(size);
+        // It goes back the way it came, even if the check is switched on meanwhile.
+        let checked = self.mem.block_check_on();
+        let thread = self.kernel.threads.current;
+        let (block, top) = if checked {
+            (self.mem.alloc(size), 0)
+        } else {
+            self.push_frame(thread, size)
+        };
         let traced = self.call_trace.is_some();
         if traced {
             self.stack_frames.push((block, size));
@@ -710,20 +754,85 @@ impl Engine {
         if traced {
             self.stack_frames.pop();
         }
-        self.mem.free(block);
+        if checked {
+            self.mem.free(block);
+        } else if let Some(Some(stack)) = self.guest_stacks.get_mut(thread) {
+            stack.1 = top;
+        }
         r
+    }
+
+    /// The address the next [`Engine::with_stack`] of `size` bytes on the running thread takes
+    /// (block check off), for tests that need to know a local's address beforehand.
+    pub fn next_stack_local(&mut self, size: u32) -> u32 {
+        let thread = self.kernel.threads.current;
+        let (block, top) = self.push_frame(thread, size);
+        if let Some(Some(stack)) = self.guest_stacks.get_mut(thread) {
+            stack.1 = top;
+        }
+        block
+    }
+
+    /// The running thread's stack top, for a caller that catches stops: after a stop unwound
+    /// through `with_stack` frames, [`Engine::guest_stack_restore`] with this mark gives them
+    /// back (the exe's frames go with ESP however a frame ends).
+    pub fn guest_stack_mark(&self) -> (usize, Option<u32>) {
+        let thread = self.kernel.threads.current;
+        let top = self
+            .guest_stacks
+            .get(thread)
+            .copied()
+            .flatten()
+            .map(|(_, top)| top);
+        (thread, top)
+    }
+
+    /// Puts a thread's stack top back where [`Engine::guest_stack_mark`] found it; a stack made
+    /// since the mark is empty again.
+    pub fn guest_stack_restore(&mut self, (thread, top): (usize, Option<u32>)) {
+        if let Some(Some(stack)) = self.guest_stacks.get_mut(thread) {
+            stack.1 = top.unwrap_or(stack.0 + GUEST_STACK_SIZE - STACK_TOP_RESERVE);
+        }
+    }
+
+    /// Takes a local of `size` bytes (rounded up to 8, zeroed) from game thread `thread`'s stack,
+    /// making the stack at its first local; answers the local and the top to put back.
+    #[inline]
+    fn push_frame(&mut self, thread: usize, size: u32) -> (u32, u32) {
+        if self.guest_stacks.len() <= thread {
+            self.guest_stacks.resize(thread + 1, None);
+        }
+        let (base, top) = match self.guest_stacks[thread] {
+            Some(stack) => stack,
+            None => {
+                let base = self.mem.alloc(GUEST_STACK_SIZE);
+                (base, base + GUEST_STACK_SIZE - STACK_TOP_RESERVE)
+            }
+        };
+        // In 64 bits, so a size near 4 GB stops here before anything is written.
+        let bytes = u64::from(size.max(1)).div_ceil(8) * 8;
+        let need = bytes + u64::from(FRAME_GAP);
+        assert!(
+            u64::from(top - base) >= need,
+            "game thread {thread}: its stack for locals ({GUEST_STACK_SIZE:#x} bytes) is full"
+        );
+        let block = top - need as u32;
+        self.guest_stacks[thread] = Some((base, block));
+        self.mem.zero(block, bytes as u32);
+        (block, top)
     }
 }
 
 /// `NV_BLOCK_CHECK`, read once: `free` or `store` (whether every store is checked), with
-/// `,log` to report without stopping. `None` when unset.
-fn block_check_from_env() -> Option<(bool, bool)> {
-    static CHECK: std::sync::OnceLock<Option<(bool, bool)>> = std::sync::OnceLock::new();
+/// `,freed` for the freed-block check and `,log` to report without stopping. `None` when unset.
+fn block_check_from_env() -> Option<(bool, bool, bool)> {
+    static CHECK: std::sync::OnceLock<Option<(bool, bool, bool)>> = std::sync::OnceLock::new();
     *CHECK.get_or_init(|| {
         let v = std::env::var("NV_BLOCK_CHECK").ok()?;
         let store = v.split(',').any(|p| p.trim() == "store");
         let stop = !v.split(',').any(|p| p.trim() == "log");
-        Some((store, stop))
+        let freed = v.split(',').any(|p| p.trim() == "freed");
+        Some((store, stop, freed))
     })
 }
 
@@ -757,6 +866,200 @@ mod tests {
             r[1].contains("found when it was freed, while 00553bb0 ran"),
             "{}",
             r[1]
+        );
+    }
+
+    /// The freed-block check names who writes through a pointer kept to an ended stack frame,
+    /// which without it would land in whatever block took the frame's place.
+    #[test]
+    fn the_freed_check_names_a_store_through_a_stale_stack_pointer() {
+        let mut e = Engine::new();
+        e.mem.enable_freed_check(false);
+        e.map(0x0100_0000, 0x1000);
+        // 00401000 keeps the address of its 8-byte local in a global; 00402000 writes through it
+        // after the frame ended.
+        e.register(0x0040_1000, |e, _| {
+            e.with_stack(8, |e, local| e.set_global(0x0100_0000, local.addr()));
+            Ret::default()
+        });
+        e.register(0x0040_2000, |e, _| {
+            let stale = e.global::<u32>(0x0100_0000);
+            e.mem.set_u32(stale, 0);
+            Ret::default()
+        });
+        e.call(0x0040_1000, &[]);
+        // A new block of the same size is not the freed frame, and the frame reads as freed.
+        let fresh = e.mem.alloc(8);
+        assert_ne!(fresh, e.global::<u32>(0x0100_0000));
+        let stale = e.global::<u32>(0x0100_0000);
+        assert_eq!(e.mem.u32(stale), crate::mem::freed_word(stale));
+        e.call(0x0040_2000, &[]);
+        let r = e.mem.take_block_reports();
+        assert_eq!(r.len(), 1, "{r:?}");
+        assert!(r[0].starts_with("00402000 wrote 4 byte(s)"), "{}", r[0]);
+        assert!(r[0].contains("allocated while 00401000 ran"), "{}", r[0]);
+        assert!(
+            r[0].contains("after it was freed while 00401000 ran"),
+            "{}",
+            r[0]
+        );
+    }
+
+    /// Readings closer together than a microsecond still add up to the real time that passed
+    /// (each one used to drop its part of a microsecond, so back-to-back readings stopped the
+    /// clock).
+    #[test]
+    fn the_real_clock_keeps_up_with_back_to_back_readings() {
+        use std::time::{Duration, Instant};
+        let mut e = Engine::new();
+        e.start_real_clock();
+        // The real time between the two readings lies between what passed from just after the
+        // first to just before the last and what passed from just before the first to just
+        // after the last (a microsecond of rounding at each reading either way).
+        let t0 = Instant::now();
+        let start = e.clock_now_us();
+        let t1 = Instant::now();
+        while t1.elapsed() < Duration::from_millis(20) {
+            e.clock_now_us();
+        }
+        let t2 = Instant::now();
+        let end = e.clock_now_us();
+        let t3 = Instant::now();
+        let counted = end - start;
+        let least = (t2 - t1).as_micros() as u64;
+        let most = (t3 - t0).as_micros() as u64;
+        assert!(
+            counted + 2 >= least,
+            "counted {counted} us, at least {least}"
+        );
+        assert!(counted <= most + 2, "counted {counted} us, at most {most}");
+    }
+
+    /// `with_stack` locals come from the running thread's own stack: nested ones go down with
+    /// [`FRAME_GAP`] bytes above each, a store past the outermost local stays on the stack (the
+    /// heap block allocated right after the stack is not touched), and an ended local's place is
+    /// taken again, zeroed.
+    #[test]
+    fn locals_come_from_the_threads_stack() {
+        let mut e = Engine::new();
+        // The stack is made at the first local; the next heap block sits right at its end.
+        let first = e.next_stack_local(0x10);
+        let heap = e.mem.alloc(0x10);
+        assert_eq!(heap, first + 0x10 + FRAME_GAP + STACK_TOP_RESERVE);
+        e.mem.write(heap, &[0x11; 0x10]);
+        let (outer, inner) = e.with_stack(0x10, |e, outer| {
+            let past = 0x10 + FRAME_GAP + STACK_TOP_RESERVE;
+            e.mem.write(outer.addr(), &vec![0xaa; past as usize]);
+            let inner = e.with_stack(8, |_, inner| inner.addr());
+            (outer.addr(), inner)
+        });
+        assert_eq!(outer, first);
+        assert_eq!(inner, outer - 8 - FRAME_GAP);
+        assert_eq!(e.mem.bytes(heap, 0x10), vec![0x11; 0x10]);
+        assert_eq!(e.next_stack_local(0x10), outer);
+        let again = e.with_stack(0x10, |e, local| {
+            assert_eq!(e.mem.bytes(local.addr(), 0x10), vec![0; 0x10]);
+            local.addr()
+        });
+        assert_eq!(again, outer);
+    }
+
+    /// A stop unwinding through locals leaves the stack's top lowered; the catcher's mark puts
+    /// it back, so the next local is where it was before the stop.
+    #[test]
+    fn a_caught_stop_gives_its_locals_back_through_the_mark() {
+        let mut e = Engine::new();
+        let first = e.next_stack_local(0x20);
+        let mark = e.guest_stack_mark();
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.with_stack(0x20, |e, _| {
+                e.with_stack(0x20, |_, _| -> u32 { panic!("stop") })
+            })
+        }));
+        assert!(stopped.is_err());
+        assert_ne!(e.next_stack_local(0x20), first);
+        e.guest_stack_restore(mark);
+        assert_eq!(e.next_stack_local(0x20), first);
+    }
+
+    /// A pointer read from a freed object leads nowhere, and the read through it names the object.
+    #[test]
+    #[should_panic(expected = "a pointer read from the freed block")]
+    fn the_freed_check_names_the_block_a_stale_pointer_came_from() {
+        let mut e = Engine::new();
+        e.mem.enable_freed_check(false);
+        let object = e.mem.alloc(0x20);
+        let other = e.mem.alloc(0x10);
+        e.mem.set_u32(object + 4, other);
+        // The game's deallocator gives the calls it was reached through (outermost first).
+        e.mem.note_path(&[0x0040_1000, 0x0040_2000]);
+        e.mem.free(object);
+        let stale = e.mem.u32(object + 4);
+        let message = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.mem.u32(stale + 0x10);
+        }))
+        .err()
+        .and_then(|p| p.downcast_ref::<String>().cloned())
+        .unwrap_or_default();
+        assert!(message.contains("(in 00402000 < 00401000)"), "{message}");
+        panic!("{message}");
+    }
+
+    /// Not a check: the host's costs per operation, for the frame-rate work (`cargo test
+    /// --release -p engine-core --lib cost_of -- --ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn cost_of_calls_and_memory() {
+        fn leaf(e: &mut Engine, a: &[u32]) -> Ret {
+            Ret {
+                eax: e.mem.u32(a[0]).wrapping_add(a[1]),
+                ..Ret::default()
+            }
+        }
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x40_0000);
+        e.register(0x0040_1000, leaf);
+        // Prime the cache.
+        e.call(0x0040_1000, &[block, 1]);
+        let n = 20_000_000u32;
+        let t = std::time::Instant::now();
+        let mut sum = 0u32;
+        for i in 0..n {
+            sum = sum.wrapping_add(e.call(0x0040_1000, &[block + (i & 0xffc), i]).eax);
+        }
+        let call_ns = t.elapsed().as_nanos() as f64 / f64::from(n);
+        let t = std::time::Instant::now();
+        for i in 0..n {
+            sum = sum.wrapping_add(leaf(&mut e, &[block + (i & 0xffc), i]).eax);
+        }
+        let direct_ns = t.elapsed().as_nanos() as f64 / f64::from(n);
+        // Loads spread over 4 MB (a working set like a frame's), a fixed pseudo-random walk.
+        let t = std::time::Instant::now();
+        let mut x = 12345u32;
+        for _ in 0..n {
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            sum = sum.wrapping_add(e.mem.u32(block + ((x >> 8) & 0x3f_fffc)));
+        }
+        let load_ns = t.elapsed().as_nanos() as f64 / f64::from(n);
+        let t = std::time::Instant::now();
+        for i in 0..n {
+            e.mem.set_u32(block + ((i * 4) & 0x3f_fffc), i);
+        }
+        let store_ns = t.elapsed().as_nanos() as f64 / f64::from(n);
+        let t = std::time::Instant::now();
+        for i in 0..n {
+            e.with_stack(0x20, |e, p| e.mem.set_u32(p.addr(), i));
+        }
+        let frame_ns = t.elapsed().as_nanos() as f64 / f64::from(n);
+        let t = std::time::Instant::now();
+        let mut f = 1.0f64;
+        for i in 0..n {
+            f = crate::x87::x87_mul(f, 1.000_001 + f64::from(i & 1) * 1e-7);
+        }
+        let x87_ns = t.elapsed().as_nanos() as f64 / f64::from(n);
+        eprintln!(
+            "cost: call {call_ns:.1} ns (direct {direct_ns:.1}), random load {load_ns:.1} ns, \
+             store {store_ns:.1} ns, with_stack {frame_ns:.1} ns, x87_mul {x87_ns:.1} ns ({sum} {f})"
         );
     }
 

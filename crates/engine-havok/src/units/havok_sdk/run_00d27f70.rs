@@ -445,8 +445,7 @@ mod tests {
         let (sizes_owner, sizes_data) = forest(&mut e, &[1, 5, 3]);
         let sizes = e.mem.u32(sizes_owner);
         // The byte count sits at +0x10 of the exe's 0x18-byte frame (the allocator doubles it).
-        let frame = e.mem.alloc(0x18);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x18);
         let got = e.call(0x00d2_81b0, &args![this, sizes]).i32();
         assert_eq!(got, 1);
         assert!(e.mem.u32(frame + 0x10) >= 12);

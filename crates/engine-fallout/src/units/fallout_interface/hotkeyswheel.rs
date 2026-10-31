@@ -1688,15 +1688,13 @@ mod tests {
         // 00701610 (0x20 bytes): the text at +0xc.
         let mut w = world();
         let this = wheel(&mut w.e);
-        let frame = w.e.mem.alloc(0x20);
-        w.e.mem.free(frame);
+        let frame = w.e.next_stack_local(0x20);
         w.e.call_log = Some(vec![]);
         w.e.call(0x0070_1610, &args![this, 0u32]);
         assert_eq!(calls(&w.e, STRING_CONSTRUCT), vec![vec![frame + 0xc]]);
         assert_eq!(calls(&w.e, STRING_DESTROY), vec![vec![frame + 0xc]]);
         // 007017b0 (0x40 bytes): the text at +0x2c.
-        let frame = w.e.mem.alloc(0x40);
-        w.e.mem.free(frame);
+        let frame = w.e.next_stack_local(0x40);
         w.e.call_log = Some(vec![]);
         w.e.call(0x0070_17b0, &args![this]);
         assert_eq!(calls(&w.e, STRING_CONSTRUCT), vec![vec![frame + 0x2c]]);

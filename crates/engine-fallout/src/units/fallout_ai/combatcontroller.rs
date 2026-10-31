@@ -989,6 +989,8 @@ pub fn fn_0097f580(e: &mut Engine, this: Ptr<CombatController>, actor: Ptr, _unu
     if !e.get(this, CombatController::pCombatGroup).is_null() {
         let group = e.get(this, CombatController::pCombatGroup);
         let attacker = e.get(this, CombatController::pAttacker);
+        // 0097f5b5-0097f5cc: pushes actor, then the attacker (a stack word
+        // 00989230 never reads; RET 0x8).
         e.call(0x0098_9230, &args![group, attacker, actor]);
     }
     if actor.addr() == e.call(GET_TARGET, &args![this]).u32() {

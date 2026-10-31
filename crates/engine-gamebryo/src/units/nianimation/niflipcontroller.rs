@@ -1157,7 +1157,13 @@ mod n003_tests {
         let binary = e.mem.alloc(0x10);
         e.mem.set_u32(binary + BINARY_STREAM_READ, TRANSFER);
         e.mem.set_u32(binary + BINARY_STREAM_WRITE, TRANSFER);
-        let stream = object(e, 1);
+        // The stream reaches past `m_pkOstr` (+0x250), beyond the 0x60 bytes `object`
+        // gives: a block of its own with the doubles' vtable, so the fields stay in it.
+        let doubles = object(e, 1);
+        let vtable = e.mem.u32(doubles);
+        let stream = e.mem.alloc(STREAM_OUTPUT + 4);
+        e.mem.set_u32(stream, vtable);
+        e.mem.set_u32(stream + 4, 1);
         e.mem.set_u32(stream + STREAM_INPUT, binary);
         e.mem.set_u32(stream + STREAM_OUTPUT, binary);
         e.mem.set_u32(stream + STREAM_FILE_VERSION, version);

@@ -347,12 +347,14 @@ pub fn hk_cached_hash_map_clear(e: &mut Engine, this: Ptr<HkCachedHashMap>) {
 }
 
 // Translated from 00d87790 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkCachedHashMap::hkCachedHashMap` (engine map name), `__fastcall`: allocates `0xc0` bytes
+/// `hkCachedHashMap::hkCachedHashMap` (engine map name), `thiscall` with one stack word it
+/// never reads (`RET 4` at `00d877ca`; every caller pushes one): allocates `0xc0` bytes
 /// from the calling thread's allocator (slot `+4`), fills the first `0x40` bytes with `0xff`
 /// (`memSet`, the 16 hash words), no elements, `hashMod` 15. Returns `this`.
 pub fn hk_cached_hash_map_hk_cached_hash_map(
     e: &mut Engine,
     this: Ptr<HkCachedHashMap>,
+    _unused: u32,
 ) -> Ptr<HkCachedHashMap> {
     let allocator = allocator(e);
     let block = e.vcall(allocator, 4, &args![0xc0u32]).u32();
@@ -493,7 +495,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d8_7760, hk_cached_hash_map_clear(Ptr<HkCachedHashMap>)),
         entry!(
             0x00d8_7790,
-            hk_cached_hash_map_hk_cached_hash_map(Ptr<HkCachedHashMap>) -> Ptr<HkCachedHashMap>
+            hk_cached_hash_map_hk_cached_hash_map(
+                Ptr<HkCachedHashMap>,
+                u32,
+            ) -> Ptr<HkCachedHashMap>
         ),
         entry!(0x00d8_77d0, hk_cached_hash_map_dtor(Ptr<HkCachedHashMap>)),
         entry!(
@@ -577,7 +582,7 @@ mod tests {
 
     fn new_map(e: &mut Engine) -> u32 {
         let this = e.mem.alloc(0x10);
-        assert_eq!(e.call(0x00d8_7790, &args![this]).u32(), this);
+        assert_eq!(e.call(0x00d8_7790, &args![this, 0u32]).u32(), this);
         this
     }
 

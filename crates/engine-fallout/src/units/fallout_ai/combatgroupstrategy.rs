@@ -1678,10 +1678,10 @@ mod tests {
         let mut e = engine();
         let data = ranged_data(&mut e);
         // Four members: the fixed 0x6c bytes, 4 * 12 + 4 * 4 bytes of tables and
-        // both pads. The block just freed is the frame.
+        // both pads. The frame is the next local on the thread's stack (its bytes stay there
+        // after the call returns).
         let size = SORT_FIXED_FRAME + 4 * 16 + 0x20;
-        let block = e.mem.alloc(size);
-        e.mem.free(block);
+        let block = e.next_stack_local(size);
         let ebp = block + size;
         combat_group_data_sort_ranged_members(&mut e, data);
         // `_alloca16` from ESP = EBP-0x6c, then from the positions table.

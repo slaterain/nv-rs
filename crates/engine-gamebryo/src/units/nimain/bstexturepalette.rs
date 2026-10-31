@@ -1428,14 +1428,14 @@ mod tests {
         let only = f.add("small.dds", 64, 0x100);
         f.e.mem.set_u32(only + 4, 3);
         f.e.mem.set_u32(MAX_TEXTURES_TO_PURGE, 10);
-        let frame = f.e.mem.alloc(0x2c);
-        f.e.mem.free(frame);
+        // The frame is the next local on the game thread's stack; its bytes stay there after
+        // the call returns (nothing takes a local before the reads below).
+        let frame = f.e.next_stack_local(0x2c);
         bs_texture_palette_purge_unused_textures(&mut f.e);
         // The answered texture sits at +0x8 of the base 0xc above the frame's bottom.
         assert_eq!(f.e.mem.u32(frame + 0xc + 8), only);
         let path = f.string("textures\\small.dds");
-        let frame = f.e.mem.alloc(0xc);
-        f.e.mem.free(frame);
+        let frame = f.e.next_stack_local(0xc);
         assert!(bs_texture_palette_remove_texture_ov2(&mut f.e, path));
         assert_eq!(f.e.mem.u32(frame + 8), only);
     }

@@ -4945,13 +4945,18 @@ mod tests {
             .collect()
     }
 
-    /// The block the next `with_stack(size)` takes (the last freed block of that size), with
-    /// the call log switched on.
+    /// The local the next `with_stack(size)` on the running thread takes (the outermost frame
+    /// of the call that follows), with the call log switched on.
     fn next_frame(e: &mut Engine, size: u32) -> u32 {
-        let frame = e.mem.alloc(size);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(size);
         e.call_log = Some(vec![]);
         frame
+    }
+
+    /// The local a `with_stack(size)` takes directly inside the next `with_stack(outer)` on the
+    /// running thread (a callee's frame nested in the frame [`next_frame`] answers for `outer`).
+    fn nested_frame(e: &mut Engine, outer: u32, size: u32) -> u32 {
+        e.with_stack(outer, |e, _| e.next_stack_local(size))
     }
 
     #[test]
@@ -5036,7 +5041,8 @@ mod tests {
         // insert's advanced iterator at +0x10 of its 0x34 bytes.
         let full = cvec_vector(&mut e, &[1.0], 1);
         let value = cvec(&mut e, &[2.0]);
-        let insert_frame = next_frame(&mut e, 0x34);
+        // The insert (`00b396c0`) runs inside push_back's frame, so its 0x34 bytes sit below it.
+        let insert_frame = nested_frame(&mut e, 0x60, 0x34);
         let frame = next_frame(&mut e, 0x60);
         e.call(0x00b3_9100, &args![full, value]);
         assert_eq!(logged(&e, VECTOR_CVEC_INSERT_ONE)[0][1], frame + 0x48);

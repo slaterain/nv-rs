@@ -501,8 +501,7 @@ mod tests {
         let direction = e.mem.alloc(16);
         store_vec(&mut e, direction, [1.0, 2.0, 3.0, 0.0]);
         // The child-space direction sits at +0x10 of the exe's aligned 0x20-byte frame.
-        let block = e.mem.alloc(0x30);
-        e.mem.free(block);
+        let block = e.next_stack_local(0x30);
         let got = e.call(0x00cf_5a20, &args![shape, direction]).f32();
         assert_eq!(e.mem.f32(((block + 0xf) & !0xf) + 0x10), 2.0);
         // local = (2, -1, 3, 0); scaled = (4, -2, 6, 0); back (rotated by the columns, plus
@@ -544,8 +543,7 @@ mod tests {
         e.mem.set_u32(output + 0x20 + 4, 9);
         let result = e.mem.alloc(4);
         // The child-space input at +0x20 of the exe's aligned 0x50-byte frame.
-        let block = e.mem.alloc(0x60);
-        e.mem.free(block);
+        let block = e.next_stack_local(0x60);
         let frame = (block + 0xf) & !0xf;
         let got = e
             .call(0x00cf_5b20, &args![shape, result, input, output])
@@ -618,8 +616,7 @@ mod tests {
         e.mem.set_u32(body + 8, body_transform);
         // The record at +0x10, the input at +0x20 and the transform at +0x50 of the exe's
         // aligned 0x90-byte frame.
-        let block = e.mem.alloc(0xa0);
-        e.mem.free(block);
+        let block = e.next_stack_local(0xa0);
         let frame = (block + 0xf) & !0xf;
         e.call(0x00cf_5cc0, &args![shape, input, body, 0x5555u32]);
         assert_eq!(seen.borrow()[0].0[1..3], [frame + 0x20, frame + 0x10]);

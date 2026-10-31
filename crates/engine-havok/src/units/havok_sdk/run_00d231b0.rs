@@ -1471,8 +1471,7 @@ mod tests {
     fn the_search_state_sits_at_0x30_of_the_aligned_frame() {
         let mut e = engine();
         let (input, output) = search_fixture(&mut e, 1.0);
-        let raw = e.mem.alloc(0x80);
-        e.mem.free(raw);
+        let raw = e.next_stack_local(0x80);
         e.call(0x00d2_4360, &args![input, output]);
         let frame = aligned_frame_at(raw, 0x70);
         assert_eq!(e.mem.u32(frame + 0x68), input);

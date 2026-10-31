@@ -367,10 +367,9 @@ mod update_tests {
         let mut s = scene(2.0, 1.5);
         let body = s.body;
         add_node(&mut s, body);
-        // The frame block is the one just freed: the axis at +0x20, the rotated direction at
+        // The frame block is the next stack local: the axis at +0x20, the rotated direction at
         // +0x30, the direction at +0x40 and the rotation at +0x50.
-        let raw = s.e.mem.alloc(UPDATE_FRAME_BELOW + 0x10);
-        s.e.mem.free(raw);
+        let raw = s.e.next_stack_local(UPDATE_FRAME_BELOW + 0x10);
         let frame = aligned_frame_at(raw, UPDATE_FRAME_BELOW);
         s.e.call(0x00c7_4570, &args![s.listener, 1.0f32]);
         let axis_angle = &calls(&s.seen, ROTATION_SET_AXIS_ANGLE)[0];

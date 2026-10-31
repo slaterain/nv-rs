@@ -48,8 +48,8 @@ modern, open-source engine that can be fixed, ported and extended.
 Experimental. Almost all of the original program is translated, and the game's
 own code now runs: it starts a new game, plays the opening in Doc Mitchell's
 house (Doc's speech, character creation, the Vit-o-Matic and his questions),
-and lets you walk around, talk to Doc and use the Pip-Boy, with the original
-graphics and sound.
+and lets you walk around, talk to Doc, use the Pip-Boy and draw, aim and fire
+weapons, with the original graphics and sound.
 
 <table>
   <tr>
@@ -64,7 +64,8 @@ graphics and sound.
 
 Not yet: a full playthrough, the open world, script-extender (NVSE) plugins,
 packaged Linux and macOS builds, and VR. Speed is the current focus: the goal
-is to run faster than the original without changing how it plays.
+is to run as fast as the original without changing how it plays (faster, optional
+systems of our own come later).
 
 ## Progress
 
@@ -73,8 +74,8 @@ is to run faster than the original without changing how it plays.
 </p>
 
 Every function of the game's own code is translated. Not counted: 29 pieces of
-Microsoft and Windows code that our own layer replaces, and a few fragments
-that can never run. Some translated functions still have small marked gaps,
+Microsoft and Windows code, 13 that our own layer replaces and 16 C runtime
+fragments that can never run. Some translated functions still have small marked gaps,
 mostly error handling; the systems below are where the real work is now.
 
 | | System | Status |
@@ -84,7 +85,7 @@ mostly error handling; the systems below are where the real work is now.
 | 🔨 | **Animation and faces** | Translated; running in the play build, being compared with the original |
 | 🔨 | **Audio:** sounds, music and the radio | Translated; the game's own sound plays and matches the original |
 | 🔨 | **Graphics:** lighting, weather and effects | Translated; the game's own renderer draws on Windows, other platforms later |
-| 🔨 | **Gameplay:** combat, AI, quests, dialogue, menus, V.A.T.S., perks, crafting | Translated; the opening's dialogue, menus and Pip-Boy run, the rest is being switched on |
+| 🔨 | **Gameplay:** combat, AI, quests, dialogue, menus, V.A.T.S., perks, crafting | Translated; the opening's dialogue, menus and Pip-Boy run, weapons draw, aim and fire, combat is being checked |
 | ⬜ | **Saves and the open world** | Saves load in Doc's house; the open world comes later |
 
 After that come optional bug fixes, script-extender compatibility and more

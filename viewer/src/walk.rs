@@ -935,11 +935,30 @@ pub fn game_main_frame(
 }
 
 /// The end of the viewer's frame (`Last`): waits for the game's frame [`game_main_frame`]
-/// began, so a frame of the game never outlives the viewer's.
+/// began, so a frame of the game never outlives the viewer's. With the game's real window and
+/// the viewer's own hidden ([`game_frame_overlaps_viewer`]) it does not wait: the game's frame
+/// runs on beside the rest of the viewer's frame and the next frame's start joins it
+/// (`Host::set_keys_down`), so the viewer's own time no longer adds to the game's frame.
 pub fn finish_game_main_frame(host: Option<NonSendMut<host::Host>>) {
+    if game_frame_overlaps_viewer() {
+        return;
+    }
     if let Some(mut host) = host {
         host.finish_main_frame();
     }
+}
+
+/// Whether the game's frame may outlive the viewer's: the game draws in its own window
+/// (`NV_D3D9=real`), the viewer's is hidden (no `NV_VIEWER_WINDOW=1`), the game takes its input
+/// from its own window, and `NV_GAME_FRAME_JOIN=last` does not ask for the wait at `Last`.
+fn game_frame_overlaps_viewer() -> bool {
+    static OVERLAP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OVERLAP.get_or_init(|| {
+        let real = std::env::var("NV_D3D9").is_ok_and(|v| v.eq_ignore_ascii_case("real"));
+        let shown = std::env::var("NV_VIEWER_WINDOW").is_ok_and(|v| v == "1");
+        let last = std::env::var("NV_GAME_FRAME_JOIN").is_ok_and(|v| v == "last");
+        real && !shown && !last && !game_frame_in_step()
+    })
 }
 
 /// `NV_GAME_FRAME_SYNC=1`: the game's frame runs inside [`game_main_frame`], the viewer waiting

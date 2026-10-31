@@ -1075,13 +1075,14 @@ mod tests {
         let mut f = Fixture::new();
         let (node, kids) = f.switch_node(3);
         let out = f.e.mem.alloc(4);
-        let frame = f.e.mem.alloc(0x18);
-        f.e.mem.free(frame);
+        // The frame is the next local the game thread's stack gives out.
+        let frame = f.e.next_stack_local(0x18);
         f.log();
         ni_switch_node_detach_child(&mut f.e, node, kids[2], out);
         let log = f.take_log();
         assert_eq!(calls(&log, NI_NODE_DETACH_CHILD_OV2)[0][2], frame + 0x10);
         let out = f.e.mem.alloc(4);
+        let frame = f.e.next_stack_local(0x18);
         f.log();
         ni_switch_node_detach_child_at(&mut f.e, node, 1, out);
         let log = f.take_log();

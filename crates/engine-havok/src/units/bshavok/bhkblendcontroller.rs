@@ -1737,9 +1737,8 @@ mod tests {
         let array = make_array(&mut e, &[[1.0, 1.0, 1.0]], 4);
         let value = e.mem.alloc(12);
         put_key(&mut e, value, [2.0, 2.0, 2.0]);
-        // The next 0x1c-byte block is the one the frame takes.
-        let frame = e.mem.alloc(0x1c);
-        e.mem.free(frame);
+        // The frame is the next 0x1c-byte local the game thread's stack gives out.
+        let frame = e.next_stack_local(0x1c);
         e.call(0x00c9a730, &args![array, 2u32, value]);
         assert_eq!(calls_to(&e, KEY_NOT_EQUAL), vec![vec![value, frame + 0x10]]);
     }
@@ -2109,8 +2108,8 @@ mod tests {
         words.extend(bits(&[1.0, 2.0, 3.0]));
         let controller = make_controller(&mut e, &[], 0);
         let (stream, input) = reader_stream(&mut e, &words, true);
-        let frame = e.mem.alloc(0x40);
-        e.mem.free(frame);
+        // The frame is the next 0x40-byte local the game thread's stack gives out.
+        let frame = e.next_stack_local(0x40);
         e.call(0x00c9ba40, &args![controller, stream]);
         // The count into the argument slot (+0x3c), the size word at +0x18, the key at +0x20.
         assert_eq!(
@@ -2129,8 +2128,8 @@ mod tests {
         e.register(TIME_CONTROLLER_SAVE_BINARY, |_, _| Ret::default());
         let controller = make_controller(&mut e, &[[1.0, 2.0, 3.0]], 1);
         let (stream, output) = writer_stream(&mut e, true);
-        let frame = e.mem.alloc(0x28);
-        e.mem.free(frame);
+        // The frame is the next 0x28-byte local the game thread's stack gives out.
+        let frame = e.next_stack_local(0x28);
         e.call(0x00c9af40, &args![controller, stream]);
         // The count from the argument slot (+0x24), the key from +0x14, the size word at +0xc.
         assert_eq!(

@@ -56,18 +56,18 @@ enum Object {
 pub struct Real {
     windows: HashMap<u32, isize>,
     d3d: Option<IDirect3D9>,
-    objects: HashMap<u32, Object>,
+    objects: crate::engine::AddrMap<u32, Object>,
     /// Open locks of buffers: (offset, size, flags), innermost last.
-    locks: HashMap<u32, Vec<(u32, u32, u32)>>,
+    locks: crate::engine::AddrMap<u32, Vec<(u32, u32, u32)>>,
     /// The buffers made with `D3DUSAGE_DYNAMIC` (their locks pass `DISCARD`/`NOOVERWRITE` on).
-    dynamic: HashSet<u32>,
+    dynamic: crate::engine::AddrSet<u32>,
     /// The differences already printed: (call, model's answer, real answer).
     logged: HashSet<(&'static str, u32, u32)>,
     /// Bindings the model took whose object has no real counterpart, by (device, binding: a
     /// stream number, or [`INDICES`], [`DECLARATION`], [`VERTEX_SHADER`], [`PIXEL_SHADER`]).
     /// The real binding is set to null instead, and the real draws are skipped while any is
     /// left: a pure device does not check what it draws with.
-    broken: HashSet<(u32, u32)>,
+    broken: crate::engine::AddrSet<(u32, u32)>,
     /// Real objects whose modelled ones are destroyed, released at the next `Present` ([`forget`]).
     graveyard: Vec<Object>,
 }
@@ -135,9 +135,16 @@ fn words(e: &Engine, at: u32, n: u32) -> Vec<u32> {
     (0..n).map(|i| e.mem.u32(at + 4 * i)).collect()
 }
 
-fn device(e: &Engine, this: u32) -> Option<IDirect3DDevice9> {
+/// The real device, borrowed: the object table holds its reference for the whole call (only
+/// [`forget`] takes it out, and it keeps the object alive until `Present`), so the handle is not
+/// counted. A counted clone cost an `AddRef` and a `Release` in d3d9.dll on every forwarded
+/// call, tens of thousands a frame.
+fn device(e: &Engine, this: u32) -> Option<std::mem::ManuallyDrop<IDirect3DDevice9>> {
     match e.kernel.graphics.real.objects.get(&this) {
-        Some(Object::Device(d)) => Some(d.clone()),
+        // SAFETY: an interface is one non-null COM pointer; the copy is never released.
+        Some(Object::Device(d)) => Some(std::mem::ManuallyDrop::new(unsafe {
+            std::mem::transmute_copy(d)
+        })),
         _ => None,
     }
 }
@@ -429,6 +436,13 @@ fn window_thread() -> &'static std::sync::Mutex<std::sync::mpsc::Sender<Request>
     })
 }
 
+/// Whether the game's window is shown without taking the focus (`NV_D3D9_BACKGROUND`, for the
+/// scripted runs, so that one does not take the keyboard and the cursor from whoever works
+/// beside it). Off, it is shown as the game's `WS_VISIBLE` window is: activated.
+fn shown_in_background() -> bool {
+    std::env::var_os("NV_D3D9_BACKGROUND").is_some()
+}
+
 unsafe fn run_window_thread(rx: std::sync::mpsc::Receiver<Request>) {
     let module = GetModuleHandleA(None).unwrap_or_default();
     let class = WNDCLASSA {
@@ -445,7 +459,8 @@ unsafe fn run_window_thread(rx: std::sync::mpsc::Receiver<Request>) {
             title.push(0);
             let [left, top, right, bottom] = request.rect;
             let child = request.parent != 0;
-            // A top-level window is shown afterwards without taking the focus.
+            // A top-level window is shown afterwards (activated, or in the background for the
+            // scripted runs: [`shown_in_background`]).
             let style = if child {
                 request.style
             } else {
@@ -471,7 +486,12 @@ unsafe fn run_window_thread(rx: std::sync::mpsc::Receiver<Request>) {
                         register_raw_mouse(w);
                     }
                     if !child && request.style & WS_VISIBLE.0 != 0 {
-                        let _ = ShowWindow(w, SW_SHOWNOACTIVATE);
+                        let show = if shown_in_background() {
+                            SW_SHOWNOACTIVATE
+                        } else {
+                            SW_SHOW
+                        };
+                        let _ = ShowWindow(w, show);
                     }
                     w.0 as isize
                 }
@@ -1313,7 +1333,13 @@ pub fn set_constants(
         face_check_constants(e, kind == 3, start, data, count);
     }
     let per = if kind % 3 == 2 { 1 } else { 4 };
-    let v = words(e, data, per * count);
+    // The model took the range (at most 256 registers of 4 words): the words on the stack, no
+    // allocation per call.
+    let mut v = [0u32; 1024];
+    let n = ((per * count) as usize).min(v.len());
+    for (i, w) in v[..n].iter_mut().enumerate() {
+        *w = e.mem.u32(data + 4 * i as u32);
+    }
     let p = v.as_ptr();
     let r = unsafe {
         match kind {

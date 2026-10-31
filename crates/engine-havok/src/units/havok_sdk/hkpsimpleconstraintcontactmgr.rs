@@ -2625,8 +2625,7 @@ mod contact_point_tests {
         record(&mut e, &seen, UFLOAT8_ASSIGN, Ret::default());
         e.register(CI_SQRT, |_, _| Ret::default());
         let properties = e.mem.alloc(0x40);
-        let frame = e.mem.alloc(0x14);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x14);
         e.call(
             0x00cf_d800,
             &args![m.mgr, first, first, 10000u32, properties],
@@ -2645,8 +2644,7 @@ mod contact_point_tests {
             flag_seen.borrow_mut().push((OPTIMIZE_CAPACITY, a.to_vec()));
             a[0].into_ret()
         });
-        let frame = e.mem.alloc(0x34);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x34);
         e.call(0x00cf_d200, &args![m.mgr + 0x14, m.owner, 1u32]);
         // The flag byte is the low byte of the `id` word, +0x30 of the frame; the owner sits at
         // +0x2c as the caller pushed it.
@@ -2662,8 +2660,7 @@ mod contact_point_tests {
         e.register(OPTIMIZE_CAPACITY, |_, a| a[0].into_ret());
         let constraint = e.mem.alloc(0x40);
         e.mem.set_u32(m.mgr + 0x38, constraint);
-        let frame = e.mem.alloc(0x2c);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x2c);
         e.call(0x00cf_d320, &args![m.mgr, 0u32, m.owner]);
         assert_eq!(calls(&seen, FIRE_CONTACT_POINT_REMOVED)[0][1], frame + 0x10);
     }
@@ -2674,8 +2671,8 @@ mod contact_point_tests {
         let info = e.mem.alloc(0x100);
         let holder = e.mem.alloc(8);
         e.mem.set_u32(holder + 4, m.owner);
-        let raw = e.mem.alloc(0x90);
-        e.mem.free(raw);
+        // The raw local `with_aligned_frame(0x80)` takes (0x80 + 0x10 bytes).
+        let raw = e.next_stack_local(0x90);
         e.call_log = Some(vec![]);
         add(&mut e, &m, info, holder, contact);
         let logged = |address: u32| -> Vec<Vec<u32>> {

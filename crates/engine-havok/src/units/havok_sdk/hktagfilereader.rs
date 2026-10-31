@@ -102,9 +102,9 @@ mod tests {
         let (binary, log) = stream(&mut e, &magic);
         let out = e.mem.alloc(4);
         // The 16 bytes are read to +0x4 of the exe's frame; the magic byte lands in the
-        // `stream` argument's slot (+0x1c).
-        let frame = e.mem.alloc(0x20);
-        e.mem.free(frame);
+        // `stream` argument's slot (+0x1c). The frame is the next stack local; its bytes stay on
+        // the stack after the call until another local is taken there.
+        let frame = e.next_stack_local(0x20);
         assert_eq!(e.call(0x00dc_ca60, &args![out, binary]).u32(), out);
         assert_eq!(e.mem.u32(out), 2);
         assert_eq!(e.mem.u32(frame + 4), 0xcab0_0d1e);

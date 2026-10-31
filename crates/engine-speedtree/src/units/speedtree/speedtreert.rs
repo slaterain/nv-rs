@@ -747,7 +747,11 @@ pub fn c_speed_tree_rt_load_tree(e: &mut Engine, this: Ptr<CSpeedTreeRT>, filena
                 let buffer = e.call(ALLOCATE, &args![MEMORY_MANAGER, size]).u32();
                 let read = e.with_stack(4, |e, flag| {
                     e.mem.set_u32(flag.addr(), 1);
-                    e.vcall(file, 8, &args![buffer, size, flag, 1u32]).u32()
+                    // 00b0551f..00b05525: the stream's own read word at `+8` (not a virtual
+                    // slot), called cdecl with the file first (`ADD ESP,0x14` at 00b05527).
+                    let read_word = e.mem.u32(file + 8);
+                    e.call(read_word, &args![file, buffer, size, flag, 1u32])
+                        .u32()
                 });
                 let position = e.mem.u32(file + 4).wrapping_add(read);
                 e.mem.set_u32(file + 4, position);
@@ -4769,8 +4773,9 @@ mod tests {
         }
     }
 
-    /// A file object whose vtable has the three slots `LoadTree` calls: the deleting destructor,
-    /// the read (`+8`, filling the buffer with 7s and returning `read`) and the size (`+0x28`).
+    /// A file object as `LoadTree` uses it: its vtable's deleting destructor (`+0`) and size
+    /// (`+0x28`), and the stream's own read word at `+8` of the object (filling the buffer with
+    /// 7s and returning `read`). Its vtable slot `+8` is the seek, which must not be called.
     fn file_object(e: &mut Engine, calls: &Calls, size: u32, read: u32) -> u32 {
         let (destroy, read_slot, size_slot) = (0x0f10_0000, 0x0f10_0010, 0x0f10_0020);
         stub(e, calls, destroy, 0);
@@ -4787,14 +4792,19 @@ mod tests {
                 ..Ret::default()
             }
         });
+        let seek_slot = 0x0f10_0030;
+        e.register_double(seek_slot, |_, _| {
+            panic!("the seek slot was called for the read")
+        });
         let vtable = 0x0f10_0100;
         let mut slots = [0u32; 11];
         slots[0] = destroy;
-        slots[2] = read_slot;
+        slots[2] = seek_slot;
         slots[10] = size_slot;
         e.put_vtable(vtable, &slots);
         let file = e.mem.alloc(0x10);
         e.mem.set_u32(file, vtable);
+        e.mem.set_u32(file + 8, read_slot);
         file
     }
 

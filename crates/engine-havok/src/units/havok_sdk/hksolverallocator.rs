@@ -794,9 +794,9 @@ mod tests {
         let list = [(0x1_1000, 0x40), (0x1_5000, 0x80)];
         let (mut e, this) = allocator(&FIELDS, &list);
         e.call_log = Some(vec![]);
-        // The inserted pair sits at +0x10 of the exe's 0x18-byte frame.
-        let frame = e.mem.alloc(0x18);
-        e.mem.free(frame);
+        // The inserted pair sits at +0x10 of the exe's 0x18-byte frame (a stack local, whose
+        // bytes stay as they were left until another local takes its place).
+        let frame = e.next_stack_local(0x18);
         free(&mut e, this, 0x1_3000, 0x100);
         assert_eq!(
             free_list(&e, this),

@@ -568,8 +568,97 @@ unsafe fn cursors(o: &mut impl Write, ds: *mut Obj) {
     }
 }
 
+/// `Play` again on a non-looping buffer, after:
+/// - `ended`: it played to its end (both cursors read 0, status 0);
+/// - `stopped`: it played to its end, then `Stop`;
+/// - `setpos`: it played to its end, then `SetCurrentPosition(0)`;
+/// - `again`: it played to its end, was played again to its end, then once more;
+/// - `midstop`: it played for 50 ms, then `Stop` and `SetCurrentPosition(0)`;
+/// - `fresh`: never played.
+///
+/// Before the last `Play` the cursors and status are written (`before`), then every change for
+/// 500 ms after it.
+unsafe fn replays(o: &mut impl Write, ds: *mut Obj) {
+    let mut freq = 0i64;
+    QueryPerformanceFrequency(&mut freq);
+    let read = |b: *mut Obj| {
+        let (mut p, mut w, mut s) = (0u32, 0u32, 0u32);
+        slot::<Fn2>(b, 0x10)(b, &mut p as *mut _ as usize, &mut w as *mut _ as usize);
+        slot::<Fn1>(b, 0x24)(b, &mut s as *mut _ as usize);
+        (p, w, s)
+    };
+    let play_to_end = |b: *mut Obj| {
+        slot::<Fn3>(b, 0x30)(b, 0, 0, 0);
+        let mut origin = 0i64;
+        QueryPerformanceCounter(&mut origin);
+        while read(b).2 & 1 != 0 && now_us(freq, origin) < 2_000_000 {}
+    };
+    for (channels, rate, bits) in [(1u16, 22050u32, 16u16), (2, 44100, 16)] {
+        for variant in ["ended", "stopped", "setpos", "again", "midstop", "fresh"] {
+            let f = format(channels, rate, bits);
+            let bytes = f.avg * 200 / 1000 / f.align as u32 * f.align as u32;
+            let (_, b) = create(ds, 0x100e0 | 0x200, false, &f, bytes);
+            let mut answers = Vec::new();
+            match variant {
+                "ended" => play_to_end(b),
+                "stopped" => {
+                    play_to_end(b);
+                    answers.push(slot::<Fn0>(b, 0x48)(b));
+                }
+                "setpos" => {
+                    play_to_end(b);
+                    answers.push(slot::<Fn1>(b, 0x34)(b, 0));
+                }
+                "again" => {
+                    play_to_end(b);
+                    play_to_end(b);
+                }
+                "midstop" => {
+                    slot::<Fn3>(b, 0x30)(b, 0, 0, 0);
+                    Sleep(50);
+                    answers.push(slot::<Fn0>(b, 0x48)(b));
+                    answers.push(slot::<Fn1>(b, 0x34)(b, 0));
+                }
+                _ => {}
+            }
+            let before = read(b);
+            let mut origin = 0i64;
+            QueryPerformanceCounter(&mut origin);
+            let hr = slot::<Fn3>(b, 0x30)(b, 0, 0, 0);
+            let mut samples = Vec::new();
+            let mut last = (u32::MAX, u32::MAX, u32::MAX);
+            loop {
+                let t = now_us(freq, origin);
+                if t > 500_000 {
+                    break;
+                }
+                let now = read(b);
+                if now != last {
+                    samples.push(format!("{t}:{:x}:{:x}:{:x}", now.0, now.1, now.2));
+                    last = now;
+                }
+            }
+            let answers: Vec<String> = answers.iter().map(|a| format!("{a:x}")).collect();
+            writeln!(
+                o,
+                "DsReplay\t{rate:x} {channels:x} {bits:x} {bytes:x} {variant}\tanswers {} before {:x}:{:x}:{:x} play {hr:x}\t{}",
+                answers.join(","),
+                before.0,
+                before.1,
+                before.2,
+                samples.join(" ")
+            )
+            .unwrap();
+            slot::<Fn0>(b, 0x48)(b);
+            release(b);
+            Sleep(50);
+        }
+    }
+}
+
 fn main() {
     let mut o = std::io::stdout().lock();
+    let only_replays = std::env::args().nth(1).as_deref() == Some("replays");
     unsafe {
         let window = window();
         let mut ds: *mut Obj = std::ptr::null_mut();
@@ -581,6 +670,12 @@ fn main() {
         }
         let hr = slot::<Fn2>(ds, 0x18)(ds, window as usize, 2);
         writeln!(o, "DsCooperativeLevel\t2\t{hr:x}\t").unwrap();
+        if only_replays {
+            replays(&mut o, ds);
+            release(ds);
+            writeln!(o, "DsEnd").unwrap();
+            return;
+        }
         let mut caps = [0u32; 0x18];
         caps[0] = 0x60;
         let hr = slot::<Fn1>(ds, 0x10)(ds, caps.as_mut_ptr() as usize);

@@ -9306,8 +9306,7 @@ mod tests {
         let text = r#"<image x="5">hi</image>"#;
         let buffer = cstring(&mut e, text);
         let path = cstring(&mut e, "menu.xml");
-        let frame = e.mem.alloc(FRAME_BELOW_EBP);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(FRAME_BELOW_EBP);
         e.call(
             0x00a0_1e20,
             &args![
@@ -9711,10 +9710,22 @@ mod tests {
         install_xml_files(&mut e, vec![("Data\\Menus\\Prefabs\\p", "1")]);
         e.call_log = Some(vec![]);
         insert_includes(&mut e, "<include src=\"p\"/>");
-        // The prefab's storage object is destroyed in place and freed.
+        // The prefab's storage object is destroyed in place and then given back to the memory
+        // manager (a block allocated after that may take its place again).
         let destroyed = calls_to(&e, XML_STORAGE_DESTROY);
         assert_eq!(destroyed.len(), 1);
-        assert_eq!(e.mem.block_size(destroyed[0][0]), None);
+        let prefab = destroyed[0][0];
+        let log = e.call_log.as_ref().unwrap();
+        let destroyed_at = log
+            .iter()
+            .position(|(called, _)| *called == XML_STORAGE_DESTROY);
+        let freed_at = log.iter().position(|(called, args)| {
+            *called == MEMORY_DEALLOCATE && *args == vec![MEMORY_MANAGER, prefab]
+        });
+        assert!(
+            matches!((destroyed_at, freed_at), (Some(d), Some(f)) if d < f),
+            "{destroyed_at:?} {freed_at:?}"
+        );
     }
 
     /// Appends `element` to the `NiTPointerList` at `list`.

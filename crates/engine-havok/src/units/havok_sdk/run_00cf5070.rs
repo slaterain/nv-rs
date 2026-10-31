@@ -429,9 +429,8 @@ mod tests {
         e.mem.set_u32(input + 0x24, filter);
         let output = e.mem.alloc(0x50);
         let result = e.mem.alloc(4);
-        // The filter byte at +0x13 of the exe's 0x28-byte frame.
-        let frame = e.mem.alloc(0x28);
-        e.mem.free(frame);
+        // The filter byte at +0x13 of the exe's 0x28-byte frame (the next stack local).
+        let frame = e.next_stack_local(0x28);
         e.call(0x00cf_5140, &args![shape, result, input, output]);
         assert_eq!(*cast.borrow(), vec![children[1]]);
         assert_eq!(seen.borrow().len(), 2);
@@ -460,9 +459,8 @@ mod tests {
         let input = e.mem.alloc(0x30);
         let body = e.mem.alloc(0x10);
         e.mem.set_u32(body + 8, 0x77);
-        // The record sits at +0x14 of the exe's 0x34-byte frame.
-        let frame = e.mem.alloc(0x34);
-        e.mem.free(frame);
+        // The record sits at +0x14 of the exe's 0x34-byte frame (the next stack local).
+        let frame = e.next_stack_local(0x34);
         let seen = Rc::clone(&records);
         e.register_double(CHILD_DOUBLE, move |e, a| {
             assert_eq!(a[2], frame + 0x14);

@@ -21,7 +21,6 @@
 
 use super::d3d9::{CODE_BASE, D3DERR_INVALIDCALL, D3D_OK, E_NOINTERFACE};
 use crate::{Engine, Ptr};
-use std::collections::HashMap;
 
 /// Where the device's slots sit (after `IDirect3D9`'s).
 pub const DEVICE_CODE: u32 = CODE_BASE + 0x0200;
@@ -298,20 +297,20 @@ struct Device {
     /// states by (stage or sampler, type), the textures by sampler (held, counted).
     /// The last gamma ramp `SetGammaRamp` was given (three 256-entry WORD tables, 0x600 bytes).
     gamma_ramp: Option<Vec<u16>>,
-    render_states: HashMap<u32, u32>,
-    stage_states: HashMap<(u32, u32), u32>,
-    sampler_states: HashMap<(u32, u32), u32>,
-    textures: HashMap<u32, u32>,
+    render_states: crate::engine::AddrMap<u32, u32>,
+    stage_states: crate::engine::AddrMap<(u32, u32), u32>,
+    sampler_states: crate::engine::AddrMap<(u32, u32), u32>,
+    textures: crate::engine::AddrMap<u32, u32>,
     /// Transforms by `D3DTRANSFORMSTATETYPE`, the scissor rectangle, user clip planes, and
     /// whether a scene is open.
-    transforms: HashMap<u32, [u32; 16]>,
+    transforms: crate::engine::AddrMap<u32, [u32; 16]>,
     scissor: [u32; 4],
-    clip_planes: HashMap<u32, [u32; 4]>,
+    clip_planes: crate::engine::AddrMap<u32, [u32; 4]>,
     in_scene: bool,
     /// The fixed-function material (`D3DMATERIAL9`, 17 words), the lights by index
     /// (`D3DLIGHT9`, 26 words), the enabled ones, and the software vertex processing switch.
     material: Option<[u32; 17]>,
-    lights: HashMap<u32, [u32; 26]>,
+    lights: crate::engine::AddrMap<u32, [u32; 26]>,
     enabled_lights: std::collections::BTreeSet<u32>,
     software_vertex_processing: bool,
     /// After a `Reset` that failed: the device needs a successful `Reset` (`TestCooperativeLevel`
@@ -346,9 +345,9 @@ pub struct Objects {
     surface_vtable: u32,
     texture_vtable: u32,
     cube_vtable: u32,
-    devices: HashMap<u32, Device>,
-    surfaces: HashMap<u32, Surface>,
-    textures: HashMap<u32, Texture>,
+    devices: crate::engine::AddrMap<u32, Device>,
+    surfaces: crate::engine::AddrMap<u32, Surface>,
+    textures: crate::engine::AddrMap<u32, Texture>,
     /// The buffers, shaders and declarations (`super::d3d9resource`).
     pub(super) resources: super::d3d9resource::Resources,
     /// The queries (`super::d3d9query`).
@@ -1141,16 +1140,16 @@ pub fn create_device(
         depth_stencil,
         viewport: [0, 0, width, height, 0f32.to_bits(), 1f32.to_bits()],
         gamma_ramp: None,
-        render_states: HashMap::new(),
-        stage_states: HashMap::new(),
-        sampler_states: HashMap::new(),
-        textures: HashMap::new(),
-        transforms: HashMap::new(),
+        render_states: Default::default(),
+        stage_states: Default::default(),
+        sampler_states: Default::default(),
+        textures: Default::default(),
+        transforms: Default::default(),
         scissor: [0, 0, width, height],
-        clip_planes: HashMap::new(),
+        clip_planes: Default::default(),
         in_scene: false,
         material: None,
-        lights: HashMap::new(),
+        lights: Default::default(),
         enabled_lights: std::collections::BTreeSet::new(),
         software_vertex_processing: false,
         lost: false,
@@ -2141,6 +2140,7 @@ fn create_texture(
         },
     );
     device_add_ref(e, this);
+    note_reference(e, Ptr::new(object), "Create", 1);
     e.mem.set_u32(out.addr(), object);
     D3D_OK
 }
@@ -2258,6 +2258,7 @@ fn create_cube_texture(
         },
     );
     device_add_ref(e, this);
+    note_reference(e, Ptr::new(object), "CreateCube", 1);
     e.mem.set_u32(out.addr(), object);
     D3D_OK
 }
@@ -2814,7 +2815,34 @@ fn texture_query_interface(e: &mut Engine, this: Ptr, iid: Ptr, out: Ptr) -> u32
 fn texture_add_ref(e: &mut Engine, this: Ptr) -> u32 {
     let t = texture(e, this);
     t.references += 1;
-    t.references
+    let left = t.references;
+    note_reference(e, this, "AddRef", left);
+    left
+}
+
+/// `NV_D3D9_REFS=FILE` (a diagnostic, not Direct3D behaviour): every count change of a texture is
+/// appended to `FILE` with the count after it and the exe functions it came from (innermost
+/// first), to find a reference given back once too often. Off by default.
+fn note_reference(e: &Engine, this: Ptr, what: &str, left: u32) {
+    static FILE: std::sync::OnceLock<Option<std::sync::Mutex<std::fs::File>>> =
+        std::sync::OnceLock::new();
+    let Some(file) = FILE.get_or_init(|| {
+        let path = std::env::var_os("NV_D3D9_REFS")?;
+        std::fs::File::create(path).ok().map(std::sync::Mutex::new)
+    }) else {
+        return;
+    };
+    let calls: Vec<String> = e
+        .call_stack
+        .iter()
+        .rev()
+        .take(14)
+        .map(|a| format!("{a:08x}"))
+        .collect();
+    if let Ok(mut f) = file.lock() {
+        use std::io::Write;
+        let _ = writeln!(f, "{:08x}	{what}	{left}	{}", this.addr(), calls.join(" < "));
+    }
 }
 
 /// `Release()`: the last reference frees the texture, its levels and their memory, and
@@ -2823,6 +2851,7 @@ fn texture_release(e: &mut Engine, this: Ptr) -> u32 {
     let t = texture(e, this);
     t.references -= 1;
     let (left, bound) = (t.references, t.bound);
+    note_reference(e, this, "Release", left);
     if left == 0 && bound == 0 {
         texture_destroy(e, this);
     }
@@ -2839,6 +2868,7 @@ fn texture_unbind(e: &mut Engine, this: Ptr) {
 }
 
 fn texture_destroy(e: &mut Engine, this: Ptr) {
+    note_reference(e, this, "destroyed", 0);
     {
         let t = e
             .kernel

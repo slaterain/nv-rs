@@ -223,8 +223,7 @@ mod tests {
             Ret::default()
         });
         // The environment and the array sit at +0x4 of the exe's 0x24-byte frame.
-        let pinned = e.mem.alloc(0x24);
-        e.mem.free(pinned);
+        let pinned = e.next_stack_local(0x24);
         e.call(0x00de_0fe0, &args![0x1111u32, 0x2222u32, 0x3333u32]);
         assert_eq!(frame.get(), pinned + 4);
         let size_when_freed = size_when_freed.borrow().clone();

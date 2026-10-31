@@ -925,9 +925,14 @@ mod tests {
         assert_eq!(e.mem.f32(cinfo + 0x44), 4.0);
     }
 
-    /// A stream whose slot `0x30` records the object handed to it.
+    /// A stream whose slot `0x30` records the object handed to it, its block big enough for
+    /// the byte-order flag at `+0x1E4` (an `object` block is only 0x100 bytes: the flag would
+    /// lie in whatever is allocated next, such as the game thread's stack for locals).
     fn stream(e: &mut Engine) -> u32 {
-        let stream = object(e, &[(0x30, 0x0900_0150)]);
+        let vtable = e.mem.alloc(0x200);
+        e.mem.set_u32(vtable + 0x30, 0x0900_0150);
+        let stream = e.mem.alloc(0x300);
+        e.mem.set_u32(stream, vtable);
         quiet(e, &[0x0900_0150]);
         stream
     }

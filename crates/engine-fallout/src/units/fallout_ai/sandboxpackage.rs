@@ -1083,11 +1083,15 @@ fn search_centre(
         .call(MOBILE_OBJECT_GET_CURRENT_PACKAGE, &args![actor])
         .u32();
     if package != 0 {
-        let coord = e.with_stack(12, |e, result| {
-            e.call(PACKAGE_GET_LOCATION_COORD, &args![package, result, actor])
-                .u32()
+        // The point is the frame's `local_38`: `00675de0` fills it and answers its address, and
+        // the centre is copied from it, so the copy is made while it is there. (Scoped to
+        // `00675de0` alone, the copy read a freed block.)
+        e.with_stack(12, |e, result| {
+            let coord = e
+                .call(PACKAGE_GET_LOCATION_COORD, &args![package, result, actor])
+                .u32();
+            copy_point(e, coord, position);
         });
-        copy_point(e, coord, position);
         if cell_by_package {
             cell = e
                 .call(PACKAGE_GET_LOCATION_CELL, &args![package, actor])
@@ -2873,6 +2877,18 @@ mod sandbox_tests {
             e.mem.set_u32(a[0] + 8, size + 1);
             size.into_ret()
         });
+        // The centre and the functor as the enumeration sees them (the frame they lie in ends
+        // with the scan).
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let record = std::rc::Rc::clone(&seen);
+        e.register_double(ENUM_REFERENCES_CLOSE_TO_POINT, move |e, a| {
+            record.borrow_mut().push([
+                e.mem.f32(a[2]).to_bits(),
+                e.mem.u32(a[7]),
+                e.mem.u32(a[7] + 4),
+            ]);
+            Ret::default()
+        });
         e.mem.set_u8(this + BED, 1);
         e.call_log = Some(vec![]);
         e.call(0x009f_54d0, &args![this, actor]);
@@ -2882,13 +2898,12 @@ mod sandbox_tests {
         let w = &enumerate[0];
         assert_eq!(w[0], 0x0700_0000);
         assert_eq!(w[1], 0x0800_0000);
-        assert_eq!(e.mem.f32(w[2]), 7.0);
         assert_eq!(w[3], 300.0f32.to_bits());
         assert_eq!(w[4], w[2]);
         assert_eq!(w[5], 300.0f32.to_bits());
         assert_eq!(w[6], SCAN_CALLBACK);
-        assert_eq!(e.mem.u32(w[7]), actor);
-        assert_eq!(e.mem.u32(w[7] + 4), this);
+        // Centre x 7.0, the functor of the actor and `this`.
+        assert_eq!(*seen.borrow(), vec![[7.0f32.to_bits(), actor, this]]);
         // Food and wandering allowed, no food item: one wander choice.
         assert_eq!(e.mem.u32(this + POTENTIAL_TARGETS + 8), 1);
         assert_eq!(e.mem.u32(buffer + 4), 3);
@@ -2901,6 +2916,43 @@ mod sandbox_tests {
         e.call(0x009f_54d0, &args![this, actor]);
         assert_eq!(e.mem.u8(this + FOOD), 1);
         assert_eq!(e.mem.u32(buffer + 0x14), 2);
+    }
+
+    /// The scan's centre is copied from the package's point in the frame's `local_38` while it
+    /// is still there (`00675de0` answers its address). With the freed-block check a point freed
+    /// before the copy would give the fill word as the centre.
+    #[test]
+    fn scan_world_copies_the_centre_from_a_live_point() {
+        let mut e = Engine::new();
+        e.mem.enable_freed_check(true);
+        let (actor, package) = scan_doubles(&mut e);
+        answer(&mut e, MOBILE_OBJECT_GET_CURRENT_PACKAGE, package);
+        e.register(PACKAGE_GET_LOCATION_COORD, |e, a| {
+            e.mem.set_f32(a[1], 7.0);
+            e.mem.set_f32(a[1] + 4, -3.0);
+            e.mem.set_f32(a[1] + 8, 0.5);
+            a[1].into_ret()
+        });
+        answer(&mut e, PACKAGE_LOCATION_RADIUS, 300);
+        answer(&mut e, ACTOR_GET_BEST_FOOD_ITEM, 0);
+        let this = data(&mut e);
+        let buffer = e.mem.alloc(0x40);
+        e.mem.set_u32(this + POTENTIAL_TARGETS + 4, buffer);
+        e.register_double(CHOICE_ARRAY_GROW, |e, a| {
+            let size = e.mem.u32(a[0] + 8);
+            e.mem.set_u32(a[0] + 8, size + 1);
+            size.into_ret()
+        });
+        // The centre as the enumeration sees it (the frame it lies in ends with the scan).
+        let centres = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let seen = std::rc::Rc::clone(&centres);
+        e.register_double(ENUM_REFERENCES_CLOSE_TO_POINT, move |e, a| {
+            seen.borrow_mut()
+                .push([e.mem.f32(a[2]), e.mem.f32(a[2] + 4), e.mem.f32(a[2] + 8)]);
+            Ret::default()
+        });
+        e.call(0x009f_54d0, &args![this, actor]);
+        assert_eq!(*centres.borrow(), vec![[7.0, -3.0, 0.5]]);
     }
 
     /// Doubles for the scan callback: a functor of `actor` and `data`, and a

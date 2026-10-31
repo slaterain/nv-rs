@@ -13740,11 +13740,9 @@ mod tests {
             DISPLAY_FALLBACK_STRING
         );
     }
-    /// The block the next `with_stack(size)` takes (the last freed block of that size).
+    /// The local the next `with_stack(size)` on this thread takes (asked of the engine).
     fn next_frame(e: &mut Engine, size: u32) -> u32 {
-        let frame = e.mem.alloc(size);
-        e.mem.free(frame);
-        frame
+        e.next_stack_local(size)
     }
 
     #[test]

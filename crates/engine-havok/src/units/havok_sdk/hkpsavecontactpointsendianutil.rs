@@ -786,8 +786,7 @@ mod tests {
         let sizes = sizes.to_vec();
         let mut call = 0;
         // The out words: +0x1c and the `track` argument's slot (+0x30) of the exe's frame.
-        let frame = e.mem.alloc(0x34);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x34);
         e.register_double(0x00e0_6070, move |e, a| {
             assert_eq!(a[3] & 0xff, 0);
             assert_eq!(a[4..6], [frame + 0x1c, frame + 0x30]);
@@ -895,8 +894,7 @@ mod tests {
         let (entry, records) = collision_entry(&mut e, 0x20, 0x5f, 1);
         let before = bytes(&e, records, 0x80);
         // The out words: +0x8 and the `entry` argument's slot (+0x14) of the exe's frame.
-        let frame = e.mem.alloc(0x18);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x18);
         e.call(0x00e0_62a0, &args![0x7777u32, entry]);
         let seen = seen.borrow();
         assert_eq!(seen.len(), 1);

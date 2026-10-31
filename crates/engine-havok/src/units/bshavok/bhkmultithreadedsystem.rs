@@ -592,8 +592,7 @@ mod tests {
         e.register(JOB_QUEUE_INSTALL, |_, _| Ret::default());
         let this = e.new_object::<BhkMultithreadedSystem>();
         let thread_id = e.mem.alloc(4);
-        let frame = e.mem.alloc(0x5c);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x5c);
         e.call(0x00cbf540, &args![this, thread_id, 0u32]);
         // The pool info at +0x30, the queue info at +0x14.
         assert_eq!(

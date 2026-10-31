@@ -769,8 +769,7 @@ mod tests {
         let buffer = e.mem.alloc(16);
         install_grow(&mut e, &log, buffer, 4);
         // The array sits at +0xc of the exe's 0x18-byte frame.
-        let frame = e.mem.alloc(0x18);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x18);
         e.call(0x00cb_b9f0, &args![]);
         assert_eq!(calls(&log, ARRAY_GROW)[0][1], frame + 0xc);
         assert_eq!(e.mem.u32(slots), 0xaa);
@@ -881,9 +880,9 @@ mod tests {
         let b = node(&mut e, 0, slots + 4);
         let c = node(&mut e, 0, slots + 8);
         link(&mut e, &[a, b, c]);
-        // The array header at +0x4 and its storage at +0x10 of the exe's 0x210-byte frame.
-        let frame = e.mem.alloc(0x210);
-        e.mem.free(frame);
+        // The array header at +0x4 and its storage at +0x10 of the exe's 0x210-byte frame (read
+        // after the call: the ended frame's bytes stay on the thread's stack).
+        let frame = e.next_stack_local(0x210);
         e.call(0x00cb_bbd0, &args![]);
         assert_eq!(e.mem.u32(frame + 4), frame + 0x10);
         assert_eq!(e.mem.u32(frame + 0x10), a);
@@ -1065,8 +1064,7 @@ mod tests {
         let reader = install_stream(&mut e, &log, STDIO_READER_CONSTRUCT, 0);
         double(&mut e, &log, BUFFERED_READER_CONSTRUCT, 0x9999);
         // The string buffer at +0x8, the answer byte at +0x7 of the exe's 0x94-byte frame.
-        let frame = e.mem.alloc(0x94);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x94);
         let got = e.call(0x00cb_bde0, &args![VCALL_THIS, 0xabcdu32]).u32();
         assert_eq!(got, 0x9999);
         assert_eq!(calls(&log, 0x0900_0c01)[0], vec![0xabcd, frame + 8]);
@@ -1115,8 +1113,7 @@ mod tests {
         let writer = install_stream(&mut e, &log, STDIO_WRITER_CONSTRUCT, 0);
         double(&mut e, &log, BUFFERED_WRITER_CONSTRUCT, 0x8888);
         // The string buffer at +0x8 of the exe's 0x94-byte frame.
-        let frame = e.mem.alloc(0x94);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x94);
         let got = e.call(0x00cb_bee0, &args![VCALL_THIS, 0xabcdu32]).u32();
         assert_eq!(got, 0x8888);
         assert_eq!(calls(&log, 0x0900_0c01)[0], vec![0xabcd, frame + 8]);

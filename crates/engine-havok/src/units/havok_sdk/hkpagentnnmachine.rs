@@ -1746,8 +1746,7 @@ mod tests {
         let entry = make_entry(&mut e, 12);
         e.mem.set_u32(entry + 0x10, scene.body);
         e.mem.set_u32(entry + 0x14, plain);
-        let raw = e.mem.alloc(0x630);
-        e.mem.free(raw);
+        let raw = e.next_stack_local(0x630);
         e.call(0x00cf_eba0, &args![entry, input, 0x99u32]);
         let frame = aligned_frame_at(raw, 0x620);
         // The first shape resolves into the first body array at +0x20.

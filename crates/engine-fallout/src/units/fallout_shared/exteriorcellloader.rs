@@ -229,7 +229,9 @@ pub fn fn_00528620(e: &mut Engine, _loader: Ptr, data: Ptr) {
     }
     if !e.call(0x0045_1cd0, &args![cell]).bool() {
         e.with_stack(8, |e, heights| {
-            let land = e.call(0x0054_6fb0, &args![cell, heights]).u32();
+            // 005286e0-005286f1: `heights` is pushed for 0053f440; GetLand
+            // (00546fb0, plain RET) takes only the cell in ECX.
+            let land = e.call(0x0054_6fb0, &args![cell]).u32();
             e.call(0x0053_f440, &args![land, heights]);
             let water_height = e.call(0x0054_71e0, &args![cell]).f32();
             let minimum_height = e.mem.f32(heights.addr());

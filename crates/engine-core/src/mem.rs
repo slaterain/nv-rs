@@ -19,6 +19,8 @@ use std::collections::{BTreeMap, HashMap};
 const PAGE_BITS: u32 = 12;
 const PAGE: usize = 1 << PAGE_BITS;
 const PAGES: usize = 1 << (32 - PAGE_BITS);
+/// Freed heap blocks up to this size (rounded) are kept in an indexed table.
+const SMALL_BLOCK: u32 = 4096;
 
 /// First heap address. Above the executable image (which ends below
 /// 0x01410000) and clear of it, so a heap pointer never aliases image data.
@@ -31,11 +33,15 @@ pub const HEAP_END: u32 = 0x7FFF_0000;
 pub struct Fault(pub u32);
 
 pub struct Mem {
-    pages: Vec<Option<Box<[u8; PAGE]>>>,
+    /// One slot per page of the 4 GB space: a fixed-size table, so an index made from a `u32`
+    /// address (`a >> PAGE_BITS`) is in range by its type and needs no bounds check.
+    pages: Box<[Option<Box<[u8; PAGE]>>; PAGES]>,
     /// Heap: next fresh address, and freed blocks by size for reuse.
     brk: u32,
-    live: BTreeMap<u32, u32>,
-    free: BTreeMap<u32, Vec<u32>>,
+    live: crate::engine::AddrMap<u32, u32>,
+    /// Freed blocks of up to [`SMALL_BLOCK`] bytes by size / 8 (the map holds larger ones).
+    small_free: Vec<Vec<u32>>,
+    free: crate::engine::AddrMap<u32, Vec<u32>>,
     /// The write watch ([`Mem::watch`]); `None` in normal runs (one test per store).
     watch: Option<Box<Watch>>,
     /// The block check ([`Mem::enable_block_check`]); `None` in normal runs.
@@ -106,6 +112,29 @@ struct BlockCheck {
     current_fn: u32,
     /// Findings not yet taken ([`Mem::take_block_reports`]).
     reports: Vec<String>,
+    /// With [`Mem::enable_freed_check`]: freed blocks held back from reuse, oldest first
+    /// (address, rounded size), each guarded whole so that a store into it is reported, until
+    /// more than [`QUARANTINE_BYTES`] wait.
+    quarantine: Option<std::collections::VecDeque<(u32, u32)>>,
+    quarantine_bytes: u64,
+    /// The quarantined blocks: size asked for, the function running when it was allocated and
+    /// the one running when it was freed.
+    freed: HashMap<u32, (u32, u32, u32)>,
+    /// The engine's calls (innermost first) the game's allocator or deallocator gave for the next
+    /// block it hands out or frees ([`Mem::note_path`]), the allocation paths of live blocks, and
+    /// both paths of quarantined ones.
+    pending_path: Vec<u32>,
+    alloc_paths: HashMap<u32, Vec<u32>>,
+    freed_paths: HashMap<u32, (Vec<u32>, Vec<u32>)>,
+}
+
+/// Bytes of freed blocks the freed-block check keeps from reuse at most.
+const QUARANTINE_BYTES: u64 = 64 << 20;
+/// The word a freed block at `addr` is filled with while it waits: `0xD0000000` with the
+/// block's address shifted down by 4, above the heap, so a pointer taken from the block leads to
+/// unmapped memory, and the read through it names the block ([`Mem::freed_block_of`]).
+pub fn freed_word(addr: u32) -> u32 {
+    0xd000_0000 | (addr >> 4)
 }
 
 impl Mem {
@@ -121,9 +150,87 @@ impl Mem {
             pages: if store { vec![0; PAGES] } else { Vec::new() },
             current_fn: 0,
             reports: Vec::new(),
+            quarantine: None,
+            quarantine_bytes: 0,
+            freed: HashMap::new(),
+            pending_path: Vec::new(),
+            alloc_paths: HashMap::new(),
+            freed_paths: HashMap::new(),
         }));
         self.check_store = store;
         self.store_diag |= store;
+    }
+
+    /// With the block check on: the engine's calls `calls` (outermost first, as
+    /// `Engine::call_stack` holds them) for the next block the game's allocator hands out or its
+    /// deallocator frees, kept (the innermost 10) to name where a freed block came from.
+    pub fn note_path(&mut self, calls: &[u32]) {
+        if let Some(c) = self.check.as_deref_mut() {
+            c.pending_path.clear();
+            c.pending_path.extend(calls.iter().rev().take(10));
+        }
+    }
+
+    /// Adds the freed-block check to the block check (turning that on with `store` when it is
+    /// off): a freed block is not handed out again at once but waits, guarded whole, behind
+    /// [`QUARANTINE_BYTES`] of later frees; a store into it meanwhile is reported with the
+    /// functions that allocated, freed and wrote it (a write through a stale pointer, which a
+    /// reused block would take silently; also one through a pointer kept to an ended
+    /// `Engine::with_stack` frame, which in the exe would land on the dead stack instead).
+    pub fn enable_freed_check(&mut self, stop: bool) {
+        if !self.check.as_deref().is_some_and(|c| c.store) {
+            self.enable_block_check(true, stop);
+        }
+        if let Some(c) = self.check.as_deref_mut() {
+            c.quarantine.get_or_insert_with(Default::default);
+        }
+    }
+
+    /// With the freed-block check, keeps the freed block `addr` (rounded `size`, `info` the
+    /// size asked for and the allocating function) back and answers the oldest blocks that
+    /// leave the quarantine for the free lists; `None` without the check.
+    fn quarantine_block(
+        &mut self,
+        addr: u32,
+        size: u32,
+        info: Option<(u32, u32)>,
+    ) -> Option<Vec<(u32, u32)>> {
+        self.check.as_deref()?.quarantine.as_ref()?;
+        // Filled with `freed_word`, so a pointer read from a freed object points nowhere and the
+        // next access through it stops the run in the function that kept using the object.
+        let fill: Vec<u8> = std::iter::repeat(freed_word(addr).to_le_bytes())
+            .take(size as usize / 4)
+            .flatten()
+            .collect();
+        let _ = self.try_write_raw(addr, &fill);
+        let c = self.check.as_deref_mut()?;
+        let queue = c.quarantine.as_mut()?;
+        let (asked, owner) = info.unwrap_or((size, 0));
+        queue.push_back((addr, size));
+        c.quarantine_bytes += u64::from(size);
+        c.freed.insert(addr, (asked, owner, c.current_fn));
+        let alloc_path = c.alloc_paths.remove(&addr).unwrap_or_default();
+        let free_path = std::mem::take(&mut c.pending_path);
+        c.freed_paths.insert(addr, (alloc_path, free_path));
+        c.guards.insert(addr, (addr + size, addr));
+        for p in (addr >> PAGE_BITS)..=((addr + size - 1) >> PAGE_BITS) {
+            c.pages[p as usize] = c.pages[p as usize].saturating_add(1);
+        }
+        let mut released = Vec::new();
+        while c.quarantine_bytes > QUARANTINE_BYTES {
+            let Some((a, s)) = queue.pop_front() else {
+                break;
+            };
+            c.quarantine_bytes -= u64::from(s);
+            c.freed.remove(&a);
+            c.freed_paths.remove(&a);
+            c.guards.remove(&a);
+            for p in (a >> PAGE_BITS)..=((a + s - 1) >> PAGE_BITS) {
+                c.pages[p as usize] = c.pages[p as usize].saturating_sub(1);
+            }
+            released.push((a, s));
+        }
+        Some(released)
     }
 
     /// Whether the block check is on.
@@ -169,6 +276,10 @@ impl Mem {
             return;
         };
         c.blocks.insert(addr, (asked, c.current_fn));
+        if !c.pending_path.is_empty() {
+            let path = std::mem::take(&mut c.pending_path);
+            c.alloc_paths.insert(addr, path);
+        }
         c.guards.insert(start, (end, addr));
         if c.store {
             for p in (start >> PAGE_BITS)..=((end - 1) >> PAGE_BITS) {
@@ -222,18 +333,31 @@ impl Mem {
         if c.pages[(a >> PAGE_BITS) as usize] == 0 && c.pages[(last >> PAGE_BITS) as usize] == 0 {
             return;
         }
-        let end = a as u64 + len.max(1) as u64;
+        let end = (a as u64 + len.max(1) as u64).min(u32::MAX as u64) as u32;
+        // The first guard the store reaches: one that starts at or below `a` and runs past it,
+        // else the lowest one starting inside the store (a store past a live block's end that
+        // also reaches a freed neighbour is named for the live block's guard first).
         let hit = c
             .guards
-            .range(..(end.min(u32::MAX as u64) as u32))
+            .range(..=a)
             .next_back()
             .filter(|(_, &(gend, _))| gend > a)
+            .or_else(|| c.guards.range(a.saturating_add(1)..end).next())
             .map(|(&gstart, &(_, block))| (gstart, block));
         let Some((gstart, block)) = hit else {
             return;
         };
-        let (asked, owner) = c.blocks.get(&block).copied().unwrap_or((0, 0));
         let writer = c.current_fn;
+        if let Some(&(asked, owner, freer)) = c.freed.get(&block) {
+            self.check_report(format!(
+                "{writer:08x} wrote {len} byte(s) at {a:08x}, +{:#x} into block {block:08x} \
+                 ({asked:#x} bytes, allocated while {owner:08x} ran) after it was freed while \
+                 {freer:08x} ran",
+                a.max(gstart) - block
+            ));
+            return;
+        }
+        let (asked, owner) = c.blocks.get(&block).copied().unwrap_or((0, 0));
         self.check_report(format!(
             "{writer:08x} wrote {len} byte(s) at {a:08x}, +{:#x} into block {block:08x} \
              ({asked:#x} bytes, allocated while {owner:08x} ran): past its end",
@@ -252,11 +376,14 @@ impl Mem {
     pub fn new() -> Self {
         let mut pages = Vec::with_capacity(PAGES);
         pages.resize_with(PAGES, || None);
+        let pages: Box<[Option<Box<[u8; PAGE]>>; PAGES]> =
+            pages.into_boxed_slice().try_into().expect("PAGES slots");
         Mem {
             pages,
             brk: HEAP_BASE,
-            live: BTreeMap::new(),
-            free: BTreeMap::new(),
+            live: Default::default(),
+            small_free: vec![Vec::new(); SMALL_BLOCK as usize / 8 + 1],
+            free: Default::default(),
             watch: None,
             check: None,
             check_store: false,
@@ -503,8 +630,44 @@ impl Mem {
     /// function touched memory that was never provided.
     pub fn read(&self, addr: u32, buf: &mut [u8]) {
         if let Err(Fault(a)) = self.try_read(addr, buf) {
-            panic!("read of unmapped memory at {a:08x}");
+            match self.freed_block_of(a) {
+                Some(block) => panic!("read of unmapped memory at {a:08x} ({block})"),
+                None => panic!("read of unmapped memory at {a:08x}"),
+            }
         }
+    }
+
+    /// With the freed-block check: the waiting freed block a fault at `a` came from, when `a` is
+    /// a [`freed_word`] plus less than 64 KB: the block and what the check knows of it.
+    #[cold]
+    fn freed_block_of(&self, a: u32) -> Option<String> {
+        let c = self.check.as_deref()?;
+        c.quarantine.as_ref()?;
+        if a < 0xd000_0000 {
+            return None;
+        }
+        let word = a & 0x0fff_ffff;
+        (0..0x1_0000u32.min(word + 1)).find_map(|offset| {
+            let base = (word - offset) << 4;
+            [base, base + 8].into_iter().find_map(|block| {
+                c.freed.get(&block).map(|&(asked, owner, freer)| {
+                    let path = |p: &[u32]| {
+                        p.iter()
+                            .map(|f| format!("{f:08x}"))
+                            .collect::<Vec<_>>()
+                            .join(" < ")
+                    };
+                    let (alloc, free) = c.freed_paths.get(&block).cloned().unwrap_or_default();
+                    format!(
+                        "a pointer read from the freed block {block:08x}, plus {offset:#x}: \
+                         {asked:#x} bytes, allocated while {owner:08x} ran (in {}), freed while \
+                         {freer:08x} ran (in {})",
+                        path(&alloc),
+                        path(&free)
+                    )
+                })
+            })
+        })
     }
 
     pub fn write(&mut self, addr: u32, data: &[u8]) {
@@ -690,18 +853,7 @@ impl Mem {
         let asked = size;
         let guard = if self.check.is_some() { GUARD } else { 0 };
         let size = size.max(1).div_ceil(8) * 8 + guard;
-        let addr = match self.free.get_mut(&size).and_then(Vec::pop) {
-            Some(a) => a,
-            None => {
-                let a = self.brk;
-                assert!(
-                    (a as u64 + size as u64) <= HEAP_END as u64,
-                    "heap exhausted allocating {size} bytes"
-                );
-                self.brk += size;
-                a
-            }
-        };
+        let addr = self.take_block(size);
         self.map(addr, size);
         if self.watched_page(addr, size) {
             self.watch_note(addr, size, None, WatchKind::Alloc);
@@ -725,13 +877,56 @@ impl Mem {
             .live
             .remove(&addr)
             .unwrap_or_else(|| panic!("free of {addr:08x}, which is not a live heap block"));
-        if self.check.is_some() {
-            self.check_free_block(addr);
-        }
+        // The watch sees the bytes the block held, before the freed check fills it.
         if self.watched_page(addr, size) {
             self.watch_note(addr, size, None, WatchKind::Free);
         }
-        self.free.entry(size).or_default().push(addr);
+        let mut released = None;
+        if let Some(c) = self.check.as_deref() {
+            let info = c.blocks.get(&addr).copied();
+            self.check_free_block(addr);
+            released = self.quarantine_block(addr, size, info);
+            if released.is_none() {
+                if let Some(c) = self.check.as_deref_mut() {
+                    c.alloc_paths.remove(&addr);
+                    c.pending_path.clear();
+                }
+            }
+        }
+        match released {
+            Some(blocks) => {
+                for (a, s) in blocks {
+                    self.free_list(s).push(a);
+                }
+            }
+            None => self.free_list(size).push(addr),
+        }
+    }
+
+    /// The freed blocks of rounded size `size`, newest last: indexed for sizes up to
+    /// [`SMALL_BLOCK`], the map above that.
+    #[inline]
+    fn free_list(&mut self, size: u32) -> &mut Vec<u32> {
+        if size <= SMALL_BLOCK {
+            &mut self.small_free[(size / 8) as usize]
+        } else {
+            self.free.entry(size).or_default()
+        }
+    }
+
+    /// A block of rounded size `size`: the newest freed one of that size, else fresh heap.
+    #[inline]
+    fn take_block(&mut self, size: u32) -> u32 {
+        if let Some(a) = self.free_list(size).pop() {
+            return a;
+        }
+        let a = self.brk;
+        assert!(
+            (a as u64 + size as u64) <= HEAP_END as u64,
+            "heap exhausted allocating {size} bytes"
+        );
+        self.brk += size;
+        a
     }
 
     /// Size of a live heap block.
@@ -799,6 +994,27 @@ mod tests {
         m.enable_block_check(true, true);
         let a = m.alloc(8);
         m.set_u8(a + 8, 1);
+    }
+
+    /// With the freed check, a store that runs past a live block's end and on into a freed
+    /// neighbour is named for the live block's own guard, which it reaches first.
+    #[test]
+    fn an_overrun_into_a_freed_neighbour_names_the_overrun_block() {
+        let mut m = Mem::new();
+        m.enable_freed_check(false);
+        let live = m.alloc(0x20);
+        let neighbour = m.alloc(0x20);
+        assert_eq!(neighbour, live + 0x20 + GUARD);
+        m.free(neighbour);
+        m.write(live, &[1; 0x34]);
+        let reports = m.take_block_reports();
+        assert_eq!(reports.len(), 1, "{reports:?}");
+        assert!(
+            reports[0].contains(&format!("+0x20 into block {live:08x}"))
+                && reports[0].contains("past its end"),
+            "{}",
+            reports[0]
+        );
     }
 
     /// The write watch records changing stores, frees and re-allocation of a watched range

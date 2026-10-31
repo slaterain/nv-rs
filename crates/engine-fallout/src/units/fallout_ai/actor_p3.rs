@@ -12548,7 +12548,8 @@ fn hit_me_damage_values(e: &mut Engine, s: &mut HitMe) {
                 FORMAT_STRING_406D00,
                 &args![text, 0x1f4u32, HIT_MESSAGE_FORMAT, word, name],
             );
-            e.with_stack(4, |e, message| {
+            // A `BSString` local (8 bytes: the text, its length and capacity, `0040c0e0`).
+            e.with_stack(8, |e, message| {
                 e.call(STRING_CONSTRUCT, &args![message, HIT_MESSAGE_TEXT]);
                 let characters = e.call(ENTRY_FIRST_EXTRA_LIST, &args![message]).u32();
                 let two: f32 = e.global(DETECTION_FLOAT_TWO);
@@ -22569,11 +22570,11 @@ mod tests {
 
     // ---- the exe's stack frames ----
 
-    /// The block the next `with_stack(size)` takes (the last freed block of that size).
+    /// The local the next `with_stack(size)` on this thread takes: the frame of the function the
+    /// test calls next, taken outside any other local of it (nothing takes its place again
+    /// before the function returns, so its words can still be read after the call).
     fn next_frame(e: &mut Engine, size: u32) -> u32 {
-        let frame = e.mem.alloc(size);
-        e.mem.free(frame);
-        frame
+        e.next_stack_local(size)
     }
 
     #[test]

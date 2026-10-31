@@ -4431,7 +4431,8 @@ fn impact_sound_marker(
 /// when its first collision object is flagged (`009c19e0`) or has no
 /// virtual +0x94, re-casts a short pick (`009c5ba0`) whose first hit
 /// replaces this one; both directions are scaled by the `float` at
-/// `010162c0`. `009c2c80` can veto the hit. A taken hit on a projectile
+/// `010162c0`. `009c2c80` can veto the hit (it gets the hit's collidable
+/// as the re-cast left it). A taken hit on a projectile
 /// moves it to the hit (`009795c0`, `009c4e60` with flag 1) and adds the
 /// impact (virtual +0x32C, material 0x24, last valid shape key); without a
 /// projectile any hit is taken. The distance goes to `distance_out`.
@@ -4515,6 +4516,9 @@ pub fn fn_009c0d80(
                             take = refine_hit(e, frame.addr(), pick, node, take);
                         }
                     }
+                    // 009c121d: the collidable is read again from the hit (`[EBP-0x50]`, its
+                    // +0x50) after the short re-cast copied its first hit over it (009c11f7).
+                    let collidable = e.mem.u32(hit + 0x50);
                     if !fn_009c2c80(e, reference, collidable, projectile.addr(), base) {
                         take = false;
                     }
@@ -7300,6 +7304,53 @@ mod tests {
             calls(&e, 0x0045_8620),
             vec![vec![calls(&e, 0x0045_8620)[0][0], 0x9090]]
         );
+    }
+
+    /// A target hit (a body in the set at `01268444`) re-cast onto the target's node: the
+    /// re-cast's first hit replaces the record, and `009c2c80` is asked about the collidable
+    /// the record holds then (009c121d reads `[EBP-0x50]` again), not the one the pick hit.
+    #[test]
+    fn hit_processing_vetoes_with_the_collidable_the_re_cast_left() {
+        let mut e = engine();
+        let pick = e.mem.alloc(0xB0);
+        let (first_collidable, refined_collidable) = (0x7A00u32, 0x7B00u32);
+        let records = [first_collidable, refined_collidable].map(|collidable| {
+            let record = e.mem.alloc(0x60);
+            e.mem.set_f32(record + 0x10, 0.5);
+            e.mem.set_u32(record + 0x50, collidable);
+            record
+        });
+        stub(&mut e, 0x008c_dd90, 0x9100);
+        stub(&mut e, 0x0072_6070, 1);
+        sequence(&mut e, 0x004a_46b0, records.to_vec());
+        e.register_double(0x0069_6c30, |e, a| {
+            let words = e.mem.bytes(a[1], 0x60);
+            e.mem.write(a[0], &words);
+            a[0].into_ret()
+        });
+        stub(&mut e, 0x004b_5820, 0x5000);
+        stub(&mut e, 0x0056_f930, 0x6000);
+        // Only the collidable the pick hit belongs to an entity of the target set.
+        e.register_double(0x004b_5950, move |_, a| {
+            u32::from(a[0] == first_collidable)
+                .wrapping_mul(0x7000)
+                .into_ret()
+        });
+        stub(&mut e, 0x004b_5a80, 0x7100);
+        stub(&mut e, 0x0043_b300, 1);
+        // The target's first collision object is flagged (0x4000): the short re-cast runs
+        // and hits.
+        stub(&mut e, 0x004b_5260, 0x7200);
+        stub(&mut e, 0x006f_a820, 0x7300);
+        let info = e.mem.alloc(4);
+        e.mem.set_u32(info, 0x4000);
+        stub(&mut e, 0x0043_b4f0, info);
+        stub(&mut e, 0x009c_5ba0, 1);
+        let node = fn_009c0d80(&mut e, Ptr::new(pick), Ptr::NULL, 0, 0, 1, f32::MAX);
+        // With the re-cast's collidable `009c2c80` finds no entity and lets the hit through.
+        assert_eq!(node, 0x5000);
+        let asked = calls(&e, 0x004b_5950);
+        assert_eq!(asked.last(), Some(&vec![refined_collidable]));
     }
 
     #[test]

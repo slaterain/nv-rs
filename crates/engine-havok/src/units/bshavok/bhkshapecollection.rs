@@ -55,12 +55,11 @@ fn container_of(e: &Engine, this: u32) -> u32 {
     object.wrapping_add(0x10)
 }
 
-/// The child for `key` through the interface (virtual `+0x14`, with the key and a scratch
-/// buffer), answering the `bhkShape` wrapper at its `+8`, or 0.
-fn child_shape(e: &mut Engine, container: u32, key: u32) -> u32 {
-    let child = e.with_stack(CHILD_BUFFER_SIZE, |e, buffer| {
-        e.vcall(container, VSLOT_CHILD, &args![key, buffer]).u32()
-    });
+/// The child for `key` through the interface (virtual `+0x14`, with the key and the caller's
+/// 0x200-byte `buffer`), answering the `bhkShape` wrapper at its `+8`, or 0. The child can be
+/// built in `buffer`, so `buffer` must still be there when its `+8` is read.
+fn child_shape(e: &mut Engine, container: u32, key: u32, buffer: Ptr) -> u32 {
+    let child = e.vcall(container, VSLOT_CHILD, &args![key, buffer]).u32();
     if child != 0 {
         e.mem.u32(child + 8)
     } else {
@@ -95,25 +94,31 @@ pub fn bhk_shape_collection_build_display_geometry(
 ) {
     let container = container_of(e, this.addr());
     let mut key = e.vcall(container, VSLOT_FIRST_KEY, &args![]).u32();
-    while key != END_KEY {
-        let mut shape = 0;
-        if this.addr() != 0 {
-            let object = e.mem.u32(this.addr() + 8);
-            if object != 0 {
-                shape = child_shape(e, object.wrapping_add(0x10), key);
+    // The 0x200-byte buffer is a local of the whole frame (`auStack_220`, used for every key):
+    // the child slot 0x14 answers can be built in it and its `+8` is read after the call, so
+    // the buffer lives for the whole walk. (Scoped to the slot call alone, the `+8` was read
+    // from a freed block.)
+    e.with_stack(CHILD_BUFFER_SIZE, |e, buffer| {
+        while key != END_KEY {
+            let mut shape = 0;
+            if this.addr() != 0 {
+                let object = e.mem.u32(this.addr() + 8);
+                if object != 0 {
+                    shape = child_shape(e, object.wrapping_add(0x10), key, buffer);
+                }
             }
+            let container = container_of(e, this.addr());
+            key = e.vcall(container, VSLOT_NEXT_KEY, &args![key]).u32();
+            if shape == 0 {
+                break;
+            }
+            e.vcall(
+                shape,
+                VSLOT_CHILD_BUILD_DISPLAY,
+                &args![first_argument, second_argument],
+            );
         }
-        let container = container_of(e, this.addr());
-        key = e.vcall(container, VSLOT_NEXT_KEY, &args![key]).u32();
-        if shape == 0 {
-            break;
-        }
-        e.vcall(
-            shape,
-            VSLOT_CHILD_BUILD_DISPLAY,
-            &args![first_argument, second_argument],
-        );
-    }
+    });
 }
 
 // Translated from 00cd2f10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -130,19 +135,22 @@ pub fn bhk_shape_collection_can_share(e: &mut Engine, this: Ptr, other: Ptr) -> 
     }
     let container = container_of(e, this.addr());
     let mut key = e.vcall(container, VSLOT_FIRST_KEY, &args![]).u32();
-    while key != END_KEY && result {
-        if this.addr() != 0 {
-            let object = e.mem.u32(this.addr() + 8);
-            if object != 0 {
-                let shape = child_shape(e, object.wrapping_add(0x10), key);
-                if shape != 0 {
-                    result = e.vcall(shape, VSLOT_CHILD_CAN_SHARE, &args![other]).bool();
+    // The frame's 0x200-byte buffer, live for the whole walk as in `BuildDisplayGeometry`.
+    e.with_stack(CHILD_BUFFER_SIZE, |e, buffer| {
+        while key != END_KEY && result {
+            if this.addr() != 0 {
+                let object = e.mem.u32(this.addr() + 8);
+                if object != 0 {
+                    let shape = child_shape(e, object.wrapping_add(0x10), key, buffer);
+                    if shape != 0 {
+                        result = e.vcall(shape, VSLOT_CHILD_CAN_SHARE, &args![other]).bool();
+                    }
                 }
             }
+            let container = container_of(e, this.addr());
+            key = e.vcall(container, VSLOT_NEXT_KEY, &args![key]).u32();
         }
-        let container = container_of(e, this.addr());
-        key = e.vcall(container, VSLOT_NEXT_KEY, &args![key]).u32();
-    }
+    });
     result
 }
 
@@ -388,6 +396,36 @@ mod tests {
         let (this, _, _) = collection(&mut e, &[5], &[true]);
         assert!(!e.call(0x00cd_2f10, &args![this, 0x4444u32]).bool());
         assert!(calls_to(&e, FIRST_KEY_SLOT).is_empty());
+    }
+
+    /// A child the interface builds in the 0x200-byte buffer (virtual `+0x14` answers the
+    /// buffer itself, its `+8` the child shape) is read while the buffer is still there: the
+    /// buffer is the frame's (`auStack_220`), not the slot call's. With the freed-block check a
+    /// buffer freed early reads back as the fill word, and the virtual call through it faults.
+    #[test]
+    fn bhk_shape_collection_reads_a_child_built_in_its_buffer() {
+        let mut e = logged_engine();
+        e.mem.enable_freed_check(true);
+        e.register(BUILD_DISPLAY_SLOT, |_, _| Ret::default());
+        e.register(SHAPE_CAN_SHARE, |_, _| 1u32.into_ret());
+        e.register(CAN_SHARE_SLOT, |_, _| 1u32.into_ret());
+        let (this, _, shapes) = collection(&mut e, &[5, 7], &[true, true]);
+        let in_place = shapes.clone();
+        e.register_double(CHILD_SLOT, move |e, a| {
+            let at = usize::from(a[1] == 7);
+            e.mem.set_u32(a[2] + 8, in_place[at]);
+            a[2].into_ret()
+        });
+        e.call(0x00cd_2e50, &args![this, 1u32, 2u32]);
+        assert_eq!(
+            calls_to(&e, BUILD_DISPLAY_SLOT),
+            vec![vec![shapes[0], 1, 2], vec![shapes[1], 1, 2]]
+        );
+        assert!(e.call(0x00cd_2f10, &args![this, 0x4444u32]).bool());
+        assert_eq!(
+            calls_to(&e, CAN_SHARE_SLOT),
+            vec![vec![shapes[0], 0x4444], vec![shapes[1], 0x4444]]
+        );
     }
 
     #[test]

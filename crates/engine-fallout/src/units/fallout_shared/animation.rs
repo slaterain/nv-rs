@@ -7606,8 +7606,9 @@ fn clear_idles_and_slot_7(e: &mut Engine, this: Ptr<Animation>) {
 /// idles ([`clear_idles_and_slot_7`] steps), then clears the controller
 /// interpolators of the animation root (`pAnimRoot`, read through
 /// `005585e0`), the blend interpolators and reloads the targets with the flag
-/// set.
-pub fn fn_0049a920(e: &mut Engine, this: Ptr<Animation>) {
+/// set. The stack word the callers push is never read (`RET 0x4` at
+/// `0049aa16`).
+pub fn fn_0049a920(e: &mut Engine, this: Ptr<Animation>, _unused_argument: u32) {
     clear_idles_and_slot_7(e, this);
     let root = e.call(KF_MODEL_ANIM_GROUP, &args![this]).ptr::<()>();
     animation_clear_controllers_interpolators(e, root);
@@ -8922,7 +8923,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00499b80, fn_00499b80() -> u32),
         entry!(0x00499b90, animation_save_game(Ptr<Animation>, Ptr)),
         entry!(0x0049a1c0, fn_0049a1c0(Ptr<Animation>, Ptr)),
-        entry!(0x0049a920, fn_0049a920(Ptr<Animation>)),
+        entry!(0x0049a920, fn_0049a920(Ptr<Animation>, u32)),
         entry!(0x0049aa20, fn_0049aa20(Ptr, Ptr<Animation>) -> u16),
         entry!(0x0049aa80, animation_save_animation(Ptr, Ptr<Animation>)),
         entry!(0x0049ab00, fn_0049ab00(Ptr, u32)),
@@ -16594,7 +16595,7 @@ mod tests {
         let stale = e.mem.alloc(0x80);
         e.mem.set_u32(this.addr() + 0xfc, stale);
         start_log(&mut e);
-        e.call(0x0049_a920, &args![this]);
+        e.call(0x0049_a920, &args![this, 0u32]);
         let log = end_log(&mut e);
         // Both idles are freed and emptied, the last slot and the ladder's
         // slots are cleared.

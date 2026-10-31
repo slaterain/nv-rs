@@ -730,7 +730,12 @@ mod b040_tests {
         e.register_double(COMPONENT_NAME_00408DA0, move |_, _| topic_text.into_ret());
         // Set from a C string: (text, 0); Set from a string: copy it.
         e.register(BS_STRING_SET, |e, a| {
-            if e.mem.block_size(a[1]) == Some(8) {
+            // A string object (text pointer, length) rather than C text: its first word points
+            // at text as long as its second word says (stack locals are not heap blocks).
+            let text = e.mem.u32(a[1]);
+            let is_string =
+                e.mem.is_mapped(text) && e.mem.u32(a[1] + 4) as usize == e.mem.cstr(text).len();
+            if is_string {
                 let text = e.mem.u32(a[1]);
                 let length = e.mem.u32(a[1] + 4);
                 e.mem.set_u32(a[0], text);

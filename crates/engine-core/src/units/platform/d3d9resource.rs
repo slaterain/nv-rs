@@ -111,6 +111,8 @@ const VERTEX_FLOAT_REGISTERS: u32 = 256;
 const PIXEL_FLOAT_REGISTERS: u32 = 224;
 const INT_REGISTERS: u32 = 16;
 const BOOL_REGISTERS: u32 = 16;
+/// Register slots kept per constant kind (the most any kind has).
+const CONSTANT_SLOTS: usize = 256;
 
 /// What an object of this module is.
 #[derive(Debug, Clone)]
@@ -146,18 +148,20 @@ struct Object {
 #[derive(Debug, Clone, Default)]
 struct Bindings {
     /// Stream sources: (buffer, offset, stride), held.
-    streams: HashMap<u32, (u32, u32, u32)>,
+    streams: crate::engine::AddrMap<u32, (u32, u32, u32)>,
     indices: u32,
     declaration: u32,
     fvf: u32,
     vertex_shader: u32,
     pixel_shader: u32,
-    /// Constant registers as their 4 words each, by (kind, register): kinds 0..2 vertex float,
-    /// int, bool; 3..5 pixel float, int, bool (a bool register keeps one word).
-    constants: HashMap<(u8, u32), [u32; 4]>,
+    /// Constant registers as their 4 words each at `kind * CONSTANT_SLOTS + register`: kinds
+    /// 0..2 vertex float, int, bool; 3..5 pixel float, int, bool (a bool register keeps one
+    /// word); `constants_set` has a bit for each register set. Both empty until the first set.
+    constants: Vec<[u32; 4]>,
+    constants_set: Vec<u64>,
     /// The stride `GetStreamSource` reports for a stream that holds no buffer (0 unless a
     /// failed `DrawPrimitiveUP` left one, measured).
-    empty_strides: HashMap<u32, u32>,
+    empty_strides: crate::engine::AddrMap<u32, u32>,
     /// Whether a `DrawPrimitiveUP` has succeeded in a scene on this device (from then on the
     /// runtime takes them outside a scene too, measured).
     drawn_from_memory: bool,
@@ -167,8 +171,8 @@ struct Bindings {
 #[derive(Debug, Default)]
 pub struct Resources {
     vtables: HashMap<u32, u32>,
-    objects: HashMap<u32, Object>,
-    bindings: HashMap<u32, Bindings>,
+    objects: crate::engine::AddrMap<u32, Object>,
+    bindings: crate::engine::AddrMap<u32, Bindings>,
 }
 
 fn resources(e: &mut Engine) -> &mut Resources {
@@ -811,13 +815,23 @@ fn set_constants(e: &mut Engine, this: Ptr, kind: u8, start: u32, data: Ptr, cou
         return D3DERR_INVALIDCALL;
     }
     let words = if kind % 3 == 2 { 1 } else { 4 };
-    for i in 0..count {
-        let at = data.addr() + 4 * words * i;
-        let mut value = [0u32; 4];
+    // The registers are read first, then stored with one lookup of the device's bindings.
+    let mut values = [[0u32; 4]; CONSTANT_SLOTS];
+    for (i, value) in values.iter_mut().enumerate().take(count as usize) {
+        let at = data.addr() + 4 * words * i as u32;
         for (w, slot) in value.iter_mut().enumerate().take(words as usize) {
             *slot = e.mem.u32(at + 4 * w as u32);
         }
-        bindings(e, this).constants.insert((kind, start + i), value);
+    }
+    let b = bindings(e, this);
+    if b.constants.is_empty() {
+        b.constants = vec![[0; 4]; 6 * CONSTANT_SLOTS];
+        b.constants_set = vec![0; 6 * CONSTANT_SLOTS / 64];
+    }
+    for (i, value) in values.iter().enumerate().take(count as usize) {
+        let slot = usize::from(kind) * CONSTANT_SLOTS + start as usize + i;
+        b.constants[slot] = *value;
+        b.constants_set[slot / 64] |= 1 << (slot % 64);
     }
     D3D_OK
 }
@@ -830,7 +844,13 @@ fn get_constants(e: &mut Engine, this: Ptr, kind: u8, start: u32, data: Ptr, cou
     }
     let words = if kind % 3 == 2 { 1 } else { 4 };
     for i in 0..count {
-        let Some(value) = bindings(e, this).constants.get(&(kind, start + i)).copied() else {
+        let slot = usize::from(kind) * CONSTANT_SLOTS + (start + i) as usize;
+        let b = bindings(e, this);
+        let set = b
+            .constants_set
+            .get(slot / 64)
+            .is_some_and(|bits| bits & (1 << (slot % 64)) != 0);
+        let Some(value) = set.then(|| b.constants[slot]) else {
             panic!(
                 "a shader constant read before it was set (kind {kind}, register {}): not provided",
                 start + i

@@ -579,8 +579,8 @@ mod tests {
         });
         e.register(DECODER_00A8B8C0, |_, _| Ret::default());
         let this = codec(&mut e, &[]);
-        let frame = e.mem.alloc(0x84);
-        e.mem.free(frame);
+        // The frame is the next local the game thread's stack gives out.
+        let frame = e.next_stack_local(0x84);
         e.call(0x00a8_be70, &args![this, source]);
         // The alpha decoder writes the fourth byte of each pixel of the block (block + 3).
         assert_eq!(blocks.borrow()[0], frame + 0x40 + 3);

@@ -352,8 +352,9 @@ mod tests {
             }
         });
         let out = e.mem.alloc(8);
-        let raw = e.mem.alloc(0x40);
-        e.mem.free(raw);
+        // The 0x40-byte local `with_aligned_frame` takes; its words stay on the thread's stack
+        // after the call returns (only the next local there zeroes them).
+        let raw = e.next_stack_local(0x40);
         e.call(0x00dd_d7e0, &args![points, out, out + 4]);
         let frame = aligned_frame_at(raw, 0x30);
         // Unit normals, to the processor's `RSQRTSS` estimate (one ULP, see the module docs).

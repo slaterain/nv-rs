@@ -4282,8 +4282,9 @@ pub fn fn_00547440(e: &mut Engine, this: Ptr<TESObjectCELL>, height: f32) {
 /// type 7 of the cell; without it, for an exterior cell with a world space,
 /// what `00586150` gives for the world space (also stored in the static at
 /// `011ca1c0`); 0 otherwise. The first call fills the static record at
-/// `011ca1c4` with the three words of `011f426c`. Returns the value.
-pub fn fn_005474b0(e: &mut Engine, this: Ptr<TESObjectCELL>) -> u32 {
+/// `011ca1c4` with the three words of `011f426c`. Returns the value. The
+/// stack word the callers push is never read (`RET 0x4` at `0054757f`).
+pub fn fn_005474b0(e: &mut Engine, this: Ptr<TESObjectCELL>, _unused_argument: u32) -> u32 {
     fn_00541ac0(e, this);
     let guard: u32 = e.global(STATIC_RECORD_GUARD);
     if guard & 1 == 0 {
@@ -4595,7 +4596,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fn_00547250(Ptr<TESObjectCELL>, Ptr, Ptr) -> bool
         ),
         entry!(0x00547440, fn_00547440(Ptr<TESObjectCELL>, f32)),
-        entry!(0x005474b0, fn_005474b0(Ptr<TESObjectCELL>) -> u32),
+        entry!(0x005474b0, fn_005474b0(Ptr<TESObjectCELL>, u32) -> u32),
         entry!(
             0x00547590,
             tes_object_cell_get_acoustic_space(Ptr<TESObjectCELL>) -> u32
@@ -10227,7 +10228,7 @@ mod tests {
         e.set(exterior, TESObjectCELL::pWorldSpace, world);
         // The first call fills the static record.
         e.call_log = Some(vec![]);
-        let result = e.call(0x0054_74b0, &args![exterior]).u32();
+        let result = e.call(0x0054_74b0, &args![exterior, 0u32]).u32();
         let log = take_log(&mut e);
         assert_eq!(result, world.addr() + 1);
         assert_eq!(e.global::<u32>(STATIC_RECORD_GUARD) & 1, 1);
@@ -10241,21 +10242,21 @@ mod tests {
         assert_eq!(order.last(), Some(&LOCK_LEAVE));
         // The record is filled once.
         e.mem.set_u32(ZERO_VECTOR, 0x99);
-        e.call(0x0054_74b0, &args![exterior]);
+        e.call(0x0054_74b0, &args![exterior, 0u32]);
         assert_eq!(e.global::<u32>(STATIC_RECORD_COPY), 0x11);
         // The extra data wins; an interior cell returns its value (or 0).
         e.mem.set_u32(exterior.addr() + CELL_WORD_A, 0x5c5c);
         e.set_global(STATIC_RECORD_LAST, 0u32);
-        assert_eq!(e.call(0x0054_74b0, &args![exterior]).u32(), 0x5c5c);
+        assert_eq!(e.call(0x0054_74b0, &args![exterior, 0u32]).u32(), 0x5c5c);
         assert_eq!(e.global::<u32>(STATIC_RECORD_LAST), 0);
         let interior = cell(&mut e, true);
-        assert_eq!(e.call(0x0054_74b0, &args![interior]).u32(), 0);
+        assert_eq!(e.call(0x0054_74b0, &args![interior, 0u32]).u32(), 0);
         e.mem.set_u32(interior.addr() + CELL_WORD_A, 0x6d6d);
-        assert_eq!(e.call(0x0054_74b0, &args![interior]).u32(), 0x6d6d);
+        assert_eq!(e.call(0x0054_74b0, &args![interior, 0u32]).u32(), 0x6d6d);
         // An exterior cell without a world space: 0.
         e.mem.set_u32(exterior.addr() + CELL_WORD_A, 0);
         e.set(exterior, TESObjectCELL::pWorldSpace, Ptr::NULL);
-        assert_eq!(e.call(0x0054_74b0, &args![exterior]).u32(), 0);
+        assert_eq!(e.call(0x0054_74b0, &args![exterior, 0u32]).u32(), 0);
     }
 
     #[test]

@@ -885,14 +885,12 @@ mod tests {
             a[0].into_ret()
         });
         e.mem.set_u32(this + 0x28, 1);
-        let raw = e.mem.alloc(0x220);
-        e.mem.free(raw);
+        let raw = e.next_stack_local(0x220);
         e.call(0x00dc_cbc0, &args![this]);
         let frame = aligned_frame_at(raw, 0x210);
         assert_eq!(flags.borrow()[0], frame + 0xf);
         two_subparts(&mut e, this);
-        let raw = e.mem.alloc(0x230);
-        e.mem.free(raw);
+        let raw = e.next_stack_local(0x230);
         e.call(0x00dc_cc30, &args![this, 0u32]);
         let frame = aligned_frame_at(raw, 0x220);
         assert_eq!(flags.borrow()[1], frame + 0x1b);
@@ -910,8 +908,7 @@ mod tests {
         let vertex = vec3(&mut e, [1.0, 2.0, 3.0]);
         let scale = vec3(&mut e, [2.0, 2.0, 2.0]);
         let bounds = e.mem.alloc(0x20);
-        let raw = e.mem.alloc(0x40);
-        e.mem.free(raw);
+        let raw = e.next_stack_local(0x40);
         e.call(0x00dc_cd50, &args![vertex, scale, bounds, 0x1111u32]);
         let frame = aligned_frame_at(raw, 0x30);
         assert_eq!(*seen.borrow(), vec![(frame + 0x20, frame + 0x10)]);

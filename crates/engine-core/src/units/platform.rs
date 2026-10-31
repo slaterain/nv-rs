@@ -66,6 +66,9 @@ pub fn operator_delete(e: &mut Engine, block: Ptr) {
 /// block for `_msize` and `realloc` (`MemoryManager`'s reallocation `00aa4150` sends a block
 /// no pool knows to `realloc`).
 pub fn memory_manager_allocate(e: &mut Engine, _this: Ptr, size: u32) -> Ptr {
+    if e.mem.block_check_on() {
+        e.mem.note_path(&e.call_stack);
+    }
     let block = e.mem.alloc(size);
     e.kernel.crt_block_sizes.insert(block, size.max(1));
     Ptr::new(block)
@@ -76,6 +79,9 @@ pub fn memory_manager_allocate(e: &mut Engine, _this: Ptr, size: u32) -> Ptr {
 pub fn memory_manager_deallocate(e: &mut Engine, _this: Ptr, block: Ptr) {
     if let (Some(hook), true) = (e.free_hook, block.addr() != 0) {
         hook(e, block.addr());
+    }
+    if e.mem.block_check_on() {
+        e.mem.note_path(&e.call_stack);
     }
     e.kernel.crt_block_sizes.remove(&block.addr());
     e.mem.free(block.addr());
@@ -1181,7 +1187,7 @@ pub struct Region {
 /// The handle table and the `VirtualAlloc` reservations (`Engine::kernel`).
 #[derive(Debug, Default)]
 pub struct Kernel {
-    objects: std::collections::BTreeMap<u32, KernelObject>,
+    objects: crate::engine::AddrMap<u32, KernelObject>,
     last_handle: u32,
     /// The game threads and their scheduling (`crate::thread_host`).
     pub threads: crate::thread_host::Threads,
@@ -1194,7 +1200,7 @@ pub struct Kernel {
     /// Which thread-local storage indexes `TlsAlloc` handed out.
     tls_allocated: Vec<bool>,
     /// The values `TlsSetValue` stored, by (thread id, index).
-    tls_values: std::collections::BTreeMap<(u32, u32), u32>,
+    tls_values: crate::engine::AddrMap<(u32, u32), u32>,
     /// The process's current directory (`GetCurrentDirectoryA`), in the
     /// game's ANSI form; `Engine::with_exe` sets it to the executable's
     /// folder, where Steam starts the game.
@@ -1221,7 +1227,7 @@ pub struct Kernel {
     /// The threads that called `CoInitializeEx`, with their concurrency mode.
     pub com_threads: std::collections::BTreeMap<u32, u32>,
     /// The critical sections by address: the mutex object standing for each.
-    pub critical_sections: std::collections::BTreeMap<u32, u32>,
+    pub critical_sections: crate::engine::AddrMap<u32, u32>,
     /// The process side: the ANSI command line and the environment blocks ([`process`]).
     pub process: process::Process,
     /// The thread's last-error code (`GetLastError`/`SetLastError`).
@@ -2500,6 +2506,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "steam_api.dll",
             "SteamAPI_RunCallbacks",
             entry!(0, window::steam_api_run_callbacks()).1,
+        ),
+        (
+            "steam_api.dll",
+            "SteamAPI_Shutdown",
+            entry!(0, window::steam_api_shutdown()).1,
         ),
         (
             "steam_api.dll",

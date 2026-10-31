@@ -146,7 +146,27 @@ const LOOK_SPEED: f32 = 0.003;
 /// The camera's near plane, in meters.
 const CAMERA_NEAR_METERS: f32 = 0.05;
 
+#[cfg(windows)]
+#[link(name = "user32")]
+extern "system" {
+    fn SetProcessDpiAwarenessContext(context: isize) -> i32;
+}
+
 fn main() {
+    // With the game's own window (`NV_D3D9=real`) the process is DPI-unaware, as FalloutNV.exe is
+    // (no `dpiAware` in its manifest): Windows scales the game's window on a display above 100%
+    // from the start, as it does the original's. Set before the window library starts, which would
+    // make the process per-monitor aware (the awareness is set once per process); the game's window
+    // then shrank to its unscaled size several seconds into the run (playtest, 2026-10-30).
+    #[cfg(windows)]
+    // The same test as the real device's (`d3d9real::wanted`): any case.
+    if std::env::var("NV_D3D9").is_ok_and(|v| v.eq_ignore_ascii_case("real")) {
+        // DPI_AWARENESS_CONTEXT_UNAWARE.
+        // SAFETY: no pointers; a failure leaves the awareness as it was.
+        unsafe {
+            SetProcessDpiAwarenessContext(-1);
+        }
+    }
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let args = match args::parse(&raw) {
         Ok(Some(args)) => args,
@@ -184,6 +204,10 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // The window in front before any of ours opens (`--background` gives the focus back to
+    // it when the viewer's own window takes it), read before the game makes its real window,
+    // which is shown activated (`NV_D3D9_BACKGROUND` keeps scripted runs in the background).
+    let user_window = background::foreground();
     // The game's own code (`crates/engine`) runs on the player's
     // FalloutNV.exe, read from the same installation as Data: any build but
     // 1.4.0.525 is refused here, with the reason (the maintainer's decision,
@@ -287,9 +311,6 @@ fn main() {
         window.resolution =
             WindowResolution::new(w as f32, h as f32).with_scale_factor_override(1.0);
     }
-    // The window in front before this one opens (`--background` gives the
-    // focus back to it).
-    let user_window = background::foreground();
     if args.background {
         // A test run out of the way: behind the other windows and without
         // the focus (and the mouse never held: `grab_cursor`), at

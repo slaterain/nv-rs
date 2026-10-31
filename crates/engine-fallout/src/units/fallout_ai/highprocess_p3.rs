@@ -9249,19 +9249,25 @@ pub fn high_process_process_travel(
                         let cell = e
                             .call(PACKAGE_SECOND_LOCATION_CELL, &args![package, actor])
                             .u32();
-                        let position = e.with_stack(12, |e, coord| {
-                            e.call(PACKAGE_SECOND_LOCATION_COORD, &args![package, coord, actor])
-                                .u32()
+                        // The point is the frame's `local_514`: `00675360` fills it and answers
+                        // its address, and `BuildRequest` reads it, so it lives through that
+                        // call. (Scoped to `00675360` alone, a freed block was read.)
+                        e.with_stack(12, |e, coord| {
+                            let position = e
+                                .call(PACKAGE_SECOND_LOCATION_COORD, &args![package, coord, actor])
+                                .u32();
+                            travel_build_request(e, a, request, position, cell, world, radius);
                         });
-                        travel_build_request(e, a, request, position, cell, world, radius);
                     } else {
                         let world = e.call(PACKAGE_LOCATION_WORLD, &args![package, actor]).u32();
                         let cell = e.call(PACKAGE_LOCATION_CELL, &args![package, actor]).u32();
-                        let position = e.with_stack(12, |e, coord| {
-                            e.call(PACKAGE_LOCATION_COORD, &args![package, coord, actor])
-                                .u32()
+                        // The same for `local_520`, which `00675de0` fills.
+                        e.with_stack(12, |e, coord| {
+                            let position = e
+                                .call(PACKAGE_LOCATION_COORD, &args![package, coord, actor])
+                                .u32();
+                            travel_build_request(e, a, request, position, cell, world, radius);
                         });
-                        travel_build_request(e, a, request, position, cell, world, radius);
                     }
                     if location_ref != 0 {
                         let form = e.call(REFERENCE_GET_FORM, &args![location_ref]).u32();
@@ -10846,8 +10852,10 @@ pub fn fn_008f25e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
 /// Otherwise it calls `EndMoveMessage(actor)` and the package's slot `0x13c`
 /// `(actor, 0, -1.0, 0)`; when that is false and the actor's state is not 9 it
 /// calls `SetProcedureIndexRunning(0)`, else `SetCurrentActionComplete(1)`
-/// (slot `0x118`). The result is false on every path.
-pub fn fn_008f3550(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) -> bool {
+/// (slot `0x118`). The result is false on every path. The second stack word
+/// is the caller's frame time (`008f4c8b-008f4c9c` pushes it); the function
+/// never reads it but pops it (`RET 0x8`).
+pub fn fn_008f3550(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr, _delta: f32) -> bool {
     let process = this.addr();
     let a = actor.addr();
     let package = e
@@ -10868,8 +10876,9 @@ pub fn fn_008f3550(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) -> bool {
 // Translated from 008f3600 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map. Like `008f3550`, but with the state 4 in place
 /// of 9: it returns true after `SetProcedureIndexRunning(0)`, and false after
-/// `SetCurrentActionComplete(1)` or without a running package.
-pub fn fn_008f3600(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) -> bool {
+/// `SetCurrentActionComplete(1)` or without a running package. The unread
+/// frame time is popped as well (`RET 0x8`; pushed at `008f4ca9-008f4cba`).
+pub fn fn_008f3600(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr, _delta: f32) -> bool {
     let process = this.addr();
     let a = actor.addr();
     let package = e
@@ -13069,14 +13078,18 @@ pub fn fn_008f31d0(
             }
             let world = e.call(PACKAGE_LOCATION_WORLD, &args![package, actor]).u32();
             let cell = e.call(PACKAGE_LOCATION_CELL, &args![package, actor]).u32();
-            let coord = e.with_stack(12, |e, buffer| {
-                e.call(PACKAGE_LOCATION_COORD, &args![package, buffer, actor])
-                    .u32()
+            // The point is the frame's `local_20`: `00675de0` fills it and answers its address,
+            // and `SetPathfindingGoal` reads the goal from it, so it lives through that call.
+            // (Scoped to `00675de0` alone, the goal was read from a freed block.)
+            e.with_stack(12, |e, buffer| {
+                let coord = e
+                    .call(PACKAGE_LOCATION_COORD, &args![package, buffer, actor])
+                    .u32();
+                e.call(
+                    ACTOR_SET_PATHFINDING_GOAL,
+                    &args![actor, coord, cell, world, radius, 0u32],
+                );
             });
-            e.call(
-                ACTOR_SET_PATHFINDING_GOAL,
-                &args![actor, coord, cell, world, radius, 0u32],
-            );
         }
     }
     false
@@ -13805,14 +13818,18 @@ pub fn fn_008f2610(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr, _unused: 
     }
     let world = e.call(PACKAGE_LOCATION_WORLD, &args![package, actor]).u32();
     let cell = e.call(PACKAGE_LOCATION_CELL, &args![package, actor]).u32();
-    let coord = e.with_stack(12, |e, buffer| {
-        e.call(PACKAGE_LOCATION_COORD, &args![package, buffer, actor])
-            .u32()
+    // The point is the frame's `local_bc`: `00675de0` fills it and answers its address, and
+    // `SetPathfindingGoal` reads the goal from it, so it lives through that call. (Scoped to
+    // `00675de0` alone, the goal was read from a freed block.)
+    e.with_stack(12, |e, buffer| {
+        let coord = e
+            .call(PACKAGE_LOCATION_COORD, &args![package, buffer, actor])
+            .u32();
+        e.call(
+            ACTOR_SET_PATHFINDING_GOAL,
+            &args![actor, coord, cell, world, radius, 0u32],
+        );
     });
-    e.call(
-        ACTOR_SET_PATHFINDING_GOAL,
-        &args![actor, coord, cell, world, radius, 0u32],
-    );
     false
 }
 
@@ -16779,8 +16796,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x008f21c0, fn_008f21c0() -> u8),
         entry!(0x008f21d0, fn_008f21d0(Ptr) -> u16),
         entry!(0x008f25e0, fn_008f25e0(Ptr, u32) -> Ptr),
-        entry!(0x008f3550, fn_008f3550(Ptr<HighProcess>, Ptr) -> bool),
-        entry!(0x008f3600, fn_008f3600(Ptr<HighProcess>, Ptr) -> bool),
+        entry!(0x008f3550, fn_008f3550(Ptr<HighProcess>, Ptr, f32) -> bool),
+        entry!(0x008f3600, fn_008f3600(Ptr<HighProcess>, Ptr, f32) -> bool),
         entry!(
             0x008ebc60,
             high_process_process_acquire(Ptr<HighProcess>, Ptr)
@@ -24385,6 +24402,68 @@ mod tests {
         );
     }
 
+    /// Makes the location getter `addr` (`this`, out point, actor) fill its out point with
+    /// `point` and answer the out point, as `00675de0` and `00675360` do.
+    fn location_into_buffer(e: &mut Engine, addr: u32, point: [f32; 3]) {
+        e.register_double(addr, move |e, a| {
+            for (i, value) in point.iter().enumerate() {
+                e.mem.set_f32(a[1] + 4 * i as u32, *value);
+            }
+            ret(a[1])
+        });
+    }
+
+    /// Makes `addr` keep the point its argument `index` points to, read while it runs.
+    fn point_reader(
+        e: &mut Engine,
+        addr: u32,
+        index: usize,
+    ) -> std::rc::Rc<std::cell::RefCell<Vec<[f32; 3]>>> {
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let log = std::rc::Rc::clone(&seen);
+        e.register_double(addr, move |e, a| {
+            let point = a[index];
+            log.borrow_mut()
+                .push([e.mem.f32(point), e.mem.f32(point + 4), e.mem.f32(point + 8)]);
+            Ret::default()
+        });
+        seen
+    }
+
+    /// The package's point (`local_520` / `local_514`) is still there when `BuildRequest` reads
+    /// it: the getter fills the frame's point and answers its address. With the freed-block
+    /// check a point freed before the request was built would read as the fill word.
+    #[test]
+    fn test_process_travel_builds_the_request_from_a_live_point() {
+        for (use_second_location, getter) in [
+            (0u32, PACKAGE_LOCATION_COORD),
+            (1, PACKAGE_SECOND_LOCATION_COORD),
+        ] {
+            let mut e = Engine::new();
+            e.mem.enable_freed_check(true);
+            let (p, actor, package) = travel_world(&mut e);
+            give_vtable(
+                &mut e,
+                package,
+                PACKAGE_TABLE,
+                &[
+                    (PACKAGE_SLOT_FIND_LOCATION, 0),
+                    (PACKAGE_SLOT_FIND_SECOND_LOCATION, 0),
+                ],
+            );
+            returning(&mut e, ACTOR_IS_PATHING_COMPLETE, 1);
+            returning(&mut e, ACTOR_SET_PATHFINDING_GOAL_REQUEST, 1);
+            e.register(PATHING_REQUEST_CONSTRUCTOR, |_, a| ret(a[0]));
+            location_into_buffer(&mut e, getter, [1.5, -2.0, 64.0]);
+            let built = point_reader(&mut e, ACTOR_BUILD_REQUEST, 2);
+            e.call(
+                0x008e5e90,
+                &args![p, actor, 0u32, 0u32, -1i32, use_second_location],
+            );
+            assert_eq!(*built.borrow(), vec![[1.5, -2.0, 64.0]]);
+        }
+    }
+
     #[test]
     fn test_process_travel_sets_the_movement_animation() {
         let mut e = Engine::new();
@@ -25299,7 +25378,7 @@ mod tests {
             &[(PACKAGE_SLOT_FIND_LOCATION, 0)],
         );
         e.call_log = Some(vec![]);
-        assert!(!e.call(0x008f3550, &args![p, actor]).bool());
+        assert!(!e.call(0x008f3550, &args![p, actor, 0.5f32]).bool());
         assert_eq!(
             calls_to(&e, process_slot(SLOT_SET_PROCEDURE_INDEX_RUNNING)),
             vec![vec![p.addr(), 0]]
@@ -25308,18 +25387,18 @@ mod tests {
             calls_to(&e, process_slot(SLOT_END_MOVE_MESSAGE)),
             vec![vec![p.addr(), actor]]
         );
-        assert!(e.call(0x008f3600, &args![p, actor]).bool());
+        assert!(e.call(0x008f3600, &args![p, actor, 0.5f32]).bool());
         // State 9 (or 4 for the other one) completes the action instead.
         give_vtable(&mut e, actor, ACTOR_TABLE, &[(ACTOR_SLOT_STATE, 9)]);
         e.call_log = Some(vec![]);
-        assert!(!e.call(0x008f3550, &args![p, actor]).bool());
+        assert!(!e.call(0x008f3550, &args![p, actor, 0.5f32]).bool());
         assert_eq!(
             calls_to(&e, process_slot(SLOT_SET_CURRENT_ACTION_COMPLETE)),
             vec![vec![p.addr(), 1]]
         );
         give_vtable(&mut e, actor, ACTOR_TABLE, &[(ACTOR_SLOT_STATE, 4)]);
         e.call_log = Some(vec![]);
-        assert!(!e.call(0x008f3600, &args![p, actor]).bool());
+        assert!(!e.call(0x008f3600, &args![p, actor, 0.5f32]).bool());
         assert_eq!(
             calls_to(&e, process_slot(SLOT_SET_CURRENT_ACTION_COMPLETE)),
             vec![vec![p.addr(), 1]]
@@ -25331,7 +25410,7 @@ mod tests {
             PACKAGE_TABLE,
             &[(PACKAGE_SLOT_FIND_LOCATION, 1)],
         );
-        assert!(!e.call(0x008f3600, &args![p, actor]).bool());
+        assert!(!e.call(0x008f3600, &args![p, actor, 0.5f32]).bool());
         give_vtable(
             &mut e,
             p.addr(),
@@ -25339,8 +25418,8 @@ mod tests {
             &[(SLOT_GET_PACKAGE_THAT_IS_RUNNING, 0)],
         );
         e.call_log = Some(vec![]);
-        assert!(!e.call(0x008f3550, &args![p, actor]).bool());
-        assert!(!e.call(0x008f3600, &args![p, actor]).bool());
+        assert!(!e.call(0x008f3550, &args![p, actor, 0.5f32]).bool());
+        assert!(!e.call(0x008f3600, &args![p, actor, 0.5f32]).bool());
         assert!(calls_to(&e, process_slot(SLOT_END_MOVE_MESSAGE)).is_empty());
     }
 
@@ -27317,6 +27396,27 @@ mod tests {
         assert_eq!(calls_to(&e, PACKAGE_SET_FLAG_10000), vec![vec![package, 0]]);
     }
 
+    /// The goal `SetPathfindingGoal` reads is the package's point in the frame's `local_20`,
+    /// still there when it runs. With the freed-block check a point freed right after
+    /// `00675de0` would read as the fill word.
+    #[test]
+    fn test_process_follow_one_hour_sets_the_goal_from_a_live_point() {
+        let mut e = Engine::new();
+        e.mem.enable_freed_check(true);
+        let (p, actor, _player, _package) = one_hour_world(&mut e);
+        let target = object_with_slots(&mut e, 0x7600_0000, &[(ACTOR_SLOT_0X22C, 0)]);
+        e.mem.set_u32(p.addr() + 0x40, target);
+        returning_float(&mut e, PACKAGE_RADIUS_ACTOR_TO_REF_TARGET, 50.0);
+        e.register(DISTANCE_FROM_REFERENCE, |_, _| Ret {
+            st0: 300.0,
+            ..Ret::default()
+        });
+        location_into_buffer(&mut e, PACKAGE_LOCATION_COORD, [12.0, 34.0, -5.0]);
+        let goals = point_reader(&mut e, ACTOR_SET_PATHFINDING_GOAL, 1);
+        assert!(!e.call(0x008f31d0, &args![p, actor, 0u32, 1u32]).bool());
+        assert_eq!(*goals.borrow(), vec![[12.0, 34.0, -5.0]]);
+    }
+
     #[test]
     fn test_fn_008f36c0_sets_a_wander_goal() {
         let mut e = Engine::new();
@@ -27534,6 +27634,21 @@ mod tests {
             calls_to(&e, process_slot(SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING)),
             vec![vec![p.addr(), actor, 1]]
         );
+    }
+
+    /// Without a location the actor is sent to the package's point, which `SetPathfindingGoal`
+    /// reads from the frame's `local_bc` while it is still there. With the freed-block check a
+    /// point freed right after `00675de0` would read as the fill word.
+    #[test]
+    fn test_fn_008f2610_sets_the_goal_from_a_live_point() {
+        let mut e = Engine::new();
+        e.mem.enable_freed_check(true);
+        let (p, actor, _player, _package) = one_hour_world(&mut e);
+        returning(&mut e, ACTOR_PACKAGE_ITEM, 0x5000);
+        location_into_buffer(&mut e, PACKAGE_LOCATION_COORD, [7.0, 8.0, 9.5]);
+        let goals = point_reader(&mut e, ACTOR_SET_PATHFINDING_GOAL, 1);
+        assert!(!e.call(0x008f2610, &args![p, actor, 0]).bool());
+        assert_eq!(*goals.borrow(), vec![[7.0, 8.0, 9.5]]);
     }
 
     /// A world for `008e9640`: the one-hour world with the stubs and slots
@@ -28674,8 +28789,7 @@ mod tests {
         e.mem.set_f32(p.addr() + DOOR_TIMER, 0.0);
         // The 0x274-byte frame of 008e51b0: the size at +0x224, the node transform at +0x1bc,
         // the composed one at +0x180, the rotation at +0x230, the collector at +0x60.
-        let frame = e.mem.alloc(0x274);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x274);
         e.call_log = Some(vec![]);
         e.call(0x008e51b0, &args![p, actor]);
         assert_eq!(calls_to(&e, POINT_CONSTRUCT_DEFAULT)[0][0], frame + 0x224);
@@ -28695,9 +28809,8 @@ mod tests {
         let (p, actor, _) = accompany_world(&mut e);
         returning_float(&mut e, DISTANCE_FROM_REFERENCE, 350.0);
         // The 0xac-byte frame: the mover positions at +0x70 and +0x94, the differences at
-        // +0x4c, +0x58, +0x88 and +0xa0.
-        let frame = e.mem.alloc(0xac);
-        e.mem.free(frame);
+        // +0x4c, +0x58, +0x88 and +0xa0. It sits under the 12-byte destination local.
+        let frame = e.with_stack(12, |e, _| e.next_stack_local(0xac));
         e.call_log = Some(vec![]);
         e.call(0x008e0b00, &args![p, actor]);
         let movers: Vec<u32> = calls_to(&e, MOVER_POSITION).iter().map(|c| c[1]).collect();

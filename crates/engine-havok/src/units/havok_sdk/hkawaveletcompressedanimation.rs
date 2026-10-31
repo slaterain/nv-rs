@@ -2618,10 +2618,9 @@ mod tests {
         let (_, chunks) = setup(&mut e);
         let transforms = e.mem.alloc(0x20);
         let floats = e.mem.alloc(0x20);
-        // The frame block is the one just freed: the statistics at +0x24, the analysis block at
+        // The frame block is the next stack local: the statistics at +0x24, the analysis block at
         // +0x5c.
-        let frame = e.mem.alloc(SAMPLE_CHUNKS_FRAME_SIZE);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(SAMPLE_CHUNKS_FRAME_SIZE);
         e.call(
             0x00e3_0200,
             &args![5u32, 0.25f32, 3u32, transforms, 0u32, floats, chunks, 4u32],
@@ -2635,8 +2634,7 @@ mod tests {
         let mut e = engine();
         let (animation, _) = endian_animation(&mut e);
         stats_double(&mut e, [1, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0]);
-        let frame = e.mem.alloc(ENDIAN_FRAME_SIZE);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(ENDIAN_FRAME_SIZE);
         e.call(0x00e2_fc10, &args![animation]);
         assert_eq!(calls(&e, ANALYSE_ENDIAN)[0][4], frame + 0x24);
     }
@@ -2653,10 +2651,11 @@ mod tests {
         record_recompose(&mut e);
         let transforms = e.mem.alloc(0x20);
         let floats = e.mem.alloc(0x20);
-        // The frame block is the one just freed: the analysis block at +0x30, the delta at
-        // +0x18, and the argument words from +0x6c, the frame (2) in the slot of `time`.
-        let frame = e.mem.alloc(SAMPLE_TRACKS_FRAME_SIZE);
-        e.mem.free(frame);
+        // The frame block is the next stack local: the analysis block at +0x30, the delta at
+        // +0x18, and the argument words from +0x6c, the frame (2) in the slot of `time`. Its
+        // bytes stay on the thread's stack after the call (nothing takes that place again before
+        // they are read).
+        let frame = e.next_stack_local(SAMPLE_TRACKS_FRAME_SIZE);
         e.call(
             0x00e3_0980,
             &args![animation, 0.3125f32, 2u32, transforms, 1u32, floats, 0u32],

@@ -1456,11 +1456,10 @@ mod tests {
         e.mem.set_u32(indices + 4, 1);
         let out = group_outputs(&mut e);
         let x_of = |e: &Engine, at: u32| (e.mem.f32(at), e.mem.f32(at + 4));
-        // The frame block is the one just freed. Placing ray 1 leaves it (the new ray) and ray 0
-        // (the bundle's first ray) in the frame: in the indexed builder the new ray's start and
+        // The frame block is the next stack local. Placing ray 1 leaves it (the new ray) and ray
+        // 0 (the bundle's first ray) in the frame: in the indexed builder the new ray's start and
         // end at +0x60 and +0x70, the other's at +0x50 and +0x80.
-        let raw = e.mem.alloc(INDEXED_FRAME_BELOW + 0x10);
-        e.mem.free(raw);
+        let raw = e.next_stack_local(INDEXED_FRAME_BELOW + 0x10);
         let frame = aligned_frame_at(raw, INDEXED_FRAME_BELOW);
         e.call(
             0x00e2_9cd0,
@@ -1475,8 +1474,7 @@ mod tests {
         assert_eq!(x_of(&e, frame + 0x80), (10.0, 0.0));
         // The octant builder: the new ray's start and end at +0x80 and +0x50, the other's at
         // +0x70 and +0x60.
-        let raw = e.mem.alloc(OCTANT_FRAME_BELOW + 0x10);
-        e.mem.free(raw);
+        let raw = e.next_stack_local(OCTANT_FRAME_BELOW + 0x10);
         let frame = aligned_frame_at(raw, OCTANT_FRAME_BELOW);
         e.call(
             0x00e2_a010,
@@ -1697,9 +1695,8 @@ mod tests {
             Ret::default()
         });
         let (starts, ends) = put_rays(&mut e);
-        // The frame block is the one just freed: the job at +0x60, the counts at +0xd0.
-        let raw = e.mem.alloc(AUTO_BUNDLE_FRAME_BELOW + 0x10);
-        e.mem.free(raw);
+        // The frame block is the next stack local: the job at +0x60, the counts at +0xd0.
+        let raw = e.next_stack_local(AUTO_BUNDLE_FRAME_BELOW + 0x10);
         let frame = aligned_frame_at(raw, AUTO_BUNDLE_FRAME_BELOW);
         e.call(
             0x00e2_a390,
@@ -1722,8 +1719,7 @@ mod tests {
         assert_eq!(e.mem.u32(frame + 0x60 + 4), 0xffff_0070);
         assert_eq!(e.mem.u32(frame + 0x60 + 0x28), 1);
         // The auto-job path: the eighth job's index word.
-        let raw = e.mem.alloc(AUTO_BUNDLE_FRAME_BELOW + 0x10);
-        e.mem.free(raw);
+        let raw = e.next_stack_local(AUTO_BUNDLE_FRAME_BELOW + 0x10);
         let frame = aligned_frame_at(raw, AUTO_BUNDLE_FRAME_BELOW);
         e.call(
             0x00e2_a390,

@@ -163,8 +163,7 @@ mod tests {
         let (memory, memory_variable) = node(&mut e, "memory", stream, 0);
         e.call_log = Some(vec![]);
         // The map sits at +0x8 of the exe's 0x18-byte frame.
-        let frame = e.mem.alloc(0x18);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x18);
         e.call(0x00cf_6a00, &args![memory, memory_source]);
         let lookup = e
             .call_log
@@ -223,8 +222,7 @@ mod tests {
         let (stream, stream_variable) = node(&mut e, "stream", unknown, 0);
         let (memory, memory_variable) = node(&mut e, "memory", stream, 0x5001);
         e.call_log = Some(vec![]);
-        let frame = e.mem.alloc(0x18);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x18);
         e.call(0x00cf_6a90, &args![memory, stream_source]);
         let lookup = e
             .call_log

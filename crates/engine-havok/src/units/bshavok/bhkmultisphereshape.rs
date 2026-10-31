@@ -952,8 +952,7 @@ mod tests {
         let this = vobject(&mut e, 0x14, &[(0xb4, 0x0900_0048), (0xa4, 0x0900_0050)]);
         let stream = e.mem.alloc(0x300);
         e.mem.set_u8(stream + 0x1e4, 1);
-        let frame = e.mem.alloc(0x30);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x30);
         e.call(0x00cb_8010, &args![this, stream]);
         // The created byte at +0x14, the local array at +0x18.
         assert_eq!(calls_to(&log, 0x0900_0048), [[this, frame + 0x14]]);

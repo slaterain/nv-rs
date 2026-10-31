@@ -4204,11 +4204,9 @@ mod tests {
         assert!(calls(&e, OBJECT_SLOT_20).is_empty());
     }
 
-    /// The next `size`-byte block (the one the frame takes) and its 16-byte boundary.
+    /// The stack local the next aligned `size`-byte frame takes, and its 16-byte boundary.
     fn next_aligned_frame(e: &mut Engine, size: u32) -> u32 {
-        let block = e.mem.alloc(size + 0x10);
-        e.mem.free(block);
-        (block + 0xf) & !0xf
+        (e.next_stack_local(size + 0x10) + 0xf) & !0xf
     }
 
     #[test]
@@ -4230,8 +4228,7 @@ mod tests {
         let entity = e.mem.alloc(0x220);
         e.mem.set_u32(world + WORLD_LOCK_COUNT, 1);
         // mergeIslands queues its record at +0x8 of its 0x14-byte frame.
-        let block = e.mem.alloc(0x14);
-        e.mem.free(block);
+        let block = e.next_stack_local(0x14);
         e.call(0x00cb_5570, &args![world, entity, entity]);
         assert_eq!(calls(&e, WORLD_ENQUEUE_OPERATION)[0][1], block + 8);
         // updateEntityBP queues its record at +0x18 of its aligned frame.
@@ -4283,16 +4280,14 @@ mod tests {
         assert_eq!(calls(&e, OBJECT_SLOT_18)[0][1], frame + 0x20);
         assert_eq!(calls(&e, OBJECT_SLOT_10)[0][3], frame + 0x10);
         // removeEntityBP: the entity's argument slot +0x28, the pairs +0x10.
-        let block = e.mem.alloc(0x2c);
-        e.mem.free(block);
+        let block = e.next_stack_local(0x2c);
         e.call(0x00cb_5c10, &args![world, entity]);
         assert_eq!(calls(&e, OBJECT_SLOT_20)[0][1], block + 0x28);
         assert_eq!(e.mem.u32(block + 0x28), entity);
         assert_eq!(calls(&e, OBJECT_SLOT_1C)[0][2], block + 0x10);
         // removePhantomBP: the pairs +0xc.
         e.call_log = Some(Vec::new());
-        let block = e.mem.alloc(0x1c);
-        e.mem.free(block);
+        let block = e.next_stack_local(0x1c);
         e.call(0x00cb_5d00, &args![world, phantom]);
         assert_eq!(calls(&e, OBJECT_SLOT_1C)[0][2], block + 0xc);
     }
@@ -4361,8 +4356,7 @@ mod tests {
         let out = e.mem.alloc(12);
         e.mem.set_u32(out + 8, 0x8000_0000);
         // The exe frame (0x60 bytes) holds the inline array at +0x14.
-        let frame = e.mem.alloc(0x60);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x60);
         e.call(0x00cb_5dd0, &args![world, entity, out]);
         assert_eq!(calls(&e, OBJECT_SLOT_10)[0][1], frame + 0x14);
         assert_eq!(array_words(&e, out), vec![action_a]);
@@ -4399,8 +4393,7 @@ mod tests {
         let actions = e.mem.alloc(12);
         word_array(&mut e, actions, &[action]);
         // The exe frame (0x5c bytes) holds the entity array at +0x10.
-        let frame = e.mem.alloc(0x5c);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x5c);
         e.call(0x00cb_5f50, &args![world, entity, actions]);
         assert_eq!(calls(&e, OBJECT_SLOT_10)[0][1], frame + 0x10);
         assert_eq!(calls(&e, ISLAND_ADD_ACTION), vec![vec![island, action]]);

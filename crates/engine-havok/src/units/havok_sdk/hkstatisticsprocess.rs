@@ -1272,10 +1272,9 @@ mod statistics_process_tests {
         let (mut e, log) = world();
         let this = e.mem.alloc(0x50);
         let source = array_of_words(&mut e, &[5]);
-        // The frame block is the one just freed: the layout word at +0x10, the throw-away array
-        // at +0x18, the writer at +0x24 and the frame info at +0x38.
-        let frame = e.mem.alloc(CONSTRUCTOR_FRAME_SIZE);
-        e.mem.free(frame);
+        // The frame is the next stack local: the layout word at +0x10, the throw-away array at
+        // +0x18, the writer at +0x24 and the frame info at +0x38.
+        let frame = e.next_stack_local(CONSTRUCTOR_FRAME_SIZE);
         e.call(0x00dd_bf00, &args![this, source]);
         assert_eq!(
             calls(&log, FRAME_INFO_CONSTRUCTOR),
@@ -1302,11 +1301,10 @@ mod statistics_process_tests {
     fn step_keeps_its_locals_at_the_exe_frame_offsets() {
         let (mut e, log) = world();
         let this = process(&mut e, &[(&[0x1000], &[0x1010])]);
-        // The frame block is the one just freed: the layout word sits at +0x18, the map at
-        // +0x34, the string map array at +0x40, the array `c` at +0x4c and the array stream
-        // writer at +0x58 of the exe's frame.
-        let frame = e.mem.alloc(STEP_FRAME_SIZE);
-        e.mem.free(frame);
+        // The frame is the next stack local: the layout word sits at +0x18, the map at +0x34,
+        // the string map array at +0x40, the array `c` at +0x4c and the array stream writer at
+        // +0x58 of the exe's frame.
+        let frame = e.next_stack_local(STEP_FRAME_SIZE);
         e.call(0x00dd_c1c0, &args![this, 0.0f32]);
         assert_eq!(calls(&log, READ_MONITOR_RANGE)[0][2], frame + 0x34);
         assert_eq!(

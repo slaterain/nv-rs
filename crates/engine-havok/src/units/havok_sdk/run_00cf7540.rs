@@ -1830,8 +1830,7 @@ mod tests {
             u32::from(e.mem.u32(a[0]) < e.mem.u32(a[1])).into_ret()
         });
         let base = keyed(&mut e, &[3, 1, 2], 16);
-        let raw = e.mem.alloc(0x40);
-        e.mem.free(raw);
+        let raw = e.next_stack_local(0x40);
         e.call(0x00cf_83c0, &args![base, 0u32, 2u32, 0x0900_0200u32]);
         assert_eq!(seen.borrow()[0], aligned_frame_at(raw, 0x30) + 0x10);
         let hidden = Rc::new(RefCell::new(Vec::new()));
@@ -1843,8 +1842,7 @@ mod tests {
             a[0].into_ret()
         });
         let base = keyed(&mut e, &[3, 1, 2], 20);
-        let raw = e.mem.alloc(0x70);
-        e.mem.free(raw);
+        let raw = e.next_stack_local(0x70);
         e.call(0x00cf_8510, &args![base, 0u32, 2u32, 0x0900_0210u32]);
         let frame = aligned_frame_at(raw, 0x60);
         assert_eq!(hidden.borrow()[0], (frame + 0x1a, frame + 0x40));
@@ -1869,8 +1867,7 @@ mod tests {
         e.mem.set_u32(queue + 0x1c, pairs);
         e.mem.set_u32(queue + 0x20, 1);
         e.mem.set_u32(queue + 0x24, 1);
-        let frame = e.mem.alloc(0x24);
-        e.mem.free(frame);
+        let frame = e.next_stack_local(0x24);
         e.call(0x00cf_7ae0, &args![queue]);
         assert_eq!(calls_to(&calls, LISTENER_DOUBLE)[0][2], frame + 0x13);
         // The pairs were swapped into the array at +0x18.
@@ -1901,8 +1898,7 @@ mod tests {
         enqueue(&mut e, queue, 27, [body, 1, 2, 3]);
         enqueue(&mut e, queue, 29, [body, 1, 2, 3]);
         calls.borrow_mut().clear();
-        let raw = e.mem.alloc(0xa0);
-        e.mem.free(raw);
+        let raw = e.next_stack_local(0xa0);
         e.call(0x00cf_7c10, &args![queue]);
         let frame = aligned_frame_at(raw, 0x90);
         assert_eq!(calls_to(&calls, 0x00c9_1620)[0][1], frame + 0x1a);

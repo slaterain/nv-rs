@@ -2368,8 +2368,9 @@ pub fn fn_009891d0(e: &mut Engine, this: Ptr<CombatGroup>, first: Ptr, second: P
 /// `CombatGroup`: records that the target `actor` just attacked a member:
 /// its `fLastAttackedMemberTimeStamp` becomes the game time now and its
 /// `LastAttackedMemberLocation` the actor's world location. Nothing for a
-/// null actor or a non-target.
-pub fn fn_00989230(e: &mut Engine, this: Ptr<CombatGroup>, actor: Ptr) {
+/// null actor or a non-target. The first stack word (the caller's attacker,
+/// `0097f5bc`) is never read (`RET 0x8`).
+pub fn fn_00989230(e: &mut Engine, this: Ptr<CombatGroup>, _unused_1: u32, actor: Ptr) {
     if actor.is_null() {
         return;
     }
@@ -6354,7 +6355,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x009891a0, fn_009891a0(Ptr<CombatGroup>, Ptr) -> u8),
         entry!(0x009891d0, fn_009891d0(Ptr<CombatGroup>, Ptr, Ptr)),
-        entry!(0x00989230, fn_00989230(Ptr<CombatGroup>, Ptr)),
+        entry!(0x00989230, fn_00989230(Ptr<CombatGroup>, u32, Ptr)),
         entry!(
             0x009892a0,
             fn_009892a0(Ptr<CombatGroup>, Ptr, Ptr, f32, Ptr, Ptr) -> Ptr
@@ -8719,17 +8720,17 @@ mod tests {
         place(&mut e, who, 1.0, 2.0, 3.0);
         let group = group_with(&mut e, &[who], &[]);
         let target = target_entry(&e, group, 0);
-        fn_00989230(&mut e, group, Ptr::NULL);
+        fn_00989230(&mut e, group, 0, Ptr::NULL);
         assert_eq!(
             e.get(target, CombatTarget::fLastAttackedMemberTimeStamp),
             0.0
         );
-        fn_00989230(&mut e, group, stranger);
+        fn_00989230(&mut e, group, 0, stranger);
         assert_eq!(
             e.get(target, CombatTarget::fLastAttackedMemberTimeStamp),
             0.0
         );
-        fn_00989230(&mut e, group, who);
+        fn_00989230(&mut e, group, 0, who);
         assert_eq!(
             e.get(target, CombatTarget::fLastAttackedMemberTimeStamp),
             NOW
@@ -8942,8 +8943,9 @@ mod tests {
         // Two members and two targets: the block holds 0x104 bytes of fixed
         // locals, 2 * 24 bytes of tables and both pads.
         let size = INTERSECTION_FIXED_LOCALS + 2 * 24 + 0x20;
-        let block = e.mem.alloc(size);
-        e.mem.free(block);
+        // The frame is the next local on the thread's stack; its bytes stay there after the
+        // call returns.
+        let block = e.next_stack_local(size);
         let ebp = block + size;
         combat_group_check_member_target_intersection(&mut e, group);
         // `_alloca16` from ESP = EBP-0x104, then from the member table.

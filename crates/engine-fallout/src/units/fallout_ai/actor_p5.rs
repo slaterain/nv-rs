@@ -11489,11 +11489,11 @@ mod tests {
 
     // ---- the exe's stack frames ----
 
-    /// The block the next `with_stack(size)` takes (the last freed block of that size).
+    /// The local the next `with_stack(size)` on this thread takes: the frame of the function the
+    /// test calls next, taken outside any other local of it (nothing takes its place again
+    /// before the function returns, so its words can still be read after the call).
     fn next_frame(e: &mut Engine, size: u32) -> u32 {
-        let frame = e.mem.alloc(size);
-        e.mem.free(frame);
-        frame
+        e.next_stack_local(size)
     }
 
     #[test]

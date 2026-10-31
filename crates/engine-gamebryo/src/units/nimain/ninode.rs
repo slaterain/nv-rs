@@ -2706,7 +2706,10 @@ mod a06_tests {
         let (mut e, log) = engine();
         let a = object(&mut e, 0);
         let n = node(&mut e, &[a, 0], 0);
-        let stream = object(&mut e, 0);
+        // The stream reaches past `m_pkOstr` (+0x250), beyond the 0xac bytes `object` gives:
+        // a block of its own, so the field stays in it.
+        let stream = e.mem.alloc(STREAM_OUTPUT + 4);
+        e.mem.set_u32(stream, VTABLE);
         let output = e.mem.alloc(0x10);
         e.mem.set_u32(stream + STREAM_OUTPUT, output);
         e.mem.set_u32(output + BINARY_STREAM_WRITE, 0x0340_0000);

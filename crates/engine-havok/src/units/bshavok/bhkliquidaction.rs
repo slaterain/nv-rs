@@ -894,7 +894,8 @@ pub fn bhk_liquid_action_init(e: &mut Engine, this: Ptr<BhkLiquidAction>, info: 
     e.vcall(me, 0x8c, &args![action]);
     e.call(REMOVE_REFERENCE, &args![action]);
     let hk_object = e.mem.u32(info + 4);
-    let value = e.with_stack(4, |e, out| {
+    // The `hkpPropertyValue` local `00c85ef0` returns by value (8 bytes).
+    let value = e.with_stack(8, |e, out| {
         let found = e
             .call(GET_PROPERTY, &args![out, hk_object, PROPERTY_ID])
             .u32();
@@ -1770,9 +1771,8 @@ mod tests {
         let mut s = scene([0.0; 3]);
         let property = s.e.mem.alloc(4);
         record(&mut s.e, GET_PROPERTY, property, &s.log);
-        // The next 0xd0-byte block is the frame (0xc0 bytes from a 16-byte boundary).
-        let raw = s.e.mem.alloc(0xd0);
-        s.e.mem.free(raw);
+        // The next 0xd0-byte local is the frame (0xc0 bytes from a 16-byte boundary).
+        let raw = s.e.next_stack_local(0xd0);
         s.e.call(0x00cb_ccb0, &args![s.this, 0.5f32]);
         let frame = (raw + 0xf) & !0xf;
         assert_eq!(calls_to(&s.log, GET_PROPERTY)[0][0], frame + 0x30);
