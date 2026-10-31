@@ -349,10 +349,11 @@ pub fn hkp_simulation_integrate(e: &mut Engine, this: Ptr, delta_time: f32) -> u
 // Translated from 00cfa400 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the map (`hkpSimulation`, `RET 0x10`): runs the unnamed function at `00cf9480`
 /// with the callback `00cf92c0`: `(entities, count, collision_input, 0x00cf92c0, word)`.
-/// Register value first: ECX (`this`) is never read.
+/// Register value first: ECX (`this`) is not written before the call (00cfa419), so it reaches
+/// `00cf9480` as that routine's register word.
 pub fn fn_00cfa400(
     e: &mut Engine,
-    _this: Ptr,
+    this: Ptr,
     entities: u32,
     count: i32,
     collision_input: u32,
@@ -360,7 +361,8 @@ pub fn fn_00cfa400(
 ) {
     e.call(
         0x00cf_9480,
-        &args![entities, count, collision_input, 0x00cf_92c0u32, word],
+        // 00cfa400..00cfa419: five pushes, ECX untouched (00cf9480 saves it at 00cf9495).
+        &args![this, entities, count, collision_input, 0x00cf_92c0u32, word],
     );
 }
 
@@ -369,10 +371,10 @@ pub fn fn_00cfa400(
 /// world, flags)`, `RET 0x10` (the low byte of the last word is the flags). When bit 1 of
 /// `flags` is set, runs `00cf9480(entities, count, world's collision input (+0x78), 0x00cf87a0,
 /// 0)`; when bit 2 is set, `00d1a300(entities, count)` (cdecl). Register value first: ECX
-/// (`this`) is never read.
+/// (`this`) is not written before 00cfa455, so it reaches `00cf9480` as its register word.
 pub fn hkp_simulation_reset_collision_information_for_entities(
     e: &mut Engine,
-    _this: Ptr,
+    this: Ptr,
     entities: u32,
     count: i32,
     world: u32,
@@ -382,7 +384,8 @@ pub fn hkp_simulation_reset_collision_information_for_entities(
         let collision_input = e.mem.u32(world + 0x78);
         e.call(
             0x00cf_9480,
-            &args![entities, count, collision_input, 0x00cf_87a0u32, 0u32],
+            // 00cfa44b..00cfa455: five pushes, ECX untouched (00cf9480 saves it at 00cf9495).
+            &args![this, entities, count, collision_input, 0x00cf_87a0u32, 0u32],
         );
     }
     if flags & 4 != 0 {
@@ -625,21 +628,29 @@ const SWEEP_TIME_SCALE: u32 = 0x0102_fc70;
 /// The factor on the scaled time step that is taken off the sweep distance (double, `0.05`).
 const SWEEP_DISTANCE_SCALE: u32 = 0x0108_2cb0;
 
-/// The four values every call of the collision callback needs.
+/// The values every call of the collision callback needs.
 #[derive(Clone, Copy)]
 struct AgentPass {
     callback: u32,
+    /// The routine's incoming `ECX` (saved at 00cf9495), the callback's register word.
+    this: u32,
     entry: u32,
     info: u32,
-    /// The output block (the callback's third argument).
+    /// The output block (the callback's third stack argument).
     output: u32,
 }
 
 impl AgentPass {
-    /// `hkAgentNnMachine_InvalidateTimInAgent(entry, info)`, then `callback(entry, info, output)`.
+    /// `hkAgentNnMachine_InvalidateTimInAgent(entry, info)`, then `callback(entry, info, output)`
+    /// with `ECX` the routine's saved register word.
     fn collide(self, e: &mut Engine) {
         e.call(INVALIDATE_TIM_IN_AGENT, &args![self.entry, self.info]);
-        e.call(self.callback, &args![self.entry, self.info, self.output]);
+        // 00cf9989 / 00cf9aba / 00cf9b53 / 00cf9b96: MOV ECX,[the slot of 00cf9495] before the
+        // callback (00cf998f, 00cf9acb, 00cf9b59, 00cf9ba7).
+        e.call(
+            self.callback,
+            &args![self.this, self.entry, self.info, self.output],
+        );
     }
 }
 
@@ -768,11 +779,13 @@ fn sweep_time_of_impact(e: &mut Engine, pass: AgentPass, body: u32, frame: u32) 
 
 // Translated from 00cf9480 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `fn_00cf9480`, unnamed (the `hkpSimulation` collision pass over a set of bodies, called
-/// with the callbacks `00cf92c0` and `00cf87a0`). Stack (`RET 0x14`): `bodies` (an array of
-/// rigid body pointers), `count`, `info`, `callback` (an address called with `(entry, info,
-/// output)`, callee-cleaned) and `mode`. `ECX` is not an input: the routine hands whatever it
-/// holds on to the callback, and both callbacks ignore it, so the callback is called with its
-/// three stack words only.
+/// with the callbacks `00cf92c0` and `00cf87a0`, and `00d0daa0` from `00d0f2e0`). Register
+/// value first: `ECX` (`this`, which all three callers leave as their own `this`) is saved at
+/// 00cf9495 (`MOV [ESP+0x20],ECX`) and loaded back into `ECX` before every callback call
+/// (00cf95a5, 00cf9989, 00cf9aba, 00cf9b53, 00cf9b96). Stack (`RET 0x14`): `bodies` (an array
+/// of rigid body pointers), `count`, `info`, `callback` (an address called as a thiscall on
+/// `this` with `(entry, info, output)`, callee-cleaned) and `mode`. `00cf92c0` and `00cf87a0`
+/// do not read `ECX`; `00d0daa0` keeps it (00d0dad0) and runs `00d0d150` on it (00d0db2c).
 ///
 /// A map keyed by collidable keeps the bodies already seen. For every body it adds the body's
 /// collidable (`body + 0x10`) to the map, then walks the collidable's sorted collision entries
@@ -792,7 +805,15 @@ fn sweep_time_of_impact(e: &mut Engine, pass: AgentPass, body: u32, frame: u32) 
 /// The output block (stack from `+0x180`) is initialised only as far as
 /// `output[+4]`, `+0x3030` (the word at `0x0104da48`), `+0x3050` and `+0x3054` (zero); the
 /// callback fills in the rest, including `output[0]`.
-pub fn fn_00cf9480(e: &mut Engine, bodies: u32, count: i32, info: u32, callback: u32, mode: u32) {
+pub fn fn_00cf9480(
+    e: &mut Engine,
+    this: u32,
+    bodies: u32,
+    count: i32,
+    info: u32,
+    callback: u32,
+    mode: u32,
+) {
     e.with_stack(0x3220, |e, frame| {
         let base = frame.addr();
         let map = base + 0x3c;
@@ -840,12 +861,14 @@ pub fn fn_00cf9480(e: &mut Engine, bodies: u32, count: i32, info: u32, callback:
                 e.mem.set_u32(output + 4, value);
                 let pass = AgentPass {
                     callback,
+                    this,
                     entry,
                     info,
                     output,
                 };
                 e.call(INVALIDATE_TIM_IN_AGENT, &args![entry, info]);
-                e.call(callback, &args![entry, info, output]);
+                // 00cf95a5: MOV ECX,[ESP+0x28] (saved at 00cf9495); 00cf95b6: CALL [EBP+0x14].
+                e.call(callback, &args![this, entry, info, output]);
                 if mode == 1 && e.mem.u32(output) != output + 0x10 {
                     sweep_time_of_impact(e, pass, body, base);
                 }
@@ -977,7 +1000,9 @@ pub fn hkp_constraint_query_in_set(
 /// function of it; no name in the engine map), `(entry, info, output)`, `RET 0xc`: invalidates
 /// the entry's time of impact (`hkAgentNnMachine_InvalidateTimInAgent`, `00cfdbe0`, cdecl
 /// `(entry, info)`). The output block is not read; `EAX` is whatever the callee leaves.
-pub fn fn_00cf87a0(e: &mut Engine, entry: u32, info: u32, _unused_output: u32) {
+/// Register value first: `00cf9480` calls it with `ECX` loaded, but 00cf87a4 `MOV ECX,[ESP+4]`
+/// overwrites it unread.
+pub fn fn_00cf87a0(e: &mut Engine, _this: u32, entry: u32, info: u32, _unused_output: u32) {
     e.call(INVALIDATE_TIM_IN_AGENT, &args![entry, info]);
 }
 
@@ -994,8 +1019,9 @@ const PROCESS_AGENT: u32 = 0x00cf_edd0;
 /// `hkAgentNnMachine_ProcessAgent(entry, info, output, entry[+8])` (`00cfedd0`) and, unless the
 /// abort flag (`01269200`) is 1 or the output holds no contact point (`output[0]` still `output
 /// + 0x10`), calls slot `0x18` of the agent `entry[+8]` with `(entry[+0x10], entry[+0x14], info,
-/// output)`.
-pub fn fn_00cf92c0(e: &mut Engine, entry: u32, info: u32, output: u32) {
+/// output)`. Register value first: `00cf9480` calls it with `ECX` loaded, but its first use of
+/// `ECX` writes it (00cf92ed `LEA ECX,[EAX+0x1c60]`).
+pub fn fn_00cf92c0(e: &mut Engine, _this: u32, entry: u32, info: u32, output: u32) {
     let fill = x87_quiet_bits(e.mem.u32(OUTPUT_INITIAL_FLOAT));
     e.mem.set_u32(output + 0x3030, fill);
     e.mem.set_u32(output + 0x3080, 0);
@@ -1403,8 +1429,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00cf_8bc0, hkp_simulation_collide(Ptr) -> u32),
         entry!(0x00cf_a6e0, hkp_constraint_query_in_set(Ptr, Ptr, Ptr, u32)),
-        entry!(0x00cf_87a0, fn_00cf87a0(u32, u32, u32)),
-        entry!(0x00cf_92c0, fn_00cf92c0(u32, u32, u32)),
+        entry!(0x00cf_87a0, fn_00cf87a0(u32, u32, u32, u32)),
+        entry!(0x00cf_92c0, fn_00cf92c0(u32, u32, u32, u32)),
         entry!(
             0x00cf_9c60,
             hkp_simulation_collide_entities_broad_phase_discrete(u32, i32, u32)
@@ -1420,7 +1446,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00cf_8a40, hkp_simulation_advance_time(Ptr) -> u32),
         entry!(0x00cf_8b00, fn_00cf8b00(Ptr)),
         entry!(0x00cf_9340, hkp_simulation_integrate(Ptr, f32) -> u32),
-        entry!(0x00cf_9480, fn_00cf9480(u32, i32, u32, u32, u32)),
+        entry!(0x00cf_9480, fn_00cf9480(u32, u32, i32, u32, u32, u32)),
         entry!(0x00cf_a080, hkp_simulation_collide_internal(Ptr, Ptr)),
         entry!(0x00cf_a400, fn_00cfa400(Ptr, u32, i32, u32, u32)),
         entry!(
@@ -1814,10 +1840,11 @@ mod tests {
     fn the_collide_wrapper_passes_the_callback_and_the_extra_word() {
         let mut e = engine();
         noop(&mut e, COLLIDE_ROUTINE);
-        e.call(0x00cfa400, &args![0u32, 0x100u32, 3i32, 0x200u32, 7u32]);
+        e.call(0x00cfa400, &args![0x40u32, 0x100u32, 3i32, 0x200u32, 7u32]);
+        // ECX (`this`) reaches 00cf9480 untouched (00cfa419) as its register word.
         assert_eq!(
             calls(&e, COLLIDE_ROUTINE),
-            vec![vec![0x100, 3, 0x200, COLLIDE_CALLBACK, 7]]
+            vec![vec![0x40, 0x100, 3, 0x200, COLLIDE_CALLBACK, 7]]
         );
     }
 
@@ -1829,13 +1856,14 @@ mod tests {
         noop(&mut e, COLLIDE_ROUTINE);
         noop(&mut e, CLEAR_COLLISION_STATE);
         let entities = 0x100u32;
-        e.call(0x00cfa430, &args![0u32, entities, 2i32, world, 6u8]);
+        e.call(0x00cfa430, &args![0x40u32, entities, 2i32, world, 6u8]);
+        // ECX (`this`) reaches 00cf9480 untouched (00cfa455) as its register word.
         assert_eq!(
             calls(&e, COLLIDE_ROUTINE),
-            vec![vec![entities, 2, 0x300, RESET_CALLBACK, 0]]
+            vec![vec![0x40, entities, 2, 0x300, RESET_CALLBACK, 0]]
         );
         assert_eq!(calls(&e, CLEAR_COLLISION_STATE), vec![vec![entities, 2]]);
-        e.call(0x00cfa430, &args![0u32, entities, 2i32, world, 1u8]);
+        e.call(0x00cfa430, &args![0x40u32, entities, 2i32, world, 1u8]);
         assert_eq!(calls(&e, COLLIDE_ROUTINE).len(), 1);
         assert_eq!(calls(&e, CLEAR_COLLISION_STATE).len(), 1);
     }
@@ -1901,7 +1929,14 @@ mod tests {
         );
         assert_eq!(
             calls(&e, COLLIDE_ROUTINE),
-            vec![vec![entity_array, 2, collision_input, COLLIDE_CALLBACK, 0]]
+            vec![vec![
+                this,
+                entity_array,
+                2,
+                collision_input,
+                COLLIDE_CALLBACK,
+                0
+            ]]
         );
         assert_eq!(calls(&e, WORLD_UNLOCK_FIRST), vec![vec![world]]);
         assert_eq!(calls(&e, WORLD_UNLOCK_SECOND), vec![vec![world]]);
@@ -1958,9 +1993,9 @@ mod tests {
         let seen_log = Rc::clone(&seen);
         e.register_double(COLLIDE_ROUTINE, move |e, a| {
             let mut entry = a.to_vec();
-            entry.push(e.mem.u32(a[2] + 0x4c));
-            entry.extend(words_at(e, a[2] + 0x50, 4));
-            entry.push(e.mem.u32(a[2] + 0x64));
+            entry.push(e.mem.u32(a[3] + 0x4c));
+            entry.extend(words_at(e, a[3] + 0x50, 4));
+            entry.push(e.mem.u32(a[3] + 0x64));
             seen_log.borrow_mut().push(entry);
             Ret::default()
         });
@@ -1986,13 +2021,14 @@ mod tests {
         let seen = seen.borrow();
         assert_eq!(seen.len(), 1);
         let entry = &seen[0];
-        assert_eq!(&entry[..2], &[0x500, 4]);
-        assert_ne!(entry[2], collision_input);
-        assert_eq!(&entry[3..5], &[COLLIDE_CALLBACK, 9]);
+        // ECX (`this`) is 00cf9480's register word (00cfa666, then 00cfa400 leaves it).
+        assert_eq!(&entry[..3], &[this, 0x500, 4]);
+        assert_ne!(entry[3], collision_input);
+        assert_eq!(&entry[4..6], &[COLLIDE_CALLBACK, 9]);
         // The copy holds the first words of the original, then the new step info.
-        assert_eq!(entry[5], 0x1000 + 0x13);
-        assert_eq!(&entry[6..10], &step_bits([1.0, 2.0, 1.0, 1.0])[..]);
-        assert_eq!(entry[10], block);
+        assert_eq!(entry[6], 0x1000 + 0x13);
+        assert_eq!(&entry[7..11], &step_bits([1.0, 2.0, 1.0, 1.0])[..]);
+        assert_eq!(entry[11], block);
         // The original collision input is untouched; the copy's block is returned.
         assert_eq!(e.mem.u32(collision_input + 0x50), 0);
         assert_eq!(*freed.borrow(), vec![vec![allocator, block, 0x200]]);
@@ -2116,6 +2152,8 @@ mod tests {
     const TRANSFORM_SETTER: u32 = 0x0900_8020;
     const ALLOCATOR_VTABLE: u32 = 0x0900_8100;
     const TRANSFORM_VTABLE: u32 = 0x0900_8200;
+    /// The register word (`ECX`, the caller's `this`) the tests hand to `00cf9480`.
+    const PASS_THIS: u32 = 0x0900_8300;
 
     /// The memory router (the allocator at its `+0x10`), and no-op doubles for the map, the
     /// allocator's free and the time-of-impact invalidation. Returns the allocator.
@@ -2229,14 +2267,17 @@ mod tests {
         let kept = Rc::clone(&seen);
         e.register_double(PASS_CALLBACK, move |e, a| {
             let mut entry = a.to_vec();
-            entry.extend(words_at(e, a[2] + 4, 1));
-            entry.extend(words_at(e, a[2] + 0x3030, 1));
-            entry.extend(words_at(e, a[2] + 0x3050, 2));
+            entry.extend(words_at(e, a[3] + 4, 1));
+            entry.extend(words_at(e, a[3] + 0x3030, 1));
+            entry.extend(words_at(e, a[3] + 0x3050, 2));
             kept.borrow_mut().push(entry);
             Ret::default()
         });
         let info = e.mem.alloc(0x80);
-        e.call(0x00cf_9480, &args![bodies, 2i32, info, PASS_CALLBACK, 0u32]);
+        e.call(
+            0x00cf_9480,
+            &args![PASS_THIS, bodies, 2i32, info, PASS_CALLBACK, 0u32],
+        );
 
         let map = reserved.borrow()[0][0];
         assert_eq!(
@@ -2267,11 +2308,12 @@ mod tests {
             vec![vec![entries[0], info], vec![entries[2], info]]
         );
         let bias = 1.5f32.to_bits();
+        // The callback runs on the routine's register word (00cf95a5 reloads ECX).
         assert_eq!(
             seen.borrow()[..],
             [
-                vec![entries[0], info, output, 0x111, bias, 0, 0],
-                vec![entries[2], info, output, 0x222, bias, 0, 0]
+                vec![PASS_THIS, entries[0], info, output, 0x111, bias, 0, 0],
+                vec![PASS_THIS, entries[2], info, output, 0x222, bias, 0, 0]
             ][..]
         );
         // Only the second body's array was owned: 5 elements of 8 bytes.
@@ -2314,7 +2356,10 @@ mod tests {
             Ret::default()
         });
         let info = e.mem.alloc(0x80);
-        e.call(0x00cf_9480, &args![bodies, 2i32, info, PASS_CALLBACK, 0u32]);
+        e.call(
+            0x00cf_9480,
+            &args![PASS_THIS, bodies, 2i32, info, PASS_CALLBACK, 0u32],
+        );
         // One entry of one body was processed.
         assert_eq!(calls(&e, MAP_INSERT).len(), 1);
         assert_eq!(calls(&e, MAP_FIND_KEY).len(), 1);
@@ -2331,7 +2376,10 @@ mod tests {
             let mut e = engine();
             let allocator = pass_doubles(&mut e);
             noop(&mut e, MAP_RESERVE);
-            e.call(0x00cf_9480, &args![0u32, count, 0u32, PASS_CALLBACK, 1u32]);
+            e.call(
+                0x00cf_9480,
+                &args![PASS_THIS, 0u32, count, 0u32, PASS_CALLBACK, 1u32],
+            );
             let map = calls(&e, MAP_DESTRUCTOR)[0][0];
             assert_eq!(
                 calls(&e, MAP_RESERVE),
@@ -2347,11 +2395,53 @@ mod tests {
         }
     }
 
+    #[test]
+    fn collision_pass_hands_its_register_word_to_the_continuous_callback() {
+        // 00d0f2e0 leaves ECX as it came (00d0f2e0..00d0f2f6), 00cf9480 saves it (00cf9495) and
+        // reloads it for the callback (00cf95a5), and 00d0daa0 keeps it (00d0dad0) to run
+        // 00d0d150 on it (00d0db2c): the continuous simulation's `this` gets there.
+        let mut e = engine();
+        pass_doubles(&mut e);
+        noop(&mut e, MAP_RESERVE);
+        e.register_double(MAP_FIND_KEY, |_, _| ret(0));
+        noop(&mut e, PROCESS_AGENT);
+        noop(&mut e, 0x00d0_d150);
+        // 00d0daa0 runs 00d0d150 when the float it copies (0104da48) is not the double at
+        // 0104e138.
+        e.mem.set_f32(OUTPUT_INITIAL_FLOAT, 1.5);
+        e.mem.set_f64(0x0104_e138, 0.0);
+        let body = e.mem.alloc(0x40);
+        let bodies = e.mem.alloc(4);
+        e.mem.set_u32(bodies, body);
+        let first = collidable(&mut e, 0, 1);
+        let second = collidable(&mut e, 0, 2);
+        let entry = collision_entry(&mut e, first, second);
+        let list = e.mem.alloc(0x10);
+        e.mem.set_u32(list, entry);
+        e.register_double(GET_COLLISION_ENTRIES_SORTED, move |e, a| {
+            e.mem.set_u32(a[1], list);
+            e.mem.set_u32(a[1] + 4, 1);
+            e.mem.set_u32(a[1] + 8, 0x8000_0001);
+            Ret::default()
+        });
+        let info = e.mem.alloc(0x80);
+        let tables = e.mem.alloc(0x1d00);
+        e.mem.set_u32(info, tables);
+        let simulation = e.mem.alloc(0x40);
+        e.call(0x00d0_f2e0, &args![simulation, bodies, 1u32, info]);
+        let output = calls(&e, PROCESS_AGENT)[0][2];
+        assert_eq!(calls(&e, PROCESS_AGENT), vec![vec![entry, info, output, 0]]);
+        assert_eq!(
+            calls(&e, 0x00d0_d150),
+            vec![vec![simulation, output, entry]]
+        );
+    }
+
     /// What `sweep_run` saw.
     struct SweepRun {
         e: Engine,
         /// Per callback call: the step and the two limits, then the body transform's `+0x30`
-        /// vector, as words.
+        /// vector, as words, then the callback's register word.
         seen: EventLog,
         axis_angle: EventLog,
         set_mul: EventLog,
@@ -2431,9 +2521,10 @@ mod tests {
                 e.mem.u32(limits + 8),
             ];
             words.extend(words_at(e, body + 0xf0 + 0x30, 4));
+            words.push(a[0]);
             kept.borrow_mut().push(words);
             if first_call.replace(false) {
-                let output = a[2];
+                let output = a[3];
                 if contacts {
                     e.mem.set_u32(output, output + 0x40);
                 } else {
@@ -2453,7 +2544,10 @@ mod tests {
         let set_mul_inverse = logger(&mut e, QUATERNION_SET_MUL_INVERSE, &[(2, 4)]);
         let rotation = logger(&mut e, TRANSFORM_SET_ROTATION, &[]);
         let transform = logger(&mut e, TRANSFORM_SETTER, &[(1, 16)]);
-        e.call(0x00cf_9480, &args![bodies, 1i32, info, PASS_CALLBACK, mode]);
+        e.call(
+            0x00cf_9480,
+            &args![PASS_THIS, bodies, 1i32, info, PASS_CALLBACK, mode],
+        );
         SweepRun {
             e,
             seen,
@@ -2493,6 +2587,11 @@ mod tests {
             assert_eq!(call[..3], step(10.0, 10.0, 10.0));
         }
         assert_eq!(seen[4][..3], step(0.5, 3.0, 4.0));
+        // Every call, the sweep's four included, runs on the routine's register word (00cf95a5,
+        // 00cf9989, 00cf9aba, 00cf9b53, 00cf9b96 reload ECX).
+        for call in seen.iter() {
+            assert_eq!(call[7], PASS_THIS);
+        }
         assert_eq!(run.e.mem.f32(run.info + 8), 0.5);
         assert_eq!(run.e.mem.f32(run.limits + 4), 3.0);
         assert_eq!(run.e.mem.f32(run.limits + 8), 4.0);
@@ -2886,7 +2985,11 @@ mod last_functions_tests {
         let (mut e, _) = engine(0);
         let log: CallLog = Rc::new(RefCell::new(Vec::new()));
         log_double(&mut e, INVALIDATE_TIM_IN_AGENT, &log, 0);
-        e.call(0x00cf_87a0, &args![0x1000u32, 0x2000u32, 0x3000u32]);
+        // The register word 00cf9480 loads comes first; 00cf87a4 overwrites ECX unread.
+        e.call(
+            0x00cf_87a0,
+            &args![0x0e00_0000u32, 0x1000u32, 0x2000u32, 0x3000u32],
+        );
         assert_eq!(
             *log.borrow(),
             vec![vec![INVALIDATE_TIM_IN_AGENT, 0x1000, 0x2000]]
@@ -2922,7 +3025,8 @@ mod last_functions_tests {
         e.mem.set_u32(entry + 0x10, 0x1111);
         e.mem.set_u32(entry + 0x14, 0x2222);
         let output = e.mem.alloc(0x3090);
-        e.call(0x00cf_92c0, &args![entry, info, output]);
+        // The register word 00cf9480 loads comes first; 00cf92ed writes ECX before any read.
+        e.call(0x00cf_92c0, &args![0x0e00_0000u32, entry, info, output]);
         (e, log, [entry, info, output, agent])
     }
 

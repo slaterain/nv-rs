@@ -8,6 +8,8 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+use crate::units::facegen::run_00aba3c0::{fn_00abb700, resize_38_in_area};
+
 /// `std::string::erase` (`0044a690`: `this`; position, count) and the
 /// append of `count` copies of a character (`00aadeb0`: `this`; count,
 /// character).
@@ -68,18 +70,18 @@ const FILE_VTABLE: u32 = 0x010a_2c38;
 /// The mesh's vector resizes: `NiPoint3`s (`00aba7b0`: vector; count,
 /// three words), 16-byte rows (`00abaaa0`: vector; count, four words),
 /// 32-byte named entries (`00ab9eb0`: vector; count), 0x2C-byte entries
-/// (`00abb3c0`: vector; count, eleven words, from `00aba220`), 0x34-byte
-/// entries (`00abb700`: vector; count, thirteen words, from `00aba270`),
-/// 0x38-byte entries (`00abbae0`: vector; count, fourteen words, from
-/// `00aba2f0`), two-float rows (`00abad80`: vector; count, two words) and
-/// words (`00aba5d0`: vector; count, value); the clears of +0x60 and
-/// +0x78 (`00ab9cd0`, `00ab9dc0`).
+/// (`00abb3c0`: vector; count, eleven words, from `00aba220`), two-float
+/// rows (`00abad80`: vector; count, two words) and words (`00aba5d0`:
+/// vector; count, value); the clears of +0x60 and +0x78 (`00ab9cd0`,
+/// `00ab9dc0`). The 0x34-byte entries (`00abb700`, thirteen words, from
+/// `00aba270`) and the 0x38-byte entries (`00abbae0`, fourteen words, from
+/// `00aba2f0`) take their value in place, called directly with the
+/// argument area the entry is built in: [`fn_00abb700`],
+/// [`resize_38_in_area`].
 const RESIZE_POINTS: u32 = 0x00ab_a7b0;
 const RESIZE_ROWS: u32 = 0x00ab_aaa0;
 const RESIZE_NAMED: u32 = 0x00ab_9eb0;
 const RESIZE_2C: u32 = 0x00ab_b3c0;
-const RESIZE_34: u32 = 0x00ab_b700;
-const RESIZE_38: u32 = 0x00ab_bae0;
 const RESIZE_PAIRS: u32 = 0x00ab_ad80;
 const RESIZE_WORDS: u32 = 0x00ab_a5d0;
 const MAKE_2C: u32 = 0x00ab_a220;
@@ -325,20 +327,31 @@ pub fn fff_read_tri_file(e: &mut Engine, name: Ptr, mesh: u32) -> bool {
             &args![mesh + 0x30, h(e, 8), 0u32, 0u32, 0u32, 0u32],
         );
         e.call(RESIZE_NAMED, &args![mesh + 0x90, h(e, 0xc)]);
-        for (resize, make, size, count, vector) in [
-            (RESIZE_2C, MAKE_2C, 0x2cu32, 0x10u32, 0xa8u32),
-            (RESIZE_34, MAKE_34, 0x34, 0x1c, 0xc0),
-            (RESIZE_38, MAKE_38, 0x38, 0x20, 0xd8),
-        ] {
-            let n = h(e, count);
-            let value = e.with_stack(size, |e, value| {
-                e.call(make, &args![value]);
-                words_of(e, value, size)
-            });
-            let mut words = vec![mesh + vector, n];
-            words.extend(value);
-            e.call(resize, &words);
-        }
+        let n = h(e, 0x10);
+        let value = e.with_stack(0x2c, |e, value| {
+            e.call(MAKE_2C, &args![value]);
+            words_of(e, value, 0x2c)
+        });
+        let mut words = vec![mesh + 0xa8, n];
+        words.extend(value);
+        e.call(RESIZE_2C, &words);
+        // 00ab61a4: `SUB ESP,0x34; MOV ECX,ESP`: the default 0x34-byte entry is built in the
+        // outgoing argument area, which stays in place as `00abb700`'s own `[EBP+0xC]` (it
+        // destroys the entry there; its `RET 0x38` frees the area). The entry's vector proxy
+        // names the area.
+        let n = h(e, 0x1c);
+        e.with_stack(0x34, |e, value| {
+            e.call(MAKE_34, &args![value]); // 00ab61af
+            fn_00abb700(e, Ptr::new(mesh + 0xc0), n, value); // 00ab61ca: the area itself
+        });
+        // 00ab61d8: `SUB ESP,0x38; MOV ECX,ESP`: the default 0x38-byte entry is built in the
+        // outgoing argument area, which stays in place as `00abbae0`'s own `[EBP+0xC]`: its
+        // vector's proxy names that area, and `00abbae0` destroys the entry there.
+        let n = h(e, 0x20); // 00ab61cf
+        e.with_stack(0x38, |e, outgoing| {
+            e.call(MAKE_38, &args![outgoing]); // 00ab61e3
+            resize_38_in_area(e, Ptr::new(mesh + 0xd8), n, outgoing.addr()); // 00ab61fe: the area
+        });
         if h(e, 0).wrapping_add(h(e, 0x24)) != 0 {
             let count = count_div(e, mesh, 0xc);
             let first = first_element(e, mesh, count);
@@ -1156,6 +1169,15 @@ mod tests {
         }
     }
 
+    /// The 0x34-byte entry's destructor (`0065ed70`, `thiscall`), which
+    /// `00abb700` (run for real) runs on its value.
+    const DESTROY_34: u32 = 0x0065_ed70;
+
+    /// `00abbae0`'s insert of `count` copies (`00abfa90`) and the 0x38-byte
+    /// entry's destructor (`0065edd0`).
+    const INSERT_38: u32 = 0x00ab_fa90;
+    const DESTRUCT_38: u32 = 0x0065_edd0;
+
     /// Makes `vector` (first +0xC, last +0x10) hold `count` zeroed elements
     /// of `size` bytes.
     fn grow(e: &mut Engine, vector: u32, count: u32, size: u32) {
@@ -1199,6 +1221,7 @@ mod tests {
             MAKE_2C,
             MAKE_34,
             MAKE_38,
+            DESTROY_34,
             CLEAR_60,
             CLEAR_78,
             BUFFER_RELEASE,
@@ -1217,14 +1240,13 @@ mod tests {
             grow(e, a[0], a[1], 0xc);
             Ret::default()
         });
-        e.register(RESIZE_34, |e, a| {
-            grow(e, a[0], a[1], 0x34);
+        // The 0x38-byte resize (00abbae0) runs on its value in place: its insert (this, proxy,
+        // where, count, value) grows the vector and the value's destructor is quiet.
+        e.register(INSERT_38, |e, a| {
+            grow(e, a[0], a[3], 0x38);
             Ret::default()
         });
-        e.register(RESIZE_38, |e, a| {
-            grow(e, a[0], a[1], 0x38);
-            Ret::default()
-        });
+        e.register(DESTRUCT_38, |_, _| Ret::default());
         e.register(RESIZE_WORDS, |e, a| {
             grow(e, a[0], a[1], 4);
             Ret::default()
@@ -1278,6 +1300,9 @@ mod tests {
         }
         let mut e = tri_engine(header, stream, true);
         let mesh = mesh(&mut e);
+        // The mesh already holds the one 0x34-byte entry, so the real
+        // `00abb700` keeps it and only destroys its value.
+        grow(&mut e, mesh + 0xc0, 1, 0x34);
         e.call_log = Some(vec![]);
         assert!(fff_read_tri_file(&mut e, Ptr::new(0x500), mesh));
         let vertices = e.mem.u32(mesh + 0xc);
@@ -1315,6 +1340,75 @@ mod tests {
         assert_eq!(error[0][0], 1);
         assert_eq!(error[0].len(), 8);
         assert_eq!(calls_to(&e, FILE_DESTRUCT).len(), 1);
+    }
+
+    /// 00ab61a4..00ab61ca: the default 0x34-byte entry (`00aba270`) is
+    /// built in the argument area of `00abb700`, which resizes with it and
+    /// destroys it there (`0065ed70`), not in a copy of its words. The
+    /// freed check is on because under it stack locals are separate
+    /// blocks: a copy of the words would be destroyed somewhere else.
+    /// Without it the copy's area reuses the ended local's address, so the
+    /// copy would be destroyed at the built address by chance.
+    #[test]
+    fn tri_file_destroys_the_default_entry_where_it_was_built() {
+        let mut header = [0u32; 14];
+        header[8] = 1;
+        let mut stream = vec![];
+        for word in [0u32, 1, 7] {
+            stream.extend(word.to_le_bytes());
+        }
+        let mut e = tri_engine(header, stream, true);
+        e.mem.enable_freed_check(false);
+        let mesh = mesh(&mut e);
+        e.call_log = Some(vec![]);
+        assert!(!fff_read_tri_file(&mut e, Ptr::new(0x500), mesh));
+        let built = calls_to(&e, MAKE_34);
+        assert_eq!(built.len(), 1);
+        assert_eq!(calls_to(&e, DESTROY_34), built);
+    }
+
+    /// 00ab61d8..00ab61fe: the default 0x38-byte entry (`00aba2f0`) is
+    /// built in `00abbae0`'s argument area, so the proxy of its 4-byte
+    /// vector (+0x20, `00aba4f0`: pointing back at that vector) names the
+    /// vector of the value the insert (`00abfa90`) copies from, and
+    /// `00abbae0` destroys the entry there (`0065edd0`). Built in a local
+    /// whose words were passed after it ended, the value the resize used was
+    /// a copy elsewhere. The freed check is on because under it stack
+    /// locals are separate blocks: a copy of the words would be read and
+    /// destroyed somewhere else. Without it the copy's area reuses the ended
+    /// local's address, so the stale proxy would name the copy by chance.
+    #[test]
+    fn tri_file_grows_the_0x38_entries_from_the_entry_its_proxy_names() {
+        // One statistical morph (header +0x20) whose vertex count does not add up (as in the
+        // test above): the read stops after it.
+        let mut header = [0u32; 14];
+        header[8] = 1;
+        let mut stream = vec![];
+        for word in [0u32, 1, 7] {
+            stream.extend(word.to_le_bytes());
+        }
+        let mut e = tri_engine(header, stream, true);
+        e.mem.enable_freed_check(false);
+        e.register(MAKE_38, |e, a| {
+            let proxy = e.mem.alloc(4);
+            e.mem.set_u32(proxy, a[0] + 0x20);
+            e.mem.set_u32(a[0] + 0x20, proxy);
+            Ret::default()
+        });
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        e.register_double(INSERT_38, move |e, a| {
+            let proxy = e.mem.u32(a[4] + 0x20);
+            sink.borrow_mut().push((a[0], a[3], a[4], e.mem.u32(proxy)));
+            grow(e, a[0], a[3], 0x38);
+            Ret::default()
+        });
+        let mesh = mesh(&mut e);
+        e.call_log = Some(vec![]);
+        assert!(!fff_read_tri_file(&mut e, Ptr::new(0x500), mesh));
+        let built = calls_to(&e, MAKE_38)[0][0];
+        assert_eq!(*seen.borrow(), vec![(mesh + 0xd8, 1, built, built + 0x20)]);
+        assert_eq!(calls_to(&e, DESTRUCT_38), vec![vec![built]]);
     }
 }
 

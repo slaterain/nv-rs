@@ -206,16 +206,15 @@ pub fn fn_00aadda0(e: &mut Engine, this: Ptr, result: u32, divisor: f32) -> u32 
 
 // Translated from 00aadde0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map: the linear control vector's `resize(count)` (`thiscall`): builds a
-/// default control (`00aade20`) in the argument area and passes it by value (fifteen words) to
-/// the resize with a value (`00aadf50`).
+/// default control (`00aade20`) in the argument area and passes it by value to the resize with
+/// a value (`00aadf50`), which works on it and destroys it there: the matrix's proxy names
+/// that area.
 pub fn fn_00aadde0(e: &mut Engine, this: Ptr, count: u32) {
-    e.with_stack(CONTROL_SIZE, |e, value| {
-        fn_00aade20(e, value);
-        let mut words = [0u32; 15];
-        for (i, word) in words.iter_mut().enumerate() {
-            *word = e.mem.u32(value.addr() + 4 * i as u32);
-        }
-        fn_00aadf50(e, this, count, words);
+    // 00aaddef: `SUB ESP,0x3C; MOV ECX,ESP`: the control is built in the outgoing argument
+    // area, which stays in place as `00aadf50`'s own `[EBP+0xC]` (its `RET 0x40` frees it).
+    e.with_stack(CONTROL_SIZE, |e, outgoing| {
+        fn_00aade20(e, outgoing); // 00aaddf7
+        resize_from_area(e, this, count, outgoing.addr()); // 00aade0c: the area itself
     });
 }
 
@@ -266,6 +265,13 @@ pub fn fn_00aadeb0(e: &mut Engine, this: Ptr, count: u32, character: u8) -> Ptr 
 /// sixteen words: the count and the control by value): grows with `00aae3a0`, or shrinks with
 /// the advance `00aaecb0` and the erase `00aae200`; then the value is destroyed (`006593e0`).
 pub fn fn_00aadf50(e: &mut Engine, this: Ptr, count: u32, value: [u32; 15]) {
+    with_value_slot(e, &value, |e, slot| resize_from_area(e, this, count, slot));
+}
+
+/// `00aadf50`'s body over the control in its argument area at `value` (the exe's `[EBP+0xC]`,
+/// where `00aadde0` builds it): the resize copies from the control there and destroys it in
+/// place.
+fn resize_from_area(e: &mut Engine, this: Ptr, count: u32, value: u32) {
     let shape = ResizeShape {
         size: ElementSize::Divide(CONTROL_SIZE),
         insert: |e, this, proxy, at, count, value| fn_00aae3a0(e, this, proxy, at, count, value),
@@ -274,10 +280,8 @@ pub fn fn_00aadf50(e: &mut Engine, this: Ptr, count: u32, value: [u32; 15]) {
             erase_by_address(CONTROL_ERASE, e, this, result, a, b, c, d)
         },
     };
-    with_value_slot(e, &value, |e, slot| {
-        resize_with_value(e, this, count, slot, &shape);
-        e.call(CONTROL_DESTRUCT, &args![slot]);
-    });
+    resize_with_value(e, this, count, value, &shape); // 00aae002: `LEA ECX,[EBP+0xC]`
+    e.call(CONTROL_DESTRUCT, &args![value]); // 00aae163: the control destroyed where it lies
 }
 
 fn fn_00aadf50_entry(e: &mut Engine, this: Ptr, count: u32, value: WordsArg<15>) {
@@ -2349,6 +2353,37 @@ mod tests {
             .step_by(CONTROL_SIZE as usize)
             .map(|a| e.mem.u32(a))
             .collect()
+    }
+
+    #[test]
+    fn control_resize_works_on_the_control_where_it_was_built() {
+        // 00aaddef..00aade0c: 00aadde0 builds the default control (00aade20) in 00aadf50's
+        // argument area, so the matrix's proxy (00449fd0: it points back at the matrix) names
+        // the control the resize copies from (00aae3a0) and destroys there (00aae163).
+        let mut e = control_engine();
+        e.register_double(VECTOR_CONSTRUCT, |e, a| {
+            let proxy = e.mem.alloc(4);
+            e.mem.set_u32(proxy, a[0]);
+            e.mem.set_u32(a[0], proxy);
+            Ret::default()
+        });
+        let destroyed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = destroyed.clone();
+        e.register_double(CONTROL_DESTRUCT, move |e, a| {
+            let proxy = e.mem.u32(a[0]);
+            sink.borrow_mut().push((a[0], e.mem.u32(proxy)));
+            Ret::default()
+        });
+        let vector = control_vector(&mut e, &[], 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_dde0, &args![vector, 1u32]);
+        let log = e.call_log.take().unwrap();
+        let built = calls_to(&log, VECTOR_CONSTRUCT)[0][0];
+        let copies = calls_to(&log, MATRIX_COPY);
+        assert!(!copies.is_empty());
+        assert!(copies.iter().all(|copy| copy[1] == built));
+        assert_eq!(*destroyed.borrow(), vec![(built, built)]);
+        assert_eq!(tags_of(&e, vector).len(), 1);
     }
 
     #[test]

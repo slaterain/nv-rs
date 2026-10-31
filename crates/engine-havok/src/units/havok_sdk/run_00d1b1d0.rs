@@ -207,8 +207,10 @@ pub fn fn_00d1b290(
 /// given, in this order of preference, to `callback` (virtual slot 4 with the address of a byte
 /// and the key; the walk ends when the byte it answers is not zero), pushed on the `hkArray` at
 /// `out`, or stored at the pointer cursor `*cursor` (advanced by 4; the walk ends when the number
-/// of stored keys reaches `limit`, signed). Answers the key of the last leaf record looked at (the
-/// exe leaves that stack word uninitialised when no record is looked at; 0 here).
+/// of stored keys reaches `limit`, signed). Answers the number of keys stored at the cursor (the
+/// counter at `[ESP+0x28]`, zeroed at `00d1b52f` and counted at `00d1b78a`..`00d1b792`, which
+/// `00d1b7e4` reads into `EAX` after `POP EDI; POP ESI`): 0 when the keys go to the callback or
+/// the array, or nowhere.
 pub fn fn_00d1b4d0(
     e: &mut Engine,
     node: u32,
@@ -235,7 +237,6 @@ pub fn fn_00d1b4d0(
         .map(|word_index| e.mem.u32(query.wrapping_add(word_index * 4)))
         .collect();
     let mut stored = 0u32;
-    let mut last_key = 0u32;
     'walk: loop {
         while (word as i32) < 0 {
             let first_child = current.wrapping_add(word & 0x7fff_fffc);
@@ -265,7 +266,7 @@ pub fn fn_00d1b4d0(
                 .wrapping_add(0xe);
             let mut index = 0u32;
             while (index as i32) < (second as i32) {
-                last_key = leaf_key_00d1b290(e, end);
+                let last_key = leaf_key_00d1b290(e, end);
                 if leaf_overlaps_00d1b290(e, query, scale, offset, end, fill) {
                     if callback != 0 {
                         let stop = e.with_stack(4, |e, flag| {
@@ -301,7 +302,9 @@ pub fn fn_00d1b4d0(
     }
     let router = e.call(MEMORY_ROUTER, &args![]).u32();
     e.mem.set_u32(router, arena_start);
-    last_key
+    // 00d1b7e0..00d1b7e4: `POP EDI; POP ESI; MOV EAX,[ESP+0x20]` reads the body's [ESP+0x28],
+    // the stored-key counter (00d1b52f, 00d1b78a..00d1b792), not the key at [ESP+0x20].
+    stored
 }
 
 /// Copies the words at `tree + 0x30` to `frame` and stores `(tree + 0x40) - (tree + 0x30)` (per
@@ -365,8 +368,11 @@ pub fn fn_00d1b850(e: &mut Engine, tree: u32, query: u32, out: u32) {
 // Translated from 00d1b930 (decompiled, FalloutNV.exe 1.4.0.525)
 /// No map name (cdecl, four words `tree`, `query`, `cursor`, `limit`; descriptions, not
 /// confirmed): `00d1b4d0` as in `00d1b850` but with no array and no callback and the pointer
-/// cursor and limit given. No profiling records.
-pub fn fn_00d1b930(e: &mut Engine, tree: u32, query: u32, cursor: u32, limit: u32) {
+/// cursor and limit given. No profiling records. Answers what `00d1b4d0` answers (the number of
+/// keys stored at the cursor): nothing after the call writes `EAX`; `00df6850`/`00df6950` add it
+/// to the entry's count and take it off the budget.
+pub fn fn_00d1b930(e: &mut Engine, tree: u32, query: u32, cursor: u32, limit: u32) -> u32 {
+    // 00d1b997..00d1b9a3: `CALL 00d1b4d0; ADD ESP,0x28; POP ESI; MOV ESP,EBP; POP EBP; RET`.
     e.with_stack(0x20, |e, frame| {
         let f = frame.addr();
         tree_vectors_00d1b7f0(e, tree, f);
@@ -385,8 +391,8 @@ pub fn fn_00d1b930(e: &mut Engine, tree: u32, query: u32, cursor: u32, limit: u3
             0,
             cursor,
             limit,
-        );
-    });
+        )
+    })
 }
 
 // Translated from 00d1b9b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -426,7 +432,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d1_b4d0, fn_00d1b4d0(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
         entry!(0x00d1_b7f0, fn_00d1b7f0(u32, u32, u32)),
         entry!(0x00d1_b850, fn_00d1b850(u32, u32, u32)),
-        entry!(0x00d1_b930, fn_00d1b930(u32, u32, u32, u32)),
+        entry!(0x00d1_b930, fn_00d1b930(u32, u32, u32, u32) -> u32),
         entry!(0x00d1_b9b0, fn_00d1b9b0(u32, u32, u32)),
     ]
 }
@@ -664,8 +670,8 @@ mod havok_a04_tests {
                 )
                 .u32();
             assert_eq!(keys(&e, out), expected(case), "bounds {low}, {high}");
-            // The last record looked at: record 0 alone for the first child, record 2 otherwise.
-            assert_eq!(last, if case == [0, 9] { KEYS[0] } else { KEYS[2] });
+            // Keys pushed on the array are not counted: the answer (00d1b7e4) is 0.
+            assert_eq!(last, 0);
             assert_eq!(e.mem.u32(f.router), f.arena);
             // 8 words of stack are 0x80 bytes: every later call of the router sees the bump.
             let cursors = f.cursors.borrow();
@@ -709,7 +715,8 @@ mod havok_a04_tests {
             vec![KEYS[0], KEYS[2]]
         );
         assert_ne!(seen[0].0, 0);
-        assert_eq!(last, KEYS[2]);
+        // Keys given to the callback are not counted: the answer (00d1b7e4) is 0.
+        assert_eq!(last, 0);
         assert_eq!(e.mem.u32(f.router), f.arena);
     }
 
@@ -720,20 +727,31 @@ mod havok_a04_tests {
         let buffer = e.mem.alloc(0x20);
         let cursor = e.mem.alloc(4);
         e.mem.set_u32(cursor, buffer);
-        e.call(
-            0x00d1_b4d0,
-            &args![f.root, f.leaves, f.scale, f.offset, f.query, 8u32, 0u32, 0u32, cursor, 5u32],
-        );
+        let stored = e
+            .call(
+                0x00d1_b4d0,
+                &args![
+                    f.root, f.leaves, f.scale, f.offset, f.query, 8u32, 0u32, 0u32, cursor, 5u32
+                ],
+            )
+            .u32();
         assert_eq!(e.mem.u32(cursor), buffer + 8);
         assert_eq!(e.mem.u32(buffer), KEYS[0]);
         assert_eq!(e.mem.u32(buffer + 4), KEYS[2]);
+        // The answer is the counter of stored keys (00d1b78a..00d1b792, read at 00d1b7e4).
+        assert_eq!(stored, 2);
         // With a limit of one the walk ends after the first key.
         e.mem.set_u32(cursor, buffer);
-        e.call(
-            0x00d1_b4d0,
-            &args![f.root, f.leaves, f.scale, f.offset, f.query, 8u32, 0u32, 0u32, cursor, 1u32],
-        );
+        let stored = e
+            .call(
+                0x00d1_b4d0,
+                &args![
+                    f.root, f.leaves, f.scale, f.offset, f.query, 8u32, 0u32, 0u32, cursor, 1u32
+                ],
+            )
+            .u32();
         assert_eq!(e.mem.u32(cursor), buffer + 4);
+        assert_eq!(stored, 1);
         assert_eq!(e.mem.u32(f.router), f.arena);
     }
 
@@ -747,7 +765,8 @@ mod havok_a04_tests {
                 &args![f.root, f.leaves, f.scale, f.offset, f.query, 8u32, 0u32, 0u32, 0u32, 0u32],
             )
             .u32();
-        assert_eq!(last, KEYS[2]);
+        // Nothing stored at a cursor: the answer (00d1b7e4) is 0.
+        assert_eq!(last, 0);
         assert_eq!(e.mem.u32(f.router), f.arena);
     }
 
@@ -821,6 +840,29 @@ mod havok_a04_tests {
         assert_eq!(e.mem.u32(cursor), buffer + 8);
         assert_eq!(e.mem.u32(buffer + 4), KEYS[2]);
         assert_eq!(*f.cursors.borrow(), vec![f.arena, f.arena + 0x80]);
+    }
+
+    /// 00d1b997..00d1b9a3: nothing after `CALL 00d1b4d0` writes `EAX`, so the answer is the
+    /// number of keys `00d1b4d0` stored at the cursor (what `00df6850` and `00df6950` add to the
+    /// entry and take off the budget).
+    #[test]
+    fn fn_00d1b930_answers_the_number_of_keys_stored() {
+        let mut e = Engine::new();
+        let f = fixture(&mut e, 5, 6);
+        let tree = tree(&mut e, &f, 8);
+        let buffer = e.mem.alloc(0x20);
+        let cursor = e.mem.alloc(4);
+        e.mem.set_u32(cursor, buffer);
+        let stored = e
+            .call(0x00d1_b930, &args![tree, f.query, cursor, 5u32])
+            .u32();
+        assert_eq!(stored, 2);
+        e.mem.set_u32(cursor, buffer);
+        let stored = e
+            .call(0x00d1_b930, &args![tree, f.query, cursor, 1u32])
+            .u32();
+        assert_eq!(stored, 1);
+        assert_eq!(e.mem.u32(cursor), buffer + 4);
     }
 
     #[test]

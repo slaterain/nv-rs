@@ -2417,14 +2417,16 @@ pub fn remove_editor_markers(e: &mut Engine, node: Ptr) -> bool {
             == 0
         {
             if e.global::<u32>(MARKER_CONTROLLER) != 0 {
-                // The game pushes a 0 word for each of these four getters
-                // and never removes it: they take no arguments.
+                // 004b5de5..004b5e5b: the 0 pushed before each getter (which takes no
+                // arguments) is the slot call's second word: slot 0x90 pops two (`RET 8`,
+                // `NiDefaultAVObjectPalette::SetAVObject` 00a2ee40), the name the getter
+                // answers and a null object, which removes that name.
                 let getters: [fn(&mut Engine) -> u32; 4] =
                     [fn_004b5f60, fn_004b5f70, fn_004b5f80, fn_004b5f90];
                 for getter in getters {
                     let value = getter(e);
                     let controller: u32 = e.global(MARKER_CONTROLLER);
-                    e.vcall(controller, 0x90, &args![value]);
+                    e.vcall(controller, 0x90, &args![value, 0u32]);
                 }
             }
             if e.call(WORD_AT_0X18, &args![node]).u32() != 0 {
@@ -6165,10 +6167,11 @@ mod tests {
         assert_eq!(
             *g.virtuals.borrow(),
             vec![
-                (0x90, vec![target, 0xa]),
-                (0x90, vec![target, 0xb]),
-                (0x90, vec![target, 0xc]),
-                (0x90, vec![target, 0xd]),
+                // Each name with a null object (004b5de5: the 0 pushed before the getter).
+                (0x90, vec![target, 0xa, 0]),
+                (0x90, vec![target, 0xb, 0]),
+                (0x90, vec![target, 0xc, 0]),
+                (0x90, vec![target, 0xd, 0]),
                 (0xe8, vec![parent, marker]),
             ]
         );

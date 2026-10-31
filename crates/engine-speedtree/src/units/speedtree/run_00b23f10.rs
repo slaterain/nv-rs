@@ -1132,7 +1132,8 @@ pub fn fn_00b26160(e: &mut Engine, first: u32, middle: u32, last: u32, compariso
 /// `std::make_heap` of the guide sort (the engine map gives it no name; `cdecl`, five arguments,
 /// the third a byte-sized empty comparison object, the last two zeros): for each of the first
 /// half of the guides, from the middle down to the first, a copy of the guide is made
-/// (`00b1ff50`, passed by value in the exe) and sifted down with `00b26b50`.
+/// (`00b1ff50`) in the outgoing argument area of `00b26b50`, which sifts it down and destroys it
+/// there (the copy's proxy names that area).
 pub fn fn_00b26260(
     e: &mut Engine,
     first: u32,
@@ -1146,8 +1147,13 @@ pub fn fn_00b26260(
     while half > 0 {
         half -= 1;
         let element = (half.wrapping_mul(0x38) as u32).wrapping_add(first);
-        let value = guide_copy_words(e, element);
-        fn_00b26b50(e, first, half, count, value, comparison);
+        // 00b2629f: `SUB ESP,0x38; MOV EDX,ESP`: the copy is built in the outgoing argument
+        // area, which stays in place as `00b26b50`'s own `[EBP+0x14]` (its caller's
+        // `ADD ESP,0x48` frees it).
+        e.with_stack(0x38, |e, outgoing| {
+            e.call(GUIDE_COPY_CONSTRUCT, &args![outgoing, element]); // 00b262aa
+            fn_00b26b50(e, first, half, count, outgoing.cast(), comparison); // 00b262be: the area itself
+        });
     }
 }
 
@@ -1376,32 +1382,29 @@ pub fn fn_00b26ab0(e: &mut Engine, first: Ptr<SFrondGuide>, second: Ptr<SFrondGu
     });
 }
 
-/// A copy of the guide at `source`, made the way the exe passes a guide by value: copy
-/// constructed (`00b1ff50`) into the argument slot; returns its 14 words.
-fn guide_copy_words(e: &mut Engine, source: u32) -> [u32; 14] {
-    e.with_stack(0x38, |e, slot| {
-        e.call(GUIDE_COPY_CONSTRUCT, &args![slot, source]);
-        let mut words = [0u32; 14];
-        for (i, word) in words.iter_mut().enumerate() {
-            *word = e.mem.u32(slot.addr() + 4 * i as u32);
-        }
-        words
-    })
+/// Destroys the guide passed by value to `00b26b50` and `00b26e80` where it lies, in the
+/// callee's own argument area (`[EBP+0x14]`), as both do at their end: its vertex vector tidied
+/// (`00b1e970`, `LEA ECX,[EBP+0x14]`) and its proxy (the word at `+0`) deleted.
+fn destroy_guide_argument(e: &mut Engine, value: Ptr<SFrondGuide>) {
+    e.call(VERTEX_VECTOR_TIDY, &args![value]);
+    let proxy = e.mem.u32(value.addr());
+    e.call(OPERATOR_DELETE, &args![proxy]);
 }
 
-/// A guide passed by value to `00b26b50` and `00b26e80`: the 14 words are put into a stack
-/// slot (the callee's argument area), `body` runs with the slot's address, and the guide is
-/// destroyed the way both callees do: its vertex vector tidied (`00b1e970`) and its proxy
-/// (the word at `+0`) deleted.
-fn with_guide_argument(e: &mut Engine, words: [u32; 14], body: impl FnOnce(&mut Engine, u32)) {
-    e.with_stack(0x38, |e, slot| {
+/// Through the uniform ABI the 14 words of a by-value guide arrive as values: they are laid out
+/// in an area that stands for the callee's argument area (`[EBP+0x14]`), and `body` runs on it.
+/// The exe's callers build the copy in that area themselves (`00b262aa`, `00b26c44`,
+/// `00b26ff1`), as `fn_00b26260`, `fn_00b26b50` and `fn_00b26f90` do.
+fn with_guide_words(
+    e: &mut Engine,
+    words: &[u32],
+    body: impl FnOnce(&mut Engine, Ptr<SFrondGuide>),
+) {
+    e.with_stack(0x38, |e, area| {
         for (i, word) in words.iter().enumerate() {
-            e.mem.set_u32(slot.addr() + 4 * i as u32, *word);
+            e.mem.set_u32(area.addr() + 4 * i as u32, *word);
         }
-        body(e, slot.addr());
-        e.call(VERTEX_VECTOR_TIDY, &args![slot]);
-        let proxy = e.mem.u32(slot.addr());
-        e.call(OPERATOR_DELETE, &args![proxy]);
+        body(e, area.cast());
     });
 }
 
@@ -1414,13 +1417,18 @@ fn with_guide_argument(e: &mut Engine, words: [u32; 14], body: impl FnOnce(&mut 
 /// by assigning to it the child with the larger key (the second child unless the first has a
 /// key below it; `00b249d0`), until the hole has no children left (a lone last child is
 /// assigned too); then pushes `value` up from the hole (`00b26e80`, with a fresh copy of
-/// `value`). `value` is destroyed at the end (`00b1e970` and its proxy deleted).
+/// `value` built in its argument area). `value` is destroyed at the end (`00b1e970` and its
+/// proxy deleted).
+///
+/// `value` is the address of the argument area that holds the by-value guide (the exe's
+/// `[EBP+0x14]`): the caller built the copy there, so the proxy of its vertex vector names that
+/// area, and it is worked on and destroyed in place.
 pub fn fn_00b26b50(
     e: &mut Engine,
     first: u32,
     hole: i32,
     bottom: i32,
-    value: [u32; 14],
+    value: Ptr<SFrondGuide>,
     comparison: u8,
 ) {
     let guide = |index: i32| (index.wrapping_mul(0x38) as u32).wrapping_add(first);
@@ -1445,10 +1453,14 @@ pub fn fn_00b26b50(
         );
         hole = bottom.wrapping_sub(1);
     }
-    with_guide_argument(e, value, |e, argument| {
-        let copy = guide_copy_words(e, argument);
-        fn_00b26e80(e, first, hole, top, copy, comparison);
+    // 00b26c38: `SUB ESP,0x38; MOV ECX,ESP`: the copy of `value` is built in the outgoing
+    // argument area, which stays in place as `00b26e80`'s own `[EBP+0x14]` (`ADD ESP,0x48`
+    // at 00b26c5d frees it).
+    e.with_stack(0x38, |e, outgoing| {
+        e.call(GUIDE_COPY_CONSTRUCT, &args![outgoing, value]); // 00b26c44: from [EBP+0x14]
+        fn_00b26e80(e, first, hole, top, outgoing.cast(), comparison); // 00b26c58: the area itself
     });
+    destroy_guide_argument(e, value); // 00b26c6e..00b26c87: `value` at [EBP+0x14] itself
 }
 
 // Translated from 00b26ca0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1513,29 +1525,33 @@ pub fn fn_00b26db0(
 /// (`(hole - 1) / 2`, the fuzzy surface area at `+0x2C`) is greater than `value`'s, the parent
 /// is assigned to the hole (`00b249d0`) and the hole moves to it; then `value` is assigned to
 /// the hole and destroyed (`00b1e970`, its proxy deleted).
+///
+/// `value` is the address of the argument area that holds the by-value guide (the exe's
+/// `[EBP+0x14]`): the caller built the copy there (`00b26c38`..`00b26c44`), so the proxy of its
+/// vertex vector names that area, and it is read and destroyed in place.
 pub fn fn_00b26e80(
     e: &mut Engine,
     first: u32,
     hole: i32,
     top: i32,
-    value: [u32; 14],
+    value: Ptr<SFrondGuide>,
     _comparison: u8,
 ) {
     let guide = |index: i32| (index.wrapping_mul(0x38) as u32).wrapping_add(first);
-    with_guide_argument(e, value, |e, argument| {
-        let mut hole = hole;
-        let mut parent = hole.wrapping_sub(1) / 2;
-        while top < hole {
-            if e.mem.f32(argument + 0x2C) < e.mem.f32(guide(parent).wrapping_add(0x2C)) {
-                fn_00b249d0(e, Ptr::new(guide(hole)), Ptr::new(guide(parent)));
-                hole = parent;
-                parent = hole.wrapping_sub(1) / 2;
-            } else {
-                break;
-            }
+    let argument = value.addr(); // [EBP+0x14]: the guide is worked on where the caller built it
+    let mut hole = hole;
+    let mut parent = hole.wrapping_sub(1) / 2;
+    while top < hole {
+        if e.mem.f32(argument + 0x2C) < e.mem.f32(guide(parent).wrapping_add(0x2C)) {
+            fn_00b249d0(e, Ptr::new(guide(hole)), Ptr::new(guide(parent)));
+            hole = parent;
+            parent = hole.wrapping_sub(1) / 2;
+        } else {
+            break;
         }
-        fn_00b249d0(e, Ptr::new(guide(hole)), Ptr::new(argument));
-    });
+    }
+    fn_00b249d0(e, Ptr::new(guide(hole)), value); // 00b26f2f: `LEA EAX,[EBP+0x14]`
+    destroy_guide_argument(e, value); // 00b26f4f..00b26f6e: `value` at [EBP+0x14] itself
 }
 
 // Translated from 00b26f90 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1545,16 +1561,22 @@ pub fn fn_00b26e80(
 /// the third a byte-sized empty comparison object, the last not read): takes a copy of the last
 /// guide (`00b1ff50`), assigns the first guide to the last slot (`00b249d0`) and sifts the copy
 /// down from the root over the shortened range (`00b26b50`, with a fresh copy of it passed by
-/// value). The temporary is tidied (`00b1e970`) and its proxy deleted.
+/// value, built in `00b26b50`'s argument area). The temporary is tidied (`00b1e970`) and its
+/// proxy deleted.
 pub fn fn_00b26f90(e: &mut Engine, first: u32, last: u32, comparison: u8, _unused_3: u32) {
     let last_guide = last.wrapping_sub(0x38);
     e.with_stack(0x38, |e, temporary| {
         let temp = temporary.addr();
         e.call(GUIDE_COPY_CONSTRUCT, &args![temp, last_guide]);
         fn_00b249d0(e, Ptr::new(last_guide), Ptr::new(first));
-        let copy = guide_copy_words(e, temp);
-        let count = element_count(first, last_guide, 0x38) as i32;
-        fn_00b26b50(e, first, 0, count, copy, comparison);
+        // 00b26fe5: `SUB ESP,0x38; MOV ECX,ESP`: the copy is built in the outgoing argument
+        // area, which stays in place as `00b26b50`'s own `[EBP+0x14]` (`ADD ESP,0x48` at
+        // 00b27019 frees it).
+        e.with_stack(0x38, |e, outgoing| {
+            e.call(GUIDE_COPY_CONSTRUCT, &args![outgoing, temp]); // 00b26ff1
+            let count = element_count(first, last_guide, 0x38) as i32;
+            fn_00b26b50(e, first, 0, count, outgoing.cast(), comparison); // 00b27014: the area itself
+        });
         e.call(VERTEX_VECTOR_TIDY, &args![temp]);
         let proxy = e.mem.u32(temp);
         e.call(OPERATOR_DELETE, &args![proxy]);
@@ -2838,20 +2860,22 @@ fn copy_leaf_floats(e: &mut Engine, lod: u32, list: u32, array: u32, offset: u32
 }
 
 /// The entry of `00b26b50` (`cdecl`: the first guide, the hole and bottom indices, the guide
-/// passed by value as 14 words and the comparison byte, 18 words in all).
+/// passed by value as 14 words and the comparison byte, 18 words in all): the guide's words are
+/// laid out in an area standing for its `[EBP+0x14]` ([`with_guide_words`]).
 fn entry_00b26b50(e: &mut Engine, a: &[u32]) -> Ret {
-    let mut value = [0u32; 14];
-    value.copy_from_slice(&a[3..17]);
-    fn_00b26b50(e, a[0], a[1] as i32, a[2] as i32, value, a[17] as u8);
+    with_guide_words(e, &a[3..17], |e, value| {
+        fn_00b26b50(e, a[0], a[1] as i32, a[2] as i32, value, a[17] as u8);
+    });
     Ret::default()
 }
 
 /// The entry of `00b26e80` (`cdecl`: the first guide, the hole and top indices, the guide
-/// passed by value as 14 words and the comparison byte, 18 words in all).
+/// passed by value as 14 words and the comparison byte, 18 words in all): the guide's words are
+/// laid out in an area standing for its `[EBP+0x14]` ([`with_guide_words`]).
 fn entry_00b26e80(e: &mut Engine, a: &[u32]) -> Ret {
-    let mut value = [0u32; 14];
-    value.copy_from_slice(&a[3..17]);
-    fn_00b26e80(e, a[0], a[1] as i32, a[2] as i32, value, a[17] as u8);
+    with_guide_words(e, &a[3..17], |e, value| {
+        fn_00b26e80(e, a[0], a[1] as i32, a[2] as i32, value, a[17] as u8);
+    });
     Ret::default()
 }
 
@@ -3897,8 +3921,7 @@ mod tests {
         let base = guides(&mut e, &[1.0, 3.0, 2.0, 5.0, 4.0, 0.0]);
         let value = argument_guide(&mut e, 0.0);
         let proxy = e.mem.u32(value);
-        let words_in = guide_words_of(&mut e, value);
-        fn_00b26e80(&mut e, base, 5, 0, words_in, 0);
+        fn_00b26e80(&mut e, base, 5, 0, Ptr::new(value), 0);
         assert_eq!(keys(&e, base, 6), vec![0.0, 3.0, 1.0, 5.0, 4.0, 2.0]);
         // The by-value argument was destroyed: its proxy block is gone.
         assert_eq!(e.mem.block_size(proxy), None);
@@ -3917,8 +3940,7 @@ mod tests {
         let mut e = engine();
         let base = guides(&mut e, &[1.0, 3.0, 2.0, 5.0, 4.0, 6.0]);
         let value = argument_guide(&mut e, 10.0);
-        let words_in = guide_words_of(&mut e, value);
-        fn_00b26b50(&mut e, base, 0, 6, words_in, 0);
+        fn_00b26b50(&mut e, base, 0, 6, Ptr::new(value), 0);
         assert_eq!(keys(&e, base, 6), vec![2.0, 3.0, 6.0, 5.0, 4.0, 10.0]);
         // Through the entry, with a heap that has a smaller second child somewhere.
         let base = guides(&mut e, &[9.0, 3.0, 4.0, 8.0, 7.0, 6.0, 5.0]);
@@ -3960,6 +3982,36 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x00b2_6ca0, &args![single, single + 0x38, 0u32]);
         assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    /// The guides the heap routines pass by value are copy constructed in the callee's argument
+    /// area and worked on and destroyed there (00b26fe5, 00b26c38, 00b2629f): every guide the
+    /// vertex tidy (00b1e970) runs on carries a proxy that names that guide. Stack locals are
+    /// separate blocks that are never handed out again here (the freed-block check, reporting
+    /// only), so a guide built in one slot and moved into another would name its old slot.
+    #[test]
+    fn heap_guides_passed_by_value_stay_where_they_were_built() {
+        let mut e = engine();
+        e.mem.enable_freed_check(false);
+        let destroyed: Rc<RefCell<Vec<(u32, u32)>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = destroyed.clone();
+        e.register_double(VERTEX_VECTOR_TIDY, move |e, a| {
+            let proxy = e.mem.u32(a[0]);
+            sink.borrow_mut().push((a[0], e.mem.u32(proxy)));
+            Ret::default()
+        });
+        // Popping (00b26f90): the copy for 00b26b50, the one 00b26b50 makes for 00b26e80, and
+        // the temporary.
+        let base = guides(&mut e, &[1.0, 3.0, 2.0]);
+        e.call(0x00b2_6ca0, &args![base, base + 0x38 * 3, 0u32]);
+        // Making a heap (00b26260): the copy for 00b26b50 and the one it makes for 00b26e80.
+        let base = guides(&mut e, &[3.0, 1.0, 2.0]);
+        e.call(0x00b2_6260, &args![base, base + 0x38 * 3, 0u32, 0u32, 0u32]);
+        let destroyed = destroyed.borrow();
+        assert_eq!(destroyed.len(), 5, "{destroyed:x?}");
+        for (guide, owner) in destroyed.iter() {
+            assert_eq!(owner, guide, "{destroyed:x?}");
+        }
     }
 
     #[test]

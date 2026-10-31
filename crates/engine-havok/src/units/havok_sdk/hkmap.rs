@@ -659,13 +659,15 @@ pub fn hk_map_base_u64_get_with_default(
 /// `hkMapBase<unsigned long,unsigned long,hkMapOperations<unsigned long>>::findOrInsertKey` (Xbox
 /// PDB), `RET 0xc` `(allocator, key, value)`: grows the table like `insert` when needed, then
 /// stores the pair only when the key is not in the map yet (an equal key keeps its value).
+/// Answers the key's slot (the iterator): `EAX` holds it at both `RET 0xc`s, and the one
+/// caller, `findOrCopy`, counts the slot's value up through it (`00dc46e8`).
 pub fn hk_map_base_u32_find_or_insert_key(
     e: &mut Engine,
     this: Ptr<HkMapBase>,
     allocator: Ptr,
     key: u32,
     value: u32,
-) {
+) -> u32 {
     let count = (e.get(this, HkMapBase::m_numElems) & 0x7fff_ffff) as i32;
     let mask = e.get(this, HkMapBase::m_hashMod);
     if count.wrapping_add(count) > mask {
@@ -676,7 +678,7 @@ pub fn hk_map_base_u32_find_or_insert_key(
     let slots = e.get(this, HkMapBase::m_elem);
     let mut slot = hash(key) & mask;
     if e.mem.u32(slots.wrapping_add(slot.wrapping_mul(8))) == key {
-        return;
+        return slot; // 00cb1f81 JZ 00cb1fa9 .. 00cb1fac RET 0xc: EAX is the home slot
     }
     loop {
         if e.mem.u32(slots.wrapping_add(slot.wrapping_mul(8))) == EMPTY {
@@ -686,11 +688,11 @@ pub fn hk_map_base_u32_find_or_insert_key(
                 .set_u32(slots.wrapping_add(slot.wrapping_mul(8)) + 4, value);
             let count_word = e.get(this, HkMapBase::m_numElems);
             e.set(this, HkMapBase::m_numElems, count_word.wrapping_add(1));
-            return;
+            return slot; // 00cb1f99 .. 00cb1fac RET 0xc: EAX is still the slot
         }
         slot = slot.wrapping_add(1) & mask;
         if e.mem.u32(slots.wrapping_add(slot.wrapping_mul(8))) == key {
-            return;
+            return slot; // 00cb1f91 JNZ not taken .. 00cb1f96 RET 0xc: EAX is the slot
         }
     }
 }
@@ -797,9 +799,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00cb1cb0,
             hk_map_base_u64_get_with_default(Ptr<HkMapBase>, u32, u32, u32, u32) -> u64
         ),
+        // Answers the slot: EAX at both RET 0xc (00cb1f96, 00cb1fac).
         entry!(
             0x00cb1f40,
-            hk_map_base_u32_find_or_insert_key(Ptr<HkMapBase>, Ptr, u32, u32)
+            hk_map_base_u32_find_or_insert_key(Ptr<HkMapBase>, Ptr, u32, u32) -> u32
         ),
         entry!(0x00cb1fb0, fn_00cb1fb0(Ptr<HkMapBase>, u32) -> u32),
         entry!(
@@ -1315,6 +1318,37 @@ mod instance_tests {
         // Enough keys grow the table like insert.
         for i in 0..4u32 {
             e.call(0x00cb_1f40, &args![map, allocator, 0x500 + 0x10 * i, i]);
+        }
+        assert_eq!(e.get(map, HkMapBase::m_hashMod), 15);
+    }
+
+    #[test]
+    fn find_or_insert_key_answers_the_slot_00cb1f40() {
+        let (mut e, allocator) = engine();
+        let (map, _) = map(&mut e, 8);
+        let home = hash(0x100) & 7;
+        let next = (home + 1) & 7;
+        // Inserted at the home slot (00cb1fac), found there (00cb1f81); a colliding key is
+        // inserted one slot on, then found after probing (00cb1f96).
+        for (key, value, slot) in [
+            (0x100u32, 1u32, home),
+            (0x100, 2, home),
+            (0x101, 3, next),
+            (0x101, 4, next),
+        ] {
+            let answer = e
+                .call(0x00cb_1f40, &args![map, allocator, key, value])
+                .u32();
+            assert_eq!(answer, slot);
+        }
+        let slots = e.get(map, HkMapBase::m_elem);
+        assert_eq!(e.mem.u32(slots + 8 * next + 4), 3);
+        // The answer indexes the pair (`findOrCopy` counts its value up through it, 00dc46e8),
+        // also in a table the call has just grown.
+        for key in [0x500u32, 0x510, 0x520, 0x530] {
+            let answer = e.call(0x00cb_1f40, &args![map, allocator, key, 0u32]).u32();
+            let slots = e.get(map, HkMapBase::m_elem);
+            assert_eq!(e.mem.u32(slots + 8 * answer), key);
         }
         assert_eq!(e.get(map, HkMapBase::m_hashMod), 15);
     }

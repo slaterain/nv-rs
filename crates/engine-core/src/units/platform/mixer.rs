@@ -90,6 +90,182 @@ pub struct Voice {
     pub spatial: Option<(f32, f32)>,
     /// The distortion effect's chain, for a buffer with it: `data` is then its processed copy.
     pub fx: Option<Box<super::dsfx::Chain>>,
+    /// A stream whose samples another thread decodes ([`Feed`], `super::dshow`'s music): `data`
+    /// has the stream's length, and holds its samples in `fed` (frames taken from the feed);
+    /// what is read elsewhere is taken first, and waited for if it is not decoded yet.
+    pub feed: Option<std::sync::Arc<Feed>>,
+    pub fed: std::ops::Range<usize>,
+}
+
+/// The most frames a fed voice takes from its [`Feed`] at a time (about 1.4 s at 48000 Hz).
+const TAKE: usize = 1 << 16;
+
+/// A stream's samples while another thread decodes them (`super::dshow`'s music, which Windows'
+/// MP3 Decoder DMO decodes while its graph runs): room for all of its frames (`frame_bytes`
+/// each), the runs of them decoded so far, and the frame a reader is waiting for. A reader that
+/// needs frames not decoded yet asks for them and waits until they are ([`Feed::take`]); the
+/// decoder decodes them next, so what is heard is always the stream's own samples.
+#[derive(Debug, Default)]
+pub struct Feed {
+    frames: usize,
+    frame_bytes: usize,
+    state: std::sync::Mutex<Fed>,
+    changed: std::sync::Condvar,
+}
+
+#[derive(Debug, Default)]
+struct Fed {
+    data: Vec<u8>,
+    /// The runs of frames decoded, in order and apart.
+    runs: Vec<std::ops::Range<usize>>,
+    /// The frame to decode next: one a reader waits for, or where the stream was sent.
+    wanted: Option<usize>,
+    /// The decoder waits before it starts (the tests' switch, [`Feed::hold`]).
+    held: bool,
+    /// Nothing holds the samples any more: the decoder stops.
+    let_go: bool,
+    /// The decoder stopped (all of it decoded, let go, or failed).
+    ended: bool,
+}
+
+impl Feed {
+    /// Room for `frames` frames of `frame_bytes` bytes, none of them decoded.
+    pub fn new(frames: usize, frame_bytes: usize) -> Feed {
+        Feed {
+            frames,
+            frame_bytes,
+            state: std::sync::Mutex::new(Fed {
+                data: vec![0; frames * frame_bytes],
+                ..Fed::default()
+            }),
+            changed: std::sync::Condvar::new(),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Fed> {
+        // A decoder that failed passes its panic on elsewhere; the samples stay usable.
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn wait<'a>(&self, f: std::sync::MutexGuard<'a, Fed>) -> std::sync::MutexGuard<'a, Fed> {
+        self.changed.wait(f).unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The stream's frames.
+    pub fn frames(&self) -> usize {
+        self.frames
+    }
+
+    /// Bytes a frame (all its channels).
+    pub fn frame_bytes(&self) -> usize {
+        self.frame_bytes
+    }
+
+    /// Holds the decoder at its start ([`Feed::started`]) until [`Feed::start`].
+    pub fn hold(&self) {
+        self.lock().held = true;
+    }
+
+    /// Lets a held decoder start.
+    pub fn start(&self) {
+        self.lock().held = false;
+        self.changed.notify_all();
+    }
+
+    /// The decoder's start: waits while it is held; false when the samples were let go.
+    pub fn started(&self) -> bool {
+        let mut f = self.lock();
+        while f.held && !f.let_go {
+            f = self.wait(f);
+        }
+        !f.let_go
+    }
+
+    /// Nothing holds the samples any more (the graph was let go): the decoder stops.
+    pub fn let_go(&self) {
+        self.lock().let_go = true;
+        self.changed.notify_all();
+    }
+
+    /// Whether the samples were let go.
+    pub fn is_let_go(&self) -> bool {
+        self.lock().let_go
+    }
+
+    /// The decoder gives the samples of frames `at..` (`bytes`, whole frames).
+    pub fn put(&self, at: usize, bytes: &[u8]) {
+        let n = (bytes.len() / self.frame_bytes).min(self.frames.saturating_sub(at));
+        if n == 0 {
+            return;
+        }
+        let mut f = self.lock();
+        let from = at * self.frame_bytes;
+        f.data[from..from + n * self.frame_bytes].copy_from_slice(&bytes[..n * self.frame_bytes]);
+        let runs = &mut f.runs;
+        // The runs that touch the new one become one with it.
+        let mut new = at..at + n;
+        let first = runs.partition_point(|r| r.end < new.start);
+        let mut last = first;
+        while last < runs.len() && runs[last].start <= new.end {
+            new = new.start.min(runs[last].start)..new.end.max(runs[last].end);
+            last += 1;
+        }
+        runs.splice(first..last, [new]);
+        drop(f);
+        self.changed.notify_all();
+    }
+
+    /// The decoder takes the frame to decode next, if one was asked for.
+    pub fn wanted(&self) -> Option<usize> {
+        self.lock().wanted.take()
+    }
+
+    /// The decoder stopped: readers no longer wait.
+    pub fn end(&self) {
+        self.lock().ended = true;
+        self.changed.notify_all();
+    }
+
+    /// The stream goes on from frame `at` (a `Run` or a seek there): the decoder decodes there
+    /// next if it has not yet.
+    pub fn want(&self, at: usize) {
+        self.lock().wanted = Some(at);
+    }
+
+    /// The runs of frames decoded so far.
+    pub fn runs(&self) -> Vec<std::ops::Range<usize>> {
+        self.lock().runs.clone()
+    }
+
+    /// Whether frame `at` is decoded.
+    pub fn decoded(&self, at: usize) -> bool {
+        self.lock().runs.iter().any(|r| r.contains(&at))
+    }
+
+    /// Frames `at..` as far as they are decoded (at most `most` of them) copied to the same
+    /// place in `to`, which has the stream's length; if frame `at` is not decoded yet, asked for
+    /// and waited for first. Answers the frames copied: none when the decoder stopped without
+    /// it (it failed; its panic goes on to the game's next call on the graph, `super::dshow`).
+    pub fn take(&self, at: usize, to: &mut [u8], most: usize) -> std::ops::Range<usize> {
+        if at >= self.frames {
+            return at..at;
+        }
+        let mut f = self.lock();
+        loop {
+            let i = f.runs.partition_point(|r| r.end <= at);
+            if let Some(run) = f.runs.get(i).filter(|r| r.start <= at) {
+                let end = run.end.min(at.saturating_add(most));
+                let bytes = at * self.frame_bytes..end * self.frame_bytes;
+                to[bytes.clone()].copy_from_slice(&f.data[bytes]);
+                return at..end;
+            }
+            if f.ended {
+                return at..at;
+            }
+            f.wanted = Some(at);
+            f = self.wait(f);
+        }
+    }
 }
 
 impl Voice {
@@ -109,7 +285,16 @@ impl Voice {
             converter: None,
             spatial: None,
             fx: None,
+            feed: None,
+            fed: 0..0,
         }
+    }
+
+    /// A voice of the 16-bit stream `feed` decodes, not playing.
+    pub fn fed_by(feed: std::sync::Arc<Feed>, channels: u16) -> Voice {
+        let mut v = Voice::new(vec![0; feed.frames() * feed.frame_bytes()], channels, 16);
+        v.feed = Some(feed);
+        v
     }
 
     fn frames(&self) -> usize {
@@ -143,6 +328,21 @@ impl Voice {
     }
 }
 
+/// For a fed voice ([`Voice::feed`], its parts): makes frame `at` of `data` the stream's own,
+/// taking it from the feed with those after it, and waiting for it if it is not decoded yet.
+fn take_fed(
+    feed: &Option<std::sync::Arc<Feed>>,
+    fed: &mut std::ops::Range<usize>,
+    data: &mut [u8],
+    at: usize,
+) {
+    if let Some(feed) = feed {
+        if !fed.contains(&at) {
+            *fed = feed.take(at, data, TAKE);
+        }
+    }
+}
+
 /// Adds `voices` into `out` (interleaved stereo, `out.len() / 2` frames). A voice with no device
 /// rate (the tests' voices) is on the exact path, one frame per output frame; every other goes
 /// through DirectSound's converter (`super::resampler`, [`Converted`]) in 10 ms periods, the
@@ -152,6 +352,13 @@ impl Voice {
 /// ([`super::dsfx::Chain::keep_ahead`]). A non-looping voice stops at its end; a voice whose
 /// converter cannot be made (another build of `RESAMPLEDMO.DLL`) is not heard. `voices` come
 /// newest first (the measured order of the sum, module documentation).
+///
+/// A fed voice ([`Voice::feed`]) reads only frames its feed has decoded: one it reads that is
+/// not decoded yet is asked for and waited for ([`Feed::take`]), the decoder going there next
+/// (`super::dshow`, which decodes it bit for bit as from the stream's start). Host code: on
+/// Windows the graph's renderer plays what its decoder has given (its position moves from 36 to
+/// 58 ms after `Run`, `super::dshow`); the wait here, only where a stream plays from a place
+/// not decoded yet, lasts while the decoder decodes that place and the few frames before it.
 pub fn render(voices: &mut [&mut Voice], out: &mut [f32]) {
     for v in voices.iter_mut() {
         let Some(at) = v.position else {
@@ -251,7 +458,8 @@ fn render_converted(v: &mut Voice, out: &mut [f32]) {
                 c.converter.retune(v.rate, v.device);
                 c.rate = v.rate;
             }
-            let (data, bits, origin, base) = (&v.data, v.bits, c.origin, c.base);
+            let (bits, origin, base) = (v.bits, c.origin, c.base);
+            let (data, feed, fed) = (&mut v.data, &v.feed, &mut v.fed);
             let mut input = |k: u64, f: &mut [f32]| {
                 let at = origin as u64 + base + k;
                 let at = if looping {
@@ -259,6 +467,9 @@ fn render_converted(v: &mut Voice, out: &mut [f32]) {
                 } else {
                     (at < frames as u64).then_some(at as usize)
                 };
+                if let Some(at) = at {
+                    take_fed(feed, fed, data, at);
+                }
                 for (ch, x) in f.iter_mut().enumerate() {
                     *x = at.map_or(0.0, |at| sample(data, bits, at * channels + ch));
                 }
@@ -304,6 +515,7 @@ fn render_exact(v: &mut Voice, out: &mut [f32]) {
                 break;
             }
         }
+        take_fed(&v.feed, &mut v.fed, &mut v.data, at);
         let (l, r) = if v.channels == 1 {
             let s = sample(&v.data, v.bits, at);
             (s, s)
@@ -850,6 +1062,87 @@ mod tests {
         // 441 frames at 0.91875 a frame: 480 output frames, then silence.
         assert_eq!(v.position, None);
         assert_eq!(out[2 * 500], 0.0);
+    }
+
+    /// A feed keeps the runs of frames decoded apart and in order, joining those that touch;
+    /// a reader takes from a run as much as it holds (or as it asks); a frame never decoded,
+    /// once the decoder stopped, is none.
+    #[test]
+    fn a_feed_keeps_the_runs_decoded() {
+        let feed = Feed::new(100, 2);
+        let bytes: Vec<u8> = (0..=255).cycle().take(200).collect();
+        feed.put(40, &bytes[80..120]);
+        feed.put(0, &bytes[..20]);
+        feed.put(60, &bytes[120..140]);
+        feed.put(95, &bytes[190..200]);
+        feed.put(99, &bytes[198..200]);
+        assert_eq!(feed.runs(), [0..10, 40..70, 95..100]);
+        assert!(feed.decoded(69) && !feed.decoded(70));
+        let mut to = vec![0u8; 200];
+        assert_eq!(feed.take(45, &mut to, 1000), 45..70);
+        assert_eq!(to[90..140], bytes[90..140]);
+        assert!(to[..90].iter().chain(&to[140..]).all(|&b| b == 0));
+        assert_eq!(feed.take(45, &mut to, 10), 45..55);
+        feed.put(10, &bytes[20..80]);
+        assert_eq!(feed.runs(), [0..70, 95..100]);
+        feed.end();
+        assert_eq!(feed.take(80, &mut to, 10), 80..80, "the decoder stopped");
+        assert_eq!(feed.take(100, &mut to, 10), 100..100, "past the end");
+        assert_eq!(feed.wanted(), None);
+    }
+
+    /// A fed voice plays the stream's own samples bit for bit, the same as a voice of all of
+    /// them, on the exact path and through a converter: where it reads frames not decoded yet
+    /// it asks for them and waits until they are. Here the decoder (on a thread of its own)
+    /// gives only what it is asked for, so every frame from where the voice starts is waited
+    /// for.
+    #[test]
+    fn a_fed_voice_waits_for_the_samples_it_reads() {
+        let all = signal(22050);
+        for (rate, device) in [(0, 0), (44100, 48000)] {
+            let mut plain = Voice::new(all.clone(), 1, 16);
+            (plain.rate, plain.device, plain.apl) = (rate, device, true);
+            plain.start(5000);
+            let feed = std::sync::Arc::new(Feed::new(22050, 2));
+            feed.put(0, &all[..2 * 3000]);
+            let mut fed = Voice::fed_by(feed.clone(), 1);
+            (fed.rate, fed.device, fed.apl) = (rate, device, true);
+            fed.start(5000);
+            let decoder = {
+                let (feed, all) = (feed.clone(), all.clone());
+                std::thread::spawn(move || {
+                    let mut asked = 0;
+                    while !feed.is_let_go() {
+                        match feed.wanted() {
+                            Some(at) if !feed.decoded(at) => {
+                                let end = (at + 1152).min(22050);
+                                feed.put(at, &all[2 * at..2 * end]);
+                                asked += 1;
+                            }
+                            _ => std::thread::yield_now(),
+                        }
+                    }
+                    asked
+                })
+            };
+            let mut a = vec![0f32; 2 * 24480];
+            let mut b = vec![0f32; 2 * 24480];
+            for (pa, pb) in a.chunks_mut(2 * 1000).zip(b.chunks_mut(2 * 1000)) {
+                render(&mut [&mut plain], pa);
+                render(&mut [&mut fed], pb);
+            }
+            feed.let_go();
+            let asked = decoder.join().expect("the decoder");
+            assert_eq!(
+                asked,
+                (22050 - 5000 + 1151) / 1152,
+                "frames 5000.. asked for"
+            );
+            let bits = |v: &[f32]| v.iter().map(|s| s.to_bits()).collect::<Vec<_>>();
+            assert!(bits(&a) == bits(&b), "{rate} on {device}");
+            assert!(a.iter().any(|&s| s != 0.0));
+            assert_eq!((plain.position, fed.position), (None, None));
+        }
     }
 
     /// `scripts/dsmix-measure`'s test signal: `frames` 16-bit mono frames.

@@ -990,8 +990,11 @@ pub fn item_mod_menu_init_item_mod_menu(e: &mut Engine, item: u32, flag: u8) {
         let tile = e.mem.u32(me(e) + 0x3c);
         e.call(SET_STRING_TRAIT, &args![tile, title, text, 1u32]);
         let object = e.call(ITEM_OBJECT, &args![mod_item(e)]).u32();
+        // 00784856: the cdecl `006450f0` reads four words (its [EBP+0x14] too); the fourth is
+        // the 0 pushed at 0078483d (ADD ESP,0xc pops only three, the slot is reused for
+        // `004bd510`'s first word).
         let damage = e
-            .call(CALC_WEAPON_DAMAGE, &args![object, ratio, item])
+            .call(CALC_WEAPON_DAMAGE, &args![object, ratio, item, 0u32])
             .f64();
         let rounded = e
             .call(
@@ -1721,5 +1724,55 @@ mod n054_tests {
         e.call(0x0078_4710, &args![0u32, 1u32]);
         assert_eq!(e.global::<u8>(FLAG_011D9F40), 0);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    /// A weapon (form type 0x28): `CalcWeaponDamageForDisplay` gets four words, the last
+    /// the 0 the exe pushes at 0078483d, and its answer is rounded to a multiple of 1.0.
+    #[test]
+    fn init_for_a_weapon_gives_the_damage_display_four_words() {
+        let mut e = Engine::new();
+        let this = menu(&mut e);
+        pages(&mut e, &[FLAG_011D9F40]);
+        e.mem.set_f64(FULL_HEALTH, 100.0);
+        e.set_global(MOD_ITEM, 0x7000u32);
+        answer_st0(&mut e, ITEM_GET_HEALTH, 50.0);
+        answer(&mut e, ITEM_OBJECT, 0x7100);
+        answer(&mut e, FORM_TYPE, 0x28);
+        answer(&mut e, SETTING_STRING, 0x5700);
+        answer_st0(&mut e, CALC_WEAPON_DAMAGE, 20.0);
+        answer_st0(&mut e, ROUND_TO_MULTIPLE, 21.0);
+        answer(&mut e, GET_NAME, 0x5800);
+        real_ftol(&mut e);
+        answer(&mut e, 0x00c1_0004, 0x900);
+        stub(
+            &mut e,
+            &[
+                SET_FLOAT_TRAIT,
+                SET_TRAIT_FROM_INT,
+                SET_STRING_TRAIT,
+                LIST_SORT,
+                0x00c1_0020,
+                0x00c0_0010,
+            ],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0078_4710, &args![0u32, 0u32]);
+        assert_eq!(
+            calls_to(&e, CALC_WEAPON_DAMAGE),
+            vec![vec![0x7100, 0.5f32.to_bits(), 0, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, ROUND_TO_MULTIPLE),
+            vec![vec![20.0f32.to_bits(), 1.0f32.to_bits()]]
+        );
+        let value = e.global::<u32>(TRAIT_FROM_NAME_0106ED18);
+        assert_eq!(
+            calls_to(&e, SET_TRAIT_FROM_INT),
+            vec![vec![0x110, 0xfa3, 1], vec![0x114, value, 21]]
+        );
+        assert_eq!(
+            calls_to(&e, 0x00c0_0010),
+            vec![vec![this.addr(), 0xf, 0x900]]
+        );
     }
 }

@@ -349,12 +349,8 @@ pub fn fn_00b32780(e: &mut Engine, this: Ptr<StlVector>, count: u32, value: u32)
     construct_vectors(e, this, count, value, fn_00b360a0);
 }
 
-/// The `resize(new_size, value)` of a vector of vectors, the value passed by value (six
-/// words, a vector, which the callee tears down at its end: its storage tidied with the
-/// element's tidy and its proxy freed). Growing inserts the missing copies with the element's
-/// insert (`this`, the end iterator, the count, the address of the value); shrinking advances
-/// the iterator at the first element by the new size (`00b16890`) and erases from there to the
-/// end.
+/// [`resize_vectors_at`] with the value as the uniform ABI hands it, six words: they are laid
+/// out in an area that stands for the callee's argument area (`[EBP+0xC]`..`[EBP+0x20]`).
 fn resize_vectors(
     e: &mut Engine,
     element: &VectorElement,
@@ -362,64 +358,79 @@ fn resize_vectors(
     new_size: u32,
     value: [u32; 6],
 ) {
-    let v = this.addr();
     e.with_stack(0x18, |e, slot| {
         for (i, word) in value.iter().enumerate() {
             e.mem.set_u32(slot.addr() + 4 * i as u32, *word);
         }
-        if vector_len(e, v, 0x18) < new_size {
-            let last = last_of(e, v);
-            let proxy = checked_iterator(e, v, last);
-            let count = new_size.wrapping_sub(vector_len(e, v, 0x18));
-            e.call(element.insert_n, &args![this, proxy, last, count, slot]);
-        } else if new_size < vector_len(e, v, 0x18) {
-            let last = last_of(e, v);
-            let last_proxy = checked_iterator(e, v, last);
-            let first = first_of(e, v);
-            let first_proxy = checked_iterator(e, v, first);
-            let advanced = e.with_stack(8, |e, pair| {
-                e.mem.set_u32(pair.addr(), first_proxy);
-                e.mem.set_u32(pair.addr() + 4, first);
-                e.call(ADVANCE_VECTOR_ITERATOR, &args![pair, new_size]);
-                (e.mem.u32(pair.addr()), e.mem.u32(pair.addr() + 4))
-            });
-            e.with_stack(8, |e, out| {
-                e.call(
-                    element.erase,
-                    &args![this, out, advanced.0, advanced.1, last_proxy, last],
-                );
-            });
-        }
-        e.call(element.tidy, &args![slot]);
-        let proxy = e.mem.u32(slot.addr());
-        e.call(OPERATOR_DELETE, &args![proxy]);
+        resize_vectors_at(e, element, this, new_size, slot.cast());
     });
+}
+
+/// The `resize(new_size, value)` of a vector of vectors, the value passed by value: a vector
+/// in the callee's argument area (`[EBP+0xC]`), which `value` names. The code works on it in
+/// place (`LEA ECX,[EBP+0xC]`), so its proxy must name that area, and tears it down at its
+/// end: its storage tidied with the element's tidy and its proxy freed. Growing inserts the
+/// missing copies with the element's insert (`this`, the end iterator, the count, the address
+/// of the value); shrinking advances the iterator at the first element by the new size
+/// (`00b16890`) and erases from there to the end.
+fn resize_vectors_at(
+    e: &mut Engine,
+    element: &VectorElement,
+    this: Ptr<StlVector>,
+    new_size: u32,
+    value: Ptr<StlVector>,
+) {
+    let v = this.addr();
+    if vector_len(e, v, 0x18) < new_size {
+        let last = last_of(e, v);
+        let proxy = checked_iterator(e, v, last);
+        let count = new_size.wrapping_sub(vector_len(e, v, 0x18));
+        // 00b32e92 (00b32932 in 00b32880): `LEA ECX,[EBP+0xC]`, the argument area itself.
+        e.call(element.insert_n, &args![this, proxy, last, count, value]);
+    } else if new_size < vector_len(e, v, 0x18) {
+        let last = last_of(e, v);
+        let last_proxy = checked_iterator(e, v, last);
+        let first = first_of(e, v);
+        let first_proxy = checked_iterator(e, v, first);
+        let advanced = e.with_stack(8, |e, pair| {
+            e.mem.set_u32(pair.addr(), first_proxy);
+            e.mem.set_u32(pair.addr() + 4, first);
+            e.call(ADVANCE_VECTOR_ITERATOR, &args![pair, new_size]);
+            (e.mem.u32(pair.addr()), e.mem.u32(pair.addr() + 4))
+        });
+        e.with_stack(8, |e, out| {
+            e.call(
+                element.erase,
+                &args![this, out, advanced.0, advanced.1, last_proxy, last],
+            );
+        });
+    }
+    e.call(element.tidy, &args![value]); // 00b32ff3 (00b32a93): the area's vector, in place
+    let proxy = e.mem.u32(value.addr()); // 00b33002 (00b32aa2)
+    e.call(OPERATOR_DELETE, &args![proxy]); // 00b33012 (00b32ab2)
 }
 
 // Translated from 00b32880 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00b32880 - the FS:[0] exception frame is not translated.
 /// `resize(new_size, value)` of a vector of 16-bit element vectors (the engine map gives it no
-/// name); the value (a 0x18-byte vector) is passed by value in the six words after `new_size`.
-/// See [`resize_vectors`].
-#[allow(clippy::too_many_arguments)]
-pub fn fn_00b32880(
-    e: &mut Engine,
-    this: Ptr<StlVector>,
-    new_size: u32,
-    value_0: u32,
-    value_1: u32,
-    value_2: u32,
-    value_3: u32,
-    value_4: u32,
-    value_5: u32,
-) {
-    resize_vectors(
-        e,
-        &SHORT_VECTORS,
-        this,
-        new_size,
-        [value_0, value_1, value_2, value_3, value_4, value_5],
-    );
+/// name); the value (a 0x18-byte vector) is passed by value in the six words after `new_size`
+/// (`RET 0x1C`). `value` is the address of the argument area that holds it (the exe's
+/// `[EBP+0xC]`): the one caller, `00b2fb30`, builds the vector there (`00b2fb77`..`00b2fb82`),
+/// so its proxy names that area, which this code copies from and tears down in place. See
+/// [`resize_vectors_at`].
+pub fn fn_00b32880(e: &mut Engine, this: Ptr<StlVector>, new_size: u32, value: Ptr<StlVector>) {
+    resize_vectors_at(e, &SHORT_VECTORS, this, new_size, value); // 00b32932, 00b32a93: in place
+}
+
+/// Through the uniform ABI the six words of `00b32880`'s by-value vector arrive as values: they
+/// are laid out in an area that stands for its argument area ([`resize_vectors`]). The exe's
+/// one caller, `00b2fb30` (`00b2fb9b`), calls [`fn_00b32880`] with the area it built the
+/// vector in.
+fn entry_00b32880(e: &mut Engine, a: &[u32]) -> Ret {
+    let mut value = [0u32; 6];
+    value.copy_from_slice(&a[2..8]); // 00b32880's [EBP+0xC]..[EBP+0x20]
+    resize_vectors(e, &SHORT_VECTORS, Ptr::new(a[0]), a[1], value);
+    Ret::default()
 }
 
 // Translated from 00b32ad0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -496,27 +507,24 @@ pub fn fn_00b32ce0(e: &mut Engine, this: Ptr<StlVector>, count: u32, value: u32)
 // Translated from 00b32de0 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00b32de0 - the FS:[0] exception frame is not translated.
 /// `resize(new_size, value)` of a vector of 32-bit element vectors (the engine map gives it no
-/// name); the value (a 0x18-byte vector) is passed by value in the six words after `new_size`.
-/// See [`resize_vectors`].
-#[allow(clippy::too_many_arguments)]
-pub fn fn_00b32de0(
-    e: &mut Engine,
-    this: Ptr<StlVector>,
-    new_size: u32,
-    value_0: u32,
-    value_1: u32,
-    value_2: u32,
-    value_3: u32,
-    value_4: u32,
-    value_5: u32,
-) {
-    resize_vectors(
-        e,
-        &WORD_VECTORS,
-        this,
-        new_size,
-        [value_0, value_1, value_2, value_3, value_4, value_5],
-    );
+/// name); the value (a 0x18-byte vector) is passed by value in the six words after `new_size`
+/// (`RET 0x1C`). `value` is the address of the argument area that holds it (the exe's
+/// `[EBP+0xC]`): the one caller, `00b2fb30`, builds the vector there (`00b2fba0`..`00b2fbab`),
+/// so its proxy names that area, which this code copies from and tears down in place. See
+/// [`resize_vectors_at`].
+pub fn fn_00b32de0(e: &mut Engine, this: Ptr<StlVector>, new_size: u32, value: Ptr<StlVector>) {
+    resize_vectors_at(e, &WORD_VECTORS, this, new_size, value); // 00b32e92, 00b32ff3: in place
+}
+
+/// Through the uniform ABI the six words of `00b32de0`'s by-value vector arrive as values: they
+/// are laid out in an area that stands for its argument area ([`resize_vectors`]). The exe's
+/// one caller, `00b2fb30` (`00b2fbc4`), calls [`fn_00b32de0`] with the area it built the
+/// vector in.
+fn entry_00b32de0(e: &mut Engine, a: &[u32]) -> Ret {
+    let mut value = [0u32; 6];
+    value.copy_from_slice(&a[2..8]); // 00b32de0's [EBP+0xC]..[EBP+0x20]
+    resize_vectors(e, &WORD_VECTORS, Ptr::new(a[0]), a[1], value);
+    Ret::default()
 }
 
 // Translated from 00b33030 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1841,10 +1849,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fn_00b326e0(Ptr<StlVector>, u32) -> Ptr<StlVector>
         ),
         entry!(0x00b32780, fn_00b32780(Ptr<StlVector>, u32, u32)),
-        entry!(
-            0x00b32880,
-            fn_00b32880(Ptr<StlVector>, u32, u32, u32, u32, u32, u32, u32)
-        ),
+        (0x00b32880, entry_00b32880 as AbiFn), // the by-value vector laid out in an area
         entry!(
             0x00b32ad0,
             fn_00b32ad0(Ptr<StlVector>, Ptr, u32, u32, u32, u32) -> Ptr
@@ -1852,10 +1857,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b32bb0, fn_00b32bb0(Ptr<StlVector>, u32, u32)),
         entry!(0x00b32c60, fn_00b32c60(Ptr<StlVector>)),
         entry!(0x00b32ce0, fn_00b32ce0(Ptr<StlVector>, u32, u32)),
-        entry!(
-            0x00b32de0,
-            fn_00b32de0(Ptr<StlVector>, u32, u32, u32, u32, u32, u32, u32)
-        ),
+        (0x00b32de0, entry_00b32de0 as AbiFn), // the by-value vector laid out in an area
         entry!(
             0x00b33030,
             fn_00b33030(Ptr<StlVector>, Ptr, u32, u32, u32, u32) -> Ptr

@@ -14,20 +14,22 @@ use crate::prelude::*;
 use crate::units::facegen::binaryfile::{
     BSFaceGenBinaryFile, StringArg, STRING_ASSIGN, STRING_NPOS, VECTOR_FIRST, VECTOR_LAST,
 };
-use crate::units::facegen::run_00aba3c0::{check, vector_size, ElementSize};
+use crate::units::facegen::run_00aba3c0::{
+    check, fn_00abb700, resize_38_in_area, vector_size, ElementSize,
+};
 
 /// The resizes with a value (unit `run_00aba3c0`, all `thiscall`: the count and the value's
 /// words): 12-byte elements (`00aba7b0`, three words), 16-byte (`00abaaa0`, four), 8-byte
-/// (`00abad80`, two), 4-byte (`00aba5d0`, one), 0x2C-byte (`00abb3c0`, eleven), 0x34-byte
-/// (`00abb700`, thirteen) and 0x38-byte (`00abbae0`, fourteen); and the 0x20-byte element
-/// vector's `resize(count)` (`00ab9eb0`, unit `run_00ab9eb0`).
+/// (`00abad80`, two), 4-byte (`00aba5d0`, one) and 0x2C-byte (`00abb3c0`, eleven); and the
+/// 0x20-byte element vector's `resize(count)` (`00ab9eb0`, unit `run_00ab9eb0`). The 0x34-byte
+/// one (`00abb700`, thirteen words) and the 0x38-byte one (`00abbae0`, fourteen) take their
+/// value in place, in the argument area it is built in: [`fn_00abb700`],
+/// [`resize_38_in_area`].
 const RESIZE_12: u32 = 0x00ab_a7b0;
 const RESIZE_16: u32 = 0x00ab_aaa0;
 const RESIZE_8: u32 = 0x00ab_ad80;
 const RESIZE_4: u32 = 0x00ab_a5d0;
 const RESIZE_2C: u32 = 0x00ab_b3c0;
-const RESIZE_34: u32 = 0x00ab_b700;
-const RESIZE_38: u32 = 0x00ab_bae0;
 const RESIZE_20: u32 = 0x00ab_9eb0;
 /// The default constructors of the 0x2C-, 0x34- and 0x38-byte elements (`00aba220`,
 /// `00aba270`, `00aba2f0`, `thiscall`; unit `run_00ab9eb0`), which build the resize value in
@@ -247,7 +249,13 @@ pub fn fn_00ab46f0(e: &mut Engine, this: Ptr, source: Ptr) {
     let vector = mesh + NAMED_34;
     let from = other + NAMED_34;
     let count = vector_size(e, from, ElementSize::Divide(0x34));
-    resize_with_default(e, vector, count, DEFAULT_34, RESIZE_34, 13);
+    // 00ab5165: `SUB ESP,0x34; MOV ECX,ESP`: the default element is built in the outgoing
+    // argument area, which stays in place as `00abb700`'s own `[EBP+0xC]` (it destroys the
+    // element there; its `RET 0x38` frees the area). The element's vector proxy names the area.
+    e.with_stack(0x34, |e, value| {
+        e.call(DEFAULT_34, &args![value]); // 00ab5170
+        fn_00abb700(e, Ptr::new(vector), count, value); // 00ab518e: the area itself, not a copy
+    });
     for_each_pair(e, vector, from, INCREMENT_34, |e, target, from| {
         let source = element(e, from);
         let name = element(e, target);
@@ -258,7 +266,13 @@ pub fn fn_00ab46f0(e: &mut Engine, this: Ptr, source: Ptr) {
     let vector = mesh + NAMED_38;
     let from = other + NAMED_38;
     let count = vector_size(e, from, ElementSize::Divide(0x38));
-    resize_with_default(e, vector, count, DEFAULT_38, RESIZE_38, 14);
+    // 00ab5467: `SUB ESP,0x38; MOV ECX,ESP`: the default element is built in the outgoing
+    // argument area, which stays in place as `00abbae0`'s own `[EBP+0xC]`: its vector's proxy
+    // names that area, and `00abbae0` destroys the element there (its `RET 0x3C` frees it).
+    e.with_stack(0x38, |e, outgoing| {
+        e.call(DEFAULT_38, &args![outgoing]); // 00ab5472
+        resize_38_in_area(e, Ptr::new(vector), count, outgoing.addr()); // 00ab5490: the area
+    });
     for_each_pair(e, vector, from, INCREMENT_38, |e, target, from| {
         let source = element(e, from);
         let name = element(e, target);
@@ -425,6 +439,10 @@ mod tests {
 
     type Log = Vec<(u32, Vec<u32>)>;
 
+    /// The 0x34-byte element's destructor (`0065ed70`, `thiscall`), which `00abb700` runs on its
+    /// value.
+    const VALUE_34_DESTRUCT: u32 = 0x0065_ed70;
+
     fn calls_to(log: &Log, addr: u32) -> Vec<Vec<u32>> {
         log.iter()
             .filter(|(a, _)| *a == addr)
@@ -450,8 +468,6 @@ mod tests {
             (RESIZE_8, 8),
             (RESIZE_4, 4),
             (RESIZE_2C, 0x2c),
-            (RESIZE_34, 0x34),
-            (RESIZE_38, 0x38),
             (RESIZE_20, 0x20),
         ] {
             e.register_double(addr, move |e, a| {
@@ -459,6 +475,14 @@ mod tests {
                 Ret::default()
             });
         }
+        // The 0x38-byte resize (00abbae0) runs on the value in place: its insert grows the
+        // vector to the count (this, proxy, where, count, value) and the value's destructor is
+        // quiet.
+        e.register_double(INSERT_38, |e, a| {
+            vector(e, a[0], a[3], 0x38);
+            Ret::default()
+        });
+        e.register(DESTRUCT_38, |_, _| Ret::default());
         for (addr, size) in [
             (INCREMENT_20, 0x20u32),
             (INCREMENT_2C, 0x2c),
@@ -489,6 +513,7 @@ mod tests {
             DEFAULT_2C,
             DEFAULT_34,
             DEFAULT_38,
+            VALUE_34_DESTRUCT,
             STRING_ASSIGN,
             INVALID_PARAMETER,
             CLEAR_12,
@@ -531,6 +556,9 @@ mod tests {
         e.mem.set_u32(with_words + 0x1c, 0x400);
         let words = vector(&mut e, with_words + 0x20, 2, 4);
         e.mem.set_u32(words + 4, 0x500);
+        // The mesh's 0x34-byte elements already number the source's one, so the real `00abb700`
+        // keeps them and only destroys its value.
+        vector(&mut e, mesh + 0xc0, 1, 0x34);
         e.call_log = Some(vec![]);
         e.call(0x00ab_46f0, &args![mesh, source]);
         let log = e.call_log.take().unwrap();
@@ -547,8 +575,12 @@ mod tests {
         let weighted_copy = e.mem.u32(mesh + 0xa8 + VECTOR_FIRST);
         assert_eq!(e.mem.u32(weighted_copy + 0xc), 0x203);
         assert_eq!(calls_to(&log, RESIZE_2C)[0].len(), 13);
-        assert_eq!(calls_to(&log, RESIZE_34)[0].len(), 15);
-        assert_eq!(calls_to(&log, RESIZE_38)[0].len(), 16);
+        let built = calls_to(&log, DEFAULT_38)[0][0];
+        assert_eq!(
+            calls_to(&log, INSERT_38),
+            vec![vec![mesh + 0xd8, 0, 0, 1, built]]
+        );
+        assert_eq!(calls_to(&log, DESTRUCT_38), vec![vec![built]]);
         let points_copy = e.mem.u32(mesh + 0xc0 + VECTOR_FIRST);
         let inner_copy = e.mem.u32(points_copy + 0x1c + VECTOR_FIRST);
         assert_eq!(e.mem.u32(inner_copy + 8), 0x300);
@@ -568,6 +600,83 @@ mod tests {
             ]
         );
         assert!(calls_to(&log, INVALID_PARAMETER).is_empty());
+    }
+
+    /// 00ab5165..00ab518e: the default 0x34-byte element (`00aba270`) is built in the argument
+    /// area of `00abb700`, which resizes with it and destroys it there (`0065ed70`), not in a
+    /// copy of its words somewhere else.
+    #[test]
+    fn the_default_named_element_is_destroyed_where_it_was_built() {
+        let mut e = engine();
+        let source = e.mem.alloc(0xf0);
+        let mesh = e.mem.alloc(0xf0);
+        // One zeroed element in every vector of the source (and in the inner vectors of its
+        // named elements); the mesh's 0x34-byte elements already number one, so the real
+        // `00abb700` keeps them.
+        for (offset, size) in [
+            (0u32, 12u32),
+            (0x18, 12),
+            (0x30, 16),
+            (0x48, 8),
+            (0x60, 12),
+            (0x78, 16),
+            (0x90, 0x20),
+            (0xa8, 0x2c),
+            (0xc0, 0x34),
+            (0xd8, 0x38),
+        ] {
+            vector(&mut e, source + offset, 1, size);
+        }
+        let with_points = e.mem.u32(source + 0xc0 + VECTOR_FIRST);
+        vector(&mut e, with_points + 0x1c, 1, 12);
+        let with_words = e.mem.u32(source + 0xd8 + VECTOR_FIRST);
+        vector(&mut e, with_words + 0x20, 1, 4);
+        vector(&mut e, mesh + 0xc0, 1, 0x34);
+        e.call_log = Some(vec![]);
+        e.call(0x00ab_46f0, &args![mesh, source]);
+        let log = e.call_log.take().unwrap();
+        let built = calls_to(&log, DEFAULT_34);
+        assert_eq!(built.len(), 1);
+        assert_eq!(calls_to(&log, VALUE_34_DESTRUCT), built);
+    }
+
+    /// `00abbae0`'s insert of `count` copies (`00abfa90`) and the 0x38-byte element's
+    /// destructor (`0065edd0`).
+    const INSERT_38: u32 = 0x00ab_fa90;
+    const DESTRUCT_38: u32 = 0x0065_edd0;
+
+    #[test]
+    fn mesh_assignment_grows_the_0x38_vector_from_the_element_its_proxy_names() {
+        // 00ab5467..00ab5490: the default 0x38-byte element (00aba2f0) is built in 00abbae0's
+        // argument area, so the proxy of its 4-byte vector (+0x20, 00aba4f0: pointing back at
+        // that vector) names the vector of the value the insert (00abfa90) copies from, and
+        // 00abbae0 destroys the element there (0065edd0). Built in a local and passed as
+        // words, the value the resize used was a copy elsewhere.
+        let mut e = engine();
+        e.register_double(DEFAULT_38, |e, a| {
+            let proxy = e.mem.alloc(4);
+            e.mem.set_u32(proxy, a[0] + 0x20);
+            e.mem.set_u32(a[0] + 0x20, proxy);
+            Ret::default()
+        });
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        e.register_double(INSERT_38, move |e, a| {
+            let proxy = e.mem.u32(a[4] + 0x20);
+            sink.borrow_mut().push((a[4], e.mem.u32(proxy)));
+            vector(e, a[0], a[3], 0x38);
+            Ret::default()
+        });
+        let source = e.mem.alloc(0xf0);
+        let mesh = e.mem.alloc(0xf0);
+        let with_words = vector(&mut e, source + 0xd8, 1, 0x38);
+        vector(&mut e, with_words + 0x20, 1, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x00ab_46f0, &args![mesh, source]);
+        let log = e.call_log.take().unwrap();
+        let built = calls_to(&log, DEFAULT_38)[0][0];
+        assert_eq!(*seen.borrow(), vec![(built, built + 0x20)]);
+        assert_eq!(calls_to(&log, DESTRUCT_38), vec![vec![built]]);
     }
 
     /// A mesh of four vertices, one triangle (0, 1, 2) and one quad (0, 1, 2, 3).

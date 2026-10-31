@@ -373,7 +373,12 @@ pub fn fn_00abb3c0(e: &mut Engine, this: Ptr, count: u32, value: [u32; 11]) {
 /// Unnamed in the engine map: a 0x34-byte-element vector's `resize(count, value)` (`thiscall`,
 /// fourteen words): grows with `00abf210`, or shrinks with the advance `00ac0d00` and the
 /// erase `00abb930`; then the value is destroyed (`0065ed70`, `thiscall`).
-pub fn fn_00abb700(e: &mut Engine, this: Ptr, count: u32, value: [u32; 13]) {
+///
+/// `value` is the address of the argument area that holds the by-value element (the exe's
+/// `[EBP+0xC]`): both callers build the element there (`00ab5165`..`00ab5170`,
+/// `00ab61a4`..`00ab61af`), so the proxy of its 12-byte vector (`0065dc90`) names that area;
+/// it is read and destroyed in place.
+pub fn fn_00abb700(e: &mut Engine, this: Ptr, count: u32, value: Ptr) {
     let shape = ResizeShape {
         size: ElementSize::Divide(0x34),
         insert: |e, this, proxy, at, count, value| fn_00abf210(e, this, proxy, at, count, value),
@@ -382,10 +387,8 @@ pub fn fn_00abb700(e: &mut Engine, this: Ptr, count: u32, value: [u32; 13]) {
             erase_by_address(0x00ab_b930, e, this, result, a, b, c, d)
         },
     };
-    with_value_slot(e, &value, |e, slot| {
-        resize_with_value(e, this, count, slot, &shape);
-        e.call(VALUE_34_DESTRUCT, &args![slot]);
-    });
+    resize_with_value(e, this, count, value.addr(), &shape); // 00abb7b2: `LEA ECX,[EBP+0xC]`
+    e.call(VALUE_34_DESTRUCT, &args![value]); // 00abb913: `LEA ECX,[EBP+0xC]`, in place
 }
 
 // Translated from 00abbae0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -394,18 +397,27 @@ pub fn fn_00abb700(e: &mut Engine, this: Ptr, count: u32, value: [u32; 13]) {
 /// fifteen words): grows with `00abfa90`, or shrinks with the advance `00ad3750` and the
 /// erase `00abbd10`; then the value is destroyed (`0065edd0`, `thiscall`).
 pub fn fn_00abbae0(e: &mut Engine, this: Ptr, count: u32, value: [u32; 14]) {
+    with_value_slot(e, &value, |e, slot| resize_38_in_area(e, this, count, slot));
+}
+
+/// `00abbae0`'s body over the value in its argument area at `value` (the exe's `[EBP+0xC]`):
+/// the callers that build the element in their outgoing argument area (`00ab46f0` at
+/// `00ab5467`, `00ab5ec0` at `00ab61d8`) pass that area itself, so the proxy of the element's
+/// 4-byte vector (+0x20, `00aba4f0`) names the vector the resize copies from; the value is
+/// destroyed there.
+pub(crate) fn resize_38_in_area(e: &mut Engine, this: Ptr, count: u32, value: u32) {
     let shape = ResizeShape {
         size: ElementSize::Divide(0x38),
-        insert: |e, this, proxy, at, count, value| fn_00abfa90(e, this, proxy, at, count, value),
+        insert: |e, this, proxy, at, count, value| {
+            insert_by_address(0x00ab_fa90, e, this, proxy, at, count, value) // 00abbbc6
+        },
         advance: |e, iterator, count| advance_by_address(0x00ad_3750, e, iterator, count),
         erase: |e, this, result, a, b, c, d| {
             erase_by_address(0x00ab_bd10, e, this, result, a, b, c, d)
         },
     };
-    with_value_slot(e, &value, |e, slot| {
-        resize_with_value(e, this, count, slot, &shape);
-        e.call(VALUE_38_DESTRUCT, &args![slot]);
-    });
+    resize_with_value(e, this, count, value, &shape); // 00abbb92: `LEA ECX,[EBP+0xC]`
+    e.call(VALUE_38_DESTRUCT, &args![value]); // 00abbcf3: the value destroyed where it lies
 }
 
 /// The destructors of the 0x34- and 0x38-byte elements (`0065ed70`, `0065edd0`; `thiscall`).
@@ -3354,8 +3366,13 @@ fn resize_32(e: &mut Engine, this: Ptr, count: u32, value: WordsArg<8>) {
 fn resize_44(e: &mut Engine, this: Ptr, count: u32, value: WordsArg<11>) {
     fn_00abb3c0(e, this, count, value.0)
 }
+/// `00abb700` takes the address of its value: the words are laid out in an area that stands for
+/// its argument area (`[EBP+0xC]`). Its two callers (`00ab46f0`, `00ab5ec0`) build the element
+/// in that area themselves and call [`fn_00abb700`] with it.
 fn resize_52(e: &mut Engine, this: Ptr, count: u32, value: WordsArg<13>) {
-    fn_00abb700(e, this, count, value.0)
+    with_value_slot(e, &value.0, |e, slot| {
+        fn_00abb700(e, this, count, Ptr::new(slot))
+    })
 }
 fn resize_56(e: &mut Engine, this: Ptr, count: u32, value: WordsArg<14>) {
     fn_00abbae0(e, this, count, value.0)

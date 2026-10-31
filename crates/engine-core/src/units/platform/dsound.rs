@@ -1032,6 +1032,26 @@ pub fn play_stream_from(
     rate: u32,
     from: usize,
 ) {
+    play_voice(e, key, Voice::new(pcm, channels, bits), rate, from);
+}
+
+/// [`play_stream_from`] of a 16-bit stream another thread decodes (`super::dshow`'s music): the
+/// voice takes its samples from `feed` as it reads them ([`super::mixer::Feed`]).
+pub fn play_stream_fed(
+    e: &mut Engine,
+    key: u32,
+    feed: Arc<super::mixer::Feed>,
+    channels: u16,
+    rate: u32,
+    from: usize,
+) {
+    if e.kernel.sound.mix.is_none() {
+        return;
+    }
+    play_voice(e, key, Voice::fed_by(feed, channels), rate, from);
+}
+
+fn play_voice(e: &mut Engine, key: u32, mut voice: Voice, rate: u32, from: usize) {
     let Some(device) = e.kernel.sound.mix.as_ref().map(|m| m.rate) else {
         return;
     };
@@ -1043,7 +1063,6 @@ pub fn play_stream_from(
         return;
     };
     let mut v = m.voices.lock().expect("the voices");
-    let mut voice = Voice::new(pcm, channels, bits);
     voice.start(from);
     voice.rate = rate;
     voice.device = device;
@@ -1095,6 +1114,27 @@ pub fn stop_stream(e: &mut Engine, key: u32) {
         m.all.remove(&at);
         m.playing.retain(|&p| p != at);
     });
+}
+
+/// The tests' output (other units' tests too): on at `rate` without a device, rendered by hand
+/// ([`mixed`]).
+#[cfg(test)]
+pub(crate) fn hear_by_hand(e: &mut Engine, rate: u32) {
+    e.kernel.sound.mix = Some(Mix {
+        voices: Arc::default(),
+        rate,
+        _output: None,
+    });
+}
+
+/// The next `frames` frames the tests' output gives ([`hear_by_hand`]).
+#[cfg(test)]
+pub(crate) fn mixed(e: &Engine, frames: usize) -> Vec<f32> {
+    let mut out = vec![0f32; 2 * frames];
+    if let Some(m) = &e.kernel.sound.mix {
+        m.voices.lock().expect("the voices").mix(&mut out);
+    }
+    out
 }
 
 type Slots<const N: usize> = [(u32, crate::AbiFn); N];

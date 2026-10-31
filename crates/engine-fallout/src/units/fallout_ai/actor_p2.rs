@@ -2844,7 +2844,9 @@ fn animation_step(e: &mut Engine, this: Ptr<Actor>, delta: f32) {
             let process = e.call(GET_PROCESS, &args![this]).u32();
             let list = e.vcall(process, PROCESS_VSLOT_0X748, &args![]).u32();
             let fraction = e.call(LIST_FRACTION_AT, &args![list, count]).f32();
-            e.call(ANIMATION_SET_FRACTION, &args![animation, fraction, count]);
+            // 00888229..00888230: PUSH ECX; FSTP [ESP]; CALL 0049bdc0 (`RET 4`): the fraction
+            // is the one word; `count` (PUSH EDX at 00888211) was 004d50e0's.
+            e.call(ANIMATION_SET_FRACTION, &args![animation, fraction]);
             let process = e.call(GET_PROCESS, &args![this]).u32();
             if e.vcall(process, PROCESS_VSLOT_0X748, &args![]).u32() != 0 {
                 let process = e.call(GET_PROCESS, &args![this]).u32();
@@ -11028,6 +11030,34 @@ mod tests {
             vec![0x4000, 0x14, 0xe0, 0xffff_ffff, 0, 0xffff_ffff]
         );
         assert!(!e.get(actor, Actor::bDeadFlag));
+    }
+
+    /// 00888211..00888230: the count is pushed for `004d50e0` (`RET 4`), and
+    /// `0049bdc0` (`RET 4`) gets only the fraction `004d50e0` left in ST0.
+    #[test]
+    fn animation_step_hands_0049bdc0_only_the_fraction() {
+        let mut e = engine2();
+        let actor = actor2(&mut e);
+        let other = actor2(&mut e);
+        set_player(&mut e, other);
+        with_process(&mut e, actor);
+        slot(&mut e, ACTOR_TABLE, VSLOT_GET_3D, eax(0x1000));
+        slot(&mut e, ACTOR_TABLE, VSLOT_GET_ANIMATION, eax(0x4000));
+        slot(&mut e, ACTOR_TABLE, VSLOT_ANIMATION_FLAG_0X21C, eax(1));
+        slot(&mut e, PROCESS_TABLE, PROCESS_VSLOT_0X748, eax(0x5000));
+        double(&mut e, PACKAGE_TYPE, eax(1));
+        double(&mut e, ANIMATION_GROUP_LOADED, eax(1));
+        double(&mut e, ANIMATION_TIME, st0(0.1));
+        double(&mut e, LIST_FRACTION_AT, st0(0.75));
+        double(&mut e, GLOBAL_WORD_ADDRESS, eax(SCRATCH_FLOAT));
+        e.set_global(MILLISECONDS_PER_SECOND, 1000.0f64);
+        e.call_log = Some(vec![]);
+        fn_00888070(&mut e, actor, 0.1);
+        assert_eq!(args_of(&e, LIST_FRACTION_AT), vec![0x5000, 100 / 0x21]);
+        assert_eq!(
+            args_of(&e, ANIMATION_SET_FRACTION),
+            vec![0x4000, 0.75f32.to_bits()]
+        );
     }
 
     #[test]

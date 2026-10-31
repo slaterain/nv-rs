@@ -896,16 +896,19 @@ pub fn fn_00ba50d0(e: &mut Engine) {
 // Translated from 00ba52d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (`run_00ba3e30`), no arguments: the shared element count at
 /// `012003ec`, when 0, becomes 0x1a below shader model 2 (`011f91c0`, signed) and 0x4e
-/// otherwise.
-pub fn fn_00ba52d0(e: &mut Engine) {
-    if e.global::<u32>(ELEMENT_COUNT_012003EC) == 0 {
-        let count = if e.global::<i32>(SHADER_MODEL_011F91C0) < 2 {
+/// otherwise. Answers the count (`EAX` at the `RET` 00ba52ef); its callers read it (00ba6d0e,
+/// 00506064, 008201bc, 00821167).
+pub fn fn_00ba52d0(e: &mut Engine) -> u32 {
+    let mut count = e.global::<u32>(ELEMENT_COUNT_012003EC); // 00ba52d0: MOV EAX,[012003ec]
+    if count == 0 {
+        count = if e.global::<i32>(SHADER_MODEL_011F91C0) < 2 {
             0x1au32
         } else {
             0x4e
         };
-        e.set_global(ELEMENT_COUNT_012003EC, count);
+        e.set_global(ELEMENT_COUNT_012003EC, count); // 00ba52ea: MOV [012003ec],EAX
     }
+    count // 00ba52ef: RET with the count in EAX on both paths (00ba52d7 JNZ, 00ba52ea)
 }
 
 /// The vertex and pixel sources of `00ba5130` (file names `010b808c`, `010b8060`), the compiled
@@ -1187,7 +1190,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ba_46c0, fn_00ba46c0(Ptr, Ptr, u32)),
         entry!(0x00ba_4940, fn_00ba4940(Ptr, Ptr, u32)),
         entry!(0x00ba_50d0, fn_00ba50d0()),
-        entry!(0x00ba_52d0, fn_00ba52d0()),
+        entry!(0x00ba_52d0, fn_00ba52d0() -> u32),
         entry!(0x00ba_5130, fn_00ba5130(Ptr)),
         entry!(0x00ba_53c0, fn_00ba53c0(Ptr, Ptr) -> Ptr),
     ]
@@ -2060,6 +2063,21 @@ mod b054_tests {
         e.set_global(ELEMENT_COUNT_012003EC, 0u32);
         e.call(0x00ba_52d0, &args![]);
         assert_eq!(e.global::<u32>(ELEMENT_COUNT_012003EC), 0x4e);
+    }
+
+    #[test]
+    fn fn_00ba52d0_answers_the_count_in_eax() {
+        // EAX is the count at the RET (00ba52ef) whether it was set (00ba52d7 JNZ) or just
+        // computed (00ba52ea); 00ba6cf0 reads it (00ba6d0e MOV EBX,EAX).
+        let mut e = rig(&[]);
+        e.set_global(ELEMENT_COUNT_012003EC, 0u32);
+        e.set_global(SHADER_MODEL_011F91C0, 1i32);
+        assert_eq!(e.call(0x00ba_52d0, &args![]).u32(), 0x1a);
+        e.set_global(ELEMENT_COUNT_012003EC, 0u32);
+        e.set_global(SHADER_MODEL_011F91C0, 2i32);
+        assert_eq!(e.call(0x00ba_52d0, &args![]).u32(), 0x4e);
+        e.set_global(ELEMENT_COUNT_012003EC, 0x77u32);
+        assert_eq!(e.call(0x00ba_52d0, &args![]).u32(), 0x77);
     }
 
     #[test]
