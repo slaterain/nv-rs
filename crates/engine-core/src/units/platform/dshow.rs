@@ -70,9 +70,9 @@
 //! graph settles 1 ms after it. Not done here (measured 2026-10-31, `measure\dshow-states`):
 //! `EC_COMPLETE` comes on Windows 35 to 208 ms after the position reached the end (24 times);
 //! a `put_CurrentPosition` right after a `Run` from stopped (within 0.1 ms) holds the position
-//! and that run's `EC_PAUSED` 42 to 60 ms (4 runs) or 118 to 139 ms (4 runs); and a
-//! `put_CurrentPosition` right before a `Run` from stopped gives its `EC_PAUSED` 43 to 64 ms
-//! after the call (4 of 4). `get_event` hands out only the front event, so an `EC_PAUSED` to
+//! and that run's `EC_PAUSED` 42 to 60 ms (4 runs) or 118 to 137 ms (4 runs) after the put returned; and a
+//! `put_CurrentPosition` right before a `Run` from stopped gives its `EC_PAUSED` 44 to 64 ms
+//! after the `Run` returned (4 of 4). `get_event` hands out only the front event, so an `EC_PAUSED` to
 //! come holds back an `EC_COMPLETE` queued behind it.
 
 use super::mixer::Feed;
