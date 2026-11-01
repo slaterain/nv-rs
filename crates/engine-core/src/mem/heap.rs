@@ -24,9 +24,10 @@
 //! - In front of the bins, freed blocks of up to [`QUICK_MAX`] bytes wait in stacks of one size
 //!   each, newest first, for the next request of their size, without any merging: the game makes
 //!   and drops tens of thousands of small objects a frame, nearly all of sizes it has just
-//!   freed, and a stack serves them as cheaply as the old exact-size lists did. When more than
-//!   [`QUICK_BYTES`] wait, the older half of each stack goes on to the bins and merges there;
-//!   when the heap is about to report itself full, all of them do.
+//!   freed, and a stack serves them as cheaply as the old exact-size lists did. At most
+//!   [`QUICK_BYTES`] wait: a free that would put more there moves a few of the oldest waiting
+//!   blocks on to the bins, where they merge (at most [`SPILL_STEP`] + 1, so no one free stalls
+//!   the frame). When the heap is about to report itself full, all of them go.
 //!
 //! All the bookkeeping is in host tables keyed by address. Nothing is written into guest memory
 //! (a freed block keeps what the freed-block check filled it with, and the write watch sees
@@ -34,6 +35,7 @@
 
 use super::{HEAP_BASE, HEAP_END};
 use crate::engine::AddrMap;
+use std::collections::VecDeque;
 
 /// Free blocks below this size have a bin of their own size each.
 const EXACT_LIMIT: u32 = 512;
@@ -53,13 +55,18 @@ const _: () = assert!(WORDS <= 32, "the bitmap of words must fit in a u32");
 /// were indexed for. Through the bins, a free and an allocation of 264 bytes to 4 KB took
 /// about half as long again as with those lists (`heap_speed` in `mem.rs`).
 pub(super) const QUICK_MAX: u32 = 4096;
-/// The bytes the quick stacks hold before the older half of each goes on to the bins. With
-/// every multiple of 8 from 264 to 4096 in use, 1 MB holds about one block of each size, so
-/// nearly every block went on and the stacks seldom served a request; 8 MB keeps a free and an
-/// allocation of those sizes within about 12% of the old lists' time.
+/// The most bytes the quick stacks hold. With every multiple of 8 from 264 to 4096 in use, 1 MB
+/// holds about one block of each size, so nearly every block went on and the stacks seldom
+/// served a request; 8 MB keeps a free and an allocation of those sizes within about 12% of the
+/// old lists' time.
 pub(super) const QUICK_BYTES: u64 = 8 << 20;
 /// How many blocks of its own bin a request looks at for one that fits.
 const OWN_BIN_LOOK: u32 = 8;
+/// How many waiting blocks, the oldest of one size after another, a free that puts the quick
+/// stacks over [`QUICK_BYTES`] moves on to the bins before it moves the oldest of its own size
+/// (which brings them back under). Moving the older half of every stack at once, as before,
+/// took 50-113 ms in one free with 8 MB of 8-byte blocks waiting: 6 to 13 frames at 120 fps.
+const SPILL_STEP: usize = 16;
 /// No node.
 const NONE: u32 = u32::MAX;
 
@@ -104,9 +111,16 @@ pub(super) struct Heap {
     nonempty: u32,
     /// Bytes in the bins.
     free_bytes: u64,
-    /// The quick stacks by size / 8, newest last, and the bytes in them.
-    quick: Vec<Vec<u32>>,
+    /// The quick stacks by size / 8, the newest block at the back (the one a request takes) and
+    /// the oldest at the front (the first to go on to the bins), and the bytes in them.
+    quick: Vec<VecDeque<u32>>,
     quick_bytes: u64,
+    /// The stack the last move to the bins took a block from: the next move looks at the stacks
+    /// after it first, so every size ages out in turn.
+    spill_from: usize,
+    /// The bytes and blocks the quick stacks held when the last request that failed moved them
+    /// all to the bins on its way to failing (for the heap's report).
+    failed_flush: (u64, usize),
     /// The largest size the quick stacks take (0: none, for tests of the bins alone).
     quick_max: u32,
 }
@@ -124,8 +138,10 @@ impl Heap {
             words: [0; WORDS],
             nonempty: 0,
             free_bytes: 0,
-            quick: vec![Vec::new(); QUICK_MAX as usize / 8 + 1],
+            quick: vec![VecDeque::new(); QUICK_MAX as usize / 8 + 1],
             quick_bytes: 0,
+            spill_from: 0,
+            failed_flush: (0, 0),
             quick_max: QUICK_MAX,
         }
     }
@@ -145,7 +161,7 @@ impl Heap {
     #[inline]
     pub(super) fn take(&mut self, size: u32) -> Option<u32> {
         if size <= self.quick_max {
-            if let Some(a) = self.quick[(size >> 3) as usize].pop() {
+            if let Some(a) = self.quick[(size >> 3) as usize].pop_back() {
                 self.quick_bytes -= u64::from(size);
                 return Some(a);
             }
@@ -156,7 +172,8 @@ impl Heap {
     /// [`Heap::take`] past the quick stacks: the bins, then the top. When both fail, the whole
     /// of the request's own bin is searched (a fitting block can sit behind more than
     /// [`OWN_BIN_LOOK`] newer, smaller ones), then every quick stack goes to the bins and the
-    /// bins and the top are tried again.
+    /// bins and the top are tried again. A request that fails notes what the quick stacks held
+    /// ([`Heap::failed_flush`]).
     fn take_free(&mut self, size: u32) -> Option<u32> {
         if let Some(n) = self.fit(size, OWN_BIN_LOOK) {
             return Some(self.carve(n, size));
@@ -167,14 +184,18 @@ impl Heap {
         if let Some(n) = self.fit(size, u32::MAX) {
             return Some(self.carve(n, size));
         }
-        if self.quick_bytes == 0 {
-            return None;
+        let waiting = (self.quick_bytes, self.quick_blocks());
+        if waiting.0 != 0 {
+            self.flush_quick();
+            if let Some(n) = self.fit(size, u32::MAX) {
+                return Some(self.carve(n, size));
+            }
+            if let Some(a) = self.grow(size) {
+                return Some(a);
+            }
         }
-        self.flush_quick(true);
-        if let Some(n) = self.fit(size, u32::MAX) {
-            return Some(self.carve(n, size));
-        }
-        self.grow(size)
+        self.failed_flush = waiting;
+        None
     }
 
     /// The free block a request of `size` bytes takes: in its own bin the newest of exactly
@@ -265,14 +286,56 @@ impl Heap {
     #[inline]
     pub(super) fn give(&mut self, addr: u32, size: u32) {
         if size <= self.quick_max {
-            self.quick[(size >> 3) as usize].push(addr);
+            self.quick[(size >> 3) as usize].push_back(addr);
             self.quick_bytes += u64::from(size);
             if self.quick_bytes > QUICK_BYTES {
-                self.flush_quick(false);
+                self.spill(size);
             }
             return;
         }
         self.release(addr, size);
+    }
+
+    /// Brings the quick stacks back to at most [`QUICK_BYTES`] after a give of `size` bytes put
+    /// them over: the oldest block of the next stack that holds one goes on to the bins, stack
+    /// after stack, up to [`SPILL_STEP`] blocks; if the stacks are still over, the oldest block of
+    /// `size` goes too. That one holds at least the `size` bytes the give added (the stacks held
+    /// at most [`QUICK_BYTES`] before it; were the block just given already gone, the stacks
+    /// would be under), so a give moves at most [`SPILL_STEP`] + 1 blocks and leaves the stacks
+    /// at most full.
+    #[cold]
+    #[inline(never)]
+    fn spill(&mut self, size: u32) {
+        for _ in 0..SPILL_STEP {
+            let Some(i) = self.next_waiting() else {
+                return;
+            };
+            self.spill_from = i;
+            self.spill_oldest(i);
+            if self.quick_bytes <= QUICK_BYTES {
+                return;
+            }
+        }
+        self.spill_oldest((size >> 3) as usize);
+    }
+
+    /// The first quick stack after the one [`Heap::spill`] took from last (round the sizes) that
+    /// holds a block, `None` when none does.
+    fn next_waiting(&self) -> Option<usize> {
+        let after = self.spill_from + 1;
+        let stacks = self.quick.len();
+        (after..stacks)
+            .chain(1..after.min(stacks))
+            .find(|&i| !self.quick[i].is_empty())
+    }
+
+    /// Moves the oldest block of quick stack `i` (if it holds one) on to the bins.
+    fn spill_oldest(&mut self, i: usize) {
+        if let Some(a) = self.quick[i].pop_front() {
+            let size = (i as u32) << 3;
+            self.quick_bytes -= u64::from(size);
+            self.release(a, size);
+        }
     }
 
     /// Puts the block `[addr, addr + size)` into the bins, merged with the free blocks on
@@ -335,22 +398,13 @@ impl Heap {
         self.link(n);
     }
 
-    /// Moves quick-stack blocks into the bins (merging there): all of them, or the older half
-    /// of each stack.
-    fn flush_quick(&mut self, all: bool) {
+    /// Moves every quick-stack block into the bins (merging there), oldest first: only a
+    /// request the heap would otherwise fail does this ([`Heap::take_free`]).
+    fn flush_quick(&mut self) {
         for i in 1..self.quick.len() {
-            let size = (i as u32) << 3;
-            let mut stack = std::mem::take(&mut self.quick[i]);
-            let n = if all {
-                stack.len()
-            } else {
-                stack.len().div_ceil(2)
-            };
-            for a in stack.drain(..n) {
-                self.quick_bytes -= u64::from(size);
-                self.release(a, size);
+            while !self.quick[i].is_empty() {
+                self.spill_oldest(i);
             }
-            self.quick[i] = stack;
         }
     }
 
@@ -420,12 +474,22 @@ impl Heap {
         self.by_start.len()
     }
 
-    /// Bytes and blocks waiting in the quick stacks.
+    /// Bytes waiting in the quick stacks (only the tests ask; the engine reads the count
+    /// through take_free's failed flush).
+    #[cfg(test)]
     pub(super) fn quick_bytes(&self) -> u64 {
         self.quick_bytes
     }
+    /// Blocks waiting in the quick stacks.
     pub(super) fn quick_blocks(&self) -> usize {
-        self.quick.iter().map(Vec::len).sum()
+        self.quick.iter().map(VecDeque::len).sum()
+    }
+
+    /// The bytes and blocks that waited in the quick stacks when the last request that failed
+    /// moved them all to the bins before giving up ((0, 0) when none waited): what the stacks
+    /// held when the request came, which the stacks themselves no longer show.
+    pub(super) fn failed_flush(&self) -> (u64, usize) {
+        self.failed_flush
     }
 
     /// The largest free block in the bins (0 when there is none).
@@ -691,27 +755,80 @@ mod tests {
         h.check([(a, 0x1000), (last, 8)]);
     }
 
-    /// Past [`QUICK_BYTES`] the older half of each quick stack goes to the bins and merges there.
+    /// A block of `size` bytes taken with a live 8-byte block after it (into `held`), so that
+    /// freed blocks taken this way never merge with one another.
+    fn take_apart(h: &mut Heap, size: u32, held: &mut Vec<(u32, u32)>) -> u32 {
+        let a = h.take(size).unwrap();
+        held.push((h.take(8).unwrap(), 8));
+        a
+    }
+
+    /// Past [`QUICK_BYTES`] a give moves the oldest waiting block to the bins, not a share of
+    /// every stack: with one size waiting, one block a give, the oldest first, and the stacks
+    /// stay at the limit. The newest blocks still wait and come back first.
     #[test]
-    fn the_quick_stacks_spill_their_older_half_into_the_bins() {
+    fn a_give_past_the_limit_moves_the_oldest_waiting_block() {
         let mut h = Heap::new();
-        let n = (QUICK_BYTES / 0x100) as u32 + 1;
-        let blocks: Vec<u32> = (0..n).map(|_| h.take(0x100).unwrap()).collect();
-        let last = h.take(0x10).unwrap();
-        for &a in &blocks {
+        let mut held = Vec::new();
+        let n = (QUICK_BYTES / 0x100) as usize + 64;
+        let blocks: Vec<u32> = (0..n)
+            .map(|_| take_apart(&mut h, 0x100, &mut held))
+            .collect();
+        for (i, &a) in blocks.iter().enumerate() {
+            let waiting = h.quick_blocks();
             h.give(a, 0x100);
+            // The first QUICK_BYTES / 0x100 blocks fill the stacks to the limit exactly.
+            let moved = waiting + 1 - h.quick_blocks();
+            assert_eq!(moved, usize::from(i >= n - 64), "give {i}");
+            assert!(h.quick_bytes() <= QUICK_BYTES, "give {i}");
         }
-        // The first half (the oldest) merged into one free block; the newest wait.
-        assert!(
-            h.quick_bytes() <= QUICK_BYTES / 2 + 0x100,
-            "{}",
-            h.quick_bytes()
-        );
-        assert_eq!(h.free_blocks(), 1);
-        let (start, size) = h.free_block_at(blocks[0]).unwrap();
-        assert_eq!((start, size), (blocks[0], n.div_ceil(2) * 0x100));
-        assert_eq!(h.take(0x100), Some(*blocks.last().unwrap()));
-        h.check([(last, 0x10), (*blocks.last().unwrap(), 0x100)]);
+        assert_eq!(h.free_blocks(), 64);
+        for &a in &blocks[..64] {
+            assert_eq!(h.free_block_at(a), Some((a, 0x100)));
+        }
+        assert_eq!(h.free_block_at(blocks[64]), None);
+        let newest = *blocks.last().unwrap();
+        assert_eq!(h.take(0x100), Some(newest));
+        held.push((newest, 0x100));
+        h.check(held);
+    }
+
+    /// A give that puts the stacks over the limit moves at most [`SPILL_STEP`] + 1 blocks: the
+    /// oldest of each size in turn, then, while the stacks are still over the limit, the oldest
+    /// of its own size. Here a 4 KB block goes over by more than the 16 smallest waiting blocks
+    /// hold.
+    #[test]
+    fn a_big_give_over_the_limit_also_moves_the_oldest_of_its_size() {
+        let mut h = Heap::new();
+        let mut held = Vec::new();
+        // One block of each size from 8 to 136 bytes, then 4 KB blocks up to the limit.
+        let small: Vec<(u32, u32)> = (1..=17)
+            .map(|k| (take_apart(&mut h, k * 8, &mut held), k * 8))
+            .collect();
+        let small_bytes: u64 = small.iter().map(|&(_, s)| u64::from(s)).sum();
+        let big_n = ((QUICK_BYTES - small_bytes) / 0x1000) as usize;
+        let big: Vec<u32> = (0..=big_n)
+            .map(|_| take_apart(&mut h, 0x1000, &mut held))
+            .collect();
+        for &(a, s) in &small {
+            h.give(a, s);
+        }
+        for &a in &big[..big_n] {
+            h.give(a, 0x1000);
+        }
+        assert_eq!(h.quick_blocks(), 17 + big_n, "nothing moved yet");
+        let waiting = h.quick_blocks();
+        h.give(big[big_n], 0x1000);
+        assert_eq!(waiting + 1 - h.quick_blocks(), SPILL_STEP + 1);
+        assert!(h.quick_bytes() <= QUICK_BYTES);
+        for &(a, s) in &small[..16] {
+            assert_eq!(h.free_block_at(a), Some((a, s)));
+        }
+        assert_eq!(h.free_block_at(small[16].0), None, "136 bytes still wait");
+        assert_eq!(h.free_block_at(big[0]), Some((big[0], 0x1000)));
+        assert_eq!(h.take(0x1000), Some(big[big_n]));
+        held.push((big[big_n], 0x1000));
+        h.check(held);
     }
 
     /// When nothing else fits, the quick stacks go to the bins, merge, and serve the request.

@@ -1460,8 +1460,10 @@ impl Mem {
     }
 
     /// Stops with the heap's state: live blocks and bytes, free bytes and blocks with the
-    /// largest free block, the bytes waiting in the quick stacks and in the block check's
-    /// quarantine, and the sizes holding the most live and the most free bytes.
+    /// largest free block, what waited in the quick stacks when the request came (the request
+    /// moved it all to the bins before giving up, so it is counted in the free bytes too), the
+    /// bytes in the block check's quarantine, and the sizes holding the most live and the most
+    /// free bytes.
     #[cold]
     #[inline(never)]
     fn heap_exhausted(&self, size: u32) -> ! {
@@ -1486,17 +1488,18 @@ impl Mem {
         let live: u64 = self.live.values().map(|&s| u64::from(s)).sum();
         let quarantine = self.check.as_deref().map_or(0, |c| c.quarantine_bytes);
         let h = &self.heap;
+        let waited = h.failed_flush();
         panic!(
             "heap exhausted allocating {size} bytes (live {} blocks {}MB, free {}MB in {} blocks, \
-             the largest {} bytes, quick stacks {}MB in {} blocks, quarantine {}MB, top {:08x}; \
-             most live {}; most free {})",
+             the largest {} bytes, quick stacks {}KB in {} blocks (moved to the bins first), \
+             quarantine {}MB, top {:08x}; most live {}; most free {})",
             self.live.len(),
             live >> 20,
             h.free_bytes() >> 20,
             h.free_blocks(),
             h.largest_free(),
-            h.quick_bytes() >> 20,
-            h.quick_blocks(),
+            waited.0 >> 10,
+            waited.1,
             quarantine >> 20,
             h.top(),
             most(tally(&mut self.live.values().copied())),
@@ -1884,7 +1887,42 @@ mod tests {
         );
         assert!(text.contains(&format!("most live 1x{rest}=")), "{text}");
         assert!(text.contains("2x256=0MB"), "{text}");
+        assert!(
+            text.contains("quick stacks 0KB in 0 blocks (moved to the bins first)"),
+            "{text}"
+        );
         assert!(text.contains("most free 1x1048576=1MB)"), "{text}");
+    }
+
+    /// The stop names what waited in the quick stacks when the request came: the request moved
+    /// it all to the bins before giving up, so the stacks are empty by the time of the report.
+    /// Here 64 freed 0x40-byte blocks, each with a live block after it, cannot make 0x100 bytes.
+    #[test]
+    fn heap_exhausted_names_what_waited_in_the_quick_stacks() {
+        let mut m = Mem::new();
+        let blocks: Vec<u32> = (0..64)
+            .map(|_| {
+                let a = m.alloc(0x40);
+                m.alloc(8);
+                a
+            })
+            .collect();
+        let rest = HEAP_END - m.heap.top();
+        let filler = m.heap.take(rest).unwrap();
+        m.live.insert(filler, rest);
+        for &a in &blocks {
+            m.free(a);
+        }
+        assert_eq!((m.heap.quick_blocks(), m.heap.quick_bytes()), (64, 0x1000));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.alloc(0x100)));
+        let text = panic_text(r);
+        assert!(
+            text.contains(
+                "free 0MB in 64 blocks, the largest 64 bytes, quick stacks 4KB in 64 blocks"
+            ),
+            "{text}"
+        );
+        assert_eq!(m.heap.quick_blocks(), 0);
     }
 
     /// A nearly full, fragmented heap serves a request from a free block that fits even when
@@ -2162,8 +2200,10 @@ mod tests {
             u64::from(new) <= most * 3 / 2 + heap::QUICK_BYTES,
             "the heap reached {new:#x} bytes for {most:#x} live"
         );
+        // Both tops hold whatever waits in the quick stacks, so the climb is measured without
+        // an allowance for them.
         assert!(
-            u64::from(new) <= u64::from(at_half) * 5 / 4 + heap::QUICK_BYTES,
+            u64::from(new) <= u64::from(at_half) * 5 / 4,
             "the heap kept climbing: {at_half:#x} half way, {new:#x} at the end"
         );
         // The pattern is one the old allocator could not hold: it climbs without bound.
