@@ -35,6 +35,25 @@ impl Drop for Output {
     }
 }
 
+/// The default output device's mix rate (its shared-mode format, the rate DirectSound mixes at),
+/// asked once on a thread of its own; `None` when there is no device (or not on Windows).
+pub fn device_rate() -> Option<u32> {
+    #[cfg(windows)]
+    {
+        static RATE: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+        *RATE.get_or_init(|| {
+            std::thread::spawn(|| unsafe { wasapi::mix_rate() })
+                .join()
+                .ok()
+                .flatten()
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 /// Starts playing `source` on the default output device; `None` when there is no device (or
 /// not on Windows).
 pub fn start(source: Arc<Mutex<dyn Source>>) -> Option<Output> {
@@ -147,6 +166,51 @@ mod wasapi {
             b(14),
             b(15),
         ]
+    }
+
+    /// The default device's mix rate (`GetMixFormat`), on a thread with COM of its own.
+    pub unsafe fn mix_rate() -> Option<u32> {
+        CoInitializeEx(std::ptr::null_mut(), 0);
+        let mut en: *mut Obj = std::ptr::null_mut();
+        let r = CoCreateInstance(
+            &guid("bcde0395-e52f-467c-8e3d-c4579291692e"),
+            std::ptr::null_mut(),
+            0x17,
+            &guid("a95664d2-9614-4f35-a746-de8db63617e6"),
+            &mut en,
+        );
+        if r != 0 {
+            return None;
+        }
+        let w = std::mem::size_of::<usize>();
+        let mut dev: *mut Obj = std::ptr::null_mut();
+        let r = slot::<Fn3>(en, 4 * w)(en, 0, 0, &mut dev as *mut _ as usize);
+        slot::<Fn0>(en, 2 * w)(en);
+        if r != 0 {
+            return None;
+        }
+        let mut client: *mut Obj = std::ptr::null_mut();
+        let iid = guid("1cb9ad4c-dbfa-4c32-b178-c2f568a703b2");
+        let r = slot::<Fn4>(dev, 3 * w)(
+            dev,
+            iid.as_ptr() as usize,
+            0x17,
+            0,
+            &mut client as *mut _ as usize,
+        );
+        slot::<Fn0>(dev, 2 * w)(dev);
+        if r != 0 {
+            return None;
+        }
+        let mut fmt: *mut u8 = std::ptr::null_mut();
+        let r = slot::<Fn1>(client, 8 * w)(client, &mut fmt as *mut _ as usize);
+        let rate = (r == 0 && !fmt.is_null())
+            .then(|| u32::from_le_bytes([*fmt.add(4), *fmt.add(5), *fmt.add(6), *fmt.add(7)]));
+        if !fmt.is_null() {
+            CoTaskMemFree(fmt as *mut c_void);
+        }
+        slot::<Fn0>(client, 2 * w)(client);
+        rate
     }
 
     /// The device's client, render client, event, buffer size, rate and channels.

@@ -1,4 +1,4 @@
-# Handoff: engine port push (updated 2026-10-29)
+# Handoff: engine port push (updated 2026-11-01)
 
 For the next Claude session leading the nv-rs engine port. Read AGENTS.md,
 docs/MILESTONES.md, docs/ENGINE_PORT_PLAN.md, docs/FRAME_SKELETON.md and
@@ -7,11 +7,19 @@ machinery runs.
 
 ## Resume here
 
-### Claude lead, 2026-10-31 (evening; current: read this first, then the morning below)
+### Claude lead, 2026-11-01 (current: read this first, then 2026-10-31 below)
+
+- **Merged:** #271. This PR: the DirectSound cursors as measured and the weapon idle sound's frame.
+- **DirectSound cursors (`dsound.rs`, `mixer.rs`, `resampler.rs`; docs/SOUND.md):** `SetCurrentPosition` on a playing buffer (the open outdoor stop) is measured and provided. The write cursor is now the input frames the converter has taken: with the second converter (`dsound.dll` `100636a0`) `resampler::AplFrames` repeats `Apl::period`'s index arithmetic in the same `f32` steps without making samples, kept from the first `Play` through `Stop`, the end and `SetFrequency`; the first converter rounds up with the first `Play` 33 frames ahead; at the device's rate there is no lead. A `SetFrequency` to the frequency a buffer already has changes nothing; a non-looping buffer ends in the period its write cursor would reach its length (a stopped buffer is never at its end: the old "Play from the end" stop is gone); a looping buffer turned not looping plays out its lap; when the second converter turns on, every playing buffer's cursors go to its write cursor (`1005713d`, not measured). The ignored `measured_replay` test drives 1,058 measured lines (`scripts/dsound-capture` modes `setpos`, `endphase`, `freqphase`, `endstop`): 1,012 match every read (main: 105); the 42 first-converter lines at 11040/22071 Hz and 4 races inside DirectSound are listed in SOUND.md. The output samples hash is unchanged. Six rounds of two independent reviews.
+- **Weapon idle sound (`009231d0`):** the record `004e75d0` copies nine words into is the frame's 0x24-byte local at `EBP-0x6c` (`009237e4`); the port gave it 12 bytes, so an NPC drawing or holstering a weapon wrote 24 bytes over the temporary sound handle and past the frame (found by the block check outdoors). The other twelve callers of `004e75d0` already give it 0x24 bytes.
+- **Outdoors, open:** long walks and `cow` trips stop with the guest heap full (1.5 GB): at the stop 569 MB were live and 901 MB sat on the exact-size free lists, which are never split or merged. A good-fit allocator that splits and merges is in review (next PR, with the flat guest memory: about 4% faster in Doc's room).
+- **Frame rate:** the next priority (maintainer, 2026-11-01): reach the original's ~120 fps in Doc's room. A measured investigation is under way (profiler with native stack walks and per-target call counts, build settings, call dispatch, the hot translated code, allocation, the platform layers and game threads, the port's call counts against the real game's).
+
+### Claude lead, 2026-10-31 (evening; read after 2026-11-01 above)
 
 - **Merged:** #270. This PR: outdoors (Goodsprings via `coc goodsprings`) from the first stop to walking through the town, Exit Game, and the host's speed work.
 - **Outdoors, stop by stop, then whole subsystems audited.** Each fix exposed the next stop in code reached for the first time, so the code under each stop was audited against the exe instruction by instruction (functions not covered by the call audit of executed code): the navmesh obstacle cutter (164 functions, 8 fixed: e.g. `006997b0` passed `navmesh + 0xe0` where the exe loads the map stored there; `006bd040` gave the new-vertex/edge helpers the navmesh where the exe gives the cutter, `006bd398`; `00699690` stepped 12-byte triangle records by 2), exterior cell loading (385 functions, 36 fixed: e.g. `00527cb0` ran `QueueReferences` on the cell's form id instead of the cell, `00527ccb`; `00528080`/`005283c0` called the map's slots on the word at `this + 0` instead of `this`, and `005283c0` dropped the smart pointer it holds the task in). Also `hkpCapsuleCapsuleAgent::getClosestPoints` (`00d3baf0`, `00d3bd80`) handed the collector a contact without the two body pointers stored after it (`00d3bb36`), the first time two capsules met outdoors. Every fix was reviewed by two independent reviewers against the disassembly.
-- **Open outdoors:** `IDirectSoundBuffer::SetCurrentPosition` on a playing buffer (`00aed080` < `00addc00`) is not measured yet (the platform layer stops); being measured.
+- **Open outdoors:** `IDirectSoundBuffer::SetCurrentPosition` on a playing buffer (`00aed080` < `00addc00`) is not measured yet (the platform layer stops); being measured (done 2026-11-01, above).
 - **Exit Game:** the renderer frees its `D3D9.DLL` on exit (`FreeLibrary`, `00e6ec6d`): now a platform row. When main returns, the play build ends the process with main's answer, standing in for the startup's `exit` (`00ecc479`).
 - **Speed:** the call path (inline dispatch, a non-`Option` call cache, a vcall fast path), the D3D9 layer's per-call costs and per-frame heap allocations: Doc's room from the post-race-menu autosave is 2-8% faster at equal work (A/B/A, about 40-80 fps by view; the original runs about 120). The rest of the frame is the translated code itself (about 80 % of samples): next, direct guest memory and direct calls.
 - **Disk:** keep the project under 150 GB (it reached 270 GB; C: filled three times). Delete battery frames, old test exes and stale `target` folders as you go.

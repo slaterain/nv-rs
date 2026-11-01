@@ -307,6 +307,19 @@ impl Voice {
         self.converter = None;
     }
 
+    /// A playing voice goes on from frame `at` (`SetCurrentPosition`, measured with
+    /// `DSMIX_SETPOS`: every capture sample for sample): what was converted already is heard
+    /// first, then the converter, kept with all it holds, is handed `at` and the frames after it.
+    pub fn move_to(&mut self, at: usize) {
+        if let Some(c) = self.converter.as_mut() {
+            // The next frame handed is `origin + base + fed`: `at`.
+            c.origin = at;
+            c.base = 0u64.wrapping_sub(c.converter.fed());
+            c.ending = false;
+        }
+        self.position = Some(at);
+    }
+
     /// Source frames per output frame.
     pub fn step(&self) -> f64 {
         if self.rate == 0 || self.device == 0 {
@@ -416,7 +429,7 @@ fn converted(v: &mut Voice) -> bool {
     if let Some(c) = v.converter.as_mut() {
         if v.apl && matches!(c.converter, Converter::Dmo(_)) {
             // The device turned on its second converter: a new one where the buffer is.
-            c.base += c.converter.fed();
+            c.base = c.base.wrapping_add(c.converter.fed());
             c.converter = Converter::Apl(Apl::new(rate, device, channels, lanes));
             c.rate = rate;
         }
@@ -471,7 +484,7 @@ fn render_converted(v: &mut Voice, out: &mut [f32]) {
             let (bits, origin, base) = (v.bits, c.origin, c.base);
             let (data, feed, fed) = (&mut v.data, &v.feed, &mut v.fed);
             let mut input = |k: u64, f: &mut [f32]| {
-                let at = origin as u64 + base + k;
+                let at = (origin as u64).wrapping_add(base).wrapping_add(k);
                 let at = if looping {
                     Some((at % frames as u64) as usize)
                 } else {
@@ -496,8 +509,8 @@ fn render_converted(v: &mut Voice, out: &mut [f32]) {
                     .push_back((l, if channels == 2 { got[1][i] } else { l }));
             }
             c.got = got;
-            let fed = c.base + c.converter.fed();
-            let next = origin as u64 + fed;
+            let fed = c.base.wrapping_add(c.converter.fed());
+            let next = (origin as u64).wrapping_add(fed);
             if !looping && next >= frames as u64 {
                 c.ending = true;
             }
@@ -1426,5 +1439,220 @@ mod tests {
             checked += 1;
         }
         eprintln!("{checked} captures match");
+    }
+
+    /// Every `DSMIX_SETPOS` capture (`scripts/dsmix-measure` with `DSMIX_HOOK`, the folder in
+    /// `NV_DSMIX_SETPOS`: a buffer moved by `SetCurrentPosition` while it plays, some with the
+    /// distortion) against the mixer: the voice played from its start and moved
+    /// ([`Voice::move_to`]; a distortion restarted there, `super::dsfx::Chain::start`) at each
+    /// period boundary in turn; the boundary that gives the capture sample for sample is named,
+    /// and so is any other way of moving that would give it (`cargo test -p engine-core --lib --
+    /// --ignored dsmix_setpos --nocapture`).
+    #[test]
+    #[ignore]
+    fn dsmix_setpos_captures() {
+        use super::super::dsfx::{edge_table, Chain, Coefficients, Distortion};
+        let Ok(dir) = std::env::var("NV_DSMIX_SETPOS") else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        let cases = std::fs::read_to_string(dir.join("cases.tsv")).unwrap();
+        let (mut failed, mut checked) = (Vec::new(), 0);
+        for line in cases.lines().filter(|l| l.starts_with('s')) {
+            let mut fields = line.split('\t');
+            let name = fields.next().unwrap();
+            let w: Vec<&str> = fields.next().unwrap().split(' ').collect();
+            let after = |k: &str| w[w.iter().position(|&x| x == k).unwrap() + 1];
+            let (ch, rate): (u16, u32) = (w[0].parse().unwrap(), w[1].parse().unwrap());
+            let looping = after("looping") == "true";
+            let to: usize = after("frame").parse().unwrap();
+            let fx = name.contains("fx");
+            let table = edge_table();
+            if fx && table.is_none() {
+                continue; // the player's dsdmo.dll cannot be measured here
+            }
+            checked += 1;
+            let frames = rate as usize;
+            let mut x = 0x1234_5678u32;
+            let data: Vec<u8> = (0..frames * usize::from(ch))
+                .flat_map(|_| {
+                    x ^= x << 13;
+                    x ^= x >> 17;
+                    x ^= x << 5;
+                    (((x % 2001) as i32 - 1000) as i16).to_le_bytes()
+                })
+                .collect();
+            let cap: Vec<f32> = std::fs::read(dir.join(format!("{name}.f32")))
+                .unwrap()
+                .chunks(4)
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect();
+            let Some(first) = cap.iter().position(|&s| s != 0.0) else {
+                failed.push(format!("{name}: silent"));
+                continue;
+            };
+            let first = first / 2;
+            let last = cap.iter().rposition(|&s| s != 0.0).unwrap() / 2 + 1;
+            let cap = &cap[2 * (first - first % 480)..2 * last];
+            let n = cap.len() / 2;
+            let mut found = Vec::new();
+            let ways: &[&str] = if fx {
+                &["moved, effect restarted", "moved, effect kept"]
+            } else {
+                &["moved", "new converter"]
+            };
+            for &how in ways {
+                for j in (480..n).step_by(480) {
+                    let mut v = Voice::new(data.clone(), ch, 16);
+                    (v.rate, v.device, v.looping) = (rate, 48000, looping);
+                    if let Some(table) = table.filter(|_| fx) {
+                        let p = [-18.2, 0.0, 5000.0, 1135.0, 5000.0];
+                        let d = Distortion::new(Coefficients::new(rate, p, table));
+                        let mut chain = Chain::new(v.data.clone(), d, ch, 16);
+                        chain.start(&mut v.data, 0);
+                        v.fx = Some(Box::new(chain));
+                    }
+                    v.start(0);
+                    let mut out = vec![0f32; 2 * n];
+                    for piece in out[..2 * j].chunks_mut(2 * 777) {
+                        render(&mut [&mut v], piece);
+                    }
+                    match how {
+                        "new converter" => v.start(to),
+                        "moved, effect restarted" => {
+                            if let Some(c) = v.fx.as_mut() {
+                                c.start(&mut v.data, to);
+                            }
+                            v.move_to(to);
+                        }
+                        _ => v.move_to(to),
+                    }
+                    for piece in out[2 * j..].chunks_mut(2 * 777) {
+                        render(&mut [&mut v], piece);
+                    }
+                    let diff = out
+                        .iter()
+                        .zip(cap.iter())
+                        .position(|(a, b)| a.to_bits() != b.to_bits());
+                    if diff.is_none() {
+                        found.push(format!("{how} at output frame {j}"));
+                    }
+                }
+            }
+            eprintln!("{name}: {n} frames from the first period; {found:?}");
+            if !found.iter().any(|f| f.starts_with(ways[0])) {
+                failed.push(name.to_string());
+            }
+        }
+        assert!(failed.is_empty(), "no match: {failed:?}");
+        assert!(checked > 0, "no captures");
+    }
+
+    /// Every `DSMIX_SETPOS_ORDER` capture (`scripts/dsmix-measure` with `DSMIX_HOOK`, the folder
+    /// in `NV_DSMIX_SETPOS`): three looping 48 kHz voices played A, B, C (they start together,
+    /// two frames into a device period) and one of them moved to its frame 24000 while they play.
+    /// The capture against the sum as the mixer makes it (each voice's sample times its gains,
+    /// added in `f32` in the list's order, newest first: C, B, A), the moved voice reading from
+    /// its new frame from each frame in turn before the first that differs without the move,
+    /// in each order of the three; the orders that give the capture sample for sample are named
+    /// (`cargo test -p engine-core --lib -- --ignored dsmix_setpos_order --nocapture`).
+    #[test]
+    #[ignore]
+    fn dsmix_setpos_order_captures() {
+        let Ok(dir) = std::env::var("NV_DSMIX_SETPOS") else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        let cases = std::fs::read_to_string(dir.join("cases.tsv")).unwrap();
+        let (mut failed, mut checked) = (Vec::new(), 0);
+        for line in cases.lines().filter(|l| l.starts_with("order_")) {
+            checked += 1;
+            let mut fields = line.split('\t');
+            let name = fields.next().unwrap();
+            let numbers: Vec<i32> = fields
+                .next()
+                .unwrap()
+                .split(|c: char| !(c.is_ascii_digit() || c == '-'))
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            // [volume, pan] for A, B, C, then the voice moved.
+            let moved = numbers[6] as usize;
+            let samples: Vec<Vec<f32>> = (0..3u32)
+                .map(|k| {
+                    let mut x = k + 1;
+                    (0..48000)
+                        .map(|_| {
+                            x ^= x << 13;
+                            x ^= x >> 17;
+                            x ^= x << 5;
+                            f32::from(((x % 2001) as i32 - 1000) as i16) / 32768.0
+                        })
+                        .collect()
+                })
+                .collect();
+            let gains: Vec<(f32, f32)> = (0..3)
+                .map(|k| channel_gains(numbers[2 * k], numbers[2 * k + 1]))
+                .collect();
+            let cap: Vec<f32> = std::fs::read(dir.join(format!("{name}.f32")))
+                .unwrap()
+                .chunks(4)
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect();
+            let first = cap.iter().position(|&s| s != 0.0).unwrap() / 2;
+            let last = cap.iter().rposition(|&s| s != 0.0).unwrap() / 2 + 1;
+            let cap = &cap[2 * first..2 * last];
+            let n = cap.len() / 2;
+            // The first frame that differs when the moved voice reads its frame 24000 from frame
+            // `j` on (none: not moved) and the sum is in `order` from then (indices, newest first).
+            let differs = |j: usize, order: [usize; 3]| {
+                (0..n)
+                    .find(|&i| {
+                        let mut out = [0f32; 2];
+                        let list = if i < j { [2, 1, 0] } else { order };
+                        for k in list {
+                            let at = if k == moved && i >= j {
+                                24000 + i - j
+                            } else {
+                                i
+                            };
+                            let s = samples[k][at % 48000];
+                            let (gl, gr) = gains[k];
+                            out[0] += if gl == 1.0 { s } else { s * gl };
+                            out[1] += if gr == 1.0 { s } else { s * gr };
+                        }
+                        out[0].to_bits() != cap[2 * i].to_bits()
+                            || out[1].to_bits() != cap[2 * i + 1].to_bits()
+                    })
+                    .unwrap_or(n)
+            };
+            let d = differs(n, [2, 1, 0]);
+            let mut found = Vec::new();
+            for order in [
+                [0, 1, 2],
+                [0, 2, 1],
+                [1, 0, 2],
+                [1, 2, 0],
+                [2, 0, 1],
+                [2, 1, 0],
+            ] {
+                for j in d.saturating_sub(960)..=d {
+                    if differs(j, order) == n {
+                        let names = order.map(|k| ["A", "B", "C"][k]);
+                        found.push(format!("{names:?} from frame {}", first + j));
+                    }
+                }
+            }
+            eprintln!(
+                "{name}: moved {}, held unmoved to frame {} of {}; {found:?}",
+                ["A", "B", "C"][moved],
+                first + d,
+                first + n
+            );
+            if found.is_empty() {
+                failed.push(name.to_string());
+            }
+        }
+        assert!(failed.is_empty(), "no match: {failed:?}");
+        assert!(checked > 0, "no captures");
     }
 }
