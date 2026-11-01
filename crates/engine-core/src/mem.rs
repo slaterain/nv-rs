@@ -158,6 +158,32 @@ mod host {
         // address space behind, so a drop does not panic over it.
         let _ = VirtualFree(p.cast::<c_void>(), 0, MEM_RELEASE);
     }
+
+    /// The runs of `[p, p + len)` (part of a block from [`reserve`]) the system has committed
+    /// and has not, as (offset from `p`, bytes, committed): what the tests check the table of
+    /// pages against.
+    #[cfg(test)]
+    pub fn committed_runs(p: *mut u8, len: usize) -> Vec<(usize, usize, bool)> {
+        use windows::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION};
+        let mut runs = Vec::new();
+        let mut at = 0;
+        while at < len {
+            let mut info = MEMORY_BASIC_INFORMATION::default();
+            // SAFETY: a query of the block's own pages, into a structure of the size given.
+            let n = unsafe {
+                VirtualQuery(
+                    Some(p.wrapping_add(at).cast_const().cast::<c_void>()),
+                    &mut info,
+                    std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+                )
+            };
+            assert_ne!(n, 0, "VirtualQuery: {}", std::io::Error::last_os_error());
+            let end = (info.BaseAddress as usize + info.RegionSize - p as usize).min(len);
+            runs.push((at, end - at, info.State == MEM_COMMIT));
+            at = end;
+        }
+        runs
+    }
 }
 
 /// The host's virtual memory calls, as on Windows above, through the C library's `mmap` and
@@ -975,6 +1001,34 @@ impl Mem {
         self.host_calls
     }
 
+    /// How many pages the table marks [`KEPT`] (the tests' view of the count).
+    #[cfg(test)]
+    pub(crate) fn kept_pages(&self) -> usize {
+        self.kept
+    }
+
+    /// Checks the table of pages: the count of kept pages is the number the table marks
+    /// [`KEPT`] and within [`KEEP_MAX`], and on Windows the system has committed exactly the
+    /// pages the table marks [`MAPPED`] or [`KEPT`].
+    #[cfg(test)]
+    pub(crate) fn check_pages(&self) {
+        let kept = (0..PAGES).filter(|&p| self.page_state(p) == KEPT).count();
+        assert_eq!(kept, self.kept, "the kept pages counted");
+        assert!(self.kept <= KEEP_MAX);
+        #[cfg(windows)]
+        for (at, len, committed) in host::committed_runs(self.space.base, SPACE) {
+            for p in at >> PAGE_BITS..(at + len) >> PAGE_BITS {
+                let state = self.page_state(p);
+                assert_eq!(
+                    committed,
+                    state == MAPPED || state == KEPT,
+                    "page {:08x} (table {state})",
+                    p << PAGE_BITS
+                );
+            }
+        }
+    }
+
     pub fn is_mapped(&self, addr: u32) -> bool {
         self.mapped_at(addr)
     }
@@ -1518,7 +1572,7 @@ impl Mem {
     /// Checks the heap's bookkeeping against the live blocks and those the freed-block check
     /// holds back (see `heap::Heap::check`).
     #[cfg(test)]
-    fn check_heap(&self) {
+    pub(crate) fn check_heap(&self) {
         let held = self
             .check
             .as_deref()
