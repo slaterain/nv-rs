@@ -10558,12 +10558,13 @@ fn weapon_idle_sound(e: &mut Engine, draw: u8, weapon: u32, actor: u32) {
     if e.call(AUDIO_MAP_00511840, &args![sound_form]).u32() == 0 {
         return;
     }
-    // The game's frame: the sound handle, a 12-byte record and a 12-byte
-    // temporary handle.
-    e.with_stack(40, |e, locals| {
-        let handle = locals.addr();
-        let record_buffer = locals.addr() + 16;
-        let temporary = locals.addr() + 28;
+    // The game's frame from `EBP-0x78`: the 12-byte temporary handle, the 0x24-byte record
+    // `004e75d0` copies nine words into (`EBP-0x6c`, 009237e4), the two flag words
+    // (`EBP-0x48`, `EBP-0x44`, kept in registers here) and the sound handle (`EBP-0x40`).
+    e.with_stack(0x44, |e, locals| {
+        let temporary = locals.addr();
+        let record_buffer = locals.addr() + 0xc;
+        let handle = locals.addr() + 0x38;
         e.call(SOUND_HANDLE_INIT, &args![handle]);
         let list = e.call(REFERENCE_EXTRA_LIST, &args![actor]).u32();
         e.call(EXTRA_GET_WEAPON_IDLE_SOUND, &args![list, handle]);
@@ -15221,6 +15222,44 @@ mod tests {
         middle_high_process_force_weapon_drawn_sheathed(&mut e, p, 0, 0, 0, a);
         assert_eq!(count(&e, SOUND_HANDLE_PLAY), 0);
         assert_eq!(count(&e, SOUND_HANDLE_STOP), 1);
+    }
+
+    /// A new idle sound's record is the frame's 0x24-byte local: `004e75d0` copies nine words
+    /// into it without touching the sound handle or the temporary handle, and without writing
+    /// past the frame (the block check stops on a write past a stack local).
+    #[test]
+    fn force_weapon_drawn_sheathed_gives_the_sound_record_nine_words() {
+        let mut e = engine();
+        e.mem.enable_block_check(true, true);
+        let p = process(&mut e);
+        let a = actor(&mut e);
+        e.mem.set_u32(p.addr() + 0x114, 0x7000);
+        e.register(ITEM_CHANGE_FORM, |_, _| ret(0x5555));
+        e.register(CALL_0046E8C0, |_, _| ret(1));
+        e.register(WEAPON_SOUND_FORM, |_, _| ret(0x5600));
+        e.register(AUDIO_MAP_00511840, |_, _| ret(0x5700));
+        e.register(SOUND_HANDLE_INIT, |e, a| {
+            e.mem.set_u32(a[0], 0x1111_1111);
+            Ret::default()
+        });
+        e.register(WEAPON_SOUND_RECORD, |e, a| {
+            for i in 0..9 {
+                e.mem.set_u32(a[1] + 4 * i, 0x2000 + i);
+            }
+            ret(a[1])
+        });
+        e.register(AUDIO_GET_SOUND_HANDLE_BY_FILENAME, |e, a| {
+            e.mem.set_u32(a[1], 0x3333_3333);
+            ret(a[1])
+        });
+        middle_high_process_force_weapon_drawn_sheathed(&mut e, p, 1, 0, 0, a);
+        let record = calls(&e, WEAPON_SOUND_RECORD)[0][1];
+        let handle = calls(&e, SOUND_HANDLE_INIT)[0][0];
+        let temporary = calls(&e, AUDIO_GET_SOUND_HANDLE_BY_FILENAME)[0][1];
+        assert_eq!(record, temporary + 0xc);
+        assert_eq!(handle, record + 0x2c);
+        assert_eq!(calls(&e, SOUND_BASE_FLAGS), vec![vec![0x2001]]);
+        assert_eq!(calls(&e, SOUND_HANDLE_ASSIGN)[0], vec![handle, temporary]);
     }
 
     #[test]

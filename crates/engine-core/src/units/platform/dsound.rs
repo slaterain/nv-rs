@@ -65,7 +65,99 @@
 //!   `SetCurrentPosition`) puts the write cursor `ceil(n * frequency / 100)` frames on, and the
 //!   buffer stops when that reaches its end (`dsound-capture replays`, 2026-10-30: all ten
 //!   cases at 22050 Hz mono and 44100 Hz stereo). A buffer's first `Play` that day led by 33
-//!   frames, not the one frame of the earlier capture, so that lead varies; the layer keeps one.
+//!   frames, not the one frame of the earlier capture: the write cursor is the frames the
+//!   converter DirectSound runs the buffer through has taken, so it steps with that converter
+//!   (`dsound-capture endstop`, 2026-10-31, and its `more` formats, 2026-11-01: 44100 and
+//!   22050 Hz stereo and 48000 Hz mono, both converters; [`Steps`]). With the first converter
+//!   (`RESAMPLEDMO`) at a frequency other than the device's rate it is the buffer's position
+//!   rounded up and a first `Play` leads by 33 frames from its first period; at the device's
+//!   rate (48000 Hz here: the converter passes the samples through) it is the position rounded
+//!   up with no lead. With the second converter on (below) it is exactly the frames that
+//!   converter takes, its `CalcInputFrames` (`dsound` `100636a0`) in its own `f32` arithmetic
+//!   (`super::resampler::AplFrames`), counted from a new converter at the buffer's first `Play`
+//!   and kept by the buffer through `Stop`, the end and `SetFrequency`, and, on the DLL's word,
+//!   `SetCurrentPosition` (`dsound` `100580b0` only moves the source and sets the cursor fields,
+//!   the converter untouched; no measured case moves a buffer with it on).
+//!   For an 8-bit or stereo buffer at its own rate that is the frames played and one more (the
+//!   earlier capture's `floor(n * frequency / 100) + 1`), but no rule of hundredths fits it
+//!   everywhere: a 16-bit mono buffer (the four-lane kernel) at 22050 Hz reads 221, 442, 663
+//!   frames after 1, 2, 3 periods, at 48000 Hz 481, 961, at 11025 Hz 111, 221, 331, 441. All 246
+//!   measured cases with the second converter on match it at every sample (`endstop`, its `more`
+//!   formats, `freqphase`); a new counter at each `Play` matches 75 of them. The layer takes the
+//!   device's rate from the output when it runs, else from the default device's mix format
+//!   (`super::sound_out::device_rate`).
+//! - The steps of a later `Play` (`dsound-capture endphase`, 2026-10-31, 162 cases in three runs,
+//!   11025 Hz 8-bit and 22050 Hz 16-bit, ends after 20 to 47 periods and stops after 3 to 10):
+//!   the write cursor goes on in the steps of the periods the buffer had played, through its end
+//!   (counted to the period its write cursor reached the end) and through `Stop`: `p` periods
+//!   played, after `n` more it is `ceil((p + n) * frequency / 100) - ceil(p * frequency / 100)`
+//!   frames on (the `ceil(n * frequency / 100)` above whenever `p * frequency / 100` is whole,
+//!   which fits every case of `replays`). All 162 match; starting the steps over is refuted by
+//!   105 of them. Also after an end then `Stop` (`freqphase`, ends after 21 to 23 periods at
+//!   11025 Hz: 12 of 12). In other words DirectSound keeps the buffer's position in hundredths
+//!   of a frame, each period adding the frequency, and the write cursor is it rounded up (these
+//!   runs had the first converter; the second's steps are above).
+//! - `SetFrequency` (`dsound-capture freqphase`, 2026-10-31, 156 cases in three runs: 11025 Hz
+//!   8-bit and 22050 Hz 16-bit buffers retuned to 11040, 22071, 16537 and 11025 Hz, then stopped
+//!   and played, played to their end and played, or stopped, retuned and played). With
+//!   DirectSound's second converter on (a change of more than 1/500 of a rate turns it on for
+//!   the device, `super::resampler`), the frames it takes go on through the change, the new
+//!   frequency counting from the next period (the converter's own retune), through `Stop` and
+//!   the end: 72 of the 72 cases with it on, `22071 6 1 apl` and `11025 6 1 big` among them,
+//!   where a first `Play` retuned on a whole frame goes on as a later `Play` would. Right after
+//!   the call both cursors read as before it (72 retunes with both converters), and the play
+//!   cursor goes on trailing the write cursor by three periods at the format's rate (every
+//!   case). A `SetFrequency` to the frequency the buffer has (0 being the format's rate) changes
+//!   nothing (`endstop` `loopoff_f`, every format, both converters). Deliberately not modelled
+//!   here: with the first converter (`RESAMPLEDMO`) and a frequency other than the format's rate
+//!   the write cursor follows that converter's own `GetRequiredInputFrames`, which no rule of
+//!   hundredths fits (36 retunes, and the 6 buffers played at 11040 or 22071 Hz from the start;
+//!   a change of 1/500 or less reaches the cursor a period late there, at the converter's
+//!   `SetRate`), and the layer carries the position's hundredths through the change there (a
+//!   first `Play` past its first period going on from its write cursor as a later `Play`):
+//!   following the converter would need its filter design from the player's `RESAMPLEDMO.DLL`,
+//!   which the cursors must not wait for. When the second converter turns on, every buffer
+//!   playing goes on from its write cursor with a new one (`dsound` `1005713d` reads the write
+//!   cursor, builds the new converter from there and sets both cursor fields to it, as `Play`
+//!   and `SetCurrentPosition` do; the output goes on from there too): both cursors read the
+//!   write cursor, the play cursor held there until the write cursor is three periods past. Not
+//!   measured.
+//! - The end (`dsound-capture endstop`, 2026-10-31, 168 cases in three runs, 22050 Hz 16-bit and
+//!   11025 Hz 8-bit, lengths around 20 periods' frames, both converters): a buffer that does not
+//!   loop never reads its write cursor at its length while it plays; it ends in the period its
+//!   write cursor would reach it, a first `Play`'s too. Stopped in the period before, both
+//!   cursors stay on the write cursor and `Play` plays the rest (it ends when its write cursor
+//!   reaches the length). A looping buffer turned not looping (`Play(0, 0, 0)` while it plays)
+//!   plays out the lap it is in and ends there; a `SetFrequency` to its own rate just before
+//!   changes nothing. 168 of 168 (`tools/check-endstop.pl`).
+//! - `SetCurrentPosition` (`dsound-capture setpos`, 2026-10-31: 22050 Hz mono and 44100 Hz
+//!   stereo 16-bit and 11025 Hz 8-bit, the game's 2D and 3D flags, 412 calls in four runs, 272 of
+//!   them on playing buffers; `build43-scratch/measure/dss1-work`): the byte is taken down to a
+//!   whole frame; the end of the buffer or past it is `DSERR_INVALIDPARAM` and changes nothing,
+//!   whether the buffer plays, is stopped or played to its end. A buffer that does not play is
+//!   stopped there, and plays from there as a later `Play` in the steps it was taking. A playing
+//!   buffer, looping or not, has both cursors there at once, keeps its status and goes on from
+//!   there as after a later `Play`, in the steps it was taking (at 22050 Hz 221, 441, 662 ...
+//!   after an even number of periods, 220, 441, 661 ... after an odd one). The play cursor stays
+//!   there until the write cursor is three periods past; a buffer that does not loop ends when
+//!   the write cursor reaches its end; a following `Play` only takes its looping flag. A first
+//!   `Play` moved before its first period still has its lead to come. All 140 calls on buffers
+//!   that do not play match at every sample, the first `Play` before them included (the 80
+//!   after an end and the 10 after a `Stop` among them). Of the 272 on playing buffers, 268
+//!   match at every sample. Of the other four, three came 5 to 24 us after a period began: the
+//!   cursors read the new place right after the call, then the old ones again until the next
+//!   period. The fourth (`setpos-run3`,
+//!   `5622 1 10 ac44 2e0 loop_half 103300`) came 10.02 ms after the last cursor change: the
+//!   cursors read the new place right after the call, then the old track's next period showed
+//!   53 us after the call, and the move counted its steps from that period on. In all four, at
+//!   the next period one read of the write cursor on the new place with the play cursor three
+//!   periods before it, then for two periods the play cursor three periods behind the write
+//!   cursor, behind the new place, before the cursors are back on the track above. A race inside
+//!   DirectSound; the layer leaves it out.
+//! - Every measured line replayed through the layer (`measured_replay`, ignored: the same calls
+//!   after the same number of periods, the cursors compared at every read, the first `Play`
+//!   included; 1,058 lines): all match but the first converter at frequencies other than the
+//!   format's rate (42 lines, above) and the four races. docs/SOUND.md has the counts.
 //!
 //! As in the DirectInput layer (`super::dinput`), the objects live in engine memory with a vtable
 //! pointer at `+0`, each provided slot a platform function (code addresses from [`CODE_BASE`]);
@@ -555,21 +647,65 @@ const DS3D_DEFERRED: u32 = 1;
 /// 2400 Hz, pre-lowpass cutoff 8000 Hz): the effect's parameters until the game sets them.
 const DISTORTION_DEFAULTS: [f32; 5] = [-18.0, 15.0, 2400.0, 2400.0, 8000.0];
 
+/// How a buffer's write cursor steps: the frames DirectSound's converter takes for it (measured,
+/// module documentation), by the converter it goes through:
+/// - `Dmo`: the first converter (`RESAMPLEDMO`) converting: the buffer's position, kept in
+///   hundredths of a frame (each period adding the frequency), rounded up; a first `Play` leads
+///   by 33 frames;
+/// - `Pass`: the first converter at the device's own rate, passing the samples through: the
+///   position, no lead;
+/// - `Apl`: the second converter: the frames it takes ([`super::resampler::AplFrames`], kept
+///   by the buffer, `Buffer::apl`), `fed` of them in the `done` periods counted from `start`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Steps {
+    Dmo,
+    Pass,
+    Apl { fed: u64, done: u64 },
+}
+
+impl Steps {
+    /// A first `Play`'s lead after `n` periods (the first converter's).
+    fn lead(self, n: u64) -> u64 {
+        match self {
+            Steps::Dmo => 33 * u64::from(n >= 1),
+            _ => 0,
+        }
+    }
+}
+
 /// Whether a buffer plays.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Play {
-    /// Stopped with both cursors at this byte.
-    Stopped(u32),
-    /// Playing since the clock read `start` (microseconds), from frame `base`; `first` for the
-    /// buffer's first `Play` since it was made (the cursors lead differently, [`cursors`]).
+    /// Stopped with both cursors at byte `at`, its position `part` hundredths of a frame past a
+    /// whole frame (see `Playing`).
+    Stopped { at: u32, part: u32 },
+    /// Playing since the clock read `start` (microseconds): the write cursor at frame `base`
+    /// then, the play cursor held on frame `from` (where `Play` or `SetCurrentPosition` put it)
+    /// until the write cursor is three periods past it (frames counted on round a looping
+    /// buffer, not wrapped); `first` for the buffer's first `Play` since it was made, before a
+    /// `SetFrequency` past its first period (it leads, [`Steps::lead`]). `part`: DirectSound keeps
+    /// the buffer's position in hundredths of a frame, each period adding the frequency, and the
+    /// write cursor follows it as `steps` says (the converter when it was played, moved or
+    /// retuned); `part` is how far past a whole frame it was at `start` (0 to 99), so the write
+    /// cursor goes on in the steps it was taking: carried through `SetCurrentPosition`,
+    /// `SetFrequency`, `Stop`, the end and the next `Play` (measured, module documentation); 0
+    /// for a buffer never played. (With the second converter the frames it takes count instead,
+    /// [`Steps::Apl`].)
+    /// `end`: the frame (counted the same way) at which it ends if it does not loop: its length,
+    /// or the end of the lap it was in when `Play` turned its looping off (measured).
     Playing {
         looping: bool,
         start: u64,
         base: u64,
+        from: u64,
         first: bool,
+        part: u32,
+        end: u64,
+        steps: Steps,
     },
-    /// A non-looping buffer that played to its end.
-    Ended,
+    /// A non-looping buffer that played to its end, its position `part` hundredths of a frame
+    /// past a whole frame (see `Playing`).
+    Ended { part: u32 },
 }
 
 /// A buffer's `WAVEFORMATEX` as the bytes it was made with (none for the primary buffer): kept in
@@ -625,6 +761,11 @@ struct Buffer {
     play: Play,
     /// `Play` was called on it before (its next `Play` is not its first).
     played: bool,
+    /// The frames the second converter takes for it ([`Steps::Apl`]): made at its first `Play`
+    /// with the second converter on (or when it turns on while the buffer plays), then kept
+    /// through `Stop`, the end and `SetFrequency` (measured, module documentation) and
+    /// `SetCurrentPosition` (the DLL: no measured case moves a buffer with it on).
+    apl: Option<super::resampler::AplFrames>,
     locks: u32,
     effect: Option<&'static str>,
     min_distance: f32,
@@ -699,6 +840,10 @@ pub struct Sound {
     record: Option<std::path::PathBuf>,
     /// What was already named on stderr (once each).
     noted: BTreeSet<&'static str>,
+    /// DirectSound has turned on its second converter for the device (a frequency moved by more
+    /// than 1/500 of a rate, [`set_frequency`], [`refresh_voice`]): it steps the cursors
+    /// ([`Steps`]) and converts the voices (`Voices::apl`).
+    apl: bool,
 }
 
 /// The output thread and the voices it plays (the buffers' engine addresses, newest `Play`
@@ -720,7 +865,9 @@ impl std::fmt::Debug for Mix {
 struct Voices {
     /// Every secondary buffer's voice, by address.
     all: BTreeMap<u32, Voice>,
-    /// The playing ones, newest `Play` first.
+    /// The voices started and not stopped since, newest `Play` first. One the output plays to its
+    /// end stays in its place, silent, until it is stopped, played again or released (moved by
+    /// `SetCurrentPosition` while its buffer still plays, it starts again there).
     playing: Vec<u32>,
     /// What goes to the device, recorded ([`want_output`]).
     record: Option<Record>,
@@ -808,7 +955,7 @@ impl Record {
 }
 
 impl Voices {
-    /// Mixes the playing voices into `out` (newest first) and drops the ones that ended.
+    /// Mixes the listed voices into `out` (newest first); one that ends stays listed, silent.
     fn mix(&mut self, out: &mut [f32]) {
         let Voices { all, playing, .. } = self;
         // `playing` holds distinct addresses (each `Play` takes its own out first): each voice
@@ -818,7 +965,7 @@ impl Voices {
                 super::mixer::render_voice(v, out);
             }
         }
-        playing.retain(|at| all.get(at).is_some_and(|v| v.position.is_some()));
+        playing.retain(|at| all.contains_key(at));
     }
 }
 
@@ -917,6 +1064,12 @@ pub fn start_output(e: &mut Engine) -> bool {
             if b.flags & DSBCAPS_PRIMARYBUFFER == 0 {
                 v.all.insert(at, voice_of(e, b));
             }
+        }
+        // The device's converter as the game has left it ([`Sound::apl`]).
+        v.apl = e.kernel.sound.apl;
+        let apl = v.apl;
+        for voice in v.all.values_mut() {
+            voice.apl = apl;
         }
     }
     let source: Arc<Mutex<dyn super::sound_out::Source>> = voices.clone();
@@ -1442,8 +1595,9 @@ fn new_buffer(flags: u32) -> Buffer {
         volume: 0,
         pan: 0,
         frequency: 0,
-        play: Play::Stopped(0),
+        play: Play::Stopped { at: 0, part: 0 },
         played: false,
+        apl: None,
         locks: 0,
         effect: None,
         // DS3D_DEFAULTMINDISTANCE and DS3D_DEFAULTMAXDISTANCE (the capture's defaults).
@@ -1797,9 +1951,18 @@ fn set_pan(e: &mut Engine, this: Ptr, v: i32) -> u32 {
     DS_OK
 }
 
-/// `SetFrequency(v)`: 0 (the format's rate) or 100..200000, else `DSERR_INVALIDPARAM`. A
-/// playing buffer goes on from where it is at the new speed. Without `DSBCAPS_CTRLFREQUENCY`
-/// not provided.
+/// `SetFrequency(v)`: 0 (the format's rate) or 100..200000, else `DSERR_INVALIDPARAM`; the
+/// frequency the buffer has changes nothing (measured, `endstop` `loopoff_f`). A playing buffer
+/// goes on from where it is at the new speed from the next period, both cursors as they were
+/// right after the call and its play cursor trailing as before (measured, `dsound-capture
+/// freqphase`, module documentation): with the second converter on, its frame counter takes the
+/// new frequency ([`Steps::Apl`], every case); with the first, its position's hundredths of a
+/// frame are carried and a first `Play` past its first period goes on from its write cursor as a
+/// later `Play`. Deliberately not modelled: with the first converter at a frequency other than
+/// the format's rate the steps are that converter's own input requests (and a small change
+/// reaches them a period late); the layer keeps the same rule there. A change of more than 1/500
+/// of the rate turns on the second converter ([`second_converter_on`]). Without
+/// `DSBCAPS_CTRLFREQUENCY` not provided.
 fn set_frequency(e: &mut Engine, this: Ptr, v: u32) -> u32 {
     let b = secondary(e, this, "SetFrequency");
     if !frequency_ok(v) {
@@ -1809,31 +1972,121 @@ fn set_frequency(e: &mut Engine, this: Ptr, v: u32) -> u32 {
         b.flags & DSBCAPS_CTRLFREQUENCY != 0,
         "SetFrequency without DSBCAPS_CTRLFREQUENCY is not provided"
     );
+    tick(e);
     let now = e.clock_now_us();
-    let b = buffer(e, this);
+    let _ = cursors_at(e, this, now);
+    let (old, new) = (b.frequency(), if v == 0 { b.rate() } else { v });
+    buffer(e, this).frequency = v;
+    if old == new {
+        return DS_OK;
+    }
+    let device = device_rate(e);
+    if let Some(counter) = buffer(e, this).apl.as_mut() {
+        counter.retune(new, device);
+    }
     if let Play::Playing {
         looping,
         start,
         base,
+        from,
         first,
-    } = b.play
+        part,
+        end,
+        steps: steps @ (Steps::Dmo | Steps::Pass),
+    } = buffer(e, this).play
     {
+        // The write cursor goes on from where it is at the new frequency from the next period,
+        // its position's hundredths carried; the play cursor goes on trailing it. A first `Play`
+        // past its first period goes on from its write cursor (its lead included) as a later
+        // `Play`; before its first period it stays a first `Play`.
         let n = periods(start, now);
-        let consumed = base + frames(n, b.frequency());
-        b.play = Play::Playing {
+        let write = write_after(base, first, part, old, steps, n);
+        let held = u64::from(part) + n * u64::from(old);
+        let (base, first) = if first && n == 0 {
+            (base, true)
+        } else {
+            (write, false)
+        };
+        let steps = steps_of(e, this);
+        buffer(e, this).play = Play::Playing {
             looping,
             start: now,
-            base: consumed,
+            base,
+            from,
             first,
+            part: (held % 100) as u32,
+            end,
+            steps,
         };
     }
-    b.frequency = v;
-    if matches!(b.play, Play::Playing { .. }) {
+    // DirectSound's rule for its converters (`dsound` `100581e0`): a move of more than 1/500 of
+    // the rate turns on the device's second converter for every buffer, from then on.
+    if old.abs_diff(new) > old / 500 {
+        second_converter_on(e, now);
+    }
+    if matches!(buffer(e, this).play, Play::Playing { .. }) {
         heard(e, this, "SetFrequency");
     } else {
         refresh_voice(e, this.addr());
     }
     DS_OK
+}
+
+/// DirectSound turns on its second converter for the device (`dsound` `100581e0`): from then on
+/// every buffer goes through it, and each one playing goes on from its write cursor with a new
+/// one (`1005713d`, `super::resampler`: the write cursor read, the new chain built from there,
+/// both cursor fields set to it as `Play` and `SetCurrentPosition` set them): both cursors on
+/// the write cursor, the write cursor going on by the frames the new converter takes
+/// ([`Steps::Apl`]) and the play cursor held there until the write cursor is three periods
+/// past. The buffer whose `SetFrequency` turns it on goes the same way. (Read from the DLL; the
+/// cursors of a buffer playing when it turns on are not measured.)
+fn second_converter_on(e: &mut Engine, now: u64) {
+    if e.kernel.sound.apl {
+        return;
+    }
+    e.kernel.sound.apl = true;
+    let device = device_rate(e);
+    let playing: Vec<u32> = e
+        .kernel
+        .sound
+        .buffers
+        .iter()
+        .filter(|(_, b)| matches!(b.play, Play::Playing { .. }))
+        .map(|(&at, _)| at)
+        .collect();
+    for at in playing {
+        let this = Ptr::new(at);
+        let _ = cursors_at(e, this, now);
+        let b = buffer(e, this);
+        if let Play::Playing {
+            looping,
+            start,
+            base,
+            first,
+            part,
+            end,
+            steps,
+            ..
+        } = b.play
+        {
+            let write = write_after(base, first, part, b.frequency(), steps, periods(start, now));
+            b.apl = Some(super::resampler::AplFrames::new(
+                b.frequency(),
+                device,
+                lanes(b),
+            ));
+            b.play = Play::Playing {
+                looping,
+                start: now,
+                base: write,
+                from: write,
+                first: false,
+                part: 0,
+                end,
+                steps: Steps::Apl { fed: 0, done: 0 },
+            };
+        }
+    }
 }
 
 /// A buffer about to be heard, or heard with new settings: with the output on, its voice is
@@ -1948,6 +2201,10 @@ fn refresh_voice(e: &mut Engine, at: u32) {
                 v.apl = true;
             }
         }
+        // The cursors step by it too ([`Steps`]).
+        drop(voices);
+        let now = e.clock_now_us();
+        second_converter_on(e, now);
     }
 }
 
@@ -1956,7 +2213,9 @@ fn refresh_3d(e: &mut Engine) {
     if e.kernel.sound.mix.is_none() {
         return;
     }
-    // In address order, found one after another (`refresh_voice` changes no buffer): no list.
+    // In address order, found one after another, with no list: `refresh_voice` adds, removes
+    // and reflags no buffer (when it turns the second converter on, it only moves the cursors
+    // of the buffers that play).
     let mut from = 0;
     while let Some(at) = e
         .kernel
@@ -2018,9 +2277,89 @@ fn periods(start: u64, now: u64) -> u64 {
     now / PERIOD_US - start / PERIOD_US
 }
 
-/// Frames a buffer moves on in `n` periods at `frequency`.
-fn frames(n: u64, frequency: u32) -> u64 {
-    n * u64::from(frequency) / 100
+/// The hundredths of a frame a position `part` hundredths past a whole frame is past one after
+/// `n` periods at `frequency`.
+fn part_after(part: u32, n: u64, frequency: u32) -> u32 {
+    ((u64::from(part) + n * u64::from(frequency)) % 100) as u32
+}
+
+/// The rate DirectSound mixes at: the output's when it runs, else the default device's
+/// (`super::sound_out::device_rate`; the measured device's 48000 when Windows names none, where
+/// DirectSound would make no device); the tests' 48000.
+fn device_rate(e: &Engine) -> u32 {
+    if let Some(m) = &e.kernel.sound.mix {
+        return m.rate;
+    }
+    #[cfg(test)]
+    {
+        48000
+    }
+    #[cfg(not(test))]
+    {
+        super::sound_out::device_rate().unwrap_or(48000)
+    }
+}
+
+/// Whether the second converter takes a buffer through its four-lane kernel (16-bit mono,
+/// `super::resampler::Apl`).
+fn lanes(b: &Buffer) -> bool {
+    let (channels, bits) = (
+        u16::from_le_bytes([b.format[2], b.format[3]]),
+        u16::from_le_bytes([b.format[14], b.format[15]]),
+    );
+    channels == 1 && bits == 16
+}
+
+/// How a buffer's write cursor steps from a `Play` or a move now ([`Steps`]): by the device's
+/// converter and, for the first, whether it converts the buffer's frequency. With the second, the
+/// buffer gets its frame counter at its first `Play`.
+fn steps_of(e: &mut Engine, this: Ptr) -> Steps {
+    let device = device_rate(e);
+    let apl = e.kernel.sound.apl;
+    let b = buffer(e, this);
+    if apl {
+        if b.apl.is_none() {
+            b.apl = Some(super::resampler::AplFrames::new(
+                b.frequency(),
+                device,
+                lanes(b),
+            ));
+        }
+        Steps::Apl { fed: 0, done: 0 }
+    } else if b.frequency() == device {
+        Steps::Pass
+    } else {
+        Steps::Dmo
+    }
+}
+
+/// A buffer playing through the first converter: its write cursor `n` periods after `start`
+/// (frames counted on round it): from `base`, its position `part` hundredths past a whole frame,
+/// at `frequency`, rounded up, with the lead of a `first` Play ([`Steps`]). Measured: the first
+/// Play (`dsound-capture` `cursors`, `replays`, `setpos`, `endphase`, `endstop`, `freqphase`), a
+/// later Play after it ended, a `Stop` or a `SetCurrentPosition` (`replays`, 2026-10-30), moved
+/// while it plays, stopped, ended or retuned (2026-10-31, `setpos`, `endphase`, `freqphase`): on
+/// by the steps it was taking.
+fn write_after(base: u64, first: bool, part: u32, frequency: u32, steps: Steps, n: u64) -> u64 {
+    let (f, part) = (u64::from(frequency), u64::from(part));
+    let lead = if first { steps.lead(n) } else { 0 };
+    base + (part + n * f).div_ceil(100) - part.div_ceil(100) + lead
+}
+
+/// The period of its `Play` in which a playing buffer that does not loop ends: the first in which
+/// its write cursor reaches `end` (measured, [`cursors`]), at most `now_n` (where it is known to
+/// have).
+fn end_period(at: impl Fn(u64) -> u64, end: u64, now_n: u64) -> u64 {
+    let (mut lo, mut hi) = (0, now_n);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if at(mid) >= end {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
 }
 
 /// Brings a playing non-looping buffer that reached its end to `Ended`; answers the play and
@@ -2028,40 +2367,71 @@ fn frames(n: u64, frequency: u32) -> u64 {
 fn cursors(e: &mut Engine, this: Ptr) -> (u32, u32) {
     tick(e);
     let now = e.clock_now_us();
+    cursors_at(e, this, now)
+}
+
+/// [`cursors`] at the clock reading `now`.
+fn cursors_at(e: &mut Engine, this: Ptr, now: u64) -> (u32, u32) {
     let b = buffer(e, this);
     match b.play {
-        Play::Stopped(at) => (at, at),
-        Play::Ended => (0, 0),
+        Play::Stopped { at, .. } => (at, at),
+        Play::Ended { .. } => (0, 0),
         Play::Playing {
             looping,
             start,
             base,
+            from,
             first,
+            part,
+            end,
+            steps,
         } => {
-            let (n, f, len, align) = (periods(start, now), b.frequency(), b.frames(), b.align());
-            let consumed = base + frames(n, f);
-            // A buffer's first Play: the write cursor one frame past the frames played after the
-            // first period. A later Play of the same buffer (after it ended, after Stop, after
-            // SetCurrentPosition, measured 2026-10-30 with `dsound-capture replays`): the
-            // frames played rounded up, and it ends once that reaches the end.
-            let write = if first {
-                consumed + u64::from(n >= 1)
+            let (f, len, align) = (b.frequency(), b.frames(), b.align());
+            let n = periods(start, now);
+            // It ends in the period its write cursor reaches its end, which it never reads while
+            // it plays (measured, `dsound-capture endstop`); its steps go on from that period
+            // (`endphase`).
+            let write = if let Steps::Apl { mut fed, mut done } = steps {
+                // The second converter's frames, period by period from where they were counted.
+                let counter = b
+                    .apl
+                    .as_mut()
+                    .expect("the second converter's frame counter");
+                while done < n {
+                    fed += counter.period();
+                    done += 1;
+                    if !looping && base + fed >= end {
+                        b.play = Play::Ended { part: 0 };
+                        return (0, 0);
+                    }
+                }
+                if let Play::Playing { steps, .. } = &mut b.play {
+                    *steps = Steps::Apl { fed, done };
+                }
+                base + fed
             } else {
-                base + (n * u64::from(f)).div_ceil(100)
+                let at = |k: u64| write_after(base, first, part, f, steps, k);
+                let write = at(n);
+                if !looping && write >= end {
+                    let period = end_period(at, end, n);
+                    b.play = Play::Ended {
+                        part: part_after(part, period, f),
+                    };
+                    return (0, 0);
+                }
+                write
             };
-            let ended = if first { consumed >= len } else { write >= len };
-            if !looping && ended {
-                b.play = Play::Ended;
-                return (0, 0);
-            }
-            // The play cursor trails the write cursor by three periods at the format's rate.
+            // The play cursor trails the write cursor by three periods at the format's rate, held
+            // where it was played from until then.
             let lag = 3 * u64::from(b.rate()) / 100;
-            let play = if write - base > lag {
+            let play = if write - from > lag {
                 write - lag
             } else {
-                base
+                from
             };
-            let wrap = |x: u64| if looping { x % len } else { x.min(len) };
+            // Frames counted on round the buffer: wrapped (a buffer that does not loop stops short
+            // of its `end`).
+            let wrap = |x: u64| x % len;
             ((wrap(play) as u32) * align, (wrap(write) as u32) * align)
         }
     }
@@ -2180,9 +2550,12 @@ fn unlock(e: &mut Engine, this: Ptr, _p1: u32, _n1: u32, _p2: u32, _n2: u32) -> 
 }
 
 /// `Play(0, 0, flags)` with flags 0 or `DSBPLAY_LOOPING`: plays from where the buffer stopped
-/// (on the platform clock); a playing buffer only takes the looping flag; a buffer that played to
-/// its end plays from its start, measured. Playing from the end (set there by
-/// `SetCurrentPosition`) is not provided.
+/// (on the platform clock), in the steps it was taking (its `part`, measured); a playing buffer
+/// only takes the looping flag (turned not looping, it plays out the lap it is in and ends there,
+/// measured with `dsound-capture endstop`); a buffer that played to its end plays from its
+/// start, measured. A stopped buffer is never at its end: `SetCurrentPosition` refuses it, and a
+/// playing buffer ends in the period its write cursor reaches its end, so `Stop` never leaves it
+/// there (measured, `endstop`: stopped in the period before, `Play` plays the rest).
 fn play(e: &mut Engine, this: Ptr, reserved: u32, priority: u32, flags: u32) -> u32 {
     let b = secondary(e, this, "Play");
     assert!(
@@ -2190,37 +2563,65 @@ fn play(e: &mut Engine, this: Ptr, reserved: u32, priority: u32, flags: u32) -> 
         "IDirectSoundBuffer::Play({reserved:#x}, {priority:#x}, {flags:#x}) is not provided"
     );
     let looping = flags & DSBPLAY_LOOPING != 0;
-    let _ = cursors(e, this);
+    tick(e);
     let now = e.clock_now_us();
+    let _ = cursors_at(e, this, now);
     let first = !buffer(e, this).played;
+    let steps = steps_of(e, this);
     let play = match buffer(e, this).play {
-        Play::Stopped(at) => {
-            assert!(
-                at < b.bytes,
-                "Play from the end of the buffer is not provided"
-            );
-            Play::Playing {
-                looping,
-                start: now,
-                base: u64::from(at / b.align()),
-                first,
-            }
-        }
-        Play::Playing {
-            start, base, first, ..
-        } => Play::Playing {
+        Play::Stopped { at, part } => Play::Playing {
             looping,
+            start: now,
+            base: u64::from(at / b.align()),
+            from: u64::from(at / b.align()),
+            first,
+            part,
+            end: b.frames(),
+            steps,
+        },
+        Play::Playing {
+            looping: was,
             start,
             base,
+            from,
             first,
-        },
+            part,
+            end,
+            steps,
+        } => {
+            // Turned not looping, it plays out the lap it is in (measured, `endstop`).
+            let end = if was && !looping {
+                let w = match steps {
+                    // Counted up to now above.
+                    Steps::Apl { fed, .. } => base + fed,
+                    _ => write_after(base, first, part, b.frequency(), steps, periods(start, now)),
+                };
+                (w / b.frames() + 1) * b.frames()
+            } else {
+                end
+            };
+            Play::Playing {
+                looping,
+                start,
+                base,
+                from,
+                first,
+                part,
+                end,
+                steps,
+            }
+        }
         // Measured (2026-10-30, `dsound-capture replays`): a buffer that played to its end
-        // plays again from its start.
-        Play::Ended => Play::Playing {
+        // plays again from its start (2026-10-31, `endphase`: in the steps it was taking).
+        Play::Ended { part } => Play::Playing {
             looping,
             start: now,
             base: 0,
+            from: 0,
             first,
+            part,
+            end: b.frames(),
+            steps,
         },
     };
     buffer(e, this).played = true;
@@ -2249,20 +2650,25 @@ fn play(e: &mut Engine, this: Ptr, reserved: u32, priority: u32, flags: u32) -> 
 }
 
 /// `Stop()`: both cursors stay at the write cursor (at 0 for a buffer that played to its end),
-/// measured.
+/// measured; where its position was in hundredths of a frame is kept for its next `Play` (`part`,
+/// measured with `dsound-capture endphase` after stops at 3 to 10 periods).
 fn stop(e: &mut Engine, this: Ptr) -> u32 {
     let b = secondary(e, this, "Stop");
     if matches!(b.play, Play::Playing { .. }) {
         note(e, &format!("Stop {:08x}", this.addr()));
     }
-    let ended = buffer(e, this).play == Play::Ended;
-    let (_, write) = cursors(e, this);
-    let ended = ended || buffer(e, this).play == Play::Ended;
-    buffer(e, this).play = match b.play {
-        Play::Stopped(at) => Play::Stopped(at),
+    tick(e);
+    let now = e.clock_now_us();
+    let (_, write) = cursors_at(e, this, now);
+    buffer(e, this).play = match (b.play, buffer(e, this).play) {
+        (Play::Stopped { at, part }, _) => Play::Stopped { at, part },
         // Measured: a buffer that played to its end keeps both cursors at 0.
-        _ if ended => Play::Stopped(0),
-        _ => Play::Stopped(write),
+        (_, Play::Ended { part }) => Play::Stopped { at: 0, part },
+        (Play::Playing { start, part, .. }, _) => Play::Stopped {
+            at: write,
+            part: part_after(part, periods(start, now), b.frequency()),
+        },
+        (Play::Ended { part }, _) => Play::Stopped { at: 0, part },
     };
     with_voice(e, this.addr(), |m, at| {
         if let Some(voice) = m.all.get_mut(&at) {
@@ -2273,20 +2679,87 @@ fn stop(e: &mut Engine, this: Ptr) -> u32 {
     DS_OK
 }
 
-/// `SetCurrentPosition(at)` on a stopped buffer: both cursors there; past the end
-/// `DSERR_INVALIDPARAM`. On a playing buffer, or one that played to its end, not provided.
+/// `SetCurrentPosition(at)` (measured 2026-10-31, `dsound-capture setpos`, module documentation):
+/// `at` down to a whole frame. At or past the end `DSERR_INVALIDPARAM` and nothing changes,
+/// whether the buffer plays or not. A stopped buffer, or one that played to its end, stays
+/// stopped with both cursors there, keeping the steps it was taking for its next `Play`. A
+/// playing buffer has both cursors there at once and goes on playing from there, looping as it
+/// was: the write cursor moves on from it by the steps the buffer was taking (`part`,
+/// [`cursors`]; a first `Play` moved before its first period still has its lead to come), the
+/// play cursor stays on it until the write cursor is three periods past, and a buffer that does
+/// not loop ends when the write cursor reaches its end.
+///
+/// What is heard (`dsmix-measure` `DSMIX_SETPOS` with `DSMIX_HOOK`, 2026-10-31, 42 captures at
+/// 48000, 22050 and 44100 Hz, mono and stereo, looping and not, with the distortion and
+/// without, every sample): what DirectSound had mixed (up to the write cursor) plays out, and
+/// its next period mixes from the new place through the buffer's converter as it was, kept
+/// with all it holds ([`super::mixer::Voice::move_to`]); a distortion starts over there as at
+/// `Play` (cleared, from 32 frames before). Here the voice moves at its next period. The moved
+/// voice keeps its place in the sum (`DSMIX_SETPOS_ORDER`, 12 captures, three runs, of three
+/// voices played A, B, C, newest first in the sum, one of them moved: moved, the oldest, A, is
+/// still added last, so not to the front; moved, B or C is not added after A, so not to the
+/// end; with three voices the order of the two added first cannot show).
+///
+/// Not measured: a voice the output has already played to its end (the output runs up to
+/// 100 ms ahead of the platform clock, `Pace`) while the buffer still plays on the platform
+/// clock starts again there, with a new converter, in its place in the sum.
 fn set_current_position(e: &mut Engine, this: Ptr, at: u32) -> u32 {
     let b = secondary(e, this, "SetCurrentPosition");
-    let _ = cursors(e, this);
-    if at > b.bytes {
+    tick(e);
+    let now = e.clock_now_us();
+    let _ = cursors_at(e, this, now);
+    if at >= b.bytes {
         return DSERR_INVALIDPARAM;
     }
+    let at = at - at % b.align();
+    let frame = at / b.align();
     let state = buffer(e, this).play;
-    assert!(
-        matches!(state, Play::Stopped(_)),
-        "SetCurrentPosition on a buffer that is not stopped is not provided"
-    );
-    buffer(e, this).play = Play::Stopped(at - at % b.align());
+    buffer(e, this).play = match state {
+        Play::Playing {
+            looping,
+            start,
+            first,
+            part,
+            ..
+        } => {
+            let n = periods(start, now);
+            // The second converter's frames counted from here, the counter going on.
+            let steps = steps_of(e, this);
+            Play::Playing {
+                looping,
+                start: now,
+                base: u64::from(frame),
+                from: u64::from(frame),
+                // A first `Play` moved before its first period still has its lead to come.
+                first: first && n == 0,
+                part: part_after(part, n, b.frequency()),
+                end: b.frames(),
+                steps,
+            }
+        }
+        Play::Stopped { part, .. } | Play::Ended { part } => Play::Stopped { at, part },
+    };
+    if matches!(state, Play::Playing { .. }) {
+        note(
+            e,
+            &format!("SetCurrentPosition {:08x} to {at:#x}", this.addr()),
+        );
+        with_voice(e, this.addr(), |m, key| {
+            let listed = m.playing.contains(&key);
+            if let Some(voice) = m.all.get_mut(&key).filter(|_| listed) {
+                let frame = frame as usize;
+                if let Some(fx) = voice.fx.as_mut() {
+                    fx.start(&mut voice.data, frame);
+                }
+                if voice.position.is_some() {
+                    voice.move_to(frame);
+                } else {
+                    voice.apl = m.apl;
+                    voice.start(frame);
+                }
+            }
+        });
+    }
     DS_OK
 }
 
@@ -2319,7 +2792,7 @@ fn set_fx(e: &mut Engine, this: Ptr, count: u32, descriptions: Ptr, results: Ptr
     );
     let name = name.expect("checked");
     assert!(
-        b.locks == 0 && matches!(b.play, Play::Stopped(_)),
+        b.locks == 0 && matches!(b.play, Play::Stopped { .. }),
         "SetFX on a playing or locked buffer is not provided"
     );
     let fx = b.flags & DSBCAPS_CTRLFX != 0;
@@ -3260,30 +3733,64 @@ mod tests {
         (e.mem.u32(0x1d00), e.mem.u32(0x1d04), e.mem.u32(0x1d08))
     }
 
+    /// Turns on DirectSound's second converter for the device, as a large frequency change on any
+    /// buffer does.
+    fn second_converter(e: &mut Engine, ds: u32) {
+        let (_, x) = create(e, ds, 0x2e0, false, 1, 44100);
+        assert_eq!(e.vcall(x, 0x44, &[30000]).u32(), DS_OK);
+        assert!(e.kernel.sound.apl);
+    }
+
+    /// Measured: the first `Play` of a 22050 Hz mono 16-bit looping buffer on the platform clock's
+    /// 10 ms periods, with DirectSound's first converter (`setpos-run1.tsv` `loop_half_play`: the
+    /// frames played rounded up and 33 more) and with its second (`freqphase-run1.tsv` `5622 1 10
+    /// ac44 steady 0 0 0 apl`: the frames its converter takes, here rounded up and one more from
+    /// the second period).
     #[test]
     fn the_cursors_move_by_10_ms_periods_of_the_platform_clock() {
         let mut e = engine();
         let ds = start_up(&mut e);
-        // 22050 Hz mono 16-bit, one second, looping, started at 5 ms.
         let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
         e.clock_ms = 5;
         assert_eq!(e.vcall(b, 0x30, &[0, 0, 1]).u32(), DS_OK);
         assert_eq!(position(&mut e, b), (0, 0, 5));
-        e.clock_ms = 10; // the first period
-        assert_eq!(position(&mut e, b), (0, 2 * 221, 5));
-        e.clock_ms = 30; // the third: the play cursor's first frame
-        assert_eq!(position(&mut e, b), (2, 2 * 662, 5));
-        e.clock_ms = 40;
-        assert_eq!(position(&mut e, b), (2 * 222, 2 * 883, 5));
-        // Past the end of the buffer: round again.
-        e.clock_ms = 1010; // 101 periods: 22270 frames
-        assert_eq!(position(&mut e, b).1, 2 * (22270 + 1 - 22050));
+        let dmo = [
+            (0, 254),
+            (0, 474),
+            (34, 695),
+            (254, 915),
+            (475, 1136),
+            (695, 1356),
+        ];
+        for (i, (p, w)) in dmo.into_iter().enumerate() {
+            e.clock_ms = 10 * (i as u32 + 1);
+            assert_eq!(position(&mut e, b), (2 * p, 2 * w, 5), "period {}", i + 1);
+        }
+        // Past the end of the buffer: round again (101 periods: 33 + 22271 frames).
+        e.clock_ms = 1010;
+        assert_eq!(position(&mut e, b).1, 2 * (33 + 22271 - 22050));
         assert_eq!(e.vcall(b, 0x48, &[]).u32(), DS_OK);
         assert_eq!(
             position(&mut e, b),
-            (2 * 221, 2 * 221, 0),
+            (2 * 254, 2 * 254, 0),
             "both at the write cursor"
         );
+        second_converter(&mut e, ds);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        e.clock_ms = 2000;
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, 1]).u32(), DS_OK);
+        let lanes = [
+            (0, 221),
+            (0, 442),
+            (2, 663),
+            (222, 883),
+            (443, 1104),
+            (663, 1324),
+        ];
+        for (i, (p, w)) in lanes.into_iter().enumerate() {
+            e.clock_ms = 2000 + 10 * (i as u32 + 1);
+            assert_eq!(position(&mut e, b), (2 * p, 2 * w, 5), "period {}", i + 1);
+        }
     }
 
     /// Measured (`dsound-capture replays`): a later Play of a buffer puts the write cursor at the
@@ -3294,8 +3801,8 @@ mod tests {
         let ds = start_up(&mut e);
         let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
         assert_eq!(e.vcall(b, 0x30, &[0, 0, 0]).u32(), DS_OK);
-        e.clock_ms = 20; // two periods: 441 frames played
-        assert_eq!(position(&mut e, b).1, 2 * 442, "first Play");
+        e.clock_ms = 20; // two periods: 441 frames played, 33 ahead (the first converter)
+        assert_eq!(position(&mut e, b).1, 2 * 474, "first Play");
         assert_eq!(e.vcall(b, 0x48, &[]).u32(), DS_OK);
         assert_eq!(e.vcall(b, 0x34, &[0]).u32(), DS_OK);
         e.clock_ms = 100;
@@ -3338,16 +3845,917 @@ mod tests {
         assert_eq!(position(&mut e, b), (0, 0, 0));
     }
 
+    /// A `0x2e0` buffer of `size` bytes, `channels`, `rate` and `bits`.
+    fn create_format(e: &mut Engine, ds: u32, format: (u16, u32, u16), size: u32) -> u32 {
+        let (channels, rate, bits) = format;
+        e.mem.write(0x1600, &format_bytes(1, channels, rate, bits));
+        for (i, w) in [0x24, 0x2e0, size, 0, 0x1600, 0, 0, 0, 0]
+            .into_iter()
+            .enumerate()
+        {
+            e.mem.set_u32(0x1700 + 4 * i as u32, w);
+        }
+        e.mem.set_u32(0x1004, 0);
+        assert_eq!(e.vcall(ds, 0xc, &[0x1700, 0x1004, 0]).u32(), DS_OK);
+        e.mem.u32(0x1004)
+    }
+
+    /// Checks the play and write cursors and the status at each clock reading (ms).
+    fn expect_cursors(e: &mut Engine, b: u32, expect: &[(u32, (u32, u32, u32))]) {
+        for &(ms, want) in expect {
+            e.clock_ms = ms;
+            assert_eq!(position(e, b), want, "at {ms} ms");
+        }
+    }
+
+    /// Measured (`dsound-capture setpos`, 2026-10-31, `setpos-run1.tsv` `loop_half_play`): the
+    /// game's call (`00aed080`: `SetCurrentPosition` then `Play(DSBPLAY_LOOPING)`) on a buffer
+    /// playing for 10 periods. Both cursors at the new place at once, then the write cursor on
+    /// from it by 221, 441, 662 ... frames (the steps the buffer was taking), the play cursor
+    /// held there until the write cursor is three periods past.
+    #[test]
+    fn a_playing_buffer_moved_goes_on_from_there() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]).u32(), DS_OK);
+        e.clock_ms = 100;
+        assert_eq!(e.vcall(b, 0x34, &[0x5622]).u32(), DS_OK);
+        assert_eq!(position(&mut e, b), (0x5622, 0x5622, 5));
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]).u32(), DS_OK);
+        assert_eq!(position(&mut e, b), (0x5622, 0x5622, 5));
+        expect_cursors(
+            &mut e,
+            b,
+            &[
+                (110, (0x5622, 0x57dc, 5)),
+                (120, (0x5622, 0x5994, 5)),
+                (130, (0x5624, 0x5b4e, 5)),
+                (140, (0x57dc, 0x5d06, 5)),
+                (150, (0x5996, 0x5ec0, 5)),
+            ],
+        );
+    }
+
+    /// Measured (`setpos-run2.tsv` `loop_half 106600`, `setpos-run3.tsv` 11025 Hz): moved after
+    /// an odd number of periods, the 22050 Hz buffer's steps go on 220, 221, 220 ...; an 11025 Hz
+    /// 8-bit buffer's after 10 and after 11 periods.
+    #[test]
+    fn a_moved_buffer_keeps_the_steps_it_was_taking() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]);
+        e.clock_ms = 110;
+        assert_eq!(e.vcall(b, 0x34, &[0x5622]).u32(), DS_OK);
+        expect_cursors(
+            &mut e,
+            b,
+            &[
+                (110, (0x5622, 0x5622, 5)),
+                (120, (0x5622, 0x57da, 5)),
+                (130, (0x5622, 0x5994, 5)),
+                (140, (0x5622, 0x5b4c, 5)),
+                (150, (0x57dc, 0x5d06, 5)),
+                (160, (0x5994, 0x5ebe, 5)),
+            ],
+        );
+        for (played, expect) in [
+            (
+                100,
+                [
+                    (0x1588, 0x15f6),
+                    (0x1588, 0x1664),
+                    (0x1589, 0x16d3),
+                    (0x15f7, 0x1741),
+                    (0x1665, 0x17af),
+                    (0x16d3, 0x181d),
+                ],
+            ),
+            (
+                110,
+                [
+                    (0x1588, 0x15f6),
+                    (0x1588, 0x1665),
+                    (0x1589, 0x16d3),
+                    (0x15f7, 0x1741),
+                    (0x1665, 0x17af),
+                    (0x16d4, 0x181e),
+                ],
+            ),
+        ] {
+            let b = create_format(&mut e, ds, (1, 11025, 8), 11025);
+            e.clock_ms = 1000;
+            e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]);
+            e.clock_ms = 1000 + played;
+            assert_eq!(e.vcall(b, 0x34, &[0x1588]).u32(), DS_OK);
+            for (i, (p, w)) in expect.into_iter().enumerate() {
+                e.clock_ms = 1000 + played + 10 * (i as u32 + 1);
+                assert_eq!(position(&mut e, b), (p, w, 5), "{played}: period {}", i + 1);
+            }
+            e.vcall(b, 0x48, &[]);
+        }
+    }
+
+    /// Measured (`setpos-run1.tsv` `loop_near_end`, `once_late`, `loop_odd`, `loop_end`,
+    /// `loop_past`, `loop_half_play_once`): a looping buffer moved to its last frame goes round;
+    /// one that does not loop ends when the write cursor reaches its end; an odd byte is taken
+    /// down to its frame; the end and past it are refused and change nothing; `Play` without the
+    /// looping flag after the move takes the flag off.
+    #[test]
+    fn a_moved_buffer_goes_round_or_ends() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]);
+        e.clock_ms = 100;
+        let before = position(&mut e, b);
+        for refused in [0xac44, 0xac46] {
+            assert_eq!(e.vcall(b, 0x34, &[refused]).u32(), DSERR_INVALIDPARAM);
+            assert_eq!(position(&mut e, b), before);
+        }
+        assert_eq!(e.vcall(b, 0x34, &[0xac43]).u32(), DS_OK);
+        expect_cursors(
+            &mut e,
+            b,
+            &[
+                (100, (0xac42, 0xac42, 5)),
+                (110, (0xac42, 0x1b8, 5)),
+                (120, (0xac42, 0x370, 5)),
+                (130, (0, 0x52a, 5)),
+                (140, (0x1b8, 0x6e2, 5)),
+            ],
+        );
+        // Not looping: from frame 16537 it ends at the 25th period.
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        e.clock_ms = 1000;
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        e.clock_ms = 1100;
+        assert_eq!(e.vcall(b, 0x34, &[0x8132]).u32(), DS_OK);
+        expect_cursors(
+            &mut e,
+            b,
+            &[
+                (1100, (0x8132, 0x8132, 1)),
+                (1110, (0x8132, 0x82ec, 1)),
+                (1130, (0x8134, 0x865e, 1)),
+                (1340, (0xa560, 0xaa8a, 1)),
+                (1350, (0, 0, 0)),
+            ],
+        );
+        // Looping, moved, then played without the flag: it ends.
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        e.clock_ms = 2000;
+        e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]);
+        e.clock_ms = 2100;
+        assert_eq!(e.vcall(b, 0x34, &[0x5623]).u32(), DS_OK);
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, 0]).u32(), DS_OK);
+        expect_cursors(
+            &mut e,
+            b,
+            &[
+                (2100, (0x5622, 0x5622, 1)),
+                (2110, (0x5622, 0x57dc, 1)),
+                (2550, (0x9e7e, 0xa3a8, 1)),
+                (2600, (0, 0, 0)),
+            ],
+        );
+    }
+
+    /// Measured (`setpos-run1.tsv` `ended_half`, `ended_end`): a buffer that played to its end,
+    /// moved, stays stopped there and plays from there as a later `Play`; moved to its end it is
+    /// refused and plays again from its start.
+    #[test]
+    fn a_buffer_that_ended_moved_plays_from_there() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 8820);
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        e.clock_ms = 300;
+        assert_eq!(position(&mut e, b), (0, 0, 0), "ended");
+        assert_eq!(e.vcall(b, 0x34, &[0x113a]).u32(), DS_OK);
+        assert_eq!(position(&mut e, b), (0x113a, 0x113a, 0));
+        e.clock_ms = 350;
+        assert_eq!(position(&mut e, b), (0x113a, 0x113a, 0));
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, 0]).u32(), DS_OK);
+        expect_cursors(
+            &mut e,
+            b,
+            &[
+                (360, (0x113a, 0x12f4, 1)),
+                (370, (0x113a, 0x14ac, 1)),
+                (380, (0x113c, 0x1666, 1)),
+            ],
+        );
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 8820);
+        e.clock_ms = 1000;
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        e.clock_ms = 1300;
+        assert_eq!(e.vcall(b, 0x34, &[0x2274]).u32(), DSERR_INVALIDPARAM);
+        assert_eq!(position(&mut e, b), (0, 0, 0));
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        e.clock_ms = 1310;
+        assert_eq!(position(&mut e, b), (0, 0x1ba, 1), "from the start");
+    }
+
+    /// Measured (`setpos-run4.tsv` `fresh_end`, `stopped_end`, and its first `loop_half`): the end
+    /// of a stopped buffer is refused too; a first `Play` moved before its first period still has
+    /// its lead to come (33 frames with the first converter: `0x5622 + 0x1fc` a period later).
+    #[test]
+    fn the_end_is_refused_and_a_first_lead_kept() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 8820);
+        for refused in [0x2274, 0x2276] {
+            assert_eq!(e.vcall(b, 0x34, &[refused]).u32(), DSERR_INVALIDPARAM);
+            assert_eq!(position(&mut e, b), (0, 0, 0));
+        }
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        e.clock_ms = 50;
+        e.vcall(b, 0x48, &[]);
+        let stopped = position(&mut e, b);
+        assert_eq!(e.vcall(b, 0x34, &[0x2274]).u32(), DSERR_INVALIDPARAM);
+        assert_eq!(position(&mut e, b), stopped);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        e.clock_ms = 1001;
+        e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]);
+        e.clock_ms = 1005;
+        assert_eq!(e.vcall(b, 0x34, &[0x5622]).u32(), DS_OK);
+        assert_eq!(position(&mut e, b), (0x5622, 0x5622, 5));
+        e.clock_ms = 1010;
+        assert_eq!(position(&mut e, b), (0x5622, 0x5622 + 2 * (33 + 221), 5));
+    }
+
+    /// Measured (`setpos-run4.tsv` `2b11 1 8 89d 102e0 stopped_half`): an 11025 Hz 8-bit buffer
+    /// stopped after 6 periods, moved and played again goes on in the steps it was taking (110,
+    /// 220, 331 ... frames, not 111, 221, 331).
+    #[test]
+    fn a_stopped_buffer_plays_on_in_its_steps() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let b = create_format(&mut e, ds, (1, 11025, 8), 0x89d);
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        e.clock_ms = 60;
+        assert_eq!(e.vcall(b, 0x48, &[]).u32(), DS_OK);
+        assert_eq!(e.vcall(b, 0x34, &[0x89d]).u32(), DSERR_INVALIDPARAM);
+        assert_eq!(e.vcall(b, 0x34, &[0x44e]).u32(), DS_OK);
+        assert_eq!(position(&mut e, b), (0x44e, 0x44e, 0));
+        e.clock_ms = 100;
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, 0]).u32(), DS_OK);
+        expect_cursors(
+            &mut e,
+            b,
+            &[
+                (100, (0x44e, 0x44e, 1)),
+                (110, (0x44e, 0x4bc, 1)),
+                (120, (0x44e, 0x52a, 1)),
+                (130, (0x44f, 0x599, 1)),
+                (140, (0x4bd, 0x607, 1)),
+                (150, (0x52b, 0x675, 1)),
+                (160, (0x599, 0x6e3, 1)),
+                (170, (0x608, 0x752, 1)),
+                (180, (0x676, 0x7c0, 1)),
+            ],
+        );
+    }
+
+    /// Measured (`endphase-run1.tsv` `2b11 1 8 8d4 ended` and `again`): a buffer played to its end
+    /// plays again in the steps of the periods it had played, to the period its write cursor
+    /// reached the end (21, then 42).
+    #[test]
+    fn a_buffer_that_ended_plays_again_in_its_steps() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let b = create_format(&mut e, ds, (1, 11025, 8), 2260);
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        e.clock_ms = 210;
+        assert_eq!(position(&mut e, b), (0, 0, 0), "ended in its 21st period");
+        e.clock_ms = 300;
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        let steps = [
+            (0, 0x6e),
+            (0, 0xdc),
+            (0, 0x14a),
+            (0x6f, 0x1b9),
+            (0xdd, 0x227),
+            (0x14b, 0x295),
+        ];
+        for (i, (p, w)) in steps.into_iter().enumerate() {
+            e.clock_ms = 310 + 10 * i as u32;
+            assert_eq!(position(&mut e, b), (p, w, 1), "period {}", i + 1);
+        }
+        e.clock_ms = 520;
+        assert_eq!(position(&mut e, b), (0, 0, 0), "ended again, 21 periods on");
+        e.clock_ms = 600;
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        let steps = [
+            (0, 0x6e),
+            (0, 0xdc),
+            (1, 0x14b),
+            (0x6f, 0x1b9),
+            (0xdd, 0x227),
+            (0x14b, 0x295),
+        ];
+        for (i, (p, w)) in steps.into_iter().enumerate() {
+            e.clock_ms = 610 + 10 * i as u32;
+            assert_eq!(position(&mut e, b), (p, w, 1), "again: period {}", i + 1);
+        }
+    }
+
+    /// Measured (`freqphase-run1..3.tsv` `2b11 1 8 2b11 retune_stop 11040 5 3 apl`, the same in
+    /// all three runs): an 11025 Hz 8-bit buffer retuned to 11040 Hz after 5 periods, stopped 3
+    /// periods later and played again: the position's hundredths go on through the change and
+    /// the stop, and the play cursor goes on trailing after the change.
+    #[test]
+    fn a_retuned_buffer_keeps_its_position_hundredths() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        second_converter(&mut e, ds);
+        let b = create_format(&mut e, ds, (1, 11025, 8), 0x2b11);
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        let first = [(0, 111), (0, 221), (1, 331), (112, 442), (222, 552)];
+        for (i, (p, w)) in first.into_iter().enumerate() {
+            e.clock_ms = 10 * (i as u32 + 1);
+            assert_eq!(position(&mut e, b), (p, w, 1), "period {}", i + 1);
+        }
+        assert_eq!(e.vcall(b, 0x44, &[11040]).u32(), DS_OK);
+        // Measured 1 us after the call (`43569:de:228:1`, all 72 retunes): unchanged.
+        assert_eq!(position(&mut e, b), (222, 552, 1), "right after the call");
+        expect_cursors(
+            &mut e,
+            b,
+            &[
+                (60, (332, 662, 1)),
+                (70, (443, 773, 1)),
+                (80, (553, 883, 1)),
+            ],
+        );
+        assert_eq!(e.vcall(b, 0x48, &[]).u32(), DS_OK);
+        assert_eq!(position(&mut e, b), (883, 883, 0));
+        e.clock_ms = 100;
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, 0]).u32(), DS_OK);
+        expect_cursors(
+            &mut e,
+            b,
+            &[
+                (110, (883, 993, 1)),
+                (120, (883, 1104, 1)),
+                (130, (884, 1214, 1)),
+                (140, (995, 1325, 1)),
+                (150, (1105, 1435, 1)),
+                (160, (1215, 1545, 1)),
+                (170, (1326, 1656, 1)),
+            ],
+        );
+    }
+
+    /// A move right after `SetFrequency`, in the same period, of a first `Play` past its first
+    /// period goes on as a later `Play` (the same as without the `SetFrequency`, measured with
+    /// `setpos-run1.tsv` `loop_half_play`: 5994 at 120 ms, then 57dc:5d06 at 140 ms).
+    #[test]
+    fn a_move_right_after_set_frequency_takes_the_measured_steps() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]);
+        e.clock_ms = 100;
+        assert_eq!(e.vcall(b, 0x44, &[22050]).u32(), DS_OK);
+        assert_eq!(e.vcall(b, 0x34, &[0x5622]).u32(), DS_OK);
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]).u32(), DS_OK);
+        expect_cursors(
+            &mut e,
+            b,
+            &[
+                (110, (0x5622, 0x57dc, 5)),
+                (120, (0x5622, 0x5994, 5)),
+                (140, (0x57dc, 0x5d06, 5)),
+            ],
+        );
+    }
+
+    /// One replay program (`tools/programs.pl` in `build43-scratch/measure/dss1-work`, from the
+    /// measured `dsound-capture` lines: `id<TAB>rate channels bits bytes<TAB>frequency set before
+    /// the first Play (0: none)<TAB>the first Play's flags (`none`: not played)<TAB>tokens`, the
+    /// tokens the measured reads `S:time:play:write:status` and the calls `C:stop`, `C:play:F`,
+    /// `C:f:HZ`, `C:scp:BYTE`, `C:wait:PERIODS`, `C:waitend`) replayed through the layer: each
+    /// call after as many periods as the measured write cursor changed before it (or ended), the
+    /// cursors read at every period, as `segment:period:play:write:status` (bytes, hex).
+    fn replay_program(line: &str) -> String {
+        let f: Vec<&str> = line.split('\t').collect();
+        let fmt: Vec<u32> = f[1].split(' ').map(|x| x.parse().unwrap()).collect();
+        let (rate, channels, bits, bytes) = (fmt[0], fmt[1] as u16, fmt[2] as u16, fmt[3]);
+        let init: u32 = f[2].parse().unwrap();
+        let first = f[3];
+        let hex = |s: &str| u32::from_str_radix(s, 16).unwrap();
+        let mut periods = 0u32;
+        let mut last: Option<(u32, Option<bool>)> = None;
+        let mut calls: Vec<(u32, String)> = Vec::new();
+        for t in f[4].split(' ') {
+            if let Some(c) = t.strip_prefix("C:") {
+                calls.push((periods, c.to_string()));
+                last = last.map(|(w, _)| (w, None));
+                continue;
+            }
+            let v: Vec<u32> = t[2..].split(':').skip(1).map(hex).collect();
+            let playing = v[2] & 1 != 0;
+            if let Some((w, Some(true))) = last {
+                if v[1] != w || !playing {
+                    periods += 1;
+                }
+            }
+            last = Some((v[1], Some(playing)));
+        }
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        // Measured with the second converter on: the `apl` and `big` parts.
+        e.kernel.sound.apl = f[0].ends_with(" apl") || f[0].ends_with(" big");
+        let b = create_format(&mut e, ds, (channels, rate, bits), bytes);
+        let mut out = Vec::new();
+        let (mut at, mut off, mut seg, mut seg_at) = (0u32, 0u32, 0u32, 0u32);
+        let read = |e: &mut Engine, out: &mut Vec<String>, seg: u32, j: u32| {
+            let (p, w, s) = position(e, b);
+            out.push(format!("{seg}:{j}:{p:x}:{w:x}:{s:x}"));
+        };
+        e.clock_ms = 0;
+        if init != 0 {
+            e.vcall(b, 0x44, &[init]);
+        }
+        if first != "none" {
+            e.vcall(b, 0x30, &[0, 0, first.parse().unwrap()]);
+        }
+        read(&mut e, &mut out, 0, 0);
+        let n = calls.len();
+        for (k, (p, c)) in calls.into_iter().enumerate() {
+            while at < p {
+                at += 1;
+                e.clock_ms = 10 * (at + off);
+                read(&mut e, &mut out, seg, at - seg_at);
+            }
+            let parts: Vec<&str> = c.split(':').collect();
+            match parts[0] {
+                "stop" => {
+                    e.vcall(b, 0x48, &[]);
+                }
+                "play" => {
+                    e.vcall(b, 0x30, &[0, 0, parts[1].parse().unwrap()]);
+                }
+                "f" => {
+                    e.vcall(b, 0x44, &[parts[1].parse().unwrap()]);
+                }
+                "scp" => {
+                    let r = e.vcall(b, 0x34, &[hex(parts[1])]).u32();
+                    out.push(format!("scp={r:x}"));
+                }
+                "wait" => {
+                    off += parts[1].parse::<u32>().unwrap();
+                    e.clock_ms = 10 * (at + off);
+                }
+                "waitend" => {
+                    for _ in 0..200 {
+                        off += 1;
+                        e.clock_ms = 10 * (at + off);
+                        if position(&mut e, b).2 & 1 == 0 {
+                            break;
+                        }
+                    }
+                    off += 2;
+                    e.clock_ms = 10 * (at + off);
+                }
+                _ => {}
+            }
+            seg += 1;
+            seg_at = at;
+            read(&mut e, &mut out, seg, 0);
+            if k + 1 == n {
+                for j in 1..=45 {
+                    e.clock_ms = 10 * (at + off + j);
+                    read(&mut e, &mut out, seg, j);
+                }
+            }
+        }
+        if n == 0 {
+            for j in 1..=45 {
+                e.clock_ms = 10 * j;
+                read(&mut e, &mut out, 0, j);
+            }
+        }
+        out.join(" ")
+    }
+
+    /// Every replay program in the file `NV_REPLAY_PROGRAMS` (`tools/programs.pl`) through the
+    /// layer, each line `id<TAB>reads` (or `PANIC message`) written to `NV_REPLAY_OUT`, for
+    /// `tools/cmp2.pl` to set against the measured reads period by period (`cargo test -p
+    /// engine-core --lib -- --ignored measured_replay`; `cmp2.pl programs out abs 0` compares
+    /// every read). A second converter turned on in the measurement (the `apl` and `big` parts)
+    /// is turned on here by the line's part. The counts per data set and the lines that differ
+    /// are in docs/SOUND.md.
+    #[test]
+    #[ignore]
+    fn measured_replay() {
+        let Ok(file) = std::env::var("NV_REPLAY_PROGRAMS") else {
+            return;
+        };
+        let text = std::fs::read_to_string(file).unwrap();
+        let mut o = String::new();
+        std::panic::set_hook(Box::new(|_| {}));
+        for line in text.lines() {
+            let id = line.split('\t').next().unwrap();
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| replay_program(line)));
+            match r {
+                Ok(s) => o += &format!("{id}\t{s}\n"),
+                Err(p) => {
+                    let msg = p
+                        .downcast_ref::<String>()
+                        .cloned()
+                        .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+                        .unwrap_or_default();
+                    o += &format!("{id}\tPANIC {}\n", msg.replace(['\t', '\n'], " "));
+                }
+            }
+        }
+        let _ = std::panic::take_hook();
+        std::fs::write(std::env::var("NV_REPLAY_OUT").unwrap(), o).unwrap();
+    }
+
+    /// Every `dsound-capture freqphase` case (the file in `NV_DSOUND_FREQPHASE`) replayed through
+    /// the layer: the same calls after the same number of periods (the measured write cursor's
+    /// changes), the cursors read at every period. Checks that nothing stops and that right
+    /// after `SetFrequency` both cursors read as just before it, as measured in every case
+    /// (`cargo test -p engine-core --lib -- --ignored freqphase_replay --nocapture`).
+    #[test]
+    #[ignore]
+    fn freqphase_replay() {
+        let Ok(file) = std::env::var("NV_DSOUND_FREQPHASE") else {
+            return;
+        };
+        let text = std::fs::read_to_string(file).unwrap();
+        let mut tally: BTreeMap<String, (u32, u32)> = BTreeMap::new();
+        for line in text.lines().filter(|l| l.starts_with("DsFreqPhase")) {
+            let f: Vec<&str> = line.split('\t').collect();
+            let w: Vec<&str> = f[1].split(' ').collect();
+            let hex = |s: &str| u32::from_str_radix(s, 16).unwrap();
+            let (rate, channels, bits, bytes) = (hex(w[0]), hex(w[1]) as u16, hex(w[2]), hex(w[3]));
+            let (variant, to, part): (&str, u32, &str) = (w[4], w[5].parse().unwrap(), w[8]);
+            let align = u32::from(channels) * bits / 8;
+            // The calls, each after the number of periods the write cursor had moved by then; and
+            // the measured reads after each call (play and write frames, distinct, `None` once
+            // ended), the first the read right after it.
+            // A period: a change of the write cursor while it plays, or its end (the status going
+            // to 0 without a call).
+            let (mut periods, mut calls) = (0u32, Vec::new());
+            let mut last: Option<(u32, Option<bool>)> = None;
+            let mut measured: Vec<Vec<Option<(u32, u32)>>> = vec![Vec::new()];
+            for x in f[3].split(' ') {
+                if let Some(m) = x.strip_prefix('|') {
+                    calls.push((periods, m.split('@').next().unwrap().to_string()));
+                    measured.push(Vec::new());
+                    last = last.map(|(w, _)| (w, None));
+                    continue;
+                }
+                let v: Vec<u32> = x.split(':').skip(1).map(hex).collect();
+                let seg = measured.last_mut().unwrap();
+                let playing = v[2] & 1 != 0;
+                let read = playing.then_some((v[0] / align, v[1] / align));
+                if seg.last() != Some(&read) && seg.last() != Some(&None) {
+                    seg.push(read);
+                }
+                if let Some((w, Some(true))) = last {
+                    if v[1] != w || !playing {
+                        periods += 1;
+                    }
+                }
+                last = Some((v[1], Some(playing)));
+            }
+            let mut e = engine();
+            let ds = start_up(&mut e);
+            let b = create_format(&mut e, ds, (channels, rate, bits as u16), bytes);
+            if variant == "steady" && to != 0 {
+                e.vcall(b, 0x44, &[to]);
+            }
+            e.vcall(b, 0x30, &[0, 0, 0]);
+            let read = |e: &mut Engine| {
+                let (p, w, s) = position(e, b);
+                (s & 1 != 0).then_some((p / align, w / align))
+            };
+            let mut layer: Vec<Vec<Option<(u32, u32)>>> = vec![Vec::new()];
+            let mut at = 0;
+            let n = calls.len();
+            for (k, (p, what)) in calls.into_iter().enumerate() {
+                while at < p {
+                    at += 1;
+                    e.clock_ms = 10 * at;
+                    let r = read(&mut e);
+                    layer.last_mut().unwrap().push(r);
+                }
+                let before = position(&mut e, b);
+                match what.as_str() {
+                    "f" => {
+                        assert_eq!(e.vcall(b, 0x44, &[to]).u32(), DS_OK);
+                        if before.2 & 1 != 0 {
+                            assert_eq!(position(&mut e, b), before, "{}: right after", f[1]);
+                        }
+                    }
+                    "stop" => {
+                        e.vcall(b, 0x48, &[]);
+                    }
+                    "play" => {
+                        e.vcall(b, 0x30, &[0, 0, 0]);
+                    }
+                    _ => {}
+                }
+                layer.push(vec![read(&mut e)]);
+                if k + 1 == n {
+                    for j in 1..=40 {
+                        e.clock_ms = 10 * (at + j);
+                        let r = read(&mut e);
+                        layer.last_mut().unwrap().push(r);
+                    }
+                }
+            }
+            // The steps after `SetFrequency` while it plays and after the last `Play`, from the
+            // read right after the call, to the end or the next call.
+            let steps = |s: &[Option<(u32, u32)>]| -> Vec<Option<(i64, i64)>> {
+                let Some(Some((p0, w0))) = s.first().copied() else {
+                    return Vec::new();
+                };
+                let mut out = Vec::new();
+                for r in s {
+                    out.push(r.map(|(p, w)| {
+                        (i64::from(p) - i64::from(p0), i64::from(w) - i64::from(w0))
+                    }));
+                    if r.is_none() {
+                        break;
+                    }
+                }
+                out
+            };
+            let segments: Vec<usize> = (1..measured.len())
+                .filter(|&i| {
+                    let name = &f[3]
+                        .split(' ')
+                        .filter(|x| x.starts_with('|'))
+                        .nth(i - 1)
+                        .unwrap()[1..];
+                    name.starts_with("f@") && !measured[i].is_empty() || name.starts_with("play@")
+                })
+                .collect();
+            let mut ok = true;
+            for i in segments {
+                let (m, l) = (steps(&measured[i]), steps(&layer[i]));
+                let k = m.len().min(l.len());
+                if m[..k] != l[..k] {
+                    ok = false;
+                    let at = (0..k).find(|&j| m[j] != l[j]).unwrap_or(0);
+                    eprintln!(
+                        "  after call {i} from step {at}: measured {:?}, layer {:?}",
+                        &m[at..k.min(at + 4)],
+                        &l[at..k.min(at + 4)]
+                    );
+                }
+            }
+            let entry = tally.entry(format!("{part} {variant}")).or_default();
+            entry.0 += u32::from(ok);
+            entry.1 += 1;
+            if !ok {
+                eprintln!("differs: {}", f[1]);
+            }
+        }
+        let total: u32 = tally.values().map(|t| t.1).sum();
+        for (k, (ok, n)) in &tally {
+            eprintln!("{k}: {ok} of {n} as measured after the calls");
+        }
+        eprintln!("{total} cases replayed");
+        assert!(total > 0);
+    }
+
+    /// Measured (`endstop-run1..3.tsv` `5622 1 10 2274 loopoff dmo` and `2b11 1 8 89d loopoff_f
+    /// apl`, the same in all three runs): a looping buffer turned not looping 30 periods into its
+    /// first `Play` plays out the lap it is in and ends there; a `SetFrequency` to the frequency it
+    /// has changes nothing. Then the reviewer's sequence: a later `Play` past its end, retuned,
+    /// turned not looping.
+    #[test]
+    fn a_looping_buffer_turned_not_looping_plays_out_its_lap() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        // 4410 frames at 22050 Hz, the first converter: 33 + 6615 frames on after 30 periods.
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 8820);
+        e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]);
+        e.clock_ms = 300;
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, 0]).u32(), DS_OK);
+        let writes = [2238, 2459, 2679, 2900, 3120, 3341, 3561, 3782, 4002, 4223];
+        for (i, w) in writes.into_iter().enumerate() {
+            e.clock_ms = 300 + 10 * i as u32;
+            assert_eq!(
+                position(&mut e, b),
+                (2 * (w - 661), 2 * w, 1),
+                "period {}",
+                30 + i
+            );
+        }
+        e.clock_ms = 400;
+        assert_eq!(position(&mut e, b), (0, 0, 0));
+        // 2205 frames at 11025 Hz 8-bit, the second converter.
+        second_converter(&mut e, ds);
+        let b = create_format(&mut e, ds, (1, 11025, 8), 2205);
+        e.clock_ms = 1000;
+        e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]);
+        e.clock_ms = 1300;
+        assert_eq!(e.vcall(b, 0x44, &[11025]).u32(), DS_OK);
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, 0]).u32(), DS_OK);
+        let writes = [
+            0x44f, 0x4bd, 0x52c, 0x59a, 0x608, 0x676, 0x6e5, 0x753, 0x7c1, 0x82f,
+        ];
+        for (i, w) in writes.into_iter().enumerate() {
+            e.clock_ms = 1300 + 10 * i as u32;
+            assert_eq!(position(&mut e, b), (w - 330, w, 1), "period {}", 30 + i);
+        }
+        e.clock_ms = 1400;
+        assert_eq!(position(&mut e, b), (0, 0, 0));
+        // A later Play 100 periods on (442 + 22050 frames, the second converter's), retuned to
+        // 22000 Hz, then not looping: it ends at 44100, 99 periods of 220 on.
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        e.clock_ms = 2005;
+        e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]);
+        e.clock_ms = 2025;
+        e.vcall(b, 0x48, &[]);
+        e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]);
+        e.clock_ms = 3025;
+        assert_eq!(e.vcall(b, 0x44, &[22000]).u32(), DS_OK);
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, 0]).u32(), DS_OK);
+        expect_cursors(
+            &mut e,
+            b,
+            &[
+                (3025, (2 * 21831, 2 * 442, 1)),
+                (3035, (2, 2 * 662, 1)),
+                (4005, (2 * 21341, 2 * 22002, 1)),
+                (4015, (0, 0, 0)),
+            ],
+        );
+    }
+
+    /// Measured (`freqphase-run1..3.tsv` `5622 1 10 ac44 retune_stop 22071 6 1 apl`): a first
+    /// `Play` retuned on a whole frame (6 periods at 22050 Hz) goes on in a later `Play`'s steps
+    /// from its write cursor: 884:1545 a period later, then after `Stop` and `Play` 1766, 1987,
+    /// 2207 (the first `Play`'s rounding would give 1544 and 1765, 1986, 2206).
+    #[test]
+    fn a_first_play_retuned_on_a_whole_frame_takes_later_steps() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        second_converter(&mut e, ds);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        e.clock_ms = 60;
+        assert_eq!(position(&mut e, b), (2 * 663, 2 * 1324, 1));
+        assert_eq!(e.vcall(b, 0x44, &[22071]).u32(), DS_OK);
+        assert_eq!(
+            position(&mut e, b),
+            (2 * 663, 2 * 1324, 1),
+            "right after the call"
+        );
+        e.clock_ms = 70;
+        assert_eq!(position(&mut e, b), (2 * 884, 2 * 1545, 1));
+        assert_eq!(e.vcall(b, 0x48, &[]).u32(), DS_OK);
+        e.clock_ms = 80;
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, 0]).u32(), DS_OK);
+        expect_cursors(
+            &mut e,
+            b,
+            &[
+                (90, (2 * 1545, 2 * 1766, 1)),
+                (100, (2 * 1545, 2 * 1987, 1)),
+                (110, (2 * 1546, 2 * 2207, 1)),
+                (120, (2 * 1767, 2 * 2428, 1)),
+            ],
+        );
+    }
+
+    /// Measured (`endstop-run1..3.tsv`): a buffer that does not loop ends in the period its write
+    /// cursor would reach its length, a first `Play`'s too, so it is never read there playing;
+    /// stopped in the period before, `Play` plays the rest (here at once: `last` with both
+    /// converters). 22051 frames at 22050 Hz.
+    #[test]
+    fn a_buffer_is_never_stopped_at_its_end() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 2 * 22051);
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        // The first converter: 33 + 21830 frames after 99 periods, 33 + 22050 after 100.
+        e.clock_ms = 990;
+        assert_eq!(position(&mut e, b), (2 * 21202, 2 * 21863, 1));
+        e.clock_ms = 1000;
+        assert_eq!(
+            position(&mut e, b),
+            (0, 0, 0),
+            "ended, not read at its length"
+        );
+        assert_eq!(e.vcall(b, 0x48, &[]).u32(), DS_OK);
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, 0]).u32(), DS_OK);
+        assert_eq!(position(&mut e, b).2, 1, "from its start");
+        // Stopped after 99 periods; Play ends in its first period (21863 + 220 >= 22051).
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 2 * 22051);
+        e.clock_ms = 2000;
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        e.clock_ms = 2990;
+        assert_eq!(e.vcall(b, 0x48, &[]).u32(), DS_OK);
+        assert_eq!(position(&mut e, b), (2 * 21863, 2 * 21863, 0));
+        e.clock_ms = 3000;
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, 0]).u32(), DS_OK);
+        assert_eq!(position(&mut e, b), (2 * 21863, 2 * 21863, 1));
+        e.clock_ms = 3010;
+        assert_eq!(position(&mut e, b), (0, 0, 0));
+        // The second converter: 21830 + 1 after 99 periods, then 220 more ends it.
+        second_converter(&mut e, ds);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 2 * 22051);
+        e.clock_ms = 4000;
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        e.clock_ms = 4990;
+        assert_eq!(e.vcall(b, 0x48, &[]).u32(), DS_OK);
+        assert_eq!(position(&mut e, b), (2 * 21831, 2 * 21831, 0));
+        e.clock_ms = 5000;
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, 0]).u32(), DS_OK);
+        e.clock_ms = 5010;
+        assert_eq!(position(&mut e, b), (0, 0, 0));
+    }
+
+    /// Measured (`freqphase-run1.tsv` `2b11 1 8 8d4 ended_stop 0 0 2260 dmo`): played to its end
+    /// (in its 21st period), stopped and played again, a buffer goes on in the steps it was
+    /// taking.
+    #[test]
+    fn a_buffer_ended_then_stopped_plays_on_in_its_steps() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let b = create_format(&mut e, ds, (1, 11025, 8), 2260);
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        e.clock_ms = 300;
+        assert_eq!(position(&mut e, b), (0, 0, 0));
+        assert_eq!(e.vcall(b, 0x48, &[]).u32(), DS_OK);
+        e.clock_ms = 400;
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        let steps = [(0, 110), (0, 220), (0, 330), (111, 441), (221, 551)];
+        for (i, (p, w)) in steps.into_iter().enumerate() {
+            e.clock_ms = 410 + 10 * i as u32;
+            assert_eq!(position(&mut e, b), (p, w, 1), "period {}", i + 1);
+        }
+    }
+
+    /// A change of 1/500 of the rate or less: the first converter goes on from where the buffer
+    /// is at the new frequency, its position's hundredths carried. A larger one turns on the
+    /// second converter, and the buffer goes on from its write cursor with a new one, both cursors
+    /// there (`dsound` `1005713d`; not measured): its frames from there (`resampler::AplFrames`).
     #[test]
     fn a_new_frequency_goes_on_from_where_the_buffer_is() {
         let mut e = engine();
         let ds = start_up(&mut e);
         let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
         e.vcall(b, 0x30, &[0, 0, 1]);
-        e.clock_ms = 20; // 441 frames
+        e.clock_ms = 20; // 441 frames, 33 ahead
+        e.vcall(b, 0x44, &[22080]);
+        e.clock_ms = 30; // one period at 22080: 220.8 more, 0.8 of them past a whole frame
+        assert_eq!(position(&mut e, b).1, 2 * (33 + 441 + 221));
+        e.clock_ms = 40; // 441.6
+        assert_eq!(position(&mut e, b).1, 2 * (33 + 441 + 442));
+        assert!(!e.kernel.sound.apl);
         e.vcall(b, 0x44, &[44100]);
-        e.clock_ms = 30; // one period at 44100: 441 more
-        assert_eq!(position(&mut e, b).1, 2 * (441 + 441 + 1));
+        assert!(e.kernel.sound.apl);
+        assert_eq!(
+            position(&mut e, b),
+            (2 * 916, 2 * 916, 5),
+            "both on the write cursor"
+        );
+        e.clock_ms = 50; // the new converter's first period at 44100
+        assert_eq!(position(&mut e, b), (2 * 916, 2 * (916 + 442), 5));
+    }
+
+    /// Another buffer's large change turns on the second converter while these play (the DLL,
+    /// `dsound` `1005713d`; not measured): each goes on from its write cursor with a new converter,
+    /// both cursors there, the play cursor held until the write cursor is three periods past.
+    #[test]
+    fn a_buffer_playing_when_the_second_converter_turns_on_goes_on_from_its_write_cursor() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        // 22050 Hz mono 16-bit: 33 + 2205 frames after 10 periods (0x117c bytes), then 221, 442,
+        // 663 more; three periods at 22050 Hz are 661 frames.
+        let (_, mono) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        // 44100 Hz stereo 16-bit: 33 + 4410 frames (0x456c bytes), then 442, 883, 1324 more; three
+        // periods are 1323 frames.
+        let stereo = create_format(&mut e, ds, (2, 44100, 16), 4 * 44100);
+        e.vcall(mono, 0x30, &[0, 0, DSBPLAY_LOOPING]);
+        e.vcall(stereo, 0x30, &[0, 0, DSBPLAY_LOOPING]);
+        e.clock_ms = 100;
+        assert_eq!(position(&mut e, mono), (0xc52, 0x117c, 5));
+        second_converter(&mut e, ds);
+        let expected = [
+            (100, (0x117c, 0x117c), (0x456c, 0x456c)),
+            (110, (0x117c, 0x1336), (0x456c, 0x4c54)),
+            (120, (0x117c, 0x14f0), (0x456c, 0x5338)),
+            (130, (0x1180, 0x16aa), (0x4570, 0x5a1c)),
+        ];
+        for (at, (mp, mw), (sp, sw)) in expected {
+            e.clock_ms = at;
+            assert_eq!(position(&mut e, mono), (mp, mw, 5), "mono at {at} ms");
+            assert_eq!(position(&mut e, stereo), (sp, sw, 5), "stereo at {at} ms");
+        }
     }
 
     /// The output on, at the test format's rate, without a device: the tests render by hand.
@@ -3375,7 +4783,17 @@ mod tests {
     /// The bits the output gets and the cursors the game reads over 2 s of buffers played, moved,
     /// refilled, retuned and stopped through the interface, as one hash; the same as the build
     /// before the allocation work (`cargo test --release -p engine-core --lib output_bits --
-    /// --ignored --nocapture`).
+    /// --ignored --nocapture`), but for the cursors, changed 2026-10-31 and 2026-11-01 (measured,
+    /// module documentation): a buffer played again after its end goes on in the steps it was
+    /// taking, after `SetFrequency` the play cursor goes on trailing, the buffers here, at the
+    /// output's rate, lead by nothing (the first converter passes them through), and with the
+    /// second converter on the write cursor is the frames it takes. `plain[1]`'s change to
+    /// 22094 Hz (in its first `Play`, 40 periods in) is one the first converter takes at a
+    /// frequency other than the format's rate, where the layer keeps the rule of hundredths, and
+    /// `plain[2]`'s change to 30000 Hz turns the second converter on while all seven play (not
+    /// measured: as the DLL reads, each goes on from its write cursor with a new converter, both
+    /// cursors there), so the combined hash rests on those two there. The samples alone hash as
+    /// before.
     #[test]
     #[ignore]
     fn output_bits_are_unchanged() {
@@ -3415,6 +4833,7 @@ mod tests {
             three_d.push((b, e.mem.u32(0x100c)));
         }
         let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        let (mut hc, mut hs) = (hash, hash);
         let eat = |hash: &mut u64, w: u32| {
             for b in w.to_le_bytes() {
                 *hash = (*hash ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
@@ -3477,6 +4896,7 @@ mod tests {
                 e.vcall(b, 0x24, &[0x1d08]);
                 for w in [0x1d00, 0x1d04, 0x1d08] {
                     eat(&mut hash, e.mem.u32(w));
+                    eat(&mut hc, e.mem.u32(w));
                 }
             }
             out.fill(0.0);
@@ -3488,10 +4908,12 @@ mod tests {
             );
             for s in &out {
                 eat(&mut hash, s.to_bits());
+                eat(&mut hs, s.to_bits());
             }
         }
-        println!("output hash {hash:016x}");
-        assert_eq!(hash, 0x5f4b_6ca6_98a5_9d3c);
+        println!("output hash {hash:016x} cursors {hc:016x} samples {hs:016x}");
+        assert_eq!(hs, 0x4323_299c_daf5_af1d, "the samples");
+        assert_eq!(hash, 0x771c_dd2d_987a_add3);
     }
 
     /// Not a check: the host heap allocations of the buffers' per-frame calls with the output on
@@ -3819,6 +5241,141 @@ mod tests {
         for f in 0..64 {
             let s = i16::from_le_bytes([expect[2 * f], expect[2 * f + 1]]);
             assert_eq!(out[2 * f], f32::from(s) / 32768.0, "frame {f}");
+        }
+    }
+
+    /// Measured (`DSMIX_SETPOS`): a heard buffer moved while it plays plays out what was mixed
+    /// (the rest of the period here), then goes on from the new place.
+    #[test]
+    fn a_heard_buffer_moved_goes_on_from_there() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let voices = hear(&mut e);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        let samples: Vec<i16> = (0..22050i32)
+            .map(|i| ((i * 7) % 2000 - 1000) as i16)
+            .collect();
+        fill(&mut e, b, 44100, &samples);
+        e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]);
+        let render = |n: usize| {
+            let mut out = vec![0f32; 2 * n];
+            super::super::sound_out::Source::render(
+                &mut *voices.lock().unwrap(),
+                22050,
+                2,
+                &mut out,
+            );
+            out
+        };
+        // Half of the first period (the device's 10 ms: 220 frames).
+        let first = render(110);
+        assert_eq!(e.vcall(b, 0x34, &[2 * 5000]).u32(), DS_OK);
+        assert_eq!(e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]).u32(), DS_OK);
+        let then = render(330);
+        let x = |f: usize| f32::from(samples[f]) / 32768.0;
+        for f in 0..110 {
+            assert_eq!(first[2 * f], x(f), "frame {f}");
+            assert_eq!(then[2 * f], x(110 + f), "the period's frame {}", 110 + f);
+        }
+        for f in 110..330 {
+            assert_eq!(
+                then[2 * f],
+                x(5000 + f - 110),
+                "moved: frame {}",
+                5000 + f - 110
+            );
+        }
+        // Not measured: a buffer the output already played to its end (ahead of the platform
+        // clock) starts again there, in its place in the sum (`a` older, still playing).
+        let a = b;
+        let (_, b) = create(&mut e, ds, 0xe0, false, 1, 440);
+        fill(&mut e, b, 440, &samples[..220]);
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        let _ = render(440);
+        {
+            let v = voices.lock().unwrap();
+            assert_eq!(v.all[&b].position, None, "played to its end");
+            assert_eq!(v.playing, vec![b, a], "still in its place");
+        }
+        assert_eq!(e.vcall(b, 0x34, &[2 * 100]).u32(), DS_OK);
+        assert_eq!(voices.lock().unwrap().playing, vec![b, a]);
+        let again = render(120);
+        // `a` has played 440 + 440 frames since it moved to 5000.
+        for f in 0..120 {
+            assert_eq!(
+                again[2 * f],
+                x(100 + f) + x(5000 + 220 + 440 + f),
+                "again: frame {}",
+                100 + f
+            );
+        }
+        // Stopped, a voice leaves the list.
+        e.vcall(b, 0x48, &[]);
+        assert_eq!(voices.lock().unwrap().playing, vec![a]);
+    }
+
+    /// Measured (`DSMIX_SETPOS`, the captures with the distortion): moved while it plays, the
+    /// effect starts over at the new place as at `Play` (cleared, from 32 frames before).
+    #[test]
+    fn a_heard_buffer_with_the_distortion_moved_starts_the_effect_there() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let voices = hear(&mut e);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        let samples: Vec<u8> = (0..22050i32)
+            .flat_map(|i| (((i * 7) % 2000 - 1000) as i16).to_le_bytes())
+            .collect();
+        let data = e.kernel.sound.buffers[&b].data;
+        e.mem.write(data, &samples);
+        e.vcall(b, 0x2c, &[0, 44100, 0x1a00, 0x1a04, 0, 0, 0]);
+        e.vcall(b, 0x4c, &[e.mem.u32(0x1a00), 44100, 0, 0]);
+        let d = effect_desc(&mut e, &GUID_DISTORTION);
+        assert_eq!(e.vcall(b, 0x54, &[1, d, 0x1c00]).u32(), DS_OK);
+        e.mem.write(0x1c10, &GUID_DISTORTION);
+        e.mem.write(0x1c20, &IID_DISTORTION8);
+        assert_eq!(e.vcall(b, 0x5c, &[0x1c10, 0, 0x1c20, 0x1c30]).u32(), DS_OK);
+        let fx = e.mem.u32(0x1c30);
+        let p = [-18.2f32, 0.0, 5000.0, 1135.0, 5000.0];
+        for (i, v) in p.into_iter().enumerate() {
+            e.mem.set_f32(0x1c40 + 4 * i as u32, v);
+        }
+        assert_eq!(e.vcall(fx, 0xc, &[0x1c40]).u32(), DS_OK);
+        e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]);
+        let render = |n: usize| {
+            let mut out = vec![0f32; 2 * n];
+            super::super::sound_out::Source::render(
+                &mut *voices.lock().unwrap(),
+                22050,
+                2,
+                &mut out,
+            );
+            out
+        };
+        let first = render(110);
+        assert_eq!(e.vcall(b, 0x34, &[2 * 5000]).u32(), DS_OK);
+        let then = render(330);
+        // By hand: the effect from 32 frames before each start.
+        let processed = |from: usize, count: usize| {
+            let c = super::super::dsfx::Coefficients::new(22050, p, &EDGE_TABLE);
+            let mut d = super::super::dsfx::Distortion::new(c);
+            let mut out = samples.clone();
+            for f in (0..32 + count).map(|k| (from + 22050 - 32 + k) % 22050) {
+                d.frame(&mut out[2 * f..2 * f + 2], 1, 16);
+            }
+            move |f: usize| f32::from(i16::from_le_bytes([out[2 * f], out[2 * f + 1]])) / 32768.0
+        };
+        let (old, new) = (processed(0, 220), processed(5000, 220));
+        for f in 0..110 {
+            assert_eq!(first[2 * f], old(f), "frame {f}");
+            assert_eq!(then[2 * f], old(110 + f), "the period's frame {}", 110 + f);
+        }
+        for f in 110..330 {
+            assert_eq!(
+                then[2 * f],
+                new(5000 + f - 110),
+                "moved: frame {}",
+                5000 + f - 110
+            );
         }
     }
 

@@ -1243,6 +1243,74 @@ impl Apl {
     }
 }
 
+/// The frames [`Apl`] takes period by period, without the samples: its `CalcInputFrames`
+/// (`100636a0`) and where each period ends (the plain formula's steps, or the lanes' first
+/// factor), the same `f32` arithmetic. DirectSound's write cursor follows them with the second
+/// converter on (measured, `super::dsound`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AplFrames {
+    step: f32,
+    t: f32,
+    u: i32,
+    lanes: bool,
+    /// Output frames per period (the device's rate / 100).
+    frames: usize,
+}
+
+impl AplFrames {
+    /// As [`Apl::new`].
+    pub fn new(frequency: u32, device: u32, lanes: bool) -> AplFrames {
+        AplFrames {
+            step: Apl::step_for(frequency, device),
+            t: 0.0,
+            u: 0,
+            lanes,
+            frames: (device / 100) as usize,
+        }
+    }
+
+    /// As [`Apl::retune`]: from the next period.
+    pub fn retune(&mut self, frequency: u32, device: u32) {
+        self.step = Apl::step_for(frequency, device);
+    }
+
+    /// One period: the input frames taken.
+    pub fn period(&mut self) -> u64 {
+        let need = ((self.frames as f32) * self.step + self.t + self.u as f32) as i32 + 1;
+        let need = need.max(0);
+        let (whole, part) = (self.step as i32, self.step - (self.step as i32) as f32);
+        let (mut u, mut t, mut done) = (self.u, self.t, 0);
+        while (u < 3 || !self.lanes) && done < self.frames {
+            done += 1;
+            u += whole;
+            t += part;
+            while t >= 1.0 {
+                t -= 1.0;
+                u += 1;
+            }
+        }
+        if self.lanes {
+            // [`Apl::run`]'s first lane alone decides where the frames step.
+            let mut fc = t * LA;
+            let fd = part * LA;
+            let mut e = u - 3;
+            while done < self.frames {
+                fc += fd;
+                if fc <= LA {
+                    e += 1;
+                    fc -= LA;
+                }
+                e += whole;
+                done += 1;
+            }
+            (u, t) = (e + 3, fc * LA_INVERSE);
+        }
+        self.u = i32::from(u == need) - 1;
+        self.t = t;
+        need as u64
+    }
+}
+
 /// A buffer's converter.
 #[derive(Debug, Clone)]
 pub enum Converter {
@@ -1331,6 +1399,44 @@ mod tests {
         (20001, 0xb8f9_0a20),
         (24087, 0xb283_e296),
     ];
+
+    /// [`AplFrames`] takes what [`Apl`] takes, period by period: both kernels, rates up, down and
+    /// the device's own, retuned while it runs.
+    #[test]
+    fn the_frame_counter_takes_what_the_converter_takes() {
+        let x = signal(4000);
+        for lanes in [true, false] {
+            for (frequency, retuned) in [
+                (22050, 16537),
+                (11025, 11040),
+                (22071, 22050),
+                (48000, 44100),
+                (44100, 60000),
+                (16537, 8000),
+            ] {
+                let mut apl = Apl::new(frequency, 48000, 1, lanes);
+                let mut counter = AplFrames::new(frequency, 48000, lanes);
+                let mut out = vec![Vec::new()];
+                for period in 0..60 {
+                    if period == 25 {
+                        apl.retune(retuned, 48000);
+                        counter.retune(retuned, 48000);
+                    }
+                    let before = apl.fed();
+                    apl.period(
+                        480,
+                        &mut |k, f| f[0] = x.get(k as usize).copied().unwrap_or(0.0),
+                        &mut out,
+                    );
+                    assert_eq!(
+                        counter.period(),
+                        apl.fed() - before,
+                        "{frequency} then {retuned}, lanes {lanes}, period {period}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn the_constants_are_the_dlls() {
