@@ -41,6 +41,9 @@ const INFO_SIZE: u32 = 0x20;
 #[derive(Default)]
 pub struct Files {
     open: BTreeMap<u32, (VorbisFile, u32)>,
+    /// What [`ov_read`] decodes into before it goes to engine memory, kept from one read to the
+    /// next (the game reads a stream a few KB at a time, every frame).
+    read: Vec<u8>,
 }
 
 impl std::fmt::Debug for Files {
@@ -184,7 +187,10 @@ pub fn ov_read(
     if length < 0 {
         return OV_EINVAL;
     }
-    let mut out = vec![0u8; length as usize];
+    // The decoder writes the samples it gives and reads nothing of the buffer: the last read's
+    // room serves, its length the one asked.
+    let mut out = std::mem::take(&mut e.kernel.sound.vorbis.read);
+    out.resize(length as usize, 0);
     let n = file(e, vf, "ov_read").0.read(&mut out);
     if n > 0 {
         e.mem.write(buffer, &out[..n as usize]);
@@ -192,6 +198,7 @@ pub fn ov_read(
             e.mem.set_u32(bitstream.addr(), 0);
         }
     }
+    e.kernel.sound.vorbis.read = out;
     n as i32
 }
 

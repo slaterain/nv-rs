@@ -572,6 +572,39 @@ enum Play {
     Ended,
 }
 
+/// A buffer's `WAVEFORMATEX` as the bytes it was made with (none for the primary buffer): kept in
+/// place, so a copy of a buffer's settings allocates nothing (the buffer's calls copy them at
+/// every call, tens a frame). Reads as the byte slice.
+#[derive(Clone, Copy, Default)]
+struct Format {
+    len: usize,
+    bytes: [u8; FORMAT_SIZE as usize],
+}
+
+impl Format {
+    fn of(bytes: &[u8]) -> Format {
+        let mut f = Format {
+            len: bytes.len(),
+            ..Format::default()
+        };
+        f.bytes[..bytes.len()].copy_from_slice(bytes);
+        f
+    }
+}
+
+impl std::ops::Deref for Format {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
+}
+
+impl std::fmt::Debug for Format {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        (**self).fmt(f)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Buffer {
     references: u32,
@@ -583,7 +616,7 @@ struct Buffer {
     /// Secondary buffers: the size, the format, the sample memory (engine memory), the 3D
     /// interface (0: not asked yet).
     bytes: u32,
-    format: Vec<u8>,
+    format: Format,
     data: u32,
     three_d: u32,
     volume: i32,
@@ -778,15 +811,13 @@ impl Voices {
     /// Mixes the playing voices into `out` (newest first) and drops the ones that ended.
     fn mix(&mut self, out: &mut [f32]) {
         let Voices { all, playing, .. } = self;
-        let mut voices: Vec<&mut Voice> = Vec::with_capacity(playing.len());
-        // `playing` holds distinct addresses; take each voice once, in its order.
-        let mut by: BTreeMap<u32, &mut Voice> = all.iter_mut().map(|(k, v)| (*k, v)).collect();
+        // `playing` holds distinct addresses (each `Play` takes its own out first): each voice
+        // is rendered once, in its order, as `mixer::render` renders a list.
         for at in playing.iter() {
-            if let Some(v) = by.remove(at) {
-                voices.push(v);
+            if let Some(v) = all.get_mut(at) {
+                super::mixer::render_voice(v, out);
             }
         }
-        super::mixer::render(&mut voices, out);
         playing.retain(|at| all.get(at).is_some_and(|v| v.position.is_some()));
     }
 }
@@ -1405,7 +1436,7 @@ fn new_buffer(flags: u32) -> Buffer {
         flags,
         listener: 0,
         bytes: 0,
-        format: Vec::new(),
+        format: Format::default(),
         data: 0,
         three_d: 0,
         volume: 0,
@@ -1498,7 +1529,7 @@ fn create_sound_buffer(e: &mut Engine, this: Ptr, desc: Ptr, out: Ptr, outer: u3
         // `GetCaps` reports).
         let size = size.div_ceil(align) * align;
         b.bytes = size;
-        b.format = f;
+        b.format = Format::of(&f);
         b.data = e.mem.alloc(size);
         if result == DS_NO_VIRTUALIZATION {
             let at = insert_buffer(e, b);
@@ -1548,7 +1579,8 @@ fn secondary(e: &mut Engine, this: Ptr, call: &str) -> Buffer {
 /// gives itself as `IDirectSoundBuffer8` and, with `DSBCAPS_CTRL3D`, its `IDirectSound3DBuffer`
 /// (sharing its reference count); any other interface is `E_NOINTERFACE`.
 fn buffer_query_interface(e: &mut Engine, this: Ptr, iid: Ptr, out: Ptr) -> u32 {
-    let id = e.mem.bytes(iid.addr(), 16);
+    let mut id = [0u8; 16];
+    e.mem.read(iid.addr(), &mut id);
     let b = buffer(e, this).clone();
     if b.flags & DSBCAPS_PRIMARYBUFFER == 0 {
         if id == IID_BUFFER8 {
@@ -1813,20 +1845,23 @@ fn heard(e: &mut Engine, this: Ptr, call: &str) {
     };
     let b = buffer(e, this).clone();
     let f = b.frequency();
-    let what = format!(
-        "{call} {:08x}: {} ch {} bit {} Hz, {} bytes{}{}",
-        this.addr(),
-        u16::from_le_bytes([b.format[2], b.format[3]]),
-        u16::from_le_bytes([b.format[14], b.format[15]]),
-        f,
-        b.bytes,
-        if b.flags & DSBCAPS_CTRL3D != 0 {
-            ", 3D"
-        } else {
-            ""
-        },
-        b.effect.map_or(String::new(), |fx| format!(", {fx}")),
-    );
+    // Written out only where it is told (a `SetFrequency` each frame tells nothing).
+    let what = |b: &Buffer| {
+        format!(
+            "{call} {:08x}: {} ch {} bit {} Hz, {} bytes{}{}",
+            this.addr(),
+            u16::from_le_bytes([b.format[2], b.format[3]]),
+            u16::from_le_bytes([b.format[14], b.format[15]]),
+            f,
+            b.bytes,
+            if b.flags & DSBCAPS_CTRL3D != 0 {
+                ", 3D"
+            } else {
+                ""
+            },
+            b.effect.map_or(String::new(), |fx| format!(", {fx}")),
+        )
+    };
     let apl = e
         .kernel
         .sound
@@ -1834,12 +1869,13 @@ fn heard(e: &mut Engine, this: Ptr, call: &str) {
         .as_ref()
         .is_some_and(|m| m.voices.lock().expect("the voices").apl);
     if f != rate && !apl && super::resampler::tables().is_none() {
-        unheard(e, &what);
+        unheard(e, &what(&b));
     }
     refresh_voice(e, this.addr());
     if call == "Play" {
         // The log also names the level it is heard at: the volume, and for a 3D buffer its
         // position from the listener and the 3D stage's channel multipliers.
+        let what = what(&b);
         let b = buffer(e, this).clone();
         let mut what = format!("{what}, volume {}", b.volume);
         if b.flags & DSBCAPS_CTRL3D != 0 {
@@ -1882,35 +1918,37 @@ fn refresh_voice(e: &mut Engine, at: u32) {
     };
     // DirectSound's rule for its converters (`dsound` `100581e0`): a move of more than 1/500 of
     // the rate turns on the device's second converter for every buffer; a smaller one is the
-    // playing converter's `SetRate` (`super::resampler`, at its next period).
-    let buffers: Vec<u32> = e
-        .kernel
-        .sound
-        .buffers
-        .iter()
-        .filter(|(_, b)| b.flags & DSBCAPS_PRIMARYBUFFER == 0)
-        .map(|(&at, _)| at)
-        .collect();
-    with_voice(e, at, |m, at| {
-        let Some(v) = m.all.get_mut(&at) else {
-            return;
-        };
-        let old = v.rate;
-        v.device = rate;
-        v.spatial = spatial;
-        v.rate = frequency;
-        if old == 0 || old == frequency {
-            return;
-        }
-        if old.abs_diff(frequency) > old / 500 && !m.apl {
-            m.apl = true;
-            for b in &buffers {
-                if let Some(v) = m.all.get_mut(b) {
-                    v.apl = true;
-                }
+    // playing converter's `SetRate` (`super::resampler`, at its next period). (`with_voice`
+    // written out, so the buffers are read in place.)
+    tick(e);
+    let sound = &e.kernel.sound;
+    let Some(mix) = &sound.mix else {
+        return;
+    };
+    let mut voices = mix.voices.lock().expect("the voices");
+    let m = &mut *voices;
+    let Some(v) = m.all.get_mut(&at) else {
+        return;
+    };
+    let old = v.rate;
+    v.device = rate;
+    v.spatial = spatial;
+    v.rate = frequency;
+    if old == 0 || old == frequency {
+        return;
+    }
+    if old.abs_diff(frequency) > old / 500 && !m.apl {
+        m.apl = true;
+        for (b, _) in sound
+            .buffers
+            .iter()
+            .filter(|(_, b)| b.flags & DSBCAPS_PRIMARYBUFFER == 0)
+        {
+            if let Some(v) = m.all.get_mut(b) {
+                v.apl = true;
             }
         }
-    });
+    }
 }
 
 /// The 3D buffers' voices brought up to date (after the listener changed).
@@ -1918,16 +1956,21 @@ fn refresh_3d(e: &mut Engine) {
     if e.kernel.sound.mix.is_none() {
         return;
     }
-    let all: Vec<u32> = e
+    // In address order, found one after another (`refresh_voice` changes no buffer): no list.
+    let mut from = 0;
+    while let Some(at) = e
         .kernel
         .sound
         .buffers
-        .iter()
-        .filter(|(_, b)| b.flags & DSBCAPS_CTRL3D != 0 && b.flags & DSBCAPS_PRIMARYBUFFER == 0)
+        .range(from..)
+        .find(|(_, b)| b.flags & DSBCAPS_CTRL3D != 0 && b.flags & DSBCAPS_PRIMARYBUFFER == 0)
         .map(|(&at, _)| at)
-        .collect();
-    for at in all {
+    {
         refresh_voice(e, at);
+        let Some(next) = at.checked_add(1) else {
+            break;
+        };
+        from = next;
     }
 }
 
@@ -2113,17 +2156,25 @@ fn unlock(e: &mut Engine, this: Ptr, _p1: u32, _n1: u32, _p2: u32, _n2: u32) -> 
     b.locks -= 1;
     let (data, bytes) = (b.data, b.bytes);
     if e.kernel.sound.mix.is_some() {
-        let samples = e.mem.bytes(data, bytes);
-        with_voice(e, this.addr(), |m, at| {
-            if let Some(voice) = m.all.get_mut(&at) {
+        // `with_voice` written out: the samples are read straight into the voice's copy, which
+        // has the buffer's size (a new copy otherwise), instead of into a new one each time.
+        tick(e);
+        if let Some(m) = &e.kernel.sound.mix {
+            let mut voices = m.voices.lock().expect("the voices");
+            if let Some(voice) = voices.all.get_mut(&this.addr()) {
                 // With the distortion the samples are the effect's input; the voice plays its
                 // processed copy.
-                match voice.fx.as_mut() {
-                    Some(fx) => fx.source = samples,
-                    None => voice.data = samples,
+                let to = match voice.fx.as_mut() {
+                    Some(fx) => &mut fx.source,
+                    None => &mut voice.data,
+                };
+                if to.len() == bytes as usize {
+                    e.mem.read(data, to);
+                } else {
+                    *to = e.mem.bytes(data, bytes);
                 }
             }
-        });
+        }
     }
     DS_OK
 }
@@ -3319,6 +3370,241 @@ mod tests {
         e.mem.write(at, &data);
         let n = e.mem.u32(n1);
         e.vcall(b, 0x4c, &[at, n, 0, 0]);
+    }
+
+    /// The bits the output gets and the cursors the game reads over 2 s of buffers played, moved,
+    /// refilled, retuned and stopped through the interface, as one hash; the same as the build
+    /// before the allocation work (`cargo test --release -p engine-core --lib output_bits --
+    /// --ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn output_bits_are_unchanged() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        e.mem.set_u32(0x1200, 0x24);
+        e.mem.set_u32(0x1204, 0x91);
+        e.vcall(ds, 0xc, &[0x1200, 0x1004, 0]);
+        let primary = e.mem.u32(0x1004);
+        e.mem.write(0x1300, &IID_LISTENER);
+        e.vcall(primary, 0, &[0x1300, 0x1008]);
+        let listener = e.mem.u32(0x1008);
+        let voices = hear(&mut e);
+        let mut x = 0x2545_f491u32;
+        let mut noise = |n: usize| -> Vec<i16> {
+            (0..n)
+                .map(|_| {
+                    x ^= x << 13;
+                    x ^= x >> 17;
+                    x ^= x << 5;
+                    (x % 20001) as i16 - 10000
+                })
+                .collect()
+        };
+        let mut plain = Vec::new();
+        for _ in 0..4 {
+            let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+            fill(&mut e, b, 44100, &noise(22050));
+            plain.push(b);
+        }
+        let mut three_d = Vec::new();
+        for _ in 0..3 {
+            let (_, b) = create(&mut e, ds, 0x302b0, true, 1, 44100);
+            fill(&mut e, b, 44100, &noise(22050));
+            e.mem.write(0x1300, &IID_BUFFER3D);
+            e.vcall(b, 0, &[0x1300, 0x100c]);
+            three_d.push((b, e.mem.u32(0x100c)));
+        }
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        let eat = |hash: &mut u64, w: u32| {
+            for b in w.to_le_bytes() {
+                *hash = (*hash ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+            }
+        };
+        let mut out = vec![0f32; 2 * 220];
+        for period in 0..200u32 {
+            let t = period as f32 * 0.1;
+            match period {
+                0 => {
+                    for (i, &b) in plain.iter().enumerate() {
+                        let flags = if i % 2 == 0 { DSBPLAY_LOOPING } else { 0 };
+                        e.vcall(b, 0x30, &[0, 0, flags]);
+                    }
+                    for &(b, _) in &three_d {
+                        e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]);
+                    }
+                }
+                40 => {
+                    e.vcall(plain[1], 0x44, &[22094]);
+                }
+                60 => {
+                    // A refill while playing (the voice's copy follows the Unlock).
+                    let b = plain[0];
+                    e.vcall(b, 0x2c, &[0, 4410, 0x1800, 0x1804, 0x1808, 0x180c, 0]);
+                    let (p, n) = (e.mem.u32(0x1800), e.mem.u32(0x1804));
+                    let fresh: Vec<u8> = noise(2205).iter().flat_map(|s| s.to_le_bytes()).collect();
+                    e.mem.write(p, &fresh[..n as usize]);
+                    e.vcall(b, 0x4c, &[p, n, 0, 0]);
+                }
+                90 => {
+                    e.vcall(plain[2], 0x44, &[30000]);
+                }
+                120 => {
+                    e.vcall(plain[3], 0x48, &[]);
+                    e.vcall(plain[1], 0x30, &[0, 0, DSBPLAY_LOOPING]);
+                }
+                _ => {}
+            }
+            e.vcall(plain[0], 0x3c, &[(-((period % 50) as i32) * 20) as u32]);
+            e.vcall(plain[2], 0x40, &[(period % 40) * 100]);
+            for (k, &(_, b3)) in three_d.iter().enumerate() {
+                let p = [t + k as f32, 1.0, (t * 0.5).sin() * 4.0];
+                e.vcall(
+                    b3,
+                    0x4c,
+                    &[p[0].to_bits(), p[1].to_bits(), p[2].to_bits(), 0],
+                );
+            }
+            let l = [t.cos() * 2.0, 0.0, t.sin() * 2.0];
+            e.vcall(
+                listener,
+                0x38,
+                &[l[0].to_bits(), l[1].to_bits(), l[2].to_bits(), 1],
+            );
+            e.vcall(listener, 0x44, &[]);
+            e.clock_ms += 10;
+            for &b in plain.iter().chain(three_d.iter().map(|(b, _)| b)) {
+                e.vcall(b, 0x10, &[0x1d00, 0x1d04]);
+                e.vcall(b, 0x24, &[0x1d08]);
+                for w in [0x1d00, 0x1d04, 0x1d08] {
+                    eat(&mut hash, e.mem.u32(w));
+                }
+            }
+            out.fill(0.0);
+            super::super::sound_out::Source::render(
+                &mut *voices.lock().unwrap(),
+                22050,
+                2,
+                &mut out,
+            );
+            for s in &out {
+                eat(&mut hash, s.to_bits());
+            }
+        }
+        println!("output hash {hash:016x}");
+        assert_eq!(hash, 0x5f4b_6ca6_98a5_9d3c);
+    }
+
+    /// Not a check: the host heap allocations of the buffers' per-frame calls with the output on
+    /// (the game's thread) and of the mixer's 10 ms periods (the output's thread), for the
+    /// frame-rate work (`cargo test --release -p engine-core --lib allocations_per -- --ignored
+    /// --nocapture`).
+    #[test]
+    #[ignore]
+    fn allocations_per_operation_of_directsound() {
+        use crate::alloc_count::{per_run, row};
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        e.mem.set_u32(0x1200, 0x24);
+        e.mem.set_u32(0x1204, 0x91);
+        e.vcall(ds, 0xc, &[0x1200, 0x1004, 0]);
+        let primary = e.mem.u32(0x1004);
+        e.mem.write(0x1300, &IID_LISTENER);
+        e.vcall(primary, 0, &[0x1300, 0x1008]);
+        let listener = e.mem.u32(0x1008);
+        let voices = hear(&mut e);
+        // Eight plain buffers and four 3D ones, playing, as a room's sounds.
+        let mut plain = Vec::new();
+        for i in 0..8i16 {
+            let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+            fill(&mut e, b, 44100, &vec![i * 100; 22050]);
+            e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]);
+            plain.push(b);
+        }
+        let mut three_d = Vec::new();
+        for i in 0..4i16 {
+            let (_, b) = create(&mut e, ds, 0x302b0, true, 1, 44100);
+            fill(&mut e, b, 44100, &vec![i * 100 + 50; 22050]);
+            e.vcall(b, 0x30, &[0, 0, DSBPLAY_LOOPING]);
+            e.mem.write(0x1300, &IID_BUFFER3D);
+            e.vcall(b, 0, &[0x1300, 0x100c]);
+            three_d.push(e.mem.u32(0x100c));
+        }
+        let b = plain[0];
+        // One plain buffer at another rate: its voice goes through the converter.
+        e.vcall(plain[1], 0x44, &[11025]);
+        let ms = |e: &mut Engine| e.clock_ms += 1;
+        row(
+            "IDirectSoundBuffer GetCurrentPosition",
+            per_run(1000, || {
+                ms(&mut e);
+                e.vcall(b, 0x10, &[0x1d00, 0x1d04]);
+            }),
+        );
+        row(
+            "IDirectSoundBuffer GetStatus",
+            per_run(1000, || {
+                e.vcall(b, 0x24, &[0x1d08]);
+            }),
+        );
+        let mut volume = 0u32;
+        row(
+            "IDirectSoundBuffer SetVolume",
+            per_run(1000, || {
+                volume = (volume + 1) % 100;
+                e.vcall(b, 0x3c, &[(-(volume as i32)) as u32]);
+            }),
+        );
+        row(
+            "IDirectSoundBuffer SetPan",
+            per_run(1000, || {
+                volume = (volume + 1) % 100;
+                e.vcall(b, 0x40, &[volume]);
+            }),
+        );
+        row(
+            "IDirectSoundBuffer SetFrequency (playing)",
+            per_run(1000, || {
+                volume = (volume + 1) % 100;
+                e.vcall(plain[1], 0x44, &[11025 + volume]);
+            }),
+        );
+        row(
+            "IDirectSoundBuffer Lock + Unlock, 4410 of 44100 bytes",
+            per_run(1000, || {
+                e.vcall(b, 0x2c, &[0, 4410, 0x1800, 0x1804, 0x1808, 0x180c, 0]);
+                let (p, n) = (e.mem.u32(0x1800), e.mem.u32(0x1804));
+                e.vcall(b, 0x4c, &[p, n, 0, 0]);
+            }),
+        );
+        let mut x = 0f32;
+        row(
+            "IDirectSound3DBuffer SetPosition (at once)",
+            per_run(1000, || {
+                x += 0.25;
+                e.vcall(three_d[0], 0x4c, &[x.to_bits(), 0, 0, 0]);
+            }),
+        );
+        row(
+            "IDirectSound3DListener SetPosition (deferred) + CommitDeferredSettings",
+            per_run(1000, || {
+                x += 0.25;
+                e.vcall(listener, 0x38, &[x.to_bits(), 0, 0, 1]);
+                e.vcall(listener, 0x44, &[]);
+            }),
+        );
+        let mut out = vec![0f32; 2 * 220];
+        row(
+            "mixer: 10 ms of 12 voices (one converted)",
+            per_run(200, || {
+                out.fill(0.0);
+                super::super::sound_out::Source::render(
+                    &mut *voices.lock().unwrap(),
+                    22050,
+                    2,
+                    &mut out,
+                );
+            }),
+        );
     }
 
     #[test]

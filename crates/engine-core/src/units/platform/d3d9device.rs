@@ -297,9 +297,9 @@ struct Device {
     /// states by (stage or sampler, type), the textures by sampler (held, counted).
     /// The last gamma ramp `SetGammaRamp` was given (three 256-entry WORD tables, 0x600 bytes).
     gamma_ramp: Option<Vec<u16>>,
-    render_states: crate::engine::AddrMap<u32, u32>,
-    stage_states: crate::engine::AddrMap<(u32, u32), u32>,
-    sampler_states: crate::engine::AddrMap<(u32, u32), u32>,
+    render_states: States<RENDER_STATES>,
+    stage_states: States<STAGE_STATES>,
+    sampler_states: States<SAMPLER_STATES>,
     textures: crate::engine::AddrMap<u32, u32>,
     /// Transforms by `D3DTRANSFORMSTATETYPE`, the scissor rectangle, user clip planes, and
     /// whether a scene is open.
@@ -316,6 +316,56 @@ struct Device {
     /// After a `Reset` that failed: the device needs a successful `Reset` (`TestCooperativeLevel`
     /// answers `D3DERR_DEVICENOTRESET`; scenes and `Present` are refused).
     lost: bool,
+}
+
+/// The render states kept (numbers 0 to 255), the texture stage states (8 stages of types 1 to
+/// 32) and the sampler states (21 samplers, [`sampler_index`], of types 1 to 13).
+const RENDER_STATES: usize = 256;
+const STAGE_STATES: usize = 8 * 32;
+const SAMPLER_STATES: usize = 21 * 13;
+
+/// States by number: each value the program set, `None` for one never set. A table rather than
+/// a map: these are set thousands of times a frame.
+#[derive(Debug, Clone)]
+struct States<const N: usize>(Box<[Option<u32>; N]>);
+
+impl<const N: usize> Default for States<N> {
+    fn default() -> Self {
+        States(Box::new([None; N]))
+    }
+}
+
+impl<const N: usize> States<N> {
+    fn get(&self, index: Option<usize>) -> Option<u32> {
+        index.and_then(|i| self.0.get(i).copied().flatten())
+    }
+    fn set(&mut self, index: usize, value: u32) {
+        self.0[index] = Some(value);
+    }
+    fn clear(&mut self) {
+        self.0.fill(None);
+    }
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.0.iter().all(Option::is_none)
+    }
+}
+
+/// The place of texture stage state `kind` of `stage` (0 to 7) in [`Device::stage_states`];
+/// `None` for a type past 1 to 32.
+fn stage_index(stage: u32, kind: u32) -> Option<usize> {
+    (1..=32)
+        .contains(&kind)
+        .then(|| stage as usize * 32 + kind as usize - 1)
+}
+
+/// The place of sampler state `kind` of `sampler` (one [`is_sampler`] names) in
+/// [`Device::sampler_states`]: samplers 0 to 15 then 256 to 260; `None` for a type past 1 to 13.
+fn sampler_index(sampler: u32, kind: u32) -> Option<usize> {
+    let s = if sampler < 16 { sampler } else { sampler - 240 };
+    (1..=13)
+        .contains(&kind)
+        .then(|| s as usize * 13 + kind as usize - 1)
 }
 
 /// A surface of this layer.
@@ -1186,10 +1236,12 @@ pub(super) fn in_scene(e: &mut Engine, this: Ptr) -> bool {
 }
 
 pub(super) fn iid_is(e: &Engine, iid: Ptr, ids: &[[u8; 16]]) -> bool {
-    !iid.is_null()
-        && ids
-            .iter()
-            .any(|id| e.mem.bytes(iid.addr(), 16) == id.as_slice())
+    if iid.is_null() || ids.is_empty() {
+        return false;
+    }
+    let mut asked = [0u8; 16];
+    e.mem.read(iid.addr(), &mut asked);
+    ids.contains(&asked)
 }
 
 /// `QueryInterface(iid, out)`: `IUnknown` and `IDirect3DDevice9` answer the device (counted);
@@ -1430,7 +1482,7 @@ fn set_viewport(e: &mut Engine, this: Ptr, viewport: Ptr) -> u32 {
     if viewport.is_null() {
         return D3DERR_INVALIDCALL;
     }
-    let words: Vec<u32> = (0..6).map(|i| e.mem.u32(viewport.addr() + 4 * i)).collect();
+    let words: [u32; 6] = std::array::from_fn(|i| e.mem.u32(viewport.addr() + 4 * i as u32));
     let target = device(e, this).render_targets[0];
     let desc = e.kernel.graphics.device_objects.surfaces[&target].desc;
     let right = u64::from(words[0]) + u64::from(words[2]);
@@ -1796,7 +1848,7 @@ fn set_render_state(e: &mut Engine, this: Ptr, state: u32, value: u32) -> u32 {
         state < 256,
         "IDirect3DDevice9::SetRenderState({state}) is not provided"
     );
-    device(e, this).render_states.insert(state, value);
+    device(e, this).render_states.set(state as usize, value);
     D3D_OK
 }
 
@@ -1806,7 +1858,7 @@ fn get_render_state(e: &mut Engine, this: Ptr, state: u32, out: Ptr) -> u32 {
     if out.is_null() {
         return D3DERR_INVALIDCALL;
     }
-    let Some(value) = device(e, this).render_states.get(&state).copied() else {
+    let Some(value) = device(e, this).render_states.get(Some(state as usize)) else {
         panic!("IDirect3DDevice9::GetRenderState({state}) before a SetRenderState: its default is not provided");
     };
     e.mem.set_u32(out.addr(), value);
@@ -1823,7 +1875,8 @@ fn set_texture_stage_state(e: &mut Engine, this: Ptr, stage: u32, kind: u32, val
         (1..=32).contains(&kind),
         "IDirect3DDevice9::SetTextureStageState(type {kind}) is not provided"
     );
-    device(e, this).stage_states.insert((stage, kind), value);
+    let index = stage_index(stage, kind).expect("a type 1 to 32");
+    device(e, this).stage_states.set(index, value);
     D3D_OK
 }
 
@@ -1832,7 +1885,7 @@ fn get_texture_stage_state(e: &mut Engine, this: Ptr, stage: u32, kind: u32, out
     if stage >= 8 || out.is_null() {
         return D3DERR_INVALIDCALL;
     }
-    let Some(value) = device(e, this).stage_states.get(&(stage, kind)).copied() else {
+    let Some(value) = device(e, this).stage_states.get(stage_index(stage, kind)) else {
         panic!("IDirect3DDevice9::GetTextureStageState({stage}, {kind}) before a set: its default is not provided");
     };
     e.mem.set_u32(out.addr(), value);
@@ -1849,9 +1902,8 @@ fn set_sampler_state(e: &mut Engine, this: Ptr, sampler: u32, kind: u32, value: 
         (1..=13).contains(&kind),
         "IDirect3DDevice9::SetSamplerState(type {kind}) is not provided"
     );
-    device(e, this)
-        .sampler_states
-        .insert((sampler, kind), value);
+    let index = sampler_index(sampler, kind).expect("a type 1 to 13");
+    device(e, this).sampler_states.set(index, value);
     D3D_OK
 }
 
@@ -1862,8 +1914,7 @@ fn get_sampler_state(e: &mut Engine, this: Ptr, sampler: u32, kind: u32, out: Pt
     }
     let Some(value) = device(e, this)
         .sampler_states
-        .get(&(sampler, kind))
-        .copied()
+        .get(sampler_index(sampler, kind))
     else {
         panic!("IDirect3DDevice9::GetSamplerState({sampler}, {kind}) before a set: its default is not provided");
     };
@@ -1879,19 +1930,29 @@ fn set_texture(e: &mut Engine, this: Ptr, sampler: u32, texture: u32) -> u32 {
     if !is_sampler(sampler) {
         return D3DERR_INVALIDCALL;
     }
-    if texture != 0 {
-        assert!(
-            e.kernel
-                .graphics
-                .device_objects
-                .textures
-                .contains_key(&texture),
-            "IDirect3DDevice9::SetTexture({sampler}, {texture:#x}): not a texture of this layer"
-        );
-        self::texture(e, Ptr::new(texture)).bound += 1;
-    }
-    let d = device(e, this);
-    let old = if texture != 0 {
+    // The texture and the device are looked up once each (they are apart in `Objects`).
+    let objects = &mut e.kernel.graphics.device_objects;
+    let held = if texture != 0 {
+        let Some(t) = objects.textures.get_mut(&texture) else {
+            panic!(
+                "IDirect3DDevice9::SetTexture({sampler}, {texture:#x}): not a texture of this layer"
+            );
+        };
+        Some(t)
+    } else {
+        None
+    };
+    let d = objects
+        .devices
+        .get_mut(&this.addr())
+        .expect("an IDirect3DDevice9 of this layer");
+    let old = if let Some(t) = held {
+        // The texture the sampler holds already: counting it once more and letting go of it
+        // once changes nothing.
+        if d.textures.get(&sampler) == Some(&texture) {
+            return D3D_OK;
+        }
+        t.bound += 1;
         d.textures.insert(sampler, texture)
     } else {
         d.textures.remove(&sampler)
@@ -4156,6 +4217,130 @@ mod tests {
         (e, device)
     }
 
+    /// Not a check: the host heap allocations of the device's per-frame calls as the game makes
+    /// them (through its vtable), for the frame-rate work (`cargo test --release -p engine-core
+    /// --lib allocations_per -- --ignored --nocapture`). The real device's side is measured in
+    /// `d3d9real`.
+    #[test]
+    #[ignore]
+    fn allocations_per_operation_of_the_device() {
+        use crate::alloc_count::{per_run, row};
+        let (mut e, device) = extra_device();
+        let table = test_table()
+            + "\nDomain\td1\t15,16\nCheckDeviceFormat\t0 1 16 0 1\t0\t\td1"
+            + "\nCreateQuery\t1\t8876086a\nCreateQuery\t8\t0\nCreateQuery\t9\t0\nCreateQuery\ta\t0"
+            + "\nDomain\td2\t17\nCheckDeviceFormat\t0 1 16 0 3\t0\t\td2";
+        d3d9::load_adapter_table(&mut e, &table);
+        let out = e.mem.alloc(4);
+        let scratch = e.mem.alloc(0x400);
+        e.vcall(device, 4 * 23, &[4, 4, 1, 0, 0x17, 1, out, 0]);
+        let texture = e.mem.u32(out);
+        e.vcall(device, 4 * 26, &[0x900, 0x208, 0, 0, out, 0]);
+        let vb = e.mem.u32(out);
+        e.vcall(device, 4 * 27, &[0x300, 0x208, 101, 0, out, 0]);
+        let ib = e.mem.u32(out);
+        let elements = e.mem.alloc(16);
+        e.mem.set_u16(elements + 8, 0xff);
+        e.mem.set_u8(elements + 12, 17);
+        e.vcall(device, 4 * 86, &[elements, out]);
+        let declaration = e.mem.u32(out);
+        let function = e.mem.alloc(16);
+        for (i, token) in [0xfffe_0300u32, 0x1234, 0x0000_ffff].iter().enumerate() {
+            e.mem.set_u32(function + 4 * i as u32, *token);
+        }
+        e.vcall(device, 4 * 91, &[function, out]);
+        let vs = e.mem.u32(out);
+        e.vcall(device, 0x1d8, &[8, out]);
+        let query = e.mem.u32(out);
+        let viewport = e.mem.alloc(24);
+        for (i, w) in [0u32, 0, 640, 480, 0, 1f32.to_bits()].iter().enumerate() {
+            e.mem.set_u32(viewport + 4 * i as u32, *w);
+        }
+        let matrix = e.mem.alloc(64);
+        let constants = e.mem.alloc(16 * 64);
+        let rect = e.mem.alloc(16);
+        e.mem.set_u32(rect + 8, 64);
+        e.mem.set_u32(rect + 12, 64);
+        let iid = e.mem.alloc(16);
+        e.mem.write(iid, &IID_DEVICE9);
+        e.vcall(device, 4 * 41, &[]);
+        let mut calls: Vec<(&str, u32, Vec<u32>)> = vec![
+            ("SetRenderState", device, vec![4 * 57, 7, 1]),
+            ("SetTextureStageState", device, vec![4 * 67, 1, 1, 4]),
+            ("SetSamplerState", device, vec![4 * 69, 0, 5, 2]),
+            ("SetTransform", device, vec![4 * 44, 256, matrix]),
+            ("SetViewport", device, vec![4 * 47, viewport]),
+            ("SetScissorRect", device, vec![4 * 75, rect]),
+            (
+                "SetTexture (bind, unbind)",
+                device,
+                vec![4 * 65, 0, texture],
+            ),
+            ("SetStreamSource", device, vec![4 * 100, 0, vb, 0, 32]),
+            ("SetIndices", device, vec![4 * 104, ib]),
+            ("SetVertexDeclaration", device, vec![4 * 87, declaration]),
+            ("SetVertexShader", device, vec![4 * 92, vs]),
+            (
+                "SetVertexShaderConstantF, 16",
+                device,
+                vec![4 * 94, 0, constants, 16],
+            ),
+            (
+                "SetPixelShaderConstantF, 4",
+                device,
+                vec![4 * 109, 0, constants, 4],
+            ),
+            (
+                "DrawIndexedPrimitive",
+                device,
+                vec![4 * 82, 4, 0, 0, 4, 0, 2],
+            ),
+            ("DrawPrimitive", device, vec![4 * 81, 4, 0, 2]),
+            ("Clear", device, vec![4 * 43, 0, 0, 1, 0, 0, 0]),
+            ("QueryInterface + Release", device, vec![0, iid, out]),
+            (
+                "vertex buffer Lock + Unlock",
+                vb,
+                vec![4 * 11, 0, 0x40, out, 0x2000],
+            ),
+            ("query Issue(END) + GetData", query, vec![0x18, 1]),
+        ];
+        for (what, object, words) in calls.iter_mut() {
+            let (slot, args) = (words[0], words[1..].to_vec());
+            let object = *object;
+            let what = *what;
+            row(
+                &format!("IDirect3DDevice9 {what}"),
+                per_run(1000, || {
+                    e.vcall(object, slot, &args);
+                    match what {
+                        "SetTexture (bind, unbind)" => {
+                            e.vcall(device, 4 * 65, &[0, 0]);
+                        }
+                        "QueryInterface + Release" => {
+                            e.vcall(device, 8, &[]);
+                        }
+                        "vertex buffer Lock + Unlock" => {
+                            e.vcall(vb, 4 * 12, &[]);
+                        }
+                        "query Issue(END) + GetData" => {
+                            e.vcall(query, 0x1c, &[scratch, 4, 1]);
+                        }
+                        _ => {}
+                    }
+                }),
+            );
+        }
+        row(
+            "IDirect3DDevice9 EndScene + Present + BeginScene",
+            per_run(1000, || {
+                e.vcall(device, 4 * 42, &[]);
+                e.vcall(device, 4 * 17, &[0, 0, 0, 0]);
+                e.vcall(device, 4 * 41, &[]);
+            }),
+        );
+    }
+
     /// `CreateOffscreenPlainSurface` (+0x90) and `ColorFill` (+0x8C) as the retail runtime
     /// answered (`d3d9-capture device extra`, 2026-10-27).
     #[test]
@@ -4328,5 +4513,518 @@ mod tests {
             D3DERR_INVALIDCALL,
             "EndScene"
         );
+    }
+
+    /// A device with what a frame of the game binds (TEST DATA, not a capture): `n` textures,
+    /// vertex and index buffers, vertex and pixel shaders and declarations (each a power of
+    /// two), and 4 KB of shader constants (distinct floats).
+    #[cfg(windows)]
+    struct Scene {
+        e: Engine,
+        device: u32,
+        textures: Vec<u32>,
+        vertex_buffers: Vec<u32>,
+        index_buffers: Vec<u32>,
+        declarations: Vec<u32>,
+        vertex_shaders: Vec<u32>,
+        pixel_shaders: Vec<u32>,
+        constants: u32,
+    }
+
+    #[cfg(windows)]
+    fn scene(n: [u32; 4]) -> Scene {
+        let (mut e, d3d, present) = d3d();
+        let table = test_table() + "\nDomain\td1\t17\nCheckDeviceFormat\t0 1 16 0 3\t0\t\td1";
+        d3d9::load_adapter_table(&mut e, &table);
+        let out = e.mem.alloc(4);
+        e.vcall(d3d, CREATE_DEVICE, &[0, 1, 0x11c, 0x40, present, out]);
+        let device = e.mem.u32(out);
+        let make = |e: &mut Engine, n: u32, slot: u32, args: &[u32]| -> Vec<u32> {
+            (0..n)
+                .map(|_| {
+                    let mut words = args.to_vec();
+                    words.push(out);
+                    words.push(0);
+                    assert_eq!(e.vcall(device, 4 * slot, &words).u32(), D3D_OK);
+                    e.mem.u32(out)
+                })
+                .collect()
+        };
+        let textures = make(&mut e, n[0], 23, &[4, 4, 1, 0, 0x17, 1]);
+        let vertex_buffers = make(&mut e, n[1], 26, &[64, 0, 0x142, 1]);
+        let index_buffers = make(&mut e, n[1], 27, &[12, 0, 101, 1]);
+        let function = |e: &mut Engine, version: u32| {
+            let at = e.mem.alloc(8);
+            e.mem.set_u32(at, version);
+            e.mem.set_u32(at + 4, 0x0000_ffff);
+            at
+        };
+        let shaders = |e: &mut Engine, slot: u32, version: u32| -> Vec<u32> {
+            (0..n[2])
+                .map(|_| {
+                    let f = function(e, version);
+                    assert_eq!(e.vcall(device, 4 * slot, &[f, out]).u32(), D3D_OK);
+                    e.mem.u32(out)
+                })
+                .collect()
+        };
+        let vertex_shaders = shaders(&mut e, 91, 0xfffe_0300);
+        let pixel_shaders = shaders(&mut e, 106, 0xffff_0300);
+        let elements = e.mem.alloc(16);
+        e.mem.set_u16(elements + 8, 0xff);
+        e.mem.set_u8(elements + 12, 17);
+        let declarations = (0..n[3])
+            .map(|_| {
+                assert_eq!(e.vcall(device, 4 * 86, &[elements, out]).u32(), D3D_OK);
+                e.mem.u32(out)
+            })
+            .collect();
+        let constants = e.mem.alloc(0x1100);
+        for i in 0..0x440 {
+            e.mem
+                .set_u32(constants + 4 * i, (i as f32 * 1.5 - 7.25).to_bits());
+        }
+        Scene {
+            e,
+            device,
+            textures,
+            vertex_buffers,
+            index_buffers,
+            declarations,
+            vertex_shaders,
+            pixel_shaders,
+            constants,
+        }
+    }
+
+    /// Gives every object of the scene a stand-in real counterpart (`d3d9real::stub`): the
+    /// device `#0`, textures `#1000..`, vertex buffers `#2000..`, index buffers `#3000..`,
+    /// declarations `#4000..`, vertex shaders `#5000..`, pixel shaders `#6000..`.
+    #[cfg(windows)]
+    fn stand_in(s: &mut Scene) {
+        use super::super::d3d9real::stub::{install, Kind};
+        install(&mut s.e, s.device, Kind::Device, 0);
+        for (kind, objects, base) in [
+            (Kind::Texture, &s.textures, 1000),
+            (Kind::VertexBuffer, &s.vertex_buffers, 2000),
+            (Kind::IndexBuffer, &s.index_buffers, 3000),
+            (Kind::Declaration, &s.declarations, 4000),
+            (Kind::VertexShader, &s.vertex_shaders, 5000),
+            (Kind::PixelShader, &s.pixel_shaders, 6000),
+        ] {
+            for (i, &o) in objects.iter().enumerate() {
+                install(&mut s.e, o, kind, base + i as u32);
+            }
+        }
+    }
+
+    /// The groups of calls a [`draw`] makes, with how many calls each makes.
+    #[cfg(windows)]
+    const GROUPS: [(&str, u32); 9] = [
+        ("SetVertexDeclaration", 1),
+        ("SetVertexShader/SetPixelShader", 2),
+        ("SetVertexShaderConstantF", 8),
+        ("SetPixelShaderConstantF", 4),
+        ("SetTexture", 2),
+        ("SetSamplerState", 4),
+        ("SetRenderState", 4),
+        ("SetStreamSource/SetIndices", 2),
+        ("DrawIndexedPrimitive", 1),
+    ];
+
+    /// One draw as the game's renderer makes them (TEST DATA, the shape of a lit, textured
+    /// mesh's pass): declaration, shaders, eight vertex and four pixel float constant ranges,
+    /// two textures, four sampler and four render states, stream 0, indices and the indexed
+    /// draw: 28 calls, the [`GROUPS`] in order. `device` is the object called (the scene's
+    /// device, or another object with the same slots). The objects are picked spread over the
+    /// scene's (as a frame's meshes are).
+    #[cfg(windows)]
+    fn draw(s: &mut Scene, device: u32, i: usize) {
+        for group in 0..GROUPS.len() {
+            draw_group(s, device, i, group);
+        }
+    }
+
+    #[cfg(windows)]
+    fn draw_group(s: &mut Scene, device: u32, i: usize, group: usize) {
+        let e = &mut s.e;
+        let data = |k: usize| s.constants + 16 * (k % 64) as u32;
+        let pick = |objects: &[u32], k: usize| objects[k.wrapping_mul(769) % objects.len()];
+        let i32 = i as u32;
+        match group {
+            0 => {
+                e.vcall(device, 4 * 87, &[pick(&s.declarations, i)]);
+            }
+            1 => {
+                e.vcall(device, 4 * 92, &[pick(&s.vertex_shaders, i)]);
+                e.vcall(device, 4 * 107, &[pick(&s.pixel_shaders, i / 2)]);
+            }
+            2 => {
+                for (k, (start, count)) in [
+                    (0, 4),
+                    (4, 4),
+                    (8, 3),
+                    (12, 1),
+                    (13, 1),
+                    (20, 2),
+                    (30, 1),
+                    (40, 1),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    e.vcall(device, 4 * 94, &[start, data(3 * i + k), count]);
+                }
+            }
+            3 => {
+                for (k, (start, count)) in [(0, 1), (1, 1), (2, 2), (5, 1)].into_iter().enumerate()
+                {
+                    e.vcall(device, 4 * 109, &[start, data(5 * i + k), count]);
+                }
+            }
+            4 => {
+                e.vcall(device, 4 * 65, &[0, pick(&s.textures, i)]);
+                e.vcall(device, 4 * 65, &[1, pick(&s.textures, 7 * i + 3)]);
+            }
+            5 => {
+                e.vcall(device, 4 * 69, &[0, 1, 1 + (i32 & 1)]);
+                e.vcall(device, 4 * 69, &[0, 2, 1]);
+                e.vcall(device, 4 * 69, &[1, 5, 2]);
+                e.vcall(device, 4 * 69, &[1, 6, 2]);
+            }
+            6 => {
+                e.vcall(device, 4 * 57, &[7, 1]);
+                e.vcall(device, 4 * 57, &[27, i32 & 1]);
+                e.vcall(device, 4 * 57, &[22, 2 + (i32 & 1)]);
+                e.vcall(device, 4 * 57, &[14, (i32 >> 1) & 1]);
+            }
+            7 => {
+                e.vcall(device, 4 * 100, &[0, pick(&s.vertex_buffers, i), 0, 32]);
+                e.vcall(device, 4 * 104, &[pick(&s.index_buffers, i)]);
+            }
+            _ => {
+                e.vcall(device, 4 * 82, &[4, 0, 0, 100, 0, 50]);
+            }
+        }
+    }
+
+    /// The calls of one draw that reach the real device, as forwarded to a stand-in (the
+    /// first draw of [`draw`]: index 0).
+    #[cfg(windows)]
+    const FIRST_DRAW: [&str; 28] = [
+        "SetVertexDeclaration(#4000)",
+        "SetVertexShader(#5000)",
+        "SetPixelShader(#6000)",
+        "vertex_constant_f(0, [c0e80000 c0b80000 c0880000 c0300000 bfa00000 3e800000 \
+         3fe00000 40500000 40980000 40c80000 40f80000 41140000 412c0000 41440000 415c0000 \
+         41740000], 4)",
+        "vertex_constant_f(4, [bfa00000 3e800000 3fe00000 40500000 40980000 40c80000 \
+         40f80000 41140000 412c0000 41440000 415c0000 41740000 41860000 41920000 419e0000 \
+         41aa0000], 4)",
+        "vertex_constant_f(8, [40980000 40c80000 40f80000 41140000 412c0000 41440000 \
+         415c0000 41740000 41860000 41920000 419e0000 41aa0000], 3)",
+        "vertex_constant_f(12, [412c0000 41440000 415c0000 41740000], 1)",
+        "vertex_constant_f(13, [41860000 41920000 419e0000 41aa0000], 1)",
+        "vertex_constant_f(20, [41b60000 41c20000 41ce0000 41da0000 41e60000 41f20000 \
+         41fe0000 42050000], 2)",
+        "vertex_constant_f(30, [41e60000 41f20000 41fe0000 42050000], 1)",
+        "vertex_constant_f(40, [420b0000 42110000 42170000 421d0000], 1)",
+        "pixel_constant_f(0, [c0e80000 c0b80000 c0880000 c0300000], 1)",
+        "pixel_constant_f(1, [bfa00000 3e800000 3fe00000 40500000], 1)",
+        "pixel_constant_f(2, [40980000 40c80000 40f80000 41140000 412c0000 41440000 \
+         415c0000 41740000], 2)",
+        "pixel_constant_f(5, [412c0000 41440000 415c0000 41740000], 1)",
+        "SetTexture(0, #1000)",
+        "SetTexture(1, #1003)",
+        "SetSamplerState(0, 1, 0x1)",
+        "SetSamplerState(0, 2, 0x1)",
+        "SetSamplerState(1, 5, 0x2)",
+        "SetSamplerState(1, 6, 0x2)",
+        "SetRenderState(7, 0x1)",
+        "SetRenderState(27, 0x0)",
+        "SetRenderState(22, 0x2)",
+        "SetRenderState(14, 0x0)",
+        "SetStreamSource(0, #2000, 0, 32)",
+        "SetIndices(#3000)",
+        "DrawIndexedPrimitive(4, 0, 0, 100, 0, 50)",
+    ];
+
+    /// What reaches the real device is the game's calls as given, in the game's order, with
+    /// the data behind their pointers as engine memory holds it; a call the model refuses does
+    /// not reach it. Pins the forwarding against a stand-in device (`d3d9real::stub`).
+    #[cfg(windows)]
+    #[test]
+    fn forwarded_calls_reach_the_real_device_as_given() {
+        use super::super::d3d9real::stub;
+        let mut s = scene([64, 16, 8, 8]);
+        stand_in(&mut s);
+        let device = s.device;
+        stub::record();
+        assert_eq!(s.e.vcall(device, 4 * 41, &[]).u32(), D3D_OK);
+        draw(&mut s, device, 0);
+        let log = stub::take();
+        assert_eq!(log[0], "BeginScene");
+        let first: Vec<String> = log[1..]
+            .iter()
+            .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect();
+        let expected: Vec<String> = FIRST_DRAW
+            .iter()
+            .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect();
+        assert_eq!(first, expected);
+        // Calls the model refuses or takes at their edges, then many draws.
+        stub::record();
+        let e = &mut s.e;
+        let data = s.constants;
+        let (t0, t1) = (s.textures[0], s.textures[1]);
+        assert_eq!(
+            e.vcall(device, 4 * 69, &[16, 1, 1]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(e.vcall(device, 4 * 65, &[16, t0]).u32(), D3DERR_INVALIDCALL);
+        assert_eq!(
+            e.vcall(device, 4 * 94, &[255, data, 2]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(
+            e.vcall(device, 4 * 109, &[223, data, 2]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(
+            e.vcall(device, 4 * 94, &[3, 0, 1]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(e.vcall(device, 4 * 94, &[3, data, 0]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 94, &[0, data, 256]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 109, &[0, data + 4, 224]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 96, &[2, data + 8, 3]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 98, &[1, data + 12, 5]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 111, &[15, data, 1]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 113, &[0, data, 16]).u32(), D3D_OK);
+        assert_eq!(
+            e.vcall(device, 4 * 113, &[1, data, 16]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(e.vcall(device, 4 * 65, &[2, t1]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 65, &[2, t1]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 65, &[2, 0]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 65, &[257, t0]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 67, &[1, 1, 4]).u32(), D3D_OK);
+        assert_eq!(
+            e.vcall(device, 4 * 67, &[8, 1, 4]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(e.vcall(device, 4 * 100, &[1, 0, 0, 0]).u32(), D3D_OK);
+        assert_eq!(
+            e.vcall(device, 4 * 100, &[16, 0, 0, 0]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(e.vcall(device, 4 * 92, &[0]).u32(), D3D_OK);
+        assert_eq!(
+            e.vcall(device, 4 * 92, &[s.vertex_shaders[3]]).u32(),
+            D3D_OK
+        );
+        // Transforms, the viewport, a material and a light, a clear and a draw from memory.
+        assert_eq!(e.vcall(device, 4 * 44, &[256, data]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 44, &[3, data + 68]).u32(), D3D_OK);
+        assert_eq!(
+            e.vcall(device, 4 * 44, &[4, data]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        let viewport = e.mem.alloc(24);
+        for (i, w) in [8, 4, 600, 400, 0.25f32.to_bits(), 1f32.to_bits()]
+            .into_iter()
+            .enumerate()
+        {
+            e.mem.set_u32(viewport + 4 * i as u32, w);
+        }
+        assert_eq!(e.vcall(device, 4 * 47, &[viewport]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 49, &[data + 20]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 51, &[1, data + 36]).u32(), D3D_OK);
+        let rect = e.mem.alloc(16);
+        e.mem.set_u32(rect + 8, 10);
+        e.mem.set_u32(rect + 12, 12);
+        let clear = [1, rect, 1, 0xff10_2030, 1f32.to_bits(), 0];
+        assert_eq!(e.vcall(device, 4 * 43, &clear).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 83, &[4, 2, data + 2, 16]).u32(), D3D_OK);
+        for i in 1..200 {
+            draw(&mut s, device, i);
+        }
+        assert_eq!(s.e.vcall(device, 4 * 42, &[]).u32(), D3D_OK);
+        let log = stub::take();
+        assert_eq!(log.len(), 22 + 199 * 28 + 1);
+        assert!(!log.iter().any(|l| l.contains("unexpected")));
+        let digest = log.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, line| {
+            line.bytes()
+                .chain(*b"\n")
+                .fold(h, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
+        });
+        if std::env::var_os("NV_D3D9_STUB_LOG").is_some() {
+            for line in &log {
+                eprintln!("{line}");
+            }
+        }
+        assert_eq!(
+            digest, 5_257_225_520_366_858_290,
+            "the forwarded calls' digest"
+        );
+        assert_eq!(super::super::d3d9real::stub::logged(&s.e), 0);
+        // What the model answers the game afterwards: its getters' answers and words, and the
+        // objects' counts.
+        let answers = model_answers(&mut s);
+        if std::env::var_os("NV_D3D9_STUB_LOG").is_some() {
+            eprintln!("{answers:08x?}");
+        }
+        let digest = answers.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &w| {
+            (h ^ u64::from(w)).wrapping_mul(0x0100_0000_01b3)
+        });
+        assert_eq!(answers.len(), 2303);
+        assert_eq!(
+            digest, 9_009_626_195_373_671_558,
+            "the model's answers' digest"
+        );
+    }
+
+    /// The scene's device state as the game can read it back: each getter's answer and the
+    /// words it writes, and each object's reference count (`AddRef` then `Release`).
+    #[cfg(windows)]
+    fn model_answers(s: &mut Scene) -> Vec<u32> {
+        let device = s.device;
+        let e = &mut s.e;
+        let out = e.mem.alloc(0x1000);
+        let mut answers = Vec::new();
+        let mut get = |e: &mut Engine, slot: u32, args: &[u32], words: u32| {
+            e.mem.zero(out, 4 * words);
+            answers.push(e.vcall(device, 4 * slot, args).u32());
+            answers.extend((0..words).map(|i| e.mem.u32(out + 4 * i)));
+        };
+        for state in [7, 14, 22, 27] {
+            get(e, 58, &[state, out], 1);
+        }
+        for (sampler, kind) in [(0, 1), (0, 2), (1, 5), (1, 6)] {
+            get(e, 68, &[sampler, kind, out], 1);
+        }
+        get(e, 66, &[1, 1, out], 1);
+        for sampler in [0, 1, 2, 257] {
+            get(e, 64, &[sampler, out], 1);
+        }
+        for stream in [0, 1] {
+            get(e, 101, &[stream, out, out + 4, out + 8], 3);
+        }
+        for slot in [105, 88, 93, 108] {
+            get(e, slot, &[out], 1);
+        }
+        get(e, 95, &[0, out, 256], 1024);
+        get(e, 110, &[0, out, 224], 896);
+        get(e, 97, &[2, out, 3], 12);
+        get(e, 99, &[1, out, 5], 5);
+        get(e, 112, &[15, out, 1], 4);
+        get(e, 114, &[0, out, 16], 16);
+        for state in [256, 3, 2] {
+            get(e, 45, &[state, out], 16);
+        }
+        get(e, 48, &[out], 6);
+        let objects = [
+            &s.textures,
+            &s.vertex_buffers,
+            &s.index_buffers,
+            &s.declarations,
+            &s.vertex_shaders,
+            &s.pixel_shaders,
+        ];
+        for &o in objects.iter().flat_map(|o| o.iter()) {
+            answers.push(e.vcall(o, 4, &[]).u32());
+            answers.push(e.vcall(o, 8, &[]).u32());
+        }
+        answers
+    }
+
+    /// The cost of the platform's Direct3D 9 calls as the game makes them (through
+    /// `Engine::vcall`), per call: the call machinery alone (the same calls to an object whose
+    /// slots do nothing), the model alone, and the model forwarding to a stand-in real device
+    /// (`d3d9real::stub`); then the forwarded cost by group of calls. The scene has 2048
+    /// textures, 1024 vertex and index buffers, 64 shaders of each kind and 32 declarations.
+    /// `cargo test --release -p engine-core --lib cost_of_d3d9 -- --ignored --nocapture`.
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn cost_of_d3d9_calls() {
+        const SIZE: [u32; 4] = [2048, 1024, 64, 32];
+        let draws = 2000;
+        let frames = 10;
+        // Nanoseconds per call of `group` (all of a draw's for `None`), the best of five rounds
+        // after a warm-up frame.
+        let run = |s: &mut Scene, device: u32, group: Option<usize>| -> f64 {
+            let calls = group.map_or(28, |g| GROUPS[g].1);
+            let mut best = f64::MAX;
+            for round in 0..6 {
+                let t = std::time::Instant::now();
+                for _ in 0..if round == 0 { 1 } else { frames } {
+                    s.e.vcall(s.device, 4 * 41, &[]);
+                    for i in 0..draws {
+                        match group {
+                            None => draw(s, device, i),
+                            Some(_) if round == 0 => draw(s, device, i),
+                            Some(g) => draw_group(s, device, i, g),
+                        }
+                    }
+                    s.e.vcall(s.device, 4 * 42, &[]);
+                }
+                let ns = t.elapsed().as_nanos() as f64 / (frames * draws) as f64 / f64::from(calls);
+                if round > 0 {
+                    best = best.min(ns);
+                }
+            }
+            best
+        };
+        // The floor: an object whose every slot is a function that does nothing.
+        let mut s = scene(SIZE);
+        fn nothing(_: &mut Engine, _: &[u32]) -> crate::Ret {
+            crate::Ret::default()
+        }
+        let empty = 0x7e0f_0000;
+        s.e.register(empty, nothing);
+        let table = s.e.mem.alloc(4 * 128);
+        for i in 0..128 {
+            s.e.mem.set_u32(table + 4 * i, empty);
+        }
+        let object = s.e.mem.alloc(8);
+        s.e.mem.set_u32(object, table);
+        let floor = run(&mut s, object, None);
+        let device = s.device;
+        let model = run(&mut s, device, None);
+        let model_groups: Vec<f64> = (0..GROUPS.len())
+            .map(|g| run(&mut s, device, Some(g)))
+            .collect();
+        let mut s = scene(SIZE);
+        stand_in(&mut s);
+        let device = s.device;
+        let forwarded = run(&mut s, device, None);
+        eprintln!(
+            "cost of a Direct3D 9 call: machinery {floor:.1} ns, model {model:.1} ns, \
+             model + forwarding to a stand-in device {forwarded:.1} ns \
+             ({draws} draws x 28 calls a frame: {:.2} ms)",
+            forwarded * f64::from(draws as u32 * 28) / 1e6
+        );
+        for (g, (name, _)) in GROUPS.iter().enumerate() {
+            let ns = run(&mut s, device, Some(g));
+            eprintln!(
+                "  {name}: model {:.1} ns, forwarded {ns:.1} ns a call",
+                model_groups[g]
+            );
+        }
+        // A skinned mesh's bone palette: 90 registers in one call.
+        let calls = 200_000u32;
+        let mut best = f64::MAX;
+        for _ in 0..5 {
+            let t = std::time::Instant::now();
+            for i in 0..calls {
+                let data = s.constants + 16 * (i % 64);
+                s.e.vcall(device, 4 * 94, &[30, data, 90]);
+            }
+            best = best.min(t.elapsed().as_nanos() as f64 / f64::from(calls));
+        }
+        eprintln!("  SetVertexShaderConstantF of 90 registers: forwarded {best:.1} ns a call");
     }
 }

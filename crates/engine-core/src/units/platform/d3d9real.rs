@@ -70,6 +70,9 @@ pub struct Real {
     broken: crate::engine::AddrSet<(u32, u32)>,
     /// Real objects whose modelled ones are destroyed, released at the next `Present` ([`forget`]).
     graveyard: Vec<Object>,
+    /// The vertices of the last `DrawPrimitiveUP`, kept so the next one reuses the room (no
+    /// state: each draw writes all it passes).
+    vertices_up: Vec<u32>,
 }
 
 impl std::fmt::Debug for Real {
@@ -115,6 +118,7 @@ fn choose_interval(interval: u32, immediate: bool) -> u32 {
     }
 }
 
+#[inline]
 fn hr(r: windows::core::Result<()>) -> u32 {
     match r {
         Ok(()) => 0,
@@ -123,22 +127,35 @@ fn hr(r: windows::core::Result<()>) -> u32 {
 }
 
 /// Prints, once per kind, a call where the real runtime answers differently from the model.
+#[inline]
 fn answer(e: &mut Engine, call: &'static str, model: u32, real_hr: u32) {
-    if model != real_hr && real(e).logged.insert((call, model, real_hr)) {
+    if model != real_hr {
+        differs(e, call, model, real_hr);
+    }
+}
+
+/// [`answer`]'s report, out of the forwarded calls' way (the answers nearly always agree).
+#[cold]
+#[inline(never)]
+fn differs(e: &mut Engine, call: &'static str, model: u32, real_hr: u32) {
+    if real(e).logged.insert((call, model, real_hr)) {
         eprintln!(
             "NV_D3D9=real: {call}: the model answers {model:#010x}, the real runtime {real_hr:#010x}"
         );
     }
 }
 
-fn words(e: &Engine, at: u32, n: u32) -> Vec<u32> {
-    (0..n).map(|i| e.mem.u32(at + 4 * i)).collect()
+/// The `N` words at `at` (a structure a call passes by address), on the stack (no allocation per
+/// call).
+fn words<const N: usize>(e: &Engine, at: u32) -> [u32; N] {
+    std::array::from_fn(|i| e.mem.u32(at + 4 * i as u32))
 }
 
 /// The real device, borrowed: the object table holds its reference for the whole call (only
 /// [`forget`] takes it out, and it keeps the object alive until `Present`), so the handle is not
 /// counted. A counted clone cost an `AddRef` and a `Release` in d3d9.dll on every forwarded
 /// call, tens of thousands a frame.
+#[inline]
 fn device(e: &Engine, this: u32) -> Option<std::mem::ManuallyDrop<IDirect3DDevice9>> {
     match e.kernel.graphics.real.objects.get(&this) {
         // SAFETY: an interface is one non-null COM pointer; the copy is never released.
@@ -711,12 +728,20 @@ pub fn clear(
     model: u32,
 ) {
     let Some(d) = device(e, this) else { return };
-    let rect_words = if rects != 0 {
-        words(e, rects, 4 * count)
-    } else {
-        Vec::new()
-    };
+    // The rectangles' words on the stack up to 16 rectangles (the game clears one or none).
+    let mut inline = [0u32; 64];
+    let mut heap = Vec::new();
     let pointer = if rects != 0 {
+        let n = (4 * count) as usize;
+        let rect_words: &mut [u32] = if n <= inline.len() {
+            &mut inline[..n]
+        } else {
+            heap.resize(n, 0);
+            &mut heap
+        };
+        for (i, w) in rect_words.iter_mut().enumerate() {
+            *w = e.mem.u32(rects + 4 * i as u32);
+        }
         rect_words.as_ptr() as *const D3DRECT
     } else {
         std::ptr::null()
@@ -826,7 +851,7 @@ pub fn set_viewport(e: &mut Engine, this: u32, viewport: u32, model: u32) {
     if viewport == 0 {
         return;
     }
-    let v = words(e, viewport, 6);
+    let v: [u32; 6] = words(e, viewport);
     let vp = D3DVIEWPORT9 {
         X: v[0],
         Y: v[1],
@@ -844,10 +869,10 @@ pub fn set_transform(e: &mut Engine, this: u32, state: u32, matrix: u32, model: 
     if matrix == 0 {
         return;
     }
-    let m = words(e, matrix, 16);
+    let m: [u32; 16] = words(e, matrix);
     if face_check::enabled() {
         // Diagnostic only (`NV_FACE_CHECK`, not exe behaviour).
-        face_check::state().transforms.insert(state, m.clone());
+        face_check::state().transforms.insert(state, m.to_vec());
     }
     let r = unsafe { d.SetTransform(D3DTRANSFORMSTATETYPE(state as i32), m.as_ptr() as *const _) };
     answer(e, "SetTransform", model, hr(r));
@@ -886,7 +911,7 @@ pub fn set_clip_plane(e: &mut Engine, this: u32, index: u32, plane: u32, model: 
     if plane == 0 {
         return;
     }
-    let p = words(e, plane, 4);
+    let p: [u32; 4] = words(e, plane);
     let r = unsafe { d.SetClipPlane(index, p.as_ptr() as *const f32) };
     answer(e, "SetClipPlane", model, hr(r));
 }
@@ -1315,6 +1340,10 @@ pub fn set_shader(e: &mut Engine, this: u32, shader: u32, pixel: bool, model: u3
 }
 
 /// `Set{Vertex,Pixel}ShaderConstant{F,I,B}`: kinds 0..2 vertex float, int, bool; 3..5 pixel.
+/// Called once the model took the call (`D3D_OK`): the model has just read the registers'
+/// words from `data` into the device's bindings, and nothing ran since, so the real device is
+/// given those words (`count` registers of 4 words, or of one word for booleans) without
+/// reading the program's memory again.
 pub fn set_constants(
     e: &mut Engine,
     this: u32,
@@ -1333,15 +1362,59 @@ pub fn set_constants(
         face_check_constants(e, kind == 3, start, data, count);
     }
     let per = if kind % 3 == 2 { 1 } else { 4 };
-    // The model took the range (at most 256 registers of 4 words): the words on the stack, no
-    // allocation per call.
-    let mut v = [0u32; 1024];
-    let n = ((per * count) as usize).min(v.len());
-    for (i, w) in v[..n].iter_mut().enumerate() {
+    // A boolean register keeps its word first: packed here (at most 16 registers).
+    let mut packed = [0u32; 16];
+    let p: *const u32 = match super::d3d9resource::constant_registers(e, this, kind, start, count) {
+        Some(registers) if per == 1 => {
+            for (w, r) in packed.iter_mut().zip(registers) {
+                *w = r[0];
+            }
+            packed.as_ptr()
+        }
+        Some(registers) => registers.as_ptr().cast(),
+        None => return set_constants_as_given(e, &d, kind, start, data, count, model),
+    };
+    let r = forward_constants(&d, kind, start, p, count);
+    answer(e, "Set*ShaderConstant*", model, hr(r));
+}
+
+/// [`set_constants`] when the model holds no registers for the range (not reached: the model
+/// keeps every register it took): the words read as given, on the stack (no allocation), out of
+/// the common path's frame.
+#[cold]
+#[inline(never)]
+fn set_constants_as_given(
+    e: &mut Engine,
+    d: &IDirect3DDevice9,
+    kind: u8,
+    start: u32,
+    data: u32,
+    count: u32,
+    model: u32,
+) {
+    let per = if kind % 3 == 2 { 1 } else { 4 };
+    // The model took the range (at most 256 registers of 4 words).
+    let mut read = [0u32; 1024];
+    let n = ((per * count) as usize).min(read.len());
+    for (i, w) in read[..n].iter_mut().enumerate() {
         *w = e.mem.u32(data + 4 * i as u32);
     }
-    let p = v.as_ptr();
-    let r = unsafe {
+    let r = forward_constants(d, kind, start, read.as_ptr(), count);
+    answer(e, "Set*ShaderConstant*", model, hr(r));
+}
+
+/// The real device's `Set*ShaderConstant*` of `kind` (as [`set_constants`]) with the `count`
+/// registers at `p`.
+#[inline]
+fn forward_constants(
+    d: &IDirect3DDevice9,
+    kind: u8,
+    start: u32,
+    p: *const u32,
+    count: u32,
+) -> windows::core::Result<()> {
+    // SAFETY: `p` holds `count` registers of the kind's size (4 words, or one for booleans).
+    unsafe {
         match kind {
             0 => d.SetVertexShaderConstantF(start, p as *const f32, count),
             1 => d.SetVertexShaderConstantI(start, p as *const i32, count),
@@ -1350,8 +1423,7 @@ pub fn set_constants(
             4 => d.SetPixelShaderConstantI(start, p as *const i32, count),
             _ => d.SetPixelShaderConstantB(start, p as *const BOOL, count),
         }
-    };
-    answer(e, "Set*ShaderConstant*", model, hr(r));
+    }
 }
 
 pub fn set_stream_source(
@@ -1411,18 +1483,17 @@ fn broken(e: &mut Engine, device: u32, binding: u32, call: &'static str, model: 
 }
 
 fn mended(e: &mut Engine, device: u32, binding: u32) {
-    real(e).broken.remove(&(device, binding));
+    // Nearly always none is broken: then there is nothing to look up.
+    let broken = &mut real(e).broken;
+    if !broken.is_empty() {
+        broken.remove(&(device, binding));
+    }
 }
 
 /// Whether the real draws of `device` are skipped (a binding without a real counterpart).
 fn skipped(e: &mut Engine, device: u32) -> bool {
-    let any = e
-        .kernel
-        .graphics
-        .real
-        .broken
-        .iter()
-        .any(|&(d, _)| d == device);
+    let broken = &e.kernel.graphics.real.broken;
+    let any = !broken.is_empty() && broken.iter().any(|&(d, _)| d == device);
     if any {
         missing(e, "a draw skipped: a binding has no real counterpart");
     }
@@ -1498,15 +1569,27 @@ pub fn draw_primitive_up(
     if skipped(e, this) {
         return;
     }
-    let bytes = as_words(&e.mem.bytes(data, vertices * stride));
+    // The vertices' bytes as words (the last one padded with zeros), read straight into them,
+    // in the room the last draw left.
+    let len = (vertices * stride) as usize;
+    let mut words = std::mem::take(&mut real(e).vertices_up);
+    words.clear();
+    words.resize(len.div_ceil(4), 0);
+    // SAFETY: the words' memory is `4 * words.len()` initialized bytes, at least `len`; a `u8`
+    // view of `u32`s has no alignment or validity requirement of its own (every byte pattern is
+    // a word; Windows targets are little-endian, so word `i` holds bytes `4i..4i + 4` as
+    // `as_words` reads them).
+    let bytes = unsafe { std::slice::from_raw_parts_mut(words.as_mut_ptr().cast::<u8>(), len) };
+    e.mem.read(data, bytes);
     let r = unsafe {
         d.DrawPrimitiveUP(
             D3DPRIMITIVETYPE(kind as i32),
             count,
-            bytes.as_ptr() as *const _,
+            words.as_ptr() as *const _,
             stride,
         )
     };
+    real(e).vertices_up = words;
     answer(e, "DrawPrimitiveUP", model, hr(r));
 }
 
@@ -1563,7 +1646,7 @@ pub fn set_material(e: &mut Engine, this: u32, material: u32, model: u32) {
     if material == 0 {
         return;
     }
-    let m = words(e, material, 17);
+    let m: [u32; 17] = words(e, material);
     let r = unsafe { d.SetMaterial(m.as_ptr() as *const D3DMATERIAL9) };
     answer(e, "SetMaterial", model, hr(r));
 }
@@ -1573,7 +1656,7 @@ pub fn set_light(e: &mut Engine, this: u32, index: u32, light: u32, model: u32) 
     if light == 0 {
         return;
     }
-    let l = words(e, light, 26);
+    let l: [u32; 26] = words(e, light);
     let r = unsafe { d.SetLight(index, l.as_ptr() as *const D3DLIGHT9) };
     answer(e, "SetLight", model, hr(r));
 }
@@ -2687,6 +2770,103 @@ mod tests {
         Some(0x1000)
     }
 
+    /// Not a check: the host heap allocations of the forwarded per-frame calls on a real device
+    /// (`cargo test --release -p engine-core --lib allocations_per -- --ignored --nocapture`);
+    /// nothing is listed where Direct3D 9 has no device.
+    #[test]
+    #[ignore]
+    fn allocations_per_operation_of_the_real_device() {
+        use crate::alloc_count::{per_run, row};
+        let mut e = Engine::new();
+        let Some(device) = test_device(&mut e, 0x54) else {
+            return;
+        };
+        let matrix = e.mem.alloc(64);
+        for i in 0..4 {
+            e.mem.set_u32(matrix + 20 * i, 1f32.to_bits());
+        }
+        let viewport = e.mem.alloc(24);
+        for (i, w) in [0u32, 0, 64, 64, 0, 1f32.to_bits()].iter().enumerate() {
+            e.mem.set_u32(viewport + 4 * i as u32, *w);
+        }
+        let rects = e.mem.alloc(32);
+        for (i, w) in [0u32, 0, 32, 32, 32, 32, 64, 64].iter().enumerate() {
+            e.mem.set_u32(rects + 4 * i as u32, *w);
+        }
+        let block = e.mem.alloc(0x1000);
+        let buffer = 0x2000;
+        // D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY, default pool, 0x900 bytes, FVF XYZ|DIFFUSE.
+        buffer_created(&mut e, device, buffer, false, 0x900, 0x208, 0x42, 0);
+        let mut rows: Vec<(&str, crate::alloc_count::Per)> = Vec::new();
+        rows.push((
+            "SetTransform",
+            per_run(1000, || set_transform(&mut e, device, 256, matrix, 0)),
+        ));
+        rows.push((
+            "SetViewport",
+            per_run(1000, || set_viewport(&mut e, device, viewport, 0)),
+        ));
+        rows.push((
+            "Clear, no rectangles",
+            per_run(1000, || clear(&mut e, device, 0, 0, 1, 0, 0, 0, 0)),
+        ));
+        rows.push((
+            "Clear, two rectangles",
+            per_run(1000, || clear(&mut e, device, 2, rects, 1, 0, 0, 0, 0)),
+        ));
+        rows.push((
+            "SetClipPlane",
+            per_run(1000, || set_clip_plane(&mut e, device, 0, block, 0)),
+        ));
+        rows.push((
+            "SetMaterial",
+            per_run(1000, || set_material(&mut e, device, block, 0)),
+        ));
+        rows.push((
+            "SetRenderState",
+            per_run(1000, || set_render_state(&mut e, device, 7, 1, 0)),
+        ));
+        rows.push((
+            "SetVertexShaderConstantF, 16",
+            per_run(1000, || set_constants(&mut e, device, 0, 0, block, 16, 0)),
+        ));
+        rows.push((
+            "SetStreamSource",
+            per_run(1000, || {
+                set_stream_source(&mut e, device, 0, buffer, 0, 16, 0)
+            }),
+        ));
+        rows.push((
+            "buffer Lock + Unlock, 0x100 bytes",
+            per_run(1000, || {
+                buffer_locked(&mut e, buffer, 0, 0x100, LOCK_DISCARD, 0);
+                buffer_unlocked(&mut e, buffer, block, 0x900, 0);
+            }),
+        ));
+        rows.push((
+            "DrawPrimitiveUP, 2 triangles of 16-byte vertices",
+            per_run(1000, || {
+                let _ = unsafe { device_of(&e, device).BeginScene() };
+                draw_primitive_up(&mut e, device, 4, 2, block, 16, 6, 0);
+                let _ = unsafe { device_of(&e, device).EndScene() };
+            }),
+        ));
+        for (what, per) in rows {
+            row(&format!("real IDirect3DDevice9 {what}"), per);
+        }
+        // SetLight needs a light the runtime takes: a directional one.
+        e.mem.set_u32(block, 3);
+        e.mem.set_u32(block + 0x40, 1f32.to_bits());
+        row(
+            "real IDirect3DDevice9 SetLight",
+            per_run(1000, || set_light(&mut e, device, 0, block, 0)),
+        );
+    }
+
+    fn device_of(e: &Engine, this: u32) -> std::mem::ManuallyDrop<IDirect3DDevice9> {
+        device(e, this).expect("the real device")
+    }
+
     /// `SetLOD` on a managed texture reaches the real texture, and the real one answers the
     /// previous level as the model does.
     #[test]
@@ -2707,5 +2887,374 @@ mod tests {
             "no answer differed: {:?}",
             e.kernel.graphics.real.logged
         );
+    }
+}
+
+/// Test only: a stand-in for the real device and its objects (COM objects of this module whose
+/// methods answer `S_OK`), so the forwarding can be driven and measured without a GPU. While
+/// recording ([`stub::record`]) each call that reaches the stand-in device is kept with its
+/// arguments (data behind pointers as words, objects by the number they were installed with).
+#[cfg(test)]
+pub(crate) mod stub {
+    use super::*;
+    use std::cell::RefCell;
+    use std::ffi::c_void;
+    use windows::core::{Interface, HRESULT};
+    use windows::Foundation::Numerics::Matrix4x4;
+
+    /// What each stand-in is installed as.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) enum Kind {
+        Device,
+        Texture,
+        VertexBuffer,
+        IndexBuffer,
+        VertexShader,
+        PixelShader,
+        Declaration,
+    }
+
+    /// A stand-in COM object: its vtable and the number it is recorded by.
+    #[repr(C)]
+    struct StubObject {
+        vtable: *const usize,
+        id: u32,
+    }
+
+    thread_local! {
+        static LOG: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+    }
+
+    /// Starts recording the calls that reach stand-in devices on this thread (an empty log).
+    pub(crate) fn record() {
+        LOG.with(|l| *l.borrow_mut() = Some(Vec::new()));
+    }
+
+    /// The calls recorded since [`record`]; recording stops.
+    pub(crate) fn take() -> Vec<String> {
+        LOG.with(|l| l.borrow_mut().take()).unwrap_or_default()
+    }
+
+    fn note(f: impl FnOnce() -> String) {
+        LOG.with(|l| {
+            if let Some(log) = l.borrow_mut().as_mut() {
+                log.push(f());
+            }
+        });
+    }
+
+    fn id(p: *mut c_void) -> String {
+        if p.is_null() {
+            "null".to_string()
+        } else {
+            // SAFETY: every object a stand-in device is given is a `StubObject`.
+            format!("#{}", unsafe { (*(p as *const StubObject)).id })
+        }
+    }
+
+    fn data<T: Copy>(p: *const T, n: usize, word: impl Fn(T) -> u32) -> String {
+        if p.is_null() {
+            return "null".to_string();
+        }
+        // SAFETY: the forwarding passes `n` readable values.
+        let v = unsafe { std::slice::from_raw_parts(p, n) };
+        v.iter()
+            .map(|&x| format!("{:08x}", word(x)))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    const OK: HRESULT = HRESULT(0);
+
+    unsafe extern "system" fn unexpected(_this: *mut c_void) -> HRESULT {
+        note(|| "an unexpected method".to_string());
+        HRESULT(0x8000_4005_u32 as i32)
+    }
+    unsafe extern "system" fn add_ref(_this: *mut c_void) -> u32 {
+        1
+    }
+    unsafe extern "system" fn release(_this: *mut c_void) -> u32 {
+        0
+    }
+    unsafe extern "system" fn begin_scene(_this: *mut c_void) -> HRESULT {
+        note(|| "BeginScene".to_string());
+        OK
+    }
+    unsafe extern "system" fn end_scene(_this: *mut c_void) -> HRESULT {
+        note(|| "EndScene".to_string());
+        OK
+    }
+    unsafe extern "system" fn set_transform(
+        _this: *mut c_void,
+        state: D3DTRANSFORMSTATETYPE,
+        m: *const Matrix4x4,
+    ) -> HRESULT {
+        note(|| {
+            format!(
+                "SetTransform({}, {})",
+                state.0,
+                data(m as *const f32, 16, f32::to_bits)
+            )
+        });
+        OK
+    }
+    unsafe extern "system" fn set_viewport(_this: *mut c_void, v: *const D3DVIEWPORT9) -> HRESULT {
+        note(|| {
+            // SAFETY: the forwarding passes a viewport.
+            let v = unsafe { *v };
+            format!(
+                "SetViewport({} {} {} {} {:08x} {:08x})",
+                v.X,
+                v.Y,
+                v.Width,
+                v.Height,
+                v.MinZ.to_bits(),
+                v.MaxZ.to_bits()
+            )
+        });
+        OK
+    }
+    unsafe extern "system" fn set_render_state(
+        _this: *mut c_void,
+        state: D3DRENDERSTATETYPE,
+        value: u32,
+    ) -> HRESULT {
+        note(|| format!("SetRenderState({}, {value:#x})", state.0));
+        OK
+    }
+    unsafe extern "system" fn clear(
+        _this: *mut c_void,
+        count: u32,
+        rects: *const D3DRECT,
+        flags: u32,
+        colour: u32,
+        z: f32,
+        stencil: u32,
+    ) -> HRESULT {
+        note(|| {
+            format!(
+                "Clear({count}, [{}], {flags:#x}, {colour:#x}, {:08x}, {stencil})",
+                data(rects as *const u32, 4 * count as usize, |w| w),
+                z.to_bits()
+            )
+        });
+        OK
+    }
+    unsafe extern "system" fn set_material(_this: *mut c_void, m: *const D3DMATERIAL9) -> HRESULT {
+        note(|| format!("SetMaterial([{}])", data(m as *const u32, 17, |w| w)));
+        OK
+    }
+    unsafe extern "system" fn set_light(
+        _this: *mut c_void,
+        index: u32,
+        l: *const D3DLIGHT9,
+    ) -> HRESULT {
+        note(|| format!("SetLight({index}, [{}])", data(l as *const u32, 26, |w| w)));
+        OK
+    }
+    unsafe extern "system" fn draw_primitive_up(
+        _this: *mut c_void,
+        kind: D3DPRIMITIVETYPE,
+        count: u32,
+        v: *const c_void,
+        stride: u32,
+    ) -> HRESULT {
+        note(|| {
+            let vertices = match kind.0 {
+                1 => count,
+                2 => 2 * count,
+                3 => count + 1,
+                4 => 3 * count,
+                _ => count + 2,
+            };
+            format!(
+                "DrawPrimitiveUP({}, {count}, [{}], {stride})",
+                kind.0,
+                data(v as *const u8, (vertices * stride) as usize, u32::from)
+            )
+        });
+        OK
+    }
+    unsafe extern "system" fn set_texture(
+        _this: *mut c_void,
+        stage: u32,
+        t: *mut c_void,
+    ) -> HRESULT {
+        note(|| format!("SetTexture({stage}, {})", id(t)));
+        OK
+    }
+    unsafe extern "system" fn set_texture_stage_state(
+        _this: *mut c_void,
+        stage: u32,
+        kind: D3DTEXTURESTAGESTATETYPE,
+        value: u32,
+    ) -> HRESULT {
+        note(|| format!("SetTextureStageState({stage}, {}, {value:#x})", kind.0));
+        OK
+    }
+    unsafe extern "system" fn set_sampler_state(
+        _this: *mut c_void,
+        sampler: u32,
+        kind: D3DSAMPLERSTATETYPE,
+        value: u32,
+    ) -> HRESULT {
+        note(|| format!("SetSamplerState({sampler}, {}, {value:#x})", kind.0));
+        OK
+    }
+    unsafe extern "system" fn draw_primitive(
+        _this: *mut c_void,
+        kind: D3DPRIMITIVETYPE,
+        start: u32,
+        count: u32,
+    ) -> HRESULT {
+        note(|| format!("DrawPrimitive({}, {start}, {count})", kind.0));
+        OK
+    }
+    unsafe extern "system" fn draw_indexed_primitive(
+        _this: *mut c_void,
+        kind: D3DPRIMITIVETYPE,
+        base: i32,
+        min: u32,
+        vertices: u32,
+        start: u32,
+        count: u32,
+    ) -> HRESULT {
+        note(|| {
+            format!(
+                "DrawIndexedPrimitive({}, {base}, {min}, {vertices}, {start}, {count})",
+                kind.0
+            )
+        });
+        OK
+    }
+    unsafe extern "system" fn set_vertex_declaration(
+        _this: *mut c_void,
+        d: *mut c_void,
+    ) -> HRESULT {
+        note(|| format!("SetVertexDeclaration({})", id(d)));
+        OK
+    }
+    unsafe extern "system" fn set_fvf(_this: *mut c_void, fvf: u32) -> HRESULT {
+        note(|| format!("SetFVF({fvf:#x})"));
+        OK
+    }
+    unsafe extern "system" fn set_vertex_shader(_this: *mut c_void, s: *mut c_void) -> HRESULT {
+        note(|| format!("SetVertexShader({})", id(s)));
+        OK
+    }
+    unsafe extern "system" fn set_pixel_shader(_this: *mut c_void, s: *mut c_void) -> HRESULT {
+        note(|| format!("SetPixelShader({})", id(s)));
+        OK
+    }
+    macro_rules! constants {
+        ($($name:ident, $t:ty, $per:expr, $word:expr;)*) => {$(
+            unsafe extern "system" fn $name(
+                _this: *mut c_void,
+                start: u32,
+                v: *const $t,
+                count: u32,
+            ) -> HRESULT {
+                note(|| {
+                    format!(
+                        "{}({start}, [{}], {count})",
+                        stringify!($name),
+                        data(v, ($per * count) as usize, $word)
+                    )
+                });
+                OK
+            }
+        )*};
+    }
+    constants! {
+        vertex_constant_f, f32, 4, f32::to_bits;
+        vertex_constant_i, i32, 4, |x: i32| x as u32;
+        vertex_constant_b, BOOL, 1, |x: BOOL| x.0 as u32;
+        pixel_constant_f, f32, 4, f32::to_bits;
+        pixel_constant_i, i32, 4, |x: i32| x as u32;
+        pixel_constant_b, BOOL, 1, |x: BOOL| x.0 as u32;
+    }
+    unsafe extern "system" fn set_stream_source(
+        _this: *mut c_void,
+        stream: u32,
+        b: *mut c_void,
+        offset: u32,
+        stride: u32,
+    ) -> HRESULT {
+        note(|| format!("SetStreamSource({stream}, {}, {offset}, {stride})", id(b)));
+        OK
+    }
+    unsafe extern "system" fn set_indices(_this: *mut c_void, b: *mut c_void) -> HRESULT {
+        note(|| format!("SetIndices({})", id(b)));
+        OK
+    }
+
+    /// The vtable every stand-in shares (`IDirect3DDevice9`'s slots; the other kinds are only
+    /// ever counted and released).
+    fn vtable() -> *const usize {
+        static TABLE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        *TABLE.get_or_init(|| Box::leak(Box::new(table())).as_ptr() as usize) as *const usize
+    }
+
+    fn table() -> [usize; 128] {
+        let mut t = [unexpected as *const () as usize; 128];
+        t[1] = add_ref as *const () as usize;
+        t[2] = release as *const () as usize;
+        t[41] = begin_scene as *const () as usize;
+        t[42] = end_scene as *const () as usize;
+        t[43] = clear as *const () as usize;
+        t[49] = set_material as *const () as usize;
+        t[51] = set_light as *const () as usize;
+        t[83] = draw_primitive_up as *const () as usize;
+        t[44] = set_transform as *const () as usize;
+        t[47] = set_viewport as *const () as usize;
+        t[57] = set_render_state as *const () as usize;
+        t[65] = set_texture as *const () as usize;
+        t[67] = set_texture_stage_state as *const () as usize;
+        t[69] = set_sampler_state as *const () as usize;
+        t[81] = draw_primitive as *const () as usize;
+        t[82] = draw_indexed_primitive as *const () as usize;
+        t[87] = set_vertex_declaration as *const () as usize;
+        t[89] = set_fvf as *const () as usize;
+        t[92] = set_vertex_shader as *const () as usize;
+        t[94] = vertex_constant_f as *const () as usize;
+        t[96] = vertex_constant_i as *const () as usize;
+        t[98] = vertex_constant_b as *const () as usize;
+        t[100] = set_stream_source as *const () as usize;
+        t[104] = set_indices as *const () as usize;
+        t[107] = set_pixel_shader as *const () as usize;
+        t[109] = pixel_constant_f as *const () as usize;
+        t[111] = pixel_constant_i as *const () as usize;
+        t[113] = pixel_constant_b as *const () as usize;
+        t
+    }
+
+    /// Makes `model` (a modelled object's address) have a stand-in real counterpart of `kind`,
+    /// recorded as `#id`.
+    pub(crate) fn install(e: &mut Engine, model: u32, kind: Kind, id: u32) {
+        let raw = Box::into_raw(Box::new(StubObject {
+            vtable: vtable(),
+            id,
+        })) as *mut c_void;
+        // SAFETY: `raw` is a COM object whose vtable answers every slot these interfaces have
+        // (the stand-ins are never freed: `Release` does nothing).
+        let object = unsafe {
+            match kind {
+                Kind::Device => Object::Device(IDirect3DDevice9::from_raw(raw)),
+                Kind::Texture => Object::Texture(IDirect3DTexture9::from_raw(raw)),
+                Kind::VertexBuffer => Object::VertexBuffer(IDirect3DVertexBuffer9::from_raw(raw)),
+                Kind::IndexBuffer => Object::IndexBuffer(IDirect3DIndexBuffer9::from_raw(raw)),
+                Kind::VertexShader => Object::VertexShader(IDirect3DVertexShader9::from_raw(raw)),
+                Kind::PixelShader => Object::PixelShader(IDirect3DPixelShader9::from_raw(raw)),
+                Kind::Declaration => {
+                    Object::Declaration(IDirect3DVertexDeclaration9::from_raw(raw))
+                }
+            }
+        };
+        real(e).objects.insert(model, object);
+    }
+
+    /// How many differences between the model's and the real answers were printed.
+    pub(crate) fn logged(e: &Engine) -> usize {
+        e.kernel.graphics.real.logged.len()
     }
 }

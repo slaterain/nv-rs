@@ -3388,8 +3388,10 @@ pub fn fn_00858af0(
         return;
     }
     e.call(SET_LOADING_STATE, &args![this, 1u32]);
-    let io_manager: u32 = e.global(SAVE_LOCK);
+    // 00858b41 and on: the global words (the I/O manager 01202d98, the player
+    // 011dea3c, `TES` 011dea10) are loaded at each use, not once.
     if reload {
+        let io_manager: u32 = e.global(SAVE_LOCK);
         e.call(IO_MANAGER_SET_STATE_5, &args![io_manager]);
     }
     let mut array = init_array;
@@ -3398,12 +3400,12 @@ pub fn fn_00858af0(
         array = e.get(this, TESSaveLoadGame::m_pInitArray);
         supplied = false;
     }
-    let player: u32 = e.global(PLAYER);
     if !location.is_null() {
         let (first, second) = (
             e.mem.u32(location.addr() + 4),
             e.mem.u32(location.addr() + 8),
         );
+        let player: u32 = e.global(PLAYER);
         e.vcall(player, FORM_BEGIN_INIT, &args![first, second]);
     }
     let list = e.mem.alloc(8);
@@ -3415,7 +3417,8 @@ pub fn fn_00858af0(
         for index in 0..count {
             let slot = e.call(ARRAY_ELEMENT_ADDRESS, &args![array, index]).u32();
             let item = e.mem.u32(slot);
-            if item != 0 && e.mem.u32(item) != player {
+            // 00858bec: compared with the player word loaded each pass.
+            if item != 0 && e.mem.u32(item) != e.global::<u32>(PLAYER) {
                 let version = e.mem.u8(item + 0xC);
                 e.call(SET_LOAD_VERSION, &args![this, version as u32]);
                 let form = e.mem.u32(item);
@@ -3477,24 +3480,32 @@ pub fn fn_00858af0(
         e.call(LIST_REMOVE_ALL, &args![list]);
     }
 
-    let tes: u32 = e.global(TES_OBJECT);
     if reload {
+        // 00858de4..00858eb1: `TES`, the player and the I/O manager are each
+        // loaded again at their calls.
+        let tes: u32 = e.global(TES_OBJECT);
         let world = locked_world(e, tes);
         if world != 0 {
             e.call(WORLD_ADD_LOCK, &args![world]);
         }
         lock_other_world(e);
+        let tes: u32 = e.global(TES_OBJECT);
         e.call(FN_00459920, &args![tes]);
+        let player: u32 = e.global(PLAYER);
         if e.call(PLAYER_GET_3D, &args![player, 0u32]).u32() == 0 {
+            let player: u32 = e.global(PLAYER);
             let loader: u32 = e.global(MODEL_LOADER);
             e.call(
                 MODEL_LOADER_QUEUE_REFERENCE,
                 &args![loader, player, 0u32, 0u32],
             );
         }
+        let io_manager: u32 = e.global(SAVE_LOCK);
         e.call(IO_MANAGER_LOAD_QUEUED_PRIORITY, &args![io_manager]);
+        let io_manager: u32 = e.global(SAVE_LOCK);
         e.call(IO_MANAGER_SET_STATE_5, &args![io_manager]);
         unlock_worlds(e, world);
+        let player: u32 = e.global(PLAYER);
         let position_ptr = e.vcall(player, REFERENCE_GET_POSITION_SLOT, &args![]).u32();
         let position = e.mem.bytes(position_ptr, 0x0C);
         e.call(SET_GLOBAL_FLAG, &args![0u32]);
@@ -3512,14 +3523,19 @@ pub fn fn_00858af0(
         e.call(SET_GLOBAL_FLAG, &args![1u32]);
         let _ = world;
     }
-    if !location.is_null() && e.call(REF_GET_PARENT_CELL, &args![player]).u32() != 0 {
-        e.call(EMPTY_FN_00483710, &args![player]);
+    if !location.is_null() {
+        let player: u32 = e.global(PLAYER);
+        if e.call(REF_GET_PARENT_CELL, &args![player]).u32() != 0 {
+            let player: u32 = e.global(PLAYER);
+            e.call(EMPTY_FN_00483710, &args![player]);
+        }
     }
     if !location.is_null() {
         let (first, second) = (
             e.mem.u32(location.addr() + 4),
             e.mem.u32(location.addr() + 8),
         );
+        let player: u32 = e.global(PLAYER);
         e.vcall(player, FORM_END_INIT, &args![first, second]);
     }
 
@@ -3550,11 +3566,14 @@ pub fn fn_00858af0(
     }
 
     if reload {
+        // 00859060 / 008590bf: loaded again after the forms' second hooks.
+        let tes: u32 = e.global(TES_OBJECT);
         let world = locked_world(e, tes);
         if world != 0 {
             e.call(WORLD_ADD_LOCK, &args![world]);
         }
         lock_other_world(e);
+        let io_manager: u32 = e.global(SAVE_LOCK);
         e.call(IO_MANAGER_LOAD_QUEUED_PRIORITY, &args![io_manager]);
         if world != 0 {
             e.call(WORLD_REMOVE_LOCK, &args![world, 0u32]);
@@ -9681,6 +9700,71 @@ mod tests {
         );
         assert_eq!(calls_to(e, SET_GLOBAL_FLAG), vec![vec![0], vec![1]]);
         assert_eq!(calls_to(e, FN_00459920), vec![vec![tes]]);
+    }
+
+    #[test]
+    fn after_load_loads_the_global_words_at_each_use() {
+        // 00858af0 loads the I/O manager (01202d98), the player (011dea3c)
+        // and `TES` (011dea10) at each use: what a form's first hook (slot
+        // 0x68) leaves there is what the later steps are given.
+        let mut rig = init_rig(&[]);
+        let e = &mut rig.e;
+        e.set_global(TES_OBJECT, 0x0044_0000u32);
+        e.set_global(SAVE_LOCK, 0x0120_2d00u32);
+        e.set_global(MODEL_LOADER, 0x0066_0000u32);
+        constant(e, PLAYER_GET_3D, 0);
+        constant(e, READ_FIELD_34, 0);
+        constant(e, GET_EXTERIOR_WORLD, 0);
+        quiet(
+            e,
+            &[
+                FN_00459920,
+                MODEL_LOADER_QUEUE_REFERENCE,
+                IO_MANAGER_LOAD_QUEUED_PRIORITY,
+                WORLD_ADD_LOCK,
+                WORLD_REMOVE_LOCK,
+                FN_0057D0A0,
+                SET_GLOBAL_FLAG,
+            ],
+        );
+        let tes = e.mem.alloc(0x40);
+        let player = object_with_slots(
+            e,
+            &[
+                (0x68, 0x0330_0068),
+                (0x6C, 0x0330_006C),
+                (0x1F4, 0x0330_01F4),
+            ],
+        );
+        let position = e.mem.alloc(16);
+        constant(e, 0x0330_01F4, position);
+        let form = object_with_slots(e, &[(0x68, 0x0350_0068), (0x6C, 0x0330_006C)]);
+        e.register_double(0x0350_0068, move |e, _| {
+            e.set_global(SAVE_LOCK, 0x0120_2e00u32);
+            e.set_global(PLAYER, player);
+            e.set_global(TES_OBJECT, tes);
+            Ret::default()
+        });
+        let record = form_and_flags(e, form, 1, 2, 7);
+        e.mem.set_u32(rig.array + 0xC, 1);
+        e.mem.set_u32(rig.array + 0x20, record);
+        fn_00858af0(e, rig.game, Ptr::new(rig.array), Ptr::NULL, true);
+        assert_eq!(
+            calls_to(e, IO_MANAGER_SET_STATE_5),
+            vec![vec![0x0120_2d00], vec![0x0120_2e00]]
+        );
+        assert_eq!(
+            calls_to(e, IO_MANAGER_LOAD_QUEUED_PRIORITY),
+            vec![vec![0x0120_2e00], vec![0x0120_2e00]]
+        );
+        assert_eq!(calls_to(e, READ_FIELD_34), vec![vec![tes], vec![tes]]);
+        assert_eq!(calls_to(e, FN_00459920), vec![vec![tes]]);
+        assert_eq!(calls_to(e, PLAYER_GET_3D), vec![vec![player, 0]]);
+        assert_eq!(
+            calls_to(e, MODEL_LOADER_QUEUE_REFERENCE),
+            vec![vec![0x0066_0000, player, 0, 0]]
+        );
+        assert_eq!(calls_to(e, 0x0330_01F4), vec![vec![player]]);
     }
 
     #[test]

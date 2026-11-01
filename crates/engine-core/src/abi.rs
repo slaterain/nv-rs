@@ -12,6 +12,7 @@
 
 use crate::ptr::Ptr;
 use crate::Engine;
+use std::mem::MaybeUninit;
 
 /// Result of a call in the uniform form.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -70,11 +71,19 @@ pub trait Arg: Sized {
     fn take(words: &[u32], i: &mut usize) -> Self;
     fn put(self, out: &mut Vec<u32>);
     /// Appends the words to a [`Words`] (what [`args!`] builds). The default goes through
-    /// [`Arg::put`]; the word types write in place.
+    /// [`Arg::put`] into a buffer the thread keeps (no allocation per call once it has grown);
+    /// the word types write in place.
     fn put_words(self, out: &mut Words) {
-        let mut v = Vec::new();
+        thread_local! {
+            static PUT: std::cell::Cell<Vec<u32>> = const { std::cell::Cell::new(Vec::new()) };
+        }
+        // Taken out while in use: a `put` that built arguments itself would get a buffer of its
+        // own.
+        let mut v = PUT.with(|b| b.take());
+        v.clear();
         self.put(&mut v);
         out.extend_from_slice(&v);
+        PUT.with(|b| b.set(v));
     }
 }
 
@@ -271,22 +280,30 @@ pub const WORDS_INLINE: usize = 12;
 /// call through `e.call(addr, &args![..])` allocates nothing (it runs millions of times a
 /// second); longer lists move to the heap. Reads as a `[u32]` slice and compares equal to a
 /// `Vec<u32>`, an array or a slice with the same words.
-#[derive(Clone)]
+///
+/// Neither the inline words past the list nor the heap list are written until used, so building
+/// a short list at a call site stores its length and its words and nothing else.
 pub struct Words {
     len: usize,
-    inline: [u32; WORDS_INLINE],
-    /// All the words once there are more than [`WORDS_INLINE`].
-    spill: Vec<u32>,
+    /// The words while there are at most [`WORDS_INLINE`]: the first `len` are written.
+    inline: MaybeUninit<[u32; WORDS_INLINE]>,
+    /// All the words once there are more than [`WORDS_INLINE`]; written (and owned) only then.
+    spill: MaybeUninit<Vec<u32>>,
 }
 
 impl Words {
     /// No words.
     #[inline(always)]
-    pub const fn new() -> Self {
-        Words {
-            len: 0,
-            inline: [0; WORDS_INLINE],
-            spill: Vec::new(),
+    pub fn new() -> Self {
+        // Only `len` is written. (A struct expression with `MaybeUninit::uninit()` fields is
+        // folded into a constant, and the uninitialised words were then copied out of it at
+        // every call site: a dozen stores of zeros. Not a `const fn`: these writes are allowed
+        // there only from Rust 1.83, past the workspace's 1.75.)
+        let mut w = MaybeUninit::<Words>::uninit();
+        // SAFETY: `len` is written; the other fields are `MaybeUninit`, valid uninitialised.
+        unsafe {
+            std::ptr::addr_of_mut!((*w.as_mut_ptr()).len).write(0);
+            w.assume_init()
         }
     }
 
@@ -294,14 +311,30 @@ impl Words {
     #[inline(always)]
     pub fn push(&mut self, w: u32) {
         if self.len < WORDS_INLINE {
-            self.inline[self.len] = w;
+            let words = self.inline.as_mut_ptr().cast::<u32>();
+            // SAFETY: `len` is below the inline array's length.
+            unsafe { words.add(self.len).write(w) };
         } else {
-            if self.len == WORDS_INLINE {
-                self.spill.extend_from_slice(&self.inline);
-            }
-            self.spill.push(w);
+            self.push_spilled(w);
         }
         self.len += 1;
+    }
+
+    /// [`Words::push`] past the inline words (`len` not yet counting `w`): the first moves them
+    /// to the heap list.
+    #[cold]
+    #[inline(never)]
+    fn push_spilled(&mut self, w: u32) {
+        if self.len == WORDS_INLINE {
+            // SAFETY: all the inline words are written (`len` is their count).
+            let inline = unsafe { self.inline.assume_init_ref() };
+            // Room for twice the inline words at once: one allocation for lists up to that.
+            let mut spill = Vec::with_capacity(2 * WORDS_INLINE);
+            spill.extend_from_slice(inline);
+            self.spill.write(spill);
+        }
+        // SAFETY: `len >= WORDS_INLINE`: the heap list was written when `len` reached it.
+        unsafe { self.spill.assume_init_mut() }.push(w);
     }
 
     /// Appends the words of `words`.
@@ -315,9 +348,11 @@ impl Words {
     #[inline(always)]
     pub fn as_slice(&self) -> &[u32] {
         if self.len <= WORDS_INLINE {
-            &self.inline[..self.len]
+            // SAFETY: the first `len` inline words are written.
+            unsafe { std::slice::from_raw_parts(self.inline.as_ptr().cast::<u32>(), self.len) }
         } else {
-            &self.spill
+            // SAFETY: `len > WORDS_INLINE`: the heap list holds the words.
+            unsafe { self.spill.assume_init_ref() }
         }
     }
 
@@ -325,10 +360,30 @@ impl Words {
     #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [u32] {
         if self.len <= WORDS_INLINE {
-            &mut self.inline[..self.len]
+            // SAFETY: the first `len` inline words are written.
+            unsafe {
+                std::slice::from_raw_parts_mut(self.inline.as_mut_ptr().cast::<u32>(), self.len)
+            }
         } else {
-            &mut self.spill
+            // SAFETY: `len > WORDS_INLINE`: the heap list holds the words.
+            unsafe { self.spill.assume_init_mut() }
         }
+    }
+}
+
+impl Drop for Words {
+    #[inline(always)]
+    fn drop(&mut self) {
+        if self.len > WORDS_INLINE {
+            // SAFETY: the heap list is written once there are more than WORDS_INLINE words.
+            unsafe { self.spill.assume_init_drop() }
+        }
+    }
+}
+
+impl Clone for Words {
+    fn clone(&self) -> Words {
+        Words::from(self.as_slice())
     }
 }
 
@@ -436,9 +491,12 @@ impl<const N: usize> PartialEq<Words> for [u32; N] {
 impl From<Words> for Vec<u32> {
     fn from(w: Words) -> Vec<u32> {
         if w.len <= WORDS_INLINE {
-            w.inline[..w.len].to_vec()
+            w.as_slice().to_vec()
         } else {
-            w.spill
+            let w = std::mem::ManuallyDrop::new(w);
+            // SAFETY: `len > WORDS_INLINE`: the heap list is written; it is moved out once, and
+            // `w` is not dropped.
+            unsafe { w.spill.assume_init_read() }
         }
     }
 }
@@ -587,6 +645,30 @@ mod tests {
         assert_eq!(args![7u32, 8u32], [7, 8]);
         assert_eq!(args![7u32, 8u32], &[7u32, 8][..]);
         assert_eq!(format!("{:?}", args![7u32]), "[7]");
+    }
+
+    /// Every way to read, change, copy and take apart a list gives its words, on either side of
+    /// the move to the heap (the inline words past the list and the heap list are only written
+    /// once used).
+    #[test]
+    fn word_lists_read_the_same_inline_and_on_the_heap() {
+        for n in [0u32, 1, 5, 11, 12, 13, 14, 24, 25, 40] {
+            let want: Vec<u32> = (0..n).map(|i| i * 3 + 1).collect();
+            let mut w = Words::new();
+            w.extend_from_slice(&want);
+            assert_eq!(w.len(), n as usize);
+            assert_eq!(w, want);
+            let copy = w.clone();
+            w.as_mut_slice().iter_mut().for_each(|x| *x += 1);
+            assert_eq!(copy, want, "a copy keeps its own words");
+            let bumped: Vec<u32> = want.iter().map(|x| x + 1).collect();
+            assert_eq!(w, bumped);
+            assert_eq!((&w).into_iter().copied().collect::<Vec<_>>(), bumped);
+            assert_eq!(w.clone().into_iter().collect::<Vec<_>>(), bumped);
+            assert_eq!(Vec::from(w), bumped);
+            assert_eq!(want.iter().copied().collect::<Words>(), want);
+            assert_eq!(Words::from(&want[..]), copy);
+        }
     }
 
     #[test]

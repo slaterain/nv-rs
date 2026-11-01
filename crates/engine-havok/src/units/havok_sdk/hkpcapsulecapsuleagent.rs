@@ -214,21 +214,22 @@ fn closest_point_status(e: &mut Engine, body_a: u32, body_b: u32, input: u32, ou
     })
 }
 
-/// The body of both closest point entry points: profiled (`"TtCapsCaps"`); the status of
-/// `closest_point_status` into a 32-byte contact, handed to the collector (slot 4) when it
-/// is 0.
+/// The body of both closest point entry points: profiled (`"TtCapsCaps"`). The exe's frame
+/// holds an `hkpCdPoint` at `ESP + 0x70`: the 32-byte contact, then the two bodies at
+/// `ESP + 0x90` and `ESP + 0x94` (`+0x20`, `+0x24` of the point), stored before the end points
+/// are moved (`00d3bb36`, `00d3bb40`; `00d3bdc6`, `00d3bdd0` in the static twin). The status of
+/// `closest_point_status` into the contact; when it is 0 the point is handed to the collector
+/// (slot 4, `LEA EAX,[ESP + 0x70]`), whose `addCdPoint` (`00cab970`) walks both bodies'
+/// parent chains.
 fn get_closest_points(e: &mut Engine, body_a: Ptr, body_b: Ptr, input: Ptr, collector: Ptr) {
     profile_record(e, LABEL_CAPSULES);
-    e.with_stack(0x20, |e, contact| {
-        let status = closest_point_status(
-            e,
-            body_a.addr(),
-            body_b.addr(),
-            input.addr(),
-            contact.addr(),
-        );
+    e.with_stack(0x28, |e, point| {
+        let point = point.addr();
+        e.mem.set_u32(point + 0x20, body_a.addr());
+        e.mem.set_u32(point + 0x24, body_b.addr());
+        let status = closest_point_status(e, body_a.addr(), body_b.addr(), input.addr(), point);
         if status == 0 {
-            e.vcall(collector.addr(), 4, &args![contact]);
+            e.vcall(collector.addr(), 4, &args![point]);
         }
     });
     profile_record(e, LABEL_END);
@@ -238,8 +239,9 @@ fn get_closest_points(e: &mut Engine, body_a: Ptr, body_b: Ptr, input: Ptr, coll
 /// `hkpCapsuleCapsuleAgent::getClosestPoints` (Xbox PDB): `this` is not read; the two bodies,
 /// the input and the collector are the stack words. Profiled (`"TtCapsCaps"`). Moves both
 /// capsules to world space, asks `hkCollideCapsuleUtilClostestPointCapsVsCaps` (`00cd6260`)
-/// with the radii, the input's tolerance (`+8`) and a contact on the stack, and gives the
-/// contact to the collector (slot 4) when the status is 0.
+/// with the radii, the input's tolerance (`+8`) and the contact of an `hkpCdPoint` on the
+/// stack (the bodies at `+0x20`, `+0x24`), and gives the point to the collector (slot 4) when
+/// the status is 0.
 pub fn hkp_capsule_capsule_agent_get_closest_points(
     e: &mut Engine,
     _unused_this: Ptr,
@@ -710,6 +712,61 @@ mod tests {
     fn static_closest_points_tell_the_collector_when_found_00d3bd80() {
         closest_points(0x00d3_bd80, false, 0);
         closest_points(0x00d3_bd80, false, 0xffff_ffff);
+    }
+
+    /// Runs a closest point query (`address` has a `this` word first when `virtual_method`)
+    /// whose utility finds a point, and checks what the collector reads behind the point it
+    /// is given: the utility's 32-byte contact, then the two bodies at `+0x20` and `+0x24`
+    /// (the exe's `hkpCdPoint` at `ESP + 0x70`, bodies at `ESP + 0x90` and `ESP + 0x94`; the
+    /// collector's `addCdPoint`, `00cab970`, walks their parent chains).
+    fn check_collected_point(address: u32, virtual_method: bool) {
+        let mut e = engine();
+        let log = new_log();
+        monitor(&mut e, 0x100);
+        let (a, b) = bodies(&mut e);
+        let collector = logging_object(&mut e, &log, COLLECTOR);
+        // The utility writes a recognisable contact into its output and reports it found.
+        let outputs: Rc<RefCell<Vec<u32>>> = Rc::new(RefCell::new(Vec::new()));
+        let written = Rc::clone(&outputs);
+        e.register_double(CLOSEST_POINT_CAPS_VS_CAPS, move |e, w| {
+            written.borrow_mut().push(w[5]);
+            for word in 0..8 {
+                e.mem.set_u32(w[5] + 4 * word, 0xc000 + word);
+            }
+            Ret::default()
+        });
+        let got: Rc<RefCell<Vec<(u32, Vec<u32>, u32, u32)>>> = Rc::new(RefCell::new(Vec::new()));
+        let copy = Rc::clone(&got);
+        e.register_double(COLLECTOR + 4, move |e, w| {
+            let point = w[1];
+            let contact = (0..8).map(|word| e.mem.u32(point + 4 * word)).collect();
+            let body_a = e.mem.u32(point + 0x20);
+            let body_b = e.mem.u32(point + 0x24);
+            copy.borrow_mut().push((point, contact, body_a, body_b));
+            Ret::default()
+        });
+        let input = e.mem.alloc(0x20);
+        e.mem.set_f32(input + 8, 0.5);
+        let words: Vec<u32> = if virtual_method {
+            vec![0x1111, a, b, input, collector]
+        } else {
+            vec![a, b, input, collector]
+        };
+        e.call(address, &words);
+        assert_eq!(outputs.borrow().len(), 1);
+        let output = outputs.borrow()[0];
+        let contact: Vec<u32> = (0..8).map(|word| 0xc000 + word).collect();
+        assert_eq!(*got.borrow(), vec![(output, contact, a, b)]);
+    }
+
+    #[test]
+    fn closest_points_give_the_collector_the_bodies_after_the_contact_00d3baf0() {
+        check_collected_point(0x00d3_baf0, true);
+    }
+
+    #[test]
+    fn static_closest_points_give_the_collector_the_bodies_after_the_contact_00d3bd80() {
+        check_collected_point(0x00d3_bd80, false);
     }
 
     #[test]

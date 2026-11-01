@@ -384,15 +384,14 @@ pub fn fn_00627920(e: &mut Engine, this: Ptr, other: Ptr) {
 /// each wall gets its own pair of corners from the minimum (`min`) and
 /// maximum (`max`) of the box, for example wall 0 spans `min.z - W` to
 /// `min.z - D` in z and `min.xy - D` to `max.xy + D`; see the match below.
-/// The corners go into the construction info's `hkAabb`; the filter
+/// Each sum is x87 code, one rounding per `FADD`/`FSUB` at the running
+/// thread's precision. The corners go into the construction info's `hkAabb`; the filter
 /// word is `00622290(word, 0, 005dbe10(), 0)`; the `bhkAabbPhantom` (`0x18` bytes,
 /// `0056e550`) is stored in the `NiPointer` and added to the world
 /// (`0056d2c0`) the cell belongs to (`004543c0`).
 pub fn fn_00627980(e: &mut Engine, this: Ptr<LoadedAreaBound>, cell: Ptr, bounds: Ptr) {
     let world = e.call(0x0045_43c0, &args![cell]).u32();
     let base = this.addr();
-    let width = e.mem.f32(base + BOUND_OFFSET);
-    let depth = e.mem.f32(base + BOUND_DEPTH);
     e.with_stack(0x180, |e, frame| {
         let f = frame.addr();
         let info = f; // 0x60 bytes: construction info (aabb at +0x20)
@@ -407,89 +406,96 @@ pub fn fn_00627980(e: &mut Engine, this: Ptr<LoadedAreaBound>, cell: Ptr, bounds
             e.call(IDENTITY, &args![corner_a]);
             e.call(IDENTITY, &args![corner_b]);
             let interior = e.call(IS_INTERIOR_CELL, &args![cell]).bool();
-            let height: f32 = if interior {
-                0.0
+            // 00627a36 / 00627a40: the height local (`FLDZ`, or `FLD [this + 0x3c]`)
+            // stored with `FSTP` and copied once more (00627a4c) before the walls read it.
+            let height = if interior {
+                0
             } else {
-                e.mem.f32(base + SIDE_WALL_HEIGHT_OFFSET)
+                x87_quiet_bits(e.mem.u32(base + SIDE_WALL_HEIGHT_OFFSET))
             };
 
+            // 00627a7b..0062807d: each coordinate is `FLD` of a box component, then one
+            // `FADD`/`FSUB` per term in the exe's order with the `float` operand
+            // `[this + 0x34]` (`W`), `[this + 0x38]` (`D`) or the height (`H`), each
+            // rounded at the running thread's x87 precision, then `FSTP` to a local
+            // that is pushed as the `float` argument.
             let min = |e: &mut Engine, axis: u32| {
                 let p = e.call(VECTOR_COMPONENT, &args![bounds, axis]).u32();
-                e.mem.f32(p) as f64
+                x87_load32(e.mem.u32(p))
             };
             let max = |e: &mut Engine, axis: u32| {
                 let p = e
                     .call(VECTOR_COMPONENT, &args![bounds.addr() + AABB_MAXIMUM, axis])
                     .u32();
-                e.mem.f32(p) as f64
+                x87_load32(e.mem.u32(p))
             };
-            let (w, d, h) = (width as f64, depth as f64, height as f64);
+            let w = |e: &mut Engine| x87_m32(e.mem.u32(base + BOUND_OFFSET));
+            let d = |e: &mut Engine| x87_m32(e.mem.u32(base + BOUND_DEPTH));
+            let h = x87_m32(height);
             let set = |e: &mut Engine, corner: u32, x: f64, y: f64, z: f64| {
-                e.call(
-                    VECTOR_SET,
-                    &args![corner, x as f32, y as f32, z as f32, 0.0f32],
-                );
+                let (x, y, z) = (x87_store32(x), x87_store32(y), x87_store32(z));
+                e.call(VECTOR_SET, &args![corner, x, y, z, 0.0f32]);
             };
             // The calls read the box in the order the game does: z, y, x.
             match wall {
                 0 => {
-                    let z = min(e, 2) - w;
-                    let y = max(e, 1) + d;
-                    let x = max(e, 0) + d;
+                    let z = x87_sub(min(e, 2), w(e));
+                    let y = x87_add(max(e, 1), d(e));
+                    let x = x87_add(max(e, 0), d(e));
                     set(e, corner_a, x, y, z);
-                    let z = min(e, 2) - d;
-                    let y = min(e, 1) - d;
-                    let x = min(e, 0) - d;
+                    let z = x87_sub(min(e, 2), d(e));
+                    let y = x87_sub(min(e, 1), d(e));
+                    let x = x87_sub(min(e, 0), d(e));
                     set(e, corner_b, x, y, z);
                 }
                 1 => {
-                    let z = max(e, 2) + d + h;
-                    let y = max(e, 1) + d;
-                    let x = max(e, 0) + d;
+                    let z = x87_add(x87_add(max(e, 2), d(e)), h);
+                    let y = x87_add(max(e, 1), d(e));
+                    let x = x87_add(max(e, 0), d(e));
                     set(e, corner_a, x, y, z);
-                    let z = max(e, 2) + h + w;
-                    let y = min(e, 1) - d;
-                    let x = min(e, 0) - d;
+                    let z = x87_add(x87_add(max(e, 2), h), w(e));
+                    let y = x87_sub(min(e, 1), d(e));
+                    let x = x87_sub(min(e, 0), d(e));
                     set(e, corner_b, x, y, z);
                 }
                 2 => {
-                    let z = max(e, 2) + h + w;
-                    let y = min(e, 1) - w;
-                    let x = max(e, 0) + w;
+                    let z = x87_add(x87_add(max(e, 2), h), w(e));
+                    let y = x87_sub(min(e, 1), w(e));
+                    let x = x87_add(max(e, 0), w(e));
                     set(e, corner_a, x, y, z);
-                    let z = min(e, 2) - w;
-                    let y = min(e, 1) - d;
-                    let x = min(e, 0) - w;
+                    let z = x87_sub(min(e, 2), w(e));
+                    let y = x87_sub(min(e, 1), d(e));
+                    let x = x87_sub(min(e, 0), w(e));
                     set(e, corner_b, x, y, z);
                 }
                 3 => {
-                    let z = max(e, 2) + h + w;
-                    let y = max(e, 1) + d;
-                    let x = min(e, 0) - w;
+                    let z = x87_add(x87_add(max(e, 2), h), w(e));
+                    let y = x87_add(max(e, 1), d(e));
+                    let x = x87_sub(min(e, 0), w(e));
                     set(e, corner_a, x, y, z);
-                    let z = min(e, 2) - w;
-                    let y = min(e, 1) - d;
-                    let x = min(e, 0) - d;
+                    let z = x87_sub(min(e, 2), w(e));
+                    let y = x87_sub(min(e, 1), d(e));
+                    let x = x87_sub(min(e, 0), d(e));
                     set(e, corner_b, x, y, z);
                 }
                 4 => {
-                    let z = max(e, 2) + h + w;
-                    let y = max(e, 1) + d;
-                    let x = max(e, 0) + d;
+                    let z = x87_add(x87_add(max(e, 2), h), w(e));
+                    let y = x87_add(max(e, 1), d(e));
+                    let x = x87_add(max(e, 0), d(e));
                     set(e, corner_a, x, y, z);
-                    let z = min(e, 2) - w;
-                    let y = min(e, 1) - d;
-                    let x = max(e, 0) + w;
+                    let z = x87_sub(min(e, 2), w(e));
+                    let y = x87_sub(min(e, 1), d(e));
+                    let x = x87_add(max(e, 0), w(e));
                     set(e, corner_b, x, y, z);
                 }
                 _ => {
-                    let z = max(e, 2) + h + w;
-                    let y = max(e, 1) + d;
-                    let x = max(e, 0) + w;
+                    let z = x87_add(x87_add(max(e, 2), h), w(e));
+                    let y = x87_add(max(e, 1), d(e));
+                    let x = x87_add(max(e, 0), w(e));
                     set(e, corner_a, x, y, z);
-                    let z = min(e, 2) - w;
-                    let y = max(e, 1) + w;
-                    let x = min(e, 0) - w;
+                    let z = x87_sub(min(e, 2), w(e));
+                    let y = x87_add(max(e, 1), w(e));
+                    let x = x87_sub(min(e, 0), w(e));
                     set(e, corner_b, x, y, z);
                 }
             }
@@ -709,6 +715,9 @@ pub fn fn_00628640(e: &mut Engine, this: Ptr, first: Ptr, second: Ptr) {
 /// Calls the virtual at slot `0x1c` of `this` with the three arguments
 /// (the second is a `float`).
 pub fn fn_006286a0(e: &mut Engine, this: Ptr, first: u32, second: f32, third: u32) {
+    // 006286ac: the float is passed on through FLD dword / FSTP dword, which
+    // quiets a signalling NaN.
+    let second = x87_quiet(second);
     e.vcall(this.addr(), 0x1c, &args![first, second, third]);
 }
 
@@ -861,6 +870,23 @@ mod tests {
         assert_eq!(
             calls_to(&log, 0x0060_c200),
             vec![vec![this, 0x11, 0.1f32.to_bits(), 0x33]]
+        );
+    }
+
+    #[test]
+    fn fn_006286a0_passes_a_signalling_nan_on_quieted() {
+        let mut e = Engine::new();
+        let log = recording(&mut e, &[0x0060_c200]);
+        let mut slots = vec![0u32; 0x10];
+        slots[0x1c / 4] = 0x0060_c200;
+        e.put_vtable(0x0a00_0000, &slots);
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this, 0x0a00_0000);
+        // 006286ac: FLD dword / FSTP dword of the float argument.
+        e.call(0x0062_86a0, &args![this, 0x11u32, 0x7f80_0001u32, 0x33u32]);
+        assert_eq!(
+            calls_to(&log, 0x0060_c200),
+            vec![vec![this, 0x11, 0x7fc0_0001, 0x33]]
         );
     }
 
@@ -1154,6 +1180,57 @@ mod tests {
         let c = corners.borrow().clone();
         assert_eq!(c[2][0], 32.0);
         assert_eq!(c[3][0], 31.0);
+    }
+
+    /// 00627b74..00627b95: wall 1's first z is `FLD max.z`, `FADD [this + 0x38]`,
+    /// `FADD` the height, `FSTP`, each operation rounded at the thread's x87
+    /// precision. With max.z 1 and `D = H = 2^-24`: at 24 bits each sum is a tie
+    /// that rounds back to 1; at 53 bits the two halves make `1 + 2^-23`.
+    #[test]
+    fn wall_corners_round_each_x87_operation_at_the_thread_precision() {
+        let mut e = Engine::new();
+        vector_doubles(&mut e);
+        let zs: Rc<RefCell<Vec<u32>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = zs.clone();
+        e.register_double(VECTOR_SET, move |_, a| {
+            sink.borrow_mut().push(a[3]);
+            Ret::default()
+        });
+        e.register(0x0045_43c0, |_, _| ret(0x9000));
+        e.register(IS_INTERIOR_CELL, |_, _| ret(0));
+        e.register(NI_POINTER_GET, |e, a| ret(e.mem.u32(a[0])));
+        e.register(NI_POINTER_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            ret(a[0])
+        });
+        for a in [
+            0x0056_e4e0u32,
+            0x0062_81a0,
+            0x0056_d2c0,
+            0x0056_d730,
+            0x0062_2290,
+            0x0056_e550,
+        ] {
+            e.register(a, |_, a| ret(a[0]));
+        }
+        e.register(0x005d_be10, |_, _| ret(0));
+        e.register(0x00aa_13e0, |e, a| ret(e.mem.alloc(a[0])));
+        let this = e.new_object::<LoadedAreaBound>();
+        let half_ulp = 2f32.powi(-24);
+        e.mem.set_f32(this.addr() + BOUND_DEPTH, half_ulp);
+        e.mem
+            .set_f32(this.addr() + SIDE_WALL_HEIGHT_OFFSET, half_ulp);
+        let bounds = e.mem.alloc(32);
+        store_vector(&mut e, bounds, [0.0; 4]);
+        store_vector(&mut e, bounds + 16, [1.0; 4]);
+        crate::units::crt::set_x87_control_word(&mut e, 0x007f);
+        fn_00627980(&mut e, this, Ptr::new(0x4000), Ptr::new(bounds));
+        crate::units::crt::set_x87_control_word(&mut e, 0x027f);
+        assert_eq!(zs.borrow().len(), 12);
+        assert_eq!(zs.borrow()[2], 1.0f32.to_bits());
+        zs.borrow_mut().clear();
+        fn_00627980(&mut e, this, Ptr::new(0x4000), Ptr::new(bounds));
+        assert_eq!(zs.borrow()[2], (1.0f32 + f32::EPSILON).to_bits());
     }
 
     /// Shared state for the `006271b0` doubles: arrays (`data, size`), the

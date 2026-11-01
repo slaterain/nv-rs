@@ -1868,11 +1868,10 @@ pub fn fn_00849280(e: &mut Engine, this: Ptr) -> Ptr {
 /// flushed.
 pub fn fn_008492b0(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, full: bool) {
     let array = this.byte_add(0x24);
-    let io_manager = e.global::<u32>(IO_MANAGER);
-    let world = e.global::<u32>(WORLD);
-    let player = e.global::<u32>(PLAYER);
     fn_00849540(e, this, true);
     if full {
+        // 008492cb: the I/O manager word is loaded here, after `00849540`.
+        let io_manager = e.global::<u32>(IO_MANAGER);
         fn_008495b0(e, Ptr::new(io_manager));
     }
     let mut index = 0u32;
@@ -1888,9 +1887,16 @@ pub fn fn_008492b0(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, full: bool) {
         index += 1;
     }
     if full {
+        // 00849343..00849364 / 008493a0: each global word (`TES`, the I/O
+        // manager, the player) is loaded at its call, after the forms'
+        // `InitLoadGame` calls above.
+        let world = e.global::<u32>(WORLD);
         e.call(WORLD_PREPARE, &args![world]);
+        let io_manager = e.global::<u32>(IO_MANAGER);
         e.call(IO_MANAGER_RESUME, &args![io_manager]);
+        let io_manager = e.global::<u32>(IO_MANAGER);
         e.call(IO_MANAGER_LOAD_QUEUED_PRIORITY, &args![io_manager]);
+        let player = e.global::<u32>(PLAYER);
         let cell = e.call(REFERENCE_PARENT_CELL, &args![player]).u32();
         let physics = if cell != 0 {
             e.call(CELL_PHYSICS_WORLD, &args![cell]).u32()
@@ -1900,6 +1906,7 @@ pub fn fn_008492b0(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, full: bool) {
         if physics != 0 {
             e.call(PHYSICS_WORLD_DEACTIVATE_ALL_ISLANDS, &args![physics]);
         }
+        let world = e.global::<u32>(WORLD);
         e.call(WORLD_FINISH, &args![world]);
     }
     let sub_buffers = e.get(this, BGSSaveLoadGame::pQueuedSubBuffersMap);
@@ -2206,9 +2213,9 @@ pub fn bgssaveloadgame_load_cell(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, cel
             REFERENCES_MAP_LOAD_FOR_CELL,
             &args![references, cell, pending],
         );
-        fn_00849c00(e, true);
+        fn_00849c00(e, this, true); // 00849b7f: ECX = this
         e.call(RECONSTRUCT_FINISH_A, &args![pending]);
-        fn_00849c00(e, false);
+        fn_00849c00(e, this, false); // 00849b91: ECX = this
         let count = fn_00849c80(e, pending);
         for index in 0..count {
             let reference = fn_00849ca0(e, pending, index);
@@ -2221,7 +2228,9 @@ pub fn bgssaveloadgame_load_cell(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, cel
 // Translated from 00849c00 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Sets (`on`) or clears bit 1 (mask 2) of the per-thread flag word at +0x294
 /// of the TLS block. `this` is not read.
-pub fn fn_00849c00(e: &mut Engine, on: bool) {
+/// 00849c04: a `thiscall` (`ECX` saved, `RET 4`): `this` is the first word
+/// and the byte `on` (`MOVZX` of `[EBP+8]`) the second.
+pub fn fn_00849c00(e: &mut Engine, _this: Ptr<BGSSaveLoadGame>, on: bool) {
     let word = e.tls() + THREAD_FLAGS_OFFSET;
     update_flag(e, word, 2, on);
 }
@@ -3578,7 +3587,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00849b10,
             bgssaveloadgame_load_cell(Ptr<BGSSaveLoadGame>, Ptr)
         ),
-        entry!(0x00849c00, fn_00849c00(bool)),
+        entry!(0x00849c00, fn_00849c00(Ptr<BGSSaveLoadGame>, bool)), // 00849c00: this, on
         entry!(0x00849c80, fn_00849c80(Ptr) -> u32),
         entry!(0x00849ca0, fn_00849ca0(Ptr, u32) -> u32),
         entry!(0x00849cc0, fn_00849cc0(Ptr<BGSSaveLoadGame>, u32) -> bool),
@@ -5626,6 +5635,30 @@ mod tests {
         assert_eq!(calls(&p.e, GARBAGE_COLLECTOR_ADD).len(), 1);
     }
 
+    #[test]
+    fn unload_pass_loads_the_global_words_at_their_calls() {
+        // 008492b0: `TES` (011dea10), the I/O manager (01202d98) and the
+        // player (011dea3c) are loaded at each call, so what the forms'
+        // `InitLoadGame` (slot 0x64) leaves there is what the world steps get.
+        let mut p = unload_pass_setup();
+        let io2 = p.e.mem.alloc(0x70);
+        p.e.register_double(FAKE_TARGET + 0x64, move |e, _| {
+            e.set_global(IO_MANAGER, io2);
+            e.set_global(WORLD, 0x1200_0000u32);
+            e.set_global(PLAYER, 0x1400_0000u32);
+            Ret::default()
+        });
+        fn_008492b0(&mut p.e, p.this, true);
+        let e = &p.e;
+        assert_eq!(e.mem.u32(p.io + 0x68), 5, "008492cb: before the loop");
+        assert_eq!(e.mem.u32(io2 + 0x68), 0);
+        assert_eq!(calls(e, WORLD_PREPARE), vec![vec![0x1200_0000]]);
+        assert_eq!(calls(e, IO_MANAGER_RESUME), vec![vec![io2]]);
+        assert_eq!(calls(e, IO_MANAGER_LOAD_QUEUED_PRIORITY), vec![vec![io2]]);
+        assert_eq!(calls(e, REFERENCE_PARENT_CELL)[0], vec![0x1400_0000]);
+        assert_eq!(calls(e, WORLD_FINISH), vec![vec![0x1200_0000]]);
+    }
+
     // ---- LoadForm -----------------------------------------------------------------
 
     /// A game object with a changes map, one entry (`flags` word 0x1234, a
@@ -6128,9 +6161,22 @@ mod tests {
         let mut e = engine2();
         let word = e.tls() + THREAD_FLAGS_OFFSET;
         e.mem.set_u32(word, 0x11);
-        fn_00849c00(&mut e, true);
+        fn_00849c00(&mut e, Ptr::new(0x5000_0000), true);
         assert_eq!(e.mem.u32(word), 0x13);
-        fn_00849c00(&mut e, false);
+        fn_00849c00(&mut e, Ptr::new(0x5000_0000), false);
+        assert_eq!(e.mem.u32(word), 0x11);
+    }
+
+    #[test]
+    fn thread_flag_helper_takes_this_first_through_its_address() {
+        // 00849c00 is a thiscall (RET 4): the uniform words are (this, on), so
+        // `on` is the second word, not this's low byte.
+        let mut e = engine2();
+        let word = e.tls() + THREAD_FLAGS_OFFSET;
+        e.mem.set_u32(word, 0x11);
+        e.call(0x0084_9c00, &args![0x5000_0000u32, 1u32]);
+        assert_eq!(e.mem.u32(word), 0x13);
+        e.call(0x0084_9c00, &args![0x5000_0001u32, 0u32]);
         assert_eq!(e.mem.u32(word), 0x11);
     }
 

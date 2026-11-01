@@ -598,19 +598,72 @@ fn get_bytes(e: &mut Engine, this: Ptr, data: Ptr, size: Ptr) -> u32 {
     D3D_OK
 }
 
-/// Whether `object` is one of this module's objects of kind `code`.
-fn is_kind(e: &mut Engine, object: u32, code: u32) -> bool {
-    resources(e).objects.get(&object).map(|o| o.code) == Some(code)
-}
-
-/// Replaces a held object word: the new one counted, the old one released.
+/// Replaces a held object word: the new one counted, the old one released. The same object
+/// again changes nothing (counted once more and released once, it stays).
 fn hold(e: &mut Engine, old: u32, new: u32) {
+    if old == new {
+        return;
+    }
     if new != 0 {
         object(e, Ptr::new(new)).bound += 1;
     }
     if old != 0 {
         unbind(e, Ptr::new(old));
     }
+}
+
+/// The object `new` (0 for none) when it is one of this module's objects of kind `code`
+/// (`Err` when it is not), looked up once for both the check and the count [`hold`] adds.
+fn checked(
+    objects: &mut crate::engine::AddrMap<u32, Object>,
+    new: u32,
+    code: u32,
+) -> Result<Option<&mut Object>, ()> {
+    if new == 0 {
+        return Ok(None);
+    }
+    match objects.get_mut(&new) {
+        Some(o) if o.code == code => Ok(Some(o)),
+        _ => Err(()),
+    }
+}
+
+/// The object words of the bindings [`bind`] replaces.
+#[derive(Clone, Copy)]
+enum Held {
+    Indices,
+    Declaration,
+    VertexShader,
+    PixelShader,
+}
+
+/// Binds `new` (0 for none) in the bindings' word `which`: an object that is not of kind `code`
+/// answers `D3DERR_INVALIDCALL`; else the word is replaced and [`hold`] counts the new object
+/// and releases the old one, with one lookup of the new object and of the bindings.
+fn bind(e: &mut Engine, this: Ptr, new: u32, code: u32, which: Held) -> u32 {
+    let Resources {
+        objects, bindings, ..
+    } = resources(e);
+    let Ok(held) = checked(objects, new, code) else {
+        return D3DERR_INVALIDCALL;
+    };
+    let b = bindings.entry(this.addr()).or_default();
+    let word = match which {
+        Held::Indices => &mut b.indices,
+        Held::Declaration => &mut b.declaration,
+        Held::VertexShader => &mut b.vertex_shader,
+        Held::PixelShader => &mut b.pixel_shader,
+    };
+    let old = std::mem::replace(word, new);
+    if old != new {
+        if let Some(o) = held {
+            o.bound += 1;
+        }
+        if old != 0 {
+            unbind(e, Ptr::new(old));
+        }
+    }
+    D3D_OK
 }
 
 // Platform: replaces D3D9.DLL IDirect3DDevice9::SetStreamSource (vtable +0x190)
@@ -626,18 +679,34 @@ pub(super) fn set_stream_source(
     offset: u32,
     stride: u32,
 ) -> u32 {
-    if stream >= STREAMS || (buffer != 0 && !is_kind(e, buffer, VERTEX_BUFFER_CODE)) {
+    if stream >= STREAMS {
         return D3DERR_INVALIDCALL;
     }
-    bindings(e, this).empty_strides.remove(&stream);
-    let old = if buffer != 0 {
-        bindings(e, this)
-            .streams
-            .insert(stream, (buffer, offset, stride))
-    } else {
-        bindings(e, this).streams.remove(&stream)
+    let Resources {
+        objects, bindings, ..
+    } = resources(e);
+    let Ok(held) = checked(objects, buffer, VERTEX_BUFFER_CODE) else {
+        return D3DERR_INVALIDCALL;
     };
-    hold(e, old.map_or(0, |o| o.0), buffer);
+    let b = bindings.entry(this.addr()).or_default();
+    if !b.empty_strides.is_empty() {
+        b.empty_strides.remove(&stream);
+    }
+    let old = if buffer != 0 {
+        b.streams.insert(stream, (buffer, offset, stride))
+    } else {
+        b.streams.remove(&stream)
+    }
+    .map_or(0, |o| o.0);
+    // As [`hold`], with the buffer looked up once.
+    if old != buffer {
+        if let Some(o) = held {
+            o.bound += 1;
+        }
+        if old != 0 {
+            unbind(e, Ptr::new(old));
+        }
+    }
     D3D_OK
 }
 
@@ -681,12 +750,7 @@ pub(super) fn get_stream_source(
 /// `SetIndices(buffer)`: the device holds the index buffer (counted), releasing the one it
 /// held; an object that is no index buffer answers `D3DERR_INVALIDCALL`.
 pub(super) fn set_indices(e: &mut Engine, this: Ptr, buffer: u32) -> u32 {
-    if buffer != 0 && !is_kind(e, buffer, INDEX_BUFFER_CODE) {
-        return D3DERR_INVALIDCALL;
-    }
-    let old = std::mem::replace(&mut bindings(e, this).indices, buffer);
-    hold(e, old, buffer);
-    D3D_OK
+    bind(e, this, buffer, INDEX_BUFFER_CODE, Held::Indices)
 }
 
 /// `GetIndices(out)`: the index buffer held (counted), or null.
@@ -706,12 +770,7 @@ pub(super) fn get_indices(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
 /// `SetVertexDeclaration(declaration)`: held (counted), the old one released; another kind of
 /// object answers `D3DERR_INVALIDCALL`.
 pub(super) fn set_vertex_declaration(e: &mut Engine, this: Ptr, declaration: u32) -> u32 {
-    if declaration != 0 && !is_kind(e, declaration, DECLARATION_CODE) {
-        return D3DERR_INVALIDCALL;
-    }
-    let old = std::mem::replace(&mut bindings(e, this).declaration, declaration);
-    hold(e, old, declaration);
-    D3D_OK
+    bind(e, this, declaration, DECLARATION_CODE, Held::Declaration)
 }
 
 // Platform: replaces D3D9.DLL IDirect3DDevice9::GetVertexDeclaration (vtable +0x160)
@@ -751,23 +810,13 @@ pub(super) fn get_fvf(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
 /// `SetVertexShader(shader)`: held (counted), the old one released; null is the fixed-function
 /// pipeline; another kind of object answers `D3DERR_INVALIDCALL`.
 pub(super) fn set_vertex_shader(e: &mut Engine, this: Ptr, shader: u32) -> u32 {
-    if shader != 0 && !is_kind(e, shader, VERTEX_SHADER_CODE) {
-        return D3DERR_INVALIDCALL;
-    }
-    let old = std::mem::replace(&mut bindings(e, this).vertex_shader, shader);
-    hold(e, old, shader);
-    D3D_OK
+    bind(e, this, shader, VERTEX_SHADER_CODE, Held::VertexShader)
 }
 
 // Platform: replaces D3D9.DLL IDirect3DDevice9::SetPixelShader (vtable +0x1AC)
 /// `SetPixelShader(shader)`: as [`set_vertex_shader`].
 pub(super) fn set_pixel_shader(e: &mut Engine, this: Ptr, shader: u32) -> u32 {
-    if shader != 0 && !is_kind(e, shader, PIXEL_SHADER_CODE) {
-        return D3DERR_INVALIDCALL;
-    }
-    let old = std::mem::replace(&mut bindings(e, this).pixel_shader, shader);
-    hold(e, old, shader);
-    D3D_OK
+    bind(e, this, shader, PIXEL_SHADER_CODE, Held::PixelShader)
 }
 
 /// `GetVertexShader(out)` / `GetPixelShader(out)` (by `pixel`): the shader held (counted), or
@@ -815,7 +864,51 @@ fn set_constants(e: &mut Engine, this: Ptr, kind: u8, start: u32, data: Ptr, cou
         return D3DERR_INVALIDCALL;
     }
     let words = if kind % 3 == 2 { 1 } else { 4 };
-    // The registers are read first, then stored with one lookup of the device's bindings.
+    let first = usize::from(kind) * CONSTANT_SLOTS + start as usize;
+    // The range is at most 4 KB (256 registers of 4 words), so it touches at most two pages:
+    // when both are mapped no read can fault, and the registers are read straight into the
+    // device's bindings (no copy of the range, no 4 KB buffer to clear per call).
+    let last = data
+        .addr()
+        .checked_add((4 * words * count).saturating_sub(1));
+    if last.is_some_and(|last| e.mem.is_mapped(data.addr()) && e.mem.is_mapped(last)) {
+        let mem = &e.mem;
+        let b = e
+            .kernel
+            .graphics
+            .device_objects
+            .resources
+            .bindings
+            .entry(this.addr())
+            .or_default();
+        if b.constants.is_empty() {
+            b.constants = vec![[0; 4]; 6 * CONSTANT_SLOTS];
+            b.constants_set = vec![0; 6 * CONSTANT_SLOTS / 64];
+        }
+        let at = data.addr();
+        let registers = &mut b.constants[first..first + count as usize];
+        if words == 4 {
+            for (i, value) in registers.iter_mut().enumerate() {
+                let at = at + 16 * i as u32;
+                *value = [
+                    mem.u32(at),
+                    mem.u32(at + 4),
+                    mem.u32(at + 8),
+                    mem.u32(at + 12),
+                ];
+            }
+        } else {
+            for (i, value) in registers.iter_mut().enumerate() {
+                *value = [mem.u32(at + 4 * i as u32), 0, 0, 0];
+            }
+        }
+        for slot in first..first + count as usize {
+            b.constants_set[slot / 64] |= 1 << (slot % 64);
+        }
+        return D3D_OK;
+    }
+    // Otherwise the registers are read first (a fault stops the run with the bindings as they
+    // were), then stored with one lookup of the device's bindings.
     let mut values = [[0u32; 4]; CONSTANT_SLOTS];
     for (i, value) in values.iter_mut().enumerate().take(count as usize) {
         let at = data.addr() + 4 * words * i as u32;
@@ -829,11 +922,34 @@ fn set_constants(e: &mut Engine, this: Ptr, kind: u8, start: u32, data: Ptr, cou
         b.constants_set = vec![0; 6 * CONSTANT_SLOTS / 64];
     }
     for (i, value) in values.iter().enumerate().take(count as usize) {
-        let slot = usize::from(kind) * CONSTANT_SLOTS + start as usize + i;
+        let slot = first + i;
         b.constants[slot] = *value;
         b.constants_set[slot / 64] |= 1 << (slot % 64);
     }
     D3D_OK
+}
+
+/// The registers `start..start + count` of a constant kind as the device's bindings hold them
+/// (4 words each; a bool register's word first): what the last successful
+/// `Set*ShaderConstant*` calls stored, read from the program's memory. `None` before the
+/// device's first set.
+#[cfg(windows)]
+pub(super) fn constant_registers(
+    e: &Engine,
+    device: u32,
+    kind: u8,
+    start: u32,
+    count: u32,
+) -> Option<&[[u32; 4]]> {
+    let b = e
+        .kernel
+        .graphics
+        .device_objects
+        .resources
+        .bindings
+        .get(&device)?;
+    let first = usize::from(kind) * CONSTANT_SLOTS + start as usize;
+    b.constants.get(first..first + count as usize)
 }
 
 /// `Get*ShaderConstant{F,I,B}(start, data, count)`: the registers' words; a register never set
@@ -926,7 +1042,8 @@ const D3DPT_TRIANGLEFAN: u32 = 6;
 /// declaration or FVF and stream 0. Nothing is drawn yet (the viewer draws), so a draw only
 /// answers; a draw the documented semantics leave open here (outside a scene, without a
 /// declaration or FVF or stream 0, an unknown primitive type) stops the run as not provided.
-fn draw_checks(e: &mut Engine, this: Ptr, what: &str, kind: u32) {
+/// Answers the index buffer the device holds (0 for none), which the indexed draw checks.
+fn draw_checks(e: &mut Engine, this: Ptr, what: &str, kind: u32) -> u32 {
     // Read in place: a copy of the bindings (their stream and constant maps) per draw cost more
     // than the rest of the draw (a29).
     let scene = in_scene(e, this);
@@ -945,6 +1062,7 @@ fn draw_checks(e: &mut Engine, this: Ptr, what: &str, kind: u32) {
     if let Some(open) = open {
         panic!("IDirect3DDevice9::{what} {open} is not provided");
     }
+    b.indices
 }
 
 // Platform: replaces D3D9.DLL IDirect3DDevice9::DrawPrimitive (vtable +0x144)
@@ -977,8 +1095,7 @@ pub(super) fn draw_indexed_primitive(
     _start_index: u32,
     _count: u32,
 ) -> u32 {
-    draw_checks(e, this, "DrawIndexedPrimitive", kind);
-    if bindings(e, this).indices == 0 {
+    if draw_checks(e, this, "DrawIndexedPrimitive", kind) == 0 {
         panic!("IDirect3DDevice9::DrawIndexedPrimitive without an index buffer is not provided");
     }
     if kind == D3DPT_POINTLIST {

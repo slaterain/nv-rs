@@ -86,7 +86,7 @@ mostly error handling; the systems below are where the real work is now.
 | 🔨 | **Audio:** sounds, music and the radio | Translated; the game's own sound plays and matches the original |
 | 🔨 | **Graphics:** lighting, weather and effects | Translated; the game's own renderer draws on Windows, other platforms later |
 | 🔨 | **Gameplay:** combat, AI, quests, dialogue, menus, V.A.T.S., perks, crafting | Translated; the opening's dialogue, menus and Pip-Boy run, weapons draw, aim and fire, combat is being checked |
-| ⬜ | **Saves and the open world** | Saves load in Doc's house; the open world comes later |
+| 🔨 | **Saves and the open world** | Saves load in Doc's house; outdoors, Goodsprings loads and can be walked through, the rest of the open world is being switched on |
 
 After that come optional bug fixes, script-extender compatibility and more
 platforms. The details are in [docs/SYSTEMS.md](docs/SYSTEMS.md) and

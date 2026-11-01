@@ -194,6 +194,8 @@ pub struct GameThread {
     /// kept here while another thread runs.
     tls: u32,
     call_stack: Vec<u32>,
+    /// The handle list of its last wait, kept for the next one (no allocation per wait).
+    spare_handles: Vec<u32>,
     /// The coroutine (made when it first runs).
     link: Option<Link>,
     /// How many times it was switched to (a diagnostic, [`describe`]).
@@ -395,6 +397,7 @@ fn ensure_main(e: &mut Engine) {
             state: RunState::Running,
             tls: 0,
             call_stack: Vec::new(),
+            spare_handles: Vec::new(),
             link: None,
             turns: 0,
         });
@@ -471,6 +474,7 @@ pub fn create(e: &mut Engine, handle: u32, start: u32, parameter: u32, suspended
         state: RunState::NotStarted,
         tls: 0,
         call_stack: Vec::new(),
+        spare_handles: Vec::new(),
         link: None,
         turns: 0,
     });
@@ -772,7 +776,11 @@ fn switch_to(e: &mut Engine, i: usize) {
     trace_switch(e, MAIN_THREAD_ID, id);
     e.kernel.threads.current = i;
     e.kernel.threads.list[i].turns += 1;
-    e.kernel.threads.list[i].state = RunState::Running;
+    // A wait's handle list is kept for the thread's next wait.
+    let t = &mut e.kernel.threads.list[i];
+    if let RunState::Waiting { handles, .. } = std::mem::replace(&mut t.state, RunState::Running) {
+        t.spare_handles = handles;
+    }
     let baton = Baton(e as *mut Engine);
     // `NV_PROFILE`: the hand-off, with the thread's own call stack.
     crate::profile::resync(&e.call_stack);
@@ -966,8 +974,13 @@ impl ThreadHost for Cooperative {
         }
         let i = e.kernel.threads.current;
         loop {
-            e.kernel.threads.list[i].state = RunState::Waiting {
-                handles: handles.to_vec(),
+            let t = &mut e.kernel.threads.list[i];
+            // The last wait's list, given back when the thread was resumed ([`switch_to`]).
+            let mut list = std::mem::take(&mut t.spare_handles);
+            list.clear();
+            list.extend_from_slice(handles);
+            t.state = RunState::Waiting {
+                handles: list,
                 all,
                 deadline,
             };

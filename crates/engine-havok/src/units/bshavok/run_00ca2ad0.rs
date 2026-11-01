@@ -262,15 +262,19 @@ fn attach_phantom_and_detector(e: &mut Engine, this: u32, frame: u32, system: u3
         .u32();
     e.mem.set_u32(system + 0x10, detector);
     e.call(DETECTOR_RESET, &args![detector]);
-    let seconds = x87_quiet(e.global::<f32>(BUDGET_SECONDS));
+    // 00ca30cd: `FLD float [012682b4]`, `FMUL double [01017b70]`, `FSTP float` to a local:
+    // both x87 products round to the control word's precision (24-bit on the main thread
+    // once the renderer's device exists), as `x87_mul` does.
+    let seconds = x87_load32(e.global::<u32>(BUDGET_SECONDS));
     let milliseconds = e.global::<f64>(MILLISECONDS);
-    let budget = (f64::from(seconds) * milliseconds) as f32;
+    let budget = x87_store32(x87_mul(seconds, milliseconds));
     let now = e.call(GET_TIMER, &args![]).u64();
     e.mem.set_u32(this + 0x20, now as u32);
     e.mem.set_u32(this + 0x24, (now >> 32) as u32);
-    let scale = e.global::<f32>(TICK_SCALE);
+    // 00ca30e2: `FLD` the local again, `FMUL float [011ac39c]`, then `00ec62f6` on ST0.
+    let scale = x87_m32(e.global::<u32>(TICK_SCALE));
     let ticks = e
-        .call(FLOAT_TO_INT64, &args![f64::from(scale) * f64::from(budget)])
+        .call(FLOAT_TO_INT64, &args![x87_mul(x87_load32(budget), scale)])
         .u64();
     e.mem.set_u32(this + 0x28, ticks as u32);
     e.mem.set_u32(this + 0x2c, (ticks >> 32) as u32);
@@ -280,7 +284,9 @@ fn attach_phantom_and_detector(e: &mut Engine, this: u32, frame: u32, system: u3
     e.mem.set_u32(info + 0x10, 0);
     if capacity & 0x8000_0000 == 0 {
         let data = e.mem.u32(info + 0xc);
-        e.vcall(allocator, 0x10, &args![data, (capacity & 0x3fff_ffff) * 8]);
+        // 00ca3127: `LEA ECX, [EDX*8]` wraps.
+        let bytes = (capacity & 0x3fff_ffff).wrapping_mul(8);
+        e.vcall(allocator, 0x10, &args![data, bytes]);
     }
 }
 
@@ -956,6 +962,39 @@ mod tests {
         assert_eq!(e.mem.u32(owner + 0x2c), 0x100);
         assert_eq!(calls_to(&e, MARK_SLOT), [[shape]]);
         assert_eq!(e.mem.u32(ROUTER_OBJECT), ROUTER_CURSOR);
+    }
+
+    /// 00ca2ad0 (00ca30cd, 00ca3127): under 24-bit precision the tick product of the float
+    /// budget and the float scale reaches `00ec62f6` rounded to 24 bits, and the phantom
+    /// info's own buffer is freed with `8 * capacity` wrapped to 32 bits.
+    #[test]
+    fn the_tick_product_follows_the_control_word_and_the_free_size_wraps() {
+        let mut e = engine();
+        crate::x87::set_control_word(0x007f);
+        e.mem.set_u32(TICK_SCALE, 0x3f80_0001);
+        e.register(PHANTOM_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[1] + 0xc, 0x0900_1234);
+            e.mem.set_u32(a[1] + 0x14, 0x2000_0001);
+            e.mem.set_u32(a[0], PHANTOM_VTABLE);
+            ret(a[0])
+        });
+        let (instance, _, _) = ragdoll_instance(&mut e, 1);
+        let body = bounded_body(&mut e, [1.0; 4], [2.0; 4]);
+        let gathered = node(&mut e, &[body], 1);
+        roots(&mut e, &[gathered]);
+        e.mem.set_u32(SKELETON_RESULT, 0x5150);
+        e.mem.set_u32(INSTANCE_RESULT, instance);
+        let this = util(&mut e, &[]);
+        e.call(0x00ca_2ad0, &args![this, 0x77u32, 3u32]);
+        crate::x87::set_control_word(crate::x87::DEFAULT_CONTROL_WORD);
+        // 500.0 * (1 + 2^-23) is 500 plus 1.95 units of the 24th bit: 500 + 2^-14.
+        let scaled = calls_to(&e, FLOAT_TO_INT64);
+        let bits = u64::from(scaled[0][0]) | (u64::from(scaled[0][1]) << 32);
+        assert_eq!(f64::from_bits(bits), 500.0 + 2f64.powi(-14));
+        assert_eq!(
+            calls_to(&e, FREE_SLOT),
+            [[ALLOCATOR_OBJECT, 0x0900_1234, 8]]
+        );
     }
 
     #[test]

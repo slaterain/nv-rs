@@ -496,9 +496,10 @@ impl Ring {
         (k - self.oldest + self.next).rem_euclid(self.size) as usize
     }
 
-    fn push(&mut self, frame: &[f32]) {
+    /// Takes frame `i` of `frames` (a `Vec` per channel) as the newest.
+    fn push(&mut self, frames: &[Vec<f32>], i: usize) {
         for (c, d) in self.data.iter_mut().enumerate() {
-            d[self.next as usize] = frame[c];
+            d[self.next as usize] = frames[c][i];
         }
         self.next += 1;
         if self.next == self.size {
@@ -552,15 +553,51 @@ impl Block<'_> {
     /// The reader (`1002d760`): up to `limit` more frames into the ring.
     fn read(&mut self, ring: &mut Ring, limit: i64) -> i64 {
         let n = limit.min(self.len() - self.read as i64).max(0);
-        let mut frame = vec![0f32; self.frames.len()];
         for _ in 0..n {
-            for (c, f) in frame.iter_mut().enumerate() {
-                *f = self.frames[c][self.read];
-            }
-            ring.push(&frame);
+            ring.push(self.frames, self.read);
             self.read += 1;
         }
         n
+    }
+}
+
+/// Buffers a converter keeps from one period to the next so that a period allocates nothing once
+/// they have grown. They hold no state: a period writes what it reads of them first.
+#[derive(Debug, Clone, Default)]
+struct Scratch {
+    /// The period's input frames, a `Vec` per channel.
+    block: Vec<Vec<f32>>,
+    /// One input frame, all its channels.
+    frame: Vec<f32>,
+    /// The first converter's frames and coefficients of one output frame ([`Dmo::convert`]).
+    xs: Vec<f32>,
+    cs: Vec<f32>,
+}
+
+impl Scratch {
+    /// The period's input: `need` frames from frame `from` on, each read with `input` into a
+    /// frame of `channels` zeros at first (as a new one), kept by channel in `block` (`need`
+    /// long each).
+    fn gather(
+        &mut self,
+        input: &mut dyn FnMut(u64, &mut [f32]),
+        from: u64,
+        need: usize,
+        channels: usize,
+    ) {
+        self.block.resize_with(channels, Vec::new);
+        for b in &mut self.block {
+            b.clear();
+            b.resize(need, 0.0);
+        }
+        self.frame.clear();
+        self.frame.resize(channels, 0.0);
+        for i in 0..need {
+            input(from + i as u64, &mut self.frame);
+            for c in 0..channels {
+                self.block[c][i] = self.frame[c];
+            }
+        }
     }
 }
 
@@ -595,6 +632,7 @@ pub struct Dmo {
     /// Frames handed to it so far.
     fed: u64,
     built: Option<Built>,
+    scratch: Scratch,
 }
 
 impl Dmo {
@@ -642,6 +680,7 @@ impl Dmo {
             ring,
             fed: 0,
             built,
+            scratch: Scratch::default(),
         };
         d.apply();
         let size = d.ring.size;
@@ -774,25 +813,26 @@ impl Dmo {
         out: &mut [Vec<f32>],
     ) {
         let need = self.need(frames as i64) as usize;
-        let mut block = vec![vec![0f32; need]; self.channels];
-        let mut frame = vec![0f32; self.channels];
-        for i in 0..need {
-            input(self.fed + i as u64, &mut frame);
-            for c in 0..self.channels {
-                block[c][i] = frame[c];
-            }
-        }
+        let mut scratch = std::mem::take(&mut self.scratch);
+        scratch.gather(input, self.fed, need, self.channels);
         self.fed += need as u64;
         let mut block = Block {
-            frames: &block,
+            frames: &scratch.block,
             read: 0,
         };
         let before = out[0].len();
         if !self.design.on {
             self.pass(&mut block, frames as i64, out);
         } else {
-            self.convert(&mut block, frames as i64, out);
+            self.convert(
+                &mut block,
+                frames as i64,
+                out,
+                &mut scratch.xs,
+                &mut scratch.cs,
+            );
         }
+        self.scratch = scratch;
         // A short period (not enough input) is padded, as the APO's output is.
         for o in out.iter_mut() {
             o.resize(before + frames, 0.0);
@@ -826,8 +866,16 @@ impl Dmo {
         self.rebase();
     }
 
-    /// The table kernel (`1002c760`) or the curve kernel (`100916a8`).
-    fn convert(&mut self, block: &mut Block, frames: i64, out: &mut [Vec<f32>]) {
+    /// The table kernel (`1002c760`) or the curve kernel (`100916a8`); `xs` and `cs` are
+    /// [`Scratch`]'s buffers (at least 4096 long here, each frame writes what it reads).
+    fn convert(
+        &mut self,
+        block: &mut Block,
+        frames: i64,
+        out: &mut [Vec<f32>],
+        xs: &mut Vec<f32>,
+        cs: &mut Vec<f32>,
+    ) {
         let d = self.design.clone();
         let n_in = block.len();
         self.f84 += n_in;
@@ -836,8 +884,11 @@ impl Dmo {
         let mut local44 = self.ring.last + 1;
         let mut split_at = local44 - self.ring.next;
         let limit_read = d.span + 500;
-        let mut xs = vec![0f32; 4096];
-        let mut cs = vec![0f32; 4096];
+        for scratch in [&mut *xs, &mut *cs] {
+            if scratch.len() < 4096 {
+                scratch.resize(4096, 0.0);
+            }
+        }
         self.f88 = first_n;
         if let Some(table) = &d.table {
             let (l, m) = (d.l, d.m);
@@ -858,7 +909,7 @@ impl Dmo {
                     split_at = local44 - self.ring.next;
                 }
                 let row = &table[(r * d.taps) as usize..((r + 1) * d.taps) as usize];
-                self.sum_out(row, first, newest, split_at, &mut xs, out);
+                self.sum_out(row, first, newest, split_at, xs, out);
                 r += self.f184;
                 q += self.f180;
                 if r >= l {
@@ -903,8 +954,8 @@ impl Dmo {
                     *c = curve.at(at as u32);
                     pos = (pos as i32).wrapping_sub(self.f138 as i32) as i64;
                 }
-                let row = cs[..taps].to_vec();
-                self.sum_out(&row, first, hi, split_at, &mut xs, out);
+                let row = &cs[..taps];
+                self.sum_out(row, first, hi, split_at, xs, out);
                 counter = if counter != 199 { counter + 1 } else { 0 };
                 x3 += self.f130;
                 x2 += self.f118;
@@ -1030,6 +1081,7 @@ pub struct Apl {
     /// plain formula (`10066870`, `10066fb0`).
     lanes: bool,
     fed: u64,
+    scratch: Scratch,
 }
 
 /// The lanes' constants (`100133e0`): the cube roots of -1/6, 1/2, -1/2, 1/6 as `f32`.
@@ -1065,6 +1117,7 @@ impl Apl {
             history: vec![[0.0; 4]; channels],
             lanes,
             fed: 0,
+            scratch: Scratch::default(),
         }
     }
 
@@ -1094,14 +1147,9 @@ impl Apl {
         let need = ((frames as f32) * self.step + self.t + self.u as f32) as i32 + 1;
         let need = need.max(0) as usize;
         let channels = self.history.len();
-        let mut block = vec![vec![0f32; need]; channels];
-        let mut frame = vec![0f32; channels];
-        for i in 0..need {
-            input(self.fed + i as u64, &mut frame);
-            for c in 0..channels {
-                block[c][i] = frame[c];
-            }
-        }
+        let mut scratch = std::mem::take(&mut self.scratch);
+        scratch.gather(input, self.fed, need, channels);
+        let block = &scratch.block;
         self.fed += need as u64;
         let whole = self.step as i32;
         let part = self.step - whole as f32;
@@ -1113,11 +1161,17 @@ impl Apl {
         }
         let last = i32::from(u_end == need as i32);
         for c in 0..channels {
-            let mut all: Vec<f32> = self.history[c].to_vec();
-            all.extend_from_slice(&block[c]);
-            let n = all.len();
-            self.history[c].copy_from_slice(&all[n - 4..]);
+            // The last four frames of the history followed by the block.
+            let (h, b) = (&mut self.history[c], &block[c]);
+            let k = b.len();
+            if k >= 4 {
+                h.copy_from_slice(&b[k - 4..]);
+            } else {
+                h.copy_within(k.., 0);
+                h[4 - k..].copy_from_slice(b);
+            }
         }
+        self.scratch = scratch;
         self.u = last - 1;
         self.t = t_end;
     }
