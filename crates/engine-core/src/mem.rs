@@ -12,15 +12,16 @@
 //!   player's installed FalloutNV.exe by [`crate::exe`] or set up by a test;
 //! - the heap, from [`HEAP_BASE`], handed out by [`Mem::alloc`] (the
 //!   translation of the game's allocator is `platform`, see
-//!   `units/platform.rs`).
+//!   `units/platform.rs`); its free space and the choice of where a block goes
+//!   are in `mem/heap.rs`.
 
 use std::collections::{BTreeMap, HashMap};
+
+mod heap;
 
 const PAGE_BITS: u32 = 12;
 const PAGE: usize = 1 << PAGE_BITS;
 const PAGES: usize = 1 << (32 - PAGE_BITS);
-/// Freed heap blocks up to this size (rounded) are kept in an indexed table.
-const SMALL_BLOCK: u32 = 4096;
 
 /// First heap address. Above the executable image (which ends below
 /// 0x01410000) and clear of it, so a heap pointer never aliases image data.
@@ -36,12 +37,9 @@ pub struct Mem {
     /// One slot per page of the 4 GB space: a fixed-size table, so an index made from a `u32`
     /// address (`a >> PAGE_BITS`) is in range by its type and needs no bounds check.
     pages: Box<[Option<Box<[u8; PAGE]>>; PAGES]>,
-    /// Heap: next fresh address, and freed blocks by size for reuse.
-    brk: u32,
+    /// The heap's live blocks (start -> size, rounded and with any guard) and its free space.
     live: crate::engine::AddrMap<u32, u32>,
-    /// Freed blocks of up to [`SMALL_BLOCK`] bytes by size / 8 (the map holds larger ones).
-    small_free: Vec<Vec<u32>>,
-    free: crate::engine::AddrMap<u32, Vec<u32>>,
+    heap: heap::Heap,
     /// The write watch ([`Mem::watch`]); `None` in normal runs (one test per store).
     watch: Option<Box<Watch>>,
     /// The block check ([`Mem::enable_block_check`]); `None` in normal runs.
@@ -114,9 +112,10 @@ struct BlockCheck {
     reports: Vec<String>,
     /// With [`Mem::enable_freed_check`]: freed blocks held back from reuse, oldest first
     /// (address, rounded size), each guarded whole so that a store into it is reported, until
-    /// more than [`QUARANTINE_BYTES`] wait.
+    /// more than `quarantine_limit` bytes ([`QUARANTINE_BYTES`]) wait.
     quarantine: Option<std::collections::VecDeque<(u32, u32)>>,
     quarantine_bytes: u64,
+    quarantine_limit: u64,
     /// The quarantined blocks: size asked for, the function running when it was allocated and
     /// the one running when it was freed.
     freed: HashMap<u32, (u32, u32, u32)>,
@@ -152,6 +151,7 @@ impl Mem {
             reports: Vec::new(),
             quarantine: None,
             quarantine_bytes: 0,
+            quarantine_limit: QUARANTINE_BYTES,
             freed: HashMap::new(),
             pending_path: Vec::new(),
             alloc_paths: HashMap::new(),
@@ -217,7 +217,7 @@ impl Mem {
             c.pages[p as usize] = c.pages[p as usize].saturating_add(1);
         }
         let mut released = Vec::new();
-        while c.quarantine_bytes > QUARANTINE_BYTES {
+        while c.quarantine_bytes > c.quarantine_limit {
             let Some((a, s)) = queue.pop_front() else {
                 break;
             };
@@ -380,10 +380,8 @@ impl Mem {
             pages.into_boxed_slice().try_into().expect("PAGES slots");
         Mem {
             pages,
-            brk: HEAP_BASE,
             live: Default::default(),
-            small_free: vec![Vec::new(); SMALL_BLOCK as usize / 8 + 1],
-            free: Default::default(),
+            heap: heap::Heap::new(),
             watch: None,
             check: None,
             check_store: false,
@@ -855,21 +853,26 @@ impl Mem {
         self.set_u8(a.wrapping_add(s.len() as u32), 0);
     }
 
-    /// The heap's current top: the next fresh address [`Mem::alloc`] hands
-    /// out (reused freed blocks lie below it). Tools that map their own memory
-    /// inside the heap range above it (the oracle check's buffer arena at
-    /// 0x30000000) check that the heap has not reached them.
+    /// The highest address the heap has reached: no block was ever handed out at or above it.
+    /// Tools that map their own memory inside the heap range above it (the oracle check's
+    /// buffer arena at 0x30000000) check that the heap has not reached them. The heap's next
+    /// fresh address can be lower: it comes down again when the blocks at the top are freed
+    /// (`mem/heap.rs`), and this stays at the highest it has been.
     pub fn heap_top(&self) -> u32 {
-        self.brk
+        self.heap.peak()
     }
 
-    /// Allocates `size` bytes (8-byte aligned, zero-filled) on the heap.
-    /// Freed blocks of the same rounded size are reused, newest first.
+    /// Allocates `size` bytes (8-byte aligned, zero-filled) on the heap. A freed block of the
+    /// same rounded size is reused first, newest first; else part of a bigger free block, else
+    /// fresh memory (`mem/heap.rs` has the policy).
     pub fn alloc(&mut self, size: u32) -> u32 {
         let asked = size;
         let guard = if self.check.is_some() { GUARD } else { 0 };
         let size = size.max(1).div_ceil(8) * 8 + guard;
-        let addr = self.take_block(size);
+        let addr = match self.heap.take(size) {
+            Some(a) => a,
+            None => self.heap_exhausted(size),
+        };
         self.map(addr, size);
         if self.watched_page(addr, size) {
             self.watch_note(addr, size, None, WatchKind::Alloc);
@@ -910,39 +913,60 @@ impl Mem {
             }
         }
         match released {
+            // Blocks leaving the freed-block check's quarantine go straight to the bins, where
+            // they merge with their free neighbours.
             Some(blocks) => {
                 for (a, s) in blocks {
-                    self.free_list(s).push(a);
+                    self.heap.release(a, s);
                 }
             }
-            None => self.free_list(size).push(addr),
+            None => self.heap.give(addr, size),
         }
     }
 
-    /// The freed blocks of rounded size `size`, newest last: indexed for sizes up to
-    /// [`SMALL_BLOCK`], the map above that.
-    #[inline]
-    fn free_list(&mut self, size: u32) -> &mut Vec<u32> {
-        if size <= SMALL_BLOCK {
-            &mut self.small_free[(size / 8) as usize]
-        } else {
-            self.free.entry(size).or_default()
+    /// Stops with the heap's state: live blocks and bytes, free bytes and blocks with the
+    /// largest free block, the bytes waiting in the quick stacks and in the block check's
+    /// quarantine, and the sizes holding the most live and the most free bytes.
+    #[cold]
+    #[inline(never)]
+    fn heap_exhausted(&self, size: u32) -> ! {
+        fn most(by_size: HashMap<u32, (u64, u64)>) -> String {
+            let mut top: Vec<_> = by_size.into_iter().collect();
+            top.sort_by(|a, b| b.1 .1.cmp(&a.1 .1).then(a.0.cmp(&b.0)));
+            top.iter()
+                .take(8)
+                .map(|(s, (n, b))| format!("{n}x{s}={}MB", b >> 20))
+                .collect::<Vec<_>>()
+                .join(" ")
         }
-    }
-
-    /// A block of rounded size `size`: the newest freed one of that size, else fresh heap.
-    #[inline]
-    fn take_block(&mut self, size: u32) -> u32 {
-        if let Some(a) = self.free_list(size).pop() {
-            return a;
-        }
-        let a = self.brk;
-        assert!(
-            (a as u64 + size as u64) <= HEAP_END as u64,
-            "heap exhausted allocating {size} bytes"
-        );
-        self.brk += size;
-        a
+        let tally = |sizes: &mut dyn Iterator<Item = u32>| {
+            let mut by_size: HashMap<u32, (u64, u64)> = HashMap::new();
+            for s in sizes {
+                let e = by_size.entry(s).or_default();
+                e.0 += 1;
+                e.1 += u64::from(s);
+            }
+            by_size
+        };
+        let live: u64 = self.live.values().map(|&s| u64::from(s)).sum();
+        let quarantine = self.check.as_deref().map_or(0, |c| c.quarantine_bytes);
+        let h = &self.heap;
+        panic!(
+            "heap exhausted allocating {size} bytes (live {} blocks {}MB, free {}MB in {} blocks, \
+             the largest {} bytes, quick stacks {}MB in {} blocks, quarantine {}MB, top {:08x}; \
+             most live {}; most free {})",
+            self.live.len(),
+            live >> 20,
+            h.free_bytes() >> 20,
+            h.free_blocks(),
+            h.largest_free(),
+            h.quick_bytes() >> 20,
+            h.quick_blocks(),
+            quarantine >> 20,
+            h.top(),
+            most(tally(&mut self.live.values().copied())),
+            most(tally(&mut h.free_sizes()))
+        )
     }
 
     /// Size of a live heap block.
@@ -951,6 +975,21 @@ impl Mem {
             return Some(asked.max(1).div_ceil(8) * 8);
         }
         self.live.get(&addr).copied()
+    }
+
+    /// Checks the heap's bookkeeping against the live blocks and those the freed-block check
+    /// holds back (see `heap::Heap::check`).
+    #[cfg(test)]
+    fn check_heap(&self) {
+        let held = self
+            .check
+            .as_deref()
+            .and_then(|c| c.quarantine.as_ref())
+            .into_iter()
+            .flatten()
+            .copied();
+        self.heap
+            .check(self.live.iter().map(|(&a, &s)| (a, s)).chain(held));
     }
 }
 
@@ -1193,5 +1232,555 @@ mod tests {
         let a = m.alloc(16);
         m.set_cstr(a, b"Goodsprings");
         assert_eq!(m.cstr(a), b"Goodsprings");
+    }
+
+    /// Freeing 0 does nothing: no block, no change to the heap.
+    #[test]
+    fn freeing_null_does_nothing() {
+        let mut m = Mem::new();
+        let a = m.alloc(0x40);
+        m.free(0);
+        assert_eq!(m.live.len(), 1);
+        assert_eq!(m.heap.top(), a + 0x40);
+        m.check_heap();
+    }
+
+    /// Several freed blocks of one size come back newest first, as before the bins, for sizes
+    /// the quick stacks hold and bigger ones (the bins) alike.
+    #[test]
+    fn same_size_blocks_come_back_newest_first() {
+        for size in [0x18, 0x1f8, 0x1000, 0x2000] {
+            let mut m = Mem::new();
+            let blocks: Vec<u32> = (0..5).map(|_| m.alloc(size)).collect();
+            m.free(blocks[1]);
+            m.free(blocks[3]);
+            assert_eq!(m.alloc(size), blocks[3]);
+            assert_eq!(m.alloc(size), blocks[1]);
+            assert_eq!(m.alloc(size), blocks[4] + size);
+            m.check_heap();
+        }
+    }
+
+    /// A big freed block serves smaller requests from its start, zero-filled, and the rest of it
+    /// serves the next.
+    #[test]
+    fn a_big_freed_block_serves_smaller_requests() {
+        let mut m = Mem::new();
+        let big = m.alloc(4 << 20);
+        let after = m.alloc(0x40);
+        m.write(big, &[0xab; 0x100]);
+        m.free(big);
+        let a = m.alloc(1 << 20);
+        assert_eq!(a, big);
+        assert_eq!(m.bytes(a, 0x100), vec![0; 0x100]);
+        assert_eq!(m.alloc(0x300), big + (1 << 20));
+        assert_eq!(m.alloc((3 << 20) - 0x300), big + (1 << 20) + 0x300);
+        assert_eq!(m.heap_top(), after + 0x40);
+        m.check_heap();
+    }
+
+    /// Freed blocks at the top lower the heap's next fresh address (merging on the way down);
+    /// `heap_top` keeps the highest it reached.
+    #[test]
+    fn freed_blocks_at_the_top_lower_it() {
+        let mut m = Mem::new();
+        // Bigger than the quick stacks take, so a freed block goes straight to the bins.
+        let a = m.alloc(0x2000);
+        let b = m.alloc(0x2000);
+        let c = m.alloc(0x2000);
+        let peak = m.heap_top();
+        m.free(a);
+        m.free(c);
+        assert_eq!(m.heap.top(), c);
+        m.free(b);
+        assert_eq!(m.heap.top(), HEAP_BASE);
+        assert_eq!(m.heap_top(), peak);
+        m.check_heap();
+        assert_eq!(m.alloc(0x1000), a);
+    }
+
+    /// Blocks leaving the freed-block check's quarantine merge with free neighbours in the bins,
+    /// even small ones.
+    #[test]
+    fn blocks_leaving_the_quarantine_merge() {
+        let mut m = Mem::new();
+        m.enable_freed_check(false);
+        m.check.as_deref_mut().unwrap().quarantine_limit = 0x90;
+        let blocks: Vec<u32> = (0..3).map(|_| m.alloc(0x40)).collect();
+        let keep = m.alloc(8);
+        assert_eq!(blocks[1], blocks[0] + 0x40 + GUARD);
+        m.free(blocks[0]);
+        assert_eq!(m.heap.free_blocks(), 0, "held back");
+        m.free(blocks[1]);
+        assert_eq!(m.heap.free_block_at(blocks[0]), Some((blocks[0], 0x50)));
+        m.free(blocks[2]);
+        assert_eq!(m.heap.free_block_at(blocks[0]), Some((blocks[0], 0xa0)));
+        assert_eq!(m.heap.quick_blocks(), 0);
+        m.check_heap();
+        assert_eq!(m.alloc(0x90), blocks[0]);
+        m.free(keep);
+        m.check_heap();
+        assert!(m.take_block_reports().is_empty());
+    }
+
+    /// A full heap stops with its state: live and free bytes, the largest free block, the sizes
+    /// holding the most.
+    #[test]
+    fn heap_exhausted_reports_the_heap() {
+        let mut m = Mem::new();
+        let _a = m.alloc(0x100);
+        let b = m.alloc(1 << 20);
+        let _c = m.alloc(0x100);
+        m.free(b);
+        // The rest of the heap as one block, taken without mapping its pages.
+        let rest = HEAP_END - m.heap.top();
+        let filler = m.heap.take(rest).unwrap();
+        m.live.insert(filler, rest);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.alloc(2 << 20)));
+        let why = r.unwrap_err();
+        let text = why.downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(
+            text.starts_with("heap exhausted allocating 2097152 bytes (live 3 blocks "),
+            "{text}"
+        );
+        assert!(
+            text.contains("free 1MB in 1 blocks, the largest 1048576 bytes"),
+            "{text}"
+        );
+        assert!(text.contains(&format!("most live 1x{rest}=")), "{text}");
+        assert!(text.contains("2x256=0MB"), "{text}");
+        assert!(text.contains("most free 1x1048576=1MB)"), "{text}");
+    }
+
+    /// A nearly full, fragmented heap serves a request from a free block that fits even when
+    /// eight newer, smaller blocks of the same bin sit in front of it (0x2000, 0x2080 and 0x20f8
+    /// share a bin).
+    #[test]
+    fn a_full_heap_serves_a_request_from_deep_in_its_bin() {
+        let mut m = Mem::new();
+        let fitting = m.alloc(0x20f8);
+        m.alloc(8);
+        let smaller: Vec<u32> = (0..8)
+            .map(|_| {
+                let a = m.alloc(0x2000);
+                m.alloc(8);
+                a
+            })
+            .collect();
+        let rest = HEAP_END - m.heap.top();
+        let filler = m.heap.take(rest).unwrap();
+        m.live.insert(filler, rest);
+        m.free(fitting);
+        for a in smaller {
+            m.free(a);
+        }
+        m.check_heap();
+        assert_eq!(m.alloc(0x2080), fitting);
+        assert_eq!(
+            m.heap.free_block_at(fitting + 0x2080),
+            Some((fitting + 0x2080, 0x78))
+        );
+        m.check_heap();
+    }
+
+    /// A small pseudo-random generator (xorshift64) for the tests below.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 >> 32) as u32
+        }
+        fn below(&mut self, n: u32) -> u32 {
+            self.next() % n
+        }
+    }
+
+    /// Random allocations and frees of mixed sizes, checked against a shadow list of the live
+    /// blocks: every block is 8-byte aligned, inside `[HEAP_BASE, top)`, disjoint from every
+    /// other live block and zero-filled when handed out, and keeps what was written into it;
+    /// the heap's own bookkeeping is checked as it goes. With `freed_check`, the freed-block
+    /// check holds blocks back and lets them go into the bins.
+    fn stress(freed_check: bool, seed: u64) {
+        let mut m = Mem::new();
+        if freed_check {
+            m.enable_freed_check(false);
+            m.check.as_deref_mut().unwrap().quarantine_limit = 0x4_0000;
+        }
+        let big = if freed_check { 0x1_0000 } else { 0x10_0000 };
+        let mut rng = Rng(seed);
+        let mut shadow: BTreeMap<u32, (u32, u32)> = BTreeMap::new();
+        let mut order: Vec<u32> = Vec::new();
+        for step in 0..20_000u32 {
+            let grow = order.len() < 50 || (order.len() < 3000 && rng.below(100) < 55);
+            if grow {
+                let asked = match rng.below(100) {
+                    0..=4 => 0,
+                    5..=74 => rng.below(300),
+                    75..=97 => 300 + rng.below(6000),
+                    _ => 0x1_0000 + rng.below(big),
+                };
+                let a = m.alloc(asked);
+                let size = m.live[&a];
+                assert_eq!(a % 8, 0);
+                assert!(
+                    a >= HEAP_BASE && a + size <= m.heap.top(),
+                    "{a:08x}+{size:x}"
+                );
+                if let Some((&p, &(ps, _))) = shadow.range(..a).next_back() {
+                    assert!(p + ps <= a, "{a:08x} overlaps {p:08x}+{ps:x}");
+                }
+                if let Some((&n, _)) = shadow.range(a..).next() {
+                    assert!(a + size <= n, "{a:08x}+{size:x} overlaps {n:08x}");
+                }
+                assert!(m.bytes(a, asked.min(64)).iter().all(|&x| x == 0));
+                let words = asked / 4;
+                if words > 0 {
+                    m.set_u32(a, step);
+                    m.set_u32(a + (words - 1) * 4, step);
+                }
+                shadow.insert(a, (size, words));
+                order.push(a);
+            } else {
+                let a = order.swap_remove(rng.below(order.len() as u32) as usize);
+                let (_, words) = shadow.remove(&a).unwrap();
+                if words > 0 {
+                    let tag = m.u32(a);
+                    assert_eq!(
+                        m.u32(a + (words - 1) * 4),
+                        tag,
+                        "block {a:08x} was overwritten"
+                    );
+                }
+                m.free(a);
+            }
+            if step % 1000 == 0 {
+                m.check_heap();
+            }
+        }
+        m.check_heap();
+        for a in order {
+            m.free(a);
+        }
+        m.check_heap();
+        assert!(m.take_block_reports().is_empty());
+    }
+
+    #[test]
+    fn random_allocs_and_frees_never_overlap() {
+        stress(false, 0x2545_f491_4f6c_dd1d);
+    }
+
+    #[test]
+    fn random_allocs_and_frees_never_overlap_with_the_freed_check() {
+        stress(true, 0x9e37_79b9_7f4a_7c15);
+    }
+
+    /// The allocator before the bins, kept for the comparisons below: fresh blocks from a bump
+    /// pointer, and a freed block reused only by a later request of exactly its size, newest
+    /// first (indexed by size / 8 up to 4096 bytes, a map above).
+    struct OldHeap {
+        brk: u32,
+        small_free: Vec<Vec<u32>>,
+        free: crate::engine::AddrMap<u32, Vec<u32>>,
+    }
+
+    impl OldHeap {
+        fn new() -> Self {
+            OldHeap {
+                brk: HEAP_BASE,
+                small_free: vec![Vec::new(); 4096 / 8 + 1],
+                free: Default::default(),
+            }
+        }
+        #[inline]
+        fn list(&mut self, size: u32) -> &mut Vec<u32> {
+            if size <= 4096 {
+                &mut self.small_free[(size / 8) as usize]
+            } else {
+                self.free.entry(size).or_default()
+            }
+        }
+        #[inline]
+        fn take(&mut self, size: u32) -> u32 {
+            if let Some(a) = self.list(size).pop() {
+                return a;
+            }
+            let a = self.brk;
+            assert!(
+                (a as u64 + size as u64) <= HEAP_END as u64,
+                "old heap exhausted"
+            );
+            self.brk += size;
+            a
+        }
+    }
+
+    /// One step of a replayed pattern: allocate object `id` with `size` bytes, or free it.
+    enum Op {
+        Alloc(usize, u32),
+        Free(usize),
+    }
+
+    /// Cells loaded and unloaded as the open world does: each round allocates a cell of 300
+    /// objects of varied sizes (70% up to 256 bytes, 25% 1-16 KB, 5% 16-256 KB, any multiple of
+    /// 8), unloads the oldest when more than four are loaded, and replaces 200 random objects of
+    /// the loaded cells. Answers the steps, each object's size, the most bytes live at once and
+    /// the step where the second half of the rounds starts.
+    fn cell_churn(rounds: usize) -> (Vec<Op>, Vec<u32>, u64, usize) {
+        fn size(rng: &mut Rng) -> u32 {
+            match rng.below(100) {
+                0..=69 => 8 + rng.below(32) * 8,
+                70..=94 => 1024 + rng.below(1920) * 8,
+                _ => 16384 + rng.below(30720) * 8,
+            }
+        }
+        let mut rng = Rng(0x0123_4567_89ab_cdef);
+        let mut ops = Vec::new();
+        let mut sizes: Vec<u32> = Vec::new();
+        let mut cells: std::collections::VecDeque<Vec<usize>> = Default::default();
+        let (mut live, mut most) = (0u64, 0u64);
+        let mut half = 0;
+        for round in 0..rounds {
+            if round == rounds / 2 {
+                half = ops.len();
+            }
+            let mut cell = Vec::new();
+            for _ in 0..300 {
+                let s = size(&mut rng);
+                ops.push(Op::Alloc(sizes.len(), s));
+                cell.push(sizes.len());
+                sizes.push(s);
+                live += u64::from(s);
+                most = most.max(live);
+            }
+            cells.push_back(cell);
+            if cells.len() > 4 {
+                for id in cells.pop_front().unwrap() {
+                    ops.push(Op::Free(id));
+                    live -= u64::from(sizes[id]);
+                }
+            }
+            for _ in 0..200 {
+                let c = rng.below(cells.len() as u32) as usize;
+                let k = rng.below(cells[c].len() as u32) as usize;
+                let old = cells[c][k];
+                ops.push(Op::Free(old));
+                live -= u64::from(sizes[old]);
+                let s = size(&mut rng);
+                ops.push(Op::Alloc(sizes.len(), s));
+                cells[c][k] = sizes.len();
+                sizes.push(s);
+                live += u64::from(s);
+                most = most.max(live);
+            }
+        }
+        (ops, sizes, most, half)
+    }
+
+    /// The fragmentation the open world showed ("heap exhausted" with 901 MB on the free lists):
+    /// with sizes that seldom repeat exactly, the old allocator's top keeps climbing with every
+    /// cell loaded, while the heap's stays within a small multiple of the bytes live at once and
+    /// stops climbing.
+    #[test]
+    fn churn_of_varied_sizes_keeps_the_heap_bounded() {
+        let (ops, sizes, most, half) = cell_churn(60);
+        let mut m = Mem::new();
+        let mut addrs = vec![0u32; sizes.len()];
+        let mut at_half = 0;
+        for (i, op) in ops.iter().enumerate() {
+            if i == half {
+                at_half = m.heap_top() - HEAP_BASE;
+            }
+            match *op {
+                Op::Alloc(id, s) => addrs[id] = m.alloc(s),
+                Op::Free(id) => m.free(addrs[id]),
+            }
+        }
+        m.check_heap();
+        let new = m.heap_top() - HEAP_BASE;
+        let mut old = OldHeap::new();
+        let mut old_half = 0;
+        for (i, op) in ops.iter().enumerate() {
+            if i == half {
+                old_half = old.brk - HEAP_BASE;
+            }
+            match *op {
+                Op::Alloc(id, s) => addrs[id] = old.take(s),
+                Op::Free(id) => old.list(sizes[id]).push(addrs[id]),
+            }
+        }
+        let old_top = old.brk - HEAP_BASE;
+        let mb = |b: u32| f64::from(b) / f64::from(1 << 20);
+        eprintln!(
+            "most live {:.1} MB; heap top {:.1} MB (half way {:.1}); old allocator {:.1} MB (half \
+             way {:.1})",
+            most as f64 / f64::from(1 << 20),
+            mb(new),
+            mb(at_half),
+            mb(old_top),
+            mb(old_half)
+        );
+        assert!(
+            u64::from(new) <= most * 3 / 2 + heap::QUICK_BYTES,
+            "the heap reached {new:#x} bytes for {most:#x} live"
+        );
+        assert!(
+            u64::from(new) <= u64::from(at_half) * 5 / 4 + heap::QUICK_BYTES,
+            "the heap kept climbing: {at_half:#x} half way, {new:#x} at the end"
+        );
+        // The pattern is one the old allocator could not hold: it climbs without bound.
+        assert!(u64::from(old_top) > most * 5, "{old_top:#x}");
+        assert!(old_top > old_half * 3 / 2, "{old_half:#x} -> {old_top:#x}");
+    }
+
+    /// What the speed comparison runs on.
+    trait Allocator {
+        fn alloc(&mut self, size: u32) -> u32;
+        fn free(&mut self, addr: u32);
+        fn top(&self) -> u32;
+    }
+
+    impl Allocator for Mem {
+        #[inline]
+        fn alloc(&mut self, size: u32) -> u32 {
+            Mem::alloc(self, size)
+        }
+        #[inline]
+        fn free(&mut self, addr: u32) {
+            Mem::free(self, addr)
+        }
+        fn top(&self) -> u32 {
+            self.heap_top()
+        }
+    }
+
+    /// [`Mem::alloc`] and [`Mem::free`] as they were with the old allocator (the same steps
+    /// around it: rounding, mapping, the watch test, zero-fill, the live map), on a `Mem` used
+    /// for its pages.
+    struct OldMem {
+        mem: Mem,
+        heap: OldHeap,
+        live: crate::engine::AddrMap<u32, u32>,
+    }
+
+    impl Allocator for OldMem {
+        #[inline]
+        fn alloc(&mut self, size: u32) -> u32 {
+            let guard = if self.mem.check.is_some() { GUARD } else { 0 };
+            let size = size.max(1).div_ceil(8) * 8 + guard;
+            let addr = self.heap.take(size);
+            self.mem.map(addr, size);
+            if self.mem.watched_page(addr, size) {
+                self.mem.watch_note(addr, size, None, WatchKind::Alloc);
+            }
+            self.mem.zero_raw(addr, size);
+            self.live.insert(addr, size);
+            addr
+        }
+        #[inline]
+        fn free(&mut self, addr: u32) {
+            if addr == 0 {
+                return;
+            }
+            let size = self.live.remove(&addr).expect("live block");
+            if self.mem.watched_page(addr, size) {
+                self.mem.watch_note(addr, size, None, WatchKind::Free);
+            }
+            assert!(self.mem.check.is_none());
+            self.heap.list(size).push(addr);
+        }
+        fn top(&self) -> u32 {
+            self.heap.brk
+        }
+    }
+
+    /// `steps` frees of a random one of `slots` live blocks, each followed by an allocation of a
+    /// size from `size`, after filling the slots; answers ns per free and allocation.
+    fn churn_ns(
+        h: &mut impl Allocator,
+        slots: usize,
+        steps: u32,
+        size: fn(&mut Rng) -> u32,
+    ) -> f64 {
+        let mut rng = Rng(0x5851_f42d_4c95_7f2d);
+        let mut live: Vec<u32> = (0..slots).map(|_| h.alloc(size(&mut rng))).collect();
+        let t = std::time::Instant::now();
+        for _ in 0..steps {
+            let i = rng.below(slots as u32) as usize;
+            h.free(live[i]);
+            live[i] = h.alloc(size(&mut rng));
+        }
+        let ns = t.elapsed().as_nanos() as f64 / f64::from(steps);
+        for a in live {
+            h.free(a);
+        }
+        ns
+    }
+
+    /// Not a check: ns per free and allocation of the heap against the allocator before the
+    /// bins, the best of three runs each, on small blocks alone, on blocks of 264 bytes to 4 KB
+    /// alone (every size, and five sizes) and on a game-like mix (`cargo test --release -p
+    /// engine-core --lib heap_speed -- --ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn heap_speed() {
+        fn small(rng: &mut Rng) -> u32 {
+            8 * (1 + rng.below(32).min(rng.below(32)))
+        }
+        // Every multiple of 8 from 264 to 4096.
+        fn mid(rng: &mut Rng) -> u32 {
+            264 + rng.below(480) * 8
+        }
+        fn five(rng: &mut Rng) -> u32 {
+            [264, 512, 1024, 2048, 4096][rng.below(5) as usize]
+        }
+        // 89% up to 256 bytes, 10% 264 bytes to 4 KB, 1% 1-64 KB (64 sizes of each), 0.005%
+        // multi-MB (8454160 is one of the open world's).
+        fn game(rng: &mut Rng) -> u32 {
+            match rng.below(100_000) {
+                0..=88_999 => small(rng),
+                89_000..=98_999 => 264 + rng.below(64) * 60,
+                99_000..=99_994 => 1024 + rng.below(64) * 1008,
+                _ => [1 << 20, (2 << 20) + 16, 4 << 20, 8_454_160][rng.below(4) as usize],
+            }
+        }
+        let mixes: [(&str, fn(&mut Rng) -> u32); 4] = [
+            ("small 8-256", small),
+            ("mid 264-4096", mid),
+            ("five sizes 264-4096", five),
+            ("game mix", game),
+        ];
+        for (name, size) in mixes {
+            let (mut old, mut new, mut bins) = (f64::MAX, f64::MAX, f64::MAX);
+            let (mut old_top, mut new_top) = (0, 0);
+            for _ in 0..3 {
+                let mut o = OldMem {
+                    mem: Mem::new(),
+                    heap: OldHeap::new(),
+                    live: Default::default(),
+                };
+                old = old.min(churn_ns(&mut o, 50_000, 5_000_000, size));
+                old_top = o.top() - HEAP_BASE;
+                drop(o);
+                let mut m = Mem::new();
+                new = new.min(churn_ns(&mut m, 50_000, 5_000_000, size));
+                new_top = m.top() - HEAP_BASE;
+                drop(m);
+                let mut m = Mem::new();
+                m.heap = heap::Heap::new().without_quick();
+                bins = bins.min(churn_ns(&mut m, 50_000, 5_000_000, size));
+            }
+            eprintln!(
+                "heap speed, {name}: old {old:.1} ns, new {new:.1} ns ({:+.0}%), bins alone \
+                 {bins:.1} ns ({:+.0}%) per free and allocation; top old {:.1} MB, new {:.1} MB",
+                (new / old - 1.0) * 100.0,
+                (bins / old - 1.0) * 100.0,
+                f64::from(old_top) / f64::from(1 << 20),
+                f64::from(new_top) / f64::from(1 << 20)
+            );
+        }
     }
 }
