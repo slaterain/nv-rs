@@ -36,6 +36,9 @@ A milestone is done when all three of these hold:
 | C: Gameplay | Actor values and combat, AI and pathfinding, quests and dialogue, menus and V.A.T.S., magic, progression, crafting, minigames, world streaming | Mostly translated; switch-overs not started |
 | D: The rest | Original saves, shut-down, video, settings, real threads, the remaining unplaced functions | Not started |
 
+Primm door-search regressions and the rebased Linux route pass; comparison
+with the original remains. See [PRIMM_ROUTE.md](PRIMM_ROUTE.md).
+
 Approximate timing (maintainer's goal): A and B in about a month, the whole
 game in about two months, depending on the weekly budget.
 

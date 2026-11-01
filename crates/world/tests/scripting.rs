@@ -914,20 +914,73 @@ fn people_go_through_load_doors_toward_their_package() {
     assert_eq!(package.form_id, FormId(FAR_TRAVEL));
     // Not reachable on foot from here...
     assert!(ai::destination(&order, &state, doc, &package).is_none());
-    let (space, _) = ai::target_place(&order, &state, doc, &package).unwrap();
+    let (space, target) = ai::target_place(&order, &state, doc, &package).unwrap();
     assert_eq!(space, FormId(CELL2));
     // ...but through the door at 150,150, coming out at 400,0 over there.
-    let way = ai::door_toward(&order, &state, doc, space).unwrap();
+    let mut navs = ai::NavCache::default();
+    assert!(ai::door_toward(&order, &state, doc, space, target, &mut navs.infos).is_none());
+    // An alarmed guard can open it (`00502310`, `008a61b0`).
+    state
+        .script_packages
+        .insert(doc, FormId(PATH_ALARM_PACKAGE));
+    assert!(ai::door_toward(&order, &state, doc, space, target, &mut navs.infos).is_some());
+    state.script_packages.insert(doc, FormId(FAR_TRAVEL));
+    // The actor's base owns the door: `00502550` allows it without a key.
+    state
+        .set_by_scripts
+        .owners
+        .insert(FormId(LINK_DOOR), FormId(DOC));
+    assert!(ai::door_toward(&order, &state, doc, space, target, &mut navs.infos).is_some());
+    state.set_by_scripts.owners.remove(&FormId(LINK_DOOR));
+    // A faction owner requires the actor's base rank to reach XRNK.
+    state
+        .set_by_scripts
+        .owners
+        .insert(FormId(LINK_DOOR), FormId(PATH_FACTION));
+    state.faction_changes.insert((doc, FormId(PATH_FACTION)), 1);
+    assert!(ai::door_toward(&order, &state, doc, space, target, &mut navs.infos).is_none());
+    state.faction_changes.insert((doc, FormId(PATH_FACTION)), 2);
+    assert!(ai::door_toward(&order, &state, doc, space, target, &mut navs.infos).is_some());
+    state.faction_changes.remove(&(doc, FormId(PATH_FACTION)));
+    // A non-faction owner with a nonzero ownership global permits access.
+    state
+        .set_by_scripts
+        .owners
+        .insert(FormId(LINK_DOOR), FormId(CHEST));
+    state.globals.insert(FormId(GLOBAL), 1.0);
+    assert!(ai::door_toward(&order, &state, doc, space, target, &mut navs.infos).is_some());
+    state.globals.insert(FormId(GLOBAL), 0.0);
+    assert!(ai::door_toward(&order, &state, doc, space, target, &mut navs.infos).is_none());
+    state.set_by_scripts.owners.remove(&FormId(LINK_DOOR));
+    state.globals.insert(FormId(GLOBAL), 5.0);
+    // Owning the near cell allows an unowned destination, but not one
+    // owned by somebody else (`00502310`).
+    state
+        .set_by_scripts
+        .cell_owners
+        .insert(FormId(CELL), FormId(DOC));
+    assert!(ai::door_toward(&order, &state, doc, space, target, &mut navs.infos).is_some());
+    state
+        .set_by_scripts
+        .cell_owners
+        .insert(FormId(CELL2), FormId(CHEST));
+    assert!(ai::door_toward(&order, &state, doc, space, target, &mut navs.infos).is_none());
+    state.set_by_scripts.cell_owners.clear();
+    state.stock(&order, doc);
+    state.items.insert((doc, FormId(KEY)), 1);
+    let way = ai::door_toward(&order, &state, doc, space, target, &mut navs.infos).unwrap();
     assert_eq!(way.door, FormId(LINK_DOOR));
     assert_eq!(
         (way.at, way.to, way.to_space),
         ([150.0, 150.0, 0.0], [400.0, 0.0, 0.0], FormId(CELL2))
     );
+    state.disabled.insert(FormId(LINK_DOOR), true);
+    assert!(ai::door_toward(&order, &state, doc, space, target, &mut navs.infos).is_none());
+    state.disabled.remove(&FormId(LINK_DOOR));
     // Out of sight they walk there at their pace (`009ea8a0`): 100 units
     // toward the door (212 away), then on through it, then to the marker
     // (141 from the far side; arriving within 20 of it, a chest's bounds-less
     // radius).
-    let mut navs = ai::NavCache::default();
     assert_eq!(
         ai::move_offstage(&order, &mut state, doc, 100.0, &mut navs),
         ai::Offstage::Moved
@@ -977,10 +1030,52 @@ fn people_go_through_load_doors_toward_their_package() {
         Some(FormId(CELL))
     );
     // And back, from the far side's door.
-    let home = ai::door_toward(&order, &state, doc, FormId(CELL)).unwrap();
+    let home = ai::door_toward(
+        &order,
+        &state,
+        doc,
+        FormId(CELL),
+        [0.0, 0.0, 0.0],
+        &mut navs.infos,
+    )
+    .unwrap();
     assert_eq!(
         (home.door, home.to),
         (FormId(LINK_DOOR2), [150.0, 120.0, 0.0])
+    );
+
+    // Two interiors joined through an intermediate place: `TestCell` →
+    // `TestCell3` → `TestCell4`. The first lookup should choose the exit to
+    // the shared exterior, and the next should choose the target entrance.
+    state.spaces.insert(doc, (FormId(CELL), FormId(CELL)));
+    state.positions.insert(doc, ([0.0, 0.0, 0.0], 0.0));
+    let first = ai::door_toward(
+        &order,
+        &state,
+        doc,
+        FormId(CELL4),
+        [200.0, 0.0, 0.0],
+        &mut navs.infos,
+    )
+    .unwrap();
+    assert_eq!(
+        (first.door, first.to_space),
+        (FormId(LINK_DOOR3), FormId(CELL3))
+    );
+    state.spaces.insert(doc, (FormId(CELL3), FormId(CELL3)));
+    state.positions.insert(doc, ([10.0, 0.0, 0.0], 0.0));
+    let second = ai::door_toward(
+        &order,
+        &state,
+        doc,
+        FormId(CELL4),
+        [200.0, 0.0, 0.0],
+        &mut navs.infos,
+    )
+    .unwrap();
+    assert_eq!(
+        (second.door, second.to_space),
+        (FormId(LINK_DOOR6), FormId(CELL4))
     );
 }
 

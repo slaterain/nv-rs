@@ -79,8 +79,8 @@ OPTIONS:
                             menu); can be given more than once
     --say TEXT              for testing: when the dialogue menu offers
                             topics, choose the first whose text contains
-                            TEXT (ignoring case); each --say is used once,
-                            in order
+                            TEXT (or one of its `|`-separated alternatives,
+                            ignoring case); each --say is used once, in order
     --no-hud                leave out the game's HUD (health, compass,
                             crosshair, messages); screenshots then show
                             the scene alone
