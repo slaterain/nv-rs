@@ -12,16 +12,19 @@
 //!   into a lock-free shadow stack ([`push`], [`pop`], [`resync`]);
 //! - on 64-bit Windows, the **instruction pointer** of the OS thread holding the engine (between
 //!   the game's frames, of the thread that runs them: the viewer's), named through `dbghelp` when
-//!   the table is printed (the exe's public symbols, so a time inside an inlined helper counts
-//!   under the function it was inlined into).
+//!   the table is printed (the program's private symbols when its PDB has them, else its public
+//!   ones; a time inside an inlined helper counts under the function it was inlined into).
 //!
 //! - on 64-bit Windows, in the game's phases, the **native call stack** of that OS thread, walked
 //!   while it is suspended (`NV_PROFILE_STACK` frames, default 64, 0 off): each image's own
 //!   unwind table (`.pdata`, binary-searched here: `RtlLookupFunctionEntry` can take the loader's
-//!   lock, which the suspended thread may hold) and `RtlVirtualUnwind`, which takes no lock; the
-//!   stack pointer and the frame register are checked against the thread's stack before each
-//!   step. Nothing allocates while the thread is suspended. Each code address's lookup is kept
-//!   for the next walks. 2026-11-01, Doc's room, 51 frames a walk: the thread stood suspended
+//!   lock, which the suspended thread may hold) and `RtlVirtualUnwind`, which takes no lock and
+//!   checks no bounds: before each step the walk goes over the stack reads the unwind will make
+//!   (from the function's unwind codes, or its epilogue's instructions) and ends as a bad frame
+//!   if one would leave the thread's stack, or at a return into code with no unwind data (only
+//!   the innermost function can be a leaf). Nothing allocates while the thread is suspended.
+//!   Each code address's lookup is kept for the next walks. 2026-11-01, Doc's room, 51 frames
+//!   a walk (before the read checks): the thread stood suspended
 //!   67 us a walk without the kept lookups, 51 us with them, and 36 us with one frame
 //!   (`NV_PROFILE_STACK=1`: suspending it and reading its registers, which every sample pays).
 //!
@@ -60,7 +63,9 @@ pub enum WalkEnd {
     Limit = 1,
     /// Code in no image the sampler knows (an image loaded since its last look, or no image).
     Unknown = 2,
-    /// A frame that would leave the thread's stack, or not move up it.
+    /// A frame that would leave the thread's stack (or whose unwind would read outside it), or
+    /// not move up it; or a return into code with no unwind data, which only the innermost
+    /// function may lack.
     Bad = 3,
 }
 
@@ -323,11 +328,7 @@ pub fn start() {
     }
     static STARTED: OnceLock<()> = OnceLock::new();
     STARTED.get_or_init(|| {
-        let seconds = std::env::var("NV_PROFILE_SECONDS")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .filter(|s| *s > 0.0)
-            .unwrap_or(10.0);
+        let period = table_period(std::env::var("NV_PROFILE_SECONDS").ok().as_deref());
         let top = std::env::var("NV_PROFILE_TOP")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
@@ -342,12 +343,13 @@ pub fn start() {
             .unwrap_or(64)
             .min(MAX_FRAMES);
         println!(
-            "NV_PROFILE: sampling every millisecond, a table every {seconds} s, \
-             native stacks to {depth} frames, the top {calls_top} call targets"
+            "NV_PROFILE: sampling every millisecond, a table every {} s, \
+             native stacks to {depth} frames, the top {calls_top} call targets",
+            period.as_secs_f64()
         );
         COUNT_TARGETS.store(calls_top > 0, Relaxed);
         let settings = Settings {
-            period: Duration::from_secs_f64(seconds),
+            period,
             top,
             calls_top,
             depth,
@@ -356,6 +358,17 @@ pub fn start() {
             .name("nv-profile".into())
             .spawn(move || sampler(settings));
     });
+}
+
+/// How often a table is printed: `NV_PROFILE_SECONDS` (`value`) when it is a number of seconds
+/// above 0 that a [`Duration`] holds, else 10 s. (`Duration::from_secs_f64` panics on `inf`, or
+/// on 1e20: the panic of the viewer's first game frame, which starts the sampler.)
+fn table_period(value: Option<&str>) -> Duration {
+    value
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|s| *s > 0.0)
+        .and_then(|s| Duration::try_from_secs_f64(s).ok())
+        .unwrap_or(Duration::from_secs(10))
 }
 
 /// What the environment asks of the sampler ([`start`]).
@@ -1131,7 +1144,7 @@ mod native {
         fn GetCurrentProcessId() -> u32;
         fn LocalFree(memory: *mut c_void) -> *mut c_void;
         fn GetModuleHandleA(name: *const u8) -> Handle;
-        fn GetExitCodeThread(thread: Handle, code: *mut u32) -> i32;
+        fn GetProcessIdOfThread(thread: Handle) -> u32;
         fn K32EnumProcessModules(
             process: Handle,
             modules: *mut Handle,
@@ -1216,9 +1229,10 @@ mod native {
     struct Found {
         /// The address looked up (0: an empty slot).
         at: u64,
-        /// Its image's base, its unwind entry (null: a leaf function, it has none) and its
+        /// Its image's base and end, its unwind entry (null: none, a leaf function) and its
         /// function's start (the frame's key).
         base: u64,
+        end: u64,
         entry: *const RuntimeFunction,
         key: u64,
     }
@@ -1227,38 +1241,63 @@ mod native {
         const EMPTY: Found = Found {
             at: 0,
             base: 0,
+            end: 0,
             entry: std::ptr::null(),
             key: 0,
         };
     }
 
-    /// How many lookups [`Found`] keeps (a power of two; direct-mapped).
+    /// How many lookups [`Lookups`] keeps (a power of two; direct-mapped).
     const FOUND_SLOTS: usize = 1 << 12;
+
+    /// The walks' kept lookups ([`Found`]), by a hash of the address.
+    struct Lookups {
+        slots: [Found; FOUND_SLOTS],
+        /// How many lookups were answered from `slots`, and how many frames were handed to
+        /// `RtlVirtualUnwind` (what the tests count).
+        #[cfg(test)]
+        hits: u64,
+        #[cfg(test)]
+        unwinds: u64,
+    }
+
+    impl Lookups {
+        fn new() -> Box<Self> {
+            Box::new(Lookups {
+                slots: [Found::EMPTY; FOUND_SLOTS],
+                #[cfg(test)]
+                hits: 0,
+                #[cfg(test)]
+                unwinds: 0,
+            })
+        }
+    }
 
     /// The lookup of code address `at` (`None`: in no known image), from `found` or made and
     /// kept there.
     ///
     /// # Safety
     /// The images are loaded.
-    unsafe fn look_up(
-        images: &[Image],
-        found: &mut [Found; FOUND_SLOTS],
-        at: u64,
-    ) -> Option<Found> {
+    unsafe fn look_up(images: &[Image], found: &mut Lookups, at: u64) -> Option<Found> {
         let slot = (at.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> (64 - FOUND_SLOTS.trailing_zeros()))
             as usize;
-        if found[slot].at == at {
-            return Some(found[slot]);
+        if found.slots[slot].at == at {
+            #[cfg(test)]
+            {
+                found.hits += 1;
+            }
+            return Some(found.slots[slot]);
         }
         let im = image_of(images, at)?;
         let entry = function_entry(im, at);
         let f = Found {
             at,
             base: im.base,
+            end: im.end,
             entry: entry.unwrap_or(std::ptr::null()),
             key: entry.map_or(at, |f| function_start(im.base, f)),
         };
-        found[slot] = f;
+        found.slots[slot] = f;
         Some(f)
     }
 
@@ -1329,43 +1368,327 @@ mod native {
         }
     }
 
-    /// Whether `f`'s frame register (if it has one and the prologue has set it) points into the
-    /// stack, `low..high`: `RtlVirtualUnwind` reads the frame from it.
+    /// `UNW_FLAG_CHAININFO`: the unwind information ends with the entry of the function part it
+    /// continues.
+    const CHAIN_INFO: u8 = 4;
+    /// The most chained parts [`prologue_reads_fit`] follows.
+    const CHAIN_LIMIT: usize = 32;
+
+    /// The unwind information of `f`, an entry of the image at `base`.
     ///
     /// # Safety
-    /// `f` is an entry of the image at `base` ([`function_entry`]).
-    unsafe fn frame_register_ok(
+    /// As [`function_start`].
+    unsafe fn unwind_info(base: u64, f: *const RuntimeFunction) -> *const u8 {
+        (base + u64::from((*f).unwind & !1)) as *const u8
+    }
+
+    /// Whether every stack read `RtlVirtualUnwind` makes to unwind the frame of `f` at `pc` lies
+    /// in the stack, `low..high`. It reads the saved registers and the return address where the
+    /// function's unwind codes (or, in an epilogue, its instructions) put them, and checks no
+    /// bounds itself: a frame taken from a stray word (one that code without unwind data pushed,
+    /// say) can send those reads past the thread's stack, an access violation in the sampler
+    /// while the engine's thread stands suspended. This goes over the same reads without making
+    /// them, as `RtlVirtualUnwind` makes them: in an epilogue, the pops it emulates and the
+    /// return address after them ([`epilogue_at`]); elsewhere the unwind codes the function has
+    /// executed at `pc`, with its chained parts, then the return address
+    /// ([`prologue_reads_fit`]). Unwind information of version 2 can also describe the
+    /// function's epilogues, which the system may go by instead of the code: there an epilogue
+    /// found in the code is checked both ways.
+    ///
+    /// # Safety
+    /// `f` is the unwind entry `code` names ([`look_up`]); `low..high` is committed memory.
+    unsafe fn unwind_reads_fit(
+        code: &Found,
+        f: *const RuntimeFunction,
+        pc: u64,
+        ctx: &Context,
+        (low, high): (u64, u64),
+    ) -> bool {
+        let fits =
+            |at: u64, len: u64| at >= low && at.checked_add(len).is_some_and(|end| end <= high);
+        let epilogue_fits = |rsp: u64, pops: u64| fits(rsp, 8 * pops + 8);
+        let prologue_fits = || prologue_reads_fit(code.base, f, pc, ctx, &fits);
+        let version = *unwind_info(code.base, f) & 7;
+        match epilogue_at(code, f, pc, ctx) {
+            None => false,
+            Some(Epilogue::Yes { rsp, pops }) if version == 1 => epilogue_fits(rsp, pops),
+            Some(Epilogue::Yes { rsp, pops } | Epilogue::Maybe { rsp, pops }) => {
+                epilogue_fits(rsp, pops) && prologue_fits()
+            }
+            Some(Epilogue::No) => prologue_fits(),
+        }
+    }
+
+    /// Whether `RtlVirtualUnwind` takes the code at `pc` for an epilogue ([`epilogue_at`]).
+    enum Epilogue {
+        /// No: it undoes the prologue's unwind codes.
+        No,
+        /// Yes: it emulates the rest of the epilogue, `pops` words read from `rsp` on (after the
+        /// epilogue's `add rsp` or `lea rsp`) and the return address after them.
+        Yes { rsp: u64, pops: u64 },
+        /// Yes unless the jump that ends it lands in another part of the same function, which
+        /// only `RtlVirtualUnwind` looks up: both ways are checked.
+        Maybe { rsp: u64, pops: u64 },
+    }
+
+    /// What `RtlVirtualUnwind` makes of the code at `pc` in `f`, read from the same bytes: an
+    /// epilogue is an optional `add rsp, imm` or `lea rsp, [frame register + disp]`, any number
+    /// of pops, then a return, or a jump out of the function (a tail call). `None` when a byte it
+    /// would read lies past the image.
+    ///
+    /// # Safety
+    /// As [`unwind_reads_fit`].
+    unsafe fn epilogue_at(
+        code: &Found,
+        f: *const RuntimeFunction,
+        pc: u64,
+        ctx: &Context,
+    ) -> Option<Epilogue> {
+        let byte = |at: u64| (at >= code.base && at < code.end).then(|| *(at as *const u8));
+        let disp32 = |at: u64| -> Option<u64> {
+            let b = [byte(at)?, byte(at + 1)?, byte(at + 2)?, byte(at + 3)?];
+            Some(i64::from(i32::from_le_bytes(b)) as u64)
+        };
+        let disp8 = |at: u64| byte(at).map(|b| i64::from(b as i8) as u64);
+        let info = unwind_info(code.base, f);
+        let frame_register = *info.add(3) & 0xf;
+        let mut at = pc;
+        let mut rsp = ctx.rsp();
+        let first = byte(at)?;
+        if first == 0x48 && byte(at + 1)? == 0x83 && byte(at + 2)? == 0xc4 {
+            // add rsp, imm8
+            rsp = rsp.wrapping_add(disp8(at + 3)?);
+            at += 4;
+        } else if first == 0x48 && byte(at + 1)? == 0x81 && byte(at + 2)? == 0xc4 {
+            // add rsp, imm32
+            rsp = rsp.wrapping_add(disp32(at + 3)?);
+            at += 7;
+        } else if first & 0xfe == 0x48 && byte(at + 1)? == 0x8d {
+            // lea rsp, [frame register + disp8 or disp32]
+            let modrm = byte(at + 2)?;
+            let register = ((first & 1) << 3) | (modrm & 7);
+            if register != 0 && register == frame_register {
+                if modrm & 0xf8 == 0x60 {
+                    rsp = ctx.register(register).wrapping_add(disp8(at + 3)?);
+                    at += 4;
+                } else if modrm & 0xf8 == 0xa0 {
+                    rsp = ctx.register(register).wrapping_add(disp32(at + 3)?);
+                    at += 7;
+                }
+            }
+        }
+        let mut pops = 0;
+        loop {
+            let b = byte(at)?;
+            if b & 0xf8 == 0x58 {
+                at += 1;
+            } else if b & 0xf0 == 0x40 && byte(at + 1)? & 0xf8 == 0x58 {
+                at += 2;
+            } else {
+                break;
+            }
+            pops += 1;
+        }
+        let b = byte(at)?;
+        let begin = code.base + u64::from((*f).begin);
+        let end = code.base + u64::from((*f).end);
+        let found = if b == 0xc3 || b == 0xc2 || (b == 0xf3 && byte(at + 1)? == 0xc3) {
+            // A return.
+            Epilogue::Yes { rsp, pops }
+        } else if b == 0xeb || b == 0xe9 {
+            let target = if b == 0xeb {
+                (at + 2).wrapping_add(disp8(at + 1)?)
+            } else {
+                (at + 5).wrapping_add(disp32(at + 1)?)
+            };
+            if !(begin..end).contains(&target) {
+                Epilogue::Maybe { rsp, pops }
+            } else if target == begin && (*info >> 3) & CHAIN_INFO == 0 {
+                Epilogue::Yes { rsp, pops }
+            } else {
+                Epilogue::No
+            }
+        } else if (b == 0xff && byte(at + 1)? == 0x25)
+            || (b & 0xf8 == 0x48 && byte(at + 1)? == 0xff && byte(at + 2)? & 0x38 == 0x20)
+        {
+            // An indirect jump (through the import table, or with REX.W): a tail call.
+            Epilogue::Yes { rsp, pops }
+        } else {
+            Epilogue::No
+        };
+        Some(found)
+    }
+
+    /// Whether the reads `RtlVirtualUnwind` makes outside an epilogue lie where `fits` allows:
+    /// it undoes the unwind codes of `f` that the prologue has executed at `pc` (every code of a
+    /// chained part), reading each pushed register at the stack pointer and each saved one at
+    /// the frame base (the frame register less its offset once the prologue has set it, else
+    /// the stack pointer), then the return address, unless a machine frame gave the next
+    /// instruction and stack pointers.
+    ///
+    /// # Safety
+    /// As [`unwind_reads_fit`].
+    unsafe fn prologue_reads_fit(
         base: u64,
         f: *const RuntimeFunction,
         pc: u64,
         ctx: &Context,
-        low: u64,
-        high: u64,
+        fits: &dyn Fn(u64, u64) -> bool,
     ) -> bool {
-        let info = (base + u64::from((*f).unwind & !1)) as *const u8;
-        let prologue = u64::from(*info.add(1));
-        let frame = *info.add(3);
-        if frame & 0xf == 0 || pc.wrapping_sub(base + u64::from((*f).begin)) < prologue {
-            return true;
+        // The registers as the unwind restores them (a push or a save read back from the stack,
+        // once the read is known to be in it).
+        let mut registers = [0u64; 16];
+        for (n, r) in registers.iter_mut().enumerate() {
+            *r = ctx.register(n as u8);
         }
-        let at = ctx
-            .register(frame & 0xf)
-            .wrapping_sub(16 * u64::from(frame >> 4));
-        (low..high).contains(&at)
+        let mut rsp = ctx.rsp();
+        let offset_in = |entry: *const RuntimeFunction| {
+            pc.wrapping_sub(base + u64::from((*entry).begin)) as u32
+        };
+        let info = unwind_info(base, f);
+        let frame = *info.add(3);
+        let count = usize::from(*info.add(2));
+        let frame_base = if frame & 0xf == 0 {
+            rsp
+        } else {
+            // The frame register is set once the prologue is over (or in a chained part);
+            // within the prologue, from the first code that sets it on (the system looks for
+            // that code slot by slot).
+            let set = (0..count)
+                .find(|&i| *info.add(5 + 2 * i) & 0xf == 3)
+                .unwrap_or(count);
+            if offset_in(f) >= u32::from(*info.add(1))
+                || (*info >> 3) & CHAIN_INFO != 0
+                || offset_in(f) >= u32::from(*info.add(4 + 2 * set))
+            {
+                registers[usize::from(frame & 0xf)].wrapping_sub(16 * u64::from(frame >> 4))
+            } else {
+                rsp
+            }
+        };
+        let mut machine_frame = false;
+        let mut entry = f;
+        for _ in 0..CHAIN_LIMIT {
+            let info = unwind_info(base, entry);
+            let version = *info & 7;
+            let count = usize::from(*info.add(2));
+            let frame = *info.add(3);
+            let slot = |i: usize| u16::from_le_bytes([*info.add(4 + 2 * i), *info.add(5 + 2 * i)]);
+            let slot32 = |i: usize| u32::from(slot(i)) | (u32::from(slot(i + 1)) << 16);
+            let offset = offset_in(entry);
+            let mut i = 0;
+            while i < count {
+                let (at, op) = (*info.add(4 + 2 * i), *info.add(5 + 2 * i));
+                let (op, op_info) = (op & 0xf, op >> 4);
+                let slots = match op {
+                    0 | 2 | 3 | 10 => 1,
+                    1 if op_info == 0 => 2,
+                    1 => 3,
+                    4 | 8 => 2,
+                    5 | 9 => 3,
+                    // Version 2: an epilogue's description (one slot) and a spare code.
+                    6 if version >= 2 => 1,
+                    7 if version >= 2 => 2,
+                    // Version 1: an XMM register's low half saved, near and far.
+                    6 => 2,
+                    7 => 3,
+                    _ => return false,
+                };
+                if i + slots > count {
+                    return false;
+                }
+                // A code the prologue has not reached at `pc` is not undone.
+                if offset >= u32::from(at) {
+                    let saved = |at: u64, len: u64, registers: &mut [u64; 16]| {
+                        if !fits(at, len) {
+                            return false;
+                        }
+                        if len == 8 {
+                            registers[usize::from(op_info)] = std::ptr::read(at as *const u64);
+                        }
+                        true
+                    };
+                    let ok = match op {
+                        // A push: popped from the stack pointer.
+                        0 => {
+                            let ok = saved(rsp, 8, &mut registers);
+                            rsp = rsp.wrapping_add(8);
+                            ok
+                        }
+                        1 => {
+                            let size = if op_info == 0 {
+                                8 * u64::from(slot(i + 1))
+                            } else {
+                                u64::from(slot32(i + 1))
+                            };
+                            rsp = rsp.wrapping_add(size);
+                            true
+                        }
+                        2 => {
+                            rsp = rsp.wrapping_add(8 * u64::from(op_info) + 8);
+                            true
+                        }
+                        3 => {
+                            rsp = registers[usize::from(frame & 0xf)]
+                                .wrapping_sub(16 * u64::from(frame >> 4));
+                            true
+                        }
+                        4 => saved(
+                            frame_base.wrapping_add(8 * u64::from(slot(i + 1))),
+                            8,
+                            &mut registers,
+                        ),
+                        5 => saved(
+                            frame_base.wrapping_add(u64::from(slot32(i + 1))),
+                            8,
+                            &mut registers,
+                        ),
+                        6 if version >= 2 => true,
+                        7 if version >= 2 => false,
+                        6 => fits(frame_base.wrapping_add(8 * u64::from(slot(i + 1))), 16),
+                        7 => fits(frame_base.wrapping_add(u64::from(slot32(i + 1))), 16),
+                        8 => fits(frame_base.wrapping_add(16 * u64::from(slot(i + 1))), 16),
+                        9 => fits(frame_base.wrapping_add(u64::from(slot32(i + 1))), 16),
+                        // A machine frame: the instruction pointer at the stack pointer, the
+                        // stack pointer three words above it (after any error code).
+                        _ => {
+                            rsp = rsp.wrapping_add(8 * u64::from(op_info));
+                            if !fits(rsp, 0x20) {
+                                return false;
+                            }
+                            rsp = std::ptr::read((rsp + 0x18) as *const u64);
+                            machine_frame = true;
+                            true
+                        }
+                    };
+                    if !ok {
+                        return false;
+                    }
+                }
+                i += slots;
+            }
+            if (*info >> 3) & CHAIN_INFO == 0 {
+                return machine_frame || fits(rsp, 8);
+            }
+            entry = info.add(4 + 2 * ((count + 1) & !1)) as *const RuntimeFunction;
+        }
+        false
     }
 
     /// Walks the suspended thread whose registers are `ctx` (and whose stack is `low..high`) up
     /// to `keys.len()` frames: each frame's function into `keys` (its start where its image's
     /// unwind table has it, else the address itself) and its address into `pcs` (the
     /// instruction pointer, then return addresses), the lookups kept in `found`. Returns the
-    /// frames and why the walk ended. Takes no lock and allocates nothing.
+    /// frames and why the walk ended. Takes no lock and allocates nothing, and reads nothing
+    /// outside the stack and the images: a frame whose unwind would ([`unwind_reads_fit`]), or
+    /// a return into code without unwind data, ends the walk as a bad frame.
     ///
     /// # Safety
     /// The images are loaded; `low..high` is the thread's committed stack; the thread stays
     /// suspended throughout.
     unsafe fn walk_stack(
         images: &[Image],
-        found: &mut [Found; FOUND_SLOTS],
+        found: &mut Lookups,
         ctx: &mut Context,
         (low, high): (u64, u64),
         keys: &mut [u64],
@@ -1393,8 +1716,12 @@ mod native {
             keys[n - 1] = code.key;
             match (!code.entry.is_null()).then_some(code.entry) {
                 Some(f) => {
-                    if !frame_register_ok(code.base, f, pc, ctx, low, high) {
+                    if !unwind_reads_fit(&code, f, pc, ctx, (low, high)) {
                         return (n, WalkEnd::Bad);
+                    }
+                    #[cfg(test)]
+                    {
+                        found.unwinds += 1;
                     }
                     let mut handler_data = std::ptr::null_mut();
                     let mut establisher = 0u64;
@@ -1410,14 +1737,19 @@ mod native {
                         std::ptr::null_mut(),
                     );
                 }
-                None => {
-                    // A leaf function: its return address is at the stack pointer.
+                None if n == 1 => {
+                    // A leaf function (only the innermost frame can be one): its return address
+                    // is at the stack pointer.
                     if rsp + 8 > high {
                         return (n, WalkEnd::Bad);
                     }
                     ctx.set_word(0xf8, std::ptr::read(rsp as *const u64));
                     ctx.set_word(0x98, rsp + 8);
                 }
+                // A return address into code without unwind data: that code called, so it is no
+                // leaf, and where it keeps its own return address is not known (taking the word
+                // at the stack pointer, as for a leaf, would follow a word it pushed).
+                None => return (n, WalkEnd::Bad),
             }
             if ctx.rip() == 0 {
                 return (n, WalkEnd::Start);
@@ -1451,7 +1783,6 @@ mod native {
     const THREAD_QUERY_INFORMATION: u32 = 0x0040;
     const CONTEXT_CONTROL: u32 = 0x0010_0001;
     const CONTEXT_INTEGER: u32 = 0x0010_0002;
-    const STILL_ACTIVE: u32 = 259;
     const CREATE_WAITABLE_TIMER_HIGH_RESOLUTION: u32 = 0x2;
     const TIMER_ALL_ACCESS: u32 = 0x1f_0003;
     const FROM_ADDRESS: u32 = 0x4;
@@ -1489,7 +1820,7 @@ mod native {
         images_at: Option<Instant>,
         images_missed: bool,
         /// The walks' lookups of code addresses (emptied when the images are listed again).
-        found: Box<[Found; FOUND_SLOTS]>,
+        found: Box<Lookups>,
         /// Each walked thread's TEB (its stack's bounds are at 8 and 0x10).
         tebs: HashMap<u32, u64>,
         query_thread: Option<QueryThread>,
@@ -1531,7 +1862,7 @@ mod native {
                 images: Vec::new(),
                 images_at: None,
                 images_missed: false,
-                found: Box::new([Found::EMPTY; FOUND_SLOTS]),
+                found: Lookups::new(),
                 tebs: HashMap::new(),
                 query_thread,
                 keys: Box::new([0; MAX_FRAMES]),
@@ -1539,16 +1870,26 @@ mod native {
             }
         }
 
-        /// A handle to OS thread `id` with suspend, context and query access (kept open).
+        /// A handle to OS thread `id` with suspend, context and query access, kept open for
+        /// good: while it is open the system gives the id to no other thread, so the handle
+        /// stays the thread's own. A thread of another process (an id of this process's thread
+        /// that ended before it was first opened, since given to a thread elsewhere) is not
+        /// opened: its TEB would be read as this process's memory.
         fn thread(&mut self, id: u32) -> Option<Handle> {
             let handle = *self.threads.entry(id).or_insert_with(|| {
-                // SAFETY: OpenThread with a thread id; a null handle is checked below.
+                // SAFETY: OpenThread with a thread id; a null handle is checked below, and a
+                // handle to another process's thread is closed and forgotten.
                 unsafe {
-                    OpenThread(
+                    let handle = OpenThread(
                         THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION,
                         0,
                         id,
-                    )
+                    );
+                    if !handle.is_null() && GetProcessIdOfThread(handle) != GetCurrentProcessId() {
+                        CloseHandle(handle);
+                        return std::ptr::null_mut();
+                    }
+                    handle
                 }
             });
             (!handle.is_null()).then_some(handle)
@@ -1601,7 +1942,7 @@ mod native {
             self.images_at = Some(Instant::now());
             self.images_missed = false;
             // An image unloaded since may have left lookups into its unwind table.
-            self.found.fill(Found::EMPTY);
+            self.found.slots.fill(Found::EMPTY);
             let mut handles: Vec<Handle> = vec![std::ptr::null_mut(); 512];
             // SAFETY: the buffer's size in bytes is passed; the handles listed are loaded
             // modules (an image unloaded in between is a risk this diagnostic takes).
@@ -1652,17 +1993,11 @@ mod native {
             // ours), on the thread's committed stack as its TEB gives it (base at 8, limit at
             // 0x10; the TEB is this process's memory).
             let walked = unsafe {
+                // A thread that has ended cannot be suspended (measured: SuspendThread answers
+                // -1 with access denied), so this is the end of its walks. Its handle stays open,
+                // which keeps its id from being given to another thread, here or in another
+                // process ([`Sampler::thread`]).
                 if SuspendThread(handle) == u32::MAX {
-                    return None;
-                }
-                // A thread that has ended (its id since taken by another, say) has no TEB to
-                // read: its handle and TEB are forgotten, and the id is opened again next time.
-                let mut code = 0u32;
-                if GetExitCodeThread(handle, &mut code) == 0 || code != STILL_ACTIVE {
-                    ResumeThread(handle);
-                    CloseHandle(handle);
-                    self.threads.remove(&id);
-                    self.tebs.remove(&id);
                     return None;
                 }
                 let walked = if GetThreadContext(handle, ctx as *mut Context) != 0 {
@@ -1708,6 +2043,22 @@ mod native {
         #[cfg(test)]
         pub fn pcs(&self, n: usize) -> &[u64] {
             &self.pcs[..n.min(MAX_FRAMES)]
+        }
+
+        /// How many of the walks' lookups were answered from the kept ones, and how many frames
+        /// were handed to `RtlVirtualUnwind`, so far.
+        #[cfg(test)]
+        pub fn lookup_counts(&self) -> (u64, u64) {
+            (self.found.hits, self.found.unwinds)
+        }
+
+        /// Whether the code at `pc` has an unwind entry in its image (`None`: in no image the
+        /// sampler knows).
+        #[cfg(test)]
+        pub fn has_unwind_entry(&mut self, pc: u64) -> Option<bool> {
+            self.refresh_images();
+            // SAFETY: the images were just listed (loaded modules).
+            unsafe { image_of(&self.images, pc).map(|im| function_entry(im, pc).is_some()) }
         }
 
         /// Waits about a millisecond.
@@ -1964,6 +2315,263 @@ mod native {
             let n = (module, symbol);
             self.names.insert(addr, n.clone());
             n
+        }
+    }
+
+    /// Walks of made-up threads: a context and a stack of the test's own, so that each case of
+    /// an unwind's reads is set up exactly, and threads of other processes.
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        // A function with a frame register (rbp = rsp + 32 after the prologue), with labels at
+        // its body and at each instruction of its epilogue.
+        std::arch::global_asm!(
+            ".globl nv_profile_test_framed",
+            ".globl nv_profile_test_framed_body",
+            ".globl nv_profile_test_framed_add",
+            ".globl nv_profile_test_framed_pop",
+            ".globl nv_profile_test_framed_ret",
+            ".seh_proc nv_profile_test_framed",
+            "nv_profile_test_framed:",
+            "push rbp",
+            ".seh_pushreg rbp",
+            "sub rsp, 32",
+            ".seh_stackalloc 32",
+            "lea rbp, [rsp + 32]",
+            ".seh_setframe rbp, 32",
+            ".seh_endprologue",
+            "nv_profile_test_framed_body:",
+            "nop",
+            "nv_profile_test_framed_add:",
+            "add rsp, 32",
+            "nv_profile_test_framed_pop:",
+            "pop rbp",
+            "nv_profile_test_framed_ret:",
+            "ret",
+            ".seh_endproc",
+        );
+
+        // A function with 64 KB of locals and no frame register (never called: its address is
+        // all the tests use).
+        std::arch::global_asm!(
+            ".globl nv_profile_test_big",
+            ".globl nv_profile_test_big_body",
+            ".seh_proc nv_profile_test_big",
+            "nv_profile_test_big:",
+            "push rbx",
+            ".seh_pushreg rbx",
+            "sub rsp, 0x10000",
+            ".seh_stackalloc 0x10000",
+            ".seh_endprologue",
+            "nv_profile_test_big_body:",
+            "nop",
+            "add rsp, 0x10000",
+            "pop rbx",
+            "ret",
+            ".seh_endproc",
+        );
+
+        // A function whose epilogue starts with `lea rsp, [rbp + 8]` (its frame register set to
+        // rsp + 32 after 40 bytes of locals, below the saved rbx and rbp).
+        std::arch::global_asm!(
+            ".globl nv_profile_test_lea",
+            ".globl nv_profile_test_lea_epilogue",
+            ".seh_proc nv_profile_test_lea",
+            "nv_profile_test_lea:",
+            "push rbp",
+            ".seh_pushreg rbp",
+            "push rbx",
+            ".seh_pushreg rbx",
+            "sub rsp, 40",
+            ".seh_stackalloc 40",
+            "lea rbp, [rsp + 32]",
+            ".seh_setframe rbp, 32",
+            ".seh_endprologue",
+            "nop",
+            "nv_profile_test_lea_epilogue:",
+            "lea rsp, [rbp + 8]",
+            "pop rbx",
+            "pop rbp",
+            "ret",
+            ".seh_endproc",
+        );
+
+        extern "C" {
+            fn nv_profile_test_framed_body();
+            fn nv_profile_test_framed_add();
+            fn nv_profile_test_framed_pop();
+            fn nv_profile_test_framed_ret();
+            fn nv_profile_test_big_body();
+            fn nv_profile_test_lea_epilogue();
+        }
+
+        type Code = unsafe extern "C" fn();
+
+        /// A walk of a made-up thread at `rip` with the stack pointer `rsp` and the frame
+        /// register (rbp) `rbp`, its stack `low..high` (the test's own memory): the frames and
+        /// how the walk ended, how many frames went to `RtlVirtualUnwind`, and the stack pointer
+        /// the walk ended with.
+        fn walk(
+            s: &mut Sampler,
+            rip: Code,
+            rsp: u64,
+            rbp: u64,
+            stack: (u64, u64),
+        ) -> (usize, WalkEnd, u64, u64) {
+            s.refresh_images();
+            let mut ctx = Context([0; 0x4d0]);
+            ctx.set_word(0xf8, rip as usize as u64);
+            ctx.set_word(0x98, rsp);
+            ctx.set_word(0xa0, rbp);
+            let (mut keys, mut pcs) = ([0u64; 4], [0u64; 4]);
+            let unwinds = s.found.unwinds;
+            // SAFETY: the images were just listed; `stack` is memory of the test's own.
+            let (n, end) = unsafe {
+                walk_stack(
+                    &s.images,
+                    &mut s.found,
+                    &mut ctx,
+                    stack,
+                    &mut keys,
+                    &mut pcs,
+                )
+            };
+            (n, end, s.found.unwinds - unwinds, ctx.rsp())
+        }
+
+        /// A function with a frame register, in its body and at each instruction of its
+        /// epilogue, unwinds to its caller when the stack holds its frame exactly, whatever the
+        /// frame register holds once the epilogue has popped it (the caller's value, here not a
+        /// stack address); with one word less, the walk ends as a bad frame and nothing goes to
+        /// `RtlVirtualUnwind`.
+        #[test]
+        fn a_frame_register_function_unwinds_at_every_step_of_its_epilogue() {
+            let mut s = Sampler::new();
+            let mut stack = vec![0u64; 0x40];
+            let low = stack.as_mut_ptr() as u64;
+            // The body's frame: 32 bytes of locals, the caller's rbp, the return address (0:
+            // the thread's start).
+            let rsp = low + 0x80;
+            stack[(0x80 + 32) / 8] = 0x5eed;
+            let high = rsp + 48;
+            for (step, rip, at, rbp) in [
+                ("body", nv_profile_test_framed_body as Code, rsp, rsp + 32),
+                ("add rsp", nv_profile_test_framed_add, rsp, rsp + 32),
+                ("pop rbp", nv_profile_test_framed_pop, rsp + 32, rsp + 32),
+                ("ret", nv_profile_test_framed_ret, rsp + 40, 0x5eed),
+            ] {
+                assert_eq!(
+                    walk(&mut s, rip, at, rbp, (low, high)),
+                    (1, WalkEnd::Start, 1, rsp + 48),
+                    "{step}"
+                );
+                assert_eq!(
+                    walk(&mut s, rip, at, rbp, (low, high - 8)),
+                    (1, WalkEnd::Bad, 0, at),
+                    "{step}, one word short"
+                );
+            }
+        }
+
+        /// A frame bigger than the stack above the stack pointer (64 KB of locals in a 4 KB
+        /// stack) ends the walk as a bad frame without `RtlVirtualUnwind`, which would read
+        /// the saved register and the return address 64 KB up, past the stack; with a stack to
+        /// hold it, it unwinds.
+        #[test]
+        fn a_frame_reaching_past_the_stack_is_not_unwound() {
+            let mut s = Sampler::new();
+            let mut stack = vec![0u64; 0x2100];
+            let low = stack.as_mut_ptr() as u64;
+            let rsp = low + 0x80;
+            let rip = nv_profile_test_big_body as Code;
+            assert_eq!(
+                walk(&mut s, rip, rsp, 0, (low, low + 0x1000)),
+                (1, WalkEnd::Bad, 0, rsp)
+            );
+            assert_eq!(
+                walk(&mut s, rip, rsp, 0, (low, rsp + 0x10010)),
+                (1, WalkEnd::Start, 1, rsp + 0x10010)
+            );
+        }
+
+        /// An epilogue that starts with `lea rsp, [rbp + 8]` pops from where the frame register
+        /// says, wherever the stack pointer is: unwound when the pops and the return address
+        /// lie in the stack, a bad frame when they reach past it or the frame register points
+        /// elsewhere.
+        #[test]
+        fn a_lea_epilogue_reads_where_the_frame_register_points() {
+            let mut s = Sampler::new();
+            let mut stack = vec![0u64; 0x40];
+            let low = stack.as_mut_ptr() as u64;
+            // The body's frame: 40 bytes of locals (rbp = rsp + 32), the saved rbx and rbp, the
+            // return address (0).
+            let rsp = low + 0x80;
+            stack[(0x80 + 40) / 8] = 0xb0b;
+            stack[(0x80 + 48) / 8] = 0x5eed;
+            let high = rsp + 64;
+            let rip = nv_profile_test_lea_epilogue as Code;
+            let below = rsp - 0x40;
+            assert_eq!(
+                walk(&mut s, rip, below, rsp + 32, (low, high)),
+                (1, WalkEnd::Start, 1, rsp + 64)
+            );
+            assert_eq!(
+                walk(&mut s, rip, below, rsp + 32, (low, high - 8)),
+                (1, WalkEnd::Bad, 0, below)
+            );
+            assert_eq!(
+                walk(&mut s, rip, below, 0x5eed_0000, (low, high)),
+                (1, WalkEnd::Bad, 0, below)
+            );
+        }
+
+        /// The ids of the threads of process `pid` (a Toolhelp snapshot).
+        fn threads_of(pid: u32) -> Vec<u32> {
+            let mut ids = Vec::new();
+            // SAFETY: a Toolhelp snapshot walked with a correctly sized entry, then closed.
+            unsafe {
+                let snapshot = CreateToolhelp32Snapshot(SNAP_THREAD, 0);
+                assert!(!snapshot.is_null() && snapshot as isize != -1);
+                let mut entry = ThreadEntry {
+                    size: std::mem::size_of::<ThreadEntry>() as u32,
+                    ..Default::default()
+                };
+                let mut more = Thread32First(snapshot, &mut entry) != 0;
+                while more {
+                    if entry.process == pid {
+                        ids.push(entry.thread);
+                    }
+                    more = Thread32Next(snapshot, &mut entry) != 0;
+                }
+                CloseHandle(snapshot);
+            }
+            ids
+        }
+
+        /// The sampler opens no thread of another process (an id that a thread of this process
+        /// held, given to another process's thread after it ended): it would suspend that thread
+        /// and read its stack's bounds as this process's memory. Its own threads it opens.
+        #[test]
+        fn a_thread_of_another_process_is_not_opened() {
+            let mut child = std::process::Command::new("ping")
+                .args(["-n", "30", "127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("ping starts");
+            let theirs = threads_of(child.id());
+            let mut s = Sampler::new();
+            let opened: Vec<u32> = theirs
+                .iter()
+                .copied()
+                .filter(|&id| s.thread(id).is_some())
+                .collect();
+            let _ = child.kill();
+            let _ = child.wait();
+            assert!(!theirs.is_empty());
+            assert_eq!(opened, Vec::<u32>::new());
+            assert!(s.thread(current_thread_id()).is_some());
         }
     }
 }
@@ -2284,6 +2892,7 @@ mod tests {
     mod walks {
         use super::super::*;
         use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
 
         #[link(name = "kernel32")]
         extern "system" {
@@ -2293,6 +2902,50 @@ mod tests {
                 frames: *mut *mut std::ffi::c_void,
                 hash: *mut u32,
             ) -> u16;
+        }
+
+        // A leaf without unwind data (no `.seh_` directives, so no unwind entry): stores 1 in
+        // the word `rdx` points at, then spins until the word `rcx` points at is not 0.
+        std::arch::global_asm!(
+            ".globl nv_profile_test_leaf",
+            "nv_profile_test_leaf:",
+            "mov dword ptr [rdx], 1",
+            "2:",
+            "pause",
+            "cmp dword ptr [rcx], 0",
+            "je 2b",
+            "ret",
+        );
+
+        // Code without unwind data that is no leaf (as a hook's stub can be): it pushes `rcx`
+        // five times (the callee's home area and the stack's alignment), calls `r9` with `rdx`
+        // and `r8` as its first two arguments, and returns.
+        std::arch::global_asm!(
+            ".globl nv_profile_test_stub",
+            "nv_profile_test_stub:",
+            "push rcx",
+            "push rcx",
+            "push rcx",
+            "push rcx",
+            "push rcx",
+            "mov rcx, rdx",
+            "mov rdx, r8",
+            "call r9",
+            "add rsp, 40",
+            "ret",
+        );
+
+        type Leaf = unsafe extern "C" fn(*const AtomicU32, *const AtomicU32);
+        type Stub = unsafe extern "C" fn(u64, *const AtomicU32, *const AtomicU32, Leaf);
+
+        extern "C" {
+            fn nv_profile_test_leaf(stop: *const AtomicU32, ready: *const AtomicU32);
+            fn nv_profile_test_stub(
+                word: u64,
+                stop: *const AtomicU32,
+                ready: *const AtomicU32,
+                leaf: Leaf,
+            );
         }
 
         static STOP: AtomicBool = AtomicBool::new(false);
@@ -2312,16 +2965,22 @@ mod tests {
             f as u64
         }
 
-        /// The bottom of the walked thread: its own backtrace taken, then a spin.
+        /// The return addresses above the calling function, as the system's own walk
+        /// (`RtlCaptureStackBackTrace`) gives them: the first is the calling function's own.
         #[inline(never)]
-        fn spin_here() -> u64 {
+        fn capture() -> Vec<u64> {
             let mut frames = [std::ptr::null_mut(); 62];
             // SAFETY: the buffer holds the 62 frames asked for.
             let n = unsafe {
-                RtlCaptureStackBackTrace(0, 62, frames.as_mut_ptr(), std::ptr::null_mut())
+                RtlCaptureStackBackTrace(2, 62, frames.as_mut_ptr(), std::ptr::null_mut())
             };
-            *CAPTURED.lock().unwrap() =
-                frames[..usize::from(n)].iter().map(|&p| p as u64).collect();
+            frames[..usize::from(n)].iter().map(|&p| p as u64).collect()
+        }
+
+        /// The bottom of the walked thread: its own backtrace taken, then a spin.
+        #[inline(never)]
+        fn spin_here() -> u64 {
+            *CAPTURED.lock().unwrap() = capture();
             READY.store(true, Relaxed);
             let mut n = 0u64;
             while !STOP.load(Relaxed) {
@@ -2342,10 +3001,11 @@ mod tests {
 
         /// A busy thread's walked stack has its functions in order (keys at their starts) and
         /// the same return addresses as the thread's own `RtlCaptureStackBackTrace`, down to
-        /// its start.
+        /// its start, in every walk; the walks after the first answer their lookups from the
+        /// kept ones.
         #[test]
         fn a_busy_threads_stack_is_walked_to_its_start() {
-            let id = std::sync::Arc::new(AtomicU32::new(0));
+            let id = Arc::new(AtomicU32::new(0));
             let i = id.clone();
             let busy = std::thread::spawn(move || {
                 i.store(native::current_thread_id(), Relaxed);
@@ -2359,48 +3019,149 @@ mod tests {
             let inner = code_of(inner_frame as fn() -> u64 as usize);
             let outer = code_of(outer_frame as fn() -> u64 as usize);
             let mut sampler = native::Sampler::new();
-            let mut last = String::new();
-            let mut matched = false;
-            for _ in 0..200 {
-                let Some(w) = sampler.walk(id.load(Relaxed), 64) else {
-                    continue;
+            let mut failed = None;
+            for walk in 0..20 {
+                let (hits, _) = sampler.lookup_counts();
+                let w = sampler.walk(id.load(Relaxed), 64);
+                let (now, _) = sampler.lookup_counts();
+                let Some(w) = w else {
+                    failed = Some(format!("walk {walk}: the thread could not be walked"));
+                    break;
                 };
                 let keys = sampler.keys(w.frames).to_vec();
                 let pcs = sampler.pcs(w.frames).to_vec();
-                last = format!("{w:?}\nkeys {keys:x?}\npcs {pcs:x?}\ncaptured {captured:x?}");
-                let Some(at) = keys.iter().position(|&k| k == spin) else {
-                    continue;
-                };
-                if w.end != WalkEnd::Start || keys.len() < at + 3 {
-                    continue;
+                // The thread spins in `spin_here` (the innermost frame, or one after it when the
+                // walk catches the thread in a helper the spin calls, as unoptimised builds do:
+                // the atomic load, `black_box`); the capture's first address is the return into
+                // `inner_frame`. Every frame but the innermost (its address moves in the spin)
+                // was looked up in an earlier walk, though a few can have lost their slot to
+                // another frame of the walk.
+                let at = keys.iter().position(|&k| k == spin).unwrap_or(usize::MAX);
+                let fine = w.end == WalkEnd::Start
+                    && keys.len() >= at.saturating_add(3)
+                    && keys[at..at + 3] == [spin, inner, outer]
+                    && pcs[at + 1..] == captured[..]
+                    && (walk == 0 || now - hits >= (w.frames as u64 - 1) / 2);
+                if !fine {
+                    failed = Some(format!(
+                        "walk {walk}: {w:?}\nkeys {keys:x?}\npcs {pcs:x?}\ncaptured {captured:x?}\n\
+                         kept lookups used {}",
+                        now - hits
+                    ));
+                    break;
                 }
-                assert_eq!(keys[at + 1], inner, "{last}");
-                assert_eq!(keys[at + 2], outer, "{last}");
-                // The capture starts in `spin_here` (its return from the capture); the callers'
-                // return addresses after it are the walk's frames after `spin_here`'s.
-                let from = captured
-                    .iter()
-                    .position(|&c| c == pcs[at + 1])
-                    .unwrap_or_else(|| panic!("the return into inner_frame captured: {last}"));
-                assert_eq!(&pcs[at + 1..], &captured[from..], "{last}");
-                // The next walks find their lookups kept: the same frames from `spin_here` on.
-                let again = (0..50).find_map(|_| {
-                    let w = sampler.walk(id.load(Relaxed), 64)?;
-                    let keys = sampler.keys(w.frames);
-                    let at = keys.iter().position(|&k| k == spin)?;
-                    Some(keys[at..].to_vec())
-                });
-                assert_eq!(again.as_deref(), Some(&keys[at..]), "{last}");
-                matched = true;
-                break;
             }
             STOP.store(true, Relaxed);
             busy.join().unwrap();
-            assert!(matched, "no walk reached the thread's start: {last}");
+            assert_eq!(failed, None);
         }
 
-        /// A thread waiting in the OS (its innermost function a system call with no unwind
-        /// entry, a leaf) is walked to its start.
+        /// The thread state the leaf and stub tests share with their walked thread: its stop and
+        /// ready words, its id and its capture.
+        #[derive(Default)]
+        struct Walked {
+            stop: AtomicU32,
+            ready: AtomicU32,
+            id: AtomicU32,
+            captured: Mutex<Vec<u64>>,
+        }
+
+        /// Starts `body` on a thread of its own and waits until it is ready to be walked.
+        fn start_walked(body: fn(&Walked)) -> (Arc<Walked>, std::thread::JoinHandle<()>) {
+            let state = Arc::new(Walked::default());
+            let s = state.clone();
+            let thread = std::thread::spawn(move || {
+                s.id.store(native::current_thread_id(), Relaxed);
+                body(&s);
+            });
+            while state.ready.load(Relaxed) == 0 {
+                std::thread::yield_now();
+            }
+            (state, thread)
+        }
+
+        /// The walked thread of the leaf test: its own backtrace taken, then the leaf called.
+        #[inline(never)]
+        fn call_the_leaf(s: &Walked) {
+            *s.captured.lock().unwrap() = capture();
+            // SAFETY: the leaf reads `stop` and writes `ready`, both live for the call.
+            unsafe { nv_profile_test_leaf(&s.stop, &s.ready) };
+            std::hint::black_box(s);
+        }
+
+        /// A thread stopped in a leaf (here code without unwind data) is walked from the return
+        /// address at its stack pointer: the leaf's frame keeps its own address (there is no
+        /// unwind entry to name its function) and the frames after it are its caller's and the
+        /// return addresses the thread's own capture has.
+        #[test]
+        fn a_leaf_at_the_innermost_frame_is_unwound_from_the_stack_pointer() {
+            let leaf = code_of(nv_profile_test_leaf as Leaf as usize);
+            let caller = code_of(call_the_leaf as fn(&Walked) as usize);
+            let (state, thread) = start_walked(call_the_leaf);
+            let mut sampler = native::Sampler::new();
+            let walks: Vec<_> = (0..20)
+                .map(|_| {
+                    let w = sampler.walk(state.id.load(Relaxed), 64)?;
+                    Some((
+                        w,
+                        sampler.keys(w.frames).to_vec(),
+                        sampler.pcs(w.frames).to_vec(),
+                    ))
+                })
+                .collect();
+            state.stop.store(1, Relaxed);
+            thread.join().unwrap();
+            let captured = state.captured.lock().unwrap().clone();
+            assert_eq!(sampler.has_unwind_entry(leaf), Some(false));
+            for walk in walks {
+                let (w, keys, pcs) = walk.expect("a walk");
+                let last = format!("{w:?}\nkeys {keys:x?}\npcs {pcs:x?}\ncaptured {captured:x?}");
+                assert_eq!(w.end, WalkEnd::Start, "{last}");
+                assert!((leaf..leaf + 16).contains(&pcs[0]), "{last}");
+                assert_eq!(keys[0], pcs[0], "{last}");
+                assert_eq!(keys[1], caller, "{last}");
+                assert_eq!(&pcs[2..], &captured[..], "{last}");
+            }
+        }
+
+        /// The walked thread of the stub test: the stub pushes a word that looks like a return
+        /// address (one into `call_the_leaf`, a function with an unwind entry) and calls the
+        /// leaf.
+        #[inline(never)]
+        fn call_the_stub(s: &Walked) {
+            let word = code_of(call_the_leaf as fn(&Walked) as usize) + 8;
+            // SAFETY: the stub calls the leaf with `stop` and `ready`, both live for the call.
+            unsafe { nv_profile_test_stub(word, &s.stop, &s.ready, nv_profile_test_leaf) };
+            std::hint::black_box(s);
+        }
+
+        /// A return into code without unwind data ends the walk as a bad frame: that code
+        /// called, so it is no leaf, and the word at the stack pointer there is one it pushed,
+        /// not its return address (taken for one, it would send the walk into whatever function
+        /// the word points into, and `RtlVirtualUnwind` on past the thread's stack).
+        #[test]
+        fn a_return_into_code_without_unwind_data_ends_the_walk() {
+            let stub = code_of(nv_profile_test_stub as Stub as usize);
+            let (state, thread) = start_walked(call_the_stub);
+            let mut sampler = native::Sampler::new();
+            let walks: Vec<_> = (0..20)
+                .map(|_| {
+                    let w = sampler.walk(state.id.load(Relaxed), 64)?;
+                    Some((w, sampler.pcs(w.frames).to_vec()))
+                })
+                .collect();
+            state.stop.store(1, Relaxed);
+            thread.join().unwrap();
+            assert_eq!(sampler.has_unwind_entry(stub), Some(false));
+            for walk in walks {
+                let (w, pcs) = walk.expect("a walk");
+                assert_eq!((w.frames, w.end), (2, WalkEnd::Bad), "{w:?} {pcs:x?}");
+                assert!((stub..stub + 32).contains(&pcs[1]), "{w:?} {pcs:x?}");
+            }
+        }
+
+        /// A thread waiting in the OS (its innermost function a system-call stub of ntdll, which
+        /// has an unwind entry) is walked to its start.
         #[test]
         fn a_waiting_threads_stack_is_walked_to_its_start() {
             let (id_tx, id_rx) = std::sync::mpsc::channel();
@@ -2426,6 +3187,26 @@ mod tests {
             stop_tx.send(()).unwrap();
             waiting.join().unwrap();
             assert!(reached, "{last}");
+        }
+    }
+
+    /// `NV_PROFILE_SECONDS` takes any number of seconds a `Duration` holds; anything else
+    /// (infinite, too big, not a number, not above 0, unset) gives the 10 s default instead of
+    /// stopping the frame that starts the sampler.
+    #[test]
+    fn the_table_period_takes_any_value() {
+        assert_eq!(table_period(None), Duration::from_secs(10));
+        assert_eq!(table_period(Some("2.5")), Duration::from_millis(2500));
+        assert_eq!(
+            table_period(Some("1e9")),
+            Duration::from_secs(1_000_000_000)
+        );
+        for value in ["inf", "1e20", "NaN", "-1", "0", "ten", ""] {
+            assert_eq!(
+                table_period(Some(value)),
+                Duration::from_secs(10),
+                "{value}"
+            );
         }
     }
 
