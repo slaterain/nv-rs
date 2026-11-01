@@ -2,9 +2,42 @@
 //!
 //! Game objects live here at their real field offsets, and pointers are the
 //! 32-bit addresses the game uses. Memory is paged (4 KiB) and sparse: a
-//! page exists once something maps or writes it. Reading an unmapped
-//! address is a fault that names the address, so a translation that reads
-//! data nobody provided stops at once instead of computing with zeros.
+//! page exists once something maps it. Reading an unmapped address is a
+//! fault that names the address, so a translation that reads data nobody
+//! provided stops at once instead of computing with zeros.
+//!
+//! Layout: every [`Mem`] reserves one block of 4 GB of host address space
+//! when it is made, so guest address `a` is host address `base + a`. The
+//! block costs no memory until pages of it are used. [`Mem::map`] makes
+//! whole pages of it usable (committed, reading zero where new) and
+//! [`Mem::unmap`] makes them unusable again, dropping their contents: a
+//! small unmap keeps the pages committed, to be zeroed in place if they are
+//! mapped again, and a large one hands them back to the system
+//! ([`KEEP_SPAN`]). A table of one byte per page (1 MB, in the same block
+//! just below the guest space, so `base` finds it too) says which pages are
+//! mapped. Every guest access tests the table first, and an unmapped page
+//! is the fault above, so no guest access reaches a page that is not
+//! mapped.
+//!
+//! A load or store of one value (at most 8 bytes) tests the bytes of its
+//! page and of the next page with one 2-byte load. When both pages are
+//! mapped (nearly always) the access is one host load or store at
+//! `base + a`, even across the end of the page, since the guest space is
+//! one block. The table's address and the data's are both worked out from
+//! `base` and `a` alone, neither from the other's result, so the processor
+//! starts both loads at once. Otherwise (the last mapped page of a range,
+//! or an unmapped page) an out-of-line path tests the page alone and,
+//! failing that, goes page by page and faults where the old page table did.
+//! (Bytes rather than bits, and one test of the pair rather than tests of
+//! the offset in the page and of the page: each of those costs instructions
+//! on every access, and measured slower than the old page table on random
+//! loads and stores.)
+//!
+//! The host calls are `VirtualAlloc` and `VirtualFree` on Windows (the
+//! block starts with no access, and pages are committed as they are mapped
+//! and decommitted as they are handed back), `mmap` on Linux and macOS (the
+//! block is readable and writable from the start; see `host` below for
+//! why). The block needs a 64-bit host.
 //!
 //! Regions:
 //! - the executable's data sections at their own addresses
@@ -23,6 +56,305 @@ const PAGE_BITS: u32 = 12;
 const PAGE: usize = 1 << PAGE_BITS;
 const PAGES: usize = 1 << (32 - PAGE_BITS);
 
+#[cfg(not(target_pointer_width = "64"))]
+compile_error!(
+    "the guest memory reserves the whole 4 GB guest space at once: it needs a 64-bit host"
+);
+
+/// Bytes of the guest space: the whole 32-bit address space. The table of mapped pages
+/// ([`TABLE`] bytes) comes just before it in the same host block ([`Space`]).
+#[cfg(target_pointer_width = "64")]
+const SPACE: usize = 1 << 32;
+/// Bytes of the table of mapped pages: one per page, one more for the page past the end of the
+/// space (always 0, for [`Mem::fast_at`]'s pair test on the last page), rounded up to 64 KB so
+/// the guest space after it starts on a 64 KB boundary of the block. Small enough that its
+/// distance below the guest space fits in a load instruction's own offset.
+const TABLE: usize = PAGES + (64 << 10);
+
+/// A page's byte in the table of mapped pages when the page is not mapped and holds nothing: on
+/// Windows not committed, elsewhere reading zero. Every page starts so.
+const UNMAPPED: u8 = 0;
+/// A page's byte in the table when the page is mapped: the only state guest accesses use.
+const MAPPED: u8 = 1;
+/// A page's byte in the table when the page is not mapped but stays committed, possibly still
+/// holding the bytes it had ([`KEEP_SPAN`]). Guest accesses fault on it as on an unmapped page;
+/// mapped again, it is zeroed in place.
+const KEPT: u8 = 2;
+/// The table's bytes for a page and the next both mapped ([`Mem::fast_at`]).
+const MAPPED_PAIR: u16 = u16::from_ne_bytes([MAPPED, MAPPED]);
+
+/// [`Mem::unmap`] keeps the pages of a call that unmaps at most this many (4 MB) committed,
+/// marked [`KEPT`], instead of handing them back to the system: mapped again, they are zeroed
+/// in place (a 4 KiB write each) where a page handed back is committed afresh and faults on its
+/// first touch. That covers the game's own `VirtualFree`/`VirtualAlloc` churn through
+/// `units/platform.rs`: a memory pool's single pages, the C runtime's 32 KB groups and the
+/// scrap heaps' halves, which shrink to their floor and grow again by doubling (from 64 KB to
+/// at most 8 MB). On Windows, handing back and committing again cost a system call each (the
+/// hand-back also interrupts the process's other running threads to drop the page from their
+/// address caches) and a fault on the page's first touch. Measured (2026-11-01,
+/// `tests::bench_commit_and_decommit`): one page committed, written and decommitted took
+/// 4.5 us handed back (8 us with three other threads busy) against 30 ns kept, and 60 to 90 ns
+/// with the boxed pages before the flat block; a scrap heap grown from 64 KB to 1 MB and shrunk
+/// back took 530 us handed back (920 us busy) against 5 us kept, and 210 us before. A larger
+/// unmap (the 8 MB of heap pages under a new reservation) hands its pages back at once.
+const KEEP_SPAN: usize = 1024;
+/// The most pages (16 MB) kept at once: an unmap that would keep more first hands every kept
+/// page back to the system.
+const KEEP_MAX: usize = 4096;
+
+/// The host's virtual memory calls: reserve a block of address space with no access, commit
+/// part of it (readable and writable, zero-filled where new), hand part of it back (its contents
+/// dropped; committed again, it reads zero) and release the whole block. A call the system
+/// refuses panics with the system's reason: guest memory cannot go on without it.
+#[cfg(windows)]
+mod host {
+    use std::ffi::c_void;
+    use windows::Win32::System::Memory::{
+        VirtualAlloc, VirtualFree, MEM_COMMIT, MEM_DECOMMIT, MEM_RELEASE, MEM_RESERVE,
+        PAGE_NOACCESS, PAGE_READWRITE,
+    };
+
+    pub fn reserve(len: usize) -> *mut u8 {
+        // SAFETY: a new reservation wherever the system puts it; nothing existing is touched.
+        let p = unsafe { VirtualAlloc(None, len, MEM_RESERVE, PAGE_NOACCESS) };
+        assert!(
+            !p.is_null(),
+            "could not reserve {len:#x} bytes of address space for guest memory: {}",
+            std::io::Error::last_os_error()
+        );
+        p.cast()
+    }
+
+    /// # Safety
+    /// `[p, p + len)` lies inside a block from [`reserve`].
+    pub unsafe fn commit(p: *mut u8, len: usize) {
+        // Pages already committed keep their contents (the call allows them in the range).
+        let r = VirtualAlloc(
+            Some(p.cast_const().cast::<c_void>()),
+            len,
+            MEM_COMMIT,
+            PAGE_READWRITE,
+        );
+        assert!(
+            !r.is_null(),
+            "could not commit {len:#x} bytes of guest memory: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+
+    /// # Safety
+    /// `[p, p + len)` lies inside a block from [`reserve`], and nothing refers into it.
+    pub unsafe fn decommit(p: *mut u8, len: usize) {
+        // Pages in the range that are not committed are allowed and stay so.
+        if let Err(e) = VirtualFree(p.cast::<c_void>(), len, MEM_DECOMMIT) {
+            panic!("could not hand back {len:#x} bytes of guest memory: {e}");
+        }
+    }
+
+    /// # Safety
+    /// `p` is a block from [`reserve`] of `len` bytes, and nothing uses it after this.
+    pub unsafe fn release(p: *mut u8, _len: usize) {
+        // Releasing a whole reservation takes size 0. A failure here (a bad block) leaves only
+        // address space behind, so a drop does not panic over it.
+        let _ = VirtualFree(p.cast::<c_void>(), 0, MEM_RELEASE);
+    }
+}
+
+/// The host's virtual memory calls, as on Windows above, through the C library's `mmap` and
+/// `munmap` (the standard library links it; this workspace has no `libc` dependency, so the
+/// few declarations and flag values are here). The flag values are the systems' own: Linux on
+/// x86-64, AArch64 and RISC-V, and macOS.
+///
+/// Here the whole block is readable and writable from the start. The system gives memory to a
+/// page only when it is first written, and with `MAP_NORESERVE` does not count the block
+/// against the memory it promises (except Linux set to strict overcommit, where a block may be
+/// refused), so committing is nothing. Handing back zeroes the bytes, and
+/// gives whole aligned 64 KB pieces of them back to the system by laying a fresh mapping over
+/// them. (Committing and handing back each 4 KiB page with `mprotect` and a fresh mapping would
+/// need the system's own pages to be 4 KiB, which they are not on macOS on Apple silicon,
+/// 16 KiB, nor on some 64-bit ARM Linux systems, 16 or 64 KiB; `MAP_FIXED` needs an address on
+/// a page of the system's own.)
+#[cfg(unix)]
+mod host {
+    use std::ffi::{c_int, c_void};
+
+    extern "C" {
+        fn mmap(
+            addr: *mut c_void,
+            len: usize,
+            prot: c_int,
+            flags: c_int,
+            fd: c_int,
+            offset: i64,
+        ) -> *mut c_void;
+        fn munmap(addr: *mut c_void, len: usize) -> c_int;
+    }
+
+    /// The pieces handed back to the system whole: a multiple of every page size the systems
+    /// above use.
+    const GIVE_BACK: usize = 64 << 10;
+
+    const PROT_READ: c_int = 1;
+    const PROT_WRITE: c_int = 2;
+    const MAP_PRIVATE: c_int = 0x02;
+    const MAP_FIXED: c_int = 0x10;
+    #[cfg(all(
+        any(target_os = "linux", target_os = "android"),
+        any(
+            target_arch = "x86_64",
+            target_arch = "aarch64",
+            target_arch = "riscv64"
+        )
+    ))]
+    const MAP_ANONYMOUS: c_int = 0x20;
+    #[cfg(all(
+        any(target_os = "linux", target_os = "android"),
+        any(
+            target_arch = "x86_64",
+            target_arch = "aarch64",
+            target_arch = "riscv64"
+        )
+    ))]
+    const MAP_NORESERVE: c_int = 0x4000;
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    const MAP_ANONYMOUS: c_int = 0x1000;
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    const MAP_NORESERVE: c_int = 0x40;
+    #[cfg(not(any(
+        all(
+            any(target_os = "linux", target_os = "android"),
+            any(
+                target_arch = "x86_64",
+                target_arch = "aarch64",
+                target_arch = "riscv64"
+            )
+        ),
+        target_os = "macos",
+        target_os = "ios"
+    )))]
+    compile_error!("guest memory: the mmap flag values for this system are not known here");
+
+    /// What `mmap` answers when it fails (`MAP_FAILED`).
+    fn failed(p: *mut c_void) -> bool {
+        p as usize == usize::MAX
+    }
+
+    /// A fresh readable and writable mapping, all zero, at `addr` (`MAP_FIXED`, replacing what
+    /// was there) or (null) wherever the system puts it.
+    ///
+    /// # Safety
+    /// With an address, `[addr, addr + len)` lies inside a block from [`reserve`], on pages of
+    /// the system's own, and nothing refers into it.
+    unsafe fn fresh(addr: *mut c_void, len: usize) -> *mut c_void {
+        let fixed = if addr.is_null() { 0 } else { MAP_FIXED };
+        let p = mmap(
+            addr,
+            len,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | fixed,
+            -1,
+            0,
+        );
+        assert!(
+            !failed(p) && (addr.is_null() || p == addr),
+            "could not map {len:#x} bytes of address space for guest memory: {}",
+            std::io::Error::last_os_error()
+        );
+        p
+    }
+
+    pub fn reserve(len: usize) -> *mut u8 {
+        // SAFETY: a new mapping wherever the system puts it; nothing existing is touched.
+        unsafe { fresh(std::ptr::null_mut(), len) }.cast()
+    }
+
+    /// Nothing to do: the block is readable and writable from the start, and a page not yet
+    /// written (or zeroed by [`decommit`]) reads zero.
+    ///
+    /// # Safety
+    /// `[p, p + len)` lies inside a block from [`reserve`].
+    pub unsafe fn commit(_p: *mut u8, _len: usize) {}
+
+    /// # Safety
+    /// `[p, p + len)` lies inside a block from [`reserve`], and nothing refers into it.
+    pub unsafe fn decommit(p: *mut u8, len: usize) {
+        // The aligned 64 KB pieces inside the range go back to the system under a fresh
+        // mapping (reading zero); the bytes before and after them are zeroed in place.
+        let start = p as usize;
+        let lo = start.next_multiple_of(GIVE_BACK) - start;
+        let hi = (start + len) / GIVE_BACK * GIVE_BACK;
+        let hi = hi.saturating_sub(start);
+        if lo < hi {
+            std::ptr::write_bytes(p, 0, lo);
+            fresh(p.add(lo).cast::<c_void>(), hi - lo);
+            std::ptr::write_bytes(p.add(hi), 0, len - hi);
+        } else {
+            std::ptr::write_bytes(p, 0, len);
+        }
+    }
+
+    /// # Safety
+    /// `p` is a block from [`reserve`] of `len` bytes, and nothing uses it after this.
+    pub unsafe fn release(p: *mut u8, len: usize) {
+        // A failure here leaves only address space behind, so a drop does not panic over it.
+        let _ = munmap(p.cast::<c_void>(), len);
+    }
+}
+
+#[cfg(not(any(windows, unix)))]
+compile_error!("guest memory: no virtual memory calls for this host");
+
+/// The host block that holds the guest space, reserved by `host::reserve`: first the table of
+/// mapped pages, [`TABLE`] bytes committed when the block is made (so it starts all zero:
+/// [`UNMAPPED`]), page `p`'s byte at `base - TABLE + p` ([`MAPPED`], [`KEPT`] or
+/// [`UNMAPPED`]); then the [`SPACE`] bytes of the guest space, guest address `a` at host address
+/// `base + a`.
+/// (The table below the guest space rather than above it: its distance from `base` then fits
+/// in the instruction that loads from it, where 4 GB would take an instruction of its own on
+/// every access.) Released when dropped.
+struct Space {
+    /// The host address of guest address 0.
+    base: *mut u8,
+}
+
+// SAFETY: a `Space` owns its block alone, as a `Box` owns its allocation: no other value holds
+// `base`, and only `Drop` releases it. [`Mem`], its only user, reads the block only through
+// `&self` and writes it only through `&mut self`, so the borrow rules keep every write apart
+// from any other access on any thread, exactly as they did for the boxed pages this replaced
+// (which made `Mem` `Send` and `Sync` by themselves). The thread host hands the engine from one
+// OS thread to the next with only one of them running it at a time (`thread_host`'s `Baton`),
+// which a block of host address space serves as well as boxed pages did: the reservation is
+// the process's, not a thread's.
+unsafe impl Send for Space {}
+// SAFETY: as for `Send` above: shared access only ever reads.
+unsafe impl Sync for Space {}
+
+impl Space {
+    fn new() -> Self {
+        let block = host::reserve(TABLE + SPACE);
+        // SAFETY: the table lies inside the block just reserved.
+        unsafe { host::commit(block, TABLE) };
+        Space {
+            base: block.wrapping_add(TABLE),
+        }
+    }
+
+    /// Where page `p`'s byte of the table of mapped pages is (`p` at most [`PAGES`]). Worked
+    /// out from `base` like the guest bytes, so one load of `base` serves both.
+    #[inline(always)]
+    fn flag(&self, p: usize) -> *mut u8 {
+        self.base.wrapping_sub(TABLE).wrapping_add(p)
+    }
+}
+
+impl Drop for Space {
+    fn drop(&mut self) {
+        // SAFETY: the block (which starts with the table) is this `Space`'s own, and nothing uses
+        // it after this.
+        unsafe { host::release(self.base.wrapping_sub(TABLE), TABLE + SPACE) }
+    }
+}
+
 /// First heap address. Above the executable image (which ends below
 /// 0x01410000) and clear of it, so a heap pointer never aliases image data.
 pub const HEAP_BASE: u32 = 0x2000_0000;
@@ -34,9 +366,19 @@ pub const HEAP_END: u32 = 0x7FFF_0000;
 pub struct Fault(pub u32);
 
 pub struct Mem {
-    /// One slot per page of the 4 GB space: a fixed-size table, so an index made from a `u32`
-    /// address (`a >> PAGE_BITS`) is in range by its type and needs no bounds check.
-    pages: Box<[Option<Box<[u8; PAGE]>>; PAGES]>,
+    /// The guest space: one block of host address space, guest address `a` at host address
+    /// `base + a`, and just below `base`, in the same block, the table of mapped pages ([`Space`],
+    /// module documentation). Guest accesses read and write only pages the table marks
+    /// [`MAPPED`]. On Windows the only pages of the guest space committed are those and the ones
+    /// the table marks [`KEPT`]; elsewhere the whole block is readable and writable from the
+    /// start (`host`).
+    space: Space,
+    /// How many pages the table marks [`KEPT`] (at most [`KEEP_MAX`]).
+    kept: usize,
+    /// How many times [`Mem::map`] and [`Mem::unmap`] have called the host's commit and
+    /// hand-back (what the tests count).
+    #[cfg(test)]
+    host_calls: u32,
     /// The heap's live blocks (start -> size, rounded and with any guard) and its free space.
     live: crate::engine::AddrMap<u32, u32>,
     heap: heap::Heap,
@@ -374,12 +716,11 @@ impl Default for Mem {
 
 impl Mem {
     pub fn new() -> Self {
-        let mut pages = Vec::with_capacity(PAGES);
-        pages.resize_with(PAGES, || None);
-        let pages: Box<[Option<Box<[u8; PAGE]>>; PAGES]> =
-            pages.into_boxed_slice().try_into().expect("PAGES slots");
         Mem {
-            pages,
+            space: Space::new(),
+            kept: 0,
+            #[cfg(test)]
+            host_calls: 0,
             live: Default::default(),
             heap: heap::Heap::new(),
             watch: None,
@@ -510,49 +851,174 @@ impl Mem {
         }
     }
 
-    /// Makes `[addr, addr + len)` addressable (zero-filled where new).
+    /// Makes `[addr, addr + len)` addressable: pages not mapped yet read zero (each run of them
+    /// committed with one host call, or, kept by [`Mem::unmap`], zeroed in place); pages already
+    /// mapped keep their bytes.
     pub fn map(&mut self, addr: u32, len: u32) {
         if len == 0 {
             return;
         }
-        let first = addr >> PAGE_BITS;
-        let last = (addr as u64 + len as u64 - 1) >> PAGE_BITS;
-        for p in first as u64..=last {
-            let slot = &mut self.pages[p as usize];
-            if slot.is_none() {
-                *slot = Some(Box::new([0; PAGE]));
+        let first = (addr >> PAGE_BITS) as usize;
+        let last = ((addr as u64 + len as u64 - 1) >> PAGE_BITS) as usize;
+        let end = (last + 1).min(PAGES);
+        let mut p = first;
+        while p < end {
+            let state = self.page_state(p);
+            let run = p;
+            while p < end && self.page_state(p) == state {
+                p += 1;
             }
+            let (at, bytes) = (self.host_page(run), (p - run) << PAGE_BITS);
+            match state {
+                MAPPED => continue,
+                KEPT => {
+                    // SAFETY: pages `run..p` lie inside the block and are committed (kept);
+                    // written under `&mut self`.
+                    unsafe { std::ptr::write_bytes(at, 0, bytes) };
+                    self.kept -= p - run;
+                }
+                _ => {
+                    // SAFETY: pages `run..p` lie inside the block (`p <= PAGES`).
+                    unsafe { host::commit(at, bytes) };
+                    self.count_host_call();
+                }
+            }
+            self.set_state(run, p, MAPPED);
         }
+        // The page table this replaced stopped here too, with the pages below the end mapped.
+        assert!(
+            last < PAGES,
+            "map of {addr:08x}+{len:x}: runs past the end of the 4 GB space"
+        );
     }
 
-    /// Makes the pages of `[addr, addr + len)` unaddressable again; their
-    /// contents are dropped. `addr` and `len` must be page multiples (the
-    /// `VirtualFree` stand-in in `units/platform.rs` decommits this way).
+    /// Makes the pages of `[addr, addr + len)` unaddressable again, their contents dropped (a
+    /// later [`Mem::map`] reads zero). A call that unmaps at most [`KEEP_SPAN`] pages keeps them
+    /// committed (marked [`KEPT`]); a larger one hands them back to the system, with any kept
+    /// pages in the range, one host call for each run. `addr` and `len` must be page multiples
+    /// (the `VirtualFree` stand-in in `units/platform.rs` decommits this way).
     pub fn unmap(&mut self, addr: u32, len: u32) {
         assert!(
             addr % PAGE as u32 == 0 && len % PAGE as u32 == 0,
             "unmap of {addr:08x}+{len:x}: not whole pages"
         );
-        let first = (addr >> PAGE_BITS) as u64;
-        for p in first..first + (len >> PAGE_BITS) as u64 {
-            self.pages[p as usize] = None;
+        let first = (addr >> PAGE_BITS) as usize;
+        let end = first + (len >> PAGE_BITS) as usize;
+        let stop = end.min(PAGES);
+        let mapped = (first..stop)
+            .filter(|&p| self.page_state(p) == MAPPED)
+            .count();
+        if mapped > KEEP_SPAN {
+            self.hand_back(first, stop, true);
+        } else if mapped > 0 {
+            if self.kept + mapped > KEEP_MAX {
+                self.hand_back(0, PAGES, false);
+            }
+            let mut p = first;
+            while p < stop {
+                if self.page_state(p) != MAPPED {
+                    p += 1;
+                    continue;
+                }
+                let run = p;
+                while p < stop && self.page_state(p) == MAPPED {
+                    p += 1;
+                }
+                self.set_state(run, p, KEPT);
+            }
+            self.kept += mapped;
+        }
+        assert!(
+            end <= PAGES,
+            "unmap of {addr:08x}+{len:x}: runs past the end of the 4 GB space"
+        );
+    }
+
+    /// Hands back to the system each run of the pages `from..to` that the table marks [`KEPT`]
+    /// (and, with `mapped`, [`MAPPED`]), one host call per run, and marks them [`UNMAPPED`].
+    fn hand_back(&mut self, from: usize, to: usize, mapped: bool) {
+        let held = |s: u8| s == KEPT || (mapped && s == MAPPED);
+        let mut p = from;
+        // Without `mapped` only kept pages matter, so the walk ends with the last of them.
+        while p < to && (mapped || self.kept > 0) {
+            if !held(self.page_state(p)) {
+                p += 1;
+                continue;
+            }
+            let run = p;
+            while p < to && held(self.page_state(p)) {
+                if self.page_state(p) == KEPT {
+                    self.kept -= 1;
+                }
+                p += 1;
+            }
+            self.set_state(run, p, UNMAPPED);
+            // SAFETY: pages `run..p` lie inside the block, and no reference into the guest
+            // space outlives a call of this module (`&mut self` here).
+            unsafe { host::decommit(self.host_page(run), (p - run) << PAGE_BITS) };
+            self.count_host_call();
         }
     }
 
+    /// Counts a host call of [`Mem::map`] or [`Mem::unmap`] for the tests; nothing otherwise.
+    #[inline(always)]
+    fn count_host_call(&mut self) {
+        #[cfg(test)]
+        {
+            self.host_calls += 1;
+        }
+    }
+
+    /// How many times [`Mem::map`] and [`Mem::unmap`] have called the host so far.
+    #[cfg(test)]
+    pub(crate) fn host_calls(&self) -> u32 {
+        self.host_calls
+    }
+
     pub fn is_mapped(&self, addr: u32) -> bool {
-        self.pages[(addr >> PAGE_BITS) as usize].is_some()
+        self.mapped_at(addr)
     }
 
-    fn page(&self, addr: u32) -> Result<&[u8; PAGE], Fault> {
-        self.pages[(addr >> PAGE_BITS) as usize]
-            .as_deref()
-            .ok_or(Fault(addr))
+    /// Page `p`'s byte in the table of mapped pages ([`MAPPED`], [`KEPT`] or [`UNMAPPED`]; `p`
+    /// an address shifted down by [`PAGE_BITS`], so below [`PAGES`]).
+    #[inline(always)]
+    fn page_state(&self, p: usize) -> u8 {
+        debug_assert!(p < PAGES);
+        // SAFETY: the table holds a byte for each of the `PAGES` pages and stays committed while
+        // the block lives; only `&mut self` writes it.
+        unsafe { *self.space.flag(p) }
     }
 
-    fn page_mut(&mut self, addr: u32) -> Result<&mut [u8; PAGE], Fault> {
-        self.pages[(addr >> PAGE_BITS) as usize]
-            .as_deref_mut()
-            .ok_or(Fault(addr))
+    /// Whether page `p` (below [`PAGES`]) is mapped.
+    #[inline(always)]
+    fn page_is_mapped(&self, p: usize) -> bool {
+        self.page_state(p) == MAPPED
+    }
+
+    /// The host address of page `p`'s first byte (`p` at most [`PAGES`]).
+    fn host_page(&self, p: usize) -> *mut u8 {
+        self.space.base.wrapping_add(p << PAGE_BITS)
+    }
+
+    /// Sets the table's bytes of pages `from..to` (at most [`PAGES`]) to `state`.
+    fn set_state(&mut self, from: usize, to: usize, state: u8) {
+        assert!(from <= to && to <= PAGES);
+        // SAFETY: the bytes of pages `from..to` lie in the table, written under `&mut self`.
+        unsafe { std::ptr::write_bytes(self.space.flag(from), state, to - from) };
+    }
+
+    /// Whether the page holding `a` is mapped: the test every access makes first.
+    #[inline(always)]
+    fn mapped_at(&self, a: u32) -> bool {
+        self.page_is_mapped((a >> PAGE_BITS) as usize)
+    }
+
+    /// The host address of guest address `a`. Worked out from `a` alone (not from the table of
+    /// mapped pages), so a load through it can start before the page's byte is known; it may be
+    /// used only once that byte says the page is mapped.
+    #[inline(always)]
+    fn host_at(&self, a: u32) -> *mut u8 {
+        self.space.base.wrapping_add(a as usize)
     }
 
     /// Reads `buf.len()` bytes; faults on the first unmapped byte.
@@ -562,8 +1028,15 @@ impl Mem {
         while done < buf.len() {
             let off = (a as usize) & (PAGE - 1);
             let n = (PAGE - off).min(buf.len() - done);
-            let p = self.page(a)?;
-            buf[done..done + n].copy_from_slice(&p[off..off + n]);
+            if !self.mapped_at(a) {
+                return Err(Fault(a));
+            }
+            // SAFETY: `[a, a + n)` lies in one mapped page; `buf` is host memory of its own (no
+            // reference into the guest space leaves this module), and nothing writes the guest
+            // space while `&self` lives.
+            unsafe {
+                std::ptr::copy_nonoverlapping(self.host_at(a), buf.as_mut_ptr().add(done), n)
+            };
             done += n;
             a = a.wrapping_add(n as u32);
         }
@@ -587,8 +1060,12 @@ impl Mem {
         while done < data.len() {
             let off = (a as usize) & (PAGE - 1);
             let n = (PAGE - off).min(data.len() - done);
-            let p = self.page_mut(a)?;
-            p[off..off + n].copy_from_slice(&data[done..done + n]);
+            if !self.mapped_at(a) {
+                return Err(Fault(a));
+            }
+            // SAFETY: `[a, a + n)` lies in one mapped page, written under `&mut self`; `data` is
+            // host memory of its own (no reference into the guest space leaves this module).
+            unsafe { std::ptr::copy_nonoverlapping(data.as_ptr().add(done), self.host_at(a), n) };
             done += n;
             a = a.wrapping_add(n as u32);
         }
@@ -615,10 +1092,11 @@ impl Mem {
         while left > 0 {
             let off = (a as usize) & (PAGE - 1);
             let n = (PAGE - off).min(left);
-            match self.page_mut(a) {
-                Ok(p) => p[off..off + n].fill(0),
-                Err(Fault(at)) => panic!("write to unmapped memory at {at:08x}"),
+            if !self.mapped_at(a) {
+                panic!("write to unmapped memory at {a:08x}");
             }
+            // SAFETY: `[a, a + n)` lies in one mapped page, written under `&mut self`.
+            unsafe { std::ptr::write_bytes(self.host_at(a), 0, n) };
             left -= n;
             a = a.wrapping_add(n as u32);
         }
@@ -628,10 +1106,17 @@ impl Mem {
     /// function touched memory that was never provided.
     pub fn read(&self, addr: u32, buf: &mut [u8]) {
         if let Err(Fault(a)) = self.try_read(addr, buf) {
-            match self.freed_block_of(a) {
-                Some(block) => panic!("read of unmapped memory at {a:08x} ({block})"),
-                None => panic!("read of unmapped memory at {a:08x}"),
-            }
+            self.read_fault(a)
+        }
+    }
+
+    /// The panic of a read that met the unmapped address `a` ([`Mem::read`]).
+    #[cold]
+    #[inline(never)]
+    fn read_fault(&self, a: u32) -> ! {
+        match self.freed_block_of(a) {
+            Some(block) => panic!("read of unmapped memory at {a:08x} ({block})"),
+            None => panic!("read of unmapped memory at {a:08x}"),
         }
     }
 
@@ -680,42 +1165,72 @@ impl Mem {
         v
     }
 
-    /// The `N` bytes at `a`: a fixed-size copy out of the page when they lie in one page (no
-    /// call to `memcpy`, which a variable-length copy costs; the translated code reads memory
-    /// hundreds of millions of times a second), else [`Mem::read`] across the page boundary.
-    /// Faults (panics) exactly as [`Mem::read`] does.
+    /// Whether a load or store of up to 8 bytes at `a` takes the fast path: the page holding `a`
+    /// and the page after it are both mapped, so the bytes are mapped wherever in the page they
+    /// start, even across its end (the guest space is one host block). One 2-byte load of the
+    /// table of mapped pages, whose bytes are exactly 1 for a mapped page; this one test costs
+    /// as many instructions as the old page table's null test, where testing the offset in the
+    /// page as well (to keep the bytes inside one page) measured slower on random accesses.
+    #[inline(always)]
+    fn fast_at(&self, a: u32) -> bool {
+        // SAFETY: the table has a byte for page `PAGES` too (always 0: the space ends there), so
+        // both bytes of the pair lie in it; only `&mut self` writes it.
+        let pair = unsafe {
+            std::ptr::read_unaligned(self.space.flag((a >> PAGE_BITS) as usize).cast::<u16>())
+        };
+        pair == MAPPED_PAIR
+    }
+
+    /// Whether the `n` bytes at `a` lie in one mapped page: the fast path's second chance, for
+    /// the last mapped page of a range (whose next page is not mapped).
+    #[inline(always)]
+    fn in_one_mapped_page(&self, a: u32, n: usize) -> bool {
+        (a as usize & (PAGE - 1)) <= PAGE - n && self.mapped_at(a)
+    }
+
+    /// The `N` bytes at `a` (`N` at most 8): one fixed-size host load at `base + a` when
+    /// [`Mem::fast_at`] allows it (no call to `memcpy`, which a variable-length copy costs; the
+    /// translated code reads memory hundreds of millions of times a second), else
+    /// [`Mem::load_slow`]. Faults (panics) exactly as [`Mem::read`] does.
     #[inline(always)]
     fn load<const N: usize>(&self, a: u32) -> [u8; N] {
-        let off = (a as usize) & (PAGE - 1);
-        if off <= PAGE - N {
-            if let Some(p) = self.pages[(a >> PAGE_BITS) as usize].as_deref() {
-                let mut b = [0; N];
-                b.copy_from_slice(&p[off..off + N]);
-                return b;
-            }
+        debug_assert!(N <= 8);
+        let p = self.host_at(a);
+        if self.fast_at(a) {
+            // SAFETY: the `N` bytes start in a mapped page and end in it or in the next one,
+            // also mapped; nothing writes the guest space while `&self` lives.
+            return unsafe { std::ptr::read_unaligned(p.cast::<[u8; N]>()) };
         }
         self.load_slow(a)
     }
 
-    /// The word at `a` when [`Mem::u32`] reads it without its slow path (it lies in one mapped
-    /// page), else `None`: for a caller that keeps the slow path out of its own body
-    /// (`Engine::vcall`). Reads as [`Mem::load`]'s fast path does, with no other effect.
+    /// The word at `a` when [`Mem::u32`] reads it without [`Mem::read`] (its page and the next
+    /// are mapped, or it lies inside one mapped page), else `None`: for a caller that keeps the
+    /// slow path out of its own body (`Engine::vcall`). Reads as [`Mem::load`] does, with no
+    /// other effect.
     #[inline(always)]
     pub(crate) fn u32_in_page(&self, a: u32) -> Option<u32> {
-        let off = (a as usize) & (PAGE - 1);
-        if off <= PAGE - 4 {
-            if let Some(p) = self.pages[(a >> PAGE_BITS) as usize].as_deref() {
-                let mut b = [0; 4];
-                b.copy_from_slice(&p[off..off + 4]);
-                return Some(u32::from_le_bytes(b));
-            }
+        let p = self.host_at(a);
+        if self.fast_at(a) || self.in_one_mapped_page(a, 4) {
+            // SAFETY: as in `Mem::load` and `Mem::load_slow`: four mapped bytes.
+            return Some(u32::from_le_bytes(unsafe {
+                std::ptr::read_unaligned(p.cast::<[u8; 4]>())
+            }));
         }
         None
     }
 
+    /// [`Mem::load`] when the page after `a`'s is not mapped (or `a`'s is not): still one host
+    /// load when the bytes lie inside one mapped page, else [`Mem::read`] across the page
+    /// boundary or into the unmapped page.
     #[cold]
     #[inline(never)]
     fn load_slow<const N: usize>(&self, a: u32) -> [u8; N] {
+        if self.in_one_mapped_page(a, N) {
+            // SAFETY: the `N` bytes lie in one mapped page; nothing writes the guest space while
+            // `&self` lives.
+            return unsafe { std::ptr::read_unaligned(self.host_at(a).cast::<[u8; N]>()) };
+        }
         let mut b = [0; N];
         self.read(a, &mut b);
         b
@@ -741,19 +1256,26 @@ impl Mem {
         if self.store_diag {
             self.store_diagnostics(a, &b);
         }
-        let off = (a as usize) & (PAGE - 1);
-        if off <= PAGE - N {
-            if let Some(p) = self.pages[(a >> PAGE_BITS) as usize].as_deref_mut() {
-                p[off..off + N].copy_from_slice(&b);
-                return;
-            }
+        debug_assert!(N <= 8);
+        let p = self.host_at(a);
+        if self.fast_at(a) {
+            // SAFETY: the `N` bytes start in a mapped page and end in it or in the next one,
+            // also mapped; written under `&mut self`.
+            unsafe { std::ptr::write_unaligned(p.cast::<[u8; N]>(), b) };
+            return;
         }
         self.store_slow(a, b)
     }
 
+    /// [`Mem::store`] off its fast path, as [`Mem::load_slow`] for loads.
     #[cold]
     #[inline(never)]
     fn store_slow<const N: usize>(&mut self, a: u32, b: [u8; N]) {
+        if self.in_one_mapped_page(a, N) {
+            // SAFETY: the `N` bytes lie in one mapped page, written under `&mut self`.
+            unsafe { std::ptr::write_unaligned(self.host_at(a).cast::<[u8; N]>(), b) };
+            return;
+        }
         if let Err(Fault(at)) = self.try_write_raw(a, &b) {
             panic!("write to unmapped memory at {at:08x}");
         }
@@ -833,17 +1355,30 @@ impl Mem {
         self.set_u64(a, v.to_bits());
     }
 
-    /// NUL-terminated byte string at `a` (without the NUL).
+    /// NUL-terminated byte string at `a` (without the NUL). Searched a page at a time; a string
+    /// that runs into an unmapped page faults at that page's first byte, as reading it byte by
+    /// byte does.
     pub fn cstr(&self, a: u32) -> Vec<u8> {
         let mut out = Vec::new();
         let mut p = a;
         loop {
-            let c = self.u8(p);
-            if c == 0 {
-                return out;
+            if !self.mapped_at(p) {
+                self.read_fault(p);
             }
-            out.push(c);
-            p = p.wrapping_add(1);
+            let n = PAGE - (p as usize & (PAGE - 1));
+            // SAFETY: `[p, p + n)` is the rest of one mapped page, and nothing writes the guest
+            // space while `&self` lives; the slice ends with this pass of the loop.
+            let bytes = unsafe { std::slice::from_raw_parts(self.host_at(p), n) };
+            match bytes.iter().position(|&c| c == 0) {
+                Some(len) => {
+                    out.extend_from_slice(&bytes[..len]);
+                    return out;
+                }
+                None => {
+                    out.extend_from_slice(bytes);
+                    p = p.wrapping_add(n as u32);
+                }
+            }
         }
     }
 
@@ -1138,8 +1673,8 @@ mod tests {
         assert_eq!(m.f64(0x1ffc), 1.25);
     }
 
-    /// The fixed-size accessors read and write every width at every offset of a page, and at
-    /// the page's end (where they go through the general path) as bytes would.
+    /// The fixed-size accessors read and write every width at every offset of a page, and
+    /// across the page's end into the next mapped page, as bytes would.
     #[test]
     fn scalar_accessors_match_byte_reads_at_every_offset() {
         let mut m = Mem::new();
@@ -1781,6 +2316,640 @@ mod tests {
                 f64::from(old_top) / f64::from(1 << 20),
                 f64::from(new_top) / f64::from(1 << 20)
             );
+        }
+    }
+
+    /// The text of a caught panic.
+    fn panic_text<T>(r: std::thread::Result<T>) -> String {
+        let why = r.err().expect("a panic");
+        why.downcast_ref::<String>()
+            .cloned()
+            .or_else(|| why.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default()
+    }
+
+    /// Mapping a range again keeps the bytes of its pages already mapped; its new pages read
+    /// zero, and the pages around it stay unmapped.
+    #[test]
+    fn map_keeps_the_bytes_of_pages_already_mapped() {
+        let mut m = Mem::new();
+        m.map(0x3000, 0x1000);
+        m.write(0x3ff0, &[0xab; 0x10]);
+        // Pages 0x2000, 0x3000 and 0x4000.
+        m.map(0x2800, 0x2000);
+        assert!(m.is_mapped(0x2000) && m.is_mapped(0x4fff));
+        assert!(!m.is_mapped(0x1fff) && !m.is_mapped(0x5000));
+        assert_eq!(m.bytes(0x3ff0, 0x10), [0xab; 0x10]);
+        assert_eq!(m.u32(0x3ffc), 0xabab_abab);
+        assert!(m.bytes(0x2000, 0x1000).iter().all(|&b| b == 0));
+        assert!(m.bytes(0x4000, 0x1000).iter().all(|&b| b == 0));
+        assert!(m.bytes(0x3000, 0xff0).iter().all(|&b| b == 0));
+    }
+
+    /// Unmapped pages lose their bytes: reads of them fault, and mapped again they read zero;
+    /// a range with unmapped pages inside it unmaps as a whole.
+    #[test]
+    fn unmap_then_map_reads_zero() {
+        let mut m = Mem::new();
+        m.map(0x1_0000, 0x3000);
+        m.write(0x1_0000, &[0x5a; 0x3000]);
+        m.unmap(0x1_1000, 0x1000);
+        assert!(m.is_mapped(0x1_0fff) && !m.is_mapped(0x1_1000) && m.is_mapped(0x1_2000));
+        let mut b = [0; 8];
+        assert_eq!(m.try_read(0x1_0ffc, &mut b), Err(Fault(0x1_1000)));
+        assert_eq!(m.u32_in_page(0x1_1000), None);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.u32(0x1_1abc)));
+        assert_eq!(panic_text(r), "read of unmapped memory at 00011abc");
+        m.map(0x1_1000, 0x1000);
+        assert!(m.bytes(0x1_1000, 0x1000).iter().all(|&b| b == 0));
+        assert_eq!(m.u32(0x1_0ffc), 0x5a5a_5a5a);
+        assert_eq!(m.u32(0x1_2000), 0x5a5a_5a5a);
+        m.write(0x1_1000, &[0x77; 0x1000]);
+        m.unmap(0x1_0000, 0x8000);
+        assert!(!(0x1_0000..0x1_8000u32)
+            .step_by(PAGE)
+            .any(|a| m.is_mapped(a)));
+        m.map(0x1_0000, 0x3000);
+        assert!(m.bytes(0x1_0000, 0x3000).iter().all(|&b| b == 0));
+    }
+
+    /// A small unmap keeps its pages committed without a host call: they fault like any
+    /// unmapped page (on the fast path, the slow path and bulk reads), and mapped again they are
+    /// zeroed in place, again without a host call.
+    #[test]
+    fn small_unmaps_keep_their_pages_and_map_zeroes_them() {
+        let mut m = Mem::new();
+        m.map(0x10_0000, 0x1_0000);
+        assert_eq!(m.host_calls(), 1, "sixteen new pages, one run");
+        m.write(0x10_0000, &[0x5a; 0x1_0000]);
+        m.unmap(0x10_4000, 0x4000);
+        assert_eq!(m.host_calls(), 1, "kept, not handed back");
+        assert_eq!(m.kept, 4);
+        assert!(m.is_mapped(0x10_3fff) && m.is_mapped(0x10_8000));
+        assert!(!m.is_mapped(0x10_4000) && !m.is_mapped(0x10_7fff));
+        let mut b = [0; 8];
+        assert_eq!(m.try_read(0x10_3ffc, &mut b), Err(Fault(0x10_4000)));
+        assert_eq!(m.u32_in_page(0x10_3ffe), None);
+        assert_eq!(m.u32_in_page(0x10_4000), None);
+        assert_eq!(m.u32(0x10_3ffc), 0x5a5a_5a5a);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.u32(0x10_3ffe)));
+        assert_eq!(panic_text(r), "read of unmapped memory at 00104000");
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.u64(0x10_5000)));
+        assert_eq!(panic_text(r), "read of unmapped memory at 00105000");
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.set_u32(0x10_7ffe, 1)));
+        assert_eq!(panic_text(r), "write to unmapped memory at 00107ffe");
+        // Unmapping kept pages again changes nothing.
+        m.unmap(0x10_4000, 0x4000);
+        assert_eq!((m.kept, m.host_calls()), (4, 1));
+        m.map(0x10_4000, 0x4000);
+        assert_eq!(m.host_calls(), 1, "zeroed in place");
+        assert_eq!(m.kept, 0);
+        assert!(m.bytes(0x10_4000, 0x4000).iter().all(|&b| b == 0));
+        assert_eq!(m.u32(0x10_3ffe), 0x5a5a);
+        assert_eq!(m.bytes(0x10_8000, 0x8000), vec![0x5a; 0x8000]);
+    }
+
+    /// One `map` across mapped, kept and unmapped pages keeps the mapped pages' bytes, zeroes
+    /// the kept ones in place and commits each run of unmapped ones with one host call.
+    #[test]
+    fn map_across_mapped_kept_and_unmapped_pages() {
+        let mut m = Mem::new();
+        // Pages 0x20..0x28: mapped, kept, mapped, unmapped, kept, unmapped, unmapped, mapped.
+        m.map(0x2_0000, 0x3000);
+        m.map(0x2_4000, 0x1000);
+        m.map(0x2_7000, 0x1000);
+        m.write(0x2_0000, &[0x11; 0x3000]);
+        m.write(0x2_4000, &[0x22; 0x1000]);
+        m.write(0x2_7000, &[0x33; 0x1000]);
+        m.unmap(0x2_1000, 0x1000);
+        m.unmap(0x2_4000, 0x1000);
+        assert_eq!((m.kept, m.host_calls()), (2, 3));
+        m.map(0x2_0000, 0x8000);
+        assert_eq!(
+            m.host_calls(),
+            5,
+            "pages 0x23 and 0x25 to 0x26, one call each"
+        );
+        assert_eq!(m.kept, 0);
+        let b = m.bytes(0x2_0000, 0x8000);
+        let page = |i: usize| &b[i * PAGE..(i + 1) * PAGE];
+        assert!(page(0).iter().all(|&x| x == 0x11));
+        assert!(page(2).iter().all(|&x| x == 0x11));
+        assert!(page(7).iter().all(|&x| x == 0x33));
+        for i in [1, 3, 4, 5, 6] {
+            assert!(page(i).iter().all(|&x| x == 0), "page {i} reads zero");
+        }
+    }
+
+    /// A small unmap across mapped, kept and unmapped pages keeps the mapped ones (the kept count
+    /// grows by those alone) and leaves the others as they were; mapped again, the range reads
+    /// zero, with only its unmapped page committed by a host call.
+    #[test]
+    fn a_small_unmap_across_mapped_kept_and_unmapped_pages() {
+        let mut m = Mem::new();
+        // Pages 0x30..0x36: mapped, kept, unmapped, mapped, mapped, kept.
+        m.map(0x3_0000, 0x2000);
+        m.map(0x3_3000, 0x3000);
+        m.write(0x3_0000, &[0x44; 0x2000]);
+        m.write(0x3_3000, &[0x55; 0x3000]);
+        m.unmap(0x3_1000, 0x1000);
+        m.unmap(0x3_5000, 0x1000);
+        assert_eq!((m.kept, m.host_calls()), (2, 2));
+        m.unmap(0x3_0000, 0x6000);
+        assert_eq!((m.kept, m.host_calls()), (5, 2));
+        assert!(!(0x30..0x36u32).any(|p| m.is_mapped(p << PAGE_BITS)));
+        m.map(0x3_0000, 0x6000);
+        assert_eq!(
+            (m.kept, m.host_calls()),
+            (0, 3),
+            "page 0x32 alone committed"
+        );
+        assert!(m.bytes(0x3_0000, 0x6000).iter().all(|&b| b == 0));
+    }
+
+    /// An unmap of more than [`KEEP_SPAN`] pages hands them back to the system, with the kept
+    /// pages among them, one host call for each run; mapped again they read zero.
+    #[test]
+    fn large_unmaps_hand_their_pages_back() {
+        let mut m = Mem::new();
+        let len = (KEEP_SPAN as u32 + 2) << PAGE_BITS;
+        m.map(0x100_0000, len);
+        m.set_u32(0x100_0000, 7);
+        m.set_u32(0x100_3000, 8);
+        m.set_u32(0x100_0000 + len - 4, 9);
+        m.unmap(0x100_3000, 0x1000);
+        assert_eq!((m.kept, m.host_calls()), (1, 1));
+        // KEEP_SPAN + 1 mapped pages, and the kept one between them: one run.
+        m.unmap(0x100_0000, len);
+        assert_eq!((m.kept, m.host_calls()), (0, 2));
+        assert!(!m.is_mapped(0x100_0000) && !m.is_mapped(0x100_0000 + len - 1));
+        m.map(0x100_0000, len);
+        assert_eq!(m.host_calls(), 3);
+        assert_eq!(
+            (
+                m.u32(0x100_0000),
+                m.u32(0x100_3000),
+                m.u32(0x100_0000 + len - 4)
+            ),
+            (0, 0, 0)
+        );
+    }
+
+    /// Kept pages never pass [`KEEP_MAX`]: the unmap that would keep more hands every kept page
+    /// back first (one host call for each run of them) and then keeps its own.
+    #[test]
+    fn kept_pages_stay_under_the_limit() {
+        let mut m = Mem::new();
+        const AT: u32 = 0x1000_0000;
+        let pages = KEEP_MAX as u32 + 2;
+        m.map(AT, pages << PAGE_BITS);
+        for i in 0..pages {
+            m.set_u32(AT + (i << PAGE_BITS), i + 1);
+        }
+        for i in 0..KEEP_MAX as u32 {
+            m.unmap(AT + (i << PAGE_BITS), 0x1000);
+        }
+        assert_eq!((m.kept, m.host_calls()), (KEEP_MAX, 1));
+        m.unmap(AT + ((KEEP_MAX as u32) << PAGE_BITS), 0x1000);
+        assert_eq!((m.kept, m.host_calls()), (1, 2));
+        assert!(m.is_mapped(AT + ((pages - 1) << PAGE_BITS)));
+        m.map(AT, pages << PAGE_BITS);
+        assert_eq!((m.kept, m.host_calls()), (0, 3));
+        for i in [0, 1, KEEP_MAX as u32 - 1, KEEP_MAX as u32] {
+            assert_eq!(m.u32(AT + (i << PAGE_BITS)), 0, "page {i} reads zero");
+        }
+        assert_eq!(m.u32(AT + ((pages - 1) << PAGE_BITS)), pages);
+    }
+
+    /// The last page of a mapped range (its next page unmapped, so off the pair test) reads and
+    /// writes every width at every offset that stays inside it, without touching the next page;
+    /// a value that runs one byte further faults at the next page's first byte, a store after
+    /// writing the bytes before it.
+    #[test]
+    fn the_last_page_of_a_range_reaches_its_last_word() {
+        let mut m = Mem::new();
+        m.map(0x7000, 0x1000);
+        m.set_u64(0x7ff8, 0x0102_0304_0506_0708);
+        m.set_u32(0x7ffc, 0xcafe_f00d);
+        assert_eq!(m.u32(0x7ffc), 0xcafe_f00d);
+        assert_eq!(m.u64(0x7ff8), 0xcafe_f00d_0506_0708);
+        assert_eq!(m.u16(0x7ffe), 0xcafe);
+        assert_eq!(m.u8(0x7fff), 0xca);
+        assert_eq!(m.u32_in_page(0x7ffc), Some(0xcafe_f00d));
+        assert_eq!(m.u32_in_page(0x7ffd), None);
+        for a in 0x7ff0..0x8000u32 {
+            m.set_u8(a, a as u8);
+        }
+        for a in 0x7ff0..0x8000u32 {
+            let left = (0x8000 - a) as usize;
+            let b = m.bytes(a, left as u32);
+            assert_eq!(m.u8(a), b[0]);
+            if left >= 2 {
+                assert_eq!(m.u16(a), u16::from_le_bytes(b[..2].try_into().unwrap()));
+            }
+            if left >= 4 {
+                assert_eq!(m.u32(a), u32::from_le_bytes(b[..4].try_into().unwrap()));
+            }
+            if left >= 8 {
+                assert_eq!(m.u64(a), u64::from_le_bytes(b[..8].try_into().unwrap()));
+            }
+        }
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.u32(0x7ffd)));
+        assert_eq!(panic_text(r), "read of unmapped memory at 00008000");
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.u64(0x7ff9)));
+        assert_eq!(panic_text(r), "read of unmapped memory at 00008000");
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            m.set_u32(0x7ffe, 0x5566_7788)
+        }));
+        assert_eq!(panic_text(r), "write to unmapped memory at 00008000");
+        assert_eq!(m.u16(0x7ffe), 0x7788);
+    }
+
+    /// The last page of the 4 GB space is an ordinary page: the fast path reads its last word,
+    /// and a value that runs past its end wraps to address 0, as with the page table before.
+    #[test]
+    fn the_last_page_of_the_space_wraps_to_address_zero() {
+        let mut m = Mem::new();
+        m.map(0xffff_f000, 0x1000);
+        m.set_u32(0xffff_fffc, 0x1122_3344);
+        assert_eq!(m.u32(0xffff_fffc), 0x1122_3344);
+        assert_eq!(m.u32_in_page(0xffff_fffc), Some(0x1122_3344));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.u32(0xffff_fffe)));
+        assert_eq!(panic_text(r), "read of unmapped memory at 00000000");
+        m.map(0, 0x1000);
+        m.set_u32(0xffff_fffe, 0xaabb_ccdd);
+        assert_eq!(m.bytes(0xffff_fffe, 4), [0xdd, 0xcc, 0xbb, 0xaa]);
+        assert_eq!(m.u16(0), 0xaabb);
+        assert_eq!(m.u32(0xffff_fffe), 0xaabb_ccdd);
+        m.unmap(0xffff_f000, 0x1000);
+        assert!(!m.is_mapped(0xffff_ffff) && m.is_mapped(0));
+    }
+
+    /// A value across two pages mapped by separate calls reads and writes as its bytes do (the
+    /// fast path takes it whole, the guest space being one block); `u32_in_page` reads it too.
+    #[test]
+    fn a_value_across_pages_mapped_apart() {
+        let mut m = Mem::new();
+        m.map(0x2_1000, 0x1000);
+        m.map(0x2_0000, 0x1000);
+        m.set_u64(0x2_0ffd, 0x8877_6655_4433_2211);
+        assert_eq!(
+            m.bytes(0x2_0ffd, 8),
+            [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]
+        );
+        assert_eq!(m.u64(0x2_0ffd), 0x8877_6655_4433_2211);
+        assert_eq!(m.u32(0x2_0ffe), 0x5544_3322);
+        assert_eq!(m.u32_in_page(0x2_0ffe), Some(0x5544_3322));
+        assert_eq!(m.u32_in_page(0x2_1000), Some(0x7766_5544));
+        // Unmapping the second page leaves the word across the boundary to the slow path.
+        m.unmap(0x2_1000, 0x1000);
+        assert_eq!(m.u32_in_page(0x2_0ffe), None);
+        assert_eq!(m.u32_in_page(0x2_0ffc), Some(0x3322_1100));
+        m.map(0x2_1000, 0x1000);
+        assert_eq!(m.u32(0x2_0ffe), 0x3322);
+        m.write(0x2_0ffe, b"abc\0");
+        assert_eq!(m.cstr(0x2_0ffe), b"abc");
+    }
+
+    /// Bulk accesses fault where they did before: a read or write at the first byte of the
+    /// first unmapped page (a write after storing the bytes before it), a string that runs
+    /// into an unmapped page at that page's first byte, a zeroing likewise after zeroing what
+    /// lies before it.
+    #[test]
+    fn bulk_accesses_fault_at_the_first_unmapped_byte() {
+        let mut m = Mem::new();
+        m.map(0x4000, 0x2000);
+        let mut buf = vec![0; 0x3000];
+        assert_eq!(m.try_read(0x4800, &mut buf), Err(Fault(0x6000)));
+        assert_eq!(m.try_read(0x3fff, &mut buf[..2]), Err(Fault(0x3fff)));
+        assert_eq!(m.try_write(0x5ffe, &[1, 2, 3, 4]), Err(Fault(0x6000)));
+        assert_eq!(m.bytes(0x5ffe, 2), [1, 2]);
+        m.write(0x5ff0, &[b'x'; 0x10]);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.cstr(0x5ff8)));
+        assert_eq!(panic_text(r), "read of unmapped memory at 00006000");
+        m.set_u8(0x5ff4, 0);
+        assert_eq!(m.cstr(0x5ff0), b"xxxx");
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.zero(0x5ff0, 0x20)));
+        assert_eq!(panic_text(r), "write to unmapped memory at 00006000");
+        assert_eq!(m.bytes(0x5ff0, 0x10), [0; 0x10]);
+    }
+
+    /// A dropped `Mem` gives its 4 GB block of address space back: more `Mem`s are made and
+    /// dropped here, one after another, than a Windows process's 128 TB could hold at once
+    /// (32,768 blocks), each with a page in use.
+    #[test]
+    fn dropped_mems_give_their_address_space_back() {
+        for i in 0..40_000u32 {
+            let mut m = Mem::new();
+            m.map(0x1000, 4);
+            m.set_u32(0x1000, i);
+            assert_eq!(m.u32(0x1000), i);
+        }
+    }
+
+    /// `Mem` stays `Send` and `Sync`, as it was with boxed pages.
+    #[test]
+    fn mem_is_send_and_sync() {
+        fn send_sync<T: Send + Sync>() {}
+        send_sync::<Mem>();
+    }
+
+    /// The page table this module used before the flat block (one boxed page per slot), kept
+    /// only to compare against in [`bench_random_word_access`].
+    struct PagedMem {
+        pages: Box<[Option<Box<[u8; PAGE]>>; PAGES]>,
+        store_diag: bool,
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn paged_slow(a: u32) -> u32 {
+        panic!("the benchmark left its pages at {a:08x}")
+    }
+
+    impl PagedMem {
+        fn new() -> Self {
+            let mut pages = Vec::with_capacity(PAGES);
+            pages.resize_with(PAGES, || None);
+            PagedMem {
+                pages: pages.into_boxed_slice().try_into().expect("PAGES slots"),
+                // Not known to the compiler, as `Mem`'s is not: each store tests it.
+                store_diag: std::hint::black_box(false),
+            }
+        }
+
+        fn map(&mut self, addr: u32, len: u32) {
+            for p in (addr >> PAGE_BITS)..=((addr + len - 1) >> PAGE_BITS) {
+                self.pages[p as usize].get_or_insert_with(|| Box::new([0; PAGE]));
+            }
+        }
+
+        fn unmap(&mut self, addr: u32, len: u32) {
+            for p in (addr >> PAGE_BITS)..((addr + len) >> PAGE_BITS) {
+                self.pages[p as usize] = None;
+            }
+        }
+
+        /// What `units/platform.rs` did for each page it committed before the flat block: map
+        /// the page, then write 4 KiB of zeros over it.
+        fn commit_page(&mut self, page: u32) {
+            self.map(page, PAGE as u32);
+            let p = self.pages[(page >> PAGE_BITS) as usize].as_deref_mut();
+            p.expect("mapped")
+                .copy_from_slice(std::hint::black_box(&[0; PAGE]));
+        }
+
+        #[inline(always)]
+        fn u32(&self, a: u32) -> u32 {
+            let off = (a as usize) & (PAGE - 1);
+            if off <= PAGE - 4 {
+                if let Some(p) = self.pages[(a >> PAGE_BITS) as usize].as_deref() {
+                    let mut b = [0; 4];
+                    b.copy_from_slice(&p[off..off + 4]);
+                    return u32::from_le_bytes(b);
+                }
+            }
+            paged_slow(a)
+        }
+
+        #[inline(always)]
+        fn set_u32(&mut self, a: u32, v: u32) {
+            if self.store_diag {
+                paged_slow(a);
+            }
+            let off = (a as usize) & (PAGE - 1);
+            if off <= PAGE - 4 {
+                if let Some(p) = self.pages[(a >> PAGE_BITS) as usize].as_deref_mut() {
+                    p[off..off + 4].copy_from_slice(&v.to_le_bytes());
+                    return;
+                }
+            }
+            paged_slow(a);
+        }
+    }
+
+    /// Not a check: what the game's `VirtualAlloc(MEM_COMMIT)` and `VirtualFree(MEM_DECOMMIT)`
+    /// cost through `units/platform.rs`, in three versions: the page table before the flat block
+    /// (`paged`: a boxed page each, mapped and zeroed page by page), the flat block handing every
+    /// page back as it is unmapped and committing it afresh, page by page (`hand back`: the
+    /// first version of the flat block), and the flat block as it is now (`now`: one call per
+    /// run, small unmaps kept). Two patterns: one page committed, written and decommitted, over
+    /// 64 pages in turn (a memory pool's pages), and a scrap heap growing from 64 KB to 1 MB by
+    /// doubling, one word written in each page, and shrinking back by halving. Each with the
+    /// process otherwise idle and with three other threads busy (as the viewer has: a decommit
+    /// then has to interrupt them). Run with `cargo test --release -p engine-core --lib
+    /// mem::tests::bench_commit_and_decommit -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_commit_and_decommit() {
+        use std::hint::black_box;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Instant;
+        const BASE: u32 = 0x0400_0000;
+        const P: u32 = PAGE as u32;
+        // The scrap heap's sizes: grown 64 KB -> 1 MB by doubling, then shrunk back by halving.
+        const SIZES: [u32; 5] = [0x1_0000, 0x2_0000, 0x4_0000, 0x8_0000, 0x10_0000];
+
+        /// Best of five, in nanoseconds per round of `f`.
+        fn best(rounds: u32, f: &mut dyn FnMut()) -> f64 {
+            (0..5)
+                .map(|_| {
+                    let t = Instant::now();
+                    for _ in 0..rounds {
+                        f();
+                    }
+                    t.elapsed().as_secs_f64() * 1e9 / rounds as f64
+                })
+                .fold(f64::INFINITY, f64::min)
+        }
+
+        let pool_paged = |m: &mut PagedMem| {
+            for i in 0..64 {
+                let page = BASE + i * P;
+                m.commit_page(page);
+                m.set_u32(page + 8, i);
+                m.unmap(page, P);
+            }
+        };
+        let pool_hand_back = |m: &mut Mem| {
+            for i in 0..64 {
+                let page = BASE + i * P;
+                m.map(page, P);
+                m.zero(page, P);
+                m.set_u32(page + 8, i);
+                let p = (page >> PAGE_BITS) as usize;
+                m.hand_back(p, p + 1, true);
+            }
+        };
+        let pool_now = |m: &mut Mem| {
+            for i in 0..64 {
+                let page = BASE + i * P;
+                m.map(page, P);
+                m.set_u32(page + 8, i);
+                m.unmap(page, P);
+            }
+        };
+        // The scrap heap's first 64 KB stay committed (mapped below, before the rounds).
+        const HEAP: u32 = 0x0800_0000;
+        let scrap_paged = |m: &mut PagedMem| {
+            for w in SIZES.windows(2) {
+                for page in (HEAP + w[0]..HEAP + w[1]).step_by(PAGE) {
+                    m.commit_page(page);
+                    m.set_u32(page, page);
+                }
+            }
+            for w in SIZES.windows(2).rev() {
+                m.unmap(HEAP + w[0], w[1] - w[0]);
+            }
+        };
+        let scrap_hand_back = |m: &mut Mem| {
+            for w in SIZES.windows(2) {
+                for page in (HEAP + w[0]..HEAP + w[1]).step_by(PAGE) {
+                    m.map(page, P);
+                    m.zero(page, P);
+                    m.set_u32(page, page);
+                }
+            }
+            for w in SIZES.windows(2).rev() {
+                for page in (HEAP + w[0]..HEAP + w[1]).step_by(PAGE) {
+                    let p = (page >> PAGE_BITS) as usize;
+                    m.hand_back(p, p + 1, true);
+                }
+            }
+        };
+        let scrap_now = |m: &mut Mem| {
+            for w in SIZES.windows(2) {
+                m.map(HEAP + w[0], w[1] - w[0]);
+                for page in (HEAP + w[0]..HEAP + w[1]).step_by(PAGE) {
+                    m.set_u32(page, page);
+                }
+            }
+            for w in SIZES.windows(2).rev() {
+                m.unmap(HEAP + w[0], w[1] - w[0]);
+            }
+        };
+
+        let stop = AtomicBool::new(false);
+        for busy in [0, 3] {
+            std::thread::scope(|s| {
+                for _ in 0..busy {
+                    s.spawn(|| {
+                        let mut n = 0u64;
+                        while !stop.load(Ordering::Relaxed) {
+                            n = black_box(n.wrapping_add(1));
+                        }
+                    });
+                }
+                for round in 0..3 {
+                    let mut paged = PagedMem::new();
+                    let mut flat = Mem::new();
+                    paged.map(HEAP, SIZES[0]);
+                    flat.map(HEAP, SIZES[0]);
+                    let a = best(200, &mut || pool_paged(black_box(&mut paged)));
+                    let b = best(200, &mut || pool_hand_back(black_box(&mut flat)));
+                    let c = best(200, &mut || pool_now(black_box(&mut flat)));
+                    println!(
+                        "{busy} busy threads, round {round}: one page committed, written and \
+                         decommitted, ns per page: paged {:.0}, hand back {:.0}, now {:.0}",
+                        a / 64.0,
+                        b / 64.0,
+                        c / 64.0
+                    );
+                    let a = best(50, &mut || scrap_paged(black_box(&mut paged)));
+                    let b = best(50, &mut || scrap_hand_back(black_box(&mut flat)));
+                    let c = best(50, &mut || scrap_now(black_box(&mut flat)));
+                    println!(
+                        "{busy} busy threads, round {round}: scrap heap 64 KB -> 1 MB -> 64 KB, \
+                         us per cycle: paged {:.0}, hand back {:.0}, now {:.0}",
+                        a / 1e3,
+                        b / 1e3,
+                        c / 1e3
+                    );
+                }
+                stop.store(true, Ordering::Relaxed);
+            });
+            stop.store(false, Ordering::Relaxed);
+        }
+    }
+
+    /// Not a check: nanoseconds per access of random 4-byte loads, random 4-byte stores and a
+    /// chain of dependent loads (each address read from the word before), on the flat block and
+    /// on the page table it replaced, over working sets of 1 MB and 64 MB. Run with
+    /// `cargo test --release -p engine-core --lib mem::tests::bench_random_word_access --
+    /// --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_random_word_access() {
+        use std::hint::black_box;
+        use std::time::Instant;
+        const BASE: u32 = 0x2000_0000;
+        const ACCESSES: usize = 1 << 23;
+        let mut x = 0x9e37_79b9u32;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x
+        };
+        for set in [1u32 << 20, 64 << 20] {
+            let mut flat = Mem::new();
+            let mut paged = PagedMem::new();
+            flat.map(BASE, set);
+            paged.map(BASE, set);
+            // Both where the compiler cannot follow them (as `flat` is, handed to functions it
+            // does not inline), so the loops below reload their fields alike.
+            black_box(&mut flat);
+            black_box(&mut paged);
+            let words = (set / 4) as usize;
+            let addrs: Vec<u32> = (0..ACCESSES)
+                .map(|_| BASE + ((next() % set) & !3))
+                .collect();
+            // One cycle through every word of the set in a random order, for the chain.
+            let mut order: Vec<u32> = (0..words as u32).map(|w| BASE + w * 4).collect();
+            for i in (1..words).rev() {
+                order.swap(i, next() as usize % (i + 1));
+            }
+            for i in 0..words {
+                let to = order[(i + 1) % words];
+                flat.set_u32(order[i], to);
+                paged.set_u32(order[i], to);
+            }
+            let best = |f: &mut dyn FnMut() -> u32| {
+                (0..5)
+                    .map(|_| {
+                        let t = Instant::now();
+                        black_box(f());
+                        t.elapsed().as_secs_f64() * 1e9 / ACCESSES as f64
+                    })
+                    .fold(f64::INFINITY, f64::min)
+            };
+            // Three rounds, each variant right after the other, so a move of the thread to
+            // another kind of core (this machine has two) shows as a round apart.
+            for round in 0..3 {
+                let flat_load = best(&mut || addrs.iter().fold(0u32, |s, &a| s ^ flat.u32(a)));
+                let paged_load = best(&mut || addrs.iter().fold(0u32, |s, &a| s ^ paged.u32(a)));
+                let flat_chain = best(&mut || (0..ACCESSES).fold(BASE, |a, _| flat.u32(a)));
+                let paged_chain = best(&mut || (0..ACCESSES).fold(BASE, |a, _| paged.u32(a)));
+                // Stores write the address back, so the chain stays intact for the next set.
+                let flat_store = best(&mut || {
+                    for &a in &addrs {
+                        flat.set_u32(a, black_box(flat.u32(a)));
+                    }
+                    0
+                });
+                let paged_store = best(&mut || {
+                    for &a in &addrs {
+                        paged.set_u32(a, black_box(paged.u32(a)));
+                    }
+                    0
+                });
+                println!(
+                    "{} MB set, round {round}, ns per access: random load {flat_load:.2} flat, \
+                     {paged_load:.2} paged; dependent load {flat_chain:.2} flat, {paged_chain:.2} \
+                     paged; random load and store {flat_store:.2} flat, {paged_store:.2} paged",
+                    set >> 20
+                );
+            }
         }
     }
 }

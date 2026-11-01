@@ -1307,30 +1307,62 @@ fn reserve(e: &mut Engine, address: u32, size: u32) -> Option<u32> {
     Some(base)
 }
 
-/// Commits the pages of `[start, start + len)` in the reservation at
-/// `base`; newly committed pages read as zero.
+/// Commits the pages of `[start, start + len)` (whole pages) in the
+/// reservation at `base`; newly committed pages read as zero.
 fn commit(e: &mut Engine, base: u32, start: u32, len: u32) {
-    for page in (start..start.wrapping_add(len)).step_by(PAGE_BYTES as usize) {
-        let i = ((page - base) / PAGE_BYTES) as usize;
-        let region = e.kernel.regions.get_mut(&base).expect("reservation");
-        if !region.committed[i] {
-            region.committed[i] = true;
-            e.mem.map(page, PAGE_BYTES);
-            e.mem.write(page, &[0; PAGE_BYTES as usize]);
-        }
-    }
+    // A page the reservation has not committed is not mapped (`reserve`
+    // unmaps the whole range, `decommit` the pages it takes, and nothing else
+    // maps memory inside a reservation), so `Mem::map` gives it zeros.
+    set_committed(e, base, start, len, true, |mem, at, len| {
+        debug_assert!(
+            (at as u64..at as u64 + len as u64)
+                .step_by(PAGE_BYTES as usize)
+                .all(|p| !mem.is_mapped(p as u32)),
+            "VirtualAlloc commit of {at:08x}+{len:x}: a page the reservation \
+             has not committed is mapped"
+        );
+        mem.map(at, len)
+    });
 }
 
-/// Decommits the pages of `[start, start + len)` in the reservation at
-/// `base`: they are no longer addressable.
+/// Decommits the pages of `[start, start + len)` (whole pages) in the
+/// reservation at `base`: they are no longer addressable.
 fn decommit(e: &mut Engine, base: u32, start: u32, len: u32) {
-    for page in (start..start.wrapping_add(len)).step_by(PAGE_BYTES as usize) {
-        let i = ((page - base) / PAGE_BYTES) as usize;
-        let region = e.kernel.regions.get_mut(&base).expect("reservation");
-        if region.committed[i] {
-            region.committed[i] = false;
-            e.mem.unmap(page, PAGE_BYTES);
+    set_committed(e, base, start, len, false, crate::Mem::unmap);
+}
+
+/// Marks the pages of `[start, start + len)` in the reservation at `base`
+/// committed or not (`to`), and hands each run of consecutive pages that
+/// change to `apply` (`Mem::map` or `Mem::unmap`) in one call, as
+/// `VirtualAlloc` and `VirtualFree` take a range in one call (so at most one
+/// host call per run rather than one per page).
+fn set_committed(
+    e: &mut Engine,
+    base: u32,
+    start: u32,
+    len: u32,
+    to: bool,
+    apply: fn(&mut crate::Mem, u32, u32),
+) {
+    let first = ((start - base) / PAGE_BYTES) as usize;
+    let end = first + (len / PAGE_BYTES) as usize;
+    let region = e.kernel.regions.get_mut(&base).expect("reservation");
+    let mut i = first;
+    while i < end {
+        if region.committed[i] == to {
+            i += 1;
+            continue;
         }
+        let run = i;
+        while i < end && region.committed[i] != to {
+            region.committed[i] = to;
+            i += 1;
+        }
+        apply(
+            &mut e.mem,
+            base + run as u32 * PAGE_BYTES,
+            (i - run) as u32 * PAGE_BYTES,
+        );
     }
 }
 
@@ -4477,6 +4509,124 @@ mod tests {
         assert_eq!(call(&mut e, VIRTUAL_FREE, &[base, 0, MEM_DECOMMIT]), 1);
         assert!(!e.mem.is_mapped(base));
         assert_eq!(call(&mut e, VIRTUAL_FREE, &[base, 0, MEM_RELEASE]), 1);
+    }
+
+    /// A commit or decommit of many pages maps or unmaps each run of pages that change in one
+    /// call, as the game's one `VirtualAlloc` or `VirtualFree` call asks: committing 64 new pages
+    /// costs one host call, not 64. Recommitted pages read zero; pages committed all along keep
+    /// their bytes.
+    #[test]
+    fn commit_and_decommit_take_each_run_of_pages_whole() {
+        let mut e = kernel_engine();
+        const AT: u32 = 0x0400_0000;
+        assert_eq!(
+            call(
+                &mut e,
+                VIRTUAL_ALLOC,
+                &[AT, 0x10_0000, MEM_RESERVE, PAGE_READWRITE]
+            ),
+            AT
+        );
+        let calls = e.mem.host_calls();
+        assert_eq!(
+            call(
+                &mut e,
+                VIRTUAL_ALLOC,
+                &[AT, 0x4_0000, MEM_COMMIT, PAGE_READWRITE]
+            ),
+            AT
+        );
+        assert_eq!(e.mem.host_calls(), calls + 1, "64 new pages, one run");
+        for i in 0..0x40u32 {
+            e.mem.set_u32(AT + i * 0x1000, i + 1);
+        }
+        // Pages 2 to 4 and 9: two runs, then both committed again in one call over all 64.
+        assert_eq!(
+            call(&mut e, VIRTUAL_FREE, &[AT + 0x2000, 0x3000, MEM_DECOMMIT]),
+            1
+        );
+        assert_eq!(
+            call(&mut e, VIRTUAL_FREE, &[AT + 0x9000, 0x1000, MEM_DECOMMIT]),
+            1
+        );
+        assert!(e.mem.is_mapped(AT + 0x1fff) && !e.mem.is_mapped(AT + 0x2000));
+        assert!(!e.mem.is_mapped(AT + 0x4fff) && e.mem.is_mapped(AT + 0x5000));
+        assert!(!e.mem.is_mapped(AT + 0x9000));
+        call(
+            &mut e,
+            VIRTUAL_ALLOC,
+            &[AT, 0x4_0000, MEM_COMMIT, PAGE_READWRITE],
+        );
+        assert_eq!(
+            e.mem.host_calls(),
+            calls + 1,
+            "small spans kept, zeroed in place"
+        );
+        for i in 0..0x40u32 {
+            let want = if (2..5).contains(&i) || i == 9 {
+                0
+            } else {
+                i + 1
+            };
+            assert_eq!(e.mem.u32(AT + i * 0x1000), want, "page {i}");
+        }
+        assert!(e.mem.bytes(AT + 0x2000, 0x3000).iter().all(|&b| b == 0));
+        // The whole reservation decommitted (size 0), then released.
+        assert_eq!(call(&mut e, VIRTUAL_FREE, &[AT, 0, MEM_DECOMMIT]), 1);
+        assert!(!(0..0x100u32).any(|i| e.mem.is_mapped(AT + i * 0x1000)));
+        assert_eq!(call(&mut e, VIRTUAL_FREE, &[AT, 0, MEM_RELEASE]), 1);
+    }
+
+    /// A reservation that ends where the 4 GB space ends commits and decommits its pages like
+    /// any other. (The page loop before the flat guest memory ran from the range's start to its
+    /// end as 32-bit addresses; that end wraps to 0, so it committed and decommitted nothing.)
+    #[test]
+    fn a_reservation_at_the_top_of_the_space_commits() {
+        let mut e = kernel_engine();
+        const AT: u32 = 0xfff0_0000;
+        assert_eq!(
+            call(
+                &mut e,
+                VIRTUAL_ALLOC,
+                &[AT, 0x10_0000, MEM_RESERVE, PAGE_READWRITE]
+            ),
+            AT
+        );
+        assert_eq!(
+            call(
+                &mut e,
+                VIRTUAL_ALLOC,
+                &[AT, 0x10_0000, MEM_COMMIT, PAGE_READWRITE]
+            ),
+            AT
+        );
+        assert!(e.mem.is_mapped(AT) && e.mem.is_mapped(0xffff_ffff));
+        e.mem.set_u32(0xffff_fffc, 5);
+        assert_eq!(call(&mut e, VIRTUAL_FREE, &[AT, 0, MEM_DECOMMIT]), 1);
+        assert!(!e.mem.is_mapped(AT) && !e.mem.is_mapped(0xffff_ffff));
+        assert_eq!(call(&mut e, VIRTUAL_FREE, &[AT, 0, MEM_RELEASE]), 1);
+    }
+
+    /// `commit` relies on a page the reservation has not committed being unmapped (`Mem::map`
+    /// then gives it zeros, where it keeps the bytes of a mapped page). A page mapped inside a
+    /// reservation by anything but `VirtualAlloc` breaks that, and debug builds stop there.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "a page the reservation has not committed is mapped")]
+    fn a_commit_over_a_page_mapped_behind_virtual_alloc_stops() {
+        let mut e = kernel_engine();
+        const AT: u32 = 0x0400_0000;
+        call(
+            &mut e,
+            VIRTUAL_ALLOC,
+            &[AT, 0x1_0000, MEM_RESERVE, PAGE_READWRITE],
+        );
+        e.mem.map(AT + 0x1000, 0x1000);
+        call(
+            &mut e,
+            VIRTUAL_ALLOC,
+            &[AT, 0x1_0000, MEM_COMMIT, PAGE_READWRITE],
+        );
     }
 
     #[test]
