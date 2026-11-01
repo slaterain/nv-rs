@@ -63,9 +63,18 @@ env -u DISPLAY WGPU_BACKEND=vulkan cargo run --release -- \
   "/path/to/Fallout New Vegas/Data" GSDocMitchellHouse
 ```
 
-For Steam/Proton installations, pass the active plugin list and INI when
-needed with `--plugins` and `--ini`. Linux builds currently run from source;
-Windows remains the packaged playtest platform.
+The game data comes from the Windows version installed through Steam (Steam
+Play / Proton), for example
+`~/.steam/steam/steamapps/common/Fallout New Vegas/Data`. For Steam/Proton
+installations, the game's own `Fallout.ini`, `FalloutPrefs.ini` and
+`plugins.txt` are read from its Proton prefix in the same Steam library
+(`steamapps/compatdata/<app id>/pfx/drive_c/users/steamuser`; both Steam
+editions, app ids 22380 and 22490), once the game has been started there.
+Until then nv-rs uses the install's `Fallout_default.ini` and the official
+plugins. `--ini` and `--plugins` still override them. The acceptance routes
+run with `scripts/acceptance.sh` (`--help` lists its options; `--headless`
+needs gamescope). Linux builds currently run from source; Windows remains the
+packaged playtest platform.
 
 ## Current live route
 

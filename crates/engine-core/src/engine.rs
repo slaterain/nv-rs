@@ -334,8 +334,7 @@ impl Engine {
         // The process starts in the executable's folder (where Steam starts
         // the game): `GetCurrentDirectoryA` reports it.
         if let Some(folder) = exe.parent() {
-            let folder = folder.to_string_lossy().replace('/', "\\");
-            e.kernel.current_directory = folder.into_bytes();
+            e.kernel.current_directory = crate::units::platform::files::game_path(folder);
         }
         Ok(e)
     }

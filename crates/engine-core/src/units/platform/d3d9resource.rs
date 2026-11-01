@@ -13,8 +13,10 @@
 //! gave. Nothing is drawn yet.
 
 use super::d3d9::{CODE_BASE, D3DERR_INVALIDCALL, D3D_OK, E_NOINTERFACE};
+#[cfg(windows)]
+use super::d3d9device::Word;
 use super::d3d9device::{
-    device_add_ref, device_release, forwarded, guid, iid_is, in_scene, Word, IID_IUNKNOWN,
+    device_add_ref, device_release, forwarded, guid, iid_is, in_scene, IID_IUNKNOWN,
 };
 use crate::{Engine, Ptr};
 use std::collections::HashMap;
