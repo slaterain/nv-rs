@@ -977,11 +977,13 @@ fn blend_into_node(e: &mut Engine, this: u32, node: u32, hk: u32, flag: bool, so
     let translation = transform + 0x24;
     let scale = x87_quiet(e.global::<f32>(POSITION_SCALE));
     let state_word = e.tls() + TLS_UPDATE_STATE;
-    e.with_stack(0xb0, |e, frame| {
+    e.with_stack(0xd0, |e, frame| {
         let f = frame.addr();
         // Frame: 0 scaled position, 0x10 and 0x20 quaternion and position blend, 0x30 and
         // 0x40 two more quaternions, 0x50 the Havok position, 0x60 a 0x40-byte record whose
-        // last vector (0x90) is the position, 0xa0 the rotation buffer.
+        // last vector (0x90) is the position, 0xa0 the 0x30-byte hkRotation: three hkVector4
+        // columns, all written by 0056dff0 (the exe's local at [ESP+0xd0] after its three
+        // pushes, 0x3c bytes below its cookie).
         let scaled = f;
         let blended_quaternion = f + 0x10;
         let blended_position = f + 0x20;
@@ -2558,6 +2560,32 @@ mod tests {
         assert_eq!(seen[1], [2.75, 5.5, 8.25, 3.0]);
         // State 0: virtual slot 0xB8 gets the transform.
         assert_eq!(calls(&s.e, 0x0900_00b8), [[s.this, transform]]);
+    }
+
+    /// `0056dff0` stores a whole hkRotation into the rotation buffer: three 16-byte columns
+    /// (`00553fc0` at `out + 0x10 * i`, i = 0..2), 0x30 bytes. The exe's local at `[ESP+0xd0]`
+    /// (after its three pushes) has 0x3c bytes below its cookie. With the block check every
+    /// frame is a guarded heap block, so a frame too small for it stops here.
+    #[test]
+    fn hkto_ni_transform_rotation_buffer_holds_the_three_columns() {
+        let mut s = blend_setup(0.25, 5.0, 0, 1, 0);
+        s.e.register_double(TRANSFORM_ROTATION_OUT, |e, a| {
+            for word in 0..12u32 {
+                e.mem.set_u32(a[0] + 4 * word, 0x3f00_0000 + word);
+            }
+            Ret::default()
+        });
+        let words_seen: Rc<RefCell<Vec<u32>>> = Rc::new(RefCell::new(vec![]));
+        let seen = words_seen.clone();
+        s.e.register_double(QUATERNION_SET, move |e, a| {
+            seen.borrow_mut()
+                .extend((0..12u32).map(|word| e.mem.u32(a[1] + 4 * word)));
+            Ret::default()
+        });
+        s.e.mem.enable_block_check(true, true);
+        s.e.call(0x00c81e30, &args![s.this]);
+        let expected: Vec<u32> = (0..12u32).map(|word| 0x3f00_0000 + word).collect();
+        assert_eq!(*words_seen.borrow(), expected);
     }
 
     #[test]
