@@ -333,6 +333,10 @@ pub struct PlayerMovement {
     main_thread: Option<engine::thread_host::MainThread>,
     pub main_frames: u64,
     main_stage: Stage<()>,
+    /// The line [`PlayerMovement::finish_main_frame`] printed when main stopped (a fault, an
+    /// untranslated function, a game thread's stop, its return without the game's window):
+    /// `Game's main stopped in frame N: why (in ..)`.
+    pub main_stop: Option<String>,
     /// When the status line ([`PlayerMovement::summary`]) was last printed from [`PlayerMovement::main_frame`].
     main_reported: Option<std::time::Instant>,
     /// Frames the AI threads (and the world step on thread 2) ran, and
@@ -370,6 +374,7 @@ impl Default for PlayerMovement {
             main_thread: None,
             main_frames: 0,
             main_stage: Stage::NotTried,
+            main_stop: None,
             main_reported: None,
             world_frames: 0,
             world_fallback_frames: 0,
@@ -1261,6 +1266,14 @@ impl PlayerMovement {
                 true
             }
             Err(why) => {
+                // Main stopped (its coroutine caught the panic, `thread_host::start_main_thread`,
+                // whose message `quiet_game_panics` kept quiet; a game thread's stop reaches main
+                // as one): its frames end here for good. The game's window keeps its last frame,
+                // so the line goes to the log always, not only to `NV_MOVE_TRACE`'s file. Once:
+                // after `Failed` no frame is handed over again.
+                let line = format!("Game's main stopped in frame {}: {why}", self.main_frames);
+                eprintln!("{line}");
+                self.main_stop = Some(line);
                 self.main_stage = Stage::Failed(why);
                 false
             }
@@ -2061,5 +2074,31 @@ mod tests {
         let ((stage, why), n) = m.stops.iter().next().unwrap();
         assert_eq!((*stage, *n), ("frame", 1));
         assert!(why.contains("00001000"), "{why}");
+    }
+
+    /// A stop of the game's `main` (here an untranslated function `WinMain`, `0086a850`, calls)
+    /// is reported as one line with the frame it stopped in and where, whatever `NV_MOVE_TRACE`
+    /// says; main isn't resumed after it, so the line comes once. (The play build reported
+    /// nothing: the game's window kept its last frame, a freeze to the player.)
+    #[test]
+    fn a_stop_on_main_is_reported_once() {
+        let mut e = Engine::new();
+        e.register(WIN_MAIN, |e, _| e.call(0x00ab_cdef, &[]));
+        let mut m = PlayerMovement::default();
+        // Its start-up is its first frame (frame 0): the stop is there.
+        m.start_main(&mut e);
+        assert_eq!(m.main_frames, 0);
+        let line = m.main_stop.clone().expect("the stop reported");
+        assert!(
+            line.starts_with("Game's main stopped in frame 0: open function 00abcdef"),
+            "{line}"
+        );
+        assert!(line.ends_with("(in 0086a850)"), "{line}");
+        assert!(m.summary().contains("stopped (open function 00abcdef"));
+        // Stopped: no frame is handed over again, and nothing more is reported.
+        assert!(!m.main_frame(&mut e));
+        assert!(!m.begin_main_frame(&mut e));
+        assert!(!m.finish_main_frame(&mut e));
+        assert_eq!(m.main_stop.as_deref(), Some(line.as_str()));
     }
 }
