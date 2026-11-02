@@ -27,11 +27,15 @@
 //!   freed, and a stack serves them as cheaply as the old exact-size lists did. At most
 //!   [`QUICK_BYTES`] wait: a free that would put more there moves a few of the oldest waiting
 //!   blocks on to the bins, where they merge (at most [`SPILL_STEP`] + 1, so no one free stalls
-//!   the frame). When the heap is about to report itself full, all of them go.
+//!   the frame). A request that the bins and the top cannot serve moves them on too,
+//!   [`FLUSH_STEP`] at a time, trying again after each batch: it may then be served, and only
+//!   when it cannot be once all have gone does the heap report itself full.
 //!
 //! All the bookkeeping is in host tables keyed by address. Nothing is written into guest memory
 //! (a freed block keeps what the freed-block check filled it with, and the write watch sees
-//! only the game's own stores).
+//! only the game's own stores). The tables that find a free block by its start and by its end
+//! are split by the address's [`REGION_BITS`] region ([`Regions`]), so that no single free
+//! rehashes every free block at once.
 
 use super::{HEAP_BASE, HEAP_END};
 use crate::engine::AddrMap;
@@ -52,21 +56,37 @@ const BINS: usize = EXACT_BINS + (32 - FIRST_POWER as usize) * SUB_BINS;
 const WORDS: usize = BINS.div_ceil(64);
 const _: () = assert!(WORDS <= 32, "the bitmap of words must fit in a u32");
 /// Freed blocks of up to this size wait in the quick stacks: the sizes the old exact-size lists
-/// were indexed for. Through the bins, a free and an allocation of 264 bytes to 4 KB took
-/// about half as long again as with those lists (`heap_speed` in `mem.rs`).
+/// were indexed for. Through the bins alone, a free and an allocation of 264 bytes to 4 KB took
+/// 60-100% longer than with those lists, and of 8 to 256 bytes more than twice as long
+/// (`heap_speed` in `mem.rs`).
 pub(super) const QUICK_MAX: u32 = 4096;
 /// The most bytes the quick stacks hold. With every multiple of 8 from 264 to 4096 in use, 1 MB
 /// holds about one block of each size, so nearly every block went on and the stacks seldom
-/// served a request; 8 MB keeps a free and an allocation of those sizes within about 12% of the
-/// old lists' time.
+/// served a request; with 8 MB a free and an allocation of those sizes take about a fifth longer
+/// than with the old lists (`heap_speed`, 2026-11-01, on a machine with other work running:
+/// +20 to +23% in three runs; small sizes alone -11 to +9%).
 pub(super) const QUICK_BYTES: u64 = 8 << 20;
+/// The quick stacks, one per size / 8 (stack 0 unused), and the words of the bitmap of those
+/// that hold a block.
+const STACKS: usize = QUICK_MAX as usize / 8 + 1;
+const STACK_WORDS: usize = STACKS.div_ceil(64);
 /// How many blocks of its own bin a request looks at for one that fits.
 const OWN_BIN_LOOK: u32 = 8;
 /// How many waiting blocks, the oldest of one size after another, a free that puts the quick
 /// stacks over [`QUICK_BYTES`] moves on to the bins before it moves the oldest of its own size
 /// (which brings them back under). Moving the older half of every stack at once, as before,
-/// took 50-113 ms in one free with 8 MB of 8-byte blocks waiting: 6 to 13 frames at 120 fps.
+/// took 51-60 ms in one free with 8 MB of 8-byte blocks waiting (release, pinned to one core):
+/// 6 or 7 frames at 120 fps.
 const SPILL_STEP: usize = 16;
+/// How many waiting blocks a request the bins and the top cannot serve moves on to the bins
+/// before it tries them again ([`Heap::take_free`]): moving all of them at once took one request
+/// as long as moving 8 MB of 8-byte blocks takes (about a million merges) even when the first
+/// few would have served it.
+const FLUSH_STEP: usize = 4096;
+/// The size, as a power of two, of the address regions [`Regions`] splits its table by (256 KB).
+/// Two free blocks in bins are never adjacent, so a region holds at most one free block per 16
+/// bytes: 16K, which one table of a region rehashes in well under a millisecond.
+const REGION_BITS: u32 = 18;
 /// No node.
 const NONE: u32 = u32::MAX;
 
@@ -91,19 +111,154 @@ struct Node {
     next: u32,
 }
 
+/// A table keyed by heap address (a free block's node number here, a live block's size in
+/// [`super::Mem`]), split into one hash table per [`REGION_BITS`] region of the heap. A hash
+/// table doubles its slots all at once, rehashing every entry: one table of every free block did
+/// that inside a single free, 18-27 ms at about 0.9M free blocks and 37-51 ms at about 1.8M
+/// (measured 2026-11-01, a burst of frees that did not merge). A region's table holds at most
+/// 16K entries, so the most one free rehashes is that many: in the same burst of 3M frees no
+/// free took more than 0.6 ms, and the burst took 90 ns a free against 230-260 ns. The table of
+/// live blocks did the same inside one allocation (9-10 ms at 0.9M live blocks, 18-19 ms at
+/// 1.8M); a region holds at most 32K of those.
+#[derive(Default)]
+pub(super) struct Regions {
+    /// The table of each region, from [`HEAP_BASE`] up (as far as a region with an entry).
+    tables: Vec<AddrMap<u32, u32>>,
+    /// The entries in all of them.
+    len: usize,
+}
+
+impl Regions {
+    /// The region of heap address `addr` (an address below [`HEAP_BASE`] wraps round to a
+    /// region far past the heap's, which holds nothing).
+    #[inline]
+    fn region(addr: u32) -> usize {
+        (addr.wrapping_sub(HEAP_BASE) >> REGION_BITS) as usize
+    }
+
+    #[inline]
+    pub(super) fn get(&self, addr: &u32) -> Option<&u32> {
+        self.tables.get(Self::region(*addr))?.get(addr)
+    }
+
+    #[inline]
+    fn get_mut(&mut self, addr: &u32) -> Option<&mut u32> {
+        self.tables.get_mut(Self::region(*addr))?.get_mut(addr)
+    }
+
+    /// Puts `n` under heap address `addr` (at least [`HEAP_BASE`]).
+    #[inline]
+    pub(super) fn insert(&mut self, addr: u32, n: u32) {
+        assert!(addr >= HEAP_BASE, "{addr:08x} is below the heap");
+        let r = Self::region(addr);
+        if r >= self.tables.len() {
+            self.tables.resize_with(r + 1, AddrMap::default);
+        }
+        if self.tables[r].insert(addr, n).is_none() {
+            self.len += 1;
+        }
+    }
+
+    #[inline]
+    pub(super) fn remove(&mut self, addr: &u32) -> Option<u32> {
+        let n = self.tables.get_mut(Self::region(*addr))?.remove(addr);
+        self.len -= usize::from(n.is_some());
+        n
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.len
+    }
+
+    pub(super) fn values(&self) -> impl Iterator<Item = &u32> + '_ {
+        self.tables.iter().flat_map(|t| t.values())
+    }
+
+    /// Every address and its entry (the checks of the tests).
+    #[cfg(test)]
+    pub(super) fn iter(&self) -> impl Iterator<Item = (&u32, &u32)> + '_ {
+        self.tables.iter().flat_map(|t| t.iter())
+    }
+
+    /// The most entries one region's table holds.
+    #[cfg(test)]
+    fn most_in_one(&self) -> usize {
+        self.tables.iter().map(|t| t.len()).max().unwrap_or(0)
+    }
+}
+
+/// The size, as a power of two, of the chunks [`Nodes`] keeps its nodes in (4096, 64 KB).
+const NODE_CHUNK_BITS: u32 = 12;
+
+/// The nodes of the free blocks in bins by number, in chunks that never move, and a list of the
+/// numbers not in use (through their `next`). One vector of every node copied all of them each
+/// time it doubled: 1.9 ms in one free at a million free blocks (measured 2026-11-01).
+#[derive(Default)]
+struct Nodes {
+    chunks: Vec<Box<[Node]>>,
+    /// The nodes made so far, and how many of them are on the list of those not in use.
+    len: usize,
+    spare_len: usize,
+    /// The first node not in use (while `spare_len` is not 0).
+    spare: u32,
+}
+
+impl Nodes {
+    /// A node for `node`: the last one given back, else a new one.
+    fn alloc(&mut self, node: Node) -> u32 {
+        if self.spare_len != 0 {
+            let n = self.spare;
+            self.spare = self[n as usize].next;
+            self.spare_len -= 1;
+            self[n as usize] = node;
+            return n;
+        }
+        let n = self.len;
+        if n >> NODE_CHUNK_BITS == self.chunks.len() {
+            self.chunks
+                .push(vec![node; 1 << NODE_CHUNK_BITS].into_boxed_slice());
+        }
+        self.len += 1;
+        self[n] = node;
+        n as u32
+    }
+
+    /// Gives node `n` back.
+    fn release(&mut self, n: u32) {
+        let spare = self.spare;
+        self[n as usize].next = spare;
+        self.spare = n;
+        self.spare_len += 1;
+    }
+}
+
+impl std::ops::Index<usize> for Nodes {
+    type Output = Node;
+    #[inline]
+    fn index(&self, n: usize) -> &Node {
+        &self.chunks[n >> NODE_CHUNK_BITS][n & ((1 << NODE_CHUNK_BITS) - 1)]
+    }
+}
+
+impl std::ops::IndexMut<usize> for Nodes {
+    #[inline]
+    fn index_mut(&mut self, n: usize) -> &mut Node {
+        &mut self.chunks[n >> NODE_CHUNK_BITS][n & ((1 << NODE_CHUNK_BITS) - 1)]
+    }
+}
+
 /// The heap's top and free space (see the module's description).
 pub(super) struct Heap {
     /// The next fresh address: everything at or above it is unused.
     top: u32,
     /// The highest the top has been.
     peak: u32,
-    /// The free blocks in bins, by node number, and the node numbers not in use.
-    nodes: Vec<Node>,
-    spare: Vec<u32>,
+    /// The free blocks in bins, by node number.
+    nodes: Nodes,
     /// The node of each free block in a bin, by its start and by its end (the address after
     /// it), to find a freed block's neighbours.
-    by_start: AddrMap<u32, u32>,
-    by_end: AddrMap<u32, u32>,
+    by_start: Regions,
+    by_end: Regions,
     /// The newest block of each bin.
     heads: [u32; BINS],
     /// The bins that hold a block (bit `b % 64` of word `b / 64`), and the words that are not 0.
@@ -115,6 +270,9 @@ pub(super) struct Heap {
     /// the oldest at the front (the first to go on to the bins), and the bytes in them.
     quick: Vec<VecDeque<u32>>,
     quick_bytes: u64,
+    /// The quick stacks that hold a block (bit `i % 64` of word `i / 64` for stack `i`), so
+    /// that a move to the bins finds the next one without looking at every empty stack.
+    waiting: [u64; STACK_WORDS],
     /// The stack the last move to the bins took a block from: the next move looks at the stacks
     /// after it first, so every size ages out in turn.
     spill_from: usize,
@@ -130,16 +288,16 @@ impl Heap {
         Heap {
             top: HEAP_BASE,
             peak: HEAP_BASE,
-            nodes: Vec::new(),
-            spare: Vec::new(),
-            by_start: AddrMap::default(),
-            by_end: AddrMap::default(),
+            nodes: Nodes::default(),
+            by_start: Regions::default(),
+            by_end: Regions::default(),
             heads: [NONE; BINS],
             words: [0; WORDS],
             nonempty: 0,
             free_bytes: 0,
-            quick: vec![VecDeque::new(); QUICK_MAX as usize / 8 + 1],
+            quick: vec![VecDeque::new(); STACKS],
             quick_bytes: 0,
+            waiting: [0; STACK_WORDS],
             spill_from: 0,
             failed_flush: (0, 0),
             quick_max: QUICK_MAX,
@@ -161,8 +319,12 @@ impl Heap {
     #[inline]
     pub(super) fn take(&mut self, size: u32) -> Option<u32> {
         if size <= self.quick_max {
-            if let Some(a) = self.quick[(size >> 3) as usize].pop_back() {
+            let i = (size >> 3) as usize;
+            if let Some(a) = self.quick[i].pop_back() {
                 self.quick_bytes -= u64::from(size);
+                if self.quick[i].is_empty() {
+                    self.waiting[i / 64] &= !(1 << (i % 64));
+                }
                 return Some(a);
             }
         }
@@ -171,9 +333,10 @@ impl Heap {
 
     /// [`Heap::take`] past the quick stacks: the bins, then the top. When both fail, the whole
     /// of the request's own bin is searched (a fitting block can sit behind more than
-    /// [`OWN_BIN_LOOK`] newer, smaller ones), then every quick stack goes to the bins and the
-    /// bins and the top are tried again. A request that fails notes what the quick stacks held
-    /// ([`Heap::failed_flush`]).
+    /// [`OWN_BIN_LOOK`] newer, smaller ones), then the waiting blocks go to the bins,
+    /// [`FLUSH_STEP`] at a time, the bins and the top tried again after each batch (so a request
+    /// one batch serves moves no more), and the whole of the bin once more when none wait. A
+    /// request that fails notes what the quick stacks held ([`Heap::failed_flush`]).
     fn take_free(&mut self, size: u32) -> Option<u32> {
         if let Some(n) = self.fit(size, OWN_BIN_LOOK) {
             return Some(self.carve(n, size));
@@ -185,14 +348,32 @@ impl Heap {
             return Some(self.carve(n, size));
         }
         let waiting = (self.quick_bytes, self.quick_blocks());
-        if waiting.0 != 0 {
-            self.flush_quick();
-            if let Some(n) = self.fit(size, u32::MAX) {
+        if waiting.0 == 0 {
+            self.failed_flush = waiting;
+            return None;
+        }
+        loop {
+            let mut moved = 0;
+            while moved < FLUSH_STEP {
+                let Some(i) = self.next_waiting() else {
+                    break;
+                };
+                self.spill_from = i;
+                self.spill_oldest(i);
+                moved += 1;
+            }
+            if let Some(n) = self.fit(size, OWN_BIN_LOOK) {
                 return Some(self.carve(n, size));
             }
             if let Some(a) = self.grow(size) {
                 return Some(a);
             }
+            if moved < FLUSH_STEP || self.quick_bytes == 0 {
+                break;
+            }
+        }
+        if let Some(n) = self.fit(size, u32::MAX) {
+            return Some(self.carve(n, size));
         }
         self.failed_flush = waiting;
         None
@@ -255,7 +436,7 @@ impl Heap {
         self.free_bytes -= u64::from(size);
         if have == size {
             self.by_end.remove(&(start + have));
-            self.spare.push(n);
+            self.nodes.release(n);
         } else {
             // The rest keeps its end, so only its start moves; its right neighbour is not free
             // (free blocks are merged), so there is nothing to merge.
@@ -286,7 +467,9 @@ impl Heap {
     #[inline]
     pub(super) fn give(&mut self, addr: u32, size: u32) {
         if size <= self.quick_max {
-            self.quick[(size >> 3) as usize].push_back(addr);
+            let i = (size >> 3) as usize;
+            self.quick[i].push_back(addr);
+            self.waiting[i / 64] |= 1 << (i % 64);
             self.quick_bytes += u64::from(size);
             if self.quick_bytes > QUICK_BYTES {
                 self.spill(size);
@@ -320,18 +503,34 @@ impl Heap {
     }
 
     /// The first quick stack after the one [`Heap::spill`] took from last (round the sizes) that
-    /// holds a block, `None` when none does.
+    /// holds a block, `None` when none does: the first bit set in [`Heap::waiting`] after it,
+    /// else the first one from the start. With one size waiting, looking at every stack in turn
+    /// (as before) passed 511 empty ones a block, which made a burst of frees past the limit
+    /// take 70-110% longer (8 to 1024 bytes, measured 2026-11-01).
+    #[inline]
     fn next_waiting(&self) -> Option<usize> {
-        let after = self.spill_from + 1;
-        let stacks = self.quick.len();
-        (after..stacks)
-            .chain(1..after.min(stacks))
-            .find(|&i| !self.quick[i].is_empty())
+        let from = self.spill_from + 1;
+        let word = from / 64;
+        if word < STACK_WORDS {
+            let here = self.waiting[word] & (!0u64 << (from % 64));
+            if here != 0 {
+                return Some(word * 64 + here.trailing_zeros() as usize);
+            }
+        }
+        // The words after it, then round from the first (its own word again, for the bits
+        // below `from`).
+        (word + 1..STACK_WORDS)
+            .chain(0..=word.min(STACK_WORDS - 1))
+            .find(|&w| self.waiting[w] != 0)
+            .map(|w| w * 64 + self.waiting[w].trailing_zeros() as usize)
     }
 
     /// Moves the oldest block of quick stack `i` (if it holds one) on to the bins.
     fn spill_oldest(&mut self, i: usize) {
         if let Some(a) = self.quick[i].pop_front() {
+            if self.quick[i].is_empty() {
+                self.waiting[i / 64] &= !(1 << (i % 64));
+            }
             let size = (i as u32) << 3;
             self.quick_bytes -= u64::from(size);
             self.release(a, size);
@@ -350,7 +549,7 @@ impl Heap {
                 let left = self.nodes[l as usize];
                 self.by_start.remove(&left.start);
                 self.free_bytes -= u64::from(left.size);
-                self.spare.push(l);
+                self.nodes.release(l);
                 start = left.start;
             }
             self.top = start;
@@ -391,21 +590,11 @@ impl Heap {
                     .by_end
                     .get_mut(&(right.start + right.size))
                     .expect("a free block's end is listed") = l;
-                self.spare.push(r);
+                self.nodes.release(r);
                 l
             }
         };
         self.link(n);
-    }
-
-    /// Moves every quick-stack block into the bins (merging there), oldest first: only a
-    /// request the heap would otherwise fail does this ([`Heap::take_free`]).
-    fn flush_quick(&mut self) {
-        for i in 1..self.quick.len() {
-            while !self.quick[i].is_empty() {
-                self.spill_oldest(i);
-            }
-        }
     }
 
     fn new_node(&mut self, start: u32, size: u32) -> u32 {
@@ -415,16 +604,7 @@ impl Heap {
             prev: NONE,
             next: NONE,
         };
-        match self.spare.pop() {
-            Some(n) => {
-                self.nodes[n as usize] = node;
-                n
-            }
-            None => {
-                self.nodes.push(node);
-                (self.nodes.len() - 1) as u32
-            }
-        }
+        self.nodes.alloc(node)
     }
 
     /// Puts node `n` at the head of its size's bin.
@@ -533,7 +713,8 @@ impl Heap {
             .map(|&n| (self.nodes[n as usize].start, self.nodes[n as usize].size))
     }
 
-    /// Checks the bookkeeping: the bins, their lists and bitmaps, both maps and the counts agree;
+    /// Checks the bookkeeping: the bins, their lists and bitmaps, both maps, the bitmap of the
+    /// quick stacks and the counts agree;
     /// no two free blocks in bins touch and none ends at the top; and the free blocks, the quick
     /// stacks and `held` (the live blocks and any held back by the freed-block check) cover
     /// `[HEAP_BASE, top)` exactly, without overlap. Panics on the first disagreement.
@@ -577,7 +758,7 @@ impl Heap {
         assert_eq!(listed, self.by_start.len());
         assert_eq!(listed, self.by_end.len());
         assert_eq!(binned, self.free_bytes);
-        assert_eq!(listed + self.spare.len(), self.nodes.len());
+        assert_eq!(listed + self.nodes.spare_len, self.nodes.len);
         // 0 live, 1 free in a bin, 2 waiting in a quick stack.
         let mut all: Vec<(u32, u32, u8)> = held.into_iter().map(|(a, s)| (a, s, 0)).collect();
         all.extend(self.by_start.values().map(|&n| {
@@ -586,6 +767,11 @@ impl Heap {
         }));
         let mut waiting = 0u64;
         for (i, stack) in self.quick.iter().enumerate() {
+            assert_eq!(
+                !stack.is_empty(),
+                (self.waiting[i / 64] >> (i % 64)) & 1 == 1,
+                "bitmap of quick stack {i}"
+            );
             for &a in stack {
                 all.push((a, (i as u32) << 3, 2));
                 waiting += u64::from(i as u32) << 3;
@@ -846,6 +1032,98 @@ mod tests {
         assert_eq!(h.take(0x80), Some(a));
         assert_eq!(h.quick_bytes(), 0);
         h.check([(a, 0x80), (c, rest)]);
+    }
+
+    /// A request that only the waiting blocks can serve moves them to the bins a batch at a
+    /// time and stops at the first batch that serves it: the rest still wait.
+    #[test]
+    fn a_full_heap_moves_only_the_waiting_blocks_it_needs() {
+        let mut h = Heap::new();
+        let n = 2 * FLUSH_STEP + 2;
+        let blocks: Vec<u32> = (0..n).map(|_| h.take(16).unwrap()).collect();
+        let rest = HEAP_END - h.top();
+        let last = h.take(rest).unwrap();
+        assert_eq!(h.take(8), None);
+        // Oldest first: the first batch is the first FLUSH_STEP blocks, which merge into one.
+        for &a in &blocks {
+            h.give(a, 16);
+        }
+        assert_eq!(h.quick_blocks(), n);
+        assert_eq!(h.take(32), Some(blocks[0]));
+        assert_eq!(h.quick_blocks(), n - FLUSH_STEP, "one batch moved");
+        assert_eq!(
+            h.free_block_at(blocks[0] + 32),
+            Some((blocks[0] + 32, FLUSH_STEP as u32 * 16 - 32))
+        );
+        h.check([(blocks[0], 32), (last, rest)]);
+        // A request the waiting blocks cannot serve moves all of them, then fails.
+        assert_eq!(h.take(0x10_0000), None);
+        assert_eq!(h.quick_blocks(), 0);
+        assert_eq!(
+            h.failed_flush(),
+            ((n - FLUSH_STEP) as u64 * 16, n - FLUSH_STEP)
+        );
+        h.check([(blocks[0], 32), (last, rest)]);
+    }
+
+    /// Free blocks that never merge (each with a live block after it) fill the tables of their
+    /// start and end region by region: no region's table holds more than 16K, the most a
+    /// 256 KB region can hold, however many there are in all.
+    #[test]
+    fn the_free_block_tables_stay_small_region_by_region() {
+        let mut h = Heap::new().without_quick();
+        let mut held = Vec::new();
+        let per_region = 1usize << (REGION_BITS - 4);
+        let blocks: Vec<u32> = (0..3 * per_region + 5)
+            .map(|_| take_apart(&mut h, 8, &mut held))
+            .collect();
+        for &a in &blocks {
+            h.release(a, 8);
+        }
+        assert_eq!(h.free_blocks(), blocks.len());
+        assert_eq!(h.by_start.most_in_one(), per_region);
+        assert_eq!(h.by_end.most_in_one(), per_region);
+        h.check(held);
+    }
+
+    /// The quick stacks move to the bins round the sizes, the oldest block of each, starting
+    /// after the size they last moved and wrapping round from the smallest.
+    #[test]
+    fn moves_to_the_bins_go_round_the_sizes() {
+        let mut h = Heap::new();
+        let mut held = Vec::new();
+        // One block each of 8, 16 and 4096 bytes, then 4 KB blocks up to 24 bytes short of the
+        // limit.
+        let firsts: Vec<u32> = [8u32, 16, 0x1000]
+            .iter()
+            .map(|&s| take_apart(&mut h, s, &mut held))
+            .collect();
+        let big_n = ((QUICK_BYTES - 8 - 16 - 0x1000) / 0x1000) as usize;
+        let big: Vec<u32> = (0..big_n + 3)
+            .map(|_| take_apart(&mut h, 0x1000, &mut held))
+            .collect();
+        for (&a, s) in firsts.iter().zip([8, 16, 0x1000]) {
+            h.give(a, s);
+        }
+        for &a in &big[..big_n] {
+            h.give(a, 0x1000);
+        }
+        assert_eq!(QUICK_BYTES - h.quick_bytes(), 0x1000 - 24);
+        assert_eq!(h.free_blocks(), 0);
+        // 24 bytes over: the 8-byte block, then the 16-byte one.
+        h.give(big[big_n], 0x1000);
+        assert_eq!(h.free_block_at(firsts[0]), Some((firsts[0], 8)));
+        assert_eq!(h.free_block_at(firsts[1]), Some((firsts[1], 16)));
+        assert_eq!(h.free_blocks(), 2);
+        // After 16 bytes, the next size that holds a block is 4096: its oldest.
+        h.give(big[big_n + 1], 0x1000);
+        assert_eq!(h.free_block_at(firsts[2]), Some((firsts[2], 0x1000)));
+        // After 4096, round from the smallest: only 4096 holds blocks, its oldest next.
+        h.give(big[big_n + 2], 0x1000);
+        assert_eq!(h.free_block_at(big[0]), Some((big[0], 0x1000)));
+        assert_eq!(h.free_blocks(), 4);
+        assert_eq!(h.quick_bytes(), QUICK_BYTES);
+        h.check(held);
     }
 
     /// On a full heap, a free block that fits is found even behind more than [`OWN_BIN_LOOK`]

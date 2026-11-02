@@ -98,8 +98,12 @@ const MAPPED_PAIR: u16 = u16::from_ne_bytes([MAPPED, MAPPED]);
 /// back took 530 us handed back (920 us busy) against 5 us kept, and 210 us before. A larger
 /// unmap (the 8 MB of heap pages under a new reservation) hands its pages back at once.
 const KEEP_SPAN: usize = 1024;
-/// The most pages (16 MB) kept at once: an unmap that would keep more first hands every kept
-/// page back to the system.
+/// The most pages (16 MB) kept at once: an unmap that would keep more first hands back as many
+/// kept pages as it would go over by, the next ones round the space from where the last such
+/// hand-back stopped ([`Mem::hand_back_kept`]). Handing every kept page back at once made the
+/// cost of one unmap depend on how scattered the earlier ones were: with 4096 kept pages in 4096
+/// runs, a one-page unmap took 3.2-3.5 ms and 4096 host calls; now 25-32 us and one host call
+/// (most of it the look for the next kept page), the ones after it 1-15 us (2026-11-01).
 const KEEP_MAX: usize = 4096;
 
 /// The host's virtual memory calls: reserve a block of address space with no access, commit
@@ -401,12 +405,16 @@ pub struct Mem {
     space: Space,
     /// How many pages the table marks [`KEPT`] (at most [`KEEP_MAX`]).
     kept: usize,
+    /// The page the next hand-back of kept pages starts looking at ([`Mem::hand_back_kept`]).
+    keep_hand: usize,
     /// How many times [`Mem::map`] and [`Mem::unmap`] have called the host's commit and
     /// hand-back (what the tests count).
     #[cfg(test)]
     host_calls: u32,
-    /// The heap's live blocks (start -> size, rounded and with any guard) and its free space.
-    live: crate::engine::AddrMap<u32, u32>,
+    /// The heap's live blocks (start -> size, rounded and with any guard; a table per region of
+    /// the heap, [`heap::Regions`], so that no allocation rehashes every live block) and its free
+    /// space.
+    live: heap::Regions,
     heap: heap::Heap,
     /// The write watch ([`Mem::watch`]); `None` in normal runs (one test per store).
     watch: Option<Box<Watch>>,
@@ -745,6 +753,7 @@ impl Mem {
         Mem {
             space: Space::new(),
             kept: 0,
+            keep_hand: 0,
             #[cfg(test)]
             host_calls: 0,
             live: Default::default(),
@@ -935,10 +944,10 @@ impl Mem {
             .filter(|&p| self.page_state(p) == MAPPED)
             .count();
         if mapped > KEEP_SPAN {
-            self.hand_back(first, stop, true);
+            self.hand_back(first, stop);
         } else if mapped > 0 {
             if self.kept + mapped > KEEP_MAX {
-                self.hand_back(0, PAGES, false);
+                self.hand_back_kept(self.kept + mapped - KEEP_MAX);
             }
             let mut p = first;
             while p < stop {
@@ -960,13 +969,58 @@ impl Mem {
         );
     }
 
+    /// Hands back `need` kept pages (all of them when fewer are kept): the first ones the table
+    /// marks [`KEPT`] from [`Mem::keep_hand`] on, round the space, one host call per run; the
+    /// next call goes on from where this one stopped, so every kept page comes round in turn.
+    /// An unmap hands back no more pages than it keeps, whatever the earlier unmaps left.
+    fn hand_back_kept(&mut self, need: usize) {
+        let mut left = need.min(self.kept);
+        let mut p = self.keep_hand;
+        while left > 0 {
+            p = self.next_kept(p);
+            let run = p;
+            while p < PAGES && left > 0 && self.page_state(p) == KEPT {
+                p += 1;
+                left -= 1;
+            }
+            self.kept -= p - run;
+            self.set_state(run, p, UNMAPPED);
+            // SAFETY: pages `run..p` lie inside the block, and no reference into the guest
+            // space outlives a call of this module (`&mut self` here).
+            unsafe { host::decommit(self.host_page(run), (p - run) << PAGE_BITS) };
+            self.count_host_call();
+        }
+        self.keep_hand = p % PAGES;
+    }
+
+    /// The first page at or after `from` (round the space) that the table marks [`KEPT`]; there
+    /// must be one. Looks at 64 pages' bytes at a time.
+    fn next_kept(&self, from: usize) -> usize {
+        // SAFETY: the table holds a byte for each of the `PAGES` pages and stays committed while
+        // the block lives; only `&mut self` writes it.
+        let table = unsafe { std::slice::from_raw_parts(self.space.flag(0), PAGES) };
+        let find = |range: std::ops::Range<usize>| {
+            let mut p = range.start;
+            while p < range.end {
+                let to = ((p | 63) + 1).min(range.end);
+                if table[p..to].iter().fold(false, |any, &b| any | (b == KEPT)) {
+                    return (p..to).find(|&q| table[q] == KEPT);
+                }
+                p = to;
+            }
+            None
+        };
+        find(from..PAGES)
+            .or_else(|| find(0..from))
+            .expect("a kept page somewhere")
+    }
+
     /// Hands back to the system each run of the pages `from..to` that the table marks [`KEPT`]
-    /// (and, with `mapped`, [`MAPPED`]), one host call per run, and marks them [`UNMAPPED`].
-    fn hand_back(&mut self, from: usize, to: usize, mapped: bool) {
-        let held = |s: u8| s == KEPT || (mapped && s == MAPPED);
+    /// or [`MAPPED`], one host call per run, and marks them [`UNMAPPED`].
+    fn hand_back(&mut self, from: usize, to: usize) {
+        let held = |s: u8| s == KEPT || s == MAPPED;
         let mut p = from;
-        // Without `mapped` only kept pages matter, so the walk ends with the last of them.
-        while p < to && (mapped || self.kept > 0) {
+        while p < to {
             if !held(self.page_state(p)) {
                 p += 1;
                 continue;
@@ -2050,7 +2104,7 @@ mod tests {
                     _ => 0x1_0000 + rng.below(big),
                 };
                 let a = m.alloc(asked);
-                let size = m.live[&a];
+                let size = *m.live.get(&a).expect("a live block");
                 assert_eq!(a % 8, 0);
                 assert!(
                     a >= HEAP_BASE && a + size <= m.heap.top(),
@@ -2589,8 +2643,9 @@ mod tests {
         );
     }
 
-    /// Kept pages never pass [`KEEP_MAX`]: the unmap that would keep more hands every kept page
-    /// back first (one host call for each run of them) and then keeps its own.
+    /// Kept pages never pass [`KEEP_MAX`]: the unmap that would keep more first hands back as
+    /// many kept pages as it goes over by (here the first of one run, one host call), then
+    /// keeps its own.
     #[test]
     fn kept_pages_stay_under_the_limit() {
         let mut m = Mem::new();
@@ -2605,14 +2660,52 @@ mod tests {
         }
         assert_eq!((m.kept, m.host_calls()), (KEEP_MAX, 1));
         m.unmap(AT + ((KEEP_MAX as u32) << PAGE_BITS), 0x1000);
-        assert_eq!((m.kept, m.host_calls()), (1, 2));
+        assert_eq!((m.kept, m.host_calls()), (KEEP_MAX, 2));
+        let first = (AT >> PAGE_BITS) as usize;
+        assert_eq!(m.page_state(first), UNMAPPED);
+        assert_eq!(m.page_state(first + 1), KEPT);
         assert!(m.is_mapped(AT + ((pages - 1) << PAGE_BITS)));
+        m.check_pages();
+        // The page handed back is committed again, the kept ones zeroed in place.
         m.map(AT, pages << PAGE_BITS);
         assert_eq!((m.kept, m.host_calls()), (0, 3));
         for i in [0, 1, KEEP_MAX as u32 - 1, KEEP_MAX as u32] {
             assert_eq!(m.u32(AT + (i << PAGE_BITS)), 0, "page {i} reads zero");
         }
         assert_eq!(m.u32(AT + ((pages - 1) << PAGE_BITS)), pages);
+    }
+
+    /// The unmap that passes [`KEEP_MAX`] hands back only as many kept pages as it goes over
+    /// by, however scattered the kept pages are: with every other page kept (4096 runs), a
+    /// one-page unmap makes one host call (handing every kept page back made 4096 and took
+    /// about 3 ms), and the next unmap goes on from there, the next kept pages round the space.
+    #[test]
+    fn the_unmap_past_the_limit_hands_back_only_what_it_goes_over_by() {
+        let mut m = Mem::new();
+        const AT: u32 = 0x2000_0000;
+        let pages = 2 * KEEP_MAX as u32 + 2;
+        m.map(AT, pages << PAGE_BITS);
+        for i in 0..KEEP_MAX as u32 {
+            m.unmap(AT + ((2 * i) << PAGE_BITS), 0x1000);
+        }
+        assert_eq!((m.kept, m.host_calls()), (KEEP_MAX, 1));
+        let page = |i: usize| (AT >> PAGE_BITS) as usize + i;
+        // One page over: the first kept page goes.
+        m.unmap(AT + ((pages - 1) << PAGE_BITS), 0x1000);
+        assert_eq!((m.kept, m.host_calls()), (KEEP_MAX, 2));
+        assert_eq!(m.page_state(page(0)), UNMAPPED);
+        assert_eq!(m.page_state(page(2)), KEPT);
+        // Pages 1 to 5, three of them mapped: three over, so the next three kept pages go, each
+        // a run of its own, before pages 1, 3 and 5 are kept.
+        m.unmap(AT + (1 << PAGE_BITS), 5 << PAGE_BITS);
+        assert_eq!((m.kept, m.host_calls()), (KEEP_MAX, 5));
+        for p in [0, 2, 4, 6] {
+            assert_eq!(m.page_state(page(p)), UNMAPPED, "page {p}");
+        }
+        for p in [1, 3, 5, 8] {
+            assert_eq!(m.page_state(page(p)), KEPT, "page {p}");
+        }
+        m.check_pages();
     }
 
     /// The last page of a mapped range (its next page unmapped, so off the pair test) reads and
@@ -2872,7 +2965,7 @@ mod tests {
                 m.zero(page, P);
                 m.set_u32(page + 8, i);
                 let p = (page >> PAGE_BITS) as usize;
-                m.hand_back(p, p + 1, true);
+                m.hand_back(p, p + 1);
             }
         };
         let pool_now = |m: &mut Mem| {
@@ -2907,7 +3000,7 @@ mod tests {
             for w in SIZES.windows(2).rev() {
                 for page in (HEAP + w[0]..HEAP + w[1]).step_by(PAGE) {
                     let p = (page >> PAGE_BITS) as usize;
-                    m.hand_back(p, p + 1, true);
+                    m.hand_back(p, p + 1);
                 }
             }
         };

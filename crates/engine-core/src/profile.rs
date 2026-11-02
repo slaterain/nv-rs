@@ -18,11 +18,16 @@
 //! - on 64-bit Windows, in the game's phases, the **native call stack** of that OS thread, walked
 //!   while it is suspended (`NV_PROFILE_STACK` frames, default 64, 0 off): each image's own
 //!   unwind table (`.pdata`, binary-searched here: `RtlLookupFunctionEntry` can take the loader's
-//!   lock, which the suspended thread may hold) and `RtlVirtualUnwind`, which takes no lock and
-//!   checks no bounds: before each step the walk goes over the stack reads the unwind will make
-//!   (from the function's unwind codes, or its epilogue's instructions) and ends as a bad frame
-//!   if one would leave the thread's stack, or at a return into code with no unwind data (only
-//!   the innermost function can be a leaf). Nothing allocates while the thread is suspended.
+//!   lock, which the suspended thread may hold) and `RtlVirtualUnwind`, which checks no bounds:
+//!   before each step the walk goes over the stack reads the unwind will make (from the
+//!   function's unwind codes, or its epilogue's instructions) and ends as a bad frame if one
+//!   would leave the thread's stack, or at a return into code with no unwind data (only the
+//!   innermost function can be a leaf). `RtlVirtualUnwind` takes no lock except at an epilogue
+//!   that ends in a jump out of its function's range (a tail call), whose target it looks up to
+//!   tell a tail call from a jump to another part of the same function: such a frame the walk
+//!   unwinds itself (its own lookup decides, then the epilogue's pops and return are emulated),
+//!   or ends the walk when the target is the same function. Nothing allocates while the thread
+//!   is suspended.
 //!   Each code address's lookup is kept for the next walks. 2026-11-01, Doc's room, 51 frames
 //!   a walk (before the read checks): the thread stood suspended
 //!   67 us a walk without the kept lookups, 51 us with them, and 36 us with one frame
@@ -1253,12 +1258,15 @@ mod native {
     /// The walks' kept lookups ([`Found`]), by a hash of the address.
     struct Lookups {
         slots: [Found; FOUND_SLOTS],
-        /// How many lookups were answered from `slots`, and how many frames were handed to
-        /// `RtlVirtualUnwind` (what the tests count).
+        /// How many lookups were answered from `slots`, how many frames were handed to
+        /// `RtlVirtualUnwind`, and how many tail-call epilogues the walk unwound itself (what
+        /// the tests count).
         #[cfg(test)]
         hits: u64,
         #[cfg(test)]
         unwinds: u64,
+        #[cfg(test)]
+        tail_calls: u64,
     }
 
     impl Lookups {
@@ -1269,6 +1277,8 @@ mod native {
                 hits: 0,
                 #[cfg(test)]
                 unwinds: 0,
+                #[cfg(test)]
+                tail_calls: 0,
             })
         }
     }
@@ -1360,6 +1370,9 @@ mod native {
         fn register(&self, n: u8) -> u64 {
             self.word(0x78 + 8 * usize::from(n & 0xf))
         }
+        fn set_register(&mut self, n: u8, v: u64) {
+            self.set_word(0x78 + 8 * usize::from(n & 0xf), v);
+        }
         fn rsp(&self) -> u64 {
             self.word(0x98)
         }
@@ -1382,41 +1395,115 @@ mod native {
         (base + u64::from((*f).unwind & !1)) as *const u8
     }
 
-    /// Whether every stack read `RtlVirtualUnwind` makes to unwind the frame of `f` at `pc` lies
-    /// in the stack, `low..high`. It reads the saved registers and the return address where the
-    /// function's unwind codes (or, in an epilogue, its instructions) put them, and checks no
-    /// bounds itself: a frame taken from a stray word (one that code without unwind data pushed,
-    /// say) can send those reads past the thread's stack, an access violation in the sampler
-    /// while the engine's thread stands suspended. This goes over the same reads without making
-    /// them, as `RtlVirtualUnwind` makes them: in an epilogue, the pops it emulates and the
-    /// return address after them ([`epilogue_at`]); elsewhere the unwind codes the function has
-    /// executed at `pc`, with its chained parts, then the return address
-    /// ([`prologue_reads_fit`]). Unwind information of version 2 can also describe the
-    /// function's epilogues, which the system may go by instead of the code: there an epilogue
-    /// found in the code is checked both ways.
+    /// How the walk unwinds a frame ([`unwind_step`]).
+    #[derive(Debug, PartialEq, Eq)]
+    enum Step {
+        /// Not at all: the walk ends as a bad frame.
+        Bad,
+        /// Through `RtlVirtualUnwind`: every stack read it makes lies in the stack, and it takes
+        /// no lock.
+        System,
+        /// By itself, at an epilogue that ends in a tail call ([`Epilogue::TailCall`]): the
+        /// stack pointer `rsp` after the epilogue's `add rsp` or `lea rsp`, then `pops` pops
+        /// from the instruction at `pops_at` on, then the return ([`emulate_epilogue`]).
+        TailCall { rsp: u64, pops: u64, pops_at: u64 },
+    }
+
+    /// How to unwind the frame of `f` at `pc` with the stack `low..high`. `RtlVirtualUnwind`
+    /// reads the saved registers and the return address where the function's unwind codes (or,
+    /// in an epilogue, its instructions) put them, and checks no bounds itself: a frame taken
+    /// from a stray word (one that code without unwind data pushed, say) can send those reads
+    /// past the thread's stack, an access violation in the sampler while the engine's thread
+    /// stands suspended. This goes over the same reads without making them, as
+    /// `RtlVirtualUnwind` makes them: in an epilogue, the pops it emulates and the return address
+    /// after them ([`epilogue_at`]); elsewhere the unwind codes the function has executed at
+    /// `pc`, with its chained parts, then the return address ([`prologue_reads_fit`]). Unwind
+    /// information of version 2 can also describe the function's epilogues, which the system may
+    /// go by instead of the code: there an epilogue found in the code is checked both ways.
+    ///
+    /// At an epilogue that ends in a jump out of the function's range, `RtlVirtualUnwind` looks
+    /// up the jump's target (`RtlLookupFunctionEntry`) to tell a tail call from a jump into
+    /// another part of the same function, and that lookup waits on a lock the loader holds while
+    /// it loads or frees a DLL: with the engine's thread suspended inside the loader, the
+    /// sampler would wait for good (a probe of a thread loading and freeing a DLL in a loop got
+    /// stuck 3 times in 3, within 9,000 to 95,000 walks). Such a frame never goes to the system:
+    /// the walk looks the target up in its own tables, unwinds a tail call itself, and ends at a
+    /// jump within the function. Checked against `RtlVirtualUnwind` (2026-11-01, every function
+    /// of 40-odd loaded images at many pcs and stack pointers, nothing suspended): the emulation
+    /// read nothing outside the stack in 445K tail-call frames and gave the system's registers
+    /// in all but 298, all at pcs inside an instruction (an `e9` or `eb` that is a ModRM byte)
+    /// of functions with version 2 unwind information, which the system unwinds by its epilogue
+    /// descriptors instead of the code.
     ///
     /// # Safety
-    /// `f` is the unwind entry `code` names ([`look_up`]); `low..high` is committed memory.
-    unsafe fn unwind_reads_fit(
+    /// `f` is the unwind entry `code` names ([`look_up`]); the images are loaded; `low..high` is
+    /// committed memory.
+    unsafe fn unwind_step(
+        images: &[Image],
+        found: &mut Lookups,
         code: &Found,
         f: *const RuntimeFunction,
         pc: u64,
         ctx: &Context,
         (low, high): (u64, u64),
-    ) -> bool {
+    ) -> Step {
         let fits =
             |at: u64, len: u64| at >= low && at.checked_add(len).is_some_and(|end| end <= high);
         let epilogue_fits = |rsp: u64, pops: u64| fits(rsp, 8 * pops + 8);
         let prologue_fits = || prologue_reads_fit(code.base, f, pc, ctx, &fits);
+        let system = |ok: bool| if ok { Step::System } else { Step::Bad };
         let version = *unwind_info(code.base, f) & 7;
         match epilogue_at(code, f, pc, ctx) {
-            None => false,
-            Some(Epilogue::Yes { rsp, pops }) if version == 1 => epilogue_fits(rsp, pops),
-            Some(Epilogue::Yes { rsp, pops } | Epilogue::Maybe { rsp, pops }) => {
-                epilogue_fits(rsp, pops) && prologue_fits()
+            None => Step::Bad,
+            Some(Epilogue::Yes { rsp, pops }) if version == 1 => system(epilogue_fits(rsp, pops)),
+            Some(Epilogue::Yes { rsp, pops }) => {
+                system(epilogue_fits(rsp, pops) && prologue_fits())
             }
-            Some(Epilogue::No) => prologue_fits(),
+            Some(Epilogue::TailCall {
+                rsp,
+                pops,
+                pops_at,
+                target,
+            }) => {
+                // The system's test: the jump stays in the function when the target's unwind
+                // entry leads (through any chained parts) to the same first part as this one's.
+                // A target with no entry, or in no image the walk knows, is another function.
+                let same = look_up(images, found, target).is_some_and(|t| {
+                    !t.entry.is_null() && t.base == code.base && t.key == code.key
+                });
+                if same || !epilogue_fits(rsp, pops) {
+                    Step::Bad
+                } else {
+                    Step::TailCall { rsp, pops, pops_at }
+                }
+            }
+            Some(Epilogue::No) => system(prologue_fits()),
         }
+    }
+
+    /// Unwinds a frame at an epilogue that ends in a tail call, as the processor would run it
+    /// ([`Step::TailCall`]): each pop from `pops_at` on reads its register from the stack, then
+    /// the return address is the instruction pointer and the stack pointer is above it. The
+    /// reads lie in the stack and no pop is into the stack pointer ([`unwind_step`],
+    /// [`epilogue_at`]).
+    ///
+    /// # Safety
+    /// As [`unwind_step`], for the reads it allowed.
+    unsafe fn emulate_epilogue(ctx: &mut Context, mut rsp: u64, pops: u64, mut at: u64) {
+        for _ in 0..pops {
+            let mut b = *(at as *const u8);
+            let mut register = 0;
+            if b & 0xf0 == 0x40 {
+                register = (b & 1) << 3;
+                at += 1;
+                b = *(at as *const u8);
+            }
+            at += 1;
+            ctx.set_register(register | (b & 7), std::ptr::read(rsp as *const u64));
+            rsp += 8;
+        }
+        ctx.set_word(0xf8, std::ptr::read(rsp as *const u64));
+        ctx.set_word(0x98, rsp + 8);
     }
 
     /// Whether `RtlVirtualUnwind` takes the code at `pc` for an epilogue ([`epilogue_at`]).
@@ -1426,18 +1513,26 @@ mod native {
         /// Yes: it emulates the rest of the epilogue, `pops` words read from `rsp` on (after the
         /// epilogue's `add rsp` or `lea rsp`) and the return address after them.
         Yes { rsp: u64, pops: u64 },
-        /// Yes unless the jump that ends it lands in another part of the same function, which
-        /// only `RtlVirtualUnwind` looks up: both ways are checked.
-        Maybe { rsp: u64, pops: u64 },
+        /// Yes unless the jump to `target` that ends it lands in another part of the same
+        /// function, which it looks up ([`unwind_step`]); the pops start at `pops_at`.
+        TailCall {
+            rsp: u64,
+            pops: u64,
+            pops_at: u64,
+            target: u64,
+        },
     }
 
     /// What `RtlVirtualUnwind` makes of the code at `pc` in `f`, read from the same bytes: an
     /// epilogue is an optional `add rsp, imm` or `lea rsp, [frame register + disp]`, any number
     /// of pops, then a return, or a jump out of the function (a tail call). `None` when a byte it
-    /// would read lies past the image.
+    /// would read lies past the image, or a pop is into the stack pointer: the system would read
+    /// the rest of the epilogue from wherever the popped word points. Compilers emit no
+    /// `pop rsp`, but a pc on the second byte of `pop r12` (41 5c) reads as one, and the walk can
+    /// meet such a pc through a stray return address.
     ///
     /// # Safety
-    /// As [`unwind_reads_fit`].
+    /// As [`unwind_step`].
     unsafe fn epilogue_at(
         code: &Found,
         f: *const RuntimeFunction,
@@ -1478,14 +1573,20 @@ mod native {
             }
         }
         let mut pops = 0;
+        let pops_at = at;
         loop {
             let b = byte(at)?;
-            if b & 0xf8 == 0x58 {
+            let register = if b & 0xf8 == 0x58 {
                 at += 1;
+                b & 7
             } else if b & 0xf0 == 0x40 && byte(at + 1)? & 0xf8 == 0x58 {
                 at += 2;
+                ((b & 1) << 3) | (byte(at - 1)? & 7)
             } else {
                 break;
+            };
+            if register == 4 {
+                return None;
             }
             pops += 1;
         }
@@ -1502,7 +1603,12 @@ mod native {
                 (at + 5).wrapping_add(disp32(at + 1)?)
             };
             if !(begin..end).contains(&target) {
-                Epilogue::Maybe { rsp, pops }
+                Epilogue::TailCall {
+                    rsp,
+                    pops,
+                    pops_at,
+                    target,
+                }
             } else if target == begin && (*info >> 3) & CHAIN_INFO == 0 {
                 Epilogue::Yes { rsp, pops }
             } else {
@@ -1527,7 +1633,7 @@ mod native {
     /// instruction and stack pointers.
     ///
     /// # Safety
-    /// As [`unwind_reads_fit`].
+    /// As [`unwind_step`].
     unsafe fn prologue_reads_fit(
         base: u64,
         f: *const RuntimeFunction,
@@ -1595,6 +1701,11 @@ mod native {
                     _ => return false,
                 };
                 if i + slots > count {
+                    return false;
+                }
+                // A push or a save of the stack pointer itself (only malformed unwind data has
+                // one): restored, it would send every later read wherever the word points.
+                if matches!(op, 0 | 4 | 5) && op_info == 4 {
                     return false;
                 }
                 // A code the prologue has not reached at `pc` is not undone.
@@ -1680,8 +1791,10 @@ mod native {
     /// unwind table has it, else the address itself) and its address into `pcs` (the
     /// instruction pointer, then return addresses), the lookups kept in `found`. Returns the
     /// frames and why the walk ended. Takes no lock and allocates nothing, and reads nothing
-    /// outside the stack and the images: a frame whose unwind would ([`unwind_reads_fit`]), or
-    /// a return into code without unwind data, ends the walk as a bad frame.
+    /// outside the stack and the images: a frame whose unwind would ([`unwind_step`]), one that
+    /// `RtlVirtualUnwind` could unwind only by looking up a function entry (a jump within the
+    /// function at an epilogue's end), and a return into code without unwind data end the walk
+    /// as a bad frame; a tail call at an epilogue's end the walk unwinds itself.
     ///
     /// # Safety
     /// The images are loaded; `low..high` is the thread's committed stack; the thread stays
@@ -1715,28 +1828,35 @@ mod native {
             };
             keys[n - 1] = code.key;
             match (!code.entry.is_null()).then_some(code.entry) {
-                Some(f) => {
-                    if !unwind_reads_fit(&code, f, pc, ctx, (low, high)) {
-                        return (n, WalkEnd::Bad);
+                Some(f) => match unwind_step(images, found, &code, f, pc, ctx, (low, high)) {
+                    Step::Bad => return (n, WalkEnd::Bad),
+                    Step::TailCall { rsp, pops, pops_at } => {
+                        #[cfg(test)]
+                        {
+                            found.tail_calls += 1;
+                        }
+                        emulate_epilogue(ctx, rsp, pops, pops_at);
                     }
-                    #[cfg(test)]
-                    {
-                        found.unwinds += 1;
+                    Step::System => {
+                        #[cfg(test)]
+                        {
+                            found.unwinds += 1;
+                        }
+                        let mut handler_data = std::ptr::null_mut();
+                        let mut establisher = 0u64;
+                        // UNW_FLAG_NHANDLER: the frame is only unwound.
+                        RtlVirtualUnwind(
+                            0,
+                            code.base,
+                            pc,
+                            f,
+                            ctx,
+                            &mut handler_data,
+                            &mut establisher,
+                            std::ptr::null_mut(),
+                        );
                     }
-                    let mut handler_data = std::ptr::null_mut();
-                    let mut establisher = 0u64;
-                    // UNW_FLAG_NHANDLER: the frame is only unwound.
-                    RtlVirtualUnwind(
-                        0,
-                        code.base,
-                        pc,
-                        f,
-                        ctx,
-                        &mut handler_data,
-                        &mut establisher,
-                        std::ptr::null_mut(),
-                    );
-                }
+                },
                 None if n == 1 => {
                     // A leaf function (only the innermost frame can be one): its return address
                     // is at the stack pointer.
@@ -1870,29 +1990,50 @@ mod native {
             }
         }
 
-        /// A handle to OS thread `id` with suspend, context and query access, kept open for
-        /// good: while it is open the system gives the id to no other thread, so the handle
-        /// stays the thread's own. A thread of another process (an id of this process's thread
-        /// that ended before it was first opened, since given to a thread elsewhere) is not
-        /// opened: its TEB would be read as this process's memory.
+        /// A handle to OS thread `id` with suspend, context and query access, kept open: while it
+        /// is open the system gives the id to no other thread, so the handle stays the thread's
+        /// own. A walked thread's stays open for good (its TEB is kept by id); another's is
+        /// closed once the thread has ended ([`Sampler::forget`]). A thread of another process
+        /// (an id of this process's thread that ended before it was first opened, since given
+        /// to a thread elsewhere) is not opened: its TEB would be read as this process's memory.
+        /// A refusal is not kept, so the id is tried again when it comes back (given to a thread
+        /// of this process).
         fn thread(&mut self, id: u32) -> Option<Handle> {
-            let handle = *self.threads.entry(id).or_insert_with(|| {
-                // SAFETY: OpenThread with a thread id; a null handle is checked below, and a
-                // handle to another process's thread is closed and forgotten.
-                unsafe {
-                    let handle = OpenThread(
-                        THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION,
-                        0,
-                        id,
-                    );
-                    if !handle.is_null() && GetProcessIdOfThread(handle) != GetCurrentProcessId() {
-                        CloseHandle(handle);
-                        return std::ptr::null_mut();
-                    }
-                    handle
+            if let Some(&handle) = self.threads.get(&id) {
+                return Some(handle);
+            }
+            // SAFETY: OpenThread with a thread id; a null handle is checked, and a handle to
+            // another process's thread is closed and not kept.
+            let handle = unsafe {
+                let handle = OpenThread(
+                    THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION,
+                    0,
+                    id,
+                );
+                if handle.is_null() {
+                    return None;
                 }
-            });
-            (!handle.is_null()).then_some(handle)
+                if GetProcessIdOfThread(handle) != GetCurrentProcessId() {
+                    CloseHandle(handle);
+                    return None;
+                }
+                handle
+            };
+            self.threads.insert(id, handle);
+            Some(handle)
+        }
+
+        /// Closes the handle to OS thread `id` (one that has ended, or that a listing of the
+        /// process no longer shows), unless the thread was walked: its TEB is kept by id, so its
+        /// handle stays open and the id stays its own.
+        fn forget(&mut self, id: u32) {
+            if self.tebs.contains_key(&id) {
+                return;
+            }
+            if let Some(handle) = self.threads.remove(&id) {
+                // SAFETY: the handle was opened by `thread` and is closed once.
+                unsafe { CloseHandle(handle) };
+            }
         }
 
         /// OS thread `id`'s TEB (`NtQueryInformationThread`'s basic information, the TEB's
@@ -2098,7 +2239,10 @@ mod native {
             // SAFETY: the handle has suspend/resume and get-context access; nothing between
             // the suspend and the resume allocates or takes a lock (the context buffer is ours).
             let ok = unsafe {
+                // A thread that has ended cannot be suspended: its handle is closed (nothing of
+                // the thread is read here, so its id need not stay its own).
                 if SuspendThread(handle) == u32::MAX {
+                    self.forget(id);
                     return None;
                 }
                 let ok = GetThreadContext(handle, ctx as *mut Context) != 0;
@@ -2108,7 +2252,8 @@ mod native {
             ok.then(|| u64::from_le_bytes(ctx.0[0xf8..0x100].try_into().expect("8 bytes")))
         }
 
-        /// The ids of every thread of this process but the sampler's own.
+        /// The ids of every thread of this process but the sampler's own. The handles kept for
+        /// threads not listed (ended since) are closed ([`Sampler::forget`]).
         pub fn process_threads(&mut self) -> Vec<u32> {
             let mut ids = Vec::new();
             // SAFETY: a Toolhelp snapshot walked with a correctly sized entry, then closed.
@@ -2130,6 +2275,15 @@ mod native {
                     more = Thread32Next(snapshot, &mut entry) != 0;
                 }
                 CloseHandle(snapshot);
+            }
+            let gone: Vec<u32> = self
+                .threads
+                .keys()
+                .copied()
+                .filter(|id| !ids.contains(id))
+                .collect();
+            for id in gone {
+                self.forget(id);
             }
             ids
         }
@@ -2397,6 +2551,74 @@ mod native {
             ".seh_endproc",
         );
 
+        // A function whose epilogue ends in a tail call: `add rsp, 32`, `pop rbx`, then a jump
+        // to the start of another function.
+        std::arch::global_asm!(
+            ".globl nv_profile_test_tail",
+            ".globl nv_profile_test_tail_epilogue",
+            ".seh_proc nv_profile_test_tail",
+            "nv_profile_test_tail:",
+            "push rbx",
+            ".seh_pushreg rbx",
+            "sub rsp, 32",
+            ".seh_stackalloc 32",
+            ".seh_endprologue",
+            "nop",
+            "nv_profile_test_tail_epilogue:",
+            "add rsp, 32",
+            "pop rbx",
+            "jmp nv_profile_test_tail_target",
+            ".seh_endproc",
+            ".seh_proc nv_profile_test_tail_target",
+            "nv_profile_test_tail_target:",
+            ".seh_endprologue",
+            "ret",
+            ".seh_endproc",
+        );
+
+        // A function in two parts, the second with chained unwind information: the second ends
+        // in a jump back into the first, out of its own range but within the same function.
+        // (The assembler gives the first part's entry the whole function's range, so the jump
+        // that leaves its part's range is the second part's.)
+        std::arch::global_asm!(
+            ".globl nv_profile_test_split",
+            ".globl nv_profile_test_split_cold",
+            ".globl nv_profile_test_split_jump",
+            ".seh_proc nv_profile_test_split",
+            "nv_profile_test_split:",
+            "push rbx",
+            ".seh_pushreg rbx",
+            ".seh_endprologue",
+            "nv_profile_test_split_hot:",
+            "pop rbx",
+            "ret",
+            ".seh_startchained",
+            ".seh_endprologue",
+            "nv_profile_test_split_cold:",
+            "nop",
+            "nv_profile_test_split_jump:",
+            "jmp nv_profile_test_split_hot",
+            ".seh_endchained",
+            ".seh_endproc",
+        );
+
+        // A function that saves r12: its epilogue's `pop r12` is 41 5c, and the 5c alone reads
+        // as `pop rsp`.
+        std::arch::global_asm!(
+            ".globl nv_profile_test_r12",
+            ".globl nv_profile_test_r12_pop",
+            ".seh_proc nv_profile_test_r12",
+            "nv_profile_test_r12:",
+            "push r12",
+            ".seh_pushreg r12",
+            ".seh_endprologue",
+            "nop",
+            "nv_profile_test_r12_pop:",
+            "pop r12",
+            "ret",
+            ".seh_endproc",
+        );
+
         extern "C" {
             fn nv_profile_test_framed_body();
             fn nv_profile_test_framed_add();
@@ -2404,6 +2626,16 @@ mod native {
             fn nv_profile_test_framed_ret();
             fn nv_profile_test_big_body();
             fn nv_profile_test_lea_epilogue();
+            fn nv_profile_test_tail_epilogue();
+            fn nv_profile_test_split();
+            fn nv_profile_test_split_jump();
+            fn nv_profile_test_split_cold();
+            fn nv_profile_test_r12_pop();
+        }
+
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn FreeLibrary(module: Handle) -> i32;
         }
 
         type Code = unsafe extern "C" fn();
@@ -2420,13 +2652,26 @@ mod native {
             stack: (u64, u64),
         ) -> (usize, WalkEnd, u64, u64) {
             s.refresh_images();
-            let mut ctx = Context([0; 0x4d0]);
-            ctx.set_word(0xf8, rip as usize as u64);
+            let walked = walk_at(s, rip as usize as u64, rsp, rbp, stack);
+            (walked.0, walked.1, walked.2, walked.4.rsp())
+        }
+
+        /// [`walk`] at any address `rip`, the images as last listed: also how many frames the
+        /// walk unwound itself at a tail call, and the registers it ended with.
+        fn walk_at(
+            s: &mut Sampler,
+            rip: u64,
+            rsp: u64,
+            rbp: u64,
+            stack: (u64, u64),
+        ) -> (usize, WalkEnd, u64, u64, Box<Context>) {
+            let mut ctx = Box::new(Context([0; 0x4d0]));
+            ctx.set_word(0xf8, rip);
             ctx.set_word(0x98, rsp);
             ctx.set_word(0xa0, rbp);
             let (mut keys, mut pcs) = ([0u64; 4], [0u64; 4]);
-            let unwinds = s.found.unwinds;
-            // SAFETY: the images were just listed; `stack` is memory of the test's own.
+            let (unwinds, tail_calls) = (s.found.unwinds, s.found.tail_calls);
+            // SAFETY: the images are listed; `stack` is memory of the test's own.
             let (n, end) = unsafe {
                 walk_stack(
                     &s.images,
@@ -2437,7 +2682,13 @@ mod native {
                     &mut pcs,
                 )
             };
-            (n, end, s.found.unwinds - unwinds, ctx.rsp())
+            (
+                n,
+                end,
+                s.found.unwinds - unwinds,
+                s.found.tail_calls - tail_calls,
+                ctx,
+            )
         }
 
         /// A function with a frame register, in its body and at each instruction of its
@@ -2526,6 +2777,215 @@ mod native {
             );
         }
 
+        /// At an epilogue that ends in a tail call, the walk unwinds the frame itself (the pops
+        /// and the return, as the processor runs them), not through `RtlVirtualUnwind`, which
+        /// would look up the jump's target and can wait there on the loader's lock. Exactly the
+        /// frame's words in the stack unwind it; with one word less the walk ends as a bad
+        /// frame.
+        #[test]
+        fn a_tail_call_epilogue_is_unwound_by_the_walk() {
+            let mut s = Sampler::new();
+            s.refresh_images();
+            let mut stack = vec![0u64; 0x40];
+            let low = stack.as_mut_ptr() as u64;
+            // After the `add rsp, 32`: the caller's rbx, then the return address (0: the
+            // thread's start).
+            let rsp = low + 0x80;
+            stack[(0x80 + 32) / 8] = 0xb0b;
+            let high = rsp + 48;
+            let rip = nv_profile_test_tail_epilogue as Code as usize as u64;
+            let (n, end, unwinds, tail_calls, ctx) = walk_at(&mut s, rip, rsp, 0, (low, high));
+            assert_eq!((n, end, unwinds, tail_calls), (1, WalkEnd::Start, 0, 1));
+            assert_eq!((ctx.rsp(), ctx.register(3)), (rsp + 48, 0xb0b));
+            let (n, end, unwinds, tail_calls, ctx) = walk_at(&mut s, rip, rsp, 0, (low, high - 8));
+            assert_eq!(
+                (n, end, unwinds, tail_calls, ctx.rsp()),
+                (1, WalkEnd::Bad, 0, 0, rsp)
+            );
+        }
+
+        /// A jump out of a part of a function (its unwind information chained to the first
+        /// part's) into another part of the same function is no tail call, and
+        /// `RtlVirtualUnwind` could tell only by looking the target up: the walk ends there as a
+        /// bad frame. The two parts have two unwind entries and one function start.
+        #[test]
+        fn a_jump_to_another_part_of_the_function_ends_the_walk() {
+            let mut s = Sampler::new();
+            s.refresh_images();
+            let split = nv_profile_test_split as Code as usize as u64;
+            let cold = nv_profile_test_split_cold as Code as usize as u64;
+            // SAFETY: the images were just listed.
+            let (first, second) = unsafe {
+                (
+                    look_up(&s.images, &mut s.found, split).expect("in this program"),
+                    look_up(&s.images, &mut s.found, cold).expect("in this program"),
+                )
+            };
+            assert!(!first.entry.is_null() && !second.entry.is_null());
+            assert_ne!(first.entry, second.entry, "two unwind entries");
+            assert_eq!((first.key, second.key), (split, split), "one function");
+            let mut stack = vec![0u64; 0x40];
+            let low = stack.as_mut_ptr() as u64;
+            let rsp = low + 0x80;
+            let rip = nv_profile_test_split_jump as Code as usize as u64;
+            let (n, end, unwinds, tail_calls, _) = walk_at(&mut s, rip, rsp, 0, (low, rsp + 16));
+            assert_eq!((n, end, unwinds, tail_calls), (1, WalkEnd::Bad, 0, 0));
+        }
+
+        /// A pc on the second byte of `pop r12` (41 5c) reads as `pop rsp`: `RtlVirtualUnwind`
+        /// would take the popped word for the stack pointer and read the return address
+        /// wherever it points (here memory of the test's own outside the stack). The walk ends
+        /// there as a bad frame.
+        #[test]
+        fn a_pop_into_the_stack_pointer_ends_the_walk() {
+            let mut s = Sampler::new();
+            s.refresh_images();
+            let mut stack = vec![0u64; 0x40];
+            let mut elsewhere = vec![0u64; 4];
+            let low = stack.as_mut_ptr() as u64;
+            let rsp = low + 0x80;
+            stack[0x80 / 8] = elsewhere.as_mut_ptr() as u64;
+            let rip = nv_profile_test_r12_pop as Code as usize as u64 + 1;
+            // SAFETY: the code of a function of this program.
+            assert_eq!(unsafe { *(rip as *const u8) }, 0x5c);
+            let (n, end, unwinds, tail_calls, ctx) = walk_at(&mut s, rip, rsp, 0, (low, rsp + 48));
+            assert_eq!(
+                (n, end, unwinds, tail_calls, ctx.rsp()),
+                (1, WalkEnd::Bad, 0, 0, rsp)
+            );
+        }
+
+        /// A walk never waits on the loader. A thread of this program loads and frees a DLL in a
+        /// loop and is suspended, as the sampler suspends the engine's thread, while a walk at a
+        /// tail-call epilogue runs: every walk comes back. Through `RtlVirtualUnwind`, a probe of
+        /// the same loop got stuck within 9,000 to 95,000 walks; here a watchdog resumes the
+        /// thread after two seconds without a walk coming back, and the test fails.
+        #[test]
+        fn a_walk_at_a_tail_call_never_waits_on_the_loader() {
+            use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
+            use std::sync::Arc;
+            let stop = Arc::new(AtomicBool::new(false));
+            let (tx, rx) = std::sync::mpsc::channel();
+            let loader = {
+                let stop = stop.clone();
+                std::thread::spawn(move || {
+                    tx.send(current_thread_id()).expect("the test waits");
+                    while !stop.load(Relaxed) {
+                        // SAFETY: a system DLL loaded by name and freed again.
+                        unsafe {
+                            let module = LoadLibraryA(b"msimg32.dll\0".as_ptr());
+                            if !module.is_null() {
+                                FreeLibrary(module);
+                            }
+                        }
+                    }
+                })
+            };
+            let id = rx.recv().expect("the loader's id");
+            let mut s = Sampler::new();
+            let handle = s.thread(id).expect("a thread of this program");
+            s.refresh_images();
+            let mut stack = vec![0u64; 0x40];
+            let low = stack.as_mut_ptr() as u64;
+            let rsp = low + 0x80;
+            let rip = nv_profile_test_tail_epilogue as Code as usize as u64;
+            let steps = Arc::new(AtomicU64::new(0));
+            let stuck = Arc::new(AtomicBool::new(false));
+            // The watchdog must be running before the first suspend: a thread starting up takes
+            // the loader's lock, which the suspended loader may hold.
+            let (up_tx, up_rx) = std::sync::mpsc::channel();
+            let watchdog = {
+                let (stop, steps, stuck) = (stop.clone(), steps.clone(), stuck.clone());
+                let handle = handle as usize;
+                std::thread::spawn(move || {
+                    up_tx.send(()).expect("the test waits");
+                    let (mut last, mut still) = (0, 0);
+                    while !stop.load(Relaxed) {
+                        std::thread::sleep(Duration::from_millis(100));
+                        let now = steps.load(Relaxed);
+                        if now != last {
+                            (last, still) = (now, 0);
+                            continue;
+                        }
+                        still += 1;
+                        if still == 20 {
+                            stuck.store(true, Relaxed);
+                            // SAFETY: the handle is open until the test ends.
+                            unsafe { ResumeThread(handle as Handle) };
+                            still = 0;
+                        }
+                    }
+                })
+            };
+            up_rx.recv().expect("the watchdog runs");
+            // Nothing allocates while the loader stands suspended (it may hold the heap's lock).
+            let mut ctx = Box::new(Context([0; 0x4d0]));
+            let (mut keys, mut pcs) = ([0u64; 4], [0u64; 4]);
+            let mut wrong = 0u64;
+            let started = Instant::now();
+            while started.elapsed() < Duration::from_millis(1500) {
+                ctx.set_word(0xf8, rip);
+                ctx.set_word(0x98, rsp);
+                // SAFETY: the handle has suspend access; the images are listed and `stack` is
+                // the test's own; only the walk runs between the suspend and the resume.
+                let walked = unsafe {
+                    if SuspendThread(handle) == u32::MAX {
+                        break;
+                    }
+                    let walked = walk_stack(
+                        &s.images,
+                        &mut s.found,
+                        &mut ctx,
+                        (low, rsp + 48),
+                        &mut keys,
+                        &mut pcs,
+                    );
+                    ResumeThread(handle);
+                    walked
+                };
+                wrong += u64::from(walked != (1, WalkEnd::Start));
+                steps.fetch_add(1, Relaxed);
+            }
+            stop.store(true, Relaxed);
+            loader.join().expect("the loader ends");
+            watchdog.join().expect("the watchdog ends");
+            let steps = steps.load(Relaxed);
+            assert!(!stuck.load(Relaxed), "a walk waited after {steps} walks");
+            assert!(steps > 100, "{steps} walks");
+            assert_eq!(wrong, 0);
+        }
+
+        /// A handle the sampler opened only to read a thread's instruction pointer is closed
+        /// once the thread has ended: when it can no longer be suspended, or when a listing of
+        /// the process no longer shows it. A walked thread's handle stays open, its TEB being
+        /// kept by its id.
+        #[test]
+        fn handles_of_ended_threads_are_closed_unless_walked() {
+            let mut s = Sampler::new();
+            for how in ["suspend", "listing", "walked"] {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let (end_tx, end_rx) = std::sync::mpsc::channel::<()>();
+                let t = std::thread::spawn(move || {
+                    tx.send(current_thread_id()).expect("the test waits");
+                    let _ = end_rx.recv();
+                });
+                let id = rx.recv().expect("the thread's id");
+                assert!(s.instruction_pointer(id).is_some(), "{how}");
+                if how == "walked" {
+                    assert!(s.walk(id, 4).is_some());
+                }
+                assert!(s.threads.contains_key(&id), "{how}");
+                end_tx.send(()).expect("the thread waits");
+                t.join().expect("the thread ends");
+                if how == "listing" {
+                    assert!(!s.process_threads().contains(&id));
+                } else {
+                    assert_eq!(s.instruction_pointer(id), None, "{how}");
+                }
+                assert_eq!(s.threads.contains_key(&id), how == "walked", "{how}");
+            }
+        }
+
         /// The ids of the threads of process `pid` (a Toolhelp snapshot).
         fn threads_of(pid: u32) -> Vec<u32> {
             let mut ids = Vec::new();
@@ -2571,6 +3031,14 @@ mod native {
             let _ = child.wait();
             assert!(!theirs.is_empty());
             assert_eq!(opened, Vec::<u32>::new());
+            // The refusal is not kept: the id is tried again if a thread of this process gets
+            // it later.
+            let kept: Vec<u32> = theirs
+                .iter()
+                .copied()
+                .filter(|id| s.threads.contains_key(id))
+                .collect();
+            assert_eq!(kept, Vec::<u32>::new());
             assert!(s.thread(current_thread_id()).is_some());
         }
     }
