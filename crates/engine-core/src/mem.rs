@@ -119,14 +119,22 @@ const KEEP_SPAN: usize = 1024;
 ///   interrupts (the second version, one call per unmap: 30-44 us busy). The idle figure is the
 ///   repair's; the others the third review's (600 unmaps past the limit with 4096 kept pages in
 ///   4096 runs, three rounds, twice).
+/// - An unmap of more pages that the next [`KEEP_BATCH_RUNS`] runs of kept pages cannot make
+///   room for hands its own pages back instead of keeping them ([`Mem::kept_runs_hold`]), a
+///   host call per run of its range. With the kept pages scattered, a 1024-page unmap (half of
+///   an 8 MB scrap heap, which the game decommits in one `VirtualFree`) handed back a kept page
+///   per page it went over by: 1024 host calls, 0.9-1.2 ms idle and 3.7-3.9 ms with three other
+///   threads busy (the fourth review's measurement). Now one call: 0.14-0.27 ms idle and
+///   0.21-0.31 ms busy, the old page table's unmap 0.33-0.36 ms (2026-11-02, five rounds each,
+///   other builds running).
 const KEEP_MAX: usize = 4096;
 /// The most kept pages (1 MB) a hand-back at the limit hands back when it needs fewer: a window
 /// of pages sliding forward makes one host call per this many one-page unmaps at the limit, not
 /// one each ([`KEEP_MAX`]). With 64, the window busy took 2.3-2.5 us a step.
 const KEEP_BATCH: usize = 256;
-/// The host calls after which a hand-back that has handed back what it needs stops short of
-/// [`KEEP_BATCH`]: scattered kept pages (a host call each) cost an unmap at most this many
-/// calls, or one per page it goes over by when that is more.
+/// The most host calls (runs of kept pages) an unmap at [`KEEP_MAX`] makes handing back kept
+/// pages: a hand-back that has what it needs stops after this many short of [`KEEP_BATCH`], and
+/// an unmap that this many runs cannot make room for hands its own pages back instead.
 const KEEP_BATCH_RUNS: usize = 8;
 /// The pages each bit of [`Mem::kept_groups`] stands for.
 const KEEP_GROUP: usize = 64;
@@ -963,8 +971,10 @@ impl Mem {
     /// Makes the pages of `[addr, addr + len)` unaddressable again, their contents dropped (a
     /// later [`Mem::map`] reads zero). A call that unmaps at most [`KEEP_SPAN`] pages keeps them
     /// committed (marked [`KEPT`]); a larger one hands them back to the system, with any kept
-    /// pages in the range, one host call for each run. `addr` and `len` must be page multiples
-    /// (the `VirtualFree` stand-in in `units/platform.rs` decommits this way).
+    /// pages in the range, one host call for each run. So does a smaller one at [`KEEP_MAX`]
+    /// that the next [`KEEP_BATCH_RUNS`] runs of kept pages cannot make room for
+    /// ([`Mem::kept_runs_hold`]). `addr` and `len` must be page multiples (the `VirtualFree`
+    /// stand-in in `units/platform.rs` decommits this way).
     pub fn unmap(&mut self, addr: u32, len: u32) {
         assert!(
             addr % PAGE as u32 == 0 && len % PAGE as u32 == 0,
@@ -976,11 +986,15 @@ impl Mem {
         let mapped = (first..stop)
             .filter(|&p| self.page_state(p) == MAPPED)
             .count();
-        if mapped > KEEP_SPAN {
+        let over = (self.kept + mapped).saturating_sub(KEEP_MAX);
+        if mapped > KEEP_SPAN || (mapped > 0 && over > 0 && !self.kept_runs_hold(over)) {
+            // Its own pages go back: more than KEEP_SPAN, or more than the next KEEP_BATCH_RUNS
+            // runs of kept pages make room for (handing back a kept page per page it went over
+            // by cost a 1024-page unmap at the limit, the kept pages scattered, 1024 host calls).
             self.hand_back(first, stop);
         } else if mapped > 0 {
-            if self.kept + mapped > KEEP_MAX {
-                self.hand_back_kept(self.kept + mapped - KEEP_MAX);
+            if over > 0 {
+                self.hand_back_kept(over);
             }
             let mut p = first;
             while p < stop {
@@ -1008,7 +1022,8 @@ impl Mem {
     /// run. The next call goes on from where this one stopped, so every kept page comes round in
     /// turn. Contiguous kept pages go back [`KEEP_BATCH`] in one call, so the unmaps after it
     /// keep their pages without a host call; scattered ones cost an unmap at most
-    /// [`KEEP_BATCH_RUNS`] calls, or `need` when that is more.
+    /// [`KEEP_BATCH_RUNS`] calls ([`Mem::unmap`] calls this only when that many runs hold
+    /// `need` pages, [`Mem::kept_runs_hold`]).
     fn hand_back_kept(&mut self, need: usize) {
         let most = need.max(KEEP_BATCH).min(self.kept);
         let need = need.min(most);
@@ -1032,6 +1047,31 @@ impl Mem {
             runs += 1;
         }
         self.keep_hand = p % PAGES;
+    }
+
+    /// Whether the first [`KEEP_BATCH_RUNS`] runs of kept pages from [`Mem::keep_hand`] on,
+    /// round the space (the runs [`Mem::hand_back_kept`] would hand back, a host call each), hold
+    /// at least `need` pages. Each run holds one at least, so a `need` of at most
+    /// [`KEEP_BATCH_RUNS`] always fits. `need` is below the kept count (an unmap that keeps its
+    /// pages adds at most [`KEEP_SPAN`], fewer than [`KEEP_MAX`]), so the look never comes round
+    /// to a page it has counted.
+    fn kept_runs_hold(&self, need: usize) -> bool {
+        debug_assert!(need < self.kept);
+        if need <= KEEP_BATCH_RUNS {
+            return true;
+        }
+        let (mut p, mut held) = (self.keep_hand, 0);
+        for _ in 0..KEEP_BATCH_RUNS {
+            p = self.next_kept(p);
+            while p < PAGES && self.page_state(p) == KEPT {
+                p += 1;
+                held += 1;
+                if held >= need {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// The first page at or after `from` (round the space; `from` at most [`PAGES`], which is
@@ -1600,8 +1640,10 @@ impl Mem {
     }
 
     /// Allocates `size` bytes (8-byte aligned, zero-filled) on the heap. A freed block of the
-    /// same rounded size is reused first, newest first; else part of a bigger free block, else
-    /// fresh memory (`mem/heap.rs` has the policy).
+    /// same rounded size is reused first, newest first: from its quick stack (up to 4 KB), or
+    /// among the first blocks of its bin; else part of a bigger free block, else fresh memory. A
+    /// fitting block deeper in its bin is used only when the top has no room (`mem/heap.rs` has
+    /// the policy).
     pub fn alloc(&mut self, size: u32) -> u32 {
         let asked = size;
         let guard = if self.check.is_some() { GUARD } else { 0 };
@@ -2813,9 +2855,10 @@ mod tests {
 
     /// With the kept pages scattered (every other page kept: 4096 runs), the unmap past
     /// [`KEEP_MAX`] hands back [`KEEP_BATCH_RUNS`] runs, a host call each (handing every kept
-    /// page back made 4096 and took about 3 ms), or as many as it goes over by when that is
-    /// more; each hand-back goes on from where the last stopped, the next kept pages round the
-    /// space.
+    /// page back made 4096 and took about 3 ms); each hand-back goes on from where the last
+    /// stopped, the next kept pages round the space. One that goes over by more than those runs
+    /// hold hands its own pages back instead, a host call per run of its range (it handed back
+    /// a kept page a call, one per page it went over by).
     #[test]
     fn scattered_kept_pages_cost_an_unmap_a_bounded_hand_back() {
         let mut m = Mem::new();
@@ -2841,17 +2884,69 @@ mod tests {
             m.unmap(AT + ((2 * p + 1) << PAGE_BITS), 0x1000);
         }
         assert_eq!((m.kept, m.host_calls()), (KEEP_MAX, calls));
-        // Pages 15 to 38: twelve mapped (the odd ones), so twelve over, more than
-        // KEEP_BATCH_RUNS. The twelve kept pages from page 16 on go, a call each (the even
-        // pages 16 to 38, the kept pages of this very range), before the odd ones are kept.
+        // Pages 15 to 38: twelve mapped (the odd ones), so twelve over, more than the next
+        // KEEP_BATCH_RUNS runs hold (the kept pages 16, 18, ... 30, one each). The range goes
+        // back instead, its kept pages (the even ones) with it: one run, one call.
         let from = 2 * runs - 1;
+        let hand = m.keep_hand;
         m.unmap(AT + ((from as u32) << PAGE_BITS), 24 << PAGE_BITS);
-        assert_eq!((m.kept, m.host_calls()), (KEEP_MAX, calls + 12));
+        assert_eq!((m.kept, m.host_calls()), (KEEP_MAX - 12, calls + 1));
         for p in from..from + 24 {
-            let want = if p % 2 == 0 { UNMAPPED } else { KEPT };
-            assert_eq!(m.page_state(page(p)), want, "page {p}");
+            assert_eq!(m.page_state(page(p)), UNMAPPED, "page {p}");
         }
         assert_eq!(m.page_state(page(from + 25)), KEPT);
+        assert_eq!(
+            m.keep_hand, hand,
+            "no kept page outside the range handed back"
+        );
+        m.check_pages();
+    }
+
+    /// An unmap of up to [`KEEP_SPAN`] pages at [`KEEP_MAX`] makes at most [`KEEP_BATCH_RUNS`]
+    /// host calls for the kept pages, however far it goes over. With the kept pages scattered
+    /// (4096 runs), a 1024-page unmap (half of an 8 MB scrap heap, which the game decommits in
+    /// one `VirtualFree`) made 1024 calls, one per page it went over by, and took 1-4 ms; now its
+    /// own pages go back in one call. Where the next runs hold enough (here one run of kept pages
+    /// that the hand reaches before the scattered ones), it hands those back and keeps its own.
+    #[test]
+    fn an_unmap_far_past_the_limit_makes_a_bounded_number_of_host_calls() {
+        let mut m = Mem::new();
+        const AT: u32 = 0x2000_0000;
+        const HALF: u32 = 0x4000_0000;
+        let half = KEEP_SPAN as u32;
+        m.map(AT, (2 * KEEP_MAX as u32) << PAGE_BITS);
+        for i in 0..KEEP_MAX as u32 {
+            m.unmap(AT + ((2 * i) << PAGE_BITS), 0x1000);
+        }
+        assert_eq!((m.kept, m.host_calls()), (KEEP_MAX, 1));
+        m.map(HALF, half << PAGE_BITS);
+        for i in 0..half {
+            m.set_u32(HALF + (i << PAGE_BITS), i + 1);
+        }
+        let before = m.host_calls();
+        m.unmap(HALF, half << PAGE_BITS);
+        assert_eq!((m.kept, m.host_calls() - before), (KEEP_MAX, 1));
+        assert!(!m.is_mapped(HALF) && m.page_state((HALF >> PAGE_BITS) as usize) == UNMAPPED);
+        m.check_pages();
+        // Mapped again, its pages read zero (committed afresh, one call).
+        m.map(HALF, half << PAGE_BITS);
+        assert_eq!(m.host_calls() - before, 2);
+        assert!((0..half).all(|i| m.u32(HALF + (i << PAGE_BITS)) == 0));
+        // The first 1024 scattered kept pages mapped again, the same number kept in one run
+        // below them, where the hand (still at page 0) comes first: the next unmap of the half
+        // hands that run back in one call and keeps its own pages.
+        let first = (AT >> PAGE_BITS) as usize;
+        let run = 0x1000_0000;
+        m.map(AT, (2 * half) << PAGE_BITS);
+        m.map(run, half << PAGE_BITS);
+        m.unmap(run, half << PAGE_BITS);
+        assert_eq!((m.kept, m.keep_hand), (KEEP_MAX, 0));
+        let before = m.host_calls();
+        m.unmap(HALF, half << PAGE_BITS);
+        assert_eq!((m.kept, m.host_calls() - before), (KEEP_MAX, 1));
+        assert_eq!(m.page_state((run >> PAGE_BITS) as usize), UNMAPPED);
+        assert_eq!(m.page_state((HALF >> PAGE_BITS) as usize), KEPT);
+        assert_eq!(m.page_state(first + 2 * half as usize), KEPT);
         m.check_pages();
     }
 

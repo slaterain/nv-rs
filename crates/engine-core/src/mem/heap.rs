@@ -57,14 +57,16 @@ const WORDS: usize = BINS.div_ceil(64);
 const _: () = assert!(WORDS <= 32, "the bitmap of words must fit in a u32");
 /// Freed blocks of up to this size wait in the quick stacks: the sizes the old exact-size lists
 /// were indexed for. Through the bins alone, a free and an allocation of 264 bytes to 4 KB took
-/// 60-100% longer than with those lists, and of 8 to 256 bytes more than twice as long
-/// (`heap_speed` in `mem.rs`).
+/// 67-116% longer than with those lists, and of 8 to 256 bytes more than twice as long
+/// (`heap_speed` in `mem.rs`, the runs given at [`QUICK_BYTES`]).
 pub(super) const QUICK_MAX: u32 = 4096;
 /// The most bytes the quick stacks hold. With every multiple of 8 from 264 to 4096 in use, 1 MB
 /// holds about one block of each size, so nearly every block went on and the stacks seldom
-/// served a request; with 8 MB a free and an allocation of those sizes take about a fifth longer
-/// than with the old lists (`heap_speed`, 2026-11-01, on a machine with other work running:
-/// +20 to +23% in three runs; small sizes alone -11 to +9%).
+/// served a request; with 8 MB a free and an allocation of those sizes take 12-32% longer than
+/// with the old lists, 23-32% in eight of the nine runs pinned to one processor (`heap_speed`,
+/// release, 2026-11-01 and 11-02: twelve runs in four sets of three, of this heap and its
+/// round-2 form, on a machine with other work running). Small sizes alone -11 to +27%, five
+/// sizes +6 to +26%, the game-like mix -1 to +15%.
 pub(super) const QUICK_BYTES: u64 = 8 << 20;
 /// The quick stacks, one per size / 8 (stack 0 unused), and the words of the bitmap of those
 /// that hold a block.

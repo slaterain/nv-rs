@@ -1712,6 +1712,35 @@ mod native {
         Some(found)
     }
 
+    /// The slot of the first unwind code of `info` (its `count` slots) that sets the frame
+    /// register, looked for as ntdll 10.0.26200 does (disassembled: the unwinder's core at
+    /// ntdll+0x1FC7C, the slot counts at ntdll+0xF0118): code by code, each code's slots from
+    /// one table for every version (1 2 1 1 2 3 2 3 2 3 1 by operation, one more for a large
+    /// allocation with a 32-bit size). `count` when no code sets it (the system then compares
+    /// against the byte after the codes). `None` when the system would raise an exception (an
+    /// operation of 11 or more) or compare against a slot past that byte (a code whose slots run
+    /// past the end): only malformed unwind data has either. Read slot by slot, as the walk
+    /// first did, a save's offset whose high byte ends in 3 (a save at 0x3610: 61 03) reads as
+    /// that code, and in a frame whose frame register does not match its stack pointer the
+    /// system's save reads were checked at the wrong base: LLVM functions that save XMM
+    /// registers after setting rbp have such offsets.
+    ///
+    /// # Safety
+    /// `info` is an image's unwind information, its `count` slots readable.
+    unsafe fn frame_code_slot(info: *const u8, count: usize) -> Option<usize> {
+        const SLOTS: [usize; 11] = [1, 2, 1, 1, 2, 3, 2, 3, 2, 3, 1];
+        let mut i = 0;
+        while i < count {
+            let b = *info.add(5 + 2 * i);
+            let op = usize::from(b & 0xf);
+            if op == 3 {
+                return Some(i);
+            }
+            i += SLOTS.get(op)? + usize::from(op == 1 && b >> 4 != 0);
+        }
+        (i == count).then_some(i)
+    }
+
     /// Whether the reads `RtlVirtualUnwind` makes outside an epilogue lie where `fits` allows:
     /// it undoes the unwind codes of `f` that the prologue has executed at `pc` (every code of a
     /// chained part), reading each pushed register at the stack pointer and each saved one at
@@ -1741,20 +1770,20 @@ mod native {
         let info = unwind_info(base, f);
         let frame = *info.add(3);
         let count = usize::from(*info.add(2));
+        let set_frame =
+            registers[usize::from(frame & 0xf)].wrapping_sub(16 * u64::from(frame >> 4));
         let frame_base = if frame & 0xf == 0 {
             rsp
+        } else if offset_in(f) >= u32::from(*info.add(1)) || (*info >> 3) & CHAIN_INFO != 0 {
+            // The frame register is set once the prologue is over (or in a chained part).
+            set_frame
         } else {
-            // The frame register is set once the prologue is over (or in a chained part);
-            // within the prologue, from the first code that sets it on (the system looks for
-            // that code slot by slot).
-            let set = (0..count)
-                .find(|&i| *info.add(5 + 2 * i) & 0xf == 3)
-                .unwrap_or(count);
-            if offset_in(f) >= u32::from(*info.add(1))
-                || (*info >> 3) & CHAIN_INFO != 0
-                || offset_in(f) >= u32::from(*info.add(4 + 2 * set))
-            {
-                registers[usize::from(frame & 0xf)].wrapping_sub(16 * u64::from(frame >> 4))
+            // Within the prologue, from the first code that sets it on.
+            let Some(set) = frame_code_slot(info, count) else {
+                return false;
+            };
+            if offset_in(f) >= u32::from(*info.add(4 + 2 * set)) {
+                set_frame
             } else {
                 rsp
             }
@@ -2741,6 +2770,33 @@ mod native {
             ".seh_endproc",
         );
 
+        // A function that sets its frame register (rbp = rsp + 128) and then saves xmm6 at 0x3610
+        // above the frame base, as LLVM code does: the save's second slot holds 0x361 (61 03),
+        // whose high byte read alone is the code that sets the frame register. Labelled after
+        // the save, still in the prologue (never called).
+        std::arch::global_asm!(
+            ".globl nv_profile_test_fpreg",
+            ".globl nv_profile_test_fpreg_saved",
+            ".seh_proc nv_profile_test_fpreg",
+            "nv_profile_test_fpreg:",
+            "push rbp",
+            ".seh_pushreg rbp",
+            "sub rsp, 0x3700",
+            ".seh_stackalloc 0x3700",
+            "lea rbp, [rsp + 128]",
+            ".seh_setframe rbp, 128",
+            "movaps xmmword ptr [rsp + 0x3610], xmm6",
+            ".seh_savexmm xmm6, 0x3610",
+            "nv_profile_test_fpreg_saved:",
+            "nop",
+            ".seh_endprologue",
+            "movaps xmm6, xmmword ptr [rsp + 0x3610]",
+            "add rsp, 0x3700",
+            "pop rbp",
+            "ret",
+            ".seh_endproc",
+        );
+
         extern "C" {
             fn nv_profile_test_framed_body();
             fn nv_profile_test_framed_add();
@@ -2754,6 +2810,8 @@ mod native {
             fn nv_profile_test_split_jump();
             fn nv_profile_test_split_cold();
             fn nv_profile_test_r12_pop();
+            fn nv_profile_test_fpreg();
+            fn nv_profile_test_fpreg_saved();
         }
 
         type Code = unsafe extern "C" fn();
@@ -2984,6 +3042,57 @@ mod native {
                 (n, end, unwinds, tail_calls, ctx.rsp()),
                 (1, WalkEnd::Bad, 0, 0, rsp)
             );
+        }
+
+        /// In a prologue that sets the frame register before a save whose offset's high byte
+        /// ends in 3, the system finds the code that sets it code by code ([`frame_code_slot`]),
+        /// so at a pc after the save it reads the save at the frame register less its offset.
+        /// With the frame register 0x3680 bytes below the stack (a stray frame), that read is
+        /// below the stack and the walk ends as a bad frame. Looked for slot by slot, the save's
+        /// offset was taken for that code: the save's read was checked at the stack pointer, and
+        /// the frame went to `RtlVirtualUnwind`, which read 0xf0 bytes below the stack (here
+        /// memory of the test's own). With the frame register where the prologue set it, the
+        /// frame unwinds.
+        #[test]
+        fn the_code_that_sets_the_frame_register_is_found_code_by_code() {
+            let mut s = Sampler::new();
+            s.refresh_images();
+            let start = nv_profile_test_fpreg as Code as usize as u64;
+            let rip = nv_profile_test_fpreg_saved as Code as usize as u64;
+            // SAFETY: the images were just listed; the unwind information is this program's.
+            unsafe {
+                let code = look_up(&s.images, &mut s.found, rip).expect("in this program");
+                assert!(!code.entry.is_null());
+                let info = unwind_info(code.base, code.entry);
+                let count = usize::from(*info.add(2));
+                // The save (two slots, the second's high byte 03), then the code that sets the
+                // frame register.
+                let ops = (*info.add(5) & 0xf, *info.add(7), *info.add(9) & 0xf);
+                assert_eq!((count, ops), (6, (8, 0x03, 3)));
+                assert_eq!(frame_code_slot(info, count), Some(2));
+                // The pc is past both codes and still in the prologue.
+                let offset = rip - start;
+                assert!(offset >= u64::from(*info.add(4)) && offset >= u64::from(*info.add(8)));
+                assert!(offset < u64::from(*info.add(1)));
+            }
+            let mut memory = vec![0u64; 0x1000];
+            let low = memory.as_mut_ptr() as u64 + 0x4000;
+            let rsp = low + 0x100;
+            // The frame: the save at 0x3610, the saved rbp at 0x3700, the return address (0).
+            let high = rsp + 0x3710;
+            // The frame base 0x3700 below the stack: the save 0xf0 below it, the saved rbp and
+            // the return address at its bottom.
+            let stray = low - 0x3680;
+            let (n, end, unwinds, tail_calls, ctx) = walk_at(&mut s, rip, rsp, stray, (low, high));
+            assert_eq!(
+                (n, end, unwinds, tail_calls, ctx.rsp()),
+                (1, WalkEnd::Bad, 0, 0, rsp)
+            );
+            let set = rsp + 128;
+            let (n, end, unwinds, _, ctx) = walk_at(&mut s, rip, rsp, set, (low, high));
+            assert_eq!((n, end, unwinds, ctx.rsp()), (1, WalkEnd::Start, 1, high));
+            let (n, end, unwinds, _, _) = walk_at(&mut s, rip, rsp, set, (low, high - 8));
+            assert_eq!((n, end, unwinds), (1, WalkEnd::Bad, 0));
         }
 
         /// A walk never waits on the loader. A thread of this program loads and frees a DLL in a
